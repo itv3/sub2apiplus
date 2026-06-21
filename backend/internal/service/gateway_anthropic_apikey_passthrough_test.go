@@ -744,6 +744,78 @@ func TestGatewayService_AnthropicOAuth_NotAffectedByAPIKeyPassthroughToggle(t *t
 	require.Contains(t, getHeaderRaw(req.Header, "anthropic-beta"), claude.BetaOAuth, "OAuth 链路仍应按原逻辑补齐 oauth beta")
 }
 
+func TestGatewayService_AnthropicAPIKeyMimicBuildRequestStripsClientHeadersAndOAuthBeta(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Request.Header.Set("anthropic-beta", claude.BetaOAuth+",custom-beta")
+	c.Request.Header.Set("user-agent", "third-party-client/1.0")
+	c.Request.Header.Set("x-stainless-lang", "python")
+
+	svc := &GatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{
+				InjectBetaForAPIKey: true,
+				MaxLineSize:         defaultMaxLineSize,
+			},
+		},
+	}
+	account := &Account{
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeAPIKey,
+		Extra: map[string]any{
+			"anthropic_apikey_mimic_claude_code": true,
+		},
+		Credentials: map[string]any{
+			"api_key": "anthropic-key",
+		},
+	}
+
+	req, wireBody, err := svc.buildUpstreamRequest(context.Background(), c, account, []byte(`{"model":"claude-3-7-sonnet-20250219","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`), "anthropic-key", "apikey", "claude-3-7-sonnet-20250219", false, false)
+	require.NoError(t, err)
+	require.NotNil(t, req)
+	require.NotNil(t, wireBody)
+	require.Equal(t, "anthropic-key", getHeaderRaw(req.Header, "x-api-key"))
+	require.Empty(t, getHeaderRaw(req.Header, "authorization"))
+	require.Equal(t, claude.DefaultHeaders["User-Agent"], getHeaderRaw(req.Header, "user-agent"))
+	require.Equal(t, "application/json", getHeaderRaw(req.Header, "accept"))
+	require.Contains(t, getHeaderRaw(req.Header, "anthropic-beta"), claude.BetaClaudeCode)
+	require.NotContains(t, getHeaderRaw(req.Header, "anthropic-beta"), claude.BetaOAuth)
+	require.NotEqual(t, "python", getHeaderRaw(req.Header, "x-stainless-lang"))
+}
+
+func TestGatewayService_AnthropicAPIKeyMimicCountTokensUsesTokenCountingBeta(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", nil)
+	c.Request.Header.Set("anthropic-beta", "custom-beta")
+
+	svc := &GatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{
+				InjectBetaForAPIKey: true,
+			},
+		},
+	}
+	account := &Account{
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeAPIKey,
+		Extra: map[string]any{
+			"anthropic_apikey_mimic_claude_code": true,
+		},
+		Credentials: map[string]any{
+			"api_key": "anthropic-key",
+		},
+	}
+
+	req, _, err := svc.buildCountTokensRequest(context.Background(), c, account, []byte(`{"model":"claude-3-5-sonnet-latest","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`), "anthropic-key", "apikey", "claude-3-5-sonnet-latest", false)
+	require.NoError(t, err)
+	require.Contains(t, getHeaderRaw(req.Header, "anthropic-beta"), claude.BetaTokenCounting)
+	require.NotContains(t, getHeaderRaw(req.Header, "anthropic-beta"), claude.BetaOAuth)
+}
+
 func TestGatewayService_AnthropicOAuth_ForwardPreservesBillingHeaderSystemBlock(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

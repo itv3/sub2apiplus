@@ -60,3 +60,27 @@ func TestAccount_IsAnthropicAPIKeyPassthroughEnabled(t *testing.T) {
 		require.False(t, openai.IsAnthropicAPIKeyPassthroughEnabled())
 	})
 }
+
+func TestAccount_IsAnthropicAPIKeyClaudeCodeMimicEnabled(t *testing.T) {
+	t.Run("Anthropic API Key 开启 mimic", func(t *testing.T) {
+		account := &Account{
+			Platform: PlatformAnthropic,
+			Type:     AccountTypeAPIKey,
+			Extra: map[string]any{
+				"anthropic_apikey_mimic_claude_code": true,
+			},
+		}
+		require.True(t, account.IsAnthropicAPIKeyClaudeCodeMimicEnabled())
+	})
+
+	t.Run("非匹配账号关闭", func(t *testing.T) {
+		account := &Account{
+			Platform: PlatformAnthropic,
+			Type:     AccountTypeOAuth,
+			Extra: map[string]any{
+				"anthropic_apikey_mimic_claude_code": true,
+			},
+		}
+		require.False(t, account.IsAnthropicAPIKeyClaudeCodeMimicEnabled())
+	})
+}

@@ -49,6 +49,30 @@ func TestAccount_IsOpenAIPassthroughEnabled(t *testing.T) {
 	})
 }
 
+func TestAccount_IsOpenAIAPIKeyCodexMimicEnabled(t *testing.T) {
+	t.Run("OpenAI API Key 开启 mimic", func(t *testing.T) {
+		account := &Account{
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeAPIKey,
+			Extra: map[string]any{
+				"openai_apikey_mimic_codex_cli": true,
+			},
+		}
+		require.True(t, account.IsOpenAIAPIKeyCodexMimicEnabled())
+	})
+
+	t.Run("非 API Key 账号关闭", func(t *testing.T) {
+		account := &Account{
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeOAuth,
+			Extra: map[string]any{
+				"openai_apikey_mimic_codex_cli": true,
+			},
+		}
+		require.False(t, account.IsOpenAIAPIKeyCodexMimicEnabled())
+	})
+}
+
 func TestAccount_IsOpenAIOAuthPassthroughEnabled(t *testing.T) {
 	t.Run("仅OAuth类型允许返回开启", func(t *testing.T) {
 		oauthAccount := &Account{

@@ -4763,7 +4763,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		return s.handleWebSearchEmulation(ctx, c, account, parsed)
 	}
 
-	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() {
+	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() && !account.IsAnthropicAPIKeyClaudeCodeMimicEnabled() {
 		passthroughBody := parsed.Body.Bytes()
 		passthroughModel := parsed.Model
 		if passthroughModel != "" {
@@ -6670,6 +6670,11 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 			return nil, nil, err
 		}
 		targetURL = s.buildCustomRelayURL(validatedURL, "/v1/messages", account)
+	}
+
+	if shouldMimicAnthropicAPIKeyClaudeCode(account, tokenType) {
+		effectiveDropSet := mergeDropSets(s.getBetaPolicyFilterSet(ctx, c, account, modelID))
+		return s.buildAnthropicAPIKeyCLIMimicRequest(ctx, account, body, token, targetURL, reqStream, effectiveDropSet)
 	}
 
 	clientHeaders := http.Header{}
@@ -9752,7 +9757,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		return fmt.Errorf("parse request: empty request")
 	}
 
-	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() {
+	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() && !account.IsAnthropicAPIKeyClaudeCodeMimicEnabled() {
 		passthroughBody := parsed.Body.Bytes()
 		if reqModel := parsed.Model; reqModel != "" {
 			if mappedModel := account.GetMappedModel(reqModel); mappedModel != reqModel {
@@ -10172,6 +10177,11 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 			return nil, nil, err
 		}
 		targetURL = s.buildCustomRelayURL(validatedURL, "/v1/messages/count_tokens", account)
+	}
+
+	if shouldMimicAnthropicAPIKeyClaudeCode(account, tokenType) {
+		effectiveDropSet := mergeDropSets(s.getBetaPolicyFilterSet(ctx, c, account, modelID))
+		return s.buildAnthropicAPIKeyCLICountTokensMimicRequest(ctx, account, body, token, targetURL, effectiveDropSet)
 	}
 
 	clientHeaders := http.Header{}
