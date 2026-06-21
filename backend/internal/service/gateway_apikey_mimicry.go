@@ -3,9 +3,16 @@ package service
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"net/http"
+	"strconv"
+	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 )
 
 func shouldMimicAnthropicAPIKeyClaudeCode(account *Account, tokenType string) bool {
@@ -26,12 +33,15 @@ func (s *GatewayService) buildAnthropicAPIKeyCLIMimicRequest(
 	token string,
 	targetURL string,
 	reqStream bool,
+	c *gin.Context,
 	effectiveDropSet map[string]struct{},
 ) (*http.Request, []byte, error) {
+	body = s.applyAnthropicAPIKeyClaudeCodeMimicryToBody(ctx, c, account, body)
 	finalBetaHeader := stripBetaTokensWithSet(defaultAPIKeyBetaHeader(body), effectiveDropSet)
 	if sanitized, changed := sanitizeAnthropicBodyForBetaTokens(body, finalBetaHeader); changed {
 		body = sanitized
 	}
+	body = signBillingHeaderCCH(body)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
@@ -46,6 +56,82 @@ func (s *GatewayService) buildAnthropicAPIKeyCLIMimicRequest(
 		setHeaderRaw(req.Header, "anthropic-beta", finalBetaHeader)
 	}
 	return req, body, nil
+}
+
+func (s *GatewayService) applyAnthropicAPIKeyClaudeCodeMimicryToBody(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	body []byte,
+) []byte {
+	if account == nil || len(body) == 0 {
+		return body
+	}
+
+	model := gjson.GetBytes(body, "model").String()
+	systemPromptInjectionEnabled, systemPrompt, systemPromptBlocks := s.claudeOAuthSystemPromptInjectionSettings(ctx)
+	systemRewritten := false
+	if systemPromptInjectionEnabled && !strings.Contains(strings.ToLower(model), "haiku") {
+		body = rewriteSystemForNonClaudeCodeWithPromptBlocks(body, rawJSONValue(body, "system"), systemPrompt, systemPromptBlocks)
+		systemRewritten = true
+	}
+
+	metadataUserID := buildAPIKeyMimicMetadataUserID(account, body, safeClientHeaders(c))
+	body, _ = normalizeClaudeOAuthRequestBody(body, model, claudeOAuthNormalizeOptions{
+		stripSystemCacheControl: !systemRewritten,
+		injectMetadata:          metadataUserID != "",
+		metadataUserID:          metadataUserID,
+	})
+
+	body = s.rewriteMessageCacheControlIfEnabled(ctx, body)
+	if rw := buildToolNameRewriteFromBody(body); rw != nil {
+		body = applyToolNameRewriteToBody(body, rw)
+		if c != nil {
+			c.Set(toolNameRewriteKey, rw)
+		}
+	} else {
+		body = applyToolsLastCacheBreakpoint(body)
+	}
+
+	return body
+}
+
+func buildAPIKeyMimicMetadataUserID(account *Account, body []byte, clientHeaders http.Header) string {
+	if account == nil {
+		return ""
+	}
+	if existing := gjson.GetBytes(body, "metadata.user_id").String(); existing != "" {
+		return ""
+	}
+
+	clientDiscriminator := ""
+	if clientHeaders != nil {
+		clientDiscriminator = NormalizeSessionUserAgent(clientHeaders.Get("User-Agent"))
+	}
+	if clientDiscriminator == "" {
+		clientDiscriminator = strconv.FormatInt(account.ID, 10)
+	}
+	deviceSeed := buildStableSessionSeed(account.ID, clientDiscriminator, "apikey-mimic-device")
+	deviceHash := sha256.Sum256([]byte(deviceSeed))
+	deviceID := hex.EncodeToString(deviceHash[:])
+
+	sessionSeed := buildStableSessionSeed(account.ID, clientDiscriminator, extractFirstUserText(body))
+	sessionID := generateSessionUUID(sessionSeed)
+	accountUUID := strings.TrimSpace(account.GetExtraString("account_uuid"))
+	uaVersion := ExtractCLIVersion(claude.DefaultHeaders["User-Agent"])
+	return FormatMetadataUserID(deviceID, accountUUID, sessionID, uaVersion)
+}
+
+func rawJSONValue(body []byte, path string) any {
+	result := gjson.GetBytes(body, path)
+	if !result.Exists() {
+		return nil
+	}
+	var value any
+	if err := json.Unmarshal([]byte(result.Raw), &value); err != nil {
+		return nil
+	}
+	return value
 }
 
 func (s *GatewayService) buildAnthropicAPIKeyCLICountTokensMimicRequest(

@@ -2404,7 +2404,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	inboundIsCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator"))
 	forceCodexCLI := s.cfg != nil && s.cfg.Gateway.ForceCodexCLI
 	accountMimicCodexCLI := account.IsOpenAIAPIKeyCodexMimicEnabled()
-	isCodexCLI := inboundIsCodexCLI || forceCodexCLI
+	isCodexCLI := inboundIsCodexCLI || forceCodexCLI || accountMimicCodexCLI
 	upstreamMimicCodexCLI := forceCodexCLI || accountMimicCodexCLI
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
 	clientTransport := GetOpenAIClientTransport(c)

@@ -785,6 +785,64 @@ func TestGatewayService_AnthropicAPIKeyMimicBuildRequestStripsClientHeadersAndOA
 	require.NotEqual(t, "python", getHeaderRaw(req.Header, "x-stainless-lang"))
 }
 
+func TestGatewayService_AnthropicAPIKeyMimicRewritesThirdPartyBodyToClaudeCodeShape(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Request.Header.Set("user-agent", "Kilo-Code/7.3.50 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14")
+
+	svc := &GatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{
+				InjectBetaForAPIKey: true,
+				MaxLineSize:         defaultMaxLineSize,
+			},
+		},
+	}
+	account := &Account{
+		ID:       303,
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeAPIKey,
+		Extra: map[string]any{
+			"anthropic_apikey_mimic_claude_code": true,
+		},
+		Credentials: map[string]any{
+			"api_key": "anthropic-key",
+		},
+	}
+
+	body := []byte(`{"model":"claude-opus-4-8","stream":true,"system":"Kilo project instructions","tools":[{"name":"kilo_read_file","description":"read","input_schema":{"type":"object","properties":{}}}],"tool_choice":{"type":"tool","name":"kilo_read_file"},"messages":[{"role":"user","content":[{"type":"text","text":"ping from kilo"}]}]}`)
+	req, wireBody, err := svc.buildUpstreamRequest(context.Background(), c, account, body, "anthropic-key", "apikey", "claude-opus-4-8", true, false)
+	require.NoError(t, err)
+	require.NotNil(t, req)
+	require.NotContains(t, getHeaderRaw(req.Header, "anthropic-beta"), claude.BetaOAuth)
+	require.Contains(t, getHeaderRaw(req.Header, "anthropic-beta"), claude.BetaClaudeCode)
+	require.Equal(t, "stream", getHeaderRaw(req.Header, "x-stainless-helper-method"))
+
+	metadataUserID := gjson.GetBytes(wireBody, "metadata.user_id").String()
+	require.NotEmpty(t, metadataUserID)
+	require.NotNil(t, ParseMetadataUserID(metadataUserID))
+
+	system := gjson.GetBytes(wireBody, "system")
+	require.True(t, system.IsArray())
+	require.Len(t, system.Array(), 3)
+	require.Contains(t, system.Get("0.text").String(), "x-anthropic-billing-header:")
+	require.Contains(t, system.Get("0.text").String(), "cc_entrypoint=cli")
+	require.NotContains(t, system.Get("0.text").String(), "cch=00000")
+	require.Equal(t, claudeCodeSystemPrompt, system.Get("1.text").String())
+	require.Equal(t, claudeCodeSystemPromptExpansion, system.Get("2.text").String())
+
+	messages := gjson.GetBytes(wireBody, "messages")
+	require.True(t, messages.IsArray())
+	require.Contains(t, messages.Get("0.content.0.text").String(), "Kilo project instructions")
+	require.Equal(t, "Understood. I will follow these instructions.", messages.Get("1.content.0.text").String())
+	require.True(t, gjson.GetBytes(wireBody, "tools").IsArray())
+	require.Equal(t, "ephemeral", gjson.GetBytes(wireBody, "tools.0.cache_control.type").String())
+	require.Equal(t, float64(1), gjson.GetBytes(wireBody, "temperature").Num)
+	require.Equal(t, float64(128000), gjson.GetBytes(wireBody, "max_tokens").Num)
+}
+
 func TestGatewayService_AnthropicAPIKeyMimicCountTokensUsesTokenCountingBeta(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()

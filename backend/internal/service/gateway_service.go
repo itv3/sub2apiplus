@@ -6674,7 +6674,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 
 	if shouldMimicAnthropicAPIKeyClaudeCode(account, tokenType) {
 		effectiveDropSet := mergeDropSets(s.getBetaPolicyFilterSet(ctx, c, account, modelID))
-		return s.buildAnthropicAPIKeyCLIMimicRequest(ctx, account, body, token, targetURL, reqStream, effectiveDropSet)
+		return s.buildAnthropicAPIKeyCLIMimicRequest(ctx, account, body, token, targetURL, reqStream, c, effectiveDropSet)
 	}
 
 	clientHeaders := http.Header{}

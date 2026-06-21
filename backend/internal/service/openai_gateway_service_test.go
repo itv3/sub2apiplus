@@ -2299,6 +2299,69 @@ func TestOpenAIGatewayService_APIKeyCodexMimicUsesTLSPath(t *testing.T) {
 	require.Equal(t, codexCLIUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 }
 
+func TestOpenAIGatewayService_APIKeyCodexMimicTreatsThirdPartyRequestAsCodexCLI(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	originalBody := []byte(`{"model":"gpt-5.4","stream":true,"instructions":"kilo test","input":"ping","max_output_tokens":8}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(originalBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("User-Agent", "Kilo-Code/7.3.50 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14")
+	c.Request.Header.Set("originator", "kilo")
+	c.Request.Header.Set("session_id", "client-session")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"text/event-stream"}, "x-request-id": []string{"rid_kilo_codex_mimic"}},
+		Body: io.NopCloser(strings.NewReader(
+			"event: response.completed\n" +
+				"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"model\":\"gpt-5.4\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n",
+		)),
+	}}
+
+	svc := &OpenAIGatewayService{
+		cfg: &config.Config{
+			Security: config.SecurityConfig{
+				URLAllowlist: config.URLAllowlistConfig{
+					Enabled:           false,
+					AllowInsecureHTTP: true,
+				},
+			},
+		},
+		httpUpstream:        upstream,
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID:          9528,
+		Name:        "openai-apikey-kilo-mimic",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "sk-test",
+			"base_url": "http://upstream.example",
+		},
+		Extra: map[string]any{
+			"openai_apikey_mimic_codex_cli":          true,
+			"enable_tls_fingerprint":                 true,
+			openai_compat.ExtraKeyResponsesMode:      string(openai_compat.ResponsesSupportModeAuto),
+			openai_compat.ExtraKeyResponsesSupported: true,
+		},
+		Status:      StatusActive,
+		Schedulable: true,
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, originalBody)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotNil(t, upstream.lastTLSProfile)
+	require.Equal(t, codexCLIUserAgent, upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, "codex_cli_rs", upstream.lastReq.Header.Get("originator"))
+	require.Equal(t, "responses=experimental", upstream.lastReq.Header.Get("OpenAI-Beta"))
+	require.Empty(t, upstream.lastReq.Header.Get("session_id"))
+	require.Equal(t, float64(8), gjson.GetBytes(upstream.lastBody, "max_output_tokens").Num)
+}
+
 // ==================== P1-08 修复：model 替换性能优化测试 ====================
 
 // ==================== P1-08 修复：model 替换性能优化测试 =============
