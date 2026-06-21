@@ -26,6 +26,20 @@ func defaultAPIKeyCountTokensMimicBetaHeader(body []byte) string {
 	return mergeAnthropicBeta([]string{beta, "token-counting-2024-11-01"}, "")
 }
 
+func anthropicAPIKeyMimicExtraBetas(modelID string) []string {
+	if requiresContext1MBetaForAPIKeyMimic(modelID) {
+		return []string{claude.BetaContext1M}
+	}
+	return nil
+}
+
+func requiresContext1MBetaForAPIKeyMimic(modelID string) bool {
+	modelID = strings.ToLower(strings.TrimSpace(modelID))
+	return strings.HasPrefix(modelID, "claude-opus-4-6") ||
+		strings.HasPrefix(modelID, "claude-opus-4-7") ||
+		strings.HasPrefix(modelID, "claude-opus-4-8")
+}
+
 func (s *GatewayService) buildAnthropicAPIKeyCLIMimicRequest(
 	ctx context.Context,
 	account *Account,
@@ -37,7 +51,9 @@ func (s *GatewayService) buildAnthropicAPIKeyCLIMimicRequest(
 	effectiveDropSet map[string]struct{},
 ) (*http.Request, []byte, error) {
 	body = s.applyAnthropicAPIKeyClaudeCodeMimicryToBody(ctx, c, account, body)
-	finalBetaHeader := stripBetaTokensWithSet(defaultAPIKeyBetaHeader(body), effectiveDropSet)
+	extraBetas := anthropicAPIKeyMimicExtraBetas(gjson.GetBytes(body, "model").String())
+	effectiveDropSet = removeTokensFromSetCopy(effectiveDropSet, extraBetas...)
+	finalBetaHeader := stripBetaTokensWithSet(mergeAnthropicBeta(extraBetas, defaultAPIKeyBetaHeader(body)), effectiveDropSet)
 	if sanitized, changed := sanitizeAnthropicBodyForBetaTokens(body, finalBetaHeader); changed {
 		body = sanitized
 	}
@@ -56,6 +72,20 @@ func (s *GatewayService) buildAnthropicAPIKeyCLIMimicRequest(
 		setHeaderRaw(req.Header, "anthropic-beta", finalBetaHeader)
 	}
 	return req, body, nil
+}
+
+func removeTokensFromSetCopy(in map[string]struct{}, tokens ...string) map[string]struct{} {
+	if len(in) == 0 || len(tokens) == 0 {
+		return in
+	}
+	out := make(map[string]struct{}, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	for _, token := range tokens {
+		delete(out, token)
+	}
+	return out
 }
 
 func (s *GatewayService) applyAnthropicAPIKeyClaudeCodeMimicryToBody(

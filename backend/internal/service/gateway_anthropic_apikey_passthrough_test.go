@@ -818,6 +818,7 @@ func TestGatewayService_AnthropicAPIKeyMimicRewritesThirdPartyBodyToClaudeCodeSh
 	require.NotNil(t, req)
 	require.NotContains(t, getHeaderRaw(req.Header, "anthropic-beta"), claude.BetaOAuth)
 	require.Contains(t, getHeaderRaw(req.Header, "anthropic-beta"), claude.BetaClaudeCode)
+	require.Contains(t, getHeaderRaw(req.Header, "anthropic-beta"), claude.BetaContext1M)
 	require.Equal(t, "stream", getHeaderRaw(req.Header, "x-stainless-helper-method"))
 
 	metadataUserID := gjson.GetBytes(wireBody, "metadata.user_id").String()
@@ -841,6 +842,13 @@ func TestGatewayService_AnthropicAPIKeyMimicRewritesThirdPartyBodyToClaudeCodeSh
 	require.Equal(t, "ephemeral", gjson.GetBytes(wireBody, "tools.0.cache_control.type").String())
 	require.Equal(t, float64(1), gjson.GetBytes(wireBody, "temperature").Num)
 	require.Equal(t, float64(128000), gjson.GetBytes(wireBody, "max_tokens").Num)
+}
+
+func TestAnthropicAPIKeyMimicExtraBetasOnlyForKnownContext1MModels(t *testing.T) {
+	require.Contains(t, anthropicAPIKeyMimicExtraBetas("claude-opus-4-8"), claude.BetaContext1M)
+	require.Contains(t, anthropicAPIKeyMimicExtraBetas("claude-opus-4-6-thinking"), claude.BetaContext1M)
+	require.Empty(t, anthropicAPIKeyMimicExtraBetas("claude-sonnet-4-5-20250929"))
+	require.Empty(t, anthropicAPIKeyMimicExtraBetas("claude-haiku-4-5-20251001"))
 }
 
 func TestGatewayService_AnthropicAPIKeyMimicCountTokensUsesTokenCountingBeta(t *testing.T) {
