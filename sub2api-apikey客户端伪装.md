@@ -222,9 +222,14 @@ BWG usage 页面里可以看到 ARM64 发过去的伪装请求已经变成：
 
 ---
 
-## 4. 后续计划
+## 4. 下一阶段目标
 
-阶段一最终版已解决当前 Kilo / Cursor 接入官方客户端限制类 OpenAI API 的问题。后续如果继续做“模型侧完全像官方客户端”的研究，不建议直接盲改源码。正确顺序是：
+阶段一最终版已经解决当前 Kilo / Cursor 接入官方客户端限制类 OpenAI API 的可用性问题。下一阶段目标不能再写成模糊的“后续研究”，需要明确分成阶段二和阶段三：
+
+- 阶段二：body cloaking / body identity mimic，目标是解决模型回答“我是 Kilo”这类模型侧身份认知问题。
+- 阶段三：UI / 配置产品化，把阶段一和阶段二确认稳定的开关放进前端，避免长期靠手工改 `account.Extra`。
+
+阶段二不建议直接盲改源码。正确顺序是：
 
 1. BWG 侧采集真实官方客户端请求。
 2. BWG 侧采集 ARM64 伪装请求。
@@ -232,7 +237,121 @@ BWG usage 页面里可以看到 ARM64 发过去的伪装请求已经变成：
 4. 只对高置信差异改源码。
 5. 每改一项都用 Kilo + 官方客户端双向回归。
 
-### 4.1 必抓样本
+### 4.1 阶段二目标：body cloaking
+
+阶段二的目标不是解决“不能用”，而是解决“模型知道自己在 Kilo / Cursor / Cline 等非官方客户端中”的身份认知问题。
+
+当前结论需要拆开：
+
+- OpenAI/Codex 可用性问题已经由裸 `role/content` 规范化和 `prompt_cache_key` 补齐解决。
+- OpenAI/Codex 阶段一最终版不默认做 Cursor / Kilo 身份替换。
+- CLIProxyAPI 的 body cloaking 策略仍然有价值，但优先作为 Anthropic mimic Claude Code 路径的候选方案灰度，不机械照抄到所有平台。
+
+阶段二优先级：
+
+1. 移植 `sanitizeForwardedSystemPrompt` 式身份清洗，但先限定作用范围。
+2. `oauthToolRenameMap` 工具名归一 + 响应回写做成独立开关，先灰度。
+3. 抓 Codex 真机 JA4/ALPN，确认官方 Codex 是 h1 还是 h2，再决定是否调整 OpenAI/Codex 的 ALPN/HTTP2 策略。
+4. 敏感词零宽混淆、per-key 设备画像钉扎后置。
+5. Anthropic 链路先守住当前 h1/Node TLS 方案，除非真机抓包证明官方 Claude Code 已变化。
+
+### 4.2 阶段二第一步：Anthropic 身份清洗
+
+第一步只移植 `sanitizeForwardedSystemPrompt` 式身份清洗，默认限定：
+
+- Anthropic mimic Claude Code profile。
+- 非官方 Claude Code 客户端，例如 Kilo / Cline / Roo 等。
+- 独立开关控制，不影响普通 Anthropic API Key passthrough。
+- 不影响 OpenAI/Codex 路径。
+
+候选开关：
+
+```json
+{
+  "anthropic_apikey_mimic_claude_code": true,
+  "anthropic_apikey_mimic_official_identity": true
+}
+```
+
+处理流程：
+
+1. 识别原客户端 system/instructions 中的身份声明，例如 Kilo、Cline、Roo、Cursor、Aider。
+2. 删除或改写这些身份声明，只保留项目规则、用户偏好、工具使用规则。
+3. 注入真实官方客户端的 system prompt。
+4. 不在第一步改工具名，避免同时引入两个变量。
+5. 用“你是什么模型 / 你在哪个客户端中”作为验收问题之一。
+
+### 4.3 阶段二第二步：工具名归一与响应回写
+
+第二步再做工具名归一，必须独立开关，不能和身份清洗绑死。
+
+候选开关：
+
+```json
+{
+  "anthropic_apikey_mimic_claude_code": true,
+  "anthropic_apikey_mimic_official_identity": true,
+  "anthropic_apikey_mimic_tool_rename": true
+}
+```
+
+处理重点：
+
+- 参考 CLIProxyAPI 的 `oauthToolRenameMap`，把第三方工具名归一成更接近官方客户端的工具名。
+- 上游返回 tool_use 后，必须把工具名回写成 Kilo 能识别的原始工具名。
+- 需要同时覆盖流式和非流式响应。
+- 必须加 Kilo 工具调用回归测试，至少覆盖一次工具调用、一次多工具、一次工具错误。
+
+### 4.4 OpenAI/Codex 阶段二边界
+
+OpenAI/Codex 侧当前不做 CLIProxyAPI 式 body identity cloaking。
+
+已确认保留：
+
+- 裸 `role/content` message 规范化。
+- 缺 `prompt_cache_key` 时补 `codex-mimic-*`。
+- 保留 Cursor / Kilo 原始身份文本、工具 description、工作区路径和客户端能力提示。
+
+后续只做传输层研究：
+
+- 抓 Codex 真机 JA4/ALPN。
+- 确认官方 Codex 是 h1 还是 h2。
+- 再决定 sub2api 是否需要调整 OpenAI/Codex 的 ALPN/HTTP2 策略。
+
+### 4.5 阶段三目标：UI / 配置产品化
+
+阶段三目标是把已经验证稳定的 mimic 能力产品化到前端 UI，减少直接改数据库或 `account.Extra` 的维护成本。
+
+阶段三不应早于阶段二核心行为稳定。建议 UI 分批上线：
+
+第一批，阶段一稳定开关：
+
+- `anthropic_apikey_mimic_claude_code`
+- `openai_apikey_mimic_codex_cli`
+- `enable_tls_fingerprint`
+- Anthropic / OpenAI API Key mimic 与 passthrough 互斥提示。
+
+第二批，阶段二灰度开关：
+
+- `anthropic_apikey_mimic_official_identity`
+- `anthropic_apikey_mimic_tool_rename`
+- `anthropic_apikey_mimic_profile`
+
+第三批，诊断能力：
+
+- 显示当前账号实际出站 profile。
+- 显示是否启用 TLS fingerprint。
+- 显示最近一次 mimic 请求的脱敏诊断摘要。
+- 提供“仅脱敏导出”的抓包辅助入口。
+
+UI 原则：
+
+- 默认保持阶段一最终稳定行为。
+- 高风险 body cloaking 开关默认关闭或灰度。
+- 每个开关要有简短风险提示，尤其是工具名归一和响应回写。
+- 不在 UI 中展示密钥、token、authorization、x-api-key。
+
+### 4.6 必抓样本
 
 Anthropic：
 
@@ -263,45 +382,17 @@ OpenAI / Codex：
 
 注意：抓包和日志必须在服务器本地脱敏，密钥、token、authorization、x-api-key 不发到聊天里。
 
-### 4.2 对比维度
+### 4.7 对比维度
 
 | 维度 | 对比内容 | 目的 |
 |---|---|---|
 | header | UA、beta、version、originator、x-stainless、session 类字段 | 让 BWG/上游看到官方客户端形态 |
-| body identity | system、instructions、metadata、model alias、客户端身份文本 | Anthropic 侧可继续研究；OpenAI/Codex 侧当前保持客户端原文 |
-| tools | 工具名称、description、schema、tool_choice、cache_control | Anthropic 侧如需官方工具名映射再单独灰度；OpenAI/Codex 侧当前不改工具名 |
+| body identity | system、instructions、metadata、model alias、客户端身份文本 | 阶段二 Anthropic 优先解决“我是 Kilo” |
+| tools | 工具名称、description、schema、tool_choice、cache_control | 阶段二第二步灰度工具名归一与响应回写 |
 | stream | SSE 事件顺序、event 类型、done 方式 | 保持客户端兼容 |
 | TLS/HTTP2 | JA3/JA4、ALPN、h2 settings、header 顺序 | 评估是否需要 transport 级改造 |
 
-### 4.3 针对 Anthropic “我是 Kilo”的可选修正方向
-
-如果后续仍要处理 Anthropic 模型侧身份认知，优先做 Anthropic。OpenAI/Codex 路径已经确认不需要靠身份清洗解决当前可用性问题。
-
-建议新增一个可控策略，不要一上来硬编码删除所有 system：
-
-```json
-{
-  "anthropic_apikey_mimic_claude_code": true,
-  "anthropic_apikey_mimic_official_identity": true
-}
-```
-
-处理流程：
-
-1. 识别原客户端 system/instructions 中的身份声明，例如 Kilo、Cline、Roo、Cursor、Aider。
-2. 删除或改写这些身份声明，只保留项目规则、用户偏好、工具使用规则。
-3. 注入真实官方客户端的 system prompt。
-4. 如果工具名泄漏客户端身份，将工具名映射成官方工具名。
-5. 上游 tool_use 回来后，再把工具名映射回 Kilo 能识别的名字。
-6. 用“你是什么模型 / 你在哪个客户端中”作为验收问题之一。
-
-OpenAI/Codex 侧当前不做类似开关。已删除的方向包括：
-
-- 不默认把 `Kilo` / `Cursor` / `Cline` / `Roo` / `OpenCode` 替换成 `Codex`。
-- 不默认改写工具 description、工作区路径、客户端能力提示。
-- 不默认映射工具名，避免破坏 Kilo / Cursor 的工具调用与执行链。
-
-### 4.4 是否要模拟 Claude Desktop 还是 Claude Code
+### 4.8 是否要模拟 Claude Desktop 还是 Claude Code
 
 这点需要先定目标：
 
