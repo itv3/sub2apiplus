@@ -227,6 +227,10 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 
 	// 续链场景保留 item_reference 与 id，避免 call_id 上下文丢失。
 	if input, ok := reqBody["input"].([]any); ok {
+		if normalizedInput, modified := normalizeCodexBareRoleContentMessages(input); modified {
+			input = normalizedInput
+			result.Modified = true
+		}
 		if normalizedInput, modified := normalizeCodexToolRoleMessages(input); modified {
 			input = normalizedInput
 			result.Modified = true
@@ -260,6 +264,60 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 	}
 
 	return result
+}
+
+func normalizeCodexBareRoleContentMessages(input []any) ([]any, bool) {
+	if len(input) == 0 {
+		return input, false
+	}
+
+	modified := false
+	normalized := make([]any, 0, len(input))
+	for _, item := range input {
+		m, ok := item.(map[string]any)
+		if !ok {
+			normalized = append(normalized, item)
+			continue
+		}
+		if strings.TrimSpace(firstNonEmptyString(m["type"])) != "" ||
+			strings.TrimSpace(firstNonEmptyString(m["role"])) == "" {
+			normalized = append(normalized, item)
+			continue
+		}
+		content, hasContent := m["content"]
+		if !hasContent {
+			normalized = append(normalized, item)
+			continue
+		}
+
+		next := make(map[string]any, len(m)+1)
+		for key, value := range m {
+			next[key] = value
+		}
+		next["type"] = "message"
+		if normalizedContent, changed := normalizeCodexBareMessageContent(content); changed {
+			next["content"] = normalizedContent
+		}
+		normalized = append(normalized, next)
+		modified = true
+	}
+	if !modified {
+		return input, false
+	}
+	return normalized, true
+}
+
+func normalizeCodexBareMessageContent(content any) (any, bool) {
+	text, ok := content.(string)
+	if !ok {
+		return content, false
+	}
+	return []any{
+		map[string]any{
+			"type": "input_text",
+			"text": text,
+		},
+	}, true
 }
 
 func normalizeCodexToolChoice(reqBody map[string]any) bool {

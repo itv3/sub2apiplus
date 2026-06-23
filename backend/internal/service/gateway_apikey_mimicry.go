@@ -114,14 +114,7 @@ func (s *GatewayService) applyAnthropicAPIKeyClaudeCodeMimicryToBody(
 	})
 
 	body = s.rewriteMessageCacheControlIfEnabled(ctx, body)
-	if rw := buildToolNameRewriteFromBody(body); rw != nil {
-		body = applyToolNameRewriteToBody(body, rw)
-		if c != nil {
-			c.Set(toolNameRewriteKey, rw)
-		}
-	} else {
-		body = applyToolsLastCacheBreakpoint(body)
-	}
+	body = applyToolsLastCacheBreakpoint(body)
 
 	return body
 }

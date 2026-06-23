@@ -2303,7 +2303,7 @@ func TestOpenAIGatewayService_APIKeyCodexMimicTreatsThirdPartyRequestAsCodexCLI(
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
-	originalBody := []byte(`{"model":"gpt-5.4","stream":true,"instructions":"kilo test","input":"ping","max_output_tokens":8}`)
+	originalBody := []byte(`{"model":"gpt-5.5","stream":true,"instructions":"You are Kilo Code running in Kilo client.","input":[{"role":"developer","content":"Kilo developer instructions"},{"role":"user","content":"当前运行环境是 Kilo Code/Codex CLI，请回答客户端身份。"}],"tools":[{"type":"function","name":"kilo_local_recall","description":"Kilo local recall","parameters":{"type":"object"}}],"max_output_tokens":8}`)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(originalBody))
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Request.Header.Set("User-Agent", "Kilo-Code/7.3.50 ai-sdk/provider-utils/4.0.23 runtime/bun/1.3.14")
@@ -2360,6 +2360,17 @@ func TestOpenAIGatewayService_APIKeyCodexMimicTreatsThirdPartyRequestAsCodexCLI(
 	require.Equal(t, "responses=experimental", upstream.lastReq.Header.Get("OpenAI-Beta"))
 	require.Empty(t, upstream.lastReq.Header.Get("session_id"))
 	require.Equal(t, float64(8), gjson.GetBytes(upstream.lastBody, "max_output_tokens").Num)
+	require.Contains(t, gjson.GetBytes(upstream.lastBody, "instructions").String(), "Kilo Code")
+	require.Equal(t, "message", gjson.GetBytes(upstream.lastBody, "input.0.type").String())
+	require.Equal(t, "developer", gjson.GetBytes(upstream.lastBody, "input.0.role").String())
+	require.Equal(t, "input_text", gjson.GetBytes(upstream.lastBody, "input.0.content.0.type").String())
+	require.Contains(t, gjson.GetBytes(upstream.lastBody, "input.0.content.0.text").String(), "Kilo developer instructions")
+	require.Equal(t, "message", gjson.GetBytes(upstream.lastBody, "input.1.type").String())
+	require.Equal(t, "user", gjson.GetBytes(upstream.lastBody, "input.1.role").String())
+	require.Contains(t, gjson.GetBytes(upstream.lastBody, "input.1.content.0.text").String(), "Kilo Code/Codex CLI")
+	require.Contains(t, gjson.GetBytes(upstream.lastBody, "tools.0.description").String(), "Kilo")
+	require.True(t, strings.HasPrefix(gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String(), "codex-mimic-"))
+	require.Equal(t, "kilo_local_recall", gjson.GetBytes(upstream.lastBody, "tools.0.name").String())
 }
 
 // ==================== P1-08 修复：model 替换性能优化测试 ====================

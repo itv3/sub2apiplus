@@ -2732,6 +2732,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			requestView = newOpenAIRequestView(body)
 		}
 	}
+	if accountMimicCodexCLI {
+		body = applyOpenAIAPIKeyCodexMimicryToBody(body)
+		requestView = newOpenAIRequestView(body)
+		reqBody = nil
+	}
 	imageBillingModel := ""
 	imageSizeTier := ""
 	imageInputSize := ""

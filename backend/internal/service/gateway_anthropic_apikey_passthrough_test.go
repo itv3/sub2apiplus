@@ -839,6 +839,8 @@ func TestGatewayService_AnthropicAPIKeyMimicRewritesThirdPartyBodyToClaudeCodeSh
 	require.Contains(t, messages.Get("0.content.0.text").String(), "Kilo project instructions")
 	require.Equal(t, "Understood. I will follow these instructions.", messages.Get("1.content.0.text").String())
 	require.True(t, gjson.GetBytes(wireBody, "tools").IsArray())
+	require.Equal(t, "kilo_read_file", gjson.GetBytes(wireBody, "tools.0.name").String())
+	require.Equal(t, "kilo_read_file", gjson.GetBytes(wireBody, "tool_choice.name").String())
 	require.Equal(t, "ephemeral", gjson.GetBytes(wireBody, "tools.0.cache_control.type").String())
 	require.Equal(t, float64(1), gjson.GetBytes(wireBody, "temperature").Num)
 	require.Equal(t, float64(128000), gjson.GetBytes(wireBody, "max_tokens").Num)

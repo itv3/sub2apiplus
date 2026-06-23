@@ -33,7 +33,7 @@
 ### `backend/internal/service/openai_gateway_service.go`
 
 - 锚点：`Forward()`
-- 修改理由：拆分 `inboundIsCodexCLI` 与 `upstreamMimicCodexCLI`，避免账号级 mimic 意外触发入站兼容逻辑。
+- 修改理由：拆分 `inboundIsCodexCLI` 与 `upstreamMimicCodexCLI`，同时让账号级 API Key mimic 参与 `isCodexCLI`，保留 Codex body 语义，避免 Kilo 这类第三方请求被当作普通客户端清理。
 
 - 锚点：`buildUpstreamRequest()`
 - 修改理由：API Key mimic 强制覆盖出站 `user-agent` / `originator` / `OpenAI-Beta` / `version`，并清理客户端 session 类 header。
@@ -55,3 +55,9 @@
   - `codexCLIUserAgent` / `codexCLIVersion` 是否变化。
   - `buildUpstreamRequest()` 的 API Key 主路径是否新增必须 header 或 body 预处理。
   - `DoWithTLS` 路径与 profile 解析语义是否变化。
+  - 账号级 mimic 是否仍参与 `isCodexCLI`；不要误回退成只改上游 header，否则 Kilo 请求可能再次失败。
+
+- 阶段二 body identity：
+  - OpenAI/Codex 路径可只净化 `instructions` / `input` 中的客户端身份词，保持 `tools[*].name` / `tool_choice.name` 原样。
+  - Claude API Key mimic 路径保持第一阶段 body 形态，不替换第三方客户端 system 文本，不新增工具名改写。
+  - 对比测试以 BWG 入站为准：官方客户端入站作为基准，ARM64 入站代表 ARM64 sub2api 出站行为，并用 `client_ip` 分组。

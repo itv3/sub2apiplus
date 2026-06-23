@@ -254,6 +254,48 @@ func TestApplyCodexOAuthTransform_StringifiesNonStringMessageContentText(t *test
 	require.Equal(t, `["a","b"]`, part["text"])
 }
 
+func TestApplyCodexOAuthTransform_NormalizesBareRoleContentMessages(t *testing.T) {
+	reqBody := map[string]any{
+		"model": "gpt-5.5",
+		"input": []any{
+			map[string]any{
+				"role":    "developer",
+				"content": "developer instructions",
+			},
+			map[string]any{
+				"role": "user",
+				"content": []any{
+					map[string]any{"type": "input_text", "text": "hello"},
+				},
+			},
+		},
+	}
+
+	applyCodexOAuthTransform(reqBody, true, false)
+
+	input, ok := reqBody["input"].([]any)
+	require.True(t, ok)
+	require.Len(t, input, 2)
+
+	developer, ok := input[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "message", developer["type"])
+	require.Equal(t, "developer", developer["role"])
+	developerContent, ok := developer["content"].([]any)
+	require.True(t, ok)
+	require.Len(t, developerContent, 1)
+	developerPart, ok := developerContent[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "input_text", developerPart["type"])
+	require.Equal(t, "developer instructions", developerPart["text"])
+
+	user, ok := input[1].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "message", user["type"])
+	require.Equal(t, "user", user["role"])
+	require.Equal(t, []any{map[string]any{"type": "input_text", "text": "hello"}}, user["content"])
+}
+
 func TestApplyCodexOAuthTransform_DowngradesUnknownToolChoice(t *testing.T) {
 	reqBody := map[string]any{
 		"model": "gpt-5.4",
