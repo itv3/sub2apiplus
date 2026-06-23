@@ -25,6 +25,7 @@
 - 分支：`mimic`
 - 远端：`origin/mimic`
 - 阶段一基线提交：`e4c93a4f fix: preserve context 1m beta for api key mimic`
+- 阶段一最终提交：`b5dfa56e fix: finalize api key mimic phase one`
 
 ARM64 测试服当前运行：
 
