@@ -3,6 +3,7 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -25,6 +26,7 @@ import (
 type queuedHTTPUpstream struct {
 	responses []*http.Response
 	requests  []*http.Request
+	bodies    [][]byte
 	tlsFlags  []bool
 }
 
@@ -33,6 +35,12 @@ func (u *queuedHTTPUpstream) Do(_ *http.Request, _ string, _ int64, _ int) (*htt
 }
 
 func (u *queuedHTTPUpstream) DoWithTLS(req *http.Request, _ string, _ int64, _ int, profile *tlsfingerprint.Profile) (*http.Response, error) {
+	if req != nil && req.Body != nil {
+		body, _ := io.ReadAll(req.Body)
+		u.bodies = append(u.bodies, append([]byte(nil), body...))
+		_ = req.Body.Close()
+		req.Body = io.NopCloser(bytes.NewReader(body))
+	}
 	u.requests = append(u.requests, req)
 	u.tlsFlags = append(u.tlsFlags, profile != nil)
 	if len(u.responses) == 0 {
@@ -387,6 +395,51 @@ func TestAccountTestService_OpenAIAPIKeyResponsesUnsupportedUsesChatCompletionsP
 	require.Contains(t, body, "已通过 /v1/chat/completions 验证")
 	require.Contains(t, body, `"success":true`)
 	require.NotContains(t, body, "当前测试接口仅支持 Responses API 路径")
+}
+
+func TestAccountTestService_OpenAIAPIKeyCodexMimicUsesResponsesProbe(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := newTestContext()
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid_account_mimic_probe"}},
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"stop after request capture"}}`)),
+	}}
+	svc := &AccountTestService{
+		httpUpstream:        upstream,
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+		cfg:                 &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+	}
+	account := &Account{
+		ID:          93,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "sk-test",
+			"base_url": "https://compat-upstream.example",
+		},
+		Extra: map[string]any{
+			"openai_apikey_mimic_codex_cli":          true,
+			"enable_tls_fingerprint":                 true,
+			openai_compat.ExtraKeyResponsesSupported: false,
+		},
+	}
+
+	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
+	require.Error(t, err)
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, "https://compat-upstream.example/v1/responses", upstream.lastReq.URL.String())
+	require.Equal(t, codexCLIUserAgent, upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, "codex_cli_rs", upstream.lastReq.Header.Get("originator"))
+	require.Equal(t, "responses=experimental", upstream.lastReq.Header.Get("OpenAI-Beta"))
+	require.Equal(t, codexCLIVersion, upstream.lastReq.Header.Get("version"))
+	require.Empty(t, upstream.lastReq.Header.Get("session_id"))
+	require.NotNil(t, upstream.lastTLSProfile)
+	require.Equal(t, "message", gjson.GetBytes(upstream.lastBody, "input.0.type").String())
+	require.Equal(t, "gpt-5.4", gjson.GetBytes(upstream.lastBody, "model").String())
+	require.True(t, strings.HasPrefix(gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String(), "codex-mimic-"))
 }
 
 func TestAccountTestService_OpenAIChatCompletionsPathReturns4xx(t *testing.T) {

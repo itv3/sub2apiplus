@@ -2297,6 +2297,11 @@ func TestOpenAIGatewayService_APIKeyCodexMimicUsesTLSPath(t *testing.T) {
 	require.NotNil(t, upstream.lastTLSProfile)
 	require.Equal(t, "Built-in Default (Node.js 24.x)", upstream.lastTLSProfile.Name)
 	require.Equal(t, codexCLIUserAgent, upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, "text/event-stream", upstream.lastReq.Header.Get("Accept"))
+	require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "store").Bool())
+	require.Equal(t, "reasoning.encrypted_content", gjson.GetBytes(upstream.lastBody, "include.0").String())
+	require.False(t, result.Stream)
 }
 
 func TestOpenAIGatewayService_APIKeyCodexMimicTreatsThirdPartyRequestAsCodexCLI(t *testing.T) {

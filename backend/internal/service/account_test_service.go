@@ -527,6 +527,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	var apiURL string
 	var isOAuth bool
 	var chatgptAccountID string
+	accountMimicCodexCLI := account.IsOpenAIAPIKeyCodexMimicEnabled()
 
 	if account.IsOAuth() {
 		isOAuth = true
@@ -554,7 +555,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		if err != nil {
 			return s.sendErrorAndEnd(c, fmt.Sprintf("Invalid base URL: %s", err.Error()))
 		}
-		if !openai_compat.ShouldUseResponsesAPI(account.Extra) {
+		if !accountMimicCodexCLI && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
 			return s.testOpenAIChatCompletionsConnection(c, account, testModelID, prompt, normalizedBaseURL, authToken)
 		}
 		apiURL = buildOpenAIResponsesURL(normalizedBaseURL)
@@ -572,6 +573,9 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	// Create OpenAI Responses API payload
 	payload := createOpenAITestPayload(testModelID, isOAuth)
 	payloadBytes, _ := json.Marshal(payload)
+	if accountMimicCodexCLI {
+		payloadBytes = applyOpenAIAPIKeyCodexMimicryToBody(payloadBytes)
+	}
 
 	// Send test_start event
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
@@ -593,6 +597,9 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		if chatgptAccountID != "" {
 			req.Header.Set("chatgpt-account-id", chatgptAccountID)
 		}
+	}
+	if accountMimicCodexCLI {
+		applyOpenAIAPIKeyCodexMimicHeaders(req, true)
 	}
 
 	// Get proxy URL

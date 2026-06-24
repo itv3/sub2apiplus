@@ -54,8 +54,72 @@ func applyOpenAIAPIKeyCodexMimicryToBody(body []byte) []byte {
 		return body
 	}
 	body = normalizeOpenAIAPIKeyCodexBareRoleContentMessagesBody(body)
+	body = normalizeOpenAIAPIKeyCodexSystemRoleBody(body)
+	body = ensureOpenAIAPIKeyCodexInstructionsBody(body)
+	body = ensureOpenAIAPIKeyCodexStreamBody(body)
+	body = ensureOpenAIAPIKeyCodexStoreBody(body)
+	body = ensureOpenAIAPIKeyCodexIncludeBody(body)
 	body = ensureOpenAIAPIKeyCodexPromptCacheKeyBody(body)
 	return body
+}
+
+func ensureOpenAIAPIKeyCodexStoreBody(body []byte) []byte {
+	store := gjson.GetBytes(body, "store")
+	if store.Exists() && !store.Bool() {
+		return body
+	}
+	out, err := sjson.SetBytes(body, "store", false)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+func ensureOpenAIAPIKeyCodexIncludeBody(body []byte) []byte {
+	include := gjson.GetBytes(body, "include")
+	if include.IsArray() {
+		found := false
+		include.ForEach(func(_, item gjson.Result) bool {
+			if strings.TrimSpace(item.String()) == "reasoning.encrypted_content" {
+				found = true
+				return false
+			}
+			return true
+		})
+		if found {
+			return body
+		}
+	}
+	out, err := sjson.SetBytes(body, "include", []string{"reasoning.encrypted_content"})
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+func ensureOpenAIAPIKeyCodexStreamBody(body []byte) []byte {
+	stream := gjson.GetBytes(body, "stream")
+	if stream.Exists() && stream.Bool() {
+		return body
+	}
+	out, err := sjson.SetBytes(body, "stream", true)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+func ensureOpenAIAPIKeyCodexInstructionsBody(body []byte) []byte {
+	instructions := gjson.GetBytes(body, "instructions")
+	if instructions.Exists() && instructions.Type == gjson.String && strings.TrimSpace(instructions.String()) != "" {
+		return body
+	}
+	model := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	out, err := sjson.SetBytes(body, "instructions", defaultCodexSynthInstructions(model))
+	if err != nil {
+		return body
+	}
+	return out
 }
 
 func ensureOpenAIAPIKeyCodexPromptCacheKeyBody(body []byte) []byte {
@@ -202,6 +266,42 @@ func normalizeOpenAIAPIKeyCodexBareRoleContentMessagesBody(body []byte) []byte {
 		return body
 	}
 	reqBody["input"] = normalized
+	out, err := marshalOpenAIUpstreamJSON(reqBody)
+	if err != nil {
+		return body
+	}
+	return out
+}
+
+func normalizeOpenAIAPIKeyCodexSystemRoleBody(body []byte) []byte {
+	if len(body) == 0 || !gjson.ValidBytes(body) || !gjson.GetBytes(body, "input").IsArray() {
+		return body
+	}
+	var reqBody map[string]any
+	if err := json.Unmarshal(body, &reqBody); err != nil {
+		return body
+	}
+	input, ok := reqBody["input"].([]any)
+	if !ok {
+		return body
+	}
+	changed := false
+	for _, item := range input {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		role, ok := m["role"].(string)
+		if !ok || !strings.EqualFold(strings.TrimSpace(role), "system") {
+			continue
+		}
+		m["role"] = "developer"
+		changed = true
+	}
+	if !changed {
+		return body
+	}
+	reqBody["input"] = input
 	out, err := marshalOpenAIUpstreamJSON(reqBody)
 	if err != nil {
 		return body

@@ -59,6 +59,7 @@ var instructionsGPT52 string
 
 // CodexBaseInstructionsForModel 按模型返回最匹配的真实 Codex base instructions：
 //   - 含 "codex" 的模型（gpt-5-codex / gpt-5.x-codex / codex-max / spark 等）→ GPT-5-Codex prompt
+//   - gpt-5.5 系非 codex 模型 → GPT-5.5 prompt（由最新非 codex prompt 改写首行）
 //   - gpt-5.2 系非 codex 模型 → GPT-5.2 prompt
 //   - gpt-5.1 / gpt-5 系非 codex 模型 → GPT-5.1 prompt
 //   - 其它 → 回退到 GPT-5-Codex prompt
@@ -69,14 +70,35 @@ func CodexBaseInstructionsForModel(model string) string {
 	switch {
 	case strings.Contains(m, "codex"):
 		return DefaultInstructions
+	case strings.HasPrefix(m, "gpt-5.5"):
+		if v := synthesizeCodexInstructionsForGPT5Version("GPT-5.5"); strings.TrimSpace(v) != "" {
+			return v
+		}
 	case strings.HasPrefix(m, "gpt-5.2"):
 		if v := strings.TrimSpace(instructionsGPT52); v != "" {
 			return instructionsGPT52
 		}
-	case strings.HasPrefix(m, "gpt-5.1"), strings.HasPrefix(m, "gpt-5"):
+	case strings.HasPrefix(m, "gpt-5.1"), m == "gpt-5":
 		if v := strings.TrimSpace(instructionsGPT51); v != "" {
 			return instructionsGPT51
 		}
 	}
 	return DefaultInstructions
+}
+
+func synthesizeCodexInstructionsForGPT5Version(version string) string {
+	base := strings.TrimSpace(instructionsGPT52)
+	if base == "" {
+		base = strings.TrimSpace(instructionsGPT51)
+	}
+	if base == "" {
+		return ""
+	}
+	lines := strings.SplitN(base, "\n", 2)
+	lines[0] = strings.Replace(lines[0], "GPT-5.2", version, 1)
+	lines[0] = strings.Replace(lines[0], "GPT-5.1", version, 1)
+	if len(lines) == 1 {
+		return lines[0]
+	}
+	return lines[0] + "\n" + lines[1]
 }

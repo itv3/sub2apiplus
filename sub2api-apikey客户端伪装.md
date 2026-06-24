@@ -1,15 +1,13 @@
-# sub2api：API Key 官方客户端伪装阶段一最终记录
+# sub2api：API Key 官方客户端伪装阶段一方案
 
-更新时间：2026-06-23
+更新时间：2026-06-24
 
 > 目标：让通过 sub2api 转发的 API Key 账号，在上游和模型侧都尽量接近官方客户端请求形态。
 >
 > - Anthropic API Key：伪装成 Claude Code / Claude Desktop 系官方 API Key 请求。
 > - OpenAI API Key：伪装成 Codex CLI / Codex Desktop 系官方 API Key 请求。
 >
-> 当前阶段一已经不是早期的“只做 header 伪装”。实际落地后，为了让 Kilo / Cursor 这类非官方客户端可用，已经做到了 header + TLS 发送路径 + Anthropic body 级 Claude Code 形态 + OpenAI Codex body 兼容修正。
->
-> 2026-06-23 复测结论：OpenAI Codex mimic 路径不需要移植 CLIProxyAPI 式 Cursor/Kilo 身份清洗。Kilo / Cursor 不能使用官方客户端限制类 OpenAI API 的根因已经由两项兼容修正解决：裸 `role/content` message 规范化，以及缺失 `prompt_cache_key` 时补 `codex-mimic-*`。
+> 阶段一覆盖 `/v1/responses`、`/v1/chat/completions`、ARM64 账号自测、BWG 下游探活四条路径。OpenAI Codex mimic 的核心能力包括 header、TLS 发送路径、Codex instructions、stream/store/include、`prompt_cache_key`、裸 `role/content` message 规范化、`system -> developer`、Chat Completions 强制走 Responses 转换，以及 `gpt-5.5` base instructions 映射。
 
 ---
 
@@ -17,30 +15,21 @@
 
 ### 1.1 阶段一状态
 
-阶段一已完成并部署到 ARM64 测试服，本版本作为阶段一最终版保存。
+阶段一已完成并部署到 ARM64 测试服。
 
 当前代码分支：
 
 - 本地仓库：`/Users/czs/Documents/sub2api`
 - 分支：`mimic`
 - 远端：`origin/mimic`
-- 阶段一基线提交：`e4c93a4f fix: preserve context 1m beta for api key mimic`
-- 阶段一最终提交：`b5dfa56e fix: finalize api key mimic phase one`
 
 ARM64 测试服当前运行：
 
-- 当前运行镜像：`sub2api:mimic-e4c93a4f-stage2j-arm64`
-- 阶段一最终保存镜像：`sub2api:mimic-e4c93a4f-phase1-final-arm64`
-- 镜像 ID：`sha256:9da1adfd400f553c6d51a64f7621ddfd2f5d20ed93ffb9516448ed92684fcd6d`
+- 当前运行镜像：`sub2api:mimic-b0db3a86-systemrole-arm64`
 - 容器：`sub2api-mimic`
 - 对外地址：`https://sg.3ab.in`
 - Claude Base URL：`https://sg.3ab.in`
 - Codex Base URL：`https://sg.3ab.in/v1`
-
-Kilo 客户端已验证通过：
-
-- Claude：`claude-opus-4-8`，`/v1/messages`，流式成功。
-- Codex/OpenAI：`gpt-5.5`，`/v1/responses`，流式成功。
 
 ### 1.2 两类“伪装”必须分开看
 
@@ -48,12 +37,16 @@ Kilo 客户端已验证通过：
 
 | 目标 | 看哪里 | 当前状态 |
 |---|---|---|
-| 上游识别为官方客户端 | header、TLS、HTTP 发送路径、beta、UA、originator | 阶段一已跑通 Kilo，BWG 端看到 ARM64 请求已像官方 CLI |
-| 模型自我认知为官方客户端 | body 里的 `system` / `instructions` / `metadata` / `tools` / 原客户端身份提示 | Anthropic 侧后续可继续研究；OpenAI/Codex 侧本轮不再做 Cursor/Kilo 身份替换 |
+| 上游识别为官方客户端 | header、TLS、HTTP 发送路径、beta、UA、originator、Codex 必需 body 字段 | 阶段一已覆盖 Kilo/Cline、ARM64 自测和 BWG 下游探活 |
+| 模型自我认知为官方客户端 | body 里的 `system` / `instructions` / `metadata` / `tools` / 原客户端身份提示 | 阶段一不做统一身份替换；只保证 Codex base instructions 在缺失时补齐 |
 
-2026-06-23 的同上游复测显示：Kilo 回答中出现 `Kilo Code / Codex CLI` 这类组合表述，是上游模型同时看到 Kilo 客户端上下文与 Codex CLI 基础 instructions 后的自然归纳，不是 sub2api 侧把 `Kilo` 改写成 `Codex`，也不是必须用 body identity sanitizer 解决的问题。
+模型侧身份判断说明：
 
-### 1.3 阶段一最终边界
+- Cline 回答自己在 Codex CLI，是因为请求缺少或没有强 Cline 身份上下文时，mimic 层会补 Codex CLI base `instructions`。
+- Kilo 仍可能回答自己在 Kilo，是因为 Kilo 自己把 `Kilo-Code`、`Kilo developer instructions`、`kilo_local_recall` 等身份或工具线索放进请求正文。
+- 模型通常看不到 HTTP `User-Agent`，只能根据 body 中可见的 `instructions`、`input`、`tools` 推断客户端身份；sub2api 不做响应侧文本替换。
+
+### 1.3 阶段一边界
 
 可以做：
 
@@ -67,11 +60,11 @@ Kilo 客户端已验证通过：
 - 如果官方客户端还有服务端隐藏 prompt、账号侧状态、产品侧 memory、UI 层上下文，单靠 sub2api 不能 100% 复制。
 - 如果官方客户端和第三方客户端可用工具完全不同，强行映射可能影响工具调用稳定性。
 - 如果上游或中转检查 HTTP/2 wire 指纹，Go `net/http` 默认传输层仍可能与官方客户端不同。
-- OpenAI/Codex 侧不再默认删除或改写 Cursor / Kilo 的真实客户端身份文本，避免影响工具调用、工作区路径、客户端能力提示和后续排障。
+- OpenAI/Codex 侧保留 Cursor / Kilo / Cline / Roo Code 的真实客户端身份文本，避免影响工具调用、工作区路径、客户端能力提示和后续排障。
 
-阶段一最终目标是：
+阶段一目标是：
 
-> 让 Kilo / Cursor 等非官方客户端在官方客户端限制类 API 上可用，同时让 BWG 端看到的关键 header、TLS、OpenAI/Codex 兼容 body 字段满足上游要求。
+> 让 Kilo / Cline / Cursor / Roo Code 等使用 `/v1/responses` 或 `/v1/chat/completions` 的非官方客户端，在官方客户端限制类 OpenAI API 上通过 ARM64 通用 Codex mimic 可用；同时让 ARM64 自测、BWG 下游探活、真实客户端请求都走同一套伪装后路径。
 
 ---
 
@@ -96,7 +89,7 @@ Kilo 客户端已验证通过：
 - 不改变 OAuth 账号现有逻辑。
 - `enable_tls_fingerprint` 仍是独立开关，mimic 只放开账号类型资格。
 
-### 2.2 Anthropic 已落地内容
+### 2.2 Anthropic 实现内容
 
 主要文件：
 
@@ -124,21 +117,24 @@ Kilo 客户端已验证通过：
 - 对 billing block 做 `signBillingHeaderCCH`。
 - Anthropic API Key mimic 允许走 TLS fingerprint profile。
 
-需要阶段二继续收敛：
+阶段二继续收敛项：
 
-- 第三方客户端原始 system 中的“我是 Kilo / You are Kilo”类身份提示，目前不能只迁移，必要时要删除或改写。
+- 第三方客户端原始 system 中的“我是 Kilo / You are Kilo”类身份提示不能只迁移，必要时要删除或改写。
 - 工具名如果带 `kilo_` / `cline_` / `roo_` 等命名，会让模型继续感知第三方客户端，需要官方工具名映射和回写。
 - 真实 Claude Desktop 与 Claude Code CLI 的 body 形态可能不同，需要分 profile。
 
-### 2.3 OpenAI / Codex 已落地内容
+### 2.3 OpenAI / Codex 实现内容
 
 主要文件：
 
 - `backend/internal/service/account_apikey_mimicry.go`
 - `backend/internal/service/apikey_mimic_identity.go`
 - `backend/internal/service/openai_apikey_mimicry.go`
+- `backend/internal/service/openai_gateway_chat_completions.go`
 - `backend/internal/service/openai_gateway_service.go`
 - `backend/internal/service/openai_codex_transform.go`
+- `backend/internal/service/account_test_service.go`
+- `backend/internal/pkg/openai/constants.go`
 - `backend/internal/service/account.go`
 
 已实现：
@@ -146,85 +142,77 @@ Kilo 客户端已验证通过：
 - `openai_passthrough` 与 `openai_apikey_mimic_codex_cli` 互斥，mimic 优先。
 - 开启账号级 mimic 时，内部 `isCodexCLI` 视为 true。
 - 这样可以保留 Codex 相关 body 语义，避免 Kilo 请求被当作普通第三方请求清理。
+- `/v1/responses` 入站走通用 Codex mimic body/header/TLS 处理。
+- `/v1/chat/completions` 入站对 API Key Codex mimic 账号强制走 Chat Completions -> Responses 转换，再进入同一套 Codex mimic body/header/TLS 处理。
+- ARM64 账号自测使用同一套 Codex mimic body/header/TLS 处理。
+- BWG 下游探活通过 ARM64 API key 进入后，也会走 ARM64 的通用 `/v1/responses` 或 `/v1/chat/completions` mimic 路径。
 - 出站强制覆盖 Codex header：
   - `user-agent: codexCLIUserAgent`
   - `originator: codex_cli_rs`
   - `OpenAI-Beta: responses=experimental`
   - `version: codexCLIVersion`
 - 删除客户端透传的 `session_id` / `conversation_id`。
-- OpenAI API Key mimic 主 HTTP `/v1/responses` 走 `DoWithTLS`。
+- OpenAI API Key mimic 主 HTTP `/v1/responses` 和 `/v1/chat/completions` 转换后的上游请求都走 `DoWithTLS`。
 - TLS profile 为 nil 时保持兼容回退。
-- 裸 `role/content` message 规范化为 Codex Desktop / Responses 风格：
+- Codex mimic body 统一补齐或规范化：
+  - `instructions`：缺失时按模型补真实 Codex CLI base instructions。
+  - `stream: true`：上游按 Codex 流式形态发送。
+  - `store: false`。
+  - `include: ["reasoning.encrypted_content"]`。
+  - `prompt_cache_key`：缺失时补稳定的 `codex-mimic-*`。
+- 裸 `role/content` message 规范化为 Codex / Responses 风格：
   - 原始形态：`{"role":"user","content":"..."}`
   - 规范形态：`{"type":"message","role":"user","content":[{"type":"input_text","text":"..."}]}`
-- 仅当请求缺少 `prompt_cache_key` 时，自动补稳定的 `codex-mimic-*`。
+- `role:"system"` 统一改为 `role:"developer"`，避免 Codex 上游对 Responses `input` 中的 `system` role 返回 400。
+- `gpt-5.5` 使用首行为 `You are GPT-5.5 running in the Codex CLI` 的 Codex prompt。
+- 仅当请求缺少 `prompt_cache_key` 时自动补值。
 - 如果客户端已有 `prompt_cache_key`，保持原值不覆盖。
-- 不再对 OpenAI/Codex mimic 请求做 Cursor / Kilo / Cline / Roo / OpenCode 身份文本替换。
+- OpenAI/Codex mimic 请求保留 Cursor / Kilo / Cline / Roo / OpenCode 身份文本。
 - 工具名、工具 description、工作区路径、客户端能力提示保持原样，避免破坏客户端工具执行链。
 
-2026-06-23 确认：
+行为边界：
 
-- Cursor / Kilo 不能使用 `gpt-5.5` 官方客户端限制类 API 的根因是上面两项 body 兼容差异。
-- 同上游复测后，`Kilo Code / Codex CLI` 与 `Codex CLI / Kilo Code` 的回答差异属于上游模型表达差异，不是 sub2api 文本替换。
-- OpenAI/Codex 侧阶段一最终版不引入 CLIProxyAPI 式 body identity cloaking。
+- Cline 回答 Codex、Kilo 回答 Kilo，属于请求正文里的身份线索差异；模型通常不会读取 HTTP `User-Agent`。
+- OpenAI/Codex 侧阶段一不引入 CLIProxyAPI 式 body identity cloaking。
 
 ---
 
-## 3. 已验证事实
+## 3. 验收状态
 
-### 3.1 本地单测
+### 3.1 本地测试
 
 已通过：
 
 ```bash
-go test ./internal/service
+go test ./internal/pkg/apicompat ./internal/pkg/openai ./internal/service
 ```
 
-关键覆盖：
-
-- Anthropic API Key mimic 丢弃客户端 header 和 OAuth beta。
-- Anthropic API Key mimic 将第三方 body 改为 Claude Code 形态。
-- `claude-opus-4-6/4-7/4-8` 额外保留 `context-1m-2025-08-07`。
-- Anthropic `count_tokens` 使用 token-counting beta。
-- OpenAI API Key Codex mimic 覆盖客户端 header。
-- OpenAI API Key Codex mimic 走 TLS 路径。
-- Kilo 请求在 OpenAI API Key mimic 下按 Codex CLI 语义处理。
-- OpenAI API Key Codex mimic 裸 `role/content` message 规范化。
-- OpenAI API Key Codex mimic 缺 `prompt_cache_key` 时补 `codex-mimic-*`。
-- OpenAI API Key Codex mimic 保留 Cursor / Kilo 身份文本，不做替换。
-
-### 3.2 ARM64 测试服
+### 3.2 ARM64 / BWG 验收
 
 已验证：
 
 - `https://sg.3ab.in/` 仍保持 API-only，根路径不展示网站页面。
 - `https://sg.3ab.in/v1` 可用于 API 调用。
 - Claude 非流式和流式请求成功。
-- OpenAI/Codex 非流式和流式请求成功。
+- OpenAI/Codex `/v1/responses` 非流式和流式请求成功。
+- OpenAI/Codex `/v1/chat/completions` 流式请求成功。
 - Kilo 客户端分别测试 `claude-opus-4-8` 和 `gpt-5.5` 成功。
+- Kilo 切换到 `/v1/chat/completions` 后成功。
+- Cline 连接 ARM64 后成功，`gpt-5.5` 身份回答为 `GPT-5.5 / Codex CLI`。
+- BWG 通过 ARM64 API key 下游探活 `/v1/responses` 和 `/v1/chat/completions` 成功。
+- ARM64 自身后台测试连接成功。
 
-### 3.3 截图解读
+### 3.3 已知边界
 
-ARM64 usage 页面里的 `USER-AGENT` 是客户端到 ARM64 的入口 UA，因此会显示 Kilo：
-
-- `Kilo-Code/7.3.50 ...`
-
-这不等价于 BWG 收到的出站伪装 UA。
-
-BWG usage 页面里可以看到 ARM64 发过去的伪装请求已经变成：
-
-- Claude：`claude-cli/... (external, cli)`
-- Codex：`codex_cli_rs/...`
-
-这说明阶段一的上游 header 伪装已生效。
-
-如果模型回答中同时提到 Kilo Code 与 Codex CLI，需要结合上游账号和同源抓包判断。2026-06-23 同上游复测结论是：这类回答来自上游模型对 Kilo 上下文和 Codex CLI instructions 的合并理解，不是 sub2api 侧身份替换。
+- ARM64 usage 页面里的 `USER-AGENT` 是客户端到 ARM64 的入口 UA，不等价于 ARM64 发往上游/BWG 的伪装 UA。
+- BWG 侧应以 ARM64 出站请求为准判断上游伪装效果。
+- 模型侧身份回答来自请求 body 中的 `instructions`、`input`、`tools` 等可见线索；sub2api 不做响应侧文本替换。
 
 ---
 
 ## 4. 下一阶段目标
 
-阶段一最终版已经解决当前 Kilo / Cursor 接入官方客户端限制类 OpenAI API 的可用性问题。下一阶段目标不能再写成模糊的“后续研究”，需要明确分成阶段二和阶段三：
+阶段一已经解决当前 Kilo / Cline / Cursor / Roo Code 这类客户端通过 `/v1/responses` 或 `/v1/chat/completions` 接入官方客户端限制类 OpenAI API 的通用可用性问题。后续目标分为阶段二和阶段三：
 
 - 阶段二：body cloaking / body identity mimic，目标是解决模型回答“我是 Kilo”这类模型侧身份认知问题。
 - 阶段三：UI / 配置产品化，把阶段一和阶段二确认稳定的开关放进前端，避免长期靠手工改 `account.Extra`。
@@ -239,12 +227,12 @@ BWG usage 页面里可以看到 ARM64 发过去的伪装请求已经变成：
 
 ### 4.1 阶段二目标：body cloaking
 
-阶段二的目标不是解决“不能用”，而是解决“模型知道自己在 Kilo / Cursor / Cline 等非官方客户端中”的身份认知问题。
+阶段二的目标是解决“模型知道自己在 Kilo / Cursor / Cline 等非官方客户端中”的身份认知问题。
 
 当前结论需要拆开：
 
-- OpenAI/Codex 可用性问题已经由裸 `role/content` 规范化和 `prompt_cache_key` 补齐解决。
-- OpenAI/Codex 阶段一最终版不默认做 Cursor / Kilo 身份替换。
+- OpenAI/Codex 可用性问题由阶段一解决：`/v1/responses`、`/v1/chat/completions`、ARM64 自测、BWG 下游探活都走同一套 Codex mimic。
+- OpenAI/Codex 阶段一不默认做 Cursor / Kilo / Cline / Roo Code 身份替换。
 - CLIProxyAPI 的 body cloaking 策略仍然有价值，但优先作为 Anthropic mimic Claude Code 路径的候选方案灰度，不机械照抄到所有平台。
 
 阶段二优先级：
@@ -309,8 +297,11 @@ OpenAI/Codex 侧当前不做 CLIProxyAPI 式 body identity cloaking。
 已确认保留：
 
 - 裸 `role/content` message 规范化。
+- `role:"system"` 归一为 `role:"developer"`。
+- 缺 `instructions` 时补 Codex CLI base instructions。
+- 强制 `stream:true`、`store:false`、`include:["reasoning.encrypted_content"]`。
 - 缺 `prompt_cache_key` 时补 `codex-mimic-*`。
-- 保留 Cursor / Kilo 原始身份文本、工具 description、工作区路径和客户端能力提示。
+- 保留 Cursor / Kilo / Cline / Roo Code 原始身份文本、工具 description、工作区路径和客户端能力提示。
 
 后续只做传输层研究：
 
@@ -346,30 +337,23 @@ OpenAI/Codex 侧当前不做 CLIProxyAPI 式 body identity cloaking。
 
 UI 原则：
 
-- 默认保持阶段一最终稳定行为。
+- 默认保持阶段一稳定行为。
 - 高风险 body cloaking 开关默认关闭或灰度。
 - 每个开关要有简短风险提示，尤其是工具名归一和响应回写。
 - 不在 UI 中展示密钥、token、authorization、x-api-key。
 
-### 4.6 必抓样本
+### 4.6 阶段二采样与对比
 
-Anthropic：
+必抓样本：
 
 - Claude 官方客户端 / Claude Code：`/v1/messages` 非流式。
 - Claude 官方客户端 / Claude Code：`/v1/messages` 流式。
 - Claude 官方客户端 / Claude Code：`/v1/messages/count_tokens`。
-- 带 tools 的请求。
-- 带长上下文或 `context-1m-2025-08-07` 的请求。
-- 直接问“你是什么模型 / 你在哪个客户端中”的请求。
-
-OpenAI / Codex：
-
 - Codex 官方客户端：`/v1/responses` 非流式。
 - Codex 官方客户端：`/v1/responses` 流式。
-- 带 tools/function calling 的请求。
-- 带 reasoning 的请求。
+- 带 tools / function calling 的请求。
+- 带长上下文、`context-1m-2025-08-07` 或 reasoning 的请求。
 - 直接问“你是什么模型 / 你在哪个客户端中”的请求。
-- 仅用于对照，不作为当前阶段必须继续移植 body identity sanitizer 的依据。
 
 每个样本记录：
 
@@ -380,10 +364,6 @@ OpenAI / Codex：
 - usage。
 - UA、beta、version、originator、metadata、session 类字段。
 
-注意：抓包和日志必须在服务器本地脱敏，密钥、token、authorization、x-api-key 不发到聊天里。
-
-### 4.7 对比维度
-
 | 维度 | 对比内容 | 目的 |
 |---|---|---|
 | header | UA、beta、version、originator、x-stainless、session 类字段 | 让 BWG/上游看到官方客户端形态 |
@@ -392,11 +372,13 @@ OpenAI / Codex：
 | stream | SSE 事件顺序、event 类型、done 方式 | 保持客户端兼容 |
 | TLS/HTTP2 | JA3/JA4、ALPN、h2 settings、header 顺序 | 评估是否需要 transport 级改造 |
 
-### 4.8 是否要模拟 Claude Desktop 还是 Claude Code
+注意：抓包和日志必须在服务器本地脱敏，密钥、token、authorization、x-api-key 不发到聊天里。
+
+### 4.7 是否要模拟 Claude Desktop 还是 Claude Code
 
 这点需要先定目标：
 
-- 如果目标是 Claude Code：当前阶段一已经接近这个方向，继续补 identity sanitizer 和工具映射即可。
+- 如果目标是 Claude Code：在阶段一基础上继续补 identity sanitizer 和工具映射即可。
 - 如果目标是 Claude Desktop：需要单独采 Claude Desktop 真实请求，因为 Desktop 的 system prompt、UA、metadata、工具语义可能不同。
 
 不能把 Claude Code、Claude Desktop、Claude agent-sdk 三者混成一个 profile。阶段二建议做成 profile 化：
@@ -424,15 +406,21 @@ OpenAI / Codex：
 - 新增自有文件：
   - `backend/internal/service/account_apikey_mimicry.go`
   - `backend/internal/service/gateway_apikey_mimicry.go`
+  - `backend/internal/service/apikey_mimic_identity.go`
   - `backend/internal/service/openai_apikey_mimicry.go`
   - `PATCHES.md`
 - 既有热点文件：
   - `backend/internal/service/gateway_service.go`
   - `backend/internal/service/openai_gateway_service.go`
+  - `backend/internal/service/openai_gateway_chat_completions.go`
+  - `backend/internal/service/account_test_service.go`
+  - `backend/internal/pkg/openai/constants.go`
   - `backend/internal/service/account.go`
 - 测试文件：
   - Anthropic passthrough/mimic 相关测试。
   - OpenAI gateway/mimic 相关测试。
+  - OpenAI account test / 探活相关测试。
+  - OpenAI model instructions 相关测试。
   - 受接口签名变化影响的 handler/service 测试。
 
 升级时重点看 `PATCHES.md`，不要只看本文档。
@@ -468,7 +456,8 @@ main  -> upstream/main
 5. 构建自定义镜像，例如 `sub2api:mimic-<sha>-arm64`。
 6. ARM64 服务器只替换应用镜像，不动 `.env`、PostgreSQL/Redis volume、Nginx 主结构。
 7. 重启 `sub2api-mimic` 后验证健康状态和 API-only 行为。
-8. 用 Kilo、Claude 官方客户端、Codex 官方客户端做回归。
+8. 用 Kilo、Cline、Claude 官方客户端、Codex 官方客户端做回归。
+9. 对 ARM64 自测、BWG 下游 `/v1/responses` 探活、BWG 下游 `/v1/chat/completions` 探活做回归。
 
 当前 ARM64 compose 路径：
 
@@ -499,25 +488,22 @@ main  -> upstream/main
 - 自定义镜像 tag 固定带 commit sha。
 - 测试失败不推新镜像。
 - ARM64 只拉取已验证镜像。
+- 当前阶段一运行镜像为 `sub2api:mimic-b0db3a86-systemrole-arm64`。
 
 ---
 
-## 7. 后续验收口径
+## 7. 深度 mimic 验收标准
 
-当前阶段一最终版可以说：
+如果未来继续做 Anthropic 或更深度 body mimic，完成后才可以把阶段能力升级描述为：
 
-> 阶段一已完成 API Key 官方客户端伪装基础能力，Kilo / Cursor 已能通过 OpenAI Codex 官方客户端限制类 API；OpenAI/Codex 路径只保留裸 `role/content` 规范化与 `prompt_cache_key` 补齐两项 body 兼容修正。
-
-如果未来继续做 Anthropic 或更深度 body mimic，完成后才可以升级描述为：
-
-> API Key 请求在目标样本范围内与 Claude/Codex 官方客户端形态一致，且模型侧不再泄漏 Kilo 等第三方客户端身份。
+> API Key 请求在目标样本范围内与 Claude/Codex 官方客户端形态一致，且模型侧身份回答接近官方客户端。
 
 后续深度 body mimic 验收必须同时满足：
 
 - BWG 端看到 ARM64 请求的关键 header 与官方样本一致或差异已解释。
 - Anthropic 侧 body 中没有第三方客户端身份泄漏。
-- OpenAI/Codex 侧不得为了身份认知破坏 Cursor / Kilo 原始工具链。
+- OpenAI/Codex 侧不得为了身份认知破坏 Cursor / Kilo / Cline / Roo Code 原始工具链。
 - “你是什么模型 / 你在哪个客户端中”回答接近官方客户端。
-- tools 场景不因工具名映射破坏。
+- tools 场景保持可用。
 - streaming 和 non-streaming 都通过。
 - Claude 和 Codex 两条链路都能正常计费和记录 usage。

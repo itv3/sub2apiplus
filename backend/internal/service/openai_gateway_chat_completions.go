@@ -16,6 +16,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
@@ -61,9 +62,11 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	promptCacheKey string,
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
-	// 入口分流：APIKey 账号 + 强制或已探测确认上游不支持 Responses，走 CC 直转。
-	// 自动模式下标记缺失（未探测）按"现状即证据"原则继续走下方原 Responses 转换路径。
-	if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
+	accountMimicCodexCLI := account.IsOpenAIAPIKeyCodexMimicEnabled()
+	// 入口分流：普通 APIKey 账号 + 强制或已探测确认上游不支持 Responses，走 CC 直转。
+	// Codex mimic 账号必须继续走 Responses 转换路径，保证 /v1/chat/completions
+	// 入站也能统一伪装成 Codex CLI 出站。
+	if account.Type == AccountTypeAPIKey && !accountMimicCodexCLI && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
 		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}
 
@@ -201,6 +204,9 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 				}
 			}
 		}
+		if accountMimicCodexCLI {
+			responsesBody = applyOpenAIAPIKeyCodexMimicryToBody(responsesBody)
+		}
 	}
 
 	// 4b. Apply OpenAI fast policy (may filter service_tier or block the request).
@@ -223,13 +229,15 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 
 	// 6. Build upstream request
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
-	upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, true, promptCacheKey, false, false)
+	isCodexCLI := accountMimicCodexCLI
+	upstreamMimicCodexCLI := accountMimicCodexCLI
+	upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, true, promptCacheKey, isCodexCLI, upstreamMimicCodexCLI)
 	releaseUpstreamCtx()
 	if err != nil {
 		return nil, fmt.Errorf("build upstream request: %w", err)
 	}
 
-	if promptCacheKey != "" {
+	if promptCacheKey != "" && !accountMimicCodexCLI {
 		apiKeyID := getAPIKeyIDFromContext(c)
 		upstreamReq.Header.Set("session_id", generateSessionUUID(isolateOpenAISessionID(apiKeyID, promptCacheKey)))
 	}
@@ -239,7 +247,16 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	var resp *http.Response
+	if account.ShouldUseOpenAITLSFingerprint() {
+		var tlsProfile *tlsfingerprint.Profile
+		if s.tlsFPProfileService != nil {
+			tlsProfile = s.tlsFPProfileService.ResolveTLSProfile(account)
+		}
+		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
+	} else {
+		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	}
 	if err != nil {
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		setOpsUpstreamError(c, 0, safeErr, "")
@@ -299,6 +316,16 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 				ResponseBody:           respBody,
 				RetryableOnSameAccount: account.IsPoolMode() && (account.IsPoolModeRetryableStatus(resp.StatusCode) || isOpenAITransientProcessingError(resp.StatusCode, upstreamMsg, respBody)),
 			}
+		}
+		if accountMimicCodexCLI && resp.StatusCode == http.StatusBadRequest {
+			logger.L().Warn("openai chat_completions: api key codex mimic upstream 400",
+				zap.Int64("account_id", account.ID),
+				zap.String("model", upstreamModel),
+				zap.String("upstream_message", upstreamMsg),
+				zap.String("upstream_body", truncateString(string(respBody), 512)),
+				zap.Any("chat_request_shape", summarizeOpenAIChatCompletionsRequestShape(body)),
+				zap.Any("responses_body_shape", summarizeOpenAIResponsesBodyShape(responsesBody)),
+			)
 		}
 		return s.handleChatCompletionsErrorResponse(resp, c, account, billingModel)
 	}
@@ -368,6 +395,143 @@ func normalizeResponsesBodyServiceTier(body []byte) ([]byte, string, error) {
 	}
 	trimmed, err := sjson.SetBytes(body, "service_tier", normalizedServiceTier)
 	return trimmed, normalizedServiceTier, err
+}
+
+func summarizeOpenAIChatCompletionsRequestShape(body []byte) map[string]any {
+	return map[string]any{
+		"has_messages": gjson.GetBytes(body, "messages").Exists(),
+		"has_input":    gjson.GetBytes(body, "input").Exists(),
+		"message_count": func() int {
+			messages := gjson.GetBytes(body, "messages")
+			if !messages.IsArray() {
+				return 0
+			}
+			return int(messages.Get("#").Int())
+		}(),
+		"tail": summarizeGJSONItems(gjson.GetBytes(body, "messages"), 6),
+	}
+}
+
+func summarizeOpenAIResponsesBodyShape(body []byte) map[string]any {
+	return map[string]any{
+		"stream":      gjson.GetBytes(body, "stream").Bool(),
+		"store":       gjson.GetBytes(body, "store").Bool(),
+		"include":     summarizeGJSONStringArray(gjson.GetBytes(body, "include"), 8),
+		"input_count": int(gjson.GetBytes(body, "input.#").Int()),
+		"tools_count": int(gjson.GetBytes(body, "tools.#").Int()),
+		"input_tail":  summarizeGJSONItems(gjson.GetBytes(body, "input"), 8),
+	}
+}
+
+func summarizeGJSONItems(items gjson.Result, limit int) []map[string]any {
+	if !items.IsArray() || limit <= 0 {
+		return nil
+	}
+	total := int(items.Get("#").Int())
+	start := total - limit
+	if start < 0 {
+		start = 0
+	}
+	out := make([]map[string]any, 0, total-start)
+	idx := -1
+	items.ForEach(func(_, item gjson.Result) bool {
+		idx++
+		if idx < start {
+			return true
+		}
+		content := item.Get("content")
+		entry := map[string]any{
+			"idx":           idx,
+			"type":          item.Get("type").String(),
+			"role":          item.Get("role").String(),
+			"tool_call_id":  item.Get("tool_call_id").String(),
+			"call_id":       item.Get("call_id").String(),
+			"name":          item.Get("name").String(),
+			"content_shape": summarizeGJSONContentShape(content),
+			"tool_calls":    int(item.Get("tool_calls.#").Int()),
+		}
+		if output := item.Get("output"); output.Exists() {
+			entry["output_len"] = len(output.String())
+		}
+		out = append(out, entry)
+		return true
+	})
+	return out
+}
+
+func summarizeGJSONContentShape(content gjson.Result) map[string]any {
+	shape := map[string]any{
+		"exists": content.Exists(),
+		"type":   content.Type.String(),
+	}
+	switch {
+	case content.Type == gjson.String:
+		shape["string_len"] = len(content.String())
+	case content.IsArray():
+		shape["count"] = int(content.Get("#").Int())
+		shape["part_types"] = summarizeGJSONPartTypes(content, 12)
+	case content.IsObject():
+		shape["keys"] = summarizeGJSONObjectKeys(content, 12)
+	}
+	return shape
+}
+
+func summarizeGJSONPartTypes(parts gjson.Result, limit int) []string {
+	if !parts.IsArray() || limit <= 0 {
+		return nil
+	}
+	out := make([]string, 0, limit)
+	idx := 0
+	parts.ForEach(func(_, part gjson.Result) bool {
+		if idx >= limit {
+			out = append(out, "...")
+			return false
+		}
+		typ := strings.TrimSpace(part.Get("type").String())
+		if typ == "" {
+			typ = "(missing)"
+		}
+		out = append(out, typ)
+		idx++
+		return true
+	})
+	return out
+}
+
+func summarizeGJSONObjectKeys(obj gjson.Result, limit int) []string {
+	if !obj.IsObject() || limit <= 0 {
+		return nil
+	}
+	out := make([]string, 0, limit)
+	idx := 0
+	obj.ForEach(func(key, _ gjson.Result) bool {
+		if idx >= limit {
+			out = append(out, "...")
+			return false
+		}
+		out = append(out, key.String())
+		idx++
+		return true
+	})
+	return out
+}
+
+func summarizeGJSONStringArray(items gjson.Result, limit int) []string {
+	if !items.IsArray() || limit <= 0 {
+		return nil
+	}
+	out := make([]string, 0, limit)
+	idx := 0
+	items.ForEach(func(_, item gjson.Result) bool {
+		if idx >= limit {
+			out = append(out, "...")
+			return false
+		}
+		out = append(out, item.String())
+		idx++
+		return true
+	})
+	return out
 }
 
 func normalizedOpenAIServiceTierValue(raw string) string {

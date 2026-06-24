@@ -2737,6 +2737,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		requestView = newOpenAIRequestView(body)
 		reqBody = nil
 	}
+	upstreamReqStream := reqStream || accountMimicCodexCLI
 	imageBillingModel := ""
 	imageSizeTier := ""
 	imageInputSize := ""
@@ -2982,7 +2983,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	for {
 		// Build upstream request
 		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
-		upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, body, token, reqStream, promptCacheKey, isCodexCLI, upstreamMimicCodexCLI)
+		upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, body, token, upstreamReqStream, promptCacheKey, isCodexCLI, upstreamMimicCodexCLI)
 		releaseUpstreamCtx()
 		if err != nil {
 			return nil, err

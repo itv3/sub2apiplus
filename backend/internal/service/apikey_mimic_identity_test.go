@@ -67,6 +67,28 @@ func TestApplyOpenAIAPIKeyCodexMimicryToBodyNormalizesBareRoleContentMessage(t *
 	require.Equal(t, "hello", gjson.GetBytes(out, "input.1.content.0.text").String())
 }
 
+func TestApplyOpenAIAPIKeyCodexMimicryToBodyConvertsSystemRoleToDeveloper(t *testing.T) {
+	body := []byte(`{
+		"model":"gpt-5.5",
+		"instructions":"Keep repository rules.",
+		"input":[
+			{"type":"message","role":"system","content":[{"type":"input_text","text":"Project system prompt"}]},
+			{"role":"system","content":"Bare system prompt"},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}
+		],
+		"stream":true
+	}`)
+
+	out := applyOpenAIAPIKeyCodexMimicryToBody(body)
+
+	require.Equal(t, "developer", gjson.GetBytes(out, "input.0.role").String())
+	require.Equal(t, "Project system prompt", gjson.GetBytes(out, "input.0.content.0.text").String())
+	require.Equal(t, "message", gjson.GetBytes(out, "input.1.type").String())
+	require.Equal(t, "developer", gjson.GetBytes(out, "input.1.role").String())
+	require.Equal(t, "Bare system prompt", gjson.GetBytes(out, "input.1.content.0.text").String())
+	require.Equal(t, "user", gjson.GetBytes(out, "input.2.role").String())
+}
+
 func TestApplyOpenAIAPIKeyCodexMimicryToBodyPreservesCursorIdentityText(t *testing.T) {
 	body := []byte(`{
 		"model":"gpt-5.5",
@@ -111,6 +133,23 @@ func TestApplyOpenAIAPIKeyCodexMimicryToBodyAddsPromptCacheKey(t *testing.T) {
 	require.Contains(t, gjson.GetBytes(out, "tools.0.description").String(), "Kilo")
 	require.Equal(t, "kilo_local_recall", gjson.GetBytes(out, "tools.0.name").String())
 	require.False(t, gjson.GetBytes(out, "tools.0.strict").Exists(), "这一步不补 tools strict")
+}
+
+func TestApplyOpenAIAPIKeyCodexMimicryToBodyAddsDefaultInstructions(t *testing.T) {
+	body := []byte(`{
+		"model":"gpt-5.5",
+		"input":[{"role":"user","content":"hello"}],
+		"stream":false
+	}`)
+
+	out := applyOpenAIAPIKeyCodexMimicryToBody(body)
+
+	require.NotEmpty(t, strings.TrimSpace(gjson.GetBytes(out, "instructions").String()))
+	require.True(t, gjson.GetBytes(out, "stream").Bool())
+	require.False(t, gjson.GetBytes(out, "store").Bool())
+	require.Equal(t, "reasoning.encrypted_content", gjson.GetBytes(out, "include.0").String())
+	require.Equal(t, "message", gjson.GetBytes(out, "input.0.type").String())
+	require.True(t, strings.HasPrefix(gjson.GetBytes(out, "prompt_cache_key").String(), "codex-mimic-"))
 }
 
 func TestApplyOpenAIAPIKeyCodexMimicryToBodyPreservesPromptCacheKey(t *testing.T) {
