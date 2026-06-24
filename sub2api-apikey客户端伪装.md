@@ -25,7 +25,7 @@
 
 ARM64 测试服当前运行：
 
-- 当前运行镜像：`sub2api:mimic-b0db3a86-systemrole-arm64`
+- 当前运行镜像：`sub2api:mimic-48e4c3c1-phase1-complete-arm64`
 - 容器：`sub2api-mimic`
 - 对外地址：`https://sg.3ab.in`
 - Claude Base URL：`https://sg.3ab.in`
@@ -488,7 +488,7 @@ main  -> upstream/main
 - 自定义镜像 tag 固定带 commit sha。
 - 测试失败不推新镜像。
 - ARM64 只拉取已验证镜像。
-- 当前阶段一运行镜像为 `sub2api:mimic-b0db3a86-systemrole-arm64`。
+- 当前阶段一运行镜像为 `sub2api:mimic-48e4c3c1-phase1-complete-arm64`。
 
 ---
 
