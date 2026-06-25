@@ -27,7 +27,7 @@
 
 ARM64 测试服当前运行：
 
-- 当前运行镜像：`sub2api:mimic-20260626-toolname-arm64`
+- 当前运行镜像：`sub2api:v0.1.137-mimic.2`
 - 容器：`sub2api-mimic`
 - 对外地址：`https://sg.3ab.in`
 - Claude Base URL：`https://sg.3ab.in`
@@ -474,13 +474,21 @@ main  -> upstream/main
 
 线上环境不要跟踪官方 `weishaw/sub2api:latest`。官方镜像更新会覆盖自定义 mimic 代码。
 
+当前自定义版本命名：
+
+| 版本 | 含义 | 对应镜像 |
+|---|---|---|
+| `v0.1.137-mimic.0` | 初始自定义基线 | 无固定 ARM64 部署镜像 |
+| `v0.1.137-mimic.1` | 阶段一完成版 | `sub2api:v0.1.137-mimic.1` |
+| `v0.1.137-mimic.2` | Kilo 工具名归一修复 | `sub2api:v0.1.137-mimic.2` |
+
 当前采用流程：
 
 1. 在 `/Users/czs/Documents/sub2api` 的 `mimic` 分支开发。
 2. 从 `upstream/main` 合并官方更新到本地。
 3. 解决冲突后运行 mimic 相关单测。
 4. 推送到 `origin/mimic`。
-5. 构建自定义镜像，例如 `sub2api:mimic-<sha>-arm64`。
+5. 构建自定义镜像，发布版使用 `sub2api:v<上游版本>-mimic.<自定义序号>`，临时测试版可保留 `sub2api:mimic-<sha>-arm64` 别名。
 6. ARM64 服务器只替换应用镜像，不动 `.env`、PostgreSQL/Redis volume、Nginx 主结构。
 7. 重启 `sub2api-mimic` 后验证健康状态和 API-only 行为。
 8. 用 Kilo、Cline、Claude 官方客户端、Codex 官方客户端做回归。
@@ -512,10 +520,10 @@ main  -> upstream/main
 
 推荐：
 
-- 自定义镜像 tag 固定带 commit sha。
+- 发布镜像 tag 固定跟 Git tag 对齐，临时测试镜像可额外保留 commit sha 别名。
 - 测试失败不推新镜像。
 - ARM64 只拉取已验证镜像。
-- 当前 ARM64 测试镜像为 `sub2api:mimic-20260626-toolname-arm64`。
+- 当前 ARM64 测试镜像为 `sub2api:v0.1.137-mimic.2`，历史别名为 `sub2api:mimic-20260626-toolname-arm64`。
 
 ---
 
