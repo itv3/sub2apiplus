@@ -78,6 +78,7 @@ ARM64 测试服当前运行：
 {
   "anthropic_apikey_mimic_claude_code": true,
   "openai_apikey_mimic_codex_cli": true,
+  "openai_apikey_mimic_codex_profile": "desktop_0_142",
   "enable_tls_fingerprint": true
 }
 ```
@@ -88,6 +89,7 @@ ARM64 测试服当前运行：
 - 与 passthrough 互斥，mimic 优先。
 - 不改变 OAuth 账号现有逻辑。
 - `enable_tls_fingerprint` 仍是独立开关，mimic 只放开账号类型资格。
+- `openai_apikey_mimic_codex_profile` 选择 OpenAI Codex 客户端形态：缺省 `desktop_0_142`（实测 Codex Desktop），可设 `cli_rs_0_125` 回滚到旧 Codex CLI 形态；非法值回退 `desktop_0_142`。
 
 ### 2.2 Anthropic 实现内容
 
@@ -146,12 +148,18 @@ ARM64 测试服当前运行：
 - `/v1/chat/completions` 入站对 API Key Codex mimic 账号强制走 Chat Completions -> Responses 转换，再进入同一套 Codex mimic body/header/TLS 处理。
 - ARM64 账号自测使用同一套 Codex mimic body/header/TLS 处理。
 - BWG 下游探活通过 ARM64 API key 进入后，也会走 ARM64 的通用 `/v1/responses` 或 `/v1/chat/completions` mimic 路径。
-- 出站 Codex header 由 profile 驱动，默认 `desktop_0_142`（实测 `Codex Desktop/0.142.0`）：
-  - `user-agent: Codex Desktop/0.142.0 ...`
-  - `originator: Codex Desktop`
-  - 注入 `x-codex-*` / `session-id` / `thread-id`
-  - 移除旧 `version` / `OpenAI-Beta` / 下划线 session header
-  - 显式 `cli_rs_0_125` profile 保留旧 `codex_cli_rs` header 形态，作为兼容/回滚
+- 出站 Codex header 由 `openai_apikey_mimic_codex_profile` 驱动，分两种形态：
+  - 默认 `desktop_0_142`（实测 Codex Desktop）：
+    - `user-agent: Codex Desktop/0.142.0 (Electron 38.2.2; macOS 15.6.1; arm64)`
+    - `originator: Codex Desktop`
+    - `x-codex-beta-features: responses=experimental`
+    - `x-client-request-id` 与 `session-id`（同值）、`thread-id`、`x-codex-window-id`、`x-codex-turn-metadata`
+    - 移除 `OpenAI-Beta`、`version`
+  - 回滚 `cli_rs_0_125`（旧 Codex CLI）：
+    - `user-agent: codex_cli_rs/0.45.0 (Mac OS 15.6.1; arm64) Terminal`
+    - `originator: codex_cli_rs`
+    - `OpenAI-Beta: responses=experimental`、`version: 0.45.0`
+  - 两种形态都删除客户端透传的 `session_id` / `conversation_id`（下划线形式）。
 - 删除客户端透传的 `session_id` / `conversation_id`。
 - OpenAI API Key mimic 主 HTTP `/v1/responses` 和 `/v1/chat/completions` 转换后的上游请求都走 `DoWithTLS`。
 - TLS profile 为 nil 时保持兼容回退。
@@ -160,12 +168,13 @@ ARM64 测试服当前运行：
   - `stream: true`：上游按 Codex 流式形态发送。
   - `store: false`。
   - `include: ["reasoning.encrypted_content"]`。
-  - `prompt_cache_key`：默认 Desktop profile 用稳定 UUID 形态并补齐与 header 同源的 `client_metadata`；显式 `cli_rs_0_125` profile 保留旧 `codex-mimic-*` 不透明 key。
+  - `prompt_cache_key`：默认 Desktop profile 用基于稳定 seed 的 UUID 形态；显式 `cli_rs_0_125` profile 保留旧 `codex-mimic-*` 不透明 key。
+  - 默认 Desktop profile 额外向 body 注入 `client_metadata`（`x-codex-installation-id`、`session_id`、`originator: codex_desktop`、`x-codex-window-id`、`x-codex-turn-metadata`），与出站 header 的 session/window/turn 同源；仅在客户端未带对应 key 时补，不覆盖已有值。
 - 裸 `role/content` message 规范化为 Codex / Responses 风格：
   - 原始形态：`{"role":"user","content":"..."}`
   - 规范形态：`{"type":"message","role":"user","content":[{"type":"input_text","text":"..."}]}`
 - `role:"system"` 统一改为 `role:"developer"`，避免 Codex 上游对 Responses `input` 中的 `system` role 返回 400。
-- `gpt-5.5` 使用首行为 `You are GPT-5.5 running in the Codex CLI` 的 Codex prompt。
+- Codex base instructions 按模型选择：含 `codex` 的模型 → GPT-5-Codex prompt；`gpt-5.5` 非 codex → 首行为 `You are GPT-5.5 running in the Codex CLI` 的 GPT-5.5 prompt；`gpt-5.2` 非 codex → GPT-5.2 prompt；其余 `gpt-5.x` 非 codex 宽匹配回落 GPT-5.1 prompt；其它回退 GPT-5-Codex prompt。
 - 仅当请求缺少 `prompt_cache_key` 时自动补值。
 - 如果客户端已有 `prompt_cache_key`，保持原值不覆盖。
 - OpenAI/Codex mimic 请求保留 Cursor / Kilo / Cline / Roo / OpenCode 身份文本。
@@ -409,6 +418,9 @@ UI 原则：
   - `backend/internal/service/gateway_apikey_mimicry.go`
   - `backend/internal/service/apikey_mimic_identity.go`
   - `backend/internal/service/openai_apikey_mimicry.go`
+  - `backend/internal/service/openai_apikey_mimic_profile.go`
+  - `backend/internal/service/openai_upstream_http.go`
+  - `backend/internal/service/gateway_debug_logging.go`（脱敏调试日志，env `SUB2API_DEBUG_GATEWAY_BODY` / `SUB2API_DEBUG_MODEL_ROUTING` / `SUB2API_DEBUG_CLAUDE_MIMIC` 开启，默认关闭）
   - `PATCHES.md`
 - 既有热点文件：
   - `backend/internal/service/gateway_service.go`
