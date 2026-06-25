@@ -846,6 +846,87 @@ func TestGatewayService_AnthropicAPIKeyMimicRewritesThirdPartyBodyToClaudeCodeSh
 	require.Equal(t, float64(128000), gjson.GetBytes(wireBody, "max_tokens").Num)
 }
 
+func TestGatewayService_AnthropicAPIKeyMimicRenamesKiloTodoWriteTool(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Request.Header.Set("user-agent", "Kilo-Code/7.3.50")
+
+	svc := &GatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{
+				InjectBetaForAPIKey: true,
+				MaxLineSize:         defaultMaxLineSize,
+			},
+		},
+	}
+	account := &Account{
+		ID:       303,
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeAPIKey,
+		Extra: map[string]any{
+			"anthropic_apikey_mimic_claude_code": true,
+		},
+		Credentials: map[string]any{
+			"api_key": "anthropic-key",
+		},
+	}
+
+	body := []byte(`{"model":"claude-opus-4-8","stream":true,"tools":[{"name":"todowrite","description":"todo","input_schema":{"type":"object","properties":{}}}],"tool_choice":{"type":"tool","name":"todowrite"},"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"todowrite","input":{}},{"type":"tool_reference","tool_name":"todowrite"}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_1","content":[{"type":"tool_reference","tool_name":"todowrite"}]}]}]}`)
+	req, wireBody, err := svc.buildUpstreamRequest(context.Background(), c, account, body, "anthropic-key", "apikey", "claude-opus-4-8", true, false)
+	require.NoError(t, err)
+	require.NotNil(t, req)
+
+	require.Equal(t, "TodoWrite", gjson.GetBytes(wireBody, "tools.0.name").String())
+	require.Equal(t, "TodoWrite", gjson.GetBytes(wireBody, "tool_choice.name").String())
+	require.Equal(t, "TodoWrite", gjson.GetBytes(wireBody, "messages.0.content.0.name").String())
+	require.Equal(t, "TodoWrite", gjson.GetBytes(wireBody, "messages.0.content.1.tool_name").String())
+	require.Equal(t, "TodoWrite", gjson.GetBytes(wireBody, "messages.1.content.0.content.0.tool_name").String())
+	require.Equal(t, "ephemeral", gjson.GetBytes(wireBody, "tools.0.cache_control.type").String())
+
+	restored := reverseToolNamesIfPresent(c, []byte(`{"content":[{"type":"tool_use","id":"tu_2","name":"TodoWrite","input":{}}]}`))
+	require.Equal(t, "todowrite", gjson.GetBytes(restored, "content.0.name").String())
+}
+
+func TestGatewayService_AnthropicAPIKeyMimicDoesNotGloballyReverseTitleCaseTools(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	svc := &GatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{
+				InjectBetaForAPIKey: true,
+				MaxLineSize:         defaultMaxLineSize,
+			},
+		},
+	}
+	account := &Account{
+		ID:       304,
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeAPIKey,
+		Extra: map[string]any{
+			"anthropic_apikey_mimic_claude_code": true,
+		},
+		Credentials: map[string]any{
+			"api_key": "anthropic-key",
+		},
+	}
+
+	body := []byte(`{"model":"claude-opus-4-8","stream":false,"tools":[{"name":"Bash","description":"shell","input_schema":{"type":"object","properties":{}}},{"name":"glob","description":"glob","input_schema":{"type":"object","properties":{}}}],"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+	_, wireBody, err := svc.buildUpstreamRequest(context.Background(), c, account, body, "anthropic-key", "apikey", "claude-opus-4-8", false, false)
+	require.NoError(t, err)
+
+	require.Equal(t, "Bash", gjson.GetBytes(wireBody, "tools.0.name").String())
+	require.Equal(t, "Glob", gjson.GetBytes(wireBody, "tools.1.name").String())
+
+	restored := reverseToolNamesIfPresent(c, []byte(`{"content":[{"type":"tool_use","name":"Bash"},{"type":"tool_use","name":"Glob"}]}`))
+	require.Equal(t, "Bash", gjson.GetBytes(restored, "content.0.name").String())
+	require.Equal(t, "glob", gjson.GetBytes(restored, "content.1.name").String())
+}
+
 func TestAnthropicAPIKeyMimicExtraBetasOnlyForKnownContext1MModels(t *testing.T) {
 	require.Contains(t, anthropicAPIKeyMimicExtraBetas("claude-opus-4-8"), claude.BetaContext1M)
 	require.Contains(t, anthropicAPIKeyMimicExtraBetas("claude-opus-4-6-thinking"), claude.BetaContext1M)
@@ -882,6 +963,38 @@ func TestGatewayService_AnthropicAPIKeyMimicCountTokensUsesTokenCountingBeta(t *
 	require.NoError(t, err)
 	require.Contains(t, getHeaderRaw(req.Header, "anthropic-beta"), claude.BetaTokenCounting)
 	require.NotContains(t, getHeaderRaw(req.Header, "anthropic-beta"), claude.BetaOAuth)
+}
+
+func TestGatewayService_AnthropicAPIKeyMimicCountTokensRenamesToolOnly(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", nil)
+
+	svc := &GatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{
+				InjectBetaForAPIKey: true,
+			},
+		},
+	}
+	account := &Account{
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeAPIKey,
+		Extra: map[string]any{
+			"anthropic_apikey_mimic_claude_code": true,
+		},
+		Credentials: map[string]any{
+			"api_key": "anthropic-key",
+		},
+	}
+
+	body := []byte(`{"model":"claude-opus-4-8","tools":[{"name":"todowrite","description":"todo","input_schema":{"type":"object","properties":{}}}],"messages":[{"role":"assistant","content":[{"type":"tool_use","id":"tu_1","name":"todowrite","input":{}}]}]}`)
+	_, wireBody, err := svc.buildCountTokensRequest(context.Background(), c, account, body, "anthropic-key", "apikey", "claude-opus-4-8", false)
+	require.NoError(t, err)
+	require.Equal(t, "TodoWrite", gjson.GetBytes(wireBody, "tools.0.name").String())
+	require.Equal(t, "TodoWrite", gjson.GetBytes(wireBody, "messages.0.content.0.name").String())
+	require.False(t, gjson.GetBytes(wireBody, "tools.0.cache_control").Exists())
 }
 
 func TestGatewayService_AnthropicAPIKeyMimicEnforcesFinalCacheControlLimit(t *testing.T) {

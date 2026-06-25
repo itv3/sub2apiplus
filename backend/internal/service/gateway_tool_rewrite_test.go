@@ -133,6 +133,65 @@ func TestApplyToolNameRewriteToBody_RenamesToolUseWithDynamicMapping(t *testing.
 	require.Equal(t, "ok", gjson.GetBytes(out, "messages.1.content.0.content").String())
 }
 
+func TestBuildClaudeCodeOAuthToolNameRewriteFromBody_UsesCLIProxyAPIMapping(t *testing.T) {
+	body := []byte(`{"tools":[{"name":"todowrite","input_schema":{}},{"name":"Bash","input_schema":{}},{"name":"web_search","type":"web_search_20250305"}],"tool_choice":{"type":"tool","name":"todowrite"},"messages":[{"role":"assistant","content":[{"type":"tool_use","name":"todowrite","input":{}},{"type":"tool_reference","tool_name":"todowrite"}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu_1","content":[{"type":"tool_reference","tool_name":"todowrite"}]}]}]}`)
+	rw := buildClaudeCodeOAuthToolNameRewriteFromBody(body)
+	require.NotNil(t, rw)
+	require.True(t, rw.StructuredResponseRestore)
+	require.Equal(t, "TodoWrite", rw.Forward["todowrite"])
+	require.NotContains(t, rw.Forward, "Bash")
+	require.NotContains(t, rw.Forward, "web_search")
+
+	out := applyToolNameRewriteToBody(body, rw)
+	require.Equal(t, "TodoWrite", gjson.GetBytes(out, "tools.0.name").String())
+	require.Equal(t, "Bash", gjson.GetBytes(out, "tools.1.name").String())
+	require.Equal(t, "web_search", gjson.GetBytes(out, "tools.2.name").String())
+	require.Equal(t, "TodoWrite", gjson.GetBytes(out, "tool_choice.name").String())
+	require.Equal(t, "TodoWrite", gjson.GetBytes(out, "messages.0.content.0.name").String())
+	require.Equal(t, "TodoWrite", gjson.GetBytes(out, "messages.0.content.1.tool_name").String())
+	require.Equal(t, "TodoWrite", gjson.GetBytes(out, "messages.1.content.0.content.0.tool_name").String())
+	require.Equal(t, "ephemeral", gjson.GetBytes(out, "tools.2.cache_control.type").String())
+
+	restored := restoreToolNamesInBytes([]byte(`{"name":"TodoWrite","other":"Bash"}`), rw)
+	require.Equal(t, `{"name":"TodoWrite","other":"Bash"}`, string(restored))
+}
+
+func TestRestoreStructuredToolNamesInBytes_DoesNotRewritePlainText(t *testing.T) {
+	rw := &ToolNameRewrite{
+		Reverse:                   map[string]string{"Read": "read", "TodoWrite": "todowrite"},
+		StructuredResponseRestore: true,
+	}
+
+	body := []byte(`{"content":[{"type":"text","text":"Read the docs before using TodoWrite."},{"type":"tool_use","name":"Read"},{"type":"tool_reference","tool_name":"TodoWrite"}]}`)
+	restored := restoreToolNamesInBytes(body, rw)
+	require.Equal(t, "Read the docs before using TodoWrite.", gjson.GetBytes(restored, "content.0.text").String())
+	require.Equal(t, "read", gjson.GetBytes(restored, "content.1.name").String())
+	require.Equal(t, "todowrite", gjson.GetBytes(restored, "content.2.tool_name").String())
+}
+
+func TestRestoreStructuredToolNamesInBytes_RestoresSSEShapes(t *testing.T) {
+	rw := &ToolNameRewrite{
+		Reverse:                   map[string]string{"Read": "read", "TodoWrite": "todowrite"},
+		StructuredResponseRestore: true,
+	}
+
+	anthropic := []byte(`data: {"type":"content_block_start","content_block":{"type":"tool_use","name":"Read","input":{}}}` + "\n\n")
+	anthropicOut := restoreToolNamesInBytes(anthropic, rw)
+	require.Contains(t, string(anthropicOut), `"name":"read"`)
+	require.True(t, strings.HasSuffix(string(anthropicOut), "\n\n"))
+
+	chat := []byte(`data: {"choices":[{"delta":{"content":"Read stays text","tool_calls":[{"function":{"name":"Read"}}]}}]}` + "\n\n")
+	chatOut := restoreToolNamesInBytes(chat, rw)
+	require.Equal(t, "Read stays text", gjson.GetBytes(chatOut[len("data: "):len(chatOut)-2], "choices.0.delta.content").String())
+	require.Equal(t, "read", gjson.GetBytes(chatOut[len("data: "):len(chatOut)-2], "choices.0.delta.tool_calls.0.function.name").String())
+
+	responses := []byte(`event: response.output_item.added` + "\n" + `data: {"type":"response.output_item.added","item":{"type":"function_call","name":"TodoWrite"},"delta":"Read stays text"}` + "\n\n")
+	responsesOut := restoreToolNamesInBytes(responses, rw)
+	responsesPayload := responsesOut[strings.Index(string(responsesOut), "data: ")+len("data: ") : len(responsesOut)-2]
+	require.Equal(t, "todowrite", gjson.GetBytes(responsesPayload, "item.name").String())
+	require.Equal(t, "Read stays text", gjson.GetBytes(responsesPayload, "delta").String())
+}
+
 func TestApplyToolsLastCacheBreakpoint_InjectsDefault(t *testing.T) {
 	body := []byte(`{"tools":[{"name":"a","input_schema":{}},{"name":"b","input_schema":{}}]}`)
 	out := applyToolsLastCacheBreakpoint(body)

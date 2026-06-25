@@ -58,6 +58,15 @@ func (s *GatewayService) buildAnthropicAPIKeyCLIMimicRequest(
 	if sanitized, changed := sanitizeAnthropicBodyForBetaTokens(body, finalBetaHeader); changed {
 		body = sanitized
 	}
+	if rw := buildClaudeCodeOAuthToolNameRewriteFromBody(body); rw != nil {
+		body = applyToolNameRewriteToBody(body, rw)
+		if c != nil {
+			c.Set(toolNameRewriteKey, rw)
+		}
+	} else {
+		body = applyToolsLastCacheBreakpoint(body)
+	}
+	body = enforceCacheControlLimit(body)
 	body = signBillingHeaderCCH(body)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
@@ -115,7 +124,6 @@ func (s *GatewayService) applyAnthropicAPIKeyClaudeCodeMimicryToBody(
 	})
 
 	body = s.rewriteMessageCacheControlIfEnabled(ctx, body)
-	body = applyToolsLastCacheBreakpoint(body)
 
 	return body
 }
@@ -170,6 +178,9 @@ func (s *GatewayService) buildAnthropicAPIKeyCLICountTokensMimicRequest(
 	finalBetaHeader := stripBetaTokensWithSet(defaultAPIKeyCountTokensMimicBetaHeader(body), effectiveDropSet)
 	if sanitized, changed := sanitizeAnthropicBodyForBetaTokens(body, finalBetaHeader); changed {
 		body = sanitized
+	}
+	if rw := buildClaudeCodeOAuthToolNameRewriteFromBody(body); rw != nil {
+		body = applyToolNameRewriteNamesToBody(body, rw)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))

@@ -23,6 +23,25 @@ var staticToolNameRewrites = map[string]string{
 	"session_":  "cc_ses_",
 }
 
+// claudeCodeOAuthToolNameRewrites 对齐 CLIProxyAPI 的 oauthToolRenameMap。
+// 只把已知第三方小写工具名改成 Claude Code 风格名称，避免扩大到动态假名混淆。
+var claudeCodeOAuthToolNameRewrites = map[string]string{
+	"bash":         "Bash",
+	"read":         "Read",
+	"write":        "Write",
+	"edit":         "Edit",
+	"glob":         "Glob",
+	"grep":         "Grep",
+	"task":         "Task",
+	"webfetch":     "WebFetch",
+	"todowrite":    "TodoWrite",
+	"question":     "Question",
+	"skill":        "Skill",
+	"ls":           "LS",
+	"todoread":     "TodoRead",
+	"notebookedit": "NotebookEdit",
+}
+
 // fakeToolNamePrefixes 是"动态映射"的前缀池，与 Parrot _FAKE_PREFIXES 一致。
 // 当 tools 数量 > dynamicToolMapThreshold 时随机选用其中前缀生成可读假名。
 var fakeToolNamePrefixes = []string{
@@ -44,9 +63,10 @@ const dynamicToolMapThreshold = 5
 // 子串时 bytes.Replace 先被吃掉（对齐 Parrot _restore_tool_names_in_chunk 的
 // `sorted(..., key=lambda x: len(x[1]), reverse=True)`）。
 type ToolNameRewrite struct {
-	Forward        map[string]string
-	Reverse        map[string]string
-	ReverseOrdered [][2]string
+	Forward                   map[string]string
+	Reverse                   map[string]string
+	ReverseOrdered            [][2]string
+	StructuredResponseRestore bool
 }
 
 // buildDynamicToolMap 构造 tools 的动态假名映射。
@@ -152,10 +172,80 @@ func buildToolNameRewriteFromBody(body []byte) *ToolNameRewrite {
 		rw.Forward[name] = fake
 		rw.Reverse[fake] = name
 	}
-	if len(rw.Forward) == 0 {
-		return nil
+	return finalizeToolNameRewrite(rw)
+}
+
+// buildClaudeCodeOAuthToolNameRewriteFromBody 按 CLIProxyAPI 的工具名映射表构造
+// 单请求映射：请求侧小写第三方名 -> Claude Code 名，响应侧再按本请求 reverse map 回写。
+func buildClaudeCodeOAuthToolNameRewriteFromBody(body []byte) *ToolNameRewrite {
+	rw := &ToolNameRewrite{
+		Forward:                   make(map[string]string),
+		Reverse:                   make(map[string]string),
+		StructuredResponseRestore: true,
+	}
+	recordRename := func(original string) {
+		renamed, ok := claudeCodeOAuthToolNameRewrites[original]
+		if !ok || renamed == "" || renamed == original {
+			return
+		}
+		rw.Forward[original] = renamed
+		if _, exists := rw.Reverse[renamed]; !exists {
+			rw.Reverse[renamed] = original
+		}
 	}
 
+	tools := gjson.GetBytes(body, "tools")
+	if tools.IsArray() {
+		tools.ForEach(func(_, tool gjson.Result) bool {
+			if !shouldMimicToolName(tool.Get("type").String()) {
+				return true
+			}
+			recordRename(tool.Get("name").String())
+			return true
+		})
+	}
+
+	if tc := gjson.GetBytes(body, "tool_choice"); tc.Exists() && tc.Get("type").String() == "tool" {
+		recordRename(tc.Get("name").String())
+	}
+
+	messages := gjson.GetBytes(body, "messages")
+	if messages.IsArray() {
+		messages.ForEach(func(_, msg gjson.Result) bool {
+			content := msg.Get("content")
+			if !content.IsArray() {
+				return true
+			}
+			content.ForEach(func(_, part gjson.Result) bool {
+				switch part.Get("type").String() {
+				case "tool_use":
+					recordRename(part.Get("name").String())
+				case "tool_reference":
+					recordRename(part.Get("tool_name").String())
+				case "tool_result":
+					nestedContent := part.Get("content")
+					if nestedContent.IsArray() {
+						nestedContent.ForEach(func(_, nestedPart gjson.Result) bool {
+							if nestedPart.Get("type").String() == "tool_reference" {
+								recordRename(nestedPart.Get("tool_name").String())
+							}
+							return true
+						})
+					}
+				}
+				return true
+			})
+			return true
+		})
+	}
+
+	return finalizeToolNameRewrite(rw)
+}
+
+func finalizeToolNameRewrite(rw *ToolNameRewrite) *ToolNameRewrite {
+	if rw == nil || len(rw.Forward) == 0 {
+		return nil
+	}
 	rw.ReverseOrdered = make([][2]string, 0, len(rw.Reverse))
 	for fake, real := range rw.Reverse {
 		rw.ReverseOrdered = append(rw.ReverseOrdered, [2]string{fake, real})
@@ -163,21 +253,19 @@ func buildToolNameRewriteFromBody(body []byte) *ToolNameRewrite {
 	sort.SliceStable(rw.ReverseOrdered, func(i, j int) bool {
 		return len(rw.ReverseOrdered[i][0]) > len(rw.ReverseOrdered[j][0])
 	})
-
 	return rw
 }
 
-// applyToolNameRewriteToBody 把已构造的 ToolNameRewrite 应用到 body 上：
+// applyToolNameRewriteNamesToBody 只改写工具名，不注入 tools cache_control。
 //
 //   - 改写 $.tools[*].name（仅对 shouldMimicToolName 通过的 tool）
 //   - 改写 $.tool_choice.name（仅当 $.tool_choice.type == "tool"）
 //   - 改写 $.messages[*].content[*].name（仅当 type == "tool_use"）
-//   - 在 $.tools[last].cache_control 上打 ephemeral 缓存断点
+//   - 改写 $.messages[*].content[*].tool_name（仅当 type == "tool_reference"）
 //
 // 响应侧 bytes.Replace 会连带还原假名 → 真名。
-func applyToolNameRewriteToBody(body []byte, rw *ToolNameRewrite) []byte {
+func applyToolNameRewriteNamesToBody(body []byte, rw *ToolNameRewrite) []byte {
 	if rw == nil || len(rw.Forward) == 0 {
-		body = applyToolsLastCacheBreakpoint(body)
 		return body
 	}
 
@@ -225,18 +313,41 @@ func applyToolNameRewriteToBody(body []byte, rw *ToolNameRewrite) []byte {
 			}
 			content.ForEach(func(blkKey, blk gjson.Result) bool {
 				blkIdx := int(blkKey.Num)
-				if blk.Get("type").String() != "tool_use" {
-					return true
-				}
-				name := blk.Get("name").String()
-				if name == "" {
-					return true
-				}
-				if fake, ok := rw.Forward[name]; ok {
-					path := fmt.Sprintf("messages.%d.content.%d.name", msgIdx, blkIdx)
-					if next, err := sjson.SetBytes(body, path, fake); err == nil {
-						body = next
+				switch blk.Get("type").String() {
+				case "tool_use":
+					name := blk.Get("name").String()
+					if fake, ok := rw.Forward[name]; ok {
+						path := fmt.Sprintf("messages.%d.content.%d.name", msgIdx, blkIdx)
+						if next, err := sjson.SetBytes(body, path, fake); err == nil {
+							body = next
+						}
 					}
+				case "tool_reference":
+					toolName := blk.Get("tool_name").String()
+					if fake, ok := rw.Forward[toolName]; ok {
+						path := fmt.Sprintf("messages.%d.content.%d.tool_name", msgIdx, blkIdx)
+						if next, err := sjson.SetBytes(body, path, fake); err == nil {
+							body = next
+						}
+					}
+				case "tool_result":
+					nestedContent := blk.Get("content")
+					if !nestedContent.IsArray() {
+						return true
+					}
+					nestedContent.ForEach(func(nestedKey, nestedBlk gjson.Result) bool {
+						if nestedBlk.Get("type").String() != "tool_reference" {
+							return true
+						}
+						toolName := nestedBlk.Get("tool_name").String()
+						if fake, ok := rw.Forward[toolName]; ok {
+							path := fmt.Sprintf("messages.%d.content.%d.content.%d.tool_name", msgIdx, blkIdx, int(nestedKey.Num))
+							if next, err := sjson.SetBytes(body, path, fake); err == nil {
+								body = next
+							}
+						}
+						return true
+					})
 				}
 				return true
 			})
@@ -244,6 +355,13 @@ func applyToolNameRewriteToBody(body []byte, rw *ToolNameRewrite) []byte {
 		})
 	}
 
+	return body
+}
+
+// applyToolNameRewriteToBody 把已构造的 ToolNameRewrite 应用到 body 上，并在
+// $.tools[last].cache_control 上打 ephemeral 缓存断点。
+func applyToolNameRewriteToBody(body []byte, rw *ToolNameRewrite) []byte {
+	body = applyToolNameRewriteNamesToBody(body, rw)
 	body = applyToolsLastCacheBreakpoint(body)
 	return body
 }
@@ -293,6 +411,9 @@ func applyToolsLastCacheBreakpoint(body []byte) []byte {
 // rw 可为 nil；nil 时仍会做静态前缀还原。
 func restoreToolNamesInBytes(data []byte, rw *ToolNameRewrite) []byte {
 	if rw != nil {
+		if rw.StructuredResponseRestore {
+			return restoreStructuredToolNamesInBytes(data, rw)
+		}
 		for _, pair := range rw.ReverseOrdered {
 			fake, real := pair[0], pair[1]
 			if fake == "" || fake == real {
@@ -305,6 +426,167 @@ func restoreToolNamesInBytes(data []byte, rw *ToolNameRewrite) []byte {
 		data = replaceAllBytes(data, replacement, prefix)
 	}
 	return data
+}
+
+func restoreStructuredToolNamesInBytes(data []byte, rw *ToolNameRewrite) []byte {
+	if len(data) == 0 || rw == nil || len(rw.Reverse) == 0 {
+		return restoreStaticToolNamePrefixes(data)
+	}
+
+	if out, ok := restoreStructuredToolNamesInSSELine(data, rw); ok {
+		return restoreStaticToolNamePrefixes(out)
+	}
+	if out, ok := restoreStructuredToolNamesInJSON(data, rw); ok {
+		return restoreStaticToolNamePrefixes(out)
+	}
+	return restoreStaticToolNamePrefixes(data)
+}
+
+func restoreStaticToolNamePrefixes(data []byte) []byte {
+	for prefix, replacement := range staticToolNameRewrites {
+		data = replaceAllBytes(data, replacement, prefix)
+	}
+	return data
+}
+
+func restoreStructuredToolNamesInSSELine(line []byte, rw *ToolNameRewrite) ([]byte, bool) {
+	dataLineStart := 0
+	lineStr := string(line)
+	if !strings.HasPrefix(lineStr, "data:") {
+		idx := strings.Index(lineStr, "\ndata:")
+		if idx < 0 {
+			return nil, false
+		}
+		dataLineStart = idx + 1
+	}
+	dataLine := line[dataLineStart:]
+	if !strings.HasPrefix(string(dataLine), "data:") {
+		return nil, false
+	}
+	prefixLen := len("data:")
+	payloadStart := prefixLen
+	for payloadStart < len(dataLine) && (dataLine[payloadStart] == ' ' || dataLine[payloadStart] == '\t') {
+		payloadStart++
+	}
+	payload := dataLine[payloadStart:]
+	payloadEnd := len(payload)
+	for payloadEnd > 0 && (payload[payloadEnd-1] == '\n' || payload[payloadEnd-1] == '\r' || payload[payloadEnd-1] == ' ' || payload[payloadEnd-1] == '\t') {
+		payloadEnd--
+	}
+	payloadJSON := payload[:payloadEnd]
+	payloadSuffix := payload[payloadEnd:]
+	if len(payloadJSON) == 0 || string(payloadJSON) == "[DONE]" || !gjson.ValidBytes(payloadJSON) {
+		return nil, false
+	}
+
+	restored, changed := restoreStructuredToolNamesInJSONObject(payloadJSON, rw)
+	if !changed {
+		return line, true
+	}
+	out := make([]byte, 0, dataLineStart+payloadStart+len(restored)+len(payloadSuffix))
+	out = append(out, line[:dataLineStart]...)
+	out = append(out, dataLine[:payloadStart]...)
+	out = append(out, restored...)
+	out = append(out, payloadSuffix...)
+	return out, true
+}
+
+func restoreStructuredToolNamesInJSON(data []byte, rw *ToolNameRewrite) ([]byte, bool) {
+	if !gjson.ValidBytes(data) {
+		return nil, false
+	}
+	return restoreStructuredToolNamesInJSONObject(data, rw)
+}
+
+func restoreStructuredToolNamesInJSONObject(data []byte, rw *ToolNameRewrite) ([]byte, bool) {
+	out := data
+	changed := false
+	setStringIfMapped := func(path string) {
+		current := gjson.GetBytes(out, path)
+		if !current.Exists() {
+			return
+		}
+		real, ok := rw.Reverse[current.String()]
+		if !ok {
+			return
+		}
+		if next, err := sjson.SetBytes(out, path, real); err == nil {
+			out = next
+			changed = true
+		}
+	}
+
+	restoreAnthropicToolFields := func(prefix string) {
+		setStringIfMapped(prefix + "name")
+		setStringIfMapped(prefix + "tool_name")
+	}
+
+	content := gjson.GetBytes(out, "content")
+	if content.IsArray() {
+		content.ForEach(func(idx, part gjson.Result) bool {
+			base := fmt.Sprintf("content.%d.", int(idx.Num))
+			switch part.Get("type").String() {
+			case "tool_use", "tool_reference":
+				restoreAnthropicToolFields(base)
+			}
+			return true
+		})
+	}
+
+	restoreAnthropicToolFields("content_block.")
+	restoreOpenAIResponseToolFields(out, &setStringIfMapped)
+	restoreOpenAIChatToolFields(out, &setStringIfMapped)
+
+	return out, changed
+}
+
+func restoreOpenAIResponseToolFields(out []byte, setStringIfMapped *func(string)) {
+	output := gjson.GetBytes(out, "output")
+	if output.IsArray() {
+		output.ForEach(func(idx, item gjson.Result) bool {
+			if item.Get("type").String() == "function_call" || item.Get("type").String() == "custom_tool_call" {
+				(*setStringIfMapped)(fmt.Sprintf("output.%d.name", int(idx.Num)))
+			}
+			return true
+		})
+	}
+
+	item := gjson.GetBytes(out, "item")
+	if item.Exists() && (item.Get("type").String() == "function_call" || item.Get("type").String() == "custom_tool_call") {
+		(*setStringIfMapped)("item.name")
+	}
+
+	typ := gjson.GetBytes(out, "type").String()
+	if typ == "response.function_call_arguments.delta" || typ == "response.function_call_arguments.done" {
+		(*setStringIfMapped)("name")
+	}
+}
+
+func restoreOpenAIChatToolFields(out []byte, setStringIfMapped *func(string)) {
+	choices := gjson.GetBytes(out, "choices")
+	if !choices.IsArray() {
+		return
+	}
+	choices.ForEach(func(choiceIdx, choice gjson.Result) bool {
+		toolCalls := choice.Get("message.tool_calls")
+		if toolCalls.IsArray() {
+			toolCalls.ForEach(func(toolIdx, toolCall gjson.Result) bool {
+				if toolCall.Get("type").String() == "" || toolCall.Get("type").String() == "function" {
+					(*setStringIfMapped)(fmt.Sprintf("choices.%d.message.tool_calls.%d.function.name", int(choiceIdx.Num), int(toolIdx.Num)))
+				}
+				return true
+			})
+		}
+
+		deltaToolCalls := choice.Get("delta.tool_calls")
+		if deltaToolCalls.IsArray() {
+			deltaToolCalls.ForEach(func(toolIdx, toolCall gjson.Result) bool {
+				(*setStringIfMapped)(fmt.Sprintf("choices.%d.delta.tool_calls.%d.function.name", int(choiceIdx.Num), int(toolIdx.Num)))
+				return true
+			})
+		}
+		return true
+	})
 }
 
 // replaceAllBytes 是 bytes.ReplaceAll 的便捷封装，避免每个调用点各自做 []byte 转换。

@@ -39,7 +39,7 @@
 - 修改理由：通过 `openAIUpstreamRequestPlan` 显式传入 `IsCodexCLI` / `PromptCacheKey` / API Key mimic profile，避免继续增加散落布尔参数。
 
 - 锚点：主 HTTP `/v1/responses` 发送路径
-- 修改理由：经 `doOpenAIHTTPUpstream()` 统一选择 `Do` / `DoWithTLS`，让 API Key mimic 绑定的 TLS profile 在 `/v1/responses` 与 `/v1/chat/completions` 转换路径保持一致。OpenAI Codex mimic 不使用内置 Node.js 默认 profile；只有显式绑定 TLS profile ID 且解析成功时才走 `DoWithTLS`。
+- 修改理由：经 `doOpenAIHTTPUpstream()` 统一选择 `Do` / `DoWithTLS`，让 API Key mimic 的 TLS 发送路径在 `/v1/responses` 与 `/v1/chat/completions` 转换路径保持一致。OpenAI Codex mimic 开启 `enable_tls_fingerprint` 后默认使用内置 Codex Desktop captured profile；只有显式绑定 TLS profile ID 且解析成功时才覆盖该默认 profile。
 
 - 锚点：`forwardOpenAIPassthrough()`
 - 修改理由：`openai_passthrough` 与 `openai_apikey_mimic_codex_cli` 互斥，保持阶段一语义清晰。
@@ -86,7 +86,7 @@
   - `codexCLIUserAgent` / `codexCLIVersion` 是否变化；它们当前仅作为 `cli_rs_0_125` 兼容 profile 与部分 OAuth 兜底使用，不应再误当成 APIKey mimic 的默认身份。
   - `openAIAPIKeyCodexMimicProfile` 的 body/header/route 行为是否仍被 `/v1/responses`、`/v1/chat/completions`、probe、自测共同复用。
   - `buildUpstreamRequest()` 的 `openAIUpstreamRequestPlan` 是否仍准确区分 `ForceCodexCLI`、官方入站 Codex、账号级 API Key mimic。
-  - `doOpenAIHTTPUpstream()` 的 `DoWithTLS` 路径与 profile 解析语义是否变化；OpenAI Codex mimic 未绑定显式 TLS profile 时不要回落到内置 Node.js profile。
+  - `doOpenAIHTTPUpstream()` 的 `DoWithTLS` 路径与 profile 解析语义是否变化；OpenAI Codex mimic 开启 TLS 指纹但未绑定显式 TLS profile 时，应回落到内置 Codex Desktop captured profile，不要回落到内置 Node.js profile。
   - 账号级 mimic 是否仍参与 `isCodexCLI`；不要误回退成只改上游 header，否则 Kilo 请求可能再次失败。
   - `openai_responses_supported` 与 `openai_responses_supported_mimic_codex_cli` 的分键语义是否仍与观测/诊断用途一致；不要把 mimic 探测结果写回普通 capability 键，也不要误把该观测键接入阶段一 mimic 路由。
   - 默认 Desktop profile 的 `prompt_cache_key` 是否仍是稳定 UUID 形态且与 `session-id` / `thread-id` / `client_metadata.session_id` 同源；显式 CLI profile 的 `codex-mimic-*` 兼容行为是否仍可回退。
