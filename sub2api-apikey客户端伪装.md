@@ -523,7 +523,7 @@ main  -> upstream/main
 - 发布镜像 tag 固定跟 Git tag 对齐，临时测试镜像可额外保留 commit sha 别名。
 - 测试失败不推新镜像。
 - ARM64 只拉取已验证镜像。
-- 当前 ARM64 测试镜像为 `sub2api:v0.1.137-mimic.2`，历史别名为 `sub2api:mimic-20260626-toolname-arm64`。
+- 当前 ARM64 测试镜像为 `sub2api:v0.1.137-mimic.2`；历史实验镜像和旧别名已清理。
 
 ---
 
