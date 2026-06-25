@@ -1,6 +1,6 @@
 # sub2api：API Key 官方客户端伪装阶段一方案
 
-更新时间：2026-06-24
+更新时间：2026-06-25
 
 > 目标：让通过 sub2api 转发的 API Key 账号，在上游和模型侧都尽量接近官方客户端请求形态。
 >
@@ -25,7 +25,7 @@
 
 ARM64 测试服当前运行：
 
-- 当前运行镜像：`sub2api:mimic-48e4c3c1-phase1-complete-arm64`
+- 当前运行镜像：`sub2api:mimic-f18101f3-desktop-profile-arm64`
 - 容器：`sub2api-mimic`
 - 对外地址：`https://sg.3ab.in`
 - Claude Base URL：`https://sg.3ab.in`
@@ -146,11 +146,12 @@ ARM64 测试服当前运行：
 - `/v1/chat/completions` 入站对 API Key Codex mimic 账号强制走 Chat Completions -> Responses 转换，再进入同一套 Codex mimic body/header/TLS 处理。
 - ARM64 账号自测使用同一套 Codex mimic body/header/TLS 处理。
 - BWG 下游探活通过 ARM64 API key 进入后，也会走 ARM64 的通用 `/v1/responses` 或 `/v1/chat/completions` mimic 路径。
-- 出站强制覆盖 Codex header：
-  - `user-agent: codexCLIUserAgent`
-  - `originator: codex_cli_rs`
-  - `OpenAI-Beta: responses=experimental`
-  - `version: codexCLIVersion`
+- 出站 Codex header 由 profile 驱动，默认 `desktop_0_142`（实测 `Codex Desktop/0.142.0`）：
+  - `user-agent: Codex Desktop/0.142.0 ...`
+  - `originator: Codex Desktop`
+  - 注入 `x-codex-*` / `session-id` / `thread-id`
+  - 移除旧 `version` / `OpenAI-Beta` / 下划线 session header
+  - 显式 `cli_rs_0_125` profile 保留旧 `codex_cli_rs` header 形态，作为兼容/回滚
 - 删除客户端透传的 `session_id` / `conversation_id`。
 - OpenAI API Key mimic 主 HTTP `/v1/responses` 和 `/v1/chat/completions` 转换后的上游请求都走 `DoWithTLS`。
 - TLS profile 为 nil 时保持兼容回退。
@@ -159,7 +160,7 @@ ARM64 测试服当前运行：
   - `stream: true`：上游按 Codex 流式形态发送。
   - `store: false`。
   - `include: ["reasoning.encrypted_content"]`。
-  - `prompt_cache_key`：缺失时补稳定的 `codex-mimic-*`。
+  - `prompt_cache_key`：默认 Desktop profile 用稳定 UUID 形态并补齐与 header 同源的 `client_metadata`；显式 `cli_rs_0_125` profile 保留旧 `codex-mimic-*` 不透明 key。
 - 裸 `role/content` message 规范化为 Codex / Responses 风格：
   - 原始形态：`{"role":"user","content":"..."}`
   - 规范形态：`{"type":"message","role":"user","content":[{"type":"input_text","text":"..."}]}`
@@ -488,7 +489,7 @@ main  -> upstream/main
 - 自定义镜像 tag 固定带 commit sha。
 - 测试失败不推新镜像。
 - ARM64 只拉取已验证镜像。
-- 当前阶段一运行镜像为 `sub2api:mimic-48e4c3c1-phase1-complete-arm64`。
+- 当前阶段一运行镜像为 `sub2api:mimic-f18101f3-desktop-profile-arm64`。
 
 ---
 
