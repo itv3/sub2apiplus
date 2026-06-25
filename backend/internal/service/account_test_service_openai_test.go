@@ -30,8 +30,21 @@ type queuedHTTPUpstream struct {
 	tlsFlags  []bool
 }
 
-func (u *queuedHTTPUpstream) Do(_ *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
-	return nil, fmt.Errorf("unexpected Do call")
+func (u *queuedHTTPUpstream) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+	if req != nil && req.Body != nil {
+		body, _ := io.ReadAll(req.Body)
+		u.bodies = append(u.bodies, append([]byte(nil), body...))
+		_ = req.Body.Close()
+		req.Body = io.NopCloser(bytes.NewReader(body))
+	}
+	u.requests = append(u.requests, req)
+	u.tlsFlags = append(u.tlsFlags, false)
+	if len(u.responses) == 0 {
+		return nil, fmt.Errorf("no mocked response")
+	}
+	resp := u.responses[0]
+	u.responses = u.responses[1:]
+	return resp, nil
 }
 
 func (u *queuedHTTPUpstream) DoWithTLS(req *http.Request, _ string, _ int64, _ int, profile *tlsfingerprint.Profile) (*http.Response, error) {
@@ -431,15 +444,18 @@ func TestAccountTestService_OpenAIAPIKeyCodexMimicUsesResponsesProbe(t *testing.
 	require.Error(t, err)
 	require.NotNil(t, upstream.lastReq)
 	require.Equal(t, "https://compat-upstream.example/v1/responses", upstream.lastReq.URL.String())
-	require.Equal(t, codexCLIUserAgent, upstream.lastReq.Header.Get("User-Agent"))
-	require.Equal(t, "codex_cli_rs", upstream.lastReq.Header.Get("originator"))
-	require.Equal(t, "responses=experimental", upstream.lastReq.Header.Get("OpenAI-Beta"))
-	require.Equal(t, codexCLIVersion, upstream.lastReq.Header.Get("version"))
+	require.Equal(t, codexDesktopUserAgent, upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, codexDesktopOriginator, upstream.lastReq.Header.Get("originator"))
+	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
+	require.Empty(t, upstream.lastReq.Header.Get("version"))
 	require.Empty(t, upstream.lastReq.Header.Get("session_id"))
+	require.Regexp(t, openAICodexUUIDPattern, upstream.lastReq.Header.Get("session-id"))
 	require.NotNil(t, upstream.lastTLSProfile)
+	require.Contains(t, upstream.lastTLSProfile.Name, "Codex Desktop 0.142.0")
+	require.Empty(t, upstream.lastTLSProfile.ALPNProtocols)
 	require.Equal(t, "message", gjson.GetBytes(upstream.lastBody, "input.0.type").String())
 	require.Equal(t, "gpt-5.4", gjson.GetBytes(upstream.lastBody, "model").String())
-	require.True(t, strings.HasPrefix(gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String(), "codex-mimic-"))
+	require.Regexp(t, openAICodexUUIDPattern, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
 }
 
 func TestAccountTestService_OpenAIChatCompletionsPathReturns4xx(t *testing.T) {

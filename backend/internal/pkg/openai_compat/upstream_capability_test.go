@@ -64,6 +64,24 @@ func TestShouldUseResponsesAPI(t *testing.T) {
 	}
 }
 
+func TestShouldUseResponsesAPIForProfile_MimicIgnoresForceChatCompletions(t *testing.T) {
+	extra := map[string]any{
+		ExtraKeyResponsesMode:                   string(ResponsesSupportModeForceChatCompletions),
+		ExtraKeyResponsesSupported:              false,
+		ExtraKeyResponsesSupportedMimicCodexCLI: false,
+	}
+
+	if got := ShouldUseResponsesAPIForProfile(extra, true); !got {
+		t.Fatalf("ShouldUseResponsesAPIForProfile(mimic=true) = %v, want true", got)
+	}
+	if got := ResolveResponsesSupportForProfile(extra, true); got != ResponsesSupportYes {
+		t.Fatalf("ResolveResponsesSupportForProfile(mimic=true) = %v, want %v", got, ResponsesSupportYes)
+	}
+	if got := ShouldUseResponsesAPIForProfile(extra, false); got {
+		t.Fatalf("ShouldUseResponsesAPIForProfile(mimic=false) = %v, want false", got)
+	}
+}
+
 func TestNormalizeResponsesSupportMode(t *testing.T) {
 	tests := []struct {
 		name string

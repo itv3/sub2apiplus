@@ -58,6 +58,12 @@ const ExtraKeyResponsesMode = "openai_responses_mode"
 // 值类型为 bool：true=支持、false=不支持、键缺失=未探测。
 const ExtraKeyResponsesSupported = "openai_responses_supported"
 
+// ExtraKeyResponsesSupportedMimicCodexCLI 是 accounts.extra JSON 中存储
+// OpenAI APIKey Codex mimic 形态探测结果的键名。值类型与
+// ExtraKeyResponsesSupported 相同。阶段一的 mimic profile 固定走 Responses
+// 伪装链路，所以该键当前只作为观测/诊断数据，避免污染普通 APIKey 探测结果。
+const ExtraKeyResponsesSupportedMimicCodexCLI = "openai_responses_supported_mimic_codex_cli"
+
 // NormalizeResponsesSupportMode 归一化账号级 Responses API 路由覆盖模式。
 // 缺失或非法值按 auto 处理，以保持存量行为。
 func NormalizeResponsesSupportMode(mode string) ResponsesSupportMode {
@@ -76,6 +82,19 @@ func NormalizeResponsesSupportMode(mode string) ResponsesSupportMode {
 // 标记缺失或类型不匹配时返回 ResponsesSupportUnknown——调用方应按
 // "未探测=保留旧行为=走 Responses" 处理（参见 ShouldUseResponsesAPI）。
 func ResolveResponsesSupport(extra map[string]any) AccountResponsesSupport {
+	return ResolveResponsesSupportForProfile(extra, false)
+}
+
+// ResolveResponsesSupportForProfile 从账号 extra 中读取指定 profile 的探测结果。
+// mimicCodexCLI=true 时直接返回 ResponsesSupportYes，保证 mimic 账号固定走
+// Responses 伪装链路，不受 force_chat_completions 或探测结果影响；
+// false 时读取普通探测键与手动覆盖模式。
+func ResolveResponsesSupportForProfile(extra map[string]any, mimicCodexCLI bool) AccountResponsesSupport {
+	if mimicCodexCLI {
+		// mimic 账号的阶段一核心语义是：所有入口统一收敛到 Responses 伪装链路。
+		// 因此这里必须忽略 force_chat_completions / 探测 false，避免再掉回 raw Chat Completions。
+		return ResponsesSupportYes
+	}
 	if extra == nil {
 		return ResponsesSupportUnknown
 	}
@@ -87,7 +106,11 @@ func ResolveResponsesSupport(extra map[string]any) AccountResponsesSupport {
 			return ResponsesSupportNo
 		}
 	}
-	v, ok := extra[ExtraKeyResponsesSupported]
+	key := ExtraKeyResponsesSupported
+	if mimicCodexCLI {
+		key = ExtraKeyResponsesSupportedMimicCodexCLI
+	}
+	v, ok := extra[key]
 	if !ok {
 		return ResponsesSupportUnknown
 	}
@@ -111,5 +134,11 @@ func ResolveResponsesSupport(extra map[string]any) AccountResponsesSupport {
 // 仅当账号已探测且确认不支持时返回 false，此时调用方应走 CC 直转路径
 // （详见 internal/service/openai_gateway_chat_completions_raw.go）。
 func ShouldUseResponsesAPI(extra map[string]any) bool {
-	return ResolveResponsesSupport(extra) != ResponsesSupportNo
+	return ShouldUseResponsesAPIForProfile(extra, false)
+}
+
+// ShouldUseResponsesAPIForProfile 判断指定 profile 下是否应走 Responses。
+// mimicCodexCLI=true 时应始终返回 true。
+func ShouldUseResponsesAPIForProfile(extra map[string]any, mimicCodexCLI bool) bool {
+	return ResolveResponsesSupportForProfile(extra, mimicCodexCLI) != ResponsesSupportNo
 }

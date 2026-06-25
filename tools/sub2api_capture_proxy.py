@@ -34,6 +34,10 @@ SENSITIVE_JSON_KEY_RE = re.compile(
     r"(api[-_]?key|access[-_]?token|refresh[-_]?token|id[-_]?token|authorization|cookie|secret|password|credential)",
     re.I,
 )
+CAPTURE_TEXT_KEY_RE = re.compile(
+    r"(prompt_cache_key|session_id|conversation_id|metadata|user_id|instructions|system|content|text|description|arguments)",
+    re.I,
+)
 HOP_BY_HOP_HEADERS = {
     "connection",
     "keep-alive",
@@ -75,7 +79,7 @@ def sanitize_json(value: Any) -> Any:
     if isinstance(value, dict):
         result: dict[str, Any] = {}
         for key, item in value.items():
-            if SENSITIVE_JSON_KEY_RE.search(str(key)):
+            if SENSITIVE_JSON_KEY_RE.search(str(key)) or CAPTURE_TEXT_KEY_RE.search(str(key)):
                 result[str(key)] = redact_scalar(item)
             else:
                 result[str(key)] = sanitize_json(item)
@@ -93,8 +97,37 @@ def sanitize_body(body: bytes, content_type: str) -> Any:
         try:
             return sanitize_json(json.loads(text))
         except Exception:
-            return {"_decode": "json_parse_failed", "text": text}
-    return {"text": text}
+            return {"_decode": "json_parse_failed", "text": redact_scalar(text)}
+    return {"text": redact_scalar(text)}
+
+
+def sanitize_response_prefix(body: bytes, content_type: str) -> str:
+    if not body:
+        return ""
+    text = body.decode("utf-8", "replace")
+    lower_type = content_type.lower()
+    if "event-stream" in lower_type:
+        sanitized_lines: list[str] = []
+        for line in text.splitlines():
+            if line.startswith("data:"):
+                payload = line.split(":", 1)[1].strip()
+                if not payload or payload == "[DONE]":
+                    sanitized_lines.append(line)
+                    continue
+                try:
+                    sanitized_payload = json.dumps(sanitize_json(json.loads(payload)), ensure_ascii=False, sort_keys=True)
+                except Exception:
+                    sanitized_payload = redact_scalar(payload)
+                sanitized_lines.append(f"data: {sanitized_payload}")
+                continue
+            sanitized_lines.append(line)
+        return "\n".join(sanitized_lines)
+    if "json" in lower_type:
+        try:
+            return json.dumps(sanitize_json(json.loads(text)), ensure_ascii=False, sort_keys=True)
+        except Exception:
+            return redact_scalar(text)
+    return redact_scalar(text)
 
 
 def sanitize_url_for_log(url: str) -> str:
@@ -264,6 +297,7 @@ class CaptureProxyHandler(BaseHTTPRequestHandler):
                     pass
         finally:
             content_type = self.headers.get("Content-Type", "")
+            response_content_type = upstream_headers.get("Content-Type", upstream_headers.get("content-type", [""]))[0]
             record = {
                 "capture_id": capture_id,
                 "captured_at": now_iso(),
@@ -286,7 +320,7 @@ class CaptureProxyHandler(BaseHTTPRequestHandler):
                     "headers": upstream_headers,
                     "captured_bytes": len(response_prefix),
                     "event_types": event_types_from_sse(bytes(response_prefix)),
-                    "body_prefix": response_prefix.decode("utf-8", "replace"),
+                    "body_prefix": sanitize_response_prefix(bytes(response_prefix), response_content_type),
                 },
                 "error": error,
             }

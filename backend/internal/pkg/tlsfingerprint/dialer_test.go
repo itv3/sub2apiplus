@@ -20,6 +20,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	utls "github.com/refraction-networking/utls"
 )
 
 // TestDialerBasicConnection tests that the dialer can establish TLS connections.
@@ -261,6 +263,37 @@ func TestBuildClientHelloSpec(t *testing.T) {
 
 	if len(spec.CipherSuites) != 2 {
 		t.Errorf("expected 2 cipher suites, got %d", len(spec.CipherSuites))
+	}
+}
+
+func TestBuildClientHelloSpecAllowsTLS12WithoutALPNOrSupportedVersions(t *testing.T) {
+	profile := &Profile{
+		Name:          "codex_desktop_captured",
+		CipherSuites:  []uint16{0x00ff, 0xc02c, 0xc02b},
+		Curves:        []uint16{0x0017, 0x0018, 0x0019},
+		PointFormats:  []uint16{0},
+		Extensions:    []uint16{0, 10, 11, 13, 5, 18, 23},
+		TLSVersMin:    0x0301,
+		TLSVersMax:    0x0303,
+		ALPNProtocols: nil,
+	}
+
+	spec := buildClientHelloSpecFromProfile(profile)
+	if spec.TLSVersMin != 0x0301 {
+		t.Fatalf("TLSVersMin: got 0x%04x, want 0x0301", spec.TLSVersMin)
+	}
+	if spec.TLSVersMax != 0x0303 {
+		t.Fatalf("TLSVersMax: got 0x%04x, want 0x0303", spec.TLSVersMax)
+	}
+	for _, ext := range spec.Extensions {
+		switch ext.(type) {
+		case *utls.ALPNExtension:
+			t.Fatal("captured Codex Desktop profile must not send ALPN")
+		case *utls.SupportedVersionsExtension:
+			t.Fatal("captured Codex Desktop profile must not send supported_versions")
+		case *utls.KeyShareExtension:
+			t.Fatal("captured Codex Desktop profile must not send key_share")
+		}
 	}
 }
 

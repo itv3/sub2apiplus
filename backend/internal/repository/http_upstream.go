@@ -5,7 +5,9 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -265,9 +267,10 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 	}
 	settings := s.resolvePoolSettings(isolation, accountConcurrency)
 	settings = s.applyProfilePoolSettings(settings, upstreamProfile)
-	// TLS 指纹客户端使用独立的缓存键，加 "tls:" 前缀
-	cacheKey := "tls:" + buildCacheKey(isolation, proxyKey, accountID, upstreamProtocolModeDefault)
-	poolKey := buildPoolKey(settings, upstreamProtocolModeDefault) + ":tls"
+	profileKey := tlsFingerprintProfileCacheKey(profile)
+	// TLS 指纹客户端使用独立缓存键，并按 profile 摘要隔离，避免切换 profile 后复用旧 transport。
+	cacheKey := "tls:" + profileKey + ":" + buildCacheKey(isolation, proxyKey, accountID, upstreamProtocolModeDefault)
+	poolKey := buildPoolKey(settings, upstreamProtocolModeDefault) + ":tls:" + profileKey
 
 	now := time.Now()
 	nowUnix := now.UnixNano()
@@ -344,6 +347,30 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 	s.evictOverLimitLocked()
 	s.mu.Unlock()
 	return entry, nil
+}
+
+func tlsFingerprintProfileCacheKey(profile *tlsfingerprint.Profile) string {
+	if profile == nil {
+		return "nil"
+	}
+	raw := fmt.Sprintf(
+		"name:%s|grease:%t|ciphers:%v|curves:%v|points:%v|sigalgs:%v|alpn:%v|versions:%v|keyshares:%v|psk:%v|ext:%v|min:%04x|max:%04x",
+		profile.Name,
+		profile.EnableGREASE,
+		profile.CipherSuites,
+		profile.Curves,
+		profile.PointFormats,
+		profile.SignatureAlgorithms,
+		profile.ALPNProtocols,
+		profile.SupportedVersions,
+		profile.KeyShareGroups,
+		profile.PSKModes,
+		profile.Extensions,
+		profile.TLSVersMin,
+		profile.TLSVersMax,
+	)
+	sum := sha256.Sum256([]byte(raw))
+	return hex.EncodeToString(sum[:8])
 }
 
 func (s *httpUpstreamService) shouldValidateResolvedIP() bool {

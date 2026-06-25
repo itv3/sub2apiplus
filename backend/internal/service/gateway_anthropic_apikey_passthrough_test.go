@@ -884,6 +884,48 @@ func TestGatewayService_AnthropicAPIKeyMimicCountTokensUsesTokenCountingBeta(t *
 	require.NotContains(t, getHeaderRaw(req.Header, "anthropic-beta"), claude.BetaOAuth)
 }
 
+func TestGatewayService_AnthropicAPIKeyMimicEnforcesFinalCacheControlLimit(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	svc := &GatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{
+				InjectBetaForAPIKey: true,
+			},
+		},
+	}
+	account := &Account{
+		ID:       404,
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeAPIKey,
+		Extra: map[string]any{
+			"anthropic_apikey_mimic_claude_code": true,
+		},
+		Credentials: map[string]any{
+			"api_key": "anthropic-key",
+		},
+	}
+
+	body := []byte(`{
+		"model":"claude-opus-4-8",
+		"system":[{"type":"text","text":"sys","cache_control":{"type":"ephemeral"}}],
+		"messages":[{"role":"user","content":[
+			{"type":"text","text":"m1","cache_control":{"type":"ephemeral"}},
+			{"type":"text","text":"m2","cache_control":{"type":"ephemeral"}},
+			{"type":"text","text":"m3","cache_control":{"type":"ephemeral"}}
+		]}],
+		"tools":[{"name":"kilo_read_file","description":"read","input_schema":{"type":"object","properties":{}},"cache_control":{"type":"ephemeral"}}]
+	}`)
+
+	req, wireBody, err := svc.buildUpstreamRequest(context.Background(), c, account, body, "anthropic-key", "apikey", "claude-opus-4-8", true, false)
+	require.NoError(t, err)
+	require.NotNil(t, req)
+	require.Equal(t, 4, strings.Count(string(wireBody), `"cache_control"`))
+}
+
 func TestGatewayService_AnthropicOAuth_ForwardPreservesBillingHeaderSystemBlock(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

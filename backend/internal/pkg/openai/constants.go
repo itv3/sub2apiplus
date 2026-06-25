@@ -61,7 +61,7 @@ var instructionsGPT52 string
 //   - 含 "codex" 的模型（gpt-5-codex / gpt-5.x-codex / codex-max / spark 等）→ GPT-5-Codex prompt
 //   - gpt-5.5 系非 codex 模型 → GPT-5.5 prompt（由最新非 codex prompt 改写首行）
 //   - gpt-5.2 系非 codex 模型 → GPT-5.2 prompt
-//   - gpt-5.1 / gpt-5 系非 codex 模型 → GPT-5.1 prompt
+//   - 其余 gpt-5 系非 codex 模型 → GPT-5.1 prompt
 //   - 其它 → 回退到 GPT-5-Codex prompt
 //
 // 任一专用 prompt 意外为空时回退到 DefaultInstructions，保证返回非空。
@@ -78,7 +78,7 @@ func CodexBaseInstructionsForModel(model string) string {
 		if v := strings.TrimSpace(instructionsGPT52); v != "" {
 			return instructionsGPT52
 		}
-	case strings.HasPrefix(m, "gpt-5.1"), m == "gpt-5":
+	case strings.HasPrefix(m, "gpt-5.1"), strings.HasPrefix(m, "gpt-5"):
 		if v := strings.TrimSpace(instructionsGPT51); v != "" {
 			return instructionsGPT51
 		}

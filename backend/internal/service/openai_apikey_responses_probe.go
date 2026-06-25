@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
@@ -31,7 +33,8 @@ const responsesProbeMaxBodyBytes = 256 * 1024
 // 而"端点存在、基础补全可用、但工具调用坏掉"的上游(如火山方舟 coding/v3 ×
 // kimi-k2.6,只回 reasoning、不产出 function_call)会被这一步暴露出来。
 //
-// Stream=false 便于一次性读取 output 数组判定;不带 instructions 以免干扰。
+// 默认 stream=false 便于一次性读取 output 数组判定; mimic profile 可能会把它
+// 改成 stream=true，此时判定逻辑会解析 SSE data 事件。
 func openaiResponsesProbePayload(modelID string) []byte {
 	if strings.TrimSpace(modelID) == "" {
 		modelID = openai.DefaultTestModel
@@ -90,12 +93,44 @@ func selectResponsesProbeModel(account *Account) string {
 	return candidates[0]
 }
 
+func buildOpenAIResponsesProbeRequest(account *Account, cfg *config.Config, probeURL, apiKey, modelID string) (*http.Request, []byte, error) {
+	probeBody := openaiResponsesProbePayload(modelID)
+	mimicProfile := resolveOpenAIAPIKeyCodexMimicProfile(account, 0, cfg)
+	probeBody = mimicProfile.RewriteBody(probeBody)
+
+	req, err := http.NewRequest(http.MethodPost, probeURL, bytes.NewReader(probeBody))
+	if err != nil {
+		return nil, nil, err
+	}
+	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	probeStream := gjson.GetBytes(probeBody, "stream").Bool()
+	if probeStream {
+		req.Header.Set("Accept", "text/event-stream")
+	} else {
+		req.Header.Set("Accept", "application/json")
+	}
+	mimicProfile.ApplyHeaders(req, probeStream)
+	return req, probeBody, nil
+}
+
+func openAIResponsesSupportedExtraKey(account *Account) string {
+	if account != nil && account.IsOpenAIAPIKeyCodexMimicEnabled() {
+		return openai_compat.ExtraKeyResponsesSupportedMimicCodexCLI
+	}
+	return openai_compat.ExtraKeyResponsesSupported
+}
+
 // ProbeOpenAIAPIKeyResponsesSupport 探测 OpenAI APIKey 账号上游是否支持
-// /v1/responses 端点，并将结果持久化到 accounts.extra.openai_responses_supported。
+// /v1/responses 端点，并将结果持久化到对应 profile 的 capability 键。
 //
 // 调用时机：账号创建/更新后，且仅当 platform=openai && type=apikey 时。
 //
 // 探测策略（参见包文档 internal/pkg/openai_compat）：
+//   - mimic 账号使用与真实转发一致的 Codex header/body 形态探测，结果写入
+//     openai_responses_supported_mimic_codex_cli 作为观测数据，避免污染普通 APIKey 形态
+//   - 非 mimic 账号结果继续写入 openai_responses_supported
 //   - 上游 404 / 405 → 端点不存在,写 false
 //   - 上游 2xx → 端点存在,进一步看工具能力:响应含 function_call 输出项才写 true;
 //     仅 reasoning / 无 function_call(如火山方舟 coding/v3 × kimi-k2.6)写 false
@@ -139,22 +174,19 @@ func (s *AccountTestService) ProbeOpenAIAPIKeyResponsesSupport(ctx context.Conte
 	probeCtx, cancel := context.WithTimeout(ctx, openaiResponsesProbeTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(probeCtx, http.MethodPost, probeURL, bytes.NewReader(openaiResponsesProbePayload(probeModel)))
+	req, _, err := buildOpenAIResponsesProbeRequest(account, s.cfg, probeURL, apiKey, probeModel)
 	if err != nil {
 		logger.LegacyPrintf("service.openai_probe", "probe_build_request_failed: account_id=%d err=%v", accountID, err)
 		return
 	}
-	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("Accept", "application/json")
+	req = req.WithContext(WithHTTPUpstreamProfile(probeCtx, HTTPUpstreamProfileOpenAI))
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
 
-	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+	resp, err := doOpenAIHTTPUpstream(s.httpUpstream, req, proxyURL, account, s.tlsFPProfileService)
 	if err != nil {
 		// 网络层失败：不写标记，保持 unknown，下次重试或由网关 fallback 处理
 		logger.LegacyPrintf("service.openai_probe", "probe_request_failed: account_id=%d url=%s err=%v", accountID, probeURL, err)
@@ -172,17 +204,18 @@ func (s *AccountTestService) ProbeOpenAIAPIKeyResponsesSupport(ctx context.Conte
 	}
 
 	supported := decideResponsesProbeSupport(resp.StatusCode, bodyBytes)
+	extraKey := openAIResponsesSupportedExtraKey(account)
 
 	if err := s.accountRepo.UpdateExtra(ctx, accountID, map[string]any{
-		openai_compat.ExtraKeyResponsesSupported: supported,
+		extraKey: supported,
 	}); err != nil {
-		logger.LegacyPrintf("service.openai_probe", "probe_persist_failed: account_id=%d supported=%v err=%v", accountID, supported, err)
+		logger.LegacyPrintf("service.openai_probe", "probe_persist_failed: account_id=%d key=%s supported=%v err=%v", accountID, extraKey, supported, err)
 		return
 	}
 
 	logger.LegacyPrintf("service.openai_probe",
-		"probe_done: account_id=%d base_url=%s probe_model=%s status=%d supported=%v",
-		accountID, normalizedBaseURL, probeModel, resp.StatusCode, supported,
+		"probe_done: account_id=%d base_url=%s probe_model=%s key=%s status=%d supported=%v",
+		accountID, normalizedBaseURL, probeModel, extraKey, resp.StatusCode, supported,
 	)
 }
 
@@ -210,9 +243,9 @@ func isResponsesEndpointSupportedByStatus(status int) bool {
 //   - 404 / 405：端点不存在 → false
 //   - 其他非 2xx（401/403/422/5xx 等）：端点存在,但本次无法判定工具能力
 //     （鉴权/校验/瞬时故障）→ 保守按 true,保持既有"端点存在即支持"行为
-//   - 2xx：探测以 tool_choice=required 强制工具调用,响应必须含 function_call
-//     输出项才算真正可用;否则(如火山方舟 coding/v3 × kimi-k2.6 仅回 reasoning)
-//     判为 false,使网关改走 /v1/chat/completions 直转路径。
+//   - 2xx：探测以 tool_choice=required 强制工具调用,响应必须在非流式 output
+//     或流式 SSE data 中含 function_call 输出项才算真正可用;否则(如火山方舟
+//     coding/v3 × kimi-k2.6 仅回 reasoning)判为 false。
 func decideResponsesProbeSupport(status int, body []byte) bool {
 	if status == http.StatusNotFound || status == http.StatusMethodNotAllowed {
 		return false
@@ -223,17 +256,59 @@ func decideResponsesProbeSupport(status int, body []byte) bool {
 	return responsesProbeBodyHasFunctionCall(body)
 }
 
-// responsesProbeBodyHasFunctionCall 判断非流式 Responses 响应体的 output 数组里
-// 是否存在 function_call 输出项。
+// responsesProbeBodyHasFunctionCall 判断 Responses 响应体里是否存在
+// function_call 输出项。兼容非流式 JSON 与 stream=true 时返回的 SSE data。
 func responsesProbeBodyHasFunctionCall(body []byte) bool {
-	output := gjson.GetBytes(body, "output")
-	if !output.IsArray() {
+	trimmed := bytes.TrimSpace(body)
+	if len(trimmed) == 0 {
 		return false
 	}
-	for _, item := range output.Array() {
-		if strings.TrimSpace(item.Get("type").String()) == "function_call" {
+	if json.Valid(trimmed) {
+		return responsesProbeJSONHasFunctionCall(gjson.ParseBytes(trimmed))
+	}
+	scanner := bufio.NewScanner(bytes.NewReader(trimmed))
+	scanner.Buffer(make([]byte, 1024), responsesProbeMaxBodyBytes)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if !strings.HasPrefix(line, "data:") {
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		if payload == "" || payload == "[DONE]" || !json.Valid([]byte(payload)) {
+			continue
+		}
+		if responsesProbeJSONHasFunctionCall(gjson.Parse(payload)) {
 			return true
 		}
+	}
+	return false
+}
+
+func responsesProbeJSONHasFunctionCall(value gjson.Result) bool {
+	if value.IsObject() {
+		if strings.TrimSpace(value.Get("type").String()) == "function_call" {
+			return true
+		}
+		found := false
+		value.ForEach(func(_, child gjson.Result) bool {
+			if responsesProbeJSONHasFunctionCall(child) {
+				found = true
+				return false
+			}
+			return true
+		})
+		return found
+	}
+	if value.IsArray() {
+		found := false
+		value.ForEach(func(_, child gjson.Result) bool {
+			if responsesProbeJSONHasFunctionCall(child) {
+				found = true
+				return false
+			}
+			return true
+		})
+		return found
 	}
 	return false
 }

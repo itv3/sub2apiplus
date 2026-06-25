@@ -25,8 +25,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ip"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 	"github.com/cespare/xxhash/v2"
@@ -2393,8 +2391,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	requestView := newOpenAIRequestView(body)
 	reqModel, reqStream, promptCacheKey := requestView.Model, requestView.Stream, requestView.PromptCacheKey
 	originalModel := reqModel
+	mimicProfile := resolveOpenAIAPIKeyCodexMimicProfile(account, getAPIKeyIDFromContext(c), s.cfg)
+	accountMimicCodexCLI := mimicProfile.Enabled
 
-	if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
+	if account.Type == AccountTypeAPIKey && !mimicProfile.ShouldUseResponsesAPI(account.Extra) {
 		return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body)
 	}
 
@@ -2403,9 +2403,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 	inboundIsCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator"))
 	forceCodexCLI := s.cfg != nil && s.cfg.Gateway.ForceCodexCLI
-	accountMimicCodexCLI := account.IsOpenAIAPIKeyCodexMimicEnabled()
 	isCodexCLI := inboundIsCodexCLI || forceCodexCLI || accountMimicCodexCLI
-	upstreamMimicCodexCLI := forceCodexCLI || accountMimicCodexCLI
 	wsDecision := s.getOpenAIWSProtocolResolver().Resolve(account)
 	clientTransport := GetOpenAIClientTransport(c)
 	// 仅允许 WS 入站请求走 WS 上游，避免出现 HTTP -> WS 协议混用。
@@ -2733,7 +2731,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 	}
 	if accountMimicCodexCLI {
-		body = applyOpenAIAPIKeyCodexMimicryToBody(body)
+		body = mimicProfile.RewriteBody(body)
 		requestView = newOpenAIRequestView(body)
 		reqBody = nil
 	}
@@ -2983,7 +2981,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	for {
 		// Build upstream request
 		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
-		upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, body, token, upstreamReqStream, promptCacheKey, isCodexCLI, upstreamMimicCodexCLI)
+		upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, body, token, openAIUpstreamRequestPlan{
+			IsStream:         upstreamReqStream,
+			PromptCacheKey:   promptCacheKey,
+			IsCodexCLI:       isCodexCLI,
+			APIKeyCodexMimic: mimicProfile,
+		})
 		releaseUpstreamCtx()
 		if err != nil {
 			return nil, err
@@ -2997,16 +3000,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 		// Send request
 		upstreamStart := time.Now()
-		var resp *http.Response
-		if account.ShouldUseOpenAITLSFingerprint() {
-			var tlsProfile *tlsfingerprint.Profile
-			if s.tlsFPProfileService != nil {
-				tlsProfile = s.tlsFPProfileService.ResolveTLSProfile(account)
-			}
-			resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
-		} else {
-			resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
-		}
+		resp, err := s.doOpenAIHTTPUpstream(upstreamReq, proxyURL, account)
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 		if err != nil {
 			// Transport-level failure (proxy/DNS/TCP/TLS — no HTTP response). Convert to
@@ -4168,7 +4162,7 @@ func writeOpenAIPassthroughResponseHeaders(dst http.Header, src http.Header, fil
 	}
 }
 
-func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token string, isStream bool, promptCacheKey string, isCodexCLI bool, upstreamMimicCodexCLI bool) (*http.Request, error) {
+func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token string, plan openAIUpstreamRequestPlan) (*http.Request, error) {
 	// Determine target URL based on account type
 	var targetURL string
 	switch account.Type {
@@ -4235,7 +4229,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 			req.Header.Del("originator")
 		} else {
 			req.Header.Set("OpenAI-Beta", "responses=experimental")
-			req.Header.Set("originator", resolveOpenAIUpstreamOriginator(c, isCodexCLI))
+			req.Header.Set("originator", resolveOpenAIUpstreamOriginator(c, plan.IsCodexCLI))
 		}
 		apiKeyID := getAPIKeyIDFromContext(c)
 		if isOpenAIResponsesCompactPath(c) {
@@ -4248,8 +4242,8 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 		} else {
 			req.Header.Set("accept", "text/event-stream")
 		}
-		if promptCacheKey != "" {
-			isolated := isolateOpenAISessionID(apiKeyID, promptCacheKey)
+		if plan.PromptCacheKey != "" {
+			isolated := isolateOpenAISessionID(apiKeyID, plan.PromptCacheKey)
 			req.Header.Set("session_id", isolated)
 			if !compatMessagesBridge || clientConversationID != "" {
 				req.Header.Set("conversation_id", isolated)
@@ -4262,9 +4256,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	if customUA != "" {
 		req.Header.Set("user-agent", customUA)
 	}
-	if account.Type == AccountTypeAPIKey && account.IsOpenAIAPIKeyCodexMimicEnabled() && upstreamMimicCodexCLI {
-		applyOpenAIAPIKeyCodexMimicHeaders(req, isStream)
-	}
+	plan.APIKeyCodexMimic.ApplyHeaders(req, plan.IsStream)
 
 	// 若开启 ForceCodexCLI，则强制将上游 User-Agent 伪装为 Codex CLI。
 	// 用于网关未透传/改写 User-Agent 时，仍能命中 Codex 侧识别逻辑。

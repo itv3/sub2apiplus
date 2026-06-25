@@ -79,6 +79,15 @@ type codexOAuthTransformOptions struct {
 	PreserveToolCallIDs     bool
 }
 
+type codexResponsesNormalizationOptions struct {
+	NormalizeBareRoleContentMessages bool
+	ConvertSystemRoleToDeveloper     bool
+	EnsureDefaultInstructions        bool
+	EnsureStream                     bool
+	EnsureStoreFalse                 bool
+	EnsureReasoningEncryptedContent  bool
+}
+
 const (
 	codexImageGenerationBridgeMarker = "<sub2api-codex-image-generation>"
 	codexImageGenerationBridgeText   = codexImageGenerationBridgeMarker + "\nWhen the user asks for raster image generation or editing, use the OpenAI Responses native `image_generation` tool attached to this request. The local Codex client may not expose an `image_gen` namespace, but that does not mean image generation is unavailable. Do not ask the user to switch to CLI fallback solely because `image_gen` is absent.\n</sub2api-codex-image-generation>"
@@ -264,6 +273,102 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 	}
 
 	return result
+}
+
+func applyCodexResponsesNormalization(reqBody map[string]any, opts codexResponsesNormalizationOptions) bool {
+	if reqBody == nil {
+		return false
+	}
+	modified := false
+	if opts.EnsureStoreFalse {
+		if v, ok := reqBody["store"].(bool); !ok || v {
+			reqBody["store"] = false
+			modified = true
+		}
+	}
+	if opts.EnsureStream {
+		if v, ok := reqBody["stream"].(bool); !ok || !v {
+			reqBody["stream"] = true
+			modified = true
+		}
+	}
+	if opts.EnsureReasoningEncryptedContent && ensureCodexEncryptedReasoningContentInclude(reqBody, true) {
+		modified = true
+	}
+	if input, ok := reqBody["input"].([]any); ok {
+		if opts.NormalizeBareRoleContentMessages {
+			if normalized, changed := normalizeCodexBareRoleContentMessages(input); changed {
+				input = normalized
+				modified = true
+			}
+		}
+		if opts.ConvertSystemRoleToDeveloper {
+			if normalized, changed := convertCodexSystemRoleMessagesToDeveloper(input); changed {
+				input = normalized
+				modified = true
+			}
+		}
+		reqBody["input"] = input
+	}
+	if opts.EnsureDefaultInstructions && applyInstructions(reqBody, true) {
+		modified = true
+	}
+	return modified
+}
+
+func ensureCodexEncryptedReasoningContentInclude(reqBody map[string]any, replaceInvalid bool) bool {
+	const encrypted = "reasoning.encrypted_content"
+	switch existing := reqBody["include"].(type) {
+	case nil:
+		reqBody["include"] = []any{encrypted}
+		return true
+	case []any:
+		for _, v := range existing {
+			if s, ok := v.(string); ok && s == encrypted {
+				return false
+			}
+		}
+		reqBody["include"] = append(existing, encrypted)
+		return true
+	case []string:
+		for _, v := range existing {
+			if v == encrypted {
+				return false
+			}
+		}
+		next := make([]any, 0, len(existing)+1)
+		for _, v := range existing {
+			next = append(next, v)
+		}
+		reqBody["include"] = append(next, encrypted)
+		return true
+	default:
+		if !replaceInvalid {
+			return false
+		}
+		reqBody["include"] = []any{encrypted}
+		return true
+	}
+}
+
+func convertCodexSystemRoleMessagesToDeveloper(input []any) ([]any, bool) {
+	if len(input) == 0 {
+		return input, false
+	}
+	modified := false
+	for _, item := range input {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		role, ok := m["role"].(string)
+		if !ok || !strings.EqualFold(strings.TrimSpace(role), "system") {
+			continue
+		}
+		m["role"] = "developer"
+		modified = true
+	}
+	return input, modified
 }
 
 func normalizeCodexBareRoleContentMessages(input []any) ([]any, bool) {
@@ -1051,23 +1156,7 @@ func ensureCodexReasoningInclude(reqBody map[string]any) bool {
 	if !ok || len(reasoning) == 0 {
 		return false
 	}
-	const encrypted = "reasoning.encrypted_content"
-	switch existing := reqBody["include"].(type) {
-	case nil:
-		reqBody["include"] = []any{encrypted}
-		return true
-	case []any:
-		for _, v := range existing {
-			if s, ok := v.(string); ok && s == encrypted {
-				return false
-			}
-		}
-		reqBody["include"] = append(existing, encrypted)
-		return true
-	default:
-		// include 为非预期类型时保持原样，避免破坏调用方意图。
-		return false
-	}
+	return ensureCodexEncryptedReasoningContentInclude(reqBody, false)
 }
 
 // applyCodexClientMetadata 在请求体补齐 client_metadata["x-codex-installation-id"]，

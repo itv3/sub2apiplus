@@ -278,7 +278,7 @@ func redactAuthHeaderValue(v string) string {
 func safeHeaderValueForLog(key string, v string) string {
 	key = strings.ToLower(strings.TrimSpace(key))
 	switch key {
-	case "authorization", "x-api-key":
+	case "authorization", "proxy-authorization", "x-api-key", "api-key", "openai-api-key", "cookie", "session_id", "conversation_id":
 		return redactAuthHeaderValue(v)
 	default:
 		return strings.TrimSpace(v)
@@ -10563,17 +10563,17 @@ func (s *GatewayService) debugLogGatewaySnapshot(tag string, headers http.Header
 		}
 	}
 
-	// 3. body（完整输出，格式化 JSON 便于 diff）
+	// 3. body（输出脱敏后的结构化内容，避免在调试日志里落完整 prompt / session 标识）
 	fmt.Fprint(&buf, "--- body ---\n")
 	if len(body) == 0 {
 		fmt.Fprint(&buf, "  (empty)\n")
 	} else {
+		redacted := []byte(redactGatewayDebugBodyForLog(body))
 		var pretty bytes.Buffer
-		if json.Indent(&pretty, body, "  ", "  ") == nil {
+		if json.Indent(&pretty, redacted, "  ", "  ") == nil {
 			fmt.Fprintf(&buf, "  %s\n", pretty.Bytes())
 		} else {
-			// JSON 格式化失败时原样输出
-			fmt.Fprintf(&buf, "  %s\n", body)
+			fmt.Fprintf(&buf, "  %s\n", redacted)
 		}
 	}
 

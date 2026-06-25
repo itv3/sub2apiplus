@@ -30,6 +30,8 @@ type Profile struct {
 	KeyShareGroups      []uint16 // Empty uses [X25519]
 	PSKModes            []uint16 // Empty uses [psk_dhe_ke]
 	Extensions          []uint16 // Extension type IDs in order; empty uses default Node.js 24.x order
+	TLSVersMin          uint16   // Empty uses TLS1.0
+	TLSVersMax          uint16   // Empty uses TLS1.3
 }
 
 // Dialer creates TLS connections with custom fingerprints.
@@ -447,12 +449,21 @@ func buildClientHelloSpecFromProfile(profile *Profile) *utls.ClientHelloSpec {
 		extensions = append(extensions, &utls.UtlsGREASEExtension{})
 	}
 
+	tlsVersMin := uint16(utls.VersionTLS10)
+	if profile != nil && profile.TLSVersMin != 0 {
+		tlsVersMin = profile.TLSVersMin
+	}
+	tlsVersMax := uint16(utls.VersionTLS13)
+	if profile != nil && profile.TLSVersMax != 0 {
+		tlsVersMax = profile.TLSVersMax
+	}
+
 	return &utls.ClientHelloSpec{
 		CipherSuites:       cipherSuites,
 		CompressionMethods: []uint8{0}, // null compression only (standard)
 		Extensions:         extensions,
-		TLSVersMax:         utls.VersionTLS13,
-		TLSVersMin:         utls.VersionTLS10,
+		TLSVersMax:         tlsVersMax,
+		TLSVersMin:         tlsVersMin,
 	}
 }
 

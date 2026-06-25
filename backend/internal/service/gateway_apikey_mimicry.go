@@ -51,6 +51,7 @@ func (s *GatewayService) buildAnthropicAPIKeyCLIMimicRequest(
 	effectiveDropSet map[string]struct{},
 ) (*http.Request, []byte, error) {
 	body = s.applyAnthropicAPIKeyClaudeCodeMimicryToBody(ctx, c, account, body)
+	body = enforceCacheControlLimit(body)
 	extraBetas := anthropicAPIKeyMimicExtraBetas(gjson.GetBytes(body, "model").String())
 	effectiveDropSet = removeTokensFromSetCopy(effectiveDropSet, extraBetas...)
 	finalBetaHeader := stripBetaTokensWithSet(mergeAnthropicBeta(extraBetas, defaultAPIKeyBetaHeader(body)), effectiveDropSet)

@@ -1,554 +1,267 @@
 package service
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
-	"github.com/tidwall/gjson"
-	"github.com/tidwall/sjson"
+	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/google/uuid"
 )
 
-type apiKeyMimicIdentityProfile struct {
-	OfficialPrompt string
-	NeutralClient  string
+const openAIAPIKeyCodexMimicProfileVersion = "codex_api_key_mimic_phase1_v2"
+
+type openAIAPIKeyCodexMimicScope struct {
+	AccountID           int64
+	APIKeyID            int64
+	UpstreamBaseURL     string
+	ServerSalt          string
+	ClientProfile       string
+	TurnID              string
+	TurnStartedAtUnixMS int64
 }
 
-var (
-	anthropicAPIKeyClaudeCodeIdentityProfile = apiKeyMimicIdentityProfile{
-		OfficialPrompt: "You are Claude Code, Anthropic's official CLI for Claude.",
-		NeutralClient:  "Claude Code",
+func resolveOpenAIAPIKeyCodexMimicScope(account *Account, apiKeyID int64, cfgs ...*config.Config) openAIAPIKeyCodexMimicScope {
+	scope := openAIAPIKeyCodexMimicScope{APIKeyID: apiKeyID}
+	if len(cfgs) > 0 {
+		scope.ServerSalt = openAIAPIKeyCodexPromptCacheKeyServerSalt(cfgs[0])
 	}
-	openAIAPIKeyCodexIdentityProfile = apiKeyMimicIdentityProfile{
-		OfficialPrompt: "You are Codex, running in the official Codex client environment.",
-		NeutralClient:  "Codex",
+	if account == nil {
+		return scope
 	}
-)
-
-var apiKeyMimicThirdPartyIdentityMarkers = []string{
-	"kilo-code",
-	"kilo code",
-	"kilo",
-	"cline",
-	"roo code",
-	"roo-code",
-	"roocode",
-	"cursor",
-	"opencode",
-	"open code",
+	scope.AccountID = account.ID
+	scope.UpstreamBaseURL = strings.TrimSpace(account.GetOpenAIBaseURL())
+	if scope.UpstreamBaseURL == "" {
+		scope.UpstreamBaseURL = "https://api.openai.com"
+	}
+	return scope
 }
 
-func applyAnthropicAPIKeyOfficialIdentityMimicryToBody(body []byte) []byte {
-	if len(body) == 0 || !gjson.ValidBytes(body) {
+func applyOpenAIAPIKeyCodexMimicryToBody(body []byte, scopes ...openAIAPIKeyCodexMimicScope) []byte {
+	if len(body) == 0 {
 		return body
 	}
-	profile := anthropicAPIKeyClaudeCodeIdentityProfile
-	body = sanitizeJSONTextValue(body, "system", profile, true)
-	body = sanitizeAnthropicSystemBlocks(body, profile)
-	body = sanitizeAnthropicMessagesIdentity(body, profile)
-	return body
-}
-
-func applyOpenAIAPIKeyCodexMimicryToBody(body []byte) []byte {
-	if len(body) == 0 || !gjson.ValidBytes(body) {
+	var reqBody map[string]any
+	if err := json.Unmarshal(body, &reqBody); err != nil {
 		return body
 	}
-	body = normalizeOpenAIAPIKeyCodexBareRoleContentMessagesBody(body)
-	body = normalizeOpenAIAPIKeyCodexSystemRoleBody(body)
-	body = ensureOpenAIAPIKeyCodexInstructionsBody(body)
-	body = ensureOpenAIAPIKeyCodexStreamBody(body)
-	body = ensureOpenAIAPIKeyCodexStoreBody(body)
-	body = ensureOpenAIAPIKeyCodexIncludeBody(body)
-	body = ensureOpenAIAPIKeyCodexPromptCacheKeyBody(body)
-	return body
-}
-
-func ensureOpenAIAPIKeyCodexStoreBody(body []byte) []byte {
-	store := gjson.GetBytes(body, "store")
-	if store.Exists() && !store.Bool() {
+	var scope openAIAPIKeyCodexMimicScope
+	if len(scopes) > 0 {
+		scope = scopes[0]
+	}
+	client := resolveOpenAIAPIKeyCodexMimicClientProfileFromScope(scope)
+	modified := applyCodexResponsesNormalization(reqBody, codexResponsesNormalizationOptions{
+		NormalizeBareRoleContentMessages: true,
+		ConvertSystemRoleToDeveloper:     true,
+		EnsureDefaultInstructions:        true,
+		EnsureStream:                     true,
+		EnsureStoreFalse:                 true,
+		EnsureReasoningEncryptedContent:  true,
+	})
+	if ensureOpenAIAPIKeyCodexPromptCacheKey(reqBody, scope) {
+		modified = true
+	}
+	if client.IsDesktop && ensureOpenAIAPIKeyCodexDesktopClientMetadata(reqBody, scope) {
+		modified = true
+	}
+	if !modified {
 		return body
 	}
-	out, err := sjson.SetBytes(body, "store", false)
+	out, err := marshalOpenAIUpstreamJSON(reqBody)
 	if err != nil {
 		return body
 	}
 	return out
 }
 
-func ensureOpenAIAPIKeyCodexIncludeBody(body []byte) []byte {
-	include := gjson.GetBytes(body, "include")
-	if include.IsArray() {
-		found := false
-		include.ForEach(func(_, item gjson.Result) bool {
-			if strings.TrimSpace(item.String()) == "reasoning.encrypted_content" {
-				found = true
-				return false
-			}
-			return true
-		})
-		if found {
-			return body
+func ensureOpenAIAPIKeyCodexPromptCacheKey(reqBody map[string]any, scope openAIAPIKeyCodexMimicScope) bool {
+	if resolveOpenAIAPIKeyCodexMimicClientProfileFromScope(scope).IsDesktop {
+		sessionID := buildOpenAIAPIKeyCodexDesktopMetadata(scope).SessionID
+		if existing, ok := reqBody["prompt_cache_key"].(string); ok && strings.TrimSpace(existing) == sessionID {
+			return false
 		}
+		reqBody["prompt_cache_key"] = sessionID
+		return true
 	}
-	out, err := sjson.SetBytes(body, "include", []string{"reasoning.encrypted_content"})
-	if err != nil {
-		return body
+	if existing, ok := reqBody["prompt_cache_key"].(string); ok && strings.TrimSpace(existing) != "" {
+		return false
 	}
-	return out
-}
-
-func ensureOpenAIAPIKeyCodexStreamBody(body []byte) []byte {
-	stream := gjson.GetBytes(body, "stream")
-	if stream.Exists() && stream.Bool() {
-		return body
-	}
-	out, err := sjson.SetBytes(body, "stream", true)
-	if err != nil {
-		return body
-	}
-	return out
-}
-
-func ensureOpenAIAPIKeyCodexInstructionsBody(body []byte) []byte {
-	instructions := gjson.GetBytes(body, "instructions")
-	if instructions.Exists() && instructions.Type == gjson.String && strings.TrimSpace(instructions.String()) != "" {
-		return body
-	}
-	model := strings.TrimSpace(gjson.GetBytes(body, "model").String())
-	out, err := sjson.SetBytes(body, "instructions", defaultCodexSynthInstructions(model))
-	if err != nil {
-		return body
-	}
-	return out
-}
-
-func ensureOpenAIAPIKeyCodexPromptCacheKeyBody(body []byte) []byte {
-	existing := gjson.GetBytes(body, "prompt_cache_key")
-	if existing.Exists() && strings.TrimSpace(existing.String()) != "" {
-		return body
-	}
-	seed := buildOpenAIAPIKeyCodexPromptCacheKeySeed(body)
+	seed := buildOpenAIAPIKeyCodexPromptCacheKeySeed(reqBody, scope)
 	if strings.TrimSpace(seed) == "" {
-		seed = fmt.Sprintf("body_bytes=%d", len(body))
+		seed = fmt.Sprintf("body_fields=%d", len(reqBody))
 	}
-	out, err := sjson.SetBytes(body, "prompt_cache_key", "codex-mimic-"+hashSensitiveValueForLog(seed))
-	if err != nil {
-		return body
-	}
-	return out
+	reqBody["prompt_cache_key"] = "codex-mimic-" + hashSensitiveValueForLog(seed)
+	return true
 }
 
-func buildOpenAIAPIKeyCodexPromptCacheKeySeed(body []byte) string {
-	parts := make([]string, 0, 16)
-	if model := strings.TrimSpace(gjson.GetBytes(body, "model").String()); model != "" {
-		parts = append(parts, "model="+model)
+func openAIAPIKeyCodexPromptCacheKeyServerSalt(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
 	}
-	if previousResponseID := strings.TrimSpace(gjson.GetBytes(body, "previous_response_id").String()); previousResponseID != "" {
-		parts = append(parts, "previous_response_id="+previousResponseID)
+	if secret := strings.TrimSpace(cfg.JWT.Secret); secret != "" {
+		return hashSensitiveValueForLog("jwt_secret:" + secret)
 	}
-	if stream := gjson.GetBytes(body, "stream"); stream.Exists() {
-		parts = append(parts, "stream="+stream.String())
+	return ""
+}
+
+func buildOpenAIAPIKeyCodexPromptCacheKeySeed(reqBody map[string]any, scope openAIAPIKeyCodexMimicScope) string {
+	parts := make([]string, 0, 8)
+	parts = append(parts, "profile="+openAIAPIKeyCodexMimicProfileVersion)
+	if profileID := strings.TrimSpace(scope.ClientProfile); profileID != "" {
+		parts = append(parts, "client_profile="+profileID)
 	}
-	if effort := strings.TrimSpace(gjson.GetBytes(body, "reasoning.effort").String()); effort != "" {
-		parts = append(parts, "reasoning_effort="+effort)
+	if strings.TrimSpace(scope.ServerSalt) != "" {
+		parts = append(parts, "server_salt="+scope.ServerSalt)
 	}
-	if verbosity := strings.TrimSpace(gjson.GetBytes(body, "text.verbosity").String()); verbosity != "" {
-		parts = append(parts, "text_verbosity="+verbosity)
+	if scope.AccountID != 0 {
+		parts = append(parts, fmt.Sprintf("account_id=%d", scope.AccountID))
 	}
-	if inputSignature := openAIAPIKeyCodexInputSignature(gjson.GetBytes(body, "input")); inputSignature != "" {
-		parts = append(parts, "input="+inputSignature)
+	if scope.APIKeyID != 0 {
+		parts = append(parts, fmt.Sprintf("api_key_id=%d", scope.APIKeyID))
 	}
-	if toolsSignature := openAIAPIKeyCodexToolsSignature(gjson.GetBytes(body, "tools")); toolsSignature != "" {
-		parts = append(parts, "tools="+toolsSignature)
+	if upstreamBaseURL := strings.TrimSpace(scope.UpstreamBaseURL); upstreamBaseURL != "" {
+		parts = append(parts, "upstream_base_url="+strings.ToLower(upstreamBaseURL))
+	}
+	if model, _ := reqBody["model"].(string); strings.TrimSpace(model) != "" {
+		parts = append(parts, "model="+strings.TrimSpace(model))
 	}
 	return strings.Join(parts, "|")
 }
 
-func openAIAPIKeyCodexInputSignature(input gjson.Result) string {
-	if input.Type == gjson.String {
-		return "string"
+type openAIAPIKeyCodexDesktopMetadata struct {
+	InstallationID      string
+	SessionID           string
+	ThreadID            string
+	TurnID              string
+	WindowID            string
+	TurnStartedAtUnixMS int64
+	TurnMetadata        string
+}
+
+func buildOpenAIAPIKeyCodexDesktopMetadata(scope openAIAPIKeyCodexMimicScope) openAIAPIKeyCodexDesktopMetadata {
+	sessionID := deterministicOpenAICodexUUID("session|" + buildOpenAIAPIKeyCodexDesktopSeed(scope))
+	turnID := strings.TrimSpace(scope.TurnID)
+	if turnID == "" {
+		turnID = uuid.NewString()
 	}
-	if !input.IsArray() {
-		return ""
+	installationID := deterministicOpenAICodexUUID("installation|" + buildOpenAIAPIKeyCodexDesktopSeed(scope))
+	windowID := sessionID + ":0"
+	turnStartedAtUnixMS := scope.TurnStartedAtUnixMS
+	if turnStartedAtUnixMS <= 0 {
+		turnStartedAtUnixMS = time.Now().UnixMilli()
 	}
-	items := make([]string, 0, 8)
-	idx := 0
-	input.ForEach(func(_, item gjson.Result) bool {
-		if idx >= 16 {
-			items = append(items, "more")
-			return false
-		}
-		itemParts := make([]string, 0, 4)
-		if typ := strings.TrimSpace(item.Get("type").String()); typ != "" {
-			itemParts = append(itemParts, "type="+typ)
-		}
-		if role := strings.TrimSpace(item.Get("role").String()); role != "" {
-			itemParts = append(itemParts, "role="+role)
-		}
-		content := item.Get("content")
-		switch {
-		case content.Type == gjson.String:
-			itemParts = append(itemParts, "content=string")
-		case content.IsArray():
-			partTypes := make([]string, 0, 4)
-			partIdx := 0
-			content.ForEach(func(_, part gjson.Result) bool {
-				if partIdx >= 8 {
-					partTypes = append(partTypes, "more")
-					return false
-				}
-				if typ := strings.TrimSpace(part.Get("type").String()); typ != "" {
-					partTypes = append(partTypes, typ)
-				}
-				partIdx++
-				return true
-			})
-			if len(partTypes) > 0 {
-				itemParts = append(itemParts, "content_types="+strings.Join(partTypes, ","))
+	turnMetadata := map[string]any{
+		"installation_id":         installationID,
+		"session_id":              sessionID,
+		"thread_id":               sessionID,
+		"turn_id":                 turnID,
+		"window_id":               windowID,
+		"request_kind":            "turn",
+		"thread_source":           "user",
+		"sandbox":                 "seatbelt",
+		"turn_started_at_unix_ms": turnStartedAtUnixMS,
+	}
+	turnMetadataBytes, _ := json.Marshal(turnMetadata)
+	return openAIAPIKeyCodexDesktopMetadata{
+		InstallationID:      installationID,
+		SessionID:           sessionID,
+		ThreadID:            sessionID,
+		TurnID:              turnID,
+		WindowID:            windowID,
+		TurnStartedAtUnixMS: turnStartedAtUnixMS,
+		TurnMetadata:        string(turnMetadataBytes),
+	}
+}
+
+func buildOpenAIAPIKeyCodexDesktopSeed(scope openAIAPIKeyCodexMimicScope) string {
+	parts := make([]string, 0, 7)
+	parts = append(parts, "client_profile="+openAIAPIKeyCodexMimicClientDesktop0142)
+	if strings.TrimSpace(scope.ServerSalt) != "" {
+		parts = append(parts, "server_salt="+scope.ServerSalt)
+	}
+	if scope.AccountID != 0 {
+		parts = append(parts, fmt.Sprintf("account_id=%d", scope.AccountID))
+	}
+	if scope.APIKeyID != 0 {
+		parts = append(parts, fmt.Sprintf("api_key_id=%d", scope.APIKeyID))
+	}
+	if upstreamBaseURL := strings.TrimSpace(scope.UpstreamBaseURL); upstreamBaseURL != "" {
+		parts = append(parts, "upstream_base_url="+strings.ToLower(upstreamBaseURL))
+	}
+	if len(parts) == 1 {
+		parts = append(parts, "anonymous_scope")
+	}
+	return strings.Join(parts, "|")
+}
+
+func deterministicOpenAICodexUUID(seed string) string {
+	sum := sha256.Sum256([]byte(seed))
+	b := sum[:16]
+	b[6] = (b[6] & 0x0f) | 0x40
+	b[8] = (b[8] & 0x3f) | 0x80
+	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
+}
+
+func ensureOpenAIAPIKeyCodexDesktopClientMetadata(reqBody map[string]any, scope openAIAPIKeyCodexMimicScope) bool {
+	metadata := buildOpenAIAPIKeyCodexDesktopMetadata(scope)
+	values := map[string]string{
+		"x-codex-installation-id": metadata.InstallationID,
+		"session_id":              metadata.SessionID,
+		"thread_id":               metadata.ThreadID,
+		"turn_id":                 metadata.TurnID,
+		"x-codex-window-id":       metadata.WindowID,
+		"x-codex-turn-metadata":   metadata.TurnMetadata,
+	}
+	switch existing := reqBody["client_metadata"].(type) {
+	case map[string]any:
+		modified := false
+		for k, v := range values {
+			if existingStringValueIsEmpty(existing[k]) {
+				existing[k] = v
+				modified = true
 			}
 		}
-		if len(itemParts) > 0 {
-			items = append(items, strings.Join(itemParts, ","))
+		if modified {
+			reqBody["client_metadata"] = existing
 		}
-		idx++
-		return true
-	})
-	return strings.Join(items, ";")
-}
-
-func openAIAPIKeyCodexToolsSignature(tools gjson.Result) string {
-	if !tools.IsArray() {
-		return ""
-	}
-	items := make([]string, 0, 8)
-	idx := 0
-	tools.ForEach(func(_, tool gjson.Result) bool {
-		if idx >= 32 {
-			items = append(items, "more")
-			return false
+		return modified
+	case map[string]string:
+		next := make(map[string]any, len(existing)+len(values))
+		for k, v := range existing {
+			next[k] = v
 		}
-		itemParts := make([]string, 0, 3)
-		if typ := strings.TrimSpace(tool.Get("type").String()); typ != "" {
-			itemParts = append(itemParts, "type="+typ)
-		}
-		if name := strings.TrimSpace(tool.Get("name").String()); name != "" {
-			itemParts = append(itemParts, "name="+name)
-		} else if name := strings.TrimSpace(tool.Get("function.name").String()); name != "" {
-			itemParts = append(itemParts, "function="+name)
-		}
-		if len(itemParts) > 0 {
-			items = append(items, strings.Join(itemParts, ","))
-		}
-		idx++
-		return true
-	})
-	return strings.Join(items, ";")
-}
-
-func normalizeOpenAIAPIKeyCodexBareRoleContentMessagesBody(body []byte) []byte {
-	if len(body) == 0 || !gjson.ValidBytes(body) {
-		return body
-	}
-	if !gjson.GetBytes(body, "input").IsArray() {
-		return body
-	}
-
-	var reqBody map[string]any
-	if err := json.Unmarshal(body, &reqBody); err != nil {
-		return body
-	}
-	input, ok := reqBody["input"].([]any)
-	if !ok {
-		return body
-	}
-	normalized, changed := normalizeCodexBareRoleContentMessages(input)
-	if !changed {
-		return body
-	}
-	reqBody["input"] = normalized
-	out, err := marshalOpenAIUpstreamJSON(reqBody)
-	if err != nil {
-		return body
-	}
-	return out
-}
-
-func normalizeOpenAIAPIKeyCodexSystemRoleBody(body []byte) []byte {
-	if len(body) == 0 || !gjson.ValidBytes(body) || !gjson.GetBytes(body, "input").IsArray() {
-		return body
-	}
-	var reqBody map[string]any
-	if err := json.Unmarshal(body, &reqBody); err != nil {
-		return body
-	}
-	input, ok := reqBody["input"].([]any)
-	if !ok {
-		return body
-	}
-	changed := false
-	for _, item := range input {
-		m, ok := item.(map[string]any)
-		if !ok {
-			continue
-		}
-		role, ok := m["role"].(string)
-		if !ok || !strings.EqualFold(strings.TrimSpace(role), "system") {
-			continue
-		}
-		m["role"] = "developer"
-		changed = true
-	}
-	if !changed {
-		return body
-	}
-	reqBody["input"] = input
-	out, err := marshalOpenAIUpstreamJSON(reqBody)
-	if err != nil {
-		return body
-	}
-	return out
-}
-
-func sanitizeAnthropicSystemBlocks(body []byte, profile apiKeyMimicIdentityProfile) []byte {
-	system := gjson.GetBytes(body, "system")
-	if !system.IsArray() {
-		return body
-	}
-	idx := -1
-	system.ForEach(func(_, item gjson.Result) bool {
-		idx++
-		if item.Get("type").String() != "text" && item.Get("text").Type != gjson.String {
-			return true
-		}
-		path := fmt.Sprintf("system.%d.text", idx)
-		body = sanitizeJSONTextValue(body, path, profile, idx == 0)
-		return true
-	})
-	return body
-}
-
-func sanitizeAnthropicMessagesIdentity(body []byte, profile apiKeyMimicIdentityProfile) []byte {
-	messages := gjson.GetBytes(body, "messages")
-	if !messages.IsArray() {
-		return body
-	}
-	msgIdx := -1
-	messages.ForEach(func(_, msg gjson.Result) bool {
-		msgIdx++
-		content := msg.Get("content")
-		if content.Type == gjson.String {
-			body = sanitizeJSONTextValue(body, fmt.Sprintf("messages.%d.content", msgIdx), profile, false)
-			return true
-		}
-		if !content.IsArray() {
-			return true
-		}
-		partIdx := -1
-		content.ForEach(func(_, part gjson.Result) bool {
-			partIdx++
-			if part.Get("text").Type == gjson.String {
-				body = sanitizeJSONTextValue(body, fmt.Sprintf("messages.%d.content.%d.text", msgIdx, partIdx), profile, false)
+		modified := false
+		for k, v := range values {
+			if strings.TrimSpace(existing[k]) == "" {
+				next[k] = v
+				modified = true
 			}
-			return true
-		})
+		}
+		if modified {
+			reqBody["client_metadata"] = next
+		}
+		return modified
+	case nil:
+		next := make(map[string]any, len(values))
+		for k, v := range values {
+			next[k] = v
+		}
+		reqBody["client_metadata"] = next
 		return true
-	})
-	return body
-}
-
-func sanitizeOpenAIInputIdentity(body []byte, profile apiKeyMimicIdentityProfile) []byte {
-	input := gjson.GetBytes(body, "input")
-	if input.Type == gjson.String {
-		return sanitizeJSONTextValue(body, "input", profile, false)
-	}
-	if !input.IsArray() {
-		return body
-	}
-	idx := -1
-	input.ForEach(func(_, item gjson.Result) bool {
-		idx++
-		if item.Get("content").Type == gjson.String {
-			body = sanitizeJSONTextValue(body, fmt.Sprintf("input.%d.content", idx), profile, false)
-			return true
-		}
-		content := item.Get("content")
-		if !content.IsArray() {
-			return true
-		}
-		partIdx := -1
-		content.ForEach(func(_, part gjson.Result) bool {
-			partIdx++
-			if part.Get("text").Type == gjson.String {
-				body = sanitizeJSONTextValue(body, fmt.Sprintf("input.%d.content.%d.text", idx, partIdx), profile, false)
-			}
-			return true
-		})
-		return true
-	})
-	return body
-}
-
-func sanitizeOpenAIToolsIdentity(body []byte, profile apiKeyMimicIdentityProfile) []byte {
-	tools := gjson.GetBytes(body, "tools")
-	if !tools.IsArray() {
-		return body
-	}
-	idx := -1
-	tools.ForEach(func(_, tool gjson.Result) bool {
-		idx++
-		body = sanitizeJSONTextValue(body, fmt.Sprintf("tools.%d.description", idx), profile, false)
-		body = sanitizeJSONTextValue(body, fmt.Sprintf("tools.%d.function.description", idx), profile, false)
-		body = sanitizeToolSchemaDescriptions(body, fmt.Sprintf("tools.%d.parameters", idx), profile)
-		body = sanitizeToolSchemaDescriptions(body, fmt.Sprintf("tools.%d.function.parameters", idx), profile)
-		return true
-	})
-	return body
-}
-
-func sanitizeToolSchemaDescriptions(body []byte, basePath string, profile apiKeyMimicIdentityProfile) []byte {
-	schema := gjson.GetBytes(body, basePath)
-	if !schema.Exists() {
-		return body
-	}
-	var walk func(path string, value gjson.Result)
-	walk = func(path string, value gjson.Result) {
-		if value.Get("description").Type == gjson.String {
-			body = sanitizeJSONTextValue(body, path+".description", profile, false)
-		}
-		if props := value.Get("properties"); props.IsObject() {
-			props.ForEach(func(key, child gjson.Result) bool {
-				walk(path+".properties."+escapeSJSONPathPart(key.String()), child)
-				return true
-			})
-		}
-		if items := value.Get("items"); items.Exists() {
-			walk(path+".items", items)
-		}
-	}
-	walk(basePath, schema)
-	return body
-}
-
-func sanitizeJSONTextValue(body []byte, path string, profile apiKeyMimicIdentityProfile, ensureOfficial bool) []byte {
-	result := gjson.GetBytes(body, path)
-	if result.Type != gjson.String {
-		return body
-	}
-	next, changed := sanitizeAPIKeyMimicIdentityText(result.String(), profile, ensureOfficial)
-	if !changed {
-		return body
-	}
-	if out, err := sjson.SetBytes(body, path, next); err == nil {
-		return out
-	}
-	return body
-}
-
-func sanitizeAPIKeyMimicIdentityText(text string, profile apiKeyMimicIdentityProfile, ensureOfficial bool) (string, bool) {
-	original := text
-	if containsAPIKeyMimicThirdPartyMarker(text) {
-		text = rewriteThirdPartyIdentityLines(text, profile)
-	}
-	if ensureOfficial && !strings.Contains(strings.ToLower(text), strings.ToLower(profile.NeutralClient)) {
-		text = strings.TrimSpace(profile.OfficialPrompt + "\n\n" + strings.TrimSpace(text))
-	}
-	return text, text != original
-}
-
-func rewriteThirdPartyIdentityLines(text string, profile apiKeyMimicIdentityProfile) string {
-	lines := strings.Split(text, "\n")
-	insertedOfficial := false
-	for i, line := range lines {
-		if !containsAPIKeyMimicThirdPartyMarker(line) {
-			continue
-		}
-		if looksLikeStandaloneIdentityInstructionLine(line) {
-			if !insertedOfficial {
-				lines[i] = profile.OfficialPrompt
-				insertedOfficial = true
-			} else {
-				lines[i] = ""
-			}
-			continue
-		}
-		lines[i] = replaceThirdPartyIdentityMarkers(line, profile.NeutralClient)
-	}
-	return strings.TrimSpace(strings.Join(lines, "\n"))
-}
-
-func containsAPIKeyMimicThirdPartyMarker(text string) bool {
-	lower := strings.ToLower(text)
-	for _, marker := range apiKeyMimicThirdPartyIdentityMarkers {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
-}
-
-func looksLikeStandaloneIdentityInstructionLine(line string) bool {
-	lower := strings.ToLower(line)
-	for _, marker := range []string{"keep ", "rules", "instructions", "project", "repository"} {
-		if strings.Contains(lower, marker) {
-			return false
-		}
-	}
-	if len(strings.Fields(line)) > 12 {
+	default:
 		return false
 	}
-	for _, marker := range []string{
-		"you are",
-		"you operate as",
-		"your name",
-		"你是",
-		"你叫",
-		"身份",
-		"client",
-		"客户端",
-		"coding agent",
-		"code assistant",
-		"interactive cli",
-	} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
 }
 
-func replaceThirdPartyIdentityMarkers(text string, replacement string) string {
-	replacer := strings.NewReplacer(
-		"Kilo-Code", replacement,
-		"kilo-code", replacement,
-		"Kilo Code", replacement,
-		"kilo code", replacement,
-		"Kilo", replacement,
-		"kilo", replacement,
-		"Cline", replacement,
-		"cline", replacement,
-		"Roo Code", replacement,
-		"roo code", replacement,
-		"Roo-Code", replacement,
-		"roo-code", replacement,
-		"RooCode", replacement,
-		"roocode", replacement,
-		"Cursor", replacement,
-		"cursor", replacement,
-		"OpenCode", replacement,
-		"opencode", replacement,
-		"Open Code", replacement,
-		"open code", replacement,
-	)
-	return replacer.Replace(text)
-}
-
-func escapeSJSONPathPart(part string) string {
-	if strings.IndexAny(part, `.\:`) == -1 {
-		return part
+func existingStringValueIsEmpty(v any) bool {
+	switch s := v.(type) {
+	case nil:
+		return true
+	case string:
+		return strings.TrimSpace(s) == ""
+	default:
+		return false
 	}
-	encoded, err := json.Marshal(part)
-	if err != nil {
-		return part
-	}
-	return string(encoded)
 }
