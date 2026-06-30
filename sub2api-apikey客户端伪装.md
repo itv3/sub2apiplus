@@ -27,7 +27,7 @@
 
 ARM64 测试服当前运行：
 
-- 当前运行镜像：`sub2api:v0.1.139-mimic.0`
+- 当前运行镜像：`sub2api:v0.1.140-mimic.0`
 - 容器：`sub2api-mimic`
 - 对外地址：`https://sg.3ab.in`
 - Claude Base URL：`https://sg.3ab.in`
@@ -482,11 +482,12 @@ main  -> upstream/main
 | `v0.1.137-mimic.1` | 阶段一完成版 | `sub2api:v0.1.137-mimic.1` |
 | `v0.1.137-mimic.2` | Kilo 工具名归一修复 | `sub2api:v0.1.137-mimic.2` |
 | `v0.1.139-mimic.0` | 合并上游 `v0.1.139`，保留 API Key mimic | `sub2api:v0.1.139-mimic.0` |
+| `v0.1.140-mimic.0` | 合并上游 `v0.1.140`，保留 API Key mimic | `sub2api:v0.1.140-mimic.0` |
 
 当前采用流程：
 
 1. 在 `/Users/czs/Developer/sub2api` 的 `mimic` 分支开发。
-2. 从上游发布 tag（例如 `v0.1.139`）合并官方更新到本地；不要直接合入未确认发布的 `upstream/main`。
+2. 从上游发布 tag（例如 `v0.1.140`）合并官方更新到本地；不要直接合入未确认发布的 `upstream/main`。
 3. 解决冲突后运行 mimic 相关单测。
 4. 推送到 `origin/mimic`。
 5. 构建自定义镜像，发布版使用 `sub2api:v<上游版本>-mimic.<自定义序号>`，临时测试版可保留 `sub2api:mimic-<sha>-arm64` 别名。
@@ -524,7 +525,7 @@ main  -> upstream/main
 - 发布镜像 tag 固定跟 Git tag 对齐，临时测试镜像可额外保留 commit sha 别名。
 - 测试失败不推新镜像。
 - ARM64 只拉取已验证镜像。
-- 当前 ARM64 测试镜像为 `sub2api:v0.1.139-mimic.0`；历史实验镜像和旧别名已清理。
+- 当前 ARM64 测试镜像为 `sub2api:v0.1.140-mimic.0`；历史实验镜像和旧别名已清理。
 
 ---
 
