@@ -63,6 +63,23 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 ) (*OpenAIForwardResult, error) {
 	mimicProfile := resolveOpenAIAPIKeyCodexMimicProfile(account, getAPIKeyIDFromContext(c), s.cfg)
 	accountMimicCodexCLI := mimicProfile.Enabled
+	restrictionResult := s.detectCodexClientRestriction(c, account, body)
+	logCodexCLIOnlyDetection(ctx, c, account, getAPIKeyIDFromContext(c), restrictionResult, body)
+	if restrictionResult.Enabled && !restrictionResult.Matched {
+		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": gin.H{
+				"type":    "forbidden_error",
+				"message": "This account only allows Codex official clients",
+			},
+		})
+		return nil, errors.New("codex_cli_only restriction: only codex official clients are allowed")
+	}
+
+	if account.Platform == PlatformGrok {
+		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
+	}
+
 	// 入口分流：普通 APIKey 账号 + 强制或已探测确认上游不支持 Responses，走 CC 直转。
 	// Codex mimic 账号必须继续走 Responses 转换路径，保证 /v1/chat/completions
 	// 入站也能统一伪装成 Codex CLI 出站。
@@ -175,7 +192,12 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		if err := json.Unmarshal(responsesBody, &reqBody); err != nil {
 			return nil, fmt.Errorf("unmarshal for codex transform: %w", err)
 		}
-		codexResult := applyCodexOAuthTransform(reqBody, false, false)
+		codexResult := applyCodexOAuthTransformWithOptions(reqBody, codexOAuthTransformOptions{
+			SkipDefaultInstructions: !isResponsesShape,
+		})
+		if !isResponsesShape {
+			ensureCodexOAuthInstructionsField(reqBody)
+		}
 		if codexResult.NormalizedModel != "" {
 			upstreamModel = codexResult.NormalizedModel
 		}
@@ -253,18 +275,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	}
 	resp, err := s.doOpenAIHTTPUpstream(upstreamReq, proxyURL, account)
 	if err != nil {
-		safeErr := sanitizeUpstreamErrorMessage(err.Error())
-		setOpsUpstreamError(c, 0, safeErr, "")
-		appendOpsUpstreamError(c, OpsUpstreamErrorEvent{
-			Platform:           account.Platform,
-			AccountID:          account.ID,
-			AccountName:        account.Name,
-			UpstreamStatusCode: 0,
-			Kind:               "request_error",
-			Message:            safeErr,
-		})
-		writeChatCompletionsError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed")
-		return nil, fmt.Errorf("upstream request failed: %s", safeErr)
+		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}
 	defer func() { _ = resp.Body.Close() }()
 

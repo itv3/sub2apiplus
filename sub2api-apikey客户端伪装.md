@@ -1,6 +1,6 @@
 # sub2api：API Key 官方客户端伪装开发文档
 
-更新时间：2026-06-26
+更新时间：2026-06-30
 
 > 目标：让通过 sub2api 转发的 API Key 账号，在上游和模型侧都尽量接近官方客户端请求形态。
 >
@@ -21,13 +21,13 @@
 
 当前代码分支：
 
-- 本地仓库：`/Users/czs/Documents/sub2api`
+- 本地仓库：`/Users/czs/Developer/sub2api`
 - 分支：`mimic`
 - 远端：`origin/mimic`
 
 ARM64 测试服当前运行：
 
-- 当前运行镜像：`sub2api:v0.1.137-mimic.2`
+- 当前运行镜像：`sub2api:v0.1.139-mimic.0`
 - 容器：`sub2api-mimic`
 - 对外地址：`https://sg.3ab.in`
 - Claude Base URL：`https://sg.3ab.in`
@@ -125,7 +125,7 @@ ARM64 测试服当前运行：
 - 请求侧同步改写 `tools[].name`、`tool_choice.name`、历史 `tool_use.name`、`tool_reference.tool_name`。
 - 响应侧使用 per-request reverseMap 结构化回写工具字段，避免把普通正文里的 `Read` / `Edit` / `Task` 误改成小写。
 - `/v1/messages/count_tokens` 只做工具名同步，不额外注入 tools cache breakpoint。
-- 对 billing block 做 `signBillingHeaderCCH`。
+- 跟随新版 Claude Code CLI 行为，billing block 不再携带 `cch`，也不再做 `signBillingHeaderCCH`。
 - Anthropic API Key mimic 允许走 TLS fingerprint profile。
 
 阶段二继续收敛项：
@@ -481,11 +481,12 @@ main  -> upstream/main
 | `v0.1.137-mimic.0` | 初始自定义基线 | 无固定 ARM64 部署镜像 |
 | `v0.1.137-mimic.1` | 阶段一完成版 | `sub2api:v0.1.137-mimic.1` |
 | `v0.1.137-mimic.2` | Kilo 工具名归一修复 | `sub2api:v0.1.137-mimic.2` |
+| `v0.1.139-mimic.0` | 合并上游 `v0.1.139`，保留 API Key mimic | `sub2api:v0.1.139-mimic.0` |
 
 当前采用流程：
 
-1. 在 `/Users/czs/Documents/sub2api` 的 `mimic` 分支开发。
-2. 从 `upstream/main` 合并官方更新到本地。
+1. 在 `/Users/czs/Developer/sub2api` 的 `mimic` 分支开发。
+2. 从上游发布 tag（例如 `v0.1.139`）合并官方更新到本地；不要直接合入未确认发布的 `upstream/main`。
 3. 解决冲突后运行 mimic 相关单测。
 4. 推送到 `origin/mimic`。
 5. 构建自定义镜像，发布版使用 `sub2api:v<上游版本>-mimic.<自定义序号>`，临时测试版可保留 `sub2api:mimic-<sha>-arm64` 别名。
@@ -523,7 +524,7 @@ main  -> upstream/main
 - 发布镜像 tag 固定跟 Git tag 对齐，临时测试镜像可额外保留 commit sha 别名。
 - 测试失败不推新镜像。
 - ARM64 只拉取已验证镜像。
-- 当前 ARM64 测试镜像为 `sub2api:v0.1.137-mimic.2`；历史实验镜像和旧别名已清理。
+- 当前 ARM64 测试镜像为 `sub2api:v0.1.139-mimic.0`；历史实验镜像和旧别名已清理。
 
 ---
 

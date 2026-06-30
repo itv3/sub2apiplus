@@ -67,7 +67,6 @@ func (s *GatewayService) buildAnthropicAPIKeyCLIMimicRequest(
 		body = applyToolsLastCacheBreakpoint(body)
 	}
 	body = enforceCacheControlLimit(body)
-	body = signBillingHeaderCCH(body)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, targetURL, bytes.NewReader(body))
 	if err != nil {
