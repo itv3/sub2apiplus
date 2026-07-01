@@ -711,6 +711,22 @@ type KeeperKeepaliveRequest struct {
 	MaxOutputTokens int    `json:"max_output_tokens"`
 }
 
+type KeeperAccountSummary struct {
+	ID           int64                `json:"id"`
+	Name         string               `json:"name"`
+	Platform     string               `json:"platform"`
+	AccountType  string               `json:"account_type"`
+	Status       string               `json:"status"`
+	Schedulable  bool                 `json:"schedulable"`
+	ErrorMessage string               `json:"error_message,omitempty"`
+	Models       []KeeperModelSummary `json:"models"`
+}
+
+type KeeperModelSummary struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name"`
+}
+
 type SyncFromCRSRequest struct {
 	BaseURL            string   `json:"base_url" binding:"required"`
 	Username           string   `json:"username" binding:"required"`
@@ -749,6 +765,82 @@ func (h *AccountHandler) Test(c *gin.Context) {
 			_ = c.Error(err)
 		}
 	}
+}
+
+// KeeperListAccounts 返回 keeper 可配置的 OpenAI 和 Anthropic 账号。
+// GET /api/v1/internal/keeper/accounts
+func (h *AccountHandler) KeeperListAccounts(c *gin.Context) {
+	if h.adminService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Admin service unavailable")
+		return
+	}
+
+	accounts := make([]KeeperAccountSummary, 0)
+	for _, platform := range []string{service.PlatformAnthropic, service.PlatformOpenAI} {
+		items, err := h.listKeeperAccountsByPlatform(c.Request.Context(), platform)
+		if err != nil {
+			response.ErrorFrom(c, err)
+			return
+		}
+		accounts = append(accounts, items...)
+	}
+	sort.Slice(accounts, func(i, j int) bool {
+		if accounts[i].Platform != accounts[j].Platform {
+			return accounts[i].Platform < accounts[j].Platform
+		}
+		return accounts[i].Name < accounts[j].Name
+	})
+	response.Success(c, accounts)
+}
+
+func (h *AccountHandler) listKeeperAccountsByPlatform(ctx context.Context, platform string) ([]KeeperAccountSummary, error) {
+	const pageSize = 500
+	result := make([]KeeperAccountSummary, 0)
+	for page := 1; ; page++ {
+		accounts, total, err := h.adminService.ListAccounts(ctx, page, pageSize, platform, "", "", "", 0, "", "name", "asc")
+		if err != nil {
+			return nil, err
+		}
+		for i := range accounts {
+			account := &accounts[i]
+			result = append(result, KeeperAccountSummary{
+				ID:           account.ID,
+				Name:         account.Name,
+				Platform:     account.Platform,
+				AccountType:  account.Type,
+				Status:       account.Status,
+				Schedulable:  account.Schedulable,
+				ErrorMessage: account.ErrorMessage,
+				Models:       keeperModelSummariesFromAvailableModels(h.availableModelsForAccount(account)),
+			})
+		}
+		if len(accounts) == 0 || int64(page*pageSize) >= total {
+			break
+		}
+	}
+	return result, nil
+}
+
+// KeeperAccountModels 返回指定账号的可用模型，沿用后台账号模型列表规则。
+// GET /api/v1/internal/keeper/accounts/:id/models
+func (h *AccountHandler) KeeperAccountModels(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	if err != nil {
+		response.NotFound(c, "Account not found")
+		return
+	}
+	if account.Platform != service.PlatformAnthropic && account.Platform != service.PlatformOpenAI {
+		response.BadRequest(c, "Unsupported account platform")
+		return
+	}
+	response.Success(c, gin.H{
+		"models": keeperModelSummariesFromAvailableModels(h.availableModelsForAccount(account)),
+	})
 }
 
 // KeeperKeepalive handles one internal keepalive request for a specified account.
@@ -2036,18 +2128,20 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 		return
 	}
 
+	response.Success(c, h.availableModelsForAccount(account))
+}
+
+func (h *AccountHandler) availableModelsForAccount(account *service.Account) any {
 	// Handle OpenAI accounts
 	if account.IsOpenAI() {
 		// OpenAI 自动透传会绕过常规模型改写，测试/模型列表也应回落到默认模型集。
 		if account.IsOpenAIPassthroughEnabled() {
-			response.Success(c, openai.DefaultModels)
-			return
+			return openai.DefaultModels
 		}
 
 		mapping := account.GetModelMapping()
 		if len(mapping) == 0 {
-			response.Success(c, openai.DefaultModels)
-			return
+			return openai.DefaultModels
 		}
 
 		// Return mapped models
@@ -2070,23 +2164,20 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 				})
 			}
 		}
-		response.Success(c, models)
-		return
+		return models
 	}
 
 	// Handle Gemini accounts
 	if account.IsGemini() {
 		// For OAuth accounts: return default Gemini models
 		if account.IsOAuth() {
-			response.Success(c, geminicli.DefaultModels)
-			return
+			return geminicli.DefaultModels
 		}
 
 		// For API Key accounts: return models based on model_mapping
 		mapping := account.GetModelMapping()
 		if len(mapping) == 0 {
-			response.Success(c, geminicli.DefaultModels)
-			return
+			return geminicli.DefaultModels
 		}
 
 		var models []geminicli.Model
@@ -2108,15 +2199,13 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 				})
 			}
 		}
-		response.Success(c, models)
-		return
+		return models
 	}
 
 	// Handle Antigravity accounts: return Claude + Gemini models
 	if account.Platform == service.PlatformAntigravity {
 		// 直接复用 antigravity.DefaultModels()，与 /v1/models 端点保持同步
-		response.Success(c, antigravity.DefaultModels())
-		return
+		return antigravity.DefaultModels()
 	}
 
 	// Handle Grok accounts
@@ -2131,14 +2220,12 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 			hasExplicitMapping = len(rawMapping) > 0
 		}
 		if !hasExplicitMapping {
-			response.Success(c, defaultModels)
-			return
+			return defaultModels
 		}
 
 		mapping := account.GetModelMapping()
 		if len(mapping) == 0 {
-			response.Success(c, defaultModels)
-			return
+			return defaultModels
 		}
 
 		defaultByID := make(map[string]xai.Model, len(defaultModels))
@@ -2165,23 +2252,20 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 				DisplayName: requestedModel,
 			})
 		}
-		response.Success(c, models)
-		return
+		return models
 	}
 
 	// Handle Claude/Anthropic accounts
 	// For OAuth and Setup-Token accounts: return default models
 	if account.IsOAuth() {
-		response.Success(c, claude.DefaultModels)
-		return
+		return claude.DefaultModels
 	}
 
 	// For API Key accounts: return models based on model_mapping
 	mapping := account.GetModelMapping()
 	if len(mapping) == 0 {
 		// No mapping configured, return default models
-		response.Success(c, claude.DefaultModels)
-		return
+		return claude.DefaultModels
 	}
 
 	// Return mapped models (keys of the mapping are the available model IDs)
@@ -2207,7 +2291,54 @@ func (h *AccountHandler) GetAvailableModels(c *gin.Context) {
 		}
 	}
 
-	response.Success(c, models)
+	return models
+}
+
+func keeperModelSummariesFromAvailableModels(models any) []KeeperModelSummary {
+	switch v := models.(type) {
+	case []KeeperModelSummary:
+		return v
+	case []string:
+		result := make([]KeeperModelSummary, 0, len(v))
+		for _, id := range v {
+			id = strings.TrimSpace(id)
+			if id != "" {
+				result = append(result, KeeperModelSummary{ID: id, DisplayName: id})
+			}
+		}
+		return result
+	}
+
+	raw, err := json.Marshal(models)
+	if err != nil {
+		return []KeeperModelSummary{}
+	}
+	var entries []struct {
+		ID          string `json:"id"`
+		DisplayName string `json:"display_name"`
+	}
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return []KeeperModelSummary{}
+	}
+	result := make([]KeeperModelSummary, 0, len(entries))
+	seen := make(map[string]struct{}, len(entries))
+	for _, entry := range entries {
+		id := strings.TrimSpace(entry.ID)
+		if id == "" {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		displayName := strings.TrimSpace(entry.DisplayName)
+		if displayName == "" {
+			displayName = id
+		}
+		result = append(result, KeeperModelSummary{ID: id, DisplayName: displayName})
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+	return result
 }
 
 // SyncUpstreamModels handles syncing live supported models from an account's upstream.

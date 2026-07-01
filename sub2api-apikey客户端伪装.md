@@ -21,14 +21,14 @@
 
 当前代码分支：
 
-- 本地仓库：`/Users/czs/Developer/sub2api`
-- 分支：`mimic`
-- 远端：`origin/mimic`
+- 本地仓库：`/Users/czs/Developer/sub2apiplus`
+- 分支：`main`
+- 远端：`origin/main`
 
 ARM64 测试服当前运行：
 
-- 当前运行镜像：`sub2api:v0.1.141-mimic.0`
-- 容器：`sub2api-mimic`
+- 当前运行镜像：`ghcr.io/itv3/sub2apiplus:0.1.141-0.03`
+- 容器：`sub2apiplus`
 - 对外地址：`https://sg.3ab.in`
 - Claude Base URL：`https://sg.3ab.in`
 - Codex Base URL：`https://sg.3ab.in/v1`
@@ -487,26 +487,26 @@ main  -> upstream/main
 
 当前采用流程：
 
-1. 在 `/Users/czs/Developer/sub2api` 的 `mimic` 分支开发。
-2. 从上游发布 tag（例如 `v0.1.141`）合并官方更新到本地；不要直接合入未确认发布的 `upstream/main`。
+1. 在 `/Users/czs/Developer/sub2apiplus` 的 `main` 分支开发。
+2. 从上游发布 tag（例如 `v0.1.141`）或确认后的 `upstream/main` 合并官方更新到本地。
 3. 解决冲突后运行 mimic 相关单测。
-4. 推送到 `origin/mimic`。
-5. 构建自定义镜像，发布版使用 `sub2api:v<上游版本>-mimic.<自定义序号>`，临时测试版可保留 `sub2api:mimic-<sha>-arm64` 别名。
+4. 推送到 `origin/main`。
+5. 构建自定义镜像，发布版使用 `ghcr.io/itv3/sub2apiplus:<上游版本>-<自定义序号>`，例如 `ghcr.io/itv3/sub2apiplus:0.1.141-0.01`。
 6. ARM64 服务器只替换应用镜像，不动 `.env`、PostgreSQL/Redis volume、Nginx 主结构。
-7. 重启 `sub2api-mimic` 后验证健康状态和 API-only 行为。
+7. 重启 `sub2apiplus` 后验证健康状态和 API-only 行为。
 8. 用 Kilo、Cline、Claude 官方客户端、Codex 官方客户端做回归。
 9. 对 ARM64 自测、BWG 下游 `/v1/responses` 探活、BWG 下游 `/v1/chat/completions` 探活做回归。
 
 当前 ARM64 compose 路径：
 
 ```bash
-/root/docker/sub2api-mimic/app/docker-compose.yml
+/root/docker/sub2apiplus/app/docker-compose.yml
 ```
 
 当前 ARM64 源码路径：
 
 ```bash
-/root/docker/sub2api-mimic/repo
+/root/docker/sub2apiplus/repo
 ```
 
 服务器升级原则：
@@ -526,7 +526,7 @@ main  -> upstream/main
 - 发布镜像 tag 固定跟 Git tag 对齐，临时测试镜像可额外保留 commit sha 别名。
 - 测试失败不推新镜像。
 - ARM64 只拉取已验证镜像。
-- 当前 ARM64 测试镜像为 `sub2api:v0.1.141-mimic.0`；历史实验镜像和旧别名已清理。
+- 当前 ARM64 测试镜像为 `ghcr.io/itv3/sub2apiplus:0.1.141-0.03`；历史实验镜像和旧别名已清理。
 
 ---
 

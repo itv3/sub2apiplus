@@ -20,6 +20,8 @@ func RegisterInternalKeeperRoutes(v1 *gin.RouterGroup, h *handler.Handlers) {
 	internal := v1.Group("/internal/keeper")
 	internal.Use(keeperInternalAuth())
 	{
+		internal.GET("/accounts", h.Admin.Account.KeeperListAccounts)
+		internal.GET("/accounts/:id/models", h.Admin.Account.KeeperAccountModels)
 		internal.POST("/accounts/:id/keepalive", h.Admin.Account.KeeperKeepalive)
 	}
 }

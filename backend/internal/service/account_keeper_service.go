@@ -90,9 +90,6 @@ func (s *AccountTestService) RunKeeperKeepalive(ctx context.Context, accountID i
 	if err != nil || account == nil {
 		return nil, ErrKeeperAccountNotFound
 	}
-	if !account.IsSchedulable() {
-		return nil, ErrKeeperAccountUnavailable
-	}
 
 	prompt := strings.TrimSpace(req.Prompt)
 	if prompt == "" {
