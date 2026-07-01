@@ -125,13 +125,14 @@ func (s *AccountTestService) RunKeeperKeepalive(ctx context.Context, accountID i
 }
 
 func (s *AccountTestService) runClaudeKeeperKeepalive(ctx context.Context, account *Account, modelID, prompt string, maxOutputTokens int) (*KeeperKeepaliveResult, error) {
-	testModelID := strings.TrimSpace(modelID)
+	testModelID := normalizeKeeperClaudeBaseModelID(modelID)
 	if testModelID == "" {
-		testModelID = claude.DefaultTestModel
+		testModelID = normalizeKeeperClaudeBaseModelID(claude.DefaultTestModel)
 	}
 	if account.Type == AccountTypeAPIKey {
 		testModelID = account.GetMappedModel(testModelID)
 	}
+	testModelID = keeperClaudeContext1MModel(testModelID)
 	if account.IsBedrock() || account.Type == AccountTypeServiceAccount {
 		return nil, fmt.Errorf("keeper does not support anthropic account type: %s", account.Type)
 	}
@@ -157,10 +158,10 @@ func (s *AccountTestService) runClaudeKeeperKeepalive(ctx context.Context, accou
 		httpReq.Header.Set(key, value)
 	}
 	if useBearer {
-		httpReq.Header.Set("anthropic-beta", claude.DefaultBetaHeader)
+		httpReq.Header.Set("anthropic-beta", keeperClaudeBetaHeader(claude.DefaultBetaHeader))
 		httpReq.Header.Set("Authorization", "Bearer "+authToken)
 	} else {
-		httpReq.Header.Set("anthropic-beta", claude.APIKeyBetaHeader)
+		httpReq.Header.Set("anthropic-beta", keeperClaudeBetaHeader(claude.APIKeyBetaHeader))
 		httpReq.Header.Set("x-api-key", authToken)
 	}
 
@@ -185,6 +186,30 @@ func (s *AccountTestService) runClaudeKeeperKeepalive(ctx context.Context, accou
 		Usage:             usage,
 		UpstreamRequestID: resp.Header.Get("request-id"),
 	}, nil
+}
+
+func normalizeKeeperClaudeBaseModelID(modelID string) string {
+	return claude.NormalizeModelID(stripKeeperClaudeContext1MSuffix(modelID))
+}
+
+func keeperClaudeContext1MModel(modelID string) string {
+	modelID = stripKeeperClaudeContext1MSuffix(modelID)
+	if modelID == "" {
+		return ""
+	}
+	return modelID + "[1m]"
+}
+
+func stripKeeperClaudeContext1MSuffix(modelID string) string {
+	modelID = strings.TrimSpace(modelID)
+	for strings.HasSuffix(strings.ToLower(modelID), "[1m]") {
+		modelID = strings.TrimSpace(modelID[:len(modelID)-len("[1m]")])
+	}
+	return modelID
+}
+
+func keeperClaudeBetaHeader(base string) string {
+	return mergeAnthropicBeta([]string{claude.BetaContext1M}, base)
 }
 
 func (s *AccountTestService) runOpenAIKeeperKeepalive(ctx context.Context, account *Account, modelID, prompt string, maxOutputTokens int) (*KeeperKeepaliveResult, error) {
