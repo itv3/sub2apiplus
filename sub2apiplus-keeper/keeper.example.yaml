@@ -1,0 +1,39 @@
+enabled: true
+timezone: Asia/Shanghai
+scan_interval_seconds: 120
+max_workers: 1
+state_path: /app/data/state.json
+
+sub2apiplus:
+  base_url: ${SUB2APIPLUS_BASE_URL}
+  internal_token: ${SUB2APIPLUS_KEEPER_INTERNAL_TOKEN}
+  timeout_seconds: 180
+
+web:
+  enabled: true
+  listen: 0.0.0.0:38090
+  username: ${KEEPER_WEB_USERNAME}
+  password: ${KEEPER_WEB_PASSWORD}
+
+targets:
+  - name: openai-main
+    enabled: true
+    account_id: 50
+    model: gpt-5.4
+    interval_minutes: 90
+    work_start: "04:00"
+    work_end: "24:00"
+    max_daily_runs: 8
+    max_output_tokens: 300
+    prompt_profile: safe_code_review
+
+  - name: claude-main
+    enabled: false
+    account_id: 51
+    model: claude-sonnet-4-5-20250929
+    interval_minutes: 90
+    work_start: "04:00"
+    work_end: "24:00"
+    max_daily_runs: 8
+    max_output_tokens: 300
+    prompt_profile: safe_code_review

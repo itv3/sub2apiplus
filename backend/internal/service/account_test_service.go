@@ -70,6 +70,7 @@ type AccountTestService struct {
 	antigravityGatewayService *AntigravityGatewayService
 	httpUpstream              HTTPUpstream
 	cfg                       *config.Config
+	billingService            *BillingService
 	tlsFPProfileService       *TLSFingerprintProfileService
 }
 
@@ -82,6 +83,7 @@ func NewAccountTestService(
 	antigravityGatewayService *AntigravityGatewayService,
 	httpUpstream HTTPUpstream,
 	cfg *config.Config,
+	billingService *BillingService,
 	tlsFPProfileService *TLSFingerprintProfileService,
 ) *AccountTestService {
 	return &AccountTestService{
@@ -92,6 +94,7 @@ func NewAccountTestService(
 		antigravityGatewayService: antigravityGatewayService,
 		httpUpstream:              httpUpstream,
 		cfg:                       cfg,
+		billingService:            billingService,
 		tlsFPProfileService:       tlsFPProfileService,
 	}
 }

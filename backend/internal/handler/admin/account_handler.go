@@ -705,6 +705,12 @@ type TestAccountRequest struct {
 	Mode    string `json:"mode"`
 }
 
+type KeeperKeepaliveRequest struct {
+	Model           string `json:"model"`
+	Prompt          string `json:"prompt"`
+	MaxOutputTokens int    `json:"max_output_tokens"`
+}
+
 type SyncFromCRSRequest struct {
 	BaseURL            string   `json:"base_url" binding:"required"`
 	Username           string   `json:"username" binding:"required"`
@@ -743,6 +749,53 @@ func (h *AccountHandler) Test(c *gin.Context) {
 			_ = c.Error(err)
 		}
 	}
+}
+
+// KeeperKeepalive handles one internal keepalive request for a specified account.
+// POST /api/v1/internal/keeper/accounts/:id/keepalive
+func (h *AccountHandler) KeeperKeepalive(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	if h.accountTestService == nil {
+		response.Error(c, http.StatusServiceUnavailable, "Account test service unavailable")
+		return
+	}
+
+	var req KeeperKeepaliveRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request body")
+		return
+	}
+	if strings.TrimSpace(req.Prompt) == "" {
+		response.BadRequest(c, "Prompt is required")
+		return
+	}
+
+	result, err := h.accountTestService.RunKeeperKeepalive(c.Request.Context(), accountID, service.KeeperKeepaliveRequest{
+		Model:           req.Model,
+		Prompt:          req.Prompt,
+		MaxOutputTokens: req.MaxOutputTokens,
+	})
+	if err != nil {
+		switch {
+		case errors.Is(err, service.ErrKeeperAccountNotFound):
+			response.NotFound(c, "Account not found")
+		case errors.Is(err, service.ErrKeeperAccountUnavailable):
+			response.Error(c, http.StatusConflict, "Account is not schedulable")
+		case errors.Is(err, service.ErrKeeperUnsupportedAccount):
+			response.BadRequest(c, "Unsupported account platform")
+		case errors.Is(err, service.ErrKeeperUpstreamUnavailable):
+			response.Error(c, http.StatusServiceUnavailable, "HTTP upstream unavailable")
+		default:
+			response.Error(c, http.StatusBadGateway, err.Error())
+		}
+		return
+	}
+
+	response.Success(c, result)
 }
 
 // RecoverState handles unified recovery of recoverable account runtime state.
