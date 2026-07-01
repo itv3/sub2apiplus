@@ -1,5 +1,5 @@
 # =============================================================================
-# Sub2API Docker Compose - Standalone Configuration
+# Sub2API Plus Docker Compose - Standalone Configuration
 # =============================================================================
 # This configuration runs only the Sub2API application.
 # PostgreSQL and Redis must be provided externally.
@@ -12,7 +12,7 @@
 
 services:
   sub2api:
-    image: weishaw/sub2api:latest
+    image: ghcr.io/itv3/sub2apiplus:latest
     container_name: sub2api
     restart: unless-stopped
     ulimits:

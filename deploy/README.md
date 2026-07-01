@@ -35,10 +35,10 @@ Use the automated preparation script for the easiest setup:
 
 ```bash
 # Download and run the preparation script
-curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/docker-deploy.sh | bash
+curl -sSL https://raw.githubusercontent.com/itv3/sub2apiplus/main/deploy/docker-deploy.sh | bash
 
 # Or download first, then run
-curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/docker-deploy.sh -o docker-deploy.sh
+curl -sSL https://raw.githubusercontent.com/itv3/sub2apiplus/main/deploy/docker-deploy.sh -o docker-deploy.sh
 chmod +x docker-deploy.sh
 ./docker-deploy.sh
 ```
@@ -71,8 +71,8 @@ If you prefer manual control:
 
 ```bash
 # Clone repository
-git clone https://github.com/Wei-Shaw/sub2api.git
-cd sub2api/deploy
+git clone https://github.com/itv3/sub2apiplus.git
+cd sub2apiplus/deploy
 
 # Configure environment
 cp .env.example .env
@@ -234,13 +234,13 @@ When using `docker-compose.local.yml`, all data is stored in local directories, 
 cd /path/to/deployment
 docker compose -f docker-compose.local.yml down
 cd ..
-tar czf sub2api-complete.tar.gz deployment/
+tar czf sub2apiplus-complete.tar.gz deployment/
 
 # Transfer to new server
-scp sub2api-complete.tar.gz user@new-server:/path/to/destination/
+scp sub2apiplus-complete.tar.gz user@new-server:/path/to/destination/
 
 # On new server: Extract and start
-tar xzf sub2api-complete.tar.gz
+tar xzf sub2apiplus-complete.tar.gz
 cd deployment/
 docker compose -f docker-compose.local.yml up -d
 ```
@@ -353,12 +353,12 @@ For production servers using systemd.
 ### One-Line Installation
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/Wei-Shaw/sub2api/main/deploy/install.sh | sudo bash
+curl -sSL https://raw.githubusercontent.com/itv3/sub2apiplus/main/deploy/install.sh | sudo bash
 ```
 
 ### Manual Installation
 
-1. Download the latest release from [GitHub Releases](https://github.com/Wei-Shaw/sub2api/releases)
+1. Download the latest release from [GitHub Releases](https://github.com/itv3/sub2apiplus/releases)
 2. Extract and copy the binary to `/opt/sub2api/`
 3. Copy `sub2api.service` to `/etc/systemd/system/`
 4. Run:
