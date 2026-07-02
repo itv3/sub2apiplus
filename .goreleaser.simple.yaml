@@ -63,7 +63,8 @@ release:
     owner: "{{ .Env.GITHUB_REPO_OWNER }}"
     name: "{{ .Env.GITHUB_REPO_NAME }}"
   draft: false
-  prerelease: auto
+  # 自有编译序号使用 v0.1.143-1 这类后缀，但它不是预发布版本。
+  prerelease: false
   name_template: "Sub2API Plus {{.Version}} (Simple)"
   # 跳过上传二进制包
   skip_upload: true
