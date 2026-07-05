@@ -193,6 +193,11 @@ const canSyncUpstream = computed(() => {
   return false
 })
 
+const shouldReplaceOnUpstreamSync = computed(() => (
+  normalizedPlatforms.value.length === 1 &&
+  normalizedPlatforms.value[0].toLowerCase() === 'antigravity'
+))
+
 const availableOptions = computed(() => {
   if (normalizedPlatforms.value.length === 0) {
     return allModels
@@ -278,6 +283,13 @@ const syncUpstreamModels = async () => {
     const upstreamModels = result.models.map(model => model.trim()).filter(Boolean)
     if (upstreamModels.length === 0) {
       appStore.showInfo(t('admin.accounts.syncUpstreamModelsEmpty'))
+      return
+    }
+
+    if (shouldReplaceOnUpstreamSync.value) {
+      const syncedModels = Array.from(new Set(upstreamModels))
+      emit('update:modelValue', syncedModels)
+      appStore.showSuccess(t('admin.accounts.syncUpstreamModelsSuccess', { count: syncedModels.length, total: upstreamModels.length }))
       return
     }
 

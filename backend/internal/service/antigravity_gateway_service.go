@@ -1062,10 +1062,8 @@ func applyThinkingModelSuffix(mappedModel string, thinkingEnabled bool) string {
 }
 
 // IsModelSupported 检查模型是否被支持
-// 所有 claude- 和 gemini- 前缀的模型都能通过映射或透传支持
 func (s *AntigravityGatewayService) IsModelSupported(requestedModel string) bool {
-	return strings.HasPrefix(requestedModel, "claude-") ||
-		strings.HasPrefix(requestedModel, "gemini-")
+	return mapAntigravityModel(&Account{Platform: PlatformAntigravity}, requestedModel) != ""
 }
 
 // TestConnectionResult 测试连接结果

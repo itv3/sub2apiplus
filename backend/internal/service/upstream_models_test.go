@@ -167,6 +167,26 @@ func TestBuildAntigravityAPIKeyModelsRequestRejectsOfficialCloudCodeBase(t *test
 	require.Contains(t, syncErr.SafeMessage(), "compatible gateway")
 }
 
+func TestFilterOfficialAntigravityModelIDs(t *testing.T) {
+	t.Parallel()
+
+	models := filterOfficialAntigravityModelIDs([]string{
+		"gemini-3.1-pro-high",
+		"gemini-pro-agent",
+		"gemini-3.5-flash-extra-low",
+		"claude-sonnet-4-6",
+		"tab_flash_lite_preview",
+		"gpt-oss-120b-medium",
+	})
+
+	require.Equal(t, []string{
+		"gemini-3.5-flash-extra-low",
+		"gemini-pro-agent",
+		"claude-sonnet-4-6",
+		"gpt-oss-120b-medium",
+	}, models)
+}
+
 func TestBuildAnthropicUpstreamModelsRequestRejectsBedrock(t *testing.T) {
 	t.Parallel()
 

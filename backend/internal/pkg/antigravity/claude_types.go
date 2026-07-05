@@ -172,14 +172,56 @@ var geminiModels = []modelDef{
 	{ID: "gemini-2.5-flash-lite", DisplayName: "Gemini 2.5 Flash Lite", CreatedAt: "2025-01-01T00:00:00Z"},
 	{ID: "gemini-2.5-flash-thinking", DisplayName: "Gemini 2.5 Flash Thinking", CreatedAt: "2025-01-01T00:00:00Z", IsReasoning: true},
 	{ID: "gemini-3-flash", DisplayName: "Gemini 3 Flash", CreatedAt: "2025-06-01T00:00:00Z"},
+	{ID: "gemini-3-flash-agent", DisplayName: "Gemini 3.5 Flash High", CreatedAt: "2026-06-29T00:00:00Z", IsReasoning: true},
 	{ID: "gemini-3-pro-low", DisplayName: "Gemini 3 Pro Low", CreatedAt: "2025-06-01T00:00:00Z"},
 	{ID: "gemini-3-pro-high", DisplayName: "Gemini 3 Pro High", CreatedAt: "2025-06-01T00:00:00Z", IsReasoning: true},
 	{ID: "gemini-3.1-pro-low", DisplayName: "Gemini 3.1 Pro Low", CreatedAt: "2026-02-19T00:00:00Z"},
 	{ID: "gemini-3.1-pro-high", DisplayName: "Gemini 3.1 Pro High", CreatedAt: "2026-02-19T00:00:00Z", IsReasoning: true},
 	{ID: "gemini-3.1-flash-image", DisplayName: "Gemini 3.1 Flash Image", CreatedAt: "2026-02-19T00:00:00Z"},
 	{ID: "gemini-3.1-flash-image-preview", DisplayName: "Gemini 3.1 Flash Image Preview", CreatedAt: "2026-02-19T00:00:00Z"},
+	{ID: "gemini-3.5-flash-extra-low", DisplayName: "Gemini 3.5 Flash Low", CreatedAt: "2026-06-29T00:00:00Z", IsReasoning: true},
+	{ID: "gemini-3.5-flash-low", DisplayName: "Gemini 3.5 Flash Medium", CreatedAt: "2026-06-29T00:00:00Z", IsReasoning: true},
 	{ID: "gemini-3-pro-preview", DisplayName: "Gemini 3 Pro Preview", CreatedAt: "2025-06-01T00:00:00Z", IsReasoning: true},
 	{ID: "gemini-3-pro-image", DisplayName: "Gemini 3 Pro Image", CreatedAt: "2025-06-01T00:00:00Z"},
+}
+
+var otherModels = []modelDef{
+	{ID: "gpt-oss-120b-medium", DisplayName: "GPT-OSS 120B Medium", CreatedAt: "2026-06-29T00:00:00Z", IsReasoning: true},
+}
+
+var officialModelIDs = []string{
+	"gemini-3.5-flash-extra-low",
+	"gemini-3.5-flash-low",
+	"gemini-3-flash-agent",
+	"gemini-3.1-pro-low",
+	"gemini-pro-agent",
+	"claude-sonnet-4-6",
+	"claude-opus-4-6-thinking",
+	"gpt-oss-120b-medium",
+}
+
+// OfficialModelIDs 返回 Antigravity 官方发包使用的模型 ID。
+func OfficialModelIDs() []string {
+	models := make([]string, len(officialModelIDs))
+	copy(models, officialModelIDs)
+	return models
+}
+
+// IsOfficialModelID 判断模型 ID 是否属于 Antigravity 官方发包模型。
+func IsOfficialModelID(modelID string) bool {
+	switch strings.TrimSpace(modelID) {
+	case "gemini-3.5-flash-extra-low",
+		"gemini-3.5-flash-low",
+		"gemini-3-flash-agent",
+		"gemini-3.1-pro-low",
+		"gemini-pro-agent",
+		"claude-sonnet-4-6",
+		"claude-opus-4-6-thinking",
+		"gpt-oss-120b-medium":
+		return true
+	default:
+		return false
+	}
 }
 
 // ========== Claude API 格式 (/v1/models) ==========
@@ -194,7 +236,10 @@ type ClaudeModel struct {
 
 // DefaultModels 返回 Claude API 格式的模型列表（Claude + Gemini）
 func DefaultModels() []ClaudeModel {
-	all := append(claudeModels, geminiModels...)
+	all := make([]modelDef, 0, len(claudeModels)+len(geminiModels)+len(otherModels))
+	all = append(all, claudeModels...)
+	all = append(all, geminiModels...)
+	all = append(all, otherModels...)
 	result := make([]ClaudeModel, len(all))
 	for i, m := range all {
 		result[i] = ClaudeModel{ID: m.ID, Type: "model", DisplayName: m.DisplayName, CreatedAt: m.CreatedAt}

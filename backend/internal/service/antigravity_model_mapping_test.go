@@ -136,6 +136,30 @@ func TestAntigravityGatewayService_GetMappedModel(t *testing.T) {
 			accountMapping: nil,
 			expected:       "gemini-3-flash",
 		},
+		{
+			name:           "默认映射透传 - gemini-3.5-flash-extra-low",
+			requestedModel: "gemini-3.5-flash-extra-low",
+			accountMapping: nil,
+			expected:       "gemini-3.5-flash-extra-low",
+		},
+		{
+			name:           "默认映射透传 - gemini-3.5-flash-low",
+			requestedModel: "gemini-3.5-flash-low",
+			accountMapping: nil,
+			expected:       "gemini-3.5-flash-low",
+		},
+		{
+			name:           "默认映射透传 - gemini-3-flash-agent",
+			requestedModel: "gemini-3-flash-agent",
+			accountMapping: nil,
+			expected:       "gemini-3-flash-agent",
+		},
+		{
+			name:           "默认映射透传 - gpt-oss-120b-medium",
+			requestedModel: "gpt-oss-120b-medium",
+			accountMapping: nil,
+			expected:       "gpt-oss-120b-medium",
+		},
 
 		// 4. 未在默认映射中的模型返回空字符串（不支持）
 		{
@@ -227,16 +251,16 @@ func TestAntigravityGatewayService_IsModelSupported(t *testing.T) {
 		{"直接支持 - claude-fable-5", "claude-fable-5", true},
 		{"直接支持 - claude-sonnet-4-5", "claude-sonnet-4-5", true},
 		{"直接支持 - gemini-3-flash", "gemini-3-flash", true},
+		{"直接支持 - gemini-3-flash-agent", "gemini-3-flash-agent", true},
+		{"直接支持 - gpt-oss-120b-medium", "gpt-oss-120b-medium", true},
 
 		// 可映射（有明确前缀映射）
 		{"可映射 - claude-opus-4-8", "claude-opus-4-8", true},
 		{"可映射 - claude-opus-4-6", "claude-opus-4-6", true},
 
-		// 前缀透传（claude 和 gemini 前缀）
-		{"Gemini前缀", "gemini-unknown", true},
-		{"Claude前缀", "claude-unknown", true},
-
 		// 不支持
+		{"不支持 - 未知Gemini", "gemini-unknown", false},
+		{"不支持 - 未知Claude", "claude-unknown", false},
 		{"不支持 - gpt-4", "gpt-4", false},
 		{"不支持 - 空字符串", "", false},
 	}

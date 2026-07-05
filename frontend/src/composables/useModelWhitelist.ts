@@ -71,17 +71,54 @@ const antigravityModels = [
   'gemini-2.5-pro',
   // Gemini 3 系列
   'gemini-3-flash',
+  'gemini-3-flash-agent',
   'gemini-3-pro-high',
   'gemini-3-pro-low',
   // Gemini 3.1 系列
   'gemini-3.1-pro',
   'gemini-3.1-pro-high',
   'gemini-3.1-pro-low',
+  'gemini-pro-agent',
   'gemini-3-pro-image',
+  // Gemini 3.5 Flash 官方档位
+  'gemini-3.5-flash-extra-low',
+  'gemini-3.5-flash-low',
   // 其他
   'gpt-oss-120b-medium',
   'tab_flash_lite_preview'
 ]
+
+// Antigravity 官方客户端抓包确认的 8 个发包 model。
+export const officialAntigravityModelIDs = [
+  'claude-opus-4-6-thinking',
+  'claude-sonnet-4-6',
+  'gemini-3-flash-agent',
+  'gemini-3.1-pro-low',
+  'gemini-3.5-flash-extra-low',
+  'gemini-3.5-flash-low',
+  'gemini-pro-agent',
+  'gpt-oss-120b-medium'
+]
+
+// Antigravity 界面显示模型名到官方发包 model 的默认映射。
+export const officialAntigravityDisplayMappings = [
+  { from: 'Claude Opus 4.6 Thinking', to: 'claude-opus-4-6-thinking' },
+  { from: 'Claude Sonnet 4.6', to: 'claude-sonnet-4-6' },
+  { from: 'GPT-OSS 120B Medium', to: 'gpt-oss-120b-medium' },
+  { from: 'Gemini 3.1 Pro High', to: 'gemini-pro-agent' },
+  { from: 'Gemini 3.1 Pro Low', to: 'gemini-3.1-pro-low' },
+  { from: 'Gemini 3.5 Flash High', to: 'gemini-3-flash-agent' },
+  { from: 'Gemini 3.5 Flash Low', to: 'gemini-3.5-flash-extra-low' },
+  { from: 'Gemini 3.5 Flash Medium', to: 'gemini-3.5-flash-low' }
+]
+
+export function getOfficialAntigravityModelIDs(): string[] {
+  return [...officialAntigravityModelIDs]
+}
+
+export function getOfficialAntigravityDisplayMappings(): ModelMappingEntry[] {
+  return officialAntigravityDisplayMappings.map((mapping) => ({ ...mapping }))
+}
 
 // 智谱 GLM
 const zhipuModels = [
@@ -321,6 +358,9 @@ const antigravityPresetMappings = [
   { label: '3.1-Pro-Preview→Pro-Agent', from: 'gemini-3.1-pro-preview', to: 'gemini-pro-agent', color: 'bg-amber-100 text-amber-700 hover:bg-amber-200 dark:bg-amber-900/30 dark:text-amber-400' },
   // Gemini 通配符映射
   { label: 'Gemini 3→Flash', from: 'gemini-3*', to: 'gemini-3-flash', color: 'bg-yellow-100 text-yellow-700 hover:bg-yellow-200 dark:bg-yellow-900/30 dark:text-yellow-400' },
+  { label: '3.5-Flash-Low', from: 'gemini-3.5-flash-extra-low', to: 'gemini-3.5-flash-extra-low', color: 'bg-lime-100 text-lime-700 hover:bg-lime-200 dark:bg-lime-900/30 dark:text-lime-400' },
+  { label: '3.5-Flash-Medium', from: 'gemini-3.5-flash-low', to: 'gemini-3.5-flash-low', color: 'bg-lime-100 text-lime-700 hover:bg-lime-200 dark:bg-lime-900/30 dark:text-lime-400' },
+  { label: '3.5-Flash-High', from: 'gemini-3-flash-agent', to: 'gemini-3-flash-agent', color: 'bg-lime-100 text-lime-700 hover:bg-lime-200 dark:bg-lime-900/30 dark:text-lime-400' },
   { label: 'Gemini 2.5→Flash', from: 'gemini-2.5*', to: 'gemini-2.5-flash', color: 'bg-orange-100 text-orange-700 hover:bg-orange-200 dark:bg-orange-900/30 dark:text-orange-400' },
   { label: '2.5-Flash-Image passthrough', from: 'gemini-2.5-flash-image', to: 'gemini-2.5-flash-image', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' },
   { label: '3.1-Flash-Image passthrough', from: 'gemini-3.1-flash-image', to: 'gemini-3.1-flash-image', color: 'bg-sky-100 text-sky-700 hover:bg-sky-200 dark:bg-sky-900/30 dark:text-sky-400' },
@@ -333,7 +373,8 @@ const antigravityPresetMappings = [
   { label: 'Opus 4.6', from: 'claude-opus-4-6', to: 'claude-opus-4-6-thinking', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
   { label: 'Opus 4.6-thinking', from: 'claude-opus-4-6-thinking', to: 'claude-opus-4-6-thinking', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
   { label: 'Opus 4.7', from: 'claude-opus-4-7', to: 'claude-opus-4-7', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
-  { label: 'Opus 4.8', from: 'claude-opus-4-8', to: 'claude-opus-4-8', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' }
+  { label: 'Opus 4.8', from: 'claude-opus-4-8', to: 'claude-opus-4-8', color: 'bg-pink-100 text-pink-700 hover:bg-pink-200 dark:bg-pink-900/30 dark:text-pink-400' },
+  { label: 'GPT-OSS 120B', from: 'gpt-oss-120b-medium', to: 'gpt-oss-120b-medium', color: 'bg-slate-100 text-slate-700 hover:bg-slate-200 dark:bg-slate-800/70 dark:text-slate-300' }
 ]
 
 // Bedrock 预设映射（与后端 DefaultBedrockModelMapping 保持一致）

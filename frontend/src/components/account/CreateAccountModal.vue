@@ -3289,7 +3289,8 @@ import {
   getModelsByPlatform,
   commonErrorCodes,
   buildModelMappingObject,
-  fetchAntigravityDefaultMappings,
+  getOfficialAntigravityDisplayMappings,
+  getOfficialAntigravityModelIDs,
   isValidWildcardPattern
 } from '@/composables/useModelWhitelist'
 import { useAuthStore } from '@/stores/auth'
@@ -3644,6 +3645,20 @@ function buildAntigravityExtra(): Record<string, unknown> | undefined {
   return Object.keys(extra).length > 0 ? extra : undefined
 }
 
+function resetAntigravityOfficialModelDefaults() {
+  antigravityModelRestrictionMode.value = 'whitelist'
+  antigravityWhitelistModels.value = getOfficialAntigravityModelIDs()
+  antigravityModelMappings.value = getOfficialAntigravityDisplayMappings()
+}
+
+function buildAntigravityModelRestrictionMapping(): Record<string, string> | null {
+  return buildModelMappingObject(
+    'combined',
+    antigravityWhitelistModels.value,
+    antigravityModelMappings.value
+  )
+}
+
 const buildOpenAICompactModelMapping = () =>
   buildModelMappingObject('mapping', [], openAICompactModelMappings.value)
 
@@ -3853,13 +3868,8 @@ watch(
         .catch(() => { tlsFingerprintProfiles.value = [] })
       // Modal opened - fill related models
       allowedModels.value = [...getModelsByPlatform(form.platform)]
-      // Antigravity: 默认使用映射模式并填充默认映射
       if (form.platform === 'antigravity') {
-        antigravityModelRestrictionMode.value = 'mapping'
-        fetchAntigravityDefaultMappings().then(mappings => {
-          antigravityModelMappings.value = [...mappings]
-        })
-        antigravityWhitelistModels.value = []
+        resetAntigravityOfficialModelDefaults()
       } else {
         antigravityWhitelistModels.value = []
         antigravityModelMappings.value = []
@@ -3912,13 +3922,8 @@ watch(
     // Clear model-related settings
     allowedModels.value = []
     modelMappings.value = []
-    // Antigravity: 默认使用映射模式并填充默认映射
     if (newPlatform === 'antigravity') {
-      antigravityModelRestrictionMode.value = 'mapping'
-      fetchAntigravityDefaultMappings().then(mappings => {
-        antigravityModelMappings.value = [...mappings]
-      })
-      antigravityWhitelistModels.value = []
+      resetAntigravityOfficialModelDefaults()
       accountCategory.value = 'oauth-based'
       antigravityAccountType.value = 'oauth'
     } else {
@@ -4348,11 +4353,7 @@ const resetForm = () => {
   modelRestrictionMode.value = 'whitelist'
   allowedModels.value = [...claudeModels] // Default fill related models
 
-  antigravityModelRestrictionMode.value = 'mapping'
-  antigravityWhitelistModels.value = []
-  fetchAntigravityDefaultMappings().then(mappings => {
-    antigravityModelMappings.value = [...mappings]
-  })
+  resetAntigravityOfficialModelDefaults()
   poolModeEnabled.value = false
   poolModeRetryCount.value = DEFAULT_POOL_MODE_RETRY_COUNT
   poolModeRetryStatusCodesInput.value = ''
@@ -4695,12 +4696,7 @@ const handleSubmit = async () => {
       api_key: upstreamApiKey.value.trim()
     }
 
-    // Antigravity 只使用映射模式
-    const antigravityModelMapping = buildModelMappingObject(
-      'mapping',
-      [],
-      antigravityModelMappings.value
-    )
+    const antigravityModelMapping = buildAntigravityModelRestrictionMapping()
     if (antigravityModelMapping) {
       credentials.model_mapping = antigravityModelMapping
     }
@@ -5418,6 +5414,10 @@ const handleAntigravityValidateRT = async (refreshTokenInput: string) => {
 
         const credentials = antigravityOAuth.buildCredentials(tokenInfo)
         applyAntigravityProjectID(credentials, antigravityProjectId.value, 'create')
+        const antigravityModelMapping = buildAntigravityModelRestrictionMapping()
+        if (antigravityModelMapping) {
+          credentials.model_mapping = antigravityModelMapping
+        }
         
         // Generate account name with index for batch
         const accountName = refreshTokens.length > 1 ? `${form.name} #${i + 1}` : form.name
@@ -5536,12 +5536,7 @@ const handleAntigravityExchange = async (authCode: string) => {
 		const credentials = antigravityOAuth.buildCredentials(tokenInfo)
 		applyAntigravityProjectID(credentials, antigravityProjectId.value, 'create')
 		applyInterceptWarmup(credentials, interceptWarmupRequests.value, 'create')
-		// Antigravity 只使用映射模式
-		const antigravityModelMapping = buildModelMappingObject(
-			'mapping',
-			[],
-			antigravityModelMappings.value
-		)
+		const antigravityModelMapping = buildAntigravityModelRestrictionMapping()
 		if (antigravityModelMapping) {
 			credentials.model_mapping = antigravityModelMapping
 		}

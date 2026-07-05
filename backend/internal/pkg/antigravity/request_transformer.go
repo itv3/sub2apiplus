@@ -39,6 +39,57 @@ func generateStableSessionID(contents []GeminiContent) string {
 	return "-" + strconv.FormatInt(n, 10)
 }
 
+func generateAntigravityRequestIdentity() (requestID string, trajectoryID string) {
+	conversationID := uuid.New().String()
+	trajectoryID = uuid.New().String()
+	return fmt.Sprintf("agent/%s/%d/%s/2", conversationID, time.Now().UnixMilli(), trajectoryID), trajectoryID
+}
+
+func antigravityModelEnum(model string) string {
+	switch strings.ToLower(strings.TrimSpace(model)) {
+	case "claude-opus-4-6-thinking":
+		return "MODEL_PLACEHOLDER_M26"
+	case "claude-sonnet-4-6":
+		return "MODEL_PLACEHOLDER_M35"
+	case "gemini-pro-agent":
+		return "MODEL_PLACEHOLDER_M16"
+	case "gemini-3.1-pro-low":
+		return "MODEL_PLACEHOLDER_M36"
+	case "gemini-3-flash-agent":
+		return "MODEL_PLACEHOLDER_M132"
+	case "gemini-3.5-flash-extra-low":
+		return "MODEL_PLACEHOLDER_M187"
+	case "gemini-3.5-flash-low":
+		return "MODEL_PLACEHOLDER_M20"
+	case "gpt-oss-120b-medium":
+		return "MODEL_OPENAI_GPT_OSS_120B_MEDIUM"
+	default:
+		return ""
+	}
+}
+
+func buildAntigravityRequestLabels(model, trajectoryID string) map[string]string {
+	if strings.TrimSpace(trajectoryID) == "" {
+		return nil
+	}
+
+	usedClaude := "false"
+	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(model)), "claude-") {
+		usedClaude = "true"
+	}
+
+	labels := map[string]string{
+		"last_step_index":          "1",
+		"trajectory_id":            trajectoryID,
+		"used_claude":              usedClaude,
+		"used_claude_conservative": usedClaude,
+	}
+	if modelEnum := antigravityModelEnum(model); modelEnum != "" {
+		labels["model_enum"] = modelEnum
+	}
+	return labels
+}
+
 type TransformOptions struct {
 	EnableIdentityPatch bool
 	// IdentityPatch 可选：自定义注入到 systemInstruction 开头的身份防护提示词；
@@ -124,10 +175,10 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 	// 3. 构建 generationConfig
 	reqForConfig := claudeReq
 	if strippedThinking {
-		// If we had to downgrade thinking blocks to plain text due to missing/invalid signatures,
-		// disable upstream thinking mode to avoid signature/structure validation errors.
+		// 如果因缺失/无效 signature 将 thinking block 降级为普通文本，
+		// 需要显式关闭上游 thinking，避免 signature/结构校验错误。
 		reqCopy := *claudeReq
-		reqCopy.Thinking = nil
+		reqCopy.Thinking = &ThinkingConfig{Type: "disabled"}
 		reqForConfig = &reqCopy
 	}
 	if targetModel != "" && targetModel != reqForConfig.Model {
@@ -140,11 +191,14 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 	// 4. 构建 tools
 	tools := buildTools(claudeReq.Tools)
 
+	requestID, trajectoryID := generateAntigravityRequestIdentity()
+
 	// 5. 构建内部请求
 	innerRequest := GeminiRequest{
 		Contents: contents,
 		// 总是生成 sessionId，基于用户消息内容
 		SessionID: generateStableSessionID(contents),
+		Labels:    buildAntigravityRequestLabels(targetModel, trajectoryID),
 	}
 
 	// 针对 Gemini Reasoning 模型（如 gemini-3.1-pro-high等）过滤强制空 ToolConfig
@@ -176,7 +230,7 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 	// 6. 包装为 v1internal 请求
 	v1Req := V1InternalRequest{
 		Project:     projectID,
-		RequestID:   "agent-" + uuid.New().String(),
+		RequestID:   requestID,
 		UserAgent:   "antigravity", // 固定值，与官方客户端一致
 		RequestType: requestType,
 		Model:       targetModel,
@@ -591,7 +645,7 @@ func parseToolResultContent(content json.RawMessage, isError bool) string {
 // buildGenerationConfig 构建 generationConfig
 const (
 	defaultMaxOutputTokens    = 64000
-	maxOutputTokensUpperBound = 65000
+	maxOutputTokensUpperBound = 65535
 	maxOutputTokensClaude     = 64000
 )
 
@@ -611,14 +665,39 @@ func isAntigravityOpusHighTierModel(model string) bool {
 		strings.HasPrefix(lower, "claude-opus-4-8")
 }
 
+func defaultAntigravityThinkingBudget(model string) (int, bool) {
+	switch strings.ToLower(strings.TrimSpace(model)) {
+	case "claude-opus-4-6-thinking", "claude-sonnet-4-6":
+		return 1024, true
+	case "gemini-3.1-pro-low":
+		return 1001, true
+	case "gemini-pro-agent":
+		return 10001, true
+	case "gemini-3.5-flash-extra-low":
+		return 1000, true
+	case "gemini-3.5-flash-low":
+		return 4000, true
+	case "gemini-3-flash-agent":
+		return 10000, true
+	case "gpt-oss-120b-medium":
+		return 8192, true
+	default:
+		return 0, false
+	}
+}
+
+func suppressAntigravityGenerationParams(model string) bool {
+	return IsGeminiReasoningModel(model) || IsOfficialModelID(model)
+}
+
 func buildGenerationConfig(req *ClaudeRequest) *GeminiGenerationConfig {
 	maxLimit := maxOutputTokensLimit(req.Model)
 	config := &GeminiGenerationConfig{
 		MaxOutputTokens: defaultMaxOutputTokens, // 默认最大输出
 	}
 
-	isReasoning := IsGeminiReasoningModel(req.Model)
-	if !isReasoning {
+	suppressParams := suppressAntigravityGenerationParams(req.Model)
+	if !suppressParams {
 		config.StopSequences = DefaultStopSequences
 	}
 
@@ -658,6 +737,16 @@ func buildGenerationConfig(req *ClaudeRequest) *GeminiGenerationConfig {
 			}
 		}
 		config.ThinkingConfig.ThinkingBudget = budget
+	} else if req.Thinking == nil {
+		if budget, ok := defaultAntigravityThinkingBudget(req.Model); ok {
+			config.ThinkingConfig = &GeminiThinkingConfig{
+				IncludeThoughts: true,
+				ThinkingBudget:  budget,
+			}
+			if adjusted, changed := ensureMaxTokensGreaterThanBudget(config.MaxOutputTokens, budget); changed {
+				config.MaxOutputTokens = adjusted
+			}
+		}
 	}
 
 	if config.MaxOutputTokens > maxLimit {
@@ -665,7 +754,7 @@ func buildGenerationConfig(req *ClaudeRequest) *GeminiGenerationConfig {
 	}
 
 	// 其他参数
-	if !isReasoning {
+	if !suppressParams {
 		if req.Temperature != nil {
 			config.Temperature = req.Temperature
 		}

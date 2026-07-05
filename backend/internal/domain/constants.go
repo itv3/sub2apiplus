@@ -99,9 +99,10 @@ var DefaultAntigravityModelMapping = map[string]string{
 	"gemini-2.5-flash-thinking":      "gemini-2.5-flash-thinking",
 	"gemini-2.5-pro":                 "gemini-2.5-pro",
 	// Gemini 3 白名单
-	"gemini-3-flash":    "gemini-3-flash",
-	"gemini-3-pro-high": "gemini-3-pro-high",
-	"gemini-3-pro-low":  "gemini-3-pro-low",
+	"gemini-3-flash":       "gemini-3-flash",
+	"gemini-3-flash-agent": "gemini-3-flash-agent",
+	"gemini-3-pro-high":    "gemini-3-pro-high",
+	"gemini-3-pro-low":     "gemini-3-pro-low",
 	// Gemini 3 preview 映射
 	"gemini-3-flash-preview": "gemini-3-flash",
 	"gemini-3-pro-preview":   "gemini-3-pro-high",
@@ -116,6 +117,9 @@ var DefaultAntigravityModelMapping = map[string]string{
 	"gemini-3.1-flash-image": "gemini-3.1-flash-image",
 	// Gemini 3.1 image preview 映射
 	"gemini-3.1-flash-image-preview": "gemini-3.1-flash-image",
+	// Gemini 3.5 Flash 官方档位
+	"gemini-3.5-flash-extra-low": "gemini-3.5-flash-extra-low",
+	"gemini-3.5-flash-low":       "gemini-3.5-flash-low",
 	// Gemini 3 image 兼容映射（向 3.1 image 迁移）
 	"gemini-3-pro-image":         "gemini-3.1-flash-image",
 	"gemini-3-pro-image-preview": "gemini-3.1-flash-image",

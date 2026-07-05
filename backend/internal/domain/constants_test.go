@@ -65,6 +65,27 @@ func TestDefaultAntigravityModelMapping_Gemini31ProAliases(t *testing.T) {
 	}
 }
 
+func TestDefaultAntigravityModelMapping_ContainsOfficialAntigravityFlashAndOSSModels(t *testing.T) {
+	t.Parallel()
+
+	cases := map[string]string{
+		"gemini-3.5-flash-extra-low": "gemini-3.5-flash-extra-low",
+		"gemini-3.5-flash-low":       "gemini-3.5-flash-low",
+		"gemini-3-flash-agent":       "gemini-3-flash-agent",
+		"gpt-oss-120b-medium":        "gpt-oss-120b-medium",
+	}
+
+	for from, want := range cases {
+		got, ok := DefaultAntigravityModelMapping[from]
+		if !ok {
+			t.Fatalf("expected mapping for %q to exist", from)
+		}
+		if got != want {
+			t.Fatalf("unexpected mapping for %q: got %q want %q", from, got, want)
+		}
+	}
+}
+
 func TestDefaultBedrockModelMapping_ContainsNewClaudeModels(t *testing.T) {
 	t.Parallel()
 

@@ -279,6 +279,13 @@ func (s *BillingService) initFallbackPricing() {
 	// GPT-5.5 / GPT-5.5 Pro 暂无独立定价，回退到 GPT-5.4。
 	s.fallbackPrices["gpt-5.5"] = s.fallbackPrices["gpt-5.4"]
 	s.fallbackPrices["gpt-5.5-pro"] = s.fallbackPrices["gpt-5.4"]
+	// Antigravity GPT-OSS 120B Medium。
+	s.fallbackPrices["gpt-oss-120b-medium"] = &ModelPricing{
+		InputPricePerToken:     0.05e-6, // $0.05 per MTok
+		OutputPricePerToken:    0.20e-6, // $0.20 per MTok
+		CacheReadPricePerToken: 0.01e-6, // $0.01 per MTok
+		SupportsCacheBreakdown: false,
+	}
 
 	s.fallbackPrices["gpt-5.4-mini"] = &ModelPricing{
 		InputPricePerToken:     7.5e-7,
@@ -665,6 +672,9 @@ func (s *BillingService) getFallbackPricing(model string) *ModelPricing {
 	}
 
 	// OpenAI（GPT-5 / Codex 族）：仅匹配已知型号，避免未知 OpenAI 型号误计价。
+	if modelLower == "gpt-oss-120b-medium" {
+		return s.fallbackPrices["gpt-oss-120b-medium"]
+	}
 	if normalized := normalizeKnownOpenAICodexModel(modelLower); normalized != "" {
 		switch normalized {
 		case "gpt-5.5-pro":

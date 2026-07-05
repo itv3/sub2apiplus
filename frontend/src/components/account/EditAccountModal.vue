@@ -1016,12 +1016,53 @@
       </div>
 
       <!-- Antigravity model restriction (applies to all antigravity types) -->
-      <!-- Antigravity 只支持模型映射模式，不支持白名单模式 -->
       <div v-if="account.platform === 'antigravity'" class="border-t border-gray-200 pt-4 dark:border-dark-600">
         <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
 
-        <!-- Mapping Mode Only (no toggle for Antigravity) -->
-        <div>
+        <div class="mb-4 flex gap-2">
+          <button
+            type="button"
+            @click="antigravityModelRestrictionMode = 'whitelist'"
+            :class="[
+              'flex-1 rounded-lg px-4 py-2 text-sm font-medium transition-all',
+              antigravityModelRestrictionMode === 'whitelist'
+                ? 'bg-primary-100 text-primary-700 dark:bg-primary-900/30 dark:text-primary-400'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-600 dark:text-gray-400 dark:hover:bg-dark-500'
+            ]"
+          >
+            <svg class="mr-1.5 inline h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+            </svg>
+            {{ t('admin.accounts.modelWhitelist') }}
+          </button>
+          <button
+            type="button"
+            @click="antigravityModelRestrictionMode = 'mapping'"
+            :class="[
+              'flex-1 rounded-lg px-4 py-2 text-sm font-medium transition-all',
+              antigravityModelRestrictionMode === 'mapping'
+                ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
+                : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-dark-600 dark:text-gray-400 dark:hover:bg-dark-500'
+            ]"
+          >
+            <svg class="mr-1.5 inline h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" />
+            </svg>
+            {{ t('admin.accounts.modelMapping') }}
+          </button>
+        </div>
+
+        <div v-if="antigravityModelRestrictionMode === 'whitelist'">
+          <ModelWhitelistSelector v-model="antigravityWhitelistModels" platform="antigravity" :account-id="account?.id" />
+          <p class="text-xs text-gray-500 dark:text-gray-400">
+            {{ t('admin.accounts.selectedModels', { count: antigravityWhitelistModels.length }) }}
+            <span v-if="antigravityWhitelistModels.length === 0 && antigravityModelMappings.length === 0">
+              {{ t('admin.accounts.supportsAllModels') }}
+            </span>
+          </p>
+        </div>
+
+        <div v-else>
           <div class="mb-3 rounded-lg bg-purple-50 p-3 dark:bg-purple-900/20">
             <p class="text-xs text-purple-700 dark:text-purple-400">{{ t('admin.accounts.mapRequestModels') }}</p>
           </div>
@@ -2452,6 +2493,7 @@ import {
   getPresetMappingsByPlatform,
   commonErrorCodes,
   buildModelMappingObject,
+  getOfficialAntigravityDisplayMappings,
   splitModelMappingObject,
   isValidWildcardPattern
 } from '@/composables/useModelWhitelist'
@@ -3149,30 +3191,32 @@ const syncFormFromAccount = (newAccount: Account | null) => {
     resetQuotaNotify()
   }
 
-  // Load antigravity model mapping (Antigravity 只支持映射模式)
+  // Load antigravity model restriction from model_mapping.
   if (newAccount.platform === 'antigravity') {
     const credentials = newAccount.credentials as Record<string, unknown> | undefined
 
-    // Antigravity 始终使用映射模式
-    antigravityModelRestrictionMode.value = 'mapping'
-    antigravityWhitelistModels.value = []
-
-    // 从 model_mapping 读取映射配置
     const rawAgMapping = credentials?.model_mapping as Record<string, string> | undefined
     if (rawAgMapping && typeof rawAgMapping === 'object') {
-      const entries = Object.entries(rawAgMapping)
-      // 无论是白名单样式(key===value)还是真正的映射，都统一转换为映射列表
-      antigravityModelMappings.value = entries.map(([from, to]) => ({ from, to }))
+      const parsed = splitModelMappingObject(rawAgMapping)
+      antigravityWhitelistModels.value = parsed.allowedModels
+      antigravityModelMappings.value = parsed.modelMappings
+      antigravityModelRestrictionMode.value =
+        parsed.modelMappings.length > 0 && parsed.allowedModels.length === 0
+          ? 'mapping'
+          : 'whitelist'
     } else {
       // 兼容旧数据：从 model_whitelist 读取，转换为映射格式
       const rawWhitelist = credentials?.model_whitelist
       if (Array.isArray(rawWhitelist) && rawWhitelist.length > 0) {
-        antigravityModelMappings.value = rawWhitelist
+        antigravityWhitelistModels.value = rawWhitelist
           .map((v) => String(v).trim())
           .filter((v) => v.length > 0)
-          .map((m) => ({ from: m, to: m }))
-      } else {
         antigravityModelMappings.value = []
+        antigravityModelRestrictionMode.value = 'whitelist'
+      } else {
+        antigravityWhitelistModels.value = []
+        antigravityModelMappings.value = []
+        antigravityModelRestrictionMode.value = 'whitelist'
       }
     }
   } else {
@@ -3361,20 +3405,10 @@ const syncAntigravityUpstreamModels = async () => {
       return
     }
 
-    let addedCount = 0
-    for (const model of upstreamModels) {
-      const exists = antigravityModelMappings.value.some((mapping) => mapping.from === model)
-      if (!exists) {
-        antigravityModelMappings.value.push({ from: model, to: model })
-        addedCount += 1
-      }
-    }
-
-    if (addedCount > 0) {
-      appStore.showSuccess(t('admin.accounts.syncUpstreamModelsSuccess', { count: addedCount, total: upstreamModels.length }))
-    } else {
-      appStore.showInfo(t('admin.accounts.syncUpstreamModelsNoChanges', { count: upstreamModels.length }))
-    }
+    const officialMappings = getOfficialAntigravityDisplayMappings()
+    antigravityModelRestrictionMode.value = 'mapping'
+    antigravityModelMappings.value = officialMappings
+    appStore.showSuccess(t('admin.accounts.syncUpstreamModelsSuccess', { count: officialMappings.length, total: upstreamModels.length }))
   } catch (error) {
     const message = error instanceof Error ? error.message : t('admin.accounts.syncUpstreamModelsFailed')
     appStore.showError(t('admin.accounts.syncUpstreamModelsError', { message }))
@@ -4014,8 +4048,7 @@ const handleSubmit = async () => {
       updatePayload.credentials = newCredentials
     }
 
-    // Antigravity: persist model mapping to credentials (applies to all antigravity types)
-    // Antigravity 只支持映射模式
+    // Antigravity: persist model restriction to credentials (applies to all antigravity types)
     if (props.account.platform === 'antigravity') {
       const currentCredentials = (updatePayload.credentials as Record<string, unknown>) ||
         ((props.account.credentials as Record<string, unknown>) || {})
@@ -4028,10 +4061,9 @@ const handleSubmit = async () => {
       delete newCredentials.model_whitelist
       delete newCredentials.model_mapping
 
-      // 只使用映射模式
       const antigravityModelMapping = buildModelMappingObject(
-        'mapping',
-        [],
+        'combined',
+        antigravityWhitelistModels.value,
         antigravityModelMappings.value
       )
       if (antigravityModelMapping) {

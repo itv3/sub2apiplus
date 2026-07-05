@@ -21,6 +21,7 @@ type GeminiRequest struct {
 	ToolConfig        *GeminiToolConfig       `json:"toolConfig,omitempty"`
 	SafetySettings    []GeminiSafetySetting   `json:"safetySettings,omitempty"`
 	SessionID         string                  `json:"sessionId,omitempty"`
+	Labels            map[string]string       `json:"labels,omitempty"`
 }
 
 // GeminiContent Gemini 内容

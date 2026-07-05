@@ -74,6 +74,23 @@ func TestCalculateCost_WithCacheTokens(t *testing.T) {
 	require.InDelta(t, expectedTotal, cost.TotalCost, 1e-10)
 }
 
+func TestCalculateCost_GPTOSS120BMediumCustomPricing(t *testing.T) {
+	svc := newTestBillingService()
+
+	tokens := UsageTokens{
+		InputTokens:     1_000_000,
+		CacheReadTokens: 1_000_000,
+		OutputTokens:    1_000_000,
+	}
+	cost, err := svc.CalculateCost("gpt-oss-120b-medium", tokens, 1.0)
+	require.NoError(t, err)
+
+	require.InDelta(t, 0.05, cost.InputCost, 1e-10)
+	require.InDelta(t, 0.01, cost.CacheReadCost, 1e-10)
+	require.InDelta(t, 0.20, cost.OutputCost, 1e-10)
+	require.InDelta(t, 0.26, cost.TotalCost, 1e-10)
+}
+
 func TestCalculateCost_RateMultiplier(t *testing.T) {
 	svc := newTestBillingService()
 

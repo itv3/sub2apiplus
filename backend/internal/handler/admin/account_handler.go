@@ -2069,8 +2069,11 @@ func (h *AccountHandler) availableModelsForAccount(account *service.Account) any
 
 	// Handle Antigravity accounts: return Claude + Gemini models
 	if account.Platform == service.PlatformAntigravity {
-		// 直接复用 antigravity.DefaultModels()，与 /v1/models 端点保持同步
-		return antigravity.DefaultModels()
+		mapping := service.AdvertisedModelMappingForAccount(account)
+		if len(mapping) == 0 {
+			return antigravity.DefaultModels()
+		}
+		return antigravityModelsForMapping(mapping)
 	}
 
 	// Handle Grok accounts
@@ -2156,6 +2159,37 @@ func (h *AccountHandler) availableModelsForAccount(account *service.Account) any
 		}
 	}
 
+	return models
+}
+
+func antigravityModelsForMapping(mapping map[string]string) []antigravity.ClaudeModel {
+	defaults := antigravity.DefaultModels()
+	defaultByID := make(map[string]antigravity.ClaudeModel, len(defaults))
+	for _, model := range defaults {
+		defaultByID[model.ID] = model
+	}
+
+	ids := make([]string, 0, len(mapping))
+	for id := range mapping {
+		if trimmed := strings.TrimSpace(id); trimmed != "" {
+			ids = append(ids, trimmed)
+		}
+	}
+	sort.Strings(ids)
+
+	models := make([]antigravity.ClaudeModel, 0, len(ids))
+	for _, id := range ids {
+		if model, ok := defaultByID[id]; ok {
+			models = append(models, model)
+			continue
+		}
+		models = append(models, antigravity.ClaudeModel{
+			ID:          id,
+			Type:        "model",
+			DisplayName: id,
+			CreatedAt:   "",
+		})
+	}
 	return models
 }
 

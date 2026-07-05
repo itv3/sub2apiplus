@@ -4,7 +4,13 @@ vi.mock('@/api/admin/accounts', () => ({
   getAntigravityDefaultModelMapping: vi.fn()
 }))
 
-import { buildModelMappingObject, getModelsByPlatform, splitModelMappingObject } from '../useModelWhitelist'
+import {
+  buildModelMappingObject,
+  getModelsByPlatform,
+  getOfficialAntigravityDisplayMappings,
+  getOfficialAntigravityModelIDs,
+  splitModelMappingObject
+} from '../useModelWhitelist'
 
 describe('useModelWhitelist', () => {
   it('openai 模型列表包含 GPT-5.4 官方快照', () => {
@@ -62,6 +68,42 @@ describe('useModelWhitelist', () => {
     const models = getModelsByPlatform('antigravity')
 
     expect(models).toContain('gemini-3.1-pro')
+  })
+
+  it('antigravity 模型列表包含官方 Flash 和 GPT-OSS 模型', () => {
+    const models = getModelsByPlatform('antigravity')
+
+    expect(models).toContain('gemini-3.5-flash-extra-low')
+    expect(models).toContain('gemini-3.5-flash-low')
+    expect(models).toContain('gemini-3-flash-agent')
+    expect(models).toContain('gemini-pro-agent')
+    expect(models).toContain('gpt-oss-120b-medium')
+  })
+
+  it('Antigravity 官方白名单默认使用抓包确认的 8 个发包 model', () => {
+    expect(getOfficialAntigravityModelIDs()).toEqual([
+      'claude-opus-4-6-thinking',
+      'claude-sonnet-4-6',
+      'gemini-3-flash-agent',
+      'gemini-3.1-pro-low',
+      'gemini-3.5-flash-extra-low',
+      'gemini-3.5-flash-low',
+      'gemini-pro-agent',
+      'gpt-oss-120b-medium'
+    ])
+  })
+
+  it('Antigravity 官方显示映射默认使用界面显示名到发包 model', () => {
+    expect(getOfficialAntigravityDisplayMappings()).toEqual([
+      { from: 'Claude Opus 4.6 Thinking', to: 'claude-opus-4-6-thinking' },
+      { from: 'Claude Sonnet 4.6', to: 'claude-sonnet-4-6' },
+      { from: 'GPT-OSS 120B Medium', to: 'gpt-oss-120b-medium' },
+      { from: 'Gemini 3.1 Pro High', to: 'gemini-pro-agent' },
+      { from: 'Gemini 3.1 Pro Low', to: 'gemini-3.1-pro-low' },
+      { from: 'Gemini 3.5 Flash High', to: 'gemini-3-flash-agent' },
+      { from: 'Gemini 3.5 Flash Low', to: 'gemini-3.5-flash-extra-low' },
+      { from: 'Gemini 3.5 Flash Medium', to: 'gemini-3.5-flash-low' }
+    ])
   })
 
   it('whitelist 模式会忽略通配符条目', () => {

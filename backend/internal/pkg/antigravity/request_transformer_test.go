@@ -338,7 +338,7 @@ func TestBuildGenerationConfig_ThinkingDynamicBudget(t *testing.T) {
 		},
 		{
 			name:        "nil thinking does not emit thinkingConfig",
-			model:       "claude-opus-4-6-thinking",
+			model:       "claude-sonnet-4-5",
 			thinking:    nil,
 			wantBudget:  0,
 			wantPresent: false,
@@ -372,6 +372,102 @@ func TestBuildGenerationConfig_ThinkingDynamicBudget(t *testing.T) {
 			if cfg.ThinkingConfig != nil {
 				t.Fatalf("expected thinkingConfig to be nil, got %+v", cfg.ThinkingConfig)
 			}
+		})
+	}
+}
+
+func TestBuildGenerationConfig_OfficialAntigravityDefaultThinkingBudget(t *testing.T) {
+	tests := []struct {
+		model      string
+		wantBudget int
+	}{
+		{"claude-opus-4-6-thinking", 1024},
+		{"claude-sonnet-4-6", 1024},
+		{"gemini-3.1-pro-low", 1001},
+		{"gemini-pro-agent", 10001},
+		{"gemini-3.5-flash-extra-low", 1000},
+		{"gemini-3.5-flash-low", 4000},
+		{"gemini-3-flash-agent", 10000},
+		{"gpt-oss-120b-medium", 8192},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			cfg := buildGenerationConfig(&ClaudeRequest{Model: tt.model})
+			require.NotNil(t, cfg)
+			require.NotNil(t, cfg.ThinkingConfig)
+			require.True(t, cfg.ThinkingConfig.IncludeThoughts)
+			require.Equal(t, tt.wantBudget, cfg.ThinkingConfig.ThinkingBudget)
+		})
+	}
+}
+
+func TestBuildGenerationConfig_OfficialAntigravityModelsSuppressExtraParams(t *testing.T) {
+	temp := 0.7
+	topP := 0.9
+	topK := 40
+
+	for _, model := range OfficialModelIDs() {
+		t.Run(model, func(t *testing.T) {
+			cfg := buildGenerationConfig(&ClaudeRequest{
+				Model:       model,
+				Temperature: &temp,
+				TopP:        &topP,
+				TopK:        &topK,
+			})
+
+			require.NotNil(t, cfg)
+			require.Empty(t, cfg.StopSequences)
+			require.Nil(t, cfg.Temperature)
+			require.Nil(t, cfg.TopP)
+			require.Nil(t, cfg.TopK)
+		})
+	}
+}
+
+func TestTransformClaudeToGeminiWithOptions_OfficialAntigravityLabels(t *testing.T) {
+	tests := []struct {
+		model      string
+		modelEnum  string
+		usedClaude string
+	}{
+		{"claude-opus-4-6-thinking", "MODEL_PLACEHOLDER_M26", "true"},
+		{"claude-sonnet-4-6", "MODEL_PLACEHOLDER_M35", "true"},
+		{"gpt-oss-120b-medium", "MODEL_OPENAI_GPT_OSS_120B_MEDIUM", "false"},
+		{"gemini-pro-agent", "MODEL_PLACEHOLDER_M16", "false"},
+		{"gemini-3.1-pro-low", "MODEL_PLACEHOLDER_M36", "false"},
+		{"gemini-3-flash-agent", "MODEL_PLACEHOLDER_M132", "false"},
+		{"gemini-3.5-flash-extra-low", "MODEL_PLACEHOLDER_M187", "false"},
+		{"gemini-3.5-flash-low", "MODEL_PLACEHOLDER_M20", "false"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			body, err := TransformClaudeToGeminiWithOptions(&ClaudeRequest{
+				Model: tt.model,
+				Messages: []ClaudeMessage{
+					{
+						Role:    "user",
+						Content: json.RawMessage(`"hello"`),
+					},
+				},
+			}, "project-1", tt.model, DefaultTransformOptions())
+			require.NoError(t, err)
+
+			var req V1InternalRequest
+			require.NoError(t, json.Unmarshal(body, &req))
+
+			labels := req.Request.Labels
+			require.NotNil(t, labels)
+			require.Equal(t, "1", labels["last_step_index"])
+			require.Equal(t, tt.modelEnum, labels["model_enum"])
+			require.Equal(t, tt.usedClaude, labels["used_claude"])
+			require.Equal(t, tt.usedClaude, labels["used_claude_conservative"])
+
+			trajectoryID := labels["trajectory_id"]
+			require.NotEmpty(t, trajectoryID)
+			require.True(t, strings.HasPrefix(req.RequestID, "agent/"))
+			require.Contains(t, req.RequestID, "/"+trajectoryID+"/2")
 		})
 	}
 }

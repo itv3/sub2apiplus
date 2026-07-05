@@ -580,6 +580,36 @@ func TestGetAvailableModels_ErrorAndGlobalListBranches(t *testing.T) {
 	require.Equal(t, int64(1), okRepo.listAllCalls.Load())
 }
 
+func TestGetAvailableModels_AntigravityUsesRawAccountMappingForAdvertisedList(t *testing.T) {
+	resetGatewayHotpathStatsForTest()
+
+	groupID := int64(12)
+	repo := &modelsListAccountRepoStub{
+		byGroup: map[int64][]Account{
+			groupID: {
+				{
+					ID:       1,
+					Platform: PlatformAntigravity,
+					Credentials: map[string]any{
+						"model_mapping": map[string]any{
+							"gemini-3.5-flash-extra-low": "gemini-3.5-flash-extra-low",
+							"gpt-oss-120b-medium":        "gpt-oss-120b-medium",
+						},
+					},
+				},
+			},
+		},
+	}
+	svc := &GatewayService{
+		accountRepo:        repo,
+		modelsListCache:    gocache.New(time.Minute, time.Minute),
+		modelsListCacheTTL: time.Minute,
+	}
+
+	models := svc.GetAvailableModels(context.Background(), &groupID, PlatformAntigravity)
+	require.Equal(t, []string{"gemini-3.5-flash-extra-low", "gpt-oss-120b-medium"}, models)
+}
+
 func TestGatewayHotpathHelpers_CacheTTLAndStickyContext(t *testing.T) {
 	t.Run("resolve_user_group_rate_cache_ttl", func(t *testing.T) {
 		require.Equal(t, defaultUserGroupRateCacheTTL, resolveUserGroupRateCacheTTL(nil))
