@@ -134,6 +134,11 @@ type UpdateAccountRequest struct {
 	ConfirmMixedChannelRisk *bool          `json:"confirm_mixed_channel_risk"` // 用户确认混合渠道风险
 }
 
+// UpdateAccountExtraRequest 表示账号 Extra 增量更新请求
+type UpdateAccountExtraRequest struct {
+	Extra map[string]any `json:"extra" binding:"required"`
+}
+
 // BulkUpdateAccountsRequest represents the payload for bulk editing accounts
 type BulkUpdateAccountsRequest struct {
 	AccountIDs              []int64                   `json:"account_ids"`
@@ -655,6 +660,38 @@ func (h *AccountHandler) Update(c *gin.Context) {
 	// 异步执行，探测失败不影响账号更新响应。
 	if len(req.Credentials) > 0 {
 		h.scheduleOpenAIResponsesProbe(account)
+	}
+
+	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
+}
+
+// PATCH /api/v1/admin/accounts/:id/extra
+func (h *AccountHandler) UpdateExtra(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+
+	var req UpdateAccountExtraRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if len(req.Extra) == 0 {
+		response.BadRequest(c, "extra is required")
+		return
+	}
+
+	if err := h.adminService.UpdateAccountExtra(c.Request.Context(), accountID, req.Extra); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
 	}
 
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))

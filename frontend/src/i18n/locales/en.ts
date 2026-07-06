@@ -415,6 +415,7 @@ export default {
     ops: 'Ops',
     promoCodes: 'Promo Codes',
     settings: 'Settings',
+    apiKeyMimic: 'API Key Mimic',
     myAccount: 'My Account',
     lightMode: 'Light Mode',
     darkMode: 'Dark Mode',
@@ -3111,6 +3112,35 @@ export default {
         },
         tip: 'Tip: Only groups with billing type "Subscription" and status "Active" appear in the group dropdown. If no options are available, create one in Group Management first.'
       }
+    },
+
+    // API Key 账号伪装设置
+    apiKeyMimic: {
+      title: 'API Key Mimic Settings',
+      description: 'Manage official-client compatibility for Anthropic / OpenAI API Key accounts',
+      refresh: 'Refresh',
+      columns: {
+        account: 'Account',
+        platform: 'Platform',
+        compatible: 'Official Client Compatible',
+        status: 'Current Profile / Status'
+      },
+      platformLabels: {
+        anthropic: 'Anthropic',
+        openai: 'OpenAI'
+      },
+      statusLabels: {
+        disabled: 'Disabled',
+        claudeCode: 'Claude Code',
+        codexDesktop: 'Codex Desktop',
+        codexCli: 'Legacy Codex CLI',
+        unknownCodexProfile: 'Codex ({profile})',
+        passthroughAlsoEnabled: 'Passthrough also enabled; runtime prefers mimic'
+      },
+      empty: 'No Anthropic / OpenAI API Key accounts',
+      loadFailed: 'Failed to load API Key accounts',
+      updateSuccess: 'Official-client compatibility updated',
+      updateFailed: 'Failed to update official-client compatibility'
     },
 
     // Accounts

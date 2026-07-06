@@ -773,6 +773,7 @@ const adminNavItems = computed((): NavItem[] => {
   if (authStore.isSimpleMode) {
     const filtered = visible.filter(item => !item.hideInSimpleMode)
     filtered.push({ path: '/keys', label: t('nav.apiKeys'), icon: KeyIcon })
+    filtered.push({ path: '/admin/settings/api-key-mimic', label: t('nav.apiKeyMimic'), icon: KeyIcon })
     filtered.push({ path: '/admin/settings', label: t('nav.settings'), icon: CogIcon })
     for (const cm of customMenuItemsForAdmin.value) {
       filtered.push({ path: `/custom/${cm.id}`, label: cm.label, icon: null, iconSvg: cm.icon_svg })
@@ -781,6 +782,7 @@ const adminNavItems = computed((): NavItem[] => {
   }
 
   visible.push({ path: '/admin/settings', label: t('nav.settings'), icon: CogIcon })
+  visible.push({ path: '/admin/settings/api-key-mimic', label: t('nav.apiKeyMimic'), icon: KeyIcon })
   for (const cm of customMenuItemsForAdmin.value) {
     visible.push({ path: `/custom/${cm.id}`, label: cm.label, icon: null, iconSvg: cm.icon_svg })
   }
@@ -822,6 +824,9 @@ function handleMenuItemClick(itemPath: string) {
 }
 
 function isActive(path: string): boolean {
+  if (path === '/admin/settings') {
+    return route.path === path
+  }
   return route.path === path || route.path.startsWith(path + '/')
 }
 

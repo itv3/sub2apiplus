@@ -148,6 +148,14 @@ export async function update(id: number, updates: UpdateAccountRequest): Promise
 }
 
 /**
+ * 使用 JSONB key 级合并增量更新账号 extra。
+ */
+export async function updateExtra(id: number, extra: Record<string, unknown>): Promise<Account> {
+  const { data } = await apiClient.patch<Account>(`/admin/accounts/${id}/extra`, { extra })
+  return data
+}
+
+/**
  * Check mixed-channel risk for account-group binding.
  */
 export async function checkMixedChannelRisk(
@@ -806,6 +814,7 @@ export const accountsAPI = {
   getById,
   create,
   update,
+  updateExtra,
   checkMixedChannelRisk,
   delete: deleteAccount,
   toggleStatus,

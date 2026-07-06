@@ -490,6 +490,18 @@ const routes: RouteRecordRaw[] = [
     }
   },
   {
+    path: '/admin/settings/api-key-mimic',
+    name: 'AdminApiKeyMimicSettings',
+    component: () => import('@/views/admin/ApiKeyMimicSettingsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'API Key Mimic Settings',
+      titleKey: 'admin.apiKeyMimic.title',
+      descriptionKey: 'admin.apiKeyMimic.description'
+    }
+  },
+  {
     path: '/admin/announcements',
     name: 'AdminAnnouncements',
     component: () => import('@/views/admin/AnnouncementsView.vue'),

@@ -415,6 +415,7 @@ export default {
     ops: '运维监控',
     promoCodes: '优惠码',
     settings: '系统设置',
+    apiKeyMimic: 'API Key 账号伪装',
     myAccount: '我的账户',
     lightMode: '浅色模式',
     darkMode: '深色模式',
@@ -3186,6 +3187,35 @@ export default {
         },
         tip: '提示：订阅分组下拉列表中只会显示计费类型为「订阅」且状态为「正常」的分组。如果没有可选项，请先到分组管理中创建。'
       }
+    },
+
+    // API Key 账号伪装设置
+    apiKeyMimic: {
+      title: 'API Key 账号伪装设置',
+      description: '统一管理 Anthropic / OpenAI API Key 账号的官方客户端兼容开关',
+      refresh: '刷新',
+      columns: {
+        account: '账号',
+        platform: '平台类型',
+        compatible: '官方客户端兼容',
+        status: '当前 profile / 状态'
+      },
+      platformLabels: {
+        anthropic: 'Anthropic',
+        openai: 'OpenAI'
+      },
+      statusLabels: {
+        disabled: '未开启',
+        claudeCode: 'Claude Code',
+        codexDesktop: 'Codex Desktop',
+        codexCli: '旧 Codex CLI',
+        unknownCodexProfile: 'Codex（{profile}）',
+        passthroughAlsoEnabled: '透传同开，运行时优先 mimic'
+      },
+      empty: '暂无 Anthropic / OpenAI API Key 账号',
+      loadFailed: '加载 API Key 账号失败',
+      updateSuccess: '已更新官方客户端兼容设置',
+      updateFailed: '更新官方客户端兼容设置失败'
     },
 
     // Accounts Management
