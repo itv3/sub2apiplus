@@ -107,6 +107,18 @@ func RegisterAdminRoutes(
 		// 邀请返利（专属用户管理）
 		registerAffiliateRoutes(admin, h)
 	}
+
+	registerKeeperInternalRoutes(v1, h, adminAuth)
+}
+
+func registerKeeperInternalRoutes(v1 *gin.RouterGroup, h *handler.Handlers, adminAuth middleware.AdminAuthMiddleware) {
+	keeper := v1.Group("/internal/keeper")
+	keeper.Use(gin.HandlerFunc(adminAuth))
+	{
+		keeper.GET("/accounts", h.Admin.Account.ListKeeperAccounts)
+		keeper.GET("/accounts/:id/models", h.Admin.Account.GetAvailableModels)
+		keeper.POST("/accounts/:id/keepalive", h.Admin.Account.RecordKeeperKeepalive)
+	}
 }
 
 func registerAdminComplianceRoutes(admin *gin.RouterGroup, h *handler.Handlers) {

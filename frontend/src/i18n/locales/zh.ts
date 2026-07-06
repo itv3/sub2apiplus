@@ -416,6 +416,7 @@ export default {
     promoCodes: '优惠码',
     settings: '系统设置',
     apiKeyMimic: 'API Key 账号伪装',
+    plusEnhancements: 'Plus 增强功能',
     myAccount: '我的账户',
     lightMode: '浅色模式',
     darkMode: '深色模式',
@@ -3189,6 +3190,15 @@ export default {
       }
     },
 
+    plusEnhancements: {
+      title: 'Plus 增强功能',
+      description: '统一管理 Sub2API Plus 的账号增强能力',
+      tabs: {
+        mimic: 'API Key 账号伪装',
+        keepalive: '账号保活'
+      }
+    },
+
     // API Key 账号伪装设置
     apiKeyMimic: {
       title: 'API Key 账号伪装设置',
@@ -3216,6 +3226,50 @@ export default {
       loadFailed: '加载 API Key 账号失败',
       updateSuccess: '已更新官方客户端兼容设置',
       updateFailed: '更新官方客户端兼容设置失败'
+    },
+
+    accountKeepalive: {
+      title: '账号保活',
+      description: '引用现有账号启用官方客户端空闲保活；账号正在正常使用时不会额外消耗保活 token',
+      refresh: '刷新',
+      save: '保存',
+      columns: {
+        account: '账号',
+        platform: '平台 / 类型',
+        enabled: '保活',
+        interval: '间隔',
+        model: '模型',
+        executor: '执行器',
+        workspace: '工作目录',
+        schedule: '调度',
+        status: '状态',
+        actions: '操作'
+      },
+      labels: {
+        enabled: '启用',
+        disabled: '关闭',
+        due: '待执行',
+        waiting: '等待',
+        neverUsed: '暂无使用记录',
+        minutes: '分钟',
+        lastUsed: '最近使用',
+        nextRun: '下次保活',
+        lastResult: '最近结果',
+        noResult: '暂无结果',
+        workWindow: '工作时间',
+        empty: '暂无 OpenAI / Anthropic 账号',
+        sidecarHint: '配置会保存到账号 Extra。keeper sidecar 对接内部接口后才会真正执行保活。'
+      },
+      placeholders: {
+        model: '例如 gpt-5.5',
+        workspace: '例如 homeproxy',
+        prompt: '留空则使用题库或默认只读问题'
+      },
+      messages: {
+        loadFailed: '加载账号保活配置失败',
+        saveSuccess: '已保存账号保活配置',
+        saveFailed: '保存账号保活配置失败'
+      }
     },
 
     // Accounts Management

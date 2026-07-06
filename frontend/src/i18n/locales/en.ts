@@ -416,6 +416,7 @@ export default {
     promoCodes: 'Promo Codes',
     settings: 'Settings',
     apiKeyMimic: 'API Key Mimic',
+    plusEnhancements: 'Plus Enhancements',
     myAccount: 'My Account',
     lightMode: 'Light Mode',
     darkMode: 'Dark Mode',
@@ -3114,6 +3115,15 @@ export default {
       }
     },
 
+    plusEnhancements: {
+      title: 'Plus Enhancements',
+      description: 'Manage Sub2API Plus account enhancement features',
+      tabs: {
+        mimic: 'API Key Mimic',
+        keepalive: 'Account Keepalive'
+      }
+    },
+
     // API Key 账号伪装设置
     apiKeyMimic: {
       title: 'API Key Mimic Settings',
@@ -3141,6 +3151,50 @@ export default {
       loadFailed: 'Failed to load API Key accounts',
       updateSuccess: 'Official-client compatibility updated',
       updateFailed: 'Failed to update official-client compatibility'
+    },
+
+    accountKeepalive: {
+      title: 'Account Keepalive',
+      description: 'Enable idle official-client keepalive for existing accounts; active accounts do not spend extra keepalive tokens',
+      refresh: 'Refresh',
+      save: 'Save',
+      columns: {
+        account: 'Account',
+        platform: 'Platform / Type',
+        enabled: 'Keepalive',
+        interval: 'Interval',
+        model: 'Model',
+        executor: 'Executor',
+        workspace: 'Workspace',
+        schedule: 'Schedule',
+        status: 'Status',
+        actions: 'Actions'
+      },
+      labels: {
+        enabled: 'Enabled',
+        disabled: 'Disabled',
+        due: 'Due',
+        waiting: 'Waiting',
+        neverUsed: 'Never used',
+        minutes: 'minutes',
+        lastUsed: 'Last used',
+        nextRun: 'Next run',
+        lastResult: 'Last result',
+        noResult: 'No result yet',
+        workWindow: 'Work window',
+        empty: 'No OpenAI / Anthropic accounts',
+        sidecarHint: 'Settings are saved into account Extra. A keeper sidecar must connect to internal APIs before keepalive jobs actually run.'
+      },
+      placeholders: {
+        model: 'e.g. gpt-5.5',
+        workspace: 'e.g. homeproxy',
+        prompt: 'Empty uses prompt bank or default read-only question'
+      },
+      messages: {
+        loadFailed: 'Failed to load account keepalive settings',
+        saveSuccess: 'Account keepalive settings saved',
+        saveFailed: 'Failed to save account keepalive settings'
+      }
     },
 
     // Accounts

@@ -139,6 +139,49 @@ type UpdateAccountExtraRequest struct {
 	Extra map[string]any `json:"extra" binding:"required"`
 }
 
+type KeeperAccountConfigResponse struct {
+	ID                int64      `json:"id"`
+	Name              string     `json:"name"`
+	Platform          string     `json:"platform"`
+	Type              string     `json:"type"`
+	Status            string     `json:"status"`
+	Enabled           bool       `json:"enabled"`
+	Executor          string     `json:"executor"`
+	Model             string     `json:"model"`
+	Workspace         string     `json:"workspace"`
+	Prompt            string     `json:"prompt,omitempty"`
+	IntervalMinutes   int        `json:"interval_minutes"`
+	WorkStart         string     `json:"work_start"`
+	WorkEnd           string     `json:"work_end"`
+	LastUsedAt        *time.Time `json:"last_used_at,omitempty"`
+	LastKeepaliveAt   *time.Time `json:"last_keepalive_at,omitempty"`
+	NextKeepaliveAt   *time.Time `json:"next_keepalive_at,omitempty"`
+	Due               bool       `json:"due"`
+	LastStatus        string     `json:"last_status,omitempty"`
+	LastError         string     `json:"last_error,omitempty"`
+	LastSummary       string     `json:"last_summary,omitempty"`
+	BillingMultiplier float64    `json:"billing_multiplier"`
+}
+
+type KeeperAccountsResponse struct {
+	Accounts []KeeperAccountConfigResponse `json:"accounts"`
+	Now      time.Time                     `json:"now"`
+}
+
+type RecordKeeperKeepaliveRequest struct {
+	Status                   string  `json:"status" binding:"required"`
+	SessionID                string  `json:"session_id"`
+	Summary                  string  `json:"summary"`
+	Error                    string  `json:"error"`
+	InputTokens              int64   `json:"input_tokens"`
+	OutputTokens             int64   `json:"output_tokens"`
+	CachedInputTokens        int64   `json:"cached_input_tokens"`
+	CacheCreationInputTokens int64   `json:"cache_creation_input_tokens"`
+	TotalTokens              int64   `json:"total_tokens"`
+	TotalCost                float64 `json:"total_cost"`
+	LocalClientError         bool    `json:"local_client_error"`
+}
+
 // BulkUpdateAccountsRequest represents the payload for bulk editing accounts
 type BulkUpdateAccountsRequest struct {
 	AccountIDs              []int64                   `json:"account_ids"`
@@ -695,6 +738,223 @@ func (h *AccountHandler) UpdateExtra(c *gin.Context) {
 	}
 
 	response.Success(c, h.buildAccountResponseWithRuntime(c.Request.Context(), account))
+}
+
+// GET /api/v1/internal/keeper/accounts
+func (h *AccountHandler) ListKeeperAccounts(c *gin.Context) {
+	ctx := c.Request.Context()
+	now := time.Now().UTC()
+
+	accounts, err := h.loadKeeperCandidateAccounts(ctx)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	out := make([]KeeperAccountConfigResponse, 0, len(accounts))
+	for _, account := range accounts {
+		item := buildKeeperAccountConfig(account, now)
+		if item.Enabled {
+			out = append(out, item)
+		}
+	}
+
+	response.Success(c, KeeperAccountsResponse{Accounts: out, Now: now})
+}
+
+func (h *AccountHandler) loadKeeperCandidateAccounts(ctx context.Context) ([]service.Account, error) {
+	const pageSize = 500
+	var out []service.Account
+	for _, platform := range []string{service.PlatformOpenAI, service.PlatformAnthropic} {
+		page := 1
+		for {
+			accounts, total, err := h.adminService.ListAccounts(ctx, page, pageSize, platform, "", "", "", 0, "", "id", "desc")
+			if err != nil {
+				return nil, err
+			}
+			out = append(out, accounts...)
+			if int64(page*pageSize) >= total || len(accounts) == 0 {
+				break
+			}
+			page++
+		}
+	}
+	return out, nil
+}
+
+func buildKeeperAccountConfig(account service.Account, now time.Time) KeeperAccountConfigResponse {
+	extra := account.Extra
+	enabled := extraBool(extra, "keeper_keepalive_enabled")
+	intervalMinutes := extraIntDefault(extra, "keeper_keepalive_interval_minutes", 90)
+	if intervalMinutes < 5 {
+		intervalMinutes = 5
+	}
+	executor := extraString(extra, "keeper_keepalive_executor")
+	if executor == "" {
+		if account.Platform == service.PlatformAnthropic {
+			executor = "claude"
+		} else {
+			executor = "codex"
+		}
+	}
+
+	lastKeepalive := extraTime(extra, "keeper_last_keepalive_at")
+	base := latestTime(account.LastUsedAt, lastKeepalive)
+	var next *time.Time
+	due := enabled
+	if base != nil {
+		calculated := base.Add(time.Duration(intervalMinutes) * time.Minute)
+		next = &calculated
+		due = enabled && !calculated.After(now)
+	}
+
+	return KeeperAccountConfigResponse{
+		ID:                account.ID,
+		Name:              account.Name,
+		Platform:          account.Platform,
+		Type:              account.Type,
+		Status:            account.Status,
+		Enabled:           enabled,
+		Executor:          executor,
+		Model:             extraString(extra, "keeper_keepalive_model"),
+		Workspace:         extraString(extra, "keeper_keepalive_workspace"),
+		Prompt:            extraString(extra, "keeper_keepalive_prompt"),
+		IntervalMinutes:   intervalMinutes,
+		WorkStart:         extraStringDefault(extra, "keeper_keepalive_work_start", "04:00"),
+		WorkEnd:           extraStringDefault(extra, "keeper_keepalive_work_end", "24:00"),
+		LastUsedAt:        account.LastUsedAt,
+		LastKeepaliveAt:   lastKeepalive,
+		NextKeepaliveAt:   next,
+		Due:               due,
+		LastStatus:        extraString(extra, "keeper_last_status"),
+		LastError:         extraString(extra, "keeper_last_error"),
+		LastSummary:       extraString(extra, "keeper_last_summary"),
+		BillingMultiplier: account.BillingRateMultiplier(),
+	}
+}
+
+// POST /api/v1/internal/keeper/accounts/:id/keepalive
+func (h *AccountHandler) RecordKeeperKeepalive(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+
+	var req RecordKeeperKeepaliveRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	updates := map[string]any{
+		"keeper_last_status":        req.Status,
+		"keeper_last_session_id":    req.SessionID,
+		"keeper_last_summary":       req.Summary,
+		"keeper_last_error":         req.Error,
+		"keeper_last_recorded_at":   now,
+		"keeper_last_input_tokens":  req.InputTokens,
+		"keeper_last_output_tokens": req.OutputTokens,
+		"keeper_last_total_tokens":  req.TotalTokens,
+		"keeper_last_total_cost":    req.TotalCost,
+		"keeper_local_client_error": req.LocalClientError,
+	}
+	if req.Status == "success" || req.Status == "skipped" {
+		updates["keeper_last_keepalive_at"] = now
+	}
+	if req.CachedInputTokens > 0 {
+		updates["keeper_last_cached_input_tokens"] = req.CachedInputTokens
+	}
+	if req.CacheCreationInputTokens > 0 {
+		updates["keeper_last_cache_creation_input_tokens"] = req.CacheCreationInputTokens
+	}
+
+	if err := h.adminService.UpdateAccountExtra(c.Request.Context(), accountID, updates); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	response.Success(c, gin.H{"ok": true, "recorded_at": now})
+}
+
+func extraBool(extra map[string]any, key string) bool {
+	if extra == nil {
+		return false
+	}
+	v, _ := extra[key].(bool)
+	return v
+}
+
+func extraString(extra map[string]any, key string) string {
+	if extra == nil {
+		return ""
+	}
+	switch v := extra[key].(type) {
+	case string:
+		return strings.TrimSpace(v)
+	default:
+		return ""
+	}
+}
+
+func extraStringDefault(extra map[string]any, key, fallback string) string {
+	if v := extraString(extra, key); v != "" {
+		return v
+	}
+	return fallback
+}
+
+func extraIntDefault(extra map[string]any, key string, fallback int) int {
+	if extra == nil {
+		return fallback
+	}
+	switch v := extra[key].(type) {
+	case int:
+		return v
+	case int64:
+		return int(v)
+	case float64:
+		return int(v)
+	case json.Number:
+		n, err := v.Int64()
+		if err == nil {
+			return int(n)
+		}
+	case string:
+		n, err := strconv.Atoi(strings.TrimSpace(v))
+		if err == nil {
+			return n
+		}
+	}
+	return fallback
+}
+
+func extraTime(extra map[string]any, key string) *time.Time {
+	raw := extraString(extra, key)
+	if raw == "" {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return nil
+	}
+	utc := t.UTC()
+	return &utc
+}
+
+func latestTime(values ...*time.Time) *time.Time {
+	var latest *time.Time
+	for _, value := range values {
+		if value == nil {
+			continue
+		}
+		utc := value.UTC()
+		if latest == nil || utc.After(*latest) {
+			latest = &utc
+		}
+	}
+	return latest
 }
 
 // scheduleOpenAIResponsesProbe 异步触发 OpenAI APIKey 账号的 Responses API 能力探测。
