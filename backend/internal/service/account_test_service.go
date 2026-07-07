@@ -38,16 +38,17 @@ const (
 
 // TestEvent represents a SSE event for account testing
 type TestEvent struct {
-	Type     string `json:"type"`
-	Text     string `json:"text,omitempty"`
-	Model    string `json:"model,omitempty"`
-	Status   string `json:"status,omitempty"`
-	Code     string `json:"code,omitempty"`
-	ImageURL string `json:"image_url,omitempty"`
-	MimeType string `json:"mime_type,omitempty"`
-	Data     any    `json:"data,omitempty"`
-	Success  bool   `json:"success,omitempty"`
-	Error    string `json:"error,omitempty"`
+	Type     string                `json:"type"`
+	Text     string                `json:"text,omitempty"`
+	Model    string                `json:"model,omitempty"`
+	Status   string                `json:"status,omitempty"`
+	Code     string                `json:"code,omitempty"`
+	ImageURL string                `json:"image_url,omitempty"`
+	MimeType string                `json:"mime_type,omitempty"`
+	Data     any                   `json:"data,omitempty"`
+	Success  bool                  `json:"success,omitempty"`
+	Error    string                `json:"error,omitempty"`
+	Usage    *KeeperKeepaliveUsage `json:"usage,omitempty"`
 }
 
 const (
@@ -71,6 +72,13 @@ type AccountTestService struct {
 	httpUpstream              HTTPUpstream
 	cfg                       *config.Config
 	tlsFPProfileService       *TLSFingerprintProfileService
+}
+
+type KeeperOpenAIProxyRequest struct {
+	Method string
+	Path   string
+	Header http.Header
+	Body   io.Reader
 }
 
 // NewAccountTestService creates a new AccountTestService
@@ -112,6 +120,131 @@ func (s *AccountTestService) validateUpstreamBaseURL(raw string) (string, error)
 		return "", err
 	}
 	return normalized, nil
+}
+
+func (s *AccountTestService) ProxyKeeperOpenAIAccount(ctx context.Context, accountID int64, in KeeperOpenAIProxyRequest) (*http.Response, error) {
+	if s == nil || s.accountRepo == nil {
+		return nil, errors.New("account test service unavailable")
+	}
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if account == nil || !account.IsOpenAI() {
+		return nil, fmt.Errorf("account %d is not an OpenAI account", accountID)
+	}
+	if !account.IsSchedulable() {
+		return nil, fmt.Errorf("account %d is not schedulable", accountID)
+	}
+	apiKey := strings.TrimSpace(account.GetOpenAIApiKey())
+	if apiKey == "" {
+		return nil, fmt.Errorf("account %d does not have OpenAI API key credentials", accountID)
+	}
+	baseURL, err := s.validateUpstreamBaseURL(account.GetOpenAIBaseURL())
+	if err != nil {
+		return nil, err
+	}
+	upstreamURL := buildKeeperOpenAIProxyURL(baseURL, in.Path)
+	req, err := http.NewRequestWithContext(ctx, in.Method, upstreamURL, in.Body)
+	if err != nil {
+		return nil, err
+	}
+	copyProxyRequestHeaders(req.Header, in.Header)
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	if orgID := strings.TrimSpace(account.GetOpenAIOrganizationID()); orgID != "" {
+		req.Header.Set("OpenAI-Organization", orgID)
+	}
+	proxyURL := ""
+	if account.ProxyID != nil && account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+	return doOpenAIHTTPUpstream(s.httpUpstream, req, proxyURL, account, s.tlsFPProfileService)
+}
+
+func (s *AccountTestService) ProxyKeeperAnthropicAccount(ctx context.Context, accountID int64, in KeeperOpenAIProxyRequest) (*http.Response, error) {
+	if s == nil || s.accountRepo == nil {
+		return nil, errors.New("account test service unavailable")
+	}
+	if s.httpUpstream == nil {
+		return nil, errors.New("http upstream unavailable")
+	}
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil {
+		return nil, err
+	}
+	if account == nil || account.Platform != PlatformAnthropic {
+		return nil, fmt.Errorf("account %d is not an Anthropic account", accountID)
+	}
+	if account.Type != AccountTypeAPIKey {
+		return nil, fmt.Errorf("account %d is not an Anthropic API key account", accountID)
+	}
+	if !account.IsSchedulable() {
+		return nil, fmt.Errorf("account %d is not schedulable", accountID)
+	}
+	apiKey := strings.TrimSpace(account.GetCredential("api_key"))
+	if apiKey == "" {
+		return nil, fmt.Errorf("account %d does not have Anthropic API key credentials", accountID)
+	}
+	baseURL := strings.TrimRight(strings.TrimSpace(account.GetBaseURL()), "/")
+	if baseURL == "" {
+		baseURL = "https://api.anthropic.com"
+	} else {
+		var err error
+		baseURL, err = s.validateUpstreamBaseURL(baseURL)
+		if err != nil {
+			return nil, err
+		}
+	}
+	upstreamURL := buildKeeperOpenAIProxyURL(baseURL, in.Path)
+	req, err := http.NewRequestWithContext(ctx, in.Method, upstreamURL, in.Body)
+	if err != nil {
+		return nil, err
+	}
+	copyProxyRequestHeaders(req.Header, in.Header)
+	setAnthropicAPIKeyAuthHeader(req.Header, account, apiKey)
+	if req.Header.Get("content-type") == "" {
+		req.Header.Set("content-type", "application/json")
+	}
+	if req.Header.Get("anthropic-version") == "" {
+		req.Header.Set("anthropic-version", "2023-06-01")
+	}
+	proxyURL := ""
+	if account.ProxyID != nil && account.Proxy != nil {
+		proxyURL = account.Proxy.URL()
+	}
+	if s.tlsFPProfileService != nil && account.IsTLSFingerprintEnabled() {
+		return s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+	}
+	return s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+}
+
+func buildKeeperOpenAIProxyURL(baseURL string, proxyPath string) string {
+	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
+	path := "/" + strings.TrimLeft(strings.TrimSpace(proxyPath), "/")
+	if strings.HasPrefix(path, "/v1/") && strings.HasSuffix(base, "/v1") {
+		path = strings.TrimPrefix(path, "/v1")
+	}
+	return base + path
+}
+
+func copyProxyRequestHeaders(dst http.Header, src http.Header) {
+	for key, values := range src {
+		if isHopByHopHeader(key) || strings.EqualFold(key, "Authorization") || strings.EqualFold(key, "X-Api-Key") {
+			continue
+		}
+		for _, value := range values {
+			dst.Add(key, value)
+		}
+	}
+}
+
+func isHopByHopHeader(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer", "transfer-encoding", "upgrade":
+		return true
+	default:
+		return false
+	}
 }
 
 // generateSessionString generates a Claude Code style session string.
@@ -173,7 +306,7 @@ func createTestPayload(modelID string) (map[string]any, error) {
 // All account types use full Claude Code client characteristics, only auth header differs
 // modelID is optional - if empty, defaults to claude.DefaultTestModel
 // mode is optional - "compact" routes OpenAI accounts to the /responses/compact probe path
-func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int64, modelID string, prompt string, mode string) error {
+func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int64, modelID string, prompt string, mode string, maxOutputTokens ...int) error {
 	ctx := c.Request.Context()
 
 	// Get account
@@ -184,7 +317,7 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 
 	// Route to platform-specific test method
 	if account.IsOpenAI() {
-		return s.testOpenAIAccountConnection(c, account, modelID, prompt, normalizeAccountTestMode(mode))
+		return s.testOpenAIAccountConnection(c, account, modelID, prompt, normalizeAccountTestMode(mode), maxOutputTokens...)
 	}
 
 	if account.IsGemini() {
@@ -494,7 +627,7 @@ func (s *AccountTestService) testBedrockAccountConnection(c *gin.Context, ctx co
 }
 
 // testOpenAIAccountConnection tests an OpenAI account's connection
-func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account *Account, modelID string, prompt string, mode string) error {
+func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account *Account, modelID string, prompt string, mode string, maxOutputTokens ...int) error {
 	ctx := c.Request.Context()
 	mode = normalizeAccountTestMode(mode)
 
@@ -581,7 +714,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	c.Writer.Flush()
 
 	// Create OpenAI Responses API payload
-	payload := createOpenAITestPayload(testModelID, isOAuth)
+	payload := createOpenAITestPayload(testModelID, prompt, isOAuth, firstPositiveInt(maxOutputTokens...))
 	payloadBytes, _ := json.Marshal(payload)
 	if accountMimicCodexCLI {
 		payloadBytes = mimicProfile.RewriteBody(payloadBytes)
@@ -1318,7 +1451,12 @@ func (s *AccountTestService) processGeminiStream(c *gin.Context, body io.Reader)
 }
 
 // createOpenAITestPayload creates a test payload for OpenAI Responses API
-func createOpenAITestPayload(modelID string, isOAuth bool) map[string]any {
+func createOpenAITestPayload(modelID string, prompt string, isOAuth bool, maxOutputTokens int) map[string]any {
+	testPrompt := strings.TrimSpace(prompt)
+	if testPrompt == "" {
+		testPrompt = "hi"
+	}
+
 	payload := map[string]any{
 		"model": modelID,
 		"input": []map[string]any{
@@ -1327,12 +1465,15 @@ func createOpenAITestPayload(modelID string, isOAuth bool) map[string]any {
 				"content": []map[string]any{
 					{
 						"type": "input_text",
-						"text": "hi",
+						"text": testPrompt,
 					},
 				},
 			},
 		},
 		"stream": true,
+	}
+	if maxOutputTokens > 0 {
+		payload["max_output_tokens"] = maxOutputTokens
 	}
 
 	// OAuth accounts using ChatGPT internal API require store: false
@@ -1540,6 +1681,9 @@ func (s *AccountTestService) processOpenAIStream(c *gin.Context, body io.Reader)
 				s.sendEvent(c, TestEvent{Type: "content", Text: delta})
 			}
 		case "response.completed", "response.done":
+			if usage := keeperUsageFromResponseEvent(data); usage != nil {
+				s.sendEvent(c, TestEvent{Type: "usage", Usage: usage})
+			}
 			s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 			return nil
 		case "response.failed":
@@ -1772,6 +1916,206 @@ func (s *AccountTestService) sendErrorAndEnd(c *gin.Context, errorMsg string) er
 	return fmt.Errorf("%s", errorMsg)
 }
 
+type KeeperKeepaliveRequest struct {
+	Model           string
+	Prompt          string
+	MaxOutputTokens int
+}
+
+type KeeperKeepaliveUsage struct {
+	InputTokens              int64 `json:"input_tokens"`
+	OutputTokens             int64 `json:"output_tokens"`
+	CachedInputTokens        int64 `json:"cached_input_tokens,omitempty"`
+	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens,omitempty"`
+	TotalTokens              int64 `json:"total_tokens"`
+}
+
+type KeeperKeepaliveBilling struct {
+	Available      bool    `json:"available"`
+	RateMultiplier float64 `json:"rate_multiplier"`
+	TotalCost      float64 `json:"total_cost,omitempty"`
+	PricingSource  string  `json:"pricing_source"`
+}
+
+type KeeperKeepaliveResult struct {
+	ID          string                  `json:"id"`
+	AccountID   int64                   `json:"account_id"`
+	AccountName string                  `json:"account_name"`
+	Platform    string                  `json:"platform"`
+	AccountType string                  `json:"account_type"`
+	Model       string                  `json:"model"`
+	Prompt      string                  `json:"prompt"`
+	ReplyText   string                  `json:"reply_text,omitempty"`
+	Summary     string                  `json:"summary,omitempty"`
+	Status      string                  `json:"status"`
+	Error       string                  `json:"error,omitempty"`
+	Usage       *KeeperKeepaliveUsage   `json:"usage,omitempty"`
+	Billing     *KeeperKeepaliveBilling `json:"billing,omitempty"`
+	StartedAt   time.Time               `json:"started_at"`
+	CompletedAt time.Time               `json:"completed_at,omitempty"`
+	LatencyMS   int64                   `json:"latency_ms"`
+}
+
+// RunKeeperKeepalive executes one low-frequency keepalive request through the
+// existing account test path, so credentials and upstream details stay inside
+// sub2apiplus.
+func (s *AccountTestService) RunKeeperKeepalive(ctx context.Context, accountID int64, req KeeperKeepaliveRequest) (*KeeperKeepaliveResult, error) {
+	startedAt := time.Now()
+	account, err := s.accountRepo.GetByID(ctx, accountID)
+	if err != nil {
+		return &KeeperKeepaliveResult{
+			ID:          startedAt.Format("20060102T150405.000000000"),
+			AccountID:   accountID,
+			Model:       strings.TrimSpace(req.Model),
+			Prompt:      strings.TrimSpace(req.Prompt),
+			Status:      "error",
+			Error:       "Account not found",
+			StartedAt:   startedAt,
+			CompletedAt: time.Now(),
+		}, err
+	}
+	if account == nil || !account.IsSchedulable() {
+		completedAt := time.Now()
+		return &KeeperKeepaliveResult{
+			ID:          startedAt.Format("20060102T150405.000000000"),
+			AccountID:   accountID,
+			AccountName: accountName(account),
+			Platform:    accountPlatform(account),
+			AccountType: accountType(account),
+			Model:       strings.TrimSpace(req.Model),
+			Prompt:      strings.TrimSpace(req.Prompt),
+			Status:      "error",
+			Error:       "Account is not schedulable",
+			StartedAt:   startedAt,
+			CompletedAt: completedAt,
+			LatencyMS:   completedAt.Sub(startedAt).Milliseconds(),
+		}, fmt.Errorf("account is not schedulable")
+	}
+	if account.Platform != PlatformOpenAI && account.Platform != PlatformAnthropic {
+		completedAt := time.Now()
+		return &KeeperKeepaliveResult{
+			ID:          startedAt.Format("20060102T150405.000000000"),
+			AccountID:   account.ID,
+			AccountName: account.Name,
+			Platform:    account.Platform,
+			AccountType: account.Type,
+			Model:       strings.TrimSpace(req.Model),
+			Prompt:      strings.TrimSpace(req.Prompt),
+			Status:      "error",
+			Error:       "Unsupported account platform",
+			StartedAt:   startedAt,
+			CompletedAt: completedAt,
+			LatencyMS:   completedAt.Sub(startedAt).Milliseconds(),
+		}, fmt.Errorf("unsupported account platform")
+	}
+
+	w := httptest.NewRecorder()
+	ginCtx, _ := gin.CreateTestContext(w)
+	ginCtx.Request = (&http.Request{}).WithContext(ctx)
+
+	model := strings.TrimSpace(req.Model)
+	prompt := strings.TrimSpace(req.Prompt)
+	testErr := s.TestAccountConnection(ginCtx, account.ID, model, prompt, AccountTestModeDefault, req.MaxOutputTokens)
+
+	completedAt := time.Now()
+	body := w.Body.String()
+	replyText, errMsg := parseTestSSEOutput(body)
+	usage := parseTestSSEUsage(body)
+	status := "success"
+	if testErr != nil || errMsg != "" {
+		status = "error"
+		if errMsg == "" && testErr != nil {
+			errMsg = testErr.Error()
+		}
+	}
+	if model == "" {
+		model = modelFromCapturedSSE(body)
+	}
+	result := &KeeperKeepaliveResult{
+		ID:          startedAt.Format("20060102T150405.000000000"),
+		AccountID:   account.ID,
+		AccountName: account.Name,
+		Platform:    account.Platform,
+		AccountType: account.Type,
+		Model:       model,
+		Prompt:      prompt,
+		ReplyText:   replyText,
+		Summary:     truncateKeeperSummary(replyText),
+		Status:      status,
+		Error:       errMsg,
+		Usage:       usage,
+		Billing: &KeeperKeepaliveBilling{
+			Available:      false,
+			RateMultiplier: account.BillingRateMultiplier(),
+			PricingSource:  "sub2apiplus",
+		},
+		StartedAt:   startedAt,
+		CompletedAt: completedAt,
+		LatencyMS:   completedAt.Sub(startedAt).Milliseconds(),
+	}
+	if status != "success" {
+		return result, fmt.Errorf("%s", errMsg)
+	}
+	return result, nil
+}
+
+func accountName(account *Account) string {
+	if account == nil {
+		return ""
+	}
+	return account.Name
+}
+
+func accountPlatform(account *Account) string {
+	if account == nil {
+		return ""
+	}
+	return account.Platform
+}
+
+func accountType(account *Account) string {
+	if account == nil {
+		return ""
+	}
+	return account.Type
+}
+
+func firstPositiveInt(values ...int) int {
+	for _, value := range values {
+		if value > 0 {
+			return value
+		}
+	}
+	return 0
+}
+
+func modelFromCapturedSSE(body string) string {
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		jsonStr := strings.TrimPrefix(line, "data: ")
+		var event TestEvent
+		if err := json.Unmarshal([]byte(jsonStr), &event); err != nil {
+			continue
+		}
+		if event.Type == "test_start" && strings.TrimSpace(event.Model) != "" {
+			return strings.TrimSpace(event.Model)
+		}
+	}
+	return ""
+}
+
+func truncateKeeperSummary(text string) string {
+	text = strings.TrimSpace(text)
+	if len([]rune(text)) <= 240 {
+		return text
+	}
+	runes := []rune(text)
+	return string(runes[:240])
+}
+
 // RunTestBackground executes an account test in-memory (no real HTTP client),
 // capturing SSE output via httptest.NewRecorder, then parses the result.
 func (s *AccountTestService) RunTestBackground(ctx context.Context, accountID int64, modelID string) (*ScheduledTestResult, error) {
@@ -1829,4 +2173,67 @@ func parseTestSSEOutput(body string) (responseText, errMsg string) {
 	}
 	responseText = strings.Join(texts, "")
 	return
+}
+
+func parseTestSSEUsage(body string) *KeeperKeepaliveUsage {
+	var usage *KeeperKeepaliveUsage
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		jsonStr := strings.TrimPrefix(line, "data: ")
+		var event TestEvent
+		if err := json.Unmarshal([]byte(jsonStr), &event); err != nil {
+			continue
+		}
+		if event.Type == "usage" && event.Usage != nil {
+			usage = event.Usage
+		}
+	}
+	return usage
+}
+
+func keeperUsageFromResponseEvent(data map[string]any) *KeeperKeepaliveUsage {
+	if usage := keeperUsageFromAny(data["usage"]); usage != nil {
+		return usage
+	}
+	responseData, _ := data["response"].(map[string]any)
+	return keeperUsageFromAny(responseData["usage"])
+}
+
+func keeperUsageFromAny(value any) *KeeperKeepaliveUsage {
+	raw, ok := value.(map[string]any)
+	if !ok || len(raw) == 0 {
+		return nil
+	}
+	usage := &KeeperKeepaliveUsage{
+		InputTokens:  int64FromAny(raw["input_tokens"]),
+		OutputTokens: int64FromAny(raw["output_tokens"]),
+		TotalTokens:  int64FromAny(raw["total_tokens"]),
+	}
+	if usage.TotalTokens == 0 {
+		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+	}
+	if details, ok := raw["input_tokens_details"].(map[string]any); ok {
+		usage.CachedInputTokens = int64FromAny(details["cached_tokens"])
+		usage.CacheCreationInputTokens = int64FromAny(details["cache_creation_tokens"])
+	}
+	return usage
+}
+
+func int64FromAny(value any) int64 {
+	switch v := value.(type) {
+	case int64:
+		return v
+	case int:
+		return int64(v)
+	case float64:
+		return int64(v)
+	case json.Number:
+		n, _ := v.Int64()
+		return n
+	default:
+		return 0
+	}
 }

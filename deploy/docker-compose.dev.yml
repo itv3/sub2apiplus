@@ -13,7 +13,7 @@ services:
     build:
       context: ..
       dockerfile: Dockerfile
-    container_name: sub2api-dev
+    container_name: sub2apiplus-dev
     restart: unless-stopped
     ports:
       - "${BIND_HOST:-127.0.0.1}:${SERVER_PORT:-8080}:8080"
@@ -41,6 +41,8 @@ services:
       - SETUP_MIGRATION_TIMEOUT_SECONDS=${SETUP_MIGRATION_TIMEOUT_SECONDS:-0}
       - TOTP_ENCRYPTION_KEY=${TOTP_ENCRYPTION_KEY:-}
       - TZ=${TZ:-Asia/Shanghai}
+      - SUB2APIPLUS_KEEPER_INTERNAL_TOKEN=${SUB2APIPLUS_KEEPER_INTERNAL_TOKEN:-}
+      - SUB2APIPLUS_KEEPER_PROJECTS=${SUB2APIPLUS_KEEPER_PROJECTS:-}
       # OpenAI HTTP upstream protocol/timeout
       - GATEWAY_OPENAI_RESPONSE_HEADER_TIMEOUT=${GATEWAY_OPENAI_RESPONSE_HEADER_TIMEOUT:-0}
       - GATEWAY_OPENAI_HTTP2_ENABLED=${GATEWAY_OPENAI_HTTP2_ENABLED:-true}
@@ -71,7 +73,7 @@ services:
 
   postgres:
     image: postgres:18-alpine
-    container_name: sub2api-postgres-dev
+    container_name: sub2apiplus-postgres-dev
     restart: unless-stopped
     volumes:
       - ./postgres_data:/var/lib/postgresql/data:Z
@@ -92,7 +94,7 @@ services:
 
   redis:
     image: redis:8-alpine
-    container_name: sub2api-redis-dev
+    container_name: sub2apiplus-redis-dev
     restart: unless-stopped
     volumes:
       - ./redis_data:/data:Z

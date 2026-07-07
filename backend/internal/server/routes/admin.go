@@ -2,6 +2,10 @@
 package routes
 
 import (
+	"crypto/subtle"
+	"os"
+	"strings"
+
 	"github.com/Wei-Shaw/sub2api/internal/handler"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -113,11 +117,34 @@ func RegisterAdminRoutes(
 
 func registerKeeperInternalRoutes(v1 *gin.RouterGroup, h *handler.Handlers, adminAuth middleware.AdminAuthMiddleware) {
 	keeper := v1.Group("/internal/keeper")
-	keeper.Use(gin.HandlerFunc(adminAuth))
+	keeper.Use(keeperInternalAuth(adminAuth))
 	{
 		keeper.GET("/accounts", h.Admin.Account.ListKeeperAccounts)
+		keeper.GET("/projects", h.Admin.Account.ListKeeperProjects)
+		keeper.GET("/state", h.Admin.Account.GetKeeperState)
+		keeper.GET("/settings", h.Admin.Account.ProxyKeeperSettings)
+		keeper.POST("/settings", h.Admin.Account.ProxyKeeperSettings)
+		keeper.POST("/run", h.Admin.Account.RunKeeperTarget)
 		keeper.GET("/accounts/:id/models", h.Admin.Account.GetAvailableModels)
 		keeper.POST("/accounts/:id/keepalive", h.Admin.Account.RecordKeeperKeepalive)
+		keeper.Any("/openai/accounts/:id/*proxy_path", h.Admin.Account.ProxyKeeperOpenAIAccount)
+		keeper.Any("/anthropic/accounts/:id/*proxy_path", h.Admin.Account.ProxyKeeperAnthropicAccount)
+	}
+}
+
+func keeperInternalAuth(adminAuth middleware.AdminAuthMiddleware) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		expected := strings.TrimSpace(os.Getenv("SUB2APIPLUS_KEEPER_INTERNAL_TOKEN"))
+		actual := strings.TrimSpace(c.GetHeader("x-api-key"))
+		if actual == "" {
+			actual = strings.TrimSpace(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "))
+		}
+		if expected != "" && actual != "" &&
+			subtle.ConstantTimeCompare([]byte(actual), []byte(expected)) == 1 {
+			c.Next()
+			return
+		}
+		gin.HandlerFunc(adminAuth)(c)
 	}
 }
 

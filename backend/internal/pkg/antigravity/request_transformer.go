@@ -706,6 +706,21 @@ func buildGenerationConfig(req *ClaudeRequest) *GeminiGenerationConfig {
 		config.MaxOutputTokens = req.MaxTokens
 	}
 
+	// Antigravity 官方模型按抓包固定 thinkingBudget，客户端 thinking 不覆盖上游发包。
+	if budget, ok := defaultAntigravityThinkingBudget(req.Model); ok {
+		config.ThinkingConfig = &GeminiThinkingConfig{
+			IncludeThoughts: true,
+			ThinkingBudget:  budget,
+		}
+		if adjusted, changed := ensureMaxTokensGreaterThanBudget(config.MaxOutputTokens, budget); changed {
+			config.MaxOutputTokens = adjusted
+		}
+		if config.MaxOutputTokens > maxLimit {
+			config.MaxOutputTokens = maxLimit
+		}
+		return config
+	}
+
 	// Thinking 配置
 	if req.Thinking != nil && (req.Thinking.Type == "enabled" || req.Thinking.Type == "adaptive") {
 		config.ThinkingConfig = &GeminiThinkingConfig{
@@ -737,16 +752,6 @@ func buildGenerationConfig(req *ClaudeRequest) *GeminiGenerationConfig {
 			}
 		}
 		config.ThinkingConfig.ThinkingBudget = budget
-	} else if req.Thinking == nil {
-		if budget, ok := defaultAntigravityThinkingBudget(req.Model); ok {
-			config.ThinkingConfig = &GeminiThinkingConfig{
-				IncludeThoughts: true,
-				ThinkingBudget:  budget,
-			}
-			if adjusted, changed := ensureMaxTokensGreaterThanBudget(config.MaxOutputTokens, budget); changed {
-				config.MaxOutputTokens = adjusted
-			}
-		}
 	}
 
 	if config.MaxOutputTokens > maxLimit {

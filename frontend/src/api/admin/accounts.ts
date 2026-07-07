@@ -482,6 +482,33 @@ export async function getAvailableModels(id: number): Promise<ClaudeModel[]> {
   return data
 }
 
+export async function getKeeperProjects(): Promise<string[]> {
+  const { data } = await apiClient.get<{ projects: string[] }>('/internal/keeper/projects')
+  return data.projects || []
+}
+
+export async function getKeeperState(): Promise<any> {
+  const { data } = await apiClient.get<any>('/internal/keeper/state')
+  return data || {}
+}
+
+export async function getKeeperSettings(): Promise<any> {
+  const { data } = await apiClient.get<any>('/internal/keeper/settings')
+  return data || {}
+}
+
+export async function saveKeeperSettings(payload: Record<string, unknown>): Promise<any> {
+  const { data } = await apiClient.post<any>('/internal/keeper/settings', payload)
+  return data || {}
+}
+
+export async function runKeeperTarget(target: string): Promise<{ status: string }> {
+  const { data } = await apiClient.post<{ status: string }>('/internal/keeper/run', null, {
+    params: { target }
+  })
+  return data
+}
+
 export interface SyncUpstreamModelsResult {
   models: string[]
 }
@@ -833,6 +860,11 @@ export const accountsAPI = {
   resetTempUnschedulable,
   setSchedulable,
   getAvailableModels,
+  getKeeperProjects,
+  getKeeperState,
+  getKeeperSettings,
+  saveKeeperSettings,
+  runKeeperTarget,
   syncUpstreamModels,
   syncUpstreamModelsPreview,
   generateAuthUrl,

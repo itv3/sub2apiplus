@@ -1,7 +1,7 @@
 # =============================================================================
 # Sub2API Plus Docker Compose - Standalone Configuration
 # =============================================================================
-# This configuration runs only the Sub2API application.
+# This configuration runs only the Sub2API Plus application.
 # PostgreSQL and Redis must be provided externally.
 #
 # Usage:
@@ -13,7 +13,7 @@
 services:
   sub2api:
     image: ghcr.io/itv3/sub2apiplus:latest
-    container_name: sub2api
+    container_name: sub2apiplus
     restart: unless-stopped
     ulimits:
       nofile:
@@ -85,6 +85,12 @@ services:
       # Timezone Configuration
       # =======================================================================
       - TZ=${TZ:-Asia/Shanghai}
+
+      # =======================================================================
+      # Plus Keeper Integration (optional)
+      # =======================================================================
+      - SUB2APIPLUS_KEEPER_INTERNAL_TOKEN=${SUB2APIPLUS_KEEPER_INTERNAL_TOKEN:-}
+      - SUB2APIPLUS_KEEPER_PROJECTS=${SUB2APIPLUS_KEEPER_PROJECTS:-}
 
       # =======================================================================
       # Gemini OAuth Configuration (optional)

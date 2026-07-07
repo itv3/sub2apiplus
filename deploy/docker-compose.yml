@@ -17,7 +17,7 @@ services:
   # ===========================================================================
   sub2api:
     image: ghcr.io/itv3/sub2apiplus:latest
-    container_name: sub2api
+    container_name: sub2apiplus
     restart: unless-stopped
     ulimits:
       nofile:
@@ -117,6 +117,12 @@ services:
       - TZ=${TZ:-Asia/Shanghai}
 
       # =======================================================================
+      # Plus Keeper Integration (optional)
+      # =======================================================================
+      - SUB2APIPLUS_KEEPER_INTERNAL_TOKEN=${SUB2APIPLUS_KEEPER_INTERNAL_TOKEN:-}
+      - SUB2APIPLUS_KEEPER_PROJECTS=${SUB2APIPLUS_KEEPER_PROJECTS:-}
+
+      # =======================================================================
       # Gemini OAuth Configuration (for Gemini accounts)
       # =======================================================================
       - GEMINI_OAUTH_CLIENT_ID=${GEMINI_OAUTH_CLIENT_ID:-}
@@ -195,7 +201,7 @@ services:
   # ===========================================================================
   postgres:
     image: postgres:18-alpine
-    container_name: sub2api-postgres
+    container_name: sub2apiplus-postgres
     restart: unless-stopped
     ulimits:
       nofile:
@@ -232,7 +238,7 @@ services:
   # ===========================================================================
   redis:
     image: redis:8-alpine
-    container_name: sub2api-redis
+    container_name: sub2apiplus-redis
     restart: unless-stopped
     ulimits:
       nofile:

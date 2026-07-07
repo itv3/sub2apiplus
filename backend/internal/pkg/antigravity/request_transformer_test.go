@@ -296,28 +296,28 @@ func TestBuildGenerationConfig_ThinkingDynamicBudget(t *testing.T) {
 	}{
 		{
 			name:        "enabled without budget defaults to dynamic (-1)",
-			model:       "claude-opus-4-6-thinking",
+			model:       "claude-opus-4-5-thinking",
 			thinking:    &ThinkingConfig{Type: "enabled"},
 			wantBudget:  -1,
 			wantPresent: true,
 		},
 		{
 			name:        "enabled with budget uses the provided value",
-			model:       "claude-opus-4-6-thinking",
+			model:       "claude-opus-4-5-thinking",
 			thinking:    &ThinkingConfig{Type: "enabled", BudgetTokens: 1024},
 			wantBudget:  1024,
 			wantPresent: true,
 		},
 		{
 			name:        "enabled with -1 budget uses dynamic (-1)",
-			model:       "claude-opus-4-6-thinking",
+			model:       "claude-opus-4-5-thinking",
 			thinking:    &ThinkingConfig{Type: "enabled", BudgetTokens: -1},
 			wantBudget:  -1,
 			wantPresent: true,
 		},
 		{
 			name:        "adaptive on opus4.6 maps to high budget (24576)",
-			model:       "claude-opus-4-6-thinking",
+			model:       "claude-opus-4-7-thinking",
 			thinking:    &ThinkingConfig{Type: "adaptive", BudgetTokens: 20000},
 			wantBudget:  ClaudeAdaptiveHighThinkingBudgetTokens,
 			wantPresent: true,
@@ -331,7 +331,7 @@ func TestBuildGenerationConfig_ThinkingDynamicBudget(t *testing.T) {
 		},
 		{
 			name:        "disabled does not emit thinkingConfig",
-			model:       "claude-opus-4-6-thinking",
+			model:       "claude-opus-4-5-thinking",
 			thinking:    &ThinkingConfig{Type: "disabled", BudgetTokens: 1024},
 			wantBudget:  0,
 			wantPresent: false,
@@ -399,6 +399,57 @@ func TestBuildGenerationConfig_OfficialAntigravityDefaultThinkingBudget(t *testi
 			require.True(t, cfg.ThinkingConfig.IncludeThoughts)
 			require.Equal(t, tt.wantBudget, cfg.ThinkingConfig.ThinkingBudget)
 		})
+	}
+}
+
+func TestBuildGenerationConfig_OfficialAntigravityThinkingBudgetIgnoresClientThinking(t *testing.T) {
+	tests := []struct {
+		name     string
+		thinking *ThinkingConfig
+	}{
+		{
+			name:     "nil thinking",
+			thinking: nil,
+		},
+		{
+			name:     "enabled without budget",
+			thinking: &ThinkingConfig{Type: "enabled"},
+		},
+		{
+			name:     "enabled with client budget",
+			thinking: &ThinkingConfig{Type: "enabled", BudgetTokens: 24576},
+		},
+		{
+			name:     "adaptive",
+			thinking: &ThinkingConfig{Type: "adaptive"},
+		},
+		{
+			name:     "disabled",
+			thinking: &ThinkingConfig{Type: "disabled"},
+		},
+		{
+			name:     "unsupported low value",
+			thinking: &ThinkingConfig{Type: "low"},
+		},
+	}
+
+	for _, model := range OfficialModelIDs() {
+		wantBudget, ok := defaultAntigravityThinkingBudget(model)
+		require.True(t, ok, "official model %s should have default thinking budget", model)
+
+		for _, tt := range tests {
+			t.Run(model+"/"+tt.name, func(t *testing.T) {
+				cfg := buildGenerationConfig(&ClaudeRequest{
+					Model:    model,
+					Thinking: tt.thinking,
+				})
+
+				require.NotNil(t, cfg)
+				require.NotNil(t, cfg.ThinkingConfig)
+				require.True(t, cfg.ThinkingConfig.IncludeThoughts)
+				require.Equal(t, wantBudget, cfg.ThinkingConfig.ThinkingBudget)
+			})
+		}
 	}
 }
 

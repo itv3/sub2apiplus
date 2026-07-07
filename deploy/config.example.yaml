@@ -1,5 +1,5 @@
-# Sub2API Configuration File
-# Sub2API 配置文件
+# Sub2API Plus Configuration File
+# Sub2API Plus 配置文件
 #
 # Copy this file to /etc/sub2api/config.yaml and modify as needed
 # 复制此文件到 /etc/sub2api/config.yaml 并根据需要修改
@@ -891,7 +891,7 @@ totp:
 
 # =============================================================================
 # LinuxDo Connect OAuth Login (SSO)
-# LinuxDo Connect OAuth 登录（用于 Sub2API 用户登录）
+# LinuxDo Connect OAuth 登录（用于 Sub2API Plus 用户登录）
 # =============================================================================
 linuxdo_connect:
   enabled: false
@@ -916,7 +916,7 @@ linuxdo_connect:
 
 # =============================================================================
 # Generic OIDC OAuth Login (SSO)
-# 通用 OIDC OAuth 登录（用于 Sub2API 用户登录）
+# 通用 OIDC OAuth 登录（用于 Sub2API Plus 用户登录）
 # =============================================================================
 oidc_connect:
   enabled: false
@@ -1055,8 +1055,8 @@ turnstile:
 # Gemini OAuth (Required for Gemini accounts)
 # Gemini OAuth 配置（Gemini 账户必需）
 # =============================================================================
-# Sub2API supports TWO Gemini OAuth modes:
-# Sub2API 支持两种 Gemini OAuth 模式：
+# Sub2API Plus supports TWO Gemini OAuth modes:
+# Sub2API Plus 支持两种 Gemini OAuth 模式：
 #
 # 1. Code Assist OAuth (requires GCP project_id)
 # 1. Code Assist OAuth（需要 GCP project_id）

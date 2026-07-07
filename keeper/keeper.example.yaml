@@ -1,0 +1,32 @@
+timezone: Asia/Shanghai
+scan_interval_seconds: 30
+state_path: /app/data/state.json
+projects_root: /workspace/projects
+runtime_root: /app/data/runtime
+prompt_guard: 注意：仅进行代码分析，在没有得到我的明确同意前禁止修改任何代码。
+
+prompt_bank:
+  - id: global-001
+    scope: global
+    enabled: true
+    text: 先看一下这个仓库的 README 和目录结构，帮我判断它主要解决什么问题，核心入口大概在哪里。
+  - id: global-002
+    scope: global
+    enabled: true
+    text: 帮我从项目结构入手，找出最值得先理解的三个模块，并说明它们之间可能怎么协作。
+  - id: homeproxy-001
+    scope: project
+    project_path: /workspace/projects/homeproxy
+    enabled: true
+    text: 先看一下 homeproxy 的 README 和目录结构，帮我概括它在 OpenWrt 上提供哪些代理相关能力。
+
+sub2apiplus:
+  base_url: http://sub2apiplus:8080
+  internal_token: ${SUB2APIPLUS_KEEPER_INTERNAL_TOKEN}
+  timeout_seconds: 180
+
+web:
+  enabled: true
+  listen: 0.0.0.0:38090
+  username: ${KEEPER_WEB_USERNAME}
+  password: ${KEEPER_WEB_PASSWORD}

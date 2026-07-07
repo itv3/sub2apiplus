@@ -1,0 +1,5 @@
+ai-keeper
+data/
+*.tmp
+.env
+.DS_Store

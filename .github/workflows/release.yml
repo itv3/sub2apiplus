@@ -196,7 +196,7 @@ jobs:
           password: ${{ secrets.DOCKERHUB_TOKEN }}
           repository: ${{ secrets.DOCKERHUB_USERNAME }}/sub2apiplus
           short-description: "Sub2API Plus - AI API Gateway Platform"
-          readme-filepath: ./deploy/DOCKER.md
+          readme-filepath: ./README.md
 
       # Send Telegram notification
       - name: Send Telegram Notification
