@@ -555,8 +555,13 @@ const keepaliveOverviewRows = computed(() => {
   const targets = Array.isArray(keeperState.value?.targets) ? keeperState.value.targets : []
   const configured = Array.isArray(keeperState.value?.configured_targets) ? keeperState.value.configured_targets : []
   if (overview.length > 0) {
-    const targetMap = new Map(targets.map((target: any) => [String(target.name || target.Name || ''), normalizeKeeperTarget(target, configured)]))
-    return overview.map((row: any) => normalizeOverviewRow(row, targetMap.get(String(row.name || row.Name || ''))))
+    const normalizedTargets = targets.map((target: any) => normalizeKeeperTarget(target, configured))
+    const targetByAccountID = new Map(normalizedTargets.filter((target: any) => target.account_id > 0).map((target: any) => [target.account_id, target]))
+    const targetByName = new Map(normalizedTargets.map((target: any) => [String(target.name || ''), target]))
+    return overview.map((row: any) => {
+      const accountID = Number(row.account_id || row.AccountID || 0)
+      return normalizeOverviewRow(row, targetByAccountID.get(accountID) || targetByName.get(String(row.name || row.Name || '')))
+    })
   }
   const configuredNames = new Set(configured.map((item: any) => String(item.name || item.Name || '').trim()).filter(Boolean))
   return targets
@@ -864,6 +869,7 @@ function normalizeOverviewRow(row: any, target?: any): any {
     success_count: Number(row.success_count ?? row.SuccessCount ?? target?.success_count ?? 0),
     failure_count: Number(row.failure_count ?? row.FailureCount ?? target?.failure_count ?? 0),
     last_keepalive_started_at: row.last_started_at || row.LastStartedAt || target?.last_keepalive_started_at,
+    last_keepalive_received_at: row.last_keepalive_received_at || row.LastKeepaliveReceivedAt || row.last_finished_at || row.LastFinishedAt || target?.last_keepalive_received_at,
     last_finished_at: row.last_finished_at || row.LastFinishedAt || target?.last_finished_at,
     next_run_at: row.next_run_at || row.NextRunAt || target?.next_run_at,
     usage_24h_cost: row.usage_24h_cost || row.Usage24hCost || target?.usage_24h_cost,

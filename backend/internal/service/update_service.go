@@ -534,7 +534,11 @@ func compareVersions(current, latest string) int {
 }
 
 func parseVersion(v string) [3]int {
+	v = strings.TrimSpace(v)
 	v = strings.TrimPrefix(v, "v")
+	if idx := strings.IndexByte(v, '-'); idx >= 0 {
+		v = v[:idx]
+	}
 	parts := strings.Split(v, ".")
 	result := [3]int{0, 0, 0}
 	for i := 0; i < len(parts) && i < 3; i++ {

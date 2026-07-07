@@ -25,7 +25,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var version = "0.1.144-4"
+var version = "0.1.146-2"
 
 const (
 	defaultClientTimeoutSeconds = 2700
@@ -976,11 +976,17 @@ func (k *Keeper) targetStateLocked(target TargetConfig) *TargetState {
 		key = slugify(target.Name)
 	}
 	state := k.state.Targets[key]
-	if state == nil && target.Name != "" && target.Name != key {
-		if legacy := k.state.Targets[target.Name]; legacy != nil {
-			state = legacy
-			delete(k.state.Targets, target.Name)
-			k.state.Targets[key] = state
+	legacyKey := strings.TrimSpace(target.Name)
+	if legacyKey != "" && legacyKey != key {
+		if legacy := k.state.Targets[legacyKey]; legacy != nil && legacy != state && isCompatibleLegacyTargetState(legacy, target) {
+			if state != nil {
+				mergeTargetState(state, legacy)
+				delete(k.state.Targets, legacyKey)
+			} else {
+				state = legacy
+				delete(k.state.Targets, legacyKey)
+				k.state.Targets[key] = state
+			}
 		}
 	}
 	if state == nil {
@@ -992,6 +998,156 @@ func (k *Keeper) targetStateLocked(target TargetConfig) *TargetState {
 	state.Model = target.Model
 	state.Enabled = target.Enabled
 	return state
+}
+
+func isCompatibleLegacyTargetState(state *TargetState, target TargetConfig) bool {
+	if state == nil {
+		return false
+	}
+	if state.AccountID <= 0 || target.AccountID <= 0 {
+		return true
+	}
+	return state.AccountID == target.AccountID
+}
+
+func mergeTargetState(dst *TargetState, src *TargetState) {
+	if dst == nil || src == nil || dst == src {
+		return
+	}
+
+	srcLatest := targetStateLastEventTime(src)
+	dstLatest := targetStateLastEventTime(dst)
+	srcIsNewer := !srcLatest.IsZero() && (dstLatest.IsZero() || srcLatest.After(dstLatest))
+
+	if strings.TrimSpace(dst.Name) == "" {
+		dst.Name = src.Name
+	}
+	if dst.AccountID <= 0 {
+		dst.AccountID = src.AccountID
+	}
+	if strings.TrimSpace(dst.Model) == "" {
+		dst.Model = src.Model
+	}
+	dst.Enabled = dst.Enabled || src.Enabled
+	dst.Running = dst.Running || src.Running
+	dst.LastKeepaliveStartedAt = laterTime(dst.LastKeepaliveStartedAt, src.LastKeepaliveStartedAt)
+	dst.LastKeepaliveReceivedAt = laterTime(dst.LastKeepaliveReceivedAt, src.LastKeepaliveReceivedAt)
+	if dst.NextRunAt.IsZero() || (!src.NextRunAt.IsZero() && src.NextRunAt.After(dst.NextRunAt)) {
+		dst.NextRunAt = src.NextRunAt
+	}
+	if src.DailyDate > dst.DailyDate {
+		dst.DailyDate = src.DailyDate
+		dst.DailyKeepaliveCount = src.DailyKeepaliveCount
+	} else if src.DailyDate == dst.DailyDate && src.DailyKeepaliveCount > dst.DailyKeepaliveCount {
+		dst.DailyKeepaliveCount = src.DailyKeepaliveCount
+	}
+	if srcIsNewer {
+		dst.ConsecutiveFailures = src.ConsecutiveFailures
+		dst.LastStatus = src.LastStatus
+		dst.LastMessageSummary = src.LastMessageSummary
+		dst.LastError = src.LastError
+	} else {
+		if strings.TrimSpace(dst.LastStatus) == "" {
+			dst.LastStatus = src.LastStatus
+		}
+		if strings.TrimSpace(dst.LastMessageSummary) == "" {
+			dst.LastMessageSummary = src.LastMessageSummary
+		}
+		if strings.TrimSpace(dst.LastError) == "" {
+			dst.LastError = src.LastError
+		}
+		if dst.ConsecutiveFailures == 0 {
+			dst.ConsecutiveFailures = src.ConsecutiveFailures
+		}
+	}
+	if strings.TrimSpace(dst.ClientStatus) == "" {
+		dst.ClientStatus = src.ClientStatus
+	}
+	if strings.TrimSpace(dst.ClientStatusDetail) == "" {
+		dst.ClientStatusDetail = src.ClientStatusDetail
+	}
+	if dst.ClientConnectedAt.IsZero() {
+		dst.ClientConnectedAt = src.ClientConnectedAt
+	}
+	dst.Sessions = mergeSessions(dst.Sessions, src.Sessions)
+	dst.Running = dst.Running || hasRunningSession(dst.Sessions)
+}
+
+func mergeSessions(primary []Session, extra []Session) []Session {
+	if len(extra) == 0 {
+		return primary
+	}
+	merged := append([]Session(nil), primary...)
+	indexByID := make(map[string]int, len(merged))
+	for i, session := range merged {
+		if strings.TrimSpace(session.ID) == "" {
+			continue
+		}
+		indexByID[session.ID] = i
+	}
+	for _, session := range extra {
+		if strings.TrimSpace(session.ID) != "" {
+			if idx, ok := indexByID[session.ID]; ok {
+				merged[idx] = mergeSession(merged[idx], session)
+				continue
+			}
+			indexByID[session.ID] = len(merged)
+		}
+		merged = append(merged, session)
+	}
+	sort.SliceStable(merged, func(i, j int) bool {
+		left := sessionEventTime(merged[i])
+		right := sessionEventTime(merged[j])
+		if left.Equal(right) {
+			return merged[i].ID < merged[j].ID
+		}
+		if left.IsZero() {
+			return true
+		}
+		if right.IsZero() {
+			return false
+		}
+		return left.Before(right)
+	})
+	return merged
+}
+
+func mergeSession(dst Session, src Session) Session {
+	if dst.Status == "running" && src.Status != "running" {
+		return src
+	}
+	if dst.CompletedAt.IsZero() && !src.CompletedAt.IsZero() {
+		return src
+	}
+	return dst
+}
+
+func targetStateLastEventTime(state *TargetState) time.Time {
+	if state == nil {
+		return time.Time{}
+	}
+	latest := laterTime(state.LastKeepaliveStartedAt, state.LastKeepaliveReceivedAt)
+	for _, session := range state.Sessions {
+		latest = laterTime(latest, sessionEventTime(session))
+	}
+	return latest
+}
+
+func sessionEventTime(session Session) time.Time {
+	if !session.CompletedAt.IsZero() {
+		return session.CompletedAt
+	}
+	return session.StartedAt
+}
+
+func laterTime(left, right time.Time) time.Time {
+	if left.IsZero() {
+		return right
+	}
+	if right.IsZero() || left.After(right) {
+		return left
+	}
+	return right
 }
 
 func (k *Keeper) currentTargets() []TargetConfig {

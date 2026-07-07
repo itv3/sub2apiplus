@@ -62,3 +62,43 @@ func TestUpdateServicePerformUpdateNoUpdateReturnsSentinel(t *testing.T) {
 	require.True(t, errors.Is(err, ErrNoUpdateAvailable))
 	require.ErrorIs(t, err, ErrNoUpdateAvailable)
 }
+
+func TestCompareVersionsIgnoresBuildSuffix(t *testing.T) {
+	tests := []struct {
+		name    string
+		current string
+		latest  string
+		want    int
+	}{
+		{
+			name:    "same upstream version with fork suffix",
+			current: "0.1.146-1",
+			latest:  "0.1.146",
+			want:    0,
+		},
+		{
+			name:    "same upstream version with v prefix and fork suffix",
+			current: "v0.1.146-1",
+			latest:  "v0.1.146",
+			want:    0,
+		},
+		{
+			name:    "older upstream base version with fork suffix",
+			current: "v0.1.145-1",
+			latest:  "v0.1.146",
+			want:    -1,
+		},
+		{
+			name:    "newer upstream base version with fork suffix",
+			current: "v0.1.147-1",
+			latest:  "v0.1.146",
+			want:    1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			require.Equal(t, tt.want, compareVersions(tt.current, tt.latest))
+		})
+	}
+}

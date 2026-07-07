@@ -83,6 +83,81 @@ func TestTargetStateUsesAccountIDAndMigratesLegacyNameKey(t *testing.T) {
 	}
 }
 
+func TestTargetStateMergesCompatibleLegacyNameKeyWhenCanonicalExists(t *testing.T) {
+	olderStarted := time.Date(2026, 7, 7, 23, 49, 47, 0, time.UTC)
+	olderCompleted := time.Date(2026, 7, 7, 23, 52, 46, 0, time.UTC)
+	newerStarted := time.Date(2026, 7, 8, 5, 55, 48, 0, time.UTC)
+	newerCompleted := time.Date(2026, 7, 8, 5, 58, 47, 0, time.UTC)
+	k := &Keeper{
+		state: State{Targets: map[string]*TargetState{
+			"8": {
+				Name:                    "anyrouter_Anthropic_czs",
+				AccountID:               8,
+				LastStatus:              "error",
+				LastError:               "new error",
+				LastKeepaliveReceivedAt: newerCompleted,
+				Sessions: []Session{{
+					ID:          "new",
+					Status:      "error",
+					StartedAt:   newerStarted,
+					CompletedAt: newerCompleted,
+					Error:       "new error",
+				}},
+			},
+			"anyrouter_Anthropic_czs": {
+				Name:                    "anyrouter_Anthropic_czs",
+				AccountID:               8,
+				LastStatus:              "error",
+				LastError:               "old error",
+				LastKeepaliveReceivedAt: olderCompleted,
+				Sessions: []Session{{
+					ID:          "old",
+					Status:      "error",
+					StartedAt:   olderStarted,
+					CompletedAt: olderCompleted,
+					Error:       "old error",
+				}},
+			},
+		}},
+	}
+
+	state := k.targetStateLocked(TargetConfig{ID: "8", Name: "anyrouter_Anthropic_czs", AccountID: 8, Model: "claude-opus-4-8[1m]"})
+
+	if _, ok := k.state.Targets["anyrouter_Anthropic_czs"]; ok {
+		t.Fatal("compatible legacy name key was not removed")
+	}
+	if got := k.state.Targets["8"]; got != state {
+		t.Fatal("canonical account id state was not preserved")
+	}
+	if len(state.Sessions) != 2 {
+		t.Fatalf("merged sessions = %d, want 2", len(state.Sessions))
+	}
+	if state.Sessions[0].ID != "old" || state.Sessions[1].ID != "new" {
+		t.Fatalf("merged sessions order = [%s %s], want [old new]", state.Sessions[0].ID, state.Sessions[1].ID)
+	}
+	if state.LastError != "new error" {
+		t.Fatalf("last error = %q, want newest canonical error", state.LastError)
+	}
+}
+
+func TestTargetStateDoesNotMergeLegacyNameKeyForDifferentAccountID(t *testing.T) {
+	k := &Keeper{
+		state: State{Targets: map[string]*TargetState{
+			"8":      {Name: "shared", AccountID: 8},
+			"shared": {Name: "shared", AccountID: 9, Running: true},
+		}},
+	}
+
+	state := k.targetStateLocked(TargetConfig{ID: "8", Name: "shared", AccountID: 8, Model: "claude-opus-4-8[1m]"})
+
+	if state.Running {
+		t.Fatal("different-account legacy state was merged into canonical state")
+	}
+	if _, ok := k.state.Targets["shared"]; !ok {
+		t.Fatal("different-account legacy name key was removed")
+	}
+}
+
 func TestPrepareRuntimeUsesTargetIDForWorkerDir(t *testing.T) {
 	k := &Keeper{cfg: Config{RuntimeRoot: t.TempDir()}}
 
