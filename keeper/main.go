@@ -477,7 +477,6 @@ func (k *Keeper) scan(ctx context.Context) {
 		k.resetDailyLocked(state, now)
 		if !target.Due && !target.NextKeepaliveAt.IsZero() && now.Before(target.NextKeepaliveAt.In(k.location)) {
 			state.NextRunAt = target.NextKeepaliveAt.In(k.location)
-			state.Running = false
 			k.saveStateLocked()
 			k.mu.Unlock()
 			continue
@@ -522,10 +521,10 @@ func (k *Keeper) runTarget(ctx context.Context, target TargetConfig) {
 	state.LastKeepaliveReceivedAt = completedAt
 	k.resetDailyLocked(state, completedAt)
 
-	last := len(state.Sessions) - 1
-	if last < 0 {
-		k.mu.Unlock()
-		return
+	sessionIndex := findSessionIndexByID(state.Sessions, session.ID)
+	if sessionIndex < 0 {
+		state.Sessions = append(state.Sessions, session)
+		sessionIndex = len(state.Sessions) - 1
 	}
 	if err != nil {
 		result.ID = session.ID
@@ -542,14 +541,16 @@ func (k *Keeper) runTarget(ctx context.Context, target TargetConfig) {
 		result.StartedAt = startedAt
 		result.CompletedAt = completedAt
 		result.LatencyMS = completedAt.Sub(startedAt).Milliseconds()
-		state.Sessions[last] = result
-		state.Sessions[last].Status = "error"
+		state.Sessions[sessionIndex] = result
+		state.Sessions[sessionIndex].Status = "error"
+		state.Running = hasRunningSession(state.Sessions)
 		state.LastStatus = "error"
 		state.LastError = result.Error
 		state.LastMessageSummary = firstNonEmpty(result.Summary, result.ReplyText, result.Error)
 		state.ConsecutiveFailures++
 		state.NextRunAt = completedAt.Add(time.Duration(maxInt(target.IntervalMinutes, 1)) * time.Minute)
-		recorded := state.Sessions[last]
+		k.trimSessionsLocked(state)
+		recorded := result
 		k.saveStateLocked()
 		k.mu.Unlock()
 		if billing, err := k.recordKeepalive(context.Background(), target, recorded); err == nil && billing != nil {
@@ -558,31 +559,47 @@ func (k *Keeper) runTarget(ctx context.Context, target TargetConfig) {
 		return
 	}
 
-	state.Sessions[last] = result
-	state.Sessions[last].ID = session.ID
-	state.Sessions[last].TargetName = target.Name
-	state.Sessions[last].AccountID = target.AccountID
-	state.Sessions[last].AccountName = target.Name
-	state.Sessions[last].Platform = target.Platform
-	state.Sessions[last].AccountType = target.AccountType
-	state.Sessions[last].Model = firstNonEmpty(result.Model, target.Model)
-	state.Sessions[last].Mode = normalizeMode(target.Mode)
-	state.Sessions[last].Prompt = prompt
-	state.Sessions[last].Status = "success"
-	state.Sessions[last].StartedAt = startedAt
-	state.Sessions[last].CompletedAt = completedAt
-	if state.Sessions[last].LatencyMS == 0 {
-		state.Sessions[last].LatencyMS = completedAt.Sub(startedAt).Milliseconds()
+	state.Sessions[sessionIndex] = result
+	state.Sessions[sessionIndex].ID = session.ID
+	state.Sessions[sessionIndex].TargetName = target.Name
+	state.Sessions[sessionIndex].AccountID = target.AccountID
+	state.Sessions[sessionIndex].AccountName = target.Name
+	state.Sessions[sessionIndex].Platform = target.Platform
+	state.Sessions[sessionIndex].AccountType = target.AccountType
+	state.Sessions[sessionIndex].Model = firstNonEmpty(result.Model, target.Model)
+	state.Sessions[sessionIndex].Mode = normalizeMode(target.Mode)
+	state.Sessions[sessionIndex].Prompt = prompt
+	state.Sessions[sessionIndex].Status = "success"
+	state.Sessions[sessionIndex].StartedAt = startedAt
+	state.Sessions[sessionIndex].CompletedAt = completedAt
+	if state.Sessions[sessionIndex].LatencyMS == 0 {
+		state.Sessions[sessionIndex].LatencyMS = completedAt.Sub(startedAt).Milliseconds()
 	}
+	state.Running = hasRunningSession(state.Sessions)
 	state.LastError = ""
 	state.LastStatus = "success"
-	state.LastMessageSummary = firstNonEmpty(state.Sessions[last].Summary, state.Sessions[last].ReplyText)
+	state.LastMessageSummary = firstNonEmpty(state.Sessions[sessionIndex].Summary, state.Sessions[sessionIndex].ReplyText)
 	state.ConsecutiveFailures = 0
 	state.DailyKeepaliveCount++
 	state.NextRunAt = completedAt.Add(time.Duration(maxInt(target.IntervalMinutes, 1)) * time.Minute)
 	k.trimSessionsLocked(state)
 	k.saveStateLocked()
-	recorded := state.Sessions[last]
+	recorded := result
+	recorded.ID = session.ID
+	recorded.TargetName = target.Name
+	recorded.AccountID = target.AccountID
+	recorded.AccountName = target.Name
+	recorded.Platform = target.Platform
+	recorded.AccountType = target.AccountType
+	recorded.Model = firstNonEmpty(result.Model, target.Model)
+	recorded.Mode = normalizeMode(target.Mode)
+	recorded.Prompt = prompt
+	recorded.Status = "success"
+	recorded.StartedAt = startedAt
+	recorded.CompletedAt = completedAt
+	if recorded.LatencyMS == 0 {
+		recorded.LatencyMS = completedAt.Sub(startedAt).Milliseconds()
+	}
 	k.mu.Unlock()
 	if billing, err := k.recordKeepalive(context.Background(), target, recorded); err == nil && billing != nil {
 		k.applySessionBilling(target, session.ID, *billing)
@@ -1724,6 +1741,27 @@ func hasSuccessfulSession(sessions []Session) bool {
 		}
 	}
 	return false
+}
+
+func hasRunningSession(sessions []Session) bool {
+	for i := len(sessions) - 1; i >= 0; i-- {
+		if sessions[i].Status == "running" {
+			return true
+		}
+	}
+	return false
+}
+
+func findSessionIndexByID(sessions []Session, id string) int {
+	if id == "" {
+		return -1
+	}
+	for i := len(sessions) - 1; i >= 0; i-- {
+		if sessions[i].ID == id {
+			return i
+		}
+	}
+	return -1
 }
 
 func stableHash(value string) uint64 {
