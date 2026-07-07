@@ -145,16 +145,15 @@ func TestGatewayService_isModelSupportedByAccountWithContext_ThinkingMode(t *tes
 			thinkingEnabled: true,
 			expected:        true, // claude-sonnet-4-5-thinking 匹配 claude-*
 		},
-		// 场景 7: 只配置 thinking 变体但没有基础模型映射 → 返回 false
-		// mapAntigravityModel 找不到 claude-opus-4-6 的映射
+		// 场景 7: 只配置官方 thinking 变体时，历史入口可通过兼容映射落到该官方模型
 		{
-			name: "opus_thinking_no_base_mapping_returns_false",
+			name: "opus_thinking_alias_matches_official_target",
 			modelMapping: map[string]any{
 				"claude-opus-4-6-thinking": "claude-opus-4-6-thinking",
 			},
 			requestedModel:  "claude-opus-4-6",
 			thinkingEnabled: true,
-			expected:        false,
+			expected:        true,
 		},
 	}
 

@@ -127,10 +127,6 @@ func newDefaultPersistentExecutor(k *Keeper, account TargetConfig) (accountPersi
 	}
 }
 
-func newCommandPersistentExecutor(k *Keeper, _ TargetConfig) (accountPersistentExecutor, error) {
-	return commandPersistentExecutor{keeper: k}, nil
-}
-
 func (k *Keeper) codexPath() string {
 	return "codex"
 }
@@ -315,10 +311,13 @@ func (k *Keeper) canResumeAccount(account TargetConfig) bool {
 }
 
 func (k *Keeper) targetStateForPersistentLocked(target TargetConfig) *TargetState {
+	if state := k.targetStateByPersistentIDLocked(targetID(target)); state != nil {
+		return state
+	}
 	if state := k.state.Targets[target.Name]; state != nil {
 		return state
 	}
-	return k.targetStateByPersistentIDLocked(targetID(target))
+	return nil
 }
 
 func (k *Keeper) targetStateByPersistentIDLocked(id string) *TargetState {
@@ -445,40 +444,6 @@ func (k *Keeper) updateClientStatusByID(accountID string, status string, detail 
 			state.ClientConnectedAt = time.Time{}
 		}
 		k.saveStateLocked()
-	}
-}
-
-type commandPersistentExecutor struct {
-	keeper *Keeper
-}
-
-func (e commandPersistentExecutor) Ensure(context.Context, persistentExecution) error {
-	return nil
-}
-
-func (e commandPersistentExecutor) Execute(ctx context.Context, req persistentExecution) (persistentExecutionResult, error) {
-	_ = ctx
-	_ = req
-	return persistentExecutionResult{}, fmt.Errorf("短命令执行器已禁用")
-}
-
-func (e commandPersistentExecutor) Close() error {
-	return nil
-}
-
-func persistentResultFromSession(session Session) persistentExecutionResult {
-	return persistentExecutionResult{
-		ExitCode:        session.ExitCode,
-		Command:         session.Command,
-		CommandText:     session.CommandText,
-		WorkDir:         session.WorkDir,
-		ReplyText:       session.ReplyText,
-		Summary:         session.Summary,
-		Stdout:          session.Stdout,
-		Stderr:          session.Stderr,
-		StdoutPath:      session.StdoutPath,
-		StderrPath:      session.StderrPath,
-		LastMessagePath: session.LastMessagePath,
 	}
 }
 

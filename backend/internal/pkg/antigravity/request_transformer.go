@@ -90,6 +90,18 @@ func buildAntigravityRequestLabels(model, trajectoryID string) map[string]string
 	return labels
 }
 
+func OfficialRequestIdentity() (requestID string, trajectoryID string) {
+	return generateAntigravityRequestIdentity()
+}
+
+func OfficialRequestLabels(model, trajectoryID string) map[string]string {
+	return buildAntigravityRequestLabels(model, trajectoryID)
+}
+
+func DefaultThinkingBudget(model string) (int, bool) {
+	return defaultAntigravityThinkingBudget(model)
+}
+
 type TransformOptions struct {
 	EnableIdentityPatch bool
 	// IdentityPatch 可选：自定义注入到 systemInstruction 开头的身份防护提示词；
@@ -179,6 +191,7 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 		// 需要显式关闭上游 thinking，避免 signature/结构校验错误。
 		reqCopy := *claudeReq
 		reqCopy.Thinking = &ThinkingConfig{Type: "disabled"}
+		reqCopy.suppressOfficialThinking = true
 		reqForConfig = &reqCopy
 	}
 	if targetModel != "" && targetModel != reqForConfig.Model {
@@ -708,6 +721,12 @@ func buildGenerationConfig(req *ClaudeRequest) *GeminiGenerationConfig {
 
 	// Antigravity 官方模型按抓包固定 thinkingBudget，客户端 thinking 不覆盖上游发包。
 	if budget, ok := defaultAntigravityThinkingBudget(req.Model); ok {
+		if req.suppressOfficialThinking {
+			if config.MaxOutputTokens > maxLimit {
+				config.MaxOutputTokens = maxLimit
+			}
+			return config
+		}
 		config.ThinkingConfig = &GeminiThinkingConfig{
 			IncludeThoughts: true,
 			ThinkingBudget:  budget,

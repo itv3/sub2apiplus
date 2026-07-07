@@ -51,6 +51,46 @@ func TestAntigravityUpstreamErrorBodyReadLimit_RespectsDiagnosticLimit(t *testin
 	require.Equal(t, int64(svc.settingService.cfg.Gateway.LogUpstreamErrorBodyMaxBytes), svc.upstreamErrorBodyReadLimit())
 }
 
+func TestWrapV1InternalRequestAppliesOfficialGeminiProfile(t *testing.T) {
+	svc := newAntigravityTestService(&config.Config{})
+	body := []byte(`{
+		"contents":[{"role":"user","parts":[{"text":"hello"}]}],
+		"generationConfig":{
+			"temperature":0.8,
+			"topP":0.9,
+			"stopSequences":["STOP"]
+		}
+	}`)
+
+	raw, err := svc.wrapV1InternalRequest("proj", "gemini-pro-agent", body)
+	require.NoError(t, err)
+
+	var wrapped map[string]any
+	require.NoError(t, json.Unmarshal(raw, &wrapped))
+	require.Equal(t, "proj", wrapped["project"])
+	require.Equal(t, "agent", wrapped["requestType"])
+	require.Equal(t, "gemini-pro-agent", wrapped["model"])
+	require.Regexp(t, `^agent/.+/\d+/.+/2$`, wrapped["requestId"])
+
+	labels, ok := wrapped["labels"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "MODEL_PLACEHOLDER_M16", labels["model_enum"])
+	require.Equal(t, "false", labels["used_claude"])
+	require.NotEmpty(t, labels["trajectory_id"])
+
+	requestBody, ok := wrapped["request"].(map[string]any)
+	require.True(t, ok)
+	generationConfig, ok := requestBody["generationConfig"].(map[string]any)
+	require.True(t, ok)
+	require.NotContains(t, generationConfig, "temperature")
+	require.NotContains(t, generationConfig, "topP")
+	require.NotContains(t, generationConfig, "stopSequences")
+	thinkingConfig, ok := generationConfig["thinkingConfig"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, true, thinkingConfig["includeThoughts"])
+	require.EqualValues(t, 10001, thinkingConfig["thinkingBudget"])
+}
+
 func TestStripSignatureSensitiveBlocksFromClaudeRequest(t *testing.T) {
 	req := &antigravity.ClaudeRequest{
 		Model: "claude-sonnet-4-5",

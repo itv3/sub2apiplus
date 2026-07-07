@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 )
 
@@ -75,19 +76,60 @@ func (a *Account) modelRateLimitKeysForRequest(ctx context.Context, requestedMod
 		return nil
 	}
 
-	keys := []string{modelKey}
+	keys := appendModelRateLimitKey(nil, modelKey)
 	switch a.Platform {
 	case PlatformAntigravity:
-		if isAntigravityGeminiModel(modelKey) && modelKey != antigravityGeminiModelRateLimitKey {
-			keys = append(keys, antigravityGeminiModelRateLimitKey)
-		}
+		requestedKey := strings.TrimSpace(requestedModel)
+		keys = appendModelRateLimitKey(keys, requestedKey)
+		keys = appendModelRateLimitKey(keys, normalizeAntigravityModelName(requestedKey))
+		keys = appendAntigravityCompatibilityRateLimitKeys(ctx, keys, modelKey)
+		keys = appendAntigravityGeminiFamilyRateLimitKey(keys)
 	case PlatformOpenAI:
 		if openAIImageGenerationRateLimitApplies(ctx, requestedModel, modelKey) && modelKey != openAIImageGenerationRateLimitKey {
-			keys = append(keys, openAIImageGenerationRateLimitKey)
+			keys = appendModelRateLimitKey(keys, openAIImageGenerationRateLimitKey)
 		}
 	case PlatformAnthropic:
 		if isAnthropicFableModel(modelKey) && modelKey != anthropicFableRateLimitKey {
-			keys = append(keys, anthropicFableRateLimitKey)
+			keys = appendModelRateLimitKey(keys, anthropicFableRateLimitKey)
+		}
+	}
+	return keys
+}
+
+func appendModelRateLimitKey(keys []string, key string) []string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return keys
+	}
+	for _, existing := range keys {
+		if existing == key {
+			return keys
+		}
+	}
+	return append(keys, key)
+}
+
+func appendAntigravityCompatibilityRateLimitKeys(ctx context.Context, keys []string, finalModel string) []string {
+	finalModel = strings.TrimSpace(finalModel)
+	if finalModel == "" {
+		return keys
+	}
+	for alias, mapped := range domain.AntigravityCompatibilityModelMapping {
+		mapped = strings.TrimSpace(mapped)
+		if enabled, ok := ThinkingEnabledFromContext(ctx); ok {
+			mapped = applyThinkingModelSuffix(mapped, enabled)
+		}
+		if mapped == finalModel {
+			keys = appendModelRateLimitKey(keys, alias)
+		}
+	}
+	return keys
+}
+
+func appendAntigravityGeminiFamilyRateLimitKey(keys []string) []string {
+	for _, key := range keys {
+		if isAntigravityGeminiModel(key) {
+			return appendModelRateLimitKey(keys, antigravityGeminiModelRateLimitKey)
 		}
 	}
 	return keys

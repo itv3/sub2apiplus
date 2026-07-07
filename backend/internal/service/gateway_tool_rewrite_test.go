@@ -65,6 +65,18 @@ func TestRestoreToolNamesInBytes_StaticPrefixRollback(t *testing.T) {
 	require.Equal(t, `{"name":"sessions_list","id":"session_xyz"}`, got)
 }
 
+type noToolNameRewriteContext struct{}
+
+func (noToolNameRewriteContext) Get(string) (any, bool) {
+	return nil, false
+}
+
+func TestReverseToolNamesIfPresent_NoMappingIsNoop(t *testing.T) {
+	data := []byte(`{"name":"cc_ses_xyz"}`)
+	got := reverseToolNamesIfPresent(noToolNameRewriteContext{}, data)
+	require.Equal(t, string(data), string(got))
+}
+
 func TestApplyToolNameRewriteToBody_RenamesToolsAndToolChoice(t *testing.T) {
 	body := []byte(`{"tools":[{"name":"sessions_list","input_schema":{}},{"name":"session_get","input_schema":{}},{"name":"web_search","type":"web_search_20250305"}],"tool_choice":{"type":"tool","name":"sessions_list"}}`)
 	rw := buildToolNameRewriteFromBody(body)

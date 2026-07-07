@@ -144,7 +144,11 @@ func (s *AccountTestService) ProxyKeeperOpenAIAccount(ctx context.Context, accou
 	if err != nil {
 		return nil, err
 	}
-	upstreamURL := buildKeeperOpenAIProxyURL(baseURL, in.Path)
+	proxyPath, err := validateKeeperOpenAIProxyPath(in.Path)
+	if err != nil {
+		return nil, err
+	}
+	upstreamURL := buildKeeperOpenAIProxyURL(baseURL, proxyPath)
 	req, err := http.NewRequestWithContext(ctx, in.Method, upstreamURL, in.Body)
 	if err != nil {
 		return nil, err
@@ -195,7 +199,11 @@ func (s *AccountTestService) ProxyKeeperAnthropicAccount(ctx context.Context, ac
 			return nil, err
 		}
 	}
-	upstreamURL := buildKeeperOpenAIProxyURL(baseURL, in.Path)
+	proxyPath, err := validateKeeperAnthropicProxyPath(in.Path)
+	if err != nil {
+		return nil, err
+	}
+	upstreamURL := buildKeeperOpenAIProxyURL(baseURL, proxyPath)
 	req, err := http.NewRequestWithContext(ctx, in.Method, upstreamURL, in.Body)
 	if err != nil {
 		return nil, err
@@ -225,6 +233,63 @@ func buildKeeperOpenAIProxyURL(baseURL string, proxyPath string) string {
 		path = strings.TrimPrefix(path, "/v1")
 	}
 	return base + path
+}
+
+func validateKeeperOpenAIProxyPath(proxyPath string) (string, error) {
+	path, err := normalizeKeeperProxyPath(proxyPath)
+	if err != nil {
+		return "", err
+	}
+	if isKeeperProxyPathExact(path, "/v1/chat/completions", "/chat/completions", "/v1/models", "/models") ||
+		isKeeperProxyPathPrefix(path, "/v1/responses", "/responses") {
+		return path, nil
+	}
+	return "", fmt.Errorf("keeper OpenAI proxy path is not allowed: %s", path)
+}
+
+func validateKeeperAnthropicProxyPath(proxyPath string) (string, error) {
+	path, err := normalizeKeeperProxyPath(proxyPath)
+	if err != nil {
+		return "", err
+	}
+	if isKeeperProxyPathExact(path, "/v1/messages", "/v1/messages/count_tokens", "/v1/models") {
+		return path, nil
+	}
+	return "", fmt.Errorf("keeper Anthropic proxy path is not allowed: %s", path)
+}
+
+func normalizeKeeperProxyPath(proxyPath string) (string, error) {
+	path := "/" + strings.TrimLeft(strings.TrimSpace(proxyPath), "/")
+	if path == "/" {
+		return "", errors.New("keeper proxy path is required")
+	}
+	if strings.Contains(path, "?") || strings.Contains(path, "#") {
+		return "", fmt.Errorf("keeper proxy path must not include query or fragment: %s", path)
+	}
+	for _, segment := range strings.Split(path, "/") {
+		if segment == "." || segment == ".." || strings.EqualFold(segment, "%2e") || strings.EqualFold(segment, "%2e%2e") {
+			return "", fmt.Errorf("keeper proxy path contains unsafe segment: %s", path)
+		}
+	}
+	return path, nil
+}
+
+func isKeeperProxyPathExact(path string, allowed ...string) bool {
+	for _, item := range allowed {
+		if path == item {
+			return true
+		}
+	}
+	return false
+}
+
+func isKeeperProxyPathPrefix(path string, allowed ...string) bool {
+	for _, item := range allowed {
+		if path == item || strings.HasPrefix(path, item+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func copyProxyRequestHeaders(dst http.Header, src http.Header) {

@@ -4,7 +4,6 @@ import "net/http"
 
 const (
 	codexDesktopOriginator   = "Codex Desktop"
-	codexDesktopVersion      = "0.142.0"
 	codexDesktopUserAgent    = "Codex Desktop/0.142.0 (Mac OS 26.5.1; arm64) dumb (codex_exec; 0.142.0)"
 	codexDesktopBetaFeatures = "memories,remote_compaction_v2"
 )
@@ -22,6 +21,8 @@ func applyOpenAIAPIKeyCodexMimicHeaders(req *http.Request, isStream bool, scopes
 	req.Header.Set("originator", client.Originator)
 	deleteHeaderAllForms(req.Header, "session_id")
 	deleteHeaderAllForms(req.Header, "conversation_id")
+	deleteHeaderAllForms(req.Header, "x-codex-turn-state")
+	deleteHeaderAllForms(req.Header, "x-codex-turn-metadata")
 	if client.IsDesktop {
 		deleteHeaderAllForms(req.Header, "OpenAI-Beta")
 		deleteHeaderAllForms(req.Header, "version")

@@ -20,6 +20,10 @@ type ClaudeRequest struct {
 	Tools       []ClaudeTool    `json:"tools,omitempty"`
 	Thinking    *ThinkingConfig `json:"thinking,omitempty"`
 	Metadata    *ClaudeMetadata `json:"metadata,omitempty"`
+
+	// suppressOfficialThinking 是内部安全标记：当历史 thinking block 缺少有效
+	// signature 被降级为普通文本时，禁止官方模型重新强制开启 thinking。
+	suppressOfficialThinking bool
 }
 
 // ClaudeMessage Claude 消息

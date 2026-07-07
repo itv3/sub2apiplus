@@ -453,6 +453,17 @@ func TestBuildGenerationConfig_OfficialAntigravityThinkingBudgetIgnoresClientThi
 	}
 }
 
+func TestBuildGenerationConfig_OfficialAntigravitySuppressesThinkingAfterSignatureStrip(t *testing.T) {
+	cfg := buildGenerationConfig(&ClaudeRequest{
+		Model:                    "claude-sonnet-4-6",
+		Thinking:                 &ThinkingConfig{Type: "disabled"},
+		suppressOfficialThinking: true,
+	})
+
+	require.NotNil(t, cfg)
+	require.Nil(t, cfg.ThinkingConfig)
+}
+
 func TestBuildGenerationConfig_OfficialAntigravityModelsSuppressExtraParams(t *testing.T) {
 	temp := 0.7
 	topP := 0.9
@@ -474,6 +485,33 @@ func TestBuildGenerationConfig_OfficialAntigravityModelsSuppressExtraParams(t *t
 			require.Nil(t, cfg.TopK)
 		})
 	}
+}
+
+func TestTransformClaudeToGeminiWithOptions_StrippedThinkingSuppressesOfficialThinking(t *testing.T) {
+	claudeReq := &ClaudeRequest{
+		Model:    "claude-sonnet-4-6",
+		Thinking: &ThinkingConfig{Type: "enabled"},
+		Messages: []ClaudeMessage{
+			{
+				Role:    "user",
+				Content: json.RawMessage(`[{"type":"text","text":"hello"}]`),
+			},
+			{
+				Role:    "assistant",
+				Content: json.RawMessage(`[{"type":"thinking","thinking":"missing signature"},{"type":"text","text":"answer"}]`),
+			},
+		},
+	}
+
+	body, err := TransformClaudeToGeminiWithOptions(claudeReq, "project-1", "claude-sonnet-4-6", DefaultTransformOptions())
+	require.NoError(t, err)
+
+	var req V1InternalRequest
+	require.NoError(t, json.Unmarshal(body, &req))
+	require.NotNil(t, req.Request.GenerationConfig)
+	require.Nil(t, req.Request.GenerationConfig.ThinkingConfig)
+	require.Equal(t, "missing signature", req.Request.Contents[1].Parts[0].Text)
+	require.False(t, req.Request.Contents[1].Parts[0].Thought)
 }
 
 func TestTransformClaudeToGeminiWithOptions_OfficialAntigravityLabels(t *testing.T) {

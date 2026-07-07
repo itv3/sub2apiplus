@@ -3784,7 +3784,8 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	if customUA != "" {
 		req.Header.Set("user-agent", customUA)
 	}
-	if s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
+	mimicProfile := resolveOpenAIAPIKeyCodexMimicProfile(account, getAPIKeyIDFromContext(c), s.cfg)
+	if s.cfg != nil && s.cfg.Gateway.ForceCodexCLI && !mimicProfile.Enabled {
 		req.Header.Set("user-agent", codexCLIUserAgent)
 	}
 	// OAuth 安全透传：对非 Codex UA 统一兜底，降低被上游风控拦截概率。
@@ -4575,7 +4576,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 
 	// 若开启 ForceCodexCLI，则强制将上游 User-Agent 伪装为 Codex CLI。
 	// 用于网关未透传/改写 User-Agent 时，仍能命中 Codex 侧识别逻辑。
-	if s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
+	if s.cfg != nil && s.cfg.Gateway.ForceCodexCLI && !plan.APIKeyCodexMimic.Enabled {
 		req.Header.Set("user-agent", codexCLIUserAgent)
 	}
 

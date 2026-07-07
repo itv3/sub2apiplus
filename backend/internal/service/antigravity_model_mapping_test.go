@@ -69,18 +69,18 @@ func TestAntigravityGatewayService_GetMappedModel(t *testing.T) {
 			expected:       "claude-sonnet-4-6",
 		},
 		{
-			name:           "默认映射 - claude-sonnet-4-5-20250929 → claude-sonnet-4-5",
+			name:           "默认映射 - claude-sonnet-4-5-20250929 → claude-sonnet-4-6",
 			requestedModel: "claude-sonnet-4-5-20250929",
 			accountMapping: nil,
-			expected:       "claude-sonnet-4-5",
+			expected:       "claude-sonnet-4-6",
 		},
 
-		// 3. 默认映射中的透传（映射到自己）
+		// 3. 官方模型透传 + 历史入口兼容映射
 		{
-			name:           "默认映射透传 - claude-fable-5",
+			name:           "兼容映射 - claude-fable-5 → claude-sonnet-4-6",
 			requestedModel: "claude-fable-5",
 			accountMapping: nil,
-			expected:       "claude-fable-5",
+			expected:       "claude-sonnet-4-6",
 		},
 		{
 			name:           "默认映射透传 - claude-sonnet-4-6",
@@ -89,22 +89,22 @@ func TestAntigravityGatewayService_GetMappedModel(t *testing.T) {
 			expected:       "claude-sonnet-4-6",
 		},
 		{
-			name:           "默认映射透传 - claude-sonnet-4-5",
+			name:           "兼容映射 - claude-sonnet-4-5 → claude-sonnet-4-6",
 			requestedModel: "claude-sonnet-4-5",
 			accountMapping: nil,
-			expected:       "claude-sonnet-4-5",
+			expected:       "claude-sonnet-4-6",
 		},
 		{
-			name:           "默认映射透传 - claude-opus-4-8",
+			name:           "兼容映射 - claude-opus-4-8 → claude-opus-4-6-thinking",
 			requestedModel: "claude-opus-4-8",
 			accountMapping: nil,
-			expected:       "claude-opus-4-8",
+			expected:       "claude-opus-4-6-thinking",
 		},
 		{
-			name:           "默认映射透传 - claude-opus-4-7",
+			name:           "兼容映射 - claude-opus-4-7 → claude-opus-4-6-thinking",
 			requestedModel: "claude-opus-4-7",
 			accountMapping: nil,
-			expected:       "claude-opus-4-7",
+			expected:       "claude-opus-4-6-thinking",
 		},
 		{
 			name:           "默认映射透传 - claude-opus-4-6-thinking",
@@ -113,28 +113,28 @@ func TestAntigravityGatewayService_GetMappedModel(t *testing.T) {
 			expected:       "claude-opus-4-6-thinking",
 		},
 		{
-			name:           "默认映射透传 - claude-sonnet-4-5-thinking",
+			name:           "兼容映射 - claude-sonnet-4-5-thinking → claude-sonnet-4-6",
 			requestedModel: "claude-sonnet-4-5-thinking",
 			accountMapping: nil,
-			expected:       "claude-sonnet-4-5-thinking",
+			expected:       "claude-sonnet-4-6",
 		},
 		{
-			name:           "默认映射透传 - gemini-2.5-flash",
+			name:           "兼容映射 - gemini-2.5-flash → gemini-3.5-flash-low",
 			requestedModel: "gemini-2.5-flash",
 			accountMapping: nil,
-			expected:       "gemini-2.5-flash",
+			expected:       "gemini-3.5-flash-low",
 		},
 		{
-			name:           "默认映射透传 - gemini-2.5-pro",
+			name:           "兼容映射 - gemini-2.5-pro → gemini-pro-agent",
 			requestedModel: "gemini-2.5-pro",
 			accountMapping: nil,
-			expected:       "gemini-2.5-pro",
+			expected:       "gemini-pro-agent",
 		},
 		{
-			name:           "默认映射透传 - gemini-3-flash",
+			name:           "兼容映射 - gemini-3-flash → gemini-3-flash-agent",
 			requestedModel: "gemini-3-flash",
 			accountMapping: nil,
-			expected:       "gemini-3-flash",
+			expected:       "gemini-3-flash-agent",
 		},
 		{
 			name:           "默认映射透传 - gemini-3.5-flash-extra-low",

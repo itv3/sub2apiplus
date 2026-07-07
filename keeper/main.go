@@ -25,7 +25,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const version = "0.1.141-0.14"
+var version = "0.1.144-4"
 
 const (
 	defaultClientTimeoutSeconds = 2700
@@ -445,6 +445,7 @@ func (k *Keeper) normalizeRuntimeState() {
 }
 
 func (k *Keeper) Run(ctx context.Context) {
+	defer k.closeAllPersistentExecutors()
 	k.refreshTargets(ctx)
 	k.scan(ctx)
 	ticker := time.NewTicker(time.Duration(k.cfg.ScanIntervalSeconds) * time.Second)
@@ -523,6 +524,7 @@ func (k *Keeper) runTarget(ctx context.Context, target TargetConfig) {
 
 	last := len(state.Sessions) - 1
 	if last < 0 {
+		k.mu.Unlock()
 		return
 	}
 	if err != nil {
@@ -585,43 +587,6 @@ func (k *Keeper) runTarget(ctx context.Context, target TargetConfig) {
 	if billing, err := k.recordKeepalive(context.Background(), target, recorded); err == nil && billing != nil {
 		k.applySessionBilling(target, session.ID, *billing)
 	}
-}
-
-func (k *Keeper) callKeepalive(ctx context.Context, target TargetConfig, prompt string) (Session, error) {
-	reqBody, _ := json.Marshal(keepaliveRequest{
-		Model:           target.Model,
-		Prompt:          prompt,
-		MaxOutputTokens: target.MaxOutputTokens,
-	})
-	url := fmt.Sprintf("%s/api/v1/internal/keeper/accounts/%d/keepalive", k.cfg.Sub2APIPlus.BaseURL, target.AccountID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(reqBody))
-	if err != nil {
-		return Session{}, err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("x-api-key", k.cfg.Sub2APIPlus.InternalToken)
-
-	resp, err := k.httpClient.Do(req)
-	if err != nil {
-		return Session{}, err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Session{}, fmt.Errorf("sub2apiplus 返回 %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	var envelope apiEnvelope
-	if err := json.Unmarshal(body, &envelope); err != nil {
-		return Session{}, err
-	}
-	if envelope.Code != 0 {
-		return Session{}, fmt.Errorf("sub2apiplus 返回错误: %s", envelope.Message)
-	}
-	var session Session
-	if err := json.Unmarshal(envelope.Data, &session); err != nil {
-		return Session{}, err
-	}
-	return session, nil
 }
 
 func (k *Keeper) recordKeepalive(ctx context.Context, target TargetConfig, session Session) (*Billing, error) {
@@ -704,150 +669,8 @@ func (k *Keeper) executeTarget(ctx context.Context, target TargetConfig, prompt 
 	}
 }
 
-func (k *Keeper) executeCodex(ctx context.Context, target TargetConfig, prompt string, sessionID string) (Session, error) {
-	if strings.TrimSpace(target.WorkspacePath) == "" {
-		return Session{Summary: "工作目录未配置"}, errors.New("工作目录未配置")
-	}
-	layout, err := k.prepareRuntime(target)
-	if err != nil {
-		return Session{Summary: "运行时准备失败", Error: err.Error()}, err
-	}
-	stdoutPath := filepath.Join(layout.LogDir, sessionID+".codex.stdout.log")
-	stderrPath := filepath.Join(layout.LogDir, sessionID+".codex.stderr.log")
-	lastMessagePath := filepath.Join(layout.SessionDir, sessionID+".codex.last.txt")
-	timeout := time.Duration(maxInt(target.TimeoutSeconds, defaultClientTimeoutSeconds)) * time.Second
-
-	args := []string{
-		"-s", "read-only",
-		"-a", "never",
-		"exec",
-		"--json",
-		"--skip-git-repo-check",
-		"--output-last-message", lastMessagePath,
-		"-C", target.WorkspacePath,
-		"-m", target.Model,
-		prompt,
-	}
-	startedAt := time.Now()
-	result, runErr := runCommand(ctx, commandSpec{
-		Path:       "codex",
-		Args:       args,
-		Dir:        target.WorkspacePath,
-		Env:        []string{"CODEX_HOME=" + layout.CodexHome, "OPENAI_API_KEY=" + k.cfg.Sub2APIPlus.InternalToken},
-		Timeout:    timeout,
-		StdoutPath: stdoutPath,
-		StderrPath: stderrPath,
-	})
-	replyText := strings.TrimSpace(readOptionalText(lastMessagePath))
-	parsedReply, usage := parseCodexJSONOutput(result.Stdout)
-	if usage == nil {
-		usage = parseCodexRolloutUsage(layout.CodexHome, startedAt)
-	}
-	if replyText == "" {
-		replyText = parsedReply
-	}
-	if replyText == "" {
-		replyText = firstNonEmpty(result.Stdout, result.Stderr)
-	}
-	session := Session{
-		AccountID:       target.AccountID,
-		AccountName:     target.Name,
-		Platform:        target.Platform,
-		AccountType:     target.AccountType,
-		Model:           target.Model,
-		Prompt:          prompt,
-		ReplyText:       truncate(replyText, 12000),
-		CommandText:     shellJoin("codex", args),
-		WorkDir:         target.WorkspacePath,
-		Stdout:          truncate(strings.TrimSpace(result.Stdout), 16000),
-		Stderr:          truncate(strings.TrimSpace(result.Stderr), 16000),
-		StdoutPath:      stdoutPath,
-		StderrPath:      stderrPath,
-		LastMessagePath: lastMessagePath,
-		Summary:         summarizeResult(replyText, result.Stdout, result.Stderr),
-		Usage:           usageToSessionUsage(usage),
-	}
-	if runErr != nil {
-		session.Error = commandErrorMessage(runErr, session.Summary, replyText, result.Stderr, result.Stdout)
-		return session, runErr
-	}
-	return session, nil
-}
-
-func (k *Keeper) executeClaude(ctx context.Context, target TargetConfig, prompt string, sessionID string) (Session, error) {
-	if strings.TrimSpace(target.WorkspacePath) == "" {
-		return Session{Summary: "工作目录未配置"}, errors.New("工作目录未配置")
-	}
-	layout, err := k.prepareRuntime(target)
-	if err != nil {
-		return Session{Summary: "运行时准备失败", Error: err.Error()}, err
-	}
-	stdoutPath := filepath.Join(layout.LogDir, sessionID+".claude.stdout.log")
-	stderrPath := filepath.Join(layout.LogDir, sessionID+".claude.stderr.log")
-	timeoutSeconds := maxInt(target.TimeoutSeconds, minClaudeTimeoutSeconds)
-	timeout := time.Duration(timeoutSeconds) * time.Second
-
-	args := []string{"--bare", "--print", "--output-format", "json", "--model", target.Model}
-	if betas := claudeBetasForModel(target.Model); len(betas) > 0 {
-		args = append(args, "--betas")
-		args = append(args, betas...)
-	}
-	args = append(args, "-p", prompt)
-
-	baseURL := fmt.Sprintf("%s/api/v1/internal/keeper/anthropic/accounts/%d", k.cfg.Sub2APIPlus.BaseURL, target.AccountID)
-	env := []string{
-		"HOME=" + layout.HomeDir,
-		"CLAUDE_CONFIG_DIR=" + layout.ClaudeConfigDir,
-		"ANTHROPIC_API_KEY=" + k.cfg.Sub2APIPlus.InternalToken,
-		"ANTHROPIC_AUTH_TOKEN=" + k.cfg.Sub2APIPlus.InternalToken,
-		"ANTHROPIC_BASE_URL=" + baseURL,
-		"ANTHROPIC_MODEL=" + target.Model,
-	}
-	if betas := claudeBetasForModel(target.Model); len(betas) > 0 {
-		env = append(env, "ANTHROPIC_BETAS="+strings.Join(betas, ","))
-	}
-
-	result, runErr := runCommand(ctx, commandSpec{
-		Path:       "claude",
-		Args:       args,
-		Dir:        target.WorkspacePath,
-		Env:        env,
-		Timeout:    timeout,
-		StdoutPath: stdoutPath,
-		StderrPath: stderrPath,
-	})
-	parsedReply, usage := parseClaudeJSONOutput(result.Stdout)
-	replyText := firstNonEmpty(parsedReply, result.Stdout, result.Stderr)
-	session := Session{
-		AccountID:   target.AccountID,
-		AccountName: target.Name,
-		Platform:    target.Platform,
-		AccountType: target.AccountType,
-		Model:       target.Model,
-		Prompt:      prompt,
-		ReplyText:   truncate(replyText, 12000),
-		CommandText: shellJoin("claude", args),
-		WorkDir:     target.WorkspacePath,
-		Stdout:      truncate(strings.TrimSpace(result.Stdout), 16000),
-		Stderr:      truncate(strings.TrimSpace(result.Stderr), 16000),
-		StdoutPath:  stdoutPath,
-		StderrPath:  stderrPath,
-		Summary:     summarizeResult(replyText, result.Stdout, result.Stderr),
-		Usage:       usageToSessionUsage(usage),
-	}
-	if runErr != nil {
-		session.Error = commandErrorMessage(runErr, session.Summary, replyText, result.Stderr, result.Stdout)
-		return session, runErr
-	}
-	return session, nil
-}
-
 func (k *Keeper) prepareRuntime(target TargetConfig) (runtimeLayout, error) {
-	name := strings.TrimSpace(target.Name)
-	if name == "" {
-		name = fmt.Sprintf("account-%d", target.AccountID)
-	}
-	root := filepath.Join(k.cfg.RuntimeRoot, "workers", slugify(name))
+	root := filepath.Join(k.cfg.RuntimeRoot, "workers", slugify(targetID(target)))
 	layout := runtimeLayout{
 		RootDir:         root,
 		LogDir:          filepath.Join(root, "logs"),
@@ -1026,13 +849,13 @@ func (k *Keeper) handleSettings(w http.ResponseWriter, r *http.Request) {
 
 func (k *Keeper) handleManualRun(w http.ResponseWriter, r *http.Request) {
 	_ = k.refreshTargets(r.Context())
-	name := strings.TrimSpace(r.URL.Query().Get("target"))
-	if name == "" {
+	selector := strings.TrimSpace(r.URL.Query().Get("target"))
+	if selector == "" {
 		http.Error(w, "target required", http.StatusBadRequest)
 		return
 	}
 	for _, target := range k.currentTargets() {
-		if target.Name == name {
+		if targetMatchesSelector(target, selector) {
 			k.mu.Lock()
 			state := k.targetStateLocked(target)
 			if state.Running {
@@ -1059,8 +882,8 @@ func (k *Keeper) withAuth(next http.HandlerFunc) http.HandlerFunc {
 			next(w, r)
 			return
 		}
-		if k.cfg.Web.Username == "" && k.cfg.Web.Password == "" {
-			next(w, r)
+		if k.cfg.Web.Username == "" || k.cfg.Web.Password == "" {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
 		username, password, ok := r.BasicAuth()
@@ -1104,7 +927,7 @@ func (k *Keeper) syncTargets() {
 
 func (k *Keeper) syncTargetsLocked() {
 	for _, target := range k.cfg.Targets {
-		if target.Name == "" {
+		if targetID(target) == "" {
 			continue
 		}
 		state := k.targetStateLocked(target)
@@ -1131,16 +954,23 @@ func (k *Keeper) targetStateLocked(target TargetConfig) *TargetState {
 	if k.state.Targets == nil {
 		k.state.Targets = map[string]*TargetState{}
 	}
-	name := target.Name
-	if name == "" {
-		name = strconv.FormatInt(target.AccountID, 10)
+	key := targetID(target)
+	if key == "" {
+		key = slugify(target.Name)
 	}
-	state := k.state.Targets[name]
+	state := k.state.Targets[key]
+	if state == nil && target.Name != "" && target.Name != key {
+		if legacy := k.state.Targets[target.Name]; legacy != nil {
+			state = legacy
+			delete(k.state.Targets, target.Name)
+			k.state.Targets[key] = state
+		}
+	}
 	if state == nil {
-		state = &TargetState{Name: name}
-		k.state.Targets[name] = state
+		state = &TargetState{Name: targetDisplayName(target)}
+		k.state.Targets[key] = state
 	}
-	state.Name = name
+	state.Name = targetDisplayName(target)
 	state.AccountID = target.AccountID
 	state.Model = target.Model
 	state.Enabled = target.Enabled
@@ -1372,6 +1202,7 @@ func (k *Keeper) refreshTargets(ctx context.Context) error {
 	k.cfg.Targets = targets
 	k.syncTargetsLocked()
 	k.mu.Unlock()
+	k.reconcilePersistentExecutors(targets)
 	return nil
 }
 
@@ -1449,9 +1280,22 @@ func (k *Keeper) workspacePath(value string) string {
 		return ""
 	}
 	if filepath.IsAbs(value) {
-		return filepath.Clean(value)
+		return ""
 	}
-	return filepath.Join(k.cfg.ProjectsRoot, value)
+	project := filepath.Clean(value)
+	if project == "." || project == ".." || strings.HasPrefix(project, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	if project != filepath.Base(project) {
+		return ""
+	}
+	root := filepath.Clean(k.cfg.ProjectsRoot)
+	candidate := filepath.Join(root, project)
+	rel, err := filepath.Rel(root, candidate)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return ""
+	}
+	return candidate
 }
 
 func withinWorkWindow(now time.Time, start, end string) bool {
@@ -1722,77 +1566,6 @@ func claudeUsageInfo(usage *struct {
 	})
 }
 
-func parseCodexRolloutUsage(codexHome string, startedAt time.Time) *usageInfo {
-	root := filepath.Join(codexHome, "sessions")
-	type candidate struct {
-		path    string
-		modTime time.Time
-	}
-	candidates := make([]candidate, 0, 4)
-	cutoff := startedAt.Add(-2 * time.Minute)
-	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil || d == nil || d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil || info.ModTime().Before(cutoff) {
-			return nil
-		}
-		candidates = append(candidates, candidate{path: path, modTime: info.ModTime()})
-		return nil
-	})
-	sort.Slice(candidates, func(i, j int) bool {
-		return candidates[i].modTime.After(candidates[j].modTime)
-	})
-	for _, item := range candidates {
-		if usage := parseCodexRolloutUsageFile(item.path); usage != nil {
-			return usage
-		}
-	}
-	return nil
-}
-
-func parseCodexRolloutUsageFile(path string) *usageInfo {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		return nil
-	}
-	var usage *usageInfo
-	for _, line := range strings.Split(string(raw), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		var event struct {
-			Type    string `json:"type"`
-			Payload struct {
-				Type string `json:"type"`
-				Info struct {
-					TotalTokenUsage struct {
-						InputTokens           int64 `json:"input_tokens"`
-						CachedInputTokens     int64 `json:"cached_input_tokens"`
-						OutputTokens          int64 `json:"output_tokens"`
-						ReasoningOutputTokens int64 `json:"reasoning_output_tokens"`
-					} `json:"total_token_usage"`
-				} `json:"info"`
-			} `json:"payload"`
-		}
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			continue
-		}
-		if event.Type == "event_msg" && event.Payload.Type == "token_count" {
-			total := event.Payload.Info.TotalTokenUsage
-			usage = normalizeUsage(usageInfo{
-				InputTokens:           total.InputTokens,
-				CachedInputTokens:     total.CachedInputTokens,
-				OutputTokens:          total.OutputTokens,
-				ReasoningOutputTokens: total.ReasoningOutputTokens,
-			})
-		}
-	}
-	return usage
-}
-
 func normalizeUsage(usage usageInfo) *usageInfo {
 	if usage.InputTokens < 0 {
 		usage.InputTokens = 0
@@ -1994,6 +1767,27 @@ func targetID(target TargetConfig) string {
 		return strconv.FormatInt(target.AccountID, 10)
 	}
 	return slugify(target.Name)
+}
+
+func targetDisplayName(target TargetConfig) string {
+	if name := strings.TrimSpace(target.Name); name != "" {
+		return name
+	}
+	return targetID(target)
+}
+
+func targetMatchesSelector(target TargetConfig, selector string) bool {
+	selector = strings.TrimSpace(selector)
+	if selector == "" {
+		return false
+	}
+	if selector == targetID(target) || selector == strings.TrimSpace(target.Name) {
+		return true
+	}
+	if target.AccountID > 0 && selector == strconv.FormatInt(target.AccountID, 10) {
+		return true
+	}
+	return false
 }
 
 func (k *Keeper) internalClientBaseURL(accountID int64, executor string) string {

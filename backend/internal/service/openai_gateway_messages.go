@@ -52,6 +52,8 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 	promptCacheKey = strings.TrimSpace(promptCacheKey)
 	apiKeyID := getAPIKeyIDFromContext(c)
+	mimicProfile := resolveOpenAIAPIKeyCodexMimicProfile(account, apiKeyID, s.cfg)
+	accountMimicCodexCLI := mimicProfile.Enabled
 	anthropicDigestChain := ""
 	anthropicMatchedDigestChain := ""
 	compatPromptCacheInjected := false
@@ -208,11 +210,11 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// upstreams using the Responses API can derive a stable session identifier
 	// from prompt_cache_key. This makes our Anthropic /v1/messages compatibility
 	// path behave more like a native Responses client.
-	if account.Type == AccountTypeAPIKey {
-		if trimmedKey := strings.TrimSpace(promptCacheKey); trimmedKey != "" {
-			var reqBody map[string]any
-			if err := json.Unmarshal(responsesBody, &reqBody); err != nil {
-				return nil, fmt.Errorf("unmarshal for prompt cache key injection: %w", err)
+		if account.Type == AccountTypeAPIKey {
+			if trimmedKey := strings.TrimSpace(promptCacheKey); trimmedKey != "" {
+				var reqBody map[string]any
+				if err := json.Unmarshal(responsesBody, &reqBody); err != nil {
+					return nil, fmt.Errorf("unmarshal for prompt cache key injection: %w", err)
 			}
 			if existing, ok := reqBody["prompt_cache_key"].(string); !ok || strings.TrimSpace(existing) == "" {
 				reqBody["prompt_cache_key"] = trimmedKey
@@ -220,10 +222,13 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 				if err != nil {
 					return nil, fmt.Errorf("remarshal after prompt cache key injection: %w", err)
 				}
-				responsesBody = updated
+					responsesBody = updated
+				}
+			}
+			if accountMimicCodexCLI {
+				responsesBody = mimicProfile.RewriteBody(responsesBody)
 			}
 		}
-	}
 
 	// 4c. Apply OpenAI fast policy (may filter service_tier or block the request).
 	// Mirrors the Claude anthropic-beta "fast-mode-2026-02-01" filter, but keyed
@@ -257,12 +262,14 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	var upstreamReq *http.Request
 	if account.Platform == PlatformGrok {
 		upstreamReq, err = buildGrokResponsesRequest(upstreamCtx, c, account, responsesBody, token)
-	} else {
-		upstreamReq, err = s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, openAIUpstreamRequestPlan{
-			IsStream:       isStream,
-			PromptCacheKey: promptCacheKey,
-		})
-	}
+		} else {
+			upstreamReq, err = s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, openAIUpstreamRequestPlan{
+				IsStream:         isStream,
+				PromptCacheKey:   promptCacheKey,
+				IsCodexCLI:       accountMimicCodexCLI,
+				APIKeyCodexMimic: mimicProfile,
+			})
+		}
 	releaseUpstreamCtx()
 	if err != nil {
 		return nil, fmt.Errorf("build upstream request: %w", err)
@@ -270,11 +277,11 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 
 	// Override session_id with a deterministic UUID derived from the isolated
 	// session key, ensuring different API keys produce different upstream sessions.
-	if promptCacheKey != "" {
-		isolatedSessionID := generateSessionUUID(isolateOpenAISessionID(apiKeyID, promptCacheKey))
-		upstreamReq.Header.Set("session_id", isolatedSessionID)
-		if upstreamReq.Header.Get("conversation_id") != "" {
-			upstreamReq.Header.Set("conversation_id", isolatedSessionID)
+		if promptCacheKey != "" && !accountMimicCodexCLI {
+			isolatedSessionID := generateSessionUUID(isolateOpenAISessionID(apiKeyID, promptCacheKey))
+			upstreamReq.Header.Set("session_id", isolatedSessionID)
+			if upstreamReq.Header.Get("conversation_id") != "" {
+				upstreamReq.Header.Set("conversation_id", isolatedSessionID)
 		}
 	}
 	if account.Type == AccountTypeOAuth && account.Platform != PlatformGrok {
@@ -297,7 +304,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+		resp, err := s.doOpenAIHTTPUpstream(upstreamReq, proxyURL, account)
 	if err != nil {
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		setOpsUpstreamError(c, 0, safeErr, "")

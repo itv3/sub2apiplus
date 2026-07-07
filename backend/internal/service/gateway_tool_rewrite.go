@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bytes"
 	"fmt"
 	"hash/fnv"
 	"math/rand"
@@ -591,10 +592,14 @@ func restoreOpenAIChatToolFields(out []byte, setStringIfMapped *func(string)) {
 
 // replaceAllBytes 是 bytes.ReplaceAll 的便捷封装，避免每个调用点各自做 []byte 转换。
 func replaceAllBytes(data []byte, from, to string) []byte {
-	if len(data) == 0 || from == to || !strings.Contains(string(data), from) {
+	if len(data) == 0 || from == "" || from == to {
 		return data
 	}
-	return []byte(strings.ReplaceAll(string(data), from, to))
+	fromBytes := []byte(from)
+	if !bytes.Contains(data, fromBytes) {
+		return data
+	}
+	return bytes.ReplaceAll(data, fromBytes, []byte(to))
 }
 
 // toolNameRewriteFromContext 从 gin.Context 取出请求阶段保存的工具名映射。
@@ -613,13 +618,13 @@ func toolNameRewriteFromContext(c interface {
 	return rw
 }
 
-// reverseToolNamesIfPresent 是响应侧 5 处注入点的统一封装：从 c 取出 mapping
-// 并对 chunk 做 bytes 级假名→真名替换。c 没有 mapping 时仍会做静态前缀还原。
+// reverseToolNamesIfPresent 是响应侧注入点的统一封装：从 c 取出 mapping
+// 并对 chunk 做 bytes 级假名→真名替换。没有请求侧 mapping 时不改响应。
 func reverseToolNamesIfPresent(c interface {
 	Get(string) (any, bool)
 }, chunk []byte) []byte {
 	rw := toolNameRewriteFromContext(c)
-	if rw == nil && len(staticToolNameRewrites) == 0 {
+	if rw == nil {
 		return chunk
 	}
 	return restoreToolNamesInBytes(chunk, rw)

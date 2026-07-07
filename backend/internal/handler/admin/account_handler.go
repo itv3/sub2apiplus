@@ -946,7 +946,11 @@ func (h *AccountHandler) loadKeeperCandidateAccounts(ctx context.Context) ([]ser
 			if err != nil {
 				return nil, err
 			}
-			out = append(out, accounts...)
+			for _, account := range accounts {
+				if isKeeperKeepaliveCandidate(account) {
+					out = append(out, account)
+				}
+			}
 			if int64(page*pageSize) >= total || len(accounts) == 0 {
 				break
 			}
@@ -954,6 +958,17 @@ func (h *AccountHandler) loadKeeperCandidateAccounts(ctx context.Context) ([]ser
 		}
 	}
 	return out, nil
+}
+
+func isKeeperKeepaliveCandidate(account service.Account) bool {
+	switch account.Platform {
+	case service.PlatformOpenAI:
+		return account.Type == service.AccountTypeAPIKey && strings.TrimSpace(account.GetOpenAIApiKey()) != ""
+	case service.PlatformAnthropic:
+		return account.Type == service.AccountTypeAPIKey && strings.TrimSpace(account.GetCredential("api_key")) != ""
+	default:
+		return false
+	}
 }
 
 func buildKeeperAccountConfig(account service.Account, now time.Time) KeeperAccountConfigResponse {

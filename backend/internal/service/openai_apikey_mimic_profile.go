@@ -82,28 +82,15 @@ func resolveOpenAIAPIKeyCodexMimicClientProfile(account *Account) openAIAPIKeyCo
 	if account != nil {
 		profileID = account.GetExtraString(openAIAPIKeyCodexMimicProfileExtraKey)
 	}
-	switch normalizeOpenAIAPIKeyCodexMimicClientProfileID(profileID) {
-	case openAIAPIKeyCodexMimicClientCLIRS0125:
-		return openAIAPIKeyCodexMimicClientProfile{
-			ID:         openAIAPIKeyCodexMimicClientCLIRS0125,
-			UserAgent:  codexCLIUserAgent,
-			Originator: "codex_cli_rs",
-			Version:    codexCLIVersion,
-			OpenAIBeta: "responses=experimental",
-		}
-	default:
-		return openAIAPIKeyCodexMimicClientProfile{
-			ID:           openAIAPIKeyCodexMimicClientDesktop0142,
-			UserAgent:    codexDesktopUserAgent,
-			Originator:   codexDesktopOriginator,
-			IsDesktop:    true,
-			BetaFeatures: codexDesktopBetaFeatures,
-		}
-	}
+	return resolveOpenAIAPIKeyCodexMimicClientProfileByID(profileID)
 }
 
 func resolveOpenAIAPIKeyCodexMimicClientProfileFromScope(scope openAIAPIKeyCodexMimicScope) openAIAPIKeyCodexMimicClientProfile {
-	switch normalizeOpenAIAPIKeyCodexMimicClientProfileID(scope.ClientProfile) {
+	return resolveOpenAIAPIKeyCodexMimicClientProfileByID(scope.ClientProfile)
+}
+
+func resolveOpenAIAPIKeyCodexMimicClientProfileByID(profileID string) openAIAPIKeyCodexMimicClientProfile {
+	switch normalizeOpenAIAPIKeyCodexMimicClientProfileID(profileID) {
 	case openAIAPIKeyCodexMimicClientCLIRS0125:
 		return openAIAPIKeyCodexMimicClientProfile{
 			ID:         openAIAPIKeyCodexMimicClientCLIRS0125,

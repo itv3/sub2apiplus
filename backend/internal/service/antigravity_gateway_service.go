@@ -20,10 +20,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/domain"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
-	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
 )
 
@@ -1023,8 +1023,30 @@ func mapAntigravityModel(account *Account, requestedModel string) string {
 		return requestedModel
 	}
 
+	if mapped := domain.AntigravityCompatibilityModelMapping[requestedModel]; mapped != "" {
+		if !hasExplicitAntigravityModelMapping(account) || account.IsModelSupported(mapped) {
+			return mapped
+		}
+	}
+
 	// 未在映射表中配置的模型，返回空字符串（不支持）
 	return ""
+}
+
+func hasExplicitAntigravityModelMapping(account *Account) bool {
+	if account == nil || account.Credentials == nil {
+		return false
+	}
+	rawMapping, ok := account.Credentials["model_mapping"].(map[string]any)
+	if !ok {
+		return false
+	}
+	for _, value := range rawMapping {
+		if _, ok := value.(string); ok {
+			return true
+		}
+	}
+	return false
 }
 
 // getMappedModel 获取映射后的模型名
@@ -1350,17 +1372,45 @@ func (s *AntigravityGatewayService) wrapV1InternalRequest(projectID, model strin
 	if projectID == "" {
 		return nil, errAntigravityProjectIDRequired
 	}
+	request = applyAntigravityNativeRequestProfile(request, model)
+	requestID, trajectoryID := antigravity.OfficialRequestIdentity()
 
 	wrapped := map[string]any{
 		"project":     projectID,
-		"requestId":   "agent-" + uuid.New().String(),
+		"requestId":   requestID,
 		"userAgent":   "antigravity", // 固定值，与官方客户端一致
 		"requestType": "agent",
 		"model":       model,
+		"labels":      antigravity.OfficialRequestLabels(model, trajectoryID),
 		"request":     request,
 	}
 
 	return json.Marshal(wrapped)
+}
+
+func applyAntigravityNativeRequestProfile(request any, model string) any {
+	body, ok := request.(map[string]any)
+	if !ok {
+		return request
+	}
+	budget, ok := antigravity.DefaultThinkingBudget(model)
+	if !ok {
+		return request
+	}
+	generationConfig, _ := body["generationConfig"].(map[string]any)
+	if generationConfig == nil {
+		generationConfig = map[string]any{}
+	}
+	delete(generationConfig, "temperature")
+	delete(generationConfig, "topP")
+	delete(generationConfig, "topK")
+	delete(generationConfig, "stopSequences")
+	generationConfig["thinkingConfig"] = map[string]any{
+		"includeThoughts": true,
+		"thinkingBudget":  budget,
+	}
+	body["generationConfig"] = generationConfig
+	return body
 }
 
 // unwrapV1InternalResponse 解包 v1internal 响应

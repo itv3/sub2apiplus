@@ -2494,6 +2494,7 @@ import {
   commonErrorCodes,
   buildModelMappingObject,
   getOfficialAntigravityDisplayMappings,
+  getOfficialAntigravityModelIDs,
   splitModelMappingObject,
   isValidWildcardPattern
 } from '@/composables/useModelWhitelist'
@@ -3405,10 +3406,12 @@ const syncAntigravityUpstreamModels = async () => {
       return
     }
 
+    const officialModels = getOfficialAntigravityModelIDs()
     const officialMappings = getOfficialAntigravityDisplayMappings()
-    antigravityModelRestrictionMode.value = 'mapping'
+    antigravityModelRestrictionMode.value = 'whitelist'
+    antigravityWhitelistModels.value = officialModels
     antigravityModelMappings.value = officialMappings
-    appStore.showSuccess(t('admin.accounts.syncUpstreamModelsSuccess', { count: officialMappings.length, total: upstreamModels.length }))
+    appStore.showSuccess(t('admin.accounts.syncUpstreamModelsSuccess', { count: officialModels.length, total: upstreamModels.length }))
   } catch (error) {
     const message = error instanceof Error ? error.message : t('admin.accounts.syncUpstreamModelsFailed')
     appStore.showError(t('admin.accounts.syncUpstreamModelsError', { message }))

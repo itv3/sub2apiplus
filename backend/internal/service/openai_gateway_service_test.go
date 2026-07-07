@@ -2429,6 +2429,39 @@ func TestOpenAIBuildUpstreamRequestAPIKeyCodexMimicOverridesClientHeaders(t *tes
 	require.Equal(t, codexDesktopBetaFeatures, req.Header.Get("x-codex-beta-features"))
 }
 
+func TestOpenAIBuildUpstreamRequestForceCodexCLIDoesNotOverrideAPIKeyMimic(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader([]byte(`{"model":"gpt-5"}`)))
+
+	svc := &OpenAIGatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{ForceCodexCLI: true},
+			Security: config.SecurityConfig{
+				URLAllowlist: config.URLAllowlistConfig{Enabled: false},
+			},
+		},
+	}
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"base_url": "https://api.openai.com",
+		},
+		Extra: map[string]any{
+			"openai_apikey_mimic_codex_cli": true,
+		},
+	}
+
+	req, err := svc.buildUpstreamRequest(c.Request.Context(), c, account, []byte(`{"model":"gpt-5"}`), "token", openAIUpstreamRequestPlan{
+		APIKeyCodexMimic: resolveOpenAIAPIKeyCodexMimicProfile(account, 0, svc.cfg),
+	})
+	require.NoError(t, err)
+	require.Equal(t, codexDesktopUserAgent, req.Header.Get("User-Agent"))
+	require.Equal(t, codexDesktopOriginator, req.Header.Get("originator"))
+}
+
 func TestOpenAIGatewayService_APIKeyCodexMimicUsesCapturedDesktopTLSProfile(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
@@ -2488,6 +2521,68 @@ func TestOpenAIGatewayService_APIKeyCodexMimicUsesCapturedDesktopTLSProfile(t *t
 	require.False(t, gjson.GetBytes(upstream.lastBody, "store").Bool())
 	require.Equal(t, "reasoning.encrypted_content", gjson.GetBytes(upstream.lastBody, "include.0").String())
 	require.False(t, result.Stream)
+}
+
+func TestOpenAIGatewayService_MessagesAPIKeyCodexMimicUsesHeadersBodyAndTLS(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	body := []byte(`{"model":"gpt-5.5","max_tokens":32,"stream":false,"messages":[{"role":"user","content":"hello"}]}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("User-Agent", "Kilo-Code/7.3.50")
+	c.Request.Header.Set("originator", "kilo")
+	c.Request.Header.Set("x-codex-turn-state", "client-state")
+	c.Request.Header.Set("x-codex-turn-metadata", "client-metadata")
+
+	upstream := &httpUpstreamRecorder{resp: openAICompatSSECompletedResponse("resp_messages_mimic", "gpt-5.5")}
+	svc := &OpenAIGatewayService{
+		cfg: &config.Config{
+			Security: config.SecurityConfig{
+				URLAllowlist: config.URLAllowlistConfig{
+					Enabled:           false,
+					AllowInsecureHTTP: true,
+				},
+			},
+		},
+		httpUpstream:        upstream,
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	account := &Account{
+		ID:          9528,
+		Name:        "openai-messages-mimic",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "sk-test",
+			"base_url": "http://upstream.example",
+		},
+		Extra: map[string]any{
+			"openai_apikey_mimic_codex_cli": true,
+			"enable_tls_fingerprint":        true,
+		},
+		Status:      StatusActive,
+		Schedulable: true,
+	}
+
+	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "")
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "http://upstream.example/v1/responses", upstream.lastReq.URL.String())
+	require.Equal(t, codexDesktopUserAgent, upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, codexDesktopOriginator, upstream.lastReq.Header.Get("originator"))
+	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
+	require.Empty(t, upstream.lastReq.Header.Get("version"))
+	require.Empty(t, upstream.lastReq.Header.Get("session_id"))
+	require.Empty(t, upstream.lastReq.Header.Get("conversation_id"))
+	require.Empty(t, upstream.lastReq.Header.Get("x-codex-turn-state"))
+	require.NotEqual(t, "client-metadata", upstream.lastReq.Header.Get("x-codex-turn-metadata"))
+	require.NotEmpty(t, upstream.lastReq.Header.Get("x-codex-turn-metadata"))
+	require.NotEmpty(t, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
+	require.NotEmpty(t, gjson.GetBytes(upstream.lastBody, "client_metadata.x-codex-turn-metadata").String())
+	require.NotNil(t, upstream.lastTLSProfile)
+	require.Contains(t, upstream.lastTLSProfile.Name, "Codex Desktop 0.142.0")
 }
 
 func TestOpenAIGatewayService_APIKeyCodexMimicTreatsThirdPartyRequestAsCodexCLI(t *testing.T) {
