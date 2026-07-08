@@ -1473,7 +1473,8 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 	// 应用 thinking 模式自动后缀：如果 thinking 开启且目标是 claude-sonnet-4-5，自动改为 thinking 版本
 	thinkingEnabled := claudeReq.Thinking != nil && (claudeReq.Thinking.Type == "enabled" || claudeReq.Thinking.Type == "adaptive")
 	mappedModel = applyThinkingModelSuffix(mappedModel, thinkingEnabled)
-	billingModel := mappedModel
+	billingModel := antigravity.ResolveClaudeUpstreamModel(&claudeReq, mappedModel)
+	upstreamRequestModel := billingModel
 
 	// 获取 access_token
 	if s.tokenProvider == nil {
@@ -1528,7 +1529,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 		settingService:  s.settingService,
 		accountRepo:     s.accountRepo,
 		handleError:     s.handleUpstreamError,
-		requestedModel:  originalModel,
+		requestedModel:  upstreamRequestModel,
 		isStickySession: isStickySession, // Forward 由上层判断粘性会话
 		groupID:         0,               // Forward 方法没有 groupID，由上层处理粘性会话清除
 		sessionHash:     "",              // Forward 方法没有 sessionHash，由上层处理粘性会话清除
@@ -1612,7 +1613,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 					settingService:  s.settingService,
 					accountRepo:     s.accountRepo,
 					handleError:     s.handleUpstreamError,
-					requestedModel:  originalModel,
+					requestedModel:  upstreamRequestModel,
 					isStickySession: isStickySession,
 					groupID:         0,  // Forward 方法没有 groupID，由上层处理粘性会话清除
 					sessionHash:     "", // Forward 方法没有 sessionHash，由上层处理粘性会话清除
@@ -1734,7 +1735,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 							settingService:  s.settingService,
 							accountRepo:     s.accountRepo,
 							handleError:     s.handleUpstreamError,
-							requestedModel:  originalModel,
+							requestedModel:  upstreamRequestModel,
 							isStickySession: isStickySession,
 							groupID:         0,
 							sessionHash:     "",
@@ -1791,7 +1792,7 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 				}
 			}
 
-			s.handleUpstreamError(ctx, prefix, account, resp.StatusCode, resp.Header, respBody, originalModel, 0, "", isStickySession)
+			s.handleUpstreamError(ctx, prefix, account, resp.StatusCode, resp.Header, respBody, upstreamRequestModel, 0, "", isStickySession)
 
 			// 精确匹配服务端配置类 400 错误，触发同账号重试 + failover
 			if resp.StatusCode == http.StatusBadRequest {
@@ -2308,7 +2309,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 		settingService:  s.settingService,
 		accountRepo:     s.accountRepo,
 		handleError:     s.handleUpstreamError,
-		requestedModel:  originalModel,
+		requestedModel:  billingModel,
 		isStickySession: isStickySession, // ForwardGemini 由上层判断粘性会话
 		groupID:         forwardOpts.groupID,
 		sessionHash:     forwardOpts.sessionHash,
@@ -2357,6 +2358,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 						if err == nil && fallbackResp.StatusCode < 400 {
 							_ = resp.Body.Close()
 							resp = fallbackResp
+							billingModel = fallbackModel
 						} else if fallbackResp != nil {
 							_ = fallbackResp.Body.Close()
 						}
@@ -2407,7 +2409,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 					settingService:  s.settingService,
 					accountRepo:     s.accountRepo,
 					handleError:     s.handleUpstreamError,
-					requestedModel:  originalModel,
+					requestedModel:  billingModel,
 					isStickySession: isStickySession,
 					groupID:         forwardOpts.groupID,
 					sessionHash:     forwardOpts.sessionHash,
@@ -2486,7 +2488,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 		if unwrapErr != nil || len(unwrappedForOps) == 0 {
 			unwrappedForOps = respBody
 		}
-		s.handleUpstreamError(ctx, prefix, account, resp.StatusCode, resp.Header, respBody, originalModel, forwardOpts.groupID, forwardOpts.sessionHash, isStickySession)
+		s.handleUpstreamError(ctx, prefix, account, resp.StatusCode, resp.Header, respBody, billingModel, forwardOpts.groupID, forwardOpts.sessionHash, isStickySession)
 		upstreamMsg := strings.TrimSpace(extractAntigravityErrorMessage(unwrappedForOps))
 		upstreamMsg = sanitizeUpstreamErrorMessage(upstreamMsg)
 		upstreamDetail := s.getUpstreamErrorDetail(unwrappedForOps)
@@ -2579,7 +2581,7 @@ handleSuccess:
 
 	// 判断是否为图片生成模型
 	imageCount := 0
-	if isImageGenerationModel(mappedModel) {
+	if isImageGenerationModel(billingModel) {
 		// Gemini 图片生成 API 每次请求只生成一张图片（API 限制）
 		imageCount = 1
 	}

@@ -1765,12 +1765,29 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			requestView = newOpenAIRequestView(body)
 		}
 	}
-	if accountMimicCodexCLI {
+	if isCompactRequest {
+		normalizedCompactBody, normalizedCompact, compactErr := normalizeOpenAICompactRequestBody(body)
+		if compactErr != nil {
+			return nil, compactErr
+		}
+		if normalizedCompact {
+			body = normalizedCompactBody
+			requestView = newOpenAIRequestView(body)
+			reqBody = nil
+		}
+		reqStream = false
+	}
+	if accountMimicCodexCLI && !isCompactRequest {
 		body = mimicProfile.RewriteBody(body)
 		requestView = newOpenAIRequestView(body)
 		reqBody = nil
 	}
-	upstreamReqStream := reqStream || accountMimicCodexCLI
+	upstreamReqStream := reqStream
+	if isCompactRequest {
+		upstreamReqStream = false
+	} else if accountMimicCodexCLI {
+		upstreamReqStream = true
+	}
 	imageBillingModel := ""
 	imageSizeTier := ""
 	imageInputSize := ""
@@ -2021,6 +2038,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 		upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, body, token, openAIUpstreamRequestPlan{
 			IsStream:         upstreamReqStream,
+			IsCompact:        isCompactRequest,
 			PromptCacheKey:   promptCacheKey,
 			IsCodexCLI:       isCodexCLI,
 			APIKeyCodexMimic: mimicProfile,
@@ -2269,6 +2287,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 		req.Header.Set("user-agent", customUA)
 	}
 	plan.APIKeyCodexMimic.ApplyHeaders(req, plan.IsStream)
+	if plan.IsCompact {
+		req.Header.Set("accept", "application/json")
+	}
 
 	// 若开启 ForceCodexCLI，则强制将上游 User-Agent 伪装为 Codex CLI。
 	// 用于网关未透传/改写 User-Agent 时，仍能命中 Codex 侧识别逻辑。

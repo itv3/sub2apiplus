@@ -525,66 +525,6 @@ func TestAccountTestService_OpenAIAPIKeyCodexMimicUsesResponsesProbe(t *testing.
 	require.Regexp(t, openAICodexUUIDPattern, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
 }
 
-func TestAccountTestService_KeeperKeepaliveUsesPromptAndUsage(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	upstreamBody := strings.Join([]string{
-		`data: {"type":"response.output_text.delta","delta":"项目分析结果"}`,
-		"",
-		`data: {"type":"response.completed","response":{"usage":{"input_tokens":11,"output_tokens":7,"total_tokens":18,"input_tokens_details":{"cached_tokens":3,"cache_creation_tokens":2}}}}`,
-		"",
-	}, "\n")
-	upstream := &httpUpstreamRecorder{resp: &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-		Body:       io.NopCloser(strings.NewReader(upstreamBody)),
-	}}
-	account := &Account{
-		ID:          95,
-		Name:        "keeper-openai",
-		Platform:    PlatformOpenAI,
-		Type:        AccountTypeAPIKey,
-		Status:      StatusActive,
-		Schedulable: true,
-		Concurrency: 1,
-		Credentials: map[string]any{
-			"api_key":  "sk-test",
-			"base_url": "https://compat-upstream.example",
-		},
-		Extra: map[string]any{
-			"openai_apikey_mimic_codex_cli": true,
-		},
-	}
-	repo := &openAIAccountTestRepo{
-		mockAccountRepoForGemini: mockAccountRepoForGemini{
-			accountsByID: map[int64]*Account{95: account},
-		},
-	}
-	svc := &AccountTestService{
-		accountRepo:  repo,
-		httpUpstream: upstream,
-		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
-	}
-
-	result, err := svc.RunKeeperKeepalive(context.Background(), 95, KeeperKeepaliveRequest{
-		Model:           "gpt-5.5",
-		Prompt:          "请分析 homeproxy 的入口调用链",
-		MaxOutputTokens: 512,
-	})
-	require.NoError(t, err)
-	require.Equal(t, "success", result.Status)
-	require.Equal(t, "项目分析结果", result.ReplyText)
-	require.NotNil(t, result.Usage)
-	require.EqualValues(t, 11, result.Usage.InputTokens)
-	require.EqualValues(t, 7, result.Usage.OutputTokens)
-	require.EqualValues(t, 18, result.Usage.TotalTokens)
-	require.EqualValues(t, 3, result.Usage.CachedInputTokens)
-	require.EqualValues(t, 2, result.Usage.CacheCreationInputTokens)
-	require.Equal(t, "请分析 homeproxy 的入口调用链", gjson.GetBytes(upstream.lastBody, "input.0.content.0.text").String())
-	require.EqualValues(t, 512, gjson.GetBytes(upstream.lastBody, "max_output_tokens").Int())
-	require.NotEqual(t, "hi", gjson.GetBytes(upstream.lastBody, "input.0.content.0.text").String())
-}
-
 func TestAccountTestService_OpenAIChatCompletionsPathReturns4xx(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, recorder := newTestContext()

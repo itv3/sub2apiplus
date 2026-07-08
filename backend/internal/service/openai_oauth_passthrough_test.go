@@ -1364,6 +1364,61 @@ func TestOpenAIGatewayService_APIKeyPassthrough_PreservesBodyAndUsesResponsesEnd
 	require.Empty(t, upstream.lastReq.Header.Get("X-Test"))
 }
 
+func TestOpenAIGatewayService_APIKeyPassthrough_CompactNormalizesBodyAndKeepsNonStreaming(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/compact", bytes.NewReader(nil))
+	c.Request.Header.Set("User-Agent", "curl/8.0")
+	c.Request.Header.Set("Accept", "text/event-stream")
+
+	originalBody := []byte(`{"model":"gpt-5.2","stream":true,"store":true,"prompt_cache_key":"client-cache","client_metadata":{"x-codex-turn-metadata":"client"},"service_tier":"flex","instructions":"compact-test","input":[{"type":"text","text":"compact me"}]}`)
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid-compact-apikey"}},
+		Body:       io.NopCloser(strings.NewReader(`{"id":"cmp_apikey","output":[],"usage":{"input_tokens":3,"output_tokens":2}}`)),
+	}
+	upstream := &httpUpstreamRecorder{resp: resp}
+
+	svc := &OpenAIGatewayService{
+		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
+		httpUpstream: upstream,
+	}
+
+	account := &Account{
+		ID:             457,
+		Name:           "apikey-compact",
+		Platform:       PlatformOpenAI,
+		Type:           AccountTypeAPIKey,
+		Concurrency:    1,
+		Credentials:    map[string]any{"api_key": "sk-api-key", "base_url": "https://api.openai.com"},
+		Extra:          map[string]any{"openai_passthrough": true},
+		Status:         StatusActive,
+		Schedulable:    true,
+		RateMultiplier: f64p(1),
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, originalBody)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.Stream)
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, "https://api.openai.com/v1/responses/compact", upstream.lastReq.URL.String())
+	require.Equal(t, "application/json", upstream.lastReq.Header.Get("Accept"))
+	require.Equal(t, "Bearer sk-api-key", upstream.lastReq.Header.Get("Authorization"))
+	require.Equal(t, "curl/8.0", upstream.lastReq.Header.Get("User-Agent"))
+	require.False(t, gjson.GetBytes(upstream.lastBody, "stream").Exists())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "store").Exists())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").Exists())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "client_metadata").Exists())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "service_tier").Exists())
+	require.Equal(t, "gpt-5.2", gjson.GetBytes(upstream.lastBody, "model").String())
+	require.Equal(t, "compact-test", gjson.GetBytes(upstream.lastBody, "instructions").String())
+	require.Equal(t, "compact me", gjson.GetBytes(upstream.lastBody, "input.0.text").String())
+	require.Contains(t, rec.Body.String(), `"id":"cmp_apikey"`)
+}
+
 func TestOpenAIGatewayService_OAuthPassthrough_WarnOnTimeoutHeadersForStream(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	logSink, restore := captureStructuredLog(t)

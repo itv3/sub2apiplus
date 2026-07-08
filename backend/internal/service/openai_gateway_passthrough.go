@@ -36,7 +36,8 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	startTime time.Time,
 ) (*OpenAIForwardResult, error) {
 	upstreamPassthroughModel := ""
-	if isOpenAIResponsesCompactPath(c) {
+	isCompact := isOpenAIResponsesCompactPath(c)
+	if isCompact {
 		compactMappedModel := resolveOpenAICompactForwardModel(account, reqModel)
 		if compactMappedModel != "" && compactMappedModel != reqModel {
 			nextBody, setErr := sjson.SetBytes(body, "model", compactMappedModel)
@@ -46,6 +47,14 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			body = nextBody
 			upstreamPassthroughModel = compactMappedModel
 		}
+		normalizedBody, normalized, err := normalizeOpenAICompactRequestBody(body)
+		if err != nil {
+			return nil, err
+		}
+		if normalized {
+			body = normalizedBody
+		}
+		reqStream = false
 	}
 
 	if account != nil && account.Type == AccountTypeOAuth {
@@ -62,14 +71,18 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			return nil, fmt.Errorf("openai passthrough rejected before upstream: %s", rejectReason)
 		}
 
-		normalizedBody, normalized, err := normalizeOpenAIPassthroughOAuthBody(body, isOpenAIResponsesCompactPath(c))
+		normalizedBody, normalized, err := normalizeOpenAIPassthroughOAuthBody(body, isCompact)
 		if err != nil {
 			return nil, err
 		}
 		if normalized {
 			body = normalizedBody
 		}
-		reqStream = gjson.GetBytes(body, "stream").Bool()
+		if isCompact {
+			reqStream = false
+		} else {
+			reqStream = gjson.GetBytes(body, "stream").Bool()
+		}
 	}
 
 	sanitizedBody, sanitized, err := sanitizeEmptyBase64InputImagesInOpenAIBody(body)
@@ -403,6 +416,9 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 
 	if req.Header.Get("content-type") == "" {
 		req.Header.Set("content-type", "application/json")
+	}
+	if isOpenAIResponsesCompactPath(c) {
+		req.Header.Set("accept", "application/json")
 	}
 
 	// 账号级请求头覆写（仅 openai api_key 账号启用时生效；OAuth 路径 no-op）

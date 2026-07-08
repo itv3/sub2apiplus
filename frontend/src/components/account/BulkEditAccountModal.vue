@@ -1270,6 +1270,7 @@ import ModelWhitelistSelector from '@/components/account/ModelWhitelistSelector.
 import Icon from '@/components/icons/Icon.vue'
 import {
   buildModelMappingObject as buildModelMappingPayload,
+  fetchAntigravityOfficialModels,
   getPresetMappingsByPlatform
 } from '@/composables/useModelWhitelist'
 import {
@@ -1503,6 +1504,21 @@ const isOpenAIModelRestrictionDisabled = computed(
     allOpenAIPassthroughCapable.value &&
     enableOpenAIPassthrough.value &&
     openaiPassthroughEnabled.value
+)
+
+const ensureAntigravityOfficialModels = async () => {
+  if (!props.show || !targetSelectedPlatforms.value.includes('antigravity')) {
+    return
+  }
+  await fetchAntigravityOfficialModels()
+}
+
+watch(
+  () => [props.show, targetSelectedPlatforms.value.join(',')],
+  () => {
+    void ensureAntigravityOfficialModels()
+  },
+  { immediate: true }
 )
 
 const openAIWSModeOptions = computed(() => [

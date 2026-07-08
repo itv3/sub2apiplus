@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/domain"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 )
 
@@ -164,6 +165,11 @@ func OpenAIImageGenerationIntentFromContext(ctx context.Context) bool {
 
 func resolveFinalAntigravityModelKey(ctx context.Context, account *Account, requestedModel string) string {
 	modelKey := mapAntigravityModel(account, requestedModel)
+	if modelKey == "" {
+		if officialModel := strings.TrimPrefix(strings.TrimSpace(requestedModel), "models/"); antigravity.IsOfficialModelID(officialModel) {
+			modelKey = officialModel
+		}
+	}
 	if modelKey == "" {
 		return ""
 	}

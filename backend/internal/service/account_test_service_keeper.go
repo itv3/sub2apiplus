@@ -73,6 +73,7 @@ func (s *AccountTestService) ProxyKeeperOpenAIAccount(ctx context.Context, accou
 	if orgID := strings.TrimSpace(account.GetOpenAIOrganizationID()); orgID != "" {
 		req.Header.Set("OpenAI-Organization", orgID)
 	}
+	applyAccountTestHeaderOverrides(account, req.Header)
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
@@ -138,6 +139,7 @@ func (s *AccountTestService) ProxyKeeperAnthropicAccount(ctx context.Context, ac
 	if req.Header.Get("anthropic-version") == "" {
 		req.Header.Set("anthropic-version", "2023-06-01")
 	}
+	applyAccountTestHeaderOverrides(account, req.Header)
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
@@ -164,6 +166,9 @@ func KeeperMaxOutputTokens(account *Account) int {
 	value := keeperExtraInt(account.Extra, "keeper_keepalive_max_output_tokens")
 	if value <= 0 {
 		return DefaultKeeperMaxOutputTokens
+	}
+	if value > KeeperProxyMaxOutputTokensHardCap {
+		return KeeperProxyMaxOutputTokensHardCap
 	}
 	return value
 }
@@ -327,12 +332,47 @@ func isKeeperProxyPathPrefix(path string, allowed ...string) bool {
 
 func copyProxyRequestHeaders(dst http.Header, src http.Header) {
 	for key, values := range src {
-		if isHopByHopHeader(key) || strings.EqualFold(key, "Authorization") || strings.EqualFold(key, "X-Api-Key") {
+		if !isKeeperProxyRequestHeaderAllowed(key) {
 			continue
 		}
 		for _, value := range values {
 			dst.Add(key, value)
 		}
+	}
+}
+
+func isKeeperProxyRequestHeaderAllowed(name string) bool {
+	if isHopByHopHeader(name) {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "accept",
+		"anthropic-beta",
+		"anthropic-client-sha",
+		"anthropic-client-version",
+		"anthropic-dangerous-direct-browser-access",
+		"anthropic-version",
+		"content-type",
+		"conversation_id",
+		"conversation-id",
+		"originator",
+		"openai-beta",
+		"session_id",
+		"session-id",
+		"user-agent",
+		"version",
+		"x-codex-turn-metadata",
+		"x-codex-turn-state",
+		"x-request-id",
+		"x-stainless-arch",
+		"x-stainless-lang",
+		"x-stainless-os",
+		"x-stainless-package-version",
+		"x-stainless-runtime",
+		"x-stainless-runtime-version":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -345,168 +385,12 @@ func isHopByHopHeader(name string) bool {
 	}
 }
 
-type KeeperKeepaliveRequest struct {
-	Model           string
-	Prompt          string
-	MaxOutputTokens int
-}
-
 type KeeperKeepaliveUsage struct {
 	InputTokens              int64 `json:"input_tokens"`
 	OutputTokens             int64 `json:"output_tokens"`
 	CachedInputTokens        int64 `json:"cached_input_tokens,omitempty"`
 	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens,omitempty"`
 	TotalTokens              int64 `json:"total_tokens"`
-}
-
-type KeeperKeepaliveBilling struct {
-	Available      bool    `json:"available"`
-	RateMultiplier float64 `json:"rate_multiplier"`
-	TotalCost      float64 `json:"total_cost,omitempty"`
-	PricingSource  string  `json:"pricing_source"`
-}
-
-type KeeperKeepaliveResult struct {
-	ID          string                  `json:"id"`
-	AccountID   int64                   `json:"account_id"`
-	AccountName string                  `json:"account_name"`
-	Platform    string                  `json:"platform"`
-	AccountType string                  `json:"account_type"`
-	Model       string                  `json:"model"`
-	Prompt      string                  `json:"prompt"`
-	ReplyText   string                  `json:"reply_text,omitempty"`
-	Summary     string                  `json:"summary,omitempty"`
-	Status      string                  `json:"status"`
-	Error       string                  `json:"error,omitempty"`
-	Usage       *KeeperKeepaliveUsage   `json:"usage,omitempty"`
-	Billing     *KeeperKeepaliveBilling `json:"billing,omitempty"`
-	StartedAt   time.Time               `json:"started_at"`
-	CompletedAt time.Time               `json:"completed_at,omitempty"`
-	LatencyMS   int64                   `json:"latency_ms"`
-}
-
-// RunKeeperKeepalive executes one low-frequency keepalive request through the
-// existing account test path, so credentials and upstream details stay inside
-// sub2apiplus.
-func (s *AccountTestService) RunKeeperKeepalive(ctx context.Context, accountID int64, req KeeperKeepaliveRequest) (*KeeperKeepaliveResult, error) {
-	startedAt := time.Now()
-	account, err := s.accountRepo.GetByID(ctx, accountID)
-	if err != nil {
-		return &KeeperKeepaliveResult{
-			ID:          startedAt.Format("20060102T150405.000000000"),
-			AccountID:   accountID,
-			Model:       strings.TrimSpace(req.Model),
-			Prompt:      strings.TrimSpace(req.Prompt),
-			Status:      "error",
-			Error:       "Account not found",
-			StartedAt:   startedAt,
-			CompletedAt: time.Now(),
-		}, err
-	}
-	if account == nil || !account.IsSchedulable() {
-		completedAt := time.Now()
-		return &KeeperKeepaliveResult{
-			ID:          startedAt.Format("20060102T150405.000000000"),
-			AccountID:   accountID,
-			AccountName: accountName(account),
-			Platform:    accountPlatform(account),
-			AccountType: accountType(account),
-			Model:       strings.TrimSpace(req.Model),
-			Prompt:      strings.TrimSpace(req.Prompt),
-			Status:      "error",
-			Error:       "Account is not schedulable",
-			StartedAt:   startedAt,
-			CompletedAt: completedAt,
-			LatencyMS:   completedAt.Sub(startedAt).Milliseconds(),
-		}, fmt.Errorf("account is not schedulable")
-	}
-	if account.Platform != PlatformOpenAI && account.Platform != PlatformAnthropic {
-		completedAt := time.Now()
-		return &KeeperKeepaliveResult{
-			ID:          startedAt.Format("20060102T150405.000000000"),
-			AccountID:   account.ID,
-			AccountName: account.Name,
-			Platform:    account.Platform,
-			AccountType: account.Type,
-			Model:       strings.TrimSpace(req.Model),
-			Prompt:      strings.TrimSpace(req.Prompt),
-			Status:      "error",
-			Error:       "Unsupported account platform",
-			StartedAt:   startedAt,
-			CompletedAt: completedAt,
-			LatencyMS:   completedAt.Sub(startedAt).Milliseconds(),
-		}, fmt.Errorf("unsupported account platform")
-	}
-
-	w := httptest.NewRecorder()
-	ginCtx, _ := gin.CreateTestContext(w)
-	ginCtx.Request = (&http.Request{}).WithContext(ctx)
-
-	model := strings.TrimSpace(req.Model)
-	prompt := strings.TrimSpace(req.Prompt)
-	testErr := s.TestAccountConnection(ginCtx, account.ID, model, prompt, AccountTestModeDefault, req.MaxOutputTokens)
-
-	completedAt := time.Now()
-	body := w.Body.String()
-	replyText, errMsg := parseTestSSEOutput(body)
-	usage := parseTestSSEUsage(body)
-	status := "success"
-	if testErr != nil || errMsg != "" {
-		status = "error"
-		if errMsg == "" && testErr != nil {
-			errMsg = testErr.Error()
-		}
-	}
-	if model == "" {
-		model = modelFromCapturedSSE(body)
-	}
-	result := &KeeperKeepaliveResult{
-		ID:          startedAt.Format("20060102T150405.000000000"),
-		AccountID:   account.ID,
-		AccountName: account.Name,
-		Platform:    account.Platform,
-		AccountType: account.Type,
-		Model:       model,
-		Prompt:      prompt,
-		ReplyText:   replyText,
-		Summary:     truncateKeeperSummary(replyText),
-		Status:      status,
-		Error:       errMsg,
-		Usage:       usage,
-		Billing: &KeeperKeepaliveBilling{
-			Available:      false,
-			RateMultiplier: account.BillingRateMultiplier(),
-			PricingSource:  "sub2apiplus",
-		},
-		StartedAt:   startedAt,
-		CompletedAt: completedAt,
-		LatencyMS:   completedAt.Sub(startedAt).Milliseconds(),
-	}
-	if status != "success" {
-		return result, fmt.Errorf("%s", errMsg)
-	}
-	return result, nil
-}
-
-func accountName(account *Account) string {
-	if account == nil {
-		return ""
-	}
-	return account.Name
-}
-
-func accountPlatform(account *Account) string {
-	if account == nil {
-		return ""
-	}
-	return account.Platform
-}
-
-func accountType(account *Account) string {
-	if account == nil {
-		return ""
-	}
-	return account.Type
 }
 
 func firstPositiveInt(values ...int) int {
@@ -516,33 +400,6 @@ func firstPositiveInt(values ...int) int {
 		}
 	}
 	return 0
-}
-
-func modelFromCapturedSSE(body string) string {
-	for _, line := range strings.Split(body, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		jsonStr := strings.TrimPrefix(line, "data: ")
-		var event TestEvent
-		if err := json.Unmarshal([]byte(jsonStr), &event); err != nil {
-			continue
-		}
-		if event.Type == "test_start" && strings.TrimSpace(event.Model) != "" {
-			return strings.TrimSpace(event.Model)
-		}
-	}
-	return ""
-}
-
-func truncateKeeperSummary(text string) string {
-	text = strings.TrimSpace(text)
-	if len([]rune(text)) <= 240 {
-		return text
-	}
-	runes := []rune(text)
-	return string(runes[:240])
 }
 
 // RunTestBackground executes an account test in-memory (no real HTTP client),

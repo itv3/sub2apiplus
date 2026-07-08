@@ -773,7 +773,7 @@ func (c *claudePersistentExecutor) ensureStarted(ctx context.Context, req persis
 	processCtx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(processCtx, path, args...)
 	cmd.Dir = req.Account.WorkspacePath
-	cmd.Env = append(os.Environ(), env...)
+	cmd.Env = buildKeeperClientEnv(env...)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
 		cancel()
@@ -821,7 +821,16 @@ func (c *claudePersistentExecutor) ensureStarted(ctx context.Context, req persis
 }
 
 func claudePersistentArgs(req persistentExecution) []string {
-	args := []string{"--bare", "--verbose", "--print", "--input-format", "stream-json", "--output-format", "stream-json", "--model", req.Account.Model}
+	args := []string{
+		"--bare",
+		"--verbose",
+		"--print",
+		"--permission-mode", "plan",
+		"--disallowed-tools", "Bash,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch",
+		"--input-format", "stream-json",
+		"--output-format", "stream-json",
+		"--model", req.Account.Model,
+	}
 	if betas := claudeBetasForModel(req.Account.Model); len(betas) > 0 {
 		args = append(args, "--betas")
 		args = append(args, betas...)
@@ -840,9 +849,37 @@ func claudePersistentEnv(req persistentExecution) []string {
 		"ANTHROPIC_AUTH_TOKEN=" + req.Account.APIKey,
 		"ANTHROPIC_BASE_URL=" + req.Account.BaseURL,
 		"ANTHROPIC_MODEL=" + req.Account.Model,
+		"CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1",
 	}
 	if betas := claudeBetasForModel(req.Account.Model); len(betas) > 0 {
 		env = append(env, "ANTHROPIC_BETAS="+strings.Join(betas, ","))
+	}
+	return env
+}
+
+func buildKeeperClientEnv(extra ...string) []string {
+	env := keeperClientBaseEnv()
+	env = append(env, extra...)
+	return env
+}
+
+func keeperClientBaseEnv() []string {
+	// 官方客户端子进程只能继承运行所需的系统环境，避免把 keeper 主进程
+	// 的内部 token、数据库地址或代理配置暴露给可被模型上下文诱导读取的进程。
+	allowed := []string{
+		"PATH",
+		"LANG",
+		"LC_ALL",
+		"LC_CTYPE",
+		"SSL_CERT_FILE",
+		"SSL_CERT_DIR",
+		"TZ",
+	}
+	env := make([]string, 0, len(allowed))
+	for _, key := range allowed {
+		if value, ok := os.LookupEnv(key); ok {
+			env = append(env, key+"="+value)
+		}
 	}
 	return env
 }
@@ -1167,7 +1204,7 @@ func (c *codexPersistentExecutor) ensureStarted(ctx context.Context, req persist
 	args := []string{"app-server", "--listen", listenURL}
 	cmd := exec.CommandContext(processCtx, path, args...)
 	cmd.Dir = req.Account.WorkspacePath
-	cmd.Env = append(os.Environ(),
+	cmd.Env = buildKeeperClientEnv(
 		"HOME="+req.Layout.HomeDir,
 		"CODEX_HOME="+req.Layout.CodexHome,
 		"OPENAI_API_KEY="+req.Account.APIKey,

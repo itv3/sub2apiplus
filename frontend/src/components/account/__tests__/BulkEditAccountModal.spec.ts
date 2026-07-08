@@ -4,6 +4,17 @@ import BulkEditAccountModal from '../BulkEditAccountModal.vue'
 import ModelWhitelistSelector from '../ModelWhitelistSelector.vue'
 import { adminAPI } from '@/api/admin'
 
+const antigravityOfficialModels = vi.hoisted(() => [
+  { id: 'gemini-3.5-flash-extra-low', display_name: 'Gemini 3.5 Flash Low', model_enum: 'MODEL_PLACEHOLDER_M187', thinking_budget: 1000, created_at: '2026-06-29T00:00:00Z', is_reasoning: true },
+  { id: 'gemini-3.5-flash-low', display_name: 'Gemini 3.5 Flash Medium', model_enum: 'MODEL_PLACEHOLDER_M20', thinking_budget: 4000, created_at: '2026-06-29T00:00:00Z', is_reasoning: true },
+  { id: 'gemini-3-flash-agent', display_name: 'Gemini 3.5 Flash High', model_enum: 'MODEL_PLACEHOLDER_M132', thinking_budget: 10000, created_at: '2026-06-29T00:00:00Z', is_reasoning: true },
+  { id: 'gemini-3.1-pro-low', display_name: 'Gemini 3.1 Pro Low', model_enum: 'MODEL_PLACEHOLDER_M36', thinking_budget: 1001, created_at: '2026-02-19T00:00:00Z', is_reasoning: true },
+  { id: 'gemini-pro-agent', display_name: 'Gemini 3.1 Pro High', model_enum: 'MODEL_PLACEHOLDER_M16', thinking_budget: 10001, created_at: '2026-02-19T00:00:00Z', is_reasoning: true },
+  { id: 'claude-sonnet-4-6', display_name: 'Claude Sonnet 4.6', model_enum: 'MODEL_PLACEHOLDER_M35', thinking_budget: 1024, created_at: '2026-02-17T00:00:00Z', is_reasoning: true },
+  { id: 'claude-opus-4-6-thinking', display_name: 'Claude Opus 4.6 Thinking', model_enum: 'MODEL_PLACEHOLDER_M26', thinking_budget: 1024, created_at: '2026-02-05T00:00:00Z', is_reasoning: true },
+  { id: 'gpt-oss-120b-medium', display_name: 'GPT-OSS 120B Medium', model_enum: 'MODEL_OPENAI_GPT_OSS_120B_MEDIUM', thinking_budget: 8192, created_at: '2026-06-29T00:00:00Z', is_reasoning: true }
+])
+
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
     showError: vi.fn(),
@@ -22,7 +33,11 @@ vi.mock('@/api/admin', () => ({
 }))
 
 vi.mock('@/api/admin/accounts', () => ({
-  getAntigravityDefaultModelMapping: vi.fn()
+  getAntigravityDefaultModelMapping: vi.fn(),
+  getAntigravityOfficialModels: vi.fn(async () => ({
+    models: antigravityOfficialModels,
+    mapping: Object.fromEntries(antigravityOfficialModels.map((model) => [model.id, model.id]))
+  }))
 }))
 
 vi.mock('vue-i18n', async () => {
@@ -88,27 +103,33 @@ describe('BulkEditAccountModal', () => {
     } as any)
   })
 
-  it('antigravity 白名单包含 Gemini 图片模型且过滤掉普通 GPT 模型', async () => {
+  it('antigravity 白名单使用后端官方模型且过滤非官方模型', async () => {
     const wrapper = mountModal()
+    await flushPromises()
     const selector = wrapper.findComponent(ModelWhitelistSelector)
     expect(selector.exists()).toBe(true)
 
     await selector.find('div.cursor-pointer').trigger('click')
 
-    expect(wrapper.text()).toContain('gemini-3.1-flash-image')
-    expect(wrapper.text()).toContain('gemini-2.5-flash-image')
+    expect(wrapper.text()).toContain('gemini-pro-agent')
+    expect(wrapper.text()).toContain('gpt-oss-120b-medium')
+    expect(wrapper.text()).not.toContain('gemini-3.1-flash-image')
+    expect(wrapper.text()).not.toContain('gemini-2.5-flash-image')
     expect(wrapper.text()).not.toContain('gpt-5.3-codex')
   })
 
-  it('antigravity 映射预设包含图片映射并过滤 OpenAI 预设', async () => {
+  it('antigravity 映射预设来自官方模型描述表并过滤 OpenAI 预设', async () => {
     const wrapper = mountModal()
+    await flushPromises()
 
     const mappingTab = wrapper.findAll('button').find((btn) => btn.text().includes('admin.accounts.modelMapping'))
     expect(mappingTab).toBeTruthy()
     await mappingTab!.trigger('click')
 
-    expect(wrapper.text()).toContain('3.1-Flash-Image passthrough')
-    expect(wrapper.text()).toContain('3-Pro-Image→3.1')
+    expect(wrapper.text()).toContain('Gemini 3.1 Pro High')
+    expect(wrapper.text()).toContain('Claude Opus 4.6 Thinking')
+    expect(wrapper.text()).not.toContain('3.1-Flash-Image passthrough')
+    expect(wrapper.text()).not.toContain('3-Pro-Image→3.1')
     expect(wrapper.text()).not.toContain('GPT-5.3 Codex Spark')
   })
 

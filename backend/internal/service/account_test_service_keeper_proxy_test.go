@@ -49,9 +49,11 @@ func TestCopyProxyRequestHeadersStripsCredentialsAndHopByHopHeaders(t *testing.T
 	src := http.Header{
 		"Authorization":  []string{"Bearer keeper"},
 		"X-Api-Key":      []string{"keeper"},
+		"Cookie":         []string{"sid=admin"},
 		"Connection":     []string{"close"},
 		"Content-Type":   []string{"application/json"},
 		"Anthropic-Beta": []string{"tools-2024-05-16"},
+		"Set-Cookie":     []string{"upstream=bad"},
 	}
 	dst := http.Header{}
 
@@ -59,9 +61,39 @@ func TestCopyProxyRequestHeadersStripsCredentialsAndHopByHopHeaders(t *testing.T
 
 	require.Empty(t, dst.Get("Authorization"))
 	require.Empty(t, dst.Get("X-Api-Key"))
+	require.Empty(t, dst.Get("Cookie"))
 	require.Empty(t, dst.Get("Connection"))
+	require.Empty(t, dst.Get("Set-Cookie"))
 	require.Equal(t, "application/json", dst.Get("Content-Type"))
 	require.Equal(t, "tools-2024-05-16", dst.Get("Anthropic-Beta"))
+}
+
+func TestKeeperProxyAppliesAccountHeaderOverridesAfterAllowlist(t *testing.T) {
+	src := http.Header{
+		"Authorization":    []string{"Bearer keeper"},
+		"Cookie":           []string{"sid=admin"},
+		"X-Stainless-Lang": []string{"client-lang"},
+	}
+	dst := http.Header{}
+	copyProxyRequestHeaders(dst, src)
+
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			credKeyHeaderOverrideEnabled: true,
+			credKeyHeaderOverrides: map[string]any{
+				"x-stainless-lang": "go",
+				"authorization":    "Bearer blocked",
+				"cookie":           "sid=blocked",
+			},
+		},
+	}
+	applyAccountTestHeaderOverrides(account, dst)
+
+	require.Equal(t, "go", dst.Get("X-Stainless-Lang"))
+	require.Empty(t, dst.Get("Authorization"))
+	require.Empty(t, dst.Get("Cookie"))
 }
 
 func TestBuildKeeperOpenAIProxyURLAvoidsDoubleV1(t *testing.T) {
@@ -82,6 +114,9 @@ func TestKeeperMaxOutputTokensUsesDefaultAndExtra(t *testing.T) {
 	}}))
 	require.Equal(t, DefaultKeeperMaxOutputTokens, KeeperMaxOutputTokens(&Account{Extra: map[string]any{
 		"keeper_keepalive_max_output_tokens": 0,
+	}}))
+	require.Equal(t, KeeperProxyMaxOutputTokensHardCap, KeeperMaxOutputTokens(&Account{Extra: map[string]any{
+		"keeper_keepalive_max_output_tokens": KeeperProxyMaxOutputTokensHardCap + 1,
 	}}))
 }
 

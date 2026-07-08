@@ -2602,12 +2602,13 @@ import {
   resolveOpenAIWSModeFromExtra
 } from '@/utils/openaiWsMode'
 import {
-  getPresetMappingsByPlatform,
-  commonErrorCodes,
-  buildModelMappingObject,
-  fetchAntigravityDefaultMappings,
-  getOfficialAntigravityDisplayMappings,
-  splitModelMappingObject,
+	  getPresetMappingsByPlatform,
+	  commonErrorCodes,
+	  buildModelMappingObject,
+	  fetchAntigravityOfficialModels,
+	  fetchAntigravityDefaultMappings,
+	  getOfficialAntigravityDisplayMappings,
+	  splitModelMappingObject,
   isValidWildcardPattern
 } from '@/composables/useModelWhitelist'
 
@@ -3555,7 +3556,8 @@ const syncAntigravityUpstreamModels = async () => {
       return
     }
 
-    const fetchedMappings = await fetchAntigravityDefaultMappings()
+	    await fetchAntigravityOfficialModels()
+	    const fetchedMappings = await fetchAntigravityDefaultMappings()
     const officialMappings = fetchedMappings.length > 0 ? fetchedMappings : getOfficialAntigravityDisplayMappings()
     const officialModels = officialMappings.map((mapping) => mapping.to).filter(Boolean)
     antigravityModelRestrictionMode.value = 'whitelist'

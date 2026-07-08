@@ -3,8 +3,11 @@ package routes
 
 import (
 	"crypto/subtle"
+	"net/http"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/handler"
 	"github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -117,35 +120,81 @@ func RegisterAdminRoutes(
 
 func registerKeeperInternalRoutes(v1 *gin.RouterGroup, h *handler.Handlers, adminAuth middleware.AdminAuthMiddleware) {
 	keeper := v1.Group("/internal/keeper")
-	keeper.Use(keeperInternalAuth(adminAuth))
 	{
-		keeper.GET("/accounts", h.Admin.Account.ListKeeperAccounts)
-		keeper.GET("/projects", h.Admin.Account.ListKeeperProjects)
-		keeper.GET("/state", h.Admin.Account.GetKeeperState)
-		keeper.GET("/settings", h.Admin.Account.ProxyKeeperSettings)
-		keeper.POST("/settings", h.Admin.Account.ProxyKeeperSettings)
-		keeper.POST("/run", h.Admin.Account.RunKeeperTarget)
-		keeper.GET("/accounts/:id/models", h.Admin.Account.GetAvailableModels)
-		keeper.POST("/accounts/:id/keepalive", h.Admin.Account.RecordKeeperKeepalive)
-		keeper.Any("/openai/accounts/:id/*proxy_path", h.Admin.Account.ProxyKeeperOpenAIAccount)
-		keeper.Any("/anthropic/accounts/:id/*proxy_path", h.Admin.Account.ProxyKeeperAnthropicAccount)
+		keeper.GET("/accounts", keeperInternalOrAdminAuth(adminAuth), h.Admin.Account.ListKeeperAccounts)
+		keeper.GET("/projects", keeperInternalOrAdminAuth(adminAuth), h.Admin.Account.ListKeeperProjects)
+		keeper.GET("/state", keeperInternalOrAdminAuth(adminAuth), h.Admin.Account.GetKeeperState)
+		keeper.GET("/settings", keeperInternalOrAdminAuth(adminAuth), h.Admin.Account.ProxyKeeperSettings)
+		keeper.POST("/settings", keeperInternalOrAdminAuth(adminAuth), h.Admin.Account.ProxyKeeperSettings)
+		keeper.POST("/run", keeperInternalOrAdminAuth(adminAuth), h.Admin.Account.RunKeeperTarget)
+		keeper.GET("/accounts/:id/models", keeperInternalOrAdminAuth(adminAuth), h.Admin.Account.GetAvailableModels)
+		keeper.POST("/accounts/:id/keepalive", keeperInternalTokenAuth(), h.Admin.Account.RecordKeeperKeepalive)
+		keeper.Any("/openai/accounts/:id/*proxy_path", keeperProxyTokenAuth(service.PlatformOpenAI), h.Admin.Account.ProxyKeeperOpenAIAccount)
+		keeper.Any("/anthropic/accounts/:id/*proxy_path", keeperProxyTokenAuth(service.PlatformAnthropic), h.Admin.Account.ProxyKeeperAnthropicAccount)
 	}
 }
 
-func keeperInternalAuth(adminAuth middleware.AdminAuthMiddleware) gin.HandlerFunc {
+func keeperInternalOrAdminAuth(adminAuth middleware.AdminAuthMiddleware) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		expected := strings.TrimSpace(os.Getenv("SUB2APIPLUS_KEEPER_INTERNAL_TOKEN"))
-		actual := strings.TrimSpace(c.GetHeader("x-api-key"))
-		if actual == "" {
-			actual = strings.TrimSpace(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "))
-		}
-		if expected != "" && actual != "" &&
-			subtle.ConstantTimeCompare([]byte(actual), []byte(expected)) == 1 {
+		if keeperInternalTokenMatches(c) {
+			c.Set(service.KeeperInternalAuthContextKey, true)
 			c.Next()
 			return
 		}
 		gin.HandlerFunc(adminAuth)(c)
 	}
+}
+
+func keeperInternalTokenAuth() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		expected := strings.TrimSpace(os.Getenv("SUB2APIPLUS_KEEPER_INTERNAL_TOKEN"))
+		if expected == "" {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "SUB2APIPLUS_KEEPER_INTERNAL_TOKEN is not configured"})
+			return
+		}
+		if !keeperInternalTokenMatches(c) {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": "invalid keeper internal token"})
+			return
+		}
+		c.Set(service.KeeperInternalAuthContextKey, true)
+		c.Next()
+	}
+}
+
+func keeperProxyTokenAuth(platform string) gin.HandlerFunc {
+	return func(c *gin.Context) {
+		accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+		if err != nil || accountID <= 0 {
+			c.AbortWithStatusJSON(http.StatusBadRequest, gin.H{"error": "invalid account ID"})
+			return
+		}
+		secret := strings.TrimSpace(os.Getenv("SUB2APIPLUS_KEEPER_INTERNAL_TOKEN"))
+		if secret == "" {
+			c.AbortWithStatusJSON(http.StatusServiceUnavailable, gin.H{"error": "SUB2APIPLUS_KEEPER_INTERNAL_TOKEN is not configured"})
+			return
+		}
+		token := keeperAuthToken(c)
+		if err := service.ValidateKeeperProxyToken(token, secret, accountID, platform, time.Now()); err != nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{"error": err.Error()})
+			return
+		}
+		c.Next()
+	}
+}
+
+func keeperInternalTokenMatches(c *gin.Context) bool {
+	expected := strings.TrimSpace(os.Getenv("SUB2APIPLUS_KEEPER_INTERNAL_TOKEN"))
+	actual := keeperAuthToken(c)
+	return expected != "" && actual != "" &&
+		subtle.ConstantTimeCompare([]byte(actual), []byte(expected)) == 1
+}
+
+func keeperAuthToken(c *gin.Context) string {
+	actual := strings.TrimSpace(c.GetHeader("x-api-key"))
+	if actual == "" {
+		actual = strings.TrimSpace(strings.TrimPrefix(c.GetHeader("Authorization"), "Bearer "))
+	}
+	return actual
 }
 
 func registerAdminComplianceRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
@@ -374,6 +423,7 @@ func registerAccountRoutes(admin *gin.RouterGroup, h *handler.Handlers) {
 
 		// Antigravity 默认模型映射
 		accounts.GET("/antigravity/default-model-mapping", h.Admin.Account.GetAntigravityDefaultModelMapping)
+		accounts.GET("/antigravity/official-models", h.Admin.Account.GetAntigravityOfficialModels)
 
 		// Spark 影子账号
 		accounts.POST("/:id/shadow", h.Admin.OpenAIOAuth.CreateShadow)

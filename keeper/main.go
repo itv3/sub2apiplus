@@ -26,7 +26,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var version = "0.1.146-2"
+var version = "0.1.146-3"
 
 const (
 	defaultClientTimeoutSeconds = 2700
@@ -227,6 +227,7 @@ type keeperAccountConfig struct {
 	WorkEnd         string     `json:"work_end"`
 	Due             bool       `json:"due"`
 	NextKeepaliveAt *time.Time `json:"next_keepalive_at"`
+	ProxyToken      string     `json:"proxy_token"`
 }
 
 type settingsRequest struct {
@@ -776,9 +777,9 @@ func (k *Keeper) renderRuntimeEnv(target TargetConfig, layout runtimeLayout) str
 		"SUB2APIPLUS_KEEPER_MODEL=" + shellQuote(target.Model),
 		"SUB2APIPLUS_KEEPER_WORKSPACE_PATH=" + shellQuote(target.WorkspacePath),
 		"CODEX_HOME=" + shellQuote(layout.CodexHome),
-		"OPENAI_API_KEY=" + shellQuote(k.cfg.Sub2APIPlus.InternalToken),
-		"ANTHROPIC_API_KEY=" + shellQuote(k.cfg.Sub2APIPlus.InternalToken),
-		"ANTHROPIC_AUTH_TOKEN=" + shellQuote(k.cfg.Sub2APIPlus.InternalToken),
+		"OPENAI_API_KEY=" + shellQuote(target.APIKey),
+		"ANTHROPIC_API_KEY=" + shellQuote(target.APIKey),
+		"ANTHROPIC_AUTH_TOKEN=" + shellQuote(target.APIKey),
 		"ANTHROPIC_BASE_URL=" + shellQuote(target.BaseURL),
 		"ANTHROPIC_MODEL=" + shellQuote(target.Model),
 	}
@@ -1464,7 +1465,16 @@ func (k *Keeper) fetchTargets(ctx context.Context) ([]TargetConfig, error) {
 		if !account.Enabled || account.ID <= 0 {
 			continue
 		}
+		workspacePath := k.workspacePath(account.Workspace)
+		if strings.TrimSpace(account.Workspace) == "" || workspacePath == "" {
+			continue
+		}
 		executor := firstNonEmpty(account.Executor, defaultExecutorForPlatform(account.Platform))
+		proxyToken := strings.TrimSpace(account.ProxyToken)
+		if proxyToken == "" {
+			log.Printf("跳过保活账号 %d：sub2apiplus 未返回账号代理 token", account.ID)
+			continue
+		}
 		targets = append(targets, TargetConfig{
 			ID:              strconv.FormatInt(account.ID, 10),
 			Name:            account.Name,
@@ -1475,12 +1485,12 @@ func (k *Keeper) fetchTargets(ctx context.Context) ([]TargetConfig, error) {
 			Executor:        executor,
 			ClientType:      executor,
 			BaseURL:         k.internalClientBaseURL(account.ID, executor),
-			APIKey:          k.cfg.Sub2APIPlus.InternalToken,
+			APIKey:          proxyToken,
 			Model:           account.Model,
 			IntervalMinutes: maxInt(account.IntervalMinutes, 1),
 			WorkStart:       account.WorkStart,
 			WorkEnd:         account.WorkEnd,
-			WorkspacePath:   k.workspacePath(account.Workspace),
+			WorkspacePath:   workspacePath,
 			PromptText:      account.Prompt,
 			Mode:            normalizeMode(account.Mode),
 			TimeoutSeconds:  defaultClientTimeoutSeconds,
@@ -2151,7 +2161,7 @@ var indexTemplate = template.Must(template.New("index").Funcs(template.FuncMap{
   <h2>{{.Name}} <span class="pill">account {{.AccountID}}</span></h2>
   <p class="muted">model={{.Model}} · enabled={{.Enabled}} · running={{.Running}} · today={{.DailyKeepaliveCount}} · failures={{.ConsecutiveFailures}} · next={{.NextRunAt}}</p>
   <p>累计 tokens：{{tokens .}} · 累计费用：{{printf "%.8f" (cost .)}}</p>
-  <button onclick="fetch('/api/run?target={{.Name}}',{method:'POST'}).then(()=>location.reload())">立即保活一次</button>
+  <button onclick="fetch('/api/run?target={{.AccountID}}',{method:'POST'}).then(()=>location.reload())">立即保活一次</button>
   {{if .LastError}}<p class="err">{{.LastError}}</p>{{end}}
   <table>
     <thead><tr><th>时间</th><th>状态</th><th>模型</th><th>用量/费用</th><th>对话内容</th></tr></thead>

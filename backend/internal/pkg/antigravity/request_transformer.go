@@ -124,12 +124,9 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 	// 检测是否有 web_search 工具
 	hasWebSearchTool := hasWebSearchTool(claudeReq.Tools)
 	requestType := "agent"
-	targetModel := mappedModel
+	targetModel := ResolveClaudeUpstreamModel(claudeReq, mappedModel)
 	if hasWebSearchTool {
 		requestType = "web_search"
-		if targetModel != OfficialWebSearchFallbackModel {
-			targetModel = OfficialWebSearchFallbackModel
-		}
 	}
 
 	// 检测是否启用 thinking
@@ -221,6 +218,14 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 	}
 
 	return json.Marshal(v1Req)
+}
+
+func ResolveClaudeUpstreamModel(claudeReq *ClaudeRequest, mappedModel string) string {
+	targetModel := strings.TrimSpace(mappedModel)
+	if claudeReq != nil && hasWebSearchTool(claudeReq.Tools) {
+		return OfficialWebSearchFallbackModel
+	}
+	return targetModel
 }
 
 // antigravityIdentity Antigravity identity 提示词

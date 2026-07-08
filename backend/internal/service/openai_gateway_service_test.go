@@ -2570,8 +2570,10 @@ func TestOpenAIGatewayService_MessagesAPIKeyCodexMimicUsesHeadersBodyAndTLS(t *t
 			"base_url": "http://upstream.example",
 		},
 		Extra: map[string]any{
-			"openai_apikey_mimic_codex_cli": true,
-			"enable_tls_fingerprint":        true,
+			"openai_apikey_mimic_codex_cli":          true,
+			"enable_tls_fingerprint":                 true,
+			openai_compat.ExtraKeyResponsesMode:      string(openai_compat.ResponsesSupportModeForceChatCompletions),
+			openai_compat.ExtraKeyResponsesSupported: false,
 		},
 		Status:      StatusActive,
 		Schedulable: true,
@@ -2594,6 +2596,63 @@ func TestOpenAIGatewayService_MessagesAPIKeyCodexMimicUsesHeadersBodyAndTLS(t *t
 	require.NotEmpty(t, gjson.GetBytes(upstream.lastBody, "client_metadata.x-codex-turn-metadata").String())
 	require.NotNil(t, upstream.lastTLSProfile)
 	require.Contains(t, upstream.lastTLSProfile.Name, "Codex Desktop 0.142.0")
+}
+
+func TestOpenAIGatewayService_APIKeyCodexMimicPreservesCompactRequestShape(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	originalBody := []byte(`{"model":"gpt-5.5","stream":true,"store":true,"prompt_cache_key":"client-cache","instructions":"compact-test","input":[{"type":"text","text":"compact me"}]}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/compact", bytes.NewReader(originalBody))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("Accept", "text/event-stream")
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid_compact_mimic"}},
+		Body:       io.NopCloser(strings.NewReader(`{"id":"resp_compact","model":"gpt-5.5","output":[],"usage":{"input_tokens":2,"output_tokens":1}}`)),
+	}}
+	svc := &OpenAIGatewayService{
+		cfg: &config.Config{
+			Security: config.SecurityConfig{
+				URLAllowlist: config.URLAllowlistConfig{
+					Enabled:           false,
+					AllowInsecureHTTP: true,
+				},
+			},
+		},
+		httpUpstream: upstream,
+	}
+	account := &Account{
+		ID:          9530,
+		Name:        "openai-apikey-compact-mimic",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "sk-test",
+			"base_url": "http://upstream.example",
+		},
+		Extra: map[string]any{
+			"openai_apikey_mimic_codex_cli": true,
+		},
+		Status:      StatusActive,
+		Schedulable: true,
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, originalBody)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.False(t, result.Stream)
+	require.Equal(t, "http://upstream.example/v1/responses/compact", upstream.lastReq.URL.String())
+	require.Equal(t, codexDesktopUserAgent, upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, "application/json", upstream.lastReq.Header.Get("Accept"))
+	require.False(t, gjson.GetBytes(upstream.lastBody, "stream").Exists())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "store").Exists())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").Exists())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "client_metadata").Exists())
+	require.Equal(t, "compact-test", gjson.GetBytes(upstream.lastBody, "instructions").String())
+	require.Equal(t, "compact me", gjson.GetBytes(upstream.lastBody, "input.0.text").String())
 }
 
 func TestOpenAIGatewayService_APIKeyCodexMimicTreatsThirdPartyRequestAsCodexCLI(t *testing.T) {

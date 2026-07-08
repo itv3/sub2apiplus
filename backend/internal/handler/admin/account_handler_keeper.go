@@ -42,6 +42,7 @@ type KeeperAccountConfigResponse struct {
 	LastError         string     `json:"last_error,omitempty"`
 	LastSummary       string     `json:"last_summary,omitempty"`
 	BillingMultiplier float64    `json:"billing_multiplier"`
+	ProxyToken        string     `json:"proxy_token,omitempty"`
 }
 
 type KeeperAccountsResponse struct {
@@ -82,9 +83,19 @@ func (h *AccountHandler) ListKeeperAccounts(c *gin.Context) {
 	}
 
 	out := make([]KeeperAccountConfigResponse, 0, len(accounts))
+	includeProxyToken := c.GetBool(service.KeeperInternalAuthContextKey)
+	tokenSecret := strings.TrimSpace(os.Getenv("SUB2APIPLUS_KEEPER_INTERNAL_TOKEN"))
 	for _, account := range accounts {
 		item := buildKeeperAccountConfig(account, now)
 		if item.Enabled {
+			if includeProxyToken {
+				proxyToken, err := service.IssueKeeperProxyToken(tokenSecret, account.ID, account.Platform, now)
+				if err != nil {
+					response.Error(c, http.StatusServiceUnavailable, err.Error())
+					return
+				}
+				item.ProxyToken = proxyToken
+			}
 			out = append(out, item)
 		}
 	}
@@ -143,6 +154,10 @@ func (h *AccountHandler) ProxyKeeperOpenAIAccount(c *gin.Context) {
 		response.BadRequest(c, "Invalid account ID")
 		return
 	}
+	if c.Request.URL.RawQuery != "" {
+		response.BadRequest(c, "keeper proxy does not accept query parameters")
+		return
+	}
 	resp, err := h.accountTestService.ProxyKeeperOpenAIAccount(c.Request.Context(), accountID, service.KeeperOpenAIProxyRequest{
 		Method: c.Request.Method,
 		Path:   c.Param("proxy_path"),
@@ -155,14 +170,7 @@ func (h *AccountHandler) ProxyKeeperOpenAIAccount(c *gin.Context) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	for key, values := range resp.Header {
-		if isKeeperProxyHopByHopHeader(key) {
-			continue
-		}
-		for _, value := range values {
-			c.Writer.Header().Add(key, value)
-		}
-	}
+	copyKeeperProxyResponseHeaders(c.Writer.Header(), resp.Header)
 	c.Status(resp.StatusCode)
 	_, _ = io.Copy(c.Writer, resp.Body)
 }
@@ -178,6 +186,10 @@ func (h *AccountHandler) ProxyKeeperAnthropicAccount(c *gin.Context) {
 		response.BadRequest(c, "Invalid account ID")
 		return
 	}
+	if c.Request.URL.RawQuery != "" {
+		response.BadRequest(c, "keeper proxy does not accept query parameters")
+		return
+	}
 	resp, err := h.accountTestService.ProxyKeeperAnthropicAccount(c.Request.Context(), accountID, service.KeeperOpenAIProxyRequest{
 		Method: c.Request.Method,
 		Path:   c.Param("proxy_path"),
@@ -190,16 +202,32 @@ func (h *AccountHandler) ProxyKeeperAnthropicAccount(c *gin.Context) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	for key, values := range resp.Header {
-		if isKeeperProxyHopByHopHeader(key) {
+	copyKeeperProxyResponseHeaders(c.Writer.Header(), resp.Header)
+	c.Status(resp.StatusCode)
+	_, _ = io.Copy(c.Writer, resp.Body)
+}
+
+func copyKeeperProxyResponseHeaders(dst http.Header, src http.Header) {
+	for key, values := range src {
+		if !isKeeperProxyResponseHeaderAllowed(key) {
 			continue
 		}
 		for _, value := range values {
-			c.Writer.Header().Add(key, value)
+			dst.Add(key, value)
 		}
 	}
-	c.Status(resp.StatusCode)
-	_, _ = io.Copy(c.Writer, resp.Body)
+}
+
+func isKeeperProxyResponseHeaderAllowed(name string) bool {
+	if isKeeperProxyHopByHopHeader(name) {
+		return false
+	}
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "content-type", "cache-control", "x-request-id", "request-id", "openai-processing-ms", "anthropic-request-id":
+		return true
+	default:
+		return false
+	}
 }
 
 func isKeeperProxyHopByHopHeader(name string) bool {
@@ -347,7 +375,7 @@ func (h *AccountHandler) RecordKeeperKeepalive(c *gin.Context) {
 		return
 	}
 	if strings.TrimSpace(req.Prompt) != "" {
-		h.runKeeperKeepalive(c, accountID, req)
+		response.BadRequest(c, "keeper keepalive execution must run in sidecar")
 		return
 	}
 	if strings.TrimSpace(req.Status) == "" {
@@ -428,68 +456,6 @@ func keeperBillingResponse(cost *service.CostBreakdown, rateMultiplier float64) 
 		"pricing_source":      "sub2apiplus",
 		"rate_multiplier":     rateMultiplier,
 	}
-}
-
-func (h *AccountHandler) runKeeperKeepalive(c *gin.Context, accountID int64, req RecordKeeperKeepaliveRequest) {
-	if h.accountTestService == nil {
-		response.Error(c, http.StatusServiceUnavailable, "Account test service unavailable")
-		return
-	}
-
-	result, err := h.accountTestService.RunKeeperKeepalive(c.Request.Context(), accountID, service.KeeperKeepaliveRequest{
-		Model:           req.Model,
-		Prompt:          req.Prompt,
-		MaxOutputTokens: req.MaxOutputTokens,
-	})
-	updates := buildKeeperKeepaliveResultExtra(result)
-	if updateErr := h.adminService.UpdateAccountExtra(c.Request.Context(), accountID, updates); updateErr != nil {
-		response.ErrorFrom(c, updateErr)
-		return
-	}
-	if err != nil {
-		response.Error(c, http.StatusBadGateway, err.Error())
-		return
-	}
-
-	response.Success(c, result)
-}
-
-func buildKeeperKeepaliveResultExtra(result *service.KeeperKeepaliveResult) map[string]any {
-	now := time.Now().UTC().Format(time.RFC3339)
-	updates := map[string]any{
-		"keeper_last_status":      "error",
-		"keeper_last_recorded_at": now,
-	}
-	if result == nil {
-		updates["keeper_last_error"] = "empty keepalive result"
-		return updates
-	}
-
-	updates["keeper_last_status"] = result.Status
-	updates["keeper_last_session_id"] = result.ID
-	updates["keeper_last_summary"] = result.Summary
-	updates["keeper_last_error"] = result.Error
-	updates["keeper_last_recorded_at"] = now
-	if !result.CompletedAt.IsZero() {
-		updates["keeper_last_recorded_at"] = result.CompletedAt.UTC().Format(time.RFC3339)
-	}
-	if result.Status == "success" || result.Status == "skipped" {
-		updates["keeper_last_keepalive_at"] = now
-		if !result.CompletedAt.IsZero() {
-			updates["keeper_last_keepalive_at"] = result.CompletedAt.UTC().Format(time.RFC3339)
-		}
-	}
-	if result.Usage != nil {
-		updates["keeper_last_input_tokens"] = result.Usage.InputTokens
-		updates["keeper_last_output_tokens"] = result.Usage.OutputTokens
-		updates["keeper_last_total_tokens"] = result.Usage.TotalTokens
-		updates["keeper_last_cached_input_tokens"] = result.Usage.CachedInputTokens
-		updates["keeper_last_cache_creation_input_tokens"] = result.Usage.CacheCreationInputTokens
-	}
-	if result.Billing != nil {
-		updates["keeper_last_total_cost"] = result.Billing.TotalCost
-	}
-	return updates
 }
 
 func extraBool(extra map[string]any, key string) bool {

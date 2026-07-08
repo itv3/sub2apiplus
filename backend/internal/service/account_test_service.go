@@ -510,9 +510,17 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	// Align test routing with gateway behavior: OpenAI accounts apply normal
 	// account model mapping, and compact mode applies compact-only mapping on top.
 	testModelID = account.GetMappedModel(testModelID)
+	credentialAccount := account
+	if account.IsCredentialShadow() {
+		resolved, err := resolveCredentialAccount(ctx, s.accountRepo, account)
+		if err != nil {
+			return s.sendErrorAndEnd(c, err.Error())
+		}
+		credentialAccount = resolved
+	}
 	if mode == AccountTestModeCompact {
 		testModelID = resolveOpenAICompactForwardModel(account, testModelID)
-		return s.testOpenAICompactConnection(c, account, testModelID)
+		return s.testOpenAICompactConnection(c, account, credentialAccount, testModelID)
 	}
 
 	// Route to image generation test if an image model is selected
@@ -525,15 +533,6 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 			return s.testOpenAIImageAPIKey(c, ctx, account, testModelID, imagePrompt)
 		}
 		return s.testOpenAIImageOAuth(c, ctx, account, testModelID, imagePrompt)
-	}
-
-	credentialAccount := account
-	if account.IsCredentialShadow() {
-		resolved, err := resolveCredentialAccount(ctx, s.accountRepo, account)
-		if err != nil {
-			return s.sendErrorAndEnd(c, err.Error())
-		}
-		credentialAccount = resolved
 	}
 
 	// Determine authentication method and API URL
@@ -807,27 +806,30 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 
 // testOpenAICompactConnection probes /responses/compact and persists the
 // resulting capability state on the account.
-func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account *Account, testModelID string) error {
+func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account *Account, credentialAccount *Account, testModelID string) error {
 	ctx := c.Request.Context()
+	if credentialAccount == nil {
+		credentialAccount = account
+	}
 
 	authToken := ""
 	apiURL := ""
 	isOAuth := false
 
 	switch {
-	case account.IsOAuth():
+	case credentialAccount.IsOAuth():
 		isOAuth = true
-		authToken = account.GetOpenAIAccessToken()
+		authToken = credentialAccount.GetOpenAIAccessToken()
 		if authToken == "" {
 			return s.sendErrorAndEnd(c, "No access token available")
 		}
 		apiURL = chatgptCodexAPIURL + "/compact"
-	case account.Type == AccountTypeAPIKey:
-		authToken = account.GetOpenAIApiKey()
+	case credentialAccount.Type == AccountTypeAPIKey:
+		authToken = credentialAccount.GetOpenAIApiKey()
 		if authToken == "" {
 			return s.sendErrorAndEnd(c, "No API key available")
 		}
-		baseURL := account.GetOpenAIBaseURL()
+		baseURL := credentialAccount.GetOpenAIBaseURL()
 		if baseURL == "" {
 			baseURL = "https://api.openai.com"
 		}
@@ -837,7 +839,7 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 		}
 		apiURL = appendOpenAIResponsesRequestPathSuffix(buildOpenAIResponsesURL(normalizedBaseURL), "/compact")
 	default:
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Unsupported account type: %s", account.Type))
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Unsupported account type: %s", credentialAccount.Type))
 	}
 
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
@@ -868,18 +870,21 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 
 	if isOAuth {
 		req.Host = "chatgpt.com"
-		setOpenAIChatGPTAccountHeaders(req.Header, account)
+		setOpenAIChatGPTAccountHeaders(req.Header, credentialAccount)
+	} else if credentialAccount.Type == AccountTypeAPIKey {
+		mimicProfile := resolveOpenAIAPIKeyCodexMimicProfile(credentialAccount, 0, s.cfg)
+		mimicProfile.ApplyHeaders(req, false)
 	}
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
-	applyAccountTestHeaderOverrides(account, req.Header)
+	applyAccountTestHeaderOverrides(credentialAccount, req.Header)
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
 
-	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+	resp, err := doOpenAIHTTPUpstream(s.httpUpstream, req, proxyURL, account, s.tlsFPProfileService)
 	if err != nil {
 		if s.accountRepo != nil {
 			updates := buildOpenAICompactProbeExtraUpdates(nil, nil, err, time.Now())

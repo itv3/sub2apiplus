@@ -13,7 +13,6 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/xai"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
@@ -32,11 +31,16 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	promptCacheKey string,
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
+	apiKeyID := getAPIKeyIDFromContext(c)
+	mimicProfile := resolveOpenAIAPIKeyCodexMimicProfile(account, apiKeyID, s.cfg)
 	// 入口分流：APIKey 账号 + 上游不支持 Responses API → 走 CC 直转（与
 	// ForwardAsChatCompletions 对称）。缺少此分流时，/v1/messages 入站请求
 	// 会被无条件转为 Responses 格式发往上游 /v1/responses，导致只支持
 	// /v1/chat/completions 的第三方 OpenAI 兼容上游全部 400。
-	if account.Type == AccountTypeAPIKey && !openai_compat.ShouldUseResponsesAPI(account.Extra) {
+	//
+	// Codex API Key mimic 的阶段一语义是固定走 Responses 伪装链路，不能被
+	// 普通账号的 force_chat_completions 或探测失败结果分流到 raw Chat Completions。
+	if account.Type == AccountTypeAPIKey && !mimicProfile.ShouldUseResponsesAPI(account.Extra) {
 		return s.forwardAnthropicViaRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}
 
@@ -57,8 +61,6 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	billingModel := resolveOpenAIForwardModel(account, normalizedModel, defaultMappedModel)
 	upstreamModel := normalizeOpenAIModelForUpstream(account, billingModel)
 	promptCacheKey = strings.TrimSpace(promptCacheKey)
-	apiKeyID := getAPIKeyIDFromContext(c)
-	mimicProfile := resolveOpenAIAPIKeyCodexMimicProfile(account, apiKeyID, s.cfg)
 	accountMimicCodexCLI := mimicProfile.Enabled
 	anthropicDigestChain := ""
 	anthropicMatchedDigestChain := ""
@@ -216,11 +218,11 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	// upstreams using the Responses API can derive a stable session identifier
 	// from prompt_cache_key. This makes our Anthropic /v1/messages compatibility
 	// path behave more like a native Responses client.
-		if account.Type == AccountTypeAPIKey {
-			if trimmedKey := strings.TrimSpace(promptCacheKey); trimmedKey != "" {
-				var reqBody map[string]any
-				if err := json.Unmarshal(responsesBody, &reqBody); err != nil {
-					return nil, fmt.Errorf("unmarshal for prompt cache key injection: %w", err)
+	if account.Type == AccountTypeAPIKey {
+		if trimmedKey := strings.TrimSpace(promptCacheKey); trimmedKey != "" {
+			var reqBody map[string]any
+			if err := json.Unmarshal(responsesBody, &reqBody); err != nil {
+				return nil, fmt.Errorf("unmarshal for prompt cache key injection: %w", err)
 			}
 			if existing, ok := reqBody["prompt_cache_key"].(string); !ok || strings.TrimSpace(existing) == "" {
 				reqBody["prompt_cache_key"] = trimmedKey
@@ -228,13 +230,13 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 				if err != nil {
 					return nil, fmt.Errorf("remarshal after prompt cache key injection: %w", err)
 				}
-					responsesBody = updated
-				}
-			}
-			if accountMimicCodexCLI {
-				responsesBody = mimicProfile.RewriteBody(responsesBody)
+				responsesBody = updated
 			}
 		}
+		if accountMimicCodexCLI {
+			responsesBody = mimicProfile.RewriteBody(responsesBody)
+		}
+	}
 
 	// 4c. Apply OpenAI fast policy (may filter service_tier or block the request).
 	// Mirrors the Claude anthropic-beta "fast-mode-2026-02-01" filter, but keyed
@@ -268,14 +270,14 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	var upstreamReq *http.Request
 	if account.Platform == PlatformGrok {
 		upstreamReq, err = buildGrokResponsesRequest(upstreamCtx, c, account, responsesBody, token)
-		} else {
-			upstreamReq, err = s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, openAIUpstreamRequestPlan{
-				IsStream:         isStream,
-				PromptCacheKey:   promptCacheKey,
-				IsCodexCLI:       accountMimicCodexCLI,
-				APIKeyCodexMimic: mimicProfile,
-			})
-		}
+	} else {
+		upstreamReq, err = s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, openAIUpstreamRequestPlan{
+			IsStream:         isStream,
+			PromptCacheKey:   promptCacheKey,
+			IsCodexCLI:       accountMimicCodexCLI,
+			APIKeyCodexMimic: mimicProfile,
+		})
+	}
 	releaseUpstreamCtx()
 	if err != nil {
 		return nil, fmt.Errorf("build upstream request: %w", err)
@@ -283,11 +285,11 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 
 	// Override session_id with a deterministic UUID derived from the isolated
 	// session key, ensuring different API keys produce different upstream sessions.
-		if promptCacheKey != "" && !accountMimicCodexCLI {
-			isolatedSessionID := generateSessionUUID(isolateOpenAISessionID(apiKeyID, promptCacheKey))
-			upstreamReq.Header.Set("session_id", isolatedSessionID)
-			if upstreamReq.Header.Get("conversation_id") != "" {
-				upstreamReq.Header.Set("conversation_id", isolatedSessionID)
+	if promptCacheKey != "" && !accountMimicCodexCLI {
+		isolatedSessionID := generateSessionUUID(isolateOpenAISessionID(apiKeyID, promptCacheKey))
+		upstreamReq.Header.Set("session_id", isolatedSessionID)
+		if upstreamReq.Header.Get("conversation_id") != "" {
+			upstreamReq.Header.Set("conversation_id", isolatedSessionID)
 		}
 	}
 	if account.Type == AccountTypeOAuth && account.Platform != PlatformGrok {
@@ -310,7 +312,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-		resp, err := s.doOpenAIHTTPUpstream(upstreamReq, proxyURL, account)
+	resp, err := s.doOpenAIHTTPUpstream(upstreamReq, proxyURL, account)
 	if err != nil {
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		setOpsUpstreamError(c, 0, safeErr, "")

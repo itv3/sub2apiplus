@@ -193,6 +193,51 @@ func TestGatewayServiceRecordUsage_PreservesRequestedAndUpstreamModels(t *testin
 	require.Equal(t, mappedModel, *usageRepo.lastLog.UpstreamModel)
 }
 
+func TestGatewayServiceRecordUsage_AntigravityDisplayAliasBillsWithUpstreamModel(t *testing.T) {
+	groupID := int64(903)
+	displayModel := "Claude Opus 4.6 Thinking"
+	upstreamModel := "claude-opus-4-6-thinking"
+	usageRepo := &openAIRecordUsageLogRepoStub{inserted: true}
+	userRepo := &openAIRecordUsageUserRepoStub{}
+	svc := newGatewayRecordUsageServiceForTest(usageRepo, userRepo, &openAIRecordUsageSubRepoStub{})
+	svc.resolver = newOpenAITokenImageChannelPricingResolverForTest(t, groupID, upstreamModel)
+
+	err := svc.RecordUsage(context.Background(), &RecordUsageInput{
+		Result: &ForwardResult{
+			RequestID:     "gateway_antigravity_display_alias_billing",
+			Usage:         ClaudeUsage{InputTokens: 100, OutputTokens: 50},
+			Model:         displayModel,
+			UpstreamModel: upstreamModel,
+			Duration:      time.Second,
+		},
+		APIKey: &APIKey{
+			ID:      803,
+			GroupID: i64p(groupID),
+			Group: &Group{
+				ID:             groupID,
+				RateMultiplier: 1.0,
+			},
+		},
+		User:    &User{ID: 603},
+		Account: &Account{ID: 703, Platform: PlatformAntigravity},
+		ChannelUsageFields: ChannelUsageFields{
+			OriginalModel:      displayModel,
+			ChannelMappedModel: displayModel,
+			BillingModelSource: BillingModelSourceRequested,
+		},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, usageRepo.lastLog)
+	require.Equal(t, displayModel, usageRepo.lastLog.Model)
+	require.Equal(t, displayModel, usageRepo.lastLog.RequestedModel)
+	require.NotNil(t, usageRepo.lastLog.UpstreamModel)
+	require.Equal(t, upstreamModel, *usageRepo.lastLog.UpstreamModel)
+	require.InDelta(t, 0.00105, usageRepo.lastLog.TotalCost, 1e-12)
+	require.InDelta(t, 0.00105, usageRepo.lastLog.ActualCost, 1e-12)
+	require.InDelta(t, usageRepo.lastLog.ActualCost, userRepo.lastAmount, 1e-12)
+}
+
 func TestGatewayServiceRecordUsage_EmptyImageSizeDefaultsBeforeBillingAndPersistence(t *testing.T) {
 	imagePrice2K := 0.19
 	groupID := int64(901)

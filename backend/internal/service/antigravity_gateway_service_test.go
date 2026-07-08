@@ -240,13 +240,20 @@ func (c *recordingInternal500CounterCache) ResetInternal500Count(_ context.Conte
 	return nil
 }
 
-type antigravitySettingRepoStub struct{}
+type antigravitySettingRepoStub struct {
+	values map[string]string
+}
 
 func (s *antigravitySettingRepoStub) Get(ctx context.Context, key string) (*Setting, error) {
 	panic("unexpected Get call")
 }
 
 func (s *antigravitySettingRepoStub) GetValue(ctx context.Context, key string) (string, error) {
+	if s != nil {
+		if value, ok := s.values[key]; ok {
+			return value, nil
+		}
+	}
 	return "", ErrSettingNotFound
 }
 
@@ -848,6 +855,118 @@ func TestAntigravityGatewayService_Forward_BillsWithMappedModel(t *testing.T) {
 	require.Equal(t, mappedModel, result.UpstreamModel)
 }
 
+func TestAntigravityGatewayService_Forward_WebSearchBillsWithFallbackModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	writer := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(writer)
+
+	body, err := json.Marshal(map[string]any{
+		"model": "claude-sonnet-4-5",
+		"messages": []map[string]any{
+			{"role": "user", "content": "search hello"},
+		},
+		"tools": []map[string]any{
+			{"type": "web_search_20250305", "name": "web_search"},
+		},
+		"max_tokens": 16,
+		"stream":     true,
+	})
+	require.NoError(t, err)
+
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+
+	upstreamBody := []byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":8,\"candidatesTokenCount\":3}}}\n\n")
+	resp := &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"X-Request-Id": []string{"req-web-search-1"}},
+		Body:       io.NopCloser(bytes.NewReader(upstreamBody)),
+	}
+
+	svc := &AntigravityGatewayService{
+		settingService: NewSettingService(&antigravitySettingRepoStub{}, &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}),
+		tokenProvider:  &AntigravityTokenProvider{},
+		httpUpstream:   &httpUpstreamStub{resp: resp},
+	}
+
+	account := &Account{
+		ID:          6,
+		Name:        "acc-forward-web-search",
+		Platform:    PlatformAntigravity,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "token",
+			"project_id":   "proj",
+			"model_mapping": map[string]any{
+				"claude-sonnet-4-5": "gemini-pro-agent",
+			},
+		},
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, body, false)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "claude-sonnet-4-5", result.Model)
+	require.Equal(t, antigravity.OfficialWebSearchFallbackModel, result.UpstreamModel)
+}
+
+func TestAntigravityGatewayService_Forward_WebSearchRateLimitUsesFallbackModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	writer := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(writer)
+
+	body, err := json.Marshal(map[string]any{
+		"model": "claude-sonnet-4-5",
+		"messages": []map[string]any{
+			{"role": "user", "content": "search hello"},
+		},
+		"tools": []map[string]any{
+			{"type": "web_search_20250305", "name": "web_search"},
+		},
+		"max_tokens": 16,
+		"stream":     false,
+	})
+	require.NoError(t, err)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+
+	svc := &AntigravityGatewayService{
+		tokenProvider: &AntigravityTokenProvider{},
+		httpUpstream:  &httpUpstreamStub{},
+	}
+
+	futureResetAt := time.Now().Add(30 * time.Second).Format(time.RFC3339)
+	account := &Account{
+		ID:          66,
+		Name:        "acc-web-search-rate-limited",
+		Platform:    PlatformAntigravity,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "token",
+			"project_id":   "proj",
+			"model_mapping": map[string]any{
+				"claude-sonnet-4-5": "gemini-pro-agent",
+			},
+		},
+		Extra: map[string]any{
+			modelRateLimitsKey: map[string]any{
+				antigravity.OfficialWebSearchFallbackModel: map[string]any{
+					"rate_limit_reset_at": futureResetAt,
+				},
+			},
+		},
+	}
+
+	result, err := svc.Forward(context.Background(), c, account, body, false)
+
+	require.Nil(t, result)
+	var failoverErr *UpstreamFailoverError
+	require.ErrorAs(t, err, &failoverErr)
+	require.Equal(t, http.StatusServiceUnavailable, failoverErr.StatusCode)
+}
+
 // TestAntigravityGatewayService_ForwardGemini_BillsWithMappedModel
 // 验证：Antigravity Gemini 转发返回的计费模型使用映射后的模型
 func TestAntigravityGatewayService_ForwardGemini_BillsWithMappedModel(t *testing.T) {
@@ -900,6 +1019,73 @@ func TestAntigravityGatewayService_ForwardGemini_BillsWithMappedModel(t *testing
 	require.NotNil(t, result)
 	require.Equal(t, "gemini-2.5-flash", result.Model)
 	require.Equal(t, mappedModel, result.UpstreamModel)
+}
+
+func TestAntigravityGatewayService_ForwardGemini_FallbackSuccessBillsWithFallbackModel(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	writer := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(writer)
+
+	body, err := json.Marshal(map[string]any{
+		"contents": []map[string]any{
+			{"role": "user", "parts": []map[string]any{{"text": "hello"}}},
+		},
+	})
+	require.NoError(t, err)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-legacy:generateContent", bytes.NewReader(body))
+
+	notFoundBody := []byte(`{"error":{"message":"model not found"}}`)
+	successBody := []byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":8,\"candidatesTokenCount\":3}}}\n\n")
+	upstream := &queuedHTTPUpstreamStub{
+		responses: []*http.Response{
+			{
+				StatusCode: http.StatusNotFound,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(bytes.NewReader(notFoundBody)),
+			},
+			{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+				Body:       io.NopCloser(bytes.NewReader(successBody)),
+			},
+		},
+	}
+
+	const mappedModel = "gemini-old-upstream"
+	const fallbackModel = "gemini-3.5-flash-low"
+	svc := &AntigravityGatewayService{
+		settingService: NewSettingService(&antigravitySettingRepoStub{values: map[string]string{
+			SettingKeyEnableModelFallback:      "true",
+			SettingKeyFallbackModelAntigravity: fallbackModel,
+		}}, &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}),
+		tokenProvider: &AntigravityTokenProvider{},
+		httpUpstream:  upstream,
+	}
+	account := &Account{
+		ID:          67,
+		Name:        "acc-gemini-fallback",
+		Platform:    PlatformAntigravity,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token": "token",
+			"project_id":   "proj",
+			"model_mapping": map[string]any{
+				"gemini-legacy": mappedModel,
+			},
+		},
+	}
+
+	result, err := svc.ForwardGemini(context.Background(), c, account, "gemini-legacy", "generateContent", false, body, false)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Equal(t, "gemini-legacy", result.Model)
+	require.Equal(t, fallbackModel, result.UpstreamModel)
+	require.Len(t, upstream.requestBodies, 2)
+	require.Contains(t, string(upstream.requestBodies[0]), mappedModel)
+	require.Contains(t, string(upstream.requestBodies[1]), fallbackModel)
 }
 
 func TestAntigravityGatewayService_ForwardGemini_RetriesCorruptedThoughtSignature(t *testing.T) {

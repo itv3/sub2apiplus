@@ -187,7 +187,7 @@
                     </td>
                     <td class="max-w-md truncate px-4 py-3">{{ row.last_message_summary || latestSessionSummary(row) }}</td>
                     <td class="min-w-40 whitespace-nowrap px-4 py-3">
-                      <button type="button" class="btn btn-secondary btn-sm" :disabled="keepaliveUpdatingIds.has(Number(row.account_id || 0))" @click="runKeepalive(row.name || '')">{{ t('admin.accountKeepalive.labels.runNow') }}</button>
+                      <button type="button" class="btn btn-secondary btn-sm" :disabled="keepaliveUpdatingIds.has(Number(row.account_id || 0))" @click="runKeepalive(String(row.account_id || row.name || ''))">{{ t('admin.accountKeepalive.labels.runNow') }}</button>
                       <button type="button" class="btn btn-secondary btn-sm ml-2" @click="openHistory(row.name || '')">{{ t('admin.accountKeepalive.labels.history') }}</button>
                     </td>
                   </tr>
@@ -723,8 +723,8 @@ async function loadKeepaliveAccounts() {
   try {
     keepaliveLoading.value = true
     const [anthropicAccounts, openaiAccounts, projects, state, settings] = await Promise.all([
-      fetchAccounts('anthropic'),
-      fetchAccounts('openai'),
+      fetchAccounts('anthropic', 'apikey'),
+      fetchAccounts('openai', 'apikey'),
       adminAPI.accounts.getKeeperProjects(),
       adminAPI.accounts.getKeeperState(),
       adminAPI.accounts.getKeeperSettings()
@@ -735,7 +735,7 @@ async function loadKeepaliveAccounts() {
     promptGuard.value = String(settings?.prompt_guard || state?.prompt_guard || '')
     promptBankRows.value = normalizePromptBank(Array.isArray(settings?.prompt_bank) ? settings.prompt_bank : (Array.isArray(state?.prompt_bank) ? state.prompt_bank : []))
     keepaliveRows.value = [...anthropicAccounts, ...openaiAccounts]
-      .filter(account => account.platform === 'anthropic' || account.platform === 'openai')
+      .filter(account => account.type === 'apikey' && (account.platform === 'anthropic' || account.platform === 'openai'))
       .sort((a, b) => b.id - a.id)
       .map(account => ({ id: account.id, account, form: buildKeepaliveForm(account, projects) }))
     await Promise.allSettled(keepaliveRows.value.map(row => loadModelOptions(row)))
@@ -1194,7 +1194,11 @@ async function deleteKeepaliveAccount() {
 async function runKeepalive(target: string) {
   if (!target) return
   try {
-    keepaliveUpdatingIds.value = new Set(keepaliveUpdatingIds.value).add(Number(keepaliveOverviewRows.value.find((row) => row.name === target)?.account_id || 0))
+    const targetAccountID = Number(target)
+    const matchedAccountID = Number(
+      keepaliveOverviewRows.value.find((row) => String(row.account_id || '') === target || row.name === target)?.account_id || 0
+    )
+    keepaliveUpdatingIds.value = new Set(keepaliveUpdatingIds.value).add(targetAccountID || matchedAccountID)
     await adminAPI.accounts.runKeeperTarget(target)
     appStore.showSuccess(t('admin.accountKeepalive.messages.runSubmitted'))
     await loadKeepaliveAccounts()

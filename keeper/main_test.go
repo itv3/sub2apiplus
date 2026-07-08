@@ -296,7 +296,7 @@ func TestFetchTargetsUsesConfiguredMaxOutputTokens(t *testing.T) {
 			t.Fatalf("x-api-key = %q, want secret", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"code":0,"data":{"accounts":[{"id":3,"name":"BWG_OpenAI","platform":"openai","type":"apikey","enabled":true,"executor":"codex","model":"gpt-5.5","mode":"fresh","workspace":"homeproxy","interval_minutes":8,"work_start":"00:00","work_end":"24:00","max_output_tokens":256},{"id":4,"name":"BWG_Anthropic","platform":"anthropic","type":"apikey","enabled":true,"executor":"claude","model":"claude-opus-4-8","mode":"fresh","workspace":"homeproxy","interval_minutes":8,"work_start":"00:00","work_end":"24:00"}]}}`))
+		_, _ = w.Write([]byte(`{"code":0,"data":{"accounts":[{"id":3,"name":"BWG_OpenAI","platform":"openai","type":"apikey","enabled":true,"executor":"codex","model":"gpt-5.5","mode":"fresh","workspace":"homeproxy","interval_minutes":8,"work_start":"00:00","work_end":"24:00","max_output_tokens":256,"proxy_token":"proxy-openai"},{"id":4,"name":"BWG_Anthropic","platform":"anthropic","type":"apikey","enabled":true,"executor":"claude","model":"claude-opus-4-8","mode":"fresh","workspace":"homeproxy","interval_minutes":8,"work_start":"00:00","work_end":"24:00","proxy_token":"proxy-anthropic"}]}}`))
 	}))
 	defer server.Close()
 
@@ -318,8 +318,131 @@ func TestFetchTargetsUsesConfiguredMaxOutputTokens(t *testing.T) {
 	if got := targets[0].MaxOutputTokens; got != 256 {
 		t.Fatalf("configured MaxOutputTokens = %d, want 256", got)
 	}
+	if got := targets[0].APIKey; got != "proxy-openai" {
+		t.Fatalf("openai target APIKey = %q, want proxy token", got)
+	}
 	if got := targets[1].MaxOutputTokens; got != defaultKeepaliveMaxTokens {
 		t.Fatalf("default MaxOutputTokens = %d, want %d", got, defaultKeepaliveMaxTokens)
+	}
+	if got := targets[1].APIKey; got != "proxy-anthropic" {
+		t.Fatalf("anthropic target APIKey = %q, want proxy token", got)
+	}
+}
+
+func TestFetchTargetsSkipsInvalidWorkspace(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("x-api-key"); got != "secret" {
+			t.Fatalf("x-api-key = %q, want secret", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"data":{"accounts":[{"id":3,"name":"valid","platform":"openai","type":"apikey","enabled":true,"executor":"codex","model":"gpt-5.5","mode":"fresh","workspace":"homeproxy","interval_minutes":8,"work_start":"00:00","work_end":"24:00","proxy_token":"proxy-valid"},{"id":4,"name":"parent","platform":"openai","type":"apikey","enabled":true,"executor":"codex","model":"gpt-5.5","mode":"fresh","workspace":"../bad","interval_minutes":8,"work_start":"00:00","work_end":"24:00","proxy_token":"proxy-parent"},{"id":5,"name":"nested","platform":"anthropic","type":"apikey","enabled":true,"executor":"claude","model":"claude-opus-4-8","mode":"fresh","workspace":"team/homeproxy","interval_minutes":8,"work_start":"00:00","work_end":"24:00","proxy_token":"proxy-nested"}]}}`))
+	}))
+	defer server.Close()
+
+	projectsRoot := t.TempDir()
+	k := &Keeper{
+		cfg: Config{
+			ProjectsRoot: projectsRoot,
+			Sub2APIPlus:  Sub2APIPlusConfig{BaseURL: server.URL, InternalToken: "secret"},
+		},
+		httpClient: server.Client(),
+	}
+
+	targets, err := k.fetchTargets(context.Background())
+	if err != nil {
+		t.Fatalf("fetchTargets error = %v", err)
+	}
+	if len(targets) != 1 {
+		t.Fatalf("targets len = %d, want 1", len(targets))
+	}
+	if targets[0].AccountID != 3 {
+		t.Fatalf("target account id = %d, want 3", targets[0].AccountID)
+	}
+	if got := targets[0].WorkspacePath; got != filepath.Join(projectsRoot, "homeproxy") {
+		t.Fatalf("workspace path = %q, want valid project path", got)
+	}
+}
+
+func TestRenderRuntimeEnvUsesScopedProxyToken(t *testing.T) {
+	k := &Keeper{}
+	target := TargetConfig{
+		AccountID:     3,
+		Name:          "BWG_OpenAI",
+		Platform:      "openai",
+		Executor:      "codex",
+		BaseURL:       "http://sub2api/api/v1/internal/keeper/openai/accounts/3/v1",
+		APIKey:        "proxy-token",
+		Model:         "gpt-5.5",
+		WorkspacePath: "/workspace/projects/homeproxy",
+	}
+	env := k.renderRuntimeEnv(target, runtimeLayout{CodexHome: "/app/data/runtime/workers/3/codex/.codex"})
+
+	if !strings.Contains(env, "OPENAI_API_KEY='proxy-token'") {
+		t.Fatalf("runtime env did not include scoped OpenAI proxy token:\n%s", env)
+	}
+	if strings.Contains(env, "secret") {
+		t.Fatalf("runtime env leaked internal token:\n%s", env)
+	}
+}
+
+func TestClaudePersistentArgsUsePlanModeAndDenyWriteTools(t *testing.T) {
+	args := claudePersistentArgs(persistentExecution{
+		Account: TargetConfig{
+			Model: "claude-opus-4-8",
+			Mode:  "fresh",
+		},
+	})
+	joined := strings.Join(args, " ")
+
+	if !strings.Contains(joined, "--permission-mode plan") {
+		t.Fatalf("claude args = %q, want plan permission mode", joined)
+	}
+	if !strings.Contains(joined, "--disallowed-tools Bash,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch") {
+		t.Fatalf("claude args = %q, want dangerous tools denied", joined)
+	}
+}
+
+func TestClaudePersistentEnvScrubsSubprocessEnvironment(t *testing.T) {
+	env := claudePersistentEnv(persistentExecution{
+		Account: TargetConfig{
+			APIKey:  "proxy-token",
+			BaseURL: "http://sub2api/api/v1/internal/keeper/anthropic/accounts/4",
+			Model:   "claude-opus-4-8",
+		},
+		Layout: runtimeLayout{
+			HomeDir:         "/app/data/runtime/workers/4/home",
+			ClaudeConfigDir: "/app/data/runtime/workers/4/claude",
+		},
+	})
+
+	found := false
+	for _, value := range env {
+		if value == "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("claude env = %#v, want subprocess env scrub enabled", env)
+	}
+}
+
+func TestKeeperClientEnvDoesNotInheritProcessSecrets(t *testing.T) {
+	t.Setenv("SUB2APIPLUS_KEEPER_INTERNAL_TOKEN", "global-secret")
+	t.Setenv("HTTP_PROXY", "http://proxy.example")
+	t.Setenv("PATH", "/usr/bin")
+
+	env := buildKeeperClientEnv("OPENAI_API_KEY=scoped-token")
+
+	joined := strings.Join(env, "\n")
+	if strings.Contains(joined, "SUB2APIPLUS_KEEPER_INTERNAL_TOKEN") || strings.Contains(joined, "global-secret") {
+		t.Fatalf("client env leaked keeper internal token: %#v", env)
+	}
+	if strings.Contains(joined, "HTTP_PROXY") || strings.Contains(joined, "proxy.example") {
+		t.Fatalf("client env inherited process proxy settings: %#v", env)
+	}
+	if !strings.Contains(joined, "OPENAI_API_KEY=scoped-token") {
+		t.Fatalf("client env missing scoped token: %#v", env)
 	}
 }
 

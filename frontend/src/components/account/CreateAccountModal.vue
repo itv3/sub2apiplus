@@ -3393,6 +3393,7 @@ import {
   getModelsByPlatform,
   commonErrorCodes,
   buildModelMappingObject,
+  fetchAntigravityOfficialModels,
   getOfficialAntigravityDisplayMappings,
   getOfficialAntigravityModelIDs,
   isValidWildcardPattern
@@ -3779,7 +3780,8 @@ function buildAntigravityExtra(): Record<string, unknown> | undefined {
   return Object.keys(extra).length > 0 ? extra : undefined
 }
 
-function resetAntigravityOfficialModelDefaults() {
+async function resetAntigravityOfficialModelDefaults() {
+  await fetchAntigravityOfficialModels()
   antigravityModelRestrictionMode.value = 'whitelist'
   antigravityWhitelistModels.value = getOfficialAntigravityModelIDs()
   antigravityModelMappings.value = getOfficialAntigravityDisplayMappings()
@@ -4003,7 +4005,7 @@ watch(
       // Modal opened - fill related models
       allowedModels.value = [...getModelsByPlatform(form.platform)]
       if (form.platform === 'antigravity') {
-        resetAntigravityOfficialModelDefaults()
+        void resetAntigravityOfficialModelDefaults()
       } else {
         antigravityWhitelistModels.value = []
         antigravityModelMappings.value = []
@@ -4057,7 +4059,7 @@ watch(
     allowedModels.value = []
     modelMappings.value = []
     if (newPlatform === 'antigravity') {
-      resetAntigravityOfficialModelDefaults()
+      void resetAntigravityOfficialModelDefaults()
       accountCategory.value = 'oauth-based'
       antigravityAccountType.value = 'oauth'
     } else {
@@ -4491,7 +4493,7 @@ const resetForm = () => {
   modelRestrictionMode.value = 'whitelist'
   allowedModels.value = [...claudeModels] // Default fill related models
 
-  resetAntigravityOfficialModelDefaults()
+  void resetAntigravityOfficialModelDefaults()
   poolModeEnabled.value = false
   poolModeRetryCount.value = DEFAULT_POOL_MODE_RETRY_COUNT
   poolModeRetryStatusCodesInput.value = ''

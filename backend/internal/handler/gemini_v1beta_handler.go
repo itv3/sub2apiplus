@@ -48,7 +48,7 @@ func (h *GatewayHandler) GeminiV1BetaListModels(c *gin.Context) {
 
 	// 强制 antigravity 模式：返回 antigravity 支持的模型列表
 	if forcePlatform == service.PlatformAntigravity {
-		c.JSON(http.StatusOK, antigravity.FallbackGeminiModelsList())
+		c.JSON(http.StatusOK, antigravity.OfficialGeminiModelsList())
 		return
 	}
 
@@ -101,7 +101,12 @@ func (h *GatewayHandler) GeminiV1BetaGetModel(c *gin.Context) {
 
 	// 强制 antigravity 模式：返回 antigravity 模型信息
 	if forcePlatform == service.PlatformAntigravity {
-		c.JSON(http.StatusOK, antigravity.FallbackGeminiModel(modelName))
+		model, ok := antigravity.OfficialGeminiModel(modelName)
+		if !ok {
+			googleError(c, http.StatusNotFound, "Model not found")
+			return
+		}
+		c.JSON(http.StatusOK, model)
 		return
 	}
 

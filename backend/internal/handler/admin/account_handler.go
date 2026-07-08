@@ -943,6 +943,10 @@ func (h *AccountHandler) UpdateExtra(c *gin.Context) {
 		response.BadRequest(c, "extra is required")
 		return
 	}
+	if err := validatePlusExtraPatch(req.Extra); err != nil {
+		response.BadRequest(c, err.Error())
+		return
+	}
 
 	if err := h.adminService.UpdateAccountExtra(c.Request.Context(), accountID, req.Extra); err != nil {
 		response.ErrorFrom(c, err)
@@ -2795,6 +2799,15 @@ func (h *AccountHandler) GetAntigravityDefaultModelMapping(c *gin.Context) {
 	response.Success(c, domain.DefaultAntigravityModelMapping)
 }
 
+// GetAntigravityOfficialModels 获取 Antigravity 官方模型描述表。
+// GET /api/v1/admin/accounts/antigravity/official-models
+func (h *AccountHandler) GetAntigravityOfficialModels(c *gin.Context) {
+	response.Success(c, gin.H{
+		"models":  antigravity.OfficialModelDescriptors(),
+		"mapping": domain.DefaultAntigravityModelMapping,
+	})
+}
+
 // sanitizeExtraBaseRPM 对 extra map 中的 base_rpm 值进行范围校验和归一化。
 // 负值归零，超过 10000 截断为 10000。extra 为 nil 或不含 base_rpm 时无操作。
 func sanitizeExtraBaseRPM(extra map[string]any) {
@@ -2812,4 +2825,132 @@ func sanitizeExtraBaseRPM(extra map[string]any) {
 		v = 10000
 	}
 	extra["base_rpm"] = v
+}
+
+func validatePlusExtraPatch(extra map[string]any) error {
+	for key, value := range extra {
+		switch key {
+		case "anthropic_apikey_mimic_claude_code",
+			"openai_apikey_mimic_codex_cli",
+			"enable_tls_fingerprint",
+			"keeper_keepalive_enabled":
+			if value != nil {
+				if _, ok := value.(bool); !ok {
+					return fmt.Errorf("extra.%s must be boolean", key)
+				}
+			}
+		case "openai_apikey_mimic_codex_profile":
+			if value == nil {
+				continue
+			}
+			profile, ok := value.(string)
+			if !ok {
+				return fmt.Errorf("extra.%s must be string", key)
+			}
+			switch strings.ToLower(strings.TrimSpace(profile)) {
+			case "", "desktop_0_142", "cli_rs_0_125":
+			default:
+				return fmt.Errorf("extra.%s is not an allowed Codex profile", key)
+			}
+		case "keeper_keepalive_interval_minutes":
+			if value == nil {
+				continue
+			}
+			interval := service.ParseExtraInt(value)
+			if interval < 1 || interval > 10080 {
+				return fmt.Errorf("extra.%s must be between 1 and 10080", key)
+			}
+		case "keeper_keepalive_max_output_tokens":
+			if value == nil {
+				continue
+			}
+			maxTokens := service.ParseExtraInt(value)
+			if maxTokens < 1 || maxTokens > service.KeeperProxyMaxOutputTokensHardCap {
+				return fmt.Errorf("extra.%s must be between 1 and %d", key, service.KeeperProxyMaxOutputTokensHardCap)
+			}
+		case "keeper_keepalive_mode":
+			if value == nil {
+				continue
+			}
+			mode, ok := value.(string)
+			if !ok {
+				return fmt.Errorf("extra.%s must be string", key)
+			}
+			switch strings.ToLower(strings.TrimSpace(mode)) {
+			case "", "fresh", "resume_last":
+			default:
+				return fmt.Errorf("extra.%s is not an allowed keepalive mode", key)
+			}
+		case "keeper_keepalive_work_start", "keeper_keepalive_work_end":
+			if value == nil {
+				continue
+			}
+			if !isValidKeeperClockString(value) {
+				return fmt.Errorf("extra.%s must use HH:MM format", key)
+			}
+		case "keeper_keepalive_model":
+			if value == nil {
+				continue
+			}
+			if !isBoundedExtraString(value, 200) {
+				return fmt.Errorf("extra.%s must be a string up to 200 characters", key)
+			}
+		case "keeper_keepalive_workspace":
+			if value == nil {
+				continue
+			}
+			if !isBoundedExtraString(value, 128) {
+				return fmt.Errorf("extra.%s must be a string up to 128 characters", key)
+			}
+			workspace := strings.TrimSpace(value.(string))
+			if strings.Contains(workspace, "/") || strings.Contains(workspace, "\\") || strings.Contains(workspace, "..") {
+				return fmt.Errorf("extra.%s must be a single project name", key)
+			}
+		case "keeper_keepalive_prompt":
+			if value == nil {
+				continue
+			}
+			if !isBoundedExtraString(value, 4000) {
+				return fmt.Errorf("extra.%s must be a string up to 4000 characters", key)
+			}
+		default:
+			return fmt.Errorf("extra.%s is not allowed in this endpoint", key)
+		}
+	}
+	return nil
+}
+
+func isBoundedExtraString(value any, maxRunes int) bool {
+	text, ok := value.(string)
+	if !ok {
+		return false
+	}
+	return len([]rune(text)) <= maxRunes
+}
+
+func isValidKeeperClockString(value any) bool {
+	text, ok := value.(string)
+	if !ok {
+		return false
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return true
+	}
+	parts := strings.Split(text, ":")
+	if len(parts) != 2 || len(parts[0]) != 2 || len(parts[1]) != 2 {
+		return false
+	}
+	hour, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return false
+	}
+	minute, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return false
+	}
+	if hour == 24 && minute == 0 {
+		return true
+	}
+	return hour >= 0 && hour <= 23 && minute >= 0 && minute <= 59
 }

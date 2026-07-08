@@ -25,6 +25,7 @@ type openAIAPIKeyCodexMimicProfile struct {
 
 type openAIUpstreamRequestPlan struct {
 	IsStream         bool
+	IsCompact        bool
 	PromptCacheKey   string
 	IsCodexCLI       bool
 	APIKeyCodexMimic openAIAPIKeyCodexMimicProfile

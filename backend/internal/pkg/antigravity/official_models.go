@@ -5,12 +5,12 @@ import "strings"
 // OfficialModelDescriptor 描述 Antigravity 官方客户端抓包确认的发包模型。
 // 抓包基线：Antigravity Hub 2.2.1，2026-07。
 type OfficialModelDescriptor struct {
-	ID             string
-	DisplayName    string
-	ModelEnum      string
-	ThinkingBudget int
-	CreatedAt      string
-	IsReasoning    bool
+	ID             string `json:"id"`
+	DisplayName    string `json:"display_name"`
+	ModelEnum      string `json:"model_enum"`
+	ThinkingBudget int    `json:"thinking_budget"`
+	CreatedAt      string `json:"created_at"`
+	IsReasoning    bool   `json:"is_reasoning"`
 }
 
 var officialModelDescriptors = []OfficialModelDescriptor{
@@ -116,6 +116,36 @@ func OfficialModelMapping() map[string]string {
 		mapping[descriptor.ID] = descriptor.ID
 	}
 	return mapping
+}
+
+func OfficialGeminiModels() []GeminiModel {
+	result := make([]GeminiModel, len(officialModelDescriptors))
+	for i, descriptor := range officialModelDescriptors {
+		result[i] = GeminiModel{
+			Name:                       "models/" + descriptor.ID,
+			DisplayName:                descriptor.DisplayName,
+			SupportedGenerationMethods: defaultGeminiMethods,
+		}
+	}
+	return result
+}
+
+func OfficialGeminiModelsList() GeminiModelsListResponse {
+	return GeminiModelsListResponse{Models: OfficialGeminiModels()}
+}
+
+func OfficialGeminiModel(model string) (GeminiModel, bool) {
+	trimmed := strings.TrimSpace(model)
+	trimmed = strings.TrimPrefix(trimmed, "models/")
+	descriptor, ok := officialModelDescriptor(trimmed)
+	if !ok {
+		return GeminiModel{}, false
+	}
+	return GeminiModel{
+		Name:                       "models/" + descriptor.ID,
+		DisplayName:                descriptor.DisplayName,
+		SupportedGenerationMethods: defaultGeminiMethods,
+	}, true
 }
 
 // IsOfficialModelID 判断模型 ID 是否属于 Antigravity 官方发包模型。

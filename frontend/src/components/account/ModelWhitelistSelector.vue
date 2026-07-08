@@ -197,20 +197,23 @@ const shouldReplaceOnUpstreamSync = computed(() => (
   normalizedPlatforms.value.length === 1 &&
   normalizedPlatforms.value[0].toLowerCase() === 'antigravity'
 ))
+const allModelOptionMap = new Map(allModels.map(model => [model.value, model]))
 
 const availableOptions = computed(() => {
   if (normalizedPlatforms.value.length === 0) {
     return allModels
   }
 
-  const allowedModels = new Set<string>()
+  const allowedModels = new Map<string, { value: string; label: string }>()
   for (const platform of normalizedPlatforms.value) {
     for (const model of getModelsByPlatform(platform)) {
-      allowedModels.add(model)
+      if (!allowedModels.has(model)) {
+        allowedModels.set(model, allModelOptionMap.get(model) ?? { value: model, label: model })
+      }
     }
   }
 
-  return allModels.filter(model => allowedModels.has(model.value))
+  return Array.from(allowedModels.values())
 })
 
 const filteredModels = computed(() => {

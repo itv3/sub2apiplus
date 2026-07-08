@@ -668,6 +668,30 @@ export async function getAntigravityDefaultModelMapping(): Promise<Record<string
   return data
 }
 
+export interface AntigravityOfficialModelDescriptor {
+  id: string
+  display_name: string
+  model_enum: string
+  thinking_budget: number
+  created_at: string
+  is_reasoning: boolean
+}
+
+export interface AntigravityOfficialModelsResponse {
+  models: AntigravityOfficialModelDescriptor[]
+  mapping: Record<string, string>
+}
+
+/**
+ * 获取 Antigravity 官方模型描述表。
+ */
+export async function getAntigravityOfficialModels(): Promise<AntigravityOfficialModelsResponse> {
+  const { data } = await apiClient.get<AntigravityOfficialModelsResponse>(
+    '/admin/accounts/antigravity/official-models'
+  )
+  return data
+}
+
 /**
  * Refresh OpenAI token using refresh token
  * @param refreshToken - The refresh token
@@ -882,6 +906,7 @@ export const accountsAPI = {
   importCodexSession,
   createOpenAICodexPAT,
   getAntigravityDefaultModelMapping,
+  getAntigravityOfficialModels,
   batchClearError,
   batchRefresh,
   setPrivacy,

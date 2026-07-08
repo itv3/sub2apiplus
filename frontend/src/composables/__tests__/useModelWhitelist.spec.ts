@@ -1,11 +1,28 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
+
+const antigravityOfficialModels = vi.hoisted(() => [
+  { id: 'gemini-3.5-flash-extra-low', display_name: 'Gemini 3.5 Flash Low', model_enum: 'MODEL_PLACEHOLDER_M187', thinking_budget: 1000, created_at: '2026-06-29T00:00:00Z', is_reasoning: true },
+  { id: 'gemini-3.5-flash-low', display_name: 'Gemini 3.5 Flash Medium', model_enum: 'MODEL_PLACEHOLDER_M20', thinking_budget: 4000, created_at: '2026-06-29T00:00:00Z', is_reasoning: true },
+  { id: 'gemini-3-flash-agent', display_name: 'Gemini 3.5 Flash High', model_enum: 'MODEL_PLACEHOLDER_M132', thinking_budget: 10000, created_at: '2026-06-29T00:00:00Z', is_reasoning: true },
+  { id: 'gemini-3.1-pro-low', display_name: 'Gemini 3.1 Pro Low', model_enum: 'MODEL_PLACEHOLDER_M36', thinking_budget: 1001, created_at: '2026-02-19T00:00:00Z', is_reasoning: true },
+  { id: 'gemini-pro-agent', display_name: 'Gemini 3.1 Pro High', model_enum: 'MODEL_PLACEHOLDER_M16', thinking_budget: 10001, created_at: '2026-02-19T00:00:00Z', is_reasoning: true },
+  { id: 'claude-sonnet-4-6', display_name: 'Claude Sonnet 4.6', model_enum: 'MODEL_PLACEHOLDER_M35', thinking_budget: 1024, created_at: '2026-02-17T00:00:00Z', is_reasoning: true },
+  { id: 'claude-opus-4-6-thinking', display_name: 'Claude Opus 4.6 Thinking', model_enum: 'MODEL_PLACEHOLDER_M26', thinking_budget: 1024, created_at: '2026-02-05T00:00:00Z', is_reasoning: true },
+  { id: 'gpt-oss-120b-medium', display_name: 'GPT-OSS 120B Medium', model_enum: 'MODEL_OPENAI_GPT_OSS_120B_MEDIUM', thinking_budget: 8192, created_at: '2026-06-29T00:00:00Z', is_reasoning: true }
+])
 
 vi.mock('@/api/admin/accounts', () => ({
-  getAntigravityDefaultModelMapping: vi.fn()
+  getAntigravityDefaultModelMapping: vi.fn(),
+  getAntigravityOfficialModels: vi.fn(async () => ({
+    models: antigravityOfficialModels,
+    mapping: Object.fromEntries(antigravityOfficialModels.map((model) => [model.id, model.id]))
+  }))
 }))
 
 import {
+  allModels,
   buildModelMappingObject,
+  fetchAntigravityOfficialModels,
   getModelsByPlatform,
   getOfficialAntigravityDisplayMappings,
   getOfficialAntigravityModelIDs,
@@ -13,6 +30,10 @@ import {
 } from '../useModelWhitelist'
 
 describe('useModelWhitelist', () => {
+  beforeAll(async () => {
+    await fetchAntigravityOfficialModels()
+  })
+
   it('openai 模型列表包含 GPT-5.4 官方快照', () => {
     const models = getModelsByPlatform('openai')
 
@@ -33,19 +54,17 @@ describe('useModelWhitelist', () => {
     expect(models).not.toContain('gpt-5.2-codex')
   })
 
-  it('antigravity 模型列表包含图片模型兼容项', () => {
+  it('antigravity 模型列表由后端官方描述表提供', () => {
     const models = getModelsByPlatform('antigravity')
 
-    expect(models).toContain('gemini-2.5-flash-image')
-    expect(models).toContain('gemini-3.1-flash-image')
-    expect(models).toContain('gemini-3-pro-image')
+    expect(models).toEqual(antigravityOfficialModels.map((model) => model.id))
   })
 
   it('Claude 模型列表包含新发布的 Claude 模型', () => {
     expect(getModelsByPlatform('claude')).toContain('claude-fable-5')
-    expect(getModelsByPlatform('antigravity')).toContain('claude-fable-5')
     expect(getModelsByPlatform('claude')).toContain('claude-opus-4-8')
-    expect(getModelsByPlatform('antigravity')).toContain('claude-opus-4-8')
+    expect(getModelsByPlatform('antigravity')).not.toContain('claude-fable-5')
+    expect(getModelsByPlatform('antigravity')).not.toContain('claude-opus-4-8')
   })
 
   it('gemini 模型列表包含原生生图模型', () => {
@@ -57,17 +76,13 @@ describe('useModelWhitelist', () => {
     expect(models.indexOf('gemini-2.5-flash-image')).toBeLessThan(models.indexOf('gemini-2.5-flash'))
   })
 
-  it('antigravity 模型列表会把新的 Gemini 图片模型排在前面', () => {
+  it('antigravity 模型列表不再混入非官方图片兼容项', () => {
     const models = getModelsByPlatform('antigravity')
 
-    expect(models.indexOf('gemini-3.1-flash-image')).toBeLessThan(models.indexOf('gemini-2.5-flash'))
-    expect(models.indexOf('gemini-2.5-flash-image')).toBeLessThan(models.indexOf('gemini-2.5-flash-lite'))
-  })
-
-  it('antigravity 模型列表包含 Gemini 3.1 Pro 通用别名', () => {
-    const models = getModelsByPlatform('antigravity')
-
-    expect(models).toContain('gemini-3.1-pro')
+    expect(models).not.toContain('gemini-2.5-flash-image')
+    expect(models).not.toContain('gemini-3.1-flash-image')
+    expect(models).not.toContain('gemini-3-pro-image')
+    expect(models).not.toContain('gemini-3.1-pro')
   })
 
   it('antigravity 模型列表包含官方 Flash 和 GPT-OSS 模型', () => {
@@ -80,29 +95,36 @@ describe('useModelWhitelist', () => {
     expect(models).toContain('gpt-oss-120b-medium')
   })
 
+  it('通用候选列表不再内置 Antigravity 官方发包模型', () => {
+    const values = allModels.map(model => model.value)
+
+    expect(values).not.toContain('gemini-pro-agent')
+    expect(values).not.toContain('gpt-oss-120b-medium')
+  })
+
   it('Antigravity 官方白名单默认使用抓包确认的 8 个发包 model', () => {
     expect(getOfficialAntigravityModelIDs()).toEqual([
-      'claude-opus-4-6-thinking',
-      'claude-sonnet-4-6',
-      'gemini-3-flash-agent',
-      'gemini-3.1-pro-low',
       'gemini-3.5-flash-extra-low',
       'gemini-3.5-flash-low',
+      'gemini-3-flash-agent',
+      'gemini-3.1-pro-low',
       'gemini-pro-agent',
+      'claude-sonnet-4-6',
+      'claude-opus-4-6-thinking',
       'gpt-oss-120b-medium'
     ])
   })
 
   it('Antigravity 官方显示映射默认使用界面显示名到发包 model', () => {
     expect(getOfficialAntigravityDisplayMappings()).toEqual([
-      { from: 'Claude Opus 4.6 Thinking', to: 'claude-opus-4-6-thinking' },
-      { from: 'Claude Sonnet 4.6', to: 'claude-sonnet-4-6' },
-      { from: 'GPT-OSS 120B Medium', to: 'gpt-oss-120b-medium' },
-      { from: 'Gemini 3.1 Pro High', to: 'gemini-pro-agent' },
-      { from: 'Gemini 3.1 Pro Low', to: 'gemini-3.1-pro-low' },
-      { from: 'Gemini 3.5 Flash High', to: 'gemini-3-flash-agent' },
       { from: 'Gemini 3.5 Flash Low', to: 'gemini-3.5-flash-extra-low' },
-      { from: 'Gemini 3.5 Flash Medium', to: 'gemini-3.5-flash-low' }
+      { from: 'Gemini 3.5 Flash Medium', to: 'gemini-3.5-flash-low' },
+      { from: 'Gemini 3.5 Flash High', to: 'gemini-3-flash-agent' },
+      { from: 'Gemini 3.1 Pro Low', to: 'gemini-3.1-pro-low' },
+      { from: 'Gemini 3.1 Pro High', to: 'gemini-pro-agent' },
+      { from: 'Claude Sonnet 4.6', to: 'claude-sonnet-4-6' },
+      { from: 'Claude Opus 4.6 Thinking', to: 'claude-opus-4-6-thinking' },
+      { from: 'GPT-OSS 120B Medium', to: 'gpt-oss-120b-medium' }
     ])
   })
 
@@ -157,5 +179,48 @@ describe('useModelWhitelist', () => {
       allowedModels: ['gpt-5.4'],
       modelMappings: [{ from: 'gpt-latest', to: 'gpt-5.4' }]
     })
+  })
+})
+
+describe('Antigravity 官方模型缓存失败重试', () => {
+  it('首次 API 失败不会缓存空数组，后续成功仍会刷新白名单和默认映射', async () => {
+    vi.resetModules()
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    const getAntigravityOfficialModels = vi.fn()
+      .mockRejectedValueOnce(new Error('temporary failure'))
+      .mockResolvedValueOnce({
+        models: [
+          {
+            id: 'gemini-3.5-flash-low',
+            display_name: 'Gemini 3.5 Flash Medium',
+            model_enum: 'MODEL_PLACEHOLDER_M20',
+            thinking_budget: 4000,
+            created_at: '2026-06-29T00:00:00Z',
+            is_reasoning: true
+          }
+        ],
+        mapping: { 'gemini-3.5-flash-low': 'gemini-3.5-flash-low' }
+      })
+
+    vi.doMock('@/api/admin/accounts', () => ({
+      getAntigravityDefaultModelMapping: vi.fn(),
+      getAntigravityOfficialModels
+    }))
+
+    try {
+      const module = await import('../useModelWhitelist')
+
+      await expect(module.fetchAntigravityDefaultMappings()).resolves.toEqual([])
+      expect(module.getOfficialAntigravityModelIDs()).toEqual([])
+
+      await expect(module.fetchAntigravityDefaultMappings()).resolves.toEqual([
+        { from: 'Gemini 3.5 Flash Medium', to: 'gemini-3.5-flash-low' }
+      ])
+      expect(module.getOfficialAntigravityModelIDs()).toEqual(['gemini-3.5-flash-low'])
+      expect(getAntigravityOfficialModels).toHaveBeenCalledTimes(2)
+    } finally {
+      warnSpy.mockRestore()
+      vi.doUnmock('@/api/admin/accounts')
+    }
   })
 })
