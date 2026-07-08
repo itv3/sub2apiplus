@@ -943,7 +943,12 @@ func (h *AccountHandler) UpdateExtra(c *gin.Context) {
 		response.BadRequest(c, "extra is required")
 		return
 	}
-	if err := validatePlusExtraPatch(req.Extra); err != nil {
+	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if err := validatePlusExtraPatchForAccount(req.Extra, account); err != nil {
 		response.BadRequest(c, err.Error())
 		return
 	}
@@ -953,7 +958,7 @@ func (h *AccountHandler) UpdateExtra(c *gin.Context) {
 		return
 	}
 
-	account, err := h.adminService.GetAccount(c.Request.Context(), accountID)
+	account, err = h.adminService.GetAccount(c.Request.Context(), accountID)
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -2915,6 +2920,46 @@ func validatePlusExtraPatch(extra map[string]any) error {
 			}
 		default:
 			return fmt.Errorf("extra.%s is not allowed in this endpoint", key)
+		}
+	}
+	return nil
+}
+
+func validatePlusExtraPatchForAccount(extra map[string]any, account *service.Account) error {
+	if err := validatePlusExtraPatch(extra); err != nil {
+		return err
+	}
+	if account == nil {
+		return fmt.Errorf("account is required")
+	}
+	for key := range extra {
+		switch key {
+		case "anthropic_apikey_mimic_claude_code":
+			if account.Platform != service.PlatformAnthropic || account.Type != service.AccountTypeAPIKey {
+				return fmt.Errorf("extra.%s only applies to Anthropic API Key accounts", key)
+			}
+		case "openai_apikey_mimic_codex_cli", "openai_apikey_mimic_codex_profile":
+			if account.Platform != service.PlatformOpenAI || account.Type != service.AccountTypeAPIKey {
+				return fmt.Errorf("extra.%s only applies to OpenAI API Key accounts", key)
+			}
+		case "enable_tls_fingerprint":
+			if account.Type != service.AccountTypeAPIKey ||
+				(account.Platform != service.PlatformOpenAI && account.Platform != service.PlatformAnthropic) {
+				return fmt.Errorf("extra.%s only applies to OpenAI or Anthropic API Key accounts", key)
+			}
+		case "keeper_keepalive_enabled",
+			"keeper_keepalive_interval_minutes",
+			"keeper_keepalive_max_output_tokens",
+			"keeper_keepalive_mode",
+			"keeper_keepalive_work_start",
+			"keeper_keepalive_work_end",
+			"keeper_keepalive_model",
+			"keeper_keepalive_workspace",
+			"keeper_keepalive_prompt":
+			if account.Type != service.AccountTypeAPIKey ||
+				(account.Platform != service.PlatformOpenAI && account.Platform != service.PlatformAnthropic) {
+				return fmt.Errorf("extra.%s only applies to OpenAI or Anthropic API Key accounts", key)
+			}
 		}
 	}
 	return nil

@@ -368,6 +368,15 @@
                 <label class="space-y-1 text-sm">{{ t('admin.accountKeepalive.labels.intervalMinutes') }}
                   <input v-model.number="keepaliveModal.form.intervalMinutes" class="input" type="number" min="1" />
                 </label>
+                <label class="space-y-1 text-sm">{{ t('admin.accountKeepalive.labels.maxOutputTokens') }}
+                  <input
+                    v-model.number="keepaliveModal.form.maxOutputTokens"
+                    class="input"
+                    type="number"
+                    min="1"
+                    :max="KEEPER_MAX_OUTPUT_TOKENS_HARD_CAP"
+                  />
+                </label>
                 <label class="space-y-1 text-sm">{{ t('admin.accountKeepalive.labels.workStart') }}
                   <input v-model.trim="keepaliveModal.form.workStart" class="input" placeholder="04:00" />
                 </label>
@@ -464,6 +473,9 @@ const KEEPER_WORKSPACE_KEY = 'keeper_keepalive_workspace'
 const KEEPER_WORK_START_KEY = 'keeper_keepalive_work_start'
 const KEEPER_WORK_END_KEY = 'keeper_keepalive_work_end'
 const KEEPER_PROMPT_KEY = 'keeper_keepalive_prompt'
+const KEEPER_MAX_OUTPUT_TOKENS_KEY = 'keeper_keepalive_max_output_tokens'
+const DEFAULT_KEEPER_MAX_OUTPUT_TOKENS = 512
+const KEEPER_MAX_OUTPUT_TOKENS_HARD_CAP = 1024
 
 type TabKey = 'mimic' | 'keepalive'
 type KeepaliveTabKey = 'overview' | 'settings' | 'history'
@@ -471,6 +483,7 @@ type KeepaliveTabKey = 'overview' | 'settings' | 'history'
 interface KeepaliveForm {
   enabled: boolean
   intervalMinutes: number
+  maxOutputTokens: number
   model: string
   mode: 'resume_last' | 'fresh'
   workspace: string
@@ -787,6 +800,7 @@ function buildKeepaliveForm(account: Account, projects = keepaliveProjectOptions
   return {
     enabled: extra[KEEPER_ENABLED_KEY] === true,
     intervalMinutes: normalizeInterval(extra[KEEPER_INTERVAL_KEY]),
+    maxOutputTokens: normalizeMaxOutputTokens(extra[KEEPER_MAX_OUTPUT_TOKENS_KEY]),
     model: typeof extra[KEEPER_MODEL_KEY] === 'string' ? extra[KEEPER_MODEL_KEY] : '',
     mode: typeof extra[KEEPER_MODE_KEY] === 'string' ? normalizeKeepaliveMode(extra[KEEPER_MODE_KEY]) : defaultKeepaliveModeForAccount(account),
     workspace: workspace || (projects.length === 1 ? projects[0] : ''),
@@ -800,6 +814,7 @@ function emptyKeepaliveForm(): KeepaliveForm {
   return {
     enabled: true,
     intervalMinutes: 8,
+    maxOutputTokens: DEFAULT_KEEPER_MAX_OUTPUT_TOKENS,
     model: '',
     mode: 'fresh',
     workspace: '',
@@ -901,6 +916,12 @@ function normalizeInterval(value: unknown): number {
   const n = Number(value)
   if (!Number.isFinite(n) || n <= 0) return 8
   return Math.max(1, Math.round(n))
+}
+
+function normalizeMaxOutputTokens(value: unknown): number {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n <= 0) return DEFAULT_KEEPER_MAX_OUTPUT_TOKENS
+  return Math.min(KEEPER_MAX_OUTPUT_TOKENS_HARD_CAP, Math.max(1, Math.round(n)))
 }
 
 function defaultKeepaliveModeForAccount(account?: Account | null): 'resume_last' | 'fresh' {
@@ -1085,6 +1106,7 @@ function buildKeepalivePatch(row: KeepaliveRow): Record<string, unknown> {
   return {
     [KEEPER_ENABLED_KEY]: row.form.enabled,
     [KEEPER_INTERVAL_KEY]: normalizeInterval(row.form.intervalMinutes),
+    [KEEPER_MAX_OUTPUT_TOKENS_KEY]: normalizeMaxOutputTokens(row.form.maxOutputTokens),
     [KEEPER_MODEL_KEY]: row.form.model,
     [KEEPER_MODE_KEY]: row.form.mode,
     [KEEPER_WORKSPACE_KEY]: row.form.workspace,
@@ -1165,7 +1187,8 @@ async function saveKeepaliveModal() {
     account,
     form: {
       ...keepaliveModal.value.form,
-      intervalMinutes: normalizeInterval(keepaliveModal.value.form.intervalMinutes)
+      intervalMinutes: normalizeInterval(keepaliveModal.value.form.intervalMinutes),
+      maxOutputTokens: normalizeMaxOutputTokens(keepaliveModal.value.form.maxOutputTokens)
     }
   }
   await saveKeepalive(row)
@@ -1176,10 +1199,11 @@ async function saveKeepaliveModal() {
 async function deleteKeepaliveAccount() {
   const account = selectedKeepaliveAccount.value
   if (!account) return
-  const patch: Record<string, unknown> = {
-    [KEEPER_ENABLED_KEY]: false,
-    [KEEPER_INTERVAL_KEY]: null,
-    [KEEPER_MODEL_KEY]: '',
+	  const patch: Record<string, unknown> = {
+	    [KEEPER_ENABLED_KEY]: false,
+	    [KEEPER_INTERVAL_KEY]: null,
+	    [KEEPER_MAX_OUTPUT_TOKENS_KEY]: null,
+	    [KEEPER_MODEL_KEY]: '',
     [KEEPER_MODE_KEY]: '',
     [KEEPER_WORKSPACE_KEY]: '',
     [KEEPER_WORK_START_KEY]: '',

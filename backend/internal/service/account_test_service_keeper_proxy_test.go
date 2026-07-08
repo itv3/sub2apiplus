@@ -11,37 +11,65 @@ import (
 )
 
 func TestValidateKeeperOpenAIProxyPath(t *testing.T) {
-	allowed := []string{
-		"/v1/responses",
-		"/v1/responses/resp_123/input_items",
-		"/responses",
-		"/chat/completions",
-		"/v1/chat/completions",
-		"/models",
-		"/v1/models",
+	allowed := []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/v1/responses"},
+		{http.MethodGet, "/v1/responses/resp_123/input_items"},
+		{http.MethodPost, "/responses"},
+		{http.MethodPost, "/chat/completions"},
+		{http.MethodPost, "/v1/chat/completions"},
+		{http.MethodGet, "/models"},
+		{http.MethodGet, "/v1/models"},
 	}
-	for _, path := range allowed {
-		got, err := validateKeeperOpenAIProxyPath(path)
-		require.NoError(t, err, path)
-		require.Equal(t, path, got)
+	for _, tt := range allowed {
+		got, err := validateKeeperOpenAIProxyPath(tt.method, tt.path)
+		require.NoError(t, err, tt.path)
+		require.Equal(t, tt.path, got)
 	}
 
-	for _, path := range []string{"/v1/files", "/v1/fine_tuning/jobs", "/v1/../models", "/v1/models?limit=1"} {
-		_, err := validateKeeperOpenAIProxyPath(path)
-		require.Error(t, err, path)
+	for _, tt := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/v1/files"},
+		{http.MethodPost, "/v1/fine_tuning/jobs"},
+		{http.MethodPost, "/v1/../models"},
+		{http.MethodGet, "/v1/models?limit=1"},
+		{http.MethodDelete, "/v1/responses/resp_123"},
+		{http.MethodGet, "/v1/chat/completions"},
+	} {
+		_, err := validateKeeperOpenAIProxyPath(tt.method, tt.path)
+		require.Error(t, err, tt.path)
 	}
 }
 
 func TestValidateKeeperAnthropicProxyPath(t *testing.T) {
-	for _, path := range []string{"/v1/messages", "/v1/messages/count_tokens", "/v1/models"} {
-		got, err := validateKeeperAnthropicProxyPath(path)
-		require.NoError(t, err, path)
-		require.Equal(t, path, got)
+	for _, tt := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodPost, "/v1/messages"},
+		{http.MethodPost, "/v1/messages/count_tokens"},
+		{http.MethodGet, "/v1/models"},
+	} {
+		got, err := validateKeeperAnthropicProxyPath(tt.method, tt.path)
+		require.NoError(t, err, tt.path)
+		require.Equal(t, tt.path, got)
 	}
 
-	for _, path := range []string{"/v1/files", "/v1/messages/../../models", "/v1/messages?beta=true"} {
-		_, err := validateKeeperAnthropicProxyPath(path)
-		require.Error(t, err, path)
+	for _, tt := range []struct {
+		method string
+		path   string
+	}{
+		{http.MethodGet, "/v1/files"},
+		{http.MethodPost, "/v1/messages/../../models"},
+		{http.MethodPost, "/v1/messages?beta=true"},
+		{http.MethodGet, "/v1/messages"},
+	} {
+		_, err := validateKeeperAnthropicProxyPath(tt.method, tt.path)
+		require.Error(t, err, tt.path)
 	}
 }
 

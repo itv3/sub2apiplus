@@ -386,7 +386,7 @@ func filterOfficialAntigravityModelIDs(models []string) []string {
 		}
 	}
 	if len(available) == 0 {
-		return antigravity.OfficialModelIDs()
+		return nil
 	}
 
 	ordered := antigravity.OfficialModelIDs()

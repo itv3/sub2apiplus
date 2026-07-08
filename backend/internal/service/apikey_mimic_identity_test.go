@@ -124,6 +124,33 @@ func TestApplyOpenAIAPIKeyCodexMimicryToBodyAddsPromptCacheKey(t *testing.T) {
 	require.False(t, gjson.GetBytes(out, "tools.0.strict").Exists(), "这一步不补 tools strict")
 }
 
+func TestApplyOpenAIAPIKeyCodexMimicryToBodyOverridesConflictingDesktopMetadata(t *testing.T) {
+	body := []byte(`{
+		"model":"gpt-5.5",
+		"prompt_cache_key":"client-cache-key",
+		"client_metadata":{
+			"session_id":"client-session",
+			"thread_id":"client-thread",
+			"turn_id":"client-turn",
+			"x-codex-window-id":"client-window",
+			"x-codex-turn-metadata":"client-metadata"
+		},
+		"input":[{"role":"user","content":"hello"}],
+		"stream":true
+	}`)
+
+	out := applyOpenAIAPIKeyCodexMimicryToBody(body)
+	key := gjson.GetBytes(out, "prompt_cache_key").String()
+
+	require.NotEmpty(t, key)
+	require.NotEqual(t, "client-cache-key", key)
+	require.Equal(t, key, gjson.GetBytes(out, "client_metadata.session_id").String())
+	require.Equal(t, key, gjson.GetBytes(out, "client_metadata.thread_id").String())
+	require.NotEqual(t, "client-turn", gjson.GetBytes(out, "client_metadata.turn_id").String())
+	require.Equal(t, key+":0", gjson.GetBytes(out, "client_metadata.x-codex-window-id").String())
+	require.Contains(t, gjson.GetBytes(out, "client_metadata.x-codex-turn-metadata").String(), `"request_kind":"turn"`)
+}
+
 func TestApplyOpenAIAPIKeyCodexMimicryToBodyAddsDefaultInstructions(t *testing.T) {
 	body := []byte(`{
 		"model":"gpt-5.5",

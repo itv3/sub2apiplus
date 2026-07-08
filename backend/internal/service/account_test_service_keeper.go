@@ -42,6 +42,9 @@ func (s *AccountTestService) ProxyKeeperOpenAIAccount(ctx context.Context, accou
 	if !account.IsSchedulable() {
 		return nil, fmt.Errorf("account %d is not schedulable", accountID)
 	}
+	if !account.getExtraBool("keeper_keepalive_enabled") {
+		return nil, fmt.Errorf("account %d keeper keepalive is not enabled", accountID)
+	}
 	apiKey := strings.TrimSpace(account.GetOpenAIApiKey())
 	if apiKey == "" {
 		return nil, fmt.Errorf("account %d does not have OpenAI API key credentials", accountID)
@@ -50,7 +53,7 @@ func (s *AccountTestService) ProxyKeeperOpenAIAccount(ctx context.Context, accou
 	if err != nil {
 		return nil, err
 	}
-	proxyPath, err := validateKeeperOpenAIProxyPath(in.Path)
+	proxyPath, err := validateKeeperOpenAIProxyPath(in.Method, in.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -101,6 +104,9 @@ func (s *AccountTestService) ProxyKeeperAnthropicAccount(ctx context.Context, ac
 	if !account.IsSchedulable() {
 		return nil, fmt.Errorf("account %d is not schedulable", accountID)
 	}
+	if !account.getExtraBool("keeper_keepalive_enabled") {
+		return nil, fmt.Errorf("account %d keeper keepalive is not enabled", accountID)
+	}
 	apiKey := strings.TrimSpace(account.GetCredential("api_key"))
 	if apiKey == "" {
 		return nil, fmt.Errorf("account %d does not have Anthropic API key credentials", accountID)
@@ -115,7 +121,7 @@ func (s *AccountTestService) ProxyKeeperAnthropicAccount(ctx context.Context, ac
 			return nil, err
 		}
 	}
-	proxyPath, err := validateKeeperAnthropicProxyPath(in.Path)
+	proxyPath, err := validateKeeperAnthropicProxyPath(in.Method, in.Path)
 	if err != nil {
 		return nil, err
 	}
@@ -273,27 +279,35 @@ func keeperJSONPositiveInt(value any) (int, bool) {
 	return 0, false
 }
 
-func validateKeeperOpenAIProxyPath(proxyPath string) (string, error) {
+func validateKeeperOpenAIProxyPath(method string, proxyPath string) (string, error) {
 	path, err := normalizeKeeperProxyPath(proxyPath)
 	if err != nil {
 		return "", err
 	}
-	if isKeeperProxyPathExact(path, "/v1/chat/completions", "/chat/completions", "/v1/models", "/models") ||
-		isKeeperProxyPathPrefix(path, "/v1/responses", "/responses") {
+	method = strings.ToUpper(strings.TrimSpace(method))
+	if method == http.MethodPost && isKeeperProxyPathExact(path, "/v1/chat/completions", "/chat/completions", "/v1/responses", "/responses") {
 		return path, nil
 	}
-	return "", fmt.Errorf("keeper OpenAI proxy path is not allowed: %s", path)
+	if method == http.MethodGet && (isKeeperProxyPathExact(path, "/v1/models", "/models") ||
+		isKeeperProxyPathPrefix(path, "/v1/responses", "/responses")) {
+		return path, nil
+	}
+	return "", fmt.Errorf("keeper OpenAI proxy method/path is not allowed: %s %s", method, path)
 }
 
-func validateKeeperAnthropicProxyPath(proxyPath string) (string, error) {
+func validateKeeperAnthropicProxyPath(method string, proxyPath string) (string, error) {
 	path, err := normalizeKeeperProxyPath(proxyPath)
 	if err != nil {
 		return "", err
 	}
-	if isKeeperProxyPathExact(path, "/v1/messages", "/v1/messages/count_tokens", "/v1/models") {
+	method = strings.ToUpper(strings.TrimSpace(method))
+	if method == http.MethodPost && isKeeperProxyPathExact(path, "/v1/messages", "/v1/messages/count_tokens") {
 		return path, nil
 	}
-	return "", fmt.Errorf("keeper Anthropic proxy path is not allowed: %s", path)
+	if method == http.MethodGet && isKeeperProxyPathExact(path, "/v1/models") {
+		return path, nil
+	}
+	return "", fmt.Errorf("keeper Anthropic proxy method/path is not allowed: %s %s", method, path)
 }
 
 func normalizeKeeperProxyPath(proxyPath string) (string, error) {

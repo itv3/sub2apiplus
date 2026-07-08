@@ -129,8 +129,10 @@ func registerKeeperInternalRoutes(v1 *gin.RouterGroup, h *handler.Handlers, admi
 		keeper.POST("/run", keeperInternalOrAdminAuth(adminAuth), h.Admin.Account.RunKeeperTarget)
 		keeper.GET("/accounts/:id/models", keeperInternalOrAdminAuth(adminAuth), h.Admin.Account.GetAvailableModels)
 		keeper.POST("/accounts/:id/keepalive", keeperInternalTokenAuth(), h.Admin.Account.RecordKeeperKeepalive)
-		keeper.Any("/openai/accounts/:id/*proxy_path", keeperProxyTokenAuth(service.PlatformOpenAI), h.Admin.Account.ProxyKeeperOpenAIAccount)
-		keeper.Any("/anthropic/accounts/:id/*proxy_path", keeperProxyTokenAuth(service.PlatformAnthropic), h.Admin.Account.ProxyKeeperAnthropicAccount)
+		keeper.GET("/openai/accounts/:id/*proxy_path", keeperProxyTokenAuth(service.PlatformOpenAI), h.Admin.Account.ProxyKeeperOpenAIAccount)
+		keeper.POST("/openai/accounts/:id/*proxy_path", keeperProxyTokenAuth(service.PlatformOpenAI), h.Admin.Account.ProxyKeeperOpenAIAccount)
+		keeper.GET("/anthropic/accounts/:id/*proxy_path", keeperProxyTokenAuth(service.PlatformAnthropic), h.Admin.Account.ProxyKeeperAnthropicAccount)
+		keeper.POST("/anthropic/accounts/:id/*proxy_path", keeperProxyTokenAuth(service.PlatformAnthropic), h.Admin.Account.ProxyKeeperAnthropicAccount)
 	}
 }
 

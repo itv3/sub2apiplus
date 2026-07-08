@@ -3343,6 +3343,7 @@ export default {
         mode: '执行模式',
         selectModel: '选择模型',
         intervalMinutes: '保活频率（分钟）',
+        maxOutputTokens: '最大输出 token',
         workStart: '工作开始时间',
         workEnd: '工作结束时间',
         selectProject: '选择项目',

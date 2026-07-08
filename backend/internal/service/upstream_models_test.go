@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/stretchr/testify/require"
 )
 
@@ -243,7 +242,7 @@ func TestFilterOfficialAntigravityModelIDs(t *testing.T) {
 	}, models)
 }
 
-func TestFilterOfficialAntigravityModelIDsFallsBackToOfficialDefaults(t *testing.T) {
+func TestFilterOfficialAntigravityModelIDsReturnsEmptyWhenNoOfficialModels(t *testing.T) {
 	t.Parallel()
 
 	models := filterOfficialAntigravityModelIDs([]string{
@@ -252,7 +251,7 @@ func TestFilterOfficialAntigravityModelIDsFallsBackToOfficialDefaults(t *testing
 		"tab_flash_lite_preview",
 	})
 
-	require.Equal(t, antigravity.OfficialModelIDs(), models)
+	require.Empty(t, models)
 }
 
 func TestBuildAnthropicUpstreamModelsRequestRejectsBedrock(t *testing.T) {

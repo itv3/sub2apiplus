@@ -2602,13 +2602,10 @@ import {
   resolveOpenAIWSModeFromExtra
 } from '@/utils/openaiWsMode'
 import {
-	  getPresetMappingsByPlatform,
-	  commonErrorCodes,
-	  buildModelMappingObject,
-	  fetchAntigravityOfficialModels,
-	  fetchAntigravityDefaultMappings,
-	  getOfficialAntigravityDisplayMappings,
-	  splitModelMappingObject,
+  getPresetMappingsByPlatform,
+  commonErrorCodes,
+  buildModelMappingObject,
+  splitModelMappingObject,
   isValidWildcardPattern
 } from '@/composables/useModelWhitelist'
 
@@ -3556,14 +3553,11 @@ const syncAntigravityUpstreamModels = async () => {
       return
     }
 
-	    await fetchAntigravityOfficialModels()
-	    const fetchedMappings = await fetchAntigravityDefaultMappings()
-    const officialMappings = fetchedMappings.length > 0 ? fetchedMappings : getOfficialAntigravityDisplayMappings()
-    const officialModels = officialMappings.map((mapping) => mapping.to).filter(Boolean)
+    const syncedModels = Array.from(new Set(upstreamModels))
     antigravityModelRestrictionMode.value = 'whitelist'
-    antigravityWhitelistModels.value = officialModels
-    antigravityModelMappings.value = officialMappings
-    appStore.showSuccess(t('admin.accounts.syncUpstreamModelsSuccess', { count: officialModels.length, total: upstreamModels.length }))
+    antigravityWhitelistModels.value = syncedModels
+    antigravityModelMappings.value = []
+    appStore.showSuccess(t('admin.accounts.syncUpstreamModelsSuccess', { count: syncedModels.length, total: upstreamModels.length }))
   } catch (error) {
     const message = error instanceof Error ? error.message : t('admin.accounts.syncUpstreamModelsFailed')
     appStore.showError(t('admin.accounts.syncUpstreamModelsError', { message }))

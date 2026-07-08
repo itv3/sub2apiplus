@@ -218,7 +218,7 @@ func ensureOpenAIAPIKeyCodexDesktopClientMetadata(reqBody map[string]any, scope 
 	case map[string]any:
 		modified := false
 		for k, v := range values {
-			if existingStringValueIsEmpty(existing[k]) {
+			if existing[k] != v {
 				existing[k] = v
 				modified = true
 			}
@@ -234,7 +234,7 @@ func ensureOpenAIAPIKeyCodexDesktopClientMetadata(reqBody map[string]any, scope 
 		}
 		modified := false
 		for k, v := range values {
-			if strings.TrimSpace(existing[k]) == "" {
+			if existing[k] != v {
 				next[k] = v
 				modified = true
 			}
@@ -250,17 +250,6 @@ func ensureOpenAIAPIKeyCodexDesktopClientMetadata(reqBody map[string]any, scope 
 		}
 		reqBody["client_metadata"] = next
 		return true
-	default:
-		return false
-	}
-}
-
-func existingStringValueIsEmpty(v any) bool {
-	switch s := v.(type) {
-	case nil:
-		return true
-	case string:
-		return strings.TrimSpace(s) == ""
 	default:
 		return false
 	}

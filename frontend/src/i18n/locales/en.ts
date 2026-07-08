@@ -3269,6 +3269,7 @@ export default {
         mode: 'Mode',
         selectModel: 'Select model',
         intervalMinutes: 'Keepalive interval (minutes)',
+        maxOutputTokens: 'Max output tokens',
         workStart: 'Work start time',
         workEnd: 'Work end time',
         selectProject: 'Select project',
