@@ -1,20 +1,15 @@
 package domain
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
+)
 
 func TestDefaultAntigravityModelMapping_ContainsOnlyOfficialModels(t *testing.T) {
 	t.Parallel()
 
-	cases := map[string]string{
-		"claude-opus-4-6-thinking":       "claude-opus-4-6-thinking",
-		"claude-sonnet-4-6":              "claude-sonnet-4-6",
-		"gemini-3-flash-agent":           "gemini-3-flash-agent",
-		"gemini-3.1-pro-low":             "gemini-3.1-pro-low",
-		AntigravityGemini31ProAgentModel: AntigravityGemini31ProAgentModel,
-		"gemini-3.5-flash-extra-low":     "gemini-3.5-flash-extra-low",
-		"gemini-3.5-flash-low":           "gemini-3.5-flash-low",
-		"gpt-oss-120b-medium":            "gpt-oss-120b-medium",
-	}
+	cases := antigravity.OfficialModelMapping()
 
 	if len(DefaultAntigravityModelMapping) != len(cases) {
 		t.Fatalf("default mapping size = %d, want %d", len(DefaultAntigravityModelMapping), len(cases))

@@ -434,7 +434,7 @@ func TestBuildGenerationConfig_OfficialAntigravityThinkingBudgetIgnoresClientThi
 	}
 
 	for _, model := range OfficialModelIDs() {
-		wantBudget, ok := defaultAntigravityThinkingBudget(model)
+		wantBudget, ok := DefaultThinkingBudget(model)
 		require.True(t, ok, "official model %s should have default thinking budget", model)
 
 		for _, tt := range tests {
@@ -745,6 +745,8 @@ func TestTransformClaudeToGeminiWithOptions_PreservesWebSearchAlongsideFunctions
 
 	var req V1InternalRequest
 	require.NoError(t, json.Unmarshal(body, &req))
+	require.Equal(t, OfficialWebSearchFallbackModel, req.Model)
+	require.True(t, IsOfficialModelID(req.Model))
 	require.Len(t, req.Request.Tools, 2)
 	require.Len(t, req.Request.Tools[0].FunctionDeclarations, 1)
 	require.Equal(t, "get_weather", req.Request.Tools[0].FunctionDeclarations[0].Name)

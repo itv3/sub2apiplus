@@ -2028,6 +2028,157 @@ export interface UpdateScheduledTestPlanRequest {
   auto_recover?: boolean
 }
 
+// ==================== Keeper Types ====================
+
+export interface KeeperUsage {
+  input_tokens?: number
+  InputTokens?: number
+  output_tokens?: number
+  OutputTokens?: number
+  cache_read_tokens?: number
+  CacheReadTokens?: number
+  cached_input_tokens?: number
+  cache_creation_input_tokens?: number
+  cache_creation_tokens?: number
+  CacheCreationTokens?: number
+  total_tokens?: number
+}
+
+export interface KeeperBilling {
+  available?: boolean
+  rate_multiplier?: number
+  actual_cost?: number
+  ActualCost?: number
+  total_cost?: number
+  TotalCost?: number
+  pricing_source?: string
+  [key: string]: unknown
+}
+
+export interface KeeperSession {
+  id?: string
+  status?: string
+  model?: string
+  mode?: string
+  prompt?: string
+  reply_text?: string
+  summary?: string
+  error?: string
+  usage?: KeeperUsage
+  Usage?: KeeperUsage
+  billing?: KeeperBilling
+  Billing?: KeeperBilling
+  started_at?: string
+  completed_at?: string
+  StartedAt?: string
+  CompletedAt?: string
+  [key: string]: unknown
+}
+
+export interface KeeperTarget {
+  id?: string
+  name?: string
+  account_id?: number
+  account_name?: string
+  platform?: string
+  account_type?: string
+  enabled?: boolean
+  Enabled?: boolean
+  running?: boolean
+  Running?: boolean
+  model?: string
+  Model?: string
+  mode?: string
+  Mode?: string
+  workspace?: string
+  sessions?: KeeperSession[]
+  Sessions?: KeeperSession[]
+  current_status?: string
+  status_class?: string
+  status_detail?: string
+  last_error?: string
+  last_message_summary?: string
+  execution_count?: number
+  success_count?: number
+  failure_count?: number
+  usage_24h_cost?: KeeperBilling
+  total_usage_cost?: KeeperBilling
+  last_started_at?: string
+  last_keepalive_started_at?: string
+  last_keepalive_received_at?: string
+  last_finished_at?: string
+  next_run_at?: string
+  AccountID?: number
+  Platform?: string
+  AccountType?: string
+  Executor?: string
+  CurrentStatus?: string
+  StatusClass?: string
+  StatusDetail?: string
+  LastError?: string
+  LastMessageSummary?: string
+  ExecutionCount?: number
+  SuccessCount?: number
+  FailureCount?: number
+  Usage24hCost?: KeeperBilling
+  TotalUsageCost?: KeeperBilling
+  LastStartedAt?: string
+  LastKeepaliveStartedAt?: string
+  LastKeepaliveReceivedAt?: string
+  LastFinishedAt?: string
+  NextRunAt?: string
+  [key: string]: unknown
+}
+
+export interface KeeperOverviewRow extends KeeperTarget {
+  status_class?: string
+  status_detail?: string
+  last_message_summary?: string
+  consecutive_failures?: number
+  execution_count?: number
+  success_count?: number
+  failure_count?: number
+  usage_24h_cost?: KeeperBilling
+  total_usage_cost?: KeeperBilling
+  current_status?: string
+  last_error?: string
+  last_started_at?: string
+  last_keepalive_started_at?: string
+  last_keepalive_received_at?: string
+  last_finished_at?: string
+  next_run_at?: string
+}
+
+export interface KeeperDashboard {
+  total_targets?: number
+  total_accounts?: number
+  enabled_targets?: number
+  enabled_accounts?: number
+  running_count?: number
+  today_successes?: number
+  today_failures?: number
+  [key: string]: unknown
+}
+
+export interface KeeperState {
+  version?: string
+  dashboard?: KeeperDashboard
+  overview?: KeeperOverviewRow[]
+  targets?: KeeperTarget[]
+  configured_targets?: KeeperTarget[]
+  prompt_guard?: string
+  prompt_bank?: Array<Record<string, unknown>>
+  [key: string]: unknown
+}
+
+export interface KeeperSettings {
+  version?: string
+  prompt_guard?: string
+  prompt_bank?: Array<Record<string, unknown>>
+  status?: string
+  [key: string]: unknown
+}
+
 // Payment types
 export type { SubscriptionPlan, PaymentOrder, CheckoutInfoResponse } from './payment'
 

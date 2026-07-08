@@ -818,7 +818,14 @@ func TestGatewayService_AnthropicAPIKeyMimicBuildRequestStripsClientHeadersAndOA
 			"anthropic_apikey_mimic_claude_code": true,
 		},
 		Credentials: map[string]any{
-			"api_key": "anthropic-key",
+			"api_key":                    "anthropic-key",
+			credKeyHeaderOverrideEnabled: true,
+			credKeyHeaderOverrides: map[string]any{
+				"user-agent":       "override-agent/1.0",
+				"anthropic-beta":   claude.BetaOAuth + ",custom-beta",
+				"x-stainless-lang": "go",
+				"x-custom":         "custom-value",
+			},
 		},
 	}
 
@@ -833,6 +840,8 @@ func TestGatewayService_AnthropicAPIKeyMimicBuildRequestStripsClientHeadersAndOA
 	require.Contains(t, getHeaderRaw(req.Header, "anthropic-beta"), claude.BetaClaudeCode)
 	require.NotContains(t, getHeaderRaw(req.Header, "anthropic-beta"), claude.BetaOAuth)
 	require.NotEqual(t, "python", getHeaderRaw(req.Header, "x-stainless-lang"))
+	require.NotEqual(t, "go", getHeaderRaw(req.Header, "x-stainless-lang"))
+	require.Equal(t, "custom-value", getHeaderRaw(req.Header, "x-custom"))
 }
 
 func TestGatewayService_AnthropicAPIKeyMimicRewritesThirdPartyBodyToClaudeCodeShape(t *testing.T) {

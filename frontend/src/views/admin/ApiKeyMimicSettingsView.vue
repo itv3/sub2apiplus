@@ -126,27 +126,27 @@
           <div v-if="keepaliveTab === 'overview'" class="space-y-4">
             <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-800">
               <div>
-                <div class="text-sm font-semibold text-gray-900 dark:text-white">keeper 状态</div>
+                <div class="text-sm font-semibold text-gray-900 dark:text-white">{{ t('admin.accountKeepalive.labels.keeperStatus') }}</div>
                 <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                  keeper {{ keeperVersion || '-' }} · 项目目录 {{ keepaliveProjectOptions.length }} 个 · 题库 {{ promptBankRows.length }} 条
+                  {{ t('admin.accountKeepalive.labels.keeperMeta', { version: keeperVersion || '-', projects: keepaliveProjectOptions.length, prompts: promptBankRows.length }) }}
                 </div>
               </div>
             </div>
             <div class="grid gap-3 md:grid-cols-4">
               <div class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-800">
-                <div class="text-xs text-gray-500">总账号数</div>
+                <div class="text-xs text-gray-500">{{ t('admin.accountKeepalive.labels.totalAccounts') }}</div>
                 <div class="mt-2 text-2xl font-semibold">{{ keepaliveDashboard.total }}</div>
               </div>
               <div class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-800">
-                <div class="text-xs text-gray-500">已启用</div>
+                <div class="text-xs text-gray-500">{{ t('admin.accountKeepalive.labels.enabledCount') }}</div>
                 <div class="mt-2 text-2xl font-semibold">{{ keepaliveDashboard.enabled }}</div>
               </div>
               <div class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-800">
-                <div class="text-xs text-gray-500">今日成功 / 失败</div>
+                <div class="text-xs text-gray-500">{{ t('admin.accountKeepalive.labels.todaySuccessFailure') }}</div>
                 <div class="mt-2 text-2xl font-semibold">{{ keepaliveDashboard.todaySuccess }} / {{ keepaliveDashboard.todayFailure }}</div>
               </div>
               <div class="rounded-lg border border-gray-200 bg-white p-4 dark:border-dark-700 dark:bg-dark-800">
-                <div class="text-xs text-gray-500">当前运行中</div>
+                <div class="text-xs text-gray-500">{{ t('admin.accountKeepalive.labels.runningNow') }}</div>
                 <div class="mt-2 text-2xl font-semibold">{{ keepaliveDashboard.running }}</div>
               </div>
             </div>
@@ -154,15 +154,15 @@
               <table class="min-w-[1280px] divide-y divide-gray-200 text-sm dark:divide-dark-700">
                 <thead class="bg-gray-100 text-gray-700 dark:bg-dark-800 dark:text-gray-200">
                   <tr>
-                    <th class="px-4 py-3 text-left">账号</th>
-                    <th class="px-4 py-3 text-left">平台 / 类型</th>
-                    <th class="px-4 py-3 text-left">模型</th>
-                    <th class="px-4 py-3 text-left">状态</th>
-                    <th class="px-4 py-3 text-left">24小时用量 / 费用</th>
-                    <th class="px-4 py-3 text-left">时间</th>
-                    <th class="px-4 py-3 text-left">执行次数</th>
-                    <th class="px-4 py-3 text-left">最近结果</th>
-                    <th class="px-4 py-3 text-left">操作</th>
+                    <th class="px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.account') }}</th>
+                    <th class="px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.platformType') }}</th>
+                    <th class="px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.model') }}</th>
+                    <th class="px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.status') }}</th>
+                    <th class="px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.usageCost24h') }}</th>
+                    <th class="px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.time') }}</th>
+                    <th class="px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.executionCount') }}</th>
+                    <th class="px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.recentResult') }}</th>
+                    <th class="px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.actions') }}</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-gray-200 bg-white dark:divide-dark-700 dark:bg-dark-900">
@@ -172,27 +172,27 @@
                     <td class="px-4 py-3">{{ row.model || '-' }}</td>
                     <td class="px-4 py-3">
                       <span class="inline-flex rounded-full px-2.5 py-1 text-xs font-medium" :class="keepaliveStatusClass(row)">
-                        {{ row.current_status || (row.running ? '执行中' : row.enabled ? '等待下次' : '关闭') }}
+                        {{ row.current_status || fallbackKeeperStatus(row) }}
                       </span>
                       <div v-if="row.status_detail || row.last_error" class="mt-1 max-w-xs truncate text-xs text-red-500">{{ row.status_detail || row.last_error }}</div>
                     </td>
                     <td class="px-4 py-3 text-xs text-gray-600 dark:text-gray-300" v-html="formatOverviewUsageCost(row.usage_24h_cost || row.total_usage_cost || buildUsageCostSummary(row.sessions))"></td>
                     <td class="px-4 py-3 text-xs text-gray-600 dark:text-gray-300">
-                      <div>最近：{{ formatDateTime(row.last_finished_at || row.last_keepalive_received_at || row.last_keepalive_started_at) }}</div>
-                      <div>下次：{{ formatDateTime(row.next_run_at) }}</div>
+                      <div>{{ t('admin.accountKeepalive.labels.recently') }}：{{ formatDateTime(row.last_finished_at || row.last_keepalive_received_at || row.last_keepalive_started_at) }}</div>
+                      <div>{{ t('admin.accountKeepalive.labels.next') }}：{{ formatDateTime(row.next_run_at) }}</div>
                     </td>
                     <td class="px-4 py-3 text-sm">
                       {{ row.execution_count ?? sessionCounts(row.sessions).total }}
-                      <div class="text-xs text-gray-500">成功 {{ row.success_count ?? sessionCounts(row.sessions).success }} / 失败 {{ row.failure_count ?? sessionCounts(row.sessions).failure }}</div>
+                      <div class="text-xs text-gray-500">{{ t('admin.accountKeepalive.labels.successFailure', { success: row.success_count ?? sessionCounts(row.sessions).success, failure: row.failure_count ?? sessionCounts(row.sessions).failure }) }}</div>
                     </td>
                     <td class="max-w-md truncate px-4 py-3">{{ row.last_message_summary || latestSessionSummary(row) }}</td>
                     <td class="min-w-40 whitespace-nowrap px-4 py-3">
-                      <button type="button" class="btn btn-secondary btn-sm" :disabled="keepaliveUpdatingIds.has(row.account_id)" @click="runKeepalive(row.name)">立即执行</button>
-                      <button type="button" class="btn btn-secondary btn-sm ml-2" @click="openHistory(row.name)">历史</button>
+                      <button type="button" class="btn btn-secondary btn-sm" :disabled="keepaliveUpdatingIds.has(Number(row.account_id || 0))" @click="runKeepalive(row.name || '')">{{ t('admin.accountKeepalive.labels.runNow') }}</button>
+                      <button type="button" class="btn btn-secondary btn-sm ml-2" @click="openHistory(row.name || '')">{{ t('admin.accountKeepalive.labels.history') }}</button>
                     </td>
                   </tr>
                   <tr v-if="keepaliveOverviewRows.length === 0">
-                    <td colspan="9" class="px-4 py-6 text-center text-gray-500">还没有配置账号。</td>
+                    <td colspan="9" class="px-4 py-6 text-center text-gray-500">{{ t('admin.accountKeepalive.labels.noConfiguredAccounts') }}</td>
                   </tr>
                 </tbody>
               </table>
@@ -201,31 +201,31 @@
 
           <div v-else-if="keepaliveTab === 'settings'" class="max-h-[calc(100vh-340px)] space-y-6 overflow-y-auto pr-2">
             <div class="flex justify-start">
-              <button type="button" class="btn btn-primary" @click="openKeepaliveModal()">添加账号</button>
+              <button type="button" class="btn btn-primary" @click="openKeepaliveModal()">{{ t('admin.accountKeepalive.labels.addAccount') }}</button>
             </div>
             <div class="overflow-x-auto rounded-lg border border-gray-200 bg-white dark:border-dark-700 dark:bg-dark-900">
               <table class="min-w-[960px] divide-y divide-gray-200 text-sm dark:divide-dark-700">
                 <thead class="bg-gray-100 text-gray-700 dark:bg-dark-800 dark:text-gray-200">
                   <tr>
-                    <th class="px-4 py-3 text-left">账号</th>
-                    <th class="px-4 py-3 text-left">平台 / 类型</th>
-                    <th class="px-4 py-3 text-left">模型</th>
-                    <th class="px-4 py-3 text-left">工作目录</th>
-                    <th class="px-4 py-3 text-left">频率</th>
-                    <th class="px-4 py-3 text-left">编辑</th>
+                    <th class="px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.account') }}</th>
+                    <th class="px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.platformType') }}</th>
+                    <th class="px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.model') }}</th>
+                    <th class="px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.project') }}</th>
+                    <th class="px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.frequency') }}</th>
+                    <th class="px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.edit') }}</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-gray-200 bg-white dark:divide-dark-700 dark:bg-dark-900">
                   <tr v-for="row in configuredKeepaliveRows" :key="row.account.id">
-                    <td class="px-4 py-3">{{ row.account.name }}<div class="text-xs text-gray-500">{{ row.form.enabled ? '已启用' : '已禁用' }}</div></td>
+                    <td class="px-4 py-3">{{ row.account.name }}<div class="text-xs text-gray-500">{{ row.form.enabled ? t('admin.accountKeepalive.labels.enabledState') : t('admin.accountKeepalive.labels.disabledState') }}</div></td>
                     <td class="px-4 py-3">{{ row.account.platform }}<div class="text-xs text-gray-500">{{ row.account.type || '-' }}</div></td>
-                    <td class="px-4 py-3">{{ row.form.model || '-' }}<div class="text-xs text-gray-500">{{ row.form.mode === 'fresh' ? '全新会话' : '接续上次会话' }}</div></td>
+                    <td class="px-4 py-3">{{ row.form.model || '-' }}<div class="text-xs text-gray-500">{{ keepaliveModeLabel(row.form.mode) }}</div></td>
                     <td class="px-4 py-3">{{ row.form.workspace || '-' }}</td>
-                    <td class="px-4 py-3">{{ row.form.intervalMinutes }} 分钟<div class="text-xs text-gray-500">{{ row.form.workStart }} - {{ row.form.workEnd }}</div></td>
-                    <td class="px-4 py-3"><button type="button" class="btn btn-secondary btn-sm" @click="openKeepaliveModal(row)">编辑</button></td>
+                    <td class="px-4 py-3">{{ t('admin.accountKeepalive.labels.minutesValue', { value: row.form.intervalMinutes }) }}<div class="text-xs text-gray-500">{{ row.form.workStart }} - {{ row.form.workEnd }}</div></td>
+                    <td class="px-4 py-3"><button type="button" class="btn btn-secondary btn-sm" @click="openKeepaliveModal(row)">{{ t('admin.accountKeepalive.labels.edit') }}</button></td>
                   </tr>
                   <tr v-if="configuredKeepaliveRows.length === 0">
-                    <td colspan="6" class="px-4 py-6 text-center text-gray-500">还没有配置账号。</td>
+                    <td colspan="6" class="px-4 py-6 text-center text-gray-500">{{ t('admin.accountKeepalive.labels.noConfiguredAccounts') }}</td>
                   </tr>
                 </tbody>
               </table>
@@ -233,30 +233,30 @@
 
             <section class="space-y-3">
               <div class="flex items-center justify-between">
-                <h3 class="text-base font-semibold text-gray-900 dark:text-white">提示词题库</h3>
-                <button type="button" class="btn btn-secondary btn-sm" @click="openPromptModal()">添加问题</button>
+                <h3 class="text-base font-semibold text-gray-900 dark:text-white">{{ t('admin.accountKeepalive.labels.promptBank') }}</h3>
+                <button type="button" class="btn btn-secondary btn-sm" @click="openPromptModal()">{{ t('admin.accountKeepalive.labels.addQuestion') }}</button>
               </div>
-              <label class="block text-sm font-medium text-gray-700 dark:text-gray-200">全局约束提示词</label>
+              <label class="block text-sm font-medium text-gray-700 dark:text-gray-200">{{ t('admin.accountKeepalive.labels.promptGuard') }}</label>
               <textarea v-model="promptGuard" class="input min-h-24 w-full"></textarea>
-              <button type="button" class="btn btn-primary btn-sm" :disabled="keepaliveLoading" @click="savePromptSettings()">保存约束</button>
+              <button type="button" class="btn btn-primary btn-sm" :disabled="keepaliveLoading" @click="savePromptSettings()">{{ t('admin.accountKeepalive.labels.saveGuard') }}</button>
               <div class="max-h-96 overflow-auto rounded-lg border border-gray-200 bg-white dark:border-dark-700 dark:bg-dark-900">
                 <table class="min-w-[960px] divide-y divide-gray-200 text-sm dark:divide-dark-700">
                   <thead class="sticky top-0 z-10 bg-gray-100 text-gray-700 dark:bg-dark-800 dark:text-gray-200">
                     <tr>
-                      <th class="px-4 py-3 text-left">适用范围</th>
-                      <th class="px-4 py-3 text-left">项目</th>
-                      <th class="px-4 py-3 text-left">问题内容</th>
-                      <th class="px-4 py-3 text-left">状态</th>
-                      <th class="px-4 py-3 text-left">操作</th>
+                      <th class="px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.scope') }}</th>
+                      <th class="px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.project') }}</th>
+                      <th class="px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.promptContent') }}</th>
+                      <th class="px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.status') }}</th>
+                      <th class="px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.actions') }}</th>
                     </tr>
                   </thead>
                   <tbody class="divide-y divide-gray-200 bg-white dark:divide-dark-700 dark:bg-dark-900">
                     <tr v-for="(item, index) in promptBankRows" :key="item.id || index">
-                      <td class="px-4 py-3">{{ item.scope === 'project' ? '指定项目' : '通用' }}</td>
+                      <td class="px-4 py-3">{{ item.scope === 'project' ? t('admin.accountKeepalive.labels.specifiedProject') : t('admin.accountKeepalive.labels.general') }}</td>
                       <td class="px-4 py-3">{{ item.scope === 'project' ? projectName(item.project_path) : '-' }}</td>
                       <td class="px-4 py-3">{{ item.text }}</td>
-                      <td class="px-4 py-3">{{ item.enabled === false ? '停用' : '启用' }}</td>
-                      <td class="px-4 py-3"><button type="button" class="btn btn-secondary btn-sm" @click="openPromptModal(index)">编辑</button></td>
+                      <td class="px-4 py-3">{{ item.enabled === false ? t('admin.accountKeepalive.labels.stopped') : t('admin.accountKeepalive.labels.active') }}</td>
+                      <td class="px-4 py-3"><button type="button" class="btn btn-secondary btn-sm" @click="openPromptModal(index)">{{ t('admin.accountKeepalive.labels.edit') }}</button></td>
                     </tr>
                   </tbody>
                 </table>
@@ -266,7 +266,7 @@
 
           <div v-else class="space-y-4">
             <select v-model="historyTarget" class="input h-9 max-w-sm">
-              <option value="">全部账号</option>
+              <option value="">{{ t('admin.accountKeepalive.labels.allAccounts') }}</option>
               <option v-for="row in keepaliveOverviewRows" :key="row.name" :value="row.name">{{ row.name }}</option>
             </select>
             <div
@@ -277,13 +277,13 @@
               <table class="table-fixed divide-y divide-gray-200 text-sm dark:divide-dark-700" :style="{ minWidth: `${HISTORY_TABLE_WIDTH}px` }">
                 <thead class="bg-gray-100 text-gray-700 dark:bg-dark-800 dark:text-gray-200">
                   <tr>
-                    <th class="w-44 px-4 py-3 text-left">时间</th>
-                    <th class="w-48 px-4 py-3 text-left">账号</th>
-                    <th class="w-56 px-4 py-3 text-left">状态</th>
-                    <th class="w-56 px-4 py-3 text-left">模型</th>
-                    <th class="w-72 px-4 py-3 text-left">用量 / 费用</th>
-                    <th class="w-96 px-4 py-3 text-left">结果摘要</th>
-                    <th class="w-[1120px] px-4 py-3 text-left">详情</th>
+                    <th class="w-44 px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.time') }}</th>
+                    <th class="w-48 px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.account') }}</th>
+                    <th class="w-56 px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.status') }}</th>
+                    <th class="w-56 px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.model') }}</th>
+                    <th class="w-72 px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.usageCost') }}</th>
+                    <th class="w-96 px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.resultSummary') }}</th>
+                    <th class="w-[1120px] px-4 py-3 text-left">{{ t('admin.accountKeepalive.labels.details') }}</th>
                   </tr>
                 </thead>
                 <tbody class="divide-y divide-gray-200 bg-white dark:divide-dark-700 dark:bg-dark-900">
@@ -298,24 +298,24 @@
                         {{ sessionError(row.session) }}
                       </div>
                     </td>
-                    <td class="px-4 py-3">{{ sessionModel(row.session) }}<div class="text-xs text-gray-500">{{ sessionMode(row.session) === 'fresh' ? '全新会话' : '接续上次会话' }}</div></td>
+                    <td class="px-4 py-3">{{ sessionModel(row.session) }}<div class="text-xs text-gray-500">{{ keepaliveModeLabel(sessionMode(row.session)) }}</div></td>
                     <td class="px-4 py-3 text-xs" v-html="formatSessionUsageCost(row.session)"></td>
                     <td class="px-4 py-3">
                       <div class="truncate" :title="sessionSummary(row.session)">{{ sessionSummary(row.session) }}</div>
                     </td>
                     <td class="px-4 py-3">
                       <details>
-                        <summary class="cursor-pointer text-primary-600 dark:text-primary-400">提示词</summary>
+                        <summary class="cursor-pointer text-primary-600 dark:text-primary-400">{{ t('admin.accountKeepalive.labels.prompt') }}</summary>
                         <pre class="mt-2 max-h-72 w-full overflow-y-auto whitespace-pre-wrap break-words rounded border border-gray-200 bg-gray-50 p-2 text-xs dark:border-dark-700 dark:bg-dark-800">{{ sessionPrompt(row.session) || '-' }}</pre>
                       </details>
                       <details class="mt-2">
-                        <summary class="cursor-pointer text-primary-600 dark:text-primary-400">模型回复</summary>
+                        <summary class="cursor-pointer text-primary-600 dark:text-primary-400">{{ t('admin.accountKeepalive.labels.modelReply') }}</summary>
                         <pre class="mt-2 max-h-72 w-full overflow-y-auto whitespace-pre-wrap break-words rounded border border-gray-200 bg-gray-50 p-2 text-xs dark:border-dark-700 dark:bg-dark-800">{{ sessionReply(row.session) || '-' }}</pre>
                       </details>
                     </td>
                   </tr>
                   <tr v-if="keeperHistoryRows.length === 0">
-                    <td colspan="7" class="px-4 py-6 text-center text-gray-500">还没有会话历史。</td>
+                    <td colspan="7" class="px-4 py-6 text-center text-gray-500">{{ t('admin.accountKeepalive.labels.noHistory') }}</td>
                   </tr>
                 </tbody>
               </table>
@@ -329,7 +329,7 @@
                 min="0"
                 step="1"
                 class="block h-2 w-full cursor-pointer accent-primary-600"
-                aria-label="会话历史横向滚动"
+                :aria-label="t('admin.accountKeepalive.labels.historyScroll')"
                 :max="historyScrollMax"
                 :value="historyScrollLeft"
                 @input="syncHistoryScrollFromSlider"
@@ -340,58 +340,58 @@
           <div v-if="keepaliveModalOpen" class="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-6">
             <div class="w-full max-w-3xl rounded-lg bg-white shadow-xl dark:bg-dark-800">
               <div class="flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-dark-700">
-                <h3 class="text-lg font-semibold">{{ editingKeepaliveRow ? '编辑账号' : '添加账号' }}</h3>
-                <button type="button" class="btn btn-secondary btn-sm" @click="closeKeepaliveModal">关闭</button>
+                <h3 class="text-lg font-semibold">{{ editingKeepaliveRow ? t('admin.accountKeepalive.labels.editAccount') : t('admin.accountKeepalive.labels.addAccount') }}</h3>
+                <button type="button" class="btn btn-secondary btn-sm" @click="closeKeepaliveModal">{{ t('admin.accountKeepalive.labels.close') }}</button>
               </div>
               <div class="grid gap-4 p-5 md:grid-cols-2">
-                <label class="space-y-1 text-sm">账号
+                <label class="space-y-1 text-sm">{{ t('admin.accountKeepalive.labels.account') }}
                   <select v-model.number="keepaliveModal.accountId" class="input" :disabled="!!editingKeepaliveRow" @change="onKeepaliveAccountChange">
-                    <option :value="0">选择账号</option>
+                    <option :value="0">{{ t('admin.accountKeepalive.labels.selectAccount') }}</option>
                     <option v-for="account in keepaliveCandidateAccounts" :key="account.id" :value="account.id">{{ account.name }} (#{{ account.id }})</option>
                   </select>
                 </label>
-                <label class="space-y-1 text-sm">平台
+                <label class="space-y-1 text-sm">{{ t('admin.accountKeepalive.labels.platform') }}
                   <input class="input" :value="selectedKeepaliveAccount?.platform || ''" disabled />
                 </label>
-                <label class="space-y-1 text-sm">执行模式
+                <label class="space-y-1 text-sm">{{ t('admin.accountKeepalive.labels.mode') }}
                   <select v-model="keepaliveModal.form.mode" class="input">
-                    <option value="resume_last">接续上次会话</option>
-                    <option value="fresh">全新会话</option>
+                    <option value="resume_last">{{ t('admin.accountKeepalive.labels.resumeSession') }}</option>
+                    <option value="fresh">{{ t('admin.accountKeepalive.labels.freshSession') }}</option>
                   </select>
                 </label>
-                <label class="space-y-1 text-sm">模型
+                <label class="space-y-1 text-sm">{{ t('admin.accountKeepalive.labels.model') }}
                   <select v-model="keepaliveModal.form.model" class="input">
-                    <option value="">选择模型</option>
+                    <option value="">{{ t('admin.accountKeepalive.labels.selectModel') }}</option>
                     <option v-for="model in modalModelOptions" :key="model" :value="model">{{ model }}</option>
                   </select>
                 </label>
-                <label class="space-y-1 text-sm">保活频率（分钟）
+                <label class="space-y-1 text-sm">{{ t('admin.accountKeepalive.labels.intervalMinutes') }}
                   <input v-model.number="keepaliveModal.form.intervalMinutes" class="input" type="number" min="1" />
                 </label>
-                <label class="space-y-1 text-sm">工作开始时间
+                <label class="space-y-1 text-sm">{{ t('admin.accountKeepalive.labels.workStart') }}
                   <input v-model.trim="keepaliveModal.form.workStart" class="input" placeholder="04:00" />
                 </label>
-                <label class="space-y-1 text-sm">工作结束时间
+                <label class="space-y-1 text-sm">{{ t('admin.accountKeepalive.labels.workEnd') }}
                   <input v-model.trim="keepaliveModal.form.workEnd" class="input" placeholder="24:00" />
                 </label>
-                <label class="space-y-1 text-sm">工作目录
+                <label class="space-y-1 text-sm">{{ t('admin.accountKeepalive.labels.project') }}
                   <select v-model="keepaliveModal.form.workspace" class="input">
-                    <option value="">选择项目目录</option>
+                    <option value="">{{ t('admin.accountKeepalive.labels.selectProject') }}</option>
                     <option v-for="project in keepaliveProjectOptions" :key="project" :value="project">{{ project }}</option>
                   </select>
                 </label>
-                <label class="space-y-1 text-sm md:col-span-2">自定义 prompt
-                  <textarea v-model.trim="keepaliveModal.form.prompt" class="input min-h-24" placeholder="留空则优先从提示词题库抽取；题库为空时使用内置只读问题"></textarea>
+                <label class="space-y-1 text-sm md:col-span-2">{{ t('admin.accountKeepalive.labels.customPrompt') }}
+                  <textarea v-model.trim="keepaliveModal.form.prompt" class="input min-h-24" :placeholder="t('admin.accountKeepalive.placeholders.customPrompt')"></textarea>
                 </label>
                 <label class="flex items-center gap-2 text-sm md:col-span-2">
                   <input v-model="keepaliveModal.form.enabled" type="checkbox" />
-                  启用该账号
+                  {{ t('admin.accountKeepalive.labels.enableAccount') }}
                 </label>
               </div>
               <div class="flex justify-end gap-2 border-t border-gray-200 px-5 py-4 dark:border-dark-700">
-                <button v-if="editingKeepaliveRow" type="button" class="btn btn-danger" @click="deleteKeepaliveAccount">删除</button>
-                <button type="button" class="btn btn-secondary" @click="closeKeepaliveModal">取消</button>
-                <button type="button" class="btn btn-primary" @click="saveKeepaliveModal">保存</button>
+                <button v-if="editingKeepaliveRow" type="button" class="btn btn-danger" @click="deleteKeepaliveAccount">{{ t('admin.accountKeepalive.labels.delete') }}</button>
+                <button type="button" class="btn btn-secondary" @click="closeKeepaliveModal">{{ t('admin.accountKeepalive.labels.cancel') }}</button>
+                <button type="button" class="btn btn-primary" @click="saveKeepaliveModal">{{ t('admin.accountKeepalive.labels.save') }}</button>
               </div>
             </div>
           </div>
@@ -399,34 +399,34 @@
           <div v-if="promptModalOpen" class="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-6">
             <div class="w-full max-w-2xl rounded-lg bg-white shadow-xl dark:bg-dark-800">
               <div class="flex items-center justify-between border-b border-gray-200 px-5 py-4 dark:border-dark-700">
-                <h3 class="text-lg font-semibold">{{ editingPromptIndex === null ? '添加问题' : '编辑问题' }}</h3>
-                <button type="button" class="btn btn-secondary btn-sm" @click="closePromptModal">关闭</button>
+                <h3 class="text-lg font-semibold">{{ editingPromptIndex === null ? t('admin.accountKeepalive.labels.addQuestion') : t('admin.accountKeepalive.labels.editQuestion') }}</h3>
+                <button type="button" class="btn btn-secondary btn-sm" @click="closePromptModal">{{ t('admin.accountKeepalive.labels.close') }}</button>
               </div>
               <div class="grid gap-4 p-5 md:grid-cols-2">
-                <label class="space-y-1 text-sm">适用范围
+                <label class="space-y-1 text-sm">{{ t('admin.accountKeepalive.labels.scope') }}
                   <select v-model="promptModal.scope" class="input">
-                    <option value="global">通用</option>
-                    <option value="project">指定项目</option>
+                    <option value="global">{{ t('admin.accountKeepalive.labels.general') }}</option>
+                    <option value="project">{{ t('admin.accountKeepalive.labels.specifiedProject') }}</option>
                   </select>
                 </label>
-                <label class="space-y-1 text-sm">项目
+                <label class="space-y-1 text-sm">{{ t('admin.accountKeepalive.labels.project') }}
                   <select v-model="promptModal.project_path" class="input" :disabled="promptModal.scope !== 'project'">
-                    <option value="">选择项目</option>
+                    <option value="">{{ t('admin.accountKeepalive.labels.selectProject') }}</option>
                     <option v-for="project in keepaliveProjectOptions" :key="project" :value="`/workspace/projects/${project}`">{{ project }}</option>
                   </select>
                 </label>
-                <label class="space-y-1 text-sm md:col-span-2">问题内容
+                <label class="space-y-1 text-sm md:col-span-2">{{ t('admin.accountKeepalive.labels.promptContent') }}
                   <textarea v-model.trim="promptModal.text" class="input min-h-28"></textarea>
                 </label>
                 <label class="flex items-center gap-2 text-sm md:col-span-2">
                   <input v-model="promptModal.enabled" type="checkbox" />
-                  启用这个问题
+                  {{ t('admin.accountKeepalive.labels.enableQuestion') }}
                 </label>
               </div>
               <div class="flex justify-end gap-2 border-t border-gray-200 px-5 py-4 dark:border-dark-700">
-                <button v-if="editingPromptIndex !== null" type="button" class="btn btn-danger" @click="deletePrompt">删除</button>
-                <button type="button" class="btn btn-secondary" @click="closePromptModal">取消</button>
-                <button type="button" class="btn btn-primary" @click="savePrompt">保存</button>
+                <button v-if="editingPromptIndex !== null" type="button" class="btn btn-danger" @click="deletePrompt">{{ t('admin.accountKeepalive.labels.delete') }}</button>
+                <button type="button" class="btn btn-secondary" @click="closePromptModal">{{ t('admin.accountKeepalive.labels.cancel') }}</button>
+                <button type="button" class="btn btn-primary" @click="savePrompt">{{ t('admin.accountKeepalive.labels.save') }}</button>
               </div>
             </div>
           </div>
@@ -441,7 +441,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { adminAPI } from '@/api/admin'
 import { useAppStore } from '@/stores/app'
-import type { Account, AccountPlatform } from '@/types'
+import type { Account, AccountPlatform, KeeperBilling, KeeperOverviewRow, KeeperSession, KeeperState, KeeperTarget, KeeperUsage } from '@/types'
 import type { Column } from '@/components/common/types'
 
 import AppLayout from '@/components/layout/AppLayout.vue'
@@ -499,11 +499,11 @@ const appStore = useAppStore()
 const activeTab = ref<TabKey>('mimic')
 const activeTabClass = 'bg-primary-600 text-white shadow-sm'
 const inactiveTabClass = 'text-gray-600 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-dark-700'
-const keepaliveTabs: Array<{ key: KeepaliveTabKey; label: string }> = [
-  { key: 'overview', label: '概览' },
-  { key: 'settings', label: '配置' },
-  { key: 'history', label: '会话历史' }
-]
+const keepaliveTabs = computed<Array<{ key: KeepaliveTabKey; label: string }>>(() => [
+  { key: 'overview', label: t('admin.accountKeepalive.tabs.overview') },
+  { key: 'settings', label: t('admin.accountKeepalive.tabs.settings') },
+  { key: 'history', label: t('admin.accountKeepalive.tabs.history') }
+])
 
 const mimicAccounts = ref<Account[]>([])
 const mimicLoading = ref(false)
@@ -516,7 +516,7 @@ const keepaliveProjectOptions = ref<string[]>([])
 const keepaliveModelOptions = ref<Record<number, string[]>>({})
 const keepaliveModelLoadingIds = ref<Set<number>>(new Set())
 const keepaliveTab = ref<KeepaliveTabKey>('overview')
-const keeperState = ref<any>({})
+const keeperState = ref<KeeperState>({})
 const keeperVersion = ref('')
 const promptGuard = ref('')
 const promptBankRows = ref<PromptQuestion[]>([])
@@ -555,23 +555,23 @@ const keepaliveOverviewRows = computed(() => {
   const targets = Array.isArray(keeperState.value?.targets) ? keeperState.value.targets : []
   const configured = Array.isArray(keeperState.value?.configured_targets) ? keeperState.value.configured_targets : []
   if (overview.length > 0) {
-    const normalizedTargets = targets.map((target: any) => normalizeKeeperTarget(target, configured))
-    const targetByAccountID = new Map(normalizedTargets.filter((target: any) => target.account_id > 0).map((target: any) => [target.account_id, target]))
-    const targetByName = new Map(normalizedTargets.map((target: any) => [String(target.name || ''), target]))
-    return overview.map((row: any) => {
+    const normalizedTargets = targets.map((target) => normalizeKeeperTarget(target, configured))
+    const targetByAccountID = new Map(normalizedTargets.filter((target) => Number(target.account_id || 0) > 0).map((target) => [Number(target.account_id || 0), target]))
+    const targetByName = new Map(normalizedTargets.map((target) => [String(target.name || ''), target]))
+    return overview.map((row) => {
       const accountID = Number(row.account_id || row.AccountID || 0)
       return normalizeOverviewRow(row, targetByAccountID.get(accountID) || targetByName.get(String(row.name || row.Name || '')))
     })
   }
-  const configuredNames = new Set(configured.map((item: any) => String(item.name || item.Name || '').trim()).filter(Boolean))
+  const configuredNames = new Set(configured.map((item) => String(item.name || item.Name || '').trim()).filter(Boolean))
   return targets
-    .filter((target: any) => configuredNames.size === 0 || configuredNames.has(String(target.name || target.Name || '').trim()))
-    .map((target: any) => normalizeKeeperTarget(target, configured))
+    .filter((target) => configuredNames.size === 0 || configuredNames.has(String(target.name || target.Name || '').trim()))
+    .map((target) => normalizeKeeperTarget(target, configured))
 })
 const keepaliveDashboard = computed(() => {
   const dashboard = keeperState.value?.dashboard || {}
   const rows = keepaliveOverviewRows.value
-  const fallback = rows.reduce((acc: any, row: any) => {
+  const fallback = rows.reduce((acc, row) => {
     acc.total += 1
     if (row.enabled) acc.enabled += 1
     if (row.running) acc.running += 1
@@ -591,7 +591,7 @@ const keepaliveDashboard = computed(() => {
   }
 })
 const keeperHistoryRows = computed(() => {
-  const rows: Array<{ target: any; session: any }> = []
+  const rows: Array<{ target: KeeperOverviewRow; session: KeeperSession }> = []
   for (const target of keepaliveOverviewRows.value) {
     if (historyTarget.value && target.name !== historyTarget.value) continue
     for (const session of target.sessions || []) rows.push({ target, session })
@@ -733,7 +733,7 @@ async function loadKeepaliveAccounts() {
     keeperState.value = state || {}
     keeperVersion.value = String(settings?.version || state?.version || '')
     promptGuard.value = String(settings?.prompt_guard || state?.prompt_guard || '')
-    promptBankRows.value = Array.isArray(settings?.prompt_bank) ? settings.prompt_bank : (Array.isArray(state?.prompt_bank) ? state.prompt_bank : [])
+    promptBankRows.value = normalizePromptBank(Array.isArray(settings?.prompt_bank) ? settings.prompt_bank : (Array.isArray(state?.prompt_bank) ? state.prompt_bank : []))
     keepaliveRows.value = [...anthropicAccounts, ...openaiAccounts]
       .filter(account => account.platform === 'anthropic' || account.platform === 'openai')
       .sort((a, b) => b.id - a.id)
@@ -817,9 +817,21 @@ function isKeepaliveConfigured(account: Account): boolean {
     String(extra[KEEPER_PROMPT_KEY] || '').trim() !== ''
 }
 
-function normalizeKeeperTarget(target: any, configured: any[]): any {
+function normalizePromptBank(items: Array<Record<string, unknown>> = []): PromptQuestion[] {
+  return items
+    .map((item) => ({
+      id: typeof item.id === 'string' ? item.id : undefined,
+      scope: item.scope === 'project' ? 'project' as const : 'global' as const,
+      project_path: typeof item.project_path === 'string' ? item.project_path : '',
+      enabled: item.enabled !== false,
+      text: typeof item.text === 'string' ? item.text : ''
+    }))
+    .filter((item) => item.text.trim() !== '')
+}
+
+function normalizeKeeperTarget(target: KeeperTarget, configured: KeeperTarget[]): KeeperOverviewRow {
   const name = String(target.name || target.Name || '')
-  const config = configured.find((item: any) => String(item.name || item.Name || '') === name) || {}
+  const config: KeeperTarget = configured.find((item) => String(item.name || item.Name || '') === name) || {}
   const sessions = Array.isArray(target.sessions) ? target.sessions : (Array.isArray(target.Sessions) ? target.Sessions : [])
   return {
     name,
@@ -848,7 +860,7 @@ function normalizeKeeperTarget(target: any, configured: any[]): any {
   }
 }
 
-function normalizeOverviewRow(row: any, target?: any): any {
+function normalizeOverviewRow(row: KeeperOverviewRow, target?: KeeperOverviewRow): KeeperOverviewRow {
   return {
     ...target,
     name: String(row.name || row.Name || target?.name || ''),
@@ -935,8 +947,8 @@ function isToday(value: string | null | undefined): boolean {
   return date.getFullYear() === now.getFullYear() && date.getMonth() === now.getMonth() && date.getDate() === now.getDate()
 }
 
-function sessionCounts(sessions: any[] = []) {
-  return sessions.reduce((acc, session) => {
+function sessionCounts(sessions: KeeperSession[] = []): { total: number; success: number; failure: number } {
+  return sessions.reduce<{ total: number; success: number; failure: number }>((acc, session) => {
     if (session.status === 'success') {
       acc.total += 1
       acc.success += 1
@@ -948,9 +960,9 @@ function sessionCounts(sessions: any[] = []) {
   }, { total: 0, success: 0, failure: 0 })
 }
 
-function buildUsageCostSummary(sessions: any[] = []) {
+function buildUsageCostSummary(sessions: KeeperSession[] = []): { total_tokens: number; currency: string; total_cost: number; has_cost: boolean; precise: boolean } | null {
   const since = Date.now() - 24 * 60 * 60 * 1000
-  const summary = sessions.reduce((acc, session) => {
+  const summary = sessions.reduce<{ total_tokens: number; currency: string; total_cost: number; has_cost: boolean; precise: boolean }>((acc, session) => {
     const time = new Date(session.completed_at || session.started_at || 0).getTime()
     if (!Number.isFinite(time) || time < since) return acc
     acc.total_tokens += Number(session.usage?.total_tokens || 0)
@@ -964,7 +976,7 @@ function buildUsageCostSummary(sessions: any[] = []) {
   return summary.total_tokens > 0 || summary.has_cost ? summary : null
 }
 
-function keepaliveStatusClass(row: any): string {
+function keepaliveStatusClass(row: KeeperOverviewRow): string {
   const statusClass = String(row.status_class || '')
   if (statusClass === 'err') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
   if (statusClass === 'warn' || row.running) return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
@@ -972,19 +984,29 @@ function keepaliveStatusClass(row: any): string {
   return 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'
 }
 
-function sessionStatus(session: any): string {
+function fallbackKeeperStatus(row: KeeperOverviewRow): string {
+  if (row.running) return t('admin.accountKeepalive.labels.running')
+  if (row.enabled) return t('admin.accountKeepalive.labels.waitingNext')
+  return t('admin.accountKeepalive.labels.closed')
+}
+
+function keepaliveModeLabel(mode: 'resume_last' | 'fresh'): string {
+  return mode === 'fresh' ? t('admin.accountKeepalive.labels.freshSession') : t('admin.accountKeepalive.labels.resumeSession')
+}
+
+function sessionStatus(session: KeeperSession): string {
   return String(session?.status || session?.Status || '').trim()
 }
 
-function sessionStatusLabel(session: any): string {
+function sessionStatusLabel(session: KeeperSession): string {
   const status = sessionStatus(session)
-  if (status === 'success') return '成功'
-  if (status === 'error') return '失败'
-  if (status === 'running') return '执行中'
+  if (status === 'success') return t('admin.accountKeepalive.labels.success')
+  if (status === 'error') return t('admin.accountKeepalive.labels.failure')
+  if (status === 'running') return t('admin.accountKeepalive.labels.running')
   return status || '-'
 }
 
-function sessionStatusClass(session: any): string {
+function sessionStatusClass(session: KeeperSession): string {
   const status = sessionStatus(session)
   if (status === 'success') return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
   if (status === 'error') return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
@@ -992,27 +1014,27 @@ function sessionStatusClass(session: any): string {
   return 'bg-gray-100 text-gray-600 dark:bg-dark-700 dark:text-gray-300'
 }
 
-function sessionError(session: any): string {
+function sessionError(session: KeeperSession): string {
   return String(session?.error || session?.Error || '').trim()
 }
 
-function sessionPrompt(session: any): string {
+function sessionPrompt(session: KeeperSession): string {
   return String(session?.prompt || session?.Prompt || '').trim()
 }
 
-function sessionReply(session: any): string {
+function sessionReply(session: KeeperSession): string {
   return String(session?.reply_text || session?.ReplyText || '').trim()
 }
 
-function sessionModel(session: any): string {
+function sessionModel(session: KeeperSession): string {
   return String(session?.model || session?.Model || '').trim() || '-'
 }
 
-function sessionMode(session: any): 'resume_last' | 'fresh' {
+function sessionMode(session: KeeperSession): 'resume_last' | 'fresh' {
   return normalizeKeepaliveMode(session?.mode || session?.Mode)
 }
 
-function sessionSummary(session: any): string {
+function sessionSummary(session: KeeperSession): string {
   return String(sessionReply(session) || sessionError(session) || session?.summary || session?.Summary || sessionStatusLabel(session) || '-')
 }
 
@@ -1037,26 +1059,26 @@ function formatMoney(value: unknown): string {
 
 function formatOverviewUsageCost(summary: any): string {
   if (!summary || !Number(summary.total_tokens || 0)) return '-'
-  const tokenText = `Token：${formatNumber(summary.total_tokens)}`
-  if (!summary.has_cost) return `${escapeHtml(tokenText)}<div class="mt-1 text-gray-500">费用：未配置价格</div>`
+  const tokenText = t('admin.accountKeepalive.labels.tokenUsage', { tokens: formatNumber(summary.total_tokens) })
+  if (!summary.has_cost) return `${escapeHtml(tokenText)}<div class="mt-1 text-gray-500">${escapeHtml(t('admin.accountKeepalive.labels.costUnconfigured'))}</div>`
   const currency = summary.currency || 'USD'
-  const label = summary.precise === false ? '估算费用' : '费用'
+  const label = summary.precise === false ? t('admin.accountKeepalive.labels.estimatedCost') : t('admin.accountKeepalive.labels.cost')
   return `${escapeHtml(tokenText)}<div class="mt-1 text-gray-500">${escapeHtml(`${label}：${currency} ${formatMoney(summary.total_cost)}`)}</div>`
 }
 
-function formatSessionUsageCost(session: any): string {
-  const usage = session?.usage || session?.Usage || {}
-  const billing = session?.billing || session?.Billing || {}
+function formatSessionUsageCost(session: KeeperSession): string {
+  const usage: KeeperUsage = session?.usage || session?.Usage || {}
+  const billing: KeeperBilling = session?.billing || session?.Billing || {}
   const input = formatNumber(usage.input_tokens ?? usage.InputTokens)
   const output = formatNumber(usage.output_tokens ?? usage.OutputTokens)
   const cached = formatNumber(usage.cache_read_tokens ?? usage.cached_input_tokens ?? usage.CacheReadTokens)
   const cacheCreated = formatNumber(usage.cache_creation_tokens ?? usage.cache_creation_input_tokens ?? usage.CacheCreationTokens)
-  const usageText = `输入 ${input} / 输出 ${output} / 缓存读取 ${cached} / 缓存创建 ${cacheCreated}`
+  const usageText = t('admin.accountKeepalive.labels.sessionUsage', { input, output, cached, cacheCreated })
   if (!billing.available && !Number(billing.actual_cost || billing.total_cost || billing.ActualCost || billing.TotalCost || 0)) {
-    return `${escapeHtml(usageText)}<div class="mt-1 text-gray-500">费用：未配置价格</div>`
+    return `${escapeHtml(usageText)}<div class="mt-1 text-gray-500">${escapeHtml(t('admin.accountKeepalive.labels.costUnconfigured'))}</div>`
   }
   const cost = Number(billing.actual_cost || billing.total_cost || billing.ActualCost || billing.TotalCost || 0)
-  return `${escapeHtml(usageText)}<div class="mt-1 text-gray-500">${escapeHtml(`费用：USD ${formatMoney(cost)}`)}</div>`
+  return `${escapeHtml(usageText)}<div class="mt-1 text-gray-500">${escapeHtml(`${t('admin.accountKeepalive.labels.cost')}：USD ${formatMoney(cost)}`)}</div>`
 }
 
 function buildKeepalivePatch(row: KeepaliveRow): Record<string, unknown> {
@@ -1127,15 +1149,15 @@ async function loadModalModels() {
 async function saveKeepaliveModal() {
   const account = selectedKeepaliveAccount.value
   if (!account) {
-    appStore.showError('请选择账号')
+    appStore.showError(t('admin.accountKeepalive.messages.selectAccount'))
     return
   }
   if (!keepaliveModal.value.form.model) {
-    appStore.showError('请选择模型')
+    appStore.showError(t('admin.accountKeepalive.messages.selectModel'))
     return
   }
   if (!keepaliveModal.value.form.workspace) {
-    appStore.showError('请选择工作目录')
+    appStore.showError(t('admin.accountKeepalive.messages.selectProject'))
     return
   }
   const row: KeepaliveRow = {
@@ -1172,12 +1194,12 @@ async function deleteKeepaliveAccount() {
 async function runKeepalive(target: string) {
   if (!target) return
   try {
-    keepaliveUpdatingIds.value = new Set(keepaliveUpdatingIds.value).add(Number(keepaliveOverviewRows.value.find((row: any) => row.name === target)?.account_id || 0))
+    keepaliveUpdatingIds.value = new Set(keepaliveUpdatingIds.value).add(Number(keepaliveOverviewRows.value.find((row) => row.name === target)?.account_id || 0))
     await adminAPI.accounts.runKeeperTarget(target)
-    appStore.showSuccess('已提交立即执行')
+    appStore.showSuccess(t('admin.accountKeepalive.messages.runSubmitted'))
     await loadKeepaliveAccounts()
   } catch (error: any) {
-    appStore.showError(error.response?.data?.detail || '立即执行失败')
+    appStore.showError(error.response?.data?.detail || t('admin.accountKeepalive.messages.runFailed'))
   } finally {
     keepaliveUpdatingIds.value = new Set()
   }
@@ -1188,7 +1210,7 @@ function openHistory(target: string) {
   keepaliveTab.value = 'history'
 }
 
-function latestSessionSummary(row: any): string {
+function latestSessionSummary(row: KeeperOverviewRow): string {
   const sessions = Array.isArray(row.sessions) ? row.sessions : []
   const latest = sessions[0]
   if (!latest) return '-'
@@ -1209,11 +1231,11 @@ function closePromptModal() {
 
 async function savePrompt() {
   if (!promptModal.value.text.trim()) {
-    appStore.showError('问题内容不能为空')
+    appStore.showError(t('admin.accountKeepalive.messages.promptRequired'))
     return
   }
   if (promptModal.value.scope === 'project' && !promptModal.value.project_path) {
-    appStore.showError('指定项目问题必须选择项目')
+    appStore.showError(t('admin.accountKeepalive.messages.projectPromptNeedsProject'))
     return
   }
   const next = [...promptBankRows.value]
@@ -1245,11 +1267,11 @@ async function savePromptSettings() {
     })
     keeperVersion.value = String(saved?.version || keeperVersion.value)
     promptGuard.value = String(saved?.prompt_guard || promptGuard.value)
-    promptBankRows.value = Array.isArray(saved?.prompt_bank) ? saved.prompt_bank : promptBankRows.value
-    appStore.showSuccess('提示词设置已保存')
+    promptBankRows.value = Array.isArray(saved?.prompt_bank) ? normalizePromptBank(saved.prompt_bank) : promptBankRows.value
+    appStore.showSuccess(t('admin.accountKeepalive.messages.promptSaved'))
     await loadKeepaliveAccounts()
   } catch (error: any) {
-    appStore.showError(error.response?.data?.detail || '保存提示词设置失败')
+    appStore.showError(error.response?.data?.detail || t('admin.accountKeepalive.messages.promptSaveFailed'))
   }
 }
 

@@ -45,29 +45,6 @@ func generateAntigravityRequestIdentity() (requestID string, trajectoryID string
 	return fmt.Sprintf("agent/%s/%d/%s/2", conversationID, time.Now().UnixMilli(), trajectoryID), trajectoryID
 }
 
-func antigravityModelEnum(model string) string {
-	switch strings.ToLower(strings.TrimSpace(model)) {
-	case "claude-opus-4-6-thinking":
-		return "MODEL_PLACEHOLDER_M26"
-	case "claude-sonnet-4-6":
-		return "MODEL_PLACEHOLDER_M35"
-	case "gemini-pro-agent":
-		return "MODEL_PLACEHOLDER_M16"
-	case "gemini-3.1-pro-low":
-		return "MODEL_PLACEHOLDER_M36"
-	case "gemini-3-flash-agent":
-		return "MODEL_PLACEHOLDER_M132"
-	case "gemini-3.5-flash-extra-low":
-		return "MODEL_PLACEHOLDER_M187"
-	case "gemini-3.5-flash-low":
-		return "MODEL_PLACEHOLDER_M20"
-	case "gpt-oss-120b-medium":
-		return "MODEL_OPENAI_GPT_OSS_120B_MEDIUM"
-	default:
-		return ""
-	}
-}
-
 func buildAntigravityRequestLabels(model, trajectoryID string) map[string]string {
 	if strings.TrimSpace(trajectoryID) == "" {
 		return nil
@@ -84,7 +61,7 @@ func buildAntigravityRequestLabels(model, trajectoryID string) map[string]string
 		"used_claude":              usedClaude,
 		"used_claude_conservative": usedClaude,
 	}
-	if modelEnum := antigravityModelEnum(model); modelEnum != "" {
+	if modelEnum := OfficialModelEnum(model); modelEnum != "" {
 		labels["model_enum"] = modelEnum
 	}
 	return labels
@@ -96,10 +73,6 @@ func OfficialRequestIdentity() (requestID string, trajectoryID string) {
 
 func OfficialRequestLabels(model, trajectoryID string) map[string]string {
 	return buildAntigravityRequestLabels(model, trajectoryID)
-}
-
-func DefaultThinkingBudget(model string) (int, bool) {
-	return defaultAntigravityThinkingBudget(model)
 }
 
 type TransformOptions struct {
@@ -116,9 +89,6 @@ func DefaultTransformOptions() TransformOptions {
 		EnableMCPXML:        true,
 	}
 }
-
-// webSearchFallbackModel web_search 请求使用的降级模型
-const webSearchFallbackModel = "gemini-2.5-flash"
 
 // MaxTokensBudgetPadding max_tokens 自动调整时在 budget_tokens 基础上增加的额度
 // Claude API 要求 max_tokens > thinking.budget_tokens，否则返回 400 错误
@@ -157,8 +127,8 @@ func TransformClaudeToGeminiWithOptions(claudeReq *ClaudeRequest, projectID, map
 	targetModel := mappedModel
 	if hasWebSearchTool {
 		requestType = "web_search"
-		if targetModel != webSearchFallbackModel {
-			targetModel = webSearchFallbackModel
+		if targetModel != OfficialWebSearchFallbackModel {
+			targetModel = OfficialWebSearchFallbackModel
 		}
 	}
 
@@ -678,27 +648,6 @@ func isAntigravityOpusHighTierModel(model string) bool {
 		strings.HasPrefix(lower, "claude-opus-4-8")
 }
 
-func defaultAntigravityThinkingBudget(model string) (int, bool) {
-	switch strings.ToLower(strings.TrimSpace(model)) {
-	case "claude-opus-4-6-thinking", "claude-sonnet-4-6":
-		return 1024, true
-	case "gemini-3.1-pro-low":
-		return 1001, true
-	case "gemini-pro-agent":
-		return 10001, true
-	case "gemini-3.5-flash-extra-low":
-		return 1000, true
-	case "gemini-3.5-flash-low":
-		return 4000, true
-	case "gemini-3-flash-agent":
-		return 10000, true
-	case "gpt-oss-120b-medium":
-		return 8192, true
-	default:
-		return 0, false
-	}
-}
-
 func suppressAntigravityGenerationParams(model string) bool {
 	return IsGeminiReasoningModel(model) || IsOfficialModelID(model)
 }
@@ -720,7 +669,7 @@ func buildGenerationConfig(req *ClaudeRequest) *GeminiGenerationConfig {
 	}
 
 	// Antigravity 官方模型按抓包固定 thinkingBudget，客户端 thinking 不覆盖上游发包。
-	if budget, ok := defaultAntigravityThinkingBudget(req.Model); ok {
+	if budget, ok := DefaultThinkingBudget(req.Model); ok {
 		if req.suppressOfficialThinking {
 			if config.MaxOutputTokens > maxLimit {
 				config.MaxOutputTokens = maxLimit

@@ -488,8 +488,15 @@ func TestAccountTestService_OpenAIAPIKeyCodexMimicUsesResponsesProbe(t *testing.
 		Type:        AccountTypeAPIKey,
 		Concurrency: 1,
 		Credentials: map[string]any{
-			"api_key":  "sk-test",
-			"base_url": "https://compat-upstream.example",
+			"api_key":                    "sk-test",
+			"base_url":                   "https://compat-upstream.example",
+			credKeyHeaderOverrideEnabled: true,
+			credKeyHeaderOverrides: map[string]any{
+				"user-agent":   "bad-client",
+				"originator":   "bad-originator",
+				"session-id":   "bad-session",
+				"x-request-id": "kept",
+			},
 		},
 		Extra: map[string]any{
 			"openai_apikey_mimic_codex_cli":          true,
@@ -497,6 +504,7 @@ func TestAccountTestService_OpenAIAPIKeyCodexMimicUsesResponsesProbe(t *testing.
 			openai_compat.ExtraKeyResponsesSupported: false,
 		},
 	}
+	require.Equal(t, "kept", account.GetHeaderOverrides()["x-request-id"])
 
 	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
 	require.Error(t, err)
@@ -504,6 +512,7 @@ func TestAccountTestService_OpenAIAPIKeyCodexMimicUsesResponsesProbe(t *testing.
 	require.Equal(t, "https://compat-upstream.example/v1/responses", upstream.lastReq.URL.String())
 	require.Equal(t, codexDesktopUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, codexDesktopOriginator, upstream.lastReq.Header.Get("originator"))
+	require.Equal(t, []string{"kept"}, upstream.lastReq.Header["x-request-id"])
 	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
 	require.Empty(t, upstream.lastReq.Header.Get("version"))
 	require.Empty(t, upstream.lastReq.Header.Get("session_id"))
@@ -603,6 +612,38 @@ func TestAccountTestService_OpenAIChatCompletionsPathReturns4xx(t *testing.T) {
 	require.Contains(t, err.Error(), "Chat Completions API (/v1/chat/completions) returned 400")
 	require.Contains(t, recorder.Body.String(), "/v1/chat/completions")
 	require.NotContains(t, recorder.Body.String(), `"success":true`)
+}
+
+func TestProbeOpenAIAPIKeyResponsesSupportSkipsMimicAccount(t *testing.T) {
+	repo := &openAIAccountTestRepo{
+		mockAccountRepoForGemini: mockAccountRepoForGemini{
+			accountsByID: map[int64]*Account{
+				101: {
+					ID:       101,
+					Platform: PlatformOpenAI,
+					Type:     AccountTypeAPIKey,
+					Credentials: map[string]any{
+						"api_key":  "sk-test",
+						"base_url": "https://compat-upstream.example",
+					},
+					Extra: map[string]any{
+						"openai_apikey_mimic_codex_cli": true,
+					},
+				},
+			},
+		},
+	}
+	upstream := &queuedHTTPUpstream{}
+	svc := &AccountTestService{
+		accountRepo:  repo,
+		httpUpstream: upstream,
+		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+	}
+
+	svc.ProbeOpenAIAPIKeyResponsesSupport(context.Background(), 101)
+
+	require.Empty(t, upstream.requests)
+	require.Nil(t, repo.updatedExtra)
 }
 
 func TestAccountTestService_OpenAIChatCompletionsPathTimeout(t *testing.T) {

@@ -80,6 +80,7 @@ func (s *GatewayService) buildAnthropicAPIKeyCLIMimicRequest(
 	if finalBetaHeader != "" {
 		setHeaderRaw(req.Header, "anthropic-beta", finalBetaHeader)
 	}
+	account.ApplyHeaderOverridesForAPIKeyMimic(req.Header)
 	return req, body, nil
 }
 
@@ -194,6 +195,7 @@ func (s *GatewayService) buildAnthropicAPIKeyCLICountTokensMimicRequest(
 	if finalBetaHeader != "" {
 		setHeaderRaw(req.Header, "anthropic-beta", finalBetaHeader)
 	}
+	account.ApplyHeaderOverridesForAPIKeyMimic(req.Header)
 	return req, body, nil
 }
 

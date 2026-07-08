@@ -14,12 +14,13 @@ import (
 	"math/rand"
 	"net/http"
 	"os"
-	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"gopkg.in/yaml.v3"
@@ -33,6 +34,7 @@ const (
 	minClaudeTimeoutSeconds     = 2700
 	defaultMaxOutputBytes       = 1 << 20
 	defaultKeepaliveMode        = "resume_last"
+	defaultKeepaliveMaxTokens   = 512
 )
 
 type Config struct {
@@ -219,6 +221,7 @@ type keeperAccountConfig struct {
 	Mode            string     `json:"mode"`
 	Workspace       string     `json:"workspace"`
 	Prompt          string     `json:"prompt"`
+	MaxOutputTokens int        `json:"max_output_tokens"`
 	IntervalMinutes int        `json:"interval_minutes"`
 	WorkStart       string     `json:"work_start"`
 	WorkEnd         string     `json:"work_end"`
@@ -244,6 +247,9 @@ type Keeper struct {
 	persistentMu        sync.Mutex
 	persistentExecutors map[string]*managedPersistentExecutor
 	persistentFactory   persistentExecutorFactory
+	runWG               sync.WaitGroup
+	runCtxMu            sync.RWMutex
+	runCtx              context.Context
 }
 
 type runtimeLayout struct {
@@ -328,6 +334,14 @@ func main() {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	signalCh := make(chan os.Signal, 2)
+	signal.Notify(signalCh, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(signalCh)
+	go func() {
+		sig := <-signalCh
+		log.Printf("收到退出信号: %s", sig)
+		cancel()
+	}()
 
 	if cfg.Web.Enabled {
 		go func() {
@@ -445,7 +459,10 @@ func (k *Keeper) normalizeRuntimeState() {
 }
 
 func (k *Keeper) Run(ctx context.Context) {
+	clearRunContext := k.setRunContext(ctx)
+	defer clearRunContext()
 	defer k.closeAllPersistentExecutors()
+	defer k.runWG.Wait()
 	k.refreshTargets(ctx)
 	k.scan(ctx)
 	ticker := time.NewTicker(time.Duration(k.cfg.ScanIntervalSeconds) * time.Second)
@@ -493,8 +510,39 @@ func (k *Keeper) scan(ctx context.Context) {
 		if !ready {
 			continue
 		}
-		go k.runTarget(ctx, target)
+		k.startRun(ctx, target)
 	}
+}
+
+func (k *Keeper) setRunContext(ctx context.Context) func() {
+	k.runCtxMu.Lock()
+	k.runCtx = ctx
+	k.runCtxMu.Unlock()
+	return func() {
+		k.runCtxMu.Lock()
+		if k.runCtx == ctx {
+			k.runCtx = nil
+		}
+		k.runCtxMu.Unlock()
+	}
+}
+
+func (k *Keeper) backgroundRunContext() context.Context {
+	k.runCtxMu.RLock()
+	ctx := k.runCtx
+	k.runCtxMu.RUnlock()
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+
+func (k *Keeper) startRun(ctx context.Context, target TargetConfig) {
+	k.runWG.Add(1)
+	go func() {
+		defer k.runWG.Done()
+		k.runTarget(ctx, target)
+	}()
 }
 
 func (k *Keeper) runTarget(ctx context.Context, target TargetConfig) {
@@ -527,6 +575,7 @@ func (k *Keeper) runTarget(ctx context.Context, target TargetConfig) {
 		sessionIndex = len(state.Sessions) - 1
 	}
 	if err != nil {
+		countAsFailure := runErrorCountsAsFailure(err)
 		result.ID = session.ID
 		result.TargetName = target.Name
 		result.AccountID = target.AccountID
@@ -547,7 +596,9 @@ func (k *Keeper) runTarget(ctx context.Context, target TargetConfig) {
 		state.LastStatus = "error"
 		state.LastError = result.Error
 		state.LastMessageSummary = firstNonEmpty(result.Summary, result.ReplyText, result.Error)
-		state.ConsecutiveFailures++
+		if countAsFailure {
+			state.ConsecutiveFailures++
+		}
 		state.NextRunAt = completedAt.Add(time.Duration(maxInt(target.IntervalMinutes, 1)) * time.Minute)
 		k.trimSessionsLocked(state)
 		recorded := result
@@ -609,6 +660,7 @@ func (k *Keeper) runTarget(ctx context.Context, target TargetConfig) {
 func (k *Keeper) recordKeepalive(ctx context.Context, target TargetConfig, session Session) (*Billing, error) {
 	body := keepaliveRequest{
 		Model:                    target.Model,
+		MaxOutputTokens:          target.MaxOutputTokens,
 		Status:                   session.Status,
 		SessionID:                session.ID,
 		Summary:                  summarizeResult(session.ReplyText, session.Stdout, session.Stderr),
@@ -865,6 +917,10 @@ func (k *Keeper) handleSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (k *Keeper) handleManualRun(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	_ = k.refreshTargets(r.Context())
 	selector := strings.TrimSpace(r.URL.Query().Get("target"))
 	if selector == "" {
@@ -883,7 +939,7 @@ func (k *Keeper) handleManualRun(w http.ResponseWriter, r *http.Request) {
 			state.Running = true
 			k.saveStateLocked()
 			k.mu.Unlock()
-			go k.runTarget(context.Background(), target)
+			k.startRun(k.backgroundRunContext(), target)
 			writeJSON(w, map[string]string{"status": "accepted"})
 			return
 		}
@@ -1221,9 +1277,7 @@ func (k *Keeper) dashboardStatsLocked() dashboardStats {
 	now := time.Now().In(k.location)
 	today := now.Format("2006-01-02")
 	stats := dashboardStats{TotalTargets: len(k.cfg.Targets)}
-	configured := map[string]TargetConfig{}
 	for _, target := range k.cfg.Targets {
-		configured[target.Name] = target
 		if target.Enabled {
 			stats.EnabledTargets++
 		}
@@ -1256,7 +1310,6 @@ func (k *Keeper) dashboardStatsLocked() dashboardStats {
 			}
 		}
 	}
-	_ = configured
 	return stats
 }
 
@@ -1431,7 +1484,7 @@ func (k *Keeper) fetchTargets(ctx context.Context) ([]TargetConfig, error) {
 			PromptText:      account.Prompt,
 			Mode:            normalizeMode(account.Mode),
 			TimeoutSeconds:  defaultClientTimeoutSeconds,
-			MaxOutputTokens: 512,
+			MaxOutputTokens: positiveIntDefault(account.MaxOutputTokens, defaultKeepaliveMaxTokens),
 			PromptProfile:   "project_overview",
 			Due:             account.Due,
 			NextKeepaliveAt: timeValue(account.NextKeepaliveAt),
@@ -1507,22 +1560,6 @@ func parseClockMinute(value string) (int, bool) {
 	return hour*60 + minute, true
 }
 
-type commandSpec struct {
-	Path       string
-	Args       []string
-	Dir        string
-	Env        []string
-	Timeout    time.Duration
-	StdoutPath string
-	StderrPath string
-}
-
-type commandResult struct {
-	ExitCode int
-	Stdout   string
-	Stderr   string
-}
-
 type limitedBuffer struct {
 	max int
 	buf bytes.Buffer
@@ -1543,62 +1580,6 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 
 func (b *limitedBuffer) String() string {
 	return b.buf.String()
-}
-
-func runCommand(ctx context.Context, spec commandSpec) (commandResult, error) {
-	path, err := exec.LookPath(spec.Path)
-	if err != nil {
-		return commandResult{}, fmt.Errorf("找不到命令: %s", spec.Path)
-	}
-	runCtx := ctx
-	cancel := func() {}
-	if spec.Timeout > 0 {
-		runCtx, cancel = context.WithTimeout(ctx, spec.Timeout)
-	}
-	defer cancel()
-
-	cmd := exec.CommandContext(runCtx, path, spec.Args...)
-	cmd.Dir = spec.Dir
-	cmd.Env = append(os.Environ(), spec.Env...)
-
-	stdoutFile, err := os.Create(spec.StdoutPath)
-	if err != nil {
-		return commandResult{}, err
-	}
-	defer func() { _ = stdoutFile.Close() }()
-	stderrFile, err := os.Create(spec.StderrPath)
-	if err != nil {
-		return commandResult{}, err
-	}
-	defer func() { _ = stderrFile.Close() }()
-
-	var stdoutBuf, stderrBuf limitedBuffer
-	stdoutBuf.max = defaultMaxOutputBytes
-	stderrBuf.max = defaultMaxOutputBytes
-	cmd.Stdout = io.MultiWriter(stdoutFile, &stdoutBuf)
-	cmd.Stderr = io.MultiWriter(stderrFile, &stderrBuf)
-
-	runErr := cmd.Run()
-	result := commandResult{Stdout: stdoutBuf.String(), Stderr: stderrBuf.String()}
-	if runErr == nil {
-		return result, nil
-	}
-	if runCtx.Err() != nil {
-		if errors.Is(runCtx.Err(), context.DeadlineExceeded) {
-			return result, fmt.Errorf("命令执行超时: %s, 超过 %s 后已终止", spec.Path, spec.Timeout)
-		}
-		return result, runCtx.Err()
-	}
-	var exitErr *exec.ExitError
-	if errors.As(runErr, &exitErr) {
-		result.ExitCode = exitErr.ExitCode()
-		detail := summarizeCommandOutput(result.Stderr, result.Stdout)
-		if detail != "" {
-			return result, fmt.Errorf("命令执行失败: %s, 退出码 %d: %s", spec.Path, exitErr.ExitCode(), detail)
-		}
-		return result, fmt.Errorf("命令执行失败: %s, 退出码 %d", spec.Path, exitErr.ExitCode())
-	}
-	return result, fmt.Errorf("命令执行失败: %s: %w", spec.Path, runErr)
 }
 
 func readOptionalText(path string) string {
@@ -2102,6 +2083,13 @@ func maxInt(a, b int) int {
 		return a
 	}
 	return b
+}
+
+func positiveIntDefault(value int, fallback int) int {
+	if value > 0 {
+		return value
+	}
+	return fallback
 }
 
 func firstFloat(values ...float64) float64 {

@@ -2285,8 +2285,13 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 		req.Header.Set("content-type", "application/json")
 	}
 
-	// 账号级请求头覆写（仅 openai api_key 账号启用时生效；OAuth 路径 no-op）
-	account.ApplyHeaderOverrides(req.Header)
+	// 账号级请求头覆写（仅 openai api_key 账号启用时生效；OAuth 路径 no-op）。
+	// Codex mimic 开启时保留官方身份头的最终决定权，避免 header override 静默破坏伪装形态。
+	if plan.APIKeyCodexMimic.Enabled {
+		account.ApplyHeaderOverridesForAPIKeyMimic(req.Header)
+	} else {
+		account.ApplyHeaderOverrides(req.Header)
+	}
 
 	return req, nil
 }

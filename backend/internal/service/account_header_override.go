@@ -61,6 +61,42 @@ var headerOverrideBlockedNames = map[string]struct{}{
 	"x-client-request-id":      {},
 }
 
+// apiKeyMimicHeaderOverrideProtectedNames 是开启官方客户端伪装时不允许账号覆写
+// 重新覆盖的身份头。普通 API Key 账号仍可使用这些 header override；只有 mimic
+// 链路应用覆写时跳过它们，避免官方请求形态被静默破坏。
+var apiKeyMimicHeaderOverrideProtectedNames = map[string]struct{}{
+	// OpenAI / Codex mimic
+	"user-agent":            {},
+	"originator":            {},
+	"openai-beta":           {},
+	"version":               {},
+	"session-id":            {},
+	"thread-id":             {},
+	"x-codex-window-id":     {},
+	"x-codex-beta-features": {},
+	"x-codex-turn-state":    {},
+	"x-codex-turn-metadata": {},
+	"x-client-request-id":   {},
+	"session_id":            {},
+	"conversation_id":       {},
+	// Anthropic / Claude Code mimic
+	"accept":                                    {},
+	"anthropic-version":                         {},
+	"anthropic-beta":                            {},
+	"x-app":                                     {},
+	"x-claude-code-session-id":                  {},
+	"x-stainless-retry-count":                   {},
+	"x-stainless-timeout":                       {},
+	"x-stainless-lang":                          {},
+	"x-stainless-package-version":               {},
+	"x-stainless-os":                            {},
+	"x-stainless-arch":                          {},
+	"x-stainless-runtime":                       {},
+	"x-stainless-runtime-version":               {},
+	"x-stainless-helper-method":                 {},
+	"anthropic-dangerous-direct-browser-access": {},
+}
+
 func isHeaderOverrideBlockedName(lowerName string) bool {
 	_, blocked := headerOverrideBlockedNames[lowerName]
 	return blocked
@@ -162,6 +198,14 @@ func (a *Account) HeaderOverrideValue(lowerName string) (string, bool) {
 // 可能存在非 canonical key），再按已知 wire casing 写入，避免产生重复头。
 // 账号未启用或不符合条件时为 no-op，可安全地在 OAuth/api_key 共用的构建器中调用。
 func (a *Account) ApplyHeaderOverrides(h http.Header) {
+	a.applyHeaderOverrides(h, nil)
+}
+
+func (a *Account) ApplyHeaderOverridesForAPIKeyMimic(h http.Header) {
+	a.applyHeaderOverrides(h, apiKeyMimicHeaderOverrideProtectedNames)
+}
+
+func (a *Account) applyHeaderOverrides(h http.Header, protectedNames map[string]struct{}) {
 	if h == nil {
 		return
 	}
@@ -173,6 +217,9 @@ func (a *Account) ApplyHeaderOverrides(h http.Header) {
 	// 全量 EqualFold 扫描兜底删除任意 casing 的既有键：透传链路可能保留客户端
 	// 原始 casing，非 canonical/wire casing 的键 deleteHeaderAllForms 覆盖不到。
 	for name, value := range overrides {
+		if _, protected := protectedNames[name]; protected {
+			continue
+		}
 		for existing := range h {
 			if strings.EqualFold(existing, name) {
 				delete(h, existing)

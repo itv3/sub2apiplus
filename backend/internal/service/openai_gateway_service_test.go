@@ -2396,7 +2396,17 @@ func TestOpenAIBuildUpstreamRequestAPIKeyCodexMimicOverridesClientHeaders(t *tes
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeAPIKey,
 		Credentials: map[string]any{
-			"base_url": "https://api.openai.com",
+			"base_url":                   "https://api.openai.com",
+			credKeyHeaderOverrideEnabled: true,
+			credKeyHeaderOverrides: map[string]any{
+				"user-agent":            "override-agent/1.0",
+				"originator":            "override-originator",
+				"session-id":            "override-session",
+				"thread-id":             "override-thread",
+				"x-codex-window-id":     "override-window",
+				"x-codex-beta-features": "override-beta",
+				"x-custom":              "custom-value",
+			},
 		},
 		Extra: map[string]any{
 			"openai_apikey_mimic_codex_cli": true,
@@ -2427,6 +2437,7 @@ func TestOpenAIBuildUpstreamRequestAPIKeyCodexMimicOverridesClientHeaders(t *tes
 	require.Equal(t, req.Header.Get("session-id"), req.Header.Get("thread-id"))
 	require.Equal(t, req.Header.Get("session-id")+":0", req.Header.Get("x-codex-window-id"))
 	require.Equal(t, codexDesktopBetaFeatures, req.Header.Get("x-codex-beta-features"))
+	require.Equal(t, "custom-value", getHeaderRaw(req.Header, "x-custom"))
 }
 
 func TestOpenAIBuildUpstreamRequestForceCodexCLIDoesNotOverrideAPIKeyMimic(t *testing.T) {

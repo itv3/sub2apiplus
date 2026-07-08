@@ -3,6 +3,7 @@ package service
 import "net/http"
 
 const (
+	// Codex API Key mimic 抓包基线：Codex Desktop 0.142.0，2026-07。
 	codexDesktopOriginator   = "Codex Desktop"
 	codexDesktopUserAgent    = "Codex Desktop/0.142.0 (Mac OS 26.5.1; arm64) dumb (codex_exec; 0.142.0)"
 	codexDesktopBetaFeatures = "memories,remote_compaction_v2"

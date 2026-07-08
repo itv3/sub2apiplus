@@ -128,8 +128,7 @@ func openAIResponsesSupportedExtraKey(account *Account) string {
 // 调用时机：账号创建/更新后，且仅当 platform=openai && type=apikey 时。
 //
 // 探测策略（参见包文档 internal/pkg/openai_compat）：
-//   - mimic 账号使用与真实转发一致的 Codex header/body 形态探测，结果写入
-//     openai_responses_supported_mimic_codex_cli 作为观测数据，避免污染普通 APIKey 形态
+//   - mimic 账号固定走 Responses 伪装链路，跳过探测，避免只写不读的付费探测请求
 //   - 非 mimic 账号结果继续写入 openai_responses_supported
 //   - 上游 404 / 405 → 端点不存在,写 false
 //   - 上游 2xx → 端点存在,进一步看工具能力:响应含 function_call 输出项才写 true;
@@ -150,6 +149,10 @@ func (s *AccountTestService) ProbeOpenAIAPIKeyResponsesSupport(ctx context.Conte
 	}
 	if account.Platform != PlatformOpenAI || account.Type != AccountTypeAPIKey {
 		// 仅 OpenAI APIKey 账号需要探测；其他账号类型无能力差异。
+		return
+	}
+	if account.IsOpenAIAPIKeyCodexMimicEnabled() {
+		logger.LegacyPrintf("service.openai_probe", "probe_skip_mimic_fixed_responses: account_id=%d", accountID)
 		return
 	}
 

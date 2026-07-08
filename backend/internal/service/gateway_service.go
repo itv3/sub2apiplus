@@ -492,14 +492,7 @@ func modelsListCacheKey(groupID *int64, platform string) string {
 }
 
 func defaultAntigravityModelIDs() []string {
-	models := antigravity.DefaultModels()
-	ids := make([]string, 0, len(models))
-	for _, model := range models {
-		if trimmed := strings.TrimSpace(model.ID); trimmed != "" {
-			ids = append(ids, trimmed)
-		}
-	}
-	return ids
+	return antigravity.OfficialModelIDs()
 }
 
 func collapseAntigravityAdvertisedMapping(mapping map[string]string) map[string]string {

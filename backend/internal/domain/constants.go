@@ -1,5 +1,7 @@
 package domain
 
+import "github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
+
 // Status constants
 const (
 	StatusActive   = "active"
@@ -73,16 +75,7 @@ const AntigravityGemini31ProAgentModel = "gemini-pro-agent"
 
 // DefaultAntigravityModelMapping 是 Antigravity 平台默认展示/白名单使用的官方 8 模型。
 // 历史兼容别名放在 AntigravityCompatibilityModelMapping，不进入默认 /models。
-var DefaultAntigravityModelMapping = map[string]string{
-	AntigravityGemini31ProAgentModel: AntigravityGemini31ProAgentModel,
-	"claude-opus-4-6-thinking":       "claude-opus-4-6-thinking",
-	"claude-sonnet-4-6":              "claude-sonnet-4-6",
-	"gemini-3-flash-agent":           "gemini-3-flash-agent",
-	"gemini-3.1-pro-low":             "gemini-3.1-pro-low",
-	"gemini-3.5-flash-extra-low":     "gemini-3.5-flash-extra-low",
-	"gemini-3.5-flash-low":           "gemini-3.5-flash-low",
-	"gpt-oss-120b-medium":            "gpt-oss-120b-medium",
-}
+var DefaultAntigravityModelMapping = antigravity.OfficialModelMapping()
 
 // AntigravityCompatibilityModelMapping 保留历史入口和旧客户端别名，但不作为默认展示模型。
 var AntigravityCompatibilityModelMapping = map[string]string{

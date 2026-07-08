@@ -2605,8 +2605,8 @@ import {
   getPresetMappingsByPlatform,
   commonErrorCodes,
   buildModelMappingObject,
+  fetchAntigravityDefaultMappings,
   getOfficialAntigravityDisplayMappings,
-  getOfficialAntigravityModelIDs,
   splitModelMappingObject,
   isValidWildcardPattern
 } from '@/composables/useModelWhitelist'
@@ -3555,8 +3555,9 @@ const syncAntigravityUpstreamModels = async () => {
       return
     }
 
-    const officialModels = getOfficialAntigravityModelIDs()
-    const officialMappings = getOfficialAntigravityDisplayMappings()
+    const fetchedMappings = await fetchAntigravityDefaultMappings()
+    const officialMappings = fetchedMappings.length > 0 ? fetchedMappings : getOfficialAntigravityDisplayMappings()
+    const officialModels = officialMappings.map((mapping) => mapping.to).filter(Boolean)
     antigravityModelRestrictionMode.value = 'whitelist'
     antigravityWhitelistModels.value = officialModels
     antigravityModelMappings.value = officialMappings

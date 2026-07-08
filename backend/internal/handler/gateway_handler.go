@@ -1035,6 +1035,11 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 		return
 	}
 
+	if platform == service.PlatformAntigravity {
+		writeModelsList(c, antigravity.OfficialModelIDs())
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"object": "list",
 		"data":   claude.DefaultModels,
@@ -1161,12 +1166,7 @@ func defaultModelIDsForPlatform(platform string) []string {
 		}
 		return ids
 	case service.PlatformAntigravity:
-		models := antigravity.DefaultModels()
-		ids := make([]string, 0, len(models))
-		for _, model := range models {
-			ids = append(ids, model.ID)
-		}
-		return ids
+		return antigravity.OfficialModelIDs()
 	case service.PlatformAnthropic:
 		ids := make([]string, 0, len(claude.DefaultModels)+len(antigravity.DefaultModels()))
 		for _, model := range claude.DefaultModels {
@@ -1220,10 +1220,7 @@ func (h *GatewayHandler) AntigravityModels(c *gin.Context) {
 			return
 		}
 	}
-	c.JSON(http.StatusOK, gin.H{
-		"object": "list",
-		"data":   antigravity.DefaultModels(),
-	})
+	writeModelsList(c, antigravity.OfficialModelIDs())
 }
 
 func cloneAPIKeyWithGroup(apiKey *service.APIKey, group *service.Group) *service.APIKey {

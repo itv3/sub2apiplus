@@ -28,6 +28,7 @@ const (
 
 	codexThreadIDFileName       = "codex-thread-id.txt"
 	codexWebSocketReadLimitByte = 16 * 1024 * 1024
+	pipePendingLineBytesLimit   = 4 * defaultMaxOutputBytes
 )
 
 type persistentExecutorFactory func(*Keeper, TargetConfig) (accountPersistentExecutor, error)
@@ -38,7 +39,6 @@ type managedPersistentExecutor struct {
 }
 
 type accountPersistentExecutor interface {
-	Ensure(context.Context, persistentExecution) error
 	Execute(context.Context, persistentExecution) (persistentExecutionResult, error)
 	Close() error
 }
@@ -53,6 +53,7 @@ type persistentExecution struct {
 	LastMessagePath string
 	CanResume       bool
 	Timeout         time.Duration
+	MaxOutputTokens int
 }
 
 type persistentExecutionResult struct {
@@ -116,6 +117,14 @@ func wrapNonFailureRunError(err error) error {
 	return &classifiedRunError{err: err, countAsFailure: false}
 }
 
+func runErrorCountsAsFailure(err error) bool {
+	var classified *classifiedRunError
+	if errors.As(err, &classified) {
+		return classified.countAsFailure
+	}
+	return true
+}
+
 func newDefaultPersistentExecutor(k *Keeper, account TargetConfig) (accountPersistentExecutor, error) {
 	switch targetExecutor(account) {
 	case "codex":
@@ -133,30 +142,6 @@ func (k *Keeper) codexPath() string {
 
 func (k *Keeper) claudePath() string {
 	return "claude"
-}
-
-func (k *Keeper) ensurePersistentClient(ctx context.Context, account TargetConfig) {
-	go func() {
-		layout, err := k.prepareRuntime(account)
-		if err != nil {
-			k.updateClientStatus(account, clientStatusError, "运行时准备失败："+err.Error())
-			return
-		}
-		executor, err := k.persistentExecutorFor(account)
-		if err != nil {
-			k.updateClientStatus(account, clientStatusError, err.Error())
-			return
-		}
-		req := persistentExecution{
-			Account:   account,
-			Layout:    layout,
-			CanResume: k.canResumeAccount(account),
-			Timeout:   persistentTimeout(account),
-		}
-		if err := executor.Ensure(ctx, req); err != nil {
-			k.updateClientStatus(account, clientStatusError, err.Error())
-		}
-	}()
 }
 
 func (k *Keeper) executeAccountPersistent(ctx context.Context, account TargetConfig, prompt string, sessionID string) (Session, error) {
@@ -184,6 +169,7 @@ func (k *Keeper) executeAccountPersistent(ctx context.Context, account TargetCon
 		LastMessagePath: lastMessagePath,
 		CanResume:       k.canResumeAccount(account),
 		Timeout:         persistentTimeout(account),
+		MaxOutputTokens: account.MaxOutputTokens,
 	}
 	result, runErr := executor.Execute(ctx, req)
 	if targetExecutor(account) == "codex" && runErr != nil && isRetryableCodexPersistentError(runErr) {
@@ -508,11 +494,75 @@ func (f *lineFiles) writeStderrLine(line string) {
 func scanPipeLines(reader io.Reader, lines chan<- string) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		select {
-		case lines <- scanner.Text():
-		default:
+	pending := make([]string, 0)
+	pendingBytes := 0
+	droppedLines := 0
+	droppedBytes := 0
+
+	queue := func(line string) bool {
+		lineBytes := len(line)
+		if lineBytes > pipePendingLineBytesLimit || pendingBytes+lineBytes > pipePendingLineBytesLimit {
+			return false
 		}
+		pending = append(pending, line)
+		pendingBytes += lineBytes
+		return true
+	}
+	dropMarker := func() string {
+		return fmt.Sprintf("[sub2apiplus-keeper] pipe 输出过快，已截断 %d 行 / %d 字节", droppedLines, droppedBytes)
+	}
+	queueDropMarker := func() {
+		if droppedLines == 0 {
+			return
+		}
+		if queue(dropMarker()) {
+			droppedLines = 0
+			droppedBytes = 0
+		}
+	}
+	drainPending := func() {
+		for {
+			for len(pending) > 0 {
+				select {
+				case lines <- pending[0]:
+					pendingBytes -= len(pending[0])
+					pending[0] = ""
+					pending = pending[1:]
+				default:
+					return
+				}
+			}
+			if droppedLines == 0 {
+				return
+			}
+			queueDropMarker()
+		}
+	}
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if len(pending) == 0 && droppedLines == 0 {
+			select {
+			case lines <- line:
+				continue
+			default:
+			}
+		}
+		if !queue(line) {
+			droppedLines++
+			droppedBytes += len(line)
+		}
+		drainPending()
+	}
+	queueDropMarker()
+	for len(pending) > 0 {
+		lines <- pending[0]
+		pendingBytes -= len(pending[0])
+		pending[0] = ""
+		pending = pending[1:]
+	}
+	if droppedLines > 0 {
+		lines <- dropMarker()
 	}
 }
 
@@ -588,12 +638,6 @@ type claudePersistentExecutor struct {
 	closed      bool
 	args        []string
 	env         []string
-}
-
-func (c *claudePersistentExecutor) Ensure(ctx context.Context, req persistentExecution) error {
-	c.runMu.Lock()
-	defer c.runMu.Unlock()
-	return c.ensureStarted(ctx, req)
 }
 
 func (c *claudePersistentExecutor) Execute(ctx context.Context, req persistentExecution) (persistentExecutionResult, error) {
@@ -960,12 +1004,6 @@ type codexAgentMessage struct {
 	TurnID string
 	Text   string
 	Phase  string
-}
-
-func (c *codexPersistentExecutor) Ensure(ctx context.Context, req persistentExecution) error {
-	c.runMu.Lock()
-	defer c.runMu.Unlock()
-	return c.ensureStarted(ctx, req)
 }
 
 func (c *codexPersistentExecutor) Execute(ctx context.Context, req persistentExecution) (persistentExecutionResult, error) {

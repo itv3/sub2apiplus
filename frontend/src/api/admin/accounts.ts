@@ -20,7 +20,9 @@ import type {
   CodexSessionImportResult,
   OpenAICodexPATCreateRequest,
   CheckMixedChannelRequest,
-  CheckMixedChannelResponse
+  CheckMixedChannelResponse,
+  KeeperSettings,
+  KeeperState
 } from '@/types'
 
 /**
@@ -487,18 +489,18 @@ export async function getKeeperProjects(): Promise<string[]> {
   return data.projects || []
 }
 
-export async function getKeeperState(): Promise<any> {
-  const { data } = await apiClient.get<any>('/internal/keeper/state')
+export async function getKeeperState(): Promise<KeeperState> {
+  const { data } = await apiClient.get<KeeperState>('/internal/keeper/state')
   return data || {}
 }
 
-export async function getKeeperSettings(): Promise<any> {
-  const { data } = await apiClient.get<any>('/internal/keeper/settings')
+export async function getKeeperSettings(): Promise<KeeperSettings> {
+  const { data } = await apiClient.get<KeeperSettings>('/internal/keeper/settings')
   return data || {}
 }
 
-export async function saveKeeperSettings(payload: Record<string, unknown>): Promise<any> {
-  const { data } = await apiClient.post<any>('/internal/keeper/settings', payload)
+export async function saveKeeperSettings(payload: Record<string, unknown>): Promise<KeeperSettings> {
+  const { data } = await apiClient.post<KeeperSettings>('/internal/keeper/settings', payload)
   return data || {}
 }
 

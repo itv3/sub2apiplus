@@ -157,6 +157,33 @@ func TestApplyHeaderOverrides(t *testing.T) {
 	require.Equal(t, 1, count)
 }
 
+func TestApplyHeaderOverridesForAPIKeyMimicSkipsIdentityHeaders(t *testing.T) {
+	acc := headerOverrideTestAccount(PlatformOpenAI, AccountTypeAPIKey, map[string]any{
+		credKeyHeaderOverrideEnabled: true,
+		credKeyHeaderOverrides: map[string]any{
+			"user-agent":        "third-party/1.0",
+			"originator":        "kilo",
+			"session-id":        "fixed-session",
+			"x-codex-window-id": "fixed-window",
+			"x-custom":          "custom-value",
+		},
+	})
+
+	h := http.Header{}
+	h.Set("User-Agent", "Codex Desktop/0.142.0")
+	h.Set("originator", "Codex Desktop")
+	h.Set("session-id", "official-session")
+	h.Set("x-codex-window-id", "official-window")
+
+	acc.ApplyHeaderOverridesForAPIKeyMimic(h)
+
+	require.Equal(t, "Codex Desktop/0.142.0", h.Get("User-Agent"))
+	require.Equal(t, "Codex Desktop", h.Get("originator"))
+	require.Equal(t, "official-session", h.Get("session-id"))
+	require.Equal(t, "official-window", h.Get("x-codex-window-id"))
+	require.Equal(t, "custom-value", getHeaderRaw(h, "x-custom"))
+}
+
 func TestApplyHeaderOverridesNoOpPaths(t *testing.T) {
 	baseline := func() http.Header {
 		h := http.Header{}

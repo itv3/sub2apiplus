@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -193,6 +196,57 @@ func TestTargetMatchesSelectorAcceptsIDAccountIDAndName(t *testing.T) {
 	}
 }
 
+func TestHandleManualRunRequiresPost(t *testing.T) {
+	k := &Keeper{}
+	req := httptest.NewRequest(http.MethodGet, "/api/run?target=keeper-openai", nil)
+	rec := httptest.NewRecorder()
+
+	k.handleManualRun(rec, req)
+
+	if rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestParseClaudeStreamLineExtractsReplyUsageAndResult(t *testing.T) {
+	message := parseClaudeStreamLine(`{"type":"assistant","message":{"content":[{"type":"text","text":" hello "}],"usage":{"input_tokens":2,"cache_read_input_tokens":3,"cache_creation_input_tokens":5,"output_tokens":7}}}`)
+	if message.reply != "hello" {
+		t.Fatalf("reply = %q, want hello", message.reply)
+	}
+	if message.usage == nil || message.usage.InputTokens != 10 || message.usage.OutputTokens != 7 {
+		t.Fatalf("usage = %+v, want input 10 output 7", message.usage)
+	}
+
+	result := parseClaudeStreamLine(`{"type":"result","subtype":"success","result":" done "}`)
+	if !result.done || result.isError || result.reply != "done" {
+		t.Fatalf("result = %+v, want done success", result)
+	}
+}
+
+func TestParseCodexItemCompletedExtractsAgentMessage(t *testing.T) {
+	msg := parseCodexItemCompleted([]byte(`{"turnId":"turn-1","item":{"type":"agentMessage","text":" hello ","phase":"final"}}`))
+	if msg.TurnID != "turn-1" || msg.Text != "hello" || msg.Phase != "final" {
+		t.Fatalf("agent message = %+v", msg)
+	}
+
+	ignored := parseCodexItemCompleted([]byte(`{"turnId":"turn-2","item":{"type":"reasoning","text":"hidden"}}`))
+	if ignored.TurnID != "turn-2" || ignored.Text != "" {
+		t.Fatalf("ignored message = %+v", ignored)
+	}
+}
+
+func TestIsRetryableCodexPersistentError(t *testing.T) {
+	if !isRetryableCodexPersistentError(io.EOF) {
+		t.Fatal("io.EOF should be retryable")
+	}
+	if !isRetryableCodexPersistentError(errors.New("failed to read frame header: closed")) {
+		t.Fatal("frame read error should be retryable")
+	}
+	if isRetryableCodexPersistentError(errors.New("model not found")) {
+		t.Fatal("business error should not be retryable")
+	}
+}
+
 func TestScanPreservesRunningStateBeforeNextKeepalive(t *testing.T) {
 	now := time.Now().UTC()
 	target := TargetConfig{
@@ -236,16 +290,50 @@ func TestScanPreservesRunningStateBeforeNextKeepalive(t *testing.T) {
 	}
 }
 
+func TestFetchTargetsUsesConfiguredMaxOutputTokens(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("x-api-key"); got != "secret" {
+			t.Fatalf("x-api-key = %q, want secret", got)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"code":0,"data":{"accounts":[{"id":3,"name":"BWG_OpenAI","platform":"openai","type":"apikey","enabled":true,"executor":"codex","model":"gpt-5.5","mode":"fresh","workspace":"homeproxy","interval_minutes":8,"work_start":"00:00","work_end":"24:00","max_output_tokens":256},{"id":4,"name":"BWG_Anthropic","platform":"anthropic","type":"apikey","enabled":true,"executor":"claude","model":"claude-opus-4-8","mode":"fresh","workspace":"homeproxy","interval_minutes":8,"work_start":"00:00","work_end":"24:00"}]}}`))
+	}))
+	defer server.Close()
+
+	k := &Keeper{
+		cfg: Config{
+			ProjectsRoot: t.TempDir(),
+			Sub2APIPlus:  Sub2APIPlusConfig{BaseURL: server.URL, InternalToken: "secret"},
+		},
+		httpClient: server.Client(),
+	}
+
+	targets, err := k.fetchTargets(context.Background())
+	if err != nil {
+		t.Fatalf("fetchTargets error = %v", err)
+	}
+	if len(targets) != 2 {
+		t.Fatalf("targets len = %d, want 2", len(targets))
+	}
+	if got := targets[0].MaxOutputTokens; got != 256 {
+		t.Fatalf("configured MaxOutputTokens = %d, want 256", got)
+	}
+	if got := targets[1].MaxOutputTokens; got != defaultKeepaliveMaxTokens {
+		t.Fatalf("default MaxOutputTokens = %d, want %d", got, defaultKeepaliveMaxTokens)
+	}
+}
+
 func TestRunTargetUpdatesMatchingSessionIDWhenAnotherRunIsQueued(t *testing.T) {
 	tempDir := t.TempDir()
 	target := TargetConfig{
-		Name:        "BWG_OpenAI",
-		AccountID:   3,
-		Platform:    "openai",
-		AccountType: "apikey",
-		Model:       "gpt-5.5",
-		Enabled:     true,
-		Executor:    "codex",
+		Name:            "BWG_OpenAI",
+		AccountID:       3,
+		Platform:        "openai",
+		AccountType:     "apikey",
+		Model:           "gpt-5.5",
+		Enabled:         true,
+		Executor:        "codex",
+		MaxOutputTokens: 512,
 	}
 	executor := &testPersistentExecutor{
 		started: make(chan persistentExecution, 1),
@@ -279,6 +367,9 @@ func TestRunTargetUpdatesMatchingSessionIDWhenAnotherRunIsQueued(t *testing.T) {
 	}
 	if req.SessionID == "" {
 		t.Fatal("session id is empty")
+	}
+	if req.MaxOutputTokens != target.MaxOutputTokens {
+		t.Fatalf("persistent MaxOutputTokens = %d, want %d", req.MaxOutputTokens, target.MaxOutputTokens)
 	}
 
 	k.appendSession(target, Session{
@@ -327,6 +418,111 @@ func TestRunTargetUpdatesMatchingSessionIDWhenAnotherRunIsQueued(t *testing.T) {
 	}
 }
 
+func TestRunTargetNonFailureErrorDoesNotIncrementConsecutiveFailures(t *testing.T) {
+	tempDir := t.TempDir()
+	target := TargetConfig{
+		Name:        "BWG_OpenAI",
+		AccountID:   3,
+		Platform:    "openai",
+		AccountType: "apikey",
+		Model:       "gpt-5.5",
+		Enabled:     true,
+		Executor:    "codex",
+	}
+	executor := &testPersistentExecutor{
+		started: make(chan persistentExecution, 1),
+		release: make(chan testPersistentResult, 1),
+	}
+	k := &Keeper{
+		cfg: Config{
+			RuntimeRoot: filepath.Join(tempDir, "runtime"),
+			StatePath:   filepath.Join(tempDir, "state.json"),
+		},
+		state:               State{Targets: map[string]*TargetState{}},
+		location:            time.UTC,
+		httpClient:          &http.Client{Timeout: time.Millisecond},
+		persistentExecutors: map[string]*managedPersistentExecutor{},
+		persistentFactory: func(*Keeper, TargetConfig) (accountPersistentExecutor, error) {
+			return executor, nil
+		},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		k.runTarget(context.Background(), target)
+		close(done)
+	}()
+
+	select {
+	case <-executor.started:
+	case <-time.After(time.Second):
+		t.Fatal("persistent executor did not start")
+	}
+	executor.release <- testPersistentResult{
+		result: persistentExecutionResult{ErrorText: "connection reset", Summary: "connection reset"},
+		err:    wrapNonFailureRunError(errors.New("connection reset")),
+	}
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("runTarget did not finish")
+	}
+
+	state := k.state.Targets["3"]
+	if state == nil {
+		t.Fatal("target state missing")
+	}
+	if got := state.ConsecutiveFailures; got != 0 {
+		t.Fatalf("ConsecutiveFailures = %d, want 0", got)
+	}
+	if len(state.Sessions) == 0 || state.Sessions[0].Status != "error" {
+		t.Fatalf("session not recorded as error: %+v", state.Sessions)
+	}
+}
+
+func TestScanPipeLinesReportsDroppedWhenPendingLimitExceeded(t *testing.T) {
+	var b strings.Builder
+	for i := 0; i < 5200; i++ {
+		b.WriteString(strings.Repeat("x", 1024))
+		b.WriteByte('\n')
+	}
+
+	lines := make(chan string, 1)
+	done := make(chan struct{})
+	go func() {
+		scanPipeLines(strings.NewReader(b.String()), lines)
+		close(done)
+	}()
+
+	time.Sleep(20 * time.Millisecond)
+	sawDropMarker := false
+	for {
+		select {
+		case line := <-lines:
+			if strings.Contains(line, "已截断") {
+				sawDropMarker = true
+			}
+		case <-done:
+			for {
+				select {
+				case line := <-lines:
+					if strings.Contains(line, "已截断") {
+						sawDropMarker = true
+					}
+				default:
+					if !sawDropMarker {
+						t.Fatal("expected dropped-line marker")
+					}
+					return
+				}
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatal("scanPipeLines did not finish")
+		}
+	}
+}
+
 type testPersistentResult struct {
 	result persistentExecutionResult
 	err    error
@@ -335,10 +531,6 @@ type testPersistentResult struct {
 type testPersistentExecutor struct {
 	started chan persistentExecution
 	release chan testPersistentResult
-}
-
-func (e *testPersistentExecutor) Ensure(context.Context, persistentExecution) error {
-	return nil
 }
 
 func (e *testPersistentExecutor) Execute(ctx context.Context, req persistentExecution) (persistentExecutionResult, error) {
