@@ -192,10 +192,11 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 		if s.settingService != nil && s.settingService.IsModelFallbackEnabled(ctx) &&
 			isModelNotFoundError(resp.StatusCode, respBody) {
 			fallbackModel := s.settingService.GetFallbackModel(ctx, PlatformAntigravity)
-			if fallbackModel != "" && fallbackModel != mappedModel {
-				logger.LegacyPrintf("service.antigravity_gateway", "[Antigravity] Model not found (%s), retrying with fallback model %s (account: %s)", mappedModel, fallbackModel, account.Name)
+			fallbackMappedModel := resolveAntigravityFallbackModel(account, fallbackModel, mappedModel)
+			if fallbackMappedModel != "" {
+				logger.LegacyPrintf("service.antigravity_gateway", "[Antigravity] Model not found (%s), retrying with fallback model %s -> %s (account: %s)", mappedModel, fallbackModel, fallbackMappedModel, account.Name)
 
-				fallbackWrapped, err := s.wrapV1InternalRequest(projectID, fallbackModel, injectedBody)
+				fallbackWrapped, err := s.wrapV1InternalRequest(projectID, fallbackMappedModel, injectedBody)
 				if err == nil {
 					fallbackReq, err := antigravity.NewAPIRequest(ctx, upstreamAction, accessToken, fallbackWrapped)
 					if err == nil {
@@ -203,7 +204,7 @@ func (s *AntigravityGatewayService) ForwardGemini(ctx context.Context, c *gin.Co
 						if err == nil && fallbackResp.StatusCode < 400 {
 							_ = resp.Body.Close()
 							resp = fallbackResp
-							billingModel = fallbackModel
+							billingModel = fallbackMappedModel
 						} else if fallbackResp != nil {
 							_ = fallbackResp.Body.Close()
 						}

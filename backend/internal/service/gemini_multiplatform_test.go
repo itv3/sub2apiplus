@@ -938,8 +938,8 @@ func TestGeminiMessagesCompatService_isModelSupportedByAccount(t *testing.T) {
 				Platform: PlatformAntigravity,
 				Credentials: map[string]any{
 					"model_mapping": map[string]any{
-						"my-custom-model": "upstream-model",
-						"gpt-4o":          "some-model",
+						"my-custom-model": "my-custom-model",
+						"gpt-4o":          "gpt-4o",
 					},
 				},
 			},
@@ -952,11 +952,11 @@ func TestGeminiMessagesCompatService_isModelSupportedByAccount(t *testing.T) {
 				Platform: PlatformAntigravity,
 				Credentials: map[string]any{
 					"model_mapping": map[string]any{
-						"my-custom-model": "upstream-model",
+						"my-custom-model": "my-custom-model",
 					},
 				},
 			},
-			model:    "claude-sonnet-4-5",
+			model:    "gemini-future-pro",
 			expected: false,
 		},
 		{

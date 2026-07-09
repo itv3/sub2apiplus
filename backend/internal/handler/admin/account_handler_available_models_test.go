@@ -257,7 +257,7 @@ func TestAccountHandlerGetAvailableModels_OpenAISparkShadowReturnsMappingModels(
 	}, ids, "影子可用模型由 model_mapping 派生（非写死）")
 }
 
-func TestAccountHandlerGetAvailableModels_AntigravityAdvertisesOfficialModelsOnly(t *testing.T) {
+func TestAccountHandlerGetAvailableModels_AntigravityAdvertisesOfficialAndManualWhitelistModels(t *testing.T) {
 	svc := &availableModelsAdminService{
 		stubAdminService: newStubAdminService(),
 		account: service.Account{
@@ -272,6 +272,7 @@ func TestAccountHandlerGetAvailableModels_AntigravityAdvertisesOfficialModelsOnl
 					"Claude Sonnet 4.6":   "claude-sonnet-4-6",
 					"gemini-pro-agent":    "gemini-pro-agent",
 					"Gemini 3.1 Pro High": "gemini-pro-agent",
+					"gemini-future-pro":   "gemini-future-pro",
 				},
 			},
 		},
@@ -296,6 +297,7 @@ func TestAccountHandlerGetAvailableModels_AntigravityAdvertisesOfficialModelsOnl
 		ids = append(ids, model.ID)
 	}
 	want := antigravity.OfficialModelIDs()
+	want = append(want, "gemini-future-pro")
 	sort.Strings(want)
 	require.Equal(t, want, ids)
 }

@@ -85,6 +85,21 @@ func TestAccount_IsAnthropicAPIKeyClaudeCodeMimicEnabled(t *testing.T) {
 	})
 }
 
+func TestShouldUseAnthropicAPIKeyPassthroughRuntime(t *testing.T) {
+	account := &Account{
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeAPIKey,
+		Extra: map[string]any{
+			"anthropic_passthrough":              true,
+			"anthropic_apikey_mimic_claude_code": true,
+		},
+	}
+	require.False(t, shouldUseAnthropicAPIKeyPassthroughRuntime(account), "mimic 与 passthrough 同开时运行时应优先 mimic")
+
+	delete(account.Extra, "anthropic_apikey_mimic_claude_code")
+	require.True(t, shouldUseAnthropicAPIKeyPassthroughRuntime(account))
+}
+
 func TestAccount_GetAnthropicAPIKeyAuthScheme(t *testing.T) {
 	tests := []struct {
 		name    string

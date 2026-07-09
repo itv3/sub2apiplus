@@ -13,29 +13,32 @@ import (
 func TestGatewayService_isModelSupportedByAccount_AntigravityModelMapping(t *testing.T) {
 	svc := &GatewayService{}
 
-	// 使用 model_mapping 作为白名单（通配符匹配）
+	// 通配符可把请求模型映射到官方模型，但不能单独扩大允许集合。
 	account := &Account{
 		Platform: PlatformAntigravity,
 		Credentials: map[string]any{
 			"model_mapping": map[string]any{
-				"claude-*":   "claude-sonnet-4-5",
-				"gemini-3-*": "gemini-3-flash",
+				"claude-*":   "claude-sonnet-4-6",
+				"gemini-3-*": "gemini-3-flash-agent",
 			},
 		},
 	}
 
-	// claude-* 通配符匹配
+	// claude-* 通配符匹配到官方模型
 	require.True(t, svc.isModelSupportedByAccount(account, "claude-sonnet-4-5"))
 	require.True(t, svc.isModelSupportedByAccount(account, "claude-haiku-4-5"))
 	require.True(t, svc.isModelSupportedByAccount(account, "claude-opus-4-6"))
 
-	// gemini-3-* 通配符匹配
+	// gemini-3-* 通配符匹配到官方模型
 	require.True(t, svc.isModelSupportedByAccount(account, "gemini-3-flash"))
 	require.True(t, svc.isModelSupportedByAccount(account, "gemini-3-pro-high"))
 
-	// gemini-2.5-* 不匹配（不在 model_mapping 中）
-	require.False(t, svc.isModelSupportedByAccount(account, "gemini-2.5-flash"))
-	require.False(t, svc.isModelSupportedByAccount(account, "gemini-2.5-pro"))
+	// 未命中通配符时，历史兼容入口仍可落到官方模型。
+	require.True(t, svc.isModelSupportedByAccount(account, "gemini-2.5-flash"))
+	require.True(t, svc.isModelSupportedByAccount(account, "gemini-2.5-pro"))
+
+	// 未知模型不支持。
+	require.False(t, svc.isModelSupportedByAccount(account, "gemini-future-pro"))
 
 	// 其他平台模型不支持
 	require.False(t, svc.isModelSupportedByAccount(account, "gpt-4"))
@@ -80,27 +83,25 @@ func TestGatewayService_isModelSupportedByAccountWithContext_ThinkingMode(t *tes
 		thinkingEnabled bool
 		expected        bool
 	}{
-		// 场景 1: 只配置 claude-sonnet-4-5-thinking，请求 claude-sonnet-4-5 + thinking=true
-		// mapAntigravityModel 找不到 claude-sonnet-4-5 的映射 → 返回 false
+		// 场景 1: 即使只配置 thinking 变体，历史入口仍会先映射到官方模型。
 		{
-			name: "thinking_enabled_no_base_mapping_returns_false",
+			name: "thinking_enabled_without_base_mapping_uses_official_target",
 			modelMapping: map[string]any{
 				"claude-sonnet-4-5-thinking": "claude-sonnet-4-5-thinking",
 			},
 			requestedModel:  "claude-sonnet-4-5",
 			thinkingEnabled: true,
-			expected:        false,
+			expected:        true,
 		},
-		// 场景 2: 只配置 claude-sonnet-4-5-thinking，请求 claude-sonnet-4-5 + thinking=false
-		// mapAntigravityModel 找不到 claude-sonnet-4-5 的映射 → 返回 false
+		// 场景 2: 关闭 thinking 时同样可走官方兼容目标。
 		{
-			name: "thinking_disabled_no_base_mapping_returns_false",
+			name: "thinking_disabled_without_base_mapping_uses_official_target",
 			modelMapping: map[string]any{
 				"claude-sonnet-4-5-thinking": "claude-sonnet-4-5-thinking",
 			},
 			requestedModel:  "claude-sonnet-4-5",
 			thinkingEnabled: false,
-			expected:        false,
+			expected:        true,
 		},
 		// 场景 3: 配置 claude-sonnet-4-5（非 thinking），请求 claude-sonnet-4-5 + thinking=true
 		// 最终模型名 = claude-sonnet-4-5-thinking，不在 mapping 中，应该不匹配
@@ -139,7 +140,9 @@ func TestGatewayService_isModelSupportedByAccountWithContext_ThinkingMode(t *tes
 		{
 			name: "wildcard_matches_thinking",
 			modelMapping: map[string]any{
-				"claude-*": "claude-sonnet-4-5",
+				"claude-*":                   "claude-sonnet-4-5",
+				"claude-sonnet-4-5":          "claude-sonnet-4-5",
+				"claude-sonnet-4-5-thinking": "claude-sonnet-4-5-thinking",
 			},
 			requestedModel:  "claude-sonnet-4-5",
 			thinkingEnabled: true,
@@ -186,9 +189,9 @@ func TestGatewayService_isModelSupportedByAccount_CustomMappingNotInDefault(t *t
 		Platform: PlatformAntigravity,
 		Credentials: map[string]any{
 			"model_mapping": map[string]any{
-				"my-custom-model":   "actual-upstream-model",
-				"gpt-4o":            "some-upstream-model",
-				"llama-3-70b":       "llama-3-70b-upstream",
+				"my-custom-model":   "my-custom-model",
+				"gpt-4o":            "gpt-4o",
+				"llama-3-70b":       "llama-3-70b",
 				"claude-sonnet-4-5": "claude-sonnet-4-5",
 			},
 		},
@@ -208,6 +211,21 @@ func TestGatewayService_isModelSupportedByAccount_CustomMappingNotInDefault(t *t
 	require.True(t, svc.isModelSupportedByAccount(account, ""))
 }
 
+func TestGatewayService_isModelSupportedByAccount_AntigravityRejectsUnallowedMappingTarget(t *testing.T) {
+	svc := &GatewayService{}
+	account := &Account{
+		Platform: PlatformAntigravity,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"friendly-name": "actual-upstream-model",
+			},
+		},
+	}
+
+	require.False(t, svc.isModelSupportedByAccount(account, "friendly-name"))
+	require.False(t, svc.isModelSupportedByAccount(account, "actual-upstream-model"))
+}
+
 // TestGatewayService_isModelSupportedByAccountWithContext_CustomMappingThinking
 // 测试自定义映射 + thinking 模式的交互
 func TestGatewayService_isModelSupportedByAccountWithContext_CustomMappingThinking(t *testing.T) {
@@ -220,7 +238,7 @@ func TestGatewayService_isModelSupportedByAccountWithContext_CustomMappingThinki
 			"model_mapping": map[string]any{
 				"claude-sonnet-4-5":          "claude-sonnet-4-5",
 				"claude-sonnet-4-5-thinking": "claude-sonnet-4-5-thinking",
-				"my-custom-model":            "upstream-model",
+				"my-custom-model":            "my-custom-model",
 			},
 		},
 	}

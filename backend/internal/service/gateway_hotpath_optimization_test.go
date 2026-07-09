@@ -581,7 +581,7 @@ func TestGetAvailableModels_ErrorAndGlobalListBranches(t *testing.T) {
 	require.Equal(t, int64(1), okRepo.listAllCalls.Load())
 }
 
-func TestGetAvailableModels_AntigravityAdvertisesOfficialModelsOnly(t *testing.T) {
+func TestGetAvailableModels_AntigravityAdvertisesOfficialAndManualWhitelistModels(t *testing.T) {
 	resetGatewayHotpathStatsForTest()
 
 	groupID := int64(12)
@@ -609,6 +609,7 @@ func TestGetAvailableModels_AntigravityAdvertisesOfficialModelsOnly(t *testing.T
 
 	models := svc.GetAvailableModels(context.Background(), &groupID, PlatformAntigravity)
 	want := defaultAntigravityModelIDs()
+	want = append(want, "custom-upstream-a")
 	sort.Strings(want)
 	require.Equal(t, want, models)
 }

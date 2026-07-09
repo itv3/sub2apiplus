@@ -91,6 +91,38 @@ func TestWrapV1InternalRequestAppliesOfficialGeminiProfile(t *testing.T) {
 	require.EqualValues(t, 10001, thinkingConfig["thinkingBudget"])
 }
 
+func TestAntigravityGatewayService_ForwardClaudeRejectsUnallowedThinkingSuffix(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	svc := &AntigravityGatewayService{}
+	account := &Account{
+		Platform: PlatformAntigravity,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"claude-sonnet-4-5": "claude-sonnet-4-5",
+			},
+		},
+	}
+	body := []byte(`{
+		"model":"claude-sonnet-4-5",
+		"max_tokens":100,
+		"thinking":{"type":"enabled","budget_tokens":1024},
+		"messages":[{"role":"user","content":"hi"}]
+	}`)
+
+	result, err := svc.Forward(context.Background(), c, account, body, false)
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "model claude-sonnet-4-5-thinking not in whitelist")
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	require.Contains(t, rec.Body.String(), "claude-sonnet-4-5-thinking")
+}
+
 func TestStripSignatureSensitiveBlocksFromClaudeRequest(t *testing.T) {
 	req := &antigravity.ClaudeRequest{
 		Model: "claude-sonnet-4-5",
@@ -844,6 +876,7 @@ func TestAntigravityGatewayService_Forward_BillsWithMappedModel(t *testing.T) {
 			"project_id":   "proj",
 			"model_mapping": map[string]any{
 				"claude-sonnet-4-5": mappedModel,
+				mappedModel:         mappedModel,
 			},
 		},
 	}
@@ -900,6 +933,7 @@ func TestAntigravityGatewayService_Forward_WebSearchBillsWithFallbackModel(t *te
 			"project_id":   "proj",
 			"model_mapping": map[string]any{
 				"claude-sonnet-4-5": "gemini-pro-agent",
+				"gemini-pro-agent":  "gemini-pro-agent",
 			},
 		},
 	}
@@ -948,6 +982,7 @@ func TestAntigravityGatewayService_Forward_WebSearchRateLimitUsesFallbackModel(t
 			"project_id":   "proj",
 			"model_mapping": map[string]any{
 				"claude-sonnet-4-5": "gemini-pro-agent",
+				"gemini-pro-agent":  "gemini-pro-agent",
 			},
 		},
 		Extra: map[string]any{
@@ -1010,6 +1045,7 @@ func TestAntigravityGatewayService_ForwardGemini_BillsWithMappedModel(t *testing
 			"project_id":   "proj",
 			"model_mapping": map[string]any{
 				"gemini-2.5-flash": mappedModel,
+				mappedModel:        mappedModel,
 			},
 		},
 	}
@@ -1073,6 +1109,8 @@ func TestAntigravityGatewayService_ForwardGemini_FallbackSuccessBillsWithFallbac
 			"project_id":   "proj",
 			"model_mapping": map[string]any{
 				"gemini-legacy": mappedModel,
+				mappedModel:     mappedModel,
+				fallbackModel:   fallbackModel,
 			},
 		},
 	}
@@ -1149,6 +1187,7 @@ func TestAntigravityGatewayService_ForwardGemini_RetriesCorruptedThoughtSignatur
 			"project_id":   "proj",
 			"model_mapping": map[string]any{
 				originalModel: mappedModel,
+				mappedModel:   mappedModel,
 			},
 		},
 	}
@@ -1208,6 +1247,7 @@ func TestAntigravityGatewayService_ForwardGemini_SignatureRetryPropagatesFailove
 			"project_id":   "proj",
 			"model_mapping": map[string]any{
 				originalModel: mappedModel,
+				mappedModel:   mappedModel,
 			},
 		},
 	}

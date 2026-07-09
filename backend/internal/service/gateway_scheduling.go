@@ -2423,7 +2423,7 @@ func (s *GatewayService) isModelSupportedByAccountWithContext(ctx context.Contex
 			if finalModel == mapped {
 				return true // thinking 后缀未改变模型名，映射已通过
 			}
-			return account.IsModelSupported(finalModel)
+			return isAntigravityAllowedModel(account, finalModel)
 		}
 		return true
 	}

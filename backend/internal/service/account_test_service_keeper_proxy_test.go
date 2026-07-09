@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"strings"
@@ -9,6 +10,34 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+type keeperProxyAccountRepoStub struct {
+	AccountRepository
+	account *Account
+}
+
+func (r *keeperProxyAccountRepoStub) GetByID(_ context.Context, _ int64) (*Account, error) {
+	return r.account, nil
+}
+
+func TestProxyKeeperOpenAIAccountRejectsNonAPIKeyAccount(t *testing.T) {
+	svc := &AccountTestService{
+		accountRepo: &keeperProxyAccountRepoStub{
+			account: &Account{
+				ID:       42,
+				Platform: PlatformOpenAI,
+				Type:     AccountTypeOAuth,
+			},
+		},
+	}
+
+	_, err := svc.ProxyKeeperOpenAIAccount(context.Background(), 42, KeeperOpenAIProxyRequest{
+		Method: http.MethodGet,
+		Path:   "/v1/models",
+	})
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "OpenAI API key account")
+}
 
 func TestValidateKeeperOpenAIProxyPath(t *testing.T) {
 	allowed := []struct {

@@ -21,20 +21,35 @@ func TestAntigravityGatewayService_GetMappedModel(t *testing.T) {
 		{
 			name:           "账户映射优先",
 			requestedModel: "claude-3-5-sonnet-20241022",
-			accountMapping: map[string]string{"claude-3-5-sonnet-20241022": "custom-model"},
-			expected:       "custom-model",
+			accountMapping: map[string]string{
+				"claude-3-5-sonnet-20241022": "custom-model",
+				"custom-model":               "custom-model",
+			},
+			expected: "custom-model",
 		},
 		{
 			name:           "账户映射 - 可覆盖默认映射的模型",
 			requestedModel: "claude-sonnet-4-5",
-			accountMapping: map[string]string{"claude-sonnet-4-5": "my-custom-sonnet"},
-			expected:       "my-custom-sonnet",
+			accountMapping: map[string]string{
+				"claude-sonnet-4-5": "my-custom-sonnet",
+				"my-custom-sonnet":  "my-custom-sonnet",
+			},
+			expected: "my-custom-sonnet",
 		},
 		{
 			name:           "账户映射 - 可覆盖未知模型",
 			requestedModel: "claude-opus-4",
-			accountMapping: map[string]string{"claude-opus-4": "my-opus"},
-			expected:       "my-opus",
+			accountMapping: map[string]string{
+				"claude-opus-4": "my-opus",
+				"my-opus":       "my-opus",
+			},
+			expected: "my-opus",
+		},
+		{
+			name:           "账户映射 - 目标未被白名单允许时拒绝",
+			requestedModel: "claude-3-5-sonnet-20241022",
+			accountMapping: map[string]string{"claude-3-5-sonnet-20241022": "custom-model"},
+			expected:       "",
 		},
 
 		// 2. 默认映射（DefaultAntigravityModelMapping）
@@ -273,9 +288,58 @@ func TestAntigravityGatewayService_IsModelSupported(t *testing.T) {
 	}
 }
 
-// TestMapAntigravityModel_WildcardTargetEqualsRequest 测试通配符映射目标恰好等于请求模型名的 edge case
-// 例如 {"claude-*": "claude-sonnet-4-5"}，请求 "claude-sonnet-4-5" 时应该通过
-func TestMapAntigravityModel_WildcardTargetEqualsRequest(t *testing.T) {
+func TestAdvertisedModelMappingForAccount_AntigravityMergesManualWhitelistModels(t *testing.T) {
+	account := &Account{
+		Platform: PlatformAntigravity,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"gemini-future-pro":      "gemini-future-pro",
+				"Gemini Future Pro":      "gemini-future-pro",
+				"gemini-3.1-pro-high":    "gemini-pro-agent",
+				"claude-sonnet-4-6":      "claude-sonnet-4-6",
+				"  gemini-future-lite  ": "  gemini-future-lite  ",
+				"models/gemini-path-pro": "gemini-path-pro",
+				"models/gemini-path-max": "models/gemini-path-max",
+			},
+		},
+	}
+
+	mapping := AdvertisedModelMappingForAccount(account)
+
+	for _, model := range defaultAntigravityModelIDs() {
+		require.Equal(t, model, mapping[model])
+	}
+	require.Equal(t, "gemini-future-pro", mapping["gemini-future-pro"])
+	require.Equal(t, "gemini-future-lite", mapping["gemini-future-lite"])
+	require.Equal(t, "gemini-path-pro", mapping["gemini-path-pro"])
+	require.Equal(t, "gemini-path-max", mapping["gemini-path-max"])
+	require.NotContains(t, mapping, "models/gemini-path-pro")
+	require.NotContains(t, mapping, "models/gemini-path-max")
+	require.NotContains(t, mapping, "Gemini Future Pro")
+	require.NotContains(t, mapping, "gemini-3.1-pro-high")
+}
+
+func TestResolveAntigravityFallbackModelUsesAccountAllowedModels(t *testing.T) {
+	defaultAccount := &Account{Platform: PlatformAntigravity}
+	require.Equal(t, "gemini-3.5-flash-low", resolveAntigravityFallbackModel(defaultAccount, "gemini-3.5-flash-low", "gemini-pro-agent"))
+	require.Empty(t, resolveAntigravityFallbackModel(defaultAccount, "gemini-future-pro", "gemini-pro-agent"))
+	require.Empty(t, resolveAntigravityFallbackModel(defaultAccount, "gemini-3.5-flash-low", "gemini-3.5-flash-low"))
+
+	customAccount := &Account{
+		Platform: PlatformAntigravity,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"gemini-future-pro": "gemini-future-pro",
+				"Future Pro":        "gemini-future-pro",
+			},
+		},
+	}
+	require.Equal(t, "gemini-future-pro", resolveAntigravityFallbackModel(customAccount, "gemini-future-pro", "gemini-pro-agent"))
+	require.Equal(t, "gemini-future-pro", resolveAntigravityFallbackModel(customAccount, "Future Pro", "gemini-pro-agent"))
+	require.Equal(t, "gemini-3.5-flash-low", resolveAntigravityFallbackModel(customAccount, "gemini-3.5-flash-low", "gemini-pro-agent"))
+}
+
+func TestMapAntigravityModel_RequiresAllowedTarget(t *testing.T) {
 	tests := []struct {
 		name           string
 		modelMapping   map[string]any
@@ -283,16 +347,37 @@ func TestMapAntigravityModel_WildcardTargetEqualsRequest(t *testing.T) {
 		expected       string
 	}{
 		{
-			name:           "wildcard target equals request model",
-			modelMapping:   map[string]any{"claude-*": "claude-sonnet-4-5"},
-			requestedModel: "claude-sonnet-4-5",
-			expected:       "claude-sonnet-4-5",
+			name:           "wildcard target official model",
+			modelMapping:   map[string]any{"claude-*": "claude-sonnet-4-6"},
+			requestedModel: "claude-opus-4-6",
+			expected:       "claude-sonnet-4-6",
 		},
 		{
-			name:           "wildcard target differs from request model",
+			name:           "wildcard target requires self map",
+			modelMapping:   map[string]any{"gemini-*": "gemini-future-pro"},
+			requestedModel: "gemini-future-pro",
+			expected:       "",
+		},
+		{
+			name: "wildcard target allowed by self map",
+			modelMapping: map[string]any{
+				"gemini-*":          "gemini-future-pro",
+				"gemini-future-pro": "gemini-future-pro",
+			},
+			requestedModel: "gemini-future-lite",
+			expected:       "gemini-future-pro",
+		},
+		{
+			name:           "legacy alias self map is not injected into allowed set",
+			modelMapping:   map[string]any{"gemini-future-pro": "gemini-future-pro"},
+			requestedModel: "gemini-3.1-pro-high",
+			expected:       "gemini-pro-agent",
+		},
+		{
+			name:           "wildcard target legacy alias rejected without self map",
 			modelMapping:   map[string]any{"claude-*": "claude-sonnet-4-5"},
 			requestedModel: "claude-opus-4-6",
-			expected:       "claude-sonnet-4-5",
+			expected:       "",
 		},
 		{
 			name:           "wildcard no match",
@@ -307,16 +392,16 @@ func TestMapAntigravityModel_WildcardTargetEqualsRequest(t *testing.T) {
 			expected:       "claude-sonnet-4-5",
 		},
 		{
-			name:           "multiple wildcards target equals one request",
-			modelMapping:   map[string]any{"claude-*": "claude-sonnet-4-5", "gemini-*": "gemini-2.5-flash"},
+			name:           "multiple wildcards target compatibility alias rejected",
+			modelMapping:   map[string]any{"claude-*": "claude-sonnet-4-6", "gemini-*": "gemini-2.5-flash"},
 			requestedModel: "gemini-2.5-flash",
-			expected:       "gemini-2.5-flash",
+			expected:       "",
 		},
 		{
-			name:           "customtools alias falls back to normalized preview mapping",
-			modelMapping:   map[string]any{"gemini-3.1-pro-preview": "gemini-3.1-pro-high"},
+			name:           "customtools alias target official model",
+			modelMapping:   map[string]any{"gemini-3.1-pro-preview": "gemini-pro-agent"},
 			requestedModel: "gemini-3.1-pro-preview-customtools",
-			expected:       "gemini-3.1-pro-high",
+			expected:       "gemini-pro-agent",
 		},
 	}
 

@@ -255,37 +255,105 @@ func (s *AntigravityGatewayService) handleAntigravityModelRateLimitBeforePolicy(
 	return true
 }
 
-// mapAntigravityModel 获取映射后的模型名
-// 完全依赖映射配置：账户映射（通配符）→ 默认映射兜底（DefaultAntigravityModelMapping）
-// 注意：返回空字符串表示模型不被支持，调度时会过滤掉该账号
+// mapAntigravityModel 获取 Antigravity 最终发包模型名。
+// 允许集合固定为官方默认模型 + 账号原始 model_mapping 中的自映射模型。
+// 账户映射和通配符只负责把请求模型转换到允许集合，不能单独扩大允许集合。
 func mapAntigravityModel(account *Account, requestedModel string) string {
 	if account == nil {
 		return ""
 	}
-	requestedModel = strings.TrimPrefix(requestedModel, "models/")
+	requestedModel = normalizeAntigravityModelID(requestedModel)
 
-	// 先按账号/默认映射解析；Antigravity 未配置映射时会使用官方模型表。
-	if mapped, matched := account.ResolveMappedModel(requestedModel); matched {
-		return mapped
+	if mapped, matched := resolveRawAntigravityModelMapping(account, requestedModel); matched {
+		return allowAntigravityMappedTarget(account, mapped)
 	}
 
-	if account.IsModelSupported(requestedModel) {
+	if isAntigravityAllowedModel(account, requestedModel) {
 		return requestedModel
 	}
 
-	// 历史入口不进入 /models 展示，但仍可转到官方模型；自定义映射只有在
-	// 目标官方模型本身被账号支持时才放行，避免绕过账号白名单。
 	if target, ok := domain.AntigravityCompatibilityModelMapping[requestedModel]; ok {
-		if mapped, matched := account.ResolveMappedModel(target); matched {
-			return mapped
-		}
-		if account.IsModelSupported(target) {
-			return target
+		return resolveAntigravityCompatibilityTarget(account, target)
+	}
+	normalized := normalizeRequestedModelForLookup(account.Platform, requestedModel)
+	if normalized != requestedModel {
+		if target, ok := domain.AntigravityCompatibilityModelMapping[normalized]; ok {
+			return resolveAntigravityCompatibilityTarget(account, target)
 		}
 	}
 
-	// 未在映射表中配置的模型，返回空字符串（不支持）
 	return ""
+}
+
+func normalizeAntigravityModelID(model string) string {
+	return strings.TrimPrefix(strings.TrimSpace(model), "models/")
+}
+
+func resolveRawAntigravityModelMapping(account *Account, requestedModel string) (string, bool) {
+	if account == nil || requestedModel == "" {
+		return "", false
+	}
+	mapping := stringMappingFromRaw(account.Credentials["model_mapping"])
+	if len(mapping) == 0 {
+		return "", false
+	}
+	if mapped, matched := resolveRequestedModelInMapping(mapping, requestedModel); matched {
+		return normalizeAntigravityModelID(mapped), true
+	}
+	normalized := normalizeRequestedModelForLookup(account.Platform, requestedModel)
+	if normalized != requestedModel {
+		if mapped, matched := resolveRequestedModelInMapping(mapping, normalized); matched {
+			return normalizeAntigravityModelID(mapped), true
+		}
+	}
+	return "", false
+}
+
+func resolveAntigravityCompatibilityTarget(account *Account, target string) string {
+	target = normalizeAntigravityModelID(target)
+	if mapped, matched := resolveRawAntigravityModelMapping(account, target); matched {
+		return allowAntigravityMappedTarget(account, mapped)
+	}
+	if isAntigravityAllowedModel(account, target) {
+		return target
+	}
+	return ""
+}
+
+func allowAntigravityMappedTarget(account *Account, mapped string) string {
+	mapped = normalizeAntigravityModelID(mapped)
+	if isAntigravityAllowedModel(account, mapped) {
+		return mapped
+	}
+	return ""
+}
+
+func isAntigravityAllowedModel(account *Account, model string) bool {
+	model = normalizeAntigravityModelID(model)
+	if model == "" {
+		return false
+	}
+	for _, officialModel := range antigravity.OfficialModelIDs() {
+		if model == officialModel {
+			return true
+		}
+	}
+	for from, to := range stringMappingFromRaw(account.Credentials["model_mapping"]) {
+		from = normalizeAntigravityModelID(from)
+		to = normalizeAntigravityModelID(to)
+		if from != "" && from == to && model == from {
+			return true
+		}
+	}
+	return false
+}
+
+func resolveAntigravityFallbackModel(account *Account, fallbackModel string, currentModel string) string {
+	mapped := mapAntigravityModel(account, fallbackModel)
+	if mapped == "" || mapped == currentModel {
+		return ""
+	}
+	return mapped
 }
 
 // getMappedModel 获取映射后的模型名
@@ -322,11 +390,11 @@ func applyThinkingModelSuffix(mappedModel string, thinkingEnabled bool) string {
 	return mappedModel
 }
 
-// IsModelSupported 检查模型是否被支持
-// 所有 claude- 和 gemini- 前缀的模型都能通过映射或透传支持
+// IsModelSupported 检查模型是否被默认 Antigravity 模型集合支持。
+// 账号手动白名单需要通过 mapAntigravityModel(account, model) 判断。
 func (s *AntigravityGatewayService) IsModelSupported(requestedModel string) bool {
-	return strings.HasPrefix(requestedModel, "claude-") ||
-		strings.HasPrefix(requestedModel, "gemini-")
+	account := &Account{Platform: PlatformAntigravity}
+	return mapAntigravityModel(account, requestedModel) != ""
 }
 
 // TestConnectionResult 测试连接结果

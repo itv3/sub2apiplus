@@ -23,7 +23,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		return fmt.Errorf("parse request: empty request")
 	}
 
-	if account != nil && account.IsAnthropicAPIKeyPassthroughEnabled() {
+	if shouldUseAnthropicAPIKeyPassthroughRuntime(account) {
 		passthroughBody := parsed.Body.Bytes()
 		if reqModel := parsed.Model; reqModel != "" {
 			if mappedModel := account.GetMappedModel(reqModel); mappedModel != reqModel {

@@ -39,6 +39,9 @@ func (s *AccountTestService) ProxyKeeperOpenAIAccount(ctx context.Context, accou
 	if account == nil || !account.IsOpenAI() {
 		return nil, fmt.Errorf("account %d is not an OpenAI account", accountID)
 	}
+	if account.Type != AccountTypeAPIKey {
+		return nil, fmt.Errorf("account %d is not an OpenAI API key account", accountID)
+	}
 	if !account.IsSchedulable() {
 		return nil, fmt.Errorf("account %d is not schedulable", accountID)
 	}

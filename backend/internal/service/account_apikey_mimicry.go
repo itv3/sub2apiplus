@@ -22,3 +22,9 @@ func (a *Account) ShouldUseOpenAITLSFingerprint() bool {
 		a.IsOpenAIAPIKeyCodexMimicEnabled() &&
 		a.getExtraBool("enable_tls_fingerprint")
 }
+
+func shouldUseAnthropicAPIKeyPassthroughRuntime(account *Account) bool {
+	return account != nil &&
+		account.IsAnthropicAPIKeyPassthroughEnabled() &&
+		!account.IsAnthropicAPIKeyClaudeCodeMimicEnabled()
+}
