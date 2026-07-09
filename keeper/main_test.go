@@ -1021,6 +1021,18 @@ func TestKeeperSessionLooksLikeLocalClientErrorIgnoresOrdinarySandboxDiscussion(
 	}
 }
 
+func TestKeeperSessionLooksLikeLocalClientErrorIgnoresEnvironmentDependencyAnalysis(t *testing.T) {
+	session := Session{
+		ReplyText: "我只做了静态分析，没有改代码。\n\n运行环境强绑定 Linux/Docker：镜像基于 Debian，安装 bash、bubblewrap、procps 等；这更像部署约束，建议文档明确 Linux 容器限定。",
+		Summary:   "我只做了静态分析，没有改代码。运行环境强绑定 Linux/Docker：镜像基于 Debian，安装 bash、bubblewrap、procps 等。",
+		Stdout:    "Dockerfile:24:      bubblewrap \\",
+		Stderr:    "codex app-server (WebSockets)\n  listening on: ws://127.0.0.1:34519",
+	}
+	if keeperSessionLooksLikeLocalClientError(session) {
+		t.Fatal("environment dependency analysis should not be treated as local client error")
+	}
+}
+
 func TestScanPipeLinesReportsDroppedWhenPendingLimitExceeded(t *testing.T) {
 	var b strings.Builder
 	for i := 0; i < 5200; i++ {

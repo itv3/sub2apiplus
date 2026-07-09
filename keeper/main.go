@@ -26,7 +26,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var version = "0.1.146-6"
+var version = "0.1.147-1"
 
 const (
 	defaultClientTimeoutSeconds = 2700
@@ -1852,51 +1852,81 @@ func keeperSessionLocalClientErrorReason(session Session) string {
 }
 
 func keeperSessionLooksLikeLocalClientError(session Session) bool {
-	values := []string{
-		session.Error,
-		session.Summary,
-		session.ReplyText,
-		session.Stderr,
-		session.Stdout,
+	for _, value := range []string{session.Error, session.Stderr} {
+		if keeperTextHasAny(value, keeperLocalClientErrorMarkers...) {
+			return true
+		}
 	}
-	for _, value := range values {
-		if keeperTextHasAny(value,
-			"bwrap:",
-			"bubblewrap",
-			"Failed RTM_NEWADDR",
-			"RTM_NEWADDR",
-			"Operation not permitted",
-			"needs access to create user namespaces",
-			"invalid keeper proxy token format",
-			"本地只读沙箱",
-			"只读执行器失效",
-			"读取仓库的只读执行器失效",
-			"命令通道仍然被环境拦住了",
-			"命令执行器当前起不来",
-			"当前无法做基于代码的有效判断",
-			"沙箱启动任何命令前报",
-			"沙箱初始化阶段失败",
-			"沙箱初始化时报错",
-			"沙箱拦截",
-			"只读命令",
-			"无法启动任何命令",
-			"无法读取本地",
-			"无法读取 `",
-			"本地读取命令被沙箱拒绝",
-			"没法打开项目",
-			"无法可靠",
-			"无法完成代码分析",
-			"未能读取仓库",
-			"没有读取到仓库",
-			"贴出相关文件",
-			"放开读取权限",
-			"请贴文件内容",
-			"请先恢复只读访问",
-		) {
+	for _, value := range []string{session.Summary, session.ReplyText, session.Stdout} {
+		if keeperTextHasAny(value, keeperLocalClientReplyMarkers...) {
 			return true
 		}
 	}
 	return false
+}
+
+var keeperLocalClientErrorMarkers = []string{
+	"bwrap:",
+	"bubblewrap",
+	"Failed RTM_NEWADDR",
+	"RTM_NEWADDR",
+	"Operation not permitted",
+	"needs access to create user namespaces",
+	"invalid keeper proxy token format",
+	"本地只读沙箱",
+	"只读执行器失效",
+	"读取仓库的只读执行器失效",
+	"命令通道仍然被环境拦住了",
+	"命令执行器当前起不来",
+	"当前无法做基于代码的有效判断",
+	"沙箱启动任何命令前报",
+	"沙箱初始化阶段失败",
+	"沙箱初始化时报错",
+	"沙箱拦截",
+	"只读命令",
+	"无法启动任何命令",
+	"无法读取本地",
+	"无法读取 `",
+	"本地读取命令被沙箱拒绝",
+	"没法打开项目",
+	"无法可靠",
+	"无法完成代码分析",
+	"未能读取仓库",
+	"没有读取到仓库",
+	"贴出相关文件",
+	"放开读取权限",
+	"请贴文件内容",
+	"请先恢复只读访问",
+}
+
+var keeperLocalClientReplyMarkers = []string{
+	"bwrap:",
+	"Failed RTM_NEWADDR",
+	"RTM_NEWADDR",
+	"needs access to create user namespaces",
+	"invalid keeper proxy token format",
+	"本地只读沙箱",
+	"只读执行器失效",
+	"读取仓库的只读执行器失效",
+	"命令通道仍然被环境拦住了",
+	"命令执行器当前起不来",
+	"当前无法做基于代码的有效判断",
+	"沙箱启动任何命令前报",
+	"沙箱初始化阶段失败",
+	"沙箱初始化时报错",
+	"沙箱拦截",
+	"无法启动任何命令",
+	"无法读取本地",
+	"无法读取 `",
+	"本地读取命令被沙箱拒绝",
+	"没法打开项目",
+	"无法完成代码分析",
+	"未能读取仓库",
+	"没有读取到仓库",
+	"贴出相关文件",
+	"放开读取权限",
+	"请贴文件内容",
+	"请先恢复只读访问",
 }
 
 func keeperTextHasAny(value string, markers ...string) bool {
