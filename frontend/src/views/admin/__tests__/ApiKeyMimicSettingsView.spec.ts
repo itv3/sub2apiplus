@@ -6,14 +6,18 @@ import type { Account, AccountPlatform, AccountType } from '@/types'
 import ApiKeyMimicSettingsView from '../ApiKeyMimicSettingsView.vue'
 import { adminAPI } from '@/api/admin'
 
-const { updateExtraMock } = vi.hoisted(() => ({
-  updateExtraMock: vi.fn()
+const { updateExtraMock, showErrorMock, showSuccessMock, showWarningMock } = vi.hoisted(() => ({
+  updateExtraMock: vi.fn(),
+  showErrorMock: vi.fn(),
+  showSuccessMock: vi.fn(),
+  showWarningMock: vi.fn()
 }))
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
-    showError: vi.fn(),
-    showSuccess: vi.fn()
+    showError: showErrorMock,
+    showSuccess: showSuccessMock,
+    showWarning: showWarningMock
   })
 }))
 
@@ -122,6 +126,9 @@ describe('ApiKeyMimicSettingsView', () => {
     vi.mocked(adminAPI.accounts.getKeeperState).mockReset()
     vi.mocked(adminAPI.accounts.getKeeperSettings).mockReset()
     vi.mocked(adminAPI.accounts.getAvailableModels).mockReset()
+    showErrorMock.mockReset()
+    showSuccessMock.mockReset()
+    showWarningMock.mockReset()
 
     vi.mocked(adminAPI.accounts.list).mockResolvedValue(page([]))
     vi.mocked(adminAPI.accounts.getKeeperProjects).mockResolvedValue(['project-a'])
@@ -172,6 +179,100 @@ describe('ApiKeyMimicSettingsView', () => {
     expect(wrapper.text()).toContain('openai-api-key')
     expect(wrapper.text()).not.toContain('anthropic-oauth')
     expect(wrapper.text()).not.toContain('openai-upstream')
+  })
+
+  it('keeper 运行时部分失败时仍可加载账号配置', async () => {
+    vi.mocked(adminAPI.accounts.list).mockImplementation(async (_page, _pageSize, filters) => {
+      if (filters?.platform === 'anthropic') {
+        return page([
+          account(1, 'anthropic-api-key', 'anthropic', 'apikey', { keeper_keepalive_enabled: true })
+        ])
+      }
+      if (filters?.platform === 'openai') {
+        return page([
+          account(3, 'openai-api-key', 'openai', 'apikey', { keeper_keepalive_enabled: true })
+        ])
+      }
+      return page([])
+    })
+    vi.mocked(adminAPI.accounts.getKeeperProjects).mockRejectedValue(new Error('keeper unavailable'))
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const keepaliveTab = wrapper.findAll('button').find(button => button.text() === 'admin.plusEnhancements.tabs.keepalive')
+    expect(keepaliveTab).toBeTruthy()
+    await keepaliveTab!.trigger('click')
+    await flushPromises()
+
+    const settingsTab = wrapper.findAll('button').find(button => button.text() === 'admin.accountKeepalive.tabs.settings')
+    expect(settingsTab).toBeTruthy()
+    await settingsTab!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('anthropic-api-key')
+    expect(wrapper.text()).toContain('openai-api-key')
+    expect(showWarningMock).toHaveBeenCalledWith('admin.accountKeepalive.messages.runtimePartialUnavailable')
+  })
+
+  it('保活历史会单独显示完整错误详情', async () => {
+    const fullError = 'unexpected status 502 Bad Gateway: {"code":502,"message":"account 9 is not schedulable"}, request id: ee60f84f-2188-4484-ba8e-fafdd713afa3'
+    const stdout = '{"method":"error","message":"api_retry: unexpected status 502 Bad Gateway","request_id":"d06ac338-8e20-4926-ad1a-80fb15594cf9"}'
+
+    vi.mocked(adminAPI.accounts.getKeeperState).mockResolvedValue({
+      version: '0.1.146-6',
+      targets: [
+        {
+          id: 'target-9',
+          name: 'account-9',
+          account_id: 9,
+          platform: 'openai',
+          account_type: 'apikey',
+          enabled: true,
+          model: 'gpt-5',
+          sessions: [
+            {
+              id: 'session-9',
+              status: 'error',
+              model: 'gpt-5',
+              mode: 'fresh',
+              prompt: 'ping',
+              reply_text: '',
+              summary: 'unexpected status 502 Bad Gateway',
+              error: fullError,
+              stdout,
+              started_at: '2026-07-09T06:44:51Z',
+              completed_at: '2026-07-09T06:45:20Z'
+            }
+          ]
+        }
+      ]
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const keepaliveTab = wrapper.findAll('button').find(button => button.text() === 'admin.plusEnhancements.tabs.keepalive')
+    expect(keepaliveTab).toBeTruthy()
+    await keepaliveTab!.trigger('click')
+    await flushPromises()
+
+    const historyTab = wrapper.findAll('button').find(button => button.text() === 'admin.accountKeepalive.tabs.history')
+    expect(historyTab).toBeTruthy()
+    await historyTab!.trigger('click')
+    await flushPromises()
+
+    const detailsBlocks = wrapper.findAll('details')
+    const modelReplyDetails = detailsBlocks.find(details => details.find('summary').text() === 'admin.accountKeepalive.labels.modelReply')
+    const errorDetails = detailsBlocks.find(details => details.find('summary').text() === 'admin.accountKeepalive.labels.errorDetails')
+
+    expect(modelReplyDetails).toBeTruthy()
+    expect(modelReplyDetails!.text()).toContain('-')
+    expect(modelReplyDetails!.text()).not.toContain(fullError)
+    expect(errorDetails).toBeTruthy()
+    expect(errorDetails!.text()).toContain(fullError)
+    expect(errorDetails!.text()).toContain('[stdout]')
+    expect(errorDetails!.text()).toContain('d06ac338-8e20-4926-ad1a-80fb15594cf9')
   })
 
   it('关闭 mimic 时不会自动写回 TLS 指纹开关', async () => {

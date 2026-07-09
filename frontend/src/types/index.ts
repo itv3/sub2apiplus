@@ -2064,6 +2064,10 @@ export interface KeeperSession {
   reply_text?: string
   summary?: string
   error?: string
+  stdout?: string
+  stderr?: string
+  stdout_path?: string
+  stderr_path?: string
   usage?: KeeperUsage
   Usage?: KeeperUsage
   billing?: KeeperBilling

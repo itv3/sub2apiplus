@@ -118,6 +118,97 @@ func TestRecordKeeperKeepaliveRejectsPromptExecution(t *testing.T) {
 	}
 }
 
+func TestRecordKeeperKeepaliveRejectsInvalidStatus(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := &AccountHandler{}
+	router := gin.New()
+	router.POST("/accounts/:id/keepalive", h.RecordKeeperKeepalive)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/accounts/1/keepalive", bytes.NewReader([]byte(`{"status":"done"}`)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "invalid status") {
+		t.Fatalf("body = %s, want invalid status error", body)
+	}
+}
+
+func TestRecordKeeperKeepaliveRejectsNegativeUsage(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	h := &AccountHandler{}
+	router := gin.New()
+	router.POST("/accounts/:id/keepalive", h.RecordKeeperKeepalive)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/accounts/1/keepalive", bytes.NewReader([]byte(`{"status":"success","input_tokens":-1}`)))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "token usage must be non-negative") {
+		t.Fatalf("body = %s, want token validation error", body)
+	}
+}
+
+func TestRecordKeeperKeepaliveSanitizesAndTruncatesFields(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	adminSvc := newStubAdminService()
+	h := &AccountHandler{adminService: adminSvc}
+	router := gin.New()
+	router.POST("/accounts/:id/keepalive", h.RecordKeeperKeepalive)
+
+	summary := strings.Repeat("s", keeperKeepaliveSummaryMaxRunes+25)
+	detail := strings.Repeat("e", keeperKeepaliveErrorMaxRunes+25)
+	body := map[string]any{
+		"status":        " SUCCESS ",
+		"session_id":    "  session-1  ",
+		"model":         "  gpt-5  ",
+		"summary":       summary,
+		"error":         detail,
+		"input_tokens":  1,
+		"output_tokens": 2,
+		"total_tokens":  3,
+		"total_cost":    0.12,
+	}
+	payload, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("marshal payload: %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/accounts/9/keepalive", bytes.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if adminSvc.lastUpdateAccountExtra.calls != 1 {
+		t.Fatalf("UpdateAccountExtra calls = %d, want 1", adminSvc.lastUpdateAccountExtra.calls)
+	}
+	if got := adminSvc.lastUpdateAccountExtra.accountID; got != 9 {
+		t.Fatalf("accountID = %d, want 9", got)
+	}
+	if got := adminSvc.lastUpdateAccountExtra.updates["keeper_last_status"]; got != "success" {
+		t.Fatalf("keeper_last_status = %#v, want success", got)
+	}
+	if got := adminSvc.lastUpdateAccountExtra.updates["keeper_last_session_id"]; got != "session-1" {
+		t.Fatalf("keeper_last_session_id = %#v, want session-1", got)
+	}
+	if got := adminSvc.lastUpdateAccountExtra.updates["keeper_last_summary"].(string); len([]rune(got)) != keeperKeepaliveSummaryMaxRunes {
+		t.Fatalf("summary length = %d, want %d", len([]rune(got)), keeperKeepaliveSummaryMaxRunes)
+	}
+	if got := adminSvc.lastUpdateAccountExtra.updates["keeper_last_error"].(string); len([]rune(got)) != keeperKeepaliveErrorMaxRunes {
+		t.Fatalf("error length = %d, want %d", len([]rune(got)), keeperKeepaliveErrorMaxRunes)
+	}
+}
+
 func TestListKeeperProjectsFiltersInvalidEntries(t *testing.T) {
 	t.Setenv("SUB2APIPLUS_KEEPER_PROJECTS", "alpha, /root/workspace, beta/gamma, .., beta, alpha, windows\\\\path, ., foo..bar")
 

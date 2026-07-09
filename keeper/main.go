@@ -26,7 +26,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-var version = "0.1.146-5"
+var version = "0.1.146-6"
 
 const (
 	defaultClientTimeoutSeconds = 2700

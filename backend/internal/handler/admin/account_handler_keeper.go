@@ -4,7 +4,9 @@ package admin
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -69,6 +71,20 @@ type RecordKeeperKeepaliveRequest struct {
 	TotalTokens              int64   `json:"total_tokens"`
 	TotalCost                float64 `json:"total_cost"`
 	LocalClientError         bool    `json:"local_client_error"`
+}
+
+const (
+	keeperKeepaliveSummaryMaxRunes   = 500
+	keeperKeepaliveErrorMaxRunes     = 16000
+	keeperKeepaliveSessionIDMaxRunes = 255
+	keeperKeepaliveModelMaxRunes     = 255
+)
+
+var keeperKeepaliveAllowedStatuses = map[string]struct{}{
+	"success": {},
+	"error":   {},
+	"skipped": {},
+	"running": {},
 }
 
 // GET /api/v1/internal/keeper/accounts
@@ -398,8 +414,8 @@ func (h *AccountHandler) RecordKeeperKeepalive(c *gin.Context) {
 		response.BadRequest(c, "keeper keepalive execution must run in sidecar")
 		return
 	}
-	if strings.TrimSpace(req.Status) == "" {
-		response.BadRequest(c, "status or prompt is required")
+	if err := normalizeKeeperKeepaliveRecordRequest(&req); err != nil {
+		response.BadRequest(c, err.Error())
 		return
 	}
 
@@ -476,6 +492,48 @@ func keeperBillingResponse(cost *service.CostBreakdown, rateMultiplier float64) 
 		"pricing_source":      "sub2apiplus",
 		"rate_multiplier":     rateMultiplier,
 	}
+}
+
+func normalizeKeeperKeepaliveRecordRequest(req *RecordKeeperKeepaliveRequest) error {
+	if req == nil {
+		return nil
+	}
+
+	req.Model = truncateKeeperKeepaliveText(strings.TrimSpace(req.Model), keeperKeepaliveModelMaxRunes)
+	req.Prompt = strings.TrimSpace(req.Prompt)
+	req.Status = strings.ToLower(strings.TrimSpace(req.Status))
+	req.SessionID = truncateKeeperKeepaliveText(strings.TrimSpace(req.SessionID), keeperKeepaliveSessionIDMaxRunes)
+	req.Summary = truncateKeeperKeepaliveText(strings.TrimSpace(req.Summary), keeperKeepaliveSummaryMaxRunes)
+	req.Error = truncateKeeperKeepaliveText(strings.TrimSpace(req.Error), keeperKeepaliveErrorMaxRunes)
+
+	if req.Status == "" {
+		return errors.New("status is required")
+	}
+	if _, ok := keeperKeepaliveAllowedStatuses[req.Status]; !ok {
+		return errors.New("invalid status")
+	}
+	if req.InputTokens < 0 ||
+		req.OutputTokens < 0 ||
+		req.CachedInputTokens < 0 ||
+		req.CacheCreationInputTokens < 0 ||
+		req.TotalTokens < 0 {
+		return errors.New("token usage must be non-negative")
+	}
+	if math.IsNaN(req.TotalCost) || math.IsInf(req.TotalCost, 0) || req.TotalCost < 0 {
+		return errors.New("total_cost must be a non-negative finite number")
+	}
+	return nil
+}
+
+func truncateKeeperKeepaliveText(value string, maxRunes int) string {
+	if maxRunes <= 0 || value == "" {
+		return ""
+	}
+	runes := []rune(value)
+	if len(runes) <= maxRunes {
+		return value
+	}
+	return string(runes[:maxRunes])
 }
 
 func extraBool(extra map[string]any, key string) bool {

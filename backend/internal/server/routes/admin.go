@@ -115,19 +115,26 @@ func RegisterAdminRoutes(
 		registerAffiliateRoutes(admin, h)
 	}
 
-	registerKeeperInternalRoutes(v1, h, adminAuth)
+	registerKeeperInternalRoutes(v1, h, adminAuth, settingService)
 }
 
-func registerKeeperInternalRoutes(v1 *gin.RouterGroup, h *handler.Handlers, adminAuth middleware.AdminAuthMiddleware) {
+func registerKeeperInternalRoutes(
+	v1 *gin.RouterGroup,
+	h *handler.Handlers,
+	adminAuth middleware.AdminAuthMiddleware,
+	settingService *service.SettingService,
+) {
 	keeper := v1.Group("/internal/keeper")
+	keeperAdmin := keeper.Group("")
+	keeperAdmin.Use(keeperInternalContextBypass(), gin.HandlerFunc(adminAuth), middleware.AdminComplianceGuard(settingService))
 	{
-		keeper.GET("/accounts", keeperInternalOrAdminAuth(adminAuth), h.Admin.Account.ListKeeperAccounts)
-		keeper.GET("/projects", keeperInternalOrAdminAuth(adminAuth), h.Admin.Account.ListKeeperProjects)
-		keeper.GET("/state", keeperInternalOrAdminAuth(adminAuth), h.Admin.Account.GetKeeperState)
-		keeper.GET("/settings", keeperInternalOrAdminAuth(adminAuth), h.Admin.Account.ProxyKeeperSettings)
-		keeper.POST("/settings", keeperInternalOrAdminAuth(adminAuth), h.Admin.Account.ProxyKeeperSettings)
-		keeper.POST("/run", keeperInternalOrAdminAuth(adminAuth), h.Admin.Account.RunKeeperTarget)
-		keeper.GET("/accounts/:id/models", keeperInternalOrAdminAuth(adminAuth), h.Admin.Account.GetAvailableModels)
+		keeperAdmin.GET("/accounts", h.Admin.Account.ListKeeperAccounts)
+		keeperAdmin.GET("/projects", h.Admin.Account.ListKeeperProjects)
+		keeperAdmin.GET("/state", h.Admin.Account.GetKeeperState)
+		keeperAdmin.GET("/settings", h.Admin.Account.ProxyKeeperSettings)
+		keeperAdmin.POST("/settings", h.Admin.Account.ProxyKeeperSettings)
+		keeperAdmin.POST("/run", h.Admin.Account.RunKeeperTarget)
+		keeperAdmin.GET("/accounts/:id/models", h.Admin.Account.GetAvailableModels)
 		keeper.POST("/accounts/:id/keepalive", keeperInternalTokenAuth(), h.Admin.Account.RecordKeeperKeepalive)
 		keeper.GET("/openai/accounts/:id/*proxy_path", keeperProxyTokenAuth(service.PlatformOpenAI), h.Admin.Account.ProxyKeeperOpenAIAccount)
 		keeper.POST("/openai/accounts/:id/*proxy_path", keeperProxyTokenAuth(service.PlatformOpenAI), h.Admin.Account.ProxyKeeperOpenAIAccount)
@@ -136,14 +143,12 @@ func registerKeeperInternalRoutes(v1 *gin.RouterGroup, h *handler.Handlers, admi
 	}
 }
 
-func keeperInternalOrAdminAuth(adminAuth middleware.AdminAuthMiddleware) gin.HandlerFunc {
+func keeperInternalContextBypass() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		if keeperInternalTokenMatches(c) {
 			c.Set(service.KeeperInternalAuthContextKey, true)
-			c.Next()
-			return
 		}
-		gin.HandlerFunc(adminAuth)(c)
+		c.Next()
 	}
 }
 

@@ -32,6 +32,12 @@ func codexDesktopCapturedTLSProfile() *tlsfingerprint.Profile {
 	}
 }
 
+func codexCLIRS0125TLSProfile() *tlsfingerprint.Profile {
+	return &tlsfingerprint.Profile{
+		Name: "Built-in Default (Node.js 24.x)",
+	}
+}
+
 func resolveOpenAIAPIKeyCodexTLSProfile(account *Account, tlsFPProfileService *TLSFingerprintProfileService) *tlsfingerprint.Profile {
 	if account == nil || !account.ShouldUseOpenAITLSFingerprint() {
 		return nil
@@ -41,6 +47,9 @@ func resolveOpenAIAPIKeyCodexTLSProfile(account *Account, tlsFPProfileService *T
 		if profile := tlsFPProfileService.GetProfileByID(profileID); profile != nil {
 			return profile
 		}
+	}
+	if resolveOpenAIAPIKeyCodexMimicClientProfile(account).ID == openAIAPIKeyCodexMimicClientCLIRS0125 {
+		return codexCLIRS0125TLSProfile()
 	}
 	return codexDesktopCapturedTLSProfile()
 }

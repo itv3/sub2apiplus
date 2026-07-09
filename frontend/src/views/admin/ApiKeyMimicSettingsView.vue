@@ -312,6 +312,10 @@
                         <summary class="cursor-pointer text-primary-600 dark:text-primary-400">{{ t('admin.accountKeepalive.labels.modelReply') }}</summary>
                         <pre class="mt-2 max-h-72 w-full overflow-y-auto whitespace-pre-wrap break-words rounded border border-gray-200 bg-gray-50 p-2 text-xs dark:border-dark-700 dark:bg-dark-800">{{ sessionReply(row.session) || '-' }}</pre>
                       </details>
+                      <details v-if="sessionErrorDetail(row.session)" class="mt-2">
+                        <summary class="cursor-pointer text-red-600 dark:text-red-400">{{ t('admin.accountKeepalive.labels.errorDetails') }}</summary>
+                        <pre class="mt-2 max-h-72 w-full overflow-y-auto whitespace-pre-wrap break-words rounded border border-red-200 bg-red-50 p-2 text-xs text-red-700 dark:border-red-900/50 dark:bg-red-950/30 dark:text-red-200">{{ sessionErrorDetail(row.session) }}</pre>
+                      </details>
                     </td>
                   </tr>
                   <tr v-if="keeperHistoryRows.length === 0">
@@ -735,22 +739,42 @@ async function loadMimicAccounts() {
 async function loadKeepaliveAccounts() {
   try {
     keepaliveLoading.value = true
-    const [anthropicAccounts, openaiAccounts, projects, state, settings] = await Promise.all([
+    const [anthropicAccounts, openaiAccounts] = await Promise.all([
       fetchAccounts('anthropic', 'apikey'),
-      fetchAccounts('openai', 'apikey'),
+      fetchAccounts('openai', 'apikey')
+    ])
+    const accounts = [...anthropicAccounts, ...openaiAccounts]
+      .filter(account => account.type === 'apikey' && (account.platform === 'anthropic' || account.platform === 'openai'))
+      .sort((a, b) => b.id - a.id)
+
+    keepaliveProjectOptions.value = []
+    keeperState.value = {}
+    keeperVersion.value = ''
+    promptGuard.value = ''
+    promptBankRows.value = []
+    keepaliveRows.value = accounts.map(account => ({ id: account.id, account, form: buildKeepaliveForm(account, []) }))
+
+    const [projectsResult, stateResult, settingsResult] = await Promise.allSettled([
       adminAPI.accounts.getKeeperProjects(),
       adminAPI.accounts.getKeeperState(),
       adminAPI.accounts.getKeeperSettings()
     ])
+
+    const projects = projectsResult.status === 'fulfilled' ? projectsResult.value : []
+    const state = stateResult.status === 'fulfilled' ? (stateResult.value || {}) : {}
+    const settings = settingsResult.status === 'fulfilled' ? (settingsResult.value || {}) : {}
+
     keepaliveProjectOptions.value = projects
-    keeperState.value = state || {}
+    keeperState.value = state
     keeperVersion.value = String(settings?.version || state?.version || '')
     promptGuard.value = String(settings?.prompt_guard || state?.prompt_guard || '')
     promptBankRows.value = normalizePromptBank(Array.isArray(settings?.prompt_bank) ? settings.prompt_bank : (Array.isArray(state?.prompt_bank) ? state.prompt_bank : []))
-    keepaliveRows.value = [...anthropicAccounts, ...openaiAccounts]
-      .filter(account => account.type === 'apikey' && (account.platform === 'anthropic' || account.platform === 'openai'))
-      .sort((a, b) => b.id - a.id)
-      .map(account => ({ id: account.id, account, form: buildKeepaliveForm(account, projects) }))
+    keepaliveRows.value = accounts.map(account => ({ id: account.id, account, form: buildKeepaliveForm(account, projects) }))
+
+    if (projectsResult.status === 'rejected' || stateResult.status === 'rejected' || settingsResult.status === 'rejected') {
+      appStore.showWarning(t('admin.accountKeepalive.messages.runtimePartialUnavailable'))
+    }
+
     await Promise.allSettled(keepaliveRows.value.map(row => loadModelOptions(row)))
     scheduleHistoryScrollMetrics()
   } catch (error: any) {
@@ -1043,6 +1067,28 @@ function sessionStatusClass(session: KeeperSession): string {
 
 function sessionError(session: KeeperSession): string {
   return String(session?.error || session?.Error || '').trim()
+}
+
+function sessionOutputValue(session: KeeperSession, snakeKey: string, pascalKey: string): string {
+  return String((session as Record<string, unknown>)?.[snakeKey] || (session as Record<string, unknown>)?.[pascalKey] || '').trim()
+}
+
+function appendDistinctSessionBlock(parts: string[], label: string, value: string): void {
+  const text = value.trim()
+  if (!text) return
+  if (parts.some(part => part.includes(text) || text.includes(part))) return
+  parts.push(`${label}\n${text}`)
+}
+
+function sessionErrorDetail(session: KeeperSession): string {
+  const parts: string[] = []
+  const error = sessionError(session)
+  if (error) parts.push(error)
+
+  appendDistinctSessionBlock(parts, '[stdout]', sessionOutputValue(session, 'stdout', 'Stdout'))
+  appendDistinctSessionBlock(parts, '[stderr]', sessionOutputValue(session, 'stderr', 'Stderr'))
+
+  return parts.join('\n\n')
 }
 
 function sessionPrompt(session: KeeperSession): string {

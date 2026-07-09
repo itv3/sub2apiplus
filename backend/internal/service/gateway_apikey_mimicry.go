@@ -52,9 +52,13 @@ func (s *GatewayService) buildAnthropicAPIKeyCLIMimicRequest(
 ) (*http.Request, []byte, error) {
 	body = s.applyAnthropicAPIKeyClaudeCodeMimicryToBody(ctx, c, account, body)
 	body = enforceCacheControlLimit(body)
-	extraBetas := anthropicAPIKeyMimicExtraBetas(gjson.GetBytes(body, "model").String())
+	modelID := gjson.GetBytes(body, "model").String()
+	extraBetas := anthropicAPIKeyMimicExtraBetas(modelID)
 	effectiveDropSet = removeTokensFromSetCopy(effectiveDropSet, extraBetas...)
 	finalBetaHeader := stripBetaTokensWithSet(mergeAnthropicBeta(extraBetas, defaultAPIKeyBetaHeader(body)), effectiveDropSet)
+	if blockErr := s.checkBetaPolicyBlockForHeader(ctx, finalBetaHeader, account, modelID); blockErr != nil {
+		return nil, nil, blockErr
+	}
 	if sanitized, changed := sanitizeAnthropicBodyForBetaTokens(body, finalBetaHeader); changed {
 		body = sanitized
 	}
@@ -116,7 +120,7 @@ func (s *GatewayService) applyAnthropicAPIKeyClaudeCodeMimicryToBody(
 		systemRewritten = true
 	}
 
-	metadataUserID := buildAPIKeyMimicMetadataUserID(account, body, safeClientHeaders(c))
+	metadataUserID := buildAPIKeyMimicMetadataUserID(account, body, safeClientHeaders(c), safeClientIP(c), getAPIKeyIDFromContext(c))
 	body, _ = normalizeClaudeOAuthRequestBody(body, model, claudeOAuthNormalizeOptions{
 		stripSystemCacheControl: !systemRewritten,
 		injectMetadata:          metadataUserID != "",
@@ -128,7 +132,7 @@ func (s *GatewayService) applyAnthropicAPIKeyClaudeCodeMimicryToBody(
 	return body
 }
 
-func buildAPIKeyMimicMetadataUserID(account *Account, body []byte, clientHeaders http.Header) string {
+func buildAPIKeyMimicMetadataUserID(account *Account, body []byte, clientHeaders http.Header, clientIP string, apiKeyID int64) string {
 	if account == nil {
 		return ""
 	}
@@ -136,9 +140,21 @@ func buildAPIKeyMimicMetadataUserID(account *Account, body []byte, clientHeaders
 		return ""
 	}
 
-	clientDiscriminator := ""
+	userAgent := ""
 	if clientHeaders != nil {
-		clientDiscriminator = NormalizeSessionUserAgent(clientHeaders.Get("User-Agent"))
+		userAgent = clientHeaders.Get("User-Agent")
+	}
+	normalizedUserAgent := NormalizeSessionUserAgent(userAgent)
+	clientDiscriminator := ""
+	if strings.TrimSpace(clientIP) != "" || normalizedUserAgent != "" || apiKeyID > 0 {
+		clientDiscriminator = sessionContextDiscriminator(&SessionContext{
+			ClientIP:  strings.TrimSpace(clientIP),
+			UserAgent: userAgent,
+			APIKeyID:  apiKeyID,
+		})
+	}
+	if clientDiscriminator == "" {
+		clientDiscriminator = normalizedUserAgent
 	}
 	if clientDiscriminator == "" {
 		clientDiscriminator = strconv.FormatInt(account.ID, 10)
@@ -175,7 +191,11 @@ func (s *GatewayService) buildAnthropicAPIKeyCLICountTokensMimicRequest(
 	effectiveDropSet map[string]struct{},
 ) (*http.Request, []byte, error) {
 	body = sanitizeCountTokensRequestBody(body)
+	modelID := gjson.GetBytes(body, "model").String()
 	finalBetaHeader := stripBetaTokensWithSet(defaultAPIKeyCountTokensMimicBetaHeader(body), effectiveDropSet)
+	if blockErr := s.checkBetaPolicyBlockForHeader(ctx, finalBetaHeader, account, modelID); blockErr != nil {
+		return nil, nil, blockErr
+	}
 	if sanitized, changed := sanitizeAnthropicBodyForBetaTokens(body, finalBetaHeader); changed {
 		body = sanitized
 	}
@@ -204,4 +224,11 @@ func safeClientHeaders(c *gin.Context) http.Header {
 		return http.Header{}
 	}
 	return c.Request.Header
+}
+
+func safeClientIP(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	return strings.TrimSpace(c.ClientIP())
 }

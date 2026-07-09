@@ -66,6 +66,24 @@ func TestResolveOpenAIAPIKeyCodexTLSProfileUsesCapturedDesktopDefault(t *testing
 	require.Equal(t, []string{"h2", "http/1.1"}, got.ALPNProtocols)
 }
 
+func TestResolveOpenAIAPIKeyCodexTLSProfileUsesCLIDefaultWhenRequested(t *testing.T) {
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Extra: map[string]any{
+			"openai_apikey_mimic_codex_cli":     true,
+			"openai_apikey_mimic_codex_profile": "cli_rs_0_125",
+			"enable_tls_fingerprint":            true,
+		},
+	}
+
+	got := resolveOpenAIAPIKeyCodexTLSProfile(account, &TLSFingerprintProfileService{})
+	require.NotNil(t, got)
+	require.Equal(t, "Built-in Default (Node.js 24.x)", got.Name)
+	require.Empty(t, got.CipherSuites)
+	require.Empty(t, got.Extensions)
+}
+
 func TestDoOpenAIHTTPUpstreamUsesCapturedDesktopTLSProfileByDefault(t *testing.T) {
 	account := &Account{
 		ID:       1,
@@ -105,4 +123,28 @@ func TestDoOpenAIHTTPUpstreamUsesCapturedDesktopTLSProfileByDefault(t *testing.T
 	require.True(t, recorder.doWithTLSCalled)
 	require.NotNil(t, recorder.lastTLSProfile)
 	require.Equal(t, "captured-codex", recorder.lastTLSProfile.Name)
+}
+
+func TestDoOpenAIHTTPUpstreamUsesCLITLSProfileWhenRequested(t *testing.T) {
+	account := &Account{
+		ID:       2,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Extra: map[string]any{
+			"openai_apikey_mimic_codex_cli":     true,
+			"openai_apikey_mimic_codex_profile": "cli_rs_0_125",
+			"enable_tls_fingerprint":            true,
+		},
+	}
+	req, err := http.NewRequest(http.MethodPost, "https://api.openai.com/v1/responses", strings.NewReader("{}"))
+	require.NoError(t, err)
+
+	recorder := &openAIHTTPUpstreamChoiceRecorder{}
+	resp, err := doOpenAIHTTPUpstream(recorder, req, "", account, &TLSFingerprintProfileService{})
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.False(t, recorder.doCalled)
+	require.True(t, recorder.doWithTLSCalled)
+	require.NotNil(t, recorder.lastTLSProfile)
+	require.Equal(t, "Built-in Default (Node.js 24.x)", recorder.lastTLSProfile.Name)
 }

@@ -72,6 +72,11 @@ type stubAdminService struct {
 		sortOrder string
 		calls     int
 	}
+	lastUpdateAccountExtra struct {
+		accountID int64
+		updates   map[string]any
+		calls     int
+	}
 	mu sync.Mutex
 }
 
@@ -417,6 +422,15 @@ func (s *stubAdminService) UpdateAccount(ctx context.Context, id int64, input *s
 }
 
 func (s *stubAdminService) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	copied := make(map[string]any, len(updates))
+	for key, value := range updates {
+		copied[key] = value
+	}
+	s.lastUpdateAccountExtra.accountID = id
+	s.lastUpdateAccountExtra.updates = copied
+	s.lastUpdateAccountExtra.calls++
 	return nil
 }
 

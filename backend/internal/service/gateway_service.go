@@ -3319,6 +3319,9 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	if beta, ok := account.HeaderOverrideValue("anthropic-beta"); ok {
 		finalBetaHeader, finalBetaShouldSet = beta, true
 	}
+	if blockErr := s.checkBetaPolicyBlockForHeader(ctx, finalBetaHeader, account, modelID); blockErr != nil {
+		return nil, nil, blockErr
+	}
 
 	// 能力维度 body sanitize：与最终 anthropic-beta header 对称
 	if sanitized, changed := sanitizeAnthropicBodyForBetaTokens(body, finalBetaHeader); changed {
@@ -4041,6 +4044,10 @@ func (s *GatewayService) checkBetaPolicyBlockForTokens(ctx context.Context, toke
 		}
 	}
 	return nil
+}
+
+func (s *GatewayService) checkBetaPolicyBlockForHeader(ctx context.Context, header string, account *Account, model string) *BetaBlockedError {
+	return s.checkBetaPolicyBlockForTokens(ctx, parseAnthropicBetaHeader(header), account, model)
 }
 
 func buildBetaTokenSet(tokens []string) map[string]struct{} {
@@ -6979,6 +6986,9 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	// 账号覆写了 anthropic-beta 时，覆写值即最终上游值：净化以覆写值为准
 	if beta, ok := account.HeaderOverrideValue("anthropic-beta"); ok {
 		finalBetaHeader, finalBetaShouldSet = beta, true
+	}
+	if blockErr := s.checkBetaPolicyBlockForHeader(ctx, finalBetaHeader, account, modelID); blockErr != nil {
+		return nil, nil, blockErr
 	}
 
 	// 能力维度 body sanitize：与最终 anthropic-beta header 对称

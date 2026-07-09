@@ -3292,6 +3292,7 @@ export default {
         todaySuccessFailure: '今日成功 / 失败',
         runningNow: '当前运行中',
         modelReply: '模型回复',
+        errorDetails: '错误详情',
         noHistory: '还没有会话历史。',
         historyScroll: '会话历史横向滚动',
         account: '账号',
@@ -3370,6 +3371,7 @@ export default {
       },
       messages: {
         loadFailed: '加载账号保活配置失败',
+        runtimePartialUnavailable: 'keeper 运行时部分数据不可用，仍可继续编辑账号保活配置',
         saveSuccess: '已保存账号保活配置',
         saveFailed: '保存账号保活配置失败',
         selectAccount: '请选择账号',

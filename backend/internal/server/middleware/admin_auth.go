@@ -30,6 +30,11 @@ func adminAuth(
 	settingService *service.SettingService,
 ) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		if shouldBypassAdminProtection(c) {
+			c.Next()
+			return
+		}
+
 		// WebSocket upgrade requests cannot set Authorization headers in browsers.
 		// For admin WebSocket endpoints (e.g. Ops realtime), allow passing the JWT via
 		// Sec-WebSocket-Protocol (subprotocol list) using a prefixed token item:
@@ -75,6 +80,10 @@ func adminAuth(
 		// 无有效认证信息
 		AbortWithError(c, 401, "UNAUTHORIZED", "Authorization required")
 	}
+}
+
+func shouldBypassAdminProtection(c *gin.Context) bool {
+	return c != nil && c.GetBool(service.KeeperInternalAuthContextKey)
 }
 
 func isWebSocketUpgradeRequest(c *gin.Context) bool {

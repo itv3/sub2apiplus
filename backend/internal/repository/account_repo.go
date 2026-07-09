@@ -57,11 +57,13 @@ var schedulerNeutralExtraKeyPrefixes = []string{
 	"codex_5h_",
 	"codex_7d_",
 	"passive_usage_",
+	"keeper_last_",
 }
 
 var schedulerNeutralExtraKeys = map[string]struct{}{
 	"codex_usage_updated_at":     {},
 	"session_window_utilization": {},
+	"keeper_local_client_error":  {},
 }
 
 const postgresParameterBatchSize = 50000

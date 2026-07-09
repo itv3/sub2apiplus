@@ -3218,6 +3218,7 @@ export default {
         todaySuccessFailure: 'Today success / failure',
         runningNow: 'Running now',
         modelReply: 'Model reply',
+        errorDetails: 'Error details',
         noHistory: 'No session history yet.',
         historyScroll: 'Session history horizontal scroll',
         account: 'Account',
@@ -3296,6 +3297,7 @@ export default {
       },
       messages: {
         loadFailed: 'Failed to load account keepalive settings',
+        runtimePartialUnavailable: 'Some keeper runtime data is unavailable, but account keepalive settings can still be edited',
         saveSuccess: 'Account keepalive settings saved',
         saveFailed: 'Failed to save account keepalive settings',
         selectAccount: 'Please select an account',
