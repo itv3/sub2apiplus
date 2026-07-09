@@ -82,6 +82,9 @@ func (a *Account) modelRateLimitKeysForRequest(ctx context.Context, requestedMod
 	case PlatformAntigravity:
 		requestedKey := strings.TrimSpace(requestedModel)
 		keys = appendModelRateLimitKey(keys, requestedKey)
+		if enabled, ok := ThinkingEnabledFromContext(ctx); ok {
+			keys = appendModelRateLimitKey(keys, applyThinkingModelSuffix(requestedKey, enabled))
+		}
 		keys = appendModelRateLimitKey(keys, normalizeAntigravityModelName(requestedKey))
 		keys = appendAntigravityCompatibilityRateLimitKeys(ctx, keys, modelKey)
 		keys = appendAntigravityGeminiFamilyRateLimitKey(keys)
