@@ -96,11 +96,19 @@ func TestCopyProxyRequestHeadersStripsCredentialsAndHopByHopHeaders(t *testing.T
 	require.Equal(t, "tools-2024-05-16", dst.Get("Anthropic-Beta"))
 }
 
-func TestKeeperProxyAppliesAccountHeaderOverridesAfterAllowlist(t *testing.T) {
+func TestKeeperProxyOfficialClientOverrideProtectsIdentityHeaders(t *testing.T) {
 	src := http.Header{
-		"Authorization":    []string{"Bearer keeper"},
-		"Cookie":           []string{"sid=admin"},
-		"X-Stainless-Lang": []string{"client-lang"},
+		"Authorization":            []string{"Bearer keeper"},
+		"Cookie":                   []string{"sid=admin"},
+		"Thread-Id":                []string{"thread-1"},
+		"X-App":                    []string{"claude-code"},
+		"X-Claude-Code-Session-Id": []string{"claude-session"},
+		"X-Client-Request-Id":      []string{"client-request"},
+		"X-Codex-Beta-Features":    []string{"beta-a"},
+		"X-Codex-Window-Id":        []string{"window-1"},
+		"X-Stainless-Lang":         []string{"client-lang"},
+		"X-Stainless-Retry-Count":  []string{"0"},
+		"X-Stainless-Timeout":      []string{"600"},
 	}
 	dst := http.Header{}
 	copyProxyRequestHeaders(dst, src)
@@ -117,9 +125,17 @@ func TestKeeperProxyAppliesAccountHeaderOverridesAfterAllowlist(t *testing.T) {
 			},
 		},
 	}
-	applyAccountTestHeaderOverrides(account, dst)
+	applyAccountTestHeaderOverridesForOfficialClientProxy(account, dst)
 
-	require.Equal(t, "go", dst.Get("X-Stainless-Lang"))
+	require.Equal(t, "thread-1", dst.Get("Thread-Id"))
+	require.Equal(t, "claude-code", dst.Get("X-App"))
+	require.Equal(t, "claude-session", dst.Get("X-Claude-Code-Session-Id"))
+	require.Equal(t, "client-request", dst.Get("X-Client-Request-Id"))
+	require.Equal(t, "beta-a", dst.Get("X-Codex-Beta-Features"))
+	require.Equal(t, "window-1", dst.Get("X-Codex-Window-Id"))
+	require.Equal(t, "client-lang", dst.Get("X-Stainless-Lang"))
+	require.Equal(t, "0", dst.Get("X-Stainless-Retry-Count"))
+	require.Equal(t, "600", dst.Get("X-Stainless-Timeout"))
 	require.Empty(t, dst.Get("Authorization"))
 	require.Empty(t, dst.Get("Cookie"))
 }

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -580,7 +581,7 @@ func TestGetAvailableModels_ErrorAndGlobalListBranches(t *testing.T) {
 	require.Equal(t, int64(1), okRepo.listAllCalls.Load())
 }
 
-func TestGetAvailableModels_AntigravityUsesRawAccountMappingForAdvertisedList(t *testing.T) {
+func TestGetAvailableModels_AntigravityAdvertisesOfficialModelsOnly(t *testing.T) {
 	resetGatewayHotpathStatsForTest()
 
 	groupID := int64(12)
@@ -592,8 +593,8 @@ func TestGetAvailableModels_AntigravityUsesRawAccountMappingForAdvertisedList(t 
 					Platform: PlatformAntigravity,
 					Credentials: map[string]any{
 						"model_mapping": map[string]any{
-							"gemini-3.5-flash-extra-low": "gemini-3.5-flash-extra-low",
-							"gpt-oss-120b-medium":        "gpt-oss-120b-medium",
+							"custom-upstream-a":          "custom-upstream-a",
+							"gemini-3.5-flash-extra-low": "custom-upstream-b",
 						},
 					},
 				},
@@ -607,7 +608,9 @@ func TestGetAvailableModels_AntigravityUsesRawAccountMappingForAdvertisedList(t 
 	}
 
 	models := svc.GetAvailableModels(context.Background(), &groupID, PlatformAntigravity)
-	require.Equal(t, []string{"gemini-3.5-flash-extra-low", "gpt-oss-120b-medium"}, models)
+	want := defaultAntigravityModelIDs()
+	sort.Strings(want)
+	require.Equal(t, want, models)
 }
 
 func TestGatewayHotpathHelpers_CacheTTLAndStickyContext(t *testing.T) {

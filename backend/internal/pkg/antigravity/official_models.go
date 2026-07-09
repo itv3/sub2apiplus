@@ -4,6 +4,8 @@ import "strings"
 
 // OfficialModelDescriptor 描述 Antigravity 官方客户端抓包确认的发包模型。
 // 抓包基线：Antigravity Hub 2.2.1，2026-07。
+// 注意：MODEL_PLACEHOLDER_M* 是 fetchAvailableModels 抓包原样返回的 model enum，
+// 不是本仓库为了脱敏临时造出的占位符；只有重新抓包确认变化后才应替换。
 type OfficialModelDescriptor struct {
 	ID             string `json:"id"`
 	DisplayName    string `json:"display_name"`

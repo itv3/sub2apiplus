@@ -1057,6 +1057,12 @@ func (c *codexPersistentExecutor) Execute(ctx context.Context, req persistentExe
 		result.Stderr = files.stderrBuf.String()
 		return result, err
 	}
+	if err := repairCodexArg0Permissions(req.Layout); err != nil {
+		result.Stderr = files.stderrBuf.String()
+		result.ErrorText = err.Error()
+		result.Summary = summarizeResult(result.ErrorText, result.Stdout, result.Stderr)
+		return result, err
+	}
 	result = c.commandResult(req)
 	c.keeper.updateClientStatus(req.Account, clientStatusExecuting, "Codex 常驻客户端执行中")
 	runCtx, cancel := context.WithCancel(ctx)
@@ -1196,6 +1202,10 @@ func (c *codexPersistentExecutor) ensureStarted(ctx context.Context, req persist
 	if err != nil {
 		return fmt.Errorf("找不到命令：%s", c.path)
 	}
+	path, err = prepareCodexLaunchPath(path, req.Layout)
+	if err != nil {
+		return fmt.Errorf("准备 Codex 运行时失败: %w", err)
+	}
 	listenURL, err := freeLoopbackWebSocketURL()
 	if err != nil {
 		return err
@@ -1250,6 +1260,143 @@ func (c *codexPersistentExecutor) ensureStarted(ctx context.Context, req persist
 	}
 	c.keeper.updateClientStatus(req.Account, clientStatusConnected, "Codex 常驻客户端已连接")
 	return nil
+}
+
+func prepareCodexLaunchPath(globalPath string, layout runtimeLayout) (string, error) {
+	resolvedPath, err := filepath.EvalSymlinks(globalPath)
+	if err != nil {
+		return "", err
+	}
+	releaseDir, err := codexReleaseDirFromBinary(resolvedPath)
+	if err != nil {
+		return "", err
+	}
+	localReleaseDir := filepath.Join(layout.CodexHome, "standalone", filepath.Base(releaseDir))
+	localBinaryPath := filepath.Join(localReleaseDir, "bin", filepath.Base(resolvedPath))
+	if info, err := os.Stat(localBinaryPath); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0111 != 0 {
+		if err := syncCodexReleaseRootPerms(releaseDir, localReleaseDir); err != nil {
+			return "", err
+		}
+		return localBinaryPath, nil
+	}
+	if err := copyCodexReleaseTree(releaseDir, localReleaseDir); err != nil {
+		return "", err
+	}
+	return localBinaryPath, nil
+}
+
+func codexReleaseDirFromBinary(path string) (string, error) {
+	if filepath.Base(path) == "" || filepath.Base(path) != "codex" {
+		return "", fmt.Errorf("无效的 Codex 可执行文件路径: %s", path)
+	}
+	binDir := filepath.Dir(path)
+	releaseDir := filepath.Dir(binDir)
+	if filepath.Base(binDir) != "bin" || filepath.Base(releaseDir) == "." || filepath.Base(releaseDir) == string(filepath.Separator) {
+		return "", fmt.Errorf("无法识别 Codex release 目录: %s", path)
+	}
+	return releaseDir, nil
+}
+
+func copyCodexReleaseTree(srcDir, dstDir string) error {
+	srcInfo, err := os.Stat(srcDir)
+	if err != nil {
+		return err
+	}
+	if info, err := os.Stat(dstDir); err == nil && info.IsDir() {
+		return os.Chmod(dstDir, srcInfo.Mode().Perm())
+	}
+	if err := os.MkdirAll(filepath.Dir(dstDir), 0755); err != nil {
+		return err
+	}
+	tmpDir, err := os.MkdirTemp(filepath.Dir(dstDir), filepath.Base(dstDir)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpDir, srcInfo.Mode().Perm()); err != nil {
+		return err
+	}
+	ok := false
+	defer func() {
+		if !ok {
+			_ = os.RemoveAll(tmpDir)
+		}
+	}()
+	if err := filepath.Walk(srcDir, func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(srcDir, path)
+		if err != nil {
+			return err
+		}
+		targetPath := filepath.Join(tmpDir, rel)
+		switch {
+		case info.Mode()&os.ModeSymlink != 0:
+			linkTarget, err := os.Readlink(path)
+			if err != nil {
+				return err
+			}
+			return os.Symlink(linkTarget, targetPath)
+		case info.IsDir():
+			return os.MkdirAll(targetPath, info.Mode().Perm())
+		default:
+			return copyFileWithMode(path, targetPath, info.Mode().Perm())
+		}
+	}); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpDir, dstDir); err != nil {
+		if info, statErr := os.Stat(dstDir); statErr == nil && info.IsDir() {
+			ok = true
+			return nil
+		}
+		return err
+	}
+	ok = true
+	return nil
+}
+
+func syncCodexReleaseRootPerms(srcDir, dstDir string) error {
+	srcInfo, err := os.Stat(srcDir)
+	if err != nil {
+		return err
+	}
+	return os.Chmod(dstDir, srcInfo.Mode().Perm())
+}
+
+func repairCodexArg0Permissions(layout runtimeLayout) error {
+	arg0Dir := filepath.Join(layout.CodexHome, "tmp", "arg0")
+	info, err := os.Stat(arg0Dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("Codex sandbox 参数目录不是文件夹: %s", arg0Dir)
+	}
+	return os.Chmod(arg0Dir, 0755)
+}
+
+func copyFileWithMode(srcPath, dstPath string, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0755); err != nil {
+		return err
+	}
+	srcFile, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+	dstFile, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+	if _, err := io.Copy(dstFile, srcFile); err != nil {
+		return err
+	}
+	return dstFile.Close()
 }
 
 func (c *codexPersistentExecutor) commandResult(req persistentExecution) persistentExecutionResult {

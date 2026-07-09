@@ -56,6 +56,11 @@ func (r *defaultOpenAIWSProtocolResolver) Resolve(account *Account) OpenAIWSProt
 	if !wsCfg.Enabled {
 		return openAIWSHTTPDecision("global_disabled")
 	}
+	// API Key mimic 当前只保证 HTTP/SSE 请求形态与 TLS 指纹一致；
+	// 在 WS 链路补齐同等保护前，统一强制回退 HTTP。
+	if account.IsOpenAIAPIKeyCodexMimicEnabled() {
+		return openAIWSHTTPDecision("apikey_mimic_http_only")
+	}
 	if account.IsOpenAIOAuth() {
 		if !wsCfg.OAuthEnabled {
 			return openAIWSHTTPDecision("oauth_disabled")

@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -83,6 +85,185 @@ func TestTargetStateUsesAccountIDAndMigratesLegacyNameKey(t *testing.T) {
 	}
 	if got := k.state.Targets["2"]; got != second {
 		t.Fatal("second target was not stored under its account id")
+	}
+}
+
+func TestSnapshotOverviewIncludesLastStatusAndLastError(t *testing.T) {
+	startedAt := time.Date(2026, time.July, 9, 12, 34, 44, 0, time.UTC)
+	completedAt := startedAt.Add(21 * time.Second)
+	k := &Keeper{
+		cfg: Config{
+			ProjectsRoot: "/workspace/projects",
+			Targets: []TargetConfig{{
+				ID:          "3",
+				Name:        "BWG_OpenAI",
+				AccountID:   3,
+				Platform:    "openai",
+				AccountType: "apikey",
+				Executor:    "codex",
+				Model:       "gpt-5.5",
+				Enabled:     true,
+			}},
+		},
+		state: State{Targets: map[string]*TargetState{
+			"3": {
+				Name:                   "BWG_OpenAI",
+				AccountID:              3,
+				Model:                  "gpt-5.5",
+				Enabled:                true,
+				LastKeepaliveStartedAt: startedAt,
+				ConsecutiveFailures:    2,
+				LastStatus:             "error",
+				LastMessageSummary:     "当前命令环境启动沙箱时报 Permission denied",
+				LastError:              "当前命令环境启动沙箱时报 Permission denied",
+				Sessions: []Session{{
+					ID:          "20260709T123444.452416264",
+					AccountID:   3,
+					TargetName:  "BWG_OpenAI",
+					Model:       "gpt-5.5",
+					Status:      "error",
+					Summary:     "当前命令环境启动沙箱时报 Permission denied",
+					Error:       "当前命令环境启动沙箱时报 Permission denied",
+					StartedAt:   startedAt,
+					CompletedAt: completedAt,
+				}},
+			},
+		}},
+		location: time.UTC,
+	}
+
+	k.mu.Lock()
+	snapshot := k.snapshotLocked()
+	k.mu.Unlock()
+
+	raw, err := json.Marshal(snapshot)
+	if err != nil {
+		t.Fatalf("marshal snapshot: %v", err)
+	}
+
+	var payload struct {
+		Overview []struct {
+			AccountID     int64  `json:"account_id"`
+			LastStatus    string `json:"last_status"`
+			LastError     string `json:"last_error"`
+			StatusDetail  string `json:"status_detail"`
+			CurrentStatus string `json:"current_status"`
+		} `json:"overview"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("unmarshal snapshot: %v", err)
+	}
+	if len(payload.Overview) != 1 {
+		t.Fatalf("overview rows = %d, want 1", len(payload.Overview))
+	}
+	row := payload.Overview[0]
+	if row.AccountID != 3 {
+		t.Fatalf("AccountID = %d, want 3", row.AccountID)
+	}
+	if row.LastStatus != "error" {
+		t.Fatalf("LastStatus = %q, want error", row.LastStatus)
+	}
+	if row.LastError != "当前命令环境启动沙箱时报 Permission denied" {
+		t.Fatalf("LastError = %q", row.LastError)
+	}
+	if row.StatusDetail != row.LastError {
+		t.Fatalf("StatusDetail = %q, want match LastError", row.StatusDetail)
+	}
+	if row.CurrentStatus != "异常" {
+		t.Fatalf("CurrentStatus = %q, want 异常", row.CurrentStatus)
+	}
+}
+
+func TestPrepareCodexLaunchPathCopiesReleaseIntoRuntime(t *testing.T) {
+	srcRoot := t.TempDir()
+	releaseDir := filepath.Join(srcRoot, "standalone", "0.142.5-aarch64-unknown-linux-musl")
+	if err := os.MkdirAll(filepath.Join(releaseDir, "bin"), 0755); err != nil {
+		t.Fatalf("mkdir bin: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(releaseDir, "codex-resources"), 0755); err != nil {
+		t.Fatalf("mkdir resources: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(releaseDir, "bin", "codex"), []byte("#!/bin/sh\necho ok\n"), 0755); err != nil {
+		t.Fatalf("write codex: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(releaseDir, "codex-resources", "bwrap"), []byte("bwrap"), 0755); err != nil {
+		t.Fatalf("write bwrap: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(releaseDir, "codex-package.json"), []byte("{}"), 0644); err != nil {
+		t.Fatalf("write package json: %v", err)
+	}
+	if err := os.Symlink("bin/codex", filepath.Join(releaseDir, "codex")); err != nil {
+		t.Fatalf("symlink root codex: %v", err)
+	}
+
+	layout := runtimeLayout{
+		CodexHome: filepath.Join(t.TempDir(), "worker", ".codex"),
+	}
+	got, err := prepareCodexLaunchPath(filepath.Join(releaseDir, "bin", "codex"), layout)
+	if err != nil {
+		t.Fatalf("prepareCodexLaunchPath: %v", err)
+	}
+
+	want := filepath.Join(layout.CodexHome, "standalone", filepath.Base(releaseDir), "bin", "codex")
+	if got != want {
+		t.Fatalf("launch path = %q, want %q", got, want)
+	}
+	if _, err := os.Stat(got); err != nil {
+		t.Fatalf("stat copied codex: %v", err)
+	}
+	releaseInfo, err := os.Stat(filepath.Dir(filepath.Dir(got)))
+	if err != nil {
+		t.Fatalf("stat copied release dir: %v", err)
+	}
+	if gotPerm := releaseInfo.Mode().Perm(); gotPerm != 0755 {
+		t.Fatalf("copied release dir perm = %o, want 755", gotPerm)
+	}
+	if err := os.Chmod(filepath.Dir(filepath.Dir(got)), 0700); err != nil {
+		t.Fatalf("chmod copied release dir: %v", err)
+	}
+	got, err = prepareCodexLaunchPath(filepath.Join(releaseDir, "bin", "codex"), layout)
+	if err != nil {
+		t.Fatalf("prepareCodexLaunchPath second call: %v", err)
+	}
+	releaseInfo, err = os.Stat(filepath.Dir(filepath.Dir(got)))
+	if err != nil {
+		t.Fatalf("restat copied release dir: %v", err)
+	}
+	if gotPerm := releaseInfo.Mode().Perm(); gotPerm != 0755 {
+		t.Fatalf("repaired release dir perm = %o, want 755", gotPerm)
+	}
+	linkTarget, err := os.Readlink(filepath.Join(filepath.Dir(filepath.Dir(got)), "codex"))
+	if err != nil {
+		t.Fatalf("read copied symlink: %v", err)
+	}
+	if linkTarget != "bin/codex" {
+		t.Fatalf("copied symlink target = %q, want bin/codex", linkTarget)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(filepath.Dir(got)), "codex-resources", "bwrap")); err != nil {
+		t.Fatalf("stat copied bwrap: %v", err)
+	}
+}
+
+func TestRepairCodexArg0PermissionsSets755(t *testing.T) {
+	layout := runtimeLayout{
+		CodexHome: filepath.Join(t.TempDir(), "worker", ".codex"),
+	}
+	arg0Dir := filepath.Join(layout.CodexHome, "tmp", "arg0")
+	if err := os.MkdirAll(arg0Dir, 0700); err != nil {
+		t.Fatalf("mkdir arg0: %v", err)
+	}
+	if err := os.Chmod(arg0Dir, 0700); err != nil {
+		t.Fatalf("chmod arg0: %v", err)
+	}
+	if err := repairCodexArg0Permissions(layout); err != nil {
+		t.Fatalf("repairCodexArg0Permissions: %v", err)
+	}
+	info, err := os.Stat(arg0Dir)
+	if err != nil {
+		t.Fatalf("stat arg0: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0755 {
+		t.Fatalf("arg0 perm = %o, want 755", got)
 	}
 }
 
@@ -601,6 +782,231 @@ func TestRunTargetNonFailureErrorDoesNotIncrementConsecutiveFailures(t *testing.
 	}
 	if len(state.Sessions) == 0 || state.Sessions[0].Status != "error" {
 		t.Fatalf("session not recorded as error: %+v", state.Sessions)
+	}
+}
+
+func TestRunTargetTreatsSandboxBlockedReplyAsError(t *testing.T) {
+	tempDir := t.TempDir()
+	target := TargetConfig{
+		Name:            "BWG_OpenAI",
+		AccountID:       3,
+		Platform:        "openai",
+		AccountType:     "apikey",
+		Model:           "gpt-5.5",
+		Enabled:         true,
+		Executor:        "codex",
+		IntervalMinutes: 8,
+	}
+	executor := &testPersistentExecutor{
+		started: make(chan persistentExecution, 1),
+		release: make(chan testPersistentResult, 1),
+	}
+	k := &Keeper{
+		cfg: Config{
+			RuntimeRoot: filepath.Join(tempDir, "runtime"),
+			StatePath:   filepath.Join(tempDir, "state.json"),
+		},
+		state:               State{Targets: map[string]*TargetState{}},
+		location:            time.UTC,
+		httpClient:          &http.Client{Timeout: time.Millisecond},
+		persistentExecutors: map[string]*managedPersistentExecutor{},
+		persistentFactory: func(*Keeper, TargetConfig) (accountPersistentExecutor, error) {
+			return executor, nil
+		},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		k.runTarget(context.Background(), target)
+		close(done)
+	}()
+
+	var req persistentExecution
+	select {
+	case req = <-executor.started:
+	case <-time.After(time.Second):
+		t.Fatal("persistent executor did not start")
+	}
+	executor.release <- testPersistentResult{
+		result: persistentExecutionResult{
+			ReplyText: "无法读取 `keeper.example.yaml`：当前沙箱启动任何命令前报 `bwrap: loopback: Failed RTM_NEWADDR`。未修改代码。",
+			Summary:   "无法读取 `keeper.example.yaml`：当前沙箱启动任何命令前报 `bwrap: loopback: Failed RTM_NEWADDR`。未修改代码。",
+			Stderr:    "Codex's Linux sandbox uses bubblewrap and needs access to create user namespaces.",
+		},
+	}
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("runTarget did not finish")
+	}
+
+	state := k.state.Targets["3"]
+	if state == nil {
+		t.Fatal("target state missing")
+	}
+	index := findSessionIndexByID(state.Sessions, req.SessionID)
+	if index < 0 {
+		t.Fatalf("session %q missing from %+v", req.SessionID, state.Sessions)
+	}
+	if got := state.Sessions[index].Status; got != "error" {
+		t.Fatalf("session status = %q, want error", got)
+	}
+	if !state.Sessions[index].LocalClientError {
+		t.Fatalf("session LocalClientError = false, want true")
+	}
+	if got := state.LastStatus; got != "error" {
+		t.Fatalf("LastStatus = %q, want error", got)
+	}
+	if got := state.ConsecutiveFailures; got != 1 {
+		t.Fatalf("ConsecutiveFailures = %d, want 1", got)
+	}
+	if state.DailyKeepaliveCount != 0 {
+		t.Fatalf("DailyKeepaliveCount = %d, want 0", state.DailyKeepaliveCount)
+	}
+}
+
+func TestRunTargetTreatsReadonlyExecutorFailureReplyAsError(t *testing.T) {
+	tempDir := t.TempDir()
+	target := TargetConfig{
+		Name:            "BWG_OpenAI",
+		AccountID:       3,
+		Platform:        "openai",
+		AccountType:     "apikey",
+		Model:           "gpt-5.5",
+		Enabled:         true,
+		Executor:        "codex",
+		IntervalMinutes: 8,
+	}
+	executor := &testPersistentExecutor{
+		started: make(chan persistentExecution, 1),
+		release: make(chan testPersistentResult, 1),
+	}
+	k := &Keeper{
+		cfg: Config{
+			RuntimeRoot: filepath.Join(tempDir, "runtime"),
+			StatePath:   filepath.Join(tempDir, "state.json"),
+		},
+		state:               State{Targets: map[string]*TargetState{}},
+		location:            time.UTC,
+		httpClient:          &http.Client{Timeout: time.Millisecond},
+		persistentExecutors: map[string]*managedPersistentExecutor{},
+		persistentFactory: func(*Keeper, TargetConfig) (accountPersistentExecutor, error) {
+			return executor, nil
+		},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		k.runTarget(context.Background(), target)
+		close(done)
+	}()
+
+	var req persistentExecution
+	select {
+	case req = <-executor.started:
+	case <-time.After(time.Second):
+		t.Fatal("persistent executor did not start")
+	}
+	executor.release <- testPersistentResult{
+		result: persistentExecutionResult{
+			ReplyText: "当前无法做基于代码的有效判断：本会话读取仓库的只读执行器失效。若必须先给一个常见风险，通常是 WebSocket/流式输出缺少背压与断连清理。",
+			Summary:   "当前无法做基于代码的有效判断：本会话读取仓库的只读执行器失效。若必须先给一个常见风险，通常是 WebSocket/流式输出缺少背压与断连清理。",
+			Stderr:    "codex app-server (WebSockets)",
+		},
+	}
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("runTarget did not finish")
+	}
+
+	state := k.state.Targets["3"]
+	if state == nil {
+		t.Fatal("target state missing")
+	}
+	index := findSessionIndexByID(state.Sessions, req.SessionID)
+	if index < 0 {
+		t.Fatalf("session %q missing from %+v", req.SessionID, state.Sessions)
+	}
+	if got := state.Sessions[index].Status; got != "error" {
+		t.Fatalf("session status = %q, want error", got)
+	}
+	if !state.Sessions[index].LocalClientError {
+		t.Fatalf("session LocalClientError = false, want true")
+	}
+}
+
+func TestRunTargetTreatsReadonlyPermissionRefusalReplyAsError(t *testing.T) {
+	tempDir := t.TempDir()
+	target := TargetConfig{
+		Name:            "BWG_OpenAI",
+		AccountID:       3,
+		Platform:        "openai",
+		AccountType:     "apikey",
+		Model:           "gpt-5.5",
+		Enabled:         true,
+		Executor:        "codex",
+		IntervalMinutes: 8,
+	}
+	executor := &testPersistentExecutor{
+		started: make(chan persistentExecution, 1),
+		release: make(chan testPersistentResult, 1),
+	}
+	k := &Keeper{
+		cfg: Config{
+			RuntimeRoot: filepath.Join(tempDir, "runtime"),
+			StatePath:   filepath.Join(tempDir, "state.json"),
+		},
+		state:               State{Targets: map[string]*TargetState{}},
+		location:            time.UTC,
+		httpClient:          &http.Client{Timeout: time.Millisecond},
+		persistentExecutors: map[string]*managedPersistentExecutor{},
+		persistentFactory: func(*Keeper, TargetConfig) (accountPersistentExecutor, error) {
+			return executor, nil
+		},
+	}
+
+	done := make(chan struct{})
+	go func() {
+		k.runTarget(context.Background(), target)
+		close(done)
+	}()
+
+	var req persistentExecution
+	select {
+	case req = <-executor.started:
+	case <-time.After(time.Second):
+		t.Fatal("persistent executor did not start")
+	}
+	executor.release <- testPersistentResult{
+		result: persistentExecutionResult{
+			ReplyText: "我现在无法验证代码：当前只读环境的本地读取命令被沙箱拒绝，没法打开项目里的 API / `workspacePath` 实现。请贴出相关文件或放开读取权限，我再按你要求在 150 字内说明。",
+			Summary:   "我现在无法验证代码：当前只读环境的本地读取命令被沙箱拒绝，没法打开项目里的 API / `workspacePath` 实现。请贴出相关文件或放开读取权限，我再按你要求在 150 字内说明。",
+			Stderr:    "codex app-server (WebSockets)",
+		},
+	}
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("runTarget did not finish")
+	}
+
+	state := k.state.Targets["3"]
+	if state == nil {
+		t.Fatal("target state missing")
+	}
+	index := findSessionIndexByID(state.Sessions, req.SessionID)
+	if index < 0 {
+		t.Fatalf("session %q missing from %+v", req.SessionID, state.Sessions)
+	}
+	if got := state.Sessions[index].Status; got != "error" {
+		t.Fatalf("session status = %q, want error", got)
+	}
+	if !state.Sessions[index].LocalClientError {
+		t.Fatalf("session LocalClientError = false, want true")
 	}
 }
 

@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { defineComponent } from 'vue'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 
-const { updateAccountMock, checkMixedChannelRiskMock, authIsSimpleMode } = vi.hoisted(() => ({
+const { updateAccountMock, checkMixedChannelRiskMock, authIsSimpleMode, fetchAntigravityOfficialModelsMock } = vi.hoisted(() => ({
   updateAccountMock: vi.fn(),
   checkMixedChannelRiskMock: vi.fn(),
-  authIsSimpleMode: { value: true }
+  authIsSimpleMode: { value: true },
+  fetchAntigravityOfficialModelsMock: vi.fn().mockResolvedValue([])
 }))
 
 vi.mock('@/stores/app', () => ({
@@ -43,6 +44,14 @@ vi.mock('@/api/admin', () => ({
 vi.mock('@/api/admin/accounts', () => ({
   getAntigravityDefaultModelMapping: vi.fn()
 }))
+
+vi.mock('@/composables/useModelWhitelist', async () => {
+  const actual = await vi.importActual<typeof import('@/composables/useModelWhitelist')>('@/composables/useModelWhitelist')
+  return {
+    ...actual,
+    fetchAntigravityOfficialModels: fetchAntigravityOfficialModelsMock
+  }
+})
 
 vi.mock('vue-i18n', async () => {
   const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
@@ -302,6 +311,7 @@ function mountModal(account = buildAccount()) {
 describe('EditAccountModal', () => {
   beforeEach(() => {
     authIsSimpleMode.value = true
+    fetchAntigravityOfficialModelsMock.mockClear()
   })
 
   it('reopening the same account rehydrates the OpenAI whitelist from props', async () => {
@@ -457,6 +467,13 @@ describe('EditAccountModal', () => {
     expect(updateAccountMock).toHaveBeenCalledTimes(1)
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_responses_mode).toBe('force_responses')
     expect(updateAccountMock.mock.calls[0]?.[1]?.extra?.openai_responses_supported).toBe(false)
+  })
+
+  it('opens antigravity edit dialog with fresh official model cache', async () => {
+    mountModal(buildAntigravityAccount())
+    await flushPromises()
+
+    expect(fetchAntigravityOfficialModelsMock).toHaveBeenCalledTimes(1)
   })
 
   it('clears OpenAI APIKey Responses override when set back to auto', async () => {

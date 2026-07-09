@@ -495,50 +495,13 @@ func defaultAntigravityModelIDs() []string {
 	return antigravity.OfficialModelIDs()
 }
 
-func collapseAntigravityAdvertisedMapping(mapping map[string]string) map[string]string {
-	if len(mapping) == 0 {
-		return nil
-	}
-
-	nonIdentityTargets := make(map[string]struct{})
-	result := make(map[string]string, len(mapping))
-	for rawFrom, rawTo := range mapping {
-		from := strings.TrimSpace(rawFrom)
-		to := strings.TrimSpace(rawTo)
-		if from == "" || to == "" {
-			continue
-		}
-		result[from] = to
-		if from != to {
-			nonIdentityTargets[to] = struct{}{}
-		}
-	}
-
-	if len(nonIdentityTargets) == 0 {
-		return result
-	}
-
-	for from, to := range result {
-		if from != to {
-			continue
-		}
-		if _, ok := nonIdentityTargets[to]; ok {
-			delete(result, from)
-		}
-	}
-	return result
-}
-
 // AdvertisedModelMappingForAccount 返回模型列表接口应暴露给用户的模型。
-// Antigravity 有自定义映射时使用原始账号配置，避免把 GetModelMapping 注入的兼容别名暴露给客户端。
+// Antigravity 的手动同步结果可保存为真实上游模型，但 /models 广告口径始终收敛到官方 8 模型。
 func AdvertisedModelMappingForAccount(account *Account) map[string]string {
 	if account == nil {
 		return nil
 	}
 	if account.Platform == PlatformAntigravity {
-		if mapping := stringMappingFromRaw(account.Credentials["model_mapping"]); len(mapping) > 0 {
-			return collapseAntigravityAdvertisedMapping(mapping)
-		}
 		defaults := defaultAntigravityModelIDs()
 		mapping := make(map[string]string, len(defaults))
 		for _, model := range defaults {

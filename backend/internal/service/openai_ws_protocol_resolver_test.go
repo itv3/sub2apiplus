@@ -122,6 +122,20 @@ func TestOpenAIWSProtocolResolver_Resolve(t *testing.T) {
 		require.Equal(t, "apikey_disabled", decision.Reason)
 	})
 
+	t.Run("API Key mimic 账号强制走HTTP", func(t *testing.T) {
+		account := &Account{
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeAPIKey,
+			Extra: map[string]any{
+				"openai_apikey_mimic_codex_cli":                 true,
+				"openai_apikey_responses_websockets_v2_enabled": true,
+			},
+		}
+		decision := NewOpenAIWSProtocolResolver(baseCfg).Resolve(account)
+		require.Equal(t, OpenAIUpstreamTransportHTTPSSE, decision.Transport)
+		require.Equal(t, "apikey_mimic_http_only", decision.Reason)
+	})
+
 	t.Run("未知认证类型回退HTTP", func(t *testing.T) {
 		account := &Account{
 			Platform: PlatformOpenAI,

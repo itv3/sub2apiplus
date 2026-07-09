@@ -216,6 +216,91 @@ func TestAccountTestService_OpenAIShadowUsesParentCredentialsAndShadowModel(t *t
 	require.Contains(t, recorder.Body.String(), `"success":true`)
 }
 
+func TestAccountTestService_OpenAIShadowMimicProtectsFinalHeaders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := newTestContext()
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid_shadow_mimic"}},
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"stop after request capture"}}`)),
+	}}
+
+	parentID := int64(301)
+	parent := &Account{
+		ID:       parentID,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Status:   StatusActive,
+		Credentials: map[string]any{
+			"access_token":               "parent-token",
+			credKeyHeaderOverrideEnabled: true,
+			credKeyHeaderOverrides: map[string]any{
+				"user-agent":   "bad-client",
+				"originator":   "bad-originator",
+				"x-request-id": "shadow-kept",
+			},
+		},
+	}
+	shadow := &Account{
+		ID:              302,
+		Platform:        PlatformOpenAI,
+		Type:            AccountTypeAPIKey,
+		Status:          StatusActive,
+		ParentAccountID: &parentID,
+		Concurrency:     1,
+		Extra: map[string]any{
+			"openai_apikey_mimic_codex_cli": true,
+		},
+	}
+
+	repo := &openAIAccountTestRepo{
+		mockAccountRepoForGemini: mockAccountRepoForGemini{
+			accountsByID: map[int64]*Account{
+				parentID: parent,
+				302:      shadow,
+			},
+		},
+	}
+	svc := &AccountTestService{
+		accountRepo:         repo,
+		httpUpstream:        upstream,
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+		cfg:                 &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+	}
+
+	err := svc.TestAccountConnection(ctx, shadow.ID, "gpt-5.4", "", "")
+	require.Error(t, err)
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, codexDesktopUserAgent, upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, codexDesktopOriginator, upstream.lastReq.Header.Get("originator"))
+	require.Empty(t, upstream.lastReq.Header.Get("X-Request-Id"))
+}
+
+func TestAccountTestService_HeaderOverridesWithProtectedIdentityPreservesOfficialHeaders(t *testing.T) {
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			credKeyHeaderOverrideEnabled: true,
+			credKeyHeaderOverrides: map[string]any{
+				"user-agent":      "bad-client",
+				"originator":      "bad-originator",
+				"accept-language": "ordinary-header-kept",
+			},
+		},
+	}
+	h := http.Header{}
+	h.Set("User-Agent", codexDesktopUserAgent)
+	h.Set("Originator", codexDesktopOriginator)
+
+	applyAccountTestHeaderOverridesWithProtectedIdentity(account, h, true)
+
+	require.Equal(t, codexDesktopUserAgent, h.Get("User-Agent"))
+	require.Equal(t, codexDesktopOriginator, h.Get("Originator"))
+	require.Equal(t, []string{"ordinary-header-kept"}, h[resolveWireCasing("accept-language")])
+}
+
 func TestAccountTestService_OpenAIStreamEOFBeforeCompletedFails(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, recorder := newTestContext()

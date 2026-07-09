@@ -110,7 +110,7 @@ func (h *AccountHandler) ListKeeperProjects(c *gin.Context) {
 	projects := make([]string, 0)
 	for _, part := range strings.Split(raw, ",") {
 		project := strings.TrimSpace(part)
-		if project == "" {
+		if !isValidKeeperProjectName(project) {
 			continue
 		}
 		if _, ok := seen[project]; ok {
@@ -121,6 +121,26 @@ func (h *AccountHandler) ListKeeperProjects(c *gin.Context) {
 	}
 	sort.Strings(projects)
 	response.Success(c, KeeperProjectsResponse{Projects: projects})
+}
+
+func isValidKeeperProjectName(project string) bool {
+	project = strings.TrimSpace(project)
+	if project == "" {
+		return false
+	}
+	if project == "." || project == ".." {
+		return false
+	}
+	if strings.Contains(project, "..") {
+		return false
+	}
+	if strings.HasPrefix(project, "/") || strings.HasPrefix(project, "\\") {
+		return false
+	}
+	if strings.Contains(project, "/") || strings.Contains(project, "\\") {
+		return false
+	}
+	return true
 }
 
 // GET /api/v1/internal/keeper/state

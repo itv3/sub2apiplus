@@ -2,8 +2,10 @@ package admin
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -113,5 +115,32 @@ func TestRecordKeeperKeepaliveRejectsPromptExecution(t *testing.T) {
 	}
 	if body := rec.Body.String(); !strings.Contains(body, "keeper keepalive execution must run in sidecar") {
 		t.Fatalf("body = %s, want sidecar-only error", body)
+	}
+}
+
+func TestListKeeperProjectsFiltersInvalidEntries(t *testing.T) {
+	t.Setenv("SUB2APIPLUS_KEEPER_PROJECTS", "alpha, /root/workspace, beta/gamma, .., beta, alpha, windows\\\\path, ., foo..bar")
+
+	gin.SetMode(gin.TestMode)
+	h := &AccountHandler{}
+	router := gin.New()
+	router.GET("/projects", h.ListKeeperProjects)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/projects", nil)
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body=%s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var resp struct {
+		Data KeeperProjectsResponse `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if got, want := resp.Data.Projects, []string{"alpha", "beta"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("projects = %v, want %v", got, want)
 	}
 }

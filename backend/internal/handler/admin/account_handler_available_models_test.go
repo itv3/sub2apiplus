@@ -6,10 +6,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -255,7 +257,7 @@ func TestAccountHandlerGetAvailableModels_OpenAISparkShadowReturnsMappingModels(
 	}, ids, "影子可用模型由 model_mapping 派生（非写死）")
 }
 
-func TestAccountHandlerGetAvailableModels_AntigravityCollapsesWhitelistAndDisplayMappings(t *testing.T) {
+func TestAccountHandlerGetAvailableModels_AntigravityAdvertisesOfficialModelsOnly(t *testing.T) {
 	svc := &availableModelsAdminService{
 		stubAdminService: newStubAdminService(),
 		account: service.Account{
@@ -293,7 +295,9 @@ func TestAccountHandlerGetAvailableModels_AntigravityCollapsesWhitelistAndDispla
 	for _, model := range resp.Data {
 		ids = append(ids, model.ID)
 	}
-	require.Equal(t, []string{"Claude Sonnet 4.6", "Gemini 3.1 Pro High"}, ids)
+	want := antigravity.OfficialModelIDs()
+	sort.Strings(want)
+	require.Equal(t, want, ids)
 }
 
 func TestAccountHandlerSyncUpstreamModels_ConfigErrorReturnsBadRequest(t *testing.T) {

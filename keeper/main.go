@@ -149,6 +149,7 @@ type Session struct {
 	LastMessagePath   string    `json:"last_message_path,omitempty"`
 	Status            string    `json:"status"`
 	Error             string    `json:"error,omitempty"`
+	LocalClientError  bool      `json:"local_client_error,omitempty"`
 	Usage             Usage     `json:"usage"`
 	Billing           Billing   `json:"billing"`
 	StartedAt         time.Time `json:"started_at"`
@@ -304,6 +305,8 @@ type overviewRow struct {
 	CurrentStatus       string            `json:"current_status"`
 	StatusClass         string            `json:"status_class"`
 	StatusDetail        string            `json:"status_detail,omitempty"`
+	LastStatus          string            `json:"last_status,omitempty"`
+	LastError           string            `json:"last_error,omitempty"`
 	LastMessageSummary  string            `json:"last_message_summary,omitempty"`
 	ConsecutiveFailures int               `json:"consecutive_failures"`
 	ExecutionCount      int               `json:"execution_count"`
@@ -577,6 +580,7 @@ func (k *Keeper) runTarget(ctx context.Context, target TargetConfig) {
 	}
 	if err != nil {
 		countAsFailure := runErrorCountsAsFailure(err)
+		result.LocalClientError = keeperSessionLooksLikeLocalClientError(result)
 		result.ID = session.ID
 		result.TargetName = target.Name
 		result.AccountID = target.AccountID
@@ -621,6 +625,31 @@ func (k *Keeper) runTarget(ctx context.Context, target TargetConfig) {
 	state.Sessions[sessionIndex].Model = firstNonEmpty(result.Model, target.Model)
 	state.Sessions[sessionIndex].Mode = normalizeMode(target.Mode)
 	state.Sessions[sessionIndex].Prompt = prompt
+	state.Sessions[sessionIndex].LocalClientError = false
+	if localClientError := keeperSessionLocalClientErrorReason(state.Sessions[sessionIndex]); localClientError != "" {
+		state.Sessions[sessionIndex].Status = "error"
+		state.Sessions[sessionIndex].Error = localClientError
+		state.Sessions[sessionIndex].LocalClientError = true
+		state.Sessions[sessionIndex].StartedAt = startedAt
+		state.Sessions[sessionIndex].CompletedAt = completedAt
+		if state.Sessions[sessionIndex].LatencyMS == 0 {
+			state.Sessions[sessionIndex].LatencyMS = completedAt.Sub(startedAt).Milliseconds()
+		}
+		state.Running = hasRunningSession(state.Sessions)
+		state.LastError = localClientError
+		state.LastStatus = "error"
+		state.LastMessageSummary = firstNonEmpty(state.Sessions[sessionIndex].Summary, state.Sessions[sessionIndex].ReplyText, localClientError)
+		state.ConsecutiveFailures++
+		state.NextRunAt = completedAt.Add(time.Duration(maxInt(target.IntervalMinutes, 1)) * time.Minute)
+		k.trimSessionsLocked(state)
+		k.saveStateLocked()
+		recorded := state.Sessions[sessionIndex]
+		k.mu.Unlock()
+		if billing, err := k.recordKeepalive(context.Background(), target, recorded); err == nil && billing != nil {
+			k.applySessionBilling(target, session.ID, *billing)
+		}
+		return
+	}
 	state.Sessions[sessionIndex].Status = "success"
 	state.Sessions[sessionIndex].StartedAt = startedAt
 	state.Sessions[sessionIndex].CompletedAt = completedAt
@@ -672,6 +701,7 @@ func (k *Keeper) recordKeepalive(ctx context.Context, target TargetConfig, sessi
 		CacheCreationInputTokens: int64(session.Usage.CacheCreationTokens),
 		TotalTokens:              int64(session.Usage.TotalTokens),
 		TotalCost:                session.Billing.TotalCost,
+		LocalClientError:         session.LocalClientError,
 	}
 	return k.postKeepalive(ctx, target.AccountID, body)
 }
@@ -1342,6 +1372,8 @@ func (k *Keeper) overviewRowsLocked() []overviewRow {
 			Model:               target.Model,
 			Enabled:             target.Enabled,
 			Running:             state.Running,
+			LastStatus:          state.LastStatus,
+			LastError:           state.LastError,
 			LastMessageSummary:  state.LastMessageSummary,
 			ConsecutiveFailures: state.ConsecutiveFailures,
 			ExecutionCount:      executionCount,
@@ -1810,6 +1842,74 @@ func summarizeResult(reply, stdout, stderr string) string {
 	default:
 		return ""
 	}
+}
+
+func keeperSessionLocalClientErrorReason(session Session) string {
+	if !keeperSessionLooksLikeLocalClientError(session) {
+		return ""
+	}
+	return firstNonEmptyMeaningful(session.Error, session.Summary, session.ReplyText, session.Stderr, session.Stdout)
+}
+
+func keeperSessionLooksLikeLocalClientError(session Session) bool {
+	values := []string{
+		session.Error,
+		session.Summary,
+		session.ReplyText,
+		session.Stderr,
+		session.Stdout,
+	}
+	for _, value := range values {
+		if keeperTextHasAny(value,
+			"bwrap:",
+			"bubblewrap",
+			"Failed RTM_NEWADDR",
+			"RTM_NEWADDR",
+			"Operation not permitted",
+			"needs access to create user namespaces",
+			"invalid keeper proxy token format",
+			"本地只读沙箱",
+			"只读执行器失效",
+			"读取仓库的只读执行器失效",
+			"命令通道仍然被环境拦住了",
+			"命令执行器当前起不来",
+			"当前无法做基于代码的有效判断",
+			"沙箱启动任何命令前报",
+			"沙箱初始化阶段失败",
+			"沙箱初始化时报错",
+			"沙箱拦截",
+			"只读命令",
+			"无法启动任何命令",
+			"无法读取本地",
+			"无法读取 `",
+			"无法可靠",
+			"无法完成代码分析",
+			"未能读取仓库",
+			"没有读取到仓库",
+			"请贴文件内容",
+			"请先恢复只读访问",
+		) {
+			return true
+		}
+		if keeperTextHasAny(value, "无法", "没法", "未能", "不能") &&
+			keeperTextHasAny(value, "沙箱", "只读环境", "只读执行器", "读取命令", "读取权限", "打开项目", "贴出相关文件", "放开读取权限") {
+			return true
+		}
+	}
+	return false
+}
+
+func keeperTextHasAny(value string, markers ...string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for _, marker := range markers {
+		if strings.Contains(value, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func truncate(value string, maxLen int) string {

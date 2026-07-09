@@ -57,8 +57,8 @@ func (h *GatewayHandler) GeminiV1BetaListModels(c *gin.Context) {
 		// 没有 gemini 账户，检查是否有 antigravity 账户可用
 		hasAntigravity, _ := h.geminiCompatService.HasAntigravityAccounts(c.Request.Context(), apiKey.GroupID)
 		if hasAntigravity {
-			// antigravity 账户使用静态模型列表
-			c.JSON(http.StatusOK, gemini.FallbackModelsList())
+			// 普通 Gemini 入口在此场景下实际承载 Antigravity 能力，需保持官方 8 模型口径一致。
+			c.JSON(http.StatusOK, antigravity.OfficialGeminiModelsList())
 			return
 		}
 		markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
@@ -115,8 +115,13 @@ func (h *GatewayHandler) GeminiV1BetaGetModel(c *gin.Context) {
 		// 没有 gemini 账户，检查是否有 antigravity 账户可用
 		hasAntigravity, _ := h.geminiCompatService.HasAntigravityAccounts(c.Request.Context(), apiKey.GroupID)
 		if hasAntigravity {
-			// antigravity 账户使用静态模型信息
-			c.JSON(http.StatusOK, gemini.FallbackModel(modelName))
+			// 普通 Gemini 入口在此场景下实际承载 Antigravity 能力，需保持官方 8 模型口径一致。
+			model, ok := antigravity.OfficialGeminiModel(modelName)
+			if !ok {
+				googleError(c, http.StatusNotFound, "Model not found")
+				return
+			}
+			c.JSON(http.StatusOK, model)
 			return
 		}
 		markOpsRoutingCapacityLimitedIfNoAvailable(c, err)

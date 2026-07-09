@@ -76,7 +76,7 @@ func (s *AccountTestService) ProxyKeeperOpenAIAccount(ctx context.Context, accou
 	if orgID := strings.TrimSpace(account.GetOpenAIOrganizationID()); orgID != "" {
 		req.Header.Set("OpenAI-Organization", orgID)
 	}
-	applyAccountTestHeaderOverrides(account, req.Header)
+	applyAccountTestHeaderOverridesForOfficialClientProxy(account, req.Header)
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
@@ -145,7 +145,7 @@ func (s *AccountTestService) ProxyKeeperAnthropicAccount(ctx context.Context, ac
 	if req.Header.Get("anthropic-version") == "" {
 		req.Header.Set("anthropic-version", "2023-06-01")
 	}
-	applyAccountTestHeaderOverrides(account, req.Header)
+	applyAccountTestHeaderOverridesForOfficialClientProxy(account, req.Header)
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
@@ -373,17 +373,26 @@ func isKeeperProxyRequestHeaderAllowed(name string) bool {
 		"openai-beta",
 		"session_id",
 		"session-id",
+		"thread-id",
 		"user-agent",
 		"version",
+		"x-app",
+		"x-claude-code-session-id",
+		"x-client-request-id",
+		"x-codex-beta-features",
 		"x-codex-turn-metadata",
 		"x-codex-turn-state",
+		"x-codex-window-id",
 		"x-request-id",
 		"x-stainless-arch",
+		"x-stainless-helper-method",
 		"x-stainless-lang",
 		"x-stainless-os",
 		"x-stainless-package-version",
+		"x-stainless-retry-count",
 		"x-stainless-runtime",
-		"x-stainless-runtime-version":
+		"x-stainless-runtime-version",
+		"x-stainless-timeout":
 		return true
 	default:
 		return false

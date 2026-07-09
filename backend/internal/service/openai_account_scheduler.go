@@ -1830,10 +1830,13 @@ func (s *OpenAIGatewayService) isOpenAIAccountTransportCompatible(account *Accou
 		if s.cfg == nil || !s.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled {
 			return s.getOpenAIWSProtocolResolver().Resolve(account).Transport == OpenAIUpstreamTransportResponsesWebsocketV2
 		}
+		decision := s.getOpenAIWSProtocolResolver().Resolve(account)
 		mode := account.ResolveOpenAIResponsesWebSocketV2Mode(s.cfg.Gateway.OpenAIWS.IngressModeDefault)
 		switch mode {
-		case OpenAIWSIngressModeCtxPool, OpenAIWSIngressModePassthrough, OpenAIWSIngressModeHTTPBridge, OpenAIWSIngressModeShared, OpenAIWSIngressModeDedicated:
+		case OpenAIWSIngressModeHTTPBridge:
 			return true
+		case OpenAIWSIngressModeCtxPool, OpenAIWSIngressModePassthrough, OpenAIWSIngressModeShared, OpenAIWSIngressModeDedicated:
+			return decision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2
 		default:
 			return false
 		}

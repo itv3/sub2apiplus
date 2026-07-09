@@ -1,9 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { defineComponent } from 'vue'
 import { flushPromises, mount } from '@vue/test-utils'
 
 import type { Account, AccountPlatform, AccountType } from '@/types'
 import ApiKeyMimicSettingsView from '../ApiKeyMimicSettingsView.vue'
 import { adminAPI } from '@/api/admin'
+
+const { updateExtraMock } = vi.hoisted(() => ({
+  updateExtraMock: vi.fn()
+}))
 
 vi.mock('@/stores/app', () => ({
   useAppStore: () => ({
@@ -26,6 +31,7 @@ vi.mock('@/api/admin', () => ({
   adminAPI: {
     accounts: {
       list: vi.fn(),
+      updateExtra: updateExtraMock,
       getKeeperProjects: vi.fn(),
       getKeeperState: vi.fn(),
       getKeeperSettings: vi.fn(),
@@ -33,6 +39,28 @@ vi.mock('@/api/admin', () => ({
     }
   }
 }))
+
+const DataTableStub = defineComponent({
+  name: 'DataTableStub',
+  props: {
+    data: {
+      type: Array,
+      default: () => []
+    }
+  },
+  template: `
+    <div>
+      <template v-if="data.length > 0">
+        <div v-for="row in data" :key="row.id">
+          <slot name="cell-account" :row="row" />
+          <slot name="cell-compatible" :row="row" />
+          <slot name="cell-status" :row="row" />
+        </div>
+      </template>
+      <slot v-else name="empty" />
+    </div>
+  `
+})
 
 function account(id: number, name: string, platform: AccountPlatform, type: AccountType, extra: Record<string, unknown> = {}): Account {
   return {
@@ -79,7 +107,7 @@ function mountView() {
       stubs: {
         AppLayout: { template: '<div><slot /></div>' },
         TablePageLayout: { template: '<div><slot name="filters" /><slot name="table" /></div>' },
-        DataTable: true,
+        DataTable: DataTableStub,
         Icon: true
       }
     }
@@ -89,6 +117,7 @@ function mountView() {
 describe('ApiKeyMimicSettingsView', () => {
   beforeEach(() => {
     vi.mocked(adminAPI.accounts.list).mockReset()
+    updateExtraMock.mockReset()
     vi.mocked(adminAPI.accounts.getKeeperProjects).mockReset()
     vi.mocked(adminAPI.accounts.getKeeperState).mockReset()
     vi.mocked(adminAPI.accounts.getKeeperSettings).mockReset()
@@ -143,5 +172,61 @@ describe('ApiKeyMimicSettingsView', () => {
     expect(wrapper.text()).toContain('openai-api-key')
     expect(wrapper.text()).not.toContain('anthropic-oauth')
     expect(wrapper.text()).not.toContain('openai-upstream')
+  })
+
+  it('关闭 mimic 时不会自动写回 TLS 指纹开关', async () => {
+    const mimicAccount = account(10, 'openai-mimic', 'openai', 'apikey', {
+      openai_apikey_mimic_codex_cli: true,
+      enable_tls_fingerprint: true
+    })
+    vi.mocked(adminAPI.accounts.list).mockImplementation(async (_page, _pageSize, filters) => {
+      if (filters?.platform === 'openai') return page([mimicAccount])
+      return page([])
+    })
+    updateExtraMock.mockResolvedValue({
+      ...mimicAccount,
+      extra: { ...mimicAccount.extra, openai_apikey_mimic_codex_cli: false }
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[role="switch"]').trigger('click')
+    await flushPromises()
+
+    expect(updateExtraMock).toHaveBeenCalledTimes(1)
+    expect(updateExtraMock).toHaveBeenCalledWith(10, {
+      openai_apikey_mimic_codex_cli: false,
+      openai_apikey_mimic_codex_profile: 'desktop_0_142'
+    })
+  })
+
+  it('开启 mimic 时会补齐 TLS 指纹开关', async () => {
+    const plainAccount = account(11, 'openai-plain', 'openai', 'apikey')
+    vi.mocked(adminAPI.accounts.list).mockImplementation(async (_page, _pageSize, filters) => {
+      if (filters?.platform === 'openai') return page([plainAccount])
+      return page([])
+    })
+    updateExtraMock.mockResolvedValue({
+      ...plainAccount,
+      extra: {
+        openai_apikey_mimic_codex_cli: true,
+        openai_apikey_mimic_codex_profile: 'desktop_0_142',
+        enable_tls_fingerprint: true
+      }
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.get('[role="switch"]').trigger('click')
+    await flushPromises()
+
+    expect(updateExtraMock).toHaveBeenCalledTimes(1)
+    expect(updateExtraMock).toHaveBeenCalledWith(11, {
+      openai_apikey_mimic_codex_cli: true,
+      openai_apikey_mimic_codex_profile: 'desktop_0_142',
+      enable_tls_fingerprint: true
+    })
   })
 })

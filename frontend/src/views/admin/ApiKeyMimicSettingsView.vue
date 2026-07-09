@@ -762,17 +762,23 @@ async function loadKeepaliveAccounts() {
 
 function buildMimicPatch(account: Account, enabled: boolean): Record<string, unknown> {
   if (account.platform === 'anthropic') {
-    return {
-      [ANTHROPIC_MIMIC_KEY]: enabled,
-      [TLS_FINGERPRINT_KEY]: enabled
+    const patch: Record<string, unknown> = {
+      [ANTHROPIC_MIMIC_KEY]: enabled
     }
+    if (enabled) {
+      patch[TLS_FINGERPRINT_KEY] = true
+    }
+    return patch
   }
 
-  return {
+  const patch: Record<string, unknown> = {
     [OPENAI_MIMIC_KEY]: enabled,
-    [OPENAI_PROFILE_KEY]: String(account.extra?.[OPENAI_PROFILE_KEY] || DEFAULT_CODEX_PROFILE),
-    [TLS_FINGERPRINT_KEY]: enabled
+    [OPENAI_PROFILE_KEY]: String(account.extra?.[OPENAI_PROFILE_KEY] || DEFAULT_CODEX_PROFILE)
   }
+  if (enabled) {
+    patch[TLS_FINGERPRINT_KEY] = true
+  }
+  return patch
 }
 
 async function toggleMimic(account: Account) {

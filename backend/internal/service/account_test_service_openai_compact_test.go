@@ -178,6 +178,74 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactShadowUsesParentC
 	require.Contains(t, rec.Body.String(), `"type":"test_complete"`)
 }
 
+func TestAccountTestService_TestAccountConnection_OpenAICompactShadowMimicUsesLogicalAccountHeaders(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	updateCalls := make(chan map[string]any, 1)
+	parentID := int64(300)
+	parent := Account{
+		ID:          parentID,
+		Name:        "openai-parent",
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeOAuth,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token":       "parent-token",
+			"chatgpt_account_id": "parent-chatgpt",
+		},
+	}
+	shadow := Account{
+		ID:              301,
+		Name:            "openai-shadow-mimic",
+		Platform:        PlatformOpenAI,
+		Type:            AccountTypeAPIKey,
+		Status:          StatusActive,
+		Schedulable:     true,
+		ParentAccountID: &parentID,
+		QuotaDimension:  QuotaDimensionSpark,
+		Concurrency:     1,
+		Extra: map[string]any{
+			"openai_apikey_mimic_codex_cli": true,
+		},
+	}
+	repo := &snapshotUpdateAccountRepo{
+		stubOpenAIAccountRepo: stubOpenAIAccountRepo{accounts: []Account{parent, shadow}},
+		updateExtraCalls:      updateCalls,
+	}
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"id":"cmp_probe_shadow_mimic","status":"completed"}`)),
+	}}
+	svc := &AccountTestService{
+		accountRepo:  repo,
+		httpUpstream: upstream,
+		cfg:          &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+	}
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/api/v1/admin/accounts/301/test", bytes.NewReader(nil))
+
+	err := svc.TestAccountConnection(c, shadow.ID, "gpt-5.4", "", AccountTestModeCompact)
+	require.NoError(t, err)
+
+	require.Equal(t, chatgptCodexAPIURL+"/compact", upstream.lastReq.URL.String())
+	require.Equal(t, "Bearer parent-token", upstream.lastReq.Header.Get("Authorization"))
+	require.Equal(t, "parent-chatgpt", upstream.lastReq.Header.Get("chatgpt-account-id"))
+	require.Equal(t, codexDesktopUserAgent, upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, codexDesktopOriginator, upstream.lastReq.Header.Get("originator"))
+	require.Equal(t, codexDesktopBetaFeatures, upstream.lastReq.Header.Get("X-Codex-Beta-Features"))
+	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
+	require.Empty(t, upstream.lastReq.Header.Get("Version"))
+
+	updates := <-updateCalls
+	require.Equal(t, true, updates["openai_compact_supported"])
+	require.Contains(t, rec.Body.String(), `"type":"test_complete"`)
+}
+
 func TestAccountTestService_TestAccountConnection_OpenAICompactAPIKeyUsesCompactPath(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

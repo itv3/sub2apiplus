@@ -2602,6 +2602,7 @@ import {
   resolveOpenAIWSModeFromExtra
 } from '@/utils/openaiWsMode'
 import {
+  fetchAntigravityOfficialModels,
   getPresetMappingsByPlatform,
   commonErrorCodes,
   buildModelMappingObject,
@@ -3486,13 +3487,16 @@ async function loadTLSProfiles() {
 
 watch(
   [() => props.show, () => props.account],
-  ([show, newAccount], [wasShow, previousAccount]) => {
+  async ([show, newAccount], [wasShow, previousAccount]) => {
     if (!show || !newAccount) {
       return
     }
     if (!wasShow || newAccount !== previousAccount) {
       syncFormFromAccount(newAccount)
-      loadTLSProfiles()
+      await Promise.allSettled([
+        loadTLSProfiles(),
+        newAccount.platform === 'antigravity' ? fetchAntigravityOfficialModels() : Promise.resolve([])
+      ])
     }
   },
   { immediate: true }

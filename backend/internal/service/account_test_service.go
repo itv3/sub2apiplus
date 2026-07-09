@@ -620,7 +620,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	}
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头。
-	applyAccountTestHeaderOverrides(credentialAccount, req.Header)
+	applyAccountTestHeaderOverridesWithProtectedIdentity(credentialAccount, req.Header, mimicProfile.Enabled)
 
 	// Get proxy URL
 	proxyURL := ""
@@ -811,6 +811,7 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 	if credentialAccount == nil {
 		credentialAccount = account
 	}
+	mimicProfile := resolveOpenAIAPIKeyCodexMimicProfile(account, 0, s.cfg)
 
 	authToken := ""
 	apiURL := ""
@@ -871,13 +872,17 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 	if isOAuth {
 		req.Host = "chatgpt.com"
 		setOpenAIChatGPTAccountHeaders(req.Header, credentialAccount)
-	} else if credentialAccount.Type == AccountTypeAPIKey {
-		mimicProfile := resolveOpenAIAPIKeyCodexMimicProfile(credentialAccount, 0, s.cfg)
+	}
+	if mimicProfile.Enabled {
 		mimicProfile.ApplyHeaders(req, false)
 	}
 
 	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
-	applyAccountTestHeaderOverrides(credentialAccount, req.Header)
+	applyAccountTestHeaderOverridesWithProtectedIdentity(
+		credentialAccount,
+		req.Header,
+		mimicProfile.Enabled,
+	)
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
@@ -1342,11 +1347,29 @@ func (s *AccountTestService) processGeminiStream(c *gin.Context, body io.Reader)
 }
 
 func applyAccountTestHeaderOverrides(account *Account, h http.Header) {
-	if account != nil && (account.IsOpenAIAPIKeyCodexMimicEnabled() || account.IsAnthropicAPIKeyClaudeCodeMimicEnabled()) {
+	applyAccountTestHeaderOverridesWithProtectedIdentity(
+		account,
+		h,
+		account != nil && (account.IsOpenAIAPIKeyCodexMimicEnabled() || account.IsAnthropicAPIKeyClaudeCodeMimicEnabled()),
+	)
+}
+
+func applyAccountTestHeaderOverridesWithProtectedIdentity(account *Account, h http.Header, protectOfficialIdentity bool) {
+	if account == nil {
+		return
+	}
+	if protectOfficialIdentity {
 		account.ApplyHeaderOverridesForAPIKeyMimic(h)
 		return
 	}
 	account.ApplyHeaderOverrides(h)
+}
+
+func applyAccountTestHeaderOverridesForOfficialClientProxy(account *Account, h http.Header) {
+	if account == nil {
+		return
+	}
+	account.ApplyHeaderOverridesForOfficialClientProxy(h)
 }
 
 // createOpenAITestPayload creates a test payload for OpenAI Responses API

@@ -205,6 +205,13 @@ func (a *Account) ApplyHeaderOverridesForAPIKeyMimic(h http.Header) {
 	a.applyHeaderOverrides(h, apiKeyMimicHeaderOverrideProtectedNames)
 }
 
+// ApplyHeaderOverridesForOfficialClientProxy 用于 keeper 等“官方客户端代发”链路。
+// 这类请求虽然不一定显式开启 mimic，但请求头已经是 Codex/Claude Code 官方形态，
+// 因此必须无条件保护身份头，避免被普通 header override 覆盖。
+func (a *Account) ApplyHeaderOverridesForOfficialClientProxy(h http.Header) {
+	a.applyHeaderOverrides(h, apiKeyMimicHeaderOverrideProtectedNames)
+}
+
 func (a *Account) applyHeaderOverrides(h http.Header, protectedNames map[string]struct{}) {
 	if h == nil {
 		return

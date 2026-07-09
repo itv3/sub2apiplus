@@ -222,36 +222,41 @@ func TestBuildAntigravityAPIKeyModelsRequestRejectsOfficialCloudCodeBase(t *test
 	require.Contains(t, syncErr.SafeMessage(), "compatible gateway")
 }
 
-func TestFilterOfficialAntigravityModelIDs(t *testing.T) {
+func TestFetchUpstreamSupportedModels_AntigravityPreservesRealSortedModels(t *testing.T) {
 	t.Parallel()
 
-	models := filterOfficialAntigravityModelIDs([]string{
-		"gemini-3.1-pro-high",
-		"gemini-pro-agent",
-		"gemini-3.5-flash-extra-low",
-		"claude-sonnet-4-6",
-		"tab_flash_lite_preview",
-		"gpt-oss-120b-medium",
-	})
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body: io.NopCloser(strings.NewReader(`{"data":[
+			{"id":"gemini-pro-agent"},
+			{"id":"tab_flash_lite_preview"},
+			{"id":"claude-sonnet-4-6"},
+			{"id":"gemini-pro-agent"},
+			{"id":"gemini-3.5-flash-extra-low"}
+		]}`)),
+	}}
+	svc := &AccountTestService{
+		httpUpstream: upstream,
+		cfg:          upstreamModelSyncTestConfig(),
+	}
 
+	models, err := svc.FetchUpstreamSupportedModels(context.Background(), &Account{
+		ID:       701,
+		Platform: PlatformAntigravity,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"api_key":  "antigravity-key",
+			"base_url": "https://gateway.example.com/antigravity",
+		},
+	})
+	require.NoError(t, err)
 	require.Equal(t, []string{
+		"claude-sonnet-4-6",
 		"gemini-3.5-flash-extra-low",
 		"gemini-pro-agent",
-		"claude-sonnet-4-6",
-		"gpt-oss-120b-medium",
-	}, models)
-}
-
-func TestFilterOfficialAntigravityModelIDsReturnsEmptyWhenNoOfficialModels(t *testing.T) {
-	t.Parallel()
-
-	models := filterOfficialAntigravityModelIDs([]string{
-		"gemini-2.5-pro",
-		"claude-fable-5",
 		"tab_flash_lite_preview",
-	})
-
-	require.Empty(t, models)
+	}, models)
 }
 
 func TestBuildAnthropicUpstreamModelsRequestRejectsBedrock(t *testing.T) {

@@ -125,9 +125,7 @@ func (s *AccountTestService) FetchUpstreamSupportedModels(ctx context.Context, a
 	}
 
 	if account.Platform == PlatformAntigravity {
-		if officialModels := filterOfficialAntigravityModelIDs(models); len(officialModels) > 0 {
-			return officialModels, nil
-		}
+		return dedupeAndSortModelIDs(models), nil
 	}
 	return models, nil
 }
@@ -367,36 +365,7 @@ func (s *AccountTestService) fetchAntigravityOAuthUpstreamModels(ctx context.Con
 	for modelID := range modelsResp.Models {
 		models = append(models, strings.TrimSpace(modelID))
 	}
-	if officialModels := filterOfficialAntigravityModelIDs(models); len(officialModels) > 0 {
-		return officialModels, nil
-	}
 	return dedupeAndSortModelIDs(models), nil
-}
-
-func filterOfficialAntigravityModelIDs(models []string) []string {
-	if len(models) == 0 {
-		return nil
-	}
-
-	available := make(map[string]struct{}, len(models))
-	for _, model := range models {
-		model = strings.TrimSpace(model)
-		if antigravity.IsOfficialModelID(model) {
-			available[model] = struct{}{}
-		}
-	}
-	if len(available) == 0 {
-		return nil
-	}
-
-	ordered := antigravity.OfficialModelIDs()
-	filtered := make([]string, 0, len(available))
-	for _, model := range ordered {
-		if _, ok := available[model]; ok {
-			filtered = append(filtered, model)
-		}
-	}
-	return filtered
 }
 
 func (s *AccountTestService) doUpstreamModelsRequest(req *http.Request, proxyURL string, account *Account) (*http.Response, error) {
