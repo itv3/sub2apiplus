@@ -1882,17 +1882,17 @@ func keeperSessionLooksLikeLocalClientError(session Session) bool {
 			"无法启动任何命令",
 			"无法读取本地",
 			"无法读取 `",
+			"本地读取命令被沙箱拒绝",
+			"没法打开项目",
 			"无法可靠",
 			"无法完成代码分析",
 			"未能读取仓库",
 			"没有读取到仓库",
+			"贴出相关文件",
+			"放开读取权限",
 			"请贴文件内容",
 			"请先恢复只读访问",
 		) {
-			return true
-		}
-		if keeperTextHasAny(value, "无法", "没法", "未能", "不能") &&
-			keeperTextHasAny(value, "沙箱", "只读环境", "只读执行器", "读取命令", "读取权限", "打开项目", "贴出相关文件", "放开读取权限") {
 			return true
 		}
 	}

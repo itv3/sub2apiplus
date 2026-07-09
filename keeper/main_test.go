@@ -1010,6 +1010,17 @@ func TestRunTargetTreatsReadonlyPermissionRefusalReplyAsError(t *testing.T) {
 	}
 }
 
+func TestKeeperSessionLooksLikeLocalClientErrorIgnoresOrdinarySandboxDiscussion(t *testing.T) {
+	session := Session{
+		ReplyText: "Docker 部署约束里提到 keeper 容器需要沙箱相关能力，但想彻底关 Web，不能只靠留空 listen。",
+		Summary:   "Docker 部署约束里提到 keeper 容器需要沙箱相关能力，但想彻底关 Web，不能只靠留空 listen。",
+		Stderr:    "codex app-server (WebSockets)\n  listening on: ws://127.0.0.1:34519",
+	}
+	if keeperSessionLooksLikeLocalClientError(session) {
+		t.Fatal("ordinary sandbox discussion should not be treated as local client error")
+	}
+}
+
 func TestScanPipeLinesReportsDroppedWhenPendingLimitExceeded(t *testing.T) {
 	var b strings.Builder
 	for i := 0; i < 5200; i++ {
