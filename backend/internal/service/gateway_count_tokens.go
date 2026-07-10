@@ -23,7 +23,9 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		return fmt.Errorf("parse request: empty request")
 	}
 
-	if shouldUseAnthropicAPIKeyPassthroughRuntime(account) {
+	bodyForPassthroughDecision := parsed.Body.Bytes()
+	apiKeyMimicClaudeCode := shouldMimicAnthropicAPIKeyClaudeCode(account, "apikey", c, bodyForPassthroughDecision)
+	if shouldUseAnthropicAPIKeyPassthroughRuntime(account, apiKeyMimicClaudeCode) {
 		passthroughBody := parsed.Body.Bytes()
 		if reqModel := parsed.Model; reqModel != "" {
 			if mappedModel := account.GetMappedModel(reqModel); mappedModel != reqModel {
@@ -123,6 +125,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Failed to get access token")
 		return err
 	}
+	apiKeyMimicClaudeCode = shouldMimicAnthropicAPIKeyClaudeCode(account, tokenType, c, body)
 
 	// 构建上游请求
 	upstreamReq, wireBody, err := s.buildCountTokensRequest(ctx, c, account, body, token, tokenType, reqModel, shouldMimicClaudeCode)
@@ -142,7 +145,8 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	}
 
 	// 发送请求
-	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+	tlsProfile := s.resolveAnthropicTLSProfileForRequest(account, apiKeyMimicClaudeCode)
+	resp, err := s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
 	if err != nil {
 		setOpsUpstreamError(c, 0, sanitizeUpstreamErrorMessage(err.Error()), "")
 		s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Request failed")
@@ -169,7 +173,7 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		filteredBody := FilterThinkingBlocksForRetry(body, reqModel)
 		retryReq, retryWireBody, buildErr := s.buildCountTokensRequest(ctx, c, account, filteredBody, token, tokenType, reqModel, shouldMimicClaudeCode)
 		if buildErr == nil {
-			retryResp, retryErr := s.httpUpstream.DoWithTLS(retryReq, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+			retryResp, retryErr := s.httpUpstream.DoWithTLS(retryReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
 			if retryErr == nil {
 				if retryResp.StatusCode < 400 {
 					// count_tokens 签名重试成功后记录最终 wire body，错误响应仍保留原 body 便于后续处理。
@@ -452,7 +456,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 		targetURL = s.buildCustomRelayURL(validatedURL, "/v1/messages/count_tokens", account)
 	}
 
-	if shouldMimicAnthropicAPIKeyClaudeCode(account, tokenType) {
+	if shouldMimicAnthropicAPIKeyClaudeCode(account, tokenType, c, body) {
 		effectiveDropSet := mergeDropSets(s.getBetaPolicyFilterSet(ctx, c, account, modelID))
 		return s.buildAnthropicAPIKeyCLICountTokensMimicRequest(ctx, account, body, token, targetURL, effectiveDropSet)
 	}

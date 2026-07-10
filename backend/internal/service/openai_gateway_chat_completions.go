@@ -58,7 +58,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	promptCacheKey string,
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
-	mimicProfile := resolveOpenAIAPIKeyCodexMimicProfile(account, getAPIKeyIDFromContext(c), s.cfg)
+	mimicProfile := resolveOpenAIAPIKeyCodexMimicProfileForRequest(account, getAPIKeyIDFromContext(c), s.cfg, c)
 	accountMimicCodexCLI := mimicProfile.Enabled
 	restrictionResult := s.detectCodexClientRestriction(c, account, body)
 	logCodexCLIOnlyDetection(ctx, c, account, getAPIKeyIDFromContext(c), restrictionResult, body)
@@ -270,7 +270,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	resp, err := s.doOpenAIHTTPUpstream(upstreamReq, proxyURL, account)
+	resp, err := s.doOpenAIHTTPUpstreamForRequest(upstreamReq, proxyURL, account, mimicProfile)
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}

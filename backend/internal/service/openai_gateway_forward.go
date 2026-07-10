@@ -38,7 +38,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	requestView := newOpenAIRequestView(body)
 	reqModel, reqStream, promptCacheKey := requestView.Model, requestView.Stream, requestView.PromptCacheKey
 	originalModel := reqModel
-	mimicProfile := resolveOpenAIAPIKeyCodexMimicProfile(account, apiKeyID, s.cfg)
+	mimicProfile := resolveOpenAIAPIKeyCodexMimicProfileForRequest(account, apiKeyID, s.cfg, c)
 	accountMimicCodexCLI := mimicProfile.Enabled
 
 	if account.Platform == PlatformGrok {
@@ -713,7 +713,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 		// Send request
 		upstreamStart := time.Now()
-		resp, err := s.doOpenAIHTTPUpstream(upstreamReq, proxyURL, account)
+		resp, err := s.doOpenAIHTTPUpstreamForRequest(upstreamReq, proxyURL, account, mimicProfile)
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 		if err != nil {
 			// Transport-level failure (proxy/DNS/TCP/TLS — no HTTP response). Convert to

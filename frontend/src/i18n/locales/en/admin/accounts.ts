@@ -3,14 +3,14 @@ export default {
       title: 'Plus Enhancements',
       description: 'Manage Sub2API Plus account enhancement features',
       tabs: {
-        mimic: 'API Key Mimic',
+        mimic: 'API Key Official Compatibility',
         keepalive: 'Account Keepalive'
       }
     },
 
     apiKeyMimic: {
-      title: 'API Key Mimic Settings',
-      description: 'Manage official-client compatibility for Anthropic / OpenAI API Key accounts',
+      title: 'API Key Official Compatibility Settings',
+      description: 'Apply Claude / Codex mimic only to unofficial clients; official clients use normal API Key forwarding',
       refresh: 'Refresh',
       columns: {
         account: 'Account',
@@ -28,7 +28,7 @@ export default {
         codexDesktop: 'Codex Desktop',
         codexCli: 'Legacy Codex CLI',
         unknownCodexProfile: 'Codex ({profile})',
-        passthroughAlsoEnabled: 'Passthrough also enabled; runtime prefers mimic'
+        passthroughAlsoEnabled: 'Passthrough also enabled; unofficial requests prefer mimic'
       },
       empty: 'No Anthropic / OpenAI API Key accounts',
       loadFailed: 'Failed to load API Key accounts',

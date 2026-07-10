@@ -98,7 +98,9 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		return s.handleWebSearchEmulation(ctx, c, account, parsed)
 	}
 
-	if shouldUseAnthropicAPIKeyPassthroughRuntime(account) {
+	bodyForPassthroughDecision := parsed.Body.Bytes()
+	apiKeyMimicClaudeCode := shouldMimicAnthropicAPIKeyClaudeCode(account, "apikey", c, bodyForPassthroughDecision)
+	if shouldUseAnthropicAPIKeyPassthroughRuntime(account, apiKeyMimicClaudeCode) {
 		passthroughBody := parsed.Body.Bytes()
 		passthroughModel := parsed.Model
 		if passthroughModel != "" {
@@ -300,6 +302,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	if err != nil {
 		return nil, err
 	}
+	apiKeyMimicClaudeCode = shouldMimicAnthropicAPIKeyClaudeCode(account, tokenType, c, body)
 
 	// 获取代理URL（自定义 base URL 模式下，proxy 通过 buildCustomRelayURL 作为查询参数传递）
 	proxyURL := ""
@@ -310,7 +313,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 	}
 
 	// 解析 TLS 指纹 profile（同一请求生命周期内不变，避免重试循环中重复解析）
-	tlsProfile := s.tlsFPProfileService.ResolveTLSProfile(account)
+	tlsProfile := s.resolveAnthropicTLSProfileForRequest(account, apiKeyMimicClaudeCode)
 
 	// 调试日志：记录即将转发的账号信息
 	logger.LegacyPrintf("service.gateway", "[Forward] Using account: ID=%d Name=%s Platform=%s Type=%s TLSFingerprint=%v Proxy=%s",

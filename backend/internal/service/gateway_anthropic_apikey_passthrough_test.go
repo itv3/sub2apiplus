@@ -844,6 +844,60 @@ func TestGatewayService_AnthropicAPIKeyMimicBuildRequestStripsClientHeadersAndOA
 	require.Equal(t, "custom-value", getHeaderRaw(req.Header, "x-custom"))
 }
 
+func TestGatewayService_AnthropicAPIKeyMimicSkipsOfficialClaudeCodeRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Request.Header.Set("user-agent", "claude-cli/2.1.198 (external, cli)")
+	c.Request.Header.Set("anthropic-beta", "official-beta")
+	c.Request.Header.Set("x-app", "official-client")
+	c.Request = c.Request.WithContext(SetClaudeCodeClient(c.Request.Context(), true))
+
+	svc := &GatewayService{
+		cfg: &config.Config{
+			Gateway: config.GatewayConfig{
+				MaxLineSize: defaultMaxLineSize,
+			},
+		},
+	}
+	account := &Account{
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeAPIKey,
+		Extra: map[string]any{
+			"anthropic_apikey_mimic_claude_code": true,
+		},
+		Credentials: map[string]any{
+			"api_key": "anthropic-key",
+		},
+	}
+	body := []byte(`{"model":"claude-3-7-sonnet-20250219","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+
+	req, wireBody, err := svc.buildUpstreamRequest(context.Background(), c, account, body, "anthropic-key", "apikey", "claude-3-7-sonnet-20250219", false, false)
+	require.NoError(t, err)
+	require.Equal(t, "claude-cli/2.1.198 (external, cli)", getHeaderRaw(req.Header, "user-agent"))
+	require.Equal(t, "official-client", getHeaderRaw(req.Header, "x-app"))
+	require.Equal(t, "official-beta", getHeaderRaw(req.Header, "anthropic-beta"))
+	require.Empty(t, getHeaderRaw(req.Header, "x-stainless-helper-method"))
+	require.False(t, gjson.GetBytes(wireBody, "metadata.user_id").Exists())
+	require.Equal(t, string(body), string(wireBody))
+}
+
+func TestGatewayService_AnthropicAPIKeyMimicSkipsTLSWhenRequestProfileDisabled(t *testing.T) {
+	svc := &GatewayService{tlsFPProfileService: &TLSFingerprintProfileService{}}
+	account := &Account{
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeAPIKey,
+		Extra: map[string]any{
+			"anthropic_apikey_mimic_claude_code": true,
+			"enable_tls_fingerprint":             true,
+		},
+	}
+
+	require.Nil(t, svc.resolveAnthropicTLSProfileForRequest(account, false))
+	require.NotNil(t, svc.resolveAnthropicTLSProfileForRequest(account, true))
+}
+
 func TestGatewayService_AnthropicAPIKeyMimicRewritesThirdPartyBodyToClaudeCodeShape(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()

@@ -94,10 +94,11 @@ func TestShouldUseAnthropicAPIKeyPassthroughRuntime(t *testing.T) {
 			"anthropic_apikey_mimic_claude_code": true,
 		},
 	}
-	require.False(t, shouldUseAnthropicAPIKeyPassthroughRuntime(account), "mimic 与 passthrough 同开时运行时应优先 mimic")
+	require.False(t, shouldUseAnthropicAPIKeyPassthroughRuntime(account, true), "本请求实际 mimic 时运行时应优先 mimic")
+	require.True(t, shouldUseAnthropicAPIKeyPassthroughRuntime(account, false), "官方客户端跳过 mimic 后可回到 passthrough 普通逻辑")
 
 	delete(account.Extra, "anthropic_apikey_mimic_claude_code")
-	require.True(t, shouldUseAnthropicAPIKeyPassthroughRuntime(account))
+	require.True(t, shouldUseAnthropicAPIKeyPassthroughRuntime(account, false))
 }
 
 func TestAccount_GetAnthropicAPIKeyAuthScheme(t *testing.T) {

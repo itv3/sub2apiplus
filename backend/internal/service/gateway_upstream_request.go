@@ -47,7 +47,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 		targetURL = s.buildCustomRelayURL(validatedURL, "/v1/messages", account)
 	}
 
-	if shouldMimicAnthropicAPIKeyClaudeCode(account, tokenType) {
+	if shouldMimicAnthropicAPIKeyClaudeCode(account, tokenType, c, body) {
 		effectiveDropSet := mergeDropSets(s.getBetaPolicyFilterSet(ctx, c, account, modelID))
 		return s.buildAnthropicAPIKeyCLIMimicRequest(ctx, account, body, token, targetURL, reqStream, c, effectiveDropSet)
 	}

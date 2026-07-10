@@ -2586,6 +2586,47 @@ func TestOpenAIBuildUpstreamRequestAPIKeyCodexMimicOverridesClientHeaders(t *tes
 	require.Equal(t, "custom-value", getHeaderRaw(req.Header, "x-custom"))
 }
 
+func TestOpenAIBuildUpstreamRequestAPIKeyCodexMimicSkipsOfficialClient(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader([]byte(`{"model":"gpt-5"}`)))
+	c.Request.Header.Set("User-Agent", "Codex Desktop/0.142.0 (Mac OS 26.5.1; arm64) dumb (codex_exec; 0.142.0)")
+	c.Request.Header.Set("originator", "Codex Desktop")
+
+	svc := &OpenAIGatewayService{
+		cfg: &config.Config{
+			Security: config.SecurityConfig{
+				URLAllowlist: config.URLAllowlistConfig{Enabled: false},
+			},
+		},
+	}
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Credentials: map[string]any{
+			"base_url": "https://api.openai.com",
+		},
+		Extra: map[string]any{
+			"openai_apikey_mimic_codex_cli": true,
+		},
+	}
+
+	mimicProfile := resolveOpenAIAPIKeyCodexMimicProfileForRequest(account, 0, svc.cfg, c)
+	require.False(t, mimicProfile.Enabled)
+
+	req, err := svc.buildUpstreamRequest(c.Request.Context(), c, account, []byte(`{"model":"gpt-5"}`), "token", openAIUpstreamRequestPlan{
+		APIKeyCodexMimic: mimicProfile,
+	})
+	require.NoError(t, err)
+	require.Equal(t, c.GetHeader("User-Agent"), req.Header.Get("User-Agent"))
+	require.Equal(t, "Codex Desktop", req.Header.Get("originator"))
+	require.Empty(t, req.Header.Get("session-id"))
+	require.Empty(t, req.Header.Get("thread-id"))
+	require.Empty(t, req.Header.Get("x-codex-window-id"))
+	require.Empty(t, req.Header.Get("x-codex-beta-features"))
+}
+
 func TestOpenAIBuildUpstreamRequestForceCodexCLIDoesNotOverrideAPIKeyMimic(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()

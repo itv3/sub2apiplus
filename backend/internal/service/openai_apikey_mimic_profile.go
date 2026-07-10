@@ -6,7 +6,9 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
+	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
 
@@ -46,6 +48,22 @@ func resolveOpenAIAPIKeyCodexMimicProfile(account *Account, apiKeyID int64, cfg 
 	}
 }
 
+func resolveOpenAIAPIKeyCodexMimicProfileForRequest(account *Account, apiKeyID int64, cfg *config.Config, c *gin.Context) openAIAPIKeyCodexMimicProfile {
+	profile := resolveOpenAIAPIKeyCodexMimicProfile(account, apiKeyID, cfg)
+	if profile.Enabled && isInboundOpenAIOfficialClient(c) {
+		profile.Enabled = false
+	}
+	return profile
+}
+
+func isInboundOpenAIOfficialClient(c *gin.Context) bool {
+	if c == nil {
+		return false
+	}
+	return openai.IsCodexOfficialClientRequestStrict(c.GetHeader("User-Agent")) ||
+		openai.IsCodexOfficialClientOriginator(c.GetHeader("originator"))
+}
+
 func (p openAIAPIKeyCodexMimicProfile) RewriteBody(body []byte) []byte {
 	if !p.Enabled {
 		return body
@@ -66,6 +84,10 @@ func (p openAIAPIKeyCodexMimicProfile) ShouldUseResponsesAPI(extra map[string]an
 
 func (p openAIAPIKeyCodexMimicProfile) ResolveResponsesSupport(extra map[string]any) openai_compat.AccountResponsesSupport {
 	return openai_compat.ResolveResponsesSupportForProfile(extra, p.Enabled)
+}
+
+func (p openAIAPIKeyCodexMimicProfile) ShouldUseTLSFingerprint(account *Account) bool {
+	return p.Enabled && account != nil && account.ShouldUseOpenAITLSFingerprint()
 }
 
 type openAIAPIKeyCodexMimicClientProfile struct {

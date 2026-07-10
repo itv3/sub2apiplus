@@ -148,3 +148,25 @@ func TestDoOpenAIHTTPUpstreamUsesCLITLSProfileWhenRequested(t *testing.T) {
 	require.NotNil(t, recorder.lastTLSProfile)
 	require.Equal(t, "Built-in Default (Node.js 24.x)", recorder.lastTLSProfile.Name)
 }
+
+func TestDoOpenAIHTTPUpstreamSkipsMimicTLSWhenRequestProfileDisabled(t *testing.T) {
+	account := &Account{
+		ID:       3,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Extra: map[string]any{
+			"openai_apikey_mimic_codex_cli": true,
+			"enable_tls_fingerprint":        true,
+		},
+	}
+	req, err := http.NewRequest(http.MethodPost, "https://api.openai.com/v1/responses", strings.NewReader("{}"))
+	require.NoError(t, err)
+
+	recorder := &openAIHTTPUpstreamChoiceRecorder{}
+	resp, err := doOpenAIHTTPUpstreamWithMimicTLS(recorder, req, "", account, &TLSFingerprintProfileService{}, false)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	require.True(t, recorder.doCalled)
+	require.False(t, recorder.doWithTLSCalled)
+	require.Nil(t, recorder.lastTLSProfile)
+}

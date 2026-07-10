@@ -3,14 +3,14 @@ export default {
       title: 'Plus 增强功能',
       description: '统一管理 Sub2API Plus 的账号增强能力',
       tabs: {
-        mimic: 'API Key 账号伪装',
+        mimic: 'API Key 官方客户端兼容',
         keepalive: '账号保活'
       }
     },
 
     apiKeyMimic: {
-      title: 'API Key 账号伪装设置',
-      description: '统一管理 Anthropic / OpenAI API Key 账号的官方客户端兼容开关',
+      title: 'API Key 官方客户端兼容设置',
+      description: '仅对非官方客户端触发 Claude / Codex mimic；官方客户端接入时按普通 API Key 逻辑转发',
       refresh: '刷新',
       columns: {
         account: '账号',
@@ -28,7 +28,7 @@ export default {
         codexDesktop: 'Codex Desktop',
         codexCli: '旧 Codex CLI',
         unknownCodexProfile: 'Codex（{profile}）',
-        passthroughAlsoEnabled: '透传同开，运行时优先 mimic'
+        passthroughAlsoEnabled: '透传同开，非官方请求优先 mimic'
       },
       empty: '暂无 Anthropic / OpenAI API Key 账号',
       loadFailed: '加载 API Key 账号失败',

@@ -11,14 +11,48 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
 
-func shouldMimicAnthropicAPIKeyClaudeCode(account *Account, tokenType string) bool {
+func shouldMimicAnthropicAPIKeyClaudeCode(account *Account, tokenType string, c *gin.Context, body []byte) bool {
 	return account != nil &&
 		tokenType == "apikey" &&
-		account.IsAnthropicAPIKeyClaudeCodeMimicEnabled()
+		account.IsAnthropicAPIKeyClaudeCodeMimicEnabled() &&
+		!isInboundAnthropicOfficialClient(c, body)
+}
+
+func isInboundAnthropicOfficialClient(c *gin.Context, body []byte) bool {
+	if c == nil || c.Request == nil {
+		return false
+	}
+	if IsClaudeCodeClient(c.Request.Context()) {
+		return true
+	}
+	userAgent := c.GetHeader("User-Agent")
+	if isClaudeCodeClient(userAgent, gjson.GetBytes(body, "metadata.user_id").String()) {
+		return true
+	}
+	return isClaudeDesktopOfficialClientUserAgent(userAgent)
+}
+
+func isClaudeDesktopOfficialClientUserAgent(userAgent string) bool {
+	ua := strings.ToLower(strings.TrimSpace(userAgent))
+	return strings.HasPrefix(ua, "claude desktop/") ||
+		strings.HasPrefix(ua, "claude-desktop/") ||
+		strings.HasPrefix(ua, "claude_desktop/") ||
+		strings.HasPrefix(ua, "claude_app/")
+}
+
+func (s *GatewayService) resolveAnthropicTLSProfileForRequest(account *Account, mimicAPIKeyClaudeCode bool) *tlsfingerprint.Profile {
+	if account != nil && account.Platform == PlatformAnthropic && account.Type == AccountTypeAPIKey && !mimicAPIKeyClaudeCode {
+		return nil
+	}
+	if s == nil || s.tlsFPProfileService == nil {
+		return nil
+	}
+	return s.tlsFPProfileService.ResolveTLSProfile(account)
 }
 
 func defaultAPIKeyCountTokensMimicBetaHeader(body []byte) string {

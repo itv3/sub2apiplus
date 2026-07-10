@@ -32,7 +32,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	defaultMappedModel string,
 ) (*OpenAIForwardResult, error) {
 	apiKeyID := getAPIKeyIDFromContext(c)
-	mimicProfile := resolveOpenAIAPIKeyCodexMimicProfile(account, apiKeyID, s.cfg)
+	mimicProfile := resolveOpenAIAPIKeyCodexMimicProfileForRequest(account, apiKeyID, s.cfg, c)
 	// 入口分流：APIKey 账号 + 上游不支持 Responses API → 走 CC 直转（与
 	// ForwardAsChatCompletions 对称）。缺少此分流时，/v1/messages 入站请求
 	// 会被无条件转为 Responses 格式发往上游 /v1/responses，导致只支持
@@ -312,7 +312,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	resp, err := s.doOpenAIHTTPUpstream(upstreamReq, proxyURL, account)
+	resp, err := s.doOpenAIHTTPUpstreamForRequest(upstreamReq, proxyURL, account, mimicProfile)
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}

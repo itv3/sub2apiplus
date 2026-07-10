@@ -61,11 +61,11 @@ func (s *OpenAIGatewayService) resolveOpenAIAPIKeyCodexTLSProfile(account *Accou
 	return resolveOpenAIAPIKeyCodexTLSProfile(account, s.tlsFPProfileService)
 }
 
-func doOpenAIHTTPUpstream(httpUpstream HTTPUpstream, req *http.Request, proxyURL string, account *Account, tlsFPProfileService *TLSFingerprintProfileService) (*http.Response, error) {
+func doOpenAIHTTPUpstreamWithMimicTLS(httpUpstream HTTPUpstream, req *http.Request, proxyURL string, account *Account, tlsFPProfileService *TLSFingerprintProfileService, useAPIKeyMimicTLS bool) (*http.Response, error) {
 	if httpUpstream == nil {
 		return nil, fmt.Errorf("http upstream unavailable")
 	}
-	if account != nil && account.ShouldUseOpenAITLSFingerprint() {
+	if useAPIKeyMimicTLS && account != nil && account.ShouldUseOpenAITLSFingerprint() {
 		if tlsProfile := resolveOpenAIAPIKeyCodexTLSProfile(account, tlsFPProfileService); tlsProfile != nil {
 			return httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, tlsProfile)
 		}
@@ -76,9 +76,21 @@ func doOpenAIHTTPUpstream(httpUpstream HTTPUpstream, req *http.Request, proxyURL
 	return httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
 }
 
+func doOpenAIHTTPUpstream(httpUpstream HTTPUpstream, req *http.Request, proxyURL string, account *Account, tlsFPProfileService *TLSFingerprintProfileService) (*http.Response, error) {
+	useAPIKeyMimicTLS := account != nil && account.ShouldUseOpenAITLSFingerprint()
+	return doOpenAIHTTPUpstreamWithMimicTLS(httpUpstream, req, proxyURL, account, tlsFPProfileService, useAPIKeyMimicTLS)
+}
+
 func (s *OpenAIGatewayService) doOpenAIHTTPUpstream(req *http.Request, proxyURL string, account *Account) (*http.Response, error) {
 	if s == nil {
 		return nil, fmt.Errorf("http upstream unavailable")
 	}
 	return doOpenAIHTTPUpstream(s.httpUpstream, req, proxyURL, account, s.tlsFPProfileService)
+}
+
+func (s *OpenAIGatewayService) doOpenAIHTTPUpstreamForRequest(req *http.Request, proxyURL string, account *Account, mimicProfile openAIAPIKeyCodexMimicProfile) (*http.Response, error) {
+	if s == nil {
+		return nil, fmt.Errorf("http upstream unavailable")
+	}
+	return doOpenAIHTTPUpstreamWithMimicTLS(s.httpUpstream, req, proxyURL, account, s.tlsFPProfileService, mimicProfile.ShouldUseTLSFingerprint(account))
 }
