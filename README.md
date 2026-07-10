@@ -368,7 +368,7 @@ Docker 镜像发布到 `ghcr.io/itv3/sub2apiplus`，支持 `linux/amd64` 和 `li
 | Tag | 含义 |
 |---|---|
 | `latest` | 最新稳定镜像。 |
-| `<Plus 版本>` | 指定版本，例如 `0.1.150-1`。 |
+| `<Plus 版本>` | 指定版本，例如 `0.1.151-1`。 |
 | `<上游主版本>.<上游次版本>` | 对应 minor 线的最新补丁。 |
 
 ### 3.2 关键环境变量
@@ -427,11 +427,11 @@ cd /path/to/sub2apiplus
 make test-frontend
 ```
 
-Plus 版本在上游版本后追加自定义序号，例如 `0.1.150-1`；Git tag 使用 `v0.1.150-1`；GHCR 镜像 tag 使用 `ghcr.io/itv3/sub2apiplus:0.1.150-1`。
+Plus 版本在上游版本后追加自定义序号，例如 `0.1.151-1`；Git tag 使用 `v0.1.151-1`；GHCR 镜像 tag 使用 `ghcr.io/itv3/sub2apiplus:0.1.151-1`。
 
 ```sh
 cd /path/to/sub2apiplus
-VERSION=0.1.150-1
+VERSION=0.1.151-1
 echo "$VERSION" > backend/cmd/server/VERSION
 git add backend/cmd/server/VERSION
 git commit -m "chore: release v${VERSION}"
@@ -503,22 +503,22 @@ keeper 通过 `max_output_tokens` 把账号级最大输出 token 传回主服务
 
 Plus 增强功能的 UI 细节以代码为准，维护文件统一记录在第 4.3 节。上游合并后需要确认：后台侧边栏仍能进入“Plus 增强功能”；页面仍包含 API Key 官方客户端兼容和账号保活分组；账号保活的概览、配置、会话历史仍能正常加载；Antigravity 账号编辑仍保留模型白名单和模型映射入口。
 
-### 4.3 v0.1.150 差异文件清单
+### 4.3 v0.1.151 差异文件清单
 
 本节只记录差异口径和审核入口，不维护一份容易过期的全量文件清单。
 
 基线说明：
 
-- 发布基线是官方上游 tag `v0.1.150`。
-- 当前分支已通过合并提交同步官方 `v0.1.150`；审核 Plus 自定义实现时，应优先看 `v0.1.150..HEAD` 中 API Key mimic、Antigravity、keeper 和 Plus UI 相关文件。
+- 发布基线是官方上游 tag `v0.1.151`。
+- 当前分支已通过合并提交同步官方 `v0.1.151`；审核 Plus 自定义实现时，应优先看 `v0.1.151..HEAD` 中 API Key mimic、Antigravity、keeper 和 Plus UI 相关文件。
 - `batch_image` 已包含在上游发布内容中，不属于 Plus 三项增强的自研范围；不要把上游批量生图代码误算进 Plus 自定义差异。
 - `keeper/` 是当前新增源码目录；`.codex-captures/` 是本地抓包样本，`.kilo/` 是本地工具配置，不计入源码清单。
 
 需要完整差异时直接生成：
 
 ```sh
-git diff --name-only v0.1.150..HEAD
-git diff --stat v0.1.150..HEAD
+git diff --name-only v0.1.151..HEAD
+git diff --stat v0.1.151..HEAD
 ```
 
 Plus 审核重点文件组：
