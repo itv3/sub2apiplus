@@ -1,6 +1,10 @@
 package service
 
-import "github.com/Wei-Shaw/sub2api/internal/config"
+import (
+	"context"
+
+	"github.com/Wei-Shaw/sub2api/internal/config"
+)
 
 // OpenAIUpstreamTransport 表示 OpenAI 上游传输协议。
 type OpenAIUpstreamTransport string
@@ -26,6 +30,10 @@ type OpenAIWSProtocolResolver interface {
 	Resolve(account *Account) OpenAIWSProtocolDecision
 }
 
+type openAIWSRequestAwareProtocolResolver interface {
+	ResolveForRequest(ctx context.Context, account *Account) OpenAIWSProtocolDecision
+}
+
 type defaultOpenAIWSProtocolResolver struct {
 	cfg *config.Config
 }
@@ -36,6 +44,10 @@ func NewOpenAIWSProtocolResolver(cfg *config.Config) OpenAIWSProtocolResolver {
 }
 
 func (r *defaultOpenAIWSProtocolResolver) Resolve(account *Account) OpenAIWSProtocolDecision {
+	return r.ResolveForRequest(context.Background(), account)
+}
+
+func (r *defaultOpenAIWSProtocolResolver) ResolveForRequest(ctx context.Context, account *Account) OpenAIWSProtocolDecision {
 	if account == nil {
 		return openAIWSHTTPDecision("account_missing")
 	}
@@ -58,7 +70,7 @@ func (r *defaultOpenAIWSProtocolResolver) Resolve(account *Account) OpenAIWSProt
 	}
 	// API Key mimic 当前只保证 HTTP/SSE 请求形态与 TLS 指纹一致；
 	// 在 WS 链路补齐同等保护前，统一强制回退 HTTP。
-	if account.IsOpenAIAPIKeyCodexMimicEnabled() {
+	if account.IsOpenAIAPIKeyCodexMimicEnabled() && !isOpenAIOfficialClientRequestContext(ctx) {
 		return openAIWSHTTPDecision("apikey_mimic_http_only")
 	}
 	if account.IsOpenAIOAuth() {
@@ -120,6 +132,13 @@ func (r *defaultOpenAIWSProtocolResolver) Resolve(account *Account) OpenAIWSProt
 		}
 	}
 	return openAIWSHTTPDecision("feature_disabled")
+}
+
+func resolveOpenAIWSProtocolForRequest(resolver OpenAIWSProtocolResolver, ctx context.Context, account *Account) OpenAIWSProtocolDecision {
+	if requestAware, ok := resolver.(openAIWSRequestAwareProtocolResolver); ok {
+		return requestAware.ResolveForRequest(ctx, account)
+	}
+	return resolver.Resolve(account)
 }
 
 func openAIWSHTTPDecision(reason string) OpenAIWSProtocolDecision {

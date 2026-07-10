@@ -14,6 +14,67 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
+func TestIsKeeperKeepaliveCandidateRequiresSchedulableAPIKeyAccount(t *testing.T) {
+	now := time.Now()
+	future := now.Add(time.Hour)
+	past := now.Add(-time.Hour)
+
+	openAIAccount := service.Account{
+		Platform:    service.PlatformOpenAI,
+		Type:        service.AccountTypeAPIKey,
+		Status:      service.StatusActive,
+		Schedulable: true,
+		Credentials: map[string]any{"api_key": "sk-openai"},
+	}
+	anthropicAccount := service.Account{
+		Platform:    service.PlatformAnthropic,
+		Type:        service.AccountTypeAPIKey,
+		Status:      service.StatusActive,
+		Schedulable: true,
+		Credentials: map[string]any{"api_key": "sk-anthropic"},
+	}
+
+	tests := []struct {
+		name    string
+		account service.Account
+		want    bool
+	}{
+		{name: "OpenAI API Key 可调度账号", account: openAIAccount, want: true},
+		{name: "Anthropic API Key 可调度账号", account: anthropicAccount, want: true},
+		{name: "停用账号", account: func() service.Account { account := openAIAccount; account.Status = "disabled"; return account }(), want: false},
+		{name: "手动不可调度账号", account: func() service.Account { account := openAIAccount; account.Schedulable = false; return account }(), want: false},
+		{name: "临时不可调度账号", account: func() service.Account {
+			account := openAIAccount
+			account.TempUnschedulableUntil = &future
+			return account
+		}(), want: false},
+		{name: "临时不可调度已恢复", account: func() service.Account {
+			account := openAIAccount
+			account.TempUnschedulableUntil = &past
+			return account
+		}(), want: true},
+		{name: "缺少凭据", account: func() service.Account { account := openAIAccount; account.Credentials = nil; return account }(), want: false},
+		{name: "OAuth 账号", account: func() service.Account {
+			account := openAIAccount
+			account.Type = service.AccountTypeOAuth
+			return account
+		}(), want: false},
+		{name: "其他平台", account: func() service.Account {
+			account := openAIAccount
+			account.Platform = service.PlatformGemini
+			return account
+		}(), want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isKeeperKeepaliveCandidate(tt.account); got != tt.want {
+				t.Fatalf("isKeeperKeepaliveCandidate() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildKeeperAccountConfigUsesLaterActivityTime(t *testing.T) {
 	now := time.Date(2026, 7, 8, 12, 0, 0, 0, time.UTC)
 	lastUsed := now.Add(-30 * time.Minute)

@@ -2907,10 +2907,11 @@ func TestOpenAIGatewayService_SchedulerWrappersAndDefaults(t *testing.T) {
 
 func TestDefaultOpenAIAccountScheduler_IsAccountTransportCompatible_Branches(t *testing.T) {
 	scheduler := &defaultOpenAIAccountScheduler{}
-	require.True(t, scheduler.isAccountTransportCompatible(nil, OpenAIUpstreamTransportAny))
-	require.True(t, scheduler.isAccountTransportCompatible(nil, OpenAIUpstreamTransportHTTPSSE))
-	require.False(t, scheduler.isAccountTransportCompatible(nil, OpenAIUpstreamTransportResponsesWebsocketV2))
-	require.False(t, scheduler.isAccountTransportCompatible(nil, OpenAIUpstreamTransportResponsesWebsocketV2Ingress))
+	ctx := context.Background()
+	require.True(t, scheduler.isAccountTransportCompatible(ctx, nil, OpenAIUpstreamTransportAny))
+	require.True(t, scheduler.isAccountTransportCompatible(ctx, nil, OpenAIUpstreamTransportHTTPSSE))
+	require.False(t, scheduler.isAccountTransportCompatible(ctx, nil, OpenAIUpstreamTransportResponsesWebsocketV2))
+	require.False(t, scheduler.isAccountTransportCompatible(ctx, nil, OpenAIUpstreamTransportResponsesWebsocketV2Ingress))
 
 	cfg := newSchedulerTestOpenAIWSV2Config()
 	scheduler.service = &OpenAIGatewayService{cfg: cfg}
@@ -2925,20 +2926,22 @@ func TestDefaultOpenAIAccountScheduler_IsAccountTransportCompatible_Branches(t *
 			"openai_apikey_responses_websockets_v2_enabled": true,
 		},
 	}
-	require.True(t, scheduler.isAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2))
-	require.True(t, scheduler.isAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2Ingress))
+	require.True(t, scheduler.isAccountTransportCompatible(ctx, account, OpenAIUpstreamTransportResponsesWebsocketV2))
+	require.True(t, scheduler.isAccountTransportCompatible(ctx, account, OpenAIUpstreamTransportResponsesWebsocketV2Ingress))
 
 	cfg.Gateway.OpenAIWS.ModeRouterV2Enabled = true
 	account.Extra["openai_apikey_responses_websockets_v2_mode"] = OpenAIWSIngressModeHTTPBridge
-	require.False(t, scheduler.isAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2))
-	require.True(t, scheduler.isAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2Ingress))
+	require.False(t, scheduler.isAccountTransportCompatible(ctx, account, OpenAIUpstreamTransportResponsesWebsocketV2))
+	require.True(t, scheduler.isAccountTransportCompatible(ctx, account, OpenAIUpstreamTransportResponsesWebsocketV2Ingress))
 
 	account.Extra["openai_apikey_mimic_codex_cli"] = true
 	account.Extra["openai_apikey_responses_websockets_v2_mode"] = OpenAIWSIngressModeCtxPool
-	require.False(t, scheduler.isAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2Ingress))
+	require.False(t, scheduler.isAccountTransportCompatible(ctx, account, OpenAIUpstreamTransportResponsesWebsocketV2Ingress))
+	officialCtx := context.WithValue(ctx, openAIAPIKeyMimicRequestContextKey{}, true)
+	require.True(t, scheduler.isAccountTransportCompatible(officialCtx, account, OpenAIUpstreamTransportResponsesWebsocketV2Ingress))
 
 	account.Extra["openai_apikey_responses_websockets_v2_mode"] = OpenAIWSIngressModeOff
-	require.False(t, scheduler.isAccountTransportCompatible(account, OpenAIUpstreamTransportResponsesWebsocketV2Ingress))
+	require.False(t, scheduler.isAccountTransportCompatible(officialCtx, account, OpenAIUpstreamTransportResponsesWebsocketV2Ingress))
 }
 
 func TestOpenAIGatewayService_SelectAccountWithScheduler_ModeRouterIngressSkipsMimicNonBridgeAccount(t *testing.T) {
@@ -3002,6 +3005,31 @@ func TestOpenAIGatewayService_SelectAccountWithScheduler_ModeRouterIngressSkipsM
 	require.NotNil(t, selection.Account)
 	require.Equal(t, int64(36032), selection.Account.ID)
 	require.Equal(t, openAIAccountScheduleLayerLoadBalance, decision.Layer)
+	if selection.ReleaseFunc != nil {
+		selection.ReleaseFunc()
+	}
+
+	officialCtx := context.WithValue(ctx, openAIAPIKeyMimicRequestContextKey{}, true)
+	officialSvc := &OpenAIGatewayService{
+		accountRepo:        schedulerTestOpenAIAccountRepo{accounts: accounts[:1]},
+		cache:              &schedulerTestGatewayCache{},
+		cfg:                cfg,
+		concurrencyService: NewConcurrencyService(schedulerTestConcurrencyCache{}),
+	}
+	selection, _, err = officialSvc.SelectAccountWithScheduler(
+		officialCtx,
+		&groupID,
+		"",
+		"",
+		"gpt-5.1",
+		nil,
+		OpenAIUpstreamTransportResponsesWebsocketV2Ingress,
+		false,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, selection)
+	require.NotNil(t, selection.Account)
+	require.Equal(t, int64(36031), selection.Account.ID)
 	if selection.ReleaseFunc != nil {
 		selection.ReleaseFunc()
 	}

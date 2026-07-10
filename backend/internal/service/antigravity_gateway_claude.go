@@ -61,6 +61,10 @@ func (s *AntigravityGatewayService) Forward(ctx context.Context, c *gin.Context,
 		return nil, s.writeClaudeError(c, http.StatusForbidden, "permission_error", fmt.Sprintf("model %s not in whitelist", mappedModel))
 	}
 	billingModel := antigravity.ResolveClaudeUpstreamModel(&claudeReq, mappedModel)
+	if !isAntigravityAllowedModel(account, billingModel) {
+		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalFeatureGate)
+		return nil, s.writeClaudeError(c, http.StatusForbidden, "permission_error", fmt.Sprintf("model %s not in whitelist", billingModel))
+	}
 	upstreamRequestModel := billingModel
 
 	// 获取 access_token

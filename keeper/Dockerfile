@@ -8,6 +8,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/sub2api
 
 FROM debian:bookworm-slim
 
+ARG CODEX_RELEASE=latest
+
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Asia/Shanghai \
     HOME=/root \
@@ -34,7 +36,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p /opt/codex-home /root/.local/bin /root/.claude \
-    && curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_RELEASE=0.142.5 sh -s -- --release 0.142.5 \
+    && curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_RELEASE="${CODEX_RELEASE}" sh -s -- --release "${CODEX_RELEASE}" \
     && curl -fsSL https://claude.ai/install.sh | bash \
     && cp -L /root/.local/bin/claude /usr/local/bin/claude \
     && chmod 0755 /usr/local/bin/claude \

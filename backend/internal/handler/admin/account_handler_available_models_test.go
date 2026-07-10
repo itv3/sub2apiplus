@@ -257,7 +257,7 @@ func TestAccountHandlerGetAvailableModels_OpenAISparkShadowReturnsMappingModels(
 	}, ids, "影子可用模型由 model_mapping 派生（非写死）")
 }
 
-func TestAccountHandlerGetAvailableModels_AntigravityAdvertisesOfficialAndManualWhitelistModels(t *testing.T) {
+func TestAccountHandlerGetAvailableModels_AntigravityAdvertisesExplicitWhitelistModels(t *testing.T) {
 	svc := &availableModelsAdminService{
 		stubAdminService: newStubAdminService(),
 		account: service.Account{
@@ -296,8 +296,43 @@ func TestAccountHandlerGetAvailableModels_AntigravityAdvertisesOfficialAndManual
 	for _, model := range resp.Data {
 		ids = append(ids, model.ID)
 	}
+	require.Equal(t, []string{
+		"claude-sonnet-4-6",
+		"gemini-future-pro",
+		"gemini-pro-agent",
+	}, ids)
+}
+
+func TestAccountHandlerGetAvailableModels_AntigravityWithoutMappingAdvertisesOfficialModels(t *testing.T) {
+	svc := &availableModelsAdminService{
+		stubAdminService: newStubAdminService(),
+		account: service.Account{
+			ID:          47,
+			Name:        "antigravity-default",
+			Platform:    service.PlatformAntigravity,
+			Type:        service.AccountTypeOAuth,
+			Status:      service.StatusActive,
+			Credentials: map[string]any{},
+		},
+	}
+	router := setupAvailableModelsRouter(svc)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/accounts/47/models", nil)
+	router.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var resp struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+	ids := make([]string, 0, len(resp.Data))
+	for _, model := range resp.Data {
+		ids = append(ids, model.ID)
+	}
 	want := antigravity.OfficialModelIDs()
-	want = append(want, "gemini-future-pro")
 	sort.Strings(want)
 	require.Equal(t, want, ids)
 }

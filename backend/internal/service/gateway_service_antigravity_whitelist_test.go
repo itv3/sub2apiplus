@@ -18,8 +18,10 @@ func TestGatewayService_isModelSupportedByAccount_AntigravityModelMapping(t *tes
 		Platform: PlatformAntigravity,
 		Credentials: map[string]any{
 			"model_mapping": map[string]any{
-				"claude-*":   "claude-sonnet-4-6",
-				"gemini-3-*": "gemini-3-flash-agent",
+				"claude-*":             "claude-sonnet-4-6",
+				"claude-sonnet-4-6":    "claude-sonnet-4-6",
+				"gemini-3-*":           "gemini-3-flash-agent",
+				"gemini-3-flash-agent": "gemini-3-flash-agent",
 			},
 		},
 	}
@@ -33,9 +35,9 @@ func TestGatewayService_isModelSupportedByAccount_AntigravityModelMapping(t *tes
 	require.True(t, svc.isModelSupportedByAccount(account, "gemini-3-flash"))
 	require.True(t, svc.isModelSupportedByAccount(account, "gemini-3-pro-high"))
 
-	// 未命中通配符时，历史兼容入口仍可落到官方模型。
-	require.True(t, svc.isModelSupportedByAccount(account, "gemini-2.5-flash"))
-	require.True(t, svc.isModelSupportedByAccount(account, "gemini-2.5-pro"))
+	// 未命中通配符时，历史兼容入口只有最终目标仍在显式白名单中才可通过。
+	require.False(t, svc.isModelSupportedByAccount(account, "gemini-2.5-flash"))
+	require.False(t, svc.isModelSupportedByAccount(account, "gemini-2.5-pro"))
 
 	// 未知模型不支持。
 	require.False(t, svc.isModelSupportedByAccount(account, "gemini-future-pro"))
@@ -83,7 +85,7 @@ func TestGatewayService_isModelSupportedByAccountWithContext_ThinkingMode(t *tes
 		thinkingEnabled bool
 		expected        bool
 	}{
-		// 场景 1: 即使只配置 thinking 变体，历史入口仍会先映射到官方模型。
+		// 场景 1: 只配置 thinking 变体时，基础模型的兼容目标不在白名单中。
 		{
 			name: "thinking_enabled_without_base_mapping_uses_official_target",
 			modelMapping: map[string]any{
@@ -91,9 +93,9 @@ func TestGatewayService_isModelSupportedByAccountWithContext_ThinkingMode(t *tes
 			},
 			requestedModel:  "claude-sonnet-4-5",
 			thinkingEnabled: true,
-			expected:        true,
+			expected:        false,
 		},
-		// 场景 2: 关闭 thinking 时同样可走官方兼容目标。
+		// 场景 2: 关闭 thinking 时也不能隐式补回基础官方模型。
 		{
 			name: "thinking_disabled_without_base_mapping_uses_official_target",
 			modelMapping: map[string]any{
@@ -101,7 +103,7 @@ func TestGatewayService_isModelSupportedByAccountWithContext_ThinkingMode(t *tes
 			},
 			requestedModel:  "claude-sonnet-4-5",
 			thinkingEnabled: false,
-			expected:        true,
+			expected:        false,
 		},
 		// 场景 3: 配置 claude-sonnet-4-5（非 thinking），请求 claude-sonnet-4-5 + thinking=true
 		// 最终模型名 = claude-sonnet-4-5-thinking，不在 mapping 中，应该不匹配

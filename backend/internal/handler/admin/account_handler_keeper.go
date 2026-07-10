@@ -341,6 +341,9 @@ func (h *AccountHandler) loadKeeperCandidateAccounts(ctx context.Context) ([]ser
 }
 
 func isKeeperKeepaliveCandidate(account service.Account) bool {
+	if !account.IsSchedulable() {
+		return false
+	}
 	switch account.Platform {
 	case service.PlatformOpenAI:
 		return account.Type == service.AccountTypeAPIKey && strings.TrimSpace(account.GetOpenAIApiKey()) != ""

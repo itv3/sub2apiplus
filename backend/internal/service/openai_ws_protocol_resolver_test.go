@@ -1,9 +1,12 @@
 package service
 
 import (
+	"context"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
@@ -134,6 +137,26 @@ func TestOpenAIWSProtocolResolver_Resolve(t *testing.T) {
 		decision := NewOpenAIWSProtocolResolver(baseCfg).Resolve(account)
 		require.Equal(t, OpenAIUpstreamTransportHTTPSSE, decision.Transport)
 		require.Equal(t, "apikey_mimic_http_only", decision.Reason)
+	})
+
+	t.Run("API Key mimic 账号对官方 Codex 恢复普通 WS 判定", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		c, _ := gin.CreateTestContext(httptest.NewRecorder())
+		c.Request = httptest.NewRequest("GET", "/openai/v1/responses", nil)
+		c.Request.Header.Set("User-Agent", "codex_cli_rs/0.125.0")
+		ctx := WithOpenAIAPIKeyMimicRequestContext(context.Background(), c)
+		account := &Account{
+			Platform: PlatformOpenAI,
+			Type:     AccountTypeAPIKey,
+			Extra: map[string]any{
+				"openai_apikey_mimic_codex_cli":                 true,
+				"openai_apikey_responses_websockets_v2_enabled": true,
+			},
+		}
+
+		decision := resolveOpenAIWSProtocolForRequest(NewOpenAIWSProtocolResolver(baseCfg), ctx, account)
+		require.Equal(t, OpenAIUpstreamTransportResponsesWebsocketV2, decision.Transport)
+		require.Equal(t, "ws_v2_enabled", decision.Reason)
 	})
 
 	t.Run("未知认证类型回退HTTP", func(t *testing.T) {

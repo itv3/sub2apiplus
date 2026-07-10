@@ -288,7 +288,7 @@ func TestAntigravityGatewayService_IsModelSupported(t *testing.T) {
 	}
 }
 
-func TestAdvertisedModelMappingForAccount_AntigravityMergesManualWhitelistModels(t *testing.T) {
+func TestAdvertisedModelMappingForAccount_AntigravityUsesExplicitWhitelistModels(t *testing.T) {
 	account := &Account{
 		Platform: PlatformAntigravity,
 		Credentials: map[string]any{
@@ -306,9 +306,6 @@ func TestAdvertisedModelMappingForAccount_AntigravityMergesManualWhitelistModels
 
 	mapping := AdvertisedModelMappingForAccount(account)
 
-	for _, model := range defaultAntigravityModelIDs() {
-		require.Equal(t, model, mapping[model])
-	}
 	require.Equal(t, "gemini-future-pro", mapping["gemini-future-pro"])
 	require.Equal(t, "gemini-future-lite", mapping["gemini-future-lite"])
 	require.Equal(t, "gemini-path-pro", mapping["gemini-path-pro"])
@@ -317,6 +314,30 @@ func TestAdvertisedModelMappingForAccount_AntigravityMergesManualWhitelistModels
 	require.NotContains(t, mapping, "models/gemini-path-max")
 	require.NotContains(t, mapping, "Gemini Future Pro")
 	require.NotContains(t, mapping, "gemini-3.1-pro-high")
+	require.NotContains(t, mapping, "gemini-3.5-flash-low")
+}
+
+func TestAdvertisedModelMappingForAccount_AntigravityDefaultsOnlyForMissingOrEmptyMapping(t *testing.T) {
+	for _, account := range []*Account{
+		{Platform: PlatformAntigravity},
+		{Platform: PlatformAntigravity, Credentials: map[string]any{}},
+		{Platform: PlatformAntigravity, Credentials: map[string]any{"model_mapping": map[string]any{}}},
+	} {
+		mapping := AdvertisedModelMappingForAccount(account)
+		require.Len(t, mapping, len(defaultAntigravityModelIDs()))
+		for _, model := range defaultAntigravityModelIDs() {
+			require.Equal(t, model, mapping[model])
+		}
+	}
+
+	malformed := &Account{
+		Platform: PlatformAntigravity,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{"gemini-pro-agent": 123},
+		},
+	}
+	require.Empty(t, AdvertisedModelMappingForAccount(malformed))
+	require.False(t, isAntigravityAllowedModel(malformed, "gemini-pro-agent"))
 }
 
 func TestResolveAntigravityFallbackModelUsesAccountAllowedModels(t *testing.T) {
@@ -336,7 +357,7 @@ func TestResolveAntigravityFallbackModelUsesAccountAllowedModels(t *testing.T) {
 	}
 	require.Equal(t, "gemini-future-pro", resolveAntigravityFallbackModel(customAccount, "gemini-future-pro", "gemini-pro-agent"))
 	require.Equal(t, "gemini-future-pro", resolveAntigravityFallbackModel(customAccount, "Future Pro", "gemini-pro-agent"))
-	require.Equal(t, "gemini-3.5-flash-low", resolveAntigravityFallbackModel(customAccount, "gemini-3.5-flash-low", "gemini-pro-agent"))
+	require.Empty(t, resolveAntigravityFallbackModel(customAccount, "gemini-3.5-flash-low", "gemini-pro-agent"))
 }
 
 func TestMapAntigravityModel_RequiresAllowedTarget(t *testing.T) {
@@ -350,7 +371,7 @@ func TestMapAntigravityModel_RequiresAllowedTarget(t *testing.T) {
 			name:           "wildcard target official model",
 			modelMapping:   map[string]any{"claude-*": "claude-sonnet-4-6"},
 			requestedModel: "claude-opus-4-6",
-			expected:       "claude-sonnet-4-6",
+			expected:       "",
 		},
 		{
 			name:           "wildcard target requires self map",
@@ -371,7 +392,7 @@ func TestMapAntigravityModel_RequiresAllowedTarget(t *testing.T) {
 			name:           "legacy alias self map is not injected into allowed set",
 			modelMapping:   map[string]any{"gemini-future-pro": "gemini-future-pro"},
 			requestedModel: "gemini-3.1-pro-high",
-			expected:       "gemini-pro-agent",
+			expected:       "",
 		},
 		{
 			name:           "wildcard target legacy alias rejected without self map",
@@ -401,7 +422,7 @@ func TestMapAntigravityModel_RequiresAllowedTarget(t *testing.T) {
 			name:           "customtools alias target official model",
 			modelMapping:   map[string]any{"gemini-3.1-pro-preview": "gemini-pro-agent"},
 			requestedModel: "gemini-3.1-pro-preview-customtools",
-			expected:       "gemini-pro-agent",
+			expected:       "",
 		},
 	}
 

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"net/http"
 	"strings"
 	"time"
@@ -11,6 +12,8 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
+
+type openAIAPIKeyMimicRequestContextKey struct{}
 
 const (
 	openAIAPIKeyCodexMimicProfileExtraKey = "openai_apikey_mimic_codex_profile"
@@ -54,6 +57,23 @@ func resolveOpenAIAPIKeyCodexMimicProfileForRequest(account *Account, apiKeyID i
 		profile.Enabled = false
 	}
 	return profile
+}
+
+// WithOpenAIAPIKeyMimicRequestContext 记录本次入站请求是否来自 Codex 官方客户端。
+// 调度发生在账号选定之前，因此必须把请求身份放入标准 context，确保账号筛选与最终转发使用同一套 mimic/WS 判定。
+func WithOpenAIAPIKeyMimicRequestContext(ctx context.Context, c *gin.Context) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, openAIAPIKeyMimicRequestContextKey{}, isInboundOpenAIOfficialClient(c))
+}
+
+func isOpenAIOfficialClientRequestContext(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	official, _ := ctx.Value(openAIAPIKeyMimicRequestContextKey{}).(bool)
+	return official
 }
 
 func isInboundOpenAIOfficialClient(c *gin.Context) bool {

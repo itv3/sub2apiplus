@@ -7,24 +7,16 @@ func defaultAntigravityModelIDs() []string {
 }
 
 // AdvertisedModelMappingForAccount 返回模型列表接口应暴露给用户的模型。
-// Antigravity 默认广告口径收敛到官方模型，同时暴露管理员在账号白名单中手动加入的自映射模型。
+// Antigravity 未显式配置白名单时广告官方模型；显式配置后只广告管理员保留的自映射模型。
 func AdvertisedModelMappingForAccount(account *Account) map[string]string {
 	if account == nil {
 		return nil
 	}
 	if account.Platform == PlatformAntigravity {
-		defaults := defaultAntigravityModelIDs()
-		mapping := make(map[string]string, len(defaults))
-		for _, model := range defaults {
+		allowed := antigravityAllowedModelSet(account)
+		mapping := make(map[string]string, len(allowed))
+		for model := range allowed {
 			mapping[model] = model
-		}
-		for from, to := range stringMappingFromRaw(account.Credentials["model_mapping"]) {
-			from = normalizeAntigravityModelID(from)
-			to = normalizeAntigravityModelID(to)
-			if from == "" || from != to {
-				continue
-			}
-			mapping[from] = to
 		}
 		return mapping
 	}

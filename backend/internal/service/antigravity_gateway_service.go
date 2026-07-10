@@ -256,7 +256,7 @@ func (s *AntigravityGatewayService) handleAntigravityModelRateLimitBeforePolicy(
 }
 
 // mapAntigravityModel 获取 Antigravity 最终发包模型名。
-// 允许集合固定为官方默认模型 + 账号原始 model_mapping 中的自映射模型。
+// 未显式配置 model_mapping 时允许官方默认模型；显式配置后只允许原始映射中的自映射模型。
 // 账户映射和通配符只负责把请求模型转换到允许集合，不能单独扩大允许集合。
 func mapAntigravityModel(account *Account, requestedModel string) string {
 	if account == nil {
@@ -328,24 +328,64 @@ func allowAntigravityMappedTarget(account *Account, mapped string) string {
 	return ""
 }
 
+func rawAntigravityModelMapping(account *Account) (map[string]string, bool) {
+	if account == nil || account.Credentials == nil {
+		return nil, false
+	}
+	raw, exists := account.Credentials["model_mapping"]
+	if !exists || raw == nil {
+		return nil, false
+	}
+	switch value := raw.(type) {
+	case map[string]any:
+		if len(value) == 0 {
+			return nil, false
+		}
+	case map[string]string:
+		if len(value) == 0 {
+			return nil, false
+		}
+	}
+	mapping := stringMappingFromRaw(raw)
+	if mapping == nil {
+		// 键已显式配置但内容无有效字符串映射时按空白名单处理，避免格式错误意外放开官方模型。
+		return nil, true
+	}
+	if len(mapping) == 0 {
+		return nil, false
+	}
+	return mapping, true
+}
+
+func antigravityAllowedModelSet(account *Account) map[string]struct{} {
+	mapping, explicit := rawAntigravityModelMapping(account)
+	if !explicit {
+		models := antigravity.OfficialModelIDs()
+		allowed := make(map[string]struct{}, len(models))
+		for _, model := range models {
+			allowed[normalizeAntigravityModelID(model)] = struct{}{}
+		}
+		return allowed
+	}
+
+	allowed := make(map[string]struct{})
+	for from, to := range mapping {
+		from = normalizeAntigravityModelID(from)
+		to = normalizeAntigravityModelID(to)
+		if from != "" && from == to {
+			allowed[from] = struct{}{}
+		}
+	}
+	return allowed
+}
+
 func isAntigravityAllowedModel(account *Account, model string) bool {
 	model = normalizeAntigravityModelID(model)
 	if model == "" {
 		return false
 	}
-	for _, officialModel := range antigravity.OfficialModelIDs() {
-		if model == officialModel {
-			return true
-		}
-	}
-	for from, to := range stringMappingFromRaw(account.Credentials["model_mapping"]) {
-		from = normalizeAntigravityModelID(from)
-		to = normalizeAntigravityModelID(to)
-		if from != "" && from == to && model == from {
-			return true
-		}
-	}
-	return false
+	_, allowed := antigravityAllowedModelSet(account)[model]
+	return allowed
 }
 
 func resolveAntigravityFallbackModel(account *Account, fallbackModel string, currentModel string) string {

@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"errors"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -581,7 +580,7 @@ func TestGetAvailableModels_ErrorAndGlobalListBranches(t *testing.T) {
 	require.Equal(t, int64(1), okRepo.listAllCalls.Load())
 }
 
-func TestGetAvailableModels_AntigravityAdvertisesOfficialAndManualWhitelistModels(t *testing.T) {
+func TestGetAvailableModels_AntigravityAdvertisesExplicitWhitelistModels(t *testing.T) {
 	resetGatewayHotpathStatsForTest()
 
 	groupID := int64(12)
@@ -608,10 +607,7 @@ func TestGetAvailableModels_AntigravityAdvertisesOfficialAndManualWhitelistModel
 	}
 
 	models := svc.GetAvailableModels(context.Background(), &groupID, PlatformAntigravity)
-	want := defaultAntigravityModelIDs()
-	want = append(want, "custom-upstream-a")
-	sort.Strings(want)
-	require.Equal(t, want, models)
+	require.Equal(t, []string{"custom-upstream-a"}, models)
 }
 
 func TestGatewayHotpathHelpers_CacheTTLAndStickyContext(t *testing.T) {

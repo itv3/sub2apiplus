@@ -123,6 +123,39 @@ func TestAntigravityGatewayService_ForwardClaudeRejectsUnallowedThinkingSuffix(t
 	require.Contains(t, rec.Body.String(), "claude-sonnet-4-5-thinking")
 }
 
+func TestAntigravityGatewayService_ForwardClaudeRejectsUnallowedWebSearchFallback(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+
+	svc := &AntigravityGatewayService{}
+	account := &Account{
+		Platform: PlatformAntigravity,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"model_mapping": map[string]any{
+				"claude-sonnet-4-5": "gemini-pro-agent",
+				"gemini-pro-agent":  "gemini-pro-agent",
+			},
+		},
+	}
+	body := []byte(`{
+		"model":"claude-sonnet-4-5",
+		"max_tokens":100,
+		"tools":[{"type":"web_search_20250305","name":"web_search"}],
+		"messages":[{"role":"user","content":"search"}]
+	}`)
+
+	result, err := svc.Forward(context.Background(), c, account, body, false)
+
+	require.Nil(t, result)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "model "+antigravity.OfficialWebSearchFallbackModel+" not in whitelist")
+	require.Equal(t, http.StatusForbidden, rec.Code)
+	require.Contains(t, rec.Body.String(), antigravity.OfficialWebSearchFallbackModel)
+}
+
 func TestStripSignatureSensitiveBlocksFromClaudeRequest(t *testing.T) {
 	req := &antigravity.ClaudeRequest{
 		Model: "claude-sonnet-4-5",
@@ -932,8 +965,9 @@ func TestAntigravityGatewayService_Forward_WebSearchBillsWithFallbackModel(t *te
 			"access_token": "token",
 			"project_id":   "proj",
 			"model_mapping": map[string]any{
-				"claude-sonnet-4-5": "gemini-pro-agent",
-				"gemini-pro-agent":  "gemini-pro-agent",
+				"claude-sonnet-4-5":                        "gemini-pro-agent",
+				"gemini-pro-agent":                         "gemini-pro-agent",
+				antigravity.OfficialWebSearchFallbackModel: antigravity.OfficialWebSearchFallbackModel,
 			},
 		},
 	}
@@ -981,8 +1015,9 @@ func TestAntigravityGatewayService_Forward_WebSearchRateLimitUsesFallbackModel(t
 			"access_token": "token",
 			"project_id":   "proj",
 			"model_mapping": map[string]any{
-				"claude-sonnet-4-5": "gemini-pro-agent",
-				"gemini-pro-agent":  "gemini-pro-agent",
+				"claude-sonnet-4-5":                        "gemini-pro-agent",
+				"gemini-pro-agent":                         "gemini-pro-agent",
+				antigravity.OfficialWebSearchFallbackModel: antigravity.OfficialWebSearchFallbackModel,
 			},
 		},
 		Extra: map[string]any{
