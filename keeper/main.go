@@ -813,6 +813,13 @@ func (k *Keeper) renderRuntimeEnv(target TargetConfig, layout runtimeLayout) str
 		"ANTHROPIC_BASE_URL=" + shellQuote(target.BaseURL),
 		"ANTHROPIC_MODEL=" + shellQuote(target.Model),
 	}
+	// claude CLI 会在客户端侧按 max_tokens 校验输出上限，默认顶到模型上限（如 opus 64000）而直接报
+	// "response exceeded the 64000 output token maximum"，请求根本到不了主服务代理的钳制逻辑。
+	// 因此仅对 claude executor 注入 CLAUDE_CODE_MAX_OUTPUT_TOKENS，把保活配置的最大输出 token 落到 CLI。
+	if targetExecutor(target) == "claude" {
+		maxTokens := positiveIntDefault(target.MaxOutputTokens, defaultKeepaliveMaxTokens)
+		lines = append(lines, "CLAUDE_CODE_MAX_OUTPUT_TOKENS="+shellQuote(strconv.Itoa(maxTokens)))
+	}
 	return strings.Join(lines, "\n") + "\n"
 }
 

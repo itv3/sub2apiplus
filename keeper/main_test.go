@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -680,6 +681,36 @@ func TestRenderRuntimeEnvUsesScopedProxyToken(t *testing.T) {
 	}
 	if strings.Contains(env, "secret") {
 		t.Fatalf("runtime env leaked internal token:\n%s", env)
+	}
+	// codex executor 不应注入 CLAUDE_CODE_MAX_OUTPUT_TOKENS（该变量仅对 claude CLI 有意义）。
+	if strings.Contains(env, "CLAUDE_CODE_MAX_OUTPUT_TOKENS") {
+		t.Fatalf("codex runtime env must not set CLAUDE_CODE_MAX_OUTPUT_TOKENS:\n%s", env)
+	}
+}
+
+func TestRenderRuntimeEnvInjectsClaudeMaxOutputTokens(t *testing.T) {
+	k := &Keeper{}
+	target := TargetConfig{
+		AccountID:       7,
+		Name:            "BWG_Anthropic",
+		Platform:        "anthropic",
+		Executor:        "claude",
+		BaseURL:         "http://sub2api/api/v1/internal/keeper/anthropic/accounts/7",
+		APIKey:          "proxy-token",
+		Model:           "claude-opus-4-8",
+		WorkspacePath:   "/workspace/projects/homeproxy",
+		MaxOutputTokens: 800,
+	}
+	env := k.renderRuntimeEnv(target, runtimeLayout{})
+	if !strings.Contains(env, "CLAUDE_CODE_MAX_OUTPUT_TOKENS='800'") {
+		t.Fatalf("claude runtime env did not inject configured max output tokens:\n%s", env)
+	}
+
+	// MaxOutputTokens 未设置（0）时回退到默认值，避免注入 0 让 CLI 拿到非法上限。
+	target.MaxOutputTokens = 0
+	env = k.renderRuntimeEnv(target, runtimeLayout{})
+	if !strings.Contains(env, "CLAUDE_CODE_MAX_OUTPUT_TOKENS='"+strconv.Itoa(defaultKeepaliveMaxTokens)+"'") {
+		t.Fatalf("claude runtime env did not fall back to default max output tokens:\n%s", env)
 	}
 }
 
