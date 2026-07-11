@@ -1283,6 +1283,13 @@ func (k *Keeper) snapshotLocked() any {
 	for _, target := range k.state.Targets {
 		cp := *target
 		cp.Sessions = append([]Session(nil), target.Sessions...)
+		// 展示快照仅保留前端需要的会话摘要，避免命令和完整进程输出放大 /api/state 响应。
+		for i := range cp.Sessions {
+			cp.Sessions[i].Stdout = ""
+			cp.Sessions[i].Stderr = ""
+			cp.Sessions[i].Command = nil
+			cp.Sessions[i].CommandText = ""
+		}
 		sort.Slice(cp.Sessions, func(i, j int) bool {
 			return cp.Sessions[i].StartedAt.After(cp.Sessions[j].StartedAt)
 		})

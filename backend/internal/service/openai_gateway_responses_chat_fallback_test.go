@@ -210,8 +210,8 @@ func TestForwardResponses_MimicAccountIgnoresForceChatFallback(t *testing.T) {
 	require.Equal(t, "http://upstream.example/v1/responses", upstream.lastReq.URL.String())
 	require.Equal(t, codexDesktopUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.NotNil(t, upstream.lastTLSProfile)
-	require.Contains(t, upstream.lastTLSProfile.Name, "Codex Desktop 0.142.0")
-	require.Empty(t, upstream.lastTLSProfile.ALPNProtocols)
+	require.Contains(t, upstream.lastTLSProfile.Name, "Codex 0.144.1")
+	require.Equal(t, []string{"h2", "http/1.1"}, upstream.lastTLSProfile.ALPNProtocols)
 	require.True(t, gjson.GetBytes(upstream.lastBody, "input").Exists())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "messages").Exists())
 }

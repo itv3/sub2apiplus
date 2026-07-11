@@ -1112,14 +1112,26 @@ func buildUpstreamTransport(settings poolSettings, proxyURL *url.URL, protocolMo
 //   - profile: TLS 指纹配置
 //
 // 返回:
-//   - *http.Transport: 配置好的 Transport 实例
+//   - http.RoundTripper: 配置好的 RoundTripper（h1 profile 为 *http.Transport；
+//     ALPN 含 h2 时为 x/net/http2.Transport）
 //   - error: 配置错误
 //
 // 代理类型处理:
 //   - nil/空: 直连，使用 TLSFingerprintDialer
 //   - http/https: HTTP 代理，使用 HTTPProxyDialer（CONNECT 隧道 + utls 握手）
 //   - socks5: SOCKS5 代理，使用 SOCKS5ProxyDialer（SOCKS5 隧道 + utls 握手）
-func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *url.URL, profile *tlsfingerprint.Profile) (*http.Transport, error) {
+func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *url.URL, profile *tlsfingerprint.Profile) (http.RoundTripper, error) {
+	// profile ALPN 声明 h2 时，改走真正的 HTTP/2 wire（utls 握手 + x/net/http2 会话）。
+	// net/http 对自定义 DialTLSContext 返回的 utls 连接不会按 ALPN 自动升级 h2，故需显式包装。
+	if tlsfingerprint.ProfileNegotiatesH2(profile) {
+		h2Transport, err := tlsfingerprint.NewH2Transport(profile, proxyURL, settings.idleConnTimeout, settings.responseHeaderTimeout)
+		if err != nil {
+			slog.Warn("tls_fingerprint_h2_transport_failed_fallback_h1", "profile", profile.Name, "error", err)
+		} else {
+			return h2Transport, nil
+		}
+	}
+
 	transport := &http.Transport{
 		MaxIdleConns:          settings.maxIdleConns,
 		MaxIdleConnsPerHost:   settings.maxIdleConnsPerHost,

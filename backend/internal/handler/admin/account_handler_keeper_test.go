@@ -3,6 +3,7 @@ package admin
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -13,6 +14,127 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 )
+
+func TestProxyKeeperAcceptsValidJSONLargerThanEightMiB(t *testing.T) {
+	tail := `","tail":"complete"}`
+	body := `{"blob":"` + strings.Repeat("a", (8<<20)+1024) + tail
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(server.Close)
+
+	responseRecorder := requestKeeperState(t, server.URL)
+	if responseRecorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", responseRecorder.Code, responseRecorder.Body.String())
+	}
+
+	var envelope struct {
+		Code int `json:"code"`
+		Data struct {
+			Tail string `json:"tail"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(responseRecorder.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("响应不是合法 JSON: %v", err)
+	}
+	if envelope.Code != 0 || envelope.Data.Tail != "complete" {
+		t.Fatalf("响应尾部不完整: code=%d tail=%q", envelope.Code, envelope.Data.Tail)
+	}
+}
+
+func TestProxyKeeperRejectsResponseOverLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		chunk := bytes.Repeat([]byte("a"), 32<<10)
+		remaining := keeperProxyResponseLimitBytes + 1
+		for remaining > 0 {
+			part := len(chunk)
+			if part > remaining {
+				part = remaining
+			}
+			if _, err := w.Write(chunk[:part]); err != nil {
+				return
+			}
+			remaining -= part
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	responseRecorder := requestKeeperState(t, server.URL)
+	if responseRecorder.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", responseRecorder.Code, http.StatusBadGateway)
+	}
+	if !strings.Contains(responseRecorder.Body.String(), "keeper response exceeds 32 MiB limit") {
+		t.Fatalf("body = %s", responseRecorder.Body.String())
+	}
+}
+
+func TestProxyKeeperRejectsInvalidJSON(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"incomplete":`)
+	}))
+	t.Cleanup(server.Close)
+
+	responseRecorder := requestKeeperState(t, server.URL)
+	if responseRecorder.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", responseRecorder.Code, http.StatusBadGateway)
+	}
+	if !strings.Contains(responseRecorder.Body.String(), "keeper returned invalid json") {
+		t.Fatalf("body = %s", responseRecorder.Body.String())
+	}
+}
+
+func TestProxyKeeperPreservesNonSuccessStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = io.WriteString(w, "keeper unavailable")
+	}))
+	t.Cleanup(server.Close)
+
+	responseRecorder := requestKeeperState(t, server.URL)
+	if responseRecorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", responseRecorder.Code, http.StatusServiceUnavailable)
+	}
+	if !strings.Contains(responseRecorder.Body.String(), "keeper unavailable") {
+		t.Fatalf("body = %s", responseRecorder.Body.String())
+	}
+}
+
+func TestProxyKeeperAcceptsEmptySuccessResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(server.Close)
+
+	responseRecorder := requestKeeperState(t, server.URL)
+	if responseRecorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", responseRecorder.Code, responseRecorder.Body.String())
+	}
+	var envelope struct {
+		Code int `json:"code"`
+	}
+	if err := json.Unmarshal(responseRecorder.Body.Bytes(), &envelope); err != nil {
+		t.Fatalf("响应不是合法 JSON: %v", err)
+	}
+	if envelope.Code != 0 {
+		t.Fatalf("code = %d, want 0", envelope.Code)
+	}
+}
+
+func requestKeeperState(t *testing.T, baseURL string) *httptest.ResponseRecorder {
+	t.Helper()
+	gin.SetMode(gin.TestMode)
+	t.Setenv("SUB2APIPLUS_KEEPER_BASE_URL", baseURL)
+	t.Setenv("SUB2APIPLUS_KEEPER_INTERNAL_TOKEN", "test-token")
+
+	router := gin.New()
+	handler := &AccountHandler{}
+	router.GET("/state", handler.GetKeeperState)
+	recorder := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/state", nil)
+	router.ServeHTTP(recorder, req)
+	return recorder
+}
 
 func TestIsKeeperKeepaliveCandidateRequiresSchedulableAPIKeyAccount(t *testing.T) {
 	now := time.Now()

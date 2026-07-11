@@ -90,6 +90,12 @@ type codexResponsesNormalizationOptions struct {
 	EnsureStream                     bool
 	EnsureStoreFalse                 bool
 	EnsureReasoningEncryptedContent  bool
+	// EnsureReasoningContextAllTurns 补齐 reasoning.context=all_turns（客户端缺省时），
+	// 对齐 codex_exec 0.144.1 抓包默认值。
+	EnsureReasoningContextAllTurns bool
+	// EnsureTextVerbosityLow 补齐 text.verbosity=low（客户端缺省时），
+	// 对齐 codex_exec 0.144.1 抓包默认值。
+	EnsureTextVerbosityLow bool
 }
 
 const (
@@ -306,6 +312,12 @@ func applyCodexResponsesNormalization(reqBody map[string]any, opts codexResponse
 	if opts.EnsureReasoningEncryptedContent && ensureCodexEncryptedReasoningContentInclude(reqBody, true) {
 		modified = true
 	}
+	if opts.EnsureReasoningContextAllTurns && ensureCodexReasoningContextAllTurns(reqBody) {
+		modified = true
+	}
+	if opts.EnsureTextVerbosityLow && ensureCodexTextVerbosityLow(reqBody) {
+		modified = true
+	}
 	if input, ok := reqBody["input"].([]any); ok {
 		if opts.NormalizeBareRoleContentMessages {
 			if normalized, changed := normalizeCodexBareRoleContentMessages(input); changed {
@@ -325,6 +337,44 @@ func applyCodexResponsesNormalization(reqBody map[string]any, opts codexResponse
 		modified = true
 	}
 	return modified
+}
+
+// ensureCodexReasoningContextAllTurns 在 reasoning 对象中补齐 context=all_turns（仅当缺省）。
+// 客户端已显式提供 reasoning.context 时保留原值，不覆盖。reasoning 缺省时创建最小对象。
+func ensureCodexReasoningContextAllTurns(reqBody map[string]any) bool {
+	switch reasoning := reqBody["reasoning"].(type) {
+	case map[string]any:
+		if v, ok := reasoning["context"].(string); ok && strings.TrimSpace(v) != "" {
+			return false
+		}
+		reasoning["context"] = "all_turns"
+		reqBody["reasoning"] = reasoning
+		return true
+	case nil:
+		reqBody["reasoning"] = map[string]any{"context": "all_turns"}
+		return true
+	default:
+		return false
+	}
+}
+
+// ensureCodexTextVerbosityLow 在 text 对象中补齐 verbosity=low（仅当缺省）。
+// 客户端已显式提供 text.verbosity 时保留原值，不覆盖。text 缺省时创建最小对象。
+func ensureCodexTextVerbosityLow(reqBody map[string]any) bool {
+	switch text := reqBody["text"].(type) {
+	case map[string]any:
+		if v, ok := text["verbosity"].(string); ok && strings.TrimSpace(v) != "" {
+			return false
+		}
+		text["verbosity"] = "low"
+		reqBody["text"] = text
+		return true
+	case nil:
+		reqBody["text"] = map[string]any{"verbosity": "low"}
+		return true
+	default:
+		return false
+	}
 }
 
 func ensureCodexEncryptedReasoningContentInclude(reqBody map[string]any, replaceInvalid bool) bool {

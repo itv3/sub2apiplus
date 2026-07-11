@@ -3,10 +3,10 @@ package service
 import "net/http"
 
 const (
-	// Codex API Key mimic 抓包基线：Codex Desktop 0.142.0，2026-07。
-	codexDesktopOriginator   = "Codex Desktop"
-	codexDesktopUserAgent    = "Codex Desktop/0.142.0 (Mac OS 26.5.1; arm64) dumb (codex_exec; 0.142.0)"
-	codexDesktopBetaFeatures = "memories,remote_compaction_v2"
+	// Codex API Key mimic 抓包基线：codex_exec 0.144.1，2026-07（anyrouter.top 直连抓包）。
+	codexDesktopOriginator   = "codex_exec"
+	codexDesktopUserAgent    = "codex_exec/0.144.1 (Debian 12.0.0; aarch64) unknown (codex_exec; 0.144.1)"
+	codexDesktopBetaFeatures = "remote_compaction_v2"
 )
 
 func applyOpenAIAPIKeyCodexMimicHeaders(req *http.Request, isStream bool, scopes ...openAIAPIKeyCodexMimicScope) {
@@ -29,6 +29,7 @@ func applyOpenAIAPIKeyCodexMimicHeaders(req *http.Request, isStream bool, scopes
 		deleteHeaderAllForms(req.Header, "version")
 		metadata := buildOpenAIAPIKeyCodexDesktopMetadata(scope)
 		req.Header.Set("x-codex-beta-features", client.BetaFeatures)
+		req.Header.Set("x-openai-internal-codex-responses-lite", "true")
 		req.Header.Set("x-client-request-id", metadata.SessionID)
 		req.Header.Set("session-id", metadata.SessionID)
 		req.Header.Set("thread-id", metadata.ThreadID)

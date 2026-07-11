@@ -59,6 +59,8 @@ func applyOpenAIAPIKeyCodexMimicryToBody(body []byte, scopes ...openAIAPIKeyCode
 		EnsureStream:                     true,
 		EnsureStoreFalse:                 true,
 		EnsureReasoningEncryptedContent:  true,
+		EnsureReasoningContextAllTurns:   true,
+		EnsureTextVerbosityLow:           true,
 	})
 	if ensureOpenAIAPIKeyCodexPromptCacheKey(reqBody, scope) {
 		modified = true
@@ -160,7 +162,7 @@ func buildOpenAIAPIKeyCodexDesktopMetadata(scope openAIAPIKeyCodexMimicScope) op
 		"window_id":               windowID,
 		"request_kind":            "turn",
 		"thread_source":           "user",
-		"sandbox":                 "seatbelt",
+		"sandbox":                 "seccomp",
 		"turn_started_at_unix_ms": turnStartedAtUnixMS,
 	}
 	turnMetadataBytes, _ := json.Marshal(turnMetadata)

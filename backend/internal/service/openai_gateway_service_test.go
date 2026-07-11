@@ -2721,9 +2721,9 @@ func TestOpenAIGatewayService_APIKeyCodexMimicUsesCapturedDesktopTLSProfile(t *t
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotNil(t, upstream.lastTLSProfile)
-	require.Contains(t, upstream.lastTLSProfile.Name, "Codex Desktop 0.142.0")
-	require.Empty(t, upstream.lastTLSProfile.ALPNProtocols)
-	require.Equal(t, uint16(0x0303), upstream.lastTLSProfile.TLSVersMax)
+	require.Contains(t, upstream.lastTLSProfile.Name, "Codex 0.144.1")
+	require.Equal(t, []string{"h2", "http/1.1"}, upstream.lastTLSProfile.ALPNProtocols)
+	require.Equal(t, uint16(0x0304), upstream.lastTLSProfile.TLSVersMax)
 	require.Equal(t, codexDesktopUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, "text/event-stream", upstream.lastReq.Header.Get("Accept"))
 	require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
@@ -2793,7 +2793,7 @@ func TestOpenAIGatewayService_MessagesAPIKeyCodexMimicUsesHeadersBodyAndTLS(t *t
 	require.NotEmpty(t, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
 	require.NotEmpty(t, gjson.GetBytes(upstream.lastBody, "client_metadata.x-codex-turn-metadata").String())
 	require.NotNil(t, upstream.lastTLSProfile)
-	require.Contains(t, upstream.lastTLSProfile.Name, "Codex Desktop 0.142.0")
+	require.Contains(t, upstream.lastTLSProfile.Name, "Codex 0.144.1")
 }
 
 func TestOpenAIGatewayService_APIKeyCodexMimicPreservesCompactRequestShape(t *testing.T) {
@@ -2909,8 +2909,8 @@ func TestOpenAIGatewayService_APIKeyCodexMimicTreatsThirdPartyRequestAsCodexCLI(
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotNil(t, upstream.lastTLSProfile)
-	require.Contains(t, upstream.lastTLSProfile.Name, "Codex Desktop 0.142.0")
-	require.Empty(t, upstream.lastTLSProfile.ALPNProtocols)
+	require.Contains(t, upstream.lastTLSProfile.Name, "Codex 0.144.1")
+	require.Equal(t, []string{"h2", "http/1.1"}, upstream.lastTLSProfile.ALPNProtocols)
 	require.Equal(t, codexDesktopUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, codexDesktopOriginator, upstream.lastReq.Header.Get("originator"))
 	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))

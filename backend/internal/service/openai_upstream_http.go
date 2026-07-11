@@ -8,27 +8,31 @@ import (
 	utls "github.com/refraction-networking/utls"
 )
 
-// codexDesktopCapturedTLSProfile 复刻 2026-06-25 在 api.3ab.in 抓到的
-// Codex Desktop/0.142.0 ClientHello。样本特征：
-// JA4=t12d220700_0d4ca5d4ec72_3304d8368043，JA3 hash=e4d448cdfe06dc1243c1eb026c74ac9a，
-// 无 ALPN / supported_versions / key_share，nginx 侧协议为 HTTP/1.1。
-func codexDesktopCapturedTLSProfile() *tlsfingerprint.Profile {
+// codexExec0144TLSProfile 复刻 2026-07-11 在 anyrouter.top 抓到的
+// codex_exec/0.144.1 ClientHello（官方 install.sh latest，Debian 12 / aarch64）。
+// 样本特征：ALPN=[h2, http/1.1]，10 个 cipher（含 0x00ff SCSV），
+// curves/key_share 含 0x11ec(X25519MLKEM768) 后量子混合组，无 GREASE，
+// 11 个 extension 顺序固定，TLS 1.3/1.2。典型 Rustls 指纹。
+// ClientHello ≈1482-1976 B（MLKEM key_share 占主要字节）。
+func codexExec0144TLSProfile() *tlsfingerprint.Profile {
 	return &tlsfingerprint.Profile{
-		Name: "Built-in Codex Desktop 0.142.0 (captured api.3ab.in 2026-06-25)",
+		Name: "Built-in Codex 0.144.1 (captured anyrouter.top 2026-07-11)",
 		CipherSuites: []uint16{
-			0x00ff,
-			0xc02c, 0xc02b, 0xc024, 0xc023,
-			0xc00a, 0xc009, 0xc008,
-			0xc030, 0xc02f, 0xc028, 0xc027,
-			0xc014, 0xc013, 0xc012,
-			0x009d, 0x009c, 0x003d, 0x003c, 0x0035, 0x002f, 0x000a,
+			0x1302, 0x1301, 0x1303,
+			0xc02c, 0xc02b, 0xcca9,
+			0xc030, 0xc02f, 0xcca8,
+			0x00ff, // TLS_EMPTY_RENEGOTIATION_INFO_SCSV
 		},
-		Curves:              []uint16{0x0017, 0x0018, 0x0019},
+		Curves:              []uint16{0x11ec, 0x001d, 0x0017, 0x0018},
 		PointFormats:        []uint16{0},
-		SignatureAlgorithms: []uint16{0x0401, 0x0201, 0x0501, 0x0601, 0x0403, 0x0203, 0x0503, 0x0603},
-		Extensions:          []uint16{0, 10, 11, 13, 5, 18, 23},
-		TLSVersMin:          uint16(utls.VersionTLS10),
-		TLSVersMax:          uint16(utls.VersionTLS12),
+		SignatureAlgorithms: []uint16{0x0503, 0x0403, 0x0603, 0x0807, 0x0806, 0x0805, 0x0804, 0x0601, 0x0501, 0x0401},
+		ALPNProtocols:       []string{"h2", "http/1.1"},
+		SupportedVersions:   []uint16{utls.VersionTLS13, utls.VersionTLS12},
+		KeyShareGroups:      []uint16{0x11ec, 0x001d},
+		PSKModes:            []uint16{1}, // psk_dhe_ke
+		Extensions:          []uint16{11, 0, 5, 43, 13, 51, 16, 23, 35, 45, 10},
+		TLSVersMin:          uint16(utls.VersionTLS12),
+		TLSVersMax:          uint16(utls.VersionTLS13),
 	}
 }
 
@@ -51,7 +55,7 @@ func resolveOpenAIAPIKeyCodexTLSProfile(account *Account, tlsFPProfileService *T
 	if resolveOpenAIAPIKeyCodexMimicClientProfile(account).ID == openAIAPIKeyCodexMimicClientCLIRS0125 {
 		return codexCLIRS0125TLSProfile()
 	}
-	return codexDesktopCapturedTLSProfile()
+	return codexExec0144TLSProfile()
 }
 
 func (s *OpenAIGatewayService) resolveOpenAIAPIKeyCodexTLSProfile(account *Account) *tlsfingerprint.Profile {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/model"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
+	utls "github.com/refraction-networking/utls"
 	"github.com/stretchr/testify/require"
 )
 
@@ -39,17 +40,18 @@ func TestResolveOpenAIAPIKeyCodexTLSProfileUsesCapturedDesktopDefault(t *testing
 	}
 	got := resolveOpenAIAPIKeyCodexTLSProfile(account, &TLSFingerprintProfileService{})
 	require.NotNil(t, got)
-	require.Contains(t, got.Name, "Codex Desktop 0.142.0")
-	require.Equal(t, []uint16{0, 10, 11, 13, 5, 18, 23}, got.Extensions)
-	require.Empty(t, got.ALPNProtocols)
-	require.Empty(t, got.SupportedVersions)
-	require.Equal(t, uint16(0x0301), got.TLSVersMin)
-	require.Equal(t, uint16(0x0303), got.TLSVersMax)
+	require.Contains(t, got.Name, "Codex 0.144.1")
+	require.Equal(t, []uint16{11, 0, 5, 43, 13, 51, 16, 23, 35, 45, 10}, got.Extensions)
+	require.Equal(t, []string{"h2", "http/1.1"}, got.ALPNProtocols)
+	require.Equal(t, []uint16{0x11ec, 0x001d, 0x0017, 0x0018}, got.Curves)
+	require.Equal(t, []uint16{0x11ec, 0x001d}, got.KeyShareGroups)
+	require.Equal(t, uint16(0x0303), got.TLSVersMin)
+	require.Equal(t, uint16(0x0304), got.TLSVersMax)
 
 	account.Extra["tls_fingerprint_profile_id"] = int64(42)
 	got = resolveOpenAIAPIKeyCodexTLSProfile(account, &TLSFingerprintProfileService{})
 	require.NotNil(t, got)
-	require.Contains(t, got.Name, "Codex Desktop 0.142.0")
+	require.Contains(t, got.Name, "Codex 0.144.1")
 
 	svc := &TLSFingerprintProfileService{
 		localCache: map[int64]*model.TLSFingerprintProfile{
@@ -104,10 +106,10 @@ func TestDoOpenAIHTTPUpstreamUsesCapturedDesktopTLSProfileByDefault(t *testing.T
 	require.False(t, recorder.doCalled)
 	require.True(t, recorder.doWithTLSCalled)
 	require.NotNil(t, recorder.lastTLSProfile)
-	require.Contains(t, recorder.lastTLSProfile.Name, "Codex Desktop 0.142.0")
-	require.Empty(t, recorder.lastTLSProfile.ALPNProtocols)
-	require.Empty(t, recorder.lastTLSProfile.SupportedVersions)
-	require.Equal(t, uint16(0x0303), recorder.lastTLSProfile.TLSVersMax)
+	require.Contains(t, recorder.lastTLSProfile.Name, "Codex 0.144.1")
+	require.Equal(t, []string{"h2", "http/1.1"}, recorder.lastTLSProfile.ALPNProtocols)
+	require.Equal(t, []uint16{utls.VersionTLS13, utls.VersionTLS12}, recorder.lastTLSProfile.SupportedVersions)
+	require.Equal(t, uint16(0x0304), recorder.lastTLSProfile.TLSVersMax)
 
 	account.Extra["tls_fingerprint_profile_id"] = int64(42)
 	tlsSvc := &TLSFingerprintProfileService{

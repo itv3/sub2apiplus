@@ -56,8 +56,19 @@ func (s *GatewayService) resolveAnthropicTLSProfileForRequest(account *Account, 
 }
 
 func defaultAPIKeyCountTokensMimicBetaHeader(body []byte) string {
-	beta := defaultAPIKeyBetaHeader(body)
+	beta := defaultAPIKeyMimicBetaHeader(body)
 	return mergeAnthropicBeta([]string{beta, "token-counting-2024-11-01"}, "")
+}
+
+// defaultAPIKeyMimicBetaHeader 返回 Anthropic API Key mimic Claude Code 时的 anthropic-beta，
+// 对齐官方 claude-cli/2.1.207 抓包的完整 beta 列表（仅 mimic 路径使用）。
+// haiku 模型上游不做第三方判定，沿用精简 haiku header。
+func defaultAPIKeyMimicBetaHeader(body []byte) string {
+	modelID := gjson.GetBytes(body, "model").String()
+	if strings.Contains(strings.ToLower(modelID), "haiku") {
+		return claude.APIKeyHaikuBetaHeader
+	}
+	return strings.Join(claude.APIKeyMimicBetas(), ",")
 }
 
 func anthropicAPIKeyMimicExtraBetas(modelID string) []string {
@@ -71,7 +82,8 @@ func requiresContext1MBetaForAPIKeyMimic(modelID string) bool {
 	modelID = strings.ToLower(strings.TrimSpace(modelID))
 	return strings.HasPrefix(modelID, "claude-opus-4-6") ||
 		strings.HasPrefix(modelID, "claude-opus-4-7") ||
-		strings.HasPrefix(modelID, "claude-opus-4-8")
+		strings.HasPrefix(modelID, "claude-opus-4-8") ||
+		strings.HasPrefix(modelID, "claude-fable-5")
 }
 
 func (s *GatewayService) buildAnthropicAPIKeyCLIMimicRequest(
@@ -89,7 +101,7 @@ func (s *GatewayService) buildAnthropicAPIKeyCLIMimicRequest(
 	modelID := gjson.GetBytes(body, "model").String()
 	extraBetas := anthropicAPIKeyMimicExtraBetas(modelID)
 	effectiveDropSet = removeTokensFromSetCopy(effectiveDropSet, extraBetas...)
-	finalBetaHeader := stripBetaTokensWithSet(mergeAnthropicBeta(extraBetas, defaultAPIKeyBetaHeader(body)), effectiveDropSet)
+	finalBetaHeader := stripBetaTokensWithSet(mergeAnthropicBeta(extraBetas, defaultAPIKeyMimicBetaHeader(body)), effectiveDropSet)
 	if blockErr := s.checkBetaPolicyBlockForHeader(ctx, finalBetaHeader, account, modelID); blockErr != nil {
 		return nil, nil, blockErr
 	}

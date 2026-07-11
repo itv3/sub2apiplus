@@ -14,6 +14,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -440,4 +441,66 @@ func fetchFingerprint(t *testing.T, profile *Profile) *TLSInfo {
 	}
 
 	return &fpResp.TLS
+}
+
+// codexExec0144TestProfile 复刻 service 层的 codex_exec/0.144.1 抓包规格，
+// 用于在 tlsfingerprint 包内离线验证 MLKEM key_share 能被 utls 正确 marshal。
+func codexExec0144TestProfile() *Profile {
+	return &Profile{
+		Name:                "codex_exec_0144_test",
+		CipherSuites:        []uint16{0x1302, 0x1301, 0x1303, 0xc02c, 0xc02b, 0xcca9, 0xc030, 0xc02f, 0xcca8, 0x00ff},
+		Curves:              []uint16{0x11ec, 0x001d, 0x0017, 0x0018},
+		PointFormats:        []uint16{0},
+		SignatureAlgorithms: []uint16{0x0503, 0x0403, 0x0603, 0x0807, 0x0806, 0x0805, 0x0804, 0x0601, 0x0501, 0x0401},
+		ALPNProtocols:       []string{"h2", "http/1.1"},
+		SupportedVersions:   []uint16{utls.VersionTLS13, utls.VersionTLS12},
+		KeyShareGroups:      []uint16{0x11ec, 0x001d},
+		PSKModes:            []uint16{1},
+		Extensions:          []uint16{11, 0, 5, 43, 13, 51, 16, 23, 35, 45, 10},
+		TLSVersMin:          uint16(utls.VersionTLS12),
+		TLSVersMax:          uint16(utls.VersionTLS13),
+	}
+}
+
+// TestCodexExec0144ClientHelloMarshals 离线验证 codex_exec/0.144.1 规格能编成合法
+// ClientHello：重点是 X25519MLKEM768(0x11ec) 后量子混合组的 key_share 必须能被 utls
+// 真正生成密钥并 marshal，而不是 panic 或空扩展。同时确认 ALPN 声明了 h2。
+func TestCodexExec0144ClientHelloMarshals(t *testing.T) {
+	spec := buildClientHelloSpecFromProfile(codexExec0144TestProfile())
+
+	// 用一对内存管道，避免任何真实网络；只需要 BuildHandshakeState 生成 ClientHello 字节。
+	clientConn, serverConn := net.Pipe()
+	defer func() { _ = clientConn.Close() }()
+	defer func() { _ = serverConn.Close() }()
+
+	uconn := utls.UClient(clientConn, &utls.Config{ServerName: "anyrouter.top"}, utls.HelloCustom)
+	if err := uconn.ApplyPreset(spec); err != nil {
+		t.Fatalf("ApplyPreset failed: %v", err)
+	}
+	if err := uconn.BuildHandshakeState(); err != nil {
+		t.Fatalf("BuildHandshakeState failed (MLKEM key_share 可能无法生成): %v", err)
+	}
+
+	raw := uconn.HandshakeState.Hello.Raw
+	if len(raw) == 0 {
+		t.Fatal("ClientHello Raw 为空，marshal 失败")
+	}
+	// 官方样本 ClientHello ≈1482-1976 B；MLKEM key_share(~1216B) 使其远超普通 ~600B。
+	if len(raw) < 1000 {
+		t.Fatalf("ClientHello 过短 (%d B)，MLKEM key_share 可能未真正写入", len(raw))
+	}
+
+	foundH2 := false
+	for _, ext := range spec.Extensions {
+		if alpn, ok := ext.(*utls.ALPNExtension); ok {
+			for _, p := range alpn.AlpnProtocols {
+				if p == "h2" {
+					foundH2 = true
+				}
+			}
+		}
+	}
+	if !foundH2 {
+		t.Fatal("codex profile 必须在 ALPN 中声明 h2")
+	}
 }

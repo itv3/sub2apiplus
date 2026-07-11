@@ -174,6 +174,123 @@ func TestSnapshotOverviewIncludesLastStatusAndLastError(t *testing.T) {
 	}
 }
 
+func TestSnapshotSessionsOmitLargeProcessFieldsWithoutMutatingState(t *testing.T) {
+	startedAt := time.Date(2026, time.July, 11, 10, 20, 30, 0, time.UTC)
+	statePath := filepath.Join(t.TempDir(), "state.json")
+	originalSession := Session{
+		ID:              "session-1",
+		TargetName:      "account-1",
+		AccountID:       1,
+		AccountName:     "OpenAI Account",
+		Platform:        "openai",
+		AccountType:     "apikey",
+		Model:           "gpt-5.5",
+		Mode:            "fresh",
+		Prompt:          "请分析当前项目。",
+		ReplyText:       "分析完成。",
+		ExitCode:        1,
+		Command:         []string{"codex", "exec", "--json"},
+		Summary:         "执行失败摘要",
+		CommandText:     "codex exec --json",
+		WorkDir:         "/workspace/projects/demo",
+		Stdout:          strings.Repeat("stdout", 1024),
+		Stderr:          strings.Repeat("stderr", 1024),
+		StdoutPath:      "/app/data/logs/session-1.stdout.log",
+		StderrPath:      "/app/data/logs/session-1.stderr.log",
+		LastMessagePath: "/app/data/sessions/session-1.last.txt",
+		Status:          "error",
+		Error:           "上游请求失败",
+		Usage: Usage{
+			InputTokens:  120,
+			OutputTokens: 30,
+			TotalTokens:  150,
+		},
+		Billing: Billing{
+			Available:      true,
+			RateMultiplier: 1,
+			ActualCost:     0.0123,
+			PricingSource:  "test",
+		},
+		StartedAt:         startedAt,
+		CompletedAt:       startedAt.Add(5 * time.Second),
+		LatencyMS:         5000,
+		UpstreamRequestID: "request-1",
+	}
+	k := &Keeper{
+		cfg: Config{StatePath: statePath},
+		state: State{Targets: map[string]*TargetState{
+			"1": {
+				Name:      "account-1",
+				AccountID: 1,
+				Sessions:  []Session{originalSession},
+			},
+		}},
+		location: time.UTC,
+	}
+
+	k.mu.Lock()
+	snapshot := k.snapshotLocked().(map[string]any)
+	k.mu.Unlock()
+
+	targets := snapshot["targets"].([]*TargetState)
+	if len(targets) != 1 {
+		t.Fatalf("snapshot targets = %d, want 1", len(targets))
+	}
+	if len(targets[0].Sessions) != 1 {
+		t.Fatalf("snapshot sessions = %d, want 1", len(targets[0].Sessions))
+	}
+	snapshotSession := targets[0].Sessions[0]
+	if snapshotSession.Stdout != "" || snapshotSession.Stderr != "" || snapshotSession.Command != nil || snapshotSession.CommandText != "" {
+		t.Fatalf("snapshot retained large process fields: stdout=%d stderr=%d command=%v command_text=%q", len(snapshotSession.Stdout), len(snapshotSession.Stderr), snapshotSession.Command, snapshotSession.CommandText)
+	}
+	if snapshotSession.Prompt != originalSession.Prompt || snapshotSession.ReplyText != originalSession.ReplyText || snapshotSession.Summary != originalSession.Summary || snapshotSession.Error != originalSession.Error {
+		t.Fatal("snapshot lost prompt, reply, summary, or error fields")
+	}
+	if snapshotSession.Usage != originalSession.Usage || snapshotSession.Billing != originalSession.Billing {
+		t.Fatal("snapshot lost usage or billing fields")
+	}
+	if snapshotSession.StdoutPath != originalSession.StdoutPath || snapshotSession.StderrPath != originalSession.StderrPath || snapshotSession.LastMessagePath != originalSession.LastMessagePath || snapshotSession.WorkDir != originalSession.WorkDir {
+		t.Fatal("snapshot lost retained path or workspace fields")
+	}
+
+	stateSession := k.state.Targets["1"].Sessions[0]
+	if stateSession.Stdout != originalSession.Stdout || stateSession.Stderr != originalSession.Stderr || stateSession.CommandText != originalSession.CommandText {
+		t.Fatal("snapshot creation mutated persisted state text fields")
+	}
+	if len(stateSession.Command) != len(originalSession.Command) {
+		t.Fatalf("persisted command length = %d, want %d", len(stateSession.Command), len(originalSession.Command))
+	}
+	for i := range originalSession.Command {
+		if stateSession.Command[i] != originalSession.Command[i] {
+			t.Fatalf("persisted command[%d] = %q, want %q", i, stateSession.Command[i], originalSession.Command[i])
+		}
+	}
+
+	k.mu.Lock()
+	k.saveStateLocked()
+	k.mu.Unlock()
+	raw, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatalf("read persisted state: %v", err)
+	}
+	var persistedState State
+	if err := json.Unmarshal(raw, &persistedState); err != nil {
+		t.Fatalf("unmarshal persisted state: %v", err)
+	}
+	persistedSession := persistedState.Targets["1"].Sessions[0]
+	if persistedSession.Stdout != originalSession.Stdout || persistedSession.Stderr != originalSession.Stderr || persistedSession.CommandText != originalSession.CommandText {
+		t.Fatal("persisted state lost large process text fields")
+	}
+	if len(persistedSession.Command) != len(originalSession.Command) {
+		t.Fatalf("persisted state command length = %d, want %d", len(persistedSession.Command), len(originalSession.Command))
+	}
+	for i := range originalSession.Command {
+		if persistedSession.Command[i] != originalSession.Command[i] {
+			t.Fatalf("persisted state command[%d] = %q, want %q", i, persistedSession.Command[i], originalSession.Command[i])
+		}
+	}
+}
+
 func TestPrepareCodexLaunchPathCopiesReleaseIntoRuntime(t *testing.T) {
 	srcRoot := t.TempDir()
 	releaseDir := filepath.Join(srcRoot, "standalone", "0.142.5-aarch64-unknown-linux-musl")

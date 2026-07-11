@@ -78,6 +78,7 @@ const (
 	keeperKeepaliveErrorMaxRunes     = 16000
 	keeperKeepaliveSessionIDMaxRunes = 255
 	keeperKeepaliveModelMaxRunes     = 255
+	keeperProxyResponseLimitBytes    = 32 << 20
 )
 
 var keeperKeepaliveAllowedStatuses = map[string]struct{}{
@@ -298,19 +299,28 @@ func (h *AccountHandler) proxyKeeper(c *gin.Context, method string, path string,
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, keeperProxyResponseLimitBytes+1))
+	if err != nil {
+		response.Error(c, http.StatusBadGateway, "failed to read keeper response: "+err.Error())
+		return
+	}
+	if len(raw) > keeperProxyResponseLimitBytes {
+		response.Error(c, http.StatusBadGateway, "keeper response exceeds 32 MiB limit")
+		return
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		response.Error(c, resp.StatusCode, strings.TrimSpace(string(raw)))
 		return
 	}
-	var payload any
-	if len(raw) > 0 {
-		if err := json.Unmarshal(raw, &payload); err != nil {
-			response.Error(c, http.StatusBadGateway, "keeper returned invalid json")
-			return
-		}
+	if len(raw) == 0 {
+		response.Success(c, nil)
+		return
 	}
-	response.Success(c, payload)
+	if !json.Valid(raw) {
+		response.Error(c, http.StatusBadGateway, "keeper returned invalid json")
+		return
+	}
+	response.Success(c, json.RawMessage(raw))
 }
 
 func (h *AccountHandler) loadKeeperCandidateAccounts(ctx context.Context) ([]service.Account, error) {
