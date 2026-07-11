@@ -436,9 +436,17 @@ echo "$VERSION" > backend/cmd/server/VERSION
 git add backend/cmd/server/VERSION
 git commit -m "chore: release v${VERSION}"
 git push origin main
-git tag "v${VERSION}"
+# 必须用 annotated tag（-a -m）：Release workflow 取 tag 的 message body 作为 GitHub Release 说明。
+# 轻量 tag（git tag v...）没有 body，Release 说明会退化成 commit 正文，导致本版改动无法展示。
+# tag 标题（首行）之后空一行再写 bullet，空行以下的正文即 Release notes。
+git tag -a "v${VERSION}" -m "v${VERSION}
+
+- 本版改动要点 1
+- 本版改动要点 2"
 git push origin "v${VERSION}"
 ```
+
+> 已经打成轻量 tag 时，可用 `gh release edit "v${VERSION}" --notes-file <文件>` 事后补写 Release 说明，无需重跑 CI。
 
 如果 tag push 没触发 Release，手动触发：
 
