@@ -831,7 +831,7 @@ func claudePersistentArgs(req persistentExecution) []string {
 		"--output-format", "stream-json",
 		"--model", req.Account.Model,
 	}
-	if betas := claudeBetasForModel(req.Account.Model); len(betas) > 0 {
+	if betas := claudeDefaultBetas(); len(betas) > 0 {
 		args = append(args, "--betas")
 		args = append(args, betas...)
 	}
@@ -851,7 +851,7 @@ func claudePersistentEnv(req persistentExecution) []string {
 		"ANTHROPIC_MODEL=" + req.Account.Model,
 		"CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1",
 	}
-	if betas := claudeBetasForModel(req.Account.Model); len(betas) > 0 {
+	if betas := claudeDefaultBetas(); len(betas) > 0 {
 		env = append(env, "ANTHROPIC_BETAS="+strings.Join(betas, ","))
 	}
 	return env

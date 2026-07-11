@@ -2114,11 +2114,9 @@ func (k *Keeper) internalClientBaseURL(accountID int64, executor string) string 
 	}
 }
 
-func claudeBetasForModel(model string) []string {
-	if strings.Contains(strings.ToLower(strings.TrimSpace(model)), "[1m]") {
-		return []string{"context-1m-2025-08-07"}
-	}
-	return nil
+func claudeDefaultBetas() []string {
+	// 所有 Anthropic 保活请求默认启用 1M 上下文，避免中转平台拒绝未声明该能力的请求。
+	return []string{"context-1m-2025-08-07"}
 }
 
 func shellJoin(path string, args []string) string {

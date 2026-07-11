@@ -581,6 +581,9 @@ func TestClaudePersistentArgsUsePlanModeAndDenyWriteTools(t *testing.T) {
 	if !strings.Contains(joined, "--disallowed-tools Bash,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch") {
 		t.Fatalf("claude args = %q, want dangerous tools denied", joined)
 	}
+	if !strings.Contains(joined, "--betas context-1m-2025-08-07") {
+		t.Fatalf("claude args = %q, want default 1M context beta", joined)
+	}
 }
 
 func TestClaudePersistentEnvScrubsSubprocessEnvironment(t *testing.T) {
@@ -597,14 +600,29 @@ func TestClaudePersistentEnvScrubsSubprocessEnvironment(t *testing.T) {
 	})
 
 	found := false
+	foundBetas := false
 	for _, value := range env {
 		if value == "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1" {
 			found = true
-			break
+		}
+		if value == "ANTHROPIC_BETAS=context-1m-2025-08-07" {
+			foundBetas = true
 		}
 	}
 	if !found {
 		t.Fatalf("claude env = %#v, want subprocess env scrub enabled", env)
+	}
+	if !foundBetas {
+		t.Fatalf("claude env = %#v, want default 1M context beta", env)
+	}
+}
+
+func TestClaudeDefaultBetasAlwaysEnables1MContext(t *testing.T) {
+	for _, model := range []string{"claude-opus-4-8", "claude-opus-4-8[1m]", ""} {
+		betas := claudeDefaultBetas()
+		if len(betas) != 1 || betas[0] != "context-1m-2025-08-07" {
+			t.Fatalf("claudeDefaultBetas() for model %q = %#v, want 1M context beta", model, betas)
+		}
 	}
 }
 

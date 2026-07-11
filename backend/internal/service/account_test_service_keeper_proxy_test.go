@@ -102,6 +102,33 @@ func TestValidateKeeperAnthropicProxyPath(t *testing.T) {
 	}
 }
 
+func TestValidateKeeperAnthropicProxyQuery(t *testing.T) {
+	for _, path := range []string{"/v1/messages", "/v1/messages/count_tokens"} {
+		got, err := validateKeeperAnthropicProxyQuery(http.MethodPost, path, "beta=true")
+		require.NoError(t, err, path)
+		require.Equal(t, "beta=true", got)
+
+		got, err = validateKeeperAnthropicProxyQuery(http.MethodPost, path, "")
+		require.NoError(t, err, path)
+		require.Empty(t, got)
+	}
+
+	for _, tt := range []struct {
+		method   string
+		path     string
+		rawQuery string
+	}{
+		{http.MethodPost, "/v1/messages", "beta=false"},
+		{http.MethodPost, "/v1/messages", "beta=true&extra=1"},
+		{http.MethodPost, "/v1/messages", "beta=true&beta=true"},
+		{http.MethodPost, "/v1/messages", "beta=%zz"},
+		{http.MethodGet, "/v1/models", "beta=true"},
+	} {
+		_, err := validateKeeperAnthropicProxyQuery(tt.method, tt.path, tt.rawQuery)
+		require.Error(t, err, tt)
+	}
+}
+
 func TestCopyProxyRequestHeadersStripsCredentialsAndHopByHopHeaders(t *testing.T) {
 	src := http.Header{
 		"Authorization":  []string{"Bearer keeper"},
@@ -177,6 +204,10 @@ func TestBuildKeeperOpenAIProxyURLAvoidsDoubleV1(t *testing.T) {
 	require.Equal(t,
 		"https://upstream.example/v1/messages",
 		buildKeeperOpenAIProxyURL("https://upstream.example", "/v1/messages"),
+	)
+	require.Equal(t,
+		"https://upstream.example/v1/messages?beta=true",
+		buildKeeperProxyURL("https://upstream.example", "/v1/messages", "beta=true"),
 	)
 }
 

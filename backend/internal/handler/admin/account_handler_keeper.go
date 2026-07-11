@@ -222,15 +222,12 @@ func (h *AccountHandler) ProxyKeeperAnthropicAccount(c *gin.Context) {
 		response.BadRequest(c, "Invalid account ID")
 		return
 	}
-	if c.Request.URL.RawQuery != "" {
-		response.BadRequest(c, "keeper proxy does not accept query parameters")
-		return
-	}
 	resp, err := h.accountTestService.ProxyKeeperAnthropicAccount(c.Request.Context(), accountID, service.KeeperOpenAIProxyRequest{
-		Method: c.Request.Method,
-		Path:   c.Param("proxy_path"),
-		Header: c.Request.Header,
-		Body:   c.Request.Body,
+		Method:   c.Request.Method,
+		Path:     c.Param("proxy_path"),
+		RawQuery: c.Request.URL.RawQuery,
+		Header:   c.Request.Header,
+		Body:     c.Request.Body,
 	})
 	if err != nil {
 		response.Error(c, http.StatusBadGateway, err.Error())

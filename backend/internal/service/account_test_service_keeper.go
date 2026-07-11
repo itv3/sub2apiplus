@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -24,8 +25,10 @@ const (
 type KeeperOpenAIProxyRequest struct {
 	Method string
 	Path   string
-	Header http.Header
-	Body   io.Reader
+	// RawQuery 仅用于经过严格白名单校验后转发官方客户端所需的查询参数。
+	RawQuery string
+	Header   http.Header
+	Body     io.Reader
 }
 
 func (s *AccountTestService) ProxyKeeperOpenAIAccount(ctx context.Context, accountID int64, in KeeperOpenAIProxyRequest) (*http.Response, error) {
@@ -128,7 +131,11 @@ func (s *AccountTestService) ProxyKeeperAnthropicAccount(ctx context.Context, ac
 	if err != nil {
 		return nil, err
 	}
-	upstreamURL := buildKeeperOpenAIProxyURL(baseURL, proxyPath)
+	proxyQuery, err := validateKeeperAnthropicProxyQuery(in.Method, proxyPath, in.RawQuery)
+	if err != nil {
+		return nil, err
+	}
+	upstreamURL := buildKeeperProxyURL(baseURL, proxyPath, proxyQuery)
 	body := in.Body
 	if isKeeperProxyPathExact(proxyPath, "/v1/messages") {
 		body, err = clampKeeperProxyJSONMaxTokens(body, KeeperMaxOutputTokens(account), "max_tokens", "max_tokens")
@@ -160,12 +167,20 @@ func (s *AccountTestService) ProxyKeeperAnthropicAccount(ctx context.Context, ac
 }
 
 func buildKeeperOpenAIProxyURL(baseURL string, proxyPath string) string {
+	return buildKeeperProxyURL(baseURL, proxyPath, "")
+}
+
+func buildKeeperProxyURL(baseURL string, proxyPath string, rawQuery string) string {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	path := "/" + strings.TrimLeft(strings.TrimSpace(proxyPath), "/")
 	if strings.HasPrefix(path, "/v1/") && strings.HasSuffix(base, "/v1") {
 		path = strings.TrimPrefix(path, "/v1")
 	}
-	return base + path
+	upstreamURL := base + path
+	if rawQuery != "" {
+		upstreamURL += "?" + rawQuery
+	}
+	return upstreamURL
 }
 
 func KeeperMaxOutputTokens(account *Account) int {
@@ -311,6 +326,29 @@ func validateKeeperAnthropicProxyPath(method string, proxyPath string) (string, 
 		return path, nil
 	}
 	return "", fmt.Errorf("keeper Anthropic proxy method/path is not allowed: %s %s", method, path)
+}
+
+func validateKeeperAnthropicProxyQuery(method string, path string, rawQuery string) (string, error) {
+	rawQuery = strings.TrimSpace(rawQuery)
+	if rawQuery == "" {
+		return "", nil
+	}
+	method = strings.ToUpper(strings.TrimSpace(method))
+	if method != http.MethodPost || !isKeeperProxyPathExact(path, "/v1/messages", "/v1/messages/count_tokens") {
+		return "", errors.New("keeper Anthropic proxy query parameters are not allowed for this method/path")
+	}
+	query, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return "", fmt.Errorf("keeper Anthropic proxy query parameters are invalid: %w", err)
+	}
+	if len(query) != 1 {
+		return "", errors.New("keeper Anthropic proxy only accepts beta=true")
+	}
+	values, ok := query["beta"]
+	if !ok || len(values) != 1 || values[0] != "true" {
+		return "", errors.New("keeper Anthropic proxy only accepts beta=true")
+	}
+	return url.Values{"beta": []string{"true"}}.Encode(), nil
 }
 
 func normalizeKeeperProxyPath(proxyPath string) (string, error) {
