@@ -418,6 +418,8 @@ func buildClientHelloSpecFromProfile(profile *Profile) *utls.ClientHelloSpec {
 			extensions = append(extensions, &utls.ALPNExtension{AlpnProtocols: alpnProtocols})
 		case 18: // signed_certificate_timestamp
 			extensions = append(extensions, &utls.SCTExtension{})
+		case 21: // 填充
+			extensions = append(extensions, &utls.UtlsPaddingExtension{GetPaddingLen: utls.BoringPaddingStyle})
 		case 23: // extended_master_secret
 			extensions = append(extensions, &utls.ExtendedMasterSecretExtension{})
 		case 35: // session_ticket

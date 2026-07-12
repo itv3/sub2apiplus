@@ -30,6 +30,12 @@ export default {
         unknownCodexProfile: 'Codex ({profile})',
         passthroughAlsoEnabled: 'Passthrough also enabled; unofficial requests prefer mimic'
       },
+      filters: {
+        status: 'Compatibility status',
+        all: 'All accounts',
+        enabled: 'Enabled only',
+        disabled: 'Disabled only'
+      },
       empty: 'No Anthropic / OpenAI API Key accounts',
       loadFailed: 'Failed to load API Key accounts',
       updateSuccess: 'Official-client compatibility updated',
@@ -45,6 +51,12 @@ export default {
         overview: 'Overview',
         settings: 'Settings',
         history: 'Session history'
+      },
+      filters: {
+        status: 'Keepalive status',
+        all: 'All accounts',
+        enabled: 'Enabled only',
+        disabled: 'Disabled only'
       },
       columns: {
         account: 'Account',

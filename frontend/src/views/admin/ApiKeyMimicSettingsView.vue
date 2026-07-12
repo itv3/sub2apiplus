@@ -44,70 +44,80 @@
       </template>
 
       <template #table>
-        <DataTable
-          v-if="activeTab === 'mimic'"
-          :columns="mimicColumns"
-          :data="mimicAccounts"
-          :loading="mimicLoading"
-          default-sort-key="id"
-          default-sort-order="desc"
-        >
-          <template #cell-account="{ row }">
-            <div class="min-w-0">
-              <div class="truncate font-medium text-gray-900 dark:text-white">
-                {{ row.name }}
+        <div v-if="activeTab === 'mimic'" class="space-y-3">
+          <div class="flex flex-wrap items-center justify-end gap-2">
+            <label for="mimic-status-filter" class="text-sm font-medium text-gray-700 dark:text-gray-200">
+              {{ t('admin.apiKeyMimic.filters.status') }}
+            </label>
+            <select id="mimic-status-filter" v-model="mimicStatusFilter" data-testid="mimic-status-filter" class="input h-9 w-full sm:w-44">
+              <option value="all">{{ t('admin.apiKeyMimic.filters.all') }}</option>
+              <option value="enabled">{{ t('admin.apiKeyMimic.filters.enabled') }}</option>
+              <option value="disabled">{{ t('admin.apiKeyMimic.filters.disabled') }}</option>
+            </select>
+          </div>
+
+          <DataTable
+            :columns="mimicColumns"
+            :data="visibleMimicAccounts"
+            :loading="mimicLoading"
+          >
+            <template #cell-account="{ row }">
+              <div class="min-w-0">
+                <div class="truncate font-medium text-gray-900 dark:text-white">
+                  {{ row.name }}
+                </div>
+                <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                  #{{ row.id }}
+                </div>
               </div>
-              <div class="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                #{{ row.id }}
-              </div>
-            </div>
-          </template>
+            </template>
 
-          <template #cell-platform="{ row }">
-            <span class="inline-flex rounded-full px-2.5 py-1 text-xs font-medium" :class="platformBadgeClass(row.platform)">
-              {{ platformLabel(row.platform) }}
-            </span>
-          </template>
-
-          <template #cell-compatible="{ row }">
-            <button
-              type="button"
-              role="switch"
-              class="relative inline-flex h-6 w-11 flex-shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:focus:ring-offset-dark-800"
-              :class="isMimicEnabled(row) ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'"
-              :aria-checked="isMimicEnabled(row)"
-              :aria-label="`${row.name} ${t('admin.apiKeyMimic.columns.compatible')}`"
-              :disabled="mimicUpdatingIds.has(row.id)"
-              @click.stop="toggleMimic(row)"
-            >
-              <span
-                class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
-                :class="isMimicEnabled(row) ? 'translate-x-5' : 'translate-x-0'"
-              />
-            </button>
-          </template>
-
-          <template #cell-status="{ row }">
-            <div class="flex flex-wrap gap-2">
-              <span
-                v-for="item in statusLabels(row)"
-                :key="item"
-                class="inline-flex rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700 dark:bg-dark-700 dark:text-gray-200"
-              >
-                {{ item }}
+            <template #cell-platform="{ row }">
+              <span class="inline-flex rounded-full px-2.5 py-1 text-xs font-medium" :class="platformBadgeClass(row.platform)">
+                {{ platformLabel(row.platform) }}
               </span>
-            </div>
-          </template>
+            </template>
 
-          <template #empty>
-            <div class="flex flex-col items-center py-6 text-gray-500 dark:text-gray-400">
-              <Icon name="inbox" size="xl" class="mb-4 h-12 w-12 text-gray-400 dark:text-dark-500" />
-              <p class="text-lg font-medium text-gray-900 dark:text-gray-100">
-                {{ t('admin.apiKeyMimic.empty') }}
-              </p>
-            </div>
-          </template>
-        </DataTable>
+            <template #cell-compatible="{ row }">
+              <button
+                type="button"
+                role="switch"
+                class="relative inline-flex h-6 w-11 flex-shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-primary-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60 dark:focus:ring-offset-dark-800"
+                :class="isMimicEnabled(row) ? 'bg-primary-600' : 'bg-gray-200 dark:bg-dark-600'"
+                :aria-checked="isMimicEnabled(row)"
+                :aria-label="`${row.name} ${t('admin.apiKeyMimic.columns.compatible')}`"
+                :disabled="mimicUpdatingIds.has(row.id)"
+                @click.stop="toggleMimic(row)"
+              >
+                <span
+                  class="pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0 transition duration-200 ease-in-out"
+                  :class="isMimicEnabled(row) ? 'translate-x-5' : 'translate-x-0'"
+                />
+              </button>
+            </template>
+
+            <template #cell-status="{ row }">
+              <div class="flex flex-wrap gap-2">
+                <span
+                  v-for="item in statusLabels(row)"
+                  :key="item"
+                  class="inline-flex rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-700 dark:bg-dark-700 dark:text-gray-200"
+                >
+                  {{ item }}
+                </span>
+              </div>
+            </template>
+
+            <template #empty>
+              <div class="flex flex-col items-center py-6 text-gray-500 dark:text-gray-400">
+                <Icon name="inbox" size="xl" class="mb-4 h-12 w-12 text-gray-400 dark:text-dark-500" />
+                <p class="text-lg font-medium text-gray-900 dark:text-gray-100">
+                  {{ t('admin.apiKeyMimic.empty') }}
+                </p>
+              </div>
+            </template>
+          </DataTable>
+        </div>
 
         <div v-else class="rounded-lg border border-gray-200 bg-gray-50/70 p-4 shadow-sm dark:border-dark-700 dark:bg-dark-900/40">
           <div class="mb-4 flex flex-wrap items-center gap-1 rounded-md border border-gray-200 bg-white p-1 dark:border-dark-700 dark:bg-dark-800">
@@ -200,8 +210,18 @@
           </div>
 
           <div v-else-if="keepaliveTab === 'settings'" class="max-h-[calc(100vh-340px)] space-y-6 overflow-y-auto pr-2">
-            <div class="flex justify-start">
+            <div class="flex flex-wrap items-center justify-between gap-3">
               <button type="button" class="btn btn-primary" @click="openKeepaliveModal()">{{ t('admin.accountKeepalive.labels.addAccount') }}</button>
+              <div class="flex w-full items-center gap-2 sm:w-auto">
+                <label for="keepalive-status-filter" class="whitespace-nowrap text-sm font-medium text-gray-700 dark:text-gray-200">
+                  {{ t('admin.accountKeepalive.filters.status') }}
+                </label>
+                <select id="keepalive-status-filter" v-model="keepaliveStatusFilter" data-testid="keepalive-status-filter" class="input h-9 w-full sm:w-44">
+                  <option value="all">{{ t('admin.accountKeepalive.filters.all') }}</option>
+                  <option value="enabled">{{ t('admin.accountKeepalive.filters.enabled') }}</option>
+                  <option value="disabled">{{ t('admin.accountKeepalive.filters.disabled') }}</option>
+                </select>
+              </div>
             </div>
             <div class="overflow-x-auto rounded-lg border border-gray-200 bg-white dark:border-dark-700 dark:bg-dark-900">
               <table class="min-w-[960px] divide-y divide-gray-200 text-sm dark:divide-dark-700">
@@ -267,7 +287,7 @@
           <div v-else class="space-y-4">
             <select v-model="historyTarget" class="input h-9 max-w-sm">
               <option value="">{{ t('admin.accountKeepalive.labels.allAccounts') }}</option>
-              <option v-for="row in keepaliveOverviewRows" :key="row.name" :value="row.name">{{ row.name }}</option>
+              <option v-for="row in keeperHistoryTargets" :key="row.name" :value="row.name">{{ row.name }}</option>
             </select>
             <div
               ref="keeperHistoryScrollRef"
@@ -483,6 +503,7 @@ const KEEPER_MAX_OUTPUT_TOKENS_HARD_CAP = 1024
 
 type TabKey = 'mimic' | 'keepalive'
 type KeepaliveTabKey = 'overview' | 'settings' | 'history'
+type FeatureStatusFilter = 'all' | 'enabled' | 'disabled'
 
 interface KeepaliveForm {
   enabled: boolean
@@ -525,10 +546,12 @@ const keepaliveTabs = computed<Array<{ key: KeepaliveTabKey; label: string }>>((
 const mimicAccounts = ref<Account[]>([])
 const mimicLoading = ref(false)
 const mimicUpdatingIds = ref<Set<number>>(new Set())
+const mimicStatusFilter = ref<FeatureStatusFilter>('all')
 
 const keepaliveRows = ref<KeepaliveRow[]>([])
 const keepaliveLoading = ref(false)
 const keepaliveUpdatingIds = ref<Set<number>>(new Set())
+const keepaliveStatusFilter = ref<FeatureStatusFilter>('all')
 const keepaliveProjectOptions = ref<string[]>([])
 const keepaliveModelOptions = ref<Record<number, string[]>>({})
 const keepaliveModelLoadingIds = ref<Set<number>>(new Set())
@@ -557,7 +580,13 @@ const mimicColumns = computed<Column[]>(() => [
   { key: 'status', label: t('admin.apiKeyMimic.columns.status') }
 ])
 
-const configuredKeepaliveRows = computed(() => keepaliveRows.value.filter(row => isKeepaliveConfigured(row.account)))
+const visibleMimicAccounts = computed(() => mimicAccounts.value
+  .filter(account => matchesFeatureStatus(isMimicEnabled(account), mimicStatusFilter.value))
+  .sort((a, b) => compareFeatureStatus(isMimicEnabled(a), isMimicEnabled(b), a.id, b.id)))
+const configuredKeepaliveRows = computed(() => keepaliveRows.value
+  .filter(row => isKeepaliveConfigured(row.account))
+  .filter(row => matchesFeatureStatus(row.form.enabled, keepaliveStatusFilter.value))
+  .sort((a, b) => compareFeatureStatus(a.form.enabled, b.form.enabled, a.account.id, b.account.id)))
 const keepaliveCandidateAccounts = computed(() => keepaliveRows.value.map(row => row.account))
 const selectedKeepaliveAccount = computed(() => keepaliveCandidateAccounts.value.find(account => account.id === keepaliveModal.value.accountId) || null)
 const modalModelOptions = computed(() => {
@@ -570,7 +599,8 @@ const modalModelOptions = computed(() => {
 const keepaliveOverviewRows = computed(() => {
   const overview = Array.isArray(keeperState.value?.overview) ? keeperState.value.overview : []
   const targets = Array.isArray(keeperState.value?.targets) ? keeperState.value.targets : []
-  const configured = Array.isArray(keeperState.value?.configured_targets) ? keeperState.value.configured_targets : []
+  const hasConfiguredTargets = Array.isArray(keeperState.value?.configured_targets)
+  const configured = hasConfiguredTargets ? keeperState.value.configured_targets || [] : []
   if (overview.length > 0) {
     const normalizedTargets = targets.map((target) => normalizeKeeperTarget(target, configured))
     const targetByAccountID = new Map(normalizedTargets.filter((target) => Number(target.account_id || 0) > 0).map((target) => [Number(target.account_id || 0), target]))
@@ -578,12 +608,26 @@ const keepaliveOverviewRows = computed(() => {
     return overview.map((row) => {
       const accountID = Number(row.account_id || row.AccountID || 0)
       return normalizeOverviewRow(row, targetByAccountID.get(accountID) || targetByName.get(String(row.name || row.Name || '')))
-    })
+    }).filter(row => row.enabled)
   }
+  const configuredAccountIDs = new Set(configured.map((item) => Number(item.account_id || item.AccountID || 0)).filter(id => id > 0))
   const configuredNames = new Set(configured.map((item) => String(item.name || item.Name || '').trim()).filter(Boolean))
   return targets
-    .filter((target) => configuredNames.size === 0 || configuredNames.has(String(target.name || target.Name || '').trim()))
+    .filter((target) => {
+      if (!hasConfiguredTargets) return Boolean(target.enabled ?? target.Enabled)
+      const accountID = Number(target.account_id || target.AccountID || 0)
+      const name = String(target.name || target.Name || '').trim()
+      return configuredAccountIDs.has(accountID) || configuredNames.has(name)
+    })
     .map((target) => normalizeKeeperTarget(target, configured))
+    .filter(row => row.enabled)
+})
+const keeperHistoryTargets = computed(() => {
+  const targets = Array.isArray(keeperState.value?.targets) ? keeperState.value.targets : []
+  const configured = Array.isArray(keeperState.value?.configured_targets) ? keeperState.value.configured_targets : []
+  return targets
+    .map(target => normalizeKeeperTarget(target, configured))
+    .sort((a, b) => String(a.name || '').localeCompare(String(b.name || '')))
 })
 const keepaliveDashboard = computed(() => {
   const dashboard = keeperState.value?.dashboard || {}
@@ -609,12 +653,23 @@ const keepaliveDashboard = computed(() => {
 })
 const keeperHistoryRows = computed(() => {
   const rows: Array<{ target: KeeperOverviewRow; session: KeeperSession }> = []
-  for (const target of keepaliveOverviewRows.value) {
+  for (const target of keeperHistoryTargets.value) {
     if (historyTarget.value && target.name !== historyTarget.value) continue
     for (const session of target.sessions || []) rows.push({ target, session })
   }
   return rows.sort((a, b) => new Date(b.session.started_at || b.session.StartedAt || 0).getTime() - new Date(a.session.started_at || a.session.StartedAt || 0).getTime())
 })
+
+function matchesFeatureStatus(enabled: boolean, filter: FeatureStatusFilter): boolean {
+  if (filter === 'enabled') return enabled
+  if (filter === 'disabled') return !enabled
+  return true
+}
+
+function compareFeatureStatus(leftEnabled: boolean, rightEnabled: boolean, leftID: number, rightID: number): number {
+  if (leftEnabled !== rightEnabled) return leftEnabled ? -1 : 1
+  return rightID - leftID
+}
 
 function refreshHistoryScrollMetrics() {
   const el = keeperHistoryScrollRef.value

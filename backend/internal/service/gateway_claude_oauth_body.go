@@ -45,6 +45,12 @@ type claudeOAuthNormalizeOptions struct {
 	injectMetadata          bool
 	metadataUserID          string
 	stripSystemCacheControl bool
+	// preserveMissingTemperature 仅供 API Key sdk-cli mimic 使用：官方 SDK CLI
+	// 在客户端未提供 temperature 时不会主动补 1，OAuth 路径继续保持原行为。
+	preserveMissingTemperature bool
+	// dropPlainAutoToolChoice 仅删除没有附加语义的 {"type":"auto"}；带有
+	// disable_parallel_tool_use 等字段的对象必须保留，避免改变客户端意图。
+	dropPlainAutoToolChoice bool
 }
 
 // sanitizeSystemText rewrites only the fixed OpenCode identity sentence (if present).
@@ -264,7 +270,7 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 	// temperature：真实 Claude Code CLI 总是发送 temperature（默认 1，客户端可覆盖）。
 	// 之前的实现直接 delete 会导致 payload 缺字段，与真实 CLI 字节级不一致。
 	// 策略：客户端传了什么就透传；没传则补默认 1。
-	if !gjson.GetBytes(out, "temperature").Exists() {
+	if !opts.preserveMissingTemperature && !gjson.GetBytes(out, "temperature").Exists() {
 		if next, ok := setJSONValueBytes(out, "temperature", 1); ok {
 			out = next
 			modified = true
@@ -312,12 +318,30 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 			}
 		}
 	}
+	if opts.dropPlainAutoToolChoice && isPlainAnthropicAutoToolChoice(gjson.GetBytes(out, "tool_choice")) {
+		if next, ok := deleteJSONPathBytes(out, "tool_choice"); ok {
+			out = next
+			modified = true
+		}
+	}
 
 	if !modified {
 		return body, modelID
 	}
 
 	return out, modelID
+}
+
+func isPlainAnthropicAutoToolChoice(choice gjson.Result) bool {
+	if !choice.Exists() || !choice.IsObject() || choice.Get("type").String() != "auto" {
+		return false
+	}
+	fieldCount := 0
+	choice.ForEach(func(_, _ gjson.Result) bool {
+		fieldCount++
+		return true
+	})
+	return fieldCount == 1
 }
 
 func (s *GatewayService) buildOAuthMetadataUserID(parsed *ParsedRequest, account *Account, fp *Fingerprint) string {

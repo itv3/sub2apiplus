@@ -181,6 +181,145 @@ describe('ApiKeyMimicSettingsView', () => {
     expect(wrapper.text()).not.toContain('openai-upstream')
   })
 
+  it('官方客户端兼容列表默认启用优先并支持状态筛选', async () => {
+    vi.mocked(adminAPI.accounts.list).mockImplementation(async (_page, _pageSize, filters) => {
+      if (filters?.platform === 'anthropic') {
+        return page([
+          account(30, 'anthropic-disabled', 'anthropic', 'apikey'),
+          account(10, 'anthropic-enabled', 'anthropic', 'apikey', { anthropic_apikey_mimic_claude_code: true })
+        ])
+      }
+      if (filters?.platform === 'openai') {
+        return page([
+          account(40, 'openai-disabled', 'openai', 'apikey'),
+          account(20, 'openai-enabled', 'openai', 'apikey', { openai_apikey_mimic_codex_cli: true })
+        ])
+      }
+      return page([])
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const initialText = wrapper.text()
+    expect(initialText.indexOf('openai-enabled')).toBeLessThan(initialText.indexOf('anthropic-disabled'))
+    expect(initialText.indexOf('anthropic-enabled')).toBeLessThan(initialText.indexOf('openai-disabled'))
+
+    await wrapper.get('[data-testid="mimic-status-filter"]').setValue('enabled')
+    expect(wrapper.text()).toContain('openai-enabled')
+    expect(wrapper.text()).toContain('anthropic-enabled')
+    expect(wrapper.text()).not.toContain('openai-disabled')
+    expect(wrapper.text()).not.toContain('anthropic-disabled')
+
+    await wrapper.get('[data-testid="mimic-status-filter"]').setValue('disabled')
+    expect(wrapper.text()).not.toContain('openai-enabled')
+    expect(wrapper.text()).not.toContain('anthropic-enabled')
+    expect(wrapper.text()).toContain('openai-disabled')
+    expect(wrapper.text()).toContain('anthropic-disabled')
+  })
+
+  it('保活配置列表默认启用优先并支持状态筛选', async () => {
+    vi.mocked(adminAPI.accounts.list).mockImplementation(async (_page, _pageSize, filters) => {
+      if (filters?.platform === 'anthropic') {
+        return page([
+          account(30, 'keepalive-disabled-newer', 'anthropic', 'apikey', {
+            keeper_keepalive_enabled: false,
+            keeper_keepalive_model: 'claude-opus-4-8'
+          }),
+          account(10, 'keepalive-enabled-anthropic', 'anthropic', 'apikey', {
+            keeper_keepalive_enabled: true,
+            keeper_keepalive_model: 'claude-opus-4-8'
+          })
+        ])
+      }
+      if (filters?.platform === 'openai') {
+        return page([
+          account(40, 'keepalive-disabled-openai', 'openai', 'apikey', {
+            keeper_keepalive_enabled: false,
+            keeper_keepalive_model: 'gpt-5.6-sol'
+          }),
+          account(20, 'keepalive-enabled-openai', 'openai', 'apikey', {
+            keeper_keepalive_enabled: true,
+            keeper_keepalive_model: 'gpt-5.6-sol'
+          })
+        ])
+      }
+      return page([])
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const keepaliveTab = wrapper.findAll('button').find(button => button.text() === 'admin.plusEnhancements.tabs.keepalive')
+    await keepaliveTab!.trigger('click')
+    await flushPromises()
+    const settingsTab = wrapper.findAll('button').find(button => button.text() === 'admin.accountKeepalive.tabs.settings')
+    await settingsTab!.trigger('click')
+
+    const initialText = wrapper.text()
+    expect(initialText.indexOf('keepalive-enabled-openai')).toBeLessThan(initialText.indexOf('keepalive-disabled-openai'))
+    expect(initialText.indexOf('keepalive-enabled-anthropic')).toBeLessThan(initialText.indexOf('keepalive-disabled-newer'))
+
+    await wrapper.get('[data-testid="keepalive-status-filter"]').setValue('enabled')
+    expect(wrapper.text()).toContain('keepalive-enabled-openai')
+    expect(wrapper.text()).toContain('keepalive-enabled-anthropic')
+    expect(wrapper.text()).not.toContain('keepalive-disabled-openai')
+    expect(wrapper.text()).not.toContain('keepalive-disabled-newer')
+
+    await wrapper.get('[data-testid="keepalive-status-filter"]').setValue('disabled')
+    expect(wrapper.text()).not.toContain('keepalive-enabled-openai')
+    expect(wrapper.text()).not.toContain('keepalive-enabled-anthropic')
+    expect(wrapper.text()).toContain('keepalive-disabled-openai')
+    expect(wrapper.text()).toContain('keepalive-disabled-newer')
+  })
+
+  it('全部保活禁用时概览为空但会话历史仍保留', async () => {
+    vi.mocked(adminAPI.accounts.getKeeperState).mockResolvedValue({
+      version: '0.1.147-1',
+      dashboard: {
+        total_targets: 0,
+        enabled_targets: 0,
+        running_count: 0
+      },
+      overview: [],
+      configured_targets: [],
+      targets: [
+        {
+          id: 'legacy-target',
+          name: 'legacy-disabled-account',
+          account_id: 9,
+          platform: 'openai',
+          account_type: 'apikey',
+          enabled: true,
+          sessions: [
+            {
+              id: 'legacy-session',
+              status: 'success',
+              summary: 'historical keepalive result',
+              started_at: '2026-07-08T10:00:00Z',
+              completed_at: '2026-07-08T10:01:00Z'
+            }
+          ]
+        }
+      ]
+    })
+
+    const wrapper = mountView()
+    await flushPromises()
+
+    const keepaliveTab = wrapper.findAll('button').find(button => button.text() === 'admin.plusEnhancements.tabs.keepalive')
+    await keepaliveTab!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).not.toContain('legacy-disabled-account')
+    expect(wrapper.text()).toContain('admin.accountKeepalive.labels.noConfiguredAccounts')
+
+    const historyTab = wrapper.findAll('button').find(button => button.text() === 'admin.accountKeepalive.tabs.history')
+    await historyTab!.trigger('click')
+    expect(wrapper.text()).toContain('legacy-disabled-account')
+    expect(wrapper.text()).toContain('historical keepalive result')
+  })
+
   it('keeper 运行时部分失败时仍可加载账号配置', async () => {
     vi.mocked(adminAPI.accounts.list).mockImplementation(async (_page, _pageSize, filters) => {
       if (filters?.platform === 'anthropic') {

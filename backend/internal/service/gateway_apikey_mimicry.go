@@ -46,17 +46,16 @@ func isClaudeDesktopOfficialClientUserAgent(userAgent string) bool {
 }
 
 func (s *GatewayService) resolveAnthropicTLSProfileForRequest(account *Account, mimicAPIKeyClaudeCode bool) *tlsfingerprint.Profile {
-	if account != nil && account.Platform == PlatformAnthropic && account.Type == AccountTypeAPIKey && !mimicAPIKeyClaudeCode {
+	if s == nil {
 		return nil
 	}
-	if s == nil || s.tlsFPProfileService == nil {
-		return nil
-	}
-	return s.tlsFPProfileService.ResolveTLSProfile(account)
+	return resolveAnthropicTLSProfileForRequest(account, mimicAPIKeyClaudeCode, s.tlsFPProfileService)
 }
 
 func defaultAPIKeyCountTokensMimicBetaHeader(body []byte) string {
-	beta := defaultAPIKeyMimicBetaHeader(body)
+	// 当前没有官方 count_tokens 对照样本，保持既有固定尾部，不把 /v1/messages
+	// 的 structured-outputs 条件规则无证据扩展到该接口。
+	beta := buildDefaultAPIKeyMimicBetaHeader(body, false)
 	return mergeAnthropicBeta([]string{beta, "token-counting-2024-11-01"}, "")
 }
 
@@ -64,11 +63,39 @@ func defaultAPIKeyCountTokensMimicBetaHeader(body []byte) string {
 // 对齐官方 claude-cli/2.1.207 抓包的完整 beta 列表（仅 mimic 路径使用）。
 // haiku 模型上游不做第三方判定，沿用精简 haiku header。
 func defaultAPIKeyMimicBetaHeader(body []byte) string {
+	return buildDefaultAPIKeyMimicBetaHeader(body, true)
+}
+
+func buildDefaultAPIKeyMimicBetaHeader(body []byte, selectStructuredOutputs bool) string {
 	modelID := gjson.GetBytes(body, "model").String()
 	if strings.Contains(strings.ToLower(modelID), "haiku") {
 		return claude.APIKeyHaikuBetaHeader
 	}
-	return strings.Join(claude.APIKeyMimicBetas(), ",")
+	betas := claude.APIKeyMimicBetas()
+	// 大上下文模型（fable-5 / opus-4-6/7/8）需要 context-1m，且官方抓包中它固定位于
+	// mid-conversation-system 之后、advisor-tool 之前，而非列表开头。用带位置的列表，
+	// 避免调用方再把 context-1m merge 到最前面导致顺序与官方不一致。
+	if requiresContext1MBetaForAPIKeyMimic(modelID) {
+		betas = claude.APIKeyMimicBetasWithContext1M()
+	}
+	// 官方 sdk-cli 会根据最终出站 body 选择末尾 beta：结构化输出请求使用
+	// structured-outputs，普通请求使用 fallback-credit。这里在 body 规范化之后调用，
+	// 因而不会基于客户端尚未重写的原始 body 作出错误判断。
+	if selectStructuredOutputs && apiKeyMimicBodyRequiresStructuredOutputs(body) {
+		for i, beta := range betas {
+			if beta == claude.BetaFallbackCredit {
+				betas[i] = claude.BetaStructuredOutputs
+				break
+			}
+		}
+	}
+	return strings.Join(betas, ",")
+}
+
+// apiKeyMimicBodyRequiresStructuredOutputs 判断最终出站 body 是否启用了 JSON Schema
+// 结构化输出。afk-mode 属于客户端运行状态，无法从 body 可靠推导，因此不在此猜测。
+func apiKeyMimicBodyRequiresStructuredOutputs(body []byte) bool {
+	return gjson.GetBytes(body, "output_config.format.type").String() == "json_schema"
 }
 
 func anthropicAPIKeyMimicExtraBetas(modelID string) []string {
@@ -101,7 +128,14 @@ func (s *GatewayService) buildAnthropicAPIKeyCLIMimicRequest(
 	modelID := gjson.GetBytes(body, "model").String()
 	extraBetas := anthropicAPIKeyMimicExtraBetas(modelID)
 	effectiveDropSet = removeTokensFromSetCopy(effectiveDropSet, extraBetas...)
-	finalBetaHeader := stripBetaTokensWithSet(mergeAnthropicBeta(extraBetas, defaultAPIKeyMimicBetaHeader(body)), effectiveDropSet)
+	// defaultAPIKeyMimicBetaHeader 已经按官方顺序放置模型必需 beta；这里不能再把
+	// extraBetas 作为 required 合并，否则 context-1m 会被重新移动到列表首位。
+	finalBetaHeader := stripBetaTokensWithSet(defaultAPIKeyMimicBetaHeader(body), effectiveDropSet)
+	if apiKeyMimicBodyRequiresStructuredOutputs(body) &&
+		!strings.Contains(strings.ToLower(modelID), "haiku") &&
+		!anthropicBetaTokensContains(finalBetaHeader, claude.BetaStructuredOutputs) {
+		return nil, nil, &BetaBlockedError{Message: "结构化输出请求需要 beta feature " + claude.BetaStructuredOutputs + "，但该 beta 已被过滤策略禁用"}
+	}
 	if blockErr := s.checkBetaPolicyBlockForHeader(ctx, finalBetaHeader, account, modelID); blockErr != nil {
 		return nil, nil, blockErr
 	}
@@ -123,9 +157,24 @@ func (s *GatewayService) buildAnthropicAPIKeyCLIMimicRequest(
 		return nil, nil, err
 	}
 	setHeaderRaw(req.Header, "x-api-key", token)
-	setHeaderRaw(req.Header, "content-type", "application/json")
+	setHeaderRaw(req.Header, "Authorization", "Bearer "+token)
+	// 官方 claude-cli/2.1.207 直连 HTTP/1.1 中转站时使用 Node 风格的 Header
+	// 文本形态。这里只调整 API Key mimic 的 /v1/messages 构造链，不改变 OAuth、
+	// count_tokens 或其他平台的共享 Header 规则。
+	setHeaderRaw(req.Header, "Content-Type", "application/json")
+	setHeaderRaw(req.Header, "Accept-Encoding", "gzip, deflate, br, zstd")
+	// HTTP/1.1 默认支持长连接；显式写入仅用于尽量贴近官方 wire 形态。
+	// 最终是否保留仍由 Go Transport 按实际协议安全处理。
+	setHeaderRaw(req.Header, "Connection", "keep-alive")
 	setHeaderRaw(req.Header, "anthropic-version", "2023-06-01")
 	applyClaudeCodeMimicHeaders(req, reqStream)
+	// API Key 官方客户端样本不发送这两个 OAuth mimic 历史头。只在本构造路径
+	// 局部删除，避免改变共享 helper 的 OAuth 和 count_tokens 行为。
+	deleteHeaderAllForms(req.Header, "x-client-request-id")
+	deleteHeaderAllForms(req.Header, "x-stainless-helper-method")
+	if sessionID := apiKeyMimicSessionIDFromBody(body); sessionID != "" {
+		setHeaderRaw(req.Header, "X-Claude-Code-Session-Id", sessionID)
+	}
 	deleteHeaderAllForms(req.Header, "anthropic-beta")
 	if finalBetaHeader != "" {
 		setHeaderRaw(req.Header, "anthropic-beta", finalBetaHeader)
@@ -167,22 +216,70 @@ func (s *GatewayService) applyAnthropicAPIKeyClaudeCodeMimicryToBody(
 	}
 
 	metadataUserID := buildAPIKeyMimicMetadataUserID(account, body, safeClientHeaders(c), safeClientIP(c), getAPIKeyIDFromContext(c))
+	// 已有但不可解析的第三方 metadata.user_id 无法与官方 Session-Id header 保持一致。
+	// 仅在这种情况下覆盖为规范 mimic metadata；合法 metadata 继续原样保留。
+	if metadataUserID != "" {
+		existing := gjson.GetBytes(body, "metadata.user_id").String()
+		if existing != "" && ParseMetadataUserID(existing) == nil {
+			if next, ok := setJSONValueBytes(body, "metadata.user_id", metadataUserID); ok {
+				body = next
+			}
+		}
+	}
 	body, _ = normalizeClaudeOAuthRequestBody(body, model, claudeOAuthNormalizeOptions{
-		stripSystemCacheControl: !systemRewritten,
-		injectMetadata:          metadataUserID != "",
-		metadataUserID:          metadataUserID,
+		stripSystemCacheControl:    !systemRewritten,
+		injectMetadata:             metadataUserID != "",
+		metadataUserID:             metadataUserID,
+		preserveMissingTemperature: true,
+		dropPlainAutoToolChoice:    true,
 	})
+	body = applyAnthropicAPIKeySDKCLIIdentity(body)
 
 	body = s.rewriteMessageCacheControlIfEnabled(ctx, body)
 
 	return body
 }
 
+const (
+	claudeSDKCLIEntrypoint     = "cc_entrypoint=sdk-cli;"
+	claudeSDKCLIIdentityPrompt = "You are a Claude agent, built on Anthropic's Claude Agent SDK."
+)
+
+// applyAnthropicAPIKeySDKCLIIdentity 只修正 API Key mimic 已生成的固定身份块。
+// 使用精确匹配避免替换用户自定义 system 文本，也不会影响共用该构造链的 OAuth 请求。
+func applyAnthropicAPIKeySDKCLIIdentity(body []byte) []byte {
+	system := gjson.GetBytes(body, "system")
+	if !system.IsArray() {
+		return body
+	}
+	out := body
+	system.ForEach(func(index, item gjson.Result) bool {
+		if item.Get("type").String() != "text" {
+			return true
+		}
+		path := "system." + index.String() + ".text"
+		text := item.Get("text").String()
+		nextText := text
+		if strings.HasPrefix(text, "x-anthropic-billing-header:") {
+			nextText = strings.Replace(text, "cc_entrypoint=cli;", claudeSDKCLIEntrypoint, 1)
+		} else if strings.TrimSpace(text) == strings.TrimSpace(claudeCodeSystemPrompt) {
+			nextText = claudeSDKCLIIdentityPrompt
+		}
+		if nextText != text {
+			if next, ok := setJSONValueBytes(out, path, nextText); ok {
+				out = next
+			}
+		}
+		return true
+	})
+	return out
+}
+
 func buildAPIKeyMimicMetadataUserID(account *Account, body []byte, clientHeaders http.Header, clientIP string, apiKeyID int64) string {
 	if account == nil {
 		return ""
 	}
-	if existing := gjson.GetBytes(body, "metadata.user_id").String(); existing != "" {
+	if existing := gjson.GetBytes(body, "metadata.user_id").String(); existing != "" && ParseMetadataUserID(existing) != nil {
 		return ""
 	}
 
@@ -214,6 +311,17 @@ func buildAPIKeyMimicMetadataUserID(account *Account, body []byte, clientHeaders
 	accountUUID := strings.TrimSpace(account.GetExtraString("account_uuid"))
 	uaVersion := ExtractCLIVersion(claude.DefaultHeaders["User-Agent"])
 	return FormatMetadataUserID(deviceID, accountUUID, sessionID, uaVersion)
+}
+
+// apiKeyMimicSessionIDFromBody 从最终出站 body 中提取 Claude Code session ID。
+// header 与 metadata 必须使用同一来源，避免无状态代理重复计算产生不一致。
+func apiKeyMimicSessionIDFromBody(body []byte) string {
+	metadataUserID := gjson.GetBytes(body, "metadata.user_id").String()
+	parsed := ParseMetadataUserID(metadataUserID)
+	if parsed == nil {
+		return ""
+	}
+	return strings.TrimSpace(parsed.SessionID)
 }
 
 func rawJSONValue(body []byte, path string) any {

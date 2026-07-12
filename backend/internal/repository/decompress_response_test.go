@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/flate"
 	"compress/gzip"
+	"compress/zlib"
 	"io"
 	"log/slog"
 	"net/http"
@@ -43,7 +44,8 @@ func TestDecompressResponseBodyExistingEncodings(t *testing.T) {
 	}{
 		{name: "gzip", encoding: "gzip", compress: compressGzip},
 		{name: "brotli", encoding: "br", compress: compressBrotli},
-		{name: "deflate", encoding: "deflate", compress: compressDeflate},
+		{name: "deflate_raw", encoding: "deflate", compress: compressDeflate},
+		{name: "deflate_zlib", encoding: "deflate", compress: compressZlibDeflate},
 	}
 
 	for _, tt := range tests {
@@ -61,6 +63,47 @@ func TestDecompressResponseBodyExistingEncodings(t *testing.T) {
 			require.NoError(t, resp.Body.Close())
 		})
 	}
+}
+
+func TestDecompressResponseBodySSEEncodings(t *testing.T) {
+	payload := []byte("event: message_start\ndata: {\"type\":\"message_start\"}\n\nevent: message_delta\ndata: {\"delta\":{\"stop_reason\":\"end_turn\"}}\n\n")
+	tests := []struct {
+		name     string
+		encoding string
+		compress func(*testing.T, []byte) []byte
+	}{
+		{name: "gzip", encoding: "gzip", compress: compressGzip},
+		{name: "brotli", encoding: "br", compress: compressBrotli},
+		{name: "deflate_raw", encoding: "deflate", compress: compressDeflate},
+		{name: "deflate_zlib", encoding: "deflate", compress: compressZlibDeflate},
+		{name: "zstd", encoding: "zstd", compress: compressZstd},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := newEncodedResponse(tt.encoding, tt.compress(t, payload))
+			resp.Header.Set("Content-Type", "text/event-stream")
+
+			decompressResponseBody(resp)
+
+			body, err := io.ReadAll(resp.Body)
+			require.NoError(t, err)
+			require.Equal(t, payload, body)
+			require.Equal(t, "text/event-stream", resp.Header.Get("Content-Type"))
+			require.Empty(t, resp.Header.Get("Content-Encoding"))
+			require.Empty(t, resp.Header.Get("Content-Length"))
+			require.Equal(t, int64(-1), resp.ContentLength)
+			require.NoError(t, resp.Body.Close())
+		})
+	}
+}
+
+func TestIsZlibHeader(t *testing.T) {
+	require.True(t, isZlibHeader([]byte{0x78, 0x9c}))
+	require.True(t, isZlibHeader([]byte{0x78, 0x01}))
+	require.False(t, isZlibHeader([]byte{0x78}))
+	require.False(t, isZlibHeader([]byte{0x00, 0x00}))
+	require.False(t, isZlibHeader([]byte{0x78, 0x9d}))
 }
 
 func TestDecompressResponseBodyWithoutEncodingLeavesBodyUntouched(t *testing.T) {
@@ -184,6 +227,16 @@ func compressDeflate(t *testing.T, payload []byte) []byte {
 	zw, err := flate.NewWriter(&buf, flate.DefaultCompression)
 	require.NoError(t, err)
 	_, err = zw.Write(payload)
+	require.NoError(t, err)
+	require.NoError(t, zw.Close())
+	return buf.Bytes()
+}
+
+func compressZlibDeflate(t *testing.T, payload []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zlib.NewWriter(&buf)
+	_, err := zw.Write(payload)
 	require.NoError(t, err)
 	require.NoError(t, zw.Close())
 	return buf.Bytes()

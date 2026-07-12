@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"compress/flate"
 	"compress/gzip"
+	"compress/zlib"
 	"context"
 	"crypto/sha256"
 	"crypto/tls"
@@ -1231,7 +1232,12 @@ func decompressResponseBody(resp *http.Response) {
 	case "br":
 		reader = brotli.NewReader(resp.Body)
 	case "deflate":
-		reader = flate.NewReader(resp.Body)
+		bufferedBody := bufio.NewReader(resp.Body)
+		deflateReader, err := newDeflateResponseReader(bufferedBody)
+		if err != nil {
+			return // 解压器初始化失败，保持原始响应 Header 和 body
+		}
+		reader = deflateReader
 	case "zstd":
 		bufferedBody := bufio.NewReader(resp.Body)
 		resp.Body = &decompressedBody{reader: bufferedBody, closer: originalBody}
@@ -1257,6 +1263,27 @@ func decompressResponseBody(resp *http.Response) {
 	resp.Header.Del("Content-Encoding")
 	resp.Header.Del("Content-Length") // 解压后长度不确定
 	resp.ContentLength = -1
+}
+
+// newDeflateResponseReader 同时兼容 HTTP 服务常见的两种 deflate 载荷：
+// RFC 1951 raw DEFLATE 与 RFC 1950 zlib-wrapped DEFLATE。Content-Encoding
+// 历史实现存在口径分歧，因此需要根据 zlib 头部特征自动选择解码器。
+func newDeflateResponseReader(bufferedBody *bufio.Reader) (io.ReadCloser, error) {
+	header, err := bufferedBody.Peek(2)
+	if err == nil && isZlibHeader(header) {
+		return zlib.NewReader(bufferedBody)
+	}
+	return flate.NewReader(bufferedBody), nil
+}
+
+// isZlibHeader 按 RFC 1950 校验 CMF/FLG：压缩方法必须为 DEFLATE、窗口大小合法，
+// 且两字节头部可以被 31 整除。仅靠首字节判断会误判合法的 raw DEFLATE 数据。
+func isZlibHeader(header []byte) bool {
+	if len(header) < 2 {
+		return false
+	}
+	cmf, flg := header[0], header[1]
+	return cmf&0x0f == 8 && cmf>>4 <= 7 && (uint16(cmf)<<8|uint16(flg))%31 == 0
 }
 
 type zstdResponseReader struct {

@@ -30,6 +30,12 @@ export default {
         unknownCodexProfile: 'Codex（{profile}）',
         passthroughAlsoEnabled: '透传同开，非官方请求优先 mimic'
       },
+      filters: {
+        status: '兼容状态',
+        all: '全部账号',
+        enabled: '仅已开启',
+        disabled: '仅未开启'
+      },
       empty: '暂无 Anthropic / OpenAI API Key 账号',
       loadFailed: '加载 API Key 账号失败',
       updateSuccess: '已更新官方客户端兼容设置',
@@ -45,6 +51,12 @@ export default {
         overview: '概览',
         settings: '配置',
         history: '会话历史'
+      },
+      filters: {
+        status: '保活状态',
+        all: '全部账号',
+        enabled: '仅已启用',
+        disabled: '仅已禁用'
       },
       columns: {
         account: '账号',

@@ -29,10 +29,11 @@ const (
 	// 新增（对齐官方 CLI 2.1.207 抓包，2026-07）
 	// 这些 beta 出现在官方 claude-cli/2.1.207 直连中转站的 anthropic-beta 完整列表中，
 	// API Key mimic 需补齐，否则第三方中转站容易据此识别为非官方客户端。
-	BetaThinkingTokenCount   = "thinking-token-count-2026-05-13"
+	BetaThinkingTokenCount    = "thinking-token-count-2026-05-13"
 	BetaMidConversationSystem = "mid-conversation-system-2026-04-07"
-	BetaAdvisorTool          = "advisor-tool-2026-03-01"
-	BetaFallbackCredit       = "fallback-credit-2026-06-01"
+	BetaAdvisorTool           = "advisor-tool-2026-03-01"
+	BetaFallbackCredit        = "fallback-credit-2026-06-01"
+	BetaStructuredOutputs     = "structured-outputs-2025-12-15"
 )
 
 // DroppedBetas 是转发时需要从 anthropic-beta header 中移除的 beta token 列表。
@@ -80,6 +81,22 @@ func APIKeyMimicBetas() []string {
 		BetaEffort,
 		BetaFallbackCredit,
 	}
+}
+
+// APIKeyMimicBetasWithContext1M 在 APIKeyMimicBetas() 基础上，把 context-1m 插入到官方
+// 抓包确认的位置（mid-conversation-system 之后、advisor-tool 之前），而不是列表开头。
+// 官方 claude-cli/2.1.207 抓包（2026-07）中 context-1m 固定在该位置；调用方对大上下文模型
+// （claude-fable-5 / claude-opus-4-6/7/8）应使用本函数，避免顺序不一致被判第三方。
+func APIKeyMimicBetasWithContext1M() []string {
+	base := APIKeyMimicBetas()
+	out := make([]string, 0, len(base)+1)
+	for _, b := range base {
+		if b == BetaAdvisorTool {
+			out = append(out, BetaContext1M)
+		}
+		out = append(out, b)
+	}
+	return out
 }
 
 // APIKeyHaikuBetaHeader Haiku 模型在 API-key 账号下使用的 anthropic-beta header（不包含 oauth / claude-code）
