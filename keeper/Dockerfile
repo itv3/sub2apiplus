@@ -1,10 +1,12 @@
 FROM golang:1.24-bookworm AS builder
 
+ARG VERSION=0.1.151-5
+
 WORKDIR /src
 COPY go.mod go.sum* ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w" -o /out/sub2apiplus-keeper .
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/sub2apiplus-keeper .
 
 FROM debian:bookworm-slim
 
