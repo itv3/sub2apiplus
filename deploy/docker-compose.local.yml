@@ -124,6 +124,7 @@ services:
       # Plus Keeper Integration (optional)
       # =======================================================================
       - SUB2APIPLUS_KEEPER_INTERNAL_TOKEN=${SUB2APIPLUS_KEEPER_INTERNAL_TOKEN:-}
+      - SUB2APIPLUS_KEEPER_BASE_URL=${SUB2APIPLUS_KEEPER_BASE_URL:-}
       - SUB2APIPLUS_KEEPER_PROJECTS=${SUB2APIPLUS_KEEPER_PROJECTS:-}
 
       # =======================================================================

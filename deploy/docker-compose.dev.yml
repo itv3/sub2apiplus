@@ -44,6 +44,7 @@ services:
       - TOTP_ENCRYPTION_KEY=${TOTP_ENCRYPTION_KEY:-}
       - TZ=${TZ:-Asia/Shanghai}
       - SUB2APIPLUS_KEEPER_INTERNAL_TOKEN=${SUB2APIPLUS_KEEPER_INTERNAL_TOKEN:-}
+      - SUB2APIPLUS_KEEPER_BASE_URL=${SUB2APIPLUS_KEEPER_BASE_URL:-}
       - SUB2APIPLUS_KEEPER_PROJECTS=${SUB2APIPLUS_KEEPER_PROJECTS:-}
       # Local mainland-China development proxy. Containers cannot use
       # 127.0.0.1 for the host proxy, so default to Docker Desktop's host name.
