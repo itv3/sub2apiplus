@@ -16,6 +16,11 @@ import (
 	"golang.org/x/net/proxy"
 )
 
+// TransportOptions 定义 TLS 指纹客户端配套的 HTTP Transport 行为。
+type TransportOptions struct {
+	DisableCompression bool
+}
+
 // Profile contains TLS fingerprint configuration.
 // All slice fields use built-in defaults when empty.
 type Profile struct {
@@ -32,6 +37,7 @@ type Profile struct {
 	Extensions          []uint16 // Extension type IDs in order; empty uses default Node.js 24.x order
 	TLSVersMin          uint16   // Empty uses TLS1.0
 	TLSVersMax          uint16   // Empty uses TLS1.3
+	Transport           TransportOptions
 }
 
 // Dialer creates TLS connections with custom fingerprints.

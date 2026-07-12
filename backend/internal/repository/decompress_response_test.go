@@ -5,15 +5,19 @@ import (
 	"compress/flate"
 	"compress/gzip"
 	"compress/zlib"
+	"crypto/tls"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/andybalholm/brotli"
 	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
+	"golang.org/x/net/http2"
 )
 
 func TestDecompressResponseBodyZstdUsage(t *testing.T) {
@@ -63,6 +67,41 @@ func TestDecompressResponseBodyExistingEncodings(t *testing.T) {
 			require.NoError(t, resp.Body.Close())
 		})
 	}
+}
+
+func TestDecompressResponseBodyGzipWhenHTTP2AutomaticCompressionDisabled(t *testing.T) {
+	payload := []byte(`{"ok":true,"source":"codex"}`)
+	compressed := compressGzip(t, payload)
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Encoding", "gzip")
+		w.Header().Set("Content-Length", strconv.Itoa(len(compressed)))
+		_, _ = w.Write(compressed)
+	}))
+	server.EnableHTTP2 = true
+	server.StartTLS()
+	defer server.Close()
+
+	transport := &http2.Transport{
+		DisableCompression: true,
+		TLSClientConfig: &tls.Config{
+			InsecureSkipVerify: true, // 测试服务器使用临时自签名证书。
+			NextProtos:         []string{"h2"},
+		},
+	}
+	resp, err := (&http.Client{Transport: transport}).Get(server.URL)
+	require.NoError(t, err)
+	require.Equal(t, "gzip", resp.Header.Get("Content-Encoding"))
+	require.False(t, resp.Uncompressed)
+
+	decompressResponseBody(resp)
+
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	require.Equal(t, payload, body)
+	require.Empty(t, resp.Header.Get("Content-Encoding"))
+	require.Empty(t, resp.Header.Get("Content-Length"))
+	require.Equal(t, int64(-1), resp.ContentLength)
+	require.NoError(t, resp.Body.Close())
 }
 
 func TestDecompressResponseBodySSEEncodings(t *testing.T) {

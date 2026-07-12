@@ -16,7 +16,8 @@ import (
 // ClientHello ≈1482-1976 B（MLKEM key_share 占主要字节）。
 func codexExec0144TLSProfile() *tlsfingerprint.Profile {
 	return &tlsfingerprint.Profile{
-		Name: "Built-in Codex 0.144.1 (captured anyrouter.top 2026-07-11)",
+		Name:      "Built-in Codex 0.144.1 (captured anyrouter.top 2026-07-11)",
+		Transport: tlsfingerprint.TransportOptions{DisableCompression: true},
 		CipherSuites: []uint16{
 			0x1302, 0x1301, 0x1303,
 			0xc02c, 0xc02b, 0xcca9,

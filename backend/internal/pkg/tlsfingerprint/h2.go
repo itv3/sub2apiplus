@@ -60,6 +60,7 @@ func NewH2Transport(profile *Profile, proxyURL *url.URL, idleConnTimeout, respon
 		return nil, err
 	}
 	return &http2.Transport{
+		DisableCompression: profile != nil && profile.Transport.DisableCompression,
 		// 复用 utls 握手：忽略 cfg，ClientHello 指纹由 profile 决定。
 		DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
 			return dial(ctx, network, addr)

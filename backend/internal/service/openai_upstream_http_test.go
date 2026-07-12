@@ -47,6 +47,7 @@ func TestResolveOpenAIAPIKeyCodexTLSProfileUsesCapturedDesktopDefault(t *testing
 	require.Equal(t, []uint16{0x11ec, 0x001d}, got.KeyShareGroups)
 	require.Equal(t, uint16(0x0303), got.TLSVersMin)
 	require.Equal(t, uint16(0x0304), got.TLSVersMax)
+	require.True(t, got.Transport.DisableCompression)
 
 	account.Extra["tls_fingerprint_profile_id"] = int64(42)
 	got = resolveOpenAIAPIKeyCodexTLSProfile(account, &TLSFingerprintProfileService{})
@@ -66,6 +67,7 @@ func TestResolveOpenAIAPIKeyCodexTLSProfileUsesCapturedDesktopDefault(t *testing
 	require.NotNil(t, got)
 	require.Equal(t, "codex-cli-captured", got.Name)
 	require.Equal(t, []string{"h2", "http/1.1"}, got.ALPNProtocols)
+	require.False(t, got.Transport.DisableCompression)
 }
 
 func TestResolveOpenAIAPIKeyCodexTLSProfileUsesCLIDefaultWhenRequested(t *testing.T) {
@@ -84,6 +86,7 @@ func TestResolveOpenAIAPIKeyCodexTLSProfileUsesCLIDefaultWhenRequested(t *testin
 	require.Equal(t, "Built-in Default (Node.js 24.x)", got.Name)
 	require.Empty(t, got.CipherSuites)
 	require.Empty(t, got.Extensions)
+	require.False(t, got.Transport.DisableCompression)
 }
 
 func TestDoOpenAIHTTPUpstreamUsesCapturedDesktopTLSProfileByDefault(t *testing.T) {

@@ -415,6 +415,33 @@ func TestHTTPUpstreamSuite(t *testing.T) {
 	suite.Run(t, new(HTTPUpstreamSuite))
 }
 
+func TestTLSFingerprintProfileCacheKeyIncludesTransportCompression(t *testing.T) {
+	base := &tlsfingerprint.Profile{Name: "same-profile", ALPNProtocols: []string{"h2", "http/1.1"}}
+	disabled := &tlsfingerprint.Profile{
+		Name:          "same-profile",
+		ALPNProtocols: []string{"h2", "http/1.1"},
+		Transport:     tlsfingerprint.TransportOptions{DisableCompression: true},
+	}
+
+	require.NotEqual(t, tlsFingerprintProfileCacheKey(base), tlsFingerprintProfileCacheKey(disabled))
+}
+
+func TestTLSFingerprintHTTP1TransportUsesProfileCompressionSetting(t *testing.T) {
+	transport, err := buildUpstreamTransportWithTLSFingerprint(
+		poolSettings{},
+		nil,
+		&tlsfingerprint.Profile{
+			ALPNProtocols: []string{"http/1.1"},
+			Transport:     tlsfingerprint.TransportOptions{DisableCompression: true},
+		},
+	)
+	require.NoError(t, err)
+
+	http1Transport, ok := transport.(*http.Transport)
+	require.True(t, ok, "期望 *http.Transport，得到 %T", transport)
+	require.True(t, http1Transport.DisableCompression)
+}
+
 // mustGetOrCreateClient 测试辅助函数，调用 getOrCreateClient 并断言无错误
 func mustGetOrCreateClient(t *testing.T, svc *httpUpstreamService, proxyURL string, accountID int64, concurrency int) *upstreamClientEntry {
 	t.Helper()

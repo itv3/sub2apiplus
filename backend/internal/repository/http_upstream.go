@@ -355,7 +355,7 @@ func tlsFingerprintProfileCacheKey(profile *tlsfingerprint.Profile) string {
 		return "nil"
 	}
 	raw := fmt.Sprintf(
-		"name:%s|grease:%t|ciphers:%v|curves:%v|points:%v|sigalgs:%v|alpn:%v|versions:%v|keyshares:%v|psk:%v|ext:%v|min:%04x|max:%04x",
+		"name:%s|grease:%t|ciphers:%v|curves:%v|points:%v|sigalgs:%v|alpn:%v|versions:%v|keyshares:%v|psk:%v|ext:%v|min:%04x|max:%04x|disable_compression:%t",
 		profile.Name,
 		profile.EnableGREASE,
 		profile.CipherSuites,
@@ -369,6 +369,7 @@ func tlsFingerprintProfileCacheKey(profile *tlsfingerprint.Profile) string {
 		profile.Extensions,
 		profile.TLSVersMin,
 		profile.TLSVersMax,
+		profile.Transport.DisableCompression,
 	)
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:8])
@@ -1140,7 +1141,8 @@ func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *u
 		IdleConnTimeout:       settings.idleConnTimeout,
 		ResponseHeaderTimeout: settings.responseHeaderTimeout,
 		// 禁用默认的 TLS，我们使用自定义的 DialTLSContext
-		ForceAttemptHTTP2: false,
+		ForceAttemptHTTP2:  false,
+		DisableCompression: profile != nil && profile.Transport.DisableCompression,
 	}
 
 	// 根据代理类型选择合适的 TLS 指纹 Dialer
