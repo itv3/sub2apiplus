@@ -5,6 +5,7 @@ package service
 import (
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/stretchr/testify/require"
 )
 
@@ -324,8 +325,8 @@ func TestAdvertisedModelMappingForAccount_AntigravityDefaultsOnlyForMissingOrEmp
 		{Platform: PlatformAntigravity, Credentials: map[string]any{"model_mapping": map[string]any{}}},
 	} {
 		mapping := AdvertisedModelMappingForAccount(account)
-		require.Len(t, mapping, len(defaultAntigravityModelIDs()))
-		for _, model := range defaultAntigravityModelIDs() {
+		require.Len(t, mapping, len(antigravity.OfficialModelIDs()))
+		for _, model := range antigravity.OfficialModelIDs() {
 			require.Equal(t, model, mapping[model])
 		}
 	}

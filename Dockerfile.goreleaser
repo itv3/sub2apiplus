@@ -45,6 +45,9 @@ WORKDIR /app
 # Copy pre-built binary from GoReleaser
 COPY sub2api /app/sub2api
 
+# 复制运行时模型定价与上下文窗口补充数据
+COPY --chown=sub2api:sub2api backend/resources /app/resources
+
 # Create data directory
 RUN mkdir -p /app/data && chown -R sub2api:sub2api /app
 

@@ -84,6 +84,7 @@ func TestDecompressResponseBodyGzipWhenHTTP2AutomaticCompressionDisabled(t *test
 	transport := &http2.Transport{
 		DisableCompression: true,
 		TLSClientConfig: &tls.Config{
+			// #nosec G402 -- 测试服务器使用 httptest 生成的临时自签名证书。
 			InsecureSkipVerify: true, // 测试服务器使用临时自签名证书。
 			NextProtos:         []string{"h2"},
 		},

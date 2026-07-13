@@ -2909,7 +2909,11 @@ func validatePlusExtraPatch(extra map[string]any) error {
 			if !isBoundedExtraString(value, 128) {
 				return fmt.Errorf("extra.%s must be a string up to 128 characters", key)
 			}
-			workspace := strings.TrimSpace(value.(string))
+			workspace, ok := value.(string)
+			if !ok {
+				return fmt.Errorf("extra.%s must be a string up to 128 characters", key)
+			}
+			workspace = strings.TrimSpace(workspace)
 			if strings.Contains(workspace, "/") || strings.Contains(workspace, "\\") || strings.Contains(workspace, "..") {
 				return fmt.Errorf("extra.%s must be a single project name", key)
 			}

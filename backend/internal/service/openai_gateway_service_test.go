@@ -2548,7 +2548,6 @@ func TestOpenAIBuildUpstreamRequestAPIKeyCodexMimicOverridesClientHeaders(t *tes
 	c.Request.Header.Set("session_id", "sess-client")
 	c.Request.Header.Set("conversation_id", "conv-client")
 
-	svc := &OpenAIGatewayService{}
 	account := &Account{
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeAPIKey,
@@ -2570,7 +2569,7 @@ func TestOpenAIBuildUpstreamRequestAPIKeyCodexMimicOverridesClientHeaders(t *tes
 		},
 	}
 
-	svc = &OpenAIGatewayService{
+	svc := &OpenAIGatewayService{
 		cfg: &config.Config{
 			Security: config.SecurityConfig{
 				URLAllowlist: config.URLAllowlistConfig{

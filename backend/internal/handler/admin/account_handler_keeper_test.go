@@ -384,10 +384,18 @@ func TestRecordKeeperKeepaliveSanitizesAndTruncatesFields(t *testing.T) {
 	if got := adminSvc.lastUpdateAccountExtra.updates["keeper_last_session_id"]; got != "session-1" {
 		t.Fatalf("keeper_last_session_id = %#v, want session-1", got)
 	}
-	if got := adminSvc.lastUpdateAccountExtra.updates["keeper_last_summary"].(string); len([]rune(got)) != keeperKeepaliveSummaryMaxRunes {
+	gotSummary, ok := adminSvc.lastUpdateAccountExtra.updates["keeper_last_summary"].(string)
+	if !ok {
+		t.Fatalf("keeper_last_summary type = %T, want string", adminSvc.lastUpdateAccountExtra.updates["keeper_last_summary"])
+	}
+	if got := gotSummary; len([]rune(got)) != keeperKeepaliveSummaryMaxRunes {
 		t.Fatalf("summary length = %d, want %d", len([]rune(got)), keeperKeepaliveSummaryMaxRunes)
 	}
-	if got := adminSvc.lastUpdateAccountExtra.updates["keeper_last_error"].(string); len([]rune(got)) != keeperKeepaliveErrorMaxRunes {
+	gotError, ok := adminSvc.lastUpdateAccountExtra.updates["keeper_last_error"].(string)
+	if !ok {
+		t.Fatalf("keeper_last_error type = %T, want string", adminSvc.lastUpdateAccountExtra.updates["keeper_last_error"])
+	}
+	if got := gotError; len([]rune(got)) != keeperKeepaliveErrorMaxRunes {
 		t.Fatalf("error length = %d, want %d", len([]rune(got)), keeperKeepaliveErrorMaxRunes)
 	}
 }

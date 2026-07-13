@@ -1786,7 +1786,7 @@ func (a *Account) IsTLSFingerprintEnabled() bool {
 	if a == nil {
 		return false
 	}
-	if !(a.IsAnthropicOAuthOrSetupToken() || a.IsAnthropicAPIKeyClaudeCodeMimicEnabled() || a.ShouldUseOpenAITLSFingerprint()) {
+	if !a.IsAnthropicOAuthOrSetupToken() && !a.IsAnthropicAPIKeyClaudeCodeMimicEnabled() && !a.ShouldUseOpenAITLSFingerprint() {
 		return false
 	}
 	if a.Extra == nil {

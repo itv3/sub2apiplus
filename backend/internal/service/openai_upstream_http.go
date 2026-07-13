@@ -59,13 +59,6 @@ func resolveOpenAIAPIKeyCodexTLSProfile(account *Account, tlsFPProfileService *T
 	return codexExec0144TLSProfile()
 }
 
-func (s *OpenAIGatewayService) resolveOpenAIAPIKeyCodexTLSProfile(account *Account) *tlsfingerprint.Profile {
-	if s == nil {
-		return nil
-	}
-	return resolveOpenAIAPIKeyCodexTLSProfile(account, s.tlsFPProfileService)
-}
-
 func doOpenAIHTTPUpstreamWithMimicTLS(httpUpstream HTTPUpstream, req *http.Request, proxyURL string, account *Account, tlsFPProfileService *TLSFingerprintProfileService, useAPIKeyMimicTLS bool) (*http.Response, error) {
 	if httpUpstream == nil {
 		return nil, fmt.Errorf("http upstream unavailable")
@@ -84,13 +77,6 @@ func doOpenAIHTTPUpstreamWithMimicTLS(httpUpstream HTTPUpstream, req *http.Reque
 func doOpenAIHTTPUpstream(httpUpstream HTTPUpstream, req *http.Request, proxyURL string, account *Account, tlsFPProfileService *TLSFingerprintProfileService) (*http.Response, error) {
 	useAPIKeyMimicTLS := account != nil && account.ShouldUseOpenAITLSFingerprint()
 	return doOpenAIHTTPUpstreamWithMimicTLS(httpUpstream, req, proxyURL, account, tlsFPProfileService, useAPIKeyMimicTLS)
-}
-
-func (s *OpenAIGatewayService) doOpenAIHTTPUpstream(req *http.Request, proxyURL string, account *Account) (*http.Response, error) {
-	if s == nil {
-		return nil, fmt.Errorf("http upstream unavailable")
-	}
-	return doOpenAIHTTPUpstream(s.httpUpstream, req, proxyURL, account, s.tlsFPProfileService)
 }
 
 func (s *OpenAIGatewayService) doOpenAIHTTPUpstreamForRequest(req *http.Request, proxyURL string, account *Account, mimicProfile openAIAPIKeyCodexMimicProfile) (*http.Response, error) {

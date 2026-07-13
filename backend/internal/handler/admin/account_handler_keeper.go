@@ -573,10 +573,6 @@ func extraStringDefault(extra map[string]any, key, fallback string) string {
 	return fallback
 }
 
-func normalizeKeeperMode(value string) string {
-	return normalizeKeeperModeDefault(value, "resume_last")
-}
-
 func normalizeKeeperModeDefault(value string, fallback string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "fresh":

@@ -525,25 +525,6 @@ func parseTestSSEOutput(body string) (responseText, errMsg string) {
 	return
 }
 
-func parseTestSSEUsage(body string) *KeeperKeepaliveUsage {
-	var usage *KeeperKeepaliveUsage
-	for _, line := range strings.Split(body, "\n") {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		jsonStr := strings.TrimPrefix(line, "data: ")
-		var event TestEvent
-		if err := json.Unmarshal([]byte(jsonStr), &event); err != nil {
-			continue
-		}
-		if event.Type == "usage" && event.Usage != nil {
-			usage = event.Usage
-		}
-	}
-	return usage
-}
-
 func keeperUsageFromResponseEvent(data map[string]any) *KeeperKeepaliveUsage {
 	if usage := keeperUsageFromAny(data["usage"]); usage != nil {
 		return usage
