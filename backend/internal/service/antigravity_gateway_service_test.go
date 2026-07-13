@@ -53,42 +53,59 @@ func TestAntigravityUpstreamErrorBodyReadLimit_RespectsDiagnosticLimit(t *testin
 
 func TestWrapV1InternalRequestAppliesOfficialGeminiProfile(t *testing.T) {
 	svc := newAntigravityTestService(&config.Config{})
-	body := []byte(`{
-		"contents":[{"role":"user","parts":[{"text":"hello"}]}],
-		"generationConfig":{
-			"temperature":0.8,
-			"topP":0.9,
-			"stopSequences":["STOP"]
-		}
-	}`)
+	tests := []struct {
+		model          string
+		modelEnum      string
+		thinkingBudget int
+	}{
+		{model: "gemini-pro-agent", modelEnum: "MODEL_PLACEHOLDER_M16", thinkingBudget: 10001},
+		{model: "gemini-3.1-pro-low", modelEnum: "MODEL_PLACEHOLDER_M36", thinkingBudget: 1001},
+		{model: "gemini-3-flash-agent", modelEnum: "MODEL_PLACEHOLDER_M132", thinkingBudget: 10000},
+		{model: "gemini-3.5-flash-extra-low", modelEnum: "MODEL_PLACEHOLDER_M187", thinkingBudget: 1000},
+		{model: "gemini-3.5-flash-low", modelEnum: "MODEL_PLACEHOLDER_M20", thinkingBudget: 4000},
+	}
 
-	raw, err := svc.wrapV1InternalRequest("proj", "gemini-pro-agent", body)
-	require.NoError(t, err)
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			body := []byte(`{
+				"contents":[{"role":"user","parts":[{"text":"hello"}]}],
+				"generationConfig":{
+					"temperature":0.8,
+					"topP":0.9,
+					"stopSequences":["STOP"]
+				}
+			}`)
 
-	var wrapped map[string]any
-	require.NoError(t, json.Unmarshal(raw, &wrapped))
-	require.Equal(t, "proj", wrapped["project"])
-	require.Equal(t, "agent", wrapped["requestType"])
-	require.Equal(t, "gemini-pro-agent", wrapped["model"])
-	require.Regexp(t, `^agent/.+/\d+/.+/2$`, wrapped["requestId"])
+			raw, err := svc.wrapV1InternalRequest("proj", tt.model, body)
+			require.NoError(t, err)
 
-	labels, ok := wrapped["labels"].(map[string]any)
-	require.True(t, ok)
-	require.Equal(t, "MODEL_PLACEHOLDER_M16", labels["model_enum"])
-	require.Equal(t, "false", labels["used_claude"])
-	require.NotEmpty(t, labels["trajectory_id"])
+			var wrapped map[string]any
+			require.NoError(t, json.Unmarshal(raw, &wrapped))
+			require.Equal(t, "proj", wrapped["project"])
+			require.Equal(t, "agent", wrapped["requestType"])
+			require.Equal(t, tt.model, wrapped["model"])
+			require.Regexp(t, `^agent/.+/\d+/.+/2$`, wrapped["requestId"])
+			require.NotContains(t, wrapped, "labels")
 
-	requestBody, ok := wrapped["request"].(map[string]any)
-	require.True(t, ok)
-	generationConfig, ok := requestBody["generationConfig"].(map[string]any)
-	require.True(t, ok)
-	require.NotContains(t, generationConfig, "temperature")
-	require.NotContains(t, generationConfig, "topP")
-	require.NotContains(t, generationConfig, "stopSequences")
-	thinkingConfig, ok := generationConfig["thinkingConfig"].(map[string]any)
-	require.True(t, ok)
-	require.Equal(t, true, thinkingConfig["includeThoughts"])
-	require.EqualValues(t, 10001, thinkingConfig["thinkingBudget"])
+			requestBody, ok := wrapped["request"].(map[string]any)
+			require.True(t, ok)
+			labels, ok := requestBody["labels"].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, tt.modelEnum, labels["model_enum"])
+			require.Equal(t, "false", labels["used_claude"])
+			require.NotEmpty(t, labels["trajectory_id"])
+
+			generationConfig, ok := requestBody["generationConfig"].(map[string]any)
+			require.True(t, ok)
+			require.NotContains(t, generationConfig, "temperature")
+			require.NotContains(t, generationConfig, "topP")
+			require.NotContains(t, generationConfig, "stopSequences")
+			thinkingConfig, ok := generationConfig["thinkingConfig"].(map[string]any)
+			require.True(t, ok)
+			require.Equal(t, true, thinkingConfig["includeThoughts"])
+			require.EqualValues(t, tt.thinkingBudget, thinkingConfig["thinkingBudget"])
+		})
+	}
 }
 
 func TestAntigravityGatewayService_ForwardClaudeRejectsUnallowedThinkingSuffix(t *testing.T) {

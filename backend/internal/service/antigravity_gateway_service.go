@@ -734,7 +734,12 @@ func (s *AntigravityGatewayService) wrapV1InternalRequest(projectID, model strin
 	if antigravity.IsOfficialModelID(model) {
 		requestID, trajectoryID := antigravity.OfficialRequestIdentity()
 		wrapped["requestId"] = requestID
-		wrapped["labels"] = antigravity.OfficialRequestLabels(model, trajectoryID)
+		requestMap, ok := request.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("官方 Antigravity 模型的请求体必须是 JSON 对象")
+		}
+		// labels 属于 v1internal 的内层 request；放在顶层会被 Google JSON Schema 拒绝。
+		requestMap["labels"] = antigravity.OfficialRequestLabels(model, trajectoryID)
 		applyOfficialAntigravityGeminiProfile(request, model)
 	}
 
