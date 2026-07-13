@@ -30,6 +30,10 @@ const (
 	userSlotKeyPrefix = "concurrency:user:"
 	// 格式: concurrency:api_key:{apiKeyID}
 	apiKeySlotKeyPrefix = "concurrency:api_key:"
+	// API 密钥级客户端 WebSocket 入站租约使用比普通请求槽位更短的 TTL，
+	// 因为空闲的入站会话不会占用单轮请求槽位。
+	openAIWSIngressLeaseKeyPrefix  = "concurrency:openai_ws_ingress:api_key:"
+	openAIWSIngressLeaseTTLSeconds = 60
 	// 等待队列计数器格式: concurrency:wait:{userID}
 	waitQueueKeyPrefix = "concurrency:wait:"
 	// 账号级等待队列计数器格式: wait:account:{accountID}
@@ -134,6 +138,48 @@ var (
 
 		redis.call('ZREMRANGEBYSCORE', key, '-inf', expireBefore)
 		redis.call('ZADD', key, now, requestID)
+		redis.call('EXPIRE', key, ttl)
+		return 1
+	`)
+
+	// acquireOpenAIWSIngressLeaseScript 以原子方式清理已崩溃的成员，
+	// 并使用 Redis TIME 获取或刷新一个 API 密钥级入站租约。
+	acquireOpenAIWSIngressLeaseScript = redis.NewScript(`
+		redis.replicate_commands()
+		local key = KEYS[1]
+		local maxConnections = tonumber(ARGV[1])
+		local ttl = tonumber(ARGV[2])
+		local leaseID = ARGV[3]
+		local now = tonumber(redis.call('TIME')[1])
+		local expireBefore = now - ttl
+		redis.call('ZREMRANGEBYSCORE', key, '-inf', expireBefore)
+		if redis.call('ZSCORE', key, leaseID) ~= false then
+			redis.call('ZADD', key, now, leaseID)
+			redis.call('EXPIRE', key, ttl)
+			return 1
+		end
+		if redis.call('ZCARD', key) < maxConnections then
+			redis.call('ZADD', key, now, leaseID)
+			redis.call('EXPIRE', key, ttl)
+			return 1
+		end
+		return 0
+	`)
+
+	// refreshOpenAIWSIngressLeaseScript 不会重新创建缺失的成员：失去租约的进程
+	// 必须终止本地 WebSocket，不能在超过分布式上限后继续静默运行。
+	refreshOpenAIWSIngressLeaseScript = redis.NewScript(`
+		redis.replicate_commands()
+		local key = KEYS[1]
+		local ttl = tonumber(ARGV[1])
+		local leaseID = ARGV[2]
+		local now = tonumber(redis.call('TIME')[1])
+		local expireBefore = now - ttl
+		redis.call('ZREMRANGEBYSCORE', key, '-inf', expireBefore)
+		if redis.call('ZSCORE', key, leaseID) == false then
+			return 0
+		end
+		redis.call('ZADD', key, now, leaseID)
 		redis.call('EXPIRE', key, ttl)
 		return 1
 	`)
@@ -281,6 +327,10 @@ func userSlotKey(userID int64) string {
 
 func apiKeySlotKey(apiKeyID int64) string {
 	return fmt.Sprintf("%s%d", apiKeySlotKeyPrefix, apiKeyID)
+}
+
+func openAIWSIngressLeaseKey(apiKeyID int64) string {
+	return fmt.Sprintf("%s%d", openAIWSIngressLeaseKeyPrefix, apiKeyID)
 }
 
 func waitQueueKey(userID int64) string {
@@ -621,6 +671,48 @@ func (c *concurrencyCache) TrackAPIKeySlot(ctx context.Context, apiKeyID int64, 
 func (c *concurrencyCache) ReleaseAPIKeySlot(ctx context.Context, apiKeyID int64, requestID string) error {
 	key := apiKeySlotKey(apiKeyID)
 	return c.rdb.ZRem(ctx, key, requestID).Err()
+}
+
+func (c *concurrencyCache) AcquireOpenAIWSIngressLease(ctx context.Context, apiKeyID int64, maxConnections int, leaseID string) (bool, error) {
+	if c == nil || c.rdb == nil || apiKeyID <= 0 || maxConnections <= 0 || leaseID == "" {
+		return false, nil
+	}
+	result, err := acquireOpenAIWSIngressLeaseScript.Run(
+		ctx,
+		c.rdb,
+		[]string{openAIWSIngressLeaseKey(apiKeyID)},
+		maxConnections,
+		openAIWSIngressLeaseTTLSeconds,
+		leaseID,
+	).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
+}
+
+func (c *concurrencyCache) RefreshOpenAIWSIngressLease(ctx context.Context, apiKeyID int64, leaseID string) (bool, error) {
+	if c == nil || c.rdb == nil || apiKeyID <= 0 || leaseID == "" {
+		return false, nil
+	}
+	result, err := refreshOpenAIWSIngressLeaseScript.Run(
+		ctx,
+		c.rdb,
+		[]string{openAIWSIngressLeaseKey(apiKeyID)},
+		openAIWSIngressLeaseTTLSeconds,
+		leaseID,
+	).Int()
+	if err != nil {
+		return false, err
+	}
+	return result == 1, nil
+}
+
+func (c *concurrencyCache) ReleaseOpenAIWSIngressLease(ctx context.Context, apiKeyID int64, leaseID string) error {
+	if c == nil || c.rdb == nil || apiKeyID <= 0 || leaseID == "" {
+		return nil
+	}
+	return c.rdb.ZRem(ctx, openAIWSIngressLeaseKey(apiKeyID), leaseID).Err()
 }
 
 func (c *concurrencyCache) GetAPIKeyConcurrencyBatch(ctx context.Context, apiKeyIDs []int64) (map[int64]int, error) {

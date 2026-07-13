@@ -38,6 +38,40 @@ export interface SwipeSelectVirtualContext {
   getRowId: (row: any, index: number) => number
 }
 
+/**
+ * 使用真实 DOM 行（`tbody tr[data-index]`），根据视口 Y 坐标定位行索引。
+ * 当列表足够小而完整渲染（虚拟化关闭）时，虚拟器窗口为空，此函数用于回退查找。
+ * 行按纵向排列，因此这里仿照 findRowIndexAtY 使用二分查找，并返回每行的
+ * `data-index`（其在排序后数据中的绝对索引）；没有渲染任何行时返回 -1。
+ * 导出此函数仅用于单元测试。
+ */
+export function findRowIndexByDomPosition(scrollEl: Element, clientY: number): number {
+  const domRows = Array.from(scrollEl.querySelectorAll('tbody tr[data-index]')) as HTMLElement[]
+  const len = domRows.length
+  if (len === 0) return -1
+  const idxOf = (el: HTMLElement) => Number(el.getAttribute('data-index'))
+
+  // 边界检查。
+  if (clientY < domRows[0].getBoundingClientRect().top) return idxOf(domRows[0])
+  if (clientY > domRows[len - 1].getBoundingClientRect().bottom) return idxOf(domRows[len - 1])
+
+  // 行按纵向排列，可使用二分查找。
+  let lo = 0, hi = len - 1
+  while (lo <= hi) {
+    const mid = (lo + hi) >>> 1
+    const rect = domRows[mid].getBoundingClientRect()
+    if (clientY < rect.top) hi = mid - 1
+    else if (clientY > rect.bottom) lo = mid + 1
+    else return idxOf(domRows[mid])
+  }
+  // 坐标位于两行间隙时，选择距离更近的一行。
+  if (hi < 0) return idxOf(domRows[0])
+  if (lo >= len) return idxOf(domRows[len - 1])
+  const rHi = domRows[hi].getBoundingClientRect()
+  const rLo = domRows[lo].getBoundingClientRect()
+  return (clientY - rHi.bottom < rLo.top - clientY) ? idxOf(domRows[hi]) : idxOf(domRows[lo])
+}
+
 export function useSwipeSelect(
   containerRef: Ref<HTMLElement | null>,
   adapter: SwipeSelectAdapter,
@@ -84,13 +118,13 @@ export function useSwipeSelect(
     const len = cachedRows.length
     if (len === 0) return -1
 
-    // Boundary checks
+    // 边界检查。
     const firstRect = cachedRows[0].getBoundingClientRect()
     if (clientY < firstRect.top) return 0
     const lastRect = cachedRows[len - 1].getBoundingClientRect()
     if (clientY > lastRect.bottom) return len - 1
 
-    // Binary search — rows are vertically ordered
+    // 行按纵向排列，可使用二分查找。
     let lo = 0, hi = len - 1
     while (lo <= hi) {
       const mid = (lo + hi) >>> 1
@@ -99,7 +133,7 @@ export function useSwipeSelect(
       else if (clientY > rect.bottom) lo = mid + 1
       else return mid
     }
-    // In a gap between rows — pick the closer one
+    // 坐标位于两行间隙时，选择距离更近的一行。
     if (hi < 0) return 0
     if (lo >= len) return len - 1
     const rHi = cachedRows[hi].getBoundingClientRect()
@@ -123,6 +157,13 @@ export function useSwipeSelect(
     const items = virt.getVirtualItems()
     for (const item of items) {
       if (contentY >= item.start && contentY < item.end) return item.index
+    }
+
+    // 虚拟化关闭（小列表完整渲染）时窗口为空，因此应通过真实 DOM 行定位，
+    // 不再使用此时已不准确的估算行高。
+    if (items.length === 0) {
+      const domIdx = findRowIndexByDomPosition(scrollEl, clientY)
+      if (domIdx >= 0) return domIdx
     }
 
     // Outside visible range: estimate

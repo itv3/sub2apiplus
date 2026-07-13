@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"os"
 	"strconv"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"go.uber.org/zap"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -57,6 +59,129 @@ type APIKeyConcurrencyCache interface {
 	TrackAPIKeySlot(ctx context.Context, apiKeyID int64, requestID string) error
 	ReleaseAPIKeySlot(ctx context.Context, apiKeyID int64, requestID string) error
 	GetAPIKeyConcurrencyBatch(ctx context.Context, apiKeyIDs []int64) (map[int64]int, error)
+}
+
+// OpenAIWSIngressLeaseCache 管理用于限制实时客户端 WebSocket 会话的短期分布式租约。
+// 它有意独立于请求槽位命名空间：空闲入站连接不会占用单轮请求槽位。
+type OpenAIWSIngressLeaseCache interface {
+	AcquireOpenAIWSIngressLease(ctx context.Context, apiKeyID int64, maxConnections int, leaseID string) (bool, error)
+	RefreshOpenAIWSIngressLease(ctx context.Context, apiKeyID int64, leaseID string) (bool, error)
+	ReleaseOpenAIWSIngressLease(ctx context.Context, apiKeyID int64, leaseID string) error
+}
+
+const (
+	openAIWSIngressLeaseTTL             = 60 * time.Second
+	openAIWSIngressLeaseRefreshInterval = 20 * time.Second
+	openAIWSIngressLeaseOperationTO     = 2 * time.Second
+)
+
+var ErrOpenAIWSIngressLeaseLost = errors.New("openai websocket ingress lease lost")
+
+// OpenAIWSIngressLease 保持 Redis 支持的入站租约有效；如果 Redis 在一个完整租约周期内
+// 无法确认所有权，则取消其上下文。每次处理器退出时都应调用 Release，以立即回收容量。
+type OpenAIWSIngressLease struct {
+	ctx      context.Context
+	cancel   context.CancelCauseFunc
+	cache    OpenAIWSIngressLeaseCache
+	apiKeyID int64
+	leaseID  string
+
+	stopOnce    sync.Once
+	stopCh      chan struct{}
+	refreshDone chan struct{}
+}
+
+func (l *OpenAIWSIngressLease) Context() context.Context {
+	if l == nil || l.ctx == nil {
+		return context.Background()
+	}
+	return l.ctx
+}
+
+func (l *OpenAIWSIngressLease) Release() {
+	if l == nil {
+		return
+	}
+	l.stopOnce.Do(func() {
+		if l.stopCh != nil {
+			close(l.stopCh)
+		}
+		if l.cancel != nil {
+			l.cancel(nil)
+		}
+		if l.refreshDone != nil {
+			<-l.refreshDone
+		}
+		if l.cache == nil || l.apiKeyID <= 0 || l.leaseID == "" {
+			return
+		}
+		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), openAIWSIngressLeaseOperationTO)
+		defer releaseCancel()
+		if err := l.cache.ReleaseOpenAIWSIngressLease(releaseCtx, l.apiKeyID, l.leaseID); err != nil {
+			logger.L().Warn("openai_ws_ingress_lease_release_failed",
+				zap.Int64("api_key_id", l.apiKeyID),
+				zap.Error(err),
+			)
+		}
+	})
+}
+
+func (l *OpenAIWSIngressLease) refreshLoop() {
+	defer func() {
+		if l != nil && l.refreshDone != nil {
+			close(l.refreshDone)
+		}
+	}()
+	if l == nil || l.cache == nil {
+		return
+	}
+	ticker := time.NewTicker(openAIWSIngressLeaseRefreshInterval)
+	defer ticker.Stop()
+	lastConfirmedAt := time.Now()
+	for {
+		select {
+		case <-l.ctx.Done():
+			return
+		case <-l.stopCh:
+			return
+		case <-ticker.C:
+			var lost bool
+			lastConfirmedAt, lost = l.refresh(lastConfirmedAt)
+			if lost {
+				l.cancel(ErrOpenAIWSIngressLeaseLost)
+				return
+			}
+		}
+	}
+}
+
+// refresh 确认租约仍归当前实例所有。成员缺失时立即判定租约丢失；
+// 临时 Redis 错误最多只能容忍一个完整的租约 TTL。
+func (l *OpenAIWSIngressLease) refresh(lastConfirmedAt time.Time) (time.Time, bool) {
+	refreshCtx, refreshCancel := context.WithTimeout(context.Background(), openAIWSIngressLeaseOperationTO)
+	owned, err := l.cache.RefreshOpenAIWSIngressLease(refreshCtx, l.apiKeyID, l.leaseID)
+	refreshCancel()
+	if err == nil && owned {
+		return time.Now(), false
+	}
+	if err == nil {
+		err = ErrOpenAIWSIngressLeaseLost
+	}
+	elapsed := time.Since(lastConfirmedAt)
+	logger.L().Warn("openai_ws_ingress_lease_refresh_failed",
+		zap.Int64("api_key_id", l.apiKeyID),
+		zap.Duration("unconfirmed_for", elapsed),
+		zap.Error(err),
+	)
+	if errors.Is(err, ErrOpenAIWSIngressLeaseLost) || elapsed >= openAIWSIngressLeaseTTL {
+		logger.L().Error("openai_ws_ingress_lease_lost",
+			zap.Int64("api_key_id", l.apiKeyID),
+			zap.Duration("unconfirmed_for", elapsed),
+			zap.Error(err),
+		)
+		return lastConfirmedAt, true
+	}
+	return lastConfirmedAt, false
 }
 
 var (
@@ -123,6 +248,47 @@ func NewConcurrencyService(cache ConcurrencyCache) *ConcurrencyService {
 	}
 	svc.SetAccountLoadBatchCacheTTL(defaultAccountLoadBatchCacheTTL)
 	return svc
+}
+
+// AcquireOpenAIWSIngressLease 以原子方式为 API 密钥预留一个实时入站连接。
+// 上限不大于 0 时明确关闭此项保护。
+func (s *ConcurrencyService) AcquireOpenAIWSIngressLease(ctx context.Context, apiKeyID int64, maxConnections int) (*OpenAIWSIngressLease, bool, error) {
+	if maxConnections <= 0 {
+		return nil, true, nil
+	}
+	if s == nil || s.cache == nil || apiKeyID <= 0 {
+		return nil, false, errors.New("openai websocket ingress lease cache is unavailable")
+	}
+	cache, ok := s.cache.(OpenAIWSIngressLeaseCache)
+	if !ok {
+		return nil, false, errors.New("openai websocket ingress lease cache is unsupported")
+	}
+	leaseID := generateRequestID()
+	baseCtx := context.Background()
+	if ctx != nil {
+		baseCtx = context.WithoutCancel(ctx)
+	}
+	acquireCtx, acquireCancel := context.WithTimeout(baseCtx, openAIWSIngressLeaseOperationTO)
+	acquired, err := cache.AcquireOpenAIWSIngressLease(acquireCtx, apiKeyID, maxConnections, leaseID)
+	acquireCancel()
+	if err != nil || !acquired {
+		return nil, acquired, err
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	leaseCtx, leaseCancel := context.WithCancelCause(ctx)
+	lease := &OpenAIWSIngressLease{
+		ctx:         leaseCtx,
+		cancel:      leaseCancel,
+		cache:       cache,
+		apiKeyID:    apiKeyID,
+		leaseID:     leaseID,
+		stopCh:      make(chan struct{}),
+		refreshDone: make(chan struct{}),
+	}
+	go lease.refreshLoop()
+	return lease, true, nil
 }
 
 // SetAccountLoadBatchCacheTTL 设置账号负载批量读取的极短 TTL 缓存；非正数表示禁用缓存。

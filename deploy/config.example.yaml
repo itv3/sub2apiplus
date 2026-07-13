@@ -254,6 +254,10 @@ gateway:
     # ingress 默认模式：off|ctx_pool|passthrough|http_bridge（仅 mode_router_v2_enabled=true 生效）
     # 兼容旧值：shared/dedicated 会按 ctx_pool 处理。
     ingress_mode_default: ctx_pool
+    # 客户端 WebSocket 在两次已完成请求之间的最长空闲时间（秒），设置为 0 时关闭此项限制。
+    ingress_inter_turn_idle_timeout_seconds: 300
+    # 每个 API 密钥在所有实例上的客户端 WebSocket 入站会话上限，设置为 0 时关闭此项限制。
+    max_ingress_connections_per_api_key: 64
     # 全局总开关，默认 true；关闭时所有请求保持原有 HTTP/SSE 路由
     enabled: true
     # 按账号类型细分开关

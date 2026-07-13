@@ -582,8 +582,12 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
 	c.Writer.Flush()
 
-	// Create OpenAI Responses API payload
-	payload := createOpenAITestPayload(testModelID, prompt, isOAuth, firstPositiveInt(maxOutputTokens...))
+	// OAuth 测试请求与真实转发使用相同的上游模型归一规则。
+	upstreamTestModelID := testModelID
+	if isOAuth {
+		upstreamTestModelID = normalizeOpenAIModelForUpstream(credentialAccount, testModelID)
+	}
+	payload := createOpenAITestPayload(upstreamTestModelID, prompt, isOAuth, firstPositiveInt(maxOutputTokens...))
 	payloadBytes, _ := json.Marshal(payload)
 	if accountMimicCodexCLI {
 		payloadBytes = mimicProfile.RewriteBody(payloadBytes)

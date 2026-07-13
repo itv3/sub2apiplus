@@ -39,6 +39,12 @@ type openAIWSClientConn interface {
 	Close() error
 }
 
+// openAIWSIdlePingCapable 有意与 openAIWSClientConn 分离。
+// 连接池探测发生在没有 goroutine 读取空闲连接时，并非所有 WebSocket 实现都能安全支持。
+type openAIWSIdlePingCapable interface {
+	SupportsIdlePingWithoutReader() bool
+}
+
 // openAIWSClientDialer 抽象 WS 建连器。
 type openAIWSClientDialer interface {
 	Dial(ctx context.Context, wsURL string, headers http.Header, proxyURL string) (openAIWSClientConn, int, http.Header, error)
@@ -299,6 +305,13 @@ func (c *coderOpenAIWSClientConn) Ping(ctx context.Context) error {
 		ctx = context.Background()
 	}
 	return c.conn.Ping(ctx)
+}
+
+// SupportsIdlePingWithoutReader 反映 coder/websocket 的实际约定。
+// Conn.Ping 会等待 pong，而控制帧只能由 Read 消费。连接池有意不为
+// 空闲连接保留读取方，因此使用 Ping 进行健康探测必然会让健康连接超时。
+func (*coderOpenAIWSClientConn) SupportsIdlePingWithoutReader() bool {
+	return false
 }
 
 func (c *coderOpenAIWSClientConn) Close() error {
