@@ -34,7 +34,7 @@ func resolveAnthropicTLSProfileForRequest(
 		}
 
 		if account.GetTLSFingerprintProfileID() == 0 {
-			return claudeCLI21207TLSProfile()
+			return nil
 		}
 	}
 

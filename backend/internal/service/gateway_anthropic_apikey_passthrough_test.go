@@ -900,7 +900,7 @@ func TestGatewayService_AnthropicAPIKeyMimicSkipsTLSWhenRequestProfileDisabled(t
 	}
 
 	require.Nil(t, svc.resolveAnthropicTLSProfileForRequest(account, false))
-	require.NotNil(t, svc.resolveAnthropicTLSProfileForRequest(account, true))
+	require.Nil(t, svc.resolveAnthropicTLSProfileForRequest(account, true))
 }
 
 func TestGatewayService_AnthropicAPIKeyMimicRewritesThirdPartyBodyToClaudeCodeShape(t *testing.T) {
@@ -949,7 +949,7 @@ func TestGatewayService_AnthropicAPIKeyMimicRewritesThirdPartyBodyToClaudeCodeSh
 	require.True(t, system.IsArray())
 	require.Len(t, system.Array(), 3)
 	require.Contains(t, system.Get("0.text").String(), "x-anthropic-billing-header:")
-	require.Contains(t, system.Get("0.text").String(), "cc_entrypoint=sdk-cli")
+	require.Contains(t, system.Get("0.text").String(), "cc_entrypoint=claude-desktop-3p")
 	require.NotContains(t, system.Get("0.text").String(), "cch=00000")
 	require.Equal(t, claudeSDKCLIIdentityPrompt, system.Get("1.text").String())
 	require.Equal(t, claudeCodeSystemPromptExpansion, system.Get("2.text").String())

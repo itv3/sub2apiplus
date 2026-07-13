@@ -2671,7 +2671,7 @@ func TestOpenAIBuildUpstreamRequestForceCodexCLIDoesNotOverrideAPIKeyMimic(t *te
 	require.Equal(t, codexDesktopOriginator, req.Header.Get("originator"))
 }
 
-func TestOpenAIGatewayService_APIKeyCodexMimicUsesCapturedDesktopTLSProfile(t *testing.T) {
+func TestOpenAIGatewayService_APIKeyCodexMimicUsesStandardTransport(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -2720,10 +2720,7 @@ func TestOpenAIGatewayService_APIKeyCodexMimicUsesCapturedDesktopTLSProfile(t *t
 	result, err := svc.Forward(context.Background(), c, account, originalBody)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.NotNil(t, upstream.lastTLSProfile)
-	require.Contains(t, upstream.lastTLSProfile.Name, "Codex 0.144.1")
-	require.Equal(t, []string{"h2", "http/1.1"}, upstream.lastTLSProfile.ALPNProtocols)
-	require.Equal(t, uint16(0x0304), upstream.lastTLSProfile.TLSVersMax)
+	require.Nil(t, upstream.lastTLSProfile)
 	require.Equal(t, codexDesktopUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, "text/event-stream", upstream.lastReq.Header.Get("Accept"))
 	require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
@@ -2732,7 +2729,7 @@ func TestOpenAIGatewayService_APIKeyCodexMimicUsesCapturedDesktopTLSProfile(t *t
 	require.False(t, result.Stream)
 }
 
-func TestOpenAIGatewayService_MessagesAPIKeyCodexMimicUsesHeadersBodyAndTLS(t *testing.T) {
+func TestOpenAIGatewayService_MessagesAPIKeyCodexMimicUsesHeadersBodyAndStandardTransport(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -2792,8 +2789,7 @@ func TestOpenAIGatewayService_MessagesAPIKeyCodexMimicUsesHeadersBodyAndTLS(t *t
 	require.NotEmpty(t, upstream.lastReq.Header.Get("x-codex-turn-metadata"))
 	require.NotEmpty(t, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
 	require.NotEmpty(t, gjson.GetBytes(upstream.lastBody, "client_metadata.x-codex-turn-metadata").String())
-	require.NotNil(t, upstream.lastTLSProfile)
-	require.Contains(t, upstream.lastTLSProfile.Name, "Codex 0.144.1")
+	require.Nil(t, upstream.lastTLSProfile)
 }
 
 func TestOpenAIGatewayService_APIKeyCodexMimicPreservesCompactRequestShape(t *testing.T) {
@@ -2908,9 +2904,7 @@ func TestOpenAIGatewayService_APIKeyCodexMimicTreatsThirdPartyRequestAsCodexCLI(
 	result, err := svc.Forward(context.Background(), c, account, originalBody)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.NotNil(t, upstream.lastTLSProfile)
-	require.Contains(t, upstream.lastTLSProfile.Name, "Codex 0.144.1")
-	require.Equal(t, []string{"h2", "http/1.1"}, upstream.lastTLSProfile.ALPNProtocols)
+	require.Nil(t, upstream.lastTLSProfile)
 	require.Equal(t, codexDesktopUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, codexDesktopOriginator, upstream.lastReq.Header.Get("originator"))
 	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))

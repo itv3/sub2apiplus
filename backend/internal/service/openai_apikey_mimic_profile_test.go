@@ -71,8 +71,9 @@ func TestOpenAIAPIKeyCodexMimicDesktopMetadataMatchesHeadersAndBody(t *testing.T
 	require.JSONEq(t, headerTurnMetadata, bodyTurnMetadata)
 	require.Equal(t, profile.Scope.TurnID, gjson.Get(bodyTurnMetadata, "turn_id").String())
 	require.Equal(t, profile.Scope.TurnStartedAtUnixMS, gjson.Get(bodyTurnMetadata, "turn_started_at_unix_ms").Int())
-	require.Equal(t, "seccomp", gjson.Get(bodyTurnMetadata, "sandbox").String())
-	require.Equal(t, "true", req.Header.Get("x-openai-internal-codex-responses-lite"))
+	require.Equal(t, "none", gjson.Get(bodyTurnMetadata, "sandbox").String())
+	require.Equal(t, "project", gjson.Get(bodyTurnMetadata, "workspace_kind").String())
+	require.Empty(t, req.Header.Get("x-openai-internal-codex-responses-lite"))
 
 	var raw map[string]any
 	require.NoError(t, json.Unmarshal([]byte(bodyTurnMetadata), &raw))

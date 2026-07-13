@@ -182,7 +182,7 @@ func TestForwardAsChatCompletions_APIKeyPropagatesPromptCacheKeyInResponsesBody(
 	require.Equal(t, generateSessionUUID(isolateOpenAISessionID(99, "cache-key-123")), upstream.lastReq.Header.Get("session_id"))
 }
 
-func TestForwardAsChatCompletions_APIKeyCodexMimicUsesResponsesHeadersBodyAndTLS(t *testing.T) {
+func TestForwardAsChatCompletions_APIKeyCodexMimicUsesResponsesHeadersBodyAndStandardTransport(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
@@ -252,9 +252,7 @@ func TestForwardAsChatCompletions_APIKeyCodexMimicUsesResponsesHeadersBodyAndTLS
 	require.Empty(t, upstream.lastReq.Header.Get("conversation_id"))
 	require.Regexp(t, openAICodexUUIDPattern, upstream.lastReq.Header.Get("session-id"))
 	require.Equal(t, upstream.lastReq.Header.Get("session-id"), upstream.lastReq.Header.Get("thread-id"))
-	require.NotNil(t, upstream.lastTLSProfile)
-	require.Contains(t, upstream.lastTLSProfile.Name, "Codex 0.144.1")
-	require.Equal(t, []string{"h2", "http/1.1"}, upstream.lastTLSProfile.ALPNProtocols)
+	require.Nil(t, upstream.lastTLSProfile)
 	require.Equal(t, "gpt-5.5", gjson.GetBytes(upstream.lastBody, "model").String())
 	require.Equal(t, upstream.lastReq.Header.Get("session-id"), gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
 	require.NotEmpty(t, strings.TrimSpace(gjson.GetBytes(upstream.lastBody, "instructions").String()))

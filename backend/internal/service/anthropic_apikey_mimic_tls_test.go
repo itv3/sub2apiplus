@@ -18,17 +18,12 @@ func newAnthropicAPIKeyMimicTLSAccount() *Account {
 	}
 }
 
-func TestResolveAnthropicTLSProfileForRequestUsesCapturedMimicDefault(t *testing.T) {
+func TestResolveAnthropicTLSProfileForRequestUsesStandardTransportByDefault(t *testing.T) {
 	account := newAnthropicAPIKeyMimicTLSAccount()
 
 	profile := resolveAnthropicTLSProfileForRequest(account, true, nil)
 
-	require.NotNil(t, profile)
-	require.Contains(t, profile.Name, "Claude CLI 2.1.207")
-	require.Equal(t, []string{"http/1.1"}, profile.ALPNProtocols)
-	require.Equal(t, []uint16{0, 23, 65281, 10, 11, 35, 16, 5, 13, 18, 51, 45, 43, 21}, profile.Extensions)
-	require.Contains(t, profile.Extensions, uint16(21))
-	require.NotContains(t, profile.Extensions, uint16(65037))
+	require.Nil(t, profile)
 }
 
 func TestResolveAnthropicTLSProfileForRequestRequiresCurrentMimicAndTLSOptIn(t *testing.T) {

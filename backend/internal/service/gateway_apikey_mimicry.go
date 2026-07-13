@@ -60,7 +60,7 @@ func defaultAPIKeyCountTokensMimicBetaHeader(body []byte) string {
 }
 
 // defaultAPIKeyMimicBetaHeader 返回 Anthropic API Key mimic Claude Code 时的 anthropic-beta，
-// 对齐官方 claude-cli/2.1.207 抓包的完整 beta 列表（仅 mimic 路径使用）。
+// 对齐官方 Claude Desktop 2.1.205 抓包的完整 beta 列表（仅 mimic 路径使用）。
 // haiku 模型上游不做第三方判定，沿用精简 haiku header。
 func defaultAPIKeyMimicBetaHeader(body []byte) string {
 	return buildDefaultAPIKeyMimicBetaHeader(body, true)
@@ -72,13 +72,11 @@ func buildDefaultAPIKeyMimicBetaHeader(body []byte, selectStructuredOutputs bool
 		return claude.APIKeyHaikuBetaHeader
 	}
 	betas := claude.APIKeyMimicBetas()
-	// 大上下文模型（fable-5 / opus-4-6/7/8）需要 context-1m，且官方抓包中它固定位于
-	// mid-conversation-system 之后、advisor-tool 之前，而非列表开头。用带位置的列表，
-	// 避免调用方再把 context-1m merge 到最前面导致顺序与官方不一致。
+	// Desktop 抓包中的稳定身份列表已经包含 context-1m；保留分支以兼容现有调用契约。
 	if requiresContext1MBetaForAPIKeyMimic(modelID) {
 		betas = claude.APIKeyMimicBetasWithContext1M()
 	}
-	// 官方 sdk-cli 会根据最终出站 body 选择末尾 beta：结构化输出请求使用
+	// 官方桌面客户端会根据最终出站 body 选择末尾 beta：结构化输出请求使用
 	// structured-outputs，普通请求使用 fallback-credit。这里在 body 规范化之后调用，
 	// 因而不会基于客户端尚未重写的原始 body 作出错误判断。
 	if selectStructuredOutputs && apiKeyMimicBodyRequiresStructuredOutputs(body) {
@@ -241,7 +239,7 @@ func (s *GatewayService) applyAnthropicAPIKeyClaudeCodeMimicryToBody(
 }
 
 const (
-	claudeSDKCLIEntrypoint     = "cc_entrypoint=sdk-cli;"
+	claudeSDKCLIEntrypoint     = "cc_entrypoint=claude-desktop-3p;"
 	claudeSDKCLIIdentityPrompt = "You are a Claude agent, built on Anthropic's Claude Agent SDK."
 )
 

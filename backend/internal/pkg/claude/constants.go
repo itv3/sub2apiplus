@@ -64,39 +64,26 @@ const HaikuBetaHeader = BetaOAuth + "," + BetaInterleavedThinking
 const APIKeyBetaHeader = BetaClaudeCode + "," + BetaInterleavedThinking + "," + BetaFineGrainedToolStreaming
 
 // APIKeyMimicBetas 返回 Anthropic API Key mimic Claude Code 时使用的完整 beta 列表。
-// 对齐官方 claude-cli/2.1.207 直连中转站的 anthropic-beta（2026-07 抓包），仅去掉 oauth
-// （API Key 账号不带 oauth beta）。顺序与官方抓包一致。
+// 对齐官方 Claude Desktop 2.1.205 直连中转站的 anthropic-beta（2026-07 抓包），仅去掉 oauth。
+// 顺序与官方桌面抓包一致。
 //
 // 注意：只供 API Key mimic 路径使用；普通/官方 API Key 直连路径仍用 APIKeyBetaHeader，
-// 避免污染非 mimic 逻辑。context-1m 由调用方按模型单独追加，此处不含。
+// 避免污染非 mimic 逻辑。桌面抓包稳定携带 context-1m，因此此处直接包含。
 func APIKeyMimicBetas() []string {
 	return []string{
 		BetaClaudeCode,
+		BetaContext1M,
 		BetaInterleavedThinking,
-		BetaThinkingTokenCount,
-		BetaContextManagement,
-		BetaPromptCachingScope,
 		BetaMidConversationSystem,
-		BetaAdvisorTool,
 		BetaEffort,
 		BetaFallbackCredit,
 	}
 }
 
-// APIKeyMimicBetasWithContext1M 在 APIKeyMimicBetas() 基础上，把 context-1m 插入到官方
-// 抓包确认的位置（mid-conversation-system 之后、advisor-tool 之前），而不是列表开头。
-// 官方 claude-cli/2.1.207 抓包（2026-07）中 context-1m 固定在该位置；调用方对大上下文模型
-// （claude-fable-5 / claude-opus-4-6/7/8）应使用本函数，避免顺序不一致被判第三方。
+// APIKeyMimicBetasWithContext1M 保留原有调用接口。当前桌面基线已固定包含 context-1m，
+// 因此直接返回同一列表，避免重复 token。
 func APIKeyMimicBetasWithContext1M() []string {
-	base := APIKeyMimicBetas()
-	out := make([]string, 0, len(base)+1)
-	for _, b := range base {
-		if b == BetaAdvisorTool {
-			out = append(out, BetaContext1M)
-		}
-		out = append(out, b)
-	}
-	return out
+	return APIKeyMimicBetas()
 }
 
 // APIKeyHaikuBetaHeader Haiku 模型在 API-key 账号下使用的 anthropic-beta header（不包含 oauth / claude-code）
@@ -110,7 +97,7 @@ const DefaultCacheControlTTL = "5m"
 // CLICurrentVersion 是 sub2api 当前对外伪装的 Claude Code CLI 版本号（三段 semver）。
 // 用于 billing attribution block 中的 cc_version=X.Y.Z.{fp} 前缀以及 fingerprint 计算。
 // 必须与 DefaultHeaders["User-Agent"] 中的版本号严格一致；不一致会被 Anthropic 判第三方。
-const CLICurrentVersion = "2.1.207"
+const CLICurrentVersion = "2.1.205"
 
 // FullClaudeCodeMimicryBetas 返回最"像"真实 Claude Code CLI 的完整 beta 列表，
 // 用于 OAuth 账号伪装成 Claude Code 时使用。
@@ -138,15 +125,15 @@ var DefaultHeaders = map[string]string{
 	// Keep these in sync with recent Claude CLI traffic to reduce the chance
 	// that Claude Code-scoped OAuth credentials are rejected as "non-CLI" usage.
 	// 版本参考：对齐 Parrot (src/transform/cc_mimicry.py:49) 的 CLI_USER_AGENT。
-	"User-Agent":                                "claude-cli/" + CLICurrentVersion + " (external, sdk-cli)",
+	"User-Agent":                                "claude-cli/" + CLICurrentVersion + " (external, claude-desktop-3p, agent-sdk/0.3.205)",
 	"X-Stainless-Lang":                          "js",
 	"X-Stainless-Package-Version":               "0.94.0",
-	"X-Stainless-OS":                            "Linux",
+	"X-Stainless-OS":                            "MacOS",
 	"X-Stainless-Arch":                          "arm64",
 	"X-Stainless-Runtime":                       "node",
 	"X-Stainless-Runtime-Version":               "v26.3.0",
 	"X-Stainless-Retry-Count":                   "0",
-	"X-Stainless-Timeout":                       "600",
+	"X-Stainless-Timeout":                       "900",
 	"X-App":                                     "cli",
 	"Anthropic-Dangerous-Direct-Browser-Access": "true",
 }

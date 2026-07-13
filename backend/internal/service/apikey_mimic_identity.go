@@ -162,7 +162,8 @@ func buildOpenAIAPIKeyCodexDesktopMetadata(scope openAIAPIKeyCodexMimicScope) op
 		"window_id":               windowID,
 		"request_kind":            "turn",
 		"thread_source":           "user",
-		"sandbox":                 "seccomp",
+		"sandbox":                 "none",
+		"workspace_kind":          "project",
 		"turn_started_at_unix_ms": turnStartedAtUnixMS,
 	}
 	turnMetadataBytes, _ := json.Marshal(turnMetadata)
@@ -179,7 +180,7 @@ func buildOpenAIAPIKeyCodexDesktopMetadata(scope openAIAPIKeyCodexMimicScope) op
 
 func buildOpenAIAPIKeyCodexDesktopSeed(scope openAIAPIKeyCodexMimicScope) string {
 	parts := make([]string, 0, 7)
-	parts = append(parts, "client_profile="+openAIAPIKeyCodexMimicClientDesktop0142)
+	parts = append(parts, "client_profile="+openAIAPIKeyCodexMimicClientDesktop0144)
 	if strings.TrimSpace(scope.ServerSalt) != "" {
 		parts = append(parts, "server_salt="+scope.ServerSalt)
 	}

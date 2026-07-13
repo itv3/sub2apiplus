@@ -18,7 +18,7 @@ type openAIAPIKeyMimicRequestContextKey struct{}
 const (
 	openAIAPIKeyCodexMimicProfileExtraKey = "openai_apikey_mimic_codex_profile"
 
-	openAIAPIKeyCodexMimicClientDesktop0142 = "desktop_0_142"
+	openAIAPIKeyCodexMimicClientDesktop0144 = "desktop_0_144"
 	openAIAPIKeyCodexMimicClientCLIRS0125   = "cli_rs_0_125"
 )
 
@@ -107,7 +107,7 @@ func (p openAIAPIKeyCodexMimicProfile) ResolveResponsesSupport(extra map[string]
 }
 
 func (p openAIAPIKeyCodexMimicProfile) ShouldUseTLSFingerprint(account *Account) bool {
-	return p.Enabled && account != nil && account.ShouldUseOpenAITLSFingerprint()
+	return p.Enabled && !p.Client.IsDesktop && account != nil && account.ShouldUseOpenAITLSFingerprint()
 }
 
 type openAIAPIKeyCodexMimicClientProfile struct {
@@ -144,7 +144,7 @@ func resolveOpenAIAPIKeyCodexMimicClientProfileByID(profileID string) openAIAPIK
 		}
 	default:
 		return openAIAPIKeyCodexMimicClientProfile{
-			ID:           openAIAPIKeyCodexMimicClientDesktop0142,
+			ID:           openAIAPIKeyCodexMimicClientDesktop0144,
 			UserAgent:    codexDesktopUserAgent,
 			Originator:   codexDesktopOriginator,
 			IsDesktop:    true,
@@ -156,11 +156,11 @@ func resolveOpenAIAPIKeyCodexMimicClientProfileByID(profileID string) openAIAPIK
 func normalizeOpenAIAPIKeyCodexMimicClientProfileID(profileID string) string {
 	v := strings.ToLower(strings.TrimSpace(profileID))
 	switch strings.ReplaceAll(v, "-", "_") {
-	case "", "desktop", "codex_desktop", "desktop_0_142", "codex_desktop_0_142":
-		return openAIAPIKeyCodexMimicClientDesktop0142
+	case "", "desktop", "codex_desktop", "desktop_0_142", "codex_desktop_0_142", "desktop_0_144", "codex_desktop_0_144":
+		return openAIAPIKeyCodexMimicClientDesktop0144
 	case "cli", "codex_cli", "cli_rs", "codex_cli_rs", "cli_rs_0_125", "codex_cli_rs_0_125":
 		return openAIAPIKeyCodexMimicClientCLIRS0125
 	default:
-		return openAIAPIKeyCodexMimicClientDesktop0142
+		return openAIAPIKeyCodexMimicClientDesktop0144
 	}
 }

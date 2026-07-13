@@ -66,7 +66,7 @@ func TestDefaultAPIKeyMimicBetaHeaderSelectsTerminalBetaFromFinalBody(t *testing
 		tokens := parseAnthropicBetaHeader(header)
 		require.True(t, anthropicBetaTokensContains(header, claude.BetaStructuredOutputs))
 		require.False(t, anthropicBetaTokensContains(header, claude.BetaFallbackCredit))
-		require.Equal(t, claude.BetaContext1M, tokens[6])
+		require.Equal(t, claude.BetaContext1M, tokens[1])
 		require.Equal(t, claude.BetaStructuredOutputs, tokens[len(tokens)-1])
 		seen := make(map[string]struct{}, len(tokens))
 		for _, token := range tokens {
@@ -340,7 +340,7 @@ func TestAnthropicAPIKeySDKCLIIdentityOnlyRewritesGeneratedBlocks(t *testing.T) 
 	body := []byte(`{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.207.abc; cc_entrypoint=cli;"},{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."},{"type":"text","text":"用户自定义：cc_entrypoint=cli;"}]}`)
 	out := applyAnthropicAPIKeySDKCLIIdentity(body)
 
-	require.Contains(t, gjson.GetBytes(out, "system.0.text").String(), "cc_entrypoint=sdk-cli;")
+	require.Contains(t, gjson.GetBytes(out, "system.0.text").String(), "cc_entrypoint=claude-desktop-3p;")
 	require.Equal(t, claudeSDKCLIIdentityPrompt, gjson.GetBytes(out, "system.1.text").String())
 	require.Equal(t, "用户自定义：cc_entrypoint=cli;", gjson.GetBytes(out, "system.2.text").String())
 }
