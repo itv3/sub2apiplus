@@ -290,7 +290,11 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 		req.Header.Set("anthropic-beta", claude.DefaultBetaHeader)
 		req.Header.Set("Authorization", "Bearer "+authToken)
 	} else {
-		req.Header.Set("anthropic-beta", claude.APIKeyBetaHeader)
+		betaHeader := claude.APIKeyBetaHeader
+		if account.IsAnthropicAPIKeyClaudeCodeMimicEnabled() {
+			betaHeader = defaultAPIKeyMimicBetaHeader(payloadBytes)
+		}
+		req.Header.Set("anthropic-beta", betaHeader)
 		setAnthropicAPIKeyAuthHeader(req.Header, account, authToken)
 	}
 
