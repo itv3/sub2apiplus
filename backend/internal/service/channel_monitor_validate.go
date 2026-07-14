@@ -124,6 +124,16 @@ func normalizeModels(in []string) []string {
 	return out
 }
 
+// normalizeMonitorPrimaryModel 为 Grok 健康检查应用默认模型，
+// 同时保留其他供应商原有的必填模型行为。
+func normalizeMonitorPrimaryModel(provider, model string) string {
+	model = strings.TrimSpace(model)
+	if model == "" && provider == MonitorProviderGrok {
+		return MonitorDefaultGrokModel
+	}
+	return model
+}
+
 // defaultAPIMode 空串归一为 chat_completions，保证历史数据与旧客户端兼容。
 func defaultAPIMode(apiMode string) string {
 	if strings.TrimSpace(apiMode) == "" {
