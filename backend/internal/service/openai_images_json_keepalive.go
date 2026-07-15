@@ -123,6 +123,11 @@ func StopOpenAIImagesJSONKeepaliveCommitted(c *gin.Context) bool {
 	return committed
 }
 
+// OpenAIImagesJSONKeepalivePresent 判断响应写入器是否属于 Images JSON 请求，包括首次心跳前已快速完成的响应。
+func OpenAIImagesJSONKeepalivePresent(c *gin.Context) bool {
+	return openAIImagesJSONKeepaliveFromContext(c) != nil
+}
+
 // OpenAIImagesJSONKeepaliveAdjustedWrittenSize 在响应大小检查中排除心跳空白，
 // 从而继续允许账号重试和故障转移。
 func OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c *gin.Context) int {

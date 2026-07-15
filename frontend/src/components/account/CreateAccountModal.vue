@@ -5746,7 +5746,7 @@ const handleAntigravityValidateRT = async (refreshTokenInput: string) => {
           continue
         }
 
-        const credentials = antigravityOAuth.buildCredentials(tokenInfo)
+        const credentials = antigravityOAuth.buildCredentials(tokenInfo, refreshTokens[i])
         applyAntigravityProjectID(credentials, antigravityProjectId.value, 'create')
         await waitForAntigravityOfficialModelDefaults()
         const antigravityModelMapping = buildAntigravityModelRestrictionMapping()

@@ -25,7 +25,7 @@ func (w *serverTimingResponseWriter) Unwrap() http.ResponseWriter {
 	return w.ResponseWriter
 }
 
-// ServerTiming 仅为管理后台 Web UI 发起的请求收集耗时。
+// ServerTiming 在启用后为管理后台和用户端 Web UI 请求收集耗时。
 func ServerTiming(enabled bool) gin.HandlerFunc {
 	if !enabled {
 		return func(c *gin.Context) {
@@ -33,7 +33,7 @@ func ServerTiming(enabled bool) gin.HandlerFunc {
 		}
 	}
 	return func(c *gin.Context) {
-		if !isAdminUIRequest(c) || c.Request == nil {
+		if !shouldCollectServerTiming(c) || c.Request == nil {
 			c.Next()
 			return
 		}
@@ -85,13 +85,18 @@ func (w *serverTimingResponseWriter) finalize() {
 	})
 }
 
-// ServerTimingHeaderValue 仅为已认证管理员返回耗时值。
+// ServerTimingHeaderValue 仅为已授权的 UI 请求范围返回耗时值。
+// 管理员可以获得已收集的管理端和用户端请求耗时；非管理员认证用户只能获得白名单用户路径的耗时。
+// X-User-UI-Request 仅用于标记请求范围，不能作为授权依据。
 func ServerTimingHeaderValue(c *gin.Context) string {
 	if c == nil || c.Request == nil {
 		return ""
 	}
 	role, ok := GetUserRoleFromContext(c)
-	if !ok || role != "admin" {
+	if !ok || role == "" {
+		return ""
+	}
+	if role != "admin" && !isUserTimingPath(c.Request.URL.Path) {
 		return ""
 	}
 	return servertiming.HeaderValue(c.Request.Context(), time.Now(), responseCacheStatus(c.Writer.Header()))
@@ -106,6 +111,10 @@ func ServerTimingResponseHeader(c *gin.Context) http.Header {
 	return http.Header{servertiming.HeaderName: []string{value}}
 }
 
+func shouldCollectServerTiming(c *gin.Context) bool {
+	return isAdminUIRequest(c) || isUserUIRequest(c)
+}
+
 func isAdminUIRequest(c *gin.Context) bool {
 	if c == nil || c.Request == nil || c.Request.URL == nil {
 		return false
@@ -115,6 +124,69 @@ func isAdminUIRequest(c *gin.Context) bool {
 	}
 	path := strings.TrimSpace(c.Request.URL.Path)
 	return path == "/api/v1/admin" || strings.HasPrefix(path, "/api/v1/admin/")
+}
+
+func isUserUIRequest(c *gin.Context) bool {
+	if c == nil || c.Request == nil || c.Request.URL == nil {
+		return false
+	}
+	if strings.TrimSpace(c.GetHeader(servertiming.UserUIHeader)) == "1" {
+		return true
+	}
+	return isUserTimingPath(c.Request.URL.Path)
+}
+
+// isUserTimingPath reports whether the path is a user-facing web API that may
+// emit Server-Timing for authenticated callers (excluding public payment routes).
+func isUserTimingPath(path string) bool {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return false
+	}
+	const prefix = "/api/v1"
+	if !strings.HasPrefix(path, prefix) {
+		return false
+	}
+	rest := strings.TrimPrefix(path, prefix)
+	if rest == "" {
+		return false
+	}
+	if !strings.HasPrefix(rest, "/") {
+		rest = "/" + rest
+	}
+
+	switch {
+	case rest == "/auth/me",
+		rest == "/auth/revoke-all-sessions",
+		rest == "/auth/oauth/bind-token":
+		return true
+	case rest == "/user", strings.HasPrefix(rest, "/user/"):
+		return true
+	case rest == "/keys", strings.HasPrefix(rest, "/keys/"):
+		return true
+	case rest == "/groups/available", rest == "/groups/rates":
+		return true
+	case rest == "/channels/available":
+		return true
+	case rest == "/usage", strings.HasPrefix(rest, "/usage/"):
+		return true
+	case rest == "/announcements", strings.HasPrefix(rest, "/announcements/"):
+		return true
+	case rest == "/redeem", strings.HasPrefix(rest, "/redeem/"):
+		return true
+	case rest == "/subscriptions", strings.HasPrefix(rest, "/subscriptions/"):
+		return true
+	case rest == "/channel-monitors", strings.HasPrefix(rest, "/channel-monitors/"):
+		return true
+	case strings.HasPrefix(rest, "/payment/"):
+		// Exclude public and webhook payment surfaces.
+		if strings.HasPrefix(rest, "/payment/public") || strings.HasPrefix(rest, "/payment/webhook") {
+			return false
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 func responseCacheStatus(header http.Header) string {
