@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 const (
@@ -135,7 +137,6 @@ func (s *AccountTestService) ProxyKeeperAnthropicAccount(ctx context.Context, ac
 	if err != nil {
 		return nil, err
 	}
-	upstreamURL := buildKeeperProxyURL(baseURL, proxyPath, proxyQuery)
 	body := in.Body
 	if isKeeperProxyPathExact(proxyPath, "/v1/messages") {
 		body, err = clampKeeperProxyJSONMaxTokens(body, KeeperMaxOutputTokens(account), "max_tokens", "max_tokens")
@@ -143,27 +144,123 @@ func (s *AccountTestService) ProxyKeeperAnthropicAccount(ctx context.Context, ac
 			return nil, err
 		}
 	}
-	req, err := http.NewRequestWithContext(ctx, in.Method, upstreamURL, body)
-	if err != nil {
-		return nil, err
+
+	mimicAPIKeyClaudeCode := isKeeperProxyPathExact(proxyPath, "/v1/messages") &&
+		account.IsAnthropicAPIKeyClaudeCodeMimicEnabled()
+	var req *http.Request
+	if mimicAPIKeyClaudeCode {
+		if s.gatewayService == nil {
+			return nil, errors.New("gateway service unavailable for keeper Anthropic mimic")
+		}
+		bodyBytes, readErr := io.ReadAll(body)
+		if readErr != nil {
+			return nil, readErr
+		}
+		modelID := strings.TrimSpace(gjson.GetBytes(bodyBytes, "model").String())
+		if modelID == "" {
+			return nil, errors.New("keeper Anthropic mimic request model is required")
+		}
+		if mappedModel := strings.TrimSpace(account.GetMappedModel(modelID)); mappedModel != "" && mappedModel != modelID {
+			bodyBytes = s.gatewayService.replaceModelInBody(bodyBytes, mappedModel)
+			modelID = mappedModel
+		}
+		bodyBytes, err = normalizeKeeperAnthropicMimicTools(bodyBytes)
+		if err != nil {
+			return nil, err
+		}
+		requestStream := gjson.GetBytes(bodyBytes, "stream").Bool()
+		req, _, err = s.gatewayService.buildUpstreamRequest(
+			ctx,
+			nil,
+			account,
+			bodyBytes,
+			apiKey,
+			"apikey",
+			modelID,
+			requestStream,
+			true,
+		)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		upstreamURL := buildKeeperProxyURL(baseURL, proxyPath, proxyQuery)
+		req, err = http.NewRequestWithContext(ctx, in.Method, upstreamURL, body)
+		if err != nil {
+			return nil, err
+		}
+		copyProxyRequestHeaders(req.Header, in.Header)
+		setAnthropicAPIKeyAuthHeader(req.Header, account, apiKey)
+		if req.Header.Get("content-type") == "" {
+			req.Header.Set("content-type", "application/json")
+		}
+		if req.Header.Get("anthropic-version") == "" {
+			req.Header.Set("anthropic-version", "2023-06-01")
+		}
+		applyAccountTestHeaderOverridesForOfficialClientProxy(account, req.Header)
 	}
-	copyProxyRequestHeaders(req.Header, in.Header)
-	setAnthropicAPIKeyAuthHeader(req.Header, account, apiKey)
-	if req.Header.Get("content-type") == "" {
-		req.Header.Set("content-type", "application/json")
-	}
-	if req.Header.Get("anthropic-version") == "" {
-		req.Header.Set("anthropic-version", "2023-06-01")
-	}
-	applyAccountTestHeaderOverridesForOfficialClientProxy(account, req.Header)
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	if s.tlsFPProfileService != nil && account.IsTLSFingerprintEnabled() {
-		return s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+	// mimic 开启时复用账号测试的 Desktop TLS 规则；关闭时按官方 CLI 直通规则处理。
+	// 两种路径都不能在未绑定 profile 时误套内置 Node.js 指纹。
+	tlsProfile := resolveAnthropicTLSProfileForRequest(account, mimicAPIKeyClaudeCode, s.tlsFPProfileService)
+	if tlsProfile != nil {
+		return s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, tlsProfile)
 	}
 	return s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+}
+
+const keeperAnthropicUnavailableToolDescription = "Unavailable in this keepalive session. Do not call this tool."
+
+// normalizeKeeperAnthropicMimicTools 将 keeper 的精简 CLI 工具集合补齐为 Desktop 基线。
+// 同名真实工具保留原 schema；缺失工具只用于满足上游客户端形态校验，并明确标记为不可用。
+func normalizeKeeperAnthropicMimicTools(body []byte) ([]byte, error) {
+	existing := make(map[string]json.RawMessage)
+	tools := gjson.GetBytes(body, "tools")
+	if tools.IsArray() {
+		for _, tool := range tools.Array() {
+			name := strings.TrimSpace(tool.Get("name").String())
+			if name == "" || tool.Raw == "" {
+				continue
+			}
+			if _, found := existing[name]; found {
+				continue
+			}
+			existing[name] = json.RawMessage(append([]byte(nil), tool.Raw...))
+		}
+	}
+
+	normalized := make([]json.RawMessage, 0, len(anthropicAPIKeyMimicTestToolNames))
+	for _, name := range anthropicAPIKeyMimicTestToolNames {
+		if tool, found := existing[name]; found {
+			normalized = append(normalized, tool)
+			continue
+		}
+		tool, err := json.Marshal(map[string]any{
+			"name":        name,
+			"description": keeperAnthropicUnavailableToolDescription,
+			"input_schema": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("marshal keeper Anthropic mimic tool %s: %w", name, err)
+		}
+		normalized = append(normalized, tool)
+	}
+
+	toolsJSON, err := json.Marshal(normalized)
+	if err != nil {
+		return nil, fmt.Errorf("marshal keeper Anthropic mimic tools: %w", err)
+	}
+	next, err := sjson.SetRawBytes(body, "tools", toolsJSON)
+	if err != nil {
+		return nil, fmt.Errorf("set keeper Anthropic mimic tools: %w", err)
+	}
+	return next, nil
 }
 
 func buildKeeperOpenAIProxyURL(baseURL string, proxyPath string) string {

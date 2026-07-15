@@ -705,6 +705,9 @@ func TestRenderRuntimeEnvInjectsClaudeMaxOutputTokens(t *testing.T) {
 	if !strings.Contains(env, "CLAUDE_CODE_MAX_OUTPUT_TOKENS='800'") {
 		t.Fatalf("claude runtime env did not inject configured max output tokens:\n%s", env)
 	}
+	if !strings.Contains(env, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC='1'") {
+		t.Fatalf("claude runtime env did not disable nonessential traffic:\n%s", env)
+	}
 
 	// MaxOutputTokens 未设置（0）时回退到默认值，避免注入 0 让 CLI 拿到非法上限。
 	target.MaxOutputTokens = 0
@@ -717,12 +720,16 @@ func TestRenderRuntimeEnvInjectsClaudeMaxOutputTokens(t *testing.T) {
 func TestClaudePersistentArgsUsePlanModeAndDenyWriteTools(t *testing.T) {
 	args := claudePersistentArgs(persistentExecution{
 		Account: TargetConfig{
-			Model: "claude-opus-4-8",
-			Mode:  "fresh",
+			AccountID: 42,
+			Model:     "claude-opus-4-8",
+			Mode:      "fresh",
 		},
 	})
 	joined := strings.Join(args, " ")
 
+	if !strings.Contains(joined, "--name keeper-42") {
+		t.Fatalf("claude args = %q, want stable keeper session name", joined)
+	}
 	if !strings.Contains(joined, "--permission-mode plan") {
 		t.Fatalf("claude args = %q, want plan permission mode", joined)
 	}
@@ -745,10 +752,13 @@ func TestClaudePersistentEnvScrubsSubprocessEnvironment(t *testing.T) {
 			HomeDir:         "/app/data/runtime/workers/4/home",
 			ClaudeConfigDir: "/app/data/runtime/workers/4/claude",
 		},
+		MaxOutputTokens: 512,
 	})
 
 	found := false
 	foundBetas := false
+	foundMaxOutputTokens := false
+	foundNonessentialTrafficDisabled := false
 	for _, value := range env {
 		if value == "CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1" {
 			found = true
@@ -756,12 +766,24 @@ func TestClaudePersistentEnvScrubsSubprocessEnvironment(t *testing.T) {
 		if value == "ANTHROPIC_BETAS=context-1m-2025-08-07" {
 			foundBetas = true
 		}
+		if value == "CLAUDE_CODE_MAX_OUTPUT_TOKENS=512" {
+			foundMaxOutputTokens = true
+		}
+		if value == "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1" {
+			foundNonessentialTrafficDisabled = true
+		}
 	}
 	if !found {
 		t.Fatalf("claude env = %#v, want subprocess env scrub enabled", env)
 	}
 	if !foundBetas {
 		t.Fatalf("claude env = %#v, want default 1M context beta", env)
+	}
+	if !foundMaxOutputTokens {
+		t.Fatalf("claude env = %#v, want configured max output tokens", env)
+	}
+	if !foundNonessentialTrafficDisabled {
+		t.Fatalf("claude env = %#v, want nonessential traffic disabled", env)
 	}
 }
 

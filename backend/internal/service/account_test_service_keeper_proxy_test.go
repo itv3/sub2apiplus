@@ -7,6 +7,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -18,6 +21,43 @@ type keeperProxyAccountRepoStub struct {
 
 func (r *keeperProxyAccountRepoStub) GetByID(_ context.Context, _ int64) (*Account, error) {
 	return r.account, nil
+}
+
+type keeperProxyHTTPUpstreamRecorder struct {
+	standardCalls int
+	tlsCalls      int
+	tlsProfile    *tlsfingerprint.Profile
+	lastRequest   *http.Request
+	lastBody      []byte
+}
+
+func (r *keeperProxyHTTPUpstreamRecorder) record(req *http.Request) {
+	r.lastRequest = req
+	if req == nil || req.Body == nil {
+		return
+	}
+	r.lastBody, _ = io.ReadAll(req.Body)
+}
+
+func (r *keeperProxyHTTPUpstreamRecorder) Do(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+	r.standardCalls++
+	r.record(req)
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"type":"message"}`)),
+	}, nil
+}
+
+func (r *keeperProxyHTTPUpstreamRecorder) DoWithTLS(req *http.Request, _ string, _ int64, _ int, profile *tlsfingerprint.Profile) (*http.Response, error) {
+	r.tlsCalls++
+	r.tlsProfile = profile
+	r.record(req)
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Header:     make(http.Header),
+		Body:       io.NopCloser(strings.NewReader(`{"type":"message"}`)),
+	}, nil
 }
 
 func TestProxyKeeperOpenAIAccountRejectsNonAPIKeyAccount(t *testing.T) {
@@ -37,6 +77,72 @@ func TestProxyKeeperOpenAIAccountRejectsNonAPIKeyAccount(t *testing.T) {
 	})
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "OpenAI API key account")
+}
+
+func TestProxyKeeperAnthropicAccountMimicTakesPriorityAndUsesStandardTransport(t *testing.T) {
+	account := &Account{
+		ID:          42,
+		Platform:    PlatformAnthropic,
+		Type:        AccountTypeAPIKey,
+		Status:      StatusActive,
+		Schedulable: true,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key": "anthropic-key",
+		},
+		Extra: map[string]any{
+			"anthropic_apikey_mimic_claude_code": true,
+			"anthropic_passthrough":              true,
+			"enable_tls_fingerprint":             true,
+			"keeper_keepalive_enabled":           true,
+		},
+	}
+	upstream := &keeperProxyHTTPUpstreamRecorder{}
+	svc := &AccountTestService{
+		accountRepo:         &keeperProxyAccountRepoStub{account: account},
+		httpUpstream:        upstream,
+		cfg:                 &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+		gatewayService: &GatewayService{cfg: &config.Config{
+			Gateway:  config.GatewayConfig{MaxLineSize: defaultMaxLineSize},
+			Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}},
+		}},
+	}
+
+	resp, err := svc.ProxyKeeperAnthropicAccount(context.Background(), account.ID, KeeperOpenAIProxyRequest{
+		Method: http.MethodPost,
+		Path:   "/v1/messages",
+		Header: http.Header{
+			"User-Agent":     []string{"claude-cli/2.1.210 (external, sdk-cli)"},
+			"Anthropic-Beta": []string{"advisor-tool-2026-03-01,context-1m-2025-08-07"},
+		},
+		Body: strings.NewReader(`{"model":"claude-fable-5","max_tokens":64000,"stream":true,"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.210.abc; cc_entrypoint=sdk-cli;"},{"type":"text","text":"You are a Claude agent, built on Anthropic's Claude Agent SDK.","cache_control":{"type":"ephemeral"}},{"type":"text","text":"CWD: /workspace/projects/ai-keeper\nDate: 2026-07-15","cache_control":{"type":"ephemeral"}}],"tools":[{"name":"Read","description":"Read files from the mounted workspace.","input_schema":{"type":"object","properties":{"file_path":{"type":"string"}}}},{"name":"CustomTool","description":"Must be removed.","input_schema":{"type":"object","properties":{}}}],"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}],"metadata":{"user_id":"{\"device_id\":\"device\",\"account_uuid\":\"\",\"session_id\":\"11111111-2222-4333-8444-555555555555\"}"}}`),
+	})
+	require.NoError(t, err)
+	require.NotNil(t, resp)
+	require.Equal(t, 1, upstream.standardCalls)
+	require.Zero(t, upstream.tlsCalls)
+	require.Nil(t, upstream.tlsProfile)
+	require.NotNil(t, upstream.lastRequest)
+	require.Equal(t, "claude-cli/2.1.209 (external, claude-desktop-3p, agent-sdk/0.3.209)", getHeaderRaw(upstream.lastRequest.Header, "User-Agent"))
+	require.Equal(t, strings.Join(claude.APIKeyMimicBetas(), ","), getHeaderRaw(upstream.lastRequest.Header, "anthropic-beta"))
+	require.Equal(t, int64(512), gjson.GetBytes(upstream.lastBody, "max_tokens").Int())
+	require.Len(t, gjson.GetBytes(upstream.lastBody, "system").Array(), 3)
+	require.Contains(t, gjson.GetBytes(upstream.lastBody, "system.0.text").String(), "cc_entrypoint=claude-desktop-3p")
+	require.Contains(t, gjson.GetBytes(upstream.lastBody, "system.0.text").String(), "cc_version=2.1.209.")
+	require.Equal(t, claudeSDKCLIIdentityPrompt, gjson.GetBytes(upstream.lastBody, "system.1.text").String())
+	require.Equal(t, claudeCodeSystemPromptExpansion, gjson.GetBytes(upstream.lastBody, "system.2.text").String())
+	require.Contains(t, gjson.GetBytes(upstream.lastBody, "messages.0.content.0.text").String(), "CWD: /workspace/projects/ai-keeper")
+	require.NotContains(t, string(upstream.lastBody), "cc_entrypoint=sdk-cli")
+	tools := gjson.GetBytes(upstream.lastBody, "tools").Array()
+	require.Len(t, tools, len(anthropicAPIKeyMimicTestToolNames))
+	for i, name := range anthropicAPIKeyMimicTestToolNames {
+		require.Equal(t, name, tools[i].Get("name").String())
+	}
+	require.Equal(t, "Read files from the mounted workspace.", gjson.GetBytes(upstream.lastBody, "tools.12.description").String())
+	require.Equal(t, "string", gjson.GetBytes(upstream.lastBody, "tools.12.input_schema.properties.file_path.type").String())
+	require.Equal(t, keeperAnthropicUnavailableToolDescription, gjson.GetBytes(upstream.lastBody, "tools.1.description").String())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "tools.#(name==\"CustomTool\")").Exists())
 }
 
 func TestValidateKeeperOpenAIProxyPath(t *testing.T) {

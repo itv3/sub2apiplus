@@ -213,8 +213,15 @@ func (s *GatewayService) applyAnthropicAPIKeyClaudeCodeMimicryToBody(
 	model := gjson.GetBytes(body, "model").String()
 	systemPromptInjectionEnabled, systemPrompt, systemPromptBlocks := s.claudeOAuthSystemPromptInjectionSettings(ctx)
 	systemRewritten := false
-	if systemPromptInjectionEnabled && !strings.Contains(strings.ToLower(model), "haiku") {
-		body = rewriteSystemForNonClaudeCodeWithPromptBlocks(body, rawJSONValue(body, "system"), systemPrompt, systemPromptBlocks)
+	if !strings.Contains(strings.ToLower(model), "haiku") {
+		// API Key Desktop mimic 的三段 system 是固定身份契约，不能受 OAuth 系统提示词
+		// 注入开关影响。过滤真实 CLI 已带的固定身份块，只把 CWD 等项目上下文移入消息。
+		if !systemPromptInjectionEnabled {
+			systemPrompt = ""
+			systemPromptBlocks = ""
+		}
+		customSystem := filterAnthropicAPIKeyMimicCustomSystem(rawJSONValue(body, "system"))
+		body = rewriteSystemForNonClaudeCodeWithPromptBlocks(body, customSystem, systemPrompt, systemPromptBlocks)
 		systemRewritten = true
 	}
 
@@ -237,6 +244,7 @@ func (s *GatewayService) applyAnthropicAPIKeyClaudeCodeMimicryToBody(
 		dropPlainAutoToolChoice:    true,
 	})
 	body = applyAnthropicAPIKeySDKCLIIdentity(body)
+	body = syncBillingHeaderVersion(body, claude.DefaultHeaders["User-Agent"])
 
 	body = s.rewriteMessageCacheControlIfEnabled(ctx, body)
 
@@ -247,6 +255,49 @@ const (
 	claudeSDKCLIEntrypoint     = "cc_entrypoint=claude-desktop-3p;"
 	claudeSDKCLIIdentityPrompt = "You are a Claude agent, built on Anthropic's Claude Agent SDK."
 )
+
+// filterAnthropicAPIKeyMimicCustomSystem 从真实 CLI system 中剔除 billing、身份和
+// 标准 expansion，仅保留 CWD、项目约束等业务上下文，供重写器移入 messages。
+func filterAnthropicAPIKeyMimicCustomSystem(system any) any {
+	system = normalizeSystemParam(system)
+	if system == nil {
+		return nil
+	}
+	if text, ok := system.(string); ok {
+		if isAnthropicAPIKeyMimicFixedSystemText(text) {
+			return nil
+		}
+		return text
+	}
+	items, ok := system.([]any)
+	if !ok {
+		return system
+	}
+	custom := make([]any, 0, len(items))
+	for _, item := range items {
+		block, ok := item.(map[string]any)
+		if !ok {
+			custom = append(custom, item)
+			continue
+		}
+		text, _ := block["text"].(string)
+		if isAnthropicAPIKeyMimicFixedSystemText(text) {
+			continue
+		}
+		custom = append(custom, item)
+	}
+	if len(custom) == 0 {
+		return nil
+	}
+	return custom
+}
+
+func isAnthropicAPIKeyMimicFixedSystemText(text string) bool {
+	trimmed := strings.TrimSpace(text)
+	return strings.HasPrefix(trimmed, "x-anthropic-billing-header:") ||
+		hasClaudeCodePrefix(trimmed) ||
+		trimmed == strings.TrimSpace(claudeCodeSystemPromptExpansion)
+}
 
 // applyAnthropicAPIKeySDKCLIIdentity 只修正 API Key mimic 已生成的固定身份块。
 // 使用精确匹配避免替换用户自定义 system 文本，也不会影响共用该构造链的 OAuth 请求。
@@ -264,7 +315,8 @@ func applyAnthropicAPIKeySDKCLIIdentity(body []byte) []byte {
 		text := item.Get("text").String()
 		nextText := text
 		if strings.HasPrefix(text, "x-anthropic-billing-header:") {
-			nextText = strings.Replace(text, "cc_entrypoint=cli;", claudeSDKCLIEntrypoint, 1)
+			nextText = strings.Replace(text, "cc_entrypoint=sdk-cli;", claudeSDKCLIEntrypoint, 1)
+			nextText = strings.Replace(nextText, "cc_entrypoint=cli;", claudeSDKCLIEntrypoint, 1)
 		} else if strings.TrimSpace(text) == strings.TrimSpace(claudeCodeSystemPrompt) {
 			nextText = claudeSDKCLIIdentityPrompt
 		}

@@ -1,6 +1,6 @@
 FROM golang:1.24-bookworm AS builder
 
-ARG VERSION=0.1.151-5
+ARG VERSION=0.1.155-4
 
 WORKDIR /src
 COPY go.mod go.sum* ./
@@ -11,6 +11,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags="-s -w -X main.version=
 FROM debian:bookworm-slim
 
 ARG CODEX_RELEASE=latest
+ARG CLAUDE_RELEASE=2.1.210
 
 ENV DEBIAN_FRONTEND=noninteractive \
     TZ=Asia/Shanghai \
@@ -39,7 +40,7 @@ RUN apt-get update \
 
 RUN mkdir -p /opt/codex-home /root/.local/bin /root/.claude \
     && curl -fsSL https://chatgpt.com/codex/install.sh | CODEX_RELEASE="${CODEX_RELEASE}" sh -s -- --release "${CODEX_RELEASE}" \
-    && curl -fsSL https://claude.ai/install.sh | bash \
+    && curl -fsSL https://claude.ai/install.sh | bash -s -- "${CLAUDE_RELEASE}" \
     && cp -L /root/.local/bin/claude /usr/local/bin/claude \
     && chmod 0755 /usr/local/bin/claude \
     && codex --version >/tmp/codex-version.txt \

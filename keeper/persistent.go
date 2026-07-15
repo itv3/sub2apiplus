@@ -825,6 +825,7 @@ func claudePersistentArgs(req persistentExecution) []string {
 		"--bare",
 		"--verbose",
 		"--print",
+		"--name", claudePersistentSessionName(req),
 		"--permission-mode", "plan",
 		"--disallowed-tools", "Bash,Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch",
 		"--input-format", "stream-json",
@@ -841,7 +842,20 @@ func claudePersistentArgs(req persistentExecution) []string {
 	return args
 }
 
+// claudePersistentSessionName 为保活会话提供稳定名称，便于会话恢复和日志定位。
+// 自动标题请求由 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC 统一关闭。
+func claudePersistentSessionName(req persistentExecution) string {
+	if req.Account.AccountID > 0 {
+		return "keeper-" + strconv.FormatInt(req.Account.AccountID, 10)
+	}
+	if name := slugify(req.Account.Name); name != "" {
+		return "keeper-" + name
+	}
+	return "keeper-session"
+}
+
 func claudePersistentEnv(req persistentExecution) []string {
+	maxOutputTokens := positiveIntDefault(req.MaxOutputTokens, defaultKeepaliveMaxTokens)
 	env := []string{
 		"HOME=" + req.Layout.HomeDir,
 		"CLAUDE_CONFIG_DIR=" + req.Layout.ClaudeConfigDir,
@@ -849,6 +863,8 @@ func claudePersistentEnv(req persistentExecution) []string {
 		"ANTHROPIC_AUTH_TOKEN=" + req.Account.APIKey,
 		"ANTHROPIC_BASE_URL=" + req.Account.BaseURL,
 		"ANTHROPIC_MODEL=" + req.Account.Model,
+		"CLAUDE_CODE_MAX_OUTPUT_TOKENS=" + strconv.Itoa(maxOutputTokens),
+		"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1",
 		"CLAUDE_CODE_SUBPROCESS_ENV_SCRUB=1",
 	}
 	if betas := claudeDefaultBetas(); len(betas) > 0 {
