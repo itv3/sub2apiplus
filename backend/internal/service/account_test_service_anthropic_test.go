@@ -86,9 +86,13 @@ func TestAccountTestService_AnthropicAPIKeyMimicUsesFullGatewayRequest(t *testin
 			if tt.wantContext {
 				require.Contains(t, betaHeader, claude.BetaContext1M)
 				require.Equal(t, "application/json", getHeaderRaw(req.Header, "Accept"))
-				require.Equal(t, claude.DefaultHeaders["User-Agent"], getHeaderRaw(req.Header, "User-Agent"))
+				require.Equal(t, "claude-cli/2.1.209 (external, claude-desktop-3p, agent-sdk/0.3.209)", getHeaderRaw(req.Header, "User-Agent"))
 				require.Equal(t, "test-key", getHeaderRaw(req.Header, "x-api-key"))
 				require.Equal(t, "Bearer test-key", getHeaderRaw(req.Header, "Authorization"))
+				require.Equal(t, int64(512), gjson.GetBytes(body, "max_tokens").Int())
+				require.Len(t, gjson.GetBytes(body, "tools").Array(), len(anthropicAPIKeyMimicTestToolNames))
+				require.Equal(t, "Agent", gjson.GetBytes(body, "tools.0.name").String())
+				require.Equal(t, "Write", gjson.GetBytes(body, "tools.26.name").String())
 
 				system := gjson.GetBytes(body, "system")
 				require.True(t, system.IsArray())

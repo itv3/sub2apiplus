@@ -60,7 +60,7 @@ func defaultAPIKeyCountTokensMimicBetaHeader(body []byte) string {
 }
 
 // defaultAPIKeyMimicBetaHeader 返回 Anthropic API Key mimic Claude Code 时的 anthropic-beta，
-// 对齐官方 Claude Desktop 2.1.205 抓包的完整 beta 列表（仅 mimic 路径使用）。
+// 对齐官方 Claude Desktop 2.1.209 抓包的完整 beta 列表（仅 mimic 路径使用）。
 // haiku 模型上游不做第三方判定，沿用精简 haiku header。
 func defaultAPIKeyMimicBetaHeader(body []byte) string {
 	return buildDefaultAPIKeyMimicBetaHeader(body, true)
@@ -129,7 +129,9 @@ func (s *GatewayService) buildAnthropicAPIKeyCLIMimicRequest(
 	// 否则会偏离 Desktop 抓包，且多数中转站会直接 400 要求启用 1m。
 	// 注意：不要把这些 token 再以 required 方式重复合并，否则会破坏官方顺序。
 	defaultBetaHeader := defaultAPIKeyMimicBetaHeader(body)
-	effectiveDropSet = removeTokensFromSetCopy(effectiveDropSet, parseAnthropicBetaHeader(defaultBetaHeader)...)
+	// 只保护静态 Desktop 身份基线；structured-outputs 等按 body 动态替换的 beta
+	// 仍必须受 BetaPolicy 控制。
+	effectiveDropSet = removeTokensFromSetCopy(effectiveDropSet, claude.APIKeyMimicBetas()...)
 	effectiveDropSet = removeTokensFromSetCopy(effectiveDropSet, anthropicAPIKeyMimicExtraBetas(modelID)...)
 	finalBetaHeader := stripBetaTokensWithSet(defaultBetaHeader, effectiveDropSet)
 	if apiKeyMimicBodyRequiresStructuredOutputs(body) &&
@@ -159,7 +161,7 @@ func (s *GatewayService) buildAnthropicAPIKeyCLIMimicRequest(
 	}
 	setHeaderRaw(req.Header, "x-api-key", token)
 	setHeaderRaw(req.Header, "Authorization", "Bearer "+token)
-	// 官方 claude-cli/2.1.207 直连 HTTP/1.1 中转站时使用 Node 风格的 Header
+	// 官方 Claude Desktop 2.1.209 直连 HTTP/1.1 中转站时使用 Node 风格的 Header
 	// 文本形态。这里只调整 API Key mimic 的 /v1/messages 构造链，不改变 OAuth、
 	// count_tokens 或其他平台的共享 Header 规则。
 	setHeaderRaw(req.Header, "Content-Type", "application/json")
@@ -349,7 +351,7 @@ func (s *GatewayService) buildAnthropicAPIKeyCLICountTokensMimicRequest(
 	modelID := gjson.GetBytes(body, "model").String()
 	// 与 /v1/messages mimic 一致：保护 Desktop 基线 beta，避免全局策略剥掉 context-1m。
 	defaultBetaHeader := defaultAPIKeyCountTokensMimicBetaHeader(body)
-	effectiveDropSet = removeTokensFromSetCopy(effectiveDropSet, parseAnthropicBetaHeader(defaultBetaHeader)...)
+	effectiveDropSet = removeTokensFromSetCopy(effectiveDropSet, claude.APIKeyMimicBetas()...)
 	effectiveDropSet = removeTokensFromSetCopy(effectiveDropSet, anthropicAPIKeyMimicExtraBetas(modelID)...)
 	finalBetaHeader := stripBetaTokensWithSet(defaultBetaHeader, effectiveDropSet)
 	if blockErr := s.checkBetaPolicyBlockForHeader(ctx, finalBetaHeader, account, modelID); blockErr != nil {

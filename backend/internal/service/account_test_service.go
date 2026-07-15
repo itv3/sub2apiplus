@@ -172,11 +172,34 @@ func createTestPayload(modelID string) (map[string]any, error) {
 	}, nil
 }
 
-// createAnthropicAPIKeyMimicTestPayload 创建普通第三方风格的测试 body。
-// 开启官方客户端兼容时，由网关 mimic 链路自行补齐 system/metadata/cache 等官方形态字段。
+var anthropicAPIKeyMimicTestToolNames = []string{
+	"Agent", "Bash", "CronCreate", "CronDelete", "CronList", "DesignSync", "Edit",
+	"EnterWorktree", "ExitWorktree", "Monitor", "NotebookEdit", "PushNotification",
+	"Read", "ReportFindings", "ScheduleWakeup", "SendMessage", "Skill", "TaskCreate",
+	"TaskGet", "TaskList", "TaskOutput", "TaskStop", "TaskUpdate", "WebFetch",
+	"WebSearch", "Workflow", "Write",
+}
+
+// createAnthropicAPIKeyMimicTestPayload 创建带官方工具集合的第三方测试 body。
+// 上游会校验 Desktop 工具集合；schema 保持最小合法形态，其余官方字段由网关 mimic 链补齐。
 func createAnthropicAPIKeyMimicTestPayload(modelID string) map[string]any {
+	tools := make([]map[string]any, 0, len(anthropicAPIKeyMimicTestToolNames))
+	for _, name := range anthropicAPIKeyMimicTestToolNames {
+		tools = append(tools, map[string]any{
+			"name":        name,
+			"description": "Use " + name + " during the account connectivity test.",
+			"input_schema": map[string]any{
+				"type":       "object",
+				"properties": map[string]any{},
+			},
+		})
+	}
+
 	return map[string]any{
-		"model": modelID,
+		"model":      modelID,
+		"system":     "Account connectivity test",
+		"max_tokens": 512,
+		"tools":      tools,
 		"messages": []map[string]any{
 			{
 				"role": "user",
