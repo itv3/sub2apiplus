@@ -68,6 +68,7 @@ type AccountTestService struct {
 	claudeTokenProvider       *ClaudeTokenProvider
 	grokTokenProvider         *GrokTokenProvider
 	antigravityGatewayService *AntigravityGatewayService
+	gatewayService            *GatewayService
 	httpUpstream              HTTPUpstream
 	cfg                       *config.Config
 	tlsFPProfileService       *TLSFingerprintProfileService
@@ -80,6 +81,7 @@ func NewAccountTestService(
 	claudeTokenProvider *ClaudeTokenProvider,
 	grokTokenProvider *GrokTokenProvider,
 	antigravityGatewayService *AntigravityGatewayService,
+	gatewayService *GatewayService,
 	httpUpstream HTTPUpstream,
 	cfg *config.Config,
 	tlsFPProfileService *TLSFingerprintProfileService,
@@ -90,6 +92,7 @@ func NewAccountTestService(
 		claudeTokenProvider:       claudeTokenProvider,
 		grokTokenProvider:         grokTokenProvider,
 		antigravityGatewayService: antigravityGatewayService,
+		gatewayService:            gatewayService,
 		httpUpstream:              httpUpstream,
 		cfg:                       cfg,
 		tlsFPProfileService:       tlsFPProfileService,
@@ -167,6 +170,26 @@ func createTestPayload(modelID string) (map[string]any, error) {
 		"temperature": 1,
 		"stream":      true,
 	}, nil
+}
+
+// createAnthropicAPIKeyMimicTestPayload 创建普通第三方风格的测试 body。
+// 开启官方客户端兼容时，由网关 mimic 链路自行补齐 system/metadata/cache 等官方形态字段。
+func createAnthropicAPIKeyMimicTestPayload(modelID string) map[string]any {
+	return map[string]any{
+		"model": modelID,
+		"messages": []map[string]any{
+			{
+				"role": "user",
+				"content": []map[string]any{
+					{
+						"type": "text",
+						"text": "hi",
+					},
+				},
+			},
+		},
+		"stream": true,
+	}
 }
 
 // TestAccountConnection tests an account's connection by sending a test request
@@ -261,45 +284,72 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 	c.Writer.Header().Set("X-Accel-Buffering", "no")
 	c.Writer.Flush()
 
-	// Create Claude Code style payload (same for all account types)
-	payload, err := createTestPayload(testModelID)
-	if err != nil {
-		return s.sendErrorAndEnd(c, "Failed to create test payload")
-	}
-	payloadBytes, _ := json.Marshal(payload)
+	// API Key 开启官方客户端兼容时，复用正式转发的完整 mimic 构造链，
+	// 避免只替换 beta 头而 body/system/session 仍停留在旧测试形态。
+	mimicAPIKeyClaudeCode := account.Type == AccountTypeAPIKey &&
+		account.IsAnthropicAPIKeyClaudeCodeMimicEnabled()
 
-	// Send test_start event
-	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
-
-	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(payloadBytes))
-	if err != nil {
-		return s.sendErrorAndEnd(c, "Failed to create request")
-	}
-
-	// Set common headers
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("anthropic-version", "2023-06-01")
-
-	// Apply Claude Code client headers
-	for key, value := range claude.DefaultHeaders {
-		req.Header.Set(key, value)
-	}
-
-	// Set authentication header
-	if account.IsOAuth() {
-		req.Header.Set("anthropic-beta", claude.DefaultBetaHeader)
-		req.Header.Set("Authorization", "Bearer "+authToken)
-	} else {
-		betaHeader := claude.APIKeyBetaHeader
-		if account.IsAnthropicAPIKeyClaudeCodeMimicEnabled() {
-			betaHeader = defaultAPIKeyMimicBetaHeader(payloadBytes)
+	var req *http.Request
+	if mimicAPIKeyClaudeCode {
+		if s.gatewayService == nil {
+			return s.sendErrorAndEnd(c, "Gateway service not configured")
 		}
-		req.Header.Set("anthropic-beta", betaHeader)
-		setAnthropicAPIKeyAuthHeader(req.Header, account, authToken)
-	}
+		payloadBytes, _ := json.Marshal(createAnthropicAPIKeyMimicTestPayload(testModelID))
+		s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
+		// c 传 nil：账号测试始终按非官方入站客户端处理，使兼容开关对测试生效。
+		builtReq, _, buildErr := s.gatewayService.buildUpstreamRequest(
+			ctx,
+			nil,
+			account,
+			payloadBytes,
+			authToken,
+			"apikey",
+			testModelID,
+			true,
+			true,
+		)
+		if buildErr != nil {
+			return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to create request: %s", buildErr.Error()))
+		}
+		req = builtReq
+	} else {
+		// Create Claude Code style payload (same for all non-mimic account types)
+		payload, err := createTestPayload(testModelID)
+		if err != nil {
+			return s.sendErrorAndEnd(c, "Failed to create test payload")
+		}
+		payloadBytes, _ := json.Marshal(payload)
 
-	// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
-	applyAccountTestHeaderOverrides(account, req.Header)
+		// Send test_start event
+		s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
+
+		var errReq error
+		req, errReq = http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(payloadBytes))
+		if errReq != nil {
+			return s.sendErrorAndEnd(c, "Failed to create request")
+		}
+
+		// Set common headers
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("anthropic-version", "2023-06-01")
+
+		// Apply Claude Code client headers
+		for key, value := range claude.DefaultHeaders {
+			req.Header.Set(key, value)
+		}
+
+		// Set authentication header
+		if account.IsOAuth() {
+			req.Header.Set("anthropic-beta", claude.DefaultBetaHeader)
+			req.Header.Set("Authorization", "Bearer "+authToken)
+		} else {
+			req.Header.Set("anthropic-beta", claude.APIKeyBetaHeader)
+			setAnthropicAPIKeyAuthHeader(req.Header, account, authToken)
+		}
+
+		// 账号级请求头覆写：测试请求与真实转发保持一致的最终头
+		applyAccountTestHeaderOverrides(account, req.Header)
+	}
 
 	// Get proxy URL
 	proxyURL := ""
@@ -307,7 +357,13 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 		proxyURL = account.Proxy.URL()
 	}
 
-	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+	// TLS 选择与正式转发一致：API Key mimic 走专用 profile 解析
+	tlsProfile := resolveAnthropicTLSProfileForRequest(
+		account,
+		mimicAPIKeyClaudeCode,
+		s.tlsFPProfileService,
+	)
+	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, tlsProfile)
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
 	}
@@ -1455,16 +1511,33 @@ func createOpenAIChatCompletionsTestPayload(modelID string, prompt string) map[s
 	}
 }
 
+// 上游偶发返回 200 + SSE，但 content 仅为固定降级文案；账号测试需判为失败。
+const claudeTestUnavailableMessage = "Service temporarily unavailable. Please retry later."
+
+// isClaudeTestUnavailableResponse 仅对已知固定降级文案做严格匹配，避免误伤正常回复。
+func isClaudeTestUnavailableResponse(text string) bool {
+	return strings.EqualFold(strings.TrimSpace(text), claudeTestUnavailableMessage)
+}
+
 // processClaudeStream processes the SSE stream from Claude API
 func (s *AccountTestService) processClaudeStream(c *gin.Context, body io.Reader) error {
 	reader := bufio.NewReader(body)
+	var responseText strings.Builder
+
+	// complete 统一处理 EOF / [DONE] / message_stop 三种正常结束路径。
+	complete := func() error {
+		if isClaudeTestUnavailableResponse(responseText.String()) {
+			return s.sendErrorAndEnd(c, claudeTestUnavailableMessage)
+		}
+		s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
+		return nil
+	}
 
 	for {
 		line, err := reader.ReadString('\n')
 		if err != nil {
 			if err == io.EOF {
-				s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
-				return nil
+				return complete()
 			}
 			return s.sendErrorAndEnd(c, fmt.Sprintf("Stream read error: %s", err.Error()))
 		}
@@ -1476,8 +1549,7 @@ func (s *AccountTestService) processClaudeStream(c *gin.Context, body io.Reader)
 
 		jsonStr := sseDataPrefix.ReplaceAllString(line, "")
 		if jsonStr == "[DONE]" {
-			s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
-			return nil
+			return complete()
 		}
 
 		var data map[string]any
@@ -1491,12 +1563,12 @@ func (s *AccountTestService) processClaudeStream(c *gin.Context, body io.Reader)
 		case "content_block_delta":
 			if delta, ok := data["delta"].(map[string]any); ok {
 				if text, ok := delta["text"].(string); ok {
+					responseText.WriteString(text)
 					s.sendEvent(c, TestEvent{Type: "content", Text: text})
 				}
 			}
 		case "message_stop":
-			s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
-			return nil
+			return complete()
 		case "error":
 			errorMsg := "Unknown error"
 			if errData, ok := data["error"].(map[string]any); ok {

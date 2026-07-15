@@ -124,11 +124,14 @@ func (s *GatewayService) buildAnthropicAPIKeyCLIMimicRequest(
 	body = s.applyAnthropicAPIKeyClaudeCodeMimicryToBody(ctx, c, account, body)
 	body = enforceCacheControlLimit(body)
 	modelID := gjson.GetBytes(body, "model").String()
-	extraBetas := anthropicAPIKeyMimicExtraBetas(modelID)
-	effectiveDropSet = removeTokensFromSetCopy(effectiveDropSet, extraBetas...)
-	// defaultAPIKeyMimicBetaHeader 已经按官方顺序放置模型必需 beta；这里不能再把
-	// extraBetas 作为 required 合并，否则 context-1m 会被重新移动到列表首位。
-	finalBetaHeader := stripBetaTokensWithSet(defaultAPIKeyMimicBetaHeader(body), effectiveDropSet)
+	// Desktop 基线 beta（含 context-1m）是官方客户端身份形态：先算默认列表，再把这些
+	// token 从 drop set 中移除。不能让全局 BetaPolicy 把 context-1m 等身份 beta 剥掉，
+	// 否则会偏离 Desktop 抓包，且多数中转站会直接 400 要求启用 1m。
+	// 注意：不要把这些 token 再以 required 方式重复合并，否则会破坏官方顺序。
+	defaultBetaHeader := defaultAPIKeyMimicBetaHeader(body)
+	effectiveDropSet = removeTokensFromSetCopy(effectiveDropSet, parseAnthropicBetaHeader(defaultBetaHeader)...)
+	effectiveDropSet = removeTokensFromSetCopy(effectiveDropSet, anthropicAPIKeyMimicExtraBetas(modelID)...)
+	finalBetaHeader := stripBetaTokensWithSet(defaultBetaHeader, effectiveDropSet)
 	if apiKeyMimicBodyRequiresStructuredOutputs(body) &&
 		!strings.Contains(strings.ToLower(modelID), "haiku") &&
 		!anthropicBetaTokensContains(finalBetaHeader, claude.BetaStructuredOutputs) {
@@ -344,7 +347,11 @@ func (s *GatewayService) buildAnthropicAPIKeyCLICountTokensMimicRequest(
 ) (*http.Request, []byte, error) {
 	body = sanitizeCountTokensRequestBody(body)
 	modelID := gjson.GetBytes(body, "model").String()
-	finalBetaHeader := stripBetaTokensWithSet(defaultAPIKeyCountTokensMimicBetaHeader(body), effectiveDropSet)
+	// 与 /v1/messages mimic 一致：保护 Desktop 基线 beta，避免全局策略剥掉 context-1m。
+	defaultBetaHeader := defaultAPIKeyCountTokensMimicBetaHeader(body)
+	effectiveDropSet = removeTokensFromSetCopy(effectiveDropSet, parseAnthropicBetaHeader(defaultBetaHeader)...)
+	effectiveDropSet = removeTokensFromSetCopy(effectiveDropSet, anthropicAPIKeyMimicExtraBetas(modelID)...)
+	finalBetaHeader := stripBetaTokensWithSet(defaultBetaHeader, effectiveDropSet)
 	if blockErr := s.checkBetaPolicyBlockForHeader(ctx, finalBetaHeader, account, modelID); blockErr != nil {
 		return nil, nil, blockErr
 	}

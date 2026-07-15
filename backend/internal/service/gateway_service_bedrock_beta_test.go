@@ -28,7 +28,13 @@ func (s *betaPolicySettingRepoStub) Set(ctx context.Context, key, value string) 
 }
 
 func (s *betaPolicySettingRepoStub) GetMultiple(ctx context.Context, keys []string) (map[string]string, error) {
-	panic("unexpected GetMultiple call")
+	out := make(map[string]string, len(keys))
+	for _, key := range keys {
+		if v, ok := s.values[key]; ok {
+			out[key] = v
+		}
+	}
+	return out, nil
 }
 
 func (s *betaPolicySettingRepoStub) SetMultiple(ctx context.Context, settings map[string]string) error {
