@@ -76,6 +76,8 @@ type BillingSummary struct {
 	UsedPercent        *float64                `json:"used_percent,omitempty"`
 	Plan               string                  `json:"plan,omitempty"` // SuperGrok | SuperGrok Heavy | ""
 	StatusCode         int                     `json:"status_code,omitempty"`
+	WeeklyStatusCode   int                     `json:"weekly_status_code,omitempty"`
+	MonthlyStatusCode  int                     `json:"monthly_status_code,omitempty"`
 	Source             string                  `json:"source,omitempty"`
 	FetchedAt          string                  `json:"fetched_at,omitempty"`
 	UpdatedAt          string                  `json:"updated_at,omitempty"`
@@ -92,6 +94,20 @@ func BuildBillingURL(formatCredits bool) string {
 		return base + BillingWeeklyPath
 	}
 	return base + BillingMonthlyPath
+}
+
+// ApplyCLIBillingHeaders 为计费 GET 请求设置 Authorization 和 CLI 身份请求头。
+// BuildBillingURLWithValidator 使用调用方解析的基础地址构造周度或月度计费地址。
+// 构造前会执行调用方提供的出站地址校验，使用自定义上游的账号会继续通过同一上游探测计费信息。
+func BuildBillingURLWithValidator(baseURL string, formatCredits bool, validator BaseURLValidator) (string, error) {
+	validatedBaseURL, err := validatedBaseURLWithValidator(baseURL, validator)
+	if err != nil {
+		return "", fmt.Errorf("invalid base url: %w", err)
+	}
+	if formatCredits {
+		return validatedBaseURL + BillingWeeklyPath, nil
+	}
+	return validatedBaseURL + BillingMonthlyPath, nil
 }
 
 // ApplyCLIBillingHeaders 为计费 GET 请求设置 Authorization 和 CLI 身份请求头。
