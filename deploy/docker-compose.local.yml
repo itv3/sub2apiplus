@@ -237,12 +237,14 @@ services:
     volumes:
       # Local directory mapping for easy migration
       - ./redis_data:/data:Z
+    # 内层 sh -c 接收的是一个多行脚本，每行必须用反斜杠续接，
+    # 否则只有 redis-server 首行会执行，后续持久化参数会被忽略。
     command: >
         sh -c '
-          redis-server
-          --save 60 1
-          --appendonly yes
-          --appendfsync everysec
+          redis-server \
+          --save 60 1 \
+          --appendonly yes \
+          --appendfsync everysec \
           ${REDIS_PASSWORD:+--requirepass "$REDIS_PASSWORD"}'
     environment:
       - TZ=${TZ:-Asia/Shanghai}

@@ -248,12 +248,15 @@ services:
         hard: 100000
     volumes:
       - redis_data:/data
+    # command 是传给内层 sh -c 的完整多行脚本。Compose 会保留引号内换行，
+    # 因此每行都必须以反斜杠续接；否则首行 redis-server 会无参数启动，
+    # --save、--appendonly 和 --appendfsync 均不会生效。
     command: >
       sh -c '
-        redis-server
-        --save 60 1
-        --appendonly yes
-        --appendfsync everysec
+        redis-server \
+        --save 60 1 \
+        --appendonly yes \
+        --appendfsync everysec \
         ${REDIS_PASSWORD:+--requirepass "$REDIS_PASSWORD"}'
     environment:
       - TZ=${TZ:-Asia/Shanghai}
