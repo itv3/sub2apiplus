@@ -16,9 +16,15 @@ Sub2API Plus 支持长时间运行的 SSE 和 WebSocket 请求。入口防护不
 
 ## 可信客户端 IP
 
-`server.trusted_proxies` 只能填写直接连接 Sub2API Plus 的代理 IP/CIDR，通常是本机 Nginx/Caddy 地址或私有负载均衡子网。留空表示不信任任何转发 IP。
+Sub2API Plus 默认关闭 `security.trust_forwarded_ip_for_api_key_acl`，升级时也会保留已有选择。关闭时以 Gin 的 `server.trusted_proxies` 链为准；该列表只能填写直接连接 Sub2API Plus 的代理 IP/CIDR，通常是本机 Nginx/Caddy 地址或私有负载均衡子网，显式留空表示不信任任何转发 IP。
 
-不能仅因请求中存在 `CF-Connecting-IP`、`X-Real-IP` 或 `X-Forwarded-For` 就信任其内容。CDN 部署必须用防火墙限制源站只接受 CDN 或负载均衡器连接，并由代理覆盖客户端传入的转发头。
+开启原始转发头接管后，日志和安全敏感链路会按顺序检查 `security.forwarded_client_ip_headers` 中的自定义请求头，再回退到 `CF-Connecting-IP`、`X-Real-IP` 和 `X-Forwarded-For`。请求头名称不区分大小写，加载时会规范化、去重，并限制为最多 16 个合法 HTTP 字段名；值必须包含 IP 字面量，可使用逗号分隔，非法值会被跳过，并优先选择公网地址。
+
+自定义请求头可通过 YAML 或逗号分隔的 `SECURITY_FORWARDED_CLIENT_IP_HEADERS` 环境变量配置；显式空环境变量会清除 YAML 值。管理后台也可以实时修改，保存后无需重启。每个请求会同时快照开关和请求头列表，避免一次请求混用新旧设置；关闭接管开关后，自定义请求头会被完全忽略。
+
+新安装会在数据库初始化时保存自定义请求头列表，现有安装缺少数据库值时会从 YAML 回填。隐藏的迁移标记可防止后续管理员选择被覆盖。设置读取失败或持久化列表格式错误时，系统会安全回退到可信代理模式并清空自定义请求头；迁移写入失败时，本次进程继续使用已计算的安全模式并记录警告。
+
+原始转发头接管不会验证直接对端，因此所有内置和自定义请求头都可能被直连客户端伪造。仅当防火墙已限制源站只能由 CDN 或负载均衡器访问时才可开启，并要求边缘代理覆盖这些请求头，而不是在客户端值后追加内容。
 
 同机代理示例：
 

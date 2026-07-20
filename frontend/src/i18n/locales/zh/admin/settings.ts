@@ -149,10 +149,17 @@ export default {
       },
       apiKeyAcl: {
         title: 'API Key IP 访问控制',
-        description: 'API Key 白/黑名单、操作审计、会话绑定和无效鉴权限流统一使用可信代理链解析的客户端 IP',
-        trustForwardedIp: '可信代理链由配置文件管理',
+        description: '配置 API Key 白/黑名单、操作审计、会话绑定和无效鉴权限流如何解析客户端 IP',
+        trustForwardedIp: '信任原始转发客户端 IP 请求头',
         trustForwardedIpHint:
-          '旧版“信任转发 IP”开关仅为 API 兼容保留，已不再改变安全行为。请在 config.yaml 的 server.trusted_proxies 中只填写实际连接源站的代理 IP/CIDR，并在修改后重启服务；来自直连或未受信代理的转发头会被忽略。'
+          'Sub2API Plus 默认关闭。开启后 CF-Connecting-IP、X-Real-IP 或 X-Forwarded-For 会直接接管客户端 IP 解析；关闭后严格使用 server.trusted_proxies。仅当源站只允许可信代理访问时才开启；切换会改变现有会话的 IP 指纹。',
+        forwardedClientIpHeaders: '自定义客户端 IP 请求头',
+        forwardedClientIpHeadersHint: '添加 CDN 或反代请求头名称，解析时优先于内置请求头。',
+        forwardedClientIpHeadersPlaceholder: 'X-Client-IP',
+        forwardedClientIpHeadersRiskHint: '源站可被直接访问时，这些原始请求头可被伪造；请先限制源站访问再信任它们。',
+        forwardedClientIpHeaderInvalid: '请输入有效的 HTTP 请求头名称。',
+        forwardedClientIpHeadersLimit: '自定义客户端 IP 请求头最多允许 {max} 个。',
+        removeForwardedClientIpHeader: '移除 {header}'
       },
       linuxdo: {
         title: 'LinuxDo Connect 登录',
@@ -637,6 +644,7 @@ export default {
         customMethodType: '支付方式',
         customMethodUpstreamType: '上游 type',
         customMethodDisplayName: '显示名称',
+        customMethodDisplayNamePlaceholder: '如：信用卡',
         stripeWebhookHint: '请在 Stripe Dashboard 中将以下地址配置为 Webhook 端点：',
         stripeWebhookApiVersionHint: 'Webhook 端点的 API 版本请与当前集成的 Stripe SDK 对齐，建议选择 {version}；版本不一致可能导致回调事件解析失败。',
         airwallexWebhookHint: '请在 Airwallex 后台将以下地址配置为 Webhook 端点；事件至少选择 Payment Intent -> Succeeded（payment_intent.succeeded），建议同时选择 Payment Intent -> Cancelled（payment_intent.cancelled）；API version 选择账户默认或最新稳定版本。',

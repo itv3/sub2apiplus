@@ -150,10 +150,17 @@ export default {
       apiKeyAcl: {
         title: 'API Key IP Access Control',
         description:
-          'API Key IP rules, audit logs, session binding, and invalid-auth limits all use the trusted-proxy client IP',
-        trustForwardedIp: 'Trusted proxies are config-managed',
+          'Configure how API Key IP rules, audit logs, session binding, and invalid-auth limits resolve the client IP',
+        trustForwardedIp: 'Trust raw forwarded client IP headers',
         trustForwardedIpHint:
-          'The legacy “trust forwarded IP” switch remains only for API compatibility and no longer changes security behavior. Configure only the proxy IPs/CIDRs that actually reach the origin in config.yaml under server.trusted_proxies, then restart the service. Forwarding headers from direct or untrusted peers are ignored.'
+          'Disabled by default in Sub2API Plus. When enabled, raw CF-Connecting-IP, X-Real-IP, or X-Forwarded-For values take over client-IP resolution. Keep it disabled to enforce server.trusted_proxies, unless the origin is restricted to trusted proxies. Changing this switch changes existing session IP fingerprints.',
+        forwardedClientIpHeaders: 'Custom client-IP headers',
+        forwardedClientIpHeadersHint: 'Add CDN or proxy header names to check before the built-in headers.',
+        forwardedClientIpHeadersPlaceholder: 'X-Client-IP',
+        forwardedClientIpHeadersRiskHint: 'These raw headers can be spoofed when the origin is reachable directly. Restrict origin access before trusting them.',
+        forwardedClientIpHeaderInvalid: 'Enter a valid HTTP header name.',
+        forwardedClientIpHeadersLimit: 'At most {max} custom client-IP headers are allowed.',
+        removeForwardedClientIpHeader: 'Remove {header}'
       },
       linuxdo: {
         title: 'LinuxDo Connect Login',
@@ -642,6 +649,7 @@ export default {
         customMethodType: 'Payment type',
         customMethodUpstreamType: 'Upstream type',
         customMethodDisplayName: 'Display name',
+        customMethodDisplayNamePlaceholder: 'e.g. Credit card',
         stripeWebhookHint: 'Configure the following URL as a Webhook endpoint in Stripe Dashboard:',
         stripeWebhookApiVersionHint: 'Set this Webhook endpoint API version to match the integrated Stripe SDK. Recommended: {version}. A mismatch can cause webhook parsing errors.',
         airwallexWebhookHint: 'Configure the following URL as a Webhook endpoint in Airwallex. Select at least Payment Intent -> Succeeded (payment_intent.succeeded), preferably also Payment Intent -> Cancelled (payment_intent.cancelled). Use the account default or latest stable API version.',
