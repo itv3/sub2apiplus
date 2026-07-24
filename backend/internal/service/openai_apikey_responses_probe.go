@@ -111,7 +111,13 @@ func buildOpenAIResponsesProbeRequest(account *Account, cfg *config.Config, prob
 	} else {
 		req.Header.Set("Accept", "application/json")
 	}
-	mimicProfile.ApplyHeaders(req, probeStream)
+	if mimicProfile.Enabled {
+		// 启用 Plus mimic 的请求沿用所选官方客户端 profile，保持其完整身份与流式行为。
+		mimicProfile.ApplyHeaders(req, probeStream)
+	} else {
+		// 普通 API Key 探测仍按上游要求携带标准 Codex 身份，避免兼容上游按客户端拒绝请求。
+		applyOpenAICodexProbeHeaders(req.Header)
+	}
 	return req, probeBody, nil
 }
 
