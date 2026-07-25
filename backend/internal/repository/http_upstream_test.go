@@ -2,6 +2,7 @@ package repository
 
 import (
 	"bytes"
+	"crypto/x509"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -18,9 +19,98 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/service"
+	utls "github.com/refraction-networking/utls"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
+
+func TestOfficialEgressT3_HTTPPoolKeySeparatesOfficialProfiles(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.ConnectionPoolIsolation = config.ConnectionPoolIsolationProxy
+	upstream := NewHTTPUpstream(cfg).(*httpUpstreamService)
+	tlsProfile := &tlsfingerprint.Profile{Name: "official-egress-test"}
+
+	first, err := upstream.getClientEntryWithTLS(
+		"",
+		94,
+		1,
+		tlsProfile,
+		service.HTTPUpstreamProfileOpenAI,
+		false,
+		false,
+		"account=94|profile=a|transport=http|host=chatgpt.com|proxy=0|ca=system|tls_profile=openai-http-a",
+	)
+	require.NoError(t, err)
+	second, err := upstream.getClientEntryWithTLS(
+		"",
+		94,
+		1,
+		tlsProfile,
+		service.HTTPUpstreamProfileOpenAI,
+		false,
+		false,
+		"account=94|profile=b|transport=http|host=chatgpt.com|proxy=0|ca=system|tls_profile=openai-http-b",
+	)
+	require.NoError(t, err)
+	require.NotSame(t, first, second)
+
+	reused, err := upstream.getClientEntryWithTLS(
+		"",
+		94,
+		1,
+		tlsProfile,
+		service.HTTPUpstreamProfileOpenAI,
+		false,
+		false,
+		"account=94|profile=b|transport=http|host=chatgpt.com|proxy=0|ca=system|tls_profile=openai-http-b",
+	)
+	require.NoError(t, err)
+	require.Same(t, second, reused)
+}
+
+func TestOfficialEgressT3_TLSClientCacheSeparatesCustomRootCAs(t *testing.T) {
+	systemRootsProfile := &tlsfingerprint.Profile{Name: "same-profile"}
+	customRootsProfile := &tlsfingerprint.Profile{
+		Name:    "same-profile",
+		RootCAs: x509.NewCertPool(),
+	}
+	require.NotEqual(
+		t,
+		tlsFingerprintProfileCacheKey(systemRootsProfile),
+		tlsFingerprintProfileCacheKey(customRootsProfile),
+	)
+}
+
+func TestOfficialEgressT3_TLSFingerprintWorksThroughSOCKS5WithCustomCA(t *testing.T) {
+	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(upstream.Close)
+	proxyURL, proxyCalls := startTestSOCKS5Proxy(t)
+
+	rootCAs := x509.NewCertPool()
+	rootCAs.AddCert(upstream.Certificate())
+	profile := &tlsfingerprint.Profile{
+		Name:                "official-egress-socks5-ca-test",
+		CipherSuites:        []uint16{0x1301, 0x1302, 0x1303, 0xc02f},
+		Curves:              []uint16{0x001d, 0x0017},
+		SignatureAlgorithms: []uint16{0x0403, 0x0804, 0x0401},
+		SupportedVersions:   []uint16{utls.VersionTLS13, utls.VersionTLS12},
+		KeyShareGroups:      []uint16{0x001d},
+		PSKModes:            []uint16{1},
+		Extensions:          []uint16{0, 10, 13, 43, 45, 51},
+		TLSVersMin:          uint16(utls.VersionTLS12),
+		TLSVersMax:          uint16(utls.VersionTLS13),
+		RootCAs:             rootCAs,
+	}
+	request, err := http.NewRequest(http.MethodGet, upstream.URL, nil)
+	require.NoError(t, err)
+	response, err := NewHTTPUpstream(nil).DoWithTLS(request, proxyURL, 94, 1, profile)
+	require.NoError(t, err)
+	require.Equal(t, http.StatusNoContent, response.StatusCode)
+	require.NoError(t, response.Body.Close())
+	require.Equal(t, int64(1), proxyCalls.Load())
+}
 
 func TestHTTPUpstreamDoCanDisableRedirectsPerRequest(t *testing.T) {
 	var redirectedCalls atomic.Int64
@@ -95,19 +185,15 @@ func TestHTTPUpstreamDoWithTLSPlainHTTPUsesConfiguredSOCKSProxy(t *testing.T) {
 	require.Equal(t, int64(1), upstreamCalls.Load())
 }
 
-func TestTLSFingerprintHTTPSProxyFallsBackWithoutBypassingProxy(t *testing.T) {
+func TestTLSFingerprintHTTPSProxyKeepsFingerprintDialerAndProxyRoute(t *testing.T) {
 	proxyURL, err := url.Parse("https://user:pass@proxy.example:8443")
 	require.NoError(t, err)
 	roundTripper, err := buildUpstreamTransportWithTLSFingerprint(poolSettings{}, proxyURL, &tlsfingerprint.Profile{Name: "test"})
 	require.NoError(t, err)
 	transport, ok := roundTripper.(*http.Transport)
-	require.Truef(t, ok, "期望 HTTPS 代理回退到 *http.Transport，实际为 %T", roundTripper)
-	require.NotNil(t, transport.Proxy)
-	require.Nil(t, transport.DialTLSContext)
-	req := &http.Request{URL: &url.URL{Scheme: "https", Host: "upstream.example"}}
-	resolved, err := transport.Proxy(req)
-	require.NoError(t, err)
-	require.Equal(t, "https://user:pass@proxy.example:8443", resolved.String())
+	require.Truef(t, ok, "期望 HTTPS 代理使用 *http.Transport，实际为 %T", roundTripper)
+	require.Nil(t, transport.Proxy)
+	require.NotNil(t, transport.DialTLSContext)
 }
 
 func startTestSOCKS5Proxy(t *testing.T) (string, *atomic.Int64) {

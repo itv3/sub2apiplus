@@ -94,6 +94,19 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		return s.forwardAsRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}
 
+	officialEgressEnabled, _, err := resolveOfficialEgressAccountProfile(account)
+	if err != nil {
+		return nil, err
+	}
+	var officialEgressBodyContract *officialOpenAIHTTPBodyContract
+	if officialEgressEnabled && account.Platform == PlatformOpenAI &&
+		account.Type == AccountTypeOAuth {
+		officialEgressBodyContract, err = captureOfficialOpenAIHTTPBodyContract(body)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	startTime := time.Now()
 
 	// 1. Parse Chat Completions request
@@ -133,7 +146,6 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	var (
 		responsesReq  *apicompat.ResponsesRequest
 		responsesBody []byte
-		err           error
 	)
 	if isResponsesShape {
 		responsesBody, err = sjson.SetBytes(body, "model", upstreamModel)
@@ -252,6 +264,14 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		return nil, policyErr
 	}
 	responsesBody = updatedBody
+	if officialEgressBodyContract != nil && !isResponsesShape {
+		if err := bindGeneratedOfficialOpenAIHTTPBodyContract(
+			officialEgressBodyContract,
+			responsesBody,
+		); err != nil {
+			return nil, err
+		}
+	}
 
 	// 5. Get access token
 	token, _, err := s.GetAccessToken(ctx, account)
@@ -263,17 +283,18 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	isCodexCLI := accountMimicCodexCLI
 	upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, openAIUpstreamRequestPlan{
-		IsStream:         true,
-		PromptCacheKey:   promptCacheKey,
-		IsCodexCLI:       isCodexCLI,
-		APIKeyCodexMimic: mimicProfile,
+		IsStream:                   true,
+		PromptCacheKey:             promptCacheKey,
+		IsCodexCLI:                 isCodexCLI,
+		APIKeyCodexMimic:           mimicProfile,
+		OfficialEgressBodyContract: officialEgressBodyContract,
 	})
 	releaseUpstreamCtx()
 	if err != nil {
 		return nil, fmt.Errorf("build upstream request: %w", err)
 	}
 
-	if promptCacheKey != "" && !accountMimicCodexCLI {
+	if promptCacheKey != "" && !accountMimicCodexCLI && !officialEgressEnabled {
 		apiKeyID := getAPIKeyIDFromContext(c)
 		upstreamReq.Header.Set("session_id", generateSessionUUID(isolateOpenAISessionID(apiKeyID, promptCacheKey)))
 	}

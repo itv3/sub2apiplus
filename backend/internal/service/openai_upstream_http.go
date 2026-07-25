@@ -63,6 +63,28 @@ func doOpenAIHTTPUpstreamWithMimicTLS(httpUpstream HTTPUpstream, req *http.Reque
 	if httpUpstream == nil {
 		return nil, fmt.Errorf("http upstream unavailable")
 	}
+	officialTLSProfile, officialEnabled, err := resolveOfficialEgressHTTPTransportProfile(req, nil)
+	if err != nil {
+		return nil, fmt.Errorf("resolve official egress HTTP transport: %w", err)
+	}
+	if officialEnabled {
+		if account == nil {
+			return nil, fmt.Errorf("official egress HTTP account is unavailable")
+		}
+		// 官方 Codex 在直连和 HTTP CONNECT 代理下使用两套已实证的 TLS/ALPN
+		// 画像。代理路径必须在建立连接前切换到 h2 画像，且由 TLS Profile
+		// 摘要和代理键共同隔离连接池，不能复用直连的空 ALPN 连接。
+		if proxyURL != "" {
+			officialTLSProfile = newOpenAIOfficialEgressHTTPProxyTLSProfile()
+		}
+		return httpUpstream.DoWithTLS(
+			req,
+			proxyURL,
+			account.ID,
+			account.Concurrency,
+			officialTLSProfile,
+		)
+	}
 	if useAPIKeyMimicTLS && account != nil && account.ShouldUseOpenAITLSFingerprint() {
 		if tlsProfile := resolveOpenAIAPIKeyCodexTLSProfile(account, tlsFPProfileService); tlsProfile != nil {
 			return httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, tlsProfile)

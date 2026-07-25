@@ -1319,6 +1319,9 @@ func (s *GatewayService) resolveCacheTTLUsageOverrideTarget(ctx context.Context,
 	if account == nil {
 		return "", false
 	}
+	if account.UsesOfficialEgressProfile() {
+		return "", false
+	}
 	if account.IsCacheTTLOverrideEnabled() {
 		return account.GetCacheTTLOverrideTarget(), true
 	}

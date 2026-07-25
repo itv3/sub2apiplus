@@ -38,6 +38,30 @@ func TestRedactText_GOCSPX(t *testing.T) {
 	}
 }
 
+func TestRedactText_JSONEmbeddedAPIKey(t *testing.T) {
+	const secret = "AIzaSyBhzSEhPzKpeQdKFTamH4tKx38OP-Q5GX0"
+	in := `{"error":{"message":"Consumer 'api_key:` + secret + `' has been suspended."}}`
+
+	out := RedactText(in)
+
+	if strings.Contains(out, secret) {
+		t.Fatalf("JSON 字符串值中的 API Key 未脱敏：%q", out)
+	}
+	if !strings.Contains(out, "api_key:***") {
+		t.Fatalf("JSON 字符串值中缺少脱敏占位符：%q", out)
+	}
+}
+
+func TestRedactText_APIKeyField(t *testing.T) {
+	out := RedactText(`{"api_key":"plain-secret","other":"ok"}`)
+	if strings.Contains(out, "plain-secret") {
+		t.Fatalf("api_key 字段未脱敏：%q", out)
+	}
+	if !strings.Contains(out, `"api_key":"***"`) {
+		t.Fatalf("api_key 字段缺少脱敏占位符：%q", out)
+	}
+}
+
 func TestRedactText_ExtraKeyCacheUsesNormalizedSortedKey(t *testing.T) {
 	clearExtraTextPatternCache()
 

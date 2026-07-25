@@ -57,13 +57,18 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 		clientHeaders = c.Request.Header
 	}
 
-	// OAuth账号：应用统一指纹和metadata重写（受设置开关控制）
+	officialEgressEnabled, _, err := resolveOfficialEgressAccountProfile(account)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// 非内置官方画像链路沿用原有统一指纹和 metadata 重写。
 	var fingerprint *Fingerprint
 	enableFP, enableMPT := true, false
 	if s.settingService != nil {
 		enableFP, enableMPT, _ = s.settingService.GetGatewayForwardingSettings(ctx)
 	}
-	if account.IsOAuth() && s.identityService != nil {
+	if account.IsOAuth() && s.identityService != nil && !officialEgressEnabled {
 		// 1. 获取或创建指纹（包含随机生成的ClientID）
 		fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, clientHeaders)
 		if err != nil {
@@ -213,6 +218,15 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	}
 	if s.debugClaudeMimicEnabled() {
 		logClaudeMimicDebug(req, body, account, tokenType, mimicClaudeCode)
+	}
+
+	req, err = attachOfficialEgressHTTPContext(req, c, account, PlatformAnthropic)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve official egress profile: %w", err)
+	}
+	req, body, _, err = s.finalizeAnthropicOfficialEgressRequest(req, c, account, body)
+	if err != nil {
+		return nil, nil, fmt.Errorf("finalize Anthropic official egress request: %w", err)
 	}
 
 	return req, body, nil

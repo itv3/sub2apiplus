@@ -17,6 +17,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -779,16 +780,19 @@ func TestGatewayService_AnthropicOAuth_NotAffectedByAPIKeyPassthroughToggle(t *t
 		},
 	}
 	account := &Account{
+		ID:       1,
 		Platform: PlatformAnthropic,
 		Type:     AccountTypeOAuth,
 		Extra: map[string]any{
 			"anthropic_passthrough": true,
+			"account_uuid":          "11111111-1111-4111-8111-111111111111",
 		},
 	}
 
 	require.False(t, account.IsAnthropicAPIKeyPassthroughEnabled())
 
-	req, _, err := svc.buildUpstreamRequest(context.Background(), c, account, []byte(`{"model":"claude-3-7-sonnet-20250219"}`), "oauth-token", "oauth", "claude-3-7-sonnet-20250219", true, false)
+	body := []byte(`{"model":"claude-3-7-sonnet-20250219","messages":[{"role":"user","content":"hello"}]}`)
+	req, _, err := svc.buildUpstreamRequest(context.Background(), c, account, body, "oauth-token", "oauth", "claude-3-7-sonnet-20250219", true, false)
 	require.NoError(t, err)
 	require.Equal(t, "Bearer oauth-token", getHeaderRaw(req.Header, "authorization"))
 	require.Contains(t, getHeaderRaw(req.Header, "anthropic-beta"), claude.BetaOAuth, "OAuth 链路仍应按原逻辑补齐 oauth beta")
@@ -1167,7 +1171,6 @@ func TestGatewayService_AnthropicOAuthMimic_RewritesSystemWithBillingBlock(t *te
 		body               string
 		wantModel          string
 		wantOriginalSystem string
-		wantMetadataUserID string
 	}{
 		{
 			name:               "sonnet system array",
@@ -1186,7 +1189,6 @@ func TestGatewayService_AnthropicOAuthMimic_RewritesSystemWithBillingBlock(t *te
 			body:               `{"model":"claude-haiku-4-5","metadata":{"user_id":"pi-session-metadata"},"system":[{"type":"text","text":"Pi project instructions","cache_control":{"type":"ephemeral"}}],"thinking":{"type":"enabled","budget_tokens":1024},"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`,
 			wantModel:          "claude-haiku-4-5-20251001",
 			wantOriginalSystem: "Pi project instructions",
-			wantMetadataUserID: "pi-session-metadata",
 		},
 	}
 
@@ -1219,6 +1221,7 @@ func TestGatewayService_AnthropicOAuthMimic_RewritesSystemWithBillingBlock(t *te
 			}
 			svc := &GatewayService{
 				cfg:                  cfg,
+				cache:                &officialEgressT4Cache{previous: make(map[string]string)},
 				responseHeaderFilter: compileResponseHeaderFilter(cfg),
 				httpUpstream:         upstream,
 				rateLimitService:     &RateLimitService{},
@@ -1234,6 +1237,9 @@ func TestGatewayService_AnthropicOAuthMimic_RewritesSystemWithBillingBlock(t *te
 				Credentials: map[string]any{
 					"access_token": "oauth-token",
 				},
+				Extra: map[string]any{
+					"account_uuid": "30130130-1301-4301-8301-301301301301",
+				},
 				Status:      StatusActive,
 				Schedulable: true,
 			}
@@ -1244,32 +1250,34 @@ func TestGatewayService_AnthropicOAuthMimic_RewritesSystemWithBillingBlock(t *te
 			require.NotNil(t, upstream.lastReq)
 			require.Equal(t, "Bearer oauth-token", getHeaderRaw(upstream.lastReq.Header, "authorization"))
 			finalBeta := getHeaderRaw(upstream.lastReq.Header, "anthropic-beta")
-			for _, beta := range claude.FullClaudeCodeMimicryBetas() {
-				require.Truef(t, anthropicBetaTokensContains(finalBeta, beta), "missing mimic beta %s", beta)
-			}
+			require.Equal(t, officialAnthropicBetaHeader, finalBeta)
 			require.False(t, anthropicBetaTokensContains(finalBeta, "client-only-beta"))
-			for key, value := range claude.DefaultHeaders {
-				require.Equal(t, value, getHeaderRaw(upstream.lastReq.Header, key), "mimic fingerprint header %s", key)
+			for _, expected := range officialAnthropicPhase0Headers {
+				require.Equal(t, expected.value, getHeaderRaw(upstream.lastReq.Header, expected.name), "官方画像 Header %s", expected.name)
 			}
-			require.NotEmpty(t, getHeaderRaw(upstream.lastReq.Header, "x-client-request-id"))
+			require.NoError(t, uuid.Validate(getHeaderRaw(upstream.lastReq.Header, "x-client-request-id")))
 
 			require.Equal(t, tt.wantModel, gjson.GetBytes(upstream.lastBody, "model").String())
 			system := gjson.GetBytes(upstream.lastBody, "system")
 			require.True(t, system.Exists())
 			require.True(t, system.IsArray(), "system should be an array")
 			arr := system.Array()
-			require.Len(t, arr, 3, "system array should have billing block + cc prompt block + expansion block")
+			require.Len(t, arr, 4, "官方画像应包含 billing、身份、主提示词和文本输出边界")
 
 			billingText := arr[0].Get("text").String()
 			require.Contains(t, billingText, "x-anthropic-billing-header:")
-			require.Contains(t, billingText, "cc_version="+claude.CLICurrentVersion+".")
-			require.Contains(t, billingText, "cc_entrypoint=cli;")
+			require.Contains(t, billingText, "cc_version="+officialAnthropicCLIVersion+".")
+			require.Contains(t, billingText, "cc_entrypoint=sdk-cli;")
 
 			require.Equal(t, claudeCodeSystemPrompt, arr[1].Get("text").String())
 			require.False(t, arr[1].Get("cache_control").Exists(), "身份前缀 block 不应带 cache_control")
 
 			require.Equal(t, claudeCodeSystemPromptExpansion, arr[2].Get("text").String())
 			require.Equal(t, "ephemeral", arr[2].Get("cache_control.type").String())
+			require.Equal(t, "1h", arr[2].Get("cache_control.ttl").String())
+			require.Equal(t, "global", arr[2].Get("cache_control.scope").String())
+			require.Equal(t, officialAnthropicSystemSplitMarker, arr[3].Get("text").String())
+			require.Equal(t, "1h", arr[3].Get("cache_control.ttl").String())
 
 			// 原始 system prompt 应迁移至 messages 中。
 			messages := gjson.GetBytes(upstream.lastBody, "messages")
@@ -1278,15 +1286,14 @@ func TestGatewayService_AnthropicOAuthMimic_RewritesSystemWithBillingBlock(t *te
 			require.Equal(t, "user", firstMsg.Get("role").String())
 			require.Contains(t, firstMsg.Get("content.0.text").String(), tt.wantOriginalSystem)
 
-			if tt.wantMetadataUserID != "" {
-				require.Equal(t, tt.wantMetadataUserID, gjson.GetBytes(upstream.lastBody, "metadata.user_id").String())
-				require.True(t, gjson.GetBytes(upstream.lastBody, "context_management").Exists())
-			}
+			metadata := ParseMetadataUserID(gjson.GetBytes(upstream.lastBody, "metadata.user_id").String())
+			require.NotNil(t, metadata)
+			require.Equal(t, "30130130-1301-4301-8301-301301301301", metadata.AccountUUID)
 		})
 	}
 }
 
-func TestGatewayService_AnthropicOAuthRealClaudeCodeHaiku_PreservesClientHeadersAndBody(t *testing.T) {
+func TestGatewayService_AnthropicOAuthRealClaudeCodeHaiku_NormalizesToBuiltInProfile(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	metadataUserID := FormatMetadataUserID(
@@ -1314,12 +1321,16 @@ func TestGatewayService_AnthropicOAuthRealClaudeCodeHaiku_PreservesClientHeaders
 
 	upstream := &anthropicHTTPUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       io.NopCloser(strings.NewReader(`{"id":"msg_real_cc","type":"message","role":"assistant","model":"claude-haiku-4-5-20251001","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":12,"output_tokens":7}}`)),
+		Header: http.Header{
+			"Content-Type": []string{"application/json"},
+			"request-id":   []string{"req_real_cc"},
+		},
+		Body: io.NopCloser(strings.NewReader(`{"id":"msg_real_cc","type":"message","role":"assistant","model":"claude-haiku-4-5-20251001","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":12,"output_tokens":7}}`)),
 	}}
 	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}
 	svc := &GatewayService{
 		cfg:                  cfg,
+		cache:                &officialEgressT4Cache{previous: make(map[string]string)},
 		responseHeaderFilter: compileResponseHeaderFilter(cfg),
 		httpUpstream:         upstream,
 		rateLimitService:     &RateLimitService{},
@@ -1327,25 +1338,29 @@ func TestGatewayService_AnthropicOAuthRealClaudeCodeHaiku_PreservesClientHeaders
 	}
 	account := &Account{
 		ID: 302, Name: "anthropic-real-cc", Platform: PlatformAnthropic, Type: AccountTypeOAuth, Concurrency: 1,
-		Credentials: map[string]any{"access_token": "oauth-token"}, Status: StatusActive, Schedulable: true,
+		Credentials: map[string]any{"access_token": "oauth-token"},
+		Extra:       map[string]any{"account_uuid": "550e8400-e29b-41d4-a716-446655440000"},
+		Status:      StatusActive, Schedulable: true,
 	}
 
 	result, err := svc.Forward(context.Background(), c, account, parsed)
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotNil(t, upstream.lastReq)
-	require.Equal(t, c.Request.Header.Get("User-Agent"), getHeaderRaw(upstream.lastReq.Header, "User-Agent"))
-	require.Equal(t, "real-client-package", getHeaderRaw(upstream.lastReq.Header, "X-Stainless-Package-Version"))
-	require.Equal(t, clientBeta, getHeaderRaw(upstream.lastReq.Header, "anthropic-beta"))
-	require.Empty(t, getHeaderRaw(upstream.lastReq.Header, "x-client-request-id"), "真实 CC 不应被强制写入 mimic request id")
-	require.Equal(t, gjson.GetBytes(body, "system").Raw, gjson.GetBytes(upstream.lastBody, "system").Raw)
-	require.Equal(t, gjson.GetBytes(body, "messages").Raw, gjson.GetBytes(upstream.lastBody, "messages").Raw)
+	require.Equal(t, officialAnthropicUserAgent, getHeaderRaw(upstream.lastReq.Header, "User-Agent"))
+	require.Equal(t, officialAnthropicBetaHeader, getHeaderRaw(upstream.lastReq.Header, "anthropic-beta"))
+	for _, expected := range officialAnthropicPhase0Headers {
+		require.Equal(t, expected.value, getHeaderRaw(upstream.lastReq.Header, expected.name), expected.name)
+	}
+	require.NoError(t, uuid.Validate(getHeaderRaw(upstream.lastReq.Header, "x-client-request-id")))
+	require.Equal(t, int64(4), gjson.GetBytes(upstream.lastBody, "system.#").Int())
+	requireOfficialAnthropicCacheProfile(t, upstream.lastBody, "messages.2.content.0.cache_control")
 	require.Equal(t, metadataUserID, gjson.GetBytes(upstream.lastBody, "metadata.user_id").String())
 	require.True(t, gjson.GetBytes(upstream.lastBody, "context_management").Exists())
-	require.NotContains(t, string(upstream.lastBody), "x-anthropic-billing-header:")
+	require.Contains(t, string(upstream.lastBody), "cc_version="+officialAnthropicCLIVersion+".")
 }
 
-func TestGatewayService_AnthropicOAuth_SystemPromptInjectionCanBeDisabled(t *testing.T) {
+func TestGatewayService_AnthropicOAuth_LegacySystemSettingDoesNotDisableBuiltInProfile(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	resetGatewayForwardingSettingsCacheForTest(t)
 
@@ -1378,6 +1393,7 @@ func TestGatewayService_AnthropicOAuth_SystemPromptInjectionCanBeDisabled(t *tes
 	}}, cfg)
 	svc := &GatewayService{
 		cfg:                  cfg,
+		cache:                &officialEgressT4Cache{previous: make(map[string]string)},
 		responseHeaderFilter: compileResponseHeaderFilter(cfg),
 		httpUpstream:         upstream,
 		rateLimitService:     &RateLimitService{},
@@ -1394,6 +1410,9 @@ func TestGatewayService_AnthropicOAuth_SystemPromptInjectionCanBeDisabled(t *tes
 		Credentials: map[string]any{
 			"access_token": "oauth-token",
 		},
+		Extra: map[string]any{
+			"account_uuid": "30230230-2302-4302-8302-302302302302",
+		},
 		Status:      StatusActive,
 		Schedulable: true,
 	}
@@ -1404,9 +1423,9 @@ func TestGatewayService_AnthropicOAuth_SystemPromptInjectionCanBeDisabled(t *tes
 
 	system := gjson.GetBytes(upstream.lastBody, "system")
 	require.True(t, system.Exists())
-	require.Equal(t, "Original system prompt", system.String())
-	require.NotContains(t, string(upstream.lastBody), "x-anthropic-billing-header:")
-	require.NotContains(t, string(upstream.lastBody), "[System Instructions]")
+	require.Equal(t, int64(4), gjson.GetBytes(upstream.lastBody, "system.#").Int())
+	require.Contains(t, string(upstream.lastBody), "x-anthropic-billing-header:")
+	require.Contains(t, string(upstream.lastBody), "Original system prompt")
 }
 
 func TestGatewayService_AnthropicAPIKeyPassthrough_StreamingStillCollectsUsageAfterClientDisconnect(t *testing.T) {

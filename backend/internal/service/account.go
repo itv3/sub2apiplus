@@ -1924,6 +1924,9 @@ func (a *Account) IsTLSFingerprintEnabled() bool {
 	if a == nil {
 		return false
 	}
+	if a.UsesOfficialEgressProfile() {
+		return false
+	}
 	if !a.IsAnthropicOAuthOrSetupToken() && !a.IsAnthropicAPIKeyClaudeCodeMimicEnabled() && !a.ShouldUseOpenAITLSFingerprint() {
 		return false
 	}
@@ -1988,6 +1991,9 @@ func (a *Account) GetUserMsgQueueMode() string {
 // 启用后将在一段时间内（15分钟）固定 metadata.user_id 中的 session ID，
 // 使上游认为请求来自同一个会话
 func (a *Account) IsSessionIDMaskingEnabled() bool {
+	if a.UsesOfficialEgressProfile() {
+		return false
+	}
 	if !a.IsAnthropicOAuthOrSetupToken() {
 		return false
 	}
@@ -2005,6 +2011,9 @@ func (a *Account) IsSessionIDMaskingEnabled() bool {
 // IsCustomBaseURLEnabled 检查是否启用自定义 base URL 中继转发
 // 仅适用于 Anthropic OAuth/SetupToken 类型账号
 func (a *Account) IsCustomBaseURLEnabled() bool {
+	if a.UsesOfficialEgressProfile() {
+		return false
+	}
 	if !a.IsAnthropicOAuthOrSetupToken() {
 		return false
 	}
@@ -2028,6 +2037,9 @@ func (a *Account) GetCustomBaseURL() string {
 // 仅适用于 Anthropic OAuth/SetupToken 类型账号
 // 启用后将所有 cache creation tokens 归入指定的 TTL 类型（5m 或 1h）
 func (a *Account) IsCacheTTLOverrideEnabled() bool {
+	if a.UsesOfficialEgressProfile() {
+		return false
+	}
 	if !a.IsAnthropicOAuthOrSetupToken() {
 		return false
 	}

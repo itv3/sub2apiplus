@@ -137,6 +137,15 @@ describe('ApiKeyMimicSettingsView', () => {
     vi.mocked(adminAPI.accounts.getAvailableModels).mockResolvedValue([])
   })
 
+  it('显示 OAuth 官方客户端伪装已内置启用', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    const notice = wrapper.get('[data-testid="oauth-official-egress-built-in"]')
+    expect(notice.text()).toContain('admin.plusEnhancements.officialEgress.title')
+    expect(notice.text()).toContain('admin.plusEnhancements.officialEgress.description')
+  })
+
   it('保活账号列表只加载并展示 OpenAI/Anthropic API Key 账号', async () => {
     vi.mocked(adminAPI.accounts.list).mockImplementation(async (_page, _pageSize, filters) => {
       if (filters?.platform === 'anthropic') {

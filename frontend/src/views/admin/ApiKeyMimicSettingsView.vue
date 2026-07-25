@@ -23,6 +23,18 @@
           </button>
         </div>
 
+        <div
+          data-testid="oauth-official-egress-built-in"
+          class="mt-4 rounded-lg border border-primary-200 bg-primary-50 px-4 py-3 dark:border-primary-900/60 dark:bg-primary-950/30"
+        >
+          <div class="text-sm font-semibold text-primary-800 dark:text-primary-200">
+            {{ t('admin.plusEnhancements.officialEgress.title') }}
+          </div>
+          <p class="mt-1 text-xs text-primary-700 dark:text-primary-300">
+            {{ t('admin.plusEnhancements.officialEgress.description') }}
+          </p>
+        </div>
+
         <div class="mt-4 inline-flex rounded-lg border border-gray-200 bg-white p-1 dark:border-dark-700 dark:bg-dark-800">
           <button
             type="button"

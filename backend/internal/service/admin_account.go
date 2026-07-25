@@ -522,6 +522,10 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err != nil {
 		return nil, err
 	}
+	accountExtra, err = NormalizeBuiltInOfficialEgressExtra(input.Platform, input.Type, accountExtra)
+	if err != nil {
+		return nil, err
+	}
 
 	// 绑定分组
 	groupIDs := input.GroupIDs
@@ -610,6 +614,18 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 			return nil, err
 		}
 		normalizedExtra, err = normalizeGrokMediaEligibilityUpdateExtra(account, input, normalizedExtra)
+		if err != nil {
+			return nil, err
+		}
+		effectiveType := account.Type
+		if strings.TrimSpace(input.Type) != "" {
+			effectiveType = input.Type
+		}
+		normalizedExtra, err = NormalizeBuiltInOfficialEgressExtra(
+			account.Platform,
+			effectiveType,
+			normalizedExtra,
+		)
 		if err != nil {
 			return nil, err
 		}

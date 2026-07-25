@@ -340,13 +340,13 @@ func TestNormalizeClaudeOAuthRequestBody_HaikuShortModelStillNormalizesToDatedID
 	require.Equal(t, "claude-haiku-4-5-20251001", gjson.GetBytes(out, "model").String())
 }
 
-func TestApplyClaudeCodeOAuthMimicryToBody_HaikuRewritesSystem(t *testing.T) {
+func TestApplyClaudeOAuthThirdPartyCompatibilityToBody_HaikuRewritesSystem(t *testing.T) {
 	account := &Account{ID: 405, Platform: PlatformAnthropic, Type: AccountTypeOAuth}
 	body := []byte(`{"model":"claude-haiku-4-5","system":"Pi project instructions","messages":[{"role":"user","content":"hello"}]}`)
 	svc := &GatewayService{cfg: &config.Config{}}
 
-	out := svc.applyClaudeCodeOAuthMimicryToBody(
-		context.Background(), nil, account, body, "Pi project instructions", "claude-haiku-4-5",
+	out, _ := svc.applyClaudeOAuthThirdPartyCompatibilityToBody(
+		context.Background(), nil, account, body, "Pi project instructions", "claude-haiku-4-5", false,
 	)
 
 	system := gjson.GetBytes(out, "system").Array()
@@ -355,6 +355,49 @@ func TestApplyClaudeCodeOAuthMimicryToBody_HaikuRewritesSystem(t *testing.T) {
 	require.Equal(t, claudeCodeSystemPrompt, system[1].Get("text").String())
 	require.Contains(t, gjson.GetBytes(out, "messages.0.content.0.text").String(), "Pi project instructions")
 	require.Equal(t, "claude-haiku-4-5-20251001", gjson.GetBytes(out, "model").String())
+}
+
+func TestApplyClaudeOAuthThirdPartyCompatibilityToBody_OfficialEgressPreservesOwnedFields(t *testing.T) {
+	account := &Account{ID: 406, Platform: PlatformAnthropic, Type: AccountTypeOAuth}
+	body := []byte(`{
+		"model":"claude-haiku-4-5",
+		"system":[
+			{"type":"text","text":"Kilo instruction","cache_control":{"type":"ephemeral","ttl":"5m"}},
+			{"type":"text","text":"Kilo context","cache_control":{"type":"ephemeral","ttl":"1h"}}
+		],
+		"metadata":{"user_id":"kilo-owned-metadata","private":"keep"},
+		"messages":[
+			{"role":"user","content":[
+				{"type":"text","text":"first","cache_control":{"type":"ephemeral","ttl":"5m"}},
+				{"type":"text","text":"second","cache_control":{"type":"ephemeral","ttl":"1h"}}
+			]}
+		],
+		"tools":[
+			{"name":"kilo_tool","description":"Kilo tool","input_schema":{"type":"object"},"cache_control":{"type":"ephemeral","ttl":"5m"}}
+		]
+	}`)
+	svc := &GatewayService{cfg: &config.Config{}}
+	originalSystem := gjson.GetBytes(body, "system").Raw
+	originalMetadata := gjson.GetBytes(body, "metadata").Raw
+
+	out, model := svc.applyClaudeOAuthThirdPartyCompatibilityToBody(
+		context.Background(),
+		nil,
+		account,
+		body,
+		gjson.GetBytes(body, "system").Value(),
+		"claude-haiku-4-5",
+		true,
+	)
+
+	require.Equal(t, "claude-haiku-4-5-20251001", model)
+	require.JSONEq(t, originalSystem, gjson.GetBytes(out, "system").Raw)
+	require.JSONEq(t, originalMetadata, gjson.GetBytes(out, "metadata").Raw)
+	require.Equal(t, "5m", gjson.GetBytes(out, "system.0.cache_control.ttl").String())
+	require.Equal(t, "1h", gjson.GetBytes(out, "system.1.cache_control.ttl").String())
+	require.Equal(t, "5m", gjson.GetBytes(out, "messages.0.content.0.cache_control.ttl").String())
+	require.Equal(t, "1h", gjson.GetBytes(out, "messages.0.content.1.cache_control.ttl").String())
+	require.Equal(t, "5m", gjson.GetBytes(out, "tools.0.cache_control.ttl").String())
 }
 
 // ============================================================================

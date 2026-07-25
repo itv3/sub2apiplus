@@ -12,6 +12,7 @@ import (
 const maxRedactDepth = 32
 
 var defaultSensitiveKeys = map[string]struct{}{
+	"api_key":            {},
 	"authorization_code": {},
 	"code":               {},
 	"code_verifier":      {},
@@ -23,6 +24,7 @@ var defaultSensitiveKeys = map[string]struct{}{
 }
 
 var defaultSensitiveKeyList = []string{
+	"api_key",
 	"authorization_code",
 	"code",
 	"code_verifier",
@@ -96,6 +98,10 @@ func RedactText(input string, extraKeys ...string) string {
 
 	patterns := getTextRedactPatterns(extraKeys)
 
+	return redactPlainText(input, patterns)
+}
+
+func redactPlainText(input string, patterns *textRedactPatterns) string {
 	out := input
 	out = reGOCSPX.ReplaceAllString(out, "GOCSPX-***")
 	out = reAIza.ReplaceAllString(out, "AIza***")
@@ -217,6 +223,11 @@ func redactValueWithDepth(value any, keys map[string]struct{}, depth int) any {
 			out[i] = redactValueWithDepth(item, keys, depth+1)
 		}
 		return out
+	case string:
+		// 上游错误 JSON 常把密钥嵌入 message/detail 等普通字符串，而不是放在
+		// api_key/access_token 字段中。递归处理字符串值，避免“结构化 JSON 已解析”
+		// 反而绕过非结构化文本的密钥模式。
+		return redactPlainText(v, defaultTextRedactPatterns)
 	default:
 		return value
 	}

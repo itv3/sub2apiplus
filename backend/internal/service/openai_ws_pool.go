@@ -70,6 +70,10 @@ type openAIWSAcquireRequest struct {
 	HeadersFactory  func(context.Context, http.Header) (http.Header, error)
 	ProxyURL        string
 	PreferredConnID string
+	// TransportKey 隔离 Profile、Host、代理、CA 与 TLS 画像，禁止跨画像复用。
+	TransportKey string
+	// OfficialEgressContext 供后台预热沿用握手时已经冻结的画像上下文。
+	OfficialEgressContext *OfficialEgressContext
 	// ForceNewConn: 强制本次获取新连接（避免复用导致连接内续链状态互相污染）。
 	ForceNewConn bool
 	// ForcePreferredConn: 强制本次只使用 PreferredConnID，禁止漂移到其它连接。
@@ -242,6 +246,7 @@ type openAIWSConn struct {
 
 	handshakeHeaders http.Header
 	betaFeatures     string
+	transportKey     string
 
 	leaseCh   chan struct{}
 	closedCh  chan struct{}
@@ -524,8 +529,10 @@ func (c *openAIWSConn) handshakeHeader(name string) string {
 	return strings.TrimSpace(c.handshakeHeaders.Get(strings.TrimSpace(name)))
 }
 
-func (c *openAIWSConn) matchesBetaFeatures(betaFeatures string) bool {
-	return c != nil && c.betaFeatures == betaFeatures
+func (c *openAIWSConn) matchesAcquireProfile(betaFeatures, transportKey string) bool {
+	return c != nil &&
+		c.betaFeatures == betaFeatures &&
+		c.transportKey == transportKey
 }
 
 func (c *openAIWSConn) isPrewarmed() bool {
@@ -824,7 +831,19 @@ func (p *openAIWSConnPool) Acquire(ctx context.Context, req openAIWSAcquireReque
 	if p != nil {
 		p.metrics.acquireTotal.Add(1)
 	}
-	return p.acquire(ctx, cloneOpenAIWSAcquireRequest(req), 0)
+	clonedRequest := cloneOpenAIWSAcquireRequest(req)
+	if egressContext, enabled := OfficialEgressContextFromContext(ctx); enabled {
+		if !egressContext.frozen || egressContext.connectionPoolID == "" {
+			return nil, errors.New("official egress WebSocket context is not ready for pooling")
+		}
+		clonedRequest.TransportKey = egressContext.connectionPoolID +
+			"|proxy_state=" + officialEgressProxyStateKey(stringsTrim(clonedRequest.ProxyURL))
+		if identityKey := officialEgressWebSocketIdentityKey(egressContext); identityKey != "" {
+			clonedRequest.TransportKey += "|identity=" + identityKey
+		}
+		clonedRequest.OfficialEgressContext = egressContext
+	}
+	return p.acquire(ctx, clonedRequest, 0)
 }
 
 func (p *openAIWSConnPool) acquire(ctx context.Context, req openAIWSAcquireRequest, retry int) (*openAIWSConnLease, error) {
@@ -838,6 +857,7 @@ func (p *openAIWSConnPool) acquire(ctx context.Context, req openAIWSAcquireReque
 retryAcquire:
 	accountID := req.Account.ID
 	betaFeatures := normalizeOpenAIWSBetaFeatures(req.Headers)
+	transportKey := stringsTrim(req.TransportKey)
 	effectiveMaxConns := p.effectiveMaxConnsByAccount(req.Account)
 	if effectiveMaxConns <= 0 {
 		return nil, errOpenAIWSConnQueueFull
@@ -865,7 +885,7 @@ retryAcquire:
 				return nil, errOpenAIWSPreferredConnUnavailable
 			}
 			preferredConn, ok := ap.conns[preferredConnID]
-			if !ok || !preferredConn.matchesBetaFeatures(betaFeatures) {
+			if !ok || !preferredConn.matchesAcquireProfile(betaFeatures, transportKey) {
 				p.recordConnPickDuration(time.Since(pickStartedAt))
 				ap.mu.Unlock()
 				closeOpenAIWSConns(evicted)
@@ -946,7 +966,7 @@ retryAcquire:
 		}
 
 		if preferredConnID != "" {
-			if conn, ok := ap.conns[preferredConnID]; ok && conn.matchesBetaFeatures(betaFeatures) && conn.tryAcquire() {
+			if conn, ok := ap.conns[preferredConnID]; ok && conn.matchesAcquireProfile(betaFeatures, transportKey) && conn.tryAcquire() {
 				connPick := time.Since(pickStartedAt)
 				p.recordConnPickDuration(connPick)
 				ap.mu.Unlock()
@@ -968,7 +988,7 @@ retryAcquire:
 			}
 		}
 
-		best := p.pickLeastBusyConnLocked(ap, "", betaFeatures)
+		best := p.pickLeastBusyConnLocked(ap, "", betaFeatures, transportKey)
 		if best != nil && best.tryAcquire() {
 			connPick := time.Since(pickStartedAt)
 			p.recordConnPickDuration(connPick)
@@ -990,7 +1010,7 @@ retryAcquire:
 			return lease, nil
 		}
 		for _, conn := range ap.conns {
-			if conn == nil || conn == best || !conn.matchesBetaFeatures(betaFeatures) {
+			if conn == nil || conn == best || !conn.matchesAcquireProfile(betaFeatures, transportKey) {
 				continue
 			}
 			if conn.tryAcquire() {
@@ -1017,8 +1037,8 @@ retryAcquire:
 	}
 
 	if !req.ForceNewConn && len(ap.conns)+ap.creating >= effectiveMaxConns {
-		compatible := p.pickLeastBusyConnLocked(ap, "", betaFeatures)
-		if idle := p.pickOldestIdleConnWithDifferentBetaFeaturesLocked(ap, betaFeatures); idle != nil {
+		compatible := p.pickLeastBusyConnLocked(ap, "", betaFeatures, transportKey)
+		if idle := p.pickOldestIdleConnWithDifferentAcquireProfileLocked(ap, betaFeatures, transportKey); idle != nil {
 			delete(ap.conns, idle.id)
 			evicted = append(evicted, idle)
 			p.metrics.scaleDownTotal.Add(1)
@@ -1099,7 +1119,7 @@ retryAcquire:
 		return nil, errOpenAIWSConnQueueFull
 	}
 
-	target := p.pickLeastBusyConnLocked(ap, req.PreferredConnID, betaFeatures)
+	target := p.pickLeastBusyConnLocked(ap, req.PreferredConnID, betaFeatures, transportKey)
 	connPick := time.Since(pickStartedAt)
 	p.recordConnPickDuration(connPick)
 	if target == nil {
@@ -1172,13 +1192,21 @@ func (p *openAIWSConnPool) pickOldestIdleConnLocked(ap *openAIWSAccountPool) *op
 	return oldest
 }
 
-func (p *openAIWSConnPool) pickOldestIdleConnWithDifferentBetaFeaturesLocked(ap *openAIWSAccountPool, betaFeatures string) *openAIWSConn {
+func (p *openAIWSConnPool) pickOldestIdleConnWithDifferentAcquireProfileLocked(
+	ap *openAIWSAccountPool,
+	betaFeatures string,
+	transportKey string,
+) *openAIWSConn {
 	if ap == nil || len(ap.conns) == 0 {
 		return nil
 	}
 	var oldest *openAIWSConn
 	for _, conn := range ap.conns {
-		if conn == nil || conn.matchesBetaFeatures(betaFeatures) || conn.isLeased() || conn.waiters.Load() > 0 || p.isConnPinnedLocked(ap, conn.id) {
+		if conn == nil ||
+			conn.matchesAcquireProfile(betaFeatures, transportKey) ||
+			conn.isLeased() ||
+			conn.waiters.Load() > 0 ||
+			p.isConnPinnedLocked(ap, conn.id) {
 			continue
 		}
 		if oldest == nil || conn.lastUsedAt().Before(oldest.lastUsedAt()) {
@@ -1329,13 +1357,19 @@ func (p *openAIWSConnPool) cleanupAccountLocked(ap *openAIWSAccountPool, now tim
 	return evicted
 }
 
-func (p *openAIWSConnPool) pickLeastBusyConnLocked(ap *openAIWSAccountPool, preferredConnID, betaFeatures string) *openAIWSConn {
+func (p *openAIWSConnPool) pickLeastBusyConnLocked(
+	ap *openAIWSAccountPool,
+	preferredConnID string,
+	betaFeatures string,
+	transportKey string,
+) *openAIWSConn {
 	if ap == nil || len(ap.conns) == 0 {
 		return nil
 	}
 	preferredConnID = stringsTrim(preferredConnID)
 	if preferredConnID != "" {
-		if conn, ok := ap.conns[preferredConnID]; ok && conn.matchesBetaFeatures(betaFeatures) {
+		if conn, ok := ap.conns[preferredConnID]; ok &&
+			conn.matchesAcquireProfile(betaFeatures, transportKey) {
 			return conn
 		}
 	}
@@ -1343,7 +1377,7 @@ func (p *openAIWSConnPool) pickLeastBusyConnLocked(ap *openAIWSAccountPool, pref
 	var bestWaiters int32
 	var bestLastUsed time.Time
 	for _, conn := range ap.conns {
-		if conn == nil || !conn.matchesBetaFeatures(betaFeatures) {
+		if conn == nil || !conn.matchesAcquireProfile(betaFeatures, transportKey) {
 			continue
 		}
 		waiters := conn.waiters.Load()
@@ -1652,7 +1686,16 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 			return nil, err
 		}
 	}
-	conn, status, handshakeHeaders, err := p.clientDialer.Dial(ctx, req.WSURL, headers, req.ProxyURL)
+	dialContext := ctx
+	if req.OfficialEgressContext != nil {
+		dialContext = WithOfficialEgressContext(dialContext, req.OfficialEgressContext)
+	}
+	conn, status, handshakeHeaders, err := p.clientDialer.Dial(
+		dialContext,
+		req.WSURL,
+		headers,
+		req.ProxyURL,
+	)
 	if err != nil {
 		var handshakeErr *openAIWSHandshakeError
 		var responseBody []byte
@@ -1676,6 +1719,7 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 	id := p.nextConnID(req.Account.ID)
 	pooledConn := newOpenAIWSConn(id, req.Account.ID, conn, handshakeHeaders)
 	pooledConn.betaFeatures = normalizeOpenAIWSBetaFeatures(req.Headers)
+	pooledConn.transportKey = stringsTrim(req.TransportKey)
 	return pooledConn, nil
 }
 
@@ -1843,6 +1887,7 @@ func cloneOpenAIWSAcquireRequest(req openAIWSAcquireRequest) openAIWSAcquireRequ
 	copied.WSURL = stringsTrim(req.WSURL)
 	copied.ProxyURL = stringsTrim(req.ProxyURL)
 	copied.PreferredConnID = stringsTrim(req.PreferredConnID)
+	copied.TransportKey = stringsTrim(req.TransportKey)
 	return copied
 }
 

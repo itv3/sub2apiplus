@@ -5,12 +5,16 @@ package tlsfingerprint
 import (
 	"bufio"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"math/rand/v2"
 	"net"
 	"net/http"
 	"net/url"
+	"strings"
 
 	utls "github.com/refraction-networking/utls"
 	"golang.org/x/net/proxy"
@@ -29,14 +33,16 @@ type Profile struct {
 	Curves              []uint16
 	PointFormats        []uint16
 	EnableGREASE        bool
-	SignatureAlgorithms []uint16 // Empty uses defaultSignatureAlgorithms
-	ALPNProtocols       []string // Empty uses ["http/1.1"]
-	SupportedVersions   []uint16 // Empty uses [TLS1.3, TLS1.2]
-	KeyShareGroups      []uint16 // Empty uses [X25519]
-	PSKModes            []uint16 // Empty uses [psk_dhe_ke]
-	Extensions          []uint16 // Extension type IDs in order; empty uses default Node.js 24.x order
-	TLSVersMin          uint16   // Empty uses TLS1.0
-	TLSVersMax          uint16   // Empty uses TLS1.3
+	SignatureAlgorithms []uint16       // Empty uses defaultSignatureAlgorithms
+	ALPNProtocols       []string       // Empty uses ["http/1.1"]
+	SupportedVersions   []uint16       // Empty uses [TLS1.3, TLS1.2]
+	KeyShareGroups      []uint16       // Empty uses [X25519]
+	PSKModes            []uint16       // Empty uses [psk_dhe_ke]
+	Extensions          []uint16       // Extension type IDs in order; empty uses default Node.js 24.x order
+	RandomizeExtensions bool           // 每次握手随机排列显式扩展；用于复现 rustls 的扩展顺序随机化
+	TLSVersMin          uint16         // Empty uses TLS1.0
+	TLSVersMax          uint16         // Empty uses TLS1.3
+	RootCAs             *x509.CertPool // 自定义目标站与 HTTPS 代理的可信根证书；为空时使用系统证书池
 	Transport           TransportOptions
 }
 
@@ -211,6 +217,18 @@ func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr stri
 		slog.Debug("tls_fingerprint_http_proxy_connect_failed", "error", err)
 		return nil, fmt.Errorf("connect to proxy: %w", err)
 	}
+	if strings.EqualFold(d.proxyURL.Scheme, "https") {
+		proxyTLSConn := tls.Client(conn, &tls.Config{
+			ServerName: d.proxyURL.Hostname(),
+			MinVersion: tls.VersionTLS12,
+			RootCAs:    profileRootCAs(d.profile),
+		})
+		if err := proxyTLSConn.HandshakeContext(ctx); err != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("TLS handshake with HTTPS proxy: %w", err)
+		}
+		conn = proxyTLSConn
+	}
 	slog.Debug("tls_fingerprint_http_proxy_connected", "proxy_addr", proxyAddr)
 
 	// Step 2: Send CONNECT request to establish tunnel
@@ -284,7 +302,10 @@ func performTLSHandshake(ctx context.Context, conn net.Conn, profile *Profile, a
 	}
 
 	spec := buildClientHelloSpecFromProfile(profile)
-	tlsConn := utls.UClient(conn, &utls.Config{ServerName: host}, utls.HelloCustom)
+	tlsConn := utls.UClient(conn, &utls.Config{
+		ServerName: host,
+		RootCAs:    profileRootCAs(profile),
+	}, utls.HelloCustom)
 
 	if err := tlsConn.ApplyPreset(spec); err != nil {
 		_ = conn.Close()
@@ -397,7 +418,12 @@ func buildClientHelloSpecFromProfile(profile *Profile) *utls.ClientHelloSpec {
 	// Determine extension order
 	extOrder := defaultExtensionOrder
 	if profile != nil && len(profile.Extensions) > 0 {
-		extOrder = profile.Extensions
+		extOrder = append([]uint16(nil), profile.Extensions...)
+		if profile.RandomizeExtensions && len(extOrder) > 1 {
+			rand.Shuffle(len(extOrder), func(i, j int) {
+				extOrder[i], extOrder[j] = extOrder[j], extOrder[i]
+			})
+		}
 	}
 
 	// Build extensions list from the ordered IDs.
@@ -473,6 +499,13 @@ func buildClientHelloSpecFromProfile(profile *Profile) *utls.ClientHelloSpec {
 		TLSVersMax:         tlsVersMax,
 		TLSVersMin:         tlsVersMin,
 	}
+}
+
+func profileRootCAs(profile *Profile) *x509.CertPool {
+	if profile == nil {
+		return nil
+	}
+	return profile.RootCAs
 }
 
 // toUint8s converts []uint16 to []uint8 (for utls fields that require []uint8).

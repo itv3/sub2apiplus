@@ -23,6 +23,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/googleapi"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/util/logredact"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 
@@ -162,6 +163,21 @@ func (s *GeminiMessagesCompatService) resolvePlatformAndSchedulingMode(ctx conte
 	forcePlatform, hasForcePlatform := ctx.Value(ctxkey.ForcePlatform).(string)
 	if hasForcePlatform && forcePlatform != "" {
 		return forcePlatform, false, true, nil
+	}
+
+	// composite Gemini 路由已经在中间件中解析出具体平台。这里必须优先使用该结果，
+	// 否则会按 group.platform=composite 查询并错误报告“无可用 Gemini 账号”。
+	// hasForcePlatform 保持 false，确保账号仍限定在当前 composite 分组内；
+	// 同时沿用 Gemini 原生分组的混合调度语义，允许明确开启 mixed_scheduling
+	// 的 Antigravity 账号参与，而不是把 composite 请求意外收窄成仅 Gemini 账号。
+	if resolvedPlatform, ok := ResolvedTargetPlatformFromContext(ctx); ok {
+		if resolvedPlatform != PlatformGemini {
+			return "", false, false, fmt.Errorf(
+				"resolved platform %s is not supported by Gemini native scheduling",
+				resolvedPlatform,
+			)
+		}
+		return PlatformGemini, true, false, nil
 	}
 
 	if groupID != nil {
@@ -1707,7 +1723,8 @@ func sanitizeUpstreamErrorMessage(msg string) string {
 	if msg == "" {
 		return msg
 	}
-	return sensitiveQueryParamRegex.ReplaceAllString(msg, `$1***`)
+	msg = sensitiveQueryParamRegex.ReplaceAllString(msg, `$1***`)
+	return logredact.RedactText(msg)
 }
 
 func (s *GeminiMessagesCompatService) writeGeminiMappedError(c *gin.Context, account *Account, upstreamStatus int, upstreamRequestID string, body []byte) error {

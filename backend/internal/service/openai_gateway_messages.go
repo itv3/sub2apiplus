@@ -45,6 +45,14 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		return s.forwardAnthropicViaRawChatCompletions(ctx, c, account, body, defaultMappedModel)
 	}
 
+	officialEgressEnabled, _, err := resolveOfficialEgressAccountProfile(account)
+	if err != nil {
+		return nil, err
+	}
+	officialEgressEnabled = officialEgressEnabled &&
+		account.Platform == PlatformOpenAI &&
+		account.Type == AccountTypeOAuth
+
 	startTime := time.Now()
 
 	// 1. Parse Anthropic request
@@ -313,14 +321,16 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	}
 
 	// 使用隔离后的会话键生成确定性 UUID，确保不同 API Key 使用不同的上游会话。
-	if account.Platform != PlatformGrok && promptCacheKey != "" && !accountMimicCodexCLI {
+	if account.Platform != PlatformGrok && promptCacheKey != "" &&
+		!accountMimicCodexCLI && !officialEgressEnabled {
 		isolatedSessionID := generateSessionUUID(isolateOpenAISessionID(apiKeyID, promptCacheKey))
 		upstreamReq.Header.Set("session_id", isolatedSessionID)
 		if upstreamReq.Header.Get("conversation_id") != "" {
 			upstreamReq.Header.Set("conversation_id", isolatedSessionID)
 		}
 	}
-	if account.Type == AccountTypeOAuth && account.Platform != PlatformGrok {
+	if account.Type == AccountTypeOAuth && account.Platform != PlatformGrok &&
+		!officialEgressEnabled {
 		// buildUpstreamRequest 保留 Messages bridge 的 body/session 兼容行为，并会先
 		// 清除身份头。真正发送前恢复完整 Codex 身份，避免 ChatGPT Codex 上游因缺失
 		// originator/OpenAI-Beta 返回 404（issue #3901）。
@@ -335,7 +345,8 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if account.Type == AccountTypeOAuth && promptCacheKey != "" && strings.TrimSpace(c.GetHeader("conversation_id")) == "" {
 		upstreamReq.Header.Del("conversation_id")
 	}
-	if compatTurnState != "" && upstreamReq.Header.Get("x-codex-turn-state") == "" {
+	if !officialEgressEnabled && compatTurnState != "" &&
+		upstreamReq.Header.Get("x-codex-turn-state") == "" {
 		upstreamReq.Header.Set("x-codex-turn-state", compatTurnState)
 	}
 

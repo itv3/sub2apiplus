@@ -25,6 +25,20 @@ type geminiCompatHTTPUpstreamStub struct {
 	lastReq  *http.Request
 }
 
+func TestGeminiNativeCompositeSchedulingUsesResolvedPlatform(t *testing.T) {
+	groupID := int64(8)
+	svc := &GeminiMessagesCompatService{}
+	ctx := WithResolvedTargetPlatform(context.Background(), PlatformGemini)
+
+	platform, useMixedScheduling, hasForcePlatform, err :=
+		svc.resolvePlatformAndSchedulingMode(ctx, &groupID)
+
+	require.NoError(t, err)
+	require.Equal(t, PlatformGemini, platform)
+	require.True(t, useMixedScheduling)
+	require.False(t, hasForcePlatform)
+}
+
 func (s *geminiCompatHTTPUpstreamStub) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
 	s.calls++
 	s.lastReq = req

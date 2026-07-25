@@ -35,6 +35,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	reasoningEffort *string,
 	reqStream bool,
 	startTime time.Time,
+	officialEgressBodyContract *officialOpenAIHTTPBodyContract,
 ) (*OpenAIForwardResult, error) {
 	upstreamPassthroughModel := ""
 	isCompact := isOpenAIResponsesCompactPath(c)
@@ -200,14 +201,33 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	var resp *http.Response
 	for {
 		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
-		upstreamReq, buildErr := s.buildUpstreamRequestOpenAIPassthrough(upstreamCtx, c, account, body, token)
+		upstreamReq, buildErr := s.buildUpstreamRequestOpenAIPassthroughWithPlan(
+			upstreamCtx,
+			c,
+			account,
+			body,
+			token,
+			openAIUpstreamRequestPlan{
+				IsStream:                   reqStream,
+				IsCompact:                  isCompact,
+				PromptCacheKey:             strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String()),
+				OfficialEgressBodyContract: officialEgressBodyContract,
+			},
+		)
 		releaseUpstreamCtx()
 		if buildErr != nil {
 			return nil, buildErr
 		}
 
 		upstreamStart := time.Now()
-		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+		resp, err = doOpenAIHTTPUpstreamWithMimicTLS(
+			s.httpUpstream,
+			upstreamReq,
+			proxyURL,
+			account,
+			s.tlsFPProfileService,
+			false,
+		)
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 		if err != nil {
 			// Transport-level failure (proxy/DNS/TCP/TLS — no HTTP response). Convert to
@@ -343,6 +363,24 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	body []byte,
 	token string,
 ) (*http.Request, error) {
+	return s.buildUpstreamRequestOpenAIPassthroughWithPlan(
+		ctx,
+		c,
+		account,
+		body,
+		token,
+		openAIUpstreamRequestPlan{},
+	)
+}
+
+func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthroughWithPlan(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	body []byte,
+	token string,
+	plan openAIUpstreamRequestPlan,
+) (*http.Request, error) {
 	targetURL := openaiPlatformAPIURL
 	switch account.Type {
 	case AccountTypeOAuth:
@@ -469,6 +507,15 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 
 	// 账号级请求头覆写（仅 openai api_key 账号启用时生效；OAuth 路径 no-op）
 	account.ApplyHeaderOverrides(req.Header)
+
+	req, err = attachOfficialEgressHTTPContext(req, c, account, PlatformOpenAI)
+	if err != nil {
+		return nil, fmt.Errorf("resolve official egress profile: %w", err)
+	}
+	req, _, err = finalizeOpenAIOfficialEgressHTTPRequest(req, c, account, body, plan)
+	if err != nil {
+		return nil, fmt.Errorf("finalize OpenAI official egress request: %w", err)
+	}
 
 	return req, nil
 }

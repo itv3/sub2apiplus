@@ -2,6 +2,10 @@ export default {
     plusEnhancements: {
       title: 'Plus Enhancements',
       description: 'Manage Sub2API Plus account enhancement features',
+      officialEgress: {
+        title: 'OAuth official-client mimicry is built in',
+        description: 'All Anthropic/OpenAI OAuth requests automatically use the corresponding Claude Code/Codex CLI egress profile, regardless of whether ingress comes from an official or third-party client.'
+      },
       tabs: {
         mimic: 'API Key Official Compatibility',
         keepalive: 'Account Keepalive'
@@ -953,6 +957,7 @@ export default {
           label: 'Custom Relay URL',
           hint: 'Forward requests to a custom relay service. Proxy URL will be passed as a query parameter.',
           urlHint: 'Relay service URL (e.g., https://relay.example.com)',
+          officialEgressConflict: 'Built-in OAuth official-client mimicry cannot be used with a custom relay URL.',
         },
         clientAffinity: {
           label: 'Client Affinity Scheduling',

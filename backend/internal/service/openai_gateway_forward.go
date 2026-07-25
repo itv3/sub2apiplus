@@ -61,6 +61,14 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	wsDecision := resolveOpenAIWSProtocolForRequest(s.getOpenAIWSProtocolResolver(), ctx, account)
 	// 仅允许 WS 入站请求走 WS 上游，避免出现 HTTP -> WS 协议混用。
 	wsDecision = resolveOpenAIWSDecisionByClientTransport(wsDecision, GetOpenAIClientTransport(c))
+	officialEgressEnabled, _, err := resolveOfficialEgressAccountProfile(account)
+	if err != nil {
+		return nil, err
+	}
+	officialOpenAIHTTPEnabled := officialEgressEnabled &&
+		account.Platform == PlatformOpenAI &&
+		account.Type == AccountTypeOAuth &&
+		wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2
 	passthroughEnabled := account.IsOpenAIPassthroughEnabled()
 	if shouldFlattenOpenAIResponsesNamespaces(account, wsDecision.Transport, passthroughEnabled) {
 		body, err = flattenOpenAIResponsesNamespaces(c, body)
@@ -74,6 +82,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 
 	originalBody := body
+	var officialEgressBodyContract *officialOpenAIHTTPBodyContract
+	if officialOpenAIHTTPEnabled {
+		officialEgressBodyContract, err = captureOfficialOpenAIHTTPBodyContract(originalBody)
+		if err != nil {
+			return nil, err
+		}
+	}
 	requestView := newOpenAIRequestView(body)
 	reqModel, reqStream, promptCacheKey := requestView.Model, requestView.Stream, requestView.PromptCacheKey
 	originalModel := reqModel
@@ -157,6 +172,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			reasoningEffort,
 			reqStream,
 			startTime,
+			officialEgressBodyContract,
 		)
 	}
 
@@ -244,7 +260,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 	instructions := gjson.GetBytes(body, "instructions")
 	instructionsEmpty := !instructions.Exists() || instructions.Type != gjson.String || strings.TrimSpace(instructions.String()) == ""
-	if instructionsEmpty && !compatMessagesBridge {
+	if instructionsEmpty && !compatMessagesBridge && !officialOpenAIHTTPEnabled {
 		markPatchSet("instructions", defaultCodexSynthInstructions(reqModel))
 	}
 
@@ -370,6 +386,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			codexResult = applyCodexOAuthTransformWithOptions(decoded, codexOAuthTransformOptions{IsCodexCLI: isCodexCLI, IsCompact: isCompactRequest, SkipDefaultInstructions: true, PreserveToolCallIDs: true})
 			ensureCodexOAuthInstructionsField(decoded)
 			markDecodedModified()
+		} else if officialOpenAIHTTPEnabled {
+			codexResult = applyCodexOAuthTransformWithOptions(decoded, codexOAuthTransformOptions{
+				IsCodexCLI:              isCodexCLI,
+				IsCompact:               isCompactRequest,
+				SkipDefaultInstructions: true,
+				PreserveToolCallIDs:     true,
+			})
 		} else {
 			codexResult = applyCodexOAuthTransform(decoded, isCodexCLI, isCompactRequest)
 		}
@@ -377,7 +400,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			markDecodedModified()
 		}
 		// 带真实 device_id 时补齐 client_metadata 安装标识，与真实 Codex 对齐（compact 形态不同，跳过）。
-		if !isCompactRequest && applyCodexClientMetadata(decoded, account) {
+		if !isCompactRequest && !officialOpenAIHTTPEnabled && applyCodexClientMetadata(decoded, account) {
 			markDecodedModified()
 		}
 		if codexResult.NormalizedModel != "" {
@@ -795,11 +818,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			)
 		}
 		upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, body, token, openAIUpstreamRequestPlan{
-			IsStream:         upstreamReqStream,
-			IsCompact:        isCompactRequest,
-			PromptCacheKey:   promptCacheKey,
-			IsCodexCLI:       isCodexCLI,
-			APIKeyCodexMimic: mimicProfile,
+			IsStream:                   upstreamReqStream,
+			IsCompact:                  isCompactRequest,
+			PromptCacheKey:             promptCacheKey,
+			IsCodexCLI:                 isCodexCLI,
+			APIKeyCodexMimic:           mimicProfile,
+			OfficialEgressBodyContract: officialEgressBodyContract,
 		})
 		if headerGuard == nil {
 			releaseUpstreamCtx()
@@ -1128,6 +1152,15 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 		account.ApplyHeaderOverridesForAPIKeyMimic(req.Header)
 	} else {
 		account.ApplyHeaderOverrides(req.Header)
+	}
+
+	req, err = attachOfficialEgressHTTPContext(req, c, account, PlatformOpenAI)
+	if err != nil {
+		return nil, fmt.Errorf("resolve official egress profile: %w", err)
+	}
+	req, _, err = finalizeOpenAIOfficialEgressHTTPRequest(req, c, account, body, plan)
+	if err != nil {
+		return nil, fmt.Errorf("finalize OpenAI official egress request: %w", err)
 	}
 
 	return req, nil

@@ -175,3 +175,62 @@ func TestDoOpenAIHTTPUpstreamSkipsMimicTLSWhenRequestProfileDisabled(t *testing.
 	require.False(t, recorder.doWithTLSCalled)
 	require.Nil(t, recorder.lastTLSProfile)
 }
+
+func TestDoOpenAIOfficialEgressHTTPSelectsDirectAndProxyProfiles(t *testing.T) {
+	account := officialEgressTestAccount(94, PlatformOpenAI)
+	egressContext := resolveOfficialEgressT3HTTPContext(
+		t,
+		account,
+		"/v1/responses",
+		"chatgpt.com",
+		"",
+	)
+
+	for _, testCase := range []struct {
+		name            string
+		proxyURL        string
+		wantCipherCount int
+		wantALPN        []string
+		wantRandomized  bool
+	}{
+		{
+			name:            "直连",
+			wantCipherCount: 30,
+		},
+		{
+			name:            "HTTP CONNECT 代理",
+			proxyURL:        "http://capture.example:18080",
+			wantCipherCount: 10,
+			wantALPN:        []string{"h2", "http/1.1"},
+			wantRandomized:  true,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			req, err := http.NewRequest(
+				http.MethodPost,
+				"https://chatgpt.com/backend-api/codex/responses",
+				strings.NewReader("{}"),
+			)
+			require.NoError(t, err)
+			req = req.WithContext(
+				WithOfficialEgressContext(req.Context(), egressContext),
+			)
+
+			recorder := &openAIHTTPUpstreamChoiceRecorder{}
+			resp, err := doOpenAIHTTPUpstreamWithMimicTLS(
+				recorder,
+				req,
+				testCase.proxyURL,
+				account,
+				nil,
+				false,
+			)
+			require.NoError(t, err)
+			require.NoError(t, resp.Body.Close())
+			require.True(t, recorder.doWithTLSCalled)
+			require.Len(t, recorder.lastTLSProfile.CipherSuites, testCase.wantCipherCount)
+			require.Equal(t, testCase.wantALPN, recorder.lastTLSProfile.ALPNProtocols)
+			require.Equal(t, testCase.wantRandomized, recorder.lastTLSProfile.RandomizeExtensions)
+		})
+	}
+}

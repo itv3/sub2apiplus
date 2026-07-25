@@ -86,3 +86,28 @@ func TestRateLimitService_HandleUpstreamError_OpenAI403ThresholdDisables(t *test
 	require.Contains(t, repo.lastErrorMsg, "workspace forbidden by policy")
 	require.Contains(t, repo.lastErrorMsg, "consecutive_403=3/3")
 }
+
+func TestRateLimitService_HandleUpstreamError_Gemini403RedactsEmbeddedAPIKey(t *testing.T) {
+	const secret = "AIzaSyBhzSEhPzKpeQdKFTamH4tKx38OP-Q5GX0"
+	repo := &rateLimitAccountRepoStub{}
+	rateLimitService := NewRateLimitService(repo, nil, &config.Config{}, nil, nil)
+	account := &Account{
+		ID:       303,
+		Platform: PlatformGemini,
+		Type:     AccountTypeAPIKey,
+	}
+	body := []byte(`{"error":{"message":"Permission denied: Consumer 'api_key:` + secret + `' has been suspended."}}`)
+
+	shouldDisable := rateLimitService.HandleUpstreamError(
+		context.Background(),
+		account,
+		http.StatusForbidden,
+		http.Header{},
+		body,
+	)
+
+	require.True(t, shouldDisable)
+	require.Equal(t, 1, repo.setErrorCalls)
+	require.NotContains(t, repo.lastErrorMsg, secret)
+	require.Contains(t, repo.lastErrorMsg, "api_key:***")
+}

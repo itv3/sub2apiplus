@@ -45,6 +45,9 @@ type claudeOAuthNormalizeOptions struct {
 	injectMetadata          bool
 	metadataUserID          string
 	stripSystemCacheControl bool
+	// preserveSystem 表示 system 及其缓存字段由后置 Finalizer 独占处理。
+	// 开启后本层只做协议与语义兼容，不能提前改写客户端 system。
+	preserveSystem bool
 	// preserveMissingTemperature 仅供 API Key sdk-cli mimic 使用：官方 SDK CLI
 	// 在客户端未提供 temperature 时不会主动补 1，OAuth 路径继续保持原行为。
 	preserveMissingTemperature bool
@@ -235,9 +238,11 @@ func normalizeClaudeOAuthRequestBody(body []byte, modelID string, opts claudeOAu
 	out := body
 	modified := false
 
-	if next, changed := normalizeClaudeOAuthSystemBody(out, opts); changed {
-		out = next
-		modified = true
+	if !opts.preserveSystem {
+		if next, changed := normalizeClaudeOAuthSystemBody(out, opts); changed {
+			out = next
+			modified = true
+		}
 	}
 
 	rawModel := gjson.GetBytes(out, "model")
@@ -381,8 +386,8 @@ func (s *GatewayService) buildOAuthMetadataUserID(parsed *ParsedRequest, account
 	return FormatMetadataUserID(userID, accountUUID, sessionID, uaVersion)
 }
 
-// applyClaudeCodeOAuthMimicryToBody 将"非 Claude Code 客户端 + Claude OAuth 账号"
-// 路径上原本只在 /v1/messages 里做的完整伪装应用到任意 body 上。
+// applyClaudeOAuthThirdPartyCompatibilityToBody 统一处理“第三方客户端 + Claude
+// OAuth 账号”的协议兼容和旧版画像逻辑。
 //
 // 这是 /v1/messages 主路径上 rewriteSystemForNonClaudeCode +
 // normalizeClaudeOAuthRequestBody 流程的通用版，供 OpenAI 协议兼容层
@@ -398,63 +403,78 @@ func (s *GatewayService) buildOAuthMetadataUserID(parsed *ParsedRequest, account
 //   - body：已经 marshal 成 Anthropic /v1/messages 格式的请求体。
 //   - systemRaw：body 中原始 system 字段（用于判断是否需要 rewrite）。
 //   - model：最终会发给上游的模型 ID（用于模型规范化 + metadata 版本选择）。
+//   - officialEgressOwnsProfile：为 true 时，system/cache/metadata 由后置
+//     Official Egress Finalizer 独占，本函数只保留模型、工具名和请求结构兼容。
 //
-// 返回：改写后的 body。即使中间任何一步失败，也会退化成原 body（不会 panic）。
-func (s *GatewayService) applyClaudeCodeOAuthMimicryToBody(
+// 返回：改写后的 body 和规范化模型。即使中间任何一步失败，也会退化成可继续
+// 处理的 body（不会 panic）。
+func (s *GatewayService) applyClaudeOAuthThirdPartyCompatibilityToBody(
 	ctx context.Context,
 	c *gin.Context,
 	account *Account,
 	body []byte,
 	systemRaw any,
 	model string,
-) []byte {
+	officialEgressOwnsProfile bool,
+) ([]byte, string) {
 	if account == nil || !account.IsOAuth() || len(body) == 0 {
-		return body
+		return body, model
 	}
 
-	systemPromptInjectionEnabled, systemPrompt, systemPromptBlocks := s.claudeOAuthSystemPromptInjectionSettings(ctx)
 	systemRewritten := false
-	if systemPromptInjectionEnabled {
-		body = rewriteSystemForNonClaudeCodeWithPromptBlocks(body, normalizeSystemParam(systemRaw), systemPrompt, systemPromptBlocks)
-		systemRewritten = true
+	normalizeOpts := claudeOAuthNormalizeOptions{
+		preserveSystem: officialEgressOwnsProfile,
 	}
+	if !officialEgressOwnsProfile {
+		systemPromptInjectionEnabled, systemPrompt, systemPromptBlocks := s.claudeOAuthSystemPromptInjectionSettings(ctx)
+		if systemPromptInjectionEnabled {
+			body = rewriteSystemForNonClaudeCodeWithPromptBlocks(
+				body,
+				normalizeSystemParam(systemRaw),
+				systemPrompt,
+				systemPromptBlocks,
+			)
+			systemRewritten = true
+		}
+		normalizeOpts.stripSystemCacheControl = !systemRewritten
 
-	normalizeOpts := claudeOAuthNormalizeOptions{stripSystemCacheControl: !systemRewritten}
-
-	if s.identityService != nil && c != nil && c.Request != nil {
-		if fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, c.Request.Header); err == nil && fp != nil {
-			mimicMPT := false
-			if s.settingService != nil {
-				_, mimicMPT, _ = s.settingService.GetGatewayForwardingSettings(ctx)
-			}
-			if !mimicMPT {
-				if uid := s.buildOAuthMetadataUserIDFromBody(ctx, account, fp, body); uid != "" {
-					normalizeOpts.injectMetadata = true
-					normalizeOpts.metadataUserID = uid
+		if s.identityService != nil && c != nil && c.Request != nil {
+			if fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, c.Request.Header); err == nil && fp != nil {
+				mimicMPT := false
+				if s.settingService != nil {
+					_, mimicMPT, _ = s.settingService.GetGatewayForwardingSettings(ctx)
+				}
+				if !mimicMPT {
+					if uid := s.buildOAuthMetadataUserIDFromBody(ctx, account, fp, body); uid != "" {
+						normalizeOpts.injectMetadata = true
+						normalizeOpts.metadataUserID = uid
+					}
 				}
 			}
 		}
 	}
 
-	body, _ = normalizeClaudeOAuthRequestBody(body, model, normalizeOpts)
+	body, model = normalizeClaudeOAuthRequestBody(body, model, normalizeOpts)
 
-	// Phase D+E+F: messages cache 策略 + 工具名混淆 + tools[-1] 断点
-	// 对齐 Parrot transform_request 里剩余的字段级改写。顺序有语义约束：
-	//   1) messages cache：仅在配置开启时清除客户端断点并注入代理断点
-	//   2) tool rewrite：最后改 tools[*].name / tool_choice.name 并在 tools[-1]
-	//      上打断点；mapping 存入 gin.Context 供响应侧 bytes.Replace 还原。
-	body = s.rewriteMessageCacheControlIfEnabled(ctx, body)
+	// 旧画像模式先处理 messages 缓存；Finalizer 接管后必须保留入口缓存结构，
+	// 由最终层一次性收敛为当前官方 Profile。
+	if !officialEgressOwnsProfile {
+		body = s.rewriteMessageCacheControlIfEnabled(ctx, body)
+	}
 
 	if rw := buildToolNameRewriteFromBody(body); rw != nil {
-		body = applyToolNameRewriteToBody(body, rw)
+		body = applyToolNameRewriteNamesToBody(body, rw)
+		if !officialEgressOwnsProfile {
+			body = applyToolsLastCacheBreakpoint(body)
+		}
 		if c != nil {
 			c.Set(toolNameRewriteKey, rw)
 		}
-	} else {
+	} else if !officialEgressOwnsProfile {
 		body = applyToolsLastCacheBreakpoint(body)
 	}
 
-	return body
+	return body, model
 }
 
 // buildOAuthMetadataUserIDFromBody 是 buildOAuthMetadataUserID 的变体，
@@ -1195,6 +1215,9 @@ func forceEphemeralCacheControlTTL(body []byte, ttl string) []byte {
 
 func (s *GatewayService) shouldInjectAnthropicCacheTTL1h(ctx context.Context, account *Account) bool {
 	if account == nil || !account.IsAnthropicOAuthOrSetupToken() || s == nil || s.settingService == nil {
+		return false
+	}
+	if account.UsesOfficialEgressProfile() {
 		return false
 	}
 	return s.settingService.IsAnthropicCacheTTL1hInjectionEnabled(ctx)

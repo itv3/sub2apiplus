@@ -185,6 +185,24 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	if err != nil {
 		return nil, fmt.Errorf("prepare http bridge body: %w", err)
 	}
+	var officialEgressBodyContract *officialOpenAIHTTPBodyContract
+	upstreamRequestContext := c
+	if account.Platform == PlatformOpenAI {
+		officialEgressEnabled, _, configErr := resolveOfficialEgressAccountProfile(account)
+		if configErr != nil {
+			return nil, fmt.Errorf("resolve official egress config: %w", configErr)
+		}
+		if officialEgressEnabled {
+			officialEgressBodyContract, err = captureOfficialOpenAIHTTPBodyContract(body)
+			if err != nil {
+				return nil, fmt.Errorf("capture OpenAI HTTP bridge body contract: %w", err)
+			}
+			upstreamRequestContext, err = newOpenAIOfficialEgressHTTPBridgeContext(c, officialEgressBodyContract)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	var upstreamReq *http.Request
@@ -209,7 +227,18 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		}
 		upstreamReq, err = buildGrokResponsesRequest(upstreamCtx, c, account, body, token, grokCacheIdentity, s.cfg)
 	} else {
-		upstreamReq, err = s.buildUpstreamRequestOpenAIPassthrough(upstreamCtx, c, account, body, token)
+		upstreamReq, err = s.buildUpstreamRequestOpenAIPassthroughWithPlan(
+			upstreamCtx,
+			upstreamRequestContext,
+			account,
+			body,
+			token,
+			openAIUpstreamRequestPlan{
+				IsStream:                   true,
+				PromptCacheKey:             strings.TrimSpace(gjson.GetBytes(body, "prompt_cache_key").String()),
+				OfficialEgressBodyContract: officialEgressBodyContract,
+			},
+		)
 	}
 	releaseUpstreamCtx()
 	if err != nil {
@@ -229,7 +258,19 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	}
 
 	turnStart := time.Now()
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	var resp *http.Response
+	if account.Platform == PlatformGrok {
+		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	} else {
+		resp, err = doOpenAIHTTPUpstreamWithMimicTLS(
+			s.httpUpstream,
+			upstreamReq,
+			proxyURL,
+			account,
+			s.tlsFPProfileService,
+			false,
+		)
+	}
 	if err != nil {
 		if turn == 1 {
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, true)
@@ -485,6 +526,31 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, terminalErr, true)
 	}
 	return resultWithUsage(), terminalErr
+}
+
+// newOpenAIOfficialEgressHTTPBridgeContext 把当前 WS 帧的身份字段映射成等价的
+// 官方 HTTP 请求头。WS 握手 Header 是连接级 prewarm 快照，不能覆盖每轮帧内
+// 更新的 turn metadata；这里只创建请求副本，不修改原始入站连接状态。
+func newOpenAIOfficialEgressHTTPBridgeContext(
+	c *gin.Context,
+	contract *officialOpenAIHTTPBodyContract,
+) (*gin.Context, error) {
+	if contract == nil {
+		return c, nil
+	}
+	if c == nil || c.Request == nil {
+		return nil, errors.New("OpenAI official egress HTTP bridge requires ingress request")
+	}
+	metadata := contract.clientMetadata
+	bridgeContext := c.Copy()
+	bridgeContext.Request = c.Request.Clone(c.Request.Context())
+	bridgeContext.Request.Header = c.Request.Header.Clone()
+	bridgeContext.Request.Header.Set("session-id", officialOpenAIString(metadata, "session_id"))
+	bridgeContext.Request.Header.Set("thread-id", officialOpenAIString(metadata, "thread_id"))
+	bridgeContext.Request.Header.Set("x-client-request-id", contract.promptCacheKey)
+	bridgeContext.Request.Header.Set("x-codex-window-id", officialOpenAIString(metadata, "x-codex-window-id"))
+	bridgeContext.Request.Header.Set("x-codex-turn-metadata", officialOpenAIString(metadata, "x-codex-turn-metadata"))
+	return bridgeContext, nil
 }
 
 func resolveGrokWSCacheIdentity(c *gin.Context, account *Account, payload []byte, originalModel string) (string, error) {

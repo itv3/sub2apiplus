@@ -369,7 +369,7 @@ func (s *RateLimitService) HandleUpstreamError(ctx context.Context, account *Acc
 			strings.TrimSpace(headers.Get("x-request-id")),
 			strings.TrimSpace(headers.Get("cf-ray")),
 			upstreamMsg,
-			truncateForLog(responseBody, 1024),
+			truncateForLog([]byte(sanitizeUpstreamErrorMessage(string(responseBody))), 1024),
 		)
 		shouldDisable = s.handle403(ctx, account, upstreamMsg, responseBody)
 	case 429:
@@ -792,10 +792,10 @@ func buildForbiddenErrorMessage(prefix string, upstreamMsg string, responseBody 
 		if json.Valid(rawBody) {
 			var compact bytes.Buffer
 			if err := json.Compact(&compact, rawBody); err == nil {
-				return prefix + truncateForLog(compact.Bytes(), 512)
+				return prefix + truncateForLog([]byte(sanitizeUpstreamErrorMessage(compact.String())), 512)
 			}
 		}
-		return prefix + truncateForLog(rawBody, 512)
+		return prefix + truncateForLog([]byte(sanitizeUpstreamErrorMessage(string(rawBody))), 512)
 	}
 
 	return prefix + fallback

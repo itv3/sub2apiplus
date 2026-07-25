@@ -29,11 +29,12 @@ type openAIAPIKeyCodexMimicProfile struct {
 }
 
 type openAIUpstreamRequestPlan struct {
-	IsStream         bool
-	IsCompact        bool
-	PromptCacheKey   string
-	IsCodexCLI       bool
-	APIKeyCodexMimic openAIAPIKeyCodexMimicProfile
+	IsStream                   bool
+	IsCompact                  bool
+	PromptCacheKey             string
+	IsCodexCLI                 bool
+	APIKeyCodexMimic           openAIAPIKeyCodexMimicProfile
+	OfficialEgressBodyContract *officialOpenAIHTTPBodyContract
 }
 
 func resolveOpenAIAPIKeyCodexMimicProfile(account *Account, apiKeyID int64, cfg *config.Config) openAIAPIKeyCodexMimicProfile {

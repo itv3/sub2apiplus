@@ -24,7 +24,203 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 
 管理后台侧边栏“Plus 增强功能”进入 `/admin/settings/plus-enhancements`，包含“API Key 官方客户端兼容”和“账号保活”两个 Tab；Antigravity 的模型、映射、官方伪装和计费配置位于账号创建/编辑页。
 
-### 1.1 API Key 官方客户端兼容
+### 1.1 OAuth 官方客户端伪装
+
+#### 1.1.1 目标与总结论
+
+> **目标**：
+1、Sub2API 对外提供标准 API 接口。无论入站来自官方客户端，还是通过标准 API 接入的第三方客户端，Anthropic/OpenAI OAuth 官方出站均自动使用对应版本 Claude Code / Codex CLI 的真实出站形态。
+2、Sub2API 原有兼容层只负责入站协议转换、模型映射、工具转换及请求语义兼容；最终 OAuth 出站请求由内置官方客户端画像统一定型。
+>
+> **实测基线**：Claude Code `2.1.218`、Codex CLI `0.145.0`，Sub2API `v0.1.164`；模型固定为 `claude-sonnet-5`、`gpt-5.6-luna`。官方客户端基准与 Sub2API 出站使用相同 S1/S2/S4，完成 direct + mitm + ingress 配对；另使用 Kilo Code VS Code 扩展从标准 API 接入，完成 Anthropic/OpenAI HTTP 的 S1/S4 和 OpenAI WebSocket 的 S1/S2/S4。Anthropic/OpenAI OAuth 官方画像为内置默认能力，Profile 版本由服务端自动绑定为 `phase0-2026-07-24`，不提供账号级开关或版本选择。
+
+| 当前路径 | Sub2API 实证（OAuth 官方画像内置生效） |
+|---|---|
+| **Anthropic HTTP** | 官方基准 S1/S2/S4 为 5/5；Kilo S1/S4 通过 |
+| **OpenAI HTTP** | 官方基准 5/5、自动透传补测 1/1；Kilo S1/S4 通过 |
+| **OpenAI WebSocket** | 官方基准和 Kilo 的 S1/S2/S4 均通过 |
+
+当前最终部署镜像为 `sub2apiplus:official-egress-built-in-a2-20260725`，运行版本为
+`0.1.164-1-n2`。账号级开关和版本字段已从数据库删除；无账号配置条件下的最终
+direct 回归目录为 `/root/oauth-capture/runs/t2-off-direct-20260725T114012Z`，
+MITM + ingress 三路径完整回归时间戳为 `20260725T114144Z`，结果见实证归档。
+
+#### 1.1.2 抓包方法、分组与证据边界
+
+> **抓包操作手册**：抓包环境、脚本及启动、抓取、拉取、停止、恢复方法统一见 `抓包相关/README.md`。本节只定义本任务的两轮抓取法、S1/S2/S4、分组关系和证据边界。
+
+##### 1.1.2.1 抓包方法：两轮抓取法 + 三场景
+
+同一组请求分别执行 direct 与 mitm 两轮，不能用其中一轮代替另一轮：
+
+| 轮次 | 抓取方式 | 验证内容 | 不能证明 |
+|---|---|---|---|
+| **direct** | 客户端或网关直连官方上游，通过 `tcpdump` 抓取真实出站流量 | ClientHello、cipher、扩展、ALPN、HTTP/WS 协议选择及连接复用 | 加密后的 Header、Body 和 WS 帧 |
+| **mitm** | 注入测试 CA，使目标流量经过 mitmproxy，并同时记录网关入站 | URL、HTTP 版本、Header、Body、system、tools、响应及 WS 帧 | 网关直连官方时的真实 TLS 指纹 |
+
+每轮使用相同模型和相同场景：
+
+- **S1**：冷启动简单问答，验证基础请求、响应和身份字段。
+- **S2**：同一会话连续多轮，验证会话生命周期、连接复用和 `previous_response_id`。
+- **S4**：完整工具闭环，验证工具定义、调用、结果回传、`call_id` 和最终回答。
+
+执行要求：
+
+1. 同一对比组使用相同客户端版本、模型、场景输入和重复次数；具体值写入运行元数据，本节不重复固定数值，当前验收基线以 §1.1.1 为准。
+2. 一次只运行一个“主体 + 平台 + 路径”，避免连接池、会话、账号调度和抓包文件互相污染。
+3. direct 轮不得插入 MITM；mitm 轮必须同时保存解密后的出站数据和网关入站数据。
+4. 每轮记录镜像、客户端版本、模型、账号、Profile、实际出站协议、开始时间和运行目录。
+5. 测试结束后恢复代理、CA、账号配置和服务状态，并检查无残留抓包进程。
+
+##### 1.1.2.2 抓包分组与动作
+
+分组编号描述固定的比较关系：`AH` 表示 Anthropic HTTP，`OH` 表示 OpenAI HTTP，`OW` 表示 OpenAI WebSocket；后缀 `1` 表示官方客户端基准，`2` 表示 Sub2API 出站。客户端版本、模型、账号和运行目录由每次运行元数据确定。
+
+| 平台与路径 | 官方客户端基准 | Sub2API 出站 | 对比关系 |
+|---|---|---|---|
+| **Anthropic · HTTP** | AH-1（Claude Code） | AH-2 | AH-2 对标 AH-1 |
+| **OpenAI · HTTP** | OH-1（Codex CLI） | OH-2 | OH-2 对标 OH-1 |
+| **OpenAI · WS** | OW-1（Codex CLI） | OW-2 | OW-2 对标 OW-1 |
+
+主基线的三组路径均执行相同的 S1/S2/S4；第三方客户端兼容性补测可以选取子集，
+但不能替代主基线，当前 Kilo 覆盖范围以 §1.1.1 为准：
+
+| 主体类型 | direct 动作 | mitm 动作 |
+|---|---|---|
+| **官方客户端** | 在客户端网络命名空间抓取直连官方流量 | 配置测试 CA 与代理，解密官方客户端请求 |
+| **Sub2API** | 在 Sub2API 网络命名空间抓取直连官方流量 | 将被测账号绑定到 MITM，同时抓取 Sub2API 入站 |
+
+HTTP 路径只能对标对应的官方 HTTP 基准，WebSocket 路径只能对标官方 WebSocket 基准。协议、模型或场景不同的样本只能用于辅助观察，不能计入一致性结论。
+
+##### 1.1.2.3 样本与证据边界
+
+- **传输层证据**：仅使用未终止 TLS 的 direct pcap 判定 ClientHello、cipher、扩展、ALPN、协议选择和连接复用。
+- **应用层证据**：使用 mitm 解密记录判定 URL、HTTP 版本、Header、Body、system、tools、响应和 WS 帧。
+- **Sub2API 改写证据**：必须保存同一次请求的入站和出站，比较规范化后的语义；不能只看出站结果。
+- **样本有效性**：必须确认命中指定账号和模型、没有 API Key 或其他账号 fallback、请求成功完成，并能与 usage/请求日志对应。
+- **续轮与工具**：S2 必须形成真实连续会话；S4 必须完成“工具定义 → 工具调用 → 工具结果 → 最终回答”，发出即失败的样本无效。
+- **版本边界**：每次结论只适用于运行元数据记录的客户端、服务镜像和 Profile；版本变化后必须重抓，不能直接沿用旧数值。
+- **安全边界**：Token、Cookie、API Key 和动态身份值必须脱敏；包含完整请求 Body 的原始样本按敏感材料管理。
+
+当前实现的镜像、测试、运行目录和恢复记录统一归档在
+`backend/internal/service/testdata/official_egress/README.md`。
+
+#### 1.1.3 Sub2API `v0.1.164` 改造方案与实施结果
+
+> **基线与证据**：本节沿用 §1.1.1 的实测基线，证据归档入口见 §1.1.2.3。Profile 目标随官方客户端版本更新；不得把单个 JA3、动态身份值或完整 system 文本写成永久常量。
+
+##### 1.1.3.1 方案结论与边界
+
+1. **范围不变**：复用 `v0.1.164` 的 composite 路由、鉴权、账号调度、重试、流式响应、usage、会话粘性和代理系统；官方客户端伪装只修正三条 OAuth 官方出站路径，不改变 Key、Group、模型路由或计费归属。
+2. **薄层实现**：在现有协议转换完成后增加统一的 Profile Resolver、`OfficialEgressContext`、Finalizer 和 Transport/Dialer Provider，不分叉完整 Handler。
+3. **最小改写**：保留入口已经携带且上游支持的语义，只修正抓包已证明不一致的字段；不得合成官方内部工具、复制完整 system 或无依据展开历史。
+4. **应用与传输同时对齐**：Anthropic HTTP、OpenAI HTTP、OpenAI WebSocket 分别维护独立 Profile，同时约束 Header/Body、TLS/ALPN、协议选择和连接复用。
+5. **身份与失败边界明确**：动态身份必须来自入口、会话、响应映射或账号配置等可追踪来源。API Key 与其他非适用账号保持原行为；OAuth Profile、Host 或身份状态校验失败时必须明确失败并记录脱敏原因，不能静默切换画像。
+
+##### 1.1.3.2 改造前主要缺口
+
+| 路径 | 改造前主要缺口 | 必须保留的正确行为 |
+|---|---|---|
+| **Anthropic HTTP** | 使用了错误的客户端 UA、HTTP/TLS 画像和固定会话身份；system/cache 结构未按 OAuth 客户端形态处理 | 工具名、工具闭环及无 `temperature` 注入 |
+| **OpenAI HTTP** | 自动注入无依据的 `instructions`，改写工具 `call_id`；Header 与 Body 身份脱节，传输画像不符 | 入口 `additional_tools`、`client_metadata`、`prompt_cache_key` 等原生 Responses 字段 |
+| **OpenAI WebSocket** | 有效 `previous_response_id` 被丢弃并展开历史；续轮重复工具字段，握手身份和 WS Dialer 不符 | 首帧及入口 WS 帧的原始语义 |
+
+三条路径还共同存在动态字段来源不统一、不同账号/Profile/代理/CA 可能错误复用连接的问题，必须由公共上下文和连接池键统一解决。
+
+##### 1.1.3.3 三条路径改造结果
+
+| 路径 | 应用层结果 | 传输层结果 |
+|---|---|---|
+| **Anthropic HTTP** | 修正 Claude Code UA、Beta、Header、system/cache 结构及 session/metadata 生命周期；保留原本正确的工具与参数语义 | 使用独立 Claude HTTP Profile，对齐官方 HTTP/1.1、TLS/ALPN 和连接行为 |
+| **OpenAI HTTP** | 取消无依据的 `instructions` 注入，保留入口字段和 `call_id`；Header 与 Body 身份使用同一生命周期 | 使用独立 Codex HTTP Profile，并按代理边界选择对应传输画像 |
+| **OpenAI WebSocket** | 保留有效 `previous_response_id`；第三方客户端的完整历史被归一化为预热、正式请求和最小工具结果续轮；握手时冻结 session/thread/window/turn 身份 | 使用专用 WS Dialer，对齐握手 Header、压缩协商、TLS/ALPN 和重连边界 |
+
+Profile 只在入口端点受支持，且目标平台、OAuth 账号、实际出站协议和官方 Host 均匹配时生效。OpenAI 自动透传和 WS mode 只决定请求处理与实际出站协议：实际走 HTTP 时应用 HTTP Profile，实际走 WebSocket 时应用 WebSocket Profile，不会关闭或绕过官方客户端伪装。
+
+##### 1.1.3.4 实际采用架构
+
+```text
+选定目标平台与 OAuth 账号
+→ OfficialEgressProfileResolver
+→ OfficialEgressContext（身份值、来源、生命周期）
+→ HTTP / WebSocket Finalizer
+→ 最终校验
+→ 路径专用 Transport / WS Dialer
+→ 官方上游
+```
+
+| 路径 | 最终出站组件 |
+|---|---|
+| Anthropic HTTP | Claude Finalizer + Claude HTTP Transport |
+| OpenAI HTTP | Codex HTTP Finalizer + Codex HTTP Transport |
+| OpenAI WebSocket | WS Handshake/Frame Finalizer + Codex WS Dialer |
+
+运行规则：
+
+1. HTTP 重试切换账号时重新构建上下文；WebSocket 握手成功后冻结账号和身份，切换时必须重新连接。
+2. 连接池键同时包含账号、Profile 版本、协议、Host、代理、CA 和 TLS Profile，禁止跨画像复用。
+3. Profile 常量集中按版本维护；动态字段只保存生成规则和来源，不保存完整抓包值。
+
+##### 1.1.3.5 实施顺序（已全部完成）
+
+| 阶段 | 任务 | 完成条件 |
+|---|---|---|
+| 0 · 基线 | 使用相同 S1/S2/S4 完成官方客户端与 Sub2API 的 direct、mitm、ingress 配对 | 三条路径的应用与传输差异可稳定复现 |
+| 1 · 路由与契约 | 固化三路径路由、账号命中、usage、重试及必要的原生客户端契约 | 三条路径命中正确平台账号，非 Profile 契约问题独立处理 |
+| 2 · 公共骨架 | 实现 Profile、上下文、字段来源、校验、脱敏日志和账号资格判断 | API Key 等非适用账号零行为变化，HTTP 重试重建上下文，WS 身份冻结 |
+| 3 · 传输层 | 实现三套 Transport/Dialer 和隔离连接池键 | 直连、代理、CA、账号和 Profile 之间无错误复用 |
+| 4 · 应用层 | 依次完成 Anthropic HTTP、OpenAI HTTP、OpenAI WebSocket Finalizer | 三条路径的 S1/S2/S4、工具和续轮语义通过 |
+| 5 · 抓包验收 | 每完成一条路径即在 Vircs 重跑 direct、mitm、ingress | 应用层与传输层均达到对应官方 Profile |
+| 6 · 回归与合并 | 全量、竞态、性能测试及连续版本合并演练 | 无功能、安全和性能回归，核心 Handler 保持薄调用点 |
+
+##### 1.1.3.6 验收标准与完成结果
+
+| 验收项 | 完成结果 |
+|---|---|
+| **路由与账务** | 三条路径命中正确平台 OAuth 账号，重试、usage 和计费归属正确；Profile 不改变 Key/Group 权限 |
+| **Anthropic HTTP** | S1/S2/S4 全部成功，工具和参数无回归，system/cache、动态身份及 HTTP/1.1 传输画像达到目标 |
+| **OpenAI HTTP** | 非流式、SSE、工具、续轮和账号切换通过；入口语义、`call_id`、动态身份及 HTTP 传输画像达到目标 |
+| **OpenAI WebSocket** | 首轮、续轮、工具、重连和 HTTP 回退通过；有效续轮、握手身份及 WS 传输画像达到目标 |
+| **第三方客户端接入** | Kilo 六种“入站协议 × 目标上游”组合均通过；协议转换、工具语义和多轮上下文正确，最终统一使用目标平台对应的官方出站画像 |
+| **模式独立性** | 自动透传开关及四种 WS mode 均不绕过 Profile，按实际出站协议选择 HTTP 或 WS 画像 |
+| **适用边界** | Anthropic/OpenAI OAuth 自动生效；API Key、其他平台及非模型入口保持原行为 |
+| **安全与回归** | 敏感值未进入普通日志；Host、代理和重定向边界受控；全量、竞态、性能及合并演练通过 |
+
+第三方客户端回归矩阵：
+
+| Kilo 入站格式 | 目标上游 | 最终出站画像 | 结果 |
+|---|---|---|---|
+| OpenAI Responses | OpenAI | Codex HTTP/WS Profile（按实际出站协议） | 通过 |
+| OpenAI Compatible | OpenAI | Codex HTTP Profile | 通过 |
+| Anthropic | Anthropic | Claude HTTP Profile | 通过 |
+| OpenAI Responses | Anthropic | Claude HTTP Profile | 通过 |
+| OpenAI Compatible | Anthropic | Claude HTTP Profile | 通过 |
+| Anthropic | OpenAI | Codex HTTP Profile | 通过 |
+
+以上是六种协议转换与路由组合，不是六套伪装实现。以后修改入站协议转换、模型/账号路由、Finalizer 或 Transport 时必须重跑受影响组合；修改公共 Resolver 或目标平台公共出站链路时必须重跑全部六种组合。
+
+详细请求计数、字段差异、TLS 数据、运行编号和恢复记录统一保存在[实证 README](backend/internal/service/testdata/official_egress/README.md)。
+
+##### 1.1.3.7 编码任务分解（已完成）
+
+所有任务均按“实现一项 → 自动化测试 → Vircs 抓包实证 → 进入下一项”的门禁执行。
+
+| 任务 | 主要产物 | 完成门禁 |
+|---|---|---|
+| **T1 · 源码落点与契约测试** | 三条真实出站调用点、结构夹具、非适用账号隔离测试和字段来源表 | 稳定复现改造前缺口，不改变非 OAuth 行为 |
+| **T2 · Profile 公共骨架** | Resolver、`OfficialEgressContext`、账号资格判断、校验及脱敏日志 | OAuth 自动生效，非适用账号零变化，错误状态明确失败，HTTP/WS 生命周期正确 |
+| **T3 · Transport 与连接池** | 三套 Transport/Dialer、代理/CA 支持及隔离连接池键 | direct 与代理抓包达标，无跨账号/Profile/CA 复用 |
+| **T4 · Anthropic HTTP** | Claude Finalizer、system/cache、动态身份及 HTTP/1.1 Profile | S1/S2/S4、工具、参数、mitm 和 direct 通过 |
+| **T5 · OpenAI HTTP** | Body/Header Finalizer、`call_id`、身份上下文及 HTTP Profile | 非流式/SSE/工具/续轮/重试及抓包通过 |
+| **T6 · OpenAI WebSocket** | Handshake/Frame Finalizer、WS Dialer及重连边界 | 首轮、有效续轮、工具、未知帧、身份冻结及抓包通过 |
+| **T7 · 回归、性能与合并** | 全量/竞态/性能测试、三路径重抓及连续版本合并记录 | §1.1.3.6 全部通过，无安全和行为回归 |
+| **N2 · 第三方客户端适配** | Kilo 六种“入站协议 × 目标上游”组合及 OpenAI WebSocket 完整历史归一化 | 六路协议转换与路由通过；HTTP S1/S4、WebSocket S1/S2/S4、工具身份及传输画像通过 |
+
+T1–T7 与 N2 均已完成。N1 是 `/v1/models`、Chat Completions 和 Gemini Native 的关联契约补测，不属于 Official Egress Profile 的核心改造范围，亦已完成。
+
+**结论**：§1.1.1 所述目标已在当前版本、Profile 及已验收的官方客户端和 Kilo 入站场景内完成。
+
+### 1.2 API Key 官方客户端兼容
 
 API Key 官方客户端兼容让 Kilo / Cline / Cursor / Roo Code 等非官方客户端尽量接近 Claude / Codex 官方客户端的 header、body、TLS 和路由形态。mimic 只作用于启用对应开关的 Anthropic / OpenAI API Key 账号和非官方客户端；官方 Claude / Codex 桌面版或 CLI 统一跳过 mimic，按普通 API Key 逻辑处理。
 
@@ -122,7 +318,7 @@ OpenAI `/v1/responses/compact` 是特例：上游保持官方 unary JSON 形态�
 
 2026-07-15 抓包验证基线：官方 Codex Desktop 0.144.0-alpha.4 与 Claude Desktop `claude-cli/2.1.209` 分别接入 sub2apiplus 建立入站基准；Kilo 与账号测试经 mimic 访问 `gpt-5.6-sol`、`claude-fable-5` 均返回 HTTP 200。`Anthropic-Dangerous-Direct-Browser-Access: true` 在官方 Claude Desktop 原始请求和 mimic 出站请求中均存在，应作为已确认的桌面 Header 保留。
 
-### 1.2 Antigravity 增强
+### 1.3 Antigravity 增强
 
 Antigravity 增强用于让 Antigravity 账号新增后默认可用；新建账号默认白名单、默认映射和 `/models` 收敛到官方抓包确认的 8 个模型，同时保留账号编辑页“自定义模型名称”入口，允许管理员手动把后续新增的 Google / Antigravity 模型加入该账号白名单。
 
@@ -147,7 +343,7 @@ Antigravity 增强用于让 Antigravity 账号新增后默认可用；新建账�
 | 官方伪装 | UA 为 `antigravity/hub/2.2.1 darwin/arm64`；默认 8 模型忽略客户端 `thinking` / `output_config.effort`，使用表中固定预算；在内层 `request.labels` 补 `model_enum/trajectory_id` 等官方标签并生成同源 `requestId`，过滤无关 stop / sampling 参数。手动追加模型按其名称发包，无需进入全局官方模型表。 |
 | 计费 | 按最终实际发包模型 `UpstreamModel` 查价，日志保留外部模型，且优先于渠道 `requested` / `channel_mapped`；`gpt-oss-120b-medium` 为 `$0.05 / $0.01 / $0.20` 每 1M tokens。 |
 
-### 1.3 账号保活
+### 1.4 账号保活
 
 账号保活用于在 OpenAI / Anthropic API Key 账号空闲超过配置间隔后，通过官方 `codex` / `claude` 客户端在真实项目目录发起低频请求，维持上游账号活跃。
 
@@ -197,76 +393,6 @@ Anthropic keeper 通过主服务内部代理转发 Claude CLI 请求。该链路
 | 概览 | keeper 版本、账号数、成功/失败、运行中账号、24 小时用量/费用、最近结果、下次时间和立即执行；账号列表只展示已启用目标。 |
 | 配置 | 管理账号、模型、项目、间隔、工作时间、执行模式、账号 prompt、全局约束和题库；支持全部/已启用/已禁用筛选，已启用优先，同状态按账号 ID 倒序。 |
 | 会话历史 | 展示时间、账号、状态、模型、token、费用、摘要、错误、提示词和 assistant 回复；从全部 target 汇总，停用账号的既有记录仍可查看，完整上游/客户端错误保留在错误详情中。 |
-
-### 1.4 上游 v0.1.164 同步能力
-
-本版完整合并上游 `v0.1.164`，并继续保留前述 Plus mimic、Antigravity 和 keeper 行为。相对 `v0.1.162` 的主要新增与修复如下：
-
-| 范围 | 更新内容 |
-|---|---|
-| 聚合分组 | 新增 `composite` 平台类型，可按公开模型、匹配方式和端点把请求路由到 Anthropic、Gemini、OpenAI、Antigravity 或 Grok，并支持上游模型别名、优先级和路由预览。 |
-| 计费 | Composite 请求默认按实际转发的具体模型计费；仅在公开别名配置了明确渠道定价时按别名计费，避免未知别名零计费或家族模糊匹配错价。 |
-| Ollama | Ollama 账号支持自动刷新 Cloud 官方用量，并收紧会话审计日志和凭证清理。 |
-| OpenAI / Codex | 官方账号测试默认使用具体模型 `gpt-5.6-sol`；修复 OAuth 透传 `input` 规范化、流式异常代理隔离和大批量身份导入索引性能。 |
-| Grok / xAI | 账号收到 402 后进入冷却；修复简易模式图片能力、Composite 路由和 CC Switch 导入平台归类。 |
-| 支付与前端 | 支付宝预下单支持移动端深链；模型限流恢复时间超过 24 小时按天和具体日期显示，并包含多项移动端布局修复。 |
-| 基础设施 | Redis 支持 ACL 用户名；升级前端和 Go 依赖以修复安全公告，并改进优雅关停时的用量清理。 |
-
-#### v0.1.162 历史同步能力
-
-本版完整合并上游 `v0.1.162`，并继续保留前述 Plus mimic、Antigravity 和 keeper 行为。相对 `v0.1.161` 的主要新增与修复如下：
-
-| 范围 | 更新内容 |
-|---|---|
-| 客户端 IP | 支持显式可信代理、自定义客户端 IP 请求头和运行时切换；Plus 新安装及升级默认继续关闭原始转发头接管，只有源站已限制为可信代理时才建议开启。 |
-| 图像存储 | 异步生图对象存储改为后台配置并保存即生效；修复环境变量凭证加载和临时加密密钥导致的重启后解密失败。 |
-| OpenAI / Codex | HTTP 桥接首轮传输、HTTP 和 SSE 失败可正确故障转移；模型清单兼容标准 OpenAI 响应，401 OAuth 账号会被标记为不可调度，并修复 system prompt 重复注入和 call_id 长度问题。 |
-| Grok / xAI | 新增客户端工具缓存开关并保持跨轮次路由；支持链式视频内容代理、手动连接测试绕过调度门控、本地 count_tokens 估算及配额探测瞬时失败重试。 |
-| 安全与计费 | 部分更新 API Key 不再清空 IP 规则；提示词安全审计仅在拦截模式下 fail-closed；同账号重试不再重复计入缓存计费；OpenAI 配额不足返回标准错误格式。 |
-| 前端与运维 | 订阅到期时间精确到分钟；暗色模式统一 slate 色板；批量生图指引接入多语言；更新检查支持独立 GitHub Token；原地更新与 HTTP 请求生命周期解耦。 |
-| 部署 | 修复 dev/local Compose 中 Redis 持久化参数和 PostgreSQL 调优参数未实际生效的问题。 |
-
-### 1.5 上游 v0.1.161 同步能力
-
-本版完整合并上游 `v0.1.157` 至 `v0.1.161`，并继续保留前述 Plus mimic、Antigravity 和 keeper 行为。相对 `v0.1.156` 的主要新增与修复如下：
-
-| 范围 | 更新内容 |
-|---|---|
-| 安全与审计 | 新增管理端操作审计、会话 IP/UA 绑定和敏感操作现场 TOTP 二次验证；新增入口拒绝聚合、默认开启的无效鉴权限流及跨实例 API Key 鉴权缓存失效 outbox。会话 IP/UA 绑定和敏感操作 step-up 总开关默认关闭。 |
-| 图像与计费 | 新增异步图像任务 API 和对象存储结果保存；拆分图片输入 token 计费；新增上游计费倍率探测并参与 OpenAI 账号调度。 |
-| OpenAI / Codex | 图片意图只调度到具备 Responses 能力的账号；瞬时冷却按最终模型隔离；Responses 流补齐 `content_part` 与完整 output，修复 WS 回合生命周期；瞬时账号耗尽改为返回 503；上游拒绝的 Responses 字段可剥离后重试。 |
-| Grok / xAI | 支持官方、区域和自定义上游切换；媒体能力按付费资格门控并在首次使用时主动探测，空 200 响应触发故障转移；统一媒体模型映射，受保护视频代理执行同源和所有者校验。 |
-| Antigravity | 保留已识别账号的付费 `PlanType`，异常 tier 不再覆盖它；账号临时冷却按最终上游模型隔离，避免单个模型故障封锁整账号。 |
-| 管理能力 | 支持用户并发数/RPM 批量修改、分组复制、渠道监控复制及账号上游链接跳转；Stripe 支付依赖改为按需加载。 |
-| 网络与权限 | API Key ACL、审计、会话绑定和无效鉴权限流统一通过 `server.trusted_proxies` 解析真实客户端地址，旧“信任转发 IP”开关仅保留 API 兼容；新增请求头和文本请求体限制，并收紧 HTTP 超时配置校验。 |
-| 部署 | Docker 支持按目标架构交叉编译；Compose 修复 Redis 持久化参数未实际传入的问题；新增边缘代理可信 IP 配置说明。 |
-
-### 1.6 上游 v0.1.156 同步能力
-
-本版完整合并上游 `v0.1.156`，并继续保留前述 Plus mimic、Antigravity 和 keeper 行为。相对 `v0.1.155` 的主要新增与修复如下：
-
-| 范围 | 更新内容 |
-|---|---|
-| OpenAI 认证与账号 | 新增 Codex Agent Identity 认证和前端认证模式标识；账号管理支持安全复制，账号重复创建具备幂等保护。 |
-| OpenAI 转发 | API Key 透传遇到 `5xx` 可触发故障切换并脱敏上游错误；修复客户端断开误报账号耗尽、原生 Responses 首输出无限等待和根路径模型别名缺失。 |
-| Responses 与协议兼容 | force-chat 可直接桥接 Anthropic 与 Chat Completions；修复并行工具调用索引、拼接流事件、不完整流终结、Read 工具参数流和 Responses Lite 工具声明。 |
-| WebSocket 与图像 | WebSocket 首消息总读取超时支持配置；优化流式刷新和图片意图复用；修复图像 JSON 完成边界、OAuth 图片尺寸上报和 Grok 视觉模型 `image_url` 桥接。 |
-| Grok / xAI | OAuth 凭证错误可安全故障切换，OAuth 池主动刷新并统一管理刷新路由；修复 Free Messages 工具缓存及图片模型误发 Responses 端点。 |
-| 调度与性能 | 完善调度缓存桶生命周期和批次查询复用，修复 degraded outbox 重复重建；优化内容审核、Ops 查询和会话种子扫描。 |
-| 前端与运维 | `/keys` 和 `/admin/groups` 支持可选 ID 列；Server-Timing 扩展到认证用户 Web API；修复 DataTable 行缓存、legacy Codex 配置及非指纹静态资源缓存。 |
-
-### 1.7 上游 v0.1.155 同步能力
-
-本版完整合并上游 `v0.1.155`，并继续保留前述 Plus mimic、Antigravity 和 keeper 行为。相对 `v0.1.153` 的主要新增与修复如下：
-
-| 范围 | 更新内容 |
-|---|---|
-| Grok / xAI | 监控中心支持 Grok 健康检查，新导入 OAuth 账号自动探活并展示 Free 计划；新增 Web SSO 批量导入，免费配额改为滚动 24 小时估算；修复 reasoning 空内容、媒体路由和提示词缓存路由标识。 |
-| OpenAI / Codex | 上游连接启用 HTTP/2 keep-alive PING；Codex 模型清单支持经 API Key 上游获取、缓存刷新和账号故障转移；改进 reset credits 检测，并对计划门控模型按账号冷却。 |
-| Responses 与图像 | 原生 Responses 和 WSv2 保留工具 namespace；Responses Lite 保留客户端图像工具；避免重复注入图像工具，非流式图像请求支持保活，流式结果补齐最终状态。 |
-| 计费与模型映射 | OpenAI 长上下文计费改为账号级开关且默认关闭；修复 `/v1/messages` 精确模型映射未生效和长上下文重复计费问题。 |
-| 调度与性能 | 账号暂停、代理到期不再触发全量重建，并发重建自动合并；修复事件延迟计算；网关复用请求视图，避免重复扫描大请求体。 |
-| 运维与监控 | 系统日志支持按主机名过滤；管理后台可选采集 Server-Timing；新增长上下文计费、日志主机索引和 Grok 渠道监控迁移。 |
 
 ## 2. 全新服务器部署
 
@@ -597,7 +723,7 @@ Gemini 支持内置 Gemini CLI OAuth Client 的 Code Assist OAuth、通过 `.env
 
 二进制 `install.sh` 仍是上游兼容的 systemd 安装路径，不安装 keeper sidecar；需要账号保活时使用 Docker Compose 部署。
 
-TLS fingerprint 的 profile、ALPN 和 HTTP/2 行为见第 1.1、4.3 节；账号需同时启用对应 mimic 开关和 `enable_tls_fingerprint`。
+TLS fingerprint 的 profile、ALPN 和 HTTP/2 行为见第 1.2、4.3 节；账号需同时启用对应 mimic 开关和 `enable_tls_fingerprint`。
 
 ## 4. 维护参考
 
@@ -650,7 +776,7 @@ git diff --stat v0.1.164..HEAD
 合并上游后按第 1 节功能规则重点确认：
 **API Key mimic**
 - 只对非官方客户端触发，官方 Claude / Codex 客户端回到 passthrough 或普通 API Key 逻辑；命中 mimic 时关键身份头不被账号 header override 覆盖。
-- Anthropic 使用 mimic 专用完整 beta 列表，不影响普通 API Key；`/v1/messages` 与 `/v1/messages/count_tokens` 保持第 1.1 节的独立构造边界，工具名归一和 per-request reverseMap 只修改结构化工具字段。
+- Anthropic 使用 mimic 专用完整 beta 列表，不影响普通 API Key；`/v1/messages` 与 `/v1/messages/count_tokens` 保持第 1.2 节的独立构造边界，工具名归一和 per-request reverseMap 只修改结构化工具字段。
 - Anthropic API Key Desktop mimic 默认使用标准 Transport，不得自动套用旧 Claude CLI 2.1.207 / Node.js 26 profile；管理员显式选择的固定或随机 TLS profile 仍优先，平台、账号类型或客户端不匹配时不得套用。
 - OpenAI mimic 强制 HTTP，跳过 mimic 后账号调度、previous response 粘连复核和最终转发都恢复普通 WS/HTTP 路由；`/v1/messages` 固定走 Responses mimic，compact 保持上游 JSON 并按需桥接下游 SSE。
 - `desktop_0_144` 为默认 profile，旧 `desktop_0_142` / `codex_desktop_0_142` 仅作为配置兼容别名；Desktop 使用 macOS Codex Desktop UA、`originator` 和动态 turn metadata，默认不套用 `codex_exec` Rustls profile，并通过标准 Go Transport 走 HTTP/2；`cli_rs_0_125` 保留独立 CLI 回滚路径，管理员显式 TLS profile 继续优先。

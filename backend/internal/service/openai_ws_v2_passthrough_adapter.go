@@ -620,6 +620,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if err := validateOpenAIWSBearerToken(account, token); err != nil {
 		return err
 	}
+	originalFirstClientMessage := cloneOpenAIWSPayloadBytes(firstClientMessage)
 	if account.IsOpenAIOAuth() && isOpenAIResponsesLiteWebSocketPayload(firstClientMessage) {
 		liteFirstMessage, _, liteErr := normalizeOpenAIResponsesLiteToolsPayload(firstClientMessage)
 		if liteErr != nil {
@@ -683,6 +684,20 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, blocked.Message, blocked)
 	}
 	firstClientMessage = updatedFirst
+	firstClientMessage, _, policyErr = finalizeOpenAIOfficialEgressWSFrame(
+		ctx,
+		originalFirstClientMessage,
+		firstClientMessage,
+		"",
+		false,
+	)
+	if policyErr != nil {
+		return NewOpenAIWSClientCloseError(
+			coderws.StatusPolicyViolation,
+			"official egress websocket first frame validation failed",
+			policyErr,
+		)
+	}
 
 	// 在 policy filter 之后再提取 service_tier / reasoning_effort 用于
 	// usage 上报：filter
@@ -850,6 +865,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			if msgType != coderws.MessageText {
 				return payload, nil, nil
 			}
+			originalPayload := cloneOpenAIWSPayloadBytes(payload)
 			eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
 			isResponseCreate := eventType == "response.create"
 			acceptedTurn := false
@@ -913,6 +929,25 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				model = capturedSessionModel
 			}
 			out, blocked, policyErr := s.applyOpenAIFastPolicyToWSResponseCreate(ctx, account, model, payload)
+			if policyErr == nil && blocked == nil {
+				expectedPreviousResponseID := strings.TrimSpace(
+					gjson.GetBytes(originalPayload, "previous_response_id").String(),
+				)
+				out, _, policyErr = finalizeOpenAIOfficialEgressWSFrame(
+					ctx,
+					originalPayload,
+					out,
+					expectedPreviousResponseID,
+					false,
+				)
+				if policyErr != nil {
+					return payload, nil, NewOpenAIWSClientCloseError(
+						coderws.StatusPolicyViolation,
+						"official egress websocket frame validation failed",
+						policyErr,
+					)
+				}
+			}
 			// 多轮 passthrough usage：仅在成功（non-block / non-err）
 			// 的 response.create 帧上更新 usageMeta，使用
 			// filter 处理后的 payload，与首帧 policy-after-extract 语义

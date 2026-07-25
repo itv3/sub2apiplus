@@ -2,6 +2,10 @@ export default {
     plusEnhancements: {
       title: 'Plus 增强功能',
       description: '统一管理 Sub2API Plus 的账号增强能力',
+      officialEgress: {
+        title: 'OAuth 官方客户端伪装已内置启用',
+        description: '所有 Anthropic/OpenAI OAuth 官方出站请求会自动使用对应的 Claude Code/Codex CLI 画像；官方客户端和第三方客户端入站均生效。'
+      },
       tabs: {
         mimic: 'API Key 官方客户端兼容',
         keepalive: '账号保活'
@@ -1008,6 +1012,7 @@ export default {
           label: '自定义转发地址',
           hint: '启用后将请求转发到自定义中继服务，代理地址将作为 URL 参数传递给中继服务',
           urlHint: '中继服务地址（如 https://relay.example.com）',
+          officialEgressConflict: 'OAuth 官方客户端伪装已内置启用，不能同时使用自定义转发地址。',
         },
         clientAffinity: {
           label: '客户端亲和调度',

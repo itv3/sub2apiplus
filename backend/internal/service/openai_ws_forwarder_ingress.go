@@ -61,6 +61,32 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	wsDecision := resolveOpenAIWSProtocolForRequest(s.getOpenAIWSProtocolResolver(), ctx, account)
+	officialEgressEnabled, _, officialEgressConfigErr := resolveOfficialEgressAccountProfile(account)
+	if officialEgressConfigErr != nil {
+		return fmt.Errorf("resolve official egress config: %w", officialEgressConfigErr)
+	}
+	officialEgressWSURL := ""
+	attachOfficialWebSocketProfile := func() error {
+		if !officialEgressEnabled {
+			return nil
+		}
+		var buildErr error
+		officialEgressWSURL, buildErr = s.buildOpenAIResponsesWSURL(account)
+		if buildErr != nil {
+			return fmt.Errorf("build official egress ws url: %w", buildErr)
+		}
+		ctx, buildErr = attachOfficialEgressWebSocketContext(
+			ctx,
+			c,
+			account,
+			officialEgressWSURL,
+			firstClientMessage,
+		)
+		if buildErr != nil {
+			return fmt.Errorf("resolve official egress profile: %w", buildErr)
+		}
+		return nil
+	}
 	forceHTTPBridge := account.Platform == PlatformGrok
 	modeRouterV2Enabled := s != nil && s.cfg != nil && s.cfg.Gateway.OpenAIWS.ModeRouterV2Enabled
 	ingressMode := OpenAIWSIngressModeCtxPool
@@ -77,6 +103,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		case OpenAIWSIngressModePassthrough:
 			if wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
 				return fmt.Errorf("websocket ingress requires ws_v2 transport, got=%s", wsDecision.Transport)
+			}
+			if err := attachOfficialWebSocketProfile(); err != nil {
+				return err
 			}
 			return s.proxyResponsesWebSocketV2Passthrough(
 				ctx,
@@ -103,6 +132,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	if !forceHTTPBridge && wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2 {
 		return fmt.Errorf("websocket ingress requires ws_v2 transport, got=%s", wsDecision.Transport)
 	}
+	if !forceHTTPBridge {
+		if err := attachOfficialWebSocketProfile(); err != nil {
+			return err
+		}
+	}
 	dedicatedMode := modeRouterV2Enabled && ingressMode == OpenAIWSIngressModeDedicated
 
 	wsURL := ""
@@ -113,7 +147,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		wsPath = "/v1/responses"
 	} else {
 		var err error
-		wsURL, err = s.buildOpenAIResponsesWSURL(account)
+		wsURL = officialEgressWSURL
+		if wsURL == "" {
+			wsURL, err = s.buildOpenAIResponsesWSURL(account)
+		}
 		if err != nil {
 			return fmt.Errorf("build ws url: %w", err)
 		}
@@ -231,7 +268,12 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				nil,
 			)
 		}
-		if turnMetadata := strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader)); turnMetadata != "" {
+		// 官方 Codex 会在同一连接内为每个 response.create 更新 Body 中的
+		// turn metadata；握手 Header 则保持建连时的 prewarm metadata。
+		// Official Egress 必须保留逐帧真实值，不能用连接级 Header 覆盖。
+		officialEgressFrameEnabled := officialEgressEnabled
+		if turnMetadata := strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader)); turnMetadata != "" &&
+			!officialEgressFrameEnabled {
 			next, setErr := applyPayloadMutation(normalized, "client_metadata."+openAIWSTurnMetadataHeader, turnMetadata)
 			if setErr != nil {
 				return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "invalid websocket request payload", setErr)
@@ -657,13 +699,15 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	agentTaskRecoveryTried := false
+	forceFreshConn := false
 	var acquireTurnLease func(int, string, bool) (*openAIWSConnLease, error)
 	acquireTurnLease = func(turn int, preferred string, forcePreferredConn bool) (*openAIWSConnLease, error) {
 		req := cloneOpenAIWSAcquireRequest(baseAcquireReq)
 		req.PreferredConnID = strings.TrimSpace(preferred)
 		req.ForcePreferredConn = forcePreferredConn
-		// dedicated 模式下每次获取均新建连接，避免跨会话复用残留上下文。
-		req.ForceNewConn = dedicatedMode
+		// dedicated 模式下每次获取均新建连接；复用连接发生读写错误后的
+		// 单次重试也必须新建，不能继续从池中挑选另一条可能同样失效的空闲连接。
+		req.ForceNewConn = dedicatedMode || forceFreshConn
 		acquireCtx, acquireCancel := context.WithTimeout(ctx, acquireTimeout)
 		lease, acquireErr := pool.Acquire(acquireCtx, req)
 		acquireCancel()
@@ -723,6 +767,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			return nil, acquireErr
 		}
+		forceFreshConn = false
 		connID := strings.TrimSpace(lease.ConnID())
 		if handshakeTurnState := strings.TrimSpace(lease.HandshakeHeader(openAIWSTurnStateHeader)); handshakeTurnState != "" {
 			turnState = handshakeTurnState
@@ -749,7 +794,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		return lease, nil
 	}
 
-	sendAndRelay := func(turn int, lease *openAIWSConnLease, payload []byte, payloadBytes int, originalModel string, imageBillingModel string, imageSizeTier string, imageInputSize string) (*OpenAIForwardResult, error) {
+	sendAndRelay := func(turn int, lease *openAIWSConnLease, payload []byte, payloadBytes int, originalModel string, imageBillingModel string, imageSizeTier string, imageInputSize string, relayToClient bool) (*OpenAIForwardResult, error) {
 		if lease == nil {
 			return nil, errors.New("upstream websocket lease is nil")
 		}
@@ -925,7 +970,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				}
 			}
 
-			if !clientDisconnected {
+			if relayToClient && !clientDisconnected {
 				if needModelReplace && len(mappedModelBytes) > 0 && openAIWSEventMayContainModel(eventType) && bytes.Contains(upstreamMessage, mappedModelBytes) {
 					upstreamMessage = replaceOpenAIWSMessageModel(upstreamMessage, mappedModel, originalModel)
 				}
@@ -1018,6 +1063,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	currentPayload := firstPayload.payloadRaw
+	currentOriginalPayload := firstPayload.rawForHash
 	currentOriginalModel := firstPayload.originalModel
 	currentImageBillingModel := firstPayload.imageBillingModel
 	currentImageSizeTier := firstPayload.imageSizeTier
@@ -1082,6 +1128,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	turn := 1
 	turnRetry := 0
 	turnPrevRecoveryTried := false
+	derivedUserTurnPrepared := 0
 	lastTurnFinishedAt := time.Time{}
 	lastTurnResponseID := ""
 	lastTurnPayload := []byte(nil)
@@ -1199,6 +1246,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
 		)
 		resetSessionLease(true)
+		forceFreshConn = true
 		skipBeforeTurn = true
 		return true
 	}
@@ -1226,6 +1274,16 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 		}
 		hasFunctionCallOutput := toolSignals.HasFunctionCallOutput
+		// Codex CLI 的每个新用户轮次都新建上游 WS，并先执行一轮
+		// generate=false 预热；工具结果续轮则继续使用同一条连接。
+		if isDerivedOpenAIOfficialEgressWSContext(ctx) &&
+			!hasFunctionCallOutput &&
+			currentPreviousResponseID == "" &&
+			derivedUserTurnPrepared != turn {
+			resetSessionLease(false)
+			forceFreshConn = true
+			derivedUserTurnPrepared = turn
+		}
 		// store=false + function_call_output 场景必须有续链锚点。
 		// 若客户端未传 previous_response_id，优先回填上一轮响应 ID，避免上游报 call_id 无法关联。
 		if shouldInferIngressFunctionCallOutputPreviousResponseID(
@@ -1282,17 +1340,21 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			openAIWSRawItemsHasFunctionCallOutput(currentTurnReplayInput)
 		hasFunctionCallOutput = hasFunctionCallOutput || replayHasFunctionCallOutput
 		if storeDisabled && turn > 1 && currentPreviousResponseID != "" {
-			shouldKeepPreviousResponseID := false
-			strictReason := ""
+			shouldKeepPreviousResponseID := shouldPreserveOpenAIOfficialEgressWSPreviousResponseID(
+				ctx,
+				currentPreviousResponseID,
+				expectedPrev,
+			)
+			strictReason := "official_egress_valid_chain"
 			var strictErr error
-			if lastTurnStrictState != nil {
+			if !shouldKeepPreviousResponseID && lastTurnStrictState != nil {
 				shouldKeepPreviousResponseID, strictReason, strictErr = shouldKeepIngressPreviousResponseIDWithStrictState(
 					lastTurnStrictState,
 					currentPayload,
 					lastTurnResponseID,
 					hasFunctionCallOutput,
 				)
-			} else {
+			} else if !shouldKeepPreviousResponseID {
 				shouldKeepPreviousResponseID, strictReason, strictErr = shouldKeepIngressPreviousResponseID(
 					lastTurnPayload,
 					currentPayload,
@@ -1403,7 +1465,15 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 					hasReplayToolContext := hasFCOutput &&
 						currentTurnReplayInputExists &&
 						openAIWSRawItemsHaveToolCallContextForOutputs(currentTurnReplayInput)
-					if !turnPrevRecoveryTried && currentPreviousResponseID != "" && (!hasFCOutput || hasReplayToolContext) {
+					preserveOfficialChain := shouldPreserveOpenAIOfficialEgressWSPreviousResponseID(
+						ctx,
+						currentPreviousResponseID,
+						expectedPrev,
+					)
+					if !preserveOfficialChain &&
+						!turnPrevRecoveryTried &&
+						currentPreviousResponseID != "" &&
+						(!hasFCOutput || hasReplayToolContext) {
 						updatedPayload, removed, dropErr := dropPreviousResponseIDFromRawPayload(currentPayload)
 						if dropErr != nil || !removed {
 							reason := "not_removed"
@@ -1510,7 +1580,112 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			)
 		}
 
-		result, relayErr := sendAndRelay(turn, sessionLease, currentPayload, currentPayloadBytes, currentOriginalModel, currentImageBillingModel, currentImageSizeTier, currentImageInputSize)
+		finalPayload, _, finalizeErr := finalizeOpenAIOfficialEgressWSFrame(
+			ctx,
+			currentOriginalPayload,
+			currentPayload,
+			expectedPrev,
+			turnPrevRecoveryTried,
+		)
+		if finalizeErr != nil {
+			return NewOpenAIWSClientCloseError(
+				coderws.StatusPolicyViolation,
+				"official egress websocket frame validation failed",
+				finalizeErr,
+			)
+		}
+		currentPayload = finalPayload
+		currentPayloadBytes = len(finalPayload)
+		outboundPayload := currentPayload
+		outboundPayloadBytes := currentPayloadBytes
+		var result *OpenAIForwardResult
+		var relayErr error
+		toolContinuationPayload, toolContinuationChanged, toolContinuationErr :=
+			buildDerivedOpenAIOfficialEgressWSToolContinuationFrame(
+				ctx,
+				outboundPayload,
+				expectedPrev,
+			)
+		if toolContinuationErr != nil {
+			return NewOpenAIWSClientCloseError(
+				coderws.StatusPolicyViolation,
+				"official egress websocket tool continuation construction failed",
+				toolContinuationErr,
+			)
+		}
+		if toolContinuationChanged {
+			outboundPayload = toolContinuationPayload
+			outboundPayloadBytes = len(outboundPayload)
+		}
+		{
+			prewarmPayload, shouldInject, prewarmBuildErr :=
+				buildDerivedOpenAIOfficialEgressWSPrewarmFrame(ctx, outboundPayload)
+			if prewarmBuildErr != nil {
+				return NewOpenAIWSClientCloseError(
+					coderws.StatusPolicyViolation,
+					"official egress websocket prewarm construction failed",
+					prewarmBuildErr,
+				)
+			}
+			if shouldInject {
+				prewarmResult, prewarmRelayErr := sendAndRelay(
+					turn,
+					sessionLease,
+					prewarmPayload,
+					len(prewarmPayload),
+					currentOriginalModel,
+					currentImageBillingModel,
+					currentImageSizeTier,
+					currentImageInputSize,
+					false,
+				)
+				if prewarmRelayErr != nil {
+					relayErr = prewarmRelayErr
+				} else if prewarmResult == nil ||
+					!prewarmResult.SucceededForScheduling() ||
+					strings.TrimSpace(prewarmResult.RequestID) == "" {
+					relayErr = wrapOpenAIWSIngressTurnError(
+						"read_upstream",
+						errors.New("official egress websocket prewarm did not return a successful response ID"),
+						false,
+					)
+				} else {
+					outboundPayload, prewarmBuildErr =
+						chainDerivedOpenAIOfficialEgressWSBusinessFrame(
+							ctx,
+							outboundPayload,
+							prewarmResult.RequestID,
+						)
+					if prewarmBuildErr != nil {
+						return NewOpenAIWSClientCloseError(
+							coderws.StatusPolicyViolation,
+							"official egress websocket prewarm chaining failed",
+							prewarmBuildErr,
+						)
+					}
+					outboundPayloadBytes = len(outboundPayload)
+					logOpenAIWSModeInfo(
+						"ingress_ws_official_prewarm_chain account_id=%d turn=%d conn_id=%s",
+						account.ID,
+						turn,
+						truncateOpenAIWSLogValue(connID, openAIWSIDValueMaxLen),
+					)
+				}
+			}
+		}
+		if relayErr == nil {
+			result, relayErr = sendAndRelay(
+				turn,
+				sessionLease,
+				outboundPayload,
+				outboundPayloadBytes,
+				currentOriginalModel,
+				currentImageBillingModel,
+				currentImageSizeTier,
+				currentImageInputSize,
+				true,
+			)
+		}
 		if relayErr != nil {
 			lastTurnClean = false
 			if recoverIngressPrevResponseNotFound(relayErr, turn, connID) {
@@ -1541,14 +1716,14 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		responseID := strings.TrimSpace(result.RequestID)
 		lastTurnResponseID = responseID
-		lastTurnPayload = cloneOpenAIWSPayloadBytes(currentPayload)
+		lastTurnPayload = cloneOpenAIWSPayloadBytes(outboundPayload)
 		lastTurnReplayInput = cloneOpenAIWSRawMessages(currentTurnReplayInput)
 		lastTurnReplayInputExists = currentTurnReplayInputExists
 		if result.wsReplayInputExists {
 			lastTurnReplayInput = append(lastTurnReplayInput, cloneOpenAIWSRawMessages(result.wsReplayInput)...)
 			lastTurnReplayInputExists = true
 		}
-		nextStrictState, strictStateErr := buildOpenAIWSIngressPreviousTurnStrictState(currentPayload)
+		nextStrictState, strictStateErr := buildOpenAIWSIngressPreviousTurnStrictState(outboundPayload)
 		if strictStateErr != nil {
 			lastTurnStrictState = nil
 			logOpenAIWSModeInfo(
@@ -1639,6 +1814,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 		}
 		currentPayload = nextPayload.payloadRaw
+		currentOriginalPayload = nextPayload.rawForHash
 		currentOriginalModel = nextPayload.originalModel
 		currentImageBillingModel = nextPayload.imageBillingModel
 		currentImageSizeTier = nextPayload.imageSizeTier

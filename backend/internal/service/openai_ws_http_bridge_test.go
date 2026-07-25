@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -60,6 +61,63 @@ func TestOpenAIWSHTTPBridgeDecisionKeepsSmallFramesOnWS(t *testing.T) {
 	svc.cfg.Gateway.OpenAIWS.HTTPBridgeEnabled = false
 	require.False(t, svc.shouldBridgeOpenAIWSHTTP(nil, 1000, ""))
 	require.True(t, svc.shouldBridgeOpenAIWSHTTP(&Account{Platform: PlatformGrok}, 1, "resp_existing"))
+}
+
+func TestProxyOpenAIWSHTTPBridgeTurnOfficialEgressUsesHTTPProfile(t *testing.T) {
+	body := newOfficialOpenAIHTTPTestBody(t, false, false, true)
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(body, &payload))
+	payload["type"] = "response.create"
+	payload["generate"] = true
+	clientMetadata := payload["client_metadata"].(map[string]any)
+	const bridgeTurnID = "019f9577-d70a-7553-ad23-8de3ede39d8c"
+	clientMetadata["turn_id"] = bridgeTurnID
+	var bridgeTurnMetadata map[string]any
+	require.NoError(t, json.Unmarshal([]byte(clientMetadata["x-codex-turn-metadata"].(string)), &bridgeTurnMetadata))
+	bridgeTurnMetadata["turn_id"] = bridgeTurnID
+	bridgeTurnMetadataBytes, err := json.Marshal(bridgeTurnMetadata)
+	require.NoError(t, err)
+	clientMetadata["x-codex-turn-metadata"] = string(bridgeTurnMetadataBytes)
+	payloadBytes, err := json.Marshal(payload)
+	require.NoError(t, err)
+
+	c := newOfficialOpenAIHTTPTestContext(body, "/v1/responses")
+	upstream := &httpUpstreamRecorder{resp: newOfficialOpenAIHTTPSSECompletedResponse("resp_http_bridge")}
+	svc := newOfficialOpenAIHTTPTestService(upstream)
+	account := newOfficialOpenAIHTTPTestAccount(94)
+	var writes [][]byte
+
+	result, err := svc.proxyOpenAIWSHTTPBridgeTurn(
+		context.Background(),
+		c,
+		account,
+		"oauth-token",
+		payloadBytes,
+		len(payloadBytes),
+		"gpt-5.6-luna",
+		"",
+		"",
+		"",
+		"",
+		1,
+		func(message []byte) error {
+			writes = append(writes, append([]byte(nil), message...))
+			return nil
+		},
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.NotEmpty(t, writes)
+	require.NotNil(t, upstream.lastTLSProfile)
+	require.Contains(t, upstream.lastTLSProfile.Name, "Codex CLI 0.145.0 HTTP")
+	egressContext, ok := OfficialEgressContextFromContext(upstream.lastReq.Context())
+	require.True(t, ok)
+	require.Equal(t, OfficialEgressTransportHTTP, egressContext.Transport())
+	require.Equal(t, officialEgressTransportProfileOpenAIHTTP, egressContext.TransportProfileID())
+	require.Equal(t, testOfficialOpenAISessionID, upstream.lastReq.Header.Get("session-id"))
+	require.Equal(t, string(bridgeTurnMetadataBytes), upstream.lastReq.Header.Get("x-codex-turn-metadata"))
+	require.Equal(t, testOfficialOpenAICallID, gjson.GetBytes(upstream.lastBody, "input.3.call_id").String())
 }
 
 func TestProxyOpenAIWSHTTPBridgeTurnTransportErrorFailoverSafety(t *testing.T) {

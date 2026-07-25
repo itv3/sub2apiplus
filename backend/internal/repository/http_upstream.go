@@ -191,12 +191,14 @@ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID i
 		return nil, err
 	}
 	profile := service.HTTPUpstreamProfileDefault
+	officialPoolID := ""
 	if req != nil {
 		profile = service.HTTPUpstreamProfileFromContext(req.Context())
+		officialPoolID, _ = service.OfficialEgressConnectionPoolIDFromContext(req.Context())
 	}
 
 	// 获取或创建对应的客户端，并标记请求占用
-	entry, err := s.acquireClientWithProfile(proxyURL, accountID, accountConcurrency, profile)
+	entry, err := s.acquireClientWithProfile(proxyURL, accountID, accountConcurrency, profile, officialPoolID)
 	if err != nil {
 		return nil, err
 	}
@@ -242,8 +244,10 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 	}
 	applyGrokCLIProxyHeaders(req)
 	upstreamProfile := service.HTTPUpstreamProfileDefault
+	officialPoolID := ""
 	if req != nil {
 		upstreamProfile = service.HTTPUpstreamProfileFromContext(req.Context())
+		officialPoolID, _ = service.OfficialEgressConnectionPoolIDFromContext(req.Context())
 	}
 
 	targetHost := ""
@@ -260,7 +264,14 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 		return nil, err
 	}
 
-	entry, err := s.acquireClientWithTLS(proxyURL, accountID, accountConcurrency, profile, upstreamProfile)
+	entry, err := s.acquireClientWithTLS(
+		proxyURL,
+		accountID,
+		accountConcurrency,
+		profile,
+		upstreamProfile,
+		officialPoolID,
+	)
 	if err != nil {
 		slog.Debug("tls_fingerprint_acquire_client_failed", "account_id", accountID, "error", err)
 		return nil, err
@@ -465,13 +476,13 @@ func isSupportedGrokCLIVersion(version string) bool {
 }
 
 // acquireClientWithTLS 获取或创建带 TLS 指纹的客户端
-func (s *httpUpstreamService) acquireClientWithTLS(proxyURL string, accountID int64, accountConcurrency int, profile *tlsfingerprint.Profile, upstreamProfile service.HTTPUpstreamProfile) (*upstreamClientEntry, error) {
-	return s.getClientEntryWithTLS(proxyURL, accountID, accountConcurrency, profile, upstreamProfile, true, true)
+func (s *httpUpstreamService) acquireClientWithTLS(proxyURL string, accountID int64, accountConcurrency int, profile *tlsfingerprint.Profile, upstreamProfile service.HTTPUpstreamProfile, officialPoolIDs ...string) (*upstreamClientEntry, error) {
+	return s.getClientEntryWithTLS(proxyURL, accountID, accountConcurrency, profile, upstreamProfile, true, true, officialPoolIDs...)
 }
 
 // getClientEntryWithTLS 获取或创建带 TLS 指纹的客户端条目
 // TLS 指纹客户端使用独立的缓存键，与普通客户端隔离
-func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID int64, accountConcurrency int, profile *tlsfingerprint.Profile, upstreamProfile service.HTTPUpstreamProfile, markInFlight bool, enforceLimit bool) (*upstreamClientEntry, error) {
+func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID int64, accountConcurrency int, profile *tlsfingerprint.Profile, upstreamProfile service.HTTPUpstreamProfile, markInFlight bool, enforceLimit bool, officialPoolIDs ...string) (*upstreamClientEntry, error) {
 	isolation := s.getIsolationMode()
 	proxyKey, parsedProxy, err := normalizeProxyURL(proxyURL)
 	if err != nil {
@@ -483,6 +494,10 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 	// TLS 指纹客户端使用独立缓存键，并按 profile 摘要隔离，避免切换 profile 后复用旧 transport。
 	cacheKey := "tls:" + profileKey + ":" + buildCacheKey(isolation, proxyKey, accountID, upstreamProtocolModeDefault)
 	poolKey := buildPoolKey(settings, upstreamProtocolModeDefault) + ":tls:" + profileKey
+	if officialPoolID := firstNonEmptyPoolID(officialPoolIDs); officialPoolID != "" {
+		cacheKey += "|official:" + officialPoolID
+		poolKey += "|official:" + officialPoolID
+	}
 
 	now := time.Now()
 	nowUnix := now.UnixNano()
@@ -565,8 +580,20 @@ func tlsFingerprintProfileCacheKey(profile *tlsfingerprint.Profile) string {
 	if profile == nil {
 		return "nil"
 	}
+	rootCASubjects := 0
+	rootCAFingerprint := ""
+	hasCustomRootCAs := profile.RootCAs != nil
+	if profile.RootCAs != nil {
+		subjects := profile.RootCAs.Subjects()
+		rootCASubjects = len(subjects)
+		rootCAHash := sha256.New()
+		for _, subject := range subjects {
+			_, _ = rootCAHash.Write(subject)
+		}
+		rootCAFingerprint = hex.EncodeToString(rootCAHash.Sum(nil)[:8])
+	}
 	raw := fmt.Sprintf(
-		"name:%s|grease:%t|ciphers:%v|curves:%v|points:%v|sigalgs:%v|alpn:%v|versions:%v|keyshares:%v|psk:%v|ext:%v|min:%04x|max:%04x|disable_compression:%t",
+		"name:%s|grease:%t|ciphers:%v|curves:%v|points:%v|sigalgs:%v|alpn:%v|versions:%v|keyshares:%v|psk:%v|ext:%v|randomize_ext:%t|min:%04x|max:%04x|custom_root_ca:%t|root_ca_subjects:%d|root_ca:%s|disable_compression:%t",
 		profile.Name,
 		profile.EnableGREASE,
 		profile.CipherSuites,
@@ -578,8 +605,12 @@ func tlsFingerprintProfileCacheKey(profile *tlsfingerprint.Profile) string {
 		profile.KeyShareGroups,
 		profile.PSKModes,
 		profile.Extensions,
+		profile.RandomizeExtensions,
 		profile.TLSVersMin,
 		profile.TLSVersMax,
+		hasCustomRootCAs,
+		rootCASubjects,
+		rootCAFingerprint,
 		profile.Transport.DisableCompression,
 	)
 	sum := sha256.Sum256([]byte(raw))
@@ -627,8 +658,8 @@ func (s *httpUpstreamService) acquireClient(proxyURL string, accountID int64, ac
 }
 
 // acquireClientWithProfile 获取或创建客户端，并按请求 profile 选择协议策略。
-func (s *httpUpstreamService) acquireClientWithProfile(proxyURL string, accountID int64, accountConcurrency int, profile service.HTTPUpstreamProfile) (*upstreamClientEntry, error) {
-	return s.getClientEntry(proxyURL, accountID, accountConcurrency, profile, true, true)
+func (s *httpUpstreamService) acquireClientWithProfile(proxyURL string, accountID int64, accountConcurrency int, profile service.HTTPUpstreamProfile, officialPoolIDs ...string) (*upstreamClientEntry, error) {
+	return s.getClientEntry(proxyURL, accountID, accountConcurrency, profile, true, true, officialPoolIDs...)
 }
 
 // getOrCreateClient 获取或创建客户端
@@ -653,7 +684,7 @@ func (s *httpUpstreamService) getOrCreateClient(proxyURL string, accountID int64
 // getClientEntry 获取或创建客户端条目
 // markInFlight=true 时会标记进行中请求，用于请求路径防止被淘汰
 // enforceLimit=true 时会限制客户端数量，超限且无法淘汰时返回错误
-func (s *httpUpstreamService) getClientEntry(proxyURL string, accountID int64, accountConcurrency int, profile service.HTTPUpstreamProfile, markInFlight bool, enforceLimit bool) (*upstreamClientEntry, error) {
+func (s *httpUpstreamService) getClientEntry(proxyURL string, accountID int64, accountConcurrency int, profile service.HTTPUpstreamProfile, markInFlight bool, enforceLimit bool, officialPoolIDs ...string) (*upstreamClientEntry, error) {
 	// 获取隔离模式
 	isolation := s.getIsolationMode()
 	// 标准化代理 URL 并解析
@@ -669,6 +700,10 @@ func (s *httpUpstreamService) getClientEntry(proxyURL string, accountID int64, a
 	cacheKey := buildCacheKey(isolation, proxyKey, accountID, protocolMode)
 	// 构建连接池配置键（用于检测配置变更）
 	poolKey := buildPoolKey(settings, protocolMode)
+	if officialPoolID := firstNonEmptyPoolID(officialPoolIDs); officialPoolID != "" {
+		cacheKey += "|official:" + officialPoolID
+		poolKey += "|official:" + officialPoolID
+	}
 
 	now := time.Now()
 	nowUnix := now.UnixNano()
@@ -933,6 +968,15 @@ func buildPoolKey(settings poolSettings, protocolMode string) string {
 		return base
 	}
 	return base + "|proto:" + protocolMode
+}
+
+func firstNonEmptyPoolID(values []string) string {
+	for _, value := range values {
+		if value = strings.TrimSpace(value); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 // buildCacheKey 构建客户端缓存键
@@ -1355,7 +1399,7 @@ func enableOpenAIHTTP2KeepAlive(transport *http.Transport) (*http2.Transport, er
 //   - http/https: HTTP 代理，使用 HTTPProxyDialer（CONNECT 隧道 + utls 握手）
 //   - socks5: SOCKS5 代理，使用 SOCKS5ProxyDialer（SOCKS5 隧道 + utls 握手）
 func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *url.URL, profile *tlsfingerprint.Profile) (http.RoundTripper, error) {
-	// profile ALPN 声明 h2 时，改走真正的 HTTP/2 wire（utls 握手 + x/net/http2 会话）。
+	// profile 的 ALPN 声明 h2 时，改走真正的 HTTP/2（utls 握手 + x/net/http2 会话）。
 	// net/http 对自定义 DialTLSContext 返回的 utls 连接不会按 ALPN 自动升级 h2，故需显式包装。
 	if tlsfingerprint.ProfileNegotiatesH2(profile) {
 		h2Transport, err := tlsfingerprint.NewH2Transport(profile, proxyURL, settings.idleConnTimeout, settings.responseHeaderTimeout)
@@ -1391,12 +1435,8 @@ func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *u
 			slog.Debug("tls_fingerprint_transport_socks5", "proxy", proxyURL.Host)
 			socks5Dialer := tlsfingerprint.NewSOCKS5ProxyDialer(profile, proxyURL)
 			transport.DialTLSContext = socks5Dialer.DialTLSContext
-		case "https":
-			// The fingerprint dialer emits a plaintext CONNECT preface and cannot
-			// establish TLS to an HTTPS proxy. Keep proxy routing via net/http.
-			return buildUpstreamTransport(settings, proxyURL, upstreamProtocolModeDefault)
-		case "http":
-			// HTTP/HTTPS 代理：使用 HTTPProxyDialer（CONNECT 隧道）
+		case "http", "https":
+			// HTTP/HTTPS 代理：先建立代理连接，再通过 CONNECT 隧道执行目标 uTLS 握手。
 			slog.Debug("tls_fingerprint_transport_http_connect", "proxy", proxyURL.Host)
 			httpDialer := tlsfingerprint.NewHTTPProxyDialer(profile, proxyURL)
 			transport.DialTLSContext = httpDialer.DialTLSContext

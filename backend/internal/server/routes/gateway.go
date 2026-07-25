@@ -53,9 +53,6 @@ func RegisterGatewayRoutes(
 			return false
 		}
 	}
-	isOpenAIGatewayPlatform := func(c *gin.Context) bool {
-		return getGroupPlatform(c) == service.PlatformOpenAI
-	}
 	countTokensHandler := func(c *gin.Context) {
 		switch getGroupPlatform(c) {
 		case service.PlatformOpenAI:
@@ -67,7 +64,7 @@ func RegisterGatewayRoutes(
 		}
 	}
 	modelsHandler := func(c *gin.Context) {
-		if isOpenAIGatewayPlatform(c) && c.Query("client_version") != "" {
+		if isCodexModelsManifestRequest(c) {
 			h.OpenAIGateway.CodexModels(c)
 			return
 		}
@@ -364,6 +361,23 @@ func getGroupPlatform(c *gin.Context) string {
 		}
 	}
 	return apiKey.Group.Platform
+}
+
+// isCodexModelsManifestRequest 判断当前模型刷新是否来自 Codex 客户端。
+//
+// composite 分组的 GET 请求没有 Body，无法通过普通模型路由中间件解析目标平台；
+// `client_version` 是 Codex 模型清单请求的明确契约，因此在这里把它定向到现有
+// OpenAI manifest Handler。该 Handler 的账号调度仍只允许 OpenAI 平台。
+func isCodexModelsManifestRequest(c *gin.Context) bool {
+	if c == nil || strings.TrimSpace(c.Query("client_version")) == "" {
+		return false
+	}
+	switch getGroupPlatform(c) {
+	case service.PlatformOpenAI, service.PlatformComposite:
+		return true
+	default:
+		return false
+	}
 }
 
 func compositeTargetPlatformMiddleware(resolver *service.CompositeRouteResolver) gin.HandlerFunc {

@@ -47,7 +47,7 @@ func TestIdentityService_RewriteUserID_PreservesTopLevelFieldOrder(t *testing.T)
 	require.Contains(t, resultStr, `"metadata":{"user_id":"`)
 }
 
-func TestIdentityService_RewriteUserIDWithMasking_PreservesTopLevelFieldOrder(t *testing.T) {
+func TestIdentityService_RewriteUserIDWithMasking_IgnoresLegacySettingForBuiltInProfile(t *testing.T) {
 	cache := &identityCacheStub{maskedSessionID: "11111111-2222-4333-8444-555555555555"}
 	svc := NewIdentityService(cache)
 
@@ -73,7 +73,7 @@ func TestIdentityService_RewriteUserIDWithMasking_PreservesTopLevelFieldOrder(t 
 	resultStr := string(result)
 
 	assertJSONTokenOrder(t, resultStr, `"alpha"`, `"messages"`, `"metadata"`, `"max_tokens"`, `"thinking"`, `"output_config"`, `"stream"`)
-	require.Contains(t, resultStr, cache.maskedSessionID)
+	require.NotContains(t, resultStr, cache.maskedSessionID)
 	require.True(t, strings.Contains(resultStr, `"metadata":{"user_id":"`))
 }
 

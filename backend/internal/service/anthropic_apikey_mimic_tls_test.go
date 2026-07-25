@@ -70,7 +70,7 @@ func TestResolveAnthropicTLSProfileForRequestDoesNotReplaceMissingExplicitProfil
 	require.Equal(t, "Built-in Default (Node.js 24.x)", profile.Name)
 }
 
-func TestResolveAnthropicTLSProfileForRequestKeepsOAuthResolution(t *testing.T) {
+func TestResolveAnthropicTLSProfileForRequestDefersOAuthToBuiltInTransport(t *testing.T) {
 	account := &Account{
 		Platform: PlatformAnthropic,
 		Type:     AccountTypeOAuth,
@@ -81,6 +81,5 @@ func TestResolveAnthropicTLSProfileForRequestKeepsOAuthResolution(t *testing.T) 
 
 	profile := resolveAnthropicTLSProfileForRequest(account, false, &TLSFingerprintProfileService{})
 
-	require.NotNil(t, profile)
-	require.Equal(t, "Built-in Default (Node.js 24.x)", profile.Name)
+	require.Nil(t, profile)
 }

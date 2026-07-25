@@ -180,7 +180,7 @@ func TestInjectAnthropicCacheControlTTL1h_OnlyUpdatesExistingEphemeralCacheContr
 	require.Equal(t, "1h", gjson.GetBytes(result, "tools.0.cache_control.ttl").String())
 }
 
-func TestGatewayCacheTTLGlobalSetting_TargetResolution(t *testing.T) {
+func TestGatewayCacheTTLGlobalSetting_DoesNotOverrideBuiltInProfile(t *testing.T) {
 	repo := &gatewayTTLSettingRepo{data: map[string]string{
 		SettingKeyEnableAnthropicCacheTTL1hInjection: "true",
 	}}
@@ -191,16 +191,16 @@ func TestGatewayCacheTTLGlobalSetting_TargetResolution(t *testing.T) {
 	account := &Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth}
 
 	target, ok := svc.resolveCacheTTLUsageOverrideTarget(context.Background(), account)
-	require.True(t, ok)
-	require.Equal(t, cacheTTLTarget5m, target)
+	require.False(t, ok)
+	require.Empty(t, target)
 
 	account.Extra = map[string]any{
 		"cache_ttl_override_enabled": true,
 		"cache_ttl_override_target":  "1h",
 	}
 	target, ok = svc.resolveCacheTTLUsageOverrideTarget(context.Background(), account)
-	require.True(t, ok)
-	require.Equal(t, cacheTTLTarget1h, target)
+	require.False(t, ok)
+	require.Empty(t, target)
 }
 
 func TestGatewayCacheTTLGlobalSetting_RequestInjectionScope(t *testing.T) {
@@ -212,8 +212,8 @@ func TestGatewayCacheTTLGlobalSetting_RequestInjectionScope(t *testing.T) {
 		settingService: NewSettingService(repo, &config.Config{}),
 	}
 
-	require.True(t, svc.shouldInjectAnthropicCacheTTL1h(context.Background(), &Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth}))
-	require.True(t, svc.shouldInjectAnthropicCacheTTL1h(context.Background(), &Account{Platform: PlatformAnthropic, Type: AccountTypeSetupToken}))
+	require.False(t, svc.shouldInjectAnthropicCacheTTL1h(context.Background(), &Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth}))
+	require.False(t, svc.shouldInjectAnthropicCacheTTL1h(context.Background(), &Account{Platform: PlatformAnthropic, Type: AccountTypeSetupToken}))
 	require.False(t, svc.shouldInjectAnthropicCacheTTL1h(context.Background(), &Account{Platform: PlatformAnthropic, Type: AccountTypeAPIKey}))
 	require.False(t, svc.shouldInjectAnthropicCacheTTL1h(context.Background(), &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}))
 
