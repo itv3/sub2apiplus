@@ -800,6 +800,8 @@ export default {
         codexImageTool: 'Codex 图片桥接策略',
         codexImageToolDesc:
           '统一控制 Codex /responses 文本请求的 hosted image_generation 桥接和客户端图片工具声明。hosted 工具自动注入仅适用于非 Responses Lite 请求；账号级策略优先于渠道和全局配置，不影响独立图片生成接口。',
+        codexImageToolWebSocketNotice:
+          '注意：OAuth 账号走 WebSocket 链路时本策略不生效。官方出站画像会按官方客户端形态发送请求体，注入的 hosted 工具会被上游校验判定为改写；HTTP 链路不受影响。',
         codexImageToolInherit: '跟随渠道',
         codexImageToolInheritDesc: '不写入账号覆盖；非 Lite 请求是否注入 hosted 工具由渠道或全局策略决定，客户端显式携带的 hosted 工具和本地 image_gen 声明照常放行。',
         codexImageToolEnabled: '启用 Hosted 桥接',
@@ -851,6 +853,8 @@ export default {
         webSearchDisabled: '关闭',
       },
       modelRestriction: '模型限制（可选）',
+      anthropicOAuthWhitelistHint:
+        '白名单会收敛模型列表接口（/v1/models）返回的模型，并让调度只把白名单内的请求派给该账号。留空表示支持所有模型。OAuth 账号的请求会原样透传官方模型 ID，因此不提供模型改名映射。',
       modelWhitelist: '模型白名单',
       modelMapping: '模型映射',
       selectAllowedModels: '选择允许的模型。留空则支持所有模型。',

@@ -291,6 +291,8 @@ func TestOpenAIGatewayServiceForward_NormalizesResponsesLiteToolsForOAuth(t *tes
 				"input":[{"type":"message","role":"user","content":"hello"}],
 				"tool_choice":{"type":"namespace","name":"collaboration"}
 			}`)
+			// 官方 UA 命中 strict 身份校验，须携带完整 Codex 身份
+			body = codexOfficialIngressIdentityForTest(t, c, body)
 
 			result, err := svc.Forward(context.Background(), c, account, body)
 

@@ -2491,7 +2491,16 @@ func (s *GatewayService) isModelSupportedByAccount(account *Account, requestedMo
 		if account.Type == AccountTypeServiceAccount {
 			requestedModel = normalizeVertexAnthropicModelID(claude.NormalizeModelID(requestedModel))
 		} else {
-			requestedModel = claude.NormalizeModelID(requestedModel)
+			// 白名单可能按短 ID 或带日期长 ID 存储（手动录入与上游同步分别产生
+			// 两种形态）：短↔长任一形态命中白名单即视为支持，避免同一模型被误杀
+			normalized := claude.NormalizeModelID(requestedModel)
+			if normalized != requestedModel && account.IsModelSupported(requestedModel) {
+				return true
+			}
+			if denormalized := claude.DenormalizeModelID(requestedModel); denormalized != requestedModel && account.IsModelSupported(denormalized) {
+				return true
+			}
+			requestedModel = normalized
 		}
 	}
 	// 其他平台使用账户的模型支持检查

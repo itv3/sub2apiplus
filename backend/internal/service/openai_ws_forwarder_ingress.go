@@ -161,6 +161,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 	debugEnabled := isOpenAIWSModeDebugEnabled()
 	isCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator")) || (s.cfg != nil && s.cfg.Gateway.ForceCodexCLI)
+	// 官方出站画像接管请求体形态后，本地注入的 image_generation 工具无法通过
+	// 帧校验：官方入站按原样比对会判定请求被篡改，第三方入站则因 Responses Lite
+	// 契约不接受顶层 image_generation 工具而被拒。两种情况都会断开连接，因此
+	// 画像启用时（OAuth 账号）WS 链路一律不做图片桥接注入。
+	skipCodexImageBridge := officialEgressEnabled
 
 	type openAIWSClientPayload struct {
 		payloadRaw         []byte
@@ -298,6 +303,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			codexImageGenerationExplicitToolPolicy = account.CodexImageGenerationExplicitToolPolicy()
 		}
 		codexBridgeEnabled := isCodexCLI &&
+			!skipCodexImageBridge &&
 			!isOpenAIResponsesLiteWebSocketPayload(normalized) &&
 			imageGenerationAllowed &&
 			codexImageGenerationExplicitToolPolicy != codexImageGenerationExplicitToolPolicyStrip &&

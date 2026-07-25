@@ -78,7 +78,9 @@ func (h *OpenAIGatewayHandler) CountTokens(c *gin.Context) {
 		zap.Any("group_id", apiKey.GroupID),
 	)
 
-	if apiKey.Group != nil && !apiKey.Group.AllowMessagesDispatch {
+	// 与 Messages 处理器共用同一豁免逻辑：OpenAI 分组受 allow_messages_dispatch
+	// 开关控制，Grok/Composite 分组豁免（Composite 的准入由路由解析控制）。
+	if !allowOpenAICompatibleMessagesDispatch(apiKey) {
 		h.anthropicErrorResponse(c, http.StatusForbidden, "permission_error",
 			"This group does not allow /v1/messages dispatch")
 		return

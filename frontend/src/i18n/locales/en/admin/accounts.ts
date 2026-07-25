@@ -740,6 +740,8 @@ export default {
         codexImageTool: 'Codex image bridge policy',
         codexImageToolDesc:
           'Controls the hosted image_generation bridge and client-declared image tools on Codex /responses text requests. Hosted auto-injection applies only to non-Responses Lite requests. Account policy takes precedence over channel and global settings; standalone image-generation endpoints are unaffected.',
+        codexImageToolWebSocketNotice:
+          'Note: this policy does not apply to OAuth accounts on the WebSocket transport. The official egress profile sends the request body in official-client form, so an injected hosted tool would be rejected as a modified request. The HTTP transport is unaffected.',
         codexImageToolInherit: 'Follow channel',
         codexImageToolInheritDesc: 'No account override; hosted injection for non-Lite requests follows the channel or global policy, while client-provided hosted tools and local image_gen declarations pass through.',
         codexImageToolEnabled: 'Enable hosted bridge',
@@ -791,6 +793,8 @@ export default {
         webSearchDisabled: 'Disabled',
       },
       modelRestriction: 'Model Restriction (Optional)',
+      anthropicOAuthWhitelistHint:
+        'The whitelist narrows the models returned by the model list endpoint (/v1/models) and makes the scheduler route only whitelisted models to this account. Leave empty to support all models. OAuth requests pass official model IDs through unchanged, so model renaming/mapping is not available.',
       modelWhitelist: 'Model Whitelist',
       modelMapping: 'Model Mapping',
       selectAllowedModels: 'Select allowed models. Leave empty to support all models.',

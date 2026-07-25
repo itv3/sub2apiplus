@@ -787,13 +787,16 @@ func TestSettingService_LoadForwardedClientIPSettingsReadFailureFailsClosed(t *t
 	require.Empty(t, runtimeSettings.Headers)
 }
 
+// 迁移写入失败时，运行时设置仍必须落到与写入成功一致的值：已持久化的 false
+// 表示管理员选择不接管转发头，迁移不会把它放宽（与 TestSettingService_
+// LoadForwardedClientIPSettingsMigration 的 legacy_false_* 用例同一策略）。
 func TestSettingService_LoadForwardedClientIPSettingsWriteFailureUsesComputedMode(t *testing.T) {
 	tests := []struct {
 		name              string
 		trustedProxiesSet bool
 		wantEnabled       bool
 	}{
-		{name: "compatibility migration remains effective", wantEnabled: true},
+		{name: "stored false stays secure without proxy config", wantEnabled: false},
 		{name: "explicit proxy policy remains secure", trustedProxiesSet: true, wantEnabled: false},
 	}
 

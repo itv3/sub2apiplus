@@ -210,9 +210,44 @@ func TestGatewayRoutesCompositeMessagesWithGrokModelUsesOpenAIGateway(t *testing
 	router.ServeHTTP(w, req)
 
 	require.NotEqual(t, http.StatusNotFound, w.Code)
+	// Composite 分组的 allow_messages_dispatch 恒为 false，门禁必须按平台豁免，
+	// 否则请求会在进入调度前被 403 拦截（历史上该测试未覆盖此层）。
+	require.NotEqual(t, http.StatusForbidden, w.Code)
+	require.NotContains(t, w.Body.String(), "does not allow /v1/messages dispatch")
 	require.NotContains(t, w.Body.String(), "not supported")
 	require.NotContains(t, w.Body.String(), "OpenAI-compatible endpoint")
 	require.NotContains(t, w.Body.String(), "composite groups")
+}
+
+func TestGatewayRoutesCompositeMessagesWithOpenAIModelUsesOpenAIGateway(t *testing.T) {
+	router := newGatewayRoutesTestRouter(service.PlatformComposite)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	require.NotEqual(t, http.StatusNotFound, w.Code)
+	require.NotEqual(t, http.StatusForbidden, w.Code)
+	require.NotContains(t, w.Body.String(), "does not allow /v1/messages dispatch")
+	require.NotContains(t, w.Body.String(), "not supported")
+	require.NotContains(t, w.Body.String(), "OpenAI-compatible endpoint")
+	require.NotContains(t, w.Body.String(), "composite groups")
+}
+
+func TestGatewayRoutesCompositeCountTokensWithOpenAIModelPassesDispatchGate(t *testing.T) {
+	router := newGatewayRoutesTestRouter(service.PlatformComposite)
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	require.NotEqual(t, http.StatusNotFound, w.Code)
+	require.NotEqual(t, http.StatusForbidden, w.Code)
+	require.NotContains(t, w.Body.String(), "does not allow /v1/messages dispatch")
 }
 
 func TestGatewayRoutesCompositeChatCompletionsWithGrokModelUsesOpenAIGateway(t *testing.T) {

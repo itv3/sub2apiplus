@@ -416,7 +416,11 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_FollowupCreateCa
 	require.Equal(t, "resp_omit_model_1", gjson.Get(requestToJSONString(captureConn.writes[1]), "previous_response_id").String())
 }
 
-func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_CodexImageBridgeRespectsResponsesLite(t *testing.T) {
+// OAuth 账号启用官方出站画像后，WS 链路不再注入 image_generation 桥接工具：
+// 注入会让请求体偏离官方形态，官方入站被判定篡改、第三方入站被 Responses Lite
+// 契约拒绝，两者都会断开连接。桥接自身的注入逻辑由 openai_codex_transform_test.go
+// 与 openai_image_generation_controls_test.go 覆盖。
+func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_OfficialEgressSkipsCodexImageBridge(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	cfg := &config.Config{}
@@ -433,9 +437,12 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_CodexImageBridge
 	cfg.Gateway.OpenAIWS.DialTimeoutSeconds = 3
 	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 3
 	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
+	cfg.Gateway.ForceCodexCLI = true
 
 	captureConn := &openAIWSCaptureConn{
 		events: [][]byte{
+			// 画像在连接建立时先发一帧 prewarm，占用首个上游响应。
+			[]byte(`{"type":"response.completed","response":{"id":"resp_codex_prewarm","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1}}}`),
 			[]byte(`{"type":"response.completed","response":{"id":"resp_codex_image_bridge","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1}}}`),
 			[]byte(`{"type":"response.completed","response":{"id":"resp_codex_image_lite","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1}}}`),
 			[]byte(`{"type":"response.completed","response":{"id":"resp_codex_image_function","model":"gpt-5.5","usage":{"input_tokens":1,"output_tokens":1}}}`),
@@ -498,7 +505,11 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_CodexImageBridge
 		ginCtx, _ := gin.CreateTestContext(rec)
 		req := r.Clone(r.Context())
 		req.Header = req.Header.Clone()
-		req.Header.Set("User-Agent", "codex_cli_rs/0.98.0")
+		// 第三方入站 + 全局 ForceCodexCLI：桥接的启用前提（isCodexCLI）成立，
+		// 从而真正验证"画像启用时跳过注入"，而不是因为不满足前提而平凡通过。
+		req.Header.Set("User-Agent", "kilo-code/1.0")
+		// 画像的 WS Profile 只接受 /v1/responses 入站端点。
+		req.URL.Path = "/v1/responses"
 		ginCtx.Request = req
 		ginCtx.Set("api_key", apiKey)
 
@@ -527,7 +538,14 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_CodexImageBridge
 	}()
 
 	writeCtx, cancelWrite := context.WithTimeout(context.Background(), 3*time.Second)
-	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{"type":"response.create","model":"gpt-5.5","stream":false,"input":"draw a cat"}`))
+	// 首帧带 developer 上下文：画像据此构造连接级 prewarm 帧。
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{
+		"type":"response.create","model":"gpt-5.5","stream":false,
+		"input":[
+			{"type":"message","role":"developer","content":[{"type":"input_text","text":"developer context"}]},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"draw a cat"}]}
+		]
+	}`))
 	cancelWrite()
 	require.NoError(t, err)
 
@@ -591,31 +609,30 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_CodexImageBridge
 		t.Fatal("等待 ingress websocket 结束超时")
 	}
 
-	require.Len(t, captureConn.writes, 3)
-	nonLitePayload := requestToJSONString(captureConn.writes[0])
-	require.True(t, gjson.Get(nonLitePayload, `tools.#(type=="image_generation")`).Exists())
-	require.Equal(t, "png", gjson.Get(nonLitePayload, `tools.#(type=="image_generation").output_format`).String())
-	require.Equal(t, "auto", gjson.Get(nonLitePayload, "tool_choice").String())
-	require.Contains(t, gjson.Get(nonLitePayload, "instructions").String(), "image_generation")
-	require.False(t, gjson.Get(nonLitePayload, "reasoning.context").Exists())
+	// 首帧是画像的连接级 prewarm，其余为三次业务请求。
+	require.Len(t, captureConn.writes, 4)
+	for i, raw := range captureConn.writes {
+		payload := requestToJSONString(raw)
+		require.False(t, gjson.Get(payload, `tools.#(type=="image_generation")`).Exists(),
+			"第 %d 帧不得携带桥接注入的 image_generation 工具", i)
+		require.False(t, gjson.Get(payload, `input.#(type=="additional_tools").tools.#(type=="image_generation")`).Exists(),
+			"第 %d 帧的 additional_tools 中同样不得出现桥接注入的工具", i)
+		require.NotContains(t, gjson.Get(payload, "instructions").String(), codexImageGenerationBridgeMarker,
+			"第 %d 帧不得携带桥接指令", i)
+	}
 
-	litePayload := requestToJSONString(captureConn.writes[1])
-	require.False(t, gjson.Get(litePayload, `tools.#(type=="image_generation")`).Exists())
-	require.NotContains(t, gjson.Get(litePayload, "instructions").String(), "image_generation")
-	require.Equal(t, "exec", gjson.Get(litePayload, `input.#(type=="additional_tools").tools.0.name`).String())
-	require.Contains(t, gjson.Get(litePayload, `input.#(type=="additional_tools").tools.0.description`).String(), "image_gen.imagegen")
+	// 画像仍按官方形态整形请求：顶层 namespace 工具搬入 input.additional_tools。
+	litePayload := requestToJSONString(captureConn.writes[2])
 	require.False(t, gjson.Get(litePayload, `tools.#(type=="namespace")`).Exists())
+	require.Equal(t, "exec", gjson.Get(litePayload, `input.#(type=="additional_tools").tools.0.name`).String())
 	require.Equal(t, "collaboration", gjson.Get(litePayload, `input.#(type=="additional_tools").tools.1.name`).String())
-	require.Equal(t, "namespace", gjson.Get(litePayload, "tool_choice.type").String())
-	require.Equal(t, "collaboration", gjson.Get(litePayload, "tool_choice.name").String())
 	require.Equal(t, "high", gjson.Get(litePayload, "reasoning.effort").String())
 	require.Equal(t, "all_turns", gjson.Get(litePayload, "reasoning.context").String())
 
-	functionPayload := requestToJSONString(captureConn.writes[2])
-	require.True(t, gjson.Get(functionPayload, `tools.#(name=="image_gen.imagegen")`).Exists())
-	require.False(t, gjson.Get(functionPayload, `tools.#(type=="image_generation")`).Exists())
-	require.False(t, gjson.Get(functionPayload, "tool_choice").Exists())
-	require.NotContains(t, gjson.Get(functionPayload, "instructions").String(), codexImageGenerationBridgeMarker)
+	// 客户端自带的 image_gen.imagegen function tool 属于业务输入，不受桥接影响。
+	functionPayload := requestToJSONString(captureConn.writes[3])
+	require.Equal(t, "image_gen.imagegen",
+		gjson.Get(functionPayload, `input.#(type=="additional_tools").tools.0.name`).String())
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_DedicatedModeDoesNotReuseConnAcrossSessions(t *testing.T) {
@@ -959,7 +976,11 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughHeade
 		ginCtx, _ := gin.CreateTestContext(rec)
 		req := r.Clone(r.Context())
 		req.Header = req.Header.Clone()
-		req.Header.Set("User-Agent", "codex_cli_rs/0.98.0")
+		// 第三方客户端：自定义非 UUID 的 prompt_cache_key 与 turn 头是第三方
+		// passthrough 语义，官方客户端的同名字段由画像按官方格式接管。
+		req.Header.Set("User-Agent", "kilo-code/1.0")
+		// 画像的 WS Profile 只接受 /v1/responses 入站端点。
+		req.URL.Path = "/v1/responses"
 		req.Header.Set(openAIWSTurnStateHeader, "turn-state-1")
 		req.Header.Set(openAIWSTurnMetadataHeader, "turn-meta-1")
 		ginCtx.Request = req
@@ -1019,15 +1040,23 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughHeade
 		t.Fatal("等待 passthrough websocket 结束超时")
 	}
 
-	require.Equal(t, isolateOpenAISessionID(0, "pcache_passthrough"), captureDialer.lastHeaders.Get("session_id"))
+	// 画像接管连接级身份：旧的下划线 session_id 握手头被移除，改用 session-id /
+	// thread-id / x-codex-window-id，turn metadata 也由画像按官方格式派生。
+	require.Empty(t, captureDialer.lastHeaders.Get("session_id"))
+	require.NotEmpty(t, captureDialer.lastHeaders.Get("session-id"))
+	require.Equal(t, captureDialer.lastHeaders.Get("session-id"), captureDialer.lastHeaders.Get("thread-id"))
+	require.NotEmpty(t, captureDialer.lastHeaders.Get("x-codex-window-id"))
+	require.NotEqual(t, "turn-meta-1", captureDialer.lastHeaders.Get(openAIWSTurnMetadataHeader))
+	// turn state 头不在画像管辖范围内，仍按 passthrough 语义透传客户端值。
 	require.Equal(t, "turn-state-1", captureDialer.lastHeaders.Get(openAIWSTurnStateHeader))
-	require.Equal(t, "turn-meta-1", captureDialer.lastHeaders.Get(openAIWSTurnMetadataHeader))
+
 	require.Len(t, upstreamConn.writes, 1)
 	forwarded := requestToJSONString(upstreamConn.writes[0])
+	// 顶层 namespace 工具仍按 Responses Lite 契约搬入 input.additional_tools；
+	// tool_choice 由画像统一为官方形态的 "auto"。
 	require.False(t, gjson.Get(forwarded, `tools.#(type=="namespace")`).Exists())
 	require.Equal(t, "collaboration", gjson.Get(forwarded, `input.#(type=="additional_tools").tools.0.name`).String())
-	require.Equal(t, "namespace", gjson.Get(forwarded, "tool_choice.type").String())
-	require.Equal(t, "collaboration", gjson.Get(forwarded, "tool_choice.name").String())
+	require.Equal(t, "auto", gjson.Get(forwarded, "tool_choice").String())
 	require.Equal(t, "medium", gjson.Get(forwarded, "reasoning.effort").String())
 	require.Equal(t, "all_turns", gjson.Get(forwarded, "reasoning.context").String())
 }

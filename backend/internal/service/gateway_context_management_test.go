@@ -497,11 +497,13 @@ func TestBuildUpstreamRequest_OAuthMimicHaiku_PreservesContextManagementEndToEnd
 
 	account := &Account{ID: 401, Platform: PlatformAnthropic, Type: AccountTypeOAuth,
 		Credentials: map[string]any{"access_token": "oauth-tok"},
+		// 内置官方出站画像要求 OAuth 账号携带 account_uuid（真实授权流程自动保存）
+		Extra:       map[string]any{"account_uuid": "11111111-1111-4111-8111-111111111111"},
 		Status:      StatusActive,
 		Schedulable: true,
 	}
 	// Haiku + mimic CC 使用完整 beta，其中包含 context-management；body 必须对称保留。
-	body := []byte(`{"model":"claude-haiku-4-5","context_management":{"edits":[{"type":"clear_thinking_20251015"}]},"messages":[]}`)
+	body := []byte(`{"model":"claude-haiku-4-5","context_management":{"edits":[{"type":"clear_thinking_20251015"}]},"messages":[{"role":"user","content":"hi"}]}`)
 	svc := &GatewayService{cfg: &config.Config{}}
 	req, _, err := svc.buildUpstreamRequest(
 		context.Background(), c, account, body,
@@ -554,12 +556,13 @@ func TestBuildUpstreamRequest_OAuthMimicNonHaiku_PreservesContextManagementEndTo
 
 	account := &Account{ID: 402, Platform: PlatformAnthropic, Type: AccountTypeOAuth,
 		Credentials: map[string]any{"access_token": "oauth-tok"},
+		Extra:       map[string]any{"account_uuid": "11111111-1111-4111-8111-111111111111"},
 		Status:      StatusActive,
 		Schedulable: true,
 	}
 	// sonnet + mimic CC → final beta = FullClaudeCodeMimicryBetas（含 context-management）→
 	// body 保留。
-	body := []byte(`{"model":"claude-sonnet-4-6","context_management":{"edits":[{"type":"clear_thinking_20251015"}]},"messages":[]}`)
+	body := []byte(`{"model":"claude-sonnet-4-6","context_management":{"edits":[{"type":"clear_thinking_20251015"}]},"messages":[{"role":"user","content":"hi"}]}`)
 	svc := &GatewayService{cfg: &config.Config{}}
 	req, _, err := svc.buildUpstreamRequest(
 		context.Background(), c, account, body,
@@ -588,9 +591,10 @@ func TestBuildUpstreamRequest_OAuthTransparentHaikuWithRealCCBeta_PreservesField
 
 	account := &Account{ID: 403, Platform: PlatformAnthropic, Type: AccountTypeOAuth,
 		Credentials: map[string]any{"access_token": "oauth-tok"},
+		Extra:       map[string]any{"account_uuid": "11111111-1111-4111-8111-111111111111"},
 		Status:      StatusActive, Schedulable: true,
 	}
-	body := []byte(`{"model":"claude-haiku-4-5","context_management":{"edits":[{"type":"clear_thinking_20251015","keep":"all"}]},"messages":[]}`)
+	body := []byte(`{"model":"claude-haiku-4-5","context_management":{"edits":[{"type":"clear_thinking_20251015","keep":"all"}]},"messages":[{"role":"user","content":"hi"}]}`)
 	svc := &GatewayService{cfg: &config.Config{}}
 	req, _, err := svc.buildUpstreamRequest(
 		context.Background(), c, account, body,

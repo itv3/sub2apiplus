@@ -1545,6 +1545,12 @@
               <p class="mt-1 text-xs leading-5 text-slate-600 dark:text-slate-300">
                 {{ t('admin.accounts.openai.codexImageToolDesc') }}
               </p>
+              <p
+                v-if="account?.type === 'oauth'"
+                class="mt-1 text-xs leading-5 text-amber-600 dark:text-amber-400"
+              >
+                {{ t('admin.accounts.openai.codexImageToolWebSocketNotice') }}
+              </p>
             </div>
           </div>
           <div class="border-t border-sky-100 bg-white/70 p-2 dark:border-sky-900/50 dark:bg-dark-800/70">
@@ -2121,6 +2127,26 @@
           />
           <p class="input-hint">{{ t('admin.accounts.autoPauseThresholdHint') }}</p>
         </div>
+      </div>
+
+      <!-- 模型限制 (Anthropic OAuth/SetupToken: 仅白名单，用于收敛 /v1/models 列表与调度) -->
+      <div
+        v-if="account?.platform === 'anthropic' && (account?.type === 'oauth' || account?.type === 'setup-token')"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
+        <div class="mb-3 rounded-lg bg-blue-50 p-3 dark:bg-blue-900/20">
+          <p class="text-xs text-blue-700 dark:text-blue-400">
+            {{ t('admin.accounts.anthropicOAuthWhitelistHint') }}
+          </p>
+        </div>
+        <ModelWhitelistSelector v-model="allowedModels" platform="anthropic" :account-id="account?.id" />
+        <p class="text-xs text-gray-500 dark:text-gray-400">
+          {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
+          <span v-if="allowedModels.length === 0 && modelMappings.length === 0">{{
+            t('admin.accounts.supportsAllModels')
+          }}</span>
+        </p>
       </div>
 
       <!-- 配额控制 (Anthropic OAuth/SetupToken: 亲和 + 窗口费用 + 会话 + RPM 等) -->
@@ -3489,8 +3515,14 @@ const syncFormFromAccount = (newAccount: Account | null) => {
             : 'https://api.anthropic.com'
     editBaseUrl.value = platformDefaultUrl
 
-    // Load model mappings for OpenAI/Grok OAuth accounts
-    if ((newAccount.platform === 'openai' || newAccount.platform === 'grok') && newAccount.credentials) {
+    // Load model mappings for OpenAI/Grok/Anthropic OAuth accounts
+    // (Anthropic OAuth/SetupToken 仅使用白名单条目；映射条目会被原样保留但 UI 不提供编辑)
+    if (
+      (newAccount.platform === 'openai' ||
+        newAccount.platform === 'grok' ||
+        newAccount.platform === 'anthropic') &&
+      newAccount.credentials
+    ) {
       const oauthCredentials = newAccount.credentials as Record<string, unknown>
       loadModelRestrictionFromMapping(oauthCredentials.model_mapping as Record<string, unknown> | undefined)
     } else {
@@ -4207,6 +4239,26 @@ const handleSubmit = async () => {
         } else {
           delete newCredentials.model_mapping
         }
+      }
+
+      updatePayload.credentials = newCredentials
+    }
+
+    // Anthropic OAuth/SetupToken: persist model whitelist to credentials
+    // 使用 combined 模式：UI 只编辑白名单，历史映射条目（如批量编辑写入）原样保留
+    if (
+      props.account.platform === 'anthropic' &&
+      (props.account.type === 'oauth' || props.account.type === 'setup-token')
+    ) {
+      const currentCredentials =
+        (updatePayload.credentials as Record<string, unknown>) ||
+        ((props.account.credentials as Record<string, unknown>) || {})
+      const newCredentials: Record<string, unknown> = { ...currentCredentials }
+      const modelMapping = buildModelRestrictionMapping()
+      if (modelMapping) {
+        newCredentials.model_mapping = modelMapping
+      } else {
+        delete newCredentials.model_mapping
       }
 
       updatePayload.credentials = newCredentials

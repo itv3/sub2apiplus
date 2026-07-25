@@ -8,7 +8,7 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 |---|---|
 | 仓库 | `https://github.com/itv3/sub2apiplus` |
 | 上游 | `https://github.com/Wei-Shaw/sub2api` |
-| 版本基线 | 当前 Plus 版本为 `0.1.164-1`（见 `backend/cmd/server/VERSION`，发版后以最新 tag 为准）；已合并上游 tag `v0.1.164`，自定义差异优先看 `v0.1.164..HEAD`。 |
+| 版本基线 | 最新已发布 Plus 版本为 `0.1.164-1`，部署和拉取镜像只能使用已发布版本；`backend/cmd/server/VERSION` 保存开发中的下一个版本号，发版后以最新 tag 为准。已合并上游 tag `v0.1.164`，自定义差异优先看 `v0.1.164..HEAD`。 |
 | Docker 镜像 | `ghcr.io/itv3/sub2apiplus` |
 | 命名约定 | 对外使用 `sub2apiplus` / `Sub2API Plus`；Go module 和 import 保留 `github.com/Wei-Shaw/sub2api`，降低上游合并成本。 |
 | Go / 客户端版本 | 主服务 `go 1.26.5`（`backend/go.mod`）；keeper `go 1.24`（`keeper/go.mod`）；keeper 镜像固定安装 Claude CLI `2.1.210`。 |
@@ -17,7 +17,7 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 维护原则：
 
 1. 长期跟随上游主线，发布版本按上游 release/tag 对齐。
-2. Plus 账号级开关优先放入 `account.Extra`；mimic / 保活走 Plus 设置页，Antigravity 走账号编辑页。
+2. Plus 账号级开关优先放入 `account.Extra`；mimic / 保活走 Plus 设置页，Antigravity 走账号编辑页；OAuth 官方客户端伪装为内置能力，不提供账号级开关。
 3. Docker 更新默认只替换应用容器，不动 PostgreSQL、Redis、反向代理配置、`.env` 和数据目录。
 
 ## 1. Plus 增强功能
@@ -32,7 +32,7 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 1、Sub2API 对外提供标准 API 接口。无论入站来自官方客户端，还是通过标准 API 接入的第三方客户端，Anthropic/OpenAI OAuth 官方出站均自动使用对应版本 Claude Code / Codex CLI 的真实出站形态。
 2、Sub2API 原有兼容层只负责入站协议转换、模型映射、工具转换及请求语义兼容；最终 OAuth 出站请求由内置官方客户端画像统一定型。
 >
-> **实测基线**：Claude Code `2.1.218`、Codex CLI `0.145.0`，Sub2API `v0.1.164`；模型固定为 `claude-sonnet-5`、`gpt-5.6-luna`。官方客户端基准与 Sub2API 出站使用相同 S1/S2/S4，完成 direct + mitm + ingress 配对；另使用 Kilo Code VS Code 扩展从标准 API 接入，完成 Anthropic/OpenAI HTTP 的 S1/S4 和 OpenAI WebSocket 的 S1/S2/S4。Anthropic/OpenAI OAuth 官方画像为内置默认能力，Profile 版本由服务端自动绑定为 `phase0-2026-07-24`，不提供账号级开关或版本选择。
+> **实测基线**：源码基线 Sub2API `v0.1.164`，抓包运行 Plus `0.1.164-1` 系列构建；官方客户端 Claude Code `2.1.218`、Codex CLI `0.145.0`；模型固定为 `claude-sonnet-5`、`gpt-5.6-luna`；Profile 版本 `phase0-2026-07-24`，由服务端自动绑定。官方客户端基准与 Sub2API 出站使用相同 S1/S2/S4，完成 direct + mitm + ingress 配对；第三方客户端使用 Kilo Code VS Code 扩展从标准 API 接入，覆盖范围见下表。
 
 | 当前路径 | Sub2API 实证（OAuth 官方画像内置生效） |
 |---|---|
@@ -40,18 +40,15 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 | **OpenAI HTTP** | 官方基准 5/5、自动透传补测 1/1；Kilo S1/S4 通过 |
 | **OpenAI WebSocket** | 官方基准和 Kilo 的 S1/S2/S4 均通过 |
 
-当前最终部署镜像为 `sub2apiplus:official-egress-built-in-a2-20260725`，运行版本为
-`0.1.164-1-n2`。账号级开关和版本字段已从数据库删除；无账号配置条件下的最终
-direct 回归目录为 `/root/oauth-capture/runs/t2-off-direct-20260725T114012Z`，
-MITM + ingress 三路径完整回归时间戳为 `20260725T114144Z`，结果见实证归档。
+验收所用的阶段构建镜像、运行目录和回归时间戳统一见[实证归档](backend/internal/service/testdata/official_egress/README.md)；阶段构建不对外发布，命名规则见 §3.4。
 
 #### 1.1.2 抓包方法、分组与证据边界
 
-> **抓包操作手册**：抓包环境、脚本及启动、抓取、拉取、停止、恢复方法统一见 `抓包相关/README.md`。本节只定义本任务的两轮抓取法、S1/S2/S4、分组关系和证据边界。
+> **抓包操作手册**：抓包环境、脚本及启动、抓取、拉取、停止、恢复方法统一见 `抓包相关/README.md`。抓包验证环境在本文统称 Vircs。本节只定义本任务的两轮抓取法、S1/S2/S4、分组关系和证据边界。
 
 ##### 1.1.2.1 抓包方法：两轮抓取法 + 三场景
 
-同一组请求分别执行 direct 与 mitm 两轮，不能用其中一轮代替另一轮：
+同一组请求分别执行 direct 与 mitm 两轮，不能用其中一轮代替另一轮；mitm 轮同时记录网关入站（下文称 ingress），ingress 不单独构成一轮：
 
 | 轮次 | 抓取方式 | 验证内容 | 不能证明 |
 |---|---|---|---|
@@ -117,27 +114,19 @@ HTTP 路径只能对标对应的官方 HTTP 基准，WebSocket 路径只能对�
 4. **应用与传输同时对齐**：Anthropic HTTP、OpenAI HTTP、OpenAI WebSocket 分别维护独立 Profile，同时约束 Header/Body、TLS/ALPN、协议选择和连接复用。
 5. **身份与失败边界明确**：动态身份必须来自入口、会话、响应映射或账号配置等可追踪来源。API Key 与其他非适用账号保持原行为；OAuth Profile、Host 或身份状态校验失败时必须明确失败并记录脱敏原因，不能静默切换画像。
 
-##### 1.1.3.2 改造前主要缺口
+##### 1.1.3.2 三条路径的改造前缺口与结果
 
-| 路径 | 改造前主要缺口 | 必须保留的正确行为 |
-|---|---|---|
-| **Anthropic HTTP** | 使用了错误的客户端 UA、HTTP/TLS 画像和固定会话身份；system/cache 结构未按 OAuth 客户端形态处理 | 工具名、工具闭环及无 `temperature` 注入 |
-| **OpenAI HTTP** | 自动注入无依据的 `instructions`，改写工具 `call_id`；Header 与 Body 身份脱节，传输画像不符 | 入口 `additional_tools`、`client_metadata`、`prompt_cache_key` 等原生 Responses 字段 |
-| **OpenAI WebSocket** | 有效 `previous_response_id` 被丢弃并展开历史；续轮重复工具字段，握手身份和 WS Dialer 不符 | 首帧及入口 WS 帧的原始语义 |
+| 路径 | 改造前主要缺口 | 应用层结果 | 传输层结果 |
+|---|---|---|---|
+| **Anthropic HTTP** | 使用了错误的客户端 UA、HTTP/TLS 画像和固定会话身份；system/cache 结构未按 OAuth 客户端形态处理 | 修正 Claude Code UA、Beta、Header、system/cache 结构及 session/metadata 生命周期；保留工具名、工具闭环和无 `temperature` 注入 | 使用独立 Claude HTTP Profile，对齐官方 HTTP/1.1、TLS/ALPN 和连接行为 |
+| **OpenAI HTTP** | 自动注入无依据的 `instructions`，改写工具 `call_id`；Header 与 Body 身份脱节，传输画像不符 | 取消无依据的 `instructions` 注入，保留 `call_id` 和入口 `additional_tools`、`client_metadata`、`prompt_cache_key` 等原生 Responses 字段；Header 与 Body 身份使用同一生命周期 | 使用独立 Codex HTTP Profile，并按代理边界选择对应传输画像 |
+| **OpenAI WebSocket** | 有效 `previous_response_id` 被丢弃并展开历史；续轮重复工具字段，握手身份和 WS Dialer 不符 | 保留有效 `previous_response_id` 和首帧及入口 WS 帧的原始语义；第三方客户端的完整历史被归一化为预热、正式请求和最小工具结果续轮；握手时冻结 session/thread/window/turn 身份 | 使用专用 WS Dialer，对齐握手 Header、压缩协商、TLS/ALPN 和重连边界 |
 
 三条路径还共同存在动态字段来源不统一、不同账号/Profile/代理/CA 可能错误复用连接的问题，必须由公共上下文和连接池键统一解决。
 
-##### 1.1.3.3 三条路径改造结果
-
-| 路径 | 应用层结果 | 传输层结果 |
-|---|---|---|
-| **Anthropic HTTP** | 修正 Claude Code UA、Beta、Header、system/cache 结构及 session/metadata 生命周期；保留原本正确的工具与参数语义 | 使用独立 Claude HTTP Profile，对齐官方 HTTP/1.1、TLS/ALPN 和连接行为 |
-| **OpenAI HTTP** | 取消无依据的 `instructions` 注入，保留入口字段和 `call_id`；Header 与 Body 身份使用同一生命周期 | 使用独立 Codex HTTP Profile，并按代理边界选择对应传输画像 |
-| **OpenAI WebSocket** | 保留有效 `previous_response_id`；第三方客户端的完整历史被归一化为预热、正式请求和最小工具结果续轮；握手时冻结 session/thread/window/turn 身份 | 使用专用 WS Dialer，对齐握手 Header、压缩协商、TLS/ALPN 和重连边界 |
-
 Profile 只在入口端点受支持，且目标平台、OAuth 账号、实际出站协议和官方 Host 均匹配时生效。OpenAI 自动透传和 WS mode 只决定请求处理与实际出站协议：实际走 HTTP 时应用 HTTP Profile，实际走 WebSocket 时应用 WebSocket Profile，不会关闭或绕过官方客户端伪装。
 
-##### 1.1.3.4 实际采用架构
+##### 1.1.3.3 实际采用架构
 
 ```text
 选定目标平台与 OAuth 账号
@@ -161,19 +150,7 @@ Profile 只在入口端点受支持，且目标平台、OAuth 账号、实际出
 2. 连接池键同时包含账号、Profile 版本、协议、Host、代理、CA 和 TLS Profile，禁止跨画像复用。
 3. Profile 常量集中按版本维护；动态字段只保存生成规则和来源，不保存完整抓包值。
 
-##### 1.1.3.5 实施顺序（已全部完成）
-
-| 阶段 | 任务 | 完成条件 |
-|---|---|---|
-| 0 · 基线 | 使用相同 S1/S2/S4 完成官方客户端与 Sub2API 的 direct、mitm、ingress 配对 | 三条路径的应用与传输差异可稳定复现 |
-| 1 · 路由与契约 | 固化三路径路由、账号命中、usage、重试及必要的原生客户端契约 | 三条路径命中正确平台账号，非 Profile 契约问题独立处理 |
-| 2 · 公共骨架 | 实现 Profile、上下文、字段来源、校验、脱敏日志和账号资格判断 | API Key 等非适用账号零行为变化，HTTP 重试重建上下文，WS 身份冻结 |
-| 3 · 传输层 | 实现三套 Transport/Dialer 和隔离连接池键 | 直连、代理、CA、账号和 Profile 之间无错误复用 |
-| 4 · 应用层 | 依次完成 Anthropic HTTP、OpenAI HTTP、OpenAI WebSocket Finalizer | 三条路径的 S1/S2/S4、工具和续轮语义通过 |
-| 5 · 抓包验收 | 每完成一条路径即在 Vircs 重跑 direct、mitm、ingress | 应用层与传输层均达到对应官方 Profile |
-| 6 · 回归与合并 | 全量、竞态、性能测试及连续版本合并演练 | 无功能、安全和性能回归，核心 Handler 保持薄调用点 |
-
-##### 1.1.3.6 验收标准与完成结果
+##### 1.1.3.4 验收标准与完成结果
 
 | 验收项 | 完成结果 |
 |---|---|
@@ -181,7 +158,7 @@ Profile 只在入口端点受支持，且目标平台、OAuth 账号、实际出
 | **Anthropic HTTP** | S1/S2/S4 全部成功，工具和参数无回归，system/cache、动态身份及 HTTP/1.1 传输画像达到目标 |
 | **OpenAI HTTP** | 非流式、SSE、工具、续轮和账号切换通过；入口语义、`call_id`、动态身份及 HTTP 传输画像达到目标 |
 | **OpenAI WebSocket** | 首轮、续轮、工具、重连和 HTTP 回退通过；有效续轮、握手身份及 WS 传输画像达到目标 |
-| **第三方客户端接入** | Kilo 六种“入站协议 × 目标上游”组合均通过；协议转换、工具语义和多轮上下文正确，最终统一使用目标平台对应的官方出站画像 |
+| **第三方客户端接入** | Kilo 六种“入站协议 × 目标上游”组合均通过；协议转换、工具语义和 WebSocket 多轮上下文正确，最终统一使用目标平台对应的官方出站画像；HTTP 路径只补测 S1/S4，连续会话生命周期由官方客户端配对样本和自动化测试覆盖 |
 | **模式独立性** | 自动透传开关及四种 WS mode 均不绕过 Profile，按实际出站协议选择 HTTP 或 WS 画像 |
 | **适用边界** | Anthropic/OpenAI OAuth 自动生效；API Key、其他平台及非模型入口保持原行为 |
 | **安全与回归** | 敏感值未进入普通日志；Host、代理和重定向边界受控；全量、竞态、性能及合并演练通过 |
@@ -201,7 +178,7 @@ Profile 只在入口端点受支持，且目标平台、OAuth 账号、实际出
 
 详细请求计数、字段差异、TLS 数据、运行编号和恢复记录统一保存在[实证 README](backend/internal/service/testdata/official_egress/README.md)。
 
-##### 1.1.3.7 编码任务分解（已完成）
+##### 1.1.3.5 编码任务分解（已完成）
 
 所有任务均按“实现一项 → 自动化测试 → Vircs 抓包实证 → 进入下一项”的门禁执行。
 
@@ -213,27 +190,38 @@ Profile 只在入口端点受支持，且目标平台、OAuth 账号、实际出
 | **T4 · Anthropic HTTP** | Claude Finalizer、system/cache、动态身份及 HTTP/1.1 Profile | S1/S2/S4、工具、参数、mitm 和 direct 通过 |
 | **T5 · OpenAI HTTP** | Body/Header Finalizer、`call_id`、身份上下文及 HTTP Profile | 非流式/SSE/工具/续轮/重试及抓包通过 |
 | **T6 · OpenAI WebSocket** | Handshake/Frame Finalizer、WS Dialer及重连边界 | 首轮、有效续轮、工具、未知帧、身份冻结及抓包通过 |
-| **T7 · 回归、性能与合并** | 全量/竞态/性能测试、三路径重抓及连续版本合并记录 | §1.1.3.6 全部通过，无安全和行为回归 |
+| **T7 · 回归、性能与合并** | 全量/竞态/性能测试、三路径重抓及连续版本合并记录 | §1.1.3.4 全部通过，无安全和行为回归 |
 | **N2 · 第三方客户端适配** | Kilo 六种“入站协议 × 目标上游”组合及 OpenAI WebSocket 完整历史归一化 | 六路协议转换与路由通过；HTTP S1/S4、WebSocket S1/S2/S4、工具身份及传输画像通过 |
 
-T1–T7 与 N2 均已完成。N1 是 `/v1/models`、Chat Completions 和 Gemini Native 的关联契约补测，不属于 Official Egress Profile 的核心改造范围，亦已完成。
+T1–T7 与 N2 均已完成。上表未列的 N1 是 `/v1/models`、Chat Completions 和 Gemini Native 的关联契约补测，不属于 Official Egress Profile 的核心改造范围，亦已完成。
 
 **结论**：§1.1.1 所述目标已在当前版本、Profile 及已验收的官方客户端和 Kilo 入站场景内完成。
 
 ### 1.2 API Key 官方客户端兼容
 
-API Key 官方客户端兼容让 Kilo / Cline / Cursor / Roo Code 等非官方客户端尽量接近 Claude / Codex 官方客户端的 header、body、TLS 和路由形态。mimic 只作用于启用对应开关的 Anthropic / OpenAI API Key 账号和非官方客户端；官方 Claude / Codex 桌面版或 CLI 统一跳过 mimic，按普通 API Key 逻辑处理。
+API Key 官方客户端兼容让 Kilo / Cline / Cursor / Roo Code 等非官方客户端尽量接近 Claude / Codex 官方客户端的 header、body、TLS 和路由形态。mimic 只作用于启用对应开关的 Anthropic / OpenAI API Key 账号和非官方客户端；经 Gateway 入站的官方 Claude / Codex 桌面版或 CLI 统一跳过 mimic，按普通 API Key 逻辑处理。客户端身份识别只依据 Gateway 入站请求上下文，内部入口另见下表。
 
 1. 仅 Anthropic / OpenAI 的 API Key 账号生效，不改变 OAuth 账号逻辑。
 2. mimic 与 passthrough 运行时互斥；同时开启时，非官方客户端优先走 mimic。
-3. 测试连接仍使用官方客户端请求形态：OpenAI 复用 Codex mimic profile，Anthropic 构造 Claude Code 风格请求。
+3. 账号测试按非官方入站请求处理并走 mimic，因此最终出站形态与官方客户端一致：OpenAI 复用 Codex mimic profile，Anthropic 复用完整 Claude Desktop mimic 构造链。
 4. 非官方客户端命中 mimic 时，关键身份 header 不允许被账号级 header override 覆盖；官方客户端跳过 mimic 后不应用该保护。
 5. OpenAI Codex mimic 的 `/v1/messages` 固定进入 Responses mimic 链路，不受 `force_chat_completions`、普通 Responses probe false 或 `openai_responses_supported=false` 影响。
 6. OpenAI Codex mimic 当前只支持 HTTP/SSE 上游，命中时不进入 Responses WebSocket；跳过 mimic 的官方 Codex 客户端按普通 API Key 账号的全局/账号 WS 开关、force HTTP 和 WSv2 mode 选择路由。该判断同时作用于账号调度、粘性账号复核和最终转发。
+7. 官方客户端识别只依据 Gateway 入站请求上下文（UA、`originator`、`metadata.user_id`）。没有入站上下文的内部入口不做该识别，因此不会因为实际发起方是官方 CLI 而跳过 mimic。
+
+三个入口的实际行为：
+
+| 入口 | 客户端识别 | Anthropic | OpenAI |
+|---|---|---|---|
+| Gateway 公网入口 | 按 UA / `originator` / `metadata.user_id` 识别 | 官方客户端跳过 mimic | 官方客户端跳过 mimic |
+| 管理后台账号测试 | 不识别（传入空 Gin Context） | 走完整 Desktop mimic 构造链 | 复用 Codex mimic profile |
+| keeper 内部代理 | 不识别 | `/v1/messages` 开关打开即走 Desktop mimic | 不做 mimic，按 header allowlist 透传官方 Codex CLI 形态 |
 
 ```json
 {"anthropic_apikey_mimic_claude_code":true,"openai_apikey_mimic_codex_cli":true,"openai_apikey_mimic_codex_profile":"desktop_0_144","enable_tls_fingerprint":true}
 ```
+
+两个开关名中的 `claude_code` / `codex_cli` 为历史命名，当前对齐目标分别是 Claude Desktop 和 Codex Desktop；Anthropic UA 仍以 `claude-cli/` 开头，是因为 Desktop 3p 本身就是 claude-cli 的 external entrypoint。
 
 | 平台 | mimic 目标 | 当前行为 |
 |---|---|---|
@@ -261,7 +249,7 @@ fallback-credit-2026-06-01
 | `output_config.format.type == "json_schema"` 的 `/v1/messages` | 将末尾 `fallback-credit-2026-06-01` 替换为 `structured-outputs-2025-12-15`。 | 保持基础列表第 2 项。 |
 | `/v1/messages/count_tokens` | 基础列表后追加 `token-counting-2024-11-01`；无官方样本证明前不套用 structured outputs 条件切换。 | 保持基础列表第 2 项。 |
 
-上述 beta 重写只属于实际命中 mimic 的请求；官方 Claude 客户端跳过 mimic，并保留其自身请求形态。
+上述 beta 重写只属于实际命中 mimic 的请求；经 Gateway 入站的官方 Claude 客户端跳过 mimic，并保留其自身请求形态。
 
 | 项目 | `/v1/messages` | `/v1/messages/count_tokens` |
 |---|---|---|
@@ -275,7 +263,7 @@ fallback-credit-2026-06-01
 
 `v0.1.155-3` 将 Anthropic API Key 账号测试从“仅替换 `anthropic-beta`”改为复用正式 Gateway 的完整 Desktop mimic 构造链，并修复 AnyRouter 返回 HTTP 200 降级文案时被误判为成功的问题。后台测试接口为 `POST /api/v1/admin/accounts/:id/test`，实现和后续维护必须遵守以下分支优先级：
 
-1. 官方 Claude Desktop / CLI 入站请求识别为官方客户端，跳过 API Key mimic；账号同时开启 `anthropic_passthrough` 时可继续进入 passthrough。
+1. 经 Gateway 入站的官方 Claude Desktop / CLI 请求识别为官方客户端，跳过 API Key mimic；账号同时开启 `anthropic_passthrough` 时可继续进入 passthrough。
 2. 非官方客户端同时命中 `anthropic_passthrough` 和 `anthropic_apikey_mimic_claude_code` 时，优先使用 mimic。
 3. 管理后台账号测试必须按非官方入站请求处理，兼容开关开启后优先使用 mimic，不得因为同时开启 passthrough 而切换到透传。当前实现向 `GatewayService.buildUpstreamRequest` 传入空 Gin Context，保证测试不被误识别为官方客户端。
 4. API Key 的普通模型映射和通配符模型映射必须先于测试请求构造执行，最终映射模型同时用于请求 body 和 mimic 规则判断。
@@ -308,21 +296,21 @@ BetaPolicy 必须区分静态身份 beta 和动态功能 beta：Desktop 静态�
 | HTTP 200，收到正常 SSE 内容并以 `message_stop` 结束 | 成功，最终发送 `{"type":"test_complete","success":true}`。 |
 | HTTP 200，但 SSE 正文仅为 `Service temporarily unavailable. Please retry later.` | 失败，发送错误事件，不得发送成功的 `test_complete`。 |
 
-2026-07-15 ARM64 实测基线：部署镜像 `ghcr.io/itv3/sub2apiplus:0.1.155-3`，使用 AnyRouter Anthropic API Key 账号 `anyrouter_Anthropic_czs`、模型 `claude-fable-5` 调用后台账号测试，返回正常文本并以 `{"type":"test_complete","success":true}` 结束。测试记录和文档不得包含账号密钥、Admin API Key、数据库密码或 scoped proxy token。
+上述判定已在 `0.1.155-3` 的 AnyRouter ARM64 实测中验证通过。测试记录和文档不得包含账号密钥、Admin API Key、数据库密码或 scoped proxy token。
 
 OpenAI `/v1/responses/compact` 是特例：上游保持官方 unary JSON 形态，移除 `stream`、`store`、`prompt_cache_key`、`client_metadata`，不补 Codex mimic body 默认值，并强制 `Accept: application/json`。通过普通 `/v1/responses` body-signal 触发且原请求为 `stream:true` 时，下游桥接为最小 Responses SSE，确保包含 `response.output_item.done` 和 `response.completed`。
 
 - mimic 只对齐 header、body、TLS 和路由，不复制服务端隐藏 prompt、账号状态、产品 memory 或 UI 上下文，也不替换响应文本或清洗客户端正文身份。
-- Codex Desktop mimic 默认使用标准 Go Transport，实际出站使用 HTTP/2；未宣称 Go `x/net/http2` 生成的 SETTINGS、伪 header 顺序和 window 更新等帧级指纹与 macOS Codex Desktop 逐字节一致。管理员显式选择的 TLS profile 仍优先，独立 CLI profile 不受影响。
+- Codex Desktop mimic 默认使用标准 Go Transport，实际出站使用 HTTP/2；未宣称 Go `x/net/http2` 生成的 SETTINGS、伪 header 顺序和 window 更新等帧级指纹与 macOS Codex Desktop 逐字节一致。管理员显式选择的 TLS profile 仍优先，独立 CLI profile 不受影响；开启 `enable_tls_fingerprint` 但未显式选择 profile 时回落到内置 Codex TLS profile：`cli_rs_0_125` 回落 CLI profile，其余回落 `codex_exec` profile。
 - 效果应以第三方中转站实际收到的上游请求为准，不能只看 usage 页面中的客户端入口 `USER-AGENT`。
 
-2026-07-15 抓包验证基线：官方 Codex Desktop 0.144.0-alpha.4 与 Claude Desktop `claude-cli/2.1.209` 分别接入 sub2apiplus 建立入站基准；Kilo 与账号测试经 mimic 访问 `gpt-5.6-sol`、`claude-fable-5` 均返回 HTTP 200。`Anthropic-Dangerous-Direct-Browser-Access: true` 在官方 Claude Desktop 原始请求和 mimic 出站请求中均存在，应作为已确认的桌面 Header 保留。
+`Anthropic-Dangerous-Direct-Browser-Access: true` 在官方 Claude Desktop 原始请求和 mimic 出站请求中均存在，应作为已确认的桌面 Header 保留；该结论来自 2026-07-15 官方 Codex Desktop 0.144.0-alpha.4 与 Claude Desktop `claude-cli/2.1.209` 的入站基准抓包。
 
 ### 1.3 Antigravity 增强
 
 Antigravity 增强用于让 Antigravity 账号新增后默认可用；新建账号默认白名单、默认映射和 `/models` 收敛到官方抓包确认的 8 个模型，同时保留账号编辑页“自定义模型名称”入口，允许管理员手动把后续新增的 Google / Antigravity 模型加入该账号白名单。
 
-| 外部显示模型 | 官方发包 model | 固定 `thinkingBudget` |
+| 界面显示名 | 官方发包 model | 固定 `thinkingBudget` |
 |---|---|---:|
 | Claude Opus 4.6 Thinking | `claude-opus-4-6-thinking` | 1024 |
 | Claude Sonnet 4.6 | `claude-sonnet-4-6` | 1024 |
@@ -337,7 +325,7 @@ Antigravity 增强用于让 Antigravity 账号新增后默认可用；新建账�
 |---|---|
 | 默认集合 | `model_mapping` 缺失或为空时，旧账号默认允许并展示官方 8 模型；新账号默认写入其自映射。管理员可通过“自定义模型名称”追加模型，手动“同步上游支持的模型”保存真实结果。 |
 | 显式白名单 | 非空 `model_mapping` 中规范化后的 `model -> model` 自映射构成唯一允许集合，官方模型不会隐式补回；显式配置但无法解析出有效字符串映射时按空白名单处理。 |
-| 映射与别名 | 模型映射保存“外部显示模型 -> 实际发包 model”；普通映射、通配符和 `gemini-3.1-pro-high` 等历史别名只负责解析，最终目标必须命中允许集合，历史别名不进入默认白名单或 `/models`。 |
+| 映射与别名 | 模型映射保存“客户端请求模型名 -> 实际发包 model”，键值为模型 ID，不是上表的界面显示名；普通映射、通配符和 `gemini-3.1-pro-high` 等历史别名只负责解析，最终目标必须命中允许集合，历史别名不进入默认白名单或 `/models`。 |
 | 模型广告 | `/antigravity/v1/models` 只展示账号实际允许的界面模型和手动加入的模型，不展示兼容别名。 |
 | `web_search` | 固定使用 `gemini-3.5-flash-low`；存在显式白名单时必须保留该模型的自映射，不能绕过白名单。 |
 | 官方伪装 | UA 为 `antigravity/hub/2.2.1 darwin/arm64`；默认 8 模型忽略客户端 `thinking` / `output_config.effort`，使用表中固定预算；在内层 `request.labels` 补 `model_enum/trajectory_id` 等官方标签并生成同源 `requestId`，过滤无关 stop / sampling 参数。手动追加模型按其名称发包，无需进入全局官方模型表。 |
@@ -368,31 +356,37 @@ Antigravity 增强用于让 Antigravity 账号新增后默认可用；新建账�
 | prompt 约束和题库 | 全局只读约束、通用问题、项目问题和账号自定义 prompt。 |
 | 模型成本 | 复用 sub2apiplus 现有成本和 usage 统计口径。 |
 
+keeper 的调度与失败处理：
+
 1. keeper 按 `scan_interval_seconds` 周期扫描账号；本仓库示例配置为 30 秒，未配置时程序默认 120 秒。
 2. 下次触发时间取“最近真实请求”和“最近成功保活”分别加保活间隔后的较晚值；账号持续使用时会自动顺延，不产生额外保活请求。
 3. 手动“立即执行”忽略空闲判断，但同账号运行中时不会重复启动。
 4. 失败会记录错误和失败次数，并按账号间隔重新排队；客户端断开、服务退出等非业务失败不会一律累计为连续失败。
 5. 收到 `SIGTERM` / `Interrupt` 后，keeper 会取消运行上下文、等待任务收尾并关闭持久连接。
 
-Anthropic keeper 通过主服务内部代理转发 Claude CLI 请求。该链路必须遵守以下兼容约束：
+Anthropic keeper 通过主服务内部代理转发 Claude CLI 请求。该链路必须遵守以下兼容约束（OpenAI keeper 的内部代理不做 mimic，按 header allowlist 透传官方 Codex CLI 形态，见第 1.2 节入口表，下述约束不适用）：
 
-1. 账号开启 `anthropic_apikey_mimic_claude_code` 时，keeper 的 `/v1/messages` 必须复用账号测试的完整 Desktop mimic 构造链；同时开启 passthrough 时仍由 mimic 优先。只有 mimic 关闭时才原样转发官方 CLI 请求。
-2. mimic 前必须执行账号模型映射和 `max_tokens` 钳制；真实 CLI 已带的 `cc_entrypoint=sdk-cli`、CLI beta 和固定 SDK system 身份不得原样进入上游。最终 Desktop UA、billing 版本、beta、三段 system、metadata、session 和鉴权规则必须与本节“Anthropic / AnyRouter 账号测试要求”一致，CWD 等项目上下文移入 messages 保留。
+1. 账号开启 `anthropic_apikey_mimic_claude_code` 时，keeper 的 `/v1/messages` 必须复用账号测试的完整 Desktop mimic 构造链（keeper 内部代理不做官方客户端识别，见第 1.2 节入口表）；同时开启 passthrough 时仍由 mimic 优先。只有 mimic 关闭时才原样转发官方 CLI 请求。
+2. mimic 前必须执行账号模型映射和 `max_tokens` 钳制；真实 CLI 已带的 `cc_entrypoint=sdk-cli`、CLI beta 和固定 SDK system 身份不得原样进入上游。最终 Desktop UA、billing 版本、beta、三段 system、metadata、session 和鉴权规则必须与第 1.2 节“Anthropic / AnyRouter 账号测试要求”一致，CWD 等项目上下文移入 messages 保留。
 3. `enable_tls_fingerprint=true` 但未显式选择 `tls_fingerprint_profile_id` 时，内部代理必须使用标准 Transport，不得自动套用内置 Node.js profile；该规则与 Anthropic 账号测试一致。
-4. keeper 的权限限制会使 Claude CLI 只上报 `Read` 等少量工具；AnyRouter 会以 HTTP 429 拒绝该非 Desktop 工具形态。mimic 内部代理必须按本节 27 项基线重排工具：保留同名真实工具定义、删除基线外工具、补齐缺失工具；补齐项必须明确标记为不可用，不能因此放开 keeper 的 Shell、写文件或联网权限。
+4. keeper 的权限限制会使 Claude CLI 只上报 `Read` 等少量工具；AnyRouter 会以 HTTP 429 拒绝该非 Desktop 工具形态。mimic 内部代理必须按第 1.2 节 27 项基线重排工具：保留同名真实工具定义、删除基线外工具、补齐缺失工具；补齐项必须明确标记为不可用，不能因此放开 keeper 的 Shell、写文件或联网权限。
 5. Claude CLI 必须使用稳定的 `--name keeper-<账号ID>`，并在真实子进程环境设置 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`。`--name` 只负责会话标识，不能单独关闭自动标题；缺少环境开关时 CLI 仍可能后台发送 `tools=[]`、`thinking=disabled`、带结构化 `output_config` 的标题请求，该请求不属于保活正文，AnyRouter 会以 HTTP 429 拒绝。
 6. 常驻 Claude 子进程必须显式继承 `CLAUDE_CODE_MAX_OUTPUT_TOKENS=<keeper_keepalive_max_output_tokens>`，与主服务请求钳制值保持一致。只把该值写入 `runtime.env` 而未传给 `exec.Command` 的环境，会使 CLI 仍按 64000 token 运行，并把上游的 512 token 截断误判为输出超限。
 7. Claude CLI 版本只能用于判断客户端请求形态，不能把 AnyRouter 的 HTTP 429 直接归因于版本。应使用同一账号和模型对照新版 CLI；若新旧版本均为 429，继续检查内部代理的 TLS、header、body 和上游状态。
 8. Claude CLI 对单次 429 最多自动重试 10 次，排查期间应暂停自动调度或使用受控单次请求，避免把一轮失败误判为多轮保活。
 9. `api_retry` 中的瞬时 429 必须保留在 stdout 供审计，但不能覆盖同一轮后续的成功 `result`；最终有正常回复和非零 usage 时，keeper 应记录 `success` 并将连续失败次数清零。
 
-2026-07-15 ARM64 keeper 实测基线：Claude CLI `2.1.210`、模型 `claude-opus-4-8`，真实保活命令包含 `--name keeper-8`，子进程环境包含 `CLAUDE_CODE_MAX_OUTPUT_TOKENS=512`、`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`。一轮复杂只读分析最终记录为 `success`，连续失败归零，usage 非零；6 个正文请求返回 HTTP 200，首个正文请求的 2 次瞬时 429 由同一 CLI 请求自动重试后恢复。验收时必须区分“最终失败的持续 429”和“最终成功前的瞬时上游重试”。
+验收时必须区分“最终失败的持续 429”和“最终成功前的瞬时上游重试”：2026-07-15 ARM64 实测（Claude CLI `2.1.210`）中，一轮保活的 6 个正文请求全部返回 HTTP 200，首个请求的 2 次瞬时 429 由同一 CLI 请求自动重试后恢复，最终仍记录为 `success`、usage 非零、连续失败归零。
 
 | 视图 | 内容 |
 |---|---|
 | 概览 | keeper 版本、账号数、成功/失败、运行中账号、24 小时用量/费用、最近结果、下次时间和立即执行；账号列表只展示已启用目标。 |
 | 配置 | 管理账号、模型、项目、间隔、工作时间、执行模式、账号 prompt、全局约束和题库；支持全部/已启用/已禁用筛选，已启用优先，同状态按账号 ID 倒序。 |
 | 会话历史 | 展示时间、账号、状态、模型、token、费用、摘要、错误、提示词和 assistant 回复；从全部 target 汇总，停用账号的既有记录仍可查看，完整上游/客户端错误保留在错误详情中。 |
+
+### 1.5 其它优化
+1、Composite 与 Grok 同等豁免，实现Anthropic协议也能访问 GPT、Grok模型
+2、Anthropic平台Oauth账号添加"模型限制"区块，复用现有 ModelWhitelistSelector 组件（含"同步最新支持模型 / 同步上游支持的模型 / 清除所有模型"三个按钮，和 OpenAI 页面一致），加载与保存逻辑把 anthropic && (oauth || setup-token) 纳入 model_mapping 持久化
 
 ## 2. 全新服务器部署
 
@@ -447,7 +441,7 @@ docker compose logs sub2api | grep "admin password"
 
 ### 2.2 准备 keeper
 
-keeper 镜像构建时会在容器内安装官方 `codex` / `claude` 客户端；它们不进入 sub2apiplus 主镜像，也不要求宿主机单独安装。Claude CLI 由 `keeper/Dockerfile` 的 `CLAUDE_RELEASE` 固定版本，更新版本时必须同时修改该默认值，不能依赖可被 Docker 缓存的 `latest` 安装层。
+keeper 镜像构建时会在容器内安装官方 `codex` / `claude` 客户端；它们不进入 sub2apiplus 主镜像，也不要求宿主机单独安装。Claude CLI 由 `keeper/Dockerfile` 的 `CLAUDE_RELEASE` 固定版本，更新版本时必须同时修改该默认值，不能依赖可被 Docker 缓存的 `latest` 安装层。Codex CLI 的 `CODEX_RELEASE` 当前仍为 `latest`，每次无缓存重建都会安装当时的最新版；需要可复现的 Codex 版本时应同样改为具体版本号。
 
 准备 keeper 源码和配置：
 
@@ -476,6 +470,7 @@ git clone --depth 1 https://github.com/itv3/homeproxy.git homeproxy
 SUB2APIPLUS_KEEPER_INTERNAL_TOKEN=<与主服务相同>
 KEEPER_BIND_HOST=127.0.0.1
 KEEPER_HOST_PORT=38091
+# 留空表示关闭 keeper 独立 Web 的 Basic Auth 入口，仅允许内部 token 访问；详见 3.2 节
 KEEPER_WEB_USERNAME=
 KEEPER_WEB_PASSWORD=
 ```
@@ -554,7 +549,7 @@ docker exec sub2apiplus-keeper codex --version
 docker exec sub2apiplus-keeper claude --version
 ```
 
-构建完成后，keeper 版本必须与主服务 Plus 版本一致，`claude --version` 必须与 `keeper/Dockerfile` 的 `CLAUDE_RELEASE` 一致；任一不一致时不得继续保活验证。更新只替换 keeper 容器，`data`、`runtime`、`projects` 和配置挂载保持不变。
+构建完成后，keeper 版本必须与主服务 Plus 版本一致，`claude --version` 必须与 `keeper/Dockerfile` 的 `CLAUDE_RELEASE` 一致；任一不一致时不得继续保活验证。`codex --version` 只记录本次实际安装的版本，`CODEX_RELEASE` 为 `latest` 时该值会随重建变化。更新只替换 keeper 容器，`data`、`runtime`、`projects` 和配置挂载保持不变。
 
 keeper 需要 `CAP_SYS_ADMIN`、`seccomp=unconfined`、`apparmor=unconfined` 以运行官方客户端和 `bubblewrap` 沙箱；`data`、`runtime`、`projects` 必须持久化。
 
@@ -571,7 +566,10 @@ keeper 需要 `CAP_SYS_ADMIN`、`seccomp=unconfined`、`apparmor=unconfined` 以
 
 ```sh
 curl -fsS http://127.0.0.1:8080/health
-curl -fsS http://127.0.0.1:38091/
+# 不带凭据访问返回 401 即为正常结果：端口映射通、服务在监听、鉴权生效
+curl -s -o /dev/null -w 'keeper web: %{http_code}\n' http://127.0.0.1:38091/
+# 需要真正读取 keeper 状态时用内部 token；token 从容器环境变量取，不写入命令历史
+docker exec sub2apiplus-keeper sh -lc 'curl -fsS -o /dev/null -H "x-api-key: ${SUB2APIPLUS_KEEPER_INTERNAL_TOKEN}" http://127.0.0.1:38090/api/state && echo "keeper api OK"'
 cd /root/docker/sub2apiplus/keeper/app && docker compose ps
 docker inspect sub2apiplus --format '{{.Config.Image}}'
 docker exec sub2apiplus /app/sub2api -version
@@ -652,7 +650,7 @@ docker compose -f /root/docker/sub2apiplus/keeper/app/docker-compose.yml up -d
 (cd /path/to/sub2apiplus && make test-frontend)
 ```
 
-Plus 版本在上游版本后追加自定义序号，例如 `0.1.164-1`；Git tag 为 `v0.1.164-1`，镜像 tag 为 `ghcr.io/itv3/sub2apiplus:0.1.164-1`。Release workflow 使用 annotated tag 的 message 生成 Release notes，因此必须使用 `git tag -a -m`；轻量 tag 不包含说明正文。
+Plus 版本在上游版本后追加自定义序号，例如 `0.1.164-1`；Git tag 为 `v0.1.164-1`，镜像 tag 为 `ghcr.io/itv3/sub2apiplus:0.1.164-1`。抓包验收使用的阶段构建（如 `0.1.164-1-n2`）不对外发布，也不进入该命名体系，只出现在实证归档。Release workflow 使用 annotated tag 的 message 生成 Release notes，因此必须使用 `git tag -a -m`；轻量 tag 不包含说明正文。
 
 ```sh
 cd /path/to/sub2apiplus
@@ -677,8 +675,6 @@ gh workflow run Release --repo itv3/sub2apiplus --ref main -f tag="v${VERSION}" 
 ```
 
 本仓库中的主服务和 keeper 可能在同一次发布中修改。凡 Release notes 标明 keeper 或 keeper 内部代理有改动，必须先更新主服务，再从同一个 tag 更新 keeper 源码并无缓存重建；不能只更新其中一方。AMD64 / ARM64 均使用以下流程，不动 PostgreSQL、Redis、volume、keeper 数据目录和 `.env`：
-
-OpenAI WS 账号使用 `http_bridge` 模式前，必须先开启 WS v2 模式路由：在配置文件设置 `gateway.openai_ws.mode_router_v2_enabled: true`，或设置环境变量 `GATEWAY_OPENAI_WS_MODE_ROUTER_V2_ENABLED=true`。WS 连接使用 Redis 60 秒租约并每 20 秒续租；若连续一个完整租期无法确认租约，实例会主动关闭本地连接，避免多实例同时持有同一会话。
 
 `v0.1.161` 新增的 `184_auth_cache_invalidation_outbox.sql` 会在 API Key、用户和分组相关表上安装触发器，且没有自动反向迁移。升级前必须备份数据库；若回退到旧应用，应同时采用经审核的触发器停用或反向迁移方案，不能只回退镜像，否则 outbox 会继续累积。
 
@@ -723,7 +719,9 @@ Gemini 支持内置 Gemini CLI OAuth Client 的 Code Assist OAuth、通过 `.env
 
 二进制 `install.sh` 仍是上游兼容的 systemd 安装路径，不安装 keeper sidecar；需要账号保活时使用 Docker Compose 部署。
 
-TLS fingerprint 的 profile、ALPN 和 HTTP/2 行为见第 1.2、4.3 节；账号需同时启用对应 mimic 开关和 `enable_tls_fingerprint`。
+TLS fingerprint 的 profile、ALPN 和 HTTP/2 行为见第 1.2、4.3 节。账号需启用对应 mimic 开关和 `enable_tls_fingerprint`；Anthropic 还必须显式选择 `tls_fingerprint_profile_id`，否则走标准 Transport，OpenAI 未显式选择时回落到内置 Codex profile。
+
+OpenAI WS 账号使用 `http_bridge` 模式前，必须先开启 WS v2 模式路由：在配置文件设置 `gateway.openai_ws.mode_router_v2_enabled: true`，或设置环境变量 `GATEWAY_OPENAI_WS_MODE_ROUTER_V2_ENABLED=true`。WS 连接使用 Redis 60 秒租约并每 20 秒续租；若连续一个完整租期无法确认租约，实例会主动关闭本地连接，避免多实例同时持有同一会话。
 
 ## 4. 维护参考
 
@@ -756,7 +754,7 @@ keeper 通过 `max_output_tokens` 把账号级最大输出 token 传回主服务
 
 ### 4.2 v0.1.164 差异文件清单
 
-发布基线为上游 tag `v0.1.164`，当前分支已通过合并提交同步；审核 Plus 实现时优先看 `v0.1.164..HEAD` 中 mimic、Antigravity、keeper 和 Plus UI。Composite 分组、Ollama Cloud 用量同步、`batch_image`、提示词安全审计和异步图像任务属于上游；`keeper/` 是新增源码，`.codex-captures/` 和 `.kilo/` 是本地样本或工具配置，不计入源码清单。完整差异用以下命令生成：
+发布基线为上游 tag `v0.1.164`，当前分支已通过合并提交同步；审核 Plus 实现时优先看 `v0.1.164..HEAD` 中 OAuth 官方出站、mimic、Antigravity、keeper 和 Plus UI。Composite 分组、Ollama Cloud 用量同步、`batch_image`、提示词安全审计和异步图像任务属于上游；`keeper/` 是新增源码，`.codex-captures/` 和 `.kilo/` 是本地样本或工具配置，不计入源码清单。完整差异用以下命令生成：
 
 ```sh
 git diff --name-only v0.1.164..HEAD
@@ -765,6 +763,7 @@ git diff --stat v0.1.164..HEAD
 
 | 范围 | 入口文件 |
 |---|---|
+| OAuth 官方客户端伪装 | `backend/internal/service/official_egress_*.go`（Profile/Resolver、三条路径 Finalizer、Transport/Dialer）、gateway 与 OpenAI WS 转发链中的调用点、`backend/internal/repository/http_upstream.go`、`backend/migrations/187_remove_official_egress_account_settings.sql`、账号创建/编辑组件与 Plus 页面的内置说明文案。 |
 | API Key mimic | `backend/internal/service/*apikey_mimic*`、OpenAI gateway/scheduler/WS 相关 service、`backend/internal/pkg/claude/constants.go`、`backend/internal/pkg/tlsfingerprint/`、`backend/internal/repository/http_upstream.go`、`backend/internal/handler/openai_gateway_handler.go`。 |
 | Antigravity | `backend/internal/pkg/antigravity/`、`backend/internal/service/antigravity_*`、`upstream_models.go`、`model_rate_limit.go`、`backend/resources/model-pricing/model_prices_and_context_window.json`。 |
 | 账号保活 | `keeper/`、`backend/internal/handler/admin/account_handler_keeper.go`、`backend/internal/service/*keeper*`、`backend/internal/server/routes/admin.go`。 |
@@ -774,12 +773,19 @@ git diff --stat v0.1.164..HEAD
 ### 4.3 上游合并检查
 
 合并上游后按第 1 节功能规则重点确认：
+**OAuth 官方客户端伪装**
+- 三条 OAuth 出站路径继续自动命中内置画像，Profile 版本由服务端绑定；账号级开关和版本字段不得回流到 API、数据库或管理端表单。
+- Profile 只在入口端点、目标平台、OAuth 账号、实际出站协议和官方 Host 全部匹配时生效；API Key、其他平台和非模型入口保持原行为。
+- 连接池键继续包含账号、Profile 版本、协议、Host、代理、CA 和 TLS Profile；HTTP 重试重建上下文，WebSocket 握手后冻结账号与身份。
+- 自动透传开关和四种 WS mode 不绕过 Profile，按实际出站协议选择 HTTP 或 WebSocket 画像。
+- 身份来源、Host 与重定向边界受控；校验失败时明确失败并记录脱敏原因，不静默切换画像。
+
 **API Key mimic**
-- 只对非官方客户端触发，官方 Claude / Codex 客户端回到 passthrough 或普通 API Key 逻辑；命中 mimic 时关键身份头不被账号 header override 覆盖。
+- Gateway 入站只对非官方客户端触发，官方 Claude / Codex 客户端回到 passthrough 或普通 API Key 逻辑；内部入口按第 1.2 节入口表处理，不做客户端识别；命中 mimic 时关键身份头不被账号 header override 覆盖。
 - Anthropic 使用 mimic 专用完整 beta 列表，不影响普通 API Key；`/v1/messages` 与 `/v1/messages/count_tokens` 保持第 1.2 节的独立构造边界，工具名归一和 per-request reverseMap 只修改结构化工具字段。
 - Anthropic API Key Desktop mimic 默认使用标准 Transport，不得自动套用旧 Claude CLI 2.1.207 / Node.js 26 profile；管理员显式选择的固定或随机 TLS profile 仍优先，平台、账号类型或客户端不匹配时不得套用。
 - OpenAI mimic 强制 HTTP，跳过 mimic 后账号调度、previous response 粘连复核和最终转发都恢复普通 WS/HTTP 路由；`/v1/messages` 固定走 Responses mimic，compact 保持上游 JSON 并按需桥接下游 SSE。
-- `desktop_0_144` 为默认 profile，旧 `desktop_0_142` / `codex_desktop_0_142` 仅作为配置兼容别名；Desktop 使用 macOS Codex Desktop UA、`originator` 和动态 turn metadata，默认不套用 `codex_exec` Rustls profile，并通过标准 Go Transport 走 HTTP/2；`cli_rs_0_125` 保留独立 CLI 回滚路径，管理员显式 TLS profile 继续优先。
+- `desktop_0_144` 为默认 profile，旧 `desktop_0_142` / `codex_desktop_0_142` 仅作为配置兼容别名；Desktop 使用 macOS Codex Desktop UA、`originator` 和动态 turn metadata，未开启 `enable_tls_fingerprint` 时默认不套用 `codex_exec` Rustls profile，并通过标准 Go Transport 走 HTTP/2；`cli_rs_0_125` 保留独立 CLI 回滚路径，管理员显式 TLS profile 继续优先。
 - HTTP/1.1 与 HTTP/2 Transport 均保持 `DisableCompression=true`，避免自动注入 gzip，同时不影响显式压缩响应的受控解压；Responses capability probe 继续按 mimic 状态分键。
 - `CodexBaseInstructionsForModel()` 保持 `gpt-5.5` / `gpt-5.2` 策略，未单独维护 prompt 的后续版本回退到最新版本（当前 GPT-5.5）。
 
@@ -815,7 +821,7 @@ git diff --stat v0.1.164..HEAD
 
 ## 5. 其它文档索引
 
-以下文档位于 `docs/`，不属于 Plus 三项增强的主线说明，但部署或二次开发时可能用到：
+以下文档位于 `docs/` 和 `deploy/`，不属于 Plus 四项增强的主线说明，但部署或二次开发时可能用到：
 
 | 文档 | 说明 |
 |---|---|
@@ -824,7 +830,7 @@ git diff --stat v0.1.164..HEAD
 | [`docs/PAYMENT_CN.md`](docs/PAYMENT_CN.md) | 支付能力中文说明。 |
 | [`docs/PAYMENT.md`](docs/PAYMENT.md) | 支付能力英文说明。 |
 | [`docs/ADMIN_PAYMENT_INTEGRATION_API.md`](docs/ADMIN_PAYMENT_INTEGRATION_API.md) | 管理端支付集成 API。 |
-| [`docs/BATCH_IMAGE_MVP.md`](docs/BATCH_IMAGE_MVP.md) | 批量生图 MVP（上游能力，非 Plus 自研三项增强）。 |
+| [`docs/BATCH_IMAGE_MVP.md`](docs/BATCH_IMAGE_MVP.md) | 批量生图 MVP（上游能力，非 Plus 自研四项增强）。 |
 | [`docs/ASYNC_IMAGE_TASKS.md`](docs/ASYNC_IMAGE_TASKS.md) | 异步图像生成与编辑任务 API（上游能力）。 |
 | [`docs/legal/admin-compliance.zh.md`](docs/legal/admin-compliance.zh.md) | 管理端合规说明（中文）。 |
 | [`docs/legal/admin-compliance.en.md`](docs/legal/admin-compliance.en.md) | 管理端合规说明（英文）。 |
