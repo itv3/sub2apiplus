@@ -530,6 +530,27 @@
         </div>
       </div>
 
+      <!-- Anthropic OAuth/SetupToken 模型限制：仅白名单，用于收敛 /v1/models 列表与调度。
+           位置与下方 OpenAI/Grok OAuth 区块保持一致（紧随备注之后）。 -->
+      <div
+        v-if="account?.platform === 'anthropic' && (account?.type === 'oauth' || account?.type === 'setup-token')"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
+        <div class="mb-3 rounded-lg bg-blue-50 p-3 dark:bg-blue-900/20">
+          <p class="text-xs text-blue-700 dark:text-blue-400">
+            {{ t('admin.accounts.anthropicOAuthWhitelistHint') }}
+          </p>
+        </div>
+        <ModelWhitelistSelector v-model="allowedModels" platform="anthropic" :account-id="account?.id" />
+        <p class="text-xs text-gray-500 dark:text-gray-400">
+          {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
+          <span v-if="allowedModels.length === 0 && modelMappings.length === 0">{{
+            t('admin.accounts.supportsAllModels')
+          }}</span>
+        </p>
+      </div>
+
       <!-- OpenAI/Grok OAuth Model Mapping (OAuth 类型没有 apikey 容器，需要独立的模型映射区域) -->
       <div
         v-if="(account.platform === 'openai' || account.platform === 'grok') && account.type === 'oauth'"
@@ -2127,26 +2148,6 @@
           />
           <p class="input-hint">{{ t('admin.accounts.autoPauseThresholdHint') }}</p>
         </div>
-      </div>
-
-      <!-- 模型限制 (Anthropic OAuth/SetupToken: 仅白名单，用于收敛 /v1/models 列表与调度) -->
-      <div
-        v-if="account?.platform === 'anthropic' && (account?.type === 'oauth' || account?.type === 'setup-token')"
-        class="border-t border-gray-200 pt-4 dark:border-dark-600"
-      >
-        <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
-        <div class="mb-3 rounded-lg bg-blue-50 p-3 dark:bg-blue-900/20">
-          <p class="text-xs text-blue-700 dark:text-blue-400">
-            {{ t('admin.accounts.anthropicOAuthWhitelistHint') }}
-          </p>
-        </div>
-        <ModelWhitelistSelector v-model="allowedModels" platform="anthropic" :account-id="account?.id" />
-        <p class="text-xs text-gray-500 dark:text-gray-400">
-          {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
-          <span v-if="allowedModels.length === 0 && modelMappings.length === 0">{{
-            t('admin.accounts.supportsAllModels')
-          }}</span>
-        </p>
       </div>
 
       <!-- 配额控制 (Anthropic OAuth/SetupToken: 亲和 + 窗口费用 + 会话 + RPM 等) -->

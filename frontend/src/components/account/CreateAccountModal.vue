@@ -2011,6 +2011,25 @@
         </div>
       </div>
 
+      <!-- Anthropic OAuth/SetupToken 模型限制：仅白名单。OAuth 请求原样透传官方
+           模型 ID，转发层不做账号级模型改写，因此不提供映射模式。 -->
+      <div
+        v-if="form.platform === 'anthropic' && isOAuthFlow"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <label class="input-label">{{ t('admin.accounts.modelRestriction') }}</label>
+        <div class="mb-3 rounded-lg bg-blue-50 p-3 dark:bg-blue-900/20">
+          <p class="text-xs text-blue-700 dark:text-blue-400">
+            {{ t('admin.accounts.anthropicOAuthWhitelistHint') }}
+          </p>
+        </div>
+        <ModelWhitelistSelector v-model="allowedModels" platform="anthropic" :sync-credentials="syncPreviewCredentials" />
+        <p class="text-xs text-gray-500 dark:text-gray-400">
+          {{ t('admin.accounts.selectedModels', { count: allowedModels.length }) }}
+          <span v-if="allowedModels.length === 0">{{ t('admin.accounts.supportsAllModels') }}</span>
+        </p>
+      </div>
+
       <!-- OpenAI OAuth Model Mapping (OAuth 类型没有 apikey 容器，需要独立的模型映射区域) -->
       <div
         v-if="(form.platform === 'openai' || form.platform === 'grok') && isOAuthFlow"
@@ -6129,6 +6148,13 @@ const handleCookieAuth = async (sessionKey: string) => {
         if (tempUnschedEnabled.value) {
           credentials.temp_unschedulable_enabled = true
           credentials.temp_unschedulable_rules = tempUnschedPayload
+        }
+        // Anthropic OAuth/SetupToken 仅支持白名单（自映射），不写入改名映射条目。
+        if (form.platform === 'anthropic') {
+          const modelMapping = buildModelMappingObject('whitelist', allowedModels.value, [])
+          if (modelMapping) {
+            credentials.model_mapping = modelMapping
+          }
         }
 
         await adminAPI.accounts.create({
