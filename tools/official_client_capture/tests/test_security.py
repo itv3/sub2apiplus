@@ -71,6 +71,11 @@ class SecurityTest(unittest.TestCase):
                     "headers": [
                         ["Authorization", "Bearer CANARY-SECRET"],
                         ["User-Agent", "claude-cli/2.1.220"],
+                        [
+                            "X-Codex-Turn-Metadata",
+                            '{"turn_id":"private-turn-id"}',
+                        ],
+                        ["X-Codex-Installation-Id", "private-installation-id"],
                     ],
                     "body": {"length": 12, "json": {"content": "hello"}},
                 },
@@ -81,7 +86,13 @@ class SecurityTest(unittest.TestCase):
             payload = normalize_mitm_directory(root, output)
             headers = payload["records"][0]["request"]["headers"]
             self.assertEqual(headers[0], ["authorization", "<secret>"])
+            self.assertEqual(headers[2], ["x-codex-turn-metadata", "<dynamic>"])
+            self.assertEqual(headers[3], ["x-codex-installation-id", "<dynamic>"])
             self.assertNotIn("CANARY-SECRET", output.read_text(encoding="utf-8"))
+            self.assertNotIn("private-turn-id", output.read_text(encoding="utf-8"))
+            self.assertNotIn(
+                "private-installation-id", output.read_text(encoding="utf-8")
+            )
 
     def test_manifest_never_contains_api_key_value(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

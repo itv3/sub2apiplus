@@ -9,7 +9,7 @@ import (
 )
 
 func BenchmarkOfficialEgressWSFrameFinalizer(b *testing.B) {
-	payload := []byte(`{"type":"response.create","model":"gpt-5.6-luna","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"` +
+	payload := []byte(`{"type":"response.create","model":"gpt-5.6-luna","client_metadata":{"session_id":"019f9577-d69f-7892-809e-8a3a4198c671","turn_id":"7a46fb58-2930-4d6c-9cca-ea1124fcc871"},"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"` +
 		strings.Repeat("官方出口性能样本", 8192) +
 		`"}]}]}`)
 	enabledContext := newOfficialEgressBenchmarkWSContext(b)

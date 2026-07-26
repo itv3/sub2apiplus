@@ -22,6 +22,7 @@ const (
 	officialOpenAIWSCompressionOffer   = "permessage-deflate; client_max_window_bits"
 	officialOpenAIWSResponseCreateType = "response.create"
 	officialOpenAIAdditionalToolsType  = "additional_tools"
+	officialOpenAIWSItemTurnMetadata   = "internal_chat_message_metadata_passthrough"
 )
 
 type officialOpenAIWSIdentity struct {
@@ -441,11 +442,6 @@ func finalizeOpenAIOfficialEgressWSFrame(
 			candidate,
 		)
 	}
-	// 正常官方链路的候选帧与入口帧逐字节一致；先走零分配快路径，
-	// 避免对包含大型工具描述的首帧重复执行两次 JSON 解析。
-	if bytes.Equal(original, candidate) {
-		return candidate, result, nil
-	}
 
 	var originalPayload map[string]any
 	if err := json.Unmarshal(original, &originalPayload); err != nil {
@@ -476,58 +472,75 @@ func finalizeOpenAIOfficialEgressWSFrame(
 			"OpenAI official egress WebSocket frame type was modified",
 		)
 	}
-	if allowControlledReplay {
-		return candidate, result, nil
+	if !allowControlledReplay {
+		originalPreviousResponseID, originalPreviousPresent := originalPayload["previous_response_id"]
+		candidatePreviousResponseID, candidatePreviousPresent := candidatePayload["previous_response_id"]
+		if originalPreviousPresent != candidatePreviousPresent ||
+			!reflect.DeepEqual(originalPreviousResponseID, candidatePreviousResponseID) {
+			return nil, result, errors.New(
+				"OpenAI official egress WebSocket previous_response_id was modified",
+			)
+		}
+		if originalPreviousPresent {
+			originalPrevious, _ := originalPreviousResponseID.(string)
+			if strings.TrimSpace(expectedPreviousResponseID) != "" &&
+				strings.TrimSpace(originalPrevious) != strings.TrimSpace(expectedPreviousResponseID) {
+				return nil, result, errors.New(
+					"OpenAI official egress WebSocket previous_response_id conflicts with prior response",
+				)
+			}
+		}
+		for _, field := range []string{
+			"input",
+			"client_metadata",
+			"prompt_cache_key",
+		} {
+			originalValue, originalPresent := originalPayload[field]
+			candidateValue, candidatePresent := candidatePayload[field]
+			if originalPresent != candidatePresent || !reflect.DeepEqual(originalValue, candidateValue) {
+				return nil, result, fmt.Errorf(
+					"OpenAI official egress WebSocket %s was modified",
+					field,
+				)
+			}
+		}
+		if !reflect.DeepEqual(
+			collectOfficialOpenAIAdditionalTools(originalPayload),
+			collectOfficialOpenAIAdditionalTools(candidatePayload),
+		) {
+			return nil, result, errors.New(
+				"OpenAI official egress WebSocket additional_tools were modified",
+			)
+		}
+		if !reflect.DeepEqual(
+			collectOfficialOpenAICallIDs(originalPayload),
+			collectOfficialOpenAICallIDs(candidatePayload),
+		) {
+			return nil, result, errors.New(
+				"OpenAI official egress WebSocket call_id was modified",
+			)
+		}
 	}
 
-	originalPreviousResponseID, originalPreviousPresent := originalPayload["previous_response_id"]
-	candidatePreviousResponseID, candidatePreviousPresent := candidatePayload["previous_response_id"]
-	if originalPreviousPresent != candidatePreviousPresent ||
-		!reflect.DeepEqual(originalPreviousResponseID, candidatePreviousResponseID) {
-		return nil, result, errors.New(
-			"OpenAI official egress WebSocket previous_response_id was modified",
+	modified, err := finalizeOfficialOpenAIWSInputTurnMetadata(candidatePayload)
+	if err != nil {
+		return nil, result, err
+	}
+	if !modified {
+		return candidate, result, nil
+	}
+	finalized, err := marshalOpenAIUpstreamJSON(candidatePayload)
+	if err != nil {
+		return nil, result, fmt.Errorf(
+			"encode OpenAI official egress WebSocket item turn metadata: %w",
+			err,
 		)
 	}
-	if originalPreviousPresent {
-		originalPrevious, _ := originalPreviousResponseID.(string)
-		if strings.TrimSpace(expectedPreviousResponseID) != "" &&
-			strings.TrimSpace(originalPrevious) != strings.TrimSpace(expectedPreviousResponseID) {
-			return nil, result, errors.New(
-				"OpenAI official egress WebSocket previous_response_id conflicts with prior response",
-			)
-		}
-	}
-	for _, field := range []string{
-		"input",
-		"client_metadata",
-		"prompt_cache_key",
-	} {
-		originalValue, originalPresent := originalPayload[field]
-		candidateValue, candidatePresent := candidatePayload[field]
-		if originalPresent != candidatePresent || !reflect.DeepEqual(originalValue, candidateValue) {
-			return nil, result, fmt.Errorf(
-				"OpenAI official egress WebSocket %s was modified",
-				field,
-			)
-		}
-	}
-	if !reflect.DeepEqual(
-		collectOfficialOpenAIAdditionalTools(originalPayload),
-		collectOfficialOpenAIAdditionalTools(candidatePayload),
-	) {
-		return nil, result, errors.New(
-			"OpenAI official egress WebSocket additional_tools were modified",
-		)
-	}
-	if !reflect.DeepEqual(
-		collectOfficialOpenAICallIDs(originalPayload),
-		collectOfficialOpenAICallIDs(candidatePayload),
-	) {
-		return nil, result, errors.New(
-			"OpenAI official egress WebSocket call_id was modified",
-		)
-	}
-	return candidate, result, nil
+	result.Modifications = append(result.Modifications, OfficialEgressModification{
+		Kind:  "frame",
+		Field: "input.*." + officialOpenAIWSItemTurnMetadata + ".turn_id",
+	})
+	return finalized, result, nil
 }
 
 // finalizeDerivedOpenAIOfficialEgressWSFrame 把第三方 response.create
@@ -582,6 +595,9 @@ func finalizeDerivedOpenAIOfficialEgressWSFrame(
 	}
 	payload["client_metadata"] = metadata
 	payload["prompt_cache_key"] = promptCacheKey
+	if _, err := finalizeOfficialOpenAIWSInputTurnMetadata(payload); err != nil {
+		return nil, result, err
+	}
 	if !reflect.DeepEqual(originalCallIDs, collectOfficialOpenAICallIDs(payload)) {
 		return nil, result, errors.New(
 			"OpenAI official egress WebSocket call_id was modified",
@@ -683,6 +699,9 @@ func buildDerivedOpenAIOfficialEgressWSPrewarmFrame(
 	}
 	payload["client_metadata"] = metadata
 	payload["prompt_cache_key"] = promptCacheKey
+	if _, err := finalizeOfficialOpenAIWSInputTurnMetadata(payload); err != nil {
+		return nil, false, err
+	}
 
 	prewarm, err := marshalOpenAIUpstreamJSON(payload)
 	if err != nil {
@@ -736,15 +755,21 @@ func chainDerivedOpenAIOfficialEgressWSBusinessFrame(
 	payload["previous_response_id"] = prewarmResponseID
 	delete(payload, "generate")
 
-	metadata, promptCacheKey, err := buildDerivedOfficialOpenAIWSFrameMetadata(
+	// 正式业务帧与刚刚规范化的首帧属于同一轮；移除 additional_tools
+	// 改变了 input 下标，但不能因此生成新的 Turn ID。
+	metadata, promptCacheKey, err := buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 		egressContext,
 		payload,
+		true,
 	)
 	if err != nil {
 		return nil, err
 	}
 	payload["client_metadata"] = metadata
 	payload["prompt_cache_key"] = promptCacheKey
+	if _, err := finalizeOfficialOpenAIWSInputTurnMetadata(payload); err != nil {
+		return nil, err
+	}
 
 	finalized, err := marshalOpenAIUpstreamJSON(payload)
 	if err != nil {
@@ -822,6 +847,9 @@ func buildDerivedOpenAIOfficialEgressWSToolContinuationFrame(
 	}
 	payload["client_metadata"] = metadata
 	payload["prompt_cache_key"] = promptCacheKey
+	if _, err := finalizeOfficialOpenAIWSInputTurnMetadata(payload); err != nil {
+		return nil, false, err
+	}
 
 	finalized, err := marshalOpenAIUpstreamJSON(payload)
 	if err != nil {
@@ -831,6 +859,219 @@ func buildDerivedOpenAIOfficialEgressWSToolContinuationFrame(
 		)
 	}
 	return finalized, true, nil
+}
+
+// finalizeOfficialOpenAIWSInputTurnMetadata 对齐 Codex OAuth WebSocket 的
+// 逐项 Turn 元数据。官方预热帧不携带该字段；业务帧中每个 input 项都带有
+// 所属轮次的 turn_id，历史项保留历史轮次，当前后缀使用 client_metadata.turn_id。
+func finalizeOfficialOpenAIWSInputTurnMetadata(payload map[string]any) (bool, error) {
+	input, ok := payload["input"].([]any)
+	if !ok {
+		return false, errors.New(
+			"OpenAI official egress WebSocket response.create requires input array",
+		)
+	}
+	generateValue, generatePresent := payload["generate"]
+	prewarm := false
+	if generatePresent {
+		generate, valid := generateValue.(bool)
+		if !valid {
+			return false, errors.New(
+				"OpenAI official egress WebSocket generate must be boolean",
+			)
+		}
+		prewarm = !generate
+	}
+	if prewarm {
+		modified := false
+		for _, rawItem := range input {
+			item, valid := rawItem.(map[string]any)
+			if !valid {
+				continue
+			}
+			if _, exists := item[officialOpenAIWSItemTurnMetadata]; exists {
+				delete(item, officialOpenAIWSItemTurnMetadata)
+				modified = true
+			}
+		}
+		return modified, nil
+	}
+
+	metadata, ok := payload["client_metadata"].(map[string]any)
+	if !ok {
+		return false, errors.New(
+			"OpenAI official egress WebSocket business frame requires client_metadata",
+		)
+	}
+	currentTurnID := strings.TrimSpace(officialOpenAIString(metadata, "turn_id"))
+	if _, err := uuid.Parse(currentTurnID); err != nil {
+		return false, errors.New(
+			"OpenAI official egress WebSocket business turn_id must be UUID",
+		)
+	}
+	sessionID := strings.TrimSpace(officialOpenAIString(metadata, "session_id"))
+	if _, err := uuid.Parse(sessionID); err != nil {
+		return false, errors.New(
+			"OpenAI official egress WebSocket business session_id must be UUID",
+		)
+	}
+
+	segments := splitOfficialOpenAIWSInputTurnSegments(input)
+	modified := false
+	for segmentIndex, segment := range segments {
+		turnID := currentTurnID
+		if segmentIndex < len(segments)-1 {
+			var err error
+			turnID, err = resolveOfficialOpenAIWSHistoricalTurnID(
+				input,
+				segment,
+				sessionID,
+				segmentIndex,
+			)
+			if err != nil {
+				return false, err
+			}
+		}
+		for _, itemIndex := range segment {
+			item, valid := input[itemIndex].(map[string]any)
+			if !valid {
+				return false, fmt.Errorf(
+					"OpenAI official egress WebSocket input item %d must be object",
+					itemIndex,
+				)
+			}
+			itemMetadata, exists := item[officialOpenAIWSItemTurnMetadata]
+			if !exists {
+				item[officialOpenAIWSItemTurnMetadata] = map[string]any{"turn_id": turnID}
+				modified = true
+				continue
+			}
+			itemMetadataMap, valid := itemMetadata.(map[string]any)
+			if !valid {
+				return false, fmt.Errorf(
+					"OpenAI official egress WebSocket input item %d turn metadata must be object",
+					itemIndex,
+				)
+			}
+			existingTurnID := strings.TrimSpace(
+				officialOpenAIString(itemMetadataMap, "turn_id"),
+			)
+			if existingTurnID == "" {
+				itemMetadataMap["turn_id"] = turnID
+				modified = true
+				continue
+			}
+			if _, err := uuid.Parse(existingTurnID); err != nil {
+				return false, fmt.Errorf(
+					"OpenAI official egress WebSocket input item %d turn_id must be UUID",
+					itemIndex,
+				)
+			}
+			if existingTurnID != turnID {
+				return false, fmt.Errorf(
+					"OpenAI official egress WebSocket input item %d turn_id conflicts with its turn",
+					itemIndex,
+				)
+			}
+		}
+	}
+	return modified, nil
+}
+
+// splitOfficialOpenAIWSInputTurnSegments 以“助手输出后的下一条用户消息”为
+// 新轮次边界。连续的用户上下文项属于同一轮，工具输出也继续归入当前轮次。
+func splitOfficialOpenAIWSInputTurnSegments(input []any) [][]int {
+	if len(input) == 0 {
+		return nil
+	}
+	segments := make([][]int, 1)
+	completedAssistantTurn := false
+	for index, rawItem := range input {
+		item, _ := rawItem.(map[string]any)
+		role := strings.TrimSpace(officialOpenAIString(item, "role"))
+		if role == "user" && completedAssistantTurn && len(segments[len(segments)-1]) > 0 {
+			segments = append(segments, nil)
+			completedAssistantTurn = false
+		}
+		segments[len(segments)-1] = append(segments[len(segments)-1], index)
+		if role == "assistant" {
+			completedAssistantTurn = true
+		}
+	}
+	return segments
+}
+
+func resolveOfficialOpenAIWSHistoricalTurnID(
+	input []any,
+	segment []int,
+	sessionID string,
+	segmentIndex int,
+) (string, error) {
+	existingTurnID := ""
+	lastUserAnchor := ""
+	for _, itemIndex := range segment {
+		item, valid := input[itemIndex].(map[string]any)
+		if !valid {
+			return "", fmt.Errorf(
+				"OpenAI official egress WebSocket input item %d must be object",
+				itemIndex,
+			)
+		}
+		if role := strings.TrimSpace(officialOpenAIString(item, "role")); role == "user" {
+			if text := officialOpenAIHTTPMessageContentText(item["content"]); text != "" {
+				lastUserAnchor = strconv.Itoa(itemIndex) + ":" + text
+			}
+		}
+		itemMetadata, exists := item[officialOpenAIWSItemTurnMetadata]
+		if !exists {
+			continue
+		}
+		itemMetadataMap, valid := itemMetadata.(map[string]any)
+		if !valid {
+			return "", fmt.Errorf(
+				"OpenAI official egress WebSocket input item %d turn metadata must be object",
+				itemIndex,
+			)
+		}
+		itemTurnID := strings.TrimSpace(officialOpenAIString(itemMetadataMap, "turn_id"))
+		if itemTurnID == "" {
+			continue
+		}
+		if _, err := uuid.Parse(itemTurnID); err != nil {
+			return "", fmt.Errorf(
+				"OpenAI official egress WebSocket input item %d turn_id must be UUID",
+				itemIndex,
+			)
+		}
+		if existingTurnID != "" && existingTurnID != itemTurnID {
+			return "", fmt.Errorf(
+				"OpenAI official egress WebSocket historical turn %d has conflicting turn_id",
+				segmentIndex,
+			)
+		}
+		existingTurnID = itemTurnID
+	}
+	if existingTurnID != "" {
+		return existingTurnID, nil
+	}
+	if lastUserAnchor == "" {
+		segmentPayload := make([]any, 0, len(segment))
+		for _, itemIndex := range segment {
+			segmentPayload = append(segmentPayload, input[itemIndex])
+		}
+		segmentBytes, err := marshalOpenAIUpstreamJSON(segmentPayload)
+		if err != nil {
+			return "", fmt.Errorf(
+				"encode OpenAI official egress WebSocket historical turn %d: %w",
+				segmentIndex,
+				err,
+			)
+		}
+		lastUserAnchor = fmt.Sprintf("%x", segmentBytes)
+	}
+	return generateSessionUUID(
+		"openai-official-egress-turn|" + sessionID + "|" + lastUserAnchor,
+	), nil
 }
 
 func buildDerivedOfficialOpenAIWSFrameMetadata(

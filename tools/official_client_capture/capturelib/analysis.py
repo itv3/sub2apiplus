@@ -6,6 +6,8 @@ import json
 import re
 import subprocess
 import urllib.parse
+from collections import Counter
+from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +30,14 @@ TSHARK_CLIENT_HELLO_FIELDS = (
     "tls.handshake.extensions_key_share_group",
     "tls.extension.psk_ke_mode",
 )
+
+OFFICIAL_EGRESS_CONTRACTS = (
+    "oauth-claude-http",
+    "oauth-codex-http",
+    "oauth-codex-ws",
+)
+
+_NORMALIZED_PLACEHOLDER_RE = re.compile(r"^<(dynamic|text|string):[^>]+>$")
 
 
 def _normalize_headers(value: Any) -> list[list[str]]:
@@ -271,6 +281,450 @@ def compare_normalized(
         "baseline_only": [item for item in baseline_records if item not in candidate_records],
         "candidate_only": [item for item in candidate_records if item not in baseline_records],
     }
+
+
+def compare_official_egress_contract(
+    baseline: dict[str, Any],
+    candidate: dict[str, Any],
+    candidate_ingress: dict[str, Any],
+    contract: str,
+) -> dict[str, Any]:
+    """比较 OAuth 官方出站契约，并单独验证候选入站到出站的语义守恒。
+
+    原始严格比较继续保留，用于发现全部结构差异；契约比较只声明两类不能跨独立
+    模型运行逐值比较的因素：对话历史，以及 Codex HTTP 的运行态 Cookie jar。
+    任何其他 Header、路径、协议或固定 Body 差异仍会使验收失败。
+    """
+
+    if contract not in OFFICIAL_EGRESS_CONTRACTS:
+        raise ValueError(f"未知 OAuth 官方出站契约：{contract}")
+
+    raw = compare_normalized(baseline, candidate)
+    baseline_records = _official_egress_contract_records(baseline, contract, "egress")
+    candidate_records = _official_egress_contract_records(candidate, contract, "egress")
+    ingress_records = _official_egress_contract_records(
+        candidate_ingress, contract, "ingress"
+    )
+
+    differences: list[str] = []
+    difference_paths: list[str] = []
+    declared: list[dict[str, Any]] = [
+        {
+            "kind": "independent_model_run_conversation_history",
+            "scope": "messages" if contract == "oauth-claude-http" else "input",
+            "reason": "官方基准与候选是两次独立模型运行；候选正文改由同次入站到出站守恒验证。",
+        },
+        {
+            "kind": "dynamic_identity_and_text_length",
+            "scope": "normalized_placeholders",
+            "reason": "动态身份和正文文本只比较类型与结构，不比较随机值或脱敏前长度。",
+        },
+    ]
+    if contract.endswith("-http"):
+        declared.append(
+            {
+                "kind": "http_header_order",
+                "scope": "request.headers",
+                "reason": "Header 名称和值严格比较，但 Go/代理运行时的发送顺序不作为画像契约。",
+            }
+        )
+    if contract == "oauth-codex-http":
+        cookie_difference = _http_cookie_presence(baseline_records) != _http_cookie_presence(
+            candidate_records
+        )
+        if cookie_difference:
+            declared.append(
+                {
+                    "kind": "runtime_cookie_jar",
+                    "scope": "request.headers.cookie",
+                    "reason": "Cookie 由 Codex CLI 的辅助 ChatGPT 请求建立，Sub2API 模型转发链不伪造运行态 Cookie。",
+                }
+            )
+
+    baseline_contract = [
+        _canonical_official_egress_record(record, contract)
+        for record in baseline_records
+    ]
+    candidate_contract = [
+        _canonical_official_egress_record(record, contract)
+        for record in candidate_records
+    ]
+    if not baseline_records:
+        differences.append("官方基准没有匹配到目标模型请求。")
+    if not candidate_records:
+        differences.append("候选出站没有匹配到目标模型请求。")
+    if not ingress_records:
+        differences.append("候选入站没有匹配到目标模型请求。")
+    if contract.endswith("-http"):
+        if Counter(_stable_record_key(item) for item in baseline_contract) != Counter(
+            _stable_record_key(item) for item in candidate_contract
+        ):
+            differences.append("官方基准与候选的固定 HTTP 出站契约不一致。")
+            difference_paths.extend(
+                _record_sequence_difference_paths(
+                    baseline_contract,
+                    candidate_contract,
+                )
+            )
+    elif baseline_contract != candidate_contract:
+        differences.append("官方基准与候选的固定 WebSocket 帧序列不一致。")
+        difference_paths.extend(
+            _record_sequence_difference_paths(
+                baseline_contract,
+                candidate_contract,
+            )
+        )
+
+    semantic_errors = _candidate_semantic_preservation_errors(
+        ingress_records,
+        candidate_records,
+        contract,
+    )
+    differences.extend(semantic_errors)
+
+    ws_errors: list[str] = []
+    if contract == "oauth-codex-ws":
+        ws_errors = _validate_official_egress_ws_item_turn_metadata(candidate_records)
+        differences.extend(ws_errors)
+
+    return {
+        "schema_version": "official-client-oauth-egress-contract-diff/v1",
+        "contract": contract,
+        "raw_equal": raw["equal"],
+        "contract_equal": not differences,
+        "equal": not differences,
+        "baseline_record_count": len(baseline_records),
+        "candidate_record_count": len(candidate_records),
+        "candidate_ingress_record_count": len(ingress_records),
+        "candidate_semantic_preserved": not semantic_errors,
+        "ws_item_turn_metadata_valid": not ws_errors if contract == "oauth-codex-ws" else None,
+        "declared_differences": declared,
+        "undeclared_differences": differences,
+        "contract_difference_paths": difference_paths,
+        "raw_diff": {
+            "schema_version": raw["schema_version"],
+            "equal": raw["equal"],
+            "baseline_evidence_kind": raw["baseline_evidence_kind"],
+            "candidate_evidence_kind": raw["candidate_evidence_kind"],
+            "baseline_record_count": raw["baseline_record_count"],
+            "candidate_record_count": raw["candidate_record_count"],
+            "baseline_only_count": len(raw["baseline_only"]),
+            "candidate_only_count": len(raw["candidate_only"]),
+        },
+    }
+
+
+def _official_egress_contract_records(
+    payload: dict[str, Any], contract: str, boundary: str
+) -> list[dict[str, Any]]:
+    records = payload.get("records")
+    if not isinstance(records, list):
+        return []
+    selected: list[dict[str, Any]] = []
+    if contract == "oauth-claude-http":
+        expected_path = "/v1/messages"
+    elif contract == "oauth-codex-http":
+        expected_path = (
+            "/v1/responses" if boundary == "ingress" else "/backend-api/codex/responses"
+        )
+    else:
+        expected_path = (
+            "/v1/responses" if boundary == "ingress" else "/backend-api/codex/responses"
+        )
+    for value in records:
+        if not isinstance(value, dict):
+            continue
+        if contract.endswith("-http"):
+            if value.get("kind") != "http_exchange":
+                continue
+            request = value.get("request")
+            request = request if isinstance(request, dict) else {}
+            if request.get("method") == "POST" and _request_path_matches(
+                request.get("path"), expected_path
+            ):
+                selected.append(value)
+            continue
+        if (
+            value.get("kind") == "websocket_frame"
+            and value.get("from_client")
+            and _request_path_matches(value.get("path"), expected_path)
+        ):
+            selected.append(value)
+    return selected
+
+
+def _canonical_official_egress_record(
+    record: dict[str, Any], contract: str
+) -> dict[str, Any]:
+    value = _canonical_normalized_placeholders(deepcopy(record))
+    if contract.endswith("-http"):
+        request = value.get("request")
+        request = request if isinstance(request, dict) else {}
+        request.pop("body_length", None)
+        headers = request.get("headers")
+        if isinstance(headers, list):
+            headers = [
+                [str(item[0]).lower(), redact_header_value(str(item[0]), str(item[1]))]
+                for item in headers
+                if isinstance(item, list) and len(item) == 2
+            ]
+            if contract == "oauth-codex-http":
+                headers = [
+                    item
+                    for item in headers
+                    if not (
+                        isinstance(item, list)
+                        and len(item) == 2
+                        and str(item[0]).lower() == "cookie"
+                    )
+                ]
+            request["headers"] = sorted(headers, key=_stable_record_key)
+        shape = request.get("json_shape")
+        if isinstance(shape, dict):
+            if contract == "oauth-claude-http":
+                shape["messages_cache_profile"] = _values_for_key(
+                    shape.get("messages"), "cache_control"
+                )
+            shape.pop("messages" if contract == "oauth-claude-http" else "input", None)
+        return {
+            "kind": "http_exchange",
+            "request": {
+                "method": request.get("method"),
+                "host": request.get("host"),
+                "path": request.get("path"),
+                "http_version": request.get("http_version"),
+                "headers": request.get("headers", []),
+                "json_shape": shape,
+            },
+        }
+
+    shape = value.get("json_shape")
+    shape = shape if isinstance(shape, dict) else {}
+    prewarm = shape.get("generate") is False
+    input_items = shape.get("input")
+    if prewarm:
+        input_contract = []
+        if isinstance(input_items, list):
+            for item in input_items:
+                item = item if isinstance(item, dict) else {}
+                input_contract.append(
+                    {"type": item.get("type"), "role": item.get("role")}
+                )
+    else:
+        input_contract = "<paired-candidate-semantic>"
+    shape["input"] = input_contract
+    return {
+        "kind": "websocket_frame",
+        "host": value.get("host"),
+        "path": value.get("path"),
+        "json_shape": shape,
+    }
+
+
+def _candidate_semantic_preservation_errors(
+    ingress_records: list[dict[str, Any]],
+    egress_records: list[dict[str, Any]],
+    contract: str,
+) -> list[str]:
+    if len(ingress_records) != len(egress_records):
+        return [
+            "候选入站与出站的模型请求数量不一致："
+            f"{len(ingress_records)} != {len(egress_records)}。"
+        ]
+    field = "messages" if contract == "oauth-claude-http" else "input"
+    errors: list[str] = []
+    for index, (ingress, egress) in enumerate(zip(ingress_records, egress_records)):
+        if contract.endswith("-http"):
+            ingress_request = ingress.get("request")
+            ingress_request = ingress_request if isinstance(ingress_request, dict) else {}
+            egress_request = egress.get("request")
+            egress_request = egress_request if isinstance(egress_request, dict) else {}
+            ingress_shape = ingress_request.get("json_shape")
+            egress_shape = egress_request.get("json_shape")
+        else:
+            ingress_shape = ingress.get("json_shape")
+            egress_shape = egress.get("json_shape")
+        ingress_shape = ingress_shape if isinstance(ingress_shape, dict) else {}
+        egress_shape = egress_shape if isinstance(egress_shape, dict) else {}
+        ingress_semantic = deepcopy(ingress_shape.get(field))
+        egress_semantic = deepcopy(egress_shape.get(field))
+        if contract == "oauth-claude-http":
+            _remove_key_recursive(ingress_semantic, "cache_control")
+            _remove_key_recursive(egress_semantic, "cache_control")
+        if contract == "oauth-codex-ws":
+            _remove_ws_item_turn_metadata(ingress_semantic)
+            _remove_ws_item_turn_metadata(egress_semantic)
+        if ingress_semantic != egress_semantic:
+            errors.append(f"候选第 {index + 1} 条请求的 {field} 入站到出站语义不守恒。")
+    return errors
+
+
+def _validate_official_egress_ws_item_turn_metadata(
+    records: list[dict[str, Any]],
+) -> list[str]:
+    errors: list[str] = []
+    for record_index, record in enumerate(records):
+        shape = record.get("json_shape")
+        shape = shape if isinstance(shape, dict) else {}
+        items = shape.get("input")
+        if not isinstance(items, list):
+            errors.append(f"候选第 {record_index + 1} 条 WS 帧缺少 input 数组。")
+            continue
+        prewarm = shape.get("generate") is False
+        for item_index, item in enumerate(items):
+            item = item if isinstance(item, dict) else {}
+            metadata = item.get("internal_chat_message_metadata_passthrough")
+            if prewarm:
+                if metadata is not None:
+                    errors.append(
+                        f"候选第 {record_index + 1} 条 WS 预热帧的第 {item_index + 1} 项不应携带逐项 Turn 元数据。"
+                    )
+                continue
+            if not isinstance(metadata, dict) or "turn_id" not in metadata:
+                errors.append(
+                    f"候选第 {record_index + 1} 条 WS 业务帧的第 {item_index + 1} 项缺少 turn_id。"
+                )
+    return errors
+
+
+def _remove_ws_item_turn_metadata(value: Any) -> None:
+    if not isinstance(value, list):
+        return
+    for item in value:
+        if isinstance(item, dict):
+            item.pop("internal_chat_message_metadata_passthrough", None)
+
+
+def _remove_key_recursive(value: Any, target_key: str) -> None:
+    if isinstance(value, dict):
+        value.pop(target_key, None)
+        for item in value.values():
+            _remove_key_recursive(item, target_key)
+    elif isinstance(value, list):
+        for item in value:
+            _remove_key_recursive(item, target_key)
+
+
+def _values_for_key(value: Any, target_key: str) -> list[Any]:
+    result: list[Any] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key == target_key:
+                result.append(item)
+            else:
+                result.extend(_values_for_key(item, target_key))
+    elif isinstance(value, list):
+        for item in value:
+            result.extend(_values_for_key(item, target_key))
+    return result
+
+
+def _canonical_normalized_placeholders(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            str(key): _canonical_normalized_placeholders(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_canonical_normalized_placeholders(item) for item in value]
+    if isinstance(value, str):
+        match = _NORMALIZED_PLACEHOLDER_RE.match(value)
+        if match:
+            return f"<{match.group(1)}>"
+    return value
+
+
+def _http_cookie_presence(records: list[dict[str, Any]]) -> list[bool]:
+    result: list[bool] = []
+    for record in records:
+        request = record.get("request")
+        request = request if isinstance(request, dict) else {}
+        headers = request.get("headers")
+        headers = headers if isinstance(headers, list) else []
+        result.append(
+            any(
+                isinstance(item, list)
+                and len(item) == 2
+                and str(item[0]).lower() == "cookie"
+                for item in headers
+            )
+        )
+    return result
+
+
+def _stable_record_key(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+
+def _request_path_matches(value: Any, expected_path: str) -> bool:
+    if not isinstance(value, str):
+        return False
+    return urllib.parse.urlsplit(value).path == expected_path
+
+
+def _record_sequence_difference_paths(
+    baseline: list[dict[str, Any]], candidate: list[dict[str, Any]]
+) -> list[str]:
+    paths: list[str] = []
+    if len(baseline) != len(candidate):
+        paths.append("$.record_count")
+    for index, (baseline_record, candidate_record) in enumerate(
+        zip(baseline, candidate)
+    ):
+        _collect_difference_paths(
+            baseline_record,
+            candidate_record,
+            f"$.records[{index}]",
+            paths,
+            40,
+        )
+        if len(paths) >= 40:
+            break
+    return paths
+
+
+def _collect_difference_paths(
+    baseline: Any,
+    candidate: Any,
+    path: str,
+    result: list[str],
+    limit: int,
+) -> None:
+    if len(result) >= limit or baseline == candidate:
+        return
+    if isinstance(baseline, dict) and isinstance(candidate, dict):
+        for key in sorted(set(baseline) | set(candidate)):
+            child = f"{path}.{key}"
+            if key not in baseline or key not in candidate:
+                result.append(child)
+                if len(result) >= limit:
+                    return
+                continue
+            _collect_difference_paths(
+                baseline[key], candidate[key], child, result, limit
+            )
+            if len(result) >= limit:
+                return
+        return
+    if isinstance(baseline, list) and isinstance(candidate, list):
+        if len(baseline) != len(candidate):
+            result.append(f"{path}.length")
+            if len(result) >= limit:
+                return
+        for index, (baseline_item, candidate_item) in enumerate(
+            zip(baseline, candidate)
+        ):
+            _collect_difference_paths(
+                baseline_item,
+                candidate_item,
+                f"{path}[{index}]",
+                result,
+                limit,
+            )
+            if len(result) >= limit:
+                return
+        return
+    result.append(path)
 
 
 def _comparison_records(payload: dict[str, Any]) -> tuple[str, list[Any]]:

@@ -67,6 +67,8 @@ MITM 保持同一 HTTPS Base URL，只给当前 CLI 子进程注入 forward prox
 目标 allowlist 中的 HTTP/WS。规范化结果用于比较 URL、HTTP 版本、Header 和 JSON 结构：
 
 - 授权头、Cookie、动态身份、查询值和正文文本会脱敏；
+- `x-codex-turn-metadata`、`x-codex-installation-id` 等复合动态身份 Header
+  整段替换为动态占位符，不把内部 UUID 写入规范化证据；
 - HTTP 单元必须出现精确模型路径的 POST，且不得出现目标 WS 帧；
 - WS 单元必须出现客户端 WS 帧，且不得发生 Responses POST 回退；
 - 原始 JSONL 仍含请求/响应正文，属于私有敏感材料。
@@ -227,6 +229,34 @@ python3 tools/official_client_capture/compare.py \
 ```
 
 不能跨 HTTP/WS 或 direct/MITM 比较，也不能把 OAuth 基准当作 API mimic 候选。
+
+### 10.1 OAuth 官方出站契约验收
+
+OAuth 官方基准与 Sub2API 候选是两次独立模型运行，不能把响应派生的对话历史、
+正文脱敏前长度或 Codex 辅助请求建立的运行态 Cookie 当成固定画像。三条 OAuth
+路径必须同时提供同次候选入站证据，并使用对应契约：
+
+```bash
+python3 tools/official_client_capture/compare.py \
+  baseline.json candidate.json \
+  --contract oauth-codex-ws \
+  --candidate-ingress candidate-ingress.json \
+  --output contract-diff.json
+```
+
+可选契约为 `oauth-claude-http`、`oauth-codex-http` 和 `oauth-codex-ws`。报告同时保留：
+
+- `raw_equal`：原始严格结构比较，仅作全量诊断，不隐藏任何差异；
+- `contract_equal`：固定 Header、路径、协议、Body 外层、WS 帧序列和候选语义守恒验收；
+- `declared_differences`：独立模型运行、动态身份、HTTP Header 顺序，以及仅限
+  Codex HTTP 的运行态 Cookie jar；
+- `undeclared_differences`：必须为零，否则验收失败；
+- `candidate_semantic_preserved`：同一次候选入站到出站的 `messages` / `input`
+  必须守恒，仅排除 Profile 自有 cache 字段和 WS 逐项 Turn 元数据。
+
+Codex WS 业务帧的每个 `input` 项必须包含
+`internal_chat_message_metadata_passthrough.turn_id`，`generate=false` 预热帧则不得包含。
+工具不会为了得到相等结果而伪造 Cookie、补造消息或删除合法的 `thinking` 内容。
 
 ## 11. 本地测试
 

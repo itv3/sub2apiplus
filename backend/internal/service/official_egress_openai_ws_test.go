@@ -3,15 +3,19 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
+
+const testOfficialOpenAIWSTurnID = "7a46fb58-2930-4d6c-9cca-ea1124fcc871"
 
 func TestOpenAIOfficialEgressWSContextFreezesIngressIdentity(t *testing.T) {
 	ctx, egressContext, c, _ := newOfficialOpenAIWSContextForTest(t)
@@ -158,6 +162,16 @@ func TestOpenAIOfficialEgressWSDerivesKiloIdentityAndCanonicalFrame(t *testing.T
 	)
 	firstTurnID := gjson.GetBytes(firstFinal, "client_metadata.turn_id").String()
 	require.NotEmpty(t, firstTurnID)
+	for index := range gjson.GetBytes(firstFinal, "input").Array() {
+		require.Equal(
+			t,
+			firstTurnID,
+			gjson.GetBytes(
+				firstFinal,
+				"input."+strconv.Itoa(index)+"."+officialOpenAIWSItemTurnMetadata+".turn_id",
+			).String(),
+		)
+	}
 	require.Equal(
 		t,
 		gjson.GetBytes(firstFinal, "prompt_cache_key").String(),
@@ -181,6 +195,15 @@ func TestOpenAIOfficialEgressWSDerivesKiloIdentityAndCanonicalFrame(t *testing.T
 	)
 	require.Equal(t, "developer", gjson.GetBytes(prewarm, "input.1.role").String())
 	require.Equal(t, "", gjson.GetBytes(prewarm, "client_metadata.turn_id").String())
+	for index := range gjson.GetBytes(prewarm, "input").Array() {
+		require.False(
+			t,
+			gjson.GetBytes(
+				prewarm,
+				"input."+strconv.Itoa(index)+"."+officialOpenAIWSItemTurnMetadata,
+			).Exists(),
+		)
+	}
 	prewarmTurnMetadata := gjson.Parse(
 		gjson.GetBytes(prewarm, "client_metadata.x-codex-turn-metadata").String(),
 	)
@@ -204,6 +227,16 @@ func TestOpenAIOfficialEgressWSDerivesKiloIdentityAndCanonicalFrame(t *testing.T
 	require.Equal(t, "user", gjson.GetBytes(business, "input.1.role").String())
 	businessTurnID := gjson.GetBytes(business, "client_metadata.turn_id").String()
 	require.NotEmpty(t, businessTurnID)
+	for index := range gjson.GetBytes(business, "input").Array() {
+		require.Equal(
+			t,
+			businessTurnID,
+			gjson.GetBytes(
+				business,
+				"input."+strconv.Itoa(index)+"."+officialOpenAIWSItemTurnMetadata+".turn_id",
+			).String(),
+		)
+	}
 	businessTurnMetadata := gjson.Parse(
 		gjson.GetBytes(business, "client_metadata.x-codex-turn-metadata").String(),
 	)
@@ -316,6 +349,14 @@ func TestOpenAIOfficialEgressWSDerivesKiloIdentityAndCanonicalFrame(t *testing.T
 		fullHistoryTurnID,
 		gjson.GetBytes(toolDelta, "client_metadata.turn_id").String(),
 	)
+	require.Equal(
+		t,
+		fullHistoryTurnID,
+		gjson.GetBytes(
+			toolDelta,
+			"input.0."+officialOpenAIWSItemTurnMetadata+".turn_id",
+		).String(),
+	)
 }
 
 func TestOpenAIOfficialEgressWSConnectionIdentitySeparatesSessions(t *testing.T) {
@@ -357,14 +398,14 @@ func TestOpenAIOfficialEgressWSConnectionIdentitySeparatesSessions(t *testing.T)
 func TestOpenAIOfficialEgressWSFramePreservesValidContinuation(t *testing.T) {
 	ctx, _, _, _ := newOfficialOpenAIWSContextForTest(t)
 	previousResponseID := "resp_valid_previous"
-	original := []byte(`{
+	original := withOfficialOpenAIWSBusinessMetadataForTest(t, []byte(`{
 		"type":"response.create",
 		"previous_response_id":"resp_valid_previous",
 		"input":[
 			{"type":"message","role":"user","content":[{"type":"input_text","text":"继续"}]},
 			{"type":"custom_tool_call_output","call_id":"call_t6","output":"ok"}
 		]
-	}`)
+	}`))
 
 	finalized, result, err := finalizeOpenAIOfficialEgressWSFrame(
 		ctx,
@@ -374,8 +415,20 @@ func TestOpenAIOfficialEgressWSFramePreservesValidContinuation(t *testing.T) {
 		false,
 	)
 	require.NoError(t, err)
-	require.Empty(t, result.Modifications)
-	require.Equal(t, original, finalized)
+	require.NotEmpty(t, result.Modifications)
+	require.Equal(
+		t,
+		testOfficialOpenAIWSTurnID,
+		gjson.GetBytes(
+			finalized,
+			"input.0."+officialOpenAIWSItemTurnMetadata+".turn_id",
+		).String(),
+	)
+	require.Equal(
+		t,
+		"call_t6",
+		gjson.GetBytes(finalized, "input.1.call_id").String(),
+	)
 	require.True(t, shouldPreserveOpenAIOfficialEgressWSPreviousResponseID(
 		ctx,
 		previousResponseID,
@@ -390,18 +443,18 @@ func TestOpenAIOfficialEgressWSFramePreservesValidContinuation(t *testing.T) {
 
 func TestOpenAIOfficialEgressWSFrameRejectsHistoryExpansionAndIdentityChanges(t *testing.T) {
 	ctx, _, _, _ := newOfficialOpenAIWSContextForTest(t)
-	original := []byte(`{
+	original := withOfficialOpenAIWSBusinessMetadataForTest(t, []byte(`{
 		"type":"response.create",
 		"previous_response_id":"resp_valid_previous",
 		"prompt_cache_key":"019f9577-d69f-7892-809e-8a3a4198c671",
 		"input":[{"type":"custom_tool_call_output","call_id":"call_t6","output":"ok"}]
-	}`)
+	}`))
 
-	withoutPrevious := []byte(`{
+	withoutPrevious := withOfficialOpenAIWSBusinessMetadataForTest(t, []byte(`{
 		"type":"response.create",
 		"prompt_cache_key":"019f9577-d69f-7892-809e-8a3a4198c671",
 		"input":[{"type":"custom_tool_call_output","call_id":"call_t6","output":"ok"}]
-	}`)
+	}`))
 	_, _, err := finalizeOpenAIOfficialEgressWSFrame(
 		ctx,
 		original,
@@ -411,7 +464,7 @@ func TestOpenAIOfficialEgressWSFrameRejectsHistoryExpansionAndIdentityChanges(t 
 	)
 	require.ErrorContains(t, err, "previous_response_id")
 
-	expandedInput := []byte(`{
+	expandedInput := withOfficialOpenAIWSBusinessMetadataForTest(t, []byte(`{
 		"type":"response.create",
 		"previous_response_id":"resp_valid_previous",
 		"prompt_cache_key":"019f9577-d69f-7892-809e-8a3a4198c671",
@@ -419,7 +472,7 @@ func TestOpenAIOfficialEgressWSFrameRejectsHistoryExpansionAndIdentityChanges(t 
 			{"type":"additional_tools","tools":[{"type":"custom","name":"exec"}]},
 			{"type":"custom_tool_call_output","call_id":"call_t6","output":"ok"}
 		]
-	}`)
+	}`))
 	_, _, err = finalizeOpenAIOfficialEgressWSFrame(
 		ctx,
 		original,
@@ -438,7 +491,106 @@ func TestOpenAIOfficialEgressWSFrameRejectsHistoryExpansionAndIdentityChanges(t 
 		true,
 	)
 	require.NoError(t, err)
-	require.Equal(t, expandedInput, finalized)
+	require.Equal(
+		t,
+		testOfficialOpenAIWSTurnID,
+		gjson.GetBytes(
+			finalized,
+			"input.1."+officialOpenAIWSItemTurnMetadata+".turn_id",
+		).String(),
+	)
+}
+
+func TestOpenAIOfficialEgressWSFrameAddsHistoricalAndCurrentTurnMetadata(t *testing.T) {
+	ctx, _, _, _ := newOfficialOpenAIWSContextForTest(t)
+	original := withOfficialOpenAIWSBusinessMetadataForTest(t, []byte(`{
+		"type":"response.create",
+		"input":[
+			{"type":"message","role":"developer","content":[{"type":"input_text","text":"规则"}]},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"第一轮环境"}]},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"第一轮问题"}]},
+			{"type":"message","role":"assistant","content":[{"type":"output_text","text":"第一轮回答"}]},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"第二轮环境"}]},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"第二轮问题"}]}
+		]
+	}`))
+
+	finalized, result, err := finalizeOpenAIOfficialEgressWSFrame(
+		ctx,
+		original,
+		original,
+		"",
+		false,
+	)
+	require.NoError(t, err)
+	require.NotEmpty(t, result.Modifications)
+	historicalTurnID := gjson.GetBytes(
+		finalized,
+		"input.0."+officialOpenAIWSItemTurnMetadata+".turn_id",
+	).String()
+	require.NotEmpty(t, historicalTurnID)
+	require.NotEqual(t, testOfficialOpenAIWSTurnID, historicalTurnID)
+	for index := 0; index < 4; index++ {
+		require.Equal(
+			t,
+			historicalTurnID,
+			gjson.GetBytes(
+				finalized,
+				"input."+strconv.Itoa(index)+"."+officialOpenAIWSItemTurnMetadata+".turn_id",
+			).String(),
+		)
+	}
+	for index := 4; index < 6; index++ {
+		require.Equal(
+			t,
+			testOfficialOpenAIWSTurnID,
+			gjson.GetBytes(
+				finalized,
+				"input."+strconv.Itoa(index)+"."+officialOpenAIWSItemTurnMetadata+".turn_id",
+			).String(),
+		)
+	}
+	require.Equal(t, "第一轮问题", gjson.GetBytes(finalized, "input.2.content.0.text").String())
+	require.Equal(t, "第二轮问题", gjson.GetBytes(finalized, "input.5.content.0.text").String())
+}
+
+func TestOpenAIOfficialEgressWSFrameRejectsConflictingItemTurnMetadata(t *testing.T) {
+	ctx, _, _, _ := newOfficialOpenAIWSContextForTest(t)
+	original := withOfficialOpenAIWSBusinessMetadataForTest(t, []byte(`{
+		"type":"response.create",
+		"input":[{
+			"type":"message",
+			"role":"user",
+			"content":[{"type":"input_text","text":"你好"}],
+			"internal_chat_message_metadata_passthrough":{"turn_id":"bee3cd38-4511-4497-899e-f19f04f953fd"}
+		}]
+	}`))
+
+	_, _, err := finalizeOpenAIOfficialEgressWSFrame(
+		ctx,
+		original,
+		original,
+		"",
+		false,
+	)
+	require.ErrorContains(t, err, "turn_id conflicts with its turn")
+}
+
+func TestOpenAIOfficialEgressWSFrameWithoutProfilePreservesPayload(t *testing.T) {
+	original := []byte(`{
+		"type":"response.create",
+		"input":[{"type":"message","role":"user","content":"你好"}]
+	}`)
+	finalized, result, err := finalizeOpenAIOfficialEgressWSFrame(
+		context.Background(),
+		original,
+		original,
+		"",
+		false,
+	)
+	require.NoError(t, err)
+	require.Empty(t, result.Modifications)
+	require.Equal(t, original, finalized)
 }
 
 func TestOpenAIOfficialEgressWSUnknownFrameIsNeverModified(t *testing.T) {
@@ -544,6 +696,19 @@ func newOfficialOpenAIWSFirstFrameForTest(t *testing.T) []byte {
 	body, err := marshalOpenAIUpstreamJSON(payload)
 	require.NoError(t, err)
 	return body
+}
+
+func withOfficialOpenAIWSBusinessMetadataForTest(t *testing.T, body []byte) []byte {
+	t.Helper()
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(body, &payload))
+	payload["client_metadata"] = map[string]any{
+		"session_id": testOfficialOpenAISessionID,
+		"turn_id":    testOfficialOpenAIWSTurnID,
+	}
+	finalized, err := marshalOpenAIUpstreamJSON(payload)
+	require.NoError(t, err)
+	return finalized
 }
 
 func applyOfficialOpenAIWSIngressHeadersForTest(c *gin.Context, firstPayload []byte) {

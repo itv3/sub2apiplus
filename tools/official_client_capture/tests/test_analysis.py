@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import subprocess
 import unittest
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import patch
 
 from tools.official_client_capture.capturelib.analysis import (
     TSHARK_CLIENT_HELLO_FIELDS,
     compare_normalized,
+    compare_official_egress_contract,
     extract_client_hellos,
     normalize_mitm_record,
     validate_tshark_client_hello_fields,
@@ -227,12 +229,269 @@ class AnalysisTest(unittest.TestCase):
         }
         self.assertTrue(compare_normalized(baseline, candidate)["equal"])
 
+    def test_oauth_claude_contract_uses_paired_ingress_for_conversation(self) -> None:
+        headers = [
+            ["user-agent", "claude-cli/2.1.220 (external, sdk-cli)"],
+            ["content-length", "<dynamic>"],
+        ]
+        baseline = {
+            "records": [
+                _http_record(
+                    "/v1/messages",
+                    headers,
+                    {
+                        "model": "claude-sonnet-5",
+                        "system": [{"type": "text", "text": "<text:12>"}],
+                        "messages": [
+                            {
+                                "role": "assistant",
+                                "content": [{"type": "tool_use", "id": "<dynamic:str>"}],
+                            }
+                        ],
+                    },
+                    "HTTP/1.1",
+                )
+            ]
+        }
+        candidate_shape = {
+            "model": "claude-sonnet-5",
+            "system": [{"type": "text", "text": "<text:99>"}],
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": "<text:123>"},
+                        {"type": "tool_use", "id": "<dynamic:str>"},
+                    ],
+                }
+            ],
+        }
+        candidate = {
+            "records": [
+                _http_record(
+                    "/v1/messages", headers, candidate_shape, "HTTP/1.1"
+                )
+            ]
+        }
+        ingress = {
+            "records": [
+                _http_record(
+                    "/v1/messages", [], candidate_shape, "HTTP/1.1"
+                )
+            ]
+        }
+
+        result = compare_official_egress_contract(
+            baseline, candidate, ingress, "oauth-claude-http"
+        )
+        self.assertFalse(result["raw_equal"])
+        self.assertTrue(result["contract_equal"])
+        self.assertTrue(result["candidate_semantic_preserved"])
+
+    def test_oauth_codex_http_contract_declares_cookie_but_rejects_semantic_loss(
+        self,
+    ) -> None:
+        baseline_shape = {
+            "model": "gpt-5.6-luna",
+            "store": False,
+            "input": [{"type": "message"}, {"type": "message"}],
+        }
+        candidate_shape = {
+            "model": "gpt-5.6-luna",
+            "store": False,
+            "input": [{"type": "message"}],
+        }
+        baseline = {
+            "records": [
+                _http_record(
+                    "/backend-api/codex/responses",
+                    [
+                        ["user-agent", "codex_cli_rs/0.145.0"],
+                        ["cookie", "<secret>"],
+                    ],
+                    baseline_shape,
+                    "HTTP/2",
+                )
+            ]
+        }
+        candidate = {
+            "records": [
+                _http_record(
+                    "/backend-api/codex/responses",
+                    [["user-agent", "codex_cli_rs/0.145.0"]],
+                    candidate_shape,
+                    "HTTP/2",
+                )
+            ]
+        }
+        ingress = {
+            "records": [
+                _http_record(
+                    "/v1/responses", [], deepcopy(candidate_shape), "HTTP/2"
+                )
+            ]
+        }
+
+        result = compare_official_egress_contract(
+            baseline, candidate, ingress, "oauth-codex-http"
+        )
+        self.assertTrue(result["contract_equal"])
+        self.assertIn(
+            "runtime_cookie_jar",
+            {item["kind"] for item in result["declared_differences"]},
+        )
+
+        ingress["records"][0]["request"]["json_shape"]["input"].append(
+            {"type": "message"}
+        )
+        result = compare_official_egress_contract(
+            baseline, candidate, ingress, "oauth-codex-http"
+        )
+        self.assertFalse(result["contract_equal"])
+        self.assertFalse(result["candidate_semantic_preserved"])
+
+    def test_oauth_codex_ws_contract_requires_business_item_turn_metadata(
+        self,
+    ) -> None:
+        prewarm = {
+            "type": "response.create",
+            "generate": False,
+            "input": [
+                {"type": "additional_tools", "role": "developer"},
+                {"type": "message", "role": "developer"},
+            ],
+            "client_metadata": {"turn_id": "<dynamic:str>"},
+        }
+        official_business = {
+            "type": "response.create",
+            "input": [
+                _ws_item("message", "developer"),
+                _ws_item("message", "user"),
+            ],
+            "client_metadata": {"turn_id": "<dynamic:str>"},
+        }
+        candidate_business = {
+            "type": "response.create",
+            "input": [_ws_item("message", "user")],
+            "client_metadata": {"turn_id": "<dynamic:str>"},
+        }
+        ingress_business = {
+            "type": "response.create",
+            "input": [{"type": "message", "role": "user"}],
+            "client_metadata": {"turn_id": "<dynamic:str>"},
+        }
+        baseline = {
+            "records": [
+                _ws_record("/backend-api/codex/responses", prewarm),
+                _ws_record("/backend-api/codex/responses", official_business),
+            ]
+        }
+        candidate = {
+            "records": [
+                _ws_record("/backend-api/codex/responses", prewarm),
+                _ws_record("/backend-api/codex/responses", candidate_business),
+            ]
+        }
+        ingress = {
+            "records": [
+                _ws_record("/v1/responses", prewarm),
+                _ws_record("/v1/responses", ingress_business),
+            ]
+        }
+
+        result = compare_official_egress_contract(
+            baseline, candidate, ingress, "oauth-codex-ws"
+        )
+        self.assertTrue(result["contract_equal"])
+        self.assertTrue(result["ws_item_turn_metadata_valid"])
+
+        del candidate_business["input"][0][
+            "internal_chat_message_metadata_passthrough"
+        ]
+        result = compare_official_egress_contract(
+            baseline, candidate, ingress, "oauth-codex-ws"
+        )
+        self.assertFalse(result["contract_equal"])
+        self.assertFalse(result["ws_item_turn_metadata_valid"])
+
+    def test_oauth_contract_rejects_unapproved_static_header_difference(self) -> None:
+        shape = {"model": "claude-sonnet-5", "messages": []}
+        baseline = {
+            "records": [
+                _http_record(
+                    "/v1/messages",
+                    [["user-agent", "claude-cli/2.1.220"]],
+                    shape,
+                    "HTTP/1.1",
+                )
+            ]
+        }
+        candidate = {
+            "records": [
+                _http_record(
+                    "/v1/messages",
+                    [["user-agent", "unapproved-client/1.0"]],
+                    shape,
+                    "HTTP/1.1",
+                )
+            ]
+        }
+        ingress = {
+            "records": [_http_record("/v1/messages", [], shape, "HTTP/1.1")]
+        }
+
+        result = compare_official_egress_contract(
+            baseline, candidate, ingress, "oauth-claude-http"
+        )
+        self.assertFalse(result["contract_equal"])
+        self.assertTrue(result["candidate_semantic_preserved"])
+
     def test_compare_rejects_mixed_evidence_kinds(self) -> None:
         result = compare_normalized({"records": []}, {"client_hellos": []})
         self.assertFalse(result["equal"])
 
     def test_compare_rejects_unknown_documents(self) -> None:
         self.assertFalse(compare_normalized({}, {})["equal"])
+
+
+def _http_record(
+    path: str,
+    headers: list[list[str]],
+    shape: dict[str, object],
+    http_version: str,
+) -> dict[str, object]:
+    return {
+        "kind": "http_exchange",
+        "request": {
+            "method": "POST",
+            "host": "<target-host>",
+            "path": path,
+            "http_version": http_version,
+            "headers": headers,
+            "json_shape": shape,
+        },
+        "response": {"status": 200},
+    }
+
+
+def _ws_record(path: str, shape: dict[str, object]) -> dict[str, object]:
+    return {
+        "kind": "websocket_frame",
+        "from_client": True,
+        "host": "<target-host>",
+        "path": path,
+        "json_shape": shape,
+    }
+
+
+def _ws_item(item_type: str, role: str) -> dict[str, object]:
+    return {
+        "type": item_type,
+        "role": role,
+        "internal_chat_message_metadata_passthrough": {
+            "turn_id": "<dynamic:str>"
+        },
+    }
 
 
 if __name__ == "__main__":
