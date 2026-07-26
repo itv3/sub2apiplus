@@ -788,6 +788,12 @@ Docker 多阶段构建镜像为 `sub2apiplus-vircs-test:v01647-apikey-anyrouter`
 `0.1.164-7-vircs-test`。该镜像已替换 Vircs 主服务进行 MITM 复验；PostgreSQL、Redis、
 keeper、`.env` 和数据卷未变更。
 
+修复与文档提交为 `4098fad53`。提交后重新构建并实际运行的最终 Vircs 镜像为
+`sub2apiplus-vircs-test:v01647-anyrouter-final`，镜像 ID
+`sha256:2f744e51229d9331a0169c8022ac204a1ca819448adc01c597a77f7115bbd5a5`；二进制报告
+`0.1.164-7-vircs-test / 4098fad53`，主服务 healthy、重启次数 0。#15/#97 代理均为空，
+keeper 运行且重启次数 0，临时 MITM 进程和 CA 均无残留。
+
 ### 3.6 其它运行能力
 
 Gemini 支持内置 Gemini CLI OAuth Client 的 Code Assist OAuth、通过 `.env` 配置 `GEMINI_OAUTH_CLIENT_ID` / `GEMINI_OAUTH_CLIENT_SECRET` 的 AI Studio OAuth，以及后台直接添加 API Key。

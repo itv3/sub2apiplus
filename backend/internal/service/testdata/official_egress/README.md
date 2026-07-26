@@ -907,3 +907,9 @@ Vircs 的全量 Go 测试除只读源码挂载阻止测试创建 `.entc` 外全�
 测试镜像替换主服务后状态为 healthy、重启次数 0。测试期间只临时把 #15 指向 MITM proxy；
 结束后 #15/#97 的 `proxy_id` 均恢复为空，临时 MITM 进程和 CA 已清理，keeper、PostgreSQL、
 Redis、`.env` 和数据卷均未修改。API Key 精确值扫描未在文本产物中发现泄露。
+
+代码与文档提交为 `4098fad53`。提交后使用该提交号重新构建的最终运行镜像为
+`sub2apiplus-vircs-test:v01647-anyrouter-final`，镜像 ID
+`sha256:2f744e51229d9331a0169c8022ac204a1ca819448adc01c597a77f7115bbd5a5`；容器内版本为
+`0.1.164-7-vircs-test / 4098fad53`。最终主服务 healthy、重启次数 0，keeper 为 running、
+重启次数 0；#15/#97 代理为空，临时 MITM 进程和 CA 均不存在。
