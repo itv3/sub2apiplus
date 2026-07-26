@@ -395,28 +395,24 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPNormalizesKiloResponsesLiteContra
 	require.Equal(t, "read_file", gjson.GetBytes(upstream.lastBody, "input.0.tools.0.name").String())
 }
 
-func TestOpenAIGatewayForwardOfficialEgressHTTPRetryRebuildsIdentity(t *testing.T) {
+func TestOpenAIGatewayForwardOfficialEgressHTTPProactiveNamespaceStripPreservesIdentity(t *testing.T) {
 	body := newOfficialOpenAIHTTPTestBody(t, false, false, true)
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(body, &payload))
 	input, ok := payload["input"].([]any)
 	require.True(t, ok)
 	require.Greater(t, len(input), 3)
-	retryItem, ok := input[3].(map[string]any)
+	item, ok := input[3].(map[string]any)
 	require.True(t, ok)
-	retryItem["namespace"] = "remove-on-retry"
+	item["namespace"] = "remove-before-forward"
 	body, err := marshalOpenAIUpstreamJSON(payload)
 	require.NoError(t, err)
 
 	c := newOfficialOpenAIHTTPTestContext(body, "/v1/responses")
 	upstream := &httpUpstreamRecorder{responses: []*http.Response{
 		newOfficialOpenAIHTTPJSONResponse(
-			http.StatusBadRequest,
-			`{"error":{"code":"unknown_parameter","message":"Unknown parameter: input[3].namespace","param":"input[3].namespace"}}`,
-		),
-		newOfficialOpenAIHTTPJSONResponse(
 			http.StatusOK,
-			`{"id":"resp_retry","model":"gpt-5.6-luna","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`,
+			`{"id":"resp_namespace","model":"gpt-5.6-luna","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`,
 		),
 	}}
 
@@ -429,18 +425,12 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPRetryRebuildsIdentity(t *testing.
 
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Len(t, upstream.requests, 2)
-	require.Equal(t, "remove-on-retry", gjson.GetBytes(upstream.bodies[0], "input.3.namespace").String())
-	require.False(t, gjson.GetBytes(upstream.bodies[1], "input.3.namespace").Exists())
-	for _, req := range upstream.requests {
-		require.Equal(t, testOfficialOpenAISessionID, req.Header.Get("session-id"))
-		require.Equal(t, testOfficialOpenAICallID, gjson.GetBytes(mustReadRequestBody(t, req), "input.3.call_id").String())
-	}
-	firstContext, firstOK := OfficialEgressContextFromContext(upstream.requests[0].Context())
-	secondContext, secondOK := OfficialEgressContextFromContext(upstream.requests[1].Context())
-	require.True(t, firstOK)
-	require.True(t, secondOK)
-	require.NotSame(t, firstContext, secondContext)
+	require.Len(t, upstream.requests, 1)
+	require.False(t, gjson.GetBytes(upstream.bodies[0], "input.3.namespace").Exists())
+	require.Equal(t, testOfficialOpenAISessionID, upstream.requests[0].Header.Get("session-id"))
+	require.Equal(t, testOfficialOpenAICallID, gjson.GetBytes(mustReadRequestBody(t, upstream.requests[0]), "input.3.call_id").String())
+	_, contextOK := OfficialEgressContextFromContext(upstream.requests[0].Context())
+	require.True(t, contextOK)
 }
 
 func TestOpenAIOfficialEgressHTTPAccountSwitchRebuildsContext(t *testing.T) {

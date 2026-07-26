@@ -292,6 +292,9 @@ gateway:
   # 官方客户端画像发布指针：active 使用当前实抓画像，previous 整体回退上一画像。
   official_client_profiles:
     mode: active
+  # ChatGPT Frameless Live 单会话硬上限（秒）。
+  live:
+    max_session_duration_seconds: 3600
   # OpenAI Responses WebSocket 配置（默认开启，可按需回滚到 HTTP）
   openai_ws:
     # 新版 WS mode 路由（默认关闭）。关闭时忽略账号级 WS mode（包括 http_bridge），保持 legacy ctx_pool 行为。
