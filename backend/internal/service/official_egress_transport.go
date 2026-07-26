@@ -309,7 +309,7 @@ func doAnthropicHTTPUpstreamWithOfficialEgress(
 	fallbackProfile *tlsfingerprint.Profile,
 ) (*http.Response, error) {
 	if httpUpstream == nil || account == nil {
-		return nil, errors.New("Anthropic HTTP upstream is unavailable")
+		return nil, errors.New("anthropic HTTP upstream is unavailable")
 	}
 	tlsProfile, _, err := resolveOfficialEgressHTTPTransportProfile(req, fallbackProfile)
 	if err != nil {

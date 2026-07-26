@@ -27,7 +27,8 @@ import (
 func TestOfficialEgressT3_HTTPPoolKeySeparatesOfficialProfiles(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Gateway.ConnectionPoolIsolation = config.ConnectionPoolIsolationProxy
-	upstream := NewHTTPUpstream(cfg).(*httpUpstreamService)
+	upstream, ok := NewHTTPUpstream(cfg).(*httpUpstreamService)
+	require.True(t, ok)
 	tlsProfile := &tlsfingerprint.Profile{Name: "official-egress-test"}
 
 	first, err := upstream.getClientEntryWithTLS(
@@ -70,14 +71,28 @@ func TestOfficialEgressT3_HTTPPoolKeySeparatesOfficialProfiles(t *testing.T) {
 
 func TestOfficialEgressT3_TLSClientCacheSeparatesCustomRootCAs(t *testing.T) {
 	systemRootsProfile := &tlsfingerprint.Profile{Name: "same-profile"}
-	customRootsProfile := &tlsfingerprint.Profile{
+	firstCustomRootsProfile := &tlsfingerprint.Profile{
+		Name:    "same-profile",
+		RootCAs: x509.NewCertPool(),
+	}
+	secondCustomRootsProfile := &tlsfingerprint.Profile{
 		Name:    "same-profile",
 		RootCAs: x509.NewCertPool(),
 	}
 	require.NotEqual(
 		t,
 		tlsFingerprintProfileCacheKey(systemRootsProfile),
-		tlsFingerprintProfileCacheKey(customRootsProfile),
+		tlsFingerprintProfileCacheKey(firstCustomRootsProfile),
+	)
+	require.NotEqual(
+		t,
+		tlsFingerprintProfileCacheKey(firstCustomRootsProfile),
+		tlsFingerprintProfileCacheKey(secondCustomRootsProfile),
+	)
+	require.Equal(
+		t,
+		tlsFingerprintProfileCacheKey(firstCustomRootsProfile),
+		tlsFingerprintProfileCacheKey(firstCustomRootsProfile),
 	)
 }
 

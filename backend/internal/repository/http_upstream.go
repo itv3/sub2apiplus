@@ -580,20 +580,14 @@ func tlsFingerprintProfileCacheKey(profile *tlsfingerprint.Profile) string {
 	if profile == nil {
 		return "nil"
 	}
-	rootCASubjects := 0
-	rootCAFingerprint := ""
 	hasCustomRootCAs := profile.RootCAs != nil
-	if profile.RootCAs != nil {
-		subjects := profile.RootCAs.Subjects()
-		rootCASubjects = len(subjects)
-		rootCAHash := sha256.New()
-		for _, subject := range subjects {
-			_, _ = rootCAHash.Write(subject)
-		}
-		rootCAFingerprint = hex.EncodeToString(rootCAHash.Sum(nil)[:8])
+	rootCAIdentity := "system"
+	if hasCustomRootCAs {
+		// CertPool 不提供可靠的证书枚举接口；使用进程内实例标识隔离不同自定义证书池。
+		rootCAIdentity = fmt.Sprintf("%p", profile.RootCAs)
 	}
 	raw := fmt.Sprintf(
-		"name:%s|grease:%t|ciphers:%v|curves:%v|points:%v|sigalgs:%v|alpn:%v|versions:%v|keyshares:%v|psk:%v|ext:%v|randomize_ext:%t|min:%04x|max:%04x|custom_root_ca:%t|root_ca_subjects:%d|root_ca:%s|disable_compression:%t",
+		"name:%s|grease:%t|ciphers:%v|curves:%v|points:%v|sigalgs:%v|alpn:%v|versions:%v|keyshares:%v|psk:%v|ext:%v|randomize_ext:%t|min:%04x|max:%04x|custom_root_ca:%t|root_ca_identity:%s|disable_compression:%t",
 		profile.Name,
 		profile.EnableGREASE,
 		profile.CipherSuites,
@@ -609,8 +603,7 @@ func tlsFingerprintProfileCacheKey(profile *tlsfingerprint.Profile) string {
 		profile.TLSVersMin,
 		profile.TLSVersMax,
 		hasCustomRootCAs,
-		rootCASubjects,
-		rootCAFingerprint,
+		rootCAIdentity,
 		profile.Transport.DisableCompression,
 	)
 	sum := sha256.Sum256([]byte(raw))

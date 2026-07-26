@@ -730,6 +730,7 @@ func TestExtractGeminiUsage(t *testing.T) {
 			}
 			if got == nil {
 				t.Fatalf("期望返回非 nil，实际返回 nil")
+				return
 			}
 			if got.InputTokens != tt.wantUsage.InputTokens {
 				t.Errorf("InputTokens: 期望 %d，实际 %d", tt.wantUsage.InputTokens, got.InputTokens)
@@ -870,6 +871,7 @@ func TestParseGeminiRateLimitResetTime(t *testing.T) {
 
 			if got == nil {
 				t.Fatalf("期望返回非 nil，实际返回 nil")
+				return
 			}
 
 			// approxDelta == -1 表示只检查非 nil，不检查具体值（如 daily quota 场景）

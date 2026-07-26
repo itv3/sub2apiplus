@@ -8,7 +8,7 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 |---|---|
 | 仓库 | `https://github.com/itv3/sub2apiplus` |
 | 上游 | `https://github.com/Wei-Shaw/sub2api` |
-| 版本基线 | 最新已发布 Plus 版本为 `0.1.164-5`，部署和拉取镜像只能使用已发布版本；`backend/cmd/server/VERSION` 保存当前发布版本，发版后以最新 tag 为准。已合并上游 tag `v0.1.164`，自定义差异优先看 `v0.1.164..HEAD`。 |
+| 版本基线 | 最新已发布 Plus 版本为 `0.1.164-6`，部署和拉取镜像只能使用已发布版本；`backend/cmd/server/VERSION` 保存当前发布版本，发版后以最新 tag 为准。已合并上游 tag `v0.1.164`，自定义差异优先看 `v0.1.164..HEAD`。 |
 | Docker 镜像 | `ghcr.io/itv3/sub2apiplus` |
 | 命名约定 | 对外使用 `sub2apiplus` / `Sub2API Plus`；Go module 和 import 保留 `github.com/Wei-Shaw/sub2api`，降低上游合并成本。 |
 | Go / 客户端版本 | 主服务 `go 1.26.5`（`backend/go.mod`）；keeper `go 1.24`（`keeper/go.mod`）；keeper 镜像固定安装 Claude CLI `2.1.210`。 |
@@ -32,13 +32,13 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 1、Sub2API 对外提供标准 API 接口。无论入站来自官方客户端，还是通过标准 API 接入的第三方客户端，Anthropic/OpenAI OAuth 官方出站均自动使用对应版本 Claude Code / Codex CLI 的真实出站形态。
 2、Sub2API 原有兼容层只负责入站协议转换、模型映射、工具转换及请求语义兼容；最终 OAuth 出站请求由内置官方客户端画像统一定型。
 >
-> **当前基线**：源码基线 Sub2API `v0.1.164`，Vircs 运行版本 `0.1.164-5`。当前 `active` 画像为 Claude Code CLI `2.1.220` 和 Codex CLI `0.145.0`，来源分别为 VirCS `oauth-20260726T014021Z` 与 `api-20260726T014252Z` 的 OAuth/API、direct/MITM、HTTP/WS 自动化抓包。2026-07-26 已在发布版本上用 Anthropic #50、OpenAI #90 重跑三条 OAuth 路径；业务场景和 direct TLS 均成功，但三条 MITM 严格规范化对比都存在未声明差异，因此当前版本不能写成“与官方流量完全一致”。AnyRouter 实际 A/B 仍待其账号恢复。
+> **当前基线**：源码基线 Sub2API `v0.1.164`，Vircs 运行版本 `0.1.164-6`。当前 `active` 画像为 Claude Code CLI `2.1.220` 和 Codex CLI `0.145.0`，来源分别为 Vircs `oauth-20260726T014021Z` 与 `api-20260726T014252Z` 的 OAuth/API、direct/MITM、HTTP/WS 自动化抓包。2026-07-26 已在发布版本上用 Anthropic #50、OpenAI #90 重跑三条 OAuth 路径；三条路径的 S1/S2/S4、候选入站到出站语义守恒、应用层官方出站契约和 direct TLS 均通过，未声明差异为 0。独立运行产生的正文、动态身份、Header 顺序和 Codex 运行时 Cookie 仍使原始 `raw_equal=false`，因此“通过”表示官方出站契约一致，不表示两个独立请求逐字节相同。AnyRouter 实际 A/B 仍待其账号恢复。
 
 | 当前路径 | Sub2API 实证（OAuth 官方画像内置生效） |
 |---|---|
-| **Anthropic HTTP** | `0.1.164-5` 的 S1/S2/S4 为 5/5，direct TLS 对齐；MITM 严格对比未通过，S4 续轮存在 `thinking` / `tool_use` 内容结构差异 |
-| **OpenAI HTTP** | `0.1.164-5` 的 S1/S2/S4 为 5/5，direct TLS 对齐；MITM 严格对比未通过，候选缺少官方 Cookie，且一条请求的 input 长度为 7/8 差异 |
-| **OpenAI WebSocket** | `0.1.164-5` 的 4 次握手、9 条 `response.create` 和 S1/S2/S4 均成功，direct TLS 对齐；MITM 严格对比未通过，仍有帧级 metadata/结构差异 |
+| **Anthropic HTTP** | `0.1.164-6` 的 S1/S2/S4 为 5/5；`contract_equal=true`、入站到出站语义守恒、未声明差异 0；direct 17-cipher、ALPN `http/1.1` 与官方基准一致 |
+| **OpenAI HTTP** | `0.1.164-6` 的 S1/S2/S4 为 5/5；`contract_equal=true`、入站到出站语义守恒、未声明差异 0；direct 30-cipher、空 ALPN 与官方基准一致 |
+| **OpenAI WebSocket** | `0.1.164-6` 的 4 次握手、9 条 `response.create` 和 S1/S2/S4 均成功；逐项 turn metadata、历史/当前 turn 分段、语义守恒和契约对比均通过；direct 10-cipher、空 ALPN 与官方基准一致 |
 
 验收所用的阶段构建镜像、运行目录和回归时间戳统一见[实证归档](backend/internal/service/testdata/official_egress/README.md)；阶段构建不对外发布，命名规则见 §3.4。
 
@@ -105,6 +105,7 @@ HTTP 路径只能对标对应的官方 HTTP 基准，WebSocket 路径只能对�
 - **续轮与工具**：S2 必须形成真实连续会话；S4 必须完成“工具定义 → 工具调用 → 工具结果 → 最终回答”，发出即失败的样本无效。
 - **版本边界**：每次结论只适用于运行元数据记录的客户端、服务镜像和 Profile；版本变化后必须重抓，不能直接沿用旧数值。
 - **安全边界**：Token、Cookie、API Key 和动态身份值必须脱敏；包含完整请求 Body 的原始样本按敏感材料管理。
+- **比较口径**：先保存原始严格差异，再按路径契约声明跨独立运行必然变化的正文、动态身份、Header 顺序及 Codex 运行时 Cookie；只有 `contract_equal=true`、候选 ingress→egress 语义守恒且未声明差异为 0 时才通过。不得以 `raw_equal=false` 单独判失败，也不得用声明规则掩盖候选自身语义丢失。
 
 历史 OAuth Official Egress 实证的镜像、测试、运行目录和恢复记录统一归档在
 `backend/internal/service/testdata/official_egress/README.md`。
@@ -165,7 +166,7 @@ Profile 只在入口端点受支持，且目标平台、OAuth 账号、实际出
 | **Anthropic HTTP** | S1/S2/S4 全部成功，工具和参数无回归，system/cache、动态身份及 HTTP/1.1 传输画像达到目标 |
 | **OpenAI HTTP** | 非流式、SSE、工具、续轮和账号切换通过；入口语义、`call_id`、动态身份及 HTTP 传输画像达到目标 |
 | **OpenAI WebSocket** | 首轮、续轮、工具、重连和 HTTP 回退通过；有效续轮、握手身份及 WS 传输画像达到目标 |
-| **第三方客户端接入** | `0.1.164-5` 已使用真实 Kilo 界面逐一选择三种协议、六个模型组合；每组 S1 与实际读取文件工具闭环均通过。Vircs usage 显示每组恰好 3 条请求，分别命中预期入站端点、目标平台和 OAuth #50/#90；OpenAI Responses → OpenAI 实际使用 WS |
+| **第三方客户端接入** | 六组合已使用真实 Kilo 界面完成 S1 与实际读取文件工具闭环。`0.1.164-6` 又单独重跑受本次修改影响的 OpenAI Responses → OpenAI WS：S1、S2 续轮、S4 单次读工具全部通过；Vircs 新增 4 条 usage，均命中 OAuth #90 且 `openai_ws_mode=true` |
 | **模式独立性** | 自动透传开关及四种 WS mode 均不绕过 Profile，按实际出站协议选择 HTTP 或 WS 画像 |
 | **适用边界** | Anthropic/OpenAI OAuth 自动生效；API Key、其他平台及非模型入口保持原行为 |
 | **安全与回归** | 敏感值未进入普通日志；Host、代理和重定向边界受控；全量、竞态、性能及合并演练通过 |
@@ -174,7 +175,7 @@ Profile 只在入口端点受支持，且目标平台、OAuth 账号、实际出
 
 | Kilo 入站格式 | 目标上游 | 最终出站画像 | 结果 |
 |---|---|---|---|
-| OpenAI Responses | OpenAI | Codex HTTP/WS Profile（实际为 WS） | 真实 Kilo S1/S4 通过；WS S2 另由协议级实测通过 |
+| OpenAI Responses | OpenAI | Codex HTTP/WS Profile（实际为 WS） | `0.1.164-6` 真实 Kilo S1/S2/S4 通过，S4 完成一次真实读工具闭环 |
 | OpenAI Compatible | OpenAI | Codex HTTP Profile | 真实 Kilo S1/S4 通过 |
 | Anthropic | Anthropic | Claude HTTP Profile | 真实 Kilo S1/S4 通过 |
 | OpenAI Responses | Anthropic | Claude HTTP Profile | 真实 Kilo S1/S4 通过 |
@@ -185,7 +186,7 @@ Profile 只在入口端点受支持，且目标平台、OAuth 账号、实际出
 
 详细请求计数、字段差异、TLS 数据、运行编号和恢复记录统一保存在[实证 README](backend/internal/service/testdata/official_egress/README.md)。
 
-##### 1.1.3.5 编码任务分解（历史阶段已完成，当前发布回归有未闭合项）
+##### 1.1.3.5 编码任务分解（已完成）
 
 所有任务均按“实现一项 → 自动化测试 → Vircs 抓包实证 → 进入下一项”的门禁执行。
 
@@ -197,12 +198,12 @@ Profile 只在入口端点受支持，且目标平台、OAuth 账号、实际出
 | **T4 · Anthropic HTTP** | Claude Finalizer、system/cache、动态身份及 HTTP/1.1 Profile | S1/S2/S4、工具、参数、mitm 和 direct 通过 |
 | **T5 · OpenAI HTTP** | Body/Header Finalizer、`call_id`、身份上下文及 HTTP Profile | 非流式/SSE/工具/续轮/重试及抓包通过 |
 | **T6 · OpenAI WebSocket** | Handshake/Frame Finalizer、WS Dialer及重连边界 | 首轮、有效续轮、工具、未知帧、身份冻结及抓包通过 |
-| **T7 · 回归、性能与合并** | 全量/竞态/性能测试、三路径重抓及连续版本合并记录 | 历史阶段通过；`0.1.164-5` 三路径重抓的业务场景通过，但严格流量对比未通过，需闭合差异 |
-| **N2 · 第三方客户端适配** | Kilo 六种“入站协议 × 目标上游”组合及 OpenAI WebSocket 完整历史归一化 | `0.1.164-5` 真实 Kilo 六组合的 S1/S4 全部通过；OpenAI Responses → OpenAI 命中 WS，协议级 S2 亦通过 |
+| **T7 · 回归、性能与合并** | 全量/竞态/性能测试、三路径重抓及连续版本合并记录 | `0.1.164-6` 三路径 S1/S2/S4、direct TLS、应用层契约和 ingress→egress 语义守恒全部通过，未声明差异为 0 |
+| **N2 · 第三方客户端适配** | Kilo 六种“入站协议 × 目标上游”组合及 OpenAI WebSocket 完整历史归一化 | 六组合 S1/S4 全部通过；`0.1.164-6` 又重跑 OpenAI Responses → OpenAI 的真实 Kilo S1/S2/S4，全部命中 WS 和 #90 |
 
-T1–T7 与 N2 的历史开发阶段均已完成。`0.1.164-5` 的真实 Kilo 六组合复验已经闭合 N2；T7 仍有三条 OAuth 严格流量差异，修复和复验前不得把当前发布版本标记为完整画像一致。上表未列的 N1 是 `/v1/models`、Chat Completions 和 Gemini Native 的关联契约补测，不属于 Official Egress Profile 的核心改造范围。
+T1–T7 与 N2 均已完成。`0.1.164-6` 已闭合上一版三条 OAuth 对比中的误报口径和 Codex WS 真实字段缺口；上表未列的 N1 是 `/v1/models`、Chat Completions 和 Gemini Native 的关联契约补测，不属于 Official Egress Profile 的核心改造范围。
 
-**结论**：架构、Profile 升级和真实 Kilo 六组合已经完成；`0.1.164-5` 仍有三条 OAuth 严格流量差异，§1.1.1 的完整画像一致性目标尚未闭合。
+**结论**：架构债务、Profile 升级、三条 OAuth 官方出站契约和真实 Kilo 六组合均已闭合。剩余 AnyRouter A/B 是外部中转兼容性验证，不改变当前官方平台边界的验收结论。
 
 ### 1.2 API Key 官方客户端兼容
 
@@ -730,19 +731,22 @@ docker compose logs --tail=100 keeper
 
 Watchtower 只能拉取并替换镜像仓库中的主服务镜像。按本文部署的 keeper 使用本地源码构建镜像 `sub2apiplus-keeper:latest`，没有对应的 GHCR 发布镜像；Watchtower 不会拉取 Git tag、替换 `/root/docker/sub2apiplus/keeper/repo` 或执行 `docker compose build`，因此不会自动更新 keeper。启用 Watchtower 的服务器在主服务自动更新后仍需按上述第 2、3 步手动更新 keeper；否则主服务和 keeper 会处于不同版本。要求严格版本配套时，应固定主服务镜像版本，并在发布后统一执行完整的三步升级流程。
 
-### 3.5 `0.1.164-5` Vircs 发布与烟测记录
+### 3.5 `0.1.164-6` Vircs 发布与复验记录
 
-2026-07-26 已发布注释标签 `v0.1.164-5`，对应提交 `123ed13e3`。Release workflow 成功生成多架构 GHCR 镜像，并按同一标签更新 Vircs 主服务与 keeper；没有重建 PostgreSQL、Redis，也没有修改 `.env` 或数据卷。
+2026-07-26 已发布注释标签 `v0.1.164-6`，对应提交 `e8b5c6051`。Release workflow 重跑后成功生成多架构 GHCR 镜像；Vircs 只替换主服务镜像，没有重建 PostgreSQL、Redis，也没有修改 `.env` 或数据卷。keeper 本轮无代码变更，继续运行上一版镜像。
 
 | 验收项 | 结果 |
 |---|---|
-| 主服务 | `ghcr.io/itv3/sub2apiplus:0.1.164-5`，容器镜像 ID `sha256:a1e6c3e60eb3556346121fc8a92178c23fbd5ff8908940f99065c6019eb8f4f9`，状态 `healthy`、重启次数 `0`。 |
-| keeper | `sub2apiplus-keeper:0.1.164-5`，容器镜像 ID `sha256:a14eb23846d36ea6ae57ac42855e7849dce9b8e34edd78fae8c38fe5cec1ed39`，进程运行且重启次数 `0`。 |
-| CLI 实测 | API direct/S1 运行 `api-deploy-0164-5-smoke` 完成；Claude HTTP、Codex HTTP、Codex WS 均返回码 `0` 且 `valid=true`，运行时凭据泄露检查均为 `false`。 |
+| 主服务 | `ghcr.io/itv3/sub2apiplus:0.1.164-6`，manifest digest `sha256:0795f476b627e51b839a8c3aba350e85a185efe8e4e30e56d17df72673f7b7d9`；`/app/sub2api --version` 为 `0.1.164-6` / `e8b5c6051`，状态 `healthy`、重启次数 `0`。 |
+| keeper | `sub2apiplus-keeper:0.1.164-5`，本轮未改 keeper；进程运行且重启次数 `0`。 |
+| OAuth MITM | Claude HTTP、Codex HTTP、Codex WS 的 S1/S2/S4 全部 `valid=true`；三条 `contract_equal=true`、ingress→egress 语义守恒、未声明差异为 0，Codex WS 逐项 turn metadata 校验通过。 |
+| OAuth direct | `v01646-oauth-egress-direct-20260726T060439Z` 共 9 个场景全部有效；业务画像分别匹配官方 17/30/10-cipher 及对应 ALPN。合并 pcap 中另有一个 13-cipher OAuth 辅助连接，不参与三条业务 Profile 判定。 |
+| Kilo 复验 | OpenAI Responses / `gpt-5.6-luna` 的 S1、S2 续轮、S4 单次读取 `backend/go.mod` 全部通过；2026-07-26 14:11:32–14:12:22 的 4 条 usage 均命中 #90 且 `openai_ws_mode=true`。 |
 | 客户端版本 | 抓包容器为 Claude Code `2.1.220`、Codex CLI `0.145.0`；keeper 镜像仍按其 Dockerfile 固定 Claude Code `2.1.210`，Codex CLI 实际安装为 `0.145.0`。keeper 版本不能冒充抓包画像来源。 |
 | 外部 A/B | `external_ab_executed=false`；AnyRouter 账号恢复前不标记为通过，Codex API Key mimic 继续保持 HTTP/SSE-only。 |
+| Vircs 直接编译 | 当前完整工作区已同步到 `/root/sub2apiplus-build/v01646-final-20260726T062500Z`；Vircs 使用 Go `1.26.5` 执行 `go test ./...` 全部通过，Docker 多阶段构建（含前端生产构建和后端 `embed` 编译）成功。隔离验证镜像为 `sub2apiplus-vircs-test:v01646-final`，镜像 ID `sha256:d9ac65dc1ce45af5ab145a1f37d075863dae950a5e968591d9b02b2e8c12b981`，二进制版本为 `0.1.164-6-vircs-test`。本次补充验证未提交到 GitHub 编译，也未替换已通过真实流量验收的生产镜像。 |
 
-烟测的脱敏摘要和 TLS 分析保存在 Vircs `/root/oauth-capture/runs/official-client/api/api-deploy-0164-5-smoke`；原始 pcap 和 CLI 事件继续按私有证据管理，不提交 Git。
+MITM 脱敏对比保存在 Vircs `/root/oauth-capture/runs/official-client/comparisons/v01646-oauth-egress-20260726T055650Z`；候选原始运行目录分别为 `phase0-sub2api-claude-mitm-20260726T055650Z`、`phase0-sub2api-codex-http-mitm-20260726T055650Z` 和 `phase0-sub2api-codex-ws-mitm-20260726T055650Z`。direct pcap 位于 `/root/oauth-capture/runs/v01646-oauth-egress-direct-20260726T060439Z`。原始 pcap、MITM Body 和 CLI 事件继续按私有证据管理，不提交 Git。
 
 ### 3.6 其它运行能力
 

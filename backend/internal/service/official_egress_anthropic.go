@@ -68,14 +68,14 @@ func (s *GatewayService) finalizeAnthropicOfficialEgressRequest(
 ) (*http.Request, []byte, OfficialEgressFinalizationResult, error) {
 	result := OfficialEgressFinalizationResult{}
 	if req == nil {
-		return nil, nil, result, errors.New("Anthropic official egress requires request")
+		return nil, nil, result, errors.New("anthropic official egress requires request")
 	}
 	egressContext, enabled := OfficialEgressContextFromContext(req.Context())
 	if !enabled {
 		return req, body, result, nil
 	}
 	if c == nil || c.Request == nil {
-		return nil, nil, result, errors.New("Anthropic official egress requires ingress request")
+		return nil, nil, result, errors.New("anthropic official egress requires ingress request")
 	}
 
 	profile, err := defaultOfficialEgressProfileResolver.ResolveHTTPProfile(
@@ -87,7 +87,7 @@ func (s *GatewayService) finalizeAnthropicOfficialEgressRequest(
 		return nil, nil, result, err
 	}
 	if profile.TargetPlatform != PlatformAnthropic {
-		return nil, nil, result, errors.New("Anthropic finalizer received non-Anthropic profile")
+		return nil, nil, result, errors.New("anthropic finalizer received non-Anthropic profile")
 	}
 	clientProfile, err := resolveOfficialClientProfileByID(profile.ID)
 	if err != nil {
@@ -161,11 +161,11 @@ func resolveOfficialAnthropicIdentity(
 	body []byte,
 ) (officialAnthropicIdentity, error) {
 	if account == nil {
-		return officialAnthropicIdentity{}, errors.New("Anthropic official egress account is nil")
+		return officialAnthropicIdentity{}, errors.New("anthropic official egress account is nil")
 	}
 	accountUUID := strings.TrimSpace(account.GetExtraString("account_uuid"))
 	if _, err := uuid.Parse(accountUUID); err != nil {
-		return officialAnthropicIdentity{}, errors.New("Anthropic official egress requires account_uuid from account state")
+		return officialAnthropicIdentity{}, errors.New("anthropic official egress requires account_uuid from account state")
 	}
 
 	rawUserID := strings.TrimSpace(gjson.GetBytes(body, "metadata.user_id").String())
@@ -185,7 +185,7 @@ func resolveOfficialAnthropicIdentity(
 			return officialAnthropicIdentity{}, err
 		}
 		if headerSessionID != "" && headerSessionID != parsed.SessionID {
-			return officialAnthropicIdentity{}, errors.New("Anthropic official egress session header conflicts with metadata")
+			return officialAnthropicIdentity{}, errors.New("anthropic official egress session header conflicts with metadata")
 		}
 		return officialAnthropicIdentity{
 			deviceID:      parsed.DeviceID,
@@ -198,7 +198,7 @@ func resolveOfficialAnthropicIdentity(
 
 	if headerSessionID != "" {
 		if _, err := uuid.Parse(headerSessionID); err != nil {
-			return officialAnthropicIdentity{}, errors.New("Anthropic official egress session header must be UUID")
+			return officialAnthropicIdentity{}, errors.New("anthropic official egress session header must be UUID")
 		}
 	}
 
@@ -253,23 +253,23 @@ func finalizeOfficialAnthropicIngressDefaults(
 	}
 	next, err := sjson.DeleteBytes(body, "temperature")
 	if err != nil {
-		return nil, errors.New("Anthropic official egress failed to remove generated temperature")
+		return nil, errors.New("anthropic official egress failed to remove generated temperature")
 	}
 	return next, nil
 }
 
 func validateOfficialAnthropicParsedIdentity(parsed *ParsedUserID) error {
 	if parsed == nil {
-		return errors.New("Anthropic official egress metadata identity is nil")
+		return errors.New("anthropic official egress metadata identity is nil")
 	}
 	if len(parsed.DeviceID) != 64 {
-		return errors.New("Anthropic official egress requires a 64-character device_id")
+		return errors.New("anthropic official egress requires a 64-character device_id")
 	}
 	if _, err := hex.DecodeString(parsed.DeviceID); err != nil {
-		return errors.New("Anthropic official egress device_id must be hexadecimal")
+		return errors.New("anthropic official egress device_id must be hexadecimal")
 	}
 	if _, err := uuid.Parse(parsed.SessionID); err != nil {
-		return errors.New("Anthropic official egress session_id must be UUID")
+		return errors.New("anthropic official egress session_id must be UUID")
 	}
 	return nil
 }
@@ -427,7 +427,7 @@ func finalizeOfficialAnthropicBody(
 	}
 	system := gjson.GetBytes(body, "system")
 	if !system.IsArray() {
-		return nil, errors.New("Anthropic official egress requires system array")
+		return nil, errors.New("anthropic official egress requires system array")
 	}
 	rawBlocks := make([][]byte, 0, 4)
 	system.ForEach(func(_, block gjson.Result) bool {
@@ -435,12 +435,12 @@ func finalizeOfficialAnthropicBody(
 		return true
 	})
 	if len(rawBlocks) != 3 && len(rawBlocks) != 4 {
-		return nil, fmt.Errorf("Anthropic official egress requires three or four system blocks, got %d", len(rawBlocks))
+		return nil, fmt.Errorf("anthropic official egress requires three or four system blocks, got %d", len(rawBlocks))
 	}
 	for _, block := range rawBlocks {
 		if gjson.GetBytes(block, "type").String() != "text" ||
 			!gjson.GetBytes(block, "text").Exists() {
-			return nil, errors.New("Anthropic official egress requires text-only system blocks")
+			return nil, errors.New("anthropic official egress requires text-only system blocks")
 		}
 	}
 
@@ -458,7 +458,7 @@ func finalizeOfficialAnthropicBody(
 		mergedText := gjson.GetBytes(rawBlocks[2], "text").String()
 		boundary := "\n\n" + officialAnthropicSystemSplitMarker
 		if strings.Count(mergedText, boundary) != 1 {
-			return nil, errors.New("Anthropic official egress system split marker is missing or ambiguous")
+			return nil, errors.New("anthropic official egress system split marker is missing or ambiguous")
 		}
 		parts := strings.SplitN(mergedText, boundary, 2)
 		rawBlocks[2], err = setOfficialAnthropicSystemText(
@@ -483,7 +483,7 @@ func finalizeOfficialAnthropicBody(
 		fourthText := gjson.GetBytes(rawBlocks[3], "text").String()
 		if strings.Contains(thirdText, officialAnthropicSystemSplitMarker) ||
 			!strings.HasPrefix(fourthText, officialAnthropicSystemSplitMarker) {
-			return nil, errors.New("Anthropic official egress four-block system boundary is invalid")
+			return nil, errors.New("anthropic official egress four-block system boundary is invalid")
 		}
 		rawBlocks[2], err = setOfficialAnthropicSystemText(
 			rawBlocks[2],
@@ -505,7 +505,7 @@ func finalizeOfficialAnthropicBody(
 
 	nextBody, ok := setJSONRawBytes(body, "system", buildJSONArrayRaw(rawBlocks))
 	if !ok {
-		return nil, errors.New("Anthropic official egress failed to replace system blocks")
+		return nil, errors.New("anthropic official egress failed to replace system blocks")
 	}
 	nextBody, err = normalizeOfficialAnthropicCacheProfile(nextBody)
 	if err != nil {
@@ -519,7 +519,7 @@ func finalizeOfficialAnthropicBody(
 	)
 	nextBody, err = sjson.SetBytes(nextBody, "metadata.user_id", metadataUserID)
 	if err != nil {
-		return nil, errors.New("Anthropic official egress failed to replace metadata.user_id")
+		return nil, errors.New("anthropic official egress failed to replace metadata.user_id")
 	}
 	return nextBody, nil
 }
@@ -534,28 +534,28 @@ func normalizeOfficialAnthropicCacheProfile(body []byte) ([]byte, error) {
 	for _, item := range invalidThinking {
 		next, ok := deleteJSONPathBytes(out, item.path)
 		if !ok {
-			return nil, errors.New("Anthropic official egress failed to remove thinking cache_control")
+			return nil, errors.New("anthropic official egress failed to remove thinking cache_control")
 		}
 		out = next
 	}
 	for _, path := range toolPaths {
 		next, ok := deleteJSONPathBytes(out, path)
 		if !ok {
-			return nil, errors.New("Anthropic official egress failed to remove tool cache_control")
+			return nil, errors.New("anthropic official egress failed to remove tool cache_control")
 		}
 		out = next
 	}
 	for _, path := range messagePaths {
 		next, ok := deleteJSONPathBytes(out, path)
 		if !ok {
-			return nil, errors.New("Anthropic official egress failed to remove message cache_control")
+			return nil, errors.New("anthropic official egress failed to remove message cache_control")
 		}
 		out = next
 	}
 	if gjson.GetBytes(out, "cache_control").Exists() {
 		next, ok := deleteJSONPathBytes(out, "cache_control")
 		if !ok {
-			return nil, errors.New("Anthropic official egress failed to remove top-level cache_control")
+			return nil, errors.New("anthropic official egress failed to remove top-level cache_control")
 		}
 		out = next
 	}
@@ -569,7 +569,7 @@ func normalizeOfficialAnthropicCacheProfile(body []byte) ([]byte, error) {
 			officialAnthropicLocalCacheControl,
 		)
 		if err != nil {
-			return nil, errors.New("Anthropic official egress failed to set message cache_control")
+			return nil, errors.New("anthropic official egress failed to set message cache_control")
 		}
 		out = next
 	case stringPath != "":
@@ -579,20 +579,20 @@ func normalizeOfficialAnthropicCacheProfile(body []byte) ([]byte, error) {
 			"cache_control": map[string]any{"type": "ephemeral", "ttl": "1h"},
 		}})
 		if err != nil {
-			return nil, errors.New("Anthropic official egress failed to build message cache block")
+			return nil, errors.New("anthropic official egress failed to build message cache block")
 		}
 		next, ok := setJSONRawBytes(out, stringPath, rawBlock)
 		if !ok {
-			return nil, errors.New("Anthropic official egress failed to replace string message content")
+			return nil, errors.New("anthropic official egress failed to replace string message content")
 		}
 		out = next
 	default:
-		return nil, errors.New("Anthropic official egress requires cacheable message content")
+		return nil, errors.New("anthropic official egress requires cacheable message content")
 	}
 
 	_, finalMessagePaths, finalToolPaths, finalSystemPaths := collectCacheControlPaths(out)
 	if len(finalMessagePaths) != 1 || len(finalToolPaths) != 0 || len(finalSystemPaths) != 2 {
-		return nil, errors.New("Anthropic official egress cache profile normalization failed")
+		return nil, errors.New("anthropic official egress cache profile normalization failed")
 	}
 	return out, nil
 }
@@ -659,18 +659,18 @@ func normalizeOfficialAnthropicSystemShape(body []byte) ([]byte, error) {
 					},
 				)
 				if err != nil {
-					return nil, errors.New("Anthropic official egress failed to build fourth system block")
+					return nil, errors.New("anthropic official egress failed to build fourth system block")
 				}
 				rawBlocks = append(rawBlocks, fourthBlock)
 				next, ok := setJSONRawBytes(body, "system", buildJSONArrayRaw(rawBlocks))
 				if !ok {
-					return nil, errors.New("Anthropic official egress failed to append fourth system block")
+					return nil, errors.New("anthropic official egress failed to append fourth system block")
 				}
 				return next, nil
 			case 1:
 				return body, nil
 			default:
-				return nil, errors.New("Anthropic official egress system split marker is ambiguous")
+				return nil, errors.New("anthropic official egress system split marker is ambiguous")
 			}
 		}
 		return body, nil
@@ -684,7 +684,7 @@ func normalizeOfficialAnthropicSystemShape(body []byte) ([]byte, error) {
 	)
 	system = gjson.GetBytes(normalized, "system")
 	if !isOfficialAnthropicSystemShape(system) {
-		return nil, errors.New("Anthropic official egress failed to normalize system structure")
+		return nil, errors.New("anthropic official egress failed to normalize system structure")
 	}
 	return normalizeOfficialAnthropicSystemShape(normalized)
 }
@@ -806,14 +806,14 @@ func extractOfficialAnthropicFingerprintText(body []byte) string {
 func setOfficialAnthropicSystemText(block []byte, text string, cacheControl []byte) ([]byte, error) {
 	next, err := sjson.SetBytes(block, "text", text)
 	if err != nil {
-		return nil, errors.New("Anthropic official egress failed to update system text")
+		return nil, errors.New("anthropic official egress failed to update system text")
 	}
 	if len(cacheControl) == 0 {
 		return deleteOfficialAnthropicCacheControl(next)
 	}
 	next, err = sjson.SetRawBytes(next, "cache_control", cacheControl)
 	if err != nil {
-		return nil, errors.New("Anthropic official egress failed to update system cache_control")
+		return nil, errors.New("anthropic official egress failed to update system cache_control")
 	}
 	return next, nil
 }
@@ -821,7 +821,7 @@ func setOfficialAnthropicSystemText(block []byte, text string, cacheControl []by
 func deleteOfficialAnthropicCacheControl(block []byte) ([]byte, error) {
 	next, err := sjson.DeleteBytes(block, "cache_control")
 	if err != nil {
-		return nil, errors.New("Anthropic official egress failed to remove system cache_control")
+		return nil, errors.New("anthropic official egress failed to remove system cache_control")
 	}
 	return next, nil
 }
@@ -884,15 +884,15 @@ func (s *GatewayService) rememberAnthropicPreviousRequestID(
 	metadataUserID := gjson.GetBytes(body, "metadata.user_id").String()
 	parsed := ParseMetadataUserID(metadataUserID)
 	if parsed == nil || strings.TrimSpace(parsed.SessionID) == "" {
-		return errors.New("Anthropic official egress response mapping requires session_id")
+		return errors.New("anthropic official egress response mapping requires session_id")
 	}
 	requestID := anthropicUpstreamRequestID(header)
 	if requestID == "" {
-		return errors.New("Anthropic official egress response mapping requires request-id")
+		return errors.New("anthropic official egress response mapping requires request-id")
 	}
 	store := s.anthropicOfficialEgressResponseStore()
 	if store == nil {
-		return errors.New("Anthropic official egress response store is unavailable")
+		return errors.New("anthropic official egress response store is unavailable")
 	}
 	return store.SetAnthropicPreviousRequestID(
 		ctx,

@@ -732,3 +732,104 @@ Kilo OpenAI Responses WebSocket 的修正后运行目录为
 
 本节复验未修改生产配置。结束时 #50/#90 均为 active 且无代理，未残留 MITM/tcpdump
 进程或监听端口；主服务为 `healthy`、重启次数 0，keeper 运行且重启次数 0。
+
+## 22. `0.1.164-6` OAuth 三路径差异闭合
+
+2026-07-26 针对 §21 的三条未通过结论完成重新归因、代码修复、发布部署和真实流量复验。
+发布标签为 `v0.1.164-6`，提交为 `e8b5c6051`，Vircs 主服务镜像为
+`ghcr.io/itv3/sub2apiplus:0.1.164-6`，manifest digest 为
+`sha256:0795f476b627e51b839a8c3aba350e85a185efe8e4e30e56d17df72673f7b7d9`。
+主服务健康且重启次数为 0；keeper 本轮无代码变更，继续运行 `0.1.164-5`。
+
+### 22.1 根因与修复边界
+
+重新把候选 ingress、候选 egress 和官方独立运行三者配对后，上一版三条差异中只有一条
+属于生产缺口：
+
+1. Claude HTTP 的候选 ingress 与 egress 都带同一 `thinking`，官方样本来自另一次模型
+   运行；这属于跨独立请求正文差异，不应由 Finalizer 删除。
+2. Codex HTTP 的候选 ingress 与 egress 都为 7 项，官方独立运行为 8 项；官方 Cookie
+   来自 CLI 的辅助 ChatGPT Cookie jar，也不应由 Sub2API 合成。
+3. Codex WS 的正式业务帧中，`input` 项确实缺少官方逐项
+   `internal_chat_message_metadata_passthrough.turn_id`。官方预热帧 `generate=false` 不带
+   该字段；S2 第二轮的历史前缀使用上一轮 turn，当前后缀使用本轮 turn。
+
+修复只作用于 OpenAI 官方 WS 帧 Finalizer：预热帧显式移除逐项 metadata；正式帧按
+“历史前缀 / 当前后缀”分段写入 turn identity；工具结果续轮沿用当前 turn；已有冲突值
+fail-closed。由 Kilo 完整历史派生的 WS 帧也复用同一规则。抓包比较工具新增三条路径契约，
+同时保留 `raw_equal`、声明差异、未声明差异和 ingress→egress 语义守恒结果，旧的原始严格
+比较入口没有删除。
+
+### 22.2 MITM + ingress 契约复验
+
+候选运行时间戳为 `20260726T055650Z`：
+
+- Claude HTTP：
+  `/root/oauth-capture/runs/phase0-sub2api-claude-mitm-20260726T055650Z`；
+- Codex HTTP：
+  `/root/oauth-capture/runs/phase0-sub2api-codex-http-mitm-20260726T055650Z`；
+- Codex WebSocket：
+  `/root/oauth-capture/runs/phase0-sub2api-codex-ws-mitm-20260726T055650Z`。
+
+三条路径的 S1/S2/S4 均为 `valid=true`，usage 分别命中 #50 Claude HTTP 5 次、#90
+Codex HTTP 5 次、#90 Codex WS 9 次。与官方基准
+`/root/oauth-capture/runs/official-client/oauth/oauth-20260726T014021Z` 的脱敏结果保存在
+`/root/oauth-capture/runs/official-client/comparisons/v01646-oauth-egress-20260726T055650Z`：
+
+| 路径 | `raw_equal` | `contract_equal` | ingress→egress 语义 | 未声明差异 |
+|---|---:|---:|---:|---:|
+| Claude HTTP | false | true | true | 0 |
+| Codex HTTP | false | true | true | 0 |
+| Codex WS | false | true | true | 0 |
+
+`raw_equal=false` 保留并展示跨独立运行正文、动态身份、Header 顺序及 Codex 运行时 Cookie
+等真实差异；它不等于契约失败。Codex WS 的逐项 turn metadata 校验为 true：4 个预热帧
+均无逐项 metadata，5 个业务帧的全部 input 项均有 metadata；S2 第二个业务帧的历史前缀
+共享上一轮 turn，当前后缀使用本轮 turn；工具结果续轮使用当前 turn。
+
+### 22.3 direct TLS 复验
+
+direct 合并运行目录为
+`/root/oauth-capture/runs/v01646-oauth-egress-direct-20260726T060439Z`。Claude HTTP、
+Codex HTTP、Codex WS 的 S1/S2/S4 共 9 个场景全部有效，pcap 大小为 1,408,887 字节。
+结构契约结果保存在上述 comparisons 目录的
+`direct-contract-20260726T060439Z.json`：
+
+- Claude HTTP 匹配官方 17-cipher、ALPN `http/1.1`，扩展顺序严格一致；
+- Codex HTTP 匹配官方 30-cipher、空 ALPN，扩展顺序严格一致；
+- Codex WS 共 4 个握手匹配官方 10-cipher、空 ALPN，扩展集合一致并允许官方随机顺序。
+
+合并 pcap 还包含一个 13-cipher 的 OAuth 辅助连接，不属于三条业务 Transport Profile，
+已在结构报告中单独列为 auxiliary，未拿它代替或污染业务画像结论。
+
+### 22.4 真实 Kilo 受影响路径回归
+
+直接操作本机真实 Kilo，选择 OpenAI Responses / `gpt-5.6-luna`，依次执行：
+
+1. S1 新会话只返回 `KILO_OAI_WS_FIX_S1_OK`；
+2. 同一会话 S2 续轮只返回 `KILO_OAI_WS_FIX_S2_OK`；
+3. 独立 S4 只调用一次读取工具读取 `backend/go.mod`，随后返回
+   `KILO_OAI_WS_FIX_S4_TOOL_OK`。
+
+三项均通过。Vircs 在 2026-07-26 14:11:32–14:12:22（Asia/Shanghai）新增 4 条 usage，
+全部命中 OAuth #90、模型 `gpt-5.6-luna` 且 `openai_ws_mode=true`，覆盖首轮、真实续轮、
+工具请求与工具结果续轮。
+
+复验结束后 #50/#90 的代理均为空，临时 MITM 代理已删除，CA 哈希和 keeper 状态已恢复，
+direct/ingress 抓包进程均正常停止。AnyRouter 账号仍不可用，因此外部中转 A/B 继续明确
+标记为待执行；这不改变本节官方平台边界的通过结论。
+
+### 22.5 Vircs 直接编译复核
+
+当前完整工作区已同步到 Vircs `/root/sub2apiplus-build/v01646-final-20260726T062500Z`，
+并在服务器侧直接完成以下验证，不使用 GitHub 编译：
+
+1. Go `1.26.5` 环境执行 `go test ./...`，全部通过；
+2. Docker 多阶段构建完成前端生产构建和后端 `-tags embed` 编译；
+3. 隔离镜像 `sub2apiplus-vircs-test:v01646-final` 的镜像 ID 为
+   `sha256:d9ac65dc1ce45af5ab145a1f37d075863dae950a5e968591d9b02b2e8c12b981`；
+4. 镜像内 `/app/sub2api --version` 返回 `0.1.164-6-vircs-test`，提交标识为
+   `worktree-20260726T062500Z`，二进制和资源目录布局检查通过。
+
+该隔离镜像只用于验证当前工作区，没有替换生产容器。生产服务继续运行已完成本节
+MITM、direct 和 Kilo 真实验收的官方发布镜像 `0.1.164-6`。

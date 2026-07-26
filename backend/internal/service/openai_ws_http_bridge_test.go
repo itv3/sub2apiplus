@@ -69,11 +69,14 @@ func TestProxyOpenAIWSHTTPBridgeTurnOfficialEgressUsesHTTPProfile(t *testing.T) 
 	require.NoError(t, json.Unmarshal(body, &payload))
 	payload["type"] = "response.create"
 	payload["generate"] = true
-	clientMetadata := payload["client_metadata"].(map[string]any)
+	clientMetadata, ok := payload["client_metadata"].(map[string]any)
+	require.True(t, ok)
 	const bridgeTurnID = "019f9577-d70a-7553-ad23-8de3ede39d8c"
 	clientMetadata["turn_id"] = bridgeTurnID
 	var bridgeTurnMetadata map[string]any
-	require.NoError(t, json.Unmarshal([]byte(clientMetadata["x-codex-turn-metadata"].(string)), &bridgeTurnMetadata))
+	rawBridgeTurnMetadata, ok := clientMetadata["x-codex-turn-metadata"].(string)
+	require.True(t, ok)
+	require.NoError(t, json.Unmarshal([]byte(rawBridgeTurnMetadata), &bridgeTurnMetadata))
 	bridgeTurnMetadata["turn_id"] = bridgeTurnID
 	bridgeTurnMetadataBytes, err := json.Marshal(bridgeTurnMetadata)
 	require.NoError(t, err)

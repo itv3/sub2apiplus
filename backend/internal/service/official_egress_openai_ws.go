@@ -1128,7 +1128,7 @@ func buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 	}
 
 	generate, _ := payload["generate"].(bool)
-	prewarm := generate == false && payload["generate"] != nil
+	prewarm := !generate && payload["generate"] != nil
 	turnID := ""
 	turnStartedAtMS := int64(0)
 	requestKind := "prewarm"

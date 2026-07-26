@@ -399,8 +399,12 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPRetryRebuildsIdentity(t *testing.
 	body := newOfficialOpenAIHTTPTestBody(t, false, false, true)
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(body, &payload))
-	input := payload["input"].([]any)
-	input[3].(map[string]any)["namespace"] = "remove-on-retry"
+	input, ok := payload["input"].([]any)
+	require.True(t, ok)
+	require.Greater(t, len(input), 3)
+	retryItem, ok := input[3].(map[string]any)
+	require.True(t, ok)
+	retryItem["namespace"] = "remove-on-retry"
 	body, err := marshalOpenAIUpstreamJSON(payload)
 	require.NoError(t, err)
 
