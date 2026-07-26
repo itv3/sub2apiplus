@@ -165,7 +165,7 @@ Profile 只在入口端点受支持，且目标平台、OAuth 账号、实际出
 | **Anthropic HTTP** | S1/S2/S4 全部成功，工具和参数无回归，system/cache、动态身份及 HTTP/1.1 传输画像达到目标 |
 | **OpenAI HTTP** | 非流式、SSE、工具、续轮和账号切换通过；入口语义、`call_id`、动态身份及 HTTP 传输画像达到目标 |
 | **OpenAI WebSocket** | 首轮、续轮、工具、重连和 HTTP 回退通过；有效续轮、握手身份及 WS 传输画像达到目标 |
-| **第三方客户端接入** | 历史 N2 阶段六种组合曾全部通过；`0.1.164-5` 发布回归的 HTTP 六组合为 4/6，`OpenAI Responses → Anthropic` 与 `OpenAI Compatible → Anthropic` 均在 S4 工具结果续轮失败；Kilo OpenAI WS 的 S1/S2/S4 通过 |
+| **第三方客户端接入** | `0.1.164-5` 已使用真实 Kilo 界面逐一选择三种协议、六个模型组合；每组 S1 与实际读取文件工具闭环均通过。Vircs usage 显示每组恰好 3 条请求，分别命中预期入站端点、目标平台和 OAuth #50/#90；OpenAI Responses → OpenAI 实际使用 WS |
 | **模式独立性** | 自动透传开关及四种 WS mode 均不绕过 Profile，按实际出站协议选择 HTTP 或 WS 画像 |
 | **适用边界** | Anthropic/OpenAI OAuth 自动生效；API Key、其他平台及非模型入口保持原行为 |
 | **安全与回归** | 敏感值未进入普通日志；Host、代理和重定向边界受控；全量、竞态、性能及合并演练通过 |
@@ -174,12 +174,12 @@ Profile 只在入口端点受支持，且目标平台、OAuth 账号、实际出
 
 | Kilo 入站格式 | 目标上游 | 最终出站画像 | 结果 |
 |---|---|---|---|
-| OpenAI Responses | OpenAI | Codex HTTP/WS Profile（按实际出站协议） | HTTP S1/S4 通过；WS S1/S2/S4 通过 |
-| OpenAI Compatible | OpenAI | Codex HTTP Profile | S1/S4 通过 |
-| Anthropic | Anthropic | Claude HTTP Profile | S1/S4 通过 |
-| OpenAI Responses | Anthropic | Claude HTTP Profile | 失败：S4 工具结果续轮返回 400，`messages.3.content` 不是数组 |
-| OpenAI Compatible | Anthropic | Claude HTTP Profile | 失败：S4 工具结果续轮返回 400，`messages.3.content` 不是数组 |
-| Anthropic | OpenAI | Codex HTTP Profile | S1/S4 通过 |
+| OpenAI Responses | OpenAI | Codex HTTP/WS Profile（实际为 WS） | 真实 Kilo S1/S4 通过；WS S2 另由协议级实测通过 |
+| OpenAI Compatible | OpenAI | Codex HTTP Profile | 真实 Kilo S1/S4 通过 |
+| Anthropic | Anthropic | Claude HTTP Profile | 真实 Kilo S1/S4 通过 |
+| OpenAI Responses | Anthropic | Claude HTTP Profile | 真实 Kilo S1/S4 通过 |
+| OpenAI Compatible | Anthropic | Claude HTTP Profile | 真实 Kilo S1/S4 通过 |
+| Anthropic | OpenAI | Codex HTTP Profile | 真实 Kilo S1/S4 通过 |
 
 以上是六种协议转换与路由组合，不是六套伪装实现。以后修改入站协议转换、模型/账号路由、Finalizer 或 Transport 时必须重跑受影响组合；修改公共 Resolver 或目标平台公共出站链路时必须重跑全部六种组合。
 
@@ -198,11 +198,11 @@ Profile 只在入口端点受支持，且目标平台、OAuth 账号、实际出
 | **T5 · OpenAI HTTP** | Body/Header Finalizer、`call_id`、身份上下文及 HTTP Profile | 非流式/SSE/工具/续轮/重试及抓包通过 |
 | **T6 · OpenAI WebSocket** | Handshake/Frame Finalizer、WS Dialer及重连边界 | 首轮、有效续轮、工具、未知帧、身份冻结及抓包通过 |
 | **T7 · 回归、性能与合并** | 全量/竞态/性能测试、三路径重抓及连续版本合并记录 | 历史阶段通过；`0.1.164-5` 三路径重抓的业务场景通过，但严格流量对比未通过，需闭合差异 |
-| **N2 · 第三方客户端适配** | Kilo 六种“入站协议 × 目标上游”组合及 OpenAI WebSocket 完整历史归一化 | `0.1.164-5` HTTP 4/6、WS S1/S2/S4 通过；两条转 Anthropic 的工具续轮待修复 |
+| **N2 · 第三方客户端适配** | Kilo 六种“入站协议 × 目标上游”组合及 OpenAI WebSocket 完整历史归一化 | `0.1.164-5` 真实 Kilo 六组合的 S1/S4 全部通过；OpenAI Responses → OpenAI 命中 WS，协议级 S2 亦通过 |
 
-T1–T7 与 N2 的历史开发阶段均已完成。`0.1.164-5` 发布回归重新打开了 T7 的三条严格流量差异，以及 N2 的两条 Anthropic 工具续轮缺陷；修复和复验前不得把当前发布版本标记为完整验收通过。上表未列的 N1 是 `/v1/models`、Chat Completions 和 Gemini Native 的关联契约补测，不属于 Official Egress Profile 的核心改造范围。
+T1–T7 与 N2 的历史开发阶段均已完成。`0.1.164-5` 的真实 Kilo 六组合复验已经闭合 N2；T7 仍有三条 OAuth 严格流量差异，修复和复验前不得把当前发布版本标记为完整画像一致。上表未列的 N1 是 `/v1/models`、Chat Completions 和 Gemini Native 的关联契约补测，不属于 Official Egress Profile 的核心改造范围。
 
-**结论**：架构与 Profile 升级已经完成，但 `0.1.164-5` 当前实证仍有三条严格流量差异和两条协议转换失败；§1.1.1 的完整验收目标尚未闭合。
+**结论**：架构、Profile 升级和真实 Kilo 六组合已经完成；`0.1.164-5` 仍有三条 OAuth 严格流量差异，§1.1.1 的完整画像一致性目标尚未闭合。
 
 ### 1.2 API Key 官方客户端兼容
 

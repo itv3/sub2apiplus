@@ -700,21 +700,28 @@ S1/S2/S4 的业务语义均成功：Claude HTTP 5/5、Codex HTTP 5/5；Codex WS 
 
 ### 21.2 Kilo 六种协议转换与路由组合
 
-HTTP 回归目录为
-`/root/oauth-capture/runs/kilo-v01645-six-http-20260726T043627Z`。每组执行非流式 S1
-和真实 S4 工具闭环，结果为 4/6：
+先行自制请求脚本目录为
+`/root/oauth-capture/runs/kilo-v01645-six-http-20260726T043627Z`。该脚本构造的两条
+转 Anthropic 工具结果续轮返回 400，但其消息结构不是 Kilo 实际发送结构，因此不再作为
+Kilo 回归结论，只保留为额外 API 兼容性观察。
 
-| Kilo 入站 | 目标上游 | 结果 |
-|---|---|---|
-| OpenAI Responses | OpenAI | 通过 |
-| OpenAI Compatible | OpenAI | 通过 |
-| Anthropic | Anthropic | 通过 |
-| OpenAI Responses | Anthropic | 失败：S4 工具结果续轮返回 400，`messages.3.content` 应为数组 |
-| OpenAI Compatible | Anthropic | 失败：S4 工具结果续轮返回 400，`messages.3.content` 应为数组 |
-| Anthropic | OpenAI | 通过 |
+随后直接操作本机真实 Kilo 界面，逐一选择用户配置的三种协议和六个模型组合。每组在
+独立新会话内执行：S1 不调用工具并返回唯一标记；S4 明确显示“读取 README.md”工具，
+授权一次只读访问后返回唯一标记和第一行 `# Sub2API Plus`。六组均通过：
 
-两个失败均发生在工具调用成功后的结果回传阶段，说明目标账号和基础路由可达，缺陷位于
-OpenAI 语义转 Anthropic 消息结构的工具续轮转换。
+| Kilo 选择 | 实际路由 | OAuth 账号 | S1/S4 | usage |
+|---|---|---:|---|---:|
+| OpenAI Responses / `claude-sonnet-5` | `/v1/responses → /v1/messages` | #50 | 通过 | 3 |
+| OpenAI Responses / `gpt-5.6-luna` | `/v1/responses → /v1/responses`，WS | #90 | 通过 | 3 |
+| Anthropic / `claude-sonnet-5` | `/v1/messages → /v1/messages` | #50 | 通过 | 3 |
+| Anthropic / `gpt-5.6-luna` | `/v1/messages → /v1/responses` | #90 | 通过 | 3 |
+| OpenAI Compatible / `claude-sonnet-5` | `/v1/chat/completions → /v1/messages` | #50 | 通过 | 3 |
+| OpenAI Compatible / `gpt-5.6-luna` | `/v1/chat/completions → /v1/responses` | #90 | 通过 | 3 |
+
+Vircs usage 时间窗为 2026-07-26 12:48:29–12:53:37（Asia/Shanghai）。每组的 3 条
+记录分别对应 S1、S4 工具请求和 S4 工具结果续轮，均为流式请求；OpenAI Responses →
+OpenAI 的 `openai_ws_mode=true`，其余五组为 HTTP。该证据覆盖真实 Kilo 的协议转换、
+账号路由和工具闭环。
 
 Kilo OpenAI Responses WebSocket 的修正后运行目录为
 `/root/oauth-capture/runs/kilo-v01645-openai-ws-fixed-20260726T044227Z`，S1、S2 同连接
