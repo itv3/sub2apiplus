@@ -660,3 +660,68 @@ pcap 由抓包容器内的 tshark 解析：
 同一时间窗内 Profile 日志计数为 Claude HTTP 5、Codex HTTP 5、Codex WebSocket
 4（按 WS 连接解析并冻结）。验收结束后 #50/#94 的代理与 fallback 均为空，临时代理
 已删除，CA 哈希恢复一致，keeper 正常运行，主服务健康且重启次数为 0。
+
+## 21. `0.1.164-5` 发布版三路径与 Kilo 回归
+
+2026-07-26 在 Vircs 已发布镜像 `ghcr.io/itv3/sub2apiplus:0.1.164-5` 上执行当前版本复验。
+Anthropic 固定使用 OAuth #50，OpenAI 按本轮要求改用 OAuth #90；两者均为 active，
+测试结束后 `proxy_id` 为空。主服务健康，主服务与 keeper 重启次数均为 0。
+
+### 21.1 OAuth 三路径 direct + MITM
+
+direct 合并运行目录为
+`/root/oauth-capture/runs/v01645-oauth-egress-direct-20260726T042447Z`：
+
+- Claude HTTP、Codex HTTP、Codex WS 的 S1/S2/S4 共 9 组摘要均为 `valid=true`。
+- usage 分别命中 #50 的 Claude HTTP 5 次、#90 的 Codex HTTP 5 次和 #90 的 Codex WS 9 次。
+- Claude direct 为 17 个密码套件、ALPN `http/1.1`；Codex HTTP 为 30 个密码套件、
+  空 ALPN；Codex WS 为 10 个密码套件、空 ALPN，均达到当前 Profile 目标。
+
+MITM 时间戳为 `20260726T042647Z`，三条候选目录分别为：
+
+- `/root/oauth-capture/runs/phase0-sub2api-claude-mitm-20260726T042647Z`；
+- `/root/oauth-capture/runs/phase0-sub2api-codex-http-mitm-20260726T042647Z`；
+- `/root/oauth-capture/runs/phase0-sub2api-codex-ws-mitm-20260726T042647Z`。
+
+S1/S2/S4 的业务语义均成功：Claude HTTP 5/5、Codex HTTP 5/5；Codex WS 为
+4 次握手、9 条 `response.create`，S4 工具结果续轮使用真实 `previous_response_id`
+和 `call_id`。但是与官方基准
+`/root/oauth-capture/runs/official-client/oauth/oauth-20260726T014021Z`
+执行严格规范化对比后，三条路径的 `equal` 均为 `false`。脱敏对比产物位于
+`/root/oauth-capture/runs/official-client/comparisons/v01645-oauth-egress-20260726T042647Z`：
+
+| 路径 | 已对齐 | 未闭合差异 |
+|---|---|---|
+| Claude HTTP | 5/5 请求、HTTP/1.1、静态 Header 名称和值 | 去除动态值和文本长度影响后仍有一条 S4 续轮结构差异：官方以 `tool_use` 开始，候选含额外 `thinking` 块 |
+| Codex HTTP | 5/5 请求、HTTP/2、主要静态 Header | 官方基准含脱敏 Cookie 而候选没有；另有一条请求的 input 长度为官方 8、候选 7 |
+| Codex WS | 4 次握手和 9 条客户端帧、静态握手画像 | 动态握手键属于预期差异，但仍有 5 个未匹配帧形状；候选部分帧缺少官方 `internal_chat_message_metadata_passthrough.turn_id` 等结构 |
+
+因此本轮只能判定“业务场景与 direct 传输通过”，不能判定“应用层与官方样本完全一致”。
+
+### 21.2 Kilo 六种协议转换与路由组合
+
+HTTP 回归目录为
+`/root/oauth-capture/runs/kilo-v01645-six-http-20260726T043627Z`。每组执行非流式 S1
+和真实 S4 工具闭环，结果为 4/6：
+
+| Kilo 入站 | 目标上游 | 结果 |
+|---|---|---|
+| OpenAI Responses | OpenAI | 通过 |
+| OpenAI Compatible | OpenAI | 通过 |
+| Anthropic | Anthropic | 通过 |
+| OpenAI Responses | Anthropic | 失败：S4 工具结果续轮返回 400，`messages.3.content` 应为数组 |
+| OpenAI Compatible | Anthropic | 失败：S4 工具结果续轮返回 400，`messages.3.content` 应为数组 |
+| Anthropic | OpenAI | 通过 |
+
+两个失败均发生在工具调用成功后的结果回传阶段，说明目标账号和基础路由可达，缺陷位于
+OpenAI 语义转 Anthropic 消息结构的工具续轮转换。
+
+Kilo OpenAI Responses WebSocket 的修正后运行目录为
+`/root/oauth-capture/runs/kilo-v01645-openai-ws-fixed-20260726T044227Z`，S1、S2 同连接
+两轮续链、S4 `kilo_echo` 工具调用和结果续轮全部通过。第一次运行
+`kilo-v01645-openai-ws-20260726T043947Z` 因测试脚本只检查
+`response.completed.response.output` 而误判；实际流式文本和工具调用位于
+`response.output_text.delta` 与 `response.output_item.done`，修正断言后复验通过，旧运行不计入验收。
+
+本节复验未修改生产配置。结束时 #50/#90 均为 active 且无代理，未残留 MITM/tcpdump
+进程或监听端口；主服务为 `healthy`、重启次数 0，keeper 运行且重启次数 0。

@@ -32,13 +32,13 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 1、Sub2API 对外提供标准 API 接口。无论入站来自官方客户端，还是通过标准 API 接入的第三方客户端，Anthropic/OpenAI OAuth 官方出站均自动使用对应版本 Claude Code / Codex CLI 的真实出站形态。
 2、Sub2API 原有兼容层只负责入站协议转换、模型映射、工具转换及请求语义兼容；最终 OAuth 出站请求由内置官方客户端画像统一定型。
 >
-> **当前基线**：源码基线 Sub2API `v0.1.164`。当前 `active` 画像为 Claude Code CLI `2.1.220` 和 Codex CLI `0.145.0`，来源分别为 VirCS `oauth-20260726T014021Z` 与 `api-20260726T014252Z` 的 OAuth/API、direct/MITM、HTTP/WS 自动化抓包。下表的历史 OAuth 端到端验收使用 Claude Code `2.1.218`、Codex CLI `0.145.0`；本轮已完成代码画像升级和自动化回归，AnyRouter 实际 A/B 待其账号恢复后补测，不冒充为已完成的实证。
+> **当前基线**：源码基线 Sub2API `v0.1.164`，Vircs 运行版本 `0.1.164-5`。当前 `active` 画像为 Claude Code CLI `2.1.220` 和 Codex CLI `0.145.0`，来源分别为 VirCS `oauth-20260726T014021Z` 与 `api-20260726T014252Z` 的 OAuth/API、direct/MITM、HTTP/WS 自动化抓包。2026-07-26 已在发布版本上用 Anthropic #50、OpenAI #90 重跑三条 OAuth 路径；业务场景和 direct TLS 均成功，但三条 MITM 严格规范化对比都存在未声明差异，因此当前版本不能写成“与官方流量完全一致”。AnyRouter 实际 A/B 仍待其账号恢复。
 
 | 当前路径 | Sub2API 实证（OAuth 官方画像内置生效） |
 |---|---|
-| **Anthropic HTTP** | 官方基准 S1/S2/S4 为 5/5；Kilo S1/S4 通过 |
-| **OpenAI HTTP** | 官方基准 5/5、自动透传补测 1/1；Kilo S1/S4 通过 |
-| **OpenAI WebSocket** | 官方基准和 Kilo 的 S1/S2/S4 均通过 |
+| **Anthropic HTTP** | `0.1.164-5` 的 S1/S2/S4 为 5/5，direct TLS 对齐；MITM 严格对比未通过，S4 续轮存在 `thinking` / `tool_use` 内容结构差异 |
+| **OpenAI HTTP** | `0.1.164-5` 的 S1/S2/S4 为 5/5，direct TLS 对齐；MITM 严格对比未通过，候选缺少官方 Cookie，且一条请求的 input 长度为 7/8 差异 |
+| **OpenAI WebSocket** | `0.1.164-5` 的 4 次握手、9 条 `response.create` 和 S1/S2/S4 均成功，direct TLS 对齐；MITM 严格对比未通过，仍有帧级 metadata/结构差异 |
 
 验收所用的阶段构建镜像、运行目录和回归时间戳统一见[实证归档](backend/internal/service/testdata/official_egress/README.md)；阶段构建不对外发布，命名规则见 §3.4。
 
@@ -165,7 +165,7 @@ Profile 只在入口端点受支持，且目标平台、OAuth 账号、实际出
 | **Anthropic HTTP** | S1/S2/S4 全部成功，工具和参数无回归，system/cache、动态身份及 HTTP/1.1 传输画像达到目标 |
 | **OpenAI HTTP** | 非流式、SSE、工具、续轮和账号切换通过；入口语义、`call_id`、动态身份及 HTTP 传输画像达到目标 |
 | **OpenAI WebSocket** | 首轮、续轮、工具、重连和 HTTP 回退通过；有效续轮、握手身份及 WS 传输画像达到目标 |
-| **第三方客户端接入** | Kilo 六种“入站协议 × 目标上游”组合均通过；协议转换、工具语义和 WebSocket 多轮上下文正确，最终统一使用目标平台对应的官方出站画像；HTTP 路径只补测 S1/S4，连续会话生命周期由官方客户端配对样本和自动化测试覆盖 |
+| **第三方客户端接入** | 历史 N2 阶段六种组合曾全部通过；`0.1.164-5` 发布回归的 HTTP 六组合为 4/6，`OpenAI Responses → Anthropic` 与 `OpenAI Compatible → Anthropic` 均在 S4 工具结果续轮失败；Kilo OpenAI WS 的 S1/S2/S4 通过 |
 | **模式独立性** | 自动透传开关及四种 WS mode 均不绕过 Profile，按实际出站协议选择 HTTP 或 WS 画像 |
 | **适用边界** | Anthropic/OpenAI OAuth 自动生效；API Key、其他平台及非模型入口保持原行为 |
 | **安全与回归** | 敏感值未进入普通日志；Host、代理和重定向边界受控；全量、竞态、性能及合并演练通过 |
@@ -174,18 +174,18 @@ Profile 只在入口端点受支持，且目标平台、OAuth 账号、实际出
 
 | Kilo 入站格式 | 目标上游 | 最终出站画像 | 结果 |
 |---|---|---|---|
-| OpenAI Responses | OpenAI | Codex HTTP/WS Profile（按实际出站协议） | 通过 |
-| OpenAI Compatible | OpenAI | Codex HTTP Profile | 通过 |
-| Anthropic | Anthropic | Claude HTTP Profile | 通过 |
-| OpenAI Responses | Anthropic | Claude HTTP Profile | 通过 |
-| OpenAI Compatible | Anthropic | Claude HTTP Profile | 通过 |
-| Anthropic | OpenAI | Codex HTTP Profile | 通过 |
+| OpenAI Responses | OpenAI | Codex HTTP/WS Profile（按实际出站协议） | HTTP S1/S4 通过；WS S1/S2/S4 通过 |
+| OpenAI Compatible | OpenAI | Codex HTTP Profile | S1/S4 通过 |
+| Anthropic | Anthropic | Claude HTTP Profile | S1/S4 通过 |
+| OpenAI Responses | Anthropic | Claude HTTP Profile | 失败：S4 工具结果续轮返回 400，`messages.3.content` 不是数组 |
+| OpenAI Compatible | Anthropic | Claude HTTP Profile | 失败：S4 工具结果续轮返回 400，`messages.3.content` 不是数组 |
+| Anthropic | OpenAI | Codex HTTP Profile | S1/S4 通过 |
 
 以上是六种协议转换与路由组合，不是六套伪装实现。以后修改入站协议转换、模型/账号路由、Finalizer 或 Transport 时必须重跑受影响组合；修改公共 Resolver 或目标平台公共出站链路时必须重跑全部六种组合。
 
 详细请求计数、字段差异、TLS 数据、运行编号和恢复记录统一保存在[实证 README](backend/internal/service/testdata/official_egress/README.md)。
 
-##### 1.1.3.5 编码任务分解（已完成）
+##### 1.1.3.5 编码任务分解（历史阶段已完成，当前发布回归有未闭合项）
 
 所有任务均按“实现一项 → 自动化测试 → Vircs 抓包实证 → 进入下一项”的门禁执行。
 
@@ -197,12 +197,12 @@ Profile 只在入口端点受支持，且目标平台、OAuth 账号、实际出
 | **T4 · Anthropic HTTP** | Claude Finalizer、system/cache、动态身份及 HTTP/1.1 Profile | S1/S2/S4、工具、参数、mitm 和 direct 通过 |
 | **T5 · OpenAI HTTP** | Body/Header Finalizer、`call_id`、身份上下文及 HTTP Profile | 非流式/SSE/工具/续轮/重试及抓包通过 |
 | **T6 · OpenAI WebSocket** | Handshake/Frame Finalizer、WS Dialer及重连边界 | 首轮、有效续轮、工具、未知帧、身份冻结及抓包通过 |
-| **T7 · 回归、性能与合并** | 全量/竞态/性能测试、三路径重抓及连续版本合并记录 | §1.1.3.4 全部通过，无安全和行为回归 |
-| **N2 · 第三方客户端适配** | Kilo 六种“入站协议 × 目标上游”组合及 OpenAI WebSocket 完整历史归一化 | 六路协议转换与路由通过；HTTP S1/S4、WebSocket S1/S2/S4、工具身份及传输画像通过 |
+| **T7 · 回归、性能与合并** | 全量/竞态/性能测试、三路径重抓及连续版本合并记录 | 历史阶段通过；`0.1.164-5` 三路径重抓的业务场景通过，但严格流量对比未通过，需闭合差异 |
+| **N2 · 第三方客户端适配** | Kilo 六种“入站协议 × 目标上游”组合及 OpenAI WebSocket 完整历史归一化 | `0.1.164-5` HTTP 4/6、WS S1/S2/S4 通过；两条转 Anthropic 的工具续轮待修复 |
 
-T1–T7 与 N2 均已完成。上表未列的 N1 是 `/v1/models`、Chat Completions 和 Gemini Native 的关联契约补测，不属于 Official Egress Profile 的核心改造范围，亦已完成。
+T1–T7 与 N2 的历史开发阶段均已完成。`0.1.164-5` 发布回归重新打开了 T7 的三条严格流量差异，以及 N2 的两条 Anthropic 工具续轮缺陷；修复和复验前不得把当前发布版本标记为完整验收通过。上表未列的 N1 是 `/v1/models`、Chat Completions 和 Gemini Native 的关联契约补测，不属于 Official Egress Profile 的核心改造范围。
 
-**结论**：§1.1.1 所述目标已在当前版本、Profile 及已验收的官方客户端和 Kilo 入站场景内完成。
+**结论**：架构与 Profile 升级已经完成，但 `0.1.164-5` 当前实证仍有三条严格流量差异和两条协议转换失败；§1.1.1 的完整验收目标尚未闭合。
 
 ### 1.2 API Key 官方客户端兼容
 
