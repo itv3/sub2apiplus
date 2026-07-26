@@ -8,7 +8,7 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 |---|---|
 | 仓库 | `https://github.com/itv3/sub2apiplus` |
 | 上游 | `https://github.com/Wei-Shaw/sub2api` |
-| 版本基线 | 最新已发布 Plus 版本为 `0.1.164-1`，部署和拉取镜像只能使用已发布版本；`backend/cmd/server/VERSION` 保存开发中的下一个版本号，发版后以最新 tag 为准。已合并上游 tag `v0.1.164`，自定义差异优先看 `v0.1.164..HEAD`。 |
+| 版本基线 | 最新已发布 Plus 版本为 `0.1.164-5`，部署和拉取镜像只能使用已发布版本；`backend/cmd/server/VERSION` 保存当前发布版本，发版后以最新 tag 为准。已合并上游 tag `v0.1.164`，自定义差异优先看 `v0.1.164..HEAD`。 |
 | Docker 镜像 | `ghcr.io/itv3/sub2apiplus` |
 | 命名约定 | 对外使用 `sub2apiplus` / `Sub2API Plus`；Go module 和 import 保留 `github.com/Wei-Shaw/sub2api`，降低上游合并成本。 |
 | Go / 客户端版本 | 主服务 `go 1.26.5`（`backend/go.mod`）；keeper `go 1.24`（`keeper/go.mod`）；keeper 镜像固定安装 Claude CLI `2.1.210`。 |
@@ -32,7 +32,7 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 1、Sub2API 对外提供标准 API 接口。无论入站来自官方客户端，还是通过标准 API 接入的第三方客户端，Anthropic/OpenAI OAuth 官方出站均自动使用对应版本 Claude Code / Codex CLI 的真实出站形态。
 2、Sub2API 原有兼容层只负责入站协议转换、模型映射、工具转换及请求语义兼容；最终 OAuth 出站请求由内置官方客户端画像统一定型。
 >
-> **当前基线**：源码基线 Sub2API `v0.1.164`。当前 `active` 画像为 Claude Code CLI `2.1.220`和 Codex CLI `0.145.0`，来源分别为 VirCS `oauth-20260726T014021Z` 与 `api-20260726T014252Z` 的 OAuth/API、direct/MITM、HTTP/WS 自动化抓包。下表的历史 OAuth 端到端验收使用 Claude Code `2.1.218`、Codex CLI `0.145.0`；本轮已完成代码画像升级和自动化回归，AnyRouter 实际 A/B 待其账号恢复后补测，不冒充为已完成的实证。
+> **当前基线**：源码基线 Sub2API `v0.1.164`。当前 `active` 画像为 Claude Code CLI `2.1.220` 和 Codex CLI `0.145.0`，来源分别为 VirCS `oauth-20260726T014021Z` 与 `api-20260726T014252Z` 的 OAuth/API、direct/MITM、HTTP/WS 自动化抓包。下表的历史 OAuth 端到端验收使用 Claude Code `2.1.218`、Codex CLI `0.145.0`；本轮已完成代码画像升级和自动化回归，AnyRouter 实际 A/B 待其账号恢复后补测，不冒充为已完成的实证。
 
 | 当前路径 | Sub2API 实证（OAuth 官方画像内置生效） |
 |---|---|
@@ -409,6 +409,8 @@ Anthropic keeper 通过主服务内部代理转发 Claude CLI 请求。该链路
 
 推荐使用 Docker Compose。主服务目录为 `/root/docker/sub2apiplus/app`；keeper 配置、数据和项目位于 `/root/docker/sub2apiplus/keeper/app`，构建源码位于 `/root/docker/sub2apiplus/keeper/repo`，其中 `app/projects/<项目名>` 挂载到 `/workspace/projects/<项目名>`。以下流程统一使用运行目录中的 `docker-compose.yml`。
 
+> **Vircs 现有实例说明（2026-07-26）**：该服务器的历史目录实际为 `/root/Docker/sub2apiplus`，其中 `Docker` 首字母大写；Linux 路径区分大小写。维护既有实例时应先读取容器的 `com.docker.compose.project.working_dir` 标签确认真实目录，不得直接照抄新部署的推荐路径。
+
 主服务和 keeper 属于同一仓库、同一发布版本，但分别以 GHCR 镜像和本地构建 sidecar 的形式部署。生产环境必须先选择一个已发布的 Plus 版本，并同时使用 `ghcr.io/itv3/sub2apiplus:<Plus版本>` 和 Git tag `v<Plus版本>`；不能把主服务 `latest` 与 keeper `main` 作为可复现的版本组合。`latest` / `main` 只适合持续跟踪最新代码的环境。
 
 ### 2.1 准备主服务
@@ -728,7 +730,21 @@ docker compose logs --tail=100 keeper
 
 Watchtower 只能拉取并替换镜像仓库中的主服务镜像。按本文部署的 keeper 使用本地源码构建镜像 `sub2apiplus-keeper:latest`，没有对应的 GHCR 发布镜像；Watchtower 不会拉取 Git tag、替换 `/root/docker/sub2apiplus/keeper/repo` 或执行 `docker compose build`，因此不会自动更新 keeper。启用 Watchtower 的服务器在主服务自动更新后仍需按上述第 2、3 步手动更新 keeper；否则主服务和 keeper 会处于不同版本。要求严格版本配套时，应固定主服务镜像版本，并在发布后统一执行完整的三步升级流程。
 
-### 3.5 其它运行能力
+### 3.5 `0.1.164-5` Vircs 发布与烟测记录
+
+2026-07-26 已发布注释标签 `v0.1.164-5`，对应提交 `123ed13e3`。Release workflow 成功生成多架构 GHCR 镜像，并按同一标签更新 Vircs 主服务与 keeper；没有重建 PostgreSQL、Redis，也没有修改 `.env` 或数据卷。
+
+| 验收项 | 结果 |
+|---|---|
+| 主服务 | `ghcr.io/itv3/sub2apiplus:0.1.164-5`，容器镜像 ID `sha256:a1e6c3e60eb3556346121fc8a92178c23fbd5ff8908940f99065c6019eb8f4f9`，状态 `healthy`、重启次数 `0`。 |
+| keeper | `sub2apiplus-keeper:0.1.164-5`，容器镜像 ID `sha256:a14eb23846d36ea6ae57ac42855e7849dce9b8e34edd78fae8c38fe5cec1ed39`，进程运行且重启次数 `0`。 |
+| CLI 实测 | API direct/S1 运行 `api-deploy-0164-5-smoke` 完成；Claude HTTP、Codex HTTP、Codex WS 均返回码 `0` 且 `valid=true`，运行时凭据泄露检查均为 `false`。 |
+| 客户端版本 | 抓包容器为 Claude Code `2.1.220`、Codex CLI `0.145.0`；keeper 镜像仍按其 Dockerfile 固定 Claude Code `2.1.210`，Codex CLI 实际安装为 `0.145.0`。keeper 版本不能冒充抓包画像来源。 |
+| 外部 A/B | `external_ab_executed=false`；AnyRouter 账号恢复前不标记为通过，Codex API Key mimic 继续保持 HTTP/SSE-only。 |
+
+烟测的脱敏摘要和 TLS 分析保存在 Vircs `/root/oauth-capture/runs/official-client/api/api-deploy-0164-5-smoke`；原始 pcap 和 CLI 事件继续按私有证据管理，不提交 Git。
+
+### 3.6 其它运行能力
 
 Gemini 支持内置 Gemini CLI OAuth Client 的 Code Assist OAuth、通过 `.env` 配置 `GEMINI_OAUTH_CLIENT_ID` / `GEMINI_OAUTH_CLIENT_SECRET` 的 AI Studio OAuth，以及后台直接添加 API Key。
 
