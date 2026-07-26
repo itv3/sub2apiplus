@@ -81,7 +81,14 @@ func buildDefaultAPIKeyMimicBetaHeaderForProfile(body []byte, selectStructuredOu
 	modelID := gjson.GetBytes(body, "model").String()
 	betas := splitAnthropicBetaTokens(profile.Wire.BetaHeader)
 	if requiresContext1MBetaForAPIKeyMimic(modelID) {
-		betas = appendAnthropicBetaToken(betas, claude.BetaContext1M)
+		// Claude Code 2.1.220 通过 --betas 启用 1M 时，会把 context-1m
+		// 放在 effort 之前。AnyRouter 又要求这些模型显式携带 1M beta，
+		// 因此动态补齐时也必须保持同一顺序，不能简单追加到末尾。
+		betas = insertAnthropicBetaTokenBefore(
+			betas,
+			claude.BetaContext1M,
+			AnthropicAPIKeyBetaEffort,
+		)
 	}
 	if selectStructuredOutputs && apiKeyMimicBodyRequiresStructuredOutputs(body) {
 		replacedLegacyFallback := false
@@ -115,6 +122,25 @@ func appendAnthropicBetaToken(tokens []string, token string) []string {
 		if existing == token {
 			return tokens
 		}
+	}
+	return append(tokens, token)
+}
+
+func insertAnthropicBetaTokenBefore(tokens []string, token, before string) []string {
+	for _, existing := range tokens {
+		if existing == token {
+			return tokens
+		}
+	}
+	for index, existing := range tokens {
+		if existing != before {
+			continue
+		}
+		out := make([]string, 0, len(tokens)+1)
+		out = append(out, tokens[:index]...)
+		out = append(out, token)
+		out = append(out, tokens[index:]...)
+		return out
 	}
 	return append(tokens, token)
 }

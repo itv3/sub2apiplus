@@ -16,8 +16,9 @@ API：  Claude Code / Codex CLI ──Sub2API 访问 Key──▶ Sub2API 公共
 - 本工具不抓 Sub2API→AnyRouter 等第三方上游，也不同时抓 Sub2API ingress；
   这些属于后续候选 A/B 阶段。
 
-截至 2026-07-26，本变更集只完成工具、离线测试、部署和 dry-run，不执行新的
-OAuth/API 真实模型请求，也不执行 AnyRouter A/B。历史实证仍以
+截至 2026-07-26，OAuth/API 两套真实基准和 AnyRouter 后续 A/B 均已执行。基准工具自身
+仍只负责官方 CLI 边界；AnyRouter 候选出站由独立编排完成，不能误写成基准工具同时抓取
+Sub2API ingress/egress。运行编号和结论以
 `backend/internal/service/testdata/official_egress/README.md` 为准。
 
 ## 2. 固定矩阵与隔离粒度
@@ -218,9 +219,9 @@ unset SUB2API_CAPTURE_API_KEY
 4. 保留失败 manifest，把整个旧 run 移到权限 0700、位于运行根之外的恢复归档目录；不要只删
    或伪造 `recovery.json`。确认运行根不再包含该不干净账本后才能重试。
 
-## 10. 后续 AnyRouter A/B
+## 10. AnyRouter A/B
 
-本工具只产生 API 官方 CLI 基准。用户参与外部站点测试后，另行抓取
+本工具只产生 API 官方 CLI 基准。外部站点测试另行抓取
 “非官方客户端→Sub2API→AnyRouter”的候选出站证据，并按相同主体、传输、场景和证据类型比较：
 
 ```bash
@@ -229,6 +230,19 @@ python3 tools/official_client_capture/compare.py \
 ```
 
 不能跨 HTTP/WS 或 direct/MITM 比较，也不能把 OAuth 基准当作 API mimic 候选。
+
+2026-07-26 已完成 active API Key HTTP 的 AnyRouter A/B，私有运行目录为
+`/root/oauth-capture/runs/anyrouter-ab-wire-20260726T072501Z`：
+
+- Claude Code `2.1.220` 直连与 Anthropic API Key mimic 的路由、静态身份、1M beta 顺序和
+  direct TLS 画像一致；候选有 HTTP 200 成功样本。
+- Codex CLI `0.145.0` 直连与 OpenAI API Key mimic 的路由、静态身份、Responses 固定外层
+  字段和 direct TLS 画像一致；两路均命中已确认的模型负载上限，未出现
+  `client_restricted`。
+- 对话正文、第三方工具 Schema、动态身份和完整 CLI 运行上下文属于独立调用语义，不要求
+  严格逐字节相等。脱敏契约结果为 `analysis/apikey-anyrouter-ab-contract.json`。
+- API Key Codex WebSocket Profile 仍为 inactive，本轮只验收 Claude HTTP 与 Codex HTTP，
+  不把未激活的 WS 路径计为通过。
 
 ### 10.1 OAuth 官方出站契约验收
 

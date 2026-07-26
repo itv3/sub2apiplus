@@ -32,7 +32,7 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 1、Sub2API 对外提供标准 API 接口。无论入站来自官方客户端，还是通过标准 API 接入的第三方客户端，Anthropic/OpenAI OAuth 官方出站均自动使用对应版本 Claude Code / Codex CLI 的真实出站形态。
 2、Sub2API 原有兼容层只负责入站协议转换、模型映射、工具转换及请求语义兼容；最终 OAuth 出站请求由内置官方客户端画像统一定型。
 >
-> **当前基线**：源码基线 Sub2API `v0.1.164`，Vircs 运行版本 `0.1.164-6`。当前 `active` 画像为 Claude Code CLI `2.1.220` 和 Codex CLI `0.145.0`，来源分别为 Vircs `oauth-20260726T014021Z` 与 `api-20260726T014252Z` 的 OAuth/API、direct/MITM、HTTP/WS 自动化抓包。2026-07-26 已在发布版本上用 Anthropic #50、OpenAI #90 重跑三条 OAuth 路径；三条路径的 S1/S2/S4、候选入站到出站语义守恒、应用层官方出站契约和 direct TLS 均通过，未声明差异为 0。独立运行产生的正文、动态身份、Header 顺序和 Codex 运行时 Cookie 仍使原始 `raw_equal=false`，因此“通过”表示官方出站契约一致，不表示两个独立请求逐字节相同。AnyRouter 实际 A/B 仍待其账号恢复。
+> **当前基线**：源码基线 Sub2API `v0.1.164`，最新发布版本为 `0.1.164-6`；Vircs 当前运行直接编译的 `0.1.164-7-vircs-test` 复验镜像。当前 `active` 画像为 Claude Code CLI `2.1.220` 和 Codex CLI `0.145.0`，来源分别为 Vircs `oauth-20260726T014021Z` 与 `api-20260726T014252Z` 的 OAuth/API、direct/MITM、HTTP/WS 自动化抓包。2026-07-26 已在发布版本上用 Anthropic #50、OpenAI #90 重跑三条 OAuth 路径；三条路径的 S1/S2/S4、候选入站到出站语义守恒、应用层官方出站契约和 direct TLS 均通过，未声明差异为 0。独立运行产生的正文、动态身份、Header 顺序和 Codex 运行时 Cookie 仍使原始 `raw_equal=false`，因此“通过”表示官方出站契约一致，不表示两个独立请求逐字节相同。同日还完成 API Key active 画像到 AnyRouter 的 Claude/Codex HTTP A/B，结果见 §1.2。
 
 | 当前路径 | Sub2API 实证（OAuth 官方画像内置生效） |
 |---|---|
@@ -203,7 +203,7 @@ Profile 只在入口端点受支持，且目标平台、OAuth 账号、实际出
 
 T1–T7 与 N2 均已完成。`0.1.164-6` 已闭合上一版三条 OAuth 对比中的误报口径和 Codex WS 真实字段缺口；上表未列的 N1 是 `/v1/models`、Chat Completions 和 Gemini Native 的关联契约补测，不属于 Official Egress Profile 的核心改造范围。
 
-**结论**：架构债务、Profile 升级、三条 OAuth 官方出站契约和真实 Kilo 六组合均已闭合。剩余 AnyRouter A/B 是外部中转兼容性验证，不改变当前官方平台边界的验收结论。
+**结论**：架构债务、Profile 升级、三条 OAuth 官方出站契约、真实 Kilo 六组合和 API Key active 画像的 AnyRouter HTTP A/B 均已闭合。API Key WebSocket 画像仍按设计保持 inactive，不属于本次外部 A/B 路径。
 
 ### 1.2 API Key 官方客户端兼容
 
@@ -239,6 +239,35 @@ API Key 官方客户端兼容让 Kilo / Cline / Cursor / Roo Code 等非官方�
 | OpenAI API Key | `codex_exec/0.145.0` | 默认 profile 为 `codex_exec_0_145`，发送 `originator=codex_exec`、`remote_compaction_v2`、`responses-lite=true`，不发 `OpenAI-Beta` 和 `version`；metadata 使用 `sandbox=seccomp`，`parallel_tool_calls=false`。API Key mimic 仍强制 HTTP/SSE，WS 画像只存档不激活。 |
 
 Profile 数据集中在 `official_client_profile_registry.go`，每个 Wire Profile 都包含不可变 ID、抓包来源、适用端点、传输画像和 SHA-256 digest。默认使用 `gateway.official_client_profiles.mode: active`；紧急时可整体切换为 `previous`，未知模式或不完整画像会 fail-closed。历史账号字段 `openai_apikey_mimic_codex_profile` 仅作 dormant 数据保留，运行时不再覆盖服务级指针。
+
+#### active 画像的 Anthropic 1M beta
+
+当前 Claude Code CLI `2.1.220` active 画像会按最终映射模型自动补
+`context-1m-2025-08-07`，不要求 Kilo / Cline / Cursor / Roo Code 自己发送。适用模型前缀为
+`claude-opus-4-6`、`claude-opus-4-7`、`claude-opus-4-8` 和 `claude-fable-5`；其他模型
+不凭空添加。补齐后的顺序与 Claude Code `2.1.220 --betas context-1m-2025-08-07`
+实抓请求一致：`context-1m-2025-08-07` 位于 `effort-2025-11-24` 之前，且不会重复。
+默认 BetaPolicy 不得过滤这项身份 beta；`structured-outputs-2025-12-15` 等按 Body
+动态触发的功能 beta 仍受 BetaPolicy 控制。
+
+#### active 画像的 AnyRouter A/B 结果
+
+2026-07-26 已使用 AnyRouter Anthropic #15 / `claude-opus-4-8` 和 OpenAI #97 /
+`gpt-5.6-sol`，分别比较“官方 CLI 直连 AnyRouter”与“非官方标准 API 入站 →
+Sub2API API Key mimic → AnyRouter”两条 HTTP 出站路径：
+
+| 验收项 | Anthropic HTTP | OpenAI HTTP |
+|---|---|---|
+| 路由与协议 | `POST /v1/messages?beta=true`、HTTP/1.1 一致 | `POST /v1/responses`、HTTP/2 一致 |
+| 静态身份 | Claude Code `2.1.220` UA、Stainless、`x-app`、1M beta 及顺序一致 | `codex_exec/0.145.0` UA、`originator`、Responses Lite、beta features 一致 |
+| direct TLS | 规范化 ClientHello 严格相等；官方 2 次、候选 1 次观察归一为同一画像 | 规范化 ClientHello 严格相等；官方 6 次、候选 1 次观察归一为同一画像 |
+| 外部结果 | 管理端账号测试和候选 MITM 样本均曾返回 200；顺序修复后的重复请求遇到 AnyRouter 瞬时 520 | 官方与候选均进入已确认的 `gpt-5.6-sol` 负载上限分支；未出现 `client_restricted` |
+
+验收结论是“兼容性契约通过”，不是“不同客户端的 Body 逐字节相同”。入站对话、工具
+Schema、max tokens、thinking/effort 和完整 CLI 运行上下文本来就由调用方语义决定；mimic
+保留这些语义，只统一路由、认证、官方静态身份、必要 Body 外层字段和 TLS 画像。私有原始证据位于
+Vircs `/root/oauth-capture/runs/anyrouter-ab-wire-20260726T072501Z`，脱敏结论为
+`analysis/apikey-anyrouter-ab-contract.json`。
 
 #### previous 回退画像历史记录
 
@@ -312,7 +341,7 @@ BetaPolicy 必须区分静态身份 beta 和动态功能 beta：Desktop 静态�
 | HTTP 200，收到正常 SSE 内容并以 `message_stop` 结束 | 成功，最终发送 `{"type":"test_complete","success":true}`。 |
 | HTTP 200，但 SSE 正文仅为 `Service temporarily unavailable. Please retry later.` | 失败，发送错误事件，不得发送成功的 `test_complete`。 |
 
-上述判定已在 `0.1.155-3` 的 AnyRouter ARM64 实测中验证通过，但它只证明旧 Desktop `previous` 画像。当前 CLI `active` 画像的 AnyRouter A/B 尚未执行。测试记录和文档不得包含账号密钥、Admin API Key、数据库密码或 scoped proxy token。
+上述旧判定已在 `0.1.155-3` 的 AnyRouter ARM64 实测中验证通过，但它只证明 Desktop `previous` 画像。CLI `active` 画像的新 A/B 结果以上文 active 小节为准。测试记录和文档不得包含账号密钥、Admin API Key、数据库密码或 scoped proxy token。
 
 #### 当前发送与回退契约
 
@@ -322,7 +351,9 @@ OpenAI `/v1/responses/compact` 是特例：上游保持官方 unary JSON 形态�
 - Codex CLI `active` 画像在开启 TLS fingerprint 时使用 2026-07-26 抓包的 direct 30-cipher/空 ALPN 或 proxy h2 传输画像；管理员显式选择的 TLS profile 仍优先。API Key WebSocket 由路由决策层强制回落 HTTP，不会因注册表中存在未激活 WS 画像而开启。
 - 效果应以第三方中转站实际收到的上游请求为准，不能只看 usage 页面中的客户端入口 `USER-AGENT`。
 
-`Anthropic-Dangerous-Direct-Browser-Access: true` 仅作为 Claude Desktop `previous` 画像的历史字段保留；当前 Claude Code CLI `active` 画像以 2026-07-26 API 抓包为准。
+`Anthropic-Dangerous-Direct-Browser-Access: true` 同时存在于 2026-07-26 Claude Code CLI
+`2.1.220` API 实抓 active 画像；它由当前 Wire Profile 局部设置，不来自或污染 Claude
+共享常量。
 
 ### 1.3 Antigravity 增强
 
@@ -743,10 +774,19 @@ Watchtower 只能拉取并替换镜像仓库中的主服务镜像。按本文部
 | OAuth direct | `v01646-oauth-egress-direct-20260726T060439Z` 共 9 个场景全部有效；业务画像分别匹配官方 17/30/10-cipher 及对应 ALPN。合并 pcap 中另有一个 13-cipher OAuth 辅助连接，不参与三条业务 Profile 判定。 |
 | Kilo 复验 | OpenAI Responses / `gpt-5.6-luna` 的 S1、S2 续轮、S4 单次读取 `backend/go.mod` 全部通过；2026-07-26 14:11:32–14:12:22 的 4 条 usage 均命中 #90 且 `openai_ws_mode=true`。 |
 | 客户端版本 | 抓包容器为 Claude Code `2.1.220`、Codex CLI `0.145.0`；keeper 镜像仍按其 Dockerfile 固定 Claude Code `2.1.210`，Codex CLI 实际安装为 `0.145.0`。keeper 版本不能冒充抓包画像来源。 |
-| 外部 A/B | `external_ab_executed=false`；AnyRouter 账号恢复前不标记为通过，Codex API Key mimic 继续保持 HTTP/SSE-only。 |
+| 外部 A/B | 已完成 AnyRouter Claude/Codex HTTP 的官方 CLI 直连与 API Key mimic 出站 A/B；静态身份和 direct TLS 均一致。Anthropic 有成功样本，OpenAI 命中已确认的模型负载上限且无 `client_restricted`。Codex API Key mimic 继续保持 HTTP/SSE-only。 |
 | Vircs 直接编译 | 当前完整工作区已同步到 `/root/sub2apiplus-build/v01646-final-20260726T062500Z`；Vircs 使用 Go `1.26.5` 执行 `go test ./...` 全部通过，Docker 多阶段构建（含前端生产构建和后端 `embed` 编译）成功。隔离验证镜像为 `sub2apiplus-vircs-test:v01646-final`，镜像 ID `sha256:d9ac65dc1ce45af5ab145a1f37d075863dae950a5e968591d9b02b2e8c12b981`，二进制版本为 `0.1.164-6-vircs-test`。本次补充验证未提交到 GitHub 编译，也未替换已通过真实流量验收的生产镜像。 |
 
 MITM 脱敏对比保存在 Vircs `/root/oauth-capture/runs/official-client/comparisons/v01646-oauth-egress-20260726T055650Z`；候选原始运行目录分别为 `phase0-sub2api-claude-mitm-20260726T055650Z`、`phase0-sub2api-codex-http-mitm-20260726T055650Z` 和 `phase0-sub2api-codex-ws-mitm-20260726T055650Z`。direct pcap 位于 `/root/oauth-capture/runs/v01646-oauth-egress-direct-20260726T060439Z`。原始 pcap、MITM Body 和 CLI 事件继续按私有证据管理，不提交 Git。
+
+AnyRouter A/B 发现 active Anthropic 1M beta 的集合正确但排列位置晚于官方 CLI；修复后
+`context-1m-2025-08-07` 已移动到 `effort-2025-11-24` 之前。当前工作区直接同步到 Vircs
+`/root/sub2apiplus-build/v01647-apikey-anyrouter-20260726T155000Z`；服务器侧除只读挂载导致
+`.entc` 无法创建这一环境性失败外，其余全量 Go 包一次通过，改为可写挂载后失败包也通过。
+Docker 多阶段构建镜像为 `sub2apiplus-vircs-test:v01647-apikey-anyrouter`，镜像 ID
+`sha256:c9fae693b3fa92c7d4545b83d72742b346cc056f0eb2fda7fbab05d736788261`，二进制版本
+`0.1.164-7-vircs-test`。该镜像已替换 Vircs 主服务进行 MITM 复验；PostgreSQL、Redis、
+keeper、`.env` 和数据卷未变更。
 
 ### 3.6 其它运行能力
 

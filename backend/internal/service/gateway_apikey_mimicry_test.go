@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"testing"
 
@@ -67,6 +68,9 @@ func TestDefaultAPIKeyMimicBetaHeaderSelectsTerminalBetaFromFinalBody(t *testing
 		require.True(t, anthropicBetaTokensContains(header, AnthropicAPIKeyBetaStructuredOutputs))
 		require.False(t, anthropicBetaTokensContains(header, AnthropicAPIKeyBetaFallbackCredit))
 		require.Contains(t, tokens, claude.BetaContext1M)
+		contextIndex := slices.Index(tokens, claude.BetaContext1M)
+		effortIndex := slices.Index(tokens, AnthropicAPIKeyBetaEffort)
+		require.Equal(t, contextIndex+1, effortIndex)
 		require.Equal(t, AnthropicAPIKeyBetaStructuredOutputs, tokens[len(tokens)-1])
 		seen := make(map[string]struct{}, len(tokens))
 		for _, token := range tokens {

@@ -816,8 +816,8 @@ Codex HTTP、Codex WS 的 S1/S2/S4 共 9 个场景全部有效，pcap 大小为 
 工具请求与工具结果续轮。
 
 复验结束后 #50/#90 的代理均为空，临时 MITM 代理已删除，CA 哈希和 keeper 状态已恢复，
-direct/ingress 抓包进程均正常停止。AnyRouter 账号仍不可用，因此外部中转 A/B 继续明确
-标记为待执行；这不改变本节官方平台边界的通过结论。
+direct/ingress 抓包进程均正常停止。本节执行当时 AnyRouter 账号仍不可用，因此当时标记为
+待执行；后续已在 §23 完成，这不改变本节官方平台边界的通过结论。
 
 ### 22.5 Vircs 直接编译复核
 
@@ -833,3 +833,77 @@ direct/ingress 抓包进程均正常停止。AnyRouter 账号仍不可用，因�
 
 该隔离镜像只用于验证当前工作区，没有替换生产容器。生产服务继续运行已完成本节
 MITM、direct 和 Kilo 真实验收的官方发布镜像 `0.1.164-6`。
+
+## 23. API Key active 画像 AnyRouter A/B 与 1M beta 顺序闭合
+
+2026-07-26 使用 Claude Code `2.1.220`、Codex CLI `0.145.0` 和当前 API Key mimic，完成
+“官方 CLI 直连 AnyRouter”与“标准 API 入站 → Sub2API → AnyRouter”的 HTTP A/B。账号与
+模型固定为 Anthropic #15 / `claude-opus-4-8`、OpenAI #97 / `gpt-5.6-sol`；测试前确认
+同一 Composite Group 中没有其他可调度账号接管这两个模型。API Key Codex WS Profile
+仍为 inactive，因此本节不包含 WS。
+
+私有原始运行目录：
+
+- 官方 CLI 功能样本：
+  `/root/oauth-capture/runs/anyrouter-ab-official-cli-20260726T071126Z`；
+- HTTP MITM 与 direct TLS：
+  `/root/oauth-capture/runs/anyrouter-ab-wire-20260726T072501Z`；
+- 脱敏综合结论：
+  `analysis/apikey-anyrouter-ab-contract.json`。
+
+### 23.1 功能结果
+
+1. Claude Code 首次不带 1M beta 的直连请求被 AnyRouter 明确要求启用 1M；显式传入
+   `context-1m-2025-08-07` 并保留正常工具后返回精确 `S1_OK`。管理端 #15 账号测试和
+   Sub2API 候选 MITM 样本均取得过 HTTP 200。
+2. Codex CLI 直连和 Sub2API 候选均进入 AnyRouter 的 `gpt-5.6-sol` 负载上限分支；这是
+   用户预先确认的正常结果。30 次官方 CLI 重试与 1 次候选请求均未出现
+   `client_restricted`。
+3. 后续 direct TLS 重复请求中，Anthropic 碰到瞬时 520、OpenAI 继续返回负载错误；这些
+   响应不改变已经捕获的 ClientHello、HTTP 身份契约和先前成功样本。
+
+### 23.2 MITM 应用层对比
+
+| 项目 | Claude HTTP | Codex HTTP |
+|---|---|---|
+| 路由 | `POST /v1/messages?beta=true`、HTTP/1.1 一致 | `POST /v1/responses`、HTTP/2 一致 |
+| 静态身份 | Claude Code UA、Stainless、`x-app`、API Key 认证一致 | Codex UA、`originator`、Responses Lite、beta features、Bearer 认证一致 |
+| Body 固定契约 | model、stream、三段 system 及前两段固定文本一致；1M beta 自动补齐 | model、store、stream、parallel tools、include、client metadata 字段集合一致 |
+| 声明差异 | 独立对话、工具 Schema、max tokens、thinking/effort 和运行上下文 | 独立对话、工具/开发者上下文、动态身份和官方 CLI 重试次数 |
+
+这不是逐字节复制：第三方客户端输入的对话和工具语义必须保留，不能为了伪装强行替换成
+Claude/Codex 本次 CLI 运行的完整上下文。验收只要求路由、认证、静态身份、必要 Body
+外层字段、语义守恒和传输画像成立。
+
+初次候选 Claude 请求已正确包含 `context-1m-2025-08-07`，但它被简单追加在
+`effort-2025-11-24` 之后；官方 Claude Code `2.1.220 --betas context-1m-2025-08-07`
+实抓顺序相反。本轮把动态 1M beta 插入到 effort 之前，并增加顺序回归测试。修复后再次
+MITM：1M beta 存在、无重复、完整 beta 顺序和全部静态 Header 与官方样本一致。
+
+### 23.3 direct TLS 对比
+
+使用同一规范化器过滤目标 SNI `anyrouter.top`，去除目标 IP、帧号、重连次数并归一化
+GREASE 后结果如下：
+
+| 路径 | 官方观察数 | 候选观察数 | 唯一画像数 | 结果 |
+|---|---:|---:|---:|---|
+| Claude HTTP | 2 | 1 | 1 / 1 | `equal=true` |
+| Codex HTTP | 6 | 1 | 1 / 1 | `equal=true` |
+
+比较结果分别保存在 `analysis/claude-tls-diff.json` 和
+`analysis/codex-tls-diff.json`。MITM 使用代理 TLS，不能替代本节 direct pcap；direct pcap
+又无法读取 Header/Body，二者共同构成证据。
+
+### 23.4 Vircs 编译、部署与恢复
+
+修复工作区同步到
+`/root/sub2apiplus-build/v01647-apikey-anyrouter-20260726T155000Z`，未通过 GitHub 编译。
+Vircs 的全量 Go 测试除只读源码挂载阻止测试创建 `.entc` 外全部一次通过；改为可写挂载后
+该失败包通过。Docker 多阶段构建成功，初次验证镜像
+`sub2apiplus-vircs-test:v01647-apikey-anyrouter` 的镜像 ID 为
+`sha256:c9fae693b3fa92c7d4545b83d72742b346cc056f0eb2fda7fbab05d736788261`，二进制版本为
+`0.1.164-7-vircs-test`。
+
+测试镜像替换主服务后状态为 healthy、重启次数 0。测试期间只临时把 #15 指向 MITM proxy；
+结束后 #15/#97 的 `proxy_id` 均恢复为空，临时 MITM 进程和 CA 已清理，keeper、PostgreSQL、
+Redis、`.env` 和数据卷均未修改。API Key 精确值扫描未在文本产物中发现泄露。

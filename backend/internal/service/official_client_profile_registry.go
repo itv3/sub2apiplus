@@ -39,6 +39,7 @@ const (
 const (
 	AnthropicAPIKeyBetaThinkingTokenCount    = "thinking-token-count-2026-05-13"
 	AnthropicAPIKeyBetaMidConversationSystem = "mid-conversation-system-2026-04-07"
+	AnthropicAPIKeyBetaEffort                = "effort-2025-11-24"
 	AnthropicAPIKeyBetaStructuredOutputs     = "structured-outputs-2025-12-15"
 	AnthropicAPIKeyBetaFallbackCredit        = "fallback-credit-2026-06-01"
 )
