@@ -30,7 +30,7 @@ export default {
         disabled: 'Disabled',
         claudeCode: 'Claude Code',
         codexDesktop: 'Codex Desktop',
-        codexCli: 'Legacy Codex CLI',
+        codexCli: 'Codex CLI 0.145.0',
         unknownCodexProfile: 'Codex ({profile})',
         passthroughAlsoEnabled: 'Passthrough also enabled; unofficial requests prefer mimic'
       },

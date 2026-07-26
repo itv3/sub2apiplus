@@ -23,7 +23,7 @@ func TestAccountTestService_AnthropicAPIKeyMimicUsesFullGatewayRequest(t *testin
 		{
 			name:        "开启兼容时复用完整 mimic 构造链",
 			mimic:       true,
-			wantHeader:  strings.Join(claude.APIKeyMimicBetas(), ","),
+			wantHeader:  defaultAPIKeyMimicBetaHeader(nil) + "," + claude.BetaContext1M,
 			wantContext: true,
 		},
 		{
@@ -86,9 +86,9 @@ func TestAccountTestService_AnthropicAPIKeyMimicUsesFullGatewayRequest(t *testin
 			if tt.wantContext {
 				require.Contains(t, betaHeader, claude.BetaContext1M)
 				require.Equal(t, "application/json", getHeaderRaw(req.Header, "Accept"))
-				require.Equal(t, "claude-cli/2.1.209 (external, claude-desktop-3p, agent-sdk/0.3.209)", getHeaderRaw(req.Header, "User-Agent"))
+				require.Equal(t, "claude-cli/2.1.220 (external, sdk-cli)", getHeaderRaw(req.Header, "User-Agent"))
 				require.Equal(t, "test-key", getHeaderRaw(req.Header, "x-api-key"))
-				require.Equal(t, "Bearer test-key", getHeaderRaw(req.Header, "Authorization"))
+				require.Empty(t, getHeaderRaw(req.Header, "Authorization"))
 				require.Equal(t, int64(512), gjson.GetBytes(body, "max_tokens").Int())
 				require.Len(t, gjson.GetBytes(body, "tools").Array(), len(anthropicAPIKeyMimicTestToolNames))
 				require.Equal(t, "Agent", gjson.GetBytes(body, "tools.0.name").String())
@@ -98,7 +98,7 @@ func TestAccountTestService_AnthropicAPIKeyMimicUsesFullGatewayRequest(t *testin
 				require.True(t, system.IsArray())
 				require.Len(t, system.Array(), 3)
 				require.Contains(t, system.Get("0.text").String(), "x-anthropic-billing-header")
-				require.Contains(t, system.Get("0.text").String(), "cc_entrypoint=claude-desktop-3p")
+				require.Contains(t, system.Get("0.text").String(), "cc_entrypoint=sdk-cli")
 				require.Equal(t, claudeSDKCLIIdentityPrompt, system.Get("1.text").String())
 				require.Equal(t, claudeCodeSystemPromptExpansion, system.Get("2.text").String())
 

@@ -235,9 +235,9 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactShadowMimicUsesLo
 	require.Equal(t, chatgptCodexAPIURL+"/compact", upstream.lastReq.URL.String())
 	require.Equal(t, "Bearer parent-token", upstream.lastReq.Header.Get("Authorization"))
 	require.Equal(t, "parent-chatgpt", upstream.lastReq.Header.Get("chatgpt-account-id"))
-	require.Equal(t, codexDesktopUserAgent, upstream.lastReq.Header.Get("User-Agent"))
-	require.Equal(t, codexDesktopOriginator, upstream.lastReq.Header.Get("originator"))
-	require.Equal(t, codexDesktopBetaFeatures, upstream.lastReq.Header.Get("X-Codex-Beta-Features"))
+	require.Equal(t, officialOpenAIHTTPUserAgent, upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, officialOpenAIHTTPOriginator, upstream.lastReq.Header.Get("originator"))
+	require.Equal(t, officialOpenAIHTTPBetaFeatures, getHeaderRaw(upstream.lastReq.Header, "x-codex-beta-features"))
 	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
 	require.Empty(t, upstream.lastReq.Header.Get("Version"))
 
@@ -377,8 +377,8 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactAPIKeyMimicUsesPr
 	require.NoError(t, err)
 
 	require.Equal(t, "https://example.com/v1/responses/compact", upstream.lastReq.URL.String())
-	require.Equal(t, codexDesktopUserAgent, upstream.lastReq.Header.Get("User-Agent"))
-	require.Equal(t, codexDesktopOriginator, upstream.lastReq.Header.Get("originator"))
+	require.Equal(t, officialOpenAIHTTPUserAgent, upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, officialOpenAIHTTPOriginator, upstream.lastReq.Header.Get("originator"))
 	require.Equal(t, "application/json", upstream.lastReq.Header.Get("Accept"))
 	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
 	require.Empty(t, upstream.lastReq.Header.Get("Version"))

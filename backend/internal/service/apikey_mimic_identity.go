@@ -61,11 +61,12 @@ func applyOpenAIAPIKeyCodexMimicryToBody(body []byte, scopes ...openAIAPIKeyCode
 		EnsureReasoningEncryptedContent:  true,
 		EnsureReasoningContextAllTurns:   true,
 		EnsureTextVerbosityLow:           true,
+		EnsureParallelToolCallsFalse:     client.ID == openAIAPIKeyCodexMimicClientCodexExec0145,
 	})
 	if ensureOpenAIAPIKeyCodexPromptCacheKey(reqBody, scope) {
 		modified = true
 	}
-	if client.IsDesktop && ensureOpenAIAPIKeyCodexDesktopClientMetadata(reqBody, scope) {
+	if client.RequiresMetadata && ensureOpenAIAPIKeyCodexClientMetadata(reqBody, scope) {
 		modified = true
 	}
 	if !modified {
@@ -79,8 +80,8 @@ func applyOpenAIAPIKeyCodexMimicryToBody(body []byte, scopes ...openAIAPIKeyCode
 }
 
 func ensureOpenAIAPIKeyCodexPromptCacheKey(reqBody map[string]any, scope openAIAPIKeyCodexMimicScope) bool {
-	if resolveOpenAIAPIKeyCodexMimicClientProfileFromScope(scope).IsDesktop {
-		sessionID := buildOpenAIAPIKeyCodexDesktopMetadata(scope).SessionID
+	if resolveOpenAIAPIKeyCodexMimicClientProfileFromScope(scope).RequiresMetadata {
+		sessionID := buildOpenAIAPIKeyCodexClientMetadata(scope).SessionID
 		if existing, ok := reqBody["prompt_cache_key"].(string); ok && strings.TrimSpace(existing) == sessionID {
 			return false
 		}
@@ -132,7 +133,7 @@ func buildOpenAIAPIKeyCodexPromptCacheKeySeed(reqBody map[string]any, scope open
 	return strings.Join(parts, "|")
 }
 
-type openAIAPIKeyCodexDesktopMetadata struct {
+type openAIAPIKeyCodexClientMetadata struct {
 	InstallationID      string
 	SessionID           string
 	ThreadID            string
@@ -142,18 +143,19 @@ type openAIAPIKeyCodexDesktopMetadata struct {
 	TurnMetadata        string
 }
 
-func buildOpenAIAPIKeyCodexDesktopMetadata(scope openAIAPIKeyCodexMimicScope) openAIAPIKeyCodexDesktopMetadata {
-	sessionID := deterministicOpenAICodexUUID("session|" + buildOpenAIAPIKeyCodexDesktopSeed(scope))
+func buildOpenAIAPIKeyCodexClientMetadata(scope openAIAPIKeyCodexMimicScope) openAIAPIKeyCodexClientMetadata {
+	sessionID := deterministicOpenAICodexUUID("session|" + buildOpenAIAPIKeyCodexClientSeed(scope))
 	turnID := strings.TrimSpace(scope.TurnID)
 	if turnID == "" {
 		turnID = uuid.NewString()
 	}
-	installationID := deterministicOpenAICodexUUID("installation|" + buildOpenAIAPIKeyCodexDesktopSeed(scope))
+	installationID := deterministicOpenAICodexUUID("installation|" + buildOpenAIAPIKeyCodexClientSeed(scope))
 	windowID := sessionID + ":0"
 	turnStartedAtUnixMS := scope.TurnStartedAtUnixMS
 	if turnStartedAtUnixMS <= 0 {
 		turnStartedAtUnixMS = time.Now().UnixMilli()
 	}
+	client := resolveOpenAIAPIKeyCodexMimicClientProfileFromScope(scope)
 	turnMetadata := map[string]any{
 		"installation_id":         installationID,
 		"session_id":              sessionID,
@@ -162,12 +164,14 @@ func buildOpenAIAPIKeyCodexDesktopMetadata(scope openAIAPIKeyCodexMimicScope) op
 		"window_id":               windowID,
 		"request_kind":            "turn",
 		"thread_source":           "user",
-		"sandbox":                 "none",
-		"workspace_kind":          "project",
+		"sandbox":                 client.Sandbox,
 		"turn_started_at_unix_ms": turnStartedAtUnixMS,
 	}
+	if client.WorkspaceKind != "" {
+		turnMetadata["workspace_kind"] = client.WorkspaceKind
+	}
 	turnMetadataBytes, _ := json.Marshal(turnMetadata)
-	return openAIAPIKeyCodexDesktopMetadata{
+	return openAIAPIKeyCodexClientMetadata{
 		InstallationID:      installationID,
 		SessionID:           sessionID,
 		ThreadID:            sessionID,
@@ -178,9 +182,13 @@ func buildOpenAIAPIKeyCodexDesktopMetadata(scope openAIAPIKeyCodexMimicScope) op
 	}
 }
 
-func buildOpenAIAPIKeyCodexDesktopSeed(scope openAIAPIKeyCodexMimicScope) string {
+func buildOpenAIAPIKeyCodexClientSeed(scope openAIAPIKeyCodexMimicScope) string {
 	parts := make([]string, 0, 7)
-	parts = append(parts, "client_profile="+openAIAPIKeyCodexMimicClientDesktop0144)
+	profileID := strings.TrimSpace(scope.ClientProfile)
+	if profileID == "" {
+		profileID = openAIAPIKeyCodexMimicClientCodexExec0145
+	}
+	parts = append(parts, "client_profile="+profileID)
 	if strings.TrimSpace(scope.ServerSalt) != "" {
 		parts = append(parts, "server_salt="+scope.ServerSalt)
 	}
@@ -207,8 +215,8 @@ func deterministicOpenAICodexUUID(seed string) string {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:16])
 }
 
-func ensureOpenAIAPIKeyCodexDesktopClientMetadata(reqBody map[string]any, scope openAIAPIKeyCodexMimicScope) bool {
-	metadata := buildOpenAIAPIKeyCodexDesktopMetadata(scope)
+func ensureOpenAIAPIKeyCodexClientMetadata(reqBody map[string]any, scope openAIAPIKeyCodexMimicScope) bool {
+	metadata := buildOpenAIAPIKeyCodexClientMetadata(scope)
 	values := map[string]string{
 		"x-codex-installation-id": metadata.InstallationID,
 		"session_id":              metadata.SessionID,

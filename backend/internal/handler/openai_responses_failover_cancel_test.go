@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -41,6 +42,12 @@ func (u *openAIResponsesFailoverCancelUpstream) Do(_ *http.Request, _ string, ac
 		Header:     http.Header{"Content-Type": []string{"text/html"}},
 		Body:       io.NopCloser(bytes.NewBufferString("<html>520: unknown error</html>")),
 	}, nil
+}
+
+// DoWithTLS 保持此用例的固定上游行为，同时覆盖 OAuth 官方画像
+// 启用后的 TLS 发送路径，避免嵌入的空接口方法被调用。
+func (u *openAIResponsesFailoverCancelUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, concurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	return u.Do(req, proxyURL, accountID, concurrency)
 }
 
 func (u *openAIResponsesFailoverCancelUpstream) calls() []int64 {

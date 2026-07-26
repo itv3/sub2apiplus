@@ -143,4 +143,25 @@ docs/*
 .codex/
 frontend/coverage/
 aicodex
+
+# 官方客户端抓包工具源码需要进入仓库；运行产物和认证状态必须留在 Vircs。
+!tools/official_client_capture/
+!tools/official_client_capture/**
+# 反向纳入源码后，重新屏蔽 Python 缓存与所有可能的原始抓包/会话材料。
+tools/official_client_capture/**/__pycache__/
+tools/official_client_capture/**/*.py[cod]
+tools/official_client_capture/**/*.jsonl
+tools/official_client_capture/**/*.log
+tools/official_client_capture/**/*.sqlite
+tools/official_client_capture/**/*.sqlite-*
+tools/official_client_capture/**/*.db
+tools/official_client_capture/**/*.har
+tools/official_client_capture/**/*.pem
+tools/official_client_capture/**/*.key
+tools/official_client_capture/runs/
+tools/official_client_capture/state/
+tools/official_client_capture/**/*.pcap
+tools/official_client_capture/**/*.pcapng
+tools/official_client_capture/**/*.mitm
+tools/official_client_capture/**/*.flow
 output/

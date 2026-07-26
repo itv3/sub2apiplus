@@ -496,9 +496,7 @@ import Icon from '@/components/icons/Icon.vue'
 
 const ANTHROPIC_MIMIC_KEY = 'anthropic_apikey_mimic_claude_code'
 const OPENAI_MIMIC_KEY = 'openai_apikey_mimic_codex_cli'
-const OPENAI_PROFILE_KEY = 'openai_apikey_mimic_codex_profile'
 const TLS_FINGERPRINT_KEY = 'enable_tls_fingerprint'
-const DEFAULT_CODEX_PROFILE = 'desktop_0_142'
 const HISTORY_TABLE_WIDTH = 2400
 
 const KEEPER_ENABLED_KEY = 'keeper_keepalive_enabled'
@@ -758,10 +756,7 @@ function statusLabels(account: Account): string[] {
     return labels
   }
 
-  const profile = String(extra[OPENAI_PROFILE_KEY] || DEFAULT_CODEX_PROFILE)
-  if (profile === DEFAULT_CODEX_PROFILE) labels.push(t('admin.apiKeyMimic.statusLabels.codexDesktop'))
-  else if (profile === 'cli_rs_0_125') labels.push(t('admin.apiKeyMimic.statusLabels.codexCli'))
-  else labels.push(t('admin.apiKeyMimic.statusLabels.unknownCodexProfile', { profile }))
+  labels.push(t('admin.apiKeyMimic.statusLabels.codexCli'))
   if (extra.openai_passthrough === true || extra.openai_oauth_passthrough === true) labels.push(t('admin.apiKeyMimic.statusLabels.passthroughAlsoEnabled'))
   return labels
 }
@@ -863,8 +858,7 @@ function buildMimicPatch(account: Account, enabled: boolean): Record<string, unk
   }
 
   const patch: Record<string, unknown> = {
-    [OPENAI_MIMIC_KEY]: enabled,
-    [OPENAI_PROFILE_KEY]: String(account.extra?.[OPENAI_PROFILE_KEY] || DEFAULT_CODEX_PROFILE)
+    [OPENAI_MIMIC_KEY]: enabled
   }
   if (enabled) {
     patch[TLS_FINGERPRINT_KEY] = true

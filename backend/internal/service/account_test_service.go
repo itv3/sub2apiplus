@@ -184,7 +184,7 @@ var anthropicAPIKeyMimicTestToolNames = []string{
 }
 
 // createAnthropicAPIKeyMimicTestPayload 创建带官方工具集合的第三方测试 body。
-// 上游会校验 Desktop 工具集合；schema 保持最小合法形态，其余官方字段由网关 mimic 链补齐。
+// 上游会校验官方客户端工具集合；schema 保持最小合法形态，其余官方字段由网关 mimic 链补齐。
 func createAnthropicAPIKeyMimicTestPayload(modelID string) map[string]any {
 	tools := make([]map[string]any, 0, len(anthropicAPIKeyMimicTestToolNames))
 	for _, name := range anthropicAPIKeyMimicTestToolNames {
@@ -388,6 +388,7 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 		account,
 		mimicAPIKeyClaudeCode,
 		s.tlsFPProfileService,
+		s.cfg,
 	)
 	resp, err := s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, tlsProfile)
 	if err != nil {

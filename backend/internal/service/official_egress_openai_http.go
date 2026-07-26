@@ -17,7 +17,7 @@ import (
 )
 
 const (
-	officialOpenAIHTTPUserAgent     = "codex_exec/0.145.0 (Ubuntu 24.4.0; x86_64) xterm-256color (codex_exec; 0.145.0)"
+	officialOpenAIHTTPUserAgent     = "codex_exec/0.145.0 (Ubuntu 24.4.0; x86_64) unknown (codex_exec; 0.145.0)"
 	officialOpenAIHTTPOriginator    = "codex_exec"
 	officialOpenAIHTTPBetaFeatures  = "remote_compaction_v2"
 	officialOpenAIHTTPResponsesLite = "true"
@@ -210,6 +210,10 @@ func finalizeOpenAIOfficialEgressHTTPRequest(
 	if profile.TargetPlatform != PlatformOpenAI {
 		return nil, result, errors.New("OpenAI finalizer received non-OpenAI profile")
 	}
+	clientProfile, err := resolveOfficialClientProfileByID(profile.ID)
+	if err != nil {
+		return nil, result, err
+	}
 
 	strictIngressIdentity := isInboundOpenAIOfficialClient(c)
 	identity, err := resolveOfficialOpenAIHTTPIdentity(
@@ -241,7 +245,7 @@ func finalizeOpenAIOfficialEgressHTTPRequest(
 	if err := registerOfficialOpenAIHTTPIdentity(egressContext, identity); err != nil {
 		return nil, result, err
 	}
-	finalizeOfficialOpenAIHTTPHeaders(req.Header, identity, plan.IsCompact)
+	finalizeOfficialOpenAIHTTPHeaders(req.Header, clientProfile, identity, plan.IsCompact)
 	result.Modifications = append(result.Modifications,
 		OfficialEgressModification{Kind: "header", Field: "session-id"},
 		OfficialEgressModification{Kind: "header", Field: "thread-id"},
@@ -867,6 +871,7 @@ func registerOfficialOpenAIHTTPIdentity(
 
 func finalizeOfficialOpenAIHTTPHeaders(
 	header http.Header,
+	profile officialClientResolvedProfile,
 	identity officialOpenAIHTTPIdentity,
 	isCompact bool,
 ) {
@@ -886,13 +891,14 @@ func finalizeOfficialOpenAIHTTPHeaders(
 	}
 	header.Set("Accept", accept)
 	header.Set("Content-Type", "application/json")
-	header.Set("User-Agent", officialOpenAIHTTPUserAgent)
-	header.Set("originator", officialOpenAIHTTPOriginator)
+	header.Set("User-Agent", profile.Build.UserAgent)
+	header.Set("originator", profile.Build.Originator)
 	header.Set("session-id", identity.sessionID)
 	header.Set("thread-id", identity.threadID)
 	header.Set("x-client-request-id", identity.clientRequest)
-	header.Set("x-codex-beta-features", officialOpenAIHTTPBetaFeatures)
 	header.Set("x-codex-turn-metadata", identity.turnMetadata)
 	header.Set("x-codex-window-id", identity.windowID)
-	header.Set(responsesLiteHeader, officialOpenAIHTTPResponsesLite)
+	for _, item := range profile.Wire.StaticHeaders {
+		header.Set(item.Name, item.Value)
+	}
 }

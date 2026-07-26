@@ -292,6 +292,10 @@ func finalizeOpenAIOfficialEgressWSHandshakeHeaders(
 			"OpenAI official egress WebSocket context conflicts with handshake",
 		)
 	}
+	clientProfile, err := resolveOfficialClientProfileByID(egressContext.clientProfileID)
+	if err != nil {
+		return result, err
+	}
 
 	sessionID, err := requiredOfficialEgressFieldValue(
 		egressContext,
@@ -341,11 +345,11 @@ func finalizeOpenAIOfficialEgressWSHandshakeHeaders(
 	headers.Set("x-client-request-id", clientRequestID)
 	headers.Set("x-codex-window-id", windowID)
 	headers.Set(openAIWSTurnMetadataHeader, turnMetadata)
-	headers.Set("User-Agent", officialOpenAIHTTPUserAgent)
-	headers.Set("originator", officialOpenAIHTTPOriginator)
-	headers.Set("x-codex-beta-features", officialOpenAIHTTPBetaFeatures)
-	headers.Set("OpenAI-Beta", openAIWSBetaV2Value)
-	headers.Set("version", officialOpenAIWSClientVersion)
+	headers.Set("User-Agent", clientProfile.Build.UserAgent)
+	headers.Set("originator", clientProfile.Build.Originator)
+	for _, item := range clientProfile.Wire.StaticHeaders {
+		headers.Set(item.Name, item.Value)
+	}
 
 	for _, name := range []string{
 		"User-Agent",

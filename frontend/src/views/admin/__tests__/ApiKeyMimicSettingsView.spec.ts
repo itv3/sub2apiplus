@@ -445,8 +445,7 @@ describe('ApiKeyMimicSettingsView', () => {
 
     expect(updateExtraMock).toHaveBeenCalledTimes(1)
     expect(updateExtraMock).toHaveBeenCalledWith(10, {
-      openai_apikey_mimic_codex_cli: false,
-      openai_apikey_mimic_codex_profile: 'desktop_0_142'
+      openai_apikey_mimic_codex_cli: false
     })
   })
 
@@ -460,7 +459,6 @@ describe('ApiKeyMimicSettingsView', () => {
       ...plainAccount,
       extra: {
         openai_apikey_mimic_codex_cli: true,
-        openai_apikey_mimic_codex_profile: 'desktop_0_142',
         enable_tls_fingerprint: true
       }
     })
@@ -474,7 +472,6 @@ describe('ApiKeyMimicSettingsView', () => {
     expect(updateExtraMock).toHaveBeenCalledTimes(1)
     expect(updateExtraMock).toHaveBeenCalledWith(11, {
       openai_apikey_mimic_codex_cli: true,
-      openai_apikey_mimic_codex_profile: 'desktop_0_142',
       enable_tls_fingerprint: true
     })
   })

@@ -203,9 +203,8 @@ func (s *AccountTestService) ProxyKeeperAnthropicAccount(ctx context.Context, ac
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	// mimic 开启时复用账号测试的 Desktop TLS 规则；关闭时按官方 CLI 直通规则处理。
-	// 两种路径都不能在未绑定 profile 时误套内置 Node.js 指纹。
-	tlsProfile := resolveAnthropicTLSProfileForRequest(account, mimicAPIKeyClaudeCode, s.tlsFPProfileService)
+	// mimic 开启时复用正式转发的发布画像 TLS 规则；关闭时按普通直通规则处理。
+	tlsProfile := resolveAnthropicTLSProfileForRequest(account, mimicAPIKeyClaudeCode, s.tlsFPProfileService, s.cfg)
 	if tlsProfile != nil {
 		return s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, tlsProfile)
 	}
@@ -214,7 +213,7 @@ func (s *AccountTestService) ProxyKeeperAnthropicAccount(ctx context.Context, ac
 
 const keeperAnthropicUnavailableToolDescription = "Unavailable in this keepalive session. Do not call this tool."
 
-// normalizeKeeperAnthropicMimicTools 将 keeper 的精简 CLI 工具集合补齐为 Desktop 基线。
+// normalizeKeeperAnthropicMimicTools 将 keeper 的精简 CLI 工具集合补齐为当前官方画像基线。
 // 同名真实工具保留原 schema；缺失工具只用于满足上游客户端形态校验，并明确标记为不可用。
 func normalizeKeeperAnthropicMimicTools(body []byte) ([]byte, error) {
 	existing := make(map[string]json.RawMessage)

@@ -281,7 +281,7 @@ func resolveOfficialEgressT3HTTPContext(
 		InboundEndpoint: endpoint,
 		Transport:       OfficialEgressTransportHTTP,
 		UpstreamHost:    host,
-		ProfileVersion:  OfficialEgressProfileVersionPhase0,
+		ProfileVersion:  officialEgressActiveVersionForTest(account),
 		AccountType:     account.Type,
 		CAFingerprint:   caFingerprint,
 	})
@@ -306,7 +306,7 @@ func resolveOfficialEgressT3WSContext(
 		InboundEndpoint: "/v1/responses",
 		Transport:       OfficialEgressTransportWebSocket,
 		UpstreamHost:    "chatgpt.com",
-		ProfileVersion:  OfficialEgressProfileVersionPhase0,
+		ProfileVersion:  officialEgressActiveVersionForTest(account),
 		AccountType:     account.Type,
 		CAFingerprint:   caFingerprint,
 	})

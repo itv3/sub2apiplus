@@ -128,6 +128,8 @@ type codexResponsesNormalizationOptions struct {
 	// EnsureTextVerbosityLow 补齐 text.verbosity=low（客户端缺省时），
 	// 对齐 codex_exec 0.144.1 抓包默认值。
 	EnsureTextVerbosityLow bool
+	// EnsureParallelToolCallsFalse 对齐 Codex CLI API 模式实抓请求。
+	EnsureParallelToolCallsFalse bool
 }
 
 const codexImageGenerationFunctionToolName = "image_gen.imagegen"
@@ -355,6 +357,12 @@ func applyCodexResponsesNormalization(reqBody map[string]any, opts codexResponse
 	}
 	if opts.EnsureTextVerbosityLow && ensureCodexTextVerbosityLow(reqBody) {
 		modified = true
+	}
+	if opts.EnsureParallelToolCallsFalse {
+		if value, ok := reqBody["parallel_tool_calls"].(bool); !ok || value {
+			reqBody["parallel_tool_calls"] = false
+			modified = true
+		}
 	}
 	if input, ok := reqBody["input"].([]any); ok {
 		if opts.NormalizeBareRoleContentMessages {

@@ -32,7 +32,7 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 1、Sub2API 对外提供标准 API 接口。无论入站来自官方客户端，还是通过标准 API 接入的第三方客户端，Anthropic/OpenAI OAuth 官方出站均自动使用对应版本 Claude Code / Codex CLI 的真实出站形态。
 2、Sub2API 原有兼容层只负责入站协议转换、模型映射、工具转换及请求语义兼容；最终 OAuth 出站请求由内置官方客户端画像统一定型。
 >
-> **实测基线**：源码基线 Sub2API `v0.1.164`，抓包运行 Plus `0.1.164-1` 系列构建；官方客户端 Claude Code `2.1.218`、Codex CLI `0.145.0`；模型固定为 `claude-sonnet-5`、`gpt-5.6-luna`；Profile 版本 `phase0-2026-07-24`，由服务端自动绑定。官方客户端基准与 Sub2API 出站使用相同 S1/S2/S4，完成 direct + mitm + ingress 配对；第三方客户端使用 Kilo Code VS Code 扩展从标准 API 接入，覆盖范围见下表。
+> **当前基线**：源码基线 Sub2API `v0.1.164`。当前 `active` 画像为 Claude Code CLI `2.1.220`和 Codex CLI `0.145.0`，来源分别为 VirCS `oauth-20260726T014021Z` 与 `api-20260726T014252Z` 的 OAuth/API、direct/MITM、HTTP/WS 自动化抓包。下表的历史 OAuth 端到端验收使用 Claude Code `2.1.218`、Codex CLI `0.145.0`；本轮已完成代码画像升级和自动化回归，AnyRouter 实际 A/B 待其账号恢复后补测，不冒充为已完成的实证。
 
 | 当前路径 | Sub2API 实证（OAuth 官方画像内置生效） |
 |---|---|
@@ -44,34 +44,41 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 
 #### 1.1.2 抓包方法、分组与证据边界
 
-> **抓包操作手册**：抓包环境、脚本及启动、抓取、拉取、停止、恢复方法统一见 `抓包相关/README.md`。抓包验证环境在本文统称 Vircs。本节只定义本任务的两轮抓取法、S1/S2/S4、分组关系和证据边界。
+> **抓包操作手册**：OAuth/API 双任务、抓包环境、认证隔离、dry-run、运行和产物方法统一见[官方客户端双任务抓包工具](tools/official_client_capture/README.md)。抓包验证环境在本文统称 Vircs。本节只定义每套任务内部的两轮抓取法、S1/S2/S4、分组关系和证据边界。
+
+客户端版本升级时必须分别执行两套任务，`all` 只负责顺序编排，不能把认证状态或证据合并：
+
+1. **OAuth 任务**：Claude Code / Codex CLI 使用 OAuth 直连 Anthropic / OpenAI 官方平台，为 §1.1 建立基准。
+2. **API 任务**：同版本 Claude Code / Codex CLI 使用 Sub2API 访问 Key，通过 Sub2API 公共 HTTPS Base URL 连接 Sub2API，为 §1.2 建立基准；禁止用本机明文 reverse ingress 的 pcap 代替 CLI 到 Sub2API 的真实 TLS。
+
+API 任务生成的官方 CLI 入站基准，后续与 Kilo / Cline / Cursor / Roo Code 请求经 Sub2API mimic 后发往 AnyRouter 等第三方站点的出站形态对比。外部站点 A/B 是独立验收阶段，不属于基准抓包任务。
 
 ##### 1.1.2.1 抓包方法：两轮抓取法 + 三场景
 
-同一组请求分别执行 direct 与 mitm 两轮，不能用其中一轮代替另一轮；mitm 轮同时记录网关入站（下文称 ingress），ingress 不单独构成一轮：
+同一“任务 + 主体 + 传输 + 场景”分别执行 direct 与 mitm，不能用其中一种证据代替另一种。当前双任务工具中，每个 S1/S2/S4 都单独启动抓包进程并写独立文件；基准工具只记录 CLI 所在边界，不同时记录 Sub2API ingress 或出站：
 
 | 轮次 | 抓取方式 | 验证内容 | 不能证明 |
 |---|---|---|---|
-| **direct** | 客户端或网关直连官方上游，通过 `tcpdump` 抓取真实出站流量 | ClientHello、cipher、扩展、ALPN、HTTP/WS 协议选择及连接复用 | 加密后的 Header、Body 和 WS 帧 |
-| **mitm** | 注入测试 CA，使目标流量经过 mitmproxy，并同时记录网关入站 | URL、HTTP 版本、Header、Body、system、tools、响应及 WS 帧 | 网关直连官方时的真实 TLS 指纹 |
+| **direct** | 在被测客户端或后续候选网关自身网络命名空间，通过 `tcpdump` 抓取未终止 TLS | ClientHello、cipher、扩展顺序、曲线、签名算法、版本、KeyShare、PSK 和客户端 offered ALPN | 加密后的 Header/Body/WS 帧；服务端协商结果；仅靠规范化结果不能断言连接复用 |
+| **mitm** | 只给当前被测进程注入测试代理与 CA，记录目标 allowlist 流量 | URL、HTTP 版本、Header、Body 结构、响应及 WS 帧 | 未插入 MITM 时的真实 TLS 指纹 |
 
 每轮使用相同模型和相同场景：
 
 - **S1**：冷启动简单问答，验证基础请求、响应和身份字段。
-- **S2**：同一会话连续多轮，验证会话生命周期、连接复用和 `previous_response_id`。
+- **S2**：同一会话连续多轮，验证会话生命周期和 `previous_response_id`；连接复用如需形成结论，另行分析原始 pcap。
 - **S4**：完整工具闭环，验证工具定义、调用、结果回传、`call_id` 和最终回答。
 
 执行要求：
 
 1. 同一对比组使用相同客户端版本、模型、场景输入和重复次数；具体值写入运行元数据，本节不重复固定数值，当前验收基线以 §1.1.1 为准。
-2. 一次只运行一个“主体 + 平台 + 路径”，避免连接池、会话、账号调度和抓包文件互相污染。
-3. direct 轮不得插入 MITM；mitm 轮必须同时保存解密后的出站数据和网关入站数据。
-4. 每轮记录镜像、客户端版本、模型、账号、Profile、实际出站协议、开始时间和运行目录。
-5. 测试结束后恢复代理、CA、账号配置和服务状态，并检查无残留抓包进程。
+2. 一次只运行一个“任务 + evidence + 主体 + 传输 + 场景”，避免连接池、会话、认证状态和抓包文件互相污染。
+3. direct 不得插入 MITM；mitm 只保存本单元目标边界的解密数据。Sub2API ingress 与候选出站配对属于后续 A/B，不得混进官方 CLI 基准文件。
+4. 每轮记录客户端版本与哈希、模型、Profile、目标、客户端 offered ALPN、开始时间、运行目录和清理结果。容器 image digest 若由调用方声明，必须明确标注未在容器内独立验证。
+5. 测试结束后清理本工具启动的抓包/CLI 进程并确认 MITM 端口释放；代理、CA 和 API 状态只注入子进程/专用目录，不修改全局账号或服务配置。
 
 ##### 1.1.2.2 抓包分组与动作
 
-分组编号描述固定的比较关系：`AH` 表示 Anthropic HTTP，`OH` 表示 OpenAI HTTP，`OW` 表示 OpenAI WebSocket；后缀 `1` 表示官方客户端基准，`2` 表示 Sub2API 出站。客户端版本、模型、账号和运行目录由每次运行元数据确定。
+分组编号描述固定的比较关系：`AH` 表示 Anthropic HTTP，`OH` 表示 OpenAI HTTP，`OW` 表示 OpenAI WebSocket；后缀 `1` 表示官方客户端基准，`2` 表示 Sub2API 候选出站。客户端版本、模型、账号和运行目录由每次运行元数据确定。双任务工具只生成 `1` 类基准；`2` 类候选必须在后续 A/B 单独抓取。
 
 | 平台与路径 | 官方客户端基准 | Sub2API 出站 | 对比关系 |
 |---|---|---|---|
@@ -84,22 +91,22 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 
 | 主体类型 | direct 动作 | mitm 动作 |
 |---|---|---|
-| **官方客户端** | 在客户端网络命名空间抓取直连官方流量 | 配置测试 CA 与代理，解密官方客户端请求 |
-| **Sub2API** | 在 Sub2API 网络命名空间抓取直连官方流量 | 将被测账号绑定到 MITM，同时抓取 Sub2API 入站 |
+| **官方客户端基准** | 在 CLI 网络命名空间抓取 OAuth→官方平台或 API Key→Sub2API 公共 HTTPS 流量 | 只给 CLI 子进程配置测试 CA 与代理，解密同一目标边界 |
+| **Sub2API 候选（后续 A/B）** | 在 Sub2API 网络命名空间抓取到官方平台或第三方 API 站点的出站流量 | 只解密 Sub2API 候选出站；如需证明改写关系，另存并关联对应 ingress 证据 |
 
 HTTP 路径只能对标对应的官方 HTTP 基准，WebSocket 路径只能对标官方 WebSocket 基准。协议、模型或场景不同的样本只能用于辅助观察，不能计入一致性结论。
 
 ##### 1.1.2.3 样本与证据边界
 
-- **传输层证据**：仅使用未终止 TLS 的 direct pcap 判定 ClientHello、cipher、扩展、ALPN、协议选择和连接复用。
+- **传输层证据**：仅使用未终止 TLS 的 direct pcap 判定 ClientHello、cipher、扩展顺序及客户端 offered ALPN；自动规范化不把 offered ALPN 当作协商结果，连接重试/复用需另行分析原始 pcap。
 - **应用层证据**：使用 mitm 解密记录判定 URL、HTTP 版本、Header、Body、system、tools、响应和 WS 帧。
-- **Sub2API 改写证据**：必须保存同一次请求的入站和出站，比较规范化后的语义；不能只看出站结果。
+- **Sub2API 改写证据**：在后续候选 A/B 阶段保存同一次请求的 ingress 和出站关联，比较规范化语义；该要求不意味着基准工具会同时抓两条边界。
 - **样本有效性**：必须确认命中指定账号和模型、没有 API Key 或其他账号 fallback、请求成功完成，并能与 usage/请求日志对应。
 - **续轮与工具**：S2 必须形成真实连续会话；S4 必须完成“工具定义 → 工具调用 → 工具结果 → 最终回答”，发出即失败的样本无效。
 - **版本边界**：每次结论只适用于运行元数据记录的客户端、服务镜像和 Profile；版本变化后必须重抓，不能直接沿用旧数值。
 - **安全边界**：Token、Cookie、API Key 和动态身份值必须脱敏；包含完整请求 Body 的原始样本按敏感材料管理。
 
-当前实现的镜像、测试、运行目录和恢复记录统一归档在
+历史 OAuth Official Egress 实证的镜像、测试、运行目录和恢复记录统一归档在
 `backend/internal/service/testdata/official_egress/README.md`。
 
 #### 1.1.3 Sub2API `v0.1.164` 改造方案与实施结果
@@ -199,11 +206,13 @@ T1–T7 与 N2 均已完成。上表未列的 N1 是 `/v1/models`、Chat Complet
 
 ### 1.2 API Key 官方客户端兼容
 
-API Key 官方客户端兼容让 Kilo / Cline / Cursor / Roo Code 等非官方客户端尽量接近 Claude / Codex 官方客户端的 header、body、TLS 和路由形态。mimic 只作用于启用对应开关的 Anthropic / OpenAI API Key 账号和非官方客户端；经 Gateway 入站的官方 Claude / Codex 桌面版或 CLI 统一跳过 mimic，按普通 API Key 逻辑处理。客户端身份识别只依据 Gateway 入站请求上下文，内部入口另见下表。
+API Key 官方客户端兼容让 Kilo / Cline / Cursor / Roo Code 等非官方客户端尽量接近 Claude Code / Codex CLI 在 **API Key 认证模式**下的 header、body、TLS 和路由形态。OAuth 和 API Key 共享经抓包证明一致的 `ClientBuild` 与传输数据，但认证、端点、beta、billing、cache 和 WS 开关仍是独立 Profile，不会把 OAuth 最终请求整体复制给 API Key。
+
+当前默认画像已直接切换为 Claude Code CLI `2.1.220` 和 `codex_exec/0.145.0`；旧 Claude Desktop `2.1.209` 与 Codex Desktop `0.144.0-alpha.4` 仅作为服务级 `previous` 回退画像保留。不设账号级灰度或字段混用。
 
 1. 仅 Anthropic / OpenAI 的 API Key 账号生效，不改变 OAuth 账号逻辑。
 2. mimic 与 passthrough 运行时互斥；同时开启时，非官方客户端优先走 mimic。
-3. 账号测试按非官方入站请求处理并走 mimic，因此最终出站形态与官方客户端一致：OpenAI 复用 Codex mimic profile，Anthropic 复用完整 Claude Desktop mimic 构造链。
+3. 账号测试按非官方入站请求处理并走与正式 Gateway 相同的 Profile 解析、Header/Body Finalizer 和 TLS 决策。
 4. 非官方客户端命中 mimic 时，关键身份 header 不允许被账号级 header override 覆盖；官方客户端跳过 mimic 后不应用该保护。
 5. OpenAI Codex mimic 的 `/v1/messages` 固定进入 Responses mimic 链路，不受 `force_chat_completions`、普通 Responses probe false 或 `openai_responses_supported=false` 影响。
 6. OpenAI Codex mimic 当前只支持 HTTP/SSE 上游，命中时不进入 Responses WebSocket；跳过 mimic 的官方 Codex 客户端按普通 API Key 账号的全局/账号 WS 开关、force HTTP 和 WSv2 mode 选择路由。该判断同时作用于账号调度、粘性账号复核和最终转发。
@@ -214,21 +223,27 @@ API Key 官方客户端兼容让 Kilo / Cline / Cursor / Roo Code 等非官方�
 | 入口 | 客户端识别 | Anthropic | OpenAI |
 |---|---|---|---|
 | Gateway 公网入口 | 按 UA / `originator` / `metadata.user_id` 识别 | 官方客户端跳过 mimic | 官方客户端跳过 mimic |
-| 管理后台账号测试 | 不识别（传入空 Gin Context） | 走完整 Desktop mimic 构造链 | 复用 Codex mimic profile |
-| keeper 内部代理 | 不识别 | `/v1/messages` 开关打开即走 Desktop mimic | 不做 mimic，按 header allowlist 透传官方 Codex CLI 形态 |
+| 管理后台账号测试 | 不识别（传入空 Gin Context） | 走当前 Claude Code CLI API Key 画像 | 走当前 Codex CLI API Key 画像 |
+| keeper 内部代理 | 不识别 | `/v1/messages` 开关打开即走当前画像 | 不做 mimic，按 header allowlist 透传官方 Codex CLI 形态 |
 
 ```json
-{"anthropic_apikey_mimic_claude_code":true,"openai_apikey_mimic_codex_cli":true,"openai_apikey_mimic_codex_profile":"desktop_0_144","enable_tls_fingerprint":true}
+{"anthropic_apikey_mimic_claude_code":true,"openai_apikey_mimic_codex_cli":true,"enable_tls_fingerprint":true}
 ```
 
-两个开关名中的 `claude_code` / `codex_cli` 为历史命名，当前对齐目标分别是 Claude Desktop 和 Codex Desktop；Anthropic UA 仍以 `claude-cli/` 开头，是因为 Desktop 3p 本身就是 claude-cli 的 external entrypoint。
+两个开关名与当前 CLI 目标一致。新的 API 基准已使用与 OAuth 相同版本的 Claude Code / Codex CLI，并让它们以 API Key 模式连接 Sub2API；后续升级可由一次自动化任务顺序覆盖两种认证、端点、HTTP/WS、direct/MITM 和 S1/S2/S4，但每个场景仍生成独立证据与 Profile。
 
 | 平台 | mimic 目标 | 当前行为 |
 |---|---|---|
-| Anthropic API Key | Claude Desktop | `/v1/messages` 与 `/v1/messages/count_tokens` 使用独立构造链，补桌面客户端 header、beta 和 body 形态；UA 基线为 `claude-cli/2.1.209 (external, claude-desktop-3p, agent-sdk/0.3.209)`，Stainless 身份为 `MacOS/arm64`、timeout `900`，并执行已知工具名归一和响应侧结构化回写。 |
-| OpenAI API Key | Codex Desktop | 默认 profile 为 `desktop_0_144`，UA 基线为 `Codex Desktop/0.144.0-alpha.4 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.707.51957)`，`originator` 为 `Codex Desktop`；补 `x-codex-*` 和 turn metadata，但不把 `x-openai-internal-codex-responses-lite` 作为固定身份无条件添加。Responses 路由、body 默认值（`store=false`、`stream`、`include=reasoning.encrypted_content`、`reasoning.context=all_turns`、`text.verbosity=low`）、`prompt_cache_key`、`client_metadata` 和 capability probe 均按 profile 处理；旧 `desktop_0_142` 名称作为兼容别名归一到新 profile，`cli_rs_0_125` 保留独立 CLI 回滚路径。 |
+| Anthropic API Key | Claude Code CLI `2.1.220` | `/v1/messages` 发送 `x-api-key` 且移除 Bearer 认证；UA、Linux/x64、Node `v26.3.0`、beta、`sdk-cli` billing、system 与 cache 形态来自 API 抓包。`/count_tokens` 暂使用独立 generic Contract，不冒充 messages 官方样本。 |
+| OpenAI API Key | `codex_exec/0.145.0` | 默认 profile 为 `codex_exec_0_145`，发送 `originator=codex_exec`、`remote_compaction_v2`、`responses-lite=true`，不发 `OpenAI-Beta` 和 `version`；metadata 使用 `sandbox=seccomp`，`parallel_tool_calls=false`。API Key mimic 仍强制 HTTP/SSE，WS 画像只存档不激活。 |
 
-#### Anthropic 1M 上下文 beta
+Profile 数据集中在 `official_client_profile_registry.go`，每个 Wire Profile 都包含不可变 ID、抓包来源、适用端点、传输画像和 SHA-256 digest。默认使用 `gateway.official_client_profiles.mode: active`；紧急时可整体切换为 `previous`，未知模式或不完整画像会 fail-closed。历史账号字段 `openai_apikey_mimic_codex_profile` 仅作 dormant 数据保留，运行时不再覆盖服务级指针。
+
+#### previous 回退画像历史记录
+
+> 本节下方的 Desktop 字段只用于说明 `previous` 兼容性来源，不是当前 `active` 出站契约，不得作为新默认值引用。
+
+##### Anthropic 1M 上下文 beta
 
 非官方客户端命中 Anthropic API Key Desktop mimic 时，基础 `anthropic-beta` 固定对齐 2026-07-13 官方 Claude Desktop 抓包，并保持以下顺序：
 
@@ -259,7 +274,7 @@ fallback-credit-2026-06-01
 | Body | 使用官方桌面抓包确认的 `cc_entrypoint=claude-desktop-3p` 和 Claude Agent SDK 身份提示；不自动补 `temperature=1`；仅删除无附加语义的 `tool_choice: {"type":"auto"}`，带 `disable_parallel_tool_use` 等附加字段时保留。 | 只应用已确认的 body 清理和工具名处理，不照搬 structured outputs 规则。 |
 | Keeper 工具 | keeper 专用内部代理把精简 CLI 工具集合规范化为下述 27 项 Desktop 基线；同名真实工具保留原 schema，缺失项使用不可用说明和最小对象 schema。 | 不适用。 |
 
-#### Anthropic / AnyRouter 账号测试要求
+##### Anthropic / AnyRouter 旧账号测试记录
 
 `v0.1.155-3` 将 Anthropic API Key 账号测试从“仅替换 `anthropic-beta`”改为复用正式 Gateway 的完整 Desktop mimic 构造链，并修复 AnyRouter 返回 HTTP 200 降级文案时被误判为成功的问题。后台测试接口为 `POST /api/v1/admin/accounts/:id/test`，实现和后续维护必须遵守以下分支优先级：
 
@@ -296,15 +311,17 @@ BetaPolicy 必须区分静态身份 beta 和动态功能 beta：Desktop 静态�
 | HTTP 200，收到正常 SSE 内容并以 `message_stop` 结束 | 成功，最终发送 `{"type":"test_complete","success":true}`。 |
 | HTTP 200，但 SSE 正文仅为 `Service temporarily unavailable. Please retry later.` | 失败，发送错误事件，不得发送成功的 `test_complete`。 |
 
-上述判定已在 `0.1.155-3` 的 AnyRouter ARM64 实测中验证通过。测试记录和文档不得包含账号密钥、Admin API Key、数据库密码或 scoped proxy token。
+上述判定已在 `0.1.155-3` 的 AnyRouter ARM64 实测中验证通过，但它只证明旧 Desktop `previous` 画像。当前 CLI `active` 画像的 AnyRouter A/B 尚未执行。测试记录和文档不得包含账号密钥、Admin API Key、数据库密码或 scoped proxy token。
+
+#### 当前发送与回退契约
 
 OpenAI `/v1/responses/compact` 是特例：上游保持官方 unary JSON 形态，移除 `stream`、`store`、`prompt_cache_key`、`client_metadata`，不补 Codex mimic body 默认值，并强制 `Accept: application/json`。通过普通 `/v1/responses` body-signal 触发且原请求为 `stream:true` 时，下游桥接为最小 Responses SSE，确保包含 `response.output_item.done` 和 `response.completed`。
 
 - mimic 只对齐 header、body、TLS 和路由，不复制服务端隐藏 prompt、账号状态、产品 memory 或 UI 上下文，也不替换响应文本或清洗客户端正文身份。
-- Codex Desktop mimic 默认使用标准 Go Transport，实际出站使用 HTTP/2；未宣称 Go `x/net/http2` 生成的 SETTINGS、伪 header 顺序和 window 更新等帧级指纹与 macOS Codex Desktop 逐字节一致。管理员显式选择的 TLS profile 仍优先，独立 CLI profile 不受影响；开启 `enable_tls_fingerprint` 但未显式选择 profile 时回落到内置 Codex TLS profile：`cli_rs_0_125` 回落 CLI profile，其余回落 `codex_exec` profile。
+- Codex CLI `active` 画像在开启 TLS fingerprint 时使用 2026-07-26 抓包的 direct 30-cipher/空 ALPN 或 proxy h2 传输画像；管理员显式选择的 TLS profile 仍优先。API Key WebSocket 由路由决策层强制回落 HTTP，不会因注册表中存在未激活 WS 画像而开启。
 - 效果应以第三方中转站实际收到的上游请求为准，不能只看 usage 页面中的客户端入口 `USER-AGENT`。
 
-`Anthropic-Dangerous-Direct-Browser-Access: true` 在官方 Claude Desktop 原始请求和 mimic 出站请求中均存在，应作为已确认的桌面 Header 保留；该结论来自 2026-07-15 官方 Codex Desktop 0.144.0-alpha.4 与 Claude Desktop `claude-cli/2.1.209` 的入站基准抓包。
+`Anthropic-Dangerous-Direct-Browser-Access: true` 仅作为 Claude Desktop `previous` 画像的历史字段保留；当前 Claude Code CLI `active` 画像以 2026-07-26 API 抓包为准。
 
 ### 1.3 Antigravity 增强
 
@@ -366,10 +383,10 @@ keeper 的调度与失败处理：
 
 Anthropic keeper 通过主服务内部代理转发 Claude CLI 请求。该链路必须遵守以下兼容约束（OpenAI keeper 的内部代理不做 mimic，按 header allowlist 透传官方 Codex CLI 形态，见第 1.2 节入口表，下述约束不适用）：
 
-1. 账号开启 `anthropic_apikey_mimic_claude_code` 时，keeper 的 `/v1/messages` 必须复用账号测试的完整 Desktop mimic 构造链（keeper 内部代理不做官方客户端识别，见第 1.2 节入口表）；同时开启 passthrough 时仍由 mimic 优先。只有 mimic 关闭时才原样转发官方 CLI 请求。
-2. mimic 前必须执行账号模型映射和 `max_tokens` 钳制；真实 CLI 已带的 `cc_entrypoint=sdk-cli`、CLI beta 和固定 SDK system 身份不得原样进入上游。最终 Desktop UA、billing 版本、beta、三段 system、metadata、session 和鉴权规则必须与第 1.2 节“Anthropic / AnyRouter 账号测试要求”一致，CWD 等项目上下文移入 messages 保留。
+1. 账号开启 `anthropic_apikey_mimic_claude_code` 时，keeper 的 `/v1/messages` 必须复用账号测试和正式 Gateway 的当前 Claude Code CLI API Key Profile（keeper 内部代理不做官方客户端识别，见第 1.2 节入口表）；同时开启 passthrough 时仍由 mimic 优先。只有 mimic 关闭时才原样转发官方 CLI 请求。
+2. mimic 前必须执行账号模型映射和 `max_tokens` 钳制；最终 UA、billing 版本、beta、system、metadata、session、cache 和鉴权规则必须由同一 Registry Profile 解析，CWD 等项目上下文移入 messages 保留。
 3. `enable_tls_fingerprint=true` 但未显式选择 `tls_fingerprint_profile_id` 时，内部代理必须使用标准 Transport，不得自动套用内置 Node.js profile；该规则与 Anthropic 账号测试一致。
-4. keeper 的权限限制会使 Claude CLI 只上报 `Read` 等少量工具；AnyRouter 会以 HTTP 429 拒绝该非 Desktop 工具形态。mimic 内部代理必须按第 1.2 节 27 项基线重排工具：保留同名真实工具定义、删除基线外工具、补齐缺失工具；补齐项必须明确标记为不可用，不能因此放开 keeper 的 Shell、写文件或联网权限。
+4. keeper 的权限限制会使 Claude CLI 只上报 `Read` 等少量工具；mimic 内部代理必须按当前官方画像基线重排工具：保留同名真实工具定义、删除基线外工具、补齐缺失工具；补齐项必须明确标记为不可用，不能因此放开 keeper 的 Shell、写文件或联网权限。
 5. Claude CLI 必须使用稳定的 `--name keeper-<账号ID>`，并在真实子进程环境设置 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`。`--name` 只负责会话标识，不能单独关闭自动标题；缺少环境开关时 CLI 仍可能后台发送 `tools=[]`、`thinking=disabled`、带结构化 `output_config` 的标题请求，该请求不属于保活正文，AnyRouter 会以 HTTP 429 拒绝。
 6. 常驻 Claude 子进程必须显式继承 `CLAUDE_CODE_MAX_OUTPUT_TOKENS=<keeper_keepalive_max_output_tokens>`，与主服务请求钳制值保持一致。只把该值写入 `runtime.env` 而未传给 `exec.Command` 的环境，会使 CLI 仍按 64000 token 运行，并把上游的 512 token 截断误判为输出超限。
 7. Claude CLI 版本只能用于判断客户端请求形态，不能把 AnyRouter 的 HTTP 429 直接归因于版本。应使用同一账号和模型对照新版 CLI；若新旧版本均为 429，继续检查内部代理的 TLS、header、body 和上游状态。
@@ -763,8 +780,9 @@ git diff --stat v0.1.164..HEAD
 
 | 范围 | 入口文件 |
 |---|---|
-| OAuth 官方客户端伪装 | `backend/internal/service/official_egress_*.go`（Profile/Resolver、三条路径 Finalizer、Transport/Dialer）、gateway 与 OpenAI WS 转发链中的调用点、`backend/internal/repository/http_upstream.go`、`backend/migrations/187_remove_official_egress_account_settings.sql`、账号创建/编辑组件与 Plus 页面的内置说明文案。 |
-| API Key mimic | `backend/internal/service/*apikey_mimic*`、OpenAI gateway/scheduler/WS 相关 service、`backend/internal/pkg/claude/constants.go`、`backend/internal/pkg/tlsfingerprint/`、`backend/internal/repository/http_upstream.go`、`backend/internal/handler/openai_gateway_handler.go`。 |
+| 官方客户端画像核心 | `backend/internal/service/official_client_profile_registry.go`（ClientBuild、Wire Profile、active/previous、digest 与抓包来源）、`official_egress_profile.go`（激活决策与可逆配置）。 |
+| OAuth 官方客户端伪装 | `backend/internal/service/official_egress_*.go`（Resolver、三条路径 Finalizer、终态校验、Transport/Dialer）、gateway 与 OpenAI WS 转发链中的调用点、`backend/internal/repository/http_upstream.go`。 |
+| API Key mimic | `backend/internal/service/*apikey_mimic*`、OpenAI gateway/scheduler/WS 相关 service、`backend/internal/pkg/tlsfingerprint/`、`backend/internal/repository/http_upstream.go`、`backend/internal/handler/openai_gateway_handler.go`。`backend/internal/pkg/claude/constants.go` 已恢复为上游共享默认值，不再存放 mimic 画像。 |
 | Antigravity | `backend/internal/pkg/antigravity/`、`backend/internal/service/antigravity_*`、`upstream_models.go`、`model_rate_limit.go`、`backend/resources/model-pricing/model_prices_and_context_window.json`。 |
 | 账号保活 | `keeper/`、`backend/internal/handler/admin/account_handler_keeper.go`、`backend/internal/service/*keeper*`、`backend/internal/server/routes/admin.go`。 |
 | Plus UI | `frontend/src/views/admin/ApiKeyMimicSettingsView.vue`、账号 API、路由、侧边栏、i18n、账号创建/编辑和模型白名单相关组件。 |
@@ -774,18 +792,19 @@ git diff --stat v0.1.164..HEAD
 
 合并上游后按第 1 节功能规则重点确认：
 **OAuth 官方客户端伪装**
-- 三条 OAuth 出站路径继续自动命中内置画像，Profile 版本由服务端绑定；账号级开关和版本字段不得回流到 API、数据库或管理端表单。
+- 三条 OAuth 出站路径继续自动命中 Registry 的服务级 `active/previous` 画像；账号级开关和任意版本字段不得回流到 API、数据库或管理端表单。
 - Profile 只在入口端点、目标平台、OAuth 账号、实际出站协议和官方 Host 全部匹配时生效；API Key、其他平台和非模型入口保持原行为。
 - 连接池键继续包含账号、Profile 版本、协议、Host、代理、CA 和 TLS Profile；HTTP 重试重建上下文，WebSocket 握手后冻结账号与身份。
 - 自动透传开关和四种 WS mode 不绕过 Profile，按实际出站协议选择 HTTP 或 WebSocket 画像。
-- 身份来源、Host 与重定向边界受控；校验失败时明确失败并记录脱敏原因，不静默切换画像。
+- Profile ID/digest/source、身份来源和最终 Method/Host/Path 受控；HTTP 禁止自动重定向，校验失败时明确失败并记录脱敏原因，不静默切换或拼装画像。
+- OAuth 冲突配置必须作为 dormant 数据保留；新建或从关闭切到开启的冲突值要显式拒绝，不得在保存时静默删除。
 
 **API Key mimic**
 - Gateway 入站只对非官方客户端触发，官方 Claude / Codex 客户端回到 passthrough 或普通 API Key 逻辑；内部入口按第 1.2 节入口表处理，不做客户端识别；命中 mimic 时关键身份头不被账号 header override 覆盖。
 - Anthropic 使用 mimic 专用完整 beta 列表，不影响普通 API Key；`/v1/messages` 与 `/v1/messages/count_tokens` 保持第 1.2 节的独立构造边界，工具名归一和 per-request reverseMap 只修改结构化工具字段。
-- Anthropic API Key Desktop mimic 默认使用标准 Transport，不得自动套用旧 Claude CLI 2.1.207 / Node.js 26 profile；管理员显式选择的固定或随机 TLS profile 仍优先，平台、账号类型或客户端不匹配时不得套用。
+- Anthropic API Key `active` 使用 Claude Code CLI 2.1.220 的局部 Header/Body/TLS 画像，不得修改 `pkg/claude` 共享常量或 `defaultFingerprint`；管理员显式选择的 TLS profile 仍优先。
 - OpenAI mimic 强制 HTTP，跳过 mimic 后账号调度、previous response 粘连复核和最终转发都恢复普通 WS/HTTP 路由；`/v1/messages` 固定走 Responses mimic，compact 保持上游 JSON 并按需桥接下游 SSE。
-- `desktop_0_144` 为默认 profile，旧 `desktop_0_142` / `codex_desktop_0_142` 仅作为配置兼容别名；Desktop 使用 macOS Codex Desktop UA、`originator` 和动态 turn metadata，未开启 `enable_tls_fingerprint` 时默认不套用 `codex_exec` Rustls profile，并通过标准 Go Transport 走 HTTP/2；`cli_rs_0_125` 保留独立 CLI 回滚路径，管理员显式 TLS profile 继续优先。
+- `codex_exec_0_145` 为默认 profile；`desktop_0_144` 及其旧别名仅属于 `previous`/配置兼容，`cli_rs_0_125` 保留独立历史兼容路径。当前 CLI 画像使用官方 direct/proxy TLS 数据和 HTTP/SSE 路由，管理员显式 TLS profile 继续优先。
 - HTTP/1.1 与 HTTP/2 Transport 均保持 `DisableCompression=true`，避免自动注入 gzip，同时不影响显式压缩响应的受控解压；Responses capability probe 继续按 mimic 状态分键。
 - `CodexBaseInstructionsForModel()` 保持 `gpt-5.5` / `gpt-5.2` 策略，未单独维护 prompt 的后续版本回退到最新版本（当前 GPT-5.5）。
 

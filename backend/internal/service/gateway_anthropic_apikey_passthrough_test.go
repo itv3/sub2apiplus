@@ -838,10 +838,10 @@ func TestGatewayService_AnthropicAPIKeyMimicBuildRequestStripsClientHeadersAndOA
 	require.NotNil(t, req)
 	require.NotNil(t, wireBody)
 	require.Equal(t, "anthropic-key", getHeaderRaw(req.Header, "x-api-key"))
-	require.Equal(t, "Bearer anthropic-key", getHeaderRaw(req.Header, "authorization"))
-	require.Equal(t, claude.DefaultHeaders["User-Agent"], getHeaderRaw(req.Header, "user-agent"))
+	require.Empty(t, getHeaderRaw(req.Header, "authorization"))
+	require.Equal(t, "claude-cli/2.1.220 (external, sdk-cli)", getHeaderRaw(req.Header, "user-agent"))
 	require.Equal(t, "application/json", getHeaderRaw(req.Header, "accept"))
-	require.Equal(t, strings.Join(claude.APIKeyMimicBetas(), ","), getHeaderRaw(req.Header, "anthropic-beta"))
+	require.Equal(t, defaultAPIKeyMimicBetaHeader(wireBody), getHeaderRaw(req.Header, "anthropic-beta"))
 	require.NotContains(t, getHeaderRaw(req.Header, "anthropic-beta"), claude.BetaOAuth)
 	require.Empty(t, getHeaderRaw(req.Header, "x-client-request-id"))
 	require.Empty(t, getHeaderRaw(req.Header, "x-stainless-helper-method"))
@@ -904,7 +904,9 @@ func TestGatewayService_AnthropicAPIKeyMimicSkipsTLSWhenRequestProfileDisabled(t
 	}
 
 	require.Nil(t, svc.resolveAnthropicTLSProfileForRequest(account, false))
-	require.Nil(t, svc.resolveAnthropicTLSProfileForRequest(account, true))
+	profile := svc.resolveAnthropicTLSProfileForRequest(account, true)
+	require.NotNil(t, profile)
+	require.Contains(t, profile.Name, "Claude Code 2.1.220")
 }
 
 func TestGatewayService_AnthropicAPIKeyMimicRewritesThirdPartyBodyToClaudeCodeShape(t *testing.T) {
@@ -939,7 +941,7 @@ func TestGatewayService_AnthropicAPIKeyMimicRewritesThirdPartyBodyToClaudeCodeSh
 	require.NoError(t, err)
 	require.NotNil(t, req)
 	require.NotContains(t, getHeaderRaw(req.Header, "anthropic-beta"), claude.BetaOAuth)
-	require.Equal(t, strings.Join(claude.APIKeyMimicBetasWithContext1M(), ","), getHeaderRaw(req.Header, "anthropic-beta"))
+	require.Equal(t, defaultAPIKeyMimicBetaHeader(wireBody), getHeaderRaw(req.Header, "anthropic-beta"))
 	require.Empty(t, getHeaderRaw(req.Header, "x-client-request-id"))
 	require.Empty(t, getHeaderRaw(req.Header, "x-stainless-helper-method"))
 
@@ -953,7 +955,7 @@ func TestGatewayService_AnthropicAPIKeyMimicRewritesThirdPartyBodyToClaudeCodeSh
 	require.True(t, system.IsArray())
 	require.Len(t, system.Array(), 3)
 	require.Contains(t, system.Get("0.text").String(), "x-anthropic-billing-header:")
-	require.Contains(t, system.Get("0.text").String(), "cc_entrypoint=claude-desktop-3p")
+	require.Contains(t, system.Get("0.text").String(), "cc_entrypoint=sdk-cli")
 	require.NotContains(t, system.Get("0.text").String(), "cch=00000")
 	require.Equal(t, claudeSDKCLIIdentityPrompt, system.Get("1.text").String())
 	require.Equal(t, claudeCodeSystemPromptExpansion, system.Get("2.text").String())
@@ -965,7 +967,7 @@ func TestGatewayService_AnthropicAPIKeyMimicRewritesThirdPartyBodyToClaudeCodeSh
 	require.True(t, gjson.GetBytes(wireBody, "tools").IsArray())
 	require.Equal(t, "kilo_read_file", gjson.GetBytes(wireBody, "tools.0.name").String())
 	require.Equal(t, "kilo_read_file", gjson.GetBytes(wireBody, "tool_choice.name").String())
-	require.Equal(t, "ephemeral", gjson.GetBytes(wireBody, "tools.0.cache_control.type").String())
+	require.False(t, gjson.GetBytes(wireBody, "tools.0.cache_control").Exists())
 	require.False(t, gjson.GetBytes(wireBody, "temperature").Exists())
 	require.Equal(t, float64(128000), gjson.GetBytes(wireBody, "max_tokens").Num)
 }
@@ -1007,7 +1009,7 @@ func TestGatewayService_AnthropicAPIKeyMimicRenamesKiloTodoWriteTool(t *testing.
 	require.Equal(t, "TodoWrite", gjson.GetBytes(wireBody, "messages.0.content.0.name").String())
 	require.Equal(t, "TodoWrite", gjson.GetBytes(wireBody, "messages.0.content.1.tool_name").String())
 	require.Equal(t, "TodoWrite", gjson.GetBytes(wireBody, "messages.1.content.0.content.0.tool_name").String())
-	require.Equal(t, "ephemeral", gjson.GetBytes(wireBody, "tools.0.cache_control.type").String())
+	require.False(t, gjson.GetBytes(wireBody, "tools.0.cache_control").Exists())
 
 	restored := reverseToolNamesIfPresent(c, []byte(`{"content":[{"type":"tool_use","id":"tu_2","name":"TodoWrite","input":{}}]}`))
 	require.Equal(t, "todowrite", gjson.GetBytes(restored, "content.0.name").String())
@@ -1160,7 +1162,11 @@ func TestGatewayService_AnthropicAPIKeyMimicEnforcesFinalCacheControlLimit(t *te
 	req, wireBody, err := svc.buildUpstreamRequest(context.Background(), c, account, body, "anthropic-key", "apikey", "claude-opus-4-8", true, false)
 	require.NoError(t, err)
 	require.NotNil(t, req)
-	require.Equal(t, 4, strings.Count(string(wireBody), `"cache_control"`))
+	require.Equal(t, 3, strings.Count(string(wireBody), `"cache_control"`))
+	require.Equal(t, "ephemeral", gjson.GetBytes(wireBody, "system.1.cache_control.type").String())
+	require.Equal(t, "ephemeral", gjson.GetBytes(wireBody, "system.2.cache_control.type").String())
+	require.Equal(t, "ephemeral", gjson.GetBytes(wireBody, "messages.2.content.2.cache_control.type").String())
+	require.NotContains(t, string(wireBody), `"ttl"`)
 }
 
 func TestGatewayService_AnthropicOAuthMimic_RewritesSystemWithBillingBlock(t *testing.T) {
@@ -1252,8 +1258,8 @@ func TestGatewayService_AnthropicOAuthMimic_RewritesSystemWithBillingBlock(t *te
 			finalBeta := getHeaderRaw(upstream.lastReq.Header, "anthropic-beta")
 			require.Equal(t, officialAnthropicBetaHeader, finalBeta)
 			require.False(t, anthropicBetaTokensContains(finalBeta, "client-only-beta"))
-			for _, expected := range officialAnthropicPhase0Headers {
-				require.Equal(t, expected.value, getHeaderRaw(upstream.lastReq.Header, expected.name), "官方画像 Header %s", expected.name)
+			for _, expected := range officialAnthropicCurrentTestHeaders(t) {
+				require.Equal(t, expected.Value, getHeaderRaw(upstream.lastReq.Header, expected.Name), "官方画像 Header %s", expected.Name)
 			}
 			require.NoError(t, uuid.Validate(getHeaderRaw(upstream.lastReq.Header, "x-client-request-id")))
 
@@ -1349,8 +1355,8 @@ func TestGatewayService_AnthropicOAuthRealClaudeCodeHaiku_NormalizesToBuiltInPro
 	require.NotNil(t, upstream.lastReq)
 	require.Equal(t, officialAnthropicUserAgent, getHeaderRaw(upstream.lastReq.Header, "User-Agent"))
 	require.Equal(t, officialAnthropicBetaHeader, getHeaderRaw(upstream.lastReq.Header, "anthropic-beta"))
-	for _, expected := range officialAnthropicPhase0Headers {
-		require.Equal(t, expected.value, getHeaderRaw(upstream.lastReq.Header, expected.name), expected.name)
+	for _, expected := range officialAnthropicCurrentTestHeaders(t) {
+		require.Equal(t, expected.Value, getHeaderRaw(upstream.lastReq.Header, expected.Name), expected.Name)
 	}
 	require.NoError(t, uuid.Validate(getHeaderRaw(upstream.lastReq.Header, "x-client-request-id")))
 	require.Equal(t, int64(4), gjson.GetBytes(upstream.lastBody, "system.#").Int())

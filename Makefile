@@ -1,4 +1,4 @@
-.PHONY: build build-backend build-frontend test test-backend test-frontend test-frontend-critical
+.PHONY: build build-backend build-frontend test test-backend test-frontend test-frontend-critical test-capture-tools
 
 FRONTEND_CRITICAL_VITEST := \
 	src/views/auth/__tests__/LinuxDoCallbackView.spec.ts \
@@ -20,7 +20,7 @@ build-frontend:
 	@pnpm --dir frontend run build
 
 # 运行测试（后端 + 前端）
-test: test-backend test-frontend
+test: test-backend test-frontend test-capture-tools
 
 test-backend:
 	@$(MAKE) -C backend test
@@ -32,3 +32,8 @@ test-frontend:
 
 test-frontend-critical:
 	@pnpm --dir frontend exec vitest run $(FRONTEND_CRITICAL_VITEST)
+
+# 抓包工具测试只使用标准库和合成数据，不联网、不读取真实凭据、不启动抓包进程。
+test-capture-tools:
+	@PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+		-s tools/official_client_capture/tests -p 'test_*.py'

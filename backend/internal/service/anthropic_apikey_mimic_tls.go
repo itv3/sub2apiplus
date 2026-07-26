@@ -1,6 +1,7 @@
 package service
 
 import (
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 )
 
@@ -10,6 +11,7 @@ func resolveAnthropicTLSProfileForRequest(
 	account *Account,
 	mimicAPIKeyClaudeCode bool,
 	tlsFPProfileService *TLSFingerprintProfileService,
+	configs ...*config.Config,
 ) *tlsfingerprint.Profile {
 	if account == nil {
 		return nil
@@ -21,6 +23,14 @@ func resolveAnthropicTLSProfileForRequest(
 		}
 
 		if account.GetTLSFingerprintProfileID() == 0 {
+			mode := officialClientProfileModeActive
+			if len(configs) > 0 {
+				mode = officialClientProfileModeFromConfig(configs[0])
+			}
+			if mode == officialClientProfileModeActive {
+				return newAnthropicOfficialEgressTLSProfile()
+			}
+			// 旧 Desktop 画像没有可复用的当前 Linux CLI 实抓 TLS，保持原行为。
 			return nil
 		}
 	}

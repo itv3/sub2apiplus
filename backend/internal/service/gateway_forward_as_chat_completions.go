@@ -97,7 +97,7 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	// 见 applyClaudeOAuthThirdPartyCompatibilityToBody 的 godoc。
 	isClaudeCode := false
 	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCode
-	officialEgressOwnsProfile, configErr := resolveAnthropicOfficialEgressOwnership(account, c)
+	officialEgressOwnsProfile, configErr := resolveAnthropicOfficialEgressOwnership(account, c, s.cfg)
 	if configErr != nil {
 		return nil, fmt.Errorf("resolve Anthropic official egress ownership: %w", configErr)
 	}

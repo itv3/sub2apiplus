@@ -177,7 +177,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 	// Official Egress 开启后，system/cache/metadata 只能由发送前的 Finalizer
 	// 写入。旧兼容层仍负责模型和工具名等语义兼容，但不能再提前塑造画像字段。
-	officialEgressOwnsProfile, configErr := resolveAnthropicOfficialEgressOwnership(account, c)
+	officialEgressOwnsProfile, configErr := resolveAnthropicOfficialEgressOwnership(account, c, s.cfg)
 	if configErr != nil {
 		return nil, fmt.Errorf("resolve Anthropic official egress ownership: %w", configErr)
 	}

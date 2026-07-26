@@ -42,32 +42,32 @@ func newBetaPolicySettingServiceWithActionForTest(t *testing.T, token, action st
 func TestDefaultAPIKeyMimicBetaHeaderSelectsTerminalBetaFromFinalBody(t *testing.T) {
 	t.Run("普通请求使用 fallback-credit", func(t *testing.T) {
 		header := defaultAPIKeyMimicBetaHeader([]byte(`{"model":"claude-sonnet-4-5","messages":[]}`))
-		require.True(t, anthropicBetaTokensContains(header, claude.BetaFallbackCredit))
-		require.False(t, anthropicBetaTokensContains(header, claude.BetaStructuredOutputs))
+		require.False(t, anthropicBetaTokensContains(header, AnthropicAPIKeyBetaFallbackCredit))
+		require.False(t, anthropicBetaTokensContains(header, AnthropicAPIKeyBetaStructuredOutputs))
 	})
 
 	t.Run("不相关的 output_config 不触发 structured-outputs", func(t *testing.T) {
 		header := defaultAPIKeyMimicBetaHeader([]byte(`{"model":"claude-sonnet-4-5","output_config":{"effort":"high"},"messages":[]}`))
-		require.True(t, anthropicBetaTokensContains(header, claude.BetaFallbackCredit))
-		require.False(t, anthropicBetaTokensContains(header, claude.BetaStructuredOutputs))
+		require.False(t, anthropicBetaTokensContains(header, AnthropicAPIKeyBetaFallbackCredit))
+		require.False(t, anthropicBetaTokensContains(header, AnthropicAPIKeyBetaStructuredOutputs))
 	})
 
 	t.Run("大小写错误或非法类型不触发 structured-outputs", func(t *testing.T) {
 		upperCase := defaultAPIKeyMimicBetaHeader([]byte(`{"model":"claude-sonnet-4-5","output_config":{"format":{"type":"JSON_SCHEMA"}},"messages":[]}`))
 		illegalType := defaultAPIKeyMimicBetaHeader([]byte(`{"model":"claude-sonnet-4-5","output_config":{"format":{"type":123}},"messages":[]}`))
-		require.True(t, anthropicBetaTokensContains(upperCase, claude.BetaFallbackCredit))
-		require.False(t, anthropicBetaTokensContains(upperCase, claude.BetaStructuredOutputs))
-		require.True(t, anthropicBetaTokensContains(illegalType, claude.BetaFallbackCredit))
-		require.False(t, anthropicBetaTokensContains(illegalType, claude.BetaStructuredOutputs))
+		require.False(t, anthropicBetaTokensContains(upperCase, AnthropicAPIKeyBetaFallbackCredit))
+		require.False(t, anthropicBetaTokensContains(upperCase, AnthropicAPIKeyBetaStructuredOutputs))
+		require.False(t, anthropicBetaTokensContains(illegalType, AnthropicAPIKeyBetaFallbackCredit))
+		require.False(t, anthropicBetaTokensContains(illegalType, AnthropicAPIKeyBetaStructuredOutputs))
 	})
 
 	t.Run("结构化输出使用 structured-outputs 并保持 context-1m 位置", func(t *testing.T) {
 		header := defaultAPIKeyMimicBetaHeader([]byte(`{"model":"claude-fable-5","output_config":{"format":{"type":"json_schema"}},"messages":[]}`))
 		tokens := parseAnthropicBetaHeader(header)
-		require.True(t, anthropicBetaTokensContains(header, claude.BetaStructuredOutputs))
-		require.False(t, anthropicBetaTokensContains(header, claude.BetaFallbackCredit))
-		require.Equal(t, claude.BetaContext1M, tokens[1])
-		require.Equal(t, claude.BetaStructuredOutputs, tokens[len(tokens)-1])
+		require.True(t, anthropicBetaTokensContains(header, AnthropicAPIKeyBetaStructuredOutputs))
+		require.False(t, anthropicBetaTokensContains(header, AnthropicAPIKeyBetaFallbackCredit))
+		require.Contains(t, tokens, claude.BetaContext1M)
+		require.Equal(t, AnthropicAPIKeyBetaStructuredOutputs, tokens[len(tokens)-1])
 		seen := make(map[string]struct{}, len(tokens))
 		for _, token := range tokens {
 			_, duplicated := seen[token]
@@ -76,18 +76,17 @@ func TestDefaultAPIKeyMimicBetaHeaderSelectsTerminalBetaFromFinalBody(t *testing
 		}
 	})
 
-	t.Run("Haiku 保持精简 beta 特殊路径", func(t *testing.T) {
+	t.Run("Haiku 使用当前 CLI 完整 beta 画像", func(t *testing.T) {
 		header := defaultAPIKeyMimicBetaHeader([]byte(`{"model":"claude-haiku-4-5","output_config":{"format":{"type":"json_schema"}},"messages":[]}`))
-		require.Equal(t, claude.APIKeyHaikuBetaHeader, header)
-		require.False(t, anthropicBetaTokensContains(header, claude.BetaStructuredOutputs))
-		require.False(t, anthropicBetaTokensContains(header, claude.BetaFallbackCredit))
+		require.True(t, anthropicBetaTokensContains(header, AnthropicAPIKeyBetaStructuredOutputs))
+		require.False(t, anthropicBetaTokensContains(header, AnthropicAPIKeyBetaFallbackCredit))
 	})
 
 	t.Run("count_tokens 暂不扩展结构化输出条件规则", func(t *testing.T) {
 		header := defaultAPIKeyCountTokensMimicBetaHeader([]byte(`{"model":"claude-sonnet-4-5","output_config":{"format":{"type":"json_schema"}},"messages":[]}`))
-		require.True(t, anthropicBetaTokensContains(header, claude.BetaFallbackCredit))
+		require.False(t, anthropicBetaTokensContains(header, AnthropicAPIKeyBetaFallbackCredit))
 		require.True(t, anthropicBetaTokensContains(header, claude.BetaTokenCounting))
-		require.False(t, anthropicBetaTokensContains(header, claude.BetaStructuredOutputs))
+		require.False(t, anthropicBetaTokensContains(header, AnthropicAPIKeyBetaStructuredOutputs))
 	})
 }
 
@@ -100,7 +99,7 @@ func TestGatewayServiceAnthropicAPIKeyMimicRejectsStructuredOutputsWhenRequiredB
 
 	svc := &GatewayService{
 		cfg:            &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}},
-		settingService: newBetaPolicySettingServiceWithActionForTest(t, claude.BetaStructuredOutputs, BetaPolicyActionFilter),
+		settingService: newBetaPolicySettingServiceWithActionForTest(t, AnthropicAPIKeyBetaStructuredOutputs, BetaPolicyActionFilter),
 	}
 	account := &Account{
 		ID:       303,
@@ -118,7 +117,7 @@ func TestGatewayServiceAnthropicAPIKeyMimicRejectsStructuredOutputsWhenRequiredB
 	require.Error(t, err)
 	var blocked *BetaBlockedError
 	require.ErrorAs(t, err, &blocked)
-	require.Contains(t, blocked.Message, claude.BetaStructuredOutputs)
+	require.Contains(t, blocked.Message, AnthropicAPIKeyBetaStructuredOutputs)
 	require.Contains(t, blocked.Message, "过滤策略")
 }
 
@@ -340,7 +339,7 @@ func TestAnthropicAPIKeySDKCLIIdentityOnlyRewritesGeneratedBlocks(t *testing.T) 
 	body := []byte(`{"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.207.abc; cc_entrypoint=cli;"},{"type":"text","text":"You are Claude Code, Anthropic's official CLI for Claude."},{"type":"text","text":"用户自定义：cc_entrypoint=cli;"}]}`)
 	out := applyAnthropicAPIKeySDKCLIIdentity(body)
 
-	require.Contains(t, gjson.GetBytes(out, "system.0.text").String(), "cc_entrypoint=claude-desktop-3p;")
+	require.Contains(t, gjson.GetBytes(out, "system.0.text").String(), "cc_entrypoint=sdk-cli;")
 	require.Equal(t, claudeSDKCLIIdentityPrompt, gjson.GetBytes(out, "system.1.text").String())
 	require.Equal(t, "用户自定义：cc_entrypoint=cli;", gjson.GetBytes(out, "system.2.text").String())
 }

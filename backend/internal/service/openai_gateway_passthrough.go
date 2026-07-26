@@ -508,7 +508,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthroughWithPlan(
 	// 账号级请求头覆写（仅 openai api_key 账号启用时生效；OAuth 路径 no-op）
 	account.ApplyHeaderOverrides(req.Header)
 
-	req, err = attachOfficialEgressHTTPContext(req, c, account, PlatformOpenAI)
+	req, err = attachOfficialEgressHTTPContext(req, c, account, PlatformOpenAI, s.cfg)
 	if err != nil {
 		return nil, fmt.Errorf("resolve official egress profile: %w", err)
 	}

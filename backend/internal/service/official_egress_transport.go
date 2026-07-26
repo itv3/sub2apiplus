@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	utls "github.com/refraction-networking/utls"
@@ -30,14 +31,13 @@ func (anthropicOfficialEgressHTTPTransportProvider) Resolve(
 ) (OfficialEgressTransportSelection, error) {
 	if err := validateOfficialEgressTransportContext(
 		egressContext,
-		officialEgressTransportProfileAnthropicHTTP,
 		OfficialEgressTransportHTTP,
 		false,
 	); err != nil {
 		return OfficialEgressTransportSelection{}, err
 	}
 	return OfficialEgressTransportSelection{
-		ProfileID:  officialEgressTransportProfileAnthropicHTTP,
+		ProfileID:  egressContext.transportProfileID,
 		TLSProfile: newAnthropicOfficialEgressTLSProfile(),
 	}, nil
 }
@@ -47,14 +47,13 @@ func (openAIOfficialEgressHTTPTransportProvider) Resolve(
 ) (OfficialEgressTransportSelection, error) {
 	if err := validateOfficialEgressTransportContext(
 		egressContext,
-		officialEgressTransportProfileOpenAIHTTP,
 		OfficialEgressTransportHTTP,
 		false,
 	); err != nil {
 		return OfficialEgressTransportSelection{}, err
 	}
 	return OfficialEgressTransportSelection{
-		ProfileID:  officialEgressTransportProfileOpenAIHTTP,
+		ProfileID:  egressContext.transportProfileID,
 		TLSProfile: newOpenAIOfficialEgressHTTPTLSProfile(),
 	}, nil
 }
@@ -64,14 +63,13 @@ func (openAIOfficialEgressWebSocketTransportProvider) Resolve(
 ) (OfficialEgressTransportSelection, error) {
 	if err := validateOfficialEgressTransportContext(
 		egressContext,
-		officialEgressTransportProfileOpenAIWS,
 		OfficialEgressTransportWebSocket,
 		true,
 	); err != nil {
 		return OfficialEgressTransportSelection{}, err
 	}
 	return OfficialEgressTransportSelection{
-		ProfileID:  officialEgressTransportProfileOpenAIWS,
+		ProfileID:  egressContext.transportProfileID,
 		TLSProfile: newOpenAIOfficialEgressWebSocketTLSProfile(),
 	}, nil
 }
@@ -82,12 +80,12 @@ func resolveOfficialEgressTransportProvider(
 	if egressContext == nil {
 		return nil, errors.New("official egress transport context is nil")
 	}
-	switch egressContext.transportProfileID {
-	case officialEgressTransportProfileAnthropicHTTP:
+	switch {
+	case egressContext.targetPlatform == PlatformAnthropic && egressContext.transport == OfficialEgressTransportHTTP:
 		return anthropicOfficialEgressHTTPTransportProvider{}, nil
-	case officialEgressTransportProfileOpenAIHTTP:
+	case egressContext.targetPlatform == PlatformOpenAI && egressContext.transport == OfficialEgressTransportHTTP:
 		return openAIOfficialEgressHTTPTransportProvider{}, nil
-	case officialEgressTransportProfileOpenAIWS:
+	case egressContext.targetPlatform == PlatformOpenAI && egressContext.transport == OfficialEgressTransportWebSocket:
 		return openAIOfficialEgressWebSocketTransportProvider{}, nil
 	default:
 		return nil, fmt.Errorf(
@@ -130,6 +128,9 @@ func resolveOfficialEgressHTTPTransportProfile(
 	if egressContext.transport != OfficialEgressTransportHTTP {
 		return nil, true, errors.New("official egress HTTP request contains non-HTTP context")
 	}
+	if err := validateOfficialEgressHTTPRequest(req, egressContext); err != nil {
+		return nil, true, err
+	}
 	selection, err := resolveOfficialEgressTransportSelection(egressContext)
 	if err != nil {
 		return nil, true, err
@@ -155,15 +156,16 @@ func resolveOfficialEgressWebSocketTransportProfile(
 
 func validateOfficialEgressTransportContext(
 	egressContext *OfficialEgressContext,
-	profileID string,
 	transport OfficialEgressTransport,
 	requireFrozen bool,
 ) error {
 	if egressContext == nil {
 		return errors.New("official egress transport context is nil")
 	}
-	if egressContext.transportProfileID != profileID {
-		return errors.New("official egress transport profile conflicts with resolved context")
+	if strings.TrimSpace(egressContext.transportProfileID) == "" ||
+		strings.TrimSpace(egressContext.clientProfileID) == "" ||
+		strings.TrimSpace(egressContext.clientProfileDigest) == "" {
+		return errors.New("official egress transport profile is incomplete")
 	}
 	if egressContext.transport != transport {
 		return errors.New("official egress transport type conflicts with resolved context")
@@ -177,11 +179,11 @@ func validateOfficialEgressTransportContext(
 	return nil
 }
 
-// newAnthropicOfficialEgressTLSProfile 复现 Claude Code 2.1.218 阶段 0
+// newAnthropicOfficialEgressTLSProfile 复现 Claude Code 2.1.220
 // 目标请求的 Node.js ClientHello：17 个 cipher、HTTP/1.1 ALPN。
 func newAnthropicOfficialEgressTLSProfile() *tlsfingerprint.Profile {
 	return &tlsfingerprint.Profile{
-		Name: "Official Claude Code 2.1.218 HTTP (phase0-2026-07-24)",
+		Name: "Official Claude Code 2.1.220 HTTP (capture-2026-07-26)",
 		CipherSuites: []uint16{
 			0x1301, 0x1302, 0x1303,
 			0xc02b, 0xc02f, 0xc02c, 0xc030,
@@ -206,7 +208,7 @@ func newAnthropicOfficialEgressTLSProfile() *tlsfingerprint.Profile {
 // Responses HTTP 的 30-cipher、空 ALPN ClientHello。
 func newOpenAIOfficialEgressHTTPTLSProfile() *tlsfingerprint.Profile {
 	return &tlsfingerprint.Profile{
-		Name:      "Official Codex CLI 0.145.0 HTTP (phase0-2026-07-24)",
+		Name:      "Official Codex CLI 0.145.0 HTTP (capture-2026-07-26)",
 		Transport: tlsfingerprint.TransportOptions{DisableCompression: true},
 		CipherSuites: []uint16{
 			0x1302, 0x1303, 0x1301,

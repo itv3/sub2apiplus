@@ -8,7 +8,6 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -79,7 +78,7 @@ func TestProxyKeeperOpenAIAccountRejectsNonAPIKeyAccount(t *testing.T) {
 	require.Contains(t, err.Error(), "OpenAI API key account")
 }
 
-func TestProxyKeeperAnthropicAccountMimicTakesPriorityAndUsesStandardTransport(t *testing.T) {
+func TestProxyKeeperAnthropicAccountMimicTakesPriorityAndUsesCurrentCLITLS(t *testing.T) {
 	account := &Account{
 		ID:          42,
 		Platform:    PlatformAnthropic,
@@ -120,20 +119,21 @@ func TestProxyKeeperAnthropicAccountMimicTakesPriorityAndUsesStandardTransport(t
 	})
 	require.NoError(t, err)
 	require.NotNil(t, resp)
-	require.Equal(t, 1, upstream.standardCalls)
-	require.Zero(t, upstream.tlsCalls)
-	require.Nil(t, upstream.tlsProfile)
+	require.Zero(t, upstream.standardCalls)
+	require.Equal(t, 1, upstream.tlsCalls)
+	require.NotNil(t, upstream.tlsProfile)
+	require.Contains(t, upstream.tlsProfile.Name, "Claude Code 2.1.220")
 	require.NotNil(t, upstream.lastRequest)
-	require.Equal(t, "claude-cli/2.1.209 (external, claude-desktop-3p, agent-sdk/0.3.209)", getHeaderRaw(upstream.lastRequest.Header, "User-Agent"))
-	require.Equal(t, strings.Join(claude.APIKeyMimicBetas(), ","), getHeaderRaw(upstream.lastRequest.Header, "anthropic-beta"))
+	require.Equal(t, "claude-cli/2.1.220 (external, sdk-cli)", getHeaderRaw(upstream.lastRequest.Header, "User-Agent"))
+	require.Equal(t, defaultAPIKeyMimicBetaHeader(upstream.lastBody), getHeaderRaw(upstream.lastRequest.Header, "anthropic-beta"))
 	require.Equal(t, int64(512), gjson.GetBytes(upstream.lastBody, "max_tokens").Int())
 	require.Len(t, gjson.GetBytes(upstream.lastBody, "system").Array(), 3)
-	require.Contains(t, gjson.GetBytes(upstream.lastBody, "system.0.text").String(), "cc_entrypoint=claude-desktop-3p")
-	require.Contains(t, gjson.GetBytes(upstream.lastBody, "system.0.text").String(), "cc_version=2.1.209.")
+	require.Contains(t, gjson.GetBytes(upstream.lastBody, "system.0.text").String(), "cc_entrypoint=sdk-cli")
+	require.Contains(t, gjson.GetBytes(upstream.lastBody, "system.0.text").String(), "cc_version=2.1.220.")
 	require.Equal(t, claudeSDKCLIIdentityPrompt, gjson.GetBytes(upstream.lastBody, "system.1.text").String())
 	require.Equal(t, claudeCodeSystemPromptExpansion, gjson.GetBytes(upstream.lastBody, "system.2.text").String())
 	require.Contains(t, gjson.GetBytes(upstream.lastBody, "messages.0.content.0.text").String(), "CWD: /workspace/projects/ai-keeper")
-	require.NotContains(t, string(upstream.lastBody), "cc_entrypoint=sdk-cli")
+	require.NotContains(t, string(upstream.lastBody), "cc_entrypoint=claude-desktop-3p")
 	tools := gjson.GetBytes(upstream.lastBody, "tools").Array()
 	require.Len(t, tools, len(anthropicAPIKeyMimicTestToolNames))
 	for i, name := range anthropicAPIKeyMimicTestToolNames {

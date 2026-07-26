@@ -81,6 +81,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			account,
 			officialEgressWSURL,
 			firstClientMessage,
+			s.cfg,
 		)
 		if buildErr != nil {
 			return fmt.Errorf("resolve official egress profile: %w", buildErr)

@@ -3,7 +3,7 @@ package service
 import "net/http"
 
 const (
-	// Codex API Key mimic 抓包基线：Codex Desktop 0.144.0-alpha.4，2026-07。
+	// previous 回退画像：Codex Desktop 0.144.0-alpha.4，2026-07。
 	codexDesktopOriginator   = "Codex Desktop"
 	codexDesktopUserAgent    = "Codex Desktop/0.144.0-alpha.4 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.707.51957)"
 	codexDesktopBetaFeatures = "remote_compaction_v2"
@@ -24,11 +24,15 @@ func applyOpenAIAPIKeyCodexMimicHeaders(req *http.Request, isStream bool, scopes
 	deleteHeaderAllForms(req.Header, "conversation_id")
 	deleteHeaderAllForms(req.Header, "x-codex-turn-state")
 	deleteHeaderAllForms(req.Header, "x-codex-turn-metadata")
-	if client.IsDesktop {
+	deleteHeaderAllForms(req.Header, "x-codex-beta-features")
+	deleteHeaderAllForms(req.Header, "x-openai-internal-codex-responses-lite")
+	for _, item := range client.StaticHeaders {
+		setHeaderRaw(req.Header, item.Name, item.Value)
+	}
+	if client.RequiresMetadata {
 		deleteHeaderAllForms(req.Header, "OpenAI-Beta")
 		deleteHeaderAllForms(req.Header, "version")
-		metadata := buildOpenAIAPIKeyCodexDesktopMetadata(scope)
-		req.Header.Set("x-codex-beta-features", client.BetaFeatures)
+		metadata := buildOpenAIAPIKeyCodexClientMetadata(scope)
 		req.Header.Set("x-client-request-id", metadata.SessionID)
 		req.Header.Set("session-id", metadata.SessionID)
 		req.Header.Set("thread-id", metadata.ThreadID)

@@ -29,7 +29,7 @@ func (r *openAIHTTPUpstreamChoiceRecorder) DoWithTLS(_ *http.Request, _ string, 
 	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("{}"))}, nil
 }
 
-func TestResolveOpenAIAPIKeyCodexTLSProfileUsesCapturedDesktopDefault(t *testing.T) {
+func TestResolveOpenAIAPIKeyCodexTLSProfileUsesCurrentCLIDefault(t *testing.T) {
 	account := &Account{
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeAPIKey,
@@ -40,11 +40,10 @@ func TestResolveOpenAIAPIKeyCodexTLSProfileUsesCapturedDesktopDefault(t *testing
 	}
 	got := resolveOpenAIAPIKeyCodexTLSProfile(account, &TLSFingerprintProfileService{})
 	require.NotNil(t, got)
-	require.Contains(t, got.Name, "Codex 0.144.1")
-	require.Equal(t, []uint16{11, 0, 5, 43, 13, 51, 16, 23, 35, 45, 10}, got.Extensions)
-	require.Equal(t, []string{"h2", "http/1.1"}, got.ALPNProtocols)
-	require.Equal(t, []uint16{0x11ec, 0x001d, 0x0017, 0x0018}, got.Curves)
-	require.Equal(t, []uint16{0x11ec, 0x001d}, got.KeyShareGroups)
+	require.Contains(t, got.Name, "Codex CLI 0.145.0")
+	require.Len(t, got.CipherSuites, 30)
+	require.Empty(t, got.ALPNProtocols)
+	require.Equal(t, []uint16{0x11ec, 0x001d, 0x0017, 0x001e, 0x0018, 0x0019, 0x0100, 0x0101}, got.Curves)
 	require.Equal(t, uint16(0x0303), got.TLSVersMin)
 	require.Equal(t, uint16(0x0304), got.TLSVersMax)
 	require.True(t, got.Transport.DisableCompression)
@@ -52,7 +51,7 @@ func TestResolveOpenAIAPIKeyCodexTLSProfileUsesCapturedDesktopDefault(t *testing
 	account.Extra["tls_fingerprint_profile_id"] = int64(42)
 	got = resolveOpenAIAPIKeyCodexTLSProfile(account, &TLSFingerprintProfileService{})
 	require.NotNil(t, got)
-	require.Contains(t, got.Name, "Codex 0.144.1")
+	require.Contains(t, got.Name, "Codex CLI 0.145.0")
 
 	svc := &TLSFingerprintProfileService{
 		localCache: map[int64]*model.TLSFingerprintProfile{
@@ -70,7 +69,7 @@ func TestResolveOpenAIAPIKeyCodexTLSProfileUsesCapturedDesktopDefault(t *testing
 	require.False(t, got.Transport.DisableCompression)
 }
 
-func TestResolveOpenAIAPIKeyCodexTLSProfileUsesCLIDefaultWhenRequested(t *testing.T) {
+func TestResolveOpenAIAPIKeyCodexTLSProfileIgnoresDormantAccountProfile(t *testing.T) {
 	account := &Account{
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeAPIKey,
@@ -83,13 +82,13 @@ func TestResolveOpenAIAPIKeyCodexTLSProfileUsesCLIDefaultWhenRequested(t *testin
 
 	got := resolveOpenAIAPIKeyCodexTLSProfile(account, &TLSFingerprintProfileService{})
 	require.NotNil(t, got)
-	require.Equal(t, "Built-in Default (Node.js 24.x)", got.Name)
-	require.Empty(t, got.CipherSuites)
-	require.Empty(t, got.Extensions)
-	require.False(t, got.Transport.DisableCompression)
+	require.Contains(t, got.Name, "Codex CLI 0.145.0")
+	require.Len(t, got.CipherSuites, 30)
+	require.NotEmpty(t, got.Extensions)
+	require.True(t, got.Transport.DisableCompression)
 }
 
-func TestDoOpenAIHTTPUpstreamUsesCapturedDesktopTLSProfileByDefault(t *testing.T) {
+func TestDoOpenAIHTTPUpstreamUsesCurrentCLITLSProfileByDefault(t *testing.T) {
 	account := &Account{
 		ID:       1,
 		Platform: PlatformOpenAI,
@@ -109,8 +108,8 @@ func TestDoOpenAIHTTPUpstreamUsesCapturedDesktopTLSProfileByDefault(t *testing.T
 	require.False(t, recorder.doCalled)
 	require.True(t, recorder.doWithTLSCalled)
 	require.NotNil(t, recorder.lastTLSProfile)
-	require.Contains(t, recorder.lastTLSProfile.Name, "Codex 0.144.1")
-	require.Equal(t, []string{"h2", "http/1.1"}, recorder.lastTLSProfile.ALPNProtocols)
+	require.Contains(t, recorder.lastTLSProfile.Name, "Codex CLI 0.145.0")
+	require.Empty(t, recorder.lastTLSProfile.ALPNProtocols)
 	require.Equal(t, []uint16{utls.VersionTLS13, utls.VersionTLS12}, recorder.lastTLSProfile.SupportedVersions)
 	require.Equal(t, uint16(0x0304), recorder.lastTLSProfile.TLSVersMax)
 
@@ -130,7 +129,7 @@ func TestDoOpenAIHTTPUpstreamUsesCapturedDesktopTLSProfileByDefault(t *testing.T
 	require.Equal(t, "captured-codex", recorder.lastTLSProfile.Name)
 }
 
-func TestDoOpenAIHTTPUpstreamUsesCLITLSProfileWhenRequested(t *testing.T) {
+func TestDoOpenAIHTTPUpstreamIgnoresDormantAccountProfile(t *testing.T) {
 	account := &Account{
 		ID:       2,
 		Platform: PlatformOpenAI,
@@ -151,7 +150,7 @@ func TestDoOpenAIHTTPUpstreamUsesCLITLSProfileWhenRequested(t *testing.T) {
 	require.False(t, recorder.doCalled)
 	require.True(t, recorder.doWithTLSCalled)
 	require.NotNil(t, recorder.lastTLSProfile)
-	require.Equal(t, "Built-in Default (Node.js 24.x)", recorder.lastTLSProfile.Name)
+	require.Contains(t, recorder.lastTLSProfile.Name, "Codex CLI 0.145.0")
 }
 
 func TestDoOpenAIHTTPUpstreamSkipsMimicTLSWhenRequestProfileDisabled(t *testing.T) {

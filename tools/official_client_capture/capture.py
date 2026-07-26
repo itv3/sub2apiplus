@@ -1,0 +1,961 @@
+#!/usr/bin/env python3
+"""顺序执行相互独立的 OAuth 与 API 官方客户端抓包任务。"""
+
+from __future__ import annotations
+
+import argparse
+import contextlib
+import json
+import os
+import platform
+import re
+import signal
+import subprocess
+import sys
+import tempfile
+import urllib.parse
+from pathlib import Path
+from typing import Any
+
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
+
+from tools.official_client_capture.capturelib.analysis import (  # noqa: E402
+    normalize_direct_pcap,
+    normalize_mitm_directory,
+    validate_tshark_client_hello_fields,
+)
+from tools.official_client_capture.capturelib.environment import (  # noqa: E402
+    build_case_environment,
+    clean_environment,
+    prepare_api_state,
+)
+from tools.official_client_capture.capturelib.lifecycle import (  # noqa: E402
+    CampaignLock,
+    build_capture_process,
+    resolve_target_addresses,
+)
+from tools.official_client_capture.capturelib.manifest import Manifest  # noqa: E402
+from tools.official_client_capture.capturelib.model import (  # noqa: E402
+    EVIDENCE_MODES,
+    SCENARIOS,
+    CampaignPlan,
+    CaptureCase,
+    ConfigurationError,
+    build_suite_plans,
+    make_batch_id,
+    utc_now,
+    validate_choice_list,
+    validate_safe_name,
+)
+from tools.official_client_capture.capturelib.scenarios import (  # noqa: E402
+    CODEX_HOOK_PATH,
+    build_codex_config_preflight_command,
+    run_claude_scenario,
+    run_codex_scenario,
+)
+from tools.official_client_capture.capturelib.recovery import (  # noqa: E402
+    RecoveryJournal,
+    find_unclean_journals,
+)
+from tools.official_client_capture.capturelib.security import (  # noqa: E402
+    ensure_private_directory,
+    file_sha256,
+    redact_known_secret,
+    scan_for_secret,
+    scrub_known_secret,
+    secure_write_text,
+)
+
+
+ENV_NAME_RE = re.compile(r"^[A-Z_][A-Z0-9_]{0,127}$")
+MODEL_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$")
+SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
+VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+DEFAULT_CLAUDE_SHA256 = "674f61f20ff306f3100cf9200e4c36c4b70278b5bef2884549819b942a89c863"
+DEFAULT_CODEX_SHA256 = "a2a05dafaa1acb002a45eaec0a462de5b13694fcfcd7bc43305f14781ce7be14"
+DEFAULT_RUNTIME_IMAGE = (
+    "oauth-egress-capture-capture-cli@"
+    "sha256:3438c4e0909d7401ff8e076a985258608a8f031629e65262db16c1979ab1771c"
+)
+RUN_ROOT_MARKER = "official-client-capture-root/v1\n"
+
+
+class CaptureInterrupted(RuntimeError):
+    """收到终止信号，要求先清理抓包进程和写完 manifest。"""
+
+    def __init__(self, signum: int) -> None:
+        self.signum = signum
+        super().__init__(f"收到终止信号 {signum}。")
+
+
+class SecretLeakDetected(RuntimeError):
+    """运行时秘密曾进入文本产物；文件已立即脱敏，但任务必须失败。"""
+
+    def __init__(self, matches: list[str]) -> None:
+        self.matches = list(matches)
+        super().__init__("检测到运行时秘密残留：" + ", ".join(matches))
+
+
+def _parse_csv(value: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in value.split(",") if item.strip())
+
+
+def _command_output(command: list[str], environment: dict[str, str]) -> str:
+    completed = subprocess.run(
+        command,
+        env=environment,
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        raise RuntimeError(f"命令执行失败：{Path(command[0]).name}")
+    return (completed.stdout or completed.stderr).strip()
+
+
+def _client_info(
+    *,
+    claude_bin: Path,
+    codex_bin: Path,
+    expected_claude_version: str,
+    expected_codex_version: str,
+    expected_claude_sha256: str,
+    expected_codex_sha256: str,
+    api_key_env: str,
+) -> dict[str, Any]:
+    """在任何真实请求前固定客户端版本和二进制哈希。"""
+
+    for path in (claude_bin, codex_bin):
+        if not path.is_file() or not os.access(path, os.X_OK):
+            raise ConfigurationError(f"客户端二进制不存在或不可执行：{path}")
+    claude_sha256 = file_sha256(claude_bin)
+    codex_sha256 = file_sha256(codex_bin)
+    if claude_sha256 != expected_claude_sha256:
+        raise ConfigurationError("Claude 二进制 SHA-256 与固定基线不符。")
+    if codex_sha256 != expected_codex_sha256:
+        raise ConfigurationError("Codex 二进制 SHA-256 与固定基线不符。")
+    environment = clean_environment(os.environ)
+    environment.pop(api_key_env, None)
+    claude_version = _command_output([str(claude_bin), "--version"], environment)
+    codex_version = _command_output([str(codex_bin), "--version"], environment)
+    claude_match = re.fullmatch(
+        r"(?P<version>\d+\.\d+\.\d+)(?: \(Claude Code\))?", claude_version
+    )
+    if not claude_match or claude_match.group("version") != expected_claude_version:
+        raise ConfigurationError(
+            f"Claude 版本不符，预期 {expected_claude_version}，实际 {claude_version}。"
+        )
+    codex_match = re.fullmatch(
+        r"codex-cli (?P<version>\d+\.\d+\.\d+)", codex_version
+    )
+    if not codex_match or codex_match.group("version") != expected_codex_version:
+        raise ConfigurationError(
+            f"Codex 版本不符，预期 {expected_codex_version}，实际 {codex_version}。"
+        )
+    return {
+        "claude": {
+            "path": str(claude_bin),
+            "version": claude_version,
+            "sha256": claude_sha256,
+            "expected_sha256": expected_claude_sha256,
+        },
+        "codex": {
+            "path": str(codex_bin),
+            "version": codex_version,
+            "sha256": codex_sha256,
+            "expected_sha256": expected_codex_sha256,
+        },
+    }
+
+
+def _validate_static_file(path: Path, description: str, *, executable: bool) -> None:
+    """拒绝符号链接、非普通文件和可被其他用户改写的运行资产。"""
+
+    if path.is_symlink() or not path.is_file():
+        raise ConfigurationError(f"{description} 不是可信普通文件：{path}")
+    metadata = path.stat()
+    if metadata.st_uid != os.geteuid() or metadata.st_mode & 0o022:
+        raise ConfigurationError(f"{description} 所有者或写权限不安全：{path}")
+    if executable and not os.access(path, os.X_OK):
+        raise ConfigurationError(f"{description} 不可执行：{path}")
+
+
+def _validate_static_directory(path: Path, description: str) -> None:
+    """拒绝符号链接及可被其他用户改写的运行目录。"""
+
+    if path.is_symlink() or not path.is_dir():
+        raise ConfigurationError(f"{description} 不是可信目录：{path}")
+    metadata = path.stat()
+    if metadata.st_uid != os.geteuid() or metadata.st_mode & 0o022:
+        raise ConfigurationError(f"{description} 所有者或写权限不安全：{path}")
+
+
+def _validate_run_root(arguments: argparse.Namespace, *, initialize: bool) -> None:
+    """限定专用运行根，禁止把原始抓包写进源码树或宽泛目录。"""
+
+    run_root = arguments.run_root
+    if not run_root.is_absolute() or run_root.is_symlink():
+        raise ConfigurationError("--run-root 必须是非符号链接的绝对路径。")
+    resolved = run_root.resolve(strict=False)
+    forbidden = {
+        Path("/").resolve(),
+        Path.home().resolve(),
+        Path("/tmp").resolve(),
+        Path("/capture").resolve(),
+        Path("/capture/runs").resolve(),
+    }
+    tool_root = Path(__file__).resolve().parent
+    source_root = next(
+        (parent for parent in tool_root.parents if (parent / ".git").exists()),
+        tool_root,
+    )
+    if resolved in forbidden or resolved.is_relative_to(source_root):
+        raise ConfigurationError("--run-root 不能指向宽泛目录、HOME 或源码树。")
+    marker = run_root / ".official-client-capture-root"
+    if run_root.exists():
+        if not run_root.is_dir():
+            raise ConfigurationError("--run-root 已存在但不是目录。")
+        metadata = run_root.stat()
+        if metadata.st_uid != os.geteuid() or metadata.st_mode & 0o777 != 0o700:
+            raise ConfigurationError("已有 --run-root 必须归当前用户所有且权限为 0700。")
+        entries = list(run_root.iterdir())
+        if entries and (
+            not marker.is_file()
+            or marker.is_symlink()
+            or marker.read_text(encoding="utf-8") != RUN_ROOT_MARKER
+        ):
+            raise ConfigurationError("已有 --run-root 缺少本工具专用标记。")
+    if initialize:
+        ensure_private_directory(run_root)
+        secure_write_text(marker, RUN_ROOT_MARKER)
+
+
+def _preflight_dependencies(
+    *,
+    arguments: argparse.Namespace,
+    plans: tuple[CampaignPlan, ...],
+    evidence: tuple[str, ...],
+) -> dict[str, Any]:
+    """在任何模型请求前校验运行资产并生成可复现元数据。"""
+
+    for plan in plans:
+        run_dir = arguments.run_root / plan.task / plan.run_id
+        if run_dir.exists():
+            raise ConfigurationError(f"运行目录已存在，拒绝覆盖：{run_dir}")
+
+    capture_tools: dict[str, Any] = {}
+    _validate_static_file(CODEX_HOOK_PATH, "Codex PreToolUse hook", executable=False)
+    capture_tools["codex_hook"] = {
+        "path": str(CODEX_HOOK_PATH),
+        "sha256": file_sha256(CODEX_HOOK_PATH),
+    }
+    if "direct" in evidence:
+        for name, path, version_args in (
+            ("tcpdump", arguments.tcpdump_bin, ["--version"]),
+            ("tshark", arguments.tshark_bin, ["--version"]),
+        ):
+            _validate_static_file(path, name, executable=True)
+            capture_tools[name] = {
+                "path": str(path),
+                "version": _command_output(
+                    [str(path), *version_args], clean_environment(os.environ)
+                ).splitlines()[0],
+                "sha256": file_sha256(path),
+            }
+        capture_tools["tshark"]["client_hello_fields"] = list(
+            validate_tshark_client_hello_fields(
+                tshark_bin=str(arguments.tshark_bin),
+                environment=clean_environment(os.environ),
+            )
+        )
+        for plan in plans:
+            for case in plan.cases:
+                if case.evidence == "direct":
+                    parsed_port = (
+                        urllib.parse.urlsplit(case.base_url).port
+                        if case.base_url
+                        else None
+                    )
+                    resolve_target_addresses(
+                        case.target_hosts,
+                        target_port=parsed_port or 443,
+                    )
+
+    ca_info: dict[str, Any] | None = None
+    if "mitm" in evidence:
+        _validate_static_file(arguments.mitmdump_bin, "mitmdump", executable=True)
+        _validate_static_file(arguments.mitm_addon, "MITM addon", executable=False)
+        _validate_static_file(arguments.ca_bundle, "MITM CA", executable=False)
+        _validate_static_directory(arguments.mitm_confdir, "MITM confdir")
+        capture_tools["mitmdump"] = {
+            "path": str(arguments.mitmdump_bin),
+            "version": _command_output(
+                [str(arguments.mitmdump_bin), "--version"],
+                clean_environment(os.environ),
+            ).splitlines()[0],
+            "sha256": file_sha256(arguments.mitmdump_bin),
+            "addon_sha256": file_sha256(arguments.mitm_addon),
+        }
+        ca_info = {
+            "path": str(arguments.ca_bundle),
+            "sha256": file_sha256(arguments.ca_bundle),
+        }
+
+    _validate_static_directory(Path("/work"), "Codex 固定工作目录 /work")
+    validated_codex_configs = 0
+    seen_codex_configs: set[tuple[str, ...]] = set()
+    with tempfile.TemporaryDirectory(
+        prefix=".codex-config-preflight-", dir=arguments.run_root
+    ) as temporary_directory:
+        preflight_home = Path(temporary_directory)
+        preflight_home.chmod(0o700)
+        preflight_environment = clean_environment(os.environ)
+        preflight_environment.update(
+            {"HOME": str(preflight_home), "CODEX_HOME": str(preflight_home)}
+        )
+        for plan in plans:
+            for case in plan.cases:
+                if case.product != "codex":
+                    continue
+                for scenario in case.scenarios:
+                    command = build_codex_config_preflight_command(
+                        codex_bin=str(arguments.codex_bin),
+                        case=case,
+                        api_key_env=arguments.api_key_env,
+                        scenario=scenario,
+                        hook_audit_path=preflight_home / "hook-audit.jsonl",
+                    )
+                    command_key = tuple(command)
+                    if command_key in seen_codex_configs:
+                        continue
+                    seen_codex_configs.add(command_key)
+                    _command_output(command, preflight_environment)
+                    validated_codex_configs += 1
+    return {
+        "runtime_image_claim": arguments.runtime_image,
+        "runtime_image_verified": False,
+        "runtime_image_limitation": (
+            "容器内无法独立反查 Docker image digest；该值来自调用方声明，"
+            "部署时仍须在宿主机用 docker inspect 复核。"
+        ),
+        "profile_version": arguments.profile_version,
+        "platform": platform.platform(),
+        "python": platform.python_version(),
+        "interface": arguments.interface,
+        "capture_tools": capture_tools,
+        "ca_bundle": ca_info,
+        "codex_config_preflight": {
+            "mode": "features_list_no_model_request",
+            "configuration_count": validated_codex_configs,
+        },
+        "clean_environment_keys": sorted(clean_environment(os.environ)),
+    }
+
+
+def _verify_oauth_state(arguments: argparse.Namespace) -> dict[str, Any]:
+    """只读取本地登录状态，不发送模型请求、不记录账号标识。"""
+
+    environment = clean_environment(os.environ)
+    claude_status = _command_output(
+        [str(arguments.claude_bin), "auth", "status", "--json"], environment
+    )
+    try:
+        claude_payload = json.loads(claude_status)
+    except ValueError as error:
+        raise ConfigurationError("Claude OAuth 状态不是合法 JSON。") from error
+    if not claude_payload.get("loggedIn"):
+        raise ConfigurationError("Claude OAuth 状态未登录。")
+    codex_status = _command_output(
+        [str(arguments.codex_bin), "login", "status"], environment
+    )
+    if "logged in" not in codex_status.lower():
+        raise ConfigurationError("Codex OAuth 状态未登录。")
+    return {
+        "claude": {
+            "logged_in": True,
+            "auth_method": claude_payload.get("authMethod"),
+            "api_provider": claude_payload.get("apiProvider"),
+        },
+        "codex": {"logged_in": True, "method": "chatgpt_oauth_state"},
+    }
+
+
+@contextlib.contextmanager
+def _termination_guard():
+    """第一枚终止信号触发解栈；清理期间忽略后续信号。"""
+
+    previous = {item: signal.getsignal(item) for item in (signal.SIGINT, signal.SIGTERM)}
+    triggered = False
+
+    def handle(signum: int, _frame: Any) -> None:
+        nonlocal triggered
+        if triggered:
+            return
+        triggered = True
+        for item in previous:
+            signal.signal(item, signal.SIG_IGN)
+        raise CaptureInterrupted(signum)
+
+    for item in previous:
+        signal.signal(item, handle)
+    try:
+        yield
+    finally:
+        for item, handler in previous.items():
+            signal.signal(item, handler)
+
+
+@contextlib.contextmanager
+def _block_termination_signals():
+    """在登记新子进程的极短窗口内延后 SIGINT/SIGTERM。"""
+
+    if not hasattr(signal, "pthread_sigmask"):
+        yield
+        return
+    blocked = {signal.SIGINT, signal.SIGTERM}
+    previous = signal.pthread_sigmask(signal.SIG_BLOCK, blocked)
+    try:
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, previous)
+
+
+def _case_output_dir(run_dir: Path, case: CaptureCase, scenario: str) -> Path:
+    return run_dir / case.evidence / case.subject / scenario
+
+
+def _case_result_dir(run_dir: Path, case: CaptureCase, scenario: str) -> Path:
+    return run_dir / "results" / case.evidence / case.subject / scenario
+
+
+def _case_analysis_path(run_dir: Path, case: CaptureCase, scenario: str) -> Path:
+    return run_dir / "analysis" / case.evidence / case.subject / f"{scenario}.json"
+
+
+def _validate_mitm_shape(case: CaptureCase, payload: dict[str, Any]) -> None:
+    records = payload.get("records") if isinstance(payload.get("records"), list) else []
+    if not records:
+        raise RuntimeError("MITM 未记录到目标主机请求。")
+    expected_path = "/messages" if case.product == "claude" else "/responses"
+
+    def is_model_path(value: Any) -> bool:
+        path = urllib.parse.urlsplit(str(value)).path.rstrip("/")
+        return path.endswith(expected_path)
+
+    client_ws_frames = [
+        record
+        for record in records
+        if isinstance(record, dict)
+        and record.get("kind") == "websocket_frame"
+        and record.get("from_client")
+        and is_model_path(record.get("path"))
+    ]
+    model_posts = [
+        record
+        for record in records
+        if isinstance(record, dict)
+        and record.get("kind") == "http_exchange"
+        and isinstance(record.get("request"), dict)
+        and str(record["request"].get("method", "")).upper() == "POST"
+        and is_model_path(record["request"].get("path"))
+    ]
+    if case.transport == "ws" and not client_ws_frames:
+        raise RuntimeError("预期 WebSocket 的 case 未记录到目标 Responses 客户端帧。")
+    if case.transport == "ws" and model_posts:
+        raise RuntimeError("预期 WebSocket 的 case 出现了 Responses HTTP 回退。")
+    if case.transport == "http" and not model_posts:
+        raise RuntimeError("预期 HTTP 的 case 未记录到对应产品 POST 模型请求。")
+    if case.transport == "http" and any(
+        record.get("kind") == "websocket_frame"
+        and is_model_path(record.get("path"))
+        for record in records
+        if isinstance(record, dict)
+    ):
+        raise RuntimeError("预期 HTTP 的 case 意外出现了 WebSocket 帧。")
+
+
+def _run_case_scenario(
+    *,
+    case: CaptureCase,
+    run_dir: Path,
+    arguments: argparse.Namespace,
+    api_secret: str | None,
+    claude_api_home: Path | None,
+    codex_api_home: Path | None,
+    scenario: str,
+    journal: RecoveryJournal,
+) -> dict[str, Any]:
+    """执行一个不可混合的 product×transport×evidence×scenario 单元。"""
+
+    started_at = utc_now()
+    output_dir = _case_output_dir(run_dir, case, scenario)
+    analysis_path = _case_analysis_path(run_dir, case, scenario)
+    environment = build_case_environment(
+        case=case,
+        source=os.environ,
+        api_secret=api_secret,
+        api_key_env=arguments.api_key_env,
+        claude_api_home=claude_api_home,
+        codex_api_home=codex_api_home,
+        proxy_url=f"http://127.0.0.1:{arguments.mitm_port}",
+        ca_bundle=arguments.ca_bundle,
+    )
+    capture_environment = clean_environment(os.environ)
+    capture_environment.pop(arguments.api_key_env, None)
+    capture = build_capture_process(
+        case=case,
+        output_dir=output_dir,
+        base_environment=capture_environment,
+        tcpdump_bin=str(arguments.tcpdump_bin),
+        mitmdump_bin=str(arguments.mitmdump_bin),
+        mitm_addon=arguments.mitm_addon,
+        mitm_confdir=arguments.mitm_confdir,
+        mitm_port=arguments.mitm_port,
+        interface=arguments.interface,
+        scenario=scenario,
+    )
+
+    result_dir = _case_result_dir(run_dir, case, scenario)
+    ensure_private_directory(result_dir, run_dir)
+    capture_started = False
+    journal_active = False
+    try:
+        with _block_termination_signals():
+            try:
+                capture.start()
+                capture_started = True
+            finally:
+                # start() 的就绪校验或首次清理失败时，process 仍可能存活。
+                # 必须先登记账本再解除信号屏蔽，避免形成不可追踪的孤儿进程。
+                if capture.process is not None:
+                    journal.activate(
+                        case=case,
+                        scenario=scenario,
+                        role=(
+                            "tcpdump" if case.evidence == "direct" else "mitmdump"
+                        ),
+                        pid=capture.process.pid,
+                        pgid=capture.process.pid,
+                        output_dir=output_dir,
+                        port=(
+                            arguments.mitm_port
+                            if case.evidence == "mitm"
+                            else None
+                        ),
+                    )
+                    journal_active = True
+        if case.product == "claude":
+            summary = run_claude_scenario(
+                claude_bin=str(arguments.claude_bin),
+                model=arguments.claude_model,
+                scenario=scenario,
+                environment=environment,
+                output_dir=result_dir,
+                timeout=arguments.timeout,
+                runtime_secret=api_secret,
+            )
+        else:
+            summary = run_codex_scenario(
+                codex_bin=str(arguments.codex_bin),
+                model=arguments.codex_model,
+                case=case,
+                scenario=scenario,
+                environment=environment,
+                output_dir=result_dir,
+                timeout=arguments.timeout,
+                runtime_secret=api_secret,
+                api_key_env=arguments.api_key_env,
+            )
+        if not summary.get("valid"):
+            raise RuntimeError(
+                f"{case.subject}/{case.evidence}/{scenario} 场景校验失败。"
+            )
+    finally:
+        try:
+            if capture_started or capture.process is not None:
+                capture.stop()
+        finally:
+            if journal_active:
+                journal.deactivate(
+                    cleanup_successful=(
+                        capture.cleanup_successful and capture.process is None
+                    )
+                )
+            elif not capture.cleanup_successful:
+                # 抓包进程可能已退出但端口恢复校验失败，此时没有可登记 PID，
+                # 仍必须把账本标成不干净以阻止下一次任务静默继续。
+                journal.deactivate(cleanup_successful=False)
+
+    ensure_private_directory(analysis_path.parent, run_dir)
+    if case.evidence == "direct":
+        analysis = normalize_direct_pcap(
+            pcap_path=output_dir / "traffic.pcap",
+            output_path=analysis_path,
+            target_hosts=case.target_hosts,
+            tshark_bin=str(arguments.tshark_bin),
+        )
+    else:
+        analysis = normalize_mitm_directory(output_dir, analysis_path)
+        _validate_mitm_shape(case, analysis)
+
+    if case.evidence == "direct":
+        protocol_observation = {
+            "kind": "client_hello_offered_alpn",
+            "values": sorted(
+                {
+                    protocol
+                    for hello in analysis.get("client_hellos", [])
+                    if isinstance(hello, dict)
+                    for protocol in hello.get("alpn", [])
+                }
+            ),
+        }
+    else:
+        records = analysis.get("records", [])
+        protocol_observation = {
+            "kind": "mitm_application_protocol",
+            "values": sorted(
+                {
+                    "websocket"
+                    if record.get("kind") == "websocket_frame"
+                    else str(
+                        record.get("request", {}).get("http_version", "unknown")
+                    )
+                    for record in records
+                    if isinstance(record, dict)
+                }
+            ),
+        }
+
+    return {
+        "subject": case.subject,
+        "product": case.product,
+        "transport": case.transport,
+        "evidence": case.evidence,
+        "scenario": scenario,
+        "boundary": case.boundary,
+        "started_at": started_at,
+        "ended_at": utc_now(),
+        "status": "complete",
+        "scenario_result": summary,
+        "capture": capture.metadata,
+        "protocol_observation": protocol_observation,
+        "analysis_path": str(analysis_path.relative_to(run_dir)),
+    }
+
+
+def _run_campaign(
+    *,
+    plan: CampaignPlan,
+    arguments: argparse.Namespace,
+    clients: dict[str, Any],
+    api_secret: str | None,
+    runtime: dict[str, Any],
+) -> dict[str, Any]:
+    run_dir = arguments.run_root / plan.task / plan.run_id
+    if run_dir.exists():
+        raise ConfigurationError(f"运行目录已存在，拒绝覆盖：{run_dir}")
+    ensure_private_directory(run_dir, arguments.run_root)
+    manifest = Manifest(plan, run_dir)
+    manifest.set_clients(clients)
+    manifest.set_runtime(runtime)
+    journal = RecoveryJournal(run_dir)
+    claude_api_home: Path | None = None
+    codex_api_home: Path | None = None
+    if plan.task == "api":
+        claude_api_home, codex_api_home = prepare_api_state(run_dir)
+
+    try:
+        for case in plan.cases:
+            for scenario in case.scenarios:
+                result = _run_case_scenario(
+                    case=case,
+                    run_dir=run_dir,
+                    arguments=arguments,
+                    api_secret=api_secret,
+                    claude_api_home=claude_api_home,
+                    codex_api_home=codex_api_home,
+                    scenario=scenario,
+                    journal=journal,
+                )
+                manifest.add_case_result(result)
+                secret_matches = scan_for_secret(run_dir, api_secret)
+                if secret_matches:
+                    scrub_known_secret(run_dir, api_secret)
+                    raise SecretLeakDetected(secret_matches)
+        secret_matches = scan_for_secret(run_dir, api_secret)
+        journal.finalize(status="complete", cleanup_successful=True)
+        manifest.finalize(
+            status="complete",
+            cleanup_successful=True,
+            secret_matches=secret_matches,
+            secret_scan_scope=(
+                ["api_runtime_key_value"] if api_secret is not None else []
+            ),
+            secret_scan_limitation=(
+                None
+                if api_secret is not None
+                else "OAuth 凭据未读入编排器内存，仅执行结构脱敏，未做值匹配扫描。"
+            ),
+        )
+        return {
+            "task": plan.task,
+            "run_id": plan.run_id,
+            "status": "complete",
+            "manifest": str(manifest.path),
+        }
+    except BaseException as error:
+        cleanup_successful = (
+            journal.data.get("active_resource") is None
+            and bool(journal.data.get("cleanup_successful"))
+        )
+        status = (
+            "interrupted"
+            if isinstance(error, (CaptureInterrupted, KeyboardInterrupt))
+            else "failed"
+        )
+        if isinstance(error, CaptureInterrupted):
+            journal.note_signal(error.signum)
+        journal.finalize(status=status, cleanup_successful=cleanup_successful)
+        safe_error = redact_known_secret(str(error), api_secret)
+        secret_matches = (
+            error.matches
+            if isinstance(error, SecretLeakDetected)
+            else scan_for_secret(run_dir, api_secret)
+        )
+        if secret_matches:
+            scrub_known_secret(run_dir, api_secret)
+        manifest.finalize(
+            status=status,
+            cleanup_successful=cleanup_successful,
+            secret_matches=secret_matches,
+            secret_scan_scope=(
+                ["api_runtime_key_value"] if api_secret is not None else []
+            ),
+            secret_scan_limitation=(
+                None
+                if api_secret is not None
+                else "OAuth 凭据未读入编排器内存，仅执行结构脱敏，未做值匹配扫描。"
+            ),
+            error=safe_error,
+        )
+        raise
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        description="执行 OAuth 与 API 两套相互独立的官方客户端抓包任务。"
+    )
+    parser.add_argument("--task", choices=("oauth", "api", "all"), required=True)
+    mode = parser.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--dry-run", action="store_true", help="只输出脱敏计划")
+    mode.add_argument("--execute", action="store_true", help="执行真实请求和抓包")
+    parser.add_argument(
+        "--acknowledge-live-requests",
+        action="store_true",
+        help="确认本轮会产生真实模型请求；--execute 必须显式提供",
+    )
+    parser.add_argument("--batch-id", default=make_batch_id())
+    parser.add_argument("--scenarios", default="s1,s2,s4")
+    parser.add_argument("--evidence", default="direct,mitm")
+    parser.add_argument("--sub2api-base-url")
+    parser.add_argument("--api-key-env", default="SUB2API_CAPTURE_API_KEY")
+    parser.add_argument("--claude-model", default="claude-sonnet-5")
+    parser.add_argument("--codex-model", default="gpt-5.6-luna")
+    parser.add_argument("--expected-claude-version", default="2.1.220")
+    parser.add_argument("--expected-codex-version", default="0.145.0")
+    parser.add_argument(
+        "--expected-claude-sha256", default=DEFAULT_CLAUDE_SHA256
+    )
+    parser.add_argument(
+        "--expected-codex-sha256", default=DEFAULT_CODEX_SHA256
+    )
+    parser.add_argument(
+        "--runtime-image",
+        default=DEFAULT_RUNTIME_IMAGE,
+        help="capture-cli 镜像引用与 digest，仅用于可复现元数据",
+    )
+    parser.add_argument(
+        "--profile-version",
+        default="official-cli-2.1.220-codex-0.145.0-baseline-v1",
+    )
+    parser.add_argument("--claude-bin", type=Path, default=Path("/root/.local/bin/claude"))
+    parser.add_argument(
+        "--codex-bin", type=Path, default=Path("/usr/local/bin/codex-capture")
+    )
+    parser.add_argument("--tcpdump-bin", type=Path, default=Path("/usr/bin/tcpdump"))
+    parser.add_argument("--tshark-bin", type=Path, default=Path("/usr/bin/tshark"))
+    parser.add_argument("--mitmdump-bin", type=Path, default=Path("/usr/bin/mitmdump"))
+    parser.add_argument(
+        "--mitm-addon",
+        type=Path,
+        default=Path(__file__).resolve().parent / "addons" / "mitm_capture.py",
+    )
+    parser.add_argument("--mitm-confdir", type=Path, default=Path("/opt/mitm"))
+    parser.add_argument(
+        "--ca-bundle",
+        type=Path,
+        default=Path("/opt/mitm/mitmproxy-ca-cert.pem"),
+    )
+    parser.add_argument(
+        "--run-root", type=Path, default=Path("/capture/runs/official-client")
+    )
+    parser.add_argument(
+        "--lock-file", type=Path, default=Path("/run/official-client-capture.lock")
+    )
+    parser.add_argument("--interface", default="any")
+    parser.add_argument("--mitm-port", type=int, default=18080)
+    parser.add_argument("--timeout", type=int, default=300)
+    return parser
+
+
+def _validate_arguments(arguments: argparse.Namespace) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    validate_safe_name(arguments.batch_id, "batch_id")
+    if not ENV_NAME_RE.fullmatch(arguments.api_key_env):
+        raise ConfigurationError("--api-key-env 必须是合法的大写环境变量名。")
+    scenarios = validate_choice_list(
+        _parse_csv(arguments.scenarios), SCENARIOS, "scenarios"
+    )
+    evidence = validate_choice_list(
+        _parse_csv(arguments.evidence), EVIDENCE_MODES, "evidence"
+    )
+    if arguments.timeout <= 0:
+        raise ConfigurationError("--timeout 必须大于 0。")
+    if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", arguments.interface):
+        raise ConfigurationError("--interface 格式非法。")
+    for field, value in (
+        ("--expected-claude-sha256", arguments.expected_claude_sha256),
+        ("--expected-codex-sha256", arguments.expected_codex_sha256),
+    ):
+        if not SHA256_RE.fullmatch(value):
+            raise ConfigurationError(f"{field} 必须是 64 位小写 SHA-256。")
+    for field, value in (
+        ("--expected-claude-version", arguments.expected_claude_version),
+        ("--expected-codex-version", arguments.expected_codex_version),
+    ):
+        if not VERSION_RE.fullmatch(value):
+            raise ConfigurationError(f"{field} 必须是精确的三段版本号。")
+    validate_safe_name(arguments.profile_version, "profile_version")
+    if not arguments.runtime_image.strip() or "sha256:" not in arguments.runtime_image:
+        raise ConfigurationError("--runtime-image 必须包含镜像引用和 sha256 digest。")
+    _validate_run_root(arguments, initialize=False)
+    if (
+        not arguments.lock_file.is_absolute()
+        or arguments.lock_file.is_symlink()
+        or arguments.lock_file.suffix != ".lock"
+    ):
+        raise ConfigurationError("--lock-file 必须是非符号链接的绝对 .lock 路径。")
+    for field, value in (
+        ("--claude-model", arguments.claude_model),
+        ("--codex-model", arguments.codex_model),
+    ):
+        if not MODEL_NAME_RE.fullmatch(value):
+            raise ConfigurationError(f"{field} 格式非法。")
+    if arguments.execute and not arguments.acknowledge_live_requests:
+        raise ConfigurationError(
+            "--execute 会产生真实模型请求，必须同时提供 --acknowledge-live-requests。"
+        )
+    return scenarios, evidence
+
+
+def main() -> int:
+    os.umask(0o077)
+    parser = _build_parser()
+    arguments = parser.parse_args()
+    try:
+        scenarios, evidence = _validate_arguments(arguments)
+        plans = build_suite_plans(
+            task=arguments.task,
+            batch_id=arguments.batch_id,
+            scenarios=scenarios,
+            evidence_modes=evidence,
+            sub2api_base_url=arguments.sub2api_base_url,
+            api_key_env=arguments.api_key_env,
+        )
+        safe_plan = {
+            "schema_version": "official-client-capture-suite/v1",
+            "batch_id": arguments.batch_id,
+            "execution_order": [plan.task for plan in plans],
+            "plans": [plan.to_dict() for plan in plans],
+            "external_ab_executed": False,
+        }
+        if arguments.dry_run:
+            print(json.dumps(safe_plan, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0
+
+        api_secret = (
+            os.environ.get(arguments.api_key_env)
+            if any(plan.task == "api" for plan in plans)
+            else None
+        )
+        if any(plan.task == "api" for plan in plans) and not api_secret:
+            raise ConfigurationError(
+                f"API 任务缺少环境变量 {arguments.api_key_env}。"
+            )
+        results: list[dict[str, Any]] = []
+        with CampaignLock(arguments.lock_file):
+            _validate_run_root(arguments, initialize=True)
+            unclean_journals = find_unclean_journals(arguments.run_root)
+            if unclean_journals:
+                raise ConfigurationError(
+                    "发现未清理的历史恢复账本：" + ", ".join(unclean_journals)
+                )
+            clients = _client_info(
+                claude_bin=arguments.claude_bin,
+                codex_bin=arguments.codex_bin,
+                expected_claude_version=arguments.expected_claude_version,
+                expected_codex_version=arguments.expected_codex_version,
+                expected_claude_sha256=arguments.expected_claude_sha256,
+                expected_codex_sha256=arguments.expected_codex_sha256,
+                api_key_env=arguments.api_key_env,
+            )
+            runtime = _preflight_dependencies(
+                arguments=arguments,
+                plans=plans,
+                evidence=evidence,
+            )
+            oauth_state = (
+                _verify_oauth_state(arguments)
+                if any(plan.task == "oauth" for plan in plans)
+                else None
+            )
+            with _termination_guard():
+                for plan in plans:
+                    task_runtime = dict(runtime)
+                    task_runtime["auth_preflight"] = (
+                        oauth_state
+                        if plan.task == "oauth"
+                        else {"kind": "sub2api_runtime_key", "present": True}
+                    )
+                    results.append(
+                        _run_campaign(
+                            plan=plan,
+                            arguments=arguments,
+                            clients=clients,
+                            api_secret=api_secret if plan.task == "api" else None,
+                            runtime=task_runtime,
+                        )
+                    )
+        print(json.dumps({**safe_plan, "results": results}, ensure_ascii=False, indent=2))
+        return 0
+    except CaptureInterrupted as error:
+        print(f"抓包任务已中断：{error}", file=sys.stderr)
+        return 128 + error.signum
+    except KeyboardInterrupt:
+        print("抓包任务已中断：收到 SIGINT。", file=sys.stderr)
+        return 130
+    except (
+        ConfigurationError,
+        RuntimeError,
+        ValueError,
+        OSError,
+        subprocess.SubprocessError,
+    ) as error:
+        print(f"抓包任务失败：{error}", file=sys.stderr)
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

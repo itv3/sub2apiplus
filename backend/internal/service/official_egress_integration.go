@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
 )
 
@@ -33,11 +35,16 @@ func attachOfficialEgressHTTPContext(
 	c *gin.Context,
 	account *Account,
 	targetPlatform string,
+	cfgs ...*config.Config,
 ) (*http.Request, error) {
 	if req == nil {
 		return nil, errors.New("official egress requires HTTP request")
 	}
-	enabled, version, err := resolveOfficialEgressAccountProfile(account)
+	mode := officialClientProfileModeActive
+	if len(cfgs) > 0 {
+		mode = officialClientProfileModeFromConfig(cfgs[0])
+	}
+	enabled, version, err := resolveOfficialEgressAccountProfile(account, mode)
 	if err != nil {
 		return nil, err
 	}
@@ -61,6 +68,7 @@ func attachOfficialEgressHTTPContext(
 		Transport:       OfficialEgressTransportHTTP,
 		UpstreamHost:    req.URL.Host,
 		ProfileVersion:  version,
+		ProfileMode:     mode,
 		AccountType:     account.Type,
 		ProxyID:         proxyID,
 	})
@@ -75,7 +83,13 @@ func attachOfficialEgressHTTPContext(
 	if err := ValidateOfficialEgressFinalState(egressContext, profile); err != nil {
 		return nil, err
 	}
-	return req.WithContext(WithOfficialEgressContext(req.Context(), egressContext)), nil
+	requestContext := WithHTTPUpstreamRedirectsDisabled(req.Context())
+	requestContext = WithOfficialEgressContext(requestContext, egressContext)
+	req = req.WithContext(requestContext)
+	if err := validateOfficialEgressHTTPRequest(req, egressContext); err != nil {
+		return nil, err
+	}
+	return req, nil
 }
 
 // supportsOfficialEgressHTTPProfile 限定当前版本真正覆盖的 HTTP 入口。
@@ -107,6 +121,7 @@ func supportsOfficialEgressHTTPProfile(targetPlatform, endpoint string) bool {
 func resolveAnthropicOfficialEgressOwnership(
 	account *Account,
 	c *gin.Context,
+	cfgs ...*config.Config,
 ) (bool, error) {
 	if account == nil ||
 		account.Platform != PlatformAnthropic ||
@@ -115,7 +130,11 @@ func resolveAnthropicOfficialEgressOwnership(
 		!supportsOfficialEgressHTTPProfile(PlatformAnthropic, c.Request.URL.Path) {
 		return false, nil
 	}
-	enabled, _, err := resolveOfficialEgressAccountProfile(account)
+	mode := officialClientProfileModeActive
+	if len(cfgs) > 0 {
+		mode = officialClientProfileModeFromConfig(cfgs[0])
+	}
+	enabled, _, err := resolveOfficialEgressAccountProfile(account, mode)
 	return enabled, err
 }
 
@@ -128,8 +147,13 @@ func attachOfficialEgressWebSocketContext(
 	account *Account,
 	targetURL string,
 	firstPayload []byte,
+	cfgs ...*config.Config,
 ) (context.Context, error) {
-	enabled, version, err := resolveOfficialEgressAccountProfile(account)
+	mode := officialClientProfileModeActive
+	if len(cfgs) > 0 {
+		mode = officialClientProfileModeFromConfig(cfgs[0])
+	}
+	enabled, version, err := resolveOfficialEgressAccountProfile(account, mode)
 	if err != nil {
 		return nil, err
 	}
@@ -154,6 +178,7 @@ func attachOfficialEgressWebSocketContext(
 		Transport:       OfficialEgressTransportWebSocket,
 		UpstreamHost:    parsedURL.Host,
 		ProfileVersion:  version,
+		ProfileMode:     mode,
 		AccountType:     account.Type,
 		ProxyID:         proxyID,
 	})
@@ -163,6 +188,9 @@ func attachOfficialEgressWebSocketContext(
 		c.Request.URL.Path,
 	)
 	if err != nil {
+		return nil, err
+	}
+	if err := validateOfficialEgressWebSocketTarget(parsedURL, egressContext); err != nil {
 		return nil, err
 	}
 	if err := prepareOpenAIOfficialEgressWSContext(
@@ -182,4 +210,59 @@ func attachOfficialEgressWebSocketContext(
 	}
 	logOfficialEgressProfileResolved(frozenContext, profile)
 	return WithOfficialEgressContext(ctx, frozenContext), nil
+}
+
+// validateOfficialEgressHTTPRequest 在实际发送前绑定 Method、Host 和最终上游 Path。
+func validateOfficialEgressHTTPRequest(req *http.Request, egressContext *OfficialEgressContext) error {
+	if req == nil || req.URL == nil || egressContext == nil {
+		return errors.New("official egress final HTTP target is unavailable")
+	}
+	if req.Method != http.MethodPost {
+		return fmt.Errorf("official egress rejected HTTP method: %s", req.Method)
+	}
+	if !strings.EqualFold(req.URL.Scheme, "https") {
+		return fmt.Errorf("official egress rejected HTTP scheme: %s", req.URL.Scheme)
+	}
+	if normalizeOfficialEgressHost(req.URL.Host) != egressContext.upstreamHost {
+		return errors.New("official egress final HTTP host conflicts with resolved context")
+	}
+	expectedPath := expectedOfficialEgressUpstreamPath(egressContext)
+	if normalizeOfficialEgressEndpoint(req.URL.Path) != expectedPath {
+		return fmt.Errorf("official egress rejected final HTTP path: %s", req.URL.Path)
+	}
+	return nil
+}
+
+func validateOfficialEgressWebSocketTarget(target *url.URL, egressContext *OfficialEgressContext) error {
+	if target == nil || egressContext == nil {
+		return errors.New("official egress final WebSocket target is unavailable")
+	}
+	if !strings.EqualFold(target.Scheme, "wss") {
+		return fmt.Errorf("official egress rejected WebSocket scheme: %s", target.Scheme)
+	}
+	if normalizeOfficialEgressHost(target.Host) != egressContext.upstreamHost {
+		return errors.New("official egress final WebSocket host conflicts with resolved context")
+	}
+	if normalizeOfficialEgressEndpoint(target.Path) != expectedOfficialEgressUpstreamPath(egressContext) {
+		return fmt.Errorf("official egress rejected final WebSocket path: %s", target.Path)
+	}
+	return nil
+}
+
+func expectedOfficialEgressUpstreamPath(egressContext *OfficialEgressContext) string {
+	if egressContext == nil {
+		return ""
+	}
+	switch egressContext.targetPlatform {
+	case PlatformAnthropic:
+		return "/v1/messages"
+	case PlatformOpenAI:
+		if egressContext.transport == OfficialEgressTransportHTTP &&
+			egressContext.inboundEndpoint == "/v1/responses/compact" {
+			return "/backend-api/codex/responses/compact"
+		}
+		return "/backend-api/codex/responses"
+	default:
+		return ""
+	}
 }

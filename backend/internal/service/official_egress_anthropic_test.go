@@ -144,8 +144,8 @@ func TestOfficialEgressT4_AnthropicFinalizerMatchesPhase0ApplicationContract(t *
 		clientRequestID := getHeaderRaw(req.Header, "x-client-request-id")
 		require.NoError(t, uuid.Validate(clientRequestID))
 		seenClientRequestIDs[clientRequestID] = struct{}{}
-		for _, expected := range officialAnthropicPhase0Headers {
-			require.Equal(t, expected.value, getHeaderRaw(req.Header, expected.name), expected.name)
+		for _, expected := range officialAnthropicCurrentTestHeaders(t) {
+			require.Equal(t, expected.Value, getHeaderRaw(req.Header, expected.Name), expected.Name)
 		}
 		require.Empty(t, getHeaderRaw(req.Header, "accept-language"))
 		require.Empty(t, getHeaderRaw(req.Header, "sec-fetch-mode"))
@@ -197,6 +197,19 @@ func TestOfficialEgressT4_AnthropicFinalizerMatchesPhase0ApplicationContract(t *
 	require.Len(t, seenClientRequestIDs, 5, "x-client-request-id 必须按请求生成")
 	require.Zero(t, identityCache.getCalls, "Official Egress 不得再读取账号级 Desktop 指纹")
 	require.Equal(t, officialAnthropicResponseMappingTTL, cache.lastTTL)
+}
+
+func officialAnthropicCurrentTestHeaders(t *testing.T) []officialClientHeaderValue {
+	t.Helper()
+	profile, err := resolveOfficialClientProfile(
+		officialClientPurposeAnthropicOAuthMessagesHTTP,
+		officialClientProfileModeActive,
+	)
+	require.NoError(t, err)
+	headers := append([]officialClientHeaderValue(nil), profile.Wire.StaticHeaders...)
+	headers = append(headers, profile.Build.RuntimeHeaders...)
+	headers = append(headers, officialClientHeaderValue{Name: "User-Agent", Value: profile.Build.UserAgent})
+	return headers
 }
 
 func TestOfficialEgressT4_AnthropicResponseMappingFeedsNextBillingBlock(t *testing.T) {
@@ -666,7 +679,7 @@ func TestOfficialEgressT4_AnthropicFingerprintSkipsSystemReminder(t *testing.T) 
 			"content":[{"type":"text","text":"后续工具结果不能改变首轮指纹"}]
 		}]
 	}`)
-	require.Equal(t, "97c", computeOfficialAnthropicFingerprint(body, officialAnthropicCLIVersion))
+	require.Equal(t, "9c5", computeOfficialAnthropicFingerprint(body, officialAnthropicCLIVersion))
 }
 
 func officialEgressT4AnthropicAccount(accountUUID string) *Account {

@@ -522,6 +522,9 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err != nil {
 		return nil, err
 	}
+	if err = ValidateBuiltInOfficialEgressExtraTransition(input.Platform, input.Type, nil, accountExtra); err != nil {
+		return nil, err
+	}
 	accountExtra, err = NormalizeBuiltInOfficialEgressExtra(input.Platform, input.Type, accountExtra)
 	if err != nil {
 		return nil, err
@@ -620,6 +623,14 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		effectiveType := account.Type
 		if strings.TrimSpace(input.Type) != "" {
 			effectiveType = input.Type
+		}
+		if err = ValidateBuiltInOfficialEgressExtraTransition(
+			account.Platform,
+			effectiveType,
+			account.Extra,
+			normalizedExtra,
+		); err != nil {
+			return nil, err
 		}
 		normalizedExtra, err = NormalizeBuiltInOfficialEgressExtra(
 			account.Platform,

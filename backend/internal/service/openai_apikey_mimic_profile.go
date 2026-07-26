@@ -18,8 +18,9 @@ type openAIAPIKeyMimicRequestContextKey struct{}
 const (
 	openAIAPIKeyCodexMimicProfileExtraKey = "openai_apikey_mimic_codex_profile"
 
-	openAIAPIKeyCodexMimicClientDesktop0144 = "desktop_0_144"
-	openAIAPIKeyCodexMimicClientCLIRS0125   = "cli_rs_0_125"
+	openAIAPIKeyCodexMimicClientCodexExec0145 = "codex_exec_0_145"
+	openAIAPIKeyCodexMimicClientDesktop0144   = "desktop_0_144"
+	openAIAPIKeyCodexMimicClientCLIRS0125     = "cli_rs_0_125"
 )
 
 type openAIAPIKeyCodexMimicProfile struct {
@@ -38,10 +39,10 @@ type openAIUpstreamRequestPlan struct {
 }
 
 func resolveOpenAIAPIKeyCodexMimicProfile(account *Account, apiKeyID int64, cfg *config.Config) openAIAPIKeyCodexMimicProfile {
-	client := resolveOpenAIAPIKeyCodexMimicClientProfile(account)
+	client := resolveOpenAIAPIKeyCodexMimicClientProfile(account, cfg)
 	scope := resolveOpenAIAPIKeyCodexMimicScope(account, apiKeyID, cfg)
 	scope.ClientProfile = client.ID
-	if client.IsDesktop {
+	if client.RequiresMetadata {
 		scope.TurnID = uuid.NewString()
 		scope.TurnStartedAtUnixMS = time.Now().UnixMilli()
 	}
@@ -112,19 +113,30 @@ func (p openAIAPIKeyCodexMimicProfile) ShouldUseTLSFingerprint(account *Account)
 }
 
 type openAIAPIKeyCodexMimicClientProfile struct {
-	ID           string
-	UserAgent    string
-	Originator   string
-	Version      string
-	OpenAIBeta   string
-	IsDesktop    bool
-	BetaFeatures string
+	ID               string
+	UserAgent        string
+	Originator       string
+	Version          string
+	OpenAIBeta       string
+	IsDesktop        bool
+	RequiresMetadata bool
+	StaticHeaders    []officialClientHeaderValue
+	Sandbox          string
+	WorkspaceKind    string
 }
 
-func resolveOpenAIAPIKeyCodexMimicClientProfile(account *Account) openAIAPIKeyCodexMimicClientProfile {
-	profileID := ""
-	if account != nil {
-		profileID = account.GetExtraString(openAIAPIKeyCodexMimicProfileExtraKey)
+func resolveOpenAIAPIKeyCodexMimicClientProfile(account *Account, configs ...*config.Config) openAIAPIKeyCodexMimicClientProfile {
+	// 画像版本只由服务级 active/previous 指针决定。历史账号字段
+	// openai_apikey_mimic_codex_profile 作为 dormant 数据保留，不得让单个账号
+	// 继续锁定 Desktop 画像或与当前发布画像混用。
+	_ = account
+	mode := officialClientProfileModeActive
+	if len(configs) > 0 {
+		mode = officialClientProfileModeFromConfig(configs[0])
+	}
+	profileID := openAIAPIKeyCodexMimicClientCodexExec0145
+	if mode == officialClientProfileModePrevious {
+		profileID = openAIAPIKeyCodexMimicClientDesktop0144
 	}
 	return resolveOpenAIAPIKeyCodexMimicClientProfileByID(profileID)
 }
@@ -135,6 +147,23 @@ func resolveOpenAIAPIKeyCodexMimicClientProfileFromScope(scope openAIAPIKeyCodex
 
 func resolveOpenAIAPIKeyCodexMimicClientProfileByID(profileID string) openAIAPIKeyCodexMimicClientProfile {
 	switch normalizeOpenAIAPIKeyCodexMimicClientProfileID(profileID) {
+	case openAIAPIKeyCodexMimicClientCodexExec0145:
+		profile, err := resolveOfficialClientProfile(
+			officialClientPurposeOpenAIAPIKeyResponsesHTTP,
+			officialClientProfileModeActive,
+		)
+		if err != nil {
+			return openAIAPIKeyCodexMimicClientProfile{}
+		}
+		return openAIAPIKeyCodexMimicClientProfile{
+			ID:               openAIAPIKeyCodexMimicClientCodexExec0145,
+			UserAgent:        profile.Build.UserAgent,
+			Originator:       profile.Build.Originator,
+			Version:          profile.Build.Version,
+			RequiresMetadata: true,
+			StaticHeaders:    profile.Wire.StaticHeaders,
+			Sandbox:          "seccomp",
+		}
 	case openAIAPIKeyCodexMimicClientCLIRS0125:
 		return openAIAPIKeyCodexMimicClientProfile{
 			ID:         openAIAPIKeyCodexMimicClientCLIRS0125,
@@ -144,12 +173,19 @@ func resolveOpenAIAPIKeyCodexMimicClientProfileByID(profileID string) openAIAPIK
 			OpenAIBeta: "responses=experimental",
 		}
 	default:
+		profile, _ := resolveOfficialClientProfile(
+			officialClientPurposeOpenAIAPIKeyResponsesHTTP,
+			officialClientProfileModePrevious,
+		)
 		return openAIAPIKeyCodexMimicClientProfile{
-			ID:           openAIAPIKeyCodexMimicClientDesktop0144,
-			UserAgent:    codexDesktopUserAgent,
-			Originator:   codexDesktopOriginator,
-			IsDesktop:    true,
-			BetaFeatures: codexDesktopBetaFeatures,
+			ID:               openAIAPIKeyCodexMimicClientDesktop0144,
+			UserAgent:        codexDesktopUserAgent,
+			Originator:       codexDesktopOriginator,
+			IsDesktop:        true,
+			RequiresMetadata: true,
+			StaticHeaders:    profile.Wire.StaticHeaders,
+			Sandbox:          "none",
+			WorkspaceKind:    "project",
 		}
 	}
 }
@@ -157,11 +193,13 @@ func resolveOpenAIAPIKeyCodexMimicClientProfileByID(profileID string) openAIAPIK
 func normalizeOpenAIAPIKeyCodexMimicClientProfileID(profileID string) string {
 	v := strings.ToLower(strings.TrimSpace(profileID))
 	switch strings.ReplaceAll(v, "-", "_") {
-	case "", "desktop", "codex_desktop", "desktop_0_142", "codex_desktop_0_142", "desktop_0_144", "codex_desktop_0_144":
+	case "", "codex_exec", "codex_exec_0_145", "codex_cli_0_145", "cli_0_145":
+		return openAIAPIKeyCodexMimicClientCodexExec0145
+	case "desktop", "codex_desktop", "desktop_0_142", "codex_desktop_0_142", "desktop_0_144", "codex_desktop_0_144":
 		return openAIAPIKeyCodexMimicClientDesktop0144
 	case "cli", "codex_cli", "cli_rs", "codex_cli_rs", "cli_rs_0_125", "codex_cli_rs_0_125":
 		return openAIAPIKeyCodexMimicClientCLIRS0125
 	default:
-		return openAIAPIKeyCodexMimicClientDesktop0144
+		return openAIAPIKeyCodexMimicClientCodexExec0145
 	}
 }

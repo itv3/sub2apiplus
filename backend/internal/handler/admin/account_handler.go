@@ -2463,12 +2463,7 @@ func (h *AccountHandler) availableModelsForAccount(account *service.Account) any
 
 	// Handle Gemini accounts
 	if account.IsGemini() {
-		// For OAuth accounts: return default Gemini models
-		if account.IsOAuth() {
-			return geminicli.DefaultModels
-		}
-
-		// For API Key accounts: return models based on model_mapping
+		// OAuth 与 API Key 同样支持白名单：未配置时回落到默认模型集。
 		mapping := account.GetModelMapping()
 		if len(mapping) == 0 {
 			return geminicli.DefaultModels
@@ -2553,12 +2548,7 @@ func (h *AccountHandler) availableModelsForAccount(account *service.Account) any
 	}
 
 	// Handle Claude/Anthropic accounts
-	// For OAuth and Setup-Token accounts: return default models
-	if account.IsOAuth() {
-		return claude.DefaultModels
-	}
-
-	// For API Key accounts: return models based on model_mapping
+	// OAuth/Setup-Token 与 API Key 同样支持白名单：未配置时回落到默认模型集。
 	mapping := account.GetModelMapping()
 	if len(mapping) == 0 {
 		// No mapping configured, return default models

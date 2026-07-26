@@ -1154,7 +1154,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 		account.ApplyHeaderOverrides(req.Header)
 	}
 
-	req, err = attachOfficialEgressHTTPContext(req, c, account, PlatformOpenAI)
+	req, err = attachOfficialEgressHTTPContext(req, c, account, PlatformOpenAI, s.cfg)
 	if err != nil {
 		return nil, fmt.Errorf("resolve official egress profile: %w", err)
 	}

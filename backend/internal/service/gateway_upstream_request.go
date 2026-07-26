@@ -220,7 +220,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 		logClaudeMimicDebug(req, body, account, tokenType, mimicClaudeCode)
 	}
 
-	req, err = attachOfficialEgressHTTPContext(req, c, account, PlatformAnthropic)
+	req, err = attachOfficialEgressHTTPContext(req, c, account, PlatformAnthropic, s.cfg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve official egress profile: %w", err)
 	}

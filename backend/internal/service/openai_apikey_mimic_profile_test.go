@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -38,7 +39,42 @@ func TestOpenAIAPIKeyCodexMimicClientProfileCLIRS0125KeepsLegacyHeadersAndPrompt
 	require.False(t, gjson.GetBytes(out, "client_metadata").Exists())
 }
 
-func TestOpenAIAPIKeyCodexMimicDesktopMetadataMatchesHeadersAndBody(t *testing.T) {
+func TestOpenAIAPIKeyCodexMimicPreviousModeRestoresDesktopProfile(t *testing.T) {
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Extra:    map[string]any{"openai_apikey_mimic_codex_cli": true},
+	}
+	cfg := &config.Config{Gateway: config.GatewayConfig{
+		OfficialClientProfiles: config.GatewayOfficialClientProfilesConfig{Mode: officialClientProfileModePrevious},
+	}}
+	profile := resolveOpenAIAPIKeyCodexMimicProfile(account, 22, cfg)
+	require.Equal(t, openAIAPIKeyCodexMimicClientDesktop0144, profile.Client.ID)
+	require.Equal(t, codexDesktopUserAgent, profile.Client.UserAgent)
+
+	req, err := http.NewRequest(http.MethodPost, "https://api.openai.com/v1/responses", nil)
+	require.NoError(t, err)
+	profile.ApplyHeaders(req, true)
+	require.Empty(t, getHeaderRaw(req.Header, "x-openai-internal-codex-responses-lite"))
+	metadata := req.Header.Get("x-codex-turn-metadata")
+	require.Equal(t, "none", gjson.Get(metadata, "sandbox").String())
+	require.Equal(t, "project", gjson.Get(metadata, "workspace_kind").String())
+}
+
+func TestOpenAIAPIKeyCodexMimicActiveModeIgnoresDormantAccountProfile(t *testing.T) {
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Extra: map[string]any{
+			"openai_apikey_mimic_codex_cli":       true,
+			openAIAPIKeyCodexMimicProfileExtraKey: openAIAPIKeyCodexMimicClientDesktop0144,
+		},
+	}
+	profile := resolveOpenAIAPIKeyCodexMimicProfile(account, 22, nil)
+	require.Equal(t, openAIAPIKeyCodexMimicClientCodexExec0145, profile.Client.ID)
+}
+
+func TestOpenAIAPIKeyCodexMimicCurrentCLIMetadataMatchesHeadersAndBody(t *testing.T) {
 	account := &Account{
 		ID:       11,
 		Platform: PlatformOpenAI,
@@ -71,9 +107,11 @@ func TestOpenAIAPIKeyCodexMimicDesktopMetadataMatchesHeadersAndBody(t *testing.T
 	require.JSONEq(t, headerTurnMetadata, bodyTurnMetadata)
 	require.Equal(t, profile.Scope.TurnID, gjson.Get(bodyTurnMetadata, "turn_id").String())
 	require.Equal(t, profile.Scope.TurnStartedAtUnixMS, gjson.Get(bodyTurnMetadata, "turn_started_at_unix_ms").Int())
-	require.Equal(t, "none", gjson.Get(bodyTurnMetadata, "sandbox").String())
-	require.Equal(t, "project", gjson.Get(bodyTurnMetadata, "workspace_kind").String())
-	require.Empty(t, req.Header.Get("x-openai-internal-codex-responses-lite"))
+	require.Equal(t, "seccomp", gjson.Get(bodyTurnMetadata, "sandbox").String())
+	require.False(t, gjson.Get(bodyTurnMetadata, "workspace_kind").Exists())
+	require.Equal(t, "true", getHeaderRaw(req.Header, "x-openai-internal-codex-responses-lite"))
+	require.Empty(t, req.Header.Get("OpenAI-Beta"))
+	require.Empty(t, req.Header.Get("version"))
 
 	var raw map[string]any
 	require.NoError(t, json.Unmarshal([]byte(bodyTurnMetadata), &raw))

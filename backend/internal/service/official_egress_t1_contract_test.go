@@ -45,7 +45,7 @@ func TestOfficialEgressT1_AnthropicHTTPBuiltInProfileIgnoresLegacyIdentityOverri
 		accountUUID       = "11111111-1111-4111-8111-111111111111"
 		deviceID          = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 		maskedSession     = "99999999-9999-4999-8999-999999999999"
-		officialUserAgent = "claude-cli/2.1.218 (external, sdk-cli)"
+		officialUserAgent = "claude-cli/2.1.220 (external, sdk-cli)"
 		cachedUserAgent   = "Mozilla/5.0 Chrome/148.0.7778.271 Electron/42.5.1 Claude/1.22209.3"
 	)
 
@@ -82,7 +82,7 @@ func TestOfficialEgressT1_AnthropicHTTPBuiltInProfileIgnoresLegacyIdentityOverri
 		"33333333-3333-4333-8333-333333333333",
 	} {
 		t.Run(fmt.Sprintf("session_%d", index+1), func(t *testing.T) {
-			inboundMetadataID := FormatMetadataUserID(deviceID, accountUUID, inboundSession, "2.1.218")
+			inboundMetadataID := FormatMetadataUserID(deviceID, accountUUID, inboundSession, "2.1.220")
 			body := []byte(fmt.Sprintf(`{
 				"model":"claude-sonnet-5",
 				"system":[

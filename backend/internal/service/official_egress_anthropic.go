@@ -18,8 +18,8 @@ import (
 )
 
 const (
-	officialAnthropicCLIVersion = "2.1.218"
-	officialAnthropicUserAgent  = "claude-cli/2.1.218 (external, sdk-cli)"
+	officialAnthropicCLIVersion = "2.1.220"
+	officialAnthropicUserAgent  = "claude-cli/2.1.220 (external, sdk-cli)"
 	officialAnthropicBetaHeader = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24,extended-cache-ttl-2025-04-11"
 
 	officialAnthropicSystemSplitMarker  = "# Text output (does not apply to tool calls)"
@@ -58,30 +58,6 @@ type officialAnthropicIngressContract struct {
 	temperaturePresent bool
 }
 
-type officialAnthropicHeaderValue struct {
-	name  string
-	value string
-}
-
-var officialAnthropicPhase0Headers = []officialAnthropicHeaderValue{
-	{name: "Accept", value: "application/json"},
-	{name: "Content-Type", value: "application/json"},
-	{name: "User-Agent", value: officialAnthropicUserAgent},
-	{name: "X-Stainless-Arch", value: "x64"},
-	{name: "X-Stainless-Lang", value: "js"},
-	{name: "X-Stainless-OS", value: "Linux"},
-	{name: "X-Stainless-Package-Version", value: "0.94.0"},
-	{name: "X-Stainless-Retry-Count", value: "0"},
-	{name: "X-Stainless-Runtime", value: "node"},
-	{name: "X-Stainless-Runtime-Version", value: "v26.3.0"},
-	{name: "X-Stainless-Timeout", value: "600"},
-	{name: "anthropic-dangerous-direct-browser-access", value: "true"},
-	{name: "anthropic-version", value: "2023-06-01"},
-	{name: "x-app", value: "cli"},
-	{name: "Accept-Encoding", value: "gzip, deflate, br, zstd"},
-	{name: "Connection", value: "keep-alive"},
-}
-
 // finalizeAnthropicOfficialEgressRequest 在所有既有转换之后执行最小差异修正。
 // 未启用 Profile 时原样返回；启用后任何身份冲突或结构不满足都会明确失败。
 func (s *GatewayService) finalizeAnthropicOfficialEgressRequest(
@@ -113,6 +89,10 @@ func (s *GatewayService) finalizeAnthropicOfficialEgressRequest(
 	if profile.TargetPlatform != PlatformAnthropic {
 		return nil, nil, result, errors.New("Anthropic finalizer received non-Anthropic profile")
 	}
+	clientProfile, err := resolveOfficialClientProfileByID(profile.ID)
+	if err != nil {
+		return nil, nil, result, err
+	}
 
 	identity, err := resolveOfficialAnthropicIdentity(c, account, body)
 	if err != nil {
@@ -137,7 +117,7 @@ func (s *GatewayService) finalizeAnthropicOfficialEgressRequest(
 		}
 	}
 
-	finalBody, err := finalizeOfficialAnthropicBody(body, identity, previousRequestID)
+	finalBody, err := finalizeOfficialAnthropicBody(body, identity, previousRequestID, clientProfile.Build.Version)
 	if err != nil {
 		return nil, nil, result, err
 	}
@@ -159,7 +139,7 @@ func (s *GatewayService) finalizeAnthropicOfficialEgressRequest(
 	); err != nil {
 		return nil, nil, result, err
 	}
-	finalizeOfficialAnthropicHeaders(req.Header, identity.sessionID, clientRequestID)
+	finalizeOfficialAnthropicHeaders(req.Header, clientProfile, identity.sessionID, clientRequestID)
 	result.Modifications = append(result.Modifications,
 		OfficialEgressModification{Kind: "header", Field: "User-Agent"},
 		OfficialEgressModification{Kind: "header", Field: "anthropic-beta"},
@@ -438,6 +418,7 @@ func finalizeOfficialAnthropicBody(
 	body []byte,
 	identity officialAnthropicIdentity,
 	previousRequestID string,
+	clientVersion string,
 ) ([]byte, error) {
 	var err error
 	body, err = normalizeOfficialAnthropicSystemShape(body)
@@ -463,7 +444,7 @@ func finalizeOfficialAnthropicBody(
 		}
 	}
 
-	billingText := buildOfficialAnthropicBillingText(body, previousRequestID)
+	billingText := buildOfficialAnthropicBillingText(body, previousRequestID, clientVersion)
 	rawBlocks[0], err = setOfficialAnthropicSystemText(rawBlocks[0], billingText, nil)
 	if err != nil {
 		return nil, err
@@ -534,7 +515,7 @@ func finalizeOfficialAnthropicBody(
 		identity.deviceID,
 		identity.accountUUID,
 		identity.sessionID,
-		officialAnthropicCLIVersion,
+		clientVersion,
 	)
 	nextBody, err = sjson.SetBytes(nextBody, "metadata.user_id", metadataUserID)
 	if err != nil {
@@ -544,7 +525,7 @@ func finalizeOfficialAnthropicBody(
 }
 
 // normalizeOfficialAnthropicCacheProfile 把第三方客户端携带的缓存断点收敛为
-// Claude Code 2.1.218 当前实测画像：system 保留两个固定 1h 断点，messages
+// Claude Code 2.1.220 当前实测画像：system 保留两个固定 1h 断点，messages
 // 仅在最后一个可缓存内容块保留一个 1h 断点，tools 不携带断点。
 func normalizeOfficialAnthropicCacheProfile(body []byte) ([]byte, error) {
 	invalidThinking, messagePaths, toolPaths, _ := collectCacheControlPaths(body)
@@ -740,11 +721,15 @@ func collectOfficialAnthropicSystemBlocks(system gjson.Result) [][]byte {
 	return rawBlocks
 }
 
-func buildOfficialAnthropicBillingText(body []byte, previousRequestID string) string {
-	fingerprint := computeOfficialAnthropicFingerprint(body, officialAnthropicCLIVersion)
+func buildOfficialAnthropicBillingText(body []byte, previousRequestID string, versions ...string) string {
+	clientVersion := officialAnthropicCLIVersion
+	if len(versions) > 0 && strings.TrimSpace(versions[0]) != "" {
+		clientVersion = strings.TrimSpace(versions[0])
+	}
+	fingerprint := computeOfficialAnthropicFingerprint(body, clientVersion)
 	text := fmt.Sprintf(
 		"x-anthropic-billing-header: cc_version=%s.%s; cc_entrypoint=sdk-cli;",
-		officialAnthropicCLIVersion,
+		clientVersion,
 		fingerprint,
 	)
 	// 当前 cch 生成算法没有可验证来源，因此按方案约束省略，不能复制抓包值或恢复旧算法。
@@ -841,16 +826,22 @@ func deleteOfficialAnthropicCacheControl(block []byte) ([]byte, error) {
 	return next, nil
 }
 
-func finalizeOfficialAnthropicHeaders(header http.Header, sessionID, clientRequestID string) {
-	for _, item := range officialAnthropicPhase0Headers {
-		deleteHeaderAllForms(header, item.name)
-		setHeaderRaw(header, item.name, item.value)
+func finalizeOfficialAnthropicHeaders(header http.Header, profile officialClientResolvedProfile, sessionID, clientRequestID string) {
+	for _, item := range profile.Wire.StaticHeaders {
+		deleteHeaderAllForms(header, item.Name)
+		setHeaderRaw(header, item.Name, item.Value)
 	}
+	for _, item := range profile.Build.RuntimeHeaders {
+		deleteHeaderAllForms(header, item.Name)
+		setHeaderRaw(header, item.Name, item.Value)
+	}
+	deleteHeaderAllForms(header, "User-Agent")
+	setHeaderRaw(header, "User-Agent", profile.Build.UserAgent)
 	for _, name := range []string{"accept-language", "sec-fetch-mode", "x-stainless-helper-method"} {
 		deleteHeaderAllForms(header, name)
 	}
 	deleteHeaderAllForms(header, "anthropic-beta")
-	setHeaderRaw(header, "anthropic-beta", officialAnthropicBetaHeader)
+	setHeaderRaw(header, "anthropic-beta", profile.Wire.BetaHeader)
 	deleteHeaderAllForms(header, "X-Claude-Code-Session-Id")
 	setHeaderRaw(header, "X-Claude-Code-Session-Id", sessionID)
 	deleteHeaderAllForms(header, "x-client-request-id")

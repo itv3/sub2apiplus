@@ -12,6 +12,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
+	"github.com/tidwall/gjson"
 )
 
 func TestAnthropicAPIKeyMimicMessagesUsesOfficialHTTP1Headers(t *testing.T) {
@@ -69,9 +70,35 @@ func TestAnthropicAPIKeyWithoutMimicDoesNotUseOfficialHTTP1Headers(t *testing.T)
 	require.Empty(t, req.Header.Get("Connection"))
 }
 
+func TestAnthropicAPIKeyMimicPreviousModeRestoresDesktopProfile(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+	c.Request.Header.Set("User-Agent", "Kilo-Code/7.3.50")
+	service := &GatewayService{cfg: &config.Config{Gateway: config.GatewayConfig{
+		MaxLineSize: defaultMaxLineSize,
+		OfficialClientProfiles: config.GatewayOfficialClientProfilesConfig{
+			Mode: officialClientProfileModePrevious,
+		},
+	}}}
+	account := &Account{
+		ID:       904,
+		Platform: PlatformAnthropic,
+		Type:     AccountTypeAPIKey,
+		Extra:    map[string]any{"anthropic_apikey_mimic_claude_code": true},
+	}
+	body := []byte(`{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hello"}]}`)
+
+	req, wireBody, err := service.buildUpstreamRequest(
+		context.Background(), c, account, body, "anthropic-key", "apikey", "claude-sonnet-4-5", true, false,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "claude-cli/2.1.209 (external, claude-desktop-3p, agent-sdk/0.3.209)", getHeaderRaw(req.Header, "User-Agent"))
+	require.Contains(t, gjson.GetBytes(wireBody, "system.0.text").String(), "cc_entrypoint=claude-desktop-3p")
+}
+
 func TestAPIKeyMimicKeepsContext1MDespiteDefaultBetaPolicy(t *testing.T) {
-	// 默认 BetaPolicy 会对 claude-sonnet-4-6 过滤 context-1m；
-	// API Key Desktop mimic 基线必须保留该 token。
+	// 默认 BetaPolicy 会过滤 context-1m；需要 1m 的模型必须保留该动态 token。
 	settingSvc := NewSettingService(
 		&betaPolicySettingRepoStub{values: map[string]string{}},
 		&config.Config{},
@@ -92,12 +119,12 @@ func TestAPIKeyMimicKeepsContext1MDespiteDefaultBetaPolicy(t *testing.T) {
 		},
 		Credentials: map[string]any{"api_key": "anthropic-key"},
 	}
-	body := []byte(`{"model":"claude-sonnet-4-6","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+	body := []byte(`{"model":"claude-opus-4-6","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
 	req, _, err := svc.buildUpstreamRequest(
-		context.Background(), nil, account, body, "anthropic-key", "apikey", "claude-sonnet-4-6", true, true,
+		context.Background(), nil, account, body, "anthropic-key", "apikey", "claude-opus-4-6", true, true,
 	)
 	require.NoError(t, err)
 	beta := getHeaderRaw(req.Header, "anthropic-beta")
 	require.Contains(t, beta, claude.BetaContext1M)
-	require.Equal(t, strings.Join(claude.APIKeyMimicBetas(), ","), beta)
+	require.Equal(t, defaultAPIKeyMimicBetaHeader(body), beta)
 }

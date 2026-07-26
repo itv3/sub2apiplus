@@ -25,15 +25,6 @@ const (
 	BetaRedactThinking     = "redact-thinking-2026-02-12"
 	BetaContextManagement  = "context-management-2025-06-27"
 	BetaExtendedCacheTTL   = "extended-cache-ttl-2025-04-11"
-
-	// 新增（对齐官方 CLI 2.1.207 抓包，2026-07）
-	// 这些 beta 出现在官方 claude-cli/2.1.207 直连中转站的 anthropic-beta 完整列表中，
-	// API Key mimic 需补齐，否则第三方中转站容易据此识别为非官方客户端。
-	BetaThinkingTokenCount    = "thinking-token-count-2026-05-13"
-	BetaMidConversationSystem = "mid-conversation-system-2026-04-07"
-	BetaAdvisorTool           = "advisor-tool-2026-03-01"
-	BetaFallbackCredit        = "fallback-credit-2026-06-01"
-	BetaStructuredOutputs     = "structured-outputs-2025-12-15"
 )
 
 // DroppedBetas 是转发时需要从 anthropic-beta header 中移除的 beta token 列表。
@@ -64,29 +55,6 @@ const HaikuBetaHeader = BetaOAuth + "," + BetaInterleavedThinking
 // APIKeyBetaHeader API-key 账号建议使用的 anthropic-beta header（不包含 oauth）
 const APIKeyBetaHeader = BetaClaudeCode + "," + BetaInterleavedThinking + "," + BetaFineGrainedToolStreaming
 
-// APIKeyMimicBetas 返回 Anthropic API Key mimic Claude Code 时使用的完整 beta 列表。
-// 对齐官方 Claude Desktop 2.1.209 直连中转站的 anthropic-beta（2026-07 抓包），仅去掉 oauth。
-// 顺序与官方桌面抓包一致。
-//
-// 注意：只供 API Key mimic 路径使用；普通/官方 API Key 直连路径仍用 APIKeyBetaHeader，
-// 避免污染非 mimic 逻辑。桌面抓包稳定携带 context-1m，因此此处直接包含。
-func APIKeyMimicBetas() []string {
-	return []string{
-		BetaClaudeCode,
-		BetaContext1M,
-		BetaInterleavedThinking,
-		BetaMidConversationSystem,
-		BetaEffort,
-		BetaFallbackCredit,
-	}
-}
-
-// APIKeyMimicBetasWithContext1M 保留原有调用接口。当前桌面基线已固定包含 context-1m，
-// 因此直接返回同一列表，避免重复 token。
-func APIKeyMimicBetasWithContext1M() []string {
-	return APIKeyMimicBetas()
-}
-
 // APIKeyHaikuBetaHeader Haiku 模型在 API-key 账号下使用的 anthropic-beta header（不包含 oauth / claude-code）
 const APIKeyHaikuBetaHeader = BetaInterleavedThinking
 
@@ -95,14 +63,10 @@ const APIKeyHaikuBetaHeader = BetaInterleavedThinking
 // 客户端缺省时统一使用 5m"，这样既不浪费 1h 缓存额度，也保留客户端自定义能力。
 const DefaultCacheControlTTL = "5m"
 
-// CLICurrentVersion 是 sub2api 当前对外伪装的 Claude Code CLI 版本号（三段 semver）。
-// 用于 billing attribution block 中的 cc_version=X.Y.Z.{fp} 前缀以及 fingerprint 计算。
-// 必须与 DefaultHeaders["User-Agent"] 中的版本号严格一致；不一致会被 Anthropic 判第三方。
-const CLICurrentVersion = "2.1.209"
-
-// AgentSDKCurrentVersion 是 Claude Desktop 当前携带的 Agent SDK 版本。
-// 必须与 DefaultHeaders["User-Agent"] 中的 agent-sdk 版本保持一致。
-const AgentSDKCurrentVersion = "0.3.209"
+// CLICurrentVersion 是上游共享 Claude 兼容路径的默认 CLI 版本。
+// Plus 的 OAuth/API Key 官方画像不读取或修改该值，而是由私有
+// Official Client Profile Registry 按认证、端点和传输场景解析。
+const CLICurrentVersion = "2.1.161"
 
 // FullClaudeCodeMimicryBetas 返回最"像"真实 Claude Code CLI 的完整 beta 列表，
 // 用于 OAuth 账号伪装成 Claude Code 时使用。
@@ -130,15 +94,15 @@ var DefaultHeaders = map[string]string{
 	// Keep these in sync with recent Claude CLI traffic to reduce the chance
 	// that Claude Code-scoped OAuth credentials are rejected as "non-CLI" usage.
 	// 版本参考：对齐 Parrot (src/transform/cc_mimicry.py:49) 的 CLI_USER_AGENT。
-	"User-Agent":                                "claude-cli/" + CLICurrentVersion + " (external, claude-desktop-3p, agent-sdk/" + AgentSDKCurrentVersion + ")",
+	"User-Agent":                                "claude-cli/" + CLICurrentVersion + " (external, cli)",
 	"X-Stainless-Lang":                          "js",
 	"X-Stainless-Package-Version":               "0.94.0",
-	"X-Stainless-OS":                            "MacOS",
+	"X-Stainless-OS":                            "Linux",
 	"X-Stainless-Arch":                          "arm64",
 	"X-Stainless-Runtime":                       "node",
-	"X-Stainless-Runtime-Version":               "v26.3.0",
+	"X-Stainless-Runtime-Version":               "v24.3.0",
 	"X-Stainless-Retry-Count":                   "0",
-	"X-Stainless-Timeout":                       "900",
+	"X-Stainless-Timeout":                       "600",
 	"X-App":                                     "cli",
 	"Anthropic-Dangerous-Direct-Browser-Access": "true",
 }

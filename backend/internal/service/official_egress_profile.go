@@ -16,12 +16,8 @@ import (
 )
 
 const (
-	// OfficialEgressProfileVersionPhase0 固定到 2026-07-24 的阶段 0 抓包基线。
+	// OfficialEgressProfileVersionPhase0 仅保留给旧配置和测试迁移识别，生产解析不再使用组合 Bundle。
 	OfficialEgressProfileVersionPhase0 = "phase0-2026-07-24"
-
-	officialEgressTransportProfileAnthropicHTTP = "anthropic-http-phase0-2026-07-24"
-	officialEgressTransportProfileOpenAIHTTP    = "openai-http-phase0-2026-07-24"
-	officialEgressTransportProfileOpenAIWS      = "openai-ws-phase0-2026-07-24"
 )
 
 // OfficialEgressTransport 区分 HTTP 请求与 WebSocket 连接，禁止二者共用画像状态。
@@ -99,6 +95,7 @@ type OfficialEgressContextInput struct {
 	Transport       OfficialEgressTransport
 	UpstreamHost    string
 	ProfileVersion  string
+	ProfileMode     string
 	AccountType     string
 	ProxyID         int64
 	CAFingerprint   string
@@ -109,20 +106,23 @@ type OfficialEgressContextInput struct {
 // 核心路由字段创建后不可修改；动态字段只能通过 RegisterField 登记。WebSocket
 // 握手前必须 Freeze，冻结后的上下文不会接受任何身份字段变化。
 type OfficialEgressContext struct {
-	accountID          int64
-	targetPlatform     string
-	inboundEndpoint    string
-	transport          OfficialEgressTransport
-	upstreamHost       string
-	profileVersion     string
-	accountType        string
-	proxyID            int64
-	caFingerprint      string
-	transportProfileID string
-	connectionPoolID   string
-	fields             map[OfficialEgressFieldName]OfficialEgressField
-	openAIWSDerived    *officialOpenAIWSDerivedState
-	frozen             bool
+	accountID           int64
+	targetPlatform      string
+	inboundEndpoint     string
+	transport           OfficialEgressTransport
+	upstreamHost        string
+	profileVersion      string
+	profileMode         string
+	accountType         string
+	proxyID             int64
+	caFingerprint       string
+	transportProfileID  string
+	clientProfileID     string
+	clientProfileDigest string
+	connectionPoolID    string
+	fields              map[OfficialEgressFieldName]OfficialEgressField
+	openAIWSDerived     *officialOpenAIWSDerivedState
+	frozen              bool
 }
 
 // NewOfficialEgressContext 创建一份请求级公共上下文，不执行路径画像修正。
@@ -134,6 +134,7 @@ func NewOfficialEgressContext(input OfficialEgressContextInput) *OfficialEgressC
 		transport:       input.Transport,
 		upstreamHost:    normalizeOfficialEgressHost(input.UpstreamHost),
 		profileVersion:  strings.TrimSpace(input.ProfileVersion),
+		profileMode:     normalizeOfficialClientProfileMode(input.ProfileMode),
 		accountType:     strings.ToLower(strings.TrimSpace(input.AccountType)),
 		proxyID:         input.ProxyID,
 		caFingerprint:   strings.TrimSpace(input.CAFingerprint),
@@ -181,6 +182,22 @@ func (c *OfficialEgressContext) ProfileVersion() string {
 		return ""
 	}
 	return c.profileVersion
+}
+
+// ClientProfileID 返回经过 Registry 解析的不可变画像标识。
+func (c *OfficialEgressContext) ClientProfileID() string {
+	if c == nil {
+		return ""
+	}
+	return c.clientProfileID
+}
+
+// ClientProfileDigest 返回画像静态数据摘要，不包含动态身份值。
+func (c *OfficialEgressContext) ClientProfileDigest() string {
+	if c == nil {
+		return ""
+	}
+	return c.clientProfileDigest
 }
 
 func (c *OfficialEgressContext) AccountType() string {
@@ -280,6 +297,9 @@ func (c *OfficialEgressContext) Freeze() (*OfficialEgressContext, error) {
 // OfficialEgressProfile 是 Resolver 输出的公共画像选择结果。
 type OfficialEgressProfile struct {
 	Enabled            bool
+	ID                 string
+	Digest             string
+	Source             string
 	Version            string
 	TargetPlatform     string
 	InboundEndpoint    string
@@ -320,7 +340,7 @@ func resolveOfficialEgressProfile(
 	endpoint string,
 	transport OfficialEgressTransport,
 ) (OfficialEgressProfile, error) {
-	enabled, version, err := resolveOfficialEgressAccountProfile(account)
+	enabled, version, err := resolveOfficialEgressAccountProfile(account, egressContextProfileMode(egressContext))
 	if err != nil {
 		return OfficialEgressProfile{}, err
 	}
@@ -333,23 +353,33 @@ func resolveOfficialEgressProfile(
 	if err := validateOfficialEgressScope(egressContext, account, endpoint, transport, version); err != nil {
 		return OfficialEgressProfile{}, err
 	}
+	purpose := resolveOfficialEgressClientPurpose(egressContext.targetPlatform, transport)
+	resolvedClient, err := resolveOfficialClientProfile(purpose, egressContext.profileMode)
+	if err != nil {
+		return OfficialEgressProfile{}, err
+	}
+	if resolvedClient.Build.Version != version {
+		return OfficialEgressProfile{}, errors.New("official egress build version conflicts with resolved client profile")
+	}
 	profile := OfficialEgressProfile{
-		Enabled:         true,
-		Version:         version,
-		TargetPlatform:  egressContext.targetPlatform,
-		InboundEndpoint: egressContext.inboundEndpoint,
-		Transport:       transport,
-		UpstreamHost:    egressContext.upstreamHost,
-		TransportProfileID: resolveOfficialEgressTransportProfileID(
-			egressContext.targetPlatform,
-			transport,
-		),
+		Enabled:            true,
+		ID:                 resolvedClient.Wire.ID,
+		Digest:             resolvedClient.Wire.Digest,
+		Source:             resolvedClient.Wire.Source,
+		Version:            version,
+		TargetPlatform:     egressContext.targetPlatform,
+		InboundEndpoint:    egressContext.inboundEndpoint,
+		Transport:          transport,
+		UpstreamHost:       egressContext.upstreamHost,
+		TransportProfileID: resolvedClient.Wire.TransportProfileID,
 	}
 	if profile.TransportProfileID == "" {
 		return OfficialEgressProfile{}, errors.New("official egress transport profile is unavailable")
 	}
 	profile.ConnectionPoolID = buildOfficialEgressConnectionPoolID(egressContext, profile)
 	egressContext.transportProfileID = profile.TransportProfileID
+	egressContext.clientProfileID = profile.ID
+	egressContext.clientProfileDigest = profile.Digest
 	egressContext.connectionPoolID = profile.ConnectionPoolID
 	return profile, nil
 }
@@ -425,6 +455,8 @@ func ValidateOfficialEgressFinalState(egressContext *OfficialEgressContext, prof
 		return errors.New("official egress final validation requires context")
 	}
 	if profile.Version != egressContext.profileVersion ||
+		profile.ID != egressContext.clientProfileID ||
+		profile.Digest != egressContext.clientProfileDigest ||
 		profile.TargetPlatform != egressContext.targetPlatform ||
 		profile.InboundEndpoint != egressContext.inboundEndpoint ||
 		profile.Transport != egressContext.transport ||
@@ -433,7 +465,8 @@ func ValidateOfficialEgressFinalState(egressContext *OfficialEgressContext, prof
 		profile.ConnectionPoolID != egressContext.connectionPoolID {
 		return errors.New("official egress final state conflicts with resolved profile")
 	}
-	if strings.TrimSpace(profile.TransportProfileID) == "" ||
+	if strings.TrimSpace(profile.ID) == "" || strings.TrimSpace(profile.Digest) == "" ||
+		strings.TrimSpace(profile.TransportProfileID) == "" ||
 		strings.TrimSpace(profile.ConnectionPoolID) == "" {
 		return errors.New("official egress transport profile is incomplete")
 	}
@@ -516,21 +549,36 @@ func usesBuiltInOfficialEgressProfile(platform, accountType string) bool {
 	}
 }
 
-func resolveOfficialEgressAccountProfile(account *Account) (bool, string, error) {
+func resolveOfficialEgressAccountProfile(account *Account, modes ...string) (bool, string, error) {
 	if account == nil {
 		return false, "", errors.New("account is nil")
 	}
 	if !account.UsesOfficialEgressProfile() {
 		return false, "", nil
 	}
-	return true, OfficialEgressProfileVersionPhase0, nil
+	mode := officialClientProfileModeActive
+	if len(modes) > 0 {
+		mode = normalizeOfficialClientProfileMode(modes[0])
+	}
+	purpose := ""
+	switch account.Platform {
+	case PlatformAnthropic:
+		purpose = officialClientPurposeAnthropicOAuthMessagesHTTP
+	case PlatformOpenAI:
+		purpose = officialClientPurposeOpenAIOAuthResponsesHTTP
+	}
+	profile, err := resolveOfficialClientProfile(purpose, mode)
+	if err != nil {
+		return false, "", err
+	}
+	return true, profile.Build.Version, nil
 }
 
-// NormalizeBuiltInOfficialEgressExtra 清理已废弃的账号级画像键和冲突配置。
+// NormalizeBuiltInOfficialEgressExtra 仅清理已废弃的账号级画像键。
 //
 // 官方出站画像已经按账号平台与认证类型自动生效。管理端即使收到旧版客户端
-// 提交的开关或版本字段，也不得继续保存。符合条件的账号同时清理过去由独立
-// TLS、会话和缓存开关控制的重复画像字段。
+// 提交的开关或版本字段，也不得继续保存。TLS、会话、缓存和自定义地址配置
+// 必须原样保留为休眠配置，避免用户切换账号类型后丢失原设置。
 func NormalizeBuiltInOfficialEgressExtra(platform, accountType string, extra map[string]any) (map[string]any, error) {
 	if extra == nil {
 		return nil, nil
@@ -543,27 +591,38 @@ func NormalizeBuiltInOfficialEgressExtra(platform, accountType string, extra map
 	delete(normalized, "official_egress_enabled")
 	delete(normalized, "official_egress_profile_version")
 
-	if !usesBuiltInOfficialEgressProfile(platform, accountType) {
-		return normalized, nil
-	}
-	if customBaseURLEnabled, _ := normalized["custom_base_url_enabled"].(bool); customBaseURLEnabled {
-		return nil, infraerrors.BadRequest(
-			"OFFICIAL_EGRESS_CUSTOM_BASE_URL_CONFLICT",
-			"built-in official egress cannot be used with custom_base_url",
-		)
-	}
-
-	// 内置官方画像统一接管应用字段、会话身份和传输画像。
-	for _, key := range []string{
-		"enable_tls_fingerprint",
-		"tls_fingerprint_profile_id",
-		"session_id_masking_enabled",
-		"cache_ttl_override_enabled",
-		"cache_ttl_override_target",
-	} {
-		delete(normalized, key)
-	}
 	return normalized, nil
+}
+
+// ValidateBuiltInOfficialEgressExtraTransition 拒绝新开启与内置 OAuth 画像冲突的
+// 配置，但允许历史值继续休眠，也允许用户关闭这些配置。
+func ValidateBuiltInOfficialEgressExtraTransition(
+	platform, accountType string,
+	current, incoming map[string]any,
+) error {
+	if !usesBuiltInOfficialEgressProfile(platform, accountType) || incoming == nil {
+		return nil
+	}
+	conflicts := []struct {
+		Key  string
+		Code string
+	}{
+		{Key: "custom_base_url_enabled", Code: "OFFICIAL_EGRESS_CUSTOM_BASE_URL_CONFLICT"},
+		{Key: "enable_tls_fingerprint", Code: "OFFICIAL_EGRESS_TLS_FINGERPRINT_CONFLICT"},
+		{Key: "session_id_masking_enabled", Code: "OFFICIAL_EGRESS_SESSION_MASKING_CONFLICT"},
+		{Key: "cache_ttl_override_enabled", Code: "OFFICIAL_EGRESS_CACHE_TTL_CONFLICT"},
+	}
+	for _, conflict := range conflicts {
+		incomingEnabled, _ := incoming[conflict.Key].(bool)
+		currentEnabled, _ := current[conflict.Key].(bool)
+		if incomingEnabled && !currentEnabled {
+			return infraerrors.BadRequest(
+				conflict.Code,
+				"内置官方出站画像生效时不能新开启配置 "+conflict.Key,
+			)
+		}
+	}
+	return nil
 }
 
 func buildOfficialEgressConnectionPoolID(
@@ -575,9 +634,10 @@ func buildOfficialEgressConnectionPoolID(
 		caState = egressContext.caFingerprint
 	}
 	return fmt.Sprintf(
-		"account=%d|profile=%s|transport=%s|host=%s|proxy=%d|ca=%s|tls_profile=%s",
+		"account=%d|profile=%s|digest=%s|transport=%s|host=%s|proxy=%d|ca=%s|tls_profile=%s",
 		egressContext.accountID,
-		profile.Version,
+		profile.ID,
+		profile.Digest,
 		profile.Transport,
 		profile.UpstreamHost,
 		egressContext.proxyID,
@@ -604,20 +664,24 @@ func officialEgressWebSocketIdentityKey(
 	return fmt.Sprintf("%x", sum[:12])
 }
 
-func resolveOfficialEgressTransportProfileID(
-	targetPlatform string,
-	transport OfficialEgressTransport,
-) string {
+func resolveOfficialEgressClientPurpose(targetPlatform string, transport OfficialEgressTransport) string {
 	switch {
 	case targetPlatform == PlatformAnthropic && transport == OfficialEgressTransportHTTP:
-		return officialEgressTransportProfileAnthropicHTTP
+		return officialClientPurposeAnthropicOAuthMessagesHTTP
 	case targetPlatform == PlatformOpenAI && transport == OfficialEgressTransportHTTP:
-		return officialEgressTransportProfileOpenAIHTTP
+		return officialClientPurposeOpenAIOAuthResponsesHTTP
 	case targetPlatform == PlatformOpenAI && transport == OfficialEgressTransportWebSocket:
-		return officialEgressTransportProfileOpenAIWS
+		return officialClientPurposeOpenAIOAuthResponsesWS
 	default:
 		return ""
 	}
+}
+
+func egressContextProfileMode(egressContext *OfficialEgressContext) string {
+	if egressContext == nil {
+		return officialClientProfileModeActive
+	}
+	return egressContext.profileMode
 }
 
 func officialEgressRedactedLogAttributes(
@@ -647,6 +711,9 @@ func officialEgressRedactedLogAttributes(
 		"transport", egressContext.transport,
 		"upstream_host", egressContext.upstreamHost,
 		"profile_version", profile.Version,
+		"profile_id", profile.ID,
+		"profile_digest", profile.Digest,
+		"profile_source", profile.Source,
 		"transport_profile", profile.TransportProfileID,
 		"proxy_id", egressContext.proxyID,
 		"custom_ca", egressContext.caFingerprint != "",

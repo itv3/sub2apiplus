@@ -347,6 +347,18 @@ func TestLoadDefaultOpenAIFirstOutputTimeoutsDisabled(t *testing.T) {
 	require.Zero(t, cfg.Gateway.OpenAIHighEffortFirstOutputTimeoutSeconds)
 }
 
+func TestOfficialClientProfilesDefaultAndValidation(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "active", cfg.Gateway.OfficialClientProfiles.Mode)
+
+	cfg.Gateway.OfficialClientProfiles.Mode = "previous"
+	require.NoError(t, cfg.Validate())
+	cfg.Gateway.OfficialClientProfiles.Mode = "invalid"
+	require.ErrorContains(t, cfg.Validate(), "gateway.official_client_profiles.mode")
+}
+
 func TestLoadOpenAIFirstOutputTimeoutsFromEnv(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("GATEWAY_OPENAI_FIRST_OUTPUT_TIMEOUT_SECONDS", "90")

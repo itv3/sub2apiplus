@@ -32,7 +32,7 @@ func TestOfficialEgressT2_OAuthAccountAutomaticallyAttachesHTTPProfile(t *testin
 	require.NotSame(t, upstreamRequest, got)
 	egressContext, exists := OfficialEgressContextFromContext(got.Context())
 	require.True(t, exists)
-	require.Equal(t, OfficialEgressProfileVersionPhase0, egressContext.ProfileVersion())
+	require.Equal(t, "2.1.220", egressContext.ProfileVersion())
 }
 
 func TestOfficialEgressT2_APIKeyAccountKeepsHTTPRequestUntouched(t *testing.T) {
@@ -249,26 +249,40 @@ func TestOfficialEgressT2_BuiltInAccountExtraNormalization(t *testing.T) {
 		},
 	)
 	require.NoError(t, err)
-	for _, legacyKey := range []string{
+	for _, dormantKey := range []string{
 		"enable_tls_fingerprint",
 		"tls_fingerprint_profile_id",
 		"session_id_masking_enabled",
 		"cache_ttl_override_enabled",
 		"cache_ttl_override_target",
 	} {
-		_, exists := normalized[legacyKey]
-		require.False(t, exists, legacyKey)
+		_, exists := normalized[dormantKey]
+		require.True(t, exists, dormantKey)
 	}
 
-	_, err = NormalizeBuiltInOfficialEgressExtra(
+	conflicting := map[string]any{
+		"custom_base_url_enabled": true,
+		"custom_base_url":         "https://relay.example.com",
+	}
+	normalized, err = NormalizeBuiltInOfficialEgressExtra(
 		PlatformAnthropic,
 		AccountTypeOAuth,
-		map[string]any{
-			"custom_base_url_enabled": true,
-			"custom_base_url":         "https://relay.example.com",
-		},
+		conflicting,
 	)
-	require.ErrorContains(t, err, "cannot be used with custom_base_url")
+	require.NoError(t, err)
+	require.Equal(t, true, normalized["custom_base_url_enabled"])
+	require.Error(t, ValidateBuiltInOfficialEgressExtraTransition(
+		PlatformAnthropic,
+		AccountTypeOAuth,
+		nil,
+		conflicting,
+	))
+	require.NoError(t, ValidateBuiltInOfficialEgressExtraTransition(
+		PlatformAnthropic,
+		AccountTypeOAuth,
+		conflicting,
+		conflicting,
+	))
 
 	apiKeyExtra, err := NormalizeBuiltInOfficialEgressExtra(
 		PlatformOpenAI,
@@ -366,10 +380,17 @@ func newOfficialEgressTestContext(
 		InboundEndpoint: endpoint,
 		Transport:       transport,
 		UpstreamHost:    host,
-		ProfileVersion:  OfficialEgressProfileVersionPhase0,
+		ProfileVersion:  officialEgressActiveVersionForTest(account),
 		AccountType:     account.Type,
 		ProxyID:         proxyID,
 	})
+}
+
+func officialEgressActiveVersionForTest(account *Account) string {
+	if account != nil && account.Platform == PlatformAnthropic {
+		return "2.1.220"
+	}
+	return "0.145.0"
 }
 
 func mustOfficialEgressField(
