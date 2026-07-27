@@ -211,7 +211,7 @@ Profile 只在入口端点受支持，且目标平台、OAuth 账号、实际出
 | **三条路径的实现层语义** | Anthropic 的 system/动态 beta 语义、OpenAI HTTP 的入口语义保真与 Cookie 生命周期、WebSocket 的逐项 turn metadata 与真实无 turn-state 基准均通过 |
 | **真实第三方定型** | 非 Codex HTTP 与原始 RFC 6455 WS 实际发送 `tool_choice=required`、`max_output_tokens=123`、错误 store/stream/include/context；出站固定字段全部回到官方非 Lite 契约，顶层 instructions/tools 与业务 reasoning/text 守恒。Anthropic 三块 system 与 `custom.defer_loading` 也由真实请求触发，比较结果 `all_passed=true` |
 | **历史 Kilo 六组合** | 六组合曾以真实 Kilo 界面完成 S1 与 S4 读文件工具闭环；`0.1.164-6` 另补 OpenAI Responses → OpenAI WS 的 S2。该矩阵是历史协议转换回归，不是 `0.1.165-4` 本轮新证据 |
-| **模式独立性** | 自动透传开关及四种 WS mode 均不绕过 Profile，按实际出站协议选择 HTTP 或 WS 画像；`ctx_pool` 与 `passthrough` 都会为第三方入站补出 `generate=false` 预热往返并把业务帧挂到预热响应上，两种 mode 的出站帧序列一致 |
+| **模式独立性** | 画像由**实际出站协议**决定，不由账号配置直接决定：HTTP 入站恒走 HTTP 出站与 HTTP 画像，账号 WS mode 不参与；只有 WebSocket 入站时 mode 才生效——`ctx_pool` 与 `passthrough` 走 WS 出站与 WS 画像，`http_bridge` 转 HTTP 出站与 HTTP 画像，`off` 直接拒绝该连接而不是降级。全局 `mode_router_v2_enabled` 关闭时固定按 `ctx_pool` 处理。自动透传开关同样不绕过 Profile。两种 WS 出站 mode 都会为第三方入站补出 `generate=false` 预热往返并把业务帧挂到预热响应上，帧序列一致 |
 | **适用边界** | Anthropic/OpenAI OAuth 自动生效；API Key、其他平台及非模型入口保持原行为 |
 | **安全与回归** | 敏感值未进入普通日志；Host、代理和重定向边界受控；全量、竞态、性能及合并演练通过 |
 
@@ -782,7 +782,7 @@ git diff --stat "$BASE..HEAD"
 - **compact 身份**：`prompt_cache_key` 与 installation ID 的补齐——见 §1.1.1.1；比较器需同时覆盖 compact 与顶层语义参数。
 - **连接池与身份生命周期**：连接池键构成、HTTP 重试重建上下文、WebSocket 握手后冻结身份——见 §1.1.3.3。
 - **Cookie 与会话状态**：Cookie jar 的隔离维度与域名 allowlist、WS 不接入 jar、`x-codex-turn-state` 的拒绝与回放条件——见 §1.1.1.1。
-- **模式独立性**：自动透传开关与四种 WS mode 不绕过 Profile，按实际出站协议选择画像；`ctx_pool` 与 `passthrough` 都要补预热往返并链接业务帧——见 §1.1.3.4。
+- **模式独立性**：画像按实际出站协议选择，不由账号配置直接决定——HTTP 入站恒走 HTTP 画像且 WS mode 不参与；WS 入站时 `ctx_pool`/`passthrough` 走 WS 画像、`http_bridge` 转 HTTP 画像、`off` 拒绝连接；`mode_router_v2_enabled` 关闭时固定按 `ctx_pool` 处理；两种 WS 出站 mode 都要补预热往返并链接业务帧——见 §1.1.3.4。
 - **身份与失败边界**：Profile ID/digest/source 与最终 Method/Host/Path 受控、禁止自动重定向、校验失败时明确失败并记录脱敏原因——见 §1.1.3.1、§1.1.3.4。
 - OAuth 冲突配置必须作为 dormant 数据保留；新建或从关闭切到开启的冲突值要显式拒绝，不得在保存时静默删除。
 
