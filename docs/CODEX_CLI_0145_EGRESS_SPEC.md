@@ -350,6 +350,24 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 - **状态**：🔴 **未对齐** —— Sub2API 在
   `openai_codex_models_service.go:318` 设 `Accept: application/json`
 
+### SPEC-HDR-007　会话头一律用连字符，且无 `conversation-id`
+
+- **规则**：官方会话头只有两个，**均为连字符小写**：`session-id`、`thread-id`
+- **依据**：`codex-api/src/requests/headers.rs:8,11` `build_session_headers()`
+  `insert_header(&mut headers, "session-id"/"thread-id", …)`　[L1]
+  ─ 下划线形式的 `session_id` 在官方仅出现于 **JSON body 的 key**
+  （`core/src/responses_metadata.rs:27`）与工具参数，**header 层绝无**　[L1 反证]
+  ─ 官方**没有** `conversation-id` / `conversation_id` 这个 header（`thread-id`
+  是它的对应物）
+- **观测**：任意通道
+- **可变性**：固定
+- **状态**：🔴 **未对齐** —— `openai_alpha_search.go:255-256` 设
+  `Session_ID` 与 `Conversation_ID`（下划线）。两处都错：形式用了下划线，
+  且 `Conversation_ID` 是官方不存在的 header。
+  ─ 该文件经 `enforceCodexIdentityHeaders` 最终把 UA 设为
+  `codexCLIUserAgent = openaiidentity.CodexUserAgent`（`openai_gateway_service.go:38`），
+  即同一个带错误 suffix 的常量，**印证 SPEC-HDR-005 的全局性**
+
 ### SPEC-HDR-003　不发 `accept-language`
 
 - **规则**：官方**从不**发送 `accept-language`
