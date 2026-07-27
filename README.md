@@ -35,6 +35,8 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 
 本轮验收基于源码版本 `0.1.165-4`（已合并上游 `v0.1.165`），由 Vircs 直接编译并运行最终复核镜像；`active` 画像为 Claude Code CLI `2.1.220` 和 Codex CLI `0.145.0`。逐路径结论见下表，解读时注意两条边界：
 
+> `0.1.165-5` 在此基础上闭合了数据保真、Lite 判定分裂、重复键 panic 与 API Key 画像 TLS 决策来源，已作为正式版发布（GitHub Releases `v0.1.165-5`，镜像 `ghcr.io/itv3/sub2apiplus:0.1.165-5`），生产已切换为该已发布镜像。下表的路径结论在 `0.1.165-5` 仍然成立，新增的 wire 证据与未覆盖边界见 [P0 数据保真修复记录](docs/P0_DATA_FIDELITY_FIX_20260727.md)。
+
 1. “通过”指应用层契约一致、语义守恒和 direct TLS 一致，不是逐字节相同；完整判定口径见 §1.1.2.3。
 2. Anthropic 侧因官方上游返回 `400 organization disabled`（#50 组织禁用），本轮用单次真实第三方请求完成 system、动态 beta、应用契约和 direct TLS 验收，未执行 §1.1.2.2 要求的完整 S1/S2/S4，也不能宣称功能响应成功。
 

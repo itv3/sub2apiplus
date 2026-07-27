@@ -65,7 +65,25 @@
 `TestDecodeOrderedRawJSONObjectDeduplicatesKeys` 双双变红，并精确捕获
 `runtime error: makeslice: cap out of range`，随后已还原。
 
-## 6. Vircs 构建与生产切换
+## 6. 正式发布与生产部署（最终状态）
+
+本轮修复已作为正式版发布，生产运行的是已发布镜像而非本地编译镜像：
+
+| 项目 | 值 |
+|---|---|
+| GitHub Release | `v0.1.165-5`（annotated tag，CI 构建成功，用时 9m4s） |
+| 提交 | `0922523a6`，含合并进来的 API Key 画像 TLS 收口（`0f2c914f9`） |
+| 生产镜像 | `ghcr.io/itv3/sub2apiplus:0.1.165-5` |
+| 镜像 ID | `sha256:11ea1280ce56e33043767a8419e8f72eb2f23a6554d2b3624eae7bf78c2a6c06` |
+| 容器内二进制 | `Sub2API 0.1.165-5 (commit: 0922523a6dd097dca243f4eb9deba40f00e37810, built: 2026-07-27T04:21:59Z)` |
+| 状态 | `healthy`、`RestartCount=0`、`/health` 返回 `{"status":"ok"}`、启动后 0 条 ERROR |
+| compose 备份 | `/root/Docker/sub2apiplus/backups/docker-compose.pre-ghcr-0.1.165-5.yml` |
+
+容器内二进制自报的 commit 与 `origin/main` HEAD 完全一致，可确认运行的就是本轮提交的代码。PostgreSQL 与 Redis 保持 7 天连续运行未受影响，数据卷未动。
+
+清理结果：删除 7 个历史构建目录、8 个临时镜像，`docker builder prune` 回收 10.5 GB。根分区占用由 29 G 降至 18 G；数据卷 1 个 0 B，未触碰。保留 `p0-data-fidelity-fix-0.1.165-5-20260727T034217Z` 本地镜像与最近两份 compose 备份作为回滚点。
+
+## 7. 阶段性 Vircs 构建与切换（过程记录）
 
 - 源码目录：`/root/sub2apiplus-build/p0-data-fidelity-fix-20260727T032232Z`
 - 运行镜像：`sub2apiplus:p0-data-fidelity-fix-0.1.165-5-20260727T034217Z`
