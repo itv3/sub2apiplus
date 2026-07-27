@@ -144,8 +144,15 @@ def handle(connection: ssl.SSLSocket, records: list, lock: threading.Lock) -> No
         record["tls_version"] = connection.version()
         with lock:
             records.append(record)
-        connection.sendall(build_response(record.get("request_line", ""),
-                                          record.get("header_names_in_order")))
+        names = record.get("header_names_in_order") or []
+        is_upgrade = any(n.strip().lower() == "upgrade" for n in names)
+        if is_upgrade and os.environ.get("H1_PROBE_DROP_WS") == "1":
+            # 直接断开而不回任何响应：官方的 force_http_fallback 由**连接层断开**
+            # 触发（core/src/client.rs:509），回 HTTP 400 只会让它走错误退出。
+            # 断连后官方会打印 Falling back from WebSockets to HTTPS transport，
+            # 随后的 POST /responses 才采得到。
+            return
+        connection.sendall(build_response(record.get("request_line", ""), names))
     except (OSError, ssl.SSLError):
         pass
     finally:
