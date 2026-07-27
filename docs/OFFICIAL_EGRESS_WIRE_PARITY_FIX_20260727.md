@@ -257,6 +257,32 @@ turn-state"的原因不止是来源接错——上游在当前场景下本身就
 P1-5/6/7 三条只改了 header 与 TLS 层，各自的入口（count_tokens、images、alpha/search）
 本轮**未构造真实请求验证**，仅由代码路径与既有单测保证。
 
+### 6.5.2 h1 直连观测能力与 P0-1 实证
+
+`tools/official_client_capture/h1_wire_probe.py` 与 `run_h1_wire_probe.sh` 补齐了此前缺失的
+观测手段：用抓包 CA 签发 `chatgpt.com` 证书，由 hosts 把域名指向 capture-cli 容器内的探针。
+Sub2API 认为自己在直连，于是使用空 ALPN 的直连画像，服务端据此协商 HTTP/1.1，探针读到
+未经改写的原始请求行与 header 字节。探针不转发到真实上游，不消耗配额。
+
+实施中的两个坑已固化在脚本里：宿主机 443 被占用，故探针跑在 capture-cli 容器内并让 hosts
+指向其容器 IP；`docker restart` 会重新生成 `/etc/hosts`，因此必须先装 CA 再重启，最后改
+hosts（Go 的 resolver 每次解析都读该文件，无需二次重启）。产物对认证与动态身份头脱敏。
+
+运行 `h1-wire-20260727T123215Z` 的实测结果：
+
+| 请求 | ALPN | header 数 | 非小写项 |
+|---|---|---|---|
+| `GET /backend-api/codex/models?client_version=0.145.0` | 无（h1） | 7 | 仅 `Host` |
+| `POST /backend-api/codex/responses` | 无（h1） | 17 | 仅 `Host`、`Content-Length` |
+
+**P0-1 由此升级为实测通过**：业务请求 17 个 header 中 15 个为小写，含 `user-agent`
+（证明抑制 Go 默认 UA 的处理在真实出站上生效）。`Host` 与 `Content-Length` 由 Go 的
+`Request.write` 硬编码输出，不经 `writeSubset`，无法通过 map key 控制。
+
+**P3-15 的差异同时被量化**：出站顺序为 `Host` → `Content-Length` → 其余**严格字典序**，
+而官方 hyper 按 `HeaderMap` 插入顺序。要给出"官方顺序是什么"的基线，还需要用同一探针
+捕获官方 CLI 的 h1 线形（把官方 CLI 的 hosts 指向探针），本轮未做。
+
 ### 6.6 本轮未覆盖
 
 1. P0-1 与 P0-3 只到代码级：前者的 h1 线形被 h2 抓包掩盖，后者的 ClientHello 需 direct pcap。
