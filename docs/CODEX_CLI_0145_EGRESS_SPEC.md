@@ -176,6 +176,20 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 
 ## 4. HTTP/2 帧层
 
+> ### ⚠ 本层基线存在观测污染，先读这段
+>
+> 采集官方 h2 基线时用了 `CODEX_CA_CERTIFICATE` 让官方信任探针证书。而官方
+> `http-client/src/custom_ca.rs:307` 在**检测到自定义 CA 时会调用
+> `builder.use_rustls_tls()`**——即从默认的 native-tls **切换到 rustls**。
+>
+> 也就是说，**本层记录的"官方值"实际是官方在 rustls 分支下的值**，不是它默认
+> （native-tls）的行为。这是典型的观测污染：观测手段改变了被观测对象。
+>
+> 该形态仍是真实的官方形态之一（企业代理 + 自定义 CA 的用户就走这条），但
+> **可变性是"条件"而非"固定"**，条件是「是否配置了自定义 CA」。官方在
+> native-tls 分支下经代理的 h2 形态，**至今未测**——实测裸 reqwest（照官方
+> features）经代理时根本不 offer h2（`negotiated_alpn = None`）。
+>
 > **仅在经代理时可见**（SPEC-PROTO-001）。且 **mitmproxy 看不到本层**——它用自己的
 > h2 栈重建连接，客户端原始 SETTINGS 的集合、取值与帧内顺序在转发后已丢失。
 > 必须用 CONNECT 代理式 h2 探针。
@@ -399,3 +413,41 @@ SPEC-H2-003/006/007 须 fork `x/net/http2`，更不论 Go 与 Rust 在 TCP 时�
 本表能给出的是：**把"我们觉得差不多"变成"差 N 项，每项差多少、为什么改不了、
 修它要付什么代价"**。这是能守住的目标；追求绝对不可区分会导致无限投入，且永远
 无法证明达成。
+
+---
+
+## 10. Rust 同源方案的可行性验证（2026-07-27）
+
+背景：本表的 ❌ 项大多卡在「Go 标准库无配置入口，须自写 wire 或 fork」。若出站层
+改用**官方同版本的 Rust 依赖**，这些形态可能无需复刻即自动一致。已做 PoC 验证。
+
+PoC 依赖严格锁定官方 `Cargo.lock`：`rust 1.95.0` / `reqwest =0.12.28` /
+`tungstenite =0.27.0`，reqwest 的 features 照抄官方（`cookies`）。
+
+| 层 | 结果 | 说明 |
+|---|---|---|
+| **h1 header 顺序 / 大小写 / `host` 位置** | ✅ **逐字节一致** | 与官方基线完全相同，**未写一行顺序控制代码** |
+| **WS 握手前 5 项** | ✅ **完全一致** | `Host, Connection, Upgrade, Sec-WebSocket-Version, Sec-WebSocket-Key` 大写驼峰且顺序对 |
+| **WS 剩余头顺序** | ⚠ **取决于插入顺序** | 实测输出为插入序的**逆序**——`swap_remove` 扰动为实（SPEC-WS-002）。要匹配官方须对齐插入顺序，不是白拿 |
+| **h2 SETTINGS 四项 + `WINDOW_UPDATE`** | ✅ **逐项一致** | 需显式 `.use_rustls_tls()`，即复刻官方 `custom_ca.rs:307` 的分支 |
+
+实测记录：`local-analysis/captures/wire-parity-fix-20260727/rust-poc/`
+
+### 10.1 由此得到的两条结论
+
+**一、"用同样的库"≠"自动一致"，还须对齐配置分支。** h2 那组数值在裸 reqwest 下
+根本测不到（不 offer h2），加上 `.use_rustls_tls()` 后才逐项吻合。**这恰好也是
+SPEC-H2 段观测污染的成因**——两件事是同一个开关。
+
+**二、IPC 协议必须保序。** h1 的自动一致性来自 `HeaderMap` 的插入序。若 Go 侧把
+header 用 map / JSON object 传给 Rust，顺序当场丢失，hyper 的保序输出随之失效，
+等于绕一圈回到原点。**跨语言协议必须用数组传 header**。
+
+### 10.2 未验证的部分
+
+- **TLS ClientHello 不在"白拿"清单内**：官方 HTTP 默认走 native-tls，底层是
+  **系统 OpenSSL**，形态取决于容器内的 OpenSSL 版本而非 Rust 依赖。
+  （反过来说官方自身也因用户机器而异，是分布而非单值，要求本就较低。）
+- h2 伪头顺序未采到（PoC 连接在 HEADERS 帧前结束）
+- 架构代价一分未减：IPC、SSE 流式透传的背压、Go 侧 official_egress 的迁移、
+  计费与日志跨进程、Rust 侧重建重试与连接池、以及长期的 Rust 维护能力
