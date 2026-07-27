@@ -30,7 +30,7 @@
 | P2 | 10：`strictIngressIdentity` 分叉 | 按既定决策保留不改 |
 | P1 | 5~8：四条旁路端点无画像 | **本轮不做**，理由见下 |
 | P3 | 13：WS turn-state 来源 | **本轮不做**，理由见下 |
-| P3 | 14~16：h2 SETTINGS、h1 header 顺序、WS 握手头序 | 本轮不做，理由见 §4 |
+| P3 | 14~16：h2 SETTINGS、h1 header 顺序、WS 握手头序 | 官方 h1 基线已补齐（§6.7）；14 被基线缺失阻塞、15 是独立工程，结论见 §6.8 |
 | P3 | 17：WS 连接池规模 | 记录，不改 |
 
 ### 范围收窄的理由
@@ -280,8 +280,53 @@ hosts（Go 的 resolver 每次解析都读该文件，无需二次重启）。�
 `Request.write` 硬编码输出，不经 `writeSubset`，无法通过 map key 控制。
 
 **P3-15 的差异同时被量化**：出站顺序为 `Host` → `Content-Length` → 其余**严格字典序**，
-而官方 hyper 按 `HeaderMap` 插入顺序。要给出"官方顺序是什么"的基线，还需要用同一探针
-捕获官方 CLI 的 h1 线形（把官方 CLI 的 hosts 指向探针），本轮未做。
+而官方 hyper 按 `HeaderMap` 插入顺序。官方侧的基线已在 §6.7 补齐。
+
+### 6.7 官方 CLI 的 h1 基线（`official-h1-full-20260727T124125Z`）
+
+把官方 CLI 自身的 hosts 指向同一探针、用 `CODEX_CA_CERTIFICATE` 让它信任探针证书后，
+采到官方 11 条 h1 请求。官方**有两套形态**，此前的分析只覆盖了其中一套：
+
+| 形态 | 实现 | header 名 | `host` 位置 |
+|---|---|---|---|
+| 普通 HTTP | hyper | **全小写** | **倒数第二**（`content-length` 在其后） |
+| WS 握手 | tungstenite | 前 5 项**大写驼峰** | `Host` 在**最前** |
+
+实测顺序：
+
+- `GET /backend-api/codex/models`：`version, authorization, chatgpt-account-id, accept, originator, user-agent, host`
+- `POST /backend-api/ps/mcp`：`originator, x-openai-product-sku, authorization, chatgpt-account-id, accept, content-type, host, content-length`
+- WS 握手 `GET /backend-api/codex/responses`：`Host, Connection, Upgrade, Sec-WebSocket-Version, Sec-WebSocket-Key, chatgpt-account-id, authorization, user-agent, originator, openai-beta, version, x-codex-beta-features, x-client-request-id, session-id, thread-id, x-codex-window-id, x-codex-turn-metadata, sec-websocket-extensions`
+
+三项由此确定：
+
+1. **官方普通 HTTP 连 `host` 都是小写**，Sub2API 的 `Host` 大写且在最前，两处都偏离。
+2. **官方 WS 握手前 5 项反而是大写驼峰**（tungstenite 按硬编码字面量写，其余才走
+   `HeaderName::as_str()` 的小写路径）。P3-16 若照"全小写"去改，方向是错的。
+3. 官方组装顺序为 `provider.build_request`（基础头）→ `extend(extra_headers)` →
+   `apply_auth`（最后），见 `codex-api/src/endpoint/session.rs:48`。
+
+**未采到官方 HTTP `POST /responses`**：官方默认走 WS，HTTP 是 `force_http_fallback`
+（`core/src/client.rs:509`）的降级路径。探针把 WS 握手从回 200 改为回 400 后，重试从
+3 次降到 2 次，但官方仍走错误退出而非降级。**Sub2API 的默认 HTTP 出站，其官方参照物
+本身是官方极少走的降级路径**——这一点对 P3-15 的优先级判断是实质性的。
+
+### 6.8 P3-15 与 P3-14 的结论
+
+**P3-15 可修，但是独立工程，本轮不做。** Go 的 `Request.write` 硬编码
+`fmt.Fprintf(w, "Host: %s\r\n", host)` 并把 `Host`/`User-Agent`/`Content-Length`
+排除在 `writeSubset` 之外，其余强制字典序。没有任何 `Transport` 配置能改变这两点，
+**唯一出路是自写 h1 请求侧字节**（劫持 `net.Conn`，响应侧仍可用 `http.ReadResponse`）。
+代价约 350 行加测试，且落在全部 OAuth 出站的核心路径上：需自管连接复用、SSE 长读、
+超时与解压。它是全有或全无——`Host` 的大小写无法单独修。建议独立分支推进并带
+profile 开关灰度。
+
+**P3-14 在拿到官方 h2 基线前不能动手。** 官方直连是空 ALPN（探针实测
+`negotiated_alpn=None`），恒为 h1，**根本不产生 h2 流量**；h2 只在经代理时出现。
+Go 的 `x/net/http2.Transport` 只暴露 `MaxHeaderListSize`、`MaxReadFrameSize`、
+`MaxDecoderHeaderTableSize`，而偏离项里的 `INITIAL_WINDOW_SIZE`、首个
+`WINDOW_UPDATE` 增量与伪头顺序都在帧层写死，须 fork。在没有官方经代理的 h2 基线的
+前提下调这些值，是拿一个偏离换另一个偏离。**先补基线，再谈修复。**
 
 ### 6.6 本轮未覆盖
 

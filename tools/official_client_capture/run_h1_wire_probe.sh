@@ -45,7 +45,7 @@ cleanup() {
     docker exec "$capture_container" pkill -f h1_wire_probe.py >/dev/null 2>&1 || true
   fi
   if [[ $hosts_patched == 1 ]]; then
-    docker cp "$hosts_backup" "$service_container:/etc/hosts" >/dev/null 2>&1 || true
+    docker exec "$service_container" sh -c 'grep -v " chatgpt.com$" /etc/hosts > /tmp/.hosts.restore && cat /tmp/.hosts.restore > /etc/hosts && rm -f /tmp/.hosts.restore' >/dev/null 2>&1 || true
   fi
   if [[ $ca_installed == 1 ]]; then
     docker exec "$service_container" rm -f "$custom_ca_path" >/dev/null 2>&1 || true
@@ -136,6 +136,7 @@ for _ in $(seq 1 90); do
   sleep 1
 done
 
+docker exec "$service_container" sh -c 'grep -v " chatgpt.com$" /etc/hosts > /tmp/.hosts.pre && cat /tmp/.hosts.pre > /etc/hosts && rm -f /tmp/.hosts.pre'
 docker exec "$service_container" sh -c "printf '%s chatgpt.com\n' '$probe_ip' >> /etc/hosts"
 hosts_patched=1
 docker exec "$service_container" sh -c "grep chatgpt.com /etc/hosts" >/dev/null

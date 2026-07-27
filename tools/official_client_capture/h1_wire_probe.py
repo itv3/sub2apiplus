@@ -30,13 +30,55 @@ HEADER_TERMINATOR = b"\r\n\r\n"
 MAX_HEADER_BYTES = 256 * 1024
 READ_CHUNK = 65536
 
-RESPONSE = (
+SSE_RESPONSE = (
     b"HTTP/1.1 200 OK\r\n"
     b"content-type: text/event-stream\r\n"
     b"connection: close\r\n"
     b"\r\n"
     b"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_h1_probe\"}}\n\n"
 )
+
+# 观测官方 CLI 时，模型清单必须回一份能解析的载荷，否则 CLI 在清单阶段就退出，
+# 后续的 /responses 请求根本不会发出，也就采集不到真正要对比的 POST 形态。
+MODELS_BODY = (
+    b'{"models":[{"slug":"gpt-5.6-luna","display_name":"GPT-5.6 Luna",'
+    b'"visibility":"list","use_responses_lite":true,'
+    b'"supports_parallel_tool_calls":true}]}'
+)
+
+
+# 官方在 WS 握手失败时会调用 force_http_fallback 降级到 HTTP POST（client.rs:509）。
+# 探针无法完成 WS 升级，若回 200 客户端会当成协议异常并重试三次，把采集配额耗光；
+# 明确回 400 让它一次就降级，POST /responses 的 h1 形态才采得到。
+WS_REJECT = (
+    b"HTTP/1.1 400 Bad Request\r\n"
+    b"content-length: 0\r\n"
+    b"connection: close\r\n"
+    b"\r\n"
+)
+
+
+def build_response(request_line: str, header_names: list[str] | None = None) -> bytes:
+    if header_names and any(name.strip().lower() == "upgrade" for name in header_names):
+        return WS_REJECT
+    if "/codex/models" in request_line:
+        return (
+            b"HTTP/1.1 200 OK\r\n"
+            b"content-type: application/json\r\n"
+            b"content-length: " + str(len(MODELS_BODY)).encode() + b"\r\n"
+            b"connection: close\r\n"
+            b"\r\n" + MODELS_BODY
+        )
+    if "/ps/" in request_line or "/plugins" in request_line:
+        body = b"{}"
+        return (
+            b"HTTP/1.1 200 OK\r\n"
+            b"content-type: application/json\r\n"
+            b"content-length: " + str(len(body)).encode() + b"\r\n"
+            b"connection: close\r\n"
+            b"\r\n" + body
+        )
+    return SSE_RESPONSE
 
 
 def secure_write(path: Path, payload: str) -> None:
@@ -102,7 +144,8 @@ def handle(connection: ssl.SSLSocket, records: list, lock: threading.Lock) -> No
         record["tls_version"] = connection.version()
         with lock:
             records.append(record)
-        connection.sendall(RESPONSE)
+        connection.sendall(build_response(record.get("request_line", ""),
+                                          record.get("header_names_in_order")))
     except (OSError, ssl.SSLError):
         pass
     finally:
