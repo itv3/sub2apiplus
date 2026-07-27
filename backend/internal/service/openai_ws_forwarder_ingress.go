@@ -860,6 +860,13 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if responseID == "" && eventResponseID != "" {
 				responseID = eventResponseID
 			}
+			// 官方从流内 response.metadata 事件取 turn-state，握手响应头在官方 CLI 里
+			// 是死代码。这里以事件流为准更新，握手头仅作连接建立时的初值回退。
+			if officialEgressEnabled {
+				if eventTurnState := extractOpenAIWSTurnStateFromUpstreamEvent(upstreamMessage); eventTurnState != "" {
+					turnState = eventTurnState
+				}
+			}
 			if eventType != "" {
 				eventCount++
 				if firstEventType == "" {

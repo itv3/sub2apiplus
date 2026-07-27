@@ -37,3 +37,49 @@ func TestReplaceOpenAIWSTurnStateFromLeaseHandlesMissingConn(t *testing.T) {
 	require.Empty(t, replaceOpenAIWSTurnStateFromLease(nil))
 	require.Empty(t, replaceOpenAIWSTurnStateFromLease(&openAIWSConnLease{}))
 }
+
+// 官方从流内 response.metadata 事件的 headers 对象取 turn-state（大小写不敏感），
+// 握手响应头那条路在官方 CLI 里是死代码。此前只认握手头导致长期取到空串。
+func TestExtractOpenAIWSTurnStateFromUpstreamEvent(t *testing.T) {
+	cases := []struct {
+		name    string
+		payload string
+		want    string
+	}{
+		{
+			name:    "标准事件",
+			payload: `{"type":"response.metadata","headers":{"x-codex-turn-state":"ts-from-event"}}`,
+			want:    "ts-from-event",
+		},
+		{
+			name:    "header 名大小写不敏感",
+			payload: `{"type":"response.metadata","headers":{"X-Codex-Turn-State":"ts-upper"}}`,
+			want:    "ts-upper",
+		},
+		{
+			name:    "非 metadata 事件不提取",
+			payload: `{"type":"response.completed","headers":{"x-codex-turn-state":"ts-ignored"}}`,
+			want:    "",
+		},
+		{
+			name:    "缺少 headers 对象",
+			payload: `{"type":"response.metadata"}`,
+			want:    "",
+		},
+		{
+			name:    "headers 不是对象",
+			payload: `{"type":"response.metadata","headers":"not-an-object"}`,
+			want:    "",
+		},
+		{
+			name:    "空载荷",
+			payload: ``,
+			want:    "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, extractOpenAIWSTurnStateFromUpstreamEvent([]byte(tc.payload)))
+		})
+	}
+}

@@ -1714,7 +1714,27 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		proxyURL = account.Proxy.URL()
 	}
 	upstreamStart := time.Now()
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	// OAuth 的图像请求同样打 chatgpt.com，必须与业务请求同一 TLS 画像，并剥离官方
+	// Codex CLI 从不发送的头。
+	//
+	// OpenAI-Beta 一并删除：官方源码里 OPENAI_BETA_HEADER 的唯一实际使用点是
+	// core/src/client.rs 的 WS 握手，值为 responses_websockets=2026-02-06；官方自己的
+	// images 端点（codex-api/src/endpoint/images.rs）与 HTTP Responses 都不发该头，
+	// 更没有 responses=experimental 这个旧值。openai_codex_identity.go 的注释也已明确
+	// 禁止辅助端点沿用它。
+	if account.IsOpenAIOAuth() {
+		deleteHeaderAllForms(upstreamReq.Header, "OpenAI-Beta")
+		stripOfficialEgressInboundHostHeaders(upstreamReq.Header)
+	}
+	var resp *http.Response
+	if account.IsOpenAIOAuth() {
+		resp, err = s.httpUpstream.DoWithTLS(
+			upstreamReq, proxyURL, account.ID, account.Concurrency,
+			OpenAIOfficialEgressHTTPTLSProfile(strings.TrimSpace(proxyURL) != ""),
+		)
+	} else {
+		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	}
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 	if err != nil {
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())

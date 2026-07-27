@@ -17,8 +17,11 @@ const (
 	openAIWSBetaV1Value = "responses_websockets=2026-02-04"
 	openAIWSBetaV2Value = "responses_websockets=2026-02-06"
 
-	openAIWSTurnStateHeader    = "x-codex-turn-state"
-	openAIWSTurnMetadataHeader = "x-codex-turn-metadata"
+	openAIWSTurnStateHeader = "x-codex-turn-state"
+	// openAIWSResponseMetadataEvent 是官方下发 turn-state 的事件名，见
+	// codex-api/src/sse/responses.rs 的 turn_state()。
+	openAIWSResponseMetadataEvent = "response.metadata"
+	openAIWSTurnMetadataHeader    = "x-codex-turn-metadata"
 
 	openAIWSLogValueMaxLen      = 160
 	openAIWSHeaderValueMaxLen   = 120

@@ -122,7 +122,15 @@ func (s *OpenAIGatewayService) ForwardCountTokensAsAnthropic(
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	resp, err := s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	// OAuth 账号的 count_tokens 同样打官方域名，必须与业务请求同一 TLS 画像；
+	// 此前走标准 Transport，会在同账号同 IP 上暴露一个不同形态的 ClientHello。
+	var resp *http.Response
+	if account.IsOpenAIOAuth() {
+		tlsProfile := OpenAIOfficialEgressHTTPTLSProfile(strings.TrimSpace(proxyURL) != "")
+		resp, err = s.httpUpstream.DoWithTLS(upstreamReq, proxyURL, account.ID, account.Concurrency, tlsProfile)
+	} else {
+		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	}
 	if err != nil {
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
 		setOpsUpstreamError(c, 0, safeErr, "")
@@ -260,7 +268,15 @@ func (s *OpenAIGatewayService) buildInputTokensUpstreamRequest(
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("accept", "application/json")
 
-	if c != nil && c.Request != nil {
+	if account.IsOpenAIOAuth() {
+		// OAuth 账号复用官方 Codex 身份，而不是把第三方客户端的 user-agent 与
+		// accept-language 复制到出站——官方 Codex CLI 从不发送 accept-language，
+		// 这两个头一起出现在同一请求上会形成官方客户端不可能产生的组合。
+		applyOpenAICodexAuxiliaryHeaders(req.Header)
+		enforceCodexIdentityHeaders(req.Header)
+		stripOfficialEgressInboundHostHeaders(req.Header)
+	} else if c != nil && c.Request != nil {
+		// 非 OAuth 账号保持既有透传行为：它们不套官方画像，出站身份由账号配置决定。
 		for key, values := range c.Request.Header {
 			lower := strings.ToLower(strings.TrimSpace(key))
 			if lower != "user-agent" && lower != "accept-language" {

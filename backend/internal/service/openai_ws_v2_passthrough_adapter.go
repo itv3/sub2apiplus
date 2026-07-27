@@ -302,6 +302,11 @@ type openAIWSPassthroughFirstOutputFrameConn struct {
 	inner             openaiwsv2.FrameConn
 	resolveDeadline   func(payload []byte) openAIWSPassthroughFirstOutputDeadline
 	activeReadTimeout time.Duration
+	// onUpstreamFrame 在每个上游帧读出后同步回调，用于从事件流提取 turn-state。
+	// 官方 Codex 的 turn-state 来自流内 response.metadata 事件而非握手响应头；
+	// passthrough 的上游帧由 relay 引擎直接中继，不经过帧处理管道，因此只能在
+	// 这层拦截。回调必须自行保证并发安全。
+	onUpstreamFrame func(payload []byte)
 
 	mu              sync.Mutex
 	state           openAIWSPassthroughFirstOutputDeadlineState
@@ -368,6 +373,9 @@ func (c *openAIWSPassthroughFirstOutputFrameConn) ReadFrame(ctx context.Context)
 		case result := <-readResultCh:
 			if result.err == nil {
 				c.observeUpstreamActivity(result.msgType, result.payload)
+				if c.onUpstreamFrame != nil {
+					c.onUpstreamFrame(result.payload)
+				}
 			}
 			return result.msgType, result.payload, result.err
 		case <-c.deadlineChanged:
@@ -878,7 +886,15 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		statusCode,
 		openAIWSHeaderValueForLog(handshakeHeaders, "x-request-id"),
 	)
-	handshakeTurnState := strings.TrimSpace(handshakeHeaders.Get(openAIWSTurnStateHeader))
+	// turn-state 以流内 response.metadata 事件为准，握手响应头只作连接建立时的初值。
+	// relay 引擎在独立 goroutine 中读上游帧，帧处理管道在另一侧读取，故用 atomic 传递。
+	var upstreamTurnState atomic.Value
+	upstreamTurnState.Store(strings.TrimSpace(handshakeHeaders.Get(openAIWSTurnStateHeader)))
+	currentTurnState := func() string {
+		value, _ := upstreamTurnState.Load().(string)
+		return value
+	}
+	handshakeTurnState := currentTurnState()
 	if officialEgressEnabled && handshakeTurnState != "" {
 		firstClientMessage, err = injectOfficialOpenAIWSTurnState(firstClientMessage, handshakeTurnState)
 		if err != nil {
@@ -895,7 +911,15 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		return errors.New("openai ws passthrough upstream connection does not support frame relay")
 	}
 	relayUpstreamFrameConn := &openAIWSPassthroughFirstOutputFrameConn{
-		inner:             upstreamFrameConn,
+		inner: upstreamFrameConn,
+		onUpstreamFrame: func(payload []byte) {
+			if !officialEgressEnabled {
+				return
+			}
+			if eventTurnState := extractOpenAIWSTurnStateFromUpstreamEvent(payload); eventTurnState != "" {
+				upstreamTurnState.Store(eventTurnState)
+			}
+		},
 		activeReadTimeout: s.openAIWSPassthroughIdleTimeout(),
 		deadlineChanged:   make(chan struct{}, 1),
 		resolveDeadline: func(payload []byte) openAIWSPassthroughFirstOutputDeadline {
@@ -1023,8 +1047,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 						policyErr,
 					)
 				}
-				if officialEgressEnabled && handshakeTurnState != "" {
-					out, policyErr = injectOfficialOpenAIWSTurnState(out, handshakeTurnState)
+				if turnState := currentTurnState(); officialEgressEnabled && turnState != "" {
+					out, policyErr = injectOfficialOpenAIWSTurnState(out, turnState)
 					if policyErr != nil {
 						return payload, nil, NewOpenAIWSClientCloseError(
 							coderws.StatusPolicyViolation,

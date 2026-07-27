@@ -73,7 +73,12 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 	}
 
 	upstreamStart := time.Now()
-	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+	// alpha/search 与 PAT 旁路都打官方域名，必须与业务请求同一 TLS 画像；
+	// 走标准 Transport 会在同账号同 IP 上暴露不同形态的 ClientHello。
+	resp, err := s.httpUpstream.DoWithTLS(
+		req, proxyURL, account.ID, account.Concurrency,
+		OpenAIOfficialEgressHTTPTLSProfile(strings.TrimSpace(proxyURL) != ""),
+	)
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, true)
@@ -153,7 +158,12 @@ func (s *OpenAIGatewayService) forwardAlphaSearchViaResponsesWebSearch(
 	SetActualOpenAIUpstreamEndpoint(c, "/v1/responses")
 
 	upstreamStart := time.Now()
-	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+	// alpha/search 与 PAT 旁路都打官方域名，必须与业务请求同一 TLS 画像；
+	// 走标准 Transport 会在同账号同 IP 上暴露不同形态的 ClientHello。
+	resp, err := s.httpUpstream.DoWithTLS(
+		req, proxyURL, account.ID, account.Concurrency,
+		OpenAIOfficialEgressHTTPTLSProfile(strings.TrimSpace(proxyURL) != ""),
+	)
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, true)

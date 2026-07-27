@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/tidwall/gjson"
 )
 
 const (
@@ -641,6 +642,38 @@ func finalizeDerivedOpenAIOfficialEgressWSFrame(
 
 // injectOfficialOpenAIWSTurnState 把上游握手返回的连接级 turn-state 写入
 // response.create 的 client_metadata，并用官方顶层字段顺序重新编码。
+// extractOpenAIWSTurnStateFromUpstreamEvent 从上游事件流中提取 turn-state。
+//
+// 官方 Codex 的来源是流内 `response.metadata` 事件顶层的 `headers` 对象，在其中
+// 大小写不敏感地查找 x-codex-turn-state（codex-api/src/sse/responses.rs 的
+// turn_state() 与 header_turn_state_value_from_json）。握手响应头那条路在官方
+// CLI 里是死代码——core 调用时固定传 None。
+//
+// 此前 Sub2API 只认握手响应头，而上游按协议在事件流里下发，101 响应通常不带该头，
+// 于是整条 turn-state 链路长期取到空串。这也是历次抓包"从未观察到 turn-state"的原因。
+// 返回空串表示该帧不携带 turn-state，调用方应保持现值不变。
+func extractOpenAIWSTurnStateFromUpstreamEvent(message []byte) string {
+	if len(message) == 0 {
+		return ""
+	}
+	if eventType := strings.TrimSpace(gjson.GetBytes(message, "type").String()); eventType != openAIWSResponseMetadataEvent {
+		return ""
+	}
+	headers := gjson.GetBytes(message, "headers")
+	if !headers.IsObject() {
+		return ""
+	}
+	turnState := ""
+	headers.ForEach(func(key, value gjson.Result) bool {
+		if !strings.EqualFold(strings.TrimSpace(key.String()), openAIWSTurnStateHeader) {
+			return true
+		}
+		turnState = strings.TrimSpace(value.String())
+		return false
+	})
+	return turnState
+}
+
 func injectOfficialOpenAIWSTurnState(payload []byte, turnState string) ([]byte, error) {
 	turnState = strings.TrimSpace(turnState)
 	if turnState == "" {

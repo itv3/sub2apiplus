@@ -162,6 +162,25 @@ passthrough 用 `openAIChatGPTInternalUnsupportedFields`（`user`、`metadata`�
 | 非 passthrough 路径 `previous_response_id` 不删 | 实测确认会删 |
 | `turn_metadata` 缺 `workspaces` 是负指纹 | 未复核，暂列观察项 |
 
+## 5.1 第二轮补充实施（`0.1.165-8`）
+
+| 编号 | 内容 | 依据 |
+|---|---|---|
+| P3-13 | WS turn-state 改从流内 `response.metadata` 事件的 `headers` 对象提取（大小写不敏感），握手响应头降级为连接建立时的初值回退。ctx_pool 在上游读循环里更新；passthrough 因上游帧由 relay 引擎直接中继、不经帧处理管道，改在 `openAIWSPassthroughFirstOutputFrameConn.ReadFrame` 挂回调，用 `atomic.Value` 跨 goroutine 传递 | 官方 `codex-api/src/sse/responses.rs` 的 `turn_state()` 与 `header_turn_state_value_from_json`；握手头那条路在官方 CLI 里是死代码（core 传 `None`） |
+| P1-5 | `count_tokens` 的 OAuth 分支不再复制第三方 `user-agent`/`accept-language`，改用官方 Codex 身份头并剥离宿主头；出站改走官方 TLS 画像 | 官方从不发送 `accept-language` |
+| P1-6 | 图像请求改走官方 TLS 画像，剥离宿主头，并删除 `OpenAI-Beta: responses=experimental` | `OPENAI_BETA_HEADER` 在官方源码的唯一实际使用点是 `core/src/client.rs` 的 WS 握手（值为 `responses_websockets=2026-02-06`）；官方自己的 images 端点与 HTTP Responses 都不发该头 |
+| P1-7 | `alpha/search` 两条出站（含 PAT 旁路）改走官方 TLS 画像 | 与业务请求同域名必须同画像 |
+
+### 查证中新发现的端点级差异
+
+官方**有独立的图像端点**：`codex-api/src/endpoint/images.rs` 的 `images/generations` 与
+`images/edits`，URL 形如 `{base}/api/codex/images/generations`。而本项目把
+`/v1/images/generations` 转换成 `/backend-api/codex/responses` 的 `image_generation` 工具调用。
+
+这是**端点选择层面的差异**，比 header 泄漏更根本：官方图像请求根本不出现在 `responses`
+端点上。修正它需要改动图像功能的整条转换链路与响应解析，属于功能性重构，本轮只做了
+header 与 TLS 层的收敛，端点差异单独记录待评估。
+
 ## 6. 验收结果
 
 状态：本轮范围（P0 四条 + P2 三条）全部通过。
@@ -218,6 +237,25 @@ passthrough 用 `openAIChatGPTInternalUnsupportedFields`（`user`、`metadata`�
 - 归档：`local-analysis/captures/wire-parity-fix-20260727/`，135 个文件，含 MANIFEST 与 SHA256SUMS
 - 凭据精确值扫描：API Key 与账号 access_token 均 **0 命中**
 - 环境恢复：抓包脚本自动恢复账号代理、CA 与 keeper，逐项核对与采集前一致
+
+### 6.5.1 第二轮验收（`0.1.165-8`）
+
+- 门禁：`go vet` 通过、后端 46 包、前端 typecheck、抓包工具 100 测试、
+  Vircs `golangci-lint` **0 issues**。
+- 镜像 `sub2apiplus:wire-parity-r2-0.1.165-8-20260727T120853Z` 已切换，
+  healthy、重启 0、无 ERROR/FATAL。
+- 抓包 `r2-http-20260727T121833Z` 与 `r2-ws-20260727T121728Z`：与官方干净基准对比，
+  HTTP header 名称集合、body 顶层字段集合仍**无差集**，确认四条改动无回归。
+
+**P3-13 的实证状态需要更正一个此前的判断。** 本轮 WS 抓包中上游
+**未下发任何 `response.metadata` 事件**（计数为 0）。这说明"历次抓包从未观察到
+turn-state"的原因不止是来源接错——上游在当前场景下本身就不发该事件。修复把来源改到
+了正确的位置并有 6 个用例覆盖提取逻辑，但仍**没有真实 wire 证据**证明端到端可用。
+要取得该证据，需要构造能触发上游下发 turn-state 的场景（可能与多轮工具调用或特定
+账号状态相关），这一点目前未知。
+
+P1-5/6/7 三条只改了 header 与 TLS 层，各自的入口（count_tokens、images、alpha/search）
+本轮**未构造真实请求验证**，仅由代码路径与既有单测保证。
 
 ### 6.6 本轮未覆盖
 
