@@ -660,11 +660,22 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 
 - **依据**：源码检索 `req.Client` / `DoWithTLS` / `OfficialEgress*TLSProfile` 的
   命中分布　[L1]
-- **状态**：🔴 **五条链路 TLS 指纹、header 定型、连接池隔离全部失效**
-- **⚠ 这比 P1-5~7 处理的范围更大**。上一轮只收敛了 `count_tokens` / `images` /
-  `alpha-search` 三条，而画像失效实际是**系统性的**：只要不在
-  `supportsOfficialEgressHTTPProfile` 白名单内就静默 fail-open，新增链路会默认漏网。
-  **根因是"默认放行"而非"默认拦截"**，逐条补白名单治标不治本。
+- **状态**：🔴 **五条链路 TLS 指纹与连接池隔离失效**
+- **⚠ 根因判断已更正**：初版写"根因是 `supportsOfficialEgressHTTPProfile` 默认放行"
+  ——**不成立**。该闸门管的是 **Finalizer（body/header 定型）**，而 TLS 画像走的是
+  调用点显式传参 `DoWithTLS(..., OpenAIOfficialEgressHTTPTLSProfile(...))`。
+  真正的根因是**这些服务各自建了独立 HTTP 客户端**（`req.Client` 等），
+  从未接入 `httpUpstream`，与白名单无关。修法同 P1-5~7：改走 `DoWithTLS`。
+- **逐条复核后的准确状态**：
+
+| 链路 | 出站方式 | 是否需修 |
+|---|---|---|
+| `settings/account_user_setting` / `subscriptions` / `accounts/check` | `req.Client`（`openai_privacy_service.go`） | 🔴 需修，改造成本中（三处共用 `PrivacyClientFactory`） |
+| `wham/rate-limit-reset-credits` | `req.Client`（`openai_quota_service.go`） | 🔴 需修，同上 |
+| `backend-api/files/{id}/download`、`conversation/{id}/attachment/…` | `req.Client`（`openai_images.go:1433` `fetchOpenAIImageDownloadURL`） | 🔴 需修，需重构函数签名以注入 `httpUpstream` |
+| `openai_images.go:621` 主路径 | `httpUpstream.Do`（无画像） | ✅ **不需修** —— 打的是 `api.openai.com`（API Key 路径），不受官方画像约束 |
+
+  ─ 最后一行是复核中避免的一次误改：主路径的 `Do`（而非 `DoWithTLS`）是**正确的**。
 
 ---
 
