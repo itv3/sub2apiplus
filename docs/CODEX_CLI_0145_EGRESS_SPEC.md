@@ -413,6 +413,41 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 - **可变性**：固定
 - **状态**：✅ 已对齐（顶层改白名单）
 
+### SPEC-BODY-006　`tool_choice` 必须是 JSON 字符串，不能是对象
+
+- **规则**：`tool_choice` 的类型是 **`String`**，实际取值为 `"auto"`
+- **依据**：`codex-api/src/common.rs:223` `pub tool_choice: String`　[L1]
+  ─ 取值实测于 `endpoint/responses_websocket.rs:922` `tool_choice: "auto".to_string()`
+  及 `core/src/client_common_tests.rs` 多处　[L1]
+- **观测**：任意通道（body 可见）
+- **可变性**：固定
+- **状态**：🔴 **类型层面的偏离，强负指纹** —— `openai_images_responses.go:357`
+  的硬编码模板发的是**对象**：
+  ```json
+  "tool_choice":{"type":"image_generation"}
+  ```
+  官方的 Rust 结构体 `pub tool_choice: String` **在类型层面就不可能序列化出对象**。
+  检测方只需判断该字段的 JSON 类型即可区分，无需比对取值。
+- **⚠ 与 SPEC-EP-001 的关系**：官方确实也走 responses + `image_generation` 工具
+  （故端点选择本身不算偏离），但官方是**让模型自主决定**是否调用该工具，
+  `tool_choice` 保持 `"auto"`；Sub2API 改为强制指定工具，于是被迫用了对象形式。
+  语义上可理解（用户明确要生图），形态上是官方不可能产生的。
+
+### SPEC-BODY-007　images 硬编码模板的其余字段
+
+- **规则**：官方 body 由 `ResponsesApiRequest` 序列化，字段集合固定
+  （`common.rs:217-238`：`model / instructions / input / tools / tool_choice /
+  parallel_tool_calls / reasoning / store / stream / stream_options / include /
+  service_tier / prompt_cache_key / text / client_metadata`）　[L1]
+- **状态**：⚠ 待第 2 步实测 —— Sub2API 的硬编码模板
+  （`openai_images_responses.go:357`）为
+  `instructions / stream / reasoning / parallel_tool_calls / include / model /
+  store / tool_choice`，字段名均在官方集合内，但取值需逐项比：
+  - `parallel_tool_calls` 硬编码 `true`，而 **Lite 模式下官方应为 `false`**
+    （SPEC-BODY-003），该模板不区分 Lite
+  - `reasoning.effort` 硬编码 `medium`、`summary` 硬编码 `auto`，是否随场景变化待验
+  - **缺 `input`**：官方 `pub input: Vec<ResponseItem>` 非 Option，一定存在
+
 ### SPEC-BODY-002　压缩策略
 
 - **规则**：普通 Responses 用 zstd；**compact 请求不压缩**
