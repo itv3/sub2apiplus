@@ -564,7 +564,10 @@ func normalizeOpenAIPassthroughOAuthBody(body []byte, compact bool) ([]byte, boo
 	normalized := body
 	changed := false
 
-	for _, field := range openAIChatGPTInternalUnsupportedFields {
+	// passthrough 此前只剔除 5 项，temperature / top_p / frequency_penalty /
+	// presence_penalty / max_completion_tokens 会原样送到 chatgpt.com，而官方
+	// ResponsesApiRequest 没有这些字段。这里改用与非 passthrough 相同的长清单。
+	for _, field := range openAICodexOAuthUnsupportedFields {
 		if value := gjson.GetBytes(normalized, field); !value.Exists() {
 			continue
 		}

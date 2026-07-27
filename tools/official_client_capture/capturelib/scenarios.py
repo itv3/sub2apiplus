@@ -509,6 +509,12 @@ def _codex_config_args(
         "feedback.enabled=false",
         'otel.exporter="none"',
         "otel.log_user_prompt=false",
+        # 插件/MCP 是官方原生支持关闭的功能流量（Feature::Plugins 为 Stable，
+        # 默认开启但可配置关闭）。基准若保留它，官方样本里会多出
+        # plugins/featured、ps/plugins/*、ps/mcp 等请求，并因此提前拿到
+        # Cloudflare Cookie，与只发模型请求的候选出站不可比。关闭后两侧
+        # 才落在同一条最小必要流量基线上。
+        "features.plugins=false",
         "features.hooks=true",
         'approval_policy="never"',
         "allow_login_shell=false",

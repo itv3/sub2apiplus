@@ -774,11 +774,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		forceFreshConn = false
 		connID := strings.TrimSpace(lease.ConnID())
-		if handshakeTurnState := strings.TrimSpace(lease.HandshakeHeader(openAIWSTurnStateHeader)); handshakeTurnState != "" {
-			turnState = handshakeTurnState
-			if c != nil {
-				c.Header(http.CanonicalHeaderKey(openAIWSTurnStateHeader), handshakeTurnState)
-			}
+		handshakeTurnState := replaceOpenAIWSTurnStateFromLease(lease)
+		turnState = handshakeTurnState
+		if handshakeTurnState != "" && c != nil {
+			c.Header(http.CanonicalHeaderKey(openAIWSTurnStateHeader), handshakeTurnState)
 		}
 		logOpenAIWSModeInfo(
 			"ingress_ws_upstream_connected account_id=%d turn=%d conn_id=%s conn_reused=%v conn_pick_ms=%d queue_wait_ms=%d preferred_conn_id=%s",
@@ -860,6 +859,13 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(upstreamMessage)
 			if responseID == "" && eventResponseID != "" {
 				responseID = eventResponseID
+			}
+			// 官方从流内 response.metadata 事件取 turn-state，握手响应头在官方 CLI 里
+			// 是死代码。这里以事件流为准更新，握手头仅作连接建立时的初值回退。
+			if officialEgressEnabled {
+				if eventTurnState := extractOpenAIWSTurnStateFromUpstreamEvent(upstreamMessage); eventTurnState != "" {
+					turnState = eventTurnState
+				}
 			}
 			if eventType != "" {
 				eventCount++

@@ -472,17 +472,43 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstream(ctx context.Cont
 		req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
 		resp, err = s.httpUpstream.Do(req, request.proxyURL, request.accountID, request.accountConcurrency)
 	} else {
-		client, clientErr := httpclient.GetClient(httpclient.Options{
-			ProxyURL:              request.proxyURL,
-			Timeout:               codexModelsManifestRequestTimeout,
-			ResponseHeaderTimeout: 10 * time.Second,
-		})
-		if clientErr != nil {
-			return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_PROXY_INVALID", "invalid proxy configuration: %v", clientErr)
+		// OAuth 的模型清单请求必须与业务请求走同一套官方 TLS 画像。此前用标准 Go
+		// 客户端发出，导致同账号同 IP 上周期性出现一个与官方画像不同的 ClientHello
+		// 打向 chatgpt.com（清单 5 分钟 TTL，过期即触发）。
+		// Cookie jar 语义与业务请求保持一致：DoWithTLS 不接管 jar，因此手工完成
+		// 「请求前注入、响应后回写」，仍受 jar 自身的 Cloudflare allowlist 约束。
+		jar := s.openAICookieJar(request.credentialAccount)
+		if jar != nil {
+			for _, cookie := range jar.Cookies(req.URL) {
+				req.AddCookie(cookie)
+			}
 		}
-		clientWithJar := *client
-		clientWithJar.Jar = s.openAICookieJar(request.credentialAccount)
-		resp, err = clientWithJar.Do(req)
+		if s.httpUpstream != nil {
+			tlsProfile := OpenAIOfficialEgressHTTPTLSProfile(strings.TrimSpace(request.proxyURL) != "")
+			resp, err = s.httpUpstream.DoWithTLS(req, request.proxyURL, request.accountID, request.accountConcurrency, tlsProfile)
+		} else {
+			// httpUpstream 仅在未接线的单元测试里为 nil；生产由 wire 注入，必然非空。
+			// 这条兜底只为让不关心传输层的用例继续跑通，不参与官方画像路径。
+			client, clientErr := httpclient.GetClient(httpclient.Options{
+				ProxyURL:              request.proxyURL,
+				Timeout:               codexModelsManifestRequestTimeout,
+				ResponseHeaderTimeout: 10 * time.Second,
+			})
+			if clientErr != nil {
+				return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_PROXY_INVALID", "invalid proxy configuration: %v", clientErr)
+			}
+			resp, err = client.Do(req)
+		}
+		if err == nil && resp != nil && jar != nil {
+			if cookies := resp.Cookies(); len(cookies) > 0 {
+				jar.SetCookies(req.URL, cookies)
+			}
+		}
+	}
+	// HTTPUpstream 是接口，实现（含测试替身）可能在未出错时返回空响应；
+	// 直接解引用会 panic，因此在这里归一成上游错误。
+	if err == nil && resp == nil {
+		err = errors.New("codex models manifest upstream returned no response")
 	}
 	if err != nil {
 		return nil, &codexModelsManifestUpstreamError{

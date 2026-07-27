@@ -106,7 +106,25 @@ func (r passthroughErrReadCloser) Close() error {
 	return nil
 }
 
+// codexModelsRecorderManifest 供测试替身应答模型清单请求。字段取值与实抓 fixture
+// 一致，保证 Lite 判定与生产同源。
+const codexModelsRecorderManifest = `{"models":[` +
+	`{"slug":"gpt-5.6-luna","visibility":"list","use_responses_lite":true,"supports_parallel_tool_calls":true},` +
+	`{"slug":"gpt-5.5","visibility":"list","use_responses_lite":false,"supports_parallel_tool_calls":true},` +
+	`{"slug":"gpt-5.4","visibility":"list","use_responses_lite":false,"supports_parallel_tool_calls":true}` +
+	`]}`
+
 func (u *httpUpstreamRecorder) Do(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error) {
+	// 模型清单请求现在与业务请求共用同一个 HTTPUpstream（官方画像要求两者同栈）。
+	// 这里单独应答，既避免它拿到业务用的 SSE 响应，也避免污染业务断言依赖的
+	// lastReq / lastBody / requests。
+	if req != nil && req.URL != nil && strings.Contains(req.URL.Path, "/codex/models") {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(codexModelsRecorderManifest)),
+		}, nil
+	}
 	u.lastReq = req
 	u.lastProxyURL = proxyURL
 	if req != nil && req.Body != nil {
@@ -457,6 +475,13 @@ func TestOpenAIGatewayService_OAuthPassthrough_StreamUsesBuiltInProfileAndKeepsT
 
 	// Use the gateway method that reads token from credentials when provider is nil.
 	svc.openAITokenProvider = nil
+
+	// 模型清单请求现在与业务请求共用 httpUpstream（官方画像要求两者同栈），而本用例的
+	// mock 对所有请求返回同一份 SSE。预置能力快照可跳过清单拉取，让用例专注 passthrough。
+	svc.openaiModelCapabilities.replaceFromManifest(
+		account.ID,
+		[]byte(`{"models":[{"slug":"gpt-5.4","visibility":"list","use_responses_lite":false,"supports_parallel_tool_calls":true}]}`),
+	)
 
 	result, err := svc.Forward(context.Background(), c, account, originalBody)
 	require.NoError(t, err)

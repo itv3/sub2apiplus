@@ -23,6 +23,23 @@ import (
 // TransportOptions 定义 TLS 指纹客户端配套的 HTTP Transport 行为。
 type TransportOptions struct {
 	DisableCompression bool
+	// LowercaseHeaders 让出站请求在 wire 上使用全小写 header 名。
+	//
+	// Go 的 Header.Set 会经 CanonicalMIMEHeaderKey 改写成 Session-Id / Originator 这类
+	// 形态，而 Rust hyper 直接用 HeaderName::as_str() 输出小写。差异只在 HTTP/1.1 上可见
+	// （HTTP/2 的 HPACK 强制小写），因此仅对需要复刻 h1 线形的画像开启。
+	LowercaseHeaders bool
+	// PreserveHeaderCase 列出即便开启 LowercaseHeaders 也要按字面量原样输出的 header。
+	//
+	// 官方并非处处小写：WS 握手由 tungstenite 生成，Host/Connection/Upgrade/
+	// Sec-WebSocket-Version/Sec-WebSocket-Key 五项是硬编码的大写驼峰，其余才走小写。
+	// 不设该清单会把这几项一并压成小写，反而偏离官方。
+	PreserveHeaderCase []string
+	// H2MaxHeaderListSize 覆盖 h2 SETTINGS 的 MAX_HEADER_LIST_SIZE。零值保持 Go 默认。
+	//
+	// Go 默认 10MB，官方 h2 栈实测为 16KB。该项只声明"我能接收多大的响应头"，
+	// 不限制自身发送，且官方本就用这个值，因此收紧不影响与官方上游的通信。
+	H2MaxHeaderListSize uint32
 }
 
 // Profile contains TLS fingerprint configuration.

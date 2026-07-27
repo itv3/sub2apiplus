@@ -285,7 +285,10 @@ func finalizeOpenAIOfficialEgressHTTPRequest(
 	}
 	logOfficialEgressProfileResolved(egressContext, profile)
 	resetOfficialEgressRequestBody(req, finalBody)
-	if account != nil && account.IsOpenAIOAuth() {
+	// compact 端点不压缩：官方 RequestCompression 的默认值是 None，且 compact 的
+	// execute_with 只设置 timeout、不传压缩选项，因此官方 compact 请求发的是明文。
+	// 普通 Responses 才走 zstd（responses_request_compression 三个条件同时成立）。
+	if account != nil && account.IsOpenAIOAuth() && !plan.IsCompact {
 		if err := compressOfficialOpenAIHTTPRequest(req, finalBody); err != nil {
 			return nil, result, err
 		}
@@ -368,6 +371,7 @@ func finalizeOfficialOpenAIHTTPBody(
 			payload,
 			useResponsesLite,
 			supportsParallelTools,
+			officialOpenAIHTTPTopLevelAllowed,
 		)
 		if err != nil {
 			return nil, false, err
@@ -447,14 +451,48 @@ func finalizeOfficialOpenAIHTTPBody(
 // normalizeDerivedOfficialOpenAIHTTPBody 把第三方 Responses 请求归一化为
 // Codex 0.145.0 的固定外层契约。只有 instructions、tools、reasoning.context
 // 和 parallel_tool_calls 按模型能力分叉，其余固定字段不区分 Lite。
+// 官方 ResponsesApiRequest / ResponseCreateWsRequest 都是固定 Rust 结构体，顶层不会
+// 出现清单外的键。第三方入站的 truncation / top_logprobs / background / max_tool_calls
+// 乃至任意自定义字段若不剔除，会被保序序列化器当作未知字段追加到 body 末尾送达上游。
+// HTTP 与 WS 字段集不同（WS 多 type / previous_response_id / generate），故各用一份。
+var (
+	officialOpenAIHTTPTopLevelAllowed = newOfficialOpenAITopLevelAllowSet(officialOpenAIHTTPFieldOrder)
+	officialOpenAIWSTopLevelAllowed   = newOfficialOpenAITopLevelAllowSet(officialOpenAIWSFieldOrder)
+)
+
+func newOfficialOpenAITopLevelAllowSet(fields []string) map[string]struct{} {
+	allowed := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		allowed[field] = struct{}{}
+	}
+	return allowed
+}
+
+// stripNonOfficialOpenAITopLevelFields 按白名单剔除顶层字段，返回是否有改动。
+func stripNonOfficialOpenAITopLevelFields(payload map[string]any, allowed map[string]struct{}) bool {
+	removed := false
+	for key := range payload {
+		if _, ok := allowed[key]; ok {
+			continue
+		}
+		delete(payload, key)
+		removed = true
+	}
+	return removed
+}
+
 func normalizeDerivedOfficialOpenAIHTTPBody(
 	payload map[string]any,
 	useResponsesLite bool,
 	supportsParallelTools bool,
+	allowedTopLevel map[string]struct{},
 ) (bool, error) {
 	modified, err := normalizeDerivedOfficialOpenAIInput(payload)
 	if err != nil {
 		return false, err
+	}
+	if stripNonOfficialOpenAITopLevelFields(payload, allowedTopLevel) {
+		modified = true
 	}
 	if useResponsesLite {
 		liteModified, err := normalizeOpenAIResponsesLiteTools(payload)
@@ -1118,9 +1156,14 @@ func finalizeOfficialOpenAIHTTPHeaders(
 		"x-client-request-id",
 		"version",
 	} {
-		header.Del(name)
+		deleteHeaderAllForms(header, name)
 	}
+	stripOfficialEgressInboundHostHeaders(header)
 
+	// 这里保持 Go 的 canonical 写法，wire 上的全小写形态由官方画像 Transport 统一收口
+	// （见 newOfficialEgressLowercaseHeaderRoundTripper）：官方 Codex 走 Rust hyper，
+	// h1 线上 header 名一律小写，而 Go 的 Header.Set 会改写成 Session-Id / Originator。
+	// 把小写化放在传输层而非此处，是为了让语义定型与 wire 形态分层，且不影响上层断言。
 	if isCompact {
 		header.Del("Accept")
 	} else {

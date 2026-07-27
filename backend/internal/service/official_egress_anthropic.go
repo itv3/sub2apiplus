@@ -857,9 +857,7 @@ func (s *GatewayService) finalizeOfficialAnthropicHeaders(
 	}
 	deleteHeaderAllForms(header, "User-Agent")
 	setHeaderRaw(header, "User-Agent", profile.Build.UserAgent)
-	for _, name := range []string{"accept-language", "sec-fetch-mode", "x-stainless-helper-method"} {
-		deleteHeaderAllForms(header, name)
-	}
+	stripOfficialEgressInboundHostHeaders(header)
 	deleteHeaderAllForms(header, "anthropic-beta")
 	betaHeader, err := s.resolveOfficialAnthropicBetaHeader(req, c, account, profile, body)
 	if err != nil {

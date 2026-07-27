@@ -938,8 +938,11 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughHeade
 	cfg.Gateway.OpenAIWS.ReadTimeoutSeconds = 3
 	cfg.Gateway.OpenAIWS.WriteTimeoutSeconds = 3
 
+	// 官方画像生效时 passthrough 会先补一轮 generate=false 的预热往返，
+	// 因此上游需要依次给出预热响应与业务响应两轮事件。
 	upstreamConn := &openAIWSCaptureConn{
 		events: [][]byte{
+			[]byte(`{"type":"response.completed","response":{"id":"resp_passthrough_prewarm","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":0}}}`),
 			[]byte(`{"type":"response.completed","response":{"id":"resp_passthrough_headers","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`),
 		},
 	}
@@ -1078,12 +1081,35 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughHeade
 	// turn state 只允许从上游握手响应流向下游，客户端值不得上行。
 	require.Empty(t, captureDialer.lastHeaders.Get(openAIWSTurnStateHeader))
 
-	require.Len(t, upstreamConn.writes, 1)
-	forwarded := requestToJSONString(upstreamConn.writes[0])
+	// 官方画像下 passthrough 与 ctx_pool 形态一致：先发 generate=false 的预热帧，
+	// 再把业务帧通过 previous_response_id 挂到预热响应上。
+	require.Len(t, upstreamConn.writes, 2)
+
+	prewarmFrame := requestToJSONString(upstreamConn.writes[0])
+	require.False(t, gjson.Get(prewarmFrame, "generate").Bool(), "预热帧必须 generate=false")
+	require.False(t, gjson.Get(prewarmFrame, "previous_response_id").Exists(), "预热帧不携带续链 ID")
+	prewarmTurnMeta := gjson.Get(prewarmFrame, "client_metadata.x-codex-turn-metadata").String()
+	require.Equal(t, "prewarm", gjson.Get(prewarmTurnMeta, "request_kind").String())
+	require.False(
+		t,
+		gjson.Get(prewarmTurnMeta, "turn_started_at_unix_ms").Exists(),
+		"预热帧不带 turn 开始时间",
+	)
+
+	forwarded := requestToJSONString(upstreamConn.writes[1])
+	require.Equal(
+		t,
+		"resp_passthrough_prewarm",
+		gjson.Get(forwarded, "previous_response_id").String(),
+		"业务帧必须挂到预热响应上",
+	)
+	businessTurnMeta := gjson.Get(forwarded, "client_metadata.x-codex-turn-metadata").String()
+	require.Equal(t, "turn", gjson.Get(businessTurnMeta, "request_kind").String())
+	require.True(t, gjson.Get(businessTurnMeta, "turn_started_at_unix_ms").Exists())
 	// 顶层 namespace 工具仍按 Responses Lite 契约搬入 input.additional_tools；
 	// 官方 Lite 画像把 tool_choice 固定为 auto，客户端自报不得覆盖能力定型。
 	require.False(t, gjson.Get(forwarded, `tools.#(type=="namespace")`).Exists())
-	require.Equal(t, "collaboration", gjson.Get(forwarded, `input.#(type=="additional_tools").tools.0.name`).String())
+	require.Equal(t, "collaboration", gjson.Get(prewarmFrame, `input.#(type=="additional_tools").tools.0.name`).String())
 	require.Equal(t, "auto", gjson.Get(forwarded, "tool_choice").String())
 	require.Equal(t, "medium", gjson.Get(forwarded, "reasoning.effort").String())
 	require.Equal(t, "all_turns", gjson.Get(forwarded, "reasoning.context").String())

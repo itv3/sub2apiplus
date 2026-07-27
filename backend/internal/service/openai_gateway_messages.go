@@ -49,6 +49,13 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if err != nil {
 		return nil, err
 	}
+	// 模型能力预热此前只在 Responses 与 WS 入口执行，CC / Messages 入口读不到快照时
+	// 对 bundled 清单之外的模型会按非 Lite 出站，与 Responses 入口判定不一致。
+	if officialEgressEnabled && account.IsOpenAIOAuth() {
+		if capabilityErr := s.ensureOpenAIModelCapability(ctx, account, body); capabilityErr != nil {
+			return nil, capabilityErr
+		}
+	}
 	officialEgressEnabled = officialEgressEnabled &&
 		account.Platform == PlatformOpenAI &&
 		account.Type == AccountTypeOAuth
@@ -178,9 +185,11 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	}
 
 	if account.Type == AccountTypeOAuth && account.Platform != PlatformGrok {
-		var reqBody map[string]any
-		if err := json.Unmarshal(responsesBody, &reqBody); err != nil {
-			return nil, fmt.Errorf("unmarshal for codex transform: %w", err)
+		// 与 Chat Completions 入口同因：map 往返会丢大整数精度并重排嵌套对象的键，
+		// 因此改用保序解码 + 复用原始字节的序列化。
+		reqBody, decodeErr := decodeOfficialJSONObjectUseNumber(responsesBody)
+		if decodeErr != nil {
+			return nil, fmt.Errorf("unmarshal for codex transform: %w", decodeErr)
 		}
 		codexResult := applyCodexOAuthTransformWithOptions(reqBody, codexOAuthTransformOptions{
 			SkipDefaultInstructions: true,
@@ -221,7 +230,7 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 		// OAuth codex transform forces stream=true upstream, so always use
 		// the streaming response handler regardless of what the client asked.
 		isStream = true
-		responsesBody, err = json.Marshal(reqBody)
+		responsesBody, err = marshalOfficialJSONObjectPreservingOrderAndRaw(reqBody, responsesBody)
 		if err != nil {
 			return nil, fmt.Errorf("remarshal after codex transform: %w", err)
 		}

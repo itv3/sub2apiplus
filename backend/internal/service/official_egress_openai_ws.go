@@ -15,6 +15,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/tidwall/gjson"
 )
 
 const (
@@ -341,6 +342,7 @@ func finalizeOpenAIOfficialEgressWSHandshakeHeaders(
 	} {
 		headers.Del(name)
 	}
+	stripOfficialEgressInboundHostHeaders(headers)
 	headers.Set("session-id", sessionID)
 	headers.Set("thread-id", threadID)
 	headers.Set("x-client-request-id", clientRequestID)
@@ -587,6 +589,7 @@ func finalizeDerivedOpenAIOfficialEgressWSFrame(
 		payload,
 		egressContext.responsesLite,
 		egressContext.parallelTools,
+		officialOpenAIWSTopLevelAllowed,
 	); err != nil {
 		return nil, result, err
 	}
@@ -639,6 +642,38 @@ func finalizeDerivedOpenAIOfficialEgressWSFrame(
 
 // injectOfficialOpenAIWSTurnState 把上游握手返回的连接级 turn-state 写入
 // response.create 的 client_metadata，并用官方顶层字段顺序重新编码。
+// extractOpenAIWSTurnStateFromUpstreamEvent 从上游事件流中提取 turn-state。
+//
+// 官方 Codex 的来源是流内 `response.metadata` 事件顶层的 `headers` 对象，在其中
+// 大小写不敏感地查找 x-codex-turn-state（codex-api/src/sse/responses.rs 的
+// turn_state() 与 header_turn_state_value_from_json）。握手响应头那条路在官方
+// CLI 里是死代码——core 调用时固定传 None。
+//
+// 此前 Sub2API 只认握手响应头，而上游按协议在事件流里下发，101 响应通常不带该头，
+// 于是整条 turn-state 链路长期取到空串。这也是历次抓包"从未观察到 turn-state"的原因。
+// 返回空串表示该帧不携带 turn-state，调用方应保持现值不变。
+func extractOpenAIWSTurnStateFromUpstreamEvent(message []byte) string {
+	if len(message) == 0 {
+		return ""
+	}
+	if eventType := strings.TrimSpace(gjson.GetBytes(message, "type").String()); eventType != openAIWSResponseMetadataEvent {
+		return ""
+	}
+	headers := gjson.GetBytes(message, "headers")
+	if !headers.IsObject() {
+		return ""
+	}
+	turnState := ""
+	headers.ForEach(func(key, value gjson.Result) bool {
+		if !strings.EqualFold(strings.TrimSpace(key.String()), openAIWSTurnStateHeader) {
+			return true
+		}
+		turnState = strings.TrimSpace(value.String())
+		return false
+	})
+	return turnState
+}
+
 func injectOfficialOpenAIWSTurnState(payload []byte, turnState string) ([]byte, error) {
 	turnState = strings.TrimSpace(turnState)
 	if turnState == "" {
@@ -794,6 +829,15 @@ func chainDerivedOpenAIOfficialEgressWSBusinessFrame(
 	)
 	if err != nil {
 		return nil, err
+	}
+	// turn-state 是上游按连接下发的粘性路由令牌，属于连接级状态而非逐帧重建的身份字段。
+	// metadata 在这里整体替换，会把预热之前已经注入的 turn-state 一并丢掉，
+	// 因此必须先从改写前的帧取回再并入新 metadata。
+	if previousMetadata, ok := payload["client_metadata"].(map[string]any); ok {
+		if turnState, ok := previousMetadata[openAIWSTurnStateHeader].(string); ok &&
+			strings.TrimSpace(turnState) != "" {
+			metadata[openAIWSTurnStateHeader] = turnState
+		}
 	}
 	payload["client_metadata"] = metadata
 	payload["prompt_cache_key"] = promptCacheKey

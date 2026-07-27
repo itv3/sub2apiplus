@@ -767,7 +767,10 @@ func TestOpenAIGatewayServiceForwardImages_OAuthPassesNAndReturnsAllImages(t *te
 	require.Equal(t, "application/json", upstream.lastReq.Header.Get("Content-Type"))
 	require.Equal(t, "text/event-stream", upstream.lastReq.Header.Get("Accept"))
 	require.Equal(t, "acct-123", upstream.lastReq.Header.Get("chatgpt-account-id"))
-	require.Equal(t, "responses=experimental", upstream.lastReq.Header.Get("OpenAI-Beta"))
+	// 官方源码里 OPENAI_BETA_HEADER 的唯一实际使用点是 WS 握手；官方自己的 images
+	// 端点与 HTTP Responses 都不发该头，更没有 responses=experimental 这个旧值。
+	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"),
+		"OAuth 图像请求不得携带 OpenAI-Beta")
 
 	require.Equal(t, openAIImagesResponsesMainModel, gjson.GetBytes(upstream.lastBody, "model").String())
 	require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())

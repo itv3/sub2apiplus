@@ -59,7 +59,7 @@ func NewH2Transport(profile *Profile, proxyURL *url.URL, idleConnTimeout, respon
 	if err != nil {
 		return nil, err
 	}
-	return &http2.Transport{
+	transport := &http2.Transport{
 		DisableCompression: profile != nil && profile.Transport.DisableCompression,
 		// 复用 utls 握手：忽略 cfg，ClientHello 指纹由 profile 决定。
 		DialTLSContext: func(ctx context.Context, network, addr string, _ *tls.Config) (net.Conn, error) {
@@ -68,5 +68,13 @@ func NewH2Transport(profile *Profile, proxyURL *url.URL, idleConnTimeout, respon
 		IdleConnTimeout: idleConnTimeout,
 		// ReadIdleTimeout 触发 h2 PING 健康检查，避免复用已被上游/代理静默关闭的连接。
 		ReadIdleTimeout: responseHeaderTimeout,
-	}, nil
+	}
+	// 官方 h2 的 SETTINGS 帧内顺序与 ENABLE_PUSH / MAX_FRAME_SIZE 取值同 Go 默认，
+	// 仅 MAX_HEADER_LIST_SIZE 偏离且可配。INITIAL_WINDOW_SIZE 与首个 WINDOW_UPDATE
+	// 取自 conf.MaxUploadBufferPer{Stream,Connection}，只能经 http.Transport.HTTP2
+	// 配置；而那条路要求连接可断言为 *tls.Conn，与 utls 不兼容，故此处改不了。
+	if profile != nil && profile.Transport.H2MaxHeaderListSize > 0 {
+		transport.MaxHeaderListSize = profile.Transport.H2MaxHeaderListSize
+	}
+	return transport, nil
 }
