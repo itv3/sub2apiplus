@@ -774,11 +774,10 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		forceFreshConn = false
 		connID := strings.TrimSpace(lease.ConnID())
-		if handshakeTurnState := strings.TrimSpace(lease.HandshakeHeader(openAIWSTurnStateHeader)); handshakeTurnState != "" {
-			turnState = handshakeTurnState
-			if c != nil {
-				c.Header(http.CanonicalHeaderKey(openAIWSTurnStateHeader), handshakeTurnState)
-			}
+		handshakeTurnState := replaceOpenAIWSTurnStateFromLease(lease)
+		turnState = handshakeTurnState
+		if handshakeTurnState != "" && c != nil {
+			c.Header(http.CanonicalHeaderKey(openAIWSTurnStateHeader), handshakeTurnState)
 		}
 		logOpenAIWSModeInfo(
 			"ingress_ws_upstream_connected account_id=%d turn=%d conn_id=%s conn_reused=%v conn_pick_ms=%d queue_wait_ms=%d preferred_conn_id=%s",

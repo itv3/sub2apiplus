@@ -53,6 +53,11 @@ def openai_payload(model: str) -> dict[str, Any]:
                 "description": "仅用于验证工具定义守恒。",
                 "parameters": {
                     "type": "object",
+                    # 保真探针：2^53+1 无法被 float64 精确表示，一旦转换阶段走 map 往返
+                    # 就会变成 9007199254740992 或科学计数法；z_first 排在 a_second 之前，
+                    # 用于检出被按字典序重排的嵌套键。两者都必须逐字节出现在出站请求中。
+                    "z_first": 9007199254740993,
+                    "a_second": 1,
                     "properties": {"query": {"type": "string"}},
                     "required": ["query"],
                     "additionalProperties": False,
@@ -137,6 +142,12 @@ def run_http(
     headers = {
         "Content-Type": "application/json",
         "User-Agent": "external-review-client/1.0",
+        # 真实第三方客户端（VSCode 内的 Kilo/Cline/Cursor、Stainless 生成的 SDK）会带这些
+        # 宿主环境头，官方 Claude Code / Codex CLI 从不发送。定向客户端必须一并携带，
+        # 否则官方出站的剥离逻辑在抓包里根本不会被触发，contract_equal=true 也证明不了它。
+        "accept-language": "zh-CN,zh;q=0.9,en-US;q=0.8",
+        "sec-fetch-mode": "cors",
+        "x-stainless-helper-method": "stream",
     }
     if anthropic:
         headers.update(

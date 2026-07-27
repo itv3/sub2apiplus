@@ -598,6 +598,68 @@ func (c *openAIWSClientFrameConn) Close() error {
 	return nil
 }
 
+// runOpenAIWSPassthroughOfficialPrewarm 在正式首帧之前补齐官方 Codex 的预热往返。
+//
+// 官方客户端在会话启动时先发一个 generate=false 的 response.create，再把正式业务帧
+// 通过 previous_response_id 挂到预热响应上。ctx_pool 模式已复现该形态，passthrough
+// 过去缺这一步，导致同一个第三方客户端在两种 WS mode 下出站形态不一致。
+//
+// 预热响应属于画像内部动作：不转发给客户端，也不计入 usage，这里读到终止事件为止只取
+// response id。读写都走未经包装的上游连接，避免占用 relay 的首输出超时状态机——那个包装
+// 是为客户端可见的首个业务输出准备的，预热流量不应该消耗它。
+func (s *OpenAIGatewayService) runOpenAIWSPassthroughOfficialPrewarm(
+	ctx context.Context,
+	upstream openaiwsv2.FrameConn,
+	prewarmPayload []byte,
+) (string, error) {
+	writeCtx, cancelWrite := context.WithTimeout(ctx, s.openAIWSWriteTimeout())
+	writeErr := upstream.WriteFrame(writeCtx, coderws.MessageText, prewarmPayload)
+	cancelWrite()
+	if writeErr != nil {
+		return "", wrapOpenAIWSIngressTurnError(
+			"write_upstream",
+			fmt.Errorf("write official egress prewarm frame: %w", writeErr),
+			false,
+		)
+	}
+
+	responseID := ""
+	for {
+		readCtx, cancelRead := context.WithTimeout(ctx, s.openAIWSReadTimeout())
+		_, payload, readErr := upstream.ReadFrame(readCtx)
+		cancelRead()
+		if readErr != nil {
+			return "", wrapOpenAIWSIngressTurnError(
+				"read_upstream",
+				fmt.Errorf("read official egress prewarm response: %w", readErr),
+				false,
+			)
+		}
+		eventType, eventResponseID, _ := parseOpenAIWSEventEnvelope(payload)
+		if responseID == "" && eventResponseID != "" {
+			responseID = eventResponseID
+		}
+		if eventType == "error" {
+			return "", wrapOpenAIWSIngressTurnError(
+				"read_upstream",
+				errors.New("official egress prewarm returned an error event"),
+				false,
+			)
+		}
+		if isOpenAIWSTerminalEvent(eventType) {
+			break
+		}
+	}
+	if responseID == "" {
+		return "", wrapOpenAIWSIngressTurnError(
+			"read_upstream",
+			errors.New("official egress prewarm did not return a response ID"),
+			false,
+		)
+	}
+	return responseID, nil
+}
+
 func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	ctx context.Context,
 	c *gin.Context,
@@ -1006,6 +1068,48 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			cancel()
 		},
 	}
+	// 官方画像生效时先补预热往返，再发正式首帧；构造器自带 shouldInject 判定，
+	// 官方客户端入站会自己发预热帧，此时不会重复注入。
+	if officialEgressEnabled {
+		prewarmPayload, shouldInject, prewarmBuildErr :=
+			buildDerivedOpenAIOfficialEgressWSPrewarmFrame(ctx, firstClientMessage)
+		if prewarmBuildErr != nil {
+			return NewOpenAIWSClientCloseError(
+				coderws.StatusPolicyViolation,
+				"official egress websocket prewarm construction failed",
+				prewarmBuildErr,
+			)
+		}
+		if shouldInject {
+			prewarmResponseID, prewarmErr := s.runOpenAIWSPassthroughOfficialPrewarm(
+				ctx,
+				upstreamFrameConn,
+				prewarmPayload,
+			)
+			if prewarmErr != nil {
+				return prewarmErr
+			}
+			chainedFirstMessage, chainErr := chainDerivedOpenAIOfficialEgressWSBusinessFrame(
+				ctx,
+				firstClientMessage,
+				prewarmResponseID,
+			)
+			if chainErr != nil {
+				return NewOpenAIWSClientCloseError(
+					coderws.StatusPolicyViolation,
+					"official egress websocket prewarm chaining failed",
+					chainErr,
+				)
+			}
+			firstClientMessage = chainedFirstMessage
+			logOpenAIWSModeInfo(
+				"passthrough_ws_official_prewarm_chain account_id=%d response_id=%s",
+				account.ID,
+				truncateOpenAIWSLogValue(prewarmResponseID, openAIWSIDValueMaxLen),
+			)
+		}
+	}
+
 	upstreamFirstMessageSent := false
 	firstWriteCtx, cancelFirstWrite := context.WithTimeout(ctx, s.openAIWSWriteTimeout())
 	firstWriteErr := relayUpstreamFrameConn.WriteFrame(firstWriteCtx, coderws.MessageText, firstClientMessage)

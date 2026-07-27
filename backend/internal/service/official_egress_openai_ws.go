@@ -341,6 +341,7 @@ func finalizeOpenAIOfficialEgressWSHandshakeHeaders(
 	} {
 		headers.Del(name)
 	}
+	stripOfficialEgressInboundHostHeaders(headers)
 	headers.Set("session-id", sessionID)
 	headers.Set("thread-id", threadID)
 	headers.Set("x-client-request-id", clientRequestID)
@@ -794,6 +795,15 @@ func chainDerivedOpenAIOfficialEgressWSBusinessFrame(
 	)
 	if err != nil {
 		return nil, err
+	}
+	// turn-state 是上游按连接下发的粘性路由令牌，属于连接级状态而非逐帧重建的身份字段。
+	// metadata 在这里整体替换，会把预热之前已经注入的 turn-state 一并丢掉，
+	// 因此必须先从改写前的帧取回再并入新 metadata。
+	if previousMetadata, ok := payload["client_metadata"].(map[string]any); ok {
+		if turnState, ok := previousMetadata[openAIWSTurnStateHeader].(string); ok &&
+			strings.TrimSpace(turnState) != "" {
+			metadata[openAIWSTurnStateHeader] = turnState
+		}
 	}
 	payload["client_metadata"] = metadata
 	payload["prompt_cache_key"] = promptCacheKey

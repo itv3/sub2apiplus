@@ -30,7 +30,7 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 
 目标有两点：
 
-1. 无论入站来自官方客户端还是第三方标准 API 客户端，Anthropic/OpenAI OAuth 官方出站均由内置画像统一定型为对应版本 Claude Code / Codex CLI 的真实形态。
+1. 无论入站来自官方客户端还是第三方标准 API 客户端，Anthropic/OpenAI OAuth 官方出站均由内置画像统一定型为对应版本 Claude Code / Codex CLI 的真实形态(官方入站走校验保真，第三方走强制定型)。
 2. 原有兼容层继续负责协议、模型、工具和请求语义转换；官方画像不改变 Key、Group、账号路由或计费归属。
 
 本轮验收基于源码版本 `0.1.165-4`（已合并上游 `v0.1.165`），由 Vircs 直接编译并运行最终复核镜像；`active` 画像为 Claude Code CLI `2.1.220` 和 Codex CLI `0.145.0`。逐路径结论见下表，解读时注意两条边界：
@@ -142,6 +142,7 @@ HTTP 路径只能对标对应的官方 HTTP 基准，WebSocket 路径只能对�
 - **样本有效性**：必须确认命中指定账号和模型、没有其他账号 fallback，并能与 usage/请求日志对应。功能验收还要求请求成功完成；若目标站点返回已确认的容量或配额错误，只能用于画像/传输验收，不能证明端到端业务成功。
 - **续轮与工具**：S2 必须形成真实连续会话；S4 必须完成“工具定义 → 工具调用 → 工具结果 → 最终回答”，发出即失败的样本无效。
 - **版本边界**：每次结论只适用于运行元数据记录的客户端、服务镜像和 Profile；版本变化后必须重抓，不能直接沿用旧数值。
+- **行为层不作对比维度**：官方客户端原生支持合法关闭遥测与非必要流量，因此候选出站“零遥测”是官方允许的配置状态，不能作为“不像官方客户端”的判据，也不计入一致性差异。Codex 侧由 `codex-rs/config/src/types.rs` 的 `AnalyticsConfigToml.enabled=false` 关闭 analytics events，otel exporter 可配 `None` 关 Statsig metrics，该结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。Claude 侧观察到 `DISABLE_TELEMETRY` 经 `isAnalyticsDisabled()` 关闭 Datadog 与 1P `event_logging`（`src/services/analytics/`），`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 经 `isEssentialTrafficOnly()` 门控 mcp-registry / policy_limits / grove / releaseNotes / feedback / modelCapabilities / referral 等十余处非必要请求（`privacyLevel.ts` 注释即 “All nonessential network traffic disabled”）。
 - **安全边界**：Token、Cookie、API Key 和动态身份值必须脱敏；包含完整请求 Body 的原始样本按敏感材料管理。
 - **比较口径**：先保存原始严格差异，再按路径契约声明跨独立运行必然变化的正文、动态身份、Header 顺序、动态工具目录及 Codex 运行时 Cookie；只有 `contract_equal=true`、候选 ingress→egress 语义守恒且 `undeclared_differences=0` 时，画像契约才通过。不得以 `raw_equal=false` 单独判失败，也不得用声明规则掩盖候选自身语义丢失。
 - **结论分级**：画像/传输验收验证路由、认证、静态 Header、必要 Body 外层字段和 TLS；完整功能验收还要求同模型、同场景输入并成功得到业务响应。文档必须明确报告所达到的级别。

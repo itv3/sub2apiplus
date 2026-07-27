@@ -135,6 +135,19 @@ func (l *openAIWSConnLease) HandshakeHeader(name string) string {
 	return l.conn.handshakeHeader(name)
 }
 
+// replaceOpenAIWSTurnStateFromLease 用当前这条连接的握手结果整体替换会话级 turn-state。
+//
+// 语义是"替换"而不是"仅在非空时覆盖"：HandshakeHeader 取的就是本连接建立时的响应头，
+// 复用连接时拿到原值、新建连接时拿到新值；握手未下发时必须返回空串，把上一条连接的残留值
+// 一并清除。官方客户端契约要求 turn-state 只在同一 turn 内保持，跨 turn 或跨连接回放会导致
+// 上游粘性路由错误，因此调用方必须直接赋值，不得再加非空判断。
+func replaceOpenAIWSTurnStateFromLease(lease *openAIWSConnLease) string {
+	if lease == nil {
+		return ""
+	}
+	return strings.TrimSpace(lease.HandshakeHeader(openAIWSTurnStateHeader))
+}
+
 func (l *openAIWSConnLease) HandshakeHeaders() http.Header {
 	if l == nil || l.conn == nil {
 		return nil

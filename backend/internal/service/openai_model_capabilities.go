@@ -19,6 +19,8 @@ const (
 	openAIModelCapabilityHydrationTimeout = 8 * time.Second
 	openAIModelCapabilityFreshTTL         = 5 * time.Minute
 	openAIModelCapabilityFailureTTL       = 30 * time.Second
+	// openAIModelVisibilityList 对应官方 ModelVisibility::List 的 serde 形态（lowercase）。
+	openAIModelVisibilityList = "list"
 )
 
 // bundledOpenAIModelCapabilities 是随当前官方客户端画像发布的冷启动快照。
@@ -50,10 +52,18 @@ type openAIModelCapabilityAccountSnapshot struct {
 	models     map[string]openAIModelCapabilities
 	expiresAt  time.Time
 	retryAfter time.Time
+	// remoteAuthoritative 表示本次账号清单满足官方 apply_remote_models 的接管条件
+	// （清单非空且至少有一个 visibility=list 的模型）。此时远端清单是唯一真相源，
+	// 清单未列出的 slug 必须走 fallback 能力位，不再回落 bundled 快照。
+	remoteAuthoritative bool
 }
 
 // replaceFromManifest 用上游模型清单原子更新账号的 Responses Lite 能力快照。
-// 同名模型覆盖 bundled 值；清单未列出的模型仍由当前客户端 bundled 快照兜底。
+//
+// 合并语义对齐官方 models-manager 的 apply_remote_models：清单非空且至少含一个
+// visibility=list 的模型时，远端整体接管，逐条按远端字段构建、不以 bundled 为基底
+// （官方此时直接 `*self.remote_models = models` 丢弃内置清单）；不满足接管条件时才
+// 退回 bundled 打底再按 slug 覆盖的旧行为。
 func (s *openAIModelCapabilitySnapshot) replaceFromManifest(accountID int64, body []byte) {
 	if s == nil || accountID <= 0 || len(body) == 0 {
 		return
@@ -63,6 +73,7 @@ func (s *openAIModelCapabilitySnapshot) replaceFromManifest(accountID int64, bod
 			Slug                      string `json:"slug"`
 			UseResponsesLite          bool   `json:"use_responses_lite"`
 			SupportsParallelToolCalls *bool  `json:"supports_parallel_tool_calls"`
+			Visibility                string `json:"visibility"`
 		} `json:"models"`
 	}
 	if err := json.Unmarshal(body, &envelope); err != nil || len(envelope.Models) == 0 {
@@ -72,17 +83,28 @@ func (s *openAIModelCapabilitySnapshot) replaceFromManifest(accountID int64, bod
 		s.markLoadFailure(accountID, time.Now())
 		return
 	}
+	remoteAuthoritative := false
+	for _, model := range envelope.Models {
+		if strings.EqualFold(strings.TrimSpace(model.Visibility), openAIModelVisibilityList) {
+			remoteAuthoritative = true
+			break
+		}
+	}
 	capabilities := make(map[string]openAIModelCapabilities, len(envelope.Models))
 	for _, model := range envelope.Models {
 		slug := strings.ToLower(strings.TrimSpace(model.Slug))
-		if slug != "" {
-			capability := bundledOpenAIModelCapabilities[slug]
-			capability.UseResponsesLite = model.UseResponsesLite
-			if model.SupportsParallelToolCalls != nil {
-				capability.SupportsParallelToolCalls = *model.SupportsParallelToolCalls
-			}
-			capabilities[slug] = capability
+		if slug == "" {
+			continue
 		}
+		var capability openAIModelCapabilities
+		if !remoteAuthoritative {
+			capability = bundledOpenAIModelCapabilities[slug]
+		}
+		capability.UseResponsesLite = model.UseResponsesLite
+		if model.SupportsParallelToolCalls != nil {
+			capability.SupportsParallelToolCalls = *model.SupportsParallelToolCalls
+		}
+		capabilities[slug] = capability
 	}
 	if len(capabilities) == 0 {
 		s.markLoadFailure(accountID, time.Now())
@@ -93,8 +115,9 @@ func (s *openAIModelCapabilitySnapshot) replaceFromManifest(accountID int64, bod
 		s.accounts = make(map[int64]openAIModelCapabilityAccountSnapshot)
 	}
 	s.accounts[accountID] = openAIModelCapabilityAccountSnapshot{
-		models:    capabilities,
-		expiresAt: time.Now().Add(openAIModelCapabilityFreshTTL),
+		models:              capabilities,
+		expiresAt:           time.Now().Add(openAIModelCapabilityFreshTTL),
+		remoteAuthoritative: remoteAuthoritative,
 	}
 	s.mu.Unlock()
 }
@@ -132,9 +155,18 @@ func (s *openAIModelCapabilitySnapshot) modelCapabilitiesState(
 	s.mu.RLock()
 	accountSnapshot, accountLoaded := s.accounts[accountID]
 	value, exists := accountSnapshot.models[model]
+	remoteAuthoritative := accountSnapshot.remoteAuthoritative && len(accountSnapshot.models) > 0
 	s.mu.RUnlock()
 	if !exists {
-		value, exists = bundledOpenAIModelCapabilities[model]
+		if remoteAuthoritative {
+			// 账号清单已按官方条件整体接管：清单未列出的 slug 等价于官方 fallback ModelInfo，
+			// 两个能力位都是 false，且属于“已知不支持”而非“未知”。这里必须返回 known=true，
+			// 否则调用方会把它当成未加载而反复同步拉取 /models，并让 bundled 旧值继续生效。
+			value = openAIModelCapabilities{}
+			exists = true
+		} else {
+			value, exists = bundledOpenAIModelCapabilities[model]
+		}
 	}
 	refreshAllowed := !accountLoaded || !now.Before(accountSnapshot.expiresAt)
 	if accountLoaded && now.Before(accountSnapshot.retryAfter) {

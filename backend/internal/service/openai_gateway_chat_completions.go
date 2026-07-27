@@ -207,9 +207,13 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	logger.L().Debug("openai chat_completions: model mapping applied", logFields...)
 
 	if account.Type == AccountTypeOAuth {
-		var reqBody map[string]any
-		if err := json.Unmarshal(responsesBody, &reqBody); err != nil {
-			return nil, fmt.Errorf("unmarshal for codex transform: %w", err)
+		// 这里是整条链路上唯一会丢保真的环节：入站结构体用 json.RawMessage 保住了工具
+		// schema 的原始字节，一旦走 map 往返，数字会降级成 float64（大整数变科学计数法）、
+		// 嵌套对象的键会被按字典序重排。改用保序解码 + 复用原始字节的序列化，
+		// 与 Responses 入口保持同一套工具。
+		reqBody, decodeErr := decodeOfficialJSONObjectUseNumber(responsesBody)
+		if decodeErr != nil {
+			return nil, fmt.Errorf("unmarshal for codex transform: %w", decodeErr)
 		}
 		isJSONObjectFormat := strings.EqualFold(strings.TrimSpace(gjson.GetBytes(responsesBody, "text.format.type").String()), "json_object")
 		codexResult := applyCodexOAuthTransformWithOptions(reqBody, codexOAuthTransformOptions{
@@ -228,7 +232,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		} else if promptCacheKey != "" {
 			reqBody["prompt_cache_key"] = promptCacheKey
 		}
-		responsesBody, err = json.Marshal(reqBody)
+		responsesBody, err = marshalOfficialJSONObjectPreservingOrderAndRaw(reqBody, responsesBody)
 		if err != nil {
 			return nil, fmt.Errorf("remarshal after codex transform: %w", err)
 		}

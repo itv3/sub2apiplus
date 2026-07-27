@@ -22,6 +22,24 @@ const (
 	OfficialEgressProfileVersionPhase0 = "phase0-2026-07-24"
 )
 
+// officialEgressInboundHostHeaders 是三条官方出站路径共同剥离的入站宿主环境头。
+// 官方 Claude Code / Codex CLI 都不发送它们：accept-language 与 sec-fetch-mode 来自浏览器
+// 或 IDE 宿主，x-stainless-helper-method 来自 Stainless 生成的 SDK。入站白名单会放行这些头，
+// 因此必须在终态定型阶段统一删除；否则第三方客户端的宿主特征会与官方身份头出现在同一请求上，
+// 形成官方客户端不可能产生的混合形态。
+var officialEgressInboundHostHeaders = [...]string{
+	"accept-language",
+	"sec-fetch-mode",
+	"x-stainless-helper-method",
+}
+
+// stripOfficialEgressInboundHostHeaders 删除上述入站头的全部大小写形式。
+func stripOfficialEgressInboundHostHeaders(header http.Header) {
+	for _, name := range officialEgressInboundHostHeaders {
+		deleteHeaderAllForms(header, name)
+	}
+}
+
 // OfficialEgressTransport 区分 HTTP 请求与 WebSocket 连接，禁止二者共用画像状态。
 type OfficialEgressTransport string
 

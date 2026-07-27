@@ -1120,6 +1120,7 @@ func finalizeOfficialOpenAIHTTPHeaders(
 	} {
 		header.Del(name)
 	}
+	stripOfficialEgressInboundHostHeaders(header)
 
 	if isCompact {
 		header.Del("Accept")
