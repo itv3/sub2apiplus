@@ -263,8 +263,13 @@ func OpenAIOfficialEgressHTTPTLSProfile(proxy bool) *tlsfingerprint.Profile {
 // 直连时的 30-cipher、空 ALPN 画像共用同一个 Transport。
 func newOpenAIOfficialEgressHTTPProxyTLSProfile() *tlsfingerprint.Profile {
 	return &tlsfingerprint.Profile{
-		Name:      "Official Codex CLI 0.145.0 HTTP Proxy (phase0-2026-07-24)",
-		Transport: tlsfingerprint.TransportOptions{DisableCompression: true, LowercaseHeaders: true},
+		Name: "Official Codex CLI 0.145.0 HTTP Proxy (phase0-2026-07-24)",
+		Transport: tlsfingerprint.TransportOptions{
+			DisableCompression: true,
+			LowercaseHeaders:   true,
+			// 官方 h2 实测为 16KB，Go 默认 10MB。
+			H2MaxHeaderListSize: 16384,
+		},
 		CipherSuites: []uint16{
 			0x1302, 0x1301, 0x1303,
 			0xc02c, 0xc02b, 0xcca9,

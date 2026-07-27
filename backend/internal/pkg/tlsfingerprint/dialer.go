@@ -35,6 +35,11 @@ type TransportOptions struct {
 	// Sec-WebSocket-Version/Sec-WebSocket-Key 五项是硬编码的大写驼峰，其余才走小写。
 	// 不设该清单会把这几项一并压成小写，反而偏离官方。
 	PreserveHeaderCase []string
+	// H2MaxHeaderListSize 覆盖 h2 SETTINGS 的 MAX_HEADER_LIST_SIZE。零值保持 Go 默认。
+	//
+	// Go 默认 10MB，官方 h2 栈实测为 16KB。该项只声明"我能接收多大的响应头"，
+	// 不限制自身发送，且官方本就用这个值，因此收紧不影响与官方上游的通信。
+	H2MaxHeaderListSize uint32
 }
 
 // Profile contains TLS fingerprint configuration.

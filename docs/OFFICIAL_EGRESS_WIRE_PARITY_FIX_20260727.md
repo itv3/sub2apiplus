@@ -30,7 +30,7 @@
 | P2 | 10：`strictIngressIdentity` 分叉 | 按既定决策保留不改 |
 | P1 | 5~8：四条旁路端点无画像 | **本轮不做**，理由见下 |
 | P3 | 13：WS turn-state 来源 | **本轮不做**，理由见下 |
-| P3 | 14~16：h2 SETTINGS、h1 header 顺序、WS 握手头序 | 官方 h1 基线已补齐（§6.7）；14 被基线缺失阻塞、15 是独立工程，结论见 §6.8 |
+| P3 | 14~16：h2 SETTINGS、h1 header 顺序、WS 握手头序 | h1/h2 基线均已补齐（§6.7、§6.10）；14 修掉可修的一项、15 是独立工程、16 大小写已修顺序待做，结论见 §6.8、§6.10 |
 | P3 | 17：WS 连接池规模 | 记录，不改 |
 
 ### 范围收窄的理由
@@ -143,7 +143,7 @@ passthrough 用 `openAIChatGPTInternalUnsupportedFields`（`user`、`metadata`�
 
 | # | 问题 | 不做的理由 |
 |---|---|---|
-| 14 | h2 SETTINGS 全段偏离（`INITIAL_WINDOW_SIZE` 4MB vs 2MB、`MAX_HEADER_LIST_SIZE` 10MB vs 16KB、首个 `WINDOW_UPDATE` +1GB、伪头顺序） | 需定制 `x/net/http2` 帧层或引入 fork。仅影响代理路径。**且无官方 h2 基线可对**——需先补抓 |
+| 14 | h2 SETTINGS 偏离（**非全段**：帧内顺序、`ENABLE_PUSH`、`MAX_FRAME_SIZE` 本就一致）。真实偏离为 `MAX_HEADER_LIST_SIZE`、`INITIAL_WINDOW_SIZE`、首个 `WINDOW_UPDATE`、伪头顺序 | 基线已补齐（§6.10）。`MAX_HEADER_LIST_SIZE` **已修**；其余三项因 utls 与 net/http 的 h2 升级路径不兼容而卡住，须 fork。仅影响代理路径 |
 | 15 | h1 header 顺序（Go 字典序 vs hyper 插入序） | `writeSubset` 内部强制排序，控制顺序须替换请求序列化路径。**需先补 h1 直连基线** |
 | 16 | WS 握手头顺序与大小写（`Sec-Websocket-Key` vs `Sec-WebSocket-Key`） | 在 `coder/websocket` 库内部生成，须 fork 或自写握手 |
 | 17 | WS 连接池上限默认 128、`min_idle` 4 后台预建、30s PING、60min 寿命；官方为单连接 + 1 条 prewarm、无 PING | 属容量与可用性设计，改动影响吞吐，需产品决策 |
@@ -357,12 +357,44 @@ crate 本身**不定义客户端默认发送列表**，发什么完全由上层�
 max_frame_size, max_header_list_size, enable_connect_protocol`。也就是说官方实际发
 哪几项、各是什么值，**只能实测**，这再次印证下面的结论。
 
-**P3-14 在拿到官方 h2 基线前不能动手。** 官方直连是空 ALPN（探针实测
-`negotiated_alpn=None`），恒为 h1，**根本不产生 h2 流量**；h2 只在经代理时出现。
-Go 的 `x/net/http2.Transport` 只暴露 `MaxHeaderListSize`、`MaxReadFrameSize`、
-`MaxDecoderHeaderTableSize`，而偏离项里的 `INITIAL_WINDOW_SIZE`、首个
-`WINDOW_UPDATE` 增量与伪头顺序都在帧层写死，须 fork。在没有官方经代理的 h2 基线的
-前提下调这些值，是拿一个偏离换另一个偏离。**先补基线，再谈修复。**
+### 6.10 官方 h2 基线与 P3-14 的落地（`official-h2-20260727T131936Z`）
+
+基线已补齐。采法见 `h2_wire_probe.py`：探针先作为 HTTP CONNECT 代理接下隧道，再在
+隧道内作为 h2 服务端完成握手。**mitmproxy 那条路拿不到这些数据**——它会用自己的 h2
+栈重建连接，客户端原始的 SETTINGS 集合、取值与帧内顺序在转发后已经丢失。
+
+三次连接结果完全一致，与 Go 侧实测（同探针，本地 `x/net/http2` v0.57.0）对账：
+
+| 项 | 官方 | Go 默认 | 结论 |
+|---|---|---|---|
+| SETTINGS 帧内顺序 | `ENABLE_PUSH, INITIAL_WINDOW_SIZE, MAX_FRAME_SIZE, MAX_HEADER_LIST_SIZE` | **完全相同** | ✅ 本就一致 |
+| `ENABLE_PUSH` | 0 | 0 | ✅ 本就一致 |
+| `MAX_FRAME_SIZE` | 16,384 | 16,384 | ✅ 本就一致 |
+| `MAX_HEADER_LIST_SIZE` | 16,384 | 10,485,760 | ✅ **已修** |
+| `INITIAL_WINDOW_SIZE` | 2,097,152 | 4,194,304 | ❌ 须 fork |
+| 首个 `WINDOW_UPDATE` | 5,177,345 | 1,073,741,824 | ❌ 须 fork |
+| 伪头顺序 | `:method, :scheme, :authority, :path` | `:authority, :method, :path, :scheme` | ❌ 须 fork |
+
+**这推翻了 §4 表格里对 P3-14 的两处描述**：SETTINGS 并非"全段偏离"，帧内顺序、
+`ENABLE_PUSH` 与 `MAX_FRAME_SIZE` 本就一致；真实偏离是四项中的三项。
+
+**已修的一项**：`TransportOptions.H2MaxHeaderListSize` 收口到 `NewH2Transport`，代理
+画像配 16384。该项只声明"我能接收多大的响应头"、不限制自身发送，且官方本就用这个值，
+因此收紧不影响与官方上游的通信。
+
+**改不了的两项的确切原因**（比"帧层写死"更准确）：`INITIAL_WINDOW_SIZE` 与首个
+`WINDOW_UPDATE` 取自 `conf.MaxUploadBufferPerStream` / `PerConnection`，二者**可以**
+经 `http.Transport.HTTP2`（`http.HTTP2Config`）配置——`configFromTransport` 会读
+`h2.t1.HTTP2`。但那要求 `http2.Transport` 由 `ConfigureTransports(t1)` 创建，而这样
+创建出的 transport 用 `noDialClientConnPool`，不能独立拨号；改走 `t1.RoundTrip` 则
+`http.Transport.dialConn` 会把连接断言为 `*tls.Conn`，utls 的 `UConn` 过不去。
+**是 utls 与 net/http 的 h2 升级路径不兼容卡住了这两项，不是配置项缺失。**
+伪头顺序则硬编码在 `internal/httpcommon/request.go:138`，无配置入口。
+
+**残余风险**：修完这一项后 h2 指纹**仍可区分**（窗口两项 + 伪头顺序）。要彻底对齐
+只能 fork `x/net/http2`。另注意 h2 仅出现在**代理路径**，直连恒为 h1。
+
+**P3-14 的结论见 §6.10**（基线已补齐，一项已修、三项本就一致、两项须 fork）。
 
 ### 6.6 本轮未覆盖
 
