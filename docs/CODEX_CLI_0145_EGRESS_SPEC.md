@@ -339,16 +339,30 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
     本身既不合语义、还会被 `NON_ORIGINATING_CLIENT_NAMES` 过滤
   - **该常量为全局共用，修一处则所有端点受益**
 
-### SPEC-HDR-006　`accept` 按端点取值
+### SPEC-HDR-006　`accept`：仅 responses 显式设，其余一律 reqwest 默认 `*/*`
 
-- **规则**：models 端点为 `*/*`
-- **依据**：官方基线实测　[L3]
+- **规则**：
+  - **responses**：显式 `text/event-stream`（`endpoint/responses.rs:149`
+    `req.headers.insert(ACCEPT, HeaderValue::from_static("text/event-stream"))`）　[L1]
+  - **其余端点**（models / compact / alpha-search / images）：端点层**不设**
+    accept，由 reqwest 补默认值 **`*/*`**　[L1 + L3]
 - **观测**：任意通道
-- **实测**：`official-h1-full-20260727T124125Z` 的 `GET /codex/models` →
-  `accept: */*`
-- **可变性**：条件（responses 为 `text/event-stream`，见 SPEC-HDR-00x 未列项）
-- **状态**：🔴 **未对齐** —— Sub2API 在
-  `openai_codex_models_service.go:318` 设 `Accept: application/json`
+- **实测**：`official-h1-full-20260727T124125Z` 中 accept 只有两种取值——
+  `*/*`（models、plugins/featured、ps/plugins/installed、ps/plugins/list）
+  与 `text/event-stream, application/json`（ps/mcp 的 SSE 端点）
+- **可变性**：条件（按端点）
+- **状态**：🔴 **四个端点全部未对齐**。根因是 Sub2API 按"该端点返回什么"来设
+  accept，而官方是"除 responses 外一律交给 reqwest 默认"：
+
+| 端点 | 官方 | Sub2API | 位置 |
+|---|---|---|---|
+| responses | `text/event-stream` | `text/event-stream` | ✅ 一致 |
+| compact | `*/*` | **无 accept 头** | 🔴 `official_egress_openai_http.go:1168` `header.Del("Accept")`——Go 不像 reqwest 会自动补，故出站彻底缺该头 |
+| models | `*/*` | `application/json` | 🔴 `openai_codex_models_service.go:318` |
+| alpha-search | `*/*` | `text/event-stream` | 🔴 `openai_alpha_search.go:246` |
+| images | `*/*` | `text/event-stream` | 🔴 `openai_images_responses.go:1710` |
+
+  ─ compact 那条最明显：**官方一定带 accept，而 Sub2API 完全没有**。
 
 ### SPEC-HDR-007　会话头一律用连字符，且无 `conversation-id`
 
