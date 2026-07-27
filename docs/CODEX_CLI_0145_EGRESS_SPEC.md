@@ -15,7 +15,7 @@
 ### 0.1 为什么要有这份表
 
 此前的工作方式是「抓包对比 → 改代码 → 抓包验证」，判断反复反转。复盘 2026-07-27
-当天的 11 次反转，成因分布是：
+当天的 16 次反转，成因分布是：
 
 | 成因 | 占比 | 典型 |
 |---|---|---|
@@ -25,10 +25,15 @@
 | 读源码读漏调用点 | 1 | 误判 images 端点无人调用（实际在 `ext/image-generation`） |
 | 常量语义误读 | 1 | 把 `defaultMaxReadFrameSize` 的**上限**当默认值 |
 | 只读一层未及依赖库 | 2 | 读 hyper 得出"官方全小写"，对 HTTP 对、对 WS 错，**引入了生产回归** |
+| **拿一处结论外推到别处** | 3 | 把 WS 握手序当作 `/responses` 的兜底（实测完全不同）；把 h1 顺序做成跨端点的并集清单（models 当场就错）；把 images 与 alpha-search 的 web-search 分支误判为 accept 不对齐（它们打的其实是 responses 端点） |
+| **只看调用点不看调用链** | 2 | 误判 live 主请求缺 `openai-alpha`（实为经 `applyLiveUpstreamIdentityHeaders` 设置）；误判 `supportsOfficialEgressHTTPProfile` 是画像失效的根因（它管的是 Finalizer，TLS 画像走显式传参） |
 
-结论有两条。其一，**"以源码为准"并不能解决问题**——后四类全是源码推断出的错，
+结论有三条。其一，**"以源码为准"并不能解决问题**——中间四类全是源码推断出的错，
 且比抓包错得更隐蔽（会一路自洽到部署）。其二，真正缺的是**规格这一层**：过去是
 「抓包结论」直接对「代码实现」，中间没有可审计的东西，每次判断都活在对话里。
+其三，**最后两类（外推与半截调用链）是当天后半段才暴露的**，且都发生在"已经建立
+规格表之后"——说明规格表本身也会写错，**每条都必须落到实测**，这正是本表要求
+每条声明观测通道、并把状态与实测运行号绑定的原因。
 
 因此本表的设计原则是：**抓包与源码交叉验证，且每条规则都必须声明"用什么通道才能
 观测到它"**——因为最贵的教训是，用看不到该项的通道去验，会得到虚假的通过。
@@ -433,7 +438,7 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 - **可变性**：固定
 - **状态**：✅ 已对齐（顶层改白名单）
 
-### SPEC-BODY-006　`tool_choice` 必须是 JSON 字符串，不能是对象
+### SPEC-BODY-005　`tool_choice` 必须是 JSON 字符串，不能是对象
 
 - **规则**：`tool_choice` 的类型是 **`String`**，实际取值为 `"auto"`
 - **依据**：`codex-api/src/common.rs:223` `pub tool_choice: String`　[L1]
@@ -453,7 +458,7 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
   `tool_choice` 保持 `"auto"`；Sub2API 改为强制指定工具，于是被迫用了对象形式。
   语义上可理解（用户明确要生图），形态上是官方不可能产生的。
 
-### SPEC-BODY-007　images 硬编码模板的其余字段
+### SPEC-BODY-006　images 硬编码模板的其余字段
 
 - **规则**：官方 body 由 `ResponsesApiRequest` 序列化，字段集合固定
   （`common.rs:217-238`：`model / instructions / input / tools / tool_choice /
@@ -760,27 +765,28 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 
 **A 类 — 值/结构差异，不依赖自写 wire，可直接改：**
 
-| # | 差异 | 位置 | 规格 |
+| # | 差异 | 规格 | 状态 |
 |---|---|---|---|
-| A1 | UA 多了官方永不产生的 suffix `(codex_exec; 0.145.0)` | `openaiidentity/codex.go:7` | SPEC-HDR-005 |
-| A2 | `accept` 四端点全错（compact 甚至完全没有该头） | 见规格表 | SPEC-HDR-006 |
-| A3 | alpha-search 会话头用下划线，且含官方不存在的 `Conversation_ID` | `openai_alpha_search.go:255-256` | SPEC-HDR-007 |
-| A4 | `tool_choice` 发对象，官方类型是 `String` | `openai_images_responses.go:357` | SPEC-BODY-006 |
-| A5 | live URL 多带 `?intent=&architecture=`，主请求缺 `openai-alpha` | `openai_live.go:35,288-305` | SPEC-EP-012 |
-| A6 | 五条旁路链路不走官方画像 | 见 SPEC-EP-011 表 | SPEC-EP-011 |
-| A7 | 隐私端点访问官方从不访问的 `settings/account_user_setting` | `openai_privacy_service.go:18` | SPEC-EP-010 |
+| A1 | UA 多了官方永不产生的 suffix `(codex_exec; 0.145.0)` | SPEC-HDR-005 | ✅ **已修 + wire 验收**（§8.7） |
+| A2 | `accept` 三处不对（compact 甚至完全没有该头） | SPEC-HDR-006 | ✅ **已修 + wire 验收**（§8.7） |
+| A3 | alpha-search 会话头用下划线，且含官方不存在的 `Conversation_ID` | SPEC-HDR-007 | ✅ **已修** |
+| A8 | OAuth 路径把入站 query 原样透传到官方 URL | SPEC-EP-013 | ✅ **已修** |
+| A4 | `tool_choice` 发对象，官方类型是 `String` | SPEC-BODY-005 | ❌ **未修**（强负指纹，检测方看 JSON 类型即可识别） |
+| A6 | 五条旁路链路不走官方画像 | SPEC-EP-011 | ❌ **未修**（privacy/quota 用 `req.Client`，改造需重构） |
+| A7 | 隐私端点访问官方从不访问的 `settings/account_user_setting` | SPEC-EP-010 | ❌ **未修**（需产品决策：该端点官方无对应物） |
+| A5 | live URL 多带 `?intent=&architecture=` | SPEC-EP-012 | ⏸ **暂不修**（需开 `AllowLive` 才可达，无法实测验证） |
 
 **A1 优先级最高**：全局常量，一处修复覆盖所有端点。
 **A6 建议连根治**：把 `supportsOfficialEgressHTTPProfile` 从"默认放行"改"默认拦截"。
 
 **B 类 — 须自写 h1 wire：**
 
-| # | 差异 | 规格 |
-|---|---|---|
-| B1 | `Host` 大小写与位置（官方小写、倒数第二） | SPEC-H1-002 |
-| B2 | `content-length` 位置（官方最后） | SPEC-H1-003 |
-| B3 | 其余 header 顺序（官方插入序、Go 字典序） | SPEC-H1-004 |
-| B4 | WS 握手剩余头顺序 | SPEC-WS-002 |
+| # | 差异 | 规格 | 状态 |
+|---|---|---|---|
+| B1 | `Host` 大小写与位置 | SPEC-H1-002 | ✅ **已修 + wire 验收**（§8.8） |
+| B2 | `content-length` 位置 | SPEC-H1-003 | ✅ **已修 + wire 验收** |
+| B3 | 其余 header 顺序 | SPEC-H1-004 | ✅ **models 与 responses 逐字节一致**；compact/alpha-search/images/live 落兜底清单，无基线 |
+| B4 | WS 握手剩余头顺序 | SPEC-WS-002 | ⚠ 大小写已对齐，顺序落兜底清单 |
 
 > **重要**：不必逐端点比 header 顺序——Go 的 `http.Header` 是 map，构造顺序不体现
 > 在 wire 上，永远字典序。各端点的顺序差异是 B1~B3 的同一实例，统一由自写 wire 解决。
@@ -795,7 +801,7 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 | C2 | 代理画像 ALPN 方向相反（改空 ALPN 则 h2 差异全消） | SPEC-TLS-002 |
 
 **第 1 步剩余（可与第 2 步合并做）：**
-- compact / models / search 的 body 字段逐项比（images 已比，见 SPEC-BODY-007）
+- compact / models / search 的 body 字段逐项比（images 已比，见 SPEC-BODY-006）
 - 各端点 header 的**完整集合**比对（目前比的是取值，尚未确认有无多发/少发）
 
 ### F. 本轮未解决但已定位的重点
