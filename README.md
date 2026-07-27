@@ -37,6 +37,8 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 
 > `0.1.165-5` 在此基础上闭合了数据保真、Lite 判定分裂、重复键 panic 与 API Key 画像 TLS 决策来源，已作为正式版发布（GitHub Releases `v0.1.165-5`，镜像 `ghcr.io/itv3/sub2apiplus:0.1.165-5`），生产已切换为该已发布镜像。下表的路径结论在 `0.1.165-5` 仍然成立，新增的 wire 证据与未覆盖边界见 [P0 数据保真修复记录](docs/P0_DATA_FIDELITY_FIX_20260727.md)。
 
+> `0.1.165-6` 继续闭合入站宿主头泄漏、WS turn-state 跨连接沿用、模型能力合并语义、Chat Completions/Messages 入口 JSON 保真与 passthrough 预热缺失五项，尚未发布，仅由 Vircs 以阶段镜像验收。本轮只重跑 OpenAI 侧：官方 Codex CLI `0.145.0` 基准（HTTP/WS × direct/MITM × S1/S2/S4）与第三方定向 HTTP/WS 候选出站逐项对照通过，宿主头剥离与预热帧序列均有真实 wire 证据；turn-state 两项因上游始终未下发该头只达到代码级验收。未重跑 Anthropic 三路径与 Kilo 六组合，下表结论仍沿用 `0.1.165-4`。范围、证伪项与未覆盖边界见 [官方出站画像保真修复记录](docs/OFFICIAL_EGRESS_PROFILE_FIDELITY_FIX_20260727.md)。
+
 1. “通过”指应用层契约一致、语义守恒和 direct TLS 一致，不是逐字节相同；完整判定口径见 §1.1.2.3。
 2. Anthropic 侧因官方上游返回 `400 organization disabled`（#50 组织禁用），本轮用单次真实第三方请求完成 system、动态 beta、应用契约和 direct TLS 验收，未执行 §1.1.2.2 要求的完整 S1/S2/S4，也不能宣称功能响应成功。
 
@@ -54,8 +56,9 @@ API Key active 画像的 AnyRouter A/B 见 §1.2。
 
 | 主题 | 约束 |
 |---|---|
+| **入站宿主头** | 三条路径在终态定型阶段统一剥离 `accept-language`、`sec-fetch-mode`、`x-stainless-helper-method`。这些头由浏览器或 IDE 宿主注入，官方 Claude Code / Codex CLI 从不发送；入站白名单会放行它们，不剥离就会与官方身份头出现在同一请求上，形成官方客户端不可能产生的混合形态。定向抓包的第三方客户端必须实际携带这些头，否则该约束在证据里不会被触发。 |
 | **Anthropic 参数与 beta** | `anthropic-beta` 按请求能力动态补齐，保留 1M context、structured outputs 和 advanced tool use/tool search 所需 beta；启用 thinking（或入口本就未携带）时删除会导致上游 `400` 的 `temperature`；`top_p`、`top_k` 因官方客户端不发送而一律清理，不受 thinking 影响。端点判定统一使用规范化入口，`/messages`、`/v1/messages` 及兼容别名不能绕过画像。 |
-| **Codex 模型能力** | OAuth 账号把 bundled 与账号 `/backend-api/codex/models` manifest 合并，并按“账号 + 精确模型 slug”缓存 `use_responses_lite` 与 `supports_parallel_tool_calls`；加载失败使用有效旧值或完整语义降级。Lite 才迁移 `instructions/tools` 并设置 `reasoning.context=all_turns`；非 Lite 保留顶层 `instructions/tools` 且不发送 `reasoning.context`。两类路径共同固定 `tool_choice=auto`、`store=false`、`stream=true`、`include=[reasoning.encrypted_content]` 并删除 `max_output_tokens`；`parallel_tool_calls` 按能力位决定。 |
+| **Codex 模型能力** | 账号 `/backend-api/codex/models` 清单的合并语义对齐官方 `apply_remote_models`：清单非空且至少含一个 `visibility=list` 的模型时远端整体接管，bundled 不再参与，清单未列出的 slug 按官方 fallback 处理（`use_responses_lite` 与 `supports_parallel_tool_calls` 均为 `false`，且属于“已知不支持”而非“未知”）；只有不满足接管条件、或清单从未成功加载时才用 bundled 兜底。能力按“账号 + 精确模型 slug”缓存，加载失败进入退避并沿用当前有效值，不同步拒绝业务请求。bundled 的权威来源是实抓 manifest fixture，两者必须逐项一致。Lite 才迁移 `instructions/tools` 并设置 `reasoning.context=all_turns`；非 Lite 保留顶层 `instructions/tools` 且不发送 `reasoning.context`。两类路径共同固定 `tool_choice=auto`、`store=false`、`stream=true`、`include=[reasoning.encrypted_content]` 并删除 `max_output_tokens`；`parallel_tool_calls` 按能力位决定。 |
 | **compact** | compact 请求补齐 `prompt_cache_key` 与 `X-Codex-Installation-ID`，不要求或生成普通 Responses 才有的 `x-client-request-id`。 |
 | **OAuth 刷新身份** | Codex token exchange/refresh 使用与 active 画像同版本的 `codex_exec` User-Agent（具体串以画像常量为准），并携带官方 `originator`。请求体形态两者不同：refresh 使用官方 JSON 契约，exchange 仍按官方形态使用 form-encoded。两者的 token 端点形态均来自官方源码，当前抓包证据不覆盖 token/usage 端点。 |
 | **会话状态** | 不再生成或注入私有 `cc_prev_req`；客户端提供的 `x-codex-turn-state` 被拒绝。HTTP 的 `turn_started_at_unix_ms` 按账号/会话/turn 保存首次真实时间；WS 仅在握手响应实际下发 turn-state 时注入同连接后续 `client_metadata`，不跨连接回放。Codex 0.145.0 的官方与候选 wire 均未观察到该状态。 |
@@ -208,7 +211,7 @@ Profile 只在入口端点受支持，且目标平台、OAuth 账号、实际出
 | **三条路径的实现层语义** | Anthropic 的 system/动态 beta 语义、OpenAI HTTP 的入口语义保真与 Cookie 生命周期、WebSocket 的逐项 turn metadata 与真实无 turn-state 基准均通过 |
 | **真实第三方定型** | 非 Codex HTTP 与原始 RFC 6455 WS 实际发送 `tool_choice=required`、`max_output_tokens=123`、错误 store/stream/include/context；出站固定字段全部回到官方非 Lite 契约，顶层 instructions/tools 与业务 reasoning/text 守恒。Anthropic 三块 system 与 `custom.defer_loading` 也由真实请求触发，比较结果 `all_passed=true` |
 | **历史 Kilo 六组合** | 六组合曾以真实 Kilo 界面完成 S1 与 S4 读文件工具闭环；`0.1.164-6` 另补 OpenAI Responses → OpenAI WS 的 S2。该矩阵是历史协议转换回归，不是 `0.1.165-4` 本轮新证据 |
-| **模式独立性** | 自动透传开关及四种 WS mode 均不绕过 Profile，按实际出站协议选择 HTTP 或 WS 画像 |
+| **模式独立性** | 自动透传开关及四种 WS mode 均不绕过 Profile，按实际出站协议选择 HTTP 或 WS 画像；`ctx_pool` 与 `passthrough` 都会为第三方入站补出 `generate=false` 预热往返并把业务帧挂到预热响应上，两种 mode 的出站帧序列一致 |
 | **适用边界** | Anthropic/OpenAI OAuth 自动生效；API Key、其他平台及非模型入口保持原行为 |
 | **安全与回归** | 敏感值未进入普通日志；Host、代理和重定向边界受控；全量、竞态、性能及合并演练通过 |
 
@@ -774,11 +777,12 @@ git diff --stat "$BASE..HEAD"
 - 三条 OAuth 出站路径继续自动命中 Registry 的服务级 `active/previous` 画像；账号级开关和任意版本字段不得回流到 API、数据库或管理端表单。
 - **Profile 生效条件与适用边界**：入口端点、目标平台、OAuth 账号、实际出站协议、官方 Host 五项全匹配才生效，API Key 与非模型入口保持原行为——见 §1.1.3.2、§1.1.3.4。
 - **Anthropic 参数与 beta**：动态 beta 合并、`temperature` 与 `top_p`/`top_k` 各自的清理条件、入口别名规范化——见 §1.1.1.1。
-- **Codex 模型能力**：能力位来源与缓存键、Lite 与非 Lite 的结构转换差异、能力加载失败不得同步拒绝业务请求——见 §1.1.1.1、§1.1.3.3。
+- **入站宿主头剥离**：三条路径共用同一份剥离清单，`accept-language`、`sec-fetch-mode`、`x-stainless-helper-method` 不得随任一路径的 HTTP 请求或 WS 握手上行；抓包脚手架的第三方客户端必须实际携带这些头才能验证该约束——见 §1.1.1.1。
+- **Codex 模型能力**：远端清单的接管条件（非空且含 `visibility=list`）与接管后缺失 slug 走 fallback 而非回落 bundled、能力位来源与缓存键、Lite 与非 Lite 的结构转换差异、能力加载失败不得同步拒绝业务请求、bundled 与实抓 manifest fixture 的一致性断言——见 §1.1.1.1、§1.1.3.3。
 - **compact 身份**：`prompt_cache_key` 与 installation ID 的补齐——见 §1.1.1.1；比较器需同时覆盖 compact 与顶层语义参数。
 - **连接池与身份生命周期**：连接池键构成、HTTP 重试重建上下文、WebSocket 握手后冻结身份——见 §1.1.3.3。
 - **Cookie 与会话状态**：Cookie jar 的隔离维度与域名 allowlist、WS 不接入 jar、`x-codex-turn-state` 的拒绝与回放条件——见 §1.1.1.1。
-- **模式独立性**：自动透传开关与四种 WS mode 不绕过 Profile，按实际出站协议选择画像——见 §1.1.3.4。
+- **模式独立性**：自动透传开关与四种 WS mode 不绕过 Profile，按实际出站协议选择画像；`ctx_pool` 与 `passthrough` 都要补预热往返并链接业务帧——见 §1.1.3.4。
 - **身份与失败边界**：Profile ID/digest/source 与最终 Method/Host/Path 受控、禁止自动重定向、校验失败时明确失败并记录脱敏原因——见 §1.1.3.1、§1.1.3.4。
 - OAuth 冲突配置必须作为 dormant 数据保留；新建或从关闭切到开启的冲突值要显式拒绝，不得在保存时静默删除。
 
