@@ -121,8 +121,12 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 - **观测**：h1/h2 探针
 - **实测**：探针拒绝 WS 升级（回 400）后官方仍走错误退出，**未观察到降级**
 - **可变性**：条件
-- **状态**：⚠ **官方参照物难得** —— Sub2API 默认 HTTP 出站，其官方对照物是官方
-  自己极少走的降级路径。这影响 §3 全部条目的优先级判断。
+- **状态**：✅ **降级路径的基线已采到**（`official-httpfb3-20260727T234853Z`）
+- **采法**（此前两次失败，记录以免重走弯路）：降级发生在**耗尽重试预算之后**
+  （`client.rs:1849` 注释）。让探针对 WS 握手回 HTTP 400 → 官方走错误退出，不降级；
+  改为**直接断开连接**才会重试，但采集上限设小了会在降级前提前退出。
+  正确做法：断连 + 采集上限放到 40，让它把重试跑完，官方即打印
+  `Falling back from WebSockets to HTTPS transport`，随后的 POST 即可采到。
 
 ---
 
@@ -178,12 +182,16 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 - **可变性**：**条件** —— 不同端点构造路径不同，顺序不同。官方基础头
   `default_headers()` 的插入序是 `originator` → `user-agent` →（条件）`residency`
   （`login/src/auth/default_client.rs:354`　[L1]），但各端点会在其前后插入自己的头
-- **状态**：✅ **models 已逐字节对齐**，其余端点为最近似值。
+- **状态**：✅ **models 与 responses 均已逐字节对齐**，其余端点为最近似值。
   ─ 顺序清单**必须按端点分派**：首版用一份并集清单，部署后抓包实测发现 models
   顺序当场就错（官方 `version` 打头，我们输出 `chatgpt-account-id` 打头）。
   已改为 `H1HeaderOrderRule` 按请求路径匹配。
-  ─ HTTP POST `/responses` 无逐字节基线（官方默认走 WS，见 SPEC-PROTO-002），
-  兜底沿用 WS 握手的业务头次序，待补基线后校准。
+  ─ HTTP POST `/responses` 的基线已补齐（见 SPEC-PROTO-002 的采法），实测次序为
+  `version, x-codex-beta-features, x-codex-window-id, x-codex-turn-metadata,
+  x-openai-internal-codex-responses-lite, x-client-request-id, session-id, thread-id,
+  accept, content-encoding, content-type, authorization, chatgpt-account-id,
+  originator, user-agent, host, content-length`——**与 WS 握手序完全不同**，
+  此前拿 WS 序作兜底是错的，现已按路径单列。
 
 ---
 
@@ -832,9 +840,16 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 **开关**：画像的 `H1HeaderOrders`，留空即完全不介入。目前只给 OpenAI 直连画像
 配置，代理与 Anthropic 路径不受影响。
 
-**残留**：HTTP POST `/responses` 的顺序是最近似值而非实测——官方默认走 WS，该
-形态需先采到官方降级路径的基线（今日已找到逼降级的方法：让 WS 连接被拒而非回
-HTTP 400，官方会打印 `Falling back from WebSockets to HTTPS transport`）。
+**`h1-wire-v3-0.1.165-14` 追加验收**：补采官方降级路径的基线后，
+`POST /codex/responses` 也已与官方**逐字节一致**：
+
+    version, x-codex-beta-features, x-codex-window-id, x-codex-turn-metadata,
+    x-openai-internal-codex-responses-lite, x-client-request-id, session-id,
+    thread-id, accept, content-encoding, content-type, authorization,
+    chatgpt-account-id, originator, user-agent, host, content-length
+
+**残留**：models 与 responses 之外的端点（compact / alpha-search / images / live）
+仍无逐字节基线，落兜底清单，为最近似值。
 
 ## 9. 本版未覆盖
 
