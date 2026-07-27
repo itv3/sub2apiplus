@@ -93,14 +93,16 @@ func selectResponsesProbeModel(account *Account) string {
 	return candidates[0]
 }
 
-func buildOpenAIResponsesProbeRequest(account *Account, cfg *config.Config, probeURL, apiKey, modelID string) (*http.Request, []byte, error) {
+// buildOpenAIResponsesProbeRequest 返回解析出的 mimicProfile，供调用方在同一次探测里
+// 复用同一份画像做 TLS 决策，避免重新解析出另一套 mode 或另一套 session/turn 身份。
+func buildOpenAIResponsesProbeRequest(account *Account, cfg *config.Config, probeURL, apiKey, modelID string) (*http.Request, []byte, openAIAPIKeyCodexMimicProfile, error) {
 	probeBody := openaiResponsesProbePayload(modelID)
 	mimicProfile := resolveOpenAIAPIKeyCodexMimicProfile(account, 0, cfg)
 	probeBody = mimicProfile.RewriteBody(probeBody)
 
 	req, err := http.NewRequest(http.MethodPost, probeURL, bytes.NewReader(probeBody))
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, openAIAPIKeyCodexMimicProfile{}, err
 	}
 	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
 	req.Header.Set("Content-Type", "application/json")
@@ -118,7 +120,7 @@ func buildOpenAIResponsesProbeRequest(account *Account, cfg *config.Config, prob
 		// 普通 API Key 探测仍按上游要求携带标准 Codex 身份，避免兼容上游按客户端拒绝请求。
 		applyOpenAICodexProbeHeaders(req.Header)
 	}
-	return req, probeBody, nil
+	return req, probeBody, mimicProfile, nil
 }
 
 func openAIResponsesSupportedExtraKey(account *Account) string {
@@ -183,7 +185,7 @@ func (s *AccountTestService) ProbeOpenAIAPIKeyResponsesSupport(ctx context.Conte
 	probeCtx, cancel := context.WithTimeout(ctx, openaiResponsesProbeTimeout)
 	defer cancel()
 
-	req, _, err := buildOpenAIResponsesProbeRequest(account, s.cfg, probeURL, apiKey, probeModel)
+	req, _, mimicProfile, err := buildOpenAIResponsesProbeRequest(account, s.cfg, probeURL, apiKey, probeModel)
 	if err != nil {
 		logger.LegacyPrintf("service.openai_probe", "probe_build_request_failed: account_id=%d err=%v", accountID, err)
 		return
@@ -198,7 +200,7 @@ func (s *AccountTestService) ProbeOpenAIAPIKeyResponsesSupport(ctx context.Conte
 		proxyURL = account.Proxy.URL()
 	}
 
-	resp, err := doOpenAIHTTPUpstream(s.httpUpstream, req, proxyURL, account, s.tlsFPProfileService)
+	resp, err := doOpenAIHTTPUpstreamWithProfile(s.httpUpstream, req, proxyURL, account, s.tlsFPProfileService, mimicProfile)
 	if err != nil {
 		// 网络层失败：不写标记，保持 unknown，下次重试或由网关 fallback 处理
 		logger.LegacyPrintf("service.openai_probe", "probe_request_failed: account_id=%d url=%s err=%v", accountID, probeURL, err)

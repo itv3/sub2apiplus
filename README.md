@@ -208,7 +208,7 @@ API Key 官方客户端兼容让 Kilo / Cline / Cursor / Roo Code 等非官方�
 
 1. 仅 Anthropic / OpenAI 的 API Key 账号生效，不改变 OAuth 账号逻辑。
 2. mimic 与 passthrough 运行时互斥；同时开启时，非官方客户端优先走 mimic。
-3. 账号测试按非官方入站请求处理并走与正式 Gateway 相同的 Profile 解析、Header/Body Finalizer 和 TLS 决策。
+3. 账号测试按非官方入站请求处理并走与正式 Gateway 相同的 Profile 解析、Header/Body Finalizer 和 TLS 决策；`active` 与 `previous` 两种模式都由同一份请求级画像同时决定 Header/Body 与 TLS，不存在按模式分叉的独立判定。
 4. 非官方客户端命中 mimic 时，关键身份 header 不允许被账号级 header override 覆盖；官方客户端跳过 mimic 后不应用该保护。
 5. OpenAI Codex mimic 的 `/v1/messages` 固定进入 Responses mimic 链路，不受 `force_chat_completions`、普通 Responses probe false 或 `openai_responses_supported=false` 影响。
 6. OpenAI Codex mimic 当前只支持 HTTP/SSE 上游，命中时不进入 Responses WebSocket；跳过 mimic 的官方 Codex 客户端按普通 API Key 账号的全局/账号 WS 开关、force HTTP 和 WSv2 mode 选择路由。该判断同时作用于账号调度、粘性账号复核和最终转发。
@@ -268,7 +268,7 @@ Sub2API API Key mimic → AnyRouter”两条 HTTP 出站路径：
 | 平台 | previous 画像 | 与 active 的关键差异 |
 |---|---|---|
 | Anthropic | Claude Desktop `2.1.209` | `claude-desktop-3p` billing、Desktop beta/system/工具集合；未指定自定义 TLS Profile 时使用标准 Transport |
-| OpenAI | Codex Desktop `0.144.0-alpha.4` | Desktop UA、Header/Body 和传输契约；API Key WS 同样不激活 |
+| OpenAI | Codex Desktop `0.144.0-alpha.4` | Desktop UA、Header/Body 和传输契约；未指定自定义 TLS Profile 时使用标准 Transport；API Key WS 同样不激活 |
 
 `v0.1.155-3` 的 AnyRouter ARM64 结果只证明 Anthropic Desktop `previous` 画像，不能作为 CLI `active` 画像的证据。旧字段、完整请求契约、工具列表和历史运行记录统一保存在[实证 README](backend/internal/service/testdata/official_egress/README.md)；维护时只允许通过 `gateway.official_client_profiles.mode` 整体回退。
 
@@ -279,6 +279,7 @@ OpenAI `/v1/responses/compact` 是特例：上游保持官方 unary JSON 形态�
 - mimic 只对齐 header、body、TLS 和路由，不复制服务端隐藏 prompt、账号状态、产品 memory 或 UI 上下文，也不替换响应文本或清洗客户端正文身份。
 - Anthropic `active` 画像在启用 mimic 和 `enable_tls_fingerprint` 后，未指定 `tls_fingerprint_profile_id` 时使用内置 Claude Code TLS Profile；`previous` 回退画像才使用标准 Transport。管理员显式选择的固定或随机 TLS Profile 始终优先。
 - Codex CLI `active` 画像在开启 TLS fingerprint 时使用 2026-07-26 抓包的 direct 30-cipher/空 ALPN 或 proxy h2 传输画像；管理员显式选择的 TLS profile 仍优先。API Key WebSocket 由路由决策层强制回落 HTTP，不会因注册表中存在未激活 WS 画像而开启。
+- OpenAI `previous` 回退画像与 Anthropic 同规则：Desktop 画像没有可复用的实抓 TLS，未指定 `tls_fingerprint_profile_id` 时使用标准 Transport。TLS 决策只能来自请求级画像，正式 Gateway、账号测试、能力探测和 keeper 内部代理共用同一判定，任何路径都不得自行重解析出另一个 mode 的画像。
 - 管理后台账号测试只有在 HTTP 200、收到正常 SSE 内容并以 `message_stop` 结束时才成功；非 200 或 HTTP 200 但正文仅为服务暂不可用降级文案时都必须失败并保留上游错误。
 - 效果应以第三方中转站实际收到的上游请求为准，不能只看 usage 页面中的客户端入口 `USER-AGENT`。
 

@@ -89,7 +89,18 @@ func (s *AccountTestService) ProxyKeeperOpenAIAccount(ctx context.Context, accou
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	return doOpenAIHTTPUpstream(s.httpUpstream, req, proxyURL, account, s.tlsFPProfileService)
+	// keeper 的 OpenAI 代理按 header allowlist 透传真实官方 Codex CLI 形态，不应用
+	// mimic header/body；TLS 仍由同一个服务级 active/previous 指针决定，避免紧急整体
+	// 回退期间出现「官方 CLI header + 另一 mode 的 TLS 画像」这种跨画像混用。
+	// 这里只需要 TLS 决策所需的字段，不生成 mimic 的 session/turn 身份。
+	return doOpenAIHTTPUpstreamWithProfile(
+		s.httpUpstream,
+		req,
+		proxyURL,
+		account,
+		s.tlsFPProfileService,
+		resolveOpenAIAPIKeyCodexMimicTLSDecision(account, s.cfg),
+	)
 }
 
 func (s *AccountTestService) ProxyKeeperAnthropicAccount(ctx context.Context, accountID int64, in KeeperOpenAIProxyRequest) (*http.Response, error) {

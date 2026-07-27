@@ -125,15 +125,16 @@ type openAIAPIKeyCodexMimicClientProfile struct {
 	WorkspaceKind    string
 }
 
-func resolveOpenAIAPIKeyCodexMimicClientProfile(account *Account, configs ...*config.Config) openAIAPIKeyCodexMimicClientProfile {
+// resolveOpenAIAPIKeyCodexMimicClientProfile 解析当前服务级发布画像。
+// cfg 为必填参数（允许显式传 nil 表示按 active 处理）：可选变参会让调用方漏传
+// 配置时静默回落到 active，从而在 mode=previous 下把 Desktop header 与
+// active CLI 的 TLS 画像混用，因此这里必须由调用方显式给出配置来源。
+func resolveOpenAIAPIKeyCodexMimicClientProfile(account *Account, cfg *config.Config) openAIAPIKeyCodexMimicClientProfile {
 	// 画像版本只由服务级 active/previous 指针决定。历史账号字段
 	// openai_apikey_mimic_codex_profile 作为 dormant 数据保留，不得让单个账号
 	// 继续锁定 Desktop 画像或与当前发布画像混用。
 	_ = account
-	mode := officialClientProfileModeActive
-	if len(configs) > 0 {
-		mode = officialClientProfileModeFromConfig(configs[0])
-	}
+	mode := officialClientProfileModeFromConfig(cfg)
 	profileID := openAIAPIKeyCodexMimicClientCodexExec0145
 	if mode == officialClientProfileModePrevious {
 		profileID = openAIAPIKeyCodexMimicClientDesktop0144

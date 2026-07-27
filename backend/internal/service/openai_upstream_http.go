@@ -44,12 +44,25 @@ func codexCLIRS0125TLSProfile() *tlsfingerprint.Profile {
 	}
 }
 
-func resolveOpenAIAPIKeyCodexTLSProfile(account *Account, tlsFPProfileService *TLSFingerprintProfileService, configs ...*config.Config) *tlsfingerprint.Profile {
-	if account == nil || !account.ShouldUseOpenAITLSFingerprint() {
+// resolveOpenAIAPIKeyCodexTLSProfile 解析账号在直连（proxyURL 为空）下的 mimic TLS 画像。
+// 判定链必须与实际出站路径 doOpenAIHTTPUpstreamWithProfile 完全一致：由服务级
+// active/previous 指针解析出画像，再统一经 ShouldUseTLSFingerprint 决定是否套指纹。
+// previous 的 Desktop 画像没有可复用的实抓 TLS，因此返回 nil 表示走标准 Transport。
+func resolveOpenAIAPIKeyCodexTLSProfile(account *Account, tlsFPProfileService *TLSFingerprintProfileService, cfg *config.Config) *tlsfingerprint.Profile {
+	mimicProfile := resolveOpenAIAPIKeyCodexMimicTLSDecision(account, cfg)
+	if !mimicProfile.ShouldUseTLSFingerprint(account) {
 		return nil
 	}
-	client := resolveOpenAIAPIKeyCodexMimicClientProfile(account, configs...)
-	return resolveOpenAIAPIKeyCodexTLSProfileForClient(account, tlsFPProfileService, client, "")
+	return resolveOpenAIAPIKeyCodexTLSProfileForClient(account, tlsFPProfileService, mimicProfile.Client, "")
+}
+
+// resolveOpenAIAPIKeyCodexMimicTLSDecision 只构造 TLS 决策所需的字段，不生成 mimic 的
+// session/turn 身份。供不应用 mimic header/body、但仍须与服务级画像指针保持同源的路径使用。
+func resolveOpenAIAPIKeyCodexMimicTLSDecision(account *Account, cfg *config.Config) openAIAPIKeyCodexMimicProfile {
+	return openAIAPIKeyCodexMimicProfile{
+		Enabled: account.IsOpenAIAPIKeyCodexMimicEnabled(),
+		Client:  resolveOpenAIAPIKeyCodexMimicClientProfile(account, cfg),
+	}
 }
 
 func resolveOpenAIAPIKeyCodexTLSProfileForClient(
@@ -80,7 +93,13 @@ func resolveOpenAIAPIKeyCodexTLSProfileForClient(
 	}
 }
 
-func doOpenAIHTTPUpstreamWithMimicTLS(httpUpstream HTTPUpstream, req *http.Request, proxyURL string, account *Account, tlsFPProfileService *TLSFingerprintProfileService, useAPIKeyMimicTLS bool, mimicProfiles ...openAIAPIKeyCodexMimicProfile) (*http.Response, error) {
+// doOpenAIHTTPUpstreamWithProfile 是所有 OpenAI HTTP 出站路径的唯一入口：
+// TLS 决策只能来自调用方给定的 mimicProfile，不在函数内部重新解析画像。
+//
+// 这样 header/body 画像与 TLS 画像必然出自同一个服务级 active/previous 指针，
+// 消除 mode=previous 下「Desktop header + active CLI TLS」的跨画像混用。
+// 不做 mimic 的路径（passthrough、WS-HTTP 桥接）传零值画像即表示不套 mimic TLS。
+func doOpenAIHTTPUpstreamWithProfile(httpUpstream HTTPUpstream, req *http.Request, proxyURL string, account *Account, tlsFPProfileService *TLSFingerprintProfileService, mimicProfile openAIAPIKeyCodexMimicProfile) (*http.Response, error) {
 	if httpUpstream == nil {
 		return nil, fmt.Errorf("http upstream unavailable")
 	}
@@ -106,12 +125,8 @@ func doOpenAIHTTPUpstreamWithMimicTLS(httpUpstream HTTPUpstream, req *http.Reque
 			officialTLSProfile,
 		)
 	}
-	if useAPIKeyMimicTLS && account != nil && account.ShouldUseOpenAITLSFingerprint() {
-		client := resolveOpenAIAPIKeyCodexMimicClientProfile(account)
-		if len(mimicProfiles) > 0 {
-			client = mimicProfiles[0].Client
-		}
-		if tlsProfile := resolveOpenAIAPIKeyCodexTLSProfileForClient(account, tlsFPProfileService, client, proxyURL); tlsProfile != nil {
+	if mimicProfile.ShouldUseTLSFingerprint(account) {
+		if tlsProfile := resolveOpenAIAPIKeyCodexTLSProfileForClient(account, tlsFPProfileService, mimicProfile.Client, proxyURL); tlsProfile != nil {
 			return httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, tlsProfile)
 		}
 	}
@@ -121,14 +136,9 @@ func doOpenAIHTTPUpstreamWithMimicTLS(httpUpstream HTTPUpstream, req *http.Reque
 	return httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
 }
 
-func doOpenAIHTTPUpstream(httpUpstream HTTPUpstream, req *http.Request, proxyURL string, account *Account, tlsFPProfileService *TLSFingerprintProfileService) (*http.Response, error) {
-	useAPIKeyMimicTLS := account != nil && account.ShouldUseOpenAITLSFingerprint()
-	return doOpenAIHTTPUpstreamWithMimicTLS(httpUpstream, req, proxyURL, account, tlsFPProfileService, useAPIKeyMimicTLS)
-}
-
 func (s *OpenAIGatewayService) doOpenAIHTTPUpstreamForRequest(req *http.Request, proxyURL string, account *Account, mimicProfile openAIAPIKeyCodexMimicProfile) (*http.Response, error) {
 	if s == nil {
 		return nil, fmt.Errorf("http upstream unavailable")
 	}
-	return doOpenAIHTTPUpstreamWithMimicTLS(s.httpUpstream, req, proxyURL, account, s.tlsFPProfileService, mimicProfile.ShouldUseTLSFingerprint(account), mimicProfile)
+	return doOpenAIHTTPUpstreamWithProfile(s.httpUpstream, req, proxyURL, account, s.tlsFPProfileService, mimicProfile)
 }

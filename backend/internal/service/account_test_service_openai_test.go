@@ -669,6 +669,63 @@ func TestAccountTestService_OpenAIAPIKeyCodexMimicUsesResponsesProbe(t *testing.
 	require.Regexp(t, openAICodexUUIDPattern, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
 }
 
+// TestAccountTestService_OpenAIAPIKeyCodexMimicPreviousModeSkipsMimicTLS 覆盖服务级
+// 紧急整体回退：mode=previous 时账号测试的 header 与 TLS 必须同源，都来自 Desktop
+// 回退画像，因此走标准 Transport，与正式 Gateway 的决策一致。
+//
+// 修复前只有 active 用例，账号测试会在 previous 下发出 Desktop header 却套上 active
+// 的 Codex CLI TLS 指纹，正是 README §1.2.4 禁止的按字段混用。
+func TestAccountTestService_OpenAIAPIKeyCodexMimicPreviousModeSkipsMimicTLS(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx, _ := newTestContext()
+
+	upstream := &httpUpstreamRecorder{resp: &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Header:     http.Header{"Content-Type": []string{"application/json"}},
+		Body:       io.NopCloser(strings.NewReader(`{"error":{"message":"stop after request capture"}}`)),
+	}}
+	cfg := previousOfficialClientProfileConfig()
+	cfg.Security = config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}
+	svc := &AccountTestService{
+		httpUpstream:        upstream,
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+		cfg:                 cfg,
+	}
+	account := &Account{
+		ID:          95,
+		Platform:    PlatformOpenAI,
+		Type:        AccountTypeAPIKey,
+		Concurrency: 1,
+		Credentials: map[string]any{
+			"api_key":  "sk-test",
+			"base_url": "https://compat-upstream.example",
+		},
+		Extra: map[string]any{
+			"openai_apikey_mimic_codex_cli": true,
+			"enable_tls_fingerprint":        true,
+		},
+	}
+
+	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
+	require.Error(t, err)
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, "https://compat-upstream.example/v1/responses", upstream.lastReq.URL.String())
+
+	// header 画像来自 previous 的 Desktop 契约。
+	require.Equal(t, codexDesktopUserAgent, upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, codexDesktopOriginator, upstream.lastReq.Header.Get("originator"))
+	require.Empty(t, getHeaderRaw(upstream.lastReq.Header, "x-openai-internal-codex-responses-lite"))
+	require.Equal(t, "none", gjson.Get(upstream.lastReq.Header.Get("x-codex-turn-metadata"), "sandbox").String())
+
+	// TLS 画像必须来自同一个 mode：Desktop 回退画像不套 mimic 指纹。
+	require.Nil(t, upstream.lastTLSProfile)
+
+	// 正式 Gateway 对同一账号同样不套指纹，两条路径决策一致。
+	gatewayProfile := resolveOpenAIAPIKeyCodexMimicProfileForRequest(account, 0, cfg, nil)
+	require.Equal(t, openAIAPIKeyCodexMimicClientDesktop0144, gatewayProfile.Client.ID)
+	require.False(t, gatewayProfile.ShouldUseTLSFingerprint(account))
+}
+
 func TestAccountTestService_OpenAIChatCompletionsPathReturns4xx(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	ctx, recorder := newTestContext()

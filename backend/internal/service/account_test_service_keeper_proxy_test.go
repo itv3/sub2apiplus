@@ -145,6 +145,82 @@ func TestProxyKeeperAnthropicAccountMimicTakesPriorityAndUsesCurrentCLITLS(t *te
 	require.False(t, gjson.GetBytes(upstream.lastBody, "tools.#(name==\"CustomTool\")").Exists())
 }
 
+// TestProxyKeeperOpenAIAccountTLSFollowsOfficialClientProfileMode 固定 keeper OpenAI
+// 内部代理的 TLS 决策来源：该路径按 header allowlist 透传真实官方 Codex CLI 形态、
+// 不应用 mimic header，但 TLS 仍须跟随同一个服务级 active/previous 指针。
+// 否则紧急整体回退期间会出现「官方 CLI header + 另一 mode 的 TLS 画像」的跨画像混用。
+func TestProxyKeeperOpenAIAccountTLSFollowsOfficialClientProfileMode(t *testing.T) {
+	newKeeperOpenAIAccount := func() *Account {
+		return &Account{
+			ID:          43,
+			Platform:    PlatformOpenAI,
+			Type:        AccountTypeAPIKey,
+			Status:      StatusActive,
+			Schedulable: true,
+			Concurrency: 1,
+			Credentials: map[string]any{
+				"api_key":  "sk-keeper",
+				"base_url": "https://compat-upstream.example",
+			},
+			Extra: map[string]any{
+				"openai_apikey_mimic_codex_cli": true,
+				"enable_tls_fingerprint":        true,
+				"keeper_keepalive_enabled":      true,
+			},
+		}
+	}
+	newProxyRequest := func() KeeperOpenAIProxyRequest {
+		return KeeperOpenAIProxyRequest{
+			Method: http.MethodPost,
+			Path:   "/v1/responses",
+			Header: http.Header{"User-Agent": []string{"codex_exec/0.145.0"}},
+			Body:   strings.NewReader(`{"model":"gpt-5.5","input":[{"role":"user","content":"hi"}]}`),
+		}
+	}
+
+	t.Run("active 模式套用当前 CLI 指纹", func(t *testing.T) {
+		account := newKeeperOpenAIAccount()
+		upstream := &keeperProxyHTTPUpstreamRecorder{}
+		svc := &AccountTestService{
+			accountRepo:         &keeperProxyAccountRepoStub{account: account},
+			httpUpstream:        upstream,
+			cfg:                 &config.Config{Security: config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}},
+			tlsFPProfileService: &TLSFingerprintProfileService{},
+		}
+
+		resp, err := svc.ProxyKeeperOpenAIAccount(context.Background(), account.ID, newProxyRequest())
+		require.NoError(t, err)
+		require.NoError(t, resp.Body.Close())
+		require.Zero(t, upstream.standardCalls)
+		require.Equal(t, 1, upstream.tlsCalls)
+		require.NotNil(t, upstream.tlsProfile)
+		require.Contains(t, upstream.tlsProfile.Name, "Codex CLI 0.145.0")
+		// keeper 不应用 mimic header：客户端原样透传的官方 UA 必须保留。
+		require.Equal(t, "codex_exec/0.145.0", upstream.lastRequest.Header.Get("User-Agent"))
+	})
+
+	t.Run("previous 模式走标准 Transport", func(t *testing.T) {
+		account := newKeeperOpenAIAccount()
+		upstream := &keeperProxyHTTPUpstreamRecorder{}
+		cfg := previousOfficialClientProfileConfig()
+		cfg.Security = config.SecurityConfig{URLAllowlist: config.URLAllowlistConfig{Enabled: false}}
+		svc := &AccountTestService{
+			accountRepo:         &keeperProxyAccountRepoStub{account: account},
+			httpUpstream:        upstream,
+			cfg:                 cfg,
+			tlsFPProfileService: &TLSFingerprintProfileService{},
+		}
+
+		resp, err := svc.ProxyKeeperOpenAIAccount(context.Background(), account.ID, newProxyRequest())
+		require.NoError(t, err)
+		require.NoError(t, resp.Body.Close())
+		require.Equal(t, 1, upstream.standardCalls)
+		require.Zero(t, upstream.tlsCalls)
+		require.Nil(t, upstream.tlsProfile)
+		require.Equal(t, "codex_exec/0.145.0", upstream.lastRequest.Header.Get("User-Agent"))
+	})
+}
+
 func TestValidateKeeperOpenAIProxyPath(t *testing.T) {
 	allowed := []struct {
 		method string

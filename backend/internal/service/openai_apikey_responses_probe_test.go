@@ -140,9 +140,12 @@ func TestBuildOpenAIResponsesProbeRequest_MimicUsesCodexHeadersAndBody(t *testin
 		},
 	}
 
-	req, body, err := buildOpenAIResponsesProbeRequest(account, &config.Config{JWT: config.JWTConfig{Secret: "probe-test-secret"}}, "https://compat-upstream.example/v1/responses", "sk-test", "gpt-5.5")
+	req, body, mimicProfile, err := buildOpenAIResponsesProbeRequest(account, &config.Config{JWT: config.JWTConfig{Secret: "probe-test-secret"}}, "https://compat-upstream.example/v1/responses", "sk-test", "gpt-5.5")
 	require.NoError(t, err)
 	require.NotNil(t, req)
+	// 返回的画像必须与 header/body 同源，供调用方复用做 TLS 决策。
+	require.True(t, mimicProfile.Enabled)
+	require.Equal(t, openAIAPIKeyCodexMimicClientCodexExec0145, mimicProfile.Client.ID)
 	require.Equal(t, officialOpenAIHTTPUserAgent, req.Header.Get("User-Agent"))
 	require.Equal(t, officialOpenAIHTTPOriginator, req.Header.Get("originator"))
 	require.Empty(t, req.Header.Get("OpenAI-Beta"))
