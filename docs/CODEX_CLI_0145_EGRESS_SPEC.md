@@ -153,9 +153,8 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 - **实测**：`GET /codex/models` → `version, authorization, chatgpt-account-id,
   accept, originator, user-agent, host`
 - **可变性**：固定
-- **状态**：❌ **未对齐** —— Go 的 `Request.write` 硬编码
-  `fmt.Fprintf(w, "Host: %s\r\n", host)` 且置于最前。**影响直连主路径**。
-  须自写 h1 请求侧字节，无配置入口。
+- **状态**：✅ **已对齐**（`h1_wire.go`，`h1-wire-v2-0.1.165-13`）——
+  在 `net.Conn` 层拦截重写请求头字节。实测 `host` 已为小写且位于末尾。
 
 ### SPEC-H1-003　`content-length` 排在 `host` 之后
 
@@ -164,7 +163,7 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 - **观测**：h1 直连探针
 - **实测**：`POST /backend-api/ps/mcp` → `..., content-type, host, content-length`
 - **可变性**：固定
-- **状态**：❌ 未对齐（Go 将其排除在 `writeSubset` 外并前置）。与 SPEC-H1-002 同一修复。
+- **状态**：✅ **已对齐** —— 实测 responses 请求为 `…, host, content-length`。
 
 ### SPEC-H1-004　其余 header 按插入序而非字典序
 
@@ -179,7 +178,12 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 - **可变性**：**条件** —— 不同端点构造路径不同，顺序不同。官方基础头
   `default_headers()` 的插入序是 `originator` → `user-agent` →（条件）`residency`
   （`login/src/auth/default_client.rs:354`　[L1]），但各端点会在其前后插入自己的头
-- **状态**：❌ 未对齐（Go `writeSubset` 强制字典序）。与 SPEC-H1-002 同一修复。
+- **状态**：✅ **models 已逐字节对齐**，其余端点为最近似值。
+  ─ 顺序清单**必须按端点分派**：首版用一份并集清单，部署后抓包实测发现 models
+  顺序当场就错（官方 `version` 打头，我们输出 `chatgpt-account-id` 打头）。
+  已改为 `H1HeaderOrderRule` 按请求路径匹配。
+  ─ HTTP POST `/responses` 无逐字节基线（官方默认走 WS，见 SPEC-PROTO-002），
+  兜底沿用 WS 握手的业务头次序，待补基线后校准。
 
 ---
 
@@ -809,6 +813,28 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 也是 `unknown`（`terminal-detection/src/lib.rs:204`）。
 
 证据：`local-analysis/captures/wire-parity-fix-20260727/h1-wire-probe/VERIFY-a-fixes-*.json`
+
+## 8.8 B 类（自写 h1 wire）的 wire 级验收（`h1-wire-v2-0.1.165-13`）
+
+| 项 | 官方基线 | 修复后实测 | 结论 |
+|---|---|---|---|
+| models 完整顺序 | `version, authorization, chatgpt-account-id, accept, originator, user-agent, host` | **完全相同** | ✅ **逐字节一致** |
+| `host` 大小写 | 小写 | 小写 | ✅ |
+| `host` 位置 | 用户头之后 | 末尾（无 body）/ 倒数第二（有 body） | ✅ |
+| `content-length` | 最后 | 最后 | ✅ |
+| 全小写 | 是 | 是 | ✅ |
+
+**实现要点**：没有自写 RoundTripper（那要自管连接池、keep-alive、响应读取，
+500~800 行；且改成每请求新建连接又会因失去 keep-alive 制造新偏离），改为在
+`net.Conn` 层拦截重写请求头字节，Go 的连接池与响应处理全部复用。任何无法确信
+改写正确的情形（chunked、超长头、解析失败）一律 passthrough 原样透传。
+
+**开关**：画像的 `H1HeaderOrders`，留空即完全不介入。目前只给 OpenAI 直连画像
+配置，代理与 Anthropic 路径不受影响。
+
+**残留**：HTTP POST `/responses` 的顺序是最近似值而非实测——官方默认走 WS，该
+形态需先采到官方降级路径的基线（今日已找到逼降级的方法：让 WS 连接被拒而非回
+HTTP 400，官方会打印 `Falling back from WebSockets to HTTPS transport`）。
 
 ## 9. 本版未覆盖
 
