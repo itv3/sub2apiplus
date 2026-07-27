@@ -74,12 +74,21 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 
 ### SPEC-TLS-002　经代理 ClientHello
 
-- **规则**：10 个 cipher suite，**ALPN = `h2, http/1.1`**
-- **依据**：`newOpenAIOfficialEgressHTTPProxyTLSProfile`　[L3]
+- **规则**：**取决于是否配置了自定义 CA**——
+  ① 默认（native-tls）：**ALPN 为空**，同直连
+  ② 配了 `CODEX_CA_CERTIFICATE` / `SSL_CERT_FILE`（rustls）：10 cipher，`ALPN = h2, http/1.1`
+- **依据**：`custom_ca.rs:398` `configured_ca_bundle()` 读到这两个变量之一即
+  `use_rustls_tls()`（`custom_ca.rs:307`）　[L1]
 - **观测**：CONNECT 隧道内的 TLS 握手
-- **实测**：h2 探针记录 `negotiated_alpn = h2`
-- **可变性**：固定
-- **状态**：✅ 已对齐
+- **实测**：`official-nativetls-20260727T161531Z`——**不设 CA 变量、改把抓包 CA 装入
+  系统信任库**后，官方经代理的 6 个连接 **全部 `negotiated_alpn = None`**
+- **可变性**：**条件**（是否配置自定义 CA）
+- **状态**：🔴 **未对齐，且方向相反** —— `newOpenAIOfficialEgressHTTPProxyTLSProfile`
+  声明 `ALPN = h2, http/1.1`，复刻的是**官方在配了自定义 CA 时**的行为。而官方**默认
+  经代理不 offer h2**。
+- **⚠ 该画像本身很可能是观测污染的产物**：要 MITM 抓包就必须让官方信任 MITM 证书，
+  而那正好触发 rustls 分支——于是采到的"官方经代理形态"实为 rustls 形态。**整个
+  代理画像的 10-cipher + h2 ALPN 都建立在这个被污染的观测上。**
 
 ### SPEC-TLS-003　WS 握手 ClientHello 的扩展顺序
 
@@ -186,9 +195,12 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 > （native-tls）的行为。这是典型的观测污染：观测手段改变了被观测对象。
 >
 > 该形态仍是真实的官方形态之一（企业代理 + 自定义 CA 的用户就走这条），但
-> **可变性是"条件"而非"固定"**，条件是「是否配置了自定义 CA」。官方在
-> native-tls 分支下经代理的 h2 形态，**至今未测**——实测裸 reqwest（照官方
-> features）经代理时根本不 offer h2（`negotiated_alpn = None`）。
+> **可变性是"条件"而非"固定"**，条件是「是否配置了自定义 CA」。
+>
+> **已补测（`official-nativetls-20260727T161531Z`）**：不设 CA 变量、改把抓包 CA 装入
+> 系统信任库后，官方经代理的 6 个连接**全部 `negotiated_alpn = None`**——即
+> **官方默认根本不产生 h2 流量**。因此本层全部条目仅在「配置了自定义 CA」这一条件
+> 下成立，对官方默认行为**不适用**。详见 SPEC-TLS-002。
 >
 > **仅在经代理时可见**（SPEC-PROTO-001）。且 **mitmproxy 看不到本层**——它用自己的
 > h2 栈重建连接，客户端原始 SETTINGS 的集合、取值与帧内顺序在转发后已丢失。
