@@ -517,22 +517,87 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 
 ---
 
-## 8.6 第 1 步进度与接续点
+## 8.6 交接说明（2026-07-28 收盘，**新会话先读这一节**）
 
-**已完成**：13 条出站链路的端点全集（§8.5）、压缩策略（SPEC-EP-005）、四端点 URL
-对齐（SPEC-EP-006~009）、隐私端点双重偏离（SPEC-EP-010）、responses HTTP/WS 的
-五层规格（§1~§7，29 条）、h2 基线校准与代理画像方向性偏离（SPEC-TLS-002）。
+### A. 任务定义
 
-**未完成（下次从这里接）**：
+用户确定的五步流程，目标是让 Sub2API 的 OpenAI OAuth 出站与官方 Codex CLI 一致：
 
-1. **各端点的 header 集合与插入顺序**——需逐个读官方 `extra_headers` 构造链，
-   再对 Sub2API 逐条比。目前只对齐了 URL 与方法。
+| 步 | 内容 | 状态 |
+|---|---|---|
+| 1 | 列规则：读官方源码 + 抓包，列出全部端点形态 | **进行中** |
+| 2 | 验规则：逐条抓包确认，标「验过了/⛔验不了」 | 未开始 |
+| 3 | 对比：逐条对 Sub2API，产出差异清单 | 未开始 |
+| 4 | 改代码：按差异清单改，含**自写 h1 wire**，部署 Vircs | 未开始 |
+| 5 | 再抓包验收 | 未开始 |
+
+### B. 已定的决策（不要重新讨论）
+
+1. **范围**：七个端点全做，**只做 OpenAI**，不碰 Anthropic。
+2. **暂不换 Rust**。同源方案已 PoC 验证可行（§10），但本轮用现有 Go 改。
+3. **自写 h1 wire 要做**，解 SPEC-H1-002/003/004 + SPEC-WS-002。**带画像开关**，
+   只对官方 OpenAI 画像启用，出问题可关开关回退。实际规模约 **500~800 行**
+   （不止 header 输出——`http.Transport` 的写入无 hook，连接池必须一并自管；
+   每请求新建连接会制造新偏离，因为官方是 keep-alive 复用）。
+4. **不 fork `x/net/http2`**。h2 三项仅影响代理路径，而**实测生产 97 个账号全部
+   直连、0 个绑代理**。且 `go.mod` 是上游 3 个月改了 7 次的高频文件，加 replace
+   会持续冲突。h2 条目标"须 fork，暂不做"。
+5. **合并上游的冲突面已查**：伪装逻辑几乎全在 fork 独有文件
+   （`official_egress_*.go`、`tlsfingerprint/h2.go`、`lowercase_headers.go`），
+   共享文件只有 `dialer.go`（上游 3 月**0 次**改动）与 `http_upstream.go`（2 次）。
+   **自写 h1 wire 应放进 fork 独有的新包**，只在 `official_egress_*` 里引用，
+   `http_upstream.go` 保持现有的一行包装，合并成本近零。
+
+### C. 工具与环境
+
+| 工具 | 用途 | 位置 |
+|---|---|---|
+| `h1_wire_probe.py` | h1 线形（header 大小写/顺序）**MITM 看不到这层** | `tools/official_client_capture/` |
+| `h2_wire_probe.py` | h2 帧层（CONNECT 代理 + h2 服务端）**mitmproxy 看不到这层** | 同上 |
+| `run_official_h1_baseline.sh` | 采官方 h1 基线 | 同上 |
+| `run_official_h2_baseline.sh` | 采官方 h2（**会触发 rustls 分支，形态被污染**） | 同上 |
+| `run_official_nativetls_baseline.sh` | 采官方 **native-tls 默认分支**（正确的采法） | 同上 |
+
+**采集要点**：设 `CODEX_CA_CERTIFICATE` / `SSL_CERT_FILE` 会触发官方
+`custom_ca.rs:307` 的 `use_rustls_tls()`，采到的是 rustls 形态。要观测默认行为，
+必须**把 CA 装进容器系统信任库**而非用环境变量。
+
+**逼官方降级到 HTTP** 的正确方法：让 WS **连接被拒**（`Connection refused`），
+而非回 HTTP 400。官方日志会打 `Falling back from WebSockets to HTTPS transport`。
+
+**证据归档**：`local-analysis/captures/wire-parity-fix-20260727/`
+（`h1-wire-probe/`、`h2-wire-probe/`、`rust-poc/`；已 gitignore，不入库）。
+
+**Vircs 部署**：rsync 源码 → 远程 `docker build` → 改
+`/root/oauth-capture/runtime/sub2apiplus-t2.override.yml` 的 image tag →
+`docker compose ... up -d sub2api`。当前运行
+`sub2apiplus:h2-settings-0.1.165-10-20260727T133353Z`。
+
+### D. 相关文档分工
+
+| 文档 | 记什么 |
+|---|---|
+| **本表** | 官方形态是什么样 + 对齐状态（**唯一事实源**） |
+| `OFFICIAL_EGRESS_WIRE_PARITY_FIX_20260727.md` | 我们改了什么（§0 有已修/待修总表） |
+| `README.md` §1.1 | 对外的现状与残留差异（§1.1.1.2） |
+| `OFFICIAL_EGRESS_PROFILE_FIDELITY_FIX_20260727.md` | 第一轮修复记录 |
+
+### E. 第 1 步未完成项（下次从这里接）
+
+1. **各端点的 header 集合与插入顺序**——逐个读官方 `extra_headers` 构造链，
+   再对 Sub2API 逐条比。目前只对齐了 URL 与方法（SPEC-EP-006~009）。
 2. **各端点的 body 字段**——models / compact / search / images 的请求体结构未列。
-3. **另五条链路的画像归属核查**——`conversation/`、`wham/rate-limit`、
-   `subscriptions`、`accounts/check`、`files` 是否走官方画像，尚未像
-   SPEC-EP-010 那样逐条查（隐私端点的 `req.Client` 问题提示**这类旁路可能普遍
-   存在画像失效**，须逐条核）。
-4. **第 2 步验规则**：全部条目尚未逐条抓包确认。
+3. **五条画像失效链路的处理方案**——SPEC-EP-011 已定位，但未定怎么修。
+   建议一并评估把 `supportsOfficialEgressHTTPProfile` 从"默认放行"改为
+   "默认拦截"，否则新增链路仍会漏网。
+4. **`count_tokens` 的去留**——SPEC-EP-003 已证官方无对应物，需产品决策。
+
+### F. 本轮未解决但已定位的重点
+
+- **SPEC-TLS-002 代理画像方向相反**：官方默认经代理不 offer h2，而我们的代理
+  画像声明 `h2`。该画像很可能整个是观测污染的产物。**修法可能是把代理画像也改成
+  空 ALPN**——那样代理路径也走 h1，h2 层全部差异自动消失。**这是尚未验证的推论。**
+- **SPEC-EP-011 画像失效是系统性的**：根因是白名单"默认放行"。
 
 ## 9. 本版未覆盖
 
