@@ -314,6 +314,42 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 - **可变性**：条件（`residency` 仅当 `REQUIREMENTS_RESIDENCY` 已设置）
 - **状态**：✅ 已对齐
 
+### SPEC-HDR-005　`user-agent` 的 suffix 语义
+
+- **规则**：`UA = prefix + suffix`
+  - `prefix = "{originator}/{version} ({os_type} {os_version}; {arch}) {terminal}"`
+  - `terminal` 由终端检测得出；**完全无终端时为 `unknown`**
+    （`terminal-detection/src/lib.rs:204` `TerminalName::Unknown => "unknown"`）
+  - `suffix` 仅当 `USER_AGENT_SUFFIX` 非空时追加，格式 `" ({name}; {version})"`
+- **依据**：`login/src/auth/default_client.rs:161` `get_codex_user_agent()`　[L1]
+  ─ `USER_AGENT_SUFFIX` 全仓**只有两个设置点**：`mcp-server/src/message_processor.rs:230`
+  与 `app-server/src/request_processors/initialize_processor.rs:133`，且值为
+  `format!("{name}; {version})")`，其中 name/version 是**连接进来的第三方客户端**
+  的名字与版本（`initialize_processor.rs:90`）　[L1]
+- **观测**：任意通道
+- **实测**：官方 `codex exec` 的 UA 为
+  `codex_exec/0.145.0 (Ubuntu 24.4.0; x86_64) xterm-256color`——**无 suffix**
+- **可变性**：条件（CLI 无 suffix；app-server/mcp-server 场景才有）
+- **状态**：🔴 **未对齐** —— Sub2API 硬编码
+  `codex_exec/0.145.0 (Ubuntu 24.4.0; x86_64) unknown (codex_exec; 0.145.0)`
+  （`internal/pkg/openaiidentity/codex.go:7`）。
+  - 中间的 `unknown` **是对的**：服务端无终端，官方在该条件下同样输出 `unknown`
+  - 但尾部 `(codex_exec; 0.145.0)` 是**官方永不产生的组合**：普通 CLI 不带 suffix；
+    app-server 场景下 suffix 是第三方客户端的 name/version，而 name 等于 originator
+    本身既不合语义、还会被 `NON_ORIGINATING_CLIENT_NAMES` 过滤
+  - **该常量为全局共用，修一处则所有端点受益**
+
+### SPEC-HDR-006　`accept` 按端点取值
+
+- **规则**：models 端点为 `*/*`
+- **依据**：官方基线实测　[L3]
+- **观测**：任意通道
+- **实测**：`official-h1-full-20260727T124125Z` 的 `GET /codex/models` →
+  `accept: */*`
+- **可变性**：条件（responses 为 `text/event-stream`，见 SPEC-HDR-00x 未列项）
+- **状态**：🔴 **未对齐** —— Sub2API 在
+  `openai_codex_models_service.go:318` 设 `Accept: application/json`
+
 ### SPEC-HDR-003　不发 `accept-language`
 
 - **规则**：官方**从不**发送 `accept-language`
