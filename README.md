@@ -97,7 +97,8 @@ API Key active 画像的 AnyRouter A/B 见 §1.2。
 （tungstenite）前 5 项是大写驼峰。照"全小写"一刀切会制造新偏离，`0.1.165-8` 曾因此
 引入回归并在 `0.1.165-9` 修回。
 
-完整清单、证据与逐条结论见 [官方出站 wire 一致性修复清单](docs/OFFICIAL_EGRESS_WIRE_PARITY_FIX_20260727.md)。
+官方形态的逐条规格（含证据等级与观测通道）见 [Codex CLI 0.145.0 出站形态规格表](docs/CODEX_CLI_0145_EGRESS_SPEC.md)；
+我们的修复过程与证据见 [官方出站 wire 一致性修复清单](docs/OFFICIAL_EGRESS_WIRE_PARITY_FIX_20260727.md)。
 
 #### 1.1.2 抓包方法、分组与证据边界
 
