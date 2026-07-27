@@ -1165,7 +1165,9 @@ func finalizeOfficialOpenAIHTTPHeaders(
 	// h1 线上 header 名一律小写，而 Go 的 Header.Set 会改写成 Session-Id / Originator。
 	// 把小写化放在传输层而非此处，是为了让语义定型与 wire 形态分层，且不影响上层断言。
 	if isCompact {
-		header.Del("Accept")
+		// 官方 compact 走 execute（端点层不设 accept），由 reqwest 补默认 */*。
+		// Go 不会自动补，因此必须显式设置——此前 Del 会导致出站彻底缺该头。
+		header.Set("Accept", "*/*")
 	} else {
 		header.Set("Accept", "text/event-stream")
 	}

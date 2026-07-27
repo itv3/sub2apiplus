@@ -201,7 +201,8 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPCompactPreservesExplicitContract(
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, chatgptCodexURL+"/compact", upstream.lastReq.URL.String())
-	require.Empty(t, upstream.lastReq.Header.Get("Accept"))
+	// 官方 compact 走 execute，端点层不设 accept，由 reqwest 补默认 */*（SPEC-HDR-006）。
+	require.Equal(t, "*/*", upstream.lastReq.Header.Get("Accept"))
 	require.Equal(t, testOfficialOpenAISessionID, upstream.lastReq.Header.Get("session-id"))
 	require.Equal(t, "入口显式指令", gjson.GetBytes(upstream.lastBody, "instructions").String())
 	require.Equal(t, testOfficialOpenAICallID, gjson.GetBytes(upstream.lastBody, "input.3.call_id").String())

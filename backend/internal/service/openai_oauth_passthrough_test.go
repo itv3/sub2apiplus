@@ -774,7 +774,8 @@ func TestOpenAIGatewayService_OAuthPassthrough_CompactUsesJSONAndKeepsNonStreami
 	require.Equal(t, "gpt-5.4", gjson.GetBytes(upstream.lastBody, "model").String())
 	require.Equal(t, "compact me", gjson.GetBytes(upstream.lastBody, "input.0.text").String())
 	require.Equal(t, "local-test-instructions", strings.TrimSpace(gjson.GetBytes(upstream.lastBody, "instructions").String()))
-	require.Empty(t, upstream.lastReq.Header.Get("Accept"))
+	// 同上：compact 的 accept 为 */*，此前 Del 会导致出站彻底缺该头。
+	require.Equal(t, "*/*", upstream.lastReq.Header.Get("Accept"))
 	// 官方 OAuth 画像携带当前 Codex version，旧 session_id 改用 session-id。
 	require.Equal(t, codexCLIVersion, upstream.lastReq.Header.Get("Version"))
 	require.NotEmpty(t, upstream.lastReq.Header.Get("session-id"))

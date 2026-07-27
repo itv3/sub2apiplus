@@ -316,7 +316,8 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifest(
 		}
 		setOpenAIChatGPTAccountHeaders(headers, credAccount)
 	}
-	headers.Set("Accept", "application/json")
+	// 官方 models 端点层不设 accept，由 reqwest 补默认 */*（规格表 SPEC-HDR-006）。
+	headers.Set("Accept", "*/*")
 	applyOpenAICodexAuxiliaryHeaders(headers)
 	headers.Set("Version", clientVersion)
 

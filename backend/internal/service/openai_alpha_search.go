@@ -252,8 +252,10 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchResponsesWebSearchRequest(c
 	apiKeyID := getAPIKeyIDFromContext(c)
 	if sessionID := strings.TrimSpace(gjson.GetBytes(alphaBody, "id").String()); sessionID != "" {
 		isolated := isolateOpenAISessionID(apiKeyID, sessionID)
-		req.Header.Set("Session_ID", isolated)
-		req.Header.Set("Conversation_ID", isolated)
+		// 官方会话头一律连字符小写，且没有 conversation-id——thread-id 才是其对应物
+		// （codex-api/src/requests/headers.rs:8,11）。规格表 SPEC-HDR-007。
+		setHeaderRaw(req.Header, "session-id", isolated)
+		setHeaderRaw(req.Header, "thread-id", isolated)
 	}
 	s.overrideBrowserUserAgent(ctx, account, req)
 	enforceCodexIdentityHeaders(req.Header)
@@ -362,7 +364,8 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchRequest(ctx context.Context
 	}
 
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "application/json")
+	// 官方 alpha/search 走 execute，端点层不设 accept，由 reqwest 补默认 */*。
+	req.Header.Set("Accept", "*/*")
 
 	if account.Type == AccountTypeOAuth {
 		req.Host = "chatgpt.com"

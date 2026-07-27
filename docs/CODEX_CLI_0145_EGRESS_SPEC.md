@@ -354,15 +354,23 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 - **状态**：🔴 **四个端点全部未对齐**。根因是 Sub2API 按"该端点返回什么"来设
   accept，而官方是"除 responses 外一律交给 reqwest 默认"：
 
-| 端点 | 官方 | Sub2API | 位置 |
-|---|---|---|---|
-| responses | `text/event-stream` | `text/event-stream` | ✅ 一致 |
-| compact | `*/*` | **无 accept 头** | 🔴 `official_egress_openai_http.go:1168` `header.Del("Accept")`——Go 不像 reqwest 会自动补，故出站彻底缺该头 |
-| models | `*/*` | `application/json` | 🔴 `openai_codex_models_service.go:318` |
-| alpha-search | `*/*` | `text/event-stream` | 🔴 `openai_alpha_search.go:246` |
-| images | `*/*` | `text/event-stream` | 🔴 `openai_images_responses.go:1710` |
+| 请求 | 实际打的端点 | 官方 | Sub2API | 状态 |
+|---|---|---|---|---|
+| responses | responses | `text/event-stream` | `text/event-stream` | ✅ |
+| compact | responses/compact | `*/*` | 原为**无 accept 头** | ✅ **已修** |
+| models | models | `*/*` | 原为 `application/json` | ✅ **已修** |
+| alpha-search 主请求 | alpha/search | `*/*` | 原为 `application/json` | ✅ **已修** |
+| alpha-search web-search | **responses** | `text/event-stream` | `text/event-stream` | ✅ 本就一致 |
+| images | **responses** | `text/event-stream` | `text/event-stream` | ✅ 本就一致 |
 
-  ─ compact 那条最明显：**官方一定带 accept，而 Sub2API 完全没有**。
+> **本表曾写错两行**（初版把 images 与 alpha-search 的 web-search 分支标为未对齐）。
+> 二者打的都是 **responses 端点**而非各自的同名端点：images 走
+> `image_generation` 工具调用（SPEC-EP-001），alpha-search 的
+> `buildOpenAIAlphaSearchResponsesWebSearchRequest` 也打 responses。
+> 因此它们的 `text/event-stream` 本就正确。**实际需修的是 3 处而非 4 处。**
+
+  ─ compact 那条最明显：**官方一定带 accept，而 Sub2API 原本完全没有**
+  （`header.Del("Accept")`，而 Go 不像 reqwest 会自动补默认值）。
 
 ### SPEC-HDR-007　会话头一律用连字符，且无 `conversation-id`
 
