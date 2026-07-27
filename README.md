@@ -240,7 +240,7 @@ API Key 官方客户端兼容让 Kilo / Cline / Cursor / Roo Code 等非官方�
 
 1. 仅 Anthropic / OpenAI 的 API Key 账号生效，不改变 OAuth 账号逻辑。
 2. mimic 与 passthrough 运行时互斥；同时开启时，非官方客户端优先走 mimic。
-3. 账号测试按非官方入站请求处理；在默认 `active` 模式下走与正式 Gateway 相同的 Profile 解析、Header/Body Finalizer 和 TLS 决策。已知限制：切到 `previous` 模式时，OpenAI 账号测试的 TLS 决策仍按 `active` 的 Codex CLI 画像执行，与 Gateway 的 Desktop 标准 Transport 不一致（Anthropic 侧无此问题）。
+3. 账号测试按非官方入站请求处理并走与正式 Gateway 相同的 Profile 解析、Header/Body Finalizer 和 TLS 决策；`active` 与 `previous` 两种模式都由同一份请求级画像同时决定 Header/Body 与 TLS，不存在按模式分叉的独立判定。
 4. 非官方客户端命中 mimic 时，关键身份 header 不允许被账号级 header override 覆盖；官方客户端跳过 mimic 后不应用该保护。
 5. OpenAI Codex mimic 的 `/v1/messages` 固定进入 Responses mimic 链路，不受 `force_chat_completions`、普通 Responses probe false 或 `openai_responses_supported=false` 影响。
 6. OpenAI Codex mimic 只支持 HTTP/SSE 上游，命中时不进入 Responses WebSocket（WS 画像在 registry 中只存档不激活）；跳过 mimic 的官方 Codex 客户端按普通 API Key 账号的全局/账号 WS 开关、force HTTP 和 WSv2 mode 选择路由。该判断同时作用于账号调度、粘性账号复核和最终转发。
@@ -301,7 +301,7 @@ Sub2API API Key mimic → AnyRouter”两条 HTTP 出站路径：
 | 平台 | previous 画像 | 与 active 的关键差异 |
 |---|---|---|
 | Anthropic | Claude Desktop `2.1.209` | `claude-desktop-3p` billing、Desktop beta/system/工具集合；未指定自定义 TLS Profile 时使用标准 Transport |
-| OpenAI | Codex Desktop `0.144.0-alpha.4` | Desktop UA、Header/Body 和传输契约 |
+| OpenAI | Codex Desktop `0.144.0-alpha.4` | Desktop UA、Header/Body 和传输契约；未指定自定义 TLS Profile 时使用标准 Transport；API Key WS 同样不激活 |
 
 Profile ID 归属：OpenAI 默认指针为 `codex_exec_0_145`（见 §1.2.2），`desktop_0_144` 及其旧别名仅属于 `previous`/配置兼容，`cli_rs_0_125` 保留独立历史兼容路径。
 
@@ -312,12 +312,14 @@ Profile ID 归属：OpenAI 默认指针为 `codex_exec_0_145`（见 §1.2.2）�
 OpenAI `/v1/responses/compact` 是特例：上游保持官方 unary JSON 形态，请求体按白名单重建，只保留 `model`、`input`、`instructions`、`tools`、`parallel_tool_calls`、`reasoning`、`text`、`service_tier`、`previous_response_id` 九个字段，其余（含 `stream`、`store`、`prompt_cache_key`、`client_metadata`）一律不带出；不补 Codex mimic body 默认值，并强制 `Accept: application/json`。该精简发生在入站规范化阶段，OAuth 路径随后由官方画像补回 `prompt_cache_key` 与 `X-Codex-Installation-ID`（见 §1.1.1.1），API Key 路径不补。通过普通 `/v1/responses` body-signal 触发且原请求为 `stream:true` 时，下游桥接为最小 Responses SSE，确保包含 `response.output_item.done` 和 `response.completed`。
 
 - mimic 只对齐 header、body、TLS 和路由，不复制服务端隐藏 prompt、账号状态、产品 memory 或 UI 上下文，也不替换响应文本或清洗客户端正文身份。
-- Anthropic `active` 画像在启用 mimic 和 `enable_tls_fingerprint` 后，未指定 `tls_fingerprint_profile_id` 时使用内置 Claude Code TLS Profile；`previous` 回退画像才使用标准 Transport。
-- Codex CLI `active` 画像在开启 TLS fingerprint 时使用 2026-07-26 抓包的 direct 30-cipher/空 ALPN 或 proxy h2 传输画像。API Key WebSocket 由路由决策层强制回落 HTTP，不会因注册表中存在未激活 WS 画像而开启（规则见 §1.2.1 第 6 条）。
-- 以上两条画像的 TLS 选择中，管理员显式指定的固定或随机 TLS Profile 始终优先。
+- Anthropic `active` 画像在启用 mimic 和 `enable_tls_fingerprint` 后，未指定 `tls_fingerprint_profile_id` 时使用内置 Claude Code TLS Profile；`previous` 回退画像才使用标准 Transport。管理员显式选择的固定或随机 TLS Profile 始终优先。
+- Codex CLI `active` 画像在开启 TLS fingerprint 时使用 2026-07-26 抓包的 direct 30-cipher/空 ALPN 或 proxy h2 传输画像；管理员显式选择的 TLS profile 仍优先。API Key WebSocket 由路由决策层强制回落 HTTP，不会因注册表中存在未激活 WS 画像而开启（规则见 §1.2.1 第 6 条）。
+- OpenAI `previous` 回退画像与 Anthropic 同规则：Desktop 画像没有可复用的实抓 TLS，未指定 `tls_fingerprint_profile_id` 时使用标准 Transport。TLS 决策只能来自请求级画像，正式 Gateway、账号测试、能力探测和 keeper 内部代理共用同一判定，任何路径都不得自行重解析出另一个 mode 的画像。
 - HTTP/1.1 与 HTTP/2 Transport 的 `DisableCompression` 由 TLS Profile 的 `Transport` 字段驱动，不是固定值：Codex 的 direct/proxy/WS 画像显式设 `true` 以避免自动注入 gzip，Anthropic 画像未设置该字段（等于 `false`）；两者都不影响显式压缩响应的受控解压。
 - Codex base instructions 由 `CodexBaseInstructionsForModel()` 按模型分四条分支：含 `codex` 的模型走 `DefaultInstructions`，`gpt-5.5` 走最新版本，`gpt-5.2` 与 `gpt-5.1` 各有单独维护的 prompt（内容为空时回退最新），其余模型回退最新版本。
 - `Anthropic-Dangerous-Direct-Browser-Access: true` 在 `claude.DefaultHeaders` 共享常量和 registry 的 Wire Profile 中各有一份，分别服务非 mimic 路径与 mimic 出站，取值一致且都对应 2026-07-26 Claude Code CLI `2.1.220` API 实抓；mimic 运行时只读取自己的 Wire Profile，不回写共享常量。
+- 管理后台账号测试只有在 HTTP 200、收到正常 SSE 内容并以 `message_stop` 结束时才成功；非 200 或 HTTP 200 但正文仅为服务暂不可用降级文案时都必须失败并保留上游错误。
+- 效果应以第三方中转站实际收到的上游请求为准，不能只看 usage 页面中的客户端入口 `USER-AGENT`。
 
 ### 1.3 Antigravity 增强
 

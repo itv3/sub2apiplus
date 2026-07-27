@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/model"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	utls "github.com/refraction-networking/utls"
@@ -29,6 +30,28 @@ func (r *openAIHTTPUpstreamChoiceRecorder) DoWithTLS(_ *http.Request, _ string, 
 	return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader("{}"))}, nil
 }
 
+// previousOfficialClientProfileConfig 返回把服务级画像指针整体切到 previous 的配置，
+// 用于复现紧急回退模式下的出站决策。
+func previousOfficialClientProfileConfig() *config.Config {
+	return &config.Config{Gateway: config.GatewayConfig{
+		OfficialClientProfiles: config.GatewayOfficialClientProfilesConfig{
+			Mode: officialClientProfileModePrevious,
+		},
+	}}
+}
+
+func newOpenAIAPIKeyMimicTLSAccount(id int64) *Account {
+	return &Account{
+		ID:       id,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Extra: map[string]any{
+			"openai_apikey_mimic_codex_cli": true,
+			"enable_tls_fingerprint":        true,
+		},
+	}
+}
+
 func TestResolveOpenAIAPIKeyCodexTLSProfileUsesCurrentCLIDefault(t *testing.T) {
 	account := &Account{
 		Platform: PlatformOpenAI,
@@ -38,7 +61,7 @@ func TestResolveOpenAIAPIKeyCodexTLSProfileUsesCurrentCLIDefault(t *testing.T) {
 			"enable_tls_fingerprint":        true,
 		},
 	}
-	got := resolveOpenAIAPIKeyCodexTLSProfile(account, &TLSFingerprintProfileService{})
+	got := resolveOpenAIAPIKeyCodexTLSProfile(account, &TLSFingerprintProfileService{}, nil)
 	require.NotNil(t, got)
 	require.Contains(t, got.Name, "Codex CLI 0.145.0")
 	require.Len(t, got.CipherSuites, 30)
@@ -49,7 +72,7 @@ func TestResolveOpenAIAPIKeyCodexTLSProfileUsesCurrentCLIDefault(t *testing.T) {
 	require.True(t, got.Transport.DisableCompression)
 
 	account.Extra["tls_fingerprint_profile_id"] = int64(42)
-	got = resolveOpenAIAPIKeyCodexTLSProfile(account, &TLSFingerprintProfileService{})
+	got = resolveOpenAIAPIKeyCodexTLSProfile(account, &TLSFingerprintProfileService{}, nil)
 	require.NotNil(t, got)
 	require.Contains(t, got.Name, "Codex CLI 0.145.0")
 
@@ -62,7 +85,7 @@ func TestResolveOpenAIAPIKeyCodexTLSProfileUsesCurrentCLIDefault(t *testing.T) {
 			},
 		},
 	}
-	got = resolveOpenAIAPIKeyCodexTLSProfile(account, svc)
+	got = resolveOpenAIAPIKeyCodexTLSProfile(account, svc, nil)
 	require.NotNil(t, got)
 	require.Equal(t, "codex-cli-captured", got.Name)
 	require.Equal(t, []string{"h2", "http/1.1"}, got.ALPNProtocols)
@@ -80,12 +103,34 @@ func TestResolveOpenAIAPIKeyCodexTLSProfileIgnoresDormantAccountProfile(t *testi
 		},
 	}
 
-	got := resolveOpenAIAPIKeyCodexTLSProfile(account, &TLSFingerprintProfileService{})
+	got := resolveOpenAIAPIKeyCodexTLSProfile(account, &TLSFingerprintProfileService{}, nil)
 	require.NotNil(t, got)
 	require.Contains(t, got.Name, "Codex CLI 0.145.0")
 	require.Len(t, got.CipherSuites, 30)
 	require.NotEmpty(t, got.Extensions)
 	require.True(t, got.Transport.DisableCompression)
+}
+
+// TestResolveOpenAIAPIKeyCodexTLSProfilePreviousModeFallsBackToStandardTransport 固定
+// previous 回退画像的 TLS 语义：Desktop 画像不套 mimic 指纹，走标准 Transport。
+// 漏传 cfg 时曾静默回落到 active，使 previous 的 Desktop header 与 active 的 CLI
+// TLS 画像混用，这正是 README §1.2.4 禁止的按字段混用。
+func TestResolveOpenAIAPIKeyCodexTLSProfilePreviousModeFallsBackToStandardTransport(t *testing.T) {
+	account := &Account{
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeAPIKey,
+		Extra: map[string]any{
+			"openai_apikey_mimic_codex_cli": true,
+			"enable_tls_fingerprint":        true,
+		},
+	}
+
+	require.Nil(t, resolveOpenAIAPIKeyCodexTLSProfile(account, &TLSFingerprintProfileService{}, previousOfficialClientProfileConfig()))
+
+	// 同一账号在 active 模式下仍使用当前 CLI 实抓画像，证明差异只来自服务级指针。
+	got := resolveOpenAIAPIKeyCodexTLSProfile(account, &TLSFingerprintProfileService{}, nil)
+	require.NotNil(t, got)
+	require.Contains(t, got.Name, "Codex CLI 0.145.0")
 }
 
 func TestDoOpenAIHTTPUpstreamUsesCurrentCLITLSProfileByDefault(t *testing.T) {
@@ -102,7 +147,7 @@ func TestDoOpenAIHTTPUpstreamUsesCurrentCLITLSProfileByDefault(t *testing.T) {
 	require.NoError(t, err)
 
 	recorder := &openAIHTTPUpstreamChoiceRecorder{}
-	resp, err := doOpenAIHTTPUpstream(recorder, req, "", account, &TLSFingerprintProfileService{})
+	resp, err := doOpenAIHTTPUpstreamWithProfile(recorder, req, "", account, &TLSFingerprintProfileService{}, resolveOpenAIAPIKeyCodexMimicProfile(account, 0, nil))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.False(t, recorder.doCalled)
@@ -120,7 +165,7 @@ func TestDoOpenAIHTTPUpstreamUsesCurrentCLITLSProfileByDefault(t *testing.T) {
 		},
 	}
 	recorder = &openAIHTTPUpstreamChoiceRecorder{}
-	resp, err = doOpenAIHTTPUpstream(recorder, req, "", account, tlsSvc)
+	resp, err = doOpenAIHTTPUpstreamWithProfile(recorder, req, "", account, tlsSvc, resolveOpenAIAPIKeyCodexMimicProfile(account, 0, nil))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.False(t, recorder.doCalled)
@@ -144,7 +189,7 @@ func TestDoOpenAIHTTPUpstreamIgnoresDormantAccountProfile(t *testing.T) {
 	require.NoError(t, err)
 
 	recorder := &openAIHTTPUpstreamChoiceRecorder{}
-	resp, err := doOpenAIHTTPUpstream(recorder, req, "", account, &TLSFingerprintProfileService{})
+	resp, err := doOpenAIHTTPUpstreamWithProfile(recorder, req, "", account, &TLSFingerprintProfileService{}, resolveOpenAIAPIKeyCodexMimicProfile(account, 0, nil))
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.False(t, recorder.doCalled)
@@ -166,13 +211,98 @@ func TestDoOpenAIHTTPUpstreamSkipsMimicTLSWhenRequestProfileDisabled(t *testing.
 	req, err := http.NewRequest(http.MethodPost, "https://api.openai.com/v1/responses", strings.NewReader("{}"))
 	require.NoError(t, err)
 
+	// 零值画像即「本次请求不做 mimic」：passthrough / WS-HTTP 桥接就是这样调用的。
 	recorder := &openAIHTTPUpstreamChoiceRecorder{}
-	resp, err := doOpenAIHTTPUpstreamWithMimicTLS(recorder, req, "", account, &TLSFingerprintProfileService{}, false)
+	resp, err := doOpenAIHTTPUpstreamWithProfile(recorder, req, "", account, &TLSFingerprintProfileService{}, openAIAPIKeyCodexMimicProfile{})
 	require.NoError(t, err)
 	require.Equal(t, http.StatusOK, resp.StatusCode)
 	require.True(t, recorder.doCalled)
 	require.False(t, recorder.doWithTLSCalled)
 	require.Nil(t, recorder.lastTLSProfile)
+}
+
+// TestOpenAIMimicTLSDecisionMatchesBetweenGatewayAndAccountTest 固定验收点：账号测试
+// 与正式 Gateway 必须对同一账号做出相同的 TLS 决策，包括 mode=previous。
+//
+// 修复前账号测试走的 doOpenAIHTTPUpstream 不接收请求级画像，会在函数内部用不带 cfg 的
+// resolveOpenAIAPIKeyCodexMimicClientProfile 重解析，previous 下静默得到 active 的
+// CLI 画像并套上 TLS 指纹，而 Gateway 的 Desktop 画像走标准 Transport，两者相反。
+func TestOpenAIMimicTLSDecisionMatchesBetweenGatewayAndAccountTest(t *testing.T) {
+	newUpstreamRequest := func(t *testing.T) *http.Request {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodPost, "https://api.openai.com/v1/responses", strings.NewReader("{}"))
+		require.NoError(t, err)
+		return req
+	}
+
+	for _, testCase := range []struct {
+		name            string
+		cfg             *config.Config
+		wantTLS         bool
+		wantProfileName string
+	}{
+		{
+			name:            "active 画像套用当前 CLI 指纹",
+			cfg:             nil,
+			wantTLS:         true,
+			wantProfileName: "Codex CLI 0.145.0",
+		},
+		{
+			name:    "previous 画像两侧都走标准 Transport",
+			cfg:     previousOfficialClientProfileConfig(),
+			wantTLS: false,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			account := newOpenAIAPIKeyMimicTLSAccount(4)
+
+			gatewayRecorder := &openAIHTTPUpstreamChoiceRecorder{}
+			gateway := &OpenAIGatewayService{
+				httpUpstream:        gatewayRecorder,
+				tlsFPProfileService: &TLSFingerprintProfileService{},
+				cfg:                 testCase.cfg,
+			}
+			gatewayResp, err := gateway.doOpenAIHTTPUpstreamForRequest(
+				newUpstreamRequest(t),
+				"",
+				account,
+				// c 为 nil 表示没有入站上下文，与账号测试一样按非官方客户端处理。
+				resolveOpenAIAPIKeyCodexMimicProfileForRequest(account, 0, gateway.cfg, nil),
+			)
+			require.NoError(t, err)
+			require.NoError(t, gatewayResp.Body.Close())
+
+			accountTestRecorder := &openAIHTTPUpstreamChoiceRecorder{}
+			accountTest := &AccountTestService{
+				httpUpstream:        accountTestRecorder,
+				tlsFPProfileService: &TLSFingerprintProfileService{},
+				cfg:                 testCase.cfg,
+			}
+			accountTestResp, err := doOpenAIHTTPUpstreamWithProfile(
+				accountTest.httpUpstream,
+				newUpstreamRequest(t),
+				"",
+				account,
+				accountTest.tlsFPProfileService,
+				resolveOpenAIAPIKeyCodexMimicProfile(account, 0, accountTest.cfg),
+			)
+			require.NoError(t, err)
+			require.NoError(t, accountTestResp.Body.Close())
+
+			require.Equal(t, testCase.wantTLS, gatewayRecorder.doWithTLSCalled)
+			require.Equal(t, gatewayRecorder.doWithTLSCalled, accountTestRecorder.doWithTLSCalled)
+			require.Equal(t, gatewayRecorder.doCalled, accountTestRecorder.doCalled)
+			if !testCase.wantTLS {
+				require.Nil(t, gatewayRecorder.lastTLSProfile)
+				require.Nil(t, accountTestRecorder.lastTLSProfile)
+				return
+			}
+			require.NotNil(t, accountTestRecorder.lastTLSProfile)
+			require.Contains(t, gatewayRecorder.lastTLSProfile.Name, testCase.wantProfileName)
+			require.Equal(t, gatewayRecorder.lastTLSProfile.Name, accountTestRecorder.lastTLSProfile.Name)
+			require.Equal(t, gatewayRecorder.lastTLSProfile.CipherSuites, accountTestRecorder.lastTLSProfile.CipherSuites)
+		})
+	}
 }
 
 func TestDoOpenAIOfficialEgressHTTPSelectsDirectAndProxyProfiles(t *testing.T) {
@@ -216,13 +346,13 @@ func TestDoOpenAIOfficialEgressHTTPSelectsDirectAndProxyProfiles(t *testing.T) {
 			)
 
 			recorder := &openAIHTTPUpstreamChoiceRecorder{}
-			resp, err := doOpenAIHTTPUpstreamWithMimicTLS(
+			resp, err := doOpenAIHTTPUpstreamWithProfile(
 				recorder,
 				req,
 				testCase.proxyURL,
 				account,
 				nil,
-				false,
+				openAIAPIKeyCodexMimicProfile{},
 			)
 			require.NoError(t, err)
 			require.NoError(t, resp.Body.Close())

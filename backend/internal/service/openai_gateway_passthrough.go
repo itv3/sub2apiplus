@@ -224,13 +224,14 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		}
 
 		upstreamStart := time.Now()
-		resp, err = doOpenAIHTTPUpstreamWithMimicTLS(
+		resp, err = doOpenAIHTTPUpstreamWithProfile(
 			s.httpUpstream,
 			upstreamReq,
 			proxyURL,
 			account,
 			s.tlsFPProfileService,
-			false,
+			// passthrough 不做 API Key mimic：零值画像表示不套 mimic TLS 指纹。
+			openAIAPIKeyCodexMimicProfile{},
 		)
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 		if err != nil {

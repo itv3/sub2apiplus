@@ -266,13 +266,14 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	if account.Platform == PlatformGrok {
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
 	} else {
-		resp, err = doOpenAIHTTPUpstreamWithMimicTLS(
+		resp, err = doOpenAIHTTPUpstreamWithProfile(
 			s.httpUpstream,
 			upstreamReq,
 			proxyURL,
 			account,
 			s.tlsFPProfileService,
-			false,
+			// WS-HTTP 桥接沿用 passthrough 语义：不做 API Key mimic，不套 mimic TLS 指纹。
+			openAIAPIKeyCodexMimicProfile{},
 		)
 	}
 	if err != nil {
