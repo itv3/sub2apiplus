@@ -40,6 +40,8 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 | `0.1.165-4` | 阶段构建 | — | 三路径完整抓包对照，逐路径结论的原始来源 |
 | `0.1.165-5` | 正式发布（Releases `v0.1.165-5`，镜像 `ghcr.io/itv3/sub2apiplus:0.1.165-5`），生产已切换为该镜像 | 数据保真、Lite 判定分裂、重复键 panic、API Key 画像 TLS 决策来源 | 未重跑三路径对照，逐路径结论沿用 `0.1.165-4`；新增 wire 证据与未覆盖边界见 [P0 数据保真修复记录](docs/P0_DATA_FIDELITY_FIX_20260727.md) |
 | `0.1.165-6` | 未发布，仅由 Vircs 以阶段镜像验收 | 入站宿主头泄漏、WS turn-state 跨连接沿用、模型能力合并语义、Chat Completions/Messages 入口 JSON 保真、passthrough 预热缺失 | 只重跑 OpenAI 侧：官方 Codex CLI `0.145.0` 基准（HTTP/WS × direct/MITM × S1/S2/S4）与第三方定向 HTTP/WS 候选出站逐项对照通过，宿主头剥离与预热帧序列均有真实 wire 证据；turn-state 两项因上游始终未下发该头只达代码级验收。未重跑 Anthropic 三路径与 Kilo 六组合。范围、证伪项与未覆盖边界见 [官方出站画像保真修复记录](docs/OFFICIAL_EGRESS_PROFILE_FIDELITY_FIX_20260727.md) |
+| `0.1.165-8` | 未发布，仅由 Vircs 以阶段镜像验收 | h1 header 名全小写、compact 不压缩、models 请求纳入官方画像、未知顶层字段改白名单、三条旁路端点（count_tokens/images/alpha-search）纳入画像、WS turn-state 改从 `response.metadata` 事件提取 | **新建 h1 直连探针**，取得首份 h1 wire 证据（此前 header 大小写与顺序被 MITM 的 h2/HPACK 完全掩盖）；清单与逐条依据见 [官方出站 wire 一致性修复清单](docs/OFFICIAL_EGRESS_WIRE_PARITY_FIX_20260727.md) |
+| `0.1.165-9`·`-10` | 未发布，仅由 Vircs 以阶段镜像验收 | WS 握手头大小写修回 tungstenite 形态（前 5 项为大写驼峰，`0.1.165-8` 曾误压为小写）、h2 `MAX_HEADER_LIST_SIZE` 由 10MB 对齐到官方 16KB | **新建 h2 帧层探针**（CONNECT 代理 + h2 服务端），取得官方 SETTINGS/WINDOW_UPDATE/伪头顺序基线；mitmproxy 用自己的 h2 栈重建连接，看不到这些。残留差异见 §1.1.1.2 |
 
 `0.1.165-6` 的宿主头剥离清单由三条路径共用，但只在 OpenAI HTTP/WS 侧取得 wire 证据；Anthropic 侧该项已无同版本证据，只能按共享逻辑外推，按 §1.1.2.3 的版本边界须重抓后才能计入实测结论。
 
@@ -73,6 +75,29 @@ API Key active 画像的 AnyRouter A/B 见 §1.2。
 | **Cookie** | OAuth HTTP 账号使用按“账号 + 代理”隔离的内存 Cookie jar，只接受 HTTPS ChatGPT 域名的 Cloudflare allowlist Cookie；模型清单复用同一策略。WS 不接入 Cookie jar，不发送 Cookie。 |
 
 验收所用的阶段构建镜像、基准与对比运行目录、回归时间戳统一见[实证归档](backend/internal/service/testdata/official_egress/README.md)；阶段构建不对外发布，命名规则见 §3.4。
+
+##### 1.1.1.2 已知的 wire 层残留差异
+
+上表的"通过"是应用层契约与 direct TLS 一致，**不含 wire 层逐字节**。截至
+`0.1.165-10`，以下差异**仍然存在且已量化**，据此不能声称与官方出站"完全一致"：
+
+| 差异 | 官方 | Sub2API | 影响路径 | 阻塞点 |
+|---|---|---|---|---|
+| h1 header 顺序与 `Host` 形态 | 全小写，`host` 倒数第二、`content-length` 最后 | `Host` 大写在最前，其余字典序 | **直连，默认主路径** | Go 的 `Request.write` 硬编码，须自写 h1 请求侧字节 |
+| WS 握手头顺序 | tungstenite 固定 5 项 + 插入序 | Go 字典序 | WS | 同上（大小写已于 `0.1.165-9` 修齐） |
+| h2 `INITIAL_WINDOW_SIZE` | 2 MB | 4 MB | 仅代理 | utls 与 net/http 的 h2 升级路径不兼容 |
+| h2 首个 `WINDOW_UPDATE` | 5,177,345 | 1 GB | 仅代理 | 同上 |
+| h2 伪头顺序 | `:method,:scheme,:authority,:path` | `:authority,:method,:path,:scheme` | 仅代理 | 硬编码于 `x/net/internal/httpcommon` |
+
+已对齐的 wire 层项目同样记录在案：h1 header 名全小写（实测 17 头中 15 项）、h2 SETTINGS
+帧内顺序与 `ENABLE_PUSH`/`MAX_FRAME_SIZE`（本就一致）、`MAX_HEADER_LIST_SIZE`、WS 握手
+前 5 项大写驼峰。
+
+**一条必须记住的验证限制**：官方并非处处小写——普通 HTTP（hyper）全小写，但 WS 握手
+（tungstenite）前 5 项是大写驼峰。照"全小写"一刀切会制造新偏离，`0.1.165-8` 曾因此
+引入回归并在 `0.1.165-9` 修回。
+
+完整清单、证据与逐条结论见 [官方出站 wire 一致性修复清单](docs/OFFICIAL_EGRESS_WIRE_PARITY_FIX_20260727.md)。
 
 #### 1.1.2 抓包方法、分组与证据边界
 
