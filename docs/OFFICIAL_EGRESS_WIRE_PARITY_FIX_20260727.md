@@ -321,6 +321,42 @@ hosts（Go 的 resolver 每次解析都读该文件，无需二次重启）。�
 超时与解压。它是全有或全无——`Host` 的大小写无法单独修。建议独立分支推进并带
 profile 开关灰度。
 
+### 6.9 官方那套形态在依赖库里的成因
+
+读了官方锁定的三个依赖版本（`hyper 1.8.1`、`http 1.4.0`、`tungstenite 0.27.0`）后确认：
+**官方的 wire 形态不是设计出来的，是库行为的副产物**。逐层如下。
+
+| 现象 | 成因 |
+|---|---|
+| header 名全小写 | `http::HeaderName` 存储即小写，hyper 默认分支 `write_headers` 直接 `extend(dst, name.as_str().as_bytes())` |
+| `host` 在用户头之后 | hyper 的 h1 编码器**不对 `Host` 做任何特殊处理**，它随 `HeaderMap` 迭代序输出；`host` 由 reqwest 在用户头之后才插入 |
+| `content-length` 在 `host` 之后 | 由 hyper `set_length` 在 encode 之前塞入 `HeaderMap`，是最后一个插入项 |
+| WS 握手前 5 项大写驼峰 | tungstenite 硬编码 `WEBSOCKET_HEADERS = ["Host","Connection","Upgrade","Sec-WebSocket-Version","Sec-WebSocket-Key"]`，先按该数组序写，之后才写剩余头 |
+
+两个此前未掌握、但直接影响实现正确性的点：
+
+1. **hyper 本身内置了保留大小写的机制**——`HeaderCaseMap` 扩展与 `title_case_headers`
+   选项，命中时走 `write_headers_original_case` / `write_headers_title_case`。官方
+   **没有启用**，所以落到小写分支。这说明小写不是协议要求，是默认路径。
+2. **`HeaderMap` 的迭代序不等价于插入序**——`remove` 用的是 `swap_remove`
+   （`map.rs: self.entries.swap_remove(found)`），会把末位元素换到被删位置。而
+   tungstenite 握手恰恰对那 5 个必需头逐个 `headers.remove(header)` 取值，**每次
+   remove 都在扰动剩余头的顺序**。HTTP 路径无 remove，才是纯插入序。
+
+**这对实现路径是简化**：Sub2API 不需要复刻这套机制，只需复刻**结果**——按实测顺序
+输出即可，不必逐条追官方源码的插入时机（§6.7 的推导链可以不用走完）。
+
+**但 WS 握手有个陷阱**：因为 swap_remove 的扰动，握手头一旦缺项，剩余顺序可能整体
+重排，**不能简单地"按清单跳过缺失项"**。HTTP 路径无此问题，跳过缺失项是安全的。
+另外 tungstenite 还有两个特例改写（`sec-websocket-protocol` → `Sec-WebSocket-Protocol`、
+`origin` → `Origin`），官方当前不发这两个头，但复刻时须一并覆盖。
+
+**P3-14 读源码解决不了。** `h2 0.4.13` 的 `Settings` 结构里每一项都是 `Option<u32>`，
+crate 本身**不定义客户端默认发送列表**，发什么完全由上层决定；帧内写入顺序固定为
+`header_table_size, enable_push, max_concurrent_streams, initial_window_size,
+max_frame_size, max_header_list_size, enable_connect_protocol`。也就是说官方实际发
+哪几项、各是什么值，**只能实测**，这再次印证下面的结论。
+
 **P3-14 在拿到官方 h2 基线前不能动手。** 官方直连是空 ALPN（探针实测
 `negotiated_alpn=None`），恒为 h1，**根本不产生 h2 流量**；h2 只在经代理时出现。
 Go 的 `x/net/http2.Transport` 只暴露 `MaxHeaderListSize`、`MaxReadFrameSize`、
