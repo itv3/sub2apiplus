@@ -477,6 +477,41 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 - **备注**：URL 与方法层面这四条均已对齐；各自的 **header 顺序**受 §3 的 h1 wire
   问题影响（全部未对齐），**body 字段**待第 2 步逐条验证。
 
+### SPEC-EP-010　隐私设置端点：双重偏离
+
+- **规则**：官方 Codex CLI **从不修改账号隐私设置**，无任何 `settings/*` 出站
+- **依据**：全仓检索 `account_user_setting` 官方命中 **0**　[L1 反证]
+- **观测**：任意通道
+- **可变性**：固定
+- **状态**：🔴 **双重偏离**
+  1. **端点本身官方从不访问**：`openai_privacy_service.go:18` 打
+     `https://chatgpt.com/backend-api/settings/account_user_setting`
+  2. **不走官方画像**：该服务用 `PrivacyClientFactory` 返回的 `req.Client`
+     （第三方 imroc/req 库），既非 `tlsfingerprint` 画像也非 `DoWithTLS`，
+     即 TLS 指纹、header 定型、连接池隔离全部失效
+- **触发**：账号级一次性设置（`privacy_mode == "training_off"`，见
+  `account.go:240`）。频率低，但**每添加一个 OAuth 账号就产生一次官方永不产生的
+  出站**，属强特征而非概率特征。
+
+---
+
+## 8.6 第 1 步进度与接续点
+
+**已完成**：13 条出站链路的端点全集（§8.5）、压缩策略（SPEC-EP-005）、四端点 URL
+对齐（SPEC-EP-006~009）、隐私端点双重偏离（SPEC-EP-010）、responses HTTP/WS 的
+五层规格（§1~§7，29 条）、h2 基线校准与代理画像方向性偏离（SPEC-TLS-002）。
+
+**未完成（下次从这里接）**：
+
+1. **各端点的 header 集合与插入顺序**——需逐个读官方 `extra_headers` 构造链，
+   再对 Sub2API 逐条比。目前只对齐了 URL 与方法。
+2. **各端点的 body 字段**——models / compact / search / images 的请求体结构未列。
+3. **另五条链路的画像归属核查**——`conversation/`、`wham/rate-limit`、
+   `subscriptions`、`accounts/check`、`files` 是否走官方画像，尚未像
+   SPEC-EP-010 那样逐条查（隐私端点的 `req.Client` 问题提示**这类旁路可能普遍
+   存在画像失效**，须逐条核）。
+4. **第 2 步验规则**：全部条目尚未逐条抓包确认。
+
 ## 9. 本版未覆盖
 
 按 §0.4 的范围界定，以下**尚未纳入**，不代表已对齐：
