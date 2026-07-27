@@ -396,6 +396,60 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 
 ---
 
+## 8.5 端点全集（第 1 步产出，2026-07-28）
+
+官方端点定义（`codex-api/src/endpoint/*.rs` 的 `fn path()`，base 为
+`https://chatgpt.com/backend-api/codex`）　[L1]：
+
+| 端点 | 方法 | path | 官方源文件 |
+|---|---|---|---|
+| responses | POST | `responses` | `responses.rs` |
+| responses（WS） | GET+Upgrade | `responses` | `responses_websocket.rs` |
+| compact | POST | `responses/compact` | `compact.rs` |
+| models | GET | `models`（带 `client_version` query） | `models.rs` |
+| alpha/search | POST | `alpha/search` | `search.rs` |
+| live | POST | `realtime/calls`（另有 `live`，FramelessBidi） | `realtime_call.rs` |
+| images | POST | `images/generations`·`images/edits` | `images.rs` |
+
+### SPEC-EP-002　官方 OAuth 只访问 chatgpt.com
+
+- **规则**：OAuth 凭据下**所有**出站都打 `chatgpt.com/backend-api/*`，
+  **从不访问 `api.openai.com`**
+- **依据**：官方全部端点的 base 均来自同一 provider　[L1]
+- **可变性**：固定
+- **状态**：⚠ 部分偏离 —— Sub2API 的 `count_tokens` 打
+  `api.openai.com/v1/responses/input_tokens`（P1-5 已收敛画像与身份头，但**域名本身
+  仍是偏离**）
+
+### SPEC-EP-003　官方无 count_tokens 端点
+
+- **规则**：官方**没有**任何 token 计数端点。`input_tokens` 仅作为 images 响应体内
+  的**字段**出现（`images.rs:157`），不是端点
+- **依据**：全仓检索无对应 `fn path()`　[L1 反证]
+- **可变性**：固定
+- **状态**：🔴 **无官方对应物** —— Sub2API 的 `/v1/messages/count_tokens` 是为兼容
+  Anthropic 接口而造，官方形态里不存在这条链路，**无法"对齐"，只能评估是否关闭或
+  改走本地估算**
+
+### SPEC-EP-004　出站面比预期宽：六个额外端点
+
+第 1 步扫描 Sub2API 全部出站 URL 时发现，除上表七个端点外还有六条打 `chatgpt.com`
+的链路。逐条核对官方是否有对应物：
+
+| Sub2API 出站 | 实现文件 | 官方是否有 |
+|---|---|---|
+| `backend-api/conversation/` | `openai_alpha_search.go` | ✅ 有 |
+| `backend-api/wham/rate-limit-reset-credits` | `openai_quota_service.go` | ✅ 有 |
+| `backend-api/subscriptions` | `admin_user.go` | ✅ 有 |
+| `backend-api/accounts/check/v4-2023-04-27` | `openai_oauth_service.go` | ✅ 有 |
+| `backend-api/files` | `openai_images.go` | ✅ 有（`files.rs`） |
+| `backend-api/settings/account_user_setting` | `openai_privacy_service.go` | 🔴 **官方命中 0** |
+
+**`settings/account_user_setting` 是官方从不访问的端点**，需进一步确认它在 OAuth
+路径下的可达性与触发条件——若 OAuth 账号会打它，即为明确的非官方特征。
+
+> 本节修正了此前"七个端点"的范围假设：实际出站面为 **7 + 6 = 13 条**。
+
 ## 9. 本版未覆盖
 
 按 §0.4 的范围界定，以下**尚未纳入**，不代表已对齐：
