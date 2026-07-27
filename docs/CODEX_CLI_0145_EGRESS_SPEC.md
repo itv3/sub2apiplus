@@ -450,6 +450,33 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 
 > 本节修正了此前"七个端点"的范围假设：实际出站面为 **7 + 6 = 13 条**。
 
+### SPEC-EP-005　压缩仅用于 responses 流式请求
+
+- **规则**：只有 responses 走 `stream_encoded_json_with`（带 `compression` 参数）
+  才可能 zstd；models / compact / alpha-search / images 全部走
+  `execute` / `execute_with`，**无 compression 参数，一律明文**
+- **依据**：`endpoint/session.rs` 两个方法的签名差异——`execute` 不接收 compression，
+  故落到 `RequestCompression` 的 `#[default] = None`　[L1]
+- **观测**：任意通道（`content-encoding` 头可见）
+- **可变性**：条件（responses 压、compact 不压）
+- **状态**：✅ **已对齐** —— Sub2API 的 `compressOfficialOpenAIHTTPRequest` 全仓
+  仅一处调用点（`official_egress_openai_http.go:292`，且带 `!plan.IsCompact` 判断），
+  alpha-search / images / count_tokens / models 四条链路压缩相关命中均为 0
+
+### SPEC-EP-006 ~ 009　各端点的 URL 与方法对齐状态
+
+| 编号 | 端点 | 官方 | Sub2API | 状态 |
+|---|---|---|---|---|
+| SPEC-EP-006 | models | `GET {base}/models?client_version=…` | `chatgpt.com/backend-api/codex/models` | ✅ 一致 |
+| SPEC-EP-007 | compact | `POST {base}/responses/compact` | 同 | ✅ 一致 |
+| SPEC-EP-008 | alpha-search | `POST {base}/alpha/search` | `chatgpt.com/backend-api/codex/alpha/search` | ✅ 一致 |
+| SPEC-EP-009 | live | `POST {base}/realtime/calls`（另有 `live`，FramelessBidi） | `chatgpt.com/backend-api/codex/realtime/calls` | ✅ 一致 |
+
+- **依据**：各端点 `fn path()`　[L1]
+- **可变性**：固定
+- **备注**：URL 与方法层面这四条均已对齐；各自的 **header 顺序**受 §3 的 h1 wire
+  问题影响（全部未对齐），**body 字段**待第 2 步逐条验证。
+
 ## 9. 本版未覆盖
 
 按 §0.4 的范围界定，以下**尚未纳入**，不代表已对齐：
