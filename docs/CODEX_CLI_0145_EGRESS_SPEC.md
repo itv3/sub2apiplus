@@ -708,15 +708,47 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 | `README.md` §1.1 | 对外的现状与残留差异（§1.1.1.2） |
 | `OFFICIAL_EGRESS_PROFILE_FIDELITY_FIX_20260727.md` | 第一轮修复记录 |
 
-### E. 第 1 步未完成项（下次从这里接）
+### E. 差异清单（第 1 步产出，第 3 步的直接输入）
 
-1. **各端点的 header 集合与插入顺序**——逐个读官方 `extra_headers` 构造链，
-   再对 Sub2API 逐条比。目前只对齐了 URL 与方法（SPEC-EP-006~009）。
-2. **各端点的 body 字段**——models / compact / search / images 的请求体结构未列。
-3. **五条画像失效链路的处理方案**——SPEC-EP-011 已定位，但未定怎么修。
-   建议一并评估把 `supportsOfficialEgressHTTPProfile` 从"默认放行"改为
-   "默认拦截"，否则新增链路仍会漏网。
-4. **`count_tokens` 的去留**——SPEC-EP-003 已证官方无对应物，需产品决策。
+**A 类 — 值/结构差异，不依赖自写 wire，可直接改：**
+
+| # | 差异 | 位置 | 规格 |
+|---|---|---|---|
+| A1 | UA 多了官方永不产生的 suffix `(codex_exec; 0.145.0)` | `openaiidentity/codex.go:7` | SPEC-HDR-005 |
+| A2 | `accept` 四端点全错（compact 甚至完全没有该头） | 见规格表 | SPEC-HDR-006 |
+| A3 | alpha-search 会话头用下划线，且含官方不存在的 `Conversation_ID` | `openai_alpha_search.go:255-256` | SPEC-HDR-007 |
+| A4 | `tool_choice` 发对象，官方类型是 `String` | `openai_images_responses.go:357` | SPEC-BODY-006 |
+| A5 | live URL 多带 `?intent=&architecture=`，主请求缺 `openai-alpha` | `openai_live.go:35,288-305` | SPEC-EP-012 |
+| A6 | 五条旁路链路不走官方画像 | 见 SPEC-EP-011 表 | SPEC-EP-011 |
+| A7 | 隐私端点访问官方从不访问的 `settings/account_user_setting` | `openai_privacy_service.go:18` | SPEC-EP-010 |
+
+**A1 优先级最高**：全局常量，一处修复覆盖所有端点。
+**A6 建议连根治**：把 `supportsOfficialEgressHTTPProfile` 从"默认放行"改"默认拦截"。
+
+**B 类 — 须自写 h1 wire：**
+
+| # | 差异 | 规格 |
+|---|---|---|
+| B1 | `Host` 大小写与位置（官方小写、倒数第二） | SPEC-H1-002 |
+| B2 | `content-length` 位置（官方最后） | SPEC-H1-003 |
+| B3 | 其余 header 顺序（官方插入序、Go 字典序） | SPEC-H1-004 |
+| B4 | WS 握手剩余头顺序 | SPEC-WS-002 |
+
+> **重要**：不必逐端点比 header 顺序——Go 的 `http.Header` 是 map，构造顺序不体现
+> 在 wire 上，永远字典序。各端点的顺序差异是 B1~B3 的同一实例，统一由自写 wire 解决。
+> 但**自写 wire 时需要按端点配置顺序清单**，因为官方各端点的插入序不同
+> （models 以 `version` 打头、ps/mcp 以 `originator` 打头）。
+
+**C 类 — 需产品决策：**
+
+| # | 事项 | 规格 |
+|---|---|---|
+| C1 | `count_tokens` 无官方对应物，且打 `api.openai.com` | SPEC-EP-003 |
+| C2 | 代理画像 ALPN 方向相反（改空 ALPN 则 h2 差异全消） | SPEC-TLS-002 |
+
+**第 1 步剩余（可与第 2 步合并做）：**
+- compact / models / search 的 body 字段逐项比（images 已比，见 SPEC-BODY-007）
+- 各端点 header 的**完整集合**比对（目前比的是取值，尚未确认有无多发/少发）
 
 ### F. 本轮未解决但已定位的重点
 
