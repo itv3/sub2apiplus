@@ -54,28 +54,33 @@ func attachOfficialEgressHTTPContext(
 	if c == nil || c.Request == nil {
 		return nil, errors.New("official egress is enabled but ingress request is unavailable")
 	}
-	if !supportsOfficialEgressHTTPProfile(targetPlatform, c.Request.URL.Path) {
+	inboundEndpoint := canonicalOfficialEgressInboundEndpoint(c.Request.URL.Path)
+	if !supportsOfficialEgressHTTPProfile(targetPlatform, inboundEndpoint) {
 		return req, nil
 	}
 	proxyID := int64(0)
 	if account.ProxyID != nil {
 		proxyID = *account.ProxyID
 	}
+	modelCapabilities := openAIModelCapabilitiesFromContext(req.Context())
 	egressContext := NewOfficialEgressContext(OfficialEgressContextInput{
 		AccountID:       account.ID,
 		TargetPlatform:  targetPlatform,
-		InboundEndpoint: c.Request.URL.Path,
+		InboundEndpoint: inboundEndpoint,
 		Transport:       OfficialEgressTransportHTTP,
 		UpstreamHost:    req.URL.Host,
 		ProfileVersion:  version,
 		ProfileMode:     mode,
 		AccountType:     account.Type,
 		ProxyID:         proxyID,
+		ResponsesLite:   modelCapabilities.UseResponsesLite,
+		ParallelTools:   modelCapabilities.SupportsParallelToolCalls,
 	})
+	egressContext.cookieJar = HTTPUpstreamCookieJarFromContext(req.Context())
 	profile, err := defaultOfficialEgressProfileResolver.ResolveHTTPProfile(
 		egressContext,
 		account,
-		c.Request.URL.Path,
+		inboundEndpoint,
 	)
 	if err != nil {
 		return nil, err
@@ -101,12 +106,12 @@ func attachOfficialEgressHTTPContext(
 func supportsOfficialEgressHTTPProfile(targetPlatform, endpoint string) bool {
 	switch strings.ToLower(strings.TrimSpace(targetPlatform)) {
 	case PlatformAnthropic:
-		normalizedEndpoint := normalizeOfficialEgressEndpoint(endpoint)
+		normalizedEndpoint := canonicalOfficialEgressInboundEndpoint(endpoint)
 		return normalizedEndpoint == "/v1/messages" ||
 			normalizedEndpoint == "/v1/responses" ||
 			normalizedEndpoint == "/v1/chat/completions"
 	case PlatformOpenAI:
-		normalizedEndpoint := normalizeOfficialEgressEndpoint(endpoint)
+		normalizedEndpoint := canonicalOfficialEgressInboundEndpoint(endpoint)
 		return normalizedEndpoint == "/v1/responses" ||
 			normalizedEndpoint == "/v1/responses/compact" ||
 			normalizedEndpoint == "/v1/chat/completions" ||
@@ -167,25 +172,30 @@ func attachOfficialEgressWebSocketContext(
 	if err != nil {
 		return nil, err
 	}
+	inboundEndpoint := canonicalOfficialEgressInboundEndpoint(c.Request.URL.Path)
 	proxyID := int64(0)
 	if account.ProxyID != nil {
 		proxyID = *account.ProxyID
 	}
+	modelCapabilities := openAIModelCapabilitiesFromContext(ctx)
 	egressContext := NewOfficialEgressContext(OfficialEgressContextInput{
 		AccountID:       account.ID,
 		TargetPlatform:  account.Platform,
-		InboundEndpoint: c.Request.URL.Path,
+		InboundEndpoint: inboundEndpoint,
 		Transport:       OfficialEgressTransportWebSocket,
 		UpstreamHost:    parsedURL.Host,
 		ProfileVersion:  version,
 		ProfileMode:     mode,
 		AccountType:     account.Type,
 		ProxyID:         proxyID,
+		ResponsesLite:   modelCapabilities.UseResponsesLite,
+		ParallelTools:   modelCapabilities.SupportsParallelToolCalls,
 	})
+	egressContext.cookieJar = HTTPUpstreamCookieJarFromContext(ctx)
 	profile, err := defaultOfficialEgressProfileResolver.ResolveWebSocketProfile(
 		egressContext,
 		account,
-		c.Request.URL.Path,
+		inboundEndpoint,
 	)
 	if err != nil {
 		return nil, err

@@ -94,6 +94,60 @@ class SecurityTest(unittest.TestCase):
                 "private-installation-id", output.read_text(encoding="utf-8")
             )
 
+    def test_mitm_normalization_verifies_turn_state_without_persisting_value(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            state = "private-turn-state"
+            records = [
+                {
+                    "_task": "oauth",
+                    "_boundary": "sub2api_egress",
+                    "_subject": "codex-ws",
+                    "request": {
+                        "method": "GET",
+                        "host": "chatgpt.com",
+                        "path": "/backend-api/codex/responses",
+                        "http_version": "HTTP/1.1",
+                        "headers": [],
+                        "body": {"length": 0, "json": None},
+                    },
+                    "response": {
+                        "status": 101,
+                        "http_version": "HTTP/1.1",
+                        "headers": [["x-codex-turn-state", state]],
+                    },
+                },
+                {
+                    "_websocket": True,
+                    "_task": "oauth",
+                    "_boundary": "sub2api_egress",
+                    "_subject": "codex-ws",
+                    "from_client": True,
+                    "host": "chatgpt.com",
+                    "path": "/backend-api/codex/responses",
+                    "length": 10,
+                    "json": {
+                        "type": "response.create",
+                        "client_metadata": {"x-codex-turn-state": state},
+                    },
+                },
+            ]
+            secure_write_text(
+                root / "codex-http.jsonl",
+                "".join(json.dumps(item) + "\n" for item in records),
+            )
+            output = root / "analysis" / "normalized.json"
+            payload = normalize_mitm_directory(root, output)
+            self.assertEqual(
+                payload["turn_state_lifecycle"],
+                {
+                    "response_state_count": 1,
+                    "matched_client_frame_count": 1,
+                    "unmatched_client_frame_count": 0,
+                },
+            )
+            self.assertNotIn(state, output.read_text(encoding="utf-8"))
+
     def test_manifest_never_contains_api_key_value(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             run_dir = Path(directory) / "api-run"

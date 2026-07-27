@@ -13,6 +13,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -54,8 +55,7 @@ func TestOpenAIOfficialEgressHTTPFinalizerUsesIngressLifecycle(t *testing.T) {
 	)
 
 	require.NoError(t, err)
-	wireBody, err := io.ReadAll(req.Body)
-	require.NoError(t, err)
+	wireBody := mustReadRequestBody(t, req)
 	require.False(t, gjson.GetBytes(wireBody, "instructions").Exists())
 	require.Equal(t, testOfficialOpenAICallID, gjson.GetBytes(wireBody, "input.3.call_id").String())
 	require.Equal(t, testOfficialOpenAICallID, gjson.GetBytes(wireBody, "input.4.call_id").String())
@@ -99,8 +99,7 @@ func TestOpenAIOfficialEgressHTTPFinalizerPreservesExplicitInstructions(t *testi
 	)
 
 	require.NoError(t, err)
-	wireBody, err := io.ReadAll(req.Body)
-	require.NoError(t, err)
+	wireBody := mustReadRequestBody(t, req)
 	require.Equal(t, "入口显式指令", gjson.GetBytes(wireBody, "instructions").String())
 }
 
@@ -175,9 +174,18 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPNonStreamAndSSE(t *testing.T) {
 }
 
 func TestOpenAIGatewayForwardOfficialEgressHTTPCompactPreservesExplicitContract(t *testing.T) {
-	body := newOfficialOpenAIHTTPTestBody(t, false, true, true)
+	bodyWithMetadata := newOfficialOpenAIHTTPTestBody(t, false, true, true)
+	turnMetadata := gjson.GetBytes(bodyWithMetadata, "client_metadata.x-codex-turn-metadata").String()
+	var compactPayload map[string]any
+	require.NoError(t, json.Unmarshal(bodyWithMetadata, &compactPayload))
+	delete(compactPayload, "client_metadata")
+	body, err := marshalOpenAIUpstreamJSON(compactPayload)
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(body, "client_metadata").Exists(), "官方 compact fixture 不得合成 client_metadata")
 	c := newOfficialOpenAIHTTPTestContext(body, "/v1/responses/compact")
 	c.Request.Header.Set("Accept", "application/json")
+	c.Request.Header.Set("X-Codex-Installation-ID", testOfficialOpenAIInstallationID)
+	c.Request.Header.Set("x-codex-turn-metadata", turnMetadata)
 	upstream := &httpUpstreamRecorder{resp: newOfficialOpenAIHTTPJSONResponse(
 		http.StatusOK,
 		`{"id":"resp_compact","model":"gpt-5.6-luna","output":[],"usage":{"input_tokens":2,"output_tokens":1}}`,
@@ -193,12 +201,13 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPCompactPreservesExplicitContract(
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, chatgptCodexURL+"/compact", upstream.lastReq.URL.String())
-	require.Equal(t, "application/json", upstream.lastReq.Header.Get("Accept"))
+	require.Empty(t, upstream.lastReq.Header.Get("Accept"))
 	require.Equal(t, testOfficialOpenAISessionID, upstream.lastReq.Header.Get("session-id"))
 	require.Equal(t, "入口显式指令", gjson.GetBytes(upstream.lastBody, "instructions").String())
 	require.Equal(t, testOfficialOpenAICallID, gjson.GetBytes(upstream.lastBody, "input.3.call_id").String())
-	require.False(t, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").Exists())
+	require.Equal(t, testOfficialOpenAISessionID, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "client_metadata").Exists())
+	require.Equal(t, testOfficialOpenAIInstallationID, upstream.lastReq.Header.Get("X-Codex-Installation-ID"))
 }
 
 func TestOpenAIGatewayForwardOfficialEgressHTTPPassthroughUnaffectedByWSMode(t *testing.T) {
@@ -292,7 +301,13 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPNormalizesKiloChatCompletions(t *
 	require.Equal(t, officialOpenAIHTTPOriginator, upstream.lastReq.Header.Get("originator"))
 	require.Equal(t, officialOpenAIHTTPBetaFeatures, upstream.lastReq.Header.Get("x-codex-beta-features"))
 	require.Equal(t, officialOpenAIHTTPResponsesLite, upstream.lastReq.Header.Get(responsesLiteHeader))
-	require.Empty(t, upstream.lastReq.Header.Get("version"))
+	require.Equal(t, "0.145.0", upstream.lastReq.Header.Get("version"))
+	require.Equal(t, "zstd", upstream.lastReq.Header.Get("Content-Encoding"))
+	rawCompressedBody, err := io.ReadAll(upstream.lastReq.Body)
+	require.NoError(t, err)
+	require.True(t, bytes.HasPrefix(rawCompressedBody, []byte{0x28, 0xb5, 0x2f, 0xfd}), "请求体必须是真实 zstd 帧，不能只伪造 Header")
+	require.Equal(t, int64(len(rawCompressedBody)), upstream.lastReq.ContentLength)
+	require.NotNil(t, upstream.lastReq.GetBody, "压缩后的请求必须支持重试重放")
 	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
 
 	egressContext, ok := OfficialEgressContextFromContext(upstream.lastReq.Context())
@@ -342,7 +357,7 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPNormalizesKiloMessages(t *testing
 	require.Empty(t, upstream.lastReq.Header.Get("session_id"))
 	require.Empty(t, upstream.lastReq.Header.Get("conversation_id"))
 	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
-	require.Empty(t, upstream.lastReq.Header.Get("version"))
+	require.Equal(t, codexCLIVersion, upstream.lastReq.Header.Get("version"))
 }
 
 func TestOpenAIGatewayForwardOfficialEgressHTTPNormalizesKiloResponsesLiteContract(t *testing.T) {
@@ -393,6 +408,33 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPNormalizesKiloResponsesLiteContra
 	require.False(t, gjson.GetBytes(upstream.lastBody, "tools").Exists())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "max_output_tokens").Exists())
 	require.Equal(t, "read_file", gjson.GetBytes(upstream.lastBody, "input.0.tools.0.name").String())
+}
+
+func TestFinalizeOfficialOpenAIHTTPBodyPreservesNestedRawData(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.6-luna","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello","opaque":{"z":9007199254740993,"a":1}}]}],"tool_choice":"required","reasoning":{"effort":"medium"}}`)
+	contract, err := captureGeneratedOfficialOpenAIHTTPBodyContract(body)
+	require.NoError(t, err)
+	identity := deriveOfficialOpenAIHTTPIdentity(
+		nil,
+		newOfficialOpenAIHTTPTestAccount(94991),
+		body,
+		contract,
+	)
+
+	finalized, modified, err := finalizeOfficialOpenAIHTTPBody(
+		body,
+		contract,
+		identity,
+		false,
+		false,
+		true,
+		true,
+	)
+	require.NoError(t, err)
+	require.True(t, modified)
+	require.Contains(t, string(finalized), `"opaque":{"z":9007199254740993,"a":1}`)
+	require.NotContains(t, string(finalized), "9007199254740992")
+	require.Equal(t, "auto", gjson.GetBytes(finalized, "tool_choice").String())
 }
 
 func TestOpenAIGatewayForwardOfficialEgressHTTPProactiveNamespaceStripPreservesIdentity(t *testing.T) {
@@ -603,12 +645,17 @@ func newOfficialOpenAIHTTPTestAccount(accountID int64) *Account {
 }
 
 func newOfficialOpenAIHTTPTestService(upstream *httpUpstreamRecorder) *OpenAIGatewayService {
-	return &OpenAIGatewayService{
+	service := &OpenAIGatewayService{
 		cfg: &config.Config{Security: config.SecurityConfig{
 			URLAllowlist: config.URLAllowlistConfig{Enabled: false},
 		}},
 		httpUpstream: upstream,
 	}
+	service.openaiModelCapabilities.replaceFromManifest(
+		94,
+		[]byte(`{"models":[{"slug":"gpt-5.6-luna","use_responses_lite":true}]}`),
+	)
+	return service
 }
 
 func newOfficialOpenAIHTTPJSONResponse(status int, body string) *http.Response {
@@ -642,6 +689,13 @@ func mustReadRequestBody(t *testing.T, req *http.Request) []byte {
 	defer func() { _ = body.Close() }()
 	data, err := io.ReadAll(body)
 	require.NoError(t, err)
+	if strings.EqualFold(req.Header.Get("Content-Encoding"), "zstd") {
+		decoder, decodeErr := zstd.NewReader(nil)
+		require.NoError(t, decodeErr)
+		defer decoder.Close()
+		data, decodeErr = decoder.DecodeAll(data, nil)
+		require.NoError(t, decodeErr)
+	}
 	return data
 }
 

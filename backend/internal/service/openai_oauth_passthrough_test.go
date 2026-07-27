@@ -20,6 +20,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
@@ -27,8 +28,8 @@ import (
 func f64p(v float64) *float64 { return &v }
 
 // codexOfficialIngressIdentityForTest 为模拟官方 Codex CLI 入站的测试补齐
-// T5 严格身份校验要求的 body 字段与配套 header（两侧必须一致）：
-// client_metadata + prompt_cache_key + session/thread/window/turn-metadata 头。
+// 严格身份契约。普通 Responses 同时携带 client_metadata；compact 只携带
+// prompt_cache_key 与配套身份头，不合成官方客户端不会发送的正文元数据。
 func codexOfficialIngressIdentityForTest(t *testing.T, c *gin.Context, body []byte) []byte {
 	t.Helper()
 	const (
@@ -44,19 +45,24 @@ func codexOfficialIngressIdentityForTest(t *testing.T, c *gin.Context, body []by
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(body, &payload))
 	payload["prompt_cache_key"] = sessionID
-	payload["client_metadata"] = map[string]any{
-		"x-codex-installation-id": installationID,
-		"session_id":              sessionID,
-		"thread_id":               sessionID,
-		"x-codex-window-id":       windowID,
-		"turn_id":                 turnID,
-		"x-codex-turn-metadata":   turnMetadata,
+	if canonicalOfficialEgressInboundEndpoint(c.Request.URL.Path) != "/v1/responses/compact" {
+		payload["client_metadata"] = map[string]any{
+			"x-codex-installation-id": installationID,
+			"session_id":              sessionID,
+			"thread_id":               sessionID,
+			"x-codex-window-id":       windowID,
+			"turn_id":                 turnID,
+			"x-codex-turn-metadata":   turnMetadata,
+		}
 	}
 	out, err := json.Marshal(payload)
 	require.NoError(t, err)
-	c.Request.Header.Set("x-client-request-id", sessionID)
+	if canonicalOfficialEgressInboundEndpoint(c.Request.URL.Path) != "/v1/responses/compact" {
+		c.Request.Header.Set("x-client-request-id", sessionID)
+	}
 	c.Request.Header.Set("session-id", sessionID)
 	c.Request.Header.Set("thread-id", sessionID)
+	c.Request.Header.Set("x-codex-installation-id", installationID)
 	c.Request.Header.Set("x-codex-window-id", windowID)
 	c.Request.Header.Set("x-codex-turn-metadata", turnMetadata)
 	return out
@@ -105,8 +111,17 @@ func (u *httpUpstreamRecorder) Do(req *http.Request, proxyURL string, accountID 
 	u.lastProxyURL = proxyURL
 	if req != nil && req.Body != nil {
 		b, _ := io.ReadAll(req.Body)
-		u.lastBody = b
-		u.bodies = append(u.bodies, append([]byte(nil), b...))
+		decoded := b
+		if strings.EqualFold(req.Header.Get("Content-Encoding"), "zstd") {
+			if decoder, err := zstd.NewReader(nil); err == nil {
+				if value, decodeErr := decoder.DecodeAll(b, nil); decodeErr == nil {
+					decoded = value
+				}
+				decoder.Close()
+			}
+		}
+		u.lastBody = decoded
+		u.bodies = append(u.bodies, append([]byte(nil), decoded...))
 		_ = req.Body.Close()
 		req.Body = io.NopCloser(bytes.NewReader(b))
 	}
@@ -159,6 +174,10 @@ func TestOpenAIGatewayService_ResponsesUnknownModelDoesNotFallbackToGPT54(t *tes
 		Status:      StatusActive,
 		Schedulable: true,
 	}
+	svc.openaiModelCapabilities.replaceFromManifest(
+		account.ID,
+		[]byte(`{"models":[{"slug":"gpt6","use_responses_lite":false}]}`),
+	)
 
 	result, err := svc.Forward(context.Background(), c, account, originalBody)
 	require.Error(t, err)
@@ -400,7 +419,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_StreamUsesBuiltInProfileAndKeepsT
 	c.Request.Header.Set("X-Test", "keep")
 	c.Request.Header.Set("x-codex-beta-features", "remote_compaction_v2")
 
-	originalBody := []byte(`{"model":"gpt-5.2","stream":true,"store":true,"instructions":"local-test-instructions","input":[{"type":"text","text":"hi"}]}`)
+	originalBody := []byte(`{"model":"gpt-5.4","stream":true,"store":true,"instructions":"local-test-instructions","input":[{"type":"text","text":"hi"}]}`)
 
 	upstreamSSE := strings.Join([]string{
 		`data: {"type":"response.output_item.added","item":{"type":"tool_call","tool_calls":[{"function":{"name":"apply_patch"}}]}}`,
@@ -444,15 +463,13 @@ func TestOpenAIGatewayService_OAuthPassthrough_StreamUsesBuiltInProfileAndKeepsT
 	require.NotNil(t, result)
 	require.True(t, result.Stream)
 
-	// 1) 透传 OAuth 请求体与旧链路关键行为保持一致：store=false + stream=true。
+	// 1) 非 Lite OAuth 请求按官方顶层契约定型：instructions 保留在顶层，固定字段归一化。
 	require.Equal(t, false, gjson.GetBytes(upstream.lastBody, "store").Bool())
 	require.Equal(t, true, gjson.GetBytes(upstream.lastBody, "stream").Bool())
-	require.False(t, gjson.GetBytes(upstream.lastBody, "instructions").Exists())
-	require.Equal(t, "developer", gjson.GetBytes(upstream.lastBody, "input.0.role").String())
-	require.Equal(t, "local-test-instructions", gjson.GetBytes(upstream.lastBody, "input.0.content.0.text").String())
+	require.Equal(t, "local-test-instructions", gjson.GetBytes(upstream.lastBody, "instructions").String())
 	// 其余关键字段保持原值。
-	require.Equal(t, "gpt-5.2", gjson.GetBytes(upstream.lastBody, "model").String())
-	require.Equal(t, "hi", gjson.GetBytes(upstream.lastBody, "input.1.text").String())
+	require.Equal(t, "gpt-5.4", gjson.GetBytes(upstream.lastBody, "model").String())
+	require.Equal(t, "hi", gjson.GetBytes(upstream.lastBody, "input.0.text").String())
 
 	// 2) only auth is replaced; inbound auth/cookie are not forwarded
 	require.Equal(t, "Bearer oauth-token", upstream.lastReq.Header.Get("Authorization"))
@@ -501,11 +518,11 @@ func TestOpenAIGatewayService_OAuthPassthrough_NamespaceRequestAndStreamResponse
 	}`)
 
 	upstreamSSE := strings.Join([]string{
-		`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"collaboration__spawn_agent","arguments":""}}`,
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"spawn_agent","namespace":"collaboration","arguments":""}}`,
 		"",
-		`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"collaboration__spawn_agent","arguments":"{}"}}`,
+		`data: {"type":"response.output_item.done","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"spawn_agent","namespace":"collaboration","arguments":"{}"}}`,
 		"",
-		`data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"collaboration__spawn_agent","arguments":"{}"}],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}`,
+		`data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"spawn_agent","namespace":"collaboration","arguments":"{}"}],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}`,
 		"",
 		"data: [DONE]",
 		"",
@@ -516,6 +533,10 @@ func TestOpenAIGatewayService_OAuthPassthrough_NamespaceRequestAndStreamResponse
 		Body:       io.NopCloser(strings.NewReader(upstreamSSE)),
 	}}
 	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	svc.openaiModelCapabilities.replaceFromManifest(
+		123,
+		[]byte(`{"models":[{"slug":"gpt-5.5","use_responses_lite":true}]}`),
+	)
 	account := &Account{
 		ID: 123, Name: "acc", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
@@ -529,12 +550,13 @@ func TestOpenAIGatewayService_OAuthPassthrough_NamespaceRequestAndStreamResponse
 	require.False(t, gjson.GetBytes(upstream.lastBody, "tools").Exists())
 	require.Equal(t, "additional_tools", gjson.GetBytes(upstream.lastBody, "input.0.type").String())
 	require.Len(t, gjson.GetBytes(upstream.lastBody, "input.0.tools").Array(), 2)
-	require.Equal(t, "plain", gjson.GetBytes(upstream.lastBody, "input.0.tools.0.name").String())
+	require.Equal(t, "namespace", gjson.GetBytes(upstream.lastBody, "input.0.tools.0.type").String())
+	require.Equal(t, "collaboration", gjson.GetBytes(upstream.lastBody, "input.0.tools.0.name").String())
+	require.Equal(t, "spawn_agent", gjson.GetBytes(upstream.lastBody, "input.0.tools.0.tools.0.name").String())
 	require.Equal(t, "function", gjson.GetBytes(upstream.lastBody, "input.0.tools.1.type").String())
-	require.Equal(t, "collaboration__spawn_agent", gjson.GetBytes(upstream.lastBody, "input.0.tools.1.name").String())
-	require.False(t, gjson.GetBytes(upstream.lastBody, "input.0.tools.1.tools").Exists())
+	require.Equal(t, "plain", gjson.GetBytes(upstream.lastBody, "input.0.tools.1.name").String())
 	require.Equal(t, "auto", gjson.GetBytes(upstream.lastBody, "tool_choice").String())
-	require.Equal(t, "collaboration__spawn_agent", gjson.GetBytes(upstream.lastBody, "input.2.name").String())
+	require.Equal(t, "spawn_agent", gjson.GetBytes(upstream.lastBody, "input.2.name").String())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "input.2.namespace").Exists())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "input.3.namespace").Exists())
 	require.Equal(t, "nested", gjson.GetBytes(upstream.lastBody, "input.3.content.0.namespace").String())
@@ -558,9 +580,9 @@ func TestOpenAIGatewayService_NativeOAuth_NamespaceRequestAndStreamResponse(t *t
 		"input":[{"type":"function_call","call_id":"call_old","name":"spawn_agent","namespace":"collaboration","arguments":"{}"}]
 	}`)
 	upstreamSSE := strings.Join([]string{
-		`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"collaboration__spawn_agent","arguments":""}}`,
+		`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"spawn_agent","namespace":"collaboration","arguments":""}}`,
 		"",
-		`data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"collaboration__spawn_agent","arguments":"{}"}],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}`,
+		`data: {"type":"response.completed","response":{"id":"resp_1","status":"completed","output":[{"type":"function_call","id":"fc_1","call_id":"call_1","name":"spawn_agent","namespace":"collaboration","arguments":"{}"}],"usage":{"input_tokens":2,"output_tokens":1,"total_tokens":3}}}`,
 		"",
 		"data: [DONE]",
 		"",
@@ -571,6 +593,10 @@ func TestOpenAIGatewayService_NativeOAuth_NamespaceRequestAndStreamResponse(t *t
 		Body:       io.NopCloser(strings.NewReader(upstreamSSE)),
 	}}
 	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+	svc.openaiModelCapabilities.replaceFromManifest(
+		124,
+		[]byte(`{"models":[{"slug":"gpt-5.5","use_responses_lite":true}]}`),
+	)
 	account := &Account{
 		ID: 124, Name: "native", Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"},
@@ -582,11 +608,12 @@ func TestOpenAIGatewayService_NativeOAuth_NamespaceRequestAndStreamResponse(t *t
 	require.NotNil(t, result)
 	require.False(t, gjson.GetBytes(upstream.lastBody, "tools").Exists())
 	require.Equal(t, "additional_tools", gjson.GetBytes(upstream.lastBody, "input.0.type").String())
-	require.Equal(t, "function", gjson.GetBytes(upstream.lastBody, "input.0.tools.0.type").String())
-	require.Equal(t, "collaboration__spawn_agent", gjson.GetBytes(upstream.lastBody, "input.0.tools.0.name").String())
+	require.Equal(t, "namespace", gjson.GetBytes(upstream.lastBody, "input.0.tools.0.type").String())
+	require.Equal(t, "collaboration", gjson.GetBytes(upstream.lastBody, "input.0.tools.0.name").String())
+	require.Equal(t, "spawn_agent", gjson.GetBytes(upstream.lastBody, "input.0.tools.0.tools.0.name").String())
 	require.Equal(t, "developer", gjson.GetBytes(upstream.lastBody, "input.1.role").String())
 	require.Equal(t, "test", gjson.GetBytes(upstream.lastBody, "input.1.content.0.text").String())
-	require.Equal(t, "collaboration__spawn_agent", gjson.GetBytes(upstream.lastBody, "input.2.name").String())
+	require.Equal(t, "spawn_agent", gjson.GetBytes(upstream.lastBody, "input.2.name").String())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "input.2.namespace").Exists())
 	require.NotContains(t, rec.Body.String(), "collaboration__spawn_agent")
 	require.Contains(t, rec.Body.String(), `"name":"spawn_agent"`)
@@ -685,7 +712,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_CompactUsesJSONAndKeepsNonStreami
 	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.1.0")
 	c.Request.Header.Set("Content-Type", "application/json")
 
-	originalBody := []byte(`{"model":"gpt-5.1-codex","stream":true,"store":true,"instructions":"local-test-instructions","input":[{"type":"text","text":"compact me"}]}`)
+	originalBody := []byte(`{"model":"gpt-5.4","stream":true,"store":true,"instructions":"local-test-instructions","input":[{"type":"text","text":"compact me"}]}`)
 	originalBody = codexOfficialIngressIdentityForTest(t, c, originalBody)
 
 	resp := &http.Response{
@@ -699,7 +726,6 @@ func TestOpenAIGatewayService_OAuthPassthrough_CompactUsesJSONAndKeepsNonStreami
 		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
 		httpUpstream: upstream,
 	}
-
 	account := &Account{
 		ID:             123,
 		Name:           "acc",
@@ -720,13 +746,14 @@ func TestOpenAIGatewayService_OAuthPassthrough_CompactUsesJSONAndKeepsNonStreami
 
 	require.False(t, gjson.GetBytes(upstream.lastBody, "store").Exists())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "stream").Exists())
-	require.Equal(t, "gpt-5.1-codex", gjson.GetBytes(upstream.lastBody, "model").String())
+	require.Equal(t, "gpt-5.4", gjson.GetBytes(upstream.lastBody, "model").String())
 	require.Equal(t, "compact me", gjson.GetBytes(upstream.lastBody, "input.0.text").String())
 	require.Equal(t, "local-test-instructions", strings.TrimSpace(gjson.GetBytes(upstream.lastBody, "instructions").String()))
-	require.Equal(t, "application/json", upstream.lastReq.Header.Get("Accept"))
-	// 官方出站画像不再携带旧 mimic 的 Version/session_id 头，改用 session-id 等新头
-	require.Empty(t, upstream.lastReq.Header.Get("Version"))
+	require.Empty(t, upstream.lastReq.Header.Get("Accept"))
+	// 官方 OAuth 画像携带当前 Codex version，旧 session_id 改用 session-id。
+	require.Equal(t, codexCLIVersion, upstream.lastReq.Header.Get("Version"))
 	require.NotEmpty(t, upstream.lastReq.Header.Get("session-id"))
+	require.Empty(t, upstream.lastReq.Header.Get("x-client-request-id"))
 	require.Equal(t, "chatgpt.com", upstream.lastReq.Host)
 	require.Equal(t, "chatgpt-acc", upstream.lastReq.Header.Get("chatgpt-account-id"))
 	require.Contains(t, rec.Body.String(), `"id":"cmp_123"`)
@@ -742,7 +769,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_UpstreamRequestIgnoresClientCance
 	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.1.0")
 	cancel()
 
-	originalBody := []byte(`{"model":"gpt-5.2","stream":true,"store":true,"instructions":"local-test-instructions","input":[{"type":"text","text":"hi"}]}`)
+	originalBody := []byte(`{"model":"gpt-5.4","stream":true,"store":true,"instructions":"local-test-instructions","input":[{"type":"text","text":"hi"}]}`)
 	originalBody = codexOfficialIngressIdentityForTest(t, c, originalBody)
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
@@ -806,6 +833,12 @@ func TestOpenAIGatewayService_OAuthPassthrough_CodexMissingInstructionsRejectedB
 		cfg:          &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
 		httpUpstream: upstream,
 	}
+	// 本用例专门覆盖历史 Codex 模型的 instructions 本地拒绝；显式注入
+	// 账号清单能力，避免测试依赖当前官方清单是否继续发布该历史模型。
+	svc.openaiModelCapabilities.replaceFromManifest(
+		123,
+		[]byte(`{"models":[{"slug":"gpt-5.1-codex","use_responses_lite":false}]}`),
+	)
 
 	account := &Account{
 		ID:             123,
@@ -832,17 +865,17 @@ func TestOpenAIGatewayService_OAuthPassthrough_CodexMissingInstructionsRejectedB
 	require.True(t, logSink.ContainsFieldValue("reject_reason", "instructions_missing"))
 }
 
-func TestOpenAIGatewayService_OAuthPassthrough_DisabledUsesLegacyTransform(t *testing.T) {
+func TestOpenAIGatewayService_OAuthPassthrough_DisabledStillNormalizesNonLiteProfile(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
-	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.1.0")
+	c.Request.Header.Set("User-Agent", "third-party-responses/1.0")
 
-	// store=true + stream=false should be forced to store=false + stream=true by applyCodexOAuthTransform (OAuth legacy path)
-	inputBody := []byte(`{"model":"gpt-5.2","stream":false,"store":true,"input":[{"type":"text","text":"hi"}]}`)
-	inputBody = codexOfficialIngressIdentityForTest(t, c, inputBody)
+	// openai_passthrough 是转发策略开关，不得关闭内置官方画像。非 Lite 只保留
+	// 顶层 instructions/tools 与可配置语义，固定外层字段仍必须对齐 Codex。
+	inputBody := []byte(`{"model":"gpt-5.4","instructions":"keep","stream":false,"store":true,"tool_choice":"required","include":["message.output_text.logprobs"],"max_output_tokens":123,"reasoning":{"effort":"medium","context":"none"},"input":[{"type":"text","text":"hi"}]}`)
 
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
@@ -872,10 +905,13 @@ func TestOpenAIGatewayService_OAuthPassthrough_DisabledUsesLegacyTransform(t *te
 	_, err := svc.Forward(context.Background(), c, account, inputBody)
 	require.NoError(t, err)
 
-	// legacy path rewrites request body (not byte-equal)
-	require.NotEqual(t, inputBody, upstream.lastBody)
-	require.Contains(t, string(upstream.lastBody), `"store":false`)
-	require.Contains(t, string(upstream.lastBody), `"stream":true`)
+	require.Equal(t, "keep", gjson.GetBytes(upstream.lastBody, "instructions").String())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "store").Bool())
+	require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
+	require.Equal(t, "auto", gjson.GetBytes(upstream.lastBody, "tool_choice").String())
+	require.Equal(t, "reasoning.encrypted_content", gjson.GetBytes(upstream.lastBody, "include.0").String())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "reasoning.context").Exists())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "max_output_tokens").Exists())
 }
 
 func TestOpenAIGatewayService_OAuthLegacy_UpstreamRequestIgnoresClientCancel(t *testing.T) {
@@ -888,7 +924,7 @@ func TestOpenAIGatewayService_OAuthLegacy_UpstreamRequestIgnoresClientCancel(t *
 	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.1.0")
 	cancel()
 
-	originalBody := []byte(`{"model":"gpt-5.2","stream":false,"store":true,"input":[{"type":"text","text":"hi"}]}`)
+	originalBody := []byte(`{"model":"gpt-5.4","stream":false,"store":true,"input":[{"type":"text","text":"hi"}]}`)
 	originalBody = codexOfficialIngressIdentityForTest(t, c, originalBody)
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
@@ -934,7 +970,7 @@ func TestOpenAIGatewayService_OAuthLegacy_CompositeCodexUAUsesCodexOriginator(t 
 	// 复合 UA（前缀不是 codex_cli_rs），历史实现会误判为非 Codex 并走 opencode。
 	c.Request.Header.Set("User-Agent", "Mozilla/5.0 codex_cli_rs/0.1.0")
 
-	inputBody := []byte(`{"model":"gpt-5.2","stream":true,"store":false,"input":[{"type":"text","text":"hi"}]}`)
+	inputBody := []byte(`{"model":"gpt-5.4","stream":true,"store":false,"input":[{"type":"text","text":"hi"}]}`)
 
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
@@ -978,7 +1014,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_ResponseHeadersAllowXCodex(t *tes
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
 	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.1.0")
 
-	originalBody := []byte(`{"model":"gpt-5.2","stream":true,"input":[{"type":"text","text":"hi"}]}`)
+	originalBody := []byte(`{"model":"gpt-5.4","stream":true,"input":[{"type":"text","text":"hi"}]}`)
 	originalBody = codexOfficialIngressIdentityForTest(t, c, originalBody)
 
 	headers := make(http.Header)
@@ -1037,7 +1073,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_UpstreamErrorIncludesPassthroughF
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
 	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.1.0")
 
-	originalBody := []byte(`{"model":"gpt-5.2","stream":false,"input":[{"type":"text","text":"hi"}]}`)
+	originalBody := []byte(`{"model":"gpt-5.4","stream":false,"input":[{"type":"text","text":"hi"}]}`)
 	originalBody = codexOfficialIngressIdentityForTest(t, c, originalBody)
 
 	resp := &http.Response{
@@ -1189,7 +1225,7 @@ func TestOpenAIGatewayService_APIKeyPassthrough_RebuildsUpstreamErrors(t *testin
 				Status:      StatusActive,
 				Schedulable: true,
 			}
-			requestBody := []byte(`{"model":"gpt-5.2","stream":false,"input":"hello"}`)
+			requestBody := []byte(`{"model":"gpt-5.4","stream":false,"input":"hello"}`)
 
 			_, err := svc.Forward(context.Background(), c, account, requestBody)
 
@@ -1280,7 +1316,7 @@ func TestOpenAIGatewayService_APIKeyPassthrough_CompactErrorBeforeKeepaliveIsSin
 		Extra:       map[string]any{"openai_passthrough": true}, Status: StatusActive, Schedulable: true,
 	}
 
-	_, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-5.2","input":"hello"}`))
+	_, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-5.4","input":"hello"}`))
 
 	require.Error(t, err)
 	require.Equal(t, http.StatusBadRequest, rec.Code)
@@ -1315,7 +1351,7 @@ func TestOpenAIGatewayService_APIKeyPassthrough_CompactErrorAfterKeepaliveIsFail
 		Extra:       map[string]any{"openai_passthrough": true}, Status: StatusActive, Schedulable: true,
 	}
 
-	_, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-5.2","input":"hello"}`))
+	_, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-5.4","input":"hello"}`))
 
 	require.Error(t, err)
 	require.Equal(t, http.StatusOK, rec.Code)
@@ -1331,7 +1367,7 @@ func TestOpenAIGatewayService_APIKeyPassthrough_CompactErrorAfterKeepaliveIsFail
 
 func TestOpenAIGatewayService_OpenAIPassthrough_RetryableStatusesTriggerFailover(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	originalBody := []byte(`{"model":"gpt-5.2","stream":false,"instructions":"local-test-instructions","input":[{"type":"text","text":"hi"}]}`)
+	originalBody := []byte(`{"model":"gpt-5.4","stream":false,"instructions":"local-test-instructions","input":[{"type":"text","text":"hi"}]}`)
 
 	newAccount := func(accountType string) *Account {
 		account := &Account{
@@ -1523,7 +1559,7 @@ func TestOpenAIGatewayService_OpenAIPassthrough_RetryableStatusesTriggerFailover
 
 func TestOpenAIGatewayService_APIKeyPassthrough_Transient5xxTriggersFailover(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	requestBody := []byte(`{"model":"gpt-5.2","stream":false,"input":"hello"}`)
+	requestBody := []byte(`{"model":"gpt-5.4","stream":false,"input":"hello"}`)
 
 	for _, statusCode := range []int{
 		http.StatusInternalServerError,
@@ -1612,7 +1648,7 @@ func TestOpenAIGatewayService_APIKeyPassthrough_ContextWindow502DoesNotFailover(
 		Extra:       map[string]any{"openai_passthrough": true}, Status: StatusActive, Schedulable: true,
 	}
 
-	result, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-5.2","input":"hello"}`))
+	result, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-5.4","input":"hello"}`))
 
 	require.Nil(t, result)
 	require.Error(t, err)
@@ -1649,7 +1685,7 @@ func TestOpenAIGatewayService_APIKeyPassthrough_PoolModeConfigured5xxRetriesSame
 		Extra: map[string]any{"openai_passthrough": true}, Status: StatusActive, Schedulable: true,
 	}
 
-	_, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-5.2","input":"hello"}`))
+	_, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-5.4","input":"hello"}`))
 
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
@@ -1734,7 +1770,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_NonCodexUAFallbackToCodexUA(t *te
 	// Non-Codex UA
 	c.Request.Header.Set("User-Agent", "curl/8.0")
 
-	inputBody := []byte(`{"model":"gpt-5.2","stream":false,"store":true,"input":[{"type":"text","text":"hi"}]}`)
+	inputBody := []byte(`{"model":"gpt-5.4","stream":false,"store":true,"input":[{"type":"text","text":"hi"}]}`)
 
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
@@ -1784,7 +1820,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_CodexTuiIdentityPreservedAndPaire
 	// 客户端携带错配的 originator，也必须按最终 UA 重配。
 	c.Request.Header.Set("originator", "codex_cli_rs")
 
-	inputBody := []byte(`{"model":"gpt-5.2","stream":false,"store":true,"input":[{"type":"text","text":"hi"}]}`)
+	inputBody := []byte(`{"model":"gpt-5.4","stream":false,"store":true,"input":[{"type":"text","text":"hi"}]}`)
 	inputBody = codexOfficialIngressIdentityForTest(t, c, inputBody)
 
 	resp := &http.Response{
@@ -1829,7 +1865,7 @@ func TestOpenAIGatewayService_CodexCLIOnly_RejectsNonCodexClient(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
 	c.Request.Header.Set("User-Agent", "curl/8.0")
 
-	inputBody := []byte(`{"model":"gpt-5.2","stream":false,"store":true,"input":[{"type":"text","text":"hi"}]}`)
+	inputBody := []byte(`{"model":"gpt-5.4","stream":false,"store":true,"input":[{"type":"text","text":"hi"}]}`)
 
 	svc := &OpenAIGatewayService{
 		cfg: &config.Config{Gateway: config.GatewayConfig{ForceCodexCLI: false}},
@@ -1883,7 +1919,7 @@ func TestOpenAIGatewayService_CodexCLIOnly_AllowOfficialClientFamilies(t *testin
 			// 故官方家族也须携带 x-codex-* 才能过门（对齐 TestDetect_EngineFingerprintSignals）。
 			c.Request.Header.Set("x-codex-window-id", "1")
 
-			inputBody := []byte(`{"model":"gpt-5.2","stream":false,"store":true,"input":[{"type":"text","text":"hi"}]}`)
+			inputBody := []byte(`{"model":"gpt-5.4","stream":false,"store":true,"input":[{"type":"text","text":"hi"}]}`)
 			// 官方 UA/originator 命中 strict 身份校验，须携带完整 Codex 身份（会覆盖上面的指纹占位头）
 			inputBody = codexOfficialIngressIdentityForTest(t, c, inputBody)
 
@@ -1927,7 +1963,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_StreamingSetsFirstTokenMs(t *test
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
 	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.1.0")
 
-	originalBody := []byte(`{"model":"gpt-5.2","stream":true,"service_tier":"fast","input":[{"type":"text","text":"hi"}]}`)
+	originalBody := []byte(`{"model":"gpt-5.4","stream":true,"service_tier":"fast","input":[{"type":"text","text":"hi"}]}`)
 	originalBody = codexOfficialIngressIdentityForTest(t, c, originalBody)
 
 	upstreamSSE := strings.Join([]string{
@@ -1982,7 +2018,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_StreamClientDisconnectStillCollec
 	// 首次写入成功，后续写入失败，模拟客户端中途断开。
 	c.Writer = &failingGinWriter{ResponseWriter: c.Writer, failAfter: 1}
 
-	originalBody := []byte(`{"model":"gpt-5.2","stream":true,"input":[{"type":"text","text":"hi"}]}`)
+	originalBody := []byte(`{"model":"gpt-5.4","stream":true,"input":[{"type":"text","text":"hi"}]}`)
 	originalBody = codexOfficialIngressIdentityForTest(t, c, originalBody)
 
 	upstreamSSE := strings.Join([]string{
@@ -2040,7 +2076,7 @@ func TestOpenAIGatewayService_APIKeyPassthrough_PreservesBodyAndUsesResponsesEnd
 	c.Request.Header.Set("X-Codex-Window-ID", "window-passthrough")
 	c.Request.Header.Set("X-Codex-Installation-ID", "installation-passthrough")
 
-	originalBody := []byte(`{"model":"gpt-5.2","stream":false,"service_tier":"flex","max_output_tokens":128,"input":[{"type":"text","text":"hi"}]}`)
+	originalBody := []byte(`{"model":"gpt-5.4","stream":false,"service_tier":"flex","max_output_tokens":128,"input":[{"type":"text","text":"hi"}]}`)
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid"}},
@@ -2091,7 +2127,7 @@ func TestOpenAIGatewayService_APIKeyPassthrough_CompactNormalizesBodyAndKeepsNon
 	c.Request.Header.Set("User-Agent", "curl/8.0")
 	c.Request.Header.Set("Accept", "text/event-stream")
 
-	originalBody := []byte(`{"model":"gpt-5.2","stream":true,"store":true,"prompt_cache_key":"client-cache","client_metadata":{"x-codex-turn-metadata":"client"},"service_tier":"flex","instructions":"compact-test","input":[{"type":"text","text":"compact me"}]}`)
+	originalBody := []byte(`{"model":"gpt-5.4","stream":true,"store":true,"prompt_cache_key":"client-cache","client_metadata":{"x-codex-turn-metadata":"client"},"service_tier":"flex","instructions":"compact-test","input":[{"type":"text","text":"compact me"}]}`)
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid-compact-apikey"}},
@@ -2130,8 +2166,8 @@ func TestOpenAIGatewayService_APIKeyPassthrough_CompactNormalizesBodyAndKeepsNon
 	require.False(t, gjson.GetBytes(upstream.lastBody, "store").Exists())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").Exists())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "client_metadata").Exists())
-	require.False(t, gjson.GetBytes(upstream.lastBody, "service_tier").Exists())
-	require.Equal(t, "gpt-5.2", gjson.GetBytes(upstream.lastBody, "model").String())
+	require.Equal(t, "flex", gjson.GetBytes(upstream.lastBody, "service_tier").String())
+	require.Equal(t, "gpt-5.4", gjson.GetBytes(upstream.lastBody, "model").String())
 	require.Equal(t, "compact-test", gjson.GetBytes(upstream.lastBody, "instructions").String())
 	require.Equal(t, "compact me", gjson.GetBytes(upstream.lastBody, "input.0.text").String())
 	require.Contains(t, rec.Body.String(), `"id":"cmp_apikey"`)
@@ -2148,7 +2184,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_WarnOnTimeoutHeadersForStream(t *
 	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.1.0")
 	c.Request.Header.Set("x-stainless-timeout", "10000")
 
-	originalBody := []byte(`{"model":"gpt-5.2","stream":true,"input":[{"type":"text","text":"hi"}]}`)
+	originalBody := []byte(`{"model":"gpt-5.4","stream":true,"input":[{"type":"text","text":"hi"}]}`)
 	originalBody = codexOfficialIngressIdentityForTest(t, c, originalBody)
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
@@ -2189,7 +2225,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_InfoWhenStreamEndsWithoutDone(t *
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
 	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.1.0")
 
-	originalBody := []byte(`{"model":"gpt-5.2","stream":true,"input":[{"type":"text","text":"hi"}]}`)
+	originalBody := []byte(`{"model":"gpt-5.4","stream":true,"input":[{"type":"text","text":"hi"}]}`)
 	originalBody = codexOfficialIngressIdentityForTest(t, c, originalBody)
 	// 注意：刻意不发送 [DONE]，模拟上游中途断流。
 	resp := &http.Response{
@@ -2232,7 +2268,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_DefaultFiltersTimeoutHeaders(t *t
 	c.Request.Header.Set("x-stainless-timeout", "120000")
 	c.Request.Header.Set("X-Test", "keep")
 
-	originalBody := []byte(`{"model":"gpt-5.2","stream":true,"input":[{"type":"text","text":"hi"}]}`)
+	originalBody := []byte(`{"model":"gpt-5.4","stream":true,"input":[{"type":"text","text":"hi"}]}`)
 	originalBody = codexOfficialIngressIdentityForTest(t, c, originalBody)
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
@@ -2279,7 +2315,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_AllowTimeoutHeadersWhenConfigured
 	c.Request.Header.Set("x-stainless-timeout", "120000")
 	c.Request.Header.Set("X-Test", "keep")
 
-	originalBody := []byte(`{"model":"gpt-5.2","stream":true,"input":[{"type":"text","text":"hi"}]}`)
+	originalBody := []byte(`{"model":"gpt-5.4","stream":true,"input":[{"type":"text","text":"hi"}]}`)
 	originalBody = codexOfficialIngressIdentityForTest(t, c, originalBody)
 	resp := &http.Response{
 		StatusCode: http.StatusOK,

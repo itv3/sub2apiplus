@@ -246,6 +246,16 @@ func newOpenAIOfficialEgressHTTPTLSProfile() *tlsfingerprint.Profile {
 	}
 }
 
+// OpenAIOfficialEgressHTTPTLSProfile 为需要复用当前 Codex HTTP 传输画像的
+// 辅助客户端提供只读新实例。调用方必须按实际是否经过代理选择画像，且不得修改
+// 返回值后跨请求共享。
+func OpenAIOfficialEgressHTTPTLSProfile(proxy bool) *tlsfingerprint.Profile {
+	if proxy {
+		return newOpenAIOfficialEgressHTTPProxyTLSProfile()
+	}
+	return newOpenAIOfficialEgressHTTPTLSProfile()
+}
+
 // newOpenAIOfficialEgressHTTPProxyTLSProfile 复现 Codex CLI 0.145.0
 // 通过 HTTP CONNECT 代理发送 Responses HTTP 时的 rustls ClientHello。
 // 阶段 0 的 client_to_mitm 抓包证明该路径使用 10 个 cipher、

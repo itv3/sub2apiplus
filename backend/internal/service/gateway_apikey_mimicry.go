@@ -90,7 +90,9 @@ func buildDefaultAPIKeyMimicBetaHeaderForProfile(body []byte, selectStructuredOu
 			AnthropicAPIKeyBetaEffort,
 		)
 	}
-	if selectStructuredOutputs && apiKeyMimicBodyRequiresStructuredOutputs(body) {
+	if selectStructuredOutputs &&
+		apiKeyMimicBodyRequiresStructuredOutputs(body) &&
+		anthropicModelSupportsStructuredOutputs(modelID) {
 		replacedLegacyFallback := false
 		for i, beta := range betas {
 			if beta == AnthropicAPIKeyBetaFallbackCredit {
@@ -151,6 +153,10 @@ func apiKeyMimicBodyRequiresStructuredOutputs(body []byte) bool {
 	return gjson.GetBytes(body, "output_config.format.type").String() == "json_schema"
 }
 
+func anthropicModelSupportsStructuredOutputs(modelID string) bool {
+	return !strings.Contains(strings.ToLower(strings.TrimSpace(modelID)), "haiku")
+}
+
 func anthropicAPIKeyMimicExtraBetas(modelID string) []string {
 	if requiresContext1MBetaForAPIKeyMimic(modelID) {
 		return []string{claude.BetaContext1M}
@@ -163,6 +169,7 @@ func requiresContext1MBetaForAPIKeyMimic(modelID string) bool {
 	return strings.HasPrefix(modelID, "claude-opus-4-6") ||
 		strings.HasPrefix(modelID, "claude-opus-4-7") ||
 		strings.HasPrefix(modelID, "claude-opus-4-8") ||
+		strings.HasPrefix(modelID, "claude-sonnet-4") ||
 		strings.HasPrefix(modelID, "claude-fable-5")
 }
 

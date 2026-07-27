@@ -206,6 +206,10 @@ func TestOpenAIGatewayServiceForwardOAuthCompactDowngradesMaxEffort(t *testing.T
 		Status:      StatusActive,
 		Schedulable: true,
 	}
+	svc.openaiModelCapabilities.replaceFromManifest(
+		account.ID,
+		[]byte(`{"models":[{"slug":"gpt-5.6-sol","use_responses_lite":true}]}`),
+	)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses/compact", nil)
@@ -255,6 +259,10 @@ func TestOpenAIGatewayServiceForwardOAuthRemoteCompactV2PreservesResponsesWire(t
 		Status:      StatusActive,
 		Schedulable: true,
 	}
+	svc.openaiModelCapabilities.replaceFromManifest(
+		account.ID,
+		[]byte(`{"models":[{"slug":"gpt-5.6-sol","use_responses_lite":true}]}`),
+	)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)

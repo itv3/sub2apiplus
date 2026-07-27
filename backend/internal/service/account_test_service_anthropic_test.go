@@ -23,7 +23,7 @@ func TestAccountTestService_AnthropicAPIKeyMimicUsesFullGatewayRequest(t *testin
 		{
 			name:        "开启兼容时复用完整 mimic 构造链",
 			mimic:       true,
-			wantHeader:  defaultAPIKeyMimicBetaHeader(nil) + "," + claude.BetaContext1M,
+			wantHeader:  defaultAPIKeyMimicBetaHeader([]byte(`{"model":"claude-fable-5"}`)),
 			wantContext: true,
 		},
 		{
@@ -85,6 +85,13 @@ func TestAccountTestService_AnthropicAPIKeyMimicUsesFullGatewayRequest(t *testin
 			require.Equal(t, tt.wantHeader, betaHeader)
 			if tt.wantContext {
 				require.Contains(t, betaHeader, claude.BetaContext1M)
+				require.Contains(t, betaHeader, claude.BetaEffort)
+				require.Less(
+					t,
+					strings.Index(betaHeader, claude.BetaContext1M),
+					strings.Index(betaHeader, claude.BetaEffort),
+					"context-1m beta 必须位于 effort beta 之前",
+				)
 				require.Equal(t, "application/json", getHeaderRaw(req.Header, "Accept"))
 				require.Equal(t, "claude-cli/2.1.220 (external, sdk-cli)", getHeaderRaw(req.Header, "User-Agent"))
 				require.Equal(t, "test-key", getHeaderRaw(req.Header, "x-api-key"))

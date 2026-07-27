@@ -4,10 +4,8 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -16,8 +14,6 @@ import (
 
 const stickySessionPrefix = "sticky_session:"
 const liveCallPrefix = "live:call:"
-
-const anthropicPreviousRequestPrefix = "official_egress:anthropic:previous_request:"
 
 type gatewayCache struct {
 	rdb *redis.Client
@@ -58,36 +54,6 @@ func (c *gatewayCache) RefreshSessionTTL(ctx context.Context, groupID int64, ses
 func (c *gatewayCache) DeleteSessionAccountID(ctx context.Context, groupID int64, sessionHash string) error {
 	key := buildSessionKey(groupID, sessionHash)
 	return c.rdb.Del(ctx, key).Err()
-}
-
-// 编译期确认 gatewayCache 具备 Anthropic 官方出口响应映射能力。
-var _ service.AnthropicOfficialEgressResponseStore = (*gatewayCache)(nil)
-
-// GetAnthropicPreviousRequestID 读取同一账号、同一客户端会话最近一次成功响应的 request-id。
-func (c *gatewayCache) GetAnthropicPreviousRequestID(ctx context.Context, sessionKey string) (string, error) {
-	value, err := c.rdb.Get(ctx, anthropicPreviousRequestPrefix+sessionKey).Result()
-	if errors.Is(err, redis.Nil) {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(value), nil
-}
-
-// SetAnthropicPreviousRequestID 保存响应映射；键由 service 层散列，Redis 中不出现明文会话。
-func (c *gatewayCache) SetAnthropicPreviousRequestID(
-	ctx context.Context,
-	sessionKey string,
-	requestID string,
-	ttl time.Duration,
-) error {
-	return c.rdb.Set(
-		ctx,
-		anthropicPreviousRequestPrefix+sessionKey,
-		strings.TrimSpace(requestID),
-		ttl,
-	).Err()
 }
 
 // Compile-time assertion: gatewayCache must implement CyberSessionBlockStore.

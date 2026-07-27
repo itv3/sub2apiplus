@@ -191,6 +191,31 @@ func TestOpenAIGatewayService_RetriesExplicitMaxOutputTokensRejection(t *testing
 	require.Equal(t, "keep", gjson.GetBytes(upstream.bodies[1], "input.0.content.max_output_tokens").String())
 }
 
+func TestOpenAIGatewayService_OAuthHTTPReplaysUpstreamTurnStateOnlyWithinRetry(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4","stream":false,"instructions":"test","max_output_tokens":4096,"input":"hello"}`)
+	first := newOpenAIRejectedFieldTestResponse(http.StatusBadRequest, `{"error":{"code":"unsupported_parameter","message":"Unsupported parameter: max_output_tokens","param":"max_output_tokens"}}`)
+	first.Header.Set(openAIWSTurnStateHeader, "turn-state-upstream")
+	upstream := &httpUpstreamRecorder{responses: []*http.Response{
+		first,
+		newOpenAIRejectedFieldTestResponse(http.StatusOK, `{"id":"resp_turn_state_ok","output":[],"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}`),
+	}}
+	c := newOpenAIRejectedFieldTestContext(body)
+	c.Request.Header.Set(openAIWSTurnStateHeader, "turn-state-client")
+
+	result, err := newOpenAIRejectedFieldTestService(upstream).Forward(
+		context.Background(),
+		c,
+		newOpenAIOAuthNamespaceTestAccount(),
+		body,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	require.Len(t, upstream.requests, 2)
+	require.Empty(t, upstream.requests[0].Header.Get(openAIWSTurnStateHeader), "客户端 turn-state 不得上行")
+	require.Equal(t, "turn-state-upstream", upstream.requests[1].Header.Get(openAIWSTurnStateHeader))
+}
+
 func TestOpenAIGatewayService_ComposesProactiveNamespaceStripWithRejectedFieldRetry(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.5","stream":false,"max_output_tokens":2048,"input":[{"type":"function_call","name":"first","namespace":"remove-first","arguments":"{}"},{"type":"custom_tool_call","name":"second","namespace":"remove-second","input":"{}"}]}`)
 	upstream := &httpUpstreamRecorder{responses: []*http.Response{

@@ -158,6 +158,10 @@ func TestOfficialEgressT1_OpenAIHTTPBuiltInProfileOwnsBodyAndIdentity(t *testing
 		}},
 		httpUpstream: upstream,
 	}
+	svc.openaiModelCapabilities.replaceFromManifest(
+		94,
+		[]byte(`{"models":[{"slug":"gpt-5.6-luna","use_responses_lite":true}]}`),
+	)
 	account := newOfficialOpenAIHTTPTestAccount(94)
 
 	result, err := svc.Forward(context.Background(), c, account, body)

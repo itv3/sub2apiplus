@@ -13,8 +13,10 @@ if __package__ in {None, ""}:
 
 from tools.official_client_capture.capturelib.analysis import (
     OFFICIAL_EGRESS_CONTRACTS,
+    OFFICIAL_EGRESS_TLS_CONTRACTS,
     compare_normalized,
     compare_official_egress_contract,
+    compare_official_egress_tls_contract,
 )
 from tools.official_client_capture.capturelib.security import secure_write_json
 
@@ -34,12 +36,25 @@ def main() -> int:
         type=Path,
         help="契约验收所需的同次候选入站规范化证据。",
     )
+    parser.add_argument(
+        "--tls-contract",
+        choices=OFFICIAL_EGRESS_TLS_CONTRACTS,
+        help="从 direct pcap 规范化结果中筛选并比较目标业务 Transport。",
+    )
     arguments = parser.parse_args()
+    if arguments.contract and arguments.tls_contract:
+        parser.error("--contract 与 --tls-contract 不能同时提供。")
     if bool(arguments.contract) != bool(arguments.candidate_ingress):
         parser.error("--contract 与 --candidate-ingress 必须同时提供。")
     baseline = json.loads(arguments.baseline.read_text(encoding="utf-8"))
     candidate = json.loads(arguments.candidate.read_text(encoding="utf-8"))
-    if arguments.contract:
+    if arguments.tls_contract:
+        result = compare_official_egress_tls_contract(
+            baseline,
+            candidate,
+            arguments.tls_contract,
+        )
+    elif arguments.contract:
         candidate_ingress = json.loads(
             arguments.candidate_ingress.read_text(encoding="utf-8")
         )

@@ -32,6 +32,26 @@ type claudeOAuthService struct {
 	clientFactory func(proxyURL string) (*req.Client, error)
 }
 
+const claudeOAuthAxiosUserAgent = "axios/1.15.2"
+
+// claudeOAuthAuthorizationCodeBody 保持与官方客户端对象的字段顺序一致。
+type claudeOAuthAuthorizationCodeBody struct {
+	GrantType    string `json:"grant_type"`
+	Code         string `json:"code"`
+	RedirectURI  string `json:"redirect_uri"`
+	ClientID     string `json:"client_id"`
+	CodeVerifier string `json:"code_verifier"`
+	State        string `json:"state,omitempty"`
+}
+
+// claudeOAuthRefreshTokenBody 保持与官方客户端对象的字段顺序及默认 scope 一致。
+type claudeOAuthRefreshTokenBody struct {
+	GrantType    string `json:"grant_type"`
+	RefreshToken string `json:"refresh_token"`
+	ClientID     string `json:"client_id"`
+	Scope        string `json:"scope"`
+}
+
 func (s *claudeOAuthService) GetOrganizationUUID(ctx context.Context, sessionKey, proxyURL string) (string, error) {
 	client, err := s.clientFactory(proxyURL)
 	if err != nil {
@@ -185,20 +205,24 @@ func (s *claudeOAuthService) ExchangeCodeForToken(ctx context.Context, code, cod
 		codeState = code[idx+1:]
 	}
 
-	reqBody := map[string]any{
-		"code":          authCode,
-		"grant_type":    "authorization_code",
-		"client_id":     oauth.ClientID,
-		"redirect_uri":  oauth.RedirectURI,
-		"code_verifier": codeVerifier,
-	}
-
-	if codeState != "" {
-		reqBody["state"] = codeState
+	reqBody := claudeOAuthAuthorizationCodeBody{
+		GrantType:    "authorization_code",
+		Code:         authCode,
+		RedirectURI:  oauth.RedirectURI,
+		ClientID:     oauth.ClientID,
+		CodeVerifier: codeVerifier,
+		State:        codeState,
 	}
 
 	logger.LegacyPrintf("repository.claude_oauth", "[OAuth] Step 3: Exchanging code for token at %s", s.tokenURL)
-	reqBodyJSON, _ := json.Marshal(logredact.RedactMap(reqBody))
+	reqBodyJSON, _ := json.Marshal(logredact.RedactMap(map[string]any{
+		"grant_type":    reqBody.GrantType,
+		"code":          reqBody.Code,
+		"redirect_uri":  reqBody.RedirectURI,
+		"client_id":     reqBody.ClientID,
+		"code_verifier": reqBody.CodeVerifier,
+		"state":         reqBody.State,
+	}))
 	logger.LegacyPrintf("repository.claude_oauth", "[OAuth] Step 3 Request Body: %s", string(reqBodyJSON))
 
 	var tokenResp oauth.TokenResponse
@@ -207,7 +231,7 @@ func (s *claudeOAuthService) ExchangeCodeForToken(ctx context.Context, code, cod
 		SetContext(ctx).
 		SetHeader("Accept", "application/json, text/plain, */*").
 		SetHeader("Content-Type", "application/json").
-		SetHeader("User-Agent", "axios/1.13.6").
+		SetHeader("User-Agent", claudeOAuthAxiosUserAgent).
 		SetBody(reqBody).
 		SetSuccessResult(&tokenResp).
 		Post(s.tokenURL)
@@ -233,10 +257,11 @@ func (s *claudeOAuthService) RefreshToken(ctx context.Context, refreshToken, pro
 		return nil, fmt.Errorf("create HTTP client: %w", err)
 	}
 
-	reqBody := map[string]any{
-		"grant_type":    "refresh_token",
-		"refresh_token": refreshToken,
-		"client_id":     oauth.ClientID,
+	reqBody := claudeOAuthRefreshTokenBody{
+		GrantType:    "refresh_token",
+		RefreshToken: refreshToken,
+		ClientID:     oauth.ClientID,
+		Scope:        oauth.ScopeAPI,
 	}
 
 	var tokenResp oauth.TokenResponse
@@ -245,7 +270,7 @@ func (s *claudeOAuthService) RefreshToken(ctx context.Context, refreshToken, pro
 		SetContext(ctx).
 		SetHeader("Accept", "application/json, text/plain, */*").
 		SetHeader("Content-Type", "application/json").
-		SetHeader("User-Agent", "axios/1.13.6").
+		SetHeader("User-Agent", claudeOAuthAxiosUserAgent).
 		SetBody(reqBody).
 		SetSuccessResult(&tokenResp).
 		Post(s.tokenURL)

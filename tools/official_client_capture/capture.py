@@ -39,6 +39,7 @@ from tools.official_client_capture.capturelib.manifest import Manifest  # noqa: 
 from tools.official_client_capture.capturelib.model import (  # noqa: E402
     EVIDENCE_MODES,
     SCENARIOS,
+    SUBJECTS,
     CampaignPlan,
     CaptureCase,
     ConfigurationError,
@@ -354,32 +355,46 @@ def _preflight_dependencies(
     }
 
 
-def _verify_oauth_state(arguments: argparse.Namespace) -> dict[str, Any]:
+def _verify_oauth_state(
+    arguments: argparse.Namespace,
+    selected_subjects: tuple[str, ...],
+    oauth_claude_secret: str | None,
+) -> dict[str, Any]:
     """只读取本地登录状态，不发送模型请求、不记录账号标识。"""
 
     environment = clean_environment(os.environ)
-    claude_status = _command_output(
-        [str(arguments.claude_bin), "auth", "status", "--json"], environment
-    )
-    try:
-        claude_payload = json.loads(claude_status)
-    except ValueError as error:
-        raise ConfigurationError("Claude OAuth 状态不是合法 JSON。") from error
-    if not claude_payload.get("loggedIn"):
-        raise ConfigurationError("Claude OAuth 状态未登录。")
-    codex_status = _command_output(
-        [str(arguments.codex_bin), "login", "status"], environment
-    )
-    if "logged in" not in codex_status.lower():
-        raise ConfigurationError("Codex OAuth 状态未登录。")
-    return {
-        "claude": {
-            "logged_in": True,
-            "auth_method": claude_payload.get("authMethod"),
-            "api_provider": claude_payload.get("apiProvider"),
-        },
-        "codex": {"logged_in": True, "method": "chatgpt_oauth_state"},
-    }
+    result: dict[str, Any] = {}
+    if "claude-http" in selected_subjects:
+        if oauth_claude_secret:
+            result["claude"] = {
+                "logged_in": True,
+                "auth_method": "runtime_oauth_token_override",
+                "api_provider": "firstParty",
+            }
+        else:
+            claude_status = _command_output(
+                [str(arguments.claude_bin), "auth", "status", "--json"],
+                environment,
+            )
+            try:
+                claude_payload = json.loads(claude_status)
+            except ValueError as error:
+                raise ConfigurationError("Claude OAuth 状态不是合法 JSON。") from error
+            if not claude_payload.get("loggedIn"):
+                raise ConfigurationError("Claude OAuth 状态未登录。")
+            result["claude"] = {
+                "logged_in": True,
+                "auth_method": claude_payload.get("authMethod"),
+                "api_provider": claude_payload.get("apiProvider"),
+            }
+    if any(subject.startswith("codex-") for subject in selected_subjects):
+        codex_status = _command_output(
+            [str(arguments.codex_bin), "login", "status"], environment
+        )
+        if "logged in" not in codex_status.lower():
+            raise ConfigurationError("Codex OAuth 状态未登录。")
+        result["codex"] = {"logged_in": True, "method": "chatgpt_oauth_state"}
+    return result
 
 
 @contextlib.contextmanager
@@ -482,6 +497,7 @@ def _run_case_scenario(
     run_dir: Path,
     arguments: argparse.Namespace,
     api_secret: str | None,
+    oauth_claude_secret: str | None,
     claude_api_home: Path | None,
     codex_api_home: Path | None,
     scenario: str,
@@ -501,6 +517,7 @@ def _run_case_scenario(
         codex_api_home=codex_api_home,
         proxy_url=f"http://127.0.0.1:{arguments.mitm_port}",
         ca_bundle=arguments.ca_bundle,
+        oauth_claude_secret=oauth_claude_secret,
     )
     capture_environment = clean_environment(os.environ)
     capture_environment.pop(arguments.api_key_env, None)
@@ -546,6 +563,11 @@ def _run_case_scenario(
                         ),
                     )
                     journal_active = True
+        runtime_secret = (
+            api_secret
+            if case.task == "api"
+            else oauth_claude_secret if case.product == "claude" else None
+        )
         if case.product == "claude":
             summary = run_claude_scenario(
                 claude_bin=str(arguments.claude_bin),
@@ -554,7 +576,7 @@ def _run_case_scenario(
                 environment=environment,
                 output_dir=result_dir,
                 timeout=arguments.timeout,
-                runtime_secret=api_secret,
+                runtime_secret=runtime_secret,
             )
         else:
             summary = run_codex_scenario(
@@ -565,8 +587,9 @@ def _run_case_scenario(
                 environment=environment,
                 output_dir=result_dir,
                 timeout=arguments.timeout,
-                runtime_secret=api_secret,
+                runtime_secret=runtime_secret,
                 api_key_env=arguments.api_key_env,
+                codex_version=arguments.expected_codex_version,
             )
         if not summary.get("valid"):
             raise RuntimeError(
@@ -652,6 +675,7 @@ def _run_campaign(
     arguments: argparse.Namespace,
     clients: dict[str, Any],
     api_secret: str | None,
+    oauth_claude_secret: str | None,
     runtime: dict[str, Any],
 ) -> dict[str, Any]:
     run_dir = arguments.run_root / plan.task / plan.run_id
@@ -675,28 +699,37 @@ def _run_campaign(
                     run_dir=run_dir,
                     arguments=arguments,
                     api_secret=api_secret,
+                    oauth_claude_secret=oauth_claude_secret,
                     claude_api_home=claude_api_home,
                     codex_api_home=codex_api_home,
                     scenario=scenario,
                     journal=journal,
                 )
                 manifest.add_case_result(result)
-                secret_matches = scan_for_secret(run_dir, api_secret)
+                runtime_secret = api_secret or oauth_claude_secret
+                secret_matches = scan_for_secret(run_dir, runtime_secret)
                 if secret_matches:
-                    scrub_known_secret(run_dir, api_secret)
+                    scrub_known_secret(run_dir, runtime_secret)
                     raise SecretLeakDetected(secret_matches)
-        secret_matches = scan_for_secret(run_dir, api_secret)
+        runtime_secret = api_secret or oauth_claude_secret
+        secret_matches = scan_for_secret(run_dir, runtime_secret)
         journal.finalize(status="complete", cleanup_successful=True)
         manifest.finalize(
             status="complete",
             cleanup_successful=True,
             secret_matches=secret_matches,
             secret_scan_scope=(
-                ["api_runtime_key_value"] if api_secret is not None else []
+                [
+                    "api_runtime_key_value"
+                    if api_secret is not None
+                    else "claude_oauth_runtime_token_value"
+                ]
+                if runtime_secret is not None
+                else []
             ),
             secret_scan_limitation=(
                 None
-                if api_secret is not None
+                if runtime_secret is not None
                 else "OAuth 凭据未读入编排器内存，仅执行结构脱敏，未做值匹配扫描。"
             ),
         )
@@ -719,31 +752,36 @@ def _run_campaign(
         if isinstance(error, CaptureInterrupted):
             journal.note_signal(error.signum)
         journal.finalize(status=status, cleanup_successful=cleanup_successful)
-        safe_error = redact_known_secret(str(error), api_secret)
+        runtime_secret = api_secret or oauth_claude_secret
+        safe_error = redact_known_secret(str(error), runtime_secret)
         secret_matches = (
             error.matches
             if isinstance(error, SecretLeakDetected)
-            else scan_for_secret(run_dir, api_secret)
+            else scan_for_secret(run_dir, runtime_secret)
         )
         if secret_matches:
-            scrub_known_secret(run_dir, api_secret)
+            scrub_known_secret(run_dir, runtime_secret)
         manifest.finalize(
             status=status,
             cleanup_successful=cleanup_successful,
             secret_matches=secret_matches,
             secret_scan_scope=(
-                ["api_runtime_key_value"] if api_secret is not None else []
+                [
+                    "api_runtime_key_value"
+                    if api_secret is not None
+                    else "claude_oauth_runtime_token_value"
+                ]
+                if runtime_secret is not None
+                else []
             ),
             secret_scan_limitation=(
                 None
-                if api_secret is not None
+                if runtime_secret is not None
                 else "OAuth 凭据未读入编排器内存，仅执行结构脱敏，未做值匹配扫描。"
             ),
             error=safe_error,
         )
         raise
-
-
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="执行 OAuth 与 API 两套相互独立的官方客户端抓包任务。"
@@ -759,9 +797,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--batch-id", default=make_batch_id())
     parser.add_argument("--scenarios", default="s1,s2,s4")
+    parser.add_argument("--subjects", default=",".join(SUBJECTS))
     parser.add_argument("--evidence", default="direct,mitm")
     parser.add_argument("--sub2api-base-url")
     parser.add_argument("--api-key-env", default="SUB2API_CAPTURE_API_KEY")
+    parser.add_argument(
+        "--claude-oauth-token-env",
+        default="",
+        help="可选的 Claude OAuth token 环境变量名；值只进入 Claude OAuth 子进程",
+    )
     parser.add_argument("--claude-model", default="claude-sonnet-5")
     parser.add_argument("--codex-model", default="gpt-5.6-luna")
     parser.add_argument("--expected-claude-version", default="2.1.220")
@@ -811,7 +855,9 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _validate_arguments(arguments: argparse.Namespace) -> tuple[tuple[str, ...], tuple[str, ...]]:
+def _validate_arguments(
+    arguments: argparse.Namespace,
+) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     validate_safe_name(arguments.batch_id, "batch_id")
     if not ENV_NAME_RE.fullmatch(arguments.api_key_env):
         raise ConfigurationError("--api-key-env 必须是合法的大写环境变量名。")
@@ -821,6 +867,15 @@ def _validate_arguments(arguments: argparse.Namespace) -> tuple[tuple[str, ...],
     evidence = validate_choice_list(
         _parse_csv(arguments.evidence), EVIDENCE_MODES, "evidence"
     )
+    subjects = validate_choice_list(
+        _parse_csv(arguments.subjects), SUBJECTS, "subjects"
+    )
+    if arguments.claude_oauth_token_env and not ENV_NAME_RE.fullmatch(
+        arguments.claude_oauth_token_env
+    ):
+        raise ConfigurationError(
+            "--claude-oauth-token-env 必须是合法的大写环境变量名。"
+        )
     if arguments.timeout <= 0:
         raise ConfigurationError("--timeout 必须大于 0。")
     if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", arguments.interface):
@@ -857,7 +912,7 @@ def _validate_arguments(arguments: argparse.Namespace) -> tuple[tuple[str, ...],
         raise ConfigurationError(
             "--execute 会产生真实模型请求，必须同时提供 --acknowledge-live-requests。"
         )
-    return scenarios, evidence
+    return scenarios, evidence, subjects
 
 
 def main() -> int:
@@ -865,7 +920,7 @@ def main() -> int:
     parser = _build_parser()
     arguments = parser.parse_args()
     try:
-        scenarios, evidence = _validate_arguments(arguments)
+        scenarios, evidence, subjects = _validate_arguments(arguments)
         plans = build_suite_plans(
             task=arguments.task,
             batch_id=arguments.batch_id,
@@ -873,6 +928,8 @@ def main() -> int:
             evidence_modes=evidence,
             sub2api_base_url=arguments.sub2api_base_url,
             api_key_env=arguments.api_key_env,
+            subjects=subjects,
+            oauth_claude_token_env=arguments.claude_oauth_token_env or None,
         )
         safe_plan = {
             "schema_version": "official-client-capture-suite/v1",
@@ -890,9 +947,19 @@ def main() -> int:
             if any(plan.task == "api" for plan in plans)
             else None
         )
+        oauth_claude_secret = (
+            os.environ.get(arguments.claude_oauth_token_env)
+            if arguments.claude_oauth_token_env
+            and any(plan.task == "oauth" for plan in plans)
+            else None
+        )
         if any(plan.task == "api" for plan in plans) and not api_secret:
             raise ConfigurationError(
                 f"API 任务缺少环境变量 {arguments.api_key_env}。"
+            )
+        if arguments.claude_oauth_token_env and not oauth_claude_secret:
+            raise ConfigurationError(
+                f"Claude OAuth 任务缺少环境变量 {arguments.claude_oauth_token_env}。"
             )
         results: list[dict[str, Any]] = []
         with CampaignLock(arguments.lock_file):
@@ -917,7 +984,7 @@ def main() -> int:
                 evidence=evidence,
             )
             oauth_state = (
-                _verify_oauth_state(arguments)
+                _verify_oauth_state(arguments, subjects, oauth_claude_secret)
                 if any(plan.task == "oauth" for plan in plans)
                 else None
             )
@@ -935,6 +1002,9 @@ def main() -> int:
                             arguments=arguments,
                             clients=clients,
                             api_secret=api_secret if plan.task == "api" else None,
+                            oauth_claude_secret=(
+                                oauth_claude_secret if plan.task == "oauth" else None
+                            ),
                             runtime=task_runtime,
                         )
                     )

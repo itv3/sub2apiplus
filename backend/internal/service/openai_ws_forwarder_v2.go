@@ -81,7 +81,6 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	turnState := ""
 	turnMetadata := ""
 	if c != nil && c.Request != nil {
-		turnState = strings.TrimSpace(c.GetHeader(openAIWSTurnStateHeader))
 		turnMetadata = strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader))
 	}
 	setOpenAIWSTurnMetadata(payload, turnMetadata)
@@ -115,11 +114,6 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		var legacySessionHash string
 		sessionHash, legacySessionHash = openAIWSSessionHashesFromID(promptCacheKey)
 		attachOpenAILegacySessionHashToGin(c, legacySessionHash)
-	}
-	if turnState == "" && stateStore != nil && sessionHash != "" {
-		if savedTurnState, ok := stateStore.GetSessionTurnState(groupID, sessionHash); ok {
-			turnState = savedTurnState
-		}
 	}
 	preferredConnID := ""
 	if stateStore != nil && previousResponseID != "" {
@@ -290,9 +284,6 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		len(handshakeTurnState),
 	)
 	if handshakeTurnState != "" {
-		if stateStore != nil && sessionHash != "" {
-			stateStore.BindSessionTurnState(groupID, sessionHash, handshakeTurnState, s.openAIWSSessionStickyTTL())
-		}
 		if c != nil {
 			c.Header(http.CanonicalHeaderKey(openAIWSTurnStateHeader), handshakeTurnState)
 		}

@@ -1248,8 +1248,10 @@ func TestForwardAsAnthropic_OAuthPreservesClaudeCodeToolCallID(t *testing.T) {
 	require.NotNil(t, result)
 	require.Equal(t, "toolu_123", gjson.GetBytes(upstream.lastBody, `input.#(type=="function_call").call_id`).String())
 	require.Equal(t, "toolu_123", gjson.GetBytes(upstream.lastBody, `input.#(type=="function_call_output").call_id`).String())
-	require.False(t, gjson.GetBytes(upstream.lastBody, "parallel_tool_calls").Bool())
-	require.Equal(t, "low", gjson.GetBytes(upstream.lastBody, "text.verbosity").String())
+	// 非 Lite 模型必须保留 Anthropic 兼容层生成的并行工具与文本详细度语义，
+	// 不能再被官方画像无条件降级为 Lite 固定值；工具严格性仍由协议转换层决定。
+	require.True(t, gjson.GetBytes(upstream.lastBody, "parallel_tool_calls").Bool())
+	require.Equal(t, "medium", gjson.GetBytes(upstream.lastBody, "text.verbosity").String())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "tools.0.strict").Bool())
 }
 
@@ -1318,7 +1320,7 @@ func requireOpenAIMessagesCodexIdentity(t *testing.T, req *http.Request) {
 	require.NotNil(t, req)
 	require.Equal(t, officialOpenAIHTTPUserAgent, req.Header.Get("User-Agent"))
 	require.Equal(t, officialOpenAIHTTPOriginator, req.Header.Get("originator"))
-	require.Empty(t, req.Header.Get("version"))
+	require.Equal(t, codexCLIVersion, req.Header.Get("version"))
 	require.Empty(t, req.Header.Get("OpenAI-Beta"))
 }
 
@@ -1384,7 +1386,7 @@ func TestForwardAsAnthropic_ForcedCodexInstructionsTemplatePrependsRenderedInstr
 	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "gpt-5.1")
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.False(t, gjson.GetBytes(upstream.lastBody, "instructions").Exists())
+	require.Equal(t, "server-prefix\n\nclient-system", gjson.GetBytes(upstream.lastBody, "instructions").String())
 }
 
 func TestForwardAsAnthropic_ForcedCodexInstructionsTemplateUsesCachedTemplateContent(t *testing.T) {
@@ -1431,7 +1433,7 @@ func TestForwardAsAnthropic_ForcedCodexInstructionsTemplateUsesCachedTemplateCon
 	result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "gpt-5.1")
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.False(t, gjson.GetBytes(upstream.lastBody, "instructions").Exists())
+	require.Equal(t, "cached-prefix\n\nclient-system", gjson.GetBytes(upstream.lastBody, "instructions").String())
 }
 
 func TestForwardAsAnthropic_ClientDisconnectDrainsUpstreamUsage(t *testing.T) {

@@ -2,7 +2,7 @@
 
 ## 1. 范围
 
-本文档记录 `OAuth.md` §3.3.7 的 T1–T3：
+本文档记录 Official Egress 改造任务分解中的 T1–T3（当前实现状态见 README §1.1.3）：
 
 1. 定位 Anthropic HTTP、OpenAI Responses HTTP、OpenAI Responses WebSocket 三条真实出站路径。
 2. 使用脱敏的阶段 0 结构夹具固化 `v0.1.164` 当前行为和已知缺口。
@@ -232,8 +232,7 @@ T4 在 `buildUpstreamRequest` 的末端接入 Claude 专用 Finalizer，不分�
    `# Text output (does not apply to tool calls)` 存在时拆成四块，并按当前官方样本移动
    cache-control；不复制完整官方 system 文本。
 5. billing 后缀跳过 `<system-reminder>`，由会话首轮真实用户提示派生；
-   `cc_entrypoint=sdk-cli`。成功响应的 `request-id` 以账号、Profile、会话散列键写入
-   Redis，下一轮生成 `cc_prev_req`。
+   `cc_entrypoint=sdk-cli`。响应 `request-id` 只用于诊断，不回灌到下一轮请求体。
 6. 当前官方二进制源代码只暴露 `cch=00000` 占位符，阶段 0 wire 值与仓库旧版
    xxHash64 算法、Bun 内置哈希均不一致。按照 §3.3 的安全边界，本实现省略 `cch`，
    不复制抓包值、不恢复已证伪的旧算法；其余 billing 字段均有可验证来源。
@@ -263,8 +262,8 @@ T4 在 `buildUpstreamRequest` 的末端接入 Claude 专用 Finalizer，不分�
   `x-client-request-id` 5/5 不重复。
 - 五条 system 均为四块；入口第三块与出站第三、四块重新拼接后 5/5 逐字相等；
   第三块 cache-control 为 `ephemeral + 1h + global`，第四块为 `ephemeral + 1h`。
-- billing 前缀与入口官方客户端 5/5 相等；`cc_prev_req` 仅出现在 S2、S4 的续轮，
-  且两处均精确等于前一响应的 `request-id`。
+- billing 前缀与入口官方客户端 5/5 相等；所有场景均不生成未被官方请求取证的
+  `cc_prev_req`。
 - 除 system 与 metadata 外的 Body 5/5 相等，`Bash` 保持不变且无 `temperature`；
   静态 Header 集合和值与官方 Claude Code 阶段 0 样本相等。
 - 同轮 OpenAI HTTP 为 5/5、OpenAI WS 为 9/9，账号 #94 路由和 usage 无回归。
@@ -913,3 +912,121 @@ Redis、`.env` 和数据卷均未修改。API Key 精确值扫描未在文本产
 `sha256:2f744e51229d9331a0169c8022ac204a1ca819448adc01c597a77f7115bbd5a5`；容器内版本为
 `0.1.164-7-vircs-test / 4098fad53`。最终主服务 healthy、重启次数 0，keeper 为 running、
 重启次数 0；#15/#97 代理为空，临时 MITM 进程和 CA 均不存在。
+
+## 24. P0–P2 修复后的 OAuth 基准与 Vircs 阶段构建
+
+2026-07-26 在 Vircs 更新抓包工具后先执行
+`oauth-oauth-p0p1p2-20260726T1050Z`。该 run 的 direct 用例完成，但 Codex HTTP MITM
+只观察到 WebSocket GET，证明向 `model_catalog_json` 添加
+`prefer_websockets=false` 不会改变 Codex CLI `0.145.0` 的传输选择；run 按失败证据保留，
+清理状态为成功。
+
+随后依据 Codex `0.145.0` 官方 `create_openai_provider` 定义修正 HTTP provider：使用独立
+ID，保留 `name="OpenAI"`、官方 Base URL、OAuth 认证和 `version: 0.145.0`，仅将
+`supports_websockets` 设为 `false`。`oauth-oauth-provider-smoke-20260726T1056Z` 的 MITM
+S1 三路径烟测通过；最终 `oauth-oauth-p0p1p2-final-20260726T1057Z` 完成 18 个 case：
+Claude HTTP、Codex HTTP、Codex WS × direct/MITM × S1/S2/S4。manifest 状态为
+`complete`，抓包清理成功。Codex HTTP 应用层证据为
+`POST /backend-api/codex/responses`、HTTP/2、`content-encoding: zstd` 和
+`version: 0.145.0`。
+
+本轮源码位于 Vircs
+`/root/sub2apiplus-build/p0-p1-p2-20260726T103655Z`，阶段镜像为
+`sub2apiplus:p0-p1-p2-20260726`，二进制版本为
+`0.1.165-1-p0p1p2-20260726 / working-tree-p0p1p2`。该镜像只用于编译验收，没有替换
+生产 `0.1.165-1` 容器。
+
+## 25. P0–P2 最终构建、生产切换与完整抓包
+
+§24 记录的是修复过程中的阶段构建，不代表最终状态。最终源码版本为 `0.1.165-2`，同步至
+Vircs `/root/sub2apiplus-build/p0-p1-p2-final-20260726T140102Z` 并直接完成 Docker 多阶段
+构建。运行镜像为
+`sub2apiplus:p0-p1-p2-final-0.1.165-2-20260726T140102Z`，镜像 ID 为
+`sha256:6c0e54f4e28476604aef489fe90ce3bdf50e9ea8d7b196da2ed93681499e4713`；镜像内二进制
+报告 `0.1.165-2 / 5770cff47-p0p1p2-final`。
+
+生产编排只替换主服务镜像，PostgreSQL、Redis、keeper、`.env` 与数据卷均未修改。切换后
+主服务为 healthy、重启次数 0，根路径、`/health` 和真实 `/v1/models` 探测成功。旧镜像
+`ghcr.io/itv3/sub2apiplus:0.1.165-1` 仍保留，编排回滚备份为
+`/root/Docker/sub2apiplus/app/docker-compose.yml.before-p0-p1-p2-final-20260726T140102Z`。
+
+### 25.1 官方基准与候选应用层
+
+官方完整基准目录为
+`/root/oauth-capture/runs/official-client/oauth/oauth-oauth-p0p2-zstd-final-20260726T1420Z`，
+Claude HTTP、Codex HTTP、Codex WS 的 direct/MITM × S1/S2/S4 共 18 个 case 全部完成，
+manifest 为 `complete`。候选 MITM + ingress 运行时间戳统一为 `20260726T142438Z`：Claude
+HTTP 5 个请求、Codex HTTP 5 个请求、Codex WS 9 条 `response.create` 均业务有效。
+
+最终报告目录为
+`/root/oauth-capture/runs/official-client/comparisons/p0-p2-final-0.1.165-2-20260726T142438Z-v2`：
+
+| 路径 | `raw_equal` | `contract_equal` | ingress→egress 语义 | 未声明差异 |
+|---|---:|---:|---:|---:|
+| Claude HTTP | false | true | true | 0 |
+| Codex HTTP | false | true | true | 0 |
+| Codex WS | false | true | true | 0 |
+
+比较器会解析 zstd 请求体，覆盖 compact 与所有已知顶层参数，并严格校验 Cookie 生命周期、
+thinking/non-thinking sampling 规则及 WS turn metadata。独立对话正文、动态身份、Header 顺序、
+经 `Set-Cookie → 后续 Cookie` 证据闭合的冷 Cookie jar 和独立响应链属于声明差异；这些差异
+仍保留在 raw 报告，不能掩盖候选 ingress→egress 的语义损失。
+
+### 25.2 候选 direct TLS
+
+候选主运行目录为
+`/root/oauth-capture/runs/p0-p2-final-direct-0.1.165-2-20260726T143437Z`。连接池复用导致部分
+S2/S4 没有产生新 ClientHello，因此保留原始证据，并在
+`/root/oauth-capture/runs/p0-p2-final-direct-0.1.165-2-20260726T143915Z` 按单元清空连接池
+补抓 Claude HTTP S2/S4 与 Codex HTTP S2/S4。最终映射结果为 9/9 `equal=true`：Claude
+HTTP 为 17-cipher + `http/1.1`，Codex HTTP 为 30-cipher + 空 ALPN，Codex WS 为
+10-cipher + 空 ALPN。WS pcap 中 30-cipher 的 `/models` 辅助连接单列计数，没有替代业务画像。
+
+### 25.3 本地证据与完整性
+
+官方基准、Sub2API 候选出站、应用层比较和 direct TLS 原始证据已拉回本地：
+`/Users/czs/Developer/sub2apiplus/local-analysis/captures/official-egress-20260726/`。官方 manifest 所列
+152 个 artifact 已逐文件核对大小和 SHA-256；候选 direct summary 中的 pcap 已复算 SHA-256；
+目录另有总 `SHA256SUMS`。原始 Body、CLI 事件、日志和 pcap 属于私有敏感证据，已被 Git
+忽略并收紧目录权限。
+
+## 26. 0.1.165-3 最终复核修复、生产切换与新证据
+
+三方复核指出的数据保真、Lite 定型、turn 时间、能力加载、compact 身份、token TLS、
+辅助身份和比较器盲区已在 `0.1.165-3` 修复。Vircs 源码目录为
+`/root/sub2apiplus-build/p0-p2-review-fix-20260726T213104Z`，生产运行镜像为
+`sub2apiplus:p0-p2-review-fix-0.1.165-3-20260726T213104Z`，镜像 ID
+`sha256:d2fb43c0588a27c6ac4e3c3e6574cd1043e0deda5c7977c88501c518429722af`。
+容器内二进制报告 `0.1.165-3 / 5770cff47d-p0p2-review-fix`。切换只改 compose 主服务
+镜像；最终主服务 healthy、重启次数 0，#50/#90 代理为空，临时代理、CA、抓包进程和端口
+均已恢复。
+
+本轮 OpenAI 官方标准基准为
+`oauth-review-fix-codex-20260726T214417Z`，非 Lite `gpt-5.4` S2 基准为
+`oauth-review-fix-nonlite-s2-20260726T221530Z`。候选标准 direct 为
+`p0-p2-review-fix-direct-openai-0.1.165-3-20260726T214834Z`，MITM HTTP/WS 为
+`p0-p2-review-fix-mitm-openai-0.1.165-3-*-20260726T215027Z`；非 Lite 候选为时间戳
+`20260726T221002Z/20260726T221051Z`。最终报告：
+
+`/root/oauth-capture/runs/official-client/comparisons/review-fix-0.1.165-3-20260726T2217Z-v5`
+
+Codex HTTP、Codex WS、非 Lite及三类 direct TLS 均为 `equal=true`；应用层
+`candidate_semantic_preserved=true`、`undeclared_differences=0`。官方与候选 wire 均没有
+观察到 `x-codex-turn-state`，比较器按“官方实际下发才要求回放”的条件生命周期判定通过。
+跨独立 CLI 运行的工具目录可以不同，但候选同次 ingress→egress 的 `tools` 仍严格比较。
+
+Claude Code 2.1.220 完整基准继续使用同日成功的
+`oauth-oauth-p0p2-zstd-final-20260726T1420Z`。#50 当前被 Anthropic 上游返回
+`400 organization disabled`，官方 CLI 和 Sub2API 均复现；当前镜像的实际 Anthropic 出站
+保存在 `phase0-sub2api-claude-mitm-20260726T222040Z`。虽然响应失败，应用层请求契约与
+direct TLS 均 `equal=true`、未声明差异 0。该结果只能验收画像，不能写成业务响应成功。
+
+Codex `thread/compact/start` 的真实 0.145.0 wire 使用带 `compaction_trigger` 的普通
+`/responses`，以第二个 `turn/completed` 完成，并不发送 `/responses/compact`。该控制面
+证据被单列，未冒充 compact 端点官方基准；compact 端点契约由专项代码测试覆盖。
+
+完整原始材料已拉回本地
+`/Users/czs/Developer/sub2apiplus/local-analysis/captures/official-egress-review-fix-20260727-062447/`，约
+257 MB。实际 API Key、#50/#90 access token 的远端与本地精确值扫描均为 0 命中；目录权限
+0700、文件权限 0600，并生成覆盖 561 个文件的 `SHA256SUMS`。完整范围、测试与未通过边界见
+`docs/P0-P2_OFFICIAL_EGRESS_REVIEW_FIX_20260727.md`。

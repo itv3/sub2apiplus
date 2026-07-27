@@ -45,7 +45,37 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	if normalized {
 		body = normalizedBody
 	}
-	if account.IsOpenAIOAuth() && isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader)) {
+	officialProfileEnabled, _, profileErr := resolveOfficialEgressAccountProfile(account)
+	if profileErr != nil {
+		return nil, profileErr
+	}
+	if officialProfileEnabled && account.IsOpenAIOAuth() {
+		if capabilityErr := s.ensureOpenAIModelCapability(ctx, account, body); capabilityErr != nil {
+			return nil, capabilityErr
+		}
+	}
+	wsDecision := resolveOpenAIWSProtocolForRequest(s.getOpenAIWSProtocolResolver(), ctx, account)
+	// 仅允许 WS 入站请求走 WS 上游，避免出现 HTTP -> WS 协议混用。
+	wsDecision = resolveOpenAIWSDecisionByClientTransport(wsDecision, GetOpenAIClientTransport(c))
+	passthroughEnabled := account.IsOpenAIPassthroughEnabled()
+	useResponsesLite := s.normalizeOpenAIResponsesLiteIngressHeader(c, account, body)
+	// namespace 冲突必须在 Lite 工具归一化之前校验；非 Lite HTTP 再执行摊平。
+	// 否则转换可能先丢失命名空间结构，让冲突请求绕过 400 校验。
+	if shouldFlattenOpenAIResponsesNamespaces(account, wsDecision.Transport, passthroughEnabled) {
+		if useResponsesLite {
+			err = validateOpenAIResponsesNamespaces(body)
+		} else {
+			body, err = flattenOpenAIResponsesNamespaces(c, body)
+		}
+		if err != nil {
+			setOpsUpstreamError(c, http.StatusBadRequest, err.Error(), "")
+			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
+				"type": "invalid_request_error", "message": err.Error(), "param": "tools",
+			}})
+			return nil, err
+		}
+	}
+	if account.IsOpenAIOAuth() && useResponsesLite {
 		liteBody, changed, liteErr := normalizeOpenAIResponsesLiteToolsPayload(body)
 		if liteErr != nil {
 			setOpsUpstreamError(c, http.StatusBadRequest, liteErr.Error(), "")
@@ -58,9 +88,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			body = liteBody
 		}
 	}
-	wsDecision := resolveOpenAIWSProtocolForRequest(s.getOpenAIWSProtocolResolver(), ctx, account)
-	// 仅允许 WS 入站请求走 WS 上游，避免出现 HTTP -> WS 协议混用。
-	wsDecision = resolveOpenAIWSDecisionByClientTransport(wsDecision, GetOpenAIClientTransport(c))
 	officialEgressEnabled, _, err := resolveOfficialEgressAccountProfile(account)
 	if err != nil {
 		return nil, err
@@ -69,17 +96,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		account.Platform == PlatformOpenAI &&
 		account.Type == AccountTypeOAuth &&
 		wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2
-	passthroughEnabled := account.IsOpenAIPassthroughEnabled()
-	if shouldFlattenOpenAIResponsesNamespaces(account, wsDecision.Transport, passthroughEnabled) {
-		body, err = flattenOpenAIResponsesNamespaces(c, body)
-		if err != nil {
-			setOpsUpstreamError(c, http.StatusBadRequest, err.Error(), "")
-			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
-				"type": "invalid_request_error", "message": err.Error(), "param": "tools",
-			}})
-			return nil, err
-		}
-	}
 	if shouldStripOpenAIResponsesInputNamespaces(account, wsDecision.Transport, passthroughEnabled) {
 		body, err = stripOpenAIResponsesInputNamespaces(body)
 		if err != nil {
@@ -411,10 +427,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			markDecodedModified()
 		} else if officialOpenAIHTTPEnabled {
 			codexResult = applyCodexOAuthTransformWithOptions(decoded, codexOAuthTransformOptions{
-				IsCodexCLI:              isCodexCLI,
-				IsCompact:               isCompactRequest,
-				SkipDefaultInstructions: true,
-				PreserveToolCallIDs:     true,
+				IsCodexCLI:                isCodexCLI,
+				IsCompact:                 isCompactRequest,
+				SkipDefaultInstructions:   true,
+				PreserveToolCallIDs:       true,
+				PreserveTopLevelSemantics: !useResponsesLite,
 			})
 		} else {
 			codexResult = applyCodexOAuthTransform(decoded, isCodexCLI, isCompactRequest)
@@ -536,7 +553,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				return nil, decodeErr
 			}
 			var marshalErr error
-			body, marshalErr = marshalOpenAIUpstreamJSON(decoded)
+			// patch 失效后走整体重编码。必须以当前正文为原始字节基准，否则未被
+			// 改动的嵌套用户数据会被 Go map 编码按字典序重排。
+			body, marshalErr = marshalOfficialJSONObjectPreservingOrderAndRaw(decoded, body)
 			if marshalErr != nil {
 				return nil, fmt.Errorf("serialize request body: %w", marshalErr)
 			}
@@ -831,6 +850,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	httpInvalidEncryptedContentRetryTried := false
 	agentTaskRecoveryTried := false
 	rejectedFieldRetryState := newOpenAIResponsesRejectedFieldRetryState(body)
+	sameTurnState := ""
 	for {
 		// Build upstream request
 		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
@@ -856,6 +876,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				headerGuard.close()
 			}
 			return nil, err
+		}
+		if sameTurnState != "" && account.IsOpenAIOAuth() {
+			upstreamReq.Header.Set(openAIWSTurnStateHeader, sameTurnState)
 		}
 
 		// Get proxy URL
@@ -896,6 +919,11 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 		// Handle error response
 		if resp.StatusCode >= 400 {
+			if account.IsOpenAIOAuth() {
+				if responseTurnState := strings.TrimSpace(resp.Header.Get(openAIWSTurnStateHeader)); responseTurnState != "" {
+					sameTurnState = responseTurnState
+				}
+			}
 			respBody := s.readUpstreamErrorBody(resp)
 			_ = resp.Body.Close()
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))
@@ -919,7 +947,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 					return nil, decodeErr
 				}
 				if trimOpenAIEncryptedReasoningItems(decoded) {
-					body, err = marshalOpenAIUpstreamJSON(decoded)
+					body, err = marshalOfficialJSONObjectPreservingOrderAndRaw(decoded, body)
 					if err != nil {
 						return nil, fmt.Errorf("serialize invalid_encrypted_content retry body: %w", err)
 					}
@@ -1042,6 +1070,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 }
 
 func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token string, plan openAIUpstreamRequestPlan) (*http.Request, error) {
+	ctx = s.bindOpenAIResponsesLiteCapability(ctx, account, body)
+	ctx = s.bindOpenAICookieJar(ctx, account)
 	// Determine target URL based on account type
 	var targetURL string
 	switch account.Type {
@@ -1146,7 +1176,12 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	}
 	plan.APIKeyCodexMimic.ApplyHeaders(req, plan.IsStream)
 	if plan.IsCompact {
-		req.Header.Set("accept", "application/json")
+		if plan.APIKeyCodexMimic.Enabled {
+			// 官方 Codex compact 请求不发送 Accept。
+			req.Header.Del("accept")
+		} else {
+			req.Header.Set("accept", "application/json")
+		}
 	}
 
 	// 若开启 ForceCodexCLI，则强制将上游 User-Agent 伪装为 Codex CLI。

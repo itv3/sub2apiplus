@@ -313,7 +313,6 @@ func TestRewriteSystemForNonClaudeCode(t *testing.T) {
 		wantMessagesLen  int    // messages 数组长度
 		wantFirstMsgRole string // 第一条消息的 role
 		wantFirstMsgText string // 第一条消息的 content[0].text
-		wantAckMsgText   string // 第二条消息的 content[0].text
 	}{
 		{
 			name:            "nil system - no messages injected",
@@ -334,10 +333,9 @@ func TestRewriteSystemForNonClaudeCode(t *testing.T) {
 			body:             `{"model":"claude-3","messages":[{"role":"user","content":"hello"}]}`,
 			system:           "You are a personal assistant running inside OpenClaw.",
 			wantSystemText:   claudeCodeSystemPrompt,
-			wantMessagesLen:  3, // instruction + ack + original
+			wantMessagesLen:  2, // 原始 system 文本 + 原消息
 			wantFirstMsgRole: "user",
-			wantFirstMsgText: "[System Instructions]\nYou are a personal assistant running inside OpenClaw.",
-			wantAckMsgText:   "Understood. I will follow these instructions.",
+			wantFirstMsgText: "You are a personal assistant running inside OpenClaw.",
 		},
 		{
 			name:            "system equals Claude Code prompt - no messages injected",
@@ -354,10 +352,9 @@ func TestRewriteSystemForNonClaudeCode(t *testing.T) {
 				map[string]any{"type": "text", "text": "Second instruction"},
 			},
 			wantSystemText:   claudeCodeSystemPrompt,
-			wantMessagesLen:  3,
+			wantMessagesLen:  2,
 			wantFirstMsgRole: "user",
-			wantFirstMsgText: "[System Instructions]\nFirst instruction\n\nSecond instruction",
-			wantAckMsgText:   "Understood. I will follow these instructions.",
+			wantFirstMsgText: "First instruction\n\nSecond instruction",
 		},
 		{
 			name:            "empty array system - no messages injected",
@@ -371,10 +368,9 @@ func TestRewriteSystemForNonClaudeCode(t *testing.T) {
 			body:             `{"model":"claude-3","system":"Custom prompt","messages":[{"role":"user","content":"hello"}]}`,
 			system:           json.RawMessage(`"Custom prompt"`),
 			wantSystemText:   claudeCodeSystemPrompt,
-			wantMessagesLen:  3,
+			wantMessagesLen:  2,
 			wantFirstMsgRole: "user",
-			wantFirstMsgText: "[System Instructions]\nCustom prompt",
-			wantAckMsgText:   "Understood. I will follow these instructions.",
+			wantFirstMsgText: "Custom prompt",
 		},
 		{
 			name:            "json.RawMessage nil system",
@@ -388,10 +384,9 @@ func TestRewriteSystemForNonClaudeCode(t *testing.T) {
 			body:             `{"model":"claude-3","messages":[{"role":"user","content":"msg1"},{"role":"assistant","content":"resp1"},{"role":"user","content":"msg2"}]}`,
 			system:           "Be helpful",
 			wantSystemText:   claudeCodeSystemPrompt,
-			wantMessagesLen:  5, // 2 injected + 3 original
+			wantMessagesLen:  4, // 原始 system 文本 + 3 条原消息
 			wantFirstMsgRole: "user",
-			wantFirstMsgText: "[System Instructions]\nBe helpful",
-			wantAckMsgText:   "Understood. I will follow these instructions.",
+			wantFirstMsgText: "Be helpful",
 		},
 	}
 
@@ -440,7 +435,7 @@ func TestRewriteSystemForNonClaudeCode(t *testing.T) {
 			require.True(t, ok, "messages should be an array")
 			require.Len(t, messages, tt.wantMessagesLen)
 
-			if tt.wantFirstMsgRole != "" && len(messages) >= 2 {
+			if tt.wantFirstMsgRole != "" && len(messages) >= 1 {
 				// 检查注入的 instruction 消息
 				firstMsg, ok := messages[0].(map[string]any)
 				require.True(t, ok)
@@ -452,18 +447,6 @@ func TestRewriteSystemForNonClaudeCode(t *testing.T) {
 				firstBlock, ok := firstContent[0].(map[string]any)
 				require.True(t, ok)
 				require.Equal(t, tt.wantFirstMsgText, firstBlock["text"])
-
-				// 检查注入的 ack 消息
-				ackMsg, ok := messages[1].(map[string]any)
-				require.True(t, ok)
-				require.Equal(t, "assistant", ackMsg["role"])
-
-				ackContent, ok := ackMsg["content"].([]any)
-				require.True(t, ok)
-				require.Len(t, ackContent, 1)
-				ackBlock, ok := ackContent[0].(map[string]any)
-				require.True(t, ok)
-				require.Equal(t, tt.wantAckMsgText, ackBlock["text"])
 			}
 		})
 	}

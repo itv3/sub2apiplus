@@ -27,6 +27,7 @@ type requestCapture struct {
 	body        []byte
 	bodyJSON    map[string]any
 	contentType string
+	userAgent   string
 }
 
 func newTestReqClient(rt http.RoundTripper) *req.Client {
@@ -218,6 +219,8 @@ func (s *ClaudeOAuthServiceSuite) TestExchangeCodeForToken() {
 			validate: func(captured requestCapture) {
 				require.Equal(s.T(), http.MethodPost, captured.method, "expected POST")
 				require.True(s.T(), strings.HasPrefix(captured.contentType, "application/json"), "unexpected content-type")
+				require.Equal(s.T(), claudeOAuthAxiosUserAgent, captured.userAgent)
+				require.Equal(s.T(), `{"grant_type":"authorization_code","code":"AUTH","redirect_uri":"https://platform.claude.com/oauth/code/callback","client_id":"9d1c250a-e61b-44d9-88ed-5944d1962f5e","code_verifier":"ver","state":"STATE2"}`, string(captured.body))
 				require.Equal(s.T(), "AUTH", captured.bodyJSON["code"])
 				require.Equal(s.T(), "STATE2", captured.bodyJSON["state"])
 				require.Equal(s.T(), oauth.ClientID, captured.bodyJSON["client_id"])
@@ -265,6 +268,7 @@ func (s *ClaudeOAuthServiceSuite) TestExchangeCodeForToken() {
 			rt := newInProcessTransport(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				captured.method = r.Method
 				captured.contentType = r.Header.Get("Content-Type")
+				captured.userAgent = r.Header.Get("User-Agent")
 				captured.body, _ = io.ReadAll(r.Body)
 				_ = json.Unmarshal(captured.body, &captured.bodyJSON)
 				tt.handler(w, r)
@@ -326,6 +330,9 @@ func (s *ClaudeOAuthServiceSuite) TestRefreshToken() {
 				require.Equal(s.T(), "refresh_token", captured.bodyJSON["grant_type"])
 				require.Equal(s.T(), "rt", captured.bodyJSON["refresh_token"])
 				require.Equal(s.T(), oauth.ClientID, captured.bodyJSON["client_id"])
+				require.Equal(s.T(), oauth.ScopeAPI, captured.bodyJSON["scope"])
+				require.Equal(s.T(), claudeOAuthAxiosUserAgent, captured.userAgent)
+				require.Equal(s.T(), `{"grant_type":"refresh_token","refresh_token":"rt","client_id":"9d1c250a-e61b-44d9-88ed-5944d1962f5e","scope":"user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload"}`, string(captured.body))
 			},
 		},
 		{
@@ -361,6 +368,7 @@ func (s *ClaudeOAuthServiceSuite) TestRefreshToken() {
 			rt := newInProcessTransport(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				captured.method = r.Method
 				captured.contentType = r.Header.Get("Content-Type")
+				captured.userAgent = r.Header.Get("User-Agent")
 				captured.body, _ = io.ReadAll(r.Body)
 				_ = json.Unmarshal(captured.body, &captured.bodyJSON)
 				tt.handler(w, r)

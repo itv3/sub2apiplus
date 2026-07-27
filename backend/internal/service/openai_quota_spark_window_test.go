@@ -503,7 +503,7 @@ func TestQueryUsageIncludesResetCreditExpirations_EndToEnd(t *testing.T) {
 	}}
 	tokenProvider := NewOpenAITokenProvider(repo, tokenCache, nil)
 
-	var capturedBeta string
+	var capturedHeaders http.Header
 	var detailCalls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "application/json")
@@ -514,7 +514,7 @@ func TestQueryUsageIncludesResetCreditExpirations_EndToEnd(t *testing.T) {
 			})
 		case "/backend-api/wham/rate-limit-reset-credits":
 			detailCalls++
-			capturedBeta = r.Header.Get("OpenAI-Beta")
+			capturedHeaders = r.Header.Clone()
 			require.Equal(t, "org-parent123", r.Header.Get("ChatGPT-Account-ID"))
 			_, _ = w.Write([]byte(`{"credits":[{"id":"secret-credit-id","expires_at":"2026-07-03T04:05:06Z"},{"expiresAt":"2026-07-04T04:05:06Z"}]}`))
 		default:
@@ -530,7 +530,10 @@ func TestQueryUsageIncludesResetCreditExpirations_EndToEnd(t *testing.T) {
 	require.NotNil(t, usage.RateLimitResetCredits)
 	require.Equal(t, 2, usage.RateLimitResetCredits.AvailableCount)
 	require.Equal(t, 1, detailCalls)
-	require.Equal(t, openaiQuotaCodexBeta, capturedBeta)
+	require.Empty(t, capturedHeaders.Get("OpenAI-Beta"))
+	require.Equal(t, codexCLIUserAgent, capturedHeaders.Get("User-Agent"))
+	require.Equal(t, codexCLIVersion, capturedHeaders.Get("Version"))
+	require.Equal(t, "codex_exec", capturedHeaders.Get("Originator"))
 	require.Equal(t, []OpenAIRateLimitResetCreditDetail{
 		{ExpiresAt: "2026-07-03T04:05:06Z"},
 		{ExpiresAt: "2026-07-04T04:05:06Z"},

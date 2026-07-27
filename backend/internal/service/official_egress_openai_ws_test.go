@@ -77,7 +77,7 @@ func TestOpenAIOfficialEgressWSDerivesKiloIdentityAndCanonicalFrame(t *testing.T
 		"model":"gpt-5.6-luna",
 		"instructions":"只回复 KILO_WS_OK",
 		"input":[
-			{"role":"user","content":[{"type":"input_text","text":"第一轮"}]}
+			{"role":"user","content":[{"type":"input_text","text":"第一轮","opaque":{"z":9007199254740993,"a":1}}]}
 		],
 		"tools":[
 			{"type":"function","name":"read_file","description":"读取文件","parameters":{"type":"object","properties":{"path":{"type":"string"}}}}
@@ -90,7 +90,7 @@ func TestOpenAIOfficialEgressWSDerivesKiloIdentityAndCanonicalFrame(t *testing.T
 	}`)
 
 	ctx, err := attachOfficialEgressWebSocketContext(
-		context.Background(),
+		withOpenAIResponsesLiteCapability(context.Background(), true),
 		c,
 		account,
 		"wss://chatgpt.com/backend-api/codex/responses",
@@ -152,6 +152,8 @@ func TestOpenAIOfficialEgressWSDerivesKiloIdentityAndCanonicalFrame(t *testing.T
 	require.Equal(t, "developer", gjson.GetBytes(firstFinal, "input.1.role").String())
 	require.Equal(t, "message", gjson.GetBytes(firstFinal, "input.2.type").String())
 	require.Equal(t, "user", gjson.GetBytes(firstFinal, "input.2.role").String())
+	require.Contains(t, string(firstFinal), `"opaque":{"z":9007199254740993,"a":1}`)
+	require.NotContains(t, string(firstFinal), "9007199254740992")
 	require.Equal(
 		t,
 		"true",
@@ -357,6 +359,54 @@ func TestOpenAIOfficialEgressWSDerivesKiloIdentityAndCanonicalFrame(t *testing.T
 			"input.0."+officialOpenAIWSItemTurnMetadata+".turn_id",
 		).String(),
 	)
+}
+
+func TestOpenAIOfficialEgressWSDerivedNonLiteUsesOfficialContract(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
+	c.Request.Header.Set("User-Agent", "third-party-ws/1.0")
+	c.Request.Header.Set("X-Session-Affinity", "nonlite-ws-session")
+	payload := []byte(`{
+		"type":"response.create",
+		"model":"gpt-5.4",
+		"instructions":"keep-top-level",
+		"input":[{"role":"user","content":[{"type":"input_text","text":"hello"}]}],
+		"tools":[{"type":"function","name":"lookup","parameters":{"type":"object"}}],
+		"parallel_tool_calls":false,
+		"store":true,
+		"stream":false,
+		"tool_choice":"required",
+		"include":["message.output_text.logprobs"],
+		"max_output_tokens":32000,
+		"reasoning":{"effort":"high","context":"none"},
+		"text":{"verbosity":"high"}
+	}`)
+
+	ctx, err := attachOfficialEgressWebSocketContext(
+		withOpenAIModelCapabilities(context.Background(), openAIModelCapabilities{
+			SupportsParallelToolCalls: true,
+		}),
+		c,
+		newOfficialOpenAIHTTPTestAccount(94),
+		"wss://chatgpt.com/backend-api/codex/responses",
+		payload,
+	)
+	require.NoError(t, err)
+	finalized, _, err := finalizeOpenAIOfficialEgressWSFrame(ctx, payload, payload, "", false)
+	require.NoError(t, err)
+	require.Equal(t, "keep-top-level", gjson.GetBytes(finalized, "instructions").String())
+	require.Equal(t, "lookup", gjson.GetBytes(finalized, "tools.0.name").String())
+	require.Len(t, gjson.GetBytes(finalized, "input").Array(), 1)
+	require.True(t, gjson.GetBytes(finalized, "parallel_tool_calls").Bool())
+	require.False(t, gjson.GetBytes(finalized, "store").Bool())
+	require.True(t, gjson.GetBytes(finalized, "stream").Bool())
+	require.Equal(t, "auto", gjson.GetBytes(finalized, "tool_choice").String())
+	require.Equal(t, "reasoning.encrypted_content", gjson.GetBytes(finalized, "include.0").String())
+	require.Equal(t, "high", gjson.GetBytes(finalized, "text.verbosity").String())
+	require.Equal(t, "high", gjson.GetBytes(finalized, "reasoning.effort").String())
+	require.False(t, gjson.GetBytes(finalized, "reasoning.context").Exists())
+	require.False(t, gjson.GetBytes(finalized, "max_output_tokens").Exists())
 }
 
 func TestOpenAIOfficialEgressWSConnectionIdentitySeparatesSessions(t *testing.T) {

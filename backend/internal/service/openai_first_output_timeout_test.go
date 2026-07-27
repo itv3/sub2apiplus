@@ -70,6 +70,10 @@ func TestOpenAIForwardFirstOutputTimeoutIncludesResponseHeaderWait(t *testing.T)
 		Status: StatusActive, Schedulable: true, Concurrency: 1,
 		Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "test-account"},
 	}
+	svc.openaiModelCapabilities.replaceFromManifest(
+		account.ID,
+		[]byte(`{"models":[{"slug":"gpt-5.5","use_responses_lite":true}]}`),
+	)
 
 	started := time.Now()
 	_, err := svc.Forward(context.Background(), c, account, body)

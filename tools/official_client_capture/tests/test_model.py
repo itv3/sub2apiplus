@@ -38,6 +38,27 @@ class PlanTest(unittest.TestCase):
         self.assertEqual(codex, "https://gateway.example.com/prefix/v1")
         self.assertEqual(host, "gateway.example.com")
 
+    def test_subject_filter_and_oauth_token_source_are_explicit(self) -> None:
+        plans = build_suite_plans(
+            task="oauth",
+            batch_id="subject-filter",
+            scenarios=("s1",),
+            evidence_modes=("direct", "mitm"),
+            sub2api_base_url=None,
+            api_key_env="SUB2API_CAPTURE_API_KEY",
+            subjects=("claude-http",),
+            oauth_claude_token_env="CLAUDE_CAPTURE_OAUTH_TOKEN",
+        )
+        self.assertEqual(
+            [case.subject for case in plans[0].cases],
+            ["claude-http", "claude-http"],
+        )
+        self.assertEqual(
+            plans[0].credential["claude_token_source_env"],
+            "CLAUDE_CAPTURE_OAUTH_TOKEN",
+        )
+        self.assertTrue(plans[0].credential["runtime_value_scan_available"])
+
     def test_api_rejects_plaintext_local_entry(self) -> None:
         for value in (
             "http://gateway.example.com",

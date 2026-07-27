@@ -15,6 +15,7 @@ import (
 
 	httppool "github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
 	openaipkg "github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openaiidentity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
@@ -113,7 +114,7 @@ const (
 	openAIProbeCacheTTL     = 10 * time.Minute
 	grokProbeRetryTTL       = 1 * time.Minute
 	grokFreeQuotaWindow     = 24 * time.Hour
-	openAICodexProbeVersion = "0.144.1"
+	openAICodexProbeVersion = openaiidentity.CodexVersion
 )
 
 // UsageCache 封装账户使用量相关的缓存
@@ -731,10 +732,7 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 		req.Header.Set("Authorization", "Bearer "+accessToken)
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("OpenAI-Beta", "responses=experimental")
-	req.Header.Set("Originator", "codex_cli_rs")
-	req.Header.Set("Version", openAICodexProbeVersion)
-	req.Header.Set("User-Agent", codexCLIUserAgent)
+	applyOpenAICodexAuxiliaryHeaders(req.Header)
 	if s.identityCache != nil {
 		if fp, fpErr := s.identityCache.GetFingerprint(reqCtx, account.ID); fpErr == nil && fp != nil && strings.TrimSpace(fp.UserAgent) != "" {
 			req.Header.Set("User-Agent", strings.TrimSpace(fp.UserAgent))

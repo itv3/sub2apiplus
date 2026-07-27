@@ -198,6 +198,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	}
 
 	agentTaskRecoveryTried := false
+	sameTurnState := ""
 	var resp *http.Response
 	for {
 		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
@@ -218,6 +219,9 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		if buildErr != nil {
 			return nil, buildErr
 		}
+		if sameTurnState != "" && account.IsOpenAIOAuth() {
+			upstreamReq.Header.Set(openAIWSTurnStateHeader, sameTurnState)
+		}
 
 		upstreamStart := time.Now()
 		resp, err = doOpenAIHTTPUpstreamWithMimicTLS(
@@ -236,6 +240,11 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		}
 		if resp.StatusCode < 400 {
 			break
+		}
+		if account.IsOpenAIOAuth() {
+			if responseTurnState := strings.TrimSpace(resp.Header.Get(openAIWSTurnStateHeader)); responseTurnState != "" {
+				sameTurnState = responseTurnState
+			}
 		}
 
 		// Peek only to identify an invalid task. Restore the body so the existing
@@ -381,6 +390,8 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthroughWithPlan(
 	token string,
 	plan openAIUpstreamRequestPlan,
 ) (*http.Request, error) {
+	ctx = s.bindOpenAIResponsesLiteCapability(ctx, account, body)
+	ctx = s.bindOpenAICookieJar(ctx, account)
 	targetURL := openaiPlatformAPIURL
 	switch account.Type {
 	case AccountTypeOAuth:

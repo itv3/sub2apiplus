@@ -20,7 +20,7 @@ SENSITIVE_HEADER_RE = re.compile(
 )
 DYNAMIC_HEADER_RE = re.compile(
     r"(^date$|request[-_]?id|session[-_]?id|thread[-_]?id|conversation[-_]?id|"
-    r"turn[-_]?id|turn[-_]?metadata|window[-_]?id|installation[-_]?id|"
+    r"turn[-_]?(id|metadata|state)|window[-_]?id|installation[-_]?id|"
     r"trace[-_]?id|content-length)",
     re.I,
 )

@@ -422,27 +422,35 @@ def _toml_string(value: str) -> str:
 
 
 def codex_provider_values(
-    *, case: CaptureCase, api_key_env: str
+    *, case: CaptureCase, api_key_env: str, codex_version: str = "0.145.0"
 ) -> tuple[str, ...]:
     """返回 OAuth/API 与 HTTP/WS 对应的 Codex provider 覆盖。"""
 
     if case.product != "codex":
         raise ValueError("Codex provider 只能用于 Codex case。")
     if case.task == "oauth" and case.transport == "ws":
-        # WS 基准使用内置 OpenAI provider，不伪造自定义目标。
+        # WS 基准直接使用内置 OpenAI provider。
         return ()
     if case.task == "oauth":
-        provider = "official_http"
+        # 内置 openai provider 是保留 ID，不能覆盖 supports_websockets。HTTP
+        # 基准使用独立 ID，但 name、base_url、认证和 version Header 必须逐项
+        # 对齐 Codex 0.145.0 的 create_openai_provider；name="OpenAI" 还决定
+        # 官方 zstd 压缩路径。唯一差异是关闭 WebSocket 支持。
+        provider = "official_openai_http"
         return (
             f"model_provider={_toml_string(provider)}",
-            f"model_providers.{provider}.name=\"Official HTTP\"",
+            f'model_providers.{provider}.name="OpenAI"',
             (
                 f"model_providers.{provider}.base_url="
                 '"https://chatgpt.com/backend-api/codex"'
             ),
-            f"model_providers.{provider}.wire_api=\"responses\"",
+            f'model_providers.{provider}.wire_api="responses"',
             f"model_providers.{provider}.requires_openai_auth=true",
             f"model_providers.{provider}.supports_websockets=false",
+            (
+                f"model_providers.{provider}.http_headers.version="
+                f"{_toml_string(codex_version)}"
+            ),
         )
 
     provider = f"sub2api_capture_{case.transport}"
@@ -491,6 +499,7 @@ def _codex_config_args(
     scenario: str,
     hook_path: Path,
     hook_audit_path: Path,
+    codex_version: str = "0.145.0",
 ) -> list[str]:
     # --ignore-user-config 会同时忽略 API 专用状态目录中的 config.toml，
     # 因此抓包所需的隐私配置必须在每次首轮和续轮命令中显式覆盖。
@@ -520,7 +529,11 @@ def _codex_config_args(
     arguments: list[str] = []
     for value in (
         *privacy_values,
-        *codex_provider_values(case=case, api_key_env=api_key_env),
+        *codex_provider_values(
+            case=case,
+            api_key_env=api_key_env,
+            codex_version=codex_version,
+        ),
     ):
         arguments.extend(["-c", value])
     return arguments
@@ -536,6 +549,7 @@ def build_codex_command(
     scenario: str,
     hook_audit_path: Path,
     hook_path: Path = CODEX_HOOK_PATH,
+    codex_version: str = "0.145.0",
 ) -> list[str]:
     """构造 Codex 首轮或续轮命令。"""
 
@@ -563,6 +577,7 @@ def build_codex_command(
                 scenario=scenario,
                 hook_path=hook_path,
                 hook_audit_path=hook_audit_path,
+                codex_version=codex_version,
             ),
         ]
     )
@@ -582,12 +597,14 @@ def build_codex_config_preflight_command(
 
     return [
         codex_bin,
-        *_codex_config_args(
-            case,
-            api_key_env,
-            scenario=scenario,
-            hook_path=hook_path,
-            hook_audit_path=hook_audit_path,
+        *(
+            _codex_config_args(
+                case,
+                api_key_env,
+                scenario=scenario,
+                hook_path=hook_path,
+                hook_audit_path=hook_audit_path,
+            )
         ),
         "features",
         "list",
@@ -777,6 +794,7 @@ def run_codex_scenario(
     timeout: int,
     runtime_secret: str | None,
     api_key_env: str,
+    codex_version: str = "0.145.0",
 ) -> dict[str, Any]:
     """执行并校验一个 Codex 场景。"""
 
@@ -799,6 +817,7 @@ def run_codex_scenario(
             resume=index > 1,
             scenario=scenario,
             hook_audit_path=hook_audit_path,
+            codex_version=codex_version,
         )
         if index == 1 and scenario != "s2":
             command.append("--ephemeral")

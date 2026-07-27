@@ -179,8 +179,8 @@ func normalizeOpenAICompactRequestBody(body []byte) ([]byte, bool, error) {
 	}
 
 	normalized := []byte(`{}`)
-	// Keep the current Codex /compact schema while still dropping request-scoped
-	// fields such as prompt_cache_key, store, and stream.
+	// 保持 Codex /compact 的独立 schema；官方出口所需的 prompt_cache_key
+	// 由最终画像统一补齐，普通 API Key compact 继续维持原有精简形态。
 	for _, field := range []string{
 		"model",
 		"input",
@@ -189,6 +189,7 @@ func normalizeOpenAICompactRequestBody(body []byte) ([]byte, bool, error) {
 		"parallel_tool_calls",
 		"reasoning",
 		"text",
+		"service_tier",
 		"previous_response_id",
 	} {
 		value := gjson.GetBytes(body, field)
@@ -1167,14 +1168,14 @@ func sanitizeEmptyBase64InputImagesInOpenAIBody(body []byte) ([]byte, bool, erro
 		return body, false, nil
 	}
 
-	var reqBody map[string]any
-	if err := json.Unmarshal(body, &reqBody); err != nil {
+	reqBody, err := decodeOfficialJSONObjectUseNumber(body)
+	if err != nil {
 		return body, false, fmt.Errorf("sanitize request body: %w", err)
 	}
 	if !sanitizeEmptyBase64InputImagesInOpenAIRequestBodyMap(reqBody) {
 		return body, false, nil
 	}
-	normalized, err := marshalOpenAIUpstreamJSON(reqBody)
+	normalized, err := marshalOfficialJSONObjectPreservingOrderAndRaw(reqBody, body)
 	if err != nil {
 		return body, false, fmt.Errorf("serialize sanitized request body: %w", err)
 	}
@@ -1279,9 +1280,11 @@ func isEmptyBase64DataURI(raw string) bool {
 	return strings.TrimSpace(strings.TrimPrefix(rest, "base64,")) == ""
 }
 
+// getOpenAIRequestBodyMap 的解码结果可能在 patch 失效后被整体重新编码，因此必须
+// 保留 JSON 数字的十进制文本，否则大整数会经 float64 静默改写。
 func getOpenAIRequestBodyMap(_ *gin.Context, body []byte) (map[string]any, error) {
-	var reqBody map[string]any
-	if err := json.Unmarshal(body, &reqBody); err != nil {
+	reqBody, err := decodeOfficialJSONObjectUseNumber(body)
+	if err != nil {
 		return nil, fmt.Errorf("parse request: %w", err)
 	}
 	return reqBody, nil

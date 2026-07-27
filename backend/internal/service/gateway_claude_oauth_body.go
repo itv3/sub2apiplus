@@ -722,7 +722,7 @@ func injectClaudeCodePrompt(body []byte, system any) []byte {
 // system 字段仅保留 Claude Code 标识提示词。
 // Anthropic 基于 system 参数内容检测第三方应用，仅前置追加 Claude Code 提示词
 // 无法通过检测，因为后续内容仍为非 Claude Code 格式。
-// 策略：将原始 system prompt 提取并注入为 user/assistant 消息对，system 仅保留 Claude Code 标识。
+// 策略：将原始 system prompt 原文注入为 user 消息，system 仅保留 Claude Code 标识。
 func rewriteSystemForNonClaudeCode(body []byte, system any) []byte {
 	return rewriteSystemForNonClaudeCodeWithPromptBlocks(body, system, "", "")
 }
@@ -929,8 +929,8 @@ func rewriteSystemForNonClaudeCodeWithPromptBlocks(body []byte, system any, expa
 	//    接近真实，同时不注入会污染被代理用户行为的工具专属指令。
 	//
 	//    缺失 billing block 的系统 payload 是 Anthropic 判定第三方的关键信号之一
-	//    （真实 CLI 每个请求都带）。新版 CLI 已取消 cch=... 签名字段，故 block 不再注入
-	//    cch（见 buildBillingAttributionText）。
+	//    （真实 CLI 每个请求都带）。官方 Bun HTTP 栈会在发送前按最终请求体生成 cch；
+	//    Go 兼容层无法生成有效校验值，因此不能在这里写入固定值或复制旧值。
 	systemBlocks, blockErr := buildClaudeOAuthSystemPromptBlocksJSON(body, expansionPrompt, blocksConfig)
 	if blockErr != nil {
 		logger.LegacyPrintf("service.gateway", "Warning: failed to build configured Claude OAuth system blocks: %v", blockErr)
@@ -946,29 +946,24 @@ func rewriteSystemForNonClaudeCodeWithPromptBlocks(body []byte, system any, expa
 		return body
 	}
 
-	// 3. 将原始 system prompt 作为 user/assistant 消息对注入到 messages 开头
-	//    模型仍通过 messages 接收完整指令，保留客户端功能
+	// 3. 将原始 system prompt 原文作为 user 消息注入到 messages 开头。
+	//    不再添加固定的 [System Instructions] 包装和虚假 assistant 确认语；两者既
+	//    形成稳定指纹，也让模型历史包含客户端从未生成的承诺。
 	ccPromptTrimmed := strings.TrimSpace(claudeCodeSystemPrompt)
 	if originalSystemText != "" && originalSystemText != ccPromptTrimmed && !hasClaudeCodePrefix(originalSystemText) {
 		instrMsg, err1 := json.Marshal(map[string]any{
 			"role": "user",
 			"content": []map[string]any{
-				{"type": "text", "text": "[System Instructions]\n" + originalSystemText},
+				{"type": "text", "text": originalSystemText},
 			},
 		})
-		ackMsg, err2 := json.Marshal(map[string]any{
-			"role": "assistant",
-			"content": []map[string]any{
-				{"type": "text", "text": "Understood. I will follow these instructions."},
-			},
-		})
-		if err1 != nil || err2 != nil {
+		if err1 != nil {
 			logger.LegacyPrintf("service.gateway", "Warning: failed to marshal system-to-messages injection")
 			return out
 		}
 
-		// 重建 messages 数组：[instruction, ack, ...originalMessages]
-		items := [][]byte{instrMsg, ackMsg}
+		// 重建 messages 数组：[原始 system 文本, ...原消息]
+		items := [][]byte{instrMsg}
 		messagesResult := gjson.GetBytes(out, "messages")
 		if messagesResult.IsArray() {
 			messagesResult.ForEach(func(_, msg gjson.Result) bool {

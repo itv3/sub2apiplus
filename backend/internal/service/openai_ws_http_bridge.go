@@ -244,7 +244,11 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	if err != nil {
 		return nil, err
 	}
-	if account.Platform != PlatformGrok && isOpenAIResponsesLiteWebSocketPayload(payload) {
+	// OAuth 账号的 Lite 能力只能来自服务端模型 manifest。API Key 上游没有该
+	// 能力清单，继续保留既有客户端协商；OAuth 客户端自报值不得覆盖 Finalizer。
+	if account.Platform != PlatformGrok &&
+		!account.IsOpenAIOAuth() &&
+		isOpenAIResponsesLiteWebSocketPayload(payload) {
 		upstreamReq.Header.Set(responsesLiteHeader, "true")
 	}
 

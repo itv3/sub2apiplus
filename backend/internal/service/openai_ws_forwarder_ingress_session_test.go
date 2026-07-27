@@ -55,7 +55,6 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_KeepLeaseAcrossT
 		toolCorrector:    NewCodexToolCorrector(),
 		openaiWSPool:     pool,
 	}
-
 	account := &Account{
 		ID:          114,
 		Name:        "openai-ingress-session-lease",
@@ -460,6 +459,10 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_OfficialEgressSk
 		toolCorrector:    NewCodexToolCorrector(),
 		openaiWSPool:     pool,
 	}
+	svc.openaiModelCapabilities.replaceFromManifest(
+		31,
+		[]byte(`{"models":[{"slug":"gpt-5.5","use_responses_lite":true}]}`),
+	)
 
 	groupID := int64(3)
 	apiKey := &APIKey{
@@ -799,7 +802,6 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 		toolCorrector:             NewCodexToolCorrector(),
 		openaiWSPassthroughDialer: captureDialer,
 	}
-
 	account := &Account{
 		ID:          452,
 		Name:        "openai-ingress-passthrough",
@@ -877,6 +879,13 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughModeR
 	readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
 	_, event, readErr := clientConn.Read(readCtx)
 	cancelRead()
+	if readErr != nil {
+		select {
+		case serverErr := <-serverErrCh:
+			require.NoError(t, serverErr, "服务端在返回首个 WS 事件前退出")
+		default:
+		}
+	}
 	require.NoError(t, readErr)
 	require.Equal(t, "response.completed", gjson.GetBytes(event, "type").String())
 	require.Equal(t, "resp_passthrough_turn_1", gjson.GetBytes(event, "response.id").String())
@@ -934,7 +943,12 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughHeade
 			[]byte(`{"type":"response.completed","response":{"id":"resp_passthrough_headers","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`),
 		},
 	}
-	captureDialer := &openAIWSCaptureDialer{conn: upstreamConn}
+	captureDialer := &openAIWSCaptureDialer{
+		conn: upstreamConn,
+		handshake: http.Header{
+			http.CanonicalHeaderKey(openAIWSTurnStateHeader): []string{"turn-state-upstream"},
+		},
+	}
 	svc := &OpenAIGatewayService{
 		cfg:                       cfg,
 		httpUpstream:              &httpUpstreamRecorder{},
@@ -943,6 +957,13 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughHeade
 		toolCorrector:             NewCodexToolCorrector(),
 		openaiWSPassthroughDialer: captureDialer,
 	}
+	// 官方 /backend-api/codex/models 返回的是真实模型 slug，不会返回 gpt-5.1 这类
+	// 客户端别名。请求里的 gpt-5.1 实际以 gpt-5.4 出站，能力必须按 gpt-5.4 查到，
+	// 这样入站归一与出站定型才落在同一个键上。
+	svc.openaiModelCapabilities.replaceFromManifest(
+		453,
+		[]byte(`{"models":[{"slug":"gpt-5.4","use_responses_lite":true}]}`),
+	)
 	account := &Account{
 		ID:          453,
 		Name:        "openai-ingress-passthrough-headers",
@@ -1027,6 +1048,13 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughHeade
 	readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
 	_, event, readErr := clientConn.Read(readCtx)
 	cancelRead()
+	if readErr != nil {
+		select {
+		case serverErr := <-serverErrCh:
+			require.NoError(t, serverErr, "服务端在返回 passthrough 事件前退出")
+		default:
+		}
+	}
 	require.NoError(t, readErr)
 	require.Equal(t, "resp_passthrough_headers", gjson.GetBytes(event, "response.id").String())
 	_ = clientConn.Close(coderws.StatusNormalClosure, "done")
@@ -1047,18 +1075,19 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughHeade
 	require.Equal(t, captureDialer.lastHeaders.Get("session-id"), captureDialer.lastHeaders.Get("thread-id"))
 	require.NotEmpty(t, captureDialer.lastHeaders.Get("x-codex-window-id"))
 	require.NotEqual(t, "turn-meta-1", captureDialer.lastHeaders.Get(openAIWSTurnMetadataHeader))
-	// turn state 头不在画像管辖范围内，仍按 passthrough 语义透传客户端值。
-	require.Equal(t, "turn-state-1", captureDialer.lastHeaders.Get(openAIWSTurnStateHeader))
+	// turn state 只允许从上游握手响应流向下游，客户端值不得上行。
+	require.Empty(t, captureDialer.lastHeaders.Get(openAIWSTurnStateHeader))
 
 	require.Len(t, upstreamConn.writes, 1)
 	forwarded := requestToJSONString(upstreamConn.writes[0])
 	// 顶层 namespace 工具仍按 Responses Lite 契约搬入 input.additional_tools；
-	// tool_choice 由画像统一为官方形态的 "auto"。
+	// 官方 Lite 画像把 tool_choice 固定为 auto，客户端自报不得覆盖能力定型。
 	require.False(t, gjson.Get(forwarded, `tools.#(type=="namespace")`).Exists())
 	require.Equal(t, "collaboration", gjson.Get(forwarded, `input.#(type=="additional_tools").tools.0.name`).String())
 	require.Equal(t, "auto", gjson.Get(forwarded, "tool_choice").String())
 	require.Equal(t, "medium", gjson.Get(forwarded, "reasoning.effort").String())
 	require.Equal(t, "all_turns", gjson.Get(forwarded, "reasoning.context").String())
+	require.Equal(t, "turn-state-upstream", gjson.Get(forwarded, "client_metadata.x-codex-turn-state").String())
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_HTTPBridgeModeRelaysHTTPStream(t *testing.T) {

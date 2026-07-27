@@ -136,6 +136,35 @@ class EnvironmentTest(unittest.TestCase):
             self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", environment)
             self.assertFalse((codex_home / "auth.json").exists())
 
+    def test_explicit_oauth_token_only_enters_claude_oauth_process(self) -> None:
+        claude_environment = build_case_environment(
+            case=self._case("oauth", "claude"),
+            source=self.source,
+            api_secret=None,
+            api_key_env="CUSTOM_CAPTURE_KEY",
+            claude_api_home=None,
+            codex_api_home=None,
+            proxy_url="http://127.0.0.1:18080",
+            ca_bundle=Path("/opt/mitm/ca.pem"),
+            oauth_claude_secret="fresh-oauth-token",
+        )
+        codex_environment = build_case_environment(
+            case=self._case("oauth", "codex"),
+            source=self.source,
+            api_secret=None,
+            api_key_env="CUSTOM_CAPTURE_KEY",
+            claude_api_home=None,
+            codex_api_home=None,
+            proxy_url="http://127.0.0.1:18080",
+            ca_bundle=Path("/opt/mitm/ca.pem"),
+            oauth_claude_secret="fresh-oauth-token",
+        )
+        self.assertEqual(
+            claude_environment["CLAUDE_CODE_OAUTH_TOKEN"],
+            "fresh-oauth-token",
+        )
+        self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", codex_environment)
+
 
 if __name__ == "__main__":
     unittest.main()

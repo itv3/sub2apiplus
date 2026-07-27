@@ -212,7 +212,7 @@ func deriveOfficialOpenAIWSIdentity(
 		return officialOpenAIWSIdentity{}, err
 	}
 	base := deriveOfficialOpenAIHTTPIdentity(c, account, firstPayload, contract)
-	turnMetadataBytes, err := json.Marshal(map[string]any{
+	turnMetadataBytes, err := marshalOfficialOpenAITurnMetadata(map[string]any{
 		"installation_id": base.installationID,
 		"session_id":      base.sessionID,
 		"thread_id":       base.threadID,
@@ -443,8 +443,8 @@ func finalizeOpenAIOfficialEgressWSFrame(
 		)
 	}
 
-	var originalPayload map[string]any
-	if err := json.Unmarshal(original, &originalPayload); err != nil {
+	originalPayload, err := decodeOfficialJSONObjectUseNumber(original)
+	if err != nil {
 		return nil, result, fmt.Errorf(
 			"decode OpenAI official egress ingress WebSocket frame: %w",
 			err,
@@ -460,8 +460,8 @@ func finalizeOpenAIOfficialEgressWSFrame(
 		return candidate, result, nil
 	}
 
-	var candidatePayload map[string]any
-	if err := json.Unmarshal(candidate, &candidatePayload); err != nil {
+	candidatePayload, err := decodeOfficialJSONObjectUseNumber(candidate)
+	if err != nil {
 		return nil, result, fmt.Errorf(
 			"decode OpenAI official egress outbound WebSocket frame: %w",
 			err,
@@ -529,7 +529,7 @@ func finalizeOpenAIOfficialEgressWSFrame(
 	if !modified {
 		return candidate, result, nil
 	}
-	finalized, err := marshalOpenAIUpstreamJSON(candidatePayload)
+	finalized, err := marshalOfficialOpenAIWSJSONPreservingRaw(candidatePayload, candidate)
 	if err != nil {
 		return nil, result, fmt.Errorf(
 			"encode OpenAI official egress WebSocket item turn metadata: %w",
@@ -552,8 +552,8 @@ func finalizeDerivedOpenAIOfficialEgressWSFrame(
 	candidate []byte,
 ) ([]byte, OfficialEgressFinalizationResult, error) {
 	result := OfficialEgressFinalizationResult{}
-	var payload map[string]any
-	if err := json.Unmarshal(candidate, &payload); err != nil {
+	payload, err := decodeOfficialJSONObjectUseNumber(candidate)
+	if err != nil {
 		return nil, result, fmt.Errorf(
 			"decode derived OpenAI official egress WebSocket frame: %w",
 			err,
@@ -570,7 +570,7 @@ func finalizeDerivedOpenAIOfficialEgressWSFrame(
 	}
 
 	originalCallIDs := collectOfficialOpenAICallIDs(payload)
-	if instructions, exists := payload["instructions"]; exists {
+	if instructions, exists := payload["instructions"]; exists && egressContext.responsesLite {
 		if _, err := moveOfficialOpenAIHTTPInstructionsToInput(
 			payload,
 			instructions,
@@ -578,10 +578,16 @@ func finalizeDerivedOpenAIOfficialEgressWSFrame(
 			return nil, result, err
 		}
 	}
-	if _, err := ensureOpenAIResponsesLiteReasoningContext(payload); err != nil {
-		return nil, result, err
+	if egressContext.responsesLite {
+		if _, err := ensureOpenAIResponsesLiteReasoningContext(payload); err != nil {
+			return nil, result, err
+		}
 	}
-	if _, err := normalizeDerivedOfficialOpenAIHTTPBody(payload); err != nil {
+	if _, err := normalizeDerivedOfficialOpenAIHTTPBody(
+		payload,
+		egressContext.responsesLite,
+		egressContext.parallelTools,
+	); err != nil {
 		return nil, result, err
 	}
 
@@ -604,7 +610,7 @@ func finalizeDerivedOpenAIOfficialEgressWSFrame(
 		)
 	}
 
-	finalized, err := marshalOpenAIUpstreamJSON(payload)
+	finalized, err := marshalOfficialOpenAIWSJSONPreservingRaw(payload, candidate)
 	if err != nil {
 		return nil, result, fmt.Errorf(
 			"encode derived OpenAI official egress WebSocket frame: %w",
@@ -631,6 +637,30 @@ func finalizeDerivedOpenAIOfficialEgressWSFrame(
 	return finalized, result, nil
 }
 
+// injectOfficialOpenAIWSTurnState 把上游握手返回的连接级 turn-state 写入
+// response.create 的 client_metadata，并用官方顶层字段顺序重新编码。
+func injectOfficialOpenAIWSTurnState(payload []byte, turnState string) ([]byte, error) {
+	turnState = strings.TrimSpace(turnState)
+	if turnState == "" {
+		return payload, nil
+	}
+	body, err := decodeOfficialJSONObjectUseNumber(payload)
+	if err != nil {
+		return nil, fmt.Errorf("decode OpenAI official egress WebSocket turn-state frame: %w", err)
+	}
+	metadata, _ := body["client_metadata"].(map[string]any)
+	if metadata == nil {
+		metadata = make(map[string]any)
+		body["client_metadata"] = metadata
+	}
+	metadata[openAIWSTurnStateHeader] = turnState
+	encoded, err := marshalOfficialOpenAIWSJSONPreservingRaw(body, payload)
+	if err != nil {
+		return nil, fmt.Errorf("encode OpenAI official egress WebSocket turn-state frame: %w", err)
+	}
+	return encoded, nil
+}
+
 // buildDerivedOpenAIOfficialEgressWSPrewarmFrame 为普通第三方客户端补出
 // Codex CLI 在每条新 WS 连接上的 generate=false 预热帧。
 //
@@ -651,8 +681,8 @@ func buildDerivedOpenAIOfficialEgressWSPrewarmFrame(
 		return nil, false, nil
 	}
 
-	var payload map[string]any
-	if err := json.Unmarshal(candidate, &payload); err != nil {
+	payload, err := decodeOfficialJSONObjectUseNumber(candidate)
+	if err != nil {
 		return nil, false, fmt.Errorf(
 			"decode derived OpenAI official egress WebSocket prewarm source: %w",
 			err,
@@ -703,7 +733,7 @@ func buildDerivedOpenAIOfficialEgressWSPrewarmFrame(
 		return nil, false, err
 	}
 
-	prewarm, err := marshalOpenAIUpstreamJSON(payload)
+	prewarm, err := marshalOfficialOpenAIWSJSONPreservingRaw(payload, candidate)
 	if err != nil {
 		return nil, false, fmt.Errorf(
 			"encode derived OpenAI official egress WebSocket prewarm frame: %w",
@@ -734,8 +764,8 @@ func chainDerivedOpenAIOfficialEgressWSBusinessFrame(
 		)
 	}
 
-	var payload map[string]any
-	if err := json.Unmarshal(candidate, &payload); err != nil {
+	payload, err := decodeOfficialJSONObjectUseNumber(candidate)
+	if err != nil {
 		return nil, fmt.Errorf(
 			"decode derived OpenAI official egress WebSocket business frame: %w",
 			err,
@@ -771,7 +801,7 @@ func chainDerivedOpenAIOfficialEgressWSBusinessFrame(
 		return nil, err
 	}
 
-	finalized, err := marshalOpenAIUpstreamJSON(payload)
+	finalized, err := marshalOfficialOpenAIWSJSONPreservingRaw(payload, candidate)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"encode derived OpenAI official egress WebSocket business frame: %w",
@@ -803,8 +833,8 @@ func buildDerivedOpenAIOfficialEgressWSToolContinuationFrame(
 	}
 
 	egressContext, _ := OfficialEgressContextFromContext(ctx)
-	var payload map[string]any
-	if err := json.Unmarshal(candidate, &payload); err != nil {
+	payload, err := decodeOfficialJSONObjectUseNumber(candidate)
+	if err != nil {
 		return nil, false, fmt.Errorf(
 			"decode derived OpenAI official egress WebSocket tool continuation: %w",
 			err,
@@ -851,7 +881,7 @@ func buildDerivedOpenAIOfficialEgressWSToolContinuationFrame(
 		return nil, false, err
 	}
 
-	finalized, err := marshalOpenAIUpstreamJSON(payload)
+	finalized, err := marshalOfficialOpenAIWSJSONPreservingRaw(payload, candidate)
 	if err != nil {
 		return nil, false, fmt.Errorf(
 			"encode derived OpenAI official egress WebSocket tool continuation: %w",
@@ -1069,7 +1099,7 @@ func resolveOfficialOpenAIWSHistoricalTurnID(
 		}
 		lastUserAnchor = fmt.Sprintf("%x", segmentBytes)
 	}
-	return generateSessionUUID(
+	return generateOfficialStableUUIDV7(
 		"openai-official-egress-turn|" + sessionID + "|" + lastUserAnchor,
 	), nil
 }
@@ -1138,13 +1168,13 @@ func buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 		state := egressContext.openAIWSDerived
 		state.mu.Lock()
 		if !preserveCurrentTurn && lastUserAnchor != "" {
-			state.lastTurnID = generateSessionUUID(
+			state.lastTurnID = generateOfficialStableUUIDV7(
 				"openai-official-egress-turn|" + sessionID + "|" + lastUserAnchor,
 			)
 			state.lastTurnStartedAtMS = time.Now().UnixMilli()
 		} else if state.lastTurnID == "" {
-			frameBytes, _ := marshalOpenAIUpstreamJSON(payload)
-			state.lastTurnID = generateSessionUUID(
+			frameBytes, _ := marshalOfficialOpenAIWSJSON(payload)
+			state.lastTurnID = generateOfficialStableUUIDV7(
 				"openai-official-egress-turn|" + sessionID + "|" +
 					fmt.Sprintf("%x", frameBytes),
 			)
@@ -1168,14 +1198,14 @@ func buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 	if !prewarm {
 		turnMetadata["turn_started_at_unix_ms"] = turnStartedAtMS
 	}
-	turnMetadataBytes, err := json.Marshal(turnMetadata)
+	turnMetadataBytes, err := marshalOfficialOpenAITurnMetadata(turnMetadata)
 	if err != nil {
 		return nil, "", fmt.Errorf(
 			"encode derived OpenAI official egress WebSocket turn metadata: %w",
 			err,
 		)
 	}
-	return map[string]any{
+	metadata := map[string]any{
 		"x-codex-installation-id": installationID,
 		"session_id":              sessionID,
 		"thread_id":               threadID,
@@ -1186,14 +1216,17 @@ func buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 			time.Now().UnixMilli(),
 			10,
 		),
-		"ws_request_header_x_openai_internal_codex_responses_lite": "true",
-	}, sessionID, nil
+	}
+	if egressContext.responsesLite {
+		metadata[responsesLiteWSMetadataKey] = "true"
+	}
+	return metadata, sessionID, nil
 }
 
 func officialOpenAIHTTPUserAnchorsFromPayload(
 	payload map[string]any,
 ) (string, string) {
-	body, err := marshalOpenAIUpstreamJSON(payload)
+	body, err := marshalOfficialOpenAIWSJSON(payload)
 	if err != nil {
 		return "", ""
 	}

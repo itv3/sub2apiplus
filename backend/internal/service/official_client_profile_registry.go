@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openaiidentity"
+
 	"github.com/Wei-Shaw/sub2api/internal/config"
 )
 
@@ -323,9 +325,9 @@ func officialClientBuildDefinitions() []officialClientBuild {
 			Provider:   PlatformOpenAI,
 			Product:    "codex",
 			Surface:    "cli",
-			Version:    "0.145.0",
-			UserAgent:  "codex_exec/0.145.0 (Ubuntu 24.4.0; x86_64) unknown (codex_exec; 0.145.0)",
-			Originator: "codex_exec",
+			Version:    openaiidentity.CodexVersion,
+			UserAgent:  openaiidentity.CodexUserAgent,
+			Originator: openaiidentity.CodexOriginator,
 			Source:     "capture:oauth-20260726T014021Z,api-20260726T014252Z",
 		},
 		{
@@ -375,7 +377,12 @@ func officialClientWireProfileDefinitions() []officialClientWireProfile {
 
 	for i := range profiles {
 		switch profiles[i].Purpose {
-		case officialClientPurposeOpenAIOAuthResponsesHTTP, officialClientPurposeOpenAIAPIKeyResponsesHTTP:
+		case officialClientPurposeOpenAIOAuthResponsesHTTP:
+			profiles[i].StaticHeaders = []officialClientHeaderValue{
+				{Name: "x-codex-beta-features", Value: "remote_compaction_v2"},
+				{Name: "version", Value: openaiidentity.CodexVersion},
+			}
+		case officialClientPurposeOpenAIAPIKeyResponsesHTTP:
 			profiles[i].StaticHeaders = []officialClientHeaderValue{
 				{Name: "x-codex-beta-features", Value: "remote_compaction_v2"},
 				{Name: "x-openai-internal-codex-responses-lite", Value: "true"},

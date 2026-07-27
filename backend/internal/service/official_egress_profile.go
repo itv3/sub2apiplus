@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"net/url"
 	"path"
 	"sort"
 	"strings"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/gatewayendpoint"
 )
 
 const (
@@ -34,7 +36,6 @@ type OfficialEgressFieldSource string
 const (
 	OfficialEgressFieldSourceIngressExplicit OfficialEgressFieldSource = "ingress_explicit"
 	OfficialEgressFieldSourceRedisSession    OfficialEgressFieldSource = "redis_session"
-	OfficialEgressFieldSourceResponseMapping OfficialEgressFieldSource = "response_mapping"
 	OfficialEgressFieldSourceAccountStatic   OfficialEgressFieldSource = "account_static"
 	OfficialEgressFieldSourceDerived         OfficialEgressFieldSource = "derived"
 )
@@ -47,7 +48,6 @@ const (
 	OfficialEgressFieldLifecycleSession    OfficialEgressFieldLifecycle = "session"
 	OfficialEgressFieldLifecycleConnection OfficialEgressFieldLifecycle = "connection"
 	OfficialEgressFieldLifecycleTurn       OfficialEgressFieldLifecycle = "turn"
-	OfficialEgressFieldLifecycleResponse   OfficialEgressFieldLifecycle = "response"
 )
 
 // OfficialEgressFieldName 是公共上下文允许登记的动态身份字段。
@@ -58,7 +58,6 @@ const (
 	OfficialEgressFieldDeviceID           OfficialEgressFieldName = "device_id"
 	OfficialEgressFieldAccountUUID        OfficialEgressFieldName = "account_uuid"
 	OfficialEgressFieldClientRequestID    OfficialEgressFieldName = "client_request_id"
-	OfficialEgressFieldPreviousRequestID  OfficialEgressFieldName = "previous_request_id"
 	OfficialEgressFieldThreadID           OfficialEgressFieldName = "thread_id"
 	OfficialEgressFieldWindowID           OfficialEgressFieldName = "window_id"
 	OfficialEgressFieldTurnMetadata       OfficialEgressFieldName = "turn_metadata"
@@ -99,6 +98,8 @@ type OfficialEgressContextInput struct {
 	AccountType     string
 	ProxyID         int64
 	CAFingerprint   string
+	ResponsesLite   bool
+	ParallelTools   bool
 }
 
 // OfficialEgressContext 保存最终出站画像所需的公共状态。
@@ -122,6 +123,9 @@ type OfficialEgressContext struct {
 	connectionPoolID    string
 	fields              map[OfficialEgressFieldName]OfficialEgressField
 	openAIWSDerived     *officialOpenAIWSDerivedState
+	responsesLite       bool
+	parallelTools       bool
+	cookieJar           http.CookieJar
 	frozen              bool
 }
 
@@ -130,7 +134,7 @@ func NewOfficialEgressContext(input OfficialEgressContextInput) *OfficialEgressC
 	return &OfficialEgressContext{
 		accountID:       input.AccountID,
 		targetPlatform:  strings.ToLower(strings.TrimSpace(input.TargetPlatform)),
-		inboundEndpoint: normalizeOfficialEgressEndpoint(input.InboundEndpoint),
+		inboundEndpoint: canonicalOfficialEgressInboundEndpoint(input.InboundEndpoint),
 		transport:       input.Transport,
 		upstreamHost:    normalizeOfficialEgressHost(input.UpstreamHost),
 		profileVersion:  strings.TrimSpace(input.ProfileVersion),
@@ -138,6 +142,8 @@ func NewOfficialEgressContext(input OfficialEgressContextInput) *OfficialEgressC
 		accountType:     strings.ToLower(strings.TrimSpace(input.AccountType)),
 		proxyID:         input.ProxyID,
 		caFingerprint:   strings.TrimSpace(input.CAFingerprint),
+		responsesLite:   input.ResponsesLite,
+		parallelTools:   input.ParallelTools,
 		fields:          make(map[OfficialEgressFieldName]OfficialEgressField),
 	}
 }
@@ -409,7 +415,7 @@ func validateOfficialEgressScope(
 	if egressContext.profileVersion != version {
 		return errors.New("official egress profile version conflicts with resolved baseline")
 	}
-	normalizedEndpoint := normalizeOfficialEgressEndpoint(endpoint)
+	normalizedEndpoint := canonicalOfficialEgressInboundEndpoint(endpoint)
 	if normalizedEndpoint == "" || normalizedEndpoint != egressContext.inboundEndpoint {
 		return errors.New("official egress endpoint conflicts with request context")
 	}
@@ -762,13 +768,18 @@ func normalizeOfficialEgressEndpoint(raw string) string {
 	return raw
 }
 
+// canonicalOfficialEgressInboundEndpoint 先完成 URL/path 清理，再复用网关入口别名规则。
+// 上游目标路径校验仍使用 normalizeOfficialEgressEndpoint，不能把两类路径混为一谈。
+func canonicalOfficialEgressInboundEndpoint(raw string) string {
+	return gatewayendpoint.NormalizeInboundEndpoint(normalizeOfficialEgressEndpoint(raw))
+}
+
 func isKnownOfficialEgressFieldName(name OfficialEgressFieldName) bool {
 	switch name {
 	case OfficialEgressFieldSessionID,
 		OfficialEgressFieldDeviceID,
 		OfficialEgressFieldAccountUUID,
 		OfficialEgressFieldClientRequestID,
-		OfficialEgressFieldPreviousRequestID,
 		OfficialEgressFieldThreadID,
 		OfficialEgressFieldWindowID,
 		OfficialEgressFieldTurnMetadata,
@@ -785,7 +796,6 @@ func isKnownOfficialEgressFieldSource(source OfficialEgressFieldSource) bool {
 	switch source {
 	case OfficialEgressFieldSourceIngressExplicit,
 		OfficialEgressFieldSourceRedisSession,
-		OfficialEgressFieldSourceResponseMapping,
 		OfficialEgressFieldSourceAccountStatic,
 		OfficialEgressFieldSourceDerived:
 		return true
@@ -799,8 +809,7 @@ func isKnownOfficialEgressFieldLifecycle(lifecycle OfficialEgressFieldLifecycle)
 	case OfficialEgressFieldLifecycleRequest,
 		OfficialEgressFieldLifecycleSession,
 		OfficialEgressFieldLifecycleConnection,
-		OfficialEgressFieldLifecycleTurn,
-		OfficialEgressFieldLifecycleResponse:
+		OfficialEgressFieldLifecycleTurn:
 		return true
 	default:
 		return false

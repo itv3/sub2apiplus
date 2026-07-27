@@ -43,8 +43,8 @@ func applyOpenAIAPIKeyCodexMimicryToBody(body []byte, scopes ...openAIAPIKeyCode
 	if len(body) == 0 {
 		return body
 	}
-	var reqBody map[string]any
-	if err := json.Unmarshal(body, &reqBody); err != nil {
+	reqBody, err := decodeOfficialJSONObjectUseNumber(body)
+	if err != nil {
 		return body
 	}
 	var scope openAIAPIKeyCodexMimicScope
@@ -72,7 +72,7 @@ func applyOpenAIAPIKeyCodexMimicryToBody(body []byte, scopes ...openAIAPIKeyCode
 	if !modified {
 		return body
 	}
-	out, err := marshalOpenAIUpstreamJSON(reqBody)
+	out, err := marshalOfficialJSONObjectPreservingOrderAndRaw(reqBody, body)
 	if err != nil {
 		return body
 	}

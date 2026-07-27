@@ -1,0 +1,14 @@
+{
+  "_source": "Codex CLI 0.145.0 的 /backend-api/codex/models 真实响应，提取自 2026-07-27 官方基准抓包 official-egress-final-review-fix-20260727-094500。",
+  "_purpose": "bundledOpenAIModelCapabilities 的权威来源。只保留影响官方出站形态的能力位，不含任何账号或凭据信息。",
+  "models": [
+    {"slug": "codex-auto-review", "use_responses_lite": false, "supports_parallel_tool_calls": true},
+    {"slug": "gpt-5.3-codex-spark", "use_responses_lite": false, "supports_parallel_tool_calls": true},
+    {"slug": "gpt-5.4", "use_responses_lite": false, "supports_parallel_tool_calls": true},
+    {"slug": "gpt-5.4-mini", "use_responses_lite": false, "supports_parallel_tool_calls": true},
+    {"slug": "gpt-5.5", "use_responses_lite": false, "supports_parallel_tool_calls": true},
+    {"slug": "gpt-5.6-luna", "use_responses_lite": true, "supports_parallel_tool_calls": true},
+    {"slug": "gpt-5.6-sol", "use_responses_lite": true, "supports_parallel_tool_calls": true},
+    {"slug": "gpt-5.6-terra", "use_responses_lite": true, "supports_parallel_tool_calls": true}
+  ]
+}

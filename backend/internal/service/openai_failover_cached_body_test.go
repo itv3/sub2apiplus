@@ -92,6 +92,14 @@ func TestOpenAIGatewayService_Forward_FailoverReparsesCachedBodyForNextAccount(t
 
 			firstAccount := openAIFailoverCachedBodyTestAccount(1, "account-a", tt.firstMapping)
 			secondAccount := openAIFailoverCachedBodyTestAccount(2, "account-b", tt.secondMapping)
+			svc.openaiModelCapabilities.replaceFromManifest(
+				firstAccount.ID,
+				[]byte(`{"models":[{"slug":"`+tt.wantFirst+`","use_responses_lite":false}]}`),
+			)
+			svc.openaiModelCapabilities.replaceFromManifest(
+				secondAccount.ID,
+				[]byte(`{"models":[{"slug":"`+tt.wantSecond+`","use_responses_lite":false}]}`),
+			)
 
 			_, err := svc.Forward(context.Background(), c, firstAccount, body)
 			require.Error(t, err)

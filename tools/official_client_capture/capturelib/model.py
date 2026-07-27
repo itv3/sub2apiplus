@@ -19,6 +19,7 @@ PRODUCT_TRANSPORTS = (
     ("codex", "http"),
     ("codex", "ws"),
 )
+SUBJECTS = tuple(f"{product}-{transport}" for product, transport in PRODUCT_TRANSPORTS)
 SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
 
@@ -182,6 +183,8 @@ def build_campaign_plan(
     evidence_modes: tuple[str, ...],
     sub2api_base_url: str | None,
     api_key_env: str,
+    subjects: tuple[str, ...] = SUBJECTS,
+    oauth_claude_token_env: str | None = None,
 ) -> CampaignPlan:
     """构造一套 OAuth 或 API 任务，绝不合并两者的运行目录。"""
 
@@ -203,6 +206,8 @@ def build_campaign_plan(
     cases: list[CaptureCase] = []
     for evidence in evidence_modes:
         for product, transport in PRODUCT_TRANSPORTS:
+            if f"{product}-{transport}" not in subjects:
+                continue
             if task == "oauth":
                 target_hosts = (
                     ("api.anthropic.com",)
@@ -230,10 +235,23 @@ def build_campaign_plan(
 
     credential = (
         {
-            "kind": "oauth_state",
-            "source": "isolated_existing_state",
+            "kind": (
+                "oauth_state_with_claude_runtime_token"
+                if oauth_claude_token_env
+                else "oauth_state"
+            ),
+            "source": (
+                "isolated_state_plus_runtime_environment"
+                if oauth_claude_token_env
+                else "isolated_existing_state"
+            ),
+            **(
+                {"claude_token_source_env": oauth_claude_token_env}
+                if oauth_claude_token_env
+                else {}
+            ),
             "orchestrator_policy": "use_in_place_without_copying",
-            "runtime_value_scan_available": False,
+            "runtime_value_scan_available": bool(oauth_claude_token_env),
         }
         if task == "oauth"
         else {
@@ -261,6 +279,8 @@ def build_suite_plans(
     evidence_modes: tuple[str, ...],
     sub2api_base_url: str | None,
     api_key_env: str,
+    subjects: tuple[str, ...] = SUBJECTS,
+    oauth_claude_token_env: str | None = None,
 ) -> tuple[CampaignPlan, ...]:
     """按 OAuth→API 顺序返回两个互相独立的任务。"""
 
@@ -273,6 +293,8 @@ def build_suite_plans(
             evidence_modes=evidence_modes,
             sub2api_base_url=sub2api_base_url,
             api_key_env=api_key_env,
+            subjects=subjects,
+            oauth_claude_token_env=oauth_claude_token_env,
         )
         for item in selected
     )

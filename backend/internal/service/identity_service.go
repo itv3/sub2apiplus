@@ -31,9 +31,9 @@ var defaultFingerprint = Fingerprint{
 	StainlessLang:           "js",
 	StainlessPackageVersion: "0.94.0",
 	StainlessOS:             "Linux",
-	StainlessArch:           "arm64",
+	StainlessArch:           "x64",
 	StainlessRuntime:        "node",
-	StainlessRuntimeVersion: "v24.3.0",
+	StainlessRuntimeVersion: "v26.3.0",
 }
 
 // Fingerprint represents account fingerprint data

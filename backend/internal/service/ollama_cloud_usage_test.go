@@ -806,6 +806,9 @@ func TestOllamaCloudUsageRefreshSingleflightAndRunnerDeduplicateSharedGroup(t *t
 	go func() { _, err := svc.Refresh(context.Background(), first.ID); errs <- err }()
 	<-started
 	go func() { _, err := svc.Refresh(context.Background(), second.ID); errs <- err }()
+	// 给第二个并发调用进入 singleflight 的时间，避免在高负载全量测试中先释放
+	// 第一个请求，导致本应共享结果的调用被误判成一次新的手动刷新。
+	time.Sleep(10 * time.Millisecond)
 	close(release)
 	require.NoError(t, <-errs)
 	require.NoError(t, <-errs)

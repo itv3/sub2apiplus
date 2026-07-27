@@ -68,6 +68,44 @@ class DryRunTest(unittest.TestCase):
             self.assertEqual(payload["execution_order"], ["oauth", "api"])
             self.assertFalse(payload["external_ab_executed"])
 
+    def test_oauth_token_override_dry_run_only_exposes_env_name(self) -> None:
+        project_root = Path(__file__).resolve().parents[3]
+        script = project_root / "tools" / "official_client_capture" / "capture.py"
+        with tempfile.TemporaryDirectory() as directory:
+            run_root = Path(directory) / "must-not-exist"
+            environment = dict(os.environ)
+            environment["CLAUDE_CAPTURE_OAUTH_TOKEN"] = "CANARY-SECRET"
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--task",
+                    "oauth",
+                    "--dry-run",
+                    "--batch-id",
+                    "oauth-override-dry-run",
+                    "--subjects",
+                    "claude-http",
+                    "--claude-oauth-token-env",
+                    "CLAUDE_CAPTURE_OAUTH_TOKEN",
+                    "--run-root",
+                    str(run_root),
+                ],
+                cwd=project_root,
+                env=environment,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(completed.returncode, 0, completed.stderr)
+            self.assertFalse(run_root.exists())
+            self.assertNotIn("CANARY-SECRET", completed.stdout + completed.stderr)
+            payload = json.loads(completed.stdout)
+            self.assertEqual(
+                payload["plans"][0]["credential"]["claude_token_source_env"],
+                "CLAUDE_CAPTURE_OAUTH_TOKEN",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

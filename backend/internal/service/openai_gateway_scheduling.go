@@ -157,7 +157,7 @@ func resolveOpenAIUpstreamOriginator(c *gin.Context, isOfficialClient bool) stri
 		}
 	}
 	if isOfficialClient {
-		return "codex_cli_rs"
+		return officialOpenAIHTTPOriginator
 	}
 	return "opencode"
 }

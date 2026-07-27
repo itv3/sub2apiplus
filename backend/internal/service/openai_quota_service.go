@@ -12,6 +12,7 @@ import (
 	"time"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openaiidentity"
 	"github.com/imroc/req/v3"
 )
 
@@ -28,8 +29,6 @@ const (
 	chatGPTRateLimitCreditsURL  = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits"
 	chatGPTRateLimitResetURL    = "https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
 	openaiQuotaUpstreamTimeout  = 20 * time.Second
-	openaiQuotaCodexBeta        = "codex-1"
-	openaiQuotaCodexOriginator  = "Codex Desktop"
 	openaiQuotaCodexLanguageTag = "zh-CN"
 	openaiQuotaSecFetchSite     = "none"
 	openaiQuotaSecFetchMode     = "no-cors"
@@ -479,15 +478,16 @@ func (s *OpenAIQuotaService) redactQuotaErrorBody(ctx context.Context, accountID
 	return string(redactAgentIdentitySensitiveBodyForAccount(ctx, s.accountRepo, account, []byte(body)))
 }
 
-// buildCodexCommonHeaders sets the request headers expected by the chatgpt.com
-// backend so calls succeed past Cloudflare/WASM checks.
+// buildCodexCommonHeaders 为配额辅助端点写入与主推理路径相同的 Codex 构建身份。
+// 旧的 codex-1 beta 与 Codex Desktop originator 不属于当前 0.145.0 画像。
 func buildCodexCommonHeaders(accessToken, chatGPTAccountID string, fedRAMP bool) map[string]string {
 	headers := map[string]string{
 		"authorization":      "Bearer " + accessToken,
 		"chatgpt-account-id": chatGPTAccountID,
-		"openai-beta":        openaiQuotaCodexBeta,
 		"oai-language":       openaiQuotaCodexLanguageTag,
-		"originator":         openaiQuotaCodexOriginator,
+		"originator":         openaiidentity.CodexOriginator,
+		"user-agent":         openaiidentity.CodexUserAgent,
+		"version":            openaiidentity.CodexVersion,
 		"accept":             "application/json",
 		"sec-fetch-site":     openaiQuotaSecFetchSite,
 		"sec-fetch-mode":     openaiQuotaSecFetchMode,

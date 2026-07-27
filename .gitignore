@@ -132,6 +132,10 @@ deploy/docker-compose.override.yml
 .gocache/
 vite.config.js
 docs/*
+!docs/P0-P2_OFFICIAL_EGRESS_FIX_20260726.md
+!docs/P0-P2_OFFICIAL_EGRESS_REVIEW_FIX_20260727.md
+!docs/P0-P2_OFFICIAL_EGRESS_FINAL_REVIEW_FIX_20260727.md
+!docs/P0_DATA_FIDELITY_FIX_20260727.md
 !docs/CLIProxyAPI_PRO_REQUIREMENTS.md
 !docs/PAYMENT.md
 !docs/PAYMENT_CN.md
@@ -164,4 +168,8 @@ tools/official_client_capture/**/*.pcap
 tools/official_client_capture/**/*.pcapng
 tools/official_client_capture/**/*.mitm
 tools/official_client_capture/**/*.flow
+# 本地分析目录包含官方客户端源码与拉回的原始抓包，只供离线校验和对比。
+# 所有本地抓包归档统一放在 local-analysis/captures/ 下，由这一条规则覆盖，
+# 不要在仓库顶层另建 captures/：那条规则已随证据目录迁移废弃。
+/local-analysis/
 output/

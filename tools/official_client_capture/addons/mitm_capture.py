@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from mitmproxy import http
+from mitmproxy.net import encoding
 
 
 SENSITIVE_HEADERS = {
@@ -116,12 +117,24 @@ def _parse_json(text: str) -> Any:
         return None
 
 
-def _body_summary(content: bytes | None) -> dict[str, Any]:
+def _body_summary(content: bytes | None, content_encoding: str = "") -> dict[str, Any]:
     raw = content or b""
-    text = raw.decode("utf-8", "replace")
+    normalized_encoding = content_encoding.strip().lower()
+    decoded = raw
+    decode_error = ""
+    if normalized_encoding:
+        try:
+            decoded = encoding.decode(raw, normalized_encoding)
+        except Exception as error:  # pragma: no cover - 由真实 MITM 版本决定支持集
+            decode_error = type(error).__name__
+    text = decoded.decode("utf-8", "replace")
     return {
         "length": len(raw),
         "sha256": hashlib.sha256(raw).hexdigest(),
+        "content_encoding": normalized_encoding,
+        "decoded_length": len(decoded),
+        "decoded_sha256": hashlib.sha256(decoded).hexdigest(),
+        "decode_error": decode_error,
         "text": text,
         "json": _parse_json(text),
     }
@@ -166,14 +179,20 @@ class OfficialClientCapture:
                 "path": _safe_path(flow.request.path),
                 "http_version": flow.request.http_version,
                 "headers": _headers_as_pairs(flow.request.headers),
-                "body": _body_summary(flow.request.raw_content),
+                "body": _body_summary(
+                    flow.request.raw_content,
+                    flow.request.headers.get("content-encoding", ""),
+                ),
             },
             "response": (
                 {
                     "status": flow.response.status_code,
                     "http_version": flow.response.http_version,
                     "headers": _headers_as_pairs(flow.response.headers),
-                    "body": _body_summary(flow.response.raw_content),
+                    "body": _body_summary(
+                        flow.response.raw_content,
+                        flow.response.headers.get("content-encoding", ""),
+                    ),
                 }
                 if flow.response
                 else None

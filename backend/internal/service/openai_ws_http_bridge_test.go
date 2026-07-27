@@ -67,10 +67,12 @@ func TestProxyOpenAIWSHTTPBridgeTurnOfficialEgressUsesHTTPProfile(t *testing.T) 
 	body := newOfficialOpenAIHTTPTestBody(t, false, false, true)
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(body, &payload))
+	payload["model"] = "gpt-5.4"
 	payload["type"] = "response.create"
 	payload["generate"] = true
 	clientMetadata, ok := payload["client_metadata"].(map[string]any)
 	require.True(t, ok)
+	clientMetadata[responsesLiteWSMetadataKey] = "true"
 	const bridgeTurnID = "019f9577-d70a-7553-ad23-8de3ede39d8c"
 	clientMetadata["turn_id"] = bridgeTurnID
 	var bridgeTurnMetadata map[string]any
@@ -87,6 +89,10 @@ func TestProxyOpenAIWSHTTPBridgeTurnOfficialEgressUsesHTTPProfile(t *testing.T) 
 	c := newOfficialOpenAIHTTPTestContext(body, "/v1/responses")
 	upstream := &httpUpstreamRecorder{resp: newOfficialOpenAIHTTPSSECompletedResponse("resp_http_bridge")}
 	svc := newOfficialOpenAIHTTPTestService(upstream)
+	svc.openaiModelCapabilities.replaceFromManifest(
+		94,
+		[]byte(`{"models":[{"slug":"gpt-5.4","use_responses_lite":false}]}`),
+	)
 	account := newOfficialOpenAIHTTPTestAccount(94)
 	var writes [][]byte
 
@@ -119,6 +125,7 @@ func TestProxyOpenAIWSHTTPBridgeTurnOfficialEgressUsesHTTPProfile(t *testing.T) 
 	require.Equal(t, OfficialEgressTransportHTTP, egressContext.Transport())
 	require.Equal(t, officialEgressTransportProfileOpenAIHTTP, egressContext.TransportProfileID())
 	require.Equal(t, testOfficialOpenAISessionID, upstream.lastReq.Header.Get("session-id"))
+	require.Empty(t, upstream.lastReq.Header.Get(responsesLiteHeader), "客户端自报不得顶回 OAuth 非 Lite Header")
 	require.Equal(t, string(bridgeTurnMetadataBytes), upstream.lastReq.Header.Get("x-codex-turn-metadata"))
 	require.Equal(t, testOfficialOpenAICallID, gjson.GetBytes(upstream.lastBody, "input.3.call_id").String())
 }

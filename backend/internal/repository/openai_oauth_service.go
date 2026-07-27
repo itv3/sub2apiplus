@@ -10,6 +10,7 @@ import (
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openaiidentity"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/imroc/req/v3"
 )
@@ -48,7 +49,8 @@ func (s *openaiOAuthService) ExchangeCode(ctx context.Context, code, codeVerifie
 
 	resp, err := client.R().
 		SetContext(ctx).
-		SetHeader("User-Agent", "codex-cli/0.91.0").
+		SetHeader("User-Agent", openaiidentity.CodexUserAgent).
+		SetHeader("originator", openaiidentity.CodexOriginator).
 		SetFormDataFromValues(formData).
 		SetSuccessResult(&tokenResp).
 		Post(s.tokenURL)
@@ -86,18 +88,23 @@ func (s *openaiOAuthService) refreshTokenWithClientID(ctx context.Context, refre
 		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_CLIENT_INIT_FAILED", "create HTTP client: %v", err)
 	}
 
-	formData := url.Values{}
-	formData.Set("grant_type", "refresh_token")
-	formData.Set("refresh_token", refreshToken)
-	formData.Set("client_id", clientID)
-	formData.Set("scope", openai.RefreshScopes)
+	refreshBody := struct {
+		ClientID     string `json:"client_id"`
+		GrantType    string `json:"grant_type"`
+		RefreshToken string `json:"refresh_token"`
+	}{
+		ClientID:     clientID,
+		GrantType:    "refresh_token",
+		RefreshToken: refreshToken,
+	}
 
 	var tokenResp openai.TokenResponse
 
 	resp, err := client.R().
 		SetContext(ctx).
-		SetHeader("User-Agent", "codex-cli/0.91.0").
-		SetFormDataFromValues(formData).
+		SetHeader("User-Agent", openaiidentity.CodexUserAgent).
+		SetHeader("originator", openaiidentity.CodexOriginator).
+		SetBody(refreshBody).
 		SetSuccessResult(&tokenResp).
 		Post(s.tokenURL)
 
@@ -116,9 +123,12 @@ func (s *openaiOAuthService) refreshTokenWithClientID(ctx context.Context, refre
 }
 
 func createOpenAIReqClient(proxyURL string) (*req.Client, error) {
+	proxyEnabled := strings.TrimSpace(proxyURL) != ""
 	return getSharedReqClient(reqClientOptions{
-		ProxyURL: proxyURL,
-		Timeout:  120 * time.Second,
+		ProxyURL:   proxyURL,
+		Timeout:    120 * time.Second,
+		ForceHTTP2: proxyEnabled,
+		TLSProfile: service.OpenAIOfficialEgressHTTPTLSProfile(proxyEnabled),
 	})
 }
 

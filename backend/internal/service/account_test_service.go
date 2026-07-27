@@ -717,13 +717,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	if isOAuth {
 		req.Host = "chatgpt.com"
 		req.Header.Set("accept", "text/event-stream")
-		req.Header.Set("OpenAI-Beta", "responses=experimental")
-		req.Header.Set("Originator", "codex_cli_rs")
-		if customUA := strings.TrimSpace(credentialAccount.GetOpenAIUserAgent()); customUA != "" {
-			req.Header.Set("User-Agent", customUA)
-		} else {
-			req.Header.Set("User-Agent", codexCLIUserAgent)
-		}
+		applyOpenAICodexAuxiliaryHeaders(req.Header)
 		setOpenAIChatGPTAccountHeaders(req.Header, credentialAccount)
 		// 与真实转发一致：originator 与最终 User-Agent 首段配套，否则上游 404（issue #3901）。
 		enforceCodexIdentityHeaders(req.Header)
@@ -1044,6 +1038,11 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 		req.Header,
 		mimicProfile.Enabled,
 	)
+	// 官方 Codex 的 compact 请求不发送 Accept；OAuth 与 API Key 官方画像探测
+	// 必须遵守同一契约，避免测试流量形成独立指纹。
+	if isOAuth || mimicProfile.Enabled {
+		req.Header.Del("Accept")
+	}
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
@@ -1974,13 +1973,7 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("OpenAI-Beta", "responses=experimental")
-	req.Header.Set("originator", "codex_cli_rs")
-	if customUA := strings.TrimSpace(credentialAccount.GetOpenAIUserAgent()); customUA != "" {
-		req.Header.Set("User-Agent", customUA)
-	} else {
-		req.Header.Set("User-Agent", codexCLIUserAgent)
-	}
+	applyOpenAICodexAuxiliaryHeaders(req.Header)
 	setOpenAIChatGPTAccountHeaders(req.Header, credentialAccount)
 	// 与真实转发一致：originator 与最终 User-Agent 首段配套（原 opencode 与 Codex UA 错配会 404，issue #3901）。
 	enforceCodexIdentityHeaders(req.Header)

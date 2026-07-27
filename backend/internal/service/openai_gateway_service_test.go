@@ -2597,7 +2597,7 @@ func TestOpenAIResponsesRequestPathSuffix(t *testing.T) {
 }
 
 func TestNormalizeOpenAICompactRequestBodyPreservesCurrentCodexPayloadFields(t *testing.T) {
-	body := []byte(`{"model":"gpt-5.5","input":[{"type":"message","role":"user","content":"compact me"}],"instructions":"compact-test","tools":[{"type":"function","name":"shell"}],"parallel_tool_calls":true,"reasoning":{"effort":"high"},"text":{"verbosity":"low"},"previous_response_id":"resp_123","store":true,"stream":true,"prompt_cache_key":"cache_123"}`)
+	body := []byte(`{"model":"gpt-5.5","input":[{"type":"message","role":"user","content":"compact me"}],"instructions":"compact-test","tools":[{"type":"function","name":"shell"}],"parallel_tool_calls":true,"reasoning":{"effort":"high"},"text":{"verbosity":"low"},"service_tier":"priority","previous_response_id":"resp_123","store":true,"stream":true,"prompt_cache_key":"cache_123"}`)
 
 	normalized, changed, err := normalizeOpenAICompactRequestBody(body)
 
@@ -2608,6 +2608,7 @@ func TestNormalizeOpenAICompactRequestBodyPreservesCurrentCodexPayloadFields(t *
 	require.True(t, gjson.GetBytes(normalized, "parallel_tool_calls").Bool())
 	require.Equal(t, "high", gjson.GetBytes(normalized, "reasoning.effort").String())
 	require.Equal(t, "low", gjson.GetBytes(normalized, "text.verbosity").String())
+	require.Equal(t, "priority", gjson.GetBytes(normalized, "service_tier").String())
 	require.Equal(t, "resp_123", gjson.GetBytes(normalized, "previous_response_id").String())
 	require.False(t, gjson.GetBytes(normalized, "store").Exists())
 	require.False(t, gjson.GetBytes(normalized, "stream").Exists())
@@ -2751,8 +2752,8 @@ func TestOpenAIBuildUpstreamRequestOAuthOfficialClientOriginatorCompatibility(t 
 			wantOriginator: "codex-tui",
 			wantUA:         "codex-tui/0.140.2 (Mac OS X 14.0; arm64) iTerm (codex-tui; 0.140.2)",
 		},
-		{name: "official originator without ua falls back to default identity", originator: "codex_vscode", wantOriginator: "codex_cli_rs", wantUA: codexCLIUserAgent},
-		{name: "third-party ua masked to default identity", userAgent: "luna/1.2.0", wantOriginator: "codex_cli_rs", wantUA: codexCLIUserAgent},
+		{name: "official originator without ua falls back to default identity", originator: "codex_vscode", wantOriginator: officialOpenAIHTTPOriginator, wantUA: codexCLIUserAgent},
+		{name: "third-party ua masked to default identity", userAgent: "luna/1.2.0", wantOriginator: officialOpenAIHTTPOriginator, wantUA: codexCLIUserAgent},
 	}
 
 	for _, tt := range tests {
@@ -3087,7 +3088,7 @@ func TestOpenAIGatewayService_APIKeyCodexMimicPreservesCompactRequestShape(t *te
 	require.False(t, result.Stream)
 	require.Equal(t, "http://upstream.example/v1/responses/compact", upstream.lastReq.URL.String())
 	require.Equal(t, officialOpenAIHTTPUserAgent, upstream.lastReq.Header.Get("User-Agent"))
-	require.Equal(t, "application/json", upstream.lastReq.Header.Get("Accept"))
+	require.Empty(t, upstream.lastReq.Header.Get("Accept"))
 	require.False(t, gjson.GetBytes(upstream.lastBody, "stream").Exists())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "store").Exists())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").Exists())

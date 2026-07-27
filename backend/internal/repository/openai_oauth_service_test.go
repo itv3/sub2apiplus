@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openaiidentity"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
@@ -42,6 +44,8 @@ func (s *OpenAIOAuthServiceSuite) setupServer(handler http.HandlerFunc) {
 func (s *OpenAIOAuthServiceSuite) TestExchangeCode_DefaultRedirectURI() {
 	errCh := make(chan string, 1)
 	s.setupServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		require.Equal(s.T(), openaiidentity.CodexUserAgent, r.Header.Get("User-Agent"))
+		require.Equal(s.T(), openaiidentity.CodexOriginator, r.Header.Get("originator"))
 		if r.Method != http.MethodPost {
 			errCh <- "method mismatch"
 			w.WriteHeader(http.StatusBadRequest)
@@ -93,31 +97,35 @@ func (s *OpenAIOAuthServiceSuite) TestExchangeCode_DefaultRedirectURI() {
 	require.Equal(s.T(), "rt", resp.RefreshToken)
 }
 
-func (s *OpenAIOAuthServiceSuite) TestRefreshToken_FormFields() {
+func (s *OpenAIOAuthServiceSuite) TestRefreshToken_JSONFields() {
 	errCh := make(chan string, 1)
 	s.setupServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseForm(); err != nil {
-			errCh <- "ParseForm failed"
+		require.Equal(s.T(), openaiidentity.CodexUserAgent, r.Header.Get("User-Agent"))
+		require.Equal(s.T(), openaiidentity.CodexOriginator, r.Header.Get("originator"))
+		require.Contains(s.T(), r.Header.Get("Content-Type"), "application/json")
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			errCh <- "Decode JSON failed"
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if got := r.PostForm.Get("grant_type"); got != "refresh_token" {
+		if got := body["grant_type"]; got != "refresh_token" {
 			errCh <- "grant_type mismatch"
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if got := r.PostForm.Get("refresh_token"); got != "rt" {
+		if got := body["refresh_token"]; got != "rt" {
 			errCh <- "refresh_token mismatch"
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if got := r.PostForm.Get("client_id"); got != openai.ClientID {
+		if got := body["client_id"]; got != openai.ClientID {
 			errCh <- "client_id mismatch"
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		if got := r.PostForm.Get("scope"); got != openai.RefreshScopes {
-			errCh <- "scope mismatch"
+		if _, exists := body["scope"]; exists {
+			errCh <- "scope must be absent"
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -137,16 +145,23 @@ func (s *OpenAIOAuthServiceSuite) TestRefreshToken_FormFields() {
 	require.Equal(s.T(), "rt2", resp.RefreshToken)
 }
 
+func (s *OpenAIOAuthServiceSuite) TestTokenClientUsesCodexTLSDialer() {
+	client, err := createOpenAIReqClient("")
+	require.NoError(s.T(), err)
+	require.NotNil(s.T(), client.GetTransport().DialTLSContext)
+}
+
 // TestRefreshToken_DefaultsToOpenAIClientID 验证未指定 client_id 时默认使用 OpenAI ClientID，
 // 且只发送一次请求（不再盲猜多个 client_id）。
 func (s *OpenAIOAuthServiceSuite) TestRefreshToken_DefaultsToOpenAIClientID() {
 	var seenClientIDs []string
 	s.setupServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseForm(); err != nil {
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		clientID := r.PostForm.Get("client_id")
+		clientID := body["client_id"]
 		seenClientIDs = append(seenClientIDs, clientID)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"access_token":"at","refresh_token":"rt","token_type":"bearer","expires_in":3600}`)
@@ -163,11 +178,12 @@ func (s *OpenAIOAuthServiceSuite) TestRefreshToken_UseProvidedClientID() {
 	const customClientID = "custom-client-id"
 	var seenClientIDs []string
 	s.setupServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseForm(); err != nil {
+		var body map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		clientID := r.PostForm.Get("client_id")
+		clientID := body["client_id"]
 		seenClientIDs = append(seenClientIDs, clientID)
 		if clientID != customClientID {
 			w.WriteHeader(http.StatusBadRequest)

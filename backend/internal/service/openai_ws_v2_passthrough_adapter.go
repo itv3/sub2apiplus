@@ -617,11 +617,15 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if account == nil {
 		return errors.New("account is nil")
 	}
+	officialEgressContext, officialEgressEnabled := OfficialEgressContextFromContext(ctx)
+	officialEgressEnabled = officialEgressEnabled &&
+		officialEgressContext.TargetPlatform() == PlatformOpenAI &&
+		officialEgressContext.Transport() == OfficialEgressTransportWebSocket
 	if err := validateOpenAIWSBearerToken(account, token); err != nil {
 		return err
 	}
 	originalFirstClientMessage := cloneOpenAIWSPayloadBytes(firstClientMessage)
-	if account.IsOpenAIOAuth() && isOpenAIResponsesLiteWebSocketPayload(firstClientMessage) {
+	if account.IsOpenAIOAuth() && openAIResponsesLiteCapabilityFromContext(ctx) {
 		liteFirstMessage, _, liteErr := normalizeOpenAIResponsesLiteToolsPayload(firstClientMessage)
 		if liteErr != nil {
 			return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, liteErr.Error(), liteErr)
@@ -743,7 +747,6 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	turnState := ""
 	turnMetadata := ""
 	if c != nil {
-		turnState = strings.TrimSpace(c.GetHeader(openAIWSTurnStateHeader))
 		turnMetadata = strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader))
 	}
 	headers, _, buildHdrErr := s.buildOpenAIWSHeaders(ctx, c, account, token, wsDecision, isCodexCLI, turnState, turnMetadata, promptCacheKey)
@@ -813,6 +816,17 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		statusCode,
 		openAIWSHeaderValueForLog(handshakeHeaders, "x-request-id"),
 	)
+	handshakeTurnState := strings.TrimSpace(handshakeHeaders.Get(openAIWSTurnStateHeader))
+	if officialEgressEnabled && handshakeTurnState != "" {
+		firstClientMessage, err = injectOfficialOpenAIWSTurnState(firstClientMessage, handshakeTurnState)
+		if err != nil {
+			return NewOpenAIWSClientCloseError(
+				coderws.StatusPolicyViolation,
+				"official egress websocket turn-state construction failed",
+				err,
+			)
+		}
+	}
 
 	upstreamFrameConn, ok := upstreamConn.(openaiwsv2.FrameConn)
 	if !ok {
@@ -881,7 +895,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				}()
 			}
 			if isResponseCreate {
-				if account.IsOpenAIOAuth() && isOpenAIResponsesLiteWebSocketPayload(payload) {
+				if account.IsOpenAIOAuth() && openAIResponsesLiteCapabilityFromContext(ctx) {
 					litePayload, _, liteErr := normalizeOpenAIResponsesLiteToolsPayload(payload)
 					if liteErr != nil {
 						return payload, nil, NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, liteErr.Error(), liteErr)
@@ -946,6 +960,16 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 						"official egress websocket frame validation failed",
 						policyErr,
 					)
+				}
+				if officialEgressEnabled && handshakeTurnState != "" {
+					out, policyErr = injectOfficialOpenAIWSTurnState(out, handshakeTurnState)
+					if policyErr != nil {
+						return payload, nil, NewOpenAIWSClientCloseError(
+							coderws.StatusPolicyViolation,
+							"official egress websocket turn-state construction failed",
+							policyErr,
+						)
+					}
 				}
 			}
 			// 多轮 passthrough usage：仅在成功（non-block / non-err）

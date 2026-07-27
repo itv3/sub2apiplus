@@ -962,8 +962,8 @@ func TestGatewayService_AnthropicAPIKeyMimicRewritesThirdPartyBodyToClaudeCodeSh
 
 	messages := gjson.GetBytes(wireBody, "messages")
 	require.True(t, messages.IsArray())
-	require.Contains(t, messages.Get("0.content.0.text").String(), "Kilo project instructions")
-	require.Equal(t, "Understood. I will follow these instructions.", messages.Get("1.content.0.text").String())
+	require.Equal(t, "Kilo project instructions", messages.Get("0.content.0.text").String())
+	require.Equal(t, "ping from kilo", messages.Get("1.content.0.text").String())
 	require.True(t, gjson.GetBytes(wireBody, "tools").IsArray())
 	require.Equal(t, "kilo_read_file", gjson.GetBytes(wireBody, "tools.0.name").String())
 	require.Equal(t, "kilo_read_file", gjson.GetBytes(wireBody, "tool_choice.name").String())
@@ -1056,7 +1056,7 @@ func TestGatewayService_AnthropicAPIKeyMimicDoesNotGloballyReverseTitleCaseTools
 func TestAnthropicAPIKeyMimicExtraBetasOnlyForKnownContext1MModels(t *testing.T) {
 	require.Contains(t, anthropicAPIKeyMimicExtraBetas("claude-opus-4-8"), claude.BetaContext1M)
 	require.Contains(t, anthropicAPIKeyMimicExtraBetas("claude-opus-4-6-thinking"), claude.BetaContext1M)
-	require.Empty(t, anthropicAPIKeyMimicExtraBetas("claude-sonnet-4-5-20250929"))
+	require.Contains(t, anthropicAPIKeyMimicExtraBetas("claude-sonnet-4-5-20250929"), claude.BetaContext1M)
 	require.Empty(t, anthropicAPIKeyMimicExtraBetas("claude-haiku-4-5-20251001"))
 }
 
@@ -1165,7 +1165,7 @@ func TestGatewayService_AnthropicAPIKeyMimicEnforcesFinalCacheControlLimit(t *te
 	require.Equal(t, 3, strings.Count(string(wireBody), `"cache_control"`))
 	require.Equal(t, "ephemeral", gjson.GetBytes(wireBody, "system.1.cache_control.type").String())
 	require.Equal(t, "ephemeral", gjson.GetBytes(wireBody, "system.2.cache_control.type").String())
-	require.Equal(t, "ephemeral", gjson.GetBytes(wireBody, "messages.2.content.2.cache_control.type").String())
+	require.Equal(t, "ephemeral", gjson.GetBytes(wireBody, "messages.1.content.2.cache_control.type").String())
 	require.NotContains(t, string(wireBody), `"ttl"`)
 }
 
@@ -1227,7 +1227,7 @@ func TestGatewayService_AnthropicOAuthMimic_RewritesSystemWithBillingBlock(t *te
 			}
 			svc := &GatewayService{
 				cfg:                  cfg,
-				cache:                &officialEgressT4Cache{previous: make(map[string]string)},
+				cache:                &officialEgressT4Cache{},
 				responseHeaderFilter: compileResponseHeaderFilter(cfg),
 				httpUpstream:         upstream,
 				rateLimitService:     &RateLimitService{},
@@ -1275,7 +1275,7 @@ func TestGatewayService_AnthropicOAuthMimic_RewritesSystemWithBillingBlock(t *te
 			require.Contains(t, billingText, "cc_version="+officialAnthropicCLIVersion+".")
 			require.Contains(t, billingText, "cc_entrypoint=sdk-cli;")
 
-			require.Equal(t, claudeCodeSystemPrompt, arr[1].Get("text").String())
+			require.Equal(t, claudeSDKCLIIdentityPrompt, arr[1].Get("text").String())
 			require.False(t, arr[1].Get("cache_control").Exists(), "身份前缀 block 不应带 cache_control")
 
 			require.Equal(t, claudeCodeSystemPromptExpansion, arr[2].Get("text").String())
@@ -1336,7 +1336,7 @@ func TestGatewayService_AnthropicOAuthRealClaudeCodeHaiku_NormalizesToBuiltInPro
 	cfg := &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}
 	svc := &GatewayService{
 		cfg:                  cfg,
-		cache:                &officialEgressT4Cache{previous: make(map[string]string)},
+		cache:                &officialEgressT4Cache{},
 		responseHeaderFilter: compileResponseHeaderFilter(cfg),
 		httpUpstream:         upstream,
 		rateLimitService:     &RateLimitService{},
@@ -1360,7 +1360,7 @@ func TestGatewayService_AnthropicOAuthRealClaudeCodeHaiku_NormalizesToBuiltInPro
 	}
 	require.NoError(t, uuid.Validate(getHeaderRaw(upstream.lastReq.Header, "x-client-request-id")))
 	require.Equal(t, int64(4), gjson.GetBytes(upstream.lastBody, "system.#").Int())
-	requireOfficialAnthropicCacheProfile(t, upstream.lastBody, "messages.2.content.0.cache_control")
+	requireOfficialAnthropicCacheProfile(t, upstream.lastBody, "messages.1.content.0.cache_control")
 	require.Equal(t, metadataUserID, gjson.GetBytes(upstream.lastBody, "metadata.user_id").String())
 	require.True(t, gjson.GetBytes(upstream.lastBody, "context_management").Exists())
 	require.Contains(t, string(upstream.lastBody), "cc_version="+officialAnthropicCLIVersion+".")
@@ -1399,7 +1399,7 @@ func TestGatewayService_AnthropicOAuth_LegacySystemSettingDoesNotDisableBuiltInP
 	}}, cfg)
 	svc := &GatewayService{
 		cfg:                  cfg,
-		cache:                &officialEgressT4Cache{previous: make(map[string]string)},
+		cache:                &officialEgressT4Cache{},
 		responseHeaderFilter: compileResponseHeaderFilter(cfg),
 		httpUpstream:         upstream,
 		rateLimitService:     &RateLimitService{},

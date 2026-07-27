@@ -214,7 +214,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 		isJSONObjectFormat := strings.EqualFold(strings.TrimSpace(gjson.GetBytes(responsesBody, "text.format.type").String()), "json_object")
 		codexResult := applyCodexOAuthTransformWithOptions(reqBody, codexOAuthTransformOptions{
 			SkipDefaultInstructions:             !isResponsesShape,
-			OmitPromotedSystemMessagesFromInput: !isResponsesShape && !isJSONObjectFormat,
+			OmitPromotedSystemMessagesFromInput: !isResponsesShape,
 			PreserveBareRoleContentMessages:     isJSONObjectFormat,
 		})
 		if !isResponsesShape {

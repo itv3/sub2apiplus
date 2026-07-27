@@ -111,7 +111,6 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	}
 	compatContinuationDisabled := compatContinuationEnabled &&
 		s.isOpenAICompatSessionContinuationDisabled(ctx, c, account, promptCacheKey)
-	compatTurnState := ""
 	// OAuth/Plus relies on session_id + x-codex-turn-state; trimming to a
 	// sliding 12-message window makes the cached prefix stall at system/tools.
 	// Keep full replay there so upstream prompt caching can grow turn by turn.
@@ -170,9 +169,6 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			zap.String("compat_previous_response_id", truncateOpenAIWSLogValue(previousResponseID, openAIWSIDValueMaxLen)),
 		)
 	}
-	if compatTurnState != "" {
-		logFields = append(logFields, zap.Bool("compat_turn_state_attached", true))
-	}
 	logger.L().Debug("openai messages: model mapping applied", logFields...)
 
 	// 4. Marshal Responses request body, then apply OAuth codex transform
@@ -222,9 +218,6 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 			promptCacheKey = codexResult.PromptCacheKey
 		}
 		delete(reqBody, "prompt_cache_key")
-		if shouldAutoInjectPromptCacheKeyForCompat(upstreamModel) {
-			compatTurnState = s.getOpenAICompatSessionTurnState(ctx, c, account, promptCacheKey)
-		}
 		// OAuth codex transform forces stream=true upstream, so always use
 		// the streaming response handler regardless of what the client asked.
 		isStream = true
@@ -345,10 +338,6 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if account.Type == AccountTypeOAuth && promptCacheKey != "" && strings.TrimSpace(c.GetHeader("conversation_id")) == "" {
 		upstreamReq.Header.Del("conversation_id")
 	}
-	if !officialEgressEnabled && compatTurnState != "" &&
-		upstreamReq.Header.Get("x-codex-turn-state") == "" {
-		upstreamReq.Header.Set("x-codex-turn-state", compatTurnState)
-	}
 
 	// 7. Send request
 	proxyURL := ""
@@ -450,12 +439,6 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	}
 	if account.Platform == PlatformGrok && account.Type == AccountTypeOAuth && !account.IsShadow() {
 		s.updateGrokUsageFromResponse(ctx, account, resp.Header, resp.StatusCode)
-	}
-
-	if account.Type == AccountTypeOAuth && promptCacheKey != "" {
-		if turnState := strings.TrimSpace(resp.Header.Get("x-codex-turn-state")); turnState != "" {
-			s.bindOpenAICompatSessionTurnState(ctx, c, account, promptCacheKey, turnState)
-		}
 	}
 
 	// 9. Handle normal response

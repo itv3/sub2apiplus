@@ -50,6 +50,16 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		return err
 	}
 	ctx = WithOpenAIAPIKeyMimicRequestContext(ctx, c)
+	officialProfileEnabled, _, profileErr := resolveOfficialEgressAccountProfile(account)
+	if profileErr != nil {
+		return fmt.Errorf("解析 OpenAI 官方出站画像: %w", profileErr)
+	}
+	if officialProfileEnabled && account.IsOpenAIOAuth() {
+		if capabilityErr := s.ensureOpenAIModelCapability(ctx, account, firstClientMessage); capabilityErr != nil {
+			return capabilityErr
+		}
+	}
+	ctx = s.bindOpenAIResponsesLiteCapability(ctx, account, firstClientMessage)
 
 	// 预取一次 OpenAI Fast Policy settings，绑定到 ctx，让该 WS session
 	// 内所有帧的 evaluateOpenAIFastPolicy 调用复用同一份快照，避免每帧
@@ -286,7 +296,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			normalized = next
 		}
-		if account.IsOpenAIOAuth() && isOpenAIResponsesLiteWebSocketPayload(normalized) {
+		if account.IsOpenAIOAuth() && openAIResponsesLiteCapabilityFromContext(ctx) {
 			litePayload, _, liteErr := normalizeOpenAIResponsesLiteToolsPayload(normalized)
 			if liteErr != nil {
 				return openAIWSClientPayload{}, NewOpenAIWSClientCloseError(
@@ -467,7 +477,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		return err
 	}
 
-	turnState := strings.TrimSpace(c.GetHeader(openAIWSTurnStateHeader))
+	turnState := ""
 	stateStore := s.getOpenAIWSStateStore()
 	groupID := getOpenAIGroupIDFromContext(c)
 	storeDisabledConnMode := s.openAIWSStoreDisabledConnMode()
@@ -476,12 +486,6 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	storeDisabled := false
 	refreshIngressRouteState := func(payload openAIWSClientPayload) {
 		sessionHash = s.GenerateSessionHash(c, payload.rawForHash)
-		if turnState == "" && stateStore != nil && sessionHash != "" {
-			if savedTurnState, ok := stateStore.GetSessionTurnState(groupID, sessionHash); ok {
-				turnState = savedTurnState
-			}
-		}
-
 		preferredConnID = ""
 		if stateStore != nil && payload.previousResponseID != "" {
 			if connID, ok := stateStore.GetResponseConn(payload.previousResponseID); ok {
@@ -525,9 +529,6 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				if err := hooks.BeforeTurn(turn); err != nil {
 					return err
 				}
-			}
-			if turnState != "" && c != nil && c.Request != nil {
-				c.Request.Header.Set(openAIWSTurnStateHeader, turnState)
 			}
 			bridgePayloadRaw := currentBridgePayload.payloadRaw
 			bridgePayloadBytes := currentBridgePayload.payloadBytes
@@ -600,9 +601,6 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			}
 			if bridgeTurnState := strings.TrimSpace(result.ResponseHeaders.Get(openAIWSTurnStateHeader)); bridgeTurnState != "" {
 				turnState = bridgeTurnState
-				if stateStore != nil && sessionHash != "" {
-					stateStore.BindSessionTurnState(groupID, sessionHash, bridgeTurnState, s.openAIWSSessionStickyTTL())
-				}
 			}
 			responseID := strings.TrimSpace(result.RequestID)
 			if responseID != "" && stateStore != nil {
@@ -778,15 +776,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		connID := strings.TrimSpace(lease.ConnID())
 		if handshakeTurnState := strings.TrimSpace(lease.HandshakeHeader(openAIWSTurnStateHeader)); handshakeTurnState != "" {
 			turnState = handshakeTurnState
-			if stateStore != nil && sessionHash != "" {
-				stateStore.BindSessionTurnState(groupID, sessionHash, handshakeTurnState, s.openAIWSSessionStickyTTL())
+			if c != nil {
+				c.Header(http.CanonicalHeaderKey(openAIWSTurnStateHeader), handshakeTurnState)
 			}
-			updatedHeaders := cloneHeader(baseAcquireReq.Headers)
-			if updatedHeaders == nil {
-				updatedHeaders = make(http.Header)
-			}
-			updatedHeaders.Set(openAIWSTurnStateHeader, handshakeTurnState)
-			baseAcquireReq.Headers = updatedHeaders
 		}
 		logOpenAIWSModeInfo(
 			"ingress_ws_upstream_connected account_id=%d turn=%d conn_id=%s conn_reused=%v conn_pick_ms=%d queue_wait_ms=%d preferred_conn_id=%s",
@@ -1603,6 +1595,18 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		currentPayload = finalPayload
 		currentPayloadBytes = len(finalPayload)
+		if officialEgressEnabled && strings.TrimSpace(turnState) != "" {
+			withTurnState, setTurnStateErr := injectOfficialOpenAIWSTurnState(currentPayload, turnState)
+			if setTurnStateErr != nil {
+				return NewOpenAIWSClientCloseError(
+					coderws.StatusPolicyViolation,
+					"official egress websocket turn-state construction failed",
+					setTurnStateErr,
+				)
+			}
+			currentPayload = withTurnState
+			currentPayloadBytes = len(withTurnState)
+		}
 		outboundPayload := currentPayload
 		outboundPayloadBytes := currentPayloadBytes
 		var result *OpenAIForwardResult

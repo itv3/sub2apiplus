@@ -75,6 +75,39 @@ class CommandTest(unittest.TestCase):
             codex_provider_values(case=case, api_key_env="IGNORED"), ()
         )
 
+    def test_codex_oauth_http_provider_matches_builtin_identity(self) -> None:
+        case = self._case("oauth", "http")
+        provider_values = codex_provider_values(
+            case=case,
+            api_key_env="IGNORED",
+            codex_version="0.145.0",
+        )
+        self.assertIn('model_provider="official_openai_http"', provider_values)
+        self.assertIn(
+            'model_providers.official_openai_http.name="OpenAI"', provider_values
+        )
+        self.assertIn(
+            "model_providers.official_openai_http.supports_websockets=false",
+            provider_values,
+        )
+        self.assertIn(
+            'model_providers.official_openai_http.http_headers.version="0.145.0"',
+            provider_values,
+        )
+        command = build_codex_command(
+            codex_bin="/bin/codex",
+            model="gpt-test",
+            case=case,
+            api_key_env="IGNORED",
+            resume=False,
+            scenario="s1",
+            hook_audit_path=Path("/capture/result/hook-audit.jsonl"),
+            codex_version="0.145.0",
+        )
+        command_text = "\n".join(command)
+        self.assertIn("official_openai_http", command_text)
+        self.assertNotIn("model_catalog_json", command_text)
+
     def test_codex_command_keeps_private_profile_and_workdir(self) -> None:
         case = self._case("api", "http")
         command = build_codex_command(

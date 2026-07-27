@@ -1659,7 +1659,7 @@ func TestExtractSystemMessagesFromInput(t *testing.T) {
 		result := extractSystemMessagesFromInput(reqBody, true)
 
 		require.True(t, result)
-		require.Equal(t, "Inspect this image.", reqBody["instructions"])
+		require.NotContains(t, reqBody, "instructions")
 		input, ok := reqBody["input"].([]any)
 		require.True(t, ok)
 		require.Len(t, input, 2)

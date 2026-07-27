@@ -18,6 +18,8 @@ const (
 	BetaTokenCounting            = "token-counting-2024-11-01"
 	BetaContext1M                = "context-1m-2025-08-07"
 	BetaFastMode                 = "fast-mode-2026-02-01"
+	BetaThinkingTokenCount       = "thinking-token-count-2026-05-13"
+	BetaMidConversationSystem    = "mid-conversation-system-2026-04-07"
 
 	// 新增（对齐官方 CLI 2.1.9x 以来的流量）
 	BetaPromptCachingScope = "prompt-caching-scope-2026-01-05"
@@ -31,8 +33,9 @@ const (
 // 这些 token 是客户端特有的，不应透传给上游 API。
 var DroppedBetas = []string{}
 
-// DefaultBetaHeader Claude Code 客户端默认的 anthropic-beta header
-const DefaultBetaHeader = BetaClaudeCode + "," + BetaOAuth + "," + BetaInterleavedThinking + "," + BetaFineGrainedToolStreaming
+// DefaultBetaHeader 是 Claude Code 2.1.220 当前业务请求的静态 beta 基线。
+// 模型与工具触发的动态 beta 仍由 Official Egress 的 BetaPolicy 单独补齐。
+const DefaultBetaHeader = BetaClaudeCode + "," + BetaOAuth + "," + BetaInterleavedThinking + "," + BetaThinkingTokenCount + "," + BetaContextManagement + "," + BetaPromptCachingScope + "," + BetaMidConversationSystem + "," + BetaEffort + "," + BetaExtendedCacheTTL
 
 // MessageBetaHeaderNoTools /v1/messages 在无工具时的 beta header
 //
@@ -66,7 +69,7 @@ const DefaultCacheControlTTL = "5m"
 // CLICurrentVersion 是上游共享 Claude 兼容路径的默认 CLI 版本。
 // Plus 的 OAuth/API Key 官方画像不读取或修改该值，而是由私有
 // Official Client Profile Registry 按认证、端点和传输场景解析。
-const CLICurrentVersion = "2.1.161"
+const CLICurrentVersion = "2.1.220"
 
 // FullClaudeCodeMimicryBetas 返回最"像"真实 Claude Code CLI 的完整 beta 列表，
 // 用于 OAuth 账号伪装成 Claude Code 时使用。
@@ -91,16 +94,14 @@ func FullClaudeCodeMimicryBetas() []string {
 
 // DefaultHeaders 是 Claude Code 客户端默认请求头。
 var DefaultHeaders = map[string]string{
-	// Keep these in sync with recent Claude CLI traffic to reduce the chance
-	// that Claude Code-scoped OAuth credentials are rejected as "non-CLI" usage.
-	// 版本参考：对齐 Parrot (src/transform/cc_mimicry.py:49) 的 CLI_USER_AGENT。
+	// 与 2.1.220 Linux x64 官方客户端业务流量保持一致。
 	"User-Agent":                                "claude-cli/" + CLICurrentVersion + " (external, cli)",
 	"X-Stainless-Lang":                          "js",
 	"X-Stainless-Package-Version":               "0.94.0",
 	"X-Stainless-OS":                            "Linux",
-	"X-Stainless-Arch":                          "arm64",
+	"X-Stainless-Arch":                          "x64",
 	"X-Stainless-Runtime":                       "node",
-	"X-Stainless-Runtime-Version":               "v24.3.0",
+	"X-Stainless-Runtime-Version":               "v26.3.0",
 	"X-Stainless-Retry-Count":                   "0",
 	"X-Stainless-Timeout":                       "600",
 	"X-App":                                     "cli",

@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,7 +8,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -23,7 +21,6 @@ const (
 	officialAnthropicBetaHeader = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,mid-conversation-system-2026-04-07,effort-2025-11-24,extended-cache-ttl-2025-04-11"
 
 	officialAnthropicSystemSplitMarker  = "# Text output (does not apply to tool calls)"
-	officialAnthropicResponseMappingTTL = 24 * time.Hour
 	officialAnthropicIngressContractKey = "official_anthropic_ingress_contract"
 )
 
@@ -31,18 +28,6 @@ var (
 	officialAnthropicGlobalCacheControl = []byte(`{"type":"ephemeral","ttl":"1h","scope":"global"}`)
 	officialAnthropicLocalCacheControl  = []byte(`{"type":"ephemeral","ttl":"1h"}`)
 )
-
-// AnthropicOfficialEgressResponseStore 保存 Claude 同一会话最近一次成功响应的 request-id。
-// repository 层通过类型断言附带实现，避免扩大所有 GatewayCache 测试桩的共享接口。
-type AnthropicOfficialEgressResponseStore interface {
-	GetAnthropicPreviousRequestID(ctx context.Context, sessionKey string) (string, error)
-	SetAnthropicPreviousRequestID(
-		ctx context.Context,
-		sessionKey string,
-		requestID string,
-		ttl time.Duration,
-	) error
-}
 
 type officialAnthropicIdentity struct {
 	deviceID      string
@@ -81,7 +66,7 @@ func (s *GatewayService) finalizeAnthropicOfficialEgressRequest(
 	profile, err := defaultOfficialEgressProfileResolver.ResolveHTTPProfile(
 		egressContext,
 		account,
-		c.Request.URL.Path,
+		egressContext.InboundEndpoint(),
 	)
 	if err != nil {
 		return nil, nil, result, err
@@ -102,22 +87,7 @@ func (s *GatewayService) finalizeAnthropicOfficialEgressRequest(
 		return nil, nil, result, err
 	}
 
-	previousRequestID, err := s.loadAnthropicPreviousRequestID(req.Context(), account, identity.sessionID)
-	if err != nil {
-		return nil, nil, result, fmt.Errorf("load Anthropic response mapping: %w", err)
-	}
-	if previousRequestID != "" {
-		if err := egressContext.RegisterField(
-			OfficialEgressFieldPreviousRequestID,
-			previousRequestID,
-			OfficialEgressFieldSourceResponseMapping,
-			OfficialEgressFieldLifecycleResponse,
-		); err != nil {
-			return nil, nil, result, err
-		}
-	}
-
-	finalBody, err := finalizeOfficialAnthropicBody(body, identity, previousRequestID, clientProfile.Build.Version)
+	finalBody, err := finalizeOfficialAnthropicBody(body, identity, "", clientProfile.Build.Version)
 	if err != nil {
 		return nil, nil, result, err
 	}
@@ -139,7 +109,17 @@ func (s *GatewayService) finalizeAnthropicOfficialEgressRequest(
 	); err != nil {
 		return nil, nil, result, err
 	}
-	finalizeOfficialAnthropicHeaders(req.Header, clientProfile, identity.sessionID, clientRequestID)
+	if err := s.finalizeOfficialAnthropicHeaders(
+		req,
+		c,
+		account,
+		clientProfile,
+		finalBody,
+		identity.sessionID,
+		clientRequestID,
+	); err != nil {
+		return nil, nil, result, err
+	}
 	result.Modifications = append(result.Modifications,
 		OfficialEgressModification{Kind: "header", Field: "User-Agent"},
 		OfficialEgressModification{Kind: "header", Field: "anthropic-beta"},
@@ -248,14 +228,32 @@ func finalizeOfficialAnthropicIngressDefaults(
 	body []byte,
 ) ([]byte, error) {
 	contract, ok := officialAnthropicIngressContractFromGin(c)
-	if !ok || contract.temperaturePresent || !gjson.GetBytes(body, "temperature").Exists() {
-		return body, nil
+	removeTemperature := officialAnthropicThinkingEnabled(body) || (ok && !contract.temperaturePresent)
+	fields := []string{"top_p", "top_k"}
+	if removeTemperature {
+		fields = append(fields, "temperature")
 	}
-	next, err := sjson.DeleteBytes(body, "temperature")
-	if err != nil {
-		return nil, errors.New("anthropic official egress failed to remove generated temperature")
+	next := body
+	for _, field := range fields {
+		if !gjson.GetBytes(next, field).Exists() {
+			continue
+		}
+		var err error
+		next, err = sjson.DeleteBytes(next, field)
+		if err != nil {
+			return nil, fmt.Errorf("anthropic official egress failed to remove sampling field %s", field)
+		}
 	}
 	return next, nil
+}
+
+func officialAnthropicThinkingEnabled(body []byte) bool {
+	thinking := gjson.GetBytes(body, "thinking")
+	if !thinking.Exists() {
+		return false
+	}
+	thinkingType := strings.ToLower(strings.TrimSpace(thinking.Get("type").String()))
+	return thinkingType == "enabled" || thinkingType == "adaptive"
 }
 
 func validateOfficialAnthropicParsedIdentity(parsed *ParsedUserID) error {
@@ -449,7 +447,11 @@ func finalizeOfficialAnthropicBody(
 	if err != nil {
 		return nil, err
 	}
-	rawBlocks[1], err = deleteOfficialAnthropicCacheControl(rawBlocks[1])
+	rawBlocks[1], err = setOfficialAnthropicSystemText(
+		rawBlocks[1],
+		claudeSDKCLIIdentityPrompt,
+		nil,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -521,7 +523,19 @@ func finalizeOfficialAnthropicBody(
 	if err != nil {
 		return nil, errors.New("anthropic official egress failed to replace metadata.user_id")
 	}
-	return nextBody, nil
+	orderedPayload, err := decodeOfficialJSONObjectUseNumber(nextBody)
+	if err != nil {
+		return nil, errors.New("anthropic official egress failed to decode final body")
+	}
+	orderedBody, err := marshalOfficialOrderedJSONObjectPreservingRaw(orderedPayload, []string{
+		"model", "messages", "system", "tools", "tool_choice", "metadata",
+		"max_tokens", "thinking", "temperature", "context_management",
+		"stream", "output_config", "speed",
+	}, nextBody)
+	if err != nil {
+		return nil, errors.New("anthropic official egress failed to encode ordered body")
+	}
+	return orderedBody, nil
 }
 
 // normalizeOfficialAnthropicCacheProfile 把第三方客户端携带的缓存断点收敛为
@@ -721,7 +735,7 @@ func collectOfficialAnthropicSystemBlocks(system gjson.Result) [][]byte {
 	return rawBlocks
 }
 
-func buildOfficialAnthropicBillingText(body []byte, previousRequestID string, versions ...string) string {
+func buildOfficialAnthropicBillingText(body []byte, _ string, versions ...string) string {
 	clientVersion := officialAnthropicCLIVersion
 	if len(versions) > 0 && strings.TrimSpace(versions[0]) != "" {
 		clientVersion = strings.TrimSpace(versions[0])
@@ -733,9 +747,6 @@ func buildOfficialAnthropicBillingText(body []byte, previousRequestID string, ve
 		fingerprint,
 	)
 	// 当前 cch 生成算法没有可验证来源，因此按方案约束省略，不能复制抓包值或恢复旧算法。
-	if strings.TrimSpace(previousRequestID) != "" {
-		text += " cc_prev_req=" + strings.TrimSpace(previousRequestID) + ";"
-	}
 	return text
 }
 
@@ -826,7 +837,16 @@ func deleteOfficialAnthropicCacheControl(block []byte) ([]byte, error) {
 	return next, nil
 }
 
-func finalizeOfficialAnthropicHeaders(header http.Header, profile officialClientResolvedProfile, sessionID, clientRequestID string) {
+func (s *GatewayService) finalizeOfficialAnthropicHeaders(
+	req *http.Request,
+	c *gin.Context,
+	account *Account,
+	profile officialClientResolvedProfile,
+	body []byte,
+	sessionID string,
+	clientRequestID string,
+) error {
+	header := req.Header
 	for _, item := range profile.Wire.StaticHeaders {
 		deleteHeaderAllForms(header, item.Name)
 		setHeaderRaw(header, item.Name, item.Value)
@@ -841,91 +861,74 @@ func finalizeOfficialAnthropicHeaders(header http.Header, profile officialClient
 		deleteHeaderAllForms(header, name)
 	}
 	deleteHeaderAllForms(header, "anthropic-beta")
-	setHeaderRaw(header, "anthropic-beta", profile.Wire.BetaHeader)
+	betaHeader, err := s.resolveOfficialAnthropicBetaHeader(req, c, account, profile, body)
+	if err != nil {
+		return err
+	}
+	setHeaderRaw(header, "anthropic-beta", betaHeader)
 	deleteHeaderAllForms(header, "X-Claude-Code-Session-Id")
 	setHeaderRaw(header, "X-Claude-Code-Session-Id", sessionID)
 	deleteHeaderAllForms(header, "x-client-request-id")
 	setHeaderRaw(header, "x-client-request-id", clientRequestID)
+	return nil
 }
 
-func (s *GatewayService) anthropicOfficialEgressResponseStore() AnthropicOfficialEgressResponseStore {
-	if s == nil || s.cache == nil {
-		return nil
-	}
-	store, _ := s.cache.(AnthropicOfficialEgressResponseStore)
-	return store
-}
-
-func (s *GatewayService) loadAnthropicPreviousRequestID(
-	ctx context.Context,
+// resolveOfficialAnthropicBetaHeader 在生成官方动态 beta 后再次执行管理员策略。
+// 静态客户端身份 beta 与模型要求的 1M beta 不能被 filter 静默剥离；动态能力
+// beta 可以被策略过滤，但请求确实依赖该能力时必须显式失败，不能带着被削弱的
+// 请求继续访问上游。
+func (s *GatewayService) resolveOfficialAnthropicBetaHeader(
+	req *http.Request,
+	c *gin.Context,
 	account *Account,
-	sessionID string,
-) (string, error) {
-	store := s.anthropicOfficialEgressResponseStore()
-	if store == nil {
-		return "", nil
-	}
-	return store.GetAnthropicPreviousRequestID(
-		ctx,
-		buildAnthropicResponseMappingKey(account, sessionID),
-	)
-}
-
-func (s *GatewayService) rememberAnthropicPreviousRequestID(
-	ctx context.Context,
-	account *Account,
+	profile officialClientResolvedProfile,
 	body []byte,
-	header http.Header,
-) error {
-	enabled, _, err := resolveOfficialEgressAccountProfile(account)
-	if err != nil || !enabled {
-		return err
+) (string, error) {
+	modelID := strings.TrimSpace(gjson.GetBytes(body, "model").String())
+	betas := splitAnthropicBetaTokens(buildOfficialAnthropicBetaHeader(profile, body))
+	filterSet := s.getBetaPolicyFilterSet(req.Context(), c, account, modelID)
+	filterSet = removeTokensFromSetCopy(filterSet, splitAnthropicBetaTokens(profile.Wire.BetaHeader)...)
+	filterSet = removeTokensFromSetCopy(filterSet, anthropicAPIKeyMimicExtraBetas(modelID)...)
+	betas = filterBetaTokens(betas, filterSet)
+	betaHeader := strings.Join(betas, ",")
+
+	if apiKeyMimicBodyRequiresStructuredOutputs(body) &&
+		anthropicModelSupportsStructuredOutputs(modelID) &&
+		!containsBetaToken(betaHeader, AnthropicAPIKeyBetaStructuredOutputs) {
+		return "", &BetaBlockedError{Message: "结构化输出请求需要 beta feature " + AnthropicAPIKeyBetaStructuredOutputs + "，但该 beta 已被过滤策略禁用"}
 	}
-	metadataUserID := gjson.GetBytes(body, "metadata.user_id").String()
-	parsed := ParseMetadataUserID(metadataUserID)
-	if parsed == nil || strings.TrimSpace(parsed.SessionID) == "" {
-		return errors.New("anthropic official egress response mapping requires session_id")
+	if officialAnthropicBodyRequiresAdvancedToolUse(body) &&
+		!containsBetaToken(betaHeader, "advanced-tool-use-2025-11-20") {
+		return "", &BetaBlockedError{Message: "延迟工具加载请求需要 beta feature advanced-tool-use-2025-11-20，但该 beta 已被过滤策略禁用"}
 	}
-	requestID := anthropicUpstreamRequestID(header)
-	if requestID == "" {
-		return errors.New("anthropic official egress response mapping requires request-id")
+	if blockErr := s.checkBetaPolicyBlockForTokens(req.Context(), betas, account, modelID); blockErr != nil {
+		return "", blockErr
 	}
-	store := s.anthropicOfficialEgressResponseStore()
-	if store == nil {
-		return errors.New("anthropic official egress response store is unavailable")
-	}
-	return store.SetAnthropicPreviousRequestID(
-		ctx,
-		buildAnthropicResponseMappingKey(account, parsed.SessionID),
-		requestID,
-		officialAnthropicResponseMappingTTL,
-	)
+	return betaHeader, nil
 }
 
-func buildAnthropicResponseMappingKey(account *Account, sessionID string) string {
-	accountID := int64(0)
-	profileVersion := ""
-	if account != nil {
-		accountID = account.ID
-		if account.UsesOfficialEgressProfile() {
-			profileVersion = OfficialEgressProfileVersionPhase0
+func buildOfficialAnthropicBetaHeader(profile officialClientResolvedProfile, body []byte) string {
+	betaHeader := buildDefaultAPIKeyMimicBetaHeaderForProfile(body, true, profile)
+	betas := splitAnthropicBetaTokens(betaHeader)
+	if officialAnthropicBodyRequiresAdvancedToolUse(body) {
+		betas = appendAnthropicBetaToken(betas, "advanced-tool-use-2025-11-20")
+	}
+	return strings.Join(betas, ",")
+}
+
+func officialAnthropicBodyRequiresAdvancedToolUse(body []byte) bool {
+	tools := gjson.GetBytes(body, "tools")
+	if !tools.IsArray() {
+		return false
+	}
+	for _, tool := range tools.Array() {
+		if isBedrockToolSearchType(tool.Get("type").String()) ||
+			tool.Get("defer_loading").Bool() ||
+			tool.Get("custom.defer_loading").Bool() ||
+			hasCodeExecutionAllowedCallers(tool) ||
+			hasInputExamples(tool) {
+			return true
 		}
 	}
-	sum := sha256.Sum256([]byte(fmt.Sprintf(
-		"%d\x00%s\x00%s",
-		accountID,
-		profileVersion,
-		strings.TrimSpace(sessionID),
-	)))
-	return hex.EncodeToString(sum[:])
-}
-
-func anthropicUpstreamRequestID(header http.Header) string {
-	if header == nil {
-		return ""
-	}
-	if value := strings.TrimSpace(getHeaderRaw(header, "request-id")); value != "" {
-		return value
-	}
-	return strings.TrimSpace(getHeaderRaw(header, "x-request-id"))
+	return false
 }

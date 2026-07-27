@@ -72,7 +72,7 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 	token string,
 	decision OpenAIWSProtocolDecision,
 	isCodexCLI bool,
-	turnState string,
+	_ string,
 	turnMetadata string,
 	promptCacheKey string,
 ) (http.Header, openAIWSSessionHeaderResolution, error) {
@@ -114,9 +114,9 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 			headers.Set("conversation_id", sessionResolution.ConversationID)
 		}
 	}
-	if state := strings.TrimSpace(turnState); state != "" {
-		headers.Set(openAIWSTurnStateHeader, state)
-	}
+	// x-codex-turn-state 不能作为 WS 握手请求头上行；画像只会把上游握手
+	// 响应值写进同一连接、同一轮 response.create 的 client_metadata。
+	headers.Del(openAIWSTurnStateHeader)
 	if metadata := strings.TrimSpace(turnMetadata); metadata != "" {
 		headers.Set(openAIWSTurnMetadataHeader, metadata)
 	}

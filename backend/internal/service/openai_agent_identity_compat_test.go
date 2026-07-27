@@ -136,8 +136,7 @@ func TestOpenAIAgentIdentityPassthroughUsesBuiltInOfficialIdentity(t *testing.T)
 	require.Empty(t, req.Header.Get("conversation_id"))
 	require.NoError(t, uuid.Validate(req.Header.Get("session-id")))
 	require.Equal(t, req.Header.Get("session-id"), req.Header.Get("thread-id"))
-	requestBody, err := io.ReadAll(req.Body)
-	require.NoError(t, err)
+	requestBody := mustReadRequestBody(t, req)
 	require.Contains(t, string(requestBody), `"prompt_cache_key":"`+req.Header.Get("session-id")+`"`)
 
 	// Authentication mode must not affect session isolation or prompt-cache
@@ -327,6 +326,10 @@ func TestOpenAIAgentIdentityTaskInvalidRetriesExactlyOnce(t *testing.T) {
 	}}
 	require.True(t, isAgentIdentityTaskInvalidHTTPResponse(http.StatusUnauthorized, []byte(`{"error":{"code":"invalid_task_id"}}`)))
 	svc := &OpenAIGatewayService{cfg: &config.Config{}, accountRepo: repo, httpUpstream: upstream}
+	svc.openaiModelCapabilities.replaceFromManifest(
+		account.ID,
+		[]byte(`{"models":[{"slug":"gpt-5.4","use_responses_lite":false}]}`),
+	)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4","instructions":"Reply OK","input":[],"stream":false}`))

@@ -139,6 +139,7 @@ def build_case_environment(
     codex_api_home: Path | None,
     proxy_url: str,
     ca_bundle: Path,
+    oauth_claude_secret: str | None = None,
 ) -> dict[str, str]:
     """构造单一 case 的子进程环境，不修改当前进程环境。"""
 
@@ -167,6 +168,9 @@ def build_case_environment(
         # OAuth 必须使用容器内已隔离的默认授权状态，禁止继承 API 专用目录。
         environment.pop("CLAUDE_CONFIG_DIR", None)
         environment.pop("CODEX_HOME", None)
+        if case.product == "claude" and oauth_claude_secret:
+            # 显式覆盖只进入当前 Claude 子进程；编排器会对完整产物执行精确值扫描。
+            environment["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_claude_secret
 
     if case.evidence == "mitm":
         for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):

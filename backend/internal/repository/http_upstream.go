@@ -205,6 +205,7 @@ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID i
 
 	// 执行请求
 	client := httpClientForUpstreamRequest(entry.client, req)
+	client = httpClientWithCookieJar(client, service.HTTPUpstreamCookieJarFromContext(req.Context()))
 	client = httpClientWithGrokAccessDeniedFallback(client)
 	resp, err := servertiming.Do(client, req)
 	if err != nil {
@@ -278,6 +279,7 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 	}
 
 	client := httpClientForUpstreamRequest(entry.client, req)
+	client = httpClientWithCookieJar(client, service.HTTPUpstreamCookieJarFromContext(req.Context()))
 	client = httpClientWithGrokAccessDeniedFallback(client)
 	resp, err := servertiming.Do(client, req)
 	if err != nil {
@@ -305,6 +307,15 @@ func httpClientForUpstreamRequest(client *http.Client, req *http.Request) *http.
 	clone.CheckRedirect = func(*http.Request, []*http.Request) error {
 		return http.ErrUseLastResponse
 	}
+	return &clone
+}
+
+func httpClientWithCookieJar(client *http.Client, jar http.CookieJar) *http.Client {
+	if client == nil || jar == nil {
+		return client
+	}
+	clone := *client
+	clone.Jar = jar
 	return &clone
 }
 

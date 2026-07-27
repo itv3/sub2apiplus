@@ -80,9 +80,9 @@ func TestDefaultAPIKeyMimicBetaHeaderSelectsTerminalBetaFromFinalBody(t *testing
 		}
 	})
 
-	t.Run("Haiku 使用当前 CLI 完整 beta 画像", func(t *testing.T) {
+	t.Run("Haiku 不注入不受支持的 structured outputs beta", func(t *testing.T) {
 		header := defaultAPIKeyMimicBetaHeader([]byte(`{"model":"claude-haiku-4-5","output_config":{"format":{"type":"json_schema"}},"messages":[]}`))
-		require.True(t, anthropicBetaTokensContains(header, AnthropicAPIKeyBetaStructuredOutputs))
+		require.False(t, anthropicBetaTokensContains(header, AnthropicAPIKeyBetaStructuredOutputs))
 		require.False(t, anthropicBetaTokensContains(header, AnthropicAPIKeyBetaFallbackCredit))
 	})
 

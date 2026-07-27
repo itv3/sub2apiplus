@@ -773,10 +773,6 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 			return nil, err
 		}
 	}
-	if err := s.rememberAnthropicPreviousRequestID(ctx, account, lastWireBody, resp.Header); err != nil {
-		return nil, fmt.Errorf("store Anthropic official egress response mapping: %w", err)
-	}
-
 	// 触发上游接受回调（提前释放串行锁，不等流完成）
 	if parsed.OnUpstreamAccepted != nil {
 		parsed.OnUpstreamAccepted()

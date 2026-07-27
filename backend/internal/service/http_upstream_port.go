@@ -1,10 +1,34 @@
 package service
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 )
+
+type httpUpstreamCookieJarContextKey struct{}
+
+// WithHTTPUpstreamCookieJar 将账号级 Cookie jar 绑定到一次上游请求。
+// repository 只负责把它安装到实际 http.Client，不需要感知账号凭据。
+func WithHTTPUpstreamCookieJar(ctx context.Context, jar http.CookieJar) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if jar == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, httpUpstreamCookieJarContextKey{}, jar)
+}
+
+// HTTPUpstreamCookieJarFromContext 返回本次请求绑定的账号级 Cookie jar。
+func HTTPUpstreamCookieJarFromContext(ctx context.Context) http.CookieJar {
+	if ctx == nil {
+		return nil
+	}
+	jar, _ := ctx.Value(httpUpstreamCookieJarContextKey{}).(http.CookieJar)
+	return jar
+}
 
 // HTTPUpstream 上游 HTTP 请求接口
 // 用于向上游 API（Claude、OpenAI、Gemini 等）发送请求

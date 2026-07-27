@@ -93,6 +93,10 @@ direct 与 MITM 使用相同客户端版本、模型和场景，但两者是独�
 9. Codex OAuth S2 为了跨进程 `resume`，会在专用 capture 容器既有 OAuth
    `CODEX_HOME` 中留下会话/rollout 元数据；它不属于 run inventory 或 Key 精确扫描范围。
    因此 OAuth 抓包必须使用专用容器，工具也不会盲删共享 sessions。
+10. 如容器内 Claude 登录状态已失效，可用 `--subjects claude-http` 和
+    `--claude-oauth-token-env <变量名>` 显式提供当前 OAuth 账号 token。变量值只进入
+    Claude OAuth 子进程，不进入 Codex、dry-run、命令参数或 manifest；整套产物会做
+    token 精确值扫描，命中即脱敏并判失败。
 
 秘密扫描有明确边界：
 
@@ -115,6 +119,13 @@ direct 与 MITM 使用相同客户端版本、模型和场景，但两者是独�
 
 真实执行会在第一条模型请求前检查：客户端精确版本和哈希、抓包工具、Codex hook、MITM
 addon、CA、目录权限、tshark 全部 TLS 字段、目标 DNS/IP、既有 OAuth 登录状态以及历史恢复账本。
+
+Codex OAuth 的两种传输使用不同配置入口：WS 直接使用内置 `openai` provider；HTTP
+不能覆盖这个保留 ID 的 `supports_websockets`，因此使用独立 `official_openai_http` ID，
+但必须逐字段复制同版本内置 provider 的 `name="OpenAI"`、官方 Base URL、OAuth 认证和
+`version` Header，只把 `supports_websockets` 设为 `false`。`name="OpenAI"` 决定官方
+zstd 请求压缩路径，`version` 必须等于 `--expected-codex-version`。不得用
+`model_catalog_json` 添加未被当前 CLI 识别的 `prefer_websockets` 字段来伪造 HTTP 基准。
 
 `--runtime-image` 只是写入 manifest 的调用方声明。容器内无法独立反查 Docker image digest，
 部署者必须在 Vircs 宿主机用 `docker inspect` 复核容器实际 image ID；manifest 会明确记录
@@ -181,6 +192,10 @@ unset SUB2API_CAPTURE_API_KEY
 如需严格分成两次人工操作，可分别使用 `--task oauth` 和 `--task api`；它们与 `all` 中的
 两个顺序任务具有相同隔离边界。
 
+`--subjects` 可把一次补抓限制为 `claude-http`、`codex-http`、`codex-ws` 的任意组合，
+未选择的客户端不会接受状态预检或发起请求。该参数用于账号状态故障后的隔离补抓，不能把
+不同版本、模型或证据模式的 run 冒充为同一批次。
+
 ## 8. 产物结构
 
 ```text
@@ -221,7 +236,7 @@ unset SUB2API_CAPTURE_API_KEY
 
 ## 10. AnyRouter A/B
 
-本工具只产生 API 官方 CLI 基准。外部站点测试另行抓取
+在 AnyRouter A/B 中，本工具只产生官方 CLI 侧的 API 基准（OAuth 基准由 OAuth 任务生成，见 §1）。外部站点测试另行抓取
 “非官方客户端→Sub2API→AnyRouter”的候选出站证据，并按相同主体、传输、场景和证据类型比较：
 
 ```bash
@@ -258,7 +273,8 @@ python3 tools/official_client_capture/compare.py \
   --output contract-diff.json
 ```
 
-可选契约为 `oauth-claude-http`、`oauth-codex-http` 和 `oauth-codex-ws`。报告同时保留：
+可选契约为 `oauth-claude-http`、`oauth-codex-http`、
+`oauth-codex-compact-http` 和 `oauth-codex-ws`。报告同时保留：
 
 - `raw_equal`：原始严格结构比较，仅作全量诊断，不隐藏任何差异；
 - `contract_equal`：固定 Header、路径、协议、Body 外层、WS 帧序列和候选语义守恒验收；
@@ -271,6 +287,41 @@ python3 tools/official_client_capture/compare.py \
 Codex WS 业务帧的每个 `input` 项必须包含
 `internal_chat_message_metadata_passthrough.turn_id`，`generate=false` 预热帧则不得包含。
 工具不会为了得到相等结果而伪造 Cookie、补造消息或删除合法的 `thinking` 内容。
+
+### 10.2 compact 与非 Lite 专项
+
+S1/S2/S4 主矩阵不会自动触发手动上下文压缩。需要验证 compact 时，使用
+`run_codex_compact_scenario.py` 通过 app-server 顺序执行 `initialize`、
+`thread/start`、`turn/start` 和 `thread/compact/start`。Codex CLI 0.145.0
+实测用第二个 `turn/completed` 表示手动压缩轮完成，不发送
+`thread/compacted`。该控制面动作产生含 `compaction_trigger` 的普通
+`/responses` 请求，不能冒充 `/responses/compact` 端点基准：
+
+```bash
+python3 tools/official_client_capture/run_codex_compact_scenario.py \
+  --mode official-http \
+  --model gpt-5.4 \
+  --output-dir /capture/runs/compact-official
+```
+
+候选使用 `--mode sub2api-http`，并只从运行时环境读取
+`SUB2API_API_KEY`。两种模式共用相同 JSON-RPC 生命周期；官方 provider 固定
+`name="OpenAI"`、`version=0.145.0` 和 HTTP 传输，确保 zstd 与身份基准有效。
+
+`run_sub2api_direct_matrix.sh` 支持通过 `CLAUDE_MODEL`、`CODEX_MODEL`、
+`SUBJECTS`、`SCENARIOS` 和 `RUN_ID` 运行补充矩阵。非 Lite 验证应把
+`CODEX_MODEL` 设为已在同账号 `/models` manifest 中确认的非 Lite 模型，不能只靠名称猜测。
+
+Vircs 的可恢复封装脚本如下：
+
+- `run_sub2api_openai_mitm_matrix.sh`：只操作指定 OpenAI OAuth 账号，临时安装 CA/代理并在退出时精确恢复；
+- `run_official_codex_scenario_capture.sh`：用固定场景驱动器生成 direct + MITM 官方样本；
+- `run_official_codex_compact_capture.sh`：生成手动压缩控制面 direct + MITM 样本；
+- `compare_review_runs.py`：汇总标准 HTTP/WS、非 Lite、手动压缩观察和 direct TLS，生成最终契约报告。
+
+跨独立 Codex CLI 运行的动态工具目录可以不同，报告会声明该边界；候选同次 ingress→egress
+仍逐字段校验 `tools`，任何工具丢失或改写都会失败。WS turn-state 同样以官方 wire 为条件：
+官方未下发时双方均无状态才算一致，官方已下发时必须看到候选同连接回放。
 
 ## 11. 本地测试
 

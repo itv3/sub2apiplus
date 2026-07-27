@@ -227,10 +227,27 @@ func (c *codexModelsManifestCache) set(key string, manifest *CodexModelsManifest
 // through verbatim. Model entries evolve with Codex client releases, so the
 // gateway deliberately avoids interpreting their fields and reflects the
 // account's real entitlements without chasing upstream schema changes.
-func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, account *Account, clientVersion, ifNoneMatch string) (*CodexModelsManifest, error) {
+func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, account *Account, clientVersion, ifNoneMatch string) (manifest *CodexModelsManifest, err error) {
+	return s.fetchCodexModelsManifest(ctx, account, clientVersion, ifNoneMatch, true)
+}
+
+// fetchCodexModelsManifest 支持能力预热使用只读模式。只读模式仍执行相同的
+// 鉴权、代理和响应校验，但辅助探测的 401 不得改变账号调度或禁用状态。
+func (s *OpenAIGatewayService) fetchCodexModelsManifest(
+	ctx context.Context,
+	account *Account,
+	clientVersion string,
+	ifNoneMatch string,
+	handleAccountAuthError bool,
+) (manifest *CodexModelsManifest, err error) {
 	if account == nil {
 		return nil, infraerrors.New(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_ACCOUNT_REQUIRED", "account is required")
 	}
+	defer func() {
+		if err == nil && manifest != nil && len(manifest.Body) > 0 {
+			s.openaiModelCapabilities.replaceFromManifest(account.ID, manifest.Body)
+		}
+	}()
 	credAccount, err := resolveCredentialAccount(ctx, s.accountRepo, account)
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_CREDENTIALS_FAILED", "resolve credential account: %v", err)
@@ -300,9 +317,8 @@ func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, acc
 		setOpenAIChatGPTAccountHeaders(headers, credAccount)
 	}
 	headers.Set("Accept", "application/json")
-	headers.Set("Originator", "codex_cli_rs")
+	applyOpenAICodexAuxiliaryHeaders(headers)
 	headers.Set("Version", clientVersion)
-	headers.Set("User-Agent", codexCLIUserAgent)
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
@@ -324,7 +340,9 @@ func (s *OpenAIGatewayService) FetchCodexModelsManifest(ctx context.Context, acc
 	}
 	manifest, fetchErr := s.fetchCodexModelsManifestUpstream(ctx, request, ifNoneMatch)
 	if !credAccount.IsOpenAIAgentIdentity() || !isAgentIdentityTaskInvalidCodexModelsError(fetchErr) {
-		s.handleCodexModelsManifestAccountAuthError(ctx, account, credAccount, fetchErr)
+		if handleAccountAuthError {
+			s.handleCodexModelsManifestAccountAuthError(ctx, account, credAccount, fetchErr)
+		}
 		return manifest, fetchErr
 	}
 	expectedTaskID := strings.TrimSpace(credAccount.GetCredential("task_id"))
@@ -434,6 +452,7 @@ func (s *OpenAIGatewayService) refreshCachedAPIKeyCodexModelsManifest(cacheKey s
 }
 
 func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstream(ctx context.Context, request codexModelsManifestRequest, ifNoneMatch string) (*CodexModelsManifest, error) {
+	ctx = s.bindOpenAICookieJar(ctx, request.credentialAccount)
 	reqCtx, cancel := context.WithTimeout(ctx, codexModelsManifestRequestTimeout)
 	defer cancel()
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, request.url, nil)
@@ -461,7 +480,9 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstream(ctx context.Cont
 		if clientErr != nil {
 			return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_PROXY_INVALID", "invalid proxy configuration: %v", clientErr)
 		}
-		resp, err = client.Do(req)
+		clientWithJar := *client
+		clientWithJar.Jar = s.openAICookieJar(request.credentialAccount)
+		resp, err = clientWithJar.Do(req)
 	}
 	if err != nil {
 		return nil, &codexModelsManifestUpstreamError{

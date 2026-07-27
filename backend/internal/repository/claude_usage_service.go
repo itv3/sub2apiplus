@@ -15,8 +15,8 @@ import (
 
 const defaultClaudeUsageURL = "https://api.anthropic.com/api/oauth/usage"
 
-// 默认 User-Agent，与用户抓包的请求一致
-const defaultUsageUserAgent = "claude-code/2.1.7"
+// 默认 User-Agent 来自 Claude Code 2.1.220 官方包中 /api/oauth/usage 的实际调用链。
+const defaultUsageUserAgent = "claude-cli/2.1.220 (external, cli)"
 
 type claudeUsageService struct {
 	usageURL          string

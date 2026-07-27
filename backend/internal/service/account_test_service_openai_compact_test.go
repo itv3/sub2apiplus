@@ -55,7 +55,7 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactOAuthSuccessPersi
 
 	require.Equal(t, chatgptCodexAPIURL+"/compact", upstream.lastReq.URL.String())
 	require.Equal(t, "chatgpt.com", upstream.lastReq.Host)
-	require.Equal(t, "application/json", upstream.lastReq.Header.Get("Accept"))
+	require.Empty(t, upstream.lastReq.Header.Get("Accept"))
 	require.Equal(t, codexCLIVersion, upstream.lastReq.Header.Get("Version"))
 	require.NotEmpty(t, upstream.lastReq.Header.Get("Session_Id"))
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.lastReq.Context()))
@@ -379,7 +379,7 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactAPIKeyMimicUsesPr
 	require.Equal(t, "https://example.com/v1/responses/compact", upstream.lastReq.URL.String())
 	require.Equal(t, officialOpenAIHTTPUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, officialOpenAIHTTPOriginator, upstream.lastReq.Header.Get("originator"))
-	require.Equal(t, "application/json", upstream.lastReq.Header.Get("Accept"))
+	require.Empty(t, upstream.lastReq.Header.Get("Accept"))
 	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
 	require.Empty(t, upstream.lastReq.Header.Get("Version"))
 	require.NotEmpty(t, upstream.lastReq.Header.Get("Session-Id"))

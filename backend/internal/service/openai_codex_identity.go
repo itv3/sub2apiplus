@@ -5,12 +5,26 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openaiidentity"
 	"github.com/google/uuid"
 )
 
 // codexUpstreamMinVersion 上游 /backend-api/codex 接受的最低 version 头：
 // 若请求携带 version 且低于该值，上游直接 404（issue #3901，2026-07 实测）。
 const codexUpstreamMinVersion = "0.144.0"
+
+// applyOpenAICodexAuxiliaryHeaders 为 models、usage、search、PAT 等辅助端点
+// 写入与主推理路径相同的当前 Codex 构建身份。端点若有额外实验 Header，必须由
+// 端点自身在调用后显式添加，禁止沿用旧版 responses=experimental 默认值。
+func applyOpenAICodexAuxiliaryHeaders(h http.Header) {
+	if h == nil {
+		return
+	}
+	h.Set("User-Agent", openaiidentity.CodexUserAgent)
+	h.Set("originator", openaiidentity.CodexOriginator)
+	h.Set("version", openaiidentity.CodexVersion)
+	h.Del("OpenAI-Beta")
+}
 
 // ensureCodexIdentityHeaders 补齐 OAuth（ChatGPT 内部接口）出站请求所需的 Codex 身份头。
 // 已有 User-Agent 与 version 保持不变，交给紧随其后的 enforceCodexIdentityHeaders
@@ -23,12 +37,12 @@ func ensureCodexIdentityHeaders(h http.Header) {
 		h.Set("user-agent", codexCLIUserAgent)
 	}
 	if strings.TrimSpace(h.Get("originator")) == "" {
-		h.Set("originator", "codex_cli_rs")
+		h.Set("originator", openaiidentity.CodexOriginator)
 	}
 	if strings.TrimSpace(h.Get("version")) == "" {
 		h.Set("version", codexCLIVersion)
 	}
-	h.Set("OpenAI-Beta", "responses=experimental")
+	h.Del("OpenAI-Beta")
 }
 
 // applyOpenAICodexProbeHeaders 为合成探测请求补齐 Codex 身份和引擎指纹。
@@ -54,7 +68,7 @@ func enforceCodexIdentityHeaders(h http.Header) {
 	}
 	originator, pairedUA, ok := openai.PairCodexClientIdentity(h.Get("user-agent"))
 	if !ok {
-		originator, pairedUA = "codex_cli_rs", codexCLIUserAgent
+		originator, pairedUA = openaiidentity.CodexOriginator, codexCLIUserAgent
 	}
 	h.Set("user-agent", pairedUA)
 	h.Set("originator", originator)

@@ -157,7 +157,7 @@ func newCodexModelsTestAccount() *Account {
 }
 
 func TestFetchCodexModelsManifestPassthrough(t *testing.T) {
-	manifestBody := `{"models":[{"slug":"gpt-5.5","display_name":"GPT-5.5"}]}`
+	manifestBody := `{"models":[{"slug":"gpt-5.5","display_name":"GPT-5.5","use_responses_lite":true}]}`
 
 	var gotAuth, gotAccountID, gotOriginator, gotClientVersion string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -193,12 +193,50 @@ func TestFetchCodexModelsManifestPassthrough(t *testing.T) {
 	if gotAccountID != "acc-123" {
 		t.Errorf("chatgpt-account-id header: got %q", gotAccountID)
 	}
-	if gotOriginator != "codex_cli_rs" {
+	if gotOriginator != officialOpenAIHTTPOriginator {
 		t.Errorf("originator header: got %q", gotOriginator)
 	}
 	if gotClientVersion != "0.137.0" {
 		t.Errorf("client_version query: got %q", gotClientVersion)
 	}
+	if enabled, known := s.openaiModelCapabilities.responsesLite(1, "gpt-5.5"); !known || !enabled {
+		t.Errorf("use_responses_lite capability not recorded: known=%v enabled=%v", known, enabled)
+	}
+}
+
+func TestFetchCodexModelsManifestRejectsNonAllowlistedCookies(t *testing.T) {
+	var requestCount int
+	var secondCookie string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		if requestCount == 1 {
+			http.SetCookie(w, &http.Cookie{Name: "codex_session", Value: "cookie-94", Path: "/"})
+		} else {
+			secondCookie = r.Header.Get("Cookie")
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[{"slug":"gpt-5.5","use_responses_lite":true}]}`))
+	}))
+	defer server.Close()
+
+	original := chatgptCodexModelsURL
+	chatgptCodexModelsURL = server.URL
+	defer func() { chatgptCodexModelsURL = original }()
+
+	service := &OpenAIGatewayService{}
+	account := newCodexModelsTestAccount()
+	_, err := service.FetchCodexModelsManifest(context.Background(), account, "0.145.0", "")
+	require.NoError(t, err)
+	_, err = service.FetchCodexModelsManifest(context.Background(), account, "0.145.1", "")
+	require.NoError(t, err)
+	require.NotContains(t, secondCookie, "codex_session=cookie-94")
+
+	otherAccount := newCodexModelsTestAccount()
+	otherAccount.ID = 43
+	otherJar := service.openAICookieJar(otherAccount)
+	parsedURL, err := url.Parse(server.URL)
+	require.NoError(t, err)
+	require.Empty(t, otherJar.Cookies(parsedURL), "不同账号不得共享 Cookie")
 }
 
 func TestFetchCodexModelsManifestAgentIdentityUsesAssertionWithoutOAuthToken(t *testing.T) {
@@ -447,7 +485,7 @@ func TestFetchCodexModelsManifestAPIKeyCustomUpstream(t *testing.T) {
 	if gotRequest.Header.Get("Authorization") != "Bearer sk-upstream" {
 		t.Errorf("authorization header: got %q", gotRequest.Header.Get("Authorization"))
 	}
-	if gotRequest.Header.Get("Originator") != "codex_cli_rs" {
+	if gotRequest.Header.Get("Originator") != officialOpenAIHTTPOriginator {
 		t.Errorf("originator header: got %q", gotRequest.Header.Get("Originator"))
 	}
 	if gotRequest.Header.Get("Version") != "0.144.0" {

@@ -85,6 +85,9 @@ type codexOAuthTransformOptions struct {
 	PreserveToolCallIDs                 bool
 	OmitPromotedSystemMessagesFromInput bool
 	PreserveBareRoleContentMessages     bool
+	// PreserveTopLevelSemantics 用于非 Responses Lite 模型，禁止把标准
+	// Responses 顶层参数强制改写成 Lite 固定画像。
+	PreserveTopLevelSemantics bool
 }
 
 const (
@@ -192,7 +195,7 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 			delete(reqBody, "stream")
 			result.Modified = true
 		}
-	} else {
+	} else if !opts.PreserveTopLevelSemantics {
 		// OAuth 走 ChatGPT internal API 时，store 必须为 false；显式 true 也会强制覆盖。
 		// 避免上游返回 "Store must be set to false"。
 		if v, ok := reqBody["store"].(bool); !ok || v {
@@ -207,6 +210,9 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 
 	// Strip parameters unsupported by ChatGPT internal Codex endpoint.
 	for _, key := range openAICodexOAuthUnsupportedFields {
+		if opts.PreserveTopLevelSemantics && key == "max_output_tokens" {
+			continue
+		}
 		if _, ok := reqBody[key]; ok {
 			delete(reqBody, key)
 			result.Modified = true
@@ -215,7 +221,7 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 
 	// 请求带 reasoning 时补齐 include:["reasoning.encrypted_content"]，与真实 Codex 对齐
 	// （compact 端点形态不同，单独处理，此处跳过）。
-	if !opts.IsCompact && ensureCodexReasoningInclude(reqBody) {
+	if !opts.IsCompact && !opts.PreserveTopLevelSemantics && ensureCodexReasoningInclude(reqBody) {
 		result.Modified = true
 	}
 
@@ -252,10 +258,10 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 		result.Modified = true
 	}
 
-	if normalizeCodexTools(reqBody) {
+	if !opts.PreserveTopLevelSemantics && normalizeCodexTools(reqBody) {
 		result.Modified = true
 	}
-	if normalizeCodexToolChoice(reqBody) {
+	if !opts.PreserveTopLevelSemantics && normalizeCodexToolChoice(reqBody) {
 		result.Modified = true
 	}
 
@@ -1383,6 +1389,12 @@ func extractSystemMessagesFromInput(reqBody map[string]any, omitPromoted bool) b
 				modified = true
 				continue
 			}
+			// 混合内容无法无损表示为顶层 instructions，只把角色改为 developer，
+			// 不再抽取其中的文本形成重复提示词。
+			m["role"] = "developer"
+			filteredInput = append(filteredInput, item)
+			modified = true
+			continue
 		}
 
 		if text := extractTextFromContent(m["content"]); text != "" {

@@ -45,8 +45,8 @@ func flattenOpenAIResponsesNamespaces(c *gin.Context, body []byte) ([]byte, erro
 	if !bytes.Contains(body, []byte(`"namespace"`)) {
 		return body, nil
 	}
-	var requestBody map[string]any
-	if err := json.Unmarshal(body, &requestBody); err != nil {
+	requestBody, err := decodeOfficialJSONObjectUseNumber(body)
+	if err != nil {
 		return body, fmt.Errorf("decode OpenAI namespace body: %w", err)
 	}
 	names, changed, err := apicompat.FlattenResponsesNamespacesExcept(requestBody, map[string]bool{"image_gen": true})
@@ -56,12 +56,27 @@ func flattenOpenAIResponsesNamespaces(c *gin.Context, body []byte) ([]byte, erro
 	if !changed {
 		return body, nil
 	}
-	rebuilt, err := marshalOpenAIUpstreamJSON(requestBody)
+	rebuilt, err := marshalOfficialJSONObjectPreservingOrderAndRaw(requestBody, body)
 	if err != nil {
 		return body, fmt.Errorf("encode OpenAI namespace body: %w", err)
 	}
 	setOpenAIResponsesNamespaceNames(c, names)
 	return rebuilt, nil
+}
+
+// validateOpenAIResponsesNamespaces 只校验 namespace 摊平后的名称冲突，不改写
+// 请求体。Responses Lite 会用 additional_tools 原生承载 namespace，因此只能
+// 提前执行冲突校验，不能把其结构先摊平成普通 function。
+func validateOpenAIResponsesNamespaces(body []byte) error {
+	if !bytes.Contains(body, []byte(`"namespace"`)) {
+		return nil
+	}
+	var requestBody map[string]any
+	if err := json.Unmarshal(body, &requestBody); err != nil {
+		return fmt.Errorf("decode OpenAI namespace body: %w", err)
+	}
+	_, _, err := apicompat.FlattenResponsesNamespacesExcept(requestBody, map[string]bool{"image_gen": true})
+	return err
 }
 
 // stripOpenAIResponsesInputNamespaces removes namespace only from direct input

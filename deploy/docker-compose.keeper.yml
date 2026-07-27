@@ -1,0 +1,34 @@
+name: sub2apiplus-keeper
+
+services:
+  keeper:
+    build:
+      context: ../repo
+      dockerfile: Dockerfile
+    image: sub2apiplus-keeper:latest
+    container_name: sub2apiplus-keeper
+    restart: unless-stopped
+    # keeper 需要这三项以运行官方客户端和 bubblewrap 沙箱
+    cap_add:
+      - CAP_SYS_ADMIN
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    env_file:
+      - ./.env
+    environment:
+      - KEEPER_CONFIG=/app/keeper.yaml
+    volumes:
+      - ./keeper.yaml:/app/keeper.yaml:ro
+      - ./data:/app/data
+      - ./projects:/workspace/projects:ro
+    ports:
+      - "${KEEPER_BIND_HOST:-127.0.0.1}:${KEEPER_HOST_PORT:-38091}:38090"
+    networks:
+      - sub2api-network
+
+networks:
+  sub2api-network:
+    external: true
+    # 必须与主服务网络一致；COMPOSE_PROJECT_NAME=sub2apiplus 时固定为该名称
+    name: sub2apiplus_sub2api-network

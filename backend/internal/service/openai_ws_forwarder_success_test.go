@@ -61,7 +61,7 @@ func TestOpenAIGatewayService_Forward_WSv2_SuccessAndBindSticky(t *testing.T) {
 			"type": "response.created",
 			"response": map[string]any{
 				"id":    "resp_new_1",
-				"model": "gpt-5.1",
+				"model": "gpt-5.4",
 			},
 		}); err != nil {
 			t.Errorf("write response.created failed: %v", err)
@@ -71,7 +71,7 @@ func TestOpenAIGatewayService_Forward_WSv2_SuccessAndBindSticky(t *testing.T) {
 			"type": "response.completed",
 			"response": map[string]any{
 				"id":    "resp_new_1",
-				"model": "gpt-5.1",
+				"model": "gpt-5.4",
 				"usage": map[string]any{
 					"input_tokens":  12,
 					"output_tokens": 7,
@@ -142,7 +142,7 @@ func TestOpenAIGatewayService_Forward_WSv2_SuccessAndBindSticky(t *testing.T) {
 		},
 	}
 
-	body := []byte(`{"model":"gpt-5.1","stream":false,"previous_response_id":"resp_prev_1","input":[{"type":"input_text","text":"hello"}]}`)
+	body := []byte(`{"model":"gpt-5.4","stream":false,"previous_response_id":"resp_prev_1","input":[{"type":"input_text","text":"hello"}]}`)
 	result, err := svc.Forward(context.Background(), c, account, body)
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -457,7 +457,7 @@ func TestOpenAIGatewayService_Forward_WSv2_RewriteModelAndToolCallsOnCompletedEv
 
 	captureConn := &openAIWSCaptureConn{
 		events: [][]byte{
-			[]byte(`{"type":"response.completed","response":{"id":"resp_model_tool_1","model":"gpt-5.1","tool_calls":[{"function":{"name":"apply_patch","arguments":"{\"file_path\":\"/tmp/a.txt\",\"old_string\":\"a\",\"new_string\":\"b\"}"}}],"usage":{"input_tokens":2,"output_tokens":1}},"tool_calls":[{"function":{"name":"apply_patch","arguments":"{\"file_path\":\"/tmp/a.txt\",\"old_string\":\"a\",\"new_string\":\"b\"}"}}]}`),
+			[]byte(`{"type":"response.completed","response":{"id":"resp_model_tool_1","model":"gpt-5.4","tool_calls":[{"function":{"name":"apply_patch","arguments":"{\"file_path\":\"/tmp/a.txt\",\"old_string\":\"a\",\"new_string\":\"b\"}"}}],"usage":{"input_tokens":2,"output_tokens":1}},"tool_calls":[{"function":{"name":"apply_patch","arguments":"{\"file_path\":\"/tmp/a.txt\",\"old_string\":\"a\",\"new_string\":\"b\"}"}}]}`),
 		},
 	}
 	captureDialer := &openAIWSCaptureDialer{conn: captureConn}
@@ -484,7 +484,7 @@ func TestOpenAIGatewayService_Forward_WSv2_RewriteModelAndToolCallsOnCompletedEv
 		Credentials: map[string]any{
 			"api_key": "sk-test",
 			"model_mapping": map[string]any{
-				"custom-original-model": "gpt-5.1",
+				"custom-original-model": "gpt-5.4",
 			},
 		},
 		Extra: map[string]any{
@@ -594,7 +594,7 @@ func TestOpenAIGatewayService_Forward_WSv2_PoolReuseNotOneToOne(t *testing.T) {
 				"type": "response.created",
 				"response": map[string]any{
 					"id":    responseID,
-					"model": "gpt-5.1",
+					"model": "gpt-5.4",
 				},
 			}); err != nil {
 				return
@@ -603,7 +603,7 @@ func TestOpenAIGatewayService_Forward_WSv2_PoolReuseNotOneToOne(t *testing.T) {
 				"type": "response.completed",
 				"response": map[string]any{
 					"id":    responseID,
-					"model": "gpt-5.1",
+					"model": "gpt-5.4",
 					"usage": map[string]any{
 						"input_tokens":  2,
 						"output_tokens": 1,
@@ -663,7 +663,7 @@ func TestOpenAIGatewayService_Forward_WSv2_PoolReuseNotOneToOne(t *testing.T) {
 		groupID := int64(2001)
 		c.Set("api_key", &APIKey{GroupID: &groupID})
 
-		body := []byte(`{"model":"gpt-5.1","stream":false,"previous_response_id":"resp_prev_reuse","input":[{"type":"input_text","text":"hello"}]}`)
+		body := []byte(`{"model":"gpt-5.4","stream":false,"previous_response_id":"resp_prev_reuse","input":[{"type":"input_text","text":"hello"}]}`)
 		result, err := svc.Forward(context.Background(), c, account, body)
 		require.NoError(t, err)
 		require.NotNil(t, result)
@@ -702,7 +702,7 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T
 
 	captureConn := &openAIWSCaptureConn{
 		events: [][]byte{
-			[]byte(`{"type":"response.completed","response":{"id":"resp_oauth_1","model":"gpt-5.1","usage":{"input_tokens":3,"output_tokens":2}}}`),
+			[]byte(`{"type":"response.completed","response":{"id":"resp_oauth_1","model":"gpt-5.4","usage":{"input_tokens":3,"output_tokens":2}}}`),
 		},
 	}
 	captureDialer := &openAIWSCaptureDialer{conn: captureConn}
@@ -733,7 +733,7 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T
 		},
 	}
 
-	body := []byte(`{"model":"gpt-5.1","stream":false,"store":true,"input":[{"type":"input_text","text":"hello","namespace":"native-wsv2"}]}`)
+	body := []byte(`{"model":"gpt-5.4","stream":false,"store":true,"input":[{"type":"input_text","text":"hello","namespace":"native-wsv2"}]}`)
 	result, err := svc.Forward(context.Background(), c, account, body)
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -774,7 +774,7 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthOriginatorCompatibility(t *testi
 			wantOriginator: "codex-tui",
 			wantUA:         "codex-tui/0.140.2 (Mac OS X 14.0; arm64) iTerm (codex-tui; 0.140.2)",
 		},
-		{name: "official originator without ua falls back to default identity", originator: "codex_vscode", wantOriginator: "codex_cli_rs", wantUA: codexCLIUserAgent},
+		{name: "official originator without ua falls back to default identity", originator: "codex_vscode", wantOriginator: officialOpenAIHTTPOriginator, wantUA: codexCLIUserAgent},
 	}
 
 	for _, tt := range tests {
@@ -803,7 +803,7 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthOriginatorCompatibility(t *testi
 
 			captureConn := &openAIWSCaptureConn{
 				events: [][]byte{
-					[]byte(`{"type":"response.completed","response":{"id":"resp_oauth_originator","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`),
+					[]byte(`{"type":"response.completed","response":{"id":"resp_oauth_originator","model":"gpt-5.4","usage":{"input_tokens":1,"output_tokens":1}}}`),
 				},
 			}
 			captureDialer := &openAIWSCaptureDialer{conn: captureConn}
@@ -834,7 +834,7 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthOriginatorCompatibility(t *testi
 				},
 			}
 
-			body := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
+			body := []byte(`{"model":"gpt-5.4","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
 			result, err := svc.Forward(context.Background(), c, account, body)
 			require.NoError(t, err)
 			require.NotNil(t, result)
@@ -865,7 +865,7 @@ func TestOpenAIGatewayService_Forward_WSv2_HeaderSessionFallbackFromPromptCacheK
 
 	captureConn := &openAIWSCaptureConn{
 		events: [][]byte{
-			[]byte(`{"type":"response.completed","response":{"id":"resp_prompt_cache_key","model":"gpt-5.1","usage":{"input_tokens":2,"output_tokens":1}}}`),
+			[]byte(`{"type":"response.completed","response":{"id":"resp_prompt_cache_key","model":"gpt-5.4","usage":{"input_tokens":2,"output_tokens":1}}}`),
 		},
 	}
 	captureDialer := &openAIWSCaptureDialer{conn: captureConn}
@@ -896,7 +896,7 @@ func TestOpenAIGatewayService_Forward_WSv2_HeaderSessionFallbackFromPromptCacheK
 		},
 	}
 
-	body := []byte(`{"model":"gpt-5.1","stream":true,"prompt_cache_key":"pcache_123","input":[{"type":"input_text","text":"hi"}]}`)
+	body := []byte(`{"model":"gpt-5.4","stream":true,"prompt_cache_key":"pcache_123","input":[{"type":"input_text","text":"hi"}]}`)
 	result, err := svc.Forward(context.Background(), c, account, body)
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -930,7 +930,7 @@ func TestOpenAIGatewayService_Forward_WSv2_ResponseDoneUsageParsed(t *testing.T)
 
 	captureConn := &openAIWSCaptureConn{
 		events: [][]byte{
-			[]byte(`{"type":"response.done","response":{"id":"resp_done_usage","model":"gpt-5.1","usage":{"input_tokens":13,"output_tokens":8,"input_tokens_details":{"cached_tokens":5},"cache_creation_input_tokens":2,"output_tokens_details":{"image_tokens":4}}}}`),
+			[]byte(`{"type":"response.done","response":{"id":"resp_done_usage","model":"gpt-5.4","usage":{"input_tokens":13,"output_tokens":8,"input_tokens_details":{"cached_tokens":5},"cache_creation_input_tokens":2,"output_tokens_details":{"image_tokens":4}}}}`),
 		},
 	}
 	captureDialer := &openAIWSCaptureDialer{conn: captureConn}
@@ -961,7 +961,7 @@ func TestOpenAIGatewayService_Forward_WSv2_ResponseDoneUsageParsed(t *testing.T)
 		},
 	}
 
-	body := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"input_text","text":"hi"}]}`)
+	body := []byte(`{"model":"gpt-5.4","stream":false,"input":[{"type":"input_text","text":"hi"}]}`)
 	result, err := svc.Forward(context.Background(), c, account, body)
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1023,7 +1023,7 @@ func TestOpenAIGatewayService_Forward_WSv1_Unsupported(t *testing.T) {
 		},
 	}
 
-	body := []byte(`{"model":"gpt-5.1","stream":false,"previous_response_id":"resp_prev_v1","input":[{"type":"input_text","text":"hello"}]}`)
+	body := []byte(`{"model":"gpt-5.4","stream":false,"previous_response_id":"resp_prev_v1","input":[{"type":"input_text","text":"hello"}]}`)
 	result, err := svc.Forward(context.Background(), c, account, body)
 	require.Error(t, err)
 	require.Nil(t, result)
@@ -1033,7 +1033,7 @@ func TestOpenAIGatewayService_Forward_WSv1_Unsupported(t *testing.T) {
 	require.Nil(t, upstream.lastReq, "WSv1 不支持时不应触发 HTTP 上游请求")
 }
 
-func TestOpenAIGatewayService_Forward_WSv2_TurnStateAndMetadataReplayOnReconnect(t *testing.T) {
+func TestOpenAIGatewayService_Forward_WSv2_TurnStateOnlyFlowsToDownstream(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	var connIndex atomic.Int64
@@ -1066,7 +1066,7 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnStateAndMetadataReplayOnReconnect
 			"type": "response.completed",
 			"response": map[string]any{
 				"id":    responseID,
-				"model": "gpt-5.1",
+				"model": "gpt-5.4",
 				"usage": map[string]any{
 					"input_tokens":  2,
 					"output_tokens": 1,
@@ -1115,7 +1115,7 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnStateAndMetadataReplayOnReconnect
 		},
 	}
 
-	reqBody := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
+	reqBody := []byte(`{"model":"gpt-5.4","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
 	rec1 := httptest.NewRecorder()
 	c1, _ := gin.CreateTestContext(rec1)
 	c1.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
@@ -1125,11 +1125,8 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnStateAndMetadataReplayOnReconnect
 	require.NoError(t, err)
 	require.NotNil(t, result1)
 
-	sessionHash := svc.GenerateSessionHash(c1, reqBody)
 	store := svc.getOpenAIWSStateStore()
-	turnState, ok := store.GetSessionTurnState(0, sessionHash)
-	require.True(t, ok)
-	require.Equal(t, "turn_state_first", turnState)
+	require.Equal(t, "turn_state_first", rec1.Header().Get("X-Codex-Turn-State"))
 
 	// 主动淘汰连接，模拟下一次请求发生重连。
 	connID, hasConn := store.GetResponseConn(result1.RequestID)
@@ -1149,7 +1146,8 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnStateAndMetadataReplayOnReconnect
 	secondHandshakeHeaders := <-headersCh
 	require.Equal(t, "turn_meta_1", firstHandshakeHeaders.Get("X-Codex-Turn-Metadata"))
 	require.Equal(t, "turn_meta_2", secondHandshakeHeaders.Get("X-Codex-Turn-Metadata"))
-	require.Equal(t, "turn_state_first", secondHandshakeHeaders.Get("X-Codex-Turn-State"))
+	require.Empty(t, firstHandshakeHeaders.Get("X-Codex-Turn-State"))
+	require.Empty(t, secondHandshakeHeaders.Get("X-Codex-Turn-State"))
 }
 
 func TestOpenAIGatewayService_Forward_WSv2_GeneratePrewarm(t *testing.T) {
@@ -1174,8 +1172,8 @@ func TestOpenAIGatewayService_Forward_WSv2_GeneratePrewarm(t *testing.T) {
 
 	captureConn := &openAIWSCaptureConn{
 		events: [][]byte{
-			[]byte(`{"type":"response.completed","response":{"id":"resp_prewarm_1","model":"gpt-5.1","usage":{"input_tokens":0,"output_tokens":0}}}`),
-			[]byte(`{"type":"response.completed","response":{"id":"resp_main_1","model":"gpt-5.1","usage":{"input_tokens":4,"output_tokens":2}}}`),
+			[]byte(`{"type":"response.completed","response":{"id":"resp_prewarm_1","model":"gpt-5.4","usage":{"input_tokens":0,"output_tokens":0}}}`),
+			[]byte(`{"type":"response.completed","response":{"id":"resp_main_1","model":"gpt-5.4","usage":{"input_tokens":4,"output_tokens":2}}}`),
 		},
 	}
 	captureDialer := &openAIWSCaptureDialer{conn: captureConn}
@@ -1207,7 +1205,7 @@ func TestOpenAIGatewayService_Forward_WSv2_GeneratePrewarm(t *testing.T) {
 		},
 	}
 
-	body := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
+	body := []byte(`{"model":"gpt-5.4","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
 	result, err := svc.Forward(context.Background(), c, account, body)
 	require.NoError(t, err)
 	require.NotNil(t, result)
@@ -1248,7 +1246,7 @@ func TestOpenAIGatewayService_PrewarmReadHonorsParentContext(t *testing.T) {
 	}
 	payload := map[string]any{
 		"type":  "response.create",
-		"model": "gpt-5.1",
+		"model": "gpt-5.4",
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
@@ -1260,7 +1258,7 @@ func TestOpenAIGatewayService_PrewarmReadHonorsParentContext(t *testing.T) {
 		OpenAIWSProtocolDecision{Transport: OpenAIUpstreamTransportResponsesWebsocketV2},
 		payload,
 		"",
-		map[string]any{"model": "gpt-5.1"},
+		map[string]any{"model": "gpt-5.4"},
 		account,
 		nil,
 		0,
@@ -1287,8 +1285,8 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnMetadataInPayloadOnConnReuse(t *t
 
 	captureConn := &openAIWSCaptureConn{
 		events: [][]byte{
-			[]byte(`{"type":"response.completed","response":{"id":"resp_meta_1","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`),
-			[]byte(`{"type":"response.completed","response":{"id":"resp_meta_2","model":"gpt-5.1","usage":{"input_tokens":1,"output_tokens":1}}}`),
+			[]byte(`{"type":"response.completed","response":{"id":"resp_meta_1","model":"gpt-5.4","usage":{"input_tokens":1,"output_tokens":1}}}`),
+			[]byte(`{"type":"response.completed","response":{"id":"resp_meta_2","model":"gpt-5.4","usage":{"input_tokens":1,"output_tokens":1}}}`),
 		},
 	}
 	captureDialer := &openAIWSCaptureDialer{conn: captureConn}
@@ -1320,7 +1318,7 @@ func TestOpenAIGatewayService_Forward_WSv2_TurnMetadataInPayloadOnConnReuse(t *t
 		},
 	}
 
-	body := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
+	body := []byte(`{"model":"gpt-5.4","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
 
 	rec1 := httptest.NewRecorder()
 	c1, _ := gin.CreateTestContext(rec1)
@@ -1382,7 +1380,7 @@ func TestOpenAIGatewayService_Forward_WSv2StoreFalseSessionConnIsolation(t *test
 				"type": "response.completed",
 				"response": map[string]any{
 					"id":    responseID,
-					"model": "gpt-5.1",
+					"model": "gpt-5.4",
 					"usage": map[string]any{
 						"input_tokens":  1,
 						"output_tokens": 1,
@@ -1432,7 +1430,7 @@ func TestOpenAIGatewayService_Forward_WSv2StoreFalseSessionConnIsolation(t *test
 		},
 	}
 
-	body := []byte(`{"model":"gpt-5.1","stream":false,"store":false,"input":[{"type":"input_text","text":"hello"}]}`)
+	body := []byte(`{"model":"gpt-5.4","stream":false,"store":false,"input":[{"type":"input_text","text":"hello"}]}`)
 
 	rec1 := httptest.NewRecorder()
 	c1, _ := gin.CreateTestContext(rec1)
@@ -1489,7 +1487,7 @@ func TestOpenAIGatewayService_Forward_WSv2StoreFalseDisableForceNewConnAllowsReu
 				"type": "response.completed",
 				"response": map[string]any{
 					"id":    responseID,
-					"model": "gpt-5.1",
+					"model": "gpt-5.4",
 					"usage": map[string]any{
 						"input_tokens":  1,
 						"output_tokens": 1,
@@ -1539,7 +1537,7 @@ func TestOpenAIGatewayService_Forward_WSv2StoreFalseDisableForceNewConnAllowsReu
 		},
 	}
 
-	body := []byte(`{"model":"gpt-5.1","stream":false,"store":false,"input":[{"type":"input_text","text":"hello"}]}`)
+	body := []byte(`{"model":"gpt-5.4","stream":false,"store":false,"input":[{"type":"input_text","text":"hello"}]}`)
 
 	rec1 := httptest.NewRecorder()
 	c1, _ := gin.CreateTestContext(rec1)
@@ -1589,8 +1587,8 @@ func TestOpenAIGatewayService_Forward_WSv2ReadTimeoutAppliesPerRead(t *testing.T
 			700 * time.Millisecond,
 		},
 		events: [][]byte{
-			[]byte(`{"type":"response.created","response":{"id":"resp_timeout_ok","model":"gpt-5.1"}}`),
-			[]byte(`{"type":"response.completed","response":{"id":"resp_timeout_ok","model":"gpt-5.1","usage":{"input_tokens":2,"output_tokens":1}}}`),
+			[]byte(`{"type":"response.created","response":{"id":"resp_timeout_ok","model":"gpt-5.4"}}`),
+			[]byte(`{"type":"response.completed","response":{"id":"resp_timeout_ok","model":"gpt-5.4","usage":{"input_tokens":2,"output_tokens":1}}}`),
 		},
 	}
 	captureDialer := &openAIWSCaptureDialer{conn: captureConn}
@@ -1630,7 +1628,7 @@ func TestOpenAIGatewayService_Forward_WSv2ReadTimeoutAppliesPerRead(t *testing.T
 		},
 	}
 
-	body := []byte(`{"model":"gpt-5.1","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
+	body := []byte(`{"model":"gpt-5.4","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
 	result, err := svc.Forward(context.Background(), c, account, body)
 	require.NoError(t, err)
 	require.NotNil(t, result)

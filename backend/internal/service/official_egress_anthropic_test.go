@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 
@@ -19,9 +18,6 @@ import (
 )
 
 type officialEgressT4Cache struct {
-	mu       sync.Mutex
-	previous map[string]string
-	lastTTL  time.Duration
 }
 
 func (c *officialEgressT4Cache) GetSessionAccountID(context.Context, int64, string) (int64, error) {
@@ -37,31 +33,6 @@ func (c *officialEgressT4Cache) RefreshSessionTTL(context.Context, int64, string
 }
 
 func (c *officialEgressT4Cache) DeleteSessionAccountID(context.Context, int64, string) error {
-	return nil
-}
-
-func (c *officialEgressT4Cache) GetAnthropicPreviousRequestID(
-	_ context.Context,
-	sessionKey string,
-) (string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.previous[sessionKey], nil
-}
-
-func (c *officialEgressT4Cache) SetAnthropicPreviousRequestID(
-	_ context.Context,
-	sessionKey string,
-	requestID string,
-	ttl time.Duration,
-) error {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.previous == nil {
-		c.previous = make(map[string]string)
-	}
-	c.previous[sessionKey] = requestID
-	c.lastTTL = ttl
 	return nil
 }
 
@@ -109,7 +80,7 @@ func TestOfficialEgressT4_AnthropicFinalizerMatchesPhase0ApplicationContract(t *
 		"44444444-4444-4444-8444-444444444444",
 		"44444444-4444-4444-8444-444444444444",
 	}
-	cache := &officialEgressT4Cache{previous: make(map[string]string)}
+	cache := &officialEgressT4Cache{}
 	identityCache := &officialEgressT4IdentityCache{}
 	svc := &GatewayService{
 		cache:           cache,
@@ -119,7 +90,7 @@ func TestOfficialEgressT4_AnthropicFinalizerMatchesPhase0ApplicationContract(t *
 
 	seenSessions := make(map[string]struct{})
 	seenClientRequestIDs := make(map[string]struct{})
-	for index, sessionID := range sessions {
+	for _, sessionID := range sessions {
 		body := officialEgressT4AnthropicBody(deviceID, sessionID)
 		c := officialEgressT4GinContext(sessionID)
 
@@ -182,21 +153,20 @@ func TestOfficialEgressT4_AnthropicFinalizerMatchesPhase0ApplicationContract(t *
 
 		require.Equal(t, "Bash", gjson.GetBytes(wireBody, "tools.0.name").String())
 		require.False(t, gjson.GetBytes(wireBody, "temperature").Exists())
+		require.Contains(
+			t,
+			string(wireBody),
+			`"opaque":{"z":9007199254740993,"a":{"y":2,"x":1}}`,
+			"Finalizer 必须原样保留嵌套用户对象的整数精度与键序",
+		)
+		require.NotContains(t, string(wireBody), "9007199254740992")
 
-		// 模拟上游成功响应，为同一会话的下一轮建立 cc_prev_req 来源。
-		responseHeader := http.Header{"request-id": []string{fmt.Sprintf("req_phase0_%02d", index)}}
-		require.NoError(t, svc.rememberAnthropicPreviousRequestID(
-			context.Background(),
-			account,
-			wireBody,
-			responseHeader,
-		))
+		require.NotContains(t, billing, "cc_prev_req=", "官方请求不得伪造未取证的续轮字段")
 	}
 
 	require.Len(t, seenSessions, 3, "五条 S1/S2/S4 请求必须保持三个客户端会话身份")
 	require.Len(t, seenClientRequestIDs, 5, "x-client-request-id 必须按请求生成")
 	require.Zero(t, identityCache.getCalls, "Official Egress 不得再读取账号级 Desktop 指纹")
-	require.Equal(t, officialAnthropicResponseMappingTTL, cache.lastTTL)
 }
 
 func officialAnthropicCurrentTestHeaders(t *testing.T) []officialClientHeaderValue {
@@ -212,67 +182,6 @@ func officialAnthropicCurrentTestHeaders(t *testing.T) []officialClientHeaderVal
 	return headers
 }
 
-func TestOfficialEgressT4_AnthropicResponseMappingFeedsNextBillingBlock(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-
-	const (
-		accountUUID = "11111111-1111-4111-8111-111111111111"
-		deviceID    = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-		sessionID   = "22222222-2222-4222-8222-222222222222"
-		requestID   = "req_response_mapping"
-	)
-	cache := &officialEgressT4Cache{previous: make(map[string]string)}
-	svc := &GatewayService{cache: cache}
-	account := officialEgressT4AnthropicAccount(accountUUID)
-
-	firstReq, firstBody, err := svc.buildUpstreamRequest(
-		context.Background(),
-		officialEgressT4GinContext(sessionID),
-		account,
-		officialEgressT4AnthropicBody(deviceID, sessionID),
-		"oauth-token",
-		"oauth",
-		"claude-sonnet-5",
-		true,
-		false,
-	)
-	require.NoError(t, err)
-	require.NotNil(t, firstReq)
-	require.NotContains(t, gjson.GetBytes(firstBody, "system.0.text").String(), "cc_prev_req=")
-	require.NoError(t, svc.rememberAnthropicPreviousRequestID(
-		context.Background(),
-		account,
-		firstBody,
-		http.Header{"request-id": []string{requestID}},
-	))
-
-	_, secondBody, err := svc.buildUpstreamRequest(
-		context.Background(),
-		officialEgressT4GinContext(sessionID),
-		account,
-		officialEgressT4AnthropicBody(deviceID, sessionID),
-		"oauth-token",
-		"oauth",
-		"claude-sonnet-5",
-		true,
-		false,
-	)
-	require.NoError(t, err)
-	require.Contains(
-		t,
-		gjson.GetBytes(secondBody, "system.0.text").String(),
-		"cc_prev_req="+requestID+";",
-	)
-
-	cache.mu.Lock()
-	defer cache.mu.Unlock()
-	require.Len(t, cache.previous, 1)
-	for key := range cache.previous {
-		require.Len(t, key, 64)
-		require.NotContains(t, key, sessionID, "Redis 键不得包含明文会话 ID")
-	}
-}
-
 func TestOfficialEgressT4_AnthropicFinalizerRejectsSessionConflict(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -281,7 +190,7 @@ func TestOfficialEgressT4_AnthropicFinalizerRejectsSessionConflict(t *testing.T)
 		sessionA = "22222222-2222-4222-8222-222222222222"
 		sessionB = "33333333-3333-4333-8333-333333333333"
 	)
-	svc := &GatewayService{cache: &officialEgressT4Cache{previous: make(map[string]string)}}
+	svc := &GatewayService{cache: &officialEgressT4Cache{}}
 	_, _, err := svc.buildUpstreamRequest(
 		context.Background(),
 		officialEgressT4GinContext(sessionB),
@@ -300,7 +209,7 @@ func TestOfficialEgressT4_AnthropicFinalizerNormalizesKiloRequest(t *testing.T) 
 	gin.SetMode(gin.TestMode)
 
 	const accountUUID = "11111111-1111-4111-8111-111111111111"
-	svc := &GatewayService{cache: &officialEgressT4Cache{previous: make(map[string]string)}}
+	svc := &GatewayService{cache: &officialEgressT4Cache{}}
 	account := officialEgressT4AnthropicAccount(accountUUID)
 	body := officialEgressT4KiloAnthropicBody(t)
 
@@ -331,21 +240,17 @@ func TestOfficialEgressT4_AnthropicFinalizerNormalizesKiloRequest(t *testing.T) 
 		gjson.GetBytes(firstBody, "system.0.text").String(),
 		"x-anthropic-billing-header:",
 	))
-	require.Equal(t, claudeCodeSystemPrompt, gjson.GetBytes(firstBody, "system.1.text").String())
+	require.Equal(t, claudeSDKCLIIdentityPrompt, gjson.GetBytes(firstBody, "system.1.text").String())
 	require.True(t, strings.HasPrefix(
 		gjson.GetBytes(firstBody, "system.3.text").String(),
 		officialAnthropicSystemSplitMarker,
 	))
-	require.Contains(
-		t,
-		gjson.GetBytes(firstBody, "messages.0.content.0.text").String(),
-		"[System Instructions]\nKilo third-party instruction",
-	)
+	require.Equal(t, "Kilo third-party instruction", gjson.GetBytes(firstBody, "messages.0.content.0.text").String())
 	require.Equal(t, int64(16), gjson.GetBytes(firstBody, "tools.#").Int())
 	require.Equal(t, "kilo_tool_15", gjson.GetBytes(firstBody, "tools.15.name").String())
 	require.False(t, gjson.GetBytes(firstBody, "tools.15.cache_control").Exists())
-	require.Equal(t, "1h", gjson.GetBytes(firstBody, "messages.2.content.0.cache_control.ttl").String())
-	requireOfficialAnthropicCacheProfile(t, firstBody, "messages.2.content.0.cache_control")
+	require.Equal(t, "1h", gjson.GetBytes(firstBody, "messages.1.content.0.cache_control.ttl").String())
+	requireOfficialAnthropicCacheProfile(t, firstBody, "messages.1.content.0.cache_control")
 
 	// 相同客户端会话锚点必须跨重试和续轮保持同一身份。
 	secondRequest, secondBody, err := svc.buildUpstreamRequest(
@@ -407,11 +312,11 @@ func TestOfficialEgressT4_AnthropicFinalizerNormalizesKiloRequest(t *testing.T) 
 	requireOfficialAnthropicCacheProfile(
 		t,
 		multiTurnFinalBody,
-		"messages.4.content.0.cache_control",
+		"messages.3.content.0.cache_control",
 	)
 	require.False(t, gjson.GetBytes(
 		multiTurnFinalBody,
-		"messages.3.content.0.cache_control",
+		"messages.2.content.0.cache_control",
 	).Exists())
 }
 
@@ -419,7 +324,7 @@ func TestOfficialEgressT4_CompatibilityLayerDefersProfileFieldsToFinalizer(t *te
 	gin.SetMode(gin.TestMode)
 
 	const accountUUID = "11111111-1111-4111-8111-111111111111"
-	svc := &GatewayService{cache: &officialEgressT4Cache{previous: make(map[string]string)}}
+	svc := &GatewayService{cache: &officialEgressT4Cache{}}
 	account := officialEgressT4AnthropicAccount(accountUUID)
 	ingressBody := officialEgressT4KiloAnthropicBody(t)
 	c := officialEgressT4KiloGinContext("kilo-ownership-session")
@@ -457,13 +362,9 @@ func TestOfficialEgressT4_CompatibilityLayerDefersProfileFieldsToFinalizer(t *te
 	require.NoError(t, err)
 	require.Equal(t, officialAnthropicUserAgent, getHeaderRaw(req.Header, "User-Agent"))
 	require.Equal(t, int64(4), gjson.GetBytes(finalBody, "system.#").Int())
-	require.Contains(
-		t,
-		gjson.GetBytes(finalBody, "messages.0.content.0.text").String(),
-		"[System Instructions]\nKilo third-party instruction",
-	)
+	require.Equal(t, "Kilo third-party instruction", gjson.GetBytes(finalBody, "messages.0.content.0.text").String())
 	require.NotEmpty(t, gjson.GetBytes(finalBody, "metadata.user_id").String())
-	requireOfficialAnthropicCacheProfile(t, finalBody, "messages.2.content.0.cache_control")
+	requireOfficialAnthropicCacheProfile(t, finalBody, "messages.1.content.0.cache_control")
 }
 
 func TestOfficialEgressT4_CrossProtocolIngressDefersProfileToAnthropicFinalizer(t *testing.T) {
@@ -471,7 +372,7 @@ func TestOfficialEgressT4_CrossProtocolIngressDefersProfileToAnthropicFinalizer(
 
 	for _, endpoint := range []string{"/v1/responses", "/v1/chat/completions"} {
 		t.Run(endpoint, func(t *testing.T) {
-			svc := &GatewayService{cache: &officialEgressT4Cache{previous: make(map[string]string)}}
+			svc := &GatewayService{cache: &officialEgressT4Cache{}}
 			account := officialEgressT4AnthropicAccount("11111111-1111-4111-8111-111111111111")
 			c := officialEgressT4KiloGinContext("kilo-cross-protocol-session")
 			c.Request.URL.Path = endpoint
@@ -509,7 +410,7 @@ func TestOfficialEgressT4_CrossProtocolIngressDefersProfileToAnthropicFinalizer(
 			requireOfficialAnthropicCacheProfile(
 				t,
 				finalBody,
-				"messages.2.content.0.cache_control",
+				"messages.1.content.0.cache_control",
 			)
 		})
 	}
@@ -537,7 +438,7 @@ func TestOfficialEgressT4_AnthropicFinalizerUsesRealKiloIngressContract(t *testi
 		legacySessionID   = "22222222-2222-4222-8222-222222222222"
 		firstSessionToken = "kilo-real-session-a"
 	)
-	svc := &GatewayService{cache: &officialEgressT4Cache{previous: make(map[string]string)}}
+	svc := &GatewayService{cache: &officialEgressT4Cache{}}
 	account := officialEgressT4AnthropicAccount(accountUUID)
 	ingressBody := officialEgressT4KiloAnthropicBody(t)
 	transformedBody, ok := setJSONValueBytes(
@@ -598,7 +499,7 @@ func TestOfficialEgressT4_AnthropicFinalizerUsesRealKiloIngressContract(t *testi
 func TestOfficialEgressT4_AnthropicFinalizerRecordsDerivedKiloIdentity(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	svc := &GatewayService{cache: &officialEgressT4Cache{previous: make(map[string]string)}}
+	svc := &GatewayService{cache: &officialEgressT4Cache{}}
 	account := officialEgressT4AnthropicAccount("11111111-1111-4111-8111-111111111111")
 	c := officialEgressT4KiloGinContext("kilo-session-source")
 	body := officialEgressT4KiloAnthropicBody(t)
@@ -628,7 +529,7 @@ func TestOfficialEgressT4_AnthropicFinalizerReportsModificationsAndProvenance(t 
 		deviceID    = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 		sessionID   = "22222222-2222-4222-8222-222222222222"
 	)
-	svc := &GatewayService{cache: &officialEgressT4Cache{previous: make(map[string]string)}}
+	svc := &GatewayService{cache: &officialEgressT4Cache{}}
 	account := officialEgressT4AnthropicAccount(accountUUID)
 	c := officialEgressT4GinContext(sessionID)
 	body := officialEgressT4AnthropicBody(deviceID, sessionID)
@@ -770,7 +671,7 @@ func officialEgressT4AnthropicBody(deviceID, sessionID string) []byte {
 			{"type":"text","text":"第三块稳定内容\n\n# Text output (does not apply to tool calls)\n第四块稳定内容","cache_control":{"type":"ephemeral"}}
 		],
 		"metadata":{"user_id":%q},
-		"messages":[{"role":"user","content":[{"type":"text","text":"abcdefghijklmnopqrstuvwxyz"}]}],
+		"messages":[{"role":"user","content":[{"type":"text","text":"abcdefghijklmnopqrstuvwxyz","opaque":{"z":9007199254740993,"a":{"y":2,"x":1}}}]}],
 		"tools":[{"name":"Bash","description":"执行命令","input_schema":{"type":"object"}}],
 		"stream":true
 	}`, metadataUserID))

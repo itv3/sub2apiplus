@@ -10,9 +10,9 @@ import (
 func requireOpenAICodexProbeHeaders(t *testing.T, h http.Header) {
 	t.Helper()
 	require.Equal(t, codexCLIUserAgent, h.Get("User-Agent"))
-	require.Equal(t, "codex_cli_rs", h.Get("Originator"))
+	require.Equal(t, officialOpenAIHTTPOriginator, h.Get("Originator"))
 	require.Equal(t, codexCLIVersion, h.Get("Version"))
-	require.Equal(t, "responses=experimental", h.Get("OpenAI-Beta"))
+	require.Empty(t, h.Get("OpenAI-Beta"))
 	require.NotEmpty(t, h.Get("X-Codex-Window-ID"))
 }
 
@@ -23,10 +23,10 @@ func TestEnsureCodexIdentityHeaders(t *testing.T) {
 		ensureCodexIdentityHeaders(h)
 		enforceCodexIdentityHeaders(h)
 
-		require.Equal(t, "codex_cli_rs", h.Get("originator"))
+		require.Equal(t, officialOpenAIHTTPOriginator, h.Get("originator"))
 		require.Equal(t, codexCLIUserAgent, h.Get("user-agent"))
 		require.Equal(t, codexCLIVersion, h.Get("version"))
-		require.Equal(t, "responses=experimental", h.Get("OpenAI-Beta"))
+		require.Empty(t, h.Get("OpenAI-Beta"))
 	})
 
 	t.Run("保留已有官方UA和合法version并重新配对", func(t *testing.T) {
@@ -42,7 +42,7 @@ func TestEnsureCodexIdentityHeaders(t *testing.T) {
 		require.Equal(t, "codex-tui", h.Get("originator"))
 		require.Equal(t, tuiUA, h.Get("user-agent"))
 		require.Equal(t, "9.9.9", h.Get("version"))
-		require.Equal(t, "responses=experimental", h.Get("OpenAI-Beta"))
+		require.Empty(t, h.Get("OpenAI-Beta"))
 	})
 }
 
@@ -76,13 +76,13 @@ func TestEnforceCodexIdentityHeaders(t *testing.T) {
 			name:           "第三方 UA 整体回退默认身份",
 			originator:     "opencode",
 			userAgent:      "luna/1.0.0",
-			wantOriginator: "codex_cli_rs",
+			wantOriginator: officialOpenAIHTTPOriginator,
 			wantUA:         codexCLIUserAgent,
 		},
 		{
 			name:           "UA 缺失回退默认身份",
 			originator:     "codex_vscode",
-			wantOriginator: "codex_cli_rs",
+			wantOriginator: officialOpenAIHTTPOriginator,
 			wantUA:         codexCLIUserAgent,
 		},
 		{

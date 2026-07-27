@@ -44,6 +44,10 @@ func TestOpenAIGatewayService_Forward_CompactOnlyModelMappingOverridesOAuthUpstr
 		Status:      StatusActive,
 		Schedulable: true,
 	}
+	svc.openaiModelCapabilities.replaceFromManifest(
+		account.ID,
+		[]byte(`{"models":[{"slug":"gpt-5.4","use_responses_lite":false}]}`),
+	)
 
 	result, err := svc.Forward(context.Background(), c, account, body)
 	require.NoError(t, err)
@@ -83,6 +87,10 @@ func TestOpenAIGatewayService_Forward_NonCompactRequestIgnoresCompactOnlyModelMa
 		Status:      StatusActive,
 		Schedulable: true,
 	}
+	svc.openaiModelCapabilities.replaceFromManifest(
+		account.ID,
+		[]byte(`{"models":[{"slug":"gpt-5.4","use_responses_lite":false}]}`),
+	)
 
 	result, err := svc.Forward(context.Background(), c, account, body)
 	require.NoError(t, err)
@@ -124,6 +132,10 @@ func TestOpenAIGatewayService_OAuthPassthrough_CompactOnlyModelMappingOverridesU
 		Status:      StatusActive,
 		Schedulable: true,
 	}
+	svc.openaiModelCapabilities.replaceFromManifest(
+		account.ID,
+		[]byte(`{"models":[{"slug":"gpt-5.4","use_responses_lite":false}]}`),
+	)
 
 	result, err := svc.Forward(context.Background(), c, account, originalBody)
 	require.NoError(t, err)
