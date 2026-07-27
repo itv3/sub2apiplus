@@ -174,12 +174,43 @@ passthrough 用 `openAIChatGPTInternalUnsupportedFields`（`user`、`metadata`�
 ### 查证中新发现的端点级差异
 
 官方**有独立的图像端点**：`codex-api/src/endpoint/images.rs` 的 `images/generations` 与
-`images/edits`，URL 形如 `{base}/api/codex/images/generations`。而本项目把
-`/v1/images/generations` 转换成 `/backend-api/codex/responses` 的 `image_generation` 工具调用。
+`images/edits`。而本项目把 `/v1/images/generations` 转换成 `/backend-api/codex/responses`
+的 `image_generation` 工具调用。
 
-这是**端点选择层面的差异**，比 header 泄漏更根本：官方图像请求根本不出现在 `responses`
-端点上。修正它需要改动图像功能的整条转换链路与响应解析，属于功能性重构，本轮只做了
-header 与 TLS 层的收敛，端点差异单独记录待评估。
+**本段曾有两处错误，已更正（2026-07-27 复核）：**
+
+**更正一：URL 写错了。** 原文写的 `{base}/api/codex/images/generations` 取自该文件的
+**单元测试 mock**（`fn provider()` 里 `base_url: "https://example.com/api/codex"`）。
+官方生产代码走 `self.provider.api_provider()`（`ext/image-generation/src/backend.rs`），
+与 responses 同一个 provider，真实 URL 是
+`https://chatgpt.com/backend-api/codex/images/generations`。
+
+已实测该端点：带 OAuth token POST 空 body 返回 **400 `Missing required parameter:
+'prompt'`**——认证通过、端点存在、路由正确（凭据不通会是 401/403，端点不存在会是 404）。
+对照组 responses 端点同样返回 400。验证未触发真实生图，不消耗配额。
+
+**更正二：定性过重。** 原文称"官方图像请求根本不出现在 responses 端点上"，不成立。
+官方**两条路都走**：
+
+| 路径 | 官方实现 |
+|---|---|
+| 独立 images 端点 | `ext/image-generation`，编译进主 CLI（`core/Cargo.toml:141`） |
+| responses + `image_generation` 工具 | 识别于 `rollout-trace/src/tool_dispatch.rs:267`，响应项处理于 `reducer/conversation/normalize.rs:116`，测试事件构造于 `core/tests/common/responses.rs:851` |
+
+也就是说，**本项目选的这条路官方自己也在走**（用户在对话中要求生图时即走此路），
+因此它**不构成"非官方"的指纹特征**——上游看到的请求与官方 CLI 对话生图时同类。
+
+**归属**：该设计源自**上游**，非本 fork 引入。引入提交 `eea6f3888`（作者 `wx-11`，
+2026-04-23，"使用codex的生图接口代替web2api"）在 `upstream/main` 上，上游当前版本仍是
+此设计。本 fork 在该文件上的三个自有提交（`6a1cc6f4c`、`5f9358f39`、`c4cfdc79b`）
+均未触及端点选择或工具调用构造（实测 diff 命中行数为 0）。
+
+**结论：优先级下调至 P3-15/16 之后，可不动。** 残留差异仅是**入口映射**——第三方调
+`/v1/images/generations` 这类 OpenAI 标准接口时官方走独立端点、本项目转工具调用，属产品
+选择而非伪装缺陷。技术上对齐无障碍（端点可达、凭据通用、schema 为
+`prompt/model/n/size/quality/background`），但上游后续一串修复（`2c14efeaa` n 参数透传、
+`bb4c1abe2` 计费尺寸归一化、`888cd8092` moderation 错误、`9491de0a3` 400 直通）都建在
+工具调用这条路上，改端点等于接手并长期维护一处与上游的分叉。
 
 ## 6. 验收结果
 
