@@ -1410,7 +1410,7 @@ func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *u
 		if err != nil {
 			slog.Warn("tls_fingerprint_h2_transport_failed_fallback_h1", "profile", profile.Name, "error", err)
 		} else {
-			return h2Transport, nil
+			return wrapUpstreamTransportWireOptions(h2Transport, profile), nil
 		}
 	}
 
@@ -1453,7 +1453,17 @@ func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *u
 		}
 	}
 
-	return transport, nil
+	return wrapUpstreamTransportWireOptions(transport, profile), nil
+}
+
+// wrapUpstreamTransportWireOptions 按画像声明补齐 wire 层形态。目前只有 header 名
+// 大小写一项：官方 Rust 客户端在 HTTP/1.1 上发全小写，Go 默认发 canonical 形态。
+// 未声明该选项的画像原样返回，不引入额外开销。
+func wrapUpstreamTransportWireOptions(base http.RoundTripper, profile *tlsfingerprint.Profile) http.RoundTripper {
+	if base == nil || profile == nil || !profile.Transport.LowercaseHeaders {
+		return base
+	}
+	return tlsfingerprint.NewLowercaseHeaderRoundTripper(base)
 }
 
 // trackedBody 带跟踪功能的响应体包装器

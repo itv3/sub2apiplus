@@ -66,6 +66,13 @@ def openai_payload(model: str) -> dict[str, Any]:
         ],
         "tool_choice": "required",
         "max_output_tokens": 123,
+        # 顶层未知字段探针：官方 ResponsesApiRequest 是固定 Rust 结构体，
+        # 这些键在真实 Codex 出站里不可能出现，必须被白名单剔除。
+        "truncation": "auto",
+        "top_logprobs": 5,
+        "background": True,
+        "max_tool_calls": 7,
+        "leak_probe_unknown_field": "must-not-reach-upstream",
         "parallel_tool_calls": False,
         "store": True,
         "stream": False,

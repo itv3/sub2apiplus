@@ -588,6 +588,7 @@ func finalizeDerivedOpenAIOfficialEgressWSFrame(
 		payload,
 		egressContext.responsesLite,
 		egressContext.parallelTools,
+		officialOpenAIWSTopLevelAllowed,
 	); err != nil {
 		return nil, result, err
 	}

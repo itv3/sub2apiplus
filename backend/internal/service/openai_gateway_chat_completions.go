@@ -98,6 +98,13 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	if err != nil {
 		return nil, err
 	}
+	// 模型能力预热此前只在 Responses 与 WS 入口执行，CC / Messages 入口读不到快照时
+	// 对 bundled 清单之外的模型会按非 Lite 出站，与 Responses 入口判定不一致。
+	if officialEgressEnabled && account.IsOpenAIOAuth() {
+		if capabilityErr := s.ensureOpenAIModelCapability(ctx, account, body); capabilityErr != nil {
+			return nil, capabilityErr
+		}
+	}
 	var officialEgressBodyContract *officialOpenAIHTTPBodyContract
 	if officialEgressEnabled && account.Platform == PlatformOpenAI &&
 		account.Type == AccountTypeOAuth {

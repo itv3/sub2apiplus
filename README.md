@@ -33,20 +33,28 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 1. 无论入站来自官方客户端还是第三方标准 API 客户端，Anthropic/OpenAI OAuth 官方出站均由内置画像统一定型为对应版本 Claude Code / Codex CLI 的真实形态(官方入站走校验保真，第三方走强制定型)。
 2. 原有兼容层继续负责协议、模型、工具和请求语义转换；官方画像不改变 Key、Group、账号路由或计费归属。
 
-本轮验收基于源码版本 `0.1.165-4`（已合并上游 `v0.1.165`），由 Vircs 直接编译并运行最终复核镜像；`active` 画像为 Claude Code CLI `2.1.220` 和 Codex CLI `0.145.0`。逐路径结论见下表，解读时注意两条边界：
+本轮验收基于源码版本 `0.1.165-4`（已合并上游 `v0.1.165`），由 Vircs 直接编译并运行最终复核镜像；`active` 画像为 Claude Code CLI `2.1.220` 和 Codex CLI `0.145.0`。后续两轮的发布状态与证据范围见下表，逐路径结论表的“最后实证版本”列与本表对应：
 
-> `0.1.165-5` 在此基础上闭合了数据保真、Lite 判定分裂、重复键 panic 与 API Key 画像 TLS 决策来源，已作为正式版发布（GitHub Releases `v0.1.165-5`，镜像 `ghcr.io/itv3/sub2apiplus:0.1.165-5`），生产已切换为该已发布镜像。下表的路径结论在 `0.1.165-5` 仍然成立，新增的 wire 证据与未覆盖边界见 [P0 数据保真修复记录](docs/P0_DATA_FIDELITY_FIX_20260727.md)。
+| 版本 | 状态 | 本轮闭合 | 证据范围 |
+|---|---|---|---|
+| `0.1.165-4` | 阶段构建 | — | 三路径完整抓包对照，逐路径结论的原始来源 |
+| `0.1.165-5` | 正式发布（Releases `v0.1.165-5`，镜像 `ghcr.io/itv3/sub2apiplus:0.1.165-5`），生产已切换为该镜像 | 数据保真、Lite 判定分裂、重复键 panic、API Key 画像 TLS 决策来源 | 未重跑三路径对照，逐路径结论沿用 `0.1.165-4`；新增 wire 证据与未覆盖边界见 [P0 数据保真修复记录](docs/P0_DATA_FIDELITY_FIX_20260727.md) |
+| `0.1.165-6` | 未发布，仅由 Vircs 以阶段镜像验收 | 入站宿主头泄漏、WS turn-state 跨连接沿用、模型能力合并语义、Chat Completions/Messages 入口 JSON 保真、passthrough 预热缺失 | 只重跑 OpenAI 侧：官方 Codex CLI `0.145.0` 基准（HTTP/WS × direct/MITM × S1/S2/S4）与第三方定向 HTTP/WS 候选出站逐项对照通过，宿主头剥离与预热帧序列均有真实 wire 证据；turn-state 两项因上游始终未下发该头只达代码级验收。未重跑 Anthropic 三路径与 Kilo 六组合。范围、证伪项与未覆盖边界见 [官方出站画像保真修复记录](docs/OFFICIAL_EGRESS_PROFILE_FIDELITY_FIX_20260727.md) |
 
-> `0.1.165-6` 继续闭合入站宿主头泄漏、WS turn-state 跨连接沿用、模型能力合并语义、Chat Completions/Messages 入口 JSON 保真与 passthrough 预热缺失五项，尚未发布，仅由 Vircs 以阶段镜像验收。本轮只重跑 OpenAI 侧：官方 Codex CLI `0.145.0` 基准（HTTP/WS × direct/MITM × S1/S2/S4）与第三方定向 HTTP/WS 候选出站逐项对照通过，宿主头剥离与预热帧序列均有真实 wire 证据；turn-state 两项因上游始终未下发该头只达到代码级验收。未重跑 Anthropic 三路径与 Kilo 六组合，下表结论仍沿用 `0.1.165-4`。范围、证伪项与未覆盖边界见 [官方出站画像保真修复记录](docs/OFFICIAL_EGRESS_PROFILE_FIDELITY_FIX_20260727.md)。
+`0.1.165-6` 的宿主头剥离清单由三条路径共用，但只在 OpenAI HTTP/WS 侧取得 wire 证据；Anthropic 侧该项已无同版本证据，只能按共享逻辑外推，按 §1.1.2.3 的版本边界须重抓后才能计入实测结论。
+
+解读逐路径结论时注意两条边界：
 
 1. “通过”指应用层契约一致、语义守恒和 direct TLS 一致，不是逐字节相同；完整判定口径见 §1.1.2.3。
 2. Anthropic 侧因官方上游返回 `400 organization disabled`（#50 组织禁用），本轮用单次真实第三方请求完成 system、动态 beta、应用契约和 direct TLS 验收，未执行 §1.1.2.2 要求的完整 S1/S2/S4，也不能宣称功能响应成功。
 
-| 路径 | Sub2API 实证（OAuth 官方画像内置生效） |
-|---|---|
-| **Anthropic HTTP** | `0.1.165-4` 的三块 system 与 `custom.defer_loading` 真实第三方样本达到 `contract_equal=true`、语义守恒、动态 beta `exercised/valid=true`、`undeclared_differences=0`；direct TLS 一致；#50 上游组织禁用导致业务响应失败 |
-| **OpenAI HTTP** | `0.1.165-4` 的 Lite S1/S2/S4、非 Lite `gpt-5.4` 及真实第三方破坏参数样本均 `contract_equal=true`、语义守恒、`undeclared_differences=0`；Cookie 建立/回放闭环与 direct TLS 通过 |
-| **OpenAI WebSocket** | `0.1.165-4` 的 Lite S1/S2/S4、非 Lite完整预热/业务帧及真实第三方业务帧均通过；逐项 turn metadata、语义守恒、契约和 direct TLS 一致 |
+| 路径 | 最后实证版本 | 验收级别 | Sub2API 实证（OAuth 官方画像内置生效） |
+|---|---|---|---|
+| **Anthropic HTTP** | `0.1.165-4` | 画像/传输 | 三块 system 与 `custom.defer_loading` 真实第三方样本达到 `contract_equal=true`、语义守恒、动态 beta `exercised/valid=true`、`undeclared_differences=0`；direct TLS 一致；#50 上游组织禁用导致业务响应失败，削弱项见上方边界 2 |
+| **OpenAI HTTP** | `0.1.165-6` | 完整功能 | Lite S1/S2/S4、非 Lite `gpt-5.4` 及真实第三方破坏参数样本均 `contract_equal=true`、语义守恒、`undeclared_differences=0`；Cookie 建立/回放闭环与 direct TLS 通过；`0.1.165-6` 重跑另覆盖宿主头剥离的真实 wire 证据 |
+| **OpenAI WebSocket** | `0.1.165-6` | 完整功能（turn-state 仅代码级） | Lite S1/S2/S4、非 Lite 完整预热/业务帧及真实第三方业务帧均通过；逐项 turn metadata、语义守恒、契约和 direct TLS 一致；`0.1.165-6` 重跑另覆盖宿主头剥离与预热帧序列，turn-state 注入因上游始终未下发该头只达代码级验收 |
+
+验收级别按 §1.1.2.3 的结论分级判定：“画像/传输”只验证路由、认证、静态 Header、必要 Body 外层字段和 TLS；“完整功能”另要求同模型、同场景输入并成功得到业务响应。
 
 API Key active 画像的 AnyRouter A/B 见 §1.2。
 
@@ -56,7 +64,7 @@ API Key active 画像的 AnyRouter A/B 见 §1.2。
 
 | 主题 | 约束 |
 |---|---|
-| **入站宿主头** | 三条路径在终态定型阶段统一剥离 `accept-language`、`sec-fetch-mode`、`x-stainless-helper-method`。这些头由浏览器或 IDE 宿主注入，官方 Claude Code / Codex CLI 从不发送；入站白名单会放行它们，不剥离就会与官方身份头出现在同一请求上，形成官方客户端不可能产生的混合形态。定向抓包的第三方客户端必须实际携带这些头，否则该约束在证据里不会被触发。 |
+| **入站宿主头** | 三条路径在终态定型阶段统一剥离 `accept-language`、`sec-fetch-mode`、`x-stainless-helper-method`。这些头由浏览器或 IDE 宿主注入，官方 Claude Code / Codex CLI 从不发送；入站白名单会放行它们，不剥离就会与官方身份头出现在同一请求上，形成官方客户端不可能产生的混合形态。定向抓包的第三方客户端必须实际携带这些头，否则该约束在证据里不会被触发。`0.1.165-6` 的剥离实现由三条路径共用，但只在 OpenAI HTTP/WS 侧取得 wire 证据；Anthropic 路径当前是共享逻辑外推，按 §1.1.2.3 的版本边界须重抓后才能计入实测结论。 |
 | **Anthropic 参数与 beta** | `anthropic-beta` 按请求能力动态补齐，保留 1M context、structured outputs 和 advanced tool use/tool search 所需 beta；启用 thinking（或入口本就未携带）时删除会导致上游 `400` 的 `temperature`；`top_p`、`top_k` 因官方客户端不发送而一律清理，不受 thinking 影响。端点判定统一使用规范化入口，`/messages`、`/v1/messages` 及兼容别名不能绕过画像。 |
 | **Codex 模型能力** | 账号 `/backend-api/codex/models` 清单的合并语义对齐官方 `apply_remote_models`：清单非空且至少含一个 `visibility=list` 的模型时远端整体接管，bundled 不再参与，清单未列出的 slug 按官方 fallback 处理（`use_responses_lite` 与 `supports_parallel_tool_calls` 均为 `false`，且属于“已知不支持”而非“未知”）；只有不满足接管条件、或清单从未成功加载时才用 bundled 兜底。能力按“账号 + 精确模型 slug”缓存，加载失败进入退避并沿用当前有效值，不同步拒绝业务请求。bundled 的权威来源是实抓 manifest fixture，两者必须逐项一致。Lite 才迁移 `instructions/tools` 并设置 `reasoning.context=all_turns`；非 Lite 保留顶层 `instructions/tools` 且不发送 `reasoning.context`。两类路径共同固定 `tool_choice=auto`、`store=false`、`stream=true`、`include=[reasoning.encrypted_content]` 并删除 `max_output_tokens`；`parallel_tool_calls` 按能力位决定。 |
 | **compact** | compact 请求补齐 `prompt_cache_key` 与 `X-Codex-Installation-ID`，不要求或生成普通 Responses 才有的 `x-client-request-id`。 |
@@ -129,7 +137,7 @@ S3 为历史编号，当前场景集不使用。
 | **OpenAI · WS** | OW-1（Codex CLI） | OW-2 | OW-2 对标 OW-1 |
 
 主基线的三组路径均执行相同的 S1/S2/S4；第三方客户端兼容性补测可以选取子集，
-但不能替代主基线，Kilo 覆盖范围以 §1.1.1 为准：
+但不能替代主基线，Kilo 六组合的覆盖范围与历史回归结果见 §1.1.3.4：
 
 | 主体类型 | direct 动作 | mitm 动作 |
 |---|---|---|

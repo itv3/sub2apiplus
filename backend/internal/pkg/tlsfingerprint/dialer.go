@@ -23,6 +23,12 @@ import (
 // TransportOptions 定义 TLS 指纹客户端配套的 HTTP Transport 行为。
 type TransportOptions struct {
 	DisableCompression bool
+	// LowercaseHeaders 让出站请求在 wire 上使用全小写 header 名。
+	//
+	// Go 的 Header.Set 会经 CanonicalMIMEHeaderKey 改写成 Session-Id / Originator 这类
+	// 形态，而 Rust hyper 直接用 HeaderName::as_str() 输出小写。差异只在 HTTP/1.1 上可见
+	// （HTTP/2 的 HPACK 强制小写），因此仅对需要复刻 h1 线形的画像开启。
+	LowercaseHeaders bool
 }
 
 // Profile contains TLS fingerprint configuration.

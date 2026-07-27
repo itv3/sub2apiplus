@@ -209,7 +209,7 @@ func newAnthropicOfficialEgressTLSProfile() *tlsfingerprint.Profile {
 func newOpenAIOfficialEgressHTTPTLSProfile() *tlsfingerprint.Profile {
 	return &tlsfingerprint.Profile{
 		Name:      "Official Codex CLI 0.145.0 HTTP (capture-2026-07-26)",
-		Transport: tlsfingerprint.TransportOptions{DisableCompression: true},
+		Transport: tlsfingerprint.TransportOptions{DisableCompression: true, LowercaseHeaders: true},
 		CipherSuites: []uint16{
 			0x1302, 0x1303, 0x1301,
 			0xc02c, 0xc030, 0x009f,
@@ -264,7 +264,7 @@ func OpenAIOfficialEgressHTTPTLSProfile(proxy bool) *tlsfingerprint.Profile {
 func newOpenAIOfficialEgressHTTPProxyTLSProfile() *tlsfingerprint.Profile {
 	return &tlsfingerprint.Profile{
 		Name:      "Official Codex CLI 0.145.0 HTTP Proxy (phase0-2026-07-24)",
-		Transport: tlsfingerprint.TransportOptions{DisableCompression: true},
+		Transport: tlsfingerprint.TransportOptions{DisableCompression: true, LowercaseHeaders: true},
 		CipherSuites: []uint16{
 			0x1302, 0x1301, 0x1303,
 			0xc02c, 0xc02b, 0xcca9,
@@ -291,7 +291,7 @@ func newOpenAIOfficialEgressHTTPProxyTLSProfile() *tlsfingerprint.Profile {
 func newOpenAIOfficialEgressWebSocketTLSProfile() *tlsfingerprint.Profile {
 	return &tlsfingerprint.Profile{
 		Name:      "Official Codex CLI 0.145.0 WebSocket (phase0-2026-07-24)",
-		Transport: tlsfingerprint.TransportOptions{DisableCompression: true},
+		Transport: tlsfingerprint.TransportOptions{DisableCompression: true, LowercaseHeaders: true},
 		CipherSuites: []uint16{
 			0x1302, 0x1301, 0x1303,
 			0xc02c, 0xc02b, 0xcca9,

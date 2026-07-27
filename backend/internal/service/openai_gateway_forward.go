@@ -146,7 +146,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	compatMessagesBridge := isOpenAICompatMessagesBridgeBody(body)
 	setOpenAICompatMessagesBridgeContext(c, compatMessagesBridge)
 
-	inboundIsCodexCLI := openai.IsCodexOfficialClientByHeaders(c.GetHeader("User-Agent"), c.GetHeader("originator"))
+	inboundIsCodexCLI := isInboundOpenAIOfficialClient(c)
 	forceCodexCLI := s.cfg != nil && s.cfg.Gateway.ForceCodexCLI
 	isCodexCLI := inboundIsCodexCLI || forceCodexCLI || accountMimicCodexCLI
 	codexImageGenerationExplicitToolPolicy := codexImageGenerationExplicitToolPolicyAllow

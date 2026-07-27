@@ -102,3 +102,21 @@ func TestOfficialEgressOpenAIWSHandshakeStripsInboundHostHeaders(t *testing.T) {
 	require.Equal(t, openaiidentity.CodexUserAgent, headers.Get("User-Agent"))
 	require.Equal(t, openaiidentity.CodexOriginator, headers.Get("originator"))
 }
+
+// 官方 compact 请求不压缩：RequestCompression 默认 None，compact 的 execute_with
+// 不传压缩选项。普通 Responses 才走 zstd。
+func TestOfficialEgressCompactRequestIsNotCompressed(t *testing.T) {
+	body := newOfficialOpenAIHTTPTestBody(t, true, false, false)
+	c := newOfficialOpenAIHTTPTestContext(body, "/v1/responses")
+	upstream := &httpUpstreamRecorder{
+		resp: newOfficialOpenAIHTTPSSECompletedResponse("resp_compress_probe"),
+	}
+
+	_, err := newOfficialOpenAIHTTPTestService(upstream).Forward(
+		context.Background(), c, newOfficialOpenAIHTTPTestAccount(94), body,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, "zstd", upstream.lastReq.Header.Get("Content-Encoding"),
+		"普通 Responses 必须保持 zstd 压缩")
+}
