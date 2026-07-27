@@ -40,6 +40,15 @@ type TransportOptions struct {
 	// Go 默认 10MB，官方 h2 栈实测为 16KB。该项只声明"我能接收多大的响应头"，
 	// 不限制自身发送，且官方本就用这个值，因此收紧不影响与官方上游的通信。
 	H2MaxHeaderListSize uint32
+	// H1HeaderOrder 非空时启用 h1 wire 层重写：按该清单（小写名）排列 header，
+	// 未列出的排在清单之后，随后是 host、content-length，名称一律小写。
+	//
+	// Go 的 Request.write 硬编码把 Host 置于最前、其余走 writeSubset 强制字典序，
+	// 与官方 hyper 的「插入序 → host → content-length」相反，且无任何配置入口
+	// （规格表 SPEC-H1-002~004）。故只能在 conn 层改写 wire 字节。
+	//
+	// 留空即完全不介入——这是该能力的开关。
+	H1HeaderOrder []string
 }
 
 // Profile contains TLS fingerprint configuration.
@@ -295,6 +304,24 @@ func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr stri
 
 // DialTLSContext establishes a TLS connection with the configured fingerprint.
 // This method is designed to be used as http.Transport.DialTLSContext.
+// wrapH1Wire 按画像声明决定是否接管 h1 请求头的 wire 形态。
+// 画像未声明 H1HeaderOrder 时原样返回，不引入任何开销。
+func wrapH1Wire(conn net.Conn, profile *Profile) net.Conn {
+	if conn == nil || profile == nil || len(profile.Transport.H1HeaderOrder) == 0 {
+		return conn
+	}
+	var preserve map[string]string
+	if len(profile.Transport.PreserveHeaderCase) > 0 {
+		preserve = make(map[string]string, len(profile.Transport.PreserveHeaderCase))
+		for _, name := range profile.Transport.PreserveHeaderCase {
+			if trimmed := strings.TrimSpace(name); trimmed != "" {
+				preserve[strings.ToLower(trimmed)] = trimmed
+			}
+		}
+	}
+	return newH1WireConn(conn, profile.Transport.H1HeaderOrder, preserve)
+}
+
 func (d *Dialer) DialTLSContext(ctx context.Context, network, addr string) (net.Conn, error) {
 	// Establish TCP connection using base dialer (supports proxy)
 	slog.Debug("tls_fingerprint_dialing_tcp", "addr", addr)
@@ -341,7 +368,9 @@ func performTLSHandshake(ctx context.Context, conn net.Conn, profile *Profile, a
 		"cipher_suite", state.CipherSuite,
 		"alpn", state.NegotiatedProtocol)
 
-	return tlsConn, nil
+	// 三个 Dialer（直连 / HTTP 代理 / SOCKS5）的共同出口：
+	// 画像声明 H1HeaderOrder 时在此接管 h1 请求头的 wire 形态。
+	return wrapH1Wire(tlsConn, profile), nil
 }
 
 // toUTLSCurves converts uint16 slice to utls.CurveID slice.
