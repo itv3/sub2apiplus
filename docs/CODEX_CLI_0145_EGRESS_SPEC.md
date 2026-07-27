@@ -605,11 +605,28 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
   1. **URL 多了 query**：`openai_live.go:35` 为
      `.../realtime/calls?intent=quicksilver&architecture=avas`。官方**不带 query**，
      且 `intent` / `architecture` 这两个参数名在官方源码中不存在
-  2. **主请求缺 `openai-alpha`**：`openai_live.go:288-305` 只设了
-     `Content-Type` / `Accept: application/sdp` / attestation / 身份头。
-     `OpenAI-Alpha: quicksilver=v2` 只出现在 `openai_live.go:396` 的另一处请求上
-- **备注**：本条比 P1-8 记的"缺 `x-codex-beta-features` 等"更具体，且指出了**反向
-  问题**——不仅少发了 header，还多发了官方不存在的 query 参数。
+  2. ~~主请求缺 `openai-alpha`~~ —— **该判断有误，已更正**：`openai_live.go:298`
+     调用了 `applyLiveUpstreamIdentityHeaders`，其中 `openai_live.go:396` 设置了
+     `OpenAI-Alpha: quicksilver=v2`，经 transport 层小写化后即为官方形态。**此项本就对齐。**
+- **备注**：真正的偏离只有 URL query 一项。它属于**反向问题**——不是少发 header，
+  而是多发了官方不存在的参数。
+- **暂不修**：live 需管理员开 `AllowLive` 才可达，无法实测验证去掉 query 后上游
+  是否仍接受。改动风险大于收益，留待该端点真正启用时评估。
+
+### SPEC-EP-013　OAuth 路径不得透传入站 query
+
+- **规则**：官方 provider 的 `query_params` 在所有构造点均为 `None`
+  （`model-provider-info/src/lib.rs:339,384,534`），除 models 端点由官方自行追加
+  `client_version` 外，**URL 不带任何 query**
+- **依据**：`codex-api/src/provider.rs:53` `url_for_path()` 仅在
+  `self.query_params` 非空时拼接　[L1]
+- **观测**：任意通道（URL 可见）
+- **可变性**：固定
+- **状态**：✅ **已修** —— `openai_alpha_search.go:339` 原先**无条件把入站 query
+  原样透传**到出站 URL，等于让第三方客户端往打给官方的 URL 上注入任意参数。
+  与 P0-4 的未知顶层字段泄漏同类，只是发生在 **URL 层**而非 body。
+  ─ 已改为仅在**非 OAuth 路径**透传：API Key 打的是第三方 base URL，不受官方画像
+  约束，保持原行为。
 
 ### SPEC-EP-010　隐私设置端点：双重偏离
 

@@ -337,7 +337,13 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchRequest(ctx context.Context
 	if err != nil {
 		return nil, fmt.Errorf("parse alpha search URL: %w", err)
 	}
-	if c != nil && c.Request != nil && c.Request.URL != nil {
+	// OAuth 路径不透传入站 query：官方 provider 的 query_params 在所有构造点均为 None
+	// （model-provider-info/src/lib.rs:339,384,534），alpha/search 的 URL 不带任何
+	// 参数。原先无条件透传等于让第三方客户端往打给官方的 URL 上注入任意 query，
+	// 与 P0-4 的未知顶层字段泄漏同类，只是发生在 URL 层。规格表 SPEC-EP-013。
+	//
+	// API Key 路径打的是第三方 base URL，不受官方画像约束，保持原有透传行为。
+	if c != nil && c.Request != nil && c.Request.URL != nil && account.Type != AccountTypeOAuth {
 		query := parsedURL.Query()
 		for key, values := range c.Request.URL.Query() {
 			for _, value := range values {

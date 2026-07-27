@@ -83,7 +83,9 @@ func TestForwardAlphaSearchOAuthPreservesWire(t *testing.T) {
 	require.Equal(t, "gpt-5.6-sol", result.Model)
 	require.Equal(t, http.StatusOK, recorder.Code)
 	require.JSONEq(t, `{"encrypted_output":"ciphertext","output":"search result"}`, recorder.Body.String())
-	require.Equal(t, chatgptCodexAlphaSearchURL+"?feature=standalone", upstream.lastReq.URL.String())
+	// OAuth 路径不透传入站 query：官方 provider 的 query_params 恒为 None，
+	// alpha/search 的 URL 不带任何参数（SPEC-EP-013）。
+	require.Equal(t, chatgptCodexAlphaSearchURL, upstream.lastReq.URL.String())
 	require.Equal(t, "chatgpt.com", upstream.lastReq.Host)
 	require.Equal(t, "Bearer oauth-token", upstream.lastReq.Header.Get("Authorization"))
 	require.Equal(t, "chatgpt-account", upstream.lastReq.Header.Get("chatgpt-account-id"))
