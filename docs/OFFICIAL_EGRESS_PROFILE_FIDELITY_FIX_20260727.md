@@ -129,6 +129,32 @@
 `reasoning.context=none`，出站全部回到官方契约（`auto` / 已删除 / `false` / `true` /
 `[reasoning.encrypted_content]` / `all_turns`）。
 
+### 6.4.1 基准口径修正：关闭官方非必要流量后重抓
+
+首轮官方基准（`oauth-20260727T073930Z`）保留了插件/MCP 流量，官方样本里混入
+`plugins/featured`、`ps/plugins/installed`（47 次）、`ps/plugins/list`（32 次）、
+`ps/plugins/suggested` 等请求，并因此提前拿到 Cloudflare Cookie，与只发模型请求的候选
+出站不可比——直接后果是 HTTP 出站多出一个 `cookie` 头的差集。
+
+`Feature::Plugins` 在官方是 `Stage::Stable`、`default_enabled: true` 但可配置关闭，
+与遥测同属"官方原生支持关闭"的行为层流量，因此基准应在关闭状态下采集。
+
+第一次尝试改 `state/codex/config.toml` **无效**：抓包工具对 Codex 使用
+`--ignore-user-config`（`capturelib/scenarios.py:504`、`:563`），磁盘配置被完全忽略，
+所有隐私设置由 `-c key=value` 显式传入，而那份 `privacy_values` 列表里有
+`analytics.enabled=false`、`otel.exporter="none"`、`feedback.enabled=false`，
+**唯独漏了 `features.plugins`**。这与第三方客户端不带宿主头属同类脚手架缺口。
+
+修复：在 `privacy_values` 中补 `features.plugins=false`，重抓得到干净基准
+`oauth-20260727T091556Z`。官方端点收敛为 `codex/models`、`codex/responses`、`ps/mcp`
+三项（`ps/mcp` 由 MCP 连接管理发起，不受该 flag 控制），`cookie` 差集随之消失。
+
+| 对比维度 | 保留插件流量 | 关闭插件流量 |
+|---|---|---|
+| HTTP header 名称集合 | 官方 17 / 候选 16，差 `cookie` | **官方 16 / 候选 16，无差集** |
+| WS 握手 header 名称集合 | 18 / 18 无差集 | 18 / 18 无差集 |
+| body 顶层字段 | 完全一致 | 完全一致 |
+
 ### 6.5 与官方基准的逐项对照
 
 同模型 `gpt-5.6-luna` 下，官方 Codex CLI 0.145.0 实抓出站与 Sub2API 候选出站：
@@ -147,8 +173,12 @@
 | WS 上行帧序列 | 预热帧 + 业务帧 | 结构一致 |
 | WS `Sec-WebSocket-Extensions` | `permessage-deflate; client_max_window_bits` | 一致 |
 
-差异仅剩入站对话内容决定的 input 消息条数（官方 3 条、候选 2 条），属 README §1.1.2.3
-定义的声明差异。
+在关闭插件流量的干净基准（`oauth-20260727T091556Z`）下，HTTP 与 WS 的 header 名称集合
+以及 body 顶层字段集合均**无差集**，9 项（HTTP）/ 11 项（WS）静态 header 取值完全相同。
+剩余取值差异 7 项，全部为跨独立运行必然变化的量：`authorization`（不同账号 token）、
+`content-length`（正文长度）、`sec-websocket-key`（握手随机数），以及
+`session-id`/`thread-id`/`x-client-request-id`/`x-codex-turn-metadata`/`x-codex-window-id`
+这组动态身份。另有入站对话内容决定的 input 消息条数差异，属 README §1.1.2.3 的声明差异。
 
 ### 6.6 环境恢复
 
