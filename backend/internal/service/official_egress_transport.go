@@ -204,25 +204,41 @@ func newAnthropicOfficialEgressTLSProfile() *tlsfingerprint.Profile {
 	}
 }
 
-// officialOpenAIH1HeaderOrder 是官方 Codex CLI 在 h1 上的 header 输出次序。
+// officialOpenAIH1HeaderOrders 是官方 Codex CLI 在 h1 上的 header 输出次序。
 //
-// 来源：official-h1-full-20260727T124125Z 的逐字节基线。models 请求实测为
-// version → authorization → chatgpt-account-id → accept → originator → user-agent
-// → host；WS 握手实测前五项为 tungstenite 硬编码的大写驼峰，其后转小写。
-// 两者合并为一份并集清单——清单内按此序输出，清单外的头保持相对次序排在其后，
-// 最后统一追加 host 与 content-length。
-var officialOpenAIH1HeaderOrder = []string{
-	// tungstenite 的 WEBSOCKET_HEADERS：仅 WS 握手会出现，HTTP 请求上自然跳过
-	"connection", "upgrade", "sec-websocket-version", "sec-websocket-key",
-	// 业务身份头
-	"chatgpt-account-id", "authorization", "user-agent", "originator", "openai-beta",
-	"version", "x-codex-beta-features", "x-client-request-id",
-	"session-id", "thread-id", "x-codex-window-id", "x-codex-turn-metadata",
-	"x-codex-turn-state", "x-codex-installation-id", "x-oai-attestation",
-	// 内容协商
-	"accept", "content-type", "content-encoding",
-	// WS 扩展声明在官方实测中位于末尾
-	"sec-websocket-extensions",
+// **必须按端点分开**：官方各端点的 HeaderMap 插入序不同，用一份并集清单会让部分
+// 端点反而更偏离——这一点是实测发现的（首版用并集，models 的顺序当场就不对）。
+//
+// 取值依据 official-h1-full-20260727T124125Z 的逐字节基线。
+var officialOpenAIH1HeaderOrders = []tlsfingerprint.H1HeaderOrderRule{
+	{
+		// 实测：version, authorization, chatgpt-account-id, accept, originator, user-agent, host
+		PathContains: "/codex/models",
+		Order: []string{
+			"version", "authorization", "chatgpt-account-id",
+			"accept", "originator", "user-agent",
+		},
+	},
+	{
+		// WS 握手实测（前五项由 tungstenite 硬编码为大写驼峰，经 PreserveHeaderCase 还原）：
+		// Host, Connection, Upgrade, Sec-WebSocket-Version, Sec-WebSocket-Key,
+		// chatgpt-account-id, authorization, user-agent, originator, openai-beta, version,
+		// x-codex-beta-features, x-client-request-id, session-id, thread-id,
+		// x-codex-window-id, x-codex-turn-metadata, sec-websocket-extensions
+		//
+		// 兜底规则（PathContains 为空）：HTTP POST /responses 官方默认走 WS、极少产生
+		// HTTP 形态，至今无逐字节基线，故沿用 WS 握手的业务头次序作为最近似值。
+		// 待补到官方降级路径的基线后再校准（SPEC-PROTO-002）。
+		Order: []string{
+			"connection", "upgrade", "sec-websocket-version", "sec-websocket-key",
+			"chatgpt-account-id", "authorization", "user-agent", "originator", "openai-beta",
+			"version", "x-codex-beta-features", "x-client-request-id",
+			"session-id", "thread-id", "x-codex-window-id", "x-codex-turn-metadata",
+			"x-codex-turn-state", "x-codex-installation-id", "x-oai-attestation",
+			"accept", "content-type", "content-encoding",
+			"sec-websocket-extensions",
+		},
+	},
 }
 
 // newOpenAIOfficialEgressHTTPTLSProfile 复现 Codex CLI 0.145.0
@@ -242,7 +258,7 @@ func newOpenAIOfficialEgressHTTPTLSProfile() *tlsfingerprint.Profile {
 			//                       accept, originator, user-agent, host
 			// 各端点的插入序不同，故清单取并集并按官方基线的相对次序排列；
 			// 未列出的 header 排在清单之后、host 之前，不影响已知项的位置。
-			H1HeaderOrder: officialOpenAIH1HeaderOrder,
+			H1HeaderOrders: officialOpenAIH1HeaderOrders,
 		},
 		CipherSuites: []uint16{
 			0x1302, 0x1303, 0x1301,

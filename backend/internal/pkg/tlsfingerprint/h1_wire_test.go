@@ -13,8 +13,13 @@ import (
 //	version, authorization, chatgpt-account-id, accept, originator, user-agent, host
 //
 // 即：用户头按插入序 → host 在最后，全小写。Go 默认输出 Host 在最前 + 其余字典序。
-var officialModelsOrder = []string{
+var officialModelsOrder = []H1HeaderOrderRule{{Order: []string{
 	"version", "authorization", "chatgpt-account-id", "accept", "originator", "user-agent",
+}}}
+
+// rules 把裸清单包成兜底规则，便于用例直接给顺序。
+func rules(order ...string) []H1HeaderOrderRule {
+	return []H1HeaderOrderRule{{Order: order}}
 }
 
 func TestRewriteH1HeadMatchesOfficialOrder(t *testing.T) {
@@ -50,7 +55,7 @@ func TestRewriteH1HeadPutsContentLengthLast(t *testing.T) {
 		"content-type: application/json\r\n" +
 		"originator: codex_exec\r\n\r\n"
 
-	out, length, _, ok := rewriteH1Head([]byte(head), []string{"accept", "content-type", "originator"}, nil)
+	out, length, _, ok := rewriteH1Head([]byte(head), rules("accept", "content-type", "originator"), nil)
 	if !ok {
 		t.Fatal("重写失败")
 	}
@@ -76,7 +81,7 @@ func TestRewriteH1HeadPreservesWebSocketCase(t *testing.T) {
 		"chatgpt-account-id: acct\r\n\r\n"
 
 	out, _, _, ok := rewriteH1Head([]byte(head),
-		[]string{"connection", "upgrade", "sec-websocket-version", "sec-websocket-key", "chatgpt-account-id"}, preserve)
+		rules("connection", "upgrade", "sec-websocket-version", "sec-websocket-key", "chatgpt-account-id"), preserve)
 	if !ok {
 		t.Fatal("重写失败")
 	}
@@ -104,7 +109,7 @@ func TestRewriteH1HeadBailsOnChunked(t *testing.T) {
 // Go 抑制默认 UA 时写出的空值 User-Agent 不能出现在 wire 上。
 func TestRewriteH1HeadDropsEmptyUserAgent(t *testing.T) {
 	head := "GET /x HTTP/1.1\r\nHost: chatgpt.com\r\nUser-Agent: \r\nuser-agent: codex_exec/0.145.0\r\n\r\n"
-	out, _, _, ok := rewriteH1Head([]byte(head), []string{"user-agent"}, nil)
+	out, _, _, ok := rewriteH1Head([]byte(head), rules("user-agent"), nil)
 	if !ok {
 		t.Fatal("重写失败")
 	}
@@ -188,5 +193,19 @@ func assertOrder(t *testing.T, got, want []string) {
 		if got[i] != want[i] {
 			t.Fatalf("第 %d 项不符\n实际=%v\n期望=%v", i, got, want)
 		}
+	}
+}
+
+// 官方各端点的插入序不同，规则集必须按路径分派——首版用并集清单时 models 顺序当场就错。
+func TestOrderForPathSelectsByEndpoint(t *testing.T) {
+	ruleset := []H1HeaderOrderRule{
+		{PathContains: "/codex/models", Order: []string{"version", "authorization"}},
+		{Order: []string{"chatgpt-account-id", "authorization"}},
+	}
+	if got := orderForPath(ruleset, "GET /backend-api/codex/models?x=1 HTTP/1.1"); got[0] != "version" {
+		t.Errorf("models 应命中专属清单，实际首项=%q", got[0])
+	}
+	if got := orderForPath(ruleset, "POST /backend-api/codex/responses HTTP/1.1"); got[0] != "chatgpt-account-id" {
+		t.Errorf("responses 应落到兜底清单，实际首项=%q", got[0])
 	}
 }

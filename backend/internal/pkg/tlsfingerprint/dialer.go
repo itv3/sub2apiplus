@@ -40,15 +40,25 @@ type TransportOptions struct {
 	// Go 默认 10MB，官方 h2 栈实测为 16KB。该项只声明"我能接收多大的响应头"，
 	// 不限制自身发送，且官方本就用这个值，因此收紧不影响与官方上游的通信。
 	H2MaxHeaderListSize uint32
-	// H1HeaderOrder 非空时启用 h1 wire 层重写：按该清单（小写名）排列 header，
+	// H1HeaderOrders 非空时启用 h1 wire 层重写：按匹配到的清单（小写名）排列 header，
 	// 未列出的排在清单之后，随后是 host、content-length，名称一律小写。
 	//
 	// Go 的 Request.write 硬编码把 Host 置于最前、其余走 writeSubset 强制字典序，
 	// 与官方 hyper 的「插入序 → host → content-length」相反，且无任何配置入口
 	// （规格表 SPEC-H1-002~004）。故只能在 conn 层改写 wire 字节。
 	//
+	// 必须按端点分别配置：官方各端点的插入序不同（实测 models 以 version 打头、
+	// WS 握手以 chatgpt-account-id 打头），用一份并集清单会让部分端点反而更偏离。
+	//
 	// 留空即完全不介入——这是该能力的开关。
-	H1HeaderOrder []string
+	H1HeaderOrders []H1HeaderOrderRule
+}
+
+// H1HeaderOrderRule 把请求路径映射到该端点的官方 header 次序。
+// 按切片顺序取第一个匹配项；PathContains 为空的规则作为兜底。
+type H1HeaderOrderRule struct {
+	PathContains string
+	Order        []string
 }
 
 // Profile contains TLS fingerprint configuration.
@@ -307,7 +317,7 @@ func (d *HTTPProxyDialer) DialTLSContext(ctx context.Context, network, addr stri
 // wrapH1Wire 按画像声明决定是否接管 h1 请求头的 wire 形态。
 // 画像未声明 H1HeaderOrder 时原样返回，不引入任何开销。
 func wrapH1Wire(conn net.Conn, profile *Profile) net.Conn {
-	if conn == nil || profile == nil || len(profile.Transport.H1HeaderOrder) == 0 {
+	if conn == nil || profile == nil || len(profile.Transport.H1HeaderOrders) == 0 {
 		return conn
 	}
 	var preserve map[string]string
@@ -319,7 +329,7 @@ func wrapH1Wire(conn net.Conn, profile *Profile) net.Conn {
 			}
 		}
 	}
-	return newH1WireConn(conn, profile.Transport.H1HeaderOrder, preserve)
+	return newH1WireConn(conn, profile.Transport.H1HeaderOrders, preserve)
 }
 
 func (d *Dialer) DialTLSContext(ctx context.Context, network, addr string) (net.Conn, error) {

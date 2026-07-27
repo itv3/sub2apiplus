@@ -31,8 +31,8 @@ import (
 type h1WireConn struct {
 	net.Conn
 
-	// order 是官方的 header 输出顺序（小写名）。未列出的头排在清单之后、host 之前。
-	order []string
+	// rules 按请求路径给出官方 header 次序；官方各端点的插入序不同，故不能共用一份。
+	rules []H1HeaderOrderRule
 	// preserve 以小写名为键、官方字面量为值，用于 WS 握手那几个大写驼峰的必需头。
 	preserve map[string]string
 
@@ -44,11 +44,11 @@ type h1WireConn struct {
 
 const h1WireMaxHeadBytes = 512 * 1024
 
-func newH1WireConn(conn net.Conn, order []string, preserve map[string]string) net.Conn {
+func newH1WireConn(conn net.Conn, rules []H1HeaderOrderRule, preserve map[string]string) net.Conn {
 	if conn == nil {
 		return nil
 	}
-	return &h1WireConn{Conn: conn, order: order, preserve: preserve}
+	return &h1WireConn{Conn: conn, rules: rules, preserve: preserve}
 }
 
 func (c *h1WireConn) Write(p []byte) (int, error) {
@@ -91,7 +91,7 @@ func (c *h1WireConn) Write(p []byte) (int, error) {
 		rest := append([]byte(nil), c.pending.Bytes()...)
 		c.pending.Reset()
 
-		rewritten, length, chunked, ok := rewriteH1Head(head, c.order, c.preserve)
+		rewritten, length, chunked, ok := rewriteH1Head(head, c.rules, c.preserve)
 		if !ok || chunked {
 			// 解析失败或 chunked：不改写，原样发出并从此放弃干预本连接。
 			c.passthrough = true
@@ -129,13 +129,30 @@ func (c *h1WireConn) giveUp(consumed int) (int, error) {
 	return consumed, nil
 }
 
+// orderForPath 取第一个匹配的规则；PathContains 为空的作为兜底。
+func orderForPath(rules []H1HeaderOrderRule, requestLine string) []string {
+	var fallback []string
+	for _, rule := range rules {
+		if rule.PathContains == "" {
+			if fallback == nil {
+				fallback = rule.Order
+			}
+			continue
+		}
+		if strings.Contains(requestLine, rule.PathContains) {
+			return rule.Order
+		}
+	}
+	return fallback
+}
+
 // rewriteH1Head 按官方形态重排请求头。
 //
-// 输出顺序为：order 清单内的头（按清单序）→ 清单外的头（按原出现序）→ host
+// 输出顺序为：匹配到的清单内的头（按清单序）→ 清单外的头（按原出现序）→ host
 // → content-length。名称一律小写，preserve 命中项按给定字面量输出。
 //
 // 返回 length 为 Content-Length 取值，chunked 表示请求使用分块编码（调用方应放弃改写）。
-func rewriteH1Head(head []byte, order []string, preserve map[string]string) (out []byte, length int64, chunked bool, ok bool) {
+func rewriteH1Head(head []byte, rules []H1HeaderOrderRule, preserve map[string]string) (out []byte, length int64, chunked bool, ok bool) {
 	text := string(head)
 	text = strings.TrimSuffix(text, "\r\n\r\n")
 	lines := strings.Split(text, "\r\n")
@@ -144,6 +161,8 @@ func rewriteH1Head(head []byte, order []string, preserve map[string]string) (out
 	}
 
 	type field struct{ name, value string }
+	order := orderForPath(rules, lines[0])
+
 	var (
 		requestLine   = lines[0]
 		fields        []field
