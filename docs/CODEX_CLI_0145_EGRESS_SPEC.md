@@ -493,6 +493,28 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
   `account.go:240`）。频率低，但**每添加一个 OAuth 账号就产生一次官方永不产生的
   出站**，属强特征而非概率特征。
 
+### SPEC-EP-011　旁路链路的画像失效是系统性的
+
+顺着 SPEC-EP-010 逐条核查其余五条打 `chatgpt.com` 的链路，**六条里有五条不走官方
+画像**：
+
+| 端点 | 实现文件 | 客户端 | 官方有无此端点 |
+|---|---|---|---|
+| `settings/account_user_setting` | `openai_privacy_service.go:18` | 🔴 `req.Client` | ❌ 官方无 |
+| `subscriptions` | `openai_privacy_service.go:98` | 🔴 `req.Client` | ✅ 有 |
+| `accounts/check/v4-2023-04-27` | `openai_privacy_service.go:97` | 🔴 `req.Client` | ✅ 有 |
+| `wham/rate-limit-reset-credits` | `openai_quota_service.go` | 🔴 非画像客户端 | ✅ 有 |
+| `backend-api/files` | `openai_images.go` | 🔴 非画像客户端（3 处） | ✅ 有 |
+| `conversation/` | `openai_alpha_search.go` | ✅ 官方画像（4 处） | ✅ 有 |
+
+- **依据**：源码检索 `req.Client` / `DoWithTLS` / `OfficialEgress*TLSProfile` 的
+  命中分布　[L1]
+- **状态**：🔴 **五条链路 TLS 指纹、header 定型、连接池隔离全部失效**
+- **⚠ 这比 P1-5~7 处理的范围更大**。上一轮只收敛了 `count_tokens` / `images` /
+  `alpha-search` 三条，而画像失效实际是**系统性的**：只要不在
+  `supportsOfficialEgressHTTPProfile` 白名单内就静默 fail-open，新增链路会默认漏网。
+  **根因是"默认放行"而非"默认拦截"**，逐条补白名单治标不治本。
+
 ---
 
 ## 8.6 第 1 步进度与接续点
