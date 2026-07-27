@@ -580,6 +580,29 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 - **备注**：URL 与方法层面这四条均已对齐；各自的 **header 顺序**受 §3 的 h1 wire
   问题影响（全部未对齐），**body 字段**待第 2 步逐条验证。
 
+### SPEC-EP-012　live 端点：URL 带了官方没有的 query，且缺 `openai-alpha`
+
+- **规则**：
+  - URL 为 `{base}/realtime/calls`，**不带任何 query 参数**
+  - quicksilver 版本经 **header** 声明：`openai-alpha: quicksilver=v1`（V1 parser）
+    或 `quicksilver=v2`（FramelessBidi）
+- **依据**：`core/src/client.rs:158`
+  `const REALTIME_CALLS_ENDPOINT: &str = "/realtime/calls"`、
+  `endpoint/realtime_call.rs:63` `fn path() -> "realtime/calls"`　[L1]
+  ─ header 见 `core/src/realtime_conversation.rs:1595`
+    `headers.insert("openai-alpha", HeaderValue::from_static("quicksilver=v1"))`　[L1]
+- **观测**：任意通道
+- **可变性**：条件（v1 / v2 取决于 event parser）
+- **状态**：🔴 **两项未对齐**（`openai_live.go`）
+  1. **URL 多了 query**：`openai_live.go:35` 为
+     `.../realtime/calls?intent=quicksilver&architecture=avas`。官方**不带 query**，
+     且 `intent` / `architecture` 这两个参数名在官方源码中不存在
+  2. **主请求缺 `openai-alpha`**：`openai_live.go:288-305` 只设了
+     `Content-Type` / `Accept: application/sdp` / attestation / 身份头。
+     `OpenAI-Alpha: quicksilver=v2` 只出现在 `openai_live.go:396` 的另一处请求上
+- **备注**：本条比 P1-8 记的"缺 `x-codex-beta-features` 等"更具体，且指出了**反向
+  问题**——不仅少发了 header，还多发了官方不存在的 query 参数。
+
 ### SPEC-EP-010　隐私设置端点：双重偏离
 
 - **规则**：官方 Codex CLI **从不修改账号隐私设置**，无任何 `settings/*` 出站
