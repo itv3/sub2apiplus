@@ -194,7 +194,7 @@ passthrough 用 `openAIChatGPTInternalUnsupportedFields`（`user`、`metadata`�
 |---|---|---|
 | P0-1 header 名大小写 | 收口在 transport 层，已有单测覆盖三种情形（小写化、UA 单例、无 UA 不造空值）。**MITM 抓包为 h2，HPACK 强制小写，无法验证 h1 线形**——需要 h1 直连观测手段 | 代码级通过 |
 | P0-2 compact 不压缩 | 普通 Responses 出站仍为 `content-encoding: zstd`；compact 分支由代码判断保证，本轮未构造 compact 请求 | 部分通过 |
-| P0-3 models 走官方画像 | 代码路径已切到 `DoWithTLS` + 官方画像。**ClientHello 差异需 direct pcap 才可见**，本轮未跑 direct | 代码级通过 |
+| P0-3 models 走官方画像 | direct 抓包 `wire-parity-direct-20260727T111727Z`：3 个 ClientHello 全部 SNI=`chatgpt.com`、cipher 列表逐字节相同（30 个）、ALPN 均为空，models 与业务请求同画像 | **通过（实测）** |
 | P0-4 未知顶层字段剔除 | 入站携带 `truncation`/`top_logprobs`/`background`/`max_tool_calls`/`leak_probe_unknown_field`，**出站全部剔除**，body 顶层收敛为官方字段集 | **通过（实测）** |
 | P2-9 入站判定统一 strict | 代码改动，行为由现有 official egress 用例覆盖 | 代码级通过 |
 | P2-11 CC/Messages 预热 | 两入口已接入 `ensureOpenAIModelCapability` | 代码级通过 |
