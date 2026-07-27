@@ -13,16 +13,34 @@ import (
 //
 // 放在传输层而不是各 Finalizer 里，是为了让语义定型与 wire 形态分层：上层继续用
 // canonical 写法读写 header，wire 形态由画像统一收口。
+//
+// 但"全小写"并非官方的统一形态：WS 握手由 tungstenite 生成，它把
+// Host/Connection/Upgrade/Sec-WebSocket-Version/Sec-WebSocket-Key 五项按硬编码字面量
+// 写出（大写驼峰），只有其余 header 才走 HeaderName::as_str() 的小写路径。因此需要
+// preserve 例外清单，否则握手的这几项会被这一层改成小写而偏离官方。
 type lowercaseHeaderRoundTripper struct {
 	base http.RoundTripper
+	// preserve 以小写名为键、官方字面量为值。命中项直接用该字面量作 map key，
+	// writeSubset 原样输出，从而绕开 CanonicalMIMEHeaderKey 的改写。
+	preserve map[string]string
 }
 
-// NewLowercaseHeaderRoundTripper 包装 base，使其发出的 header 名全部为小写。
-func NewLowercaseHeaderRoundTripper(base http.RoundTripper) http.RoundTripper {
+// NewLowercaseHeaderRoundTripper 包装 base，使其发出的 header 名全部为小写；
+// preserveCase 中的名字按给定字面量原样输出，用于官方并非小写的少数 header。
+func NewLowercaseHeaderRoundTripper(base http.RoundTripper, preserveCase []string) http.RoundTripper {
 	if base == nil {
 		return nil
 	}
-	return &lowercaseHeaderRoundTripper{base: base}
+	var preserve map[string]string
+	if len(preserveCase) > 0 {
+		preserve = make(map[string]string, len(preserveCase))
+		for _, name := range preserveCase {
+			if trimmed := strings.TrimSpace(name); trimmed != "" {
+				preserve[strings.ToLower(trimmed)] = trimmed
+			}
+		}
+	}
+	return &lowercaseHeaderRoundTripper{base: base, preserve: preserve}
 }
 
 func (r *lowercaseHeaderRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -45,6 +63,10 @@ func (r *lowercaseHeaderRoundTripper) RoundTrip(req *http.Request) (*http.Respon
 			if userAgent == "" && len(values) > 0 {
 				userAgent = values[0]
 			}
+			continue
+		}
+		if literal, ok := r.preserve[lower]; ok {
+			lowered[literal] = values
 			continue
 		}
 		lowered[lower] = values

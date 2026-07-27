@@ -290,8 +290,16 @@ func newOpenAIOfficialEgressHTTPProxyTLSProfile() *tlsfingerprint.Profile {
 // 对应阶段 0 四个目标握手的不同 JA3，禁止固定单一样本。
 func newOpenAIOfficialEgressWebSocketTLSProfile() *tlsfingerprint.Profile {
 	return &tlsfingerprint.Profile{
-		Name:      "Official Codex CLI 0.145.0 WebSocket (phase0-2026-07-24)",
-		Transport: tlsfingerprint.TransportOptions{DisableCompression: true, LowercaseHeaders: true},
+		Name: "Official Codex CLI 0.145.0 WebSocket (phase0-2026-07-24)",
+		Transport: tlsfingerprint.TransportOptions{
+			DisableCompression: true,
+			LowercaseHeaders:   true,
+			// tungstenite 的 WEBSOCKET_HEADERS 是硬编码大写驼峰，其余头才小写。
+			// Host 不必列：Go 的 Request.write 硬编码输出 "Host: "，本就一致。
+			PreserveHeaderCase: []string{
+				"Connection", "Upgrade", "Sec-WebSocket-Version", "Sec-WebSocket-Key",
+			},
+		},
 		CipherSuites: []uint16{
 			0x1302, 0x1301, 0x1303,
 			0xc02c, 0xc02b, 0xcca9,

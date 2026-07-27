@@ -29,6 +29,12 @@ type TransportOptions struct {
 	// 形态，而 Rust hyper 直接用 HeaderName::as_str() 输出小写。差异只在 HTTP/1.1 上可见
 	// （HTTP/2 的 HPACK 强制小写），因此仅对需要复刻 h1 线形的画像开启。
 	LowercaseHeaders bool
+	// PreserveHeaderCase 列出即便开启 LowercaseHeaders 也要按字面量原样输出的 header。
+	//
+	// 官方并非处处小写：WS 握手由 tungstenite 生成，Host/Connection/Upgrade/
+	// Sec-WebSocket-Version/Sec-WebSocket-Key 五项是硬编码的大写驼峰，其余才走小写。
+	// 不设该清单会把这几项一并压成小写，反而偏离官方。
+	PreserveHeaderCase []string
 }
 
 // Profile contains TLS fingerprint configuration.

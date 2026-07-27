@@ -1463,7 +1463,7 @@ func wrapUpstreamTransportWireOptions(base http.RoundTripper, profile *tlsfinger
 	if base == nil || profile == nil || !profile.Transport.LowercaseHeaders {
 		return base
 	}
-	return tlsfingerprint.NewLowercaseHeaderRoundTripper(base)
+	return tlsfingerprint.NewLowercaseHeaderRoundTripper(base, profile.Transport.PreserveHeaderCase)
 }
 
 // trackedBody 带跟踪功能的响应体包装器

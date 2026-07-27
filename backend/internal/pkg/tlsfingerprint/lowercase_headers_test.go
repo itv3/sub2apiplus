@@ -1,8 +1,11 @@
 package tlsfingerprint
 
 import (
+	"bufio"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -24,7 +27,7 @@ func (c *capturingRoundTripper) RoundTrip(req *http.Request) (*http.Response, er
 // 该 RoundTripper 负责把 wire 形态收口到小写。
 func TestLowercaseHeaderRoundTripperLowercasesHeaderNames(t *testing.T) {
 	base := &capturingRoundTripper{}
-	rt := NewLowercaseHeaderRoundTripper(base)
+	rt := NewLowercaseHeaderRoundTripper(base, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
 	req.Header.Set("Session-Id", "s1")
@@ -52,7 +55,7 @@ func TestLowercaseHeaderRoundTripperLowercasesHeaderNames(t *testing.T) {
 // 若被误当成普通 header 处理就会同时发出两行。
 func TestLowercaseHeaderRoundTripperKeepsSingleUserAgent(t *testing.T) {
 	base := &capturingRoundTripper{}
-	rt := NewLowercaseHeaderRoundTripper(base)
+	rt := NewLowercaseHeaderRoundTripper(base, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
 	req.Header.Set("User-Agent", "codex_exec/0.145.0 (Ubuntu 24.4.0; x86_64) unknown")
@@ -75,7 +78,7 @@ func TestLowercaseHeaderRoundTripperKeepsSingleUserAgent(t *testing.T) {
 // 未携带 User-Agent 时不应凭空造出空值头。
 func TestLowercaseHeaderRoundTripperWithoutUserAgent(t *testing.T) {
 	base := &capturingRoundTripper{}
-	rt := NewLowercaseHeaderRoundTripper(base)
+	rt := NewLowercaseHeaderRoundTripper(base, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
 	req.Header.Set("Session-Id", "s1")
@@ -108,4 +111,82 @@ func lookupRawHeader(h http.Header, key string) []string {
 		}
 	}
 	return nil
+}
+
+// WS 握手不是全小写：tungstenite 把 Host/Connection/Upgrade/Sec-WebSocket-Version/
+// Sec-WebSocket-Key 五项按硬编码字面量写出（大写驼峰），只有其余 header 走小写路径。
+//
+// 这里直接读 wire 字节而不看 Request.Header：Go 的 http server 会把收到的 header 名
+// canonical 化后入 map，map 级断言看不出真实形态——正是该差异此前未被发现的原因。
+func TestLowercaseHeaderRoundTripperPreservesWebSocketHandshakeCase(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("监听失败: %v", err)
+	}
+	defer listener.Close()
+
+	names := make(chan []string, 1)
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		var got []string
+		scanner := bufio.NewScanner(conn)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if line == "" {
+				break
+			}
+			if idx := strings.Index(line, ":"); idx > 0 {
+				got = append(got, line[:idx])
+			}
+		}
+		names <- got
+		_, _ = conn.Write([]byte("HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"))
+	}()
+
+	rt := NewLowercaseHeaderRoundTripper(&http.Transport{},
+		[]string{"Connection", "Upgrade", "Sec-WebSocket-Version", "Sec-WebSocket-Key"})
+	req, err := http.NewRequest(http.MethodGet, "http://"+listener.Addr().String(), nil)
+	if err != nil {
+		t.Fatalf("构造请求失败: %v", err)
+	}
+	// coder/websocket 用 Go canonical 形式设置这些头。
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Sec-Websocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+	req.Header.Set("Sec-Websocket-Version", "13")
+	req.Header.Set("Chatgpt-Account-Id", "acct")
+	req.Header.Set("Originator", "codex_cli_rs")
+
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip 失败: %v", err)
+	}
+	resp.Body.Close()
+
+	onWire := <-names
+	present := make(map[string]bool, len(onWire))
+	for _, name := range onWire {
+		present[name] = true
+	}
+	// 官方大写驼峰的五项（Host 由 Go 的 Request.write 硬编码输出，本就一致）。
+	for _, name := range []string{"Host", "Connection", "Upgrade", "Sec-WebSocket-Version", "Sec-WebSocket-Key"} {
+		if !present[name] {
+			t.Errorf("wire 上缺少官方形态的 %q，实际=%v", name, onWire)
+		}
+	}
+	// 业务头仍须小写，且不得出现被压小写的握手头。
+	for _, name := range []string{"chatgpt-account-id", "originator"} {
+		if !present[name] {
+			t.Errorf("wire 上缺少小写业务头 %q，实际=%v", name, onWire)
+		}
+	}
+	for _, name := range []string{"connection", "upgrade", "sec-websocket-key", "sec-websocket-version"} {
+		if present[name] {
+			t.Errorf("握手头 %q 被压成小写，偏离 tungstenite 形态，实际=%v", name, onWire)
+		}
+	}
 }
