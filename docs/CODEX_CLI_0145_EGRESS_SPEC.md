@@ -793,6 +793,23 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
   空 ALPN**——那样代理路径也走 h1，h2 层全部差异自动消失。**这是尚未验证的推论。**
 - **SPEC-EP-011 画像失效是系统性的**：根因是白名单"默认放行"。
 
+## 8.7 A 类修复的 wire 级验收（`egress-a-fixes-0.1.165-11`）
+
+改完即部署 Vircs 并用 h1 直连探针实测，**不接受"自以为改对了"**：
+
+| 项 | 官方基线 | 修复前 | 修复后实测 | 结论 |
+|---|---|---|---|---|
+| models `accept` | `*/*` | `application/json` | `*/*` | ✅ |
+| UA | `…x86_64) xterm-256color` | `…x86_64) unknown (codex_exec; 0.145.0)` | `…x86_64) unknown` | ✅ |
+| responses `accept` | `text/event-stream` | 同 | `text/event-stream` | ✅ 本就一致 |
+| 会话头 | `session-id` / `thread-id` | responses 路径本就正确 | `session-id` / `thread-id` | ✅ |
+
+**UA 残留的 terminal 段差异（`xterm-256color` vs `unknown`）不是偏离**：官方基线
+是在带终端的容器里采的，而 Sub2API 是服务端进程、无终端；官方在同样条件下输出的
+也是 `unknown`（`terminal-detection/src/lib.rs:204`）。
+
+证据：`local-analysis/captures/wire-parity-fix-20260727/h1-wire-probe/VERIFY-a-fixes-*.json`
+
 ## 9. 本版未覆盖
 
 按 §0.4 的范围界定，以下**尚未纳入**，不代表已对齐：
