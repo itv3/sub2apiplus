@@ -451,3 +451,67 @@ header 用 map / JSON object 传给 Rust，顺序当场丢失，hyper 的保序�
 - h2 伪头顺序未采到（PoC 连接在 HEADERS 帧前结束）
 - 架构代价一分未减：IPC、SSE 流式透传的背压、Go 侧 official_egress 的迁移、
   计费与日志跨进程、Rust 侧重建重试与连接池、以及长期的 Rust 维护能力
+
+### 10.3 据此设想的目标架构
+
+> ⚠ **本小节是方案设想，不是规格。** 本表其余部分记录的是**已验证的事实**（官方
+> 形态与对齐状态），本节记录的是**尚未决策的架构方向**。不要把它当作已定的架构。
+> Anthropic 侧一并记于此只为不散落，其规格另立文档。
+
+```
+Go 主程序（路由 / 鉴权 / 计费 / 调度 / 语义定型）
+  ├─ Rust sidecar     → OpenAI      （同源 Codex CLI，已 PoC 验证，见 §10）
+  └─ Node.js sidecar  → Anthropic   （同源 Claude Code，HTTP 栈待验证）
+```
+
+Anthropic 侧是 **Node.js 而非 Rust**——`newAnthropicOfficialEgressTLSProfile`
+的注释即写明复现的是 "Claude Code 2.1.220 的 Node.js ClientHello（17 个 cipher、
+HTTP/1.1 ALPN）"。要同源就得用 Node.js，因此是三语言架构。
+
+#### 现有薄层四个组件的去向
+
+README §1.1.3.1 描述的薄层（Profile Resolver / OfficialEgressContext / Finalizer /
+Transport Dialer Provider）位于**出站侧**（"在现有协议转换完成后"），不是入口前置层。
+在同源方案下四者命运不同：
+
+| 组件 | 去向 |
+|---|---|
+| Profile Resolver | **留在 Go** —— 属业务逻辑 |
+| OfficialEgressContext | **留在 Go** |
+| Finalizer | **只有形态层被取代**，语义层留在 Go（见下） |
+| Transport / Dialer Provider | **整个消失** —— TLS 指纹与 h1/h2 wire 由 sidecar 的库天然产生 |
+
+Finalizer 现在承担两类活，同源方案只接管其中一类：
+
+- **形态层**（header 名大小写、顺序、`Host` 位置、SETTINGS）→ **sidecar 白拿**，
+  §10 已逐项验证
+- **语义层**（header 放什么值、body 剔除哪些字段、Lite 变换、顶层白名单）→
+  **仍须 Go 实现**。sidecar 不会自动做这些，传什么字段就发什么字段
+
+#### 三条必须遵守的约束
+
+1. **跨语言协议必须保序。** h1 的自动一致性来自 `HeaderMap` 插入序；若用 map /
+   JSON object 传 header，顺序当场丢失，等于绕一圈回到原点。**必须用数组。**
+2. **必须复刻官方的配置分支，不能只对齐依赖版本。** §10.1 已证：裸 reqwest 经代理
+   根本不 offer h2，须显式 `.use_rustls_tls()`（即官方 `custom_ca.rs:307` 那个判断）
+   才与官方一致。
+3. **Anthropic 侧第一步是验证 HTTP 栈是否变更。** 用 2.1.88 源码定位它用哪个 HTTP
+   库与哪些配置分支（架构性信息跨版本相对稳定），**再用 2.1.220 实测验证该结论仍
+   成立**。低成本对账法：若该库的默认 ClientHello 恰为现有画像的 17-cipher，说明
+   栈未换、结论可用。
+
+> 关于「2.1.88 属外推、不得降为画像基准」这条既有裁定：它在**复刻方案**下完全成立
+> （复刻就是照抄值）。**同源方案不抄值**，只用旧源码回答"用什么库、有哪些分支"，
+> 具体取值一律以 2.1.220 实测为准，因此两者不冲突。
+
+#### 尚未决策 / 未评估
+
+- Go ↔ sidecar 的 IPC 形式与 SSE 流式透传的背压处理
+- 现有 Go 侧 official_egress 代码的迁移路径
+- 计费、日志、指标跨进程传递
+- sidecar 侧重建重试、超时与连接池
+- 长期的 Rust / Node.js 维护能力
+- **流量的统计特征**：官方 CLI 是单用户单进程单账号、节奏由人操作决定；Sub2API 是
+  网关，多账号复用、高频转发、连接池共享。即使单个请求逐字节一致，请求间的时间
+  分布与并发模式在统计层面仍不同。**这一层换语言解决不了**，若验收标准写成"官方
+  无法区分"，它会是最后也最难的门槛。
