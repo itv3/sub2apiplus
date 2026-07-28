@@ -857,6 +857,48 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 **残留**：models 与 responses 之外的端点（compact / alpha-search / images / live）
 仍无逐字节基线，落兜底清单，为最近似值。
 
+## 8.9 剩余端点的 header 集合与 body（第 1 步补全）
+
+> **顺序一律标为待实测，不做推导。** 理由：responses 的实测顺序里 `originator` 与
+> `user-agent` 出现在**倒数**位置，而按 `default_headers()` 的插入序推导它们应在最前
+> ——说明「基础头 → extend → apply_auth」这条链推不出真实次序。当天已因外推错过
+> 三次（§0.1），故此处只记可确证的集合与字段。
+
+### SPEC-EP-014　compact 的 header 集合
+
+- **规则**：`extra_headers` 的构造链为（`core/src/client.rs:599-617`）　[L1]
+  1. `x-codex-installation-id`（条件：有安装 ID 时）
+  2. `build_responses_headers()` → `x-codex-beta-features`、`x-codex-turn-state`
+  3. `add_originator_header()` → `originator`
+  4. `build_responses_compatibility_headers()`
+  5. `build_session_headers()` → `session-id`、`thread-id`
+  6. `x-oai-attestation`（条件：能生成 attestation 时）
+  7. `add_responses_lite_header()` → `x-openai-internal-codex-responses-lite`（Lite 时）
+- **与 responses 的差异**：compact **不设** `x-client-request-id`
+  （responses 在 `endpoint/responses.rs:89` 单独 `insert_header`），也不设 `accept`
+  （SPEC-HDR-006）
+- **顺序**：⛔ **待实测** —— 落 h1 wire 的兜底清单
+- **可变性**：条件（installation-id / attestation / Lite 三项各自可缺）
+
+### SPEC-EP-015　alpha-search 的 body 字段
+
+- **规则**：`SearchRequest { id, model, reasoning?, input?, commands? }`
+  （`codex-api/src/search.rs:9`）　[L1]
+- **顺序**：⛔ 待实测
+- **状态**：⚠ 待第 2 步核对 Sub2API 是否多发/少发字段
+
+### SPEC-EP-016　images 走 responses 端点，header 与 body 同 responses
+
+- **规则**：Sub2API 的 images 打的是 `/codex/responses`（SPEC-EP-001），因此其
+  header 与 body 约束**完全等同 responses**，不适用官方 `images/generations` 的
+  `ImageGenerationRequest { prompt, background?, model, n?, quality?, size? }`
+- **顺序**：✅ 命中 responses 的实测清单（已逐字节对齐）
+- **状态**：⚠ body 仍有 SPEC-BODY-005（`tool_choice` 类型）未修
+
+### SPEC-EP-017　count_tokens 无官方对应物
+
+- 见 SPEC-EP-003。官方无该端点，**无形态可列、无基线可采**，不参与第 2 步验证。
+
 ## 9. 本版未覆盖
 
 按 §0.4 的范围界定，以下**尚未纳入**，不代表已对齐：
