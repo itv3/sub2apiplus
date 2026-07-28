@@ -111,6 +111,53 @@ def redact(name: str, value: str) -> str:
     return value
 
 
+def maybe_decompress(raw: bytes, content_encoding: str) -> bytes:
+    """官方 responses 的 body 是 zstd 压缩的（SPEC-BODY-002），不解压就取不到结构。"""
+
+    if "zstd" not in content_encoding.lower() or not raw:
+        return raw
+    try:
+        import zstandard
+
+        return zstandard.ZstdDecompressor().decompress(raw, max_output_size=32 * 1024 * 1024)
+    except Exception:  # noqa: BLE001 - 解压失败不应中断采集
+        return b""
+
+
+def summarize_body(raw: bytes, content_type: str) -> dict | None:
+    """只提取 body 的**结构**，不记录取值。
+
+    body 里含用户对话内容，产物要拉回本地归档，绝不能落明文。而验证 body 类规则
+    （顶层字段集合、tool_choice 的 JSON 类型、Lite 变换）只需要结构即可。
+    """
+
+    if not raw or "json" not in content_type.lower():
+        return None
+    try:
+        parsed = json.loads(raw.decode("utf-8", "replace"))
+    except (ValueError, UnicodeDecodeError):
+        return None
+    if not isinstance(parsed, dict):
+        return {"top_level_type": type(parsed).__name__}
+    shape = {}
+    for key, value in parsed.items():
+        if isinstance(value, bool):
+            # 布尔值本身就是形态的一部分（如 parallel_tool_calls），可安全记录。
+            shape[key] = f"bool:{str(value).lower()}"
+        elif isinstance(value, str):
+            # 短枚举值是形态（如 tool_choice="auto"），长文本是用户内容，只记长度。
+            shape[key] = f"str:{value}" if len(value) <= 24 else f"str:<len={len(value)}>"
+        elif isinstance(value, (int, float)):
+            shape[key] = f"num:{value}"
+        elif isinstance(value, list):
+            shape[key] = f"array:<len={len(value)}>"
+        elif isinstance(value, dict):
+            shape[key] = "object:{" + ",".join(sorted(value.keys())[:8]) + "}"
+        elif value is None:
+            shape[key] = "null"
+    return {"top_level_fields_in_order": list(parsed.keys()), "shape": shape}
+
+
 def parse_head(raw: bytes) -> dict:
     """按原始字节解析请求行与 header，保留出现顺序和大小写。"""
 
@@ -138,8 +185,31 @@ def handle(connection: ssl.SSLSocket, records: list, lock: threading.Lock) -> No
             if not chunk:
                 break
             buffer += chunk
-        head_bytes = buffer.split(HEADER_TERMINATOR, 1)[0]
+        head_bytes, _, body_start = buffer.partition(HEADER_TERMINATOR)
         record = parse_head(head_bytes)
+        # 按 Content-Length 补齐 body，仅用于提取结构（见 summarize_body）。
+        declared = 0
+        content_type = ""
+        content_encoding = ""
+        for item in record.get("headers", []):
+            lowered = item["name"].strip().lower()
+            if lowered == "content-length":
+                try:
+                    declared = int(item["value"])
+                except ValueError:
+                    declared = 0
+            elif lowered == "content-type":
+                content_type = item["value"]
+            elif lowered == "content-encoding":
+                content_encoding = item["value"]
+        body = body_start
+        while declared and len(body) < declared:
+            chunk = connection.recv(min(READ_CHUNK, declared - len(body)))
+            if not chunk:
+                break
+            body += chunk
+        if summary := summarize_body(maybe_decompress(body, content_encoding), content_type):
+            record["body"] = summary
         record["negotiated_alpn"] = connection.selected_alpn_protocol()
         record["tls_version"] = connection.version()
         with lock:

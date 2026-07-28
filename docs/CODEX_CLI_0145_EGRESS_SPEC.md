@@ -444,7 +444,9 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 - **依据**：`codex-api/src/common.rs:223` `pub tool_choice: String`　[L1]
   ─ 取值实测于 `endpoint/responses_websocket.rs:922` `tool_choice: "auto".to_string()`
   及 `core/src/client_common_tests.rs` 多处　[L1]
-- **观测**：任意通道（body 可见）
+- **观测**：h1 探针（**须解 zstd**，官方 responses 的 body 是压缩的）
+- **实测**：`official-body2-20260728T000549Z` → `tool_choice = str:auto`，
+  **确证为 JSON 字符串**
 - **可变性**：固定
 - **状态**：🔴 **类型层面的偏离，强负指纹** —— `openai_images_responses.go:357`
   的硬编码模板发的是**对象**：
@@ -898,6 +900,30 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 ### SPEC-EP-017　count_tokens 无官方对应物
 
 - 见 SPEC-EP-003。官方无该端点，**无形态可列、无基线可采**，不参与第 2 步验证。
+
+## 8.10 官方 responses body 的实测基线（`official-body2-20260728T000549Z`）
+
+探针原先只读 header 段，body 类规则**一条都验不了**。补上 body 采集后（只提取
+**结构**不记录取值——body 含用户对话内容，产物要归档），并加 zstd 解压（官方
+responses 的 body 是压缩的，不解压取不到结构），得到：
+
+**顶层字段序**：
+`model, input, tool_choice, parallel_tool_calls, reasoning, store, stream, include,
+prompt_cache_key, text, client_metadata`
+
+**关键字段形态**：
+
+| 字段 | 官方实测 | 意义 |
+|---|---|---|
+| `tool_choice` | `str:auto` | **确证是字符串** → SPEC-BODY-005 的类型偏离成立 |
+| `parallel_tool_calls` | `bool:false` | 该样本为 Lite 模式，印证 SPEC-BODY-003 |
+| `stream` | `bool:true` | |
+| `store` | `bool:false` | |
+| `include` | `array:<len=1>` | 对应 `reasoning.encrypted_content` |
+| `reasoning` | `object:{context,effort}` | Lite 下含 `context`，印证 SPEC-BODY-003 |
+
+> **采集要点**：body 必须解 zstd。首次采集因未解压而拿到空结构，一度误以为探针
+> 没抓到 body。
 
 ## 9. 本版未覆盖
 
