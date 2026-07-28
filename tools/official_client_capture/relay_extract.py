@@ -69,6 +69,86 @@ def summarize_body(raw: bytes, encoding: str, ctype: str) -> dict | None:
     return {"top_level_fields_in_order": list(parsed.keys()), "shape": shape}
 
 
+H2_PREFACE = b"PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+
+H2_FRAME_TYPES = {
+    0x0: "DATA", 0x1: "HEADERS", 0x2: "PRIORITY", 0x3: "RST_STREAM",
+    0x4: "SETTINGS", 0x5: "PUSH_PROMISE", 0x6: "PING", 0x7: "GOAWAY",
+    0x8: "WINDOW_UPDATE", 0x9: "CONTINUATION",
+}
+
+H2_SETTINGS_NAMES = {
+    0x1: "HEADER_TABLE_SIZE", 0x2: "ENABLE_PUSH", 0x3: "MAX_CONCURRENT_STREAMS",
+    0x4: "INITIAL_WINDOW_SIZE", 0x5: "MAX_FRAME_SIZE", 0x6: "MAX_HEADER_LIST_SIZE",
+    0x8: "ENABLE_CONNECT_PROTOCOL",
+}
+
+
+def parse_h2_stream(data: bytes) -> dict:
+    """解析 h2 帧序列，保留 SETTINGS 帧内顺序与 HPACK 动态表演进。
+
+    这是中继相对 mitmproxy 的核心优势所在：mitmproxy 会用自己的 h2 栈重建连接，
+    客户端原始的 SETTINGS 集合、取值与帧内顺序在转发后已丢失（§2.4）。中继只
+    复制字节，故这些全都保留。
+
+    HPACK 解码需按连接维护**单一** Decoder 实例——动态表是跨帧累积的，
+    每帧新建解码器会解出错误结果。
+    """
+
+    import struct
+
+    try:
+        from hpack import Decoder as HPACKDecoder
+
+        decoder = HPACKDecoder()
+    except ImportError:
+        decoder = None
+
+    frames, pos = [], 0
+    if data.startswith(H2_PREFACE):
+        pos = len(H2_PREFACE)
+    while pos + 9 <= len(data):
+        length = int.from_bytes(data[pos:pos + 3], "big")
+        ftype, flags = data[pos + 3], data[pos + 4]
+        sid = int.from_bytes(data[pos + 5:pos + 9], "big") & 0x7FFFFFFF
+        payload = data[pos + 9:pos + 9 + length]
+        if len(payload) < length:
+            break
+        entry = {"type": H2_FRAME_TYPES.get(ftype, f"UNKNOWN_0x{ftype:x}"),
+                 "stream_id": sid, "flags": flags, "length": length}
+        if ftype == 0x4 and not (flags & 0x1):
+            # 手工解析以保留帧内顺序——h2 库解析成 dict 会丢掉顺序，
+            # 而顺序本身就是要观测的形态。
+            items = []
+            for off in range(0, len(payload) - 5, 6):
+                ident, val = struct.unpack(">HI", payload[off:off + 6])
+                items.append({"name": H2_SETTINGS_NAMES.get(ident, f"UNKNOWN_0x{ident:x}"),
+                              "value": val})
+            entry["settings_in_order"] = items
+        elif ftype == 0x8:
+            entry["window_size_increment"] = int.from_bytes(payload, "big") & 0x7FFFFFFF
+        elif ftype == 0x7 and length >= 8:
+            entry["last_stream_id"] = int.from_bytes(payload[:4], "big") & 0x7FFFFFFF
+            entry["error_code"] = int.from_bytes(payload[4:8], "big")
+        elif ftype == 0x3 and length >= 4:
+            entry["error_code"] = int.from_bytes(payload[:4], "big")
+        elif ftype == 0x1 and decoder is not None:
+            block = payload
+            if flags & 0x8 and block:  # PADDED
+                block = block[1:len(block) - block[0]]
+            if flags & 0x20:  # PRIORITY
+                block = block[5:]
+            try:
+                decoded = decoder.decode(block)
+                entry["header_names_in_order"] = [n for n, _ in decoded]
+                entry["headers"] = [{"name": n, "value": redact(n, v)} for n, v in decoded]
+            except Exception as exc:  # noqa: BLE001
+                entry["hpack_error"] = str(exc)
+        frames.append(entry)
+        pos += 9 + length
+    return {"frames": frames, "frame_count": len(frames)}
+
+
 def parse_h1_stream(data: bytes) -> list[dict]:
     """从连续字节流里逐个切出 h1 请求，保留字面大小写与出现顺序。"""
 
@@ -142,9 +222,9 @@ def main() -> None:
         if not data:
             continue
         name = os.path.basename(path).split(".")[0]
-        if data[:4] == b"PRI ":
+        if data.startswith(H2_PREFACE):
             conns.append({"connection": name, "protocol": "h2",
-                          "note": "h2 帧解析待实现", "bytes": len(data)})
+                          "bytes": len(data), **parse_h2_stream(data)})
             continue
         reqs = parse_h1_stream(data)
         if reqs:

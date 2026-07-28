@@ -425,6 +425,28 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
 > **官方默认根本不产生 h2 流量**。因此本层全部条目仅在「配置了自定义 CA」这一条件
 > 下成立，对官方默认行为**不适用**。详见 SPEC-TLS-002。
 >
+> ### ✅ 已由 R 类通道独立复验（2026-07-28）
+>
+> 字节中继（真实上游、不伪造任何应答）经代理采到 **25 条 h2 连接**，SETTINGS
+> 四项、`WINDOW_UPDATE`、伪头顺序与此前探针基线**完全吻合**：
+>
+> ```
+> SETTINGS: ENABLE_PUSH=0, INITIAL_WINDOW_SIZE=2097152,
+>           MAX_FRAME_SIZE=16384, MAX_HEADER_LIST_SIZE=16384
+> WINDOW_UPDATE: 5177345
+> 伪头: :method, :scheme, :authority, :path
+> ```
+>
+> **这解除了原有证据的一半疑虑**：此前唯一证据来自终结型 h2 探针（自己应答、
+> 不转发上游），存在"客户端因拿不到真实响应而行为异常"的可能；现在有了真实
+> 上游往返的独立复现。
+>
+> **但污染并未解除**：两次采集都设了 `CODEX_CA_CERTIFICATE`（否则客户端不 offer
+> h2，根本采不到本层），故仍属**官方 rustls 分支下的条件样本**。官方 native-tls
+> 默认分支不产生 h2 流量，本层对默认行为**依然不适用**。
+>
+> 证据：`official-relay-h2-relay-h2-20260728T032147Z`
+>
 > **仅在经代理时可见**（SPEC-PROTO-001）。且 **mitmproxy 看不到本层**——它用自己的
 > h2 栈重建连接，客户端原始 SETTINGS 的集合、取值与帧内顺序在转发后已丢失。
 > 必须用 CONNECT 代理式 h2 探针。
