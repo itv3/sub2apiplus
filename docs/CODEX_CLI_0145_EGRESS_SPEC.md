@@ -147,7 +147,34 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 
 ---
 
-### 1.5.4 工具与环境
+### 1.5.4 什么不列为规则：可合法关闭的流量
+
+**行为层不作对比维度。** 官方客户端**原生支持合法关闭**遥测与非必要流量，因此候选
+出站的"零遥测"是**官方允许的配置状态**，不能作为"不像官方客户端"的判据，也不计入
+一致性差异。
+
+| 侧 | 关闭手段 | 关掉什么 |
+|---|---|---|
+| **Codex** | `AnalyticsConfigToml.enabled = false`（`codex-rs/config/src/types.rs`） | analytics events |
+| | otel exporter 配 `None` | Statsig metrics |
+| **Claude Code** | `DISABLE_TELEMETRY` → `isAnalyticsDisabled()` | Datadog、1P `event_logging`（`src/services/analytics/`） |
+| | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` → `isEssentialTrafficOnly()` | mcp-registry / policy_limits / grove / releaseNotes / feedback / modelCapabilities / referral 等十余处（`privacyLevel.ts` 注释即 *"All nonessential network traffic disabled"*） |
+
+Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
+
+#### 由此得出的三条操作准则
+
+1. **不把这类请求写成规则。** 官方基线里出现的 `ps/plugins/*`、`plugins/featured`、
+   `ps/mcp` 等，属于**可关闭的非必要流量**，不构成 Sub2API 必须复刻的形态。
+   规格表中提及它们，仅因其 header 取值可作为**同期同栈**的旁证（例如
+   SPEC-HDR-006 用 `plugins/featured` 佐证 reqwest 的 `accept: */*` 默认值）。
+2. **采基线时必须关掉它们，并记录关了什么。** 否则这些流量会混进样本、干扰差集
+   判断。本轮官方基线即在关闭插件后采集——**关闭前后 cookie 存在差集，关闭后差集
+   消失**，说明不关会得出错误结论。
+3. **反过来也不成立**：Sub2API 不发这些请求，**不是**偏离。官方用户关掉遥测后同样
+   不发。
+
+### 1.5.5 工具与环境
 
 | 工具 | 用途 | 位置 |
 |---|---|---|
@@ -161,6 +188,9 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 `custom_ca.rs:307` 的 `use_rustls_tls()`，采到的是 rustls 形态。要观测默认行为，
 必须**把 CA 装进容器系统信任库**而非用环境变量。
 
+**采基线前必须关闭非必要流量并记录**（§1.5.4）：本轮官方基线在关闭插件后采集。
+关闭前后 cookie 存在差集、关闭后消失——不关会把可关闭流量的副作用误判为形态差异。
+
 **逼官方降级到 HTTP** 的正确方法：让 WS **连接被拒**（`Connection refused`），
 而非回 HTTP 400。官方日志会打 `Falling back from WebSockets to HTTPS transport`。
 
@@ -172,7 +202,7 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 `docker compose ... up -d sub2api`。当前运行
 `sub2apiplus:h2-settings-0.1.165-10-20260727T133353Z`。
 
-### 1.5.5 相关文档分工
+### 1.5.6 相关文档分工
 
 | 文档 | 记什么 |
 |---|---|
@@ -755,6 +785,10 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
   `v4-2023-04-27` 后缀在官方源码中不存在，疑似取自 ChatGPT 网页版
 
 > 本节修正了此前"七个端点"的范围假设：实际出站面为 **7 + 6 = 13 条**。
+>
+> **另需区分**：官方基线中还会出现 `ps/plugins/*`、`plugins/featured`、`ps/mcp`
+> 等请求，它们属**可合法关闭的非必要流量**（§1.5.4），**不列为规则**——Sub2API
+> 不发它们不构成偏离。本表引用它们仅作同期同栈的旁证。
 
 ### SPEC-EP-005　压缩仅用于 responses 流式请求
 
