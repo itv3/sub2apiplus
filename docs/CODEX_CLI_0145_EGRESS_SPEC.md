@@ -985,6 +985,28 @@ prompt_cache_key, text, client_metadata`
 > 决策的后续动作（工具调用、生图、compact）都触发不了**。要采这些，须让探针能返回
 > 可驱动后续流程的伪造响应——那是另一项观测能力建设。
 
+## 8.12 最终验收（`tool-choice-0.1.165-15`）
+
+| 项 | 官方基线 | 实测 | 结论 |
+|---|---|---|---|
+| `GET /codex/models` header 全序 | 7 项 | 相同 | ✅ **逐字节一致** |
+| `POST /codex/responses` header 全序 | 17 项 | 相同 | ✅ **逐字节一致** |
+| responses body `tool_choice` | `str:auto` | `str:auto` | ✅ |
+
+### ⚠ 一处验证盲区，必须记录
+
+上表的 `tool_choice` 取自**普通 responses 请求**，而它本来就是 `auto`——
+**这不能证明 images 模板的改动生效**。SPEC-BODY-005 修的是
+`openai_images_responses.go:357` 的硬编码模板，只有走生图入口才会命中。
+
+尝试补验时被拦下：`POST /v1/images/generations` 返回
+`403 Image generation is not enabled for this group`。属**分组配置限制**，
+非探针能力不足。
+
+**结论**：A4 的代码改动已通过编译与全量测试，但**未取得 wire 级证据**。
+要补验需先为测试分组开启生图权限，然后跑
+`tools/official_client_capture/run_images_wire_probe.sh`（已就位）。
+
 ## 9. 本版未覆盖
 
 按 §0.4 的范围界定，以下**尚未纳入**，不代表已对齐：
