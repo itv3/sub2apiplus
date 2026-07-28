@@ -925,6 +925,51 @@ prompt_cache_key, text, client_metadata`
 > **采集要点**：body 必须解 zstd。首次采集因未解压而拿到空结构，一度误以为探针
 > 没抓到 body。
 
+## 8.11 第 2 步产出：逐条验证状态
+
+标注口径：**✅ 验过了**＝有官方实测运行号；**⛔ 验不了**＝客观无法采到，附原因；
+**⚠ 可验未验**＝观测手段具备但尚未执行。
+
+### ✅ 验过了（27 条）
+
+| 条目 | 实测运行 |
+|---|---|
+| SPEC-TLS-001/002 | direct pcap、`official-nativetls-20260727T161531Z` |
+| SPEC-PROTO-001/002 | h1 探针（官方 `alpn=None`）、`official-httpfb3-20260727T234853Z` |
+| SPEC-H1-001/002/003/004 | `official-h1-full-20260727T124125Z` + `VERIFY-h1wire-v3` |
+| SPEC-H2-001~007 | `official-h2-20260727T131936Z`（**仅 rustls 分支**，见 §4 污染说明） |
+| SPEC-WS-001/002 | `official-h1-full-20260727T124125Z` |
+| SPEC-HDR-002/003/004/005/006/007 | h1 基线（基础头集合、无 `accept-language`、`openai-beta` 仅 WS、UA、accept、会话头） |
+| SPEC-BODY-001/002/003/005 | `official-body2-20260728T000549Z` |
+| SPEC-EP-001/005/006/013/016 | 400 探测、h1 基线、URL 实测、单元测试 |
+
+### ⛔ 验不了（8 条）
+
+| 条目 | 原因 |
+|---|---|
+| SPEC-HDR-001（组装顺序） | 顺序层面已被 responses 实测**证伪**——推导链得不到真实次序，该条降为语义参考，不作断言 |
+| SPEC-WS-003（两个特例改写） | 官方当前不发 `sec-websocket-protocol` / `origin`，**无样本可采** |
+| SPEC-BODY-004（turn-state 来源） | 上游在历次采集中**从未下发** `response.metadata` 事件 |
+| SPEC-EP-003 / 017（无 count_tokens 端点） | **负面命题**——无法用抓包证明某端点不存在，只能靠源码反证 |
+| SPEC-EP-002（只访问 chatgpt.com） | 同为负面命题；已采样本中官方确实全打 chatgpt.com，但不构成穷尽证明 |
+| SPEC-EP-012（live） | 需管理员开 `AllowLive` 才可达 |
+| SPEC-EP-010 / 011（画像失效） | 属 **Sub2API 侧**实现问题，非官方形态，用源码检索确认而非抓包 |
+
+### ⚠ 可验未验（8 条）
+
+| 条目 | 缺什么 |
+|---|---|
+| SPEC-TLS-003（WS 扩展随机序） | 需 direct pcap 多次采样比对 JA3 差异 |
+| SPEC-EP-004（六个额外端点） | 官方基线已含 plugins/ps 系列，但未逐条对账 |
+| SPEC-EP-007/008/009（compact/search/live 的 URL） | 仅 models 有实测，其余未触发 |
+| SPEC-EP-014（compact header 集合） | 需触发官方 compact（对话超长才发生） |
+| SPEC-EP-015（search body） | 需触发官方 web search（模型自主决定，探针环境下不会发生） |
+| SPEC-BODY-006（images 模板其余字段） | 需触发官方生图 |
+
+> **⚠ 类的共同障碍**：探针不转发上游，官方 CLI 拿不到真实响应，因此**依赖模型自主
+> 决策的后续动作（工具调用、生图、compact）都触发不了**。要采这些，须让探针能返回
+> 可驱动后续流程的伪造响应——那是另一项观测能力建设。
+
 ## 9. 本版未覆盖
 
 按 §0.4 的范围界定，以下**尚未纳入**，不代表已对齐：
