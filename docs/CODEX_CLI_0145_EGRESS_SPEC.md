@@ -325,6 +325,8 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
 - **依据**：由 hyper `set_length` 在 encode 之前塞入 `HeaderMap`，是最后插入项　[L2]
 - **观测**：h1 直连探针
 - **实测**：`POST /backend-api/ps/mcp` → `..., content-type, host, content-length`
+  ─ 该端点属可关闭流量（§1.5.4），此处**仅作旁证**：它与业务请求同栈同期，其
+  `content-length` 位置反映的是 hyper 的通用行为，而非该端点特有
 - **可变性**：固定
 - **状态**：✅ **已对齐** —— 实测 responses 请求为 `…, host, content-length`。
 
@@ -338,6 +340,8 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
 - **观测**：h1 直连探针
 - **实测**：两个端点共有 header 的相对顺序不同（`originator` 在 models 里第 5、
   在 ps/mcp 里第 1），**证明是插入序而非哈希序**
+  ─ `ps/mcp` 属可关闭流量（§1.5.4），此处取其**相对顺序**作反证，与该端点是否
+  该被复刻无关
 - **可变性**：**条件** —— 不同端点构造路径不同，顺序不同。官方基础头
   `default_headers()` 的插入序是 `originator` → `user-agent` →（条件）`residency`
   （`login/src/auth/default_client.rs:354`　[L1]），但各端点会在其前后插入自己的头
@@ -524,6 +528,8 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
 - **实测**：`official-h1-full-20260727T124125Z` 中 accept 只有两种取值——
   `*/*`（models、plugins/featured、ps/plugins/installed、ps/plugins/list）
   与 `text/event-stream, application/json`（ps/mcp 的 SSE 端点）
+  ─ 除 models 外均属可关闭流量（§1.5.4），此处**仅用于佐证 reqwest 的默认值**：
+  这些端点在源码中同样不设 accept，其一致输出 `*/*` 印证了默认值推断
 - **可变性**：条件（按端点）
 - **状态**：🔴 **四个端点全部未对齐**。根因是 Sub2API 按"该端点返回什么"来设
   accept，而官方是"除 responses 外一律交给 reqwest 默认"：
@@ -1002,6 +1008,23 @@ _HEADER: &str = "…"          HeaderName::from_static("…")
 | `x-codex-subscribe-cursor`、`x-openai-fedramp` | ❌ 不在 OAuth 出站路径（属 app-server 远程控制传输层） |
 
 **结论**：header 层面无其余遗漏。规则数由 52 增至 **53**。
+
+### 反向筛查：现存规则里有没有不该算规则的
+
+按 §1.5.4 的口径把 53 条逐条过筛，命中「可关闭流量」特征词的有 5 条
+（SPEC-H1-003、SPEC-H1-004、SPEC-HDR-006、SPEC-EP-017、SPEC-EP-019）。逐条核对
+上下文后确认：**6 处引用全部是当旁证，无一条把这些端点本身写成需复刻的形态**。
+
+旁证的用法有三种，均已在引用处标注性质：
+
+| 引用 | 用途 |
+|---|---|
+| `ps/mcp` 的 `..., content-type, host, content-length` | 证明 `content-length` 排在 `host` 之后是 hyper 的**通用行为** |
+| `originator` 在 models 里第 5、在 ps/mcp 里第 1 | 反证 header 顺序是**插入序而非哈希序** |
+| `plugins/featured` 等一致输出 `*/*` | 佐证 **reqwest 的 accept 默认值**（这些端点源码中同样不设 accept） |
+
+**结论：无需删除任何规则。** 但引用处此前未标明性质，读者可能误读为"这些端点也要
+复刻"，已逐处补注。
 
 > **方法局限**：本次只扫了 header。body 字段、TLS 参数、协议行为的完整性尚未用
 > 同等方式核查过——那需要不同的扫描口径，列为后续项。
