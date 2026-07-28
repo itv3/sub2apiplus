@@ -149,6 +149,92 @@ def parse_h2_stream(data: bytes) -> dict:
     return {"frames": frames, "frame_count": len(frames)}
 
 
+WS_OPCODES = {0x0: "CONT", 0x1: "TEXT", 0x2: "BINARY",
+              0x8: "CLOSE", 0x9: "PING", 0xA: "PONG"}
+
+
+def parse_ws_frames(data: bytes) -> list[dict]:
+    """解析 WS 帧序列。
+
+    官方 responses 默认走 WebSocket，业务往返（含工具调用的发起与结果回传）
+    全在 WS 帧里——只解析 h1/h2 会漏掉整条业务链。
+
+    客户端→服务端的帧带 mask，须解掩码才能读出 payload。这里只提取**结构**：
+    TEXT 帧解析为 JSON 后记录顶层字段与事件类型，不留取值。
+    """
+
+    # permessage-deflate 默认启用**上下文接管**：滑动窗口跨帧共享，因此必须按
+    # 连接维护单一解压器。逐帧新建会让第 2 帧起全部失败——首版即如此。
+    try:
+        import zlib
+
+        inflater = zlib.decompressobj(-zlib.MAX_WBITS)
+    except ImportError:
+        inflater = None
+
+    frames, pos = [], 0
+    while pos + 2 <= len(data):
+        b0, b1 = data[pos], data[pos + 1]
+        fin, opcode = bool(b0 & 0x80), b0 & 0x0F
+        # RSV1 置位表示 permessage-deflate 压缩（RFC 7692），官方 WS 握手协商了
+        # 该扩展，业务帧 payload 因此是 raw deflate——不解压读不出 JSON。
+        rsv1 = bool(b0 & 0x40)
+        masked, ln = bool(b1 & 0x80), b1 & 0x7F
+        cur = pos + 2
+        if ln == 126:
+            if cur + 2 > len(data):
+                break
+            ln = int.from_bytes(data[cur:cur + 2], "big"); cur += 2
+        elif ln == 127:
+            if cur + 8 > len(data):
+                break
+            ln = int.from_bytes(data[cur:cur + 8], "big"); cur += 8
+        mask = b""
+        if masked:
+            if cur + 4 > len(data):
+                break
+            mask = data[cur:cur + 4]; cur += 4
+        if cur + ln > len(data):
+            break
+        payload = data[cur:cur + ln]
+        if masked and mask:
+            payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+
+        entry = {"opcode": WS_OPCODES.get(opcode, f"0x{opcode:x}"),
+                 "fin": fin, "masked": masked, "length": ln, "rsv1_deflate": rsv1}
+        if opcode == 0x1 and payload:
+            raw = payload
+            if rsv1:
+                # permessage-deflate：raw deflate 且省略末尾 4 字节，
+                # 解压时须补回 \x00\x00\xff\xff（RFC 7692 §7.2.2）。
+                try:
+                    raw = inflater.decompress(raw + b"\x00\x00\xff\xff")
+                    entry["compressed"] = "permessage-deflate"
+                except Exception as exc:  # noqa: BLE001
+                    entry["note"] = f"deflate 解压失败: {exc}"
+            try:
+                obj = json.loads(raw.decode("utf-8", "replace"))
+                if isinstance(obj, dict):
+                    entry["top_level_fields_in_order"] = list(obj.keys())
+                    if "type" in obj:
+                        entry["event_type"] = obj["type"]
+                    # body 字段只记结构，payload 里含对话内容
+                    entry["shape"] = {
+                        k: (f"str:{v}" if isinstance(v, str) and len(v) <= 24
+                            else f"str:<len={len(v)}>" if isinstance(v, str)
+                            else f"bool:{str(v).lower()}" if isinstance(v, bool)
+                            else f"num:{v}" if isinstance(v, (int, float))
+                            else f"array:<len={len(v)}>" if isinstance(v, list)
+                            else "object:{" + ",".join(sorted(v.keys())[:10]) + "}" if isinstance(v, dict)
+                            else "null")
+                        for k, v in obj.items()}
+            except ValueError:
+                entry["note"] = "非 JSON TEXT 帧"
+        frames.append(entry)
+        pos = cur + ln
+    return frames
+
+
 def parse_h1_stream(data: bytes) -> list[dict]:
     """从连续字节流里逐个切出 h1 请求，保留字面大小写与出现顺序。"""
 
@@ -227,9 +313,19 @@ def main() -> None:
                           "bytes": len(data), **parse_h2_stream(data)})
             continue
         reqs = parse_h1_stream(data)
-        if reqs:
-            conns.append({"connection": name, "protocol": "h1",
-                          "bytes": len(data), "requests": reqs})
+        if not reqs:
+            continue
+        rec = {"connection": name, "protocol": "h1", "bytes": len(data), "requests": reqs}
+        # WS 握手之后的剩余字节是 WS 帧——业务往返全在这里
+        if any("upgrade" in n.lower() for r in reqs for n in r["header_names_in_order"]):
+            idx = data.find(b"\r\n\r\n")
+            if idx > 0:
+                ws = parse_ws_frames(data[idx + 4:])
+                if ws:
+                    rec["protocol"] = "ws"
+                    rec["ws_frames"] = ws
+                    rec["ws_frame_count"] = len(ws)
+        conns.append(rec)
 
     fd = os.open(args.output, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:

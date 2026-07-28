@@ -1045,6 +1045,37 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
 - **⚠ 排除的误判**：19 条"只有下行"最初疑似字节管道漏包。核验后确认**全部**
   以完整 HTTP 响应行开头、残缺续传为 0，故是连接复用而非丢字节——**字节管道保真**。
 
+### SPEC-WS-004　WS 业务帧启用 permessage-deflate 且上下文接管
+
+- **规则**：官方 WS 握手协商 `permessage-deflate` 扩展，业务帧 **RSV1 置位**、
+  payload 为 raw deflate（省略末尾 4 字节，须补 `\x00\x00\xff\xff`）；
+  且启用**上下文接管**——滑动窗口跨帧共享
+- **依据**：字节中继实测，首字节 `0xC1` 即 `FIN|RSV1|TEXT`　[L3]
+- **观测**：**仅 R 类通道可见**——需完整 WS 字节流
+- **实测**：`official-relay-tool-relay-tool-20260728T032441Z`
+- **可变性**：固定
+- **状态**：⚠ **Sub2API 侧未比对**
+- **⚠ 解析陷阱**：必须**按连接维护单一解压器**。逐帧新建会让第 2 帧起全部失败
+  ——首版实现即如此，表现为"只有第一帧能解出 JSON"。
+
+### SPEC-WS-005　WS 业务帧的 body 形态与首轮/多轮差异
+
+- **规则**：帧类型为 `response.create`，顶层字段序为
+  `type, model, [previous_response_id,] input, tool_choice,
+  parallel_tool_calls, reasoning, store, stream, include, prompt_cache_key,
+  text, [generate,] client_metadata`
+- **首轮与后续轮的两处差异**（实测三帧对比）：
+  1. **`previous_response_id` 仅后续轮出现**，首轮无此字段
+  2. **`generate` 仅首轮出现**，后续轮无
+- **`tool_choice` 恒为 `str:auto`**，`parallel_tool_calls` 恒为 `bool:false`
+  ——与 HTTP 路径实测一致（SPEC-BODY-005、§2.12）
+- **依据**：字节中继工具调用链实测　[L3]
+- **观测**：仅 R 类通道
+- **可变性**：**条件**（首轮 / 后续轮）
+- **状态**：⚠ Sub2API 侧未比对
+- **⚠ 这是首次拿到官方 WS 路径的 body 形态**——此前所有通道都止步于握手头，
+  业务帧因 deflate 压缩而不可读。
+
 ### SPEC-EP-021　压缩的默认路径是 Remote Compaction V2，走普通 `/responses`
 
 - **规则**：官方压缩有**两条路径**，由 `should_use_remote_compact_task()` 分派
