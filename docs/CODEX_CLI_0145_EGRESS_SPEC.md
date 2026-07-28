@@ -647,6 +647,8 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
 
 ### SPEC-BODY-006　images 硬编码模板的其余字段
 
+- **可变性**：**条件**（Lite 与否影响 `parallel_tool_calls`；场景影响 `reasoning`）
+
 - **规则**：官方 body 由 `ResponsesApiRequest` 序列化，字段集合固定
   （`common.rs:217-238`：`model / instructions / input / tools / tool_choice /
   parallel_tool_calls / reasoning / store / stream / stream_options / include /
@@ -749,6 +751,8 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
   改走本地估算**
 
 ### SPEC-EP-004　出站面比预期宽：六个额外端点
+
+- **可变性**：**条件**（各链路由不同功能触发，非每次请求都出现）
 
 - **依据**：扫描 Sub2API 全部出站 URL 与官方全仓交叉核对　[L1]
 
@@ -854,6 +858,8 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
 
 ### SPEC-EP-011　旁路链路的画像失效是系统性的
 
+- **可变性**：固定（属实现结构，不随请求变化）
+
 顺着 SPEC-EP-010 逐条核查其余五条打 `chatgpt.com` 的链路，**六条里有五条不走官方
 画像**：
 
@@ -911,6 +917,8 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
 
 ### SPEC-EP-018　四条官方不存在的端点
 
+- **可变性**：固定（结构性不可达）
+
 - **规则**：官方 Codex CLI **从不访问** `backend-api/conversation/`、
   `backend-api/subscriptions`、`backend-api/files`、
   `backend-api/settings/account_user_setting`　[L1 反证]
@@ -921,6 +929,8 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
   不是"用错了指纹"。只能由产品决定是否保留这些功能。
 
 ### SPEC-EP-019　wham 系列路径与官方一致（前一版判断有误）
+
+- **可变性**：**条件**（`PathStyle` 随 base_url 是否含 `/backend-api` 而变）
 
 - **规则**：官方对 `chatgpt.com` / `chat.openai.com` 的 base_url **自动补
   `/backend-api`**（`backend-client/src/client.rs:160-162`，注释原文
@@ -950,7 +960,34 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
 > ——说明「基础头 → extend → apply_auth」这条链推不出真实次序。当天已因外推错过
 > 三次（§1.2），故此处只记可确证的集合与字段。
 
-### SPEC-EP-014　compact 的 header 集合
+### SPEC-EP-021　压缩的默认路径是 Remote Compaction V2，走普通 `/responses`
+
+- **规则**：官方压缩有**两条路径**，由 `should_use_remote_compact_task()` 分派
+  （`core/src/compact.rs:88`）：
+  - **V2（默认）**：`provider.supports_remote_compaction()` 对 **OpenAI 恒为 true**
+    （`model-provider-info/src/lib.rs:417-418`：`self.is_openai() || is_azure_...`），
+    走 `run_remote_compaction_request_v2()` → `client_session.stream()`
+    （`core/src/compact_remote_v2.rs:350`），即**普通 `/responses` 端点**，
+    请求体中追加一个 `{"type":"compaction_trigger"}` 输入项
+  - **Legacy**：`/responses/compact` 端点（`codex-api/src/endpoint/compact.rs`）
+- **依据**：上述三处生产代码　[L1]
+- **观测**：⚠ **可验未验** —— 需真实上下文达到压缩阈值才触发
+- **可变性**：条件（provider 类型）
+- **状态**：🔴 **规格表此前的定位有误**
+
+> **这是外部审阅方案（`CODEX_CLI_0145_EMPIRICAL_VALIDATION_PLAN.md` §8.5）指出、
+> 经本地源码核实成立的遗漏。** 此前 SPEC-EP-007、SPEC-EP-014、SPEC-EP-020 都默认
+> "压缩 = `/responses/compact`"，实际那是 **legacy 路径**；**OpenAI 账号默认走 V2**，
+> 打的是普通 `/responses`。
+>
+> **连带影响**：SPEC-EP-020 记录的 `CompactionInput` 字段集（不含 `tool_choice`/
+> `store`/`stream`/`include`）只适用于 legacy；V2 走 `/responses`，其请求体应遵循
+> `ResponsesApiRequest` 的完整字段集。**两条路径的 body 形态不同，不能混为一谈。**
+>
+> **对 Sub2API 的影响待评估**：需确认本项目的 compact 走哪条路径——若打的是
+> `/responses/compact` 而官方默认走 V2，则**端点选择本身就是偏离**。
+
+### SPEC-EP-014　compact 的 header 集合（**legacy 路径**）
 
 - **规则**：`extra_headers` 的构造链为（`core/src/client.rs:599-617`）　[L1]
   1. `x-codex-installation-id`（条件：有安装 ID 时）
@@ -968,6 +1005,8 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
 
 ### SPEC-EP-015　alpha-search 的 header 集合与 body 字段
 
+- **可变性**：**条件**（`x-codex-turn-metadata` 仅在有 turn metadata 时出现）
+
 - **body**：`SearchRequest { id, model, reasoning?, input?, commands? }`
   （`codex-api/src/search.rs:9`）　[L1]
 - **header 集合**：`search_request_headers()` 只设**两项**
@@ -979,7 +1018,9 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
 - **状态**：🔴 Sub2API 多发了 `session-id`/`thread-id`（SPEC-HDR-007 已改为连字符，
   但**官方在该端点上根本不发这两个头**），待第 2 步核对
 
-### SPEC-EP-020　compact 的 body 字段集比 responses 窄
+### SPEC-EP-020　legacy compact 的 body 字段集比 responses 窄
+
+- **可变性**：**条件**（仅 legacy 路径适用；默认走 V2，见 SPEC-EP-021）
 
 - **规则**：`CompactionInput { model, input, instructions, tools?,
   parallel_tool_calls, reasoning?, service_tier?, prompt_cache_key? }`
@@ -993,6 +1034,8 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
 
 ### SPEC-EP-016　images 走 responses 端点，header 与 body 同 responses
 
+- **可变性**：固定（路由选择不随请求变化）
+
 - **依据**：`openai_images_responses.go:357` 构造的是 responses 请求（SPEC-EP-001）　[L1]
 
 - **规则**：Sub2API 的 images 打的是 `/codex/responses`（SPEC-EP-001），因此其
@@ -1002,6 +1045,8 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
 - **状态**：⚠ body 的 SPEC-BODY-005（`tool_choice` 类型）已修但缺 wire 证据
 
 ### SPEC-EP-017　count_tokens 无官方对应物
+
+- **可变性**：固定（结构性不可达）
 
 - **依据**：同 SPEC-EP-003　[L1 反证]
 
