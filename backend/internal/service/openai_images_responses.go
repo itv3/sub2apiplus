@@ -354,7 +354,18 @@ func buildOpenAIImagesResponsesRequest(parsed *OpenAIImagesRequest, toolModel st
 		return nil, fmt.Errorf("image input is required")
 	}
 
-	req := []byte(`{"instructions":"","stream":true,"reasoning":{"effort":"medium","summary":"auto"},"parallel_tool_calls":true,"include":["reasoning.encrypted_content"],"model":"","store":false,"tool_choice":{"type":"image_generation"}}`)
+	// tool_choice 必须是 JSON **字符串**：官方 ResponsesApiRequest.tool_choice 的类型
+	// 是 String（codex-api/src/common.rs:223），实测取值恒为 "auto"
+	// （official-body2-20260728T000549Z）。此前发的是对象
+	// {"type":"image_generation"}——那是官方在类型层面就不可能序列化出的形态，
+	// 检测方只需判断该字段的 JSON 类型即可识别。规格表 SPEC-BODY-005。
+	//
+	// 代价：由「强制调用生图工具」变为「模型自主决定」。tools 里只提供
+	// image_generation 一个工具且 prompt 明确要求生图，模型不调用的概率低；万一
+	// 不调用，响应侧取不到 image_generation_call，会返回 502 并附诊断摘要
+	// （summarizeOpenAIImagesNoOutputBody），属可见失败而非静默损坏。
+	// 若生产上出现生图失败率上升，把这里改回对象形式即可立即回退。
+	req := []byte(`{"instructions":"","stream":true,"reasoning":{"effort":"medium","summary":"auto"},"parallel_tool_calls":true,"include":["reasoning.encrypted_content"],"model":"","store":false,"tool_choice":"auto"}`)
 	req, _ = sjson.SetBytes(req, "model", openAIImagesResponsesMainModel)
 
 	input := []byte(`[{"type":"message","role":"user","content":[{"type":"input_text","text":""}]}]`)

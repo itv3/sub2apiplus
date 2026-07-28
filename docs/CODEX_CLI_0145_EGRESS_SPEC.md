@@ -680,11 +680,26 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 - **依据**：源码检索 `req.Client` / `DoWithTLS` / `OfficialEgress*TLSProfile` 的
   命中分布　[L1]
 - **状态**：🔴 **五条链路 TLS 指纹与连接池隔离失效**
-- **⚠ 根因判断已更正**：初版写"根因是 `supportsOfficialEgressHTTPProfile` 默认放行"
-  ——**不成立**。该闸门管的是 **Finalizer（body/header 定型）**，而 TLS 画像走的是
-  调用点显式传参 `DoWithTLS(..., OpenAIOfficialEgressHTTPTLSProfile(...))`。
-  真正的根因是**这些服务各自建了独立 HTTP 客户端**（`req.Client` 等），
-  从未接入 `httpUpstream`，与白名单无关。修法同 P1-5~7：改走 `DoWithTLS`。
+- **⚠ 根因判断已两次更正，最终结论如下**：
+  - **初版**写"根因是 `supportsOfficialEgressHTTPProfile` 默认放行"——不成立。
+    该闸门管的是 **Finalizer（body/header 定型）**，TLS 画像走调用点显式传参。
+  - **二版**写"这些服务各自建了独立客户端、忘了接 `httpUpstream`，修法是改走
+    `DoWithTLS`"——**也不成立**。
+  - **实际情况**：`CreatePrivacyReqClient`（`repository/req_client_pool.go:115`）
+    显式设 `Impersonate: true`，注释写明 *"Uses Chrome TLS fingerprint
+    impersonation to bypass Cloudflare checks"*。**这是有意用 Chrome 指纹，不是
+    遗漏。** privacy 与 quota 两个服务共用该工厂。
+- **因此不应改成 Codex 画像**，理由有二：
+  1. 这些端点（`settings/account_user_setting`、`accounts/check`、`subscriptions`、
+     `wham/rate-limit`）是 **ChatGPT 网页版端点**，官方 Codex CLI 本就不访问
+     （SPEC-EP-010 实测官方命中 0）。既然官方不访问，套 Codex 画像并不会让它
+     "更像官方"。
+  2. 改掉 Chrome 指纹很可能**触发 Cloudflare 拦截**，把一个形态问题换成功能故障。
+- **真正的问题在 SPEC-EP-010 而非画像**：官方从不修改账号隐私设置，**这个动作本身**
+  就是官方永不产生的。换任何指纹都解决不了，只能由产品决定是否保留该功能。
+- **状态**：⏸ **不修**（结论从"需修"翻转）。仅
+  `openai_images.go:1433` 的 `fetchOpenAIImageDownloadURL` 例外——它打的 `files`
+  与 `conversation` 是官方**确实会访问**的端点，值得单独评估。
 - **逐条复核后的准确状态**：
 
 | 链路 | 出站方式 | 是否需修 |
@@ -773,8 +788,8 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 | A2 | `accept` 三处不对（compact 甚至完全没有该头） | SPEC-HDR-006 | ✅ **已修 + wire 验收**（§8.7） |
 | A3 | alpha-search 会话头用下划线，且含官方不存在的 `Conversation_ID` | SPEC-HDR-007 | ✅ **已修** |
 | A8 | OAuth 路径把入站 query 原样透传到官方 URL | SPEC-EP-013 | ✅ **已修** |
-| A4 | `tool_choice` 发对象，官方类型是 `String` | SPEC-BODY-005 | ❌ **未修**（强负指纹，检测方看 JSON 类型即可识别） |
-| A6 | 五条旁路链路不走官方画像 | SPEC-EP-011 | ❌ **未修**（privacy/quota 用 `req.Client`，改造需重构） |
+| A4 | `tool_choice` 发对象，官方类型是 `String` | SPEC-BODY-005 | ✅ **已修**（改为 `"auto"`，官方实测值） |
+| A6 | 五条旁路链路不走官方画像 | SPEC-EP-011 | ⏸ **不修**（实为有意用 Chrome 指纹绕 Cloudflare；端点本身官方不访问，套 Codex 画像无益且有故障风险） |
 | A7 | 隐私端点访问官方从不访问的 `settings/account_user_setting` | SPEC-EP-010 | ❌ **未修**（需产品决策：该端点官方无对应物） |
 | A5 | live URL 多带 `?intent=&architecture=` | SPEC-EP-012 | ⏸ **暂不修**（需开 `AllowLive` 才可达，无法实测验证） |
 
