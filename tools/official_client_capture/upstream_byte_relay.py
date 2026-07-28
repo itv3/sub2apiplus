@@ -205,6 +205,24 @@ class Relay:
             meta["client_alpn_offer"] = offered
             meta["alpn_source"] = "assumed" if offered else "none"
 
+            # ── 顺序很重要：先升级客户端腿，再连上游 ──
+            # 客户端发出 ClientHello 后即等待 ServerHello。若此刻先去做上游 TLS
+            # （握手可能耗时数百毫秒），客户端会因等不到响应而 reset——这正是
+            # 联调时反复出现 ConnectionResetError 的原因。
+            #
+            # 代价：客户端腿必须在知道上游选定协议之前就定下 ALPN，故直接用调用方
+            # 声明的 offer。这也是 --assume-alpn 必须与 N0 实测一致的原因之一。
+            if offered:
+                self.ctx.set_alpn_protocols(offered)
+
+            # StreamWriter.start_tls 是**原地升级**：返回 None，并就地替换 writer
+            # 自身的 transport。曾误以为它返回新 transport 并赋值 writer._transport，
+            # 结果把 transport 置成 None，连接当场断。
+            await writer.start_tls(self.ctx)
+            ssl_obj = writer.get_extra_info("ssl_object")
+            cli_alpn = ssl_obj.selected_alpn_protocol() if ssl_obj else None
+            meta["client_alpn"] = cli_alpn
+
             # ── 上游腿：用**客户端同一份** ALPN 列表握手 ──
             up_ctx = ssl.create_default_context()
             if offered:
@@ -214,19 +232,6 @@ class Relay:
                 ssl=up_ctx, server_hostname=target_host)
             up_alpn = up_w.get_extra_info("ssl_object").selected_alpn_protocol()
             meta["upstream_alpn"] = up_alpn
-
-            # ── 客户端腿：只允许协商到上游已选定的同一协议 ──
-            if up_alpn:
-                self.ctx.set_alpn_protocols([up_alpn])
-            # start_tls 会换掉底层 transport，必须从它的返回值取 ssl_object；
-            # 继续读原 writer 的 extra_info 会拿到升级前的（None）。
-            new_transport = await writer.start_tls(self.ctx)
-            if new_transport is not None:
-                writer._transport = new_transport  # type: ignore[attr-defined]
-            ssl_obj = (new_transport or writer.transport).get_extra_info("ssl_object")
-            cli_alpn = ssl_obj.selected_alpn_protocol() if ssl_obj else None
-            meta["client_alpn"] = cli_alpn
-
             if cli_alpn != up_alpn:
                 # 两侧不一致即污染：中继会把客户端逼上它本不走的协议。
                 meta["error"] = f"ALPN 不一致 client={cli_alpn} upstream={up_alpn}"

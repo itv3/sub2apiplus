@@ -204,10 +204,22 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
 协议——这本身就是污染。正确做法是取客户端实际 offer、用同一列表与上游握手，
 两侧协商结果不一致即作废该次运行。
 
-> **实现现状**：`upstream_byte_relay.py` 已实现字节管道、双向哈希校验与 ALPN 镜像
-> 校验，但 asyncio 的 `TransportSocket` 不暴露 `recv()`，**无法在握手前窥探
-> ClientHello**，故 offer 由 `--assume-alpn` 显式传入，其值**必须与 N0 被动 pcap
-> 实测一致**。端到端联调未完成（客户端腿 TLS 握手仍在调试）。
+> **实现现状**：`upstream_byte_relay.py` **已联调通过**，真实上游往返成功——
+> 客户端与上游协商同为 h2，上行 129 字节 / 下行 991 字节，双向 sha256 各自记录。
+>
+> 联调中踩到的两个坑，均已在代码注释里写明成因：
+>
+> 1. **`StreamWriter.start_tls` 是原地升级**，返回 `None` 而非新 transport。
+>    误以为要赋值 `writer._transport` 反而把 transport 置成 `None`，连接当场断，
+>    表现为难以定位的 `ConnectionResetError`。
+> 2. **握手顺序不能先连上游**。客户端发出 ClientHello 后即等待 ServerHello，
+>    此时若去做上游 TLS（可能耗时数百毫秒），客户端会因等不到响应而 reset。
+>    必须**先升级客户端腿、再连上游**。
+>
+> **遗留妥协**：asyncio 的 `TransportSocket` 不暴露 `recv()`，无法在握手前窥探
+> ClientHello，故 ALPN offer 由 `--assume-alpn` 显式传入。加之顺序调整后客户端腿
+> 必须在知道上游选定协议**之前**就定下 ALPN，该值**必须与 N0 被动 pcap 实测一致**
+> ——给错等于把客户端逼上它本不走的协议，反而制造污染。
 
 ### 1.5.6 工具与环境
 
