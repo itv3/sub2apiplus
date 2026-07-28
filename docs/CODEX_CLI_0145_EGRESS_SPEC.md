@@ -750,6 +750,8 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
 
 ### SPEC-EP-004　出站面比预期宽：六个额外端点
 
+- **依据**：扫描 Sub2API 全部出站 URL 与官方全仓交叉核对　[L1]
+
 第 1 步扫描 Sub2API 全部出站 URL 时发现，除上表七个端点外还有六条打 `chatgpt.com`
 的链路。逐条核对官方是否有对应物：
 
@@ -991,6 +993,8 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
 
 ### SPEC-EP-016　images 走 responses 端点，header 与 body 同 responses
 
+- **依据**：`openai_images_responses.go:357` 构造的是 responses 请求（SPEC-EP-001）　[L1]
+
 - **规则**：Sub2API 的 images 打的是 `/codex/responses`（SPEC-EP-001），因此其
   header 与 body 约束**完全等同 responses**，不适用官方 `images/generations` 的
   `ImageGenerationRequest { prompt, background?, model, n?, quality?, size? }`
@@ -998,6 +1002,8 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
 - **状态**：⚠ body 的 SPEC-BODY-005（`tool_choice` 类型）已修但缺 wire 证据
 
 ### SPEC-EP-017　count_tokens 无官方对应物
+
+- **依据**：同 SPEC-EP-003　[L1 反证]
 
 - 见 SPEC-EP-003。官方无该端点，**无形态可列、无基线可采**，不参与第 2 步验证。
 
@@ -1020,6 +1026,32 @@ _HEADER: &str = "…"          HeaderName::from_static("…")
 | `x-codex-subscribe-cursor`、`x-openai-fedramp` | ❌ 不在 OAuth 出站路径（属 app-server 远程控制传输层） |
 
 **结论**：header 层面无其余遗漏。规则数由 52 增至 **53**。
+
+### 规则的构成（2026-07-28）
+
+**总数 53 个编号 / 47 个独立条目**（另 6 个编号以表格形式合并计数：
+`SPEC-H2-002~005`、`SPEC-EP-006~009`）。
+
+**按证据等级**（同一条可跨级，故合计大于条目数）：
+
+| 等级 | 条数 | 说明 |
+|---|---|---|
+| **L1** 官方生产代码直读 | 32 | 含 10 条 **L1 反证**（证明官方**不做**某事） |
+| **L2** 依赖库行为推断 | 7 | hyper / tungstenite / http crate 的默认行为 |
+| **L3** 实测为唯一依据 | 7 | 主要是 h2 SETTINGS——源码给不出答案 |
+| **L4** 单元测试 / mock | 1 | 仅作参考，不得断言 |
+
+**按性质**：
+
+| 性质 | 条数 |
+|---|---|
+| 官方形态规则（"官方是这样发的"） | 35 |
+| 负面命题（"官方不做某事"，含 L1 反证） | 10 |
+| 语义参考 / 不构成偏离 | 2 |
+
+> **两点提醒**：其一，**负面命题占了 1/5**，它们无法用抓包证明（见 §2.12.2），
+> 只能靠源码反证——这是本表证据结构上最薄的一环。其二，L3 那 7 条集中在 h2 层，
+> 而 h2 层整体处在观测污染的阴影下（§2.4）。
 
 ### 反向筛查：现存规则里有没有不该算规则的
 
