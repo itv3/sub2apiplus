@@ -1107,6 +1107,39 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
 > `response.create`（对话链），HTTP 通道同时打了独立 images 端点——**官方确实
 > 两条都走**，生图不经 responses 工具调用完成。
 
+### SPEC-EP-023　压缩有三种实现、四种触发原因
+
+- **规则**：`CompactionImplementation` 枚举有**三个**取值
+  （`core/src/compact_model_fallback.rs:36-39`）　[L1]：
+
+  | 取值 | 遥测标签 |
+  |---|---|
+  | `Responses` | `responses` |
+  | `ResponsesCompactionV2` | `responses_compaction_v2` |
+  | `ResponsesCompact` | `responses_compact` |
+
+  `CompactionReason` 有**四个**：`UserRequested`、`ContextLimit`、
+  `ModelDownshift`、`CompHashChanged`
+- **状态**：⚠ **规格表此前只记了两条路径**（V2 与 legacy），实际是三种实现 ×
+  四种原因。SPEC-EP-021 的二分法**不完整**，各实现分别打什么端点尚未逐一确认。
+
+### SPEC-EP-024　`/compact` 是 TUI 专属，`codex exec` 不解析
+
+- **规则**：斜杠命令 `/compact` 只在 TUI 的输入框解析
+  （`tui/src/bottom_pane/chat_composer.rs`），`codex exec` **不认**该命令，
+  会当作普通用户文本发给模型　[L1]
+- **实测**：`official-relay-compact-relay-compact-20260728T035756Z` ——
+  向 `codex exec resume` 发 `/compact`，WS 帧的 `input` 项类型为
+  `[message, message, message, message, message]`，**无 `compaction_trigger`**，
+  且全程未出现 `/responses/compact` 请求。模型只是"照字面理解"做了内容摘要。
+- **状态**：⛔ **压缩链路仍未采到** —— 这是一次**失败的触发尝试**，记录在此
+  以免重复走弯路。
+
+> **要采压缩链路，可行路径有三**：
+> 1. **灌满上下文**触发 `ContextLimit`——成本高但最接近自然行为
+> 2. **走 TUI** 而非 `exec`，才能用 `/compact` 触发 `UserRequested`
+> 3. **降低 manifest 的上下文窗口**使其提前触发——属 I 类干预，须标注
+
 ### SPEC-EP-021　压缩的默认路径是 Remote Compaction V2，走普通 `/responses`
 
 - **规则**：官方压缩有**两条路径**，由 `should_use_remote_compact_task()` 分派

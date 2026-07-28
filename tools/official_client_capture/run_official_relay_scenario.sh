@@ -110,18 +110,33 @@ case "$scenario" in
   image)
     prompt='请生成一张图片：一只红色的狐狸，简单画风。' ;;
   compact)
-    # 压缩由上下文长度触发，需先灌入足够历史
-    prompt='请把下面这段话原样重复 40 遍，每遍另起一行：这是用于填充上下文的测试语句。' ;;
+    # /compact 是官方的手动触发入口，无须灌满上下文即可走压缩链路。
+    # 先发一轮普通对话建立会话历史，再触发压缩——空会话压缩没有意义。
+    prompt='__COMPACT__' ;;
   *) echo "未知 SCENARIO: $scenario" >&2; exit 2 ;;
 esac
 
 echo "=== 场景 $scenario，$turns 轮 ==="
-for i in $(seq 1 "$turns"); do
-  echo "--- 第 $i 轮 ---"
-  docker exec "$capture_container" timeout 180 "$codex_bin" exec \
+if [[ $prompt == "__COMPACT__" ]]; then
+  # codex exec 是单轮的，/compact 需要在同一会话内先有历史。用 resume 串起来：
+  # 先跑一轮建立会话，再对该会话发 /compact。
+  echo "--- 建立会话历史 ---"
+  session_out=$(docker exec "$capture_container" timeout 120 "$codex_bin" exec \
     --model "$model" --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox \
-    "$prompt" 2>&1 | tail -3 || true
-done
+    "请简单介绍一下 HTTP 协议的三次握手，200 字以内。" 2>&1 | tail -5) || true
+  echo "$session_out" | tail -2
+  echo "--- 触发 /compact ---"
+  docker exec "$capture_container" timeout 180 "$codex_bin" exec resume --last \
+    --model "$model" --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox \
+    "/compact" 2>&1 | tail -4 || true
+else
+  for i in $(seq 1 "$turns"); do
+    echo "--- 第 $i 轮 ---"
+    docker exec "$capture_container" timeout 180 "$codex_bin" exec \
+      --model "$model" --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox \
+      "$prompt" 2>&1 | tail -3 || true
+  done
+fi
 
 docker exec "$capture_container" pkill -f upstream_byte_relay.py >/dev/null 2>&1 || true
 sleep 3
