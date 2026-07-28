@@ -1,18 +1,25 @@
 # Codex CLI 0.145.0 出站形态规格表
 
 版本绑定：`codex-cli 0.145.0`　依赖锁定：`hyper 1.8.1` / `http 1.4.0` / `tungstenite 0.27.0` / `h2 0.4.13` / `reqwest 0.12.28`
-首版日期：2026-07-27
+首版 2026-07-27，末次更新 2026-07-28
 
-## 0. 这份文档是什么
+本文分三部分：**一、背景与任务**（为什么做、怎么做）；**二、规则**（官方形态是什么样，
+52 条）；**三、方案**（差异、已做的修复、后续路线）。
+
+---
+
+# 第一部分　背景与任务
+
+## 1. 这份文档是什么
 
 它描述**官方 Codex CLI 用 OAuth 凭据向 OpenAI 请求时，在线上产生的可观测形态**，
-以及 Sub2API 对每一项的对齐状态。
+以及 Sub2API 对每一项的对齐状态。**官方形态以本表为唯一事实源。**
 
 它**不是**修复记录。修复过程见
 [官方出站 wire 一致性修复清单](OFFICIAL_EGRESS_WIRE_PARITY_FIX_20260727.md)；
-本表回答的是"官方是什么样"，那份文档回答的是"我们改了什么"。
+本表回答"官方是什么样"，那份文档回答"我们改了什么"。
 
-### 0.1 为什么要有这份表
+## 2. 为什么要有这份表
 
 此前的工作方式是「抓包对比 → 改代码 → 抓包验证」，判断反复反转。复盘 2026-07-27
 当天的 16 次反转，成因分布是：
@@ -38,7 +45,38 @@
 因此本表的设计原则是：**抓包与源码交叉验证，且每条规则都必须声明"用什么通道才能
 观测到它"**——因为最贵的教训是，用看不到该项的通道去验，会得到虚假的通过。
 
-### 0.2 证据等级
+## 3. 任务定义
+
+用户确定的五步流程，目标是让 Sub2API 的 OpenAI OAuth 出站与官方 Codex CLI 一致：
+
+| 步 | 内容 | 状态 |
+|---|---|---|
+| 1 | 列规则：读官方源码 + 抓包，列出全部端点形态 | **进行中** |
+| 2 | 验规则：逐条抓包确认，标「验过了/⛔验不了」 | 未开始 |
+| 3 | 对比：逐条对 Sub2API，产出差异清单 | 未开始 |
+| 4 | 改代码：按差异清单改，含**自写 h1 wire**，部署 Vircs | 未开始 |
+| 5 | 再抓包验收 | 未开始 |
+
+## 4. 已定的决策（不要重新讨论）
+
+1. **范围**：七个端点全做，**只做 OpenAI**，不碰 Anthropic。
+2. **暂不换 Rust**。同源方案已 PoC 验证可行（§20），但本轮用现有 Go 改。
+3. **自写 h1 wire 要做**，解 SPEC-H1-002/003/004 + SPEC-WS-002。**带画像开关**，
+   只对官方 OpenAI 画像启用，出问题可关开关回退。实际规模约 **500~800 行**
+   （不止 header 输出——`http.Transport` 的写入无 hook，连接池必须一并自管；
+   每请求新建连接会制造新偏离，因为官方是 keep-alive 复用）。
+4. **不 fork `x/net/http2`**。h2 三项仅影响代理路径，而**实测生产 97 个账号全部
+   直连、0 个绑代理**。且 `go.mod` 是上游 3 个月改了 7 次的高频文件，加 replace
+   会持续冲突。h2 条目标"须 fork，暂不做"。
+5. **合并上游的冲突面已查**：伪装逻辑几乎全在 fork 独有文件
+   （`official_egress_*.go`、`tlsfingerprint/h2.go`、`lowercase_headers.go`），
+   共享文件只有 `dialer.go`（上游 3 月**0 次**改动）与 `http_upstream.go`（2 次）。
+   **自写 h1 wire 应放进 fork 独有的新包**，只在 `official_egress_*` 里引用，
+   `http_upstream.go` 保持现有的一行包装，合并成本近零。
+
+## 5. 工作方法
+
+### 5.1 证据等级
 
 | 等级 | 含义 | 风险 |
 |---|---|---|
@@ -53,20 +91,61 @@ L4 单列是因为踩过：`images.rs` 的测试里 `base_url: "https://example.
 L3 是合法等级，不是缺陷：`h2` crate 的 `Settings` 全为 `Option<u32>`，crate 本身
 不定义客户端默认发送列表，官方实际发什么值**源码里推不出来**，只能实测。
 
-### 0.3 可变性
+### 5.2 可变性
 
 - **固定**：每次请求都一样
 - **随机**：官方每次都不同（复刻时必须同样随机，钉死单一样本反而是负指纹）
 - **条件**：随场景变化（Lite/非 Lite、有无 attestation、直连/代理）
 
-### 0.4 本版范围
+### 5.3 本版范围
 
 **OpenAI OAuth 出站、responses 端点（HTTP + WS）**，覆盖 TLS / 协议协商 / wire /
 header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按同格式扩。
 
 ---
 
-## 1. TLS 层
+### 5.4 工具与环境
+
+| 工具 | 用途 | 位置 |
+|---|---|---|
+| `h1_wire_probe.py` | h1 线形（header 大小写/顺序）**MITM 看不到这层** | `tools/official_client_capture/` |
+| `h2_wire_probe.py` | h2 帧层（CONNECT 代理 + h2 服务端）**mitmproxy 看不到这层** | 同上 |
+| `run_official_h1_baseline.sh` | 采官方 h1 基线 | 同上 |
+| `run_official_h2_baseline.sh` | 采官方 h2（**会触发 rustls 分支，形态被污染**） | 同上 |
+| `run_official_nativetls_baseline.sh` | 采官方 **native-tls 默认分支**（正确的采法） | 同上 |
+
+**采集要点**：设 `CODEX_CA_CERTIFICATE` / `SSL_CERT_FILE` 会触发官方
+`custom_ca.rs:307` 的 `use_rustls_tls()`，采到的是 rustls 形态。要观测默认行为，
+必须**把 CA 装进容器系统信任库**而非用环境变量。
+
+**逼官方降级到 HTTP** 的正确方法：让 WS **连接被拒**（`Connection refused`），
+而非回 HTTP 400。官方日志会打 `Falling back from WebSockets to HTTPS transport`。
+
+**证据归档**：`local-analysis/captures/wire-parity-fix-20260727/`
+（`h1-wire-probe/`、`h2-wire-probe/`、`rust-poc/`；已 gitignore，不入库）。
+
+**Vircs 部署**：rsync 源码 → 远程 `docker build` → 改
+`/root/oauth-capture/runtime/sub2apiplus-t2.override.yml` 的 image tag →
+`docker compose ... up -d sub2api`。当前运行
+`sub2apiplus:h2-settings-0.1.165-10-20260727T133353Z`。
+
+### 5.5 相关文档分工
+
+| 文档 | 记什么 |
+|---|---|
+| **本表** | 官方形态是什么样 + 对齐状态（**唯一事实源**） |
+| `OFFICIAL_EGRESS_WIRE_PARITY_FIX_20260727.md` | 我们改了什么（§5.1 有已修/待修总表） |
+| `README.md` §1.1 | 对外的现状与残留差异（§1.1.1.2） |
+| `OFFICIAL_EGRESS_PROFILE_FIDELITY_FIX_20260727.md` | 第一轮修复记录 |
+
+---
+
+# 第二部分　规则
+
+共 **52 条**（46 个独立条目，另有两组以表格合并计数）。每条声明规则、依据与证据
+等级、观测通道、实测运行、可变性、对齐状态。
+
+## 6. TLS 层
 
 ### SPEC-TLS-001　直连 ClientHello
 
@@ -106,7 +185,8 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 
 ---
 
-## 2. 协议协商层
+
+## 7. 协议协商层
 
 ### SPEC-PROTO-001　直连恒为 HTTP/1.1
 
@@ -115,8 +195,8 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 - **观测**：h1 直连探针
 - **可变性**：固定
 - **状态**：✅ 已对齐（`ProfileNegotiatesH2` 判定为假）
-- **⚠ 连带影响**：**这是全表最重要的一条**。它意味着 h1 wire 形态（§3）作用于
-  **默认主路径**，而 h2 帧层（§4）**仅在经代理时**才可见。
+- **⚠ 连带影响**：**这是全表最重要的一条**。它意味着 h1 wire 形态（§8）作用于
+  **默认主路径**，而 h2 帧层（§9）**仅在经代理时**才可见。
 
 ### SPEC-PROTO-002　responses 默认走 WebSocket，HTTP 是降级路径
 
@@ -135,7 +215,8 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 
 ---
 
-## 3. HTTP/1.1 wire 层
+
+## 8. HTTP/1.1 wire 层
 
 > 本层全部条目**只能用 h1 直连探针观测**。MITM 一律不可见——经代理即 h2，
 > HPACK 强制小写并重排。用 MITM 验本层等于自欺。
@@ -200,7 +281,8 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 
 ---
 
-## 4. HTTP/2 帧层
+
+## 9. HTTP/2 帧层
 
 > ### ⚠ 本层基线存在观测污染，先读这段
 >
@@ -272,7 +354,8 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 
 ---
 
-## 5. WebSocket 握手层
+
+## 10. WebSocket 握手层
 
 ### SPEC-WS-001　前 5 项为大写驼峰
 
@@ -314,7 +397,8 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 
 ---
 
-## 6. header 语义层
+
+## 11. header 语义层
 
 ### SPEC-HDR-001　组装顺序
 
@@ -425,7 +509,8 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 
 ---
 
-## 7. body 层
+
+## 12. body 层
 
 ### SPEC-BODY-001　顶层字段为固定结构体
 
@@ -505,7 +590,8 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 
 ---
 
-## 8. 端点选择
+
+## 13. 端点选择
 
 ### SPEC-EP-001　images 有独立端点，但 responses + 工具调用也是官方路径
 
@@ -526,7 +612,8 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 
 ---
 
-## 8.5 端点全集（第 1 步产出，2026-07-28）
+
+## 14. 端点全集
 
 官方端点定义（`codex-api/src/endpoint/*.rs` 的 `fn path()`，base 为
 `https://chatgpt.com/backend-api/codex`）　[L1]：
@@ -576,7 +663,7 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 | `backend-api/settings/account_user_setting` | `openai_privacy_service.go:18` | 🔴 **官方无** |
 
 > **本表初版有误，已更正**：初版靠粗略 grep 计数判定前五条"官方有"，精确查证后
-> **四条官方根本没有、两条路径与官方不同**。教训同 §0.1 的"外推"类——
+> **四条官方根本没有、两条路径与官方不同**。教训同 §2 的"外推"类——
 > **grep 命中数不等于端点存在**，`subscriptions` 的命中来自
 > `utils/readiness/src/lib.rs` 的注释，`files` 的命中来自测试桩。
 
@@ -738,173 +825,12 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 
 ---
 
-## 8.6 交接说明（2026-07-28 收盘，**新会话先读这一节**）
-
-### A. 任务定义
-
-用户确定的五步流程，目标是让 Sub2API 的 OpenAI OAuth 出站与官方 Codex CLI 一致：
-
-| 步 | 内容 | 状态 |
-|---|---|---|
-| 1 | 列规则：读官方源码 + 抓包，列出全部端点形态 | **进行中** |
-| 2 | 验规则：逐条抓包确认，标「验过了/⛔验不了」 | 未开始 |
-| 3 | 对比：逐条对 Sub2API，产出差异清单 | 未开始 |
-| 4 | 改代码：按差异清单改，含**自写 h1 wire**，部署 Vircs | 未开始 |
-| 5 | 再抓包验收 | 未开始 |
-
-### B. 已定的决策（不要重新讨论）
-
-1. **范围**：七个端点全做，**只做 OpenAI**，不碰 Anthropic。
-2. **暂不换 Rust**。同源方案已 PoC 验证可行（§10），但本轮用现有 Go 改。
-3. **自写 h1 wire 要做**，解 SPEC-H1-002/003/004 + SPEC-WS-002。**带画像开关**，
-   只对官方 OpenAI 画像启用，出问题可关开关回退。实际规模约 **500~800 行**
-   （不止 header 输出——`http.Transport` 的写入无 hook，连接池必须一并自管；
-   每请求新建连接会制造新偏离，因为官方是 keep-alive 复用）。
-4. **不 fork `x/net/http2`**。h2 三项仅影响代理路径，而**实测生产 97 个账号全部
-   直连、0 个绑代理**。且 `go.mod` 是上游 3 个月改了 7 次的高频文件，加 replace
-   会持续冲突。h2 条目标"须 fork，暂不做"。
-5. **合并上游的冲突面已查**：伪装逻辑几乎全在 fork 独有文件
-   （`official_egress_*.go`、`tlsfingerprint/h2.go`、`lowercase_headers.go`），
-   共享文件只有 `dialer.go`（上游 3 月**0 次**改动）与 `http_upstream.go`（2 次）。
-   **自写 h1 wire 应放进 fork 独有的新包**，只在 `official_egress_*` 里引用，
-   `http_upstream.go` 保持现有的一行包装，合并成本近零。
-
-### C. 工具与环境
-
-| 工具 | 用途 | 位置 |
-|---|---|---|
-| `h1_wire_probe.py` | h1 线形（header 大小写/顺序）**MITM 看不到这层** | `tools/official_client_capture/` |
-| `h2_wire_probe.py` | h2 帧层（CONNECT 代理 + h2 服务端）**mitmproxy 看不到这层** | 同上 |
-| `run_official_h1_baseline.sh` | 采官方 h1 基线 | 同上 |
-| `run_official_h2_baseline.sh` | 采官方 h2（**会触发 rustls 分支，形态被污染**） | 同上 |
-| `run_official_nativetls_baseline.sh` | 采官方 **native-tls 默认分支**（正确的采法） | 同上 |
-
-**采集要点**：设 `CODEX_CA_CERTIFICATE` / `SSL_CERT_FILE` 会触发官方
-`custom_ca.rs:307` 的 `use_rustls_tls()`，采到的是 rustls 形态。要观测默认行为，
-必须**把 CA 装进容器系统信任库**而非用环境变量。
-
-**逼官方降级到 HTTP** 的正确方法：让 WS **连接被拒**（`Connection refused`），
-而非回 HTTP 400。官方日志会打 `Falling back from WebSockets to HTTPS transport`。
-
-**证据归档**：`local-analysis/captures/wire-parity-fix-20260727/`
-（`h1-wire-probe/`、`h2-wire-probe/`、`rust-poc/`；已 gitignore，不入库）。
-
-**Vircs 部署**：rsync 源码 → 远程 `docker build` → 改
-`/root/oauth-capture/runtime/sub2apiplus-t2.override.yml` 的 image tag →
-`docker compose ... up -d sub2api`。当前运行
-`sub2apiplus:h2-settings-0.1.165-10-20260727T133353Z`。
-
-### D. 相关文档分工
-
-| 文档 | 记什么 |
-|---|---|
-| **本表** | 官方形态是什么样 + 对齐状态（**唯一事实源**） |
-| `OFFICIAL_EGRESS_WIRE_PARITY_FIX_20260727.md` | 我们改了什么（§0 有已修/待修总表） |
-| `README.md` §1.1 | 对外的现状与残留差异（§1.1.1.2） |
-| `OFFICIAL_EGRESS_PROFILE_FIDELITY_FIX_20260727.md` | 第一轮修复记录 |
-
-### E. 差异清单（第 1 步产出，第 3 步的直接输入）
-
-**A 类 — 值/结构差异，不依赖自写 wire，可直接改：**
-
-| # | 差异 | 规格 | 状态 |
-|---|---|---|---|
-| A1 | UA 多了官方永不产生的 suffix `(codex_exec; 0.145.0)` | SPEC-HDR-005 | ✅ **已修 + wire 验收**（§8.7） |
-| A2 | `accept` 三处不对（compact 甚至完全没有该头） | SPEC-HDR-006 | ✅ **已修 + wire 验收**（§8.7） |
-| A3 | alpha-search 会话头用下划线，且含官方不存在的 `Conversation_ID` | SPEC-HDR-007 | ✅ **已修** |
-| A8 | OAuth 路径把入站 query 原样透传到官方 URL | SPEC-EP-013 | ✅ **已修** |
-| A4 | `tool_choice` 发对象，官方类型是 `String` | SPEC-BODY-005 | ✅ **已修**（改为 `"auto"`，官方实测值） |
-| A6 | 五条旁路链路不走官方画像 | SPEC-EP-011 | ⏸ **不修**（实为有意用 Chrome 指纹绕 Cloudflare；端点本身官方不访问，套 Codex 画像无益且有故障风险） |
-| A7 | 隐私端点访问官方从不访问的 `settings/account_user_setting` | SPEC-EP-010 | ❌ **未修**（需产品决策：该端点官方无对应物） |
-| A5 | live URL 多带 `?intent=&architecture=` | SPEC-EP-012 | ⏸ **暂不修**（需开 `AllowLive` 才可达，无法实测验证） |
-
-**A1 优先级最高**：全局常量，一处修复覆盖所有端点。
-**A6 建议连根治**：把 `supportsOfficialEgressHTTPProfile` 从"默认放行"改"默认拦截"。
-
-**B 类 — 须自写 h1 wire：**
-
-| # | 差异 | 规格 | 状态 |
-|---|---|---|---|
-| B1 | `Host` 大小写与位置 | SPEC-H1-002 | ✅ **已修 + wire 验收**（§8.8） |
-| B2 | `content-length` 位置 | SPEC-H1-003 | ✅ **已修 + wire 验收** |
-| B3 | 其余 header 顺序 | SPEC-H1-004 | ✅ **models 与 responses 逐字节一致**；compact/alpha-search/images/live 落兜底清单，无基线 |
-| B4 | WS 握手剩余头顺序 | SPEC-WS-002 | ⚠ 大小写已对齐，顺序落兜底清单 |
-
-> **重要**：不必逐端点比 header 顺序——Go 的 `http.Header` 是 map，构造顺序不体现
-> 在 wire 上，永远字典序。各端点的顺序差异是 B1~B3 的同一实例，统一由自写 wire 解决。
-> 但**自写 wire 时需要按端点配置顺序清单**，因为官方各端点的插入序不同
-> （models 以 `version` 打头、ps/mcp 以 `originator` 打头）。
-
-**C 类 — 需产品决策：**
-
-| # | 事项 | 规格 |
-|---|---|---|
-| C1 | `count_tokens` 无官方对应物，且打 `api.openai.com` | SPEC-EP-003 |
-| C2 | 代理画像 ALPN 方向相反（改空 ALPN 则 h2 差异全消） | SPEC-TLS-002 |
-
-**第 1 步剩余（可与第 2 步合并做）：**
-- compact / models / search 的 body 字段逐项比（images 已比，见 SPEC-BODY-006）
-- 各端点 header 的**完整集合**比对（目前比的是取值，尚未确认有无多发/少发）
-
-### F. 本轮未解决但已定位的重点
-
-- **SPEC-TLS-002 代理画像方向相反**：官方默认经代理不 offer h2，而我们的代理
-  画像声明 `h2`。该画像很可能整个是观测污染的产物。**修法可能是把代理画像也改成
-  空 ALPN**——那样代理路径也走 h1，h2 层全部差异自动消失。**这是尚未验证的推论。**
-- **SPEC-EP-011 画像失效是系统性的**：根因是白名单"默认放行"。
-
-## 8.7 A 类修复的 wire 级验收（`egress-a-fixes-0.1.165-11`）
-
-改完即部署 Vircs 并用 h1 直连探针实测，**不接受"自以为改对了"**：
-
-| 项 | 官方基线 | 修复前 | 修复后实测 | 结论 |
-|---|---|---|---|---|
-| models `accept` | `*/*` | `application/json` | `*/*` | ✅ |
-| UA | `…x86_64) xterm-256color` | `…x86_64) unknown (codex_exec; 0.145.0)` | `…x86_64) unknown` | ✅ |
-| responses `accept` | `text/event-stream` | 同 | `text/event-stream` | ✅ 本就一致 |
-| 会话头 | `session-id` / `thread-id` | responses 路径本就正确 | `session-id` / `thread-id` | ✅ |
-
-**UA 残留的 terminal 段差异（`xterm-256color` vs `unknown`）不是偏离**：官方基线
-是在带终端的容器里采的，而 Sub2API 是服务端进程、无终端；官方在同样条件下输出的
-也是 `unknown`（`terminal-detection/src/lib.rs:204`）。
-
-证据：`local-analysis/captures/wire-parity-fix-20260727/h1-wire-probe/VERIFY-a-fixes-*.json`
-
-## 8.8 B 类（自写 h1 wire）的 wire 级验收（`h1-wire-v2-0.1.165-13`）
-
-| 项 | 官方基线 | 修复后实测 | 结论 |
-|---|---|---|---|
-| models 完整顺序 | `version, authorization, chatgpt-account-id, accept, originator, user-agent, host` | **完全相同** | ✅ **逐字节一致** |
-| `host` 大小写 | 小写 | 小写 | ✅ |
-| `host` 位置 | 用户头之后 | 末尾（无 body）/ 倒数第二（有 body） | ✅ |
-| `content-length` | 最后 | 最后 | ✅ |
-| 全小写 | 是 | 是 | ✅ |
-
-**实现要点**：没有自写 RoundTripper（那要自管连接池、keep-alive、响应读取，
-500~800 行；且改成每请求新建连接又会因失去 keep-alive 制造新偏离），改为在
-`net.Conn` 层拦截重写请求头字节，Go 的连接池与响应处理全部复用。任何无法确信
-改写正确的情形（chunked、超长头、解析失败）一律 passthrough 原样透传。
-
-**开关**：画像的 `H1HeaderOrders`，留空即完全不介入。目前只给 OpenAI 直连画像
-配置，代理与 Anthropic 路径不受影响。
-
-**`h1-wire-v3-0.1.165-14` 追加验收**：补采官方降级路径的基线后，
-`POST /codex/responses` 也已与官方**逐字节一致**：
-
-    version, x-codex-beta-features, x-codex-window-id, x-codex-turn-metadata,
-    x-openai-internal-codex-responses-lite, x-client-request-id, session-id,
-    thread-id, accept, content-encoding, content-type, authorization,
-    chatgpt-account-id, originator, user-agent, host, content-length
-
-**残留**：models 与 responses 之外的端点（compact / alpha-search / images / live）
-仍无逐字节基线，落兜底清单，为最近似值。
-
-## 8.9 剩余端点的 header 集合与 body（第 1 步补全）
+## 15. 剩余端点的 header 集合与 body
 
 > **顺序一律标为待实测，不做推导。** 理由：responses 的实测顺序里 `originator` 与
 > `user-agent` 出现在**倒数**位置，而按 `default_headers()` 的插入序推导它们应在最前
 > ——说明「基础头 → extend → apply_auth」这条链推不出真实次序。当天已因外推错过
-> 三次（§0.1），故此处只记可确证的集合与字段。
+> 三次（§2），故此处只记可确证的集合与字段。
 
 ### SPEC-EP-014　compact 的 header 集合
 
@@ -959,7 +885,147 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 
 - 见 SPEC-EP-003。官方无该端点，**无形态可列、无基线可采**，不参与第 2 步验证。
 
-## 8.10 官方 responses body 的实测基线（`official-body2-20260728T000549Z`）
+## 16. 规则的验证状态
+
+标注口径：**✅ 验过了**＝有官方实测运行号；**⛔ 验不了**＝客观无法采到，附原因；
+**⚠ 可验未验**＝观测手段具备但尚未执行。
+
+#### ✅ 验过了（27 条）
+
+| 条目 | 实测运行 |
+|---|---|
+| SPEC-TLS-001/002 | direct pcap、`official-nativetls-20260727T161531Z` |
+| SPEC-PROTO-001/002 | h1 探针（官方 `alpn=None`）、`official-httpfb3-20260727T234853Z` |
+| SPEC-H1-001/002/003/004 | `official-h1-full-20260727T124125Z` + `VERIFY-h1wire-v3` |
+| SPEC-H2-001~007 | `official-h2-20260727T131936Z`（**仅 rustls 分支**，见 §4 污染说明） |
+| SPEC-WS-001/002 | `official-h1-full-20260727T124125Z` |
+| SPEC-HDR-002/003/004/005/006/007 | h1 基线（基础头集合、无 `accept-language`、`openai-beta` 仅 WS、UA、accept、会话头） |
+| SPEC-BODY-001/002/003/005 | `official-body2-20260728T000549Z` |
+| SPEC-EP-001/005/006/013/016 | 400 探测、h1 基线、URL 实测、单元测试 |
+
+#### ⛔ 验不了（8 条）
+
+| 条目 | 原因 |
+|---|---|
+| SPEC-HDR-001（组装顺序） | 顺序层面已被 responses 实测**证伪**——推导链得不到真实次序，该条降为语义参考，不作断言 |
+| SPEC-WS-003（两个特例改写） | 官方当前不发 `sec-websocket-protocol` / `origin`，**无样本可采** |
+| SPEC-BODY-004（turn-state 来源） | 上游在历次采集中**从未下发** `response.metadata` 事件 |
+| SPEC-EP-003 / 017（无 count_tokens 端点） | **负面命题**——无法用抓包证明某端点不存在，只能靠源码反证 |
+| SPEC-EP-002（只访问 chatgpt.com） | 同为负面命题；已采样本中官方确实全打 chatgpt.com，但不构成穷尽证明 |
+| SPEC-EP-012（live） | 需管理员开 `AllowLive` 才可达 |
+| SPEC-EP-010 / 011（画像失效） | 属 **Sub2API 侧**实现问题，非官方形态，用源码检索确认而非抓包 |
+
+#### ⚠ 可验未验（8 条）
+
+| 条目 | 缺什么 |
+|---|---|
+| SPEC-TLS-003（WS 扩展随机序） | 需 direct pcap 多次采样比对 JA3 差异 |
+| SPEC-EP-004（六个额外端点） | 官方基线已含 plugins/ps 系列，但未逐条对账 |
+| SPEC-EP-007/008/009（compact/search/live 的 URL） | 仅 models 有实测，其余未触发 |
+| SPEC-EP-014（compact header 集合） | 需触发官方 compact（对话超长才发生） |
+| SPEC-EP-015（search body） | 需触发官方 web search（模型自主决定，探针环境下不会发生） |
+| SPEC-BODY-006（images 模板其余字段） | 需触发官方生图 |
+
+> **⚠ 类的共同障碍**：探针不转发上游，官方 CLI 拿不到真实响应，因此**依赖模型自主
+> 决策的后续动作（工具调用、生图、compact）都触发不了**。要采这些，须让探针能返回
+> 可驱动后续流程的伪造响应——那是另一项观测能力建设。
+
+---
+
+# 第三部分　方案
+
+## 17. 差异清单
+
+**A 类 — 值/结构差异，不依赖自写 wire，可直接改：**
+
+| # | 差异 | 规格 | 状态 |
+|---|---|---|---|
+| A1 | UA 多了官方永不产生的 suffix `(codex_exec; 0.145.0)` | SPEC-HDR-005 | ✅ **已修 + wire 验收**（§18） |
+| A2 | `accept` 三处不对（compact 甚至完全没有该头） | SPEC-HDR-006 | ✅ **已修 + wire 验收**（§18） |
+| A3 | alpha-search 会话头用下划线，且含官方不存在的 `Conversation_ID` | SPEC-HDR-007 | ✅ **已修** |
+| A8 | OAuth 路径把入站 query 原样透传到官方 URL | SPEC-EP-013 | ✅ **已修** |
+| A4 | `tool_choice` 发对象，官方类型是 `String` | SPEC-BODY-005 | ✅ **已修**（改为 `"auto"`，官方实测值） |
+| A6 | 五条旁路链路不走官方画像 | SPEC-EP-011 | ⏸ **不修**（实为有意用 Chrome 指纹绕 Cloudflare；端点本身官方不访问，套 Codex 画像无益且有故障风险） |
+| A7 | 隐私端点访问官方从不访问的 `settings/account_user_setting` | SPEC-EP-010 | ❌ **未修**（需产品决策：该端点官方无对应物） |
+| A5 | live URL 多带 `?intent=&architecture=` | SPEC-EP-012 | ⏸ **暂不修**（需开 `AllowLive` 才可达，无法实测验证） |
+
+**A1 优先级最高**：全局常量，一处修复覆盖所有端点。
+**A6 建议连根治**：把 `supportsOfficialEgressHTTPProfile` 从"默认放行"改"默认拦截"。
+
+**B 类 — 须自写 h1 wire：**
+
+| # | 差异 | 规格 | 状态 |
+|---|---|---|---|
+| B1 | `Host` 大小写与位置 | SPEC-H1-002 | ✅ **已修 + wire 验收**（§18） |
+| B2 | `content-length` 位置 | SPEC-H1-003 | ✅ **已修 + wire 验收** |
+| B3 | 其余 header 顺序 | SPEC-H1-004 | ✅ **models 与 responses 逐字节一致**；compact/alpha-search/images/live 落兜底清单，无基线 |
+| B4 | WS 握手剩余头顺序 | SPEC-WS-002 | ⚠ 大小写已对齐，顺序落兜底清单 |
+
+> **重要**：不必逐端点比 header 顺序——Go 的 `http.Header` 是 map，构造顺序不体现
+> 在 wire 上，永远字典序。各端点的顺序差异是 B1~B3 的同一实例，统一由自写 wire 解决。
+> 但**自写 wire 时需要按端点配置顺序清单**，因为官方各端点的插入序不同
+> （models 以 `version` 打头、ps/mcp 以 `originator` 打头）。
+
+**C 类 — 需产品决策：**
+
+| # | 事项 | 规格 |
+|---|---|---|
+| C1 | `count_tokens` 无官方对应物，且打 `api.openai.com` | SPEC-EP-003 |
+| C2 | 代理画像 ALPN 方向相反（改空 ALPN 则 h2 差异全消） | SPEC-TLS-002 |
+
+**第 1 步剩余（可与第 2 步合并做）：**
+- compact / models / search 的 body 字段逐项比（images 已比，见 SPEC-BODY-006）
+- 各端点 header 的**完整集合**比对（目前比的是取值，尚未确认有无多发/少发）
+
+## 18. 已完成的修复与验收
+
+### A 类修复的 wire 级验收（`egress-a-fixes-0.1.165-11`）
+
+改完即部署 Vircs 并用 h1 直连探针实测，**不接受"自以为改对了"**：
+
+| 项 | 官方基线 | 修复前 | 修复后实测 | 结论 |
+|---|---|---|---|---|
+| models `accept` | `*/*` | `application/json` | `*/*` | ✅ |
+| UA | `…x86_64) xterm-256color` | `…x86_64) unknown (codex_exec; 0.145.0)` | `…x86_64) unknown` | ✅ |
+| responses `accept` | `text/event-stream` | 同 | `text/event-stream` | ✅ 本就一致 |
+| 会话头 | `session-id` / `thread-id` | responses 路径本就正确 | `session-id` / `thread-id` | ✅ |
+
+**UA 残留的 terminal 段差异（`xterm-256color` vs `unknown`）不是偏离**：官方基线
+是在带终端的容器里采的，而 Sub2API 是服务端进程、无终端；官方在同样条件下输出的
+也是 `unknown`（`terminal-detection/src/lib.rs:204`）。
+
+证据：`local-analysis/captures/wire-parity-fix-20260727/h1-wire-probe/VERIFY-a-fixes-*.json`
+
+### B 类（自写 h1 wire）的 wire 级验收（`h1-wire-v2-0.1.165-13`）
+
+| 项 | 官方基线 | 修复后实测 | 结论 |
+|---|---|---|---|
+| models 完整顺序 | `version, authorization, chatgpt-account-id, accept, originator, user-agent, host` | **完全相同** | ✅ **逐字节一致** |
+| `host` 大小写 | 小写 | 小写 | ✅ |
+| `host` 位置 | 用户头之后 | 末尾（无 body）/ 倒数第二（有 body） | ✅ |
+| `content-length` | 最后 | 最后 | ✅ |
+| 全小写 | 是 | 是 | ✅ |
+
+**实现要点**：没有自写 RoundTripper（那要自管连接池、keep-alive、响应读取，
+500~800 行；且改成每请求新建连接又会因失去 keep-alive 制造新偏离），改为在
+`net.Conn` 层拦截重写请求头字节，Go 的连接池与响应处理全部复用。任何无法确信
+改写正确的情形（chunked、超长头、解析失败）一律 passthrough 原样透传。
+
+**开关**：画像的 `H1HeaderOrders`，留空即完全不介入。目前只给 OpenAI 直连画像
+配置，代理与 Anthropic 路径不受影响。
+
+**`h1-wire-v3-0.1.165-14` 追加验收**：补采官方降级路径的基线后，
+`POST /codex/responses` 也已与官方**逐字节一致**：
+
+    version, x-codex-beta-features, x-codex-window-id, x-codex-turn-metadata,
+    x-openai-internal-codex-responses-lite, x-client-request-id, session-id,
+    thread-id, accept, content-encoding, content-type, authorization,
+    chatgpt-account-id, originator, user-agent, host, content-length
+
+**残留**：models 与 responses 之外的端点（compact / alpha-search / images / live）
+仍无逐字节基线，落兜底清单，为最近似值。
+
+### 官方 responses body 的实测基线（`official-body2-20260728T000549Z`）
 
 探针原先只读 header 段，body 类规则**一条都验不了**。补上 body 采集后（只提取
 **结构**不记录取值——body 含用户对话内容，产物要归档），并加 zstd 解压（官方
@@ -983,52 +1049,7 @@ prompt_cache_key, text, client_metadata`
 > **采集要点**：body 必须解 zstd。首次采集因未解压而拿到空结构，一度误以为探针
 > 没抓到 body。
 
-## 8.11 第 2 步产出：逐条验证状态
-
-标注口径：**✅ 验过了**＝有官方实测运行号；**⛔ 验不了**＝客观无法采到，附原因；
-**⚠ 可验未验**＝观测手段具备但尚未执行。
-
-### ✅ 验过了（27 条）
-
-| 条目 | 实测运行 |
-|---|---|
-| SPEC-TLS-001/002 | direct pcap、`official-nativetls-20260727T161531Z` |
-| SPEC-PROTO-001/002 | h1 探针（官方 `alpn=None`）、`official-httpfb3-20260727T234853Z` |
-| SPEC-H1-001/002/003/004 | `official-h1-full-20260727T124125Z` + `VERIFY-h1wire-v3` |
-| SPEC-H2-001~007 | `official-h2-20260727T131936Z`（**仅 rustls 分支**，见 §4 污染说明） |
-| SPEC-WS-001/002 | `official-h1-full-20260727T124125Z` |
-| SPEC-HDR-002/003/004/005/006/007 | h1 基线（基础头集合、无 `accept-language`、`openai-beta` 仅 WS、UA、accept、会话头） |
-| SPEC-BODY-001/002/003/005 | `official-body2-20260728T000549Z` |
-| SPEC-EP-001/005/006/013/016 | 400 探测、h1 基线、URL 实测、单元测试 |
-
-### ⛔ 验不了（8 条）
-
-| 条目 | 原因 |
-|---|---|
-| SPEC-HDR-001（组装顺序） | 顺序层面已被 responses 实测**证伪**——推导链得不到真实次序，该条降为语义参考，不作断言 |
-| SPEC-WS-003（两个特例改写） | 官方当前不发 `sec-websocket-protocol` / `origin`，**无样本可采** |
-| SPEC-BODY-004（turn-state 来源） | 上游在历次采集中**从未下发** `response.metadata` 事件 |
-| SPEC-EP-003 / 017（无 count_tokens 端点） | **负面命题**——无法用抓包证明某端点不存在，只能靠源码反证 |
-| SPEC-EP-002（只访问 chatgpt.com） | 同为负面命题；已采样本中官方确实全打 chatgpt.com，但不构成穷尽证明 |
-| SPEC-EP-012（live） | 需管理员开 `AllowLive` 才可达 |
-| SPEC-EP-010 / 011（画像失效） | 属 **Sub2API 侧**实现问题，非官方形态，用源码检索确认而非抓包 |
-
-### ⚠ 可验未验（8 条）
-
-| 条目 | 缺什么 |
-|---|---|
-| SPEC-TLS-003（WS 扩展随机序） | 需 direct pcap 多次采样比对 JA3 差异 |
-| SPEC-EP-004（六个额外端点） | 官方基线已含 plugins/ps 系列，但未逐条对账 |
-| SPEC-EP-007/008/009（compact/search/live 的 URL） | 仅 models 有实测，其余未触发 |
-| SPEC-EP-014（compact header 集合） | 需触发官方 compact（对话超长才发生） |
-| SPEC-EP-015（search body） | 需触发官方 web search（模型自主决定，探针环境下不会发生） |
-| SPEC-BODY-006（images 模板其余字段） | 需触发官方生图 |
-
-> **⚠ 类的共同障碍**：探针不转发上游，官方 CLI 拿不到真实响应，因此**依赖模型自主
-> 决策的后续动作（工具调用、生图、compact）都触发不了**。要采这些，须让探针能返回
-> 可驱动后续流程的伪造响应——那是另一项观测能力建设。
-
-## 8.12 最终验收（`tool-choice-0.1.165-15`）
+### 最终验收（`tool-choice-0.1.165-15`）
 
 | 项 | 官方基线 | 实测 | 结论 |
 |---|---|---|---|
@@ -1036,7 +1057,7 @@ prompt_cache_key, text, client_metadata`
 | `POST /codex/responses` header 全序 | 17 项 | 相同 | ✅ **逐字节一致** |
 | responses body `tool_choice` | `str:auto` | `str:auto` | ✅ |
 
-### ⚠ 一处验证盲区，必须记录
+#### ⚠ 一处验证盲区，必须记录
 
 上表的 `tool_choice` 取自**普通 responses 请求**，而它本来就是 `auto`——
 **这不能证明 images 模板的改动生效**。SPEC-BODY-005 修的是
@@ -1050,39 +1071,14 @@ prompt_cache_key, text, client_metadata`
 要补验需先为测试分组开启生图权限，然后跑
 `tools/official_client_capture/run_images_wire_probe.sh`（已就位）。
 
-## 9. 本版未覆盖
+## 19. 已定位但未解决的重点
 
-按 §0.4 的范围界定，以下**尚未纳入**，不代表已对齐：
+- **SPEC-TLS-002 代理画像方向相反**：官方默认经代理不 offer h2，而我们的代理
+  画像声明 `h2`。该画像很可能整个是观测污染的产物。**修法可能是把代理画像也改成
+  空 ALPN**——那样代理路径也走 h1，h2 层全部差异自动消失。**这是尚未验证的推论。**
+- **SPEC-EP-011 画像失效是系统性的**：根因是白名单"默认放行"。
 
-1. **models / compact / 旁路端点**（`count_tokens`、`alpha/search`、`/v1/live`）的
-   逐项形态
-2. **Anthropic 侧全部形态** —— Anthropic 画像未开启 `LowercaseHeaders`
-   （Claude Code 是 Node.js，形态未验证）
-3. **连接管理与时序**：连接复用节奏、重试退避、WS 连接池规模（官方为单连接 +
-   1 条 prewarm、无 PING；Sub2API 为上限 128、`min_idle` 4、30s PING）
-4. **Go 与 Rust 的运行时差异**：TCP 时序等难以写成规格的项
-
-### 9.1 一条必须记住的紧迫性
-
-记忆中的「官方源码基线陷阱」：**Codex 2.1.113 起官方转为二进制分发，新版源码永久
-不可得**。本表所有 L1/L2 依据都建立在 0.145.0 源码可读的前提上。源码消失后，抓包
-将成为唯一手段，而本表会是唯一能回答"官方为什么是这个形态"的历史锚点。
-
-**趁源码还在，把规格固化下来——现在不做，以后做不了。**
-
-### 9.2 对"官方无法区分"这一目标的诚实评估
-
-本表建成也达不到该目标。已确认的硬边界：SPEC-H1-002/003/004 须自写 h1 wire、
-SPEC-H2-003/006/007 须 fork `x/net/http2`，更不论 Go 与 Rust 在 TCP 时序与连接
-复用节奏上的差异。
-
-本表能给出的是：**把"我们觉得差不多"变成"差 N 项，每项差多少、为什么改不了、
-修它要付什么代价"**。这是能守住的目标；追求绝对不可区分会导致无限投入，且永远
-无法证明达成。
-
----
-
-## 10. Rust 同源方案的可行性验证（2026-07-27）
+## 20. Rust 同源方案
 
 背景：本表的 ❌ 项大多卡在「Go 标准库无配置入口，须自写 wire 或 fork」。若出站层
 改用**官方同版本的 Rust 依赖**，这些形态可能无需复刻即自动一致。已做 PoC 验证。
@@ -1099,7 +1095,7 @@ PoC 依赖严格锁定官方 `Cargo.lock`：`rust 1.95.0` / `reqwest =0.12.28` /
 
 实测记录：`local-analysis/captures/wire-parity-fix-20260727/rust-poc/`
 
-### 10.1 由此得到的两条结论
+### 由此得到的两条结论
 
 **一、"用同样的库"≠"自动一致"，还须对齐配置分支。** h2 那组数值在裸 reqwest 下
 根本测不到（不 offer h2），加上 `.use_rustls_tls()` 后才逐项吻合。**这恰好也是
@@ -1109,7 +1105,7 @@ SPEC-H2 段观测污染的成因**——两件事是同一个开关。
 header 用 map / JSON object 传给 Rust，顺序当场丢失，hyper 的保序输出随之失效，
 等于绕一圈回到原点。**跨语言协议必须用数组传 header**。
 
-### 10.2 未验证的部分
+### 未验证的部分
 
 - **TLS ClientHello 不在"白拿"清单内**：官方 HTTP 默认走 native-tls，底层是
   **系统 OpenSSL**，形态取决于容器内的 OpenSSL 版本而非 Rust 依赖。
@@ -1118,7 +1114,7 @@ header 用 map / JSON object 传给 Rust，顺序当场丢失，hyper 的保序�
 - 架构代价一分未减：IPC、SSE 流式透传的背压、Go 侧 official_egress 的迁移、
   计费与日志跨进程、Rust 侧重建重试与连接池、以及长期的 Rust 维护能力
 
-### 10.3 据此设想的目标架构
+### 据此设想的目标架构
 
 > ⚠ **本小节是方案设想，不是规格。** 本表其余部分记录的是**已验证的事实**（官方
 > 形态与对齐状态），本节记录的是**尚未决策的架构方向**。不要把它当作已定的架构。
@@ -1126,7 +1122,7 @@ header 用 map / JSON object 传给 Rust，顺序当场丢失，hyper 的保序�
 
 ```
 Go 主程序（路由 / 鉴权 / 计费 / 调度 / 语义定型）
-  ├─ Rust sidecar     → OpenAI      （同源 Codex CLI，已 PoC 验证，见 §10）
+  ├─ Rust sidecar     → OpenAI      （同源 Codex CLI，已 PoC 验证，见 §20）
   └─ Node.js sidecar  → Anthropic   （同源 Claude Code，HTTP 栈待验证）
 ```
 
@@ -1150,7 +1146,7 @@ Transport Dialer Provider）位于**出站侧**（"在现有协议转换完成�
 Finalizer 现在承担两类活，同源方案只接管其中一类：
 
 - **形态层**（header 名大小写、顺序、`Host` 位置、SETTINGS）→ **sidecar 白拿**，
-  §10 已逐项验证
+  §20 已逐项验证
 - **语义层**（header 放什么值、body 剔除哪些字段、Lite 变换、顶层白名单）→
   **仍须 Go 实现**。sidecar 不会自动做这些，传什么字段就发什么字段
 
@@ -1158,7 +1154,7 @@ Finalizer 现在承担两类活，同源方案只接管其中一类：
 
 1. **跨语言协议必须保序。** h1 的自动一致性来自 `HeaderMap` 插入序；若用 map /
    JSON object 传 header，顺序当场丢失，等于绕一圈回到原点。**必须用数组。**
-2. **必须复刻官方的配置分支，不能只对齐依赖版本。** §10.1 已证：裸 reqwest 经代理
+2. **必须复刻官方的配置分支，不能只对齐依赖版本。** §20 已证：裸 reqwest 经代理
    根本不 offer h2，须显式 `.use_rustls_tls()`（即官方 `custom_ca.rs:307` 那个判断）
    才与官方一致。
 3. **Anthropic 侧第一步是验证 HTTP 栈是否变更。** 用 2.1.88 源码定位它用哪个 HTTP
@@ -1181,3 +1177,35 @@ Finalizer 现在承担两类活，同源方案只接管其中一类：
   网关，多账号复用、高频转发、连接池共享。即使单个请求逐字节一致，请求间的时间
   分布与并发模式在统计层面仍不同。**这一层换语言解决不了**，若验收标准写成"官方
   无法区分"，它会是最后也最难的门槛。
+
+## 21. 本版未覆盖
+
+按 §5.3 的范围界定，以下**尚未纳入**，不代表已对齐：
+
+1. **models / compact / 旁路端点**（`count_tokens`、`alpha/search`、`/v1/live`）的
+   逐项形态
+2. **Anthropic 侧全部形态** —— Anthropic 画像未开启 `LowercaseHeaders`
+   （Claude Code 是 Node.js，形态未验证）
+3. **连接管理与时序**：连接复用节奏、重试退避、WS 连接池规模（官方为单连接 +
+   1 条 prewarm、无 PING；Sub2API 为上限 128、`min_idle` 4、30s PING）
+4. **Go 与 Rust 的运行时差异**：TCP 时序等难以写成规格的项
+
+### 一条必须记住的紧迫性
+
+记忆中的「官方源码基线陷阱」：**Codex 2.1.113 起官方转为二进制分发，新版源码永久
+不可得**。本表所有 L1/L2 依据都建立在 0.145.0 源码可读的前提上。源码消失后，抓包
+将成为唯一手段，而本表会是唯一能回答"官方为什么是这个形态"的历史锚点。
+
+**趁源码还在，把规格固化下来——现在不做，以后做不了。**
+
+### 对"官方无法区分"这一目标的诚实评估
+
+本表建成也达不到该目标。已确认的硬边界：SPEC-H1-002/003/004 须自写 h1 wire、
+SPEC-H2-003/006/007 须 fork `x/net/http2`，更不论 Go 与 Rust 在 TCP 时序与连接
+复用节奏上的差异。
+
+本表能给出的是：**把"我们觉得差不多"变成"差 N 项，每项差多少、为什么改不了、
+修它要付什么代价"**。这是能守住的目标；追求绝对不可区分会导致无限投入，且永远
+无法证明达成。
+
+---
