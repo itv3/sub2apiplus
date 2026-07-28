@@ -1076,6 +1076,37 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
 - **⚠ 这是首次拿到官方 WS 路径的 body 形态**——此前所有通道都止步于握手头，
   业务帧因 deflate 压缩而不可读。
 
+### SPEC-EP-022　官方独立 images 端点的实测形态
+
+- **规则**（首个真实样本，此前只有源码推断）：
+
+  ```
+  POST /backend-api/codex/images/generations HTTP/1.1
+  header: version, authorization, chatgpt-account-id, content-type, accept,
+          originator, user-agent, cookie, host, content-length
+  body:   {prompt, background, model, quality, size}
+  ```
+
+  实测取值：`background=auto`、`quality=auto`、`size=auto`、`model=gpt-image-2`
+- **依据**：字节中继实测　[L3]
+- **观测**：**仅 R 类通道可见**——需模型真的决定生图
+- **实测**：`official-relay-image-relay-image-20260728T034055Z`
+- **可变性**：条件（`n` 字段在本样本中**未出现**，官方 struct 中为 `Option<u64>`）
+- **状态**：ℹ️ 参考项 —— Sub2API 走 responses + 工具调用（SPEC-EP-001），不打此端点
+
+> **两处此前的推断得到修正**：
+>
+> 1. **URL 确证**为 `chatgpt.com/backend-api/codex/images/generations`。此前
+>    SPEC-EP-001 记的 `{base}/api/codex/...` 取自单元测试 mock（L4），一度被误当
+>    生产 URL；后经 400 探测修正，**现由真实请求最终确认**。
+> 2. **body 只发 5 个字段**，官方 `ImageGenerationRequest` 定义的 `n` 在本样本中
+>    未出现——`Option` 字段为 `None` 时不序列化。此前按 struct 定义列出 6 字段，
+>    实际线上形态更窄。
+>
+> **同时印证 SPEC-EP-001 的两条路并存**：本次运行中 WS 通道有 19 帧
+> `response.create`（对话链），HTTP 通道同时打了独立 images 端点——**官方确实
+> 两条都走**，生图不经 responses 工具调用完成。
+
 ### SPEC-EP-021　压缩的默认路径是 Remote Compaction V2，走普通 `/responses`
 
 - **规则**：官方压缩有**两条路径**，由 `should_use_remote_compact_task()` 分派
