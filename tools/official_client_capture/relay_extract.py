@@ -121,6 +121,22 @@ def main() -> None:
     args = ap.parse_args()
 
     conns = []
+    # 先统计连接形态：官方会预建 TLS 连接占位（上行 0 字节），响应则落在实际
+    # 承载请求的那条连接上。这不是管道漏字节——已核验「只有下行」的 19 条其
+    # 下行全部以完整 HTTP 响应行开头、残缺续传为 0。
+    stats = {"total": 0, "with_request": 0, "response_only": 0, "idle": 0}
+    for path in sorted(glob.glob(os.path.join(args.relay_dir, "*client_to_upstream.bin"))):
+        down = path.replace("client_to_upstream", "upstream_to_client")
+        up_n = os.path.getsize(path)
+        down_n = os.path.getsize(down) if os.path.exists(down) else 0
+        stats["total"] += 1
+        if up_n > 0:
+            stats["with_request"] += 1
+        elif down_n > 0:
+            stats["response_only"] += 1
+        else:
+            stats["idle"] += 1
+
     for path in sorted(glob.glob(os.path.join(args.relay_dir, "*client_to_upstream.bin"))):
         data = Path(path).read_bytes()
         if not data:
@@ -137,10 +153,12 @@ def main() -> None:
 
     fd = os.open(args.output, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
     with os.fdopen(fd, "w", encoding="utf-8") as f:
-        json.dump({"schema_version": "relay-extract/v1", "connections": conns},
+        json.dump({"schema_version": "relay-extract/v1",
+                   "connection_stats": stats, "connections": conns},
                   f, ensure_ascii=False, indent=2)
     total = sum(len(c.get("requests", [])) for c in conns)
     print(json.dumps({"connections": len(conns), "requests": total,
+                      "connection_stats": stats,
                       "output": args.output}, ensure_ascii=False))
 
 
