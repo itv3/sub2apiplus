@@ -110,25 +110,63 @@ case "$scenario" in
   image)
     prompt='请生成一张图片：一只红色的狐狸，简单画风。' ;;
   compact)
-    # /compact 是官方的手动触发入口，无须灌满上下文即可走压缩链路。
-    # 先发一轮普通对话建立会话历史，再触发压缩——空会话压缩没有意义。
-    prompt='__COMPACT__' ;;
+    # 灌满上下文触发 CompactionReason::ContextLimit——三条可行路径里唯一能拿到
+    # **自然基线**的（另两条需交互式 TUI，或降 manifest 窗口属 I 类干预）。
+    #
+    # 注意 /compact 走不通：斜杠命令只在 TUI 输入框解析，codex exec 会把它当普通
+    # 文本发给模型，模型"照字面理解"做段摘要，看着像压缩其实不是（SPEC-EP-024）。
+    prompt='__COMPACT_FILL__' ;;
   *) echo "未知 SCENARIO: $scenario" >&2; exit 2 ;;
 esac
 
 echo "=== 场景 $scenario，$turns 轮 ==="
-if [[ $prompt == "__COMPACT__" ]]; then
-  # codex exec 是单轮的，/compact 需要在同一会话内先有历史。用 resume 串起来：
-  # 先跑一轮建立会话，再对该会话发 /compact。
-  echo "--- 建立会话历史 ---"
-  session_out=$(docker exec "$capture_container" timeout 120 "$codex_bin" exec \
-    --model "$model" --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox \
-    "请简单介绍一下 HTTP 协议的三次握手，200 字以内。" 2>&1 | tail -5) || true
-  echo "$session_out" | tail -2
-  echo "--- 触发 /compact ---"
-  docker exec "$capture_container" timeout 180 "$codex_bin" exec resume --last \
-    --model "$model" --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox \
-    "/compact" 2>&1 | tail -4 || true
+if [[ $prompt == "__COMPACT_FILL__" ]]; then
+  # 用**真实编码工作流**灌上下文，而非让模型写长文。
+  #
+  # 理由不只是"像不像"：Codex 是编码助手，真实使用中 input 数组是
+  # message + 工具调用 + 工具输出**混合**的。用写作文的方式灌，采到的 input 全是
+  # message（实测 relay-compact2 的分布为 message×46 / reasoning×7 / 工具×0），
+  # 形态本身就偏离了真实使用——拿这种样本去验压缩链路，结论不可靠。
+  #
+  # 改为让它读文件、跑命令、改代码：上下文增长来自文件内容与命令输出，这才是
+  # Codex 真实的 token 消耗来源。
+  fill_rounds=${FILL_ROUNDS:-10}
+
+  # 准备一个有真实体量的代码库供其探索——用官方源码树本身
+  work="/tmp/compact-probe"
+  docker exec "$capture_container" sh -c "rm -rf $work && mkdir -p $work" >/dev/null 2>&1
+
+  tasks=(
+    "看一下当前目录有哪些文件，简要说明这个项目是做什么的。"
+    "读一下最主要的那个源文件，讲讲它的核心逻辑。"
+    "这个项目有哪些依赖？列出来并说明各自的用途。"
+    "找出代码里所有的错误处理逻辑，评估是否完备。"
+    "帮我在项目里新建一个 utils.py，写几个常用的字符串处理函数。"
+    "给刚才写的函数补上单元测试，并运行测试看是否通过。"
+    "测试跑完后，检查一下代码风格是否统一，需要的话调整。"
+    "把项目里所有 Python 文件的行数统计出来，按大小排序。"
+    "回顾一下我们刚才做的所有修改，逐个说明改动理由。"
+    "基于目前的代码，提出三个可以继续优化的方向，并说明优先级。"
+  )
+
+  echo "--- 准备工作目录 ---"
+  docker exec "$capture_container" sh -c \
+    "cd $work && printf 'import sys\n\ndef main():\n    print(\"probe\")\n\nif __name__ == \"__main__\":\n    main()\n' > app.py && printf 'requests>=2.0\npytest>=7.0\n' > requirements.txt && printf '# Compact Probe\n\n一个用于测试的最小项目。\n' > README.md" >/dev/null 2>&1
+
+  for i in $(seq 1 "$fill_rounds"); do
+    task="${tasks[$((i-1))]}"
+    [[ -z $task ]] && break
+    echo "--- 第 $i 轮：$task ---"
+    if [[ $i == 1 ]]; then
+      docker exec -w "$work" "$capture_container" timeout 240 "$codex_bin" exec \
+        --model "$model" --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox \
+        "$task" 2>&1 | tail -2 || true
+    else
+      docker exec -w "$work" "$capture_container" timeout 240 "$codex_bin" exec resume --last \
+        --model "$model" --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox \
+        "$task" 2>&1 | tail -2 || true
+    fi
+  done
 else
   for i in $(seq 1 "$turns"); do
     echo "--- 第 $i 轮 ---"

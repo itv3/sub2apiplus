@@ -1107,6 +1107,33 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
 > `response.create`（对话链），HTTP 通道同时打了独立 images 端点——**官方确实
 > 两条都走**，生图不经 responses 工具调用完成。
 
+### SPEC-BODY-007　真实编码工作流下的 input 项类型分布
+
+- **规则**：Codex 是编码助手，真实使用中 `input` 数组是 **message + 工具调用 +
+  工具输出混合**。十轮真实编码任务（读文件 / 跑命令 / 改代码）的实测分布：
+
+  | input 项类型 | 次数 |
+  |---|---|
+  | `message` | 160 |
+  | `reasoning` | 85 |
+  | `custom_tool_call_output` | 80 |
+  | `custom_tool_call` | 65 |
+  | `additional_tools` | 10 |
+
+  最大 `input` 长度 **78 项**
+- **依据**：字节中继实测　[L3]
+- **实测**：`official-relay-workflow-relay-compact3-20260728T041007Z`
+- **可变性**：条件（随任务类型变化）
+- **状态**：ℹ️ 参考项 —— 用于校验采样场景的真实性
+
+> **这条的用途是当"场景真实性"的判据。** 首版用"请详细讲解 TCP 协议…不少于
+> 500 字"这类提示词灌上下文，实测 input 分布为 `message×46 / reasoning×7 /
+> **工具调用 0**`——**形态从根上就偏了**。拿那种样本去验任何与 `input` 相关的
+> 规则，结论都不可靠。
+>
+> **判据**：若某次采集的 `input` 里工具调用占比为 0，该样本**不能代表 Codex 的
+> 真实使用形态**，只能用于验证与 `input` 内容无关的规则（如 TLS、header 顺序）。
+
 ### SPEC-EP-023　压缩有三种实现、四种触发原因
 
 - **规则**：`CompactionImplementation` 枚举有**三个**取值
