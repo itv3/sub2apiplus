@@ -568,15 +568,40 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 
 | Sub2API 出站 | 实现文件 | 官方是否有 |
 |---|---|---|
-| `backend-api/conversation/` | `openai_alpha_search.go` | ✅ 有 |
-| `backend-api/wham/rate-limit-reset-credits` | `openai_quota_service.go` | ✅ 有 |
-| `backend-api/subscriptions` | `admin_user.go` | ✅ 有 |
-| `backend-api/accounts/check/v4-2023-04-27` | `openai_oauth_service.go` | ✅ 有 |
-| `backend-api/files` | `openai_images.go` | ✅ 有（`files.rs`） |
-| `backend-api/settings/account_user_setting` | `openai_privacy_service.go` | 🔴 **官方命中 0** |
+| `backend-api/wham/rate-limit-reset-credits` | `openai_quota_service.go` | ⚠ **路径不同**：官方为 `{base}/wham/rate-limit-reset-credits`（`backend-client/src/client/rate_limit_resets.rs:93`），无 `/backend-api` 前缀 |
+| `backend-api/accounts/check/v4-2023-04-27` | `openai_oauth_service.go` | ⚠ **路径不同**：官方为 `{base}/api/codex/accounts/check` 或 `{base}/wham/accounts/check`（`backend-client/src/client.rs:306-307`），**无 `v4-2023-04-27` 版本后缀** |
+| `backend-api/conversation/` | `openai_alpha_search.go` | 🔴 **官方无** |
+| `backend-api/subscriptions` | `openai_privacy_service.go:98` | 🔴 **官方无** |
+| `backend-api/files` | `openai_images.go` | 🔴 **官方无生产调用**（`core/src/mcp_openai_file.rs:268` 是 wiremock 测试桩） |
+| `backend-api/settings/account_user_setting` | `openai_privacy_service.go:18` | 🔴 **官方无** |
 
-**`settings/account_user_setting` 是官方从不访问的端点**，需进一步确认它在 OAuth
-路径下的可达性与触发条件——若 OAuth 账号会打它，即为明确的非官方特征。
+> **本表初版有误，已更正**：初版靠粗略 grep 计数判定前五条"官方有"，精确查证后
+> **四条官方根本没有、两条路径与官方不同**。教训同 §0.1 的"外推"类——
+> **grep 命中数不等于端点存在**，`subscriptions` 的命中来自
+> `utils/readiness/src/lib.rs` 的注释，`files` 的命中来自测试桩。
+
+### SPEC-EP-018　四条官方不存在的端点
+
+- **规则**：官方 Codex CLI **从不访问** `backend-api/conversation/`、
+  `backend-api/subscriptions`、`backend-api/files`、
+  `backend-api/settings/account_user_setting`　[L1 反证]
+- **观测**：⛔ 负面命题，无法用抓包证明不存在
+- **状态**：🔴 **四条链路每次调用都是官方永不产生的出站**。其中
+  `settings/account_user_setting` 每加一个 OAuth 账号即触发一次（SPEC-EP-010）。
+- **备注**：这类偏离**换 TLS 画像解决不了**——问题是"访问了不该访问的端点"，
+  不是"用错了指纹"。只能由产品决定是否保留这些功能。
+
+### SPEC-EP-019　两条端点的路径与官方不同
+
+| 端点 | 官方 | Sub2API |
+|---|---|---|
+| 配额 | `{base}/wham/rate-limit-reset-credits` | `chatgpt.com/backend-api/wham/rate-limit-reset-credits` |
+| 账号校验 | `{base}/api/codex/accounts/check` 或 `{base}/wham/accounts/check` | `chatgpt.com/backend-api/accounts/check/**v4-2023-04-27**` |
+
+- **依据**：`backend-client/src/client/rate_limit_resets.rs:93`、
+  `backend-client/src/client.rs:306-307`　[L1]
+- **状态**：⚠ 待核 —— 需确认官方的 `{base}` 是否含 `/backend-api`；
+  `v4-2023-04-27` 后缀在官方源码中不存在，疑似取自 ChatGPT 网页版
 
 > 本节修正了此前"七个端点"的范围假设：实际出站面为 **7 + 6 = 13 条**。
 
@@ -897,12 +922,30 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 - **顺序**：⛔ **待实测** —— 落 h1 wire 的兜底清单
 - **可变性**：条件（installation-id / attestation / Lite 三项各自可缺）
 
-### SPEC-EP-015　alpha-search 的 body 字段
+### SPEC-EP-015　alpha-search 的 header 集合与 body 字段
 
-- **规则**：`SearchRequest { id, model, reasoning?, input?, commands? }`
+- **body**：`SearchRequest { id, model, reasoning?, input?, commands? }`
   （`codex-api/src/search.rs:9`）　[L1]
+- **header 集合**：`search_request_headers()` 只设**两项**
+  （`ext/web-search/src/tool.rs:185-195`）　[L1]：
+  1. `x-codex-turn-metadata`（条件：有 turn metadata 时）
+  2. `originator`（经 `add_originator_header`）
+  ─ **不设** `accept`（由 reqwest 补 `*/*`）、**不设** `session-id`/`thread-id`
 - **顺序**：⛔ 待实测
-- **状态**：⚠ 待第 2 步核对 Sub2API 是否多发/少发字段
+- **状态**：🔴 Sub2API 多发了 `session-id`/`thread-id`（SPEC-HDR-007 已改为连字符，
+  但**官方在该端点上根本不发这两个头**），待第 2 步核对
+
+### SPEC-EP-020　compact 的 body 字段集比 responses 窄
+
+- **规则**：`CompactionInput { model, input, instructions, tools?,
+  parallel_tool_calls, reasoning?, service_tier?, prompt_cache_key? }`
+  （`codex-api/src/common.rs:26`）　[L1]
+- **与 responses 的差异**：**不含** `tool_choice`、`store`、`stream`、`include`、
+  `text`、`client_metadata` —— 这与 SPEC-BODY-002（compact 不压缩）、
+  SPEC-EP-014（compact 不设 `accept`/`x-client-request-id`）共同说明
+  **compact 是一条独立形态，不能套 responses 的定型**
+- **顺序**：⛔ 待实测
+- **状态**：⚠ 待核对 Sub2API 的 compact 出站是否多发上述六个字段
 
 ### SPEC-EP-016　images 走 responses 端点，header 与 body 同 responses
 
