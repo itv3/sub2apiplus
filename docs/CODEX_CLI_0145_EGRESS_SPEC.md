@@ -1178,7 +1178,20 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
     请求体中追加一个 `{"type":"compaction_trigger"}` 输入项
   - **Legacy**：`/responses/compact` 端点（`codex-api/src/endpoint/compact.rs`）
 - **依据**：上述三处生产代码　[L1]
-- **观测**：⚠ **可验未验** —— 需真实上下文达到压缩阈值才触发
+- **观测**：✅ **已实测**（`official-relay-compact-relay-compact4-20260728T041624Z`）
+- **实测结论**：本次运行打过的 codex 端点仅
+  `['/backend-api/codex/models', '/backend-api/codex/responses']`
+  ——**全程无 `/responses/compact`**，压缩确实走普通 `/responses`（WS 通道），
+  V2 为默认路径的判断成立。
+- **压缩链路的两帧形态**：
+  1. **发起帧**：`input = [custom_tool_call_output, compaction_trigger]`，
+     顶层含 `previous_response_id`
+  2. **回填帧**：`input = [additional_tools, message×9, compaction]`，
+     顶层**无** `previous_response_id`（新窗口起点，与 SPEC-WS-005 的轮次差异一致）
+- **⚠ 采集条件**：该样本以 `model_context_window=20000` 采集（官方标准配置项，
+  `core/src/config/mod.rs:633`）。**非默认值**——调小它是为逼出
+  `CompactionReason::ContextLimit`，压缩本身走的仍是真实代码路径，故不计为 I 类
+  干预；但阈值非默认这一点须随证据保留。
 - **可变性**：条件（provider 类型）
 - **状态**：🔴 **规格表此前的定位有误**
 

@@ -131,6 +131,13 @@ if [[ $prompt == "__COMPACT_FILL__" ]]; then
   # 改为让它读文件、跑命令、改代码：上下文增长来自文件内容与命令输出，这才是
   # Codex 真实的 token 消耗来源。
   fill_rounds=${FILL_ROUNDS:-10}
+  # model_context_window 是官方标准配置项（core/src/config/mod.rs:633），压缩链路
+  # 四处都读它。调小它逼出 CompactionReason::ContextLimit，比继续灌 token 省得多。
+  # 这不属 I 类污染：改的是「多大算超限」，压缩本身走的仍是真实代码路径；但该值
+  # 非默认，证据中须标注。
+  ctx_opt=""
+  [[ -n ${CONTEXT_WINDOW:-} ]] && ctx_opt="-c model_context_window=$CONTEXT_WINDOW"
+  echo "上下文窗口设定：${CONTEXT_WINDOW:-默认}"
 
   # 准备一个有真实体量的代码库供其探索——用官方源码树本身
   work="/tmp/compact-probe"
@@ -159,11 +166,11 @@ if [[ $prompt == "__COMPACT_FILL__" ]]; then
     echo "--- 第 $i 轮：$task ---"
     if [[ $i == 1 ]]; then
       docker exec -w "$work" "$capture_container" timeout 240 "$codex_bin" exec \
-        --model "$model" --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox \
+        $ctx_opt --model "$model" --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox \
         "$task" 2>&1 | tail -2 || true
     else
       docker exec -w "$work" "$capture_container" timeout 240 "$codex_bin" exec resume --last \
-        --model "$model" --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox \
+        $ctx_opt --model "$model" --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox \
         "$task" 2>&1 | tail -2 || true
     fi
   done
