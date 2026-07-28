@@ -755,8 +755,8 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
 
 | Sub2API 出站 | 实现文件 | 官方是否有 |
 |---|---|---|
-| `backend-api/wham/rate-limit-reset-credits` | `openai_quota_service.go` | ⚠ **路径不同**：官方为 `{base}/wham/rate-limit-reset-credits`（`backend-client/src/client/rate_limit_resets.rs:93`），无 `/backend-api` 前缀 |
-| `backend-api/accounts/check/v4-2023-04-27` | `openai_oauth_service.go` | ⚠ **路径不同**：官方为 `{base}/api/codex/accounts/check` 或 `{base}/wham/accounts/check`（`backend-client/src/client.rs:306-307`），**无 `v4-2023-04-27` 版本后缀** |
+| `backend-api/wham/rate-limit-reset-credits`<br>`…/consume`、`backend-api/wham/usage` | `openai_quota_service.go` | ✅ **一致**（官方对 chatgpt.com 自动补 `/backend-api` 后走 `/wham/*`，见 SPEC-EP-019） |
+| `backend-api/accounts/check/v4-2023-04-27` | `openai_privacy_service.go:97` | 🔴 **路径不同**：官方为 `…/backend-api/wham/accounts/check`——Sub2API **少了 `wham/` 段、多了官方不存在的 `v4-2023-04-27` 后缀** |
 | `backend-api/conversation/` | `openai_alpha_search.go` | 🔴 **官方无** |
 | `backend-api/subscriptions` | `openai_privacy_service.go:98` | 🔴 **官方无** |
 | `backend-api/files` | `openai_images.go` | 🔴 **官方无生产调用**（`core/src/mcp_openai_file.rs:268` 是 wiremock 测试桩） |
@@ -778,156 +778,28 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
 - **备注**：这类偏离**换 TLS 画像解决不了**——问题是"访问了不该访问的端点"，
   不是"用错了指纹"。只能由产品决定是否保留这些功能。
 
-### SPEC-EP-019　两条端点的路径与官方不同
+### SPEC-EP-019　wham 系列路径与官方一致（前一版判断有误）
 
-| 端点 | 官方 | Sub2API |
-|---|---|---|
-| 配额 | `{base}/wham/rate-limit-reset-credits` | `chatgpt.com/backend-api/wham/rate-limit-reset-credits` |
-| 账号校验 | `{base}/api/codex/accounts/check` 或 `{base}/wham/accounts/check` | `chatgpt.com/backend-api/accounts/check/**v4-2023-04-27**` |
+- **规则**：官方对 `chatgpt.com` / `chat.openai.com` 的 base_url **自动补
+  `/backend-api`**（`backend-client/src/client.rs:160-162`，注释原文
+  *"Normalize common ChatGPT hostnames to include /backend-api so we hit the WHAM
+  paths"*），补完后 `PathStyle::from_base_url` 因含 `/backend-api` 判定为
+  `ChatGptApi`，走 `/wham/*` 分支（`client.rs:112-119`）　[L1]
+- **因此官方真实 URL 为**：
 
-- **依据**：`backend-client/src/client/rate_limit_resets.rs:93`、
-  `backend-client/src/client.rs:306-307`　[L1]
-- **状态**：⚠ 待核 —— 需确认官方的 `{base}` 是否含 `/backend-api`；
-  `v4-2023-04-27` 后缀在官方源码中不存在，疑似取自 ChatGPT 网页版
-
-> 本节修正了此前"七个端点"的范围假设：实际出站面为 **7 + 6 = 13 条**。
->
-> **另需区分**：官方基线中还会出现 `ps/plugins/*`、`plugins/featured`、`ps/mcp`
-> 等请求，它们属**可合法关闭的非必要流量**（§1.5.4），**不列为规则**——Sub2API
-> 不发它们不构成偏离。本表引用它们仅作同期同栈的旁证。
-
-### SPEC-EP-005　压缩仅用于 responses 流式请求
-
-- **规则**：只有 responses 走 `stream_encoded_json_with`（带 `compression` 参数）
-  才可能 zstd；models / compact / alpha-search / images 全部走
-  `execute` / `execute_with`，**无 compression 参数，一律明文**
-- **依据**：`endpoint/session.rs` 两个方法的签名差异——`execute` 不接收 compression，
-  故落到 `RequestCompression` 的 `#[default] = None`　[L1]
-- **观测**：任意通道（`content-encoding` 头可见）
-- **可变性**：条件（responses 压、compact 不压）
-- **状态**：✅ **已对齐** —— Sub2API 的 `compressOfficialOpenAIHTTPRequest` 全仓
-  仅一处调用点（`official_egress_openai_http.go:292`，且带 `!plan.IsCompact` 判断），
-  alpha-search / images / count_tokens / models 四条链路压缩相关命中均为 0
-
-### SPEC-EP-006 ~ 009　各端点的 URL 与方法对齐状态
-
-| 编号 | 端点 | 官方 | Sub2API | 状态 |
-|---|---|---|---|---|
-| SPEC-EP-006 | models | `GET {base}/models?client_version=…` | `chatgpt.com/backend-api/codex/models` | ✅ 一致 |
-| SPEC-EP-007 | compact | `POST {base}/responses/compact` | 同 | ✅ 一致 |
-| SPEC-EP-008 | alpha-search | `POST {base}/alpha/search` | `chatgpt.com/backend-api/codex/alpha/search` | ✅ 一致 |
-| SPEC-EP-009 | live | `POST {base}/realtime/calls`（另有 `live`，FramelessBidi） | `chatgpt.com/backend-api/codex/realtime/calls` | ✅ 一致 |
-
-- **依据**：各端点 `fn path()`　[L1]
-- **可变性**：固定
-- **备注**：URL 与方法层面这四条均已对齐；各自的 **header 顺序**受 §2.3 的 h1 wire
-  问题影响（全部未对齐），**body 字段**待第 2 步逐条验证。
-
-### SPEC-EP-012　live 端点：URL 带了官方没有的 query，且缺 `openai-alpha`
-
-- **规则**：
-  - URL 为 `{base}/realtime/calls`，**不带任何 query 参数**
-  - quicksilver 版本经 **header** 声明：`openai-alpha: quicksilver=v1`（V1 parser）
-    或 `quicksilver=v2`（FramelessBidi）
-- **依据**：`core/src/client.rs:158`
-  `const REALTIME_CALLS_ENDPOINT: &str = "/realtime/calls"`、
-  `endpoint/realtime_call.rs:63` `fn path() -> "realtime/calls"`　[L1]
-  ─ header 见 `core/src/realtime_conversation.rs:1595`
-    `headers.insert("openai-alpha", HeaderValue::from_static("quicksilver=v1"))`　[L1]
-- **观测**：任意通道
-- **可变性**：条件（v1 / v2 取决于 event parser）
-- **状态**：🔴 **两项未对齐**（`openai_live.go`）
-  1. **URL 多了 query**：`openai_live.go:35` 为
-     `.../realtime/calls?intent=quicksilver&architecture=avas`。官方**不带 query**，
-     且 `intent` / `architecture` 这两个参数名在官方源码中不存在
-  2. ~~主请求缺 `openai-alpha`~~ —— **该判断有误，已更正**：`openai_live.go:298`
-     调用了 `applyLiveUpstreamIdentityHeaders`，其中 `openai_live.go:396` 设置了
-     `OpenAI-Alpha: quicksilver=v2`，经 transport 层小写化后即为官方形态。**此项本就对齐。**
-- **备注**：真正的偏离只有 URL query 一项。它属于**反向问题**——不是少发 header，
-  而是多发了官方不存在的参数。
-- **暂不修**：live 需管理员开 `AllowLive` 才可达，无法实测验证去掉 query 后上游
-  是否仍接受。改动风险大于收益，留待该端点真正启用时评估。
-
-### SPEC-EP-013　OAuth 路径不得透传入站 query
-
-- **规则**：官方 provider 的 `query_params` 在所有构造点均为 `None`
-  （`model-provider-info/src/lib.rs:339,384,534`），除 models 端点由官方自行追加
-  `client_version` 外，**URL 不带任何 query**
-- **依据**：`codex-api/src/provider.rs:53` `url_for_path()` 仅在
-  `self.query_params` 非空时拼接　[L1]
-- **观测**：任意通道（URL 可见）
-- **可变性**：固定
-- **状态**：✅ **已修** —— `openai_alpha_search.go:339` 原先**无条件把入站 query
-  原样透传**到出站 URL，等于让第三方客户端往打给官方的 URL 上注入任意参数。
-  与 P0-4 的未知顶层字段泄漏同类，只是发生在 **URL 层**而非 body。
-  ─ 已改为仅在**非 OAuth 路径**透传：API Key 打的是第三方 base URL，不受官方画像
-  约束，保持原行为。
-
-### SPEC-EP-010　隐私设置端点：双重偏离
-
-- **规则**：官方 Codex CLI **从不修改账号隐私设置**，无任何 `settings/*` 出站
-- **依据**：全仓检索 `account_user_setting` 官方命中 **0**　[L1 反证]
-- **观测**：任意通道
-- **可变性**：固定
-- **状态**：🔴 **双重偏离**
-  1. **端点本身官方从不访问**：`openai_privacy_service.go:18` 打
-     `https://chatgpt.com/backend-api/settings/account_user_setting`
-  2. **不走官方画像**：该服务用 `PrivacyClientFactory` 返回的 `req.Client`
-     （第三方 imroc/req 库），既非 `tlsfingerprint` 画像也非 `DoWithTLS`，
-     即 TLS 指纹、header 定型、连接池隔离全部失效
-- **触发**：账号级一次性设置（`privacy_mode == "training_off"`，见
-  `account.go:240`）。频率低，但**每添加一个 OAuth 账号就产生一次官方永不产生的
-  出站**，属强特征而非概率特征。
-
-### SPEC-EP-011　旁路链路的画像失效是系统性的
-
-顺着 SPEC-EP-010 逐条核查其余五条打 `chatgpt.com` 的链路，**六条里有五条不走官方
-画像**：
-
-| 端点 | 实现文件 | 客户端 | 官方有无此端点 |
+| 用途 | 官方 | Sub2API | 结论 |
 |---|---|---|---|
-| `settings/account_user_setting` | `openai_privacy_service.go:18` | 🔴 `req.Client` | ❌ 官方无 |
-| `subscriptions` | `openai_privacy_service.go:98` | 🔴 `req.Client` | ✅ 有 |
-| `accounts/check/v4-2023-04-27` | `openai_privacy_service.go:97` | 🔴 `req.Client` | ✅ 有 |
-| `wham/rate-limit-reset-credits` | `openai_quota_service.go` | 🔴 非画像客户端 | ✅ 有 |
-| `backend-api/files` | `openai_images.go` | 🔴 非画像客户端（3 处） | ✅ 有 |
-| `conversation/` | `openai_alpha_search.go` | ✅ 官方画像（4 处） | ✅ 有 |
+| 用量 | `chatgpt.com/backend-api/wham/usage` | 同 | ✅ 一致 |
+| 配额 | `chatgpt.com/backend-api/wham/rate-limit-reset-credits` | 同 | ✅ 一致 |
+| 配额消费 | `chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume` | 同 | ✅ 一致 |
+| 账号校验 | `chatgpt.com/backend-api/wham/accounts/check` | `…/backend-api/accounts/check/**v4-2023-04-27**` | 🔴 **仍不同** |
 
-- **依据**：源码检索 `req.Client` / `DoWithTLS` / `OfficialEgress*TLSProfile` 的
-  命中分布　[L1]
-- **状态**：🔴 **五条链路 TLS 指纹与连接池隔离失效**
-- **⚠ 根因判断已两次更正，最终结论如下**：
-  - **初版**写"根因是 `supportsOfficialEgressHTTPProfile` 默认放行"——不成立。
-    该闸门管的是 **Finalizer（body/header 定型）**，TLS 画像走调用点显式传参。
-  - **二版**写"这些服务各自建了独立客户端、忘了接 `httpUpstream`，修法是改走
-    `DoWithTLS`"——**也不成立**。
-  - **实际情况**：`CreatePrivacyReqClient`（`repository/req_client_pool.go:115`）
-    显式设 `Impersonate: true`，注释写明 *"Uses Chrome TLS fingerprint
-    impersonation to bypass Cloudflare checks"*。**这是有意用 Chrome 指纹，不是
-    遗漏。** privacy 与 quota 两个服务共用该工厂。
-- **因此不应改成 Codex 画像**，理由有二：
-  1. 这些端点（`settings/account_user_setting`、`accounts/check`、`subscriptions`、
-     `wham/rate-limit`）是 **ChatGPT 网页版端点**，官方 Codex CLI 本就不访问
-     （SPEC-EP-010 实测官方命中 0）。既然官方不访问，套 Codex 画像并不会让它
-     "更像官方"。
-  2. 改掉 Chrome 指纹很可能**触发 Cloudflare 拦截**，把一个形态问题换成功能故障。
-- **真正的问题在 SPEC-EP-010 而非画像**：官方从不修改账号隐私设置，**这个动作本身**
-  就是官方永不产生的。换任何指纹都解决不了，只能由产品决定是否保留该功能。
-- **状态**：⏸ **不修**（结论从"需修"翻转）。仅
-  `openai_images.go:1433` 的 `fetchOpenAIImageDownloadURL` 例外——它打的 `files`
-  与 `conversation` 是官方**确实会访问**的端点，值得单独评估。
-- **逐条复核后的准确状态**：
-
-| 链路 | 出站方式 | 是否需修 |
-|---|---|---|
-| `settings/account_user_setting` / `subscriptions` / `accounts/check` | `req.Client`（`openai_privacy_service.go`） | 🔴 需修，改造成本中（三处共用 `PrivacyClientFactory`） |
-| `wham/rate-limit-reset-credits` | `req.Client`（`openai_quota_service.go`） | 🔴 需修，同上 |
-| `backend-api/files/{id}/download`、`conversation/{id}/attachment/…` | `req.Client`（`openai_images.go:1433` `fetchOpenAIImageDownloadURL`） | 🔴 需修，需重构函数签名以注入 `httpUpstream` |
-| `openai_images.go:621` 主路径 | `httpUpstream.Do`（无画像） | ✅ **不需修** —— 打的是 `api.openai.com`（API Key 路径），不受官方画像约束 |
-
-  ─ 最后一行是复核中避免的一次误改：主路径的 `Do`（而非 `DoWithTLS`）是**正确的**。
-
----
+- **⚠ 本条前一版判断有误，已更正**：上一版写"官方为 `{base}/wham/…`，无
+  `/backend-api` 前缀"——**只看了 `format!` 那一行，没看 base_url 是怎么来的**。
+  这是 §1.2 记录的"只看调用点不看调用链"那一类，第三次犯。
+- **残留偏离只有账号校验一条**：官方走 `wham/accounts/check`，Sub2API 走
+  `accounts/check/v4-2023-04-27`——**既少了 `wham/` 段，又多了官方源码中不存在的
+  版本后缀**，疑似取自 ChatGPT 网页版。
 
 ## 2.10 剩余端点的 header 集合与 body
 
