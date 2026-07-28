@@ -1019,8 +1019,24 @@ Codex 侧结论基于与 active 画像同版本的 `codex-cli-0.145` 源码。
 > `store`/`stream`/`include`）只适用于 legacy；V2 走 `/responses`，其请求体应遵循
 > `ResponsesApiRequest` 的完整字段集。**两条路径的 body 形态不同，不能混为一谈。**
 >
-> **对 Sub2API 的影响待评估**：需确认本项目的 compact 走哪条路径——若打的是
-> `/responses/compact` 而官方默认走 V2，则**端点选择本身就是偏离**。
+> **对 Sub2API 的影响（已核实）**：`official_egress_integration.go:270-273` 按
+> **入站路径**决定出站——第三方客户端打 `/v1/responses/compact`，就转发到
+> `/backend-api/codex/responses/compact`（**legacy 路径**）。而官方对 OpenAI 账号
+> `supports_remote_compaction()` 恒为 true，**默认走 V2 的普通 `/responses`**。
+>
+> **但这不宜简单判为偏离**，因为两者的触发方是不同的：
+>
+> | | 官方 | Sub2API |
+> |---|---|---|
+> | 谁决定压缩 | **CLI 自己**，上下文超阈值时自动触发 | **第三方客户端**，显式打 compact 入口 |
+> | 出站端点 | V2 → `/responses`（默认） | legacy → `/responses/compact` |
+>
+> 官方的 V2 是「客户端自主决定压缩」这条链路的产物；而 Sub2API 收到的是入站客户端
+> **已经决定要压缩**的显式请求。若强行改走 V2，等于把一个显式 compact 请求伪装成
+> 普通对话请求——语义上是否成立需另行判断。
+>
+> **当前状态**：⚠ **列为待决策项，不擅自改**。要判定需先取得两条路径的实测基线
+> （V2 至今无基线，见 SPEC-EP-021 的观测状态），再评估语义等价性。
 
 ### SPEC-EP-014　compact 的 header 集合（**legacy 路径**）
 
