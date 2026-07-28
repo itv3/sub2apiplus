@@ -76,7 +76,7 @@
 这三条是从踩坑里得来的，不是形式要求：
 
 1. **不许跳步。** 本轮曾从第 1 步没做完直接跳到第 4 步改代码，第 2 步整个被略过
-   ——结果是 43 条规则一条都没标过验证状态，且改代码时才发现探针连 body 都不读。
+   ——结果是当时全部规则一条都没标过验证状态，且改代码时才发现探针连 body 都不读。
 2. **每条规则必须落到实测。** 规格表本身也会写错（§1.2 记录的 16 次反转里，
    有 5 次发生在规格表建立**之后**）。因此每条都要声明观测通道、并把状态绑定到
    实测运行号。
@@ -286,7 +286,7 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 - **实测**：`GET /codex/models` → `version, authorization, chatgpt-account-id,
   accept, originator, user-agent, host`
 - **可变性**：固定
-- **状态**：✅ **已对齐**（`h1_wire.go`，`h1-wire-v2-0.1.165-13`）——
+- **状态**：✅ **已对齐**（`h1_wire.go`，首验 `-13`、`-14` 补 responses 基线后复验）——
   在 `net.Conn` 层拦截重写请求头字节。实测 `host` 已为小写且位于末尾。
 
 ### SPEC-H1-003　`content-length` 排在 `host` 之后
@@ -576,7 +576,11 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 - **实测**：`official-body2-20260728T000549Z` → `tool_choice = str:auto`，
   **确证为 JSON 字符串**
 - **可变性**：固定
-- **状态**：🔴 **类型层面的偏离，强负指纹** —— `openai_images_responses.go:357`
+- **状态**：✅ **已修**（`tool-choice-0.1.165-15`），但**缺 wire 级证据**——
+  补验时 `/v1/images/generations` 返回 `403 Image generation is not enabled for
+  this group`，属分组配置限制。开启生图权限后跑
+  `tools/official_client_capture/run_images_wire_probe.sh` 即可补证。
+- **修复前的形态**：`openai_images_responses.go:357`
   的硬编码模板发的是**对象**：
   ```json
   "tool_choice":{"type":"image_generation"}
@@ -759,7 +763,7 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 
 - **依据**：各端点 `fn path()`　[L1]
 - **可变性**：固定
-- **备注**：URL 与方法层面这四条均已对齐；各自的 **header 顺序**受 §3 的 h1 wire
+- **备注**：URL 与方法层面这四条均已对齐；各自的 **header 顺序**受 §2.3 的 h1 wire
   问题影响（全部未对齐），**body 字段**待第 2 步逐条验证。
 
 ### SPEC-EP-012　live 端点：URL 带了官方没有的 query，且缺 `openai-alpha`
@@ -922,7 +926,7 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
   header 与 body 约束**完全等同 responses**，不适用官方 `images/generations` 的
   `ImageGenerationRequest { prompt, background?, model, n?, quality?, size? }`
 - **顺序**：✅ 命中 responses 的实测清单（已逐字节对齐）
-- **状态**：⚠ body 仍有 SPEC-BODY-005（`tool_choice` 类型）未修
+- **状态**：⚠ body 的 SPEC-BODY-005（`tool_choice` 类型）已修但缺 wire 证据
 
 ### SPEC-EP-017　count_tokens 无官方对应物
 
@@ -940,7 +944,7 @@ header / body 五层。models、compact、旁路端点与 Anthropic 侧后续按
 | SPEC-TLS-001/002 | direct pcap、`official-nativetls-20260727T161531Z` |
 | SPEC-PROTO-001/002 | h1 探针（官方 `alpn=None`）、`official-httpfb3-20260727T234853Z` |
 | SPEC-H1-001/002/003/004 | `official-h1-full-20260727T124125Z` + `VERIFY-h1wire-v3` |
-| SPEC-H2-001~007 | `official-h2-20260727T131936Z`（**仅 rustls 分支**，见 §4 污染说明） |
+| SPEC-H2-001~007 | `official-h2-20260727T131936Z`（**仅 rustls 分支**，见 §2.4 污染说明） |
 | SPEC-WS-001/002 | `official-h1-full-20260727T124125Z` |
 | SPEC-HDR-002/003/004/005/006/007 | h1 基线（基础头集合、无 `accept-language`、`openai-beta` 仅 WS、UA、accept、会话头） |
 | SPEC-BODY-001/002/003/005 | `official-body2-20260728T000549Z` |
@@ -1103,7 +1107,7 @@ SPEC-H1-002~004 的关键，也是薄层里唯一触及 wire 字节的组件（�
 
 证据：`local-analysis/captures/wire-parity-fix-20260727/h1-wire-probe/VERIFY-a-fixes-*.json`
 
-#### 3.1.5.2 B 类（自写 h1 wire）的 wire 级验收（`h1-wire-v2-0.1.165-13`）
+#### 3.1.5.2 B 类（自写 h1 wire）的 wire 级验收（`-13` 首验、`-14` 追加）
 
 | 项 | 官方基线 | 修复后实测 | 结论 |
 |---|---|---|---|
@@ -1235,7 +1239,7 @@ header 用 map / JSON object 传给 Rust，顺序当场丢失，hyper 的保序�
 
 ```
 Go 主程序（路由 / 鉴权 / 计费 / 调度 / 语义定型）
-  ├─ Rust sidecar     → OpenAI      （同源 Codex CLI，已 PoC 验证，见 §1.20）
+  ├─ Rust sidecar     → OpenAI      （同源 Codex CLI，已 PoC 验证，见 §3.2.1）
   └─ Node.js sidecar  → Anthropic   （同源 Claude Code，HTTP 栈待验证）
 ```
 
@@ -1365,3 +1369,23 @@ SPEC-H2-003/006/007 须 fork `x/net/http2`，更不论 Go 与 Rust 在 TCP 时�
 无法证明达成。
 
 ---
+
+---
+
+## 3.5 当前进度速览（2026-07-28）
+
+**运行镜像**：`sub2apiplus:tool-choice-0.1.165-15`
+
+**已与官方逐字节一致**：`GET /codex/models`、`POST /codex/responses` 的完整 header
+次序（含 `host` 小写与位置、`content-length` 收尾）。后者是**默认主路径**。
+
+**下一步的两件实事**（均属五步流程的第 1 步补基线，见 §1.3.1）：
+
+1. **补 compact 的官方基线** —— 降级采法已跑通（`run_official_http_fallback_baseline.sh`），
+   compact 应同法可采，采到后即可把 §2.10 的 compact 顺序从兜底清单换成实测值。
+2. **开启生图权限验 `tool_choice`** —— 需在管理端为测试分组开生图，然后跑
+   `run_images_wire_probe.sh`。这是 §3.1.4 里唯一"已改但缺证"的项。
+
+**探针的已知能力上限**：不转发上游，因此**依赖模型自主决策的动作**（工具调用、
+生图、compact 触发）采不到。要突破得让探针能返回可驱动后续流程的伪造响应——
+那是一项独立的观测能力建设，也是 §2.11.3 那 8 条"可验未验"的共同障碍。
