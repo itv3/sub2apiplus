@@ -83,16 +83,18 @@ func (c *liveTestFrameConn) Close() error {
 
 type liveTestDialer struct {
 	conn    *liveTestFrameConn
+	ctx     context.Context
 	url     string
 	headers http.Header
 }
 
 func (d *liveTestDialer) Dial(
-	_ context.Context,
+	ctx context.Context,
 	wsURL string,
 	headers http.Header,
 	_ string,
 ) (openAIWSClientConn, int, http.Header, error) {
+	d.ctx = ctx
 	d.url = wsURL
 	d.headers = headers.Clone()
 	return d.conn, http.StatusSwitchingProtocols, nil, nil
@@ -334,8 +336,9 @@ func TestProxyLiveSidebandForwardsTextAndBinary(t *testing.T) {
 		Type:        AccountTypeOAuth,
 		Concurrency: 2,
 		Credentials: map[string]any{
-			"access_token":       "test-access-token",
-			"chatgpt_account_id": "acct_test",
+			"access_token":               "test-access-token",
+			"chatgpt_account_id":         "acct_test",
+			"chatgpt_account_is_fedramp": true,
 		},
 	}
 	record := &LiveCallRecord{
@@ -409,10 +412,29 @@ func TestProxyLiveSidebandForwardsTextAndBinary(t *testing.T) {
 	require.Equal(t, coderws.MessageBinary, messageType)
 	require.Equal(t, []byte{4, 5, 6}, payload)
 
-	require.Equal(t, "wss://chatgpt.com/backend-api/codex/call_proxy", dialer.url)
+	require.Equal(t, "wss://api.openai.com/v1/realtime?intent=quicksilver&call_id=call_proxy", dialer.url)
 	require.Equal(t, "Bearer test-access-token", dialer.headers.Get("Authorization"))
 	require.Equal(t, "acct_test", dialer.headers.Get("Chatgpt-Account-Id"))
+	require.Equal(t, "true", dialer.headers.Get("X-OpenAI-FedRAMP"))
 	require.Equal(t, `{"v":1,"s":0,"t":"v1.sideband"}`, dialer.headers.Get(liveAttestationHeader))
+	require.Empty(t, dialer.headers.Get("Host"))
+	require.Empty(t, dialer.headers.Get("Connection"))
+	require.Empty(t, dialer.headers.Get("Upgrade"))
+	require.Empty(t, dialer.headers.Get("Sec-WebSocket-Version"))
+	require.Empty(t, dialer.headers.Get("Sec-WebSocket-Key"))
+	require.Empty(t, dialer.headers.Get("Sec-WebSocket-Extensions"))
+	egressContext, ok := OfficialEgressContextFromContext(dialer.ctx)
+	require.True(t, ok)
+	require.True(t, egressContext.IsFrozen())
+	require.Equal(t, account.ID, egressContext.AccountID())
+	require.Equal(t, PlatformOpenAI, egressContext.TargetPlatform())
+	require.Equal(t, OfficialEgressTransportWebSocket, egressContext.Transport())
+	require.Equal(t, "api.openai.com", egressContext.UpstreamHost())
+	require.Equal(t, "/v1/realtime", egressContext.InboundEndpoint())
+	require.Equal(t, officialCodexVersion0145, egressContext.ProfileVersion())
+	require.Equal(t, officialCodexEndpointRealtimeSideband, egressContext.CodexEndpointProfileID())
+	require.NotEmpty(t, egressContext.InvocationID())
+	require.NotEmpty(t, egressContext.ConnectionPoolID())
 	upstream.reads <- liveTestFrame{err: coderws.CloseError{Code: coderws.StatusNormalClosure}}
 	require.ErrorIs(t, <-proxyResult, ErrLiveCallNotFound)
 }

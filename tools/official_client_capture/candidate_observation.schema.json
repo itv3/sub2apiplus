@@ -1,0 +1,45 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/candidate-observation-v1.json",
+  "title": "候选侧独立解析事实记录",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "record_id",
+    "scenario_id",
+    "record_type",
+    "data"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-candidate-observation/v1"
+    },
+    "record_id": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "scenario_id": {
+      "type": "string",
+      "pattern": "^A[0-9]{2}$"
+    },
+    "record_type": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z][a-z0-9_]*$"
+    },
+    "data": {
+      "type": "object",
+      "minProperties": 1
+    },
+    "source_artifacts": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  }
+}

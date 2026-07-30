@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/platform/liveattestation"
 	coderws "github.com/coder/websocket"
 	"github.com/google/uuid"
 	"github.com/tidwall/gjson"
@@ -31,15 +32,99 @@ const (
 	liveUpstreamBodyLimit         = 2 << 20
 )
 
-var (
-	chatGPTLiveCallsURL        = "https://chatgpt.com/backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas"
-	chatGPTLiveSidebandBaseURL = "wss://chatgpt.com/backend-api/codex"
-)
-
 type liveFrameConn interface {
 	ReadFrame(ctx context.Context) (coderws.MessageType, []byte, error)
 	WriteFrame(ctx context.Context, msgType coderws.MessageType, payload []byte) error
 	Close() error
+}
+
+// liveSidebandClientDialer 标记专用于 realtime sideband 的无压缩握手。
+// 生产 dialer 必须实现此接口；测试注入的旧 dialer 可继续走通用 Dial。
+type liveSidebandClientDialer interface {
+	DialLiveSideband(
+		ctx context.Context,
+		wsURL string,
+		headers http.Header,
+		proxyURL string,
+	) (openAIWSClientConn, int, http.Header, error)
+}
+
+// DialLiveSideband 使用 Codex 0.145.0 WS TLS 画像建立 realtime sideband，且显式
+// 禁用 permessage-deflate。Responses WS 仍由通用 Dial 使用上下文接管压缩，两者不能
+// 共享握手选项。
+func (d *coderOpenAIWSClientDialer) DialLiveSideband(
+	ctx context.Context,
+	wsURL string,
+	headers http.Header,
+	proxyURL string,
+) (openAIWSClientConn, int, http.Header, error) {
+	if d == nil {
+		return nil, 0, nil, errors.New("live sideband dialer is nil")
+	}
+	targetURL := strings.TrimSpace(wsURL)
+	if targetURL == "" {
+		return nil, 0, nil, errors.New("live sideband url is empty")
+	}
+	tlsProfile := newOpenAIOfficialEgressWebSocketTLSProfile()
+	if egressContext, enabled := OfficialEgressContextFromContext(ctx); enabled {
+		if _, err := resolveOfficialEgressWebSocketTransportProfile(egressContext); err != nil {
+			return nil, 0, nil, err
+		}
+		parsedTarget, err := url.Parse(targetURL)
+		if err != nil {
+			return nil, 0, nil, fmt.Errorf("解析 Live sideband URL：%w", err)
+		}
+		if err := validateOfficialEgressWebSocketTarget(parsedTarget, egressContext); err != nil {
+			return nil, 0, nil, err
+		}
+		tlsProfile, err = officialCodex0145ResolveEndpointTLSProfileForURL(
+			egressContext.ProfileVersion(),
+			codex0145EndpointID(egressContext.CodexEndpointProfileID()),
+			parsedTarget,
+		)
+		if err != nil {
+			return nil, 0, nil, fmt.Errorf("解析 Live sideband TLS 画像：%w", err)
+		}
+	}
+	transport, err := buildOpenAIOfficialEgressWSTransport(
+		tlsProfile,
+		proxyURL,
+	)
+	if err != nil {
+		return nil, 0, nil, err
+	}
+	httpClient := &http.Client{
+		Transport: transport,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
+	connection, response, err := coderws.Dial(ctx, targetURL, &coderws.DialOptions{
+		HTTPClient:      httpClient,
+		HTTPHeader:      cloneHeader(headers),
+		CompressionMode: coderws.CompressionDisabled,
+	})
+	if err != nil {
+		status := 0
+		responseHeaders := http.Header(nil)
+		var responseBody []byte
+		if response != nil {
+			status = response.StatusCode
+			responseHeaders = cloneHeader(response.Header)
+			if response.Body != nil {
+				responseBody, _ = io.ReadAll(io.LimitReader(response.Body, 8<<10))
+				_ = response.Body.Close()
+			}
+		}
+		transport.CloseIdleConnections()
+		return nil, status, responseHeaders, &openAIWSHandshakeError{Body: responseBody, Err: err}
+	}
+	connection.SetReadLimit(openAIWSMessageReadLimitBytes)
+	responseHeaders := http.Header(nil)
+	if response != nil {
+		responseHeaders = cloneHeader(response.Header)
+	}
+	return &coderOpenAIWSClientConn{conn: connection}, http.StatusSwitchingProtocols, responseHeaders, nil
 }
 
 func liveSidebandReadError(err error) error {
@@ -52,6 +137,16 @@ func liveSidebandReadError(err error) error {
 func hashLiveCallID(callID string) string {
 	sum := sha256.Sum256([]byte(callID))
 	return hex.EncodeToString(sum[:])
+}
+
+// liveRealtimeSessionID 从持久化的 Live 租约生成稳定 UUID。第一跳与后续 observer／
+// proxy 重连都使用同一个 x-session-id，同时不需要扩展 Redis 记录结构。
+func liveRealtimeSessionID(leaseID string) string {
+	seed := strings.TrimSpace(leaseID)
+	if seed == "" {
+		seed = "missing-live-lease"
+	}
+	return uuid.NewSHA1(uuid.NameSpaceURL, []byte("sub2api/live/realtime-session/"+seed)).String()
 }
 
 func liveGroupID(groupID *int64) int64 {
@@ -134,11 +229,6 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 	if err != nil {
 		return nil, err
 	}
-	attestation, attestationCiphertext, err := s.prepareLiveAttestation(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	excluded := make(map[int64]struct{})
 	var lastErr error
 	for attempt := 0; attempt <= 3; attempt++ {
@@ -169,7 +259,48 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 		}
 
 		account := selection.Account
+		proxyIsolated := account.ProxyID != nil && account.Proxy != nil &&
+			*account.ProxyID == account.Proxy.ID && account.ProxyFallbackOriginID == nil &&
+			account.Proxy.Protocol == "http" && account.Proxy.Status == StatusActive &&
+			account.Proxy.FallbackMode == FallbackModeNone && account.Proxy.BackupProxyID == nil
+		var proxyID int64
+		var proxyName, proxyHost string
+		var proxyPort int
+		if account.ProxyID != nil && account.Proxy != nil {
+			proxyID = *account.ProxyID
+			proxyName = account.Proxy.Name
+			proxyHost = account.Proxy.Host
+			proxyPort = account.Proxy.Port
+		}
+		attestationContext := liveattestation.WithCandidateCaptureScope(
+			ctx,
+			liveattestation.CandidateCaptureScope{
+				APIKeyID:      identity.APIKeyID,
+				GroupID:       liveGroupID(identity.GroupID),
+				AccountID:     account.ID,
+				ProxyID:       proxyID,
+				ProxyName:     proxyName,
+				ProxyHost:     proxyHost,
+				ProxyPort:     proxyPort,
+				ProxyIsolated: proxyIsolated,
+			},
+		)
+		attestation, attestationCiphertext, attestationErr := s.prepareLiveAttestation(attestationContext)
+		if attestationErr != nil {
+			selection.ReleaseFunc()
+			return nil, attestationErr
+		}
+		attemptContext, runtimeState, runtimeErr := bindOfficialCodex0145RuntimeStateFromCapturedIngress(
+			ctx,
+			account,
+			codex0145EndpointID(officialCodexEndpointRealtimeCalls),
+		)
+		if runtimeErr != nil {
+			selection.ReleaseFunc()
+			return nil, fmt.Errorf("解析 Live 进程画像：%w", runtimeErr)
+		}
 		leaseID := generateRequestID()
+		realtimeSessionID := liveRealtimeSessionID(leaseID)
 		acquired, acquireErr := liveCache.AcquireLiveLease(
 			ctx,
 			account.ID,
@@ -188,7 +319,13 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 			return nil, ErrLiveConcurrencyFull
 		}
 
-		created, createErr := s.createUpstreamLiveCall(ctx, account, request, attestation)
+		created, createErr := s.createUpstreamLiveCall(
+			attemptContext,
+			account,
+			request,
+			attestation,
+			realtimeSessionID,
+		)
 		selection.ReleaseFunc()
 		if createErr != nil {
 			s.releaseLiveLease(account.ID, identity.UserID, identity.APIKeyID, leaseID)
@@ -221,6 +358,7 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 			UserAgent:             identity.UserAgent,
 			IPAddress:             identity.IPAddress,
 			InboundEndpoint:       identity.InboundEndpoint,
+			CodexRuntimeState:     liveCodexRuntimeStateFromOfficial(runtimeState),
 			AttestationCiphertext: attestationCiphertext,
 		}
 		mappingTTL := s.liveMaxSessionDuration() + 5*time.Minute
@@ -256,7 +394,21 @@ func (s *OpenAIGatewayService) createUpstreamLiveCall(
 	account *Account,
 	request *LiveCallRequest,
 	attestation string,
+	realtimeSessionID string,
 ) (*LiveCallCreated, error) {
+	endpointID := codex0145EndpointID(officialCodexEndpointRealtimeCalls)
+	endpoint, err := resolveCodex0145Endpoint(officialCodexVersion0145, endpointID)
+	if err != nil {
+		return nil, err
+	}
+	target, err := officialCodex0145BuildEndpointURL(
+		officialCodexVersion0145,
+		endpointID,
+		officialCodex0145EndpointURLInput{},
+	)
+	if err != nil {
+		return nil, err
+	}
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
 		logLiveCreateStageFailure(ctx, account.ID, "access_token", err)
@@ -272,11 +424,25 @@ func (s *OpenAIGatewayService) createUpstreamLiveCall(
 	if err != nil {
 		return nil, err
 	}
-	reqCtx := WithHTTPUpstreamRedirectsDisabled(WithHTTPUpstreamProfile(ctx, HTTPUpstreamProfileOpenAI))
-	upstreamReq, err := http.NewRequestWithContext(reqCtx, http.MethodPost, chatGPTLiveCallsURL, bytes.NewReader(body))
+	reqCtx := WithHTTPUpstreamProfile(ctx, HTTPUpstreamProfileOpenAI)
+	upstreamReq, err := http.NewRequestWithContext(reqCtx, endpoint.Method, target.String(), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
 	}
+	upstreamReq, egressContext, err := attachOfficialCodex0145EndpointRequest(
+		upstreamReq,
+		account,
+		endpointID,
+		realtimeSessionID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("绑定 Live 首跳画像：%w", err)
+	}
+	body, err = officialCodex0145FinalizeEndpointJSONBody(egressContext, body, nil)
+	if err != nil {
+		return nil, fmt.Errorf("定型 Live 首跳 body：%w", err)
+	}
+	resetOfficialEgressRequestBody(upstreamReq, body)
 	authHeaders, err := s.buildOpenAIAuthenticationHeaders(ctx, account, token)
 	if err != nil {
 		logLiveCreateStageFailure(ctx, account.ID, "authentication_headers", err)
@@ -287,17 +453,39 @@ func (s *OpenAIGatewayService) createUpstreamLiveCall(
 			upstreamReq.Header.Add(key, value)
 		}
 	}
-	upstreamReq.Host = "chatgpt.com"
 	if err := resolveAndSetOpenAIChatGPTAccountHeaders(ctx, s.accountRepo, upstreamReq.Header, account); err != nil {
 		logLiveCreateStageFailure(ctx, account.ID, "account_headers", err)
 		return nil, err
 	}
-	upstreamReq.Header.Set("Content-Type", "application/json")
-	upstreamReq.Header.Set("Accept", "application/sdp")
-	upstreamReq.Header.Set(liveAttestationHeader, attestation)
-	applyLiveUpstreamIdentityHeaders(upstreamReq.Header)
+	upstreamReq.Header.Set("x-session-id", realtimeSessionID)
+	if strings.TrimSpace(attestation) != "" {
+		upstreamReq.Header.Set(liveAttestationHeader, attestation)
+	}
+	userAgent, originator, err := officialCodex0145ProcessIdentity(egressContext)
+	if err != nil {
+		return nil, fmt.Errorf("解析 Live 首跳进程身份：%w", err)
+	}
+	upstreamReq.Header.Set("user-agent", userAgent)
+	upstreamReq.Header.Set("originator", originator)
+	if _, err := officialCodex0145FinalizeEndpointHeaders(egressContext, upstreamReq.Header, nil); err != nil {
+		return nil, fmt.Errorf("定型 Live 首跳 header：%w", err)
+	}
+	tlsProfile, err := officialCodex0145ResolveEndpointTLSProfileForURL(
+		egressContext.ProfileVersion(),
+		endpointID,
+		upstreamReq.URL,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("解析 Live 首跳 TLS 画像：%w", err)
+	}
 
-	resp, err := s.httpUpstream.Do(upstreamReq, resolveAccountProxyURL(account), account.ID, account.Concurrency)
+	resp, err := s.httpUpstream.DoWithTLS(
+		upstreamReq,
+		resolveAccountProxyURL(account),
+		account.ID,
+		account.Concurrency,
+		tlsProfile,
+	)
 	if err != nil {
 		logLiveCreateStageFailure(ctx, account.ID, "upstream_transport", err)
 		return nil, err
@@ -392,33 +580,24 @@ func liveCallIDFromLocation(location string) (string, error) {
 	return callID, nil
 }
 
-func applyLiveUpstreamIdentityHeaders(headers http.Header) {
-	headers.Set("OpenAI-Alpha", "quicksilver=v2")
-	ensureCodexIdentityHeaders(headers)
-	enforceCodexIdentityHeaders(headers)
-	if strings.TrimSpace(headers.Get("session-id")) == "" {
-		headers.Set("session-id", uuid.NewString())
-	}
-	if strings.TrimSpace(headers.Get("thread-id")) == "" {
-		headers.Set("thread-id", uuid.NewString())
-	}
-	// Realtime/Live 不使用 Responses 的实验头。
-	headers.Del("OpenAI-Beta")
-}
-
 func (s *OpenAIGatewayService) liveSidebandHeaders(
 	ctx context.Context,
 	account *Account,
+	egressContext *OfficialEgressContext,
 	record *LiveCallRecord,
 ) (http.Header, error) {
+	if account == nil || record == nil {
+		return nil, ErrLiveCallNotFound
+	}
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
 		return nil, err
 	}
-	headers, err := s.buildOpenAIAuthenticationHeaders(ctx, account, token)
+	authenticationHeaders, err := s.buildOpenAIAuthenticationHeaders(ctx, account, token)
 	if err != nil {
 		return nil, err
 	}
+	headers := cloneHeader(authenticationHeaders)
 	if err := resolveAndSetOpenAIChatGPTAccountHeaders(ctx, s.accountRepo, headers, account); err != nil {
 		return nil, err
 	}
@@ -426,8 +605,17 @@ func (s *OpenAIGatewayService) liveSidebandHeaders(
 	if err != nil {
 		return nil, err
 	}
+	userAgent, originator, err := officialCodex0145ProcessIdentity(egressContext)
+	if err != nil {
+		return nil, err
+	}
+	headers.Set("x-session-id", liveRealtimeSessionID(record.LeaseID))
 	headers.Set(liveAttestationHeader, attestation)
-	applyLiveUpstreamIdentityHeaders(headers)
+	headers.Set("user-agent", userAgent)
+	headers.Set("originator", originator)
+	if _, err := officialCodex0145FinalizeEndpointHeaders(egressContext, headers, nil); err != nil {
+		return nil, fmt.Errorf("定型 Live sideband header：%w", err)
+	}
 	return headers, nil
 }
 
@@ -439,12 +627,51 @@ func (s *OpenAIGatewayService) dialLiveSideband(ctx context.Context, record *Liv
 	if account == nil || !account.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityLive) {
 		return nil, ErrLiveUnavailable
 	}
-	headers, err := s.liveSidebandHeaders(ctx, account, record)
+	ctx, _, err = restoreLiveCodexRuntimeState(ctx, account, record)
+	if err != nil {
+		return nil, fmt.Errorf("恢复 Live 进程画像：%w", err)
+	}
+	endpointID := codex0145EndpointID(officialCodexEndpointRealtimeSideband)
+	target, err := officialCodex0145BuildEndpointURL(
+		officialCodexVersion0145,
+		endpointID,
+		officialCodex0145EndpointURLInput{
+			QueryValues: map[string]string{"call_id": record.CallID},
+		},
+	)
 	if err != nil {
 		return nil, err
 	}
-	target := strings.TrimRight(chatGPTLiveSidebandBaseURL, "/") + "/" + url.PathEscape(record.CallID)
-	conn, status, _, err := s.getOpenAIWSPassthroughDialer().Dial(ctx, target, headers, resolveAccountProxyURL(account))
+	wsContext, egressContext, err := attachOfficialCodex0145EndpointWebSocketContext(
+		ctx,
+		account,
+		endpointID,
+		target.String(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("绑定 Live sideband 画像：%w", err)
+	}
+	headers, err := s.liveSidebandHeaders(wsContext, account, egressContext, record)
+	if err != nil {
+		return nil, err
+	}
+	dialer := s.getOpenAIWSPassthroughDialer()
+	if dialer == nil {
+		return nil, errors.New("live sideband dialer is unavailable")
+	}
+	var conn openAIWSClientConn
+	var status int
+	if specialized, ok := dialer.(liveSidebandClientDialer); ok {
+		conn, status, _, err = specialized.DialLiveSideband(
+			wsContext,
+			target.String(),
+			headers,
+			resolveAccountProxyURL(account),
+		)
+	} else {
+		// 兼容测试注入的最小 dialer；生产默认实现始终走上面的无压缩分支。
+		conn, status, _, err = dialer.Dial(wsContext, target.String(), headers, resolveAccountProxyURL(account))
+	}
 	if err != nil {
 		return nil, fmt.Errorf("dial live sideband (status %d): %w", status, err)
 	}
@@ -454,6 +681,52 @@ func (s *OpenAIGatewayService) dialLiveSideband(ctx context.Context, record *Liv
 		return nil, errors.New("live sideband transport does not support raw frames")
 	}
 	return raw, nil
+}
+
+func liveCodexRuntimeStateFromOfficial(state officialCodex0145RuntimeState) LiveCodexRuntimeState {
+	cloned := cloneOfficialCodex0145RuntimeState(state)
+	return LiveCodexRuntimeState{
+		SurfaceID:              cloned.SurfaceID,
+		ProcessPhase:           cloned.ProcessPhase,
+		Originator:             cloned.Originator,
+		TerminalToken:          cloned.TerminalToken,
+		UserAgentSuffixEnabled: cloned.UserAgentSuffixEnabled,
+		ConditionalHeaders:     cloned.ConditionalHeaders,
+	}
+}
+
+func officialCodexRuntimeStateFromLive(state LiveCodexRuntimeState) officialCodex0145RuntimeState {
+	return cloneOfficialCodex0145RuntimeState(officialCodex0145RuntimeState{
+		SurfaceID:              state.SurfaceID,
+		ProcessPhase:           state.ProcessPhase,
+		Originator:             state.Originator,
+		TerminalToken:          state.TerminalToken,
+		UserAgentSuffixEnabled: state.UserAgentSuffixEnabled,
+		ConditionalHeaders:     state.ConditionalHeaders,
+	})
+}
+
+func restoreLiveCodexRuntimeState(
+	ctx context.Context,
+	account *Account,
+	record *LiveCallRecord,
+) (context.Context, officialCodex0145RuntimeState, error) {
+	var runtimeState officialCodex0145RuntimeState
+	var err error
+	if record != nil && strings.TrimSpace(record.CodexRuntimeState.SurfaceID) != "" {
+		runtimeState = officialCodexRuntimeStateFromLive(record.CodexRuntimeState)
+	} else {
+		// 兼容更新前已写入 Redis 的短生命周期记录；新记录必须走完整快照。
+		runtimeState, err = resolveOfficialCodex0145RuntimeState(nil, account)
+		if err != nil {
+			return nil, officialCodex0145RuntimeState{}, err
+		}
+	}
+	bound, err := withOfficialCodex0145RuntimeState(ctx, runtimeState)
+	if err != nil {
+		return nil, officialCodex0145RuntimeState{}, err
+	}
+	return bound, runtimeState, nil
 }
 
 func (s *OpenAIGatewayService) GetLiveCallForIdentity(

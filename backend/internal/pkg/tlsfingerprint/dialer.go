@@ -52,13 +52,45 @@ type TransportOptions struct {
 	//
 	// 留空即完全不介入——这是该能力的开关。
 	H1HeaderOrders []H1HeaderOrderRule
+	// StrictH1Wire 要求画像声明的每个 HTTP/1.1 请求都必须完成 wire 定型。
+	//
+	// 开启后，未知端点、条件规则不匹配、出现画像外 header、chunked 请求、
+	// 头部解析失败或头部过大都会直接终止本次连接，不允许回落到 Go 默认线序。
+	// 该开关只供具有完整端点矩阵的不可变官方画像使用；普通客户端保持关闭。
+	StrictH1Wire bool
 }
 
-// H1HeaderOrderRule 把请求路径映射到该端点的官方 header 次序。
-// 按切片顺序取第一个匹配项；PathContains 为空的规则作为兜底。
+// H1HeaderOrderMode 定义匹配端点后的 header 排序算法。
+type H1HeaderOrderMode string
+
+const (
+	// H1HeaderOrderModeStatic 按 Order 中声明的最终线序输出。
+	H1HeaderOrderModeStatic H1HeaderOrderMode = "static"
+	// H1HeaderOrderModeSwapRemove 先以 Order 表示官方 HeaderMap 的迭代序，
+	// 再依次 swap_remove RemoveHeaders，最后输出 PrefixHeaders、剩余项以及
+	// AppendHeaders。AppendHeaders 用于 tungstenite 删除五个握手头之后才生成的
+	// Sec-WebSocket-Extensions，不能提前放进 HeaderMap 参与 swap_remove。
+	// 该算法用于复刻 tungstenite，而不是对某个完整样本做缺项跳过。
+	H1HeaderOrderModeSwapRemove H1HeaderOrderMode = "swap_remove"
+)
+
+// H1HeaderOrderRule 把 method、精确路径和条件 header 映射到端点 wire 线序。
+//
+// PathContains 仅为旧画像兼容保留；完整版本画像必须使用 Path 精确匹配，且不得
+// 声明空路径兜底。RequiredHeaders/ForbiddenHeaders 用于同一端点的条件槽位。
 type H1HeaderOrderRule struct {
-	PathContains string
-	Order        []string
+	Method           string
+	Path             string
+	PathContains     string
+	RequiredHeaders  []string
+	ForbiddenHeaders []string
+	Order            []string
+	Mode             H1HeaderOrderMode
+	PrefixHeaders    []string
+	RemoveHeaders    []string
+	AppendHeaders    []string
+	// RejectUnlisted 禁止把画像未声明的 header 追加到末尾。
+	RejectUnlisted bool
 }
 
 // Profile contains TLS fingerprint configuration.
@@ -329,7 +361,12 @@ func wrapH1Wire(conn net.Conn, profile *Profile) net.Conn {
 			}
 		}
 	}
-	return newH1WireConn(conn, profile.Transport.H1HeaderOrders, preserve)
+	return newH1WireConnWithMode(
+		conn,
+		profile.Transport.H1HeaderOrders,
+		preserve,
+		profile.Transport.StrictH1Wire,
+	)
 }
 
 func (d *Dialer) DialTLSContext(ctx context.Context, network, addr string) (net.Conn, error) {

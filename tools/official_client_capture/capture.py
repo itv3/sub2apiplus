@@ -125,50 +125,70 @@ def _client_info(
     expected_claude_sha256: str,
     expected_codex_sha256: str,
     api_key_env: str,
+    subjects: tuple[str, ...] = SUBJECTS,
 ) -> dict[str, Any]:
     """在任何真实请求前固定客户端版本和二进制哈希。"""
 
-    for path in (claude_bin, codex_bin):
+    required_clients = {
+        "claude" if subject.startswith("claude-") else "codex"
+        for subject in subjects
+    }
+    paths = {
+        "claude": claude_bin,
+        "codex": codex_bin,
+    }
+    for name in sorted(required_clients):
+        path = paths[name]
         if not path.is_file() or not os.access(path, os.X_OK):
             raise ConfigurationError(f"客户端二进制不存在或不可执行：{path}")
-    claude_sha256 = file_sha256(claude_bin)
-    codex_sha256 = file_sha256(codex_bin)
-    if claude_sha256 != expected_claude_sha256:
-        raise ConfigurationError("Claude 二进制 SHA-256 与固定基线不符。")
-    if codex_sha256 != expected_codex_sha256:
-        raise ConfigurationError("Codex 二进制 SHA-256 与固定基线不符。")
     environment = clean_environment(os.environ)
     environment.pop(api_key_env, None)
-    claude_version = _command_output([str(claude_bin), "--version"], environment)
-    codex_version = _command_output([str(codex_bin), "--version"], environment)
-    claude_match = re.fullmatch(
-        r"(?P<version>\d+\.\d+\.\d+)(?: \(Claude Code\))?", claude_version
-    )
-    if not claude_match or claude_match.group("version") != expected_claude_version:
-        raise ConfigurationError(
-            f"Claude 版本不符，预期 {expected_claude_version}，实际 {claude_version}。"
+    clients: dict[str, Any] = {}
+    if "claude" in required_clients:
+        claude_sha256 = file_sha256(claude_bin)
+        if claude_sha256 != expected_claude_sha256:
+            raise ConfigurationError("Claude 二进制 SHA-256 与固定基线不符。")
+        claude_version = _command_output([str(claude_bin), "--version"], environment)
+        claude_match = re.fullmatch(
+            r"(?P<version>\d+\.\d+\.\d+)(?: \(Claude Code\))?", claude_version
         )
-    codex_match = re.fullmatch(
-        r"codex-cli (?P<version>\d+\.\d+\.\d+)", codex_version
-    )
-    if not codex_match or codex_match.group("version") != expected_codex_version:
-        raise ConfigurationError(
-            f"Codex 版本不符，预期 {expected_codex_version}，实际 {codex_version}。"
-        )
-    return {
-        "claude": {
+        if (
+            not claude_match
+            or claude_match.group("version") != expected_claude_version
+        ):
+            raise ConfigurationError(
+                "Claude 版本不符，"
+                f"预期 {expected_claude_version}，实际 {claude_version}。"
+            )
+        clients["claude"] = {
             "path": str(claude_bin),
             "version": claude_version,
             "sha256": claude_sha256,
             "expected_sha256": expected_claude_sha256,
-        },
-        "codex": {
+        }
+    if "codex" in required_clients:
+        codex_sha256 = file_sha256(codex_bin)
+        if codex_sha256 != expected_codex_sha256:
+            raise ConfigurationError("Codex 二进制 SHA-256 与固定基线不符。")
+        codex_version = _command_output([str(codex_bin), "--version"], environment)
+        codex_match = re.fullmatch(
+            r"codex-cli (?P<version>\d+\.\d+\.\d+)", codex_version
+        )
+        if (
+            not codex_match
+            or codex_match.group("version") != expected_codex_version
+        ):
+            raise ConfigurationError(
+                "Codex 版本不符，"
+                f"预期 {expected_codex_version}，实际 {codex_version}。"
+            )
+        clients["codex"] = {
             "path": str(codex_bin),
             "version": codex_version,
             "sha256": codex_sha256,
             "expected_sha256": expected_codex_sha256,
-        },
-    }
+        }
+    return clients
 
 
 def _validate_static_file(path: Path, description: str, *, executable: bool) -> None:
@@ -977,6 +997,7 @@ def main() -> int:
                 expected_claude_sha256=arguments.expected_claude_sha256,
                 expected_codex_sha256=arguments.expected_codex_sha256,
                 api_key_env=arguments.api_key_env,
+                subjects=subjects,
             )
             runtime = _preflight_dependencies(
                 arguments=arguments,

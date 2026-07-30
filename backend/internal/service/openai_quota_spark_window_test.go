@@ -9,14 +9,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/imroc/req/v3"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/require"
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
@@ -71,19 +73,53 @@ func (c *stubQuotaTokenCache) AcquireRefreshLock(_ context.Context, _ string, _ 
 
 func (c *stubQuotaTokenCache) ReleaseRefreshLock(_ context.Context, _ string) error { return nil }
 
-// newQuotaRedirectingFactory 返回 PrivacyClientFactory，将请求重定向到 httptest.Server。
-func newQuotaRedirectingFactory(srv *httptest.Server) PrivacyClientFactory {
-	targetURL, _ := url.Parse(srv.URL)
-	return func(_ string) (*req.Client, error) {
-		c := req.C().WrapRoundTripFunc(func(rt req.RoundTripper) req.RoundTripFunc {
-			return func(r *req.Request) (*req.Response, error) {
-				r.URL.Scheme = targetURL.Scheme
-				r.URL.Host = targetURL.Host
-				return rt.RoundTrip(r)
-			}
-		})
-		return c, nil
+// quotaRedirectingUpstream 将保留原始路径和 header 的请求转发到测试服务器。
+type quotaRedirectingUpstream struct {
+	target      *url.URL
+	mu          sync.Mutex
+	requests    []*http.Request
+	bodies      [][]byte
+	tlsProfiles []*tlsfingerprint.Profile
+}
+
+func (u *quotaRedirectingUpstream) Do(
+	request *http.Request,
+	_ string,
+	_ int64,
+	_ int,
+) (*http.Response, error) {
+	cloned := request.Clone(request.Context())
+	cloned.URL.Scheme = u.target.Scheme
+	cloned.URL.Host = u.target.Host
+	return http.DefaultClient.Do(cloned)
+}
+
+func (u *quotaRedirectingUpstream) DoWithTLS(
+	request *http.Request,
+	proxyURL string,
+	accountID int64,
+	accountConcurrency int,
+	profile *tlsfingerprint.Profile,
+) (*http.Response, error) {
+	var body []byte
+	if request.Body != nil {
+		body, _ = io.ReadAll(request.Body)
+		request.Body = io.NopCloser(strings.NewReader(string(body)))
 	}
+	snapshot := request.Clone(request.Context())
+	snapshot.Header = request.Header.Clone()
+	u.mu.Lock()
+	u.requests = append(u.requests, snapshot)
+	u.bodies = append(u.bodies, append([]byte(nil), body...))
+	u.tlsProfiles = append(u.tlsProfiles, profile)
+	u.mu.Unlock()
+	return u.Do(request, proxyURL, accountID, accountConcurrency)
+}
+
+// newQuotaRedirectingUpstream 构造不添加任何浏览器头的测试 HTTPUpstream。
+func newQuotaRedirectingUpstream(srv *httptest.Server) *quotaRedirectingUpstream {
+	targetURL, _ := url.Parse(srv.URL)
+	return &quotaRedirectingUpstream{target: targetURL}
 }
 
 // ── Part A: buildCodexSparkWindowExtraUpdates ─────────────────────────────────
@@ -220,7 +256,7 @@ func TestResetCreditAgentIdentityUsesAssertionAndRecoversInvalidTaskOnce(t *test
 	t.Cleanup(func() { openAIAgentIdentityAuthAPIBaseURL = oldBase })
 
 	invalidator := &agentIdentityWSInvalidationRecorder{}
-	svc := NewOpenAIQuotaService(repo, nil, nil, newQuotaRedirectingFactory(srv))
+	svc := NewOpenAIQuotaService(repo, nil, nil, newQuotaRedirectingUpstream(srv))
 	svc.agentIdentityWS = invalidator
 
 	result, err := svc.ResetCredit(context.Background(), account.ID)
@@ -282,7 +318,7 @@ func TestResetCreditAgentIdentityReusesConcurrentlyRecoveredTask(t *testing.T) {
 	openAIAgentIdentityAuthAPIBaseURL = srv.URL
 	t.Cleanup(func() { openAIAgentIdentityAuthAPIBaseURL = oldBase })
 
-	svc := NewOpenAIQuotaService(repo, nil, nil, newQuotaRedirectingFactory(srv))
+	svc := NewOpenAIQuotaService(repo, nil, nil, newQuotaRedirectingUpstream(srv))
 	result, err := svc.ResetCredit(context.Background(), account.ID)
 	require.NoError(t, err)
 	require.Equal(t, "ok", result.Code)
@@ -332,9 +368,9 @@ func TestPrepareUpstreamCallShadowResolve(t *testing.T) {
 	}}
 	tokenProvider := NewOpenAITokenProvider(repo, tokenCache, nil)
 
-	// privacyClientFactory 可以是任意合法工厂；prepareUpstreamCall 在返回前不调用它
-	svc := NewOpenAIQuotaService(repo, nil, tokenProvider, func(_ string) (*req.Client, error) {
-		return req.C(), nil
+	// HTTPUpstream 只用于配置完整性检查；prepareUpstreamCall 不会真正发起请求。
+	svc := NewOpenAIQuotaService(repo, nil, tokenProvider, &quotaRedirectingUpstream{
+		target: &url.URL{Scheme: "http", Host: "127.0.0.1:1"},
 	})
 
 	_, chatGPTAccountID, _, _, err := svc.prepareUpstreamCall(ctx, 200)
@@ -373,7 +409,7 @@ func TestQueryUsageAgentIdentityUsesAssertionWithoutOAuthToken(t *testing.T) {
 		_, _ = w.Write([]byte(`{"plan_type":"pro","rate_limit":{"allowed":true}}`))
 	}))
 	defer srv.Close()
-	svc := NewOpenAIQuotaService(repo, nil, nil, newQuotaRedirectingFactory(srv))
+	svc := NewOpenAIQuotaService(repo, nil, nil, newQuotaRedirectingUpstream(srv))
 	usage, err := svc.QueryUsage(context.Background(), account.ID)
 	require.NoError(t, err)
 	require.NotNil(t, usage)
@@ -427,7 +463,7 @@ func TestQueryUsageAgentIdentityRecoversInvalidTaskOnce(t *testing.T) {
 	t.Cleanup(func() { openAIAgentIdentityAuthAPIBaseURL = oldBase })
 
 	invalidator := &agentIdentityWSInvalidationRecorder{}
-	svc := NewOpenAIQuotaService(repo, nil, nil, newQuotaRedirectingFactory(srv))
+	svc := NewOpenAIQuotaService(repo, nil, nil, newQuotaRedirectingUpstream(srv))
 	svc.agentIdentityWS = invalidator
 	usage, err := svc.QueryUsage(context.Background(), account.ID)
 	require.NoError(t, err)
@@ -523,7 +559,7 @@ func TestQueryUsageIncludesResetCreditExpirations_EndToEnd(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	svc := NewOpenAIQuotaService(repo, nil, tokenProvider, newQuotaRedirectingFactory(srv))
+	svc := NewOpenAIQuotaService(repo, nil, tokenProvider, newQuotaRedirectingUpstream(srv))
 	usage, err := svc.QueryUsage(ctx, 100)
 	require.NoError(t, err)
 	require.NotNil(t, usage)
@@ -532,8 +568,10 @@ func TestQueryUsageIncludesResetCreditExpirations_EndToEnd(t *testing.T) {
 	require.Equal(t, 1, detailCalls)
 	require.Empty(t, capturedHeaders.Get("OpenAI-Beta"))
 	require.Equal(t, codexCLIUserAgent, capturedHeaders.Get("User-Agent"))
-	require.Equal(t, codexCLIVersion, capturedHeaders.Get("Version"))
-	require.Equal(t, "codex_exec", capturedHeaders.Get("Originator"))
+	require.Equal(t, "*/*", capturedHeaders.Get("Accept"))
+	require.Empty(t, capturedHeaders.Get("Version"))
+	require.Empty(t, capturedHeaders.Get("Originator"))
+	require.Empty(t, capturedHeaders.Get("Sec-Fetch-Site"))
 	require.Equal(t, []OpenAIRateLimitResetCreditDetail{
 		{ExpiresAt: "2026-07-03T04:05:06Z"},
 		{ExpiresAt: "2026-07-04T04:05:06Z"},
@@ -579,7 +617,7 @@ func TestQueryUsageResetCreditDetails401NonFatal(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	svc := NewOpenAIQuotaService(repo, nil, tokenProvider, newQuotaRedirectingFactory(srv))
+	svc := NewOpenAIQuotaService(repo, nil, tokenProvider, newQuotaRedirectingUpstream(srv))
 	usage, err := svc.QueryUsage(ctx, 100)
 	require.NoError(t, err)
 	require.NotNil(t, usage)
@@ -587,6 +625,115 @@ func TestQueryUsageResetCreditDetails401NonFatal(t *testing.T) {
 	require.Equal(t, 1, usage.RateLimitResetCredits.AvailableCount)
 	require.Equal(t, 1, detailCalls)
 	require.Empty(t, usage.RateLimitResetCredits.Credits)
+}
+
+func TestCodexWhamRequestsUseClosedBackendClientProfile(t *testing.T) {
+	account := &Account{
+		ID:       710,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Status:   StatusActive,
+		Credentials: map[string]any{
+			"chatgpt_account_id": "acct-wham-profile",
+		},
+	}
+	repo := &stubQuotaAccountRepo{accounts: map[int64]*Account{account.ID: account}}
+	tokenProvider := NewOpenAITokenProvider(repo, &stubQuotaTokenCache{tokens: map[string]string{
+		OpenAITokenCacheKey(account): "token-wham-profile",
+	}}, nil)
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("content-type", "application/json")
+		switch request.URL.Path {
+		case "/backend-api/wham/usage":
+			_, _ = writer.Write([]byte(`{}`))
+		case "/backend-api/wham/rate-limit-reset-credits":
+			_, _ = writer.Write([]byte(`{}`))
+		case "/backend-api/wham/rate-limit-reset-credits/consume":
+			_, _ = writer.Write([]byte(`{"code":"ok","windows_reset":1}`))
+		default:
+			http.NotFound(writer, request)
+		}
+	}))
+	defer server.Close()
+
+	upstream := newQuotaRedirectingUpstream(server)
+	service := NewOpenAIQuotaService(repo, nil, tokenProvider, upstream)
+	runtimeState := defaultOfficialCodex0145RuntimeState()
+	runtimeState.SurfaceID = officialCodexSurfaceTUI
+	runtimeState.Originator = "codex-tui"
+	runtimeState.TerminalToken = "xterm-256color"
+	runtimeState.UserAgentSuffixEnabled = false
+	runtimeContext, err := withOfficialCodex0145RuntimeState(context.Background(), runtimeState)
+	require.NoError(t, err)
+	_, err = service.QueryUsage(runtimeContext, account.ID)
+	require.NoError(t, err)
+	_, err = service.ResetCredit(runtimeContext, account.ID)
+	require.NoError(t, err)
+
+	require.Len(t, upstream.requests, 3)
+	require.Len(t, upstream.tlsProfiles, 3)
+	expectedTargets := []string{
+		"https://chatgpt.com/backend-api/wham/usage",
+		"https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+		"https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume",
+	}
+	expectedEndpointIDs := []string{
+		officialCodexEndpointWhamUsage,
+		officialCodexEndpointWhamResetCredits,
+		officialCodexEndpointWhamConsumeResetCredit,
+	}
+	poolIDs := make([]string, 0, len(upstream.requests))
+	for index, request := range upstream.requests {
+		require.Equal(t, expectedTargets[index], request.URL.String())
+		require.Equal(t, "chatgpt.com", request.Host)
+		require.Equal(t, "Bearer token-wham-profile", request.Header.Get("Authorization"))
+		require.Equal(t, "acct-wham-profile", request.Header.Get("Chatgpt-Account-Id"))
+		require.Equal(t, "*/*", request.Header.Get("Accept"))
+		require.Equal(
+			t,
+			"codex-tui/0.145.0 (Ubuntu 24.4.0; x86_64) xterm-256color",
+			request.Header.Get("User-Agent"),
+		)
+		require.True(t, HTTPUpstreamRedirectsDisabled(request.Context()))
+		require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(request.Context()))
+		require.NotNil(t, upstream.tlsProfiles[index])
+		require.True(t, upstream.tlsProfiles[index].Transport.StrictH1Wire)
+		egressContext, ok := OfficialEgressContextFromContext(request.Context())
+		require.True(t, ok)
+		require.Equal(t, expectedEndpointIDs[index], egressContext.CodexEndpointProfileID())
+		poolIDs = append(poolIDs, egressContext.ConnectionPoolID())
+		matchedWireRule := false
+		for _, rule := range upstream.tlsProfiles[index].Transport.H1HeaderOrders {
+			if rule.Method == request.Method && rule.Path == request.URL.EscapedPath() {
+				matchedWireRule = true
+				break
+			}
+		}
+		require.True(t, matchedWireRule, "WHAM 请求缺少 method/path 精确 H1 规则")
+
+		headerNames := make([]string, 0, len(request.Header))
+		for name := range request.Header {
+			headerNames = append(headerNames, strings.ToLower(name))
+		}
+		expectedHeaders := []string{"user-agent", "authorization", "chatgpt-account-id", "accept"}
+		if index == 2 {
+			expectedHeaders = append(expectedHeaders, "content-type")
+			require.Equal(t, "application/json", request.Header.Get("Content-Type"))
+		} else {
+			require.Empty(t, request.Header.Get("Content-Type"))
+		}
+		require.ElementsMatch(t, expectedHeaders, headerNames)
+	}
+	require.Equal(t, poolIDs[0], poolIDs[1])
+	require.Equal(t, poolIDs[1], poolIDs[2])
+	require.Contains(t, poolIDs[0], "invocation="+officialCodexClientBackendLongLived)
+
+	require.Empty(t, upstream.bodies[0])
+	require.Empty(t, upstream.bodies[1])
+	var consumeBody map[string]string
+	require.NoError(t, json.Unmarshal(upstream.bodies[2], &consumeBody))
+	require.Len(t, consumeBody, 1)
+	require.NotEmpty(t, consumeBody["redeem_request_id"])
 }
 
 // TestResetCreditGetByIDError_FailsClosed 验证守卫「失败关闭」语义：
@@ -640,7 +787,7 @@ func TestQueryUsageShadowResolve_EndToEnd(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	svc := NewOpenAIQuotaService(repo, nil, tokenProvider, newQuotaRedirectingFactory(srv))
+	svc := NewOpenAIQuotaService(repo, nil, tokenProvider, newQuotaRedirectingUpstream(srv))
 	usage, err := svc.QueryUsage(ctx, 200)
 	require.NoError(t, err)
 	require.NotNil(t, usage)

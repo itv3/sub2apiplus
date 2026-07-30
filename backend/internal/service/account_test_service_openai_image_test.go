@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAccountTestService_OpenAIImageOAuthHandlesOutputItemDoneFallback(t *testing.T) {
+func TestAccountTestService_OpenAIImageOAuthUsesCodex0145NativeEndpoint(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -23,13 +23,9 @@ func TestAccountTestService_OpenAIImageOAuthHandlesOutputItemDoneFallback(t *tes
 		resp: &http.Response{
 			StatusCode: http.StatusOK,
 			Header: http.Header{
-				"Content-Type": []string{"text/event-stream"},
+				"Content-Type": []string{"application/json"},
 			},
-			Body: io.NopCloser(strings.NewReader(
-				"data: {\"type\":\"response.output_item.done\",\"item\":{\"id\":\"ig_123\",\"type\":\"image_generation_call\",\"result\":\"aGVsbG8=\",\"revised_prompt\":\"draw a cat\",\"output_format\":\"png\"}}\n\n" +
-					"data: {\"type\":\"response.completed\",\"response\":{\"created_at\":1710000006,\"tool_usage\":{\"image_gen\":{\"images\":1}},\"output\":[]}}\n\n" +
-					"data: [DONE]\n\n",
-			)),
+			Body: io.NopCloser(strings.NewReader(`{"created":1710000006,"data":[{"b64_json":"aGVsbG8="}],"output_format":"png"}`)),
 		},
 	}
 	svc := &AccountTestService{httpUpstream: upstream}
@@ -39,7 +35,8 @@ func TestAccountTestService_OpenAIImageOAuthHandlesOutputItemDoneFallback(t *tes
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
 		Credentials: map[string]any{
-			"access_token": "token-123",
+			"access_token":       "token-123",
+			"chatgpt_account_id": "acct-images",
 		},
 	}
 
@@ -47,7 +44,12 @@ func TestAccountTestService_OpenAIImageOAuthHandlesOutputItemDoneFallback(t *tes
 	require.NoError(t, err)
 	require.NotNil(t, upstream.lastReq)
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.lastReq.Context()))
-	require.Contains(t, rec.Body.String(), "Calling Codex /responses image tool")
+	require.Equal(t, "https://chatgpt.com/backend-api/codex/images/generations", upstream.lastReq.URL.String())
+	require.Equal(t, "*/*", upstream.lastReq.Header.Get("Accept"))
+	require.Equal(t, officialCodexVersion0145, upstream.lastReq.Header.Get("Version"))
+	require.Equal(t, `{"prompt":"draw a cat","model":"gpt-image-2"}`, string(upstream.lastBody))
+	require.NotNil(t, upstream.lastTLSProfile)
+	require.Contains(t, rec.Body.String(), "Calling Codex /images/generations")
 	require.Contains(t, rec.Body.String(), "data:image/png;base64,aGVsbG8=")
 	require.Contains(t, rec.Body.String(), "\"success\":true")
 }

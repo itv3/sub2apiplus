@@ -289,7 +289,7 @@ func TestOpenAIGatewayServiceForward_NormalizesResponsesLiteToolsForOAuth(t *tes
 					{"type":"namespace","name":"collaboration","tools":[{"type":"function","name":"spawn_agent","parameters":{"type":"object"}}]}
 				],
 				"input":[{"type":"message","role":"user","content":"hello"}],
-				"tool_choice":{"type":"namespace","name":"collaboration"}
+				"tool_choice":"auto"
 			}`)
 			// 官方 UA 命中 strict 身份校验，须携带完整 Codex 身份
 			body = codexOfficialIngressIdentityForTest(t, c, body)
@@ -306,8 +306,7 @@ func TestOpenAIGatewayServiceForward_NormalizesResponsesLiteToolsForOAuth(t *tes
 			require.Equal(t, "exec", gjson.GetBytes(upstream.lastBody, `tools.#(type=="custom").name`).String())
 			require.True(t, gjson.GetBytes(upstream.lastBody, `tools.#(type=="tool_search")`).Exists())
 			require.Equal(t, "collaboration", gjson.GetBytes(upstream.lastBody, `input.#(type=="additional_tools").tools.0.name`).String())
-			require.Equal(t, "namespace", gjson.GetBytes(upstream.lastBody, "tool_choice.type").String())
-			require.Equal(t, "collaboration", gjson.GetBytes(upstream.lastBody, "tool_choice.name").String())
+			require.Equal(t, "auto", gjson.GetBytes(upstream.lastBody, "tool_choice").String())
 		})
 	}
 }

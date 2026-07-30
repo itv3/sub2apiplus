@@ -201,6 +201,13 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	compactStartedAt := time.Now()
 	defer h.logOpenAIRemoteCompactOutcome(c, compactStartedAt)
 	setOpenAIClientTransportHTTP(c)
+	// 版本画像必须在通用 body reader 删除 Content-Encoding 前冻结官方进程 feature；
+	// 后续账号选择、retry 和 Finalizer 只消费这份调用级快照。
+	if c.Request != nil {
+		c.Request = c.Request.WithContext(
+			service.WithOfficialCodex0145IngressRuntime(c.Request.Context(), c),
+		)
+	}
 
 	requestStart := time.Now()
 
@@ -692,23 +699,18 @@ func isBareOpenAIResponsesPath(c *gin.Context) bool {
 }
 
 func isOpenAIRemoteCompactionV2Request(c *gin.Context, body []byte) bool {
-	stream, valid := parseOpenAICompatibleStream(body)
-	if !valid || !stream || c == nil || c.Request == nil {
+	if c == nil || c.Request == nil || !service.HasCompactionTriggerInInput(body) {
 		return false
 	}
-	for _, header := range c.Request.Header.Values("x-codex-beta-features") {
-		for _, feature := range strings.Split(header, ",") {
-			if strings.TrimSpace(feature) == "remote_compaction_v2" {
-				return true
-			}
-		}
-	}
-	return false
+	// 0.145.0 的 remote_compaction_v2 是版本默认值，不以入站 header 是否出现
+	// 作为开关。第三方请求已经携带 trigger 时保持普通 /responses；只有调用者
+	// 明确请求 /responses/compact 才进入 legacy 分支。
+	return service.OfficialCodexRemoteCompactionV2Default()
 }
 
 // normalizeOpenAIResponsesCompactRequest keeps Codex remote compaction v2 on
-// its native streaming /responses wire and preserves the legacy body-signal
-// promotion for clients that do not explicitly advertise that protocol.
+// its native /responses wire。legacy 不再由“缺少 beta header”猜测，只接受显式
+// /responses/compact；这使第三方转 Codex OAuth 时也继承 0.145.0 的默认 V2 语义。
 // 返回归一化后的 body；ok=false 表示错误响应已写出，调用方应直接 return。
 func (h *OpenAIGatewayHandler) normalizeOpenAIResponsesCompactRequest(c *gin.Context, reqLog *zap.Logger, body []byte) ([]byte, bool) {
 	isCompactRequest := service.IsOpenAIResponsesCompactPathForTest(c)
@@ -1746,7 +1748,21 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			reqLog.Warn("openai.websocket_bind_sticky_session_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 		}
 
-		token, _, err := h.gatewayService.GetRequestCredential(ctx, c, account)
+		accountCtx := ctx
+		if account.IsOpenAIOAuth() {
+			accountCtx, err = service.BindOfficialCodex0145ResponsesWebSocketRuntime(
+				ctx,
+				c,
+				account,
+			)
+			if err != nil {
+				reqLog.Warn("openai.websocket_bind_codex_runtime_failed", zap.Int64("account_id", account.ID), zap.Error(err))
+				closeOpenAIClientWS(wsConn, coderws.StatusPolicyViolation, "invalid Codex client runtime")
+				return
+			}
+		}
+
+		token, _, err := h.gatewayService.GetRequestCredential(accountCtx, c, account)
 		if err != nil {
 			reqLog.Warn("openai.websocket_get_access_token_failed", zap.Int64("account_id", account.ID), zap.Error(err))
 			if ctx.Err() != nil {
@@ -1922,7 +1938,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 		// WebSocket 首包可能很大，hash 必须在 hooks 外算成字符串，避免 AfterTurn 闭包保活请求体。
 		requestPayloadHash = service.HashUsageRequestPayload(wsFirstMessage)
 
-		if err := h.gatewayService.ProxyResponsesWebSocketFromClient(ctx, c, wsConn, account, token, wsFirstMessage, hooks); err != nil {
+		if err := h.gatewayService.ProxyResponsesWebSocketFromClient(accountCtx, c, wsConn, account, token, wsFirstMessage, hooks); err != nil {
 			var failoverErr *service.UpstreamFailoverError
 			if errors.As(err, &failoverErr) {
 				if handleWSFailover(account, failoverErr) {

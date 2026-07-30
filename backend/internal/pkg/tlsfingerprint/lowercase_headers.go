@@ -47,7 +47,7 @@ func (r *lowercaseHeaderRoundTripper) RoundTrip(req *http.Request) (*http.Respon
 	if r == nil || r.base == nil {
 		return nil, http.ErrUseLastResponse
 	}
-	if req == nil || len(req.Header) == 0 {
+	if req == nil {
 		return r.base.RoundTrip(req)
 	}
 
@@ -71,11 +71,13 @@ func (r *lowercaseHeaderRoundTripper) RoundTrip(req *http.Request) (*http.Respon
 		}
 		lowered[lower] = values
 	}
+	// canonical key 必须始终置空：h1 路径下 Request.write 会在请求没有
+	// User-Agent 时自动补 Go-http-client/1.1，而官方画像中的“缺少该槽位”表示
+	// wire 上确实没有该头。h2 路径同样以这个空值标记阻止默认值注入。
+	lowered["User-Agent"] = []string{""}
 	if userAgent != "" {
-		// canonical key 置空串：h1 路径下 Request.write 跳过硬编码输出；
-		// h2 路径下 x/net/http2 以 asciiEqualFold 匹配 user-agent，空值同样跳过
-		// 并标记 didUA，不会再补默认 UA。两条路径都只发出一个小写 user-agent。
-		lowered["User-Agent"] = []string{""}
+		// 画像显式声明 User-Agent 时，空 canonical 值只负责抑制 Go 默认值，
+		// 真正的官方值仍由小写 key 写出，因此 wire 上恰好只有一行。
 		lowered["user-agent"] = []string{userAgent}
 	}
 	cloned.Header = lowered

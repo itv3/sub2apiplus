@@ -88,8 +88,10 @@ func TestOfficialEgressOpenAIHTTPStripsInboundHostHeadersFromOfficialClient(t *t
 func TestOfficialEgressOpenAIWSHandshakeStripsInboundHostHeaders(t *testing.T) {
 	ctx, _, _, _ := newOfficialOpenAIWSContextForTest(t)
 	headers := http.Header{
-		"User-Agent": []string{"Kilo-Code/7.4.0"},
-		"Originator": []string{"third-party"},
+		"User-Agent":         []string{"Kilo-Code/7.4.0"},
+		"Originator":         []string{"third-party"},
+		"Authorization":      []string{"Bearer oauth-test-token"},
+		"Chatgpt-Account-Id": []string{"chatgpt-test-account"},
 	}
 	for name, value := range inboundHostHeaderSamples {
 		headers.Set(name, value)
@@ -103,9 +105,8 @@ func TestOfficialEgressOpenAIWSHandshakeStripsInboundHostHeaders(t *testing.T) {
 	require.Equal(t, openaiidentity.CodexOriginator, headers.Get("originator"))
 }
 
-// 官方 compact 请求不压缩：RequestCompression 默认 None，compact 的 execute_with
-// 不传压缩选项。普通 Responses 才走 zstd。
-func TestOfficialEgressCompactRequestIsNotCompressed(t *testing.T) {
+// 官方进程关闭 enable_request_compression 时，HTTP Responses 保持明文。
+func TestOfficialEgressResponsesRespectsCompressionFeatureOff(t *testing.T) {
 	body := newOfficialOpenAIHTTPTestBody(t, true, false, false)
 	c := newOfficialOpenAIHTTPTestContext(body, "/v1/responses")
 	upstream := &httpUpstreamRecorder{
@@ -117,6 +118,28 @@ func TestOfficialEgressCompactRequestIsNotCompressed(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.NotNil(t, upstream.lastReq)
-	require.Equal(t, "zstd", upstream.lastReq.Header.Get("Content-Encoding"),
-		"普通 Responses 必须保持 zstd 压缩")
+	require.Empty(t, upstream.lastReq.Header.Get("Content-Encoding"))
+}
+
+// 官方进程默认开启压缩时，入站 zstd feature 状态必须在终态重新编码后保留。
+func TestOfficialEgressResponsesRespectsCompressionFeatureOn(t *testing.T) {
+	body := newOfficialOpenAIHTTPTestBody(t, true, false, false)
+	c := newOfficialOpenAIHTTPTestContext(body, "/v1/responses")
+	c.Request.Header.Set("Content-Encoding", "zstd")
+	// 生产 body reader 会在解压后删除 Content-Encoding；画像必须消费此前冻结的
+	// 调用级 feature 快照，而不是在 Finalizer 阶段重新读取已变化的 header。
+	c.Request = c.Request.WithContext(
+		WithOfficialCodex0145IngressRuntime(c.Request.Context(), c),
+	)
+	c.Request.Header.Del("Content-Encoding")
+	upstream := &httpUpstreamRecorder{
+		resp: newOfficialOpenAIHTTPSSECompletedResponse("resp_compress_probe_on"),
+	}
+
+	_, err := newOfficialOpenAIHTTPTestService(upstream).Forward(
+		context.Background(), c, newOfficialOpenAIHTTPTestAccount(94), body,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, upstream.lastReq)
+	require.Equal(t, "zstd", upstream.lastReq.Header.Get("Content-Encoding"))
 }

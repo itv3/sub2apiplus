@@ -23,6 +23,15 @@ class CompactScenarioTest(unittest.TestCase):
         )
         self.assertTrue(any("supports_websockets=false" in value for value in values))
 
+    def test_official_provider_accepts_target_codex_version(self) -> None:
+        values = provider_values("official-http", "0.146.0")
+        self.assertIn(
+            'model_providers.official_openai_http.http_headers.version="0.146.0"',
+            values,
+        )
+        with self.assertRaises(ValueError):
+            provider_values("official-http", '0.146.0"')
+
     def test_command_contains_no_auth_value(self) -> None:
         command = build_app_server_command("/bin/codex", "sub2api-http")
         self.assertEqual(command[:4], ["/bin/codex", "app-server", "--strict-config", "--stdio"])

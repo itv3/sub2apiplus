@@ -124,17 +124,16 @@ func ProvideOpenAITokenProvider(
 	return p
 }
 
-// ProvideOpenAIQuotaService wires the OpenAI quota query/reset service.
-// It depends on the OpenAI token provider for refreshed access tokens and the
-// privacy client factory for the impersonated upstream HTTP client.
+// ProvideOpenAIQuotaService 注入 OpenAI 配额查询与重置服务。
+// wham 使用 Codex backend-client 画像，因此必须走可抓包的统一 HTTPUpstream。
 func ProvideOpenAIQuotaService(
 	accountRepo AccountRepository,
 	proxyRepo ProxyRepository,
 	tokenProvider *OpenAITokenProvider,
-	privacyClientFactory PrivacyClientFactory,
+	httpUpstream HTTPUpstream,
 	openAIGatewayService *OpenAIGatewayService,
 ) *OpenAIQuotaService {
-	service := NewOpenAIQuotaService(accountRepo, proxyRepo, tokenProvider, privacyClientFactory)
+	service := NewOpenAIQuotaService(accountRepo, proxyRepo, tokenProvider, httpUpstream)
 	service.agentIdentityWS = openAIGatewayService
 	return service
 }
@@ -194,6 +193,7 @@ func ProvideAccountTestService(
 		tlsFPProfileService,
 	)
 	service.agentIdentityWS = openAIGatewayService
+	service.openAIGatewayService = openAIGatewayService
 	return service
 }
 

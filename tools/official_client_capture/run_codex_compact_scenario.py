@@ -7,6 +7,7 @@ import argparse
 import json
 import os
 import queue
+import re
 import signal
 import subprocess
 import threading
@@ -40,8 +41,13 @@ def secure_write(path: Path, content: str) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def provider_values(mode: str) -> tuple[str, ...]:
+def provider_values(
+    mode: str, codex_version: str = "0.145.0"
+) -> tuple[str, ...]:
     """返回官方 HTTP 与 Sub2API HTTP 的可复现 provider 配置。"""
+
+    if not re.fullmatch(r"\d+\.\d+\.\d+", codex_version):
+        raise ValueError("Codex 版本必须是三段数字。")
 
     if mode == "official-http":
         return (
@@ -54,7 +60,10 @@ def provider_values(mode: str) -> tuple[str, ...]:
             'model_providers.official_openai_http.wire_api="responses"',
             'model_providers.official_openai_http.requires_openai_auth=true',
             'model_providers.official_openai_http.supports_websockets=false',
-            'model_providers.official_openai_http.http_headers.version="0.145.0"',
+            (
+                "model_providers.official_openai_http.http_headers.version="
+                f'"{codex_version}"'
+            ),
             "features.responses_websockets_v2=false",
         )
     if mode == "sub2api-http":
@@ -74,7 +83,9 @@ def provider_values(mode: str) -> tuple[str, ...]:
     raise ValueError(f"不支持的 compact 模式：{mode}")
 
 
-def build_app_server_command(codex_bin: str, mode: str) -> list[str]:
+def build_app_server_command(
+    codex_bin: str, mode: str, codex_version: str = "0.145.0"
+) -> list[str]:
     """构造不包含任何认证值的 app-server 命令。"""
 
     values = (
@@ -86,7 +97,7 @@ def build_app_server_command(codex_bin: str, mode: str) -> list[str]:
         'approval_policy="never"',
         'sandbox_mode="read-only"',
         'shell_environment_policy.inherit="none"',
-        *provider_values(mode),
+        *provider_values(mode, codex_version),
     )
     command = [codex_bin, "app-server", "--strict-config", "--stdio"]
     for value in values:
@@ -276,7 +287,12 @@ class AppServerClient:
 
 
 def run_scenario(
-    *, codex_bin: str, mode: str, model: str, timeout: int
+    *,
+    codex_bin: str,
+    mode: str,
+    model: str,
+    timeout: int,
+    codex_version: str = "0.145.0",
 ) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
     """执行首轮请求和手动 compact，并返回不可伪造的生命周期计数。"""
 
@@ -287,7 +303,9 @@ def run_scenario(
     elif not environment.get("SUB2API_API_KEY"):
         raise RuntimeError("Sub2API compact 模式缺少 SUB2API_API_KEY。")
     deadline = time.monotonic() + timeout
-    client = AppServerClient(build_app_server_command(codex_bin, mode), environment)
+    client = AppServerClient(
+        build_app_server_command(codex_bin, mode, codex_version), environment
+    )
     valid = False
     error_type = ""
     thread_id = ""
@@ -331,6 +349,7 @@ def run_scenario(
     summary = {
         "schema_version": "codex-compact-capture/v1",
         "mode": mode,
+        "codex_version": codex_version,
         "model": model,
         "valid": valid,
         "error_type": error_type,
@@ -350,6 +369,7 @@ def parse_arguments() -> argparse.Namespace:
         "--mode", choices=("official-http", "sub2api-http"), required=True
     )
     parser.add_argument("--model", required=True)
+    parser.add_argument("--codex-version", default="0.145.0")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--timeout", type=int, default=300)
     return parser.parse_args()
@@ -364,6 +384,7 @@ def main() -> int:
         mode=arguments.mode,
         model=arguments.model,
         timeout=arguments.timeout,
+        codex_version=arguments.codex_version,
     )
     runtime_secret = os.environ.get("SUB2API_API_KEY")
     serialized = "".join(

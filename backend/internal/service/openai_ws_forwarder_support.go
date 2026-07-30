@@ -77,8 +77,23 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 	}
 	prewarmPayload["generate"] = false
 	prewarmPayloadJSON := payloadAsJSONBytes(prewarmPayload)
+	prewarmPayloadJSON, _, err := finalizeOpenAIOfficialEgressWSFrame(
+		ctx,
+		prewarmPayloadJSON,
+		prewarmPayloadJSON,
+		"",
+		false,
+	)
+	if err != nil {
+		lease.MarkBroken()
+		return wrapOpenAIWSFallback("official_egress_prewarm_frame", err)
+	}
 
-	if err := lease.WriteJSONWithContextTimeout(ctx, prewarmPayload, s.openAIWSWriteTimeout()); err != nil {
+	if err := lease.WriteJSONWithContextTimeout(
+		ctx,
+		json.RawMessage(prewarmPayloadJSON),
+		s.openAIWSWriteTimeout(),
+	); err != nil {
 		lease.MarkBroken()
 		logOpenAIWSModeInfo(
 			"prewarm_write_fail account_id=%d conn_id=%s cause=%s",

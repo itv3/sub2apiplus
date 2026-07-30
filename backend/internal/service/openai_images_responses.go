@@ -328,7 +328,25 @@ func openAIImageUploadToDataURL(upload OpenAIImagesUpload) (string, error) {
 	return "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(upload.Data), nil
 }
 
-func buildOpenAIImagesResponsesRequest(parsed *OpenAIImagesRequest, toolModel string) ([]byte, error) {
+// resolveOpenAICodexImagesEndpoint 根据入站操作选择 0.145.0 独立 images 画像。
+// 调用方不得自行拼接 ChatGPT 路径，以免 generations/edits 再次退回 hosted
+// Responses 形态。
+func resolveOpenAICodexImagesEndpoint(parsed *OpenAIImagesRequest) (officialCodexEndpointProfile, error) {
+	endpointID := officialCodexEndpointImagesGenerations
+	if parsed != nil && parsed.IsEdits() {
+		endpointID = officialCodexEndpointImagesEdits
+	}
+	return resolveCodex0145Endpoint(
+		officialCodexVersion0145,
+		codex0145EndpointID(endpointID),
+	)
+}
+
+// buildOpenAICodexImagesRequestBody 构造 Codex 0.145.0 独立 images 端点正文，
+// 不经过 hosted /responses 工具请求。
+// generations 顶层最多五个字段；edits 只在首位增加 images，且 n、mask、style、
+// output_format 等不属于官方结构体的字段一律不会出站。
+func buildOpenAICodexImagesRequestBody(parsed *OpenAIImagesRequest, model string) ([]byte, error) {
 	if parsed == nil {
 		return nil, fmt.Errorf("parsed images request is required")
 	}
@@ -336,12 +354,27 @@ func buildOpenAIImagesResponsesRequest(parsed *OpenAIImagesRequest, toolModel st
 	if prompt == "" {
 		return nil, fmt.Errorf("prompt is required")
 	}
+	model = strings.TrimSpace(model)
+	if model == "" {
+		return nil, fmt.Errorf("model is required")
+	}
+	endpoint, err := resolveOpenAICodexImagesEndpoint(parsed)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Codex images endpoint profile: %w", err)
+	}
 
 	inputImages := make([]string, 0, len(parsed.InputImageURLs)+len(parsed.Uploads))
 	for _, imageURL := range parsed.InputImageURLs {
-		if trimmed := strings.TrimSpace(imageURL); trimmed != "" {
-			inputImages = append(inputImages, trimmed)
+		trimmed := strings.TrimSpace(imageURL)
+		if trimmed == "" {
+			continue
 		}
+		// 官方 image edit 工具先把本地文件读入并转为 data URL。远程 URL 不能
+		// 原样泄漏到该端点，否则 wire 形态与 0.145.0 实抓不一致。
+		if !strings.HasPrefix(strings.ToLower(trimmed), "data:") {
+			return nil, fmt.Errorf("Codex image edit only accepts data URL inputs")
+		}
+		inputImages = append(inputImages, trimmed)
 	}
 	for _, upload := range parsed.Uploads {
 		dataURL, err := openAIImageUploadToDataURL(upload)
@@ -354,84 +387,230 @@ func buildOpenAIImagesResponsesRequest(parsed *OpenAIImagesRequest, toolModel st
 		return nil, fmt.Errorf("image input is required")
 	}
 
-	// tool_choice 必须是 JSON **字符串**：官方 ResponsesApiRequest.tool_choice 的类型
-	// 是 String（codex-api/src/common.rs:223），实测取值恒为 "auto"
-	// （official-body2-20260728T000549Z）。此前发的是对象
-	// {"type":"image_generation"}——那是官方在类型层面就不可能序列化出的形态，
-	// 检测方只需判断该字段的 JSON 类型即可识别。规格表 SPEC-BODY-005。
-	//
-	// 代价：由「强制调用生图工具」变为「模型自主决定」。tools 里只提供
-	// image_generation 一个工具且 prompt 明确要求生图，模型不调用的概率低；万一
-	// 不调用，响应侧取不到 image_generation_call，会返回 502 并附诊断摘要
-	// （summarizeOpenAIImagesNoOutputBody），属可见失败而非静默损坏。
-	// 若生产上出现生图失败率上升，把这里改回对象形式即可立即回退。
-	req := []byte(`{"instructions":"","stream":true,"reasoning":{"effort":"medium","summary":"auto"},"parallel_tool_calls":true,"include":["reasoning.encrypted_content"],"model":"","store":false,"tool_choice":"auto"}`)
-	req, _ = sjson.SetBytes(req, "model", openAIImagesResponsesMainModel)
-
-	input := []byte(`[{"type":"message","role":"user","content":[{"type":"input_text","text":""}]}]`)
-	input, _ = sjson.SetBytes(input, "0.content.0.text", prompt)
-	for index, imageURL := range inputImages {
-		part := []byte(`{"type":"input_image","image_url":""}`)
-		part, _ = sjson.SetBytes(part, "image_url", imageURL)
-		input, _ = sjson.SetRawBytes(input, fmt.Sprintf("0.content.%d", index+1), part)
+	payload := map[string]any{
+		"prompt": prompt,
+		"model":  model,
 	}
-	req, _ = sjson.SetRawBytes(req, "input", input)
-
-	action := "generate"
 	if parsed.IsEdits() {
-		action = "edit"
+		images := make([]map[string]any, 0, len(inputImages))
+		for _, imageURL := range inputImages {
+			images = append(images, map[string]any{"image_url": imageURL})
+		}
+		payload["images"] = images
 	}
-	tool := []byte(`{"type":"image_generation","action":"","model":""}`)
-	tool, _ = sjson.SetBytes(tool, "action", action)
-	tool, _ = sjson.SetBytes(tool, "model", strings.TrimSpace(toolModel))
-	if shouldPassOpenAIImagesN(toolModel, parsed.N) {
-		tool, _ = sjson.SetBytes(tool, "n", parsed.N)
-	}
-
 	for _, field := range []struct {
-		path  string
+		name  string
 		value string
 	}{
-		{path: "size", value: parsed.Size},
-		{path: "quality", value: parsed.Quality},
-		{path: "background", value: parsed.Background},
-		{path: "output_format", value: parsed.OutputFormat},
-		{path: "moderation", value: parsed.Moderation},
-		{path: "style", value: parsed.Style},
+		{name: "background", value: parsed.Background},
+		{name: "quality", value: parsed.Quality},
+		{name: "size", value: parsed.Size},
 	} {
 		if trimmed := strings.TrimSpace(field.value); trimmed != "" {
-			tool, _ = sjson.SetBytes(tool, field.path, trimmed)
+			payload[field.name] = trimmed
 		}
 	}
-	if parsed.OutputCompression != nil {
-		tool, _ = sjson.SetBytes(tool, "output_compression", *parsed.OutputCompression)
-	}
-	if parsed.PartialImages != nil {
-		tool, _ = sjson.SetBytes(tool, "partial_images", *parsed.PartialImages)
-	}
+	return officialCodex0145ProjectEndpointJSONBody(
+		officialCodexVersion0145,
+		codex0145EndpointID(endpoint.ID),
+		payload,
+		nil,
+		nil,
+	)
+}
 
-	maskImageURL := strings.TrimSpace(parsed.MaskImageURL)
-	if parsed.MaskUpload != nil {
-		dataURL, err := openAIImageUploadToDataURL(*parsed.MaskUpload)
-		if err != nil {
-			return nil, err
+// buildOpenAICodexImagesRequest 直接执行端点画像：URL、方法、Host、header 闭包和
+// Cookie 生命周期都由 0.145.0 画像决定，不复用会注入 Responses 会话头与正文修正的
+// buildUpstreamRequest。
+func (s *OpenAIGatewayService) buildOpenAICodexImagesRequest(
+	ctx context.Context,
+	account *Account,
+	body []byte,
+	token string,
+	endpoint officialCodexEndpointProfile,
+	invocationID string,
+) (*http.Request, error) {
+	targetURL, err := officialCodex0145BuildEndpointURL(
+		officialCodexVersion0145,
+		codex0145EndpointID(endpoint.ID),
+		officialCodex0145EndpointURLInput{},
+	)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Codex images endpoint URL: %w", err)
+	}
+	ctx = s.bindOpenAICookieJar(ctx, account)
+	req, err := http.NewRequestWithContext(ctx, endpoint.Method, targetURL.String(), bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
+	req.Host = endpoint.Host
+	req, egressContext, err := attachOfficialCodex0145EndpointRequest(
+		req,
+		account,
+		codex0145EndpointID(endpoint.ID),
+		invocationID,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("attach Codex images endpoint profile: %w", err)
+	}
+	body, err = officialCodex0145FinalizeEndpointJSONBody(egressContext, body, nil)
+	if err != nil {
+		return nil, fmt.Errorf("finalize Codex images body: %w", err)
+	}
+	resetOfficialEgressRequestBody(req, body)
+
+	authHeaders, err := s.buildOpenAIAuthenticationHeaders(ctx, account, token)
+	if err != nil {
+		return nil, fmt.Errorf("build openai authentication headers: %w", err)
+	}
+	for key, values := range authHeaders {
+		for _, value := range values {
+			req.Header.Add(key, value)
 		}
-		maskImageURL = dataURL
 	}
-	if maskImageURL != "" {
-		tool, _ = sjson.SetBytes(tool, "input_image_mask.image_url", maskImageURL)
+	if err := resolveAndSetOpenAIChatGPTAccountHeaders(ctx, s.accountRepo, req.Header, account); err != nil {
+		return nil, fmt.Errorf("resolve chatgpt account headers: %w", err)
 	}
-
-	req, _ = sjson.SetRawBytes(req, "tools", []byte(`[]`))
-	req, _ = sjson.SetRawBytes(req, "tools.-1", tool)
+	req.Header.Set("Content-Type", endpoint.ContentType)
+	req.Header.Set("Accept", endpoint.Accept)
+	userAgent, originator, identityErr := officialCodex0145ProcessIdentity(egressContext)
+	if identityErr != nil {
+		return nil, fmt.Errorf("resolve Codex images process identity: %w", identityErr)
+	}
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Originator", originator)
+	// OAuth 的账号覆写当前为 no-op；仍保留调用顺序，再由画像闭包作最终决定。
+	account.ApplyHeaderOverrides(req.Header)
+	if _, err := officialCodex0145FinalizeEndpointHeaders(egressContext, req.Header, nil); err != nil {
+		return nil, fmt.Errorf("finalize Codex images endpoint headers: %w", err)
+	}
 	return req, nil
 }
 
-func shouldPassOpenAIImagesN(model string, n int) bool {
-	if n <= 1 {
-		return false
+// collectOpenAICodexImagesResponse 解析独立 images 的 unary JSON 响应。上游允许
+// 回传额外的 output_format 与 usage；前者用于 data URL MIME，后者用于计费。
+func collectOpenAICodexImagesResponse(
+	body []byte,
+	fallbackModel string,
+) ([]openAIResponsesImageResult, int64, []byte, openAIResponsesImageResult, OpenAIUsage, error) {
+	if !gjson.ValidBytes(body) || !gjson.ParseBytes(body).IsObject() {
+		return nil, 0, nil, openAIResponsesImageResult{}, OpenAIUsage{}, &OpenAIImagesUpstreamError{
+			StatusCode: http.StatusBadGateway,
+			ErrorType:  "api_error",
+			Code:       "invalid_image_response",
+			Message:    "Upstream returned an invalid images response",
+		}
 	}
-	return !strings.EqualFold(strings.TrimSpace(model), "dall-e-3")
+	root := gjson.ParseBytes(body)
+	createdAt := root.Get("created").Int()
+	if createdAt <= 0 {
+		createdAt = time.Now().Unix()
+	}
+	meta := openAIResponsesImageResult{
+		OutputFormat: strings.TrimSpace(root.Get("output_format").String()),
+		Size:         strings.TrimSpace(root.Get("size").String()),
+		Background:   strings.TrimSpace(root.Get("background").String()),
+		Quality:      strings.TrimSpace(root.Get("quality").String()),
+		Model:        strings.TrimSpace(root.Get("model").String()),
+	}
+	if meta.Model == "" {
+		meta.Model = strings.TrimSpace(fallbackModel)
+	}
+	results := make([]openAIResponsesImageResult, 0)
+	if data := root.Get("data"); data.IsArray() {
+		for _, item := range data.Array() {
+			encoded := strings.TrimSpace(item.Get("b64_json").String())
+			if encoded == "" {
+				continue
+			}
+			result := meta
+			result.Result = encoded
+			result.RevisedPrompt = strings.TrimSpace(item.Get("revised_prompt").String())
+			results = append(results, result)
+		}
+	}
+	if len(results) == 0 {
+		if errorObject := root.Get("error"); errorObject.Exists() {
+			return nil, 0, nil, openAIResponsesImageResult{}, OpenAIUsage{}, openAIImagesUpstreamErrorFromGJSON(errorObject, root.Get("id").String())
+		}
+		return nil, 0, nil, openAIResponsesImageResult{}, OpenAIUsage{}, &OpenAIImagesUpstreamError{
+			StatusCode: http.StatusBadGateway,
+			ErrorType:  "api_error",
+			Code:       "missing_image_output",
+			Message:    "Upstream did not return image output",
+		}
+	}
+	reconcileOpenAIResponsesImageResultSizes(results, &meta)
+	var usageRaw []byte
+	if raw := root.Get("usage"); raw.Exists() && raw.IsObject() {
+		usageRaw = []byte(raw.Raw)
+	}
+	usage, _ := extractOpenAIUsageFromJSONBytes(body)
+	return results, createdAt, usageRaw, meta, usage, nil
+}
+
+func (s *OpenAIGatewayService) handleOpenAICodexImagesNonStreamingResponse(
+	resp *http.Response,
+	c *gin.Context,
+	responseFormat string,
+	fallbackModel string,
+) (OpenAIUsage, int, []string, error) {
+	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
+	if err != nil {
+		return OpenAIUsage{}, 0, nil, err
+	}
+	results, createdAt, usageRaw, meta, usage, err := collectOpenAICodexImagesResponse(body, fallbackModel)
+	if err != nil {
+		return OpenAIUsage{}, 0, nil, err
+	}
+	responseBody, err := buildOpenAIImagesAPIResponse(results, createdAt, usageRaw, meta, responseFormat)
+	if err != nil {
+		return OpenAIUsage{}, 0, nil, err
+	}
+	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	c.Data(resp.StatusCode, "application/json; charset=utf-8", responseBody)
+	return usage, len(results), openAIResponsesImageResultSizes(results), nil
+}
+
+func (s *OpenAIGatewayService) handleOpenAICodexImagesStreamingResponse(
+	resp *http.Response,
+	c *gin.Context,
+	startTime time.Time,
+	responseFormat string,
+	streamPrefix string,
+	fallbackModel string,
+) (OpenAIUsage, int, []string, *int, error) {
+	body, err := ReadUpstreamResponseBody(resp.Body, s.cfg, c, openAITooLargeError)
+	if err != nil {
+		return OpenAIUsage{}, 0, nil, nil, err
+	}
+	results, createdAt, usageRaw, _, usage, err := collectOpenAICodexImagesResponse(body, fallbackModel)
+	if err != nil {
+		return OpenAIUsage{}, 0, nil, nil, err
+	}
+	responseheaders.WriteFilteredHeaders(c.Writer.Header(), resp.Header, s.responseHeaderFilter)
+	c.Header("Content-Type", "text/event-stream")
+	c.Header("Cache-Control", "no-cache")
+	c.Header("Connection", "keep-alive")
+	c.Status(resp.StatusCode)
+	flusher, ok := c.Writer.(http.Flusher)
+	if !ok {
+		return OpenAIUsage{}, 0, nil, nil, fmt.Errorf("streaming is not supported by response writer")
+	}
+	firstTokenMs := int(time.Since(startTime).Milliseconds())
+	eventName := streamPrefix + ".completed"
+	emitted := 0
+	for _, result := range results {
+		payload := buildOpenAIImagesStreamCompletedPayload(eventName, result, responseFormat, createdAt, usageRaw)
+		if err := s.writeOpenAIImagesStreamEvent(c, flusher, eventName, payload); err != nil {
+			// 上游 unary JSON 已完整读取并解析；即使客户端在下游 SSE 写入时断开，
+			// 生成量与 usage 仍必须完整返回给计费链路，且不得换账号重复生成。
+			return usage, len(results), openAIResponsesImageResultSizes(results), &firstTokenMs, err
+		}
+		emitted++
+	}
+	return usage, emitted, openAIResponsesImageResultSizes(results), &firstTokenMs, nil
 }
 
 func extractOpenAIImagesFromResponsesCompleted(payload []byte) ([]openAIResponsesImageResult, int64, []byte, openAIResponsesImageResult, error) {
@@ -1698,6 +1877,19 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		account.Type,
 		len(parsed.Uploads),
 	)
+	endpointProfile, err := resolveOpenAICodexImagesEndpoint(parsed)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Codex images endpoint profile: %w", err)
+	}
+	ctx, err = bindOfficialCodex0145RuntimeStateFromIngress(
+		ctx,
+		c,
+		account,
+		codex0145EndpointID(endpointProfile.ID),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Codex images runtime state: %w", err)
+	}
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	defer releaseUpstreamCtx()
 
@@ -1706,46 +1898,39 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		return nil, err
 	}
 
-	responsesBody, err := buildOpenAIImagesResponsesRequest(parsed, requestModel)
+	imagesBody, err := buildOpenAICodexImagesRequestBody(parsed, requestModel)
 	if err != nil {
 		return nil, err
 	}
-	upstreamReq, err := s.buildUpstreamRequest(upstreamCtx, c, account, responsesBody, token, openAIUpstreamRequestPlan{
-		IsStream:       true,
-		PromptCacheKey: parsed.StickySessionSeed(),
-	})
+	invocationID, err := officialEgressInvocationIDForRequest(c)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Codex images invocation: %w", err)
+	}
+	upstreamReq, err := s.buildOpenAICodexImagesRequest(upstreamCtx, account, imagesBody, token, endpointProfile, invocationID)
 	if err != nil {
 		return nil, err
 	}
-	upstreamReq.Header.Set("Content-Type", "application/json")
-	upstreamReq.Header.Set("Accept", "text/event-stream")
+	SetActualOpenAIUpstreamEndpoint(c, endpointProfile.Path)
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
 	upstreamStart := time.Now()
-	// OAuth 的图像请求同样打 chatgpt.com，必须与业务请求同一 TLS 画像，并剥离官方
-	// Codex CLI 从不发送的头。
-	//
-	// OpenAI-Beta 一并删除：官方源码里 OPENAI_BETA_HEADER 的唯一实际使用点是
-	// core/src/client.rs 的 WS 握手，值为 responses_websockets=2026-02-06；官方自己的
-	// images 端点（codex-api/src/endpoint/images.rs）与 HTTP Responses 都不发该头，
-	// 更没有 responses=experimental 这个旧值。openai_codex_identity.go 的注释也已明确
-	// 禁止辅助端点沿用它。
-	if account.IsOpenAIOAuth() {
-		deleteHeaderAllForms(upstreamReq.Header, "OpenAI-Beta")
-		stripOfficialEgressInboundHostHeaders(upstreamReq.Header)
+	// 代理只负责路由，不能改变 Codex 0.145.0 的 TLS/H1 画像；images 的 execute
+	// 路径也明确不启用请求压缩。
+	tlsProfile, err := officialCodex0145ResolveEndpointTLSProfileForURL(
+		officialCodexVersion0145,
+		codex0145EndpointID(endpointProfile.ID),
+		upstreamReq.URL,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Codex images TLS profile: %w", err)
 	}
-	var resp *http.Response
-	if account.IsOpenAIOAuth() {
-		resp, err = s.httpUpstream.DoWithTLS(
-			upstreamReq, proxyURL, account.ID, account.Concurrency,
-			OpenAIOfficialEgressHTTPTLSProfile(strings.TrimSpace(proxyURL) != ""),
-		)
-	} else {
-		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
-	}
+	resp, err := s.httpUpstream.DoWithTLS(
+		upstreamReq, proxyURL, account.ID, account.Concurrency,
+		tlsProfile,
+	)
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 	if err != nil {
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())
@@ -1807,7 +1992,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	// keepalive 心跳字节，避免 failover 第 2 轮起把上一轮心跳残留误判为已写响应。
 	writerSizeBeforeResponse := OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c)
 	if parsed.Stream {
-		usage, imageCount, imageOutputSizes, firstTokenMs, err = s.handleOpenAIImagesOAuthStreamingResponse(resp, c, startTime, parsed.ResponseFormat, openAIImagesStreamPrefix(parsed), requestModel)
+		usage, imageCount, imageOutputSizes, firstTokenMs, err = s.handleOpenAICodexImagesStreamingResponse(resp, c, startTime, parsed.ResponseFormat, openAIImagesStreamPrefix(parsed), requestModel)
 		if err != nil {
 			if imageCount > 0 {
 				return &OpenAIForwardResult{
@@ -1823,6 +2008,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 					ImageSize:        parsed.SizeTier,
 					ImageInputSize:   parsed.Size,
 					ImageOutputSizes: imageOutputSizes,
+					UpstreamEndpoint: endpointProfile.Path,
 				}, err
 			}
 			return nil, s.handleOpenAIImagesOAuthResponseError(
@@ -1837,7 +2023,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 			)
 		}
 	} else {
-		usage, imageCount, imageOutputSizes, err = s.handleOpenAIImagesOAuthNonStreamingResponse(resp, c, parsed.ResponseFormat, requestModel)
+		usage, imageCount, imageOutputSizes, err = s.handleOpenAICodexImagesNonStreamingResponse(resp, c, parsed.ResponseFormat, requestModel)
 		if err != nil {
 			return nil, s.handleOpenAIImagesOAuthResponseError(
 				upstreamCtx,
@@ -1850,9 +2036,6 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 				err,
 			)
 		}
-	}
-	if imageCount <= 0 {
-		imageCount = parsed.N
 	}
 	return &OpenAIForwardResult{
 		RequestID:        resp.Header.Get("x-request-id"),
@@ -1867,6 +2050,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		ImageSize:        parsed.SizeTier,
 		ImageInputSize:   parsed.Size,
 		ImageOutputSizes: imageOutputSizes,
+		UpstreamEndpoint: endpointProfile.Path,
 	}, nil
 }
 
@@ -1914,7 +2098,16 @@ func (s *OpenAIGatewayService) handleOpenAIImagesOAuthResponseError(
 		Message:            upstreamErr.clientMessage(),
 	})
 
-	if !retryable || responseWritten {
+	if !retryable {
+		// 独立 images 端点可能以 HTTP 200 + 顶层 error 返回内容策略或参数错误。
+		// 在尚未写出下游响应时，应按解析出的 4xx 语义回写，不能留下空的 200。
+		if !responseWritten {
+			setOpsUpstreamError(c, upstreamErr.clientStatusCode(), upstreamErr.clientMessage(), requestID)
+			writeOpenAIImagesUpstreamErrorResponse(c, upstreamErr)
+		}
+		return err
+	}
+	if responseWritten {
 		return err
 	}
 

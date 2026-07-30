@@ -187,6 +187,7 @@ func TestOpenAIOfficialEgressNonLiteUsesOfficialTopLevelContract(t *testing.T) {
 		payload,
 		contract,
 		identity,
+		officialOpenAIReasoningDefaults{},
 		false,
 		false,
 		false,

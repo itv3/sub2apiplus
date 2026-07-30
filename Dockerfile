@@ -55,6 +55,7 @@ FROM --platform=${BUILDPLATFORM} ${GOLANG_IMAGE} AS backend-builder
 ARG VERSION=
 ARG COMMIT=docker
 ARG DATE
+ARG GO_BUILD_TAGS=embed
 ARG GOPROXY
 ARG GOSUMDB
 # buildx 根据 --platform 目标自动填充，例如 linux/amd64。
@@ -89,7 +90,7 @@ RUN --mount=type=cache,id=sub2api-gomod,target=/go/pkg/mod \
     if [ -z "${VERSION_VALUE}" ]; then VERSION_VALUE="$(./scripts/resolve-version.sh)"; fi && \
     DATE_VALUE="${DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" && \
     CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build \
-    -tags embed \
+    -tags "${GO_BUILD_TAGS}" \
     -ldflags="-s -w -X main.Version=${VERSION_VALUE} -X main.Commit=${COMMIT} -X main.Date=${DATE_VALUE} -X main.BuildType=release" \
     -trimpath \
     -o /app/sub2api \

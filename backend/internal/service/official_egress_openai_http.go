@@ -74,6 +74,136 @@ type officialOpenAIHTTPIdentity struct {
 	source         OfficialEgressFieldSource
 }
 
+type officialOpenAIIdentityKind string
+
+const (
+	officialOpenAIIdentityKindRoot                officialOpenAIIdentityKind = "root"
+	officialOpenAIIdentityKindSubagent            officialOpenAIIdentityKind = "subagent"
+	officialOpenAIIdentityKindGuardian            officialOpenAIIdentityKind = "guardian"
+	officialOpenAIIdentityKindMemoryConsolidation officialOpenAIIdentityKind = "memory_consolidation"
+)
+
+type officialOpenAIIngressIdentityValues struct {
+	sessionID      string
+	threadID       string
+	promptCacheKey string
+}
+
+// validateOfficialOpenAIIngressIdentityKind 按 Codex 0.145.0 的身份来源画像验证
+// prompt cache 锚点。根线程使用 session UUID；普通子代理与内部记忆合并仍沿用
+// session UUID；guardian 是唯一源码明确覆写为 guardian:<parent_thread_id> 的分支。
+func validateOfficialOpenAIIngressIdentityKind(
+	scope string,
+	c *gin.Context,
+	clientMetadata map[string]any,
+	turnMetadata map[string]any,
+	identity officialOpenAIIngressIdentityValues,
+	isCompact bool,
+) (officialOpenAIIdentityKind, error) {
+	if c == nil {
+		return "", fmt.Errorf("%s ingress context is unavailable", scope)
+	}
+	subagent := strings.TrimSpace(c.GetHeader("x-openai-subagent"))
+	memoryGeneration := strings.TrimSpace(c.GetHeader("x-openai-memgen-request"))
+	parentThreadID := strings.TrimSpace(c.GetHeader("x-codex-parent-thread-id"))
+	turnSource := officialOpenAIString(turnMetadata, "thread_source")
+	turnSubagentKind := officialOpenAIString(turnMetadata, "subagent_kind")
+	turnParentThreadID := officialOpenAIString(turnMetadata, "parent_thread_id")
+
+	for _, headerName := range []string{"x-openai-subagent", "x-codex-parent-thread-id"} {
+		rawMetadataValue, exists := clientMetadata[headerName]
+		if !exists {
+			continue
+		}
+		metadataValue, valid := rawMetadataValue.(string)
+		if !valid || strings.TrimSpace(metadataValue) != strings.TrimSpace(c.GetHeader(headerName)) {
+			return "", fmt.Errorf(
+				"%s client_metadata %s conflicts with ingress header",
+				scope,
+				headerName,
+			)
+		}
+	}
+
+	if parentThreadID != "" {
+		if _, err := uuid.Parse(parentThreadID); err != nil {
+			return "", fmt.Errorf("%s parent thread must be UUID", scope)
+		}
+		if turnParentThreadID != parentThreadID {
+			return "", fmt.Errorf("%s parent thread conflicts with turn metadata", scope)
+		}
+	}
+	// legacy compact 的 wire schema 没有 client_metadata，因此只能依靠入口
+	// 条件头与 x-codex-turn-metadata 交叉验证；普通 responses 仍要求正文副本存在。
+	if !isCompact && subagent != "" {
+		metadataSubagent, exists := clientMetadata["x-openai-subagent"].(string)
+		if !exists || strings.TrimSpace(metadataSubagent) != subagent {
+			return "", fmt.Errorf("%s subagent is missing from client_metadata", scope)
+		}
+	}
+	if !isCompact && parentThreadID != "" {
+		metadataParent, exists := clientMetadata["x-codex-parent-thread-id"].(string)
+		if !exists || strings.TrimSpace(metadataParent) != parentThreadID {
+			return "", fmt.Errorf("%s parent thread is missing from client_metadata", scope)
+		}
+	}
+
+	kind := officialOpenAIIdentityKindRoot
+	expectedPromptCacheKey := identity.sessionID
+	switch {
+	case memoryGeneration != "":
+		if memoryGeneration != "true" || subagent != "memory_consolidation" || parentThreadID != "" ||
+			turnSource != "memory_consolidation" || turnSubagentKind != "" || turnParentThreadID != "" {
+			return "", fmt.Errorf("%s memory consolidation identity conflicts", scope)
+		}
+		kind = officialOpenAIIdentityKindMemoryConsolidation
+	case subagent == "guardian":
+		if parentThreadID == "" || turnSource != "subagent" ||
+			turnSubagentKind != "guardian" || turnParentThreadID != parentThreadID {
+			return "", fmt.Errorf("%s guardian identity conflicts", scope)
+		}
+		kind = officialOpenAIIdentityKindGuardian
+		expectedPromptCacheKey = "guardian:" + parentThreadID
+	case subagent != "":
+		if turnSource != "subagent" || turnSubagentKind == "" {
+			return "", fmt.Errorf("%s subagent identity conflicts", scope)
+		}
+		kind = officialOpenAIIdentityKindSubagent
+	case parentThreadID != "" || turnSource == "subagent" ||
+		turnSource == "memory_consolidation" || turnSubagentKind != "" || turnParentThreadID != "":
+		return "", fmt.Errorf("%s root identity contains subagent metadata", scope)
+	}
+
+	if kind == officialOpenAIIdentityKindRoot {
+		if identity.sessionID != identity.threadID {
+			return "", fmt.Errorf("%s root session/thread identity conflicts", scope)
+		}
+	} else if identity.sessionID == identity.threadID {
+		return "", fmt.Errorf("%s child session/thread identity conflicts", scope)
+	}
+	if identity.promptCacheKey != expectedPromptCacheKey {
+		return "", fmt.Errorf("%s %s prompt_cache_key conflicts with identity", scope, kind)
+	}
+	return kind, nil
+}
+
+// officialOpenAICompactionMetadata 按官方 TurnMetadata 的声明顺序序列化。
+// 这里使用结构体而非 map，避免 encoding/json 把嵌套字段改为字典序。
+type officialOpenAICompactionMetadata struct {
+	Trigger        string `json:"trigger"`
+	Reason         string `json:"reason"`
+	Implementation string `json:"implementation"`
+	Phase          string `json:"phase"`
+	Strategy       string `json:"strategy"`
+}
+
+var officialOpenAICompactionReasons = map[string]struct{}{
+	"user_requested":    {},
+	"context_limit":     {},
+	"model_downshift":   {},
+	"comp_hash_changed": {},
+}
+
 // captureOfficialOpenAIHTTPBodyContract 在既有 OAuth 转换前记录入口契约。
 // 标准第三方请求可以没有 Codex 身份字段；真正的官方 Codex 请求仍由 Finalizer
 // 按入口 Header 严格校验完整身份。
@@ -99,6 +229,38 @@ func captureOfficialOpenAIHTTPBodyContract(body []byte) (*officialOpenAIHTTPBody
 	}
 	contract.additionalTools = collectOfficialOpenAIAdditionalTools(payload)
 	contract.callIDs = collectOfficialOpenAICallIDs(payload)
+	return contract, nil
+}
+
+// captureOfficialOpenAIHTTPBodyContractForRequest 在正文契约之上恢复 Handler
+// 已显式保存的 legacy compact 会话锚点。compact normalizer 会按独立 schema
+// 删除 prompt_cache_key，因此这里只接受同一请求上下文中预先存在的原始 seed；
+// 不从 Header、正文其他字段或随机值生成、猜测身份。
+func captureOfficialOpenAIHTTPBodyContractForRequest(
+	c *gin.Context,
+	body []byte,
+) (*officialOpenAIHTTPBodyContract, error) {
+	contract, err := captureOfficialOpenAIHTTPBodyContract(body)
+	if err != nil {
+		return nil, err
+	}
+	if c == nil || !isOpenAIResponsesCompactPath(c) {
+		return contract, nil
+	}
+	rawSeed, exists := c.Get(openAICompactSessionSeedKey)
+	if !exists {
+		return contract, nil
+	}
+	seed, ok := rawSeed.(string)
+	if !ok || strings.TrimSpace(seed) == "" {
+		return contract, nil
+	}
+	seed = strings.TrimSpace(seed)
+	if contract.promptCacheKeySet && contract.promptCacheKey != seed {
+		return nil, errors.New("OpenAI official egress compact prompt_cache_key conflicts with captured seed")
+	}
+	contract.promptCacheKeySet = true
+	contract.promptCacheKey = seed
 	return contract, nil
 }
 
@@ -227,7 +389,7 @@ func finalizeOpenAIOfficialEgressHTTPRequest(
 	if profile.TargetPlatform != PlatformOpenAI {
 		return nil, result, errors.New("OpenAI finalizer received non-OpenAI profile")
 	}
-	clientProfile, err := resolveOfficialClientProfileByID(profile.ID)
+	userAgent, originator, err := officialCodex0145ProcessIdentity(egressContext)
 	if err != nil {
 		return nil, result, err
 	}
@@ -244,10 +406,32 @@ func finalizeOpenAIOfficialEgressHTTPRequest(
 	if err != nil {
 		return nil, result, err
 	}
+	toolPresentationModified := false
+	if !strictIngressIdentity && !plan.IsCompact {
+		payload, decodeErr := decodeOfficialJSONObjectUseNumber(body)
+		if decodeErr != nil {
+			return nil, result, fmt.Errorf("解析 Codex 派生工具呈现：%w", decodeErr)
+		}
+		toolPresentationModified, err = officialCodex0145NormalizeDerivedToolPresentation(
+			egressContext.ProfileVersion(),
+			codex0145EndpointID(egressContext.CodexEndpointProfileID()),
+			payload,
+		)
+		if err != nil {
+			return nil, result, err
+		}
+		if toolPresentationModified {
+			body, err = marshalOfficialJSONObjectPreservingOrderAndRaw(payload, body)
+			if err != nil {
+				return nil, result, fmt.Errorf("编码 Codex 派生工具呈现：%w", err)
+			}
+		}
+	}
 	finalBody, bodyModified, err := finalizeOfficialOpenAIHTTPBody(
 		body,
 		plan.OfficialEgressBodyContract,
 		identity,
+		officialOpenAIReasoningDefaultsFromContext(egressContext),
 		strictIngressIdentity,
 		plan.IsCompact,
 		egressContext.responsesLite,
@@ -256,6 +440,15 @@ func finalizeOpenAIOfficialEgressHTTPRequest(
 	if err != nil {
 		return nil, result, err
 	}
+	finalBody, err = officialCodex0145FinalizeEndpointJSONBody(
+		egressContext,
+		finalBody,
+		nil,
+	)
+	if err != nil {
+		return nil, result, fmt.Errorf("按 Codex 版本画像定型 HTTP body：%w", err)
+	}
+	bodyModified = bodyModified || toolPresentationModified
 	if bodyModified {
 		result.Modifications = append(result.Modifications,
 			OfficialEgressModification{Kind: "body", Field: "instructions"},
@@ -267,10 +460,12 @@ func finalizeOpenAIOfficialEgressHTTPRequest(
 	}
 	finalizeOfficialOpenAIHTTPHeaders(
 		req.Header,
-		clientProfile,
+		userAgent,
+		originator,
 		identity,
 		plan.IsCompact,
 		egressContext.responsesLite,
+		plan.OfficialEgressTurnState,
 	)
 	result.Modifications = append(result.Modifications,
 		OfficialEgressModification{Kind: "header", Field: "session-id"},
@@ -285,25 +480,70 @@ func finalizeOpenAIOfficialEgressHTTPRequest(
 	}
 	logOfficialEgressProfileResolved(egressContext, profile)
 	resetOfficialEgressRequestBody(req, finalBody)
-	// compact 端点不压缩：官方 RequestCompression 的默认值是 None，且 compact 的
-	// execute_with 只设置 timeout、不传压缩选项，因此官方 compact 请求发的是明文。
-	// 普通 Responses 才走 zstd（responses_request_compression 三个条件同时成立）。
-	if account != nil && account.IsOpenAIOAuth() && !plan.IsCompact {
-		if err := compressOfficialOpenAIHTTPRequest(req, finalBody); err != nil {
+	requestCompression, err := resolveOfficialOpenAIRequestCompression(egressContext)
+	if err != nil {
+		return nil, result, err
+	}
+	// compact 端点始终明文。普通 Responses 的画像默认开启 zstd；若入站本身是
+	// 官方 Codex HTTP fallback，则以它是否发送 content-encoding:zstd 还原该进程
+	// 的 feature 状态。该状态已在解压前冻结到版本运行态，不能再从当前 header 猜测。
+	if account != nil && account.IsOpenAIOAuth() && !plan.IsCompact && requestCompression.Enabled {
+		if err := compressOfficialOpenAIHTTPRequest(req, finalBody, requestCompression.Level); err != nil {
 			return nil, result, err
 		}
 		result.Modifications = append(result.Modifications,
 			OfficialEgressModification{Kind: "header", Field: "Content-Encoding"},
 		)
 	}
+	if plan.IsCompact || !requestCompression.Enabled {
+		deleteHeaderAllForms(req.Header, "content-encoding")
+	}
+	if _, err := officialCodex0145FinalizeEndpointHeaders(
+		egressContext,
+		req.Header,
+		map[string]bool{
+			officialCodexConditionResponsesLite:      egressContext.responsesLite,
+			officialCodexConditionRequestCompression: headerContainsToken(req.Header, "content-encoding", "zstd"),
+		},
+	); err != nil {
+		return nil, result, fmt.Errorf("按 Codex 版本画像定型 HTTP header：%w", err)
+	}
 	return req, result, nil
 }
 
+type officialOpenAIRequestCompressionPlan struct {
+	Enabled bool
+	Level   int
+}
+
+func resolveOfficialOpenAIRequestCompression(
+	egressContext *OfficialEgressContext,
+) (officialOpenAIRequestCompressionPlan, error) {
+	if egressContext == nil {
+		return officialOpenAIRequestCompressionPlan{}, errors.New("OpenAI official request compression requires egress context")
+	}
+	profile, err := resolveCodex0145VersionProfile(egressContext.ProfileVersion())
+	if err != nil {
+		return officialOpenAIRequestCompressionPlan{}, err
+	}
+	if !profile.FeatureDefaults.EnableRequestCompression {
+		return officialOpenAIRequestCompressionPlan{}, nil
+	}
+	state := cloneOfficialCodex0145RuntimeState(egressContext.codexRuntimeState)
+	if err := validateOfficialCodex0145RuntimeState(state); err != nil {
+		return officialOpenAIRequestCompressionPlan{}, err
+	}
+	return officialOpenAIRequestCompressionPlan{
+		Enabled: state.RequestCompressionEnabled,
+		Level:   profile.FeatureDefaults.RequestCompressionLevel,
+	}, nil
+}
+
 // compressOfficialOpenAIHTTPRequest 在所有 JSON 终态修正完成后执行官方 Codex
-// 请求压缩。level 3 与 Codex 0.145.0 的稳定配置一致；reset helper 同步 Body、
-// ContentLength 与 GetBody，确保重定向、重试和抓包读取到同一份压缩字节。
-func compressOfficialOpenAIHTTPRequest(req *http.Request, body []byte) error {
-	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(3)))
+// 请求压缩。level 由不可变版本画像传入；reset helper 同步 Body、ContentLength
+// 与 GetBody，确保重定向、重试和抓包读取到同一份压缩字节。
+func compressOfficialOpenAIHTTPRequest(req *http.Request, body []byte, level int) error {
+	encoder, err := zstd.NewWriter(nil, zstd.WithEncoderLevel(zstd.EncoderLevelFromZstd(level)))
 	if err != nil {
 		return fmt.Errorf("create OpenAI official zstd encoder: %w", err)
 	}
@@ -320,6 +560,7 @@ func finalizeOfficialOpenAIHTTPBody(
 	body []byte,
 	contract *officialOpenAIHTTPBodyContract,
 	identity officialOpenAIHTTPIdentity,
+	reasoningDefaults officialOpenAIReasoningDefaults,
 	strictIngressIdentity bool,
 	isCompact bool,
 	useResponsesLite bool,
@@ -334,6 +575,17 @@ func finalizeOfficialOpenAIHTTPBody(
 	}
 
 	modified := false
+	allowedTopLevel := officialOpenAIHTTPTopLevelAllowed
+	if isCompact {
+		allowedTopLevel = officialOpenAICompactTopLevelAllowed
+	}
+	if strictIngressIdentity {
+		if err := validateOfficialOpenAITopLevelContract(payload, allowedTopLevel, !isCompact); err != nil {
+			return nil, false, err
+		}
+	} else if isCompact && stripNonOfficialOpenAITopLevelFields(payload, allowedTopLevel) {
+		modified = true
+	}
 	currentInstructions, currentInstructionsPresent := payload["instructions"]
 	if strictIngressIdentity {
 		if !contract.instructionsPresent {
@@ -371,6 +623,7 @@ func finalizeOfficialOpenAIHTTPBody(
 			payload,
 			useResponsesLite,
 			supportsParallelTools,
+			reasoningDefaults,
 			officialOpenAIHTTPTopLevelAllowed,
 		)
 		if err != nil {
@@ -456,9 +709,33 @@ func finalizeOfficialOpenAIHTTPBody(
 // 乃至任意自定义字段若不剔除，会被保序序列化器当作未知字段追加到 body 末尾送达上游。
 // HTTP 与 WS 字段集不同（WS 多 type / previous_response_id / generate），故各用一份。
 var (
-	officialOpenAIHTTPTopLevelAllowed = newOfficialOpenAITopLevelAllowSet(officialOpenAIHTTPFieldOrder)
-	officialOpenAIWSTopLevelAllowed   = newOfficialOpenAITopLevelAllowSet(officialOpenAIWSFieldOrder)
+	officialOpenAIHTTPTopLevelAllowed    = newOfficialOpenAITopLevelAllowSet(officialOpenAIHTTPFieldOrder)
+	officialOpenAICompactTopLevelAllowed = newOfficialOpenAITopLevelAllowSet(officialOpenAICompactFieldOrder)
+	officialOpenAIWSTopLevelAllowed      = newOfficialOpenAITopLevelAllowSet(officialOpenAIWSFieldOrder)
 )
+
+// officialOpenAIReasoningDefaults 是 `/models` 清单在请求上下文中的冻结投影。
+// 它不是全局兜底：不同模型、不同账号清单可以给出不同默认值。
+type officialOpenAIReasoningDefaults struct {
+	Effort          string
+	Summary         string
+	SupportsSummary bool
+	Known           bool
+}
+
+func officialOpenAIReasoningDefaultsFromContext(
+	egressContext *OfficialEgressContext,
+) officialOpenAIReasoningDefaults {
+	if egressContext == nil {
+		return officialOpenAIReasoningDefaults{}
+	}
+	return officialOpenAIReasoningDefaults{
+		Effort:          egressContext.defaultReasoningLevel,
+		Summary:         egressContext.defaultReasoningSummary,
+		SupportsSummary: egressContext.supportsReasoningSummary,
+		Known:           egressContext.reasoningDefaultsKnown,
+	}
+}
 
 func newOfficialOpenAITopLevelAllowSet(fields []string) map[string]struct{} {
 	allowed := make(map[string]struct{}, len(fields))
@@ -481,10 +758,38 @@ func stripNonOfficialOpenAITopLevelFields(payload map[string]any, allowed map[st
 	return removed
 }
 
+// validateOfficialOpenAITopLevelContract 对伪装为官方客户端的入站正文执行闭包校验。
+// 官方 Rust 结构体不会序列化画像外字段；严格入口出现未知字段时必须拒绝，不能
+// 以“透明透传”为由制造官方客户端不可能产生的 body。
+func validateOfficialOpenAITopLevelContract(
+	payload map[string]any,
+	allowed map[string]struct{},
+	requireToolChoice bool,
+) error {
+	for key := range payload {
+		if _, ok := allowed[key]; !ok {
+			return fmt.Errorf("OpenAI official egress body contains unknown top-level field: %s", key)
+		}
+	}
+	toolChoice, exists := payload["tool_choice"]
+	if !exists {
+		if requireToolChoice {
+			return errors.New("OpenAI official egress tool_choice is missing")
+		}
+		return nil
+	}
+	value, ok := toolChoice.(string)
+	if !ok || value != "auto" {
+		return errors.New("OpenAI official egress tool_choice must be the string auto")
+	}
+	return nil
+}
+
 func normalizeDerivedOfficialOpenAIHTTPBody(
 	payload map[string]any,
 	useResponsesLite bool,
 	supportsParallelTools bool,
+	reasoningDefaults officialOpenAIReasoningDefaults,
 	allowedTopLevel map[string]struct{},
 ) (bool, error) {
 	modified, err := normalizeDerivedOfficialOpenAIInput(payload)
@@ -521,6 +826,16 @@ func normalizeDerivedOfficialOpenAIHTTPBody(
 		} else if reasoningModified {
 			modified = true
 		}
+	}
+	reasoningModified, err := normalizeDerivedOfficialOpenAIReasoning(
+		payload,
+		reasoningDefaults,
+	)
+	if err != nil {
+		return false, err
+	}
+	if reasoningModified {
+		modified = true
 	}
 
 	// Kilo/OpenAI OAuth 与 Codex CLI 均不会向 Codex 官方上游发送
@@ -568,6 +883,75 @@ func normalizeDerivedOfficialOpenAIHTTPBody(
 		if verbosity, _ := text["verbosity"].(string); verbosity != "low" {
 			text["verbosity"] = "low"
 			modified = true
+		}
+	}
+	return modified, nil
+}
+
+// normalizeDerivedOfficialOpenAIReasoning 复刻 Codex build_reasoning：effort
+// 缺省时取模型清单默认值，summary 缺省时取模型默认值；不支持 summary 或显式
+// `none` 时按 serde Option 语义省略。reasoning 外层结构体本身始终存在。
+func normalizeDerivedOfficialOpenAIReasoning(
+	payload map[string]any,
+	defaults officialOpenAIReasoningDefaults,
+) (bool, error) {
+	rawReasoning, exists := payload["reasoning"]
+	reasoning, ok := rawReasoning.(map[string]any)
+	modified := false
+	if !exists || rawReasoning == nil {
+		reasoning = make(map[string]any)
+		payload["reasoning"] = reasoning
+		modified = true
+	} else if !ok {
+		return false, errors.New("OpenAI official egress reasoning must be an object")
+	}
+
+	if rawEffort, exists := reasoning["effort"]; exists {
+		effort, ok := rawEffort.(string)
+		if !ok || strings.TrimSpace(effort) == "" {
+			return false, errors.New("OpenAI official egress reasoning.effort must be a non-empty string")
+		}
+		// 0.145.0 的 Ultra 只用于本地配置，对 Responses wire 映射为 Max。
+		if strings.EqualFold(strings.TrimSpace(effort), "ultra") && effort != "max" {
+			reasoning["effort"] = "max"
+			modified = true
+		}
+	} else if effort := strings.TrimSpace(defaults.Effort); effort != "" {
+		if strings.EqualFold(effort, "ultra") {
+			effort = "max"
+		}
+		reasoning["effort"] = strings.ToLower(effort)
+		modified = true
+	}
+
+	if rawSummary, exists := reasoning["summary"]; exists {
+		summary, ok := rawSummary.(string)
+		if !ok {
+			return false, errors.New("OpenAI official egress reasoning.summary must be a string")
+		}
+		summary = strings.ToLower(strings.TrimSpace(summary))
+		switch summary {
+		case "none":
+			delete(reasoning, "summary")
+			modified = true
+		case "auto", "concise", "detailed":
+			if defaults.Known && !defaults.SupportsSummary {
+				delete(reasoning, "summary")
+				modified = true
+			} else if rawSummary != summary {
+				reasoning["summary"] = summary
+				modified = true
+			}
+		default:
+			return false, errors.New("OpenAI official egress reasoning.summary is invalid")
+		}
+	} else if summary := strings.ToLower(strings.TrimSpace(defaults.Summary)); defaults.Known && defaults.SupportsSummary && summary != "" && summary != "none" {
+		switch summary {
+		case "auto", "concise", "detailed":
+			reasoning["summary"] = summary
+			modified = true
+		default:
+			return false, errors.New("OpenAI official egress model reasoning summary is invalid")
 		}
 	}
 	return modified, nil
@@ -810,11 +1194,10 @@ func resolveExplicitOfficialOpenAIHTTPIdentity(
 		}
 	}
 	uuidIdentity := map[string]string{
-		"installation_id":  identity.installationID,
-		"session_id":       identity.sessionID,
-		"thread_id":        identity.threadID,
-		"turn_id":          identity.turnID,
-		"prompt_cache_key": identity.promptCacheKey,
+		"installation_id": identity.installationID,
+		"session_id":      identity.sessionID,
+		"thread_id":       identity.threadID,
+		"turn_id":         identity.turnID,
 	}
 	if !isCompact {
 		uuidIdentity["client_request"] = identity.clientRequest
@@ -824,16 +1207,12 @@ func resolveExplicitOfficialOpenAIHTTPIdentity(
 			return officialOpenAIHTTPIdentity{}, fmt.Errorf("OpenAI official egress %s must be UUID", name)
 		}
 	}
-	if identity.sessionID != identity.threadID ||
-		identity.sessionID != identity.promptCacheKey {
-		return officialOpenAIHTTPIdentity{}, errors.New("OpenAI official egress session/thread/body identity conflicts")
-	}
-	if !isCompact && identity.sessionID != identity.clientRequest {
-		return officialOpenAIHTTPIdentity{}, errors.New("OpenAI official egress session/request identity conflicts")
+	if !isCompact && identity.threadID != identity.clientRequest {
+		return officialOpenAIHTTPIdentity{}, errors.New("OpenAI official egress thread/request identity conflicts")
 	}
 	windowParts := strings.Split(identity.windowID, ":")
-	if len(windowParts) != 2 || windowParts[0] != identity.sessionID {
-		return officialOpenAIHTTPIdentity{}, errors.New("OpenAI official egress window_id conflicts with session")
+	if len(windowParts) != 2 || windowParts[0] != identity.threadID {
+		return officialOpenAIHTTPIdentity{}, errors.New("OpenAI official egress window_id conflicts with thread")
 	}
 	windowIndex, err := strconv.Atoi(windowParts[1])
 	if err != nil || windowIndex < 0 {
@@ -846,7 +1225,6 @@ func resolveExplicitOfficialOpenAIHTTPIdentity(
 		strings.TrimSpace(c.GetHeader("x-codex-turn-metadata")) != identity.turnMetadata {
 		return officialOpenAIHTTPIdentity{}, errors.New("OpenAI official egress ingress headers conflict with body identity")
 	}
-
 	var turnMetadata map[string]any
 	if err := json.Unmarshal([]byte(identity.turnMetadata), &turnMetadata); err != nil {
 		return officialOpenAIHTTPIdentity{}, errors.New("OpenAI official egress turn metadata must be valid JSON")
@@ -857,6 +1235,20 @@ func resolveExplicitOfficialOpenAIHTTPIdentity(
 		officialOpenAIString(turnMetadata, "turn_id") != identity.turnID ||
 		officialOpenAIString(turnMetadata, "window_id") != identity.windowID {
 		return officialOpenAIHTTPIdentity{}, errors.New("OpenAI official egress turn metadata conflicts with identity")
+	}
+	if _, err := validateOfficialOpenAIIngressIdentityKind(
+		"OpenAI official egress",
+		c,
+		contract.clientMetadata,
+		turnMetadata,
+		officialOpenAIIngressIdentityValues{
+			sessionID:      identity.sessionID,
+			threadID:       identity.threadID,
+			promptCacheKey: identity.promptCacheKey,
+		},
+		isCompact,
+	); err != nil {
+		return officialOpenAIHTTPIdentity{}, err
 	}
 	return identity, nil
 }
@@ -922,6 +1314,10 @@ func deriveOfficialOpenAIHTTPIdentity(
 		"sandbox":                 "seccomp",
 		"turn_started_at_unix_ms": turnStartedAtUnixMS,
 	}
+	if compaction, ok := resolveDerivedOfficialOpenAICompactionMetadata(c, body); ok {
+		turnMetadataValues["request_kind"] = "compaction"
+		turnMetadataValues["compaction"] = compaction
+	}
 	turnMetadataBytes, _ := marshalOfficialOpenAITurnMetadata(turnMetadataValues)
 	return officialOpenAIHTTPIdentity{
 		installationID: installationID,
@@ -934,6 +1330,46 @@ func deriveOfficialOpenAIHTTPIdentity(
 		promptCacheKey: sessionID,
 		source:         OfficialEgressFieldSourceDerived,
 	}
+}
+
+// resolveDerivedOfficialOpenAICompactionMetadata 把第三方请求能表达的压缩语义收敛为
+// Codex 0.145.0 的四种 reason。已有 trigger 不会再次追加；本函数只生成元数据。
+// 三种自动 reason 可由入站 x-codex-turn-metadata 原样携带，非法值不会伪造第五种。
+func resolveDerivedOfficialOpenAICompactionMetadata(
+	c *gin.Context,
+	body []byte,
+) (officialOpenAICompactionMetadata, bool) {
+	legacy := isOpenAIResponsesCompactPath(c)
+	remoteV2 := HasCompactionTriggerInInput(body) && OfficialCodexRemoteCompactionV2Default()
+	if !legacy && !remoteV2 {
+		return officialOpenAICompactionMetadata{}, false
+	}
+
+	reason := "user_requested"
+	if c != nil {
+		candidate := strings.TrimSpace(gjson.Get(c.GetHeader("x-codex-turn-metadata"), "compaction.reason").String())
+		if _, ok := officialOpenAICompactionReasons[candidate]; ok {
+			reason = candidate
+		}
+	}
+	metadata := officialOpenAICompactionMetadata{
+		Trigger:        "manual",
+		Reason:         reason,
+		Implementation: "responses_compaction_v2",
+		Phase:          "standalone_turn",
+		Strategy:       "memento",
+	}
+	if legacy {
+		metadata.Implementation = "responses_compact"
+	}
+	if reason != "user_requested" {
+		metadata.Trigger = "auto"
+		metadata.Phase = "mid_turn"
+		if reason == "model_downshift" || reason == "comp_hash_changed" {
+			metadata.Phase = "pre_turn"
+		}
+	}
+	return metadata, true
 }
 
 // resolveOfficialOpenAIHTTPTurnStart 在同一入站请求重试和同一 turn 的独立续轮中
@@ -1142,10 +1578,12 @@ func registerOfficialOpenAIHTTPIdentity(
 
 func finalizeOfficialOpenAIHTTPHeaders(
 	header http.Header,
-	profile officialClientResolvedProfile,
+	userAgent string,
+	originator string,
 	identity officialOpenAIHTTPIdentity,
 	isCompact bool,
 	useResponsesLite bool,
+	turnState string,
 ) {
 	for _, name := range []string{
 		"conversation_id",
@@ -1172,8 +1610,8 @@ func finalizeOfficialOpenAIHTTPHeaders(
 		header.Set("Accept", "text/event-stream")
 	}
 	header.Set("Content-Type", "application/json")
-	header.Set("User-Agent", profile.Build.UserAgent)
-	header.Set("originator", profile.Build.Originator)
+	header.Set("User-Agent", userAgent)
+	header.Set("originator", originator)
 	header.Set("session-id", identity.sessionID)
 	header.Set("thread-id", identity.threadID)
 	if !isCompact {
@@ -1181,8 +1619,9 @@ func finalizeOfficialOpenAIHTTPHeaders(
 	}
 	header.Set("x-codex-turn-metadata", identity.turnMetadata)
 	header.Set("x-codex-window-id", identity.windowID)
-	for _, item := range profile.Wire.StaticHeaders {
-		header.Set(item.Name, item.Value)
+	header.Set("version", officialCodexVersion0145)
+	if !isCompact {
+		header.Set("x-codex-beta-features", officialOpenAIHTTPBetaFeatures)
 	}
 	header.Del(responsesLiteHeader)
 	if useResponsesLite {
@@ -1190,5 +1629,8 @@ func finalizeOfficialOpenAIHTTPHeaders(
 	}
 	if isCompact {
 		header.Set("X-Codex-Installation-ID", identity.installationID)
+	}
+	if turnState = strings.TrimSpace(turnState); turnState != "" {
+		header.Set("x-codex-turn-state", turnState)
 	}
 }

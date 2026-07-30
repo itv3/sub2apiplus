@@ -12,6 +12,7 @@ capture_root=${CAPTURE_ROOT:-/root/oauth-capture}
 subjects=${SUBJECTS:-"codex-http codex-ws"}
 scenarios=${SCENARIOS:-"s1 s2 s4"}
 codex_model=${CODEX_MODEL:-gpt-5.6-luna}
+codex_version=${CODEX_VERSION:-0.145.0}
 run_id_prefix=${RUN_ID_PREFIX:-p0-p2-review-fix-mitm-openai-0.1.165-3}
 window_id=${WINDOW_ID:-$(date -u +%Y%m%dT%H%M%SZ)}
 ca_source="$capture_root/state/mitm/mitmproxy-ca-cert.pem"
@@ -192,7 +193,7 @@ for subject in $subjects; do
       fi
       docker exec -e SUB2API_API_KEY="$api_key" "$capture_container" \
         python3 /capture/tools/official_client_capture/run_codex_compact_scenario.py \
-        --mode sub2api-http --model "$codex_model" \
+        --mode sub2api-http --model "$codex_model" --codex-version "$codex_version" \
         --output-dir "$output_dir" --timeout 300
     else
       docker exec -e SUB2API_API_KEY="$api_key" "$capture_container" \

@@ -57,7 +57,15 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactOAuthSuccessPersi
 	require.Equal(t, "chatgpt.com", upstream.lastReq.Host)
 	require.Empty(t, upstream.lastReq.Header.Get("Accept"))
 	require.Equal(t, codexCLIVersion, upstream.lastReq.Header.Get("Version"))
-	require.NotEmpty(t, upstream.lastReq.Header.Get("Session_Id"))
+	// 会话头必须是官方形态：连字符小写的 session-id / thread-id，且没有
+	// conversation-id（SPEC-HDR-007，官方 compact 16 项线序的第 5、6 位）。
+	// ⚠ 必须直查 map——setHeaderRaw 存的是原始小写键，Header.Get 会先规范化成
+	// "Session-Id" 再查，拿不到。
+	require.NotEmpty(t, upstream.lastReq.Header["session-id"])
+	require.NotEmpty(t, upstream.lastReq.Header["thread-id"])
+	require.Empty(t, upstream.lastReq.Header["Session_ID"])
+	require.Empty(t, upstream.lastReq.Header["Conversation_ID"])
+	require.Empty(t, upstream.lastReq.Header.Get("Conversation-Id"))
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.lastReq.Context()))
 	require.Equal(t, codexCLIUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, "chatgpt-acc", upstream.lastReq.Header.Get("chatgpt-account-id"))

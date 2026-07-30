@@ -52,9 +52,16 @@ func (openAIOfficialEgressHTTPTransportProvider) Resolve(
 	); err != nil {
 		return OfficialEgressTransportSelection{}, err
 	}
+	tlsProfile, err := officialCodex0145ResolveTLSProfile(
+		officialCodexVersion0145,
+		officialCodexTransportHTTPDefault,
+	)
+	if err != nil {
+		return OfficialEgressTransportSelection{}, fmt.Errorf("编译 Codex HTTP 传输画像：%w", err)
+	}
 	return OfficialEgressTransportSelection{
 		ProfileID:  egressContext.transportProfileID,
-		TLSProfile: newOpenAIOfficialEgressHTTPTLSProfile(),
+		TLSProfile: tlsProfile,
 	}, nil
 }
 
@@ -68,9 +75,16 @@ func (openAIOfficialEgressWebSocketTransportProvider) Resolve(
 	); err != nil {
 		return OfficialEgressTransportSelection{}, err
 	}
+	tlsProfile, err := officialCodex0145ResolveTLSProfile(
+		officialCodexVersion0145,
+		officialCodexTransportWS,
+	)
+	if err != nil {
+		return OfficialEgressTransportSelection{}, fmt.Errorf("编译 Codex WS 传输画像：%w", err)
+	}
 	return OfficialEgressTransportSelection{
 		ProfileID:  egressContext.transportProfileID,
-		TLSProfile: newOpenAIOfficialEgressWebSocketTLSProfile(),
+		TLSProfile: tlsProfile,
 	}, nil
 }
 
@@ -204,121 +218,16 @@ func newAnthropicOfficialEgressTLSProfile() *tlsfingerprint.Profile {
 	}
 }
 
-// officialOpenAIH1HeaderOrders 是官方 Codex CLI 在 h1 上的 header 输出次序。
-//
-// **必须按端点分开**：官方各端点的 HeaderMap 插入序不同，用一份并集清单会让部分
-// 端点反而更偏离——这一点是实测发现的（首版用并集，models 的顺序当场就不对）。
-//
-// 取值依据 official-h1-full-20260727T124125Z 的逐字节基线。
-var officialOpenAIH1HeaderOrders = []tlsfingerprint.H1HeaderOrderRule{
-	{
-		// 实测：version, authorization, chatgpt-account-id, accept, originator, user-agent, host
-		PathContains: "/codex/models",
-		Order: []string{
-			"version", "authorization", "chatgpt-account-id",
-			"accept", "originator", "user-agent",
-		},
-	},
-	{
-		// HTTP POST /responses 的官方逐字节基线（official-httpfb3-20260727T234853Z）。
-		//
-		// 该形态此前一直采不到：官方默认走 WS，HTTP 只是 force_http_fallback 的降级
-		// 路径，而降级发生在**耗尽重试预算之后**（client.rs:1849 的注释）。让探针对
-		// 握手回 HTTP 400 只会让官方走错误退出；必须**直接断开连接**并让它把重试跑完，
-		// 才会打印 Falling back from WebSockets to HTTPS transport。
-		//
-		// 实测次序与 WS 握手完全不同——此前用 WS 序作兜底是错的。
-		PathContains: "/codex/responses",
-		Order: []string{
-			"version", "x-codex-beta-features", "x-codex-window-id", "x-codex-turn-metadata",
-			"x-openai-internal-codex-responses-lite", "x-client-request-id",
-			"session-id", "thread-id",
-			"accept", "content-encoding", "content-type",
-			"authorization", "chatgpt-account-id", "originator", "user-agent",
-		},
-	},
-	{
-		// WS 握手实测（前五项由 tungstenite 硬编码为大写驼峰，经 PreserveHeaderCase 还原）：
-		// Host, Connection, Upgrade, Sec-WebSocket-Version, Sec-WebSocket-Key,
-		// chatgpt-account-id, authorization, user-agent, originator, openai-beta, version,
-		// x-codex-beta-features, x-client-request-id, session-id, thread-id,
-		// x-codex-window-id, x-codex-turn-metadata, sec-websocket-extensions
-		//
-		// 兜底规则（PathContains 为空）：其余端点尚无逐字节基线，沿用此序。
-		Order: []string{
-			"connection", "upgrade", "sec-websocket-version", "sec-websocket-key",
-			"chatgpt-account-id", "authorization", "user-agent", "originator", "openai-beta",
-			"version", "x-codex-beta-features", "x-client-request-id",
-			"session-id", "thread-id", "x-codex-window-id", "x-codex-turn-metadata",
-			"x-codex-turn-state", "x-codex-installation-id", "x-oai-attestation",
-			"accept", "content-type", "content-encoding",
-			"sec-websocket-extensions",
-		},
-	},
-}
-
-// newOpenAIOfficialEgressHTTPTLSProfile 复现 Codex CLI 0.145.0
-// Responses HTTP 的 30-cipher、空 ALPN ClientHello。
+// newOpenAIOfficialEgressHTTPTLSProfile 是旧调用点的兼容入口。TLS、H1 端点矩阵
+// 与 strict 策略全部由不可变 0.145.0 画像编译，不再在传输文件复制参数。
 func newOpenAIOfficialEgressHTTPTLSProfile() *tlsfingerprint.Profile {
-	return &tlsfingerprint.Profile{
-		Name: "Official Codex CLI 0.145.0 HTTP (capture-2026-07-26)",
-		Transport: tlsfingerprint.TransportOptions{
-			DisableCompression: true,
-			LowercaseHeaders:   true,
-			// 官方 hyper 按 HeaderMap 插入序输出，host 在用户头之后、content-length 最后，
-			// 全小写；Go 则把 Host 硬编码前置并对其余强制字典序，无配置入口
-			// （规格表 SPEC-H1-002~004）。此清单驱动 conn 层的 wire 重写。
-			//
-			// 取值依据官方基线 official-h1-full-20260727T124125Z：
-			//   GET /codex/models → version, authorization, chatgpt-account-id,
-			//                       accept, originator, user-agent, host
-			// 各端点的插入序不同，故清单取并集并按官方基线的相对次序排列；
-			// 未列出的 header 排在清单之后、host 之前，不影响已知项的位置。
-			H1HeaderOrders: officialOpenAIH1HeaderOrders,
-		},
-		CipherSuites: []uint16{
-			0x1302, 0x1303, 0x1301,
-			0xc02c, 0xc030, 0x009f,
-			0xcca9, 0xcca8, 0xccaa,
-			0xc02b, 0xc02f, 0x009e,
-			0xc024, 0xc028, 0x006b,
-			0xc023, 0xc027, 0x0067,
-			0xc00a, 0xc014, 0x0039,
-			0xc009, 0xc013, 0x0033,
-			0x009d, 0x009c, 0x003d,
-			0x003c, 0x0035, 0x002f,
-		},
-		Curves: []uint16{
-			0x11ec, 0x001d, 0x0017, 0x001e,
-			0x0018, 0x0019, 0x0100, 0x0101,
-		},
-		PointFormats: []uint16{0},
-		SignatureAlgorithms: []uint16{
-			0x0905, 0x0906, 0x0904,
-			0x0403, 0x0503, 0x0603,
-			0x0807, 0x0808, 0x081a, 0x081b, 0x081c,
-			0x0809, 0x080a, 0x080b,
-			0x0804, 0x0805, 0x0806,
-			0x0401, 0x0501, 0x0601,
-			0x0303, 0x0301, 0x0302,
-			0x0402, 0x0502, 0x0602,
-		},
-		SupportedVersions: []uint16{utls.VersionTLS13, utls.VersionTLS12},
-		KeyShareGroups:    []uint16{0x11ec, 0x001d},
-		PSKModes:          []uint16{1},
-		Extensions:        []uint16{65281, 0, 11, 10, 35, 22, 23, 13, 43, 45, 51},
-		TLSVersMin:        uint16(utls.VersionTLS12),
-		TLSVersMax:        uint16(utls.VersionTLS13),
-	}
+	return mustResolveOfficialCodex0145TLSProfile(officialCodexTransportHTTPDefault)
 }
 
-// OpenAIOfficialEgressHTTPTLSProfile 为需要复用当前 Codex HTTP 传输画像的
-// 辅助客户端提供只读新实例。调用方必须按实际是否经过代理选择画像，且不得修改
-// 返回值后跨请求共享。
-func OpenAIOfficialEgressHTTPTLSProfile(proxy bool) *tlsfingerprint.Profile {
-	if proxy {
-		return newOpenAIOfficialEgressHTTPProxyTLSProfile()
-	}
+// OpenAIOfficialEgressHTTPTLSProfile 为尚在迁移的辅助端点提供默认 HTTP 画像。
+// 路由是否经过代理不能改变 ClientHello；Codex 0.145.0 只有配置有效自定义 CA
+// 才切换到 rustls/h2，而本产品未开放该条件分支。参数仅为旧调用点兼容保留。
+func OpenAIOfficialEgressHTTPTLSProfile(_ bool) *tlsfingerprint.Profile {
 	return newOpenAIOfficialEgressHTTPTLSProfile()
 }
 
@@ -356,38 +265,21 @@ func newOpenAIOfficialEgressHTTPProxyTLSProfile() *tlsfingerprint.Profile {
 	}
 }
 
-// newOpenAIOfficialEgressWebSocketTLSProfile 复现 Codex CLI 0.145.0
-// Responses WS 的 rustls ClientHello。扩展集合固定，但每次握手随机排序，
-// 对应阶段 0 四个目标握手的不同 JA3，禁止固定单一样本。
+// newOpenAIOfficialEgressWebSocketTLSProfile 是旧调用点的兼容入口。WS 的 rustls
+// 参数、固定前五项与 swap_remove 规则均从同一版本画像编译。
 func newOpenAIOfficialEgressWebSocketTLSProfile() *tlsfingerprint.Profile {
-	return &tlsfingerprint.Profile{
-		Name: "Official Codex CLI 0.145.0 WebSocket (phase0-2026-07-24)",
-		Transport: tlsfingerprint.TransportOptions{
-			DisableCompression: true,
-			LowercaseHeaders:   true,
-			// tungstenite 的 WEBSOCKET_HEADERS 是硬编码大写驼峰，其余头才小写。
-			// Host 不必列：Go 的 Request.write 硬编码输出 "Host: "，本就一致。
-			PreserveHeaderCase: []string{
-				"Connection", "Upgrade", "Sec-WebSocket-Version", "Sec-WebSocket-Key",
-			},
-		},
-		CipherSuites: []uint16{
-			0x1302, 0x1301, 0x1303,
-			0xc02c, 0xc02b, 0xcca9,
-			0xc030, 0xc02f, 0xcca8,
-			0x00ff,
-		},
-		Curves:              []uint16{0x11ec, 0x001d, 0x0017, 0x0018},
-		PointFormats:        []uint16{0},
-		SignatureAlgorithms: []uint16{0x0503, 0x0403, 0x0603, 0x0807, 0x0806, 0x0805, 0x0804, 0x0601, 0x0501, 0x0401},
-		SupportedVersions:   []uint16{utls.VersionTLS13, utls.VersionTLS12},
-		KeyShareGroups:      []uint16{0x11ec, 0x001d},
-		PSKModes:            []uint16{1},
-		Extensions:          []uint16{0, 5, 10, 11, 13, 23, 35, 43, 45, 51},
-		RandomizeExtensions: true,
-		TLSVersMin:          uint16(utls.VersionTLS12),
-		TLSVersMax:          uint16(utls.VersionTLS13),
+	return mustResolveOfficialCodex0145TLSProfile(officialCodexTransportWS)
+}
+
+// mustResolveOfficialCodex0145TLSProfile 仅供无法修改签名的历史构造器使用。
+// 固定版本画像若在进程内失效，必须立即停止，不能返回 nil 让调用点悄悄降级为
+// Go 默认 TLS；带动态版本/端点的执行路径一律使用返回 error 的严格解析 API。
+func mustResolveOfficialCodex0145TLSProfile(transportID string) *tlsfingerprint.Profile {
+	profile, err := officialCodex0145ResolveTLSProfile(officialCodexVersion0145, transportID)
+	if err != nil {
+		panic(fmt.Sprintf("编译内置 Codex 0.145.0 传输画像失败：%v", err))
 	}
+	return profile
 }
 
 func doAnthropicHTTPUpstreamWithOfficialEgress(

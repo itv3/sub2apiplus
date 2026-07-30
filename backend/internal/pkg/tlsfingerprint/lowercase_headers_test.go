@@ -75,8 +75,9 @@ func TestLowercaseHeaderRoundTripperKeepsSingleUserAgent(t *testing.T) {
 	}
 }
 
-// 未携带 User-Agent 时不应凭空造出空值头。
-func TestLowercaseHeaderRoundTripperWithoutUserAgent(t *testing.T) {
+// 未携带 User-Agent 时必须用 canonical 空值抑制 Go 默认 UA；该空值不会写到
+// wire，只是 net/http 的传输层哨兵。
+func TestLowercaseHeaderRoundTripperWithoutUserAgentSuppressesGoDefault(t *testing.T) {
 	base := &capturingRoundTripper{}
 	rt := NewLowercaseHeaderRoundTripper(base, nil)
 
@@ -86,11 +87,60 @@ func TestLowercaseHeaderRoundTripperWithoutUserAgent(t *testing.T) {
 	if _, err := rt.RoundTrip(req); err != nil {
 		t.Fatalf("RoundTrip 失败: %v", err)
 	}
-	if lookupRawHeader(base.captured, "User-Agent") != nil {
-		t.Error("请求本无 User-Agent，不应生成空值头")
+	canonical := lookupRawHeader(base.captured, "User-Agent")
+	if len(canonical) != 1 || canonical[0] != "" {
+		t.Errorf("缺少抑制 Go 默认 UA 的 canonical 空值哨兵: %v", canonical)
 	}
 	if lookupRawHeader(base.captured, "user-agent") != nil {
 		t.Error("请求本无 User-Agent，不应生成小写头")
+	}
+}
+
+// 直接读取 HTTP/1.1 原始头，证明内部空值哨兵既不会出线，也不会让 Go 补入
+// Go-http-client/1.1。Files 控制面正依赖这个“画像没有 UA 即 wire 没有 UA”的语义。
+func TestLowercaseHeaderRoundTripperWithoutUserAgentOmitsItOnWire(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("监听失败: %v", err)
+	}
+	defer listener.Close()
+
+	head := make(chan []string, 1)
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer conn.Close()
+		var lines []string
+		scanner := bufio.NewScanner(conn)
+		for scanner.Scan() {
+			line := scanner.Text()
+			if line == "" {
+				break
+			}
+			lines = append(lines, line)
+		}
+		head <- lines
+		_, _ = conn.Write([]byte("HTTP/1.1 200 OK\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"))
+	}()
+
+	rt := NewLowercaseHeaderRoundTripper(&http.Transport{}, nil)
+	req, err := http.NewRequest(http.MethodPost, "http://"+listener.Addr().String()+"/backend-api/files", nil)
+	if err != nil {
+		t.Fatalf("构造请求失败: %v", err)
+	}
+	req.Header.Set("Authorization", "Bearer redacted")
+	resp, err := rt.RoundTrip(req)
+	if err != nil {
+		t.Fatalf("RoundTrip 失败: %v", err)
+	}
+	resp.Body.Close()
+
+	for _, line := range <-head {
+		if strings.HasPrefix(strings.ToLower(line), "user-agent:") {
+			t.Fatalf("wire 不应出现 User-Agent，实际行=%q", line)
+		}
 	}
 }
 

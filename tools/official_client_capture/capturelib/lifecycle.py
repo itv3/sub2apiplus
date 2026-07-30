@@ -144,7 +144,22 @@ def resolve_target_addresses(
 
 
 def _direct_bpf(target_addresses: tuple[str, ...], target_port: int) -> str:
-    """仅用经过标准化的 IP 构造 tcpdump 目标过滤器。"""
+    """构造 tcpdump 过滤器。
+
+    ⚠ **按 host 过滤会让"只访问某域名"这类命题变成循环论证。**
+    本函数默认按目标 IP 过滤（省流量），但验证 SPEC-EP-002 那类**全称命题**时
+    必须设 `CAPTURE_BPF_ALL_HOSTS=1`——只按端口抓，才可能看到
+    api.openai.com / auth.openai.com 之类的其他域名。
+
+    2026-07-28 之前 SPEC-EP-002 的 pcap 证据就栽在这里：BPF 写死
+    `host <chatgpt.com 的 4 个 IP>`，那份 pcap 物理上记录不到别的域名，
+    用它证明"只访问 chatgpt.com"永远为真。
+    """
+
+    if os.environ.get("CAPTURE_BPF_ALL_HOSTS") == "1":
+        if not 1 <= target_port <= 65535:
+            raise ConfigurationError("direct 目标端口超出合法范围。")
+        return f"tcp port {target_port}"
 
     if not target_addresses:
         raise ConfigurationError("direct 抓包缺少已解析的目标 IP。")

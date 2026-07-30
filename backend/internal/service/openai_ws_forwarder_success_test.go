@@ -17,6 +17,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -683,7 +684,9 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
-	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.98.0")
+	// HTTP 入站使用第三方身份，由网关按 Codex 0.145.0 画像派生 WS 出站。
+	// 官方 Codex HTTP 入站代表客户端自身已经进入 HTTP fallback，不应重启 WS。
+	c.Request.Header.Set("User-Agent", "unit-test-agent/1.0")
 	c.Request.Header.Set("session_id", "sess-oauth-1")
 	c.Request.Header.Set("conversation_id", "conv-oauth-1")
 	c.Request.Header.Set("x-codex-beta-features", "remote_compaction_v2")
@@ -726,12 +729,17 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T
 		Schedulable: true,
 		Concurrency: 1,
 		Credentials: map[string]any{
-			"access_token": "oauth-token-1",
+			"access_token":       "oauth-token-1",
+			"chatgpt_account_id": "chatgpt-test-account-29",
 		},
 		Extra: map[string]any{
 			"responses_websockets_v2_enabled": true,
 		},
 	}
+	svc.openaiModelCapabilities.replaceFromManifest(
+		account.ID,
+		[]byte(`{"models":[{"slug":"gpt-5.4","use_responses_lite":false}]}`),
+	)
 
 	body := []byte(`{"model":"gpt-5.4","stream":false,"store":true,"input":[{"type":"input_text","text":"hello","namespace":"native-wsv2"}]}`)
 	result, err := svc.Forward(context.Background(), c, account, body)
@@ -747,34 +755,42 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T
 	require.True(t, gjson.Get(requestJSON, "stream").Bool(), "OAuth Codex 规范化后应强制 stream=true")
 	require.Equal(t, "native-wsv2", gjson.Get(requestJSON, "input.0.namespace").String(), "OAuth WSv2 应保留原生 namespace")
 	require.Equal(t, openAIWSBetaV2Value, captureDialer.lastHeaders.Get("OpenAI-Beta"))
+	require.Equal(t, codexCLIVersion, captureDialer.lastHeaders.Get("version"))
 	require.Equal(t, "remote_compaction_v2", captureDialer.lastHeaders.Get("x-codex-beta-features"))
-	// OAuth 账号的 session_id/conversation_id 应被 isolateOpenAISessionID 隔离，
-	// 测试中未设置 api_key 到 context，apiKeyID=0。
-	require.Equal(t, isolateOpenAISessionID(0, "sess-oauth-1"), captureDialer.lastHeaders.Get("session_id"))
-	require.Equal(t, isolateOpenAISessionID(0, "conv-oauth-1"), captureDialer.lastHeaders.Get("conversation_id"))
+	require.Equal(t, codexCLIUserAgent, captureDialer.lastHeaders.Get("user-agent"))
+	require.Equal(t, officialOpenAIHTTPOriginator, captureDialer.lastHeaders.Get("originator"))
+	require.Equal(t, "Bearer oauth-token-1", captureDialer.lastHeaders.Get("authorization"))
+	require.Equal(t, "chatgpt-test-account-29", captureDialer.lastHeaders.Get("chatgpt-account-id"))
+	// 0.145.0 画像删除旧下划线身份头，只保留连字符形式的会话身份。
+	require.Empty(t, captureDialer.lastHeaders.Get("session_id"))
+	require.Empty(t, captureDialer.lastHeaders.Get("conversation_id"))
+	sessionID, err := uuid.Parse(captureDialer.lastHeaders.Get("session-id"))
+	require.NoError(t, err)
+	require.Equal(t, uuid.Version(7), sessionID.Version())
+	require.Equal(t, captureDialer.lastHeaders.Get("session-id"), captureDialer.lastHeaders.Get("thread-id"))
+	require.Equal(t, officialOpenAIWSResponseCreateType, gjson.Get(requestJSON, "type").String())
+	require.Equal(t, "auto", gjson.Get(requestJSON, "tool_choice").String())
+	require.True(t, gjson.Get(requestJSON, "parallel_tool_calls").Exists())
+	require.True(t, gjson.Get(requestJSON, "parallel_tool_calls").Bool())
+	require.True(t, gjson.Get(requestJSON, "reasoning").IsObject())
+	require.Equal(t, "medium", gjson.Get(requestJSON, "reasoning.effort").String())
+	require.False(t, gjson.Get(requestJSON, "reasoning.summary").Exists())
+	require.Equal(t, "reasoning.encrypted_content", gjson.Get(requestJSON, "include.0").String())
+	require.True(t, gjson.Get(requestJSON, "client_metadata").IsObject())
 }
 
-func TestOpenAIGatewayService_Forward_WSv2_OAuthOriginatorCompatibility(t *testing.T) {
+func TestOpenAIGatewayService_Forward_WSv2_OAuthUsesCodex0145CanonicalIdentity(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	// 上游要求 originator 与最终 user-agent 首段配套（issue #3901）：
-	// originator 一律由最终 UA 推导；推导不出官方身份时整体回退默认 Codex CLI 身份。
+	// 第三方 HTTP 入站经 WS 出站时，最终身份由 0.145.0 版本画像定型，
+	// 不再透传任意历史 Codex 版本或桌面端身份。
 	tests := []struct {
-		name           string
-		userAgent      string
-		originator     string
-		wantOriginator string
-		wantUA         string
+		name       string
+		userAgent  string
+		originator string
 	}{
-		{name: "official ua pairs originator", userAgent: "Codex Desktop/1.2.3", wantOriginator: "Codex Desktop", wantUA: "Codex Desktop/1.2.3"},
-		{
-			name:           "mismatched originator repaired from ua",
-			userAgent:      "codex-tui/0.140.2 (Mac OS X 14.0; arm64) iTerm (codex-tui; 0.140.2)",
-			originator:     "codex_cli_rs",
-			wantOriginator: "codex-tui",
-			wantUA:         "codex-tui/0.140.2 (Mac OS X 14.0; arm64) iTerm (codex-tui; 0.140.2)",
-		},
-		{name: "official originator without ua falls back to default identity", originator: "codex_vscode", wantOriginator: officialOpenAIHTTPOriginator, wantUA: codexCLIUserAgent},
+		{name: "third party user agent", userAgent: "kilo-code/1.0"},
+		{name: "third party originator", originator: "integration-test"},
 	}
 
 	for _, tt := range tests {
@@ -827,19 +843,26 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthOriginatorCompatibility(t *testi
 				Schedulable: true,
 				Concurrency: 1,
 				Credentials: map[string]any{
-					"access_token": "oauth-token-1",
+					"access_token":       "oauth-token-1",
+					"chatgpt_account_id": "chatgpt-test-account-129",
 				},
 				Extra: map[string]any{
 					"responses_websockets_v2_enabled": true,
 				},
 			}
+			svc.openaiModelCapabilities.replaceFromManifest(
+				account.ID,
+				[]byte(`{"models":[{"slug":"gpt-5.4","use_responses_lite":false}]}`),
+			)
 
 			body := []byte(`{"model":"gpt-5.4","stream":false,"input":[{"type":"input_text","text":"hello"}]}`)
 			result, err := svc.Forward(context.Background(), c, account, body)
 			require.NoError(t, err)
 			require.NotNil(t, result)
-			require.Equal(t, tt.wantOriginator, captureDialer.lastHeaders.Get("originator"))
-			require.Equal(t, tt.wantUA, captureDialer.lastHeaders.Get("user-agent"))
+			require.Equal(t, officialOpenAIHTTPOriginator, captureDialer.lastHeaders.Get("originator"))
+			require.Equal(t, codexCLIUserAgent, captureDialer.lastHeaders.Get("user-agent"))
+			require.Equal(t, codexCLIVersion, captureDialer.lastHeaders.Get("version"))
+			require.Equal(t, "chatgpt-test-account-129", captureDialer.lastHeaders.Get("chatgpt-account-id"))
 		})
 	}
 }
@@ -850,7 +873,7 @@ func TestOpenAIGatewayService_Forward_WSv2_HeaderSessionFallbackFromPromptCacheK
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
-	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.98.0")
+	c.Request.Header.Set("User-Agent", "unit-test-agent/1.0")
 
 	cfg := &config.Config{}
 	cfg.Security.URLAllowlist.Enabled = false
@@ -889,12 +912,17 @@ func TestOpenAIGatewayService_Forward_WSv2_HeaderSessionFallbackFromPromptCacheK
 		Schedulable: true,
 		Concurrency: 1,
 		Credentials: map[string]any{
-			"access_token": "oauth-token-1",
+			"access_token":       "oauth-token-1",
+			"chatgpt_account_id": "chatgpt-test-account-31",
 		},
 		Extra: map[string]any{
 			"responses_websockets_v2_enabled": true,
 		},
 	}
+	svc.openaiModelCapabilities.replaceFromManifest(
+		account.ID,
+		[]byte(`{"models":[{"slug":"gpt-5.4","use_responses_lite":false}]}`),
+	)
 
 	body := []byte(`{"model":"gpt-5.4","stream":true,"prompt_cache_key":"pcache_123","input":[{"type":"input_text","text":"hi"}]}`)
 	result, err := svc.Forward(context.Background(), c, account, body)
@@ -902,11 +930,18 @@ func TestOpenAIGatewayService_Forward_WSv2_HeaderSessionFallbackFromPromptCacheK
 	require.NotNil(t, result)
 	require.Equal(t, "resp_prompt_cache_key", result.RequestID)
 
-	// OAuth 账号的 session_id 应被 isolateOpenAISessionID 隔离（apiKeyID=0，未在 context 设置）。
-	require.Equal(t, isolateOpenAISessionID(0, "pcache_123"), captureDialer.lastHeaders.Get("session_id"))
+	// 第三方 prompt_cache_key 只作为派生锚点；最终 WS 身份必须收敛为官方 UUID。
+	require.Empty(t, captureDialer.lastHeaders.Get("session_id"))
 	require.Empty(t, captureDialer.lastHeaders.Get("conversation_id"))
 	require.NotNil(t, captureConn.lastWrite)
-	require.True(t, gjson.Get(requestToJSONString(captureConn.lastWrite), "stream").Exists())
+	requestJSON := requestToJSONString(captureConn.lastWrite)
+	sessionID, err := uuid.Parse(captureDialer.lastHeaders.Get("session-id"))
+	require.NoError(t, err)
+	require.Equal(t, uuid.Version(7), sessionID.Version())
+	require.Equal(t, captureDialer.lastHeaders.Get("session-id"), captureDialer.lastHeaders.Get("thread-id"))
+	require.Equal(t, captureDialer.lastHeaders.Get("session-id"), gjson.Get(requestJSON, "prompt_cache_key").String())
+	require.NotEqual(t, "pcache_123", gjson.Get(requestJSON, "prompt_cache_key").String())
+	require.True(t, gjson.Get(requestJSON, "stream").Exists())
 }
 
 func TestOpenAIGatewayService_Forward_WSv2_ResponseDoneUsageParsed(t *testing.T) {

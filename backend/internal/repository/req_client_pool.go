@@ -48,6 +48,11 @@ func getSharedReqClient(opts reqClientOptions) (*req.Client, error) {
 	}
 
 	client := req.C().SetTimeout(opts.Timeout)
+	if opts.TLSProfile != nil && opts.TLSProfile.Transport.DisableCompression {
+		// TLS/H1 画像声明的是完整线形；若仍让 req 自动追加 Accept-Encoding，
+		// strict H1 会在写出前拒绝画像外字段。该 transport 选项必须与拨号画像同源。
+		client = client.DisableCompression()
+	}
 	if opts.ForceHTTP2 {
 		client = client.EnableForceHTTP2()
 	}
@@ -106,7 +111,12 @@ func buildReqClientKey(opts reqClientOptions) string {
 	if opts.TLSProfile == nil {
 		return baseKey
 	}
-	return baseKey + "|tls=" + opts.TLSProfile.Name
+	return fmt.Sprintf(
+		"%s|tls=%s|disable_compression=%t",
+		baseKey,
+		opts.TLSProfile.Name,
+		opts.TLSProfile.Transport.DisableCompression,
+	)
 }
 
 // CreatePrivacyReqClient creates an HTTP client for OpenAI privacy settings API

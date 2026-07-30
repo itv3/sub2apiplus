@@ -1,6 +1,10 @@
 docs/claude-relay-service/
 .codex
 
+# Python 缓存（仓库任意层级）
+__pycache__/
+*.py[cod]
+
 # ===================
 # Go 后端
 # ===================
@@ -139,6 +143,7 @@ docs/*
 !docs/OFFICIAL_EGRESS_PROFILE_FIDELITY_FIX_20260727.md
 !docs/OFFICIAL_EGRESS_WIRE_PARITY_FIX_20260727.md
 !docs/CODEX_CLI_0145_EGRESS_SPEC.md
+!docs/EVIDENCE_INDEX.md
 !docs/CLIProxyAPI_PRO_REQUIREMENTS.md
 !docs/PAYMENT.md
 !docs/PAYMENT_CN.md

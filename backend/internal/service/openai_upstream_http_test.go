@@ -70,6 +70,8 @@ func TestResolveOpenAIAPIKeyCodexTLSProfileUsesCurrentCLIDefault(t *testing.T) {
 	require.Equal(t, uint16(0x0303), got.TLSVersMin)
 	require.Equal(t, uint16(0x0304), got.TLSVersMax)
 	require.True(t, got.Transport.DisableCompression)
+	require.False(t, got.Transport.StrictH1Wire)
+	require.Empty(t, got.Transport.H1HeaderOrders)
 
 	account.Extra["tls_fingerprint_profile_id"] = int64(42)
 	got = resolveOpenAIAPIKeyCodexTLSProfile(account, &TLSFingerprintProfileService{}, nil)
@@ -329,9 +331,7 @@ func TestDoOpenAIOfficialEgressHTTPSelectsDirectAndProxyProfiles(t *testing.T) {
 		{
 			name:            "HTTP CONNECT 代理",
 			proxyURL:        "http://capture.example:18080",
-			wantCipherCount: 10,
-			wantALPN:        []string{"h2", "http/1.1"},
-			wantRandomized:  true,
+			wantCipherCount: 30,
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {

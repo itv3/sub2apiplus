@@ -68,6 +68,31 @@
 
 > **凡是只在 HTTP/1.1 上可见的差异（header 名大小写、header 顺序），现有全部 MITM 证据都看不到**——h2 协议强制小写并使用 HPACK。这类问题只能靠读码定位，验证需要另建 h1 直连的观测手段。
 
+### 1.1 判断反转的成因分布（2026-07-27 复盘）
+
+这份复盘是规格表（`CODEX_CLI_0145_EGRESS_SPEC.md`）成立的直接理由，明细留档于此，
+规格表正文只保留结论。当天判断反转 16 次，成因：
+
+| 成因 | 次数 | 典型 |
+|---|---|---|
+| 抓包通道自身有掩盖 | 3 | MITM 必经代理走 h2，HPACK 抹平 header 大小写与顺序 |
+| 脚手架预置掩盖差异 | 2 | 预置模型清单掩盖第三方 Lite 失效 |
+| 读源码读错层 | 1 | 把单元测试的 mock base 当成生产 URL |
+| 读源码读漏调用点 | 1 | 误判 images 端点无人调用（实际在 `ext/image-generation`） |
+| 常量语义误读 | 1 | 把 `defaultMaxReadFrameSize` 的**上限**当默认值 |
+| 只读一层未及依赖库 | 2 | 读 hyper 得出"官方全小写"，对 HTTP 对、对 WS 错，**引入了生产回归** |
+| **拿一处结论外推到别处** | 3 | 把 WS 握手序当作 `/responses` 的兜底（实测完全不同）；把 h1 顺序做成跨端点的并集清单（models 当场就错）；把 images 与 alpha-search 的 web-search 分支误判为 accept 不对齐（它们打的其实是 responses 端点） |
+| **只看调用点不看调用链** | 2 | 误判 live 主请求缺 `openai-alpha`（实为经 `applyLiveUpstreamIdentityHeaders` 设置）；误判 `supportsOfficialEgressHTTPProfile` 是画像失效的根因（它管的是 Finalizer，TLS 画像走显式传参） |
+
+三点值得记住：中间四类**全是源码推断出的错**，且比抓包错更隐蔽（会一路自洽到部署）；
+最后两类**发生在规格表建立之后**，说明规格表本身也会写错；因此每条规则都必须
+声明观测通道并绑定实测运行号。
+
+后续轮次又新增两类同型错误，一并记此：
+**只看定义不看调用点**（`SearchRequest` 漏读 `settings`/`max_output_tokens` 两个字段）、
+**样本选择偏差**（UA suffix 只取了 `models` 端点样本，恰好落在 MCP initialize 之前，
+据此删掉了本来正确的 suffix——见规格表 SPEC-HDR-005）。
+
 ## 2. 本轮修复范围
 
 | 优先级 | 条目 | 本轮 |
@@ -384,7 +409,7 @@ hosts（Go 的 resolver 每次解析都读该文件，无需二次重启）。�
 3. 官方组装顺序为 `provider.build_request`（基础头）→ `extend(extra_headers)` →
    `apply_auth`（最后），见 `codex-api/src/endpoint/session.rs:48`。
 
-**未采到官方 HTTP `POST /responses`**：官方默认走 WS，HTTP 是 `force_http_fallback`
+**官方 HTTP `POST /responses` 已采到**（`relay-wshdr2`，自定义 provider 走 HTTP）：官方默认走 WS，HTTP 是 `force_http_fallback`
 （`core/src/client.rs:509`）的降级路径。探针把 WS 握手从回 200 改为回 400 后，重试从
 3 次降到 2 次，但官方仍走错误退出而非降级。**Sub2API 的默认 HTTP 出站，其官方参照物
 本身是官方极少走的降级路径**——这一点对 P3-15 的优先级判断是实质性的。

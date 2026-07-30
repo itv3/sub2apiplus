@@ -49,23 +49,36 @@ type LiveCallIdentity struct {
 	InboundEndpoint string
 }
 
+// LiveCodexRuntimeState 是 realtime calls 与 sideband 之间持久化的版本运行态。
+// 只包含允许出站的非敏感画像值；完整快照保证两跳不会因账号 requirements 在
+// 会话期间变化而产生不同 UA、originator 或 residency。
+type LiveCodexRuntimeState struct {
+	SurfaceID              string            `json:"surface_id"`
+	ProcessPhase           string            `json:"process_phase"`
+	Originator             string            `json:"originator"`
+	TerminalToken          string            `json:"terminal_token"`
+	UserAgentSuffixEnabled bool              `json:"user_agent_suffix_enabled"`
+	ConditionalHeaders     map[string]string `json:"conditional_headers"`
+}
+
 type LiveCallRecord struct {
-	CallID          string
-	CallHash        string
-	AccountID       int64
-	APIKeyID        int64
-	UserID          int64
-	GroupID         int64
-	SubscriptionID  int64
-	LeaseID         string
-	Model           string
-	CreatedAt       time.Time
-	ExpiresAt       time.Time
-	Controller      string
-	ControllerOwner string
-	UserAgent       string
-	IPAddress       string
-	InboundEndpoint string
+	CallID            string
+	CallHash          string
+	AccountID         int64
+	APIKeyID          int64
+	UserID            int64
+	GroupID           int64
+	SubscriptionID    int64
+	LeaseID           string
+	Model             string
+	CreatedAt         time.Time
+	ExpiresAt         time.Time
+	Controller        string
+	ControllerOwner   string
+	UserAgent         string
+	IPAddress         string
+	InboundEndpoint   string
+	CodexRuntimeState LiveCodexRuntimeState
 	// AttestationCiphertext 仅用于让同一会话的 Sideband 复用创建时的证明。
 	AttestationCiphertext string
 }

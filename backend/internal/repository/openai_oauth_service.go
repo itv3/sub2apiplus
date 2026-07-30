@@ -2,7 +2,9 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -11,6 +13,7 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openaiidentity"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/imroc/req/v3"
 )
@@ -83,30 +86,30 @@ func (s *openaiOAuthService) RefreshTokenWithClientID(ctx context.Context, refre
 }
 
 func (s *openaiOAuthService) refreshTokenWithClientID(ctx context.Context, refreshToken, proxyURL, clientID string) (*openai.TokenResponse, error) {
-	client, err := createOpenAIReqClient(proxyURL)
+	request, tlsProfile, err := service.BuildOfficialCodex0145OAuthRefreshRequest(
+		ctx,
+		clientID,
+		refreshToken,
+		openai.RefreshScopes,
+	)
+	if err != nil {
+		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_REQUEST_INVALID", "build refresh request: %v", err)
+	}
+	// tokenURL 仅为仓库测试保留本地 server 注入点；生产构造始终来自 0.145.0
+	// 端点画像，不能由配置改写 auth.openai.com。
+	if override := strings.TrimSpace(s.tokenURL); override != "" && override != openai.TokenURL {
+		overrideURL, parseErr := url.Parse(override)
+		if parseErr != nil {
+			return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_REQUEST_INVALID", "parse test token URL: %v", parseErr)
+		}
+		request.URL = overrideURL
+		request.Host = overrideURL.Host
+	}
+	client, err := createOpenAIReqClientWithProfile(proxyURL, tlsProfile)
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_CLIENT_INIT_FAILED", "create HTTP client: %v", err)
 	}
-
-	refreshBody := struct {
-		ClientID     string `json:"client_id"`
-		GrantType    string `json:"grant_type"`
-		RefreshToken string `json:"refresh_token"`
-	}{
-		ClientID:     clientID,
-		GrantType:    "refresh_token",
-		RefreshToken: refreshToken,
-	}
-
-	var tokenResp openai.TokenResponse
-
-	resp, err := client.R().
-		SetContext(ctx).
-		SetHeader("User-Agent", openaiidentity.CodexUserAgent).
-		SetHeader("originator", openaiidentity.CodexOriginator).
-		SetBody(refreshBody).
-		SetSuccessResult(&tokenResp).
-		Post(s.tokenURL)
+	resp, err := client.GetClient().Do(request)
 
 	if err != nil {
 		if shouldReturnOpenAINoProxyHint(ctx, proxyURL, err) {
@@ -114,21 +117,31 @@ func (s *openaiOAuthService) refreshTokenWithClientID(ctx context.Context, refre
 		}
 		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_REQUEST_FAILED", "request failed: %v", err)
 	}
-
-	if !resp.IsSuccessState() {
-		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_TOKEN_REFRESH_FAILED", "token refresh failed: status %d, body: %s", resp.StatusCode, resp.String())
+	defer func() { _ = resp.Body.Close() }()
+	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
+	if err != nil {
+		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_REQUEST_FAILED", "read response: %v", err)
 	}
-
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_TOKEN_REFRESH_FAILED", "token refresh failed: status %d, body: %s", resp.StatusCode, string(responseBody))
+	}
+	var tokenResp openai.TokenResponse
+	if err := json.Unmarshal(responseBody, &tokenResp); err != nil {
+		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_TOKEN_REFRESH_FAILED", "decode token response: %v", err)
+	}
 	return &tokenResp, nil
 }
 
 func createOpenAIReqClient(proxyURL string) (*req.Client, error) {
-	proxyEnabled := strings.TrimSpace(proxyURL) != ""
+	return createOpenAIReqClientWithProfile(proxyURL, service.OpenAIOfficialEgressHTTPTLSProfile(false))
+}
+
+func createOpenAIReqClientWithProfile(proxyURL string, profile *tlsfingerprint.Profile) (*req.Client, error) {
 	return getSharedReqClient(reqClientOptions{
 		ProxyURL:   proxyURL,
 		Timeout:    120 * time.Second,
-		ForceHTTP2: proxyEnabled,
-		TLSProfile: service.OpenAIOfficialEgressHTTPTLSProfile(proxyEnabled),
+		ForceHTTP2: false,
+		TLSProfile: profile,
 	})
 }
 

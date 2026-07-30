@@ -108,7 +108,7 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	var officialEgressBodyContract *officialOpenAIHTTPBodyContract
 	if officialEgressEnabled && account.Platform == PlatformOpenAI &&
 		account.Type == AccountTypeOAuth {
-		officialEgressBodyContract, err = captureOfficialOpenAIHTTPBodyContract(body)
+		officialEgressBodyContract, err = captureOfficialOpenAIHTTPBodyContractForRequest(c, body)
 		if err != nil {
 			return nil, err
 		}

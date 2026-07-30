@@ -19,7 +19,7 @@ func TestOpenAIGatewayService_Forward_CompactOnlyModelMappingOverridesOAuthUpstr
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
-	body := []byte(`{"model":"gpt-5.4","stream":false,"instructions":"compact-test","input":"hello"}`)
+	body := []byte(`{"model":"gpt-5.4","parallel_tool_calls":false,"stream":false,"instructions":"compact-test","input":"hello"}`)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/compact", bytes.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
 
@@ -62,9 +62,10 @@ func TestOpenAIGatewayService_Forward_NonCompactRequestIgnoresCompactOnlyModelMa
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
-	body := []byte(`{"model":"gpt-5.4","stream":false,"instructions":"normal-test","input":"hello"}`)
+	body := []byte(`{"model":"gpt-5.4","stream":false,"instructions":"normal-test","input":"hello","reasoning":{"effort":"medium","summary":"auto"}}`)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
+	setOfficialCodexForceHTTPFallback(c, true)
 
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
@@ -109,7 +110,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_CompactOnlyModelMappingOverridesU
 	c.Request.Header.Set("User-Agent", "third-party-client/1.0")
 	c.Request.Header.Set("Content-Type", "application/json")
 
-	originalBody := []byte(`{"model":"gpt-5.4","stream":true,"store":true,"instructions":"compact-pass","input":[{"type":"text","text":"compact me"}]}`)
+	originalBody := []byte(`{"model":"gpt-5.4","parallel_tool_calls":false,"stream":true,"store":true,"instructions":"compact-pass","input":[{"type":"text","text":"compact me"}]}`)
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
 		Header:     http.Header{"Content-Type": []string{"application/json"}, "x-request-id": []string{"rid-compact-pass-map"}},

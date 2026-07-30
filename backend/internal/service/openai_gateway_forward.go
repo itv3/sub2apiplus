@@ -55,9 +55,48 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 	}
 	wsDecision := resolveOpenAIWSProtocolForRequest(s.getOpenAIWSProtocolResolver(), ctx, account)
-	// 仅允许 WS 入站请求走 WS 上游，避免出现 HTTP -> WS 协议混用。
-	wsDecision = resolveOpenAIWSDecisionByClientTransport(wsDecision, GetOpenAIClientTransport(c))
+	clientTransport := GetOpenAIClientTransport(c)
+	if account != nil && account.IsOpenAIOAuth() {
+		versionProfile, profileErr := resolveCodex0145VersionProfile(officialCodexVersion0145)
+		if profileErr != nil {
+			return nil, profileErr
+		}
+		// 官方 Codex 自身以 HTTP 入站，说明它已经耗尽自己的 WS 预算并进入
+		// force_http_fallback；网关不得替它重新启动 WS。普通第三方 HTTP 则由
+		// 网关扮演 Codex 客户端，按版本画像默认先走 WS。legacy compact 没有 WS。
+		forceInboundHTTP := isInboundOpenAIOfficialClient(c) ||
+			isOpenAIResponsesCompactPath(c) ||
+			isOfficialCodexForceHTTPFallback(c)
+		if versionProfile.FeatureDefaults.SupportsWebSockets && !forceInboundHTTP {
+			wsDecision = OpenAIWSProtocolDecision{
+				Transport: OpenAIUpstreamTransportResponsesWebsocketV2,
+				Reason:    "codex_version_profile_default",
+			}
+		} else {
+			wsDecision = OpenAIWSProtocolDecision{
+				Transport: OpenAIUpstreamTransportHTTPSSE,
+				Reason:    "codex_force_http_fallback",
+			}
+		}
+	} else {
+		wsDecision = resolveOpenAIWSDecisionByClientTransport(wsDecision, clientTransport)
+	}
 	passthroughEnabled := account.IsOpenAIPassthroughEnabled()
+	// OAuth refresh 可能发生在 passthrough 与普通转换分支各自构造真正请求之前。
+	// 因此必须在任何分支早退之前冻结同一次调用的可信进程快照，保证刷新链和
+	// Responses 最终请求共享 TUI/exec、终端 token、suffix 与条件身份。
+	if account.IsOpenAIOAuth() {
+		endpointID := codex0145EndpointID(officialCodexEndpointResponsesHTTP)
+		if isOpenAIResponsesCompactPath(c) {
+			endpointID = codex0145EndpointID(officialCodexEndpointResponsesCompact)
+		} else if !passthroughEnabled && wsDecision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2 {
+			endpointID = codex0145EndpointID(officialCodexEndpointResponsesWS)
+		}
+		ctx, err = bindOfficialCodex0145RuntimeStateFromIngress(ctx, c, account, endpointID)
+		if err != nil {
+			return nil, fmt.Errorf("解析 Codex 进程运行态：%w", err)
+		}
+	}
 	useResponsesLite := s.normalizeOpenAIResponsesLiteIngressHeader(c, account, body)
 	// namespace 冲突必须在 Lite 工具归一化之前校验；非 Lite HTTP 再执行摊平。
 	// 否则转换可能先丢失命名空间结构，让冲突请求绕过 400 校验。
@@ -110,7 +149,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	originalBody := body
 	var officialEgressBodyContract *officialOpenAIHTTPBodyContract
 	if officialOpenAIHTTPEnabled {
-		officialEgressBodyContract, err = captureOfficialOpenAIHTTPBodyContract(originalBody)
+		officialEgressBodyContract, err = captureOfficialOpenAIHTTPBodyContractForRequest(c, originalBody)
 		if err != nil {
 			return nil, err
 		}
@@ -272,6 +311,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		imageGenerationAllowed = GroupAllowsImageGeneration(apiKey.Group)
 	}
 	codexImageGenerationBridgeEnabled := isCodexCLI &&
+		!officialOpenAIHTTPEnabled &&
 		!isOpenAIResponsesLiteHeader(c.GetHeader(responsesLiteHeader)) &&
 		imageGenerationAllowed &&
 		codexImageGenerationExplicitToolPolicy != codexImageGenerationExplicitToolPolicyStrip &&
@@ -612,7 +652,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return nil, err
 	}
 
-	// 命中 WS 时仅走 WebSocket Mode；不再自动回退 HTTP。
+	// Codex 0.145.0 内置 provider 默认先走 WS；只有可重试连接错误耗尽本次
+	// 调用的预算后，才把同一调用置为 force_http_fallback 并继续 HTTP。
 	if wsDecision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2 {
 		// WS 分支需要结构化 payload 与重连恢复，命中后再触发 full-map decode。
 		wsReqBody, err := ensureReqBody()
@@ -633,6 +674,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		var wsResult *OpenAIForwardResult
 		var wsErr error
 		wsLastFailureReason := ""
+		forceHTTPFallback := false
 		agentTaskRecoveryTried := false
 		wsPrevResponseRecoveryTried := false
 		wsInvalidEncryptedContentRecoveryTried := false
@@ -746,6 +788,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			if retryable && attempt < maxAttempts {
 				backoff := s.openAIWSRetryBackoff(attempt)
 				if retryBudget > 0 && time.Since(retryStartedAt)+backoff > retryBudget {
+					forceHTTPFallback = account.IsOpenAIOAuth()
 					s.recordOpenAIWSRetryExhausted()
 					logOpenAIWSModeInfo(
 						"reconnect_budget_exhausted account_id=%d attempts=%d max_retries=%d reason=%s elapsed_ms=%d budget_ms=%d",
@@ -782,6 +825,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 				continue
 			}
 			if retryable {
+				forceHTTPFallback = account.IsOpenAIOAuth()
 				s.recordOpenAIWSRetryExhausted()
 				logOpenAIWSModeInfo(
 					"reconnect_exhausted account_id=%d attempts=%d max_retries=%d reason=%s",
@@ -831,8 +875,35 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			return wsResult, nil
 		}
-		s.writeOpenAIWSFallbackErrorResponse(c, account, wsErr)
-		return nil, wsErr
+		if !forceHTTPFallback {
+			s.writeOpenAIWSFallbackErrorResponse(c, account, wsErr)
+			return nil, wsErr
+		}
+		setOfficialCodexForceHTTPFallback(c, true)
+
+		// HTTP fallback 与 WS retry 属于同一次上层调用：不重新选账号，也不创建
+		// 新的调用生命周期。使用 WS 已完成的语义修正结果重建 JSON，但保持原始
+		// 顶层字段顺序，随后仍须经过 HTTP 画像 Finalizer。
+		body, err = marshalOfficialJSONObjectPreservingOrderAndRaw(wsReqBody, body)
+		if err != nil {
+			return nil, fmt.Errorf("serialize OpenAI WS HTTP fallback body: %w", err)
+		}
+		requestView = newOpenAIRequestView(body)
+		reqBody = nil
+		officialOpenAIHTTPEnabled = officialEgressEnabled &&
+			account.Platform == PlatformOpenAI && account.Type == AccountTypeOAuth
+		if officialOpenAIHTTPEnabled {
+			officialEgressBodyContract, err = captureOfficialOpenAIHTTPBodyContractForRequest(c, body)
+			if err != nil {
+				return nil, err
+			}
+		}
+		logOpenAIWSModeInfo(
+			"fallback_http account_id=%d attempts=%d reason=%s force_http_fallback=true",
+			account.ID,
+			wsAttempts,
+			normalizeOpenAIWSLogValue(wsLastFailureReason),
+		)
 	}
 
 	reasoningEffort := extractOpenAIReasoningEffortFromBody(body, upstreamModel, billingModel, originalModel)
@@ -851,6 +922,26 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	agentTaskRecoveryTried := false
 	rejectedFieldRetryState := newOpenAIResponsesRejectedFieldRetryState(body)
 	sameTurnState := ""
+	turnStateStoreKey := ""
+	turnStateGroupID := int64(0)
+	if officialOpenAIHTTPEnabled && officialEgressBodyContract != nil {
+		turnIdentity, identityErr := resolveOfficialOpenAIHTTPIdentity(
+			c,
+			account,
+			body,
+			officialEgressBodyContract,
+			isInboundOpenAIOfficialClient(c),
+			isCompactRequest,
+		)
+		if identityErr != nil {
+			return nil, identityErr
+		}
+		turnStateStoreKey = officialOpenAIHTTPTurnStateStoreKey(turnIdentity)
+		turnStateGroupID = getOpenAIGroupIDFromContext(c)
+		if store := s.getOpenAIWSStateStore(); store != nil && turnStateStoreKey != "" {
+			sameTurnState, _ = store.GetSessionTurnState(turnStateGroupID, turnStateStoreKey)
+		}
+	}
 	for {
 		// Build upstream request
 		upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
@@ -867,6 +958,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			IsCodexCLI:                 isCodexCLI,
 			APIKeyCodexMimic:           mimicProfile,
 			OfficialEgressBodyContract: officialEgressBodyContract,
+			OfficialEgressTurnState:    sameTurnState,
 		})
 		if headerGuard == nil {
 			releaseUpstreamCtx()
@@ -877,10 +969,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			return nil, err
 		}
-		if sameTurnState != "" && account.IsOpenAIOAuth() {
-			upstreamReq.Header.Set(openAIWSTurnStateHeader, sameTurnState)
-		}
-
 		// Get proxy URL
 		proxyURL := ""
 		if account.ProxyID != nil && account.Proxy != nil {
@@ -913,17 +1001,31 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			// unschedule the account on durable faults (e.g. rejected proxy credentials).
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 		}
+		if resp == nil {
+			if headerGuard != nil {
+				headerGuard.close()
+			}
+			return nil, errors.New("OpenAI upstream returned an empty HTTP response")
+		}
 		if headerGuard != nil {
 			resp.Body = &openAIRequestContextReadCloser{ReadCloser: resp.Body, cleanup: headerGuard.close}
+		}
+		if account.IsOpenAIOAuth() {
+			if responseTurnState := strings.TrimSpace(resp.Header.Get(openAIWSTurnStateHeader)); responseTurnState != "" {
+				sameTurnState = responseTurnState
+				if store := s.getOpenAIWSStateStore(); store != nil && turnStateStoreKey != "" {
+					store.BindSessionTurnState(
+						turnStateGroupID,
+						turnStateStoreKey,
+						responseTurnState,
+						officialOpenAIHTTPTurnStartTTL,
+					)
+				}
+			}
 		}
 
 		// Handle error response
 		if resp.StatusCode >= 400 {
-			if account.IsOpenAIOAuth() {
-				if responseTurnState := strings.TrimSpace(resp.Header.Get(openAIWSTurnStateHeader)); responseTurnState != "" {
-					sameTurnState = responseTurnState
-				}
-			}
 			respBody := s.readUpstreamErrorBody(resp)
 			_ = resp.Body.Close()
 			resp.Body = io.NopCloser(bytes.NewReader(respBody))

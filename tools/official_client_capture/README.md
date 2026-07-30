@@ -301,12 +301,14 @@ S1/S2/S4 主矩阵不会自动触发手动上下文压缩。需要验证 compact
 python3 tools/official_client_capture/run_codex_compact_scenario.py \
   --mode official-http \
   --model gpt-5.4 \
+  --codex-version 0.145.0 \
   --output-dir /capture/runs/compact-official
 ```
 
 候选使用 `--mode sub2api-http`，并只从运行时环境读取
 `SUB2API_API_KEY`。两种模式共用相同 JSON-RPC 生命周期；官方 provider 固定
-`name="OpenAI"`、`version=0.145.0` 和 HTTP 传输，确保 zstd 与身份基准有效。
+`name="OpenAI"`、由 `--codex-version` 指定的 `version` 和 HTTP 传输，确保 zstd 与身份
+基准有效。
 
 `run_sub2api_direct_matrix.sh` 支持通过 `CLAUDE_MODEL`、`CODEX_MODEL`、
 `SUBJECTS`、`SCENARIOS` 和 `RUN_ID` 运行补充矩阵。非 Lite 验证应把
@@ -323,7 +325,67 @@ Vircs 的可恢复封装脚本如下：
 仍逐字段校验 `tools`，任何工具丢失或改写都会失败。WS turn-state 同样以官方 wire 为条件：
 官方未下发时双方均无状态才算一致，官方已下发时必须看到候选同连接回放。
 
-## 11. 本地测试
+## 11. Codex CLI 版本升级总入口
+
+`codex_upgrade.py` 将源码扫描、现有官方／候选抓包任务、证据提取、动态出站面比较和
+规则覆盖报告组合为一次运行。完整口径见
+`docs/CODEX_CLI_0145_EGRESS_SPEC.md` 第四部分。
+
+```bash
+python3 tools/official_client_capture/codex_upgrade.py \
+  --dry-run \
+  --baseline-version 0.145.0 \
+  --target-version 0.146.0 \
+  --baseline-source local-analysis/sources/codex-cli-0.145 \
+  --target-source /path/to/codex-cli-0.146 \
+  --baseline-evidence /path/to/0.145.0/official-evidence \
+  --target-sha256 <64位小写SHA-256> \
+  --runtime-image <镜像引用@sha256:digest> \
+  --output /root/oauth-capture/runs/codex-upgrade-0.146.0
+```
+
+dry-run 的 `coverage_plan.official_unmapped` 和 `candidate_unmapped` 必须为空，才能把本轮
+任务矩阵视为完整。现有脚本不能触发的新端点或条件分支通过 `--extra-jobs` 注入。附加文件
+使用 `codex-upgrade-extra-jobs/v1`，每个任务声明直接执行的参数数组、环境、证据目录和覆盖
+规则；总入口不通过 shell 拼接命令。
+
+以下 JSON 仅说明扩展任务的结构；脚本路径、证据目录和规则编号必须替换为目标版本实际值。
+
+```json
+{
+  "schema_version": "codex-upgrade-extra-jobs/v1",
+  "jobs": [
+    {
+      "id": "candidate-new-surface",
+      "phase": "candidate",
+      "suites": ["full"],
+      "description": "新端点候选抓包",
+      "steps": [
+        {
+          "argv": ["python3", "{repo_root}/tools/example_probe.py"],
+          "environment": {"RUN_ID": "{campaign_id}-candidate-new"},
+          "timeout": 1800
+        }
+      ],
+      "evidence_roots": ["{capture_root}/runs/{campaign_id}-candidate-new"],
+      "covers": ["SPEC-EP-025"],
+      "required": true
+    }
+  ]
+}
+```
+
+附加任务引用的新编号必须先加入目标版本规则清单；未分类的新源码调用点或动态签名仍会
+使报告保持 `review_required`，不能仅靠任务成功绕过。
+
+### 11.1 候选 42 条严格验收
+
+候选侧逐规则抓包、断言、环境恢复和最终组包见
+[`CANDIDATE_42_ACCEPTANCE.md`](CANDIDATE_42_ACCEPTANCE.md)。部署源码中的 Go 严格测试只可
+按 [`CANDIDATE_TEST_TRACE.md`](CANDIDATE_TEST_TRACE.md) 转换为绑定原始 relay 的抽象
+trace，不能代替 pcap、HTTP 请求字节或 WebSocket 帧证据。
+
+## 12. 本地测试
 
 测试只使用标准库和合成数据，不联网、不读取真实 Key，也不启动 tcpdump、mitmdump 或模型请求：
 

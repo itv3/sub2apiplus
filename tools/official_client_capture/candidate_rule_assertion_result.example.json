@@ -1,0 +1,22 @@
+{
+  "schema_version": "codex-candidate-rule-assertion/v1",
+  "rule_id": "SPEC-TLS-001",
+  "status": "pass",
+  "started_at": "<填写带时区的断言开始 RFC 3339 时间>",
+  "finished_at": "<填写带时区的断言结束 RFC 3339 时间>",
+  "exit_code": 0,
+  "checker_sha256": "<填写验收提交中 checker 文件的64位小写SHA-256>",
+  "command_sha256": "<填写紧凑 JSON 命令参数数组的64位小写SHA-256>",
+  "checks": [
+    {
+      "id": "<填写该规则内唯一的检查ID>",
+      "description": "<填写实际执行的语义判断>",
+      "passed": true,
+      "expected": "<填写规则定义的精确期望>",
+      "actual": "<填写从候选原始证据解析出的实际值>",
+      "evidence_paths": [
+        "candidate/SPEC-TLS-001/<填写已在 candidate_raw_evidence 声明的原始文件>"
+      ]
+    }
+  ]
+}

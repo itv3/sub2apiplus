@@ -12,6 +12,7 @@ import (
 	"unsafe"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/imroc/req/v3"
 	"github.com/stretchr/testify/require"
 )
@@ -115,6 +116,23 @@ func TestCreateOpenAIReqClient_Timeout120Seconds(t *testing.T) {
 	client, err := createOpenAIReqClient("http://proxy.local:8080")
 	require.NoError(t, err)
 	require.Equal(t, 120*time.Second, client.GetClient().Timeout)
+}
+
+func TestGetSharedReqClient_AppliesProfileDisableCompression(t *testing.T) {
+	sharedReqClients = sync.Map{}
+	profile := &tlsfingerprint.Profile{
+		Name: "strict-h1-no-automatic-accept-encoding",
+		Transport: tlsfingerprint.TransportOptions{
+			DisableCompression: true,
+		},
+	}
+	client, err := getSharedReqClient(reqClientOptions{
+		Timeout:    time.Second,
+		TLSProfile: profile,
+	})
+	require.NoError(t, err)
+	require.True(t, client.GetTransport().DisableCompression)
+	require.Contains(t, buildReqClientKey(reqClientOptions{TLSProfile: profile}), "disable_compression=true")
 }
 
 func TestCreateGeminiReqClient_ForceHTTP2Disabled(t *testing.T) {

@@ -958,7 +958,7 @@ func TestForwardAsAnthropic_OAuthValidatesOrDerivesCodexIdentity(t *testing.T) {
 
 			result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "gpt-5.4")
 			if tt.wantError {
-				require.ErrorContains(t, err, "requires complete identity from official ingress")
+				require.ErrorContains(t, err, "必须是配对的 exec/TUI 身份")
 				require.Nil(t, result)
 				return
 			}

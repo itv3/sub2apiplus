@@ -1,0 +1,3544 @@
+{
+  "schema_version": "codex-candidate-42-acceptance/v1",
+  "codex_version": "0.145.0",
+  "assessment_id": "<填写唯一验收批次 ID>",
+  "generated_at": "<填写带时区的 RFC 3339 时间>",
+  "rule_manifest_sha256": "<填写 codex_upgrade_rules_0_145_0.json 的64位小写SHA-256>",
+  "candidate_identity": {
+    "git_commit": "<填写40位小写Git提交ID>",
+    "source_tree_sha256": "<填写部署源码树的64位小写SHA-256>",
+    "image_reference": "<填写唯一且不可变的镜像引用>",
+    "image_digest": "sha256:<填写64位小写镜像摘要>",
+    "deployed_version": "<填写服务器实际运行版本>"
+  },
+  "rules": [
+    {
+      "rule_id": "SPEC-TLS-001",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-TLS-001>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-TLS-001"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-TLS-001/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-TLS-001/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-TLS-001-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-TLS-001-断言程序>.py",
+          "--rule",
+          "SPEC-TLS-001"
+        ],
+        "result": {
+          "path": "assertions/SPEC-TLS-001.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-TLS-001/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-TLS-001/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-TLS-003",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-TLS-003>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-TLS-003"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-TLS-003/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-TLS-003/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-TLS-003-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-TLS-003-断言程序>.py",
+          "--rule",
+          "SPEC-TLS-003"
+        ],
+        "result": {
+          "path": "assertions/SPEC-TLS-003.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-TLS-003/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-TLS-003/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-PROTO-001",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-PROTO-001>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-PROTO-001"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-PROTO-001/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-PROTO-001/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-PROTO-001-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-PROTO-001-断言程序>.py",
+          "--rule",
+          "SPEC-PROTO-001"
+        ],
+        "result": {
+          "path": "assertions/SPEC-PROTO-001.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-PROTO-001/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-PROTO-001/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-PROTO-002",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-PROTO-002>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-PROTO-002"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-PROTO-002/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-PROTO-002/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-PROTO-002-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-PROTO-002-断言程序>.py",
+          "--rule",
+          "SPEC-PROTO-002"
+        ],
+        "result": {
+          "path": "assertions/SPEC-PROTO-002.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-PROTO-002/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-PROTO-002/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-CONN-001",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-CONN-001>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-CONN-001"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-CONN-001/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-CONN-001/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-CONN-001-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-CONN-001-断言程序>.py",
+          "--rule",
+          "SPEC-CONN-001"
+        ],
+        "result": {
+          "path": "assertions/SPEC-CONN-001.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-CONN-001/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-CONN-001/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-H1-001",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-H1-001>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-H1-001"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-H1-001/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-H1-001/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-H1-001-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-H1-001-断言程序>.py",
+          "--rule",
+          "SPEC-H1-001"
+        ],
+        "result": {
+          "path": "assertions/SPEC-H1-001.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-H1-001/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-H1-001/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-H1-002",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-H1-002>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-H1-002"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-H1-002/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-H1-002/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-H1-002-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-H1-002-断言程序>.py",
+          "--rule",
+          "SPEC-H1-002"
+        ],
+        "result": {
+          "path": "assertions/SPEC-H1-002.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-H1-002/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-H1-002/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-H1-003",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-H1-003>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-H1-003"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-H1-003/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-H1-003/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-H1-003-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-H1-003-断言程序>.py",
+          "--rule",
+          "SPEC-H1-003"
+        ],
+        "result": {
+          "path": "assertions/SPEC-H1-003.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-H1-003/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-H1-003/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-H1-004",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-H1-004>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-H1-004"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-H1-004/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-H1-004/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-H1-004-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-H1-004-断言程序>.py",
+          "--rule",
+          "SPEC-H1-004"
+        ],
+        "result": {
+          "path": "assertions/SPEC-H1-004.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-H1-004/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-H1-004/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-WS-001",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-WS-001>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-WS-001"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-WS-001/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-WS-001/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-WS-001-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-WS-001-断言程序>.py",
+          "--rule",
+          "SPEC-WS-001"
+        ],
+        "result": {
+          "path": "assertions/SPEC-WS-001.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-WS-001/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-WS-001/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-WS-002",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-WS-002>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-WS-002"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-WS-002/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-WS-002/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-WS-002-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-WS-002-断言程序>.py",
+          "--rule",
+          "SPEC-WS-002"
+        ],
+        "result": {
+          "path": "assertions/SPEC-WS-002.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-WS-002/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-WS-002/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-WS-004",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-WS-004>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-WS-004"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-WS-004/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-WS-004/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-WS-004-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-WS-004-断言程序>.py",
+          "--rule",
+          "SPEC-WS-004"
+        ],
+        "result": {
+          "path": "assertions/SPEC-WS-004.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-WS-004/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-WS-004/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-WS-005",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-WS-005>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-WS-005"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-WS-005/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-WS-005/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-WS-005-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-WS-005-断言程序>.py",
+          "--rule",
+          "SPEC-WS-005"
+        ],
+        "result": {
+          "path": "assertions/SPEC-WS-005.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-WS-005/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-WS-005/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-HDR-001",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-HDR-001>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-HDR-001"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-HDR-001/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-HDR-001/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-HDR-001-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-HDR-001-断言程序>.py",
+          "--rule",
+          "SPEC-HDR-001"
+        ],
+        "result": {
+          "path": "assertions/SPEC-HDR-001.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-HDR-001/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-HDR-001/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-HDR-002",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-HDR-002>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-HDR-002"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-HDR-002/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-HDR-002/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-HDR-002-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-HDR-002-断言程序>.py",
+          "--rule",
+          "SPEC-HDR-002"
+        ],
+        "result": {
+          "path": "assertions/SPEC-HDR-002.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-HDR-002/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-HDR-002/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-HDR-004",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-HDR-004>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-HDR-004"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-HDR-004/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-HDR-004/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-HDR-004-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-HDR-004-断言程序>.py",
+          "--rule",
+          "SPEC-HDR-004"
+        ],
+        "result": {
+          "path": "assertions/SPEC-HDR-004.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-HDR-004/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-HDR-004/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-HDR-005",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-HDR-005>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-HDR-005"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-HDR-005/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-HDR-005/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-HDR-005-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-HDR-005-断言程序>.py",
+          "--rule",
+          "SPEC-HDR-005"
+        ],
+        "result": {
+          "path": "assertions/SPEC-HDR-005.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-HDR-005/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-HDR-005/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-HDR-006",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-HDR-006>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-HDR-006"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-HDR-006/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-HDR-006/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-HDR-006-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-HDR-006-断言程序>.py",
+          "--rule",
+          "SPEC-HDR-006"
+        ],
+        "result": {
+          "path": "assertions/SPEC-HDR-006.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-HDR-006/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-HDR-006/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-HDR-007",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-HDR-007>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-HDR-007"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-HDR-007/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-HDR-007/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-HDR-007-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-HDR-007-断言程序>.py",
+          "--rule",
+          "SPEC-HDR-007"
+        ],
+        "result": {
+          "path": "assertions/SPEC-HDR-007.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-HDR-007/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-HDR-007/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-HDR-008",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-HDR-008>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-HDR-008"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-HDR-008/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-HDR-008/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-HDR-008-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-HDR-008-断言程序>.py",
+          "--rule",
+          "SPEC-HDR-008"
+        ],
+        "result": {
+          "path": "assertions/SPEC-HDR-008.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-HDR-008/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-HDR-008/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-BODY-001",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-BODY-001>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-BODY-001"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-BODY-001/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-BODY-001/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-BODY-001-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-BODY-001-断言程序>.py",
+          "--rule",
+          "SPEC-BODY-001"
+        ],
+        "result": {
+          "path": "assertions/SPEC-BODY-001.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-BODY-001/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-BODY-001/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-BODY-002",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-BODY-002>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-BODY-002"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-BODY-002/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-BODY-002/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-BODY-002-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-BODY-002-断言程序>.py",
+          "--rule",
+          "SPEC-BODY-002"
+        ],
+        "result": {
+          "path": "assertions/SPEC-BODY-002.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-BODY-002/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-BODY-002/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-BODY-003",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-BODY-003>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-BODY-003"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-BODY-003/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-BODY-003/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-BODY-003-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-BODY-003-断言程序>.py",
+          "--rule",
+          "SPEC-BODY-003"
+        ],
+        "result": {
+          "path": "assertions/SPEC-BODY-003.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-BODY-003/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-BODY-003/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-BODY-004",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-BODY-004>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-BODY-004"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-BODY-004/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-BODY-004/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-BODY-004-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-BODY-004-断言程序>.py",
+          "--rule",
+          "SPEC-BODY-004"
+        ],
+        "result": {
+          "path": "assertions/SPEC-BODY-004.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-BODY-004/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-BODY-004/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-BODY-005",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-BODY-005>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-BODY-005"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-BODY-005/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-BODY-005/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-BODY-005-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-BODY-005-断言程序>.py",
+          "--rule",
+          "SPEC-BODY-005"
+        ],
+        "result": {
+          "path": "assertions/SPEC-BODY-005.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-BODY-005/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-BODY-005/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-BODY-006",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-BODY-006>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-BODY-006"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-BODY-006/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-BODY-006/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-BODY-006-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-BODY-006-断言程序>.py",
+          "--rule",
+          "SPEC-BODY-006"
+        ],
+        "result": {
+          "path": "assertions/SPEC-BODY-006.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-BODY-006/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-BODY-006/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-EP-001",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-EP-001>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-EP-001"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-EP-001/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-EP-001/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-EP-001-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-EP-001-断言程序>.py",
+          "--rule",
+          "SPEC-EP-001"
+        ],
+        "result": {
+          "path": "assertions/SPEC-EP-001.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-EP-001/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-EP-001/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-EP-002",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-EP-002>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-EP-002"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-EP-002/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-EP-002/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-EP-002-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-EP-002-断言程序>.py",
+          "--rule",
+          "SPEC-EP-002"
+        ],
+        "result": {
+          "path": "assertions/SPEC-EP-002.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-EP-002/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-EP-002/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-EP-005",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-EP-005>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-EP-005"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-EP-005/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-EP-005/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-EP-005-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-EP-005-断言程序>.py",
+          "--rule",
+          "SPEC-EP-005"
+        ],
+        "result": {
+          "path": "assertions/SPEC-EP-005.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-EP-005/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-EP-005/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-EP-006",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-EP-006>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-EP-006"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-EP-006/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-EP-006/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-EP-006-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-EP-006-断言程序>.py",
+          "--rule",
+          "SPEC-EP-006"
+        ],
+        "result": {
+          "path": "assertions/SPEC-EP-006.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-EP-006/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-EP-006/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-EP-007",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-EP-007>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-EP-007"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-EP-007/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-EP-007/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-EP-007-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-EP-007-断言程序>.py",
+          "--rule",
+          "SPEC-EP-007"
+        ],
+        "result": {
+          "path": "assertions/SPEC-EP-007.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-EP-007/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-EP-007/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-EP-008",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-EP-008>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-EP-008"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-EP-008/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-EP-008/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-EP-008-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-EP-008-断言程序>.py",
+          "--rule",
+          "SPEC-EP-008"
+        ],
+        "result": {
+          "path": "assertions/SPEC-EP-008.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-EP-008/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-EP-008/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-EP-009",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-EP-009>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-EP-009"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-EP-009/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-EP-009/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-EP-009-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-EP-009-断言程序>.py",
+          "--rule",
+          "SPEC-EP-009"
+        ],
+        "result": {
+          "path": "assertions/SPEC-EP-009.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-EP-009/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-EP-009/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-EP-012",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-EP-012>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-EP-012"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-EP-012/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-EP-012/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-EP-012-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-EP-012-断言程序>.py",
+          "--rule",
+          "SPEC-EP-012"
+        ],
+        "result": {
+          "path": "assertions/SPEC-EP-012.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-EP-012/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-EP-012/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-EP-013",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-EP-013>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-EP-013"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-EP-013/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-EP-013/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-EP-013-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-EP-013-断言程序>.py",
+          "--rule",
+          "SPEC-EP-013"
+        ],
+        "result": {
+          "path": "assertions/SPEC-EP-013.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-EP-013/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-EP-013/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-EP-014",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-EP-014>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-EP-014"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-EP-014/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-EP-014/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-EP-014-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-EP-014-断言程序>.py",
+          "--rule",
+          "SPEC-EP-014"
+        ],
+        "result": {
+          "path": "assertions/SPEC-EP-014.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-EP-014/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-EP-014/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-EP-015",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-EP-015>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-EP-015"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-EP-015/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-EP-015/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-EP-015-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-EP-015-断言程序>.py",
+          "--rule",
+          "SPEC-EP-015"
+        ],
+        "result": {
+          "path": "assertions/SPEC-EP-015.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-EP-015/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-EP-015/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-EP-019",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-EP-019>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-EP-019"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-EP-019/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-EP-019/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-EP-019-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-EP-019-断言程序>.py",
+          "--rule",
+          "SPEC-EP-019"
+        ],
+        "result": {
+          "path": "assertions/SPEC-EP-019.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-EP-019/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-EP-019/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-EP-020",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-EP-020>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-EP-020"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-EP-020/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-EP-020/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-EP-020-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-EP-020-断言程序>.py",
+          "--rule",
+          "SPEC-EP-020"
+        ],
+        "result": {
+          "path": "assertions/SPEC-EP-020.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-EP-020/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-EP-020/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-EP-021",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-EP-021>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-EP-021"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-EP-021/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-EP-021/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-EP-021-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-EP-021-断言程序>.py",
+          "--rule",
+          "SPEC-EP-021"
+        ],
+        "result": {
+          "path": "assertions/SPEC-EP-021.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-EP-021/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-EP-021/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-EP-022",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-EP-022>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-EP-022"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-EP-022/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-EP-022/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-EP-022-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-EP-022-断言程序>.py",
+          "--rule",
+          "SPEC-EP-022"
+        ],
+        "result": {
+          "path": "assertions/SPEC-EP-022.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-EP-022/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-EP-022/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "rule_id": "SPEC-EP-023",
+      "implementation": {
+        "summary": "<填写该规则在候选实现中的定型说明>",
+        "locations": [
+          {
+            "path": "backend/<填写实现文件-SPEC-EP-023>.go",
+            "sha256": "<填写实现文件的64位小写SHA-256>",
+            "line_start": 1,
+            "line_end": 1,
+            "symbol": "<填写指定行范围内的英文符号名>"
+          }
+        ]
+      },
+      "trigger": {
+        "description": "<填写可复现该规则的触发场景>",
+        "preconditions": [
+          "<填写账号、协议、功能开关等前置条件>"
+        ],
+        "command": [
+          "<填写触发程序>",
+          "--rule",
+          "SPEC-EP-023"
+        ],
+        "expected_observation": "<填写应在原始证据中观察到的形态>"
+      },
+      "official_evidence": {
+        "observation": "<填写 Codex CLI 0.145.0 官方侧观察结论>",
+        "artifacts": [
+          {
+            "path": "official/SPEC-EP-023/<填写官方证据文件>",
+            "sha256": "<填写官方证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "candidate_raw_evidence": {
+        "observation": "<填写 Sub2API 候选侧原始抓包观察结论>",
+        "artifacts": [
+          {
+            "path": "candidate/SPEC-EP-023/<填写候选原始证据文件>",
+            "sha256": "<填写候选原始证据文件的64位小写SHA-256>",
+            "kind": "pcap"
+          }
+        ]
+      },
+      "assertion": {
+        "checker": {
+          "path": "tools/official_client_capture/assertions/<填写-SPEC-EP-023-断言程序>.py",
+          "sha256": "<填写断言程序的64位小写SHA-256>"
+        },
+        "command": [
+          "python3",
+          "tools/official_client_capture/assertions/<填写-SPEC-EP-023-断言程序>.py",
+          "--rule",
+          "SPEC-EP-023"
+        ],
+        "result": {
+          "path": "assertions/SPEC-EP-023.result.json",
+          "sha256": "<填写结构化断言结果的64位小写SHA-256>",
+          "kind": "assertion_result"
+        }
+      },
+      "environment_restoration": {
+        "description": "<填写代理、CA、账号、keeper、hosts 等状态的恢复范围>",
+        "state_pairs": [
+          {
+            "name": "production-normalized-state",
+            "before": {
+              "path": "restoration/SPEC-EP-023/before.json",
+              "sha256": "<填写抓包前规范化状态的64位小写SHA-256>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区的抓包前 RFC 3339 时间>"
+            },
+            "after": {
+              "path": "restoration/SPEC-EP-023/after.json",
+              "sha256": "<填写抓包后规范化状态的64位小写SHA-256；内容必须与 before 逐字节一致>",
+              "kind": "normalized_state",
+              "captured_at": "<填写带时区且晚于断言结束的 RFC 3339 时间>"
+            }
+          }
+        ]
+      }
+    }
+  ]
+}

@@ -15,3 +15,31 @@ type Provider interface {
 	Check(ctx context.Context) error
 	Generate(ctx context.Context) (string, error)
 }
+
+type candidateCaptureScopeContextKey struct{}
+
+// CandidateCaptureScope 把一次 Live 调用绑定到专用验收身份和已配置代理的账号。
+// 普通 provider 忽略它；candidatecapture provider 必须逐项匹配后才会生成合成值。
+type CandidateCaptureScope struct {
+	APIKeyID      int64
+	GroupID       int64
+	AccountID     int64
+	ProxyID       int64
+	ProxyName     string
+	ProxyHost     string
+	ProxyPort     int
+	ProxyIsolated bool
+}
+
+// WithCandidateCaptureScope 只传递非敏感的调度身份，不携带 API Key 或代理凭据。
+func WithCandidateCaptureScope(ctx context.Context, scope CandidateCaptureScope) context.Context {
+	return context.WithValue(ctx, candidateCaptureScopeContextKey{}, scope)
+}
+
+func candidateCaptureScopeFromContext(ctx context.Context) (CandidateCaptureScope, bool) {
+	if ctx == nil {
+		return CandidateCaptureScope{}, false
+	}
+	scope, ok := ctx.Value(candidateCaptureScopeContextKey{}).(CandidateCaptureScope)
+	return scope, ok
+}

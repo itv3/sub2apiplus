@@ -145,7 +145,7 @@ func TestOpenAIGatewayService_OpenAIHTTPStripsInputNamespacesBeforeFirstForward(
 	for _, tt := range accounts {
 		for _, path := range []string{"/v1/responses", "/v1/responses/compact"} {
 			t.Run(tt.name+path, func(t *testing.T) {
-				body := []byte(`{"model":"gpt-5.5","stream":false,"instructions":"test","input":[{"type":"message","role":"user","namespace":"remove","content":[{"type":"input_text","text":"hello","namespace":"nested-keep"}]}]}`)
+				body := []byte(`{"model":"gpt-5.5","stream":false,"instructions":"test","parallel_tool_calls":false,"reasoning":{"effort":"medium","summary":"auto"},"input":[{"type":"message","role":"user","namespace":"remove","content":[{"type":"input_text","text":"hello","namespace":"nested-keep"}]}]}`)
 				upstream := &httpUpstreamRecorder{responses: []*http.Response{
 					newOpenAIRejectedFieldTestResponse(http.StatusOK, `{"id":"resp_namespace_ok","output":[],"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}}`),
 				}}
@@ -192,7 +192,7 @@ func TestOpenAIGatewayService_RetriesExplicitMaxOutputTokensRejection(t *testing
 }
 
 func TestOpenAIGatewayService_OAuthHTTPReplaysUpstreamTurnStateOnlyWithinRetry(t *testing.T) {
-	body := []byte(`{"model":"gpt-5.4","stream":false,"instructions":"test","max_output_tokens":4096,"input":"hello"}`)
+	body := []byte(`{"model":"gpt-5.4","stream":false,"instructions":"test","max_output_tokens":4096,"input":"hello","reasoning":{"effort":"medium","summary":"auto"}}`)
 	first := newOpenAIRejectedFieldTestResponse(http.StatusBadRequest, `{"error":{"code":"unsupported_parameter","message":"Unsupported parameter: max_output_tokens","param":"max_output_tokens"}}`)
 	first.Header.Set(openAIWSTurnStateHeader, "turn-state-upstream")
 	upstream := &httpUpstreamRecorder{responses: []*http.Response{
@@ -257,6 +257,7 @@ func newOpenAIRejectedFieldTestContext(body []byte) *gin.Context {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Request.Header.Set("User-Agent", "curl/8.0")
+	setOfficialCodexForceHTTPFallback(c, true)
 	return c
 }
 

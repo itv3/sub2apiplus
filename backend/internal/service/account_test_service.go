@@ -70,6 +70,7 @@ type AccountTestService struct {
 	grokTokenProvider         *GrokTokenProvider
 	antigravityGatewayService *AntigravityGatewayService
 	gatewayService            *GatewayService
+	openAIGatewayService      *OpenAIGatewayService
 	httpUpstream              HTTPUpstream
 	cfg                       *config.Config
 	tlsFPProfileService       *TLSFingerprintProfileService
@@ -221,7 +222,8 @@ func createAnthropicAPIKeyMimicTestPayload(modelID string) map[string]any {
 // TestAccountConnection tests an account's connection by sending a test request
 // All account types use full Claude Code client characteristics, only auth header differs
 // modelID is optional - if empty, defaults to claude.DefaultTestModel
-// mode is optional - "compact" routes OpenAI accounts to the /responses/compact probe path
+// mode 可选；compact 执行 /responses/compact 探针，official_files_probe 执行
+// Codex 0.145.0 Files 三段式出站探针。
 func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int64, modelID string, prompt string, mode string, maxOutputTokens ...int) error {
 	ctx := c.Request.Context()
 
@@ -587,6 +589,9 @@ func (s *AccountTestService) testBedrockAccountConnection(c *gin.Context, ctx co
 func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account *Account, modelID string, prompt string, mode string, maxOutputTokens ...int) error {
 	ctx := c.Request.Context()
 	mode = normalizeAccountTestMode(mode)
+	if mode == AccountTestModeOfficialFilesProbe {
+		return s.testOpenAIOfficialFilesProbe(c, account)
+	}
 
 	// Default to openai.DefaultTestModel for OpenAI testing
 	testModelID := modelID
@@ -1028,8 +1033,14 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 	}
 	applyOpenAICodexProbeHeaders(req.Header)
 	probeSessionID := compactProbeSessionID(account.ID)
-	req.Header.Set("Session_ID", probeSessionID)
-	req.Header.Set("Conversation_ID", probeSessionID)
+	// 本请求直发官方 compact 端点（上面的 chatgptCodexAPIURL + "/compact"），
+	// 会话头必须与官方一致：连字符小写的 session-id / thread-id，官方没有
+	// conversation-id 这个头（codex-api/src/requests/headers.rs:8,11）。
+	// 实测官方 compact 的 16 项线序里两者在第 5、6 位。规格表 SPEC-HDR-007。
+	// ⚠ 用 setHeaderRaw 而非 Header.Set——后者会把键规范化成 Session-Id，
+	// 官方是全小写。与主链路 openai_alpha_search.go 的写法保持一致。
+	setHeaderRaw(req.Header, "session-id", probeSessionID)
+	setHeaderRaw(req.Header, "thread-id", probeSessionID)
 
 	if isOAuth {
 		req.Host = "chatgpt.com"
@@ -1919,7 +1930,9 @@ func (s *AccountTestService) testOpenAIImageAPIKey(c *gin.Context, ctx context.C
 	return nil
 }
 
-// testOpenAIImageOAuth tests OpenAI image generation using an OAuth account via Codex /responses API.
+// testOpenAIImageOAuth 使用 Codex 0.145.0 独立 images/generations 画像测试 OAuth
+// 生图能力。账号探针与真实转发必须共用 URL、header、正文和 TLS 合同，不能退回
+// hosted /responses。
 func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Context, account *Account, modelID, prompt string) error {
 	credentialAccount := account
 	if account.IsShadow() {
@@ -1945,7 +1958,7 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	c.Writer.Flush()
 
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: modelID})
-	s.sendEvent(c, TestEvent{Type: "content", Text: "Calling Codex /responses image tool...\n"})
+	s.sendEvent(c, TestEvent{Type: "content", Text: "Calling Codex /images/generations...\n"})
 
 	parsed := &OpenAIImagesRequest{
 		Endpoint: openAIImagesGenerationsEndpoint,
@@ -1954,17 +1967,46 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	}
 	applyOpenAIImagesDefaults(parsed)
 
-	responsesBody, err := buildOpenAIImagesResponsesRequest(parsed, parsed.Model)
+	endpointProfile, err := resolveOpenAICodexImagesEndpoint(parsed)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to resolve image endpoint profile: %s", err.Error()))
+	}
+	imagesBody, err := buildOpenAICodexImagesRequestBody(parsed, parsed.Model)
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to build image request: %s", err.Error()))
 	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, chatgptCodexAPIURL, bytes.NewReader(responsesBody))
+	targetURL, err := officialCodex0145BuildEndpointURL(
+		officialCodexVersion0145,
+		codex0145EndpointID(endpointProfile.ID),
+		officialCodex0145EndpointURLInput{},
+	)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to resolve image endpoint URL: %s", err.Error()))
+	}
+	req, err := http.NewRequestWithContext(ctx, endpointProfile.Method, targetURL.String(), bytes.NewReader(imagesBody))
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create request")
 	}
 	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
-	req.Host = "chatgpt.com"
+	req.Host = endpointProfile.Host
+	invocationID, err := officialEgressInvocationIDForRequest(c)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to resolve image invocation: %s", err.Error()))
+	}
+	req, egressContext, err := attachOfficialCodex0145EndpointRequest(
+		req,
+		credentialAccount,
+		codex0145EndpointID(endpointProfile.ID),
+		invocationID,
+	)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to attach image endpoint profile: %s", err.Error()))
+	}
+	imagesBody, err = officialCodex0145FinalizeEndpointJSONBody(egressContext, imagesBody, nil)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to finalize image request body: %s", err.Error()))
+	}
+	resetOfficialEgressRequestBody(req, imagesBody)
 	if credentialAccount.IsOpenAIAgentIdentity() {
 		authHeaders, authErr := buildAgentIdentityAuthenticationHeaders(ctx, s.accountRepo, s.agentIdentityWS, &s.agentIdentityTaskMu, credentialAccount)
 		if authErr != nil {
@@ -1979,19 +2021,39 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 		req.Header.Set("Authorization", "Bearer "+authToken)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Accept", "text/event-stream")
-	applyOpenAICodexAuxiliaryHeaders(req.Header)
+	req.Header.Set("Accept", "*/*")
 	setOpenAIChatGPTAccountHeaders(req.Header, credentialAccount)
-	// 与真实转发一致：originator 与最终 User-Agent 首段配套（原 opencode 与 Codex UA 错配会 404，issue #3901）。
-	enforceCodexIdentityHeaders(req.Header)
+	userAgent, originator, err := officialCodex0145ProcessIdentity(egressContext)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to resolve image process identity: %s", err.Error()))
+	}
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Originator", originator)
+	if _, err := officialCodex0145FinalizeEndpointHeaders(egressContext, req.Header, nil); err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to finalize image endpoint profile: %s", err.Error()))
+	}
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	resp, err := s.httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+	tlsProfile, err := officialCodex0145ResolveEndpointTLSProfileForURL(
+		officialCodexVersion0145,
+		codex0145EndpointID(endpointProfile.ID),
+		req.URL,
+	)
 	if err != nil {
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Responses API request failed: %s", err.Error()))
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to resolve image TLS profile: %s", err.Error()))
+	}
+	resp, err := s.httpUpstream.DoWithTLS(
+		req,
+		proxyURL,
+		account.ID,
+		account.Concurrency,
+		tlsProfile,
+	)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Images API request failed: %s", err.Error()))
 	}
 	defer func() {
 		if resp != nil && resp.Body != nil {
@@ -2003,7 +2065,7 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 		body = redactAgentIdentitySensitiveBodyForAccount(ctx, s.accountRepo, credentialAccount, body)
 		message := strings.TrimSpace(extractUpstreamErrorMessage(body))
 		if message == "" {
-			message = fmt.Sprintf("Responses API returned %d", resp.StatusCode)
+			message = fmt.Sprintf("Images API returned %d", resp.StatusCode)
 		}
 		return s.sendErrorAndEnd(c, message)
 	}
@@ -2014,12 +2076,12 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	}
 	body = redactAgentIdentitySensitiveBodyForAccount(ctx, s.accountRepo, credentialAccount, body)
 
-	results, _, _, _, _, err := collectOpenAIImagesFromResponsesBody(body)
+	results, _, _, _, _, err := collectOpenAICodexImagesResponse(body, parsed.Model)
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to parse image response: %s", err.Error()))
 	}
 	if len(results) == 0 {
-		return s.sendErrorAndEnd(c, "No images returned from responses API")
+		return s.sendErrorAndEnd(c, "No images returned from images API")
 	}
 
 	for _, item := range results {

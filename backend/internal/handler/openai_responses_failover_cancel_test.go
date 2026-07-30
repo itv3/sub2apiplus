@@ -29,7 +29,18 @@ type openAIResponsesFailoverCancelUpstream struct {
 	onFirstDo  func()
 }
 
-func (u *openAIResponsesFailoverCancelUpstream) Do(_ *http.Request, _ string, accountID int64, _ int) (*http.Response, error) {
+func (u *openAIResponsesFailoverCancelUpstream) Do(req *http.Request, _ string, accountID int64, _ int) (*http.Response, error) {
+	// 版本画像会异步刷新 models manifest；该辅助请求不属于本用例要观察的
+	// Responses failover 调用，也不能提前触发“客户端断开”回调。
+	if req != nil && req.URL != nil && req.URL.Path == "/backend-api/codex/models" {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body: io.NopCloser(bytes.NewBufferString(
+				`{"models":[{"slug":"gpt-5.4","visibility":"list","use_responses_lite":false,"supports_parallel_tool_calls":true}]}`,
+			)),
+		}, nil
+	}
 	u.mu.Lock()
 	u.accountIDs = append(u.accountIDs, accountID)
 	first := len(u.accountIDs) == 1
@@ -68,7 +79,10 @@ func newOpenAIResponsesFailoverTestHandler(t *testing.T, upstream service.HTTPUp
 			Schedulable: true,
 			Concurrency: 0,
 			Priority:    0,
-			Credentials: map[string]any{"access_token": "token-1"},
+			Credentials: map[string]any{
+				"access_token":       "token-1",
+				"chatgpt_account_id": "chatgpt-account-1",
+			},
 		},
 		{
 			ID:          2,
@@ -79,7 +93,10 @@ func newOpenAIResponsesFailoverTestHandler(t *testing.T, upstream service.HTTPUp
 			Schedulable: true,
 			Concurrency: 0,
 			Priority:    1,
-			Credentials: map[string]any{"access_token": "token-2"},
+			Credentials: map[string]any{
+				"access_token":       "token-2",
+				"chatgpt_account_id": "chatgpt-account-2",
+			},
 		},
 	}
 	accountRepo := openAIImagesFailoverAccountRepo{accounts: accounts}
@@ -139,6 +156,9 @@ func newOpenAIResponsesFailoverTestContext(t *testing.T, ctx context.Context) (*
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = req
+	// 此用例验证“同一次调用耗尽 WS 预算后”的 HTTP 账号切换语义。
+	// 标记与 service 内调用级 fallback 状态一致，避免默认画像拨真实 WS 上游。
+	c.Set("official_codex_force_http_fallback", true)
 	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
 		ID:      99,
 		GroupID: &groupID,

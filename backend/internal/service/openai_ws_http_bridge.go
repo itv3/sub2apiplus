@@ -193,7 +193,7 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			return nil, fmt.Errorf("resolve official egress config: %w", configErr)
 		}
 		if officialEgressEnabled {
-			officialEgressBodyContract, err = captureOfficialOpenAIHTTPBodyContract(body)
+			officialEgressBodyContract, err = captureOfficialOpenAIHTTPBodyContractForRequest(c, body)
 			if err != nil {
 				return nil, fmt.Errorf("capture OpenAI HTTP bridge body contract: %w", err)
 			}

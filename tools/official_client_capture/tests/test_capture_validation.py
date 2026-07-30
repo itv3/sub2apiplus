@@ -131,6 +131,30 @@ class CaptureShapeValidationTest(unittest.TestCase):
                     api_key_env="SUB2API_CAPTURE_API_KEY",
                 )
 
+    def test_codex_only_capture_does_not_require_claude_binary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            codex = Path(directory) / "codex"
+            codex.write_text("binary", encoding="utf-8")
+            codex.chmod(0o700)
+            with patch(
+                "tools.official_client_capture.capture._command_output",
+                return_value="codex-cli 0.146.0",
+            ), patch(
+                "tools.official_client_capture.capture.file_sha256",
+                return_value="b" * 64,
+            ):
+                result = _client_info(
+                    claude_bin=Path(directory) / "missing-claude",
+                    codex_bin=codex,
+                    expected_claude_version="2.1.220",
+                    expected_codex_version="0.146.0",
+                    expected_claude_sha256="a" * 64,
+                    expected_codex_sha256="b" * 64,
+                    api_key_env="SUB2API_CAPTURE_API_KEY",
+                    subjects=("codex-http", "codex-ws"),
+                )
+            self.assertEqual(set(result), {"codex"})
+
     def test_static_security_asset_rejects_symlink(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             target = Path(directory) / "hook.py"

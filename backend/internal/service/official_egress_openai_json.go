@@ -8,27 +8,40 @@ import (
 	"sort"
 )
 
-var officialOpenAIHTTPFieldOrder = []string{
-	"model", "instructions", "input", "tools", "tool_choice",
-	"parallel_tool_calls", "reasoning", "store", "stream", "stream_options",
-	"include", "service_tier", "prompt_cache_key", "text", "client_metadata",
-}
+// Responses 三种正文的顶层槽位直接来自不可变版本画像。序列化器只负责执行槽位，
+// 不再在 Go 代码里维护第二份字段清单；升级 Codex 时新增画像即可，避免 Finalizer 与
+// 传输结构体各自演化后形成“画像写对、实际发送仍用旧数组”的隐蔽偏离。
+var (
+	officialOpenAIHTTPFieldOrder = mustOfficialCodexBodyFieldOrder(
+		officialCodexEndpointResponsesHTTP,
+	)
+	officialOpenAICompactFieldOrder = mustOfficialCodexBodyFieldOrder(
+		officialCodexEndpointResponsesCompact,
+	)
+	officialOpenAIWSFieldOrder = mustOfficialCodexBodyFieldOrder(
+		officialCodexEndpointResponsesWS,
+	)
+)
 
-var officialOpenAICompactFieldOrder = []string{
-	"model", "input", "instructions", "tools", "parallel_tool_calls",
-	"reasoning", "service_tier", "prompt_cache_key", "text",
-}
-
-var officialOpenAIWSFieldOrder = []string{
-	"type", "model", "instructions", "previous_response_id", "input", "tools",
-	"tool_choice", "parallel_tool_calls", "reasoning", "store", "stream",
-	"stream_options", "include", "service_tier", "prompt_cache_key", "text",
-	"generate", "client_metadata",
+func mustOfficialCodexBodyFieldOrder(endpointID string) []string {
+	endpoint, err := resolveCodex0145Endpoint(
+		officialCodexVersion0145,
+		codex0145EndpointID(endpointID),
+	)
+	if err != nil {
+		panic(err)
+	}
+	fields := make([]string, 0, len(endpoint.Body.Fields))
+	for _, field := range endpoint.Body.Fields {
+		fields = append(fields, field.Name)
+	}
+	return fields
 }
 
 var officialOpenAITurnMetadataFieldOrder = []string{
 	"installation_id", "session_id", "thread_id", "turn_id", "window_id",
 	"request_kind", "thread_source", "sandbox", "turn_started_at_unix_ms",
+	"compaction",
 }
 
 type officialJSONRawPool map[string]json.RawMessage

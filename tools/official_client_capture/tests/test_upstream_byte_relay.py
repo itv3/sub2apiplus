@@ -1,0 +1,630 @@
+"""字节中继 WS 受控注入的无网络测试。"""
+
+from __future__ import annotations
+
+import json
+import struct
+import subprocess
+import sys
+import tempfile
+import unittest
+import zlib
+from pathlib import Path
+
+from tools.official_client_capture.candidate_evidence_guard import scan_files_for_secrets
+from tools.official_client_capture.relay_extract import parse_ws_frames
+from tools.official_client_capture.scrub_raw_bytes import rewrite_relay_manifest, scrub
+from tools.official_client_capture.upstream_byte_relay import (
+    _SYNTHETIC_AUX_CFUV_COOKIE,
+    _SYNTHETIC_AUX_TURN_STATE,
+    _SYNTHETIC_FILE_HOST,
+    _SYNTHETIC_FILE_ID,
+    _SYNTHETIC_FILE_QUERY,
+    _SYNTHETIC_CORE_CFUV_COOKIE,
+    _SYNTHETIC_CORE_TURN_STATE,
+    _SYNTHETIC_REALTIME_CALL_ID,
+    _SyntheticCoreWebSocketDecoder,
+    _decode_client_text_frame,
+    _encode_server_text_frame,
+    _redact_oauth_refresh_body,
+    _synthetic_aux_response,
+    _synthetic_core_response,
+)
+
+
+def _masked_client_frame(
+    payload: bytes,
+    *,
+    opcode: int,
+    fin: bool,
+    rsv1: bool = False,
+) -> bytes:
+    first = opcode | (0x80 if fin else 0) | (0x40 if rsv1 else 0)
+    mask = b"\x11\x22\x33\x44"
+    masked = bytes(value ^ mask[index % 4] for index, value in enumerate(payload))
+    if len(payload) <= 125:
+        head = bytes((first, 0x80 | len(payload)))
+    elif len(payload) <= 0xFFFF:
+        head = bytes((first, 0x80 | 126)) + struct.pack(">H", len(payload))
+    else:
+        head = bytes((first, 0x80 | 127)) + struct.pack(">Q", len(payload))
+    return head + mask + masked
+
+
+def _masked_client_text_frame(text: str, *, compressed: bool) -> bytes:
+    payload = text.encode("utf-8")
+    if compressed:
+        compressor = zlib.compressobj(wbits=-15)
+        payload = compressor.compress(payload) + compressor.flush(zlib.Z_SYNC_FLUSH)
+        payload = payload[:-4]
+    return _masked_client_frame(
+        payload,
+        opcode=0x1,
+        fin=True,
+        rsv1=compressed,
+    )
+
+
+def _fragmented_compressed_text_frames(
+    compressor: zlib.Compress,
+    text: str,
+) -> list[bytes]:
+    payload = compressor.compress(text.encode("utf-8"))
+    payload += compressor.flush(zlib.Z_SYNC_FLUSH)
+    payload = payload[:-4]
+    split = max(1, len(payload) - 4)
+    return [
+        _masked_client_frame(
+            payload[:split],
+            opcode=0x1,
+            fin=False,
+            rsv1=True,
+        ),
+        _masked_client_frame(payload[split:], opcode=0x0, fin=False),
+        _masked_client_frame(b"", opcode=0x0, fin=True),
+    ]
+
+
+class UpstreamByteRelayWebSocketTest(unittest.TestCase):
+    def test_server_injection_frame_is_unmasked_and_uncompressed(self) -> None:
+        text = json.dumps({
+            "type": "response.metadata",
+            "headers": {"x-codex-turn-state": "probe-ws-turn-state-0145"},
+        }, separators=(",", ":"))
+        frame = _encode_server_text_frame(text)
+        self.assertEqual(frame[0], 0x81)
+        self.assertEqual(frame[0] & 0x40, 0)
+        self.assertEqual(frame[1] & 0x80, 0)
+        self.assertTrue(frame.endswith(text.encode("utf-8")))
+
+    def test_decodes_masked_plain_response_create(self) -> None:
+        text = '{"type":"response.create","generate":false}'
+        frame = _masked_client_text_frame(text, compressed=False)
+        self.assertEqual(_decode_client_text_frame(frame), text)
+
+    def test_decodes_masked_deflate_response_create(self) -> None:
+        text = '{"type":"response.create","input":[{"type":"message"}]}'
+        frame = _masked_client_text_frame(text, compressed=True)
+        self.assertEqual(_decode_client_text_frame(frame), text)
+
+    def test_reassembles_coder_fragmented_context_takeover_messages(self) -> None:
+        compressor = zlib.compressobj(wbits=-15)
+        decoder = _SyntheticCoreWebSocketDecoder()
+        wire = bytearray()
+        texts = [
+            json.dumps(
+                {
+                    "type": "response.create",
+                    "model": "gpt-5.6-sol",
+                    "input": [{"type": "message", "content": "a" * 512}],
+                },
+                separators=(",", ":"),
+            ),
+            json.dumps(
+                {
+                    "type": "response.create",
+                    "model": "gpt-5.6-sol",
+                    "input": [{"type": "message", "content": "b" * 512}],
+                },
+                separators=(",", ":"),
+            ),
+        ]
+        for text in texts:
+            frames = _fragmented_compressed_text_frames(compressor, text)
+            wire.extend(b"".join(frames))
+            self.assertIsNone(decoder.text(frames[0]))
+            self.assertIsNone(decoder.text(frames[1]))
+            self.assertEqual(decoder.text(frames[2]), text)
+
+        parsed = parse_ws_frames(bytes(wire))
+        text_frames = [frame for frame in parsed if frame["opcode"] == "TEXT"]
+        self.assertEqual(
+            [frame.get("event_type") for frame in text_frames],
+            ["response.create", "response.create"],
+        )
+        self.assertTrue(all(frame["rsv1_deflate"] for frame in text_frames))
+        self.assertTrue(
+            all(frame.get("compressed") == "permessage-deflate" for frame in text_frames)
+        )
+        self.assertEqual(
+            [frame.get("message_fragment_count") for frame in text_frames],
+            [3, 3],
+        )
+
+
+class UpstreamByteRelaySyntheticAuxTest(unittest.TestCase):
+    @staticmethod
+    def response(host: str, line: str, headers: bytes = b"", body: bytes = b""):
+        head = line.encode("ascii") + b"\r\n" + headers + b"\r\n"
+        return _synthetic_aux_response(host, line, head, body)
+
+    def test_a09_auxiliary_endpoints_are_allowlisted(self) -> None:
+        cases = (
+            (
+                "GET /backend-api/codex/models?client_version=0.145.0 HTTP/1.1",
+                "models_manifest",
+            ),
+            ("POST /backend-api/codex/responses/compact HTTP/1.1", "legacy_compact"),
+            ("POST /backend-api/codex/alpha/search HTTP/1.1", "alpha_search"),
+            (
+                "POST /backend-api/codex/images/generations HTTP/1.1",
+                "images_generation",
+            ),
+            ("POST /backend-api/codex/images/edits HTTP/1.1", "images_edit"),
+        )
+        for request_line, action in cases:
+            with self.subTest(action=action):
+                result = self.response("chatgpt.com", request_line)
+                self.assertIsNotNone(result)
+                self.assertEqual(result.action, action)
+                self.assertTrue(result.wire.startswith(b"HTTP/1.1 200 OK\r\n"))
+
+    def test_a09_legacy_compact_response_has_complete_responses_usage(self) -> None:
+        result = self.response(
+            "chatgpt.com",
+            "POST /backend-api/codex/responses/compact HTTP/1.1",
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.action, "legacy_compact")
+
+        response_head, response_body = result.wire.split(b"\r\n\r\n", 1)
+        payload = json.loads(response_body)
+        self.assertEqual(payload["id"], "cmp_candidate_aux")
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(payload["output"], [])
+        self.assertEqual(
+            payload["usage"],
+            {
+                "input_tokens": 7,
+                "output_tokens": 1,
+                "total_tokens": 8,
+                "input_tokens_details": {"cached_tokens": 0},
+            },
+        )
+        self.assertIn(
+            f"content-length: {len(response_body)}".encode("ascii"),
+            response_head.lower(),
+        )
+
+    def test_a09_compact_prime_sets_cookie_and_beta_sets_turn_state(self) -> None:
+        prime = self.response(
+            "chatgpt.com",
+            "POST /backend-api/codex/responses/compact HTTP/1.1",
+            b'x-codex-turn-metadata: {"capture_variant":"prime"}\r\n',
+        )
+        self.assertIsNotNone(prime)
+        self.assertIn(
+            f"set-cookie: {_SYNTHETIC_AUX_CFUV_COOKIE}\r\n".encode("ascii"),
+            prime.wire,
+        )
+
+        default = self.response(
+            "chatgpt.com",
+            "POST /backend-api/codex/responses/compact HTTP/1.1",
+        )
+        beta = self.response(
+            "chatgpt.com",
+            "POST /backend-api/codex/responses/compact HTTP/1.1",
+            b"x-codex-beta-features: candidate_aux_beta\r\n",
+        )
+        self.assertIsNotNone(default)
+        self.assertIsNotNone(beta)
+        self.assertNotIn(b"set-cookie:", default.wire.lower())
+        self.assertNotIn(b"set-cookie:", beta.wire.lower())
+        self.assertNotIn(_SYNTHETIC_AUX_TURN_STATE.encode("ascii"), default.wire)
+        self.assertIn(
+            f"x-codex-turn-state: {_SYNTHETIC_AUX_TURN_STATE}\r\n".encode("ascii"),
+            beta.wire,
+        )
+
+    def test_realtime_two_hop_is_linked_and_terminal(self) -> None:
+        first = self.response(
+            "chatgpt.com",
+            "POST /backend-api/codex/realtime/calls?intent=quicksilver&architecture=avas HTTP/1.1",
+        )
+        self.assertIsNotNone(first)
+        self.assertIn(_SYNTHETIC_REALTIME_CALL_ID.encode("ascii"), first.wire)
+
+        second = self.response(
+            "api.openai.com",
+            (
+                "GET /v1/realtime?intent=quicksilver&call_id="
+                f"{_SYNTHETIC_REALTIME_CALL_ID} HTTP/1.1"
+            ),
+            b"Upgrade: websocket\r\nSec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n",
+        )
+        self.assertIsNotNone(second)
+        self.assertEqual(second.action, "realtime_sideband")
+        self.assertIn(
+            b"sec-websocket-accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",
+            second.wire,
+        )
+        self.assertIn(b'{"type":"session.ended"}', second.terminal_ws_frame)
+
+    def test_wham_consume_is_a_local_synthetic_response(self) -> None:
+        for request_line, action in (
+            ("GET /backend-api/wham/usage HTTP/1.1", "wham_usage"),
+            (
+                "GET /backend-api/wham/rate-limit-reset-credits HTTP/1.1",
+                "wham_credit_details",
+            ),
+            (
+                "POST /backend-api/wham/rate-limit-reset-credits/consume HTTP/1.1",
+                "wham_safe_consume",
+            ),
+        ):
+            with self.subTest(action=action):
+                result = self.response("chatgpt.com", request_line)
+                self.assertIsNotNone(result)
+                self.assertEqual(result.action, action)
+
+    def test_oauth_dummy_is_redacted_before_persistence(self) -> None:
+        dummy = b"dummy-refresh-must-not-persist"
+        body = b"grant_type=refresh_token&refresh_token=" + dummy + b"&scope=openid"
+        redacted, changed = _redact_oauth_refresh_body(body)
+        self.assertTrue(changed)
+        self.assertEqual(len(redacted), len(body))
+        self.assertNotIn(dummy, redacted)
+        self.assertIn(b"refresh_token=<secret>", redacted)
+
+        response = self.response(
+            "auth.openai.com",
+            "POST /oauth/token HTTP/1.1",
+            body=body,
+        )
+        self.assertIsNotNone(response)
+        self.assertEqual(response.action, "oauth_dummy_invalid_grant")
+        self.assertTrue(response.wire.startswith(b"HTTP/1.1 400 Bad Request"))
+        self.assertIn(b'"error":"invalid_grant"', response.wire)
+
+    def test_files_chain_uses_response_returned_regional_host(self) -> None:
+        created = self.response(
+            "chatgpt.com",
+            "POST /backend-api/files HTTP/1.1",
+        )
+        self.assertIsNotNone(created)
+        self.assertIn(_SYNTHETIC_FILE_HOST.encode("ascii"), created.wire)
+        self.assertIn(_SYNTHETIC_FILE_ID.encode("ascii"), created.wire)
+        self.assertIn(_SYNTHETIC_FILE_QUERY.encode("ascii"), created.wire)
+
+        uploaded = self.response(
+            _SYNTHETIC_FILE_HOST,
+            f"PUT /candidate-aux/{_SYNTHETIC_FILE_ID}?{_SYNTHETIC_FILE_QUERY} HTTP/1.1",
+        )
+        self.assertIsNotNone(uploaded)
+        self.assertEqual(uploaded.action, "files_blob_put")
+
+        finalized = self.response(
+            "chatgpt.com",
+            f"POST /backend-api/files/{_SYNTHETIC_FILE_ID}/uploaded HTTP/1.1",
+        )
+        self.assertIsNotNone(finalized)
+        self.assertEqual(finalized.action, "files_uploaded")
+
+    def test_unknown_or_wrong_query_is_fail_closed(self) -> None:
+        self.assertIsNone(
+            self.response("chatgpt.com", "POST /backend-api/wham/unknown HTTP/1.1")
+        )
+        self.assertIsNone(
+            self.response(
+                "chatgpt.com",
+                "POST /backend-api/codex/realtime/calls?intent=other&architecture=avas HTTP/1.1",
+            )
+        )
+        self.assertIsNone(
+            self.response(
+                _SYNTHETIC_FILE_HOST,
+                f"PUT /candidate-aux/{_SYNTHETIC_FILE_ID}?sig=wrong HTTP/1.1",
+            )
+        )
+
+    def test_synthetic_profile_requires_second_explicit_switch(self) -> None:
+        script = Path(__file__).parents[1] / "upstream_byte_relay.py"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--cert",
+                "missing.crt",
+                "--key",
+                "missing.key",
+                "--output",
+                "missing-output",
+                "--synthetic-profile",
+                "candidate-aux-v1",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("必须同时提供", result.stderr)
+
+    def test_synthetic_profile_rejects_production_upstream_map(self) -> None:
+        script = Path(__file__).parents[1] / "upstream_byte_relay.py"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--cert",
+                "missing.crt",
+                "--key",
+                "missing.key",
+                "--output",
+                "missing-output",
+                "--synthetic-profile",
+                "candidate-aux-v1",
+                "--allow-synthetic-responses",
+                "--upstream-ip",
+                "203.0.113.10",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("禁止配置任何生产上游", result.stderr)
+
+
+class UpstreamByteRelaySyntheticCoreTest(unittest.TestCase):
+    @staticmethod
+    def response(
+        scenario: str,
+        line: str,
+        headers: bytes = b"",
+        body: bytes = b"",
+        ordinal: int = 1,
+    ):
+        head = line.encode("ascii") + b"\r\n" + headers + b"\r\n"
+        return _synthetic_core_response(
+            scenario,
+            "chatgpt.com",
+            line,
+            head,
+            body,
+            ordinal,
+        )
+
+    def test_a03_four_response_cookie_and_turn_state_sequence(self) -> None:
+        results = [
+            self.response(
+                "A03",
+                "POST /backend-api/codex/responses HTTP/1.1",
+                ordinal=ordinal,
+            )
+            for ordinal in range(1, 5)
+        ]
+        self.assertTrue(all(result is not None for result in results))
+        wires = [result.wire for result in results if result is not None]
+        self.assertEqual(
+            [result.action for result in results if result is not None],
+            ["responses_http_success"] * 4,
+        )
+        self.assertEqual(
+            [result.set_cookie_names for result in results if result is not None],
+            [("_cfuvid",), (), (), ()],
+        )
+        self.assertIn(
+            f"set-cookie: {_SYNTHETIC_CORE_CFUV_COOKIE}\r\n".encode("ascii"),
+            wires[0],
+        )
+        self.assertNotIn(b"set-cookie:", b"".join(wires[1:]).lower())
+        self.assertNotIn(_SYNTHETIC_CORE_TURN_STATE.encode("ascii"), wires[0])
+        self.assertNotIn(_SYNTHETIC_CORE_TURN_STATE.encode("ascii"), wires[1])
+        self.assertIn(_SYNTHETIC_CORE_TURN_STATE.encode("ascii"), wires[2])
+        self.assertNotIn(_SYNTHETIC_CORE_TURN_STATE.encode("ascii"), wires[3])
+        self.assertIn(b'"model":"gpt-5.5"', wires[0])
+        self.assertIn(b'"model":"gpt-5.5"', wires[1])
+        self.assertIn(b'"model":"gpt-5.6-sol"', wires[2])
+        self.assertIn(b'"model":"gpt-5.6-sol"', wires[3])
+        for wire in wires:
+            self.assertIn(b"content-type: text/event-stream", wire)
+            self.assertIn(b'"type":"response.completed"', wire)
+            self.assertIn(b"data: [DONE]", wire)
+
+    def test_a03_cookie_is_redacted_from_public_relay_bytes(self) -> None:
+        first = self.response(
+            "A03",
+            "POST /backend-api/codex/responses HTTP/1.1",
+            ordinal=1,
+        )
+        self.assertIsNotNone(first)
+        private_bytes = (
+            first.wire
+            + b"POST /backend-api/codex/responses HTTP/1.1\r\n"
+            + f"cookie: {_SYNTHETIC_CORE_CFUV_COOKIE.split(';', 1)[0]}\r\n\r\n".encode(
+                "ascii"
+            )
+        )
+        public_bytes, replacements = scrub(private_bytes)
+        self.assertEqual(len(public_bytes), len(private_bytes))
+        # 现有等长 scrub 规则会先按 Cookie 命中 Set-Cookie 的后缀，再由
+        # Set-Cookie 专用规则复核替换；另一次命中来自后续请求的 Cookie。
+        self.assertEqual(replacements, 3)
+        self.assertNotIn(b"_cfuvid", public_bytes)
+        self.assertNotIn(b"candidate-core-0145", public_bytes)
+        self.assertEqual(public_bytes.count(b"<secret>"), 2)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "a03-public-relay.bin"
+            path.write_bytes(public_bytes)
+            scan = scan_files_for_secrets([("candidate/A03/relay.bin", path)])
+        self.assertTrue(scan["passed"], scan["findings"])
+
+    def test_models_manifest_covers_lite_and_non_lite(self) -> None:
+        result = self.response(
+            "A04",
+            "GET /backend-api/codex/models?client_version=0.145.0 HTTP/1.1",
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.action, "models_manifest")
+        self.assertIn(b'"slug":"gpt-5.5"', result.wire)
+        self.assertIn(b'"use_responses_lite":false', result.wire)
+        self.assertIn(b'"slug":"gpt-5.6-sol"', result.wire)
+        self.assertIn(b'"use_responses_lite":true', result.wire)
+
+    def test_ws_requires_permessage_deflate_and_builds_valid_accept(self) -> None:
+        headers = (
+            b"Upgrade: websocket\r\n"
+            b"Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+            b"Sec-WebSocket-Extensions: permessage-deflate; client_max_window_bits\r\n"
+        )
+        result = self.response(
+            "A05",
+            "GET /backend-api/codex/responses HTTP/1.1",
+            headers,
+        )
+        self.assertIsNotNone(result)
+        self.assertTrue(result.websocket)
+        self.assertIn(
+            b"sec-websocket-accept: s3pPLMBiTxaQ9kYGzzhZRbK+xOo=",
+            result.wire,
+        )
+        self.assertIn(b"sec-websocket-extensions: permessage-deflate", result.wire)
+        self.assertIsNone(
+            self.response(
+                "A05",
+                "GET /backend-api/codex/responses HTTP/1.1",
+                b"Upgrade: websocket\r\nSec-WebSocket-Key: key\r\n",
+            )
+        )
+
+    def test_scenario_path_matrix_is_fail_closed(self) -> None:
+        self.assertIsNone(
+            self.response("A05", "POST /backend-api/codex/responses HTTP/1.1")
+        )
+        self.assertIsNone(
+            self.response("A03", "POST /backend-api/codex/responses/compact HTTP/1.1")
+        )
+        self.assertIsNone(
+            _synthetic_core_response(
+                "A03",
+                "auth.openai.com",
+                "POST /oauth/token HTTP/1.1",
+                b"POST /oauth/token HTTP/1.1\r\n\r\n",
+                b"",
+                1,
+            )
+        )
+
+    def test_context_takeover_decoder_reads_two_compressed_messages(self) -> None:
+        compressor = zlib.compressobj(wbits=-15)
+        decoder = _SyntheticCoreWebSocketDecoder()
+        for ordinal in (1, 2):
+            text = json.dumps(
+                {"type": "response.create", "ordinal": ordinal},
+                separators=(",", ":"),
+            )
+            payload = compressor.compress(text.encode("utf-8"))
+            payload += compressor.flush(zlib.Z_SYNC_FLUSH)
+            payload = payload[:-4]
+            mask = b"\x11\x22\x33\x44"
+            masked = bytes(
+                value ^ mask[index % 4] for index, value in enumerate(payload)
+            )
+            frame = bytes((0xC1, 0x80 | len(payload))) + mask + masked
+            self.assertEqual(decoder.text(frame), text)
+
+    def test_core_profile_requires_scenario_and_rejects_upstream(self) -> None:
+        script = Path(__file__).parents[1] / "upstream_byte_relay.py"
+        missing_scenario = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--cert",
+                "missing.crt",
+                "--key",
+                "missing.key",
+                "--output",
+                "missing-output",
+                "--synthetic-profile",
+                "candidate-core-v1",
+                "--allow-synthetic-responses",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(missing_scenario.returncode, 2)
+        self.assertIn("必须提供 --candidate-core-scenario", missing_scenario.stderr)
+
+        production_map = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--cert",
+                "missing.crt",
+                "--key",
+                "missing.key",
+                "--output",
+                "missing-output",
+                "--synthetic-profile",
+                "candidate-core-v1",
+                "--allow-synthetic-responses",
+                "--candidate-core-scenario",
+                "A03",
+                "--upstream-map",
+                "chatgpt.com=203.0.113.10",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(production_map.returncode, 2)
+        self.assertIn("禁止配置任何生产上游", production_map.stderr)
+
+
+class ScrubbedRelayEvidenceTest(unittest.TestCase):
+    def test_manifest_copy_creates_destination_without_wire_files(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "private"
+            destination = root / "public"
+            source.mkdir()
+            (source / "relay.json").write_text(
+                json.dumps({"connections": []}),
+                encoding="utf-8",
+            )
+            self.assertTrue(rewrite_relay_manifest(source, destination))
+            self.assertTrue((destination / "relay.json").is_file())
+
+    def test_equal_length_placeholder_passes_candidate_secret_guard(self) -> None:
+        source = (
+            b"POST /oauth/token HTTP/1.1\r\n"
+            b"authorization: Bearer real-token-value-123456789\r\n"
+            b"cookie: session=real-cookie-value-123456789\r\n\r\n"
+            b'{"refresh_token":"real-refresh-value-123456789"}'
+        )
+        scrubbed, replacements = scrub(source)
+        self.assertEqual(len(scrubbed), len(source))
+        self.assertEqual(replacements, 3)
+        self.assertNotIn(b"real-token", scrubbed)
+        self.assertGreaterEqual(scrubbed.count(b"<secret>"), 3)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "relay.bin"
+            path.write_bytes(scrubbed)
+            result = scan_files_for_secrets([("candidate/A13/relay.bin", path)])
+        self.assertTrue(result["passed"], result["findings"])
+
+if __name__ == "__main__":
+    unittest.main()

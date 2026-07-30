@@ -21,6 +21,8 @@ import (
 const (
 	testOfficialOpenAIInstallationID = "bee3cd38-4511-4497-899e-f19f04f953fd"
 	testOfficialOpenAISessionID      = "019f9577-d69f-7892-809e-8a3a4198c671"
+	testOfficialOpenAIChildThreadID  = "019f9577-d69f-7892-809e-8a3a4198c672"
+	testOfficialOpenAIOtherThreadID  = "019f9577-d69f-7892-809e-8a3a4198c673"
 	testOfficialOpenAITurnID         = "019f9577-d70a-7553-ad23-8de3ede39d8b"
 	testOfficialOpenAICallID         = "call_5FYHRGgugSt5anQYPCM8LO1B"
 )
@@ -127,6 +129,339 @@ func TestOpenAIOfficialEgressHTTPFinalizerRejectsIdentityConflict(t *testing.T) 
 	require.ErrorContains(t, err, "ingress headers conflict with body identity")
 }
 
+func TestOpenAIOfficialEgressHTTPFinalizerAcceptsGuardianIdentity(t *testing.T) {
+	body := newOfficialOpenAIGuardianHTTPBody(t)
+	contract, err := captureOfficialOpenAIHTTPBodyContract(body)
+	require.NoError(t, err)
+	c := newOfficialOpenAIGuardianHTTPContext(t, body, "/v1/responses")
+
+	req, err := (&OpenAIGatewayService{}).buildUpstreamRequest(
+		c.Request.Context(),
+		c,
+		newOfficialOpenAIHTTPTestAccount(94),
+		body,
+		"oauth-token",
+		openAIUpstreamRequestPlan{
+			IsStream:                   true,
+			PromptCacheKey:             "guardian:" + testOfficialOpenAISessionID,
+			IsCodexCLI:                 true,
+			OfficialEgressBodyContract: contract,
+		},
+	)
+
+	require.NoError(t, err)
+	wireBody := mustReadRequestBody(t, req)
+	require.Equal(t, testOfficialOpenAISessionID, req.Header.Get("session-id"))
+	require.Equal(t, testOfficialOpenAIChildThreadID, req.Header.Get("thread-id"))
+	require.Equal(t, testOfficialOpenAIChildThreadID, req.Header.Get("x-client-request-id"))
+	require.Equal(t, testOfficialOpenAIChildThreadID+":0", req.Header.Get("x-codex-window-id"))
+	require.Equal(t, "guardian", req.Header.Get("x-openai-subagent"))
+	require.Equal(t, testOfficialOpenAISessionID, req.Header.Get("x-codex-parent-thread-id"))
+	require.Equal(t, "guardian:"+testOfficialOpenAISessionID, gjson.GetBytes(wireBody, "prompt_cache_key").String())
+	require.Equal(t, testOfficialOpenAISessionID, gjson.GetBytes(wireBody, "client_metadata.session_id").String())
+	require.Equal(t, testOfficialOpenAIChildThreadID, gjson.GetBytes(wireBody, "client_metadata.thread_id").String())
+	require.Equal(t, "guardian", gjson.GetBytes(wireBody, "client_metadata.x-openai-subagent").String())
+	require.Equal(t, testOfficialOpenAISessionID, gjson.GetBytes(wireBody, "client_metadata.x-codex-parent-thread-id").String())
+
+	turnMetadata := gjson.Parse(req.Header.Get("x-codex-turn-metadata"))
+	require.Equal(t, testOfficialOpenAISessionID, turnMetadata.Get("session_id").String())
+	require.Equal(t, testOfficialOpenAIChildThreadID, turnMetadata.Get("thread_id").String())
+	require.Equal(t, testOfficialOpenAIChildThreadID+":0", turnMetadata.Get("window_id").String())
+}
+
+func TestResolveExplicitOfficialOpenAIHTTPIdentityAcceptsMemoryConsolidation(t *testing.T) {
+	body := newOfficialOpenAIMemoryConsolidationHTTPBody(t)
+	contract, err := captureOfficialOpenAIHTTPBodyContract(body)
+	require.NoError(t, err)
+	c := newOfficialOpenAIMemoryConsolidationHTTPContext(t, body, "/v1/responses")
+
+	identity, err := resolveExplicitOfficialOpenAIHTTPIdentity(c, contract, false)
+	require.NoError(t, err)
+	require.Equal(t, testOfficialOpenAISessionID, identity.sessionID)
+	require.Equal(t, testOfficialOpenAIChildThreadID, identity.threadID)
+	require.Equal(t, testOfficialOpenAIChildThreadID, identity.clientRequest)
+	require.Equal(t, testOfficialOpenAISessionID, identity.promptCacheKey)
+}
+
+func TestResolveExplicitOfficialOpenAIHTTPIdentityAcceptsOrdinaryChild(t *testing.T) {
+	body := newOfficialOpenAIChildHTTPBody(
+		t,
+		testOfficialOpenAISessionID,
+		"collab_spawn",
+		testOfficialOpenAISessionID,
+		"subagent",
+		"thread_spawn",
+	)
+	contract, err := captureOfficialOpenAIHTTPBodyContract(body)
+	require.NoError(t, err)
+	c := newOfficialOpenAIChildHTTPContext(
+		t,
+		body,
+		"/v1/responses",
+		"collab_spawn",
+		false,
+		testOfficialOpenAISessionID,
+	)
+
+	identity, err := resolveExplicitOfficialOpenAIHTTPIdentity(c, contract, false)
+	require.NoError(t, err)
+	require.Equal(t, testOfficialOpenAISessionID, identity.sessionID)
+	require.Equal(t, testOfficialOpenAIChildThreadID, identity.threadID)
+	require.Equal(t, testOfficialOpenAIChildThreadID, identity.clientRequest)
+	require.Equal(t, testOfficialOpenAISessionID, identity.promptCacheKey)
+}
+
+func TestResolveExplicitOfficialOpenAIHTTPIdentityRequiresThreadAnchors(t *testing.T) {
+	tests := []struct {
+		name      string
+		mutate    func(t *testing.T, body []byte, c *gin.Context) []byte
+		errorText string
+	}{
+		{
+			name: "client request 必须等于 thread",
+			mutate: func(_ *testing.T, body []byte, c *gin.Context) []byte {
+				c.Request.Header.Set("x-client-request-id", testOfficialOpenAIOtherThreadID)
+				return body
+			},
+			errorText: "thread/request identity conflicts",
+		},
+		{
+			name: "guardian prompt cache key 必须绑定父线程",
+			mutate: func(t *testing.T, body []byte, _ *gin.Context) []byte {
+				return mutateOfficialOpenAIHTTPTestBody(t, body, func(payload map[string]any, _ map[string]any, _ map[string]any) {
+					payload["prompt_cache_key"] = testOfficialOpenAIOtherThreadID
+				})
+			},
+			errorText: "guardian prompt_cache_key conflicts with identity",
+		},
+		{
+			name: "window 前缀必须等于 thread",
+			mutate: func(t *testing.T, body []byte, c *gin.Context) []byte {
+				body = mutateOfficialOpenAIHTTPTestBody(t, body, func(_ map[string]any, metadata map[string]any, turnMetadata map[string]any) {
+					metadata["x-codex-window-id"] = testOfficialOpenAISessionID + ":0"
+					turnMetadata["window_id"] = testOfficialOpenAISessionID + ":0"
+				})
+				c.Request.Header.Set("x-codex-window-id", testOfficialOpenAISessionID+":0")
+				c.Request.Header.Set("x-codex-turn-metadata", gjson.GetBytes(body, "client_metadata.x-codex-turn-metadata").String())
+				return body
+			},
+			errorText: "window_id conflicts with thread",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := newOfficialOpenAIGuardianHTTPBody(t)
+			c := newOfficialOpenAIGuardianHTTPContext(t, body, "/v1/responses")
+			body = tt.mutate(t, body, c)
+			contract, err := captureOfficialOpenAIHTTPBodyContract(body)
+			require.NoError(t, err)
+
+			_, err = resolveExplicitOfficialOpenAIHTTPIdentity(c, contract, false)
+			require.ErrorContains(t, err, tt.errorText)
+		})
+	}
+}
+
+func TestResolveExplicitOfficialOpenAIHTTPCompactIdentityUsesSessionPromptCacheKey(t *testing.T) {
+	fullBody := newOfficialOpenAIHTTPTestBody(t, false, false, false)
+	turnMetadata := gjson.GetBytes(fullBody, "client_metadata.x-codex-turn-metadata").String()
+	body := mutateOfficialOpenAIHTTPTestBody(t, fullBody, func(payload map[string]any, _ map[string]any, _ map[string]any) {
+		delete(payload, "client_metadata")
+	})
+	c := newOfficialOpenAIHTTPTestContext(body, "/v1/responses/compact")
+	c.Request.Header.Del("x-client-request-id")
+	c.Request.Header.Set("X-Codex-Installation-ID", testOfficialOpenAIInstallationID)
+	c.Request.Header.Set("x-codex-turn-metadata", turnMetadata)
+	contract, err := captureOfficialOpenAIHTTPBodyContract(body)
+	require.NoError(t, err)
+
+	identity, err := resolveExplicitOfficialOpenAIHTTPIdentity(c, contract, true)
+	require.NoError(t, err)
+	require.Equal(t, testOfficialOpenAISessionID, identity.sessionID)
+	require.Equal(t, testOfficialOpenAISessionID, identity.threadID)
+	require.Equal(t, testOfficialOpenAISessionID, identity.promptCacheKey)
+	require.Empty(t, identity.clientRequest)
+
+	conflictingBody := mutateOfficialOpenAIHTTPTestBody(t, body, func(payload map[string]any, _ map[string]any, _ map[string]any) {
+		payload["prompt_cache_key"] = testOfficialOpenAIOtherThreadID
+	})
+	conflictingContract, err := captureOfficialOpenAIHTTPBodyContract(conflictingBody)
+	require.NoError(t, err)
+	_, err = resolveExplicitOfficialOpenAIHTTPIdentity(c, conflictingContract, true)
+	require.ErrorContains(t, err, "root prompt_cache_key conflicts with identity")
+}
+
+func TestResolveExplicitOfficialOpenAIHTTPCompactIdentityAcceptsConditionalKinds(t *testing.T) {
+	tests := []struct {
+		name           string
+		newFullBody    func(t *testing.T) []byte
+		subagent       string
+		memoryGenerate bool
+		parentThreadID string
+		expectedPrompt string
+	}{
+		{
+			name: "普通子代理沿用 session key",
+			newFullBody: func(t *testing.T) []byte {
+				return newOfficialOpenAIChildHTTPBody(
+					t,
+					testOfficialOpenAISessionID,
+					"collab_spawn",
+					testOfficialOpenAISessionID,
+					"subagent",
+					"thread_spawn",
+				)
+			},
+			subagent:       "collab_spawn",
+			parentThreadID: testOfficialOpenAISessionID,
+			expectedPrompt: testOfficialOpenAISessionID,
+		},
+		{
+			name:           "内部记忆合并沿用 session key",
+			newFullBody:    newOfficialOpenAIMemoryConsolidationHTTPBody,
+			subagent:       "memory_consolidation",
+			memoryGenerate: true,
+			expectedPrompt: testOfficialOpenAISessionID,
+		},
+		{
+			name:           "guardian 绑定 parent thread",
+			newFullBody:    newOfficialOpenAIGuardianHTTPBody,
+			subagent:       "guardian",
+			parentThreadID: testOfficialOpenAISessionID,
+			expectedPrompt: "guardian:" + testOfficialOpenAISessionID,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fullBody := tt.newFullBody(t)
+			turnMetadata := gjson.GetBytes(fullBody, "client_metadata.x-codex-turn-metadata").String()
+			body := mutateOfficialOpenAIHTTPTestBody(t, fullBody, func(payload map[string]any, _ map[string]any, _ map[string]any) {
+				delete(payload, "client_metadata")
+			})
+			c := newOfficialOpenAIChildHTTPContext(
+				t,
+				body,
+				"/v1/responses/compact",
+				tt.subagent,
+				tt.memoryGenerate,
+				tt.parentThreadID,
+			)
+			c.Request.Header.Set("X-Codex-Installation-ID", testOfficialOpenAIInstallationID)
+			c.Request.Header.Set("x-codex-turn-metadata", turnMetadata)
+			c.Request.Header.Del("x-client-request-id")
+			contract, err := captureOfficialOpenAIHTTPBodyContract(body)
+			require.NoError(t, err)
+
+			identity, err := resolveExplicitOfficialOpenAIHTTPIdentity(c, contract, true)
+			require.NoError(t, err)
+			require.Equal(t, testOfficialOpenAISessionID, identity.sessionID)
+			require.Equal(t, testOfficialOpenAIChildThreadID, identity.threadID)
+			require.Equal(t, tt.expectedPrompt, identity.promptCacheKey)
+			require.Empty(t, identity.clientRequest)
+		})
+	}
+}
+
+func TestResolveExplicitOfficialOpenAIHTTPIdentityRejectsConditionalMetadataHeaderConflict(t *testing.T) {
+	tests := []struct {
+		name      string
+		field     string
+		bodyValue any
+	}{
+		{name: "subagent", field: "x-openai-subagent", bodyValue: "guardian-mismatch"},
+		{name: "parent thread", field: "x-codex-parent-thread-id", bodyValue: testOfficialOpenAIOtherThreadID},
+		{name: "非字符串", field: "x-openai-subagent", bodyValue: 7},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := newOfficialOpenAIGuardianHTTPBody(t)
+			body = mutateOfficialOpenAIHTTPTestBody(t, body, func(_ map[string]any, metadata map[string]any, _ map[string]any) {
+				metadata[tt.field] = tt.bodyValue
+			})
+			contract, err := captureOfficialOpenAIHTTPBodyContract(body)
+			require.NoError(t, err)
+			c := newOfficialOpenAIGuardianHTTPContext(t, body, "/v1/responses")
+
+			_, err = resolveExplicitOfficialOpenAIHTTPIdentity(c, contract, false)
+			require.ErrorContains(t, err, "client_metadata "+tt.field+" conflicts with ingress header")
+		})
+	}
+}
+
+func TestResolveDerivedOfficialOpenAICompactionMetadataCoversAllReasons(t *testing.T) {
+	tests := []struct {
+		name     string
+		reason   string
+		trigger  string
+		phase    string
+		expected string
+	}{
+		{
+			name:     "用户主动触发",
+			reason:   "user_requested",
+			trigger:  "manual",
+			phase:    "standalone_turn",
+			expected: `{"trigger":"manual","reason":"user_requested","implementation":"responses_compaction_v2","phase":"standalone_turn","strategy":"memento"}`,
+		},
+		{
+			name:     "上下文阈值触发",
+			reason:   "context_limit",
+			trigger:  "auto",
+			phase:    "mid_turn",
+			expected: `{"trigger":"auto","reason":"context_limit","implementation":"responses_compaction_v2","phase":"mid_turn","strategy":"memento"}`,
+		},
+		{
+			name:     "模型降级触发",
+			reason:   "model_downshift",
+			trigger:  "auto",
+			phase:    "pre_turn",
+			expected: `{"trigger":"auto","reason":"model_downshift","implementation":"responses_compaction_v2","phase":"pre_turn","strategy":"memento"}`,
+		},
+		{
+			name:     "压缩哈希变化触发",
+			reason:   "comp_hash_changed",
+			trigger:  "auto",
+			phase:    "pre_turn",
+			expected: `{"trigger":"auto","reason":"comp_hash_changed","implementation":"responses_compaction_v2","phase":"pre_turn","strategy":"memento"}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			body := []byte(`{"model":"gpt-5.6-luna","input":[{"type":"compaction_trigger"}]}`)
+			c := newOfficialOpenAIHTTPTestContext(body, "/v1/responses")
+			c.Request.Header.Set("x-codex-turn-metadata", `{"compaction":{"reason":"`+tt.reason+`"}}`)
+
+			metadata, ok := resolveDerivedOfficialOpenAICompactionMetadata(c, body)
+			require.True(t, ok)
+			require.Equal(t, tt.trigger, metadata.Trigger)
+			require.Equal(t, tt.phase, metadata.Phase)
+			encoded, err := json.Marshal(metadata)
+			require.NoError(t, err)
+			require.JSONEq(t, tt.expected, string(encoded))
+			// JSONEq 不校验字段顺序；再比较原始字节确保 wire 顺序不被 map 改写。
+			require.Equal(t, tt.expected, string(encoded))
+		})
+	}
+}
+
+func TestResolveDerivedOfficialOpenAICompactionMetadataLegacyImplementation(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.6-luna","input":[]}`)
+	c := newOfficialOpenAIHTTPTestContext(body, "/v1/responses/compact")
+
+	metadata, ok := resolveDerivedOfficialOpenAICompactionMetadata(c, body)
+	require.True(t, ok)
+	encoded, err := json.Marshal(metadata)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		`{"trigger":"manual","reason":"user_requested","implementation":"responses_compact","phase":"standalone_turn","strategy":"memento"}`,
+		string(encoded),
+	)
+}
+
 func TestOpenAIGatewayForwardOfficialEgressHTTPNonStreamAndSSE(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -209,6 +544,56 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPCompactPreservesExplicitContract(
 	require.Equal(t, testOfficialOpenAISessionID, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "client_metadata").Exists())
 	require.Equal(t, testOfficialOpenAIInstallationID, upstream.lastReq.Header.Get("X-Codex-Installation-ID"))
+}
+
+func TestOpenAIGatewayForwardOfficialEgressHTTPCompactRestoresOnlyCapturedSeed(t *testing.T) {
+	originalBody := newOfficialOpenAIHTTPTestBody(t, false, true, true)
+	normalizedBody, changed, err := normalizeOpenAICompactRequestBody(originalBody)
+	require.NoError(t, err)
+	require.True(t, changed)
+	require.False(t, gjson.GetBytes(normalizedBody, "prompt_cache_key").Exists())
+	require.False(t, gjson.GetBytes(normalizedBody, "client_metadata").Exists())
+
+	for _, tt := range []struct {
+		name        string
+		captureSeed bool
+		wantError   string
+	}{
+		{name: "原始 seed 已捕获", captureSeed: true},
+		{name: "没有显式 seed", wantError: "requires complete identity from official ingress"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			c := newOfficialOpenAIHTTPTestContext(originalBody, "/v1/responses/compact")
+			c.Request.Header.Set("Accept", "application/json")
+			c.Request.Header.Set("X-Codex-Installation-ID", testOfficialOpenAIInstallationID)
+			if tt.captureSeed {
+				c.Set(openAICompactSessionSeedKey, testOfficialOpenAISessionID)
+			}
+			upstream := &httpUpstreamRecorder{resp: newOfficialOpenAIHTTPJSONResponse(
+				http.StatusOK,
+				`{"id":"resp_compact_seed","model":"gpt-5.6-luna","output":[],"usage":{"input_tokens":2,"output_tokens":1}}`,
+			)}
+
+			result, forwardErr := newOfficialOpenAIHTTPTestService(upstream).Forward(
+				context.Background(),
+				c,
+				newOfficialOpenAIHTTPTestAccount(94),
+				normalizedBody,
+			)
+			if tt.wantError != "" {
+				require.ErrorContains(t, forwardErr, tt.wantError)
+				require.Nil(t, result)
+				require.Nil(t, upstream.lastReq)
+				return
+			}
+
+			require.NoError(t, forwardErr)
+			require.NotNil(t, result)
+			require.NotNil(t, upstream.lastReq)
+			require.Equal(t, testOfficialOpenAISessionID, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
+			require.False(t, gjson.GetBytes(upstream.lastBody, "client_metadata").Exists())
+		})
+	}
 }
 
 func TestOpenAIGatewayForwardOfficialEgressHTTPPassthroughUnaffectedByWSMode(t *testing.T) {
@@ -426,6 +811,7 @@ func TestFinalizeOfficialOpenAIHTTPBodyPreservesNestedRawData(t *testing.T) {
 		body,
 		contract,
 		identity,
+		officialOpenAIReasoningDefaults{},
 		false,
 		false,
 		true,
@@ -506,6 +892,141 @@ func TestOpenAIOfficialEgressHTTPAccountSwitchRebuildsContext(t *testing.T) {
 	require.NotEqual(t, firstContext.ConnectionPoolID(), secondContext.ConnectionPoolID())
 	requireOfficialOpenAIField(t, firstContext, OfficialEgressFieldSessionID, testOfficialOpenAISessionID, OfficialEgressFieldLifecycleSession)
 	requireOfficialOpenAIField(t, secondContext, OfficialEgressFieldSessionID, testOfficialOpenAISessionID, OfficialEgressFieldLifecycleSession)
+}
+
+func newOfficialOpenAIGuardianHTTPBody(t *testing.T) []byte {
+	t.Helper()
+	return newOfficialOpenAIChildHTTPBody(
+		t,
+		"guardian:"+testOfficialOpenAISessionID,
+		"guardian",
+		testOfficialOpenAISessionID,
+		"subagent",
+		"guardian",
+	)
+}
+
+func newOfficialOpenAIMemoryConsolidationHTTPBody(t *testing.T) []byte {
+	t.Helper()
+	return newOfficialOpenAIChildHTTPBody(
+		t,
+		testOfficialOpenAISessionID,
+		"memory_consolidation",
+		"",
+		"memory_consolidation",
+		"",
+	)
+}
+
+func newOfficialOpenAIChildHTTPBody(
+	t *testing.T,
+	promptCacheKey string,
+	subagent string,
+	parentThreadID string,
+	threadSource string,
+	turnSubagentKind string,
+) []byte {
+	t.Helper()
+	body := newOfficialOpenAIHTTPTestBody(t, true, false, false)
+	return mutateOfficialOpenAIHTTPTestBody(t, body, func(payload map[string]any, metadata map[string]any, turnMetadata map[string]any) {
+		payload["prompt_cache_key"] = promptCacheKey
+		metadata["thread_id"] = testOfficialOpenAIChildThreadID
+		metadata["x-codex-window-id"] = testOfficialOpenAIChildThreadID + ":0"
+		metadata["x-openai-subagent"] = subagent
+		if parentThreadID == "" {
+			delete(metadata, "x-codex-parent-thread-id")
+		} else {
+			metadata["x-codex-parent-thread-id"] = parentThreadID
+		}
+		turnMetadata["thread_id"] = testOfficialOpenAIChildThreadID
+		turnMetadata["window_id"] = testOfficialOpenAIChildThreadID + ":0"
+		turnMetadata["thread_source"] = threadSource
+		if turnSubagentKind == "" {
+			delete(turnMetadata, "subagent_kind")
+		} else {
+			turnMetadata["subagent_kind"] = turnSubagentKind
+		}
+		if parentThreadID == "" {
+			delete(turnMetadata, "parent_thread_id")
+		} else {
+			turnMetadata["parent_thread_id"] = parentThreadID
+		}
+	})
+}
+
+func mutateOfficialOpenAIHTTPTestBody(
+	t *testing.T,
+	body []byte,
+	mutate func(payload map[string]any, metadata map[string]any, turnMetadata map[string]any),
+) []byte {
+	t.Helper()
+	var payload map[string]any
+	require.NoError(t, json.Unmarshal(body, &payload))
+	metadata, _ := payload["client_metadata"].(map[string]any)
+	turnMetadata := map[string]any{}
+	if metadata != nil {
+		rawTurnMetadata, _ := metadata["x-codex-turn-metadata"].(string)
+		if strings.TrimSpace(rawTurnMetadata) != "" {
+			require.NoError(t, json.Unmarshal([]byte(rawTurnMetadata), &turnMetadata))
+		}
+	}
+	mutate(payload, metadata, turnMetadata)
+	if metadata != nil {
+		encodedTurnMetadata, err := json.Marshal(turnMetadata)
+		require.NoError(t, err)
+		metadata["x-codex-turn-metadata"] = string(encodedTurnMetadata)
+	}
+	mutated, err := marshalOpenAIUpstreamJSON(payload)
+	require.NoError(t, err)
+	return mutated
+}
+
+func newOfficialOpenAIGuardianHTTPContext(t *testing.T, body []byte, path string) *gin.Context {
+	t.Helper()
+	return newOfficialOpenAIChildHTTPContext(
+		t,
+		body,
+		path,
+		"guardian",
+		false,
+		testOfficialOpenAISessionID,
+	)
+}
+
+func newOfficialOpenAIMemoryConsolidationHTTPContext(t *testing.T, body []byte, path string) *gin.Context {
+	t.Helper()
+	return newOfficialOpenAIChildHTTPContext(
+		t,
+		body,
+		path,
+		"memory_consolidation",
+		true,
+		"",
+	)
+}
+
+func newOfficialOpenAIChildHTTPContext(
+	t *testing.T,
+	body []byte,
+	path string,
+	subagent string,
+	memoryGeneration bool,
+	parentThreadID string,
+) *gin.Context {
+	t.Helper()
+	c := newOfficialOpenAIHTTPTestContext(body, path)
+	c.Request.Header.Set("session-id", testOfficialOpenAISessionID)
+	c.Request.Header.Set("thread-id", testOfficialOpenAIChildThreadID)
+	c.Request.Header.Set("x-client-request-id", testOfficialOpenAIChildThreadID)
+	c.Request.Header.Set("x-codex-window-id", testOfficialOpenAIChildThreadID+":0")
+	c.Request.Header.Set("x-openai-subagent", subagent)
+	if memoryGeneration {
+		c.Request.Header.Set("x-openai-memgen-request", "true")
+	}
+	if parentThreadID != "" {
+		c.Request.Header.Set("x-codex-parent-thread-id", parentThreadID)
+	}
+	return c
 }
 
 func newOfficialOpenAIHTTPTestBody(
@@ -595,8 +1116,10 @@ func newOfficialOpenAIHTTPTestContext(body []byte, path string) *gin.Context {
 	c.Request = httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
 	c.Request.Header.Set("Accept", "text/event-stream")
 	c.Request.Header.Set("Content-Type", "application/json")
-	c.Request.Header.Set("User-Agent", "codex_exec/0.145.0 (Ubuntu 24.4.0; x86_64) xterm-256color (codex_exec; 0.145.0)")
+	c.Request.Header.Set("User-Agent", officialOpenAIHTTPUserAgent)
 	c.Request.Header.Set("originator", "codex_exec")
+	c.Request.Header.Set("authorization", "Bearer oauth-test-token")
+	c.Request.Header.Set("chatgpt-account-id", "chatgpt-test-account")
 	c.Request.Header.Set("session-id", testOfficialOpenAISessionID)
 	c.Request.Header.Set("thread-id", testOfficialOpenAISessionID)
 	c.Request.Header.Set("x-client-request-id", testOfficialOpenAISessionID)
@@ -625,6 +1148,7 @@ func newOfficialOpenAIHTTPKiloContext(body []byte, sessionAffinity string) *gin.
 	c.Request.Header.Set("X-Session-Affinity", sessionAffinity)
 	c.Set("api_key", &APIKey{ID: 1})
 	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+	setOfficialCodexForceHTTPFallback(c, true)
 	return c
 }
 

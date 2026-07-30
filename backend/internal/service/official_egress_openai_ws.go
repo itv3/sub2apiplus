@@ -132,11 +132,10 @@ func resolveExplicitOfficialOpenAIWSIdentity(
 		}
 	}
 	for name, value := range map[string]string{
-		"installation_id":  identity.installationID,
-		"session_id":       identity.sessionID,
-		"thread_id":        identity.threadID,
-		"client_request":   identity.clientRequest,
-		"prompt_cache_key": identity.promptCacheKey,
+		"installation_id": identity.installationID,
+		"session_id":      identity.sessionID,
+		"thread_id":       identity.threadID,
+		"client_request":  identity.clientRequest,
 	} {
 		if _, err := uuid.Parse(value); err != nil {
 			return officialOpenAIWSIdentity{}, fmt.Errorf(
@@ -153,17 +152,15 @@ func resolveExplicitOfficialOpenAIWSIdentity(
 			)
 		}
 	}
-	if identity.sessionID != identity.threadID ||
-		identity.sessionID != identity.clientRequest ||
-		identity.sessionID != identity.promptCacheKey {
+	if identity.threadID != identity.clientRequest {
 		return officialOpenAIWSIdentity{}, errors.New(
-			"OpenAI official egress WebSocket session/thread/request/body identity conflicts",
+			"OpenAI official egress WebSocket thread/request identity conflicts",
 		)
 	}
 	windowParts := strings.Split(identity.windowID, ":")
-	if len(windowParts) != 2 || windowParts[0] != identity.sessionID {
+	if len(windowParts) != 2 || windowParts[0] != identity.threadID {
 		return officialOpenAIWSIdentity{}, errors.New(
-			"OpenAI official egress WebSocket window_id conflicts with session",
+			"OpenAI official egress WebSocket window_id conflicts with thread",
 		)
 	}
 	windowIndex, err := strconv.Atoi(windowParts[1])
@@ -181,7 +178,6 @@ func resolveExplicitOfficialOpenAIWSIdentity(
 			"OpenAI official egress WebSocket ingress headers conflict with frame identity",
 		)
 	}
-
 	var turnMetadata map[string]any
 	if err := json.Unmarshal([]byte(identity.turnMetadata), &turnMetadata); err != nil {
 		return officialOpenAIWSIdentity{}, errors.New(
@@ -196,6 +192,20 @@ func resolveExplicitOfficialOpenAIWSIdentity(
 		return officialOpenAIWSIdentity{}, errors.New(
 			"OpenAI official egress WebSocket turn metadata conflicts with identity",
 		)
+	}
+	if _, err := validateOfficialOpenAIIngressIdentityKind(
+		"OpenAI official egress WebSocket",
+		c,
+		metadata,
+		turnMetadata,
+		officialOpenAIIngressIdentityValues{
+			sessionID:      identity.sessionID,
+			threadID:       identity.threadID,
+			promptCacheKey: identity.promptCacheKey,
+		},
+		false,
+	); err != nil {
+		return officialOpenAIWSIdentity{}, err
 	}
 	return identity, nil
 }
@@ -294,7 +304,7 @@ func finalizeOpenAIOfficialEgressWSHandshakeHeaders(
 			"OpenAI official egress WebSocket context conflicts with handshake",
 		)
 	}
-	clientProfile, err := resolveOfficialClientProfileByID(egressContext.clientProfileID)
+	userAgent, originator, err := officialCodex0145ProcessIdentity(egressContext)
 	if err != nil {
 		return result, err
 	}
@@ -348,10 +358,17 @@ func finalizeOpenAIOfficialEgressWSHandshakeHeaders(
 	headers.Set("x-client-request-id", clientRequestID)
 	headers.Set("x-codex-window-id", windowID)
 	headers.Set(openAIWSTurnMetadataHeader, turnMetadata)
-	headers.Set("User-Agent", clientProfile.Build.UserAgent)
-	headers.Set("originator", clientProfile.Build.Originator)
-	for _, item := range clientProfile.Wire.StaticHeaders {
-		headers.Set(item.Name, item.Value)
+	headers.Set("User-Agent", userAgent)
+	headers.Set("originator", originator)
+	headers.Set("x-codex-beta-features", officialOpenAIHTTPBetaFeatures)
+	if _, err := officialCodex0145FinalizeEndpointHeaders(
+		egressContext,
+		headers,
+		map[string]bool{
+			officialCodexConditionRemoteCompactionV2: true,
+		},
+	); err != nil {
+		return result, fmt.Errorf("按 Codex 版本画像定型 WS 握手 header：%w", err)
 	}
 
 	for _, name := range []string{
@@ -474,6 +491,13 @@ func finalizeOpenAIOfficialEgressWSFrame(
 			"OpenAI official egress WebSocket frame type was modified",
 		)
 	}
+	if err := validateOfficialOpenAITopLevelContract(
+		candidatePayload,
+		officialOpenAIWSTopLevelAllowed,
+		true,
+	); err != nil {
+		return nil, result, err
+	}
 	if !allowControlledReplay {
 		originalPreviousResponseID, originalPreviousPresent := originalPayload["previous_response_id"]
 		candidatePreviousResponseID, candidatePreviousPresent := candidatePayload["previous_response_id"]
@@ -529,7 +553,11 @@ func finalizeOpenAIOfficialEgressWSFrame(
 		return nil, result, err
 	}
 	if !modified {
-		return candidate, result, nil
+		finalized, err := officialCodex0145FinalizeEndpointJSONBody(egressContext, candidate, nil)
+		if err != nil {
+			return nil, result, fmt.Errorf("按 Codex 版本画像定型 WS frame：%w", err)
+		}
+		return finalized, result, nil
 	}
 	finalized, err := marshalOfficialOpenAIWSJSONPreservingRaw(candidatePayload, candidate)
 	if err != nil {
@@ -542,6 +570,10 @@ func finalizeOpenAIOfficialEgressWSFrame(
 		Kind:  "frame",
 		Field: "input.*." + officialOpenAIWSItemTurnMetadata + ".turn_id",
 	})
+	finalized, err = officialCodex0145FinalizeEndpointJSONBody(egressContext, finalized, nil)
+	if err != nil {
+		return nil, result, fmt.Errorf("按 Codex 版本画像定型 WS frame：%w", err)
+	}
 	return finalized, result, nil
 }
 
@@ -572,6 +604,14 @@ func finalizeDerivedOpenAIOfficialEgressWSFrame(
 	}
 
 	originalCallIDs := collectOfficialOpenAICallIDs(payload)
+	toolPresentationModified, err := officialCodex0145NormalizeDerivedToolPresentation(
+		egressContext.ProfileVersion(),
+		codex0145EndpointID(egressContext.CodexEndpointProfileID()),
+		payload,
+	)
+	if err != nil {
+		return nil, result, err
+	}
 	if instructions, exists := payload["instructions"]; exists && egressContext.responsesLite {
 		if _, err := moveOfficialOpenAIHTTPInstructionsToInput(
 			payload,
@@ -589,6 +629,7 @@ func finalizeDerivedOpenAIOfficialEgressWSFrame(
 		payload,
 		egressContext.responsesLite,
 		egressContext.parallelTools,
+		officialOpenAIReasoningDefaultsFromContext(egressContext),
 		officialOpenAIWSTopLevelAllowed,
 	); err != nil {
 		return nil, result, err
@@ -620,6 +661,10 @@ func finalizeDerivedOpenAIOfficialEgressWSFrame(
 			err,
 		)
 	}
+	finalized, err = officialCodex0145FinalizeEndpointJSONBody(egressContext, finalized, nil)
+	if err != nil {
+		return nil, result, fmt.Errorf("按 Codex 版本画像定型派生 WS frame：%w", err)
+	}
 	for _, field := range []string{
 		"client_metadata",
 		"prompt_cache_key",
@@ -635,6 +680,12 @@ func finalizeDerivedOpenAIOfficialEgressWSFrame(
 		result.Modifications = append(result.Modifications, OfficialEgressModification{
 			Kind:  "frame",
 			Field: field,
+		})
+	}
+	if toolPresentationModified {
+		result.Modifications = append(result.Modifications, OfficialEgressModification{
+			Kind:  "frame",
+			Field: "tools.image_gen",
 		})
 	}
 	return finalized, result, nil

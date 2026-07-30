@@ -8,16 +8,20 @@ import (
 )
 
 const (
-	// AccountTestModeDefault drives the standard /responses connection test.
+	// AccountTestModeDefault 执行标准 /responses 连接测试。
 	AccountTestModeDefault = "default"
-	// AccountTestModeCompact drives the /responses/compact compact-probe test.
+	// AccountTestModeCompact 执行 /responses/compact 能力探针。
 	AccountTestModeCompact = "compact"
+	// AccountTestModeOfficialFilesProbe 执行 Codex 0.145.0 Files 三段式出站探针。
+	AccountTestModeOfficialFilesProbe = "official_files_probe"
 )
 
 func normalizeAccountTestMode(mode string) string {
 	switch strings.ToLower(strings.TrimSpace(mode)) {
 	case AccountTestModeCompact:
 		return AccountTestModeCompact
+	case AccountTestModeOfficialFilesProbe:
+		return AccountTestModeOfficialFilesProbe
 	default:
 		return AccountTestModeDefault
 	}

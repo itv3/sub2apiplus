@@ -18,12 +18,16 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
+	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/net/http2"
 )
 
 type codexModelsHTTPUpstreamStub struct {
-	do func(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error)
+	do        func(req *http.Request, proxyURL string, accountID int64, accountConcurrency int) (*http.Response, error)
+	mu        sync.Mutex
+	profiles  []*tlsfingerprint.Profile
+	proxyURLs []string
 }
 
 type codexModelsBlockingBody struct {
@@ -50,7 +54,11 @@ func (s *codexModelsHTTPUpstreamStub) Do(req *http.Request, proxyURL string, acc
 	return s.do(req, proxyURL, accountID, accountConcurrency)
 }
 
-func (s *codexModelsHTTPUpstreamStub) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+func (s *codexModelsHTTPUpstreamStub) DoWithTLS(req *http.Request, proxyURL string, accountID int64, accountConcurrency int, profile *tlsfingerprint.Profile) (*http.Response, error) {
+	s.mu.Lock()
+	s.profiles = append(s.profiles, profile)
+	s.proxyURLs = append(s.proxyURLs, proxyURL)
+	s.mu.Unlock()
 	return s.Do(req, proxyURL, accountID, accountConcurrency)
 }
 
@@ -158,50 +166,117 @@ func newCodexModelsTestAccount() *Account {
 
 func TestFetchCodexModelsManifestPassthrough(t *testing.T) {
 	manifestBody := `{"models":[{"slug":"gpt-5.5","display_name":"GPT-5.5","use_responses_lite":true}]}`
-
-	var gotAuth, gotAccountID, gotOriginator, gotClientVersion string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAuth = r.Header.Get("Authorization")
-		gotAccountID = r.Header.Get("chatgpt-account-id")
-		gotOriginator = r.Header.Get("Originator")
-		gotClientVersion = r.URL.Query().Get("client_version")
-		w.Header().Set("ETag", `W/"abc123"`)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(manifestBody))
-	}))
-	defer server.Close()
-
-	original := chatgptCodexModelsURL
-	chatgptCodexModelsURL = server.URL
-	defer func() { chatgptCodexModelsURL = original }()
-
-	s := &OpenAIGatewayService{}
+	var gotRequest *http.Request
+	upstream := &codexModelsHTTPUpstreamStub{do: func(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+		gotRequest = req
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Etag": []string{`W/"abc123"`}, "Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(manifestBody)),
+		}, nil
+	}}
+	s := &OpenAIGatewayService{httpUpstream: upstream}
 	manifest, err := s.FetchCodexModelsManifest(context.Background(), newCodexModelsTestAccount(), "0.137.0", "")
-	if err != nil {
-		t.Fatalf("FetchCodexModelsManifest returned error: %v", err)
+	require.NoError(t, err)
+	require.Equal(t, manifestBody, string(manifest.Body))
+	require.Equal(t, `W/"abc123"`, manifest.ETag)
+	require.NotNil(t, gotRequest)
+	require.Equal(t, http.MethodGet, gotRequest.Method)
+	require.Equal(t, "https://chatgpt.com/backend-api/codex/models?client_version=0.145.0", gotRequest.URL.String())
+	require.Equal(t, "chatgpt.com", gotRequest.Host)
+	require.Equal(t, "Bearer test-access-token", gotRequest.Header.Get("Authorization"))
+	require.Equal(t, "acc-123", gotRequest.Header.Get("chatgpt-account-id"))
+	require.Equal(t, officialOpenAIHTTPOriginator, gotRequest.Header.Get("Originator"))
+	require.Equal(t, officialCodexVersion0145, gotRequest.Header.Get("Version"))
+	require.Equal(t, "*/*", gotRequest.Header.Get("Accept"))
+	require.Empty(t, gotRequest.Header.Get("Cookie"))
+	require.Empty(t, gotRequest.Header.Get("If-None-Match"))
+	var headerNames []string
+	for name := range gotRequest.Header {
+		headerNames = append(headerNames, http.CanonicalHeaderKey(name))
 	}
-
-	if string(manifest.Body) != manifestBody {
-		t.Errorf("body not passed through verbatim: got %q", manifest.Body)
+	require.ElementsMatch(t, []string{
+		"Version", "Authorization", "Chatgpt-Account-Id", "Accept", "Originator", "User-Agent",
+	}, headerNames)
+	require.Len(t, upstream.profiles, 1)
+	var modelsRule *tlsfingerprint.H1HeaderOrderRule
+	for index := range upstream.profiles[0].Transport.H1HeaderOrders {
+		rule := &upstream.profiles[0].Transport.H1HeaderOrders[index]
+		if rule.Method == http.MethodGet && rule.Path == "/backend-api/codex/models" {
+			modelsRule = rule
+			break
+		}
 	}
-	if manifest.ETag != `W/"abc123"` {
-		t.Errorf("etag not passed through: got %q", manifest.ETag)
-	}
-	if gotAuth != "Bearer test-access-token" {
-		t.Errorf("authorization header: got %q", gotAuth)
-	}
-	if gotAccountID != "acc-123" {
-		t.Errorf("chatgpt-account-id header: got %q", gotAccountID)
-	}
-	if gotOriginator != officialOpenAIHTTPOriginator {
-		t.Errorf("originator header: got %q", gotOriginator)
-	}
-	if gotClientVersion != "0.137.0" {
-		t.Errorf("client_version query: got %q", gotClientVersion)
-	}
+	require.NotNil(t, modelsRule)
+	require.True(t, modelsRule.RejectUnlisted)
 	if enabled, known := s.openaiModelCapabilities.responsesLite(1, "gpt-5.5"); !known || !enabled {
 		t.Errorf("use_responses_lite capability not recorded: known=%v enabled=%v", known, enabled)
 	}
+}
+
+func TestFetchCodexModelsManifestProxyDoesNotChangeTLSProfile(t *testing.T) {
+	upstream := &codexModelsHTTPUpstreamStub{do: func(_ *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"models":[]}`)),
+		}, nil
+	}}
+	service := &OpenAIGatewayService{httpUpstream: upstream}
+	direct := newCodexModelsTestAccount()
+	require.NotNil(t, service)
+	_, err := service.FetchCodexModelsManifest(context.Background(), direct, "0.100.0", "")
+	require.NoError(t, err)
+
+	proxyID := int64(9)
+	proxied := newCodexModelsTestAccount()
+	proxied.ID = 2
+	proxied.ProxyID = &proxyID
+	proxied.Proxy = &Proxy{Protocol: "http", Host: "127.0.0.1", Port: 7890}
+	_, err = service.FetchCodexModelsManifest(context.Background(), proxied, "9.9.9", "")
+	require.NoError(t, err)
+
+	require.Len(t, upstream.profiles, 2)
+	require.Equal(t, upstream.profiles[0], upstream.profiles[1])
+	require.Equal(t, []string{"", "http://127.0.0.1:7890"}, upstream.proxyURLs)
+}
+
+func TestFetchCodexModelsManifestReusesInvocationWithinIngressOnly(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	var invocationIDs []string
+	upstream := &codexModelsHTTPUpstreamStub{do: func(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+		egressContext, ok := OfficialEgressContextFromContext(req.Context())
+		require.True(t, ok)
+		invocationIDs = append(invocationIDs, egressContext.InvocationID())
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"models":[]}`)),
+		}, nil
+	}}
+	service := &OpenAIGatewayService{httpUpstream: upstream}
+	account := newCodexModelsTestAccount()
+
+	newIngress := func() *gin.Context {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodGet, "/backend-api/codex/models", nil)
+		return c
+	}
+	firstIngress := newIngress()
+	_, err := service.FetchCodexModelsManifest(firstIngress.Request.Context(), account, "", "", firstIngress)
+	require.NoError(t, err)
+	_, err = service.FetchCodexModelsManifest(firstIngress.Request.Context(), account, "", "", firstIngress)
+	require.NoError(t, err)
+
+	secondIngress := newIngress()
+	_, err = service.FetchCodexModelsManifest(secondIngress.Request.Context(), account, "", "", secondIngress)
+	require.NoError(t, err)
+
+	require.Len(t, invocationIDs, 3)
+	require.NotEmpty(t, invocationIDs[0])
+	require.Equal(t, invocationIDs[0], invocationIDs[1], "同一上层调用重建请求必须复用 invocation ID")
+	require.NotEqual(t, invocationIDs[0], invocationIDs[2], "不同上层调用不得共用 invocation ID")
 }
 
 func TestFetchCodexModelsManifestRejectsNonAllowlistedCookies(t *testing.T) {
@@ -385,8 +460,8 @@ func TestFetchCodexModelsManifestDefaultClientVersion(t *testing.T) {
 	if _, err := s.FetchCodexModelsManifest(context.Background(), newCodexModelsTestAccount(), "", ""); err != nil {
 		t.Fatalf("FetchCodexModelsManifest returned error: %v", err)
 	}
-	if gotClientVersion != openAICodexProbeVersion {
-		t.Errorf("default client_version: got %q, want %q", gotClientVersion, openAICodexProbeVersion)
+	if gotClientVersion != officialCodexVersion0145 {
+		t.Errorf("default client_version: got %q, want %q", gotClientVersion, officialCodexVersion0145)
 	}
 }
 
@@ -411,8 +486,8 @@ func TestFetchCodexModelsManifestNotModified(t *testing.T) {
 	if !manifest.NotModified {
 		t.Error("expected NotModified to be true")
 	}
-	if gotIfNoneMatch != `W/"abc123"` {
-		t.Errorf("if-none-match header: got %q", gotIfNoneMatch)
+	if gotIfNoneMatch != "" {
+		t.Errorf("OAuth models 不得发送 if-none-match: got %q", gotIfNoneMatch)
 	}
 }
 

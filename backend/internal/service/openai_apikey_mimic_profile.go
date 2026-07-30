@@ -36,6 +36,9 @@ type openAIUpstreamRequestPlan struct {
 	IsCodexCLI                 bool
 	APIKeyCodexMimic           openAIAPIKeyCodexMimicProfile
 	OfficialEgressBodyContract *officialOpenAIHTTPBodyContract
+	// OfficialEgressTurnState 必须在终态 Header Finalizer 内写入；禁止发送层在
+	// Finalizer 之后补头，否则条件槽位与最终校验都会被绕过。
+	OfficialEgressTurnState string
 }
 
 func resolveOpenAIAPIKeyCodexMimicProfile(account *Account, apiKeyID int64, cfg *config.Config) openAIAPIKeyCodexMimicProfile {

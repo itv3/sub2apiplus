@@ -215,7 +215,7 @@ func TestOpenAIGatewayServiceForwardOAuthCompactDowngradesMaxEffort(t *testing.T
 	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses/compact", nil)
 	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
 
-	body := []byte(`{"model":"gpt-5.6-sol","instructions":"compact-test","input":"hello","reasoning":{"effort":"max"}}`)
+	body := []byte(`{"model":"gpt-5.6-sol","instructions":"compact-test","input":"hello","parallel_tool_calls":false,"reasoning":{"effort":"max"}}`)
 	result, err := svc.Forward(context.Background(), c, account, body)
 
 	require.NoError(t, err)
@@ -268,6 +268,7 @@ func TestOpenAIGatewayServiceForwardOAuthRemoteCompactV2PreservesResponsesWire(t
 	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
 	c.Request.Header.Set("x-codex-beta-features", "remote_compaction_v2")
 	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+	setOfficialCodexForceHTTPFallback(c, true)
 
 	body := []byte(`{"model":"gpt-5.6-sol","stream":true,"instructions":"response-test","input":[{"type":"message","role":"user","content":"hello"},{"type":"compaction_trigger"}],"reasoning":{"effort":"max","context":"all_turns"}}`)
 	result, err := svc.Forward(context.Background(), c, account, body)

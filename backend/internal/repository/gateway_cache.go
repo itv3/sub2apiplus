@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"time"
@@ -132,29 +133,34 @@ func (c *gatewayCache) SaveLiveCall(ctx context.Context, record *service.LiveCal
 	if record == nil || record.CallHash == "" || record.CallID == "" {
 		return fmt.Errorf("invalid live call record")
 	}
+	codexRuntimeState, err := json.Marshal(record.CodexRuntimeState)
+	if err != nil {
+		return fmt.Errorf("encode live Codex runtime state: %w", err)
+	}
 	values := map[string]any{
-		"call_id":          record.CallID,
-		"account_id":       record.AccountID,
-		"api_key_id":       record.APIKeyID,
-		"user_id":          record.UserID,
-		"group_id":         record.GroupID,
-		"subscription_id":  record.SubscriptionID,
-		"lease_id":         record.LeaseID,
-		"model":            record.Model,
-		"created_at":       record.CreatedAt.UnixMilli(),
-		"expires_at":       record.ExpiresAt.UnixMilli(),
-		"controller":       record.Controller,
-		"controller_owner": record.ControllerOwner,
-		"user_agent":       record.UserAgent,
-		"ip_address":       record.IPAddress,
-		"inbound_endpoint": record.InboundEndpoint,
-		"attestation":      record.AttestationCiphertext,
+		"call_id":             record.CallID,
+		"account_id":          record.AccountID,
+		"api_key_id":          record.APIKeyID,
+		"user_id":             record.UserID,
+		"group_id":            record.GroupID,
+		"subscription_id":     record.SubscriptionID,
+		"lease_id":            record.LeaseID,
+		"model":               record.Model,
+		"created_at":          record.CreatedAt.UnixMilli(),
+		"expires_at":          record.ExpiresAt.UnixMilli(),
+		"controller":          record.Controller,
+		"controller_owner":    record.ControllerOwner,
+		"user_agent":          record.UserAgent,
+		"ip_address":          record.IPAddress,
+		"inbound_endpoint":    record.InboundEndpoint,
+		"codex_runtime_state": string(codexRuntimeState),
+		"attestation":         record.AttestationCiphertext,
 	}
 	key := liveCallKey(record.CallHash)
 	pipe := c.rdb.TxPipeline()
 	pipe.HSet(ctx, key, values)
 	pipe.Expire(ctx, key, ttl)
-	_, err := pipe.Exec(ctx)
+	_, err = pipe.Exec(ctx)
 	return err
 }
 
@@ -172,6 +178,12 @@ func (c *gatewayCache) GetLiveCall(ctx context.Context, callHash string) (*servi
 	}
 	createdAt := time.UnixMilli(parseInt("created_at"))
 	expiresAt := time.UnixMilli(parseInt("expires_at"))
+	var codexRuntimeState service.LiveCodexRuntimeState
+	if encoded := values["codex_runtime_state"]; encoded != "" {
+		if err := json.Unmarshal([]byte(encoded), &codexRuntimeState); err != nil {
+			return nil, fmt.Errorf("decode live Codex runtime state: %w", err)
+		}
+	}
 	return &service.LiveCallRecord{
 		CallID:                values["call_id"],
 		CallHash:              callHash,
@@ -189,6 +201,7 @@ func (c *gatewayCache) GetLiveCall(ctx context.Context, callHash string) (*servi
 		UserAgent:             values["user_agent"],
 		IPAddress:             values["ip_address"],
 		InboundEndpoint:       values["inbound_endpoint"],
+		CodexRuntimeState:     codexRuntimeState,
 		AttestationCiphertext: values["attestation"],
 	}, nil
 }

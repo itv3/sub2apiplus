@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/candidate-test-trace-receipt-v1.json",
+  "title": "Codex CLI 0.145.0 Go 验收测试 trace 生成回执",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "codex_version",
+    "status",
+    "base_capture_manifest",
+    "mapping",
+    "profile",
+    "go_test_log",
+    "source_snapshot",
+    "tests",
+    "generated"
+  ],
+  "properties": {
+    "schema_version": {"const": "codex-candidate-test-trace-receipt/v1"},
+    "codex_version": {"const": "0.145.0"},
+    "status": {"const": "pass"},
+    "base_capture_manifest": {"$ref": "#/$defs/file"},
+    "mapping": {"$ref": "#/$defs/file"},
+    "profile": {"$ref": "#/$defs/file"},
+    "go_test_log": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["artifact_path", "sha256"],
+      "properties": {
+        "artifact_path": {"$ref": "#/$defs/path"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "source_snapshot": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["files"],
+      "properties": {
+        "files": {
+          "type": "array",
+          "minItems": 2,
+          "items": {"$ref": "#/$defs/file"}
+        }
+      }
+    },
+    "tests": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["package", "name", "status", "fact_ids"],
+        "properties": {
+          "package": {"type": "string", "minLength": 1},
+          "name": {"type": "string", "pattern": "^Test[A-Za-z0-9_]+$"},
+          "status": {"const": "pass"},
+          "fact_ids": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {"type": "string", "minLength": 1}
+          }
+        }
+      }
+    },
+    "generated": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["capture_manifest", "trace_artifacts"],
+      "properties": {
+        "capture_manifest": {"$ref": "#/$defs/file"},
+        "trace_artifacts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "sha256", "kind", "scenario_id", "record_count"],
+            "properties": {
+              "path": {"$ref": "#/$defs/path"},
+              "sha256": {"$ref": "#/$defs/sha256"},
+              "kind": {"enum": ["process_trace", "websocket_trace"]},
+              "scenario_id": {"type": "string", "pattern": "^A[0-9]{2}$"},
+              "record_count": {"type": "integer", "minimum": 1}
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"$ref": "#/$defs/path"},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

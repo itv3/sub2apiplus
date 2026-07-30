@@ -1,0 +1,1062 @@
+{
+  "schema_version": 1,
+  "spec": "docs/CODEX_CLI_0145_EGRESS_SPEC.md",
+  "source_version": "0.145.0",
+  "rules": {
+    "SPEC-TLS-001": [],
+    "SPEC-TLS-002": [
+      {
+        "path": "http-client/src/custom_ca.rs",
+        "start": 296,
+        "end": 320,
+        "context_sha256": "44adf938b6eacfe214f66d00804508e4026802e9ea912af7d8aa88ec5735b768",
+        "anchor": "fn build_reqwest_client_with_env("
+      },
+      {
+        "path": "http-client/src/custom_ca.rs",
+        "start": 398,
+        "end": 398,
+        "context_sha256": "cf694d36d8a16a873cf06e473e1a52faef5f1aa1096d2519bcb85f0822411caf",
+        "anchor": "fn configured_ca_bundle(&self) -> Option<ConfiguredCaBundle> {"
+      },
+      {
+        "path": "login/src/auth/default_client.rs",
+        "start": 238,
+        "end": 251,
+        "context_sha256": "f5a540cd45e1956d69080a465ebd62cbd1a3d4b7b65f60890684541df004c58d",
+        "anchor": "pub fn build_reqwest_client() -> reqwest::Client {"
+      }
+    ],
+    "SPEC-TLS-003": [
+      {
+        "path": "websocket-client/src/lib.rs",
+        "start": 45,
+        "end": 45,
+        "context_sha256": "36ccba5cd2050a3ed321120bafc7cde93fc5fb82e0756b3eb7b757d7cac4d08e",
+        "anchor": "tls_config: build_rustls_client_config_with_custom_ca()?,"
+      }
+    ],
+    "SPEC-PROTO-001": [
+      {
+        "path": "http-client/src/custom_ca.rs",
+        "start": 296,
+        "end": 320,
+        "context_sha256": "44adf938b6eacfe214f66d00804508e4026802e9ea912af7d8aa88ec5735b768",
+        "anchor": "fn build_reqwest_client_with_env("
+      }
+    ],
+    "SPEC-PROTO-002": [
+      {
+        "path": "model-provider-info/src/lib.rs",
+        "start": 140,
+        "end": 140,
+        "context_sha256": "cd0e739f183360fcb86ad458cda56779e2a468e6e752f79f4f994f6dfb30a774",
+        "anchor": "pub supports_websockets: bool,"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 509,
+        "end": 509,
+        "context_sha256": "e416c9c6c8d13fe179511cf28131fb953b17369327fc5fb27df456a962baacf6",
+        "anchor": "pub(crate) fn force_http_fallback("
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 930,
+        "end": 930,
+        "context_sha256": "e5c33a903a418f0fbab61dfc1808581fa4966bd48c7fbf046fd53ae0817332c5",
+        "anchor": "pub fn responses_websocket_enabled(&self) -> bool {"
+      },
+      {
+        "path": "core/src/responses_retry.rs",
+        "start": 35,
+        "end": 45,
+        "context_sha256": "4adc554d9ee75444d9713dc7518bdf62db65058ed15d139aab7f04b997174c92",
+        "anchor": ")"
+      }
+    ],
+    "SPEC-CONN-001": [
+      {
+        "path": "login/src/auth/default_client.rs",
+        "start": 238,
+        "end": 238,
+        "context_sha256": "0a7bbf08b53be5138b777ce74e423aa04167aba5cbc642a84e35243e15911c1a",
+        "anchor": "pub fn build_reqwest_client() -> reqwest::Client {"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 964,
+        "end": 977,
+        "context_sha256": "afb3db86bebfdc219d3d00380411d7484f4c50e781ce26ab43e89764cc4f2a2e",
+        "anchor": "fn build_api_transport("
+      },
+      {
+        "path": "codex-api/src/endpoint/session.rs",
+        "start": 80,
+        "end": 154,
+        "context_sha256": "c6a25a846155fee7d7956758c02de288071a34c7088fa0a8fa5ad4bda782c4f9",
+        "anchor": "pub(crate) async fn execute_with<C>("
+      },
+      {
+        "path": "model-provider/src/models_endpoint.rs",
+        "start": 75,
+        "end": 75,
+        "context_sha256": "6b85d097ee1bc631d96245669878e2be583204ba101e798240d244e53e5e169e",
+        "anchor": "async fn list_models("
+      },
+      {
+        "path": "ext/image-generation/src/backend.rs",
+        "start": 27,
+        "end": 27,
+        "context_sha256": "8b70143a177a0b9eb33093769fb6b308b4dbc1413244c93e6d1f0f07d198eb4e",
+        "anchor": "async fn client(&self) -> Result<ImagesClient<ReqwestTransport>, String> {"
+      },
+      {
+        "path": "ext/web-search/src/tool.rs",
+        "start": 91,
+        "end": 91,
+        "context_sha256": "e188fae743bba30daf3dc604b623948927046ceaa1fd06f126c26ba573641bdc",
+        "anchor": "impl WebSearchTool {"
+      }
+    ],
+    "SPEC-H1-001": [
+      {
+        "path": "tools/spec_source_deps/hyper-1.8.1/src/proto/h1/role.rs",
+        "start": 1572,
+        "end": 1578,
+        "context_sha256": "2a56ee30e690d0337c40a746f1096c51b62d694a79efcd2a22898c5612c67da2",
+        "anchor": "pub(crate) fn write_headers(headers: &HeaderMap, dst: &mut Vec<u8>) {"
+      }
+    ],
+    "SPEC-H1-002": [
+      {
+        "path": "tools/spec_source_deps/hyper-util-0.1.20/src/client/legacy/client.rs",
+        "start": 298,
+        "end": 306,
+        "context_sha256": "a26a5cce45921b91cee3a5f2dd41586875700f583840f367297eaa9b8dddd4f6",
+        "anchor": "if self.config.set_host {"
+      },
+      {
+        "path": "tools/spec_source_deps/hyper-util-0.1.20/src/client/legacy/client.rs",
+        "start": 1033,
+        "end": 1036,
+        "context_sha256": "2daf2c62c2cff4868dda62a818d700041b614894c8b26212e36742d975043ad4",
+        "anchor": "client_config: Config {"
+      }
+    ],
+    "SPEC-H1-003": [
+      {
+        "path": "tools/spec_source_deps/hyper-1.8.1/src/proto/h1/role.rs",
+        "start": 1410,
+        "end": 1419,
+        "context_sha256": "a3b7a6328e686b234b6894dcbd16335106b1b08214074fdde5e4dd13477b88eb",
+        "anchor": "// User didn't set transfer-encoding, AND we know body length,"
+      },
+      {
+        "path": "tools/spec_source_deps/hyper-1.8.1/src/proto/h1/role.rs",
+        "start": 1483,
+        "end": 1512,
+        "context_sha256": "ee03cdfc082c32b98749d02afb5f81698d4fc4dbbf4f8b1eff73af49b912f719",
+        "anchor": "fn set_content_length(headers: &mut HeaderMap, len: u64) -> Encoder {"
+      }
+    ],
+    "SPEC-H1-004": [
+      {
+        "path": "tools/spec_source_deps/http-1.4.0/src/header/map.rs",
+        "start": 923,
+        "end": 928,
+        "context_sha256": "4c3e633b54534902713a73d5b5b1fee7c0a7d6ee63bb491fe9f8861864812916",
+        "anchor": "pub fn iter(&self) -> Iter<'_, T> {"
+      },
+      {
+        "path": "tools/spec_source_deps/http-1.4.0/src/header/map.rs",
+        "start": 1572,
+        "end": 1602,
+        "context_sha256": "59331f5a9c0cc56e89c44ad829f5ac3406850be5b49c3ca864c92560889900f8",
+        "anchor": "pub fn remove<K>(&mut self, key: K) -> Option<T>"
+      }
+    ],
+    "SPEC-H2-001": [
+      {
+        "path": "tools/spec_source_deps/hyper-1.8.1/src/proto/h2/client.rs",
+        "start": 110,
+        "end": 110,
+        "context_sha256": "af8139d8b9f46458c73d883033dba5f85df81cc1e08b37e30fe83186fc05deaa",
+        "anchor": ".enable_push(false);"
+      },
+      {
+        "path": "tools/spec_source_deps/h2-0.4.13/src/frame/settings.rs",
+        "start": 213,
+        "end": 259,
+        "context_sha256": "f8982df007b37a9e53850633cba382006e77cf89e13884cad07657e23823152e",
+        "anchor": "pub fn encode(&self, dst: &mut BytesMut) {"
+      }
+    ],
+    "SPEC-H2-002": [
+      {
+        "path": "tools/spec_source_deps/hyper-1.8.1/src/proto/h2/client.rs",
+        "start": 110,
+        "end": 110,
+        "context_sha256": "af8139d8b9f46458c73d883033dba5f85df81cc1e08b37e30fe83186fc05deaa",
+        "anchor": ".enable_push(false);"
+      }
+    ],
+    "SPEC-H2-003": [
+      {
+        "path": "tools/spec_source_deps/hyper-1.8.1/src/proto/h2/client.rs",
+        "start": 49,
+        "end": 49,
+        "context_sha256": "a4304d25e6cf36684a90cf073356c0559e75234595ebb158d7808badc8d350b4",
+        "anchor": "const DEFAULT_STREAM_WINDOW: u32 = 1024 * 1024 * 2; // 2mb"
+      }
+    ],
+    "SPEC-H2-004": [
+      {
+        "path": "tools/spec_source_deps/hyper-1.8.1/src/proto/h2/client.rs",
+        "start": 50,
+        "end": 50,
+        "context_sha256": "86c495853ef1fae90b2383b853be0533219588cf1abe8bfc4f915d3b183f2bed",
+        "anchor": "const DEFAULT_MAX_FRAME_SIZE: u32 = 1024 * 16; // 16kb"
+      }
+    ],
+    "SPEC-H2-005": [
+      {
+        "path": "tools/spec_source_deps/hyper-1.8.1/src/proto/h2/client.rs",
+        "start": 52,
+        "end": 52,
+        "context_sha256": "eadf8472b083a412189c9e53bcce63d7f147ce6e235a8675e03ea6137c82dc9f",
+        "anchor": "const DEFAULT_MAX_HEADER_LIST_SIZE: u32 = 1024 * 16; // 16kb"
+      }
+    ],
+    "SPEC-H2-006": [
+      {
+        "path": "tools/spec_source_deps/hyper-1.8.1/src/proto/h2/client.rs",
+        "start": 48,
+        "end": 48,
+        "context_sha256": "e0ad8955cc3a2b2e051f4b4b6561936b3d6e6fe37d6711f9ba28f787a6771d2e",
+        "anchor": "const DEFAULT_CONN_WINDOW: u32 = 1024 * 1024 * 5; // 5mb"
+      },
+      {
+        "path": "tools/spec_source_deps/h2-0.4.13/src/frame/settings.rs",
+        "start": 43,
+        "end": 44,
+        "context_sha256": "cf3f017a5fa5a55a0b77e088e46413c4d731388c915d70129d30d820f3e09a7e",
+        "anchor": "/// The default value of SETTINGS_INITIAL_WINDOW_SIZE"
+      }
+    ],
+    "SPEC-H2-007": [
+      {
+        "path": "tools/spec_source_deps/h2-0.4.13/src/frame/headers.rs",
+        "start": 698,
+        "end": 718,
+        "context_sha256": "3da0189f5de58532980d9300fa6abcd410f89b88e3d1bbec1cdc96dc8cb5fb33",
+        "anchor": "impl Iterator for Iter {"
+      },
+      {
+        "path": "tools/spec_source_deps/h2-0.4.13/src/hpack/encoder.rs",
+        "start": 61,
+        "end": 78,
+        "context_sha256": "d59ecc00c75e23cc0e27fac7ace6f6946ccef36e63c4ddb61986f3e1ac542f9d",
+        "anchor": "pub fn encode<I>(&mut self, headers: I, dst: &mut BytesMut)"
+      }
+    ],
+    "SPEC-WS-001": [
+      {
+        "path": "tools/spec_source_deps/tungstenite-openai-0.27.0/src/handshake/client.rs",
+        "start": 137,
+        "end": 175,
+        "context_sha256": "b5e98405685956b7d1396272ec5dc169a4559db3017fea694c459aeb3b676384",
+        "anchor": "const WEBSOCKET_HEADERS: [&str; 5] ="
+      }
+    ],
+    "SPEC-WS-002": [
+      {
+        "path": "tools/spec_source_deps/tungstenite-openai-0.27.0/src/handshake/client.rs",
+        "start": 159,
+        "end": 206,
+        "context_sha256": "3b69a5682f058aa07237485463f9c91869d54c02a40cfbf7c6394e5e74824093",
+        "anchor": "let headers = request.headers_mut();"
+      },
+      {
+        "path": "tools/spec_source_deps/http-1.4.0/src/header/map.rs",
+        "start": 1572,
+        "end": 1602,
+        "context_sha256": "59331f5a9c0cc56e89c44ad829f5ac3406850be5b49c3ca864c92560889900f8",
+        "anchor": "pub fn remove<K>(&mut self, key: K) -> Option<T>"
+      }
+    ],
+    "SPEC-WS-003": [
+      {
+        "path": "model-provider-info/src/lib.rs",
+        "start": 116,
+        "end": 116,
+        "context_sha256": "46cc3bb7f5f6f86a556b89a122a327e614c271ac8661ddd84717058bc6590985",
+        "anchor": "pub http_headers: Option<HashMap<String, String>>,"
+      },
+      {
+        "path": "tools/spec_source_deps/tungstenite-openai-0.27.0/src/handshake/client.rs",
+        "start": 190,
+        "end": 206,
+        "context_sha256": "95ea1be018454fba2eb4148da3ffed1bbdd4b2f6c8b76a047610a96ce010bfe5",
+        "anchor": "for (k, v) in headers {"
+      }
+    ],
+    "SPEC-WS-004": [],
+    "SPEC-WS-005": [
+      {
+        "path": "codex-api/src/common.rs",
+        "start": 266,
+        "end": 292,
+        "context_sha256": "2f0d3043902969591c85a1e247af327e52a2ae2cd7ea009adc01a0d02500741e",
+        "anchor": "pub struct ResponseCreateWsRequest<'a> {"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 1604,
+        "end": 1641,
+        "context_sha256": "012691a8b78d5d0e97c2a5c29fdf1952ed19c7435be9017d1f868f6f741a7732",
+        "anchor": "self.prepare_websocket_request(&request);"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 897,
+        "end": 897,
+        "context_sha256": "b7a0f0fca5c2cf9b18ffb96a1ed7f8ba35b29dec7b55ff08f24482f9c7877c6a",
+        "anchor": "parallel_tool_calls: prompt.parallel_tool_calls && !model_info.use_responses_lite,"
+      }
+    ],
+    "SPEC-HDR-001": [
+      {
+        "path": "codex-api/src/endpoint/session.rs",
+        "start": 48,
+        "end": 48,
+        "context_sha256": "f280ee34cc064b3cb09f81b7ff5d32561ac37346dd7259f749155c95549c2b72",
+        "anchor": "fn make_request("
+      },
+      {
+        "path": "codex-api/src/endpoint/session.rs",
+        "start": 80,
+        "end": 154,
+        "context_sha256": "c6a25a846155fee7d7956758c02de288071a34c7088fa0a8fa5ad4bda782c4f9",
+        "anchor": "pub(crate) async fn execute_with<C>("
+      },
+      {
+        "path": "login/src/auth/default_client.rs",
+        "start": 310,
+        "end": 310,
+        "context_sha256": "e5386a9748bbae4db916b2305a1055422028be8fc41f5f85bc3049562e250caa",
+        "anchor": "fn default_reqwest_client_builder() -> reqwest::ClientBuilder {"
+      }
+    ],
+    "SPEC-HDR-002": [
+      {
+        "path": "login/src/auth/default_client.rs",
+        "start": 54,
+        "end": 54,
+        "context_sha256": "695914e92fe0bcfa98b54be760f8b81a708b8a4199228b00749ba6dc3aa01d8e",
+        "anchor": "static REQUIREMENTS_RESIDENCY: LazyLock<RwLock<Option<ResidencyRequirement>>> ="
+      },
+      {
+        "path": "login/src/auth/default_client.rs",
+        "start": 101,
+        "end": 106,
+        "context_sha256": "4c396834fe8872c32a445aa28d965a25fd78d3582879cf7492d974a88a33a00f",
+        "anchor": "pub fn set_default_client_residency_requirement(enforce_residency: Option<ResidencyRequirement>) {"
+      },
+      {
+        "path": "login/src/auth/default_client.rs",
+        "start": 354,
+        "end": 367,
+        "context_sha256": "d4e581d3a26472f5932e303eb426d8e0daef5ef7b0708525609170380a1c680b",
+        "anchor": "pub fn default_headers() -> HeaderMap {"
+      },
+      {
+        "path": "config/src/config_requirements.rs",
+        "start": 868,
+        "end": 868,
+        "context_sha256": "d041a77328a1b945d3c8a2096d195ef3b1e00fe85b229df505360b2d5dff000a",
+        "anchor": "pub enforce_residency: Option<ResidencyRequirement>,"
+      },
+      {
+        "path": "exec/src/lib.rs",
+        "start": 484,
+        "end": 484,
+        "context_sha256": "ecf3ca29f21a80809164296564f24781fb6a824fbdb5c863cb6f4fd28b6f9fb5",
+        "anchor": "set_default_client_residency_requirement(config.enforce_residency.value());"
+      },
+      {
+        "path": "tui/src/lib.rs",
+        "start": 1171,
+        "end": 1171,
+        "context_sha256": "8f14d4aafd623b8581f09715bc69cf49e09572500fc6af3dd77bd708907cd50b",
+        "anchor": "set_default_client_residency_requirement(config.enforce_residency.value());"
+      },
+      {
+        "path": "app-server/src/request_processors/initialize_processor.rs",
+        "start": 132,
+        "end": 132,
+        "context_sha256": "c9c0f74aaecc2affe3b2320255e81aaf4a61864af16c6bf14357f0c2d25cd373",
+        "anchor": "set_default_client_residency_requirement(self.config.enforce_residency.value());"
+      }
+    ],
+    "SPEC-HDR-004": [
+      {
+        "path": "core/src/client.rs",
+        "start": 141,
+        "end": 141,
+        "context_sha256": "6c7ca2085d285c211b731a13a6271ef049e1419b400e16da8ab94956be9e0a3a",
+        "anchor": "pub const OPENAI_BETA_HEADER: &str = \"OpenAI-Beta\";"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 1094,
+        "end": 1094,
+        "context_sha256": "419e7c814b83e7420518db88e8e38f8dd7f985c02649d864677d3f136d301fd9",
+        "anchor": "OPENAI_BETA_HEADER,"
+      },
+      {
+        "path": "cli/src/doctor.rs",
+        "start": 93,
+        "end": 93,
+        "context_sha256": "76ed0712ff11bab31eb4d6bbb11f73730f2a993663f150cbdb326b7e35ac2f33",
+        "anchor": "const OPENAI_BETA_HEADER: &str = \"OpenAI-Beta\";"
+      },
+      {
+        "path": "cli/src/doctor.rs",
+        "start": 2382,
+        "end": 2382,
+        "context_sha256": "1d743d403341f83fd4ee67033965142ddb0317b8f3a83d8328491b344ac7d130",
+        "anchor": "OPENAI_BETA_HEADER,"
+      }
+    ],
+    "SPEC-HDR-005": [
+      {
+        "path": "login/src/auth/default_client.rs",
+        "start": 41,
+        "end": 41,
+        "context_sha256": "b9cb8d7549157bf2dc653075fef38c6afdf9f3d04170d80a46879f7928568fe0",
+        "anchor": "pub static USER_AGENT_SUFFIX: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));"
+      },
+      {
+        "path": "login/src/auth/default_client.rs",
+        "start": 161,
+        "end": 161,
+        "context_sha256": "d29cfa239b73601946f99ced5ae1e6d3bcda1f5a64f402a3e388870404771c4c",
+        "anchor": "pub fn get_codex_user_agent() -> String {"
+      },
+      {
+        "path": "app-server/src/request_processors/initialize_processor.rs",
+        "start": 90,
+        "end": 133,
+        "context_sha256": "7b93905a2402fe5725da21793b641678133c6c2a624c75f1fc4f89dc763083d3",
+        "anchor": "let user_agent_suffix = format!(\"{name}; {version}\");"
+      },
+      {
+        "path": "cloud-tasks/src/util.rs",
+        "start": 10,
+        "end": 10,
+        "context_sha256": "a0d9112f0ff201ab6509f16983b195fd2dbbaada2ba2205cc3a624ae96c3f707",
+        "anchor": "if let Ok(mut guard) = codex_login::default_client::USER_AGENT_SUFFIX.lock() {"
+      }
+    ],
+    "SPEC-HDR-006": [
+      {
+        "path": "codex-api/src/endpoint/responses.rs",
+        "start": 149,
+        "end": 149,
+        "context_sha256": "63633a1c8bc6d6778dde47a0405fa69445bbe8f50deb251b355a152da122b44d",
+        "anchor": "http::header::ACCEPT,"
+      }
+    ],
+    "SPEC-HDR-007": [
+      {
+        "path": "codex-api/src/requests/headers.rs",
+        "start": 8,
+        "end": 8,
+        "context_sha256": "607ed45888164598adb9609e9862f57fc1e4bbe3205ad924d608e795e7bc30f7",
+        "anchor": "insert_header(&mut headers, \"session-id\", &id);"
+      },
+      {
+        "path": "codex-api/src/requests/headers.rs",
+        "start": 11,
+        "end": 11,
+        "context_sha256": "7582cc36b9544364e4873f996199a766e12732b5d29910662ade8efdb12c9a82",
+        "anchor": "insert_header(&mut headers, \"thread-id\", &id);"
+      },
+      {
+        "path": "core/src/realtime_conversation.rs",
+        "start": 1606,
+        "end": 1606,
+        "context_sha256": "01ab17aba3b145204920f3eb9df1f06d47096246e60871fc1205da9489df37a5",
+        "anchor": "headers.insert(\"x-session-id\", realtime_session_id);"
+      }
+    ],
+    "SPEC-HDR-008": [
+      {
+        "path": "core/src/responses_metadata.rs",
+        "start": 243,
+        "end": 317,
+        "context_sha256": "0f6d9e9fc376bc1aa7589301a7c7cb9ba7ba0dad4a3d4bf6fced4ad1faee602a",
+        "anchor": "pub(crate) fn compatibility_headers(&self) -> ApiHeaderMap {"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 721,
+        "end": 754,
+        "context_sha256": "98b507f0159cf7efc6ebb8a1a37361a04b685e41d9ae3ccf6d9525608ea6d007",
+        "anchor": "fn build_subagent_headers(&self) -> ApiHeaderMap {"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 1089,
+        "end": 1101,
+        "context_sha256": "95ae1bed0bf5c2eea0833508420ee247f3b2abad90604991d7bbd65e71754bac",
+        "anchor": "headers.extend(self.build_responses_compatibility_headers(responses_metadata));"
+      },
+      {
+        "path": "features/src/lib.rs",
+        "start": 925,
+        "end": 929,
+        "context_sha256": "f45c34958ac425865e3b6e4c677fd5f1203fc24bb3a6992a3e539d0f4ed28bf2",
+        "anchor": "id: Feature::RuntimeMetrics,"
+      }
+    ],
+    "SPEC-BODY-001": [
+      {
+        "path": "codex-api/src/common.rs",
+        "start": 216,
+        "end": 292,
+        "context_sha256": "160b86f25be061200c9950b78a7ac95aabfa1eeeff0c242c9daddba157fd75aa",
+        "anchor": "pub struct ResponsesApiRequest {"
+      }
+    ],
+    "SPEC-BODY-002": [
+      {
+        "path": "features/src/lib.rs",
+        "start": 1027,
+        "end": 1030,
+        "context_sha256": "e9fbd4bee4df4449e59d8e77bc2a3c102b888b88fe0e9908901e278d5dd16176",
+        "anchor": "id: Feature::EnableRequestCompression,"
+      },
+      {
+        "path": "core/src/session/session.rs",
+        "start": 1120,
+        "end": 1120,
+        "context_sha256": "c60cc5cfff54908adb7a7676e27ad115b2df42a13260f6868905b3270d96df3f",
+        "anchor": "config.features.enabled(Feature::EnableRequestCompression),"
+      },
+      {
+        "path": "http-client/src/request.rs",
+        "start": 41,
+        "end": 43,
+        "context_sha256": "dfa6c9b85d40ff15f19fa1e4ff9d1706b7bd1dd5fa19faec451663c2b50662f0",
+        "anchor": "#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]"
+      }
+    ],
+    "SPEC-BODY-003": [
+      {
+        "path": "core/src/client.rs",
+        "start": 804,
+        "end": 820,
+        "context_sha256": "75daf85c3572ec706dba31e8f82bd4604d8f31228d1677aa7a6d8aa89b7fe6d6",
+        "anchor": "fn build_reasoning("
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 843,
+        "end": 864,
+        "context_sha256": "ea523d51bd39a26be45a2c40ae0cc58ba9393cab5ee7edd39bb38648f1a7467d",
+        "anchor": "let (instructions, tools) = if model_info.use_responses_lite {"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 897,
+        "end": 897,
+        "context_sha256": "b7a0f0fca5c2cf9b18ffb96a1ed7f8ba35b29dec7b55ff08f24482f9c7877c6a",
+        "anchor": "parallel_tool_calls: prompt.parallel_tool_calls && !model_info.use_responses_lite,"
+      }
+    ],
+    "SPEC-BODY-004": [
+      {
+        "path": "codex-api/src/sse/responses.rs",
+        "start": 62,
+        "end": 70,
+        "context_sha256": "2648d6b8d2e9cb37c8217c9732b5e5763ed10771823f8fabbe00cf7b95088c29",
+        "anchor": "if let Some(turn_state) = turn_state.as_ref()"
+      },
+      {
+        "path": "codex-api/src/endpoint/responses_websocket.rs",
+        "start": 730,
+        "end": 733,
+        "context_sha256": "0bb452bf834701a05ed42c3ab14252aebddcf9394f42a6276bd92f320d49c5ab",
+        "anchor": "if let Some(response_turn_state) = event.turn_state()"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 1561,
+        "end": 1565,
+        "context_sha256": "5e979f70b1f0d7e73ce694ee7679b6be6696a40617865e467b1d35a64b65c8fc",
+        "anchor": "let mut client_metadata = self"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 1885,
+        "end": 1901,
+        "context_sha256": "afa5598b0068d92dd0e7b160c5004c2a94e80d24b89eec06c3f544f35032d020",
+        "anchor": "fn build_responses_headers("
+      }
+    ],
+    "SPEC-BODY-005": [
+      {
+        "path": "codex-api/src/common.rs",
+        "start": 223,
+        "end": 223,
+        "context_sha256": "b55d503c5ca8554db1f1f77278d8ae21bf04d2c4c03ec13316d30107f265b04c",
+        "anchor": "pub tool_choice: String,"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 896,
+        "end": 896,
+        "context_sha256": "44b44a7257d238e91c7206f17493833c25922c4149e5dcec1296564b372fb443",
+        "anchor": "tool_choice: \"auto\".to_string(),"
+      }
+    ],
+    "SPEC-BODY-006": [
+      {
+        "path": "codex-api/src/common.rs",
+        "start": 217,
+        "end": 238,
+        "context_sha256": "56481e93c04bed35a11b3187742cb0a3115771b6d8bdcda78f4bf762ec704f54",
+        "anchor": "pub model: String,"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 804,
+        "end": 897,
+        "context_sha256": "39250d2d15e6b0dab773554a375838696ef11cae09b7d59c92186d8e124be339",
+        "anchor": "fn build_reasoning("
+      }
+    ],
+    "SPEC-BODY-007": [],
+    "SPEC-EP-001": [
+      {
+        "path": "core/src/tools/spec_plan.rs",
+        "start": 93,
+        "end": 94,
+        "context_sha256": "4bd0588d49839b1dec3baffaba08c5d33945dd4e3938e9467ea83a4f77a85ddc",
+        "anchor": "const IMAGE_GEN_NAMESPACE: &str = \"image_gen\";"
+      },
+      {
+        "path": "tools/src/tool_spec.rs",
+        "start": 17,
+        "end": 40,
+        "context_sha256": "eee3e2365a026f542e86843b472fd05bb01fd31cbdfcdb40a66ddf1d4987863a",
+        "anchor": "pub enum ToolSpec {"
+      },
+      {
+        "path": "ext/image-generation/src/backend.rs",
+        "start": 27,
+        "end": 64,
+        "context_sha256": "28cb0c95b91e9ca4a69b653ea267b6cc3a67758cd5504f5d8187cfe625950d24",
+        "anchor": "async fn client(&self) -> Result<ImagesClient<ReqwestTransport>, String> {"
+      },
+      {
+        "path": "codex-api/src/endpoint/images.rs",
+        "start": 33,
+        "end": 68,
+        "context_sha256": "01a5ce6e71f46e6b2e8edec423982ef1e2aee4c59c36d4a74b9e6349a4e465c3",
+        "anchor": "pub async fn generate("
+      }
+    ],
+    "SPEC-EP-002": [
+      {
+        "path": "model-provider-info/src/lib.rs",
+        "start": 329,
+        "end": 332,
+        "context_sha256": "a4b0d87a534b529c5c17bf379c018ec20374f072ca750a579a4de39d3ee2405c",
+        "anchor": "pub fn create_openai_provider(base_url: Option<String>) -> ModelProviderInfo {"
+      },
+      {
+        "path": "login/src/auth/manager.rs",
+        "start": 189,
+        "end": 189,
+        "context_sha256": "2653366b02129d76476b2c96889e989af9b480eef396d7c3ee6ed6f2353c60e8",
+        "anchor": "const REFRESH_TOKEN_URL: &str = \"https://auth.openai.com/oauth/token\";"
+      },
+      {
+        "path": "core/src/realtime_conversation.rs",
+        "start": 1135,
+        "end": 1142,
+        "context_sha256": "f5da42e030fd40c7ea3f22c23276ec46c76c3d4c85e4fe1f271bc57c555ea965",
+        "anchor": "let mut api_provider = provider.to_api_provider(Some(AuthMode::ApiKey))?;"
+      },
+      {
+        "path": "core/src/mcp_openai_file.rs",
+        "start": 145,
+        "end": 182,
+        "context_sha256": "e4a480ebe250325fd2353251c07666c721b39b6b9c01e61d4dabbcc8ed464469",
+        "anchor": ".get_metadata(&path_uri, /*sandbox*/ None)"
+      },
+      {
+        "path": "codex-api/src/files.rs",
+        "start": 131,
+        "end": 290,
+        "context_sha256": "7a65177f9eca980019f9f12aadee2239f6f7ed9f03e7a32c3141e4fca5028679",
+        "anchor": "let create_url = format!(\"{}/files\", base_url.trim_end_matches('/'));"
+      }
+    ],
+    "SPEC-EP-005": [
+      {
+        "path": "codex-api/src/endpoint/session.rs",
+        "start": 63,
+        "end": 154,
+        "context_sha256": "3dabe22c291b3be06ecd4b46bb11e08363f33f84839dc3469a7861ef63507433",
+        "anchor": "pub(crate) async fn execute("
+      },
+      {
+        "path": "codex-api/src/endpoint/responses.rs",
+        "start": 135,
+        "end": 153,
+        "context_sha256": "cfde2c46be41d9d41a1483aefe127249af33be4613168a90e68710d049c1b51f",
+        "anchor": "let request_compression = match compression {"
+      },
+      {
+        "path": "codex-api/src/endpoint/models.rs",
+        "start": 46,
+        "end": 62,
+        "context_sha256": "06b282d7f5f59f47786bcceba36e707a87be85d1f753382a1655584a1e3607a9",
+        "anchor": "pub async fn list_models("
+      },
+      {
+        "path": "codex-api/src/endpoint/compact.rs",
+        "start": 46,
+        "end": 56,
+        "context_sha256": "0cb1ec43d41d81ca64b471d05e3fd33e39843d398d9edf33641c1cecc93a1d0b",
+        "anchor": "let resp = self"
+      },
+      {
+        "path": "codex-api/src/endpoint/search.rs",
+        "start": 35,
+        "end": 45,
+        "context_sha256": "eaf5e126ef545a5407732d514f68203e3e2b14c30363bc119731f93c107d2202",
+        "anchor": "pub async fn search("
+      },
+      {
+        "path": "codex-api/src/endpoint/images.rs",
+        "start": 33,
+        "end": 68,
+        "context_sha256": "01a5ce6e71f46e6b2e8edec423982ef1e2aee4c59c36d4a74b9e6349a4e465c3",
+        "anchor": "pub async fn generate("
+      }
+    ],
+    "SPEC-EP-006": [
+      {
+        "path": "codex-api/src/endpoint/models.rs",
+        "start": 31,
+        "end": 55,
+        "context_sha256": "58d0b7e0914567098600f9422c3d14162d07ca27e58176015fe81d158d5428b4",
+        "anchor": "fn path() -> &'static str {"
+      }
+    ],
+    "SPEC-EP-007": [
+      {
+        "path": "codex-api/src/endpoint/compact.rs",
+        "start": 35,
+        "end": 50,
+        "context_sha256": "5038b4b14dab56aed87973faaf4760b98c0949042ac0efe348c6b7c240b4b295",
+        "anchor": "fn path() -> &'static str {"
+      }
+    ],
+    "SPEC-EP-008": [
+      {
+        "path": "codex-api/src/endpoint/search.rs",
+        "start": 31,
+        "end": 44,
+        "context_sha256": "cb5724457325b5ac709d1eba6aed0f2d5d91c10e3b9aae3e299fb3868e5ee0e3",
+        "anchor": "fn path() -> &'static str {"
+      }
+    ],
+    "SPEC-EP-009": [
+      {
+        "path": "codex-api/src/endpoint/realtime_call.rs",
+        "start": 62,
+        "end": 72,
+        "context_sha256": "e4542896056019aff4c67f940565e031abe5acce78de6fbb393afef5d22e1890",
+        "anchor": "fn path() -> &'static str {"
+      },
+      {
+        "path": "codex-api/src/endpoint/realtime_call.rs",
+        "start": 108,
+        "end": 155,
+        "context_sha256": "a4331bfe0e413d82b0ff4d568402ba2ce01486585563200161e24ebeec923064",
+        "anchor": "let resp = self"
+      }
+    ],
+    "SPEC-EP-012": [
+      {
+        "path": "codex-api/src/endpoint/realtime_call.rs",
+        "start": 213,
+        "end": 224,
+        "context_sha256": "bce3de80f270bd5355a452049d99aa74a84cf5b7754858844b21e0fdf235fe63",
+        "anchor": "fn configure_realtime_call_request("
+      },
+      {
+        "path": "core/src/realtime_conversation.rs",
+        "start": 1135,
+        "end": 1135,
+        "context_sha256": "68f51134c5098a539d0faa6473d1bc2be1e2bc9a9650f77ec1a1bc4a6c83cecd",
+        "anchor": "let mut api_provider = provider.to_api_provider(Some(AuthMode::ApiKey))?;"
+      },
+      {
+        "path": "core/src/realtime_conversation.rs",
+        "start": 1165,
+        "end": 1183,
+        "context_sha256": "206e2eff750e883a5f7fecb41a2ed3bf5da4ee578a5b314169dcf99069e0d062",
+        "anchor": "let extra_headers = match transport {"
+      },
+      {
+        "path": "core/src/realtime_conversation.rs",
+        "start": 1595,
+        "end": 1595,
+        "context_sha256": "7d4b456b5ab861aa085545f8ef84604e24d1eebc351d78376f69c8fb9958417c",
+        "anchor": "headers.insert(\"openai-alpha\", HeaderValue::from_static(\"quicksilver=v1\"));"
+      },
+      {
+        "path": "codex-api/src/endpoint/realtime_websocket/methods.rs",
+        "start": 729,
+        "end": 793,
+        "context_sha256": "0cc7aa119a089d57861d5b022c3aa2122a5614ead93429336f6ba331a8e7905c",
+        "anchor": "pub async fn connect_webrtc_sideband("
+      },
+      {
+        "path": "codex-api/src/endpoint/realtime_websocket/methods.rs",
+        "start": 896,
+        "end": 971,
+        "context_sha256": "812f60273234d5e96538cda6afe8fff85cf02aecc65e53ce812ed78ee917fffe",
+        "anchor": "fn websocket_url_from_api_url("
+      },
+      {
+        "path": "core/src/realtime_conversation.rs",
+        "start": 1701,
+        "end": 1707,
+        "context_sha256": "36c91df9135722d9a0f63afda7d98d3864db8a5a1874fe91e080a42eb1cf5728",
+        "anchor": "let connection = match tokio::select! {"
+      }
+    ],
+    "SPEC-EP-013": [
+      {
+        "path": "codex-api/src/provider.rs",
+        "start": 53,
+        "end": 53,
+        "context_sha256": "b89659c793984a6f25871c775e3c48cea6c55636bc99df02cd3d786dad774a49",
+        "anchor": "pub fn url_for_path(&self, path: &str) -> String {"
+      },
+      {
+        "path": "model-provider-info/src/lib.rs",
+        "start": 339,
+        "end": 339,
+        "context_sha256": "8533fc20b706f2c8ef52a7abdcc622f41859e2c129bff1d021ef2464a00934dd",
+        "anchor": "query_params: None,"
+      },
+      {
+        "path": "codex-api/src/endpoint/realtime_call.rs",
+        "start": 213,
+        "end": 224,
+        "context_sha256": "bce3de80f270bd5355a452049d99aa74a84cf5b7754858844b21e0fdf235fe63",
+        "anchor": "fn configure_realtime_call_request("
+      }
+    ],
+    "SPEC-EP-014": [
+      {
+        "path": "core/src/client.rs",
+        "start": 599,
+        "end": 617,
+        "context_sha256": "be21dfcca77bc3a774098dc6273dd61999582ade30219843307aec55ceea4a5a",
+        "anchor": "let mut extra_headers = ApiHeaderMap::new();"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 1885,
+        "end": 1902,
+        "context_sha256": "0dabbc4abcf30bdcf39b68d514c58c415f57f0f21f81b680d244aa53241f320a",
+        "anchor": "fn build_responses_headers("
+      },
+      {
+        "path": "codex-api/src/endpoint/responses.rs",
+        "start": 89,
+        "end": 89,
+        "context_sha256": "862d1a27db55bb5160921c5e077648dbcce71234a4ee973b687ca958214ad3b4",
+        "anchor": "insert_header(&mut headers, \"x-client-request-id\", thread_id);"
+      }
+    ],
+    "SPEC-EP-015": [
+      {
+        "path": "codex-api/src/search.rs",
+        "start": 9,
+        "end": 21,
+        "context_sha256": "499ab570dc0d0a1229cbba21087f824d2f54d6e17d28f2673358d32263e63ea1",
+        "anchor": "pub struct SearchRequest {"
+      },
+      {
+        "path": "ext/web-search/src/tool.rs",
+        "start": 110,
+        "end": 120,
+        "context_sha256": "bf886d34ecff31f1bb279aeb1fb25b7b19e20ef241e04e2653b6717fae81a197",
+        "anchor": "let request = SearchRequest {"
+      },
+      {
+        "path": "ext/web-search/src/tool.rs",
+        "start": 185,
+        "end": 195,
+        "context_sha256": "7a39eb681d3a558ad4951e47c1498cb5ee11bb7aa8c7c37cd4812ea404240e8b",
+        "anchor": "fn search_request_headers(originator: Option<&str>, turn_metadata: Option<&str>) -> HeaderMap {"
+      }
+    ],
+    "SPEC-EP-019": [
+      {
+        "path": "backend-client/src/client/rate_limit_resets.rs",
+        "start": 14,
+        "end": 18,
+        "context_sha256": "31ff0ad4d1308a43531f5be8315afa8b39afc4c0e3e8b74872ce8b4ea6b323d1",
+        "anchor": "#[derive(Serialize)]"
+      },
+      {
+        "path": "backend-client/src/client/rate_limit_resets.rs",
+        "start": 30,
+        "end": 109,
+        "context_sha256": "f15ce2a0ba27e2808e8cd1d8e8b516061e6eb7c24949c1b06892fcb5e543119d",
+        "anchor": "pub(super) async fn get_rate_limit_status(&self) -> Result<RateLimitStatusWithResetCredits> {"
+      },
+      {
+        "path": "backend-client/src/client.rs",
+        "start": 212,
+        "end": 231,
+        "context_sha256": "cfed3f9aa4dd6d3ef7f72f83dce2cc0d334bddd29324c1b8e3d4a0e2002e5cf1",
+        "anchor": "fn headers(&self) -> HeaderMap {"
+      }
+    ],
+    "SPEC-EP-020": [
+      {
+        "path": "codex-api/src/common.rs",
+        "start": 26,
+        "end": 41,
+        "context_sha256": "7836c8ac51f934565c1627167887805e3d7c4573dadd09f3434fd9bffe460f96",
+        "anchor": "pub struct CompactionInput<'a> {"
+      }
+    ],
+    "SPEC-EP-021": [
+      {
+        "path": "core/src/compact_remote_v2_attempt.rs",
+        "start": 78,
+        "end": 78,
+        "context_sha256": "99e2e0cc0647990766372677fb1c3b418b1da78d91bdf1bc4d6b226fc9e2ef5e",
+        "anchor": "input.push(ResponseItem::CompactionTrigger {});"
+      },
+      {
+        "path": "model-provider-info/src/lib.rs",
+        "start": 417,
+        "end": 418,
+        "context_sha256": "1579a3040b5783dfe9a5501ecc1ef6f1a025ee43a5ebcafb965f23afc377411a",
+        "anchor": "pub fn supports_remote_compaction(&self) -> bool {"
+      },
+      {
+        "path": "features/src/lib.rs",
+        "start": 1379,
+        "end": 1382,
+        "context_sha256": "2c7003342cc596ada55058a4c39ccf1aeb38d9ef9b029e57cfe956f855e94681",
+        "anchor": "id: Feature::RemoteCompactionV2,"
+      },
+      {
+        "path": "core/src/tasks/compact.rs",
+        "start": 44,
+        "end": 44,
+        "context_sha256": "58da9b04aaf5267fba3d32510b2eb3a07505da5cfc55dee77d636917267e8012",
+        "anchor": ".enabled(codex_features::Feature::RemoteCompactionV2)"
+      }
+    ],
+    "SPEC-EP-022": [
+      {
+        "path": "codex-api/src/images.rs",
+        "start": 5,
+        "end": 30,
+        "context_sha256": "76524bc062dd06bbb6dcc94d80e5dd4720b336725dd4ebe26eb7b028c82b2a53",
+        "anchor": "pub struct ImageGenerationRequest {"
+      },
+      {
+        "path": "codex-api/src/endpoint/images.rs",
+        "start": 33,
+        "end": 68,
+        "context_sha256": "01a5ce6e71f46e6b2e8edec423982ef1e2aee4c59c36d4a74b9e6349a4e465c3",
+        "anchor": "pub async fn generate("
+      },
+      {
+        "path": "ext/image-generation/src/tool.rs",
+        "start": 270,
+        "end": 327,
+        "context_sha256": "4c89d13267c8fdcac1cc4266e42a76b3f6a516dc24777a3d03e3f1b981295b87",
+        "anchor": "let images = match (paths.is_empty(), args.num_last_images_to_include) {"
+      }
+    ],
+    "SPEC-EP-023": [
+      {
+        "path": "analytics/src/facts.rs",
+        "start": 368,
+        "end": 381,
+        "context_sha256": "0b4f7e969e86dd6fc428e9261f228212e7e887743025b71e5a2c021ba89173d2",
+        "anchor": "pub enum CompactionReason {"
+      },
+      {
+        "path": "core/src/tasks/compact.rs",
+        "start": 35,
+        "end": 76,
+        "context_sha256": "a3ab178346cfade6f0b71c756181fc7127e39def207622e454343b4edf6bdc39",
+        "anchor": "if ctx.config.features.enabled(Feature::TokenBudget) {"
+      },
+      {
+        "path": "core/src/compact_token_budget.rs",
+        "start": 20,
+        "end": 89,
+        "context_sha256": "d674c62a1b8795ff712259f01662b2a3f542becd73694603d5323617b1dd3aa1",
+        "anchor": "/// Runs token-budget manual compaction as a normal compaction lifecycle."
+      },
+      {
+        "path": "core/src/session/turn.rs",
+        "start": 801,
+        "end": 990,
+        "context_sha256": "0c7d8ad7d2cbcbc8b2f97f388adfc8d35ebdf6a63d15fe6ea17e1b734ec89970",
+        "anchor": "#[instrument(level = \"trace\", skip_all)]"
+      },
+      {
+        "path": "core/src/compact_model_fallback.rs",
+        "start": 29,
+        "end": 39,
+        "context_sha256": "b2eb0c234f7cbd107c1fca0b208e271abd4a760f6c140de76db0a1d85fb9587f",
+        "anchor": "let reason_tag = match reason {"
+      },
+      {
+        "path": "core/src/compact_remote_v2_attempt.rs",
+        "start": 78,
+        "end": 78,
+        "context_sha256": "99e2e0cc0647990766372677fb1c3b418b1da78d91bdf1bc4d6b226fc9e2ef5e",
+        "anchor": "input.push(ResponseItem::CompactionTrigger {});"
+      }
+    ],
+    "SPEC-EP-024": [
+      {
+        "path": "tui/src/slash_command.rs",
+        "start": 40,
+        "end": 40,
+        "context_sha256": "52ef12f9a93c72c00a6692700debada764b7ecb127bbf2e05b0b291a741c4f3b",
+        "anchor": "Compact,"
+      },
+      {
+        "path": "tui/src/chatwidget/slash_dispatch.rs",
+        "start": 256,
+        "end": 256,
+        "context_sha256": "404b4c1e69dfcf590459231f0500d1fbcc16c8d47996c390c44e5ae19171738f",
+        "anchor": "SlashCommand::Compact => {"
+      }
+    ]
+  }
+}

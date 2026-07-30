@@ -13,6 +13,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
@@ -81,6 +82,12 @@ func (u *openAIImagesFailoverHTTPUpstream) Do(_ *http.Request, _ string, account
 	}, nil
 }
 
+// DoWithTLS 保持此用例原有的固定上游行为，同时覆盖 OAuth 图片端点
+// 启用版本画像后的 TLS 发送路径。
+func (u *openAIImagesFailoverHTTPUpstream) DoWithTLS(req *http.Request, proxyURL string, accountID int64, concurrency int, _ *tlsfingerprint.Profile) (*http.Response, error) {
+	return u.Do(req, proxyURL, accountID, concurrency)
+}
+
 func (u *openAIImagesFailoverHTTPUpstream) calls() []int64 {
 	u.mu.Lock()
 	defer u.mu.Unlock()
@@ -100,7 +107,10 @@ func TestOpenAIGatewayHandlerImages_ServerErrorFailsOverAndReturnsClearErrorWhen
 			Schedulable: true,
 			Concurrency: 0,
 			Priority:    0,
-			Credentials: map[string]any{"access_token": "token-1"},
+			Credentials: map[string]any{
+				"access_token":       "token-1",
+				"chatgpt_account_id": "chatgpt-account-1",
+			},
 		},
 		{
 			ID:          2,
@@ -111,7 +121,10 @@ func TestOpenAIGatewayHandlerImages_ServerErrorFailsOverAndReturnsClearErrorWhen
 			Schedulable: true,
 			Concurrency: 0,
 			Priority:    1,
-			Credentials: map[string]any{"access_token": "token-2"},
+			Credentials: map[string]any{
+				"access_token":       "token-2",
+				"chatgpt_account_id": "chatgpt-account-2",
+			},
 		},
 	}
 	accountRepo := openAIImagesFailoverAccountRepo{accounts: accounts}

@@ -82,15 +82,31 @@ func resolveOpenAIAPIKeyCodexTLSProfileForClient(
 	}
 	switch client.ID {
 	case openAIAPIKeyCodexMimicClientCodexExec0145:
-		if proxyURL != "" {
-			return newOpenAIOfficialEgressHTTPProxyTLSProfile()
-		}
-		return newOpenAIOfficialEgressHTTPTLSProfile()
+		return newOpenAIAPIKeyCodex0145TLSOnlyProfile(proxyURL != "")
 	case openAIAPIKeyCodexMimicClientCLIRS0125:
 		return codexCLIRS0125TLSProfile()
 	default:
 		return codexExec0144TLSProfile()
 	}
+}
+
+// newOpenAIAPIKeyCodex0145TLSOnlyProfile 仅复用 0.145.0 的 ClientHello。
+// API-key mimic 的目标 URL 可能是第三方 /v1/responses，不属于 OAuth 版本画像的
+// chatgpt.com 端点矩阵，因此绝不能携带 OAuth 的 strict H1 method/path 契约。
+func newOpenAIAPIKeyCodex0145TLSOnlyProfile(useProxy bool) *tlsfingerprint.Profile {
+	var profile *tlsfingerprint.Profile
+	if useProxy {
+		profile = newOpenAIOfficialEgressHTTPProxyTLSProfile()
+	} else {
+		profile = newOpenAIOfficialEgressHTTPTLSProfile()
+	}
+	if profile == nil {
+		return nil
+	}
+	profile.Name += " TLS-only API-key mimic"
+	profile.Transport.H1HeaderOrders = nil
+	profile.Transport.StrictH1Wire = false
+	return profile
 }
 
 // doOpenAIHTTPUpstreamWithProfile 是所有 OpenAI HTTP 出站路径的唯一入口：
@@ -111,12 +127,9 @@ func doOpenAIHTTPUpstreamWithProfile(httpUpstream HTTPUpstream, req *http.Reques
 		if account == nil {
 			return nil, fmt.Errorf("official egress HTTP account is unavailable")
 		}
-		// 官方 Codex 在直连和 HTTP CONNECT 代理下使用两套已实证的 TLS/ALPN
-		// 画像。代理路径必须在建立连接前切换到 h2 画像，且由 TLS Profile
-		// 摘要和代理键共同隔离连接池，不能复用直连的空 ALPN 连接。
-		if proxyURL != "" {
-			officialTLSProfile = newOpenAIOfficialEgressHTTPProxyTLSProfile()
-		}
+		// 代理只决定 TCP 路由，不决定 Codex HTTP TLS 画像。默认系统 CA 路径
+		// 在直连与 CONNECT 下均使用 30-cipher、空 ALPN 的 HTTP/1.1 画像；
+		// 只有有效自定义 CA 才能进入另一分支，而该能力当前未开放。
 		return httpUpstream.DoWithTLS(
 			req,
 			proxyURL,

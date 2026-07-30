@@ -32,6 +32,11 @@ func f64p(v float64) *float64 { return &v }
 // prompt_cache_key 与配套身份头，不合成官方客户端不会发送的正文元数据。
 func codexOfficialIngressIdentityForTest(t *testing.T, c *gin.Context, body []byte) []byte {
 	t.Helper()
+	// 该 helper 只服务 HTTP passthrough/legacy 行为测试；0.145.0 默认 WS
+	// 后必须显式固定传输，避免测试绕过 recorder 去拨真实 chatgpt.com。
+	setOfficialCodexForceHTTPFallback(c, true)
+	c.Request.Header.Set("user-agent", officialOpenAIHTTPUserAgent)
+	c.Request.Header.Set("originator", officialOpenAIHTTPOriginator)
 	const (
 		sessionID      = "22222222-2222-4222-8222-222222222222"
 		installationID = "33333333-3333-4333-8333-333333333333"
@@ -45,7 +50,33 @@ func codexOfficialIngressIdentityForTest(t *testing.T, c *gin.Context, body []by
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(body, &payload))
 	payload["prompt_cache_key"] = sessionID
-	if canonicalOfficialEgressInboundEndpoint(c.Request.URL.Path) != "/v1/responses/compact" {
+	isCompact := canonicalOfficialEgressInboundEndpoint(c.Request.URL.Path) == "/v1/responses/compact"
+	if isCompact {
+		// legacy compact 的 Rust 请求结构体始终序列化该必需字段。
+		if _, exists := payload["parallel_tool_calls"]; !exists {
+			payload["parallel_tool_calls"] = false
+		}
+	} else {
+		// 普通 Responses 的 strict 夹具必须模拟 0.145.0 的完整必需外层，
+		// 不能依赖派生路径替官方客户端补字段。
+		if _, exists := payload["tool_choice"]; !exists {
+			payload["tool_choice"] = "auto"
+		}
+		if _, exists := payload["parallel_tool_calls"]; !exists {
+			payload["parallel_tool_calls"] = false
+		}
+		if _, exists := payload["reasoning"]; !exists {
+			payload["reasoning"] = map[string]any{"effort": "medium", "summary": "auto"}
+		}
+		if _, exists := payload["store"]; !exists {
+			payload["store"] = false
+		}
+		if _, exists := payload["stream"]; !exists {
+			payload["stream"] = true
+		}
+		if _, exists := payload["include"]; !exists {
+			payload["include"] = []any{"reasoning.encrypted_content"}
+		}
 		payload["client_metadata"] = map[string]any{
 			"x-codex-installation-id": installationID,
 			"session_id":              sessionID,
@@ -57,9 +88,11 @@ func codexOfficialIngressIdentityForTest(t *testing.T, c *gin.Context, body []by
 	}
 	out, err := json.Marshal(payload)
 	require.NoError(t, err)
-	if canonicalOfficialEgressInboundEndpoint(c.Request.URL.Path) != "/v1/responses/compact" {
+	if !isCompact {
 		c.Request.Header.Set("x-client-request-id", sessionID)
 	}
+	c.Request.Header.Set("authorization", "Bearer oauth-token")
+	c.Request.Header.Set("chatgpt-account-id", "chatgpt-acc")
 	c.Request.Header.Set("session-id", sessionID)
 	c.Request.Header.Set("thread-id", sessionID)
 	c.Request.Header.Set("x-codex-installation-id", installationID)
@@ -165,9 +198,10 @@ func TestOpenAIGatewayService_ResponsesUnknownModelDoesNotFallbackToGPT54(t *tes
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
-	originalBody := []byte(`{"model":"gpt6","stream":false,"instructions":"local-test-instructions","input":[{"type":"text","text":"hi"}]}`)
+	originalBody := []byte(`{"model":"gpt6","stream":false,"instructions":"local-test-instructions","input":[{"type":"text","text":"hi"}],"reasoning":{"effort":"medium","summary":"auto"}}`)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(originalBody))
 	c.Request.Header.Set("Content-Type", "application/json")
+	setOfficialCodexForceHTTPFallback(c, true)
 
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusBadRequest,
@@ -263,9 +297,10 @@ func TestOpenAIGatewayService_OAuthMessagesBridgeDoesNotInjectDefaultInstruction
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
-	originalBody := []byte(`{"model":"gpt-5.5","stream":true,"prompt_cache_key":"anthropic-metadata-session-1","input":[{"type":"message","role":"developer","content":[{"type":"input_text","text":"<sub2api-claude-code-todo-guard>"}]},{"type":"message","role":"user","content":"hello"}]}`)
+	originalBody := []byte(`{"model":"gpt-5.5","stream":true,"prompt_cache_key":"anthropic-metadata-session-1","input":[{"type":"message","role":"developer","content":[{"type":"input_text","text":"<sub2api-claude-code-todo-guard>"}]},{"type":"message","role":"user","content":"hello"}],"reasoning":{"effort":"medium","summary":"auto"}}`)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(originalBody))
 	c.Request.Header.Set("Content-Type", "application/json")
+	setOfficialCodexForceHTTPFallback(c, true)
 
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusBadRequest,
@@ -437,7 +472,8 @@ func TestOpenAIGatewayService_OAuthPassthrough_StreamUsesBuiltInProfileAndKeepsT
 	c.Request.Header.Set("X-Test", "keep")
 	c.Request.Header.Set("x-codex-beta-features", "remote_compaction_v2")
 
-	originalBody := []byte(`{"model":"gpt-5.4","stream":true,"store":true,"instructions":"local-test-instructions","input":[{"type":"text","text":"hi"}]}`)
+	originalBody := []byte(`{"model":"gpt-5.4","stream":true,"store":true,"instructions":"local-test-instructions","input":[{"type":"text","text":"hi"}],"reasoning":{"effort":"medium","summary":"auto"}}`)
+	setOfficialCodexForceHTTPFallback(c, true)
 
 	upstreamSSE := strings.Join([]string{
 		`data: {"type":"response.output_item.added","item":{"type":"tool_call","tool_calls":[{"function":{"name":"apply_patch"}}]}}`,
@@ -530,6 +566,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_NamespaceRequestAndStreamResponse
 	originalBody := []byte(`{
 		"model":"gpt-5.5",
 		"stream":true,
+		"reasoning":{"effort":"medium","summary":"auto"},
 		"instructions":"local-test-instructions",
 		"tools":[
 			{"type":"function","name":"plain","description":"keep","parameters":{"type":"object"}},
@@ -541,6 +578,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_NamespaceRequestAndStreamResponse
 			{"type":"message","role":"user","namespace":"residual","content":[{"type":"input_text","text":"keep","namespace":"nested"}]}
 		]
 	}`)
+	setOfficialCodexForceHTTPFallback(c, true)
 
 	upstreamSSE := strings.Join([]string{
 		`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"spawn_agent","namespace":"collaboration","arguments":""}}`,
@@ -601,9 +639,11 @@ func TestOpenAIGatewayService_NativeOAuth_NamespaceRequestAndStreamResponse(t *t
 	c.Request.Header.Set("User-Agent", "third-party-client/1.0")
 	body := []byte(`{
 		"model":"gpt-5.5","stream":true,"instructions":"test",
+		"reasoning":{"effort":"medium","summary":"auto"},
 		"tools":[{"type":"namespace","name":"collaboration","tools":[{"type":"function","name":"spawn_agent","parameters":{"type":"object"}}]}],
 		"input":[{"type":"function_call","call_id":"call_old","name":"spawn_agent","namespace":"collaboration","arguments":"{}"}]
 	}`)
+	setOfficialCodexForceHTTPFallback(c, true)
 	upstreamSSE := strings.Join([]string{
 		`data: {"type":"response.output_item.added","output_index":0,"item":{"type":"function_call","id":"fc_1","call_id":"call_1","name":"spawn_agent","namespace":"collaboration","arguments":""}}`,
 		"",
@@ -702,7 +742,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_NamespaceCollisionReturnsBadReque
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
-	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.144.1")
+	c.Request.Header.Set("User-Agent", "third-party-client/1.0")
 	body := []byte(`{
 		"model":"gpt-5.5","stream":true,"instructions":"test",
 		"tools":[
@@ -840,7 +880,8 @@ func TestOpenAIGatewayService_OAuthPassthrough_CodexMissingInstructionsRejectedB
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses?trace=1", bytes.NewReader(nil))
-	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.98.0 (Windows 10.0.19045; x86_64) unknown")
+	c.Request.Header.Set("User-Agent", officialOpenAIHTTPUserAgent)
+	c.Request.Header.Set("originator", officialOpenAIHTTPOriginator)
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Request.Header.Set("OpenAI-Beta", "responses=experimental")
 
@@ -887,7 +928,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_CodexMissingInstructionsRejectedB
 	require.Nil(t, upstream.lastReq)
 
 	require.True(t, logSink.ContainsMessage("OpenAI passthrough 本地拦截：Codex 请求缺少有效 instructions"))
-	require.True(t, logSink.ContainsFieldValue("request_user_agent", "codex_cli_rs/0.98.0 (Windows 10.0.19045; x86_64) unknown"))
+	require.True(t, logSink.ContainsFieldValue("request_user_agent", officialOpenAIHTTPUserAgent))
 	require.True(t, logSink.ContainsFieldValue("reject_reason", "instructions_missing"))
 }
 
@@ -902,6 +943,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_DisabledStillNormalizesNonLitePro
 	// openai_passthrough 是转发策略开关，不得关闭内置官方画像。非 Lite 只保留
 	// 顶层 instructions/tools 与可配置语义，固定外层字段仍必须对齐 Codex。
 	inputBody := []byte(`{"model":"gpt-5.4","instructions":"keep","stream":false,"store":true,"tool_choice":"required","include":["message.output_text.logprobs"],"max_output_tokens":123,"reasoning":{"effort":"medium","context":"none"},"input":[{"type":"text","text":"hi"}]}`)
+	setOfficialCodexForceHTTPFallback(c, true)
 
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
@@ -997,6 +1039,11 @@ func TestOpenAIGatewayService_OAuthLegacy_CompositeCodexUAUsesCodexOriginator(t 
 	c.Request.Header.Set("User-Agent", "Mozilla/5.0 codex_cli_rs/0.1.0")
 
 	inputBody := []byte(`{"model":"gpt-5.4","stream":true,"store":false,"input":[{"type":"text","text":"hi"}]}`)
+	inputBody = codexOfficialIngressIdentityForTest(t, c, inputBody)
+	// 本用例验证宽松兼容路径；版本画像不得把带浏览器前缀的旧 token 当成
+	// 0.145.0 官方身份，因此在通用官方夹具之后恢复第三方复合 UA。
+	c.Request.Header.Set("User-Agent", "Mozilla/5.0 codex_cli_rs/0.1.0")
+	c.Request.Header.Del("originator")
 
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
@@ -1796,7 +1843,8 @@ func TestOpenAIGatewayService_OAuthPassthrough_NonCodexUAFallbackToCodexUA(t *te
 	// Non-Codex UA
 	c.Request.Header.Set("User-Agent", "curl/8.0")
 
-	inputBody := []byte(`{"model":"gpt-5.4","stream":false,"store":true,"input":[{"type":"text","text":"hi"}]}`)
+	inputBody := []byte(`{"model":"gpt-5.4","stream":false,"store":true,"input":[{"type":"text","text":"hi"}],"reasoning":{"effort":"medium","summary":"auto"}}`)
+	setOfficialCodexForceHTTPFallback(c, true)
 
 	resp := &http.Response{
 		StatusCode: http.StatusOK,
@@ -2377,6 +2425,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_AllowTimeoutHeadersWhenConfigured
 	_, err := svc.Forward(context.Background(), c, account, originalBody)
 	require.NoError(t, err)
 	require.NotNil(t, upstream.lastReq)
-	require.Equal(t, "120000", upstream.lastReq.Header.Get("x-stainless-timeout"))
+	// 0.145.0 内置画像是端点 header 闭集；旧 passthrough 超时白名单不能越过画像。
+	require.Empty(t, upstream.lastReq.Header.Get("x-stainless-timeout"))
 	require.Empty(t, upstream.lastReq.Header.Get("X-Test"))
 }

@@ -191,15 +191,12 @@ func TestOpenAIImagesJSONKeepalive_HeartbeatBeforeForwardStillFailsOver(t *testi
 	svc := &OpenAIGatewayService{
 		httpUpstream: &httpUpstreamRecorder{
 			resp: &http.Response{
-				StatusCode: http.StatusOK,
+				StatusCode: http.StatusInternalServerError,
 				Header: http.Header{
-					"Content-Type": []string{"text/event-stream"},
+					"Content-Type": []string{"application/json"},
 					"X-Request-Id": []string{"req_img_heartbeat_failover"},
 				},
-				Body: io.NopCloser(strings.NewReader(
-					"data: {\"type\":\"response.created\",\"response\":{\"created_at\":1710000021}}\n\n" +
-						"data: {\"type\":\"error\",\"error\":{\"type\":\"server_error\",\"code\":\"server_error\",\"message\":\"The image service is temporarily unavailable.\"}}\n\n",
-				)),
+				Body: io.NopCloser(strings.NewReader(`{"error":{"type":"server_error","code":"server_error","message":"The image service is temporarily unavailable."}}`)),
 			},
 		},
 	}
@@ -217,7 +214,8 @@ func TestOpenAIImagesJSONKeepalive_HeartbeatBeforeForwardStillFailsOver(t *testi
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
 		Credentials: map[string]any{
-			"access_token": "token-123",
+			"access_token":       "token-123",
+			"chatgpt_account_id": "acct-images",
 		},
 	}
 
@@ -226,7 +224,7 @@ func TestOpenAIImagesJSONKeepalive_HeartbeatBeforeForwardStillFailsOver(t *testi
 	require.Nil(t, result)
 	var failoverErr *UpstreamFailoverError
 	require.ErrorAs(t, err, &failoverErr)
-	require.Equal(t, http.StatusBadGateway, failoverErr.StatusCode)
+	require.Equal(t, http.StatusInternalServerError, failoverErr.StatusCode)
 	require.Contains(t, string(failoverErr.ResponseBody), "temporarily unavailable")
 	require.Empty(t, strings.TrimSpace(rec.Body.String()), "only heartbeat whitespace may reach the client")
 
@@ -237,7 +235,7 @@ func TestOpenAIImagesJSONKeepalive_HeartbeatBeforeForwardStillFailsOver(t *testi
 	require.Len(t, events, 1)
 	require.Equal(t, "failover", events[0].Kind)
 	require.Equal(t, account.ID, events[0].AccountID)
-	require.Equal(t, http.StatusBadGateway, events[0].UpstreamStatusCode)
+	require.Equal(t, http.StatusInternalServerError, events[0].UpstreamStatusCode)
 }
 
 func waitForOpenAIImagesJSONKeepalive(t *testing.T, c *gin.Context) {

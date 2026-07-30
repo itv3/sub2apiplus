@@ -105,7 +105,8 @@ func TestOpenAIGatewayServiceForwardImages_ImageRateLimitReturnsFailoverAndCools
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
 		Credentials: map[string]any{
-			"access_token": "token-123",
+			"access_token":       "token-123",
+			"chatgpt_account_id": "chatgpt-account-204",
 		},
 	}
 

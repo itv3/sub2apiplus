@@ -16,6 +16,8 @@ func TestNormalizeAccountTestMode(t *testing.T) {
 		{input: "default", want: AccountTestModeDefault},
 		{input: " compact ", want: AccountTestModeCompact},
 		{input: "COMPACT", want: AccountTestModeCompact},
+		{input: " official_files_probe ", want: AccountTestModeOfficialFilesProbe},
+		{input: "OFFICIAL_FILES_PROBE", want: AccountTestModeOfficialFilesProbe},
 		{input: "unknown", want: AccountTestModeDefault},
 	}
 

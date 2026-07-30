@@ -69,12 +69,13 @@ func TestOpenAIGatewayService_Forward_FailoverReparsesCachedBodyForNextAccount(t
 			if requestModel == "" {
 				requestModel = "alias-model"
 			}
-			body := []byte(`{"model":"` + requestModel + `","stream":false,"instructions":"cache-test","input":"hello"}`)
+			body := []byte(`{"model":"` + requestModel + `","stream":false,"instructions":"cache-test","input":"hello","reasoning":{"effort":"medium","summary":"auto"}}`)
 
 			rec := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(rec)
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
 			c.Request.Header.Set("Content-Type", "application/json")
+			setOfficialCodexForceHTTPFallback(c, true)
 
 			upstream := &httpUpstreamRecorder{responses: []*http.Response{
 				{

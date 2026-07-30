@@ -27,19 +27,47 @@ const (
 // 账号 manifest 对同名模型拥有更高优先级；缺失模型仍可使用与当前画像同版本的
 // bundled 值，避免清单裁剪或暂时故障把已知模型静默当成非 Lite。
 var bundledOpenAIModelCapabilities = map[string]openAIModelCapabilities{
-	"codex-auto-review":   {SupportsParallelToolCalls: true},
-	"gpt-5.3-codex-spark": {SupportsParallelToolCalls: true},
-	"gpt-5.4":             {SupportsParallelToolCalls: true},
-	"gpt-5.4-mini":        {SupportsParallelToolCalls: true},
-	"gpt-5.5":             {SupportsParallelToolCalls: true},
-	"gpt-5.6-sol":         {UseResponsesLite: true, SupportsParallelToolCalls: true},
-	"gpt-5.6-terra":       {UseResponsesLite: true, SupportsParallelToolCalls: true},
-	"gpt-5.6-luna":        {UseResponsesLite: true, SupportsParallelToolCalls: true},
+	"codex-auto-review": {
+		SupportsParallelToolCalls: true, DefaultReasoningLevel: "medium",
+		DefaultReasoningSummary: "none", SupportsReasoningSummaryParameter: true, ReasoningDefaultsKnown: true,
+	},
+	"gpt-5.3-codex-spark": {
+		SupportsParallelToolCalls: true,
+		DefaultReasoningSummary:   "auto", SupportsReasoningSummaryParameter: true, ReasoningDefaultsKnown: true,
+	},
+	"gpt-5.4": {
+		SupportsParallelToolCalls: true, DefaultReasoningLevel: "medium",
+		DefaultReasoningSummary: "none", SupportsReasoningSummaryParameter: true, ReasoningDefaultsKnown: true,
+	},
+	"gpt-5.4-mini": {
+		SupportsParallelToolCalls: true, DefaultReasoningLevel: "medium",
+		DefaultReasoningSummary: "none", SupportsReasoningSummaryParameter: true, ReasoningDefaultsKnown: true,
+	},
+	"gpt-5.5": {
+		SupportsParallelToolCalls: true, DefaultReasoningLevel: "medium",
+		DefaultReasoningSummary: "none", SupportsReasoningSummaryParameter: true, ReasoningDefaultsKnown: true,
+	},
+	"gpt-5.6-sol": {
+		UseResponsesLite: true, SupportsParallelToolCalls: true, DefaultReasoningLevel: "low",
+		DefaultReasoningSummary: "none", SupportsReasoningSummaryParameter: true, ReasoningDefaultsKnown: true,
+	},
+	"gpt-5.6-terra": {
+		UseResponsesLite: true, SupportsParallelToolCalls: true, DefaultReasoningLevel: "medium",
+		DefaultReasoningSummary: "none", SupportsReasoningSummaryParameter: true, ReasoningDefaultsKnown: true,
+	},
+	"gpt-5.6-luna": {
+		UseResponsesLite: true, SupportsParallelToolCalls: true, DefaultReasoningLevel: "medium",
+		DefaultReasoningSummary: "none", SupportsReasoningSummaryParameter: true, ReasoningDefaultsKnown: true,
+	},
 }
 
 type openAIModelCapabilities struct {
-	UseResponsesLite          bool
-	SupportsParallelToolCalls bool
+	UseResponsesLite                  bool
+	SupportsParallelToolCalls         bool
+	DefaultReasoningLevel             string
+	DefaultReasoningSummary           string
+	SupportsReasoningSummaryParameter bool
+	ReasoningDefaultsKnown            bool
 }
 
 type openAIModelCapabilitySnapshot struct {
@@ -70,10 +98,13 @@ func (s *openAIModelCapabilitySnapshot) replaceFromManifest(accountID int64, bod
 	}
 	var envelope struct {
 		Models []struct {
-			Slug                      string `json:"slug"`
-			UseResponsesLite          bool   `json:"use_responses_lite"`
-			SupportsParallelToolCalls *bool  `json:"supports_parallel_tool_calls"`
-			Visibility                string `json:"visibility"`
+			Slug                              string  `json:"slug"`
+			UseResponsesLite                  bool    `json:"use_responses_lite"`
+			SupportsParallelToolCalls         *bool   `json:"supports_parallel_tool_calls"`
+			DefaultReasoningLevel             *string `json:"default_reasoning_level"`
+			DefaultReasoningSummary           *string `json:"default_reasoning_summary"`
+			SupportsReasoningSummaryParameter *bool   `json:"supports_reasoning_summary_parameter"`
+			Visibility                        string  `json:"visibility"`
 		} `json:"models"`
 	}
 	if err := json.Unmarshal(body, &envelope); err != nil || len(envelope.Models) == 0 {
@@ -99,10 +130,24 @@ func (s *openAIModelCapabilitySnapshot) replaceFromManifest(accountID int64, bod
 		var capability openAIModelCapabilities
 		if !remoteAuthoritative {
 			capability = bundledOpenAIModelCapabilities[slug]
+		} else {
+			// ModelInfo 的 serde 默认值：summary=auto，且 summary 参数默认受支持。
+			capability.DefaultReasoningSummary = "auto"
+			capability.SupportsReasoningSummaryParameter = true
 		}
+		capability.ReasoningDefaultsKnown = true
 		capability.UseResponsesLite = model.UseResponsesLite
 		if model.SupportsParallelToolCalls != nil {
 			capability.SupportsParallelToolCalls = *model.SupportsParallelToolCalls
+		}
+		if model.DefaultReasoningLevel != nil {
+			capability.DefaultReasoningLevel = strings.ToLower(strings.TrimSpace(*model.DefaultReasoningLevel))
+		}
+		if model.DefaultReasoningSummary != nil {
+			capability.DefaultReasoningSummary = strings.ToLower(strings.TrimSpace(*model.DefaultReasoningSummary))
+		}
+		if model.SupportsReasoningSummaryParameter != nil {
+			capability.SupportsReasoningSummaryParameter = *model.SupportsReasoningSummaryParameter
 		}
 		capabilities[slug] = capability
 	}
@@ -162,7 +207,11 @@ func (s *openAIModelCapabilitySnapshot) modelCapabilitiesState(
 			// 账号清单已按官方条件整体接管：清单未列出的 slug 等价于官方 fallback ModelInfo，
 			// 两个能力位都是 false，且属于“已知不支持”而非“未知”。这里必须返回 known=true，
 			// 否则调用方会把它当成未加载而反复同步拉取 /models，并让 bundled 旧值继续生效。
-			value = openAIModelCapabilities{}
+			value = openAIModelCapabilities{
+				DefaultReasoningSummary:           "auto",
+				SupportsReasoningSummaryParameter: true,
+				ReasoningDefaultsKnown:            true,
+			}
 			exists = true
 		} else {
 			value, exists = bundledOpenAIModelCapabilities[model]
@@ -217,7 +266,14 @@ func (s *OpenAIGatewayService) resolveOpenAIModelCapabilities(
 	model := openAIModelCapabilityKey(account, body)
 	value, known := s.openaiModelCapabilities.modelCapabilities(account.ID, model)
 	if !known {
-		return openAIModelCapabilities{}
+		// 官方对未知 slug 使用 model_info_from_slug：effort=None、summary=auto，
+		// 且 summary 参数受支持。拉取清单失败时也只能采用这一公开 fallback，
+		// 不能发出缺失 reasoning 结构体的非官方形态。
+		return openAIModelCapabilities{
+			DefaultReasoningSummary:           "auto",
+			SupportsReasoningSummaryParameter: true,
+			ReasoningDefaultsKnown:            true,
+		}
 	}
 	return value
 }

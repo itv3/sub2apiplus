@@ -121,7 +121,7 @@ func TestOpenAIAgentIdentityPassthroughUsesBuiltInOfficialIdentity(t *testing.T)
 	}
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
-	body := []byte(`{"model":"gpt-5.4","instructions":"Reply OK","input":[],"stream":true,"prompt_cache_key":"cache-agent"}`)
+	body := []byte(`{"model":"gpt-5.4","instructions":"Reply OK","input":[],"stream":true,"prompt_cache_key":"cache-agent","reasoning":{"effort":"medium","summary":"auto"}}`)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
 	c.Request.Header.Set("session_id", "client-session")
 	c.Request.Header.Set("conversation_id", "client-conversation")
@@ -332,9 +332,11 @@ func TestOpenAIAgentIdentityTaskInvalidRetriesExactlyOnce(t *testing.T) {
 	)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4","instructions":"Reply OK","input":[],"stream":false}`))
+	requestBody := []byte(`{"model":"gpt-5.4","instructions":"Reply OK","input":[],"stream":false,"reasoning":{"effort":"medium","summary":"auto"}}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(requestBody))
+	setOfficialCodexForceHTTPFallback(c, true)
 
-	_, err := svc.Forward(context.Background(), c, account, []byte(`{"model":"gpt-5.4","instructions":"Reply OK","input":[],"stream":false}`))
+	_, err := svc.Forward(context.Background(), c, account, requestBody)
 	require.NoError(t, err)
 	require.Equal(t, 1, registerCalls)
 	require.Len(t, upstream.requests, 2)
@@ -349,8 +351,9 @@ func TestOpenAIAgentIdentityTaskInvalidRetriesExactlyOnce(t *testing.T) {
 	}
 	rec2 := httptest.NewRecorder()
 	c2, _ := gin.CreateTestContext(rec2)
-	c2.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4","instructions":"Reply OK","input":[],"stream":false}`))
-	_, err = svc.Forward(context.Background(), c2, account, []byte(`{"model":"gpt-5.4","instructions":"Reply OK","input":[],"stream":false}`))
+	c2.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(requestBody))
+	setOfficialCodexForceHTTPFallback(c2, true)
+	_, err = svc.Forward(context.Background(), c2, account, requestBody)
 	require.Error(t, err)
 	require.Equal(t, 2, registerCalls)
 	require.Len(t, upstream.requests, 4)
@@ -364,8 +367,9 @@ func TestOpenAIAgentIdentityTaskInvalidRetriesExactlyOnce(t *testing.T) {
 	}
 	rec3 := httptest.NewRecorder()
 	c3, _ := gin.CreateTestContext(rec3)
-	c3.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-5.4","instructions":"Reply OK","input":[],"stream":false}`))
-	_, err = svc.Forward(context.Background(), c3, account, []byte(`{"model":"gpt-5.4","instructions":"Reply OK","input":[],"stream":false}`))
+	c3.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(requestBody))
+	setOfficialCodexForceHTTPFallback(c3, true)
+	_, err = svc.Forward(context.Background(), c3, account, requestBody)
 	require.NoError(t, err)
 	require.Equal(t, 3, registerCalls)
 	require.Len(t, upstream.requests, 6)
@@ -382,7 +386,7 @@ func TestOpenAIAgentIdentityCompatRoutesRecoverInvalidTaskOnce(t *testing.T) {
 		{
 			name: "chat completions",
 			path: "/v1/chat/completions",
-			body: []byte(`{"model":"gpt-5.4","stream":false,"messages":[{"role":"user","content":"hi"}]}`),
+			body: []byte(`{"model":"gpt-5.4","stream":false,"reasoning_effort":"medium","messages":[{"role":"user","content":"hi"}]}`),
 			call: func(s *OpenAIGatewayService, ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
 				return s.ForwardAsChatCompletions(ctx, c, account, body, "", "gpt-5.4")
 			},
@@ -432,9 +436,14 @@ func TestOpenAIAgentIdentityCompatRoutesRecoverInvalidTaskOnce(t *testing.T) {
 				{StatusCode: http.StatusUnauthorized, Header: http.Header{"Content-Type": []string{"application/json"}}, Body: io.NopCloser(strings.NewReader(`{"error":{"code":"invalid_task_id"}}`))},
 			}}
 			svc := &OpenAIGatewayService{cfg: &config.Config{}, accountRepo: repo, httpUpstream: upstream}
+			svc.openaiModelCapabilities.replaceFromManifest(
+				account.ID,
+				[]byte(`{"models":[{"slug":"gpt-5.4","use_responses_lite":false}]}`),
+			)
 			rec := httptest.NewRecorder()
 			c, _ := gin.CreateTestContext(rec)
 			c.Request = httptest.NewRequest(http.MethodPost, tt.path, bytes.NewReader(tt.body))
+			setOfficialCodexForceHTTPFallback(c, true)
 
 			_, err := tt.call(svc, context.Background(), c, account, tt.body)
 			require.Error(t, err)

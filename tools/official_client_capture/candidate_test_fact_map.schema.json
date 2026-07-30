@@ -1,0 +1,155 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/candidate-test-fact-map-v1.json",
+  "title": "Codex CLI 0.145.0 候选 Go 验收测试事实冻结映射",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "codex_version",
+    "fact_prefix",
+    "forbidden_record_types",
+    "tests"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-candidate-test-fact-map/v1"
+    },
+    "codex_version": {
+      "const": "0.145.0"
+    },
+    "fact_prefix": {
+      "const": "CANDIDATE_TRACE_FACT "
+    },
+    "forbidden_record_types": {
+      "const": [
+        "http_request",
+        "tls_client_hello",
+        "websocket_frame"
+      ]
+    },
+    "tests": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "package",
+          "name",
+          "test_file",
+          "test_file_sha256",
+          "source_files",
+          "facts"
+        ],
+        "properties": {
+          "package": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._/-]+$"
+          },
+          "name": {
+            "type": "string",
+            "pattern": "^Test[A-Za-z0-9_]+$"
+          },
+          "test_file": {
+            "$ref": "#/$defs/path"
+          },
+          "test_file_sha256": {
+            "$ref": "#/$defs/sha256"
+          },
+          "source_files": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["path", "sha256"],
+              "properties": {
+                "path": {"$ref": "#/$defs/path"},
+                "sha256": {"$ref": "#/$defs/sha256"}
+              }
+            }
+          },
+          "facts": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "fact_id",
+                "scenario_id",
+                "record_type",
+                "trace_kind",
+                "data_keys",
+                "required_source_kinds"
+              ],
+              "properties": {
+                "fact_id": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9._-]+$"
+                },
+                "scenario_id": {
+                  "type": "string",
+                  "pattern": "^A[0-9]{2}$"
+                },
+                "record_type": {
+                  "enum": [
+                    "alpha_search_flow",
+                    "compaction_decision",
+                    "conditional_header",
+                    "connection_lifecycle",
+                    "file_upload_chain",
+                    "header_assembly",
+                    "image_edit_encoding",
+                    "image_tool_flow",
+                    "lite_transform",
+                    "realtime_chain",
+                    "response_prefix_reuse",
+                    "serialization_boundary",
+                    "surface_identity",
+                    "transport_fallback",
+                    "turn_state_chain",
+                    "websocket_compression_context"
+                  ]
+                },
+                "trace_kind": {
+                  "enum": ["process_trace", "websocket_trace"]
+                },
+                "data_keys": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[a-z][a-z0-9_]*$"
+                  }
+                },
+                "required_source_kinds": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": {
+                    "enum": ["pcap", "pcapng", "relay_binary", "wire_dump"]
+                  },
+                  "contains": {"const": "relay_binary"}
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

@@ -84,6 +84,27 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		turnMetadata = strings.TrimSpace(c.GetHeader(openAIWSTurnMetadataHeader))
 	}
 	setOpenAIWSTurnMetadata(payload, turnMetadata)
+	firstPayload := payloadAsJSONBytes(payload)
+	ctx = s.bindOpenAIResponsesLiteCapability(ctx, account, firstPayload)
+	ctx, err = attachOfficialEgressWebSocketContext(
+		ctx,
+		c,
+		account,
+		wsURL,
+		firstPayload,
+		s.cfg,
+	)
+	if err != nil {
+		return nil, wrapOpenAIWSFallback("official_egress_context", err)
+	}
+	if egressContext, enabled := OfficialEgressContextFromContext(ctx); enabled {
+		if value, valueErr := requiredOfficialEgressFieldValue(
+			egressContext,
+			OfficialEgressFieldPromptCacheKey,
+		); valueErr == nil {
+			promptCacheKey = value
+		}
+	}
 	payloadEventType := openAIWSPayloadString(payload, "type")
 	if payloadEventType == "" {
 		payloadEventType = "response.create"
@@ -303,7 +324,24 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		return nil, err
 	}
 
-	if err := lease.WriteJSONWithContextTimeout(ctx, payload, s.openAIWSWriteTimeout()); err != nil {
+	outboundPayload := payloadAsJSONBytes(payload)
+	outboundPayload, _, err = finalizeOpenAIOfficialEgressWSFrame(
+		ctx,
+		outboundPayload,
+		outboundPayload,
+		"",
+		false,
+	)
+	if err != nil {
+		lease.MarkBroken()
+		return nil, wrapOpenAIWSFallback("official_egress_frame", err)
+	}
+	payloadBytes = len(outboundPayload)
+	if err := lease.WriteJSONWithContextTimeout(
+		ctx,
+		json.RawMessage(outboundPayload),
+		s.openAIWSWriteTimeout(),
+	); err != nil {
 		lease.MarkBroken()
 		logOpenAIWSModeInfo(
 			"write_request_fail account_id=%d conn_id=%s cause=%s payload_bytes=%d",

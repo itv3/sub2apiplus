@@ -42,8 +42,8 @@ func TestDetectOpenAIImageResultSize(t *testing.T) {
 func TestOpenAIGatewayServiceForwardImages_OAuthUsesDecodedOutputDimensions(t *testing.T) {
 	run := runOpenAIOAuthImageActualSizeTest(t, false)
 
-	require.Equal(t, "3840x2160", gjson.GetBytes(run.upstream.lastBody, "tools.0.size").String())
-	require.Equal(t, "low", gjson.GetBytes(run.upstream.lastBody, "tools.0.quality").String())
+	require.Equal(t, "3840x2160", gjson.GetBytes(run.upstream.lastBody, "size").String())
+	require.Equal(t, "low", gjson.GetBytes(run.upstream.lastBody, "quality").String())
 	require.Equal(t, "1672x941", gjson.Get(run.recorder.Body.String(), "size").String())
 	require.Equal(t, "auto", gjson.Get(run.recorder.Body.String(), "quality").String())
 	require.Equal(t, []string{"1672x941"}, run.result.ImageOutputSizes)
@@ -84,15 +84,13 @@ func runOpenAIOAuthImageActualSizeTest(t *testing.T, stream bool) openAIOAuthIma
 
 	encoded := encodeOpenAIImageTestPNG(t, 1672, 941)
 	upstreamBody := fmt.Sprintf(
-		"data: {\"type\":\"response.created\",\"response\":{\"created_at\":1710000000,\"tools\":[{\"type\":\"image_generation\",\"model\":\"gpt-image-2\",\"size\":\"auto\",\"quality\":\"auto\",\"output_format\":\"png\"}]}}\n\n"+
-			"data: {\"type\":\"response.completed\",\"response\":{\"created_at\":1710000000,\"tools\":[{\"type\":\"image_generation\",\"model\":\"gpt-image-2\",\"size\":\"auto\",\"quality\":\"auto\",\"output_format\":\"png\"}],\"output\":[{\"id\":\"ig_actual_size\",\"type\":\"image_generation_call\",\"result\":%q}]}}\n\n"+
-			"data: [DONE]\n\n",
+		`{"created":1710000000,"data":[{"b64_json":%q}],"output_format":"png","quality":"auto","size":"auto"}`,
 		encoded,
 	)
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
 		StatusCode: http.StatusOK,
 		Header: http.Header{
-			"Content-Type": []string{"text/event-stream"},
+			"Content-Type": []string{"application/json"},
 			"X-Request-Id": []string{"req_img_actual_size"},
 		},
 		Body: io.NopCloser(strings.NewReader(upstreamBody)),

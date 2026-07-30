@@ -110,8 +110,11 @@ func TestOpenAIGatewayServiceForwardOAuthDerivesEffortFromSuffixModel(t *testing
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
 	SetOpenAIClientTransport(c, OpenAIClientTransportHTTP)
+	setOfficialCodexForceHTTPFallback(c, true)
 
-	body := []byte(`{"model":"gpt-5.4-xhigh","instructions":"suffix-test","input":"hello","stream":false}`)
+	// reasoning 对象是 0.145.0 必需外层，但故意不提供 effort，确保用量元数据
+	// 仍只能从原始模型后缀推导。
+	body := []byte(`{"model":"gpt-5.4-xhigh","instructions":"suffix-test","input":"hello","stream":false,"reasoning":{"summary":"auto"}}`)
 	result, err := svc.Forward(context.Background(), c, account, body)
 
 	require.NoError(t, err)

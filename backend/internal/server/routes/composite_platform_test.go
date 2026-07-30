@@ -10,9 +10,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openaiidentity"
 	servermiddleware "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
+	"github.com/klauspost/compress/zstd"
 	"github.com/stretchr/testify/require"
 )
 
@@ -75,6 +77,46 @@ func TestCompositeTargetPlatformMiddlewareResolvesModelAndRestoresBody(t *testin
 
 	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"model":"gpt-5"}`))
 	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusNoContent, w.Code)
+}
+
+func TestCompositeTargetPlatformMiddlewareCapturesCodexRuntimeBeforeBodyDecode(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+	router.Use(gin.HandlerFunc(servermiddleware.APIKeyAuthMiddleware(func(c *gin.Context) {
+		groupID := int64(1)
+		c.Set(string(servermiddleware.ContextKeyAPIKey), &service.APIKey{
+			GroupID: &groupID,
+			Group:   &service.Group{Platform: service.PlatformComposite},
+		})
+		c.Next()
+	})))
+	router.Use(compositeTargetPlatformMiddleware(nil))
+	router.POST("/v1/responses", func(c *gin.Context) {
+		require.Empty(t, c.GetHeader("Content-Encoding"))
+		capturedContext := c.Request.Context()
+		recapturedContext := service.WithOfficialCodex0145IngressRuntime(capturedContext, c)
+		require.True(t, capturedContext == recapturedContext, "后续 Handler 捕获必须复用路由入口快照")
+
+		body, err := io.ReadAll(c.Request.Body)
+		require.NoError(t, err)
+		require.JSONEq(t, `{"model":"gpt-5"}`, string(body))
+		c.Status(http.StatusNoContent)
+	})
+
+	encoder, err := zstd.NewWriter(nil)
+	require.NoError(t, err)
+	compressed := encoder.EncodeAll([]byte(`{"model":"gpt-5"}`), nil)
+	require.NoError(t, encoder.Close())
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(compressed))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Content-Encoding", "zstd")
+	req.Header.Set("User-Agent", openaiidentity.CodexUserAgent)
+	req.Header.Set("originator", openaiidentity.CodexOriginator)
 	w := httptest.NewRecorder()
 
 	router.ServeHTTP(w, req)

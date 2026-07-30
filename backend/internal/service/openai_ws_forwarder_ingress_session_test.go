@@ -483,7 +483,8 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_OfficialEgressSk
 		Schedulable: true,
 		Concurrency: 1,
 		Credentials: map[string]any{
-			"access_token": "test-token",
+			"access_token":       "test-token",
+			"chatgpt_account_id": "chatgpt-test-account-31",
 		},
 		Extra: map[string]any{
 			"openai_oauth_responses_websockets_v2_enabled": true,
@@ -976,7 +977,8 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughHeade
 		Schedulable: true,
 		Concurrency: 1,
 		Credentials: map[string]any{
-			"access_token": "oauth-token",
+			"access_token":       "oauth-token",
+			"chatgpt_account_id": "chatgpt-test-account-453",
 		},
 		Extra: map[string]any{
 			"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModePassthrough,

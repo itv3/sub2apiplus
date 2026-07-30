@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -38,7 +39,7 @@ func alphaSearchResponsesSSE(output string) string {
 		`data: {"type":"response.completed","response":{"output":[{"type":"message","content":[{"type":"output_text","text":` + strconv.Quote(output) + `}]}]}}` + "\n\n"
 }
 
-func TestForwardAlphaSearchOAuthPreservesWire(t *testing.T) {
+func TestForwardAlphaSearchOAuthAppliesCodex0145WireContract(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{
 		"id":"search-session",
@@ -55,7 +56,7 @@ func TestForwardAlphaSearchOAuthPreservesWire(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/alpha/search?feature=standalone", bytes.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Request.Header.Set("User-Agent", codexCLIUserAgent)
-	c.Request.Header.Set("Originator", "codex_cli_rs")
+	c.Request.Header.Set("Originator", "codex_exec")
 	c.Request.Header.Set("Version", "0.144.1")
 
 	upstream := &httpUpstreamRecorder{resp: &http.Response{
@@ -91,9 +92,66 @@ func TestForwardAlphaSearchOAuthPreservesWire(t *testing.T) {
 	require.Equal(t, "chatgpt-account", upstream.lastReq.Header.Get("chatgpt-account-id"))
 	// 官方 alpha/search 走 execute，accept 由 reqwest 补默认 */*（SPEC-HDR-006）。
 	require.Equal(t, "*/*", upstream.lastReq.Header.Get("Accept"))
-	require.Equal(t, codexCLIVersion, upstream.lastReq.Header.Get("Version"))
+	require.Equal(t, officialCodexVersion0145, upstream.lastReq.Header.Get("Version"))
+	require.Equal(t, "application/json", upstream.lastReq.Header.Get("Content-Type"))
+	require.NotEmpty(t, upstream.lastReq.Header.Get("X-Codex-Turn-Metadata"))
 	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
-	require.JSONEq(t, string(body), string(upstream.lastBody))
+	require.Equal(t,
+		`{"id":"search-session","model":"gpt-5.6-sol","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"latest news"}]}],"commands":{"search_query":[{"q":"OpenAI news","recency":1}]},"settings":{"allowed_callers":["direct"],"external_web_access":true},"max_output_tokens":2000}`,
+		string(upstream.lastBody),
+	)
+	require.False(t, gjson.GetBytes(upstream.lastBody, "reasoning").Exists())
+	require.False(t, gjson.GetBytes(upstream.lastBody, "future_field").Exists())
+	require.NotNil(t, upstream.lastTLSProfile)
+	var alphaRule *tlsfingerprint.H1HeaderOrderRule
+	for index := range upstream.lastTLSProfile.Transport.H1HeaderOrders {
+		rule := &upstream.lastTLSProfile.Transport.H1HeaderOrders[index]
+		if rule.Method == http.MethodPost && rule.Path == "/backend-api/codex/alpha/search" {
+			alphaRule = rule
+			break
+		}
+	}
+	require.NotNil(t, alphaRule)
+	require.Equal(t, chatgptCodexAlphaSearchURL, "https://"+upstream.lastReq.Host+alphaRule.Path)
+	require.True(t, alphaRule.RejectUnlisted)
+}
+
+func TestBuildOpenAIAlphaSearchRequestReusesInvocationWithinIngressOnly(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"id":"search-session","model":"gpt-5.6-sol","input":[],"commands":{},"settings":{},"max_output_tokens":2000}`)
+	service := &OpenAIGatewayService{cfg: &config.Config{}}
+	account := &Account{
+		ID:       42,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":       "oauth-token",
+			"chatgpt_account_id": "chatgpt-account",
+		},
+	}
+	newIngress := func() *gin.Context {
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/alpha/search", bytes.NewReader(body))
+		return c
+	}
+	invocationID := func(req *http.Request) string {
+		egressContext, ok := OfficialEgressContextFromContext(req.Context())
+		require.True(t, ok)
+		return egressContext.InvocationID()
+	}
+
+	firstIngress := newIngress()
+	first, err := service.buildOpenAIAlphaSearchRequest(context.Background(), firstIngress, account, body, "oauth-token")
+	require.NoError(t, err)
+	second, err := service.buildOpenAIAlphaSearchRequest(context.Background(), firstIngress, account, body, "oauth-token")
+	require.NoError(t, err)
+	thirdIngress := newIngress()
+	third, err := service.buildOpenAIAlphaSearchRequest(context.Background(), thirdIngress, account, body, "oauth-token")
+	require.NoError(t, err)
+
+	require.Equal(t, invocationID(first), invocationID(second))
+	require.NotEqual(t, invocationID(first), invocationID(third))
 }
 
 func TestForwardAlphaSearchPATUsesResponsesWebSearchFallback(t *testing.T) {
@@ -101,7 +159,10 @@ func TestForwardAlphaSearchPATUsesResponsesWebSearchFallback(t *testing.T) {
 	body := []byte(`{
 		"id":"search-session",
 		"model":"gpt-5.6-sol",
+		"input":[],
 		"commands":{"search_query":[{"q":"OpenAI news"}]},
+		"settings":{},
+		"max_output_tokens":2000,
 		"prompt_cache_key":"responses-cache-key",
 		"prompt_cache_retention":"24h"
 	}`)
@@ -110,7 +171,7 @@ func TestForwardAlphaSearchPATUsesResponsesWebSearchFallback(t *testing.T) {
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/alpha/search", bytes.NewReader(body))
 	c.Request.Header.Set("Content-Type", "application/json")
 	c.Request.Header.Set("User-Agent", codexCLIUserAgent)
-	c.Request.Header.Set("Originator", "codex_cli_rs")
+	c.Request.Header.Set("Originator", "codex_exec")
 	c.Request.Header.Set("Version", "0.144.1")
 	c.Request.Header.Set("OpenAI-Beta", "responses=experimental")
 	c.Request.Header.Set("Accept-Language", "zh-CN")
@@ -174,7 +235,7 @@ func TestForwardAlphaSearchPATUsesResponsesWebSearchFallback(t *testing.T) {
 
 func TestForwardAlphaSearchPATBackfillsMissingChatGPTAccountMetadata(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	body := []byte(`{"id":"search-session","model":"gpt-5.6-sol","commands":{"search_query":[{"q":"OpenAI news"}]}}`)
+	body := []byte(`{"id":"search-session","model":"gpt-5.6-sol","input":[],"commands":{"search_query":[{"q":"OpenAI news"}]},"settings":{},"max_output_tokens":2000}`)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/alpha/search", bytes.NewReader(body))
@@ -235,7 +296,7 @@ func TestForwardAlphaSearchPATBackfillsMissingChatGPTAccountMetadata(t *testing.
 
 func TestForwardAlphaSearchAPIKeyMapsModelAndPassesThroughError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	body := []byte(`{"id":"search-session","model":"gpt-5.6-sol","commands":{"search_query":[{"q":"news"}]}}`)
+	body := []byte(`{"id":"search-session","model":"gpt-5.6-sol","input":[],"commands":{"search_query":[{"q":"news"}]},"settings":{},"max_output_tokens":2000}`)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/alpha/search", bytes.NewReader(body))
@@ -309,7 +370,7 @@ func TestForwardAlphaSearchReturnsFailoverBeforeWriting(t *testing.T) {
 
 func TestForwardAlphaSearchUnauthorizedDoesNotMarkAccountError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	body := []byte(`{"id":"search-session","model":"gpt-5.6-sol","commands":{"search_query":[{"q":"news"}]}}`)
+	body := []byte(`{"id":"search-session","model":"gpt-5.6-sol","input":[],"commands":{"search_query":[{"q":"news"}]},"settings":{},"max_output_tokens":2000}`)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/alpha/search", bytes.NewReader(body))
@@ -352,7 +413,7 @@ func TestForwardAlphaSearchUnauthorizedDoesNotMarkAccountError(t *testing.T) {
 
 func TestForwardAlphaSearchPATResponsesFallbackUnauthorizedDoesNotMarkAccountError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	body := []byte(`{"id":"search-session","model":"gpt-5.6-sol","commands":{"search_query":[{"q":"news"}]}}`)
+	body := []byte(`{"id":"search-session","model":"gpt-5.6-sol","input":[],"commands":{"search_query":[{"q":"news"}]},"settings":{},"max_output_tokens":2000}`)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/alpha/search", bytes.NewReader(body))
@@ -445,7 +506,7 @@ func TestForwardAlphaSearchAPIKeyEndpointNotFoundFailsOver(t *testing.T) {
 // OAuth 账号的 chatgpt.com 端点固定存在，404 保持原有透传行为不变。
 func TestForwardAlphaSearchOAuthNotFoundPassesThrough(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	body := []byte(`{"id":"search-session","model":"gpt-5.6-sol","commands":{"search_query":[{"q":"news"}]}}`)
+	body := []byte(`{"id":"search-session","model":"gpt-5.6-sol","input":[],"commands":{"search_query":[{"q":"news"}]},"settings":{},"max_output_tokens":2000}`)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/alpha/search", bytes.NewReader(body))
@@ -493,4 +554,44 @@ func TestIsOpenAIAlphaSearchEndpointUnsupported(t *testing.T) {
 	require.False(t, isOpenAIAlphaSearchEndpointUnsupported(apiKey, http.StatusBadRequest))
 	require.False(t, isOpenAIAlphaSearchEndpointUnsupported(oauth, http.StatusNotFound))
 	require.False(t, isOpenAIAlphaSearchEndpointUnsupported(nil, http.StatusNotFound))
+}
+
+// 官方 alpha/search 的线序（relay-search-20260728T055449Z 实测）为
+//
+//	version, x-codex-turn-metadata, authorization, chatgpt-account-id,
+//	content-type, accept, originator, user-agent, cookie, host, content-length
+//
+// 其中**没有** session-id / thread-id——SearchClient 的 search_request_headers()
+// 只设 x-codex-turn-metadata 与 originator 两项（ext/web-search/src/tool.rs:185）。
+// 规格表 SPEC-EP-015。
+//
+// 本测试锁住兜底剥离：account.ApplyHeaderOverrides 的白名单收了 session-id /
+// thread-id，账号配置覆写就会把它们设进来，必须在出站前删掉。此前剥离列表只写了
+// 下划线形式，Del 规范化后与连字符形式不是同一个键，防线形同虚设。
+func TestStripOpenAIAlphaSearchResponsesHeadersRemovesSessionHeaders(t *testing.T) {
+	headers := http.Header{}
+	// 连字符形式：官方现行写法，也是账号覆写白名单里的键
+	headers.Set("session-id", "sess-1")
+	headers.Set("thread-id", "thread-1")
+	// 下划线形式：历史写法，仍可能由旧配置带入
+	headers.Set("Session_ID", "sess-2")
+	headers.Set("Conversation_ID", "conv-2")
+	// 其余 Responses 专用头
+	headers.Set("OpenAI-Beta", "responses_websockets=2026-02-06")
+	headers.Set("X-Codex-Beta-Features", "foo")
+	headers.Set("X-Codex-Turn-State", "bar")
+	// 官方 alpha/search 确实会发的两项，必须保留
+	headers.Set("originator", "codex_exec")
+	headers.Set("X-Codex-Turn-Metadata", "meta")
+
+	stripOpenAIAlphaSearchResponsesHeaders(headers)
+
+	for _, key := range []string{
+		"session-id", "thread-id", "Session_ID", "Conversation_ID",
+		"OpenAI-Beta", "X-Codex-Beta-Features", "X-Codex-Turn-State",
+	} {
+		require.Empty(t, headers.Get(key), "%s 必须被剥离：官方 alpha/search 不发该头", key)
+	}
+	require.Equal(t, "codex_exec", headers.Get("originator"), "originator 属官方默认客户端头，不得剥离")
+	require.Equal(t, "meta", headers.Get("X-Codex-Turn-Metadata"), "x-codex-turn-metadata 是官方明确设置的两项之一")
 }
