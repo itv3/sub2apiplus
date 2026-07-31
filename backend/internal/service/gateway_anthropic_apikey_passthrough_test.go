@@ -1173,10 +1173,11 @@ func TestGatewayService_AnthropicOAuthMimic_RewritesSystemWithBillingBlock(t *te
 	gin.SetMode(gin.TestMode)
 
 	tests := []struct {
-		name               string
-		body               string
-		wantModel          string
-		wantOriginalSystem string
+		name                       string
+		body                       string
+		wantModel                  string
+		wantOriginalSystem         string
+		wantOriginalSystemCacheTTL string
 	}{
 		{
 			name:               "sonnet system array",
@@ -1191,10 +1192,11 @@ func TestGatewayService_AnthropicOAuthMimic_RewritesSystemWithBillingBlock(t *te
 			wantOriginalSystem: "x-anthropic-billing-header keep",
 		},
 		{
-			name:               "haiku full mimicry",
-			body:               `{"model":"claude-haiku-4-5","metadata":{"user_id":"pi-session-metadata"},"system":[{"type":"text","text":"Pi project instructions","cache_control":{"type":"ephemeral"}}],"thinking":{"type":"enabled","budget_tokens":1024},"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`,
-			wantModel:          "claude-haiku-4-5-20251001",
-			wantOriginalSystem: "Pi project instructions",
+			name:                       "haiku full mimicry",
+			body:                       `{"model":"claude-haiku-4-5","metadata":{"user_id":"pi-session-metadata"},"system":[{"type":"text","text":"Pi project instructions","cache_control":{"type":"ephemeral","ttl":"1h"}}],"thinking":{"type":"enabled","budget_tokens":1024},"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]}`,
+			wantModel:                  "claude-haiku-4-5-20251001",
+			wantOriginalSystem:         "Pi project instructions",
+			wantOriginalSystemCacheTTL: "1h",
 		},
 	}
 
@@ -1291,6 +1293,12 @@ func TestGatewayService_AnthropicOAuthMimic_RewritesSystemWithBillingBlock(t *te
 			firstMsg := messages.Array()[0]
 			require.Equal(t, "user", firstMsg.Get("role").String())
 			require.Contains(t, firstMsg.Get("content.0.text").String(), tt.wantOriginalSystem)
+			if tt.wantOriginalSystemCacheTTL != "" {
+				require.Equal(t, "ephemeral", firstMsg.Get("content.0.cache_control.type").String())
+				require.Equal(t, tt.wantOriginalSystemCacheTTL, firstMsg.Get("content.0.cache_control.ttl").String())
+			} else {
+				require.False(t, firstMsg.Get("content.0.cache_control").Exists())
+			}
 
 			metadata := ParseMetadataUserID(gjson.GetBytes(upstream.lastBody, "metadata.user_id").String())
 			require.NotNil(t, metadata)
@@ -1360,7 +1368,12 @@ func TestGatewayService_AnthropicOAuthRealClaudeCodeHaiku_NormalizesToBuiltInPro
 	}
 	require.NoError(t, uuid.Validate(getHeaderRaw(upstream.lastReq.Header, "x-client-request-id")))
 	require.Equal(t, int64(4), gjson.GetBytes(upstream.lastBody, "system.#").Int())
-	requireOfficialAnthropicCacheProfile(t, upstream.lastBody, "messages.1.content.0.cache_control")
+	requireOfficialAnthropicCacheProfile(
+		t,
+		upstream.lastBody,
+		"messages.0.content.0.cache_control",
+		"messages.1.content.0.cache_control",
+	)
 	require.Equal(t, metadataUserID, gjson.GetBytes(upstream.lastBody, "metadata.user_id").String())
 	require.True(t, gjson.GetBytes(upstream.lastBody, "context_management").Exists())
 	require.Contains(t, string(upstream.lastBody), "cc_version="+officialAnthropicCLIVersion+".")

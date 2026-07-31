@@ -67,8 +67,10 @@ const APIKeyHaikuBetaHeader = BetaInterleavedThinking
 const DefaultCacheControlTTL = "5m"
 
 // CLICurrentVersion 是上游共享 Claude 兼容路径的默认 CLI 版本。
-// Plus 的 OAuth/API Key 官方画像不读取或修改该值，而是由私有
-// Official Client Profile Registry 按认证、端点和传输场景解析。
+// 上游兼容路径用它生成 billing attribution 的 cc_version 前缀与指纹，因此必须与
+// DefaultHeaders["User-Agent"] 的版本严格一致。Plus 的 OAuth/API Key 官方画像
+// 不读取或修改该值，而是由私有 Official Client Profile Registry 按认证、端点和
+// 传输场景解析。
 const CLICurrentVersion = "2.1.220"
 
 // FullClaudeCodeMimicryBetas 返回最"像"真实 Claude Code CLI 的完整 beta 列表，

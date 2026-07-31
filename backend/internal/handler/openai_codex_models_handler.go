@@ -15,8 +15,8 @@ import (
 // Codex CLI 和 Codex 桌面应用通过 GET {base_url}/models?client_version=...
 // （自定义供应商模式）或 GET /backend-api/codex/models（chatgpt_base_url 模式）
 // 刷新模型选择器，这两条路由都会进入此处。模型清单会从选定账号的 ChatGPT 后端
-// 或自定义 API Key 上游原样代理。API Key 清单使用短期异步重新校验缓存，
-// 以容忍客户端取消请求。
+// 原样代理；自定义 API Key 清单仅执行客户端兼容性规范化。API Key 清单使用
+// 短期异步重新校验缓存，以容忍客户端取消请求。
 func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 	if c.Request.Context().Err() != nil {
 		return

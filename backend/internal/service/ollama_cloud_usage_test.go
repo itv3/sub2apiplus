@@ -36,6 +36,14 @@ type ollamaUsageTestRepo struct {
 	disableAutoAttempts atomic.Int64
 	disableAutoCalls    atomic.Int64
 	groupResolveCalls   atomic.Int64
+	getByIDCalls        atomic.Int64
+}
+
+// GetByID counts loads so a test can wait for a caller to reach the point just
+// before the singleflight group, instead of guessing with a sleep.
+func (r *ollamaUsageTestRepo) GetByID(ctx context.Context, id int64) (*Account, error) {
+	r.getByIDCalls.Add(1)
+	return r.upstreamBillingProbeAccountRepo.GetByID(ctx, id)
 }
 
 func (r *ollamaUsageTestRepo) ListOllamaCloudUsageGroupAccounts(_ context.Context, anchors []*Account) ([]Account, error) {
@@ -805,10 +813,15 @@ func TestOllamaCloudUsageRefreshSingleflightAndRunnerDeduplicateSharedGroup(t *t
 	errs := make(chan error, 2)
 	go func() { _, err := svc.Refresh(context.Background(), first.ID); errs <- err }()
 	<-started
+	// The first caller is now parked in the stub, having loaded the account twice
+	// (once to build the group key, once inside the singleflight function).
+	loadsBeforeSecond := repo.getByIDCalls.Load()
 	go func() { _, err := svc.Refresh(context.Background(), second.ID); errs <- err }()
-	// 给第二个并发调用进入 singleflight 的时间，避免在高负载全量测试中先释放
-	// 第一个请求，导致本应共享结果的调用被误判成一次新的手动刷新。
-	time.Sleep(10 * time.Millisecond)
+	// 第二个调用加载完账号后会立即加入 singleflight；确认它到达该阶段后再释放
+	// 第一个调用，避免第二次刷新被误判为新的手动请求并触发 30 秒限流。
+	require.Eventually(t, func() bool {
+		return repo.getByIDCalls.Load() > loadsBeforeSecond
+	}, 5*time.Second, time.Millisecond, "the second caller must reach the singleflight group before the first is released")
 	close(release)
 	require.NoError(t, <-errs)
 	require.NoError(t, <-errs)

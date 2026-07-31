@@ -95,6 +95,19 @@ server {
 }
 ```
 
+如果在 `http` 块启用了 Nginx gzip，必须从 `gzip_types` 排除
+`text/event-stream`，且不能为 Sub2API 使用 `gzip_types *`。上面的
+`proxy_buffering off` 只关闭代理缓冲，不会关闭 gzip 响应过滤器。普通响应应使用
+明确的类型列表：
+
+```nginx
+gzip on;
+gzip_types text/plain text/css application/json application/javascript application/xml image/svg+xml;
+```
+
+如果共享全局配置无法按内容类型排除 SSE，应在流式 API 路由对应的 location 中设置
+`gzip off;`，Web UI 和静态资源仍可继续使用 gzip。
+
 除非 Nginx 的 real-IP 处理已严格限制为明确的可信代理 CIDR，否则不要使用请求传入的 `$http_x_forwarded_for`。
 
 ## Caddy 与 CDN
@@ -102,6 +115,13 @@ server {
 仓库内置的 `deploy/Caddyfile` 设置了 64 KiB 请求头上限、10 秒请求头超时和 256 MiB 请求体上限，并用 TCP 对端地址覆盖转发地址，因此它是“客户端直连 Caddy”的基线。
 
 Caddy 位于 CDN 后方时，不能原样使用 `{remote_host}` 转发配置，否则所有用户都会被归属到 CDN 出口地址，入口拒绝聚合和无效鉴权限流也会把无关用户合并统计。
+
+内置 Caddy 配置不设置 `flush_interval`，让 Caddy 自动刷新 `text/event-stream`
+响应并把客户端取消继续传递至上游。不要全局设置该项：正值会增加流式延迟，Caddy
+2.6.2 的特殊值 `-1` 还会导致客户端断开后反向代理请求继续运行。压缩配置必须使用
+明确的响应类型列表，不能改成 `text/*` 或简写的 `encode gzip zstd`，因为两者都会
+匹配 `text/event-stream` 并可能把 SSE 缓冲至响应结束。流式响应应保持不压缩，Web
+UI、JSON 和静态资源仍可压缩。
 
 CDN 部署应先用防火墙限制源站只接受当前 CDN 出口 CIDR，再将这些准确范围配置为 Caddy 可信代理，并从 Caddy 解析后的 `{client_ip}` 生成上游请求头：
 

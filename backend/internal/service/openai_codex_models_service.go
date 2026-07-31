@@ -40,12 +40,12 @@ const (
 	codexModelsManifestRequestTimeout        = 15 * time.Second
 )
 
-// CodexModelsManifest carries the raw upstream manifest payload plus caching
-// metadata so handlers can pass both through to the client untouched.
+// CodexModelsManifest carries the client representation plus caching metadata.
 type CodexModelsManifest struct {
-	Body        []byte
-	ETag        string
-	NotModified bool
+	Body         []byte
+	ETag         string
+	upstreamETag string
+	NotModified  bool
 }
 
 type codexModelsManifestUpstreamError struct {
@@ -233,10 +233,8 @@ func (c *codexModelsManifestCache) set(key string, manifest *CodexModelsManifest
 // FetchCodexModelsManifest 从 OAuth 账号的 ChatGPT 后端或 API Key 账号的
 // 自定义上游获取实时 Codex 模型清单。
 //
-// After validating the stable top-level envelope, the response body is passed
-// through verbatim. Model entries evolve with Codex client releases, so the
-// gateway deliberately avoids interpreting their fields and reflects the
-// account's real entitlements without chasing upstream schema changes.
+// 校验稳定的顶层结构后，OAuth 响应体保持原样；自定义 API Key 清单只执行
+// 自定义供应商模式所需的最小兼容性调整。入口上下文还用于绑定 Plus 官方出站画像。
 func (s *OpenAIGatewayService) FetchCodexModelsManifest(
 	ctx context.Context,
 	account *Account,
@@ -527,7 +525,7 @@ func (s *OpenAIGatewayService) refreshCachedAPIKeyCodexModelsManifest(cacheKey s
 		cached, _ := s.codexModelsManifestCache.get(cacheKey, time.Now())
 		ifNoneMatch := ""
 		if cached != nil {
-			ifNoneMatch = cached.ETag
+			ifNoneMatch = cached.upstreamETag
 		}
 		manifest, err := s.fetchCodexModelsManifestUpstream(context.Background(), request, ifNoneMatch)
 		if err != nil {
@@ -680,6 +678,7 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstream(ctx context.Cont
 			retryable: isRetryableCodexModelsManifestTransportError(err),
 		}
 	}
+	upstreamBody := body
 	if request.useAPIKeyUpstream {
 		body = convertOpenAIModelListToCodexManifest(body)
 	}
@@ -694,7 +693,95 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstream(ctx context.Cont
 			retryable: true,
 		}
 	}
-	return &CodexModelsManifest{Body: body, ETag: resp.Header.Get("ETag")}, nil
+	if request.useAPIKeyUpstream {
+		body, err = adjustAPIKeyCodexModelsManifest(body)
+		if err != nil {
+			return nil, &codexModelsManifestUpstreamError{
+				err: infraerrors.Newf(
+					http.StatusBadGateway,
+					"OPENAI_CODEX_MODELS_UPSTREAM_INVALID_MANIFEST",
+					"codex models manifest upstream could not be adjusted: %v",
+					err,
+				),
+				retryable: true,
+			}
+		}
+	}
+	etag := resp.Header.Get("ETag")
+	manifest := &CodexModelsManifest{Body: body, ETag: etag}
+	if request.useAPIKeyUpstream {
+		manifest.upstreamETag = etag
+		if !bytes.Equal(body, upstreamBody) {
+			manifest.ETag = codexModelsManifestBodyETag(body)
+		}
+	}
+	return manifest, nil
+}
+
+func codexModelsManifestBodyETag(body []byte) string {
+	sum := sha256.Sum256(body)
+	return fmt.Sprintf(`"%x"`, sum)
+}
+
+var apiKeyCodexModelsWithoutResponsesLite = map[string]struct{}{
+	"gpt-5.6-sol":   {},
+	"gpt-5.6-terra": {},
+	"gpt-5.6-luna":  {},
+}
+
+// adjustAPIKeyCodexModelsManifest prevents Codex from selecting Responses
+// Lite for custom API key providers. Those clients do not install web.run in
+// Lite mode, so the affected model manifests must advertise the full Responses
+// path. Return the original body when no targeted true value is present.
+func adjustAPIKeyCodexModelsManifest(body []byte) ([]byte, error) {
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		return nil, fmt.Errorf("decode JSON object: %w", err)
+	}
+	var models []json.RawMessage
+	if err := json.Unmarshal(envelope["models"], &models); err != nil {
+		return nil, fmt.Errorf("decode top-level models array: %w", err)
+	}
+
+	changed := false
+	for i, rawModel := range models {
+		var model map[string]json.RawMessage
+		if err := json.Unmarshal(rawModel, &model); err != nil || model == nil {
+			continue
+		}
+		var slug string
+		if err := json.Unmarshal(model["slug"], &slug); err != nil {
+			continue
+		}
+		if _, targeted := apiKeyCodexModelsWithoutResponsesLite[slug]; !targeted {
+			continue
+		}
+		var useResponsesLite bool
+		if err := json.Unmarshal(model["use_responses_lite"], &useResponsesLite); err != nil || !useResponsesLite {
+			continue
+		}
+		model["use_responses_lite"] = json.RawMessage("false")
+		adjusted, err := json.Marshal(model)
+		if err != nil {
+			return nil, fmt.Errorf("encode model %q: %w", slug, err)
+		}
+		models[i] = adjusted
+		changed = true
+	}
+	if !changed {
+		return body, nil
+	}
+
+	adjustedModels, err := json.Marshal(models)
+	if err != nil {
+		return nil, fmt.Errorf("encode top-level models array: %w", err)
+	}
+	envelope["models"] = adjustedModels
+	adjusted, err := json.Marshal(envelope)
+	if err != nil {
+		return nil, fmt.Errorf("encode JSON object: %w", err)
+	}
+	return adjusted, nil
 }
 
 // convertOpenAIModelListToCodexManifest rewrites a standard OpenAI

@@ -416,17 +416,19 @@ func TestOfficialEgressT4_CrossProtocolIngressDefersProfileToAnthropicFinalizer(
 	}
 }
 
-func requireOfficialAnthropicCacheProfile(t *testing.T, body []byte, messagePath string) {
+func requireOfficialAnthropicCacheProfile(t *testing.T, body []byte, messagePathsExpected ...string) {
 	t.Helper()
 	invalidThinking, messagePaths, toolPaths, systemPaths := collectCacheControlPaths(body)
 	require.Empty(t, invalidThinking)
-	require.Equal(t, []string{messagePath}, messagePaths)
+	require.Equal(t, messagePathsExpected, messagePaths)
 	require.Empty(t, toolPaths)
 	require.Equal(t, []string{
 		"system.2.cache_control",
 		"system.3.cache_control",
 	}, systemPaths)
-	require.Equal(t, "1h", gjson.GetBytes(body, messagePath+".ttl").String())
+	for _, messagePath := range messagePathsExpected {
+		require.Equal(t, "1h", gjson.GetBytes(body, messagePath+".ttl").String())
+	}
 }
 
 func TestOfficialEgressT4_AnthropicFinalizerUsesRealKiloIngressContract(t *testing.T) {

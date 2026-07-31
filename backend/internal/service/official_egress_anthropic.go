@@ -38,9 +38,10 @@ type officialAnthropicIdentity struct {
 }
 
 type officialAnthropicIngressContract struct {
-	metadataUserID     string
-	metadataUserIDSet  bool
-	temperaturePresent bool
+	metadataUserID                  string
+	metadataUserIDSet               bool
+	temperaturePresent              bool
+	migratedSystemCacheControlFound bool
 }
 
 // finalizeAnthropicOfficialEgressRequest 在所有既有转换之后执行最小差异修正。
@@ -87,7 +88,14 @@ func (s *GatewayService) finalizeAnthropicOfficialEgressRequest(
 		return nil, nil, result, err
 	}
 
-	finalBody, err := finalizeOfficialAnthropicBody(body, identity, "", clientProfile.Build.Version)
+	contract, _ := officialAnthropicIngressContractFromGin(c)
+	finalBody, err := finalizeOfficialAnthropicBody(
+		body,
+		identity,
+		"",
+		clientProfile.Build.Version,
+		contract.migratedSystemCacheControlFound,
+	)
 	if err != nil {
 		return nil, nil, result, err
 	}
@@ -202,10 +210,13 @@ func captureOfficialAnthropicIngressContract(c *gin.Context, body []byte) {
 		return
 	}
 	metadataUserID := gjson.GetBytes(body, "metadata.user_id")
+	system := gjson.GetBytes(body, "system")
+	_, _, _, systemCachePaths := collectCacheControlPaths(body)
 	c.Set(officialAnthropicIngressContractKey, officialAnthropicIngressContract{
-		metadataUserID:     metadataUserID.String(),
-		metadataUserIDSet:  metadataUserID.Exists() && metadataUserID.Type == gjson.String,
-		temperaturePresent: gjson.GetBytes(body, "temperature").Exists(),
+		metadataUserID:                  metadataUserID.String(),
+		metadataUserIDSet:               metadataUserID.Exists() && metadataUserID.Type == gjson.String,
+		temperaturePresent:              gjson.GetBytes(body, "temperature").Exists(),
+		migratedSystemCacheControlFound: len(systemCachePaths) > 0 && !isOfficialAnthropicSystemShape(system),
 	})
 }
 
@@ -417,6 +428,7 @@ func finalizeOfficialAnthropicBody(
 	identity officialAnthropicIdentity,
 	previousRequestID string,
 	clientVersion string,
+	preserveMigratedSystemCacheControl bool,
 ) ([]byte, error) {
 	var err error
 	body, err = normalizeOfficialAnthropicSystemShape(body)
@@ -509,7 +521,7 @@ func finalizeOfficialAnthropicBody(
 	if !ok {
 		return nil, errors.New("anthropic official egress failed to replace system blocks")
 	}
-	nextBody, err = normalizeOfficialAnthropicCacheProfile(nextBody)
+	nextBody, err = normalizeOfficialAnthropicCacheProfile(nextBody, preserveMigratedSystemCacheControl)
 	if err != nil {
 		return nil, err
 	}
@@ -540,10 +552,21 @@ func finalizeOfficialAnthropicBody(
 
 // normalizeOfficialAnthropicCacheProfile 把第三方客户端携带的缓存断点收敛为
 // Claude Code 2.1.220 当前实测画像：system 保留两个固定 1h 断点，messages
-// 仅在最后一个可缓存内容块保留一个 1h 断点，tools 不携带断点。
-func normalizeOfficialAnthropicCacheProfile(body []byte) ([]byte, error) {
+// 保留最后一个可缓存内容块；若原始 system 自带断点，则同时保留迁移到首条消息的
+// 断点，确保稳定系统提示词可复用缓存。tools 不携带断点，总数最多为 4。
+func normalizeOfficialAnthropicCacheProfile(body []byte, preserveMigratedSystemCacheControl bool) ([]byte, error) {
 	invalidThinking, messagePaths, toolPaths, _ := collectCacheControlPaths(body)
 	out := body
+	preservedMessagePath := ""
+	if preserveMigratedSystemCacheControl {
+		const migratedPath = "messages.0.content.0.cache_control"
+		for _, path := range messagePaths {
+			if path == migratedPath {
+				preservedMessagePath = path
+				break
+			}
+		}
+	}
 
 	for _, item := range invalidThinking {
 		next, ok := deleteJSONPathBytes(out, item.path)
@@ -575,6 +598,7 @@ func normalizeOfficialAnthropicCacheProfile(body []byte) ([]byte, error) {
 	}
 
 	blockPath, stringPath, stringValue := lastOfficialAnthropicCacheableMessageContent(body)
+	lastMessagePath := ""
 	switch {
 	case blockPath != "":
 		next, err := sjson.SetRawBytes(
@@ -586,6 +610,7 @@ func normalizeOfficialAnthropicCacheProfile(body []byte) ([]byte, error) {
 			return nil, errors.New("anthropic official egress failed to set message cache_control")
 		}
 		out = next
+		lastMessagePath = blockPath + ".cache_control"
 	case stringPath != "":
 		rawBlock, err := json.Marshal([]map[string]any{{
 			"type":          "text",
@@ -600,12 +625,24 @@ func normalizeOfficialAnthropicCacheProfile(body []byte) ([]byte, error) {
 			return nil, errors.New("anthropic official egress failed to replace string message content")
 		}
 		out = next
+		lastMessagePath = stringPath + ".0.cache_control"
 	default:
 		return nil, errors.New("anthropic official egress requires cacheable message content")
 	}
+	if preservedMessagePath != "" && preservedMessagePath != lastMessagePath {
+		next, err := sjson.SetRawBytes(out, preservedMessagePath, officialAnthropicLocalCacheControl)
+		if err != nil {
+			return nil, errors.New("anthropic official egress failed to preserve migrated system cache_control")
+		}
+		out = next
+	}
 
 	_, finalMessagePaths, finalToolPaths, finalSystemPaths := collectCacheControlPaths(out)
-	if len(finalMessagePaths) != 1 || len(finalToolPaths) != 0 || len(finalSystemPaths) != 2 {
+	expectedMessagePathCount := 1
+	if preservedMessagePath != "" && preservedMessagePath != lastMessagePath {
+		expectedMessagePathCount = 2
+	}
+	if len(finalMessagePaths) != expectedMessagePathCount || len(finalToolPaths) != 0 || len(finalSystemPaths) != 2 {
 		return nil, errors.New("anthropic official egress cache profile normalization failed")
 	}
 	return out, nil

@@ -332,7 +332,10 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	needModelReplace := false
 	var mappedModelBytes []byte
 	if originalModel != "" {
-		mappedModel = normalizeOpenAIModelForUpstream(account, account.GetMappedModel(originalModel))
+		mappedModel = strings.TrimSpace(gjson.GetBytes(body, "model").String())
+		if mappedModel == "" {
+			mappedModel = normalizeOpenAIModelForUpstream(account, account.GetMappedModel(originalModel))
+		}
 		needModelReplace = mappedModel != "" && mappedModel != originalModel
 		if needModelReplace {
 			mappedModelBytes = []byte(mappedModel)
@@ -558,12 +561,12 @@ func newOpenAIOfficialEgressHTTPBridgeContext(
 	return bridgeContext, nil
 }
 
-func resolveGrokWSCacheIdentity(c *gin.Context, account *Account, payload []byte, originalModel string) (string, error) {
-	body, err := prepareOpenAIWSHTTPBridgeBody(payload)
+func resolveGrokWSCacheIdentity(c *gin.Context, account *Account, seedPayload, currentPayload []byte, originalModel string) (string, error) {
+	body, err := prepareOpenAIWSHTTPBridgeBody(seedPayload)
 	if err != nil {
 		return "", err
 	}
-	upstreamModel := resolveGrokWSUpstreamModel(account, body, originalModel)
+	upstreamModel := resolveGrokWSUpstreamModel(account, currentPayload, originalModel)
 	body, err = patchGrokResponsesBody(body, upstreamModel)
 	if err != nil {
 		return "", err
@@ -573,7 +576,11 @@ func resolveGrokWSCacheIdentity(c *gin.Context, account *Account, payload []byte
 
 func resolveGrokWSUpstreamModel(account *Account, body []byte, originalModel string) string {
 	upstreamModel := strings.TrimSpace(gjson.GetBytes(body, "model").String())
-	if account != nil && originalModel != "" {
+	originalModel = strings.TrimSpace(originalModel)
+	// Shared ingress has already applied channel and account mappings when the
+	// body model differs from the client-facing model. Only resolve from the
+	// original model when the body still carries that original value.
+	if account != nil && originalModel != "" && (upstreamModel == "" || upstreamModel == originalModel) {
 		if mappedModel := normalizeOpenAIModelForUpstream(account, account.GetMappedModel(originalModel)); mappedModel != "" {
 			upstreamModel = mappedModel
 		}
