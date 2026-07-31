@@ -19,6 +19,8 @@ services:
     image: ghcr.io/itv3/sub2apiplus:latest
     container_name: sub2apiplus
     restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
     ulimits:
       nofile:
         soft: 100000
