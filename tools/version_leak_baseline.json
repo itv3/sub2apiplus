@@ -1,0 +1,35 @@
+{
+  "_comment": "各生产文件当前的 Codex 版本标识符命中行数。门禁只允许下降，不允许上升；未列入本表的文件必须为零。版本解耦完成后应逐步收紧至空表。",
+  "_exempt": [
+    "backend/internal/service/official_egress_codex_0145_profile.go"
+  ],
+  "files": {
+    "backend/internal/handler/openai_gateway_handler.go": 4,
+    "backend/internal/handler/openai_live.go": 1,
+    "backend/internal/pkg/openaiidentity/codex.go": 3,
+    "backend/internal/repository/openai_oauth_service.go": 2,
+    "backend/internal/server/routes/gateway.go": 2,
+    "backend/internal/service/account_test_service.go": 14,
+    "backend/internal/service/account_test_service_openai_files.go": 4,
+    "backend/internal/service/official_client_profile_registry.go": 20,
+    "backend/internal/service/official_egress_codex_engine.go": 104,
+    "backend/internal/service/official_egress_codex_files.go": 20,
+    "backend/internal/service/official_egress_codex_integration.go": 144,
+    "backend/internal/service/official_egress_codex_oauth.go": 14,
+    "backend/internal/service/official_egress_integration.go": 17,
+    "backend/internal/service/official_egress_openai_http.go": 18,
+    "backend/internal/service/official_egress_openai_json.go": 3,
+    "backend/internal/service/official_egress_openai_ws.go": 9,
+    "backend/internal/service/official_egress_profile.go": 23,
+    "backend/internal/service/official_egress_transport.go": 14,
+    "backend/internal/service/openai_alpha_search.go": 20,
+    "backend/internal/service/openai_codex_models_service.go": 26,
+    "backend/internal/service/openai_compact_probe.go": 1,
+    "backend/internal/service/openai_gateway_forward.go": 6,
+    "backend/internal/service/openai_images_responses.go": 25,
+    "backend/internal/service/openai_live.go": 32,
+    "backend/internal/service/openai_quota_service.go": 15,
+    "backend/internal/service/openai_upstream_http.go": 3,
+    "backend/internal/service/openai_ws_forwarder_ingress.go": 1
+  }
+}

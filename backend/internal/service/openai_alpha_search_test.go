@@ -556,7 +556,7 @@ func TestIsOpenAIAlphaSearchEndpointUnsupported(t *testing.T) {
 	require.False(t, isOpenAIAlphaSearchEndpointUnsupported(nil, http.StatusNotFound))
 }
 
-// 官方 alpha/search 的线序（relay-search-20260728T055449Z 实测）为
+// 官方 alpha/search 的线序（clean-search-20260728T132311Z 实测）为
 //
 //	version, x-codex-turn-metadata, authorization, chatgpt-account-id,
 //	content-type, accept, originator, user-agent, cookie, host, content-length

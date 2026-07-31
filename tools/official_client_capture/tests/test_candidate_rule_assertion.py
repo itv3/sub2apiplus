@@ -20,6 +20,7 @@ from tools.official_client_capture.candidate_rule_assertion import (
     load_observations,
     load_profile,
     main as assertion_main,
+    source_spec_section_sha256,
 )
 
 
@@ -48,6 +49,22 @@ def write_manifest(
 
 
 class CandidateRuleExpectationTest(unittest.TestCase):
+    def test_source_spec_fragment_digest_ignores_other_sections(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "spec.md"
+            source.write_text(
+                "# 第一部分 背景\n旧内容\n# 第二部分 规则\n冻结规则\n# 第三部分 方案\n旧方案\n",
+                encoding="utf-8",
+            )
+            before = source_spec_section_sha256(source, "第二章")
+            source.write_text(
+                "# 第一部分 背景\n新内容\n# 第二部分 规则\n冻结规则\n# 第三部分 方案\n新方案\n# 第四部分 升级\n新增流程\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(
+                source_spec_section_sha256(source, "第二章"), before
+            )
+
     def test_profile_is_exact_closed_42_rule_universe(self) -> None:
         profile = load_profile(PROFILE_PATH, RULE_MANIFEST_PATH)
         manifest = json.loads(RULE_MANIFEST_PATH.read_text(encoding="utf-8"))
@@ -61,9 +78,12 @@ class CandidateRuleExpectationTest(unittest.TestCase):
             sum(len(rule["checks"]) for rule in profile["rules"]),
             42,
         )
-        spec_relative = profile["source_spec"].split("#", 1)[0]
+        spec_relative, _, fragment = profile["source_spec"].partition("#")
         spec_path = TOOL_ROOT.parents[1] / spec_relative
-        self.assertEqual(file_sha256(spec_path), profile["source_spec_sha256"])
+        self.assertEqual(
+            source_spec_section_sha256(spec_path, fragment),
+            profile["source_spec_sha256"],
+        )
 
     def test_profile_is_independent_from_candidate_go_profile(self) -> None:
         checker_source = (TOOL_ROOT / "candidate_rule_assertion.py").read_text(
@@ -112,7 +132,7 @@ class CandidateRuleExpectationTest(unittest.TestCase):
             profile["rules"].pop()
             path.write_text(json.dumps(profile), encoding="utf-8")
             with self.assertRaisesRegex(
-                AssertionConfigurationError, "精确覆盖 42 条规则"
+            AssertionConfigurationError, "精确覆盖目标版本规则全集"
             ):
                 load_profile(
                     path,

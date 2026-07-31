@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,6 +11,52 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
+
+// TestOfficialCodexVersionSnapshotsDriveVersionResolution 锁定多版本机制：版本
+// 解析只认注册表登记的快照，未登记版本明确失败而不回退到既有画像；端点入口的版本
+// 来自 registry 的 release 指针而非写死常量。升级 Codex 版本时应当只需登记新快照
+// 并调整 release 指针，不改动 §3.5.2 的共享接入点。
+func TestOfficialCodexVersionSnapshotsDriveVersionResolution(t *testing.T) {
+	require.Contains(t, officialCodexVersionSnapshots, officialCodexVersion0145)
+
+	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	require.NoError(t, err)
+	require.Equal(t, officialCodexVersion0145, profile.Version)
+
+	// 未登记版本必须明确失败，不得静默回退到任何既有快照。
+	_, err = resolveCodex0145VersionProfile("0.146.0")
+	require.ErrorContains(t, err, "未知 Codex 官方出站版本画像")
+
+	active, err := activeOfficialCodexVersion()
+	require.NoError(t, err)
+	require.Equal(t, officialCodexVersion0145, active)
+}
+
+// TestOfficialCodex0145ProjectEndpointJSONBodyDropsFieldsOutsideClosedSet 锁定
+// body 投影对画像闭集外字段的处理。新版本客户端的新增字段正是在这里被抹掉的，
+// 请求仍然成功，因此该行为必须有测试和运行时告警共同看住。
+func TestOfficialCodex0145ProjectEndpointJSONBodyDropsFieldsOutsideClosedSet(t *testing.T) {
+	original := []byte(`{"id":"s1","model":"gpt-5.5","input":"q","commands":[],` +
+		`"settings":{},"max_output_tokens":256,"future_field":"新版本新增","another":1}`)
+	payload, err := decodeOfficialJSONObjectUseNumber(original)
+	require.NoError(t, err)
+
+	encoded, err := officialCodex0145ProjectEndpointJSONBody(
+		officialCodexVersion0145,
+		codex0145EndpointID(officialCodexEndpointAlphaSearch),
+		payload,
+		original,
+		nil,
+	)
+	require.NoError(t, err)
+
+	var projected map[string]any
+	require.NoError(t, json.Unmarshal(encoded, &projected))
+	require.Contains(t, projected, "id")
+	require.Contains(t, projected, "max_output_tokens")
+	require.NotContains(t, projected, "future_field")
+	require.NotContains(t, projected, "another")
+}
 
 func TestOfficialCodex0145RuntimeStateRejectsForgedThirdPartyConditions(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -44,7 +91,7 @@ func TestOfficialCodex0145RuntimeStateUsesManagedAccountConditions(t *testing.T)
 	require.ErrorContains(t, err, "只允许 us")
 }
 
-func TestOfficialCodex0145RuntimeStateAcceptsOnlyExactPairedSurfaceIdentity(t *testing.T) {
+func TestOfficialCodex0145RuntimeStateProjectsMismatchedIdentityToProfile(t *testing.T) {
 	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
 	require.NoError(t, err)
 
@@ -82,19 +129,77 @@ func TestOfficialCodex0145RuntimeStateAcceptsOnlyExactPairedSurfaceIdentity(t *t
 	require.NoError(t, err)
 	require.Equal(t, "xterm-256color", xtermState.TerminalToken)
 
+	// 出站一律按 active 画像定型：入站 originator 与 surface 不一致时不再拒绝，
+	// 改用画像 originator 出站。
 	userAgent, err := profile.RenderUserAgent(officialCodexSurfaceExec, true)
 	require.NoError(t, err)
-	_, err = resolveOfficialCodex0145RuntimeState(
+	mismatchedOriginator, err := resolveOfficialCodex0145RuntimeState(
 		officialCodex0145RuntimeIngress(userAgent, "codex-tui"),
 		officialEgressTestAccount(145, PlatformOpenAI),
 	)
-	require.ErrorContains(t, err, "画像允许的进程阶段")
+	require.NoError(t, err)
+	require.Equal(t, officialCodexSurfaceExec, mismatchedOriginator.SurfaceID)
+	require.Equal(t, "codex_exec", mismatchedOriginator.Originator)
 
-	_, err = resolveOfficialCodex0145RuntimeState(
+	// UA 无法匹配任何 surface 时投影到默认画像状态，同样不拒绝服务。
+	forged, err := resolveOfficialCodex0145RuntimeState(
 		officialCodex0145RuntimeIngress(userAgent+" forged", "codex_exec"),
 		officialEgressTestAccount(145, PlatformOpenAI),
 	)
-	require.ErrorContains(t, err, "配对")
+	require.NoError(t, err)
+	require.Equal(t, defaultOfficialCodex0145RuntimeState(), forged)
+}
+
+func TestOfficialCodex0145RuntimeStateProjectsOtherOfficialClientsToDefaultSurface(t *testing.T) {
+	defaultState := defaultOfficialCodex0145RuntimeState()
+	account := officialEgressTestAccount(145, PlatformOpenAI)
+	clients := []struct {
+		name       string
+		userAgent  string
+		originator string
+	}{
+		{
+			name:       "Codex Desktop 0.146",
+			userAgent:  "Codex Desktop/0.146.0-alpha.3.1 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.721.81911)",
+			originator: "Codex Desktop",
+		},
+		{
+			name:       "Codex VS Code 0.146",
+			userAgent:  "codex_vscode/0.146.0-alpha.3.1 (Ubuntu 24.4.0; aarch64) unknown (VS Code; 26.721.41059)",
+			originator: "codex_vscode",
+		},
+		{
+			name:       "Codex exec 后续版本",
+			userAgent:  "codex_exec/0.146.0 (Ubuntu 24.4.0; x86_64) unknown (codex_exec; 0.146.0)",
+			originator: "codex_exec",
+		},
+		{
+			// 画像平台串固定为 Ubuntu，官方同版本客户端在 macOS/Windows 上同样
+			// 无法通过完整线形校验；这类入口必须投影出站，不得拒绝服务。
+			name:       "官方 0.145.0 非 Ubuntu 平台",
+			userAgent:  "codex_exec/0.145.0 (Mac OS X 15.5.0; arm64) unknown (codex_exec; 0.145.0)",
+			originator: "codex_exec",
+		},
+	}
+	endpoints := []codex0145EndpointID{
+		codex0145EndpointID(officialCodexEndpointResponsesHTTP),
+		codex0145EndpointID(officialCodexEndpointResponsesWS),
+	}
+
+	for _, client := range clients {
+		for _, endpointID := range endpoints {
+			t.Run(client.name+"/"+string(endpointID), func(t *testing.T) {
+				c := officialCodex0145RuntimeIngress(client.userAgent, client.originator)
+				// 非目标版本入口不能借官方客户端身份激活 0.145.0 条件分支。
+				c.Request.Header.Set("x-openai-subagent", "review")
+				c.Request.Header.Set("x-openai-memgen-request", "true")
+				c.Request.Header.Set("x-codex-parent-thread-id", "forged-parent")
+				state, err := resolveOfficialCodex0145RuntimeState(c, account, endpointID)
+				require.NoError(t, err)
+				require.Equal(t, defaultState, state)
+			})
+		}
+	}
 }
 
 func TestOfficialCodex0145RuntimeStateModelsBootstrapIsProfilePhase(t *testing.T) {
@@ -114,12 +219,16 @@ func TestOfficialCodex0145RuntimeStateModelsBootstrapIsProfilePhase(t *testing.T
 		require.Equal(t, "codex_cli_rs", state.Originator)
 		require.False(t, state.UserAgentSuffixEnabled)
 
-		_, resolveErr = resolveOfficialCodex0145RuntimeState(
+		// codex_cli_rs 只在 models 首跳成立；用在其他端点时不再拒绝，改按画像
+		// originator 与 initialized 阶段出站。
+		nonModels, resolveErr := resolveOfficialCodex0145RuntimeState(
 			ingress,
 			officialEgressTestAccount(145, PlatformOpenAI),
 			codex0145EndpointID(officialCodexEndpointResponsesHTTP),
 		)
-		require.ErrorContains(t, resolveErr, "画像允许的进程阶段")
+		require.NoError(t, resolveErr)
+		require.Equal(t, officialCodexProcessPhaseInitialized, nonModels.ProcessPhase)
+		require.NotEqual(t, "codex_cli_rs", nonModels.Originator)
 	}
 }
 
@@ -139,11 +248,14 @@ func TestOfficialCodex0145RuntimeStateCrossChecksSubagentMetadata(t *testing.T) 
 	require.Equal(t, "Other(custom-review)", state.ConditionalHeaders["x-openai-subagent"])
 	require.Equal(t, parentID, state.ConditionalHeaders["x-codex-parent-thread-id"])
 
+	// 条件头与 turn metadata 冲突时按“条件不成立”处理：不发条件头，请求照常出站。
 	mismatch := officialCodex0145RuntimeIngress(userAgent, "codex_exec")
 	mismatch.Request.Header.Set("x-openai-subagent", "guardian")
 	mismatch.Request.Header.Set("x-codex-turn-metadata", `{"thread_source":"subagent","subagent_kind":"review"}`)
-	_, err = resolveOfficialCodex0145RuntimeState(mismatch, officialEgressTestAccount(145, PlatformOpenAI))
-	require.ErrorContains(t, err, "subagent 条件")
+	mismatchState, err := resolveOfficialCodex0145RuntimeState(mismatch, officialEgressTestAccount(145, PlatformOpenAI))
+	require.NoError(t, err)
+	require.NotContains(t, mismatchState.ConditionalHeaders, "x-openai-subagent")
+	require.NotContains(t, mismatchState.ConditionalHeaders, "x-codex-parent-thread-id")
 
 	memgen := officialCodex0145RuntimeIngress(userAgent, "codex_exec")
 	memgen.Request.Header.Set("x-openai-subagent", "memory_consolidation")

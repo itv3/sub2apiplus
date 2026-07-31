@@ -38,11 +38,12 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 | 版本 | 状态 | 本轮闭合 | 证据范围 |
 |---|---|---|---|
 | `0.1.165-4` | 阶段构建 | — | 三路径完整抓包对照，逐路径结论的原始来源 |
-| `0.1.165-5` | 正式发布（Releases `v0.1.165-5`，镜像 `ghcr.io/itv3/sub2apiplus:0.1.165-5`），生产已切换为该镜像 | 数据保真、Lite 判定分裂、重复键 panic、API Key 画像 TLS 决策来源 | 未重跑三路径对照，逐路径结论沿用 `0.1.165-4`；新增 wire 证据与未覆盖边界见 [P0 数据保真修复记录](docs/P0_DATA_FIDELITY_FIX_20260727.md) |
-| `0.1.165-6` | 未发布，仅由 Vircs 以阶段镜像验收 | 入站宿主头泄漏、WS turn-state 跨连接沿用、模型能力合并语义、Chat Completions/Messages 入口 JSON 保真、passthrough 预热缺失 | 只重跑 OpenAI 侧：官方 Codex CLI `0.145.0` 基准（HTTP/WS × direct/MITM × S1/S2/S4）与第三方定向 HTTP/WS 候选出站逐项对照通过，宿主头剥离与预热帧序列均有真实 wire 证据；turn-state 两项因上游始终未下发该头只达代码级验收。未重跑 Anthropic 三路径与 Kilo 六组合。范围、证伪项与未覆盖边界见 [官方出站画像保真修复记录](docs/OFFICIAL_EGRESS_PROFILE_FIDELITY_FIX_20260727.md) |
-| `0.1.165-8` | 未发布，仅由 Vircs 以阶段镜像验收 | h1 header 名全小写、compact 不压缩、models 请求纳入官方画像、未知顶层字段改白名单、三条旁路端点（count_tokens/images/alpha-search）纳入画像、WS turn-state 改从 `response.metadata` 事件提取 | **新建 h1 直连探针**，取得首份 h1 wire 证据（此前 header 大小写与顺序被 MITM 的 h2/HPACK 完全掩盖）；清单与逐条依据见 [官方出站 wire 一致性修复清单](docs/OFFICIAL_EGRESS_WIRE_PARITY_FIX_20260727.md) |
+| `0.1.165-5` | 正式发布（Releases `v0.1.165-5`，镜像 `ghcr.io/itv3/sub2apiplus:0.1.165-5`），生产已切换为该镜像 | 数据保真、Lite 判定分裂、重复键 panic、API Key 画像 TLS 决策来源 | 未重跑三路径对照，逐路径结论沿用 `0.1.165-4`；历史过程材料已在规格收口后清理 |
+| `0.1.165-6` | 未发布，仅由 Vircs 以阶段镜像验收 | 入站宿主头泄漏、WS turn-state 跨连接沿用、模型能力合并语义、Chat Completions/Messages 入口 JSON 保真、passthrough 预热缺失 | 只重跑 OpenAI 侧：官方 Codex CLI `0.145.0` 基准（HTTP/WS × direct/MITM × S1/S2/S4）与第三方定向 HTTP/WS 候选出站逐项对照通过，宿主头剥离与预热帧序列均有真实 wire 证据；turn-state 两项因上游始终未下发该头只达代码级验收。未重跑 Anthropic 三路径与 Kilo 六组合；历史过程材料已在规格收口后清理 |
+| `0.1.165-8` | 未发布，仅由 Vircs 以阶段镜像验收 | h1 header 名全小写、compact 不压缩、models 请求纳入官方画像、未知顶层字段改白名单、三条旁路端点（count_tokens/images/alpha-search）纳入画像、WS turn-state 改从 `response.metadata` 事件提取 | 新建 h1 直连探针并取得首份 h1 wire 证据；当前规则与保留证据统一见 Codex 0.145.0 出站规格 |
 | `0.1.165-9`·`-10` | 未发布，仅由 Vircs 以阶段镜像验收 | WS 握手头大小写修回 tungstenite 形态（前 5 项为大写驼峰，`0.1.165-8` 曾误压为小写）、h2 `MAX_HEADER_LIST_SIZE` 由 10MB 对齐到官方 16KB | **新建 h2 帧层探针**（CONNECT 代理 + h2 服务端），取得官方 SETTINGS/WINDOW_UPDATE/伪头顺序基线；mitmproxy 用自己的 h2 栈重建连接，看不到这些。残留差异见 §1.1.1.2 |
-| `0.1.165-11` | 正式发布（Releases `v0.1.165-11`，镜像 `ghcr.io/itv3/sub2apiplus:0.1.165-11`），Vircs 已切换为该镜像 | 官方 OAuth 定型层按版本画像重建：Codex `0.145.0` 版本画像（host／固定 path 与 query、header 契约的线形名与顺序槽位、exec 与 tui 双 surface）、端点 URL 收敛为唯一动态输入面、文件直传、OAuth、turn-state 按 turn 隔离；候选侧 42 条规则的验收工具链与失败关闭门禁 | **42 条正式验收尚未执行**：仓库内只有 Schema 与故意不可通过的占位骨架，真实断言结果与 `before`／`after` 环境恢复证据均未归档，按规格表 §3.2.1「已有基础不等于 42 项已完成」不得计入实测结论。本轮未重跑三路径对照，§1.1.1.2 的残留差异基线仍为 `0.1.165-10`。官方侧 53 个编号项的源码／抓包双证据复核见 [证据索引](docs/EVIDENCE_INDEX.md) |
+| `0.1.165-11` | 正式发布（Releases `v0.1.165-11`，镜像 `ghcr.io/itv3/sub2apiplus:0.1.165-11`），Vircs 已切换为该镜像 | 官方 OAuth 定型层按版本画像重建：Codex `0.145.0` 完整画像、稳定执行引擎、文件直传、OAuth、turn-state 隔离及失败关闭验收链 | Codex 0.145.0 的规则来源、42 项范围、伪装方案实现、源码改动台账和升级流程统一见[出站规格、实现与演进手册](docs/CODEX_CLI_0145_EGRESS_SPEC.md)；官方侧逐项证据路径由[证据索引](docs/EVIDENCE_INDEX.md)生成。发布状态本身不替代绑定具体源码树、镜像和画像摘要的 Campaign 验收。 |
+| `0.1.165-12` | 正式发布（Releases `v0.1.165-12`，镜像 `ghcr.io/itv3/sub2apiplus:0.1.165-12`） | 入站身份失败关闭改为投影出站：删除 5 个拒绝点（UA 不匹配 surface、originator 不匹配、turn metadata 解析失败、subagent 校验失败、parent thread 冲突），官方 `0.146` 与非 Ubuntu 平台的官方 `0.145.0` 客户端不再被拒；新增版本快照注册表与 release 指针取版本；补齐投影降级与 body 闭集丢弃字段的可观测信号 | **画像摘要 `9b7dd12d…` 未变，出站形态不变**，本轮只改变失败关闭策略与代码结构，未重跑候选 Campaign。新增两道实现侧门禁（版本标识符泄漏基线、§3.5 台账完整性复算）与逐调用点终态定型配对检查；§3.5 台账补登 10 个此前漏登的出站定型文件，统计口径由单提交改为冻结上游基线累计。按 §4.1，源码树变化严格上仍应有候选验收，本次发布未执行 |
 
 `0.1.165-6` 的宿主头剥离清单由三条路径共用，但只在 OpenAI HTTP/WS 侧取得 wire 证据；Anthropic 侧该项已无同版本证据，只能按共享逻辑外推，按 §1.1.2.3 的版本边界须重抓后才能计入实测结论。
 
@@ -98,12 +99,12 @@ API Key active 画像的 AnyRouter A/B 见 §1.2。
 （tungstenite）前 5 项是大写驼峰。照"全小写"一刀切会制造新偏离，`0.1.165-8` 曾因此
 引入回归并在 `0.1.165-9` 修回。
 
-官方形态的逐条规格（含证据等级与观测通道）见 [Codex CLI 0.145.0 出站形态规格表](docs/CODEX_CLI_0145_EGRESS_SPEC.md)；
-我们的修复过程与证据见 [官方出站 wire 一致性修复清单](docs/OFFICIAL_EGRESS_WIRE_PARITY_FIX_20260727.md)。
+官方形态的逐条规则、证据等级、观测通道、实现和升级流程统一见
+[Codex CLI 0.145.0 出站规格、实现与演进手册](docs/CODEX_CLI_0145_EGRESS_SPEC.md)。
 
 #### 1.1.2 抓包方法、分组与证据边界
 
-> **抓包操作手册**：OAuth/API 双任务、抓包环境、认证隔离、dry-run、运行和产物方法统一见[官方客户端双任务抓包工具](tools/official_client_capture/README.md)。抓包验证环境在本文统称 Vircs。本节只定义每套任务内部的两轮抓取法、S1/S2/S4、分组关系和证据边界。
+> **抓包与升级操作手册**：Codex CLI 0.145.0 的证据生成、抓包、复算、验收和升级流程统一见[出站规格、实现与演进手册](docs/CODEX_CLI_0145_EGRESS_SPEC.md)；[工具目录 README](tools/official_client_capture/README.md)只保留入口导航。抓包验证环境在本文统称 Vircs。
 
 本地分析资料统一放在 `local-analysis/`（已被 `.gitignore` 整目录忽略，不进 Git，新环境需自行下载准备）：
 
@@ -263,7 +264,9 @@ Profile 只在入口端点受支持，且目标平台、OAuth 账号、实际出
 
 以上是六种协议转换与路由组合，不是六套伪装实现。以后修改入站协议转换、模型/账号路由、Finalizer 或 Transport 时必须重跑受影响组合；修改公共 Resolver 或目标平台公共出站链路时必须重跑全部六种组合。
 
-2026-07-27 的最终复核任务没有重跑 Kilo；本节 Kilo 表仅保留历史回归结果，不能作为 `0.1.165-4` 的本轮新证据。本轮范围、测试、镜像和抓包结论见[最终复核记录](docs/P0-P2_OFFICIAL_EGRESS_FINAL_REVIEW_FIX_20260727.md)。
+2026-07-27 的最终复核任务没有重跑 Kilo；本节 Kilo 表仅保留历史回归结果，不能作为
+`0.1.165-4` 的本轮新证据。当前 Codex 0.145.0 范围、证据和验收边界统一见
+[出站规格、实现与演进手册](docs/CODEX_CLI_0145_EGRESS_SPEC.md)。
 
 ##### 1.1.3.5 编码任务分解（已完成）
 
@@ -384,7 +387,7 @@ Antigravity 增强用于让 Antigravity 账号新增后默认可用；新建账�
 | 默认集合 | `model_mapping` 缺失或为空时，旧账号默认允许并展示官方 8 模型；新账号创建时默认写入 16 条——8 条 `模型 ID -> 模型 ID` 自映射和 8 条 `界面显示名 -> 模型 ID` 映射。管理员可通过“自定义模型名称”追加模型，手动“同步上游支持的模型”保存真实结果。 |
 | 显式白名单 | 非空 `model_mapping` 中规范化后的 `model -> model` 自映射构成唯一允许集合，官方模型不会隐式补回；显式配置但无法解析出有效字符串映射时按空白名单处理。 |
 | 映射与别名 | 模型映射保存“客户端请求模型名 -> 实际发包 model”，键既可以是模型 ID，也可以是界面显示名（默认落库的 8 条显示名映射即属此类）。但允许集合只由 `model -> model` 自映射构成，所以显示名映射、普通映射、通配符和 `gemini-3.1-pro-high` 等历史别名都只负责解析、不扩大允许集合，最终目标必须命中允许集合；历史别名不进入默认白名单或 `/models`。 |
-| 模型广告 | `/antigravity/v1/models` 展示账号实际允许的界面模型和手动加入的模型，不展示兼容别名。**已知问题**：允许集合为空时（见“显式白名单”行）该端点仍回落展示官方 8 模型，而此时任何请求都会被拒 403，广告集合与可用集合完全不相交；修复方向是空集合时返回空列表，见[缺陷记录](docs/KNOWN_ISSUE_ANTIGRAVITY_MODELS_EMPTY_WHITELIST.md)。 |
+| 模型广告 | `/antigravity/v1/models` 展示账号实际允许的界面模型和手动加入的模型，不展示兼容别名。**已知问题**：允许集合为空时（见“显式白名单”行）该端点仍回落展示官方 8 模型，而此时任何请求都会被拒 403，广告集合与可用集合完全不相交；修复方向是空集合时返回空列表。 |
 | `web_search` | 固定使用 `gemini-3.5-flash-low`（即上表界面显示的 **Gemini 3.5 Flash Medium**）；存在显式白名单时必须保留该模型的自映射，不能绕过白名单。 |
 | 官方伪装 | UA 默认为 `antigravity/hub/2.2.1 darwin/arm64`，版本号可由 `ANTIGRAVITY_USER_AGENT_VERSION` 环境变量或后台“网关转发 → `antigravity_user_agent_version`”覆盖；默认 8 模型忽略客户端 `thinking` / `output_config.effort`，使用表中固定预算；在内层 `request.labels` 补 `model_enum/trajectory_id` 等官方标签并生成同源 `requestId`，过滤无关 stop / sampling 参数。手动追加模型按其名称发包，无需进入全局官方模型表。 |
 | 计费 | 按最终实际发包模型 `UpstreamModel` 查价，日志保留外部模型，且优先于渠道 `requested` / `channel_mapped`；`gpt-oss-120b-medium` 每 1M tokens 为输入 `$0.05`、缓存读取 `$0.01`、输出 `$0.20`。 |
@@ -865,7 +868,7 @@ README 只保留当前契约和操作入口；详细设计、抓包步骤与运�
 | 文档 | 说明 |
 |---|---|
 | [`优化方案.md`](优化方案.md) | 官方客户端画像的架构方案、任务分解和完成状态。 |
-| [`tools/official_client_capture/README.md`](tools/official_client_capture/README.md) | OAuth/API 双任务抓包工具、认证隔离、执行参数和产物说明。 |
+| [`tools/official_client_capture/README.md`](tools/official_client_capture/README.md) | Codex 官方出站工具目录的权威文档链接和唯一编排入口。 |
 | [`backend/internal/service/testdata/official_egress/README.md`](backend/internal/service/testdata/official_egress/README.md) | OAuth、API Key、Kilo、AnyRouter 和 Vircs 的脱敏实证索引。 |
 | [`deploy/APPLE_CONTAINER.md`](deploy/APPLE_CONTAINER.md) | Apple silicon Mac 的原生容器部署、升级、备份和限制说明。 |
 | [`deploy/EDGE_SECURITY.md`](deploy/EDGE_SECURITY.md) | CDN、反向代理可信链和真实客户端 IP 的安全配置说明。 |

@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-egress-profile-v1.json",
+  "title": "Codex 出站运行画像清单",
+  "description": "描述目标 Codex CLI 版本对应的 Go 薄层运行画像。draft 仅供分类草案，只有 approved 才能封存；编排器还会校验 profile_payload_sha256 与 profile_payload 的规范化摘要一致。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "codex_version",
+    "profile_id",
+    "profile_digest",
+    "profile_payload",
+    "profile_payload_sha256",
+    "status"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-egress-profile/v1"
+    },
+    "codex_version": {
+      "$ref": "#/$defs/version"
+    },
+    "profile_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "profile_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "profile_payload": {
+      "type": "object",
+      "description": "经审核的版本画像规范化快照；内部字段由对应版本的 Go 画像契约定义。",
+      "minProperties": 1
+    },
+    "profile_payload_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "status": {
+      "enum": [
+        "draft",
+        "approved"
+      ]
+    }
+  },
+  "$defs": {
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

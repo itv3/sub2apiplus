@@ -1,0 +1,683 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-capture-attempt-v1.json",
+  "title": "Codex 出站抓包不可变 Attempt",
+  "description": "run 阶段只写一次的抓包事实；seal 只能引用其摘要，不能回写本文件。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "phase",
+    "candidate_id",
+    "status",
+    "identity",
+    "results",
+    "evidence_roots",
+    "environment",
+    "binary_verification",
+    "execution_error",
+    "restoration_error",
+    "next_gate",
+    "campaign_manifest_sha256",
+    "attempt_id",
+    "run_nonce",
+    "started_at_utc",
+    "completed_at_utc",
+    "reservation",
+    "attempt_digest"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-upgrade-capture-attempt/v1"
+    },
+    "campaign_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "phase": {
+      "enum": [
+        "official",
+        "candidate"
+      ]
+    },
+    "candidate_id": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/safeId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "status": {
+      "enum": [
+        "awaiting_receipts",
+        "failed",
+        "environment_contaminated"
+      ]
+    },
+    "identity": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/officialIdentity"
+        },
+        {
+          "$ref": "#/$defs/candidateIdentity"
+        }
+      ]
+    },
+    "results": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/jobResult"
+      }
+    },
+    "evidence_roots": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/absolutePath"
+      }
+    },
+    "environment": {
+      "$ref": "#/$defs/environment"
+    },
+    "binary_verification": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/binaryVerification"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "execution_error": {
+      "$ref": "#/$defs/nullableError"
+    },
+    "restoration_error": {
+      "$ref": "#/$defs/nullableError"
+    },
+    "next_gate": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "campaign_manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "attempt_id": {
+      "type": "string",
+      "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$"
+    },
+    "run_nonce": {
+      "$ref": "#/$defs/sha256"
+    },
+    "started_at_utc": {
+      "$ref": "#/$defs/rfc3339"
+    },
+    "completed_at_utc": {
+      "$ref": "#/$defs/rfc3339"
+    },
+    "reservation": {
+      "$ref": "#/$defs/fileBinding"
+    },
+    "attempt_digest": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "phase": {
+            "const": "official"
+          }
+        },
+        "required": [
+          "phase"
+        ]
+      },
+      "then": {
+        "properties": {
+          "candidate_id": {
+            "const": null
+          },
+          "identity": {
+            "$ref": "#/$defs/officialIdentity"
+          },
+          "binary_verification": {
+            "$ref": "#/$defs/binaryVerification"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "phase": {
+            "const": "candidate"
+          }
+        },
+        "required": [
+          "phase"
+        ]
+      },
+      "then": {
+        "properties": {
+          "candidate_id": {
+            "$ref": "#/$defs/safeId"
+          },
+          "identity": {
+            "$ref": "#/$defs/candidateIdentity"
+          },
+          "binary_verification": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "status": {
+            "const": "awaiting_receipts"
+          }
+        },
+        "required": [
+          "status"
+        ]
+      },
+      "then": {
+        "properties": {
+          "execution_error": {
+            "type": "null"
+          },
+          "restoration_error": {
+            "type": "null"
+          },
+          "next_gate": {
+            "$ref": "#/$defs/nonEmptyText"
+          },
+          "environment": {
+            "allOf": [
+              {
+                "$ref": "#/$defs/environment"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "before_probe": {
+                    "$ref": "#/$defs/fileBindingWithBytes"
+                  },
+                  "after_probe": {
+                    "$ref": "#/$defs/fileBindingWithBytes"
+                  },
+                  "restoration_report": {
+                    "$ref": "#/$defs/fileBindingWithBytes"
+                  }
+                }
+              }
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "nonEmptyText": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "imageId": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "immutableImage": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._/:+-]*@sha256:[0-9a-f]{64}$"
+    },
+    "gitCommit": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40,64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "nullableSha256": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "absolutePath": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "rfc3339": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "fileBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "ruleId": {
+      "type": "string",
+      "pattern": "^SPEC-[A-Z0-9]+-[0-9]{3}$"
+    },
+    "scenarioId": {
+      "type": "string",
+      "pattern": "^A[0-9]{2}$"
+    },
+    "fileBindingWithBytes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "nullableFileBindingWithBytes": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/fileBindingWithBytes"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "evidence_root",
+        "before_probe",
+        "after_probe",
+        "restoration_report"
+      ],
+      "properties": {
+        "evidence_root": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "before_probe": {
+          "$ref": "#/$defs/nullableFileBindingWithBytes"
+        },
+        "after_probe": {
+          "$ref": "#/$defs/nullableFileBindingWithBytes"
+        },
+        "restoration_report": {
+          "$ref": "#/$defs/nullableFileBindingWithBytes"
+        }
+      }
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "type",
+        "message"
+      ],
+      "properties": {
+        "type": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "message": {
+          "type": "string",
+          "maxLength": 1000
+        }
+      }
+    },
+    "nullableError": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/error"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "officialIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cli_version",
+        "binary_sha256",
+        "source_tree_sha256",
+        "cargo_lock_sha256",
+        "git_commit",
+        "runtime_image",
+        "operating_system",
+        "architecture",
+        "tls_dependencies_sha256"
+      ],
+      "properties": {
+        "cli_version": {
+          "$ref": "#/$defs/version"
+        },
+        "binary_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "source_tree_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "cargo_lock_sha256": {
+          "$ref": "#/$defs/nullableSha256"
+        },
+        "git_commit": {
+          "$ref": "#/$defs/gitCommit"
+        },
+        "runtime_image": {
+          "$ref": "#/$defs/immutableImage"
+        },
+        "operating_system": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "architecture": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "tls_dependencies_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "candidateIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "git_commit",
+        "source_root",
+        "source_tree_sha256",
+        "image_reference",
+        "image_digest",
+        "image_id",
+        "build_id",
+        "deployed_version",
+        "profile_id",
+        "profile_digest"
+      ],
+      "properties": {
+        "git_commit": {
+          "$ref": "#/$defs/gitCommit"
+        },
+        "source_root": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "source_tree_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "image_reference": {
+          "$ref": "#/$defs/immutableImage"
+        },
+        "image_digest": {
+          "$ref": "#/$defs/imageId"
+        },
+        "image_id": {
+          "$ref": "#/$defs/imageId"
+        },
+        "build_id": {
+          "$ref": "#/$defs/safeId"
+        },
+        "deployed_version": {
+          "$ref": "#/$defs/safeId"
+        },
+        "profile_id": {
+          "$ref": "#/$defs/safeId"
+        },
+        "profile_digest": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "jobStepResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "step",
+        "argv",
+        "return_code",
+        "log"
+      ],
+      "properties": {
+        "step": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/nonEmptyText"
+          }
+        },
+        "return_code": {
+          "type": "integer"
+        },
+        "log": {
+          "$ref": "#/$defs/absolutePath"
+        }
+      }
+    },
+    "jobResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "phase",
+        "required",
+        "execution_sha256",
+        "status",
+        "description",
+        "duration_seconds",
+        "steps",
+        "evidence_roots",
+        "missing_evidence_patterns",
+        "empty_evidence_patterns",
+        "covers",
+        "scenario_ids"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/safeId"
+        },
+        "phase": {
+          "enum": [
+            "official",
+            "candidate"
+          ]
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "execution_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "status": {
+          "enum": [
+            "complete",
+            "failed"
+          ]
+        },
+        "description": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "duration_seconds": {
+          "type": "number",
+          "minimum": 0
+        },
+        "steps": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/jobStepResult"
+          }
+        },
+        "evidence_roots": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/absolutePath"
+          }
+        },
+        "missing_evidence_patterns": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmptyText"
+          }
+        },
+        "empty_evidence_patterns": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmptyText"
+          }
+        },
+        "covers": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/ruleId"
+          }
+        },
+        "scenario_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/scenarioId"
+          }
+        }
+      }
+    },
+    "binaryIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "label",
+        "path",
+        "version",
+        "version_output",
+        "sha256"
+      ],
+      "properties": {
+        "label": {
+          "enum": [
+            "container:capture_codex_bin",
+            "container:relay_codex_bin",
+            "host:relay_codex_bin"
+          ]
+        },
+        "path": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "version": {
+          "$ref": "#/$defs/version"
+        },
+        "version_output": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "binaryVerification": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "passed",
+        "expected_version",
+        "expected_sha256",
+        "runtime_image_reference",
+        "runtime_image_id",
+        "identities"
+      ],
+      "properties": {
+        "passed": {
+          "const": true
+        },
+        "expected_version": {
+          "$ref": "#/$defs/version"
+        },
+        "expected_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "runtime_image_reference": {
+          "$ref": "#/$defs/immutableImage"
+        },
+        "runtime_image_id": {
+          "$ref": "#/$defs/imageId"
+        },
+        "identities": {
+          "type": "array",
+          "minItems": 3,
+          "maxItems": 3,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/binaryIdentity"
+          }
+        }
+      }
+    }
+  }
+}

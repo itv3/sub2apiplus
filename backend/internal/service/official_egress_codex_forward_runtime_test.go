@@ -24,13 +24,60 @@ func TestOfficialCodex0145ForwardBindsRuntimeBeforeOAuthRefresh(t *testing.T) {
 		false,
 	)
 	require.NoError(t, err)
+	execUserAgent, err := profile.RenderUserAgent(officialCodexSurfaceExec, true)
+	require.NoError(t, err)
 
 	for _, testCase := range []struct {
-		name        string
-		passthrough bool
+		name           string
+		passthrough    bool
+		userAgent      string
+		originator     string
+		wantUserAgent  string
+		wantOriginator string
+		wantSurface    string
+		wantTerminal   string
+		wantSuffix     bool
 	}{
-		{name: "普通转换", passthrough: false},
-		{name: "passthrough 早退", passthrough: true},
+		{
+			name:           "精确 TUI 普通转换",
+			userAgent:      tuiUserAgent,
+			originator:     "codex-tui",
+			wantUserAgent:  tuiUserAgent,
+			wantOriginator: "codex-tui",
+			wantSurface:    officialCodexSurfaceTUI,
+			wantTerminal:   "xterm-256color",
+		},
+		{
+			name:           "精确 TUI passthrough 早退",
+			passthrough:    true,
+			userAgent:      tuiUserAgent,
+			originator:     "codex-tui",
+			wantUserAgent:  tuiUserAgent,
+			wantOriginator: "codex-tui",
+			wantSurface:    officialCodexSurfaceTUI,
+			wantTerminal:   "xterm-256color",
+		},
+		{
+			name:           "Desktop 后续版本投影默认画像",
+			userAgent:      "Codex Desktop/0.146.0-alpha.3.1 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.721.81911)",
+			originator:     "Codex Desktop",
+			wantUserAgent:  execUserAgent,
+			wantOriginator: "codex_exec",
+			wantSurface:    officialCodexSurfaceExec,
+			wantTerminal:   "unknown",
+			wantSuffix:     true,
+		},
+		{
+			name:           "VS Code 后续版本投影默认画像",
+			passthrough:    true,
+			userAgent:      "codex_vscode/0.146.0-alpha.3.1 (Ubuntu 24.4.0; aarch64) unknown (VS Code; 26.721.41059)",
+			originator:     "codex_vscode",
+			wantUserAgent:  execUserAgent,
+			wantOriginator: "codex_exec",
+			wantSurface:    officialCodexSurfaceExec,
+			wantTerminal:   "unknown",
+			wantSuffix:     true,
+		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			body := []byte(`{"model":"gpt-5.4","instructions":"保持原样","stream":true,"input":[{"type":"message","role":"user","content":"hello"}]}`)
@@ -39,8 +86,8 @@ func TestOfficialCodex0145ForwardBindsRuntimeBeforeOAuthRefresh(t *testing.T) {
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
 			c.Request.Header.Set("content-type", "application/json")
 			body = codexOfficialIngressIdentityForTest(t, c, body)
-			c.Request.Header.Set("user-agent", tuiUserAgent)
-			c.Request.Header.Set("originator", "codex-tui")
+			c.Request.Header.Set("user-agent", testCase.userAgent)
+			c.Request.Header.Set("originator", testCase.originator)
 
 			account := &Account{
 				ID:          145,
@@ -90,13 +137,13 @@ func TestOfficialCodex0145ForwardBindsRuntimeBeforeOAuthRefresh(t *testing.T) {
 			require.NoError(t, forwardErr)
 			require.NotNil(t, result)
 			require.NotNil(t, upstream.lastReq)
-			require.Equal(t, tuiUserAgent, upstream.lastReq.Header.Get("user-agent"))
-			require.Equal(t, "codex-tui", upstream.lastReq.Header.Get("originator"))
+			require.Equal(t, testCase.wantUserAgent, upstream.lastReq.Header.Get("user-agent"))
+			require.Equal(t, testCase.wantOriginator, upstream.lastReq.Header.Get("originator"))
 			require.NoError(t, oauthClient.err)
-			require.Equal(t, officialCodexSurfaceTUI, oauthClient.state.SurfaceID)
-			require.Equal(t, "codex-tui", oauthClient.state.Originator)
-			require.Equal(t, "xterm-256color", oauthClient.state.TerminalToken)
-			require.False(t, oauthClient.state.UserAgentSuffixEnabled)
+			require.Equal(t, testCase.wantSurface, oauthClient.state.SurfaceID)
+			require.Equal(t, testCase.wantOriginator, oauthClient.state.Originator)
+			require.Equal(t, testCase.wantTerminal, oauthClient.state.TerminalToken)
+			require.Equal(t, testCase.wantSuffix, oauthClient.state.UserAgentSuffixEnabled)
 		})
 	}
 }

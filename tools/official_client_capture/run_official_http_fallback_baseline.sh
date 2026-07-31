@@ -12,18 +12,13 @@ umask 077
 # 做法：hosts 把 chatgpt.com 指向探针（h1，不支持 WS 升级），官方 WS 握手失败后降级，
 # 随后的 POST /responses 即被 h1 探针记录。
 #
-# 为什么必须经代理：官方直连画像是空 ALPN，恒为 HTTP/1.1，根本不产生 h2 流量；只有
-# 经代理时 reqwest 才换用含 h2 的 ClientHello。因此探针同时扮演 CONNECT 代理与 h2
-# 服务端两个角色（见 h2_wire_probe.py）。
-#
-# 与 h1 基线脚本的区别：走代理不需要改 hosts，因此没有 hosts 污染的清理负担。
-# 探针不转发上游，本脚本不产生真实业务请求，也不消耗账号配额。
+# 本场景不经代理，而是临时修改 hosts 并把抓包 CA 安装进系统信任库，使官方客户端仍走
+# native-tls 的 HTTP/1.1 分支。探针只返回受控响应，不转发真实上游，因此不消耗账号配额。
 
 capture_container=${CAPTURE_CONTAINER:-capture-cli}
 capture_root=${CAPTURE_ROOT:-/root/oauth-capture}
 run_id=${RUN_ID:?必须提供 RUN_ID}
 model=${MODEL:-gpt-5.6-luna}
-probe_port=${PROBE_PORT:-18081}
 expect_connections=${EXPECT_CONNECTIONS:-3}
 codex_bin=${CODEX_BIN:-/root/.local/bin/codex}
 
@@ -42,7 +37,7 @@ probe_started=0
 cleanup() {
   local status=$?
   if [[ $probe_started == 1 ]]; then
-    docker exec "$capture_container" pkill -f h2_wire_probe.py >/dev/null 2>&1 || true
+    docker exec "$capture_container" pkill -f h1_wire_probe.py >/dev/null 2>&1 || true
   fi
   docker exec "$capture_container" sh -c 'grep -v " chatgpt.com$" /etc/hosts > /tmp/.hr && cat /tmp/.hr > /etc/hosts && rm -f /tmp/.hr' >/dev/null 2>&1 || true
   docker exec "$capture_container" rm -f /usr/local/share/ca-certificates/mitm-baseline.crt >/dev/null 2>&1 || true

@@ -283,13 +283,22 @@ type officialCodexProfileSnapshot struct {
 
 var defaultOfficialCodex0145Snapshot = mustBuildOfficialCodex0145Snapshot()
 
-// resolveCodex0145VersionProfile 只接受精确三段版本，不做 trim、别名或回退。
+// officialCodexVersionSnapshots 是版本快照注册表。升级 Codex 版本时只在此登记新
+// 快照并调整 registry 的 release 指针，不修改稳定执行引擎，也不修改 §3.5.2 的
+// 共享接入点——这正是 §4.5.13 承诺的落地方式。
+var officialCodexVersionSnapshots = map[string]officialCodexProfileSnapshot{
+	officialCodexVersion0145: defaultOfficialCodex0145Snapshot,
+}
+
+// resolveCodex0145VersionProfile 只接受精确三段版本，不做 trim、别名或回退；
+// 未登记的版本按未知处理，不回退到任何既有快照。
 func resolveCodex0145VersionProfile(version string) (*officialCodexVersionProfile, error) {
-	if version != officialCodexVersion0145 {
+	snapshot, exists := officialCodexVersionSnapshots[version]
+	if !exists {
 		return nil, fmt.Errorf("未知 Codex 官方出站版本画像：%q", version)
 	}
 	var profile officialCodexVersionProfile
-	if err := json.Unmarshal([]byte(defaultOfficialCodex0145Snapshot.JSON), &profile); err != nil {
+	if err := json.Unmarshal([]byte(snapshot.JSON), &profile); err != nil {
 		return nil, fmt.Errorf("解码 Codex %s 版本画像：%w", version, err)
 	}
 	if err := validateOfficialCodexVersionProfile(profile); err != nil {
@@ -299,8 +308,8 @@ func resolveCodex0145VersionProfile(version string) (*officialCodexVersionProfil
 	if err != nil {
 		return nil, err
 	}
-	if digest != defaultOfficialCodex0145Snapshot.Digest || profile.Digest != digest {
-		return nil, errors.New("Codex 0.145.0 版本画像摘要不一致")
+	if digest != snapshot.Digest || profile.Digest != digest {
+		return nil, fmt.Errorf("Codex %s 版本画像摘要不一致", version)
 	}
 	return &profile, nil
 }

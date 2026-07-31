@@ -3,8 +3,8 @@
 
 本工具只读取证据归档，不导入候选 Go 画像。冻结预期位于
 ``candidate_rule_expectations_0_145_0.json``，抓包事实来自统一 manifest 所引用的
-pcap、relay 原始字节或结构化 trace。成功输出可直接作为
-``candidate_42_acceptance.py`` 所要求的单规则 assertion result。
+pcap、relay 原始字节或结构化 trace。成功输出由统一升级编排器复算并纳入逐规则
+正式验收。
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
     "tools/official_client_capture/candidate_rule_expectations_0_145_0.json"
 )
 FROZEN_PROFILE_SHA256 = (
-    "5c0bdf55cef6da030c6a3121a50436f7f71126507ed880a76c407db5dcf88a44"
+    "0732af76f7452bc83c2aa59da9c5edbc8629f9da31386222d30c25a82cbbbc6c"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RULE_ID_RE = re.compile(r"^SPEC-[A-Z0-9]+-[0-9]{3}$")
@@ -262,10 +262,17 @@ def load_profile(
     rule_manifest_path: Path | None = None,
     *,
     verify_frozen_digest: bool = True,
+    expected_codex_version: str = CODEX_VERSION,
+    expected_profile_sha256: str | None = None,
 ) -> dict[str, Any]:
-    """加载冻结画像，并可选核对 42 条封闭规则全集。"""
+    """加载版本化断言画像，并可选核对规则全集与批准摘要。"""
 
     profile = _load_json(profile_path, "冻结规则画像")
+    if expected_profile_sha256 is not None:
+        if not SHA256_RE.fullmatch(expected_profile_sha256):
+            raise AssertionConfigurationError("批准规则画像 SHA-256 格式非法")
+        if file_sha256(profile_path) != expected_profile_sha256:
+            raise AssertionConfigurationError("批准规则画像 SHA-256 不匹配")
     if verify_frozen_digest and file_sha256(profile_path) != FROZEN_PROFILE_SHA256:
         raise AssertionConfigurationError(
             "冻结规则画像 SHA-256 不匹配；修改预期必须经过独立审核，"
@@ -287,7 +294,7 @@ def load_profile(
     )
     if profile.get("schema_version") != PROFILE_SCHEMA_VERSION:
         raise AssertionConfigurationError("冻结规则画像 schema_version 不匹配")
-    if profile.get("codex_version") != CODEX_VERSION:
+    if profile.get("codex_version") != expected_codex_version:
         raise AssertionConfigurationError("冻结规则画像 Codex 版本不匹配")
     source_spec_sha256 = profile.get("source_spec_sha256")
     if not isinstance(source_spec_sha256, str) or not SHA256_RE.fullmatch(
@@ -298,8 +305,9 @@ def load_profile(
         source_spec = profile.get("source_spec")
         if not isinstance(source_spec, str):
             raise AssertionConfigurationError("冻结规则画像 source_spec 格式非法")
+        source_path_text, _, source_fragment = source_spec.partition("#")
         source_relative = _relative_path(
-            source_spec.split("#", 1)[0], "冻结规则画像 source_spec"
+            source_path_text, "冻结规则画像 source_spec"
         )
         try:
             repository_root = profile_path.resolve(strict=True).parent.parents[1]
@@ -312,7 +320,7 @@ def load_profile(
             raise AssertionConfigurationError(
                 "无法从冻结画像位置解析来源规格"
             ) from error
-        if file_sha256(source_path) != source_spec_sha256:
+        if source_spec_section_sha256(source_path, source_fragment) != source_spec_sha256:
             raise AssertionConfigurationError(
                 "来源规格 SHA-256 与冻结画像声明不一致"
             )
@@ -430,16 +438,56 @@ def load_profile(
         raise AssertionConfigurationError("冻结规则画像存在重复 rule_id")
 
     if rule_manifest_path is not None:
-        manifest = _load_json(rule_manifest_path, "42 条规则清单")
+        manifest = _load_json(rule_manifest_path, "目标版本规则清单")
         expected_rule_ids = manifest.get("required_rules") if isinstance(manifest, dict) else None
         if not isinstance(expected_rule_ids, list) or rule_ids != expected_rule_ids:
             raise AssertionConfigurationError(
-                "冻结规则画像必须按相同顺序精确覆盖 42 条规则清单"
+                "冻结规则画像必须按相同顺序精确覆盖目标版本规则全集"
             )
     return profile
 
 
-def _validate_capture_manifest(value: Any) -> list[dict[str, Any]]:
+def source_spec_section_sha256(source_path: Path, fragment: str) -> str:
+    """按 source_spec 的章节锚点计算稳定摘要，避免无关章节改动击穿冻结画像。"""
+
+    if not fragment:
+        return file_sha256(source_path)
+    headings = {
+        "第二章": "# 第二部分 规则",
+        "第二部分": "# 第二部分 规则",
+        "第二部分-规则": "# 第二部分 规则",
+    }
+    expected_heading = headings.get(fragment)
+    if expected_heading is None:
+        raise AssertionConfigurationError(
+            f"冻结规则画像 source_spec 章节锚点不受支持：{fragment}"
+        )
+    try:
+        lines = source_path.read_text(encoding="utf-8").splitlines(keepends=True)
+    except (OSError, UnicodeDecodeError) as error:
+        raise AssertionConfigurationError(f"无法读取来源规格章节：{error}") from error
+    start = next(
+        (index for index, line in enumerate(lines) if line.rstrip("\r\n") == expected_heading),
+        None,
+    )
+    if start is None:
+        raise AssertionConfigurationError(f"来源规格缺少章节：{expected_heading}")
+    end = next(
+        (
+            index
+            for index in range(start + 1, len(lines))
+            if lines[index].startswith("# ")
+        ),
+        len(lines),
+    )
+    section = "".join(lines[start:end]).encode("utf-8")
+    return hashlib.sha256(section).hexdigest()
+
+
+def _validate_capture_manifest(
+    value: Any,
+    expected_codex_version: str = CODEX_VERSION,
+) -> list[dict[str, Any]]:
     if not isinstance(value, dict):
         raise AssertionConfigurationError("capture manifest 顶层必须是对象")
     _require_exact_keys(
@@ -455,7 +503,7 @@ def _validate_capture_manifest(value: Any) -> list[dict[str, Any]]:
     )
     if value.get("schema_version") != CAPTURE_MANIFEST_SCHEMA_VERSION:
         raise AssertionConfigurationError("capture manifest schema_version 不匹配")
-    if value.get("codex_version") != CODEX_VERSION:
+    if value.get("codex_version") != expected_codex_version:
         raise AssertionConfigurationError("capture manifest Codex 版本不匹配")
     if value.get("status") != "complete":
         raise AssertionConfigurationError("capture manifest status 必须是 complete")
@@ -825,11 +873,12 @@ def _trace_observations(
 def load_observations(
     capture_manifest_path: Path,
     evidence_root: Path,
+    expected_codex_version: str = CODEX_VERSION,
 ) -> tuple[dict[str, Any], list[Observation]]:
     """校验所有 manifest artifact 的路径与哈希，并解析可断言事实。"""
 
     manifest = _load_json(capture_manifest_path, "capture manifest")
-    artifacts = _validate_capture_manifest(manifest)
+    artifacts = _validate_capture_manifest(manifest, expected_codex_version)
     declared_artifact_scenarios = {
         artifact["path"]: set(artifact["scenario_ids"])
         for artifact in artifacts
@@ -1305,10 +1354,12 @@ def build_assertion_command(
     output: str,
     profile: str = DEFAULT_PROFILE_RELATIVE_PATH,
     rule_manifest: str = "tools/official_client_capture/codex_upgrade_rules_0_145_0.json",
+    expected_codex_version: str | None = None,
+    expected_profile_sha256: str | None = None,
 ) -> list[str]:
     """构造应写入验收 submission 的稳定 checker 参数数组。"""
 
-    return [
+    command = [
         "python3",
         CHECKER_RELATIVE_PATH,
         "--rule-id",
@@ -1321,9 +1372,13 @@ def build_assertion_command(
         profile,
         "--rule-manifest",
         rule_manifest,
-        "--output",
-        output,
     ]
+    if expected_codex_version is not None:
+        command.extend(["--expected-codex-version", expected_codex_version])
+    if expected_profile_sha256 is not None:
+        command.extend(["--expected-profile-sha256", expected_profile_sha256])
+    command.extend(["--output", output])
+    return command
 
 
 def build_assertion_result(
@@ -1374,6 +1429,8 @@ def _build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=tool_root / "codex_upgrade_rules_0_145_0.json",
     )
+    parser.add_argument("--expected-codex-version")
+    parser.add_argument("--expected-profile-sha256")
     parser.add_argument("--output", type=Path, required=True)
     return parser
 
@@ -1383,9 +1440,18 @@ def main(argv: Iterable[str] | None = None) -> int:
     started_at = utc_now()
     checks: list[dict[str, Any]]
     try:
-        profile = load_profile(args.profile, args.rule_manifest)
+        expected_version = args.expected_codex_version or CODEX_VERSION
+        profile = load_profile(
+            args.profile,
+            args.rule_manifest,
+            verify_frozen_digest=args.expected_profile_sha256 is None,
+            expected_codex_version=expected_version,
+            expected_profile_sha256=args.expected_profile_sha256,
+        )
         capture_manifest, observations = load_observations(
-            args.capture_manifest, args.evidence_root
+            args.capture_manifest,
+            args.evidence_root,
+            expected_version,
         )
         checks = evaluate_rule(
             profile, args.rule_id, observations, capture_manifest
@@ -1408,6 +1474,8 @@ def main(argv: Iterable[str] | None = None) -> int:
         evidence_root=str(args.evidence_root),
         profile=str(args.profile),
         rule_manifest=str(args.rule_manifest),
+        expected_codex_version=args.expected_codex_version,
+        expected_profile_sha256=args.expected_profile_sha256,
         output=str(args.output),
     )
     result = build_assertion_result(

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-seal-failure-v1.json",
+  "title": "Codex 候选 Seal 恢复失败收据",
+  "description": "Kilo 后恢复门禁失败时写入 attempt 内的主污染事实，不能依赖 Campaign 旁路 marker。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "campaign_manifest_sha256",
+    "phase",
+    "candidate_id",
+    "attempt_id",
+    "run_nonce",
+    "failed_at_utc",
+    "error_type",
+    "reason",
+    "failure_digest"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-upgrade-seal-failure/v1"
+    },
+    "campaign_id": {"$ref": "#/$defs/safeId"},
+    "campaign_manifest_sha256": {"$ref": "#/$defs/sha256"},
+    "phase": {"const": "candidate"},
+    "candidate_id": {"$ref": "#/$defs/safeId"},
+    "attempt_id": {"$ref": "#/$defs/safeId"},
+    "run_nonce": {"$ref": "#/$defs/sha256"},
+    "failed_at_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "error_type": {"$ref": "#/$defs/nonEmptyText"},
+    "reason": {"const": "Kilo 后环境恢复门禁失败"},
+    "failure_digest": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "nonEmptyText": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    }
+  }
+}

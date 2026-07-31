@@ -1,0 +1,512 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-campaign-v1.json",
+  "title": "Codex 出站版本升级 Campaign 不可变核心清单",
+  "description": "Campaign 创建时只写一次，并由 campaign.sha256 封存。后续状态、候选身份、比较结果和验收门禁只能写入独立阶段收据，禁止回写本清单。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "created_at_utc",
+    "baseline_version",
+    "target_version",
+    "target_sha256",
+    "suite",
+    "official_identity",
+    "baseline_identity",
+    "tool_identity",
+    "inputs",
+    "analysis",
+    "configuration",
+    "required_rules",
+    "coverage_plan",
+    "jobs"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": "codex-upgrade-campaign/v1"
+    },
+    "campaign_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "created_at_utc": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "baseline_version": {
+      "$ref": "#/$defs/version"
+    },
+    "target_version": {
+      "$ref": "#/$defs/version"
+    },
+    "target_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "suite": {
+      "enum": [
+        "core",
+        "full"
+      ]
+    },
+    "official_identity": {
+      "$ref": "#/$defs/officialIdentity"
+    },
+    "baseline_identity": {
+      "$ref": "#/$defs/sourceIdentity"
+    },
+    "tool_identity": {
+      "$ref": "#/$defs/toolIdentity"
+    },
+    "inputs": {
+      "$ref": "#/$defs/inputs"
+    },
+    "analysis": {
+      "$ref": "#/$defs/analysis"
+    },
+    "configuration": {
+      "$ref": "#/$defs/configuration"
+    },
+    "required_rules": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/ruleId"
+      }
+    },
+    "coverage_plan": {
+      "$ref": "#/$defs/coveragePlan"
+    },
+    "jobs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/plannedJob"
+      }
+    }
+  },
+  "$defs": {
+    "nonEmptyText": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "nullableSha256": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/sha256"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "ruleId": {
+      "type": "string",
+      "pattern": "^SPEC-[A-Z0-9]+-[0-9]{3}$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "absolutePath": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "gitCommit": {
+      "oneOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40,64}$"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "fileBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "nullableFileBinding": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/fileBinding"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "sourceIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "source_tree_sha256",
+        "egress_inventory_sha256",
+        "cargo_lock_sha256",
+        "git_commit"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "source_tree_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "egress_inventory_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "cargo_lock_sha256": {
+          "$ref": "#/$defs/nullableSha256"
+        },
+        "git_commit": {
+          "$ref": "#/$defs/gitCommit"
+        }
+      }
+    },
+    "officialIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cli_version",
+        "binary_sha256",
+        "source_tree_sha256",
+        "cargo_lock_sha256",
+        "git_commit",
+        "runtime_image",
+        "operating_system",
+        "architecture",
+        "tls_dependencies_sha256"
+      ],
+      "properties": {
+        "cli_version": {
+          "$ref": "#/$defs/version"
+        },
+        "binary_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "source_tree_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "cargo_lock_sha256": {
+          "$ref": "#/$defs/nullableSha256"
+        },
+        "git_commit": {
+          "$ref": "#/$defs/gitCommit"
+        },
+        "runtime_image": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "operating_system": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "architecture": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "tls_dependencies_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "toolFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "toolIdentity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "git_commit",
+        "entry_count",
+        "files_sha256",
+        "entries"
+      ],
+      "properties": {
+        "git_commit": {
+          "$ref": "#/$defs/gitCommit"
+        },
+        "entry_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "files_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "entries": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/toolFile"
+          }
+        }
+      }
+    },
+    "inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baseline_rules",
+        "discovery_scenarios",
+        "extra_jobs"
+      ],
+      "properties": {
+        "baseline_rules": {
+          "$ref": "#/$defs/fileBinding"
+        },
+        "discovery_scenarios": {
+          "$ref": "#/$defs/fileBinding"
+        },
+        "extra_jobs": {
+          "$ref": "#/$defs/nullableFileBinding"
+        }
+      }
+    },
+    "analysis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baseline-source",
+        "target-source",
+        "source-diff",
+        "baseline-surface"
+      ],
+      "properties": {
+        "baseline-source": {
+          "$ref": "#/$defs/fileBinding"
+        },
+        "target-source": {
+          "$ref": "#/$defs/fileBinding"
+        },
+        "source-diff": {
+          "$ref": "#/$defs/fileBinding"
+        },
+        "baseline-surface": {
+          "$ref": "#/$defs/fileBinding"
+        }
+      }
+    },
+    "configuration": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "baseline_source",
+        "target_source",
+        "baseline_evidence",
+        "runtime_image",
+        "model",
+        "capture_root",
+        "capture_container",
+        "service_container",
+        "keeper_container",
+        "postgres_container",
+        "redis_container",
+        "capture_codex_bin",
+        "relay_codex_bin",
+        "codex_account_id",
+        "api_key_id"
+      ],
+      "properties": {
+        "baseline_source": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "target_source": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "baseline_evidence": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "runtime_image": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "model": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "capture_root": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "capture_container": {
+          "$ref": "#/$defs/safeId"
+        },
+        "service_container": {
+          "$ref": "#/$defs/safeId"
+        },
+        "keeper_container": {
+          "$ref": "#/$defs/safeId"
+        },
+        "postgres_container": {
+          "$ref": "#/$defs/safeId"
+        },
+        "redis_container": {
+          "$ref": "#/$defs/safeId"
+        },
+        "capture_codex_bin": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "relay_codex_bin": {
+          "$ref": "#/$defs/absolutePath"
+        },
+        "codex_account_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "api_key_id": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "coveragePlan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "required_rule_count",
+        "official_unmapped",
+        "candidate_unmapped"
+      ],
+      "properties": {
+        "required_rule_count": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "official_unmapped": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/ruleId"
+          }
+        },
+        "candidate_unmapped": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/ruleId"
+          }
+        }
+      }
+    },
+    "plannedStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "argv",
+        "timeout"
+      ],
+      "properties": {
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/nonEmptyText"
+          }
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "plannedJob": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "phase",
+        "description",
+        "steps",
+        "evidence_roots",
+        "covers",
+        "scenario_ids"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/safeId"
+        },
+        "phase": {
+          "enum": [
+            "official",
+            "candidate"
+          ]
+        },
+        "description": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/plannedStep"
+          }
+        },
+        "evidence_roots": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/nonEmptyText"
+          }
+        },
+        "covers": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/ruleId"
+          }
+        },
+        "scenario_ids": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^A[0-9]{2}$"
+          }
+        }
+      }
+    }
+  }
+}

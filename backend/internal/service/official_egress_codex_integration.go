@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -226,6 +228,24 @@ func isOfficialCodexForceHTTPFallback(c *gin.Context) bool {
 	return exists && ok && enabled
 }
 
+// activeOfficialCodexVersion 从 registry 的 release 指针解析当前 active Codex 版本。
+// 端点级入口据此取版本而不写死常量：升级画像时只需登记新版本快照并调整 release
+// 指针，无需改动本文件或 §3.5.2 的其他共享接入点。
+func activeOfficialCodexVersion() (string, error) {
+	resolved, err := resolveOfficialClientProfile(
+		officialClientPurposeOpenAIOAuthResponsesHTTP,
+		officialClientProfileModeActive,
+	)
+	if err != nil {
+		return "", err
+	}
+	version := strings.TrimSpace(resolved.Build.Version)
+	if version == "" {
+		return "", fmt.Errorf("official client registry 未提供 Codex 版本")
+	}
+	return version, nil
+}
+
 // attachOfficialCodex0145EndpointRequest 为 models/images/search/realtime/wham/files
 // 等辅助端点绑定与主 Responses 相同的完整版本画像和调用级连接生命周期。
 // invocationID 为空时创建新调用；同一次业务重试重建请求时必须显式复用返回上下文中的 ID。
@@ -241,7 +261,11 @@ func attachOfficialCodex0145EndpointRequest(
 	if account == nil || !account.IsOpenAIOAuth() {
 		return nil, nil, fmt.Errorf("Codex 辅助端点只支持 OpenAI OAuth 账号")
 	}
-	endpoint, err := resolveCodex0145Endpoint(officialCodexVersion0145, endpointID)
+	version, err := activeOfficialCodexVersion()
+	if err != nil {
+		return nil, nil, err
+	}
+	endpoint, err := resolveCodex0145Endpoint(version, endpointID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -270,7 +294,7 @@ func attachOfficialCodex0145EndpointRequest(
 		InboundEndpoint:   req.URL.Path,
 		Transport:         OfficialEgressTransportHTTP,
 		UpstreamHost:      req.URL.Hostname(),
-		ProfileVersion:    officialCodexVersion0145,
+		ProfileVersion:    version,
 		ProfileMode:       officialClientProfileModeActive,
 		AccountType:       account.Type,
 		ProxyID:           proxyID,
@@ -418,7 +442,6 @@ func resolveOfficialCodex0145RuntimeStateFromSnapshot(
 	if !snapshot.OfficialClient {
 		return state, validateOfficialCodex0145RuntimeState(state)
 	}
-	state.RequestCompressionEnabled = snapshot.RequestCompressionEnabled
 	userAgent := snapshot.UserAgent
 	originator := snapshot.Originator
 	var selectedSurface *officialCodexSurfaceProfile
@@ -446,12 +469,21 @@ func resolveOfficialCodex0145RuntimeStateFromSnapshot(
 		}
 	}
 	if selectedSurface == nil {
-		return officialCodex0145RuntimeState{}, fmt.Errorf(
-			"Codex 0.145.0 入口必须是配对的 exec/TUI 身份：user-agent=%q originator=%q",
+		// 出站形态一律由账号绑定的 active 画像定型，入站声明的版本与平台对上游
+		// 不可见，因此任何官方或第三方入口都投影到该画像，不因身份对不上而拒绝
+		// 服务。此处曾经失败关闭，既误拒新版本客户端，也误拒真正的官方同版本
+		// 客户端——画像平台串固定为 Ubuntu，macOS/Windows 上的官方 CLI 同样
+		// 通不过完整线形校验。
+		logger.LegacyPrintf(
+			"service.official_egress_codex",
+			"[Codex] 入站身份未匹配 %s 画像 surface，按 active 画像投影出站：user-agent=%q originator=%q",
+			profile.Version,
 			userAgent,
 			originator,
 		)
+		return state, validateOfficialCodex0145RuntimeState(state)
 	}
+	state.RequestCompressionEnabled = snapshot.RequestCompressionEnabled
 	state.SurfaceID = selectedSurface.ID
 	state.TerminalToken = selectedTerminalToken
 	state.UserAgentSuffixEnabled = selectedSuffixEnabled
@@ -462,59 +494,78 @@ func resolveOfficialCodex0145RuntimeStateFromSnapshot(
 		if len(endpointIDs) > 0 {
 			endpointID = endpointIDs[0]
 		}
-		if originator != selectedSurface.InitialModelsOriginator ||
-			state.UserAgentSuffixEnabled ||
-			!selectedSurface.InitialModelsMayOmit ||
-			endpointID != codex0145EndpointID(officialCodexEndpointModels) {
-			return officialCodex0145RuntimeState{}, fmt.Errorf(
-				"Codex 0.145.0 入口必须是画像允许的进程阶段：surface=%q user-agent=%q originator=%q endpoint=%q",
+		// 启动首次 models 省略 originator 是官方真实行为（SPEC-HDR-005），仍需
+		// 识别以产生正确的进程阶段。其余不一致一律按画像 originator 出站：出站
+		// 值本就来自画像，入站写了什么不影响最终线序，不构成拒绝服务的理由。
+		if originator == selectedSurface.InitialModelsOriginator &&
+			!state.UserAgentSuffixEnabled &&
+			selectedSurface.InitialModelsMayOmit &&
+			endpointID == codex0145EndpointID(officialCodexEndpointModels) {
+			state.ProcessPhase = officialCodexProcessPhaseInitialModels
+			state.Originator = originator
+		} else {
+			logger.LegacyPrintf(
+				"service.official_egress_codex",
+				"[Codex] 入站 originator 与 %s 画像 surface %q 不一致，按画像值出站：originator=%q endpoint=%q",
+				profile.Version,
 				selectedSurface.ID,
-				userAgent,
 				originator,
 				endpointID,
 			)
 		}
-		state.ProcessPhase = officialCodexProcessPhaseInitialModels
-		state.Originator = originator
 	}
 
 	subagent := snapshot.Subagent
 	memgen := snapshot.MemoryGeneration
 	parentThreadID := snapshot.ParentThreadID
 	if subagent != "" || memgen != "" || parentThreadID != "" {
+		// 条件头只有在入站证据完整且自洽时才成立。证据缺失或冲突时按“条件不成立”
+		// 处理——不发这几个条件头，请求仍按画像出站；条件头是官方的条件性行为，
+		// 缺少它们产生的是合法形态，而拒绝服务不是。
 		var turnMetadata map[string]any
-		if err := json.Unmarshal([]byte(snapshot.TurnMetadata), &turnMetadata); err != nil {
-			return officialCodex0145RuntimeState{}, fmt.Errorf(
-				"Codex 0.145.0 条件头缺少可验证的 turn metadata：%w",
-				err,
-			)
-		}
+		metadataErr := json.Unmarshal([]byte(snapshot.TurnMetadata), &turnMetadata)
 		threadSource := officialOpenAIString(turnMetadata, "thread_source")
 		subagentKind := officialOpenAIString(turnMetadata, "subagent_kind")
 		metadataParent := officialOpenAIString(turnMetadata, "parent_thread_id")
-		if err := officialCodex0145ValidateSubagentRuntime(
+		subagentErr := officialCodex0145ValidateSubagentRuntime(
 			profile.Subagents,
 			subagent,
 			memgen,
 			threadSource,
 			subagentKind,
 			parentThreadID,
-		); err != nil {
-			return officialCodex0145RuntimeState{}, err
-		}
-		if memgen != "" {
-			state.ConditionalHeaders["x-openai-memgen-request"] = memgen
-		}
-		if subagent != "" {
-			state.ConditionalHeaders["x-openai-subagent"] = subagent
-		}
-		if metadataParent != parentThreadID {
-			return officialCodex0145RuntimeState{}, fmt.Errorf(
-				"Codex 0.145.0 parent thread 与 turn metadata 冲突",
+		)
+		switch {
+		case metadataErr != nil:
+			logger.LegacyPrintf(
+				"service.official_egress_codex",
+				"[Codex] 条件头缺少可验证的 turn metadata，按条件不成立出站：%v",
+				metadataErr,
 			)
-		}
-		if parentThreadID != "" {
-			state.ConditionalHeaders["x-codex-parent-thread-id"] = parentThreadID
+		case subagentErr != nil:
+			logger.LegacyPrintf(
+				"service.official_egress_codex",
+				"[Codex] 条件头不在 %s 画像声明范围，按条件不成立出站：%v",
+				profile.Version,
+				subagentErr,
+			)
+		case metadataParent != parentThreadID:
+			logger.LegacyPrintf(
+				"service.official_egress_codex",
+				"[Codex] parent thread 与 turn metadata 冲突，按条件不成立出站：header=%q metadata=%q",
+				parentThreadID,
+				metadataParent,
+			)
+		default:
+			if memgen != "" {
+				state.ConditionalHeaders["x-openai-memgen-request"] = memgen
+			}
+			if subagent != "" {
+				state.ConditionalHeaders["x-openai-subagent"] = subagent
+			}
+			if parentThreadID != "" {
+				state.ConditionalHeaders["x-codex-parent-thread-id"] = parentThreadID
+			}
 		}
 	}
 	if err := validateOfficialCodex0145RuntimeState(state); err != nil {
@@ -808,13 +859,33 @@ func officialCodex0145ProjectEndpointJSONBody(
 	if endpoint.Body.Encoding != "json" || !endpoint.Body.Closed {
 		return nil, fmt.Errorf("Codex 端点 %s 不是封闭 JSON 派生目标", endpoint.ID)
 	}
+	declared := make(map[string]struct{}, len(endpoint.Body.Fields))
 	projected := make(map[string]any, len(endpoint.Body.Fields))
 	order := make([]string, 0, len(endpoint.Body.Fields))
 	for _, field := range endpoint.Body.Fields {
+		declared[field.Name] = struct{}{}
 		order = append(order, field.Name)
 		if value, exists := payload[field.Name]; exists {
 			projected[field.Name] = value
 		}
+	}
+	// 画像闭集之外的顶层字段在此被抹掉。新版本客户端的新增字段正是从这里无声
+	// 消失的，表现为“功能不生效但请求成功”，必须留下可查信号——它同时也是
+	// “该做新版本画像了”的唯一运行时提示。
+	dropped := make([]string, 0, len(payload))
+	for name := range payload {
+		if _, ok := declared[name]; !ok {
+			dropped = append(dropped, name)
+		}
+	}
+	if len(dropped) > 0 {
+		sort.Strings(dropped)
+		logger.LegacyPrintf(
+			"service.official_egress_codex",
+			"[Codex] 端点 %s 的 body 投影丢弃画像闭集外字段：%s",
+			endpoint.ID,
+			strings.Join(dropped, ","),
+		)
 	}
 	encoded, err := marshalOfficialOrderedJSONObjectPreservingRaw(projected, order, original)
 	if err != nil {

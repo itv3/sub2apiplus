@@ -1,0 +1,316 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-egress-observed-profile-v2.json",
+  "title": "Codex 出站运行画像观测收据",
+  "description": "由机器 finalizer 根据 Sub2API 运行审计生成，绑定候选镜像、源码树、构建与部署身份，并保留可重放的生产者证明。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "campaign_id",
+    "attempt_id",
+    "run_nonce",
+    "attempt_started_at_utc",
+    "client_checkpoint_at_utc",
+    "candidate_id",
+    "target_version",
+    "profile_id",
+    "profile_digest",
+    "image_id",
+    "image_reference",
+    "source_tree_sha256",
+    "build_id",
+    "deployed_version",
+    "source",
+    "event_id",
+    "observed_at_utc",
+    "runtime_event",
+    "producer"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-egress-observed-profile/v2"
+    },
+    "status": {
+      "const": "active"
+    },
+    "campaign_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "attempt_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "run_nonce": {
+      "$ref": "#/$defs/runNonce"
+    },
+    "attempt_started_at_utc": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "client_checkpoint_at_utc": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "candidate_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "target_version": {
+      "$ref": "#/$defs/version"
+    },
+    "profile_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "profile_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "image_id": {
+      "$ref": "#/$defs/imageId"
+    },
+    "image_reference": {
+      "$ref": "#/$defs/immutableImage"
+    },
+    "source_tree_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "build_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "deployed_version": {
+      "$ref": "#/$defs/safeId"
+    },
+    "source": {
+      "const": "sub2api-runtime"
+    },
+    "event_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "observed_at_utc": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "runtime_event": {
+      "$ref": "#/$defs/fileBindingWithBytes"
+    },
+    "producer": {
+      "$ref": "#/$defs/producer"
+    }
+  },
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "runNonce": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "imageId": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "immutableImage": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._/:+-]*@sha256:[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "absolutePath": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "fileBindingWithBytes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "namedFileBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "properties": {
+        "name": {
+          "const": "runtime_audit"
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "canonicalArgument": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "tool",
+        "subcommand",
+        "canonical_arguments",
+        "input_bindings",
+        "command_sha256"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "codex-egress-receipt-producer/v1"
+        },
+        "tool": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "sha256"
+          ],
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/absolutePath"
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "subcommand": {
+          "const": "observed-profile"
+        },
+        "canonical_arguments": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "evidence_root",
+            "output",
+            "campaign_id",
+            "attempt_id",
+            "run_nonce",
+            "attempt_started_at_utc",
+            "client_checkpoint_at_utc",
+            "candidate_id",
+            "target_version",
+            "profile_id",
+            "profile_digest",
+            "image_id",
+            "image_reference",
+            "source_tree_sha256",
+            "build_id",
+            "deployed_version"
+          ],
+          "properties": {
+            "evidence_root": {
+              "$ref": "#/$defs/absolutePath"
+            },
+            "output": {
+              "$ref": "#/$defs/relativePath"
+            },
+            "campaign_id": {
+              "$ref": "#/$defs/safeId"
+            },
+            "attempt_id": {
+              "$ref": "#/$defs/safeId"
+            },
+            "run_nonce": {
+              "$ref": "#/$defs/runNonce"
+            },
+            "attempt_started_at_utc": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "client_checkpoint_at_utc": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "candidate_id": {
+              "$ref": "#/$defs/safeId"
+            },
+            "target_version": {
+              "$ref": "#/$defs/version"
+            },
+            "profile_id": {
+              "$ref": "#/$defs/safeId"
+            },
+            "profile_digest": {
+              "$ref": "#/$defs/sha256"
+            },
+            "image_id": {
+              "$ref": "#/$defs/imageId"
+            },
+            "image_reference": {
+              "$ref": "#/$defs/immutableImage"
+            },
+            "source_tree_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "build_id": {
+              "$ref": "#/$defs/safeId"
+            },
+            "deployed_version": {
+              "$ref": "#/$defs/safeId"
+            }
+          }
+        },
+        "input_bindings": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "$ref": "#/$defs/namedFileBinding"
+          }
+        },
+        "command_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}

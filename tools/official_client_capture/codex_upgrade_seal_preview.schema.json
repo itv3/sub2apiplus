@@ -1,0 +1,185 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-seal-preview-v1.json",
+  "title": "Codex 出站抓包 Seal 预览",
+  "description": "人工批准前由机器生成的联合事实摘要；批准值必须等于 review_sha256，预览本身不可回写。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "phase",
+    "candidate_id",
+    "attempt_id",
+    "attempt_digest",
+    "stage_payload_sha256",
+    "evidence_inventory_digest",
+    "assertion_manifest_sha256",
+    "restoration_report_sha256",
+    "status",
+    "review_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-upgrade-seal-preview/v1"
+    },
+    "campaign_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "phase": {
+      "enum": [
+        "official",
+        "candidate"
+      ]
+    },
+    "candidate_id": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/safeId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "attempt_id": {
+      "type": "string",
+      "pattern": "^[0-9]{8}T[0-9]{6}Z-[0-9a-f]{16}$"
+    },
+    "attempt_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "stage_payload_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "evidence_inventory_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "assertion_manifest_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "restoration_report_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "post_client_restoration_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "observed_profile_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "client_receipt_sha256": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kilo-compatible",
+        "kilo-responses"
+      ],
+      "properties": {
+        "kilo-compatible": {
+          "$ref": "#/$defs/sha256"
+        },
+        "kilo-responses": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "status": {
+      "const": "approval_required"
+    },
+    "review_sha256": {
+      "$ref": "#/$defs/sha256"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "phase": {
+            "const": "official"
+          }
+        },
+        "required": [
+          "phase"
+        ]
+      },
+      "then": {
+        "properties": {
+          "candidate_id": {
+            "const": null
+          }
+        },
+        "not": {
+          "anyOf": [
+            {
+              "properties": {
+                "post_client_restoration_sha256": {}
+              },
+              "required": [
+                "post_client_restoration_sha256"
+              ]
+            },
+            {
+              "properties": {
+                "observed_profile_sha256": {}
+              },
+              "required": [
+                "observed_profile_sha256"
+              ]
+            },
+            {
+              "properties": {
+                "client_receipt_sha256": {}
+              },
+              "required": [
+                "client_receipt_sha256"
+              ]
+            }
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "phase": {
+            "const": "candidate"
+          }
+        },
+        "required": [
+          "phase"
+        ]
+      },
+      "then": {
+        "required": [
+          "post_client_restoration_sha256",
+          "observed_profile_sha256",
+          "client_receipt_sha256"
+        ],
+        "properties": {
+          "candidate_id": {
+            "$ref": "#/$defs/safeId"
+          },
+          "post_client_restoration_sha256": {
+            "$ref": "#/$defs/sha256"
+          },
+          "observed_profile_sha256": {
+            "$ref": "#/$defs/sha256"
+          },
+          "client_receipt_sha256": {
+            "type": "object"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

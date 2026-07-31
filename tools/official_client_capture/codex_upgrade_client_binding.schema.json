@@ -1,0 +1,637 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-egress-client-binding-v2.json",
+  "title": "Codex 出站第三方客户端绑定收据",
+  "description": "由机器 finalizer 关联 Kilo 安装、入口、运行审计、响应 witness 与 usage 审计，证明请求由同一候选构建、部署和批准画像处理。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "campaign_id",
+    "attempt_id",
+    "run_nonce",
+    "attempt_started_at_utc",
+    "client_checkpoint_at_utc",
+    "client_id",
+    "client_version",
+    "protocol",
+    "entrypoint",
+    "model",
+    "candidate_id",
+    "target_version",
+    "profile_id",
+    "profile_digest",
+    "candidate_image_id",
+    "source_tree_sha256",
+    "build_id",
+    "deployed_version",
+    "request_evidence",
+    "response_evidence",
+    "request_proof",
+    "response_proof",
+    "raw_evidence",
+    "producer"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-egress-client-binding/v2"
+    },
+    "status": {
+      "const": "success"
+    },
+    "campaign_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "attempt_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "run_nonce": {
+      "$ref": "#/$defs/runNonce"
+    },
+    "attempt_started_at_utc": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "client_checkpoint_at_utc": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "client_id": {
+      "$ref": "#/$defs/clientId"
+    },
+    "client_version": {
+      "$ref": "#/$defs/nonEmptyText"
+    },
+    "protocol": {
+      "enum": [
+        "openai-compatible",
+        "openai-responses"
+      ]
+    },
+    "entrypoint": {
+      "enum": [
+        "/v1/chat/completions",
+        "/v1/responses"
+      ]
+    },
+    "model": {
+      "$ref": "#/$defs/nonEmptyText"
+    },
+    "candidate_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "target_version": {
+      "$ref": "#/$defs/version"
+    },
+    "profile_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "profile_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "candidate_image_id": {
+      "$ref": "#/$defs/imageId"
+    },
+    "source_tree_sha256": {
+      "$ref": "#/$defs/sha256"
+    },
+    "build_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "deployed_version": {
+      "$ref": "#/$defs/safeId"
+    },
+    "request_evidence": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/fileBindingWithBytes"
+      }
+    },
+    "response_evidence": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/fileBindingWithBytes"
+      }
+    },
+    "request_proof": {
+      "$ref": "#/$defs/requestProof"
+    },
+    "response_proof": {
+      "$ref": "#/$defs/responseProof"
+    },
+    "raw_evidence": {
+      "$ref": "#/$defs/rawEvidence"
+    },
+    "producer": {
+      "$ref": "#/$defs/producer"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "client_id": {
+            "const": "kilo-compatible"
+          }
+        },
+        "required": [
+          "client_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "protocol": {
+            "const": "openai-compatible"
+          },
+          "entrypoint": {
+            "const": "/v1/chat/completions"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "client_id": {
+            "const": "kilo-responses"
+          }
+        },
+        "required": [
+          "client_id"
+        ]
+      },
+      "then": {
+        "properties": {
+          "protocol": {
+            "const": "openai-responses"
+          },
+          "entrypoint": {
+            "const": "/v1/responses"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "nonEmptyText": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "clientId": {
+      "enum": [
+        "kilo-compatible",
+        "kilo-responses"
+      ]
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "runNonce": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "imageId": {
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "absolutePath": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "fileBindingWithBytes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "requestProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "source",
+        "request_id",
+        "campaign_id",
+        "attempt_id",
+        "run_nonce",
+        "client_id",
+        "client_version",
+        "protocol",
+        "entrypoint",
+        "model",
+        "candidate_id",
+        "target_version",
+        "auth_mode",
+        "oauth_account_id",
+        "profile_id",
+        "profile_digest",
+        "candidate_image_id",
+        "upstream_endpoint",
+        "transport",
+        "affected_branches",
+        "observed_at_utc"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "codex-egress-client-request-evidence/v1"
+        },
+        "source": {
+          "const": "sub2api-runtime-audit"
+        },
+        "request_id": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "campaign_id": {
+          "$ref": "#/$defs/safeId"
+        },
+        "attempt_id": {
+          "$ref": "#/$defs/safeId"
+        },
+        "run_nonce": {
+          "$ref": "#/$defs/runNonce"
+        },
+        "client_id": {
+          "$ref": "#/$defs/clientId"
+        },
+        "client_version": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "protocol": {
+          "enum": [
+            "openai-compatible",
+            "openai-responses"
+          ]
+        },
+        "entrypoint": {
+          "enum": [
+            "/v1/chat/completions",
+            "/v1/responses"
+          ]
+        },
+        "model": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "candidate_id": {
+          "$ref": "#/$defs/safeId"
+        },
+        "target_version": {
+          "$ref": "#/$defs/version"
+        },
+        "auth_mode": {
+          "const": "oauth"
+        },
+        "oauth_account_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "profile_id": {
+          "$ref": "#/$defs/safeId"
+        },
+        "profile_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "candidate_image_id": {
+          "$ref": "#/$defs/imageId"
+        },
+        "upstream_endpoint": {
+          "type": "string",
+          "pattern": "^/"
+        },
+        "transport": {
+          "enum": [
+            "http",
+            "websocket"
+          ]
+        },
+        "affected_branches": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "http",
+              "websocket",
+              "lite",
+              "models",
+              "cache",
+              "prewarm",
+              "fallback"
+            ]
+          }
+        },
+        "observed_at_utc": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "responseProof": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "source",
+        "request_id",
+        "campaign_id",
+        "attempt_id",
+        "run_nonce",
+        "client_id",
+        "candidate_id",
+        "status",
+        "http_status",
+        "response_id",
+        "usage_recorded",
+        "usage_id",
+        "usage_account_id",
+        "completed_at_utc"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "codex-egress-client-response-evidence/v1"
+        },
+        "source": {
+          "const": "sub2api-usage-audit"
+        },
+        "request_id": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "campaign_id": {
+          "$ref": "#/$defs/safeId"
+        },
+        "attempt_id": {
+          "$ref": "#/$defs/safeId"
+        },
+        "run_nonce": {
+          "$ref": "#/$defs/runNonce"
+        },
+        "client_id": {
+          "$ref": "#/$defs/clientId"
+        },
+        "candidate_id": {
+          "$ref": "#/$defs/safeId"
+        },
+        "status": {
+          "const": "success"
+        },
+        "http_status": {
+          "type": "integer",
+          "minimum": 200,
+          "maximum": 299
+        },
+        "response_id": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "usage_recorded": {
+          "const": true
+        },
+        "usage_id": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "usage_account_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "completed_at_utc": {
+          "$ref": "#/$defs/timestamp"
+        }
+      }
+    },
+    "rawEvidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "installation",
+        "ingress",
+        "response_witness",
+        "runtime_audit",
+        "usage_audit"
+      ],
+      "properties": {
+        "installation": {
+          "$ref": "#/$defs/fileBindingWithBytes"
+        },
+        "ingress": {
+          "$ref": "#/$defs/fileBindingWithBytes"
+        },
+        "response_witness": {
+          "$ref": "#/$defs/fileBindingWithBytes"
+        },
+        "runtime_audit": {
+          "$ref": "#/$defs/fileBindingWithBytes"
+        },
+        "usage_audit": {
+          "$ref": "#/$defs/fileBindingWithBytes"
+        }
+      }
+    },
+    "namedFileBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "properties": {
+        "name": {
+          "enum": [
+            "installation",
+            "ingress",
+            "response_witness",
+            "runtime_audit",
+            "usage_audit"
+          ]
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "canonicalArgument": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "tool",
+        "subcommand",
+        "canonical_arguments",
+        "input_bindings",
+        "command_sha256"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "codex-egress-receipt-producer/v1"
+        },
+        "tool": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "sha256"
+          ],
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/absolutePath"
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "subcommand": {
+          "const": "kilo-binding"
+        },
+        "canonical_arguments": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "evidence_root",
+            "output",
+            "campaign_id",
+            "attempt_id",
+            "run_nonce",
+            "attempt_started_at_utc",
+            "client_checkpoint_at_utc",
+            "client_id",
+            "candidate_id",
+            "target_version",
+            "profile_id",
+            "profile_digest",
+            "candidate_image_id",
+            "source_tree_sha256",
+            "build_id",
+            "deployed_version",
+            "model"
+          ],
+          "properties": {
+            "evidence_root": {
+              "$ref": "#/$defs/absolutePath"
+            },
+            "output": {
+              "$ref": "#/$defs/relativePath"
+            },
+            "campaign_id": {
+              "$ref": "#/$defs/safeId"
+            },
+            "attempt_id": {
+              "$ref": "#/$defs/safeId"
+            },
+            "run_nonce": {
+              "$ref": "#/$defs/runNonce"
+            },
+            "attempt_started_at_utc": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "client_checkpoint_at_utc": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "client_id": {
+              "$ref": "#/$defs/clientId"
+            },
+            "candidate_id": {
+              "$ref": "#/$defs/safeId"
+            },
+            "target_version": {
+              "$ref": "#/$defs/version"
+            },
+            "profile_id": {
+              "$ref": "#/$defs/safeId"
+            },
+            "profile_digest": {
+              "$ref": "#/$defs/sha256"
+            },
+            "candidate_image_id": {
+              "$ref": "#/$defs/imageId"
+            },
+            "source_tree_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "build_id": {
+              "$ref": "#/$defs/safeId"
+            },
+            "deployed_version": {
+              "$ref": "#/$defs/safeId"
+            },
+            "model": {
+              "$ref": "#/$defs/nonEmptyText"
+            }
+          }
+        },
+        "input_bindings": {
+          "type": "array",
+          "minItems": 5,
+          "maxItems": 5,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/namedFileBinding"
+          }
+        },
+        "command_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}

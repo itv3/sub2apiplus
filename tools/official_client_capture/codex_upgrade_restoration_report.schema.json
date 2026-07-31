@@ -1,0 +1,616 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-egress-restoration-report-v2.json",
+  "title": "Codex 出站抓包环境恢复报告",
+  "description": "由机器 finalizer 对五类前后状态执行字节相等或数据库前置主键子集比较，并绑定全部输入字节与可重放生产者身份。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "phase",
+    "candidate_id",
+    "status",
+    "checks",
+    "producer"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-egress-restoration-report/v2"
+    },
+    "phase": {
+      "enum": [
+        "official",
+        "candidate"
+      ]
+    },
+    "candidate_id": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/safeId"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "status": {
+      "const": "restored"
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 5,
+      "maxItems": 5,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/restorationCheck"
+      },
+      "allOf": [
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "service_state_restored"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "container_state_restored"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "database_state_preserved"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "account_state_preserved"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        },
+        {
+          "contains": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "const": "configuration_state_restored"
+              }
+            },
+            "required": [
+              "id"
+            ]
+          },
+          "minContains": 1,
+          "maxContains": 1
+        }
+      ]
+    },
+    "producer": {
+      "$ref": "#/$defs/producer"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "phase": {
+            "const": "official"
+          }
+        },
+        "required": [
+          "phase"
+        ]
+      },
+      "then": {
+        "properties": {
+          "candidate_id": {
+            "const": null
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "phase": {
+            "const": "candidate"
+          }
+        },
+        "required": [
+          "phase"
+        ]
+      },
+      "then": {
+        "properties": {
+          "candidate_id": {
+            "$ref": "#/$defs/safeId"
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "absolutePath": {
+      "type": "string",
+      "pattern": "^/"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "fileBindingWithBytes": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "restorationEvidenceRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "role",
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "properties": {
+        "role": {
+          "enum": [
+            "before",
+            "after"
+          ]
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "restorationEvidenceRefs": {
+      "type": "array",
+      "minItems": 2,
+      "maxItems": 2,
+      "prefixItems": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/restorationEvidenceRef"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "role": {
+                  "const": "before"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/restorationEvidenceRef"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "role": {
+                  "const": "after"
+                }
+              }
+            }
+          ]
+        }
+      ],
+      "items": false
+    },
+    "byteState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "sha256",
+        "bytes"
+      ],
+      "properties": {
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "nullableNonnegativeInteger": {
+      "oneOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "watermarkState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "before_max_id",
+        "before_row_count",
+        "after_max_id",
+        "after_row_count"
+      ],
+      "properties": {
+        "before_max_id": {
+          "$ref": "#/$defs/nullableNonnegativeInteger"
+        },
+        "before_row_count": {
+          "$ref": "#/$defs/nullableNonnegativeInteger"
+        },
+        "after_max_id": {
+          "$ref": "#/$defs/nullableNonnegativeInteger"
+        },
+        "after_row_count": {
+          "$ref": "#/$defs/nullableNonnegativeInteger"
+        }
+      }
+    },
+    "databaseState": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "before_snapshot_sha256",
+        "after_snapshot_sha256",
+        "required_primary_key_count",
+        "after_primary_key_count",
+        "verified_primary_key_count",
+        "missing_primary_key_count",
+        "primary_key_fingerprints_sha256",
+        "watermarks"
+      ],
+      "properties": {
+        "before_snapshot_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "after_snapshot_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "required_primary_key_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "after_primary_key_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "verified_primary_key_count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "missing_primary_key_count": {
+          "const": 0
+        },
+        "primary_key_fingerprints_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "watermarks": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ops_error_logs": {
+              "$ref": "#/$defs/watermarkState"
+            },
+            "ops_system_logs": {
+              "$ref": "#/$defs/watermarkState"
+            },
+            "usage_logs": {
+              "$ref": "#/$defs/watermarkState"
+            }
+          }
+        }
+      }
+    },
+    "restorationCheckBase": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "comparator",
+        "passed",
+        "expected",
+        "actual",
+        "evidence_refs"
+      ],
+      "properties": {
+        "id": {
+          "enum": [
+            "service_state_restored",
+            "container_state_restored",
+            "database_state_preserved",
+            "account_state_preserved",
+            "configuration_state_restored"
+          ]
+        },
+        "comparator": {
+          "enum": [
+            "byte_equal",
+            "before_subset"
+          ]
+        },
+        "passed": {
+          "const": true
+        },
+        "expected": {
+          "type": "object"
+        },
+        "actual": {
+          "type": "object"
+        },
+        "evidence_refs": {
+          "$ref": "#/$defs/restorationEvidenceRefs"
+        }
+      }
+    },
+    "restorationCheck": {
+      "oneOf": [
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/restorationCheckBase"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "enum": [
+                    "service_state_restored",
+                    "container_state_restored",
+                    "account_state_preserved",
+                    "configuration_state_restored"
+                  ]
+                },
+                "comparator": {
+                  "const": "byte_equal"
+                },
+                "expected": {
+                  "$ref": "#/$defs/byteState"
+                },
+                "actual": {
+                  "$ref": "#/$defs/byteState"
+                }
+              }
+            }
+          ]
+        },
+        {
+          "allOf": [
+            {
+              "$ref": "#/$defs/restorationCheckBase"
+            },
+            {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "const": "database_state_preserved"
+                },
+                "comparator": {
+                  "const": "before_subset"
+                },
+                "expected": {
+                  "$ref": "#/$defs/databaseState"
+                },
+                "actual": {
+                  "$ref": "#/$defs/databaseState"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "namedFileBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "properties": {
+        "name": {
+          "enum": [
+            "service_before",
+            "service_after",
+            "container_before",
+            "container_after",
+            "database_before",
+            "database_after",
+            "account_before",
+            "account_after",
+            "configuration_before",
+            "configuration_after"
+          ]
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "canonicalArgument": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "integer"
+        },
+        {
+          "type": "boolean"
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "tool",
+        "subcommand",
+        "canonical_arguments",
+        "input_bindings",
+        "command_sha256"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "codex-egress-receipt-producer/v1"
+        },
+        "tool": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "sha256"
+          ],
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/absolutePath"
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "subcommand": {
+          "const": "restoration"
+        },
+        "canonical_arguments": {
+          "type": "object",
+          "required": [
+            "evidence_root",
+            "output",
+            "phase",
+            "candidate_id"
+          ],
+          "properties": {
+            "evidence_root": {
+              "$ref": "#/$defs/absolutePath"
+            },
+            "output": {
+              "$ref": "#/$defs/relativePath"
+            },
+            "phase": {
+              "enum": [
+                "official",
+                "candidate"
+              ]
+            },
+            "candidate_id": {
+              "oneOf": [
+                {
+                  "$ref": "#/$defs/safeId"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/canonicalArgument"
+          }
+        },
+        "input_bindings": {
+          "type": "array",
+          "minItems": 10,
+          "maxItems": 10,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/namedFileBinding"
+          }
+        },
+        "command_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    }
+  }
+}

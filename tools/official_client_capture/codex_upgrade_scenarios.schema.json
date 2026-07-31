@@ -1,0 +1,361 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-scenarios-v1.json",
+  "title": "Codex 出站版本化场景清单",
+  "description": "把目标 Codex 版本的场景、任务命令、环境模板、证据根和规则覆盖从编排器代码中移到不可变机器清单。编排器只负责变量替换、执行、恢复和封存，不应按 Codex 版本增加条件分支。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "codex_version",
+    "profile_id",
+    "source_spec",
+    "rule_manifest",
+    "variable_contract",
+    "evidence_scenarios",
+    "capture_jobs",
+    "required_client_bindings"
+  ],
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "minLength": 1
+    },
+    "schema_version": {
+      "const": "codex-upgrade-scenarios/v1"
+    },
+    "codex_version": {
+      "$ref": "#/$defs/version"
+    },
+    "profile_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "source_spec": {
+      "$ref": "#/$defs/sourceBinding"
+    },
+    "rule_manifest": {
+      "$ref": "#/$defs/ruleManifestBinding"
+    },
+    "variable_contract": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/variable"
+      }
+    },
+    "evidence_scenarios": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/evidenceScenario"
+      }
+    },
+    "capture_jobs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/captureJob"
+      }
+    },
+    "required_client_bindings": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/safeId"
+      },
+      "allOf": [
+        {
+          "contains": {
+            "const": "kilo-compatible"
+          }
+        },
+        {
+          "contains": {
+            "const": "kilo-responses"
+          }
+        }
+      ]
+    }
+  },
+  "$defs": {
+    "nonEmptyText": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "ruleId": {
+      "type": "string",
+      "pattern": "^SPEC-[A-Z0-9]+-[0-9]{3}$"
+    },
+    "scenarioId": {
+      "type": "string",
+      "pattern": "^A[0-9]{2}$"
+    },
+    "fileBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "sourceBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "fragment",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "fragment": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "ruleManifestBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256",
+        "rule_count"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "rule_count": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "variable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "type",
+        "required",
+        "sensitive",
+        "description"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "type": {
+          "enum": [
+            "string",
+            "integer",
+            "absolute_path",
+            "sha256",
+            "image_reference"
+          ]
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "sensitive": {
+          "type": "boolean"
+        },
+        "default": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "integer"
+            }
+          ]
+        },
+        "description": {
+          "$ref": "#/$defs/nonEmptyText"
+        }
+      }
+    },
+    "evidenceScenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenario_id",
+        "description",
+        "trigger",
+        "preconditions",
+        "required_artifact_kinds",
+        "covers"
+      ],
+      "properties": {
+        "scenario_id": {
+          "$ref": "#/$defs/scenarioId"
+        },
+        "description": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "trigger": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "preconditions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/nonEmptyText"
+          }
+        },
+      "required_artifact_kinds": {
+        "type": "array",
+        "minItems": 1,
+        "uniqueItems": true,
+        "items": {
+          "$ref": "#/$defs/nonEmptyText"
+          }
+        },
+        "covers": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/ruleId"
+          }
+        }
+      }
+    },
+    "commandStep": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "argv",
+        "environment",
+        "timeout_seconds"
+      ],
+      "properties": {
+        "argv": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/nonEmptyText"
+          }
+        },
+      "environment": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "string"
+        }
+        },
+      "timeout_seconds": {
+        "type": "integer",
+        "minimum": 1
+        }
+      }
+    },
+    "captureJob": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "phase",
+        "suites",
+        "scenario_ids",
+        "description",
+        "required",
+        "steps",
+        "evidence_roots",
+        "covers"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/safeId"
+        },
+        "phase": {
+          "enum": [
+            "official",
+            "candidate"
+          ]
+        },
+      "suites": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+            "enum": [
+              "core",
+              "full"
+            ]
+          }
+        },
+        "scenario_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/scenarioId"
+          }
+        },
+        "description": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "required": {
+          "type": "boolean"
+        },
+        "steps": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/commandStep"
+          }
+        },
+        "evidence_roots": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/nonEmptyText"
+          }
+        },
+      "covers": {
+        "type": "array",
+        "minItems": 1,
+        "items": {
+            "$ref": "#/$defs/ruleId"
+          }
+        }
+      }
+    }
+  }
+}

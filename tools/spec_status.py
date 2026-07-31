@@ -174,20 +174,19 @@ def render_summary(items) -> str:
         + len(MECHANISM_ITEMS)
         + len(EVIDENCE_RECORDS)
     )
-    current_oauth = oauth[COLS[0]]
-    full_oauth = len(OAUTH_RULES)
+    verified_oauth = oauth[COLS[0]]
+    required_oauth = len(OAUTH_RULES)
     mechanism_total = len(MECHANISM_ITEMS)
-    current_alignment = current_oauth + mechanism_total
-    full_alignment = full_oauth + mechanism_total
+    required_alignment = required_oauth + mechanism_total
     return f"""<!-- SPEC_STATUS_START -->
 | 分组 | 条数 | 当前验证状态 | Sub2API 需对齐项 |
 |---|---:|---|---:|
-| **① 内置 OpenAI OAuth 可见规则** | **{full_oauth}** | ✅ {current_oauth}；🟡 {oauth[COLS[1]]} | **当前 {current_oauth}；完整 Voice/realtime 后 {full_oauth}** |
+| **① 内置 OpenAI OAuth 可见规则** | **{required_oauth}** | ✅ {verified_oauth}；🟡 {oauth[COLS[1]]} | **{required_oauth}** |
 | **② 自定义 CA 条件分支** | **{len(CA_RULES)}** | ✅ {ca[COLS[0]]}；🟡 {ca[COLS[1]]} | **0** |
 | **③ 自定义 provider 条件分支** | **{len(CUSTOM_PROVIDER_RULES)}** | ✅ {custom[COLS[0]]}；🟡 {custom[COLS[1]]} | **0** |
 | **④ 派生／内部机制说明** | **{mechanism_total}** | 源码机制 | **{mechanism_total}** |
 | **⑤ 采集与观测记录** | **{len(EVIDENCE_RECORDS)}** | 观测记录 | **0** |
-| **合计** | **{total}** | — | **当前 {current_alignment}；完整 Voice/realtime 后 {full_alignment}** |
+| **合计** | **{total}** | — | **{required_alignment}** |
 <!-- SPEC_STATUS_END -->"""
 
 

@@ -2,7 +2,7 @@
   "schema_version": "codex-candidate-rule-expectations/v1",
   "codex_version": "0.145.0",
   "source_spec": "docs/CODEX_CLI_0145_EGRESS_SPEC.md#第二章",
-  "source_spec_sha256": "43331e18d10b2e163ec3f1b61ae575f5e006358b05d9c9330040b55df02a9eb7",
+  "source_spec_sha256": "81f0a20f97edfa700e6d379966192a860dcb41706329aaaa22c2549d7f0e16ae",
   "scenarios": [
     {
       "scenario_id": "A01",

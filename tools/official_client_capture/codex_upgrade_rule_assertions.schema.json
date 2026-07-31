@@ -1,0 +1,457 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-egress-rule-assertions-v1.json",
+  "title": "Codex 出站逐规则断言定义或验收结果",
+  "description": "definitions 直接采用 codex-candidate-rule-expectations/v1 冻结画像格式；results 同时绑定官方与候选两侧的原始证据、机器执行结果和命令。",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/definitionDocument"
+    },
+    {
+      "$ref": "#/$defs/resultDocument"
+    }
+  ],
+  "$defs": {
+    "nonEmptyText": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "checkId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9._-]*$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "ruleId": {
+      "type": "string",
+      "pattern": "^SPEC-[A-Z0-9]+-[0-9]{3}$"
+    },
+    "scenarioId": {
+      "type": "string",
+      "pattern": "^A[0-9]{2}$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "fileBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "predicate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "operator"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "operator": {
+          "enum": [
+            "equal",
+            "not_equal",
+            "present",
+            "absent",
+            "contains",
+            "in",
+            "match",
+            "subset"
+          ]
+        },
+        "value": true
+      }
+    },
+    "selector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "record_type"
+      ],
+      "properties": {
+        "record_type": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_]*$"
+        },
+        "scenario_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/scenarioId"
+          }
+        },
+        "where": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/predicate"
+          }
+        }
+      }
+    },
+    "assertion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "operator"
+      ],
+      "properties": {
+        "operator": {
+          "enum": [
+            "all_absent",
+            "all_contains",
+            "all_equal",
+            "all_fields_equal",
+            "all_list_all_different",
+            "all_list_all_same",
+            "all_list_prefix",
+            "all_list_suffix",
+            "all_lowercase",
+            "all_match",
+            "all_not_contains",
+            "all_ordered_subset_of",
+            "all_subset",
+            "any_equal",
+            "any_subset",
+            "count_at_least",
+            "count_equal",
+            "distinct_count_at_least",
+            "distinct_values_equal",
+            "none_subset",
+            "same_set_distinct_order"
+          ]
+        },
+        "path": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "left_path": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "right_path": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "value": true,
+        "allowed": {
+          "type": "array"
+        },
+        "required": {
+          "type": "array"
+        },
+        "minimum_records": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "minimum_artifacts": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "minimum_distinct_orders": {
+          "type": "integer",
+          "minimum": 2
+        }
+      }
+    },
+    "checkDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "description",
+        "select",
+        "assertion"
+      ],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/checkId"
+        },
+        "description": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "select": {
+          "$ref": "#/$defs/selector"
+        },
+        "assertion": {
+          "$ref": "#/$defs/assertion"
+        }
+      }
+    },
+    "scenarioDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenario_id",
+        "description",
+        "trigger",
+        "preconditions",
+        "required_artifact_kinds"
+      ],
+      "properties": {
+        "scenario_id": {
+          "$ref": "#/$defs/scenarioId"
+        },
+        "description": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "trigger": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "preconditions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/nonEmptyText"
+          }
+        },
+        "required_artifact_kinds": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/nonEmptyText"
+          }
+        }
+      }
+    },
+    "ruleDefinition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule_id",
+        "scenario_ids",
+        "description",
+        "checks"
+      ],
+      "properties": {
+        "rule_id": {
+          "$ref": "#/$defs/ruleId"
+        },
+        "scenario_ids": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "$ref": "#/$defs/scenarioId"
+          }
+        },
+        "description": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "checks": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/checkDefinition"
+          }
+        }
+      }
+    },
+    "definitionDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "codex_version",
+        "source_spec",
+        "source_spec_sha256",
+        "scenarios",
+        "rules"
+      ],
+      "properties": {
+        "$schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema_version": {
+          "const": "codex-candidate-rule-expectations/v1"
+        },
+        "codex_version": {
+          "$ref": "#/$defs/version"
+        },
+        "source_spec": {
+          "type": "string",
+          "minLength": 3,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+#\\S+$"
+        },
+        "source_spec_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "scenarios": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/scenarioDefinition"
+          }
+        },
+        "rules": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/ruleDefinition"
+          }
+        }
+      }
+    },
+    "command": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "$ref": "#/$defs/nonEmptyText"
+      }
+    },
+    "assertionIds": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/checkId"
+      }
+    },
+    "evidenceBindings": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/fileBinding"
+      }
+    },
+    "ruleResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule",
+        "status",
+        "official_evidence_refs",
+        "candidate_evidence_refs",
+        "official_machine_result",
+        "candidate_machine_result",
+        "official_command",
+        "candidate_command",
+        "positive_assertions",
+        "negative_assertions",
+        "evidence_level",
+        "rationale"
+      ],
+      "properties": {
+        "rule": {
+          "$ref": "#/$defs/ruleId"
+        },
+        "status": {
+          "const": "pass"
+        },
+        "official_evidence_refs": {
+          "$ref": "#/$defs/evidenceBindings"
+        },
+        "candidate_evidence_refs": {
+          "$ref": "#/$defs/evidenceBindings"
+        },
+        "official_machine_result": {
+          "$ref": "#/$defs/fileBinding"
+        },
+        "candidate_machine_result": {
+          "$ref": "#/$defs/fileBinding"
+        },
+        "official_command": {
+          "$ref": "#/$defs/command"
+        },
+        "candidate_command": {
+          "$ref": "#/$defs/command"
+        },
+        "positive_assertions": {
+          "$ref": "#/$defs/assertionIds"
+        },
+        "negative_assertions": {
+          "$ref": "#/$defs/assertionIds"
+        },
+        "evidence_level": {
+          "const": "full"
+        },
+        "rationale": {
+          "$ref": "#/$defs/nonEmptyText"
+        }
+      }
+    },
+    "resultDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "document_kind",
+        "candidate_id",
+        "target_version",
+        "profile_id",
+        "profile_digest",
+        "official_package_digest",
+        "candidate_package_digest",
+        "comparison_package_digest",
+        "rules"
+      ],
+      "properties": {
+        "$schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema_version": {
+          "const": "codex-egress-rule-assertions/v1"
+        },
+        "document_kind": {
+          "const": "results"
+        },
+        "candidate_id": {
+          "$ref": "#/$defs/safeId"
+        },
+        "target_version": {
+          "$ref": "#/$defs/version"
+        },
+        "profile_id": {
+          "$ref": "#/$defs/safeId"
+        },
+        "profile_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "official_package_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "candidate_package_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "comparison_package_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "rules": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/ruleResult"
+          }
+        }
+      }
+    }
+  }
+}

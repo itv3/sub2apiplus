@@ -1,0 +1,167 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-egress-rule-assertion-template-v1.json",
+  "title": "Codex 出站逐规则断言执行模板",
+  "description": "compare 阶段生成的只读工作模板；SHA-256、检查 ID 与最终状态必须在双侧 checker 执行后写入独立 results.json，模板本身不能被 accept。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "document_kind",
+    "candidate_id",
+    "target_version",
+    "profile_id",
+    "profile_digest",
+    "official_package_digest",
+    "candidate_package_digest",
+    "comparison_package_digest",
+    "rules"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-egress-rule-assertion-template/v1"
+    },
+    "document_kind": {
+      "const": "template"
+    },
+    "candidate_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "target_version": {
+      "$ref": "#/$defs/version"
+    },
+    "profile_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "profile_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "official_package_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "candidate_package_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "comparison_package_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "rules": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/templateRule"
+      }
+    }
+  },
+  "$defs": {
+    "nonEmptyText": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "ruleId": {
+      "type": "string",
+      "pattern": "^SPEC-[A-Z0-9]+-[0-9]{3}$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "pendingFileBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "type": "null"
+        }
+      }
+    },
+    "command": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "$ref": "#/$defs/nonEmptyText"
+      }
+    },
+    "emptyArray": {
+      "type": "array",
+      "maxItems": 0
+    },
+    "templateRule": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule",
+        "status",
+        "official_evidence_refs",
+        "candidate_evidence_refs",
+        "official_machine_result",
+        "candidate_machine_result",
+        "official_command",
+        "candidate_command",
+        "positive_assertions",
+        "negative_assertions",
+        "evidence_level",
+        "rationale"
+      ],
+      "properties": {
+        "rule": {
+          "$ref": "#/$defs/ruleId"
+        },
+        "status": {
+          "const": "blocked"
+        },
+        "official_evidence_refs": {
+          "$ref": "#/$defs/emptyArray"
+        },
+        "candidate_evidence_refs": {
+          "$ref": "#/$defs/emptyArray"
+        },
+        "official_machine_result": {
+          "$ref": "#/$defs/pendingFileBinding"
+        },
+        "candidate_machine_result": {
+          "$ref": "#/$defs/pendingFileBinding"
+        },
+        "official_command": {
+          "$ref": "#/$defs/command"
+        },
+        "candidate_command": {
+          "$ref": "#/$defs/command"
+        },
+        "positive_assertions": {
+          "$ref": "#/$defs/emptyArray"
+        },
+        "negative_assertions": {
+          "$ref": "#/$defs/emptyArray"
+        },
+        "evidence_level": {
+          "const": "unreviewed"
+        },
+        "rationale": {
+          "$ref": "#/$defs/nonEmptyText"
+        }
+      }
+    }
+  }
+}

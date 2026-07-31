@@ -984,11 +984,8 @@ HTTP 为 17-cipher + `http/1.1`，Codex HTTP 为 30-cipher + 空 ALPN，Codex WS
 
 ### 25.3 本地证据与完整性
 
-官方基准、Sub2API 候选出站、应用层比较和 direct TLS 原始证据已拉回本地：
-`/Users/czs/Developer/sub2apiplus/local-analysis/captures/official-egress-20260726/`。官方 manifest 所列
-152 个 artifact 已逐文件核对大小和 SHA-256；候选 direct summary 中的 pcap 已复算 SHA-256；
-目录另有总 `SHA256SUMS`。原始 Body、CLI 事件、日志和 pcap 属于私有敏感证据，已被 Git
-忽略并收紧目录权限。
+本节原始阶段抓包已被当前规则证据替代并清理。Codex CLI 0.145.0 的保留证据及完整性边界
+统一见 `docs/CODEX_CLI_0145_EGRESS_SPEC.md` 和 `docs/EVIDENCE_INDEX.md`。
 
 ## 26. 0.1.165-3 最终复核修复、生产切换与新证据
 
@@ -1025,8 +1022,5 @@ Codex `thread/compact/start` 的真实 0.145.0 wire 使用带 `compaction_trigge
 `/responses`，以第二个 `turn/completed` 完成，并不发送 `/responses/compact`。该控制面
 证据被单列，未冒充 compact 端点官方基准；compact 端点契约由专项代码测试覆盖。
 
-完整原始材料已拉回本地
-`/Users/czs/Developer/sub2apiplus/local-analysis/captures/official-egress-review-fix-20260727-062447/`，约
-257 MB。实际 API Key、#50/#90 access token 的远端与本地精确值扫描均为 0 命中；目录权限
-0700、文件权限 0600，并生成覆盖 561 个文件的 `SHA256SUMS`。完整范围、测试与未通过边界见
-`docs/P0-P2_OFFICIAL_EGRESS_REVIEW_FIX_20260727.md`。
+本节原始阶段抓包已被当前规则证据替代并清理。当前范围、测试、保留证据和未覆盖边界统一
+见 `docs/CODEX_CLI_0145_EGRESS_SPEC.md` 和 `docs/EVIDENCE_INDEX.md`。

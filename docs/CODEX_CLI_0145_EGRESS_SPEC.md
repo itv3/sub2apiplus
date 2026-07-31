@@ -1,251 +1,186 @@
-# Codex CLI 0.145.0 出站形态规格表
+# Codex CLI 0.145.0 出站规格、实现与演进手册
 
-版本绑定：`codex-cli 0.145.0`　依赖锁定：`hyper 1.8.1` / `hyper-util 0.1.20` / `http 1.4.0` / `tungstenite 0.27.0` / `h2 0.4.13` / `reqwest 0.12.28`
-末次更新 2026-07-30
+版本绑定：`codex-cli 0.145.0`<br>
+依赖锁定：`hyper 1.8.1` / `hyper-util 0.1.20` / `http 1.4.0` /
+`tungstenite 0.27.0` / `h2 0.4.13` / `reqwest 0.12.28`<br>
+末次更新：2026-07-31
 
-本文分三部分：
+本文是 Codex CLI 0.145.0 OpenAI OAuth 出站形态及 Sub2API 对齐工作的**唯一人类可读
+权威文档**。读完本文应能回答四个问题：
 
-- **一、背景与任务** —— 适用范围、证据口径与复核入口
-- **二、规则** —— 内置 OpenAI OAuth 39 条、自定义 CA 条件分支 8 条、
-  自定义 provider 条件分支 1 条，另有 3 条机制说明、2 条采集记录
-- **三、方案** —— 方案甲的实现、差异与边界，以及方案乙的评估结论
+1. 官方规则如何由源码、依赖和抓包形成；
+2. Codex CLI 0.145.0 的规则是什么；
+3. Sub2API 如何用版本画像驱动的 Go 薄层实现这些规则；
+4. Codex CLI 升级、合并 Sub2API 上游和重新验收时应怎样处理。
 
-> **审核入口**：先看第二部分导语和规则正文，再看
-> [`EVIDENCE_INDEX.md`](EVIDENCE_INDEX.md) 的逐项证据结论；需要重新解析样本或运行门禁时，
-> 执行 §1.2.1。
+原始源码、抓包、JSON Schema 和可执行工具仍是机器证据，不复制进 Markdown。本文会给出
+唯一入口、精确路径和证据边界；审核者理解完整逻辑不需要再阅读其他过程文档。
+`docs/EVIDENCE_INDEX.md` 是由工具生成的逐规则证据索引，不是另一份设计说明。
+
+| 部分 | 回答的问题 | 权威内容 |
+|---|---|---|
+| 第一部分 | 规则从哪里来、怎样复算 | 范围、证据、抓包、源码分析和规则准入 |
+| 第二部分 | 官方 0.145.0 是什么形态 | 53 个编号项原文，其中 42 项属于 Sub2API 对齐范围 |
+| 第三部分 | Sub2API 怎样实现 | 伪装架构、版本画像、运行链、文件台账和合并边界 |
+| 第四部分 | 下一版本怎样升级 | 五份版本清单、分阶段抓包、双侧断言、启用和回滚 |
 
 ---
 
-# 第一部分 背景与任务
+# 第一部分 规则如何形成
 
-## 1.1 这份文档是什么
+## 1.1 目标、范围与当前结论
 
-它描述**官方 Codex CLI 用 OAuth 凭据向 OpenAI 请求时，在线上产生的可观测形态**，
-以及 Sub2API 对每一项的对齐状态。**官方形态以本表为唯一事实源。**
+目标是让 Sub2API 使用 OpenAI OAuth 账号出站时，在第二部分规定的范围内产生与
+Codex CLI 0.145.0 一致的可观测形态。范围包括 TLS、协议协商、连接生命周期、
+HTTP/1.1、条件 HTTP/2、WebSocket、header、body、端点和跨请求状态。
 
-本表不记录修复过程。实现差异与验收见第三部分；代码变更明细见
-[官方出站 wire 一致性修复清单](OFFICIAL_EGRESS_WIRE_PARITY_FIX_20260727.md)。
+本版只描述：
 
-## 1.2 证据在哪（审核者先读这段）
+- 官方版本：`codex-cli 0.145.0`；
+- 凭据路径：内置 OpenAI OAuth；
+- 官方实测平台：第二部分各规则明确记录的平台和条件；
+- Sub2API 实现：版本画像驱动的 Go 薄层伪装；
+- 客户端入口：官方 Codex CLI，以及最终收敛到同一画像的 Compatible／Responses 入口。
 
-源码、依赖源码和抓包证据分别位于：
+Anthropic、OpenAI API Key mimic、其他供应商和可合法关闭的 plugins、apps、analytics、
+otel 流量不属于本版规则。自定义 CA 和自定义 provider 的条件分支仍保留在第二部分，
+但不计入内置 OAuth 的 42 项实现目标。
 
-| 证据 | 位置 | 约束 |
+本文共定义 53 个编号项，其中 39 条内置 OpenAI OAuth 可见规则和 3 条派生／内部机制属于
+Sub2API 对齐范围，合计 42 项；完整分类、验证状态和规则正文见第二部分。第二部分是规则
+定义的唯一事实源。规则数量不会因为抓包有限、实现困难或某次场景未触发而改变；证据充分度、
+实现状态和规则是否属于目标范围是三个独立维度。
+
+当前仓库已经完成 0.145.0 完整版本画像、稳定执行引擎以及官方／第三方入口的统一应用点；
+42/42 结论只绑定实际验收时冻结的源码树、镜像、画像摘要和封存证据，不能由发布版本号或
+当前工作树自动继承。
+
+## 1.2 证据位置与完整性
+
+| 证据层 | 位置 | 用途 |
 |---|---|---|
-| Codex CLI 源码 | `local-analysis/sources/codex-cli-0.145/codex-rs/` | 必须是 `0.145.0` 源码树 |
-| Sub2API 源码 | `backend/` | 引用必须带完整相对路径 |
-| L2 依赖源码 | `tools/spec_source_deps/` | 版本、提交及文件哈希由 `manifest.json` 锁定 |
-| 抓包证据 | `local-analysis/captures/` | 运行号与证明范围以 `EVIDENCE_INDEX.md` 为准 |
+| 官方生产源码 | `local-analysis/sources/codex-cli-0.145/codex-rs/` | 读取调用链、条件和内部机制 |
+| 锁定依赖源码 | `tools/spec_source_deps/` | 解释 hyper、h2、http、tungstenite 等线形行为 |
+| 官方抓包 | `local-analysis/captures/` | 证明运行时实际发出的 TLS、HTTP 和 WS 形态 |
+| Sub2API 源码 | `backend/` | 定位伪装实现的画像、执行器和上游接入点 |
+| 证据索引 | `docs/EVIDENCE_INDEX.md` | 机器生成的规则编号、运行号、路径和证据强度 |
+| 引用锚点 | `tools/spec_ref_anchors.json` | 防止源码版本、符号和行号静默漂移 |
 
-第二部分源码引用均使用相对路径和精确行号。裸文件名歧义、行号漂移、引用测试代码、
-L2 快照变化以及源码树版本不符都会使门禁失败。13 条纯 L2 规则
-（`SPEC-H1-001~004`、`SPEC-H2-001~007`、`SPEC-WS-001/002`）及
-`SPEC-WS-003` 的 L2 部分可通过本地快照离线复核；`tungstenite 0.27.0` 使用
-Cargo.lock 指定的 OpenAI fork 提交
-`4fffad30fe373adbdcffab9545e9e9bf4f2fc19f`。
+官方源码树、L2 依赖版本、抓包运行号和文件摘要必须同时绑定。只保存结论 JSON、截图、
+HTTP 200 或测试日志，不能替代可重新解析的原始证据。
 
-逐项结论见 [`EVIDENCE_INDEX.md`](EVIDENCE_INDEX.md) §1。源码证据为充分 41、部分 7、
-无／不适用 5；抓包证据为充分 50、有限 2、不适用 1。其中 52/53 项具有可重新解析的
-P/R 原始证据；`SPEC-HDR-001` 描述内部调用顺序，wire 在结构上不适用。源码证据强度、
-抓包证据强度和规则总体状态是三个独立维度。
+证据分为四种：
 
-### 1.2.1 既有证据的最小复现命令
+| 类型 | 内容 | 能证明什么 |
+|---|---|---|
+| **P** | 原始 pcap | ClientHello、SNI、TLS 扩展、连接时序等被动线索 |
+| **R** | 等长脱敏的中继原始字节 | HTTP/1.1 线序、body、WebSocket 握手和帧 |
+| **J** | JSON 解码摘要 | 只证明摘要实际保留的字段 |
+| **M** | manifest 绑定的脱敏分析 | 只证明清单绑定字段和摘要 |
 
-以下命令只复算已经归档的证据，不启动 Codex CLI、网络中继或抓包进程。命令分为依赖、
-R 类原始字节、P 类 pcap 和文档门禁四组；规则对应的运行号与目录由
-[`EVIDENCE_INDEX.md`](EVIDENCE_INDEX.md) 提供。新版本的一键采集与比较见第四部分。
+R 类对 Authorization、Cookie、账号和游标等值做等长替换，保持 header 名、大小写、偏移、
+长度和帧结构。未脱敏材料只能保留在采集机私有目录。样本若存在非预期单向或空连接，只能
+支持已观察到的正例，不能支持“从未出现”、连接总数或最大值等全称命题。
+
+## 1.3 从源码和抓包形成规则
+
+一条规则按以下顺序产生：
+
+1. **锁定版本与环境**：冻结官方源码、Cargo.lock、CLI 二进制、平台、配置和账号范围。
+2. **读取官方生产调用链**：从入口追到请求构造、认证、Client 生命周期、TLS 和依赖层；
+   测试代码只能作辅助，不得作为官方行为的唯一依据。
+3. **列出自变量与场景**：按传输、端点、Lite、压缩、状态、错误和配置分支形成场景矩阵。
+4. **选择观测通道**：TLS/SNI 使用 P；HTTP/WS 应用字节使用 R；结构化日志和 manifest
+   只能证明其保存字段。
+5. **双向验证**：既要从源码推导应观察什么，也要从抓包反查每个出站面由哪条生产路径产生。
+6. **收窄命题并编号**：写明范围、命题、可变性、源码、实测、实现要求、状态和证据边界。
+7. **执行完整性门禁**：检查引用、样本、规则分类、证据索引和未声明缺口。
+
+源码与运行证据正交：源码能说明机制和条件，不能单独证明平台 TLS 或最终线序；抓包能证明
+实际输出，不能自动解释内部来源。规则只有在两类证据达到其命题需要的强度后才能定型。
+
+## 1.4 证据等级、可变性与观测边界
+
+| 等级 | 含义 | 使用约束 |
+|---|---|---|
+| **L1** | 官方生产代码直读 | 必须确认处于生产调用链 |
+| **L2** | 锁定依赖的行为 | 必须绑定准确版本、feature 和提交 |
+| **L3** | 运行实测 | 用于源码无法给出的平台或 wire 事实 |
+| **L4** | 单元测试、mock、合成输入 | 只能辅助，不得单独定义官方规则 |
+
+规则中的“固定、随机、条件”分别表示每次一致、每次可变化、随明确自变量变化。随机项不能
+钉死为单一样本；条件项必须在真实条件下验证，不能把代理、CA 或失败注入后的结果外推到
+默认路径。
+
+观测遵守以下边界：
+
+- pcap 看不到加密后的 HTTP/WS 内容；中继字节不能替代客户端直连的 TLS 事实；
+- 验证域名全集时，过滤条件不得预先包含被测域名；
+- 自定义 CA 位于 HTTP TLS 选型上游，不能用于证明默认 TLS 画像；
+- 受控干预只证明客户端收到指定输入后的反应，不自动等于自然成功链；
+- plugins、apps、analytics、otel 等可关闭流量不作为必须出现的规则；
+- h2、MITM 或服务端重建的连接不能冒充客户端原始 HTTP/1.1 线序。
+
+## 1.5 证据复算、重新抓包与规则收口
+
+本节覆盖同一证据工作流的两种使用场景：审核已有证据时直接运行离线审计工具；发起新版本
+升级或重新验收时，通过统一编排入口启动新一轮抓包、比较和验收。两者不是平行工作流。
+
+**审核官方 0.145.0 已有证据。** 以下命令只重算已归档证据，不启动真实客户端或网络任务：
 
 ```bash
-# ① 解析依赖与样本完整性
-python3 -m pip install zstandard hpack
+# 样本完整性与中继字节解析
 python3 tools/official_client_capture/check_sample_integrity.py \
-    local-analysis/captures/raw-scrubbed/relay-imgedit1/relay
-
-# ② 从 R 类原始字节复现客户端→上游的 header、body 和帧形态
+  local-analysis/captures/raw-scrubbed/relay-imgedit1/relay
 python3 tools/official_client_capture/relay_extract.py \
-    --relay-dir local-analysis/captures/raw-scrubbed/relay-imgedit1/relay \
-    --output /tmp/check.json
+  --relay-dir local-analysis/captures/raw-scrubbed/relay-imgedit1/relay \
+  --output /tmp/codex-0145-relay-check.json
 
-# ③a SPEC-EP-002：普通会话、token 刷新和文件上传的 SNI
-python3 tools/official_client_capture/pcap_clienthello.py \
-    --dir local-analysis/captures/wire-parity-fix-20260727/official-baseline/oauth-ep002-allhosts/direct
-python3 tools/official_client_capture/pcap_clienthello.py \
-    --dir local-analysis/captures/wire-parity-fix-20260727/official-baseline/oauth-ep002-refresh/direct
-python3 tools/official_client_capture/pcap_clienthello.py \
-    --dir local-analysis/captures/raw-scrubbed/audit-ep002-file-upload-full2-20260730a/direct
-
-# ③b SPEC-TLS-001/003、SPEC-PROTO-001：解析默认 HTTP 与 WS ClientHello
+# TLS ClientHello、SNI 和 ALPN 复算
 python3 tools/official_client_capture/pcap_clienthello.py --by-subdir \
-    --dir local-analysis/captures/wire-parity-fix-20260727/official-baseline/oauth-20260727T091556Z-noplugins/direct
+  --dir local-analysis/captures/wire-parity-fix-20260727/official-baseline/oauth-20260727T091556Z-noplugins/direct
 
-# ③c SPEC-TLS-002：解析有效自定义 CA 下的 HTTP ClientHello
-python3 tools/official_client_capture/pcap_clienthello.py \
-    --dir local-analysis/captures/wire-parity-fix-20260727/official-baseline/audit-tls002-ca-n0-20260730a/direct
-
-# ④ 文档与证据门禁；全部命令必须零退出
+# 文档、源码引用和证据门禁
 python3 tools/check_spec_refs.py --symbol --cfg-test
 python3 tools/spec_status.py --check
 python3 tools/check_sample_counts.py
 python3 tools/evidence_index.py --check
 python3 tools/check_gaps.py
 python3 -m unittest tools/test_check_spec_refs.py
+
+# 实现侧门禁：台账完整性与版本标识符泄漏
+python3 tools/check_ledger_completeness.py
+python3 tools/check_version_leak.py
 ```
 
-③a 的普通会话、刷新和上传样本分别给出 `chatgpt.com`、`auth.openai.com` 和动态
-`oaiusercontent.com` SNI；`api.openai.com` sideband 由 `SPEC-EP-002` 所列 R 类运行证明。
-域名全集样本的过滤条件不得包含被测域名。③b 只判断已捕获 ClientHello 的内部结构，
-预期为 37 个 native-tls 画像、4 个 rustls 画像，且 41 个 ClientHello 均不 offer ALPN；
-③c 应得到 10 个 cipher，并依次 offer `h2`、`http/1.1`。R 类解析只能证明原始字节中
-实际保存的方向和字段；J/M 摘要未记录的内容不能据此补推。
+精确运行号、规则编号与证据路径由 `docs/EVIDENCE_INDEX.md` 生成。审核者不需要凭目录名猜测
+哪次抓包有效。
 
-### 1.2.2 样本完整性与证据类型
+**发起新一轮抓包或验收。** 新版本升级或重新验收时，发起官方抓包、Sub2API 候选抓包、
+差异分类、离线比较和验收的唯一编排入口是：
 
-`check_sample_integrity.py` 将连接分为双向、只有下行、只有上行和两向皆空四类。
-存在非预期单向或空连接的样本只能支持已观察到的正例，不得用于缺失、总数、最大值等
-全称或计数命题。
+```bash
+python3 tools/official_client_capture/codex_upgrade.py --help
+```
 
-证据类型及边界统一定义在 [`EVIDENCE_INDEX.md`](EVIDENCE_INDEX.md) §0：
+底层 `capture.py`、场景驱动器、解析器和 finalizer 是该入口的受控依赖，不再作为平行
+工作流。完整升级步骤见第四部分。
 
-- **P**：原始 pcap，可复核 ClientHello、SNI、TLS 扩展等被动线索。
-- **R**：等长脱敏的中继原始字节，可重新解析 HTTP/1.1、body 和 WS 帧。
-- **J**：JSON 摘要，只能证明摘要已保存的字段。
-- **M**：manifest 绑定的脱敏分析，可复核已绑定字段，不能代替原始字节。
+## 1.6 规则准入、变更与停止标准
 
-R 类原始字节位于 `local-analysis/captures/raw-scrubbed/〈运行号〉/relay/*.bin`；凭据值
-采用等长占位替换，长度字段和字节偏移不变。`local-analysis/` 不进入 Git，复核者需直接
-访问工作区目录。
+新增或修改规则必须满足：
 
-## 1.3 为什么要有这份表
+1. 命题属于已声明的官方出站范围；
+2. 已定位官方生产路径或明确属于只能实测的 L3 事实；
+3. 已选择能够观察该命题的通道，并记录盲区；
+4. 正例、负例和条件分支足以排除已知替代解释；
+5. 规则编号、源码引用、运行号和证据摘要能够重新计算；
+6. Sub2API 的实现要求描述可见结果，不强制复制官方内部类或函数；
+7. 规则全集、版本画像、场景和断言画像之间没有未分类项。
 
-源码能够说明生产路径和依赖归因，但不能单独确定运行时 TLS、线序和帧形态；抓包能够
-证明实际输出，但不能自动说明触发条件和内部机制。因此每条规则同时记录源码依据、运行
-证据、适用范围和观测边界，并通过编号把规格、证据和实现差异连接起来。
-
-## 1.4 任务定义
-
-**目标**：让 Sub2API 的 OpenAI OAuth 出站与官方 Codex CLI 0.145.0 一致。
-
-五步流程规定一轮对齐如何验收；§1.5.1 的四阶段规定何时评估架构替代方案；Codex CLI
-新版本的规则发现、抓包和画像升级见第四部分。
-
-### 1.4.1 五步流程
-
-| 步骤 | 动作 | 验收标准 |
-|---|---|---|
-| 1. 建立规则 | 读取官方生产源码、依赖源码和运行证据 | 每条规则具有范围、命题、证据等级和可变性 |
-| 2. 验证规则 | 选择能够观测该命题的通道 | 可见 wire 规则绑定运行号；不可观测部分明确边界 |
-| 3. 对比实现 | 按 SPEC 编号比较官方形态与 Sub2API | 每项差异可追溯到规则和证据 |
-| 4. 实现修正 | 按差异实施，并限制在对应画像范围 | 不改变范围外 provider、协议或凭据路径 |
-| 5. 出站验收 | 重新采集 Sub2API 出站并逐项复核 | wire 证据通过；源码检查和单测不能替代出站证据 |
-
-规则数量与状态以第二部分导语为准，源码／抓包充分度以 `EVIDENCE_INDEX.md` 为准，
-实现差异与验收状态见第三部分。规则按形态维度统计，端点按 URL 统计，两者不能换算。
-抓包有限的两项及各自边界由 `SPEC-EP-012` 和 `SPEC-EP-023` 直接说明。
-
-## 1.5 已确定的实现决策
-
-1. **范围只含 OpenAI**；Anthropic 出站不属于本版。
-2. **方案甲继续使用现有 Go 实现**；方案乙的同源 sidecar 已完成可行性评估，本版不实施。
-3. **h1 wire 定型只在官方 OpenAI 画像下启用**，并保留关闭开关。不同上层调用不共享
-   Client；同一次调用的 retry 必须保留连接池和断线重连语义，详见 `SPEC-CONN-001`。
-4. **不 fork `x/net/http2`**。h2 形态只在有效自定义 CA 使 HTTP 协商到 h2 时暴露；
-   本产品未开放该条件分支，因此不承担对应实现成本。
-5. 画像逻辑放在 fork 独有文件或新包中，共享上游文件只保留最小接入点。
-
-### 1.5.1 推进顺序：先穷尽方案甲，再评估方案乙
-
-架构评估按以下顺序进行：
-
-1. 用源码与抓包建立规则全集和官方基线。
-2. 将方案甲修正到可达到的边界，并逐条完成出站验收。
-3. 以方案甲无法消除的残留偏离定义硬边界。
-4. 根据残留偏离的辨识度和实现成本评估方案乙。
-
-当前硬边界和残留项已明确，剩余偏离不足以支持引入 sidecar；选型结论见 §3.3.4。
-方案甲内尚未完成的实现或验收不改变该架构结论。
-
-## 1.6 工作方法
-
-### 1.6.1 证据等级
-
-| 等级 | 含义 | 风险 |
-|---|---|---|
-| **L1** | 官方生产代码直读 | 最强，但要确认是生产路径而非测试 |
-| **L2** | 依赖库行为推断（hyper/tungstenite/h2 的默认行为） | 官方源码里看不到，易整层漏掉 |
-| **L3** | 实测为唯一依据（源码给不出答案） | 受样本覆盖度限制 |
-| **L4** | 单元测试 / mock 数据 | **仅参考**，不得作为断言依据 |
-
-判为 L3 前必须查完官方生产调用链和相关依赖层；TLS ClientHello、系统 TLS 策略及
-WS 运行时帧形态可以合法使用 L3。L4 不得作为规则断言依据，`--cfg-test` 会阻止
-L1/L2 引用落入测试代码。
-
-### 1.6.2 可变性
-
-- **固定**：每次请求都一样
-- **随机**：官方每次都不同（复刻时必须同样随机，钉死单一样本反而是负指纹）
-- **条件**：随场景变化（Lite/非 Lite、有无 attestation、直连/代理）
-
-### 1.6.3 本版范围
-
-本版只覆盖 Codex CLI 0.145.0 的 **OpenAI OAuth 出站**，包括第二部分列出的 TLS、
-协议协商、连接、HTTP/1.1、HTTP/2、WebSocket、header、body 和端点辅助链。
-Anthropic 出站不在本版范围。
-
-### 1.6.4 什么不列为规则：可合法关闭的流量
-
-官方允许关闭 plugins、apps、analytics 和 otel，因此这些流量是否出现不作为画像规则，
-Sub2API 不发送它们也不构成偏离。采集基线时使用 `--disable plugins`、
-`--disable apps`、`[analytics] enabled=false` 和 `[otel] exporter="none"`，并记录配置。
-被关闭的请求只可作为同期同栈旁证，不得用于必须出现、连接总数或请求分布等命题。
-
-### 1.6.5 观测通道与各自的盲区
-
-完整通道定义和实验设计见
-[`CODEX_CLI_0145_EMPIRICAL_VALIDATION_PLAN.md`](CODEX_CLI_0145_EMPIRICAL_VALIDATION_PLAN.md)。
-本表使用以下判定原则：
-
-1. **证据只能证明通道可见的内容。** pcap 可证明 ClientHello、SNI、TLS 扩展和 TCP
-   时序，不能证明加密后的 h1/h2/WS；R 类中继可证明应用字节，不能证明客户端直连时的
-   ServerHello、证书和 TLS record 分片。
-2. **过滤条件不得包含被测命题。** 验证域名全集必须使用不含 host 条件的 BPF；hosts
-   劫持或按目标 IP 过滤的样本只能证明已进入该通道的连接。
-3. **干预按因果链限定结论。** 证据表述为
-   `初始状态 S → 观测或输入 E → 官方路径 P → 输出 R`；干预发生前的输出不因后续输入
-   自动失效，干预后的状态和后续轮次不得外推为自然链路。
-4. **条件分支必须在其真实条件下采集。** 自定义 CA 位于 HTTP TLS 选型上游，因此该
-   样本不能证明默认 TLS 画像，但可证明 `SPEC-H2-*` 所描述的自定义 CA 分支；WS 始终走
-   rustls，与 HTTP 的 CA 分支条件不同。
-5. **ALPN 必须镜像客户端 offer。** 中继两侧协商结果不一致时，该次运行不得用于协议
-   结论；显式 `--assume-alpn` 必须与被动 pcap 结果一致。
-
-受控干预只证明客户端收到指定输入后的反应；纯合成样本只用于网关鲁棒性，不参与
-“官方是什么样”的结论。
-
-### 1.6.6 工具与环境
-
-关键工具均位于 `tools/official_client_capture/`：`pcap_clienthello.py` 解析 pcap，
-`upstream_byte_relay.py` 和 `run_official_relay_scenario.sh` 采集应用字节，
-`relay_extract.py`、`check_sample_integrity.py` 和 `scrub_raw_bytes.py` 分别负责解析、
-完整性检查和等长脱敏。
-
-采集环境必须满足：
-
-1. 默认 HTTP TLS 画像使用系统信任库，不设置 `CODEX_CA_CERTIFICATE` 或
-   `SSL_CERT_FILE`；自定义 CA 分支单独采集。
-2. 按 §1.6.4 关闭非必要流量，并把启用条件记录到运行 manifest。
-3. 需要 HTTP 降级时拒绝 WS 连接，不用 HTTP 400 代替连接失败。
-4. 未脱敏原始字节不得离开采集机；归档前必须完成等长脱敏和凭据零命中检查。
-
-**证据归档**：`local-analysis/captures/wire-parity-fix-20260727/`（已 gitignore）。
-
-### 1.6.7 相关文档分工
-
-- **本表**：官方形态与对齐状态的唯一事实源。
-- `EVIDENCE_INDEX.md`：逐项证据充分度、运行号和文件路径。
-- `CODEX_CLI_0145_EMPIRICAL_VALIDATION_PLAN.md`：观测通道、因果边界和采样设计。
-- `tools/official_client_capture/README.md`：抓包环境、安全和执行说明。
-- `OFFICIAL_EGRESS_WIRE_PARITY_FIX_20260727.md`：实现差异、代码修正和验收记录。
-- `README.md` §1.1：对外现状与残留差异。
+停止采样不等于假定未来永远不变。达到场景覆盖、重复样本和源码闭环后，只能把结论限定在
+当前版本、平台和条件内；Codex CLI 版本、依赖、平台或配置分支变化时，必须按第四部分重新
+发现和分类。
 
 ---
 
@@ -256,19 +191,20 @@ Sub2API 不发送它们也不构成偏离。采集基线时使用 `--disable plu
 <!-- SPEC_STATUS_START -->
 | 分组 | 条数 | 当前验证状态 | Sub2API 需对齐项 |
 |---|---:|---|---:|
-| **① 内置 OpenAI OAuth 可见规则** | **39** | ✅ 38；🟡 1 | **当前 38；完整 Voice/realtime 后 39** |
+| **① 内置 OpenAI OAuth 可见规则** | **39** | ✅ 38；🟡 1 | **39** |
 | **② 自定义 CA 条件分支** | **8** | ✅ 8；🟡 0 | **0** |
 | **③ 自定义 provider 条件分支** | **1** | ✅ 1；🟡 0 | **0** |
 | **④ 派生／内部机制说明** | **3** | 源码机制 | **3** |
 | **⑤ 采集与观测记录** | **2** | 观测记录 | **0** |
-| **合计** | **53** | — | **当前 41；完整 Voice/realtime 后 42** |
+| **合计** | **53** | — | **42** |
 <!-- SPEC_STATUS_END -->
 
 对固定转发到 OpenAI 官方 OAuth 上游的实现口径：
 
-- 当前 38 条包含已验证的 realtime 第一跳 `SPEC-EP-009`；只暂不计唯一部分项
-  `SPEC-EP-012`，因此当前为 **38 条可见 wire 规则 + 3 条机制要求 = 41 项**。
-- 完整覆盖 Voice/realtime 后为 **39 条可见 wire 规则 + 3 条机制要求 = 42 项**。
+- 对齐范围始终是 **39 条可见 wire 规则 + 3 条机制要求 = 42 项**；规则数量不随证据
+  充分度改变，`SPEC-EP-012` 也属于必须实现和验收的 39 条可见规则。
+- `SPEC-EP-012` 当前以源码和受控 200 第二跳证据闭合规则形态，但自然 Voice/realtime
+  成功样本仍标记为抓包有限；该证据限制不再把 42 项口径缩减为 41 项。
 - ② 仅在配置有效自定义 CA bundle 时触发；产品不开放该能力时无需实现。
 - ③ 仅适用于 Codex 自定义 provider；固定使用 OpenAI 官方上游时无需实现。
 - ④ 不要求复制官方内部代码结构，但必须对齐其产生的可见结果；⑤ 只用于证据审计，
@@ -985,335 +921,493 @@ Sub2API 不发送它们也不构成偏离。采集基线时使用 `--disable plu
 - **实现**：不实现采集入口；产品若提供 TUI 兼容层，再按 surface 区分 slash command。
 - **状态**：✅ 源码充分；抓包充分。
 
-# 第三部分 方案与选型
+# 第三部分 Sub2API 伪装方案实现
 
-本章只回答三个问题：两种方案如何覆盖必须实现的 42 项、如何跟进 Codex CLI 升级、
-以及如何降低 Sub2API 长期合并上游的成本。规则定义和验收口径只以第二部分为准；
-本章不维护易过期的逐条完成状态。
+## 3.1 版本画像驱动的运行架构
 
-## 3.1 选型前提
-
-完整目标是第二部分定义的 **42 项**：39 条内置 OpenAI OAuth 可见规则，加 3 条
-派生／内部机制要求。自定义 CA 的 8 条、自定义 provider 的 1 条和 2 条采集记录
-不属于该实现目标。
-
-| 实现层 | 数量 | 范围 |
-|---|---:|---|
-| 传输、协议与连接 | 13 | `TLS-001/003`、`PROTO-001/002`、`CONN-001`、`H1-001~004`、`WS-001/002/004/005` |
-| Header、Body 与端点行为 | 26 | `HDR-002/004~008`、`BODY-001/002/003/005/006`、15 条 `EP` 可见规则 |
-| 派生／内部机制 | 3 | `HDR-001`、`BODY-004`、`EP-023` |
-| **合计** | **42** | **必须全部对齐** |
-
-因此，选型不能只比较谁更容易生成相同的 h1、h2 或 WS 字节。后两组共 **29 项**，
-需要身份上下文、请求定型、状态管理和端点编排；仅替换 HTTP 客户端不能自动完成。
-
-## 3.2 方案甲：Go 内薄层定型
-
-### 3.2.1 架构
-
-保留 Sub2API 现有路由、鉴权、账号调度、协议转换、重试、流式响应和计费，在协议转换
-之后、最终出站之前增加一层仅服务于官方 OpenAI OAuth 的定型逻辑：
+现有路由、鉴权、账号调度、协议转换、重试、流式响应和计费继续由 Go 承担；官方 OpenAI
+OAuth 请求在最终出站前进入版本画像驱动的定型层。
 
 ```text
-目标账号与 CLI 版本
-→ Profile Resolver
-→ OfficialEgressContext
-→ Header / Body / Endpoint Finalizer
+客户端请求
+→ 路由与协议适配
+→ OAuth 账号选择
+→ Official Client Profile Registry
+→ Codex 版本解析
+→ 不可变 0.145.0 Profile
+→ Endpoint / Header / Body / State Finalizer
 → HTTP / WebSocket 传输画像
-→ 官方上游
+→ OpenAI 上游
 ```
 
-| 组件 | 职责 |
-|---|---|
-| 版本化 Profile | 固定某一 Codex CLI 版本的端点、字段、header 和传输参数 |
-| `OfficialEgressContext` | 保存身份值、来源、会话状态和生命周期 |
-| 语义 Finalizer | 实现 26 条应用层规则及 3 条机制要求 |
-| HTTP／WS 传输画像 | 实现 13 条传输、协议和连接规则 |
-| 验收门禁 | 将每项规则同时映射到实现、官方证据和 Sub2API 出站证据 |
+伪装实现由两层组成：
 
-现有 `official_egress_*`、`tlsfingerprint` 和 `h1WireConn` 可作为该架构的基础，
-但“已有基础”不等于“42 项已经完成”；是否完成只能按第二部分逐项验收。
-
-### 3.2.2 覆盖 42 项的方式
-
-| 范围 | 实现要求 |
-|---|---|
-| TLS 与协议选择 | 画像明确 TLS 栈、ALPN 和 HTTP／WS 分支，不从代理状态推断 |
-| 连接生命周期 | 调用间、调用内 retry、断线重连分别按 `CONN-001` 管理 Client 与连接池 |
-| HTTP/1.1 | 每个适用端点使用版本化线序清单；未配置端点不得以通用兜底冒充已对齐 |
-| WebSocket | 同时定型握手大小写与顺序、压缩参数、帧状态和 `response.create` 字段 |
-| Header 与 Body | 在最终出站点封闭字段集合、值、顺序、压缩和 Lite 变换 |
-| 端点与机制 | 在 Go 内完成 images、compact、search、realtime、turn-state 和 reason 编排 |
-
-方案甲不要求复制 Codex 的内部类或函数；只要可见结果与第二部分一致，内部实现可以
-继续使用 Go 和 Sub2API 现有业务结构。
-
-### 3.2.3 长期升级与合并方式
-
-方案甲应由“散落的条件分支”收敛为“稳定执行引擎 + 不可变版本画像”：
-
-1. 每个 Codex CLI 版本建立独立画像；升级时新增画像，不覆盖旧画像。
-2. 端点 header 线序、字段集合和条件矩阵尽量数据化；状态机与传输适配器保持通用。
-3. 画像只放在 fork 独有文件或新包中，共享上游文件只保留最小接入点。
-4. 每次升级按“官方源码／抓包 → 规则差异 → 新画像 → 双向抓包验收”更新。
-5. 未知版本或缺少端点画像时明确失败或退出官方画像，不得静默套用旧版本。
-6. 合并 Sub2API 上游后运行同一套规则覆盖和出站字节门禁，及时发现接入点漂移。
-
-这种组织方式把 Codex 升级成本集中在画像差异，把 Sub2API 合并冲突集中在少数稳定
-接入点。它仍需持续抓包和维护传输细节，但不会额外引入跨进程协议与部署单元。
-
-## 3.3 方案乙：同源 Rust sidecar
-
-### 3.3.1 架构
-
-Go 保留业务层和语义定型，将有序 header、body、连接参数及流式控制信息通过 IPC
-交给 Rust sidecar；sidecar 锁定 Codex CLI 同版本依赖和配置分支，并负责最终 HTTP／WS
-连接：
-
-```text
-Go 路由、鉴权、账号调度与语义 Finalizer
-→ 保序 IPC
-→ Rust 同版本传输层
-→ 官方上游
-```
-
-要覆盖完整 42 项，方案乙仍须在 Go 内保留 26 条应用层规则和 3 条机制要求。sidecar
-主要替代传输实现，不能从收到的请求中自动推导 Codex 的业务语义。
-
-### 3.3.2 PoC 已确认的能力边界
-
-| 层 | 结论 | 对 42 项的意义 |
+| 层 | 职责 | 约束 |
 |---|---|---|
-| h1 header 线序、大小写和 `host` 位置 | 同版本依赖可自然产生相同字节 | 对 `H1-001~004` 有明显优势 |
-| WS 握手前五项 | 可自然一致 | 覆盖 `WS-001` 的主要形态 |
-| WS 剩余 header | 仍取决于插入顺序和 `swap_remove` 扰动 | `WS-002` 仍需显式定型 |
-| h2 SETTINGS 与窗口 | 对齐官方配置分支后可以一致 | 优势明显，但自定义 CA 的 h2 规则不在 42 项内 |
-| TLS ClientHello | 受系统 OpenSSL、平台和配置分支影响 | 不能仅靠锁定 Rust crate 自动获得 |
-| 应用语义与端点编排 | sidecar 不会自动生成 | 29 项仍由 Go 实现 |
+| 稳定执行引擎 | 解析画像、收集运行上下文、定型 URL/header/body、选择传输并管理状态 | 不包含按版本散落的常量和模型特判 |
+| 不可变版本画像 | 保存某一 Codex 版本的 surface、端点、字段、线序、条件、连接和传输契约 | 新版本新增快照，不原位修改旧版本 |
 
-“使用相同依赖”只减少部分传输层复刻，并不等于整条 Codex 出站链自动同源。依赖版本、
-feature、TLS 后端、构造顺序、Client 生命周期和配置分支仍须逐项匹配。
+画像选择由账号类型与 registry 的 release 指针完成，与入站客户端身份无关。Compatible
+与 Responses 第三方入口使用相同画像，但必须先经过协议适配，再在最终出站点统一定型。
 
-### 3.3.3 生产化成本
+**入站身份不参与出站形态决策。** 只要账号是 OpenAI OAuth 且端点在画像闭集内，出站
+一律由账号绑定的 active 画像定型：不区分官方或第三方客户端，不区分客户端声明的版本、
+平台或 surface。改变出站画像的唯一途径是显式升级 active 画像。
 
-方案乙除 Rust 传输代码外，还必须长期维护：
+依据是入站声明对上游不可见：网关在最终出站点用画像覆盖客户端身份，上游只观察到一个
+自洽的 active 版本形态。入站写了什么既不会泄漏，也不构成拒绝服务的理由。反之，按入站
+身份分流才是真正的风险——同一账号同一 IP 上出现两种出站形态，其不一致本身就是最强的
+识别特征（同类教训见 SPEC-TLS-001 与 §3.5.2 的 `openai_gateway_count_tokens.go`）。
 
-- 保序且可版本演进的 IPC 协议，不能用无序对象传 header；
-- SSE、普通响应和 WS 双向流的背压、取消、超时与断线传播；
-- retry、连接池、代理、自定义 CA、认证刷新和错误语义；
-- 计费、日志、指标、追踪、健康检查、灰度与回滚；
-- Go 与 Rust 两套依赖升级、安全修复、构建和发布流程。
+因此入站身份校验一律降级，不阻断请求：
 
-若把 29 项应用行为也迁入 sidecar，sidecar 将从“同源传输层”膨胀为 Codex 的应用层
-分叉或嵌入，升级与合并成本反而更高。
+- UA 匹配不上任何画像 surface：投影到画像默认运行态；
+- originator 与 surface 不一致：按画像 originator 出站，仅保留 SPEC-HDR-005 的
+  首次 models 阶段识别；
+- 条件头证据缺失或与 turn metadata 冲突：按“条件不成立”处理，不发这些条件头。
+  条件头本就是官方的条件性行为，不发产生的是官方最常见的合法形态。
 
-## 3.4 两种方案对比
+每处降级都必须产生可观测信号。投影路径按画像闭集丢弃未知顶层字段（见 §3.3.2）时同样
+必须告警：新版本客户端的新增字段会在此被抹掉，表现为“功能不生效但请求成功”，这是本
+方案唯一的功能性风险面，也是运行时唯一能提示“该升级画像了”的信号。
 
-| 维度 | 方案甲：Go 内薄层 | 方案乙：Rust sidecar | 更优 |
-|---|---|---|---|
-| 完整覆盖 42 项 | 语义、机制和传输可在同一上下文闭环 | 29 项仍需 Go，sidecar 只接管部分传输项 | **甲** |
-| 传输默认形态 | 需画像和少量 wire 定型 | 同依赖、同配置时部分形态可自然一致 | **乙** |
-| Codex CLI 升级 | 新增版本画像并按规则重验 | 依赖默认变化可少量继承；应用语义、配置和 IPC 仍要更新 | **甲略优** |
-| 合并 Sub2API 上游 | fork 独有包 + 少数稳定接入点 | Go Finalizer 仍在，并新增 IPC、sidecar 和部署接入 | **甲** |
-| 运行与排障 | 单进程、沿用现有链路 | 多进程、跨语言、故障面更大 | **甲** |
-| 回滚 | 切换版本画像或关闭官方画像 | 需同时协调主程序、协议和 sidecar 版本 | **甲** |
-| 自定义 CA 下的 h2 | 实现成本高，且本版不要求 | 同源 Rust 配置更有优势 | **乙** |
-| 当前基础 | 已有 Go 薄层和 wire 定型组件 | 只有传输可行性 PoC | **甲** |
+唯一保留的失败关闭是账号侧配置错误（如 residency 配置了非法值）。那属于运维配置问题，
+与客户端能否使用无关。
 
-### 3.4.1 选型结论
+## 3.2 Codex 0.145.0 完整画像
 
-**生产方案选择方案甲；方案乙保留为传输层对照探针和后备路线。**
+`official_egress_codex_0145_profile.go` 保存完整封闭快照，包括：
 
-理由如下：
+- exec／TUI 两个 surface 的 user-agent、originator 和终端身份；
+- 默认 feature、Remote Compaction V2、请求压缩和 Lite 能力来源；
+- HTTP 默认传输、WS rustls 传输及连接生命周期；
+- models、responses HTTP/WS、compact、alpha-search、images、realtime、wham、
+  OAuth refresh 和文件上传端点；
+- 每个端点的 method、host、path、query、accept、content-type、压缩、header 槽位、
+  body 闭集和动态值来源；
+- turn-state、subagent、memory、parent thread、residency、runtime metrics 等条件关系；
+- 文件上传三阶段和服务端返回 URL 的唯一例外边界。
 
-1. **目标是 42 项全覆盖，不是只复制传输栈。** 其中 29 项无论是否引入 sidecar，
-   都需要 Sub2API 的身份上下文、语义定型和端点编排。
-2. **方案乙最强的 h2 优势不属于当前必做范围。** 自定义 CA 的 8 条规则已明确排除，
-   不能用非必做项的收益承担全链路 sidecar 成本。
-3. **方案甲更利于双线升级。** 版本画像隔离 Codex 差异，fork 独有包和最小接入点
-   隔离 Sub2API 上游变化；两类升级都可由同一套 42 项门禁约束。
-4. **方案乙没有消除 Go 层，只是在其后增加一个分布式边界。** IPC、流式背压、
-   连接生命周期、可观测性和发布协调会成为新的长期维护面。
-5. **方案乙的优势仍然值得利用。** Rust PoC 可在 Codex 升级时充当传输基准，帮助
-   判断 Go 画像差异，但不进入生产请求路径。
-
-## 3.5 实施与重评估边界
-
-方案甲达到完成状态必须同时满足：
-
-1. 42 项分别映射到明确的实现点和触发条件，无通用兜底被计作已对齐。
-2. 每项同时具备第二部分要求的官方证据和 Sub2API 出站证据。
-3. CLI 版本画像相互隔离；旧版回归与新版验收可以同时运行。
-4. 合并 Sub2API 上游后，规则覆盖、单元测试和原始字节门禁全部通过。
-5. 完整 Voice/realtime 链完成后，目标从当前 41 项闭合为 42 项。
-
-出现以下任一条件时，重新评估方案乙：
-
-1. 产品将自定义 CA／h2 纳入必须支持范围。
-2. Codex 新增高辨识度且无法在 Go 中稳定实现的必做传输规则。
-3. 连续多个 CLI 版本表明 Go 传输画像的维护成本高于 sidecar 的运行与发布成本。
-4. Codex 提供稳定、可复用的官方 Rust 出站边界，使 sidecar 不再依赖内部实现。
-
-两种方案都只能对齐单次请求、连接和协议层的可见形态。Sub2API 作为多账号网关，
-其并发度、请求节奏和跨账号统计特征不会因更换实现语言而自动等同于单用户 CLI；
-该差异不属于 42 项，也不能作为选择 sidecar 的理由。
-
-# 第四部分 Codex CLI 更新与规则演进
-
-本部分定义从一个已验收版本升级到新版本的固定流程。**42 项只属于 0.145.0 基线，
-不是未来版本的固定总数。** 新版本可以继承、修改、删除既有规则，也可以增加新的出站
-形态；目标版本的规则总数只能在完成发现和分类后确定。
-
-## 4.1 升级原则
-
-每个新版本都必须重新完成规则覆盖验证，但不要求人工逐条执行 42 次抓包：
-
-1. 旧版本源码和抓包是比较基线，不能直接充当新版本证据。
-2. 一组场景可以同时覆盖多条规则；采集按场景编排，验收仍按规则编号统计。
-3. 源码和依赖差异决定重点调查范围，不能替代新版本的运行证据。
-4. 未变化规则可以复用实现逻辑，但目标版本仍须留下对应的源码与运行验证结果。
-5. 新画像独立于旧画像；升级不得覆盖已经验收的版本配置。
-6. 账号权限、服务端条件或场景未触发时记为阻塞，不得继承旧版本结论或记为通过。
-
-## 4.2 一键升级审计
-
-统一入口为 `tools/official_client_capture/codex_upgrade.py`。它只负责编排、清单、提取、
-比较和报告；具体抓包仍由现有专用脚本执行。
-
-先执行 dry-run，确认版本、路径、任务和规则映射，不写盘、不发请求：
-
-```bash
-python3 tools/official_client_capture/codex_upgrade.py \
-  --dry-run \
-  --baseline-version 0.145.0 \
-  --target-version 0.146.0 \
-  --baseline-source local-analysis/sources/codex-cli-0.145 \
-  --target-source /path/to/codex-cli-0.146 \
-  --baseline-evidence /path/to/0.145.0/official-evidence \
-  --target-sha256 <64位小写SHA-256> \
-  --runtime-image <镜像引用@sha256:digest> \
-  --output /root/oauth-capture/runs/codex-upgrade-0.146.0
-```
-
-确认真实请求、账号配额和环境恢复条件后，一次执行完整采集与分析：
-
-```bash
-python3 tools/official_client_capture/codex_upgrade.py \
-  --execute --acknowledge-live-requests \
-  --baseline-version 0.145.0 \
-  --target-version 0.146.0 \
-  --baseline-source local-analysis/sources/codex-cli-0.145 \
-  --target-source /path/to/codex-cli-0.146 \
-  --baseline-evidence /path/to/0.145.0/official-evidence \
-  --target-sha256 <64位小写SHA-256> \
-  --runtime-image <镜像引用@sha256:digest> \
-  --output /root/oauth-capture/runs/codex-upgrade-0.146.0
-```
-
-`--suite full` 是默认值；`--suite core` 只运行基础 HTTP／WS、compact 和 h1 场景，
-不能作为完整版本验收。未来新增场景通过 `--extra-jobs` 加入同一次运行，不修改总入口。
-
-### 4.2.1 固定执行顺序
+画像构造后编码成不可变规范快照，每次解析返回深拷贝，调用方不能修改全局数据。当前
+画像摘要由测试固定为：
 
 ```text
-版本、哈希与环境预检
-→ 旧版／新版源码和 Cargo.lock 出站面扫描
-→ 官方 CLI direct、MITM 与原始字节场景
-→ Sub2API 同条件 direct、MITM 与 wire 场景
-→ JSON／JSONL／pcap／relay 统一提取
-→ 旧版官方 vs 新版官方
-→ 新版官方 vs Sub2API
-→ 规则证据覆盖与新增形态门禁
-→ report.json + report.md
+9b7dd12df50dbcff74594b1f05440161cd99b963019a4f316f20c08ed5f5ba1e
 ```
 
-运行目录一次性使用，禁止覆盖；每个子任务单独记录状态、日志、产物根和负责的规则。
-任一环境恢复任务返回专用失败码时立即停止后续抓包，避免在污染环境中继续采集。
+摘要变化表示完整画像发生变化，必须同步检查第二部分规则、版本清单、测试和抓包证据。
 
-### 4.2.2 主要产物
+**版本快照注册表。** 快照不由调用方按常量直接引用，而是登记在
+`officialCodexVersionSnapshots` 中按版本号解析；未登记的版本按未知处理，明确失败，
+不回退到任何既有快照。端点级入口通过 `activeOfficialCodexVersion()` 从
+`official_client_profile_registry.go` 的 release 指针取得当前 active 版本，不再写死
+版本常量——版本因此是数据而非代码结构。
+
+据此，新增版本的代码侧改动收敛为：新建版本快照文件、在注册表登记、在 registry 补
+build/wire profile 并调整 release 指针。§3.5.2 的共享接入点无需改动，这是 §4.5 第 13
+条得以成立的机制基础。注意这只是代码接线，快照内容本身必须来自第四部分的完整抓包
+验收 Campaign，不能手工推断。
+
+## 3.3 最终出站定型
+
+### 3.3.1 运行上下文
+
+入口先保存原始客户端 surface、user-agent、originator、压缩 feature 和会话信息；账号
+选定后再绑定 OAuth、目标版本、端点、模型能力、Lite、turn-state 和条件 header。运行
+上下文只在当前上层调用或 WS 连接内有效，不能跨无关请求复用。
+
+### 3.3.2 URL、header 与 body
+
+版本画像拥有 host、固定 path 和固定 query；执行器只接受画像声明的动态 path/query。
+文件 blob 上传使用服务端返回的完整签名 URL，是唯一允许完整动态 URL 的端点。
+
+header 按画像槽位和槽内序号生成，逻辑名与 wire 名分开保存。HTTP/1.1 在最终写出前完成
+小写、顺序、host 和 content-length 定型；WS 保留 tungstenite 前五项固定大小写，并按
+画像规定处理剩余 header。body 使用封闭字段集合和稳定编码顺序，未知顶层字段不能透传。
+
+### 3.3.3 状态、连接与端点编排
+
+turn-state 按调用／连接身份隔离并从官方响应指定位置更新。HTTP Client、调用内 retry、
+WS 连接和后端长生命周期 Client 由端点画像分别声明，不能用单一全局池推断。
+images、compact、alpha-search、realtime、wham、OAuth refresh 和文件上传均通过画像端点
+执行，不允许旁路通用请求器绕过定型。
+
+## 3.4 42 项覆盖责任
+
+| 责任面 | 数量 | 实现位置 |
+|---|---:|---|
+| TLS、协议、连接、h1、WS | 13 | 传输画像、`tlsfingerprint`、HTTP/WS 执行器 |
+| Header、Body、端点可见行为 | 26 | 端点画像、header/body finalizer、端点编排 |
+| 内部机制 | 3 | 运行上下文、turn-state、压缩选择 |
+| **合计** | **42** | **同一版本画像和同一验收链闭合** |
+
+一条规则只有同时具备画像／执行点、官方证据、候选证据和机器断言，才算完成。通用兜底、
+单元测试、HTTP 200 或整体 surface 相似都不能替代逐规则验收。
+
+## 3.5 源码改动台账
+
+本节是以后合并 Sub2API 上游时的维护边界。`Fork 新增`表示文件不属于上游基础实现，应尽量
+保持自包含；`上游接入点`表示合并时最容易冲突的共享文件，必须逐项复核。测试文件与生产
+文件同名或在对应目录内，不逐个重复解释，但不能在合并时省略。
+
+本次来源分类使用本地冻结的 upstream 基线
+`12d811bd76572836d6df6e1fa8aa5ff91be3b12e`。以后合并上游时必须先记录新的明确 commit，
+再刷新本台账；不能用未更新的远端引用继续判断“上游已有”。
+
+**登记判据。** 一个生产 Go 文件只要引用 Codex/OpenAI 出站定型专属符号，就必须登记，
+无论它是否携带版本字面量——WS 传输、连接池与握手定型点都不含版本号，却直接决定
+ClientHello 与握手线序。判据刻意不使用通用的 `OfficialEgress` 前缀：该前缀同时覆盖
+Anthropic 画像，会把 §1.1 已排除的供应商路径卷进来。Anthropic、API Key mimic 及其他
+供应商路径不在本台账范围内。
+
+**同步机制。** 本台账曾长期手工维护且无同步机制，因而漏登 10 个出站定型文件，其中
+包含 WS TLS 画像解析、连接池身份 key 和 OAuth count_tokens 的 TLS 复用。现由门禁
+按上述判据自动复算：
+
+```bash
+python3 tools/check_ledger_completeness.py
+python3 tools/check_version_leak.py
+```
+
+前者比对应登记文件集合与本节实际登记内容；后者按 `tools/version_leak_baseline.json`
+的基线快照，禁止共享业务层与通用执行层新增版本标识符。两者都必须纳入 §4.7 第 5 步
+的门禁执行。
+
+### 3.5.1 Fork 新增的画像与执行层
+
+| 文件 | 责任 |
+|---|---|
+| `backend/internal/service/official_client_profile_registry.go` | 官方客户端画像注册与解析 |
+| `backend/internal/service/official_egress_codex_0145_profile.go` | Codex 0.145.0 完整不可变画像 |
+| `backend/internal/service/official_egress_codex_engine.go` | 画像编译、URL/header/body 和传输契约执行 |
+| `backend/internal/service/official_egress_codex_integration.go` | 入口运行上下文与 Codex 画像接入 |
+| `backend/internal/service/official_egress_codex_oauth.go` | OAuth refresh 的版本化请求形态 |
+| `backend/internal/service/official_egress_codex_files.go` | 文件创建、blob 上传、完成轮询三阶段 |
+| `backend/internal/service/official_egress_profile.go` | 通用官方出站上下文与画像接口 |
+| `backend/internal/service/official_egress_integration.go` | HTTP/WS 官方画像的统一应用点 |
+| `backend/internal/service/official_egress_openai_http.go` | OpenAI HTTP header/body 定型 |
+| `backend/internal/service/official_egress_openai_ws.go` | OpenAI WS 握手、帧和 fallback 定型 |
+| `backend/internal/service/official_egress_openai_json.go` | 稳定 JSON 顺序、闭集和原始数值保真 |
+| `backend/internal/service/official_egress_openai_state.go` | turn-state 等跨请求状态隔离 |
+| `backend/internal/service/official_egress_transport.go` | HTTP/WS 传输画像选择 |
+| `backend/internal/service/official_egress_uuid.go` | 需要稳定关联时的 UUID v7 绑定 |
+| `backend/internal/pkg/tlsfingerprint/h1_wire.go` | HTTP/1.1 最终 wire 名、顺序和 host 定型 |
+| `backend/internal/pkg/tlsfingerprint/lowercase_headers.go` | header 大小写与保留名单适配 |
+| `backend/internal/platform/liveattestation/attestation_candidate_capture.go` | 候选验收所需 attestation 观测 |
+| `backend/internal/platform/liveattestation/attestation_unsupported_provider.go` | 不支持平台的显式边界 |
+| `backend/internal/service/account_test_service_openai_files.go` | 管理接口的 Files 三阶段生产探针 |
+| `backend/internal/service/testdata/official_egress/` | 模型能力 fixture 与脱敏实证说明 |
+
+对应的 `*_test.go` 覆盖画像摘要、端点全集、字段闭集、连接生命周期、OAuth、文件上传、
+HTTP/WS、候选 trace 和配置失败关闭。新增版本时应新建版本画像及测试，不复制一套执行引擎。
+
+其中 `official_egress_finalizer_pairing_test.go` 用 Go AST 逐**调用点**核对终态定型
+配对。每个画像 attach 返回的 egressContext，必须在该 attach **之后**被传入 header
+finalizer，或传入确实交付定型的包装函数（如 `liveSidebandHeaders`）。包装函数按
+**形参位置**做不动点传播，而不是按函数整体判定——只要求“函数调用过 finalizer”会让
+定型了另一个 context、而传入的 egressContext 从未使用的包装函数假绿。
+
+attach 调用点与 JSON body 定型／回写调用点各自维护完整清单（当前 8 个 HTTP attach、
+1 个 WS attach）。用清单而非计数或集合，是因为后者存在多种假绿：文件级共现下
+`official_egress_codex_files.go` 的两组独立调用删掉一组仍会通过；总数阈值下删除整个 WS
+调用点及其定型后总数不变；body 侧仅比较“定型次数 > 回写次数”时，删除定型反而使该关系
+不成立。清单同时锁定数量与归属，新增端点需登记、删除调用点需人工确认。
+
+位置晚于 attach 并不等于定型会发生，因此还检查执行语境：定型不得位于闭包或 `defer`
+中，不得晚于发送调用（`Do`／`DoWithTLS`／`Dial`），且其条件嵌套深度不得深于对应
+attach——`openai_alpha_search.go` 的 attach 与定型同处 `if account.IsOpenAIOAuth()`
+块内属合法形态，而 attach 在无条件路径、定型只在某个分支里则不成立。同名变量被再次
+赋值后即越过有效区间，一处定型无法同时认领前后两个 attach。参数位置传播遇到内层作用域
+遮蔽同名形参时保守放弃，不做可能认错对象的匹配。
+
+分析器自带负例测试，覆盖：删除其中一组定型、删除包装函数定型、包装函数定型的是另一个
+context、同名变量复用（前后两种顺序）、定型出现在 attach 之前、egressContext 被丢弃、
+定型只存在于条件分支、定型位于闭包、定型被 defer、定型晚于发送，以及 body 侧删除定型
+与定型回写同时删除。
+
+**已知局限**：本检查只覆盖已经过 attach 的调用点，无法证明某个端点没有绕过 attach 直接
+构造请求。清单变化提示的是“attach 调用点增减”，不是“端点增减”。
+
+### 3.5.2 共享业务接入点
+
+`上游已有`表示该文件存在于本轮记录的 upstream 基线；`Fork 已有`表示文件由本项目其他
+能力先行引入，但本次伪装实现仍修改了它。两类都不是画像私有文件，合并时必须检查。
+
+这里记录的是**初次接入的影响面和以后合并上游的风险面**，不是薄层核心的文件数量。
+相对 §3.5 冻结的上游基线，以下 34 个共享生产文件累计变更约 `+9375/-1133` 行。该数字
+度量的是合并上游时的冲突面，包含画像接入与其他 fork 能力在同一文件上的叠加，不等于
+画像接入自身的代码量。画像接入分散在多个提交，除 `933dcbfb6` 外还有 `c1d321a70`、
+`f2dec4067`、`6a1cc6f4c`、`0922523a6`、`5b2ddf0e6` 等，因此本节口径绑定基线累计差异，
+不绑定任何单一提交；早期版本按单提交统计出的 `25 个文件 / +1370/-303` 已作废。
+薄的是画像驱动的最终定型核心；初次改造仍须把原有多个入口、独立端点和传输旁路一次性
+接到核心。后续 Codex 版本升级若再次大面积修改这些文件，说明版本差异已经泄漏到业务层。
+
+**稳定接入点。** 这些文件负责取得身份、传递上下文或在最终 HTTP／WS／TLS 边界调用统一
+定型逻辑。完成初次接入后，版本升级原则上不应修改它们。
+
+| 来源 | 文件或文件组 | 接入内容 | 合并上游时检查 |
+|---|---|---|---|
+| 上游已有 | `backend/internal/handler/openai_gateway_handler.go` | 在 body 标准化前保存官方客户端运行身份 | 调用顺序是否仍早于解压和协议转换 |
+| Fork 已有 | `backend/internal/pkg/openaiidentity/codex.go` | Codex 版本和 surface 身份解析 | 新官方 UA 不能被旧正则静默接受 |
+| 上游已有 | `backend/internal/pkg/tlsfingerprint/dialer.go` | 应用 TLS、h1 wire 与大小写适配 | transport 包装顺序和连接复用是否漂移 |
+| 上游已有 | `backend/internal/repository/req_client_pool.go` | Client 池和调用内 retry 生命周期 | 不能恢复为跨上层调用的无条件复用 |
+| 上游已有 | `backend/internal/service/openai_gateway_forward.go` | Compatible／Responses 到最终出站的公共路径 | 画像必须在协议适配后、发包前应用 |
+| 上游已有 | `backend/internal/service/openai_gateway_chat_completions.go` | Chat Completions 派生到 Responses | 派生语义不能绕过 body 闭集 |
+| 上游已有 | `backend/internal/service/openai_gateway_passthrough.go` | 直通路径绑定画像上下文并调用 HTTP 终态定型 | 直通不得跳过 `finalizeOpenAIOfficialEgressHTTPRequest` |
+| 上游已有 | `backend/internal/service/openai_gateway_count_tokens.go` | OAuth count_tokens 复用官方 HTTP TLS 画像 | 必须与业务请求同画像，否则同账号同 IP 暴露两种 ClientHello |
+| Fork 已有 | `backend/internal/service/openai_apikey_mimic_profile.go` | `openAIUpstreamRequestPlan` 承载 body 契约与 turn-state | turn-state 只能由终态 Header Finalizer 写入 |
+| Fork 已有 | `backend/internal/service/openai_upstream_http.go` | HTTP 最终发送和 retry | endpoint、Client 和 header 顺序仍来自画像 |
+| 上游已有 | `backend/internal/service/openai_ws_forwarder_ingress.go` | WS 入站身份与首帧 | 官方／第三方入口不能混用未绑定上下文 |
+| 上游已有 | `backend/internal/service/openai_ws_forwarder_support.go` | WS 能力、预热和 fallback | 画像默认值优先于模型名猜测 |
+| 上游已有 | `backend/internal/service/openai_ws_forwarder_payload.go` | WS 握手 header 终态定型 | 握手头不得在 Finalizer 之后被补写 |
+| 上游已有 | `backend/internal/service/openai_ws_forwarder_v2.go` | WS 最终连接与帧处理 | 握手、压缩和 fallback 仍按画像 |
+| 上游已有 | `backend/internal/service/openai_ws_v2_passthrough_adapter.go` | WS 业务帧、预热帧与派生帧定型，握手 turn-state 消费 | 帧仍由画像构建函数生成；不得在 adapter 内自行拼帧 |
+| 上游已有 | `backend/internal/service/openai_ws_client.go` | 解析 WS TLS 画像、构建传输、握手后补齐 header | RoundTripper 包装顺序漂移会直接改变 ClientHello 与握手线序 |
+| 上游已有 | `backend/internal/service/openai_ws_pool.go` | 连接池身份 key 与画像上下文传递 | key 必须含画像身份，否则不同画像的连接会被错误复用 |
+| 上游已有 | `backend/internal/service/openai_ws_http_bridge.go` | WS 到 HTTP 降级 | 同一调用的身份和状态必须连续 |
+
+**一次性旁路收口。** 这些文件原本拥有独立请求构造器、Client、状态或多阶段编排，不能只靠
+主 `/responses` 的 Finalizer 覆盖。初次改造需要接入画像；后续版本差异应由新画像表达，
+只有端点机制本身变化且现有执行引擎无法表达时才允许再次修改。
+
+| 来源 | 文件或文件组 | 接入内容 | 合并上游时检查 |
+|---|---|---|---|
+| 上游已有 | `backend/internal/handler/openai_codex_models_handler.go` | models 入口绑定 Codex surface 与版本 | 是否仍进入画像而非通用 HTTP |
+| Fork 已有 | `backend/internal/handler/openai_live.go` | realtime 入口保存运行上下文 | 第一跳和 sideband 是否保持同一身份 |
+| 上游已有 | `backend/internal/repository/gateway_cache.go` | realtime 跨阶段保存画像运行身份 | cache key 和序列化必须保留影响出站的版本身份 |
+| 上游已有 | `backend/internal/repository/openai_oauth_service.go` | OAuth refresh 接入版本化端点和传输画像 | refresh 不得丢失 surface／版本 |
+| 上游已有 | `backend/internal/service/openai_images_responses.go` | 模型工具和独立 images 端点分流 | hosted tool 与 namespace/imagegen 不得混淆 |
+| Fork 已有 | `backend/internal/service/openai_alpha_search.go` | alpha-search 两阶段端点 | header/body 和会话状态必须走画像 |
+| 上游已有 | `backend/internal/service/openai_compact_probe.go` | compact 选择与 reason | 不得重复压缩或丢失触发原因 |
+| 上游已有 | `backend/internal/service/openai_codex_models_service.go` | models 能力和 Lite 来源 | 版本化 capability fixture 不得被通用值覆盖 |
+| 上游已有 | `backend/internal/service/openai_quota_service.go` | WHAM usage、reset-credits 查询与 consume | 版本画像、backend-client 生命周期与 header/body/TLS 仍由统一执行层控制 |
+| Fork 已有 | `backend/internal/service/openai_live.go` | realtime 服务编排 | 第一跳和第二跳身份、URL、header 连续 |
+| 上游已有 | `backend/internal/service/account_test_service.go` | 管理接口的 OAuth images／Files 生产探针 | 探针必须走画像端点，不得旁路通用请求器 |
+| Fork 已有 | `backend/internal/platform/liveattestation/attestation.go` | attestation 条件值 | 缺失时保持条件缺失，不能伪造常量 |
+
+**基础设施接线。** 这些文件只负责让入口和新组件可达，不承载版本规则。
+
+| 来源 | 文件或文件组 | 接入内容 | 合并上游时检查 |
+|---|---|---|---|
+| 上游已有 | `backend/internal/server/routes/gateway.go` | HTTP／WS 路由接入 | 新入口必须进入相同画像选择点 |
+| 上游已有 | `backend/cmd/server/wire_gen.go`、`backend/internal/service/wire.go` | 新组件依赖注入 | 上游重新生成 wire 后必须复核注入仍存在 |
+| 上游已有 | `Dockerfile` | 候选镜像所需运行工具／身份 | 构建结果必须重新绑定 image digest |
+
+上述三组只记录影响生产出站的共享接入面。纯测试和抓包工具仍由对应门禁覆盖；上游新增
+OpenAI 路径时，应先判断能否进入现有稳定接入点，再决定是否新增旁路收口，不能直接把
+版本常量或模型特判写入共享业务文件。
+
+### 3.5.3 抓包与验收工具
+
+| 路径 | 责任 |
+|---|---|
+| `tools/official_client_capture/codex_upgrade.py` | 唯一升级编排入口 |
+| `tools/official_client_capture/codex_upgrade_environment_probe.py` | 数据、容器、账号和配置前后探针 |
+| `tools/official_client_capture/codex_upgrade_receipt_finalizer.py` | 恢复、运行画像和 Kilo 机器收据 |
+| `tools/official_client_capture/codex_upgrade_*schema.json` | Campaign、attempt、阶段、规则和客户端收据契约 |
+| `tools/official_client_capture/codex_upgrade_rules_0_145_0.json` | 0.145.0 规则编号基线 |
+| `tools/official_client_capture/codex_upgrade_scenarios_0_145_0.json` | 0.145.0 官方／候选场景基线 |
+| `tools/official_client_capture/candidate_rule_assertion.py` | 官方与候选两侧逐规则断言 |
+| `tools/official_client_capture/capture.py`、`capturelib/` | 编排器调用的底层采集与安全生命周期 |
+| `tools/official_client_capture/pcap_clienthello.py`、`relay_extract.py` | TLS 与应用字节离线解析 |
+| `tools/official_client_capture/check_sample_integrity.py` | 单向、空连接和中继样本完整性检查 |
+| `tools/official_client_capture/scrub_raw_bytes.py` | 原始字节等长脱敏、秘密检查和脱敏结果验证 |
+| `tools/check_spec_refs.py`、`tools/evidence_index.py`、`tools/spec_status.py` | 规则、源码引用和证据索引门禁 |
+| `tools/check_ledger_completeness.py` | §3.5 台账完整性复算 |
+| `tools/check_version_leak.py`、`tools/version_leak_baseline.json` | 生产代码版本标识符泄漏门禁与基线 |
+
+底层脚本只有被版本场景清单引用时才属于正式工具链。历史一次性脚本不应重新成为平行入口。
+
+## 3.6 当前验收边界
+
+当前 0.145.0 伪装实现以第二部分 42 项为目标，官方客户端和第三方入口都必须绑定同一
+源码树、镜像、profile ID／digest 和规则清单。验收结论只对已封存 Campaign 身份成立，
+不外推到其他版本、平台、镜像或工作树。
+
+Sub2API 是多账号网关，并发度、跨账号调度和整体请求节奏不会变成单用户 CLI；这些服务级
+统计特征不属于 42 项。工具只能证明声明范围内的请求和恢复事实，不能替代生产备份、SSH
+主机证明或任意未知秘密扫描。
+
+---
+
+# 第四部分 Codex CLI 升级与上游演进
+
+## 4.1 何时必须启动升级
+
+出现以下任一变化都要新建版本 Campaign：
+
+- Codex CLI 版本或官方二进制 SHA-256 变化；
+- Cargo.lock、网络依赖、TLS 后端或目标平台变化；
+- 官方默认 feature、端点、header、body、连接或状态路径变化；
+- Sub2API 源码树、候选镜像、构建 ID 或版本画像变化；
+- 合并上游后统一应用点、Client 生命周期或协议适配发生变化。
+
+旧版规则、实现逻辑和场景可以作为发现线索，旧版运行证据不能替代目标版本证据。
+
+## 4.2 版本化五份清单
+
+目标版本的权威输入放在：
+
+```text
+tools/official_client_capture/versions/<目标版本>/
+```
+
+至少包含：
 
 | 文件 | 内容 |
 |---|---|
-| `manifest.json` | 版本、任务矩阵、命令参数和规则映射 |
-| `analysis/baseline-source.json` | 旧版本源码出站面 |
-| `analysis/target-source.json` | 新版本源码出站面 |
-| `analysis/source-diff.json` | 新增／删除的调用点、端点、header 和依赖 |
-| `analysis/official-surface.json` | 新版官方运行时出站面 |
-| `analysis/candidate-surface.json` | Sub2API 运行时出站面 |
-| `analysis/baseline-to-official.json` | 新旧官方动态形态差异 |
-| `analysis/official-to-candidate.json` | 新版官方与 Sub2API 差异 |
-| `analysis/coverage.json` | 每条规则的官方／候选证据任务及完成状态 |
-| `report.json`、`report.md` | 机器与人工审阅入口 |
+| `target-rules.json` | 目标版本规则全集、范围、必做性和断言器 |
+| `rule-migration.json` | 旧规则的 inherit/change/delete 和新规则的 add 分类 |
+| `scenarios.json` | 官方／候选场景、变量、前置条件、清理动作和规则覆盖 |
+| `profile.json` | Go 薄层可直接实现的完整版本画像，不是旧版增量 |
+| `assertion-profile.json` | 独立于候选实现的正例、负例和逐规则期望 |
 
-任务成功只表示证据已收集并完成结构比较，不自动等于规则通过。`ready` 还要求必需任务
-成功、规则证据映射闭合、没有未分类的新形态，并且官方与候选动态出站面一致。
+五份清单分别计算 SHA-256，并以联合摘要人工批准。规则数量由迁移结果产生；42 只属于
+0.145.0，后续版本不得写死为 42。
 
-## 4.3 新出站形态发现
-
-抓包只能看到被场景触发的路径，不能单独证明“没有其他出站”。新版本必须同时执行以下
-四层发现：
-
-### 4.3.1 源码调用点
-
-扫描 Rust/TOML 中的 HTTP／WS Client、请求构造器、发送点、端点字符串和 header 插入点。
-相关文件内容变化、新文件或新调用点都会进入 `source-diff.json`，等待人工分类。
-
-### 4.3.2 网络依赖与配置分支
-
-解析 `Cargo.lock` 中的 reqwest、hyper、h2、tungstenite、native-tls、rustls 等网络依赖。
-版本、来源、checksum 或 TLS／feature 配置变化时，即使端点源码未变，也必须重验对应传输
-规则。
-
-### 4.3.3 动态出站面
-
-从 JSON、JSONL、pcap 和 relay 原始上行统一提取以下签名：
+## 4.3 单向状态机与统一命令
 
 ```text
-host/SNI + path及query键 + method + protocol
-+ header名称与线序 + body结构哈希
-+ WS事件类型、字段顺序与压缩
-+ TLS cipher、扩展顺序与ALPN
+planned
+→ official_sealed
+→ profile_approved
+→ candidate_sealed
+→ compared
+→ ready
 ```
 
-新版官方出现旧版清单中不存在的签名时，必须产生新增形态候选，不能自动忽略。
+唯一入口：
 
-### 4.3.4 覆盖责任
+```bash
+python3 tools/official_client_capture/codex_upgrade.py --help
+```
 
-每个源码出站入口和动态形态必须处于以下状态之一：
+| 阶段 | 核心动作 | 完成条件 |
+|---|---|---|
+| `plan` | 冻结版本、源码、二进制、规则、场景和环境身份 | 新建不可变 Campaign |
+| `capture-official run/seal` | 对目标官方 CLI 执行场景、恢复和证据封存 | 官方目标出站面完整 |
+| `classify` | 比较源码、依赖和动态出站面，完成五份清单 | 无未分类项，联合摘要获批 |
+| `capture-candidate run/seal` | 对固定源码树、镜像和画像执行候选及第三方入口 | 候选身份、恢复和客户端收据封存 |
+| `compare` | 断网重哈希并比较官方／候选证据 | 生成双侧逐规则断言模板 |
+| `accept` | 重放机器断言、收据、安全和 evidence seal | 全部门禁通过，进入 `ready` |
+| `status` | 从不可变收据推导状态 | 不修改 Campaign |
+| `resume` | 只续跑允许自动重试的失败阶段 | 不代替人工分类或摘要批准 |
 
-- 已由场景覆盖并归入既有规则；
-- 已建立新规则；
-- 有证据证明不属于当前 OpenAI OAuth 范围；
-- 因权限或外部条件阻塞；
-- 尚未分类。
+真实请求和封存分开：`run` 只采集并保存 attempt，`seal` 只允许绑定该 attempt 已声明的证据。
+候选第一次 seal 建立 Kilo 后环境检查点，第二次生成预览，第三次按相同 review digest 封存。
 
-最后两种状态阻止目标画像发布。dry-run 中的 `official_unmapped` 和
-`candidate_unmapped` 必须为空；新增场景可由 `--extra-jobs` 注入总编排器。
+## 4.4 升级步骤
 
-## 4.4 规则演进与画像更新
+1. **冻结基线**：记录旧版 profile digest、规则清单、官方证据和已验收镜像。
+2. **取得目标版本**：锁定官方源码、Cargo.lock、二进制 SHA-256、运行镜像和平台。
+3. **官方发现**：扫描新增／删除调用点，执行 full 官方场景并封存证据。
+4. **规则迁移**：逐项分类 inherit、change、add、delete、condition_change 或 blocked。
+5. **实现新画像**：新建版本快照文件，登记进 `officialCodexVersionSnapshots`，并在
+   registry 补 build/wire profile、调整 release 指针（见 §3.2）；稳定执行引擎只在新
+   形态无法表达时修改。快照内容全部来自第 3–4 步的证据，不得手工推断。
+6. **候选验收**：最终镜像覆盖官方 Codex CLI、Compatible、Responses HTTP/WS 和 Kilo。
+7. **双侧断言**：每条目标规则分别运行官方和候选机器断言，随后 compare 和 accept。
+8. **合并上游复验**：以合并后的最终源码树和镜像新建 candidate attempt，不能复用合并前结论。
+9. **灰度与回滚准备**：只发布不可变画像和镜像，保留上一已验收版本。
 
-完成采集后，对每个差异作唯一分类：
+目标版本出现新出站面不是失败；未发现、未分类或用旧画像静默兜底才是失败。
 
-| 分类 | 处理 |
+## 4.5 必须保持的可信边界
+
+以下约束不能因为简化文档而删除：
+
+1. Campaign 核心清单、attempt、preview 和阶段 result 均只写一次。
+2. 每次 run 在发请求前原子预约并生成随机 `run_nonce`；只留下 reservation 的中断和孤儿
+   预约均按失败关闭，不允许自动重跑。
+3. 官方身份绑定版本、二进制、源码树、依赖和实际运行镜像。
+4. 候选身份绑定源码树、构建 ID、部署版本、OCI digest、image ID 和 profile digest。
+5. evidence root、日志、pcap、relay、收据和恢复报告共同进入逐文件 inventory。
+6. compare、accept 和后续 status 都重新计算摘要并重放机器 finalizer；机器收据必须由
+   `codex_upgrade_receipt_finalizer.py` 从原始事实生成，人工只能批准机器给出的
+   `review_sha256`，不能手写通过结论。
+7. 环境恢复失败会污染整个 Campaign，不允许自动 resume 或继续 seal。
+8. 完整失败只能显式执行 `resume --rerun-failed`；失败重跑创建新 attempt 并重新执行全部
+   任务，不跨 attempt 复用日志或证据。
+9. 真实请求只有在明确提供 `--acknowledge-live-requests` 后才能执行。
+10. 抓包和验收不得执行 `compose down`、`pull` 或 `prune`，不得替换、重建数据容器。
+11. 凭据、Cookie、完整代理 URL 和未脱敏原始字节不得进入 Git 或阶段身份文件。
+12. `ready` 只表示证据门禁通过，不表示已部署、已备份或已完成生产回滚演练。
+13. 新 Codex CLI 版本只新增版本快照、版本清单和测试，不修改 §3.5.2 的共享接入点。
+    §3.2 的版本快照注册表与 release 指针使该约束可以实际达成，不再只是原则；
+    `tools/check_version_leak.py` 的基线机制负责看住它——共享接入点的版本标识符命中数
+    只许降不许升，基线外的文件必须为零。若现有画像和稳定执行引擎确实无法表达新机制、
+    必须修改共享文件，则要记录受影响规则、无法表达的原因、共享文件最小差异和专项复验
+    结果，并显式更新泄漏基线使该例外可见可审计，不能以版本升级为由重新散落条件分支。
+
+## 4.6 官方与第三方入口矩阵
+
+| 入口 | 必须证明 |
 |---|---|
-| 继承 | 规则命题不变，为目标版本保存新的验证结果 |
-| 变化 | 保留编号血缘，更新目标版本命题、证据和画像值 |
-| 新增 | 分配新编号，补源码证据、官方抓包、Sub2API 实现和候选抓包 |
-| 删除 | 证明对应出站入口已删除或条件不可达，不以一次未触发作为删除证据 |
-| 条件变化 | 更新适用范围和触发矩阵，并补正例／负例 |
-| 阻塞 | 记录缺少的权限或外部条件，禁止启用完整画像 |
+| 官方 Codex CLI | 无论声明何种版本、平台或 surface，均收敛到 active 画像，不落入通用兜底 |
+| `/v1/chat/completions` | Compatible 适配后进入目标 HTTP Responses 画像 |
+| `/v1/responses` HTTP | Responses 入口使用同一 HTTP 画像 |
+| `/v1/responses` WebSocket | WS、预热和 fallback 使用同一版本画像 |
+| Kilo Compatible | `kilo-compatible` 收据绑定模型、账号、请求、响应、usage 和 profile |
+| Kilo Responses | `kilo-responses` 收据绑定相同候选身份和 profile |
 
-目标版本规则清单由分类结果生成，不把 42 写死。每条规则仍须满足“实现点、触发条件、
-源码证据、官方运行证据、Sub2API 运行证据”五项闭环。
+Kilo 的 installation 可以早于 attempt；ingress、runtime、response 和 usage 必须绑定相同
+Campaign、attempt、`run_nonce`，并位于 attempt 开始与 client checkpoint 之间。检查点后
+不得继续发送 Kilo 模型请求。第三方入口证明“不同入站协议收敛到同一出站画像”，不要求每个
+客户端独立触发规则全集。
 
-## 4.5 启用与回滚门禁
+## 4.7 合并 Sub2API 上游
 
-新画像只有同时满足以下条件才能启用：
+每次合并按以下顺序处理：
 
-1. 新版本所有出站调用点均已分类，没有未知网络入口。
-2. 目标规则清单中的必做项全部具有官方和 Sub2API 证据。
-3. 官方与 Sub2API 的结构、线序、协议和条件行为逐项通过。
-4. 旧版本画像回归测试仍通过，新画像没有覆盖旧画像数据。
-5. 合并当前 Sub2API 上游后重新执行相同门禁并通过。
+1. 更新并记录明确的上游 commit，不用含糊的“最新 main”作为基线；
+2. 先合并上游业务代码，不同时改版本画像；
+3. 按 §3.5.2 的上游接入点逐文件复核调用顺序、上下文和旁路；
+4. 重新生成 wire 依赖注入和其他生成代码；
+5. 运行 Go 全量测试、抓包工具测试和文档门禁，其中必须包含
+   `tools/check_ledger_completeness.py` 与 `tools/check_version_leak.py`；
+6. 用合并后源码构建新镜像，并记录 source tree digest、build ID、OCI digest 和 image ID；
+7. 新建候选 attempt，重跑官方、候选、Kilo、compare 和 accept；
+8. 若上游新增出站路径，先归入规则发现和版本清单，不能在共享文件内追加临时特判；
+9. 更新 §3.5 的文件台账，删除已不再存在的接入点并登记新增接入点。
 
-启用按版本显式路由；失败时切回上一已验收画像。未知 CLI 版本不得静默使用最新画像。
+画像文件尽量保持 fork 独有；上游文件只保留取得身份、传递上下文和进入统一 finalizer 的
+最小调用。这样 Codex 升级成本集中在版本画像，上游合并冲突集中在有限接入点。
+
+## 4.8 启用与回滚
+
+新画像只有在 Campaign `ready`、最终镜像身份一致、合并上游后 full 门禁通过时才能灰度。
+
+灰度维度是 registry 的 release 指针与 profile mode，**不是入站客户端声明的版本**：按
+§3.1，出站画像与客户端身份无关，同一时刻所有 OAuth 出站使用同一 active 画像。把新画像
+指向 `Active`、上一已验收画像保留在 `Previous`，即可通过 profile mode 在两者间切换。
+
+出现逐规则回归、运行 profile digest 不一致、入口落入通用兜底、服务健康失败、账号映射
+异常、恢复失败、秘密扫描失败或证据摘要不一致时，立即停止扩大灰度并切回上一已验收画像
+和镜像。保留 `Previous` 指针的价值正在于此：回滚是切换指针而非改代码重建镜像。回滚不能
+删除 Campaign、覆盖画像或重建数据容器；回滚后复核服务、数据挂载、账号、keeper、
+代理／CA 残留和旧版入口。
+
+## 4.9 文档、工具与证据保留
+
+本文件是唯一叙事文档；以下内容仍作为机器资产保留：
+
+| 资产 | 保留原因 |
+|---|---|
+| `docs/EVIDENCE_INDEX.md` | 从本文件和证据映射生成的审核索引 |
+| `tools/spec_source_deps/` | 第二部分 L2 引用的锁定依赖 |
+| `tools/official_client_capture/` 正式入口、场景依赖和 Schema | 重新抓包和验收所必需 |
+| `local-analysis/sources/codex-cli-0.145/` | 第二部分 L1 引用的官方生产源码 |
+| `local-analysis/captures/raw-scrubbed/` 中索引引用的 36 个目录 | 第二部分 R 类规则可重新解析的基础 |
+| `official-egress-final-review-fix-20260727-094500`、`profile-fidelity-fix-20260727`、`wire-parity-fix-20260727` | 第二部分 P/J/M 证据及其完整 manifest |
+| `kilo-r11-20260731T220626Z` | 当前官方／第三方入口收敛验收的 Kilo 封存证据 |
+| 已接受 Campaign 的 result、assertions 和 evidence seal | 证明某个候选身份曾达到 ready |
+
+历史过程文档、一次性脚本和未被规则／Campaign 引用的抓包不属于长期权威输入。清理前必须
+先生成保留清单，证明第二部分、`EVIDENCE_INDEX.md`、版本场景和已接受 Campaign 均不再
+引用；随后先移入隔离目录，复验全部门禁后再删除。不得根据文件名、日期或“看起来过时”
+直接删除证据。
+
+2026-07-31 已按上述规则完成第一次清理：删除 22 个无规则引用的 R 类重复／失败尝试目录、
+3 个已被当前证据替代的历史 Campaign、11 个根目录一次性脚本、历史过程文档和生成缓存；
+共清理 3533 个抓包文件，约 738 MiB。删除前后均通过证据索引、样本计数、缺口、规格引用、
+抓包工具测试和 Kilo 摘要校验；上述保留资产未改写。
