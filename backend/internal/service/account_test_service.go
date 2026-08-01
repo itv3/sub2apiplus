@@ -2004,8 +2004,7 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to build image request: %s", err.Error()))
 	}
-	targetURL, err := officialCodex0145BuildEndpointURL(
-		officialCodexVersion0145,
+	targetURL, err := buildActiveCodexEndpointURL(
 		codex0145EndpointID(endpointProfile.ID),
 		officialCodex0145EndpointURLInput{},
 	)
@@ -2066,8 +2065,7 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	tlsProfile, err := officialCodex0145ResolveEndpointTLSProfileForURL(
-		officialCodexVersion0145,
+	tlsProfile, err := resolveActiveCodexEndpointTLSProfileForURL(
 		codex0145EndpointID(endpointProfile.ID),
 		req.URL,
 	)

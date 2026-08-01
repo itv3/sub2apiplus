@@ -339,7 +339,11 @@ func attachOfficialCodex0145EndpointWebSocketContext(
 	if err != nil {
 		return nil, nil, fmt.Errorf("解析 Codex 辅助 WebSocket URL：%w", err)
 	}
-	endpoint, err := resolveCodex0145Endpoint(officialCodexVersion0145, endpointID)
+	version, err := activeOfficialCodexVersion()
+	if err != nil {
+		return nil, nil, err
+	}
+	endpoint, err := resolveCodex0145Endpoint(version, endpointID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -365,7 +369,7 @@ func attachOfficialCodex0145EndpointWebSocketContext(
 		InboundEndpoint:   target.Path,
 		Transport:         OfficialEgressTransportWebSocket,
 		UpstreamHost:      target.Hostname(),
-		ProfileVersion:    officialCodexVersion0145,
+		ProfileVersion:    version,
 		ProfileMode:       officialClientProfileModeActive,
 		AccountType:       account.Type,
 		ProxyID:           proxyID,
@@ -418,7 +422,7 @@ func resolveOfficialCodex0145RuntimeStateFromSnapshot(
 	endpointIDs ...codex0145EndpointID,
 ) (officialCodex0145RuntimeState, error) {
 	state := defaultOfficialCodex0145RuntimeState()
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveActiveCodexVersionProfile()
 	if err != nil {
 		return officialCodex0145RuntimeState{}, err
 	}
@@ -614,7 +618,7 @@ func officialCodex0145ValidateSubagentRuntime(
 }
 
 func validateOfficialCodex0145RuntimeState(state officialCodex0145RuntimeState) error {
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveActiveCodexVersionProfile()
 	if err != nil {
 		return err
 	}

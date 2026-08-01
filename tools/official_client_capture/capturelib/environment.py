@@ -81,15 +81,69 @@ BASE_ENVIRONMENT_KEYS = {
 }
 
 
-def clean_environment(source: Mapping[str, str] | None = None) -> dict[str, str]:
-    """从最小白名单重建环境，拒绝未知变量改变客户端或 TLS 画像。"""
+# 允许在差分场景中显式注入的探针变量。这些键都是官方客户端自身读取的条件开关，
+# 用于给 docs/Claude_code_21220_EGRESS_SPEC.md 第 2.2 节的条件候选取正负例。
+#
+# 这里刻意维持一份独立白名单，而不是放开 clean_environment：默认拒绝未知变量是为了
+# 防止环境污染改变客户端或 TLS 画像，一旦允许任意注入，任何一次采集都无法再自证
+# 「出站形态只由画像决定」。凡是能改变凭据、上游地址、代理或 CA 的键都不在此列，
+# 它们会改变的是被测对象本身而不是被测条件。
+INJECTABLE_PROBE_KEYS = {
+    "ANTHROPIC_BETAS",
+    "ANTHROPIC_CUSTOM_HEADERS",
+    "CLAUDE_CODE_ADDITIONAL_PROTECTION",
+    "CLAUDE_CODE_DISPATCH_V2S",
+    # 以下三个由同一个 header 构造对象读取，各自条件展开一个 header：
+    #   s = process.env.CLAUDE_CODE_CONTAINER_ID        -> x-claude-remote-container-id
+    #   a = process.env.CLAUDE_CODE_REMOTE_SESSION_ID   -> x-claude-remote-session-id
+    #   l = process.env.CLAUDE_AGENT_SDK_CLIENT_APP     -> x-client-app
+    # 它们只在出站 header 上追加标识，不改变凭据、上游地址、代理或 CA。
+    "CLAUDE_AGENT_SDK_CLIENT_APP",
+    "CLAUDE_CODE_CONTAINER_ID",
+    "CLAUDE_CODE_REMOTE_SESSION_ID",
+}
+
+
+def parse_injected_env(pairs: list[str] | None) -> dict[str, str]:
+    """解析 `KEY=VALUE` 形式的探针变量，仅接受白名单内的键。"""
+
+    injected: dict[str, str] = {}
+    for item in pairs or ():
+        key, sep, value = item.partition("=")
+        key = key.strip()
+        if not sep or not key:
+            raise ConfigurationError(f"--inject-env 需要 KEY=VALUE 形式：{item!r}")
+        if key not in INJECTABLE_PROBE_KEYS:
+            allowed = "、".join(sorted(INJECTABLE_PROBE_KEYS))
+            raise ConfigurationError(
+                f"{key} 不在允许注入的探针变量内。允许的键：{allowed}")
+        if key in injected:
+            raise ConfigurationError(f"--inject-env 重复声明了 {key}。")
+        injected[key] = value
+    return injected
+
+
+def clean_environment(
+    source: Mapping[str, str] | None = None,
+    injected: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """从最小白名单重建环境，拒绝未知变量改变客户端或 TLS 画像。
+
+    `injected` 只接受 `INJECTABLE_PROBE_KEYS` 内的探针变量，由调用方先经
+    `parse_injected_env` 校验；这里再兜一次底，避免绕过参数解析直接传入。
+    """
 
     original = source if source is not None else os.environ
-    return {
+    environment = {
         key: value
         for key, value in original.items()
         if key in BASE_ENVIRONMENT_KEYS
     }
+    for key, value in (injected or {}).items():
+        if key not in INJECTABLE_PROBE_KEYS:
+            raise ConfigurationError(f"{key} 不是允许注入的探针变量。")
+        environment[key] = value
+    return environment
 
 
 def prepare_api_state(run_dir: Path) -> tuple[Path, Path]:
@@ -140,10 +194,11 @@ def build_case_environment(
     proxy_url: str,
     ca_bundle: Path,
     oauth_claude_secret: str | None = None,
+    injected_env: Mapping[str, str] | None = None,
 ) -> dict[str, str]:
     """构造单一 case 的子进程环境，不修改当前进程环境。"""
 
-    environment = clean_environment(source)
+    environment = clean_environment(source, injected_env)
     # 自定义 Key 变量名也必须先删除，避免 all 模式把 API 凭据带入 OAuth 子进程。
     environment.pop(api_key_env, None)
     environment.update(PRIVACY_ENV)

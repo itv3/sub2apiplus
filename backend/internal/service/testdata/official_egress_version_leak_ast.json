@@ -1,0 +1,167 @@
+{
+  "_comment": "归属于 Codex/OpenAI 的版本命中指纹 → 次数。覆盖字符串字面量、常量拼接与注释三类；指纹由「命中类型 + 归属上下文 + 语义内容」生成。注意「改动归属位置会产生新指纹」只适用于 AST 表达式命中（字面量与拼接）：注释按 CommentGroup 全文管理，同一段注释在文件内移动不会改变指纹。归属由 go/ast 的父节点链判定，见 official_egress_version_leak_ast_test.go。门禁禁止出现基线外的新指纹，也禁止同一指纹次数上升；重建基线用 UPDATE_VERSION_LEAK_AST_BASELINE=1。",
+  "files": {
+    "backend/cmd/server/main.go": {
+      "86547fc8db9757c8": 1
+    },
+    "backend/internal/handler/admin/setting_handler_update.go": {
+      "1f906664b346d657": 1,
+      "6a9d9d895464bcd7": 1,
+      "71a22b786c0185bc": 1,
+      "7a27558d607b53d6": 1,
+      "cdf5be7c1f628f88": 1
+    },
+    "backend/internal/handler/openai_gateway_handler.go": {
+      "53fb854e542b48e0": 1
+    },
+    "backend/internal/pkg/openai/request.go": {
+      "d155773c2c4dc8dc": 1,
+      "e9516d439abb740e": 1
+    },
+    "backend/internal/pkg/openaiidentity/codex.go": {
+      "27353274124d7650": 1,
+      "bbe36c8241027346": 1,
+      "c58ae39832285798": 1
+    },
+    "backend/internal/repository/claude_usage_service.go": {
+      "b0e18ac249fdfc67": 1
+    },
+    "backend/internal/server/routes/gateway.go": {
+      "20bc5ac158e96c31": 1
+    },
+    "backend/internal/service/account_test_service.go": {
+      "71a1948d1a3c6e44": 1,
+      "8ef948a0e8526c25": 1
+    },
+    "backend/internal/service/account_test_service_openai_files.go": {
+      "2ffca2e79a30104c": 1,
+      "63d184c99ea21a8e": 1,
+      "943c9f791e9ea312": 1,
+      "f7064bbaca7de9b2": 1
+    },
+    "backend/internal/service/admin_compliance.go": {
+      "0257ca76d26eaa64": 1
+    },
+    "backend/internal/service/domain_constants.go": {
+      "2573aa52baeecc49": 1,
+      "28d68a9379119cf3": 1
+    },
+    "backend/internal/service/metadata_userid.go": {
+      "80eadaeef2ec1cbc": 1
+    },
+    "backend/internal/service/official_client_profile_registry.go": {
+      "1e75ff7e6b9d988f": 1,
+      "28a9c6289529b674": 1,
+      "2dd30db8866a6685": 1,
+      "2fb7a9ece079a534": 1,
+      "7e54fdd5b19c6701": 1,
+      "98e9b9a395cec945": 1,
+      "c2400352c1a75065": 1,
+      "dcbfc79967e3ffb4": 1,
+      "f0e1fca094954b08": 1
+    },
+    "backend/internal/service/official_egress_codex_engine.go": {
+      "1628014ea7b35992": 1,
+      "22eb07062ac4fcd6": 1,
+      "5181a51cdf56c367": 1,
+      "5fae5d06f576464a": 1,
+      "7ee5f0fa6d660202": 1,
+      "9627a09b87006800": 1,
+      "cae56eb205f9b7d2": 1,
+      "d73e829855d8bc4d": 1,
+      "f42b06e5ff5f7880": 1,
+      "f8a10653cee671d9": 1
+    },
+    "backend/internal/service/official_egress_codex_files.go": {
+      "ca20294720868e71": 1
+    },
+    "backend/internal/service/official_egress_codex_integration.go": {
+      "0202af3b248b1d40": 1,
+      "032817e5ed67cb9e": 1,
+      "132ca67b2d1f23e2": 1,
+      "22ad04c6e8734e3b": 1,
+      "28190e3f4a9eea08": 1,
+      "54d62a189afc078f": 1,
+      "5d08444911005c30": 1,
+      "626bf4087d71857a": 1,
+      "62ead375f3c55d0b": 1,
+      "6c947f09f47f35f0": 1,
+      "8db380daf676f802": 1,
+      "af344e622c1e2933": 1,
+      "b3e9a085db92656b": 1,
+      "ba4c9c748dfddd23": 1,
+      "c53a2a74fbdfd7c7": 1,
+      "c5422105e73ea483": 1,
+      "d0a2305ecb4dec11": 1,
+      "e5f46575a90b8368": 1,
+      "ec89f17e0fac73ec": 1,
+      "fa1e4037317983b2": 1,
+      "fc98921caacb2b27": 1,
+      "ff6bec7caccb9ad5": 1
+    },
+    "backend/internal/service/official_egress_openai_http.go": {
+      "0829dc91be284917": 1,
+      "3243b776db099034": 1,
+      "457dac318ac6233f": 1,
+      "5dfe094b5147502f": 1,
+      "6c5c19fb2aba4d36": 1,
+      "8b82c42b516a87df": 1,
+      "a4ceab87bc1055d0": 1,
+      "bdbae8ec1edde0d2": 1
+    },
+    "backend/internal/service/official_egress_openai_ws.go": {
+      "901784d40910f36d": 1,
+      "e5a7c056a811fdcd": 1
+    },
+    "backend/internal/service/official_egress_profile.go": {
+      "88295edd4b8dc379": 1
+    },
+    "backend/internal/service/official_egress_transport.go": {
+      "1dc7bc0b26a9f27f": 1,
+      "50ca029ef774f8d7": 1,
+      "cadcdd1bd50acc26": 1,
+      "f4933aef87cfa89a": 1
+    },
+    "backend/internal/service/openai_alpha_search.go": {
+      "ab7c072c38794f7b": 1
+    },
+    "backend/internal/service/openai_apikey_mimicry.go": {
+      "037d487b4dff1105": 1,
+      "93852d5b7051aca0": 1
+    },
+    "backend/internal/service/openai_codex_identity.go": {
+      "5ded7fdfd189ba9f": 1,
+      "dd0d8e01f559711d": 1
+    },
+    "backend/internal/service/openai_codex_transform.go": {
+      "c3e9c2d94a5ce52c": 1,
+      "f8d7d16e815fb00d": 1
+    },
+    "backend/internal/service/openai_compact_probe.go": {
+      "19152a0438da036c": 1
+    },
+    "backend/internal/service/openai_gateway_forward.go": {
+      "db897e4da4905219": 1
+    },
+    "backend/internal/service/openai_gateway_response_handling.go": {
+      "73433d7af37b4eb4": 1
+    },
+    "backend/internal/service/openai_images_responses.go": {
+      "13df96bec5fb5280": 1,
+      "6afac4a5f162cec7": 1,
+      "87577db9e3d63424": 1,
+      "fdca5e84e0775a3b": 1
+    },
+    "backend/internal/service/openai_live.go": {
+      "401536f8e7d76d7b": 1
+    },
+    "backend/internal/service/openai_quota_service.go": {
+      "f0bb0e5c51afdee5": 1
+    },
+    "backend/internal/service/openai_upstream_http.go": {
+      "7fd93425ad6c5e78": 1,
+      "c68f1b1ca528673c": 1,
+      "f566ddd6b9c89587": 1
+    }
+  }
+}

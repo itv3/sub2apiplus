@@ -1,0 +1,2773 @@
+{
+  "schema_version": "claude-egress-rule-ledger/v1",
+  "target_version": "2.1.220",
+  "ledger_revision": 4,
+  "source_document": "docs/Claude_code_21220_EGRESS_SPEC.md",
+  "purpose": "对第二章原有 36 个 SPEC ID 逐项进行原子性、范围和证据闭环复核；本台账不把旧文档中的“已验证”声明视为证据。",
+  "denominator_field_semantics": "verification_denominators 只声明选定证据的非循环有限分母与复算口径，不代表规则 disposition 已达到 verified。",
+  "allowed_dispositions": [
+    "verified",
+    "observed",
+    "candidate",
+    "response_compat",
+    "superseded"
+  ],
+  "historical_36_summary": {
+    "total": 36,
+    "verified": 0,
+    "observed": 27,
+    "candidate": 5,
+    "superseded": 1,
+    "response_compat": 3,
+    "observed_ids": [
+      "SPEC-TLS-001",
+      "SPEC-TLS-002",
+      "SPEC-PROTO-001",
+      "SPEC-HDR-001",
+      "SPEC-HDR-002",
+      "SPEC-HDR-003",
+      "SPEC-HDR-004",
+      "SPEC-HDR-005",
+      "SPEC-HDR-006",
+      "SPEC-HDR-007",
+      "SPEC-HDR-008",
+      "SPEC-HDR-009",
+      "SPEC-HDR-010",
+      "SPEC-HDR-012",
+      "SPEC-HDR-013",
+      "SPEC-HDR-014",
+      "SPEC-HDR-015",
+      "SPEC-BODY-001",
+      "SPEC-BODY-002",
+      "SPEC-BODY-003",
+      "SPEC-BODY-004",
+      "SPEC-BODY-005",
+      "SPEC-BODY-006",
+      "SPEC-EP-001",
+      "SPEC-EP-002",
+      "SPEC-CONN-001",
+      "SPEC-BETA-001"
+    ],
+    "candidate_ids": [
+      "SPEC-HDR-016",
+      "SPEC-HDR-017",
+      "SPEC-HDR-018",
+      "SPEC-HDR-019",
+      "SPEC-CONN-002"
+    ],
+    "superseded_ids": [
+      "SPEC-HDR-011"
+    ],
+    "response_compat_ids": [
+      "SPEC-RESP-001",
+      "SPEC-RESP-002",
+      "SPEC-RESP-003"
+    ],
+    "verified_ids": []
+  },
+  "active_egress_summary": {
+    "historical_verified": 0,
+    "replacement_verified": 0,
+    "replacement_observed": 2,
+    "additional_verified": 0,
+    "total_verified": 0,
+    "excludes_dispositions": [
+      "observed",
+      "candidate",
+      "response_compat",
+      "superseded"
+    ],
+    "note": "当前没有命题同时满足第一章全部正式准入条件。精确样本事实保留为 observed：manifest 未归档实际 argv、采集器与完整环境，runtime image 未独立验证且未执行秘密扫描；Body 静态锚点又未形成字段级数据流证明。",
+    "additional_observed": 12
+  },
+  "common_scope": {
+    "profile_name": "SCOPE-BASELINE",
+    "client_binary_sha256": "674f61f20ff306f3100cf9200e4c36c4b70278b5bef2884549819b942a89c863",
+    "platform": "Linux x86_64",
+    "entrypoint": "sdk-cli",
+    "provider": "firstParty",
+    "authentication": "claude.ai OAuth",
+    "privacy_mode": "essential-traffic",
+    "primary_model": "claude-sonnet-5",
+    "profile_semantics": "已采抓包基线画像，不代表 Claude Code 无参数默认行为。",
+    "clean_environment_keys": [
+      "HOME",
+      "PATH"
+    ],
+    "probe_env_manifest_boundary": "oauth-claude-newaccount-baseline 的 runtime 未记录 injected_probe_env；oauth-probe-baseline-r2 明确记录为空对象。前者只能结合 clean_environment_keys 证明未保留其他环境键，不能把字段缺失表述成已记录空值。",
+    "argv_manifested": false,
+    "current_driver_source": "tools/official_client_capture/capturelib/scenarios.py",
+    "current_driver_source_sha256": "a3854a554eb4f1d216ac5ef73bbfa0fec5a2b1a04f24ddefaa1bfb60078883c6",
+    "current_driver_argv_reconstruction": "-p --model claude-sonnet-5 --safe-mode --no-chrome --disable-slash-commands --prompt-suggestions false --no-session-persistence --max-budget-usd 0.25，并按场景显式设置 --tools；因 argv 未写入 manifest，只作范围解释，不作为 M 绑定事实。",
+    "finite_evidence_scopes": {
+      "SCOPE-J6": {
+        "catalog_refs": [
+          "BASELINE-J",
+          "PROBE-BASELINE-J"
+        ],
+        "unit": "四个明确列举的 J-raw 文件中，全部 boundary=official_cli_to_official_platform、category=claude、subject=claude-http 且 request 为对象的记录，共 6 条。",
+        "non_circular_selector": "筛选条件不得使用待证的 method、path、host、http_version、Header 或 Body 字段。"
+      },
+      "SCOPE-P8": {
+        "catalog_refs": [
+          "BASELINE-P",
+          "HISTORICAL-220"
+        ],
+        "unit": "四个明确列举的 direct pcap 中，从原始 pcap 解析出的全部 ClientHello，共 8 个。",
+        "non_circular_selector": "分母不得按待证的 ALPN、SNI 或扩展值筛选。"
+      },
+      "SCOPE-ALLHOSTS-P4": {
+        "catalog_refs": [
+          "ALLHOSTS"
+        ],
+        "unit": "两个明确列举的 allhosts direct s1 pcap 中，从原始 pcap 解析出的全部 ClientHello，共 4 个。",
+        "non_circular_selector": "分母不得按待证的 SNI 或 ALPN 值筛选。"
+      }
+    },
+    "scenarios": [
+      "s1",
+      "s2",
+      "s4"
+    ],
+    "boundary": "仅约束官方客户端到 api.anthropic.com 的已观测路径；不推出 TUI、其他平台、其他 provider、遥测、远程控制面或端点全集。"
+  },
+  "evidence_catalog": {
+    "A1-SOURCE-MANIFEST": {
+      "channels": [
+        "A1",
+        "M"
+      ],
+      "paths": [
+        "local-analysis/sources/claude-code-2.1.220-official/SOURCE_MANIFEST.json",
+        "local-analysis/sources/claude-code-2.1.220-official/bundle-anchors-linux-x64.json"
+      ],
+      "sha256_by_path": {
+        "local-analysis/sources/claude-code-2.1.220-official/SOURCE_MANIFEST.json": "f16387ab426af769325a6c1bc6ef57fd150c8c66a7bbd3fadab8d22874820917",
+        "local-analysis/sources/claude-code-2.1.220-official/bundle-anchors-linux-x64.json": "fa1fc337254c5257c869d4856b681165f190a26124ea7af4ff42754f27d98e7e"
+      },
+      "note": "绑定官方包、二进制摘要、Bun 主模块摘要和提取器摘要；只证明产物身份，不证明具体规则。"
+    },
+    "A1-CANDIDATES": {
+      "channels": [
+        "A1"
+      ],
+      "paths": [
+        "local-analysis/sources/claude-code-2.1.220-official/CANDIDATE_EVIDENCE.json"
+      ],
+      "sha256_by_path": {
+        "local-analysis/sources/claude-code-2.1.220-official/CANDIDATE_EVIDENCE.json": "134d2fe5b83c0b542b2311a7f4a8e7817e52d0494055ece4697700ebf6abc6c7"
+      },
+      "note": "局部语义窗口与摘要；未完成完整数据流证明时只能支持候选或解释运行观察。"
+    },
+    "A1-REACHABILITY": {
+      "channels": [
+        "A1"
+      ],
+      "paths": [
+        "local-analysis/sources/claude-code-2.1.220-official/reachability-index-linux-x64.json"
+      ],
+      "note": "启发式可达性索引，limitations 必须随引用保留。"
+    },
+    "BASELINE-J": {
+      "channels": [
+        "J",
+        "M"
+      ],
+      "paths": [
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-claude-newaccount-baseline/manifest.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-claude-newaccount-baseline/analysis/mitm/claude-http/s1.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-claude-newaccount-baseline/analysis/mitm/claude-http/s2.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-claude-newaccount-baseline/analysis/mitm/claude-http/s4.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-claude-newaccount-baseline/mitm/claude-http/s1/claude-http.jsonl",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-claude-newaccount-baseline/mitm/claude-http/s2/claude-http.jsonl",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-claude-newaccount-baseline/mitm/claude-http/s4/claude-http.jsonl"
+      ],
+      "note": "complete；覆盖主会话 s1、s2、s4 的解析后请求与响应。"
+    },
+    "PROBE-BASELINE-J": {
+      "channels": [
+        "J",
+        "M"
+      ],
+      "paths": [
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-probe-baseline-r2/manifest.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-probe-baseline-r2/analysis/mitm/claude-http/s1.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-probe-baseline-r2/mitm/claude-http/s1/claude-http.jsonl"
+      ],
+      "note": "complete；独立基线 s1 复验，用于与 oauth-claude-newaccount-baseline 交叉验证基线请求体常量。"
+    },
+    "BASELINE-P": {
+      "channels": [
+        "P",
+        "M"
+      ],
+      "paths": [
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-claude-newaccount-baseline/manifest.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-claude-newaccount-baseline/analysis/direct/claude-http/s1.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-claude-newaccount-baseline/analysis/direct/claude-http/s2.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-claude-newaccount-baseline/analysis/direct/claude-http/s4.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-claude-newaccount-baseline/direct/claude-http/s1/traffic.pcap",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-claude-newaccount-baseline/direct/claude-http/s2/traffic.pcap",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-claude-newaccount-baseline/direct/claude-http/s4/traffic.pcap"
+      ],
+      "note": "complete；包含 ClientHello 解析摘要和原始 pcap。"
+    },
+    "HISTORICAL-220": {
+      "channels": [
+        "J",
+        "P",
+        "M"
+      ],
+      "paths": [
+        "local-analysis/captures/official-egress-final-review-fix-20260727-094500/official-client/oauth-oauth-p0p2-zstd-final-20260726T1420Z/manifest.json",
+        "local-analysis/captures/official-egress-final-review-fix-20260727-094500/official-client/oauth-oauth-p0p2-zstd-final-20260726T1420Z/analysis/mitm/claude-http/s1.json",
+        "local-analysis/captures/official-egress-final-review-fix-20260727-094500/official-client/oauth-oauth-p0p2-zstd-final-20260726T1420Z/analysis/direct/claude-http/s1.json",
+        "local-analysis/captures/official-egress-final-review-fix-20260727-094500/official-client/oauth-oauth-p0p2-zstd-final-20260726T1420Z/direct/claude-http/s1/traffic.pcap"
+      ],
+      "note": "manifest 绑定同一 2.1.220 Linux 二进制。"
+    },
+    "WIRE-DEFAULT": {
+      "channels": [
+        "R"
+      ],
+      "paths": [
+        "local-analysis/captures/claude-wire-r-20260801/relay-r1/relay.json",
+        "local-analysis/captures/claude-wire-r-20260801/relay-r1/conn001.client_to_upstream.bin",
+        "local-analysis/captures/claude-wire-r-20260801/relay-r1/conn001.upstream_to_client.bin",
+        "local-analysis/captures/claude-wire-r-20260801/relay-r1/conn002.client_to_upstream.bin",
+        "local-analysis/captures/claude-wire-r-20260801/relay-r1/conn002.upstream_to_client.bin",
+        "local-analysis/captures/claude-wire-r-20260801/relay-r2/relay.json",
+        "local-analysis/captures/claude-wire-r-20260801/relay-r2/conn001.client_to_upstream.bin",
+        "local-analysis/captures/claude-wire-r-20260801/relay-r2/conn001.upstream_to_client.bin",
+        "local-analysis/captures/claude-wire-r-20260801/relay-r2/conn002.client_to_upstream.bin",
+        "local-analysis/captures/claude-wire-r-20260801/relay-r2/conn002.upstream_to_client.bin"
+      ],
+      "note": "两轮等长脱敏的原始 HTTP/1.1 请求和响应字节；目录缺少与 baseline run 等价的完整 M 绑定，因此 R 独有命题只算已观察。"
+    },
+    "WIRE-SUBAGENT": {
+      "channels": [
+        "R"
+      ],
+      "paths": [
+        "local-analysis/captures/claude-wire-r-20260801/subagent-r1/relay.json",
+        "local-analysis/captures/claude-wire-r-20260801/subagent-r1/conn002.client_to_upstream.bin",
+        "local-analysis/captures/claude-wire-r-20260801/subagent-r1/conn003.client_to_upstream.bin",
+        "local-analysis/captures/claude-wire-r-20260801/subagent-r2/relay.json",
+        "local-analysis/captures/claude-wire-r-20260801/subagent-r2/conn002.client_to_upstream.bin",
+        "local-analysis/captures/claude-wire-r-20260801/subagent-r2/conn003.client_to_upstream.bin"
+      ],
+      "note": "两轮主 agent 与一层子 agent 原始请求字节；目录缺少完整 M 绑定，且不存在两层嵌套样本。"
+    },
+    "PROBE-PROTECTION": {
+      "channels": [
+        "J",
+        "M"
+      ],
+      "paths": [
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-probe-protect-r1/manifest.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-probe-protect-r1/mitm/claude-http/s1/claude-http.jsonl",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-probe-protect-r2/manifest.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-probe-protect-r2/mitm/claude-http/s1/claude-http.jsonl"
+      ],
+      "note": "两轮 complete，manifest 记录只注入 CLAUDE_CODE_ADDITIONAL_PROTECTION=1。"
+    },
+    "PROBE-CUSTOM": {
+      "channels": [
+        "J",
+        "M"
+      ],
+      "paths": [
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-probe-custom-r1/manifest.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-probe-custom-r1/mitm/claude-http/s1/claude-http.jsonl",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-probe-custom-r2/manifest.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-probe-custom-r2/mitm/claude-http/s1/claude-http.jsonl"
+      ],
+      "note": "两轮 complete，只有单行单 header 正例。"
+    },
+    "PROBE-DISPATCH": {
+      "channels": [
+        "J",
+        "M"
+      ],
+      "paths": [
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-probe-dispatch-r1/manifest.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-probe-dispatch-r1/mitm/claude-http/s1/claude-http.jsonl",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-probe-dispatch-r2/manifest.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-probe-dispatch-r2/mitm/claude-http/s1/claude-http.jsonl"
+      ],
+      "note": "两轮 complete；只提供环境变量注入后的负例，不覆盖远程 gate 正例。"
+    },
+    "PROBE-BETAS": {
+      "channels": [
+        "J",
+        "M"
+      ],
+      "paths": [
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-probe-betas-r3/manifest.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-probe-betas-r3/mitm/claude-http/s1/claude-http.jsonl",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-probe-betas-r4/manifest.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-probe-betas-r4/mitm/claude-http/s1/claude-http.jsonl"
+      ],
+      "note": "两轮 complete；只覆盖一个合法 beta 值。"
+    },
+    "MODEL-OPUS": {
+      "channels": [
+        "J",
+        "M"
+      ],
+      "paths": [
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-model-opus-r1/manifest.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-model-opus-r1/mitm/claude-http/s1/claude-http.jsonl"
+      ],
+      "note": "complete；只有一轮 opus 正例。"
+    },
+    "MODEL-HAIKU-FAILED": {
+      "channels": [
+        "M"
+      ],
+      "paths": [
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-model-haiku-r1/manifest.json"
+      ],
+      "note": "status=failed，不能作为正式正例。"
+    },
+    "RETRY-FAULT": {
+      "channels": [
+        "J",
+        "M",
+        "L"
+      ],
+      "paths": [
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-retry-fault-r1/manifest.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-retry-fault-r1/mitm/claude-http/s1/claude-http.jsonl",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-retry-fault-r1/mitm/claude-http/s1/lifecycle-connection.ndjson",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-retry-fault-r2/manifest.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-retry-fault-r2/mitm/claude-http/s1/claude-http.jsonl",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-retry-fault-r2/mitm/claude-http/s1/lifecycle-connection.ndjson"
+      ],
+      "note": "两轮受控 500 一次失败后成功。"
+    },
+    "RETRY-KILL": {
+      "channels": [
+        "J",
+        "M",
+        "L"
+      ],
+      "paths": [
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-retry-kill-r1/manifest.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-retry-kill-r1/mitm/claude-http/s1/claude-http.jsonl",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-retry-kill-r1/mitm/claude-http/s1/lifecycle-connection.ndjson"
+      ],
+      "note": "一轮受控断连接正例。"
+    },
+    "RETRY-429": {
+      "channels": [
+        "J",
+        "M",
+        "L"
+      ],
+      "paths": [
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-ratelimit-429-r1/manifest.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-ratelimit-429-r1/mitm/claude-http/s1/claude-http.jsonl",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-ratelimit-429-r1/mitm/claude-http/s1/lifecycle-connection.ndjson"
+      ],
+      "note": "一轮受控 429 一次失败后成功。"
+    },
+    "ALLHOSTS": {
+      "channels": [
+        "P",
+        "J",
+        "M"
+      ],
+      "paths": [
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-discover-allhosts-r1/manifest.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-discover-allhosts-r1/analysis/direct/claude-http/s1.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-discover-allhosts-r1/direct/claude-http/s1/traffic.pcap",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-discover-allhosts-r1/mitm/claude-http/s1/claude-http.jsonl",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-discover-allhosts-r2/manifest.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-discover-allhosts-r2/analysis/direct/claude-http/s1.json",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-discover-allhosts-r2/direct/claude-http/s1/traffic.pcap",
+        "local-analysis/captures/claude-spec-baseline-20260801/oauth-discover-allhosts-r2/mitm/claude-http/s1/claude-http.jsonl"
+      ],
+      "note": "两轮关闭 host 预过滤，但仍只覆盖 443 与 essential-traffic 的 s1。"
+    }
+  },
+  "replacement_rules": [
+    {
+      "id": "SPEC-HDR-020",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "observed",
+        "reason": "六个选定 J-raw 请求的完整 header 数组均不含该 HTTP Header；但运行 manifest 未满足第一章完整 M 准入，故不升格。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "SCOPE-BASELINE 的主会话推理请求中，HTTP header 集合不包含 x-anthropic-billing-header。",
+      "scope": "SCOPE-J6；缺完整 M 的子 agent R 观察不纳入本条，也不推出 TUI、workload 或其他 provider 路径。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "基线主会话完整 HTTP header 数组中的缺席。"
+        },
+        {
+          "catalog_ref": "PROBE-BASELINE-J",
+          "supports": "独立 complete 基线 s1 的 HTTP header 数组复验同名 Header 缺席。"
+        },
+        {
+          "catalog_ref": "A1-CANDIDATES",
+          "supports": "billing attribution 的当前产物静态构造线索。"
+        },
+        {
+          "catalog_ref": "A1-SOURCE-MANIFEST",
+          "supports": "绑定 A1 候选到官方 2.1.220 Linux 产物。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "完整 M 绑定",
+          "reason": "manifest 未归档实际 argv、采集器与完整环境，runtime image 未独立验证，且未执行秘密扫描。"
+        }
+      ],
+      "required_channels": [
+        "J",
+        "M"
+      ],
+      "verification_denominators": [
+        {
+          "channel": "J",
+          "unit": "all request records in selected J-raw artifacts",
+          "expected": 6,
+          "catalog_refs": [
+            "BASELINE-J",
+            "PROBE-BASELINE-J"
+          ]
+        }
+      ],
+      "next_probe": [
+        "TUI 与 workload 若进入正式范围，需分别取得正负例。"
+      ],
+      "superseded_by": [],
+      "replaces": [
+        "SPEC-HDR-011 的 HTTP header 子命题"
+      ],
+      "notes": [
+        "这是 HTTP header 层的负命题，不否定请求体 system 文本中出现同名字面。",
+        "A1-CANDIDATES 只解释 billing 文本构造线索，不证明 HTTP Header 的全路径缺席。",
+        "WIRE-DEFAULT 与 WIRE-SUBAGENT 也观察到缺席，但因 R 目录缺完整 M，只作补充观察。"
+      ]
+    },
+    {
+      "id": "SPEC-BODY-007",
+      "revision": 1,
+      "domain": "body",
+      "status": {
+        "disposition": "observed",
+        "reason": "六个选定 J-raw 请求均出现相同 attribution 前缀；但字段级 A1 数据流与第一章完整 M 准入均未闭合。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "SCOPE-J6 的每个请求中，system[0].text 是以字面 `x-anthropic-billing-header:` 开头的字符串。",
+      "scope": "SCOPE-J6；只约束文本前缀，不合并 block type、cc_version、cc_entrypoint、cch、字段顺序或动态性。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "五个选定请求的 system[0].text attribution 前缀。"
+        },
+        {
+          "catalog_ref": "PROBE-BASELINE-J",
+          "supports": "第六个独立请求复验 attribution 前缀。"
+        },
+        {
+          "catalog_ref": "A1-CANDIDATES",
+          "supports": "billing 文本构造字面与局部 sink 近邻线索；不是字段级数据流证明。"
+        },
+        {
+          "catalog_ref": "A1-SOURCE-MANIFEST",
+          "supports": "绑定 A1 候选到官方 2.1.220 Linux 产物。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "字段级 A1 数据流",
+          "reason": "现有 ±20 KB sink 近邻不能证明构造点经 system block 到达 messages.create。"
+        },
+        {
+          "reference": "完整 M 绑定",
+          "reason": "manifest 未归档实际 argv、采集器与完整环境，runtime image 未独立验证，且未执行秘密扫描。"
+        }
+      ],
+      "required_channels": [
+        "J",
+        "A1",
+        "M"
+      ],
+      "verification_denominators": [
+        {
+          "channel": "J",
+          "unit": "all request records in selected J-raw artifacts",
+          "expected": 6,
+          "catalog_refs": [
+            "BASELINE-J",
+            "PROBE-BASELINE-J"
+          ]
+        }
+      ],
+      "next_probe": [
+        "为 attribution 前缀建立构造点到 messages.create 的字段级数据流锚点，并补完整 M。"
+      ],
+      "superseded_by": [],
+      "replaces": [
+        "SPEC-HDR-011 中被误分类为 HTTP header 的 body attribution 子命题"
+      ],
+      "notes": [
+        "cc_version、cc_entrypoint 与 cch 已拆为 SPEC-BODY-014/015/016。",
+        "R 中 cch 已从静态占位 00000 改写为五字符值，但改写机制仍是候选。"
+      ]
+    }
+  ],
+  "additional_rules": [
+    {
+      "id": "SPEC-BODY-008",
+      "revision": 1,
+      "domain": "body",
+      "status": {
+        "disposition": "observed",
+        "reason": "两个 complete run 的六个已采基线请求均发送相同 model 值。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "SCOPE-J6 的已采请求体 model 恰为 claude-sonnet-5；不推出 CLI 无参数默认模型。",
+      "scope": "SCOPE-J6；不外推 Opus、Haiku、子 agent 模型选择或 fallback。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "s1、s2、s4 的五个基线请求均为 claude-sonnet-5。"
+        },
+        {
+          "catalog_ref": "PROBE-BASELINE-J",
+          "supports": "独立 s1 基线请求复验为 claude-sonnet-5。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "字段级 A1 数据流",
+          "reason": "当前没有 model 取值到最终请求 Body 的目标版本数据流锚点。"
+        },
+        {
+          "reference": "完整 M 绑定",
+          "reason": "manifest 未归档实际 argv、采集器与完整环境，runtime image 未独立验证，且未执行秘密扫描。"
+        }
+      ],
+      "required_channels": [
+        "J",
+        "A1",
+        "M"
+      ],
+      "verification_denominators": [
+        {
+          "channel": "J",
+          "unit": "all request records in selected J-raw artifacts",
+          "expected": 6,
+          "catalog_refs": [
+            "BASELINE-J",
+            "PROBE-BASELINE-J"
+          ]
+        }
+      ],
+      "next_probe": [
+        "模型选择或 fallback 进入实现范围时，按模型分别建立独立规则。"
+      ],
+      "superseded_by": [],
+      "notes": [
+        "模型值与模型选择算法是不同命题；本条只约束基线画像的可见值。",
+        "当前 driver 源码显式传递 --model，但 argv 未进入 manifest，故该因果关系不属于 verified 命题。"
+      ]
+    },
+    {
+      "id": "SPEC-BODY-009",
+      "revision": 1,
+      "domain": "body",
+      "status": {
+        "disposition": "observed",
+        "reason": "两个 complete run 的六个基线请求均发送整数 64000。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "SCOPE-J6 的请求体 max_tokens 恰为整数 64000。",
+      "scope": "SCOPE-J6；不外推其他模型、context overflow 改写或 quota 请求。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "s1、s2、s4 的五个基线请求均为 64000。"
+        },
+        {
+          "catalog_ref": "PROBE-BASELINE-J",
+          "supports": "独立 s1 基线请求复验为 64000。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "字段级 A1 数据流",
+          "reason": "当前没有 max_tokens 取值到最终请求 Body 的目标版本数据流锚点。"
+        },
+        {
+          "reference": "完整 M 绑定",
+          "reason": "manifest 未归档实际 argv、采集器与完整环境，runtime image 未独立验证，且未执行秘密扫描。"
+        }
+      ],
+      "required_channels": [
+        "J",
+        "A1",
+        "M"
+      ],
+      "verification_denominators": [
+        {
+          "channel": "J",
+          "unit": "all request records in selected J-raw artifacts",
+          "expected": 6,
+          "catalog_refs": [
+            "BASELINE-J",
+            "PROBE-BASELINE-J"
+          ]
+        }
+      ],
+      "next_probe": [
+        "分别验证 Opus、Haiku、context overflow 与 quota 路径的取值。"
+      ],
+      "superseded_by": [],
+      "notes": [
+        "必须保留 JSON 数字类型，不得序列化为字符串。"
+      ]
+    },
+    {
+      "id": "SPEC-BODY-010",
+      "revision": 1,
+      "domain": "body",
+      "status": {
+        "disposition": "observed",
+        "reason": "两个 complete run 的六个基线请求均发送唯一键 type=adaptive。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "SCOPE-J6 的请求体 thinking 恰为 {\"type\":\"adaptive\"}。",
+      "scope": "SCOPE-J6；不外推禁用 thinking、固定 budget 或其他模型路径。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "s1、s2、s4 的五个基线请求均为唯一键 type=adaptive。"
+        },
+        {
+          "catalog_ref": "PROBE-BASELINE-J",
+          "supports": "独立 s1 基线请求复验相同对象。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "字段级 A1 数据流",
+          "reason": "当前没有 thinking 对象到最终请求 Body 的目标版本数据流锚点。"
+        },
+        {
+          "reference": "完整 M 绑定",
+          "reason": "manifest 未归档实际 argv、采集器与完整环境，runtime image 未独立验证，且未执行秘密扫描。"
+        }
+      ],
+      "required_channels": [
+        "J",
+        "A1",
+        "M"
+      ],
+      "verification_denominators": [
+        {
+          "channel": "J",
+          "unit": "all request records in selected J-raw artifacts",
+          "expected": 6,
+          "catalog_refs": [
+            "BASELINE-J",
+            "PROBE-BASELINE-J"
+          ]
+        }
+      ],
+      "next_probe": [
+        "thinking 配置变化进入范围时，按触发条件建立差分矩阵。"
+      ],
+      "superseded_by": [],
+      "notes": [
+        "本条约束完整对象，而不只约束 type 键存在。"
+      ]
+    },
+    {
+      "id": "SPEC-BODY-011",
+      "revision": 1,
+      "domain": "body",
+      "status": {
+        "disposition": "observed",
+        "reason": "两个 complete run 的六个基线请求均发送同一个单项 edits 对象。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "SCOPE-J6 的请求体 context_management 恰为 {\"edits\":[{\"type\":\"clear_thinking_20251015\",\"keep\":\"all\"}]}。",
+      "scope": "SCOPE-J6；不外推长上下文、compact 或服务端动态策略。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "s1、s2、s4 的五个基线请求均为同一个单项 edits 对象。"
+        },
+        {
+          "catalog_ref": "PROBE-BASELINE-J",
+          "supports": "独立 s1 基线请求复验相同对象。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "字段级 A1 数据流",
+          "reason": "当前没有 context_management 对象到最终请求 Body 的目标版本数据流锚点。"
+        },
+        {
+          "reference": "完整 M 绑定",
+          "reason": "manifest 未归档实际 argv、采集器与完整环境，runtime image 未独立验证，且未执行秘密扫描。"
+        }
+      ],
+      "required_channels": [
+        "J",
+        "A1",
+        "M"
+      ],
+      "verification_denominators": [
+        {
+          "channel": "J",
+          "unit": "all request records in selected J-raw artifacts",
+          "expected": 6,
+          "catalog_refs": [
+            "BASELINE-J",
+            "PROBE-BASELINE-J"
+          ]
+        }
+      ],
+      "next_probe": [
+        "触发 compact 与长上下文后验证 edits 是否改变。"
+      ],
+      "superseded_by": [],
+      "notes": [
+        "对象和数组结构均属于可见发包形态。"
+      ]
+    },
+    {
+      "id": "SPEC-BODY-012",
+      "revision": 1,
+      "domain": "body",
+      "status": {
+        "disposition": "observed",
+        "reason": "两个 complete run 的六个基线请求均发送唯一键 effort=high。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "SCOPE-J6 的请求体 output_config 恰为 {\"effort\":\"high\"}。",
+      "scope": "SCOPE-J6；不外推用户显式 effort、其他模型或远程配置。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "s1、s2、s4 的五个基线请求均为唯一键 effort=high。"
+        },
+        {
+          "catalog_ref": "PROBE-BASELINE-J",
+          "supports": "独立 s1 基线请求复验相同对象。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "字段级 A1 数据流",
+          "reason": "当前没有 output_config 对象到最终请求 Body 的目标版本数据流锚点。"
+        },
+        {
+          "reference": "完整 M 绑定",
+          "reason": "manifest 未归档实际 argv、采集器与完整环境，runtime image 未独立验证，且未执行秘密扫描。"
+        }
+      ],
+      "required_channels": [
+        "J",
+        "A1",
+        "M"
+      ],
+      "verification_denominators": [
+        {
+          "channel": "J",
+          "unit": "all request records in selected J-raw artifacts",
+          "expected": 6,
+          "catalog_refs": [
+            "BASELINE-J",
+            "PROBE-BASELINE-J"
+          ]
+        }
+      ],
+      "next_probe": [
+        "显式 effort 或远程配置进入范围时建立正负例。"
+      ],
+      "superseded_by": [],
+      "notes": [
+        "本条不推断 effort 的内部选择算法。"
+      ]
+    },
+    {
+      "id": "SPEC-BODY-013",
+      "revision": 1,
+      "domain": "body",
+      "status": {
+        "disposition": "observed",
+        "reason": "两个 complete run 的六个基线请求均发送 JSON 布尔值 true。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "SCOPE-J6 的请求体 stream 恰为 JSON 布尔值 true。",
+      "scope": "SCOPE-J6；不外推异常后的 non-stream fallback 或辅助请求。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "s1、s2、s4 的五个基线请求均为布尔值 true。"
+        },
+        {
+          "catalog_ref": "PROBE-BASELINE-J",
+          "supports": "独立 s1 基线请求复验为布尔值 true。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "字段级 A1 数据流",
+          "reason": "当前没有 stream 值到最终请求 Body 的目标版本数据流锚点。"
+        },
+        {
+          "reference": "完整 M 绑定",
+          "reason": "manifest 未归档实际 argv、采集器与完整环境，runtime image 未独立验证，且未执行秘密扫描。"
+        }
+      ],
+      "required_channels": [
+        "J",
+        "A1",
+        "M"
+      ],
+      "verification_denominators": [
+        {
+          "channel": "J",
+          "unit": "all request records in selected J-raw artifacts",
+          "expected": 6,
+          "catalog_refs": [
+            "BASELINE-J",
+            "PROBE-BASELINE-J"
+          ]
+        }
+      ],
+      "next_probe": [
+        "受控触发 non-stream fallback，验证重发条件与完整请求差分。"
+      ],
+      "superseded_by": [],
+      "notes": [
+        "必须保持布尔类型；字符串 \"true\" 不等价。"
+      ]
+    },
+    {
+      "id": "SPEC-TLS-003",
+      "revision": 1,
+      "domain": "tls",
+      "status": {
+        "disposition": "observed",
+        "reason": "两个 allhosts pcap 中的全部 4 个 ClientHello 均携带 api.anthropic.com SNI；但运行 manifest 未满足第一章完整 M 准入。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "SCOPE-ALLHOSTS-P4 的每个 ClientHello 的 SNI 恰为 api.anthropic.com。",
+      "scope": "SCOPE-ALLHOSTS-P4；只覆盖 essential-traffic、tcp/443、s1 两轮，不是 host 或端点全集。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "ALLHOSTS",
+          "supports": "关闭 host 预过滤的两轮原始 pcap、派生分析与各自 manifest。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "完整 M 绑定",
+          "reason": "manifest 未归档实际 argv、采集器与完整环境，runtime image 未独立验证，且未执行秘密扫描。"
+        }
+      ],
+      "required_channels": [
+        "P",
+        "M"
+      ],
+      "verification_denominators": [
+        {
+          "channel": "P",
+          "unit": "all ClientHello in selected pcaps",
+          "expected": 4,
+          "catalog_refs": [
+            "ALLHOSTS"
+          ]
+        }
+      ],
+      "next_probe": [
+        "补完整 M，并在 default 隐私模式与非 443 发现范围下分别重采。"
+      ],
+      "superseded_by": [],
+      "notes": [
+        "本条承接原 SPEC-EP-001 混入的 TLS SNI 子命题。"
+      ]
+    },
+    {
+      "id": "SPEC-EP-003",
+      "revision": 1,
+      "domain": "endpoint",
+      "status": {
+        "disposition": "observed",
+        "reason": "SCOPE-J6 的 6 条独立枚举记录中 request.method 均为 POST；但运行 manifest 未满足第一章完整 M 准入。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "SCOPE-J6 的每个请求中，request.method 标量恰为 POST。",
+      "scope": "SCOPE-J6；不继承 path、HTTP host、scheme、port 或 TLS SNI。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "五个选定请求的解析后 method。"
+        },
+        {
+          "catalog_ref": "PROBE-BASELINE-J",
+          "supports": "第六个独立请求复验 method。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "完整 M 绑定",
+          "reason": "manifest 未归档实际 argv、采集器与完整环境，runtime image 未独立验证，且未执行秘密扫描。"
+        }
+      ],
+      "required_channels": [
+        "J",
+        "M"
+      ],
+      "verification_denominators": [
+        {
+          "channel": "J",
+          "unit": "all request records in selected J-raw artifacts",
+          "expected": 6,
+          "catalog_refs": [
+            "BASELINE-J",
+            "PROBE-BASELINE-J"
+          ]
+        }
+      ],
+      "next_probe": [
+        "补完整 M；其他请求方法须分别建号。"
+      ],
+      "superseded_by": [],
+      "notes": [
+        "本条承接原 SPEC-EP-001 的 method 子命题。"
+      ]
+    },
+    {
+      "id": "SPEC-EP-004",
+      "revision": 1,
+      "domain": "endpoint",
+      "status": {
+        "disposition": "observed",
+        "reason": "SCOPE-J6 的 6 条独立枚举记录中解析后 request.host 均为 api.anthropic.com；但运行 manifest 未满足第一章完整 M 准入。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "SCOPE-J6 的每个请求中，解析后的 request.host 标量恰为 api.anthropic.com。",
+      "scope": "SCOPE-J6；这是 J 层 HTTP host，不等同于 TLS SNI，也不是其他端点的 host 全集。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "五个选定请求的解析后 HTTP host。"
+        },
+        {
+          "catalog_ref": "PROBE-BASELINE-J",
+          "supports": "第六个独立请求复验 HTTP host。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "完整 M 绑定",
+          "reason": "manifest 未归档实际 argv、采集器与完整环境，runtime image 未独立验证，且未执行秘密扫描。"
+        }
+      ],
+      "required_channels": [
+        "J",
+        "M"
+      ],
+      "verification_denominators": [
+        {
+          "channel": "J",
+          "unit": "all request records in selected J-raw artifacts",
+          "expected": 6,
+          "catalog_refs": [
+            "BASELINE-J",
+            "PROBE-BASELINE-J"
+          ]
+        }
+      ],
+      "next_probe": [
+        "补完整 M；scheme 与 port 若进入合同必须另建原子编号。"
+      ],
+      "superseded_by": [],
+      "notes": [
+        "本条承接原 SPEC-EP-001 的 HTTP host 子命题。"
+      ]
+    },
+    {
+      "id": "SPEC-BODY-014",
+      "revision": 1,
+      "domain": "body",
+      "status": {
+        "disposition": "observed",
+        "reason": "SCOPE-J6 的 6 条 attribution 均含符合 2.1.220.<非空后缀> 形态的 cc_version；字段级 A1 数据流与完整 M 尚未闭合。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "SCOPE-J6 的 attribution 分段中，cc_version 标量匹配 ^2\\.1\\.220\\.[^;\\s]+$。",
+      "scope": "SCOPE-J6；只证明字段值形态，不证明后缀生成算法、稳定性或唯一性。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "五个选定请求中的 cc_version 值。"
+        },
+        {
+          "catalog_ref": "PROBE-BASELINE-J",
+          "supports": "第六个独立请求复验 cc_version 形态。"
+        },
+        {
+          "catalog_ref": "A1-CANDIDATES",
+          "supports": "billing 文本构造的局部静态线索；不是字段级数据流证明。"
+        },
+        {
+          "catalog_ref": "A1-SOURCE-MANIFEST",
+          "supports": "把静态候选绑定到官方 2.1.220 Linux 产物。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "字段级 A1 数据流",
+          "reason": "现有静态工具只提供局部 sink 近邻。"
+        },
+        {
+          "reference": "完整 M 绑定",
+          "reason": "manifest 未归档实际 argv、采集器与完整环境，runtime image 未独立验证，且未执行秘密扫描。"
+        }
+      ],
+      "required_channels": [
+        "J",
+        "A1",
+        "M"
+      ],
+      "verification_denominators": [
+        {
+          "channel": "J",
+          "unit": "all request records in selected J-raw artifacts",
+          "expected": 6,
+          "catalog_refs": [
+            "BASELINE-J",
+            "PROBE-BASELINE-J"
+          ]
+        }
+      ],
+      "next_probe": [
+        "建立 cc_version 构造点到 system[0].text 再到 messages.create 的数据流锚点，并补完整 M。"
+      ],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-BODY-015",
+      "revision": 1,
+      "domain": "body",
+      "status": {
+        "disposition": "observed",
+        "reason": "SCOPE-J6 的 6 条 attribution 中 cc_entrypoint 均为 sdk-cli；字段级 A1 数据流与完整 M 尚未闭合。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "SCOPE-J6 的 attribution 分段中，cc_entrypoint 标量恰为 sdk-cli。",
+      "scope": "SCOPE-J6；不外推 TUI、agent-sdk、client-app 或 workload。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "五个选定请求中的 cc_entrypoint 值。"
+        },
+        {
+          "catalog_ref": "PROBE-BASELINE-J",
+          "supports": "第六个独立请求复验 cc_entrypoint。"
+        },
+        {
+          "catalog_ref": "A1-CANDIDATES",
+          "supports": "billing 文本与 entrypoint 的局部静态线索；不是字段级数据流证明。"
+        },
+        {
+          "catalog_ref": "A1-SOURCE-MANIFEST",
+          "supports": "把静态候选绑定到官方 2.1.220 Linux 产物。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "字段级 A1 数据流",
+          "reason": "现有静态工具只提供局部 sink 近邻。"
+        },
+        {
+          "reference": "完整 M 绑定",
+          "reason": "manifest 未归档实际 argv、采集器与完整环境，runtime image 未独立验证，且未执行秘密扫描。"
+        }
+      ],
+      "required_channels": [
+        "J",
+        "A1",
+        "M"
+      ],
+      "verification_denominators": [
+        {
+          "channel": "J",
+          "unit": "all request records in selected J-raw artifacts",
+          "expected": 6,
+          "catalog_refs": [
+            "BASELINE-J",
+            "PROBE-BASELINE-J"
+          ]
+        }
+      ],
+      "next_probe": [
+        "建立 cc_entrypoint 构造点到最终请求 Body 的数据流锚点，并补完整 M。"
+      ],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-BODY-016",
+      "revision": 1,
+      "domain": "body",
+      "status": {
+        "disposition": "observed",
+        "reason": "SCOPE-J6 的 6 条 attribution 中 cch 均为五字符字母数字标量；字段级 A1 数据流与完整 M 尚未闭合。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "SCOPE-J6 的 attribution 分段中，cch 标量匹配 ^[A-Za-z0-9]{5}$。",
+      "scope": "SCOPE-J6；只证明字符形态和长度，不证明随机性、唯一性或生成算法。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "五个选定请求中的 cch 值。"
+        },
+        {
+          "catalog_ref": "PROBE-BASELINE-J",
+          "supports": "第六个独立请求复验 cch 形态。"
+        },
+        {
+          "catalog_ref": "A1-CANDIDATES",
+          "supports": "cch=00000 占位符与 billing 文本构造的局部静态线索；不是改写数据流证明。"
+        },
+        {
+          "catalog_ref": "A1-SOURCE-MANIFEST",
+          "supports": "把静态候选绑定到官方 2.1.220 Linux 产物。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "cch 改写数据流",
+          "reason": "现有静态工具未证明占位符到序列化后五字符值的改写路径。"
+        },
+        {
+          "reference": "完整 M 绑定",
+          "reason": "manifest 未归档实际 argv、采集器与完整环境，runtime image 未独立验证，且未执行秘密扫描。"
+        }
+      ],
+      "required_channels": [
+        "J",
+        "A1",
+        "M"
+      ],
+      "verification_denominators": [
+        {
+          "channel": "J",
+          "unit": "all request records in selected J-raw artifacts",
+          "expected": 6,
+          "catalog_refs": [
+            "BASELINE-J",
+            "PROBE-BASELINE-J"
+          ]
+        }
+      ],
+      "next_probe": [
+        "建立 cch 占位符改写到最终 Body 的数据流锚点，并补完整 M。"
+      ],
+      "superseded_by": [],
+      "notes": [
+        "六个样本值相互不同只作观察，不推出每次请求必然唯一。"
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "id": "SPEC-TLS-001",
+      "revision": 1,
+      "domain": "tls",
+      "status": {
+        "disposition": "observed",
+        "reason": "已选 P 样本支持 retained_claim，但原 ID 同时包含精确序列与跨场景全称不变性，非原子命题，故只计 observed。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "旧命题把精确序列与“不随场景、模型或账号变化”的全称不变性合并。"
+        ]
+      },
+      "retained_claim": "在已列 complete 的 Linux x86_64、sdk-cli、firstParty OAuth 样本中，ClientHello 扩展类型序列均为 0,23,65281,10,11,35,16,5,13,18,51,45,43,21。",
+      "scope": "common_scope；只保留样本内一致性，不推出未采集模型、账号或 provider 的全称不变性。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-P",
+          "supports": "ClientHello 扩展序列及原始 pcap。"
+        },
+        {
+          "catalog_ref": "HISTORICAL-220",
+          "supports": "同一 2.1.220 二进制的独立历史样本。"
+        }
+      ],
+      "missing_refs": [],
+      "required_channels": [
+        "P",
+        "M"
+      ],
+      "next_probe": [
+        "若要恢复跨模型或跨账号不变性结论，需为每个新增维度做独立 direct pcap 重复。"
+      ],
+      "superseded_by": [],
+      "notes": [
+        "失败 run oauth-20260726T011739Z 的短序列不纳入本命题。"
+      ]
+    },
+    {
+      "id": "SPEC-TLS-002",
+      "revision": 1,
+      "domain": "tls",
+      "status": {
+        "disposition": "observed",
+        "reason": "选定 pcap 的全部 8 个 ClientHello 均只 offer http/1.1；但运行 manifest 未满足第一章完整 M 准入，故不升格。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "已声明 direct 样本的 ClientHello 只 offer http/1.1。",
+      "scope": "SCOPE-P8；不推出其他 provider 或平台永不 offer h2。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-P",
+          "supports": "ALPN 列表。"
+        },
+        {
+          "catalog_ref": "HISTORICAL-220",
+          "supports": "独立历史样本。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "完整 M 绑定",
+          "reason": "manifest 未归档实际 argv、采集器与完整环境，runtime image 未独立验证，且未执行秘密扫描。"
+        }
+      ],
+      "required_channels": [
+        "P",
+        "M"
+      ],
+      "verification_denominators": [
+        {
+          "channel": "P",
+          "unit": "all ClientHello in selected pcaps",
+          "expected": 8,
+          "catalog_refs": [
+            "BASELINE-P",
+            "HISTORICAL-220"
+          ]
+        }
+      ],
+      "next_probe": [],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-PROTO-001",
+      "revision": 1,
+      "domain": "protocol",
+      "status": {
+        "disposition": "observed",
+        "reason": "六个选定 J-raw 请求均解析为 HTTP/1.1；但运行 manifest 未满足第一章完整 M 准入，故不升格。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "已声明推理请求的应用层协议为 HTTP/1.1。",
+      "scope": "SCOPE-J6；限已枚举的六个解析记录。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "解析后的 HTTP/1.1。"
+        },
+        {
+          "catalog_ref": "PROBE-BASELINE-J",
+          "supports": "独立 complete 基线 s1 复验 HTTP/1.1。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "完整 M 绑定",
+          "reason": "manifest 未归档实际 argv、采集器与完整环境，runtime image 未独立验证，且未执行秘密扫描。"
+        }
+      ],
+      "required_channels": [
+        "J",
+        "M"
+      ],
+      "verification_denominators": [
+        {
+          "channel": "J",
+          "unit": "all request records in selected J-raw artifacts",
+          "expected": 6,
+          "catalog_refs": [
+            "BASELINE-J",
+            "PROBE-BASELINE-J"
+          ]
+        }
+      ],
+      "next_probe": [],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-HDR-001",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "observed",
+        "reason": "基线样本支持 22 项名称、大小写和相对顺序，但原 ID 合并 H1 字节格式与条件插槽且 R 缺完整 M，故只计 observed。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "至少包含基础 header 序列、H1 字节格式、条件插槽三个独立命题。",
+          "位置说明混用了从 0 开始和从 1 开始的编号。"
+        ]
+      },
+      "retained_claim": "基线 Sonnet 推理路径发送文档所列 22 项 header 名称、大小写和相对顺序；条件插槽不在本条正式命题内。",
+      "scope": "common_scope；基线无探针、主会话推理请求。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "WIRE-DEFAULT",
+          "supports": "基线 22 项名称、大小写、顺序、冒号空格与 CRLF。"
+        },
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "解析后的基线序列。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "hdr-combo-r1",
+          "reason": "仓库中不存在该 run。"
+        },
+        {
+          "reference": "hdr-combo-r2",
+          "reason": "仓库中不存在该 run。"
+        }
+      ],
+      "required_channels": [
+        "J"
+      ],
+      "next_probe": [
+        "用同一 run 同时注入槽 A 与槽 B 各项，保留原始 R 字节并明确位置统一为从 1 开始。"
+      ],
+      "superseded_by": [],
+      "notes": [
+        "仅 .a 基线序列和 .b H1 字节格式具备现成 R 证据；.c 条件插槽仍是候选。"
+      ]
+    },
+    {
+      "id": "SPEC-HDR-002",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "observed",
+        "reason": "六个选定 J-raw 请求均复验精确 UA；但 A1 只有局部 sink 近邻且运行 manifest 未满足第一章完整 M 准入。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "基线 sdk-cli 样本发送 User-Agent: claude-cli/2.1.220 (external, sdk-cli)。",
+      "scope": "SCOPE-J6；不覆盖 TUI、client-app、workload 或其他可选 UA 段。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "精确 UA 值。"
+        },
+        {
+          "catalog_ref": "PROBE-BASELINE-J",
+          "supports": "独立 complete 基线 s1 复验精确 UA。"
+        },
+        {
+          "catalog_ref": "A1-CANDIDATES",
+          "supports": "CAND-UA-ENTRYPOINT 局部模板。"
+        },
+        {
+          "catalog_ref": "A1-SOURCE-MANIFEST",
+          "supports": "绑定 UA 模板候选到官方 2.1.220 Linux 产物。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "UA 字段级 A1 数据流",
+          "reason": "现有候选只证明模板字面与局部 sink 近邻，未证明模板到最终请求 Header 的数据流。"
+        },
+        {
+          "reference": "完整 M 绑定",
+          "reason": "manifest 未归档实际 argv、采集器与完整环境，runtime image 未独立验证，且未执行秘密扫描。"
+        }
+      ],
+      "required_channels": [
+        "J",
+        "A1",
+        "M"
+      ],
+      "verification_denominators": [
+        {
+          "channel": "J",
+          "unit": "all request records in selected J-raw artifacts",
+          "expected": 6,
+          "catalog_refs": [
+            "BASELINE-J",
+            "PROBE-BASELINE-J"
+          ]
+        }
+      ],
+      "next_probe": [
+        "TUI 与 CLAUDE_AGENT_SDK_CLIENT_APP 正例须另立规则。"
+      ],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-HDR-003",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "observed",
+        "reason": "Sonnet 基线样本支持九项序列，但原 ID 同时合并 Opus 与 Haiku 分支且非原子，故只计 observed。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "把 Sonnet、Opus、Haiku 三种模型形态和注册表机制合并。",
+          "同一规则内出现“随模型变化”和“基线按 9 项输出”的自相矛盾。"
+        ]
+      },
+      "retained_claim": "SCOPE-BASELINE 的 Sonnet 5 请求发送文档所列 9 项 anthropic-beta 序列。",
+      "scope": "SCOPE-BASELINE；Opus 仅一轮观察，Haiku 没有成功正例，二者均不进入本条 verified 命题。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "Sonnet 5 的 9 项序列。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "relay-haiku-r1",
+          "reason": "仓库中不存在该 run。"
+        },
+        {
+          "reference": "relay-haiku-r2",
+          "reason": "仓库中不存在该 run。"
+        }
+      ],
+      "required_channels": [
+        "J"
+      ],
+      "next_probe": [
+        "补抓至少两轮成功 Haiku R/J，并逐模型建立独立 beta 序列规则。"
+      ],
+      "superseded_by": [],
+      "notes": [
+        "注册表数量不等于基线发送集合。",
+        "MODEL-OPUS 的单轮相同序列只作观察；MODEL-HAIKU-FAILED 只证明当前 Haiku run 不能作正例。"
+      ]
+    },
+    {
+      "id": "SPEC-HDR-004",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "observed",
+        "reason": "J 样本支持该固定值，但尚未把当前构造点到请求 sink 的静态闭环与完整样本分母同时绑定，故只计 observed。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "已声明推理请求发送 anthropic-version: 2023-06-01。",
+      "scope": "common_scope。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "解析值。"
+        },
+        {
+          "catalog_ref": "WIRE-DEFAULT",
+          "supports": "wire 值。"
+        }
+      ],
+      "missing_refs": [],
+      "required_channels": [
+        "J"
+      ],
+      "next_probe": [],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-HDR-005",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "observed",
+        "reason": "J 样本支持解析值，R 仅作补充观察；当前构造点到 sink 的静态闭环和完整分母未同时绑定，故只计 observed。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "基线推理请求发送 Accept-Encoding: gzip, deflate, br, zstd。",
+      "scope": "common_scope；绑定当前 Bun/平台。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "WIRE-DEFAULT",
+          "supports": "wire 字面值。"
+        },
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "重复观察。"
+        }
+      ],
+      "missing_refs": [],
+      "required_channels": [
+        "J"
+      ],
+      "next_probe": [],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-HDR-006",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "observed",
+        "reason": "已采样本支持八项取值，但原 ID 合并八个 Header 与重试分支，非原子命题，故只计 observed。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "合并八个可独立变化的字段。",
+          "将基线画像与重试状态行为合并。"
+        ]
+      },
+      "retained_claim": "当前 Linux/Bun 基线样本发送 Arch=x64、Lang=js、OS=Linux、Package-Version=0.94.0、Retry-Count=0、Runtime=node、Runtime-Version=v26.3.0、Timeout=600。",
+      "scope": "common_scope；平台、运行时和 SDK 版本变化即失效。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "八项基线值。"
+        },
+        {
+          "catalog_ref": "RETRY-FAULT",
+          "supports": "受控 500 重试时 Retry-Count 仍为 0。"
+        },
+        {
+          "catalog_ref": "RETRY-KILL",
+          "supports": "断连接重试时 Retry-Count 仍为 0。"
+        }
+      ],
+      "missing_refs": [],
+      "required_channels": [
+        "J",
+        "M",
+        "L"
+      ],
+      "next_probe": [
+        "字段值画像与重试计数行为分别编号；补 429 独立重复。"
+      ],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-HDR-007",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "observed",
+        "reason": "前台基线样本支持两个可见值，但原 ID 合并多个 Header 与未采 cli-bg 分支，非原子命题，故只计 observed。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "anthropic-dangerous-direct-browser-access 与 x-app 是两个原子命题。",
+          "x-app 又包含前台已观测与后台未观测两个条件分支。"
+        ]
+      },
+      "retained_claim": "SCOPE-BASELINE 的前台样本同时发送 anthropic-dangerous-direct-browser-access:true 与 x-app:cli。",
+      "scope": "common_scope；只覆盖前台。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "两个前台值。"
+        },
+        {
+          "catalog_ref": "WIRE-DEFAULT",
+          "supports": "wire 值与相对位置。"
+        },
+        {
+          "catalog_ref": "A1-REACHABILITY",
+          "supports": "后台分支只作静态线索。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "cli-bg 运行正例",
+          "reason": "仓库中不存在可绑定的 TUI 后台运行。"
+        }
+      ],
+      "required_channels": [
+        "J",
+        "A1"
+      ],
+      "next_probe": [
+        "在真实 TTY 中启动后台 agent，取得 cli-bg 的 J/R 正例。"
+      ],
+      "superseded_by": [],
+      "notes": [
+        "cli-bg 分支仅为候选，不属于 retained_claim。"
+      ]
+    },
+    {
+      "id": "SPEC-HDR-008",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "observed",
+        "reason": "基线负例支持 Header 缺席，但原 ID 合并环境可达性、远程 gate 与重试移除机制，非原子命题，故只计 observed。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "把运行负例、静态不可达性和远程条件分支合并。"
+        ]
+      },
+      "retained_claim": "基线 firstParty OAuth 推理请求不发送 anthropic-dispatch-id。",
+      "scope": "common_scope；只证明环境注入路径负例，不否定远程 gate 正例。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "PROBE-DISPATCH",
+          "supports": "两轮环境注入负例。"
+        },
+        {
+          "catalog_ref": "A1-CANDIDATES",
+          "supports": "CAND-HDR-DISPATCH 的局部静态窗口。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "tengu_cedar_lattice=true 正例",
+          "reason": "远程 gate 未受控且无正例。"
+        }
+      ],
+      "required_channels": [
+        "J",
+        "M",
+        "A1"
+      ],
+      "next_probe": [
+        "在可绑定远程配置快照的环境取得 gate 正例；否则只保留基线缺席规则。"
+      ],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-HDR-009",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "observed",
+        "reason": "两轮受控输入支持存在性和值，但原 ID 同时合并槽位与分支机制，非原子命题，故只计 observed。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "合并触发、值、位置和总数。",
+          "绝对位置基准未声明且与文档其他条目冲突。"
+        ]
+      },
+      "retained_claim": "CLAUDE_CODE_ADDITIONAL_PROTECTION=1 的两轮正例发送 x-anthropic-additional-protection:true，基线负例不发送。",
+      "scope": "common_scope；只验证真值字符串 1。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "PROBE-PROTECTION",
+          "supports": "正负例、值及 J 中的相对位置。"
+        },
+        {
+          "catalog_ref": "A1-CANDIDATES",
+          "supports": "CAND-HDR-ADDITIONAL-PROTECTION 写入点。"
+        }
+      ],
+      "missing_refs": [],
+      "required_channels": [
+        "J",
+        "M",
+        "A1"
+      ],
+      "next_probe": [
+        "补 R 条件正例；位置统一写成从 1 开始或只写相对槽位。",
+        "差分 0、false、空串及大小写变体。"
+      ],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-HDR-010",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "observed",
+        "reason": "两轮单行正例支持存在性和值，但原 ID 合并解析、槽位与覆盖优先级，非原子命题，故只计 observed。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "解析算法、插入位置、多项顺序和覆盖优先级是四个命题。"
+        ]
+      },
+      "retained_claim": "单行 X-Egress-Probe: probe-alpha 在两轮注入中出现于 X-Claude-Code-Session-Id 之后、X-Stainless-Arch 之前；基线负例不出现。",
+      "scope": "common_scope；仅单行单 header。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "PROBE-CUSTOM",
+          "supports": "单行正负例与相对位置。"
+        },
+        {
+          "catalog_ref": "A1-CANDIDATES",
+          "supports": "CAND-HDR-CUSTOM 的局部解析与展开线索。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "多行 ANTHROPIC_CUSTOM_HEADERS 正例",
+          "reason": "未采集。"
+        },
+        {
+          "reference": "同名覆盖正例",
+          "reason": "未采集。"
+        }
+      ],
+      "required_channels": [
+        "J",
+        "M",
+        "A1"
+      ],
+      "next_probe": [
+        "分别补多行顺序、含多个冒号、非法行和与 defaultHeaders 同名的正负例，并保留 R。"
+      ],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-HDR-011",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "superseded",
+        "reason": "旧规则正确观察到 HTTP header 集合无同名字段，却错误推出 billing attribution 不出站；R 证明该字符串位于请求体 system 文本块。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "把 HTTP header 名与 body 内以 header 风格编码的 attribution 文本混为一类。",
+          "把基线主会话、续轮和子 agent 的不同归因字段合并。"
+        ]
+      },
+      "retained_claim": "基线样本的 HTTP header 列表不含 x-anthropic-billing-header；但请求体 system 中存在以该字面开头的 attribution 文本，含 cc_version、cc_entrypoint、经 Bun 改写后的 cch，并可条件包含 cc_prev_req 或 cc_is_subagent。",
+      "scope": "common_scope；明确区分 HTTP header 层与 JSON body 的 system 文本层。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "HTTP header 集合中无同名字段。"
+        },
+        {
+          "catalog_ref": "WIRE-DEFAULT",
+          "supports": "body system 文本中实际存在 billing attribution 与非 00000 的 cch。"
+        },
+        {
+          "catalog_ref": "WIRE-SUBAGENT",
+          "supports": "主续轮的 cc_prev_req 与子 agent 的 cc_is_subagent=true。"
+        },
+        {
+          "catalog_ref": "A1-CANDIDATES",
+          "supports": "CAND-BODY-BILLING 与 CAND-BODY-CCH-PLACEHOLDER 的静态线索。"
+        }
+      ],
+      "missing_refs": [],
+      "required_channels": [
+        "J"
+      ],
+      "next_probe": [
+        "为 body attribution 独立建立字段矩阵，覆盖首轮、续轮、一层/两层子 agent、workload 与 TUI。"
+      ],
+      "superseded_by": [
+        "SPEC-HDR-020",
+        "SPEC-BODY-007"
+      ],
+      "notes": [
+        "relay-r1 可见 `x-anthropic-billing-header: cc_version=2.1.220.dd0; cc_entrypoint=sdk-cli; cch=bbfd2;`。",
+        "subagent-r1 主请求可见 cc_prev_req，子请求可见 cc_is_subagent=true。"
+      ]
+    },
+    {
+      "id": "SPEC-HDR-012",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "observed",
+        "reason": "J 中可以复算样本内唯一性，但未静态证明生成器与每次调用边界。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "已采集请求的 x-client-request-id 均为 UUID 形态且样本内未复用。",
+      "scope": "common_scope；结论只到样本内唯一，不推出生成算法。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "未脱敏 J 中的实际 request id。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "2.1.220 生成器到网络 sink 的数据流证明",
+          "reason": "尚未建立。"
+        }
+      ],
+      "required_channels": [
+        "J",
+        "A1"
+      ],
+      "next_probe": [
+        "定位 UUID 生成点及每 attempt 调用边界，并覆盖重试和并发请求。"
+      ],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-HDR-013",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "observed",
+        "reason": "已声明 s2/s4 支持会话内共享，但原 ID 合并会话内复用、跨会话差异与生成机制，非原子命题，故只计 observed。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "同会话稳定与跨会话唯一是两个可独立失败的命题。"
+        ]
+      },
+      "retained_claim": "已采集 s2/s4 内，同一会话的多个请求共用 X-Claude-Code-Session-Id。",
+      "scope": "common_scope；不覆盖 compact、resume、后台或进程重启边界。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "会话内和样本间实际值对比。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "会话生命周期边界证明",
+          "reason": "未覆盖 resume、compact、后台与进程重启。"
+        }
+      ],
+      "required_channels": [
+        "J",
+        "M"
+      ],
+      "next_probe": [
+        "以固定 session-id、resume、compact 和新进程作单变量对照。"
+      ],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-HDR-014",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "observed",
+        "reason": "实际 subagent-r1/r2 支持一层子 agent 的存在性与相对位置，但旧引用名不存在，值格式和唯一性尚未闭环。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "合并主会话缺席、子会话存在、相对位置、值格式和跨 agent 唯一性。",
+          "绝对位置 17 使用从 0 开始编号。"
+        ]
+      },
+      "retained_claim": "两轮一层子 agent 原始请求携带 x-claude-code-agent-id，主 agent 请求不携带；该字段位于 x-app 之后、x-client-request-id 之前。",
+      "scope": "common_scope；只覆盖内置 general-purpose 的一层子 agent。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "WIRE-SUBAGENT",
+          "supports": "两轮主/子差分、值和相对位置。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "relay-sub-c",
+          "reason": "仓库中不存在该 run；实际可绑定目录为 subagent-r1。"
+        },
+        {
+          "reference": "relay-sub-c2",
+          "reason": "仓库中不存在该 run；实际可绑定目录为 subagent-r2。"
+        }
+      ],
+      "required_channels": [
+        "R"
+      ],
+      "next_probe": [
+        "对多个并发子 agent 复算值格式和唯一性；位置统一为从 1 开始或相对槽位。"
+      ],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-HDR-015",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "observed",
+        "reason": "两轮 R 支持一层主/子请求共享 session id；更广的会话边界未覆盖。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "header 共享与 metadata 内层 session_id 相等应作为两个关联断言记录。"
+        ]
+      },
+      "retained_claim": "subagent-r1/r2 中一层子 agent 与对应主 agent 的 X-Claude-Code-Session-Id 相同。",
+      "scope": "common_scope；一层子 agent 首请求。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "WIRE-SUBAGENT",
+          "supports": "主/子原始请求 session id 对比及 body metadata 对比。"
+        }
+      ],
+      "missing_refs": [],
+      "required_channels": [
+        "R"
+      ],
+      "next_probe": [
+        "覆盖后台、resume 和两层嵌套会话。"
+      ],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-HDR-016",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "candidate",
+        "reason": "静态条件展开存在，但正文引用的两轮运行在仓库中不存在，UA 联动也未验证。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "存在性、值、槽位及 UA 联动是多个命题。"
+        ]
+      },
+      "retained_claim": "A1 提示 CLAUDE_AGENT_SDK_CLIENT_APP 非空时可能产生 x-client-app；当前没有可绑定运行正例。",
+      "scope": "common_scope 的条件候选。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "A1-REACHABILITY",
+          "supports": "条件字段的静态线索；不能替代运行证据。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "hdr-clientapp-r1",
+          "reason": "仓库中不存在该 run。"
+        },
+        {
+          "reference": "hdr-clientapp-r2",
+          "reason": "仓库中不存在该 run。"
+        }
+      ],
+      "required_channels": [
+        "A1",
+        "J",
+        "R"
+      ],
+      "next_probe": [
+        "注入 probe-app，采集两轮 J/R，并同时核验 User-Agent 是否增加 client-app 段。"
+      ],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-HDR-017",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "candidate",
+        "reason": "只有静态条件线索，所引两轮运行不存在。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "存在性、原值透传和槽位可分别验证。"
+        ]
+      },
+      "retained_claim": "A1 提示 CLAUDE_CODE_CONTAINER_ID 非空时可能产生 x-claude-remote-container-id；尚无运行证实。",
+      "scope": "远程容器条件候选；不属于基线主路径。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "A1-REACHABILITY",
+          "supports": "静态条件线索。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "hdr-container-r1",
+          "reason": "仓库中不存在该 run。"
+        },
+        {
+          "reference": "hdr-container-r2",
+          "reason": "仓库中不存在该 run。"
+        }
+      ],
+      "required_channels": [
+        "A1",
+        "J",
+        "R"
+      ],
+      "next_probe": [
+        "先做环境变量单变量注入，再补真实远程容器正例。"
+      ],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-HDR-018",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "candidate",
+        "reason": "只有静态条件线索，所引两轮运行不存在。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "存在性、原值透传和槽位可分别验证。"
+        ]
+      },
+      "retained_claim": "A1 提示 CLAUDE_CODE_REMOTE_SESSION_ID 非空时可能产生 x-claude-remote-session-id；尚无运行证实。",
+      "scope": "远程会话条件候选；不属于基线主路径。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "A1-REACHABILITY",
+          "supports": "静态条件线索。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "hdr-remotesess-r1",
+          "reason": "仓库中不存在该 run。"
+        },
+        {
+          "reference": "hdr-remotesess-r2",
+          "reason": "仓库中不存在该 run。"
+        }
+      ],
+      "required_channels": [
+        "A1",
+        "J",
+        "R"
+      ],
+      "next_probe": [
+        "先做环境变量单变量注入，再补真实远程会话正例并比较普通 session id。"
+      ],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-HDR-019",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "candidate",
+        "reason": "两层嵌套运行引用均不存在；一层 subagent 样本不能证明 parent-agent-id。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "层级三档、两个字段、相对位置和父子值相等是多个命题。"
+        ]
+      },
+      "retained_claim": "A1 提示有 parentAgentId 时可能发送 x-claude-code-parent-agent-id；当前没有两层嵌套运行正例。",
+      "scope": "两层及以上子 agent 候选。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "A1-REACHABILITY",
+          "supports": "parentAgentId 条件展开线索。"
+        },
+        {
+          "catalog_ref": "WIRE-SUBAGENT",
+          "supports": "只提供一层负例边界，不能证明两层正例。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "relay-nested-r1",
+          "reason": "仓库中不存在该 run。"
+        },
+        {
+          "reference": "relay-nested-r2",
+          "reason": "仓库中不存在该 run。"
+        }
+      ],
+      "required_channels": [
+        "A1",
+        "R"
+      ],
+      "next_probe": [
+        "构造可重复的两层与三层嵌套，保留每层原始请求并验证直接父级关系。"
+      ],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-BODY-001",
+      "revision": 1,
+      "domain": "body",
+      "status": {
+        "disposition": "observed",
+        "reason": "基线样本支持十键集合，但原 ID 合并键集合、序列化顺序与条件字段边界，非原子命题，故只计 observed。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "顶层键集合与顶层键顺序是两个命题。",
+          "HitCC/旧源码线索显示 temperature、tool_choice、speed、fallbacks、fallback_credit_token、diagnostics 等条件键，基线十键不能提升为全路径恰集。"
+        ]
+      },
+      "retained_claim": "基线 Sonnet 主会话样本的 body 顶层键集合恰为文档所列十键。",
+      "scope": "common_scope；仅基线无额外条件字段路径。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "基线十键集合。"
+        },
+        {
+          "catalog_ref": "WIRE-DEFAULT",
+          "supports": "原始 JSON 顶层顺序。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "条件 body 字段正例矩阵",
+          "reason": "尚未采集。"
+        }
+      ],
+      "required_channels": [
+        "J"
+      ],
+      "next_probe": [
+        "逐个触发 temperature、tool_choice、speed、fallbacks、fallback_credit_token、diagnostics，并记录新增键的相对顺序。"
+      ],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-BODY-002",
+      "revision": 1,
+      "domain": "body",
+      "status": {
+        "disposition": "observed",
+        "reason": "基线样本支持内嵌 JSON、三键与跨层相等，但这些是多个独立命题，原 ID 非原子，故只计 observed。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "编码形态、键集合、字段生命周期和跨层相等性需拆分。",
+          "CLAUDE_CODE_EXTRA_METADATA 可能扩展内层对象，基线三键不是全路径恰集。"
+        ]
+      },
+      "retained_claim": "基线样本 metadata 只有 user_id；该值是可再次解析且恰含 device_id、account_uuid、session_id 三键的 JSON 字符串，内层 session_id 与 X-Claude-Code-Session-Id 相等。",
+      "scope": "common_scope；未设置额外 metadata 的基线路径。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "内嵌 JSON、基线键及 header/body session 等值。"
+        },
+        {
+          "catalog_ref": "WIRE-SUBAGENT",
+          "supports": "一层主/子场景的 metadata 关联。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "CLAUDE_CODE_EXTRA_METADATA 正负例",
+          "reason": "未采集。"
+        },
+        {
+          "reference": "跨机器与跨账号差分",
+          "reason": "现有统计不足以证明字段生命周期。"
+        }
+      ],
+      "required_channels": [
+        "J"
+      ],
+      "next_probe": [
+        "补 extra metadata、跨账号和跨机器差分；分别编号编码形态与跨层一致性。"
+      ],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-BODY-003",
+      "revision": 1,
+      "domain": "body",
+      "status": {
+        "disposition": "observed",
+        "reason": "基线主 agent 样本支持四段与两个缓存断点，但原 ID 合并段数、类型和两个位置命题，非原子，故只计 observed。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "段数、元素类型、cache_control 出现位置及其 scope/ttl 是独立命题。"
+        ]
+      },
+      "retained_claim": "基线主会话样本的 system 为四个 text block，索引 2、3 含 cache_control；不适用于子 agent。",
+      "scope": "common_scope 的主 agent 基线首轮/续轮；明确排除 subagent、compact、MCP 和长上下文。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "主会话四段及 cache_control 位置。"
+        },
+        {
+          "catalog_ref": "WIRE-DEFAULT",
+          "supports": "原始 body。"
+        },
+        {
+          "catalog_ref": "WIRE-SUBAGENT",
+          "supports": "子 agent 三段反例边界。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "compact、MCP、长上下文缓存断点矩阵",
+          "reason": "未采集。"
+        }
+      ],
+      "required_channels": [
+        "J"
+      ],
+      "next_probe": [
+        "按主/子、MCP、compact 和长上下文分别记录 block 数、cache_control.type、ttl、scope。"
+      ],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-BODY-004",
+      "revision": 1,
+      "domain": "body",
+      "status": {
+        "disposition": "observed",
+        "reason": "J 支持已采集的两轮序列，但只各有有限配对，无法推出更长会话状态机。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "首轮序列和续轮追加序列应分成按轮次条件的两个断言。"
+        ]
+      },
+      "retained_claim": "已采集主会话首轮 messages 角色为 [user,system]，第二轮配对样本为 [user,system,assistant,user,system]。",
+      "scope": "common_scope；只覆盖主会话两轮。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "s1/s2/s4 的角色序列。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "第三轮、compact 后和 resume 后序列",
+          "reason": "未采集。"
+        }
+      ],
+      "required_channels": [
+        "J"
+      ],
+      "next_probe": [
+        "采集三轮以上、compact 前后、resume 前后并建立转移规则。"
+      ],
+      "superseded_by": [],
+      "notes": [
+        "2.1.197 的 user/assistant-only 线索已被 2.1.220 mid-conversation system 实测改变。"
+      ]
+    },
+    {
+      "id": "SPEC-BODY-005",
+      "revision": 1,
+      "domain": "body",
+      "status": {
+        "disposition": "observed",
+        "reason": "s1/s2 的 3 个无工具请求支持 tools:[]，但原 ID 同时合并单工具 schema，非原子命题，故只计 observed。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "无工具字段形态与普通客户端工具元素 schema 是两个命题。",
+          "“每个元素恰为三键”对 server tool/deferred tool 过度全称化。"
+        ]
+      },
+      "retained_claim": "基线未启用工具时，请求体显式发送 tools:[]，而不是省略该字段。",
+      "scope": "SCOPE-BASELINE-NO-TOOLS；只对应已采 s1/s2 的 tools:[]，不包含显式启用 Bash 的 s4，也不覆盖 MCP、ToolSearch、deferred 或 server tool。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "空数组与 s4 单工具形态。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "ToolSearch/deferred tool 正例",
+          "reason": "未采集。"
+        },
+        {
+          "reference": "server tool 与 MCP schema 正例",
+          "reason": "未采集。"
+        }
+      ],
+      "required_channels": [
+        "J"
+      ],
+      "next_probe": [
+        "分别采集普通多工具、MCP、ToolSearch/deferred 和 server tool，并按工具类别建立 schema。"
+      ],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-BODY-006",
+      "revision": 1,
+      "domain": "body",
+      "status": {
+        "disposition": "observed",
+        "reason": "两轮 R 观察到一层子 agent 首请求的 system 段数与 messages 角色，但 R 目录缺完整 M 绑定。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "system=3 与 messages=[user] 应拆开。"
+        ]
+      },
+      "retained_claim": "subagent-r1/r2 的一层子 agent 首请求观察到 system 三段、messages 仅一条 user；同轮主 agent 形态不同。",
+      "scope": "一层内置 general-purpose 子 agent 的首请求。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "WIRE-SUBAGENT",
+          "supports": "两轮原始 body 主/子差分。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "子 agent 第二轮及更多轮",
+          "reason": "未采集。"
+        }
+      ],
+      "required_channels": [
+        "R"
+      ],
+      "next_probe": [
+        "采集子 agent 多轮并分别验证 system 与 messages 状态变化。"
+      ],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-EP-001",
+      "revision": 1,
+      "domain": "endpoint",
+      "status": {
+        "disposition": "observed",
+        "reason": "六个选定 J-raw 请求的 request.path 均为同一值；但运行 manifest 未满足第一章完整 M 准入，故不升格。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "SCOPE-J6 的每个请求中，request.path 标量恰为 /v1/messages?beta=true。",
+      "scope": "SCOPE-J6；只证明合并后的 path+query 字符串，不合并 method、HTTP host 或 TLS SNI，也不是端点全集。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "五个选定请求的解析后 request.path。"
+        },
+        {
+          "catalog_ref": "PROBE-BASELINE-J",
+          "supports": "第六个独立请求复验 request.path。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "完整 M 绑定",
+          "reason": "manifest 未归档实际 argv、采集器与完整环境，runtime image 未独立验证，且未执行秘密扫描。"
+        }
+      ],
+      "required_channels": [
+        "J",
+        "M"
+      ],
+      "verification_denominators": [
+        {
+          "channel": "J",
+          "unit": "all request records in selected J-raw artifacts",
+          "expected": 6,
+          "catalog_refs": [
+            "BASELINE-J",
+            "PROBE-BASELINE-J"
+          ]
+        }
+      ],
+      "next_probe": [
+        "补完整 M；端点全集继续由独立候选管理。"
+      ],
+      "superseded_by": [],
+      "notes": [
+        "原命题的 method、HTTP host 与 TLS SNI 已分别拆为 SPEC-EP-003、SPEC-EP-004 与 SPEC-TLS-003。"
+      ]
+    },
+    {
+      "id": "SPEC-EP-002",
+      "revision": 1,
+      "domain": "endpoint",
+      "status": {
+        "disposition": "observed",
+        "reason": "端点存在、先后顺序、五项 header 顺序、无 body 和独立连接均被合并。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "至少包含请求目标、header 序列、body 缺席、时序与连接复用五类命题。"
+        ]
+      },
+      "retained_claim": "relay-r1/r2 均记录一个 HEAD /api/hello HTTP/1.1 请求，其五项 header 顺序与无 body 可由 R 验证；两轮中它先于推理请求并走不同连接。",
+      "scope": "两轮 WIRE-DEFAULT；不推出所有 entrypoint/会话必发。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "WIRE-DEFAULT",
+          "supports": "HEAD 请求目标、header、body、时序和连接分布。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "2.1.220 构造点与启动调用链",
+          "reason": "尚未定位。"
+        }
+      ],
+      "required_channels": [
+        "R",
+        "A1"
+      ],
+      "next_probe": [
+        "定位构造点，并在同一会话多轮、TUI、离线和连接失败场景验证发送次数。"
+      ],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-CONN-001",
+      "revision": 1,
+      "domain": "connection_retry",
+      "status": {
+        "disposition": "observed",
+        "reason": "两轮受控 500 支持 retry-count 观察，但原 ID 合并重发、Header 值及多种失败分支，非原子命题，故只计 observed。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "把三类故障、header 状态和连接生命周期合并。"
+        ]
+      },
+      "retained_claim": "两轮受控单次 500 后均观察到客户端重发，且原请求与重发请求的 X-Stainless-Retry-Count 均为 0。",
+      "scope": "common_scope；仅受控一次故障，不等同自然失败链。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "RETRY-FAULT",
+          "supports": "500 重发、计数和连接生命周期。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "429 第二轮独立重复",
+          "reason": "未采集。"
+        }
+      ],
+      "required_channels": [
+        "J",
+        "L",
+        "M"
+      ],
+      "next_probe": [
+        "为 429、500、529、其他 5xx、网络错误分别做两轮，并拆分 retry-count 与连接复用规则。"
+      ],
+      "superseded_by": [],
+      "notes": [
+        "RETRY-KILL 与 RETRY-429 只作相邻故障族观察，不支持本条两轮 500 的 verified 命题。"
+      ]
+    },
+    {
+      "id": "SPEC-CONN-002",
+      "revision": 1,
+      "domain": "connection_retry",
+      "status": {
+        "disposition": "candidate",
+        "reason": "文档所列 retry-limit-3/5/9 三个 run 均不存在，无法复算退避间隔、封顶或至少九次重试。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "指数基数、倍数、抖动、封顶与重试次数下界是多个统计命题。"
+        ]
+      },
+      "retained_claim": "旧源码与短故障样本提示存在应用层重试；2.1.220 的完整退避曲线、约 35 秒封顶和至少九次重试均未被当前仓库证实。",
+      "scope": "连续 5xx 受控故障候选。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "RETRY-FAULT",
+          "supports": "只证明单次 500 后会重发，不能支持长曲线。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "retry-limit-3",
+          "reason": "仓库中不存在该 run。"
+        },
+        {
+          "reference": "retry-limit-5",
+          "reason": "仓库中不存在该 run。"
+        },
+        {
+          "reference": "retry-limit-9",
+          "reason": "仓库中不存在该 run。"
+        }
+      ],
+      "required_channels": [
+        "J",
+        "L",
+        "M",
+        "A1"
+      ],
+      "next_probe": [
+        "按 3/5/9 连续故障重新采集，每档至少两轮，保存单调时钟时间戳和注入 manifest；静态定位 backoff 参数。"
+      ],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-RESP-001",
+      "revision": 1,
+      "domain": "response_compatibility",
+      "status": {
+        "disposition": "response_compat",
+        "reason": "这是服务端响应/代理下游兼容要求，不属于官方客户端出站请求画像。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "Content-Type、Transfer-Encoding 与 Content-Encoding 是三个响应属性。"
+        ]
+      },
+      "retained_claim": "已观察的成功流式响应同时为 SSE、chunked 和 gzip。",
+      "scope": "服务端到客户端的 200 stream:true 响应；不得计入 client egress 规则完成率。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "解析后的响应 header。"
+        },
+        {
+          "catalog_ref": "WIRE-DEFAULT",
+          "supports": "原始响应字节。"
+        }
+      ],
+      "missing_refs": [],
+      "required_channels": [
+        "J",
+        "R"
+      ],
+      "next_probe": [
+        "移入独立响应兼容章节，按 streaming/non-streaming/error 分类。"
+      ],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-RESP-002",
+      "revision": 1,
+      "domain": "response_compatibility",
+      "status": {
+        "disposition": "response_compat",
+        "reason": "这是服务端/CDN 响应画像，不属于客户端出站；稳定性分类还混合多个统计命题。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "26 种字段、三类稳定性、顺序变体和 server-timing 可选性需拆分。"
+        ]
+      },
+      "retained_claim": "当前样本记录了响应 header 的取值变化和至少两种 wire 顺序；只能作为响应兼容观察。",
+      "scope": "服务端/CDN 到客户端的成功响应；不得计入 client egress 规则完成率。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "响应 header 样本。"
+        },
+        {
+          "catalog_ref": "WIRE-DEFAULT",
+          "supports": "wire 顺序与可选字段观察。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "按组织、CDN PoP 和时间分层的稳定性统计",
+          "reason": "现有样本不足以把“其余固定”提升为规则。"
+        }
+      ],
+      "required_channels": [
+        "J",
+        "R"
+      ],
+      "next_probe": [
+        "移入响应兼容章节；将必变、用量相关、可选和顺序分别统计。"
+      ],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-RESP-003",
+      "revision": 1,
+      "domain": "response_compatibility",
+      "status": {
+        "disposition": "response_compat",
+        "reason": "R 能观察 gzip 后再 chunked 的响应封装，但方向是服务端出站。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "WIRE-DEFAULT 的 200 流式响应呈现外层 HTTP chunked、chunk 内容为 gzip 流。",
+      "scope": "服务端到客户端的成功流式响应；不得计入 client egress 规则完成率。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "WIRE-DEFAULT",
+          "supports": "原始响应字节及封装次序。"
+        }
+      ],
+      "missing_refs": [],
+      "required_channels": [
+        "R"
+      ],
+      "next_probe": [
+        "移入独立响应兼容章节，并补错误与非流式响应。"
+      ],
+      "superseded_by": [],
+      "notes": []
+    },
+    {
+      "id": "SPEC-BETA-001",
+      "revision": 1,
+      "domain": "beta",
+      "status": {
+        "disposition": "observed",
+        "reason": "两轮单值正例支持存在性和位置，但原 ID 合并解析、多值、重复与非法值行为，非原子命题，故只计 observed。"
+      },
+      "atomicity": {
+        "atomic": false,
+        "issues": [
+          "解析算法、单值存在性、插入位置和基线负例是多个命题。",
+          "“索引 7”是从 0 开始，需与 header 位置编号规范分开声明。"
+        ]
+      },
+      "retained_claim": "在 Sonnet 5 基线序列中注入单个合法 context-1m-2025-08-07 时，两轮 J 均观察到该值位于 mid-conversation-system 之后、effort 之前；基线负例无该项。",
+      "scope": "common_scope；只覆盖单个合法 beta。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "PROBE-BETAS",
+          "supports": "两轮合法单值正例及相对位置。"
+        },
+        {
+          "catalog_ref": "A1-CANDIDATES",
+          "supports": "CAND-BETA-ENV 的解析线索。"
+        }
+      ],
+      "missing_refs": [
+        {
+          "reference": "多值、重复值、空项运行正例",
+          "reason": "未采集。"
+        }
+      ],
+      "required_channels": [
+        "J",
+        "M",
+        "A1"
+      ],
+      "next_probe": [
+        "分别注入多值、空白、重复和非法值；对每种模型单独验证插入位置。"
+      ],
+      "superseded_by": [],
+      "notes": [
+        "failed 的 probe-betas-r1/r2 可证明非法值被服务端看到，但不能计入 complete 正例基数。"
+      ]
+    }
+  ]
+}

@@ -161,8 +161,132 @@ def _common_payload() -> dict[str, Any]:
     }
 
 
+def _lifecycle_path(category: str) -> Path:
+    """生命周期事件写独立文件。
+
+    扩展名刻意不是 `.jsonl`：`analysis.normalize_mitm_directory` 会 glob 目录下所有
+    `*.jsonl` 并按「一条 HTTP exchange」规范化，而生命周期记录没有完整的
+    request/response 对，混进去会破坏既有的 J 规范化产物。
+    """
+
+    return OUTPUT_DIR / f"lifecycle-{category}.ndjson"
+
+
+def _record_lifecycle(event: str, flow: Any, extra: dict[str, Any] | None = None) -> None:
+    """记录一次流生命周期事件，带 flow ID 以便与 HTTP 记录关联。"""
+
+    request = getattr(flow, "request", None)
+    host = getattr(request, "host", "") or ""
+    if host.lower() not in TARGET_HOSTS:
+        return
+    category = _classify(getattr(request, "path", "") or "")
+    payload = {
+        **_common_payload(),
+        "_category": category,
+        "_event": event,
+        "_flow_id": getattr(flow, "id", None),
+        "method": getattr(request, "method", None),
+        "path": _safe_path(getattr(request, "path", "") or ""),
+        "http_version": getattr(request, "http_version", None),
+    }
+    if extra:
+        payload.update(extra)
+    _append_json_line(_lifecycle_path(category), payload)
+
+
+def _record_connection(event: str, data: Any) -> None:
+    """记录上游连接生命周期。没有 flow 可关联，只落地址与时间。"""
+
+    conn = getattr(data, "server", None)
+    address = getattr(conn, "address", None)
+    host = str(address[0]).lower() if isinstance(address, tuple) and address else ""
+    if host and TARGET_HOSTS and not any(host.endswith(t) or t in host for t in TARGET_HOSTS):
+        # 地址可能是 IP，无法可靠匹配域名；匹配不上时仍记录，由分析侧判定。
+        pass
+    _append_json_line(OUTPUT_DIR / "lifecycle-connection.ndjson", {
+        **_common_payload(),
+        "_event": event,
+        "server_address": str(address or ""),
+    })
+
+
+# 受控错误注入：CAPTURE_FAULT_SPEC 形如 "status=500,count=1" 或 "kill=1"。
+# 重试链路无法靠自然采集获得——服务端不会按需返回 5xx，也不会按需断连。要给
+# X-Stainless-Retry-Count 递增这类命题取正例，只能在 MITM 层受控注入故障。
+# 注入产生的样本只能证明「客户端收到该输入后的反应」，不等于自然成功链，
+# 引用时必须声明这一点。
+_FAULT_SPEC: dict[str, str] = {}
+for _item in (os.environ.get("CAPTURE_FAULT_SPEC") or "").split(","):
+    if "=" in _item:
+        _k, _, _v = _item.partition("=")
+        _FAULT_SPEC[_k.strip()] = _v.strip()
+_FAULT_BUDGET = int(_FAULT_SPEC.get("count") or 0)
+
+
 class OfficialClientCapture:
     """仅记录当前任务 allowlist 中的目标主机。"""
+
+    def __init__(self) -> None:
+        self._faults_left = _FAULT_BUDGET
+
+    def _maybe_inject_fault(self, flow: http.HTTPFlow) -> bool:
+        """按预算注入一次故障，返回是否已注入。"""
+
+        if self._faults_left <= 0 or flow.request.host.lower() not in TARGET_HOSTS:
+            return False
+        self._faults_left -= 1
+        if _FAULT_SPEC.get("kill"):
+            _record_lifecycle("fault_kill", flow, {"remaining_budget": self._faults_left})
+            flow.kill()
+            return True
+        status = int(_FAULT_SPEC.get("status") or 0)
+        if status:
+            _record_lifecycle("fault_status", flow,
+                              {"injected_status": status, "remaining_budget": self._faults_left})
+            flow.response = http.Response.make(
+                status, b'{"type":"error","error":{"type":"api_error",'
+                        b'"message":"injected fault for retry observation"}}',
+                {"content-type": "application/json"})
+            return True
+        return False
+
+    def request(self, flow: http.HTTPFlow) -> None:
+        """请求离开客户端即落盘。
+
+        只有 `response` 钩子时，任何没有收到完整响应的流——断连、超时、被中止的
+        重试——都不会留下任何痕迹，retry 与连接生命周期命题因此无法取证。
+        """
+
+        _record_lifecycle("request", flow, {
+            "header_names": [name for name, _ in _headers_as_pairs(flow.request.headers)],
+            "content_length": flow.request.headers.get("content-length"),
+            "retry_count": flow.request.headers.get("x-stainless-retry-count"),
+        })
+        self._maybe_inject_fault(flow)
+
+    def error(self, flow: http.HTTPFlow) -> None:
+        """连接错误、超时或被中止时落盘，记录是否已有响应。"""
+
+        error = getattr(flow, "error", None)
+        _record_lifecycle("error", flow, {
+            "error": str(getattr(error, "msg", error) or "")[:400],
+            "had_response": bool(getattr(flow, "response", None)),
+            "response_status": getattr(getattr(flow, "response", None), "status_code", None),
+        })
+
+    def server_connect(self, data: Any) -> None:
+        """上游连接建立。
+
+        mitmproxy 8.x 的 ServerConnectionHookData 不带 flow，因此这里不做 host
+        allowlist 过滤也无法关联 flow，只记录地址与时间，用于判断连接复用次数。
+        """
+
+        _record_connection("server_connect", data)
+
+    def server_disconnected(self, data: Any) -> None:
+        """上游连接关闭，用于判断连接复用与提前断开。"""
+
+        _record_connection("server_disconnected", data)
 
     def response(self, flow: http.HTTPFlow) -> None:
         if flow.request.host.lower() not in TARGET_HOSTS:
@@ -171,6 +295,8 @@ class OfficialClientCapture:
         payload = {
             **_common_payload(),
             "_category": category,
+            # 与 lifecycle-*.ndjson 中同一条流的事件关联。
+            "_flow_id": getattr(flow, "id", None),
             "request": {
                 "method": flow.request.method,
                 "scheme": flow.request.scheme,

@@ -335,12 +335,11 @@ func (s *OpenAIQuotaService) doCodexQuotaRequest(
 	if err != nil {
 		return 0, nil, err
 	}
-	endpoint, err := resolveCodex0145Endpoint(officialCodexVersion0145, endpointID)
+	endpoint, err := resolveActiveCodexEndpoint(endpointID)
 	if err != nil {
 		return 0, nil, err
 	}
-	target, err := officialCodex0145BuildEndpointURL(
-		officialCodexVersion0145,
+	target, err := buildActiveCodexEndpointURL(
 		endpointID,
 		officialCodex0145EndpointURLInput{},
 	)
@@ -393,8 +392,7 @@ func (s *OpenAIQuotaService) doCodexQuotaRequest(
 	if _, err := officialCodex0145FinalizeEndpointHeaders(egressContext, request.Header, nil); err != nil {
 		return 0, nil, err
 	}
-	tlsProfile, err := officialCodex0145ResolveEndpointTLSProfileForURL(
-		officialCodexVersion0145,
+	tlsProfile, err := resolveActiveCodexEndpointTLSProfileForURL(
 		endpointID,
 		request.URL,
 	)
@@ -618,7 +616,7 @@ func (s *OpenAIQuotaService) redactQuotaErrorBody(ctx context.Context, accountID
 // buildCodexCommonHeaders 只生成 backend-client 画像所需的运行态基础头。
 // accept 及其他常量由端点 Finalizer 注入；FedRAMP 则在凭据账号解析后按条件加入。
 func buildCodexCommonHeaders(ctx context.Context, accessToken, chatGPTAccountID string) (http.Header, error) {
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveActiveCodexVersionProfile()
 	if err != nil {
 		return nil, err
 	}

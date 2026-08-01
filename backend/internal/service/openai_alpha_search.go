@@ -367,15 +367,13 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchRequest(ctx context.Context
 	var endpointProfile officialCodexEndpointProfile
 	var err error
 	if account.IsOpenAIOAuth() {
-		endpointProfile, err = resolveCodex0145Endpoint(
-			officialCodexVersion0145,
+		endpointProfile, err = resolveActiveCodexEndpoint(
 			codex0145EndpointID(officialCodexEndpointAlphaSearch),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("resolve alpha search endpoint profile: %w", err)
 		}
-		profileURL, profileErr := officialCodex0145BuildEndpointURL(
-			officialCodexVersion0145,
+		profileURL, profileErr := buildActiveCodexEndpointURL(
 			codex0145EndpointID(endpointProfile.ID),
 			officialCodex0145EndpointURLInput{},
 		)
@@ -460,7 +458,11 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchRequest(ctx context.Context
 
 		turnMetadata := openAIAlphaSearchInboundHeader(c, "X-Codex-Turn-Metadata")
 		if turnMetadata == "" {
-			turnMetadata = deriveOfficialOpenAIHTTPIdentity(c, account, body, nil).turnMetadata
+			derived, deriveErr := deriveOfficialOpenAIHTTPIdentity(c, account, body, nil)
+			if deriveErr != nil {
+				return nil, fmt.Errorf("derive alpha search turn metadata: %w", deriveErr)
+			}
+			turnMetadata = derived.turnMetadata
 		}
 		req.Header.Set("X-Codex-Turn-Metadata", turnMetadata)
 		userAgent, originator, identityErr := officialCodex0145ProcessIdentity(egressContext)
@@ -540,8 +542,7 @@ func sanitizeOpenAIAlphaSearchBody(body []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("decode alpha search body: %w", err)
 	}
-	return officialCodex0145ProjectEndpointJSONBody(
-		officialCodexVersion0145,
+	return projectActiveCodexEndpointJSONBody(
 		codex0145EndpointID(officialCodexEndpointAlphaSearch),
 		payload,
 		body,

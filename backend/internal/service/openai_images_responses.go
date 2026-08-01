@@ -336,8 +336,7 @@ func resolveOpenAICodexImagesEndpoint(parsed *OpenAIImagesRequest) (officialCode
 	if parsed != nil && parsed.IsEdits() {
 		endpointID = officialCodexEndpointImagesEdits
 	}
-	return resolveCodex0145Endpoint(
-		officialCodexVersion0145,
+	return resolveActiveCodexEndpoint(
 		codex0145EndpointID(endpointID),
 	)
 }
@@ -410,8 +409,7 @@ func buildOpenAICodexImagesRequestBody(parsed *OpenAIImagesRequest, model string
 			payload[field.name] = trimmed
 		}
 	}
-	return officialCodex0145ProjectEndpointJSONBody(
-		officialCodexVersion0145,
+	return projectActiveCodexEndpointJSONBody(
 		codex0145EndpointID(endpoint.ID),
 		payload,
 		nil,
@@ -430,8 +428,7 @@ func (s *OpenAIGatewayService) buildOpenAICodexImagesRequest(
 	endpoint officialCodexEndpointProfile,
 	invocationID string,
 ) (*http.Request, error) {
-	targetURL, err := officialCodex0145BuildEndpointURL(
-		officialCodexVersion0145,
+	targetURL, err := buildActiveCodexEndpointURL(
 		codex0145EndpointID(endpoint.ID),
 		officialCodex0145EndpointURLInput{},
 	)
@@ -1919,8 +1916,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	upstreamStart := time.Now()
 	// 代理只负责路由，不能改变 Codex 0.145.0 的 TLS/H1 画像；images 的 execute
 	// 路径也明确不启用请求压缩。
-	tlsProfile, err := officialCodex0145ResolveEndpointTLSProfileForURL(
-		officialCodexVersion0145,
+	tlsProfile, err := resolveActiveCodexEndpointTLSProfileForURL(
 		codex0145EndpointID(endpointProfile.ID),
 		upstreamReq.URL,
 	)

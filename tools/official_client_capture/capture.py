@@ -28,6 +28,7 @@ from tools.official_client_capture.capturelib.analysis import (  # noqa: E402
 from tools.official_client_capture.capturelib.environment import (  # noqa: E402
     build_case_environment,
     clean_environment,
+    parse_injected_env,
     prepare_api_state,
 )
 from tools.official_client_capture.capturelib.lifecycle import (  # noqa: E402
@@ -372,6 +373,11 @@ def _preflight_dependencies(
             "configuration_count": validated_codex_configs,
         },
         "clean_environment_keys": sorted(clean_environment(os.environ)),
+        # 探针注入项必须进 manifest：条件规则的正负例靠它区分，
+        # 不记录就无法证明某次样本属于哪一侧。
+        "injected_probe_env": dict(sorted(getattr(arguments, "injected_env", {}).items())),
+        # 故障注入同样必须可审计：注入过的样本不能与自然样本混用。
+        "injected_fault_spec": getattr(arguments, "fault_spec", "") or None,
     }
 
 
@@ -538,10 +544,12 @@ def _run_case_scenario(
         proxy_url=f"http://127.0.0.1:{arguments.mitm_port}",
         ca_bundle=arguments.ca_bundle,
         oauth_claude_secret=oauth_claude_secret,
+        injected_env=getattr(arguments, "injected_env", None),
     )
     capture_environment = clean_environment(os.environ)
     capture_environment.pop(arguments.api_key_env, None)
     capture = build_capture_process(
+        fault_spec=arguments.fault_spec,
         case=case,
         output_dir=output_dir,
         base_environment=capture_environment,
@@ -872,6 +880,26 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--interface", default="any")
     parser.add_argument("--mitm-port", type=int, default=18080)
     parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument(
+        "--fault-spec",
+        default="",
+        metavar="SPEC",
+        help=(
+            "受控故障注入，形如 status=500,count=1 或 kill=1,count=1。仅 MITM 证据可用，"
+            "用于给重试链路取正例。注入样本只证明客户端收到该输入后的反应，"
+            "不等于自然成功链，引用时必须声明。"
+        ),
+    )
+    parser.add_argument(
+        "--inject-env",
+        action="append",
+        metavar="KEY=VALUE",
+        help=(
+            "向被测客户端注入一个探针环境变量，可重复。只接受官方客户端自身读取的"
+            "条件开关（见 environment.INJECTABLE_PROBE_KEYS），用于条件规则取正负例；"
+            "注入项会写进 manifest 供审计。凭据、上游地址、代理和 CA 类变量一律拒绝。"
+        ),
+    )
     return parser
 
 
@@ -932,6 +960,8 @@ def _validate_arguments(
         raise ConfigurationError(
             "--execute 会产生真实模型请求，必须同时提供 --acknowledge-live-requests。"
         )
+    # 解析后就地固化，后续所有环境构造与 manifest 记录都用这一份，避免两处解析漂移。
+    arguments.injected_env = parse_injected_env(arguments.inject_env)
     return scenarios, evidence, subjects
 
 

@@ -69,7 +69,7 @@ func (s *OpenAIGatewayService) UploadOfficialCodexFile(
 	account *Account,
 	input OfficialCodexFileUploadInput,
 ) (*OfficialCodexUploadedFile, error) {
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveActiveCodexVersionProfile()
 	if err != nil {
 		return nil, err
 	}

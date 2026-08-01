@@ -27,8 +27,10 @@ SCAN_ROOT = ROOT / "backend"
 
 # Codex/OpenAI 出站定型专属符号。命中即表示该文件参与官方出站形态的产生，
 # 无论它是否携带版本字面量——WS 传输、连接池与握手定型点都不含版本号。
+# 版本化的符号名按形状匹配而不写死版本号：判据若写成 Codex0145，升级后新增的
+# Codex0146 文件就不会被认定为出站定型面，台账会在最需要复算的时刻悄悄漏登。
 SURFACE_RE = re.compile(
-    r"officialCodex|OfficialCodex|Codex0145|codex0145"
+    r"officialCodex|OfficialCodex|[Cc]odex\d{3,}"
     r"|OpenAIOfficialEgress|officialEgressWebSocket"
     r"|officialOpenAIHTTPBodyContract|OfficialEgressTransportWebSocket"
 )

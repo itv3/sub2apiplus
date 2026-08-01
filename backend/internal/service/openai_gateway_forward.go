@@ -57,7 +57,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	wsDecision := resolveOpenAIWSProtocolForRequest(s.getOpenAIWSProtocolResolver(), ctx, account)
 	clientTransport := GetOpenAIClientTransport(c)
 	if account != nil && account.IsOpenAIOAuth() {
-		versionProfile, profileErr := resolveCodex0145VersionProfile(officialCodexVersion0145)
+		versionProfile, profileErr := resolveActiveCodexVersionProfile()
 		if profileErr != nil {
 			return nil, profileErr
 		}

@@ -617,8 +617,11 @@ func TestOfficialCodex0145DeepCopyAndDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if first == pristine {
-		t.Fatal("两次版本解析返回了同一指针")
+	// 解析交付的是进程内只读单例：重复解析必须命中同一份编译结果，而不是每次
+	// 重新解码 48 KB 快照并重算摘要。需要可变副本的调用方走
+	// cloneOfficialCodexVersionProfile，隔离责任因此从解析路径移交给调用方。
+	if first != pristine {
+		t.Fatal("两次版本解析返回了不同指针，只读单例契约被破坏")
 	}
 	if first.Digest != pristine.Digest || first.Digest != defaultOfficialCodex0145Snapshot.Digest {
 		t.Fatalf("版本画像摘要不稳定：%s / %s / %s", first.Digest, pristine.Digest, defaultOfficialCodex0145Snapshot.Digest)
@@ -638,21 +641,37 @@ func TestOfficialCodex0145DeepCopyAndDigest(t *testing.T) {
 		t.Fatalf("全画像重算摘要不一致：实际 %s，期望 %s", recomputed, first.Digest)
 	}
 
-	first.RequiredRules[0] = "MUTATED"
-	first.Surfaces[0].Product = "mutated"
-	first.ToolPresentation.EndpointIDs[0] = "mutated"
-	first.Subagents.Mappings[0].HeaderValue = "mutated"
-	first.Transports[0].CipherSuites[0] = 0
-	first.Transports[1].WebSocket.FixedHandshakePrefix[0] = "mutated"
-	first.Endpoints[0].Query[0].Value = "mutated"
-	first.Endpoints[1].Headers[0].Name = "mutated"
-	first.Endpoints[1].Body.Fields[0].Name = "mutated"
+	// 显式深拷贝必须与只读单例完全隔离：改写副本不得影响后续任何一次解析。
+	mutable, err := cloneOfficialCodexVersionProfile(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutable.RequiredRules[0] = "MUTATED"
+	mutable.Surfaces[0].Product = "mutated"
+	mutable.ToolPresentation.EndpointIDs[0] = "mutated"
+	mutable.Subagents.Mappings[0].HeaderValue = "mutated"
+	mutable.Transports[0].CipherSuites[0] = 0
+	mutable.Transports[1].WebSocket.FixedHandshakePrefix[0] = "mutated"
+	mutable.Endpoints[0].Query[0].Value = "mutated"
+	mutable.Endpoints[1].Headers[0].Name = "mutated"
+	mutable.Endpoints[1].Body.Fields[0].Name = "mutated"
 	fresh, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if reflect.DeepEqual(&mutable, fresh) {
+		t.Fatal("深拷贝没有与只读单例隔离")
+	}
 	if !reflect.DeepEqual(pristine, fresh) {
-		t.Fatal("调用方修改版本画像后污染了不可变规范快照")
+		t.Fatal("修改深拷贝后污染了不可变规范快照")
+	}
+	// 单例在进程内被任何调用方改写都会体现为摘要漂移，这里是最后一道自检。
+	singletonDigest, err := digestOfficialCodexVersionProfile(*fresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if singletonDigest != expectedDigest {
+		t.Fatalf("只读单例在进程内被改写：摘要 %s，期望 %s", singletonDigest, expectedDigest)
 	}
 
 	endpointFirst, err := resolveCodex0145Endpoint(officialCodexVersion0145, codex0145EndpointID(officialCodexEndpointResponsesHTTP))
@@ -701,8 +720,14 @@ func TestOfficialCodex0145DeepCopyAndDigest(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			mutation.mutate(profile)
-			mutatedDigest, err := digestOfficialCodexVersionProfile(*profile)
+			// 解析结果是只读单例，mutation 必须作用在深拷贝上，
+			// 否则会把损坏画像泄漏给同进程内其余测试。
+			mutable, err := cloneOfficialCodexVersionProfile(profile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			mutation.mutate(&mutable)
+			mutatedDigest, err := digestOfficialCodexVersionProfile(mutable)
 			if err != nil {
 				t.Fatal(err)
 			}

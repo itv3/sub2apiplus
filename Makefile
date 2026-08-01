@@ -1,4 +1,4 @@
-.PHONY: build build-backend build-frontend test test-backend test-frontend test-frontend-critical test-capture-tools
+.PHONY: build build-backend build-frontend test test-backend test-frontend test-frontend-critical test-capture-tools check-egress-spec
 
 FRONTEND_CRITICAL_VITEST := \
 	src/views/auth/__tests__/LinuxDoCallbackView.spec.ts \
@@ -20,7 +20,16 @@ build-frontend:
 	@pnpm --dir frontend run build
 
 # 运行测试（后端 + 前端）
-test: test-backend test-frontend test-capture-tools
+test: test-backend test-frontend test-capture-tools check-egress-spec
+
+# Codex 出站规格门禁，见 docs/CODEX_CLI_0145_EGRESS_SPEC.md §3.5 与 §4.7。
+# 这些检查此前只能手工执行，因而无法阻止回归；--self-test 先校验判据本身是否
+# 仍与版本号解耦，再用它扫描仓库。全部只读标准库，不联网。
+check-egress-spec:
+	@python3 tools/check_version_leak.py --self-test
+	@python3 tools/check_version_leak.py
+	@python3 tools/check_ledger_completeness.py
+	@python3 tools/check_spec_refs.py
 
 test-backend:
 	@$(MAKE) -C backend test

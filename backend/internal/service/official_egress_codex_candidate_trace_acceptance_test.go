@@ -296,6 +296,7 @@ func TestCandidateTraceCodex0145TurnStateFacts(t *testing.T) {
 	httpHeaders := make(http.Header)
 	finalizeOfficialOpenAIHTTPHeaders(
 		httpHeaders,
+		officialCodexVersion0145,
 		"codex_exec/0.145.0",
 		"codex_exec",
 		identity,
@@ -320,6 +321,7 @@ func TestCandidateTraceCodex0145TurnStateFacts(t *testing.T) {
 	compactHeaders := make(http.Header)
 	finalizeOfficialOpenAIHTTPHeaders(
 		compactHeaders,
+		officialCodexVersion0145,
 		"codex_exec/0.145.0",
 		"codex_exec",
 		identity,

@@ -66,3 +66,31 @@ func newOfficialEgressBenchmarkWSContext(b *testing.B) context.Context {
 	require.NoError(b, ValidateOfficialEgressFinalState(frozenContext, profile))
 	return WithOfficialEgressContext(context.Background(), frozenContext)
 }
+
+// BenchmarkOfficialCodexVersionProfileResolve 守护画像解析的只读单例契约。
+// 改造前每次解析都要重新解码 48 KB 快照、执行全量结构校验并重算 SHA-256，
+// 实测约 449 μs / 239 KB / 1790 次分配，而单条 HTTP 定型链路会重复触发十余次。
+// 命中编译缓存后这里应当退化为常数级查表，不再产生任何分配。
+func BenchmarkOfficialCodexVersionProfileResolve(b *testing.B) {
+	b.ReportAllocs()
+	for range b.N {
+		if _, err := resolveCodex0145VersionProfile(officialCodexVersion0145); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkOfficialCodexEndpointResolve 覆盖端点级深拷贝。端点是执行器唯一会
+// 就地改写的画像数据，必须继续返回可安全改写的副本；这里守护的是该副本不再
+// 经由 JSON 编解码产生。
+func BenchmarkOfficialCodexEndpointResolve(b *testing.B) {
+	b.ReportAllocs()
+	for range b.N {
+		if _, err := resolveCodex0145Endpoint(
+			officialCodexVersion0145,
+			codex0145EndpointID(officialCodexEndpointResponsesHTTP),
+		); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

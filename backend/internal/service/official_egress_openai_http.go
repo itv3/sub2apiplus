@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openaiidentity"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -72,6 +74,10 @@ type officialOpenAIHTTPIdentity struct {
 	clientRequest  string
 	promptCacheKey string
 	source         OfficialEgressFieldSource
+	// sessionAnchorExplicit 表示会话身份来自入站的显式锚点（会话头或
+	// prompt_cache_key），而不是从消息内容兜底推导。只有显式锚点才能作为跨请求
+	// 复用 turn-state 的依据，理由见 officialOpenAIHTTPTurnStateStoreKey。
+	sessionAnchorExplicit bool
 }
 
 type officialOpenAIIdentityKind string
@@ -432,10 +438,13 @@ func finalizeOpenAIOfficialEgressHTTPRequest(
 		plan.OfficialEgressBodyContract,
 		identity,
 		officialOpenAIReasoningDefaultsFromContext(egressContext),
-		strictIngressIdentity,
-		plan.IsCompact,
-		egressContext.responsesLite,
-		egressContext.parallelTools,
+		officialOpenAIHTTPBodyOptions{
+			StrictIngressIdentity: strictIngressIdentity,
+			IsCompact:             plan.IsCompact,
+			UseResponsesLite:      egressContext.responsesLite,
+			SupportsParallelTools: egressContext.parallelTools,
+			UserAgent:             officialOpenAIInboundUserAgent(c),
+		},
 	)
 	if err != nil {
 		return nil, result, err
@@ -460,6 +469,7 @@ func finalizeOpenAIOfficialEgressHTTPRequest(
 	}
 	finalizeOfficialOpenAIHTTPHeaders(
 		req.Header,
+		egressContext.ProfileVersion(),
 		userAgent,
 		originator,
 		identity,
@@ -556,19 +566,35 @@ func compressOfficialOpenAIHTTPRequest(req *http.Request, body []byte, level int
 	return nil
 }
 
+// officialOpenAIHTTPBodyOptions 收拢 body 定型的四个开关。
+//
+// 它们原先是四个相邻的 bool 形参：调用点写反不会产生任何编译或测试信号，而
+// StrictIngressIdentity 一旦被误传，严格官方入口就会被当成派生入口改写 body，
+// 这恰好是最难在回归里发现的一类偏差。改用具名字段后错位在编译期即被挡住。
+type officialOpenAIHTTPBodyOptions struct {
+	StrictIngressIdentity bool
+	IsCompact             bool
+	UseResponsesLite      bool
+	SupportsParallelTools bool
+	// UserAgent 只用于投影告警定位来源，不参与任何定型决策。
+	UserAgent string
+}
+
 func finalizeOfficialOpenAIHTTPBody(
 	body []byte,
 	contract *officialOpenAIHTTPBodyContract,
 	identity officialOpenAIHTTPIdentity,
 	reasoningDefaults officialOpenAIReasoningDefaults,
-	strictIngressIdentity bool,
-	isCompact bool,
-	useResponsesLite bool,
-	supportsParallelTools bool,
+	options officialOpenAIHTTPBodyOptions,
 ) ([]byte, bool, error) {
 	if contract == nil {
 		return nil, false, errors.New("OpenAI official egress body contract is nil")
 	}
+	// 解构一次，保持下方定型逻辑的可读性与原实现一致。
+	strictIngressIdentity := options.StrictIngressIdentity
+	isCompact := options.IsCompact
+	useResponsesLite := options.UseResponsesLite
+	supportsParallelTools := options.SupportsParallelTools
 	payload, err := decodeOfficialJSONObjectUseNumber(body)
 	if err != nil {
 		return nil, false, fmt.Errorf("decode OpenAI official egress body: %w", err)
@@ -580,11 +606,28 @@ func finalizeOfficialOpenAIHTTPBody(
 		allowedTopLevel = officialOpenAICompactTopLevelAllowed
 	}
 	if strictIngressIdentity {
-		if err := validateOfficialOpenAITopLevelContract(payload, allowedTopLevel, !isCompact); err != nil {
-			return nil, false, err
+		// 官方入口出现画像闭集外的顶层字段，最可能的原因是官方客户端已经升级到新
+		// 版本而 active 画像还停在旧版本。这里按 §3.1 投影并告警，而不是拒绝：
+		// 拒绝会让真·官方新版客户端在整个升级窗口内完全不可用，而投影只丢掉尚未
+		// 纳入画像的新功能，出站形态本身仍然是自洽的官方形态。代价是画像与真实
+		// 客户端脱节时不再硬失败，因此告警必须存在——它是唯一的替代信号。
+		if removed := stripNonOfficialOpenAITopLevelFields(payload, allowedTopLevel); len(removed) > 0 {
+			modified = true
+			warnOfficialOpenAIProjectedTopLevelFields(removed, options.UserAgent, true)
 		}
-	} else if isCompact && stripNonOfficialOpenAITopLevelFields(payload, allowedTopLevel) {
-		modified = true
+		if !isCompact {
+			// SPEC-BODY-005：tool_choice 恒为字符串 auto。已知字段的值不合契约时
+			// 同样按画像规范化，与派生路径使用同一套投影语义，不再单独拒绝。
+			if current, ok := payload["tool_choice"].(string); !ok || current != "auto" {
+				payload["tool_choice"] = "auto"
+				modified = true
+			}
+		}
+	} else if isCompact {
+		if removed := stripNonOfficialOpenAITopLevelFields(payload, allowedTopLevel); len(removed) > 0 {
+			modified = true
+			warnOfficialOpenAIProjectedTopLevelFields(removed, options.UserAgent, false)
+		}
 	}
 	currentInstructions, currentInstructionsPresent := payload["instructions"]
 	if strictIngressIdentity {
@@ -625,6 +668,7 @@ func finalizeOfficialOpenAIHTTPBody(
 			supportsParallelTools,
 			reasoningDefaults,
 			officialOpenAIHTTPTopLevelAllowed,
+			options.UserAgent,
 		)
 		if err != nil {
 			return nil, false, err
@@ -745,22 +789,115 @@ func newOfficialOpenAITopLevelAllowSet(fields []string) map[string]struct{} {
 	return allowed
 }
 
-// stripNonOfficialOpenAITopLevelFields 按白名单剔除顶层字段，返回是否有改动。
-func stripNonOfficialOpenAITopLevelFields(payload map[string]any, allowed map[string]struct{}) bool {
-	removed := false
+// stripNonOfficialOpenAITopLevelFields 按白名单剔除顶层字段，返回被剔除的字段名。
+//
+// 返回字段名而不只是布尔：被投影掉的字段是「官方已经升级、画像还没跟上」在运行时
+// 的唯一信号（§3.1），只报告"有改动"无法定位到底是哪个新字段。map 遍历序不确定，
+// 因此排序后返回，让同一组字段产生稳定的告警文本，去重才有意义。
+func stripNonOfficialOpenAITopLevelFields(
+	payload map[string]any,
+	allowed map[string]struct{},
+) []string {
+	var removed []string
 	for key := range payload {
 		if _, ok := allowed[key]; ok {
 			continue
 		}
 		delete(payload, key)
-		removed = true
+		removed = append(removed, key)
 	}
+	sort.Strings(removed)
 	return removed
 }
 
-// validateOfficialOpenAITopLevelContract 对伪装为官方客户端的入站正文执行闭包校验。
-// 官方 Rust 结构体不会序列化画像外字段；严格入口出现未知字段时必须拒绝，不能
-// 以“透明透传”为由制造官方客户端不可能产生的 body。
+// officialOpenAIInboundUserAgent 取入站声明的 UA，只用于投影告警定位来源。
+//
+// 这里必须是入站 UA 而不是画像生成的出站 UA：后者对所有官方请求都相同，无法回答
+// "是哪个客户端发来了画像不认识的字段"这个唯一有诊断价值的问题。
+func officialOpenAIInboundUserAgent(c *gin.Context) string {
+	if c == nil {
+		return ""
+	}
+	return strings.TrimSpace(c.GetHeader("User-Agent"))
+}
+
+// officialOpenAIProjectedFieldsSeen 记录已经告警过的字段组合。
+//
+// 投影发生在每个请求上，逐请求打印会淹没日志；而这里真正有价值的信息是"出现了一组
+// 画像未覆盖的字段"，同一组字段重复出现并不增加信息量。因此按入口类型加字段组合
+// 去重，每种组合在进程生命周期内只告警一次。
+//
+// 去重表必须封顶：key 直接来自入站字段名，第三方客户端可以每次发送随机顶层字段名
+// 把表撑大，否则这里就成了一个由外部输入驱动的内存增长向量。真实场景中画像外字段
+// 的种类有限，触顶本身即说明遇到的是构造流量而不是新版本客户端。
+const officialOpenAIProjectedFieldsSeenLimit = 256
+
+// 用互斥锁而不是 sync.Map + 原子计数：后者的“查计数、插入、加计数”三步不原子，
+// 并发请求携带各不相同的未知字段时可以同时看到计数未达上限并全部插入，表的实际
+// 规模会越过封顶值。这条路径每种字段组合只走一次热路径，锁竞争可以忽略。
+var (
+	officialOpenAIProjectedFieldsMu   sync.Mutex
+	officialOpenAIProjectedFieldsSeen = map[string]struct{}{}
+)
+
+// warnOfficialOpenAIProjectedTopLevelFields 报告被投影丢弃的顶层字段。
+//
+// §3.1 把这条信号定为运行时唯一能提示"该升级画像了"的依据。出现在官方入口上尤其
+// 重要：它说明官方客户端已经在发送当前 active 画像还不认识的字段，画像落后于真实
+// 客户端；出现在派生入口上则通常只是第三方客户端携带了非官方字段。
+func warnOfficialOpenAIProjectedTopLevelFields(
+	fields []string,
+	userAgent string,
+	strictIngress bool,
+) {
+	if len(fields) == 0 {
+		return
+	}
+	ingress := "派生入口"
+	if strictIngress {
+		ingress = "官方入口"
+	}
+	key := ingress + "|" + strings.Join(fields, ",")
+	officialOpenAIProjectedFieldsMu.Lock()
+	if _, seen := officialOpenAIProjectedFieldsSeen[key]; seen {
+		officialOpenAIProjectedFieldsMu.Unlock()
+		return
+	}
+	if len(officialOpenAIProjectedFieldsSeen) >= officialOpenAIProjectedFieldsSeenLimit {
+		officialOpenAIProjectedFieldsMu.Unlock()
+		return
+	}
+	officialOpenAIProjectedFieldsSeen[key] = struct{}{}
+	reachedLimit := len(officialOpenAIProjectedFieldsSeen) == officialOpenAIProjectedFieldsSeenLimit
+	officialOpenAIProjectedFieldsMu.Unlock()
+
+	if reachedLimit {
+		logger.LegacyPrintf(
+			"service.official_egress_openai",
+			"[Codex] 投影告警去重表已达上限 %d，后续投影不再单独告警；"+
+				"字段种类如此之多通常意味着构造流量而非画像落后",
+			officialOpenAIProjectedFieldsSeenLimit,
+		)
+	}
+	logger.LegacyPrintf(
+		"service.official_egress_openai",
+		"[Codex] %s 出现画像闭集外的顶层字段，已按 active 画像投影丢弃：fields=%v user-agent=%q",
+		ingress,
+		fields,
+		userAgent,
+	)
+}
+
+// validateOfficialOpenAITopLevelContract 校验一份候选正文是否仍在画像闭集内。
+//
+// 现在只服务于 WS 派生帧的内部一致性检查：那里的输入是网关自己生成或改写过的帧，
+// 越界字段意味着 adapter 绕过了画像构建函数，属于本仓代码缺陷，必须失败关闭，
+// 不能用投影掩盖——投影只对来自外部、无法控制的输入才有意义。
+//
+// 入站正文不再走这条路径。官方入口出现画像外字段更可能是官方客户端先于画像升级，
+// 按 §3.1 投影并告警，见 finalizeOfficialOpenAIHTTPBody 里的 strictIngressIdentity
+// 分支。官方 Rust 结构体不会序列化画像外字段这一事实仍然成立，它现在表达为
+// “投影后出站形态自洽”，而不是“拒绝服务”。
 func validateOfficialOpenAITopLevelContract(
 	payload map[string]any,
 	allowed map[string]struct{},
@@ -791,13 +928,16 @@ func normalizeDerivedOfficialOpenAIHTTPBody(
 	supportsParallelTools bool,
 	reasoningDefaults officialOpenAIReasoningDefaults,
 	allowedTopLevel map[string]struct{},
+	// userAgent 只用于投影告警定位来源，不参与定型决策。
+	userAgent string,
 ) (bool, error) {
 	modified, err := normalizeDerivedOfficialOpenAIInput(payload)
 	if err != nil {
 		return false, err
 	}
-	if stripNonOfficialOpenAITopLevelFields(payload, allowedTopLevel) {
+	if removed := stripNonOfficialOpenAITopLevelFields(payload, allowedTopLevel); len(removed) > 0 {
 		modified = true
+		warnOfficialOpenAIProjectedTopLevelFields(removed, userAgent, false)
 	}
 	if useResponsesLite {
 		liteModified, err := normalizeOpenAIResponsesLiteTools(payload)
@@ -1142,7 +1282,7 @@ func resolveOfficialOpenAIHTTPIdentity(
 	if strictIngressIdentity {
 		return resolveExplicitOfficialOpenAIHTTPIdentity(c, contract, isCompact)
 	}
-	return deriveOfficialOpenAIHTTPIdentity(c, account, body, contract), nil
+	return deriveOfficialOpenAIHTTPIdentity(c, account, body, contract)
 }
 
 func resolveExplicitOfficialOpenAIHTTPIdentity(
@@ -1157,6 +1297,8 @@ func resolveExplicitOfficialOpenAIHTTPIdentity(
 		clientRequest:  strings.TrimSpace(c.GetHeader("x-client-request-id")),
 		promptCacheKey: contract.promptCacheKey,
 		source:         OfficialEgressFieldSourceIngressExplicit,
+		// 官方入口的整份身份都由入站显式携带，会话归属不存在歧义。
+		sessionAnchorExplicit: true,
 	}
 	if isCompact {
 		// 官方 compact schema 不包含 client_metadata；身份来自同一请求的
@@ -1261,7 +1403,7 @@ func deriveOfficialOpenAIHTTPIdentity(
 	account *Account,
 	body []byte,
 	contract *officialOpenAIHTTPBodyContract,
-) officialOpenAIHTTPIdentity {
+) (officialOpenAIHTTPIdentity, error) {
 	accountID := int64(0)
 	if account != nil {
 		accountID = account.ID
@@ -1282,8 +1424,17 @@ func deriveOfficialOpenAIHTTPIdentity(
 
 	firstUserAnchor, lastUserAnchor := officialOpenAIHTTPUserAnchors(body)
 	sessionAnchor := officialOpenAIHTTPSessionAnchor(c)
+	// 记录锚点是否来自入站显式声明：兜底锚点只保证“同内容得到同 ID”，
+	// 不保证“同 ID 属于同一个会话”。
+	sessionAnchorExplicit := sessionAnchor != ""
 	if sessionAnchor == "" && contract != nil {
 		sessionAnchor = strings.TrimSpace(contract.promptCacheKey)
+		// 必须看 promptCacheKeySet 而不是值是否非空：Chat Completions 兼容链会按
+		// 模型、工具、system 与首条用户消息自动生成一个 prompt_cache_key，
+		// bindGeneratedOfficialOpenAIHTTPBodyContract 明确不设该标志。那种 key 与
+		// 首条消息兜底一样只保证“同内容同 ID”，若当成显式锚点，turn-state 会在
+		// 内容相同的独立会话间串用，P7 的隔离等于失效。
+		sessionAnchorExplicit = contract.promptCacheKeySet && sessionAnchor != ""
 	}
 	if sessionAnchor == "" {
 		sessionAnchor = "first_user=" + firstUserAnchor
@@ -1318,18 +1469,24 @@ func deriveOfficialOpenAIHTTPIdentity(
 		turnMetadataValues["request_kind"] = "compaction"
 		turnMetadataValues["compaction"] = compaction
 	}
-	turnMetadataBytes, _ := marshalOfficialOpenAITurnMetadata(turnMetadataValues)
-	return officialOpenAIHTTPIdentity{
-		installationID: installationID,
-		sessionID:      sessionID,
-		threadID:       sessionID,
-		windowID:       windowID,
-		turnID:         turnID,
-		turnMetadata:   string(turnMetadataBytes),
-		clientRequest:  sessionID,
-		promptCacheKey: sessionID,
-		source:         OfficialEgressFieldSourceDerived,
+	// 该结果直接成为 x-codex-turn-metadata 的值。marshal 失败不能退化成空串：
+	// 那会让 header 携带一个官方客户端不可能产生的值出站，且沿途无人察觉。
+	turnMetadataBytes, err := marshalOfficialOpenAITurnMetadata(turnMetadataValues)
+	if err != nil {
+		return officialOpenAIHTTPIdentity{}, fmt.Errorf("构造 turn metadata：%w", err)
 	}
+	return officialOpenAIHTTPIdentity{
+		installationID:        installationID,
+		sessionID:             sessionID,
+		threadID:              sessionID,
+		windowID:              windowID,
+		turnID:                turnID,
+		turnMetadata:          string(turnMetadataBytes),
+		clientRequest:         sessionID,
+		promptCacheKey:        sessionID,
+		source:                OfficialEgressFieldSourceDerived,
+		sessionAnchorExplicit: sessionAnchorExplicit,
+	}, nil
 }
 
 // resolveDerivedOfficialOpenAICompactionMetadata 把第三方请求能表达的压缩语义收敛为
@@ -1578,6 +1735,9 @@ func registerOfficialOpenAIHTTPIdentity(
 
 func finalizeOfficialOpenAIHTTPHeaders(
 	header http.Header,
+	// version 来自运行上下文的 active 画像版本，不再是编译期常量：辅助端点与 WS
+	// 握手的 version 头由画像槽位生成，主链若继续写死常量，升级后两者就会分叉。
+	version string,
 	userAgent string,
 	originator string,
 	identity officialOpenAIHTTPIdentity,
@@ -1619,7 +1779,7 @@ func finalizeOfficialOpenAIHTTPHeaders(
 	}
 	header.Set("x-codex-turn-metadata", identity.turnMetadata)
 	header.Set("x-codex-window-id", identity.windowID)
-	header.Set("version", officialCodexVersion0145)
+	header.Set("version", version)
 	if !isCompact {
 		header.Set("x-codex-beta-features", officialOpenAIHTTPBetaFeatures)
 	}

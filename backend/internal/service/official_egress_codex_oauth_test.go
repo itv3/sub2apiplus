@@ -70,6 +70,51 @@ func (r *officialCodexOAuthRuntimeRepo) Update(_ context.Context, account *Accou
 	return nil
 }
 
+func TestResolveActiveCodexOAuthExchangeProfileUsesTLSOnlyIdentity(t *testing.T) {
+	profile, err := ResolveActiveCodexOAuthExchangeProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := resolveOfficialClientProfile(
+		officialClientPurposeOpenAIOAuthResponsesHTTP,
+		officialClientProfileModeActive,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile.UserAgent != active.Build.UserAgent {
+		t.Fatalf("OAuth 换码未使用 active Codex UA：%q", profile.UserAgent)
+	}
+	if profile.Originator != active.Build.Originator {
+		t.Fatalf("OAuth 换码未使用 active Codex originator：%q", profile.Originator)
+	}
+	if profile.TLSProfile == nil {
+		t.Fatal("OAuth 换码缺少 TLS 画像")
+	}
+	if profile.TLSProfile.Transport.StrictH1Wire || len(profile.TLSProfile.Transport.H1HeaderOrders) != 0 {
+		t.Fatalf("OAuth 换码错误继承 strict H1 规则：%+v", profile.TLSProfile.Transport)
+	}
+
+	refreshProfile, err := resolveActiveCodexEndpointTLSProfile(officialCodexEndpointOAuthRefresh)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !refreshProfile.Transport.StrictH1Wire || len(refreshProfile.Transport.H1HeaderOrders) == 0 {
+		t.Fatal("OAuth refresh 严格画像被意外降级")
+	}
+	if profile.TLSProfile.Name == refreshProfile.Name {
+		t.Fatalf("OAuth 换码与 refresh 使用相同缓存身份：%q", profile.TLSProfile.Name)
+	}
+
+	second, err := ResolveActiveCodexOAuthExchangeProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.TLSProfile == profile.TLSProfile {
+		t.Fatal("OAuth 换码画像未按调用隔离")
+	}
+}
+
 func TestOfficialCodex0145OAuthRefreshUsesVersionProfile(t *testing.T) {
 	request, tlsProfile, err := BuildOfficialCodex0145OAuthRefreshRequest(
 		context.Background(),

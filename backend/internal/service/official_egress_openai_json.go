@@ -24,8 +24,15 @@ var (
 )
 
 func mustOfficialCodexBodyFieldOrder(endpointID string) []string {
+	// 版本取自 registry 的 release 指针而不是编译期常量：字段顺序属于 wire 形态，
+	// 必须与 header、TLS 出自同一版本，否则升级后会出现新版本 header 搭配旧版本
+	// 字段序的组合。release 指针是编译期数据，因此启动时求值与运行时求值等价。
+	version, err := activeOfficialCodexVersion()
+	if err != nil {
+		panic(err)
+	}
 	endpoint, err := resolveCodex0145Endpoint(
-		officialCodexVersion0145,
+		version,
 		codex0145EndpointID(endpointID),
 	)
 	if err != nil {

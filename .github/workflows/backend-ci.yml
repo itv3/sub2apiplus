@@ -18,6 +18,16 @@ jobs:
       - name: Official client capture tool tests
         run: make test-capture-tools
 
+  egress-spec-gates:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+      - name: Codex egress spec gates
+        run: make check-egress-spec
+
   shell:
     runs-on: macos-15
     steps:

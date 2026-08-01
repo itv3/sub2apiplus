@@ -21,6 +21,11 @@ const (
 	officialCodexTransportHTTPDefault = "codex-0.145.0-http-ubuntu24-native"
 	officialCodexTransportWS          = "codex-0.145.0-ws-rustls"
 
+	// 协议标识不含版本号，是跨版本稳定的语义键；执行层按它查传输画像，
+	// 而不是写死带版本号的传输 ID。
+	officialCodexTransportProtocolHTTP1 = "http/1.1"
+	officialCodexTransportProtocolWS    = "websocket"
+
 	officialCodexEndpointModels                 = "models"
 	officialCodexEndpointResponsesHTTP          = "responses_http"
 	officialCodexEndpointResponsesWS            = "responses_ws"
@@ -290,13 +295,37 @@ var officialCodexVersionSnapshots = map[string]officialCodexProfileSnapshot{
 	officialCodexVersion0145: defaultOfficialCodex0145Snapshot,
 }
 
-// resolveCodex0145VersionProfile 只接受精确三段版本，不做 trim、别名或回退；
-// 未登记的版本按未知处理，不回退到任何既有快照。
-func resolveCodex0145VersionProfile(version string) (*officialCodexVersionProfile, error) {
-	snapshot, exists := officialCodexVersionSnapshots[version]
-	if !exists {
-		return nil, fmt.Errorf("未知 Codex 官方出站版本画像：%q", version)
+// officialCodexCompiledProfiles 是注册表内每个快照在进程启动时一次性解码、校验并
+// 核对摘要后的只读单例。
+//
+// 画像是进程级不可变常量。此前每次解析都要重新解码 48 KB 快照、执行全量结构校验
+// 并重算 SHA-256，实测单次约 449 μs / 239 KB / 1790 次分配，而一条 HTTP 定型链路
+// 会重复触发十余次。这笔开销换不到任何隔离收益：真正会被执行器就地改写的是端点级
+// 数据，那部分由 ResolveEndpoint 单独深拷贝。
+//
+// 解析结果按只读契约使用，调用方一律不得写入其字段；需要可变副本的场景（画像
+// mutation 测试、未来的版本派生）必须显式调用 cloneOfficialCodexVersionProfile。
+var officialCodexCompiledProfiles = mustCompileOfficialCodexVersionSnapshots()
+
+func mustCompileOfficialCodexVersionSnapshots() map[string]*officialCodexVersionProfile {
+	compiled := make(map[string]*officialCodexVersionProfile, len(officialCodexVersionSnapshots))
+	for version, snapshot := range officialCodexVersionSnapshots {
+		profile, err := compileOfficialCodexVersionSnapshot(version, snapshot)
+		if err != nil {
+			panic(err)
+		}
+		compiled[version] = profile
 	}
+	return compiled
+}
+
+// compileOfficialCodexVersionSnapshot 执行原先散落在解析路径上的全部一次性工作：
+// 解码、结构校验和摘要自洽核对。任一步失败都必须在进程启动时暴露，而不是等到
+// 请求期才在某个调用点上返回错误。
+func compileOfficialCodexVersionSnapshot(
+	version string,
+	snapshot officialCodexProfileSnapshot,
+) (*officialCodexVersionProfile, error) {
 	var profile officialCodexVersionProfile
 	if err := json.Unmarshal([]byte(snapshot.JSON), &profile); err != nil {
 		return nil, fmt.Errorf("解码 Codex %s 版本画像：%w", version, err)
@@ -312,6 +341,37 @@ func resolveCodex0145VersionProfile(version string) (*officialCodexVersionProfil
 		return nil, fmt.Errorf("Codex %s 版本画像摘要不一致", version)
 	}
 	return &profile, nil
+}
+
+// resolveCodex0145VersionProfile 只接受精确三段版本，不做 trim、别名或回退；
+// 未登记的版本按未知处理，不回退到任何既有快照。
+//
+// 返回的是进程内只读单例，调用方不得修改其任何字段。
+func resolveCodex0145VersionProfile(version string) (*officialCodexVersionProfile, error) {
+	profile, exists := officialCodexCompiledProfiles[version]
+	if !exists {
+		return nil, fmt.Errorf("未知 Codex 官方出站版本画像：%q", version)
+	}
+	return profile, nil
+}
+
+// cloneOfficialCodexVersionProfile 返回整份版本画像的深拷贝。解析路径交付的是
+// 只读单例，因此任何需要改写画像的场景都必须先经过这里，避免污染全局快照。
+func cloneOfficialCodexVersionProfile(
+	profile *officialCodexVersionProfile,
+) (officialCodexVersionProfile, error) {
+	if profile == nil {
+		return officialCodexVersionProfile{}, errors.New("Codex 版本画像为空")
+	}
+	encoded, err := json.Marshal(profile)
+	if err != nil {
+		return officialCodexVersionProfile{}, fmt.Errorf("复制 Codex %s 版本画像：%w", profile.Version, err)
+	}
+	var cloned officialCodexVersionProfile
+	if err := json.Unmarshal(encoded, &cloned); err != nil {
+		return officialCodexVersionProfile{}, fmt.Errorf("复制 Codex %s 版本画像：%w", profile.Version, err)
+	}
+	return cloned, nil
 }
 
 // resolveCodex0145Endpoint 同时执行精确版本和精确端点解析，并返回端点深拷贝。
@@ -336,8 +396,13 @@ func resolveOfficialCodexEndpointProfile(version, endpointID string) (officialCo
 // OfficialCodexRemoteCompactionV2Default 把 handler 的压缩分派决策绑定到版本画像，
 // 避免再次把“header 是否出现”误当成 feature 默认值。显式 legacy 请求仍通过
 // /responses/compact 选择；普通 /responses 中已有 compaction_trigger 时保持 V2。
+//
+// feature 默认值必须与 header、TLS、端点出自同一版本：它决定 handler 的压缩分派与
+// HTTP turn metadata，若停在编译期常量上，切换 release 后就会出现“新画像出站、旧画像
+// 路由”的跨层分叉。这里的 panic 是理论兜底——active 版本解析失败在包初始化期即已暴露
+// （见 official_egress_transport.go 的传输画像预检）。
 func OfficialCodexRemoteCompactionV2Default() bool {
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveActiveCodexVersionProfile()
 	if err != nil {
 		panic(err)
 	}
@@ -345,25 +410,73 @@ func OfficialCodexRemoteCompactionV2Default() bool {
 }
 
 // ResolveEndpoint 返回端点画像的深拷贝，未知端点或带空白的近似 ID 均失败。
+// 版本画像本身是只读单例，端点则是执行器会就地改写的数据，因此这里必须拷贝。
+// 拷贝按结构逐字段进行，不再经过 JSON 编解码。
 func (p *officialCodexVersionProfile) ResolveEndpoint(endpointID string) (officialCodexEndpointProfile, error) {
 	if p == nil {
 		return officialCodexEndpointProfile{}, errors.New("Codex 版本画像为空")
 	}
-	for _, endpoint := range p.Endpoints {
-		if endpoint.ID != endpointID {
+	for i := range p.Endpoints {
+		if p.Endpoints[i].ID != endpointID {
 			continue
 		}
-		encoded, err := json.Marshal(endpoint)
-		if err != nil {
-			return officialCodexEndpointProfile{}, fmt.Errorf("复制端点画像 %s：%w", endpointID, err)
-		}
-		var cloned officialCodexEndpointProfile
-		if err := json.Unmarshal(encoded, &cloned); err != nil {
-			return officialCodexEndpointProfile{}, fmt.Errorf("复制端点画像 %s：%w", endpointID, err)
-		}
-		return cloned, nil
+		return cloneOfficialCodexEndpointProfile(p.Endpoints[i]), nil
 	}
 	return officialCodexEndpointProfile{}, fmt.Errorf("Codex %s 不支持端点画像：%q", p.Version, endpointID)
+}
+
+// ResolveDefaultTransportID 按协议返回该版本的默认传输画像 ID。
+//
+// 传输 ID 自身携带版本号（如 codex-0.145.0-http-ubuntu24-native），调用方因此不能
+// 写死传输 ID 常量：升级后新快照会定义自己的传输 ID，写死的常量在新画像里根本查不到。
+// 按协议查询让执行层与具体 ID 解耦，版本差异留在画像内部。
+func (p *officialCodexVersionProfile) ResolveDefaultTransportID(protocol string) (string, error) {
+	if p == nil {
+		return "", errors.New("Codex 版本画像为空")
+	}
+	resolved := ""
+	for _, transport := range p.Transports {
+		if transport.Protocol != protocol {
+			continue
+		}
+		if resolved != "" {
+			return "", fmt.Errorf(
+				"Codex %s 的协议 %q 存在多个传输画像，无法确定默认项",
+				p.Version,
+				protocol,
+			)
+		}
+		resolved = transport.ID
+	}
+	if resolved == "" {
+		return "", fmt.Errorf("Codex %s 没有协议为 %q 的传输画像", p.Version, protocol)
+	}
+	return resolved, nil
+}
+
+// cloneOfficialCodexEndpointProfile 复制端点画像及其全部切片。端点内只有值类型
+// 元素的切片，没有嵌套指针，因此逐切片复制即构成完整深拷贝。
+func cloneOfficialCodexEndpointProfile(
+	endpoint officialCodexEndpointProfile,
+) officialCodexEndpointProfile {
+	cloned := endpoint
+	cloned.Query = cloneOfficialCodexSlice(endpoint.Query)
+	cloned.Headers = cloneOfficialCodexSlice(endpoint.Headers)
+	cloned.HeaderMapInsertionOrder = cloneOfficialCodexSlice(endpoint.HeaderMapInsertionOrder)
+	cloned.PostRemoveHeaders = cloneOfficialCodexSlice(endpoint.PostRemoveHeaders)
+	cloned.Body.Fields = cloneOfficialCodexSlice(endpoint.Body.Fields)
+	return cloned
+}
+
+// cloneOfficialCodexSlice 保持 nil 与空切片的区别，使结构化拷贝与原先的 JSON
+// 往返拷贝结果完全一致。
+func cloneOfficialCodexSlice[T any](src []T) []T {
+	if src == nil {
+		return nil
+	}
+	dst := make([]T, len(src))
+	copy(dst, src)
+	return dst
 }
 
 // OrderedHeaders 返回按槽位和槽内序号排列的 header 深拷贝。
@@ -1088,7 +1201,35 @@ func digestOfficialCodexVersionProfile(profile officialCodexVersionProfile) (str
 	return hex.EncodeToString(sum[:]), nil
 }
 
+// officialCodexVersionValidators 登记每个版本的专属校验器。
+//
+// 画像里的规则清单、surface 身份、feature 默认值、工具呈现和文件流程都是版本事实，
+// 只能由该版本自己断言。原先通用解析路径直接要求 Version 等于 0.145.0，等于把注册表
+// 按版本查表的能力整个抵消掉：登记新快照后解析必然失败，而 §3.2 承诺的“升级只需登记
+// 快照并切换 release 指针”正是建立在这条路径能通过之上。
+//
+// 新增版本时在自己的快照文件里登记校验器即可，通用执行引擎与 §3.5.2 的共享接入点
+// 都不需要改动。
+var officialCodexVersionValidators = map[string]func(officialCodexVersionProfile) error{
+	officialCodexVersion0145: validateCodex0145Profile,
+}
+
+// validateOfficialCodexVersionProfile 是版本无关的校验入口：确认版本号存在且该版本
+// 登记了专属校验器，随后把全部断言交给它。
 func validateOfficialCodexVersionProfile(profile officialCodexVersionProfile) error {
+	version := strings.TrimSpace(profile.Version)
+	if version == "" {
+		return errors.New("Codex 版本画像缺少版本号")
+	}
+	validator, registered := officialCodexVersionValidators[version]
+	if !registered {
+		return fmt.Errorf("Codex 版本 %q 未登记专属校验器", version)
+	}
+	return validator(profile)
+}
+
+// validateCodex0145Profile 是 0.145.0 的专属校验器，其中每条断言都只对该版本成立。
+func validateCodex0145Profile(profile officialCodexVersionProfile) error {
 	if profile.Version != officialCodexVersion0145 {
 		return fmt.Errorf("版本必须精确为 %s", officialCodexVersion0145)
 	}

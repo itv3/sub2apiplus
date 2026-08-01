@@ -401,12 +401,11 @@ func (s *OpenAIGatewayService) createUpstreamLiveCall(
 	realtimeSessionID string,
 ) (*LiveCallCreated, error) {
 	endpointID := codex0145EndpointID(officialCodexEndpointRealtimeCalls)
-	endpoint, err := resolveCodex0145Endpoint(officialCodexVersion0145, endpointID)
+	endpoint, err := resolveActiveCodexEndpoint(endpointID)
 	if err != nil {
 		return nil, err
 	}
-	target, err := officialCodex0145BuildEndpointURL(
-		officialCodexVersion0145,
+	target, err := buildActiveCodexEndpointURL(
 		endpointID,
 		officialCodex0145EndpointURLInput{},
 	)
@@ -636,8 +635,7 @@ func (s *OpenAIGatewayService) dialLiveSideband(ctx context.Context, record *Liv
 		return nil, fmt.Errorf("恢复 Live 进程画像：%w", err)
 	}
 	endpointID := codex0145EndpointID(officialCodexEndpointRealtimeSideband)
-	target, err := officialCodex0145BuildEndpointURL(
-		officialCodexVersion0145,
+	target, err := buildActiveCodexEndpointURL(
 		endpointID,
 		officialCodex0145EndpointURLInput{
 			QueryValues: map[string]string{"call_id": record.CallID},

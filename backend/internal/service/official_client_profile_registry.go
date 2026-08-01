@@ -365,33 +365,30 @@ func officialClientWireProfileDefinitions() []officialClientWireProfile {
 		newAnthropicWireProfile("anthropic_claude_desktop_2_1_209_apikey_messages_http_previous", officialClientPurposeAnthropicAPIKeyMessagesHTTP, officialClientBuildAnthropicDesktop, "apikey", "messages", anthropicDesktopBeta, "capture:desktop-2.1.209-202607"),
 		newAnthropicWireProfile("anthropic_claude_code_2_1_220_apikey_count_tokens_generic", officialClientPurposeAnthropicAPIKeyCountTokensCompat, officialClientBuildAnthropicCLI21220, "apikey", "count_tokens_generic", anthropicAPIKeyBeta+",token-counting-2024-11-01", "derived:messages-client-build-with-generic-count-tokens-contract"),
 		newAnthropicWireProfile("anthropic_claude_desktop_2_1_209_apikey_count_tokens_generic_previous", officialClientPurposeAnthropicAPIKeyCountTokensCompat, officialClientBuildAnthropicDesktop, "apikey", "count_tokens_generic", anthropicDesktopBeta+",token-counting-2024-11-01", "derived:legacy-desktop-generic-count-tokens-contract"),
-		newOpenAIWireProfile("openai_codex_cli_0_145_0_oauth_responses_http_direct", officialClientPurposeOpenAIOAuthResponsesHTTP, officialClientBuildOpenAICodex0145, "oauth", "responses", "http", "openai-http-codex-0.145.0-direct", "capture:oauth-20260726T014021Z"),
-		newOpenAIWireProfile("openai_codex_cli_0_145_0_xterm_oauth_responses_http_previous", officialClientPurposeOpenAIOAuthResponsesHTTP, officialClientBuildOpenAICodexPrev, "oauth", "responses", "http", "openai-http-codex-0.145.0-direct", "capture:phase0-20260724"),
-		newOpenAIWireProfile("openai_codex_cli_0_145_0_oauth_responses_ws_direct", officialClientPurposeOpenAIOAuthResponsesWS, officialClientBuildOpenAICodex0145, "oauth", "responses", "websocket", "openai-ws-codex-0.145.0-direct", "capture:oauth-20260726T014021Z"),
-		newOpenAIWireProfile("openai_codex_cli_0_145_0_xterm_oauth_responses_ws_previous", officialClientPurposeOpenAIOAuthResponsesWS, officialClientBuildOpenAICodexPrev, "oauth", "responses", "websocket", "openai-ws-codex-0.145.0-direct", "capture:phase0-20260724"),
-		newOpenAIWireProfile("openai_codex_cli_0_145_0_apikey_responses_http_direct", officialClientPurposeOpenAIAPIKeyResponsesHTTP, officialClientBuildOpenAICodex0145, "apikey", "responses", "http", "openai-http-codex-0.145.0-direct", "capture:api-20260726T014252Z"),
+		newOpenAIWireProfile("openai_codex_cli_0_145_0_oauth_responses_http_direct", officialClientPurposeOpenAIOAuthResponsesHTTP, officialClientBuildOpenAICodex0145, "oauth", "responses", "http", officialEgressTransportProfileOpenAIHTTP, "capture:oauth-20260726T014021Z"),
+		newOpenAIWireProfile("openai_codex_cli_0_145_0_xterm_oauth_responses_http_previous", officialClientPurposeOpenAIOAuthResponsesHTTP, officialClientBuildOpenAICodexPrev, "oauth", "responses", "http", officialEgressTransportProfileOpenAIHTTP, "capture:phase0-20260724"),
+		newOpenAIWireProfile("openai_codex_cli_0_145_0_oauth_responses_ws_direct", officialClientPurposeOpenAIOAuthResponsesWS, officialClientBuildOpenAICodex0145, "oauth", "responses", "websocket", officialEgressTransportProfileOpenAIWS, "capture:oauth-20260726T014021Z"),
+		newOpenAIWireProfile("openai_codex_cli_0_145_0_xterm_oauth_responses_ws_previous", officialClientPurposeOpenAIOAuthResponsesWS, officialClientBuildOpenAICodexPrev, "oauth", "responses", "websocket", officialEgressTransportProfileOpenAIWS, "capture:phase0-20260724"),
+		newOpenAIWireProfile("openai_codex_cli_0_145_0_apikey_responses_http_direct", officialClientPurposeOpenAIAPIKeyResponsesHTTP, officialClientBuildOpenAICodex0145, "apikey", "responses", "http", officialEgressTransportProfileOpenAIHTTP, "capture:api-20260726T014252Z"),
 		newOpenAIWireProfile("openai_codex_desktop_0_144_0a4_apikey_responses_http_previous", officialClientPurposeOpenAIAPIKeyResponsesHTTP, officialClientBuildOpenAIDesktop, "apikey", "responses", "http", "openai-http-legacy-0.144.1", "capture:desktop-0.144.0-alpha.4-202607"),
-		newOpenAIWireProfile("openai_codex_cli_0_145_0_apikey_responses_ws_inactive", officialClientPurposeOpenAIAPIKeyResponsesWS, officialClientBuildOpenAICodex0145, "apikey", "responses", "websocket", "openai-ws-codex-0.145.0-direct", "capture:api-20260726T014252Z"),
+		newOpenAIWireProfile("openai_codex_cli_0_145_0_apikey_responses_ws_inactive", officialClientPurposeOpenAIAPIKeyResponsesWS, officialClientBuildOpenAICodex0145, "apikey", "responses", "websocket", officialEgressTransportProfileOpenAIWS, "capture:api-20260726T014252Z"),
 		newOpenAIWireProfile("openai_codex_desktop_0_144_0a4_apikey_responses_ws_previous_inactive", officialClientPurposeOpenAIAPIKeyResponsesWS, officialClientBuildOpenAIDesktop, "apikey", "responses", "websocket", "openai-ws-legacy-inactive", "derived:legacy-inactive"),
 	}
 
+	// StaticHeaders 只被 API Key mimic 与 Anthropic 两条路径消费。OAuth 路径的
+	// header 由 §3.3.2 的终态 Finalizer 按版本画像写出，registry 只向它提供
+	// Build.Version 一个字符串。
+	//
+	// 这里曾经也为 OAuth 的 responses HTTP／WS 登记过 StaticHeaders：它带 digest、
+	// 带抓包来源，看起来与下面两条完全一样权威，实际全仓没有任何消费点——改它既不
+	// 影响出站，也不会有测试失败。一份改了不生效的配置比没有配置更危险，因此删除，
+	// 让 OAuth 的 header 只保留 Finalizer 一个事实源。
 	for i := range profiles {
 		switch profiles[i].Purpose {
-		case officialClientPurposeOpenAIOAuthResponsesHTTP:
-			profiles[i].StaticHeaders = []officialClientHeaderValue{
-				{Name: "x-codex-beta-features", Value: "remote_compaction_v2"},
-				{Name: "version", Value: openaiidentity.CodexVersion},
-			}
 		case officialClientPurposeOpenAIAPIKeyResponsesHTTP:
 			profiles[i].StaticHeaders = []officialClientHeaderValue{
 				{Name: "x-codex-beta-features", Value: "remote_compaction_v2"},
 				{Name: "x-openai-internal-codex-responses-lite", Value: "true"},
-			}
-		case officialClientPurposeOpenAIOAuthResponsesWS:
-			profiles[i].StaticHeaders = []officialClientHeaderValue{
-				{Name: "x-codex-beta-features", Value: "remote_compaction_v2"},
-				{Name: "OpenAI-Beta", Value: "responses_websockets=2026-02-06"},
-				{Name: "version", Value: "0.145.0"},
 			}
 		case officialClientPurposeOpenAIAPIKeyResponsesWS:
 			profiles[i].StaticHeaders = []officialClientHeaderValue{

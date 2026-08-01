@@ -2,6 +2,7 @@ package repository
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +12,7 @@ import (
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openaiidentity"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
@@ -145,7 +147,9 @@ func (s *OpenAIOAuthServiceSuite) TestRefreshToken_ProfileDrivenFormFields() {
 }
 
 func (s *OpenAIOAuthServiceSuite) TestTokenClientUsesCodexTLSDialer() {
-	client, err := createOpenAIReqClient("")
+	profile, err := service.ResolveActiveCodexOAuthExchangeProfile()
+	require.NoError(s.T(), err)
+	client, err := createOpenAIExchangeReqClient("", profile.TLSProfile)
 	require.NoError(s.T(), err)
 	require.NotNil(s.T(), client.GetTransport().DialTLSContext)
 }
@@ -209,24 +213,42 @@ func (s *OpenAIOAuthServiceSuite) TestNonSuccessStatus_IncludesBody() {
 	require.ErrorContains(s.T(), err, "bad")
 }
 
-func (s *OpenAIOAuthServiceSuite) TestRequestError_ClosedServer() {
+func (s *OpenAIOAuthServiceSuite) TestRequestErrorWithProxyKeepsGenericReason() {
 	s.setupServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	s.srv.Close()
 
-	_, err := s.svc.ExchangeCode(s.ctx, "code", "ver", openai.DefaultRedirectURI, "", "")
+	_, err := s.svc.ExchangeCode(
+		s.ctx,
+		"code",
+		"ver",
+		openai.DefaultRedirectURI,
+		"http://127.0.0.1:1",
+		"",
+	)
 	require.Error(s.T(), err)
+	require.Equal(s.T(), "OPENAI_OAUTH_REQUEST_FAILED", infraerrors.Reason(err))
 	require.ErrorContains(s.T(), err, "request failed")
 }
 
-func (s *OpenAIOAuthServiceSuite) TestExchangeCode_RequestErrorWithoutProxyReturnsProxyHint() {
+func (s *OpenAIOAuthServiceSuite) TestExchangeCode_RequestErrorWithoutProxyReturnsDirectConnectionHint() {
 	s.setupServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	s.srv.Close()
 
 	_, err := s.svc.ExchangeCode(s.ctx, "code", "ver", openai.DefaultRedirectURI, "", "")
 
 	require.Error(s.T(), err)
-	require.Equal(s.T(), "OPENAI_OAUTH_PROXY_REQUIRED", infraerrors.Reason(err))
-	require.Contains(s.T(), infraerrors.Message(err), "no proxy is configured")
+	require.Equal(s.T(), "OPENAI_OAUTH_DIRECT_CONNECTION_FAILED", infraerrors.Reason(err))
+	require.Contains(s.T(), infraerrors.Message(err), "could not reach OpenAI directly")
+}
+
+func (s *OpenAIOAuthServiceSuite) TestProfileErrorIsNotReportedAsDirectConnectionFailure() {
+	err := &url.Error{
+		Op:  http.MethodPost,
+		URL: openai.TokenURL,
+		Err: errors.New("official h1 wire request does not match immutable profile"),
+	}
+
+	require.False(s.T(), shouldReturnOpenAIDirectConnectionHint(s.ctx, "", err))
 }
 
 func (s *OpenAIOAuthServiceSuite) TestContextCancel() {
@@ -326,6 +348,7 @@ func (s *OpenAIOAuthServiceSuite) TestExchangeCode_SuccessButInvalidJSON() {
 
 	_, err := s.svc.ExchangeCode(s.ctx, "code", "ver", openai.DefaultRedirectURI, "", "")
 	require.Error(s.T(), err, "expected error for invalid JSON response")
+	require.Equal(s.T(), "OPENAI_OAUTH_REQUEST_FAILED", infraerrors.Reason(err))
 }
 
 func (s *OpenAIOAuthServiceSuite) TestRefreshToken_NonSuccessStatus() {

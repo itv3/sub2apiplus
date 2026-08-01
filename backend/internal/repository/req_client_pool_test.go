@@ -13,6 +13,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
+	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/imroc/req/v3"
 	"github.com/stretchr/testify/require"
 )
@@ -111,9 +112,11 @@ func TestGetSharedReqClient_ProxyURLMissingHost(t *testing.T) {
 	require.Contains(t, err.Error(), "proxy URL missing host")
 }
 
-func TestCreateOpenAIReqClient_Timeout120Seconds(t *testing.T) {
+func TestCreateOpenAIExchangeReqClient_Timeout120Seconds(t *testing.T) {
 	sharedReqClients = sync.Map{}
-	client, err := createOpenAIReqClient("http://proxy.local:8080")
+	profile, err := service.ResolveActiveCodexOAuthExchangeProfile()
+	require.NoError(t, err)
+	client, err := createOpenAIExchangeReqClient("http://proxy.local:8080", profile.TLSProfile)
 	require.NoError(t, err)
 	require.Equal(t, 120*time.Second, client.GetClient().Timeout)
 }

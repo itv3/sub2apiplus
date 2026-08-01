@@ -52,9 +52,9 @@ func (openAIOfficialEgressHTTPTransportProvider) Resolve(
 	); err != nil {
 		return OfficialEgressTransportSelection{}, err
 	}
-	tlsProfile, err := officialCodex0145ResolveTLSProfile(
-		officialCodexVersion0145,
-		officialCodexTransportHTTPDefault,
+	tlsProfile, err := resolveOfficialCodexDefaultTLSProfile(
+		egressContext.ProfileVersion(),
+		officialCodexTransportProtocolHTTP1,
 	)
 	if err != nil {
 		return OfficialEgressTransportSelection{}, fmt.Errorf("编译 Codex HTTP 传输画像：%w", err)
@@ -75,9 +75,9 @@ func (openAIOfficialEgressWebSocketTransportProvider) Resolve(
 	); err != nil {
 		return OfficialEgressTransportSelection{}, err
 	}
-	tlsProfile, err := officialCodex0145ResolveTLSProfile(
-		officialCodexVersion0145,
-		officialCodexTransportWS,
+	tlsProfile, err := resolveOfficialCodexDefaultTLSProfile(
+		egressContext.ProfileVersion(),
+		officialCodexTransportProtocolWS,
 	)
 	if err != nil {
 		return OfficialEgressTransportSelection{}, fmt.Errorf("编译 Codex WS 传输画像：%w", err)
@@ -221,7 +221,7 @@ func newAnthropicOfficialEgressTLSProfile() *tlsfingerprint.Profile {
 // newOpenAIOfficialEgressHTTPTLSProfile 是旧调用点的兼容入口。TLS、H1 端点矩阵
 // 与 strict 策略全部由不可变 0.145.0 画像编译，不再在传输文件复制参数。
 func newOpenAIOfficialEgressHTTPTLSProfile() *tlsfingerprint.Profile {
-	return mustResolveOfficialCodex0145TLSProfile(officialCodexTransportHTTPDefault)
+	return mustResolveOfficialCodexDefaultTLSProfile(officialCodexTransportProtocolHTTP1)
 }
 
 // OpenAIOfficialEgressHTTPTLSProfile 为尚在迁移的辅助端点提供默认 HTTP 画像。
@@ -268,16 +268,58 @@ func newOpenAIOfficialEgressHTTPProxyTLSProfile() *tlsfingerprint.Profile {
 // newOpenAIOfficialEgressWebSocketTLSProfile 是旧调用点的兼容入口。WS 的 rustls
 // 参数、固定前五项与 swap_remove 规则均从同一版本画像编译。
 func newOpenAIOfficialEgressWebSocketTLSProfile() *tlsfingerprint.Profile {
-	return mustResolveOfficialCodex0145TLSProfile(officialCodexTransportWS)
+	return mustResolveOfficialCodexDefaultTLSProfile(officialCodexTransportProtocolWS)
 }
 
-// mustResolveOfficialCodex0145TLSProfile 仅供无法修改签名的历史构造器使用。
-// 固定版本画像若在进程内失效，必须立即停止，不能返回 nil 让调用点悄悄降级为
-// Go 默认 TLS；带动态版本/端点的执行路径一律使用返回 error 的严格解析 API。
-func mustResolveOfficialCodex0145TLSProfile(transportID string) *tlsfingerprint.Profile {
-	profile, err := officialCodex0145ResolveTLSProfile(officialCodexVersion0145, transportID)
+// 包初始化期预检两个内置传输画像。
+//
+// 它们的输入全是编译期常量（固定版本 + 固定传输 ID），编译失败属于构建错误而
+// 不是运行时状态。此前失败只会在请求路径上 panic，而 gin 的 Recovery 会把它降级
+// 成单请求 500——既达不到下方注释期望的"立即停止"，又让同一个构建错误以最难定位
+// 的形式在 6 个调用点上反复出现。这里在启动时先走一遍同样的构造路径把失败提前；
+// 直接复用两个既有构造器，因此不额外引入版本标识符。
+var _ = precompileOfficialCodexBuiltinTLSProfiles()
+
+func precompileOfficialCodexBuiltinTLSProfiles() struct{} {
+	newOpenAIOfficialEgressHTTPTLSProfile()
+	newOpenAIOfficialEgressWebSocketTLSProfile()
+	return struct{}{}
+}
+
+// resolveOfficialCodexDefaultTLSProfile 按版本与协议解析传输画像。
+//
+// 版本来自运行上下文或 registry 的 release 指针，传输 ID 由画像按协议给出，因此
+// 执行层不再持有任何版本相关的常量：升级只需登记新快照并切换 release 指针。
+func resolveOfficialCodexDefaultTLSProfile(
+	version string,
+	protocol string,
+) (*tlsfingerprint.Profile, error) {
+	profile, err := resolveCodex0145VersionProfile(version)
 	if err != nil {
-		panic(fmt.Sprintf("编译内置 Codex 0.145.0 传输画像失败：%v", err))
+		return nil, err
+	}
+	transportID, err := profile.ResolveDefaultTransportID(protocol)
+	if err != nil {
+		return nil, err
+	}
+	return officialCodex0145ResolveTLSProfile(version, transportID)
+}
+
+// mustResolveOfficialCodexDefaultTLSProfile 仅供无法修改签名的历史构造器使用。
+// 画像若在进程内失效，必须立即停止，不能返回 nil 让调用点悄悄降级为 Go 默认 TLS；
+// 带动态版本/端点的执行路径一律使用返回 error 的严格解析 API。
+//
+// 同样的输入已在包初始化期预检通过，因此这里的 panic 只是理论兜底。它也不能改为
+// 返回共享单例：API-key mimic 的 TLS-only 派生构造器会就地改写返回值（清掉
+// H1HeaderOrders 与 StrictH1Wire），共享指针会让这些改写污染全部官方出站。
+func mustResolveOfficialCodexDefaultTLSProfile(protocol string) *tlsfingerprint.Profile {
+	version, err := activeOfficialCodexVersion()
+	if err != nil {
+		panic(fmt.Sprintf("解析 active Codex 版本失败：%v", err))
+	}
+	profile, err := resolveOfficialCodexDefaultTLSProfile(version, protocol)
+	if err != nil {
+		panic(fmt.Sprintf("编译 Codex %s 传输画像失败：%v", version, err))
 	}
 	return profile
 }

@@ -222,7 +222,10 @@ func deriveOfficialOpenAIWSIdentity(
 	if err != nil {
 		return officialOpenAIWSIdentity{}, err
 	}
-	base := deriveOfficialOpenAIHTTPIdentity(c, account, firstPayload, contract)
+	base, err := deriveOfficialOpenAIHTTPIdentity(c, account, firstPayload, contract)
+	if err != nil {
+		return officialOpenAIWSIdentity{}, err
+	}
 	turnMetadataBytes, err := marshalOfficialOpenAITurnMetadata(map[string]any{
 		"installation_id": base.installationID,
 		"session_id":      base.sessionID,
@@ -631,6 +634,9 @@ func finalizeDerivedOpenAIOfficialEgressWSFrame(
 		egressContext.parallelTools,
 		officialOpenAIReasoningDefaultsFromContext(egressContext),
 		officialOpenAIWSTopLevelAllowed,
+		// WS 帧定型阶段拿不到入站 HTTP 头，投影告警只报告字段名与入口类型；
+		// 握手阶段的入站身份已由 WS 入口自行记录。
+		"",
 	); err != nil {
 		return nil, result, err
 	}
@@ -1262,22 +1268,33 @@ func buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 		_, lastUserAnchor := officialOpenAIHTTPUserAnchorsFromPayload(payload)
 		state := egressContext.openAIWSDerived
 		state.mu.Lock()
+		var seedErr error
 		if !preserveCurrentTurn && lastUserAnchor != "" {
 			state.lastTurnID = generateOfficialStableUUIDV7(
 				"openai-official-egress-turn|" + sessionID + "|" + lastUserAnchor,
 			)
 			state.lastTurnStartedAtMS = time.Now().UnixMilli()
 		} else if state.lastTurnID == "" {
-			frameBytes, _ := marshalOfficialOpenAIWSJSON(payload)
-			state.lastTurnID = generateOfficialStableUUIDV7(
-				"openai-official-egress-turn|" + sessionID + "|" +
-					fmt.Sprintf("%x", frameBytes),
-			)
-			state.lastTurnStartedAtMS = time.Now().UnixMilli()
+			// 没有用户锚点时以整帧内容做 seed。marshal 失败不能静默退化成空
+			// seed：那会让本会话此后所有帧共用同一个 Turn ID，而定型链路其余
+			// 环节都观察不到异常。这里把错误交回调用方按定型失败处理。
+			frameBytes, marshalErr := marshalOfficialOpenAIWSJSON(payload)
+			if marshalErr != nil {
+				seedErr = fmt.Errorf("构造 WebSocket Turn ID seed：%w", marshalErr)
+			} else {
+				state.lastTurnID = generateOfficialStableUUIDV7(
+					"openai-official-egress-turn|" + sessionID + "|" +
+						fmt.Sprintf("%x", frameBytes),
+				)
+				state.lastTurnStartedAtMS = time.Now().UnixMilli()
+			}
 		}
 		turnID = state.lastTurnID
 		turnStartedAtMS = state.lastTurnStartedAtMS
 		state.mu.Unlock()
+		if seedErr != nil {
+			return nil, "", seedErr
+		}
 	}
 
 	turnMetadata := map[string]any{

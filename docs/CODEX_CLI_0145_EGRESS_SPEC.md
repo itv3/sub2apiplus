@@ -966,10 +966,16 @@ OAuth 请求在最终出站前进入版本画像驱动的定型层。
   首次 models 阶段识别；
 - 条件头证据缺失或与 turn metadata 冲突：按“条件不成立”处理，不发这些条件头。
   条件头本就是官方的条件性行为，不发产生的是官方最常见的合法形态。
+- 顶层字段超出画像闭集：按闭集投影丢弃并告警，不拒绝请求。官方入口与派生入口在这一
+  点上处理相同——严格入口此前是失败关闭，但官方客户端先于画像升级时，那会让真·官方
+  新版客户端在整个升级窗口内不可用，而这恰恰是最不该失败的时刻。
+- 已知字段的值不合契约（如 `tool_choice` 不是 `auto`）：按画像规范化，不拒绝请求。
 
 每处降级都必须产生可观测信号。投影路径按画像闭集丢弃未知顶层字段（见 §3.3.2）时同样
 必须告警：新版本客户端的新增字段会在此被抹掉，表现为“功能不生效但请求成功”，这是本
-方案唯一的功能性风险面，也是运行时唯一能提示“该升级画像了”的信号。
+方案唯一的功能性风险面，也是运行时唯一能提示“该升级画像了”的信号。告警按“入口类型 +
+字段名组合”去重，每种组合在进程内只报一次——投影发生在每个请求上，逐请求打印会淹没
+日志，而重复出现同一组字段并不增加信息量。
 
 唯一保留的失败关闭是账号侧配置错误（如 residency 配置了非法值）。那属于运维配置问题，
 与客户端能否使用无关。
@@ -988,8 +994,10 @@ OAuth 请求在最终出站前进入版本画像驱动的定型层。
 - turn-state、subagent、memory、parent thread、residency、runtime metrics 等条件关系；
 - 文件上传三阶段和服务端返回 URL 的唯一例外边界。
 
-画像构造后编码成不可变规范快照，每次解析返回深拷贝，调用方不能修改全局数据。当前
-画像摘要由测试固定为：
+画像构造后编码成不可变规范快照，并在进程启动时一次性解码、结构校验和摘要核对，
+任一步失败都在启动期暴露而非请求期。此后解析返回的是进程内只读单例，调用方不得
+写入其字段；执行器唯一会就地改写的端点数据仍按次深拷贝，需要改写整份画像的场景
+（画像 mutation 测试、未来的版本派生）必须显式取深拷贝。当前画像摘要由测试固定为：
 
 ```text
 9b7dd12df50dbcff74594b1f05440161cd99b963019a4f316f20c08ed5f5ba1e
@@ -1003,10 +1011,35 @@ OAuth 请求在最终出站前进入版本画像驱动的定型层。
 `official_client_profile_registry.go` 的 release 指针取得当前 active 版本，不再写死
 版本常量——版本因此是数据而非代码结构。
 
-据此，新增版本的代码侧改动收敛为：新建版本快照文件、在注册表登记、在 registry 补
-build/wire profile 并调整 release 指针。§3.5.2 的共享接入点无需改动，这是 §4.5 第 13
-条得以成立的机制基础。注意这只是代码接线，快照内容本身必须来自第四部分的完整抓包
-验收 Campaign，不能手工推断。
+**版本解耦已落地。** 生产代码中不再存在写死的版本常量：版本一律来自运行上下文的
+`ProfileVersion()` 或 registry 的 release 指针（`activeOfficialCodexVersion()`），
+`official_egress_codex_active_release.go` 是后者的统一入口。传输画像不再按带版本号的
+传输 ID 查找，而是按协议（`http/1.1`、`websocket`）由画像给出 ID，因此执行层与具体
+传输 ID 解耦；body 顶层字段序同样在启动时按 active 版本解析。
+
+画像校验相应分层：通用入口只确认版本号存在且该版本登记了专属校验器，规则清单、
+surface 身份、feature 默认值等版本事实全部交由专属校验器断言。0.145.0 的断言原样
+保留在 `validateCodex0145Profile` 中，新版本在自己的快照文件里登记自己的校验器。
+
+据此，新增版本的代码侧动作是：新建版本快照文件（画像数据 + 专属校验器）、在
+`officialCodexVersionSnapshots` 与 `officialCodexVersionValidators` 登记、在 registry 补
+build/wire profile 并调整 release 指针。§3.5.2 的共享接入点不需要改动。注意这只是代码
+接线，快照内容本身必须来自第四部分的完整抓包验收 Campaign，不能手工推断。
+
+**已知限制：注册仍非自包含。** 上述两个注册表目前定义在 `official_egress_codex_0145_profile.go`
+中，因此新增版本仍要编辑该文件，而不能只靠新版本文件自己的 `init()` 完成登记——启动期
+编译（`officialCodexCompiledProfiles`）在包级变量初始化阶段就已完成，晚于任何 `init()`。
+这不影响出站正确性，但让"新版本文件自包含"这一点尚未成立；改造需要把注册模型换成注册表
+构建期的确定性收集。
+
+`official_egress_codex_version_upgrade_test.go` 是这条路径的机器断言：它用一份合成的
+下一版本快照验证登记专属校验器后通用路径确实接受新版本，并逐条断言 header、端点、
+传输画像和字段序都跟随 active 版本。若某条路径回退到编译期常量，对应断言立即变红并
+指出分叉位置——这是单版本测试无法提供的信号。
+
+仍需注意：符号名层面的版本耦合尚未清除（`codex0145EndpointID`、`officialCodex0145*`
+等约 500 行）。它们不携带版本值，不影响出站形态，属于可读性与门禁噪声问题，可由一次
+机械重命名收敛。
 
 ## 3.3 最终出站定型
 
@@ -1029,6 +1062,21 @@ header 按画像槽位和槽内序号生成，逻辑名与 wire 名分开保存�
 
 turn-state 按调用／连接身份隔离并从官方响应指定位置更新。HTTP Client、调用内 retry、
 WS 连接和后端长生命周期 Client 由端点画像分别声明，不能用单一全局池推断。
+
+**turn-state 的跨请求复用只在会话身份来自入站显式锚点时成立**：入站会话头，或入站 body
+**显式携带**的 `prompt_cache_key`。
+
+这里的“显式”必须按 `promptCacheKeySet` 判断，不能只看键值是否非空：Chat Completions
+兼容链会按模型、工具、system 与首条用户消息自动生成一个 `prompt_cache_key`，生成路径
+明确不设该标志。那种键与首条消息兜底同样只保证“同内容得到同一个 ID”，若当作显式锚点，
+隔离等于没做。
+
+第三方请求缺少这些锚点时，会话身份由消息内容兜底推导：它只保证“同内容得到同一个 ID”，
+不保证“同一个 ID 属于同一个会话”——同账号、同 API Key、同 UA 下两段开头相同且当前末条
+消息也相同的独立对话会算出同一身份。此时放弃复用，因为缺失 turn-state 按 §3.1 只是不发
+该条件头（官方最常见的合法形态），而把一段对话的上游状态句柄送进另一段没有安全的降级
+形态。身份本身仍保持确定性，工具结果续轮因此仍复用同一个 turn。
+
 images、compact、alpha-search、realtime、wham、OAuth refresh 和文件上传均通过画像端点
 执行，不允许旁路通用请求器绕过定型。
 
@@ -1050,9 +1098,15 @@ images、compact、alpha-search、realtime、wham、OAuth refresh 和文件上�
 保持自包含；`上游接入点`表示合并时最容易冲突的共享文件，必须逐项复核。测试文件与生产
 文件同名或在对应目录内，不逐个重复解释，但不能在合并时省略。
 
-本次来源分类使用本地冻结的 upstream 基线
-`12d811bd76572836d6df6e1fa8aa5ff91be3b12e`。以后合并上游时必须先记录新的明确 commit，
+本次来源分类使用 upstream 基线 `26d894ef4f50645a4bf1030e378ac892f17d0223`
+（2026-07-31，合并 v0.1.169 时的上游 tip）。以后合并上游时必须先记录新的明确 commit，
 再刷新本台账；不能用未更新的远端引用继续判断“上游已有”。
+
+上一版基线 `12d811bd7`（2026-07-09，v0.1.149）长期未刷新，其间已合并 13 次上游，
+后果有两处：一是把上游自身演进算成了 fork 改动，冲突面因此高估约 2.7 倍；二是
+`openai_live.go`（handler 与 service 两处）、`openai_alpha_search.go`、
+`attestation.go` 在这段时间里进入上游，却仍被标为“Fork 已有”。本地 `upstream/main`
+引用恰好也停在旧基线上——这正是本段警告的“用未更新的远端引用判断来源”。
 
 **登记判据。** 一个生产 Go 文件只要引用 Codex/OpenAI 出站定型专属符号，就必须登记，
 无论它是否携带版本字面量——WS 传输、连接池与握手定型点都不含版本号，却直接决定
@@ -1065,13 +1119,37 @@ Anthropic 画像，会把 §1.1 已排除的供应商路径卷进来。Anthropic
 按上述判据自动复算：
 
 ```bash
-python3 tools/check_ledger_completeness.py
-python3 tools/check_version_leak.py
+make check-egress-spec   # 判据自测 + 台账完整性 + 版本泄漏 + 规格引用
 ```
 
-前者比对应登记文件集合与本节实际登记内容；后者按 `tools/version_leak_baseline.json`
-的基线快照，禁止共享业务层与通用执行层新增版本标识符。两者都必须纳入 §4.7 第 5 步
-的门禁执行。
+台账检查比对应登记文件集合与本节实际登记内容；版本泄漏检查按
+`tools/version_leak_baseline.json` 的基线，禁止共享业务层与通用执行层新增版本标识符。
+四项均已接入 `.github/workflows/backend-ci.yml`，不再依赖人工执行。
+
+**两处判据本身必须与版本号解耦。** 早期实现把 `0.145.0`、`Codex0145` 写进正则，结果是
+升级时整组失效：新代码写 `Codex0146` 或 `"0.146.0"` 完全不命中，而升级恰恰是这两个门禁
+最该起作用的时刻。现按标识符形状匹配，`--self-test` 用内联样本把“判据是否仍与版本解耦”
+本身变成机器断言。
+
+**版本泄漏检查按证据类型分工。** 判断一个裸版本字面量算不算泄漏，取决于它属于谁——
+Codex/OpenAI 配置写死版本是泄漏，Anthropic 画像的版本按 §1.1 不在范围内。这个归属问题
+必须由语法结构回答：同一 `ValueSpec` 的多个名称与值、同一切片里的多个 `CallExpr`、同一
+物理行上的多条记录，正则都区分不了，每补一条规则就在假绿与误报之间摆动一次。因此：
+
+- 裸版本字面量的归属由 `backend/internal/service/official_egress_version_leak_ast_test.go`
+  用 `go/ast` 判定（父节点栈定位 `CallExpr`／`ValueSpec`／`CompositeLit`，归属无法确认时
+  按泄漏处理），基线在同目录 `testdata/` 下；
+- 版本化符号名（`Codex0146`）与注释中的 codex 版本仍由 `check_version_leak.py` 的文本
+  规则覆盖——那类模式是纯文本形态，不需要语法归属。
+
+两侧都用指纹基线，两侧都随 `make check-egress-spec` 与 `go test ./...` 进入 CI。
+
+**基线记录指纹而非计数。** 只比每个文件的命中数量时，同一文件删掉一处旧泄漏、同时新增
+一处新泄漏即可通过；基线因此保存规范化行内容的哈希与出现次数，等量替换会被识别为新指纹。
+
+**豁免必须难以触发。** 出站定型文件内的裸版本字面量默认算泄漏，只有确属其他供应商画像
+（§1.1 已排除）才豁免。豁免判定基于剥离注释后的代码，并限定在同一条 `{}` 记录内：否则
+一句 `// claude compatibility` 注释、或紧邻的 Anthropic 记录，都能把真实泄漏一并掩盖。
 
 ### 3.5.1 Fork 新增的画像与执行层
 
@@ -1080,6 +1158,7 @@ python3 tools/check_version_leak.py
 | `backend/internal/service/official_client_profile_registry.go` | 官方客户端画像注册与解析 |
 | `backend/internal/service/official_egress_codex_0145_profile.go` | Codex 0.145.0 完整不可变画像 |
 | `backend/internal/service/official_egress_codex_engine.go` | 画像编译、URL/header/body 和传输契约执行 |
+| `backend/internal/service/official_egress_codex_active_release.go` | 按 registry release 指针解析 active 版本画像的统一入口 |
 | `backend/internal/service/official_egress_codex_integration.go` | 入口运行上下文与 Codex 画像接入 |
 | `backend/internal/service/official_egress_codex_oauth.go` | OAuth refresh 的版本化请求形态 |
 | `backend/internal/service/official_egress_codex_files.go` | 文件创建、blob 上传、完成轮询三阶段 |
@@ -1100,6 +1179,9 @@ python3 tools/check_version_leak.py
 
 对应的 `*_test.go` 覆盖画像摘要、端点全集、字段闭集、连接生命周期、OAuth、文件上传、
 HTTP/WS、候选 trace 和配置失败关闭。新增版本时应新建版本画像及测试，不复制一套执行引擎。
+其中 `official_egress_codex_version_upgrade_test.go` 是跨版本安全网，见 §3.2 末尾：单版本
+测试无法暴露"某条路径没跟随 release 指针"，而这恰恰是升级时最容易发生、也最难在生产
+中定位的偏差。
 
 其中 `official_egress_finalizer_pairing_test.go` 用 Go AST 逐**调用点**核对终态定型
 配对。每个画像 attach 返回的 egressContext，必须在该 attach **之后**被传入 header
@@ -1134,11 +1216,15 @@ context、同名变量复用（前后两种顺序）、定型出现在 attach �
 能力先行引入，但本次伪装实现仍修改了它。两类都不是画像私有文件，合并时必须检查。
 
 这里记录的是**初次接入的影响面和以后合并上游的风险面**，不是薄层核心的文件数量。
-相对 §3.5 冻结的上游基线，以下 34 个共享生产文件累计变更约 `+9375/-1133` 行。该数字
+相对 §3.5 记录的上游基线，以下 34 个共享生产文件累计变更 `+3596/-750` 行。该数字
 度量的是合并上游时的冲突面，包含画像接入与其他 fork 能力在同一文件上的叠加，不等于
 画像接入自身的代码量。画像接入分散在多个提交，除 `933dcbfb6` 外还有 `c1d321a70`、
 `f2dec4067`、`6a1cc6f4c`、`0922523a6`、`5b2ddf0e6` 等，因此本节口径绑定基线累计差异，
 不绑定任何单一提交；早期版本按单提交统计出的 `25 个文件 / +1370/-303` 已作废。
+
+**统计必须以当前上游为基准。** 同一批文件相对旧基线 `12d811bd7` 是 `+9842/-1170`，
+相对当前上游只有 `+3596/-750`：差额全部是上游自身在这 22 天里的演进，它们不会在合并
+时产生冲突。基线一旦过期，这个指标就会持续虚高，进而误判改造规模与收口进度。
 薄的是画像驱动的最终定型核心；初次改造仍须把原有多个入口、独立端点和传输旁路一次性
 接到核心。后续 Codex 版本升级若再次大面积修改这些文件，说明版本差异已经泄漏到业务层。
 
@@ -1173,17 +1259,17 @@ context、同名变量复用（前后两种顺序）、定型出现在 attach �
 | 来源 | 文件或文件组 | 接入内容 | 合并上游时检查 |
 |---|---|---|---|
 | 上游已有 | `backend/internal/handler/openai_codex_models_handler.go` | models 入口绑定 Codex surface 与版本 | 是否仍进入画像而非通用 HTTP |
-| Fork 已有 | `backend/internal/handler/openai_live.go` | realtime 入口保存运行上下文 | 第一跳和 sideband 是否保持同一身份 |
+| 上游已有 | `backend/internal/handler/openai_live.go` | realtime 入口保存运行上下文 | 第一跳和 sideband 是否保持同一身份 |
 | 上游已有 | `backend/internal/repository/gateway_cache.go` | realtime 跨阶段保存画像运行身份 | cache key 和序列化必须保留影响出站的版本身份 |
 | 上游已有 | `backend/internal/repository/openai_oauth_service.go` | OAuth refresh 接入版本化端点和传输画像 | refresh 不得丢失 surface／版本 |
 | 上游已有 | `backend/internal/service/openai_images_responses.go` | 模型工具和独立 images 端点分流 | hosted tool 与 namespace/imagegen 不得混淆 |
-| Fork 已有 | `backend/internal/service/openai_alpha_search.go` | alpha-search 两阶段端点 | header/body 和会话状态必须走画像 |
+| 上游已有 | `backend/internal/service/openai_alpha_search.go` | alpha-search 两阶段端点 | header/body 和会话状态必须走画像 |
 | 上游已有 | `backend/internal/service/openai_compact_probe.go` | compact 选择与 reason | 不得重复压缩或丢失触发原因 |
 | 上游已有 | `backend/internal/service/openai_codex_models_service.go` | models 能力和 Lite 来源 | 版本化 capability fixture 不得被通用值覆盖 |
 | 上游已有 | `backend/internal/service/openai_quota_service.go` | WHAM usage、reset-credits 查询与 consume | 版本画像、backend-client 生命周期与 header/body/TLS 仍由统一执行层控制 |
-| Fork 已有 | `backend/internal/service/openai_live.go` | realtime 服务编排 | 第一跳和第二跳身份、URL、header 连续 |
+| 上游已有 | `backend/internal/service/openai_live.go` | realtime 服务编排 | 第一跳和第二跳身份、URL、header 连续 |
 | 上游已有 | `backend/internal/service/account_test_service.go` | 管理接口的 OAuth images／Files 生产探针 | 探针必须走画像端点，不得旁路通用请求器 |
-| Fork 已有 | `backend/internal/platform/liveattestation/attestation.go` | attestation 条件值 | 缺失时保持条件缺失，不能伪造常量 |
+| 上游已有 | `backend/internal/platform/liveattestation/attestation.go` | attestation 条件值 | 缺失时保持条件缺失，不能伪造常量 |
 
 **基础设施接线。** 这些文件只负责让入口和新组件可达，不承载版本规则。
 
@@ -1246,24 +1332,25 @@ Sub2API 是多账号网关，并发度、跨账号调度和整体请求节奏不
 
 ## 4.2 版本化五份清单
 
-目标版本的权威输入放在：
+目标版本的权威输入按 `<用途>_<版本>.json` 平铺在 `tools/official_client_capture/`，
+不使用 `versions/<版本>/` 子目录。至少包含：
 
-```text
-tools/official_client_capture/versions/<目标版本>/
-```
-
-至少包含：
-
-| 文件 | 内容 |
-|---|---|
-| `target-rules.json` | 目标版本规则全集、范围、必做性和断言器 |
-| `rule-migration.json` | 旧规则的 inherit/change/delete 和新规则的 add 分类 |
-| `scenarios.json` | 官方／候选场景、变量、前置条件、清理动作和规则覆盖 |
-| `profile.json` | Go 薄层可直接实现的完整版本画像，不是旧版增量 |
-| `assertion-profile.json` | 独立于候选实现的正例、负例和逐规则期望 |
+| 文件 | 内容 | 0.145.0 现状 |
+|---|---|---|
+| `codex_upgrade_rules_<版本>.json` | 目标版本规则全集、范围、必做性和断言器 | 已封存 |
+| `codex_upgrade_rule_migration` | 旧规则的 inherit/change/delete 和新规则的 add 分类 | 仅有 schema：0.145.0 是规则基线，没有旧版本可迁移 |
+| `codex_upgrade_scenarios_<版本>.json` | 官方／候选场景、变量、前置条件、清理动作和规则覆盖 | 已封存 |
+| `codex_egress_profile`（画像清单） | Go 薄层可直接实现的完整版本画像，不是旧版增量 | **仅有 schema，无实例** |
+| `candidate_rule_expectations_<版本>.json` | 独立于候选实现的正例、负例和逐规则期望 | 已封存 |
 
 五份清单分别计算 SHA-256，并以联合摘要人工批准。规则数量由迁移结果产生；42 只属于
 0.145.0，后续版本不得写死为 42。
+
+**画像的事实源当前在 Go 代码里。** `codex_egress_profile.schema.json` 所描述的画像清单
+从未生成，全仓也没有任何代码引用该 schema；真正的事实源是
+`official_egress_codex_0145_profile.go` 里手工构造的快照。因此“审核画像清单 → 生成 Go
+快照”这条链路尚未建立，画像评审只能直接读 Go 代码，而 schema 起不到约束作用。要让它
+成立需要补一个生成器，使 Go 快照成为产物而不是事实源。
 
 ## 4.3 单向状态机与统一命令
 

@@ -316,15 +316,13 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifest(
 	appendModelsPath := false
 	switch {
 	case credAccount.IsOpenAIOAuth():
-		endpointProfile, err = resolveCodex0145Endpoint(
-			officialCodexVersion0145,
+		endpointProfile, err = resolveActiveCodexEndpoint(
 			endpointID,
 		)
 		if err != nil {
 			return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_PROFILE_INVALID", "resolve Codex models endpoint profile: %v", err)
 		}
-		profileURL, profileErr := officialCodex0145BuildEndpointURL(
-			officialCodexVersion0145,
+		profileURL, profileErr := buildActiveCodexEndpointURL(
 			endpointID,
 			officialCodex0145EndpointURLInput{},
 		)
@@ -584,8 +582,7 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstream(ctx context.Cont
 	} else {
 		// 非默认 URL 只用于包内测试桩；它不具备官方 host，不能绑定
 		// 出站上下文，但 header 仍由同一端点画像收敛。
-		if _, finalizeErr := officialCodex0145ApplyHeaderContract(
-			officialCodexVersion0145,
+		if _, finalizeErr := applyActiveCodexHeaderContract(
 			request.endpointID,
 			req.Header,
 			officialCodex0145ConditionsFromHeaders(req.Header),
@@ -608,14 +605,12 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstream(ctx context.Cont
 			var tlsProfileErr error
 			var tlsProfile *tlsfingerprint.Profile
 			if request.useCodex0145Profile {
-				tlsProfile, tlsProfileErr = officialCodex0145ResolveEndpointTLSProfileForURL(
-					officialCodexVersion0145,
+				tlsProfile, tlsProfileErr = resolveActiveCodexEndpointTLSProfileForURL(
 					request.endpointID,
 					req.URL,
 				)
 			} else {
-				tlsProfile, tlsProfileErr = officialCodex0145ResolveEndpointTLSProfile(
-					officialCodexVersion0145,
+				tlsProfile, tlsProfileErr = resolveActiveCodexEndpointTLSProfile(
 					request.endpointID,
 				)
 			}

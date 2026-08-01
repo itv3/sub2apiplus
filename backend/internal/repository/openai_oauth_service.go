@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -12,7 +13,6 @@ import (
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/openaiidentity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/imroc/req/v3"
@@ -28,7 +28,11 @@ type openaiOAuthService struct {
 }
 
 func (s *openaiOAuthService) ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI, proxyURL, clientID string) (*openai.TokenResponse, error) {
-	client, err := createOpenAIReqClient(proxyURL)
+	exchangeProfile, err := service.ResolveActiveCodexOAuthExchangeProfile()
+	if err != nil {
+		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_EXCHANGE_PROFILE_FAILED", "resolve OAuth exchange profile: %v", err)
+	}
+	client, err := createOpenAIExchangeReqClient(proxyURL, exchangeProfile.TLSProfile)
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_CLIENT_INIT_FAILED", "create HTTP client: %v", err)
 	}
@@ -52,15 +56,15 @@ func (s *openaiOAuthService) ExchangeCode(ctx context.Context, code, codeVerifie
 
 	resp, err := client.R().
 		SetContext(ctx).
-		SetHeader("User-Agent", openaiidentity.CodexUserAgent).
-		SetHeader("originator", openaiidentity.CodexOriginator).
+		SetHeader("User-Agent", exchangeProfile.UserAgent).
+		SetHeader("originator", exchangeProfile.Originator).
 		SetFormDataFromValues(formData).
 		SetSuccessResult(&tokenResp).
 		Post(s.tokenURL)
 
 	if err != nil {
-		if shouldReturnOpenAINoProxyHint(ctx, proxyURL, err) {
-			return nil, newOpenAINoProxyHintError(err)
+		if shouldReturnOpenAIDirectConnectionHint(ctx, proxyURL, err) {
+			return nil, newOpenAIDirectConnectionError(err)
 		}
 		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_REQUEST_FAILED", "request failed: %v", err)
 	}
@@ -86,7 +90,7 @@ func (s *openaiOAuthService) RefreshTokenWithClientID(ctx context.Context, refre
 }
 
 func (s *openaiOAuthService) refreshTokenWithClientID(ctx context.Context, refreshToken, proxyURL, clientID string) (*openai.TokenResponse, error) {
-	request, tlsProfile, err := service.BuildOfficialCodex0145OAuthRefreshRequest(
+	request, tlsProfile, err := service.BuildActiveCodexOAuthRefreshRequest(
 		ctx,
 		clientID,
 		refreshToken,
@@ -95,7 +99,7 @@ func (s *openaiOAuthService) refreshTokenWithClientID(ctx context.Context, refre
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_REQUEST_INVALID", "build refresh request: %v", err)
 	}
-	// tokenURL 仅为仓库测试保留本地 server 注入点；生产构造始终来自 0.145.0
+	// tokenURL 仅为仓库测试保留本地 server 注入点；生产构造始终来自 active Codex
 	// 端点画像，不能由配置改写 auth.openai.com。
 	if override := strings.TrimSpace(s.tokenURL); override != "" && override != openai.TokenURL {
 		overrideURL, parseErr := url.Parse(override)
@@ -112,8 +116,8 @@ func (s *openaiOAuthService) refreshTokenWithClientID(ctx context.Context, refre
 	resp, err := client.GetClient().Do(request)
 
 	if err != nil {
-		if shouldReturnOpenAINoProxyHint(ctx, proxyURL, err) {
-			return nil, newOpenAINoProxyHintError(err)
+		if shouldReturnOpenAIDirectConnectionHint(ctx, proxyURL, err) {
+			return nil, newOpenAIDirectConnectionError(err)
 		}
 		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_REQUEST_FAILED", "request failed: %v", err)
 	}
@@ -132,8 +136,8 @@ func (s *openaiOAuthService) refreshTokenWithClientID(ctx context.Context, refre
 	return &tokenResp, nil
 }
 
-func createOpenAIReqClient(proxyURL string) (*req.Client, error) {
-	return createOpenAIReqClientWithProfile(proxyURL, service.OpenAIOfficialEgressHTTPTLSProfile(false))
+func createOpenAIExchangeReqClient(proxyURL string, profile *tlsfingerprint.Profile) (*req.Client, error) {
+	return createOpenAIReqClientWithProfile(proxyURL, profile)
 }
 
 func createOpenAIReqClientWithProfile(proxyURL string, profile *tlsfingerprint.Profile) (*req.Client, error) {
@@ -145,20 +149,34 @@ func createOpenAIReqClientWithProfile(proxyURL string, profile *tlsfingerprint.P
 	})
 }
 
-func shouldReturnOpenAINoProxyHint(ctx context.Context, proxyURL string, err error) bool {
+func shouldReturnOpenAIDirectConnectionHint(ctx context.Context, proxyURL string, err error) bool {
 	if strings.TrimSpace(proxyURL) != "" || err == nil {
 		return false
 	}
 	if ctx != nil && ctx.Err() != nil {
 		return false
 	}
-	return !errors.Is(err, context.Canceled)
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	return isOpenAIConnectivityError(err)
 }
 
-func newOpenAINoProxyHintError(cause error) error {
+// isOpenAIConnectivityError 只识别 HTTP 传输阶段包装的底层网络错误。
+// 响应 JSON 解码、严格画像拒绝等应用层错误不能被误报为直连失败。
+func isOpenAIConnectivityError(err error) bool {
+	var requestErr *url.Error
+	if !errors.As(err, &requestErr) || requestErr.Err == nil {
+		return false
+	}
+	var networkErr net.Error
+	return errors.As(requestErr.Err, &networkErr)
+}
+
+func newOpenAIDirectConnectionError(cause error) error {
 	return infraerrors.New(
 		http.StatusBadGateway,
-		"OPENAI_OAUTH_PROXY_REQUIRED",
-		"OpenAI OAuth request failed: no proxy is configured and this server could not reach OpenAI directly. Select a proxy that can access OpenAI, then retry; if the authorization code has expired, regenerate the authorization URL.",
+		"OPENAI_OAUTH_DIRECT_CONNECTION_FAILED",
+		"This server could not reach OpenAI directly. Check the server network and retry; if a proxy is needed, select one that can access OpenAI. If the authorization code has expired, regenerate the authorization URL.",
 	).WithCause(cause)
 }

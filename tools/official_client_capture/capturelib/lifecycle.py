@@ -422,6 +422,7 @@ class CaptureProcess:
 
 def build_capture_process(
     *,
+    fault_spec: str = "",
     case: CaptureCase,
     output_dir: Path,
     base_environment: dict[str, str],
@@ -451,6 +452,9 @@ def build_capture_process(
                 "CAPTURE_OUTPUT_DIR": str(output_dir),
             }
         )
+        # 受控故障注入只在显式声明时生效；空值等价于不注入。
+        if fault_spec:
+            environment["CAPTURE_FAULT_SPEC"] = fault_spec
     target_port = _case_target_port(case)
     target_addresses = (
         resolve_target_addresses(

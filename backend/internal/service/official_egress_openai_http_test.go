@@ -800,22 +800,23 @@ func TestFinalizeOfficialOpenAIHTTPBodyPreservesNestedRawData(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.6-luna","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello","opaque":{"z":9007199254740993,"a":1}}]}],"tool_choice":"required","reasoning":{"effort":"medium"}}`)
 	contract, err := captureGeneratedOfficialOpenAIHTTPBodyContract(body)
 	require.NoError(t, err)
-	identity := deriveOfficialOpenAIHTTPIdentity(
+	identity, err := deriveOfficialOpenAIHTTPIdentity(
 		nil,
 		newOfficialOpenAIHTTPTestAccount(94991),
 		body,
 		contract,
 	)
+	require.NoError(t, err)
 
 	finalized, modified, err := finalizeOfficialOpenAIHTTPBody(
 		body,
 		contract,
 		identity,
 		officialOpenAIReasoningDefaults{},
-		false,
-		false,
-		true,
-		true,
+		officialOpenAIHTTPBodyOptions{
+			UseResponsesLite:      true,
+			SupportsParallelTools: true,
+		},
 	)
 	require.NoError(t, err)
 	require.True(t, modified)
@@ -1237,4 +1238,321 @@ func requireOfficialOpenAIField(
 	require.Equal(t, wantValue, field.Value())
 	require.Equal(t, OfficialEgressFieldSourceIngressExplicit, field.Source)
 	require.Equal(t, wantLifecycle, field.Lifecycle)
+}
+
+// TestFinalizeOfficialOpenAIHTTPBodyProjectsUnknownFieldsOnStrictIngress 锁定 §3.1
+// 对严格入口的要求：画像闭集外的顶层字段按投影丢弃并告警，而不是拒绝请求。
+//
+// 直接场景是官方客户端先于画像升级——0.146 客户端新增顶层字段时，网关必须继续可用，
+// 只丢掉尚未纳入画像的字段。此前这里返回 error，整个升级窗口内真·官方新版客户端
+// 都会被拒，而这恰恰是最不该发生失败的时刻。
+func TestFinalizeOfficialOpenAIHTTPBodyProjectsUnknownFieldsOnStrictIngress(t *testing.T) {
+	// 严格入口的前提是入站已携带完整官方身份，这里按真实官方请求形态构造，
+	// 只额外加入一个画像尚未覆盖的顶层字段。
+	body := []byte(`{"model":"gpt-5.6-luna","input":"hi","tool_choice":"auto",` +
+		`"client_metadata":{"session_id":"019f9577-d69f-7892-809e-8a3a4198c671",` +
+		`"turn_id":"7a46fb58-2930-4d6c-9cca-ea1124fcc871"},` +
+		`"codex_future_field":{"enabled":true}}`)
+	contract, err := captureGeneratedOfficialOpenAIHTTPBodyContract(body)
+	require.NoError(t, err)
+	identity, err := deriveOfficialOpenAIHTTPIdentity(
+		nil,
+		newOfficialOpenAIHTTPTestAccount(94992),
+		body,
+		contract,
+	)
+	require.NoError(t, err)
+
+	finalized, modified, err := finalizeOfficialOpenAIHTTPBody(
+		body,
+		contract,
+		identity,
+		officialOpenAIReasoningDefaults{},
+		officialOpenAIHTTPBodyOptions{
+			StrictIngressIdentity: true,
+			SupportsParallelTools: true,
+			UserAgent:             "codex_exec/0.146.0 (Ubuntu 24.4.0; x86_64) unknown",
+		},
+	)
+	require.NoError(t, err, "严格入口不得因画像尚未覆盖的新字段拒绝请求")
+	require.True(t, modified)
+	require.False(
+		t,
+		gjson.GetBytes(finalized, "codex_future_field").Exists(),
+		"画像闭集外的字段必须被投影丢弃，不能透传给上游",
+	)
+	require.Equal(t, "auto", gjson.GetBytes(finalized, "tool_choice").String())
+}
+
+// TestFinalizeOfficialOpenAIHTTPBodyNormalizesToolChoiceOnStrictIngress 锁定
+// SPEC-BODY-005 在严格入口上的投影语义：已知字段的值不合契约时按画像规范化，
+// 与派生路径使用同一套处理，而不是单独拒绝。
+func TestFinalizeOfficialOpenAIHTTPBodyNormalizesToolChoiceOnStrictIngress(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.6-luna","input":"hi","tool_choice":"required",` +
+		`"client_metadata":{"session_id":"019f9577-d69f-7892-809e-8a3a4198c671",` +
+		`"turn_id":"7a46fb58-2930-4d6c-9cca-ea1124fcc871"}}`)
+	contract, err := captureGeneratedOfficialOpenAIHTTPBodyContract(body)
+	require.NoError(t, err)
+	identity, err := deriveOfficialOpenAIHTTPIdentity(
+		nil,
+		newOfficialOpenAIHTTPTestAccount(94993),
+		body,
+		contract,
+	)
+	require.NoError(t, err)
+
+	finalized, _, err := finalizeOfficialOpenAIHTTPBody(
+		body,
+		contract,
+		identity,
+		officialOpenAIReasoningDefaults{},
+		officialOpenAIHTTPBodyOptions{
+			StrictIngressIdentity: true,
+			SupportsParallelTools: true,
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, "auto", gjson.GetBytes(finalized, "tool_choice").String())
+}
+
+// TestStripNonOfficialOpenAITopLevelFieldsReportsRemovedNames 锁定投影信号本身。
+//
+// 只返回"有改动"无法定位是哪个新字段出现了，而 §3.1 把这条信号定为运行时唯一能
+// 提示"该升级画像了"的依据；顺序固定是为了让告警去重稳定生效。
+func TestStripNonOfficialOpenAITopLevelFieldsReportsRemovedNames(t *testing.T) {
+	payload := map[string]any{
+		"model":      "gpt-5.6-luna",
+		"zeta_field": 1,
+		"alpha_field": map[string]any{
+			"nested": true,
+		},
+	}
+	allowed := newOfficialOpenAITopLevelAllowSet([]string{"model"})
+
+	removed := stripNonOfficialOpenAITopLevelFields(payload, allowed)
+	require.Equal(t, []string{"alpha_field", "zeta_field"}, removed)
+	require.Len(t, payload, 1)
+	require.Contains(t, payload, "model")
+	require.Empty(t, stripNonOfficialOpenAITopLevelFields(payload, allowed))
+}
+
+// TestOfficialOpenAIHTTPTurnStateStoreKeyRequiresExplicitAnchor 锁定 turn-state 的
+// 复用边界：只有会话身份来自入站显式锚点时才允许跨请求复用。
+//
+// 兜底锚点由首条用户消息推导，同账号、同 API Key、同 UA 下两段开头相同的独立对话
+// 会算出同一个会话身份。turn-state 是上游的会话状态句柄，此时复用等于把一段对话的
+// 状态送进另一段；而缺失 turn-state 只会让该条件头不发出，那是官方最常见的合法形态。
+func TestOfficialOpenAIHTTPTurnStateStoreKeyRequiresExplicitAnchor(t *testing.T) {
+	derived := officialOpenAIHTTPIdentity{
+		sessionID: "session-94995",
+		turnID:    "turn-94995",
+	}
+	require.Empty(
+		t,
+		officialOpenAIHTTPTurnStateStoreKey(derived),
+		"内容兜底推导出的会话身份不得作为 turn-state 跨请求复用的依据",
+	)
+
+	explicit := derived
+	explicit.sessionAnchorExplicit = true
+	require.NotEmpty(
+		t,
+		officialOpenAIHTTPTurnStateStoreKey(explicit),
+		"显式会话锚点下必须保留复用，否则工具结果续轮会丢失 turn",
+	)
+}
+
+// TestDeriveOfficialOpenAIHTTPIdentityMarksAnchorSource 锁定锚点来源的判定路径：
+// 带会话头的请求可复用 turn-state，纯内容兜底的不行，且两者的会话身份必须不同。
+func TestDeriveOfficialOpenAIHTTPIdentityMarksAnchorSource(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-5.4","input":"anchor-source-94996"}`)
+	contract, err := captureGeneratedOfficialOpenAIHTTPBodyContract(body)
+	require.NoError(t, err)
+	account := newOfficialOpenAIHTTPTestAccount(94996)
+
+	withoutAnchor, _ := gin.CreateTestContext(httptest.NewRecorder())
+	withoutAnchor.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	derived, err := deriveOfficialOpenAIHTTPIdentity(withoutAnchor, account, body, contract)
+	require.NoError(t, err)
+	require.False(t, derived.sessionAnchorExplicit)
+	require.Empty(t, officialOpenAIHTTPTurnStateStoreKey(derived))
+
+	withAnchor, _ := gin.CreateTestContext(httptest.NewRecorder())
+	withAnchor.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	withAnchor.Request.Header.Set("X-Session-Id", "conversation-94996")
+	anchored, err := deriveOfficialOpenAIHTTPIdentity(withAnchor, account, body, contract)
+	require.NoError(t, err)
+	require.True(t, anchored.sessionAnchorExplicit)
+	require.NotEmpty(t, officialOpenAIHTTPTurnStateStoreKey(anchored))
+	require.NotEqual(
+		t,
+		derived.sessionID,
+		anchored.sessionID,
+		"显式锚点必须参与会话身份推导，否则加不加会话头没有区别",
+	)
+}
+
+// TestDeriveOfficialOpenAIHTTPIdentityContentFallbackCollides 记录兜底推导本身的
+// 碰撞事实，并锁定它不会传导到 turn-state。
+//
+// 两段独立对话只要开头与当前末条消息相同，就会得到同一个会话与 turn 身份——这是
+// 确定性推导的固有代价，保留它是为了让工具结果续轮复用同一个 turn。真正必须阻断的
+// 是它进一步共享上游状态句柄。
+func TestDeriveOfficialOpenAIHTTPIdentityContentFallbackCollides(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	body := []byte(`{"model":"gpt-5.4","input":"collision-probe-94997"}`)
+	contract, err := captureGeneratedOfficialOpenAIHTTPBodyContract(body)
+	require.NoError(t, err)
+	account := newOfficialOpenAIHTTPTestAccount(94997)
+
+	first, _ := gin.CreateTestContext(httptest.NewRecorder())
+	first.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	second, _ := gin.CreateTestContext(httptest.NewRecorder())
+	second.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+
+	firstIdentity, err := deriveOfficialOpenAIHTTPIdentity(first, account, body, contract)
+	require.NoError(t, err)
+	secondIdentity, err := deriveOfficialOpenAIHTTPIdentity(second, account, body, contract)
+	require.NoError(t, err)
+
+	require.Equal(t, firstIdentity.sessionID, secondIdentity.sessionID)
+	require.Equal(t, firstIdentity.turnID, secondIdentity.turnID)
+	require.Empty(
+		t,
+		officialOpenAIHTTPTurnStateStoreKey(firstIdentity),
+		"身份可以碰撞，但碰撞不得传导为共享 turn-state",
+	)
+}
+
+// TestOfficialOpenAIHTTPFinalizerMatchesProfileHeaderContract 把主 Responses HTTP 链
+// 的 header 定型与版本画像绑定。
+//
+// 辅助端点（models/images/search/realtime/wham/files/OAuth refresh）与 WS 握手都经过
+// officialCodex0145ApplyHeaderContract，header 值由画像槽位声明直接生成；主链是唯一
+// 例外，它在 finalizeOfficialOpenAIHTTPHeaders 里手工写出。两处目前完全一致，但这份
+// 一致没有任何机器保证：升级时若只换画像不改 finalizer，辅助端点会跟随新版本而主链
+// 仍按旧值出站——同账号同 IP 上出现两种版本形态，正是 §3.1 列为最强识别特征的那类
+// 不一致。
+//
+// 锁定两条：主链不得发出画像未声明的 header；画像声明了固定值的槽位，主链发出的值
+// 必须与之相同。不要求主链发满全部槽位——条件头在条件不成立时本就不发，
+// host/content-length 由传输层生成。
+func TestOfficialOpenAIHTTPFinalizerMatchesProfileHeaderContract(t *testing.T) {
+	identity := officialOpenAIHTTPIdentity{
+		installationID: testOfficialOpenAIInstallationID,
+		sessionID:      "0199aaaa-0000-7000-8000-000000000001",
+		threadID:       "0199aaaa-0000-7000-8000-000000000002",
+		windowID:       "0199aaaa-0000-7000-8000-000000000003",
+		turnID:         "0199aaaa-0000-7000-8000-000000000004",
+		turnMetadata:   `{"request_kind":"turn"}`,
+		clientRequest:  "0199aaaa-0000-7000-8000-000000000005",
+	}
+	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	require.NoError(t, err)
+
+	testCases := []struct {
+		name             string
+		endpointID       string
+		isCompact        bool
+		useResponsesLite bool
+		turnState        string
+	}{
+		{name: "普通", endpointID: officialCodexEndpointResponsesHTTP},
+		{name: "Lite", endpointID: officialCodexEndpointResponsesHTTP, useResponsesLite: true},
+		{name: "带turn-state", endpointID: officialCodexEndpointResponsesHTTP, turnState: "probe-turn-state"},
+		{name: "compact", endpointID: officialCodexEndpointResponsesCompact, isCompact: true},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			endpoint, err := profile.ResolveEndpoint(testCase.endpointID)
+			require.NoError(t, err)
+			declared := make(map[string]string, len(endpoint.Headers))
+			for _, slot := range endpoint.OrderedHeaders() {
+				declared[strings.ToLower(slot.Name)] = slot.Value
+			}
+
+			header := http.Header{}
+			finalizeOfficialOpenAIHTTPHeaders(
+				header,
+				officialCodexVersion0145,
+				officialOpenAIHTTPUserAgent,
+				officialOpenAIHTTPOriginator,
+				identity,
+				testCase.isCompact,
+				testCase.useResponsesLite,
+				testCase.turnState,
+			)
+			require.NotEmpty(t, header)
+
+			for name, values := range header {
+				lower := strings.ToLower(name)
+				expected, ok := declared[lower]
+				require.Truef(
+					t,
+					ok,
+					"主链发出了端点 %s 画像未声明的 header：%s",
+					endpoint.ID,
+					name,
+				)
+				if expected == "" {
+					// 画像只声明槽位，值来自运行上下文（身份、turn-state 等）。
+					continue
+				}
+				require.Lenf(t, values, 1, "header %s 必须恰好一个值", name)
+				require.Equalf(
+					t,
+					expected,
+					values[0],
+					"header %s 的值与端点 %s 的画像声明不一致：升级时换了画像却没改 finalizer，"+
+						"辅助端点会跟随新版本而主链仍按旧值出站",
+					name,
+					endpoint.ID,
+				)
+			}
+		})
+	}
+}
+
+// TestDeriveOfficialOpenAIHTTPIdentityRejectsGeneratedPromptCacheKey 锁定 P7 的隔离
+// 不被自动生成的缓存键绕过。
+//
+// Chat Completions 兼容链会按模型、工具、system 与首条用户消息自动生成
+// prompt_cache_key，而 bindGeneratedOfficialOpenAIHTTPBodyContract 明确不设
+// promptCacheKeySet。那种 key 与首条消息兜底同样只保证“同内容得到同 ID”，一旦被当作
+// 入站显式锚点，turn-state 就会在内容相同的独立会话之间串用——隔离等于没做。
+func TestDeriveOfficialOpenAIHTTPIdentityRejectsGeneratedPromptCacheKey(t *testing.T) {
+	body := []byte(`{"model":"gpt-5.4","input":"generated-anchor-probe-94998"}`)
+	account := newOfficialOpenAIHTTPTestAccount(94998)
+
+	generated, err := captureGeneratedOfficialOpenAIHTTPBodyContract(body)
+	require.NoError(t, err)
+	// 模拟兼容链的产物：缓存键有值，但不是入站显式携带的。
+	generated.promptCacheKey = "generated-cache-key-94998"
+	generated.promptCacheKeySet = false
+
+	derived, err := deriveOfficialOpenAIHTTPIdentity(nil, account, body, generated)
+	require.NoError(t, err)
+	require.False(
+		t,
+		derived.sessionAnchorExplicit,
+		"内部生成的 prompt_cache_key 不得被当作入站显式锚点",
+	)
+	require.Empty(
+		t,
+		officialOpenAIHTTPTurnStateStoreKey(derived),
+		"生成型缓存键不得成为 turn-state 跨请求复用的依据",
+	)
+
+	// 入站显式携带同一个键时，仍然按显式锚点处理。
+	explicitContract, err := captureGeneratedOfficialOpenAIHTTPBodyContract(body)
+	require.NoError(t, err)
+	explicitContract.promptCacheKey = "generated-cache-key-94998"
+	explicitContract.promptCacheKeySet = true
+
+	explicit, err := deriveOfficialOpenAIHTTPIdentity(nil, account, body, explicitContract)
+	require.NoError(t, err)
+	require.True(t, explicit.sessionAnchorExplicit)
+	require.NotEmpty(t, officialOpenAIHTTPTurnStateStoreKey(explicit))
 }

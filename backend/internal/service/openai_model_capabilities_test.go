@@ -181,17 +181,15 @@ func TestOpenAIOfficialEgressNonLiteUsesOfficialTopLevelContract(t *testing.T) {
 	}`)
 	contract, err := captureGeneratedOfficialOpenAIHTTPBodyContract(payload)
 	require.NoError(t, err)
-	identity := deriveOfficialOpenAIHTTPIdentity(nil, newOfficialOpenAIHTTPTestAccount(94), payload, contract)
+	identity, err := deriveOfficialOpenAIHTTPIdentity(nil, newOfficialOpenAIHTTPTestAccount(94), payload, contract)
+	require.NoError(t, err)
 
 	finalized, _, err := finalizeOfficialOpenAIHTTPBody(
 		payload,
 		contract,
 		identity,
 		officialOpenAIReasoningDefaults{},
-		false,
-		false,
-		false,
-		true,
+		officialOpenAIHTTPBodyOptions{SupportsParallelTools: true},
 	)
 	require.NoError(t, err)
 	require.Equal(t, "keep-top-level", gjson.GetBytes(finalized, "instructions").String())
@@ -220,8 +218,10 @@ func TestOfficialOpenAIHTTPTurnStartUsesCurrentStableTime(t *testing.T) {
 	account := newOfficialOpenAIHTTPTestAccount(94001)
 
 	before := time.Now().UnixMilli()
-	first := deriveOfficialOpenAIHTTPIdentity(firstContext, account, body, contract)
-	second := deriveOfficialOpenAIHTTPIdentity(secondContext, account, body, contract)
+	first, err := deriveOfficialOpenAIHTTPIdentity(firstContext, account, body, contract)
+	require.NoError(t, err)
+	second, err := deriveOfficialOpenAIHTTPIdentity(secondContext, account, body, contract)
+	require.NoError(t, err)
 	after := time.Now().UnixMilli()
 	firstStartedAt := gjson.Get(first.turnMetadata, "turn_started_at_unix_ms").Int()
 	secondStartedAt := gjson.Get(second.turnMetadata, "turn_started_at_unix_ms").Int()
