@@ -1,0 +1,9 @@
+{
+  "schema_version": 2,
+  "result": "accepted",
+  "sink_id": "codex.realtime.calls",
+  "canary_receipt_digest": "7f281c28f6bb7d21abf4e88947b2d70e8728cbc76e9e31de527df34413b6308d",
+  "observation_digest": "4ac3cc375adcae3ad42ee88b4e92396a4ba12d4244179b7416357b81a3790d71",
+  "reviewed_by": "codex-changeset3-final-wire-audit",
+  "review_ref": "changeset-3-post-identity-authority-final-wire/2026-08-03"
+}

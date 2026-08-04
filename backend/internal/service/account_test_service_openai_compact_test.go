@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
@@ -55,14 +56,12 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactOAuthSuccessPersi
 
 	require.Equal(t, chatgptCodexAPIURL+"/compact", upstream.lastReq.URL.String())
 	require.Equal(t, "chatgpt.com", upstream.lastReq.Host)
-	require.Empty(t, upstream.lastReq.Header.Get("Accept"))
+	require.Equal(t, "*/*", upstream.lastReq.Header.Get("Accept"))
 	require.Equal(t, codexCLIVersion, upstream.lastReq.Header.Get("Version"))
 	// 会话头必须是官方形态：连字符小写的 session-id / thread-id，且没有
 	// conversation-id（SPEC-HDR-007，官方 compact 16 项线序的第 5、6 位）。
-	// ⚠ 必须直查 map——setHeaderRaw 存的是原始小写键，Header.Get 会先规范化成
-	// "Session-Id" 再查，拿不到。
-	require.NotEmpty(t, upstream.lastReq.Header["session-id"])
-	require.NotEmpty(t, upstream.lastReq.Header["thread-id"])
+	require.NotEmpty(t, upstream.lastReq.Header.Get("session-id"))
+	require.NotEmpty(t, upstream.lastReq.Header.Get("thread-id"))
 	require.Empty(t, upstream.lastReq.Header["Session_ID"])
 	require.Empty(t, upstream.lastReq.Header["Conversation_ID"])
 	require.Empty(t, upstream.lastReq.Header.Get("Conversation-Id"))
@@ -70,6 +69,11 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactOAuthSuccessPersi
 	require.Equal(t, codexCLIUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, "chatgpt-acc", upstream.lastReq.Header.Get("chatgpt-account-id"))
 	require.Equal(t, "true", upstream.lastReq.Header.Get("x-openai-fedramp"))
+	identity, ok := officialegress.AttemptIdentityFromContext(upstream.lastReq.Context())
+	require.True(t, ok)
+	require.Equal(t, officialEgressSinkAdminTestCompact, identity.SinkID)
+	require.True(t, identity.HasFinalizationToken,
+		"管理端 compact 探针必须由 Codex Executor 签发 FinalizationToken")
 	require.Equal(t, "gpt-5.4", gjson.GetBytes(upstream.lastBody, "model").String())
 
 	updates := <-updateCalls
@@ -245,9 +249,10 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactShadowMimicUsesLo
 	require.Equal(t, "parent-chatgpt", upstream.lastReq.Header.Get("chatgpt-account-id"))
 	require.Equal(t, officialOpenAIHTTPUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, officialOpenAIHTTPOriginator, upstream.lastReq.Header.Get("originator"))
-	require.Equal(t, officialOpenAIHTTPBetaFeatures, getHeaderRaw(upstream.lastReq.Header, "x-codex-beta-features"))
+	require.Empty(t, getHeaderRaw(upstream.lastReq.Header, "x-codex-beta-features"),
+		"官方 compact 画像不声明 Responses beta feature")
 	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
-	require.Empty(t, upstream.lastReq.Header.Get("Version"))
+	require.Equal(t, codexCLIVersion, upstream.lastReq.Header.Get("Version"))
 
 	updates := <-updateCalls
 	require.Equal(t, true, updates["openai_compact_supported"])

@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/google/uuid"
 )
 
@@ -51,15 +53,53 @@ type officialCodexFileUploadedResponse struct {
 // officialCodexFileUploadCall 固定一次三段式调用使用的账号、代理、版本快照和
 // invocation ID。uploaded 的轮询只重建请求，不得重新选择账号或创建上层调用。
 type officialCodexFileUploadCall struct {
-	service           *OpenAIGatewayService
-	profile           *officialCodexVersionProfile
-	routeAccount      *Account
-	credentialAccount *Account
-	proxyURL          string
-	invocationID      string
-	ctx               context.Context
-	now               func() time.Time
-	sleep             func(context.Context, time.Duration) error
+	service            *OpenAIGatewayService
+	runtime            *OfficialEgressTransitionRuntime
+	registerInvocation *officialCodexHTTPInvocation
+	blobInvocation     *officialCodexHTTPInvocation
+	profile            *officialCodexVersionProfile
+	routeAccount       *Account
+	credentialAccount  *Account
+	proxyURL           string
+	invocationID       string
+	ctx                context.Context
+	now                func() time.Time
+	sleep              func(context.Context, time.Duration) error
+}
+
+type officialCodexFileCreateSemanticBody struct {
+	UseCase  string `json:"use_case"`
+	FileSize uint64 `json:"file_size"`
+	FileName string `json:"file_name"`
+}
+
+func marshalOfficialCodexFileSemanticBody(payload any) ([]byte, error) {
+	return json.Marshal(payload)
+}
+
+func newOfficialCodexBlobUploadSemanticRequest(
+	ctx context.Context,
+	target *url.URL,
+	fileSizeBytes uint64,
+	contents io.Reader,
+) (*http.Request, error) {
+	if target == nil || target.Hostname() == "" {
+		return nil, errors.New("Codex blob 上传 target 非法")
+	}
+	var body io.Reader = contents
+	if fileSizeBytes == 0 {
+		body = http.NoBody
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPut, target.String(), body)
+	if err != nil {
+		return nil, err
+	}
+	request = request.WithContext(WithHTTPUpstreamProfile(request.Context(), HTTPUpstreamProfileOpenAI))
+	request.Host = target.Host
+	request.ContentLength = int64(fileSizeBytes)
+	// raw stream 是单次能力；即使来源可重放，也不得向 transport 暴露 GetBody。
+	request.GetBody = nil
+	return request, nil
 }
 
 // UploadOfficialCodexFile 按 Codex CLI 0.145.0 版本画像执行 create、区域 blob
@@ -69,7 +109,11 @@ func (s *OpenAIGatewayService) UploadOfficialCodexFile(
 	account *Account,
 	input OfficialCodexFileUploadInput,
 ) (*OfficialCodexUploadedFile, error) {
-	profile, err := resolveActiveCodexVersionProfile()
+	runtimeState, err := resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream)
+	if err != nil {
+		return nil, err
+	}
+	profile, err := resolveCodexVersionProfileForMode(string(runtimeState.CodexReleaseMode))
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +129,7 @@ func (s *OpenAIGatewayService) UploadOfficialCodexFile(
 		return nil, errors.New("Codex 文件上传内容为空")
 	}
 
-	call, err := newOfficialCodexFileUploadCall(ctx, s, account, profile)
+	call, err := newOfficialCodexFileUploadCall(ctx, s, runtimeState, account, profile)
 	if err != nil {
 		return nil, err
 	}
@@ -102,10 +146,11 @@ func (s *OpenAIGatewayService) UploadOfficialCodexFile(
 func newOfficialCodexFileUploadCall(
 	ctx context.Context,
 	service *OpenAIGatewayService,
+	runtimeState *OfficialEgressTransitionRuntime,
 	account *Account,
 	profile *officialCodexVersionProfile,
 ) (*officialCodexFileUploadCall, error) {
-	if service == nil || service.httpUpstream == nil {
+	if service == nil || service.httpUpstream == nil || runtimeState == nil {
 		return nil, errors.New("Codex 文件上传 HTTP 服务不可用")
 	}
 	if account == nil || !account.IsOpenAIOAuth() {
@@ -130,6 +175,7 @@ func newOfficialCodexFileUploadCall(
 	}
 	return &officialCodexFileUploadCall{
 		service:           service,
+		runtime:           runtimeState,
 		profile:           profile,
 		routeAccount:      account,
 		credentialAccount: credentialAccount,
@@ -145,14 +191,14 @@ func (c *officialCodexFileUploadCall) create(
 	fileName string,
 	fileSizeBytes uint64,
 ) (*officialCodexFileCreateResponse, error) {
-	body := map[string]any{
-		"file_name": fileName,
-		"file_size": fileSizeBytes,
-		"use_case":  c.profile.Files.UseCase,
+	// 结构体顺序是业务构造顺序，并刻意不等同于 Profile wire 顺序；最终
+	// file_name/file_size/use_case 线序只能由 officialegress compiler 决定。
+	body := officialCodexFileCreateSemanticBody{
+		UseCase: c.profile.Files.UseCase, FileSize: fileSizeBytes, FileName: fileName,
 	}
 	responseBody, err := c.executeJSON(
-		codex0145EndpointID(c.profile.Files.CreateEndpointID),
-		officialCodex0145EndpointURLInput{},
+		codexEndpointID(c.profile.Files.CreateEndpointID),
+		officialCodexEndpointURLInput{},
 		body,
 	)
 	if err != nil {
@@ -173,7 +219,7 @@ func (c *officialCodexFileUploadCall) uploadBlob(
 	fileSizeBytes uint64,
 	contents io.Reader,
 ) error {
-	endpointID := codex0145EndpointID(c.profile.Files.BlobUploadEndpointID)
+	endpointID := codexEndpointID(c.profile.Files.BlobUploadEndpointID)
 	endpoint, err := c.profile.ResolveEndpoint(string(endpointID))
 	if err != nil {
 		return err
@@ -181,10 +227,10 @@ func (c *officialCodexFileUploadCall) uploadBlob(
 	if endpoint.Body.Encoding != "raw_bytes" {
 		return fmt.Errorf("Codex 文件端点 %s 不是 raw_bytes", endpoint.ID)
 	}
-	target, err := officialCodex0145BuildEndpointURL(
+	target, err := officialCodexBuildEndpointURL(
 		c.profile.Version,
 		endpointID,
-		officialCodex0145EndpointURLInput{ReturnedURL: returnedURL},
+		officialCodexEndpointURLInput{ReturnedURL: returnedURL},
 	)
 	if err != nil {
 		// 签名 query 不能进入普通错误文本。
@@ -196,46 +242,38 @@ func (c *officialCodexFileUploadCall) uploadBlob(
 		time.Duration(c.profile.Files.RequestTimeoutMillis)*time.Millisecond,
 	)
 	defer cancel()
-	var body io.Reader = contents
-	if fileSizeBytes == 0 {
-		body = http.NoBody
+	requestContext, err = bindOfficialEgressSink(requestContext, officialEgressSinkFilesBlobUpload)
+	if err != nil {
+		return fmt.Errorf("绑定 Codex 文件 blob SinkID：%w", err)
 	}
-	request, err := http.NewRequestWithContext(requestContext, endpoint.Method, target.String(), body)
+	request, err := newOfficialCodexBlobUploadSemanticRequest(
+		requestContext, target, fileSizeBytes, contents,
+	)
 	if err != nil {
 		return fmt.Errorf("构造 Codex 文件 blob 请求：%w", err)
 	}
-	request = request.WithContext(WithHTTPUpstreamProfile(request.Context(), HTTPUpstreamProfileOpenAI))
-	request.Host = target.Host
-	request.ContentLength = int64(fileSizeBytes)
-	// 文件流不可重放；即便调用方传入 bytes.Reader，也不允许传输层据此重试 PUT。
-	request.GetBody = nil
-	request.Header.Set("x-ms-client-request-id", uuid.NewString())
-	request, egressContext, err := attachOfficialCodex0145EndpointRequest(
-		request,
-		c.routeAccount,
-		endpointID,
-		c.invocationID,
-	)
-	if err != nil {
-		return fmt.Errorf("绑定 Codex 文件 blob 画像：%w", err)
+	if c.blobInvocation == nil {
+		c.blobInvocation, err = newOfficialCodexHTTPInvocation(
+			requestContext,
+			officialCodexHTTPInvocationInput{
+				Runtime: c.runtime, Account: c.routeAccount,
+				SinkID:       officialegress.SinkCodexFilesBlobUpload,
+				InvocationID: c.invocationID, ProxyURL: c.proxyURL,
+				PolicyID:      "changeset3.files.blob_upload",
+				PolicySource:  "service.UploadOfficialCodexFile",
+				AttemptBudget: 1, SingleUseBody: true,
+			},
+		)
+		if err != nil {
+			return &officialCodexFileBlobTransportError{host: target.Hostname(), cause: err}
+		}
 	}
-	if _, err := officialCodex0145FinalizeEndpointHeaders(egressContext, request.Header, nil); err != nil {
-		return fmt.Errorf("定型 Codex 文件 blob headers：%w", err)
-	}
-	tlsProfile, err := officialCodex0145ResolveEndpointTLSProfileForURL(
-		c.profile.Version,
-		endpointID,
-		request.URL,
-	)
-	if err != nil {
-		return fmt.Errorf("编译 Codex 文件 blob TLS 画像：%w", err)
-	}
-	response, err := c.service.httpUpstream.DoWithTLS(
-		request,
-		c.proxyURL,
-		c.routeAccount.ID,
-		c.routeAccount.Concurrency,
-		tlsProfile,
+	response, err := c.blobInvocation.Execute(
+		requestContext,
+		officialCodexHTTPAttemptInput{
+			EndpointID: string(endpointID), Request: request,
+			DynamicInputs: officialegress.EndpointDynamicInputs{ReturnedURL: target},
+		},
 	)
 	if err != nil {
 		return &officialCodexFileBlobTransportError{host: target.Hostname(), cause: err}
@@ -265,9 +303,9 @@ func (c *officialCodexFileUploadCall) finalize(
 	startedAt := c.now()
 	for {
 		responseBody, err := c.executeJSON(
-			codex0145EndpointID(c.profile.Files.UploadedEndpointID),
-			officialCodex0145EndpointURLInput{PathValues: map[string]string{"file_id": fileID}},
-			map[string]any{},
+			codexEndpointID(c.profile.Files.UploadedEndpointID),
+			officialCodexEndpointURLInput{PathValues: map[string]string{"file_id": fileID}},
+			struct{}{},
 		)
 		if err != nil {
 			return nil, err
@@ -318,25 +356,19 @@ func (c *officialCodexFileUploadCall) finalize(
 // executeJSON 是 create 与 uploaded 共用的版本画像执行器。URL、方法、body
 // 闭集、header 闭集、TLS/H1 和请求超时均在这里一次定型。
 func (c *officialCodexFileUploadCall) executeJSON(
-	endpointID codex0145EndpointID,
-	urlInput officialCodex0145EndpointURLInput,
-	payload map[string]any,
+	endpointID codexEndpointID,
+	urlInput officialCodexEndpointURLInput,
+	payload any,
 ) ([]byte, error) {
 	endpoint, err := c.profile.ResolveEndpoint(string(endpointID))
 	if err != nil {
 		return nil, err
 	}
-	orderedBody, err := officialCodex0145ProjectEndpointJSONBody(
-		c.profile.Version,
-		endpointID,
-		payload,
-		nil,
-		nil,
-	)
+	semanticBody, err := marshalOfficialCodexFileSemanticBody(payload)
 	if err != nil {
-		return nil, fmt.Errorf("构造 Codex 文件端点 %s body：%w", endpoint.ID, err)
+		return nil, fmt.Errorf("编码 Codex 文件端点 %s 业务 body：%w", endpoint.ID, err)
 	}
-	target, err := officialCodex0145BuildEndpointURL(c.profile.Version, endpointID, urlInput)
+	target, err := officialCodexBuildEndpointURL(c.profile.Version, endpointID, urlInput)
 	if err != nil {
 		return nil, fmt.Errorf("构造 Codex 文件端点 %s URL：%w", endpoint.ID, err)
 	}
@@ -346,26 +378,17 @@ func (c *officialCodexFileUploadCall) executeJSON(
 		time.Duration(c.profile.Files.RequestTimeoutMillis)*time.Millisecond,
 	)
 	defer cancel()
+	requestContext, err = bindOfficialEgressSink(requestContext, officialEgressSinkFilesRegister)
+	if err != nil {
+		return nil, fmt.Errorf("绑定 Codex 文件登记 SinkID：%w", err)
+	}
 	request, err := http.NewRequestWithContext(requestContext, endpoint.Method, target.String(), nil)
 	if err != nil {
 		return nil, fmt.Errorf("构造 Codex 文件端点 %s 请求：%w", endpoint.ID, err)
 	}
 	request = request.WithContext(WithHTTPUpstreamProfile(request.Context(), HTTPUpstreamProfileOpenAI))
 	request.Host = target.Host
-	request, egressContext, err := attachOfficialCodex0145EndpointRequest(
-		request,
-		c.routeAccount,
-		endpointID,
-		c.invocationID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("绑定 Codex 文件端点 %s 画像：%w", endpoint.ID, err)
-	}
-	orderedBody, err = officialCodex0145FinalizeEndpointJSONBody(egressContext, orderedBody, nil)
-	if err != nil {
-		return nil, fmt.Errorf("定型 Codex 文件端点 %s body：%w", endpoint.ID, err)
-	}
-	resetOfficialEgressRequestBody(request, orderedBody)
+	resetOfficialEgressRequestBody(request, semanticBody)
 
 	token, _, err := c.service.GetAccessToken(requestContext, c.credentialAccount)
 	if err != nil {
@@ -385,28 +408,40 @@ func (c *officialCodexFileUploadCall) executeJSON(
 		}
 	}
 	setOpenAIChatGPTAccountHeaders(request.Header, c.credentialAccount)
-	if _, err := officialCodex0145FinalizeEndpointHeaders(egressContext, request.Header, nil); err != nil {
-		return nil, fmt.Errorf("定型 Codex 文件端点 %s headers：%w", endpoint.ID, err)
+	if c.registerInvocation == nil {
+		c.registerInvocation, err = newOfficialCodexHTTPInvocation(
+			requestContext,
+			officialCodexHTTPInvocationInput{
+				Runtime: c.runtime, Account: c.routeAccount,
+				SinkID:       officialegress.SinkCodexFilesRegister,
+				InvocationID: c.invocationID, ProxyURL: c.proxyURL,
+				PolicyID:      "changeset3.files.register",
+				PolicySource:  "service.UploadOfficialCodexFile",
+				AttemptBudget: c.registerAttemptBudget(),
+			},
+		)
+		if err != nil {
+			return nil, fmt.Errorf("创建 Codex 文件 register invocation：%w", err)
+		}
 	}
-	tlsProfile, err := officialCodex0145ResolveEndpointTLSProfileForURL(
-		c.profile.Version,
-		endpointID,
-		request.URL,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("编译 Codex 文件端点 %s TLS 画像：%w", endpoint.ID, err)
-	}
-	response, err := c.service.httpUpstream.DoWithTLS(
-		request,
-		c.proxyURL,
-		c.routeAccount.ID,
-		c.routeAccount.Concurrency,
-		tlsProfile,
+	response, err := c.registerInvocation.Execute(
+		requestContext,
+		officialCodexHTTPAttemptInput{EndpointID: string(endpointID), Request: request},
 	)
 	if err != nil {
 		return nil, fmt.Errorf("请求 Codex 文件端点 %s：%w", endpoint.ID, err)
 	}
 	return readOfficialCodexFileControlResponse(endpoint.ID, response)
+}
+
+// registerAttemptBudget 覆盖 create、uploaded 首次检查及整个画像轮询窗口。
+func (c *officialCodexFileUploadCall) registerAttemptBudget() int {
+	if c == nil || c.profile == nil || c.profile.Files.FinalizeRetryDelayMillis <= 0 ||
+		c.profile.Files.FinalizeTimeoutMillis <= 0 {
+		return 2
+	}
+	polls := c.profile.Files.FinalizeTimeoutMillis / c.profile.Files.FinalizeRetryDelayMillis
+	return int(polls) + 2
 }
 
 func readOfficialCodexFileControlResponse(endpointID string, response *http.Response) ([]byte, error) {

@@ -310,6 +310,32 @@ gateway:
   # 官方客户端画像发布指针：active 使用当前实抓画像，previous 整体回退上一画像。
   official_client_profiles:
     mode: active
+  # 官方出站 Guard。变更集 1C 默认 fail-close；未知 route 与无效 binding 禁止永久全局 observe。
+  official_egress_guard:
+    unknown_route_policy: enforce
+    unregistered_sink_policy: enforce
+    # fail-close 默认值。存在 canary_enforce 控制时只允许 1..100；0 会启动失败。
+    canary_percent: 100
+    max_unique_log_samples: 512
+    # 设置 policy_overrides_json 时必须填写稳定、唯一的部署实例 ID。
+    instance_id: ""
+    # 1C 紧急回滚：严格 JSON，只允许 enforced→canary 和带截止时间的 observe 覆盖。
+    # 修改配置并重启同一镜像即可生效，不需要重新发布。
+    sink_controls_json: ""
+    # unknown/unregistered 紧急 observe：schema 2 必须绑定 instance、精确 route/sink、截止时间、责任人和原因。
+    # unknown route 还必须提供目标 EscapedPath 的小写 SHA-256；安全模板只用于日志，不能替代精确摘要。
+    policy_overrides_json: ""
+  # OpenAI privacy browser persona 独立发布线。
+  # 审核前保持 disabled/0；启用后按账号稳定分桶灰度 Chrome 133/XHR。
+  # 若 Cloudflare 通过率恶化，只需关闭 enabled，不影响 WHAM/Executor 发布线。
+  openai_privacy_browser:
+    enabled: false
+    canary_percent: 0
+    platform: auto
+    # 留空时从部署进程 locale 解析；也可按地域显式设置，如 en-US,en;q=0.9。
+    accept_language: ""
+    # Cloudflare/上游失败后自动重试冷却，避免每轮 token 刷新都重打。
+    failure_cooldown_seconds: 3600
   # ChatGPT Frameless Live 单会话硬上限（秒）。
   live:
     max_session_duration_seconds: 3600

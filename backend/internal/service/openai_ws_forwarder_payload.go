@@ -159,9 +159,6 @@ func (s *OpenAIGatewayService) buildOpenAIWSHeaders(
 	// 覆盖所有 WS 模式（ctx_pool/dedicated/passthrough）的握手头。
 	account.ApplyHeaderOverrides(headers)
 
-	if _, err := finalizeOpenAIOfficialEgressWSHandshakeHeaders(ctx, headers); err != nil {
-		return nil, sessionResolution, err
-	}
 	return headers, sessionResolution, nil
 }
 

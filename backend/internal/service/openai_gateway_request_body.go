@@ -384,6 +384,20 @@ func IsForwardableOpenAIResponsesRequestPath(c *gin.Context) bool {
 	return ok
 }
 
+// validateOpenAIOfficialResponsesSubpath 把 OAuth Codex 发送面限制在已经具备官方
+// 画像证据的精确路由。普通 API Key 与自定义兼容上游不属于 OAuth persona，继续
+// 保留既有通用子路径转发能力，也不会携带 OAuth SinkID 进入 Guard。
+func validateOpenAIOfficialResponsesSubpath(account *Account, c *gin.Context) error {
+	if account == nil || !account.IsOpenAIOAuth() {
+		return nil
+	}
+	suffix := strings.TrimSpace(openAIResponsesRequestPathSuffix(c))
+	if suffix == "" || suffix == "/compact" {
+		return nil
+	}
+	return errors.New("unsupported official OAuth responses subpath")
+}
+
 // rawOpenAIResponsesRequestPathSuffix 仅做提取，不做任何安全判断。
 func rawOpenAIResponsesRequestPathSuffix(c *gin.Context) string {
 	if c == nil || c.Request == nil || c.Request.URL == nil {

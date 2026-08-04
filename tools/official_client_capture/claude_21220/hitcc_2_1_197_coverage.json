@@ -4,8 +4,12 @@
   "target_version": "2.1.220",
   "source_inventory": {
     "git_commit": "f4556e5b18a65232023998219e53c2598cc17d82",
+    "git_worktree_clean": true,
     "markdown_files_total": 112,
     "markdown_files_under_docs": 110,
+    "markdown_byte_count": 1303892,
+    "markdown_path_and_content_sha256": "09029442ec90febe4b43ac72fb589f5a4e2dae2f38b7644b4e8bbe8d063f0eb0",
+    "digest_method": "对全部 Markdown 按仓库相对路径排序，逐行拼接 <文件 SHA-256><两个空格><仓库相对路径><换行>，再计算整体 SHA-256。",
     "pretty_bundle_present": false
   },
   "scope": {
@@ -64,8 +68,8 @@
   "summary": {
     "total_clues": 88,
     "coverage_counts": {
-      "covered": 11,
-      "partial": 63,
+      "covered": 9,
+      "partial": 65,
       "missing": 4,
       "out_of_scope": 10
     },
@@ -77,7 +81,8 @@
       "cross_reference_only": 33,
       "no_egress_clue": 8
     },
-    "conclusion": "第二轮已按 2.4 候选台账重算现有 88 条：候选已承接核心载体但证据未闭环的线索记为 partial，不升格为目标版本规则。全库 112 篇 Markdown 中仍有 53 篇直接线索源尚未逐条抽取，因此不能宣称现有 88 条已覆盖 HitCC 全部线索。"
+    "semantic_classification_boundary": "112 个路径与 clue_id 反向映射可由 checker 机械复核；document_disposition、mapping_status 及‘是否还有独立线索’属于人工语义判断，checker 不能从 Markdown 自动证明分类正确或线索抽取穷尽。71/18/53 是当前审阅台账口径，不是由路径计数单独推出的客观常量。",
+    "conclusion": "逐条按当前原子 retained claim 重算现有 88 条：覆盖 9、部分覆盖 65、缺失 4、范围外 10；本轮新增完整 M 只闭合三个环境 Header 条件和嵌套父 agent 关系，其他条件或分支不足的线索仍记为 partial。全库 112 篇 Markdown 中仍有 53 篇直接线索源尚未逐条抽取，因此不能宣称现有 88 条已覆盖 HitCC 全部线索。"
   },
   "supporting_document_mappings": [
     {
@@ -994,12 +999,12 @@
       "source_kind": "hitcc_runtime_analysis",
       "old_reachability": "live",
       "target_version": "2.1.220",
-      "spec_rule_ids": ["SPEC-EP-001"],
-      "coverage": "covered",
+      "spec_rule_ids": ["SPEC-EP-004", "SPEC-TLS-003", "CAND-EP-FULLSET"],
+      "coverage": "partial",
       "drift_status": "same",
-      "current_evidence": "SPEC-EP-001 的 J/P 样本均指向 api.anthropic.com。",
-      "next_probe": "继续在非 s1 场景与关闭 host 过滤的抓包中核对。",
-      "notes": "只说明默认 first-party 数据面，不说明全部控制面 host。"
+      "current_evidence": "SPEC-EP-004 只是在 TARGET_HOSTS allowlist 后观察到 HTTP host；SPEC-TLS-003 在无 host 预过滤的两个 direct pcap 中观察到 SNI。两者均不能独立证明默认 baseURL 的 scheme、authority 选择机制或端点全集。",
+      "next_probe": "用无 host/path 预过滤的 HTTP exchange 发现复验 authority，并闭环默认 baseURL 的目标版本静态构造点。",
+      "notes": "当前样本与旧 first-party 数据面 host 相容，但不说明全部控制面 host，也未达到 verified。"
     },
     {
       "clue_id": "HITCC-AUTH-002",
@@ -1014,7 +1019,7 @@
       "spec_rule_ids": ["SPEC-HDR-001", "CAND-AUTH-BEARER"],
       "coverage": "partial",
       "drift_status": "same",
-      "current_evidence": "默认 wire 已观察 Authorization，2.4 的 CAND-AUTH-BEARER 已承接 Bearer 与 apiKey=null 选择，但缺 2.1.220 认证选择链的完整数据流绑定。",
+      "current_evidence": "SCOPE-J6 已观察 Authorization，2.4 的 CAND-AUTH-BEARER 已承接 Bearer 与 apiKey=null 选择，但缺 2.1.220 认证选择链的完整数据流绑定。",
       "next_probe": "对脱敏前长度与 header 名做 OAuth/API-key 对照，并在 bundle 中闭环 SDK auth 参数。",
       "notes": "不得记录或暴露 token 值。"
     },
@@ -1062,11 +1067,11 @@
       "source_kind": "hitcc_runtime_analysis",
       "old_reachability": "live",
       "target_version": "2.1.220",
-      "spec_rule_ids": ["SPEC-HDR-002", "CAND-UA-CLI", "CAND-HDR-REMOTE-MATRIX", "CAND-WORKLOAD"],
+      "spec_rule_ids": ["SPEC-HDR-002", "SPEC-HDR-022", "CAND-UA-CLI", "CAND-HDR-REMOTE-MATRIX", "CAND-WORKLOAD"],
       "coverage": "partial",
       "drift_status": "unknown",
-      "current_evidence": "sdk-cli 默认值已验证；TUI 与三个可选尾段无完整正例。",
-      "next_probe": "分别采集 TUI、Agent SDK client-app 与 workload 正例。",
+      "current_evidence": "SCOPE-J6 观察到显式 print 模式的 sdk-cli UA；SPEC-HDR-022 又以两轮正例证实 client-app/<value> 可选段。TUI、agent-sdk 独立段与 workload 段仍无完整正例。",
+      "next_probe": "分别采集 TUI、独立 agent-sdk 段与 workload 正例。",
       "notes": "entrypoint 与 x-app 是两个不同维度。"
     },
     {
@@ -1097,9 +1102,9 @@
       "old_reachability": "live",
       "target_version": "2.1.220",
       "spec_rule_ids": ["SPEC-HDR-013", "SPEC-HDR-015"],
-      "coverage": "covered",
+      "coverage": "partial",
       "drift_status": "same",
-      "current_evidence": "同会话复用、跨会话变化及主/子会话共享均已有规则映射。",
+      "current_evidence": "已采样本观察到同会话复用及一层主/子 agent 共享；跨会话互异、resume、后台与完整生命周期尚未由原子规则承接。",
       "next_probe": "补 compact、resume、后台 agent 的会话边界。",
       "notes": "与 remote session id 不同。"
     },
@@ -1113,12 +1118,12 @@
       "source_kind": "hitcc_runtime_analysis",
       "old_reachability": "conditional",
       "target_version": "2.1.220",
-      "spec_rule_ids": ["SPEC-HDR-017", "CAND-HDR-REMOTE-MATRIX"],
-      "coverage": "partial",
+      "spec_rule_ids": ["SPEC-HDR-017", "SPEC-HDR-023", "CAND-HDR-REMOTE-MATRIX"],
+      "coverage": "covered",
       "drift_status": "same",
-      "current_evidence": "SPEC-HDR-017 已承接环境变量、header 名和值与槽位，但正文将其处置为候选，引用的运行正例未归档。",
-      "next_probe": "核对两次独立正例归档和完整 manifest。",
-      "notes": "仅 remote/container 场景出现。"
+      "current_evidence": "SPEC-HDR-017/023 由目标版本静态构造点、两轮未设置负例和两轮唯一值正例闭环，且每轮完整 M 可复算。",
+      "next_probe": "真实 remote-container 产品环境和空白输入仍作为扩展矩阵，不改变该环境变量条件命题。",
+      "notes": "只把受控环境变量到 Header 的映射标为 covered，不外推远程产品环境全集。"
     },
     {
       "clue_id": "HITCC-HDR-005",
@@ -1130,11 +1135,11 @@
       "source_kind": "hitcc_runtime_analysis",
       "old_reachability": "conditional",
       "target_version": "2.1.220",
-      "spec_rule_ids": ["SPEC-HDR-018", "CAND-HDR-REMOTE-MATRIX"],
-      "coverage": "partial",
+      "spec_rule_ids": ["SPEC-HDR-018", "SPEC-HDR-024", "CAND-HDR-REMOTE-MATRIX"],
+      "coverage": "covered",
       "drift_status": "same",
-      "current_evidence": "SPEC-HDR-018 已承接环境变量、header 名和值与槽位，但正文将其处置为候选，引用的运行正例未归档。",
-      "next_probe": "核对 remote session 生命周期内是否稳定。",
+      "current_evidence": "SPEC-HDR-018/024 由目标版本静态构造点、两轮未设置负例和两轮唯一值正例闭环，且每轮完整 M 可复算。",
+      "next_probe": "真实 remote session 生命周期仍作为扩展矩阵。",
       "notes": "不等于 metadata.user_id 内的 session_id。"
     },
     {
@@ -1147,12 +1152,12 @@
       "source_kind": "hitcc_runtime_analysis",
       "old_reachability": "conditional",
       "target_version": "2.1.220",
-      "spec_rule_ids": ["SPEC-HDR-016", "CAND-HDR-REMOTE-MATRIX"],
-      "coverage": "partial",
+      "spec_rule_ids": ["SPEC-HDR-016", "SPEC-HDR-021", "CAND-HDR-REMOTE-MATRIX"],
+      "coverage": "covered",
       "drift_status": "same",
-      "current_evidence": "SPEC-HDR-016 已承接环境变量、header 名和值与槽位，但正文将其处置为候选，引用的运行正例未归档。",
-      "next_probe": "确认空白值、前后空格与 UA 可选段的联动。",
-      "notes": "需要和 User-Agent 的 client-app 段联测。"
+      "current_evidence": "SPEC-HDR-016/021 由目标版本静态构造点、两轮未设置负例和两轮 probe-app-21220 正例闭环；UA 联动由独立 SPEC-HDR-022 处理。",
+      "next_probe": "空白值和带前后空格值仍作为扩展输入矩阵。",
+      "notes": "Header 条件命题已闭合，UA 是另一个载体，不在本条重复计数。"
     },
     {
       "clue_id": "HITCC-HDR-007",
@@ -1167,7 +1172,7 @@
       "spec_rule_ids": ["SPEC-HDR-014"],
       "coverage": "covered",
       "drift_status": "same",
-      "current_evidence": "一层子 agent 正例已有规则映射。",
+      "current_evidence": "缺完整 M 的两轮 R 样本观察到一层子 agent 发送该 Header；SPEC-HDR-014 仍为 observed。",
       "next_probe": "补生成算法与多轮稳定性，但不要把算法写成 wire 必需条件。",
       "notes": "主会话不发送。"
     },
@@ -1181,12 +1186,12 @@
       "source_kind": "hitcc_summary",
       "old_reachability": "conditional",
       "target_version": "2.1.220",
-      "spec_rule_ids": ["SPEC-HDR-019"],
-      "coverage": "partial",
+      "spec_rule_ids": ["SPEC-HDR-019", "SPEC-HDR-025"],
+      "coverage": "covered",
       "drift_status": "same",
-      "current_evidence": "两层嵌套已有观察；第二章却外推为两层以上。",
-      "next_probe": "采三层嵌套，验证只发送直接父级还是链式信息。",
-      "notes": "当前只能覆盖到两层。"
+      "current_evidence": "a1/a2/a3 各两轮完整 M 将 request Header、task_started.task_id 与 tool_use_id 链逐层绑定；深度 2/3 的 parent header 均等于直接父 agent-id。",
+      "next_probe": "并发、后台与 resume 属于扩展生命周期，不改变已验证的已采深度关系。",
+      "notes": "SPEC-HDR-019 负责出现深度，SPEC-HDR-025 负责直接父值相等。"
     },
     {
       "clue_id": "HITCC-HDR-009",
@@ -1199,9 +1204,9 @@
       "old_reachability": "conditional",
       "target_version": "2.1.220",
       "spec_rule_ids": ["SPEC-HDR-009"],
-      "coverage": "covered",
+      "coverage": "partial",
       "drift_status": "same",
-      "current_evidence": "2.1.220 已有单变量正负例与插槽记录。",
+      "current_evidence": "2.1.220 两轮单变量正例与基线负例观察到存在性和值；SPEC-HDR-009 因合并触发和值/槽位仍为 observed。",
       "next_probe": "补 true/false/空串/非法值的布尔解析矩阵。",
       "notes": "服务端解释不在客户端证据范围。"
     },
@@ -1235,7 +1240,7 @@
       "spec_rule_ids": ["SPEC-HDR-008", "CAND-HDR-DISPATCH-RETRY"],
       "coverage": "partial",
       "drift_status": "unknown",
-      "current_evidence": "SPEC-HDR-008 覆盖默认缺失，CAND-HDR-DISPATCH-RETRY 已承接首事件前移除并重试；远程 gate 正例及故障链仍未闭环。",
+      "current_evidence": "SPEC-HDR-008 记录基线缺失，CAND-HDR-DISPATCH-RETRY 已承接首事件前移除并重试；远程 gate 正例及故障链仍未闭环。",
       "next_probe": "构造 gate 正例后在首事件前注入 5xx、连接错误与 body-phase 错误。",
       "notes": "默认不发送与条件路径存在必须拆成两个命题。"
     },
@@ -1250,9 +1255,9 @@
       "old_reachability": "conditional",
       "target_version": "2.1.220",
       "spec_rule_ids": ["SPEC-HDR-012"],
-      "coverage": "covered",
+      "coverage": "partial",
       "drift_status": "same",
-      "current_evidence": "目标 OAuth scope 内每请求唯一已有 J 证据。",
+      "current_evidence": "目标 firstParty OAuth 样本观察到该 Header 及样本内不碰撞；Anthropic AWS host 条件、生成算法与完整会话唯一性未承接。",
       "next_probe": "若扩 provider scope，再验证默认 host 条件。",
       "notes": "生成条件与 UUID 算法是两个独立层次。"
     },
@@ -1269,7 +1274,7 @@
       "spec_rule_ids": ["CAND-HDR-TRACEPARENT"],
       "coverage": "partial",
       "drift_status": "unknown",
-      "current_evidence": "默认 22 项 header 中无 traceparent；2.4 的 CAND-HDR-TRACEPARENT 已承接 active span 条件载体，但缺 2.1.220 静态可达链和正负例。",
+      "current_evidence": "SCOPE-BASELINE 的 22 项 Header 中无 traceparent；2.4 的 CAND-HDR-TRACEPARENT 已承接 active span 条件载体，但缺 2.1.220 静态可达链和正负例。",
       "next_probe": "在 2.1.220 bundle 定位 Apc/trace 注入链，并分别构造 active span、env 放宽和默认负例。",
       "notes": "响应 traceresponse 不能替代请求 traceparent 正例。"
     },
@@ -1303,7 +1308,7 @@
       "spec_rule_ids": ["SPEC-HDR-004"],
       "coverage": "covered",
       "drift_status": "same",
-      "current_evidence": "30/30 目标请求取值一致。",
+      "current_evidence": "SPEC-HDR-004 的 BASELINE-J 5/5 个解析请求观察到该值；其他 supporting endpoint 不在本条分母。",
       "next_probe": "不同 supporting endpoint 单独验证，不外推主消息规则。",
       "notes": "该值可能在 remote/control 请求中复用，但顺序不同。"
     },
@@ -1320,7 +1325,7 @@
       "spec_rule_ids": ["SPEC-BODY-002"],
       "coverage": "covered",
       "drift_status": "same",
-      "current_evidence": "2.1.220 默认与子会话样本均验证内嵌 JSON 和三基础键。",
+      "current_evidence": "2.1.220 基线与子会话样本均观察到内嵌 JSON 和三个基础键，但跨机器、跨账号可变性未证实。",
       "next_probe": "补跨机器、跨账号差分以确认可变性层级。",
       "notes": "字段名 user_id 不代表值是裸用户标识。"
     },
@@ -1337,7 +1342,7 @@
       "spec_rule_ids": ["SPEC-BODY-002", "CAND-METADATA-EXTRA"],
       "coverage": "partial",
       "drift_status": "unknown",
-      "current_evidence": "SPEC-BODY-002 仅覆盖默认三键；CAND-METADATA-EXTRA 已承接 JSON object 合并与非法值分支，但未验证覆盖优先级、错误行为和 wire 正例。",
+      "current_evidence": "SPEC-BODY-002 仅观察到基线三键；CAND-METADATA-EXTRA 已承接 JSON object 合并与非法值分支，但未证实覆盖优先级、错误行为和 wire 正例。",
       "next_probe": "注入普通键、同名基础键、数组、标量、非法 JSON，并核对键序和错误路径。",
       "notes": "若 2.1.220 仍可达，当前‘恰含三个键’必须收窄到未注入环境变量。"
     },
@@ -1354,7 +1359,7 @@
       "spec_rule_ids": ["SPEC-BODY-002"],
       "coverage": "partial",
       "drift_status": "unknown",
-      "current_evidence": "默认同账号样本只证明单一值，未验证 remote/env 来源和空值。",
+      "current_evidence": "同账号基线样本只观察到单一值，未证实 remote/env 来源和空值。",
       "next_probe": "采 remote account、显式 account env、无 account 三组对照。",
       "notes": "不要从同机单账号样本推导生成算法。"
     },
@@ -1371,7 +1376,7 @@
       "spec_rule_ids": ["SPEC-BODY-002", "SPEC-HDR-015"],
       "coverage": "covered",
       "drift_status": "same",
-      "current_evidence": "默认及子 agent 请求逐项相等。",
+      "current_evidence": "基线 J 与缺完整 M 的一层子 agent R 样本中，两处 session_id 逐项相等；跨生命周期仍未覆盖。",
       "next_probe": "补 resume、fork、compact、后台会话的边界。",
       "notes": "remote session header 仍是独立维度。"
     },
@@ -1388,7 +1393,7 @@
       "spec_rule_ids": ["SPEC-BODY-001", "CAND-BODY-CONDITIONAL-FIELDS", "CAND-FALLBACK-PROTOCOL", "CAND-CACHE-DIAGNOSIS"],
       "coverage": "partial",
       "drift_status": "unknown",
-      "current_evidence": "SPEC-BODY-001 固定默认十键；CAND-BODY-CONDITIONAL-FIELDS、CAND-FALLBACK-PROTOCOL 与 CAND-CACHE-DIAGNOSIS 已承接主要条件键，但尚无逐字段触发矩阵。",
+      "current_evidence": "SPEC-BODY-001 只观察到基线十键；CAND-BODY-CONDITIONAL-FIELDS、CAND-FALLBACK-PROTOCOL 与 CAND-CACHE-DIAGNOSIS 已承接主要条件键，但尚无逐字段触发矩阵。",
       "next_probe": "先在 2.1.220 bundle 建数据流表，再为每个条件字段设计单变量或受控响应正例。",
       "notes": "默认键集合不能外推为所有请求的全称键集合。"
     },
@@ -1402,10 +1407,10 @@
       "source_kind": "hitcc_runtime_analysis",
       "old_reachability": "live",
       "target_version": "2.1.220",
-      "spec_rule_ids": ["SPEC-BODY-001", "SPEC-HDR-003"],
+      "spec_rule_ids": ["SPEC-BODY-001", "SPEC-BODY-008", "SPEC-HDR-003"],
       "coverage": "partial",
       "drift_status": "changed",
-      "current_evidence": "Sonnet 5、Opus 4.8、Haiku 4.5 有部分运行样本，但第二章未建立模型名映射规则。",
+      "current_evidence": "SPEC-BODY-008 只观察到 SCOPE-J6 的 claude-sonnet-5；Opus 只有一轮相邻样本，Haiku 没有成功正例，provider/model normalization 机制仍未建立。",
       "next_probe": "按 alias、精确 model id、fallback model 与 provider 逐组采集 body.model。",
       "notes": "beta 形态和 body.model 必须在同一模型矩阵中绑定。"
     },
@@ -1436,10 +1441,10 @@
       "source_kind": "hitcc_runtime_analysis",
       "old_reachability": "live",
       "target_version": "2.1.220",
-      "spec_rule_ids": ["SPEC-BODY-003", "SPEC-BODY-007", "SPEC-HDR-020", "CAND-BODY-BILLING-CONDITIONS", "CAND-BODY-CCH-REWRITE", "CAND-SYSTEM-SEMANTICS"],
+      "spec_rule_ids": ["SPEC-BODY-003", "SPEC-BODY-007", "SPEC-BODY-014", "SPEC-BODY-015", "SPEC-BODY-016", "SPEC-HDR-020", "CAND-BODY-BILLING-CONDITIONS", "CAND-BODY-CCH-REWRITE", "CAND-SYSTEM-SEMANTICS"],
       "coverage": "partial",
       "drift_status": "same",
-      "current_evidence": "SPEC-BODY-007 已正式描述 system[0] attribution，SPEC-HDR-020 区分 HTTP Header 缺失；两个 billing 候选及 CAND-SYSTEM-SEMANTICS 承接条件字段和段语义，但未完整闭环。",
+      "current_evidence": "SPEC-BODY-007 与 SPEC-BODY-014/015/016 在 SCOPE-J6 分别观察到 attribution 前缀、version、entrypoint、cch；SPEC-HDR-020 观察到同名 HTTP Header 缺席。identity 段语义及条件字段仍未完整闭环。",
       "next_probe": "从原始 body 提取四段语义标签、cc_version/cch/cc_prev_req 等字段及缓存属性。",
       "notes": "x-anthropic-billing-header 字符串可位于 system 文本，不等于同名 HTTP header。"
     },
@@ -1504,10 +1509,10 @@
       "source_kind": "hitcc_runtime_analysis",
       "old_reachability": "conditional",
       "target_version": "2.1.220",
-      "spec_rule_ids": ["SPEC-BODY-001", "SPEC-CONN-001", "CAND-RETRY-529-FALLBACK"],
+      "spec_rule_ids": ["SPEC-BODY-001", "SPEC-BODY-009", "SPEC-CONN-001", "CAND-RETRY-529-FALLBACK"],
       "coverage": "partial",
       "drift_status": "unknown",
-      "current_evidence": "默认 body 已观察 max_tokens，CAND-RETRY-529-FALLBACK 承接 context overflow 时改写 max_tokens；request/env 优先级仍未被候选原子化。",
+      "current_evidence": "SPEC-BODY-009 在 SCOPE-J6 观察到 max_tokens=64000；CAND-RETRY-529-FALLBACK 承接 context overflow 时改写 max_tokens，request/env 优先级仍未被候选原子化。",
       "next_probe": "按 env、请求 override、context overflow retry 做单变量抓包。",
       "notes": "重试时 body 可能变化，不能只比较 header。"
     },
@@ -1521,10 +1526,10 @@
       "source_kind": "hitcc_runtime_analysis",
       "old_reachability": "conditional",
       "target_version": "2.1.220",
-      "spec_rule_ids": ["SPEC-BODY-001", "CAND-BODY-CONDITIONAL-FIELDS"],
+      "spec_rule_ids": ["SPEC-BODY-001", "SPEC-BODY-010", "CAND-BODY-CONDITIONAL-FIELDS"],
       "coverage": "partial",
       "drift_status": "unknown",
-      "current_evidence": "默认 Sonnet 5 有 thinking；CAND-BODY-CONDITIONAL-FIELDS 已承接 temperature 条件字段，但 thinking-disabled、不支持模型与互斥关系仍无正例。",
+      "current_evidence": "SPEC-BODY-010 在 SCOPE-J6 观察到 thinking={type:adaptive}；CAND-BODY-CONDITIONAL-FIELDS 承接 temperature 条件字段，但 thinking-disabled、不支持模型与互斥关系仍无正例。",
       "next_probe": "构造 thinking disabled、budget thinking、adaptive thinking 与不支持模型四组对照。",
       "notes": "thinking 和 temperature 应作为互斥条件联合验证。"
     },
@@ -1538,10 +1543,10 @@
       "source_kind": "hitcc_runtime_analysis",
       "old_reachability": "conditional",
       "target_version": "2.1.220",
-      "spec_rule_ids": ["SPEC-BODY-001", "SPEC-HDR-003"],
+      "spec_rule_ids": ["SPEC-BODY-001", "SPEC-BODY-011", "SPEC-HDR-003"],
       "coverage": "partial",
       "drift_status": "unknown",
-      "current_evidence": "默认 Sonnet/Opus 场景出现该键，条件消失侧未验证。",
+      "current_evidence": "SPEC-BODY-011 在 SCOPE-J6 的 Sonnet 5 请求中观察到精确 context_management 对象；Opus 只有相邻单轮样本，条件消失侧未证实。",
       "next_probe": "按模型能力与移除对应 beta 的受控路径验证键的存在性和值。",
       "notes": "不能把默认十键外推到所有模型。"
     },
@@ -1555,10 +1560,10 @@
       "source_kind": "hitcc_runtime_analysis",
       "old_reachability": "conditional",
       "target_version": "2.1.220",
-      "spec_rule_ids": ["SPEC-BODY-001"],
+      "spec_rule_ids": ["SPEC-BODY-001", "SPEC-BODY-012"],
       "coverage": "partial",
       "drift_status": "unknown",
-      "current_evidence": "默认请求只观察到 output_config 存在，未形成内部键和值矩阵。",
+      "current_evidence": "SPEC-BODY-012 在 SCOPE-J6 观察到 output_config 恰为 {effort:high}；其他 effort、taskBudget、outputFormat 组合未形成矩阵。",
       "next_probe": "按 effort 级别、结构化 output format 和 task budget 差分。",
       "notes": "嵌套对象键序也需 R 证据。"
     },
@@ -1575,7 +1580,7 @@
       "spec_rule_ids": ["SPEC-BODY-001", "CAND-BODY-CONDITIONAL-FIELDS"],
       "coverage": "partial",
       "drift_status": "unknown",
-      "current_evidence": "默认十键中无 speed；CAND-BODY-CONDITIONAL-FIELDS 已承接 speed 条件字段，但 fast entitlement 正例与重试移除行为未闭环。",
+      "current_evidence": "SCOPE-J6 的基线十键中无 speed；CAND-BODY-CONDITIONAL-FIELDS 已承接 speed 条件字段，但 fast entitlement 正例与重试移除行为未闭环。",
       "next_probe": "在具备 fast entitlement 的账号采正例，并注入 429/529 观察后续请求移除 speed。",
       "notes": "初始意图与重试后的实际 fastMode 可能不同。"
     },
@@ -1592,7 +1597,7 @@
       "spec_rule_ids": ["SPEC-BODY-005", "CAND-BODY-CONDITIONAL-FIELDS", "CAND-SERVER-WEBSEARCH"],
       "coverage": "partial",
       "drift_status": "unknown",
-      "current_evidence": "默认工具样本没有 tool_choice；CAND-BODY-CONDITIONAL-FIELDS 与 CAND-SERVER-WEBSEARCH 已承接条件载体和 server-tool 强制选择线索，但无 gate 正例。",
+      "current_evidence": "已采基线工具样本没有 tool_choice；CAND-BODY-CONDITIONAL-FIELDS 与 CAND-SERVER-WEBSEARCH 已承接条件载体和 server-tool 强制选择线索，但无 gate 正例。",
       "next_probe": "构造 WebSearch、structured output 和普通 tool choice 分支。",
       "notes": "不能用普通 local tool 的三键 schema覆盖 server tool choice。"
     },
@@ -1609,7 +1614,7 @@
       "spec_rule_ids": ["SPEC-BODY-001", "CAND-BODY-CONDITIONAL-FIELDS", "CAND-FALLBACK-PROTOCOL"],
       "coverage": "partial",
       "drift_status": "unknown",
-      "current_evidence": "默认 body 无这两个键；CAND-BODY-CONDITIONAL-FIELDS 与 CAND-FALLBACK-PROTOCOL 已承接 fallbacks 和 fallback_credit_token，但缺 gate、token 与受控响应正例。",
+      "current_evidence": "SCOPE-J6 的 Body 无这两个键；CAND-BODY-CONDITIONAL-FIELDS 与 CAND-FALLBACK-PROTOCOL 已承接 fallbacks 和 fallback_credit_token，但缺 gate、token 与受控响应正例。",
       "next_probe": "在授权测试环境构造服务端 fallback/refusal 与 credit mint/echo，保留 token 仅作等长脱敏。",
       "notes": "token 为敏感值，禁止明文归档。"
     },
@@ -1626,7 +1631,7 @@
       "spec_rule_ids": ["SPEC-BODY-001", "CAND-BODY-CONDITIONAL-FIELDS", "CAND-CACHE-DIAGNOSIS"],
       "coverage": "partial",
       "drift_status": "unknown",
-      "current_evidence": "默认十键无 diagnostics；CAND-BODY-CONDITIONAL-FIELDS 与 CAND-CACHE-DIAGNOSIS 已承接 diagnostics.previous_message_id，但缺 gate 与关联前一响应 id 的正例。",
+      "current_evidence": "SCOPE-J6 的基线十键无 diagnostics；CAND-BODY-CONDITIONAL-FIELDS 与 CAND-CACHE-DIAGNOSIS 已承接 diagnostics.previous_message_id，但缺 gate 与关联前一响应 id 的正例。",
       "next_probe": "定位 2.1.220 cache-diagnosis gate，并构造有 previous request id 的多轮请求。",
       "notes": "需要同时验证对应 beta 与 400 strip/retry。"
     },
@@ -1640,10 +1645,10 @@
       "source_kind": "hitcc_runtime_analysis",
       "old_reachability": "conditional",
       "target_version": "2.1.220",
-      "spec_rule_ids": ["SPEC-BODY-001", "SPEC-RESP-001", "CAND-STREAM-NONSTREAM"],
+      "spec_rule_ids": ["SPEC-BODY-001", "SPEC-BODY-013", "SPEC-RESP-001", "CAND-STREAM-NONSTREAM"],
       "coverage": "partial",
       "drift_status": "unknown",
-      "current_evidence": "stream:true 默认请求已观察；CAND-STREAM-NONSTREAM 已承接 stream:false 降级及触发族，但 fallback body 与 max-token 限制仍未采集。",
+      "current_evidence": "SPEC-BODY-013 在 SCOPE-J6 观察到 stream:true；CAND-STREAM-NONSTREAM 已承接 stream:false 降级及触发族，但 fallback body 与 max-token 限制仍未采集。",
       "next_probe": "注入 streaming 404/idle/首事件前错误并捕获同步 fallback body。",
       "notes": "同一逻辑请求可能产生两个不同 client request id。"
     },
@@ -1742,10 +1747,10 @@
       "source_kind": "hitcc_runtime_analysis",
       "old_reachability": "live",
       "target_version": "2.1.220",
-      "spec_rule_ids": ["SPEC-BODY-005"],
-      "coverage": "covered",
+      "spec_rule_ids": ["SPEC-BODY-005", "CAND-TOOLS-EXTENDED"],
+      "coverage": "partial",
       "drift_status": "same",
-      "current_evidence": "Bash 与 Agent 单工具样本均为三键。",
+      "current_evidence": "缺完整 M 的 Bash 与 Agent 单工具样本观察到三键；SPEC-BODY-005 retained claim 只覆盖无工具时 tools=[]，CAND-TOOLS-EXTENDED 保留普通工具 schema 候选。",
       "next_probe": "补多工具、全部内置工具和 MCP 普通 schema。",
       "notes": "规则范围必须排除 server-side tool。"
     },
@@ -1864,7 +1869,7 @@
       "spec_rule_ids": ["SPEC-HDR-003", "SPEC-BETA-001"],
       "coverage": "partial",
       "drift_status": "changed",
-      "current_evidence": "三模型默认序列和 ANTHROPIC_BETAS 单值已覆盖，但工具/cache/fast/auto 条件组合没有规则矩阵。",
+      "current_evidence": "Sonnet 5 序列已有基线观察，Opus 只有一轮相邻观察，Haiku 没有成功正例；ANTHROPIC_BETAS 单值有样本，但工具/cache/fast/auto 条件组合没有规则矩阵。",
       "next_probe": "从 2.1.220 注册表生成 condition-to-beta 表并逐个选择可运行正例。",
       "notes": "注册存在不等于默认发送。"
     },
@@ -1881,7 +1886,7 @@
       "spec_rule_ids": ["SPEC-HDR-003", "CAND-EP-COUNTTOKENS", "CAND-EP-SDK-SURFACE", "CAND-EP-FULLSET"],
       "coverage": "partial",
       "drift_status": "unknown",
-      "current_evidence": "默认 beta 注册表已分析；CAND-EP-COUNTTOKENS 与 CAND-EP-SDK-SURFACE 已承接 supporting capability，但 2.1.220 CLI 可达性未逐项闭环。",
+      "current_evidence": "目标版本只有 beta 注册表静态线索；CAND-EP-COUNTTOKENS 与 CAND-EP-SDK-SURFACE 已承接 supporting capability，但 2.1.220 CLI 可达性未逐项闭环。",
       "next_probe": "先区分活 CLI 调用点与内嵌 SDK wrapper，再按端点采集。",
       "notes": "不得把五项 beta 全量加到默认 messages 请求。"
     },
@@ -1946,10 +1951,10 @@
       "source_kind": "hitcc_runtime_analysis",
       "old_reachability": "live",
       "target_version": "2.1.220",
-      "spec_rule_ids": ["SPEC-CONN-002", "CAND-RETRY-MATRIX"],
+      "spec_rule_ids": ["SPEC-CONN-002", "SPEC-CONN-003", "CAND-RETRY-MATRIX"],
       "coverage": "partial",
       "drift_status": "unknown",
-      "current_evidence": "SPEC-CONN-002 只证明至少 9 次；CAND-RETRY-MATRIX 已承接完整 retry 分支族，但未原子化默认上限与环境覆盖，也未测试终止边界。",
+      "current_evidence": "SPEC-CONN-003 以两轮连续 9 个受控 500 后仍发出第 10 个成功请求，证明普通路径重试下界至少为 9；A1 显示正常路径默认 maxRetries=10，但终止边界与覆盖优先级未做运行正反测试。",
       "next_probe": "分别注入 10、11、12 次失败，并设置 CLAUDE_CODE_MAX_RETRIES=2 做终止边界验证。",
       "notes": "旧版默认 10 不能直接写成 2.1.220 结论。"
     },
@@ -1966,7 +1971,7 @@
       "spec_rule_ids": ["SPEC-CONN-001", "SPEC-CONN-002", "CAND-RETRY-MATRIX"],
       "coverage": "partial",
       "drift_status": "unknown",
-      "current_evidence": "当前只运行验证 429、500 与断连；CAND-RETRY-MATRIX 已承接 401/403/408/409/429/529/5xx、Retry-After 与 x-should-retry 分支族。",
+      "current_evidence": "当前只取得 429、500 与断连的运行观察；CAND-RETRY-MATRIX 已承接 401/403/408/409/429/529/5xx、Retry-After 与 x-should-retry 分支族。",
       "next_probe": "对 408、409、401、502/503/529、x-should-retry true/false 逐项受控注入。",
       "notes": "remote 401/403 不属于默认 firstParty 推理 scope。"
     },
@@ -2051,9 +2056,9 @@
       "spec_rule_ids": ["SPEC-CONN-002", "CAND-RETRY-MATRIX"],
       "coverage": "partial",
       "drift_status": "unknown",
-      "current_evidence": "普通连续 500 退避有样本，CAND-RETRY-MATRIX 已承接状态与 header 判定族；持久性重试的独立计数和时钟仍未识别。",
+      "current_evidence": "当前只观察到两轮单次 500 后重发；没有可复算的连续 500 长链或退避时序。CAND-RETRY-MATRIX 仅保留状态与 Header 判定候选，持久性重试的独立计数和时钟仍未识别。",
       "next_probe": "在 2.1.220 静态定位持久性错误判定，再选择可控错误测独立计数。",
-      "notes": "约 35 秒封顶只适用于当前观测分支。"
+      "notes": "旧文档提出约 35 秒封顶；当前没有可复算长链，不能作为 2.1.220 已观察事实。"
     },
     {
       "clue_id": "HITCC-RETRY-008",
@@ -2099,12 +2104,12 @@
       "source_kind": "hitcc_runtime_analysis",
       "old_reachability": "live",
       "target_version": "2.1.220",
-      "spec_rule_ids": ["SPEC-EP-001"],
-      "coverage": "covered",
+      "spec_rule_ids": ["SPEC-EP-001", "SPEC-EP-003"],
+      "coverage": "partial",
       "drift_status": "same",
-      "current_evidence": "默认、模型与子 agent 请求均落到该端点。",
-      "next_probe": "为 WebSearch/structured output 单独绑定请求 body 形态。",
-      "notes": "端点相同不代表 payload 相同。"
+      "current_evidence": "SPEC-EP-001/003 只在受 host 与 /messages 预筛的 SCOPE-J6 中观察到精确 path 和 POST；structured output 与 server-side tool 路径没有完整 M 正例。",
+      "next_probe": "用无 path 预过滤的 HTTP exchange 发现复验 request target，并为 structured output 与每种 server-side tool 分别绑定完整 M。",
+      "notes": "端点相同不代表 payload 相同；当前观察不能外推到命题列举的全部分支。"
     },
     {
       "clue_id": "HITCC-EP-002",

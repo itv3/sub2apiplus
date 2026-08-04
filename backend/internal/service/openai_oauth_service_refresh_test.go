@@ -10,12 +10,13 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
-	"github.com/imroc/req/v3"
 	"github.com/stretchr/testify/require"
 )
 
 type openaiOAuthClientRefreshStub struct {
-	refreshCalls int32
+	refreshCalls    int32
+	refreshResponse *openai.TokenResponse
+	refreshErr      error
 }
 
 func (s *openaiOAuthClientRefreshStub) ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI, proxyURL, clientID string) (*openai.TokenResponse, error) {
@@ -24,19 +25,72 @@ func (s *openaiOAuthClientRefreshStub) ExchangeCode(ctx context.Context, code, c
 
 func (s *openaiOAuthClientRefreshStub) RefreshToken(ctx context.Context, refreshToken, proxyURL string) (*openai.TokenResponse, error) {
 	atomic.AddInt32(&s.refreshCalls, 1)
+	if s.refreshResponse != nil || s.refreshErr != nil {
+		return s.refreshResponse, s.refreshErr
+	}
 	return nil, errors.New("not implemented")
 }
 
 func (s *openaiOAuthClientRefreshStub) RefreshTokenWithClientID(ctx context.Context, refreshToken, proxyURL string, clientID string) (*openai.TokenResponse, error) {
 	atomic.AddInt32(&s.refreshCalls, 1)
+	if s.refreshResponse != nil || s.refreshErr != nil {
+		return s.refreshResponse, s.refreshErr
+	}
 	return nil, errors.New("not implemented")
+}
+
+func TestOpenAIOAuthService_RefreshAccountTokenDoesNotBypassPrivacyCooldown(t *testing.T) {
+	client := &openaiOAuthClientRefreshStub{refreshResponse: &openai.TokenResponse{
+		AccessToken: "rotated-access-token", RefreshToken: "rotated-refresh-token", ExpiresIn: 3600,
+	}}
+	svc := NewOpenAIOAuthService(nil, client)
+	defer svc.Stop()
+	capture := &privacyProductionCapture{}
+	var proxyURLs []string
+	var rolloutKeys []string
+	svc.SetPrivacyClientFactory(capture.factory(&proxyURLs, &rolloutKeys))
+
+	stableKey := buildOpenAIPrivacyRolloutKey("acct-cooldown")
+	account := &Account{
+		ID:       78,
+		Platform: PlatformOpenAI,
+		Type:     AccountTypeOAuth,
+		Credentials: map[string]any{
+			"access_token":       "old-access-token",
+			"refresh_token":      "old-refresh-token",
+			"chatgpt_account_id": "acct-cooldown",
+		},
+		Extra: map[string]any{
+			"privacy_mode":            PrivacyModeCFBlocked,
+			privacyRetryAfterExtraKey: time.Now().UTC().Add(time.Hour).Format(time.RFC3339),
+			privacyRolloutKeyExtraKey: stableKey,
+		},
+	}
+
+	info, err := svc.RefreshAccountToken(context.Background(), account)
+	require.NoError(t, err)
+	require.Equal(t, "rotated-access-token", info.AccessToken)
+	for _, request := range capture.snapshot() {
+		require.NotEqual(t, "/backend-api/settings/account_user_setting", request.URL.Path,
+			"账号刷新不得在读取冷却状态前调用 settings")
+	}
+	for _, rolloutKey := range rolloutKeys {
+		require.Equal(t, stableKey, rolloutKey)
+	}
+
+	requestCount := len(capture.snapshot())
+	result := ensureOpenAIPrivacyForAccount(
+		context.Background(), svc.privacyClientFactory, account, "", false,
+	)
+	require.Empty(t, result.Mode, "冷却期内统一入口必须直接跳过")
+	require.Len(t, capture.snapshot(), requestCount, "冷却检查不得产生 settings 请求")
 }
 
 func TestOpenAIOAuthService_RefreshAccountToken_NoRefreshTokenUsesExistingAccessToken(t *testing.T) {
 	client := &openaiOAuthClientRefreshStub{}
 	svc := NewOpenAIOAuthService(nil, client)
 	var privacyClientCalls int32
-	svc.SetPrivacyClientFactory(func(proxyURL string) (*req.Client, error) {
+	svc.SetPrivacyClientFactory(func(request PrivacyClientRequest) (*PrivacyHTTPClient, error) {
 		atomic.AddInt32(&privacyClientCalls, 1)
 		return nil, errors.New("stop before request")
 	})
@@ -63,6 +117,7 @@ func TestOpenAIOAuthService_RefreshAccountToken_NoRefreshTokenUsesExistingAccess
 }
 
 func TestOpenAIOAuthService_RefreshAccountToken_PATIgnoresStaleRefreshToken(t *testing.T) {
+	configureObserveGuardForLocalHTTPTest(t)
 	client := &openaiOAuthClientRefreshStub{}
 	var whoamiCalls int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -145,6 +200,7 @@ func TestOpenAITokenRefresher_NeedsRefresh_SkipsAccountWithoutRefreshToken(t *te
 }
 
 func TestOpenAITokenRefresher_Refresh_PATRemovesStaleOAuthFields(t *testing.T) {
+	configureObserveGuardForLocalHTTPTest(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "application/json")
 		_, _ = w.Write([]byte(`{

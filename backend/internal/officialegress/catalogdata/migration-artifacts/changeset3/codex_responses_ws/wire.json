@@ -1,0 +1,563 @@
+{
+  "schema_version": 2,
+  "capture_kind": "adapter_terminal_final_wire",
+  "sink_id": "codex.responses.ws",
+  "route": {
+    "method": "GET",
+    "host": "chatgpt.com",
+    "path": "/backend-api/codex/responses",
+    "purpose": "user_request.responses_ws",
+    "protocol": "websocket"
+  },
+  "authority_id": "codex.executor.changeset1b",
+  "has_finalization_token": true,
+  "endpoint_id": "responses_ws",
+  "backend": "websocket",
+  "adapter_id": "officialegress.websocket",
+  "transport_id": "codex-0.145.0-ws-rustls",
+  "release_modes": [
+    "active",
+    "previous"
+  ],
+  "credential_material": "synthetic_attempt_local_redacted",
+  "final_wire_manifest": {
+    "path": "docs/changeset3/post_identity_authority_refactor_final_wire/manifest.json",
+    "sha256": "c824ffb0ab6e2429c09f9ac517cf3e6f96860c7c6ef77c229757fd690bdbcf0f"
+  },
+  "secret_scan": {
+    "path": "docs/changeset3/post_identity_authority_refactor_final_wire/secret-scan.json",
+    "sha256": "94e400de321b64784203041ac6320186b6b8757723205681306333318f372050"
+  },
+  "active_capture_sha256": "b3f9f99e342eb7c4a92685d25cfc564d1a84a269b01ba92ead911a99ab3d3799",
+  "previous_capture_sha256": "25a2e33172b4201edfae635c43c5b88b5cb914f87c70b06437b5deda07ec2a52",
+  "active_capture": {
+    "sink_id": "codex.responses.ws",
+    "anchor": false,
+    "release_mode": "active",
+    "method": "GET",
+    "host_template": "chatgpt.com",
+    "final_host": "chatgpt.com",
+    "path_template": "/backend-api/codex/responses",
+    "final_path": "/backend-api/codex/responses",
+    "protocol": "websocket",
+    "purpose": "user_request.responses_ws",
+    "endpoint_id": "responses_ws",
+    "authority_id": "codex.executor.changeset1b",
+    "has_finalization_token": true,
+    "terminal_guard_allow": true,
+    "profile_validation_result": "passed",
+    "attempt_ordinal": 1,
+    "attempt_reason": "initial",
+    "release_digest": "b74f979845113fbacfed216a39387d5abd589e5d9ed45eb430d3f46e9925e1f2",
+    "profile_digest": "7d9c22ce150eb8395cb6ad66a5b77175c48840c1129710e32e484b50b9e63eb5",
+    "bundle_digest": "a050896d8941e0a80ac55c65527ef0909a79363b219fb5e655ebe912136aa2c9",
+    "backend": "websocket",
+    "adapter_id": "officialegress.websocket",
+    "transport_id": "codex-0.145.0-ws-rustls",
+    "connection_identity_digest": "fc6b3cec4d7b493f69236e4ca074f7bc1c8bc9c059a8d6584783cce37ff5e6cf",
+    "connection_pool_digest": "6749b38f34504f3a5ed8076dec8b7098f42de92465e035f8d68192e96a83b99d",
+    "tls_profile_digest": "77fc884edcd2edbea0696237cfaf644b8813ed421f34dfa6696d582686d997f7",
+    "normalization": {
+      "HeaderMode": "preserve",
+      "SuppressDefaultUserAgent": false,
+      "WebSocketCompressionOffer": "permessage-deflate; client_max_window_bits"
+    },
+    "ordered_headers": [
+      {
+        "name": "host",
+        "wire_name": "Host",
+        "present": true,
+        "source": "transport_generated",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "chatgpt.com",
+        "value_sha256": "c6240ca88eed5b237451d4ceab51a5df1e8bc3b0a4a0e099fbe4b9f0d5cf23a2"
+      },
+      {
+        "name": "connection",
+        "wire_name": "Connection",
+        "present": true,
+        "source": "generated",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "Upgrade",
+        "value_sha256": "7ec0261b8e8aa3e0b1affde5f18ca1930ae73d81a5303d667aae9ffd2803cbc7"
+      },
+      {
+        "name": "upgrade",
+        "wire_name": "Upgrade",
+        "present": true,
+        "source": "generated",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "websocket",
+        "value_sha256": "7ce54cbababdd64826b853179905315617306f430e5154177ddbed04c282b7da"
+      },
+      {
+        "name": "sec-websocket-version",
+        "wire_name": "Sec-WebSocket-Version",
+        "present": true,
+        "source": "generated",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "13",
+        "value_sha256": "3fdba35f04dc8c462986c992bcf875546257113072a909c162f7e470e581e278"
+      },
+      {
+        "name": "sec-websocket-key",
+        "wire_name": "Sec-WebSocket-Key",
+        "present": true,
+        "source": "transport_generated",
+        "value_kind": "transport_generated_synthetic_placeholder"
+      },
+      {
+        "name": "version",
+        "wire_name": "version",
+        "present": true,
+        "source": "constant",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "0.145.0",
+        "value_sha256": "600e7465057d457ff6bc81d82d1b2f1ecfc738421de8ac6c0ede05675df78aac"
+      },
+      {
+        "name": "x-codex-beta-features",
+        "wire_name": "x-codex-beta-features",
+        "present": true,
+        "source": "feature",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "remote_compaction_v2",
+        "value_sha256": "90aa3351ab4db547752c7bbb9ce0f2aa135658049e7582c25e9dd42147b735a4"
+      },
+      {
+        "name": "x-client-request-id",
+        "wire_name": "x-client-request-id",
+        "present": true,
+        "source": "session",
+        "value_kind": "synthetic_dynamic_identity"
+      },
+      {
+        "name": "session-id",
+        "wire_name": "session-id",
+        "present": true,
+        "source": "session",
+        "value_kind": "synthetic_dynamic_identity"
+      },
+      {
+        "name": "thread-id",
+        "wire_name": "thread-id",
+        "present": true,
+        "source": "session",
+        "value_kind": "synthetic_dynamic_identity"
+      },
+      {
+        "name": "x-codex-window-id",
+        "wire_name": "x-codex-window-id",
+        "present": true,
+        "source": "session",
+        "value_kind": "synthetic_dynamic_identity"
+      },
+      {
+        "name": "x-codex-turn-metadata",
+        "wire_name": "x-codex-turn-metadata",
+        "present": true,
+        "source": "turn",
+        "value_kind": "synthetic_dynamic_identity"
+      },
+      {
+        "name": "x-codex-parent-thread-id",
+        "wire_name": "x-codex-parent-thread-id",
+        "source": "session",
+        "value_kind": "static_or_synthetic_safe"
+      },
+      {
+        "name": "x-openai-subagent",
+        "wire_name": "x-openai-subagent",
+        "source": "turn",
+        "value_kind": "static_or_synthetic_safe"
+      },
+      {
+        "name": "x-openai-memgen-request",
+        "wire_name": "x-openai-memgen-request",
+        "source": "turn",
+        "value_kind": "static_or_synthetic_safe"
+      },
+      {
+        "name": "openai-beta",
+        "wire_name": "openai-beta",
+        "present": true,
+        "source": "constant",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "responses_websockets=2026-02-06",
+        "value_sha256": "091dd4af333f9ab1d1d6a4e01d36a978d5ec7c15310d4066524c0e9c22d0c4ea"
+      },
+      {
+        "name": "x-responsesapi-include-timing-metrics",
+        "wire_name": "x-responsesapi-include-timing-metrics",
+        "source": "feature",
+        "value_kind": "static_or_synthetic_safe"
+      },
+      {
+        "name": "originator",
+        "wire_name": "originator",
+        "present": true,
+        "source": "process",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "codex_exec",
+        "value_sha256": "3b25e661587b2485f7ff418499cefd0c7c336e201ebd5fe41bccb47cf60d4da5"
+      },
+      {
+        "name": "user-agent",
+        "wire_name": "user-agent",
+        "present": true,
+        "source": "process",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "codex_exec/0.145.0 (Ubuntu 24.4.0; x86_64) unknown (codex_exec; 0.145.0)",
+        "value_sha256": "287b5df4a2d87dcd7128baf756d6d96d93ee318f148add6c38a8ca7693281c08"
+      },
+      {
+        "name": "x-openai-internal-codex-residency",
+        "wire_name": "x-openai-internal-codex-residency",
+        "source": "managed_config",
+        "value_kind": "static_or_synthetic_safe"
+      },
+      {
+        "name": "authorization",
+        "wire_name": "authorization",
+        "present": true,
+        "source": "authentication",
+        "value_kind": "attempt_authentication"
+      },
+      {
+        "name": "chatgpt-account-id",
+        "wire_name": "chatgpt-account-id",
+        "present": true,
+        "source": "account",
+        "value_kind": "synthetic_dynamic_identity"
+      },
+      {
+        "name": "x-openai-fedramp",
+        "wire_name": "x-openai-fedramp",
+        "source": "account",
+        "value_kind": "static_or_synthetic_safe"
+      },
+      {
+        "name": "sec-websocket-extensions",
+        "wire_name": "sec-websocket-extensions",
+        "present": true,
+        "source": "generated",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "permessage-deflate; client_max_window_bits",
+        "value_sha256": "15446415d580a8f8733f9c85a558c84539cb4b1ea79ba353f4851b1d60c0fedc"
+      }
+    ],
+    "body": {
+      "encoding": "websocket_json",
+      "ordered_fields": null,
+      "type_shape": null,
+      "synthetic_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "compression": "permessage_deflate_context_takeover",
+      "applied_compression": "none",
+      "compression_level": 3,
+      "credential_bearing": false
+    },
+    "websocket": {
+      "handshake_generated_headers": [
+        "Host",
+        "Connection",
+        "Upgrade",
+        "Sec-WebSocket-Version",
+        "Sec-WebSocket-Key"
+      ],
+      "compression_offer": "permessage-deflate; client_max_window_bits",
+      "context_takeover": true,
+      "event_matrix": [
+        {
+          "event_type": "response.create",
+          "frame_type": "text",
+          "policy": "profile_finalized",
+          "frame_ordinal": 1,
+          "ordered_fields": [
+            "type",
+            "model",
+            "previous_response_id",
+            "input",
+            "tool_choice",
+            "parallel_tool_calls",
+            "reasoning",
+            "store",
+            "stream",
+            "include",
+            "prompt_cache_key",
+            "client_metadata"
+          ],
+          "type_shape_sha256": "306b7fc1d2933b6ac682a8669d9aa38f518fd73c991ca2869283a6408ae2373c",
+          "body_sha256": "25b21fcac7db8fb0badc17c8631dc2f5ea7c0c1092825e240e98119973af5243"
+        }
+      ]
+    },
+    "single_use_raw_stream": false,
+    "single_use_consumption_count": 0
+  },
+  "previous_capture": {
+    "sink_id": "codex.responses.ws",
+    "anchor": false,
+    "release_mode": "previous",
+    "method": "GET",
+    "host_template": "chatgpt.com",
+    "final_host": "chatgpt.com",
+    "path_template": "/backend-api/codex/responses",
+    "final_path": "/backend-api/codex/responses",
+    "protocol": "websocket",
+    "purpose": "user_request.responses_ws",
+    "endpoint_id": "responses_ws",
+    "authority_id": "codex.executor.changeset1b",
+    "has_finalization_token": true,
+    "terminal_guard_allow": true,
+    "profile_validation_result": "passed",
+    "attempt_ordinal": 1,
+    "attempt_reason": "initial",
+    "release_digest": "bd45d62b0c6e5945e152b7be529ce17212f4b9fd72f231ded6631d540a3b3511",
+    "profile_digest": "7d9c22ce150eb8395cb6ad66a5b77175c48840c1129710e32e484b50b9e63eb5",
+    "bundle_digest": "1d20582c35c175c44be2e2a1c608221964646cb07af3e7338287fcdf048801f6",
+    "backend": "websocket",
+    "adapter_id": "officialegress.websocket",
+    "transport_id": "codex-0.145.0-ws-rustls",
+    "connection_identity_digest": "526ffff7424a6bd67331ae9c03b3c27e736766e7d5ae67ee276f00d68f64cbf2",
+    "connection_pool_digest": "6a05c72a04bb47b816d8b1b4fd5c7bb492ac7371df2f5b537f32e81a7fef1127",
+    "tls_profile_digest": "77fc884edcd2edbea0696237cfaf644b8813ed421f34dfa6696d582686d997f7",
+    "normalization": {
+      "HeaderMode": "preserve",
+      "SuppressDefaultUserAgent": false,
+      "WebSocketCompressionOffer": "permessage-deflate; client_max_window_bits"
+    },
+    "ordered_headers": [
+      {
+        "name": "host",
+        "wire_name": "Host",
+        "present": true,
+        "source": "transport_generated",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "chatgpt.com",
+        "value_sha256": "c6240ca88eed5b237451d4ceab51a5df1e8bc3b0a4a0e099fbe4b9f0d5cf23a2"
+      },
+      {
+        "name": "connection",
+        "wire_name": "Connection",
+        "present": true,
+        "source": "generated",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "Upgrade",
+        "value_sha256": "7ec0261b8e8aa3e0b1affde5f18ca1930ae73d81a5303d667aae9ffd2803cbc7"
+      },
+      {
+        "name": "upgrade",
+        "wire_name": "Upgrade",
+        "present": true,
+        "source": "generated",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "websocket",
+        "value_sha256": "7ce54cbababdd64826b853179905315617306f430e5154177ddbed04c282b7da"
+      },
+      {
+        "name": "sec-websocket-version",
+        "wire_name": "Sec-WebSocket-Version",
+        "present": true,
+        "source": "generated",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "13",
+        "value_sha256": "3fdba35f04dc8c462986c992bcf875546257113072a909c162f7e470e581e278"
+      },
+      {
+        "name": "sec-websocket-key",
+        "wire_name": "Sec-WebSocket-Key",
+        "present": true,
+        "source": "transport_generated",
+        "value_kind": "transport_generated_synthetic_placeholder"
+      },
+      {
+        "name": "version",
+        "wire_name": "version",
+        "present": true,
+        "source": "constant",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "0.145.0",
+        "value_sha256": "600e7465057d457ff6bc81d82d1b2f1ecfc738421de8ac6c0ede05675df78aac"
+      },
+      {
+        "name": "x-codex-beta-features",
+        "wire_name": "x-codex-beta-features",
+        "present": true,
+        "source": "feature",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "remote_compaction_v2",
+        "value_sha256": "90aa3351ab4db547752c7bbb9ce0f2aa135658049e7582c25e9dd42147b735a4"
+      },
+      {
+        "name": "x-client-request-id",
+        "wire_name": "x-client-request-id",
+        "present": true,
+        "source": "session",
+        "value_kind": "synthetic_dynamic_identity"
+      },
+      {
+        "name": "session-id",
+        "wire_name": "session-id",
+        "present": true,
+        "source": "session",
+        "value_kind": "synthetic_dynamic_identity"
+      },
+      {
+        "name": "thread-id",
+        "wire_name": "thread-id",
+        "present": true,
+        "source": "session",
+        "value_kind": "synthetic_dynamic_identity"
+      },
+      {
+        "name": "x-codex-window-id",
+        "wire_name": "x-codex-window-id",
+        "present": true,
+        "source": "session",
+        "value_kind": "synthetic_dynamic_identity"
+      },
+      {
+        "name": "x-codex-turn-metadata",
+        "wire_name": "x-codex-turn-metadata",
+        "present": true,
+        "source": "turn",
+        "value_kind": "synthetic_dynamic_identity"
+      },
+      {
+        "name": "x-codex-parent-thread-id",
+        "wire_name": "x-codex-parent-thread-id",
+        "source": "session",
+        "value_kind": "static_or_synthetic_safe"
+      },
+      {
+        "name": "x-openai-subagent",
+        "wire_name": "x-openai-subagent",
+        "source": "turn",
+        "value_kind": "static_or_synthetic_safe"
+      },
+      {
+        "name": "x-openai-memgen-request",
+        "wire_name": "x-openai-memgen-request",
+        "source": "turn",
+        "value_kind": "static_or_synthetic_safe"
+      },
+      {
+        "name": "openai-beta",
+        "wire_name": "openai-beta",
+        "present": true,
+        "source": "constant",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "responses_websockets=2026-02-06",
+        "value_sha256": "091dd4af333f9ab1d1d6a4e01d36a978d5ec7c15310d4066524c0e9c22d0c4ea"
+      },
+      {
+        "name": "x-responsesapi-include-timing-metrics",
+        "wire_name": "x-responsesapi-include-timing-metrics",
+        "source": "feature",
+        "value_kind": "static_or_synthetic_safe"
+      },
+      {
+        "name": "originator",
+        "wire_name": "originator",
+        "present": true,
+        "source": "process",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "codex_exec",
+        "value_sha256": "3b25e661587b2485f7ff418499cefd0c7c336e201ebd5fe41bccb47cf60d4da5"
+      },
+      {
+        "name": "user-agent",
+        "wire_name": "user-agent",
+        "present": true,
+        "source": "process",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "codex_exec/0.145.0 (Ubuntu 24.4.0; x86_64) xterm-256color (codex_exec; 0.145.0)",
+        "value_sha256": "c75274444156914aec4432d432ae0ae8cf787761c715ff557debc3a0711bac79"
+      },
+      {
+        "name": "x-openai-internal-codex-residency",
+        "wire_name": "x-openai-internal-codex-residency",
+        "source": "managed_config",
+        "value_kind": "static_or_synthetic_safe"
+      },
+      {
+        "name": "authorization",
+        "wire_name": "authorization",
+        "present": true,
+        "source": "authentication",
+        "value_kind": "attempt_authentication"
+      },
+      {
+        "name": "chatgpt-account-id",
+        "wire_name": "chatgpt-account-id",
+        "present": true,
+        "source": "account",
+        "value_kind": "synthetic_dynamic_identity"
+      },
+      {
+        "name": "x-openai-fedramp",
+        "wire_name": "x-openai-fedramp",
+        "source": "account",
+        "value_kind": "static_or_synthetic_safe"
+      },
+      {
+        "name": "sec-websocket-extensions",
+        "wire_name": "sec-websocket-extensions",
+        "present": true,
+        "source": "generated",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "permessage-deflate; client_max_window_bits",
+        "value_sha256": "15446415d580a8f8733f9c85a558c84539cb4b1ea79ba353f4851b1d60c0fedc"
+      }
+    ],
+    "body": {
+      "encoding": "websocket_json",
+      "ordered_fields": null,
+      "type_shape": null,
+      "synthetic_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "compression": "permessage_deflate_context_takeover",
+      "applied_compression": "none",
+      "compression_level": 3,
+      "credential_bearing": false
+    },
+    "websocket": {
+      "handshake_generated_headers": [
+        "Host",
+        "Connection",
+        "Upgrade",
+        "Sec-WebSocket-Version",
+        "Sec-WebSocket-Key"
+      ],
+      "compression_offer": "permessage-deflate; client_max_window_bits",
+      "context_takeover": true,
+      "event_matrix": [
+        {
+          "event_type": "response.create",
+          "frame_type": "text",
+          "policy": "profile_finalized",
+          "frame_ordinal": 1,
+          "ordered_fields": [
+            "type",
+            "model",
+            "previous_response_id",
+            "input",
+            "tool_choice",
+            "parallel_tool_calls",
+            "reasoning",
+            "store",
+            "stream",
+            "include",
+            "prompt_cache_key",
+            "client_metadata"
+          ],
+          "type_shape_sha256": "306b7fc1d2933b6ac682a8669d9aa38f518fd73c991ca2869283a6408ae2373c",
+          "body_sha256": "25b21fcac7db8fb0badc17c8631dc2f5ea7c0c1092825e240e98119973af5243"
+        }
+      ]
+    },
+    "single_use_raw_stream": false,
+    "single_use_consumption_count": 0
+  },
+  "comparison_result": "scoped_reference_match_with_explicit_approved_deltas",
+  "redaction": "Authorization、attestation、cookie 与 refresh token 仅保留 attempt-local 类型；所有值均为合成数据。"
+}

@@ -1,0 +1,10 @@
+{
+  "schema_version": "changeset5-workspace-baseline-receipt/v1",
+  "changeset": "5",
+  "manifest_path": "docs/changeset5/workspace-baseline/manifest.json",
+  "manifest_sha256": "c0d23f184627ff2d1b2aa7705db63d9a7f11c5bcc31adbe64cc9a72a11a50162",
+  "protected_prior_count": 546,
+  "incidental_non_authoritative_count": 2,
+  "changeset5_prerequisite_count": 10,
+  "file_type_policy": "regular_or_explicit_absent; symlink_forbidden"
+}

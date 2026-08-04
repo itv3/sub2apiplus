@@ -1,0 +1,19 @@
+{
+  "schema_version": "changeset5-pre-refactor-final-wire-receipt/v1",
+  "changeset": "5",
+  "baseline": "changeset4_accepted_workspace_before_changeset5_refactor",
+  "manifest_path": "docs/changeset5/pre-refactor-final-wire/manifest.json",
+  "manifest_sha256": "959b3179c0a54ffa81fa58057e43994e237f1f8565de0f28788a01f18e2d316d",
+  "secret_scan_path": "docs/changeset5/pre-refactor-final-wire/secret-scan.json",
+  "secret_scan_sha256": "6446d2ce06d745dd1240a513b77d261cca89a719ab9e6e34164891fce60e7488",
+  "route_count": 28,
+  "capture_count": 56,
+  "capture_key_set_sha256": "41be9cfa14a60bcc098c2bcfa4404e52d6a5637a239ecf19c306b1a4c2425057",
+  "classification_upstream_base": "26d894ef4f50645a4bf1030e378ac892f17d0223",
+  "observed_remote_head": "825ca7b1fc9335f904bc077f051de815fb61e47f",
+  "rules": [
+    "远端观察值不参与本变更集 diff、分类或验收",
+    "变更集 5 完成后必须从当前生产 semantic bridge 重建并逐 capture 严格比较",
+    "除另行精确登记的非 wire 元数据外不允许任何 capture 差异"
+  ]
+}

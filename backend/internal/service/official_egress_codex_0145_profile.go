@@ -6,11 +6,17 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
+
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
+	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 )
+
+const officialCodexProfileVersion = officialCodexVersion0145
 
 const (
 	officialCodexVersion0145 = "0.145.0"
@@ -18,8 +24,9 @@ const (
 	officialCodexSurfaceExec = "exec"
 	officialCodexSurfaceTUI  = "tui"
 
-	officialCodexTransportHTTPDefault = "codex-0.145.0-http-ubuntu24-native"
-	officialCodexTransportWS          = "codex-0.145.0-ws-rustls"
+	officialCodexTransportHTTPDefault   = "codex-0.145.0-http-ubuntu24-native"
+	officialCodexTransportHTTPLongLived = "codex-0.145.0-http-ubuntu24-native-long-lived"
+	officialCodexTransportWS            = "codex-0.145.0-ws-rustls"
 
 	// 协议标识不含版本号，是跨版本稳定的语义键；执行层按它查传输画像，
 	// 而不是写死带版本号的传输 ID。
@@ -88,9 +95,9 @@ const (
 	officialCodexSourceFeature        = "feature"
 )
 
-// codex0145EndpointID 是 0.145.0 画像允许的端点标识类型。
+// codexEndpointID 是 0.145.0 画像允许的端点标识类型。
 // 动态字符串必须显式转换后才能进入解析器，避免调用方误把路径或别名当作端点 ID。
-type codex0145EndpointID string
+type codexEndpointID string
 
 // officialCodexVersionProfile 是一个完整、不可变快照的内存表示。
 //
@@ -192,25 +199,23 @@ type officialCodexFilesProfile struct {
 
 // officialCodexTransportProfile 描述 HTTP 或 WS 的传输和连接边界。
 type officialCodexTransportProfile struct {
-	ID                       string
-	Protocol                 string
-	PlatformCondition        string
-	TLSStack                 string
-	CipherSuites             []uint16
-	SupportedGroups          []uint16
-	SignatureAlgorithms      []uint16
-	ALPN                     []string
-	Extensions               []uint16
-	RandomizeExtensions      bool
-	SupportedVersions        []uint16
-	KeyShareGroups           []uint16
-	PSKModes                 []uint16
-	TLSMinVersion            uint16
-	TLSMaxVersion            uint16
-	LowercaseHTTPHeaders     bool
-	CrossCallConnectionReuse bool
-	RetryReusesClient        bool
-	WebSocket                *officialCodexWebSocketTransportProfile
+	ID                   string
+	Protocol             string
+	PlatformCondition    string
+	TLSStack             string
+	CipherSuites         []uint16
+	SupportedGroups      []uint16
+	SignatureAlgorithms  []uint16
+	ALPN                 []string
+	Extensions           []uint16
+	RandomizeExtensions  bool
+	SupportedVersions    []uint16
+	KeyShareGroups       []uint16
+	PSKModes             []uint16
+	TLSMinVersion        uint16
+	TLSMaxVersion        uint16
+	LowercaseHTTPHeaders bool
+	WebSocket            *officialCodexWebSocketTransportProfile
 }
 
 // officialCodexWebSocketTransportProfile 保存 WS 特有的握手和帧参数。
@@ -281,78 +286,187 @@ type officialCodexBodyField struct {
 	Condition string
 }
 
-type officialCodexProfileSnapshot struct {
-	JSON   string
-	Digest string
-}
+var officialCodexFormalProfileCache sync.Map
 
-var defaultOfficialCodex0145Snapshot = mustBuildOfficialCodex0145Snapshot()
-
-// officialCodexVersionSnapshots 是版本快照注册表。升级 Codex 版本时只在此登记新
-// 快照并调整 registry 的 release 指针，不修改稳定执行引擎，也不修改 §3.5.2 的
-// 共享接入点——这正是 §4.5.13 承诺的落地方式。
-var officialCodexVersionSnapshots = map[string]officialCodexProfileSnapshot{
-	officialCodexVersion0145: defaultOfficialCodex0145Snapshot,
-}
-
-// officialCodexCompiledProfiles 是注册表内每个快照在进程启动时一次性解码、校验并
-// 核对摘要后的只读单例。
-//
-// 画像是进程级不可变常量。此前每次解析都要重新解码 48 KB 快照、执行全量结构校验
-// 并重算 SHA-256，实测单次约 449 μs / 239 KB / 1790 次分配，而一条 HTTP 定型链路
-// 会重复触发十余次。这笔开销换不到任何隔离收益：真正会被执行器就地改写的是端点级
-// 数据，那部分由 ResolveEndpoint 单独深拷贝。
-//
-// 解析结果按只读契约使用，调用方一律不得写入其字段；需要可变副本的场景（画像
-// mutation 测试、未来的版本派生）必须显式调用 cloneOfficialCodexVersionProfile。
-var officialCodexCompiledProfiles = mustCompileOfficialCodexVersionSnapshots()
-
-func mustCompileOfficialCodexVersionSnapshots() map[string]*officialCodexVersionProfile {
-	compiled := make(map[string]*officialCodexVersionProfile, len(officialCodexVersionSnapshots))
-	for version, snapshot := range officialCodexVersionSnapshots {
-		profile, err := compileOfficialCodexVersionSnapshot(version, snapshot)
-		if err != nil {
-			panic(err)
-		}
-		compiled[version] = profile
-	}
-	return compiled
-}
-
-// compileOfficialCodexVersionSnapshot 执行原先散落在解析路径上的全部一次性工作：
-// 解码、结构校验和摘要自洽核对。任一步失败都必须在进程启动时暴露，而不是等到
-// 请求期才在某个调用点上返回错误。
-func compileOfficialCodexVersionSnapshot(
-	version string,
-	snapshot officialCodexProfileSnapshot,
-) (*officialCodexVersionProfile, error) {
-	var profile officialCodexVersionProfile
-	if err := json.Unmarshal([]byte(snapshot.JSON), &profile); err != nil {
-		return nil, fmt.Errorf("解码 Codex %s 版本画像：%w", version, err)
-	}
-	if err := validateOfficialCodexVersionProfile(profile); err != nil {
-		return nil, fmt.Errorf("校验 Codex %s 版本画像：%w", version, err)
-	}
-	digest, err := digestOfficialCodexVersionProfile(profile)
-	if err != nil {
-		return nil, err
-	}
-	if digest != snapshot.Digest || profile.Digest != digest {
-		return nil, fmt.Errorf("Codex %s 版本画像摘要不一致", version)
-	}
-	return &profile, nil
-}
-
-// resolveCodex0145VersionProfile 只接受精确三段版本，不做 trim、别名或回退；
+// resolveCodexVersionProfile 只接受精确三段版本，不做 trim、别名或回退；
 // 未登记的版本按未知处理，不回退到任何既有快照。
 //
 // 返回的是进程内只读单例，调用方不得修改其任何字段。
-func resolveCodex0145VersionProfile(version string) (*officialCodexVersionProfile, error) {
-	profile, exists := officialCodexCompiledProfiles[version]
-	if !exists {
+func resolveCodexVersionProfile(version string) (*officialCodexVersionProfile, error) {
+	var selected officialegress.ResolvedCodexRelease
+	found := false
+	for _, mode := range []officialegress.ReleaseMode{
+		officialegress.ReleaseModeActive,
+		officialegress.ReleaseModePrevious,
+	} {
+		release, err := officialegress.DefaultReleaseCatalog().Resolve(mode)
+		if err != nil {
+			return nil, err
+		}
+		if release.Version() != version {
+			continue
+		}
+		if found && selected.ProfileDigest() != release.ProfileDigest() {
+			return nil, fmt.Errorf("版本 %q 对应多个不可互换的 ProfileDigest", version)
+		}
+		selected = release
+		found = true
+	}
+	if !found {
 		return nil, fmt.Errorf("未知 Codex 官方出站版本画像：%q", version)
 	}
-	return profile, nil
+	return resolveOfficialCodexReleaseProfile(selected)
+}
+
+func resolveOfficialCodexReleaseProfile(
+	release officialegress.ResolvedCodexRelease,
+) (*officialCodexVersionProfile, error) {
+	executable := release.ExecutableProfile()
+	if cached, ok := officialCodexFormalProfileCache.Load(executable.Digest()); ok {
+		return cached.(*officialCodexVersionProfile), nil
+	}
+	profile := projectExecutableCodexProfile(executable)
+	if profile.Digest != release.ExecutableProfileDigest() {
+		return nil, errors.New("service 投影与正式 ExecutableProfileDigest 不一致")
+	}
+	actual, _ := officialCodexFormalProfileCache.LoadOrStore(executable.Digest(), &profile)
+	return actual.(*officialCodexVersionProfile), nil
+}
+
+// projectExecutableCodexProfile 是旧 service 数据形状的兼容投影。它只从启动期已验证的
+// ExecutableProfile 构造，不再序列化 ProfileSpec/RawJSON；RequiredRules 因而保持为空。
+func projectExecutableCodexProfile(
+	executable profilecontract.ExecutableProfile,
+) officialCodexVersionProfile {
+	features := executable.Features()
+	tool := executable.ToolPresentation()
+	subagents := executable.Subagents()
+	files := executable.Files()
+	profile := officialCodexVersionProfile{
+		Version: executable.Version(), Digest: executable.Digest(),
+		FeatureDefaults: officialCodexFeatureDefaults{
+			SupportsWebSockets:             features.SupportsWebSockets,
+			RemoteCompactionV2:             features.RemoteCompactionV2,
+			EnableRequestCompression:       features.EnableRequestCompression,
+			RequestCompressionLevel:        features.RequestCompressionLevel,
+			RuntimeMetrics:                 features.RuntimeMetrics,
+			ForceHTTPFallback:              features.ForceHTTPFallback,
+			ResponsesLiteFromModelManifest: features.ResponsesLiteFromModelManifest,
+			ParallelToolsFromModelManifest: features.ParallelToolsFromModelManifest,
+		},
+		ToolPresentation: officialCodexToolPresentationProfile{
+			EndpointIDs:                  append([]string(nil), tool.EndpointIDs...),
+			HostedImageGenerationAllowed: tool.HostedImageGenerationAllowed,
+			HostedImageGenerationType:    tool.HostedImageGenerationType,
+			NamespaceType:                tool.NamespaceType, NamespaceName: tool.NamespaceName,
+			FunctionType: tool.FunctionType, FunctionName: tool.FunctionName,
+			LiteCarrierItemType:     tool.LiteCarrierItemType,
+			NamespaceRequiredFields: append([]string(nil), tool.NamespaceRequiredFields...),
+			FunctionRequiredFields:  append([]string(nil), tool.FunctionRequiredFields...),
+		},
+		Subagents: officialCodexSubagentProfile{
+			OtherLabelAllowed:     subagents.OtherLabelAllowed,
+			OtherThreadSource:     subagents.OtherThreadSource,
+			OtherHeaderEqualsKind: subagents.OtherHeaderEqualsKind,
+		},
+		Files: officialCodexFilesProfile{
+			CreateEndpointID:         files.CreateEndpointID,
+			BlobUploadEndpointID:     files.BlobUploadEndpointID,
+			UploadedEndpointID:       files.UploadedEndpointID,
+			UploadLimitBytes:         files.UploadLimitBytes,
+			RequestTimeoutMillis:     files.RequestTimeoutMillis,
+			FinalizeTimeoutMillis:    files.FinalizeTimeoutMillis,
+			FinalizeRetryDelayMillis: files.FinalizeRetryDelayMillis,
+			UseCase:                  files.UseCase, URIPrefix: files.URIPrefix,
+			FinalizeSuccessStatus: files.FinalizeSuccessStatus,
+			FinalizeRetryStatus:   files.FinalizeRetryStatus,
+		},
+	}
+	for _, surface := range executable.Surfaces() {
+		profile.Surfaces = append(profile.Surfaces, officialCodexSurfaceProfile{
+			ID: surface.ID, Product: surface.Product, Version: surface.Version,
+			PlatformPrefix:       surface.PlatformPrefix,
+			DefaultTerminalToken: surface.DefaultTerminalToken,
+			TerminalTokenPattern: surface.TerminalTokenPattern,
+			SuffixName:           surface.SuffixName, SuffixVersion: surface.SuffixVersion,
+			SuffixOptional:          surface.SuffixOptional,
+			InitialModelsMayOmit:    surface.InitialModelsMayOmit,
+			Originator:              surface.Originator,
+			InitialModelsOriginator: surface.InitialModelsOriginator,
+		})
+	}
+	for _, mapping := range subagents.Mappings {
+		profile.Subagents.Mappings = append(profile.Subagents.Mappings, officialCodexSubagentMapping{
+			ID: mapping.ID, HeaderValue: mapping.HeaderValue, MetadataKind: mapping.MetadataKind,
+			ThreadSource: mapping.ThreadSource, MemoryGeneration: mapping.MemoryGeneration,
+			ParentThreadRequired: mapping.ParentThreadRequired,
+		})
+	}
+	for _, endpoint := range executable.Endpoints() {
+		projected := officialCodexEndpointProfile{
+			ID: endpoint.ID, Method: endpoint.Method, Upgrade: endpoint.Upgrade,
+			TransportID: endpoint.TransportID, Host: endpoint.Host,
+			HostFromResponse: endpoint.HostFromResponse, Path: endpoint.Path,
+			Accept: endpoint.Accept, ContentType: endpoint.ContentType,
+			Compression:             string(endpoint.Compression),
+			ClientLifecycle:         string(endpoint.ResourceLifecycle.Lifecycle),
+			HeaderOrderMode:         string(endpoint.HeaderOrderMode),
+			HeaderMapInsertionOrder: append([]string(nil), endpoint.HeaderMapInsertionOrder...),
+			PostRemoveHeaders:       append([]string(nil), endpoint.PostRemoveHeaders...),
+			Body: officialCodexBodyContract{
+				Encoding: string(endpoint.Body.Encoding), Closed: endpoint.Body.Closed,
+				Discriminator: endpoint.Body.Discriminator,
+			},
+		}
+		for _, query := range endpoint.Query {
+			projected.Query = append(projected.Query, officialCodexQueryField{
+				Name: query.Name, Value: query.Value, Source: string(query.Source), Required: query.Required,
+			})
+		}
+		for _, header := range endpoint.Headers {
+			projected.Headers = append(projected.Headers, officialCodexHeaderSlot{
+				Slot: header.Slot, Sequence: header.Sequence, Name: header.Name,
+				WireName: header.WireName, Value: header.Value, Source: string(header.Source),
+				Condition: string(header.Condition), AlternateGroup: header.AlternateGroup,
+			})
+		}
+		for _, field := range endpoint.Body.Fields {
+			projected.Body.Fields = append(projected.Body.Fields, officialCodexBodyField{
+				Name: field.Name, Required: field.Required,
+				OmitWhen: string(field.OmitWhen), Condition: string(field.Condition),
+			})
+		}
+		profile.Endpoints = append(profile.Endpoints, projected)
+	}
+	for _, transport := range executable.Transports() {
+		projected := officialCodexTransportProfile{
+			ID: transport.ID, Protocol: transport.Protocol,
+			PlatformCondition: transport.PlatformCondition, TLSStack: transport.TLSStack,
+			CipherSuites:        append([]uint16(nil), transport.CipherSuites...),
+			SupportedGroups:     append([]uint16(nil), transport.SupportedGroups...),
+			SignatureAlgorithms: append([]uint16(nil), transport.SignatureAlgorithms...),
+			ALPN:                append([]string(nil), transport.ALPN...),
+			Extensions:          append([]uint16(nil), transport.Extensions...),
+			RandomizeExtensions: transport.RandomizeExtensions,
+			SupportedVersions:   append([]uint16(nil), transport.SupportedVersions...),
+			KeyShareGroups:      append([]uint16(nil), transport.KeyShareGroups...),
+			PSKModes:            append([]uint16(nil), transport.PSKModes...),
+			TLSMinVersion:       transport.TLSMinVersion, TLSMaxVersion: transport.TLSMaxVersion,
+			LowercaseHTTPHeaders: transport.LowercaseHTTPHeaders,
+		}
+		if transport.WebSocket != nil {
+			projected.WebSocket = &officialCodexWebSocketTransportProfile{
+				FixedHandshakePrefix: append([]string(nil), transport.WebSocket.FixedHandshakePrefix...),
+				RemainingHeaderMode:  transport.WebSocket.RemainingHeaderMode,
+				CompressionOffer:     transport.WebSocket.CompressionOffer,
+				CompressedTextRSV1:   transport.WebSocket.CompressedTextRSV1,
+				RawDeflatePayload:    transport.WebSocket.RawDeflatePayload,
+				ContextTakeover:      transport.WebSocket.ContextTakeover,
+			}
+		}
+		profile.Transports = append(profile.Transports, projected)
+	}
+	return profile
 }
 
 // cloneOfficialCodexVersionProfile 返回整份版本画像的深拷贝。解析路径交付的是
@@ -374,9 +488,9 @@ func cloneOfficialCodexVersionProfile(
 	return cloned, nil
 }
 
-// resolveCodex0145Endpoint 同时执行精确版本和精确端点解析，并返回端点深拷贝。
-func resolveCodex0145Endpoint(version string, endpointID codex0145EndpointID) (officialCodexEndpointProfile, error) {
-	profile, err := resolveCodex0145VersionProfile(version)
+// resolveCodexEndpoint 同时执行精确版本和精确端点解析，并返回端点深拷贝。
+func resolveCodexEndpoint(version string, endpointID codexEndpointID) (officialCodexEndpointProfile, error) {
+	profile, err := resolveCodexVersionProfile(version)
 	if err != nil {
 		return officialCodexEndpointProfile{}, err
 	}
@@ -385,28 +499,59 @@ func resolveCodex0145Endpoint(version string, endpointID codex0145EndpointID) (o
 
 // resolveOfficialCodexVersionProfile 保留旧接入名，统一委托给严格版本解析器。
 func resolveOfficialCodexVersionProfile(version string) (*officialCodexVersionProfile, error) {
-	return resolveCodex0145VersionProfile(version)
+	return resolveCodexVersionProfile(version)
 }
 
 // resolveOfficialCodexEndpointProfile 保留旧接入名，统一委托给严格端点解析器。
 func resolveOfficialCodexEndpointProfile(version, endpointID string) (officialCodexEndpointProfile, error) {
-	return resolveCodex0145Endpoint(version, codex0145EndpointID(endpointID))
+	return resolveCodexEndpoint(version, codexEndpointID(endpointID))
+}
+
+// resolveOfficialCodexTransportTLSProfileByID 是传输层使用的版本中立接缝。
+// 具体版本解析只保留在画像实现内，调用方提交启动期已编译的精确 transport ID。
+func resolveOfficialCodexTransportTLSProfileByID(
+	version string,
+	transportID string,
+) (*tlsfingerprint.Profile, error) {
+	return officialCodexResolveTLSProfile(version, transportID)
 }
 
 // OfficialCodexRemoteCompactionV2Default 把 handler 的压缩分派决策绑定到版本画像，
 // 避免再次把“header 是否出现”误当成 feature 默认值。显式 legacy 请求仍通过
 // /responses/compact 选择；普通 /responses 中已有 compaction_trigger 时保持 V2。
 //
-// feature 默认值必须与 header、TLS、端点出自同一版本：它决定 handler 的压缩分派与
-// HTTP turn metadata，若停在编译期常量上，切换 release 后就会出现“新画像出站、旧画像
-// 路由”的跨层分叉。这里的 panic 是理论兜底——active 版本解析失败在包初始化期即已暴露
-// （见 official_egress_transport.go 的传输画像预检）。
-func OfficialCodexRemoteCompactionV2Default() bool {
-	profile, err := resolveActiveCodexVersionProfile()
+// feature 默认值必须与 header、TLS、端点出自同一发布模式：它决定 handler 的压缩分派与
+// HTTP turn metadata，若自行选择 active，切换 previous 后就会出现跨发布混搭。
+// mode 必须来自进程运行时或调用级 OfficialEgressContext；空 mode 不允许退化为 active。
+func OfficialCodexRemoteCompactionV2Default(mode string) bool {
+	enabled, err := resolveOfficialCodexRemoteCompactionV2Default(
+		mode,
+		resolveCodexVersionProfileForMode,
+	)
 	if err != nil {
 		panic(err)
 	}
-	return profile.FeatureDefaults.RemoteCompactionV2
+	return enabled
+}
+
+type officialCodexModeProfileResolver func(string) (*officialCodexVersionProfile, error)
+
+func resolveOfficialCodexRemoteCompactionV2Default(
+	mode string,
+	resolver officialCodexModeProfileResolver,
+) (bool, error) {
+	mode = strings.TrimSpace(mode)
+	if mode == "" {
+		return false, errors.New("Codex compaction feature 缺少冻结 release mode")
+	}
+	if resolver == nil {
+		return false, errors.New("Codex compaction feature 缺少版本画像解析器")
+	}
+	profile, err := resolver(mode)
+	if err != nil {
+		return false, err
+	}
+	return profile.FeatureDefaults.RemoteCompactionV2, nil
 }
 
 // ResolveEndpoint 返回端点画像的深拷贝，未知端点或带空白的近似 ID 均失败。
@@ -425,31 +570,40 @@ func (p *officialCodexVersionProfile) ResolveEndpoint(endpointID string) (offici
 	return officialCodexEndpointProfile{}, fmt.Errorf("Codex %s 不支持端点画像：%q", p.Version, endpointID)
 }
 
-// ResolveDefaultTransportID 按协议返回该版本的默认传输画像 ID。
+// ResolveDefaultTransportID 按协议返回该版本的请求级默认传输画像 ID。
 //
 // 传输 ID 自身携带版本号（如 codex-0.145.0-http-ubuntu24-native），调用方因此不能
 // 写死传输 ID 常量：升级后新快照会定义自己的传输 ID，写死的常量在新画像里根本查不到。
-// 按协议查询让执行层与具体 ID 解耦，版本差异留在画像内部。
+// HTTP 长期 client 与请求级 client 可以具有相同 TLS 参数，但资源语义不同；默认入口
+// 只从 per_upper_api_call 端点使用的 transport 中选取，不能因协议相同而混用。
 func (p *officialCodexVersionProfile) ResolveDefaultTransportID(protocol string) (string, error) {
 	if p == nil {
 		return "", errors.New("Codex 版本画像为空")
 	}
-	resolved := ""
+	transportProtocols := make(map[string]string, len(p.Transports))
 	for _, transport := range p.Transports {
-		if transport.Protocol != protocol {
+		transportProtocols[transport.ID] = transport.Protocol
+	}
+	wantLifecycle := officialCodexClientPerUpperCall
+	if protocol == officialCodexTransportProtocolWS {
+		wantLifecycle = officialCodexClientWebSocket
+	}
+	resolved := ""
+	for _, endpoint := range p.Endpoints {
+		if endpoint.ClientLifecycle != wantLifecycle || transportProtocols[endpoint.TransportID] != protocol {
 			continue
 		}
-		if resolved != "" {
+		if resolved != "" && resolved != endpoint.TransportID {
 			return "", fmt.Errorf(
-				"Codex %s 的协议 %q 存在多个传输画像，无法确定默认项",
+				"Codex %s 的协议 %q 存在多个请求级默认传输画像",
 				p.Version,
 				protocol,
 			)
 		}
-		resolved = transport.ID
+		resolved = endpoint.TransportID
 	}
 	if resolved == "" {
-		return "", fmt.Errorf("Codex %s 没有协议为 %q 的传输画像", p.Version, protocol)
+		return "", fmt.Errorf("Codex %s 没有协议为 %q 的请求级默认传输画像", p.Version, protocol)
 	}
 	return resolved, nil
 }
@@ -534,663 +688,6 @@ func (p *officialCodexVersionProfile) RenderUserAgentWithTerminal(
 	return "", fmt.Errorf("Codex %s 不支持入口画像：%q", p.Version, surfaceID)
 }
 
-func mustBuildOfficialCodex0145Snapshot() officialCodexProfileSnapshot {
-	profile, err := newOfficialCodex0145VersionProfile()
-	if err != nil {
-		panic(err)
-	}
-	digest, err := digestOfficialCodexVersionProfile(profile)
-	if err != nil {
-		panic(err)
-	}
-	profile.Digest = digest
-	encoded, err := json.Marshal(profile)
-	if err != nil {
-		panic(err)
-	}
-	return officialCodexProfileSnapshot{JSON: string(encoded), Digest: digest}
-}
-
-func newOfficialCodex0145VersionProfile() (officialCodexVersionProfile, error) {
-	profile := officialCodexVersionProfile{
-		Version:          officialCodexVersion0145,
-		RequiredRules:    officialCodex0145RequiredRules(),
-		Surfaces:         officialCodex0145Surfaces(),
-		FeatureDefaults:  officialCodex0145FeatureDefaults(),
-		ToolPresentation: officialCodex0145ToolPresentation(),
-		Subagents:        officialCodex0145Subagents(),
-		Files:            officialCodex0145FilesProfile(),
-		Transports:       officialCodex0145Transports(),
-		Endpoints:        officialCodex0145Endpoints(),
-	}
-	if err := validateOfficialCodexVersionProfile(profile); err != nil {
-		return officialCodexVersionProfile{}, err
-	}
-	return profile, nil
-}
-
-func officialCodex0145RequiredRules() []string {
-	return []string{
-		"SPEC-TLS-001", "SPEC-TLS-003", "SPEC-PROTO-001", "SPEC-PROTO-002",
-		"SPEC-CONN-001", "SPEC-H1-001", "SPEC-H1-002", "SPEC-H1-003",
-		"SPEC-H1-004", "SPEC-WS-001", "SPEC-WS-002", "SPEC-WS-004",
-		"SPEC-WS-005", "SPEC-HDR-001", "SPEC-HDR-002", "SPEC-HDR-004",
-		"SPEC-HDR-005", "SPEC-HDR-006", "SPEC-HDR-007", "SPEC-HDR-008",
-		"SPEC-BODY-001", "SPEC-BODY-002", "SPEC-BODY-003", "SPEC-BODY-004",
-		"SPEC-BODY-005", "SPEC-BODY-006", "SPEC-EP-001", "SPEC-EP-002",
-		"SPEC-EP-005", "SPEC-EP-006", "SPEC-EP-007", "SPEC-EP-008",
-		"SPEC-EP-009", "SPEC-EP-012", "SPEC-EP-013", "SPEC-EP-014",
-		"SPEC-EP-015", "SPEC-EP-019", "SPEC-EP-020", "SPEC-EP-021",
-		"SPEC-EP-022", "SPEC-EP-023",
-	}
-}
-
-func officialCodex0145Surfaces() []officialCodexSurfaceProfile {
-	return []officialCodexSurfaceProfile{
-		{
-			ID: officialCodexSurfaceExec, Product: "codex_exec", Version: officialCodexVersion0145,
-			PlatformPrefix: "(Ubuntu 24.4.0; x86_64)", DefaultTerminalToken: "unknown", TerminalTokenPattern: `^[A-Za-z0-9._/-]+$`, SuffixName: "codex_exec",
-			SuffixVersion: officialCodexVersion0145, SuffixOptional: true,
-			InitialModelsMayOmit: true, Originator: "codex_exec", InitialModelsOriginator: "codex_cli_rs",
-		},
-		{
-			ID: officialCodexSurfaceTUI, Product: "codex-tui", Version: officialCodexVersion0145,
-			PlatformPrefix: "(Ubuntu 24.4.0; x86_64)", DefaultTerminalToken: "unknown", TerminalTokenPattern: `^[A-Za-z0-9._/-]+$`, SuffixName: "codex-tui",
-			SuffixVersion: officialCodexVersion0145, SuffixOptional: true,
-			InitialModelsMayOmit: true, Originator: "codex-tui", InitialModelsOriginator: "codex_cli_rs",
-		},
-	}
-}
-
-func officialCodex0145FeatureDefaults() officialCodexFeatureDefaults {
-	return officialCodexFeatureDefaults{
-		SupportsWebSockets: true, RemoteCompactionV2: true,
-		EnableRequestCompression: true, RequestCompressionLevel: 3,
-		RuntimeMetrics: false, ForceHTTPFallback: false,
-		ResponsesLiteFromModelManifest: true, ParallelToolsFromModelManifest: true,
-	}
-}
-
-func officialCodex0145ToolPresentation() officialCodexToolPresentationProfile {
-	return officialCodexToolPresentationProfile{
-		EndpointIDs: []string{
-			officialCodexEndpointResponsesHTTP,
-			officialCodexEndpointResponsesWS,
-		},
-		HostedImageGenerationAllowed: false,
-		HostedImageGenerationType:    "image_generation",
-		NamespaceType:                "namespace",
-		NamespaceName:                "image_gen",
-		FunctionType:                 "function",
-		FunctionName:                 "imagegen",
-		LiteCarrierItemType:          "additional_tools",
-		NamespaceRequiredFields:      []string{"type", "name", "description", "tools"},
-		FunctionRequiredFields:       []string{"type", "name", "description", "strict", "parameters"},
-	}
-}
-
-func officialCodex0145Subagents() officialCodexSubagentProfile {
-	return officialCodexSubagentProfile{
-		Mappings: []officialCodexSubagentMapping{
-			{ID: "review", HeaderValue: "review", MetadataKind: "review", ThreadSource: "subagent"},
-			{ID: "compact", HeaderValue: "compact", MetadataKind: "compact", ThreadSource: "subagent"},
-			{ID: "thread_spawn", HeaderValue: "collab_spawn", MetadataKind: "thread_spawn", ThreadSource: "subagent", ParentThreadRequired: true},
-			{ID: "memory_subagent", HeaderValue: "memory_consolidation", MetadataKind: "memory_consolidation", ThreadSource: "subagent"},
-			{ID: "memory_internal", HeaderValue: "memory_consolidation", ThreadSource: "memory_consolidation", MemoryGeneration: true},
-		},
-		OtherLabelAllowed:     true,
-		OtherThreadSource:     "subagent",
-		OtherHeaderEqualsKind: true,
-	}
-}
-
-func officialCodex0145FilesProfile() officialCodexFilesProfile {
-	return officialCodexFilesProfile{
-		CreateEndpointID:         officialCodexEndpointFilesCreate,
-		BlobUploadEndpointID:     officialCodexEndpointFilesBlobUpload,
-		UploadedEndpointID:       officialCodexEndpointFilesUploaded,
-		UploadLimitBytes:         512 * 1024 * 1024,
-		RequestTimeoutMillis:     60 * 1000,
-		FinalizeTimeoutMillis:    30 * 1000,
-		FinalizeRetryDelayMillis: 250,
-		UseCase:                  "codex",
-		URIPrefix:                "sediment://",
-		FinalizeSuccessStatus:    "success",
-		FinalizeRetryStatus:      "retry",
-	}
-}
-
-func officialCodex0145Transports() []officialCodexTransportProfile {
-	return []officialCodexTransportProfile{
-		{
-			ID: officialCodexTransportHTTPDefault, Protocol: "http/1.1",
-			PlatformCondition: "ubuntu_24_04_without_valid_custom_ca", TLSStack: "native_tls_openssl",
-			CipherSuites: []uint16{
-				0x1302, 0x1303, 0x1301, 0xc02c, 0xc030, 0x009f,
-				0xcca9, 0xcca8, 0xccaa, 0xc02b, 0xc02f, 0x009e,
-				0xc024, 0xc028, 0x006b, 0xc023, 0xc027, 0x0067,
-				0xc00a, 0xc014, 0x0039, 0xc009, 0xc013, 0x0033,
-				0x009d, 0x009c, 0x003d, 0x003c, 0x0035, 0x002f,
-			},
-			SupportedGroups: []uint16{0x11ec, 0x001d, 0x0017, 0x001e, 0x0018, 0x0019, 0x0100, 0x0101},
-			SignatureAlgorithms: []uint16{
-				0x0905, 0x0906, 0x0904, 0x0403, 0x0503, 0x0603,
-				0x0807, 0x0808, 0x081a, 0x081b, 0x081c, 0x0809,
-				0x080a, 0x080b, 0x0804, 0x0805, 0x0806, 0x0401,
-				0x0501, 0x0601, 0x0303, 0x0301, 0x0302, 0x0402,
-				0x0502, 0x0602,
-			},
-			Extensions:        []uint16{65281, 0, 11, 10, 35, 22, 23, 13, 43, 45, 51},
-			SupportedVersions: []uint16{0x0304, 0x0303}, KeyShareGroups: []uint16{0x11ec, 0x001d},
-			PSKModes: []uint16{1}, TLSMinVersion: 0x0303, TLSMaxVersion: 0x0304,
-			LowercaseHTTPHeaders: true, CrossCallConnectionReuse: false, RetryReusesClient: true,
-		},
-		{
-			ID: officialCodexTransportWS, Protocol: "websocket",
-			PlatformCondition: "all_supported_platforms", TLSStack: "rustls",
-			CipherSuites: []uint16{
-				0x1302, 0x1301, 0x1303, 0xc02c, 0xc02b,
-				0xcca9, 0xc030, 0xc02f, 0xcca8, 0x00ff,
-			},
-			SupportedGroups:     []uint16{0x11ec, 0x001d, 0x0017, 0x0018},
-			SignatureAlgorithms: []uint16{0x0503, 0x0403, 0x0603, 0x0807, 0x0806, 0x0805, 0x0804, 0x0601, 0x0501, 0x0401},
-			Extensions:          []uint16{0, 5, 10, 11, 13, 23, 35, 43, 45, 51}, RandomizeExtensions: true,
-			SupportedVersions: []uint16{0x0304, 0x0303}, KeyShareGroups: []uint16{0x11ec, 0x001d},
-			PSKModes: []uint16{1}, TLSMinVersion: 0x0303, TLSMaxVersion: 0x0304,
-			CrossCallConnectionReuse: false, RetryReusesClient: true,
-			WebSocket: &officialCodexWebSocketTransportProfile{
-				FixedHandshakePrefix: []string{"Host", "Connection", "Upgrade", "Sec-WebSocket-Version", "Sec-WebSocket-Key"},
-				RemainingHeaderMode:  officialCodexHeaderOrderWSSwapRemove,
-				CompressionOffer:     "permessage-deflate; client_max_window_bits",
-				CompressedTextRSV1:   true, RawDeflatePayload: true, ContextTakeover: true,
-			},
-		},
-	}
-}
-
-func officialCodex0145Endpoints() []officialCodexEndpointProfile {
-	return []officialCodexEndpointProfile{
-		codex0145ModelsEndpoint(),
-		codex0145ResponsesHTTPEndpoint(),
-		codex0145ResponsesWSEndpoint(),
-		codex0145CompactEndpoint(),
-		codex0145SearchEndpoint(),
-		codex0145ImagesEndpoint(false),
-		codex0145ImagesEndpoint(true),
-		codex0145RealtimeCallsEndpoint(),
-		codex0145RealtimeSidebandEndpoint(),
-		codex0145WhamEndpoint(officialCodexEndpointWhamUsage, http.MethodGet, "/backend-api/wham/usage", false),
-		codex0145WhamEndpoint(officialCodexEndpointWhamResetCredits, http.MethodGet, "/backend-api/wham/rate-limit-reset-credits", false),
-		codex0145WhamEndpoint(officialCodexEndpointWhamConsumeResetCredit, http.MethodPost, "/backend-api/wham/rate-limit-reset-credits/consume", true),
-		codex0145OAuthRefreshEndpoint(),
-		codex0145FilesCreateEndpoint(),
-		codex0145FilesBlobUploadEndpoint(),
-		codex0145FilesUploadedEndpoint(),
-	}
-}
-
-func codex0145ModelsEndpoint() officialCodexEndpointProfile {
-	return officialCodexEndpointProfile{
-		ID: officialCodexEndpointModels, Method: http.MethodGet,
-		TransportID: officialCodexTransportHTTPDefault, Host: "chatgpt.com",
-		Path:   "/backend-api/codex/models",
-		Query:  []officialCodexQueryField{{Name: "client_version", Value: officialCodexVersion0145, Source: officialCodexSourceConstant, Required: true}},
-		Accept: "*/*", Compression: officialCodexCompressionNone,
-		ClientLifecycle: officialCodexClientPerUpperCall, HeaderOrderMode: officialCodexHeaderOrderH1HeaderMap,
-		Headers: []officialCodexHeaderSlot{
-			h(10, "version", officialCodexVersion0145, officialCodexSourceConstant, officialCodexConditionAlways),
-			h(20, "authorization", "", officialCodexSourceAuthentication, officialCodexConditionAlways),
-			h(30, "chatgpt-account-id", "", officialCodexSourceAccount, officialCodexConditionAlways),
-			h(35, "x-openai-fedramp", "true", officialCodexSourceAccount, officialCodexConditionFedRAMP),
-			h(40, "accept", "*/*", officialCodexSourceConstant, officialCodexConditionAlways),
-			h(60, "originator", "", officialCodexSourceProcess, officialCodexConditionAlways),
-			h(70, "user-agent", "", officialCodexSourceProcess, officialCodexConditionAlways),
-			h(75, "x-openai-internal-codex-residency", "", officialCodexSourceManagedConfig, officialCodexConditionResidency),
-			h(80, "host", "", officialCodexSourceGenerated, officialCodexConditionAuto),
-		},
-		Body: bodyNone(),
-	}
-}
-
-func codex0145ResponsesHTTPEndpoint() officialCodexEndpointProfile {
-	return officialCodexEndpointProfile{
-		ID: officialCodexEndpointResponsesHTTP, Method: http.MethodPost,
-		TransportID: officialCodexTransportHTTPDefault, Host: "chatgpt.com",
-		Path: "/backend-api/codex/responses", Accept: "text/event-stream",
-		ContentType: "application/json", Compression: officialCodexCompressionZstdFeature,
-		ClientLifecycle: officialCodexClientPerUpperCall, HeaderOrderMode: officialCodexHeaderOrderH1HeaderMap,
-		Headers: []officialCodexHeaderSlot{
-			h(10, "version", officialCodexVersion0145, officialCodexSourceConstant, officialCodexConditionAlways),
-			h(20, "x-codex-beta-features", "remote_compaction_v2", officialCodexSourceFeature, officialCodexConditionRemoteCompactionV2),
-			h(25, "x-codex-turn-state", "", officialCodexSourceTurn, officialCodexConditionTurnState),
-			h(30, "x-codex-window-id", "", officialCodexSourceSession, officialCodexConditionAlways),
-			h(40, "x-codex-turn-metadata", "", officialCodexSourceTurn, officialCodexConditionAlways),
-			h(50, "x-openai-subagent", "", officialCodexSourceTurn, officialCodexConditionSubagent),
-			h(51, "x-openai-memgen-request", "true", officialCodexSourceTurn, officialCodexConditionMemoryGeneration),
-			h(52, "x-codex-parent-thread-id", "", officialCodexSourceSession, officialCodexConditionParentThread),
-			h(60, "x-openai-internal-codex-responses-lite", "true", officialCodexSourceModelManifest, officialCodexConditionResponsesLite),
-			h(70, "x-client-request-id", "", officialCodexSourceSession, officialCodexConditionAlways),
-			h(80, "session-id", "", officialCodexSourceSession, officialCodexConditionAlways),
-			h(90, "thread-id", "", officialCodexSourceSession, officialCodexConditionAlways),
-			h(100, "accept", "text/event-stream", officialCodexSourceConstant, officialCodexConditionAlways),
-			h(110, "content-encoding", "zstd", officialCodexSourceFeature, officialCodexConditionRequestCompression),
-			h(120, "content-type", "application/json", officialCodexSourceConstant, officialCodexConditionAlways),
-			h(130, "authorization", "", officialCodexSourceAuthentication, officialCodexConditionAlways),
-			h(140, "chatgpt-account-id", "", officialCodexSourceAccount, officialCodexConditionAlways),
-			h(142, "x-openai-fedramp", "true", officialCodexSourceAccount, officialCodexConditionFedRAMP),
-			h(150, "originator", "", officialCodexSourceProcess, officialCodexConditionAlways),
-			h(160, "user-agent", "", officialCodexSourceProcess, officialCodexConditionAlways),
-			h(165, "x-openai-internal-codex-residency", "", officialCodexSourceManagedConfig, officialCodexConditionResidency),
-			h(170, "cookie", "", officialCodexSourceSession, officialCodexConditionCookie),
-			h(180, "host", "", officialCodexSourceGenerated, officialCodexConditionAuto),
-			h(190, "content-length", "", officialCodexSourceGenerated, officialCodexConditionAuto),
-		},
-		Body: bodyJSON(true,
-			bf("model", true, ""), bf("instructions", false, "empty_string"), bf("input", true, ""),
-			bf("tools", false, "none"), bf("tool_choice", true, ""), bf("parallel_tool_calls", true, ""),
-			bf("reasoning", true, ""), bf("store", true, ""), bf("stream", true, ""),
-			bf("stream_options", false, "none"), bf("include", true, ""), bf("service_tier", false, "none"),
-			bf("prompt_cache_key", false, "none"), bf("text", false, "none"), bf("client_metadata", false, "none"),
-		),
-	}
-}
-
-func codex0145ResponsesWSEndpoint() officialCodexEndpointProfile {
-	headers := []officialCodexHeaderSlot{
-		wh(10, "host", "Host", "", officialCodexSourceGenerated, officialCodexConditionAuto),
-		wh(20, "connection", "Connection", "Upgrade", officialCodexSourceGenerated, officialCodexConditionAlways),
-		wh(30, "upgrade", "Upgrade", "websocket", officialCodexSourceGenerated, officialCodexConditionAlways),
-		wh(40, "sec-websocket-version", "Sec-WebSocket-Version", "13", officialCodexSourceGenerated, officialCodexConditionAlways),
-		wh(50, "sec-websocket-key", "Sec-WebSocket-Key", "", officialCodexSourceGenerated, officialCodexConditionAuto),
-		wh(60, "chatgpt-account-id", "chatgpt-account-id", "", officialCodexSourceAccount, officialCodexConditionAlways),
-		wh(65, "x-openai-fedramp", "x-openai-fedramp", "true", officialCodexSourceAccount, officialCodexConditionFedRAMP),
-		wh(70, "authorization", "authorization", "", officialCodexSourceAuthentication, officialCodexConditionAlways),
-		wh(80, "user-agent", "user-agent", "", officialCodexSourceProcess, officialCodexConditionAlways),
-		wh(90, "originator", "originator", "", officialCodexSourceProcess, officialCodexConditionAlways),
-		wh(95, "x-openai-internal-codex-residency", "x-openai-internal-codex-residency", "", officialCodexSourceManagedConfig, officialCodexConditionResidency),
-		wh(100, "openai-beta", "openai-beta", "responses_websockets=2026-02-06", officialCodexSourceConstant, officialCodexConditionAlways),
-		wh(110, "version", "version", officialCodexVersion0145, officialCodexSourceConstant, officialCodexConditionAlways),
-		wh(120, "x-codex-beta-features", "x-codex-beta-features", "remote_compaction_v2", officialCodexSourceFeature, officialCodexConditionRemoteCompactionV2),
-		wh(130, "x-client-request-id", "x-client-request-id", "", officialCodexSourceSession, officialCodexConditionAlways),
-		wh(140, "session-id", "session-id", "", officialCodexSourceSession, officialCodexConditionAlways),
-		wh(150, "thread-id", "thread-id", "", officialCodexSourceSession, officialCodexConditionAlways),
-		wh(160, "x-codex-window-id", "x-codex-window-id", "", officialCodexSourceSession, officialCodexConditionAlways),
-		wh(170, "x-codex-turn-metadata", "x-codex-turn-metadata", "", officialCodexSourceTurn, officialCodexConditionAlways),
-		wh(180, "x-openai-subagent", "x-openai-subagent", "", officialCodexSourceTurn, officialCodexConditionSubagent),
-		wh(181, "x-openai-memgen-request", "x-openai-memgen-request", "true", officialCodexSourceTurn, officialCodexConditionMemoryGeneration),
-		wh(182, "x-codex-parent-thread-id", "x-codex-parent-thread-id", "", officialCodexSourceSession, officialCodexConditionParentThread),
-		wh(183, "x-responsesapi-include-timing-metrics", "x-responsesapi-include-timing-metrics", "true", officialCodexSourceFeature, officialCodexConditionRuntimeMetrics),
-		wh(190, "sec-websocket-extensions", "sec-websocket-extensions", "permessage-deflate; client_max_window_bits", officialCodexSourceGenerated, officialCodexConditionAlways),
-	}
-	return officialCodexEndpointProfile{
-		ID: officialCodexEndpointResponsesWS, Method: http.MethodGet, Upgrade: "websocket",
-		TransportID: officialCodexTransportWS, Host: "chatgpt.com", Path: "/backend-api/codex/responses",
-		Compression:     officialCodexCompressionPerMessageDeflate,
-		ClientLifecycle: officialCodexClientWebSocket, HeaderOrderMode: officialCodexHeaderOrderWSSwapRemove,
-		Headers: headers,
-		// 这是 Codex 0.145.0 在 tungstenite 删除五个固定握手头之前的
-		// HeaderMap.entries 顺序，不是某次完整抓包的最终顺序。条件头先按本序
-		// 缺席，再执行 swap_remove，才能复刻 residency/runtime 等条件引起的
-		// 整体扰动。扩展头由 tungstenite 在删除完成后生成，单列在下方。
-		HeaderMapInsertionOrder: []string{
-			"host", "connection", "upgrade", "sec-websocket-version", "sec-websocket-key",
-			"version", "x-codex-beta-features", "x-client-request-id", "session-id", "thread-id",
-			"x-codex-window-id", "x-codex-turn-metadata", "x-codex-parent-thread-id",
-			"x-openai-subagent", "x-openai-memgen-request", "openai-beta",
-			"x-responsesapi-include-timing-metrics", "originator", "user-agent",
-			"x-openai-internal-codex-residency", "authorization", "chatgpt-account-id",
-			"x-openai-fedramp",
-		},
-		PostRemoveHeaders: []string{"sec-websocket-extensions"},
-		Body: officialCodexBodyContract{
-			Encoding: "websocket_json", Closed: true, Discriminator: "type=response.create",
-			Fields: []officialCodexBodyField{
-				bf("type", true, ""), bf("model", true, ""), bf("instructions", false, "empty_string"),
-				bf("previous_response_id", false, "none_or_unreusable_prefix"), bf("input", true, ""),
-				bf("tools", false, "none"), bf("tool_choice", true, ""), bf("parallel_tool_calls", true, ""),
-				bf("reasoning", true, ""), bf("store", true, ""), bf("stream", true, ""),
-				bf("stream_options", false, "none"), bf("include", true, ""), bf("service_tier", false, "none"),
-				bf("prompt_cache_key", false, "none"), bf("text", false, "none"),
-				bf("generate", false, "none"), bf("client_metadata", false, "none"),
-			},
-		},
-	}
-}
-
-func codex0145CompactEndpoint() officialCodexEndpointProfile {
-	beta := h(30, "x-codex-beta-features", "", officialCodexSourceFeature, officialCodexConditionBetaFeatures)
-	beta.Sequence = 0
-	beta.AlternateGroup = "compact-third-slot"
-	turnState := h(30, "x-codex-turn-state", "", officialCodexSourceTurn, officialCodexConditionTurnState)
-	turnState.Sequence = 1
-	turnState.AlternateGroup = "compact-third-slot"
-	return officialCodexEndpointProfile{
-		ID: officialCodexEndpointResponsesCompact, Method: http.MethodPost,
-		TransportID: officialCodexTransportHTTPDefault, Host: "chatgpt.com",
-		Path: "/backend-api/codex/responses/compact", Accept: "*/*", ContentType: "application/json",
-		Compression: officialCodexCompressionNone, ClientLifecycle: officialCodexClientPerUpperCall,
-		HeaderOrderMode: officialCodexHeaderOrderH1HeaderMap,
-		Headers: []officialCodexHeaderSlot{
-			h(10, "version", officialCodexVersion0145, officialCodexSourceConstant, officialCodexConditionAlways),
-			h(20, "x-codex-installation-id", "", officialCodexSourceSession, officialCodexConditionAlways),
-			beta, turnState,
-			h(40, "x-codex-window-id", "", officialCodexSourceSession, officialCodexConditionAlways),
-			h(50, "x-codex-turn-metadata", "", officialCodexSourceTurn, officialCodexConditionAlways),
-			h(51, "x-openai-subagent", "", officialCodexSourceTurn, officialCodexConditionSubagent),
-			h(52, "x-openai-memgen-request", "true", officialCodexSourceTurn, officialCodexConditionMemoryGeneration),
-			h(53, "x-codex-parent-thread-id", "", officialCodexSourceSession, officialCodexConditionParentThread),
-			h(60, "session-id", "", officialCodexSourceSession, officialCodexConditionAlways),
-			h(70, "thread-id", "", officialCodexSourceSession, officialCodexConditionAlways),
-			h(80, "x-openai-internal-codex-responses-lite", "true", officialCodexSourceModelManifest, officialCodexConditionResponsesLite),
-			h(90, "authorization", "", officialCodexSourceAuthentication, officialCodexConditionAlways),
-			h(100, "chatgpt-account-id", "", officialCodexSourceAccount, officialCodexConditionAlways),
-			h(105, "x-openai-fedramp", "true", officialCodexSourceAccount, officialCodexConditionFedRAMP),
-			h(110, "content-type", "application/json", officialCodexSourceConstant, officialCodexConditionAlways),
-			h(120, "accept", "*/*", officialCodexSourceConstant, officialCodexConditionAlways),
-			h(130, "originator", "", officialCodexSourceProcess, officialCodexConditionAlways),
-			h(140, "user-agent", "", officialCodexSourceProcess, officialCodexConditionAlways),
-			h(145, "x-openai-internal-codex-residency", "", officialCodexSourceManagedConfig, officialCodexConditionResidency),
-			h(150, "cookie", "", officialCodexSourceSession, officialCodexConditionCookie),
-			h(160, "host", "", officialCodexSourceGenerated, officialCodexConditionAuto),
-			h(170, "content-length", "", officialCodexSourceGenerated, officialCodexConditionAuto),
-		},
-		Body: bodyJSON(true,
-			bf("model", true, ""), bf("input", true, ""), bf("instructions", false, "empty_string"),
-			bf("tools", false, "none"), bf("parallel_tool_calls", true, ""), bf("reasoning", false, "none"),
-			bf("service_tier", false, "none"), bf("prompt_cache_key", false, "none"), bf("text", false, "none"),
-		),
-	}
-}
-
-func codex0145SearchEndpoint() officialCodexEndpointProfile {
-	return officialCodexEndpointProfile{
-		ID: officialCodexEndpointAlphaSearch, Method: http.MethodPost,
-		TransportID: officialCodexTransportHTTPDefault, Host: "chatgpt.com",
-		Path: "/backend-api/codex/alpha/search", Accept: "*/*", ContentType: "application/json",
-		Compression: officialCodexCompressionNone, ClientLifecycle: officialCodexClientPerUpperCall,
-		HeaderOrderMode: officialCodexHeaderOrderH1HeaderMap,
-		Headers: []officialCodexHeaderSlot{
-			h(10, "version", officialCodexVersion0145, officialCodexSourceConstant, officialCodexConditionAlways),
-			h(20, "x-codex-turn-metadata", "", officialCodexSourceTurn, officialCodexConditionAlways),
-			h(30, "authorization", "", officialCodexSourceAuthentication, officialCodexConditionAlways),
-			h(40, "chatgpt-account-id", "", officialCodexSourceAccount, officialCodexConditionAlways),
-			h(45, "x-openai-fedramp", "true", officialCodexSourceAccount, officialCodexConditionFedRAMP),
-			h(50, "content-type", "application/json", officialCodexSourceConstant, officialCodexConditionAlways),
-			h(60, "accept", "*/*", officialCodexSourceConstant, officialCodexConditionAlways),
-			h(70, "originator", "", officialCodexSourceProcess, officialCodexConditionAlways),
-			h(80, "user-agent", "", officialCodexSourceProcess, officialCodexConditionAlways),
-			h(85, "x-openai-internal-codex-residency", "", officialCodexSourceManagedConfig, officialCodexConditionResidency),
-			h(90, "cookie", "", officialCodexSourceSession, officialCodexConditionCookie),
-			h(100, "host", "", officialCodexSourceGenerated, officialCodexConditionAuto),
-			h(110, "content-length", "", officialCodexSourceGenerated, officialCodexConditionAuto),
-		},
-		Body: bodyJSON(true,
-			bf("id", true, ""), bf("model", true, ""), bf("input", true, ""),
-			bf("commands", true, ""), bf("settings", true, ""), bf("max_output_tokens", true, ""),
-		),
-	}
-}
-
-func codex0145ImagesEndpoint(edit bool) officialCodexEndpointProfile {
-	id := officialCodexEndpointImagesGenerations
-	path := "/backend-api/codex/images/generations"
-	fields := []officialCodexBodyField{
-		bf("prompt", true, ""), bf("background", false, "none"), bf("model", true, ""),
-		bf("quality", false, "none"), bf("size", false, "none"),
-	}
-	if edit {
-		id = officialCodexEndpointImagesEdits
-		path = "/backend-api/codex/images/edits"
-		fields = append([]officialCodexBodyField{bf("images", true, "")}, fields...)
-	}
-	return officialCodexEndpointProfile{
-		ID: id, Method: http.MethodPost, TransportID: officialCodexTransportHTTPDefault,
-		Host: "chatgpt.com", Path: path, Accept: "*/*", ContentType: "application/json",
-		Compression: officialCodexCompressionNone, ClientLifecycle: officialCodexClientPerUpperCall,
-		HeaderOrderMode: officialCodexHeaderOrderH1HeaderMap,
-		Headers:         standardCodexJSONHeaders(false), Body: bodyJSON(true, fields...),
-	}
-}
-
-func codex0145RealtimeCallsEndpoint() officialCodexEndpointProfile {
-	return officialCodexEndpointProfile{
-		ID: officialCodexEndpointRealtimeCalls, Method: http.MethodPost,
-		TransportID: officialCodexTransportHTTPDefault, Host: "chatgpt.com",
-		Path: "/backend-api/codex/realtime/calls",
-		Query: []officialCodexQueryField{
-			{Name: "intent", Value: "quicksilver", Source: officialCodexSourceConstant, Required: true},
-			{Name: "architecture", Value: "avas", Source: officialCodexSourceConstant, Required: true},
-		},
-		Accept: "*/*", ContentType: "application/json", Compression: officialCodexCompressionNone,
-		ClientLifecycle: officialCodexClientPerUpperCall, HeaderOrderMode: officialCodexHeaderOrderH1HeaderMap,
-		Headers: []officialCodexHeaderSlot{
-			h(10, "version", officialCodexVersion0145, officialCodexSourceConstant, officialCodexConditionAlways),
-			h(20, "openai-alpha", "quicksilver=v1", officialCodexSourceConstant, officialCodexConditionAlways),
-			h(30, "x-session-id", "", officialCodexSourceSession, officialCodexConditionSessionID),
-			h(35, "x-oai-attestation", "", officialCodexSourceAuthentication, officialCodexConditionAttestation),
-			h(40, "authorization", "", officialCodexSourceAuthentication, officialCodexConditionAlways),
-			h(50, "chatgpt-account-id", "", officialCodexSourceAccount, officialCodexConditionAlways),
-			h(55, "x-openai-fedramp", "true", officialCodexSourceAccount, officialCodexConditionFedRAMP),
-			h(60, "content-type", "application/json", officialCodexSourceConstant, officialCodexConditionAlways),
-			h(70, "accept", "*/*", officialCodexSourceConstant, officialCodexConditionAlways),
-			h(80, "originator", "", officialCodexSourceProcess, officialCodexConditionAlways),
-			h(90, "user-agent", "", officialCodexSourceProcess, officialCodexConditionAlways),
-			h(95, "x-openai-internal-codex-residency", "", officialCodexSourceManagedConfig, officialCodexConditionResidency),
-			h(100, "cookie", "", officialCodexSourceSession, officialCodexConditionCookie),
-			h(110, "host", "", officialCodexSourceGenerated, officialCodexConditionAuto),
-			h(120, "content-length", "", officialCodexSourceGenerated, officialCodexConditionAuto),
-		},
-		Body: bodyJSON(true, bf("sdp", true, ""), bf("session", true, "")),
-	}
-}
-
-func codex0145RealtimeSidebandEndpoint() officialCodexEndpointProfile {
-	return officialCodexEndpointProfile{
-		ID: officialCodexEndpointRealtimeSideband, Method: http.MethodGet, Upgrade: "websocket",
-		TransportID: officialCodexTransportWS, Host: "api.openai.com", Path: "/v1/realtime",
-		Query: []officialCodexQueryField{
-			{Name: "intent", Value: "quicksilver", Source: officialCodexSourceConstant, Required: true},
-			{Name: "call_id", Source: officialCodexSourceServerResponse, Required: true},
-		},
-		Compression: officialCodexCompressionNone, ClientLifecycle: officialCodexClientWebSocket,
-		HeaderOrderMode: officialCodexHeaderOrderWSSwapRemove,
-		Headers: []officialCodexHeaderSlot{
-			wh(10, "host", "Host", "", officialCodexSourceGenerated, officialCodexConditionAuto),
-			wh(20, "connection", "Connection", "Upgrade", officialCodexSourceGenerated, officialCodexConditionAlways),
-			wh(30, "upgrade", "Upgrade", "websocket", officialCodexSourceGenerated, officialCodexConditionAlways),
-			wh(40, "sec-websocket-version", "Sec-WebSocket-Version", "13", officialCodexSourceGenerated, officialCodexConditionAlways),
-			wh(50, "sec-websocket-key", "Sec-WebSocket-Key", "", officialCodexSourceGenerated, officialCodexConditionAuto),
-			wh(60, "user-agent", "user-agent", "", officialCodexSourceProcess, officialCodexConditionAlways),
-			wh(70, "originator", "originator", "", officialCodexSourceProcess, officialCodexConditionAlways),
-			wh(75, "x-openai-internal-codex-residency", "x-openai-internal-codex-residency", "", officialCodexSourceManagedConfig, officialCodexConditionResidency),
-			wh(80, "chatgpt-account-id", "chatgpt-account-id", "", officialCodexSourceAccount, officialCodexConditionAlways),
-			wh(85, "x-openai-fedramp", "x-openai-fedramp", "true", officialCodexSourceAccount, officialCodexConditionFedRAMP),
-			wh(90, "authorization", "authorization", "", officialCodexSourceAuthentication, officialCodexConditionAlways),
-			wh(100, "x-session-id", "x-session-id", "", officialCodexSourceSession, officialCodexConditionSessionID),
-			wh(105, "x-oai-attestation", "x-oai-attestation", "", officialCodexSourceAuthentication, officialCodexConditionAttestation),
-			wh(110, "version", "version", officialCodexVersion0145, officialCodexSourceConstant, officialCodexConditionAlways),
-			wh(120, "openai-alpha", "openai-alpha", "quicksilver=v1", officialCodexSourceConstant, officialCodexConditionAlways),
-		},
-		// sideband 使用同一 tungstenite 删除算法，但默认不协商压缩，因此没有
-		// 删除后追加项。顺序来自 realtime provider → extra/auth → default headers。
-		HeaderMapInsertionOrder: []string{
-			"host", "connection", "upgrade", "sec-websocket-version", "sec-websocket-key",
-			"version", "openai-alpha", "x-session-id", "x-oai-attestation", "authorization",
-			"chatgpt-account-id", "x-openai-fedramp", "originator", "user-agent",
-			"x-openai-internal-codex-residency",
-		},
-		Body: officialCodexBodyContract{
-			Encoding: "websocket_discriminated_events", Closed: false, Discriminator: "type",
-			Fields: []officialCodexBodyField{bf("type", true, "")},
-		},
-	}
-}
-
-func codex0145WhamEndpoint(id, method, path string, consume bool) officialCodexEndpointProfile {
-	headers := []officialCodexHeaderSlot{
-		h(10, "user-agent", "", officialCodexSourceProcess, officialCodexConditionAlways),
-		h(20, "authorization", "", officialCodexSourceAuthentication, officialCodexConditionAlways),
-		h(30, "chatgpt-account-id", "", officialCodexSourceAccount, officialCodexConditionAlways),
-		h(32, "x-openai-fedramp", "true", officialCodexSourceAccount, officialCodexConditionFedRAMP),
-		h(40, "accept", "*/*", officialCodexSourceConstant, officialCodexConditionAlways),
-		h(50, "host", "", officialCodexSourceGenerated, officialCodexConditionAuto),
-	}
-	body := bodyNone()
-	contentType := ""
-	if consume {
-		contentType = "application/json"
-		headers = append(headers,
-			h(35, "content-type", "application/json", officialCodexSourceConstant, officialCodexConditionAlways),
-			h(60, "content-length", "", officialCodexSourceGenerated, officialCodexConditionAuto),
-		)
-		body = bodyJSON(true,
-			bf("redeem_request_id", true, ""),
-			bfCond("credit_id", false, "none", officialCodexConditionCreditID),
-		)
-	}
-	return officialCodexEndpointProfile{
-		ID: id, Method: method, TransportID: officialCodexTransportHTTPDefault,
-		Host: "chatgpt.com", Path: path, Accept: "*/*", ContentType: contentType,
-		Compression: officialCodexCompressionNone, ClientLifecycle: officialCodexClientBackendLongLived,
-		HeaderOrderMode: officialCodexHeaderOrderH1HeaderMap, Headers: headers, Body: body,
-	}
-}
-
-func codex0145OAuthRefreshEndpoint() officialCodexEndpointProfile {
-	return officialCodexEndpointProfile{
-		ID: officialCodexEndpointOAuthRefresh, Method: http.MethodPost,
-		TransportID: officialCodexTransportHTTPDefault, Host: "auth.openai.com", Path: "/oauth/token",
-		Accept: "application/json", ContentType: "application/x-www-form-urlencoded",
-		Compression: officialCodexCompressionNone, ClientLifecycle: officialCodexClientPerUpperCall,
-		HeaderOrderMode: officialCodexHeaderOrderExplicit,
-		Headers: []officialCodexHeaderSlot{
-			h(10, "content-type", "application/x-www-form-urlencoded", officialCodexSourceConstant, officialCodexConditionAlways),
-			h(20, "accept", "application/json", officialCodexSourceConstant, officialCodexConditionAlways),
-			h(30, "user-agent", "", officialCodexSourceProcess, officialCodexConditionAlways),
-			h(40, "host", "", officialCodexSourceGenerated, officialCodexConditionAuto),
-			h(50, "content-length", "", officialCodexSourceGenerated, officialCodexConditionAuto),
-		},
-		Body: officialCodexBodyContract{
-			Encoding: "form_urlencoded", Closed: true,
-			Fields: []officialCodexBodyField{
-				bf("client_id", true, ""), bf("grant_type", true, ""),
-				bf("refresh_token", true, ""), bf("scope", true, ""),
-			},
-		},
-	}
-}
-
-func codex0145FilesCreateEndpoint() officialCodexEndpointProfile {
-	return officialCodexEndpointProfile{
-		ID: officialCodexEndpointFilesCreate, Method: http.MethodPost,
-		TransportID: officialCodexTransportHTTPDefault, Host: "chatgpt.com", Path: "/backend-api/files",
-		Accept: "*/*", ContentType: "application/json", Compression: officialCodexCompressionNone,
-		ClientLifecycle: officialCodexClientPerUpperCall, HeaderOrderMode: officialCodexHeaderOrderH1HeaderMap,
-		Headers: codex0145FilesAuthorizedJSONHeaders(),
-		Body:    bodyJSON(true, bf("file_name", true, ""), bf("file_size", true, ""), bf("use_case", true, "")),
-	}
-}
-
-func codex0145FilesBlobUploadEndpoint() officialCodexEndpointProfile {
-	return officialCodexEndpointProfile{
-		ID: officialCodexEndpointFilesBlobUpload, Method: http.MethodPut,
-		TransportID: officialCodexTransportHTTPDefault, Host: "*.oaiusercontent.com", HostFromResponse: true,
-		Path:        "{server_returned_path}",
-		Query:       []officialCodexQueryField{{Name: "*", Source: officialCodexSourceServerResponse, Required: true}},
-		Compression: officialCodexCompressionNone, ClientLifecycle: officialCodexClientReturnedUploadURL,
-		HeaderOrderMode: officialCodexHeaderOrderExplicit,
-		Accept:          "*/*",
-		Headers: []officialCodexHeaderSlot{
-			h(10, "x-ms-blob-type", "BlockBlob", officialCodexSourceConstant, officialCodexConditionAlways),
-			h(20, "x-ms-client-request-id", "", officialCodexSourceGenerated, officialCodexConditionAlways),
-			h(30, "content-length", "", officialCodexSourceRequestBody, officialCodexConditionAlways),
-			h(40, "accept", "*/*", officialCodexSourceConstant, officialCodexConditionAlways),
-			h(50, "host", "", officialCodexSourceGenerated, officialCodexConditionAuto),
-		},
-		Body: officialCodexBodyContract{Encoding: "raw_bytes", Closed: true},
-	}
-}
-
-func codex0145FilesUploadedEndpoint() officialCodexEndpointProfile {
-	return officialCodexEndpointProfile{
-		ID: officialCodexEndpointFilesUploaded, Method: http.MethodPost,
-		TransportID: officialCodexTransportHTTPDefault, Host: "chatgpt.com",
-		Path: "/backend-api/files/{file_id}/uploaded", Accept: "*/*", ContentType: "application/json",
-		Compression: officialCodexCompressionNone, ClientLifecycle: officialCodexClientPerUpperCall,
-		HeaderOrderMode: officialCodexHeaderOrderH1HeaderMap, Headers: codex0145FilesAuthorizedJSONHeaders(),
-		Body: bodyJSON(true),
-	}
-}
-
-// codex0145FilesAuthorizedJSONHeaders 对应 FileClient 的 authorized_request +
-// reqwest JSON 构造器。文件控制面不会经过通用 Codex API client 的默认头注入，
-// 因而没有 version、originator、user-agent、cookie 或 residency。
-func codex0145FilesAuthorizedJSONHeaders() []officialCodexHeaderSlot {
-	return []officialCodexHeaderSlot{
-		h(10, "authorization", "", officialCodexSourceAuthentication, officialCodexConditionAlways),
-		h(20, "chatgpt-account-id", "", officialCodexSourceAccount, officialCodexConditionAlways),
-		h(25, "x-openai-fedramp", "true", officialCodexSourceAccount, officialCodexConditionFedRAMP),
-		h(30, "content-type", "application/json", officialCodexSourceConstant, officialCodexConditionAlways),
-		h(40, "accept", "*/*", officialCodexSourceConstant, officialCodexConditionAlways),
-		h(50, "host", "", officialCodexSourceGenerated, officialCodexConditionAuto),
-		h(60, "content-length", "", officialCodexSourceGenerated, officialCodexConditionAuto),
-	}
-}
-
-func standardCodexJSONHeaders(includeTurnMetadata bool) []officialCodexHeaderSlot {
-	headers := []officialCodexHeaderSlot{
-		h(10, "version", officialCodexVersion0145, officialCodexSourceConstant, officialCodexConditionAlways),
-	}
-	if includeTurnMetadata {
-		headers = append(headers, h(20, "x-codex-turn-metadata", "", officialCodexSourceTurn, officialCodexConditionAlways))
-	}
-	base := 30
-	headers = append(headers,
-		h(base, "authorization", "", officialCodexSourceAuthentication, officialCodexConditionAlways),
-		h(base+10, "chatgpt-account-id", "", officialCodexSourceAccount, officialCodexConditionAlways),
-		h(base+15, "x-openai-fedramp", "true", officialCodexSourceAccount, officialCodexConditionFedRAMP),
-		h(base+20, "content-type", "application/json", officialCodexSourceConstant, officialCodexConditionAlways),
-		h(base+30, "accept", "*/*", officialCodexSourceConstant, officialCodexConditionAlways),
-		h(base+40, "originator", "", officialCodexSourceProcess, officialCodexConditionAlways),
-		h(base+50, "user-agent", "", officialCodexSourceProcess, officialCodexConditionAlways),
-		h(base+55, "x-openai-internal-codex-residency", "", officialCodexSourceManagedConfig, officialCodexConditionResidency),
-		h(base+60, "cookie", "", officialCodexSourceSession, officialCodexConditionCookie),
-		h(base+70, "host", "", officialCodexSourceGenerated, officialCodexConditionAuto),
-		h(base+80, "content-length", "", officialCodexSourceGenerated, officialCodexConditionAuto),
-	)
-	return headers
-}
-
-func h(slot int, name, value, source, condition string) officialCodexHeaderSlot {
-	return officialCodexHeaderSlot{
-		Slot: slot, Name: name, WireName: strings.ToLower(name), Value: value,
-		Source: source, Condition: condition,
-	}
-}
-
-func wh(slot int, name, wireName, value, source, condition string) officialCodexHeaderSlot {
-	return officialCodexHeaderSlot{
-		Slot: slot, Name: name, WireName: wireName, Value: value,
-		Source: source, Condition: condition,
-	}
-}
-
-func bf(name string, required bool, omitWhen string) officialCodexBodyField {
-	return officialCodexBodyField{Name: name, Required: required, OmitWhen: omitWhen}
-}
-
-func bfCond(name string, required bool, omitWhen, condition string) officialCodexBodyField {
-	return officialCodexBodyField{Name: name, Required: required, OmitWhen: omitWhen, Condition: condition}
-}
-
-func bodyJSON(closed bool, fields ...officialCodexBodyField) officialCodexBodyContract {
-	return officialCodexBodyContract{Encoding: "json", Closed: closed, Fields: fields}
-}
-
-func bodyNone() officialCodexBodyContract {
-	return officialCodexBodyContract{Encoding: "none", Closed: true}
-}
-
 func digestOfficialCodexVersionProfile(profile officialCodexVersionProfile) (string, error) {
 	profile.Digest = ""
 	encoded, err := json.Marshal(profile)
@@ -1199,381 +696,4 @@ func digestOfficialCodexVersionProfile(profile officialCodexVersionProfile) (str
 	}
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:]), nil
-}
-
-// officialCodexVersionValidators 登记每个版本的专属校验器。
-//
-// 画像里的规则清单、surface 身份、feature 默认值、工具呈现和文件流程都是版本事实，
-// 只能由该版本自己断言。原先通用解析路径直接要求 Version 等于 0.145.0，等于把注册表
-// 按版本查表的能力整个抵消掉：登记新快照后解析必然失败，而 §3.2 承诺的“升级只需登记
-// 快照并切换 release 指针”正是建立在这条路径能通过之上。
-//
-// 新增版本时在自己的快照文件里登记校验器即可，通用执行引擎与 §3.5.2 的共享接入点
-// 都不需要改动。
-var officialCodexVersionValidators = map[string]func(officialCodexVersionProfile) error{
-	officialCodexVersion0145: validateCodex0145Profile,
-}
-
-// validateOfficialCodexVersionProfile 是版本无关的校验入口：确认版本号存在且该版本
-// 登记了专属校验器，随后把全部断言交给它。
-func validateOfficialCodexVersionProfile(profile officialCodexVersionProfile) error {
-	version := strings.TrimSpace(profile.Version)
-	if version == "" {
-		return errors.New("Codex 版本画像缺少版本号")
-	}
-	validator, registered := officialCodexVersionValidators[version]
-	if !registered {
-		return fmt.Errorf("Codex 版本 %q 未登记专属校验器", version)
-	}
-	return validator(profile)
-}
-
-// validateCodex0145Profile 是 0.145.0 的专属校验器，其中每条断言都只对该版本成立。
-func validateCodex0145Profile(profile officialCodexVersionProfile) error {
-	if profile.Version != officialCodexVersion0145 {
-		return fmt.Errorf("版本必须精确为 %s", officialCodexVersion0145)
-	}
-	if err := validateCodex0145RequiredRules(profile.RequiredRules); err != nil {
-		return err
-	}
-	if err := validateCodex0145Surfaces(profile.Surfaces); err != nil {
-		return err
-	}
-	if err := validateCodex0145FeatureDefaults(profile.FeatureDefaults); err != nil {
-		return err
-	}
-	if err := validateCodex0145ToolPresentation(profile.ToolPresentation); err != nil {
-		return err
-	}
-	if err := validateCodex0145Subagents(profile.Subagents); err != nil {
-		return err
-	}
-	if err := validateCodex0145FilesProfile(profile.Files); err != nil {
-		return err
-	}
-	transportIDs, err := validateCodex0145Transports(profile.Transports)
-	if err != nil {
-		return err
-	}
-	if err := validateCodex0145Endpoints(profile.Endpoints, transportIDs); err != nil {
-		return err
-	}
-	return nil
-}
-
-func validateCodex0145ToolPresentation(tools officialCodexToolPresentationProfile) error {
-	expected := officialCodex0145ToolPresentation()
-	endpointIDsMatch := officialCodex0145StringSliceEqual(tools.EndpointIDs, expected.EndpointIDs)
-	namespaceFieldsMatch := officialCodex0145StringSliceEqual(
-		tools.NamespaceRequiredFields,
-		expected.NamespaceRequiredFields,
-	)
-	functionFieldsMatch := officialCodex0145StringSliceEqual(
-		tools.FunctionRequiredFields,
-		expected.FunctionRequiredFields,
-	)
-	if tools.HostedImageGenerationAllowed != expected.HostedImageGenerationAllowed ||
-		tools.HostedImageGenerationType != expected.HostedImageGenerationType ||
-		tools.NamespaceType != expected.NamespaceType ||
-		tools.NamespaceName != expected.NamespaceName ||
-		tools.FunctionType != expected.FunctionType ||
-		tools.FunctionName != expected.FunctionName ||
-		tools.LiteCarrierItemType != expected.LiteCarrierItemType || !endpointIDsMatch ||
-		!namespaceFieldsMatch || !functionFieldsMatch {
-		return fmt.Errorf("Codex 0.145.0 工具呈现画像不符合版本规格：%+v", tools)
-	}
-	return nil
-}
-
-func officialCodex0145StringSliceEqual(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for index := range right {
-		if left[index] != right[index] {
-			return false
-		}
-	}
-	return true
-}
-
-func validateCodex0145Subagents(subagents officialCodexSubagentProfile) error {
-	expected := officialCodex0145Subagents()
-	mappingsMatch := len(subagents.Mappings) == len(expected.Mappings)
-	if mappingsMatch {
-		for index := range expected.Mappings {
-			if subagents.Mappings[index] != expected.Mappings[index] {
-				mappingsMatch = false
-				break
-			}
-		}
-	}
-	if !mappingsMatch || subagents.OtherLabelAllowed != expected.OtherLabelAllowed ||
-		subagents.OtherThreadSource != expected.OtherThreadSource ||
-		subagents.OtherHeaderEqualsKind != expected.OtherHeaderEqualsKind {
-		return fmt.Errorf("Codex 0.145.0 subagent 画像不符合版本规格：%+v", subagents)
-	}
-	return nil
-}
-
-func validateCodex0145FilesProfile(files officialCodexFilesProfile) error {
-	expected := officialCodex0145FilesProfile()
-	if files != expected {
-		return fmt.Errorf("Codex 0.145.0 Files 流程画像不符合版本规格：%+v", files)
-	}
-	return nil
-}
-
-func validateCodex0145RequiredRules(rules []string) error {
-	expected := stringSet(officialCodex0145RequiredRules())
-	if len(rules) != 42 {
-		return fmt.Errorf("Codex 0.145.0 必须包含 42 条规则，实际为 %d", len(rules))
-	}
-	seen := make(map[string]struct{}, len(rules))
-	for _, rule := range rules {
-		if _, duplicate := seen[rule]; duplicate {
-			return fmt.Errorf("Codex 0.145.0 规则重复：%s", rule)
-		}
-		if _, ok := expected[rule]; !ok {
-			return fmt.Errorf("Codex 0.145.0 包含未知规则：%s", rule)
-		}
-		seen[rule] = struct{}{}
-	}
-	for rule := range expected {
-		if _, ok := seen[rule]; !ok {
-			return fmt.Errorf("Codex 0.145.0 缺少规则：%s", rule)
-		}
-	}
-	return nil
-}
-
-func validateCodex0145Surfaces(surfaces []officialCodexSurfaceProfile) error {
-	expected := stringSet([]string{officialCodexSurfaceExec, officialCodexSurfaceTUI})
-	if len(surfaces) != len(expected) {
-		return fmt.Errorf("Codex 0.145.0 入口画像数量错误：%d", len(surfaces))
-	}
-	seen := make(map[string]struct{}, len(surfaces))
-	for _, surface := range surfaces {
-		if _, ok := expected[surface.ID]; !ok {
-			return fmt.Errorf("未知 Codex 入口画像：%q", surface.ID)
-		}
-		if _, duplicate := seen[surface.ID]; duplicate {
-			return fmt.Errorf("Codex 入口画像重复：%s", surface.ID)
-		}
-		seen[surface.ID] = struct{}{}
-		if surface.Product == "" || surface.Version != officialCodexVersion0145 || surface.PlatformPrefix == "" ||
-			surface.DefaultTerminalToken != "unknown" || surface.TerminalTokenPattern != `^[A-Za-z0-9._/-]+$` ||
-			surface.SuffixName == "" || surface.SuffixVersion != officialCodexVersion0145 || !surface.SuffixOptional ||
-			!surface.InitialModelsMayOmit || surface.Originator == "" || surface.InitialModelsOriginator != "codex_cli_rs" {
-			return fmt.Errorf("Codex 入口画像不完整：%s", surface.ID)
-		}
-	}
-	return nil
-}
-
-func validateCodex0145FeatureDefaults(features officialCodexFeatureDefaults) error {
-	if !features.SupportsWebSockets || !features.RemoteCompactionV2 || !features.EnableRequestCompression ||
-		features.RequestCompressionLevel != 3 || features.RuntimeMetrics || features.ForceHTTPFallback ||
-		!features.ResponsesLiteFromModelManifest || !features.ParallelToolsFromModelManifest {
-		return errors.New("Codex 0.145.0 feature 默认值不符合版本规格")
-	}
-	return nil
-}
-
-func validateCodex0145Transports(transports []officialCodexTransportProfile) (map[string]struct{}, error) {
-	expected := stringSet([]string{officialCodexTransportHTTPDefault, officialCodexTransportWS})
-	if len(transports) != len(expected) {
-		return nil, fmt.Errorf("Codex 0.145.0 传输画像数量错误：%d", len(transports))
-	}
-	seen := make(map[string]struct{}, len(transports))
-	for _, transport := range transports {
-		if _, ok := expected[transport.ID]; !ok {
-			return nil, fmt.Errorf("未知 Codex 传输画像：%q", transport.ID)
-		}
-		if _, duplicate := seen[transport.ID]; duplicate {
-			return nil, fmt.Errorf("Codex 传输画像重复：%s", transport.ID)
-		}
-		seen[transport.ID] = struct{}{}
-		if transport.Protocol == "" || transport.PlatformCondition == "" || transport.TLSStack == "" ||
-			len(transport.CipherSuites) == 0 || len(transport.Extensions) == 0 ||
-			len(transport.SupportedVersions) == 0 || transport.TLSMinVersion == 0 || transport.TLSMaxVersion == 0 {
-			return nil, fmt.Errorf("Codex 传输画像不完整：%s", transport.ID)
-		}
-		if hasDuplicateUint16(transport.CipherSuites) || hasDuplicateUint16(transport.Extensions) ||
-			hasDuplicateUint16(transport.SupportedGroups) {
-			return nil, fmt.Errorf("Codex 传输画像包含重复 TLS 项：%s", transport.ID)
-		}
-		if transport.ID == officialCodexTransportHTTPDefault {
-			if len(transport.CipherSuites) != 30 || len(transport.ALPN) != 0 || !transport.LowercaseHTTPHeaders ||
-				transport.CrossCallConnectionReuse || !transport.RetryReusesClient || transport.WebSocket != nil {
-				return nil, errors.New("Codex 0.145.0 默认 HTTP 传输参数不完整")
-			}
-		}
-		if transport.ID == officialCodexTransportWS {
-			if len(transport.CipherSuites) != 10 || !transport.RandomizeExtensions || transport.WebSocket == nil ||
-				len(transport.WebSocket.FixedHandshakePrefix) != 5 || !transport.WebSocket.CompressedTextRSV1 ||
-				!transport.WebSocket.RawDeflatePayload || !transport.WebSocket.ContextTakeover {
-				return nil, errors.New("Codex 0.145.0 WS 传输参数不完整")
-			}
-		}
-	}
-	return seen, nil
-}
-
-func validateCodex0145Endpoints(endpoints []officialCodexEndpointProfile, transportIDs map[string]struct{}) error {
-	expected := stringSet(officialCodex0145RequiredEndpointIDs())
-	if len(endpoints) != len(expected) {
-		return fmt.Errorf("Codex 0.145.0 端点画像数量错误：%d", len(endpoints))
-	}
-	seen := make(map[string]struct{}, len(endpoints))
-	for _, endpoint := range endpoints {
-		if _, ok := expected[endpoint.ID]; !ok {
-			return fmt.Errorf("未知 Codex 端点画像：%q", endpoint.ID)
-		}
-		if _, duplicate := seen[endpoint.ID]; duplicate {
-			return fmt.Errorf("Codex 端点画像重复：%s", endpoint.ID)
-		}
-		seen[endpoint.ID] = struct{}{}
-		if endpoint.Method == "" || endpoint.Host == "" || endpoint.Path == "" || endpoint.TransportID == "" ||
-			endpoint.ClientLifecycle == "" || endpoint.HeaderOrderMode == "" || endpoint.Compression == "" {
-			return fmt.Errorf("Codex 端点画像不完整：%s", endpoint.ID)
-		}
-		if _, ok := transportIDs[endpoint.TransportID]; !ok {
-			return fmt.Errorf("Codex 端点 %s 引用未知传输 %s", endpoint.ID, endpoint.TransportID)
-		}
-		if err := validateCodex0145Query(endpoint); err != nil {
-			return err
-		}
-		if err := validateCodex0145Headers(endpoint); err != nil {
-			return err
-		}
-		if err := validateCodex0145Body(endpoint); err != nil {
-			return err
-		}
-	}
-	for endpointID := range expected {
-		if _, ok := seen[endpointID]; !ok {
-			return fmt.Errorf("Codex 0.145.0 缺少端点画像：%s", endpointID)
-		}
-	}
-	return nil
-}
-
-func validateCodex0145Query(endpoint officialCodexEndpointProfile) error {
-	seen := make(map[string]struct{}, len(endpoint.Query))
-	for _, field := range endpoint.Query {
-		if field.Name == "" || field.Source == "" {
-			return fmt.Errorf("Codex 端点 %s 包含不完整 query", endpoint.ID)
-		}
-		if _, duplicate := seen[field.Name]; duplicate {
-			return fmt.Errorf("Codex 端点 %s 的 query 重复：%s", endpoint.ID, field.Name)
-		}
-		seen[field.Name] = struct{}{}
-	}
-	return nil
-}
-
-func validateCodex0145Headers(endpoint officialCodexEndpointProfile) error {
-	if len(endpoint.Headers) == 0 {
-		return fmt.Errorf("Codex 端点 %s 缺少 header 画像", endpoint.ID)
-	}
-	seenNames := make(map[string]struct{}, len(endpoint.Headers))
-	seenPositions := make(map[string]struct{}, len(endpoint.Headers))
-	for _, header := range endpoint.Headers {
-		if header.Slot <= 0 || header.Name == "" || header.WireName == "" || header.Source == "" || header.Condition == "" {
-			return fmt.Errorf("Codex 端点 %s 包含不完整 header 槽位", endpoint.ID)
-		}
-		name := strings.ToLower(header.Name)
-		if _, duplicate := seenNames[name]; duplicate {
-			return fmt.Errorf("Codex 端点 %s 的 header 重复：%s", endpoint.ID, header.Name)
-		}
-		seenNames[name] = struct{}{}
-		position := fmt.Sprintf("%d/%d", header.Slot, header.Sequence)
-		if _, duplicate := seenPositions[position]; duplicate {
-			return fmt.Errorf("Codex 端点 %s 的 header 槽位重复：%s", endpoint.ID, position)
-		}
-		seenPositions[position] = struct{}{}
-		if endpoint.Upgrade == "" && header.WireName != strings.ToLower(header.WireName) {
-			return fmt.Errorf("普通 HTTP 端点 %s 的 header 必须小写：%s", endpoint.ID, header.WireName)
-		}
-	}
-	if endpoint.Upgrade == "" {
-		if len(endpoint.HeaderMapInsertionOrder) != 0 || len(endpoint.PostRemoveHeaders) != 0 {
-			return fmt.Errorf("普通 HTTP 端点 %s 不得声明 WS HeaderMap 构造序", endpoint.ID)
-		}
-		return nil
-	}
-	if endpoint.HeaderOrderMode != officialCodexHeaderOrderWSSwapRemove {
-		return fmt.Errorf("Codex WS 端点 %s 未使用 swap_remove 画像", endpoint.ID)
-	}
-	desired := make([]string, 0, len(endpoint.Headers))
-	for _, header := range endpoint.Headers {
-		desired = append(desired, strings.ToLower(header.Name))
-	}
-	prefix := []string{"host", "connection", "upgrade", "sec-websocket-version", "sec-websocket-key"}
-	if _, _, err := officialCodex0145CompileWSHeaderConstruction(endpoint, desired, prefix); err != nil {
-		return err
-	}
-	return nil
-}
-
-func validateCodex0145Body(endpoint officialCodexEndpointProfile) error {
-	body := endpoint.Body
-	if body.Encoding == "" {
-		return fmt.Errorf("Codex 端点 %s 缺少 body 编码", endpoint.ID)
-	}
-	seen := make(map[string]struct{}, len(body.Fields))
-	for _, field := range body.Fields {
-		if field.Name == "" {
-			return fmt.Errorf("Codex 端点 %s 包含空 body 字段", endpoint.ID)
-		}
-		if _, duplicate := seen[field.Name]; duplicate {
-			return fmt.Errorf("Codex 端点 %s 的 body 字段重复：%s", endpoint.ID, field.Name)
-		}
-		seen[field.Name] = struct{}{}
-	}
-	if body.Encoding == "none" && len(body.Fields) != 0 {
-		return fmt.Errorf("Codex 端点 %s 的无 body 契约包含字段", endpoint.ID)
-	}
-	return nil
-}
-
-func officialCodex0145RequiredEndpointIDs() []string {
-	return []string{
-		officialCodexEndpointModels,
-		officialCodexEndpointResponsesHTTP,
-		officialCodexEndpointResponsesWS,
-		officialCodexEndpointResponsesCompact,
-		officialCodexEndpointAlphaSearch,
-		officialCodexEndpointImagesGenerations,
-		officialCodexEndpointImagesEdits,
-		officialCodexEndpointRealtimeCalls,
-		officialCodexEndpointRealtimeSideband,
-		officialCodexEndpointWhamUsage,
-		officialCodexEndpointWhamResetCredits,
-		officialCodexEndpointWhamConsumeResetCredit,
-		officialCodexEndpointOAuthRefresh,
-		officialCodexEndpointFilesCreate,
-		officialCodexEndpointFilesBlobUpload,
-		officialCodexEndpointFilesUploaded,
-	}
-}
-
-func stringSet(values []string) map[string]struct{} {
-	result := make(map[string]struct{}, len(values))
-	for _, value := range values {
-		result[value] = struct{}{}
-	}
-	return result
-}
-
-func hasDuplicateUint16(values []uint16) bool {
-	seen := make(map[uint16]struct{}, len(values))
-	for _, value := range values {
-		if _, duplicate := seen[value]; duplicate {
-			return true
-		}
-		seen[value] = struct{}{}
-	}
-	return false
 }

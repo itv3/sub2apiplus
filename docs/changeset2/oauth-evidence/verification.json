@@ -1,0 +1,33 @@
+{
+  "schema_version": "official-oauth-verification/v1",
+  "status": "pass_with_scoped_limitation",
+  "source": {
+    "tag": "rust-v0.145.0",
+    "commit": "25af12f7e61572b0bc18ddb1008be543b91519b0"
+  },
+  "binary": {
+    "version": "codex-cli 0.145.0",
+    "sha256": "a2a05dafaa1acb002a45eaec0a462de5b13694fcfcd7bc43305f14781ce7be14"
+  },
+  "authorization_code_exchange": {
+    "request_line": "POST /oauth/token HTTP/1.1",
+    "header_names_in_wire_order": ["content-type", "accept", "host", "content-length"],
+    "content_type": "application/x-www-form-urlencoded",
+    "body_field_order": ["grant_type", "code", "redirect_uri", "client_id", "code_verifier"],
+    "user_agent_absent": true,
+    "originator_absent": true
+  },
+  "oauth_refresh": {
+    "request_line": "POST /oauth/token HTTP/1.1",
+    "header_names_in_wire_order": ["content-type", "accept", "originator", "user-agent", "host", "content-length"],
+    "content_type": "application/json",
+    "body_field_order": ["client_id", "grant_type", "refresh_token"],
+    "user_agent_present": true,
+    "originator_present": true
+  },
+  "scoped_limitation": {
+    "alpn_capability_matrix": false,
+    "connection_lifecycle_matrix": false,
+    "exchange_endpoint_upgrade_allowed": false
+  }
+}

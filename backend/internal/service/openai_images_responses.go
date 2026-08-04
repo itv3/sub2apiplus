@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
@@ -331,13 +332,17 @@ func openAIImageUploadToDataURL(upload OpenAIImagesUpload) (string, error) {
 // resolveOpenAICodexImagesEndpoint 根据入站操作选择 0.145.0 独立 images 画像。
 // 调用方不得自行拼接 ChatGPT 路径，以免 generations/edits 再次退回 hosted
 // Responses 形态。
-func resolveOpenAICodexImagesEndpoint(parsed *OpenAIImagesRequest) (officialCodexEndpointProfile, error) {
+func resolveOpenAICodexImagesEndpoint(
+	parsed *OpenAIImagesRequest,
+	mode string,
+) (officialCodexEndpointProfile, error) {
 	endpointID := officialCodexEndpointImagesGenerations
 	if parsed != nil && parsed.IsEdits() {
 		endpointID = officialCodexEndpointImagesEdits
 	}
-	return resolveActiveCodexEndpoint(
-		codex0145EndpointID(endpointID),
+	return resolveCodexEndpointForMode(
+		mode,
+		codexEndpointID(endpointID),
 	)
 }
 
@@ -345,7 +350,11 @@ func resolveOpenAICodexImagesEndpoint(parsed *OpenAIImagesRequest) (officialCode
 // 不经过 hosted /responses 工具请求。
 // generations 顶层最多五个字段；edits 只在首位增加 images，且 n、mask、style、
 // output_format 等不属于官方结构体的字段一律不会出站。
-func buildOpenAICodexImagesRequestBody(parsed *OpenAIImagesRequest, model string) ([]byte, error) {
+func buildOpenAICodexImagesRequestBody(
+	parsed *OpenAIImagesRequest,
+	model string,
+	mode string,
+) ([]byte, error) {
 	if parsed == nil {
 		return nil, fmt.Errorf("parsed images request is required")
 	}
@@ -357,7 +366,7 @@ func buildOpenAICodexImagesRequestBody(parsed *OpenAIImagesRequest, model string
 	if model == "" {
 		return nil, fmt.Errorf("model is required")
 	}
-	endpoint, err := resolveOpenAICodexImagesEndpoint(parsed)
+	endpoint, err := resolveOpenAICodexImagesEndpoint(parsed, mode)
 	if err != nil {
 		return nil, fmt.Errorf("resolve Codex images endpoint profile: %w", err)
 	}
@@ -409,8 +418,9 @@ func buildOpenAICodexImagesRequestBody(parsed *OpenAIImagesRequest, model string
 			payload[field.name] = trimmed
 		}
 	}
-	return projectActiveCodexEndpointJSONBody(
-		codex0145EndpointID(endpoint.ID),
+	return projectCodexEndpointJSONBodyForMode(
+		mode,
+		codexEndpointID(endpoint.ID),
 		payload,
 		nil,
 		nil,
@@ -427,10 +437,12 @@ func (s *OpenAIGatewayService) buildOpenAICodexImagesRequest(
 	token string,
 	endpoint officialCodexEndpointProfile,
 	invocationID string,
+	mode string,
 ) (*http.Request, error) {
-	targetURL, err := buildActiveCodexEndpointURL(
-		codex0145EndpointID(endpoint.ID),
-		officialCodex0145EndpointURLInput{},
+	targetURL, err := buildCodexEndpointURLForMode(
+		mode,
+		codexEndpointID(endpoint.ID),
+		officialCodexEndpointURLInput{},
 	)
 	if err != nil {
 		return nil, fmt.Errorf("resolve Codex images endpoint URL: %w", err)
@@ -442,19 +454,6 @@ func (s *OpenAIGatewayService) buildOpenAICodexImagesRequest(
 	}
 	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
 	req.Host = endpoint.Host
-	req, egressContext, err := attachOfficialCodex0145EndpointRequest(
-		req,
-		account,
-		codex0145EndpointID(endpoint.ID),
-		invocationID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("attach Codex images endpoint profile: %w", err)
-	}
-	body, err = officialCodex0145FinalizeEndpointJSONBody(egressContext, body, nil)
-	if err != nil {
-		return nil, fmt.Errorf("finalize Codex images body: %w", err)
-	}
 	resetOfficialEgressRequestBody(req, body)
 
 	authHeaders, err := s.buildOpenAIAuthenticationHeaders(ctx, account, token)
@@ -471,17 +470,8 @@ func (s *OpenAIGatewayService) buildOpenAICodexImagesRequest(
 	}
 	req.Header.Set("Content-Type", endpoint.ContentType)
 	req.Header.Set("Accept", endpoint.Accept)
-	userAgent, originator, identityErr := officialCodex0145ProcessIdentity(egressContext)
-	if identityErr != nil {
-		return nil, fmt.Errorf("resolve Codex images process identity: %w", identityErr)
-	}
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Originator", originator)
 	// OAuth 的账号覆写当前为 no-op；仍保留调用顺序，再由画像闭包作最终决定。
 	account.ApplyHeaderOverrides(req.Header)
-	if _, err := officialCodex0145FinalizeEndpointHeaders(egressContext, req.Header, nil); err != nil {
-		return nil, fmt.Errorf("finalize Codex images endpoint headers: %w", err)
-	}
 	return req, nil
 }
 
@@ -1866,6 +1856,11 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	if err := validateOpenAIImagesModel(requestModel); err != nil {
 		return nil, err
 	}
+	runtimeState, err := resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream)
+	if err != nil {
+		return nil, err
+	}
+	releaseMode := string(runtimeState.CodexReleaseMode)
 	logger.LegacyPrintf(
 		"service.openai_gateway",
 		"[OpenAI] Images request routing request_model=%s endpoint=%s account_type=%s uploads=%d",
@@ -1874,18 +1869,23 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		account.Type,
 		len(parsed.Uploads),
 	)
-	endpointProfile, err := resolveOpenAICodexImagesEndpoint(parsed)
+	endpointProfile, err := resolveOpenAICodexImagesEndpoint(parsed, releaseMode)
 	if err != nil {
 		return nil, fmt.Errorf("resolve Codex images endpoint profile: %w", err)
 	}
-	ctx, err = bindOfficialCodex0145RuntimeStateFromIngress(
+	ctx, err = bindOfficialCodexRuntimeStateFromIngress(
 		ctx,
 		c,
 		account,
-		codex0145EndpointID(endpointProfile.ID),
+		releaseMode,
+		codexEndpointID(endpointProfile.ID),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("resolve Codex images runtime state: %w", err)
+	}
+	ctx, err = bindOfficialEgressSink(ctx, officialEgressSinkImagesResponses)
+	if err != nil {
+		return nil, fmt.Errorf("bind Codex images official egress sink: %w", err)
 	}
 	upstreamCtx, releaseUpstreamCtx := detachUpstreamContext(ctx)
 	defer releaseUpstreamCtx()
@@ -1895,7 +1895,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		return nil, err
 	}
 
-	imagesBody, err := buildOpenAICodexImagesRequestBody(parsed, requestModel)
+	imagesBody, err := buildOpenAICodexImagesRequestBody(parsed, requestModel, releaseMode)
 	if err != nil {
 		return nil, err
 	}
@@ -1903,7 +1903,7 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 	if err != nil {
 		return nil, fmt.Errorf("resolve Codex images invocation: %w", err)
 	}
-	upstreamReq, err := s.buildOpenAICodexImagesRequest(upstreamCtx, account, imagesBody, token, endpointProfile, invocationID)
+	upstreamReq, err := s.buildOpenAICodexImagesRequest(upstreamCtx, account, imagesBody, token, endpointProfile, invocationID, releaseMode)
 	if err != nil {
 		return nil, err
 	}
@@ -1914,19 +1914,21 @@ func (s *OpenAIGatewayService) forwardOpenAIImagesOAuth(
 		proxyURL = account.Proxy.URL()
 	}
 	upstreamStart := time.Now()
-	// 代理只负责路由，不能改变 Codex 0.145.0 的 TLS/H1 画像；images 的 execute
-	// 路径也明确不启用请求压缩。
-	tlsProfile, err := resolveActiveCodexEndpointTLSProfileForURL(
-		codex0145EndpointID(endpointProfile.ID),
-		upstreamReq.URL,
+	invocation, err := newOfficialCodexHTTPInvocation(
+		upstreamCtx,
+		officialCodexHTTPInvocationInput{
+			Runtime: runtimeState, Account: account,
+			SinkID: officialegress.SinkCodexImagesResponses, InvocationID: invocationID,
+			ProxyURL: proxyURL, PolicyID: "changeset3.images.responses",
+			PolicySource: "service.forwardOpenAIImagesOAuth", AttemptBudget: 1,
+		},
 	)
 	if err != nil {
-		return nil, fmt.Errorf("resolve Codex images TLS profile: %w", err)
+		return nil, err
 	}
-	resp, err := s.httpUpstream.DoWithTLS(
-		upstreamReq, proxyURL, account.ID, account.Concurrency,
-		tlsProfile,
-	)
+	resp, err := invocation.Execute(upstreamCtx, officialCodexHTTPAttemptInput{
+		EndpointID: endpointProfile.ID, Request: upstreamReq,
+	})
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 	if err != nil {
 		safeErr := sanitizeUpstreamErrorMessage(err.Error())

@@ -1,0 +1,105 @@
+package officialegress
+
+import (
+	"bytes"
+	"encoding/json"
+	"io/fs"
+	"path"
+	"strings"
+	"testing"
+
+	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
+)
+
+func TestRuntimeCatalogFilesDeterministicallyRebuildEmbeddedTree(t *testing.T) {
+	catalog := DefaultReleaseCatalog()
+	files, err := catalog.RuntimeCatalogFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 5 {
+		t.Fatalf("正式版本数据文件数=%d，期望 5", len(files))
+	}
+	seen := make(map[string]bool, len(files))
+	for _, file := range files {
+		if seen[file.Path] || path.Clean(file.Path) != file.Path || strings.Contains(file.Path, "testdata") {
+			t.Fatalf("正式版本数据导出路径非法：%s", file.Path)
+		}
+		seen[file.Path] = true
+		embedded, readErr := releaseCatalogFS.ReadFile(path.Join("catalogdata/runtime", file.Path))
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if !bytes.Equal(file.Data, embedded) {
+			t.Fatalf("正式版本数据无法确定性重建：%s", file.Path)
+		}
+	}
+	if !seen["release-catalog.json"] {
+		t.Fatal("正式版本数据缺少 release-catalog.json selector")
+	}
+}
+
+func TestReleaseCatalogFSContainsNoHistoricalTestdata(t *testing.T) {
+	err := fs.WalkDir(releaseCatalogFS, ".", func(pathValue string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if strings.Contains(pathValue, "testdata") {
+			t.Fatalf("releaseCatalogFS 意外嵌入历史 testdata：%s", pathValue)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRuntimeProfileBlobRejectsSamePathDifferentBytes(t *testing.T) {
+	catalog := DefaultReleaseCatalog()
+	doc := catalog.snapshots.ToDoc()
+	if len(doc.Snapshots) == 0 {
+		t.Fatal("正式 SnapshotCatalog 为空")
+	}
+	mutatedPath := doc.Snapshots[0].File
+	_, err := profilecontract.NewSnapshotCatalog(doc, func(relativePath string) ([]byte, error) {
+		raw, readErr := releaseCatalogFS.ReadFile(path.Join("catalogdata/runtime", relativePath))
+		if readErr != nil {
+			return nil, readErr
+		}
+		if relativePath == mutatedPath {
+			// 只增加合法 JSON 尾部空白，语义画像 digest 不变；blob SHA-256 仍必须拒绝。
+			raw = append(raw, ' ')
+		}
+		return raw, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "blob SHA-256") {
+		t.Fatalf("同内容寻址路径的不同原文字节未被拒绝：%v", err)
+	}
+}
+
+func TestRuntimeReleaseCatalogManifestUsesDigestAddressedAggregates(t *testing.T) {
+	raw, err := releaseCatalogFS.ReadFile(runtimeReleaseCatalogManifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest releaseCatalogManifest
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&manifest); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range []struct {
+		name      string
+		pathValue string
+		digest    string
+		directory string
+	}{
+		{name: "ReleaseGraph", pathValue: manifest.ReleaseGraph.Path, digest: manifest.ReleaseGraph.SHA256, directory: "catalogdata/runtime/release-graphs"},
+		{name: "SnapshotCatalog", pathValue: manifest.SnapshotCatalog.Path, digest: manifest.SnapshotCatalog.SHA256, directory: "catalogdata/runtime/snapshot-catalogs"},
+	} {
+		want := path.Join(item.directory, item.digest+".json")
+		if item.pathValue != want || !receiptSHA256(item.digest) {
+			t.Fatalf("%s 未按 digest 寻址：got=%s want=%s", item.name, item.pathValue, want)
+		}
+	}
+}

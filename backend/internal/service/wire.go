@@ -61,9 +61,11 @@ func ProvideOpenAIOAuthService(
 	proxyRepo ProxyRepository,
 	oauthClient OpenAIOAuthClient,
 	privacyClientFactory PrivacyClientFactory,
+	officialEgress *OfficialEgressTransitionRuntime,
 ) *OpenAIOAuthService {
 	svc := NewOpenAIOAuthService(proxyRepo, oauthClient)
 	svc.SetPrivacyClientFactory(privacyClientFactory)
+	svc.SetOfficialEgressRuntime(officialEgress)
 	return svc
 }
 
@@ -132,9 +134,11 @@ func ProvideOpenAIQuotaService(
 	tokenProvider *OpenAITokenProvider,
 	httpUpstream HTTPUpstream,
 	openAIGatewayService *OpenAIGatewayService,
+	officialEgress *OfficialEgressTransitionRuntime,
 ) *OpenAIQuotaService {
 	service := NewOpenAIQuotaService(accountRepo, proxyRepo, tokenProvider, httpUpstream)
 	service.agentIdentityWS = openAIGatewayService
+	service.officialEgress = officialEgress
 	return service
 }
 
@@ -151,6 +155,7 @@ func ProvideAccountUsageService(
 	identityCache IdentityCache,
 	tlsFPProfileService *TLSFingerprintProfileService,
 	openAIGatewayService *OpenAIGatewayService,
+	officialEgress *OfficialEgressTransitionRuntime,
 ) *AccountUsageService {
 	service := NewAccountUsageService(
 		accountRepo,
@@ -166,6 +171,7 @@ func ProvideAccountUsageService(
 		tlsFPProfileService,
 	)
 	service.agentIdentityWS = openAIGatewayService
+	service.officialEgress = officialEgress
 	return service
 }
 
@@ -180,6 +186,7 @@ func ProvideAccountTestService(
 	cfg *config.Config,
 	tlsFPProfileService *TLSFingerprintProfileService,
 	openAIGatewayService *OpenAIGatewayService,
+	officialEgress *OfficialEgressTransitionRuntime,
 ) *AccountTestService {
 	service := NewAccountTestService(
 		accountRepo,
@@ -194,6 +201,64 @@ func ProvideAccountTestService(
 	)
 	service.agentIdentityWS = openAIGatewayService
 	service.openAIGatewayService = openAIGatewayService
+	service.officialEgress = officialEgress
+	return service
+}
+
+// ProvideOpenAIGatewayService 只在生产 wiring 中补入 1B Codex Executor；保留
+// NewOpenAIGatewayService 的原签名，避免纯业务单元测试被迫构造完整发送栈。
+func ProvideOpenAIGatewayService(
+	accountRepo AccountRepository,
+	usageLogRepo UsageLogRepository,
+	usageBillingRepo UsageBillingRepository,
+	userRepo UserRepository,
+	userSubRepo UserSubscriptionRepository,
+	userGroupRateRepo UserGroupRateRepository,
+	cache GatewayCache,
+	cfg *config.Config,
+	schedulerSnapshot *SchedulerSnapshotService,
+	concurrencyService *ConcurrencyService,
+	billingService *BillingService,
+	rateLimitService *RateLimitService,
+	billingCacheService *BillingCacheService,
+	httpUpstream HTTPUpstream,
+	deferredService *DeferredService,
+	openAITokenProvider *OpenAITokenProvider,
+	grokTokenProvider *GrokTokenProvider,
+	tlsFPProfileService *TLSFingerprintProfileService,
+	resolver *ModelPricingResolver,
+	channelService *ChannelService,
+	balanceNotifyService *BalanceNotifyService,
+	settingService *SettingService,
+	userPlatformQuotaRepo UserPlatformQuotaRepository,
+	officialEgress *OfficialEgressTransitionRuntime,
+) *OpenAIGatewayService {
+	service := NewOpenAIGatewayService(
+		accountRepo,
+		usageLogRepo,
+		usageBillingRepo,
+		userRepo,
+		userSubRepo,
+		userGroupRateRepo,
+		cache,
+		cfg,
+		schedulerSnapshot,
+		concurrencyService,
+		billingService,
+		rateLimitService,
+		billingCacheService,
+		httpUpstream,
+		deferredService,
+		openAITokenProvider,
+		grokTokenProvider,
+		tlsFPProfileService,
+		resolver,
+		channelService,
+		balanceNotifyService,
+		settingService,
+		userPlatformQuotaRepo,
+	)
+	service.officialEgress = officialEgress
 	return service
 }
 
@@ -677,6 +742,7 @@ func ProvideAPIKeyService(
 // ProviderSet is the Wire provider set for all services
 var ProviderSet = wire.NewSet(
 	// Core services
+	ProvideOfficialEgressTransitionRuntime,
 	NewAuthService,
 	NewPasskeyService,
 	NewUserService,
@@ -697,7 +763,7 @@ var ProviderSet = wire.NewSet(
 	NewAnnouncementService,
 	NewAdminService,
 	NewGatewayService,
-	NewOpenAIGatewayService,
+	ProvideOpenAIGatewayService,
 	ProvideImageStorageSettingService,
 	ProvideImageTaskService,
 	ProvideBatchImageModelPricingResolver,

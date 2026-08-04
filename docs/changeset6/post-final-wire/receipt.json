@@ -1,0 +1,21 @@
+{
+  "schema_version": "changeset6-post-final-wire-receipt/v1",
+  "changeset": "6",
+  "baseline_manifest_path": "docs/changeset5/post-refactor-final-wire/manifest.json",
+  "baseline_manifest_sha256": "3b1dfc541086da317c288bc064016acda9003780f907c3d5ae6c1720a7a78fb5",
+  "manifest_path": "docs/changeset6/post-final-wire/manifest.json",
+  "manifest_sha256": "169152bcd97bd3ce63983b850f08ac4031597c2a8b855f27304d1fc4b6285e5f",
+  "secret_scan_path": "docs/changeset6/post-final-wire/secret-scan.json",
+  "secret_scan_sha256": "64b960366f3a14efdb3aa4b1e0418c154a9d40079be1c985e3dbf942722484d3",
+  "route_count": 28,
+  "capture_count": 56,
+  "capture_key_set_sha256": "41be9cfa14a60bcc098c2bcfa4404e52d6a5637a239ecf19c306b1a4c2425057",
+  "allowed_deltas": [],
+  "unexpected_wire_diff_count": 0,
+  "comparison_result": "passed",
+  "rules": [
+    "变更集 5 post final-wire 三件套只读，禁止重新生成或覆盖",
+    "变更集 6 post 与变更集 5 post 使用统一严格比较器逐字段比较",
+    "允许列表固定为空，任何最终 wire 差异均失败"
+  ]
+}

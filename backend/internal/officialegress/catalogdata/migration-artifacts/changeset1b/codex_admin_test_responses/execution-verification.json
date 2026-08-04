@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "result": "passed",
+  "sink_id": "codex.admin_test.responses",
+  "route": {
+    "method": "POST",
+    "host": "chatgpt.com",
+    "path": "/backend-api/codex/responses",
+    "purpose": "admin_test.responses",
+    "protocol": "http"
+  },
+  "authority_kind": "codex_executor",
+  "authority_id": "codex.executor.changeset1b",
+  "token_issuer_id": "codex.executor.changeset1b",
+  "evidence_kind": "codex_endpoint",
+  "evidence_id": "responses_http",
+  "backend": "http_upstream",
+  "adapter_id": "officialegress.http_upstream",
+  "transport_id": "codex-0.145.0-http-ubuntu24-native",
+  "wire_fixture_sha256": "a598b7bc90486d2f267338f23301ca0967bfe2dbe1036e0b9f6fb8d337190cdb"
+}

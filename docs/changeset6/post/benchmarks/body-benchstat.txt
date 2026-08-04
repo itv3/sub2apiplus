@@ -1,0 +1,35 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Wei-Shaw/sub2api/internal/service
+cpu: Apple M4
+                             │ ../docs/changeset6/baseline/benchmarks/body-pre.txt │ ../docs/changeset6/post/benchmarks/body-post.txt │
+                             │                       sec/op                        │          sec/op           vs base                │
+BodyCompileLargeUnchanged-10                                          13.938m ± 1%               5.232m ±  1%  -62.46% (p=0.000 n=10)
+BodyCompileLargeDirty-10                                              14.050m ± 0%               5.275m ±  1%  -62.45% (p=0.000 n=10)
+BodyCompileRetry-10                                                    28.28m ± 1%               11.05m ±  1%  -60.92% (p=0.000 n=10)
+BodyCompileOpenWS-10                                                   3.994m ± 1%               3.595m ± 15%  -10.01% (p=0.023 n=10)
+geomean                                                                12.20m                    5.754m        -52.82%
+
+                             │ ../docs/changeset6/baseline/benchmarks/body-pre.txt │ ../docs/changeset6/post/benchmarks/body-post.txt │
+                             │                         B/s                         │           B/s            vs base                 │
+BodyCompileLargeUnchanged-10                                          85.25Mi ± 1%            227.10Mi ±  1%  +166.40% (p=0.000 n=10)
+BodyCompileLargeDirty-10                                              84.56Mi ± 0%            225.22Mi ±  1%  +166.34% (p=0.000 n=10)
+BodyCompileRetry-10                                                   84.03Mi ± 1%            215.03Mi ±  1%  +155.89% (p=0.000 n=10)
+BodyCompileOpenWS-10                                                  297.3Mi ± 1%             330.4Mi ± 13%   +11.12% (p=0.023 n=10)
+geomean                                                               115.8Mi                  245.5Mi        +111.94%
+
+                             │ ../docs/changeset6/baseline/benchmarks/body-pre.txt │ ../docs/changeset6/post/benchmarks/body-post.txt │
+                             │                        B/op                         │           B/op            vs base                │
+BodyCompileLargeUnchanged-10                                          55.37Mi ± 0%               37.73Mi ± 0%  -31.86% (p=0.000 n=10)
+BodyCompileLargeDirty-10                                              55.37Mi ± 0%               37.73Mi ± 0%  -31.86% (p=0.000 n=10)
+BodyCompileRetry-10                                                  110.74Mi ± 0%               75.46Mi ± 0%  -31.86% (p=0.000 n=10)
+BodyCompileOpenWS-10                                                 14.826Mi ± 0%               6.412Mi ± 0%  -56.75% (p=0.000 n=10)
+geomean                                                               47.36Mi                    28.81Mi       -39.18%
+
+                             │ ../docs/changeset6/baseline/benchmarks/body-pre.txt │ ../docs/changeset6/post/benchmarks/body-post.txt │
+                             │                      allocs/op                      │        allocs/op          vs base                │
+BodyCompileLargeUnchanged-10                                            990.0 ± 0%                 534.0 ± 0%  -46.06% (p=0.000 n=10)
+BodyCompileLargeDirty-10                                                992.0 ± 0%                 533.0 ± 0%  -46.27% (p=0.000 n=10)
+BodyCompileRetry-10                                                    1.986k ± 0%                1.066k ± 0%  -46.34% (p=0.000 n=10)
+BodyCompileOpenWS-10                                                    313.0 ± 0%                 207.0 ± 1%  -33.87% (p=0.000 n=10)
+geomean                                                                 884.0                      500.6       -43.37%

@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "bootstrap_commit": "38a9929eac35a39c86de2f27de8f7a805d7dae52",
+  "bootstrap_tree": "a8c3dee18a01a6138bfcea60860bb5ad11548c3a",
+  "inventory_sha256": "46593243b1bd315eafcb54335502a1f46bc2b8bfc0ecc2d3146da4e7087bfaeb",
+  "scanner_algorithm_sha256": "7169fb7acf769d08b24d5dc44cb2d54c46624384204cf03026f2c657992c0195",
+  "reconstructed_at": "2026-08-03T00:00:00+08:00",
+  "reviewed_by": "changeset2-task-breakdown-approved",
+  "review_ref": "changeset-2-implementation/2026-08-03",
+  "rationale": "变更集 2 仅增加 LegacyCompiledDispatcher 的精确业务 delegation、opaque capability 包内终端展开、中心 infrastructure terminal 与隔离测试桩分类；legacy_delegated 收据保持原 RuntimeSinkID、purpose、persona、route、backend 和 enforcement，不伪造 MigrationReceipt，也不扩大 sealed legacy ceiling。"
+}

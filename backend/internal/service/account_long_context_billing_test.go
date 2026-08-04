@@ -76,6 +76,7 @@ type longContextBillingRepoStub struct {
 	account          *Account
 	accounts         []*Account
 	createdAccount   *Account
+	updateCalls      int
 	updateExtraCalls int
 	bulkUpdateCalls  int
 }
@@ -102,12 +103,21 @@ func (r *longContextBillingRepoStub) GetByIDs(_ context.Context, _ []int64) ([]*
 }
 
 func (r *longContextBillingRepoStub) Update(_ context.Context, account *Account) error {
+	r.updateCalls++
 	r.account = account
 	return nil
 }
 
-func (r *longContextBillingRepoStub) UpdateExtra(_ context.Context, _ int64, _ map[string]any) error {
+func (r *longContextBillingRepoStub) UpdateExtra(_ context.Context, _ int64, updates map[string]any) error {
 	r.updateExtraCalls++
+	if r.account != nil {
+		if r.account.Extra == nil {
+			r.account.Extra = make(map[string]any)
+		}
+		for key, value := range updates {
+			r.account.Extra[key] = value
+		}
+	}
 	return nil
 }
 

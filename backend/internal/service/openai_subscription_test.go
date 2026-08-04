@@ -34,9 +34,9 @@ func TestFetchChatGPTSubscriptionExpiresAt(t *testing.T) {
 	chatGPTSubscriptionsURL = server.URL + "/backend-api/subscriptions"
 	t.Cleanup(func() { chatGPTSubscriptionsURL = oldURL })
 
-	got := fetchChatGPTSubscriptionExpiresAt(context.Background(), func(proxyURL string) (*req.Client, error) {
-		return req.C().SetTimeout(5 * time.Second), nil
-	}, "access-token", "", "acc_123")
+	got := fetchChatGPTSubscriptionExpiresAt(context.Background(), func(request PrivacyClientRequest) (*PrivacyHTTPClient, error) {
+		return &PrivacyHTTPClient{Client: req.C().SetTimeout(5 * time.Second), Persona: "chrome_133_xhr"}, nil
+	}, "access-token", "", "acc_123", buildOpenAIPrivacyRolloutKey("acc_123"))
 
 	require.Equal(t, wantExpiresAt, got)
 }
@@ -74,9 +74,9 @@ func TestFetchChatGPTAccountInfo_SkipsExpiredWorkspaceCandidate(t *testing.T) {
 	chatGPTAccountsCheckURL = server.URL + "/backend-api/accounts/check/v4-2023-04-27"
 	t.Cleanup(func() { chatGPTAccountsCheckURL = oldURL })
 
-	got := fetchChatGPTAccountInfo(context.Background(), func(proxyURL string) (*req.Client, error) {
-		return req.C().SetTimeout(5 * time.Second), nil
-	}, "access-token", "", "org-expired-workspace")
+	got := fetchChatGPTAccountInfo(context.Background(), func(request PrivacyClientRequest) (*PrivacyHTTPClient, error) {
+		return &PrivacyHTTPClient{Client: req.C().SetTimeout(5 * time.Second), Persona: "chrome_133_xhr"}, nil
+	}, "access-token", "", "org-expired-workspace", buildOpenAIPrivacyRolloutKey("org-expired-workspace"))
 
 	require.NotNil(t, got)
 	require.Equal(t, "free", got.PlanType)
@@ -111,9 +111,9 @@ func TestFetchChatGPTAccountInfo_SkipsDeactivatedWorkspaceCandidate(t *testing.T
 	chatGPTAccountsCheckURL = server.URL + "/backend-api/accounts/check/v4-2023-04-27"
 	t.Cleanup(func() { chatGPTAccountsCheckURL = oldURL })
 
-	got := fetchChatGPTAccountInfo(context.Background(), func(proxyURL string) (*req.Client, error) {
-		return req.C().SetTimeout(5 * time.Second), nil
-	}, "access-token", "", "org-deactivated-workspace")
+	got := fetchChatGPTAccountInfo(context.Background(), func(request PrivacyClientRequest) (*PrivacyHTTPClient, error) {
+		return &PrivacyHTTPClient{Client: req.C().SetTimeout(5 * time.Second), Persona: "chrome_133_xhr"}, nil
+	}, "access-token", "", "org-deactivated-workspace", buildOpenAIPrivacyRolloutKey("org-deactivated-workspace"))
 
 	require.NotNil(t, got)
 	require.Equal(t, "pro", got.PlanType)

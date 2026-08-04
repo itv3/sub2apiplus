@@ -1,0 +1,44 @@
+{
+  "schema_version": 1,
+  "capture_kind": "sanitized_final_request",
+  "sink_id": "codex.usage.probe",
+  "route": {
+    "method": "POST",
+    "host": "chatgpt.com",
+    "path": "/backend-api/codex/responses",
+    "purpose": "usage_probe",
+    "protocol": "http"
+  },
+  "authority_id": "codex.executor.changeset1b",
+  "has_finalization_token": true,
+  "header_names": [
+    "accept",
+    "authorization",
+    "chatgpt-account-id",
+    "content-encoding",
+    "content-type",
+    "originator",
+    "session-id",
+    "thread-id",
+    "user-agent",
+    "version",
+    "x-client-request-id",
+    "x-codex-beta-features",
+    "x-codex-turn-metadata",
+    "x-codex-window-id"
+  ],
+  "body_fields": [
+    "client_metadata",
+    "include",
+    "input",
+    "model",
+    "parallel_tool_calls",
+    "prompt_cache_key",
+    "reasoning",
+    "store",
+    "stream",
+    "tool_choice"
+  ],
+  "body_shape_sha256": "c5c6c5559cdaccc87e87dd7546b94bdb33ffc8328fc372646bf367830bcaa725",
+  "redaction": "仅保存头名、正文字段名与类型形状；所有凭据、动态 ID 和字段值已省略。"
+}

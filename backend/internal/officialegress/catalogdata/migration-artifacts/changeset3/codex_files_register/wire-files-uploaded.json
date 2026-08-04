@@ -1,0 +1,243 @@
+{
+  "schema_version": 2,
+  "capture_kind": "adapter_terminal_final_wire",
+  "sink_id": "codex.files.register",
+  "route": {
+    "method": "POST",
+    "host": "chatgpt.com",
+    "path": "/backend-api/files/{file_id}/uploaded",
+    "purpose": "user_request.file_register",
+    "protocol": "http"
+  },
+  "authority_id": "codex.executor.changeset1b",
+  "has_finalization_token": true,
+  "endpoint_id": "files_uploaded",
+  "backend": "http_upstream",
+  "adapter_id": "officialegress.http_upstream",
+  "transport_id": "codex-0.145.0-http-ubuntu24-native",
+  "release_modes": [
+    "active",
+    "previous"
+  ],
+  "credential_material": "synthetic_attempt_local_redacted",
+  "final_wire_manifest": {
+    "path": "docs/changeset3/post_identity_authority_refactor_final_wire/manifest.json",
+    "sha256": "c824ffb0ab6e2429c09f9ac517cf3e6f96860c7c6ef77c229757fd690bdbcf0f"
+  },
+  "secret_scan": {
+    "path": "docs/changeset3/post_identity_authority_refactor_final_wire/secret-scan.json",
+    "sha256": "94e400de321b64784203041ac6320186b6b8757723205681306333318f372050"
+  },
+  "active_capture_sha256": "73d75815e57cc5b708c482efc42ce6f025c1cf9256b493a93e38c14e2cc8d4e8",
+  "previous_capture_sha256": "e3d0845432690c6fc592ae96a114135346755b602d11ddcdb4a045ec89a72471",
+  "active_capture": {
+    "sink_id": "codex.files.register",
+    "anchor": false,
+    "release_mode": "active",
+    "method": "POST",
+    "host_template": "chatgpt.com",
+    "final_host": "chatgpt.com",
+    "path_template": "/backend-api/files/{file_id}/uploaded",
+    "final_path": "/backend-api/files/synthetic-file-id/uploaded",
+    "protocol": "http",
+    "purpose": "user_request.file_register",
+    "endpoint_id": "files_uploaded",
+    "authority_id": "codex.executor.changeset1b",
+    "has_finalization_token": true,
+    "terminal_guard_allow": true,
+    "profile_validation_result": "passed",
+    "attempt_ordinal": 1,
+    "attempt_reason": "initial",
+    "release_digest": "b74f979845113fbacfed216a39387d5abd589e5d9ed45eb430d3f46e9925e1f2",
+    "profile_digest": "7d9c22ce150eb8395cb6ad66a5b77175c48840c1129710e32e484b50b9e63eb5",
+    "bundle_digest": "c7dd40826b471f7fae67581f61db567f03aa21cb3cd9b7554c8119ff0b06a4ee",
+    "backend": "http_upstream",
+    "adapter_id": "officialegress.http_upstream",
+    "transport_id": "codex-0.145.0-http-ubuntu24-native",
+    "connection_identity_digest": "d4aefe11dbc73c5a0fc54e7a4f27867d9df5f1f01d9b33bbe77c4cb229a63878",
+    "connection_pool_digest": "2b270e45adaaae42bdc8ae5a3a4505f42956cdafa8746301db861e28bf3ba19a",
+    "tls_profile_digest": "1195209846426e94d26732557c2536654e6bfe1292bb382c9f345ff6effe6b2e",
+    "normalization": {
+      "HeaderMode": "lowercase",
+      "SuppressDefaultUserAgent": true,
+      "WebSocketCompressionOffer": ""
+    },
+    "ordered_headers": [
+      {
+        "name": "authorization",
+        "wire_name": "authorization",
+        "present": true,
+        "source": "authentication",
+        "value_kind": "attempt_authentication"
+      },
+      {
+        "name": "chatgpt-account-id",
+        "wire_name": "chatgpt-account-id",
+        "present": true,
+        "source": "account",
+        "value_kind": "synthetic_dynamic_identity"
+      },
+      {
+        "name": "x-openai-fedramp",
+        "wire_name": "x-openai-fedramp",
+        "source": "account",
+        "value_kind": "static_or_synthetic_safe"
+      },
+      {
+        "name": "content-type",
+        "wire_name": "content-type",
+        "present": true,
+        "source": "constant",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "application/json",
+        "value_sha256": "bacb769b46f6d169fb227ea026550f411d46cbe66a9c2a6ba36449c8cf8e4dea"
+      },
+      {
+        "name": "accept",
+        "wire_name": "accept",
+        "present": true,
+        "source": "constant",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "*/*",
+        "value_sha256": "7994750c119d1c03615dde46677ccae5429cdbfc2687b51224f0ae6c5609a63d"
+      },
+      {
+        "name": "host",
+        "wire_name": "host",
+        "present": true,
+        "source": "transport_generated",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "chatgpt.com",
+        "value_sha256": "c6240ca88eed5b237451d4ceab51a5df1e8bc3b0a4a0e099fbe4b9f0d5cf23a2"
+      },
+      {
+        "name": "content-length",
+        "wire_name": "content-length",
+        "present": true,
+        "source": "request_body",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "2",
+        "value_sha256": "d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35"
+      }
+    ],
+    "body": {
+      "encoding": "json",
+      "ordered_fields": null,
+      "type_shape": null,
+      "synthetic_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "compression": "none",
+      "applied_compression": "none",
+      "compression_level": 3,
+      "final_wire_bytes": 2,
+      "credential_bearing": false
+    },
+    "single_use_raw_stream": false,
+    "single_use_consumption_count": 0
+  },
+  "previous_capture": {
+    "sink_id": "codex.files.register",
+    "anchor": false,
+    "release_mode": "previous",
+    "method": "POST",
+    "host_template": "chatgpt.com",
+    "final_host": "chatgpt.com",
+    "path_template": "/backend-api/files/{file_id}/uploaded",
+    "final_path": "/backend-api/files/synthetic-file-id/uploaded",
+    "protocol": "http",
+    "purpose": "user_request.file_register",
+    "endpoint_id": "files_uploaded",
+    "authority_id": "codex.executor.changeset1b",
+    "has_finalization_token": true,
+    "terminal_guard_allow": true,
+    "profile_validation_result": "passed",
+    "attempt_ordinal": 1,
+    "attempt_reason": "initial",
+    "release_digest": "bd45d62b0c6e5945e152b7be529ce17212f4b9fd72f231ded6631d540a3b3511",
+    "profile_digest": "7d9c22ce150eb8395cb6ad66a5b77175c48840c1129710e32e484b50b9e63eb5",
+    "bundle_digest": "49afd9f027630ad179f2f35e78332c10b2436ef05dae5c3ad44f64b8b7e31f2c",
+    "backend": "http_upstream",
+    "adapter_id": "officialegress.http_upstream",
+    "transport_id": "codex-0.145.0-http-ubuntu24-native",
+    "connection_identity_digest": "cbb587c723c96289c0c17510cb03f33a638088e0108e9883cd4790e864532584",
+    "connection_pool_digest": "e0937ae2012eb167146f3051bd2fff76fde6c794b81f5377ea7cea919b0ff37f",
+    "tls_profile_digest": "1195209846426e94d26732557c2536654e6bfe1292bb382c9f345ff6effe6b2e",
+    "normalization": {
+      "HeaderMode": "lowercase",
+      "SuppressDefaultUserAgent": true,
+      "WebSocketCompressionOffer": ""
+    },
+    "ordered_headers": [
+      {
+        "name": "authorization",
+        "wire_name": "authorization",
+        "present": true,
+        "source": "authentication",
+        "value_kind": "attempt_authentication"
+      },
+      {
+        "name": "chatgpt-account-id",
+        "wire_name": "chatgpt-account-id",
+        "present": true,
+        "source": "account",
+        "value_kind": "synthetic_dynamic_identity"
+      },
+      {
+        "name": "x-openai-fedramp",
+        "wire_name": "x-openai-fedramp",
+        "source": "account",
+        "value_kind": "static_or_synthetic_safe"
+      },
+      {
+        "name": "content-type",
+        "wire_name": "content-type",
+        "present": true,
+        "source": "constant",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "application/json",
+        "value_sha256": "bacb769b46f6d169fb227ea026550f411d46cbe66a9c2a6ba36449c8cf8e4dea"
+      },
+      {
+        "name": "accept",
+        "wire_name": "accept",
+        "present": true,
+        "source": "constant",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "*/*",
+        "value_sha256": "7994750c119d1c03615dde46677ccae5429cdbfc2687b51224f0ae6c5609a63d"
+      },
+      {
+        "name": "host",
+        "wire_name": "host",
+        "present": true,
+        "source": "transport_generated",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "chatgpt.com",
+        "value_sha256": "c6240ca88eed5b237451d4ceab51a5df1e8bc3b0a4a0e099fbe4b9f0d5cf23a2"
+      },
+      {
+        "name": "content-length",
+        "wire_name": "content-length",
+        "present": true,
+        "source": "request_body",
+        "value_kind": "static_or_synthetic_safe",
+        "safe_value": "2",
+        "value_sha256": "d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35"
+      }
+    ],
+    "body": {
+      "encoding": "json",
+      "ordered_fields": null,
+      "type_shape": null,
+      "synthetic_sha256": "44136fa355b3678a1146ad16f7e8649e94fb4fc21fe77e8310c060f61caaff8a",
+      "compression": "none",
+      "applied_compression": "none",
+      "compression_level": 3,
+      "final_wire_bytes": 2,
+      "credential_bearing": false
+    },
+    "single_use_raw_stream": false,
+    "single_use_consumption_count": 0
+  },
+  "comparison_result": "scoped_reference_match_with_explicit_approved_deltas",
+  "redaction": "Authorization、attestation、cookie 与 refresh token 仅保留 attempt-local 类型；所有值均为合成数据。"
+}

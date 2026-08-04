@@ -1,0 +1,27 @@
+{
+  "schema_version": "changeset5-final-wire-normalization-transition/v1",
+  "changeset": "5",
+  "original_pre_manifest_path": "docs/changeset5/pre-refactor-final-wire/manifest.json",
+  "original_pre_manifest_sha256": "959b3179c0a54ffa81fa58057e43994e237f1f8565de0f28788a01f18e2d316d",
+  "normalized_pre_manifest_path": "docs/changeset5/normalized-pre-refactor-final-wire/manifest.json",
+  "normalized_pre_manifest_sha256": "51501f4c140a417d81c3d1a8f8525be4ef2f77c11248ffa63ca8e50150d011f7",
+  "approved_deltas": [
+    {
+      "capture_key": "active\u0000codex.oauth.refresh\u0000POST\u0000auth.openai.com\u0000/oauth/token\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "d2fa19a77a08f911adc49e004770bcf0151e52ea6b6e5db9e1077def934056d0",
+      "after_sha256": "b1c81c8f4f9439ae294061b9b8b92604c8c2773ac728b176b828e3bda8e2bbca",
+      "reason": "OAuth 生产入口原先随机生成 InvocationID；测试采集边界固定 InvocationID，仅消除连接池生命周期摘要噪声"
+    },
+    {
+      "capture_key": "previous\u0000codex.oauth.refresh\u0000POST\u0000auth.openai.com\u0000/oauth/token\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "d5567cd034eb25f151a5e00025a94b54d210a761f39472a11d681f27fa8af858",
+      "after_sha256": "fb412c32660c858109360ef5f7c043792c9287c450a43d385e179a70701d2ff3",
+      "reason": "OAuth 生产入口原先随机生成 InvocationID；测试采集边界固定 InvocationID，仅消除连接池生命周期摘要噪声"
+    }
+  ],
+  "applied_delta_count": 2,
+  "unexpected_delta_count": 0,
+  "result": "passed"
+}

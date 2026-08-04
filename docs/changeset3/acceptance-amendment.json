@@ -1,0 +1,47 @@
+{
+  "schema_version": "changeset3-acceptance-amendment/v1",
+  "status": "approved_for_remediation_with_constraints",
+  "approval_ref": "changeset3-formal-remediation-review-2026-08-03",
+  "original_facts": {
+    "acceptance_matrix": {
+      "path": "docs/changeset3/acceptance-matrix.json",
+      "sha256": "2dc2acb8247bde3a9afadaaa0e7f57e482d2fdcaefd0f08211c11a1b702f9d56",
+      "pending_migration_count": 19,
+      "runtime_enforced_target": 23
+    },
+    "codex_binding_freeze": {
+      "path": "docs/changeset3/codex-binding-freeze.json",
+      "sha256": "30e7814c10370278ce4940e00e5b2943b2243e763b9537dbb5069c7c0e310304"
+    },
+    "catalog_amendments": {
+      "path": "backend/internal/officialegress/catalogdata/catalog-amendments.json",
+      "sha256": "325e7f918147a9876b9ec3fcecc09c96219ba7425b686376767365725d1a46b5"
+    }
+  },
+  "scope_exclusions": [
+    {
+      "sink_id": "codex.admin_test.chat_completions",
+      "kind": "runtime_scope_exclusion",
+      "ast_fingerprint": "93418efda9cf",
+      "source_blob_sha256": "b932b28fdb708bd8b89d6f4cb7c865e90ffe8930e509d3f1912d6e32898f055e"
+    },
+    {
+      "sink_id": "codex.admin_test.keeper",
+      "kind": "runtime_scope_exclusion",
+      "ast_fingerprint": "d0e7cca6b855",
+      "source_blob_sha256": "689a1fe132daa14beaad88a7ade54c1c8f4f1852ef1015563993392b9d9b85e0"
+    }
+  ],
+  "effective_target": {
+    "new_migration_sink_count": 17,
+    "new_migration_route_count": 24,
+    "existing_enforced_anchor_count": 4,
+    "runtime_sink_count": 21,
+    "runtime_route_count": 28,
+    "codex_profile_runtime_legacy_count": 0,
+    "codex_profile_runtime_enforced_count": 21,
+    "scope_exclusion_count": 2,
+    "transport_only_exception": "codex.oauth.exchange"
+  },
+  "correction_reason": "3.0 冻结器保留了 19/23 的历史矩阵，但未消费冻结前已经存在的两个 runtime_scope_exclusion Catalog Amendment。本修正不改写原矩阵，只在完整历史证据链上推导正式有效目标 17/21。"
+}

@@ -1,0 +1,25 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Wei-Shaw/sub2api/internal/service
+cpu: Apple M4
+                                      │ ../docs/changeset6/baseline/benchmarks/profile-pre.txt │ ../docs/changeset6/post/benchmarks/profile-post.txt │
+                                      │                         sec/op                         │           sec/op             vs base                │
+OfficialCodexVersionProfileResolve-10                                             7020.5n ± 1%                   339.8n ± 3%  -95.16% (p=0.000 n=10)
+OfficialCodexEndpointResolve-10                                                   7191.5n ± 0%                   818.6n ± 3%  -88.62% (p=0.000 n=10)
+geomean                                                                            7.105µ                        527.4n       -92.58%
+
+                                      │ ../docs/changeset6/baseline/benchmarks/profile-pre.txt │ ../docs/changeset6/post/benchmarks/profile-post.txt │
+                                      │                          B/op                          │          B/op           vs base                     │
+OfficialCodexVersionProfileResolve-10                                             9.333Ki ± 0%             0.000Ki ± 0%  -100.00% (p=0.000 n=10)
+OfficialCodexEndpointResolve-10                                                  13.219Ki ± 0%             3.875Ki ± 0%   -70.69% (p=0.000 n=10)
+geomean                                                                           11.11Ki                                ?                       ¹ ²
+¹ summaries must be >0 to compute geomean
+² ratios must be >0 to compute geomean
+
+                                      │ ../docs/changeset6/baseline/benchmarks/profile-pre.txt │ ../docs/changeset6/post/benchmarks/profile-post.txt │
+                                      │                       allocs/op                        │       allocs/op         vs base                     │
+OfficialCodexVersionProfileResolve-10                                               20.00 ± 0%                0.00 ± 0%  -100.00% (p=0.000 n=10)
+OfficialCodexEndpointResolve-10                                                    22.000 ± 0%               2.000 ± 0%   -90.91% (p=0.000 n=10)
+geomean                                                                             20.98                                ?                       ¹ ²
+¹ summaries must be >0 to compute geomean
+² ratios must be >0 to compute geomean

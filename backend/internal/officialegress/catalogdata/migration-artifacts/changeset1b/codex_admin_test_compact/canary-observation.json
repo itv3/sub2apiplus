@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "sink_id": "codex.admin_test.compact",
+  "result": "accepted",
+  "environment": "DMIT",
+  "observed_at": "2026-08-02T15:49:26Z",
+  "exercise_kind": "live_canary",
+  "evidence": [
+    "gpt-5.6-luna 管理端 compact 返回 HTTP 200",
+    "SSE 包含 test_start、content 与 success=true 的 test_complete",
+    "100% canary Guard 下该 Sink 拒绝数为 0"
+  ],
+  "guard_canary_percent": 100,
+  "guard_rejections": 0,
+  "reviewed_by": "codex-audit-changeset-1c-remediation",
+  "review_ref": "changeset-1c-remediation-audit/2026-08-03"
+}

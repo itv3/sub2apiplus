@@ -330,21 +330,24 @@ type UpdateGroupInput struct {
 }
 
 type CreateAccountInput struct {
-	Name               string
-	Notes              *string
-	Platform           string
-	Type               string
-	Credentials        map[string]any
-	Extra              map[string]any
-	ProxyID            *int64
-	Concurrency        int
-	Priority           int
-	RateMultiplier     *float64 // 账号计费倍率（>=0，允许 0）
-	LoadFactor         *int
-	GroupIDs           []int64
-	ExpiresAt          *int64
-	AutoPauseOnExpired *bool
-	ProbeEnabled       *bool
+	Name        string
+	Notes       *string
+	Platform    string
+	Type        string
+	Credentials map[string]any
+	Extra       map[string]any
+	// ManagedPrivacyExtra 仅供服务端 OAuth/privacy 创建入口写入受管字段，
+	// 通用 HTTP 创建请求不得映射此字段。
+	ManagedPrivacyExtra map[string]any
+	ProxyID             *int64
+	Concurrency         int
+	Priority            int
+	RateMultiplier      *float64 // 账号计费倍率（>=0，允许 0）
+	LoadFactor          *int
+	GroupIDs            []int64
+	ExpiresAt           *int64
+	AutoPauseOnExpired  *bool
+	ProbeEnabled        *bool
 	// SkipDefaultGroupBind prevents auto-binding to platform default group when GroupIDs is empty.
 	SkipDefaultGroupBind bool
 	// SkipMixedChannelCheck skips the mixed channel risk check when binding groups.
@@ -362,11 +365,14 @@ type ShadowOptions struct {
 }
 
 type UpdateAccountInput struct {
-	Name                  string
-	Notes                 *string
-	Type                  string // Account type: oauth, setup-token, apikey
-	Credentials           map[string]any
-	Extra                 map[string]any
+	Name        string
+	Notes       *string
+	Type        string // Account type: oauth, setup-token, apikey
+	Credentials map[string]any
+	Extra       map[string]any
+	// ManagedPrivacyExtra 仅供服务端 OAuth/privacy 入口原子写入受管字段，
+	// 通用 HTTP UpdateAccount 请求不得映射此字段。
+	ManagedPrivacyExtra   map[string]any
 	ProxyID               *int64
 	Concurrency           *int     // 使用指针区分"未提供"和"设置为0"
 	Priority              *int     // 使用指针区分"未提供"和"设置为0"

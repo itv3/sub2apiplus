@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -119,7 +120,7 @@ func TestForwardAlphaSearchOAuthAppliesCodex0145WireContract(t *testing.T) {
 func TestBuildOpenAIAlphaSearchRequestReusesInvocationWithinIngressOnly(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"id":"search-session","model":"gpt-5.6-sol","input":[],"commands":{},"settings":{},"max_output_tokens":2000}`)
-	service := &OpenAIGatewayService{cfg: &config.Config{}}
+	service := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: &liveHTTPUpstreamStub{}}
 	account := &Account{
 		ID:       42,
 		Platform: PlatformOpenAI,
@@ -204,7 +205,14 @@ func TestForwardAlphaSearchPATUsesResponsesWebSearchFallback(t *testing.T) {
 
 	result, err := service.ForwardAlphaSearch(context.Background(), c, account, body)
 
-	require.NoError(t, err)
+	if err != nil {
+		rawEvents, _ := c.Get(OpsUpstreamErrorsKey)
+		events, _ := rawEvents.([]*OpsUpstreamErrorEvent)
+		if len(events) > 0 {
+			t.Fatalf("PAT Responses fallback 失败: %v, ops=%+v", err, *events[0])
+		}
+		t.Fatalf("PAT Responses fallback 失败: %v", err)
+	}
 	require.NotNil(t, result)
 	require.Equal(t, 1, result.WebSearchCalls)
 	require.Equal(t, "/v1/responses", result.UpstreamEndpoint)
@@ -218,13 +226,23 @@ func TestForwardAlphaSearchPATUsesResponsesWebSearchFallback(t *testing.T) {
 	require.Equal(t, "text/event-stream", upstream.lastReq.Header.Get("Accept"))
 	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
 	require.Equal(t, codexCLIVersion, upstream.lastReq.Header.Get("Version"))
-	require.Equal(t, `{"turn_id":"turn-1"}`, upstream.lastReq.Header.Get("X-Codex-Turn-Metadata"))
+	turnMetadata := upstream.lastReq.Header.Get("X-Codex-Turn-Metadata")
+	require.NotEmpty(t, gjson.Get(turnMetadata, "turn_id").String())
+	require.NotEmpty(t, gjson.Get(turnMetadata, "session_id").String())
+	require.NotEqual(t, "turn-1", gjson.Get(turnMetadata, "turn_id").String(),
+		"重建的 Responses body 必须由 Executor 生成自身身份，不得套用 alpha 入站 turn")
 	require.Equal(t, officialOpenAIHTTPOriginator, upstream.lastReq.Header.Get("Originator"))
-	require.Empty(t, upstream.lastReq.Header.Get("X-Codex-Beta-Features"))
+	require.Equal(t, officialOpenAIHTTPBetaFeatures, upstream.lastReq.Header.Get("X-Codex-Beta-Features"))
 	require.Empty(t, upstream.lastReq.Header.Get("X-Codex-Turn-State"))
 	require.Empty(t, upstream.lastReq.Header.Get(responsesLiteHeaderKey))
 	require.Empty(t, upstream.lastReq.Header.Get("Accept-Language"))
-	require.False(t, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").Exists())
+	identity, ok := officialegress.AttemptIdentityFromContext(upstream.lastReq.Context())
+	require.True(t, ok)
+	require.Equal(t, officialEgressSinkAlphaSearchPATFallback, identity.SinkID)
+	require.True(t, identity.HasFinalizationToken,
+		"PAT alpha fallback 必须由 Codex Executor 签发 FinalizationToken")
+	require.NotEmpty(t, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
+	require.NotEqual(t, "responses-cache-key", gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "prompt_cache_retention").Exists())
 	require.Equal(t, "gpt-5.6-sol", gjson.GetBytes(upstream.lastBody, "model").String())
 	require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
@@ -234,6 +252,7 @@ func TestForwardAlphaSearchPATUsesResponsesWebSearchFallback(t *testing.T) {
 }
 
 func TestForwardAlphaSearchPATBackfillsMissingChatGPTAccountMetadata(t *testing.T) {
+	configureObserveGuardForLocalHTTPTest(t)
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"id":"search-session","model":"gpt-5.6-sol","input":[],"commands":{"search_query":[{"q":"OpenAI news"}]},"settings":{},"max_output_tokens":2000}`)
 	recorder := httptest.NewRecorder()

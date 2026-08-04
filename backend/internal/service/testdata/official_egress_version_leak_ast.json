@@ -51,53 +51,41 @@
     },
     "backend/internal/service/official_client_profile_registry.go": {
       "1e75ff7e6b9d988f": 1,
-      "28a9c6289529b674": 1,
-      "2dd30db8866a6685": 1,
-      "2fb7a9ece079a534": 1,
-      "7e54fdd5b19c6701": 1,
-      "98e9b9a395cec945": 1,
-      "c2400352c1a75065": 1,
-      "dcbfc79967e3ffb4": 1,
-      "f0e1fca094954b08": 1
+      "c2400352c1a75065": 1
     },
     "backend/internal/service/official_egress_codex_engine.go": {
-      "1628014ea7b35992": 1,
-      "22eb07062ac4fcd6": 1,
-      "5181a51cdf56c367": 1,
-      "5fae5d06f576464a": 1,
-      "7ee5f0fa6d660202": 1,
-      "9627a09b87006800": 1,
-      "cae56eb205f9b7d2": 1,
-      "d73e829855d8bc4d": 1,
-      "f42b06e5ff5f7880": 1,
-      "f8a10653cee671d9": 1
+      "296f6c9794043eb5": 1,
+      "2ccd22c4cabbc4ab": 1,
+      "6f283d8a0d4edd30": 1,
+      "8dd59e0c07e83204": 1,
+      "9259d02fb1d6638d": 1,
+      "c9dc3ff52d6bf55c": 1,
+      "cbf4b454502ac2b2": 1,
+      "ccfd9174ae8cada4": 1,
+      "fdff306e92be077c": 1
     },
     "backend/internal/service/official_egress_codex_files.go": {
       "ca20294720868e71": 1
     },
     "backend/internal/service/official_egress_codex_integration.go": {
-      "0202af3b248b1d40": 1,
-      "032817e5ed67cb9e": 1,
-      "132ca67b2d1f23e2": 1,
-      "22ad04c6e8734e3b": 1,
-      "28190e3f4a9eea08": 1,
-      "54d62a189afc078f": 1,
-      "5d08444911005c30": 1,
-      "626bf4087d71857a": 1,
-      "62ead375f3c55d0b": 1,
-      "6c947f09f47f35f0": 1,
-      "8db380daf676f802": 1,
-      "af344e622c1e2933": 1,
-      "b3e9a085db92656b": 1,
-      "ba4c9c748dfddd23": 1,
-      "c53a2a74fbdfd7c7": 1,
-      "c5422105e73ea483": 1,
+      "09bc033b69e4624a": 1,
+      "1ebf659c7ec9ab0c": 1,
+      "284fec243b4c9bd9": 1,
+      "2c16918f3c32111e": 1,
+      "329fe26c285ad392": 1,
+      "370973bbaa47c09b": 1,
+      "3809257d5bcca430": 1,
+      "70a052cbccd13855": 1,
+      "70bd285418373670": 1,
+      "74cc863d8a71da19": 1,
+      "7794c85cd38bf62a": 1,
+      "7d27241b562d149b": 1,
+      "873b324de0d61765": 1,
+      "b7f926a2a21be7a1": 1,
       "d0a2305ecb4dec11": 1,
-      "e5f46575a90b8368": 1,
-      "ec89f17e0fac73ec": 1,
-      "fa1e4037317983b2": 1,
-      "fc98921caacb2b27": 1,
-      "ff6bec7caccb9ad5": 1
+      "eb30bc818c41d2f0": 1,
+      "fb77648cb8bc58af": 1,
+      "fe9c90efa76a3916": 1
     },
     "backend/internal/service/official_egress_openai_http.go": {
       "0829dc91be284917": 1,
@@ -110,8 +98,7 @@
       "bdbae8ec1edde0d2": 1
     },
     "backend/internal/service/official_egress_openai_ws.go": {
-      "901784d40910f36d": 1,
-      "e5a7c056a811fdcd": 1
+      "901784d40910f36d": 1
     },
     "backend/internal/service/official_egress_profile.go": {
       "88295edd4b8dc379": 1
@@ -149,18 +136,14 @@
     "backend/internal/service/openai_images_responses.go": {
       "13df96bec5fb5280": 1,
       "6afac4a5f162cec7": 1,
-      "87577db9e3d63424": 1,
-      "fdca5e84e0775a3b": 1
-    },
-    "backend/internal/service/openai_live.go": {
-      "401536f8e7d76d7b": 1
+      "87577db9e3d63424": 1
     },
     "backend/internal/service/openai_quota_service.go": {
       "f0bb0e5c51afdee5": 1
     },
     "backend/internal/service/openai_upstream_http.go": {
       "7fd93425ad6c5e78": 1,
-      "c68f1b1ca528673c": 1,
+      "8ec0db215cf8a1c0": 1,
       "f566ddd6b9c89587": 1
     }
   }

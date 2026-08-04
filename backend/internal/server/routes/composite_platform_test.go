@@ -99,7 +99,7 @@ func TestCompositeTargetPlatformMiddlewareCapturesCodexRuntimeBeforeBodyDecode(t
 	router.POST("/v1/responses", func(c *gin.Context) {
 		require.Empty(t, c.GetHeader("Content-Encoding"))
 		capturedContext := c.Request.Context()
-		recapturedContext := service.WithOfficialCodex0145IngressRuntime(capturedContext, c)
+		recapturedContext := service.WithOfficialCodexIngressRuntime(capturedContext, c)
 		require.True(t, capturedContext == recapturedContext, "后续 Handler 捕获必须复用路由入口快照")
 
 		body, err := io.ReadAll(c.Request.Body)

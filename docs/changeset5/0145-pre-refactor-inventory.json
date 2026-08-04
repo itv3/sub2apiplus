@@ -1,0 +1,1514 @@
+{
+  "schema_version": "changeset5-0145-pre-refactor-inventory/v1",
+  "changeset": "5",
+  "scope": "backend production Go identifiers; comments, strings and tests excluded",
+  "identifier_count": 58,
+  "occurrence_count": 289,
+  "occurrence_fingerprint_sha256": "df7036ea1c40e588030a5cb11028c3a54e170d59f5f3f3de3cbb9a0941646c28",
+  "identifiers": [
+    {
+      "name": "BindOfficialCodex0145ResponsesWebSocketRuntime",
+      "count": 2,
+      "occurrences": [
+        {
+          "path": "backend/internal/handler/openai_gateway_handler.go",
+          "line": 1816
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 181
+        }
+      ]
+    },
+    {
+      "name": "WithOfficialCodex0145IngressRuntime",
+      "count": 4,
+      "occurrences": [
+        {
+          "path": "backend/internal/handler/openai_gateway_handler.go",
+          "line": 252
+        },
+        {
+          "path": "backend/internal/handler/openai_live.go",
+          "line": 103
+        },
+        {
+          "path": "backend/internal/server/routes/gateway.go",
+          "line": 416
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 52
+        }
+      ]
+    },
+    {
+      "name": "attachOfficialCodex0145EndpointRequest",
+      "count": 1,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 268
+        }
+      ]
+    },
+    {
+      "name": "attachOfficialCodex0145EndpointWebSocketContext",
+      "count": 1,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 348
+        }
+      ]
+    },
+    {
+      "name": "bindOfficialCodex0145RuntimeStateFromCapturedIngress",
+      "count": 2,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 209
+        },
+        {
+          "path": "backend/internal/service/openai_live.go",
+          "line": 214
+        }
+      ]
+    },
+    {
+      "name": "cloneOfficialCodex0145RuntimeState",
+      "count": 9,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+          "line": 34
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 108
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 122
+        },
+        {
+          "path": "backend/internal/service/official_egress_openai_http.go",
+          "line": 495
+        },
+        {
+          "path": "backend/internal/service/official_egress_profile.go",
+          "line": 144
+        },
+        {
+          "path": "backend/internal/service/official_egress_profile.go",
+          "line": 233
+        },
+        {
+          "path": "backend/internal/service/official_egress_profile.go",
+          "line": 453
+        },
+        {
+          "path": "backend/internal/service/openai_live.go",
+          "line": 598
+        },
+        {
+          "path": "backend/internal/service/openai_live.go",
+          "line": 610
+        }
+      ]
+    },
+    {
+      "name": "codex0145EndpointID",
+      "count": 58,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/account_test_service.go",
+          "line": 2060
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+          "line": 25
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+          "line": 141
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+          "line": 533
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+          "line": 548
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 45
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 88
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 127
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 284
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 299
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 539
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 711
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 846
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 981
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_files.go",
+          "line": 200
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_files.go",
+          "line": 222
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_files.go",
+          "line": 306
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_files.go",
+          "line": 359
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 138
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 163
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 205
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 213
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 271
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 351
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 433
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 447
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 523
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 533
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 776
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 879
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 888
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 902
+        },
+        {
+          "path": "backend/internal/service/official_egress_integration.go",
+          "line": 320
+        },
+        {
+          "path": "backend/internal/service/official_egress_integration.go",
+          "line": 432
+        },
+        {
+          "path": "backend/internal/service/official_egress_integration.go",
+          "line": 466
+        },
+        {
+          "path": "backend/internal/service/official_egress_openai_http.go",
+          "line": 419
+        },
+        {
+          "path": "backend/internal/service/official_egress_openai_ws.go",
+          "line": 620
+        },
+        {
+          "path": "backend/internal/service/official_egress_profile.go",
+          "line": 599
+        },
+        {
+          "path": "backend/internal/service/official_egress_profile.go",
+          "line": 683
+        },
+        {
+          "path": "backend/internal/service/official_egress_profile.go",
+          "line": 932
+        },
+        {
+          "path": "backend/internal/service/openai_alpha_search.go",
+          "line": 57
+        },
+        {
+          "path": "backend/internal/service/openai_alpha_search.go",
+          "line": 412
+        },
+        {
+          "path": "backend/internal/service/openai_alpha_search.go",
+          "line": 419
+        },
+        {
+          "path": "backend/internal/service/openai_alpha_search.go",
+          "line": 593
+        },
+        {
+          "path": "backend/internal/service/openai_codex_models_service.go",
+          "line": 155
+        },
+        {
+          "path": "backend/internal/service/openai_codex_models_service.go",
+          "line": 275
+        },
+        {
+          "path": "backend/internal/service/openai_codex_models_service.go",
+          "line": 322
+        },
+        {
+          "path": "backend/internal/service/openai_gateway_forward.go",
+          "line": 103
+        },
+        {
+          "path": "backend/internal/service/openai_gateway_forward.go",
+          "line": 105
+        },
+        {
+          "path": "backend/internal/service/openai_gateway_forward.go",
+          "line": 107
+        },
+        {
+          "path": "backend/internal/service/openai_images_responses.go",
+          "line": 345
+        },
+        {
+          "path": "backend/internal/service/openai_images_responses.go",
+          "line": 423
+        },
+        {
+          "path": "backend/internal/service/openai_images_responses.go",
+          "line": 444
+        },
+        {
+          "path": "backend/internal/service/openai_images_responses.go",
+          "line": 1881
+        },
+        {
+          "path": "backend/internal/service/openai_live.go",
+          "line": 218
+        },
+        {
+          "path": "backend/internal/service/openai_live.go",
+          "line": 326
+        },
+        {
+          "path": "backend/internal/service/openai_live.go",
+          "line": 546
+        },
+        {
+          "path": "backend/internal/service/openai_quota_service.go",
+          "line": 424
+        }
+      ]
+    },
+    {
+      "name": "defaultOfficialCodex0145RuntimeState",
+      "count": 5,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+          "line": 30
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 449
+        },
+        {
+          "path": "backend/internal/service/official_egress_profile.go",
+          "line": 131
+        },
+        {
+          "path": "backend/internal/service/official_egress_profile.go",
+          "line": 235
+        },
+        {
+          "path": "backend/internal/service/openai_quota_service.go",
+          "line": 733
+        }
+      ]
+    },
+    {
+      "name": "newOpenAIAPIKeyCodex0145TLSOnlyProfile",
+      "count": 2,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/openai_upstream_http.go",
+          "line": 89
+        },
+        {
+          "path": "backend/internal/service/openai_upstream_http.go",
+          "line": 100
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145ApplyHeaderContract",
+      "count": 2,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 709
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 818
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145BuildEndpointURL",
+      "count": 3,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 537
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_files.go",
+          "line": 230
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_files.go",
+          "line": 371
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145CompileH1Rules",
+      "count": 2,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 243
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 400
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145CompileWSHeaderConstruction",
+      "count": 2,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 454
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 478
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145ConditionsFromHeaders",
+      "count": 3,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 805
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 832
+        },
+        {
+          "path": "backend/internal/service/openai_codex_models_service.go",
+          "line": 599
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145DecodeJSONObject",
+      "count": 2,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 877
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 1027
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145EscapedPathMatchesTemplate",
+      "count": 2,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 338
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 361
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145ExpandEndpointPath",
+      "count": 2,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 568
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 623
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145FinalizeEndpointHeaders",
+      "count": 2,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 767
+        },
+        {
+          "path": "backend/internal/service/official_egress_openai_ws.go",
+          "line": 374
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145FinalizeEndpointJSONBody",
+      "count": 1,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 869
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145HeaderForTrustedCondition",
+      "count": 2,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 807
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 821
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145HostMatches",
+      "count": 7,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 334
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 686
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 693
+        },
+        {
+          "path": "backend/internal/service/official_egress_integration.go",
+          "line": 326
+        },
+        {
+          "path": "backend/internal/service/official_egress_integration.go",
+          "line": 355
+        },
+        {
+          "path": "backend/internal/service/official_egress_profile.go",
+          "line": 611
+        },
+        {
+          "path": "backend/internal/service/official_egress_profile.go",
+          "line": 688
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145IngressRuntimeContextKey",
+      "count": 4,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 34
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 61
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 88
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 217
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145IngressRuntimeSnapshot",
+      "count": 11,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+          "line": 24
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 36
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 66
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 68
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 70
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 84
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 86
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 88
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 215
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 217
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 444
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145IngressRuntimeSnapshotFromContext",
+      "count": 4,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 56
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 82
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 147
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 151
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145IngressRuntimeSnapshotFromGin",
+      "count": 3,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 62
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 66
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 436
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145JSONPair",
+      "count": 4,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 1022
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 1027
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 1036
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 1050
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145LowerHeaderNames",
+      "count": 4,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 444
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 483
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 484
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 526
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145MapString",
+      "count": 9,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 67
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 110
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 155
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 159
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 181
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 187
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 188
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 194
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 209
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145NormalizeDerivedToolPresentation",
+      "count": 3,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 43
+        },
+        {
+          "path": "backend/internal/service/official_egress_openai_http.go",
+          "line": 417
+        },
+        {
+          "path": "backend/internal/service/official_egress_openai_ws.go",
+          "line": 618
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145PathMatches",
+      "count": 2,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_integration.go",
+          "line": 358
+        },
+        {
+          "path": "backend/internal/service/official_egress_integration.go",
+          "line": 393
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145ProcessIdentity",
+      "count": 2,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 720
+        },
+        {
+          "path": "backend/internal/service/official_egress_openai_ws.go",
+          "line": 317
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145ProjectEndpointJSONBody",
+      "count": 1,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 900
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145ResolveEndpointTLSProfile",
+      "count": 1,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 282
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145ResolveEndpointTLSProfileForURL",
+      "count": 1,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 297
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145ResolveTLSProfile",
+      "count": 2,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+          "line": 557
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 217
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145RuntimeState",
+      "count": 35,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+          "line": 23
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 97
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 114
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 116
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 118
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 120
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 124
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 139
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 142
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 214
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 225
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 229
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 434
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 448
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 453
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 461
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 602
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 646
+        },
+        {
+          "path": "backend/internal/service/official_egress_integration.go",
+          "line": 105
+        },
+        {
+          "path": "backend/internal/service/official_egress_integration.go",
+          "line": 242
+        },
+        {
+          "path": "backend/internal/service/official_egress_profile.go",
+          "line": 115
+        },
+        {
+          "path": "backend/internal/service/official_egress_profile.go",
+          "line": 131
+        },
+        {
+          "path": "backend/internal/service/official_egress_profile.go",
+          "line": 132
+        },
+        {
+          "path": "backend/internal/service/official_egress_profile.go",
+          "line": 144
+        },
+        {
+          "path": "backend/internal/service/official_egress_profile.go",
+          "line": 144
+        },
+        {
+          "path": "backend/internal/service/official_egress_profile.go",
+          "line": 145
+        },
+        {
+          "path": "backend/internal/service/official_egress_profile.go",
+          "line": 189
+        },
+        {
+          "path": "backend/internal/service/official_egress_profile.go",
+          "line": 226
+        },
+        {
+          "path": "backend/internal/service/openai_live.go",
+          "line": 597
+        },
+        {
+          "path": "backend/internal/service/openai_live.go",
+          "line": 609
+        },
+        {
+          "path": "backend/internal/service/openai_live.go",
+          "line": 610
+        },
+        {
+          "path": "backend/internal/service/openai_live.go",
+          "line": 625
+        },
+        {
+          "path": "backend/internal/service/openai_live.go",
+          "line": 626
+        },
+        {
+          "path": "backend/internal/service/openai_live.go",
+          "line": 635
+        },
+        {
+          "path": "backend/internal/service/openai_live.go",
+          "line": 640
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145RuntimeStateContextKey",
+      "count": 3,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 33
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 107
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 118
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145RuntimeStateFromContext",
+      "count": 4,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+          "line": 40
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 112
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 140
+        },
+        {
+          "path": "backend/internal/service/openai_quota_service.go",
+          "line": 728
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145ShouldOmitJSONField",
+      "count": 2,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 919
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 1069
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145ToolPresentationApplies",
+      "count": 3,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 53
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 97
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 125
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145TransportGeneratesHeader",
+      "count": 2,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 797
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 831
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145TrustedConditionalHeaders",
+      "count": 5,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 25
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 688
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 795
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 815
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 822
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145ValidateAndOrderFormBody",
+      "count": 1,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 979
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145ValidateAndOrderJSONBody",
+      "count": 2,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 844
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 877
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145ValidateEndpointTarget",
+      "count": 3,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_integration.go",
+          "line": 333
+        },
+        {
+          "path": "backend/internal/service/official_egress_integration.go",
+          "line": 351
+        },
+        {
+          "path": "backend/internal/service/official_egress_integration.go",
+          "line": 441
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145ValidateImageNamespaceDefinition",
+      "count": 2,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 165
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 172
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145ValidateJSONDiscriminator",
+      "count": 2,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 930
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 1084
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145ValidateReturnedURL",
+      "count": 2,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 562
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 663
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145ValidateSubagentRuntime",
+      "count": 2,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 560
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 607
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145ValidateToolList",
+      "count": 3,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 104
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 113
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 137
+        }
+      ]
+    },
+    {
+      "name": "officialCodex0145ValidateToolPresentation",
+      "count": 2,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 86
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 886
+        }
+      ]
+    },
+    {
+      "name": "officialCodexVersion0145",
+      "count": 2,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+          "line": 27
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+          "line": 63
+        }
+      ]
+    },
+    {
+      "name": "openAIAPIKeyCodexMimicClientCodexExec0145",
+      "count": 9,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/apikey_mimic_identity.go",
+          "line": 64
+        },
+        {
+          "path": "backend/internal/service/apikey_mimic_identity.go",
+          "line": 189
+        },
+        {
+          "path": "backend/internal/service/openai_apikey_mimic_profile.go",
+          "line": 21
+        },
+        {
+          "path": "backend/internal/service/openai_apikey_mimic_profile.go",
+          "line": 141
+        },
+        {
+          "path": "backend/internal/service/openai_apikey_mimic_profile.go",
+          "line": 154
+        },
+        {
+          "path": "backend/internal/service/openai_apikey_mimic_profile.go",
+          "line": 163
+        },
+        {
+          "path": "backend/internal/service/openai_apikey_mimic_profile.go",
+          "line": 199
+        },
+        {
+          "path": "backend/internal/service/openai_apikey_mimic_profile.go",
+          "line": 205
+        },
+        {
+          "path": "backend/internal/service/openai_upstream_http.go",
+          "line": 88
+        }
+      ]
+    },
+    {
+      "name": "resolveBoundOrIngressOfficialCodex0145RuntimeState",
+      "count": 7,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+          "line": 57
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 133
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 165
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 300
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 378
+        },
+        {
+          "path": "backend/internal/service/official_egress_integration.go",
+          "line": 107
+        },
+        {
+          "path": "backend/internal/service/official_egress_integration.go",
+          "line": 244
+        }
+      ]
+    },
+    {
+      "name": "resolveCodex0145Endpoint",
+      "count": 12,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+          "line": 533
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+          "line": 548
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_engine.go",
+          "line": 984
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 286
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 367
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 777
+        },
+        {
+          "path": "backend/internal/service/official_egress_integration.go",
+          "line": 318
+        },
+        {
+          "path": "backend/internal/service/official_egress_integration.go",
+          "line": 430
+        },
+        {
+          "path": "backend/internal/service/official_egress_integration.go",
+          "line": 464
+        },
+        {
+          "path": "backend/internal/service/official_egress_profile.go",
+          "line": 597
+        },
+        {
+          "path": "backend/internal/service/official_egress_profile.go",
+          "line": 681
+        },
+        {
+          "path": "backend/internal/service/official_egress_profile.go",
+          "line": 930
+        }
+      ]
+    },
+    {
+      "name": "resolveCodex0145VersionProfile",
+      "count": 7,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+          "line": 336
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+          "line": 534
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+          "line": 543
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 743
+        },
+        {
+          "path": "backend/internal/service/official_egress_openai_http.go",
+          "line": 488
+        },
+        {
+          "path": "backend/internal/service/official_egress_profile.go",
+          "line": 559
+        },
+        {
+          "path": "backend/internal/service/official_egress_transport.go",
+          "line": 346
+        }
+      ]
+    },
+    {
+      "name": "validateOfficialCodex0145RuntimeState",
+      "count": 9,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 99
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 123
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 473
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 514
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 601
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 646
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 748
+        },
+        {
+          "path": "backend/internal/service/official_egress_openai_http.go",
+          "line": 496
+        },
+        {
+          "path": "backend/internal/service/official_egress_profile.go",
+          "line": 750
+        }
+      ]
+    },
+    {
+      "name": "withOfficialCodex0145RuntimeState",
+      "count": 5,
+      "occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+          "line": 47
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 95
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 175
+        },
+        {
+          "path": "backend/internal/service/official_egress_codex_integration.go",
+          "line": 227
+        },
+        {
+          "path": "backend/internal/service/openai_live.go",
+          "line": 638
+        }
+      ]
+    }
+  ]
+}

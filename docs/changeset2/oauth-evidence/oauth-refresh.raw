@@ -1,0 +1,9 @@
+POST /oauth/token HTTP/1.1
+content-type: application/json
+accept: */*
+originator: codex_exec
+user-agent: codex_exec/0.145.0 (Ubuntu 24.4.0; x86_64) unknown
+host: 127.0.0.1:18555
+content-length: 120
+
+{"client_id":"app_EMoamEEZ73f0CkXaXp7hrann","grant_type":"refresh_token","refresh_token":"<synthetic>XXXXXXXXXXXXXXXXX"}

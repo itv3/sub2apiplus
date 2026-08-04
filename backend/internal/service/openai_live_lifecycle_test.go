@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	coderws "github.com/coder/websocket"
 	"github.com/stretchr/testify/require"
 )
@@ -378,6 +379,7 @@ func TestProxyLiveSidebandForwardsTextAndBinary(t *testing.T) {
 	service := &OpenAIGatewayService{
 		accountRepo:               &liveTestAccountRepo{account: account},
 		cache:                     store,
+		httpUpstream:              &liveHTTPUpstreamStub{},
 		openaiWSPassthroughDialer: dialer,
 		liveAttestationCipher:     attestationCipher,
 	}
@@ -404,7 +406,14 @@ func TestProxyLiveSidebandForwardsTextAndBinary(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	require.NoError(t, client.Write(ctx, coderws.MessageText, []byte(`{"type":"client.text"}`)))
-	clientText := <-upstream.writes
+	var clientText liveTestFrame
+	select {
+	case clientText = <-upstream.writes:
+	case proxyErr := <-proxyResult:
+		t.Fatalf("Live sideband 在转发首帧前退出：%v", proxyErr)
+	case <-ctx.Done():
+		t.Fatalf("等待 Live sideband 首帧超时：%v", ctx.Err())
+	}
 	require.Equal(t, coderws.MessageText, clientText.messageType)
 	require.JSONEq(t, `{"type":"client.text"}`, string(clientText.payload))
 
@@ -436,18 +445,17 @@ func TestProxyLiveSidebandForwardsTextAndBinary(t *testing.T) {
 	require.Empty(t, dialer.headers.Get("Sec-WebSocket-Version"))
 	require.Empty(t, dialer.headers.Get("Sec-WebSocket-Key"))
 	require.Empty(t, dialer.headers.Get("Sec-WebSocket-Extensions"))
-	egressContext, ok := OfficialEgressContextFromContext(dialer.ctx)
+	attempt, ok := officialegress.AttemptIdentityFromContext(dialer.ctx)
 	require.True(t, ok)
-	require.True(t, egressContext.IsFrozen())
-	require.Equal(t, account.ID, egressContext.AccountID())
-	require.Equal(t, PlatformOpenAI, egressContext.TargetPlatform())
-	require.Equal(t, OfficialEgressTransportWebSocket, egressContext.Transport())
-	require.Equal(t, "api.openai.com", egressContext.UpstreamHost())
-	require.Equal(t, "/v1/realtime", egressContext.InboundEndpoint())
-	require.Equal(t, officialCodexVersion0145, egressContext.ProfileVersion())
-	require.Equal(t, officialCodexEndpointRealtimeSideband, egressContext.CodexEndpointProfileID())
-	require.NotEmpty(t, egressContext.InvocationID())
-	require.NotEmpty(t, egressContext.ConnectionPoolID())
+	require.Equal(t, officialegress.SinkCodexRealtimeSideband, attempt.SinkID)
+	require.Equal(t, officialCodexEndpointRealtimeSideband, attempt.EndpointID)
+	require.Equal(t, officialegress.ReleaseModeActive, attempt.ReleaseMode)
+	require.NotEmpty(t, attempt.InvocationID)
+	require.NotEmpty(t, attempt.ReleaseDigest)
+	require.NotEmpty(t, attempt.BundleDigest)
+	require.NotEmpty(t, attempt.ProfileDigest)
+	require.NotEmpty(t, attempt.ConnectionPoolDigest)
+	require.True(t, attempt.HasFinalizationToken)
 	upstream.reads <- liveTestFrame{err: coderws.CloseError{Code: coderws.StatusNormalClosure}}
 	require.ErrorIs(t, <-proxyResult, ErrLiveCallNotFound)
 }

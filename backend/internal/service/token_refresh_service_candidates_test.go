@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/imroc/req/v3"
 	"github.com/stretchr/testify/require"
 )
 
@@ -215,7 +214,7 @@ func TestTokenRefreshService_RefreshFailureDoesNotCallPrivacy(t *testing.T) {
 				accountRepo:   repo,
 				refreshPolicy: DefaultBackgroundRefreshPolicy(),
 				cfg:           &config.TokenRefreshConfig{MaxRetries: 1, RetryBackoffSeconds: 0},
-				privacyClientFactory: func(string) (*req.Client, error) {
+				privacyClientFactory: func(PrivacyClientRequest) (*PrivacyHTTPClient, error) {
 					t.Fatalf("privacy client factory must not be called on refresh failure")
 					return nil, errors.New("unexpected privacy call")
 				},

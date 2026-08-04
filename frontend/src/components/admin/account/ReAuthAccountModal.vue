@@ -372,23 +372,14 @@ const handleExchangeCode = async () => {
       return
     }
 
-    const tokenInfo = await oauthClient.exchangeAuthCode(
-      authCode.trim(),
-      sessionId,
-      stateToUse,
-      props.account.proxy_id
-    )
-    if (!tokenInfo) return
-
-    // Build credentials and extra info
-    const credentials = oauthClient.buildCredentials(tokenInfo)
-    const extra = oauthClient.buildExtraInfo(tokenInfo)
-
+    oauthClient.loading.value = true
+    oauthClient.error.value = ''
     try {
-      const updatedAccount = await adminAPI.accounts.applyOAuthCredentials(props.account.id, {
-        type: 'oauth',
-        credentials,
-        extra
+      // 服务端先读取账号现有 Extra 和固定 rollout key，再兑换 token 并原子落库。
+      const updatedAccount = await adminAPI.accounts.reauthorizeOpenAI(props.account.id, {
+        session_id: sessionId,
+        code: authCode.trim(),
+        state: stateToUse
       })
 
       appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
@@ -397,6 +388,8 @@ const handleExchangeCode = async () => {
     } catch (error: any) {
       oauthClient.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
       appStore.showError(oauthClient.error.value)
+    } finally {
+      oauthClient.loading.value = false
     }
   } else if (isGemini.value) {
     const sessionId = geminiOAuth.sessionId.value

@@ -1,0 +1,29 @@
+{
+  "schema_version": 2,
+  "result": "passed",
+  "sink_id": "codex.responses.chat_completions",
+  "route": {
+    "method": "POST",
+    "host": "chatgpt.com",
+    "path": "/backend-api/codex/responses",
+    "purpose": "user_request.chat_completions",
+    "protocol": "http"
+  },
+  "authority_kind": "codex_executor",
+  "authority_id": "codex.executor.changeset1b",
+  "token_issuer_id": "codex.executor.changeset1b",
+  "evidence_kind": "codex_endpoint",
+  "evidence_id": "responses_http",
+  "backend": "http_upstream",
+  "adapter_id": "officialegress.http_upstream",
+  "transport_id": "codex-0.145.0-http-ubuntu24-native",
+  "wire_fixture_sha256": "bd048284045a1e0d83e22cb4e77494e04994f8b2a9e63d32bef2f5c1b411544c",
+  "final_wire_manifest_sha256": "c824ffb0ab6e2429c09f9ac517cf3e6f96860c7c6ef77c229757fd690bdbcf0f",
+  "active_capture_sha256": "ac1b1e12156de2fb428e335bcff5a5c648a62f065a3a05395718c9eb62d92f16",
+  "previous_capture_sha256": "1cf7004e797803cd28116f126d8e42b27fff5b9240081fb5478c83df7033bb1d",
+  "terminal_guard_allow": true,
+  "compared_release_modes": [
+    "active",
+    "previous"
+  ]
+}

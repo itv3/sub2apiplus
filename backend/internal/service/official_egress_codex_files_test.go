@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
@@ -93,6 +94,11 @@ func (u *officialCodexFileTestUpstream) DoWithTLS(
 		record.EndpointID = egressContext.CodexEndpointProfileID()
 		record.InvocationID = egressContext.InvocationID()
 		record.ConnectionPool = egressContext.ConnectionPoolID()
+	}
+	if identity, ok := officialegress.AttemptIdentityFromContext(request.Context()); ok {
+		record.EndpointID = identity.EndpointID
+		record.InvocationID = identity.InvocationID
+		record.ConnectionPool = identity.ConnectionPoolDigest
 	}
 	if profile != nil {
 		for _, rule := range profile.Transport.H1HeaderOrders {
@@ -260,7 +266,7 @@ func TestUploadOfficialCodexFileExecutesProfileDrivenThreeStepFlow(t *testing.T)
 func TestUploadOfficialCodexFileRejectsOversizeBeforeNetwork(t *testing.T) {
 	upstream := &officialCodexFileTestUpstream{}
 	service := &OpenAIGatewayService{httpUpstream: upstream}
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	require.NoError(t, err)
 	_, err = service.UploadOfficialCodexFile(
 		context.Background(),
@@ -342,11 +348,14 @@ func TestOfficialCodexFileFinalizeStopsAtProfileTimeout(t *testing.T) {
 	defer server.Close()
 	upstream := newOfficialCodexFileTestUpstream(t, server)
 	service := &OpenAIGatewayService{httpUpstream: upstream}
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
+	require.NoError(t, err)
+	runtimeState, err := resolveOfficialEgressRuntime(nil, upstream)
 	require.NoError(t, err)
 	call, err := newOfficialCodexFileUploadCall(
 		context.Background(),
 		service,
+		runtimeState,
 		officialCodexFileTestAccount(),
 		profile,
 	)

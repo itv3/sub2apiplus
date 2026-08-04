@@ -1459,20 +1459,22 @@ func (s *TokenRefreshService) ensureOpenAIPrivacy(ctx context.Context, account *
 		}
 	}
 
-	mode := disableOpenAITraining(ctx, s.privacyClientFactory, token, proxyURL)
-	if mode == "" {
+	result := ensureOpenAIPrivacyForAccount(ctx, s.privacyClientFactory, account, proxyURL, false)
+	if result.Mode == "" {
 		return
 	}
 
-	if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{"privacy_mode": mode}); err != nil {
+	if err := s.accountRepo.UpdateExtra(ctx, account.ID, result.ExtraUpdates()); err != nil {
 		slog.Warn("token_refresh.update_privacy_mode_failed",
 			"account_id", account.ID,
 			"error", err,
 		)
 	} else {
+		mergeAccountExtra(account, result.ExtraUpdates())
 		slog.Info("token_refresh.privacy_mode_set",
 			"account_id", account.ID,
-			"privacy_mode", mode,
+			"privacy_mode", result.Mode,
+			"privacy_persona", result.Persona,
 		)
 	}
 }

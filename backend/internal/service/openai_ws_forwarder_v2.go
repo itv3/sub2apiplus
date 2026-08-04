@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
@@ -97,12 +98,30 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	if err != nil {
 		return nil, wrapOpenAIWSFallback("official_egress_context", err)
 	}
+	runtimeSinkID := officialEgressSinkResponsesWS
 	if egressContext, enabled := OfficialEgressContextFromContext(ctx); enabled {
+		ctx, err = bindOfficialEgressSink(ctx, runtimeSinkID)
+		if err != nil {
+			return nil, wrapOpenAIWSFallback("official_egress_sink", err)
+		}
 		if value, valueErr := requiredOfficialEgressFieldValue(
 			egressContext,
 			OfficialEgressFieldPromptCacheKey,
 		); valueErr == nil {
 			promptCacheKey = value
+		}
+	} else {
+		runtimeSinkID = ""
+	}
+	var officialRuntime *OfficialEgressTransitionRuntime
+	invocationID := ""
+	if runtimeSinkID != "" {
+		officialRuntime, err = resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream)
+		if err != nil {
+			return nil, wrapOpenAIWSFallback("official_egress_runtime", err)
+		}
+		if identity, ok := officialegress.AttemptIdentityFromContext(ctx); ok {
+			invocationID = identity.InvocationID
 		}
 	}
 	payloadEventType := openAIWSPayloadString(payload, "type")
@@ -190,10 +209,11 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	acquireCtx, acquireCancel := context.WithTimeout(ctx, s.openAIWSAcquireTimeout())
 	defer acquireCancel()
 
-	lease, err := s.getOpenAIWSConnPool().Acquire(acquireCtx, openAIWSAcquireRequest{
+	acquireRequest := openAIWSAcquireRequest{
 		Account: account,
 		WSURL:   wsURL,
 		Headers: wsHeaders,
+		SinkID:  runtimeSinkID,
 		HeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, error) {
 			return s.refreshOpenAIAgentIdentityHeaders(factoryCtx, account, headers)
 		},
@@ -205,7 +225,34 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 			}
 			return ""
 		}(),
-	})
+	}
+	var officialInvocation *OpenAIForwardInvocationPlan
+	if officialRuntime != nil {
+		officialInvocation, err = officialCodexResponseForwardPlanForHolder(
+			ctx,
+			officialCodexBundleHolderForGin(c),
+			officialCodexResponseForwardPlanInput{
+				Runtime: officialRuntime, Account: account, PrimarySinkID: runtimeSinkID,
+				InvocationID: invocationID, ProxyURL: acquireRequest.ProxyURL,
+				PolicyID:        "changeset3.responses.ws",
+				PolicySource:    "service.forwardOpenAIWSV2",
+				FallbackSinkIDs: []officialegress.SinkID{officialegress.SinkCodexResponsesWSHTTPBridge},
+				AttemptBudget:   officialCodexMainForwardAttemptBudget,
+			},
+		)
+		if err != nil {
+			return nil, err
+		}
+	}
+	pool := s.getOpenAIWSConnPool()
+	var lease openAIWSLeaseSession
+	if officialInvocation != nil {
+		lease, err = officialInvocation.AcquireWebSocketPool(
+			acquireCtx, pool, acquireRequest, officialCodexEndpointResponsesWS,
+		)
+	} else {
+		lease, err = pool.Acquire(acquireCtx, acquireRequest)
+	}
 	if err != nil {
 		var agentDialErr *openAIWSDialError
 		if s.isAgentIdentityAccount(ctx, account) && errors.As(err, &agentDialErr) && isAgentIdentityTaskInvalidWSDialError(agentDialErr) && agentTaskRecoveryTried != nil && !*agentTaskRecoveryTried {
@@ -325,7 +372,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 	}
 
 	outboundPayload := payloadAsJSONBytes(payload)
-	outboundPayload, _, err = finalizeOpenAIOfficialEgressWSFrame(
+	outboundPayload, _, err = prepareOpenAIOfficialEgressSemanticWSFrame(
 		ctx,
 		outboundPayload,
 		outboundPayload,
@@ -337,7 +384,7 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 		return nil, wrapOpenAIWSFallback("official_egress_frame", err)
 	}
 	payloadBytes = len(outboundPayload)
-	if err := lease.WriteJSONWithContextTimeout(
+	if err := lease.WriteSemanticJSONWithContextTimeout(
 		ctx,
 		json.RawMessage(outboundPayload),
 		s.openAIWSWriteTimeout(),

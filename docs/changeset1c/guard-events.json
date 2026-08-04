@@ -1,0 +1,129 @@
+{
+  "schema_version": 1,
+  "environment": "DMIT",
+  "events": [
+    {
+      "observed_at": "2026-08-03T00:21:24.771Z",
+      "reason_code": "canary_observe_passthrough",
+      "sink_id": "codex.admin_test.compact",
+      "method": "POST",
+      "host_template": "chatgpt.com",
+      "path_template": "/backend-api/codex/responses/compact",
+      "backend": "http_upstream",
+      "protocol": "http",
+      "enforcement_state": "canary_enforce"
+    },
+    {
+      "observed_at": "2026-08-03T00:22:46.291Z",
+      "reason_code": "sink_override_observed",
+      "sink_id": "codex.admin_test.responses",
+      "method": "POST",
+      "host_template": "chatgpt.com",
+      "path_template": "/backend-api/codex/responses",
+      "backend": "http_upstream",
+      "protocol": "http",
+      "enforcement_state": "enforced"
+    },
+    {
+      "observed_at": "2026-08-03T00:25:42.579Z",
+      "reason_code": "missing_finalization_token",
+      "sink_id": "codex.oauth.refresh",
+      "method": "POST",
+      "host_template": "auth.openai.com",
+      "path_template": "/oauth/token",
+      "backend": "req_profile",
+      "protocol": "http",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "observed_at": "2026-08-03T00:25:42.579Z",
+      "reason_code": "wrong_executor",
+      "sink_id": "codex.oauth.refresh",
+      "method": "POST",
+      "host_template": "auth.openai.com",
+      "path_template": "/oauth/token",
+      "backend": "req_profile",
+      "protocol": "http",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "observed_at": "2026-08-03T00:25:42.845Z",
+      "reason_code": "missing_finalization_token",
+      "sink_id": "web.privacy.account_info",
+      "method": "GET",
+      "host_template": "chatgpt.com",
+      "path_template": "/backend-api/accounts/check/v4-2023-04-27",
+      "backend": "req_profile",
+      "protocol": "http",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "observed_at": "2026-08-03T00:25:42.845Z",
+      "reason_code": "wrong_executor",
+      "sink_id": "web.privacy.account_info",
+      "method": "GET",
+      "host_template": "chatgpt.com",
+      "path_template": "/backend-api/accounts/check/v4-2023-04-27",
+      "backend": "req_profile",
+      "protocol": "http",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "observed_at": "2026-08-03T00:25:43.590Z",
+      "reason_code": "missing_finalization_token",
+      "sink_id": "web.privacy.subscription",
+      "method": "GET",
+      "host_template": "chatgpt.com",
+      "path_template": "/backend-api/subscriptions",
+      "backend": "req_profile",
+      "protocol": "http",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "observed_at": "2026-08-03T00:25:43.590Z",
+      "reason_code": "wrong_executor",
+      "sink_id": "web.privacy.subscription",
+      "method": "GET",
+      "host_template": "chatgpt.com",
+      "path_template": "/backend-api/subscriptions",
+      "backend": "req_profile",
+      "protocol": "http",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "observed_at": "2026-08-03T00:25:44.113Z",
+      "reason_code": "missing_finalization_token",
+      "sink_id": "web.privacy.disable_training",
+      "method": "PATCH",
+      "host_template": "chatgpt.com",
+      "path_template": "/backend-api/settings/account_user_setting",
+      "backend": "req_profile",
+      "protocol": "http",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "observed_at": "2026-08-03T00:25:44.114Z",
+      "reason_code": "wrong_executor",
+      "sink_id": "web.privacy.disable_training",
+      "method": "PATCH",
+      "host_template": "chatgpt.com",
+      "path_template": "/backend-api/settings/account_user_setting",
+      "backend": "req_profile",
+      "protocol": "http",
+      "enforcement_state": "legacy_observe"
+    }
+  ],
+  "final_scan": {
+    "started_at": "2026-08-03T00:24:51Z",
+    "ended_at": "2026-08-03T00:35:01Z",
+    "reason_counts": {
+      "unknown_route": 0,
+      "missing_sink_id": 0,
+      "unregistered_sink": 0,
+      "sink_binding_mismatch": 0,
+      "wrong_backend": 0,
+      "release_digest_mismatch": 0
+    },
+    "panic_fatal_count": 0
+  }
+}

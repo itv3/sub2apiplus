@@ -1,0 +1,259 @@
+{
+  "schema_version": "changeset6-benchmark-calculation/v1",
+  "changeset": "6",
+  "baseline_metadata": {
+    "path": "docs/changeset6/baseline/benchmark-metadata.json",
+    "sha256": "bb206905aeae5933e5a6c254bf39677b14bb279169af307421ecde4bdee835ca"
+  },
+  "post_metadata": {
+    "path": "docs/changeset6/post/benchmark-metadata.json",
+    "sha256": "0ec6d4c81cff93d8d6d2661016dc1a79c688e8bb2e4ccf1047a9b4c461ed6f5b"
+  },
+  "drivers": {
+    "body_pre": {
+      "path": "docs/changeset6/baseline/benchmark-drivers/body-pre_test.go",
+      "sha256": "c2902c023bfddb35d6b746a103069774d7d14c4b2a300efa1efb25632c320cab"
+    },
+    "body_post": {
+      "path": "docs/changeset6/post/benchmark-drivers/body-post_test.go",
+      "sha256": "bce3b5c5aace49adee353ce45d893a048b3c577d4244242fa34a911f1f847b4f"
+    },
+    "catalog_pre": {
+      "path": "docs/changeset6/baseline/benchmark-drivers/catalog-pre_test.go",
+      "sha256": "f7731b9f5a2999e94ab869f245ba74e20654c22b018af74ab7a6f430f1822aed"
+    },
+    "catalog_post": {
+      "path": "docs/changeset6/post/benchmark-drivers/catalog-post_test.go",
+      "sha256": "f7731b9f5a2999e94ab869f245ba74e20654c22b018af74ab7a6f430f1822aed"
+    },
+    "profile_pre": {
+      "path": "docs/changeset6/baseline/benchmark-drivers/profile-pre_test.go",
+      "sha256": "66e0775b72be6456d71c5527b21664c1b06b9c743fdfb83515a808812331a846"
+    },
+    "profile_post": {
+      "path": "docs/changeset6/post/benchmark-drivers/profile-post_test.go",
+      "sha256": "66e0775b72be6456d71c5527b21664c1b06b9c743fdfb83515a808812331a846"
+    }
+  },
+  "driver_equivalence": {
+    "body_allowed_delta_count": 1,
+    "body_allowed_delta": "CodexEgressPlan.Body 的旧 []byte constructor 适配为 post RequestBody",
+    "catalog_byte_equal": true,
+    "profile_byte_equal": true,
+    "fixture_sha256": "7698cddeadace650567e46e7be9b66286212e26e983edb29e78da423ac713e08",
+    "commands_byte_equal": true
+  },
+  "raw_results": [
+    {
+      "path": "docs/changeset6/baseline/benchmarks/body-pre.txt",
+      "sha256": "f683a44c5616d6c5e23a745f5aae7cff5f7bb01d719d3ddad1704cd3eaff2395"
+    },
+    {
+      "path": "docs/changeset6/baseline/benchmarks/catalog-pre.txt",
+      "sha256": "31917a6c43e62792d8983e3a9f4e8335309e00641a06bb1af39550eb14339d29"
+    },
+    {
+      "path": "docs/changeset6/baseline/benchmarks/profile-pre.txt",
+      "sha256": "df0dece3672a9008351fcdf84693bdbbb8199a15be9f7f41fde700ea07699f05"
+    },
+    {
+      "path": "docs/changeset6/post/benchmarks/body-post.txt",
+      "sha256": "4e2612780b1db27dbaf469a5f1d62fb05af6ab628228b9bb0e0893bb019f7727"
+    },
+    {
+      "path": "docs/changeset6/post/benchmarks/catalog-post.txt",
+      "sha256": "3769d0d638fef9c25d0eaed935cd123e4709da4bdd1f0c22c903104d8b95997c"
+    },
+    {
+      "path": "docs/changeset6/post/benchmarks/profile-post.txt",
+      "sha256": "75ba69b55b4f6c37a1070eb1903b90cc5c1d13349e40df491c688ac9a3297825"
+    }
+  ],
+  "benchstat_results": [
+    {
+      "path": "docs/changeset6/post/benchmarks/body-benchstat.txt",
+      "sha256": "6b7fd5a32507ea61a72468e077609d2215bb92b654a878cef08f1b00ecbf95ff"
+    },
+    {
+      "path": "docs/changeset6/post/benchmarks/catalog-benchstat.txt",
+      "sha256": "57804d568cdcba3da4233a1430546f6cd272f0e892f4301a46649bddd397b1d8"
+    },
+    {
+      "path": "docs/changeset6/post/benchmarks/profile-benchstat.txt",
+      "sha256": "d511980e185ff4115304e513f83d55d76e8dc68f3eb07f5db80d0a8e32d9d12f"
+    }
+  ],
+  "body_cases": [
+    {
+      "name": "BenchmarkBodyCompileLargeUnchanged",
+      "sample_count_pre": 10,
+      "sample_count_post": 10,
+      "pre_median": {
+        "ns_per_op": "13937632",
+        "bytes_per_op": "58057006.5",
+        "allocs_per_op": "990"
+      },
+      "post_median": {
+        "ns_per_op": "5231656.5",
+        "bytes_per_op": "39561217.5",
+        "allocs_per_op": "534"
+      },
+      "ns_change_percent": "-62.463807",
+      "bytes_reduction_percent": "31.857979",
+      "allocs_reduction_percent": "46.060606",
+      "checks": {
+        "bytes_reduction_at_least_30_percent": true,
+        "allocs_reduction_at_least_30_percent": true,
+        "ns_regression_not_over_5_percent": true
+      },
+      "result": "passed"
+    },
+    {
+      "name": "BenchmarkBodyCompileLargeDirty",
+      "sample_count_pre": 10,
+      "sample_count_post": 10,
+      "pre_median": {
+        "ns_per_op": "14050444",
+        "bytes_per_op": "58057446.5",
+        "allocs_per_op": "992"
+      },
+      "post_median": {
+        "ns_per_op": "5275270",
+        "bytes_per_op": "39560484",
+        "allocs_per_op": "533"
+      },
+      "ns_change_percent": "-62.454781",
+      "bytes_reduction_percent": "31.859759",
+      "allocs_reduction_percent": "46.270161",
+      "checks": {
+        "bytes_reduction_at_least_30_percent": true,
+        "allocs_reduction_at_least_30_percent": true,
+        "ns_regression_not_over_5_percent": true
+      },
+      "result": "passed"
+    },
+    {
+      "name": "BenchmarkBodyCompileRetry",
+      "sample_count_pre": 10,
+      "sample_count_post": 10,
+      "pre_median": {
+        "ns_per_op": "28277556",
+        "bytes_per_op": "116115806",
+        "allocs_per_op": "1986.5"
+      },
+      "post_median": {
+        "ns_per_op": "11050804.5",
+        "bytes_per_op": "79120332",
+        "allocs_per_op": "1066"
+      },
+      "ns_change_percent": "-60.920228",
+      "bytes_reduction_percent": "31.860842",
+      "allocs_reduction_percent": "46.33778",
+      "checks": {
+        "bytes_reduction_at_least_30_percent": true,
+        "allocs_reduction_at_least_30_percent": true,
+        "ns_regression_not_over_5_percent": true
+      },
+      "result": "passed"
+    },
+    {
+      "name": "BenchmarkBodyCompileOpenWS",
+      "sample_count_pre": 10,
+      "sample_count_post": 10,
+      "pre_median": {
+        "ns_per_op": "3994436",
+        "bytes_per_op": "15546107",
+        "allocs_per_op": "313"
+      },
+      "post_median": {
+        "ns_per_op": "3594654",
+        "bytes_per_op": "6723481.5",
+        "allocs_per_op": "207"
+      },
+      "ns_change_percent": "-10.008472",
+      "bytes_reduction_percent": "56.751349",
+      "allocs_reduction_percent": "33.865815",
+      "checks": {
+        "bytes_reduction_at_least_30_percent": true,
+        "allocs_reduction_at_least_30_percent": true,
+        "ns_regression_not_over_5_percent": true
+      },
+      "result": "passed"
+    }
+  ],
+  "catalog_and_profile_cases": [
+    {
+      "name": "BenchmarkReleaseCatalogResolve",
+      "sample_count_pre": 10,
+      "sample_count_post": 10,
+      "pre_median": {
+        "ns_per_op": "3302",
+        "bytes_per_op": "4909",
+        "allocs_per_op": "10"
+      },
+      "post_median": {
+        "ns_per_op": "50.8",
+        "bytes_per_op": "0",
+        "allocs_per_op": "0"
+      },
+      "ns_change_percent": "-98.461538",
+      "expected_post": {
+        "bytes_per_op": "0",
+        "allocs_per_op": "0"
+      },
+      "every_post_sample_matches_absolute_contract": true,
+      "result": "passed"
+    },
+    {
+      "name": "BenchmarkOfficialCodexVersionProfileResolve",
+      "sample_count_pre": 10,
+      "sample_count_post": 10,
+      "pre_median": {
+        "ns_per_op": "7020.5",
+        "bytes_per_op": "9557",
+        "allocs_per_op": "20"
+      },
+      "post_median": {
+        "ns_per_op": "339.75",
+        "bytes_per_op": "0",
+        "allocs_per_op": "0"
+      },
+      "ns_change_percent": "-95.160601",
+      "expected_post": {
+        "bytes_per_op": "0",
+        "allocs_per_op": "0"
+      },
+      "every_post_sample_matches_absolute_contract": true,
+      "result": "passed"
+    },
+    {
+      "name": "BenchmarkOfficialCodexEndpointResolve",
+      "sample_count_pre": 10,
+      "sample_count_post": 10,
+      "pre_median": {
+        "ns_per_op": "7191.5",
+        "bytes_per_op": "13536",
+        "allocs_per_op": "22"
+      },
+      "post_median": {
+        "ns_per_op": "818.6",
+        "bytes_per_op": "3968",
+        "allocs_per_op": "2"
+      },
+      "ns_change_percent": "-88.617117",
+      "expected_post": {
+        "bytes_per_op": "3968",
+        "allocs_per_op": "2"
+      },
+      "every_post_sample_matches_absolute_contract": true,
+      "result": "passed"
+    }
+  ],
+  "thresholds": {
+    "body_minimum_bytes_reduction_percent": "30",
+    "body_minimum_allocs_reduction_percent": "30",
+    "maximum_ns_regression_percent": "5",
+    "sample_count_each_side": 10
+  },
+  "result": "passed"
+}

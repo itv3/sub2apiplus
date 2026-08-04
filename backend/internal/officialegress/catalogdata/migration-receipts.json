@@ -1,0 +1,362 @@
+{
+  "schema_version": 2,
+  "bootstrap_commit": "38a9929eac35a39c86de2f27de8f7a805d7dae52",
+  "receipts": [
+    {
+      "sink_id": "codex.admin_test.compact",
+      "approved_state": "canary_enforce",
+      "binding_digest": "3d037e18843ecf5fbe2148bcac2e8b9d7f0437be396acb956d814f5b2ae80ffb",
+      "authority_kind": "codex_executor",
+      "authority_id": "codex.executor.changeset1b",
+      "token_issuer_id": "codex.executor.changeset1b",
+      "routes": [
+        {
+          "route": {
+            "method": "POST",
+            "host": "chatgpt.com",
+            "path": "/backend-api/codex/responses/compact",
+            "purpose": "admin_test.compact",
+            "protocol": "http"
+          },
+          "evidence_kind": "codex_endpoint",
+          "evidence_id": "responses_compact",
+          "backend": "http_upstream",
+          "adapter_id": "officialegress.http_upstream",
+          "transport_id": "codex-0.145.0-http-ubuntu24-native",
+          "wire_fixture": {
+            "path": "catalogdata/migration-artifacts/changeset1b/codex_admin_test_compact/wire.json",
+            "sha256": "067be318397805c0a4c0319b2fd3c2974ef8c475a0de5f4b31ba6cc2412d2d42"
+          },
+          "execution_verification": {
+            "path": "catalogdata/migration-artifacts/changeset1b/codex_admin_test_compact/execution-verification.json",
+            "sha256": "88c08faeb1439af192c1bae53a8524829e68a332e9b668c501bd817095d798be"
+          }
+        }
+      ],
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*AccountTestService.testOpenAICompactConnection@backend/internal/service/account_test_service.go#facade_openai_upstream#1",
+          "ast_fingerprint": "93418efda9cf"
+        }
+      ],
+      "reviewed_by": "user-approved-changesets-0-1a-1b",
+      "review_ref": "changeset-1b-receipt-closure/2026-08-02",
+      "rationale": "变更集 1B 已通过生产 Executor 重放、100% canary Guard 校验和最终请求脱敏固化。"
+    },
+    {
+      "sink_id": "codex.admin_test.compact",
+      "approved_state": "enforced",
+      "binding_digest": "3d037e18843ecf5fbe2148bcac2e8b9d7f0437be396acb956d814f5b2ae80ffb",
+      "authority_kind": "codex_executor",
+      "authority_id": "codex.executor.changeset1b",
+      "token_issuer_id": "codex.executor.changeset1b",
+      "routes": [
+        {
+          "route": {
+            "method": "POST",
+            "host": "chatgpt.com",
+            "path": "/backend-api/codex/responses/compact",
+            "purpose": "admin_test.compact",
+            "protocol": "http"
+          },
+          "evidence_kind": "codex_endpoint",
+          "evidence_id": "responses_compact",
+          "backend": "http_upstream",
+          "adapter_id": "officialegress.http_upstream",
+          "transport_id": "codex-0.145.0-http-ubuntu24-native",
+          "wire_fixture": {
+            "path": "catalogdata/migration-artifacts/changeset1b/codex_admin_test_compact/wire.json",
+            "sha256": "067be318397805c0a4c0319b2fd3c2974ef8c475a0de5f4b31ba6cc2412d2d42"
+          },
+          "execution_verification": {
+            "path": "catalogdata/migration-artifacts/changeset1b/codex_admin_test_compact/execution-verification.json",
+            "sha256": "88c08faeb1439af192c1bae53a8524829e68a332e9b668c501bd817095d798be"
+          }
+        }
+      ],
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*AccountTestService.testOpenAICompactConnection@backend/internal/service/account_test_service.go#facade_openai_upstream#1",
+          "ast_fingerprint": "93418efda9cf"
+        }
+      ],
+      "prior_canary_receipt_digest": "5ae6ee4c6906f59d88bc12f41edbaa3ce084628893d58050587fd931d19629ed",
+      "canary_acceptance": {
+        "path": "catalogdata/migration-artifacts/changeset1b/codex_admin_test_compact/canary-acceptance.json",
+        "sha256": "b0c33f6a0c0f1b9413b1853d3bdd4fa617a4a437d6988ec1b8b7eaab75492aba"
+      },
+      "reviewed_by": "codex-audit-changeset-1c-remediation",
+      "review_ref": "changeset-1c-remediation-audit/2026-08-03",
+      "rationale": "变更集 1C 主动演练与回滚证据已完成 Codex 技术复审，保留完整 canary 前序并等待用户最终验收。"
+    },
+    {
+      "sink_id": "codex.admin_test.responses",
+      "approved_state": "canary_enforce",
+      "binding_digest": "4f6bae1a243a384b94cddd53ebe5bfd0b863c7e70752ad3e773da36b27e9dd70",
+      "authority_kind": "codex_executor",
+      "authority_id": "codex.executor.changeset1b",
+      "token_issuer_id": "codex.executor.changeset1b",
+      "routes": [
+        {
+          "route": {
+            "method": "POST",
+            "host": "chatgpt.com",
+            "path": "/backend-api/codex/responses",
+            "purpose": "admin_test.responses",
+            "protocol": "http"
+          },
+          "evidence_kind": "codex_endpoint",
+          "evidence_id": "responses_http",
+          "backend": "http_upstream",
+          "adapter_id": "officialegress.http_upstream",
+          "transport_id": "codex-0.145.0-http-ubuntu24-native",
+          "wire_fixture": {
+            "path": "catalogdata/migration-artifacts/changeset1b/codex_admin_test_responses/wire.json",
+            "sha256": "a598b7bc90486d2f267338f23301ca0967bfe2dbe1036e0b9f6fb8d337190cdb"
+          },
+          "execution_verification": {
+            "path": "catalogdata/migration-artifacts/changeset1b/codex_admin_test_responses/execution-verification.json",
+            "sha256": "54dfce75ddbd738a541e398ee7dfa7df7a6453783ba8e9cc28aa5ab3cdadd4cf"
+          }
+        }
+      ],
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*AccountTestService.testOpenAIAccountConnection@backend/internal/service/account_test_service.go#facade_openai_upstream#1",
+          "ast_fingerprint": "93418efda9cf"
+        }
+      ],
+      "reviewed_by": "user-approved-changesets-0-1a-1b",
+      "review_ref": "changeset-1b-receipt-closure/2026-08-02",
+      "rationale": "变更集 1B 已通过生产 Executor 重放、100% canary Guard 校验和最终请求脱敏固化。"
+    },
+    {
+      "sink_id": "codex.admin_test.responses",
+      "approved_state": "enforced",
+      "binding_digest": "4f6bae1a243a384b94cddd53ebe5bfd0b863c7e70752ad3e773da36b27e9dd70",
+      "authority_kind": "codex_executor",
+      "authority_id": "codex.executor.changeset1b",
+      "token_issuer_id": "codex.executor.changeset1b",
+      "routes": [
+        {
+          "route": {
+            "method": "POST",
+            "host": "chatgpt.com",
+            "path": "/backend-api/codex/responses",
+            "purpose": "admin_test.responses",
+            "protocol": "http"
+          },
+          "evidence_kind": "codex_endpoint",
+          "evidence_id": "responses_http",
+          "backend": "http_upstream",
+          "adapter_id": "officialegress.http_upstream",
+          "transport_id": "codex-0.145.0-http-ubuntu24-native",
+          "wire_fixture": {
+            "path": "catalogdata/migration-artifacts/changeset1b/codex_admin_test_responses/wire.json",
+            "sha256": "a598b7bc90486d2f267338f23301ca0967bfe2dbe1036e0b9f6fb8d337190cdb"
+          },
+          "execution_verification": {
+            "path": "catalogdata/migration-artifacts/changeset1b/codex_admin_test_responses/execution-verification.json",
+            "sha256": "54dfce75ddbd738a541e398ee7dfa7df7a6453783ba8e9cc28aa5ab3cdadd4cf"
+          }
+        }
+      ],
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*AccountTestService.testOpenAIAccountConnection@backend/internal/service/account_test_service.go#facade_openai_upstream#1",
+          "ast_fingerprint": "93418efda9cf"
+        }
+      ],
+      "prior_canary_receipt_digest": "d0ee4071febfac7e4b88a16de123311500b13be144cba60e3f55ae04c5c0bfd8",
+      "canary_acceptance": {
+        "path": "catalogdata/migration-artifacts/changeset1b/codex_admin_test_responses/canary-acceptance.json",
+        "sha256": "00ad671c9718403be31db67225f769095ea0fba5a525d6833c7575dc3a5d9aed"
+      },
+      "reviewed_by": "codex-audit-changeset-1c-remediation",
+      "review_ref": "changeset-1c-remediation-audit/2026-08-03",
+      "rationale": "变更集 1C 主动演练与回滚证据已完成 Codex 技术复审，保留完整 canary 前序并等待用户最终验收。"
+    },
+    {
+      "sink_id": "codex.alpha_search.pat_fallback",
+      "approved_state": "canary_enforce",
+      "binding_digest": "6244bc35da309924aeab4d7247262fdc968efcde55b4f798b52b7d89829ce5a1",
+      "authority_kind": "codex_executor",
+      "authority_id": "codex.executor.changeset1b",
+      "token_issuer_id": "codex.executor.changeset1b",
+      "routes": [
+        {
+          "route": {
+            "method": "POST",
+            "host": "chatgpt.com",
+            "path": "/backend-api/codex/responses",
+            "purpose": "user_request.alpha_search_pat",
+            "protocol": "http"
+          },
+          "evidence_kind": "codex_endpoint",
+          "evidence_id": "responses_http",
+          "backend": "http_upstream",
+          "adapter_id": "officialegress.http_upstream",
+          "transport_id": "codex-0.145.0-http-ubuntu24-native",
+          "wire_fixture": {
+            "path": "catalogdata/migration-artifacts/changeset1b/codex_alpha_search_pat_fallback/wire.json",
+            "sha256": "8c1fa40066ac0a0740bca75257ca1f921f0b5d9dc06aab5eef604dfb235c1433"
+          },
+          "execution_verification": {
+            "path": "catalogdata/migration-artifacts/changeset1b/codex_alpha_search_pat_fallback/execution-verification.json",
+            "sha256": "23ad4182a6fdaf0ad23c5efb7fea90efe0b3e36dd996609d0bd37ff18f440320"
+          }
+        }
+      ],
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.forwardAlphaSearchViaResponsesWebSearch@backend/internal/service/openai_alpha_search.go#facade_http_upstream_do_tls#1",
+          "ast_fingerprint": "33276ecf03af"
+        }
+      ],
+      "reviewed_by": "user-approved-changesets-0-1a-1b",
+      "review_ref": "changeset-1b-receipt-closure/2026-08-02",
+      "rationale": "变更集 1B 已通过生产 Executor 重放、100% canary Guard 校验和最终请求脱敏固化。"
+    },
+    {
+      "sink_id": "codex.alpha_search.pat_fallback",
+      "approved_state": "enforced",
+      "binding_digest": "6244bc35da309924aeab4d7247262fdc968efcde55b4f798b52b7d89829ce5a1",
+      "authority_kind": "codex_executor",
+      "authority_id": "codex.executor.changeset1b",
+      "token_issuer_id": "codex.executor.changeset1b",
+      "routes": [
+        {
+          "route": {
+            "method": "POST",
+            "host": "chatgpt.com",
+            "path": "/backend-api/codex/responses",
+            "purpose": "user_request.alpha_search_pat",
+            "protocol": "http"
+          },
+          "evidence_kind": "codex_endpoint",
+          "evidence_id": "responses_http",
+          "backend": "http_upstream",
+          "adapter_id": "officialegress.http_upstream",
+          "transport_id": "codex-0.145.0-http-ubuntu24-native",
+          "wire_fixture": {
+            "path": "catalogdata/migration-artifacts/changeset1b/codex_alpha_search_pat_fallback/wire.json",
+            "sha256": "8c1fa40066ac0a0740bca75257ca1f921f0b5d9dc06aab5eef604dfb235c1433"
+          },
+          "execution_verification": {
+            "path": "catalogdata/migration-artifacts/changeset1b/codex_alpha_search_pat_fallback/execution-verification.json",
+            "sha256": "23ad4182a6fdaf0ad23c5efb7fea90efe0b3e36dd996609d0bd37ff18f440320"
+          }
+        }
+      ],
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.forwardAlphaSearchViaResponsesWebSearch@backend/internal/service/openai_alpha_search.go#facade_http_upstream_do_tls#1",
+          "ast_fingerprint": "33276ecf03af"
+        }
+      ],
+      "prior_canary_receipt_digest": "43cc528c5583f4e0942af0a8d3171369ee5389ea9f5b54376fe0fb7691aabd69",
+      "canary_acceptance": {
+        "path": "catalogdata/migration-artifacts/changeset1b/codex_alpha_search_pat_fallback/canary-acceptance.json",
+        "sha256": "1abd46464f284d2f4e943a08c6d1adbd50bf9a0845aa3245c1bf5d82ac0741d1"
+      },
+      "reviewed_by": "codex-audit-changeset-1c-remediation",
+      "review_ref": "changeset-1c-remediation-audit/2026-08-03",
+      "rationale": "变更集 1C 主动演练与回滚证据已完成 Codex 技术复审，保留完整 canary 前序并等待用户最终验收。"
+    },
+    {
+      "sink_id": "codex.usage.probe",
+      "approved_state": "canary_enforce",
+      "binding_digest": "bf2744e2208bf2cf3293f2476be3066eb35bfd7326e8c9b9040f912aa64b8c0b",
+      "authority_kind": "codex_executor",
+      "authority_id": "codex.executor.changeset1b",
+      "token_issuer_id": "codex.executor.changeset1b",
+      "routes": [
+        {
+          "route": {
+            "method": "POST",
+            "host": "chatgpt.com",
+            "path": "/backend-api/codex/responses",
+            "purpose": "usage_probe",
+            "protocol": "http"
+          },
+          "evidence_kind": "codex_endpoint",
+          "evidence_id": "responses_http",
+          "backend": "http_upstream",
+          "adapter_id": "officialegress.http_upstream",
+          "transport_id": "codex-0.145.0-http-ubuntu24-native",
+          "wire_fixture": {
+            "path": "catalogdata/migration-artifacts/changeset1b/codex_usage_probe/wire.json",
+            "sha256": "8eefec78f4399d67731b6215bd578ba5729bd901c3760c45e88fb08f799c1840"
+          },
+          "execution_verification": {
+            "path": "catalogdata/migration-artifacts/changeset1b/codex_usage_probe/execution-verification.json",
+            "sha256": "e5b21409ca0eae35bfd3176072fdedfc7d212fe73549f95a638403f545a3bde9"
+          }
+        }
+      ],
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*AccountUsageService.probeOpenAICodexSnapshot@backend/internal/service/account_usage_service.go#factory_httpclient_pool#1",
+          "ast_fingerprint": "01d0937254f5"
+        },
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*AccountUsageService.probeOpenAICodexSnapshot@backend/internal/service/account_usage_service.go#net_http_client_do#1",
+          "ast_fingerprint": "6510439f9f68"
+        }
+      ],
+      "reviewed_by": "user-approved-changesets-0-1a-1b",
+      "review_ref": "changeset-1b-receipt-closure/2026-08-02",
+      "rationale": "变更集 1B 已通过生产 Executor 重放、100% canary Guard 校验和最终请求脱敏固化。"
+    },
+    {
+      "sink_id": "codex.usage.probe",
+      "approved_state": "enforced",
+      "binding_digest": "bf2744e2208bf2cf3293f2476be3066eb35bfd7326e8c9b9040f912aa64b8c0b",
+      "authority_kind": "codex_executor",
+      "authority_id": "codex.executor.changeset1b",
+      "token_issuer_id": "codex.executor.changeset1b",
+      "routes": [
+        {
+          "route": {
+            "method": "POST",
+            "host": "chatgpt.com",
+            "path": "/backend-api/codex/responses",
+            "purpose": "usage_probe",
+            "protocol": "http"
+          },
+          "evidence_kind": "codex_endpoint",
+          "evidence_id": "responses_http",
+          "backend": "http_upstream",
+          "adapter_id": "officialegress.http_upstream",
+          "transport_id": "codex-0.145.0-http-ubuntu24-native",
+          "wire_fixture": {
+            "path": "catalogdata/migration-artifacts/changeset1b/codex_usage_probe/wire.json",
+            "sha256": "8eefec78f4399d67731b6215bd578ba5729bd901c3760c45e88fb08f799c1840"
+          },
+          "execution_verification": {
+            "path": "catalogdata/migration-artifacts/changeset1b/codex_usage_probe/execution-verification.json",
+            "sha256": "e5b21409ca0eae35bfd3176072fdedfc7d212fe73549f95a638403f545a3bde9"
+          }
+        }
+      ],
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*AccountUsageService.probeOpenAICodexSnapshot@backend/internal/service/account_usage_service.go#factory_httpclient_pool#1",
+          "ast_fingerprint": "01d0937254f5"
+        },
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*AccountUsageService.probeOpenAICodexSnapshot@backend/internal/service/account_usage_service.go#net_http_client_do#1",
+          "ast_fingerprint": "6510439f9f68"
+        }
+      ],
+      "prior_canary_receipt_digest": "064a0276531e352ec5b0d9d5f8870e376c49317ed2744890ae30f85442fa7d4d",
+      "canary_acceptance": {
+        "path": "catalogdata/migration-artifacts/changeset1b/codex_usage_probe/canary-acceptance.json",
+        "sha256": "4d163c2a91931f4f0b974b5442e8f59ec7e34ba9aaf3c48cf3ca63e098405b11"
+      },
+      "reviewed_by": "codex-audit-changeset-1c-remediation",
+      "review_ref": "changeset-1c-remediation-audit/2026-08-03",
+      "rationale": "变更集 1C 主动演练与回滚证据已完成 Codex 技术复审，保留完整 canary 前序并等待用户最终验收。"
+    }
+  ]
+}

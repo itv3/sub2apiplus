@@ -1,0 +1,15 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Wei-Shaw/sub2api/internal/officialegress
+cpu: Apple M4
+                         │ ../docs/changeset6/baseline/benchmarks/catalog-pre.txt │ ../docs/changeset6/post/benchmarks/catalog-post.txt │
+                         │                         sec/op                         │           sec/op             vs base                │
+ReleaseCatalogResolve-10                                            3302.00n ± 1%                   50.80n ± 3%  -98.46% (p=0.000 n=10)
+
+                         │ ../docs/changeset6/baseline/benchmarks/catalog-pre.txt │ ../docs/changeset6/post/benchmarks/catalog-post.txt │
+                         │                          B/op                          │            B/op             vs base                 │
+ReleaseCatalogResolve-10                                             4.794Ki ± 0%                 0.000Ki ± 0%  -100.00% (p=0.000 n=10)
+
+                         │ ../docs/changeset6/baseline/benchmarks/catalog-pre.txt │ ../docs/changeset6/post/benchmarks/catalog-post.txt │
+                         │                       allocs/op                        │         allocs/op           vs base                 │
+ReleaseCatalogResolve-10                                               10.00 ± 0%                    0.00 ± 0%  -100.00% (p=0.000 n=10)

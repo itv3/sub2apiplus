@@ -1,0 +1,42 @@
+{
+  "schema_version": "changeset5-legacy-symbol-inventory/v1",
+  "changeset": "5",
+  "scope": "backend/internal/service production Go AST",
+  "symbols": [
+    {
+      "name": "attachOfficialCodex0145EndpointRequest",
+      "definition_count": 1,
+      "call_count": 0,
+      "allowed_final_definition_count": 0,
+      "allowed_final_call_count": 0
+    },
+    {
+      "name": "attachOfficialCodex0145EndpointWebSocketContext",
+      "definition_count": 1,
+      "call_count": 0,
+      "allowed_final_definition_count": 0,
+      "allowed_final_call_count": 0
+    },
+    {
+      "name": "officialCodex0145FinalizeEndpointJSONBody",
+      "definition_count": 1,
+      "call_count": 0,
+      "allowed_final_definition_count": 0,
+      "allowed_final_call_count": 0
+    },
+    {
+      "name": "officialCodex0145FinalizeEndpointHeaders",
+      "definition_count": 1,
+      "call_count": 1,
+      "allowed_final_definition_count": 0,
+      "allowed_final_call_count": 0
+    },
+    {
+      "name": "finalizeOpenAIOfficialEgressWSHandshakeHeaders",
+      "definition_count": 1,
+      "call_count": 0,
+      "allowed_final_definition_count": 0,
+      "allowed_final_call_count": 0
+    }
+  ]
+}

@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -296,6 +297,12 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	}
 
 	// 5. Get access token
+	if officialEgressEnabled && account.IsOpenAIOAuth() {
+		ctx, err = bindOfficialEgressSink(ctx, officialEgressSinkResponsesAnthropicCompat)
+		if err != nil {
+			return nil, fmt.Errorf("bind Anthropic compatibility official egress sink: %w", err)
+		}
+	}
 	token, _, err := s.getRequestCredential(ctx, c, account)
 	if err != nil {
 		return nil, fmt.Errorf("get access token: %w", err)
@@ -356,6 +363,19 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
+	var officialForwardPlan *OpenAIForwardInvocationPlan
+	if officialEgressEnabled && account.IsOpenAIOAuth() {
+		officialForwardPlan, err = s.officialCodexResponseForwardPlan(
+			ctx, c, account,
+			officialegress.SinkCodexResponsesAnthropicCompat,
+			"changeset3.responses.anthropic_compat",
+			"service.ForwardAsAnthropic",
+			officialCodexHTTPForwardAttemptBudget,
+		)
+		if err != nil {
+			return nil, err
+		}
+	}
 	// Grok 可能拒绝由其他 OAuth 账号或缓存身份重放的加密推理内容。
 	// 与 forwardGrokResponses 保持一致：遇到 400 时先剥离并重试一次，再触发故障转移。
 	var resp *http.Response
@@ -371,7 +391,13 @@ func (s *OpenAIGatewayService) ForwardAsAnthropic(
 				return nil, fmt.Errorf("build grok retry request: %w", err)
 			}
 		}
-		resp, err = s.doOpenAIHTTPUpstreamForRequest(upstreamReq, proxyURL, account, mimicProfile)
+		if officialForwardPlan != nil {
+			resp, err = officialForwardPlan.ExecuteHTTPRequest(
+				upstreamReq.Context(), upstreamReq, officialCodexEndpointResponsesHTTP,
+			)
+		} else {
+			resp, err = s.doOpenAIHTTPUpstreamForRequest(upstreamReq, proxyURL, account, mimicProfile)
+		}
 		if err != nil {
 			return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 		}

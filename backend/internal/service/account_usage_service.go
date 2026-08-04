@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	httppool "github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
+	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	openaipkg "github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openaiidentity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
@@ -124,6 +124,7 @@ type UsageCache struct {
 	antigravityCache  sync.Map           // accountID -> *antigravityUsageCache
 	apiFlight         singleflight.Group // 防止同一账号的并发请求击穿缓存（Anthropic）
 	antigravityFlight singleflight.Group // 防止同一 Antigravity 账号的并发请求击穿缓存
+	openAIProbeFlight singleflight.Group // 同一 OpenAI 账号的 WHAM/Responses 探针只允许一个在途请求
 	openAIProbeCache  sync.Map           // accountID -> time.Time
 	grokProbeCache    sync.Map           // accountID -> last billing probe attempt
 }
@@ -298,6 +299,7 @@ type AccountUsageService struct {
 	grokQuotaFetcher        *GrokQuotaFetcher
 	grokQuotaService        *GrokQuotaService
 	openAIQuotaService      *OpenAIQuotaService
+	officialEgress          *OfficialEgressTransitionRuntime
 	cache                   *UsageCache
 	identityCache           IdentityCache
 	tlsFPProfileService     *TLSFingerprintProfileService
@@ -612,32 +614,12 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 
 	applyExtraToUsage(usage, account.Extra, now)
 
-	if (force || shouldRefreshOpenAICodexSnapshot(account, usage, now)) && s.shouldProbeOpenAICodexSnapshot(account.ID, now, force) {
-		if account.IsShadow() {
-			// Spark shadow accounts fetch usage from /wham/usage (bengalfox channel)
-			// via the shared OpenAIQuotaService, which resolves credentials from the
-			// parent account.  The result is written to the shadow row's own codex_*
-			// Extra keys and immediately reflected in the returned UsageInfo.
-			if s.openAIQuotaService != nil {
-				if quotaUsage, err := s.openAIQuotaService.QueryUsage(ctx, account.ID); err == nil {
-					if updates := buildCodexSparkWindowExtraUpdates(quotaUsage, now); len(updates) > 0 {
-						mergeAccountExtra(account, updates)
-						s.persistOpenAICodexProbeSnapshot(account.ID, updates)
-						if usage.UpdatedAt == nil {
-							usage.UpdatedAt = &now
-						}
-						applyExtraToUsage(usage, account.Extra, now)
-					}
-				}
-			}
-		} else {
-			if updates, err := s.probeOpenAICodexSnapshot(ctx, account); err == nil && len(updates) > 0 {
-				mergeAccountExtra(account, updates)
-				if usage.UpdatedAt == nil {
-					usage.UpdatedAt = &now
-				}
-				applyExtraToUsage(usage, account.Extra, now)
-			}
+	if (force || shouldRefreshOpenAICodexSnapshot(account, usage, now)) &&
+		s.shouldProbeOpenAICodexSnapshot(account.ID, now, force) {
+		updates := s.probeOpenAICodexSnapshotSingleflight(ctx, account, force)
+		if len(updates) > 0 {
+			mergeAccountExtra(account, updates)
+			applyExtraToUsage(usage, account.Extra, now)
 		}
 	}
 
@@ -662,6 +644,52 @@ func (s *AccountUsageService) getOpenAIUsage(ctx context.Context, account *Accou
 	return usage, nil
 }
 
+// probeOpenAICodexSnapshotSingleflight 将同一账号的并发普通请求和手动 force 合并。
+// force 只绕过陈旧度缓存，不绕过 singleflight，也不绕过 Executor 的计费 fallback lease。
+func (s *AccountUsageService) probeOpenAICodexSnapshotSingleflight(
+	ctx context.Context,
+	account *Account,
+	force bool,
+) map[string]any {
+	if account == nil {
+		return nil
+	}
+	execute := func() (any, error) {
+		probeNow := time.Now()
+		if !force && !s.shouldProbeOpenAICodexSnapshot(account.ID, probeNow) {
+			return nil, nil
+		}
+		defer s.markOpenAICodexSnapshotProbe(account.ID, probeNow)
+
+		if account.IsShadow() {
+			// Spark shadow 通过共享 OpenAIQuotaService 查询 /wham/usage 的 Bengalfox
+			// 通道；结果写回 shadow 自身的 codex_* Extra。
+			if s.openAIQuotaService == nil {
+				return nil, nil
+			}
+			quotaUsage, err := s.openAIQuotaService.QueryUsageOnly(ctx, account.ID)
+			if err != nil {
+				return nil, err
+			}
+			updates := buildCodexSparkWindowExtraUpdates(quotaUsage, probeNow)
+			if len(updates) > 0 {
+				s.persistOpenAICodexProbeSnapshot(account.ID, updates)
+			}
+			return updates, nil
+		}
+
+		return s.refreshOpenAICodexSnapshotWHAMFirst(ctx, account, probeNow)
+	}
+	if s.cache == nil {
+		value, _ := execute()
+		updates, _ := value.(map[string]any)
+		return updates
+	}
+	value, _, _ := s.cache.openAIProbeFlight.Do(fmt.Sprintf("account:%d", account.ID), execute)
+	updates, _ := value.(map[string]any)
+	return updates
+}
+
 func shouldRefreshOpenAICodexSnapshot(account *Account, usage *UsageInfo, now time.Time) bool {
 	if account == nil {
 		return false
@@ -682,13 +710,8 @@ func isOpenAICodexSnapshotStale(account *Account, now time.Time) bool {
 	if account == nil || !account.IsOpenAIOAuth() {
 		return false
 	}
-	// 普通账号的 codex 刷新走 probe(/responses 头),要求 WSv2;但 spark 影子走 QueryUsage
-	// (/wham/usage body 的 codex_bengalfox),与 WSv2 无关——不能用 WSv2 门控其 staleness,否则首刷后
-	// codex_5h/7d 已存在→staleness 恒 false→spark 窗口永久冻结(外审第9轮 P1)。影子改按
-	// codex_usage_updated_at TTL 判定;实际查询频率仍由 shouldProbeOpenAICodexSnapshot 的缓存 TTL 节流。
-	if !account.IsShadow() && !account.IsOpenAIResponsesWebSocketV2Enabled() {
-		return false
-	}
+	// WHAM 是独立 HTTP 端点，与 Responses WSv2 开关无关；普通 OAuth 与 Spark
+	// shadow 都只按用量快照时间判断陈旧度。
 	if account.Extra == nil {
 		return true
 	}
@@ -715,8 +738,115 @@ func (s *AccountUsageService) shouldProbeOpenAICodexSnapshot(accountID int64, no
 			}
 		}
 	}
-	s.cache.openAIProbeCache.Store(accountID, now)
 	return true
+}
+
+func (s *AccountUsageService) markOpenAICodexSnapshotProbe(accountID int64, now time.Time) {
+	if s == nil || s.cache == nil || accountID <= 0 {
+		return
+	}
+	s.cache.openAIProbeCache.Store(accountID, now)
+}
+
+// refreshOpenAICodexSnapshotWHAMFirst 按机器可读语义矩阵判断普通 OAuth 是否可
+// 使用顶层 rate_limit；未获批准的单元在同一次刷新内进入已画像的 Executor fallback。
+func (s *AccountUsageService) refreshOpenAICodexSnapshotWHAMFirst(
+	ctx context.Context,
+	account *Account,
+	now time.Time,
+) (map[string]any, error) {
+	reason := openAIWHAMEligibilityFallbackReason(account)
+	if reason == "" {
+		if s.openAIQuotaService == nil {
+			reason = openAIWHAMFallbackServiceUnavailable
+		} else {
+			usage, err := s.openAIQuotaService.QueryUsageOnly(ctx, account.ID)
+			if err == nil {
+				updates, mapErr := buildCodexGlobalWindowExtraUpdates(usage, now)
+				mappingReason := ""
+				if mapErr != nil {
+					mappingReason = openAIWHAMMappingFallbackReason(mapErr)
+				}
+				cell := evaluateOpenAIWHAMMatrix(account, usage, mappingReason)
+				if cell.FinalDecision == openAIWHAMDecisionSupported {
+					slog.Info("openai_usage_wham_success",
+						"account_id", account.ID,
+						"credential_plan", cell.CredentialPlan,
+						"response_plan", cell.ResponsePlan,
+						"approved_family", cell.PlanFamily,
+						"source", "top_level_rate_limit",
+					)
+					s.persistOpenAICodexProbeSnapshot(account.ID, updates)
+					return updates, nil
+				} else {
+					reason = cell.FallbackReason
+				}
+			} else {
+				fallbackReason, allowed := openAIWHAMRequestFallbackReason(err)
+				if !allowed {
+					return nil, err
+				}
+				reason = fallbackReason
+			}
+		}
+	}
+
+	// fallback 仍是模型调用，必须显式记录原因、频率上限与删除条件。
+	slog.Warn("openai_usage_wham_fallback",
+		"account_id", account.ID,
+		"reason_code", reason,
+		"minimum_interval_seconds", int(openAIProbeCacheTTL/time.Second),
+		"removal_condition", openAIWHAMFallbackRemovalCondition,
+	)
+	return s.probeOpenAICodexSnapshot(ctx, account)
+}
+
+func openAIWHAMEligibilityFallbackReason(account *Account) string {
+	return openAIWHAMPreflightFallbackReason(newOpenAIWHAMMatrixCell(account))
+}
+
+func openAIWHAMRequestFallbackReason(err error) (string, bool) {
+	if err == nil {
+		return "", false
+	}
+	status := infraerrors.FromError(err)
+	switch status.Reason {
+	case "OPENAI_QUOTA_MISSING_ACCOUNT_ID":
+		return openAIWHAMFallbackAccountIDMissing, true
+	case "OPENAI_QUOTA_RESPONSE_INVALID":
+		return "wham_response_invalid", true
+	case "OPENAI_QUOTA_UPSTREAM_ERROR":
+		switch strings.TrimSpace(status.Metadata["upstream_status"]) {
+		case "404", "405", "410", "422":
+			return "wham_endpoint_incompatible_" + strings.TrimSpace(status.Metadata["upstream_status"]), true
+		}
+	}
+	return "", false
+}
+
+func openAIWHAMMappingFallbackReason(err error) string {
+	if err == nil {
+		return "wham_response_invalid"
+	}
+	reason := strings.TrimSpace(err.Error())
+	switch {
+	case strings.HasPrefix(reason, "wham_window_unknown_"):
+		return "wham_window_unknown_duration"
+	case strings.HasPrefix(reason, "wham_window_duplicate_"):
+		return "wham_window_duplicate_duration"
+	}
+	switch reason {
+	case "wham_rate_limit_missing",
+		"wham_window_missing",
+		"wham_window_incomplete",
+		"wham_window_used_percent_invalid",
+		"wham_window_5h_missing",
+		"wham_window_7d_missing",
+		"wham_window_reset_invalid":
+		return reason
+	default:
+		return "wham_response_invalid"
+	}
 }
 
 func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, account *Account) (map[string]any, error) {
@@ -732,6 +862,12 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 	}
 	modelID := openaipkg.DefaultTestModel
 	payload := createOpenAITestPayload(modelID, "", true, 0)
+	// 这里只准备业务语义；字段线序、画像元数据与压缩由 Executor compiler
+	// 统一定型。Usage probe 仍须提供 Responses 端点要求的完整业务闭集。
+	payload["tool_choice"] = "auto"
+	payload["parallel_tool_calls"] = false
+	payload["reasoning"] = map[string]any{"effort": "low", "summary": "auto"}
+	payload["include"] = []string{"reasoning.encrypted_content"}
 	payloadBytes, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("marshal openai probe payload: %w", err)
@@ -739,6 +875,10 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 
 	reqCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
+	reqCtx, err = bindOfficialEgressSink(reqCtx, officialEgressSinkUsageProbe)
+	if err != nil {
+		return nil, fmt.Errorf("bind OpenAI Codex probe official egress sink: %w", err)
+	}
 	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, chatgptCodexURL, bytes.NewReader(payloadBytes))
 	if err != nil {
 		return nil, fmt.Errorf("create openai probe request: %w", err)
@@ -774,15 +914,20 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	client, err := httppool.GetClient(httppool.Options{
-		ProxyURL:              proxyURL,
-		Timeout:               15 * time.Second,
-		ResponseHeaderTimeout: 10 * time.Second,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("build openai probe client: %w", err)
+	var httpUpstream HTTPUpstream
+	if s.openAIQuotaService != nil {
+		httpUpstream = s.openAIQuotaService.httpUpstream
 	}
-	resp, err := client.Do(req)
+	officialEgress, err := resolveOfficialEgressRuntime(s.officialEgress, httpUpstream)
+	if err != nil {
+		return nil, fmt.Errorf("resolve Codex usage fallback Executor: %w", err)
+	}
+	resp, err := officialEgress.ExecuteCodexHTTP(reqCtx, OfficialCodexHTTPExecution{
+		SinkID: officialEgressSinkUsageProbe, EndpointID: officialCodexEndpointResponsesHTTP,
+		Account: account, ProxyURL: proxyURL, Request: req,
+		PolicyID: "changeset1b.usage.responses_fallback.v1", PolicySource: "docs/1.md#changeset-1b",
+		MinimumInterval: openAIProbeCacheTTL, ConcurrencyLimit: 1, HasBillingSideEffect: true,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("openai codex probe request failed: %w", err)
 	}

@@ -1,0 +1,20 @@
+{
+  "schema_version": "changeset5-normalized-pre-refactor-final-wire-receipt/v1",
+  "changeset": "5",
+  "baseline": "changeset4_accepted_workspace_before_changeset5_refactor",
+  "manifest_path": "docs/changeset5/normalized-pre-refactor-final-wire/manifest.json",
+  "manifest_sha256": "51501f4c140a417d81c3d1a8f8525be4ef2f77c11248ffa63ca8e50150d011f7",
+  "secret_scan_path": "docs/changeset5/normalized-pre-refactor-final-wire/secret-scan.json",
+  "secret_scan_sha256": "281bcfae80abb2b60156a71fa8d3d3fe9667f52196762a0ba15794bf1c82e438",
+  "original_pre_manifest_path": "docs/changeset5/pre-refactor-final-wire/manifest.json",
+  "original_pre_manifest_sha256": "959b3179c0a54ffa81fa58057e43994e237f1f8565de0f28788a01f18e2d316d",
+  "normalization_transition_path": "docs/changeset5/final-wire-normalization-transition.json",
+  "route_count": 28,
+  "capture_count": 56,
+  "capture_key_set_sha256": "41be9cfa14a60bcc098c2bcfa4404e52d6a5637a239ecf19c306b1a4c2425057",
+  "rules": [
+    "original pre 保持字节不变，normalized pre 只能通过结构化 normalization transition 承接",
+    "只允许两条 OAuth connection_pool_digest 随机噪声归一化",
+    "post 与 normalized pre 必须使用空允许列表逐 capture 零差异比较"
+  ]
+}

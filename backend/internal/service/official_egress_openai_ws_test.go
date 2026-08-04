@@ -44,7 +44,7 @@ func TestOpenAIOfficialEgressWSContextUsesRuntimeFrozenBeforeTokenRefresh(t *tes
 	firstPayload := newOfficialOpenAIWSFirstFrameForTest(t)
 	c := newOfficialOpenAIWSIngressContextForTest(t, firstPayload)
 	applyOfficialOpenAIWSIngressHeadersForTest(c, firstPayload)
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	require.NoError(t, err)
 	tuiUserAgent, err := profile.RenderUserAgentWithTerminal(
 		officialCodexSurfaceTUI,
@@ -56,10 +56,11 @@ func TestOpenAIOfficialEgressWSContextUsesRuntimeFrozenBeforeTokenRefresh(t *tes
 	c.Request.Header.Set("originator", "codex-tui")
 	account := newOfficialOpenAIHTTPTestAccount(94)
 
-	ctx, err := BindOfficialCodex0145ResponsesWebSocketRuntime(
+	ctx, err := BindOfficialCodexResponsesWebSocketRuntime(
 		context.Background(),
 		c,
 		account,
+		officialClientProfileModeActive,
 	)
 	require.NoError(t, err)
 
@@ -95,7 +96,7 @@ func TestBindOfficialCodex0145ResponsesWebSocketRuntimeRejectsNonOAuthAccount(t 
 		"api_key": {Platform: PlatformOpenAI, Type: AccountTypeAPIKey},
 	} {
 		t.Run(name, func(t *testing.T) {
-			ctx, err := BindOfficialCodex0145ResponsesWebSocketRuntime(
+			ctx, err := BindOfficialCodexResponsesWebSocketRuntime(
 				context.Background(),
 				c,
 				account,
@@ -126,23 +127,6 @@ func TestOpenAIOfficialEgressWSContextAcceptsGuardianIdentity(t *testing.T) {
 	require.Equal(t, testOfficialOpenAIChildThreadID, mustOfficialEgressField(t, egressContext, OfficialEgressFieldClientRequestID).Value())
 	require.Equal(t, "guardian:"+testOfficialOpenAISessionID, mustOfficialEgressField(t, egressContext, OfficialEgressFieldPromptCacheKey).Value())
 
-	headers := http.Header{
-		"User-Agent":               []string{"codex_exec/0.145.0 (Ubuntu 24.4.0; x86_64)"},
-		"Originator":               []string{"codex_exec"},
-		"Authorization":            []string{"Bearer oauth-test-token"},
-		"Chatgpt-Account-Id":       []string{"chatgpt-test-account"},
-		"X-Codex-Beta-Features":    []string{"remote_compaction_v2"},
-		"X-Openai-Subagent":        []string{"guardian"},
-		"X-Codex-Parent-Thread-Id": []string{testOfficialOpenAISessionID},
-	}
-	_, err = finalizeOpenAIOfficialEgressWSHandshakeHeaders(ctx, headers)
-	require.NoError(t, err)
-	require.Equal(t, testOfficialOpenAISessionID, headers.Get("session-id"))
-	require.Equal(t, testOfficialOpenAIChildThreadID, headers.Get("thread-id"))
-	require.Equal(t, testOfficialOpenAIChildThreadID, headers.Get("x-client-request-id"))
-	require.Equal(t, testOfficialOpenAIChildThreadID+":0", headers.Get("x-codex-window-id"))
-	require.Equal(t, "guardian", headers.Get("x-openai-subagent"))
-	require.Equal(t, testOfficialOpenAISessionID, headers.Get("x-codex-parent-thread-id"))
 }
 
 func TestResolveExplicitOfficialOpenAIWSIdentityAcceptsMemoryConsolidation(t *testing.T) {
@@ -260,33 +244,6 @@ func TestResolveExplicitOfficialOpenAIWSIdentityRejectsConditionalMetadataHeader
 	}
 }
 
-func TestOpenAIOfficialEgressWSHandshakeUsesFrozenOfficialHeaders(t *testing.T) {
-	ctx, _, _, _ := newOfficialOpenAIWSContextForTest(t)
-	headers := http.Header{
-		"User-Agent":              []string{"codex_exec/0.145.0 (Ubuntu 24.4.0; x86_64)"},
-		"Originator":              []string{"codex_exec"},
-		"Authorization":           []string{"Bearer oauth-test-token"},
-		"Chatgpt-Account-Id":      []string{"chatgpt-test-account"},
-		"X-Codex-Beta-Features":   []string{"remote_compaction_v2"},
-		"Session_id":              []string{"legacy-session"},
-		"Conversation_id":         []string{"legacy-conversation"},
-		"X-Codex-Installation-Id": []string{testOfficialOpenAIInstallationID},
-	}
-
-	result, err := finalizeOpenAIOfficialEgressWSHandshakeHeaders(ctx, headers)
-	require.NoError(t, err)
-	require.NotEmpty(t, result.Modifications)
-	require.Empty(t, headers.Get("session_id"))
-	require.Empty(t, headers.Get("conversation_id"))
-	require.Empty(t, headers.Get("x-codex-installation-id"))
-	require.Equal(t, testOfficialOpenAISessionID, headers.Get("session-id"))
-	require.Equal(t, testOfficialOpenAISessionID, headers.Get("thread-id"))
-	require.Equal(t, testOfficialOpenAISessionID, headers.Get("x-client-request-id"))
-	require.Equal(t, testOfficialOpenAISessionID+":0", headers.Get("x-codex-window-id"))
-	require.Equal(t, openAIWSBetaV2Value, headers.Get("OpenAI-Beta"))
-	require.Equal(t, officialOpenAIWSClientVersion, headers.Get("version"))
-}
-
 func TestOpenAIOfficialEgressWSDerivesKiloIdentityAndCanonicalFrame(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
@@ -328,20 +285,6 @@ func TestOpenAIOfficialEgressWSDerivesKiloIdentityAndCanonicalFrame(t *testing.T
 		OfficialEgressFieldSourceDerived,
 		mustOfficialEgressField(t, egressContext, OfficialEgressFieldSessionID).Source,
 	)
-
-	headers := http.Header{
-		"User-Agent":         []string{"Kilo-Code/7.4.0"},
-		"Originator":         []string{"third-party"},
-		"Authorization":      []string{"Bearer oauth-test-token"},
-		"Chatgpt-Account-Id": []string{"chatgpt-test-account"},
-	}
-	_, err = finalizeOpenAIOfficialEgressWSHandshakeHeaders(ctx, headers)
-	require.NoError(t, err)
-	require.Equal(t, officialOpenAIHTTPUserAgent, headers.Get("User-Agent"))
-	require.Equal(t, officialOpenAIHTTPOriginator, headers.Get("originator"))
-	require.Equal(t, officialOpenAIHTTPBetaFeatures, headers.Get("x-codex-beta-features"))
-	require.Equal(t, openAIWSBetaV2Value, headers.Get("OpenAI-Beta"))
-	require.Equal(t, officialOpenAIWSClientVersion, headers.Get("version"))
 
 	firstFinal, firstResult, err := finalizeOpenAIOfficialEgressWSFrame(
 		ctx,

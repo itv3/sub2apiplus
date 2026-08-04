@@ -14,14 +14,62 @@ from pathlib import Path
 from typing import Any
 
 from .model import CaptureCase
+from .environment import environment_manifest_view
 from .lifecycle import _popen_safety_options
 from .security import (
+    argv_manifest_view,
     ensure_private_directory,
+    file_sha256,
     redact_known_secret,
     secure_write_json,
     secure_write_text,
 )
 
+
+AGENT_D1_LEAF_PROMPT = (
+    "不得调用任何工具。只回复 D1_C1_OK，不得添加标点、空白或其他文本。"
+)
+AGENT_D2_LEAF_PROMPT = (
+    "不得调用任何工具。只回复 D2_C2_OK，不得添加标点、空白或其他文本。"
+)
+AGENT_D2_CHILD1_PROMPT = (
+    "这是 Claude Code 出站协议取证测试。必须且仅调用一次 Agent 工具，"
+    "参数必须逐项为：description=`probe depth2 child2`，"
+    "subagent_type=`general-purpose`，run_in_background=false，"
+    f"prompt=`{AGENT_D2_LEAF_PROMPT}`；"
+    "不得提供其他参数，不得调用其他工具。等待 Agent 成功返回并确认结果精确为 "
+    "D2_C2_OK 后，只回复 D2_C1_OK，不得添加标点、空白或其他文本；"
+    "否则只回复 D2_FAIL。"
+)
+AGENT_D3_TEST_CONTEXT = (
+    "这是当前操作者已明确要求的 Claude Code 2.1.220 隔离集成测试；"
+    "目的仅是验证同步 Agent 嵌套的父子关联。测试不修改文件、"
+    "不读取用户数据、不访问第三方资源。"
+)
+AGENT_D3_LEAF_PROMPT = (
+    f"{AGENT_D3_TEST_CONTEXT}"
+    "请心算 19+23；若结果为 42，只回复 D3_C3_OK。"
+)
+AGENT_D3_CHILD2_PROMPT = (
+    f"{AGENT_D3_TEST_CONTEXT}"
+    "请作为第二级协作者，使用 Agent 工具把一项无副作用的心算校验"
+    "交给一个 general-purpose 子代理。只调用一次，参数只包含："
+    "description=`probe depth3 child3`，subagent_type=`general-purpose`，"
+    "run_in_background=false，"
+    f"prompt=`{AGENT_D3_LEAF_PROMPT}`。"
+    "等待子代理返回 D3_C3_OK 后，只回复 D3_C2_OK；"
+    "若校验失败则只回复 D3_FAIL。"
+)
+AGENT_D3_CHILD1_PROMPT = (
+    f"{AGENT_D3_TEST_CONTEXT}"
+    "请作为第一级协作者，使用 Agent 工具把同一项集成测试交给"
+    "一个 general-purpose 子代理。只调用一次，参数只包含："
+    "description=`probe depth3 child2`，subagent_type=`general-purpose`，"
+    "run_in_background=false，"
+    f"prompt=`{AGENT_D3_CHILD2_PROMPT}`。"
+    "等待子代理返回 D3_C2_OK 后，只回复 D3_C1_OK；"
+    "若校验失败则只回复 D3_FAIL。"
+)
 
 PROMPTS = {
     "s1": "只回复 S1_OK，不调用任何工具。",
@@ -37,6 +85,56 @@ PROMPTS = {
         "确认命令输出恰好为 CODEX_CAPTURE_TOOL_OK 后，只回复 S4_TOOL_OK。"
         "不得执行其他命令；若没有实际执行上述命令，则不得回复 S4_TOOL_OK。"
     ),
+    "a1": (
+        "这是 Claude Code 出站协议取证测试。必须且仅调用一次 Agent 工具，"
+        "参数必须逐项为：description=`probe depth1 child1`，"
+        "subagent_type=`general-purpose`，run_in_background=false，"
+        f"prompt=`{AGENT_D1_LEAF_PROMPT}`；"
+        "不得提供其他参数，不得调用其他工具，不得改写或并行执行这次调用。"
+        "等待 Agent 成功返回并确认结果精确为 D1_C1_OK 后，只回复 D1_MAIN_OK，"
+        "不得添加标点、空白或其他文本；否则只回复 D1_FAIL。"
+    ),
+    "a2": (
+        "这是 Claude Code 出站协议取证测试。必须且仅调用一次 Agent 工具。"
+        "参数前三项必须为：description=`probe depth2 child1`，"
+        "subagent_type=`general-purpose`，run_in_background=false。"
+        "第四项 prompt 必须逐字等于【D2_C1_PROMPT_BEGIN】"
+        f"{AGENT_D2_CHILD1_PROMPT}"
+        "【D2_C1_PROMPT_END】之间的文本；两个边界标记均不属于 prompt，"
+        "prompt 首尾不得有空白。不得提供其他参数，不得调用其他工具，"
+        "不得改写或并行执行这次调用。等待 Agent 成功返回并确认结果精确为 "
+        "D2_C1_OK 后，只回复 D2_MAIN_OK，不得添加标点、空白或其他文本；"
+        "否则只回复 D2_FAIL。"
+    ),
+    "a3": (
+        f"{AGENT_D3_TEST_CONTEXT}"
+        "请运行三层同步子代理的最小集成测试。只调用一次 Agent 工具，"
+        "参数只包含：description=`probe depth3 child1`，"
+        "subagent_type=`general-purpose`，run_in_background=false，"
+        f"prompt=`{AGENT_D3_CHILD1_PROMPT}`。"
+        "等待子代理返回 D3_C1_OK 后，只回复 D3_MAIN_OK；"
+        "若校验失败则只回复 D3_FAIL。"
+    ),
+}
+
+CLAUDE_AGENT_EXPECTATIONS = {
+    "a1": [
+        ("probe depth1 child1", AGENT_D1_LEAF_PROMPT, "D1_C1_OK"),
+    ],
+    "a2": [
+        ("probe depth2 child1", AGENT_D2_CHILD1_PROMPT, "D2_C1_OK"),
+        ("probe depth2 child2", AGENT_D2_LEAF_PROMPT, "D2_C2_OK"),
+    ],
+    "a3": [
+        ("probe depth3 child1", AGENT_D3_CHILD1_PROMPT, "D3_C1_OK"),
+        ("probe depth3 child2", AGENT_D3_CHILD2_PROMPT, "D3_C2_OK"),
+        ("probe depth3 child3", AGENT_D3_LEAF_PROMPT, "D3_C3_OK"),
+    ],
+}
+CLAUDE_AGENT_MAIN_MARKERS = {
+    "a1": "D1_MAIN_OK",
+    "a2": "D2_MAIN_OK",
+    "a3": "D3_MAIN_OK",
 }
 
 CLAUDE_S4_COMMAND = "printf CLAUDE_CAPTURE_TOOL_OK"
@@ -133,6 +231,225 @@ def _nested_items_by_type(value: Any, expected: str) -> list[dict[str, Any]]:
     return result
 
 
+def _direct_claude_blocks(
+    records: list[dict[str, Any]], expected: str
+) -> list[dict[str, Any]]:
+    """只读取 stream-json 顶层消息的直接 content block。"""
+
+    items: list[dict[str, Any]] = []
+    for record in records:
+        if record.get("type") not in {"assistant", "user"}:
+            continue
+        message = record.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if isinstance(block, dict) and block.get("type") == expected:
+                items.append(
+                    {
+                        "owner": record.get("parent_tool_use_id"),
+                        "subagent_type": record.get("subagent_type"),
+                        "task_description": record.get("task_description"),
+                        "block": block,
+                    }
+                )
+    return items
+
+
+def _deduplicate_claude_blocks(
+    items: list[dict[str, Any]], key_name: str
+) -> tuple[list[dict[str, Any]], int, bool]:
+    """按 tool ID 语义去重；同 ID 内容或 owner 冲突即标记无效。"""
+
+    unique: dict[str, dict[str, Any]] = {}
+    duplicate_count = 0
+    conflict = False
+    for item in items:
+        block = item["block"]
+        key = block.get(key_name)
+        if not isinstance(key, str) or not key:
+            conflict = True
+            continue
+        normalized = json.dumps(
+            {
+                "owner": item.get("owner"),
+                "block": block,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        if key in unique:
+            duplicate_count += 1
+            if unique[key]["normalized"] != normalized:
+                conflict = True
+            continue
+        unique[key] = {**item, "normalized": normalized}
+    return list(unique.values()), duplicate_count, conflict
+
+
+def _last_owner_text(
+    records: list[dict[str, Any]], owner: str
+) -> tuple[str | None, bool]:
+    """返回一个子 agent 最后的直接文本，并校验转发身份元数据。"""
+
+    texts: list[str] = []
+    metadata_valid = False
+    for record in records:
+        if record.get("type") != "assistant" or record.get("parent_tool_use_id") != owner:
+            continue
+        if record.get("subagent_type") == "general-purpose" and isinstance(
+            record.get("task_description"), str
+        ):
+            metadata_valid = True
+        message = record.get("message")
+        content = message.get("content") if isinstance(message, dict) else None
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if (
+                isinstance(block, dict)
+                and block.get("type") == "text"
+                and isinstance(block.get("text"), str)
+                and block["text"].strip()
+            ):
+                texts.append(block["text"].strip())
+    return (texts[-1] if texts else None), metadata_valid
+
+
+def _contains_standalone_success_marker(text: str | None, marker: str) -> bool:
+    """允许子代理给出解释，但成功标记必须且只能独占一行。"""
+
+    if text is None:
+        return False
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    failure_markers = {"D1_FAIL", "D2_FAIL", "D3_FAIL"}
+    return lines.count(marker) == 1 and not failure_markers.intersection(lines)
+
+
+def _validate_claude_agent_chain(
+    scenario: str, records: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """按 parent_tool_use_id 严格验证同步嵌套 Agent 链。"""
+
+    raw_uses = _direct_claude_blocks(records, "tool_use")
+    raw_results = _direct_claude_blocks(records, "tool_result")
+    uses, use_duplicates, use_conflict = _deduplicate_claude_blocks(
+        raw_uses, "id"
+    )
+    results, result_duplicates, result_conflict = _deduplicate_claude_blocks(
+        raw_results, "tool_use_id"
+    )
+    expected = CLAUDE_AGENT_EXPECTATIONS[scenario]
+    by_owner: dict[Any, list[dict[str, Any]]] = {}
+    for item in uses:
+        by_owner.setdefault(item.get("owner"), []).append(item)
+    result_by_id = {
+        item["block"]["tool_use_id"]: item
+        for item in results
+        if isinstance(item["block"].get("tool_use_id"), str)
+    }
+    ordered: list[dict[str, Any]] = []
+    owner: str | None = None
+    chain_valid = True
+    child_markers: list[dict[str, Any]] = []
+    for description, prompt, child_marker in expected:
+        candidates = by_owner.get(owner, [])
+        if len(candidates) != 1:
+            chain_valid = False
+            break
+        item = candidates[0]
+        block = item["block"]
+        tool_id = block.get("id")
+        tool_input = block.get("input")
+        exact_input = (
+            block.get("name") == "Agent"
+            and isinstance(tool_id, str)
+            and isinstance(tool_input, dict)
+            and set(tool_input) == {
+                "description",
+                "prompt",
+                "run_in_background",
+                "subagent_type",
+            }
+            and tool_input.get("description") == description
+            and tool_input.get("prompt") == prompt
+            and tool_input.get("run_in_background") is False
+            and tool_input.get("subagent_type") == "general-purpose"
+        )
+        result = result_by_id.get(str(tool_id))
+        result_valid = (
+            result is not None
+            and result.get("owner") == owner
+            and result["block"].get("is_error") is not True
+        )
+        child_text, child_metadata_present = _last_owner_text(records, str(tool_id))
+        child_records = [
+            record
+            for record in records
+            if record.get("parent_tool_use_id") == tool_id
+            and record.get("type") in {"assistant", "user"}
+        ]
+        child_metadata_valid = bool(child_records) and all(
+            record.get("subagent_type") == "general-purpose"
+            and record.get("task_description") == description
+            for record in child_records
+        )
+        child_marker_exact = child_text == child_marker
+        child_marker_valid = _contains_standalone_success_marker(
+            child_text, child_marker
+        )
+        chain_valid = chain_valid and exact_input and result_valid
+        chain_valid = (
+            chain_valid
+            and child_metadata_present
+            and child_metadata_valid
+            and child_marker_valid
+        )
+        ordered.append(
+            {
+                "tool_use_id": tool_id,
+                "owner": owner,
+                "description": description,
+                "exact_input": exact_input,
+                "paired_result": result_valid,
+                "child_metadata_valid": child_metadata_valid,
+                "child_marker_present": child_marker_valid,
+                "child_marker_exact": child_marker_exact,
+            }
+        )
+        child_markers.append(
+            {"description": description, "marker_present": child_marker_valid}
+        )
+        owner = str(tool_id)
+    expected_ids = {str(item["tool_use_id"]) for item in ordered}
+    paired_ids = set(result_by_id)
+    shape_valid = (
+        len(uses) == len(expected)
+        and len(results) == len(expected)
+        and paired_ids == expected_ids
+        and all(item["block"].get("name") == "Agent" for item in uses)
+    )
+    return {
+        "tool_use_count": len(uses),
+        "tool_result_count": len(results),
+        "tool_use_raw_count": len(raw_uses),
+        "tool_result_raw_count": len(raw_results),
+        "tool_use_duplicate_count": use_duplicates,
+        "tool_result_duplicate_count": result_duplicates,
+        "tool_block_conflict": use_conflict or result_conflict,
+        "agent_chain": ordered,
+        "child_markers": child_markers,
+        "agent_chain_valid": (
+            chain_valid
+            and shape_valid
+            and not use_conflict
+            and not result_conflict
+        ),
+    }
+
+
 def build_claude_command(
     *, claude_bin: str, model: str, scenario: str
 ) -> list[str]:
@@ -150,7 +467,11 @@ def build_claude_command(
         "false",
         "--no-session-persistence",
         "--max-budget-usd",
-        "0.25",
+        (
+            "2.00"
+            if scenario == "a3"
+            else "1.00" if scenario in CLAUDE_AGENT_EXPECTATIONS else "0.25"
+        ),
     ]
     if scenario == "s4":
         command.extend(
@@ -159,6 +480,18 @@ def build_claude_command(
                 "Bash",
                 "--allowedTools",
                 f"Bash({CLAUDE_S4_COMMAND})",
+                "--permission-mode",
+                "dontAsk",
+            ]
+        )
+    elif scenario in CLAUDE_AGENT_EXPECTATIONS:
+        # Task 是 CLI 的兼容名；发往 Anthropic 的实际工具 schema 名为 Agent。
+        command.extend(
+            [
+                "--tools",
+                "Task",
+                "--allowedTools",
+                "Task",
                 "--permission-mode",
                 "dontAsk",
             ]
@@ -215,15 +548,6 @@ def _read_claude_until_result(
 def _run_claude_two_turns(
     command: list[str], environment: dict[str, str], timeout: int
 ) -> tuple[int, str, str]:
-    command.extend(
-        [
-            "--input-format",
-            "stream-json",
-            "--output-format",
-            "stream-json",
-            "--verbose",
-        ]
-    )
     process = subprocess.Popen(
         command,
         env=environment,
@@ -319,24 +643,40 @@ def _validate_claude(
     records = _load_json_lines(stdout)
     results = [record for record in records if record.get("type") == "result"]
     expected_results = 2 if scenario == "s2" else 1
-    markers = (
-        ["S2_TURN1_OK", "S2_TURN2_OK"]
-        if scenario == "s2"
-        else ["S4_TOOL_OK" if scenario == "s4" else "S1_OK"]
-    )
+    if scenario == "s2":
+        markers = ["S2_TURN1_OK", "S2_TURN2_OK"]
+    elif scenario == "s4":
+        markers = ["S4_TOOL_OK"]
+    elif scenario in CLAUDE_AGENT_MAIN_MARKERS:
+        markers = [CLAUDE_AGENT_MAIN_MARKERS[scenario]]
+    else:
+        markers = ["S1_OK"]
     result_values = [str(record.get("result", "")).strip() for record in results]
-    tool_uses = _nested_items_by_type(records, "tool_use")
-    tool_results = _nested_items_by_type(records, "tool_result")
+    raw_tool_uses = _direct_claude_blocks(records, "tool_use")
+    raw_tool_results = _direct_claude_blocks(records, "tool_result")
+    tool_uses, tool_use_duplicates, tool_use_conflict = _deduplicate_claude_blocks(
+        raw_tool_uses, "id"
+    )
+    tool_results, tool_result_duplicates, tool_result_conflict = (
+        _deduplicate_claude_blocks(raw_tool_results, "tool_use_id")
+    )
+    tool_use_blocks = [item["block"] for item in tool_uses]
+    tool_result_blocks = [item["block"] for item in tool_results]
     exact_tool_command = (
-        len(tool_uses) == 1
-        and tool_uses[0].get("name") == "Bash"
-        and isinstance(tool_uses[0].get("input"), dict)
-        and tool_uses[0]["input"].get("command") == CLAUDE_S4_COMMAND
+        len(tool_use_blocks) == 1
+        and tool_use_blocks[0].get("name") == "Bash"
+        and isinstance(tool_use_blocks[0].get("input"), dict)
+        and tool_use_blocks[0]["input"].get("command") == CLAUDE_S4_COMMAND
     )
     exact_tool_output = (
-        len(tool_results) == 1
-        and _tool_result_text(tool_results[0]) == CLAUDE_S4_OUTPUT
-        and tool_results[0].get("is_error") is False
+        len(tool_result_blocks) == 1
+        and _tool_result_text(tool_result_blocks[0]) == CLAUDE_S4_OUTPUT
+        and tool_result_blocks[0].get("is_error") is False
+    )
+    agent_summary = (
+        _validate_claude_agent_chain(scenario, records)
+        if scenario in CLAUDE_AGENT_EXPECTATIONS
+        else None
     )
     summary: dict[str, Any] = {
         "return_code": return_code,
@@ -344,21 +684,31 @@ def _validate_claude(
         "success_result_count": sum(
             record.get("subtype") == "success" for record in results
         ),
-        "tool_use_count": len(tool_uses),
-        "tool_result_count": len(tool_results),
+        "tool_use_count": len(tool_use_blocks),
+        "tool_result_count": len(tool_result_blocks),
+        "tool_use_raw_count": len(raw_tool_uses),
+        "tool_result_raw_count": len(raw_tool_results),
+        "tool_use_duplicate_count": tool_use_duplicates,
+        "tool_result_duplicate_count": tool_result_duplicates,
+        "tool_block_conflict": tool_use_conflict or tool_result_conflict,
         "exact_tool_command": exact_tool_command,
         "exact_tool_output": exact_tool_output,
         "markers_present": result_values == markers,
         "runtime_secret_exposed": runtime_secret_exposed,
     }
+    if agent_summary is not None:
+        summary.update(agent_summary)
     summary["valid"] = (
         return_code == 0
         and summary["result_count"] == expected_results
         and summary["success_result_count"] == expected_results
         and summary["markers_present"]
         and not runtime_secret_exposed
+        and not summary["tool_block_conflict"]
         and (
-            (
+            summary["agent_chain_valid"]
+            if scenario in CLAUDE_AGENT_EXPECTATIONS
+            else (
                 summary["tool_use_count"] == 0
                 and summary["tool_result_count"] == 0
             )
@@ -378,6 +728,7 @@ def run_claude_scenario(
     output_dir: Path,
     timeout: int,
     runtime_secret: str | None,
+    known_secrets: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """执行并校验一个 Claude 场景。"""
 
@@ -386,12 +737,40 @@ def run_claude_scenario(
         claude_bin=claude_bin, model=model, scenario=scenario
     )
     if scenario == "s2":
+        command.extend(
+            [
+                "--input-format",
+                "stream-json",
+                "--output-format",
+                "stream-json",
+                "--verbose",
+            ]
+        )
+    else:
+        if scenario in CLAUDE_AGENT_EXPECTATIONS:
+            command.append("--forward-subagent-text")
+        prompt = PROMPTS["claude_s4"] if scenario == "s4" else PROMPTS[scenario]
+        command.extend(["--output-format", "stream-json", "--verbose", prompt])
+    secret_values = dict(known_secrets or {})
+    if runtime_secret and not secret_values:
+        secret_values["runtime_secret"] = runtime_secret
+    invocation = argv_manifest_view(command, secret_values)
+    invocation.update(
+        {
+            "cwd": os.getcwd(),
+            "environment": environment_manifest_view(environment, secret_values),
+            "stdin_mode": "stream-json-two-turns" if scenario == "s2" else "devnull",
+        }
+    )
+    invocation_path = output_dir / "invocation.json"
+    secure_write_json(invocation_path, invocation)
+    invocation["file_sha256"] = file_sha256(invocation_path)
+
+    if scenario == "s2":
         return_code, stdout, stderr = _run_claude_two_turns(
             command, environment, timeout
         )
     else:
-        prompt = PROMPTS["claude_s4"] if scenario == "s4" else PROMPTS[scenario]
-        command.extend(["--output-format", "stream-json", "--verbose", prompt])
         completed = _run_owned_cli_command(command, environment, timeout)
         return_code, stdout, stderr = (
             completed.returncode,
@@ -412,7 +791,14 @@ def run_claude_scenario(
         safe_stdout,
         runtime_secret_exposed=runtime_secret_exposed,
     )
-    summary.update({"product": "claude", "scenario": scenario, "model": model})
+    summary.update(
+        {
+            "product": "claude",
+            "scenario": scenario,
+            "model": model,
+            "invocation": invocation,
+        }
+    )
     secure_write_json(output_dir / "summary.json", summary)
     return summary
 

@@ -25,9 +25,10 @@ import (
 )
 
 type Application struct {
-	Server      *http.Server
-	PromptAudit *securityaudit.PromptService
-	Cleanup     func()
+	Server         *http.Server
+	PromptAudit    *securityaudit.PromptService
+	OfficialEgress *service.OfficialEgressTransitionRuntime
+	Cleanup        func()
 }
 
 func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
@@ -46,7 +47,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 		// Server layer ProviderSet
 		server.ProviderSet,
 
-		// Privacy client factory for OpenAI training opt-out
+		// OpenAI 训练数据退出端点使用的隐私客户端工厂
 		providePrivacyClientFactory,
 
 		// BuildInfo provider
@@ -56,13 +57,36 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 		provideCleanup,
 
 		// Application struct
-		wire.Struct(new(Application), "Server", "PromptAudit", "Cleanup"),
+		wire.Struct(new(Application), "Server", "PromptAudit", "OfficialEgress", "Cleanup"),
 	)
 	return nil, nil
 }
 
-func providePrivacyClientFactory() service.PrivacyClientFactory {
-	return repository.CreatePrivacyReqClient
+func providePrivacyClientFactory(cfg *config.Config) service.PrivacyClientFactory {
+	browser := cfg.Gateway.OpenAIPrivacyBrowser
+	return func(request service.PrivacyClientRequest) (*service.PrivacyHTTPClient, error) {
+		persona := repository.SelectPrivacyBrowserPersona(
+			browser.Enabled,
+			browser.CanaryPercent,
+			request.RolloutKey,
+		)
+		client, err := repository.CreatePrivacyReqClientWithProfile(request.ProxyURL, repository.PrivacyReqClientProfile{
+			Persona:        persona,
+			Platform:       browser.Platform,
+			AcceptLanguage: browser.AcceptLanguage,
+		})
+		privacyClient := &service.PrivacyHTTPClient{
+			Client:          client,
+			Persona:         string(persona),
+			FailureCooldown: time.Duration(browser.FailureCooldownSeconds) * time.Second,
+		}
+		if err != nil {
+			// 即使代理或客户端创建失败，也把配置中的冷却策略带回 service，
+			// 防止账号在每轮 token refresh 无间隔重试同一失败。
+			return privacyClient, err
+		}
+		return privacyClient, nil
+	}
 }
 
 func provideServiceBuildInfo(buildInfo handler.BuildInfo) service.BuildInfo {

@@ -249,7 +249,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// 后续账号选择、retry 和 Finalizer 只消费这份调用级快照。
 	if c.Request != nil {
 		c.Request = c.Request.WithContext(
-			service.WithOfficialCodex0145IngressRuntime(c.Request.Context(), c),
+			service.WithOfficialCodexIngressRuntime(c.Request.Context(), c),
 		)
 	}
 
@@ -296,7 +296,16 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 
 	setOpsRequestContext(c, "", false)
 	sessionHashBody := body
-	body, ok = h.normalizeOpenAIResponsesCompactRequest(c, reqLog, body)
+	compactionProfileMode := ""
+	if isBareOpenAIResponsesPath(c) && service.HasCompactionTriggerInInput(body) {
+		compactionProfileMode, err = service.OfficialCodexProcessProfileMode()
+		if err != nil {
+			reqLog.Error("codex.remote_compact.release_mode_unavailable", zap.Error(err))
+			h.errorResponse(c, http.StatusInternalServerError, "api_error", "Codex release mode unavailable")
+			return
+		}
+	}
+	body, ok = h.normalizeOpenAIResponsesCompactRequest(c, reqLog, body, compactionProfileMode)
 	if !ok {
 		return
 	}
@@ -747,24 +756,29 @@ func isBareOpenAIResponsesPath(c *gin.Context) bool {
 	return strings.HasSuffix(normalizedPath, "/responses")
 }
 
-func isOpenAIRemoteCompactionV2Request(c *gin.Context, body []byte) bool {
+func isOpenAIRemoteCompactionV2Request(c *gin.Context, body []byte, profileMode string) bool {
 	if c == nil || c.Request == nil || !service.HasCompactionTriggerInInput(body) {
 		return false
 	}
 	// 0.145.0 的 remote_compaction_v2 是版本默认值，不以入站 header 是否出现
 	// 作为开关。第三方请求已经携带 trigger 时保持普通 /responses；只有调用者
 	// 明确请求 /responses/compact 才进入 legacy 分支。
-	return service.OfficialCodexRemoteCompactionV2Default()
+	return service.OfficialCodexRemoteCompactionV2Default(profileMode)
 }
 
 // normalizeOpenAIResponsesCompactRequest keeps Codex remote compaction v2 on
 // its native /responses wire。legacy 不再由“缺少 beta header”猜测，只接受显式
 // /responses/compact；这使第三方转 Codex OAuth 时也继承 0.145.0 的默认 V2 语义。
 // 返回归一化后的 body；ok=false 表示错误响应已写出，调用方应直接 return。
-func (h *OpenAIGatewayHandler) normalizeOpenAIResponsesCompactRequest(c *gin.Context, reqLog *zap.Logger, body []byte) ([]byte, bool) {
+func (h *OpenAIGatewayHandler) normalizeOpenAIResponsesCompactRequest(
+	c *gin.Context,
+	reqLog *zap.Logger,
+	body []byte,
+	profileMode string,
+) ([]byte, bool) {
 	isCompactRequest := service.IsOpenAIResponsesCompactPathForTest(c)
 	if !isCompactRequest && isBareOpenAIResponsesPath(c) && service.HasCompactionTriggerInInput(body) {
-		if isOpenAIRemoteCompactionV2Request(c, body) {
+		if isOpenAIRemoteCompactionV2Request(c, body, profileMode) {
 			return body, true
 		}
 		c.Request.URL.Path = strings.TrimRight(c.Request.URL.Path, "/") + "/compact"
@@ -1799,7 +1813,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 
 		accountCtx := ctx
 		if account.IsOpenAIOAuth() {
-			accountCtx, err = service.BindOfficialCodex0145ResponsesWebSocketRuntime(
+			accountCtx, err = service.BindOfficialCodexResponsesWebSocketRuntime(
 				ctx,
 				c,
 				account,

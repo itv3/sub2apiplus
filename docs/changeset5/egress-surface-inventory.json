@@ -1,0 +1,227 @@
+{
+  "schema_version": "changeset5-egress-surface-inventory/v1",
+  "changeset": "5",
+  "classification_upstream_base": "26d894ef4f50645a4bf1030e378ac892f17d0223",
+  "observed_remote_head": "825ca7b1fc9335f904bc077f051de815fb61e47f",
+  "surface_count": 52,
+  "surfaces": [
+    {
+      "path": "backend/cmd/server/wire_gen.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/handler/openai_gateway_handler.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/handler/openai_live.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/profile.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/snapshotdoc.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/zerovalues.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/repository/official_egress_guard.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/repository/wire.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/server/routes/gateway.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/account_test_service.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/account_test_service_openai_files.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/account_usage_service.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/official_client_profile_registry.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/official_egress_1a_transition.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/official_egress_1b_executor.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_engine.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_files.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_integration.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_release_projection.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/official_egress_http_invocation.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/official_egress_identity_authority.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/official_egress_integration.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/official_egress_legacy_dispatch.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_http.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_json.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_ws.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/official_egress_profile.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/official_egress_transport.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/official_egress_transport_adapters.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/official_egress_websocket_invocation.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/openai_alpha_search.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/openai_apikey_mimic_profile.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/openai_codex_models_service.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/openai_forward_plan.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_chat_completions.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_count_tokens.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_forward.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_messages.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_passthrough.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/openai_images_responses.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/openai_live.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/openai_oauth_service.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/openai_quota_service.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/openai_upstream_http.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_client.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_ingress.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_support.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_v2.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_http_bridge.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_pool.go",
+      "file_type": "regular"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_v2_passthrough_adapter.go",
+      "file_type": "regular"
+    }
+  ],
+  "exclusions": [
+    {
+      "path": "backend/cmd/egressprofiledump/genenums.go",
+      "reason": "离线枚举生成器 main 包，不进入生产 server 二进制"
+    },
+    {
+      "path": "backend/cmd/egressscan/classify.go",
+      "reason": "egressscan 分类规则表，符号为被扫描对象名称，不参与出站定型"
+    }
+  ]
+}

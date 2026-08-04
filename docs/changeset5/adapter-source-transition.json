@@ -1,0 +1,25 @@
+{
+  "schema_version": "changeset5-adapter-source-transition/v1",
+  "changeset": "5",
+  "reference_facade_audit": "docs/changeset3/facade-audit.json",
+  "reference_facade_audit_sha256": "cc2eec638bee28f95f35e8f0e8629c2f2d1f43e64a8447a9eae942987726bbd4",
+  "transitions": [
+    {
+      "adapter_id": "officialegress.req_profile",
+      "from_candidate_id": "github.com/Wei-Shaw/sub2api/internal/repository.openAIOAuthReqProfileTransport.Do@backend/internal/repository/openai_oauth_service.go#net_http_client_do#1",
+      "to_candidate_id": "github.com/Wei-Shaw/sub2api/internal/repository.openAIOAuthReqProfileTransport.Do@backend/internal/repository/official_egress_guard.go#net_http_client_do#1",
+      "final_classification": "infrastructure/not_applicable",
+      "reason": "同包机械迁入 fork 独立官方出站 adapter，签名与调用链不变"
+    },
+    {
+      "adapter_id": "officialegress.websocket_round_tripper",
+      "from_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*officialEgressWebSocketRoundTripper.RoundTrip@backend/internal/service/openai_ws_client.go#roundtripper_roundtrip#1",
+      "to_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*officialEgressWebSocketRoundTripper.RoundTrip@backend/internal/service/official_egress_transport_adapters.go#roundtripper_roundtrip#1",
+      "final_classification": "infrastructure/not_applicable",
+      "removal_receipt": "docs/changeset5/removal-receipts.json",
+      "removal_receipt_sha256": "6145bde9e8d6a34b64d3f3751224860d97a99be3f7862b244ecade0a68da84d7",
+      "enforced_migration_receipt_digest": "0ee273056a479818579a8c48fd931755099101c213b8e981cbce147765dac427",
+      "reason": "旧业务候选通过 enforced 收据退出；新位置只展开 Executor 签发后的物理握手"
+    }
+  ]
+}

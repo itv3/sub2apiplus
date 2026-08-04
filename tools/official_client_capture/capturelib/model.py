@@ -13,7 +13,8 @@ from typing import Any
 SCHEMA_VERSION = "official-client-capture/v1"
 TASKS = ("oauth", "api")
 EVIDENCE_MODES = ("direct", "mitm")
-SCENARIOS = ("s1", "s2", "s4")
+CLAUDE_AGENT_SCENARIOS = ("a1", "a2", "a3")
+SCENARIOS = ("s1", "s2", "s4", *CLAUDE_AGENT_SCENARIOS)
 PRODUCT_TRANSPORTS = (
     ("claude", "http"),
     ("codex", "http"),

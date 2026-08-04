@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
@@ -285,6 +286,12 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	}
 
 	// 5. Get access token
+	if officialEgressEnabled && account.IsOpenAIOAuth() {
+		ctx, err = bindOfficialEgressSink(ctx, officialEgressSinkResponsesChatCompletions)
+		if err != nil {
+			return nil, fmt.Errorf("bind Chat Completions compatibility official egress sink: %w", err)
+		}
+	}
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
 		return nil, fmt.Errorf("get access token: %w", err)
@@ -315,7 +322,27 @@ func (s *OpenAIGatewayService) ForwardAsChatCompletions(
 	if account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	resp, err := s.doOpenAIHTTPUpstreamForRequest(upstreamReq, proxyURL, account, mimicProfile)
+	var officialForwardPlan *OpenAIForwardInvocationPlan
+	if officialEgressEnabled && account.IsOpenAIOAuth() {
+		officialForwardPlan, err = s.officialCodexResponseForwardPlan(
+			ctx, c, account,
+			officialegress.SinkCodexResponsesChatCompletions,
+			"changeset3.responses.chat_completions",
+			"service.ForwardAsChatCompletions",
+			officialCodexHTTPForwardAttemptBudget,
+		)
+		if err != nil {
+			return nil, err
+		}
+	}
+	var resp *http.Response
+	if officialForwardPlan != nil {
+		resp, err = officialForwardPlan.ExecuteHTTPRequest(
+			upstreamReq.Context(), upstreamReq, officialCodexEndpointResponsesHTTP,
+		)
+	} else {
+		resp, err = s.doOpenAIHTTPUpstreamForRequest(upstreamReq, proxyURL, account, mimicProfile)
+	}
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, false)
 	}

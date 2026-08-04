@@ -1,0 +1,14 @@
+{
+  "schema_version": "changeset5-0145-symbol-allowlist/v1",
+  "changeset": "5",
+  "allowed_identifiers": [
+    {
+      "name": "officialCodexVersion0145",
+      "reason": "0.145.0 不可变画像的证据版本常量，值和名称均属于版本化快照"
+    },
+    {
+      "name": "openAIAPIKeyCodexMimicClientCodexExec0145",
+      "reason": "API Key mimic 已持久化历史画像 ID 的内部绑定常量，不得机械改写外部稳定值"
+    }
+  ]
+}

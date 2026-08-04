@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net/http"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/oauth"
@@ -16,6 +17,17 @@ type OpenAIOAuthClient interface {
 	ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI, proxyURL, clientID string) (*openai.TokenResponse, error)
 	RefreshToken(ctx context.Context, refreshToken, proxyURL string) (*openai.TokenResponse, error)
 	RefreshTokenWithClientID(ctx context.Context, refreshToken, proxyURL string, clientID string) (*openai.TokenResponse, error)
+}
+
+// OpenAIOAuthRefreshResponseDecoder 只负责解释 Executor 已发送完成的 refresh 响应。
+// repository 不再接收编译能力，也不能自行选择 Codex transport。
+type OpenAIOAuthRefreshResponseDecoder interface {
+	DecodeRefreshResponse(
+		ctx context.Context,
+		response *http.Response,
+		transportErr error,
+		proxyURL string,
+	) (*openai.TokenResponse, error)
 }
 
 // GrokOAuthClient interface for xAI/Grok OAuth operations.

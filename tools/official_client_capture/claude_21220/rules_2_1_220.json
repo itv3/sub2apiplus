@@ -1,10 +1,10 @@
 {
-  "schema_version": "claude-egress-rule-ledger/v1",
+  "schema_version": "claude-egress-rule-ledger/v2",
   "target_version": "2.1.220",
-  "ledger_revision": 4,
+  "ledger_revision": 6,
   "source_document": "docs/Claude_code_21220_EGRESS_SPEC.md",
-  "purpose": "对第二章原有 36 个 SPEC ID 逐项进行原子性、范围和证据闭环复核；本台账不把旧文档中的“已验证”声明视为证据。",
-  "denominator_field_semantics": "verification_denominators 只声明选定证据的非循环有限分母与复算口径，不代表规则 disposition 已达到 verified。",
+  "purpose": "同时维护 Claude Code 2.1.220 规则的取证状态、Sub2API 1.1 对齐责任与实现验收门槛；三个维度相互独立，observed 不等于 verified 或 implemented。",
+  "denominator_field_semantics": "verification_denominators 只用于待证字段未参与上游捕获或路由选择的有限证据分母，不代表规则 disposition 已达到 verified。EP-001 与 EP-004 因 path/host 预筛选而不声明该字段。",
   "allowed_dispositions": [
     "verified",
     "observed",
@@ -14,9 +14,9 @@
   ],
   "historical_36_summary": {
     "total": 36,
-    "verified": 0,
+    "verified": 5,
     "observed": 27,
-    "candidate": 5,
+    "candidate": 0,
     "superseded": 1,
     "response_compat": 3,
     "observed_ids": [
@@ -48,13 +48,7 @@
       "SPEC-CONN-001",
       "SPEC-BETA-001"
     ],
-    "candidate_ids": [
-      "SPEC-HDR-016",
-      "SPEC-HDR-017",
-      "SPEC-HDR-018",
-      "SPEC-HDR-019",
-      "SPEC-CONN-002"
-    ],
+    "candidate_ids": [],
     "superseded_ids": [
       "SPEC-HDR-011"
     ],
@@ -63,21 +57,27 @@
       "SPEC-RESP-002",
       "SPEC-RESP-003"
     ],
-    "verified_ids": []
+    "verified_ids": [
+      "SPEC-HDR-016",
+      "SPEC-HDR-017",
+      "SPEC-HDR-018",
+      "SPEC-HDR-019",
+      "SPEC-CONN-002"
+    ]
   },
   "active_egress_summary": {
-    "historical_verified": 0,
+    "historical_verified": 5,
     "replacement_verified": 0,
     "replacement_observed": 2,
-    "additional_verified": 0,
-    "total_verified": 0,
+    "additional_verified": 7,
+    "total_verified": 12,
     "excludes_dispositions": [
       "observed",
       "candidate",
       "response_compat",
       "superseded"
     ],
-    "note": "当前没有命题同时满足第一章全部正式准入条件。精确样本事实保留为 observed：manifest 未归档实际 argv、采集器与完整环境，runtime image 未独立验证且未执行秘密扫描；Body 静态锚点又未形成字段级数据流证明。",
+    "note": "本轮 22 次专项运行均满足完整 M：实际 argv 与环境、采集执行源码、宿主容器/镜像身份、清理状态和精确秘密扫描均可离线复算。原五个复合候选拆为 12 个原子命题后升格 verified；其余 41 条仍受旧运行 M 或复合命题边界限制，保持 observed。",
     "additional_observed": 12
   },
   "common_scope": {
@@ -97,16 +97,53 @@
     "probe_env_manifest_boundary": "oauth-claude-newaccount-baseline 的 runtime 未记录 injected_probe_env；oauth-probe-baseline-r2 明确记录为空对象。前者只能结合 clean_environment_keys 证明未保留其他环境键，不能把字段缺失表述成已记录空值。",
     "argv_manifested": false,
     "current_driver_source": "tools/official_client_capture/capturelib/scenarios.py",
-    "current_driver_source_sha256": "a3854a554eb4f1d216ac5ef73bbfa0fec5a2b1a04f24ddefaa1bfb60078883c6",
-    "current_driver_argv_reconstruction": "-p --model claude-sonnet-5 --safe-mode --no-chrome --disable-slash-commands --prompt-suggestions false --no-session-persistence --max-budget-usd 0.25，并按场景显式设置 --tools；因 argv 未写入 manifest，只作范围解释，不作为 M 绑定事实。",
+    "current_driver_source_sha256": "ed27c7528b59fddd1981cd482586e35fa3dd3658f7b1ad0af769ea27afbc74df",
+    "current_driver_argv_reconstruction": "旧 SCOPE-J6 基线 manifest 未归档 argv；本轮专项完整 M 则逐 case 归档 invocation.json 及 manifest 内 argv/environment 摘要，verified 规则只引用后者。",
+    "current_mitm_addon_source": "tools/official_client_capture/addons/mitm_capture.py",
+    "current_mitm_addon_source_sha256": "5622963829b5425ae047c2b8d0028c071313231af6346c695542eb6cab9fd556",
+    "current_mitm_addon_manifested": true,
+    "verified_campaign": {
+      "archive_root": "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801",
+      "complete_runs": 22,
+      "runtime_image_reference": "oauth-egress-capture-capture-cli@sha256:3438c4e0909d7401ff8e076a985258608a8f031629e65262db16c1979ab1771c",
+      "m_requirements": [
+        "campaign_status",
+        "capture_execution_sources",
+        "case_invocation_and_environment",
+        "cleanup",
+        "exact_secret_scan",
+        "runtime_identity"
+      ],
+      "boundary": "只覆盖已列举的 header 单变量/组合、a1/a2/a3 嵌套和普通 500（无 Retry-After）3/5/9 连续故障场景。",
+      "analyzer_path": "tools/official_client_capture/analyze_claude_21220_pending_evidence.py",
+      "analyzer_sha256": "d721c2d02fd0f8f325f65b5f3dacfb30723c34f0c6e137408370fbb1fb33011c",
+      "report_path": "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/pending-evidence-analysis.json",
+      "report_sha256": "d7b6681e79531b0a84600c83bb2116eeb3c3932955e8e7f86e292e23e810ea11",
+      "campaign_binding_sha256": "b2bdc967114b9bd4001ee8da0feec0f79e5a2490fc9bf03dc59780298a454d98",
+      "matrix_counts": {
+        "agent-a1": 2,
+        "agent-a2": 2,
+        "agent-a3": 2,
+        "header-baseline": 2,
+        "header-client-app": 2,
+        "header-combination": 2,
+        "header-container": 2,
+        "header-remote-session": 2,
+        "retry-3": 2,
+        "retry-5": 2,
+        "retry-9": 2
+      },
+      "post_run_secret_scan_tool_path": "tools/official_client_capture/post_run_secret_scan_receipt.py",
+      "post_run_secret_scan_tool_sha256": "af062e03f0e45315562577c07580185232d48b7db13be36cc31cba7d0626c035"
+    },
     "finite_evidence_scopes": {
       "SCOPE-J6": {
         "catalog_refs": [
           "BASELINE-J",
           "PROBE-BASELINE-J"
         ],
-        "unit": "四个明确列举的 J-raw 文件中，全部 boundary=official_cli_to_official_platform、category=claude、subject=claude-http 且 request 为对象的记录，共 6 条。",
-        "non_circular_selector": "筛选条件不得使用待证的 method、path、host、http_version、Header 或 Body 字段。"
+        "unit": "四个明确列举的 claude-http J-raw 文件中，全部 boundary=official_cli_to_official_platform、category=claude、subject=claude-http 且 request 为对象的记录，共 6 条。",
+        "selection_boundary": "上游 MITM addon 先把 manifest 的 target_hosts=[api.anthropic.com] 载入 TARGET_HOSTS 并据此过滤，再用 path 含 /messages 路由到 claude-http.jsonl；因此 host 命题是预条件，精确 path 命题也受 /messages 部分预筛。method、http_version、Header 与 Body 待证字段未参与这两个路由条件。addon 摘要未进入运行 manifest。"
       },
       "SCOPE-P8": {
         "catalog_refs": [
@@ -143,7 +180,7 @@
       ],
       "sha256_by_path": {
         "local-analysis/sources/claude-code-2.1.220-official/SOURCE_MANIFEST.json": "f16387ab426af769325a6c1bc6ef57fd150c8c66a7bbd3fadab8d22874820917",
-        "local-analysis/sources/claude-code-2.1.220-official/bundle-anchors-linux-x64.json": "fa1fc337254c5257c869d4856b681165f190a26124ea7af4ff42754f27d98e7e"
+        "local-analysis/sources/claude-code-2.1.220-official/bundle-anchors-linux-x64.json": "ded4c96a715d75fd5c38f499e4065e2c090355ad484cfad4f08dbcf5167e256f"
       },
       "note": "绑定官方包、二进制摘要、Bun 主模块摘要和提取器摘要；只证明产物身份，不证明具体规则。"
     },
@@ -155,7 +192,7 @@
         "local-analysis/sources/claude-code-2.1.220-official/CANDIDATE_EVIDENCE.json"
       ],
       "sha256_by_path": {
-        "local-analysis/sources/claude-code-2.1.220-official/CANDIDATE_EVIDENCE.json": "134d2fe5b83c0b542b2311a7f4a8e7817e52d0494055ece4697700ebf6abc6c7"
+        "local-analysis/sources/claude-code-2.1.220-official/CANDIDATE_EVIDENCE.json": "4e4608fc70dceb14154cb46c0a3deaa907e110f67d7db2dd2ce21e0654c6f646"
       },
       "note": "局部语义窗口与摘要；未完成完整数据流证明时只能支持候选或解释运行观察。"
     },
@@ -166,7 +203,10 @@
       "paths": [
         "local-analysis/sources/claude-code-2.1.220-official/reachability-index-linux-x64.json"
       ],
-      "note": "启发式可达性索引，limitations 必须随引用保留。"
+      "sha256_by_path": {
+        "local-analysis/sources/claude-code-2.1.220-official/reachability-index-linux-x64.json": "2d73cdfe0846fdaf7c50fec638579cd8c7767faeef7828be68232cd3d8b8a4e2"
+      },
+      "note": "启发式可达性索引；新增结构化探针以命名回溯约束值流，Linux/Darwin 均唯一命中且 α 一致；limitations 仍须随引用保留。"
     },
     "BASELINE-J": {
       "channels": [
@@ -389,6 +429,412 @@
         "local-analysis/captures/claude-spec-baseline-20260801/oauth-discover-allhosts-r2/mitm/claude-http/s1/claude-http.jsonl"
       ],
       "note": "两轮关闭 host 预过滤，但仍只覆盖 443 与 essential-traffic 的 s1。"
+    },
+    "PROBE-HDR-NEGATIVE-COMPLETE": {
+      "channels": [
+        "J",
+        "M"
+      ],
+      "paths": [
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-base-neg-01c-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-base-neg-02-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-base-neg-01c-20260801/manifest.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-base-neg-01c-20260801/mitm/claude-http/s1/claude-http.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-base-neg-01c-20260801/results/mitm/claude-http/s1/invocation.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-base-neg-01c-20260801/results/mitm/claude-http/s1/summary.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-base-neg-02-20260801/manifest.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-base-neg-02-20260801/mitm/claude-http/s1/claude-http.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-base-neg-02-20260801/results/mitm/claude-http/s1/invocation.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-base-neg-02-20260801/results/mitm/claude-http/s1/summary.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-base-neg-01c-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-base-neg-02-20260801.json"
+      ],
+      "sha256_by_path": {
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-base-neg-01c-20260801.json": "3ab940ec0b01eb37d75715a89aff4833799a85708d97223755617816de1925aa",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-base-neg-02-20260801.json": "7bf9208e38d5018ade648a908d31d1cc74a865a5f65c3576783ba5b0fbf06ae0",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-base-neg-01c-20260801/manifest.json": "3237c2468fadfc49e88565549a218623e0b9c7c61447ac2d82ff626b2d98b034",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-base-neg-01c-20260801/mitm/claude-http/s1/claude-http.jsonl": "ba1876979da88a5d0c22b2d366fe7ad3dba3478a8ded8f79cae02af73a3dfe5f",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-base-neg-01c-20260801/results/mitm/claude-http/s1/invocation.json": "726d110a331c33856c55d795790eb1bc390db1720b376e566c0c6000a8125723",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-base-neg-01c-20260801/results/mitm/claude-http/s1/summary.json": "e17908f7bc2e1b82b555a28901da6461d0ebea39714bb9776a3166c69dd44acf",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-base-neg-02-20260801/manifest.json": "0e161133b5633f9d99fc91b4ae80d886ba2076efab2ec57941f467d3fa9f471b",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-base-neg-02-20260801/mitm/claude-http/s1/claude-http.jsonl": "fb9bce6113a349821adae7bffb43cf751772159d1a54af1e061d6ebf756a6072",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-base-neg-02-20260801/results/mitm/claude-http/s1/invocation.json": "726d110a331c33856c55d795790eb1bc390db1720b376e566c0c6000a8125723",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-base-neg-02-20260801/results/mitm/claude-http/s1/summary.json": "e17908f7bc2e1b82b555a28901da6461d0ebea39714bb9776a3166c69dd44acf",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-base-neg-01c-20260801.json": "18207f717caf8b92505d9935cb23cfd3ddf5fbda0e49ba8ae52d919ac9f528a0",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-base-neg-02-20260801.json": "616b4a647eb30e7437b7b56f3c6b38084f9f9a1605b439b9d2022a88fb3b0150"
+      },
+      "note": "两轮未设置条件环境的 s1 负例；逐轮绑定最终 manifest、宿主运行回执、终态秘密扫描回执、invocation、summary 与原始 HTTP J。"
+    },
+    "PROBE-HDR-CLIENTAPP-COMPLETE": {
+      "channels": [
+        "J",
+        "M"
+      ],
+      "paths": [
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-hdr016-pos-01-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-hdr016-pos-02-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr016-pos-01-20260801/manifest.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr016-pos-01-20260801/mitm/claude-http/s1/claude-http.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr016-pos-01-20260801/results/mitm/claude-http/s1/invocation.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr016-pos-01-20260801/results/mitm/claude-http/s1/summary.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr016-pos-02-20260801/manifest.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr016-pos-02-20260801/mitm/claude-http/s1/claude-http.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr016-pos-02-20260801/results/mitm/claude-http/s1/invocation.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr016-pos-02-20260801/results/mitm/claude-http/s1/summary.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-hdr016-pos-01-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-hdr016-pos-02-20260801.json"
+      ],
+      "sha256_by_path": {
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-hdr016-pos-01-20260801.json": "aff7210eac10ea39ec9c13df032a6b5e60c7788e47b49cb7bf29b465eb1c468d",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-hdr016-pos-02-20260801.json": "eba5b10ff64f5146148bbbad1620d0423ff05a3c82a0c70c47c1a69a3ce1acf8",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr016-pos-01-20260801/manifest.json": "c61ee4c7d3b372892b0c2ef4e4b7f967e9f3ca5eadef9c246b919a7bb947cac4",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr016-pos-01-20260801/mitm/claude-http/s1/claude-http.jsonl": "6ca9ddf166cb8a747e60e03a877c84e5fd57d601ff4ca1c5207bf2d36e5dcd7b",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr016-pos-01-20260801/results/mitm/claude-http/s1/invocation.json": "01cd9c99924b9b1d44da340f39fd6db69ed311f98b22b50189fc1883382f8c33",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr016-pos-01-20260801/results/mitm/claude-http/s1/summary.json": "f748394a26a2ac32a633d20e2344997b80c12cf066a16145972044bc27713903",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr016-pos-02-20260801/manifest.json": "1ba3ba580fcb50e071959aedfae5e09c081dee17ee6fa39e51a1e713f6d96a69",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr016-pos-02-20260801/mitm/claude-http/s1/claude-http.jsonl": "bccfb46bff9542ead2dbf60d0574a0633674cedd2b807790b0a1dac9bf4c3861",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr016-pos-02-20260801/results/mitm/claude-http/s1/invocation.json": "01cd9c99924b9b1d44da340f39fd6db69ed311f98b22b50189fc1883382f8c33",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr016-pos-02-20260801/results/mitm/claude-http/s1/summary.json": "f748394a26a2ac32a633d20e2344997b80c12cf066a16145972044bc27713903",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-hdr016-pos-01-20260801.json": "5afd1be5ce1d322f758e7f603fb61a6c7126b37a38226ac63d4d540cbd0603e6",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-hdr016-pos-02-20260801.json": "b2975a3af1659f2cd845a457fe2f1293641bd77df1c165396a545aa40b28d928"
+      },
+      "note": "两轮 client-app 单变量正例；逐轮绑定最终 manifest、宿主运行回执、终态秘密扫描回执、invocation、summary 与原始 HTTP J。"
+    },
+    "PROBE-HDR-CONTAINER-COMPLETE": {
+      "channels": [
+        "J",
+        "M"
+      ],
+      "paths": [
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-hdr017-pos-01-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-hdr017-pos-02-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr017-pos-01-20260801/manifest.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr017-pos-01-20260801/mitm/claude-http/s1/claude-http.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr017-pos-01-20260801/results/mitm/claude-http/s1/invocation.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr017-pos-01-20260801/results/mitm/claude-http/s1/summary.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr017-pos-02-20260801/manifest.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr017-pos-02-20260801/mitm/claude-http/s1/claude-http.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr017-pos-02-20260801/results/mitm/claude-http/s1/invocation.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr017-pos-02-20260801/results/mitm/claude-http/s1/summary.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-hdr017-pos-01-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-hdr017-pos-02-20260801.json"
+      ],
+      "sha256_by_path": {
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-hdr017-pos-01-20260801.json": "c5dceae27b6d68f48ec918ba794db989c74d79bd1001673cb81af23f4b198e23",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-hdr017-pos-02-20260801.json": "dc624e254c608c64d51366d4b9b2de604f8ba3145a2b051e6b4de704f71a4e0e",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr017-pos-01-20260801/manifest.json": "a9a9b3241aa069db98e5b41e020a42e1203dc2090e1d4ad8236eb8a00dd788ea",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr017-pos-01-20260801/mitm/claude-http/s1/claude-http.jsonl": "22a6ae32c87d2eb4a36135cda168a71221ec2448017021cf1f9e9d6b3c37253f",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr017-pos-01-20260801/results/mitm/claude-http/s1/invocation.json": "de8ab9e57ff3e93497c693af96c3e2ef6b629156ad8bcec8c8383b166f646d1c",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr017-pos-01-20260801/results/mitm/claude-http/s1/summary.json": "f88ad68526d14f8e43673305f33550b94be48d964305c170fcaa0a53a5f0df72",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr017-pos-02-20260801/manifest.json": "334d38209fb28738965993999c320e1026669131de4281b347d801a809888d13",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr017-pos-02-20260801/mitm/claude-http/s1/claude-http.jsonl": "fcffc94859ed08f9a7953fd3c506a6f92bb80e70d91a69a4e5aa21a896eb0545",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr017-pos-02-20260801/results/mitm/claude-http/s1/invocation.json": "de8ab9e57ff3e93497c693af96c3e2ef6b629156ad8bcec8c8383b166f646d1c",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr017-pos-02-20260801/results/mitm/claude-http/s1/summary.json": "f88ad68526d14f8e43673305f33550b94be48d964305c170fcaa0a53a5f0df72",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-hdr017-pos-01-20260801.json": "f4555f1df6c8ec04d543294018869317d1d23e14d052a0ea85360dfbed2caa6f",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-hdr017-pos-02-20260801.json": "69c87abc213b8b7e9db64c4bec3815b4478a167294df3847a2f57981eef99220"
+      },
+      "note": "两轮 remote-container 单变量正例；逐轮绑定最终 manifest、宿主运行回执、终态秘密扫描回执、invocation、summary 与原始 HTTP J。"
+    },
+    "PROBE-HDR-REMOTESESSION-COMPLETE": {
+      "channels": [
+        "J",
+        "M"
+      ],
+      "paths": [
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-hdr018-pos-01-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-hdr018-pos-02-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr018-pos-01-20260801/manifest.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr018-pos-01-20260801/mitm/claude-http/s1/claude-http.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr018-pos-01-20260801/results/mitm/claude-http/s1/invocation.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr018-pos-01-20260801/results/mitm/claude-http/s1/summary.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr018-pos-02-20260801/manifest.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr018-pos-02-20260801/mitm/claude-http/s1/claude-http.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr018-pos-02-20260801/results/mitm/claude-http/s1/invocation.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr018-pos-02-20260801/results/mitm/claude-http/s1/summary.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-hdr018-pos-01-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-hdr018-pos-02-20260801.json"
+      ],
+      "sha256_by_path": {
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-hdr018-pos-01-20260801.json": "fc7a8dd026c2a2bb1730910584ab315a28b741c350444f8da75cc991ec20a028",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-hdr018-pos-02-20260801.json": "f0e26936c259ed5ea58993c1fb39b6707e172bb101fe53d035ce9be3798e18c4",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr018-pos-01-20260801/manifest.json": "115334794d3ca31f9578366a008e247b0638499260c3bb34076973b5f3fd037c",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr018-pos-01-20260801/mitm/claude-http/s1/claude-http.jsonl": "d69794afcc3f0e9ca4d0d094f9dfa872f9c890ebddda4004f84c3a93779d93ff",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr018-pos-01-20260801/results/mitm/claude-http/s1/invocation.json": "9a0daa101c03eb5f5802aae8f8c59033ba8d1b273ff19da6e0c51a9cba19035c",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr018-pos-01-20260801/results/mitm/claude-http/s1/summary.json": "969090f0e1f3e6b4f1d42254691a60240602efa84057bb13067b3ddf5cefd132",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr018-pos-02-20260801/manifest.json": "6dde4c731a47148b7731be73ff7a81073b4a754775ead8240c6f8f9048cc7870",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr018-pos-02-20260801/mitm/claude-http/s1/claude-http.jsonl": "6bdaca02717981b8e071e3fb25d83471ff7a6757112f0905a57c456a87658ec8",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr018-pos-02-20260801/results/mitm/claude-http/s1/invocation.json": "9a0daa101c03eb5f5802aae8f8c59033ba8d1b273ff19da6e0c51a9cba19035c",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr018-pos-02-20260801/results/mitm/claude-http/s1/summary.json": "969090f0e1f3e6b4f1d42254691a60240602efa84057bb13067b3ddf5cefd132",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-hdr018-pos-01-20260801.json": "3f73908a45ee27f3d5365e102ec67879b2a317e85f7cf6e58a6947f1f9fdc1b4",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-hdr018-pos-02-20260801.json": "ee2805276ef10021b462f06890100b6dc0a27b7d4ea7e6f788d0473dc51beebb"
+      },
+      "note": "两轮 remote-session 单变量正例；逐轮绑定最终 manifest、宿主运行回执、终态秘密扫描回执、invocation、summary 与原始 HTTP J。"
+    },
+    "PROBE-HDR-COMBO-COMPLETE": {
+      "channels": [
+        "J",
+        "M"
+      ],
+      "paths": [
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-hdr-combo-a2-01-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-hdr-combo-a2-02-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr-combo-a2-01-20260801/manifest.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr-combo-a2-01-20260801/mitm/claude-http/a2/claude-http.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr-combo-a2-01-20260801/results/mitm/claude-http/a2/invocation.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr-combo-a2-01-20260801/results/mitm/claude-http/a2/stdout.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr-combo-a2-01-20260801/results/mitm/claude-http/a2/summary.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr-combo-a2-02-20260801/manifest.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr-combo-a2-02-20260801/mitm/claude-http/a2/claude-http.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr-combo-a2-02-20260801/results/mitm/claude-http/a2/invocation.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr-combo-a2-02-20260801/results/mitm/claude-http/a2/stdout.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr-combo-a2-02-20260801/results/mitm/claude-http/a2/summary.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-hdr-combo-a2-01-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-hdr-combo-a2-02-20260801.json"
+      ],
+      "sha256_by_path": {
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-hdr-combo-a2-01-20260801.json": "1a930a2910a87b62731d5f9a1c072f67edc5495d46e754f4c0320523f1ef00f3",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-hdr-combo-a2-02-20260801.json": "ad50eab0af168c983930fb985b2fcc7c6588e648f5a96871b1277dc6af602dd5",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr-combo-a2-01-20260801/manifest.json": "7a40becb2d342e4c4c75744fae2029dd357ba7d5011955f7fea211060ad1a3df",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr-combo-a2-01-20260801/mitm/claude-http/a2/claude-http.jsonl": "134070aacb37c2a80a14a4a017ed84e5ac788a5a70e9ae89fcd075a4b5c5933a",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr-combo-a2-01-20260801/results/mitm/claude-http/a2/invocation.json": "93d33ccd33bbe76ea2237ea2681cb46d4c0a38e3478a211f3d791392c3f970ab",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr-combo-a2-01-20260801/results/mitm/claude-http/a2/stdout.jsonl": "c9e4c46169400c6e2ecbd7befa020b82eeddb6644af4c4b3be3123377c1e12cf",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr-combo-a2-01-20260801/results/mitm/claude-http/a2/summary.json": "e7f900484b461e69456f161f823b5f2760b5843bfba1f1542db689e0b054146e",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr-combo-a2-02-20260801/manifest.json": "6aa7f6f7ecd0eec49eb78bf54f5ca3b3b7db24ec7f593b6ef83c45f998e1fdfa",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr-combo-a2-02-20260801/mitm/claude-http/a2/claude-http.jsonl": "9b7daee55fc4dede422e39cc6a9db20bae8881cedbf6c82865f0baa0e7c2efd5",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr-combo-a2-02-20260801/results/mitm/claude-http/a2/invocation.json": "93d33ccd33bbe76ea2237ea2681cb46d4c0a38e3478a211f3d791392c3f970ab",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr-combo-a2-02-20260801/results/mitm/claude-http/a2/stdout.jsonl": "5c53e92179b048fab9533109df96fd70fc263cc71cc0c3c232847197759a88fd",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-hdr-combo-a2-02-20260801/results/mitm/claude-http/a2/summary.json": "303d05e495b6e24a5e5e80b6d2930d80f351499d6c2fbb664dc547f111fb83ac",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-hdr-combo-a2-01-20260801.json": "27a6ce6efdc83dd6f18b2eaf0106502486878fe635506de80d288e0d24b05132",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-hdr-combo-a2-02-20260801.json": "f85eaa012cc695c6b31b7cba847324e05267b4a6456b9d5feb1ef6a41ea89b11"
+      },
+      "note": "两轮组合 a2 正例；逐轮绑定最终 manifest、宿主运行回执、终态秘密扫描回执、invocation、summary、stdout 与原始 HTTP J。"
+    },
+    "PROBE-AGENT-DEPTHS-COMPLETE": {
+      "channels": [
+        "J",
+        "M"
+      ],
+      "paths": [
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-agent-a1-01-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-agent-a1-02-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-agent-a2-01-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-agent-a2-03-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-agent-a3t-02-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-agent-a3v-01-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a1-01-20260801/manifest.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a1-01-20260801/mitm/claude-http/a1/claude-http.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a1-01-20260801/results/mitm/claude-http/a1/invocation.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a1-01-20260801/results/mitm/claude-http/a1/stdout.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a1-01-20260801/results/mitm/claude-http/a1/summary.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a1-02-20260801/manifest.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a1-02-20260801/mitm/claude-http/a1/claude-http.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a1-02-20260801/results/mitm/claude-http/a1/invocation.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a1-02-20260801/results/mitm/claude-http/a1/stdout.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a1-02-20260801/results/mitm/claude-http/a1/summary.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a2-01-20260801/manifest.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a2-01-20260801/mitm/claude-http/a2/claude-http.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a2-01-20260801/results/mitm/claude-http/a2/invocation.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a2-01-20260801/results/mitm/claude-http/a2/stdout.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a2-01-20260801/results/mitm/claude-http/a2/summary.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a2-03-20260801/manifest.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a2-03-20260801/mitm/claude-http/a2/claude-http.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a2-03-20260801/results/mitm/claude-http/a2/invocation.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a2-03-20260801/results/mitm/claude-http/a2/stdout.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a2-03-20260801/results/mitm/claude-http/a2/summary.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a3t-02-20260801/manifest.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a3t-02-20260801/mitm/claude-http/a3/claude-http.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a3t-02-20260801/results/mitm/claude-http/a3/invocation.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a3t-02-20260801/results/mitm/claude-http/a3/stdout.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a3t-02-20260801/results/mitm/claude-http/a3/summary.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a3v-01-20260801/manifest.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a3v-01-20260801/mitm/claude-http/a3/claude-http.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a3v-01-20260801/results/mitm/claude-http/a3/invocation.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a3v-01-20260801/results/mitm/claude-http/a3/stdout.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a3v-01-20260801/results/mitm/claude-http/a3/summary.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-agent-a1-01-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-agent-a1-02-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-agent-a2-01-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-agent-a2-03-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-agent-a3t-02-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-agent-a3v-01-20260801.json"
+      ],
+      "sha256_by_path": {
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-agent-a1-01-20260801.json": "82be4cce37852d0002e05bf78f0572454bb7863ddbdd206d943020a2f96c2517",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-agent-a1-02-20260801.json": "f6c1e0a273dd6d19055c1afcc855ecaea3be40f04e8698e2f83765b35c70ebd9",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-agent-a2-01-20260801.json": "cd0975b7a81b43f0004823e24b0ccd076a3dc840d2b535a929dcdffaf0c0736c",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-agent-a2-03-20260801.json": "091e73c109f28930053f44605c7ea977ba8578eac56145b7ed313f8df43aa054",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-agent-a3t-02-20260801.json": "1d11996a935184e29f24ccf5afb5c5b953e627c4b8ba53232dc56d83b9aa4fb3",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-agent-a3v-01-20260801.json": "2730d8ca36073002f1713caa539c69b2dd742b3a88297635aa8c0ac63e5cbe40",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a1-01-20260801/manifest.json": "c688b194f8a90a6024e02c67fb68759815096bd88a1812eace7e94eb6890992c",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a1-01-20260801/mitm/claude-http/a1/claude-http.jsonl": "ff642ed982252600a21ceb70c6a003aeae83eac1baa7b93d9e7b9ffaa6730411",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a1-01-20260801/results/mitm/claude-http/a1/invocation.json": "c493e12300875ff00ef5670eb8c6bd832b05aab75e564bac086b1d751e05ab26",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a1-01-20260801/results/mitm/claude-http/a1/stdout.jsonl": "a56d6f38ff34c41b17013bfee1c849a40bb891541db119615698f43d2ed86767",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a1-01-20260801/results/mitm/claude-http/a1/summary.json": "5f49cbec3163e322f7568dca507749b5012eb5f5b0a89b0f7d7a56313d40412b",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a1-02-20260801/manifest.json": "d2fe9fd8e70fcab390621f8ffe39d6f7d04ba2ced443aa91bacf8c5a22ae605d",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a1-02-20260801/mitm/claude-http/a1/claude-http.jsonl": "0fb2c6e2df2c28c06b108f6fa4cf963d525547ce1a33081e80a5d58a6cc35d44",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a1-02-20260801/results/mitm/claude-http/a1/invocation.json": "c493e12300875ff00ef5670eb8c6bd832b05aab75e564bac086b1d751e05ab26",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a1-02-20260801/results/mitm/claude-http/a1/stdout.jsonl": "001fe4cf8a52198e66372da6888dcb6c80c898cb74cb7fdad685bd752400a8bf",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a1-02-20260801/results/mitm/claude-http/a1/summary.json": "ba50e1200bad315dddcae424453ec59e75828af9e22a9bd2c214a97b13cb61d9",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a2-01-20260801/manifest.json": "7b1681c316980de90810a64a7b5acfbaf110fbd6f8572661049d7cdc9f2a6bc7",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a2-01-20260801/mitm/claude-http/a2/claude-http.jsonl": "5c2bcfd43c811412475cb028e6000d344fbec44fe4a651628a1caa2b7e2466e3",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a2-01-20260801/results/mitm/claude-http/a2/invocation.json": "0dff5fa647ded59a2268a91959d217d6d1f7d90cf054ff17c443e52cb7e0fd11",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a2-01-20260801/results/mitm/claude-http/a2/stdout.jsonl": "1acb137501654cb63469b499c1eba54cb9780c4207f458de51dd1c75427414a8",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a2-01-20260801/results/mitm/claude-http/a2/summary.json": "22aa6ae19f85e1d0f6e74d57caf5c6c39791cbdd3fb63b4ab5205048c441f4ae",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a2-03-20260801/manifest.json": "dfe39da033f568e7bb11cf89b2adb77215a57a5f8e4fde82e1944f9b72779ced",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a2-03-20260801/mitm/claude-http/a2/claude-http.jsonl": "07d50a1a185d5b96b878b8b66a333d210362e66effab195501983d1b82a3eda0",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a2-03-20260801/results/mitm/claude-http/a2/invocation.json": "0dff5fa647ded59a2268a91959d217d6d1f7d90cf054ff17c443e52cb7e0fd11",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a2-03-20260801/results/mitm/claude-http/a2/stdout.jsonl": "a27612032f8e32131cd5b097e3bf26612b5c1c12ccb1ecc3dde6b1231983e761",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a2-03-20260801/results/mitm/claude-http/a2/summary.json": "d50a2bb27c12b238b8e4b50ab5053a1532f000a527b9d0f16b86d056f701b27f",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a3t-02-20260801/manifest.json": "3d57cc7eff51d8b6eb18d1d0d0f7500f398e6533d8420265ec62169b4f4c46fa",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a3t-02-20260801/mitm/claude-http/a3/claude-http.jsonl": "63052dcccca0d4a1ef69d9ab5fda5fe7c246d07134dc8d9e6db7d7a7ddbbc658",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a3t-02-20260801/results/mitm/claude-http/a3/invocation.json": "74146ab07bfdaeb69eda356dd505caac850ce6a05dc17f05d5e2735968b660a7",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a3t-02-20260801/results/mitm/claude-http/a3/stdout.jsonl": "0ae9e9082e73272b80927216106776ff6953082b2c02eb1ed321d179ab3f207f",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a3t-02-20260801/results/mitm/claude-http/a3/summary.json": "ad31078271678080d358dc36f9b18f92451b21b7d04339223e1e9ab672fb7ab0",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a3v-01-20260801/manifest.json": "0550fdc48a1fe2cf96172a89a965e983c7ed2824862cec55cfd676a21e73ca15",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a3v-01-20260801/mitm/claude-http/a3/claude-http.jsonl": "a35411d5fe4c1981eb2bbc2a9e8a3d3d4ebbfc3a5d5945a855357dfbe7347463",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a3v-01-20260801/results/mitm/claude-http/a3/invocation.json": "74146ab07bfdaeb69eda356dd505caac850ce6a05dc17f05d5e2735968b660a7",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a3v-01-20260801/results/mitm/claude-http/a3/stdout.jsonl": "f0ad766a3a097cd7ee48af1b7c73ef24b0d23eae31488a1f4664d0d1e8ea86f5",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-agent-a3v-01-20260801/results/mitm/claude-http/a3/summary.json": "495a108dea210351fdd844be6850966bb3788c6f71ba26ea48733f3fb11a5154",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-agent-a1-01-20260801.json": "9df3b044c1681a85e41ba02f38d94f31c99baa015241240e426d09595e704bc2",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-agent-a1-02-20260801.json": "905ba6b01c2ff93c457844186095ee852edc32ff21ff2e95850ff815e4537116",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-agent-a2-01-20260801.json": "61ec5f8a84e1210f54ded5b878aa83e73a5ba4c83c3fc7ea8f6fa98b40c2d096",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-agent-a2-03-20260801.json": "357935272471fc3883051dc1e4c9194e884b35dd9e23daee3cc92c754591fa99",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-agent-a3t-02-20260801.json": "31fcd6e77d5551912ef0533b01ca5a0c62b91d20a99bbc59d3071815da543ad1",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-agent-a3v-01-20260801.json": "72f28547ccdaf6afa6881e0c7b3f31672929dddf0fb279063a351712bf637616"
+      },
+      "note": "a1/a2/a3 各两轮独立运行；逐轮绑定最终 manifest、宿主运行回执、终态秘密扫描回执、invocation、summary、stdout 与原始 HTTP J。"
+    },
+    "RETRY-500-COUNT3-COMPLETE": {
+      "channels": [
+        "J",
+        "L",
+        "M"
+      ],
+      "paths": [
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-retry-c3v-01-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-retry-c3v-02-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c3v-01-20260801/manifest.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c3v-01-20260801/mitm/claude-http/s1/claude-http.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c3v-01-20260801/mitm/claude-http/s1/lifecycle-claude.ndjson",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c3v-01-20260801/results/mitm/claude-http/s1/invocation.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c3v-01-20260801/results/mitm/claude-http/s1/stdout.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c3v-01-20260801/results/mitm/claude-http/s1/summary.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c3v-02-20260801/manifest.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c3v-02-20260801/mitm/claude-http/s1/claude-http.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c3v-02-20260801/mitm/claude-http/s1/lifecycle-claude.ndjson",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c3v-02-20260801/results/mitm/claude-http/s1/invocation.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c3v-02-20260801/results/mitm/claude-http/s1/stdout.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c3v-02-20260801/results/mitm/claude-http/s1/summary.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-retry-c3v-01-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-retry-c3v-02-20260801.json"
+      ],
+      "sha256_by_path": {
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-retry-c3v-01-20260801.json": "f162117a9a4850ac5936c52a2673e2e65eb3ae7de78389589a254452a62edf87",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-retry-c3v-02-20260801.json": "f3d57c59841c45631d7251835f18086a897b2e1dc1db03cdf5fbd57961f126a5",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c3v-01-20260801/manifest.json": "a7f3ba086c0d18a7cbabe5edb6478442b1e7c54c582a0f48e7105793c55cb966",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c3v-01-20260801/mitm/claude-http/s1/claude-http.jsonl": "6a16341abf7d4ba1de9ddcd8455ee97b6ed12029335a7b33e017c3acf3d9fa0b",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c3v-01-20260801/mitm/claude-http/s1/lifecycle-claude.ndjson": "c390e9943d1b631b0b698158dc7d436f1deb408dc3f4ae4f448cbba3e5b61ac5",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c3v-01-20260801/results/mitm/claude-http/s1/invocation.json": "726d110a331c33856c55d795790eb1bc390db1720b376e566c0c6000a8125723",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c3v-01-20260801/results/mitm/claude-http/s1/stdout.jsonl": "65ba6e1f505e5d5c69816bb670bd5b5a495fb34c26761c51d01f12f2efbe5b0b",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c3v-01-20260801/results/mitm/claude-http/s1/summary.json": "e17908f7bc2e1b82b555a28901da6461d0ebea39714bb9776a3166c69dd44acf",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c3v-02-20260801/manifest.json": "ce962822cd9795aaeb3c29110637a7701322a5891d0495c2b41faa91b0363a00",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c3v-02-20260801/mitm/claude-http/s1/claude-http.jsonl": "6323961d43ab0508f939e83f9e9e2d36d164a0d18dfac65b1d5fcbe2a838dbcb",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c3v-02-20260801/mitm/claude-http/s1/lifecycle-claude.ndjson": "e5844386af520d5783fad80475a3fa2635dbf6e038dfcf004c30ac62d89f9396",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c3v-02-20260801/results/mitm/claude-http/s1/invocation.json": "726d110a331c33856c55d795790eb1bc390db1720b376e566c0c6000a8125723",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c3v-02-20260801/results/mitm/claude-http/s1/stdout.jsonl": "9ebd6b6bfa15405de69871029a0776c3ea9a1b2d90d443168bef2dbbf18a8c61",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c3v-02-20260801/results/mitm/claude-http/s1/summary.json": "e17908f7bc2e1b82b555a28901da6461d0ebea39714bb9776a3166c69dd44acf",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-retry-c3v-01-20260801.json": "5f74c9eec4a09a74b9bd23a3abd07918b841ffd12639eba3e4db4da602b12494",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-retry-c3v-02-20260801.json": "3814ba8dfecada6411d27e22353055c04f00b154e948da2a331d18fbf40e0d8e"
+      },
+      "note": "连续 3 个普通模型 POST 500、无 Retry-After 的两轮运行；绑定 J、api_retry stdout、flow 生命周期 L 与完整 M。"
+    },
+    "RETRY-500-COUNT5-COMPLETE": {
+      "channels": [
+        "J",
+        "L",
+        "M"
+      ],
+      "paths": [
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-retry-c5v-01-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-retry-c5v-02-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c5v-01-20260801/manifest.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c5v-01-20260801/mitm/claude-http/s1/claude-http.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c5v-01-20260801/mitm/claude-http/s1/lifecycle-claude.ndjson",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c5v-01-20260801/results/mitm/claude-http/s1/invocation.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c5v-01-20260801/results/mitm/claude-http/s1/stdout.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c5v-01-20260801/results/mitm/claude-http/s1/summary.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c5v-02-20260801/manifest.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c5v-02-20260801/mitm/claude-http/s1/claude-http.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c5v-02-20260801/mitm/claude-http/s1/lifecycle-claude.ndjson",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c5v-02-20260801/results/mitm/claude-http/s1/invocation.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c5v-02-20260801/results/mitm/claude-http/s1/stdout.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c5v-02-20260801/results/mitm/claude-http/s1/summary.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-retry-c5v-01-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-retry-c5v-02-20260801.json"
+      ],
+      "sha256_by_path": {
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-retry-c5v-01-20260801.json": "0c36d6e78a84357e517f3b34a81c6f981f26723955213172d347803f1e261218",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-retry-c5v-02-20260801.json": "18680f9f3fdf5b8e64e3124f17f0c65fec64478af4cd71f63425dc35745081f6",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c5v-01-20260801/manifest.json": "412b4721a641230f4b7ecc2a0eb12db9cf758c6746eee05789f5e84ff8a49d1c",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c5v-01-20260801/mitm/claude-http/s1/claude-http.jsonl": "ccd88ca0c9ff5ca52ead920ddd9e354ac9256d7fd301110df2436fd637c21482",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c5v-01-20260801/mitm/claude-http/s1/lifecycle-claude.ndjson": "165cd3bca41b03b3dfe8a7c4f60d80cfe86caf23e9b814950fb56ee2d8c91e4d",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c5v-01-20260801/results/mitm/claude-http/s1/invocation.json": "726d110a331c33856c55d795790eb1bc390db1720b376e566c0c6000a8125723",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c5v-01-20260801/results/mitm/claude-http/s1/stdout.jsonl": "a0de68dc03d35b3356047e76729a28b4cbf5b09bbf9634af21ca0df8e069e15e",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c5v-01-20260801/results/mitm/claude-http/s1/summary.json": "e17908f7bc2e1b82b555a28901da6461d0ebea39714bb9776a3166c69dd44acf",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c5v-02-20260801/manifest.json": "bdaf6723d0ff616da76359ea1dd1df3c62d52a0cfbed5baf6b7d69e5e504ee08",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c5v-02-20260801/mitm/claude-http/s1/claude-http.jsonl": "4362cb6b3ded1bb2958fa1a1276dc7e47e1ad7f0af1956873c8e2cceb1400fde",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c5v-02-20260801/mitm/claude-http/s1/lifecycle-claude.ndjson": "5f057014375c36593ea6703de97bac8bc88cc56ef907bdf05765b6e4f17f0f66",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c5v-02-20260801/results/mitm/claude-http/s1/invocation.json": "726d110a331c33856c55d795790eb1bc390db1720b376e566c0c6000a8125723",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c5v-02-20260801/results/mitm/claude-http/s1/stdout.jsonl": "5d7770132401ad781605297e63c96c7b3bf85eba9ec36e0cd07f35f147d3b6e6",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c5v-02-20260801/results/mitm/claude-http/s1/summary.json": "e17908f7bc2e1b82b555a28901da6461d0ebea39714bb9776a3166c69dd44acf",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-retry-c5v-01-20260801.json": "289ccbff46e7416b36b176726261d17c39a7204fa5ba8e9a2dbb3ca05a0acdda",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-retry-c5v-02-20260801.json": "ecfe0e39e35469a2127a6912691388f73fba1484fe162f62e81543379faf611a"
+      },
+      "note": "连续 5 个普通模型 POST 500、无 Retry-After 的两轮运行；绑定 J、api_retry stdout、flow 生命周期 L 与完整 M。"
+    },
+    "RETRY-500-COUNT9-COMPLETE": {
+      "channels": [
+        "J",
+        "L",
+        "M"
+      ],
+      "paths": [
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-retry-c9v-01-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-retry-c9v-02-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c9v-01-20260801/manifest.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c9v-01-20260801/mitm/claude-http/s1/claude-http.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c9v-01-20260801/mitm/claude-http/s1/lifecycle-claude.ndjson",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c9v-01-20260801/results/mitm/claude-http/s1/invocation.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c9v-01-20260801/results/mitm/claude-http/s1/stdout.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c9v-01-20260801/results/mitm/claude-http/s1/summary.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c9v-02-20260801/manifest.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c9v-02-20260801/mitm/claude-http/s1/claude-http.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c9v-02-20260801/mitm/claude-http/s1/lifecycle-claude.ndjson",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c9v-02-20260801/results/mitm/claude-http/s1/invocation.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c9v-02-20260801/results/mitm/claude-http/s1/stdout.jsonl",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c9v-02-20260801/results/mitm/claude-http/s1/summary.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-retry-c9v-01-20260801.json",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-retry-c9v-02-20260801.json"
+      ],
+      "sha256_by_path": {
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-retry-c9v-01-20260801.json": "7d2630a2e6d051eedb747430544d958233303db9181e00d21d8461c9faa8e5ab",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/post-run-secret-scan-receipts/oauth-pnd-retry-c9v-02-20260801.json": "7af40c37888625f8c3ab2d3b173a671ef12a75c628e7092d1e3f4481d740ce7f",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c9v-01-20260801/manifest.json": "f50fe29171e9e35fa64f820b9f282a48aa8b9e6414052f2b98f153ae67fb81cf",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c9v-01-20260801/mitm/claude-http/s1/claude-http.jsonl": "415c8c19c81831c812a976f67acd3c0bfa19cb3f0b99174a4200ca47f6137e41",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c9v-01-20260801/mitm/claude-http/s1/lifecycle-claude.ndjson": "4ea8d201983817b35c00765caa11b86eab3f8b3f42801462b23eea888785d972",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c9v-01-20260801/results/mitm/claude-http/s1/invocation.json": "726d110a331c33856c55d795790eb1bc390db1720b376e566c0c6000a8125723",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c9v-01-20260801/results/mitm/claude-http/s1/stdout.jsonl": "4e1b343f62b46507d68b2e2b2a44f1a7fec3d6acbd399d5275af121e63f1aaa1",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c9v-01-20260801/results/mitm/claude-http/s1/summary.json": "e17908f7bc2e1b82b555a28901da6461d0ebea39714bb9776a3166c69dd44acf",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c9v-02-20260801/manifest.json": "338085753e2fbaadf5e46a74cf9823c37ab9e728bdb7686ec8f6cdacf4445638",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c9v-02-20260801/mitm/claude-http/s1/claude-http.jsonl": "309f6e75facc884f37e90f42a64d989f48943a0daf84f0ad2ba35bd7a7018706",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c9v-02-20260801/mitm/claude-http/s1/lifecycle-claude.ndjson": "9da7524e8a39dd0eb449f7cca653bd2c6a3300277dde7fbc01bf94c811e4c84e",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c9v-02-20260801/results/mitm/claude-http/s1/invocation.json": "726d110a331c33856c55d795790eb1bc390db1720b376e566c0c6000a8125723",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c9v-02-20260801/results/mitm/claude-http/s1/stdout.jsonl": "2051ba78275d6565a70add4ba097a71edfd6ebf03d5072d50e56b5e2b870fc9a",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runs/oauth-pnd-retry-c9v-02-20260801/results/mitm/claude-http/s1/summary.json": "e17908f7bc2e1b82b555a28901da6461d0ebea39714bb9776a3166c69dd44acf",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-retry-c9v-01-20260801.json": "0acc054408f85ac380b77e33dc69a21ea1a395b76f78487cd3b587300fabc195",
+        "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/runtime-receipts/pnd-retry-c9v-02-20260801.json": "87c39095b7d8d6f4ff1df8df38c023753553c98603b85aa2143ef2f89352041a"
+      },
+      "note": "连续 9 个普通模型 POST 500、无 Retry-After 的两轮运行；绑定 J、api_retry stdout、flow 生命周期 L 与完整 M。"
     }
   },
   "replacement_rules": [
@@ -404,7 +850,7 @@
         "atomic": true,
         "issues": []
       },
-      "retained_claim": "SCOPE-BASELINE 的主会话推理请求中，HTTP header 集合不包含 x-anthropic-billing-header。",
+      "retained_claim": "SCOPE-J6 的主会话推理请求中，HTTP header 集合不包含 x-anthropic-billing-header。",
       "scope": "SCOPE-J6；缺完整 M 的子 agent R 观察不纳入本条，也不推出 TUI、workload 或其他 provider 路径。",
       "evidence_refs": [
         {
@@ -456,7 +902,18 @@
         "这是 HTTP header 层的负命题，不否定请求体 system 文本中出现同名字面。",
         "A1-CANDIDATES 只解释 billing 文本构造线索，不证明 HTTP Header 的全路径缺席。",
         "WIRE-DEFAULT 与 WIRE-SUBAGENT 也观察到缺席，但因 R 目录缺完整 M，只作补充观察。"
-      ]
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "header_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-HDR-020"
+      }
     },
     {
       "id": "SPEC-BODY-007",
@@ -526,10 +983,360 @@
       "notes": [
         "cc_version、cc_entrypoint 与 cch 已拆为 SPEC-BODY-014/015/016。",
         "R 中 cch 已从静态占位 00000 改写为五字符值，但改写机制仍是候选。"
-      ]
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "body_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-BODY-007"
+      }
     }
   ],
   "additional_rules": [
+    {
+      "id": "SPEC-HDR-021",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "verified",
+        "reason": "目标版本静态构造点约束同值展开，两轮完整 M 正例均观察到 x-client-app 原值透传。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "CLAUDE_AGENT_SDK_CLIENT_APP 为非空值时，x-client-app 的值与该 client_app 值逐字节相同。",
+      "scope": "2.1.220 Linux x86_64；firstParty OAuth print s1；两轮 probe-app-21220 正例。只约束已采非空值的等值关系。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "A1-REACHABILITY",
+          "supports": "结构化探针以命名回溯约束环境值与 Header 值为同一 minify 变量。"
+        },
+        {
+          "catalog_ref": "PROBE-HDR-CLIENTAPP-COMPLETE",
+          "supports": "两轮原始 J 值与 manifest 注入环境逐字节相等，且 M 完整。"
+        }
+      ],
+      "missing_refs": [],
+      "required_channels": [
+        "A1",
+        "J",
+        "M"
+      ],
+      "next_probe": [
+        "空白、Unicode 和超长值属于输入扩展矩阵，不得由单一 ASCII 标记值外推。"
+      ],
+      "superseded_by": [],
+      "notes": [],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_conditional",
+        "evidence_class": "verified",
+        "readiness": "formal_verified",
+        "formal_ready": true,
+        "implementation_status": "not_assessed",
+        "profile_stage": "header_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-HDR-021"
+      }
+    },
+    {
+      "id": "SPEC-HDR-022",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "verified",
+        "reason": "两轮完整 M 正例与两轮负例同时验证同一 client_app 值对 User-Agent 可选段的联动。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "client_app 缺席时 User-Agent 为 claude-cli/2.1.220 (external, sdk-cli)；client_app=probe-app-21220 时变为 claude-cli/2.1.220 (external, sdk-cli, client-app/probe-app-21220)。",
+      "scope": "2.1.220 Linux x86_64；firstParty OAuth print s1；只约束 client-app 段的有无和值联动，不外推 TUI、workload 或独立 agent-sdk 段。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "A1-REACHABILITY",
+          "supports": "client_app 生产构造点及 UA entrypoint 邻近线索。"
+        },
+        {
+          "catalog_ref": "PROBE-HDR-NEGATIVE-COMPLETE",
+          "supports": "两轮无 client_app 的精确 User-Agent。"
+        },
+        {
+          "catalog_ref": "PROBE-HDR-CLIENTAPP-COMPLETE",
+          "supports": "两轮带 client-app/probe-app-21220 段的精确 User-Agent。"
+        }
+      ],
+      "missing_refs": [],
+      "required_channels": [
+        "A1",
+        "J",
+        "M"
+      ],
+      "next_probe": [
+        "TUI、workload 和独立 agent-sdk 段继续保留在 CAND-UA-CLI/CAND-WORKLOAD。"
+      ],
+      "superseded_by": [],
+      "notes": [
+        "Sub2API 应从规范化 client_app 语义同时生成 Header 与 UA 段，不能分别信任入站字面 Header。"
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_conditional",
+        "evidence_class": "verified",
+        "readiness": "formal_verified",
+        "formal_ready": true,
+        "implementation_status": "not_assessed",
+        "profile_stage": "header_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-HDR-022"
+      }
+    },
+    {
+      "id": "SPEC-HDR-023",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "verified",
+        "reason": "目标版本静态构造点约束同值展开，两轮完整 M 正例均观察到容器 ID 原值透传。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "CLAUDE_CODE_CONTAINER_ID 为非空值时，x-claude-remote-container-id 的值与该 container ID 逐字节相同。",
+      "scope": "2.1.220 Linux x86_64；受控环境变量两轮 probe-container-21220 正例；不等同真实远程容器生命周期。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "A1-REACHABILITY",
+          "supports": "结构化探针约束环境值与 Header 值为同一 minify 变量。"
+        },
+        {
+          "catalog_ref": "PROBE-HDR-CONTAINER-COMPLETE",
+          "supports": "两轮原始 J 值与 manifest 注入环境逐字节相等，且 M 完整。"
+        }
+      ],
+      "missing_refs": [],
+      "required_channels": [
+        "A1",
+        "J",
+        "M"
+      ],
+      "next_probe": [
+        "真实远程容器的生成算法和生命周期属于独立候选。"
+      ],
+      "superseded_by": [],
+      "notes": [],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_conditional",
+        "evidence_class": "verified",
+        "readiness": "formal_verified",
+        "formal_ready": true,
+        "implementation_status": "not_assessed",
+        "profile_stage": "header_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-HDR-023"
+      }
+    },
+    {
+      "id": "SPEC-HDR-024",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "verified",
+        "reason": "目标版本静态构造点约束同值展开，两轮完整 M 正例均观察到 remote session ID 原值透传。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "CLAUDE_CODE_REMOTE_SESSION_ID 为非空值时，x-claude-remote-session-id 的值与该 remote session ID 逐字节相同。",
+      "scope": "2.1.220 Linux x86_64；受控环境变量两轮 probe-remote-session-21220 正例；不等同真实远程会话生命周期。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "A1-REACHABILITY",
+          "supports": "结构化探针约束环境值与 Header 值为同一 minify 变量。"
+        },
+        {
+          "catalog_ref": "PROBE-HDR-REMOTESESSION-COMPLETE",
+          "supports": "两轮原始 J 值与 manifest 注入环境逐字节相等，且 M 完整。"
+        }
+      ],
+      "missing_refs": [],
+      "required_channels": [
+        "A1",
+        "J",
+        "M"
+      ],
+      "next_probe": [
+        "真实 remote session 的生成、复用与终止边界属于独立候选。"
+      ],
+      "superseded_by": [],
+      "notes": [
+        "该值不得从普通 X-Claude-Code-Session-Id 或 metadata.user_id.session_id 推导。"
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_conditional",
+        "evidence_class": "verified",
+        "readiness": "formal_verified",
+        "formal_ready": true,
+        "implementation_status": "not_assessed",
+        "profile_stage": "header_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-HDR-024"
+      }
+    },
+    {
+      "id": "SPEC-HDR-025",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "verified",
+        "reason": "六轮 a1/a2/a3 完整 M 运行通过 task_started.task_id、tool_use_id 与请求 Header 建立直接父子绑定。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "在已采深度 2 与 3 的嵌套 agent 请求中，x-claude-code-parent-agent-id 等于该请求直接父 agent 请求的 x-claude-code-agent-id。",
+      "scope": "2.1.220 Linux x86_64；general-purpose a2/a3 各两轮；值按每轮动态 task/tool 链复算，不固定任一抓包字面 ID。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "A1-REACHABILITY",
+          "supports": "parentAgentId 经同一 encoder 写入 parent-agent Header 的唯一生产构造点。"
+        },
+        {
+          "catalog_ref": "PROBE-AGENT-DEPTHS-COMPLETE",
+          "supports": "六轮 J 与 stdout 的 task_started/tool_use 链及完整 M，覆盖深度 0–3。"
+        }
+      ],
+      "missing_refs": [],
+      "required_channels": [
+        "A1",
+        "J",
+        "M"
+      ],
+      "next_probe": [
+        "并发兄弟 agent、后台与 resume 的关联生命周期继续作为扩展矩阵。"
+      ],
+      "superseded_by": [],
+      "notes": [
+        "Sub2API 必须从内部 agent 树生成父值，不能把第三方入站的同名 Header 原样透传。"
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_conditional",
+        "evidence_class": "verified",
+        "readiness": "formal_verified",
+        "formal_ready": true,
+        "implementation_status": "not_assessed",
+        "profile_stage": "state_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-HDR-025"
+      }
+    },
+    {
+      "id": "SPEC-HDR-026",
+      "revision": 1,
+      "domain": "header",
+      "status": {
+        "disposition": "verified",
+        "reason": "两个组合 a2 场景在同一深度 2 请求中同时触发五个条件 Header，并给出相同的 J 层序列投影。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "当 a2 深度 2 请求同时触发 agent、parent-agent、remote-container、remote-session 与 client-app 时，将实际 HTTP/1.1 Header 序列投影到七个相关名称，顺序为 x-app → x-claude-code-agent-id → x-claude-code-parent-agent-id → x-claude-remote-container-id → x-claude-remote-session-id → x-client-app → x-client-request-id。",
+      "scope": "2.1.220 Linux x86_64；两个组合 a2 完整 M 运行；该顺序是七字段投影，不声称它们在完整 Header 列表中相邻。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "PROBE-HDR-COMBO-COMPLETE",
+          "supports": "两轮组合场景的原始 J Header 数组、stdout 父子绑定与完整 M。"
+        }
+      ],
+      "missing_refs": [],
+      "required_channels": [
+        "J",
+        "M"
+      ],
+      "next_probe": [
+        "HTTP/2、其他 entrypoint/provider 和不同条件子集的序列必须单独验证。"
+      ],
+      "superseded_by": [],
+      "notes": [
+        "生产对象构造点中的源码字段顺序并不等于最终 HTTP 序列；Sub2API 应以本条运行层投影作为 HTTP/1.1 对齐目标。"
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_conditional",
+        "evidence_class": "verified",
+        "readiness": "formal_verified",
+        "formal_ready": true,
+        "implementation_status": "not_assessed",
+        "profile_stage": "header_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-HDR-026"
+      }
+    },
+    {
+      "id": "SPEC-CONN-003",
+      "revision": 1,
+      "domain": "connection_retry",
+      "status": {
+        "disposition": "verified",
+        "reason": "连续 9 个受控模型 POST 500 的两轮完整 M 运行均发出第 10 个请求并取得 200 成功。"
+      },
+      "atomicity": {
+        "atomic": true,
+        "issues": []
+      },
+      "retained_claim": "在普通 500、无 Retry-After 的已采路径中，Claude Code 2.1.220 至少执行 9 次应用层重试；连续 9 个 500 后仍发送第 10 个模型请求。",
+      "scope": "2.1.220 firstParty OAuth print s1；MITM 只故障注入模型 POST；两轮 count=9。只证明重试次数下界，不证明默认终止边界恰为 10。",
+      "evidence_refs": [
+        {
+          "catalog_ref": "A1-REACHABILITY",
+          "supports": "普通路径重试常量块及主 beta.messages.create 调用点的目标版本锚点。"
+        },
+        {
+          "catalog_ref": "RETRY-500-COUNT9-COMPLETE",
+          "supports": "两轮均为 9 个 fault_status、10 个模型请求、9 个 api_retry，最终 200/result success。"
+        }
+      ],
+      "missing_refs": [],
+      "required_channels": [
+        "A1",
+        "J",
+        "L",
+        "M"
+      ],
+      "next_probe": [
+        "若要证明默认终止边界，应分别注入 10、11 次失败并验证终止；环境覆盖值也要做独立正反实验。"
+      ],
+      "superseded_by": [],
+      "notes": [
+        "A1 显示普通路径默认 maxRetries=10，但本条 formal claim 刻意只保留运行可证的至少 9 次下界。"
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_conditional",
+        "evidence_class": "verified",
+        "readiness": "formal_verified",
+        "formal_ready": true,
+        "implementation_status": "not_assessed",
+        "profile_stage": "connection_policy",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-CONN-003"
+      }
+    },
     {
       "id": "SPEC-BODY-008",
       "revision": 1,
@@ -587,7 +1394,18 @@
       "notes": [
         "模型值与模型选择算法是不同命题；本条只约束基线画像的可见值。",
         "当前 driver 源码显式传递 --model，但 argv 未进入 manifest，故该因果关系不属于 verified 命题。"
-      ]
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "body_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-BODY-008"
+      }
     },
     {
       "id": "SPEC-BODY-009",
@@ -645,7 +1463,18 @@
       "superseded_by": [],
       "notes": [
         "必须保留 JSON 数字类型，不得序列化为字符串。"
-      ]
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "body_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-BODY-009"
+      }
     },
     {
       "id": "SPEC-BODY-010",
@@ -703,7 +1532,18 @@
       "superseded_by": [],
       "notes": [
         "本条约束完整对象，而不只约束 type 键存在。"
-      ]
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "body_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-BODY-010"
+      }
     },
     {
       "id": "SPEC-BODY-011",
@@ -761,7 +1601,18 @@
       "superseded_by": [],
       "notes": [
         "对象和数组结构均属于可见发包形态。"
-      ]
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "body_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-BODY-011"
+      }
     },
     {
       "id": "SPEC-BODY-012",
@@ -819,7 +1670,18 @@
       "superseded_by": [],
       "notes": [
         "本条不推断 effort 的内部选择算法。"
-      ]
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "body_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-BODY-012"
+      }
     },
     {
       "id": "SPEC-BODY-013",
@@ -877,7 +1739,18 @@
       "superseded_by": [],
       "notes": [
         "必须保持布尔类型；字符串 \"true\" 不等价。"
-      ]
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "body_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-BODY-013"
+      }
     },
     {
       "id": "SPEC-TLS-003",
@@ -925,7 +1798,18 @@
       "superseded_by": [],
       "notes": [
         "本条承接原 SPEC-EP-001 混入的 TLS SNI 子命题。"
-      ]
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "transport_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-TLS-003"
+      }
     },
     {
       "id": "SPEC-EP-003",
@@ -978,7 +1862,18 @@
       "superseded_by": [],
       "notes": [
         "本条承接原 SPEC-EP-001 的 method 子命题。"
-      ]
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "endpoint_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-EP-003"
+      }
     },
     {
       "id": "SPEC-EP-004",
@@ -986,14 +1881,14 @@
       "domain": "endpoint",
       "status": {
         "disposition": "observed",
-        "reason": "SCOPE-J6 的 6 条独立枚举记录中解析后 request.host 均为 api.anthropic.com；但运行 manifest 未满足第一章完整 M 准入。"
+        "reason": "六个 J-raw 记录的解析后 host 均为 api.anthropic.com，但采集器本就按同一 TARGET_HOSTS allowlist 过滤；这是预条件观察，不是独立验证。"
       },
       "atomicity": {
         "atomic": true,
         "issues": []
       },
       "retained_claim": "SCOPE-J6 的每个请求中，解析后的 request.host 标量恰为 api.anthropic.com。",
-      "scope": "SCOPE-J6；这是 J 层 HTTP host，不等同于 TLS SNI，也不是其他端点的 host 全集。",
+      "scope": "SCOPE-J6；manifest 预设 target_hosts=[api.anthropic.com]，故本条不能用于 host 发现或全称验证；它也不等同于 TLS SNI。",
       "evidence_refs": [
         {
           "catalog_ref": "BASELINE-J",
@@ -1006,6 +1901,10 @@
       ],
       "missing_refs": [
         {
+          "reference": "无 host 预过滤的 HTTP 发现",
+          "reason": "MITM addon 在落盘前丢弃不属于 TARGET_HOSTS 的 flow。"
+        },
+        {
           "reference": "完整 M 绑定",
           "reason": "manifest 未归档实际 argv、采集器与完整环境，runtime image 未独立验证，且未执行秘密扫描。"
         }
@@ -1014,24 +1913,24 @@
         "J",
         "M"
       ],
-      "verification_denominators": [
-        {
-          "channel": "J",
-          "unit": "all request records in selected J-raw artifacts",
-          "expected": 6,
-          "catalog_refs": [
-            "BASELINE-J",
-            "PROBE-BASELINE-J"
-          ]
-        }
-      ],
       "next_probe": [
-        "补完整 M；scheme 与 port 若进入合同必须另建原子编号。"
+        "用无 host allowlist 的 HTTP exchange 发现复验 authority，并补完整 M；scheme 与 port 若进入合同另建编号。"
       ],
       "superseded_by": [],
       "notes": [
         "本条承接原 SPEC-EP-001 的 HTTP host 子命题。"
-      ]
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "endpoint_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-EP-004"
+      }
     },
     {
       "id": "SPEC-BODY-014",
@@ -1095,7 +1994,18 @@
         "建立 cc_version 构造点到 system[0].text 再到 messages.create 的数据流锚点，并补完整 M。"
       ],
       "superseded_by": [],
-      "notes": []
+      "notes": [],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "body_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-BODY-014"
+      }
     },
     {
       "id": "SPEC-BODY-015",
@@ -1159,7 +2069,18 @@
         "建立 cc_entrypoint 构造点到最终请求 Body 的数据流锚点，并补完整 M。"
       ],
       "superseded_by": [],
-      "notes": []
+      "notes": [],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "body_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-BODY-015"
+      }
     },
     {
       "id": "SPEC-BODY-016",
@@ -1225,7 +2146,18 @@
       "superseded_by": [],
       "notes": [
         "六个样本值相互不同只作观察，不推出每次请求必然唯一。"
-      ]
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "body_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-BODY-016"
+      }
     }
   ],
   "rules": [
@@ -1255,7 +2187,12 @@
           "supports": "同一 2.1.220 二进制的独立历史样本。"
         }
       ],
-      "missing_refs": [],
+      "missing_refs": [
+        {
+          "reference": "原子拆分与完整分母",
+          "reason": "当前历史 ID 合并精确扩展序列和跨维度不变性；尚未为收窄后的序列命题声明可复算分母并绑定完整 M。"
+        }
+      ],
       "required_channels": [
         "P",
         "M"
@@ -1266,7 +2203,18 @@
       "superseded_by": [],
       "notes": [
         "失败 run oauth-20260726T011739Z 的短序列不纳入本命题。"
-      ]
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "transport_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-TLS-001"
+      }
     },
     {
       "id": "SPEC-TLS-002",
@@ -1313,9 +2261,22 @@
           ]
         }
       ],
-      "next_probe": [],
+      "next_probe": [
+        "补归档实际 argv、采集器、完整环境、runtime image 验证与秘密扫描；跨平台或 provider 另建差分规则。"
+      ],
       "superseded_by": [],
-      "notes": []
+      "notes": [],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "transport_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-TLS-002"
+      }
     },
     {
       "id": "SPEC-PROTO-001",
@@ -1362,9 +2323,22 @@
           ]
         }
       ],
-      "next_probe": [],
+      "next_probe": [
+        "补完整 M；若合同要求原始 HTTP 请求行而非解析结果，再用带完整 M 的 R 单独建号。"
+      ],
       "superseded_by": [],
-      "notes": []
+      "notes": [],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "transport_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-PROTO-001"
+      }
     },
     {
       "id": "SPEC-HDR-001",
@@ -1412,7 +2386,18 @@
       "superseded_by": [],
       "notes": [
         "仅 .a 基线序列和 .b H1 字节格式具备现成 R 证据；.c 条件插槽仍是候选。"
-      ]
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "header_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-HDR-001"
+      }
     },
     {
       "id": "SPEC-HDR-002",
@@ -1476,7 +2461,18 @@
         "TUI 与 CLAUDE_AGENT_SDK_CLIENT_APP 正例须另立规则。"
       ],
       "superseded_by": [],
-      "notes": []
+      "notes": [],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "header_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-HDR-002"
+      }
     },
     {
       "id": "SPEC-HDR-003",
@@ -1494,7 +2490,7 @@
         ]
       },
       "retained_claim": "SCOPE-BASELINE 的 Sonnet 5 请求发送文档所列 9 项 anthropic-beta 序列。",
-      "scope": "SCOPE-BASELINE；Opus 仅一轮观察，Haiku 没有成功正例，二者均不进入本条 verified 命题。",
+      "scope": "SCOPE-BASELINE；Opus 仅一轮观察，Haiku 没有成功正例，二者均不进入本条有限 Sonnet retained claim。",
       "evidence_refs": [
         {
           "catalog_ref": "BASELINE-J",
@@ -1521,7 +2517,18 @@
       "notes": [
         "注册表数量不等于基线发送集合。",
         "MODEL-OPUS 的单轮相同序列只作观察；MODEL-HAIKU-FAILED 只证明当前 Haiku run 不能作正例。"
-      ]
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "header_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-HDR-003"
+      }
     },
     {
       "id": "SPEC-HDR-004",
@@ -1547,13 +2554,37 @@
           "supports": "wire 值。"
         }
       ],
-      "missing_refs": [],
-      "required_channels": [
-        "J"
+      "missing_refs": [
+        {
+          "reference": "构造点到请求 sink 的数据流",
+          "reason": "当前只有解析值与缺完整 M 的 wire 补充观察，未定位目标二进制中的字段级构造链。"
+        },
+        {
+          "reference": "完整 M 与有限分母",
+          "reason": "现有证据未同时归档实际 argv、采集器、完整环境、runtime image 验证和秘密扫描。"
+        }
       ],
-      "next_probe": [],
+      "required_channels": [
+        "A1",
+        "J",
+        "M"
+      ],
+      "next_probe": [
+        "建立 anthropic-version 构造点到请求 sink 的字段级锚点，并用两个完整 M run 复验精确值。"
+      ],
       "superseded_by": [],
-      "notes": []
+      "notes": [],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "header_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-HDR-004"
+      }
     },
     {
       "id": "SPEC-HDR-005",
@@ -1579,13 +2610,37 @@
           "supports": "重复观察。"
         }
       ],
-      "missing_refs": [],
-      "required_channels": [
-        "J"
+      "missing_refs": [
+        {
+          "reference": "当前 Bun/SDK 构造来源",
+          "reason": "尚未把 Accept-Encoding 的产生层与目标二进制实际请求 sink 闭环。"
+        },
+        {
+          "reference": "完整 M 与有限分母",
+          "reason": "WIRE-DEFAULT 缺完整 M，J 样本也未归档实际 argv、采集器、runtime image 验证和秘密扫描。"
+        }
       ],
-      "next_probe": [],
+      "required_channels": [
+        "A1",
+        "J",
+        "M"
+      ],
+      "next_probe": [
+        "定位当前 Bun/SDK 的 Accept-Encoding 生成层并绑定请求 sink；补两个完整 M run，平台或 runtime 变化另做差分。"
+      ],
       "superseded_by": [],
-      "notes": []
+      "notes": [],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "header_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-HDR-005"
+      }
     },
     {
       "id": "SPEC-HDR-006",
@@ -1618,7 +2673,16 @@
           "supports": "断连接重试时 Retry-Count 仍为 0。"
         }
       ],
-      "missing_refs": [],
+      "missing_refs": [
+        {
+          "reference": "八个 Header 原子拆分",
+          "reason": "平台、SDK、runtime、timeout 与 retry-count 的触发和可变性不同，当前复合 ID 不能升格。"
+        },
+        {
+          "reference": "完整 M 绑定",
+          "reason": "基线与故障样本未同时满足实际 argv、采集器、完整环境、runtime image 验证和秘密扫描要求。"
+        }
+      ],
       "required_channels": [
         "J",
         "M",
@@ -1628,7 +2692,18 @@
         "字段值画像与重试计数行为分别编号；补 429 独立重复。"
       ],
       "superseded_by": [],
-      "notes": []
+      "notes": [],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "header_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-HDR-006"
+      }
     },
     {
       "id": "SPEC-HDR-007",
@@ -1677,7 +2752,18 @@
       "superseded_by": [],
       "notes": [
         "cli-bg 分支仅为候选，不属于 retained_claim。"
-      ]
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "header_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-HDR-007"
+      }
     },
     {
       "id": "SPEC-HDR-008",
@@ -1720,7 +2806,18 @@
         "在可绑定远程配置快照的环境取得 gate 正例；否则只保留基线缺席规则。"
       ],
       "superseded_by": [],
-      "notes": []
+      "notes": [],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "header_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-HDR-008"
+      }
     },
     {
       "id": "SPEC-HDR-009",
@@ -1742,14 +2839,23 @@
       "evidence_refs": [
         {
           "catalog_ref": "PROBE-PROTECTION",
-          "supports": "正负例、值及 J 中的相对位置。"
+          "supports": "两轮值为 1 的正例、Header 值及 J 中的相对位置。"
+        },
+        {
+          "catalog_ref": "BASELINE-J",
+          "supports": "未注入 CLAUDE_CODE_ADDITIONAL_PROTECTION 的基线请求中该 Header 缺席。"
         },
         {
           "catalog_ref": "A1-CANDIDATES",
           "supports": "CAND-HDR-ADDITIONAL-PROTECTION 写入点。"
         }
       ],
-      "missing_refs": [],
+      "missing_refs": [
+        {
+          "reference": "触发、值与槽位原子拆分",
+          "reason": "当前 ID 合并环境 gate、Header 值和相对位置；R 条件正例及更多输入取值也未闭合。"
+        }
+      ],
       "required_channels": [
         "J",
         "M",
@@ -1760,7 +2866,18 @@
         "差分 0、false、空串及大小写变体。"
       ],
       "superseded_by": [],
-      "notes": []
+      "notes": [],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_conditional",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "header_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-HDR-009"
+      }
     },
     {
       "id": "SPEC-HDR-010",
@@ -1807,7 +2924,18 @@
         "分别补多行顺序、含多个冒号、非法行和与 defaultHeaders 同名的正负例，并保留 R。"
       ],
       "superseded_by": [],
-      "notes": []
+      "notes": [],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_conditional",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "header_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-HDR-010"
+      }
     },
     {
       "id": "SPEC-HDR-011",
@@ -1844,7 +2972,16 @@
           "supports": "CAND-BODY-BILLING 与 CAND-BODY-CCH-PLACEHOLDER 的静态线索。"
         }
       ],
-      "missing_refs": [],
+      "missing_refs": [
+        {
+          "reference": "WIRE-SUBAGENT 的完整 M 绑定",
+          "reason": "两轮 R 目录没有等价完整 manifest，不能绑定实际 argv、采集器、完整环境、runtime image 验证和秘密扫描。"
+        },
+        {
+          "reference": "会话生命周期与嵌套差分",
+          "reason": "当前只有一层子 agent 首请求，未覆盖后台、resume、跨连接与两层嵌套。"
+        }
+      ],
       "required_channels": [
         "J"
       ],
@@ -1858,7 +2995,18 @@
       "notes": [
         "relay-r1 可见 `x-anthropic-billing-header: cc_version=2.1.220.dd0; cc_entrypoint=sdk-cli; cch=bbfd2;`。",
         "subagent-r1 主请求可见 cc_prev_req，子请求可见 cc_is_subagent=true。"
-      ]
+      ],
+      "alignment": {
+        "target_1_1": false,
+        "responsibility": "none_superseded",
+        "evidence_class": "superseded",
+        "readiness": "excluded",
+        "formal_ready": false,
+        "implementation_status": "not_applicable",
+        "profile_stage": "none",
+        "paired_acceptance_required": false,
+        "assertion_id": null
+      }
     },
     {
       "id": "SPEC-HDR-012",
@@ -1894,7 +3042,18 @@
         "定位 UUID 生成点及每 attempt 调用边界，并覆盖重试和并发请求。"
       ],
       "superseded_by": [],
-      "notes": []
+      "notes": [],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "state_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-HDR-012"
+      }
     },
     {
       "id": "SPEC-HDR-013",
@@ -1932,7 +3091,18 @@
         "以固定 session-id、resume、compact 和新进程作单变量对照。"
       ],
       "superseded_by": [],
-      "notes": []
+      "notes": [],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "state_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-HDR-013"
+      }
     },
     {
       "id": "SPEC-HDR-014",
@@ -1965,16 +3135,32 @@
         {
           "reference": "relay-sub-c2",
           "reason": "仓库中不存在该 run；实际可绑定目录为 subagent-r2。"
+        },
+        {
+          "reference": "WIRE-SUBAGENT 的完整 M 绑定",
+          "reason": "实际两轮 R 目录没有等价完整 manifest，不能绑定 argv、采集器、完整环境、runtime image 验证和秘密扫描。"
         }
       ],
       "required_channels": [
-        "R"
+        "R",
+        "M"
       ],
       "next_probe": [
         "对多个并发子 agent 复算值格式和唯一性；位置统一为从 1 开始或相对槽位。"
       ],
       "superseded_by": [],
-      "notes": []
+      "notes": [],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_conditional",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "state_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-HDR-014"
+      }
     },
     {
       "id": "SPEC-HDR-015",
@@ -1998,190 +3184,244 @@
           "supports": "主/子原始请求 session id 对比及 body metadata 对比。"
         }
       ],
-      "missing_refs": [],
+      "missing_refs": [
+        {
+          "reference": "WIRE-SUBAGENT 的完整 M 绑定",
+          "reason": "两轮 R 目录没有等价完整 manifest，不能绑定实际 argv、采集器、完整环境、runtime image 验证和秘密扫描。"
+        },
+        {
+          "reference": "会话生命周期与嵌套差分",
+          "reason": "当前只有一层子 agent 首请求，未覆盖后台、resume、跨连接与两层嵌套。"
+        }
+      ],
       "required_channels": [
-        "R"
+        "R",
+        "M"
       ],
       "next_probe": [
         "覆盖后台、resume 和两层嵌套会话。"
       ],
       "superseded_by": [],
-      "notes": []
+      "notes": [],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_conditional",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "state_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-HDR-015"
+      }
     },
     {
       "id": "SPEC-HDR-016",
-      "revision": 1,
+      "revision": 2,
       "domain": "header",
       "status": {
-        "disposition": "candidate",
-        "reason": "静态条件展开存在，但正文引用的两轮运行在仓库中不存在，UA 联动也未验证。"
+        "disposition": "verified",
+        "reason": "目标版本静态构造点唯一命中；两轮未设置负例与两轮非空唯一值正例均以完整 M 归档。"
       },
       "atomicity": {
-        "atomic": false,
-        "issues": [
-          "存在性、值、槽位及 UA 联动是多个命题。"
-        ]
+        "atomic": true,
+        "issues": []
       },
-      "retained_claim": "A1 提示 CLAUDE_AGENT_SDK_CLIENT_APP 非空时可能产生 x-client-app；当前没有可绑定运行正例。",
-      "scope": "common_scope 的条件候选。",
+      "retained_claim": "在已采 firstParty OAuth print 路径中，未设置 CLAUDE_AGENT_SDK_CLIENT_APP 时 x-client-app 缺席；设置为非空值时 x-client-app 存在。",
+      "scope": "2.1.220 Linux x86_64；s1；两轮未设置负例与两轮 probe-app-21220 正例。只验证存在性条件，不合并值或 UA 命题。",
       "evidence_refs": [
         {
           "catalog_ref": "A1-REACHABILITY",
-          "supports": "条件字段的静态线索；不能替代运行证据。"
-        }
-      ],
-      "missing_refs": [
-        {
-          "reference": "hdr-clientapp-r1",
-          "reason": "仓库中不存在该 run。"
+          "supports": "CAND-HDR-CLIENT-APP-CONSTRUCTION 唯一命中环境值到条件 Header 展开的生产构造点。"
         },
         {
-          "reference": "hdr-clientapp-r2",
-          "reason": "仓库中不存在该 run。"
+          "catalog_ref": "PROBE-HDR-NEGATIVE-COMPLETE",
+          "supports": "两轮未设置负例及完整 M。"
+        },
+        {
+          "catalog_ref": "PROBE-HDR-CLIENTAPP-COMPLETE",
+          "supports": "两轮非空唯一值正例及完整 M。"
         }
       ],
+      "missing_refs": [],
       "required_channels": [
         "A1",
         "J",
-        "R"
+        "M"
       ],
       "next_probe": [
-        "注入 probe-app，采集两轮 J/R，并同时核验 User-Agent 是否增加 client-app 段。"
+        "空字符串、纯空白和前后空格属于扩展输入矩阵；不得反向扩大本条已验证范围。"
       ],
       "superseded_by": [],
-      "notes": []
+      "notes": [
+        "Header 原值透传由 SPEC-HDR-021 单独约束；UA 联动由 SPEC-HDR-022 单独约束。"
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_conditional",
+        "evidence_class": "verified",
+        "readiness": "formal_verified",
+        "formal_ready": true,
+        "implementation_status": "not_assessed",
+        "profile_stage": "header_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-HDR-016"
+      }
     },
     {
       "id": "SPEC-HDR-017",
-      "revision": 1,
+      "revision": 2,
       "domain": "header",
       "status": {
-        "disposition": "candidate",
-        "reason": "只有静态条件线索，所引两轮运行不存在。"
+        "disposition": "verified",
+        "reason": "目标版本静态构造点唯一命中；两轮未设置负例与两轮受控环境变量正例均以完整 M 归档。"
       },
       "atomicity": {
-        "atomic": false,
-        "issues": [
-          "存在性、原值透传和槽位可分别验证。"
-        ]
+        "atomic": true,
+        "issues": []
       },
-      "retained_claim": "A1 提示 CLAUDE_CODE_CONTAINER_ID 非空时可能产生 x-claude-remote-container-id；尚无运行证实。",
-      "scope": "远程容器条件候选；不属于基线主路径。",
+      "retained_claim": "在已采 firstParty OAuth print 路径中，未设置 CLAUDE_CODE_CONTAINER_ID 时 x-claude-remote-container-id 缺席；设置为非空值时该 Header 存在。",
+      "scope": "2.1.220 Linux x86_64；s1；受控环境变量映射。只验证环境变量到 Header 的存在性条件，不声称等同真实 remote-container 产品环境。",
       "evidence_refs": [
         {
           "catalog_ref": "A1-REACHABILITY",
-          "supports": "静态条件线索。"
-        }
-      ],
-      "missing_refs": [
-        {
-          "reference": "hdr-container-r1",
-          "reason": "仓库中不存在该 run。"
+          "supports": "CAND-HDR-REMOTE-CONTAINER-CONSTRUCTION 唯一命中生产构造点。"
         },
         {
-          "reference": "hdr-container-r2",
-          "reason": "仓库中不存在该 run。"
+          "catalog_ref": "PROBE-HDR-NEGATIVE-COMPLETE",
+          "supports": "两轮未设置负例及完整 M。"
+        },
+        {
+          "catalog_ref": "PROBE-HDR-CONTAINER-COMPLETE",
+          "supports": "两轮非空唯一值正例及完整 M。"
         }
       ],
+      "missing_refs": [],
       "required_channels": [
         "A1",
         "J",
-        "R"
+        "M"
       ],
       "next_probe": [
-        "先做环境变量单变量注入，再补真实远程容器正例。"
+        "真实远程容器、空白值与生命周期稳定性仍是扩展矩阵，不得混入本条。"
       ],
       "superseded_by": [],
-      "notes": []
+      "notes": [
+        "Header 原值透传由 SPEC-HDR-023 单独约束。"
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_conditional",
+        "evidence_class": "verified",
+        "readiness": "formal_verified",
+        "formal_ready": true,
+        "implementation_status": "not_assessed",
+        "profile_stage": "header_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-HDR-017"
+      }
     },
     {
       "id": "SPEC-HDR-018",
-      "revision": 1,
+      "revision": 2,
       "domain": "header",
       "status": {
-        "disposition": "candidate",
-        "reason": "只有静态条件线索，所引两轮运行不存在。"
+        "disposition": "verified",
+        "reason": "目标版本静态构造点唯一命中；两轮未设置负例与两轮受控环境变量正例均以完整 M 归档。"
       },
       "atomicity": {
-        "atomic": false,
-        "issues": [
-          "存在性、原值透传和槽位可分别验证。"
-        ]
+        "atomic": true,
+        "issues": []
       },
-      "retained_claim": "A1 提示 CLAUDE_CODE_REMOTE_SESSION_ID 非空时可能产生 x-claude-remote-session-id；尚无运行证实。",
-      "scope": "远程会话条件候选；不属于基线主路径。",
+      "retained_claim": "在已采 firstParty OAuth print 路径中，未设置 CLAUDE_CODE_REMOTE_SESSION_ID 时 x-claude-remote-session-id 缺席；设置为非空值时该 Header 存在。",
+      "scope": "2.1.220 Linux x86_64；s1；受控环境变量映射。只验证环境变量到 Header 的存在性条件，不声称等同真实 remote-session 产品环境。",
       "evidence_refs": [
         {
           "catalog_ref": "A1-REACHABILITY",
-          "supports": "静态条件线索。"
-        }
-      ],
-      "missing_refs": [
-        {
-          "reference": "hdr-remotesess-r1",
-          "reason": "仓库中不存在该 run。"
+          "supports": "CAND-HDR-REMOTE-SESSION-CONSTRUCTION 唯一命中生产构造点。"
         },
         {
-          "reference": "hdr-remotesess-r2",
-          "reason": "仓库中不存在该 run。"
+          "catalog_ref": "PROBE-HDR-NEGATIVE-COMPLETE",
+          "supports": "两轮未设置负例及完整 M。"
+        },
+        {
+          "catalog_ref": "PROBE-HDR-REMOTESESSION-COMPLETE",
+          "supports": "两轮非空唯一值正例及完整 M。"
         }
       ],
+      "missing_refs": [],
       "required_channels": [
         "A1",
         "J",
-        "R"
+        "M"
       ],
       "next_probe": [
-        "先做环境变量单变量注入，再补真实远程会话正例并比较普通 session id。"
+        "真实远程会话生命周期、空白值及与普通 session id 的跨生命周期比较仍属扩展矩阵。"
       ],
       "superseded_by": [],
-      "notes": []
+      "notes": [
+        "Header 原值透传由 SPEC-HDR-024 单独约束；该字段不得与 X-Claude-Code-Session-Id 合并。"
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_conditional",
+        "evidence_class": "verified",
+        "readiness": "formal_verified",
+        "formal_ready": true,
+        "implementation_status": "not_assessed",
+        "profile_stage": "header_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-HDR-018"
+      }
     },
     {
       "id": "SPEC-HDR-019",
-      "revision": 1,
+      "revision": 2,
       "domain": "header",
       "status": {
-        "disposition": "candidate",
-        "reason": "两层嵌套运行引用均不存在；一层 subagent 样本不能证明 parent-agent-id。"
+        "disposition": "verified",
+        "reason": "a1、a2、a3 各两轮完整 M 运行把请求 Header、task_started 与 tool_use 链绑定到确定深度。"
       },
       "atomicity": {
-        "atomic": false,
-        "issues": [
-          "层级三档、两个字段、相对位置和父子值相等是多个命题。"
-        ]
+        "atomic": true,
+        "issues": []
       },
-      "retained_claim": "A1 提示有 parentAgentId 时可能发送 x-claude-code-parent-agent-id；当前没有两层嵌套运行正例。",
-      "scope": "两层及以上子 agent 候选。",
+      "retained_claim": "在已采 a1/a2/a3 请求链中，深度 0 的主请求和深度 1 的第一层 agent 请求不带 x-claude-code-parent-agent-id；深度 2 与 3 的嵌套 agent 请求携带该 Header。",
+      "scope": "2.1.220 Linux x86_64；general-purpose 子 agent；每个 a1/a2/a3 场景两轮。这里只验证按已采深度的存在性，不合并父值相等或 Header 顺序。",
       "evidence_refs": [
         {
           "catalog_ref": "A1-REACHABILITY",
-          "supports": "parentAgentId 条件展开线索。"
+          "supports": "CAND-HDR-PARENT-AGENT-CONSTRUCTION 唯一命中 parentAgentId 条件展开与编码。"
         },
         {
-          "catalog_ref": "WIRE-SUBAGENT",
-          "supports": "只提供一层负例边界，不能证明两层正例。"
+          "catalog_ref": "PROBE-AGENT-DEPTHS-COMPLETE",
+          "supports": "六轮 a1/a2/a3 原始 J、stdout task/tool 链及完整 M。"
         }
       ],
-      "missing_refs": [
-        {
-          "reference": "relay-nested-r1",
-          "reason": "仓库中不存在该 run。"
-        },
-        {
-          "reference": "relay-nested-r2",
-          "reason": "仓库中不存在该 run。"
-        }
-      ],
+      "missing_refs": [],
       "required_channels": [
         "A1",
-        "R"
+        "J",
+        "M"
       ],
       "next_probe": [
-        "构造可重复的两层与三层嵌套，保留每层原始请求并验证直接父级关系。"
+        "并发、后台、resume、自定义 agent 类型和深度 4+ 属于扩展矩阵，不得由本条外推。"
       ],
       "superseded_by": [],
-      "notes": []
+      "notes": [
+        "直接父 agent 值相等由 SPEC-HDR-025 单独约束。"
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_conditional",
+        "evidence_class": "verified",
+        "readiness": "formal_verified",
+        "formal_ready": true,
+        "implementation_status": "not_assessed",
+        "profile_stage": "state_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-HDR-019"
+      }
     },
     {
       "id": "SPEC-BODY-001",
@@ -2223,7 +3463,18 @@
         "逐个触发 temperature、tool_choice、speed、fallbacks、fallback_credit_token、diagnostics，并记录新增键的相对顺序。"
       ],
       "superseded_by": [],
-      "notes": []
+      "notes": [],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "body_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-BODY-001"
+      }
     },
     {
       "id": "SPEC-BODY-002",
@@ -2269,7 +3520,18 @@
         "补 extra metadata、跨账号和跨机器差分；分别编号编码形态与跨层一致性。"
       ],
       "superseded_by": [],
-      "notes": []
+      "notes": [],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "body_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-BODY-002"
+      }
     },
     {
       "id": "SPEC-BODY-003",
@@ -2314,7 +3576,18 @@
         "按主/子、MCP、compact 和长上下文分别记录 block 数、cache_control.type、ttl、scope。"
       ],
       "superseded_by": [],
-      "notes": []
+      "notes": [],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "body_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-BODY-003"
+      }
     },
     {
       "id": "SPEC-BODY-004",
@@ -2353,7 +3626,18 @@
       "superseded_by": [],
       "notes": [
         "2.1.197 的 user/assistant-only 线索已被 2.1.220 mid-conversation system 实测改变。"
-      ]
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_conditional",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "body_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-BODY-004"
+      }
     },
     {
       "id": "SPEC-BODY-005",
@@ -2395,7 +3679,18 @@
         "分别采集普通多工具、MCP、ToolSearch/deferred 和 server tool，并按工具类别建立 schema。"
       ],
       "superseded_by": [],
-      "notes": []
+      "notes": [],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_conditional",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "body_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-BODY-005"
+      }
     },
     {
       "id": "SPEC-BODY-006",
@@ -2432,7 +3727,18 @@
         "采集子 agent 多轮并分别验证 system 与 messages 状态变化。"
       ],
       "superseded_by": [],
-      "notes": []
+      "notes": [],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_conditional",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "body_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-BODY-006"
+      }
     },
     {
       "id": "SPEC-EP-001",
@@ -2440,14 +3746,14 @@
       "domain": "endpoint",
       "status": {
         "disposition": "observed",
-        "reason": "六个选定 J-raw 请求的 request.path 均为同一值；但运行 manifest 未满足第一章完整 M 准入，故不升格。"
+        "reason": "六个已按 /messages 路由的 J-raw 请求，其精确 request.path 均为同一值；这是受部分 path 预筛的观察，且完整 M 未闭合。"
       },
       "atomicity": {
         "atomic": true,
         "issues": []
       },
       "retained_claim": "SCOPE-J6 的每个请求中，request.path 标量恰为 /v1/messages?beta=true。",
-      "scope": "SCOPE-J6；只证明合并后的 path+query 字符串，不合并 method、HTTP host 或 TLS SNI，也不是端点全集。",
+      "scope": "SCOPE-J6；claude-http 文件已按 path 含 /messages 分类。本条只记录该预筛类别内的精确 path+query，不是无预过滤发现，也不是端点全集。",
       "evidence_refs": [
         {
           "catalog_ref": "BASELINE-J",
@@ -2460,6 +3766,10 @@
       ],
       "missing_refs": [
         {
+          "reference": "无 path 预过滤的 HTTP 发现",
+          "reason": "现有 addon 先按 path 含 /messages 把记录路由到 claude-http.jsonl。"
+        },
+        {
           "reference": "完整 M 绑定",
           "reason": "manifest 未归档实际 argv、采集器与完整环境，runtime image 未独立验证，且未执行秘密扫描。"
         }
@@ -2468,24 +3778,24 @@
         "J",
         "M"
       ],
-      "verification_denominators": [
-        {
-          "channel": "J",
-          "unit": "all request records in selected J-raw artifacts",
-          "expected": 6,
-          "catalog_refs": [
-            "BASELINE-J",
-            "PROBE-BASELINE-J"
-          ]
-        }
-      ],
       "next_probe": [
-        "补完整 M；端点全集继续由独立候选管理。"
+        "用不按 path 路由的全 HTTP exchange 归档复验精确 request target，并补完整 M。"
       ],
       "superseded_by": [],
       "notes": [
         "原命题的 method、HTTP host 与 TLS SNI 已分别拆为 SPEC-EP-003、SPEC-EP-004 与 SPEC-TLS-003。"
-      ]
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "endpoint_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-EP-001"
+      }
     },
     {
       "id": "SPEC-EP-002",
@@ -2523,7 +3833,18 @@
         "定位构造点，并在同一会话多轮、TUI、离线和连接失败场景验证发送次数。"
       ],
       "superseded_by": [],
-      "notes": []
+      "notes": [],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_required",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "lifecycle_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-EP-002"
+      }
     },
     {
       "id": "SPEC-CONN-001",
@@ -2563,56 +3884,78 @@
       ],
       "superseded_by": [],
       "notes": [
-        "RETRY-KILL 与 RETRY-429 只作相邻故障族观察，不支持本条两轮 500 的 verified 命题。"
-      ]
+        "RETRY-KILL 与 RETRY-429 只作相邻故障族观察，不支持把本条两轮 500 观察外推为其他故障族规则。"
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_conditional",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "connection_policy",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-CONN-001"
+      }
     },
     {
       "id": "SPEC-CONN-002",
-      "revision": 1,
+      "revision": 2,
       "domain": "connection_retry",
       "status": {
-        "disposition": "candidate",
-        "reason": "文档所列 retry-limit-3/5/9 三个 run 均不存在，无法复算退避间隔、封顶或至少九次重试。"
+        "disposition": "verified",
+        "reason": "2.1.220 A1 唯一定位 delay 公式与常量；3/5/9 连续 500 各两轮的 api_retry 延迟及单调时钟间隔均逐 attempt 复算通过。"
       },
       "atomicity": {
-        "atomic": false,
-        "issues": [
-          "指数基数、倍数、抖动、封顶与重试次数下界是多个统计命题。"
-        ]
+        "atomic": true,
+        "issues": []
       },
-      "retained_claim": "旧源码与短故障样本提示存在应用层重试；2.1.220 的完整退避曲线、约 35 秒封顶和至少九次重试均未被当前仓库证实。",
-      "scope": "连续 5xx 受控故障候选。",
+      "retained_claim": "普通应用层重试在没有可用 Retry-After 时，第 attempt 次等待为 round(base + random×0.25×base) ms，其中 base=min(500×2^(attempt-1), 32000)。因此 attempt 1–6 的区间依次为 500–625、1000–1250、2000–2500、4000–5000、8000–10000、16000–20000 ms，attempt 7 起为 32000–40000 ms。",
+      "scope": "2.1.220 firstParty OAuth print 路径；MITM 仅对模型 POST 注入普通 500、无 Retry-After；故障数 3/5/9 各两轮。只约束 delay 公式，不合并重试次数上限或 retryable 判定。",
       "evidence_refs": [
         {
-          "catalog_ref": "RETRY-FAULT",
-          "supports": "只证明单次 500 后会重发，不能支持长曲线。"
-        }
-      ],
-      "missing_refs": [
-        {
-          "reference": "retry-limit-3",
-          "reason": "仓库中不存在该 run。"
+          "catalog_ref": "A1-REACHABILITY",
+          "supports": "CAND-RETRY-DELAY-FORMULA、CONSTANT-BLOCK 与 MAIN-MESSAGES-CREATE 唯一命中目标版本生产 bundle。"
         },
         {
-          "reference": "retry-limit-5",
-          "reason": "仓库中不存在该 run。"
+          "catalog_ref": "RETRY-500-COUNT3-COMPLETE",
+          "supports": "两轮 attempt 1–3 的 api_retry.delay_ms 与实际单调间隔。"
         },
         {
-          "reference": "retry-limit-9",
-          "reason": "仓库中不存在该 run。"
+          "catalog_ref": "RETRY-500-COUNT5-COMPLETE",
+          "supports": "两轮 attempt 1–5 的 api_retry.delay_ms 与实际单调间隔。"
+        },
+        {
+          "catalog_ref": "RETRY-500-COUNT9-COMPLETE",
+          "supports": "两轮 attempt 1–9，含 32 秒指数基值封顶后的 attempt 7–9。"
         }
       ],
+      "missing_refs": [],
       "required_channels": [
+        "A1",
         "J",
         "L",
-        "M",
-        "A1"
+        "M"
       ],
       "next_probe": [
-        "按 3/5/9 连续故障重新采集，每档至少两轮，保存单调时钟时间戳和注入 manifest；静态定位 backoff 参数。"
+        "Retry-After、429/529/断连、x-should-retry、persistent/watchdog 与终止边界继续留在 CAND-RETRY-MATRIX，不得由普通 500 外推。"
       ],
       "superseded_by": [],
-      "notes": []
+      "notes": [
+        "旧文档的“约 35 秒封顶”不准确；32 秒是指数基值上限，加入正向抖动后的允许区间上界为 40 秒。",
+        "X-Stainless-Retry-Count 在所有已采物理请求中仍为 0；应用层 attempt 来自 stdout 的 system/api_retry。"
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_conditional",
+        "evidence_class": "verified",
+        "readiness": "formal_verified",
+        "formal_ready": true,
+        "implementation_status": "not_assessed",
+        "profile_stage": "connection_policy",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-CONN-002"
+      }
     },
     {
       "id": "SPEC-RESP-001",
@@ -2649,7 +3992,18 @@
         "移入独立响应兼容章节，按 streaming/non-streaming/error 分类。"
       ],
       "superseded_by": [],
-      "notes": []
+      "notes": [],
+      "alignment": {
+        "target_1_1": false,
+        "responsibility": "downstream_response_compat",
+        "evidence_class": "response_compat",
+        "readiness": "response_only",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "response_compatibility",
+        "paired_acceptance_required": false,
+        "assertion_id": null
+      }
     },
     {
       "id": "SPEC-RESP-002",
@@ -2691,7 +4045,18 @@
         "移入响应兼容章节；将必变、用量相关、可选和顺序分别统计。"
       ],
       "superseded_by": [],
-      "notes": []
+      "notes": [],
+      "alignment": {
+        "target_1_1": false,
+        "responsibility": "downstream_response_compat",
+        "evidence_class": "response_compat",
+        "readiness": "response_only",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "response_compatibility",
+        "paired_acceptance_required": false,
+        "assertion_id": null
+      }
     },
     {
       "id": "SPEC-RESP-003",
@@ -2721,7 +4086,18 @@
         "移入独立响应兼容章节，并补错误与非流式响应。"
       ],
       "superseded_by": [],
-      "notes": []
+      "notes": [],
+      "alignment": {
+        "target_1_1": false,
+        "responsibility": "downstream_response_compat",
+        "evidence_class": "response_compat",
+        "readiness": "response_only",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "response_compatibility",
+        "paired_acceptance_required": false,
+        "assertion_id": null
+      }
     },
     {
       "id": "SPEC-BETA-001",
@@ -2767,7 +4143,126 @@
       "superseded_by": [],
       "notes": [
         "failed 的 probe-betas-r1/r2 可证明非法值被服务端看到，但不能计入 complete 正例基数。"
-      ]
+      ],
+      "alignment": {
+        "target_1_1": true,
+        "responsibility": "egress_conditional",
+        "evidence_class": "observed",
+        "readiness": "provisional_observed",
+        "formal_ready": false,
+        "implementation_status": "not_assessed",
+        "profile_stage": "header_finalizer",
+        "paired_acceptance_required": true,
+        "assertion_id": "PAIR-SPEC-BETA-001"
+      }
     }
-  ]
+  ],
+  "alignment_contract": {
+    "goal_section": "1.1",
+    "profile_name": "Claude220Profile",
+    "complete_for_goal_1_1": false,
+    "count_semantics": "目标 53 表示当前已编号的客户端出站责任；其中正式已验证 12、有限运行观察 41、编号内候选 0。未编号 CAND 缺口仍未封口，因此不能把 formal_ready 理解为整体 1.1 已完成。",
+    "ingress_convergence": "官方客户端和第三方标准 API 入站先规范化，再由同一个 Claude220Profile 与同一组 finalizer 出站。",
+    "dynamic_value_policy": "动态值只对齐格式、来源、关联关系与生命周期，不复制抓包字面值。",
+    "summary": {
+      "total_rule_ids": 57,
+      "egress_target_ids": 53,
+      "formally_verified_ids": 12,
+      "provisional_observed_ids": 41,
+      "pending_candidate_ids": 0,
+      "excluded_from_egress_ids": 4,
+      "egress_required": 32,
+      "egress_conditional": 21,
+      "egress_pending_evidence": 0,
+      "downstream_response_compat": 3,
+      "none_superseded": 1,
+      "formal_ready": 12
+    },
+    "domain_summary": [
+      {
+        "domain": "tls",
+        "total": 3,
+        "egress_target": 3,
+        "formally_verified": 0,
+        "provisional_observed": 3,
+        "pending_evidence": 0,
+        "excluded": 0
+      },
+      {
+        "domain": "protocol",
+        "total": 1,
+        "egress_target": 1,
+        "formally_verified": 0,
+        "provisional_observed": 1,
+        "pending_evidence": 0,
+        "excluded": 0
+      },
+      {
+        "domain": "header",
+        "total": 26,
+        "egress_target": 25,
+        "formally_verified": 10,
+        "provisional_observed": 15,
+        "pending_evidence": 0,
+        "excluded": 1
+      },
+      {
+        "domain": "body",
+        "total": 16,
+        "egress_target": 16,
+        "formally_verified": 0,
+        "provisional_observed": 16,
+        "pending_evidence": 0,
+        "excluded": 0
+      },
+      {
+        "domain": "endpoint",
+        "total": 4,
+        "egress_target": 4,
+        "formally_verified": 0,
+        "provisional_observed": 4,
+        "pending_evidence": 0,
+        "excluded": 0
+      },
+      {
+        "domain": "connection_retry",
+        "total": 3,
+        "egress_target": 3,
+        "formally_verified": 2,
+        "provisional_observed": 1,
+        "pending_evidence": 0,
+        "excluded": 0
+      },
+      {
+        "domain": "beta",
+        "total": 1,
+        "egress_target": 1,
+        "formally_verified": 0,
+        "provisional_observed": 1,
+        "pending_evidence": 0,
+        "excluded": 0
+      },
+      {
+        "domain": "response_compatibility",
+        "total": 3,
+        "egress_target": 0,
+        "formally_verified": 0,
+        "provisional_observed": 0,
+        "pending_evidence": 0,
+        "excluded": 3
+      }
+    ],
+    "finalizer_pipeline": [
+      "normalize_semantic_request",
+      "Claude220Profile",
+      "lifecycle_finalizer",
+      "state_finalizer",
+      "endpoint_finalizer",
+      "header_finalizer",
+      "body_finalizer",
+      "connection_policy",
+      "transport_finalizer",
+      "paired_acceptance"
+    ]
+  }
 }

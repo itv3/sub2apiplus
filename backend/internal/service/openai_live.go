@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/platform/liveattestation"
 	coderws "github.com/coder/websocket"
@@ -40,95 +41,6 @@ type liveFrameConn interface {
 	ReadFrame(ctx context.Context) (coderws.MessageType, []byte, error)
 	WriteFrame(ctx context.Context, msgType coderws.MessageType, payload []byte) error
 	Close() error
-}
-
-// liveSidebandClientDialer 标记专用于 realtime sideband 的无压缩握手。
-// 生产 dialer 必须实现此接口；测试注入的旧 dialer 可继续走通用 Dial。
-type liveSidebandClientDialer interface {
-	DialLiveSideband(
-		ctx context.Context,
-		wsURL string,
-		headers http.Header,
-		proxyURL string,
-	) (openAIWSClientConn, int, http.Header, error)
-}
-
-// DialLiveSideband 使用 Codex 0.145.0 WS TLS 画像建立 realtime sideband，且显式
-// 禁用 permessage-deflate。Responses WS 仍由通用 Dial 使用上下文接管压缩，两者不能
-// 共享握手选项。
-func (d *coderOpenAIWSClientDialer) DialLiveSideband(
-	ctx context.Context,
-	wsURL string,
-	headers http.Header,
-	proxyURL string,
-) (openAIWSClientConn, int, http.Header, error) {
-	if d == nil {
-		return nil, 0, nil, errors.New("live sideband dialer is nil")
-	}
-	targetURL := strings.TrimSpace(wsURL)
-	if targetURL == "" {
-		return nil, 0, nil, errors.New("live sideband url is empty")
-	}
-	tlsProfile := newOpenAIOfficialEgressWebSocketTLSProfile()
-	if egressContext, enabled := OfficialEgressContextFromContext(ctx); enabled {
-		if _, err := resolveOfficialEgressWebSocketTransportProfile(egressContext); err != nil {
-			return nil, 0, nil, err
-		}
-		parsedTarget, err := url.Parse(targetURL)
-		if err != nil {
-			return nil, 0, nil, fmt.Errorf("解析 Live sideband URL：%w", err)
-		}
-		if err := validateOfficialEgressWebSocketTarget(parsedTarget, egressContext); err != nil {
-			return nil, 0, nil, err
-		}
-		tlsProfile, err = officialCodex0145ResolveEndpointTLSProfileForURL(
-			egressContext.ProfileVersion(),
-			codex0145EndpointID(egressContext.CodexEndpointProfileID()),
-			parsedTarget,
-		)
-		if err != nil {
-			return nil, 0, nil, fmt.Errorf("解析 Live sideband TLS 画像：%w", err)
-		}
-	}
-	transport, err := buildOpenAIOfficialEgressWSTransport(
-		tlsProfile,
-		proxyURL,
-	)
-	if err != nil {
-		return nil, 0, nil, err
-	}
-	httpClient := &http.Client{
-		Transport: transport,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-	connection, response, err := coderws.Dial(ctx, targetURL, &coderws.DialOptions{
-		HTTPClient:      httpClient,
-		HTTPHeader:      cloneHeader(headers),
-		CompressionMode: coderws.CompressionDisabled,
-	})
-	if err != nil {
-		status := 0
-		responseHeaders := http.Header(nil)
-		var responseBody []byte
-		if response != nil {
-			status = response.StatusCode
-			responseHeaders = cloneHeader(response.Header)
-			if response.Body != nil {
-				responseBody, _ = io.ReadAll(io.LimitReader(response.Body, 8<<10))
-				_ = response.Body.Close()
-			}
-		}
-		transport.CloseIdleConnections()
-		return nil, status, responseHeaders, &openAIWSHandshakeError{Body: responseBody, Err: err}
-	}
-	connection.SetReadLimit(openAIWSMessageReadLimitBytes)
-	responseHeaders := http.Header(nil)
-	if response != nil {
-		responseHeaders = cloneHeader(response.Header)
-	}
-	return &coderOpenAIWSClientConn{conn: connection}, http.StatusSwitchingProtocols, responseHeaders, nil
 }
 
 func liveSidebandReadError(err error) error {
@@ -294,10 +206,16 @@ func (s *OpenAIGatewayService) CreateLiveCall(
 			selection.ReleaseFunc()
 			return nil, attestationErr
 		}
-		attemptContext, runtimeState, runtimeErr := bindOfficialCodex0145RuntimeStateFromCapturedIngress(
+		egressRuntime, runtimeErr := resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream)
+		if runtimeErr != nil {
+			selection.ReleaseFunc()
+			return nil, runtimeErr
+		}
+		attemptContext, runtimeState, runtimeErr := bindOfficialCodexRuntimeStateFromCapturedIngress(
 			ctx,
 			account,
-			codex0145EndpointID(officialCodexEndpointRealtimeCalls),
+			string(egressRuntime.CodexReleaseMode),
+			codexEndpointID(officialCodexEndpointRealtimeCalls),
 		)
 		if runtimeErr != nil {
 			selection.ReleaseFunc()
@@ -400,14 +318,20 @@ func (s *OpenAIGatewayService) createUpstreamLiveCall(
 	attestation string,
 	realtimeSessionID string,
 ) (*LiveCallCreated, error) {
-	endpointID := codex0145EndpointID(officialCodexEndpointRealtimeCalls)
-	endpoint, err := resolveActiveCodexEndpoint(endpointID)
+	runtimeState, err := resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream)
 	if err != nil {
 		return nil, err
 	}
-	target, err := buildActiveCodexEndpointURL(
+	releaseMode := string(runtimeState.CodexReleaseMode)
+	endpointID := codexEndpointID(officialCodexEndpointRealtimeCalls)
+	endpoint, err := resolveCodexEndpointForMode(releaseMode, endpointID)
+	if err != nil {
+		return nil, err
+	}
+	target, err := buildCodexEndpointURLForMode(
+		releaseMode,
 		endpointID,
-		officialCodex0145EndpointURLInput{},
+		officialCodexEndpointURLInput{},
 	)
 	if err != nil {
 		return nil, err
@@ -427,23 +351,14 @@ func (s *OpenAIGatewayService) createUpstreamLiveCall(
 	if err != nil {
 		return nil, err
 	}
-	reqCtx := WithHTTPUpstreamProfile(ctx, HTTPUpstreamProfileOpenAI)
+	boundCtx, bindErr := bindOfficialEgressSink(ctx, officialEgressSinkRealtimeCalls)
+	if bindErr != nil {
+		return nil, fmt.Errorf("绑定 Live 首跳 SinkID：%w", bindErr)
+	}
+	reqCtx := WithHTTPUpstreamProfile(boundCtx, HTTPUpstreamProfileOpenAI)
 	upstreamReq, err := http.NewRequestWithContext(reqCtx, endpoint.Method, target.String(), bytes.NewReader(body))
 	if err != nil {
 		return nil, err
-	}
-	upstreamReq, egressContext, err := attachOfficialCodex0145EndpointRequest(
-		upstreamReq,
-		account,
-		endpointID,
-		realtimeSessionID,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("绑定 Live 首跳画像：%w", err)
-	}
-	body, err = officialCodex0145FinalizeEndpointJSONBody(egressContext, body, nil)
-	if err != nil {
-		return nil, fmt.Errorf("定型 Live 首跳 body：%w", err)
 	}
 	resetOfficialEgressRequestBody(upstreamReq, body)
 	authHeaders, err := s.buildOpenAIAuthenticationHeaders(ctx, account, token)
@@ -460,35 +375,28 @@ func (s *OpenAIGatewayService) createUpstreamLiveCall(
 		logLiveCreateStageFailure(ctx, account.ID, "account_headers", err)
 		return nil, err
 	}
-	upstreamReq.Header.Set("x-session-id", realtimeSessionID)
 	if strings.TrimSpace(attestation) != "" {
 		upstreamReq.Header.Set(liveAttestationHeader, attestation)
 	}
-	userAgent, originator, err := officialCodex0145ProcessIdentity(egressContext)
-	if err != nil {
-		return nil, fmt.Errorf("解析 Live 首跳进程身份：%w", err)
-	}
-	upstreamReq.Header.Set("user-agent", userAgent)
-	upstreamReq.Header.Set("originator", originator)
-	if _, err := officialCodex0145FinalizeEndpointHeaders(egressContext, upstreamReq.Header, nil); err != nil {
-		return nil, fmt.Errorf("定型 Live 首跳 header：%w", err)
-	}
-	tlsProfile, err := officialCodex0145ResolveEndpointTLSProfileForURL(
-		egressContext.ProfileVersion(),
-		endpointID,
-		upstreamReq.URL,
+	invocation, err := newOfficialCodexHTTPInvocation(
+		reqCtx,
+		officialCodexHTTPInvocationInput{
+			Runtime: runtimeState, Account: account,
+			SinkID: officialegress.SinkCodexRealtimeCalls, InvocationID: realtimeSessionID,
+			ProxyURL: resolveAccountProxyURL(account), PolicyID: "changeset3.realtime.calls",
+			PolicySource: "service.createUpstreamLiveCall", AttemptBudget: 1,
+			IdentityFacts: officialCodexInvocationIdentityInput{
+				SessionID: realtimeSessionID,
+			},
+		},
 	)
 	if err != nil {
-		return nil, fmt.Errorf("解析 Live 首跳 TLS 画像：%w", err)
+		logLiveCreateStageFailure(ctx, account.ID, "invocation", err)
+		return nil, err
 	}
-
-	resp, err := s.httpUpstream.DoWithTLS(
-		upstreamReq,
-		resolveAccountProxyURL(account),
-		account.ID,
-		account.Concurrency,
-		tlsProfile,
-	)
+	resp, err := invocation.Execute(reqCtx, officialCodexHTTPAttemptInput{
+		EndpointID: string(endpointID), Request: upstreamReq,
+	})
 	if err != nil {
 		logLiveCreateStageFailure(ctx, account.ID, "upstream_transport", err)
 		return nil, err
@@ -586,7 +494,7 @@ func liveCallIDFromLocation(location string) (string, error) {
 func (s *OpenAIGatewayService) liveSidebandHeaders(
 	ctx context.Context,
 	account *Account,
-	egressContext *OfficialEgressContext,
+	_ *OfficialEgressContext,
 	record *LiveCallRecord,
 ) (http.Header, error) {
 	if account == nil || record == nil {
@@ -608,17 +516,8 @@ func (s *OpenAIGatewayService) liveSidebandHeaders(
 	if err != nil {
 		return nil, err
 	}
-	userAgent, originator, err := officialCodex0145ProcessIdentity(egressContext)
-	if err != nil {
-		return nil, err
-	}
 	headers.Set("x-session-id", liveRealtimeSessionID(record.LeaseID))
 	headers.Set(liveAttestationHeader, attestation)
-	headers.Set("user-agent", userAgent)
-	headers.Set("originator", originator)
-	if _, err := officialCodex0145FinalizeEndpointHeaders(egressContext, headers, nil); err != nil {
-		return nil, fmt.Errorf("定型 Live sideband header：%w", err)
-	}
 	return headers, nil
 }
 
@@ -630,30 +529,32 @@ func (s *OpenAIGatewayService) dialLiveSideband(ctx context.Context, record *Liv
 	if account == nil || !account.SupportsOpenAIEndpointCapability(OpenAIEndpointCapabilityLive) {
 		return nil, ErrLiveUnavailable
 	}
-	ctx, _, err = restoreLiveCodexRuntimeState(ctx, account, record)
+	runtimeState, err := resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream)
+	if err != nil {
+		return nil, err
+	}
+	ctx, _, err = restoreLiveCodexRuntimeState(
+		ctx, account, record, string(runtimeState.CodexReleaseMode),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("恢复 Live 进程画像：%w", err)
 	}
-	endpointID := codex0145EndpointID(officialCodexEndpointRealtimeSideband)
-	target, err := buildActiveCodexEndpointURL(
+	ctx, err = bindOfficialEgressSink(ctx, officialEgressSinkRealtimeSideband)
+	if err != nil {
+		return nil, fmt.Errorf("绑定 Live sideband SinkID：%w", err)
+	}
+	endpointID := codexEndpointID(officialCodexEndpointRealtimeSideband)
+	target, err := buildCodexEndpointURLForMode(
+		string(runtimeState.CodexReleaseMode),
 		endpointID,
-		officialCodex0145EndpointURLInput{
+		officialCodexEndpointURLInput{
 			QueryValues: map[string]string{"call_id": record.CallID},
 		},
 	)
 	if err != nil {
 		return nil, err
 	}
-	wsContext, egressContext, err := attachOfficialCodex0145EndpointWebSocketContext(
-		ctx,
-		account,
-		endpointID,
-		target.String(),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("绑定 Live sideband 画像：%w", err)
-	}
-	headers, err := s.liveSidebandHeaders(wsContext, account, egressContext, record)
+	headers, err := s.liveSidebandHeaders(ctx, account, nil, record)
 	if err != nil {
 		return nil, err
 	}
@@ -661,32 +562,40 @@ func (s *OpenAIGatewayService) dialLiveSideband(ctx context.Context, record *Liv
 	if dialer == nil {
 		return nil, errors.New("live sideband dialer is unavailable")
 	}
-	var conn openAIWSClientConn
-	var status int
-	if specialized, ok := dialer.(liveSidebandClientDialer); ok {
-		conn, status, _, err = specialized.DialLiveSideband(
-			wsContext,
-			target.String(),
-			headers,
-			resolveAccountProxyURL(account),
-		)
-	} else {
-		// 兼容测试注入的最小 dialer；生产默认实现始终走上面的无压缩分支。
-		conn, status, _, err = dialer.Dial(wsContext, target.String(), headers, resolveAccountProxyURL(account))
+	identity, _ := officialegress.AttemptIdentityFromContext(ctx)
+	invocation, err := newOfficialCodexWebSocketInvocation(
+		ctx,
+		officialCodexWebSocketInvocationInput{
+			Runtime: runtimeState, Account: account,
+			SinkID:       officialegress.SinkCodexRealtimeSideband,
+			InvocationID: identity.InvocationID, ProxyURL: resolveAccountProxyURL(account),
+			PolicyID:     "changeset3.realtime.sideband",
+			PolicySource: "service.dialLiveSideband", AttemptBudget: 1,
+			IdentityFacts: officialCodexInvocationIdentityInput{
+				SessionID: liveRealtimeSessionID(record.LeaseID),
+			},
+		},
+	)
+	if err != nil {
+		return nil, err
 	}
+	conn, status, _, err := invocation.DialDirect(
+		ctx,
+		dialer,
+		openAIWSAcquireRequest{
+			Account: account, WSURL: target.String(), Headers: headers,
+			ProxyURL: resolveAccountProxyURL(account),
+		},
+		string(endpointID),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("dial live sideband (status %d): %w", status, err)
 	}
-	raw, ok := conn.(liveFrameConn)
-	if !ok {
-		_ = conn.Close()
-		return nil, errors.New("live sideband transport does not support raw frames")
-	}
-	return raw, nil
+	return conn, nil
 }
 
-func liveCodexRuntimeStateFromOfficial(state officialCodex0145RuntimeState) LiveCodexRuntimeState {
-	cloned := cloneOfficialCodex0145RuntimeState(state)
+func liveCodexRuntimeStateFromOfficial(state officialCodexRuntimeState) LiveCodexRuntimeState {
+	cloned := cloneOfficialCodexRuntimeState(state)
 	return LiveCodexRuntimeState{
 		SurfaceID:              cloned.SurfaceID,
 		ProcessPhase:           cloned.ProcessPhase,
@@ -697,8 +606,8 @@ func liveCodexRuntimeStateFromOfficial(state officialCodex0145RuntimeState) Live
 	}
 }
 
-func officialCodexRuntimeStateFromLive(state LiveCodexRuntimeState) officialCodex0145RuntimeState {
-	return cloneOfficialCodex0145RuntimeState(officialCodex0145RuntimeState{
+func officialCodexRuntimeStateFromLive(state LiveCodexRuntimeState) officialCodexRuntimeState {
+	return cloneOfficialCodexRuntimeState(officialCodexRuntimeState{
 		SurfaceID:              state.SurfaceID,
 		ProcessPhase:           state.ProcessPhase,
 		Originator:             state.Originator,
@@ -712,21 +621,23 @@ func restoreLiveCodexRuntimeState(
 	ctx context.Context,
 	account *Account,
 	record *LiveCallRecord,
-) (context.Context, officialCodex0145RuntimeState, error) {
-	var runtimeState officialCodex0145RuntimeState
+	mode string,
+) (context.Context, officialCodexRuntimeState, error) {
+	var runtimeState officialCodexRuntimeState
 	var err error
 	if record != nil && strings.TrimSpace(record.CodexRuntimeState.SurfaceID) != "" {
 		runtimeState = officialCodexRuntimeStateFromLive(record.CodexRuntimeState)
+		runtimeState.ProfileMode = normalizeOfficialClientProfileMode(mode)
 	} else {
 		// 兼容更新前已写入 Redis 的短生命周期记录；新记录必须走完整快照。
-		runtimeState, err = resolveOfficialCodex0145RuntimeState(nil, account)
+		runtimeState, err = resolveOfficialCodexRuntimeState(nil, account, mode)
 		if err != nil {
-			return nil, officialCodex0145RuntimeState{}, err
+			return nil, officialCodexRuntimeState{}, err
 		}
 	}
-	bound, err := withOfficialCodex0145RuntimeState(ctx, runtimeState)
+	bound, err := withOfficialCodexRuntimeState(ctx, runtimeState)
 	if err != nil {
-		return nil, officialCodex0145RuntimeState{}, err
+		return nil, officialCodexRuntimeState{}, err
 	}
 	return bound, runtimeState, nil
 }

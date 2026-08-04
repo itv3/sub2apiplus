@@ -136,6 +136,20 @@ deploy/docker-compose.override.yml
 .gocache/
 vite.config.js
 docs/*
+# 官方出站身份伪装的主方案与已实施变更集证据必须一起进入评审；只放行精确文件和目录。
+!docs/1.md
+# 变更集 0/1A/1B/1C/2 的产出必须进版本控制：基线清单是 make check-egress-spec 的
+# 输入，缺失会让干净 checkout 上的 CI 直接失败；其余文档是 SinkCatalog 与 persona
+# 分类的权威来源，需要随代码一起演进和评审。
+!docs/changeset0/
+!docs/changeset1a/
+!docs/changeset1b/
+!docs/changeset1c/
+!docs/changeset2/
+!docs/changeset3/
+!docs/changeset4/
+!docs/changeset5/
+!docs/changeset6/
 !docs/P0-P2_OFFICIAL_EGRESS_FIX_20260726.md
 !docs/P0-P2_OFFICIAL_EGRESS_REVIEW_FIX_20260727.md
 !docs/P0-P2_OFFICIAL_EGRESS_FINAL_REVIEW_FIX_20260727.md
@@ -143,6 +157,7 @@ docs/*
 !docs/OFFICIAL_EGRESS_PROFILE_FIDELITY_FIX_20260727.md
 !docs/OFFICIAL_EGRESS_WIRE_PARITY_FIX_20260727.md
 !docs/CODEX_CLI_0145_EGRESS_SPEC.md
+!docs/Claude_code_21220_EGRESS_SPEC.md
 !docs/EVIDENCE_INDEX.md
 !docs/PAYMENT.md
 !docs/PAYMENT_CN.md
@@ -180,3 +195,10 @@ tools/official_client_capture/**/*.flow
 # 不要在仓库顶层另建 captures/：那条规则已随证据目录迁移废弃。
 /local-analysis/
 output/
+
+# egressscan 构建产物（go build ./cmd/egressscan 的默认输出）
+/backend/egressscan
+
+# 本地测试缓存与误用 -h 作为位置参数产生的画像导出文件，不属于源码或验收证据。
+/.vite/
+/backend/-h

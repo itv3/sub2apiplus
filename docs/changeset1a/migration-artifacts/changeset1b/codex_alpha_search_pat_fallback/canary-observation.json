@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "sink_id": "codex.alpha_search.pat_fallback",
+  "result": "accepted",
+  "environment": "local-ci",
+  "observed_at": "2026-08-02T15:37:05Z",
+  "exercise_kind": "deterministic_active_exercise",
+  "evidence": [
+    "DMIT 当前没有 active PAT 账号，按 1C 低频路径规则使用主动演练",
+    "TestForwardAlphaSearchPATUsesResponsesWebSearchFallback 通过",
+    "TestChangeset1BReceiptArtifactsReplayProductionExecutor 在 100% canary Guard 下通过"
+  ],
+  "guard_canary_percent": 100,
+  "guard_rejections": 0,
+  "reviewed_by": "codex-audit-changeset-1c-remediation",
+  "review_ref": "changeset-1c-remediation-audit/2026-08-03"
+}

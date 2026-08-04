@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/gatewayendpoint"
 )
@@ -79,6 +80,7 @@ const (
 	OfficialEgressFieldThreadID           OfficialEgressFieldName = "thread_id"
 	OfficialEgressFieldWindowID           OfficialEgressFieldName = "window_id"
 	OfficialEgressFieldTurnMetadata       OfficialEgressFieldName = "turn_metadata"
+	OfficialEgressFieldTurnState          OfficialEgressFieldName = "turn_state"
 	OfficialEgressFieldPromptCacheKey     OfficialEgressFieldName = "prompt_cache_key"
 	OfficialEgressFieldPreviousResponseID OfficialEgressFieldName = "previous_response_id"
 	OfficialEgressFieldCallID             OfficialEgressFieldName = "call_id"
@@ -104,13 +106,14 @@ func (f OfficialEgressField) String() string {
 	return "[redacted]"
 }
 
-// officialCodex0145RuntimeState 保存不能从最终 header 是否存在反推的进程状态。
+// officialCodexRuntimeState 保存不能从最终 header 是否存在反推的进程状态。
 //
 // SurfaceID 与 UserAgentSuffixEnabled 对应 SPEC-HDR-005；RequestCompressionEnabled
 // 保存画像默认值或官方入口在解压前冻结的 feature 状态；ConditionalHeaders 只允许
 // 装入已经由官方入口或受管理配置证明来源的条件头。普通第三方请求即使伪造同名
 // header，也不能把画像条件激活。
-type officialCodex0145RuntimeState struct {
+type officialCodexRuntimeState struct {
+	ProfileMode               string
 	SurfaceID                 string
 	ProcessPhase              string
 	Originator                string
@@ -125,8 +128,8 @@ const (
 	officialCodexProcessPhaseInitialModels = "initial_models"
 )
 
-func defaultOfficialCodex0145RuntimeState() officialCodex0145RuntimeState {
-	return officialCodex0145RuntimeState{
+func defaultOfficialCodexRuntimeState() officialCodexRuntimeState {
+	return officialCodexRuntimeState{
 		SurfaceID:              officialCodexSurfaceExec,
 		ProcessPhase:           officialCodexProcessPhaseInitialized,
 		Originator:             "codex_exec",
@@ -138,8 +141,9 @@ func defaultOfficialCodex0145RuntimeState() officialCodex0145RuntimeState {
 	}
 }
 
-func cloneOfficialCodex0145RuntimeState(state officialCodex0145RuntimeState) officialCodex0145RuntimeState {
-	cloned := officialCodex0145RuntimeState{
+func cloneOfficialCodexRuntimeState(state officialCodexRuntimeState) officialCodexRuntimeState {
+	cloned := officialCodexRuntimeState{
+		ProfileMode:               strings.TrimSpace(state.ProfileMode),
 		SurfaceID:                 strings.TrimSpace(state.SurfaceID),
 		ProcessPhase:              strings.TrimSpace(state.ProcessPhase),
 		Originator:                strings.TrimSpace(state.Originator),
@@ -182,7 +186,7 @@ type OfficialEgressContextInput struct {
 	InvocationID string
 	// CodexRuntimeState 是版本画像解析前已经完成来源校验的进程快照。
 	// 零值只用于非 OpenAI 画像；OpenAI 零值会采用 exec 已初始化状态。
-	CodexRuntimeState officialCodex0145RuntimeState
+	CodexRuntimeState officialCodexRuntimeState
 }
 
 // OfficialEgressContext 保存最终出站画像所需的公共状态。
@@ -219,16 +223,19 @@ type OfficialEgressContext struct {
 	supportsReasoningSummary  bool
 	reasoningDefaultsKnown    bool
 	invocationID              string
-	codexRuntimeState         officialCodex0145RuntimeState
+	codexRuntimeState         officialCodexRuntimeState
 	cookieJar                 http.CookieJar
 	frozen                    bool
 }
 
 // NewOfficialEgressContext 创建一份请求级公共上下文，不执行路径画像修正。
 func NewOfficialEgressContext(input OfficialEgressContextInput) *OfficialEgressContext {
-	runtimeState := cloneOfficialCodex0145RuntimeState(input.CodexRuntimeState)
+	runtimeState := cloneOfficialCodexRuntimeState(input.CodexRuntimeState)
 	if strings.EqualFold(strings.TrimSpace(input.TargetPlatform), PlatformOpenAI) && runtimeState.SurfaceID == "" {
-		runtimeState = defaultOfficialCodex0145RuntimeState()
+		runtimeState = defaultOfficialCodexRuntimeState()
+	}
+	if strings.EqualFold(strings.TrimSpace(input.TargetPlatform), PlatformOpenAI) {
+		runtimeState.ProfileMode = normalizeOfficialClientProfileMode(input.ProfileMode)
 	}
 	return &OfficialEgressContext{
 		accountID:                input.AccountID,
@@ -302,6 +309,14 @@ func (c *OfficialEgressContext) ProfileVersion() string {
 		return ""
 	}
 	return c.profileVersion
+}
+
+// ProfileMode 返回调用或 WebSocket 会话开始时冻结的发布模式。
+func (c *OfficialEgressContext) ProfileMode() string {
+	if c == nil {
+		return ""
+	}
+	return c.profileMode
 }
 
 // ClientProfileID 返回经过 Registry 解析的不可变画像标识。
@@ -435,7 +450,7 @@ func (c *OfficialEgressContext) Freeze() (*OfficialEgressContext, error) {
 	for name, field := range c.fields {
 		clone.fields[name] = field
 	}
-	clone.codexRuntimeState = cloneOfficialCodex0145RuntimeState(c.codexRuntimeState)
+	clone.codexRuntimeState = cloneOfficialCodexRuntimeState(c.codexRuntimeState)
 	clone.frozen = true
 	return &clone, nil
 }
@@ -502,28 +517,46 @@ func resolveOfficialEgressProfile(
 	if err := validateOfficialEgressScope(egressContext, account, endpoint, transport, version); err != nil {
 		return OfficialEgressProfile{}, err
 	}
-	purpose := resolveOfficialEgressClientPurpose(egressContext.targetPlatform, transport)
-	resolvedClient, err := resolveOfficialClientProfile(purpose, egressContext.profileMode)
-	if err != nil {
-		return OfficialEgressProfile{}, err
-	}
-	if resolvedClient.Build.Version != version {
-		return OfficialEgressProfile{}, errors.New("official egress build version conflicts with resolved client profile")
-	}
 	profile := OfficialEgressProfile{
-		Enabled:            true,
-		ID:                 resolvedClient.Wire.ID,
-		Digest:             resolvedClient.Wire.Digest,
-		Source:             resolvedClient.Wire.Source,
-		Version:            version,
-		TargetPlatform:     egressContext.targetPlatform,
-		InboundEndpoint:    egressContext.inboundEndpoint,
-		Transport:          transport,
-		UpstreamHost:       egressContext.upstreamHost,
-		TransportProfileID: resolvedClient.Wire.TransportProfileID,
+		Enabled: true, Version: version, TargetPlatform: egressContext.targetPlatform,
+		InboundEndpoint: egressContext.inboundEndpoint, Transport: transport,
+		UpstreamHost: egressContext.upstreamHost,
 	}
 	if egressContext.targetPlatform == PlatformOpenAI {
-		versionProfile, profileErr := resolveCodex0145VersionProfile(version)
+		release, releaseErr := officialegress.DefaultReleaseCatalog().Resolve(
+			officialegress.ReleaseMode(egressContext.profileMode),
+		)
+		if releaseErr != nil {
+			return OfficialEgressProfile{}, releaseErr
+		}
+		releasePurpose := officialegress.RegistryPurposeOpenAIOAuthHTTP
+		if transport == OfficialEgressTransportWebSocket {
+			releasePurpose = officialegress.RegistryPurposeOpenAIOAuthWS
+		}
+		node, ok := release.Node(releasePurpose)
+		if !ok || node.Build.Version != version {
+			return OfficialEgressProfile{}, errors.New("正式 Codex release 与出站上下文不一致")
+		}
+		profile.ID = node.Wire.ID
+		profile.Digest = node.Wire.Digest
+		profile.Source = node.Wire.Source
+		profile.TransportProfileID = node.Wire.TransportProfileID
+	} else {
+		purpose := resolveOfficialEgressClientPurpose(egressContext.targetPlatform, transport)
+		resolvedClient, resolveErr := resolveOfficialClientProfile(purpose, egressContext.profileMode)
+		if resolveErr != nil {
+			return OfficialEgressProfile{}, resolveErr
+		}
+		if resolvedClient.Build.Version != version {
+			return OfficialEgressProfile{}, errors.New("official egress build version conflicts with resolved client profile")
+		}
+		profile.ID = resolvedClient.Wire.ID
+		profile.Digest = resolvedClient.Wire.Digest
+		profile.Source = resolvedClient.Wire.Source
+		profile.TransportProfileID = resolvedClient.Wire.TransportProfileID
+	}
+	if egressContext.targetPlatform == PlatformOpenAI {
+		versionProfile, profileErr := resolveCodexVersionProfile(version)
 		if profileErr != nil {
 			return OfficialEgressProfile{}, profileErr
 		}
@@ -561,9 +594,9 @@ func resolveOfficialCodexEndpointIDForContext(egressContext *OfficialEgressConte
 		return "", errors.New("Codex 端点画像需要 OpenAI 官方出站上下文")
 	}
 	if endpointID := strings.TrimSpace(egressContext.codexRequestedEndpointID); endpointID != "" {
-		endpoint, err := resolveCodex0145Endpoint(
+		endpoint, err := resolveCodexEndpoint(
 			egressContext.profileVersion,
-			codex0145EndpointID(endpointID),
+			codexEndpointID(endpointID),
 		)
 		if err != nil {
 			return "", err
@@ -575,7 +608,7 @@ func resolveOfficialCodexEndpointIDForContext(egressContext *OfficialEgressConte
 		if egressContext.transport != expectedTransport {
 			return "", fmt.Errorf("Codex 端点 %s 的传输与上下文冲突", endpoint.ID)
 		}
-		if !officialCodex0145HostMatches(endpoint.Host, egressContext.upstreamHost) {
+		if !officialCodexHostMatches(endpoint.Host, egressContext.upstreamHost) {
 			return "", fmt.Errorf("Codex 端点 %s 的 host 与上下文冲突", endpoint.ID)
 		}
 		return endpoint.ID, nil
@@ -645,14 +678,14 @@ func validateOfficialEgressScope(
 			return errors.New("official egress only supports OpenAI OAuth accounts")
 		}
 		if strings.TrimSpace(egressContext.codexRequestedEndpointID) != "" {
-			endpointProfile, endpointErr := resolveCodex0145Endpoint(
+			endpointProfile, endpointErr := resolveCodexEndpoint(
 				egressContext.profileVersion,
-				codex0145EndpointID(egressContext.codexRequestedEndpointID),
+				codexEndpointID(egressContext.codexRequestedEndpointID),
 			)
 			if endpointErr != nil {
 				return endpointErr
 			}
-			if !officialCodex0145HostMatches(endpointProfile.Host, egressContext.upstreamHost) {
+			if !officialCodexHostMatches(endpointProfile.Host, egressContext.upstreamHost) {
 				return fmt.Errorf("official egress rejected Codex endpoint host: %s", egressContext.upstreamHost)
 			}
 			expectedTransport := OfficialEgressTransportHTTP
@@ -714,7 +747,7 @@ func ValidateOfficialEgressFinalState(egressContext *OfficialEgressContext, prof
 		return errors.New("Codex 完整版本画像未绑定")
 	}
 	if profile.TargetPlatform == PlatformOpenAI {
-		if err := validateOfficialCodex0145RuntimeState(egressContext.codexRuntimeState); err != nil {
+		if err := validateOfficialCodexRuntimeState(egressContext.codexRuntimeState); err != nil {
 			return err
 		}
 		if egressContext.codexRuntimeState.ProcessPhase == officialCodexProcessPhaseInitialModels &&
@@ -817,7 +850,13 @@ func resolveOfficialEgressAccountProfile(account *Account, modes ...string) (boo
 	case PlatformAnthropic:
 		purpose = officialClientPurposeAnthropicOAuthMessagesHTTP
 	case PlatformOpenAI:
-		purpose = officialClientPurposeOpenAIOAuthResponsesHTTP
+		release, releaseErr := officialegress.DefaultReleaseCatalog().Resolve(
+			officialegress.ReleaseMode(mode),
+		)
+		if releaseErr != nil {
+			return false, "", releaseErr
+		}
+		return true, release.Version(), nil
 	}
 	profile, err := resolveOfficialClientProfile(purpose, mode)
 	if err != nil {
@@ -888,9 +927,9 @@ func buildOfficialEgressConnectionPoolID(
 	invocation := strings.TrimSpace(egressContext.invocationID)
 	endpointPoolKey := profile.CodexEndpointProfileID
 	if egressContext.targetPlatform == PlatformOpenAI && profile.CodexEndpointProfileID != "" {
-		endpoint, err := resolveCodex0145Endpoint(
+		endpoint, err := resolveCodexEndpoint(
 			egressContext.profileVersion,
-			codex0145EndpointID(profile.CodexEndpointProfileID),
+			codexEndpointID(profile.CodexEndpointProfileID),
 		)
 		if err == nil && endpoint.ClientLifecycle == officialCodexClientBackendLongLived {
 			// WHAM 的三个端点由同一个 backend-client 常驻 Client 发出。连接池键
@@ -1056,6 +1095,7 @@ func isKnownOfficialEgressFieldName(name OfficialEgressFieldName) bool {
 		OfficialEgressFieldThreadID,
 		OfficialEgressFieldWindowID,
 		OfficialEgressFieldTurnMetadata,
+		OfficialEgressFieldTurnState,
 		OfficialEgressFieldPromptCacheKey,
 		OfficialEgressFieldPreviousResponseID,
 		OfficialEgressFieldCallID:

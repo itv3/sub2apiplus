@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/stretchr/testify/require"
 )
 
@@ -396,6 +398,142 @@ func TestOpenAIWSConnPool_AcquireReusesOnlyMatchingBetaFeatures(t *testing.T) {
 	plainLease.Release()
 
 	require.Equal(t, 2, dialer.DialCount())
+}
+
+func TestOpenAIWSConnPool_DoesNotReuseAcrossSinkEnforcementIdentity(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 2
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 2
+	pool := newOpenAIWSConnPool(cfg)
+	dialer := &openAIWSCountingDialer{}
+	pool.setClientDialerForTest(dialer)
+	pool.guard = &requireCurrentTokenAdmissionGuard{}
+	account := &Account{ID: 129, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	base := openAIWSAcquireRequest{
+		Account: account,
+		WSURL:   "wss://chatgpt.com/backend-api/codex/responses",
+		Headers: http.Header{"Upgrade": []string{"websocket"}},
+	}
+	first := base
+	first.SinkID = officialegress.SinkCodexResponsesWS
+	firstLease, err := pool.Acquire(
+		newWSExecutorAttemptContextForSink(t, officialegress.SinkCodexResponsesWS),
+		first,
+	)
+	require.NoError(t, err)
+	firstConnID := firstLease.ConnID()
+	firstLease.Release()
+
+	second := base
+	second.SinkID = officialegress.SinkCodexResponsesWSV2Passthrough
+	secondLease, err := pool.Acquire(
+		newWSExecutorAttemptContextForSink(t, officialegress.SinkCodexResponsesWSV2Passthrough),
+		second,
+	)
+	require.NoError(t, err)
+	require.False(t, secondLease.Reused())
+	require.NotEqual(t, firstConnID, secondLease.ConnID())
+	secondLease.Release()
+	require.Equal(t, 2, dialer.DialCount())
+}
+
+func TestOpenAIWSConnPool_SameSinkReuseRequiresCurrentInvocationToken(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 0
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+	pool := newOpenAIWSConnPool(cfg)
+	dialer := &openAIWSCountingDialer{}
+	pool.setClientDialerForTest(dialer)
+	admission := &requireCurrentTokenAdmissionGuard{}
+	pool.guard = admission
+
+	tokenContext := newWSExecutorAttemptContext(t)
+	request := openAIWSAcquireRequest{
+		Account: &Account{ID: 130, Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+		WSURL:   "wss://chatgpt.com/backend-api/codex/responses",
+		Headers: http.Header{"Upgrade": []string{"websocket"}},
+		SinkID:  officialegress.SinkCodexResponsesWS,
+	}
+	first, err := pool.Acquire(tokenContext, request)
+	require.NoError(t, err)
+	firstConnID := first.ConnID()
+	first.Release()
+
+	_, err = pool.Acquire(context.Background(), request)
+	require.Error(t, err)
+	require.ErrorIs(t, err, officialegress.ErrGuardRejected)
+	require.Equal(t, int64(2), admission.calls.Load(), "每次 Acquire 都必须执行 admission")
+	require.Equal(t, 1, dialer.DialCount(), "缺 Token 的同 Sink 请求不得复用或新拨号")
+
+	second, err := pool.Acquire(tokenContext, request)
+	require.NoError(t, err)
+	require.True(t, second.Reused())
+	require.Equal(t, firstConnID, second.ConnID())
+	second.Release()
+}
+
+func TestOpenAIWSConnPool_CanarySinkDisablesTokenlessBackgroundPrewarm(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 2
+	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 2
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 2
+	pool := newOpenAIWSConnPool(cfg)
+	t.Cleanup(pool.Close)
+	dialer := &openAIWSCountingDialer{}
+	pool.setClientDialerForTest(dialer)
+	pool.guard = &requireCurrentTokenAdmissionGuard{}
+	pool.tokenlessPrewarmAllowed = func(sinkID officialegress.SinkID) (bool, error) {
+		require.Equal(t, officialegress.SinkCodexResponsesWS, sinkID)
+		return false, nil
+	}
+
+	request := openAIWSAcquireRequest{
+		Account: &Account{ID: 131, Platform: PlatformOpenAI, Type: AccountTypeOAuth},
+		WSURL:   "wss://chatgpt.com/backend-api/codex/responses",
+		Headers: http.Header{"Upgrade": []string{"websocket"}},
+		SinkID:  officialegress.SinkCodexResponsesWS,
+	}
+	tokenContext := newWSExecutorAttemptContext(t)
+	first, err := pool.Acquire(tokenContext, request)
+	require.NoError(t, err)
+	verifiedConnID := first.ConnID()
+	first.Release()
+
+	// 生产默认 min-idle 会尝试补齐连接；canary/enforced 必须在
+	// 调度层就禁止这种没有 invocation Token 的后台拨号。
+	pool.ensureTargetIdleAsync(request.Account.ID)
+	require.Never(t, func() bool {
+		return dialer.DialCount() > 1
+	}, 100*time.Millisecond, 5*time.Millisecond)
+	ap, ok := pool.getAccountPool(request.Account.ID)
+	require.True(t, ok)
+	ap.mu.Lock()
+	require.Len(t, ap.conns, 1)
+	require.Zero(t, ap.creating)
+	require.False(t, ap.prewarmActive)
+	ap.mu.Unlock()
+	require.Equal(t, 1, dialer.DialCount(), "tokenless prewarm 不得拨号或进入池")
+
+	// 绕过调度层直接进入 worker 也必须 fail-close，并释放预留计数。
+	ap.mu.Lock()
+	ap.creating = 1
+	ap.prewarmActive = true
+	ap.mu.Unlock()
+	pool.prewarmConns(request.Account.ID, request, 1)
+	ap.mu.Lock()
+	require.Len(t, ap.conns, 1)
+	require.Zero(t, ap.creating)
+	require.False(t, ap.prewarmActive)
+	ap.mu.Unlock()
+	require.Equal(t, 1, dialer.DialCount())
+
+	second, err := pool.Acquire(tokenContext, request)
+	require.NoError(t, err)
+	require.True(t, second.Reused())
+	require.Equal(t, verifiedConnID, second.ConnID(), "canary invocation 只能复用终端验证连接")
+	second.Release()
 }
 
 func TestOpenAIWSConnPool_AcquireReplacesIdleConnWithDifferentBetaFeatures(t *testing.T) {
@@ -1833,6 +1971,128 @@ func (c *openAIWSContextProbeConn) Close() error {
 }
 
 type openAIWSNilConnDialer struct{}
+
+type requireCurrentTokenAdmissionGuard struct {
+	calls atomic.Int64
+}
+
+func (g *requireCurrentTokenAdmissionGuard) EvaluateConnectionAdmission(
+	request *http.Request,
+	_ officialegress.BackendKind,
+	_ officialegress.WireProtocol,
+) officialegress.GuardDecision {
+	g.calls.Add(1)
+	identity, ok := officialegress.AttemptIdentityFromContext(request.Context())
+	if !ok || !identity.HasFinalizationToken || identity.InvocationID == "" {
+		return officialegress.GuardDecision{
+			Allow: false, Scope: officialegress.EgressScopeManaged,
+			RejectionReason: officialegress.ReasonMissingFinalizationToken,
+			Reasons:         []officialegress.GuardReason{officialegress.ReasonMissingFinalizationToken},
+		}
+	}
+	return officialegress.GuardDecision{Allow: true, Scope: officialegress.EgressScopeManaged}
+}
+
+func newWSExecutorAttemptContext(t *testing.T) context.Context {
+	return newWSExecutorAttemptContextForSink(t, officialegress.SinkCodexResponsesWS)
+}
+
+func newWSExecutorAttemptContextForSink(
+	t *testing.T,
+	sinkID officialegress.SinkID,
+) context.Context {
+	t.Helper()
+	execution := officialegress.ExecutionPolicy{
+		ID: "ws-pool-test-execution", Source: "test", MaxAttempts: 1,
+		Replayable: true, ConcurrencyLimit: 1,
+	}
+	deployment := officialegress.DeploymentSupportPolicy{
+		ID: "ws-pool-test-deployment", Source: "test", Platform: "test", ProxyMode: "direct",
+		SupportedBackends: []officialegress.BackendKind{officialegress.BackendWebSocket},
+	}
+	behavior := officialegress.BehaviorPolicy{
+		ID: "ws-pool-test-behavior", Source: "test",
+		Kind: officialegress.BehaviorUserRequest, AttemptBudget: 1,
+	}
+	resolver, err := officialegress.NewBundleResolver(
+		officialegress.DefaultReleaseCatalog(), officialegress.DefaultSinkCatalog(),
+	)
+	require.NoError(t, err)
+	bundle, err := resolver.Resolve(officialegress.BundleResolveRequest{
+		SinkID: sinkID, Mode: officialegress.ReleaseModeActive,
+		Execution: execution, Deployment: deployment, Behavior: behavior,
+	})
+	require.NoError(t, err)
+	binding, ok := officialegress.DefaultSinkCatalog().Resolve(sinkID)
+	require.True(t, ok)
+	guard, err := officialegress.NewGuard(officialegress.GuardConfig{
+		UnknownRoutePolicy:     officialegress.UnknownRoutePolicy(officialegress.PolicyObserve),
+		UnregisteredSinkPolicy: officialegress.UnregisteredSinkPolicy(officialegress.PolicyObserve),
+	}, officialegress.DefaultSinkCatalog(), officialegress.DefaultOfficialRouteCatalog(), nil)
+	require.NoError(t, err)
+	adapter, err := officialegress.NewWebSocketTransportAdapter(wsExecutorUnusedTransport{})
+	require.NoError(t, err)
+	registry, err := officialegress.NewAdapterRegistry(
+		[]officialegress.BackendDescriptor{{
+			Backend: officialegress.BackendWebSocket, Protocol: officialegress.WireProtocolWebSocket,
+			AdapterID: officialegress.AdapterWebSocket,
+		}},
+		[]officialegress.TransportAdapter{adapter},
+	)
+	require.NoError(t, err)
+	executor, err := officialegress.NewExecutor(
+		officialCodexExecutorID, officialegress.NewCompiler(), registry, guard,
+	)
+	require.NoError(t, err)
+	target, err := url.Parse("https://chatgpt.com/backend-api/codex/responses")
+	require.NoError(t, err)
+	semanticRequest := &http.Request{
+		Method: http.MethodGet, URL: target,
+		Header: http.Header{"Authorization": []string{"Bearer ws-pool-test-token"}},
+	}
+	semanticRequest = semanticRequest.WithContext(context.Background())
+	semantic, err := prepareOfficialCodexSemanticAttempt(
+		semanticRequest, nil, officialCodexEndpointResponsesWS,
+		"ws-pool-current-invocation",
+		officialCodexIdentityAccountProjection{ID: 1, ChatGPTAccountID: "ws-pool-account"},
+	)
+	require.NoError(t, err)
+	prepared, err := executor.Prepare(context.Background(), officialegress.ExecutorRequest{
+		Bundle: bundle,
+		Plan: officialegress.CodexEgressPlan{
+			SinkID:  sinkID,
+			Purpose: binding.Purpose(), EndpointID: "responses_ws",
+			Mode: officialegress.ReleaseModeActive, Method: http.MethodGet, URL: target,
+			Protocol:       officialegress.WireProtocolWebSocket,
+			Headers:        semantic.Headers,
+			IdentityMode:   officialegress.IdentityCodexOAuthStrict,
+			IdentityFacts:  semantic.IdentityFacts,
+			Authentication: semantic.Authentication,
+			HeaderPolicy: officialegress.HeaderPolicy{
+				ID: "ws-pool-test-headers", Source: "test",
+			},
+			BodyPolicy: officialegress.BodyPolicy{
+				ID: "ws-pool-test-body", Source: "test",
+			},
+			BehaviorPolicy: behavior,
+			Body:           officialegress.NewReplayableRequestBody(nil),
+			InvocationID:   "ws-pool-current-invocation", DeclaredPersona: officialegress.PersonaCodexCLI,
+		},
+	})
+	require.NoError(t, err)
+	request, err := prepared.TakeHTTPRequest()
+	require.NoError(t, err)
+	return request.Context()
+}
+
+type wsExecutorUnusedTransport struct{}
+
+func (wsExecutorUnusedTransport) AcquireWebSocket(
+	context.Context,
+	officialegress.PreparedRequest,
+) (officialegress.WebSocketConnection, error) {
+	return nil, errors.New("测试只执行 Prepare，不应发送")
+}
 
 func (d *openAIWSNilConnDialer) Dial(
 	ctx context.Context,

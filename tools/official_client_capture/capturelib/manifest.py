@@ -31,6 +31,12 @@ class Manifest:
                 "matches": [],
                 "limitation": None,
             },
+            "m_binding": {
+                "required": False,
+                "complete": False,
+                "requirements": {},
+                "limitations": [],
+            },
             "artifacts": [],
         }
         self.write()
@@ -66,6 +72,8 @@ class Manifest:
         secret_matches: list[str],
         secret_scan_scope: list[str] | None = None,
         secret_scan_limitation: str | None = None,
+        secret_scan_report: dict[str, Any] | None = None,
+        m_binding_required: bool = False,
         error: str | None = None,
     ) -> None:
         """写入最终状态和产物索引。"""
@@ -76,11 +84,50 @@ class Manifest:
             "attempted": True,
             "successful": cleanup_successful,
         }
-        self.data["secret_scan"] = {
+        self.data["secret_scan"] = copy.deepcopy(secret_scan_report) if secret_scan_report else {
             "performed": bool(secret_scan_scope),
             "scope": list(secret_scan_scope or []),
             "matches": list(secret_matches),
             "limitation": secret_scan_limitation,
+        }
+        runtime_identity = self.data.get("runtime", {}).get("runtime_image_verified") is True
+        case_bindings = bool(self.data["case_results"]) and all(
+            isinstance(result.get("scenario_result"), dict)
+            and isinstance(result["scenario_result"].get("invocation"), dict)
+            and bool(result["scenario_result"]["invocation"].get("argv_sha256"))
+            and bool(
+                result["scenario_result"]["invocation"]
+                .get("environment", {})
+                .get("sha256")
+            )
+            for result in self.data["case_results"]
+            if isinstance(result, dict)
+        )
+        secret_scan_complete = (
+            self.data["secret_scan"].get("performed") is True
+            and self.data["secret_scan"].get("passed") is True
+        )
+        source_binding = bool(
+            self.data.get("runtime", {})
+            .get("capture_tools", {})
+            .get("execution_sources", {})
+            .get("sha256")
+        )
+        requirements = {
+            "runtime_identity": runtime_identity,
+            "case_invocation_and_environment": case_bindings,
+            "capture_execution_sources": source_binding,
+            "exact_secret_scan": secret_scan_complete,
+            "cleanup": cleanup_successful,
+            "campaign_status": status == "complete",
+        }
+        self.data["m_binding"] = {
+            "required": m_binding_required,
+            "complete": all(requirements.values()),
+            "requirements": requirements,
+            "limitations": [
+                name for name, satisfied in requirements.items() if not satisfied
+            ],
         }
         if error:
             self.data["error"] = error

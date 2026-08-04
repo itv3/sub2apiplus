@@ -4,17 +4,23 @@ from __future__ import annotations
 
 import json
 import signal
+import subprocess
 import sys
+import tempfile
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 from tools.official_client_capture.capturelib.scenarios import (
+    CLAUDE_AGENT_EXPECTATIONS,
+    CLAUDE_AGENT_MAIN_MARKERS,
     CODEX_HOOK_TRUST_WARNING,
     _contains_runtime_secret,
     _run_owned_cli_command,
     _run_claude_two_turns,
     _validate_claude,
     _validate_codex,
+    run_claude_scenario,
 )
 
 
@@ -32,6 +38,7 @@ def _claude_s4_records(
                 "content": [
                     {
                         "type": "tool_use",
+                        "id": "tool-1",
                         "name": "Bash",
                         "input": {"command": command},
                     }
@@ -72,6 +79,91 @@ def _codex_command_event(
             "status": status,
         },
     }
+
+
+def _claude_agent_records(scenario: str) -> list[dict[str, object]]:
+    """构造与 2.1.220 扁平转发格式一致的同步 Agent 链。"""
+
+    expectations = CLAUDE_AGENT_EXPECTATIONS[scenario]
+    records: list[dict[str, object]] = []
+    owners: list[str | None] = []
+    tool_ids: list[str] = []
+    owner: str | None = None
+    for index, (description, prompt, _marker) in enumerate(expectations, start=1):
+        tool_id = f"agent-tool-{index}"
+        record: dict[str, object] = {
+            "type": "assistant",
+            "parent_tool_use_id": owner,
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "id": tool_id,
+                        "name": "Agent",
+                        "input": {
+                            "description": description,
+                            "prompt": prompt,
+                            "run_in_background": False,
+                            "subagent_type": "general-purpose",
+                        },
+                    }
+                ]
+            },
+        }
+        if owner is not None:
+            parent_description = expectations[index - 2][0]
+            record.update(
+                {
+                    "subagent_type": "general-purpose",
+                    "task_description": parent_description,
+                }
+            )
+        records.append(record)
+        owners.append(owner)
+        tool_ids.append(tool_id)
+        owner = tool_id
+
+    for index in reversed(range(len(expectations))):
+        description, _prompt, marker = expectations[index]
+        tool_id = tool_ids[index]
+        records.append(
+            {
+                "type": "assistant",
+                "parent_tool_use_id": tool_id,
+                "subagent_type": "general-purpose",
+                "task_description": description,
+                "message": {"content": [{"type": "text", "text": marker}]},
+            }
+        )
+        result_record: dict[str, object] = {
+            "type": "user",
+            "parent_tool_use_id": owners[index],
+            "message": {
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": tool_id,
+                        "content": marker,
+                    }
+                ]
+            },
+        }
+        if owners[index] is not None:
+            result_record.update(
+                {
+                    "subagent_type": "general-purpose",
+                    "task_description": expectations[index - 1][0],
+                }
+            )
+        records.append(result_record)
+    records.append(
+        {
+            "type": "result",
+            "subtype": "success",
+            "result": CLAUDE_AGENT_MAIN_MARKERS[scenario],
+        }
+    )
+    return records
 
 
 class ClaudeValidationTest(unittest.TestCase):
@@ -163,7 +255,9 @@ for index in range(2):
         self.assertFalse(marker_only["valid"])
 
         records = _claude_s4_records()
-        records.insert(1, records[0])
+        extra = json.loads(json.dumps(records[0]))
+        extra["message"]["content"][0]["id"] = "tool-2"
+        records.insert(1, extra)
         self.assertFalse(_validate_claude("s4", 0, _jsonl(records))["valid"])
 
     def test_non_tool_scenario_requires_zero_tool_items(self) -> None:
@@ -187,6 +281,92 @@ for index in range(2):
         )
         self.assertFalse(summary["valid"])
         self.assertTrue(summary["runtime_secret_exposed"])
+
+    def test_nested_agent_scenarios_require_exact_parent_chain(self) -> None:
+        for scenario, expected_depth in (("a1", 1), ("a2", 2), ("a3", 3)):
+            with self.subTest(scenario=scenario):
+                summary = _validate_claude(
+                    scenario,
+                    0,
+                    _jsonl(_claude_agent_records(scenario)),
+                )
+                self.assertTrue(summary["valid"], summary)
+                self.assertEqual(summary["tool_use_count"], expected_depth)
+                self.assertTrue(summary["agent_chain_valid"])
+
+    def test_nested_agent_wrong_parent_is_rejected(self) -> None:
+        records = _claude_agent_records("a2")
+        second_use = next(
+            record
+            for record in records
+            if record.get("type") == "assistant"
+            and record.get("parent_tool_use_id") == "agent-tool-1"
+            and record.get("message", {}).get("content", [{}])[0].get("type")
+            == "tool_use"
+        )
+        second_use["parent_tool_use_id"] = None
+        summary = _validate_claude("a2", 0, _jsonl(records))
+        self.assertFalse(summary["valid"])
+
+    def test_nested_agent_accepts_one_standalone_marker_with_explanation(self) -> None:
+        records = _claude_agent_records("a3")
+        leaf = next(
+            record
+            for record in records
+            if record.get("type") == "assistant"
+            and record.get("parent_tool_use_id") == "agent-tool-3"
+            and record.get("message", {}).get("content", [{}])[0].get("type")
+            == "text"
+        )
+        leaf["message"]["content"][0]["text"] = (
+            "19+23=42。\n\nD3_C3_OK\n\n这是无副作用校验。"
+        )
+        summary = _validate_claude("a3", 0, _jsonl(records))
+        self.assertTrue(summary["valid"], summary)
+        self.assertFalse(summary["agent_chain"][2]["child_marker_exact"])
+        self.assertTrue(summary["agent_chain"][2]["child_marker_present"])
+
+        leaf["message"]["content"][0]["text"] += "\nD3_FAIL"
+        self.assertFalse(_validate_claude("a3", 0, _jsonl(records))["valid"])
+
+    def test_invocation_archives_exact_final_argv_and_redacted_environment(self) -> None:
+        stdout = _jsonl(
+            [{"type": "result", "subtype": "success", "result": "S1_OK"}]
+        )
+        with tempfile.TemporaryDirectory() as directory, patch(
+            "tools.official_client_capture.capturelib.scenarios._run_owned_cli_command",
+            return_value=subprocess.CompletedProcess(
+                ["/bin/claude"], 0, stdout=stdout, stderr=""
+            ),
+        ) as runner:
+            summary = run_claude_scenario(
+                claude_bin="/bin/claude",
+                model="claude-test",
+                scenario="s1",
+                environment={
+                    "PATH": "/usr/bin",
+                    "CLAUDE_CODE_OAUTH_TOKEN": "CANARY-SECRET",
+                },
+                output_dir=Path(directory),
+                timeout=5,
+                runtime_secret="CANARY-SECRET",
+                known_secrets={"oauth_access": "CANARY-SECRET"},
+            )
+            executed_argv = runner.call_args.args[0]
+            invocation = json.loads(
+                (Path(directory) / "invocation.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(invocation["argv_redacted"], executed_argv)
+            self.assertEqual(summary["invocation"]["argv_redacted"], executed_argv)
+            self.assertTrue(
+                invocation["environment"]["values"]["CLAUDE_CODE_OAUTH_TOKEN"][
+                    "redacted"
+                ]
+            )
+            self.assertNotIn(
+                "CANARY-SECRET",
+                (Path(directory) / "invocation.json").read_text(encoding="utf-8"),
+            )
 
 
 class CodexValidationTest(unittest.TestCase):

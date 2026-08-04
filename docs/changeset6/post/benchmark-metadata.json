@@ -1,0 +1,72 @@
+{
+  "schema_version": "changeset6-benchmark-post/v1",
+  "changeset": "6",
+  "captured_at": "2026-08-04T12:52:04+08:00",
+  "environment": {
+    "go_launcher_version": "go1.26.4",
+    "selected_go_toolchain": "go1.26.5",
+    "toolchain_selection_reason": "backend/go.mod 声明 go 1.26.5，GOTOOLCHAIN=auto；pre/post 使用同一 HEAD 与同一选择规则",
+    "goos": "darwin",
+    "goarch": "arm64",
+    "cpu": "Apple M4",
+    "gomaxprocs": 10
+  },
+  "git": {
+    "head": "38a9929eac35a39c86de2f27de8f7a805d7dae52",
+    "head_tree": "a8c3dee18a01a6138bfcea60860bb5ad11548c3a"
+  },
+  "fixture": {
+    "generator_path": "backend/internal/service/official_egress_changeset6_benchmark_test.go",
+    "generator_sha256": "bce3b5c5aace49adee353ce45d893a048b3c577d4244242fa34a911f1f847b4f",
+    "fixture_sha256": "7698cddeadace650567e46e7be9b66286212e26e983edb29e78da423ac713e08",
+    "sizes": {
+      "large_unchanged": 1245846,
+      "large_dirty": 1245828,
+      "large_open_ws": 1245249
+    }
+  },
+  "commands": [
+    "go test ./internal/service -run '^TestChangeset6BodyBenchmarkFixtureIsFrozen$' -bench '^BenchmarkBodyCompile(LargeUnchanged|LargeDirty|Retry|OpenWS)$' -benchmem -count=10",
+    "go test ./internal/officialegress -run '^$' -bench '^BenchmarkReleaseCatalogResolve$' -benchmem -count=10",
+    "go test ./internal/service -run '^$' -bench '^BenchmarkOfficialCodex(VersionProfileResolve|EndpointResolve)$' -benchmem -count=10"
+  ],
+  "benchstat": {
+    "module": "golang.org/x/perf/cmd/benchstat",
+    "version": "v0.0.0-20260709024250-82a0b07e230d"
+  },
+  "results": [
+    {
+      "path": "docs/changeset6/post/benchmarks/body-post.txt",
+      "sha256": "4e2612780b1db27dbaf469a5f1d62fb05af6ab628228b9bb0e0893bb019f7727"
+    },
+    {
+      "path": "docs/changeset6/post/benchmarks/body-benchstat.txt",
+      "sha256": "6b7fd5a32507ea61a72468e077609d2215bb92b654a878cef08f1b00ecbf95ff"
+    },
+    {
+      "path": "docs/changeset6/post/benchmarks/catalog-post.txt",
+      "sha256": "3769d0d638fef9c25d0eaed935cd123e4709da4bdd1f0c22c903104d8b95997c"
+    },
+    {
+      "path": "docs/changeset6/post/benchmarks/catalog-benchstat.txt",
+      "sha256": "57804d568cdcba3da4233a1430546f6cd272f0e892f4301a46649bddd397b1d8"
+    },
+    {
+      "path": "docs/changeset6/post/benchmarks/profile-post.txt",
+      "sha256": "75ba69b55b4f6c37a1070eb1903b90cc5c1d13349e40df491c688ac9a3297825"
+    },
+    {
+      "path": "docs/changeset6/post/benchmarks/profile-benchstat.txt",
+      "sha256": "d511980e185ff4115304e513f83d55d76e8dc68f3eb07f5db80d0a8e32d9d12f"
+    }
+  ],
+  "acceptance": {
+    "body_all_cases_bop_reduction_at_least_30_percent": true,
+    "body_all_cases_allocs_reduction_at_least_30_percent": true,
+    "body_no_ns_regression_over_5_percent": true,
+    "release_catalog_resolve_zero_alloc": true,
+    "version_profile_resolve_zero_alloc": true,
+    "endpoint_resolve_only_deep_copy_allocations": true,
+    "result": "passed"
+  }
+}

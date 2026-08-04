@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/util/responseheaders"
 	"github.com/gin-gonic/gin"
@@ -183,6 +184,12 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 	}
 
 	// Get access token
+	if account.IsOpenAIOAuth() {
+		ctx, err = bindOfficialEgressSink(ctx, officialEgressSinkResponsesPassthrough)
+		if err != nil {
+			return nil, fmt.Errorf("bind Responses passthrough official egress sink: %w", err)
+		}
+	}
 	token, _, err := s.GetAccessToken(ctx, account)
 	if err != nil {
 		return nil, err
@@ -195,6 +202,19 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 
 	if c != nil {
 		c.Set("openai_passthrough", true)
+	}
+	var officialForwardPlan *OpenAIForwardInvocationPlan
+	if account.IsOpenAIOAuth() && officialEgressBodyContract != nil {
+		officialForwardPlan, err = s.officialCodexResponseForwardPlan(
+			ctx, c, account,
+			officialegress.SinkCodexResponsesPassthrough,
+			"changeset3.responses.passthrough",
+			"service.forwardOpenAIPassthrough",
+			officialCodexHTTPForwardAttemptBudget,
+		)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	agentTaskRecoveryTried := false
@@ -224,15 +244,25 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		}
 
 		upstreamStart := time.Now()
-		resp, err = doOpenAIHTTPUpstreamWithProfile(
-			s.httpUpstream,
-			upstreamReq,
-			proxyURL,
-			account,
-			s.tlsFPProfileService,
-			// passthrough 不做 API Key mimic：零值画像表示不套 mimic TLS 指纹。
-			openAIAPIKeyCodexMimicProfile{},
-		)
+		if officialForwardPlan != nil {
+			endpointID := officialCodexEndpointResponsesHTTP
+			if isCompact {
+				endpointID = officialCodexEndpointResponsesCompact
+			}
+			resp, err = officialForwardPlan.ExecuteHTTPRequest(
+				upstreamReq.Context(), upstreamReq, endpointID,
+			)
+		} else {
+			resp, err = doOpenAIHTTPUpstreamWithProfile(
+				s.httpUpstream,
+				upstreamReq,
+				proxyURL,
+				account,
+				s.tlsFPProfileService,
+				// passthrough 不做 API Key mimic：零值画像表示不套 mimic TLS 指纹。
+				openAIAPIKeyCodexMimicProfile{},
+			)
+		}
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 		if err != nil {
 			// Transport-level failure (proxy/DNS/TCP/TLS — no HTTP response). Convert to
@@ -524,7 +554,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthroughWithPlan(
 	if err != nil {
 		return nil, fmt.Errorf("resolve official egress profile: %w", err)
 	}
-	req, _, err = finalizeOpenAIOfficialEgressHTTPRequest(req, c, account, body, plan)
+	req, _, err = prepareOpenAIOfficialEgressSemanticHTTPRequest(req, c, account, body, plan)
 	if err != nil {
 		return nil, fmt.Errorf("finalize OpenAI official egress request: %w", err)
 	}

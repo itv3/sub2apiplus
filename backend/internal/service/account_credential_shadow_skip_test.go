@@ -10,7 +10,6 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	"github.com/imroc/req/v3"
 	"github.com/stretchr/testify/require"
 )
 
@@ -85,7 +84,7 @@ func TestEnsureOpenAIPrivacySkipsShadow(t *testing.T) {
 	}
 	privacyCalled := false
 	svc := &adminServiceImpl{
-		privacyClientFactory: func(proxyURL string) (*req.Client, error) {
+		privacyClientFactory: func(request PrivacyClientRequest) (*PrivacyHTTPClient, error) {
 			privacyCalled = true
 			return nil, errors.New("should not reach factory for shadow account")
 		},

@@ -5,12 +5,61 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
+	"net/url"
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	utls "github.com/refraction-networking/utls"
 )
+
+// tlsFingerprintProfileFromTransportSpec 只做中立 TransportSpec 到底层资源 DTO
+// 的机械转换，不重新读取 service 画像或 active 发布事实。
+func tlsFingerprintProfileFromTransportSpec(
+	transport officialegress.TransportSpec,
+) (*tlsfingerprint.Profile, error) {
+	tls := transport.TLS
+	if tls.Stack == "" || len(tls.CipherSuites) == 0 {
+		return nil, errors.New("CompiledExecution 缺少 TLS 事实")
+	}
+	rules := make([]tlsfingerprint.H1HeaderOrderRule, len(tls.H1HeaderOrders))
+	for index, rule := range tls.H1HeaderOrders {
+		mode := tlsfingerprint.H1HeaderOrderModeStatic
+		if rule.Mode == "swap_remove" {
+			mode = tlsfingerprint.H1HeaderOrderModeSwapRemove
+		}
+		rules[index] = tlsfingerprint.H1HeaderOrderRule{
+			Method: rule.Method, Path: rule.Path,
+			RequiredHeaders:  append([]string(nil), rule.RequiredHeaders...),
+			ForbiddenHeaders: append([]string(nil), rule.ForbiddenHeaders...),
+			Order:            append([]string(nil), rule.Order...), Mode: mode,
+			PrefixHeaders:  append([]string(nil), rule.PrefixHeaders...),
+			RemoveHeaders:  append([]string(nil), rule.RemoveHeaders...),
+			AppendHeaders:  append([]string(nil), rule.AppendHeaders...),
+			RejectUnlisted: rule.RejectUnlisted,
+		}
+	}
+	return &tlsfingerprint.Profile{
+		Name: "Official Codex compiled " + transport.ConnectionPoolDigest,
+		Transport: tlsfingerprint.TransportOptions{
+			DisableCompression: true, LowercaseHeaders: tls.LowercaseHeaders,
+			PreserveHeaderCase: append([]string(nil), tls.PreserveHeaderCase...),
+			H1HeaderOrders:     rules, StrictH1Wire: tls.StrictH1Wire,
+		},
+		CipherSuites:        append([]uint16(nil), tls.CipherSuites...),
+		Curves:              append([]uint16(nil), tls.SupportedGroups...),
+		SignatureAlgorithms: append([]uint16(nil), tls.SignatureAlgorithms...),
+		ALPNProtocols:       append([]string(nil), tls.ALPN...),
+		SupportedVersions:   append([]uint16(nil), tls.SupportedVersions...),
+		KeyShareGroups:      append([]uint16(nil), tls.KeyShareGroups...),
+		PSKModes:            append([]uint16(nil), tls.PSKModes...),
+		Extensions:          append([]uint16(nil), tls.Extensions...),
+		RandomizeExtensions: tls.RandomizeExtensions,
+		TLSVersMin:          tls.MinVersion, TLSVersMax: tls.MaxVersion,
+	}, nil
+}
 
 // OfficialEgressTransportSelection 是路径 Provider 输出的确定性传输选择。
 type OfficialEgressTransportSelection struct {
@@ -52,9 +101,9 @@ func (openAIOfficialEgressHTTPTransportProvider) Resolve(
 	); err != nil {
 		return OfficialEgressTransportSelection{}, err
 	}
-	tlsProfile, err := resolveOfficialCodexDefaultTLSProfile(
+	tlsProfile, err := resolveOfficialCodexTransportTLSProfileByID(
 		egressContext.ProfileVersion(),
-		officialCodexTransportProtocolHTTP1,
+		egressContext.transportProfileID,
 	)
 	if err != nil {
 		return OfficialEgressTransportSelection{}, fmt.Errorf("编译 Codex HTTP 传输画像：%w", err)
@@ -75,9 +124,9 @@ func (openAIOfficialEgressWebSocketTransportProvider) Resolve(
 	); err != nil {
 		return OfficialEgressTransportSelection{}, err
 	}
-	tlsProfile, err := resolveOfficialCodexDefaultTLSProfile(
+	tlsProfile, err := resolveOfficialCodexTransportTLSProfileByID(
 		egressContext.ProfileVersion(),
-		officialCodexTransportProtocolWS,
+		egressContext.transportProfileID,
 	)
 	if err != nil {
 		return OfficialEgressTransportSelection{}, fmt.Errorf("编译 Codex WS 传输画像：%w", err)
@@ -294,7 +343,7 @@ func resolveOfficialCodexDefaultTLSProfile(
 	version string,
 	protocol string,
 ) (*tlsfingerprint.Profile, error) {
-	profile, err := resolveCodex0145VersionProfile(version)
+	profile, err := resolveCodexVersionProfile(version)
 	if err != nil {
 		return nil, err
 	}
@@ -302,7 +351,7 @@ func resolveOfficialCodexDefaultTLSProfile(
 	if err != nil {
 		return nil, err
 	}
-	return officialCodex0145ResolveTLSProfile(version, transportID)
+	return resolveOfficialCodexTransportTLSProfileByID(version, transportID)
 }
 
 // mustResolveOfficialCodexDefaultTLSProfile 仅供无法修改签名的历史构造器使用。
@@ -313,9 +362,9 @@ func resolveOfficialCodexDefaultTLSProfile(
 // 返回共享单例：API-key mimic 的 TLS-only 派生构造器会就地改写返回值（清掉
 // H1HeaderOrders 与 StrictH1Wire），共享指针会让这些改写污染全部官方出站。
 func mustResolveOfficialCodexDefaultTLSProfile(protocol string) *tlsfingerprint.Profile {
-	version, err := activeOfficialCodexVersion()
+	version, err := officialCodexVersionForMode(officialClientProfileModeActive)
 	if err != nil {
-		panic(fmt.Sprintf("解析 active Codex 版本失败：%v", err))
+		panic(fmt.Sprintf("解析正式 Codex 版本失败：%v", err))
 	}
 	profile, err := resolveOfficialCodexDefaultTLSProfile(version, protocol)
 	if err != nil {
@@ -348,9 +397,29 @@ func doAnthropicHTTPUpstreamWithOfficialEgress(
 }
 
 func officialEgressProxyStateKey(rawProxyURL string) string {
+	rawProxyURL = strings.TrimSpace(rawProxyURL)
 	if rawProxyURL == "" {
 		return "direct"
 	}
-	sum := sha256.Sum256([]byte(rawProxyURL))
-	return hex.EncodeToString(sum[:8])
+	normalized := rawProxyURL
+	if parsed, err := url.Parse(rawProxyURL); err == nil && parsed.Hostname() != "" {
+		parsed.Scheme = strings.ToLower(parsed.Scheme)
+		port := parsed.Port()
+		if port == "" {
+			switch parsed.Scheme {
+			case "http":
+				port = "80"
+			case "https":
+				port = "443"
+			case "socks5", "socks5h":
+				port = "1080"
+			}
+		}
+		if port != "" {
+			parsed.Host = net.JoinHostPort(strings.ToLower(parsed.Hostname()), port)
+		}
+		normalized = parsed.String()
+	}
+	sum := sha256.Sum256([]byte("sub2api.proxy-identity.v1\x00" + normalized))
+	return hex.EncodeToString(sum[:])
 }

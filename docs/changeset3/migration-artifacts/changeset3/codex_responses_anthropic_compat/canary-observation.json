@@ -1,0 +1,18 @@
+{
+  "schema_version": 2,
+  "sink_id": "codex.responses.anthropic_compat",
+  "result": "accepted",
+  "environment": "local-deterministic",
+  "observed_at": "2026-08-03T00:00:00+08:00",
+  "exercise_kind": "adapter_terminal_final_wire",
+  "evidence": [
+    "active/previous 两种 release mode 的 adapter-terminal final-wire 已冻结并通过 ProfileSpec 校验",
+    "保护 Header、Body 线序、WS 帧、TLS/Profile/Pool 与动态目标 mutation 反例全部 fail-close",
+    "FinalizationToken、attempt ordinal、terminal Guard 和 secret scan 均通过"
+  ],
+  "guard_canary_percent": 100,
+  "guard_rejections": 0,
+  "external_traffic": false,
+  "reviewed_by": "codex-changeset3-final-wire-audit",
+  "review_ref": "changeset-3-post-identity-authority-final-wire/2026-08-03"
+}

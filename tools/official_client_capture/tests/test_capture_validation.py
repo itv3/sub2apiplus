@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
+import datetime as dt
+import json
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from tools.official_client_capture.capture import (
     _client_info,
+    _container_id_from_mountinfo,
+    _load_host_runtime_receipt,
     _validate_mitm_shape,
     _validate_static_file,
 )
+from tools.official_client_capture.capturelib.security import file_sha256
+from tools.official_client_capture.runtime_host_receipt import build_receipt
 from tools.official_client_capture.capturelib.model import (
     ConfigurationError,
     build_campaign_plan,
@@ -163,6 +170,116 @@ class CaptureShapeValidationTest(unittest.TestCase):
             link.symlink_to(target)
             with self.assertRaises(ConfigurationError):
                 _validate_static_file(link, "Codex hook", executable=False)
+
+    def test_host_runtime_receipt_binds_nonce_image_container_and_sources(self) -> None:
+        source_identity = {
+            "algorithm": "canonical-json-sha256",
+            "files": [{"path": "capture.py", "size": 1, "sha256": "a" * 64}],
+            "sha256": "b" * 64,
+        }
+        hostname = "capture-cli"
+        container_id = "c" * 64
+        nonce = "d" * 64
+        runtime_image = "capture.example/tool@sha256:" + "e" * 64
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "receipt.json"
+            payload = {
+                "schema_version": "official-client-runtime-host-receipt/v1",
+                "issued_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+                "run_nonce": nonce,
+                "container": {
+                    "name": "capture-cli",
+                    "id": container_id,
+                    "hostname": hostname,
+                    "started_at_utc": "2026-08-01T00:00:00Z",
+                },
+                "runtime_image_reference": runtime_image,
+                "runtime_image_id": "sha256:" + "1" * 64,
+                "repo_digest_verified": True,
+                "capture_source_bundle": source_identity,
+                "producer": {"sha256": "2" * 64},
+                "docker_server": {"version": "29.6.1"},
+            }
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            path.chmod(0o600)
+            arguments = SimpleNamespace(
+                host_runtime_receipt=path,
+                host_runtime_receipt_sha256=file_sha256(path),
+                run_nonce=nonce,
+                runtime_image=runtime_image,
+                require_complete_m=True,
+            )
+            with patch(
+                "tools.official_client_capture.capture.socket.gethostname",
+                return_value=hostname,
+            ), patch(
+                "tools.official_client_capture.capture._container_id_from_mountinfo",
+                return_value=container_id,
+            ):
+                result = _load_host_runtime_receipt(arguments, source_identity)
+            self.assertEqual(result["runtime_image_id"], "sha256:" + "1" * 64)
+            self.assertTrue(result["container_runtime_binding"]["verified"])
+
+            arguments.run_nonce = "0" * 64
+            with patch(
+                "tools.official_client_capture.capture.socket.gethostname",
+                return_value=hostname,
+            ), patch(
+                "tools.official_client_capture.capture._container_id_from_mountinfo",
+                return_value=container_id,
+            ), self.assertRaises(ConfigurationError):
+                _load_host_runtime_receipt(arguments, source_identity)
+
+    def test_container_id_is_recovered_from_docker_managed_mounts(self) -> None:
+        container_id = "9" * 64
+        with tempfile.TemporaryDirectory() as directory:
+            mountinfo = Path(directory) / "mountinfo"
+            mountinfo.write_text(
+                "1 2 8:1 /var/lib/docker/containers/"
+                + container_id
+                + "/hostname /etc/hostname rw - ext4 /dev/sda1 rw\n"
+                "2 2 8:1 /var/lib/docker/containers/"
+                + container_id
+                + "/hosts /etc/hosts rw - ext4 /dev/sda1 rw\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(_container_id_from_mountinfo(mountinfo), container_id)
+
+    def test_host_receipt_producer_verifies_repo_digest(self) -> None:
+        runtime_image = "capture.example/tool@sha256:" + "a" * 64
+        container_id = "b" * 64
+        hostname = "capture-cli"
+        container_payload = [
+            {
+                "Id": container_id,
+                "Image": "sha256:" + "c" * 64,
+                "State": {
+                    "Running": True,
+                    "StartedAt": "2026-08-01T00:00:00Z",
+                },
+                "Config": {"Hostname": hostname},
+            }
+        ]
+        image_payload = [
+            {
+                "RepoDigests": [runtime_image],
+            }
+        ]
+        docker_server = {"Version": "29.6.1", "Os": "linux", "Arch": "amd64"}
+        tool_root = Path(__file__).resolve().parents[1]
+        with patch(
+            "tools.official_client_capture.runtime_host_receipt._docker_json",
+            side_effect=[container_payload, image_payload, docker_server],
+        ):
+            receipt = build_receipt(
+                container="capture-cli",
+                runtime_image=runtime_image,
+                tool_root=tool_root,
+                run_nonce="d" * 64,
+            )
+        self.assertTrue(receipt["repo_digest_verified"])
+        self.assertEqual(receipt["container"]["hostname"], hostname)
+        self.assertEqual(len(receipt["capture_source_bundle"]["sha256"]), 64)
 
 
 if __name__ == "__main__":

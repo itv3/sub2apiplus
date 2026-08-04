@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "result": "accepted",
+  "sink_id": "codex.usage.probe",
+  "canary_receipt_digest": "064a0276531e352ec5b0d9d5f8870e376c49317ed2744890ae30f85442fa7d4d",
+  "observation_digest": "a08210892f950f3f14d62dbe008fb92a875843ecae210fabda4ad1839b39efdc",
+  "reviewed_by": "codex-audit-changeset-1c-remediation",
+  "review_ref": "changeset-1c-remediation-audit/2026-08-03"
+}

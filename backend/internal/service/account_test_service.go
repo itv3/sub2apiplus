@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/geminicli"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
@@ -74,6 +75,7 @@ type AccountTestService struct {
 	httpUpstream              HTTPUpstream
 	cfg                       *config.Config
 	tlsFPProfileService       *TLSFingerprintProfileService
+	officialEgress            *OfficialEgressTransitionRuntime
 	agentIdentityTaskMu       sync.Mutex
 	agentIdentityWS           agentIdentityWSConnectionInvalidator
 }
@@ -706,6 +708,15 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	if !agentIdentityTaskRecoveryWasTried(ctx) {
 		s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
 	}
+	// 只有 ChatGPT OAuth 内部端点属于 Codex 官方 persona。API-Key 与自定义
+	// base URL 是通用第三方发送，不能通过非空 SinkID 把它们强行纳入受管闭集。
+	if isOAuth {
+		boundCtx, bindErr := bindOfficialEgressSink(ctx, officialEgressSinkAdminTestResponses)
+		if bindErr != nil {
+			return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to bind official egress sink: %s", bindErr.Error()))
+		}
+		ctx = boundCtx
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(payloadBytes))
 	if err != nil {
@@ -754,9 +765,22 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		proxyURL = account.Proxy.URL()
 	}
 
-	// TLS 决策必须复用上面这份带 s.cfg 解析的 mimicProfile，与正式 Gateway 同源：
-	// 否则 mode=previous 下 header 走 Desktop 画像、TLS 走 active CLI 画像。
-	resp, err := doOpenAIHTTPUpstreamWithProfile(s.httpUpstream, req, proxyURL, account, s.tlsFPProfileService, mimicProfile)
+	var resp *http.Response
+	if isOAuth {
+		officialEgress, runtimeErr := resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream)
+		if runtimeErr != nil {
+			return s.sendErrorAndEnd(c, fmt.Sprintf("Codex Executor is not configured: %s", runtimeErr.Error()))
+		}
+		resp, err = officialEgress.ExecuteCodexHTTP(ctx, OfficialCodexHTTPExecution{
+			SinkID: officialEgressSinkAdminTestResponses, EndpointID: officialCodexEndpointResponsesHTTP,
+			Account: credentialAccount, ProxyURL: proxyURL, Request: req, Ingress: c,
+			PolicyID: "changeset1b.admin_test.responses.v1", PolicySource: "docs/1.md#changeset-1b",
+			ConcurrencyLimit: 1, HasBillingSideEffect: true,
+		})
+	} else {
+		// API-Key/custom base URL 不属于 Codex persona，继续使用原有通用发送逻辑。
+		resp, err = doOpenAIHTTPUpstreamWithProfile(s.httpUpstream, req, proxyURL, account, s.tlsFPProfileService, mimicProfile)
+	}
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Request failed: %s", err.Error()))
 	}
@@ -943,7 +967,6 @@ func (s *AccountTestService) testOpenAIChatCompletionsConnection(
 
 	s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
 	s.sendEvent(c, TestEvent{Type: "status", Text: "正在通过 /v1/chat/completions 测试连接"})
-
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, bytes.NewReader(payloadBytes))
 	if err != nil {
 		return s.sendErrorAndEnd(c, "Failed to create Chat Completions request")
@@ -1033,6 +1056,15 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 	if !agentIdentityTaskRecoveryWasTried(ctx) {
 		s.sendEvent(c, TestEvent{Type: "test_start", Model: testModelID})
 	}
+	// Compact 同时支持 OAuth 与 API-Key/custom base URL；仅 OAuth 分支使用
+	// chatgpt.com 的已举证 Codex route，API-Key 分支必须保持 out-of-scope。
+	if isOAuth {
+		boundCtx, bindErr := bindOfficialEgressSink(ctx, officialEgressSinkAdminTestCompact)
+		if bindErr != nil {
+			return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to bind official egress sink: %s", bindErr.Error()))
+		}
+		ctx = boundCtx
+	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(payloadBytes))
 	if err != nil {
@@ -1091,7 +1123,21 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 		proxyURL = account.Proxy.URL()
 	}
 
-	resp, err := doOpenAIHTTPUpstreamWithProfile(s.httpUpstream, req, proxyURL, account, s.tlsFPProfileService, mimicProfile)
+	var resp *http.Response
+	if isOAuth {
+		officialEgress, runtimeErr := resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream)
+		if runtimeErr != nil {
+			return s.sendErrorAndEnd(c, fmt.Sprintf("Codex Executor is not configured: %s", runtimeErr.Error()))
+		}
+		resp, err = officialEgress.ExecuteCodexHTTP(ctx, OfficialCodexHTTPExecution{
+			SinkID: officialEgressSinkAdminTestCompact, EndpointID: officialCodexEndpointResponsesCompact,
+			Account: credentialAccount, ProxyURL: proxyURL, Request: req, Ingress: c,
+			PolicyID: "changeset1b.admin_test.compact.v1", PolicySource: "docs/1.md#changeset-1b",
+			ConcurrencyLimit: 1, HasBillingSideEffect: true,
+		})
+	} else {
+		resp, err = doOpenAIHTTPUpstreamWithProfile(s.httpUpstream, req, proxyURL, account, s.tlsFPProfileService, mimicProfile)
+	}
 	if err != nil {
 		if s.accountRepo != nil {
 			updates := buildOpenAICompactProbeExtraUpdates(nil, nil, err, time.Now())
@@ -1995,21 +2041,31 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 		Prompt:   prompt,
 	}
 	applyOpenAIImagesDefaults(parsed)
+	runtimeState, err := resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to resolve official egress runtime: %s", err.Error()))
+	}
+	releaseMode := string(runtimeState.CodexReleaseMode)
 
-	endpointProfile, err := resolveOpenAICodexImagesEndpoint(parsed)
+	endpointProfile, err := resolveOpenAICodexImagesEndpoint(parsed, releaseMode)
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to resolve image endpoint profile: %s", err.Error()))
 	}
-	imagesBody, err := buildOpenAICodexImagesRequestBody(parsed, parsed.Model)
+	imagesBody, err := buildOpenAICodexImagesRequestBody(parsed, parsed.Model, releaseMode)
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to build image request: %s", err.Error()))
 	}
-	targetURL, err := buildActiveCodexEndpointURL(
-		codex0145EndpointID(endpointProfile.ID),
-		officialCodex0145EndpointURLInput{},
+	targetURL, err := buildCodexEndpointURLForMode(
+		releaseMode,
+		codexEndpointID(endpointProfile.ID),
+		officialCodexEndpointURLInput{},
 	)
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to resolve image endpoint URL: %s", err.Error()))
+	}
+	ctx, err = bindOfficialEgressSink(ctx, officialEgressSinkImagesOAuthTest)
+	if err != nil {
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to bind official egress sink: %s", err.Error()))
 	}
 	req, err := http.NewRequestWithContext(ctx, endpointProfile.Method, targetURL.String(), bytes.NewReader(imagesBody))
 	if err != nil {
@@ -2021,20 +2077,6 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to resolve image invocation: %s", err.Error()))
 	}
-	req, egressContext, err := attachOfficialCodex0145EndpointRequest(
-		req,
-		credentialAccount,
-		codex0145EndpointID(endpointProfile.ID),
-		invocationID,
-	)
-	if err != nil {
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to attach image endpoint profile: %s", err.Error()))
-	}
-	imagesBody, err = officialCodex0145FinalizeEndpointJSONBody(egressContext, imagesBody, nil)
-	if err != nil {
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to finalize image request body: %s", err.Error()))
-	}
-	resetOfficialEgressRequestBody(req, imagesBody)
 	if credentialAccount.IsOpenAIAgentIdentity() {
 		authHeaders, authErr := buildAgentIdentityAuthenticationHeaders(ctx, s.accountRepo, s.agentIdentityWS, &s.agentIdentityTaskMu, credentialAccount)
 		if authErr != nil {
@@ -2051,34 +2093,27 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "*/*")
 	setOpenAIChatGPTAccountHeaders(req.Header, credentialAccount)
-	userAgent, originator, err := officialCodex0145ProcessIdentity(egressContext)
-	if err != nil {
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to resolve image process identity: %s", err.Error()))
-	}
-	req.Header.Set("User-Agent", userAgent)
-	req.Header.Set("Originator", originator)
-	if _, err := officialCodex0145FinalizeEndpointHeaders(egressContext, req.Header, nil); err != nil {
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to finalize image endpoint profile: %s", err.Error()))
-	}
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	tlsProfile, err := resolveActiveCodexEndpointTLSProfileForURL(
-		codex0145EndpointID(endpointProfile.ID),
-		req.URL,
+	invocation, err := newOfficialCodexHTTPInvocation(
+		req.Context(),
+		officialCodexHTTPInvocationInput{
+			Runtime: runtimeState, Account: credentialAccount,
+			SinkID: officialEgressSinkImagesOAuthTest, InvocationID: invocationID,
+			ProxyURL: proxyURL, PolicyID: "changeset3.images.oauth_test",
+			PolicySource: "service.testOpenAIImageOAuth",
+			BehaviorKind: officialegress.BehaviorAdminTest, AttemptBudget: 1,
+		},
 	)
 	if err != nil {
-		return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to resolve image TLS profile: %s", err.Error()))
+		return s.sendErrorAndEnd(c, fmt.Sprintf("Images API invocation failed: %s", err.Error()))
 	}
-	resp, err := s.httpUpstream.DoWithTLS(
-		req,
-		proxyURL,
-		account.ID,
-		account.Concurrency,
-		tlsProfile,
-	)
+	resp, err := invocation.Execute(req.Context(), officialCodexHTTPAttemptInput{
+		EndpointID: endpointProfile.ID, Request: req,
+	})
 	if err != nil {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Images API request failed: %s", err.Error()))
 	}

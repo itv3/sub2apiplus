@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	openaiwsv2 "github.com/Wei-Shaw/sub2api/internal/service/openai_ws_v2"
@@ -745,6 +746,25 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	officialEgressEnabled = officialEgressEnabled &&
 		officialEgressContext.TargetPlatform() == PlatformOpenAI &&
 		officialEgressContext.Transport() == OfficialEgressTransportWebSocket
+	if officialEgressEnabled {
+		boundCtx, bindErr := bindOfficialEgressSink(ctx, officialEgressSinkResponsesWSV2Passthrough)
+		if bindErr != nil {
+			return fmt.Errorf("bind Responses WebSocket passthrough official egress sink: %w", bindErr)
+		}
+		ctx = boundCtx
+	}
+	var officialRuntime *OfficialEgressTransitionRuntime
+	invocationID := ""
+	if officialEgressEnabled {
+		var runtimeErr error
+		officialRuntime, runtimeErr = resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream)
+		if runtimeErr != nil {
+			return runtimeErr
+		}
+		if identity, ok := officialegress.AttemptIdentityFromContext(ctx); ok {
+			invocationID = identity.InvocationID
+		}
+	}
 	if err := validateOpenAIWSBearerToken(account, token); err != nil {
 		return err
 	}
@@ -827,7 +847,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, blocked.Message, blocked)
 	}
 	firstClientMessage = updatedFirst
-	firstClientMessage, _, policyErr = finalizeOpenAIOfficialEgressWSFrame(
+	firstClientMessage, _, policyErr = prepareOpenAIOfficialEgressSemanticWSFrame(
 		ctx,
 		originalFirstClientMessage,
 		firstClientMessage,
@@ -901,9 +921,27 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	if dialer == nil {
 		return errors.New("openai ws passthrough dialer is nil")
 	}
+	var officialInvocation *officialCodexWebSocketInvocation
+	if officialRuntime != nil {
+		officialInvocation, err = newOfficialCodexWebSocketInvocation(
+			ctx,
+			officialCodexWebSocketInvocationInput{
+				Runtime: officialRuntime, Account: account,
+				SinkID:       officialegress.SinkCodexResponsesWSV2Passthrough,
+				InvocationID: invocationID, ProxyURL: proxyURL,
+				PolicyID:        "changeset3.responses.ws_v2_passthrough",
+				PolicySource:    "service.proxyResponsesWebSocketV2Passthrough",
+				FallbackSinkIDs: []officialegress.SinkID{officialegress.SinkCodexResponsesWSHTTPBridge},
+				AttemptBudget:   2,
+			},
+		)
+		if err != nil {
+			return err
+		}
+	}
 
 	agentTaskRecoveryTried := false
-	var upstreamConn openAIWSClientConn
+	var upstreamConn interface{ Close() error }
 	statusCode := 0
 	var handshakeHeaders http.Header
 	for {
@@ -912,7 +950,20 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 			return fmt.Errorf("refresh ws authentication headers: %w", err)
 		}
 		dialCtx, cancelDial := context.WithTimeout(ctx, s.openAIWSDialTimeout())
-		upstreamConn, statusCode, handshakeHeaders, err = dialer.Dial(dialCtx, wsURL, headers, proxyURL)
+		if officialInvocation != nil {
+			upstreamConn, statusCode, handshakeHeaders, err = officialInvocation.DialDirect(
+				dialCtx,
+				dialer,
+				openAIWSAcquireRequest{
+					Account: account, WSURL: wsURL, Headers: headers, ProxyURL: proxyURL,
+				},
+				officialCodexEndpointResponsesWS,
+			)
+		} else {
+			upstreamConn, statusCode, handshakeHeaders, err = dialOpenAIWSV2UnwiredTest(
+				dialCtx, dialer, wsURL, headers, proxyURL,
+			)
+		}
 		cancelDial()
 		if err == nil {
 			break
@@ -965,7 +1016,9 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	}
 	handshakeTurnState := currentTurnState()
 	if officialEgressEnabled && handshakeTurnState != "" {
-		firstClientMessage, err = injectOfficialOpenAIWSTurnState(firstClientMessage, handshakeTurnState)
+		firstClientMessage, err = injectOfficialOpenAIWSTurnState(
+			ctx, firstClientMessage, handshakeTurnState,
+		)
 		if err != nil {
 			return NewOpenAIWSClientCloseError(
 				coderws.StatusPolicyViolation,
@@ -1127,7 +1180,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 				expectedPreviousResponseID := strings.TrimSpace(
 					gjson.GetBytes(originalPayload, "previous_response_id").String(),
 				)
-				out, _, policyErr = finalizeOpenAIOfficialEgressWSFrame(
+				out, _, policyErr = prepareOpenAIOfficialEgressSemanticWSFrame(
 					ctx,
 					originalPayload,
 					out,
@@ -1142,7 +1195,7 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 					)
 				}
 				if turnState := currentTurnState(); officialEgressEnabled && turnState != "" {
-					out, policyErr = injectOfficialOpenAIWSTurnState(out, turnState)
+					out, policyErr = injectOfficialOpenAIWSTurnState(ctx, out, turnState)
 					if policyErr != nil {
 						return payload, nil, NewOpenAIWSClientCloseError(
 							coderws.StatusPolicyViolation,
@@ -1505,6 +1558,18 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 		hooks.AfterTurn(turnCount+1, nil, turnErr)
 	}
 	return turnErr
+}
+
+// dialOpenAIWSV2UnwiredTest 只服务未注入 official runtime 的包内测试桩。
+// 生产 wiring 必有 ProcessSinkCatalog 与 Dispatcher，不得进入本函数。
+func dialOpenAIWSV2UnwiredTest(
+	ctx context.Context,
+	dialer openAIWSClientDialer,
+	wsURL string,
+	headers http.Header,
+	proxyURL string,
+) (openAIWSClientConn, int, http.Header, error) {
+	return dialer.Dial(ctx, wsURL, headers, proxyURL)
 }
 
 func openAIWSPassthroughRelayClientClose(exit openaiwsv2.RelayExit, completedTurns int) (coderws.StatusCode, string, bool) {

@@ -66,9 +66,9 @@ func TestShouldRefreshOpenAICodexSnapshot(t *testing.T) {
 	}
 }
 
-// TestShouldRefreshOpenAICodexSnapshot_SparkShadowIgnoresWSv2 外审第9轮 P1:spark 影子用量走
-// QueryUsage(/wham/usage,与 WSv2 无关),staleness 不得被 WSv2 门控,否则首刷后窗口永久冻结。
-func TestShouldRefreshOpenAICodexSnapshot_SparkShadowIgnoresWSv2(t *testing.T) {
+// TestShouldRefreshOpenAICodexSnapshot_StalenessIgnoresWSv2 验证变更集 1B 后
+// Spark 和普通 OAuth 的用量新鲜度都与 WSv2 开关解耦。
+func TestShouldRefreshOpenAICodexSnapshot_StalenessIgnoresWSv2(t *testing.T) {
 	t.Parallel()
 
 	now := time.Now()
@@ -104,14 +104,14 @@ func TestShouldRefreshOpenAICodexSnapshot_SparkShadowIgnoresWSv2(t *testing.T) {
 		t.Fatal("expected fresh spark shadow to skip refresh (TTL not elapsed)")
 	}
 
-	// 反向对照:普通账号无 WSv2 + 过期时间戳→仍不刷(WSv2 门控普通账号的 probe 刷新)。
+	// 普通 OAuth 无 WSv2 + 过期时间戳也必须刷新。
 	normalNoWS := &Account{
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
 		Extra:    map[string]any{"codex_usage_updated_at": staleAt},
 	}
-	if shouldRefreshOpenAICodexSnapshot(normalNoWS, usage, now) {
-		t.Fatal("expected non-WSv2 normal account to skip codex probe refresh")
+	if !shouldRefreshOpenAICodexSnapshot(normalNoWS, usage, now) {
+		t.Fatal("expected stale non-WSv2 normal account to refresh")
 	}
 }
 

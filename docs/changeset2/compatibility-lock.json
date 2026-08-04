@@ -1,0 +1,142 @@
+{
+  "schema_version": 1,
+  "changeset": "2",
+  "task": "2.0",
+  "status": "completed_baseline_frozen",
+  "frozen_at": "2026-08-03T11:11:12+08:00",
+  "bootstrap_commit": "38a9929eac35a39c86de2f27de8f7a805d7dae52",
+  "migration_receipts": {
+    "path": "docs/changeset1a/migration-receipts.json",
+    "sha256": "94ff0e21cded16b08ba5b9ed4cabd9950a367d0c1fba2924d8d2e1313a6ba4a7",
+    "schema_version": 2,
+    "route_identity_fields": [
+      "method",
+      "host",
+      "path",
+      "purpose",
+      "protocol"
+    ],
+    "receipts": [
+      {
+        "sink_id": "codex.admin_test.compact",
+        "approved_state": "canary_enforce",
+        "binding_digest": "3d037e18843ecf5fbe2148bcac2e8b9d7f0437be396acb956d814f5b2ae80ffb",
+        "route": {
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/responses/compact",
+          "purpose": "admin_test.compact",
+          "protocol": "http"
+        }
+      },
+      {
+        "sink_id": "codex.admin_test.compact",
+        "approved_state": "enforced",
+        "binding_digest": "3d037e18843ecf5fbe2148bcac2e8b9d7f0437be396acb956d814f5b2ae80ffb",
+        "route": {
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/responses/compact",
+          "purpose": "admin_test.compact",
+          "protocol": "http"
+        }
+      },
+      {
+        "sink_id": "codex.admin_test.responses",
+        "approved_state": "canary_enforce",
+        "binding_digest": "4f6bae1a243a384b94cddd53ebe5bfd0b863c7e70752ad3e773da36b27e9dd70",
+        "route": {
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/responses",
+          "purpose": "admin_test.responses",
+          "protocol": "http"
+        }
+      },
+      {
+        "sink_id": "codex.admin_test.responses",
+        "approved_state": "enforced",
+        "binding_digest": "4f6bae1a243a384b94cddd53ebe5bfd0b863c7e70752ad3e773da36b27e9dd70",
+        "route": {
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/responses",
+          "purpose": "admin_test.responses",
+          "protocol": "http"
+        }
+      },
+      {
+        "sink_id": "codex.alpha_search.pat_fallback",
+        "approved_state": "canary_enforce",
+        "binding_digest": "6244bc35da309924aeab4d7247262fdc968efcde55b4f798b52b7d89829ce5a1",
+        "route": {
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/responses",
+          "purpose": "user_request.alpha_search_pat",
+          "protocol": "http"
+        }
+      },
+      {
+        "sink_id": "codex.alpha_search.pat_fallback",
+        "approved_state": "enforced",
+        "binding_digest": "6244bc35da309924aeab4d7247262fdc968efcde55b4f798b52b7d89829ce5a1",
+        "route": {
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/responses",
+          "purpose": "user_request.alpha_search_pat",
+          "protocol": "http"
+        }
+      },
+      {
+        "sink_id": "codex.usage.probe",
+        "approved_state": "canary_enforce",
+        "binding_digest": "bf2744e2208bf2cf3293f2476be3066eb35bfd7326e8c9b9040f912aa64b8c0b",
+        "route": {
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/responses",
+          "purpose": "usage_probe",
+          "protocol": "http"
+        }
+      },
+      {
+        "sink_id": "codex.usage.probe",
+        "approved_state": "enforced",
+        "binding_digest": "bf2744e2208bf2cf3293f2476be3066eb35bfd7326e8c9b9040f912aa64b8c0b",
+        "route": {
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/responses",
+          "purpose": "usage_probe",
+          "protocol": "http"
+        }
+      }
+    ]
+  },
+  "release_graph_before_changeset2": {
+    "path": "backend/internal/officialegress/releasecontract/testdata/release-graph.json",
+    "sha256": "044b26f23fc9b7ada39efd5cdc17935567a8f9ccb4bdd4e9a130a88624cc7229",
+    "node_count": 4,
+    "active_build_id": "openai_codex_exec_0_145_0_ubuntu_24_04_x64_unknown",
+    "previous_build_id": "openai_codex_exec_0_145_0_ubuntu_24_04_x64_xterm",
+    "active_http_wire_digest": "24b31caaca6687fd1b89d331f8fdae19824640deb2bea87cbffa94a1023f631d",
+    "previous_http_wire_digest": "948e940c8a80c1072b6f42b85b74aecb5a52190dd802de400882c3d1db68d002",
+    "active_ws_wire_digest": "45cd236ec743cb097168903fa1b18f5429a193cb6555e7ecc197e90b045a1e53",
+    "previous_ws_wire_digest": "6fc2545cd38955dcbe8070655efef8d17ce109008ac576f86ff6c35fa384280e"
+  },
+  "snapshot_before_changeset2": {
+    "catalog_path": "backend/internal/officialegress/profilecontract/testdata/snapshot-catalog.json",
+    "catalog_sha256": "9f136043fa486d8351e4604d2e45cb2114313a7fbd89b095717304b50ce4a705",
+    "version": "0.145.0",
+    "profile_digest": "9b7dd12df50dbcff74594b1f05440161cd99b963019a4f316f20c08ed5f5ba1e",
+    "snapshot_path": "backend/internal/officialegress/profilecontract/testdata/snapshots/0.145.0/9b7dd12df50dbcff74594b1f05440161cd99b963019a4f316f20c08ed5f5ba1e.json",
+    "snapshot_file_sha256": "07270f6d86e0ae376815ce109d6678a4d3365680e9d45efdaf2fcb87004c8368"
+  },
+  "enforced_wire_evidence": {
+    "source": "migration_receipts.routes",
+    "sink_count": 4,
+    "rule": "wire_fixture 与 execution_verification 的 SHA-256 继续由 MigrationReceipt lifecycle 门禁复算"
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "schema_version": "sub2api.changeset6.changeset3_source_transition.v1",
+  "changeset": "6",
+  "reference_manifest": "docs/changeset3/post_identity_authority_refactor_final_wire/manifest.json",
+  "reference_manifest_sha256": "c824ffb0ab6e2429c09f9ac517cf3e6f96860c7c6ef77c229757fd690bdbcf0f",
+  "prior_transition": "docs/changeset5/changeset3-source-transition.json",
+  "prior_transition_sha256": "e022d78b3af69a937a60a388009fa4ecafa8042410cf5602f32ecff7c29b176d",
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/compiler.go",
+      "from_sha256": "5e5ec6589b0576dcc8b682a8afdf558ab1580596786cde1829704c17b02021b5",
+      "to_sha256": "a13b3f8bc3796857ae77899a858b253dba00af5519e9bb0df3d5bb457222531e",
+      "reason": "变更集 6 将 replayable JSON 编译收敛为单个 attempt document，并共享不可变 Body backing。"
+    },
+    {
+      "path": "backend/internal/officialegress/executor.go",
+      "from_sha256": "c09ba8acf44a45f4f2f5513f7a7a7d6587918d078f821b66f5e2920670421479",
+      "to_sha256": "f60ef1232f2e2cc2be681a44e89cc42ba4e16821610ce7caaa0191bfedc47362",
+      "reason": "变更集 6 为 compiler、attempt budget、执行策略和 transport 阶段增加可 unwrap 的稳定 RuntimeError code。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_http_invocation.go",
+      "from_sha256": "88c414efd01e8a3cd46dc3597ca16c3dee5b8287147213d87f7fcbbaa07c6bf5",
+      "to_sha256": "ed4a9e36401e1db0d4fb235feea6dc8b6edaa370cfa10c20a0f72d9b755e87e5",
+      "reason": "HTTP attempt 直接传递已解析的 attempt-owned RequestBody，取消 service 到 Compiler 之间的整段重建与复制。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_identity_authority.go",
+      "from_sha256": "2f82dfdae81df71203e777163b680a4072132b8e9cc50e609ca275c022953cad",
+      "to_sha256": "4ba01a6a2840d422d626cfc4bc04eee8789b01e19c31b9252f9f70faeaaf53ad",
+      "reason": "compiler-owned Body 字段抽取改用 officialegress attempt document，duplicate 在任何 dirty 操作前统一 fail-close。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_transport_adapters.go",
+      "from_sha256": "b9bf2d0c462eee41fb086f9798dea75f3fb80d366f36b66951b24aaf893b2f6b",
+      "to_sha256": "1da65dc52f8811613f6dde337b06a15b70ac6410eab2a7d9ccfc8c08bd1a0c44",
+      "reason": "WS frame 复用同一 attempt document，并为连接准入 Guard 拒绝增加稳定错误码而不改变 GuardReason。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_websocket_invocation.go",
+      "from_sha256": "09c9d93c4b8db313a63f119fb92101b028a1566bccfbda53009ab5816f90f74b",
+      "to_sha256": "5a0febd6f92e0117579711c48b44126a3b61cea83be95f0713f7e29f198c6864",
+      "reason": "WebSocket handshake attempt 直接传递 prepare 阶段创建的不可变 replayable Body 句柄。"
+    },
+    {
+      "path": "backend/internal/service/openai_forward_plan.go",
+      "from_sha256": "b182f97b108fa35a4cdcd5d731892cbe883fd254c414872d6bc3608b246e0fc7",
+      "to_sha256": "5539b9a047496507a442706ceb7495745b5b1c61c15dcb3d51ae1ad3437f034e",
+      "reason": "Forward attempt 不再把 prepare 结果重新复制为第二个 replayable RequestBody。"
+    }
+  ]
+}

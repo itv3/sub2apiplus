@@ -1,0 +1,49 @@
+{
+  "schema_version": "changeset3-facade-audit/v1",
+  "reviewed_by": "codex-changeset3-self-audit",
+  "review_ref": "changeset-3-facade-audit/2026-08-03",
+  "facades": [
+    {
+      "sink_id": "codex.facade.oauth_client",
+      "current_candidate_ids": [
+        "github.com/Wei-Shaw/sub2api/internal/repository.createOpenAIReqClientWithProfile@backend/internal/repository/openai_oauth_service.go#factory_shared_req#1"
+      ],
+      "disposition": "retained_transport_infrastructure",
+      "removal_receipt": false,
+      "rationale": "OAuth exchange 继续以 transport_only 使用共享 req-profile factory；refresh 的业务身份由 Executor adapter 注入，factory 本身不成为 RuntimeSinkID。"
+    },
+    {
+      "sink_id": "codex.facade.upstream",
+      "current_candidate_ids": [
+        "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.doOpenAIHTTPUpstreamForRequest@backend/internal/service/openai_upstream_http.go#facade_openai_upstream#1",
+        "github.com/Wei-Shaw/sub2api/internal/service.doOpenAIHTTPUpstreamWithProfile@backend/internal/service/openai_upstream_http.go#facade_legacy_compiled_http#1"
+      ],
+      "disposition": "retained_transport_infrastructure",
+      "removal_receipt": false,
+      "rationale": "API Key、自定义上游和 transport-only legacy 路径仍复用共享 HTTP facade；Codex enforced 分支只通过 Executor HTTP adapter，facade 不承载其业务 SinkID。"
+    },
+    {
+      "sink_id": "codex.facade.ws_pool",
+      "current_candidate_ids": [
+        "github.com/Wei-Shaw/sub2api/internal/service.*openAIWSConnPool.dialConn@backend/internal/service/openai_ws_pool.go#facade_ws_dialer#1"
+      ],
+      "disposition": "retained_transport_infrastructure",
+      "removal_receipt": false,
+      "rationale": "连接池物理拨号候选仍真实存在；enforced Codex Acquire 在复用和新拨号前均由 WebSocket adapter 验证当前 FinalizationToken。"
+    }
+  ],
+  "production_adapters": [
+    {
+      "adapter_id": "officialegress.http_upstream",
+      "candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*officialCodexHTTPUpstreamPort.SendHTTPUpstream@backend/internal/service/official_egress_1b_executor.go#facade_http_upstream_do_tls#1"
+    },
+    {
+      "adapter_id": "officialegress.req_profile",
+      "candidate_id": "github.com/Wei-Shaw/sub2api/internal/repository.openAIOAuthReqProfileTransport.Do@backend/internal/repository/openai_oauth_service.go#net_http_client_do#1"
+    },
+    {
+      "adapter_id": "officialegress.websocket",
+      "candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.officialCodexWebSocketAcquireRouter.AcquireOfficialCodexWebSocket@backend/internal/service/official_egress_transport_adapters.go#facade_ws_dialer#1"
+    }
+  ]
+}

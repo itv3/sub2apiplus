@@ -200,6 +200,10 @@ func registerAgentIdentityTask(ctx context.Context, account *Account) (string, e
 	if err != nil {
 		return "", errors.New("failed to serialize agent task registration")
 	}
+	ctx, err = bindOfficialEgressSink(ctx, officialEgressSinkAgentTaskRegister)
+	if err != nil {
+		return "", errors.New("failed to bind agent task registration egress sink")
+	}
 	url := strings.TrimRight(strings.TrimSpace(openAIAgentIdentityAuthAPIBaseURL), "/") + "/v1/agent/" + key.runtimeID + "/task/register"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(body)))
 	if err != nil {

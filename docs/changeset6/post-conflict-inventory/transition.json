@@ -1,0 +1,66 @@
+{
+  "schema_version": "changeset6-conflict-unit-transition/v2",
+  "changeset": "6",
+  "baseline": {
+    "directory": "docs/changeset5/post-refactor-conflict-inventory",
+    "full_sha256": "6a3c0a45339da65a01ae2e5d591cb682046f33fe35464583c66155dfe318c816",
+    "governable_sha256": "03c2d35555febf086caffdd7ab03625353be5f1146064c19aebfc50b44543118",
+    "receipt_sha256": "e263d3b6199f6c411c4c48c4a59c19be773c48e8a61df3d0301fe9b112bcc9b4"
+  },
+  "post": {
+    "directory": "docs/changeset6/post-conflict-inventory",
+    "full_sha256": "a3fa810d7bc25f2ed94916b8fc28c8df6ba8e021679a413a7da67bff5d662b7f",
+    "governable_sha256": "3a13b91659ae5444bb0bf470ca5aca74855058a548731e36b60b595c7388efdc",
+    "receipt_sha256": "73812d158a7d07148fbcec0ae0f28f4edadaec700c92374e234f983e61c7494f"
+  },
+  "comparison": {
+    "conflict_file_count_before": 36,
+    "conflict_file_count_after": 36,
+    "full_unit_count_before": 247,
+    "full_unit_count_after": 247,
+    "governable_unit_count_before": 90,
+    "governable_unit_count_after": 90,
+    "full_added_unit_ids": [],
+    "full_removed_unit_ids": [],
+    "governable_added_unit_ids": [],
+    "governable_removed_unit_ids": [],
+    "changed_full_unit_count": 20,
+    "changed_full_unit_ids": [
+      "backend/internal/service/openai_ws_pool.go\u0000declaration_added\u0000\u0000openAIWSAdmissionGuard\u0000type openAIWSAdmissionGuard *ast.InterfaceType",
+      "backend/internal/service/openai_ws_pool.go\u0000declaration_added\u0000\u0000openAIWSLeaseSession\u0000type openAIWSLeaseSession *ast.InterfaceType",
+      "backend/internal/service/openai_ws_pool.go\u0000declaration_added\u0000\u0000replaceOpenAIWSTurnStateFromLease\u0000func .replaceOpenAIWSTurnStateFromLeasefunc(lease openAIWSLeaseSession) string",
+      "backend/internal/service/openai_ws_pool.go\u0000declaration_added\u0000*openAIWSConn\u0000matchesAcquireProfile\u0000func *openAIWSConn.matchesAcquireProfilefunc(betaFeatures, transportKey string) bool",
+      "backend/internal/service/openai_ws_pool.go\u0000declaration_added\u0000*openAIWSConnLease\u0000WriteSemanticJSONWithContextTimeout\u0000func *openAIWSConnLease.WriteSemanticJSONWithContextTimeoutfunc(\n\tctx context.Context,\n\tvalue any,\n\ttimeout time.Duration,\n) error",
+      "backend/internal/service/openai_ws_pool.go\u0000declaration_added\u0000*openAIWSConnPool\u0000allowsTokenlessBackgroundPrewarm\u0000func *openAIWSConnPool.allowsTokenlessBackgroundPrewarmfunc(sinkID officialegress.SinkID) bool",
+      "backend/internal/service/openai_ws_pool.go\u0000declaration_added\u0000*openAIWSConnPool\u0000pickOldestIdleConnWithDifferentAcquireProfileLocked\u0000func *openAIWSConnPool.pickOldestIdleConnWithDifferentAcquireProfileLockedfunc(\n\tap *openAIWSAccountPool,\n\tbetaFeatures string,\n\ttransportKey string,\n) *openAIWSConn",
+      "backend/internal/service/openai_ws_pool.go\u0000declaration_modified\u0000\u0000cloneOpenAIWSAcquireRequest\u0000func .cloneOpenAIWSAcquireRequestfunc(req openAIWSAcquireRequest) openAIWSAcquireRequest",
+      "backend/internal/service/openai_ws_pool.go\u0000declaration_modified\u0000\u0000openAIWSAcquireRequest\u0000type openAIWSAcquireRequest *ast.StructType",
+      "backend/internal/service/openai_ws_pool.go\u0000declaration_modified\u0000\u0000openAIWSConn\u0000type openAIWSConn *ast.StructType",
+      "backend/internal/service/openai_ws_pool.go\u0000declaration_modified\u0000\u0000openAIWSConnPool\u0000type openAIWSConnPool *ast.StructType",
+      "backend/internal/service/openai_ws_pool.go\u0000declaration_modified\u0000*openAIWSConn\u0000matchesBetaFeatures\u0000func *openAIWSConn.matchesBetaFeaturesfunc(betaFeatures string) bool",
+      "backend/internal/service/openai_ws_pool.go\u0000declaration_modified\u0000*openAIWSConnPool\u0000Acquire\u0000func *openAIWSConnPool.Acquirefunc(ctx context.Context, req openAIWSAcquireRequest) (*openAIWSConnLease, error)",
+      "backend/internal/service/openai_ws_pool.go\u0000declaration_modified\u0000*openAIWSConnPool\u0000acquire\u0000func *openAIWSConnPool.acquirefunc(ctx context.Context, req openAIWSAcquireRequest, retry int) (*openAIWSConnLease, error)",
+      "backend/internal/service/openai_ws_pool.go\u0000declaration_modified\u0000*openAIWSConnPool\u0000dialConn\u0000func *openAIWSConnPool.dialConnfunc(ctx context.Context, req openAIWSAcquireRequest) (*openAIWSConn, error)",
+      "backend/internal/service/openai_ws_pool.go\u0000declaration_modified\u0000*openAIWSConnPool\u0000ensureTargetIdleAsync\u0000func *openAIWSConnPool.ensureTargetIdleAsyncfunc(accountID int64)",
+      "backend/internal/service/openai_ws_pool.go\u0000declaration_modified\u0000*openAIWSConnPool\u0000pickLeastBusyConnLocked\u0000func *openAIWSConnPool.pickLeastBusyConnLockedfunc(\n\tap *openAIWSAccountPool,\n\tpreferredConnID string,\n\tbetaFeatures string,\n\ttransportKey string,\n) *openAIWSConn",
+      "backend/internal/service/openai_ws_pool.go\u0000declaration_modified\u0000*openAIWSConnPool\u0000pickOldestIdleConnWithDifferentBetaFeaturesLocked\u0000func *openAIWSConnPool.pickOldestIdleConnWithDifferentBetaFeaturesLockedfunc(ap *openAIWSAccountPool, betaFeatures string) *openAIWSConn",
+      "backend/internal/service/openai_ws_pool.go\u0000declaration_modified\u0000*openAIWSConnPool\u0000prewarmConns\u0000func *openAIWSConnPool.prewarmConnsfunc(accountID int64, req openAIWSAcquireRequest, total int, generations ...uint64)",
+      "backend/internal/service/openai_ws_pool.go\u0000file_structure_or_non_go_modified\u0000\u0000<file_structure>\u0000package/import/build-tag/comment structure"
+    ],
+    "changed_governable_unit_count": 7,
+    "changed_governable_unit_ids": [
+      "backend/internal/service/openai_ws_pool.go\u0000declaration_added\u0000\u0000openAIWSAdmissionGuard\u0000type openAIWSAdmissionGuard *ast.InterfaceType",
+      "backend/internal/service/openai_ws_pool.go\u0000declaration_added\u0000*openAIWSConnPool\u0000allowsTokenlessBackgroundPrewarm\u0000func *openAIWSConnPool.allowsTokenlessBackgroundPrewarmfunc(sinkID officialegress.SinkID) bool",
+      "backend/internal/service/openai_ws_pool.go\u0000declaration_modified\u0000\u0000openAIWSAcquireRequest\u0000type openAIWSAcquireRequest *ast.StructType",
+      "backend/internal/service/openai_ws_pool.go\u0000declaration_modified\u0000\u0000openAIWSConnPool\u0000type openAIWSConnPool *ast.StructType",
+      "backend/internal/service/openai_ws_pool.go\u0000declaration_modified\u0000*openAIWSConnPool\u0000Acquire\u0000func *openAIWSConnPool.Acquirefunc(ctx context.Context, req openAIWSAcquireRequest) (*openAIWSConnLease, error)",
+      "backend/internal/service/openai_ws_pool.go\u0000declaration_modified\u0000*openAIWSConnPool\u0000dialConn\u0000func *openAIWSConnPool.dialConnfunc(ctx context.Context, req openAIWSAcquireRequest) (*openAIWSConn, error)",
+      "backend/internal/service/openai_ws_pool.go\u0000file_structure_or_non_go_modified\u0000\u0000<file_structure>\u0000package/import/build-tag/comment structure"
+    ],
+    "changed_path_closure": [
+      "backend/internal/service/openai_ws_pool.go"
+    ]
+  },
+  "reason": "变更集 6 在既有 WS pool 单元内接入 attempt-owned Body 与可 unwrap RuntimeError；冲突文件、单元 ID 和可治理单元数量均未扩大",
+  "result": "passed"
+}

@@ -12,6 +12,7 @@ import json
 import os
 import re
 import stat
+import time
 import urllib.parse
 from pathlib import Path
 from typing import Any
@@ -153,6 +154,7 @@ def _classify(path: str) -> str:
 def _common_payload() -> dict[str, Any]:
     return {
         "_captured_at": dt.datetime.now(dt.timezone.utc).isoformat(),
+        "_captured_monotonic_ns": time.monotonic_ns(),
         "_task": TASK,
         "_boundary": BOUNDARY,
         "_run_id": RUN_ID,
@@ -223,6 +225,19 @@ for _item in (os.environ.get("CAPTURE_FAULT_SPEC") or "").split(","):
 _FAULT_BUDGET = int(_FAULT_SPEC.get("count") or 0)
 
 
+def _is_fault_target(flow: http.HTTPFlow) -> bool:
+    """只对目标主机的模型 POST 注入故障，避免后台设置请求消耗预算。"""
+
+    request = getattr(flow, "request", None)
+    if request is None:
+        return False
+    return (
+        str(getattr(request, "host", "")).lower() in TARGET_HOSTS
+        and str(getattr(request, "method", "")).upper() == "POST"
+        and _classify(str(getattr(request, "path", ""))) in {"claude", "codex"}
+    )
+
+
 class OfficialClientCapture:
     """仅记录当前任务 allowlist 中的目标主机。"""
 
@@ -232,7 +247,7 @@ class OfficialClientCapture:
     def _maybe_inject_fault(self, flow: http.HTTPFlow) -> bool:
         """按预算注入一次故障，返回是否已注入。"""
 
-        if self._faults_left <= 0 or flow.request.host.lower() not in TARGET_HOSTS:
+        if self._faults_left <= 0 or not _is_fault_target(flow):
             return False
         self._faults_left -= 1
         if _FAULT_SPEC.get("kill"):

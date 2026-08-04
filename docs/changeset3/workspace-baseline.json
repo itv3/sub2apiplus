@@ -1,0 +1,73 @@
+{
+  "schema_version": "changeset3-workspace-baseline/v1",
+  "status": "frozen_before_production_changes",
+  "frozen_at": "2026-08-03T17:01:00+08:00",
+  "update_policy": "manual_review_only",
+  "git": {
+    "branch": "main",
+    "head": "38a9929eac35a39c86de2f27de8f7a805d7dae52",
+    "porcelain_v1_z_sha256": "d56848c805fc0f0608e9561493441720cfc6231f6abe1940342d12a0e6eec034",
+    "tracked_diff_binary_sha256": "134698ae75aa0ac99f24edabe31a3cb364d1af47cbfa6e1b91810bab03217f86",
+    "porcelain_entry_count": 181,
+    "modified_or_other_count": 134,
+    "deleted_count": 3,
+    "untracked_porcelain_entry_count": 44,
+    "untracked_file_count": 182,
+    "deleted_files": [
+      "backend/internal/service/official_egress_codex_active_release.go",
+      "backend/internal/service/official_egress_codex_oauth.go",
+      "tools/scan_egress_sinks.py"
+    ]
+  },
+  "frozen_artifacts": {
+    "workspace_status_readable": {
+      "path": "docs/changeset3/workspace-status.txt",
+      "sha256": "48d68ea2eb30649a621e3db9091dd339e5a103304798dcfb541b1dcceaa33b2d"
+    },
+    "untracked_files": {
+      "path": "docs/changeset3/untracked-files.sha256",
+      "sha256": "3cfcc8d787a476227b74858eddaa8d783a90107d5418e181c16bc2e87c0c525a"
+    },
+    "codex_bindings": {
+      "path": "docs/changeset3/codex-binding-freeze.json",
+      "sha256": "30e7814c10370278ce4940e00e5b2943b2243e763b9537dbb5069c7c0e310304"
+    },
+    "acceptance_matrix": {
+      "path": "docs/changeset3/acceptance-matrix.json",
+      "sha256": "2dc2acb8247bde3a9afadaaa0e7f57e482d2fdcaefd0f08211c11a1b702f9d56"
+    }
+  },
+  "ledger_sources": {
+    "release_bindings_sha256": "0302e9a1904aa4f95ecb2092a0df5e6b1265e9543615f465c3363bdaf585065b",
+    "migration_receipts_sha256": "94ff0e21cded16b08ba5b9ed4cabd9950a367d0c1fba2924d8d2e1313a6ba4a7",
+    "legacy_baseline_sha256": "42c49c9000221d30671398b9870297c80d0d6c2b84dfc1e3918056cb7c4c68db",
+    "legacy_ceiling_sha256": "f744ab46c8f509577ee4a88050e426bc9c04152b39bc5f6f0d0877d4b99cc58d",
+    "changeset1a_removal_receipts_sha256": "7d9d57cd30bcde5e1b7eacb35d8fcd2b65c80b8799955eb5537e91829bc90282",
+    "changeset2_removal_receipts_sha256": "c9e0edee6deaa742ca4be85addc02b9c2e2dcd31f15302e676b7830c8e1f8d10"
+  },
+  "executor_and_gate": {
+    "executor_id": "codex.executor.changeset1b",
+    "executor_source_sha256": "f4aee8a17dce9b88347f2cff30aeda01ddf33fb6d62528b34c28244116a0a654",
+    "production_wiring_source_sha256": "2252c2656511133e23c16d82be1b2d93c152a38326fee4433a1d60b301e40d0c",
+    "adapter_projection_sha256": "36bb3b4341ed388f9b5ec592e1c48937ce9ceef6e0c9265e9aa11990c94809ad",
+    "registered_production_adapters": [
+      "officialegress.http_upstream"
+    ],
+    "required_final_adapters": [
+      "officialegress.http_upstream",
+      "officialegress.req_profile",
+      "officialegress.websocket"
+    ],
+    "pairing_gate_path": "backend/internal/service/official_egress_finalizer_pairing_test.go",
+    "pairing_gate_lines": 825,
+    "pairing_gate_sha256": "417cb19d7041fade18ea6e31379169c4b983f9c0ca27077ac0cff81af5bc43ea",
+    "legacy_attach_finalizer_projection_sha256": "fdfabc098fceb4ee82507d310279c4820a43f6d1917c8210a552389292aa2967"
+  },
+  "constraints": {
+    "existing_enforced_receipts_byte_identical": true,
+    "oauth_exchange_transport_only": true,
+    "automatic_baseline_update_forbidden": true,
+    "automatic_receipt_acceptance_forbidden": true,
+    "destructive_git_cleanup_forbidden": true
+  }
+}

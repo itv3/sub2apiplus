@@ -5,10 +5,15 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Mapping
+from typing import Any, Mapping
 
 from .model import CaptureCase, ConfigurationError
-from .security import ensure_private_directory, secure_write_text
+from .security import (
+    SENSITIVE_HEADER_RE,
+    canonical_json_sha256,
+    ensure_private_directory,
+    secure_write_text,
+)
 
 
 PROXY_KEYS = {
@@ -100,8 +105,70 @@ INJECTABLE_PROBE_KEYS = {
     # 它们只在出站 header 上追加标识，不改变凭据、上游地址、代理或 CA。
     "CLAUDE_AGENT_SDK_CLIENT_APP",
     "CLAUDE_CODE_CONTAINER_ID",
+    "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH",
     "CLAUDE_CODE_REMOTE_SESSION_ID",
 }
+
+
+def _safe_custom_headers(value: str) -> str:
+    """保留非敏感探针 Header，并遮蔽认证类 Header 的值。"""
+
+    lines: list[str] = []
+    for line in value.splitlines():
+        name, separator, item_value = line.partition(":")
+        if separator and SENSITIVE_HEADER_RE.search(name):
+            lines.append(f"{name}: <redacted-sensitive-header>")
+        else:
+            lines.append(line)
+    return "\n".join(lines)
+
+
+def environment_manifest_view(
+    environment: Mapping[str, str],
+    known_secrets: Mapping[str, str] | None = None,
+) -> dict[str, Any]:
+    """归档实际子进程环境的完整脱敏视图。"""
+
+    secrets = {
+        source: value
+        for source, value in (known_secrets or {}).items()
+        if value
+    }
+    sensitive_name = (
+        "KEY",
+        "TOKEN",
+        "SECRET",
+        "PASSWORD",
+        "CREDENTIAL",
+        "AUTHORIZATION",
+        "COOKIE",
+    )
+    values: dict[str, Any] = {}
+    redacted_keys: list[str] = []
+    for key in sorted(environment):
+        value = str(environment[key])
+        secret_sources = sorted(
+            source for source, secret in secrets.items() if secret in value
+        )
+        if secret_sources or any(marker in key.upper() for marker in sensitive_name):
+            values[key] = {
+                "present": True,
+                "redacted": True,
+                "reason": "credential",
+                "secret_sources": secret_sources,
+            }
+            redacted_keys.append(key)
+        elif key == "ANTHROPIC_CUSTOM_HEADERS":
+            values[key] = _safe_custom_headers(value)
+        else:
+            values[key] = value
+    return {
+        "schema_version": "official-client-environment/v1",
+        "values": values,
+        "keys": sorted(values),
+        "redacted_keys": redacted_keys,
+        "sha256": canonical_json_sha256(values),
+    }
 
 
 def parse_injected_env(pairs: list[str] | None) -> dict[str, str]:

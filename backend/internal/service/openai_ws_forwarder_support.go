@@ -22,7 +22,7 @@ func (s *OpenAIGatewayService) isOpenAIWSGeneratePrewarmEnabled() bool {
 // 预热默认关闭，仅在配置开启后生效；失败时按可恢复错误回退到 HTTP。
 func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 	ctx context.Context,
-	lease *openAIWSConnLease,
+	lease openAIWSLeaseSession,
 	decision OpenAIWSProtocolDecision,
 	payload map[string]any,
 	previousResponseID string,
@@ -77,7 +77,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 	}
 	prewarmPayload["generate"] = false
 	prewarmPayloadJSON := payloadAsJSONBytes(prewarmPayload)
-	prewarmPayloadJSON, _, err := finalizeOpenAIOfficialEgressWSFrame(
+	prewarmPayloadJSON, _, err := prepareOpenAIOfficialEgressSemanticWSFrame(
 		ctx,
 		prewarmPayloadJSON,
 		prewarmPayloadJSON,
@@ -89,7 +89,7 @@ func (s *OpenAIGatewayService) performOpenAIWSGeneratePrewarm(
 		return wrapOpenAIWSFallback("official_egress_prewarm_frame", err)
 	}
 
-	if err := lease.WriteJSONWithContextTimeout(
+	if err := lease.WriteSemanticJSONWithContextTimeout(
 		ctx,
 		json.RawMessage(prewarmPayloadJSON),
 		s.openAIWSWriteTimeout(),

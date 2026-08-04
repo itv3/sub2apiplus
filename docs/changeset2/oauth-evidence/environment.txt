@@ -1,0 +1,9 @@
+run_id=official-oauth-appwire-20260803-1785721508040
+official_binary_version=codex-cli 0.145.0
+official_binary_sha256=a2a05dafaa1acb002a45eaec0a462de5b13694fcfcd7bc43305f14781ce7be14
+source_tag=rust-v0.145.0
+source_commit=25af12f7e61572b0bc18ddb1008be543b91519b0
+image=oauth-egress-capture-capture-cli:latest
+image_id=sha256:3438c4e0909d7401ff8e076a985258608a8f031629e65262db16c1979ab1771c
+network_mode=none
+capture_container_removed=true

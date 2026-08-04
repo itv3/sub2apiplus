@@ -1,0 +1,56 @@
+{
+  "schema_version": "sub2api.changeset4.changeset3_source_transition.v1",
+  "changeset": "4",
+  "reference_manifest": "docs/changeset3/post_identity_authority_refactor_final_wire/manifest.json",
+  "reference_manifest_sha256": "c824ffb0ab6e2429c09f9ac517cf3e6f96860c7c6ef77c229757fd690bdbcf0f",
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/compiler.go",
+      "from_sha256": "187016839c67c7f7f9280dcb70e29b6ad028371e56b422d3b110bf886ca3a008",
+      "to_sha256": "5e5ec6589b0576dcc8b682a8afdf558ab1580596786cde1829704c17b02021b5",
+      "reason": "执行画像投影、资源生命周期策略及完整连接身份编译"
+    },
+    {
+      "path": "backend/internal/officialegress/executor.go",
+      "from_sha256": "46aed2e3793eb9d03699d201e50ddc33c677b8fa8365754efe8571b5a16d9f5d",
+      "to_sha256": "c09ba8acf44a45f4f2f5513f7a7a7d6587918d078f821b66f5e2920670421479",
+      "reason": "部署代理身份和自定义 CA 内容摘要门禁"
+    },
+    {
+      "path": "backend/internal/service/official_egress_http_invocation.go",
+      "from_sha256": "f9dd86c484b1048d91ece9302f57e3f6c6f4abd9a9204ad9ea9f79d39b11c1c1",
+      "to_sha256": "88c414efd01e8a3cd46dc3597ca16c3dee5b8287147213d87f7fcbbaa07c6bf5",
+      "reason": "HTTP 调用提交规范化代理身份"
+    },
+    {
+      "path": "backend/internal/service/openai_forward_plan.go",
+      "from_sha256": "b649a954323fc07830faef60a532d930e87707c46dad5e4f2a96daeb6299a80d",
+      "to_sha256": "b182f97b108fa35a4cdcd5d731892cbe883fd254c414872d6bc3608b246e0fc7",
+      "reason": "冻结 turn-state scope 所需 release、账号和 authority 事实，并支持同一 Bundle 内 WS 到 HTTP fallback 的预切换验证"
+    },
+    {
+      "path": "backend/internal/service/official_egress_websocket_invocation.go",
+      "from_sha256": "918b0aef1c030255a7136477d64fbc483bec785a082c0c961346e8c2967f861f",
+      "to_sha256": "09c9d93c4b8db313a63f119fb92101b028a1566bccfbda53009ab5816f90f74b",
+      "reason": "WebSocket 调用提交规范化代理身份"
+    },
+    {
+      "path": "backend/internal/service/openai_oauth_service.go",
+      "from_sha256": "e97e2864dc9bd84e238b561b25a061e3ba5afcdbc7d7d0fdaf6d3a5b275a224a",
+      "to_sha256": "7804a34437a93841f6fe27a358eb96c0b893a34b8599e5f15904c59086c73ab3",
+      "reason": "OAuth 官方调用提交规范化代理身份，并在已有账号刷新时绑定本地账号投影"
+    },
+    {
+      "path": "backend/internal/service/official_egress_changeset3_production_final_wire_test.go",
+      "from_sha256": "8b2640ad2c2e80a73b422e52c3b23ed85ff52b178637bfc86ed795849b82110d",
+      "to_sha256": "3964bbd26488ee0d0bebe44693bc3a7957aaa9b094b0ca2fbc1f08d849ce6771",
+      "reason": "旧 final-wire 继续按原摘要冻结；有意变化改由固定摘要的 Changeset 4 source transition 承接"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/release-catalog.json",
+      "from_sha256": "4a8cf2712f2558f3b0bdb151e781054f141b5632309865a54cdeee4a1326ede6",
+      "to_sha256": "aa2ad86b83c1be055e7986dfbc48e99168c62a8064b677a7a7e13e62002f44dc",
+      "reason": "生命周期闭集修复后，运行时目录切换到为 WHAM 长期复用拆分的不可变画像摘要"
+    }
+  ]
+}

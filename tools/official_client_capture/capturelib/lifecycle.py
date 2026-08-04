@@ -19,7 +19,7 @@ from types import TracebackType
 from typing import IO, Any
 
 from .model import CaptureCase, ConfigurationError
-from .security import ensure_private_directory
+from .security import argv_manifest_view, ensure_private_directory
 
 
 PR_SET_PDEATHSIG = 1
@@ -484,6 +484,7 @@ def build_capture_process(
         "target_addresses": list(target_addresses),
         "bpf": command[-1] if case.evidence == "direct" else None,
         "mitm_port": mitm_port if case.evidence == "mitm" else None,
+        "invocation": argv_manifest_view(command),
     }
     return CaptureProcess(
         case=case,

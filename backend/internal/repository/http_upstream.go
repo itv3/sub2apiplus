@@ -29,6 +29,7 @@ import (
 	"golang.org/x/net/http2"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyutil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
@@ -148,6 +149,7 @@ type openAIHTTP2FallbackState struct {
 // 8. 账号并发数与连接池上限对应（账号隔离策略下）
 type httpUpstreamService struct {
 	cfg     *config.Config                  // 全局配置
+	guard   *officialegress.Guard           // 四类发送栈共用的官方出站 Guard
 	mu      sync.RWMutex                    // 保护 clients map 的读写锁
 	clients map[string]*upstreamClientEntry // 客户端缓存池，key 由隔离策略决定
 	// OpenAI 走 HTTP/HTTPS 代理时的 H2->H1 回退状态（key=标准化 proxyKey）
@@ -163,8 +165,13 @@ type httpUpstreamService struct {
 // 返回:
 //   - service.HTTPUpstream 接口实现
 func NewHTTPUpstream(cfg *config.Config) service.HTTPUpstream {
+	return newHTTPUpstream(cfg, officialegress.DefaultGuard())
+}
+
+func newHTTPUpstream(cfg *config.Config, guard *officialegress.Guard) service.HTTPUpstream {
 	return &httpUpstreamService{
 		cfg:     cfg,
+		guard:   guard,
 		clients: make(map[string]*upstreamClientEntry),
 	}
 }
@@ -559,7 +566,12 @@ func (s *httpUpstreamService) getClientEntryWithTLS(proxyURL string, accountID i
 
 	// 创建带 TLS 指纹的 Transport
 	slog.Debug("tls_fingerprint_creating_new_client", "account_id", accountID, "cache_key", cacheKey, "proxy", proxyKey)
-	transport, err := buildUpstreamTransportWithTLSFingerprint(settings, parsedProxy, profile)
+	transport, err := buildUpstreamTransportWithTLSFingerprintAndGuard(
+		settings,
+		parsedProxy,
+		profile,
+		s.guard,
+	)
 	if err != nil {
 		s.mu.Unlock()
 		return nil, fmt.Errorf("build TLS fingerprint transport: %w", err)
@@ -755,7 +767,16 @@ func (s *httpUpstreamService) getClientEntry(proxyURL string, accountID int64, a
 		s.mu.Unlock()
 		return nil, fmt.Errorf("build transport: %w", err)
 	}
-	client := &http.Client{Transport: transport}
+	var guardedTransport http.RoundTripper = transport
+	if s.guard != nil {
+		guardedTransport = officialegress.NewGuardedRoundTripper(
+			transport,
+			s.guard,
+			officialegress.BackendHTTPUpstream,
+			officialegress.WireProtocolHTTP,
+		)
+	}
+	client := &http.Client{Transport: guardedTransport}
 	if s.shouldValidateResolvedIP() {
 		client.CheckRedirect = s.redirectChecker
 	}
@@ -1403,6 +1424,15 @@ func enableOpenAIHTTP2KeepAlive(transport *http.Transport) (*http2.Transport, er
 //   - http/https: HTTP 代理，使用 HTTPProxyDialer（CONNECT 隧道 + utls 握手）
 //   - socks5: SOCKS5 代理，使用 SOCKS5ProxyDialer（SOCKS5 隧道 + utls 握手）
 func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *url.URL, profile *tlsfingerprint.Profile) (http.RoundTripper, error) {
+	return buildUpstreamTransportWithTLSFingerprintAndGuard(settings, proxyURL, profile, nil)
+}
+
+func buildUpstreamTransportWithTLSFingerprintAndGuard(
+	settings poolSettings,
+	proxyURL *url.URL,
+	profile *tlsfingerprint.Profile,
+	guard *officialegress.Guard,
+) (http.RoundTripper, error) {
 	// profile 的 ALPN 声明 h2 时，改走真正的 HTTP/2（utls 握手 + x/net/http2 会话）。
 	// net/http 对自定义 DialTLSContext 返回的 utls 连接不会按 ALPN 自动升级 h2，故需显式包装。
 	if tlsfingerprint.ProfileNegotiatesH2(profile) {
@@ -1410,7 +1440,7 @@ func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *u
 		if err != nil {
 			slog.Warn("tls_fingerprint_h2_transport_failed_fallback_h1", "profile", profile.Name, "error", err)
 		} else {
-			return wrapUpstreamTransportWireOptions(h2Transport, profile), nil
+			return wrapUpstreamTransportWireOptions(h2Transport, profile, guard), nil
 		}
 	}
 
@@ -1453,13 +1483,25 @@ func buildUpstreamTransportWithTLSFingerprint(settings poolSettings, proxyURL *u
 		}
 	}
 
-	return wrapUpstreamTransportWireOptions(transport, profile), nil
+	return wrapUpstreamTransportWireOptions(transport, profile, guard), nil
 }
 
 // wrapUpstreamTransportWireOptions 按画像声明补齐 wire 层形态。目前只有 header 名
 // 大小写一项：官方 Rust 客户端在 HTTP/1.1 上发全小写，Go 默认发 canonical 形态。
 // 未声明该选项的画像原样返回，不引入额外开销。
-func wrapUpstreamTransportWireOptions(base http.RoundTripper, profile *tlsfingerprint.Profile) http.RoundTripper {
+func wrapUpstreamTransportWireOptions(
+	base http.RoundTripper,
+	profile *tlsfingerprint.Profile,
+	guards ...*officialegress.Guard,
+) http.RoundTripper {
+	if len(guards) > 0 && guards[0] != nil {
+		base = officialegress.NewGuardedRoundTripper(
+			base,
+			guards[0],
+			officialegress.BackendHTTPUpstream,
+			officialegress.WireProtocolHTTP,
+		)
+	}
 	if base == nil || profile == nil || !profile.Transport.LowercaseHeaders {
 		return base
 	}

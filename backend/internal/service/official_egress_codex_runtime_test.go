@@ -17,17 +17,15 @@ import (
 // 来自 registry 的 release 指针而非写死常量。升级 Codex 版本时应当只需登记新快照
 // 并调整 release 指针，不改动 §3.5.2 的共享接入点。
 func TestOfficialCodexVersionSnapshotsDriveVersionResolution(t *testing.T) {
-	require.Contains(t, officialCodexVersionSnapshots, officialCodexVersion0145)
-
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	require.NoError(t, err)
 	require.Equal(t, officialCodexVersion0145, profile.Version)
 
 	// 未登记版本必须明确失败，不得静默回退到任何既有快照。
-	_, err = resolveCodex0145VersionProfile("0.146.0")
+	_, err = resolveCodexVersionProfile("0.146.0")
 	require.ErrorContains(t, err, "未知 Codex 官方出站版本画像")
 
-	active, err := activeOfficialCodexVersion()
+	active, err := officialCodexVersionForMode(officialClientProfileModeActive)
 	require.NoError(t, err)
 	require.Equal(t, officialCodexVersion0145, active)
 }
@@ -41,9 +39,9 @@ func TestOfficialCodex0145ProjectEndpointJSONBodyDropsFieldsOutsideClosedSet(t *
 	payload, err := decodeOfficialJSONObjectUseNumber(original)
 	require.NoError(t, err)
 
-	encoded, err := officialCodex0145ProjectEndpointJSONBody(
+	encoded, err := officialCodexProjectEndpointJSONBody(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointAlphaSearch),
+		codexEndpointID(officialCodexEndpointAlphaSearch),
 		payload,
 		original,
 		nil,
@@ -69,7 +67,7 @@ func TestOfficialCodex0145RuntimeStateRejectsForgedThirdPartyConditions(t *testi
 	c.Request.Header.Set("x-responsesapi-include-timing-metrics", "true")
 	c.Request.Header.Set("x-openai-internal-codex-residency", "us")
 
-	state, err := resolveOfficialCodex0145RuntimeState(c, officialEgressTestAccount(145, PlatformOpenAI))
+	state, err := resolveOfficialCodexRuntimeState(c, officialEgressTestAccount(145, PlatformOpenAI), officialClientProfileModeActive, officialClientProfileModeActive)
 	require.NoError(t, err)
 	require.Equal(t, officialCodexSurfaceExec, state.SurfaceID)
 	require.True(t, state.UserAgentSuffixEnabled)
@@ -81,18 +79,18 @@ func TestOfficialCodex0145RuntimeStateUsesManagedAccountConditions(t *testing.T)
 	account.Extra[officialCodexResidencyAccountExtraKey] = "us"
 	account.Extra[officialCodexRuntimeMetricsAccountExtra] = true
 
-	state, err := resolveOfficialCodex0145RuntimeState(nil, account)
+	state, err := resolveOfficialCodexRuntimeState(nil, account, officialClientProfileModeActive, officialClientProfileModeActive)
 	require.NoError(t, err)
 	require.Equal(t, "us", state.ConditionalHeaders["x-openai-internal-codex-residency"])
 	require.Equal(t, "true", state.ConditionalHeaders["x-responsesapi-include-timing-metrics"])
 
 	account.Extra[officialCodexResidencyAccountExtraKey] = "eu"
-	_, err = resolveOfficialCodex0145RuntimeState(nil, account)
+	_, err = resolveOfficialCodexRuntimeState(nil, account, officialClientProfileModeActive, officialClientProfileModeActive)
 	require.ErrorContains(t, err, "只允许 us")
 }
 
 func TestOfficialCodex0145RuntimeStateProjectsMismatchedIdentityToProfile(t *testing.T) {
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	require.NoError(t, err)
 
 	for _, testCase := range []struct {
@@ -110,7 +108,7 @@ func TestOfficialCodex0145RuntimeStateProjectsMismatchedIdentityToProfile(t *tes
 			userAgent, renderErr := profile.RenderUserAgent(testCase.surfaceID, testCase.includeSuffix)
 			require.NoError(t, renderErr)
 			c := officialCodex0145RuntimeIngress(userAgent, testCase.originator)
-			state, resolveErr := resolveOfficialCodex0145RuntimeState(c, officialEgressTestAccount(145, PlatformOpenAI))
+			state, resolveErr := resolveOfficialCodexRuntimeState(c, officialEgressTestAccount(145, PlatformOpenAI), officialClientProfileModeActive, officialClientProfileModeActive)
 			require.NoError(t, resolveErr)
 			require.Equal(t, testCase.surfaceID, state.SurfaceID)
 			require.Equal(t, testCase.includeSuffix, state.UserAgentSuffixEnabled)
@@ -122,10 +120,12 @@ func TestOfficialCodex0145RuntimeStateProjectsMismatchedIdentityToProfile(t *tes
 		true,
 	)
 	require.NoError(t, err)
-	xtermState, err := resolveOfficialCodex0145RuntimeState(
+	xtermState, err := resolveOfficialCodexRuntimeState(
 		officialCodex0145RuntimeIngress(xtermUserAgent, "codex-tui"),
-		officialEgressTestAccount(145, PlatformOpenAI),
-	)
+		officialEgressTestAccount(145, PlatformOpenAI), officialClientProfileModeActive,
+
+		officialClientProfileModeActive)
+
 	require.NoError(t, err)
 	require.Equal(t, "xterm-256color", xtermState.TerminalToken)
 
@@ -133,25 +133,32 @@ func TestOfficialCodex0145RuntimeStateProjectsMismatchedIdentityToProfile(t *tes
 	// 改用画像 originator 出站。
 	userAgent, err := profile.RenderUserAgent(officialCodexSurfaceExec, true)
 	require.NoError(t, err)
-	mismatchedOriginator, err := resolveOfficialCodex0145RuntimeState(
+	mismatchedOriginator, err := resolveOfficialCodexRuntimeState(
 		officialCodex0145RuntimeIngress(userAgent, "codex-tui"),
-		officialEgressTestAccount(145, PlatformOpenAI),
-	)
+		officialEgressTestAccount(145, PlatformOpenAI), officialClientProfileModeActive,
+
+		officialClientProfileModeActive)
+
 	require.NoError(t, err)
 	require.Equal(t, officialCodexSurfaceExec, mismatchedOriginator.SurfaceID)
 	require.Equal(t, "codex_exec", mismatchedOriginator.Originator)
 
 	// UA 无法匹配任何 surface 时投影到默认画像状态，同样不拒绝服务。
-	forged, err := resolveOfficialCodex0145RuntimeState(
+	forged, err := resolveOfficialCodexRuntimeState(
 		officialCodex0145RuntimeIngress(userAgent+" forged", "codex_exec"),
-		officialEgressTestAccount(145, PlatformOpenAI),
-	)
+		officialEgressTestAccount(145, PlatformOpenAI), officialClientProfileModeActive,
+
+		officialClientProfileModeActive)
+
 	require.NoError(t, err)
-	require.Equal(t, defaultOfficialCodex0145RuntimeState(), forged)
+	expected := defaultOfficialCodexRuntimeState()
+	expected.ProfileMode = officialClientProfileModeActive
+	require.Equal(t, expected, forged)
 }
 
 func TestOfficialCodex0145RuntimeStateProjectsOtherOfficialClientsToDefaultSurface(t *testing.T) {
-	defaultState := defaultOfficialCodex0145RuntimeState()
+	defaultState := defaultOfficialCodexRuntimeState()
+	defaultState.ProfileMode = officialClientProfileModeActive
 	account := officialEgressTestAccount(145, PlatformOpenAI)
 	clients := []struct {
 		name       string
@@ -181,9 +188,9 @@ func TestOfficialCodex0145RuntimeStateProjectsOtherOfficialClientsToDefaultSurfa
 			originator: "codex_exec",
 		},
 	}
-	endpoints := []codex0145EndpointID{
-		codex0145EndpointID(officialCodexEndpointResponsesHTTP),
-		codex0145EndpointID(officialCodexEndpointResponsesWS),
+	endpoints := []codexEndpointID{
+		codexEndpointID(officialCodexEndpointResponsesHTTP),
+		codexEndpointID(officialCodexEndpointResponsesWS),
 	}
 
 	for _, client := range clients {
@@ -194,7 +201,7 @@ func TestOfficialCodex0145RuntimeStateProjectsOtherOfficialClientsToDefaultSurfa
 				c.Request.Header.Set("x-openai-subagent", "review")
 				c.Request.Header.Set("x-openai-memgen-request", "true")
 				c.Request.Header.Set("x-codex-parent-thread-id", "forged-parent")
-				state, err := resolveOfficialCodex0145RuntimeState(c, account, endpointID)
+				state, err := resolveOfficialCodexRuntimeState(c, account, officialClientProfileModeActive, endpointID)
 				require.NoError(t, err)
 				require.Equal(t, defaultState, state)
 			})
@@ -203,17 +210,18 @@ func TestOfficialCodex0145RuntimeStateProjectsOtherOfficialClientsToDefaultSurfa
 }
 
 func TestOfficialCodex0145RuntimeStateModelsBootstrapIsProfilePhase(t *testing.T) {
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	require.NoError(t, err)
 	for _, surfaceID := range []string{officialCodexSurfaceExec, officialCodexSurfaceTUI} {
 		userAgent, renderErr := profile.RenderUserAgent(surfaceID, false)
 		require.NoError(t, renderErr)
 		ingress := officialCodex0145RuntimeIngress(userAgent, "codex_cli_rs")
-		state, resolveErr := resolveOfficialCodex0145RuntimeState(
+		state, resolveErr := resolveOfficialCodexRuntimeState(
 			ingress,
-			officialEgressTestAccount(145, PlatformOpenAI),
-			codex0145EndpointID(officialCodexEndpointModels),
-		)
+			officialEgressTestAccount(145, PlatformOpenAI), officialClientProfileModeActive,
+
+			codexEndpointID(officialCodexEndpointModels))
+
 		require.NoError(t, resolveErr)
 		require.Equal(t, officialCodexProcessPhaseInitialModels, state.ProcessPhase)
 		require.Equal(t, "codex_cli_rs", state.Originator)
@@ -221,11 +229,12 @@ func TestOfficialCodex0145RuntimeStateModelsBootstrapIsProfilePhase(t *testing.T
 
 		// codex_cli_rs 只在 models 首跳成立；用在其他端点时不再拒绝，改按画像
 		// originator 与 initialized 阶段出站。
-		nonModels, resolveErr := resolveOfficialCodex0145RuntimeState(
+		nonModels, resolveErr := resolveOfficialCodexRuntimeState(
 			ingress,
-			officialEgressTestAccount(145, PlatformOpenAI),
-			codex0145EndpointID(officialCodexEndpointResponsesHTTP),
-		)
+			officialEgressTestAccount(145, PlatformOpenAI), officialClientProfileModeActive,
+
+			codexEndpointID(officialCodexEndpointResponsesHTTP))
+
 		require.NoError(t, resolveErr)
 		require.Equal(t, officialCodexProcessPhaseInitialized, nonModels.ProcessPhase)
 		require.NotEqual(t, "codex_cli_rs", nonModels.Originator)
@@ -233,7 +242,7 @@ func TestOfficialCodex0145RuntimeStateModelsBootstrapIsProfilePhase(t *testing.T
 }
 
 func TestOfficialCodex0145RuntimeStateCrossChecksSubagentMetadata(t *testing.T) {
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	require.NoError(t, err)
 	userAgent, err := profile.RenderUserAgent(officialCodexSurfaceExec, true)
 	require.NoError(t, err)
@@ -243,7 +252,7 @@ func TestOfficialCodex0145RuntimeStateCrossChecksSubagentMetadata(t *testing.T) 
 	guardian.Request.Header.Set("x-openai-subagent", "Other(custom-review)")
 	guardian.Request.Header.Set("x-codex-parent-thread-id", parentID)
 	guardian.Request.Header.Set("x-codex-turn-metadata", `{"thread_source":"subagent","subagent_kind":"Other(custom-review)","parent_thread_id":"`+parentID+`"}`)
-	state, err := resolveOfficialCodex0145RuntimeState(guardian, officialEgressTestAccount(145, PlatformOpenAI))
+	state, err := resolveOfficialCodexRuntimeState(guardian, officialEgressTestAccount(145, PlatformOpenAI), officialClientProfileModeActive, officialClientProfileModeActive)
 	require.NoError(t, err)
 	require.Equal(t, "Other(custom-review)", state.ConditionalHeaders["x-openai-subagent"])
 	require.Equal(t, parentID, state.ConditionalHeaders["x-codex-parent-thread-id"])
@@ -252,7 +261,7 @@ func TestOfficialCodex0145RuntimeStateCrossChecksSubagentMetadata(t *testing.T) 
 	mismatch := officialCodex0145RuntimeIngress(userAgent, "codex_exec")
 	mismatch.Request.Header.Set("x-openai-subagent", "guardian")
 	mismatch.Request.Header.Set("x-codex-turn-metadata", `{"thread_source":"subagent","subagent_kind":"review"}`)
-	mismatchState, err := resolveOfficialCodex0145RuntimeState(mismatch, officialEgressTestAccount(145, PlatformOpenAI))
+	mismatchState, err := resolveOfficialCodexRuntimeState(mismatch, officialEgressTestAccount(145, PlatformOpenAI), officialClientProfileModeActive, officialClientProfileModeActive)
 	require.NoError(t, err)
 	require.NotContains(t, mismatchState.ConditionalHeaders, "x-openai-subagent")
 	require.NotContains(t, mismatchState.ConditionalHeaders, "x-codex-parent-thread-id")
@@ -261,7 +270,7 @@ func TestOfficialCodex0145RuntimeStateCrossChecksSubagentMetadata(t *testing.T) 
 	memgen.Request.Header.Set("x-openai-subagent", "memory_consolidation")
 	memgen.Request.Header.Set("x-openai-memgen-request", "true")
 	memgen.Request.Header.Set("x-codex-turn-metadata", `{"thread_source":"memory_consolidation"}`)
-	state, err = resolveOfficialCodex0145RuntimeState(memgen, officialEgressTestAccount(145, PlatformOpenAI))
+	state, err = resolveOfficialCodexRuntimeState(memgen, officialEgressTestAccount(145, PlatformOpenAI), officialClientProfileModeActive, officialClientProfileModeActive)
 	require.NoError(t, err)
 	require.Equal(t, "true", state.ConditionalHeaders["x-openai-memgen-request"])
 
@@ -269,56 +278,20 @@ func TestOfficialCodex0145RuntimeStateCrossChecksSubagentMetadata(t *testing.T) 
 	threadSpawn.Request.Header.Set("x-openai-subagent", "collab_spawn")
 	threadSpawn.Request.Header.Set("x-codex-parent-thread-id", parentID)
 	threadSpawn.Request.Header.Set("x-codex-turn-metadata", `{"thread_source":"subagent","subagent_kind":"thread_spawn","parent_thread_id":"`+parentID+`"}`)
-	state, err = resolveOfficialCodex0145RuntimeState(threadSpawn, officialEgressTestAccount(145, PlatformOpenAI))
+	state, err = resolveOfficialCodexRuntimeState(threadSpawn, officialEgressTestAccount(145, PlatformOpenAI), officialClientProfileModeActive, officialClientProfileModeActive)
 	require.NoError(t, err)
 	require.Equal(t, "collab_spawn", state.ConditionalHeaders["x-openai-subagent"])
 
 	memorySubagent := officialCodex0145RuntimeIngress(userAgent, "codex_exec")
 	memorySubagent.Request.Header.Set("x-openai-subagent", "memory_consolidation")
 	memorySubagent.Request.Header.Set("x-codex-turn-metadata", `{"thread_source":"subagent","subagent_kind":"memory_consolidation"}`)
-	state, err = resolveOfficialCodex0145RuntimeState(memorySubagent, officialEgressTestAccount(145, PlatformOpenAI))
+	state, err = resolveOfficialCodexRuntimeState(memorySubagent, officialEgressTestAccount(145, PlatformOpenAI), officialClientProfileModeActive, officialClientProfileModeActive)
 	require.NoError(t, err)
 	require.Empty(t, state.ConditionalHeaders["x-openai-memgen-request"])
 }
 
-func TestOfficialCodex0145RuntimeStatePropagatesAndProjectsByEndpoint(t *testing.T) {
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
-	require.NoError(t, err)
-	userAgent, err := profile.RenderUserAgent(officialCodexSurfaceTUI, false)
-	require.NoError(t, err)
-	account := officialEgressTestAccount(145, PlatformOpenAI)
-	account.Extra[officialCodexResidencyAccountExtraKey] = "us"
-	ingress := officialCodex0145RuntimeIngress(userAgent, "codex-tui")
-
-	ctx, err := bindOfficialCodex0145RuntimeStateFromIngress(context.Background(), ingress, account)
-	require.NoError(t, err)
-	req := httptest.NewRequest(http.MethodGet, "https://chatgpt.com/backend-api/wham/usage", nil).WithContext(ctx)
-	req, egressContext, err := attachOfficialCodex0145EndpointRequest(
-		req,
-		account,
-		codex0145EndpointID(officialCodexEndpointWhamUsage),
-		"runtime-propagation-test",
-	)
-	require.NoError(t, err)
-	actualUserAgent, actualOriginator, err := officialCodex0145ProcessIdentity(egressContext)
-	require.NoError(t, err)
-	require.Equal(t, userAgent, actualUserAgent)
-	require.Equal(t, "codex-tui", actualOriginator)
-
-	req.Header.Set("user-agent", actualUserAgent)
-	req.Header.Set("authorization", "Bearer test")
-	req.Header.Set("chatgpt-account-id", "acct_test")
-	req.Header.Set("accept", "*/*")
-	req.Header.Set("x-openai-internal-codex-residency", "forged")
-	req.Header.Set("x-openai-subagent", "forged")
-	_, err = officialCodex0145FinalizeEndpointHeaders(egressContext, req.Header, nil)
-	require.NoError(t, err)
-	require.Empty(t, req.Header.Get("x-openai-internal-codex-residency"))
-	require.Empty(t, req.Header.Get("x-openai-subagent"))
-}
-
 func TestOfficialCodex0145HTTPAttachUsesRuntimeFrozenBeforeTokenRefresh(t *testing.T) {
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	require.NoError(t, err)
 	tuiUserAgent, err := profile.RenderUserAgentWithTerminal(
 		officialCodexSurfaceTUI,
@@ -328,12 +301,13 @@ func TestOfficialCodex0145HTTPAttachUsesRuntimeFrozenBeforeTokenRefresh(t *testi
 	require.NoError(t, err)
 	c := officialCodex0145RuntimeIngress(tuiUserAgent, "codex-tui")
 	account := officialEgressTestAccount(145, PlatformOpenAI)
-	ctx, err := bindOfficialCodex0145RuntimeStateFromIngress(
+	ctx, err := bindOfficialCodexRuntimeStateFromIngress(
 		context.Background(),
 		c,
-		account,
-		codex0145EndpointID(officialCodexEndpointResponsesHTTP),
-	)
+		account, officialClientProfileModeActive,
+
+		codexEndpointID(officialCodexEndpointResponsesHTTP))
+
 	require.NoError(t, err)
 
 	// 模拟刷新完成后兼容层改写入站 header；最终 HTTP attach 只能使用 context
@@ -358,7 +332,7 @@ func TestOfficialCodex0145HTTPAttachUsesRuntimeFrozenBeforeTokenRefresh(t *testi
 }
 
 func TestOfficialCodex0145HTTPCompressionFeatureSurvivesIngressBodyDecode(t *testing.T) {
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	require.NoError(t, err)
 	userAgent, err := profile.RenderUserAgent(officialCodexSurfaceExec, true)
 	require.NoError(t, err)
@@ -366,7 +340,7 @@ func TestOfficialCodex0145HTTPCompressionFeatureSurvivesIngressBodyDecode(t *tes
 	body := []byte(`{"model":"gpt-5.5","input":[]}`)
 	require.NoError(t, compressOfficialOpenAIHTTPRequest(c.Request, body, 3))
 	c.Request = c.Request.WithContext(
-		WithOfficialCodex0145IngressRuntime(c.Request.Context(), c),
+		WithOfficialCodexIngressRuntime(c.Request.Context(), c),
 	)
 
 	// 真实调用通用 body reader，证明冻结发生在它移除线上的编码头之前。
@@ -374,62 +348,64 @@ func TestOfficialCodex0145HTTPCompressionFeatureSurvivesIngressBodyDecode(t *tes
 	require.NoError(t, err)
 	require.JSONEq(t, string(body), string(decoded))
 	require.Empty(t, c.Request.Header.Get("Content-Encoding"))
-	ctx, err := bindOfficialCodex0145RuntimeStateFromIngress(
+	ctx, err := bindOfficialCodexRuntimeStateFromIngress(
 		c.Request.Context(),
 		c,
-		officialEgressTestAccount(145, PlatformOpenAI),
-		codex0145EndpointID(officialCodexEndpointResponsesHTTP),
-	)
+		officialEgressTestAccount(145, PlatformOpenAI), officialClientProfileModeActive,
+
+		codexEndpointID(officialCodexEndpointResponsesHTTP))
+
 	require.NoError(t, err)
-	state, found, err := officialCodex0145RuntimeStateFromContext(ctx)
+	state, found, err := officialCodexRuntimeStateFromContext(ctx)
 	require.NoError(t, err)
 	require.True(t, found)
 	require.True(t, state.RequestCompressionEnabled)
 }
 
 func TestOfficialCodex0145HTTPCompressionFeatureIgnoresLateHeaderMutation(t *testing.T) {
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	require.NoError(t, err)
 	userAgent, err := profile.RenderUserAgent(officialCodexSurfaceExec, true)
 	require.NoError(t, err)
 	c := officialCodex0145RuntimeIngress(userAgent, "codex_exec")
 	c.Request = c.Request.WithContext(
-		WithOfficialCodex0145IngressRuntime(c.Request.Context(), c),
+		WithOfficialCodexIngressRuntime(c.Request.Context(), c),
 	)
 
 	// 冻结后再伪造 zstd 不能改变该调用的 feature，证明 Finalizer 不回读当前 header。
 	c.Request.Header.Set("Content-Encoding", "zstd")
-	ctx, err := bindOfficialCodex0145RuntimeStateFromIngress(
+	ctx, err := bindOfficialCodexRuntimeStateFromIngress(
 		c.Request.Context(),
 		c,
-		officialEgressTestAccount(145, PlatformOpenAI),
-		codex0145EndpointID(officialCodexEndpointResponsesHTTP),
-	)
+		officialEgressTestAccount(145, PlatformOpenAI), officialClientProfileModeActive,
+
+		codexEndpointID(officialCodexEndpointResponsesHTTP))
+
 	require.NoError(t, err)
-	state, found, err := officialCodex0145RuntimeStateFromContext(ctx)
+	state, found, err := officialCodexRuntimeStateFromContext(ctx)
 	require.NoError(t, err)
 	require.True(t, found)
 	require.False(t, state.RequestCompressionEnabled)
 }
 
 func TestWithOfficialCodex0145IngressRuntimeKeepsFirstWireSnapshot(t *testing.T) {
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	require.NoError(t, err)
 	userAgent, err := profile.RenderUserAgent(officialCodexSurfaceExec, true)
 	require.NoError(t, err)
 	c := officialCodex0145RuntimeIngress(userAgent, "codex_exec")
 	c.Request.Header.Set("Content-Encoding", "zstd")
 
-	first := WithOfficialCodex0145IngressRuntime(c.Request.Context(), c)
+	first := WithOfficialCodexIngressRuntime(c.Request.Context(), c)
 	// 模拟 Composite 路由完成解压、后续兼容层又改写进程头；Handler 的重复捕获
 	// 必须返回同一上下文，不能用标准化后的请求覆盖首次 wire 快照。
 	c.Request.Header.Del("Content-Encoding")
 	c.Request.Header.Set("User-Agent", "third-party/1.0")
 	c.Request.Header.Del("originator")
-	second := WithOfficialCodex0145IngressRuntime(first, c)
+	second := WithOfficialCodexIngressRuntime(first, c)
 
 	require.True(t, first == second)
-	snapshot, captured := officialCodex0145IngressRuntimeSnapshotFromContext(second)
+	snapshot, captured := officialCodexIngressRuntimeSnapshotFromContext(second)
 	require.True(t, captured)
 	require.True(t, snapshot.OfficialClient)
 	require.Equal(t, userAgent, snapshot.UserAgent)
@@ -438,7 +414,8 @@ func TestWithOfficialCodex0145IngressRuntimeKeepsFirstWireSnapshot(t *testing.T)
 }
 
 func TestOfficialCodex0145RuntimeStateIsDeepCopiedAcrossContextFreeze(t *testing.T) {
-	state := defaultOfficialCodex0145RuntimeState()
+	state := defaultOfficialCodexRuntimeState()
+	state.ProfileMode = officialClientProfileModeActive
 	state.ConditionalHeaders["x-openai-internal-codex-residency"] = "us"
 	egressContext := NewOfficialEgressContext(OfficialEgressContextInput{
 		AccountID:         145,

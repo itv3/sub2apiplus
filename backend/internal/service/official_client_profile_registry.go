@@ -8,9 +8,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/openaiidentity"
-
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 )
 
 const (
@@ -28,9 +27,6 @@ const (
 	officialClientBuildAnthropicCLI21220 = "anthropic_claude_code_2_1_220_linux_x64_node_26_3_0"
 	officialClientBuildAnthropicCLI21218 = "anthropic_claude_code_2_1_218_linux_x64_node_26_3_0"
 	officialClientBuildAnthropicDesktop  = "anthropic_claude_desktop_2_1_209_macos_arm64_node_26_3_0"
-	officialClientBuildOpenAICodex0145   = "openai_codex_exec_0_145_0_ubuntu_24_04_x64_unknown"
-	officialClientBuildOpenAICodexPrev   = "openai_codex_exec_0_145_0_ubuntu_24_04_x64_xterm"
-	officialClientBuildOpenAIDesktop     = "openai_codex_desktop_0_144_0_alpha_4_macos_arm64"
 
 	// 这三个别名表示当前发布画像的传输边界，供连接池与兼容性测试使用。
 	officialEgressTransportProfileAnthropicHTTP = "anthropic-http-claude-code-2.1.220-direct"
@@ -91,24 +87,24 @@ type officialClientReleasePointer struct {
 	Previous string
 }
 
-type officialClientProfileRegistry struct {
+type anthropicClientProfileCatalog struct {
 	builds   map[string]officialClientBuild
 	profiles map[string]officialClientWireProfile
 	releases map[string]officialClientReleasePointer
 }
 
-var defaultOfficialClientProfileRegistry = mustBuildOfficialClientProfileRegistry()
+var defaultAnthropicClientProfileCatalog = mustBuildAnthropicClientProfileCatalog()
 
-func mustBuildOfficialClientProfileRegistry() *officialClientProfileRegistry {
-	registry, err := buildOfficialClientProfileRegistry()
+func mustBuildAnthropicClientProfileCatalog() *anthropicClientProfileCatalog {
+	registry, err := buildAnthropicClientProfileCatalog()
 	if err != nil {
 		panic(err)
 	}
 	return registry
 }
 
-func buildOfficialClientProfileRegistry() (*officialClientProfileRegistry, error) {
-	registry := &officialClientProfileRegistry{
+func buildAnthropicClientProfileCatalog() (*anthropicClientProfileCatalog, error) {
+	registry := &anthropicClientProfileCatalog{
 		builds:   make(map[string]officialClientBuild),
 		profiles: make(map[string]officialClientWireProfile),
 		releases: make(map[string]officialClientReleasePointer),
@@ -132,7 +128,7 @@ func buildOfficialClientProfileRegistry() (*officialClientProfileRegistry, error
 	return registry, nil
 }
 
-func (r *officialClientProfileRegistry) addBuild(build officialClientBuild) error {
+func (r *anthropicClientProfileCatalog) addBuild(build officialClientBuild) error {
 	build.ID = strings.TrimSpace(build.ID)
 	if build.ID == "" || strings.TrimSpace(build.Version) == "" || strings.TrimSpace(build.UserAgent) == "" {
 		return errors.New("official client build is incomplete")
@@ -144,7 +140,7 @@ func (r *officialClientProfileRegistry) addBuild(build officialClientBuild) erro
 	return nil
 }
 
-func (r *officialClientProfileRegistry) addProfile(profile officialClientWireProfile) error {
+func (r *anthropicClientProfileCatalog) addProfile(profile officialClientWireProfile) error {
 	profile.ID = strings.TrimSpace(profile.ID)
 	profile.Purpose = strings.TrimSpace(profile.Purpose)
 	profile.BuildID = strings.TrimSpace(profile.BuildID)
@@ -166,7 +162,7 @@ func (r *officialClientProfileRegistry) addProfile(profile officialClientWirePro
 	return nil
 }
 
-func (r *officialClientProfileRegistry) addRelease(purpose string, release officialClientReleasePointer) error {
+func (r *anthropicClientProfileCatalog) addRelease(purpose string, release officialClientReleasePointer) error {
 	purpose = strings.TrimSpace(purpose)
 	if purpose == "" || strings.TrimSpace(release.Active) == "" || strings.TrimSpace(release.Previous) == "" {
 		return errors.New("official client release pointer is incomplete")
@@ -180,7 +176,7 @@ func (r *officialClientProfileRegistry) addRelease(purpose string, release offic
 	return nil
 }
 
-func (r *officialClientProfileRegistry) resolve(purpose, mode string) (officialClientResolvedProfile, error) {
+func (r *anthropicClientProfileCatalog) resolve(purpose, mode string) (officialClientResolvedProfile, error) {
 	if r == nil {
 		return officialClientResolvedProfile{}, errors.New("official client profile registry is nil")
 	}
@@ -199,7 +195,7 @@ func (r *officialClientProfileRegistry) resolve(purpose, mode string) (officialC
 	return r.resolveByID(profileID)
 }
 
-func (r *officialClientProfileRegistry) resolveByID(profileID string) (officialClientResolvedProfile, error) {
+func (r *anthropicClientProfileCatalog) resolveByID(profileID string) (officialClientResolvedProfile, error) {
 	profile, exists := r.profiles[strings.TrimSpace(profileID)]
 	if !exists {
 		return officialClientResolvedProfile{}, fmt.Errorf("unknown official client profile: %s", profileID)
@@ -215,11 +211,95 @@ func (r *officialClientProfileRegistry) resolveByID(profileID string) (officialC
 }
 
 func resolveOfficialClientProfile(purpose, mode string) (officialClientResolvedProfile, error) {
-	return defaultOfficialClientProfileRegistry.resolve(purpose, mode)
+	switch purpose {
+	case officialClientPurposeOpenAIOAuthResponsesHTTP,
+		officialClientPurposeOpenAIOAuthResponsesWS,
+		officialClientPurposeOpenAIAPIKeyResponsesHTTP,
+		officialClientPurposeOpenAIAPIKeyResponsesWS:
+		return resolveFormalOpenAIClientProfile(purpose, mode)
+	default:
+		return defaultAnthropicClientProfileCatalog.resolve(purpose, mode)
+	}
 }
 
 func resolveOfficialClientProfileByID(profileID string) (officialClientResolvedProfile, error) {
-	return defaultOfficialClientProfileRegistry.resolveByID(profileID)
+	return defaultAnthropicClientProfileCatalog.resolveByID(profileID)
+}
+
+// resolveFormalOpenAIClientProfile 只把正式 ReleaseCatalog 投影到仍在迁移期消费的
+// service DTO。它不维护 release pointer，也不读取 service 侧 registry。
+func resolveFormalOpenAIClientProfile(purpose, mode string) (officialClientResolvedProfile, error) {
+	switch strings.ToLower(strings.TrimSpace(mode)) {
+	case "", officialClientProfileModeActive, officialClientProfileModePrevious:
+	default:
+		return officialClientResolvedProfile{}, fmt.Errorf("unknown official client profile mode: %s", mode)
+	}
+	releaseMode := officialegress.ReleaseMode(normalizeOfficialClientProfileMode(mode))
+	release, err := officialegress.DefaultReleaseCatalog().Resolve(releaseMode)
+	if err != nil {
+		return officialClientResolvedProfile{}, err
+	}
+	releasePurpose := officialegress.RegistryPurposeOpenAIOAuthHTTP
+	endpointID := officialCodexEndpointResponsesHTTP
+	transport := "http"
+	switch purpose {
+	case officialClientPurposeOpenAIOAuthResponsesWS, officialClientPurposeOpenAIAPIKeyResponsesWS:
+		releasePurpose = officialegress.RegistryPurposeOpenAIOAuthWS
+		endpointID = officialCodexEndpointResponsesWS
+		transport = "websocket"
+	case officialClientPurposeOpenAIOAuthResponsesHTTP, officialClientPurposeOpenAIAPIKeyResponsesHTTP:
+	default:
+		return officialClientResolvedProfile{}, fmt.Errorf("unknown OpenAI client profile purpose: %s", purpose)
+	}
+	node, ok := release.Node(releasePurpose)
+	if !ok {
+		return officialClientResolvedProfile{}, fmt.Errorf("formal release lacks purpose: %s", releasePurpose)
+	}
+	build := officialClientBuild{
+		ID: node.Build.ID, Provider: node.Build.Provider, Product: node.Build.Product,
+		Surface: node.Build.Surface, Version: node.Build.Version,
+		UserAgent: node.Build.UserAgent, Originator: node.Build.Originator,
+		Source: node.Build.Source,
+	}
+	for _, header := range node.Build.RuntimeHeaders {
+		build.RuntimeHeaders = append(build.RuntimeHeaders, officialClientHeaderValue{
+			Name: header.Name, Value: header.Value,
+		})
+	}
+	wire := officialClientWireProfile{
+		ID: node.Wire.ID, Purpose: purpose, BuildID: node.Build.ID,
+		AuthMode: node.Wire.AuthMode, Endpoint: node.Wire.Endpoint,
+		Transport: transport, NetworkVariant: node.Wire.NetworkVariant,
+		BetaHeader: node.Wire.BetaHeader, TransportProfileID: node.Wire.TransportProfileID,
+		Source: node.Wire.Source, Digest: node.Wire.Digest,
+	}
+	for _, header := range node.Wire.StaticHeaders {
+		wire.StaticHeaders = append(wire.StaticHeaders, officialClientHeaderValue{
+			Name: header.Name, Value: header.Value,
+		})
+	}
+	if strings.Contains(purpose, "apikey") {
+		wire.ID += ".apikey_projection"
+		wire.AuthMode = "apikey"
+		for _, endpoint := range release.ExecutableProfile().Endpoints() {
+			if endpoint.ID != endpointID {
+				continue
+			}
+			for _, header := range endpoint.Headers {
+				switch strings.ToLower(header.Name) {
+				case "x-codex-beta-features", "x-openai-internal-codex-responses-lite", "openai-beta":
+					if header.Value != "" {
+						wire.StaticHeaders = append(wire.StaticHeaders, officialClientHeaderValue{
+							Name: header.WireName, Value: header.Value,
+						})
+					}
+				}
+			}
+			break
+		}
+		wire.Digest = digestOfficialClientProfile(build, wire)
+	}
+	return officialClientResolvedProfile{Wire: wire, Build: build}, nil
 }
 
 func officialClientProfileModeFromConfig(cfg *config.Config) string {
@@ -320,36 +400,6 @@ func officialClientBuildDefinitions() []officialClientBuild {
 			},
 			Source: "capture:desktop-2.1.209-202607",
 		},
-		{
-			ID:         officialClientBuildOpenAICodex0145,
-			Provider:   PlatformOpenAI,
-			Product:    "codex",
-			Surface:    "cli",
-			Version:    openaiidentity.CodexVersion,
-			UserAgent:  openaiidentity.CodexUserAgent,
-			Originator: openaiidentity.CodexOriginator,
-			Source:     "capture:oauth-20260726T014021Z,api-20260726T014252Z",
-		},
-		{
-			ID:         officialClientBuildOpenAICodexPrev,
-			Provider:   PlatformOpenAI,
-			Product:    "codex",
-			Surface:    "cli",
-			Version:    "0.145.0",
-			UserAgent:  "codex_exec/0.145.0 (Ubuntu 24.4.0; x86_64) xterm-256color (codex_exec; 0.145.0)",
-			Originator: "codex_exec",
-			Source:     "capture:phase0-20260724",
-		},
-		{
-			ID:         officialClientBuildOpenAIDesktop,
-			Provider:   PlatformOpenAI,
-			Product:    "codex_desktop",
-			Surface:    "desktop",
-			Version:    "0.144.0-alpha.4",
-			UserAgent:  "Codex Desktop/0.144.0-alpha.4 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.707.51957)",
-			Originator: "Codex Desktop",
-			Source:     "capture:desktop-0.144.0-alpha.4-202607",
-		},
 	}
 }
 
@@ -365,42 +415,6 @@ func officialClientWireProfileDefinitions() []officialClientWireProfile {
 		newAnthropicWireProfile("anthropic_claude_desktop_2_1_209_apikey_messages_http_previous", officialClientPurposeAnthropicAPIKeyMessagesHTTP, officialClientBuildAnthropicDesktop, "apikey", "messages", anthropicDesktopBeta, "capture:desktop-2.1.209-202607"),
 		newAnthropicWireProfile("anthropic_claude_code_2_1_220_apikey_count_tokens_generic", officialClientPurposeAnthropicAPIKeyCountTokensCompat, officialClientBuildAnthropicCLI21220, "apikey", "count_tokens_generic", anthropicAPIKeyBeta+",token-counting-2024-11-01", "derived:messages-client-build-with-generic-count-tokens-contract"),
 		newAnthropicWireProfile("anthropic_claude_desktop_2_1_209_apikey_count_tokens_generic_previous", officialClientPurposeAnthropicAPIKeyCountTokensCompat, officialClientBuildAnthropicDesktop, "apikey", "count_tokens_generic", anthropicDesktopBeta+",token-counting-2024-11-01", "derived:legacy-desktop-generic-count-tokens-contract"),
-		newOpenAIWireProfile("openai_codex_cli_0_145_0_oauth_responses_http_direct", officialClientPurposeOpenAIOAuthResponsesHTTP, officialClientBuildOpenAICodex0145, "oauth", "responses", "http", officialEgressTransportProfileOpenAIHTTP, "capture:oauth-20260726T014021Z"),
-		newOpenAIWireProfile("openai_codex_cli_0_145_0_xterm_oauth_responses_http_previous", officialClientPurposeOpenAIOAuthResponsesHTTP, officialClientBuildOpenAICodexPrev, "oauth", "responses", "http", officialEgressTransportProfileOpenAIHTTP, "capture:phase0-20260724"),
-		newOpenAIWireProfile("openai_codex_cli_0_145_0_oauth_responses_ws_direct", officialClientPurposeOpenAIOAuthResponsesWS, officialClientBuildOpenAICodex0145, "oauth", "responses", "websocket", officialEgressTransportProfileOpenAIWS, "capture:oauth-20260726T014021Z"),
-		newOpenAIWireProfile("openai_codex_cli_0_145_0_xterm_oauth_responses_ws_previous", officialClientPurposeOpenAIOAuthResponsesWS, officialClientBuildOpenAICodexPrev, "oauth", "responses", "websocket", officialEgressTransportProfileOpenAIWS, "capture:phase0-20260724"),
-		newOpenAIWireProfile("openai_codex_cli_0_145_0_apikey_responses_http_direct", officialClientPurposeOpenAIAPIKeyResponsesHTTP, officialClientBuildOpenAICodex0145, "apikey", "responses", "http", officialEgressTransportProfileOpenAIHTTP, "capture:api-20260726T014252Z"),
-		newOpenAIWireProfile("openai_codex_desktop_0_144_0a4_apikey_responses_http_previous", officialClientPurposeOpenAIAPIKeyResponsesHTTP, officialClientBuildOpenAIDesktop, "apikey", "responses", "http", "openai-http-legacy-0.144.1", "capture:desktop-0.144.0-alpha.4-202607"),
-		newOpenAIWireProfile("openai_codex_cli_0_145_0_apikey_responses_ws_inactive", officialClientPurposeOpenAIAPIKeyResponsesWS, officialClientBuildOpenAICodex0145, "apikey", "responses", "websocket", officialEgressTransportProfileOpenAIWS, "capture:api-20260726T014252Z"),
-		newOpenAIWireProfile("openai_codex_desktop_0_144_0a4_apikey_responses_ws_previous_inactive", officialClientPurposeOpenAIAPIKeyResponsesWS, officialClientBuildOpenAIDesktop, "apikey", "responses", "websocket", "openai-ws-legacy-inactive", "derived:legacy-inactive"),
-	}
-
-	// StaticHeaders 只被 API Key mimic 与 Anthropic 两条路径消费。OAuth 路径的
-	// header 由 §3.3.2 的终态 Finalizer 按版本画像写出，registry 只向它提供
-	// Build.Version 一个字符串。
-	//
-	// 这里曾经也为 OAuth 的 responses HTTP／WS 登记过 StaticHeaders：它带 digest、
-	// 带抓包来源，看起来与下面两条完全一样权威，实际全仓没有任何消费点——改它既不
-	// 影响出站，也不会有测试失败。一份改了不生效的配置比没有配置更危险，因此删除，
-	// 让 OAuth 的 header 只保留 Finalizer 一个事实源。
-	for i := range profiles {
-		switch profiles[i].Purpose {
-		case officialClientPurposeOpenAIAPIKeyResponsesHTTP:
-			profiles[i].StaticHeaders = []officialClientHeaderValue{
-				{Name: "x-codex-beta-features", Value: "remote_compaction_v2"},
-				{Name: "x-openai-internal-codex-responses-lite", Value: "true"},
-			}
-		case officialClientPurposeOpenAIAPIKeyResponsesWS:
-			profiles[i].StaticHeaders = []officialClientHeaderValue{
-				{Name: "x-codex-beta-features", Value: "remote_compaction_v2"},
-				{Name: "OpenAI-Beta", Value: "responses_websockets=2026-02-06"},
-			}
-		}
-		if profiles[i].BuildID == officialClientBuildOpenAIDesktop {
-			profiles[i].StaticHeaders = []officialClientHeaderValue{
-				{Name: "x-codex-beta-features", Value: "remote_compaction_v2"},
-			}
-		}
 	}
 	return profiles
 }
@@ -436,20 +450,6 @@ func newAnthropicWireProfile(id, purpose, buildID, authMode, endpoint, betaHeade
 	}
 }
 
-func newOpenAIWireProfile(id, purpose, buildID, authMode, endpoint, transport, transportProfileID, source string) officialClientWireProfile {
-	return officialClientWireProfile{
-		ID:                 id,
-		Purpose:            purpose,
-		BuildID:            buildID,
-		AuthMode:           authMode,
-		Endpoint:           endpoint,
-		Transport:          transport,
-		NetworkVariant:     "direct",
-		TransportProfileID: transportProfileID,
-		Source:             source,
-	}
-}
-
 func officialClientReleaseDefinitions() map[string]officialClientReleasePointer {
 	return map[string]officialClientReleasePointer{
 		officialClientPurposeAnthropicOAuthMessagesHTTP: {
@@ -463,22 +463,6 @@ func officialClientReleaseDefinitions() map[string]officialClientReleasePointer 
 		officialClientPurposeAnthropicAPIKeyCountTokensCompat: {
 			Active:   "anthropic_claude_code_2_1_220_apikey_count_tokens_generic",
 			Previous: "anthropic_claude_desktop_2_1_209_apikey_count_tokens_generic_previous",
-		},
-		officialClientPurposeOpenAIOAuthResponsesHTTP: {
-			Active:   "openai_codex_cli_0_145_0_oauth_responses_http_direct",
-			Previous: "openai_codex_cli_0_145_0_xterm_oauth_responses_http_previous",
-		},
-		officialClientPurposeOpenAIOAuthResponsesWS: {
-			Active:   "openai_codex_cli_0_145_0_oauth_responses_ws_direct",
-			Previous: "openai_codex_cli_0_145_0_xterm_oauth_responses_ws_previous",
-		},
-		officialClientPurposeOpenAIAPIKeyResponsesHTTP: {
-			Active:   "openai_codex_cli_0_145_0_apikey_responses_http_direct",
-			Previous: "openai_codex_desktop_0_144_0a4_apikey_responses_http_previous",
-		},
-		officialClientPurposeOpenAIAPIKeyResponsesWS: {
-			Active:   "openai_codex_cli_0_145_0_apikey_responses_ws_inactive",
-			Previous: "openai_codex_desktop_0_144_0a4_apikey_responses_ws_previous_inactive",
 		},
 	}
 }

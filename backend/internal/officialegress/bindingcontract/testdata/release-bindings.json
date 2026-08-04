@@ -1,0 +1,1923 @@
+{
+  "schema_version": 1,
+  "source": {
+    "baseline_sha256": "46593243b1bd315eafcb54335502a1f46bc2b8bfc0ecc2d3146da4e7087bfaeb",
+    "bootstrap_commit": "38a9929eac35a39c86de2f27de8f7a805d7dae52",
+    "build_contexts": [
+      "darwin/arm64",
+      "linux/amd64"
+    ],
+    "packages_loaded": 212,
+    "scan_pattern": "github.com/Wei-Shaw/sub2api/...",
+    "total_candidates": 180,
+    "bound_candidates": 47
+  },
+  "bindings": [
+    {
+      "sink_id": "codex.admin_test.chat_completions",
+      "purpose": "admin_test.chat_completions",
+      "persona": "codex-cli",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        {
+          "raw": "POST chatgpt.com/backend-api/codex/responses",
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/responses",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "1B",
+      "expiry_condition": "1B 迁入 Executor",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*AccountTestService.testOpenAIChatCompletionsConnection@backend/internal/service/account_test_service.go#facade_openai_upstream#1",
+          "ast_fingerprint": "93418efda9cf",
+          "file": "backend/internal/service/account_test_service.go",
+          "func": "*AccountTestService.testOpenAIChatCompletionsConnection",
+          "callee": "github.com/Wei-Shaw/sub2api/internal/service.doOpenAIHTTPUpstreamWithProfile",
+          "sink_kind": "facade_openai_upstream",
+          "sink_type": "facade",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "http_upstream",
+          "official_host": false,
+          "target_resolution": "dynamic",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": [
+            "POST"
+          ],
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "管理端 chat completions 形态测试"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.admin_test.compact",
+      "purpose": "admin_test.compact",
+      "persona": "codex-cli",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        {
+          "raw": "POST chatgpt.com/backend-api/codex/responses/compact",
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/responses/compact",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "1B",
+      "expiry_condition": "1B 迁入 Executor",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*AccountTestService.testOpenAICompactConnection@backend/internal/service/account_test_service.go#facade_openai_upstream#1",
+          "ast_fingerprint": "93418efda9cf",
+          "file": "backend/internal/service/account_test_service.go",
+          "func": "*AccountTestService.testOpenAICompactConnection",
+          "callee": "github.com/Wei-Shaw/sub2api/internal/service.doOpenAIHTTPUpstreamWithProfile",
+          "sink_kind": "facade_openai_upstream",
+          "sink_type": "facade",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "http_upstream",
+          "official_host": true,
+          "target_resolution": "constructed",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": [
+            "chatgpt.com"
+          ],
+          "resolved_methods": [
+            "POST"
+          ],
+          "resolved_paths": [
+            "/backend-api/codex/responses/compact"
+          ],
+          "resolved_targets": [
+            "https://chatgpt.com/backend-api/codex/responses/compact"
+          ],
+          "rationale": "compact 端点探测"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.admin_test.keeper",
+      "purpose": "admin_test.keeper_proxy",
+      "persona": "codex-cli",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        {
+          "raw": "POST chatgpt.com/backend-api/codex/responses",
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/responses",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "1B",
+      "expiry_condition": "1B 迁入 Executor",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*AccountTestService.ProxyKeeperOpenAIAccount@backend/internal/service/account_test_service_keeper.go#facade_openai_upstream#1",
+          "ast_fingerprint": "d0e7cca6b855",
+          "file": "backend/internal/service/account_test_service_keeper.go",
+          "func": "*AccountTestService.ProxyKeeperOpenAIAccount",
+          "callee": "github.com/Wei-Shaw/sub2api/internal/service.doOpenAIHTTPUpstreamWithProfile",
+          "sink_kind": "facade_openai_upstream",
+          "sink_type": "facade",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "http_upstream",
+          "official_host": false,
+          "target_resolution": "dynamic",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "keeper 代发；仅接受 OpenAI 账号"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.admin_test.responses",
+      "purpose": "admin_test.responses",
+      "persona": "codex-cli",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        {
+          "raw": "POST chatgpt.com/backend-api/codex/responses",
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/responses",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "1B",
+      "expiry_condition": "1B 迁入 Executor",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*AccountTestService.testOpenAIAccountConnection@backend/internal/service/account_test_service.go#facade_openai_upstream#1",
+          "ast_fingerprint": "93418efda9cf",
+          "file": "backend/internal/service/account_test_service.go",
+          "func": "*AccountTestService.testOpenAIAccountConnection",
+          "callee": "github.com/Wei-Shaw/sub2api/internal/service.doOpenAIHTTPUpstreamWithProfile",
+          "sink_kind": "facade_openai_upstream",
+          "sink_type": "facade",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "http_upstream",
+          "official_host": true,
+          "target_resolution": "constructed",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": [
+            "chatgpt.com"
+          ],
+          "resolved_methods": [
+            "POST"
+          ],
+          "resolved_paths": [
+            "/backend-api/codex/responses"
+          ],
+          "resolved_targets": [
+            "https://chatgpt.com/backend-api/codex/responses"
+          ],
+          "rationale": "管理端账号测试；Header 手工构造，缺 finalize"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.alpha_search.direct",
+      "purpose": "user_request.alpha_search",
+      "persona": "codex-cli",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        {
+          "raw": "POST chatgpt.com/backend-api/codex/alpha/search",
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/alpha/search",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "3",
+      "expiry_condition": "变更集 3 迁入 Executor",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.ForwardAlphaSearch@backend/internal/service/openai_alpha_search.go#facade_http_upstream_do_tls#1",
+          "ast_fingerprint": "976008177702",
+          "file": "backend/internal/service/openai_alpha_search.go",
+          "func": "*OpenAIGatewayService.ForwardAlphaSearch",
+          "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).DoWithTLS",
+          "sink_kind": "facade_http_upstream_do_tls",
+          "sink_type": "facade",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "http_upstream",
+          "official_host": false,
+          "target_resolution": "unknown",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "主路径已 fail-close：缺 egress context 直接报错"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.alpha_search.pat_fallback",
+      "purpose": "user_request.alpha_search_pat",
+      "persona": "codex-cli",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        {
+          "raw": "POST chatgpt.com/backend-api/codex/responses",
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/responses",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "1B",
+      "expiry_condition": "1B 补 finalize",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.forwardAlphaSearchViaResponsesWebSearch@backend/internal/service/openai_alpha_search.go#facade_http_upstream_do_tls#1",
+          "ast_fingerprint": "33276ecf03af",
+          "file": "backend/internal/service/openai_alpha_search.go",
+          "func": "*OpenAIGatewayService.forwardAlphaSearchViaResponsesWebSearch",
+          "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).DoWithTLS",
+          "sink_kind": "facade_http_upstream_do_tls",
+          "sink_type": "facade",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "http_upstream",
+          "official_host": false,
+          "target_resolution": "unknown",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "半旁路：TLS 有画像，Header/Body 手工构造且无 finalize"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.facade.oauth_client",
+      "purpose": "facade",
+      "persona": "codex-cli",
+      "endpoint_evidence": "not_applicable",
+      "routes": [],
+      "target_backend": "req_profile",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "3",
+      "expiry_condition": "变更集 3 由 Executor backend wiring 吸收",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/repository.createOpenAIReqClientWithProfile@backend/internal/repository/openai_oauth_service.go#factory_shared_req#1",
+          "ast_fingerprint": "53489d6632d6",
+          "file": "backend/internal/repository/openai_oauth_service.go",
+          "func": "createOpenAIReqClientWithProfile",
+          "callee": "github.com/Wei-Shaw/sub2api/internal/repository.getSharedReqClient",
+          "sink_kind": "factory_shared_req",
+          "sink_type": "factory",
+          "protocol": "http",
+          "endpoint_evidence": "not_applicable",
+          "actual_backend": "req_profile",
+          "official_host": false,
+          "target_resolution": "unknown",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "refresh 与 exchange 共用的客户端工厂；不是任一业务请求的 RuntimeSinkID"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.facade.upstream",
+      "purpose": "facade",
+      "persona": "codex-cli",
+      "endpoint_evidence": "not_applicable",
+      "routes": [],
+      "target_backend": "http_upstream",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "3",
+      "expiry_condition": "变更集 3 后由 Executor 取代",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.doOpenAIHTTPUpstreamForRequest@backend/internal/service/openai_upstream_http.go#facade_openai_upstream#1",
+          "ast_fingerprint": "93418efda9cf",
+          "file": "backend/internal/service/openai_upstream_http.go",
+          "func": "*OpenAIGatewayService.doOpenAIHTTPUpstreamForRequest",
+          "callee": "github.com/Wei-Shaw/sub2api/internal/service.doOpenAIHTTPUpstreamWithProfile",
+          "sink_kind": "facade_openai_upstream",
+          "sink_type": "facade",
+          "protocol": "http",
+          "endpoint_evidence": "not_applicable",
+          "actual_backend": "http_upstream",
+          "official_host": false,
+          "target_resolution": "unknown",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "二级 facade"
+        },
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.doOpenAIHTTPUpstreamWithProfile@backend/internal/service/openai_upstream_http.go#facade_http_upstream_do#1",
+          "ast_fingerprint": "623791ba81ac",
+          "file": "backend/internal/service/openai_upstream_http.go",
+          "func": "doOpenAIHTTPUpstreamWithProfile",
+          "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).Do",
+          "sink_kind": "facade_http_upstream_do",
+          "sink_type": "facade",
+          "protocol": "http",
+          "endpoint_evidence": "not_applicable",
+          "actual_backend": "http_upstream",
+          "official_host": false,
+          "target_resolution": "unknown",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "共享 facade；11 个业务调用点经此发送，自身不承载业务身份"
+        },
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.doOpenAIHTTPUpstreamWithProfile@backend/internal/service/openai_upstream_http.go#facade_http_upstream_do#2",
+          "ast_fingerprint": "48569920b96c",
+          "file": "backend/internal/service/openai_upstream_http.go",
+          "func": "doOpenAIHTTPUpstreamWithProfile",
+          "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).Do",
+          "sink_kind": "facade_http_upstream_do",
+          "sink_type": "facade",
+          "protocol": "http",
+          "endpoint_evidence": "not_applicable",
+          "actual_backend": "http_upstream",
+          "official_host": false,
+          "target_resolution": "unknown",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "共享 facade；11 个业务调用点经此发送，自身不承载业务身份"
+        },
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.doOpenAIHTTPUpstreamWithProfile@backend/internal/service/openai_upstream_http.go#facade_http_upstream_do_tls#1",
+          "ast_fingerprint": "0bc6f212e671",
+          "file": "backend/internal/service/openai_upstream_http.go",
+          "func": "doOpenAIHTTPUpstreamWithProfile",
+          "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).DoWithTLS",
+          "sink_kind": "facade_http_upstream_do_tls",
+          "sink_type": "facade",
+          "protocol": "http",
+          "endpoint_evidence": "not_applicable",
+          "actual_backend": "http_upstream",
+          "official_host": false,
+          "target_resolution": "unknown",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "共享 facade；11 个业务调用点经此发送，自身不承载业务身份"
+        },
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.doOpenAIHTTPUpstreamWithProfile@backend/internal/service/openai_upstream_http.go#facade_http_upstream_do_tls#2",
+          "ast_fingerprint": "976008177702",
+          "file": "backend/internal/service/openai_upstream_http.go",
+          "func": "doOpenAIHTTPUpstreamWithProfile",
+          "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).DoWithTLS",
+          "sink_kind": "facade_http_upstream_do_tls",
+          "sink_type": "facade",
+          "protocol": "http",
+          "endpoint_evidence": "not_applicable",
+          "actual_backend": "http_upstream",
+          "official_host": false,
+          "target_resolution": "unknown",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "共享 facade；11 个业务调用点经此发送，自身不承载业务身份"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.facade.ws_pool",
+      "purpose": "facade",
+      "persona": "codex-cli",
+      "endpoint_evidence": "not_applicable",
+      "routes": [],
+      "target_backend": "websocket",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "3",
+      "expiry_condition": "变更集 3 后由 Executor 统一管理连接生命周期",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*openAIWSConnPool.dialConn@backend/internal/service/openai_ws_pool.go#facade_ws_dialer#1",
+          "ast_fingerprint": "75d241848c1b",
+          "file": "backend/internal/service/openai_ws_pool.go",
+          "func": "*openAIWSConnPool.dialConn",
+          "callee": "(github.com/Wei-Shaw/sub2api/internal/service.openAIWSClientDialer).Dial",
+          "sink_kind": "facade_ws_dialer",
+          "sink_type": "facade",
+          "protocol": "websocket",
+          "endpoint_evidence": "not_applicable",
+          "actual_backend": "websocket",
+          "official_host": false,
+          "target_resolution": "dynamic",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": [
+            "GET"
+          ],
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "WS 连接池拨号 facade；自身不承载业务身份"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.files.blob_upload",
+      "purpose": "user_request.file_blob",
+      "persona": "codex-cli",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        {
+          "raw": "PUT *.oaiusercontent.com/{server_returned_path}",
+          "method": "PUT",
+          "host": "*.oaiusercontent.com",
+          "path": "/{server_returned_path}",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "3",
+      "expiry_condition": "变更集 3 迁入 Executor 并补动态 host 的运行时 Guard",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*officialCodexFileUploadCall.uploadBlob@backend/internal/service/official_egress_codex_files.go#facade_http_upstream_do_tls#1",
+          "ast_fingerprint": "2ff84291db76",
+          "file": "backend/internal/service/official_egress_codex_files.go",
+          "func": "*officialCodexFileUploadCall.uploadBlob",
+          "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).DoWithTLS",
+          "sink_kind": "facade_http_upstream_do_tls",
+          "sink_type": "facade",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "http_upstream",
+          "official_host": false,
+          "target_resolution": "dynamic",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "HostFromResponse=true：host 与 path 均由上游响应给出，静态不可解析"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.files.register",
+      "purpose": "user_request.file_register",
+      "persona": "codex-cli",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        {
+          "raw": "POST chatgpt.com/backend-api/files",
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/files",
+          "transport": "http"
+        },
+        {
+          "raw": "POST chatgpt.com/backend-api/files/{file_id}/uploaded",
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/files/{file_id}/uploaded",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "3",
+      "expiry_condition": "变更集 3 迁入 Executor",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*officialCodexFileUploadCall.executeJSON@backend/internal/service/official_egress_codex_files.go#facade_http_upstream_do_tls#1",
+          "ast_fingerprint": "2ff84291db76",
+          "file": "backend/internal/service/official_egress_codex_files.go",
+          "func": "*officialCodexFileUploadCall.executeJSON",
+          "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).DoWithTLS",
+          "sink_kind": "facade_http_upstream_do_tls",
+          "sink_type": "facade",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "http_upstream",
+          "official_host": false,
+          "target_resolution": "dynamic",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "文件上传登记与确认（JSON 段）"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.images.oauth_test",
+      "purpose": "admin_test.images_oauth",
+      "persona": "codex-cli",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        {
+          "raw": "POST chatgpt.com/backend-api/codex/images/edits",
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/images/edits",
+          "transport": "http"
+        },
+        {
+          "raw": "POST chatgpt.com/backend-api/codex/images/generations",
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/images/generations",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "1B",
+      "expiry_condition": "1B 迁入 Executor",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*AccountTestService.testOpenAIImageOAuth@backend/internal/service/account_test_service.go#facade_http_upstream_do_tls#1",
+          "ast_fingerprint": "976008177702",
+          "file": "backend/internal/service/account_test_service.go",
+          "func": "*AccountTestService.testOpenAIImageOAuth",
+          "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).DoWithTLS",
+          "sink_kind": "facade_http_upstream_do_tls",
+          "sink_type": "facade",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "http_upstream",
+          "official_host": false,
+          "target_resolution": "dynamic",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "OAuth 图片测试打官方端点"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.images.responses",
+      "purpose": "user_request.images",
+      "persona": "codex-cli",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        {
+          "raw": "POST chatgpt.com/backend-api/codex/images/edits",
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/images/edits",
+          "transport": "http"
+        },
+        {
+          "raw": "POST chatgpt.com/backend-api/codex/images/generations",
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/images/generations",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "3",
+      "expiry_condition": "变更集 3 迁入 Executor",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.forwardOpenAIImagesOAuth@backend/internal/service/openai_images_responses.go#facade_http_upstream_do_tls#1",
+          "ast_fingerprint": "42671e416c2c",
+          "file": "backend/internal/service/openai_images_responses.go",
+          "func": "*OpenAIGatewayService.forwardOpenAIImagesOAuth",
+          "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).DoWithTLS",
+          "sink_kind": "facade_http_upstream_do_tls",
+          "sink_type": "facade",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "http_upstream",
+          "official_host": false,
+          "target_resolution": "unknown",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "图片生成/编辑 OAuth 路径"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.models.list",
+      "purpose": "models_manifest",
+      "persona": "codex-cli",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        {
+          "raw": "GET chatgpt.com/backend-api/codex/models",
+          "method": "GET",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/models",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "1B",
+      "expiry_condition": "1B 移除其中的 httpclient.GetClient 分支",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.fetchCodexModelsManifestUpstream@backend/internal/service/openai_codex_models_service.go#facade_http_upstream_do#1",
+          "ast_fingerprint": "b89fcd6bffe9",
+          "file": "backend/internal/service/openai_codex_models_service.go",
+          "func": "*OpenAIGatewayService.fetchCodexModelsManifestUpstream",
+          "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).Do",
+          "sink_kind": "facade_http_upstream_do",
+          "sink_type": "facade",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "http_upstream",
+          "official_host": false,
+          "target_resolution": "dynamic",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": [
+            "GET"
+          ],
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "三分支实现，其中一支用无 uTLS 客户端"
+        },
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.fetchCodexModelsManifestUpstream@backend/internal/service/openai_codex_models_service.go#facade_http_upstream_do_tls#1",
+          "ast_fingerprint": "d8b36ca624a7",
+          "file": "backend/internal/service/openai_codex_models_service.go",
+          "func": "*OpenAIGatewayService.fetchCodexModelsManifestUpstream",
+          "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).DoWithTLS",
+          "sink_kind": "facade_http_upstream_do_tls",
+          "sink_type": "facade",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "http_upstream",
+          "official_host": false,
+          "target_resolution": "dynamic",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": [
+            "GET"
+          ],
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "三分支实现，其中一支用无 uTLS 客户端"
+        },
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.fetchCodexModelsManifestUpstream@backend/internal/service/openai_codex_models_service.go#factory_httpclient_pool#1",
+          "ast_fingerprint": "01d0937254f5",
+          "file": "backend/internal/service/openai_codex_models_service.go",
+          "func": "*OpenAIGatewayService.fetchCodexModelsManifestUpstream",
+          "callee": "github.com/Wei-Shaw/sub2api/internal/pkg/httpclient.GetClient",
+          "sink_kind": "factory_httpclient_pool",
+          "sink_type": "factory",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "http_upstream",
+          "official_host": false,
+          "target_resolution": "unknown",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "三分支实现，其中一支用无 uTLS 客户端"
+        },
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.fetchCodexModelsManifestUpstream@backend/internal/service/openai_codex_models_service.go#net_http_client_do#1",
+          "ast_fingerprint": "6510439f9f68",
+          "file": "backend/internal/service/openai_codex_models_service.go",
+          "func": "*OpenAIGatewayService.fetchCodexModelsManifestUpstream",
+          "callee": "(*net/http.Client).Do",
+          "sink_kind": "net_http_client_do",
+          "sink_type": "terminal",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "http_upstream",
+          "official_host": false,
+          "target_resolution": "dynamic",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": [
+            "GET"
+          ],
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "三分支实现，其中一支用无 uTLS 客户端"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.oauth.exchange",
+      "purpose": "oauth_code_exchange",
+      "persona": "codex-cli",
+      "endpoint_evidence": "transport_only",
+      "routes": [
+        {
+          "raw": "POST auth.openai.com/oauth/token",
+          "method": "POST",
+          "host": "auth.openai.com",
+          "path": "/oauth/token",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "req_profile",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "2",
+      "expiry_condition": "变更集 2 补齐授权码换 token 的端点证据后消费 ReleaseBundle",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/repository.*openaiOAuthService.ExchangeCode@backend/internal/repository/openai_oauth_service.go#reqv3_post#1",
+          "ast_fingerprint": "1f967219ce9a",
+          "file": "backend/internal/repository/openai_oauth_service.go",
+          "func": "*openaiOAuthService.ExchangeCode",
+          "callee": "(*github.com/imroc/req/v3.Request).Post",
+          "sink_kind": "reqv3_post",
+          "sink_type": "terminal",
+          "protocol": "http",
+          "endpoint_evidence": "transport_only",
+          "actual_backend": "req_profile",
+          "official_host": false,
+          "target_resolution": "dynamic",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": [
+            "POST"
+          ],
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "已有 Codex TLS/User-Agent/Originator 证据，但 0.145 画像只有 refresh body，不能按同 route 冒充同端点契约"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.oauth.refresh",
+      "purpose": "oauth_refresh",
+      "persona": "codex-cli",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        {
+          "raw": "POST auth.openai.com/oauth/token",
+          "method": "POST",
+          "host": "auth.openai.com",
+          "path": "/oauth/token",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "req_profile",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "2",
+      "expiry_condition": "变更集 2 改为消费 ReleaseBundle",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/repository.*openaiOAuthService.refreshTokenWithClientID@backend/internal/repository/openai_oauth_service.go#net_http_client_do#1",
+          "ast_fingerprint": "ff8decf0d9ca",
+          "file": "backend/internal/repository/openai_oauth_service.go",
+          "func": "*openaiOAuthService.refreshTokenWithClientID",
+          "callee": "(*net/http.Client).Do",
+          "sink_kind": "net_http_client_do",
+          "sink_type": "terminal",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "req_profile",
+          "official_host": false,
+          "target_resolution": "unknown",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "已画像；硬编码 active 待修；backend 保持 req_profile 不换栈"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.quota.wham",
+      "purpose": "quota_query",
+      "persona": "codex-cli",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        {
+          "raw": "GET chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+          "method": "GET",
+          "host": "chatgpt.com",
+          "path": "/backend-api/wham/rate-limit-reset-credits",
+          "transport": "http"
+        },
+        {
+          "raw": "GET chatgpt.com/backend-api/wham/usage",
+          "method": "GET",
+          "host": "chatgpt.com",
+          "path": "/backend-api/wham/usage",
+          "transport": "http"
+        },
+        {
+          "raw": "POST chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume",
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/wham/rate-limit-reset-credits/consume",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "3",
+      "expiry_condition": "变更集 3 迁入 Executor",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIQuotaService.doCodexQuotaRequest@backend/internal/service/openai_quota_service.go#facade_http_upstream_do_tls#1",
+          "ast_fingerprint": "1f0eb260f5fa",
+          "file": "backend/internal/service/openai_quota_service.go",
+          "func": "*OpenAIQuotaService.doCodexQuotaRequest",
+          "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).DoWithTLS",
+          "sink_kind": "facade_http_upstream_do_tls",
+          "sink_type": "facade",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "http_upstream",
+          "official_host": false,
+          "target_resolution": "dynamic",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "WHAM 用量与重置额度；端点已在画像登记"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.realtime.calls",
+      "purpose": "user_request.realtime_calls",
+      "persona": "codex-cli",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        {
+          "raw": "POST chatgpt.com/backend-api/codex/realtime/calls",
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/realtime/calls",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "3",
+      "expiry_condition": "变更集 3 迁入 Executor",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.createUpstreamLiveCall@backend/internal/service/openai_live.go#facade_http_upstream_do_tls#1",
+          "ast_fingerprint": "b058a641669c",
+          "file": "backend/internal/service/openai_live.go",
+          "func": "*OpenAIGatewayService.createUpstreamLiveCall",
+          "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).DoWithTLS",
+          "sink_kind": "facade_http_upstream_do_tls",
+          "sink_type": "facade",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "http_upstream",
+          "official_host": false,
+          "target_resolution": "dynamic",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "画像 TransportID=HTTPDefault，是 HTTP 端点而非 WebSocket"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.realtime.sideband",
+      "purpose": "user_request.realtime_sideband",
+      "persona": "codex-cli",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        {
+          "raw": "GET api.openai.com/v1/realtime (WebSocket)",
+          "method": "GET",
+          "host": "api.openai.com",
+          "path": "/v1/realtime",
+          "transport": "websocket"
+        }
+      ],
+      "target_backend": "websocket",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "3",
+      "expiry_condition": "变更集 3 迁入 Executor.Dial",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.dialLiveSideband@backend/internal/service/openai_live.go#facade_ws_dialer#1",
+          "ast_fingerprint": "2b7126682dcb",
+          "file": "backend/internal/service/openai_live.go",
+          "func": "*OpenAIGatewayService.dialLiveSideband",
+          "callee": "(github.com/Wei-Shaw/sub2api/internal/service.openAIWSClientDialer).Dial",
+          "sink_kind": "facade_ws_dialer",
+          "sink_type": "facade",
+          "protocol": "websocket",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "websocket",
+          "official_host": false,
+          "target_resolution": "dynamic",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": [
+            "GET"
+          ],
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "经 openAIWSClientDialer 接口拨号；与 DialLiveSideband 同一 RuntimeSinkID"
+        },
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*coderOpenAIWSClientDialer.DialLiveSideband@backend/internal/service/openai_live.go#ws_coder_dial#1",
+          "ast_fingerprint": "cf19bc44d62b",
+          "file": "backend/internal/service/openai_live.go",
+          "func": "*coderOpenAIWSClientDialer.DialLiveSideband",
+          "callee": "github.com/coder/websocket.Dial",
+          "sink_kind": "ws_coder_dial",
+          "sink_type": "terminal",
+          "protocol": "websocket",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "websocket",
+          "official_host": false,
+          "target_resolution": "dynamic",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": [
+            "GET"
+          ],
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "realtime sideband：唯一在 api.openai.com 上的 codex-cli route"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.responses.anthropic_compat",
+      "purpose": "user_request.anthropic_compat",
+      "persona": "codex-cli",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        {
+          "raw": "POST chatgpt.com/backend-api/codex/responses",
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/responses",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "3",
+      "expiry_condition": "变更集 3 迁入 Executor",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.ForwardAsAnthropic@backend/internal/service/openai_gateway_messages.go#facade_openai_upstream_req#1",
+          "ast_fingerprint": "4fa501ed584c",
+          "file": "backend/internal/service/openai_gateway_messages.go",
+          "func": "*OpenAIGatewayService.ForwardAsAnthropic",
+          "callee": "(*github.com/Wei-Shaw/sub2api/internal/service.OpenAIGatewayService).doOpenAIHTTPUpstreamForRequest",
+          "sink_kind": "facade_openai_upstream_req",
+          "sink_type": "facade",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "http_upstream",
+          "official_host": false,
+          "target_resolution": "unknown",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "Anthropic 形态入站、Codex 形态出站；入站形态不改变出站 persona"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.responses.chat_completions",
+      "purpose": "user_request.chat_completions",
+      "persona": "codex-cli",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        {
+          "raw": "POST chatgpt.com/backend-api/codex/responses",
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/responses",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "3",
+      "expiry_condition": "变更集 3 迁入 Executor",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.ForwardAsChatCompletions@backend/internal/service/openai_gateway_chat_completions.go#facade_openai_upstream_req#1",
+          "ast_fingerprint": "4fa501ed584c",
+          "file": "backend/internal/service/openai_gateway_chat_completions.go",
+          "func": "*OpenAIGatewayService.ForwardAsChatCompletions",
+          "callee": "(*github.com/Wei-Shaw/sub2api/internal/service.OpenAIGatewayService).doOpenAIHTTPUpstreamForRequest",
+          "sink_kind": "facade_openai_upstream_req",
+          "sink_type": "facade",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "http_upstream",
+          "official_host": false,
+          "target_resolution": "unknown",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "chat completions 形态入站 → Codex 出站"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.responses.forward",
+      "purpose": "user_request.responses",
+      "persona": "codex-cli",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        {
+          "raw": "POST chatgpt.com/backend-api/codex/responses",
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/responses",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "3",
+      "expiry_condition": "变更集 3 迁入 Executor 并收敛 Forward",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.Forward@backend/internal/service/openai_gateway_forward.go#facade_openai_upstream_req#1",
+          "ast_fingerprint": "4fa501ed584c",
+          "file": "backend/internal/service/openai_gateway_forward.go",
+          "func": "*OpenAIGatewayService.Forward",
+          "callee": "(*github.com/Wei-Shaw/sub2api/internal/service.OpenAIGatewayService).doOpenAIHTTPUpstreamForRequest",
+          "sink_kind": "facade_openai_upstream_req",
+          "sink_type": "facade",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "http_upstream",
+          "official_host": false,
+          "target_resolution": "unknown",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "主链；forward.go:242 是向 passthrough 的分派，不是独立发送点"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.responses.passthrough",
+      "purpose": "user_request.passthrough",
+      "persona": "codex-cli",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        {
+          "raw": "POST chatgpt.com/backend-api/codex/responses",
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/responses",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "3",
+      "expiry_condition": "变更集 3 迁入 Executor",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.forwardOpenAIPassthrough@backend/internal/service/openai_gateway_passthrough.go#facade_openai_upstream#1",
+          "ast_fingerprint": "b2102a8241dd",
+          "file": "backend/internal/service/openai_gateway_passthrough.go",
+          "func": "*OpenAIGatewayService.forwardOpenAIPassthrough",
+          "callee": "github.com/Wei-Shaw/sub2api/internal/service.doOpenAIHTTPUpstreamWithProfile",
+          "sink_kind": "facade_openai_upstream",
+          "sink_type": "facade",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "http_upstream",
+          "official_host": false,
+          "target_resolution": "unknown",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "透传主链"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.responses.ws",
+      "purpose": "user_request.responses_ws",
+      "persona": "codex-cli",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        {
+          "raw": "GET chatgpt.com/backend-api/codex/responses (WebSocket)",
+          "method": "GET",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/responses",
+          "transport": "websocket"
+        }
+      ],
+      "target_backend": "websocket",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "3",
+      "expiry_condition": "变更集 3 迁入 Executor.Dial",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*coderOpenAIWSClientDialer.Dial@backend/internal/service/openai_ws_client.go#ws_coder_dial#1",
+          "ast_fingerprint": "b83e9187f131",
+          "file": "backend/internal/service/openai_ws_client.go",
+          "func": "*coderOpenAIWSClientDialer.Dial",
+          "callee": "github.com/coder/websocket.Dial",
+          "sink_kind": "ws_coder_dial",
+          "sink_type": "terminal",
+          "protocol": "websocket",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "websocket",
+          "official_host": false,
+          "target_resolution": "dynamic",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": [
+            "GET"
+          ],
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "Responses WS 拨号；画像 method 为 GET + Upgrade，不是 POST"
+        },
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*officialEgressWebSocketRoundTripper.RoundTrip@backend/internal/service/openai_ws_client.go#roundtripper_roundtrip#1",
+          "ast_fingerprint": "5d0a9e7a1188",
+          "file": "backend/internal/service/openai_ws_client.go",
+          "func": "*officialEgressWebSocketRoundTripper.RoundTrip",
+          "callee": "(net/http.RoundTripper).RoundTrip",
+          "sink_kind": "roundtripper_roundtrip",
+          "sink_type": "terminal",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "websocket",
+          "official_host": false,
+          "target_resolution": "unknown",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "WS 握手的 RoundTripper 层，与 Dial 同属一个 RuntimeSinkID"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.responses.ws_http_bridge",
+      "purpose": "user_request.ws_http_fallback",
+      "persona": "codex-cli",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        {
+          "raw": "POST chatgpt.com/backend-api/codex/responses",
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/responses",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "3",
+      "expiry_condition": "变更集 3 迁入 Executor",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.proxyOpenAIWSHTTPBridgeTurn@backend/internal/service/openai_ws_http_bridge.go#facade_http_upstream_do#1",
+          "ast_fingerprint": "5d4353cdb3dc",
+          "file": "backend/internal/service/openai_ws_http_bridge.go",
+          "func": "*OpenAIGatewayService.proxyOpenAIWSHTTPBridgeTurn",
+          "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).Do",
+          "sink_kind": "facade_http_upstream_do",
+          "sink_type": "facade",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "http_upstream",
+          "official_host": false,
+          "target_resolution": "unknown",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "入站 WS、出站 HTTP 的桥；backend 是 http_upstream 而非 websocket"
+        },
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.proxyOpenAIWSHTTPBridgeTurn@backend/internal/service/openai_ws_http_bridge.go#facade_openai_upstream#1",
+          "ast_fingerprint": "b2102a8241dd",
+          "file": "backend/internal/service/openai_ws_http_bridge.go",
+          "func": "*OpenAIGatewayService.proxyOpenAIWSHTTPBridgeTurn",
+          "callee": "github.com/Wei-Shaw/sub2api/internal/service.doOpenAIHTTPUpstreamWithProfile",
+          "sink_kind": "facade_openai_upstream",
+          "sink_type": "facade",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "http_upstream",
+          "official_host": false,
+          "target_resolution": "unknown",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "入站 WS、出站 HTTP 的桥；backend 是 http_upstream 而非 websocket"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.responses.ws_v2_passthrough",
+      "purpose": "user_request.responses_ws_v2",
+      "persona": "codex-cli",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        {
+          "raw": "GET chatgpt.com/backend-api/codex/responses (WebSocket)",
+          "method": "GET",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/responses",
+          "transport": "websocket"
+        }
+      ],
+      "target_backend": "websocket",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "3",
+      "expiry_condition": "变更集 3 迁入 Executor.Dial",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.proxyResponsesWebSocketV2Passthrough@backend/internal/service/openai_ws_v2_passthrough_adapter.go#facade_ws_dialer#1",
+          "ast_fingerprint": "70de9fdba1fc",
+          "file": "backend/internal/service/openai_ws_v2_passthrough_adapter.go",
+          "func": "*OpenAIGatewayService.proxyResponsesWebSocketV2Passthrough",
+          "callee": "(github.com/Wei-Shaw/sub2api/internal/service.openAIWSClientDialer).Dial",
+          "sink_kind": "facade_ws_dialer",
+          "sink_type": "facade",
+          "protocol": "websocket",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "websocket",
+          "official_host": false,
+          "target_resolution": "unknown",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": [
+            "GET"
+          ],
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "WSv2 透传；经接口拨号，前一版扫描器完全看不见"
+        }
+      ]
+    },
+    {
+      "sink_id": "codex.usage.probe",
+      "purpose": "usage_probe",
+      "persona": "codex-cli",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        {
+          "raw": "POST chatgpt.com/backend-api/codex/responses",
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/responses",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "1B",
+      "expiry_condition": "1B 改 WHAM-first 后本 sink 消失",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*AccountUsageService.probeOpenAICodexSnapshot@backend/internal/service/account_usage_service.go#factory_httpclient_pool#1",
+          "ast_fingerprint": "01d0937254f5",
+          "file": "backend/internal/service/account_usage_service.go",
+          "func": "*AccountUsageService.probeOpenAICodexSnapshot",
+          "callee": "github.com/Wei-Shaw/sub2api/internal/pkg/httpclient.GetClient",
+          "sink_kind": "factory_httpclient_pool",
+          "sink_type": "factory",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "plain_net_http",
+          "official_host": false,
+          "target_resolution": "unknown",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "P0：httpclient.GetClient 无 uTLS 直打官方推理端点"
+        },
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*AccountUsageService.probeOpenAICodexSnapshot@backend/internal/service/account_usage_service.go#net_http_client_do#1",
+          "ast_fingerprint": "6510439f9f68",
+          "file": "backend/internal/service/account_usage_service.go",
+          "func": "*AccountUsageService.probeOpenAICodexSnapshot",
+          "callee": "(*net/http.Client).Do",
+          "sink_kind": "net_http_client_do",
+          "sink_type": "terminal",
+          "protocol": "http",
+          "endpoint_evidence": "codex_profile",
+          "actual_backend": "plain_net_http",
+          "official_host": true,
+          "target_resolution": "constructed",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": [
+            "chatgpt.com"
+          ],
+          "resolved_methods": [
+            "POST"
+          ],
+          "resolved_paths": [
+            "/backend-api/codex/responses"
+          ],
+          "resolved_targets": [
+            "https://chatgpt.com/backend-api/codex/responses"
+          ],
+          "rationale": "P0：httpclient.GetClient 无 uTLS 直打官方推理端点"
+        }
+      ]
+    },
+    {
+      "sink_id": "dead.images.download_blob",
+      "purpose": "dead_code",
+      "persona": "dead-code",
+      "endpoint_evidence": "not_applicable",
+      "routes": [],
+      "target_backend": "-",
+      "enforcement_state": "pending_removal",
+      "owner": "czs",
+      "migration_changeset": "1B",
+      "expiry_condition": "1B 删除该链路",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.downloadOpenAIImageBytes@backend/internal/service/openai_images.go#reqv3_get#1",
+          "ast_fingerprint": "4456cda5f782",
+          "file": "backend/internal/service/openai_images.go",
+          "func": "downloadOpenAIImageBytes",
+          "callee": "(*github.com/imroc/req/v3.Request).Get",
+          "sink_kind": "reqv3_get",
+          "sink_type": "terminal",
+          "protocol": "http",
+          "endpoint_evidence": "not_applicable",
+          "actual_backend": "-",
+          "official_host": false,
+          "target_resolution": "dynamic",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": [
+            "GET"
+          ],
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "生产无调用者；唯一测试只走 base64 分支，网络分支无覆盖"
+        }
+      ]
+    },
+    {
+      "sink_id": "dead.images.fetch_url",
+      "purpose": "dead_code",
+      "persona": "dead-code",
+      "endpoint_evidence": "not_applicable",
+      "routes": [],
+      "target_backend": "-",
+      "enforcement_state": "pending_removal",
+      "owner": "czs",
+      "migration_changeset": "1B",
+      "expiry_condition": "1B 删除该链路",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.fetchOpenAIImageDownloadURL@backend/internal/service/openai_images.go#reqv3_get#1",
+          "ast_fingerprint": "3e1defec5ab7",
+          "file": "backend/internal/service/openai_images.go",
+          "func": "fetchOpenAIImageDownloadURL",
+          "callee": "(*github.com/imroc/req/v3.Request).Get",
+          "sink_kind": "reqv3_get",
+          "sink_type": "terminal",
+          "protocol": "http",
+          "endpoint_evidence": "not_applicable",
+          "actual_backend": "-",
+          "official_host": false,
+          "target_resolution": "constructed",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": [
+            "GET"
+          ],
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "同上；含 attempt\u003c8 重试循环直打 chatgpt.com"
+        }
+      ]
+    },
+    {
+      "sink_id": "unclassified.agent.task_register",
+      "purpose": "agent_task_register",
+      "persona": "unclassified",
+      "endpoint_evidence": "missing",
+      "routes": [
+        {
+          "raw": "POST auth.openai.com/api/accounts/v1/agent/{runtime}/task/register",
+          "method": "POST",
+          "host": "auth.openai.com",
+          "path": "/api/accounts/v1/agent/{runtime}/task/register",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "1B",
+      "expiry_condition": "1B 完成官方行为举证并接入 Executor",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.registerAgentIdentityTask@backend/internal/service/openai_agent_identity.go#factory_httpclient_pool#1",
+          "ast_fingerprint": "01d0937254f5",
+          "file": "backend/internal/service/openai_agent_identity.go",
+          "func": "registerAgentIdentityTask",
+          "callee": "github.com/Wei-Shaw/sub2api/internal/pkg/httpclient.GetClient",
+          "sink_kind": "factory_httpclient_pool",
+          "sink_type": "factory",
+          "protocol": "http",
+          "endpoint_evidence": "missing",
+          "actual_backend": "plain_net_http",
+          "official_host": false,
+          "target_resolution": "unknown",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "P0：无 uTLS 且无 Codex 身份头；persona 归属待举证"
+        },
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.registerAgentIdentityTask@backend/internal/service/openai_agent_identity.go#net_http_client_do#1",
+          "ast_fingerprint": "6510439f9f68",
+          "file": "backend/internal/service/openai_agent_identity.go",
+          "func": "registerAgentIdentityTask",
+          "callee": "(*net/http.Client).Do",
+          "sink_kind": "net_http_client_do",
+          "sink_type": "terminal",
+          "protocol": "http",
+          "endpoint_evidence": "missing",
+          "actual_backend": "plain_net_http",
+          "official_host": false,
+          "target_resolution": "dynamic",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": [
+            "POST"
+          ],
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "P0：无 uTLS 且无 Codex 身份头；persona 归属待举证"
+        }
+      ]
+    },
+    {
+      "sink_id": "unclassified.pat.whoami",
+      "purpose": "pat_whoami",
+      "persona": "unclassified",
+      "endpoint_evidence": "missing",
+      "routes": [
+        {
+          "raw": "GET auth.openai.com/api/accounts/v1/user-auth-credential/whoami",
+          "method": "GET",
+          "host": "auth.openai.com",
+          "path": "/api/accounts/v1/user-auth-credential/whoami",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "1B",
+      "expiry_condition": "1B 完成官方行为举证并接入 Executor",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIOAuthService.ValidateCodexPersonalAccessToken@backend/internal/service/openai_codex_pat_service.go#factory_httpclient_pool#1",
+          "ast_fingerprint": "01d0937254f5",
+          "file": "backend/internal/service/openai_codex_pat_service.go",
+          "func": "*OpenAIOAuthService.ValidateCodexPersonalAccessToken",
+          "callee": "github.com/Wei-Shaw/sub2api/internal/pkg/httpclient.GetClient",
+          "sink_kind": "factory_httpclient_pool",
+          "sink_type": "factory",
+          "protocol": "http",
+          "endpoint_evidence": "missing",
+          "actual_backend": "plain_net_http",
+          "official_host": false,
+          "target_resolution": "unknown",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": null,
+          "resolved_methods": null,
+          "resolved_paths": null,
+          "resolved_targets": null,
+          "rationale": "P0：Codex 身份头 + Go 标准库 TLS，身份自相矛盾"
+        },
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIOAuthService.ValidateCodexPersonalAccessToken@backend/internal/service/openai_codex_pat_service.go#net_http_client_do#1",
+          "ast_fingerprint": "6510439f9f68",
+          "file": "backend/internal/service/openai_codex_pat_service.go",
+          "func": "*OpenAIOAuthService.ValidateCodexPersonalAccessToken",
+          "callee": "(*net/http.Client).Do",
+          "sink_kind": "net_http_client_do",
+          "sink_type": "terminal",
+          "protocol": "http",
+          "endpoint_evidence": "missing",
+          "actual_backend": "plain_net_http",
+          "official_host": true,
+          "target_resolution": "constructed",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": [
+            "auth.openai.com"
+          ],
+          "resolved_methods": [
+            "GET"
+          ],
+          "resolved_paths": [
+            "/api/accounts/v1/user-auth-credential/whoami"
+          ],
+          "resolved_targets": [
+            "https://auth.openai.com/api/accounts/v1/user-auth-credential/whoami"
+          ],
+          "rationale": "P0：Codex 身份头 + Go 标准库 TLS，身份自相矛盾"
+        }
+      ]
+    },
+    {
+      "sink_id": "web.privacy.account_info",
+      "purpose": "account_info",
+      "persona": "chatgpt-web",
+      "endpoint_evidence": "external_persona",
+      "routes": [
+        {
+          "raw": "GET chatgpt.com/backend-api/accounts/check/v4-2023-04-27",
+          "method": "GET",
+          "host": "chatgpt.com",
+          "path": "/backend-api/accounts/check/v4-2023-04-27",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "req_profile",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "1B",
+      "expiry_condition": "1B 修复 wire 缺陷后进 enforced",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.fetchChatGPTAccountInfo@backend/internal/service/openai_privacy_service.go#reqv3_get#1",
+          "ast_fingerprint": "d31d9ffc53e4",
+          "file": "backend/internal/service/openai_privacy_service.go",
+          "func": "fetchChatGPTAccountInfo",
+          "callee": "(*github.com/imroc/req/v3.Request).Get",
+          "sink_kind": "reqv3_get",
+          "sink_type": "terminal",
+          "protocol": "http",
+          "endpoint_evidence": "external_persona",
+          "actual_backend": "req_profile",
+          "official_host": true,
+          "target_resolution": "constructed",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": [
+            "chatgpt.com"
+          ],
+          "resolved_methods": [
+            "GET"
+          ],
+          "resolved_paths": [
+            "/backend-api/accounts/check/v4-2023-04-27"
+          ],
+          "resolved_targets": [
+            "https://chatgpt.com/backend-api/accounts/check/v4-2023-04-27"
+          ],
+          "rationale": "同 web.privacy.disable_training"
+        }
+      ]
+    },
+    {
+      "sink_id": "web.privacy.disable_training",
+      "purpose": "privacy_setting",
+      "persona": "chatgpt-web",
+      "endpoint_evidence": "external_persona",
+      "routes": [
+        {
+          "raw": "PATCH chatgpt.com/backend-api/settings/account_user_setting",
+          "method": "PATCH",
+          "host": "chatgpt.com",
+          "path": "/backend-api/settings/account_user_setting",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "req_profile",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "1B",
+      "expiry_condition": "1B 修复 wire 缺陷（Chrome 120→133、导航 Header→XHR）后进 enforced",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.disableOpenAITraining@backend/internal/service/openai_privacy_service.go#reqv3_patch#1",
+          "ast_fingerprint": "bfabdb3c8eb3",
+          "file": "backend/internal/service/openai_privacy_service.go",
+          "func": "disableOpenAITraining",
+          "callee": "(*github.com/imroc/req/v3.Request).Patch",
+          "sink_kind": "reqv3_patch",
+          "sink_type": "terminal",
+          "protocol": "http",
+          "endpoint_evidence": "external_persona",
+          "actual_backend": "req_profile",
+          "official_host": true,
+          "target_resolution": "const",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": [
+            "chatgpt.com"
+          ],
+          "resolved_methods": [
+            "PATCH"
+          ],
+          "resolved_paths": [
+            "/backend-api/settings/account_user_setting"
+          ],
+          "resolved_targets": [
+            "https://chatgpt.com/backend-api/settings/account_user_setting"
+          ],
+          "rationale": "Chrome impersonate；wire 实测含导航专属 Header 且指纹版本过时"
+        }
+      ]
+    },
+    {
+      "sink_id": "web.privacy.subscription",
+      "purpose": "subscription_info",
+      "persona": "chatgpt-web",
+      "endpoint_evidence": "external_persona",
+      "routes": [
+        {
+          "raw": "GET chatgpt.com/backend-api/subscriptions",
+          "method": "GET",
+          "host": "chatgpt.com",
+          "path": "/backend-api/subscriptions",
+          "transport": "http"
+        }
+      ],
+      "target_backend": "req_profile",
+      "enforcement_state": "legacy_observe",
+      "owner": "czs",
+      "migration_changeset": "1B",
+      "expiry_condition": "1B 修复 wire 缺陷后进 enforced",
+      "candidates": [
+        {
+          "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.fetchChatGPTSubscriptionExpiresAt@backend/internal/service/openai_privacy_service.go#reqv3_get#1",
+          "ast_fingerprint": "3273dbba919a",
+          "file": "backend/internal/service/openai_privacy_service.go",
+          "func": "fetchChatGPTSubscriptionExpiresAt",
+          "callee": "(*github.com/imroc/req/v3.Request).Get",
+          "sink_kind": "reqv3_get",
+          "sink_type": "terminal",
+          "protocol": "http",
+          "endpoint_evidence": "external_persona",
+          "actual_backend": "req_profile",
+          "official_host": true,
+          "target_resolution": "constructed",
+          "build_contexts": [
+            "darwin/arm64",
+            "linux/amd64"
+          ],
+          "resolved_hosts": [
+            "chatgpt.com"
+          ],
+          "resolved_methods": [
+            "GET"
+          ],
+          "resolved_paths": [
+            "/backend-api/subscriptions"
+          ],
+          "resolved_targets": [
+            "https://chatgpt.com/backend-api/subscriptions"
+          ],
+          "rationale": "同 web.privacy.disable_training"
+        }
+      ]
+    }
+  ]
+}

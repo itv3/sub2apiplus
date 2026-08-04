@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	coderws "github.com/coder/websocket"
 	"github.com/gin-gonic/gin"
@@ -154,6 +155,28 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	if !forceHTTPBridge {
 		if err := attachOfficialWebSocketProfile(); err != nil {
 			return err
+		}
+	}
+	runtimeSinkID := officialEgressSinkResponsesWS
+	if _, enabled := OfficialEgressContextFromContext(ctx); enabled && !forceHTTPBridge {
+		boundCtx, bindErr := bindOfficialEgressSink(ctx, runtimeSinkID)
+		if bindErr != nil {
+			return fmt.Errorf("bind Responses WebSocket official egress sink: %w", bindErr)
+		}
+		ctx = boundCtx
+	} else {
+		runtimeSinkID = ""
+	}
+	var officialRuntime *OfficialEgressTransitionRuntime
+	invocationID := ""
+	if runtimeSinkID != "" {
+		var runtimeErr error
+		officialRuntime, runtimeErr = resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream)
+		if runtimeErr != nil {
+			return runtimeErr
+		}
+		if identity, ok := officialegress.AttemptIdentityFromContext(ctx); ok {
+			invocationID = identity.InvocationID
 		}
 	}
 	dedicatedMode := modeRouterV2Enabled && ingressMode == OpenAIWSIngressModeDedicated
@@ -661,6 +684,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		Account: account,
 		WSURL:   wsURL,
 		Headers: wsHeaders,
+		SinkID:  runtimeSinkID,
 		HeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, error) {
 			return s.refreshOpenAIAgentIdentityHeaders(factoryCtx, account, headers)
 		},
@@ -671,6 +695,24 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			return ""
 		}(),
 		ForceNewConn: false,
+	}
+	var officialInvocation *OpenAIForwardInvocationPlan
+	if officialRuntime != nil {
+		officialInvocation, err = officialCodexResponseForwardPlanForHolder(
+			ctx,
+			officialCodexBundleHolderForGin(c),
+			officialCodexResponseForwardPlanInput{
+				Runtime: officialRuntime, Account: account, PrimarySinkID: runtimeSinkID,
+				InvocationID: invocationID, ProxyURL: baseAcquireReq.ProxyURL,
+				PolicyID:        "changeset3.responses.ws",
+				PolicySource:    "service.openAIWSForwardIngress",
+				FallbackSinkIDs: []officialegress.SinkID{officialegress.SinkCodexResponsesWSHTTPBridge},
+				AttemptBudget:   officialCodexIngressForwardAttemptBudget,
+			},
+		)
+		if err != nil {
+			return err
+		}
 	}
 	pool := s.getOpenAIWSConnPool()
 	if pool == nil {
@@ -729,8 +771,8 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 	agentTaskRecoveryTried := false
 	forceFreshConn := false
-	var acquireTurnLease func(int, string, bool) (*openAIWSConnLease, error)
-	acquireTurnLease = func(turn int, preferred string, forcePreferredConn bool) (*openAIWSConnLease, error) {
+	var acquireTurnLease func(int, string, bool) (openAIWSLeaseSession, error)
+	acquireTurnLease = func(turn int, preferred string, forcePreferredConn bool) (openAIWSLeaseSession, error) {
 		req := cloneOpenAIWSAcquireRequest(baseAcquireReq)
 		req.PreferredConnID = strings.TrimSpace(preferred)
 		req.ForcePreferredConn = forcePreferredConn
@@ -738,7 +780,15 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		// 单次重试也必须新建，不能继续从池中挑选另一条可能同样失效的空闲连接。
 		req.ForceNewConn = dedicatedMode || forceFreshConn
 		acquireCtx, acquireCancel := context.WithTimeout(ctx, acquireTimeout)
-		lease, acquireErr := pool.Acquire(acquireCtx, req)
+		var lease openAIWSLeaseSession
+		var acquireErr error
+		if officialInvocation != nil {
+			lease, acquireErr = officialInvocation.AcquireWebSocketPool(
+				acquireCtx, pool, req, officialCodexEndpointResponsesWS,
+			)
+		} else {
+			lease, acquireErr = pool.Acquire(acquireCtx, req)
+		}
 		acquireCancel()
 		var dialErr *openAIWSDialError
 		if acquireErr != nil && s.isAgentIdentityAccount(ctx, account) && errors.As(acquireErr, &dialErr) && isAgentIdentityTaskInvalidWSDialError(dialErr) && !agentTaskRecoveryTried {
@@ -816,13 +866,13 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		return lease, nil
 	}
 
-	sendAndRelay := func(turn int, lease *openAIWSConnLease, payload []byte, payloadBytes int, originalModel string, imageBillingModel string, imageSizeTier string, imageInputSize string, relayToClient bool) (*OpenAIForwardResult, error) {
+	sendAndRelay := func(turn int, lease openAIWSLeaseSession, payload []byte, payloadBytes int, originalModel string, imageBillingModel string, imageSizeTier string, imageInputSize string, relayToClient bool) (*OpenAIForwardResult, error) {
 		if lease == nil {
 			return nil, errors.New("upstream websocket lease is nil")
 		}
 		turnStart := time.Now()
 		wroteDownstream := false
-		if err := lease.WriteJSONWithContextTimeout(ctx, json.RawMessage(payload), s.openAIWSWriteTimeout()); err != nil {
+		if err := lease.WriteSemanticJSONWithContextTimeout(ctx, json.RawMessage(payload), s.openAIWSWriteTimeout()); err != nil {
 			return nil, wrapOpenAIWSIngressTurnError(
 				"write_upstream",
 				fmt.Errorf("write upstream websocket request: %w", err),
@@ -1107,7 +1157,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		}
 		return strings.TrimSpace(openAIWSPayloadStringFromRaw(payload, "previous_response_id")) != ""
 	}
-	var sessionLease *openAIWSConnLease
+	var sessionLease openAIWSLeaseSession
 	sessionConnID := ""
 	pinnedSessionConnID := ""
 	unpinSessionConn := func(connID string) {
@@ -1612,7 +1662,7 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			)
 		}
 
-		finalPayload, _, finalizeErr := finalizeOpenAIOfficialEgressWSFrame(
+		finalPayload, _, finalizeErr := prepareOpenAIOfficialEgressSemanticWSFrame(
 			ctx,
 			currentOriginalPayload,
 			currentPayload,
@@ -1629,7 +1679,9 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		currentPayload = finalPayload
 		currentPayloadBytes = len(finalPayload)
 		if officialEgressEnabled && strings.TrimSpace(turnState) != "" {
-			withTurnState, setTurnStateErr := injectOfficialOpenAIWSTurnState(currentPayload, turnState)
+			withTurnState, setTurnStateErr := injectOfficialOpenAIWSTurnState(
+				ctx, currentPayload, turnState,
+			)
 			if setTurnStateErr != nil {
 				return NewOpenAIWSClientCloseError(
 					coderws.StatusPolicyViolation,

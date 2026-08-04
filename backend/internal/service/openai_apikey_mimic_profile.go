@@ -177,17 +177,15 @@ func resolveOpenAIAPIKeyCodexMimicClientProfileByID(profileID string) openAIAPIK
 			OpenAIBeta: "responses=experimental",
 		}
 	default:
-		profile, _ := resolveOfficialClientProfile(
-			officialClientPurposeOpenAIAPIKeyResponsesHTTP,
-			officialClientProfileModePrevious,
-		)
+		// API-key Desktop 是非 Codex persona 的历史兼容画像，不属于正式
+		// ReleaseCatalog。这里显式保持其空静态头契约，避免从 Codex previous
+		// ProfileSpec 注入 Responses Lite 等 CLI 专用字段。
 		return openAIAPIKeyCodexMimicClientProfile{
 			ID:               openAIAPIKeyCodexMimicClientDesktop0144,
 			UserAgent:        codexDesktopUserAgent,
 			Originator:       codexDesktopOriginator,
 			IsDesktop:        true,
 			RequiresMetadata: true,
-			StaticHeaders:    profile.Wire.StaticHeaders,
 			Sandbox:          "none",
 			WorkspaceKind:    "project",
 		}

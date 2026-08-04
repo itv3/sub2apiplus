@@ -1,0 +1,25 @@
+{
+  "schema_version": "changeset3-pairing-gate-evaluation/v1",
+  "reviewed_by": "codex-changeset3-self-audit",
+  "review_ref": "changeset-3-pairing-gate-evaluation/2026-08-03",
+  "gate_file": "backend/internal/service/official_egress_finalizer_pairing_test.go",
+  "gate_lines_at_review": 825,
+  "production_call_counts": {
+    "legacy_http_attach": 0,
+    "legacy_ws_attach": 0,
+    "legacy_header_finalizer": 1,
+    "legacy_body_finalizer": 0
+  },
+  "deletion_conditions": {
+    "production_legacy_attach_calls_zero": true,
+    "production_legacy_header_body_calls_zero": false,
+    "runtime_sinks_only_use_unified_executor": true,
+    "three_production_adapters_in_source_gate": true,
+    "terminals_reject_tokenless_managed_requests": true,
+    "four_existing_enforced_receipts_reproducible": true,
+    "active_previous_ws_fallback_retry_negative_gates_pass": true,
+    "replacement_gate_has_mutation_negative_tests": true
+  },
+  "decision": "retained",
+  "rationale": "825 行 pairing 门禁继续保留；Runtime Sink 已不再调用旧 attach/body finalizer，唯一旧 header 调用位于仅供冻结测试使用的兼容 helper，不能进入 21 个 Runtime Sink 调用链。"
+}

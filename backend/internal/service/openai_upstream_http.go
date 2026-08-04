@@ -1,10 +1,14 @@
 package service
 
 import (
+	"context"
 	"fmt"
 	"net/http"
+	"strings"
+	"sync"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	utls "github.com/refraction-networking/utls"
 )
@@ -82,7 +86,7 @@ func resolveOpenAIAPIKeyCodexTLSProfileForClient(
 	}
 	switch client.ID {
 	case openAIAPIKeyCodexMimicClientCodexExec0145:
-		return newOpenAIAPIKeyCodex0145TLSOnlyProfile(proxyURL != "")
+		return newOpenAIAPIKeyCodexTLSOnlyProfile(proxyURL != "")
 	case openAIAPIKeyCodexMimicClientCLIRS0125:
 		return codexCLIRS0125TLSProfile()
 	default:
@@ -90,10 +94,10 @@ func resolveOpenAIAPIKeyCodexTLSProfileForClient(
 	}
 }
 
-// newOpenAIAPIKeyCodex0145TLSOnlyProfile 仅复用 0.145.0 的 ClientHello。
+// newOpenAIAPIKeyCodexTLSOnlyProfile 仅复用 0.145.0 的 ClientHello。
 // API-key mimic 的目标 URL 可能是第三方 /v1/responses，不属于 OAuth 版本画像的
 // chatgpt.com 端点矩阵，因此绝不能携带 OAuth 的 strict H1 method/path 契约。
-func newOpenAIAPIKeyCodex0145TLSOnlyProfile(useProxy bool) *tlsfingerprint.Profile {
+func newOpenAIAPIKeyCodexTLSOnlyProfile(useProxy bool) *tlsfingerprint.Profile {
 	var profile *tlsfingerprint.Profile
 	if useProxy {
 		profile = newOpenAIOfficialEgressHTTPProxyTLSProfile()
@@ -115,6 +119,29 @@ func newOpenAIAPIKeyCodex0145TLSOnlyProfile(useProxy bool) *tlsfingerprint.Profi
 // 这样 header/body 画像与 TLS 画像必然出自同一个服务级 active/previous 指针，
 // 消除 mode=previous 下「Desktop header + active CLI TLS」的跨画像混用。
 // 不做 mimic 的路径（passthrough、WS-HTTP 桥接）传零值画像即表示不套 mimic TLS。
+type officialCodexBundleHolderContextKey struct{}
+type officialCodexLegacyPolicyContextKey struct{}
+
+type officialCodexLegacyPolicyContext struct {
+	policyID        string
+	policySource    string
+	fallbackSinkIDs []officialegress.SinkID
+}
+
+type officialCodexBundleHolder struct {
+	mu                sync.Mutex
+	bundle            *officialegress.ReleaseBundle
+	httpInvocation    *officialCodexHTTPInvocation
+	httpAttemptBudget int
+	wsInvocations     map[officialegress.SinkID]*officialCodexWebSocketInvocation
+	forwardPlans      map[officialCodexForwardPlanKey]*OpenAIForwardInvocationPlan
+}
+
+type officialCodexForwardPlanKey struct {
+	sinkID    officialegress.SinkID
+	accountID int64
+}
+
 func doOpenAIHTTPUpstreamWithProfile(httpUpstream HTTPUpstream, req *http.Request, proxyURL string, account *Account, tlsFPProfileService *TLSFingerprintProfileService, mimicProfile openAIAPIKeyCodexMimicProfile) (*http.Response, error) {
 	if httpUpstream == nil {
 		return nil, fmt.Errorf("http upstream unavailable")
@@ -127,26 +154,71 @@ func doOpenAIHTTPUpstreamWithProfile(httpUpstream HTTPUpstream, req *http.Reques
 		if account == nil {
 			return nil, fmt.Errorf("official egress HTTP account is unavailable")
 		}
-		// 代理只决定 TCP 路由，不决定 Codex HTTP TLS 画像。默认系统 CA 路径
-		// 在直连与 CONNECT 下均使用 30-cipher、空 ALPN 的 HTTP/1.1 画像；
-		// 只有有效自定义 CA 才能进入另一分支，而该能力当前未开放。
-		return httpUpstream.DoWithTLS(
-			req,
-			proxyURL,
-			account.ID,
-			account.Concurrency,
-			officialTLSProfile,
+		_ = officialTLSProfile // 旧上下文只用于识别正式 Codex 路径，传输事实改由 Bundle 注入。
+		runtimeState, runtimeErr := resolveOfficialEgressRuntime(nil, httpUpstream)
+		if runtimeErr != nil {
+			return nil, runtimeErr
+		}
+		identity, exists := officialegress.AttemptIdentityFromContext(req.Context())
+		if !exists || identity.SinkID == "" {
+			return nil, fmt.Errorf("official egress HTTP 请求缺少权威 SinkID")
+		}
+		holder, _ := req.Context().Value(officialCodexBundleHolderContextKey{}).(*officialCodexBundleHolder)
+		if holder == nil {
+			holder = &officialCodexBundleHolder{}
+			*req = *req.WithContext(context.WithValue(req.Context(), officialCodexBundleHolderContextKey{}, holder))
+		}
+		holder.mu.Lock()
+		defer holder.mu.Unlock()
+		policy := officialCodexLegacyPolicyContext{
+			policyID: "codex.http.legacy", policySource: "docs/1.md#changeset-2",
+		}
+		if frozen, ok := req.Context().Value(officialCodexLegacyPolicyContextKey{}).(officialCodexLegacyPolicyContext); ok &&
+			strings.TrimSpace(frozen.policyID) != "" && strings.TrimSpace(frozen.policySource) != "" {
+			policy = frozen
+		}
+		response, bundle, dispatchErr := runtimeState.DispatchCodexLegacyHTTP(
+			req.Context(),
+			httpUpstream,
+			OfficialCodexLegacyHTTPDispatch{
+				Bundle: holder.bundle, SinkID: identity.SinkID, Account: account,
+				Request: req, ProxyURL: proxyURL, PolicyID: policy.policyID,
+				PolicySource: policy.policySource, InvocationID: identity.InvocationID,
+				FallbackSinkIDs: append([]officialegress.SinkID(nil), policy.fallbackSinkIDs...),
+			},
 		)
+		if bundle.BundleDigest() != "" {
+			holder.bundle = &bundle
+		}
+		return response, dispatchErr
 	}
 	if mimicProfile.ShouldUseTLSFingerprint(account) {
 		if tlsProfile := resolveOpenAIAPIKeyCodexTLSProfileForClient(account, tlsFPProfileService, mimicProfile.Client, proxyURL); tlsProfile != nil {
-			return httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, tlsProfile)
+			return doOpenAIAPIKeyHTTPTransport(httpUpstream, req, proxyURL, account, tlsProfile)
 		}
 	}
-	if account == nil {
-		return httpUpstream.Do(req, proxyURL, 0, 0)
+	return doOpenAIAPIKeyHTTPTransport(httpUpstream, req, proxyURL, account, nil)
+}
+
+// doOpenAIAPIKeyHTTPTransport 仅承载非 Codex persona 的 API-key/custom provider
+// 兼容发送。它与 ReleaseBundle 数据链隔离，scanner 按精确函数登记为 out-of-scope。
+func doOpenAIAPIKeyHTTPTransport(
+	httpUpstream HTTPUpstream,
+	req *http.Request,
+	proxyURL string,
+	account *Account,
+	tlsProfile *tlsfingerprint.Profile,
+) (*http.Response, error) {
+	accountID := int64(0)
+	concurrency := 0
+	if account != nil {
+		accountID = account.ID
+		concurrency = account.Concurrency
 	}
-	return httpUpstream.Do(req, proxyURL, account.ID, account.Concurrency)
+	if tlsProfile != nil {
+		return httpUpstream.DoWithTLS(req, proxyURL, accountID, concurrency, tlsProfile)
+	}
+	return httpUpstream.Do(req, proxyURL, accountID, concurrency)
 }
 
 func (s *OpenAIGatewayService) doOpenAIHTTPUpstreamForRequest(req *http.Request, proxyURL string, account *Account, mimicProfile openAIAPIKeyCodexMimicProfile) (*http.Response, error) {

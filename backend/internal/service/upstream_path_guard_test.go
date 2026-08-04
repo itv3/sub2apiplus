@@ -83,6 +83,35 @@ func TestSanitizedUpstreamPathSuffixRejectsNonConformingSegments(t *testing.T) {
 	}
 }
 
+func TestOfficialOAuthResponsesSubpathRequiresReviewedRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	oauth := &Account{Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	apiKey := &Account{Platform: PlatformOpenAI, Type: AccountTypeAPIKey}
+	for _, testCase := range []struct {
+		name       string
+		account    *Account
+		path       string
+		shouldFail bool
+	}{
+		{name: "OAuth 根路由", account: oauth, path: "/v1/responses"},
+		{name: "OAuth compact", account: oauth, path: "/v1/responses/compact"},
+		{name: "OAuth 资源读取", account: oauth, path: "/v1/responses/resp_1", shouldFail: true},
+		{name: "OAuth cancel", account: oauth, path: "/v1/responses/resp_1/cancel", shouldFail: true},
+		{name: "APIKey 自定义子路径", account: apiKey, path: "/v1/responses/resp_1/cancel"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			context, _ := gin.CreateTestContext(httptest.NewRecorder())
+			context.Request = httptest.NewRequest(http.MethodPost, testCase.path, nil)
+			err := validateOpenAIOfficialResponsesSubpath(testCase.account, context)
+			if testCase.shouldFail {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
 func TestSanitizedUpstreamPathSuffixEnforcesBounds(t *testing.T) {
 	longSegment := "/"
 	for i := 0; i < maxUpstreamPathSegmentLen+1; i++ {

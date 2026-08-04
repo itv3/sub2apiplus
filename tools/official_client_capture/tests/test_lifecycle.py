@@ -120,6 +120,10 @@ class LifecycleTest(unittest.TestCase):
         self.assertEqual(
             process.command[-1], "tcp port 443 and (host 203.0.113.20)"
         )
+        self.assertEqual(
+            process.metadata["invocation"]["argv_redacted"], process.command
+        )
+        self.assertEqual(len(process.metadata["invocation"]["argv_sha256"]), 64)
 
     def test_custom_https_port_is_used_for_dns_and_bpf(self) -> None:
         plan = build_campaign_plan(

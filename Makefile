@@ -1,4 +1,19 @@
-.PHONY: build build-backend build-frontend test test-backend test-frontend test-frontend-critical test-capture-tools check-egress-spec
+.PHONY: build build-backend build-frontend test test-backend test-frontend test-frontend-critical test-capture-tools check-egress-spec check-egress-bootstrap-replay check-egress-seal
+
+EGRESS_BOOTSTRAP_COMMIT := 38a9929eac35a39c86de2f27de8f7a805d7dae52
+EGRESS_BOOTSTRAP_BASELINE := $(CURDIR)/docs/changeset0/sink-baseline.json
+EGRESS_BOOTSTRAP_SUPPLEMENTS := $(CURDIR)/docs/changeset1a/pre-bootstrap-supplements.json
+EGRESS_REMOVAL_RECEIPTS := $(CURDIR)/docs/changeset2/removal-receipts.json,$(CURDIR)/docs/changeset3/removal-receipts.json,$(CURDIR)/docs/changeset5/removal-receipts.json
+EGRESS_MIGRATION_RECEIPTS := $(CURDIR)/docs/changeset1a/migration-receipts.json,$(CURDIR)/docs/changeset3/migration-receipts.json
+EGRESS_BOOTSTRAP_REMOVAL_RECEIPTS := $(CURDIR)/docs/changeset2/removal-receipts.json
+EGRESS_BOOTSTRAP_MIGRATION_RECEIPTS := $(CURDIR)/docs/changeset1a/migration-receipts.json
+EGRESS_CATALOG_AMENDMENTS := $(CURDIR)/docs/changeset1a/catalog-amendments.json
+EGRESS_BOOTSTRAP_INVENTORY_LOCK := $(CURDIR)/docs/changeset5/bootstrap-inventory-lock.json
+EGRESS_SCANNER_SOURCE_ROOT := $(CURDIR)/backend/cmd/egressscan
+EGRESS_LEGACY_BASELINE := $(CURDIR)/docs/changeset1a/legacy-baseline.json
+EGRESS_LEGACY_CEILING := $(CURDIR)/docs/changeset1a/legacy-ceiling.json
+EGRESS_LEGACY_SEAL_RECEIPT := $(CURDIR)/docs/changeset1a/legacy-seal-receipt.json
+EGRESS_SEAL_BASE_REF ?=
 
 FRONTEND_CRITICAL_VITEST := \
 	src/views/auth/__tests__/LinuxDoCallbackView.spec.ts \
@@ -24,12 +39,125 @@ test: test-backend test-frontend test-capture-tools check-egress-spec
 
 # Codex 出站规格门禁，见 docs/CODEX_CLI_0145_EGRESS_SPEC.md §3.5 与 §4.7。
 # 这些检查此前只能手工执行，因而无法阻止回归；--self-test 先校验判据本身是否
-# 仍与版本号解耦，再用它扫描仓库。全部只读标准库，不联网。
-check-egress-spec:
+# 仍与版本号解耦，再用它扫描仓库。全部只读且不联网。
+check-egress-seal:
+	@cd backend && go run ./cmd/egressseal \
+		-receipt "$(EGRESS_LEGACY_SEAL_RECEIPT)" \
+		-ceiling "$(EGRESS_LEGACY_CEILING)" \
+		-supplements "$(EGRESS_BOOTSTRAP_SUPPLEMENTS)" \
+		-baseline "$(EGRESS_LEGACY_BASELINE)" \
+		-protected-base-ref "$(EGRESS_SEAL_BASE_REF)"
+
+check-egress-spec: check-egress-bootstrap-replay check-egress-seal
 	@python3 tools/check_version_leak.py --self-test
 	@python3 tools/check_version_leak.py
+	@python3 tools/check_changeset5_0145_symbols.py --self-test
+	@python3 tools/check_changeset5_0145_symbols.py
+	@python3 tools/changeset6_workspace_transition.py --self-test
+	@python3 tools/changeset6_workspace_transition.py
+	@python3 tools/changeset6_benchmark_evidence.py --self-test
+	@python3 tools/changeset6_benchmark_evidence.py
 	@python3 tools/check_ledger_completeness.py
 	@python3 tools/check_spec_refs.py
+	@cd backend && go run ./cmd/egressscan -mode self-test
+	@cd backend && go run ./cmd/egressscan -mode check \
+		-baseline ../docs/changeset0/sink-baseline.json \
+		-supplements ../docs/changeset1a/pre-bootstrap-supplements.json \
+		-removals "$(EGRESS_REMOVAL_RECEIPTS)" \
+		-migration-receipts "$(EGRESS_MIGRATION_RECEIPTS)" \
+		-catalog-amendments ../docs/changeset1a/catalog-amendments.json \
+		-inventory-lock "$(EGRESS_BOOTSTRAP_INVENTORY_LOCK)" \
+		-scanner-source-root ./cmd/egressscan
+	@cd backend && d=$$(mktemp -d) && trap "rm -rf $$d" EXIT; \
+		go run ./cmd/egressscan -mode stats \
+			-baseline ../docs/changeset0/sink-baseline.json -out $$d/sink-stats.md && \
+		cmp -s $$d/sink-stats.md ../docs/changeset0/sink-stats.md || \
+		{ echo "🔴 发送面统计已与基线漂移，请重新生成 sink-stats.md"; exit 1; }
+	@cd backend && test -z "$$(gofmt -l \
+		./internal/officialegress/ \
+		./cmd/egressruntimedump/ \
+		./cmd/egressprofiledump/ \
+		./cmd/egressreleasegraphdump/ \
+		./cmd/egressbindingdump/ \
+		./cmd/egressconflictinventory/ \
+		./cmd/egressseal/ \
+		./cmd/egressscan/)"
+	@cd backend && go vet \
+		./internal/officialegress/... \
+		./cmd/egressruntimedump/ \
+		./cmd/egressprofiledump/ \
+		./cmd/egressreleasegraphdump/ \
+		./cmd/egressbindingdump/ \
+		./cmd/egressconflictinventory/ \
+		./cmd/egressseal/ \
+		./cmd/egressscan/
+	@cd backend && go test \
+		./internal/officialegress/... \
+		./cmd/egressruntimedump/ \
+		./cmd/egressprofiledump/ \
+		./cmd/egressreleasegraphdump/ \
+		./cmd/egressbindingdump/ \
+		./cmd/egressconflictinventory/ \
+		./cmd/egressseal/ \
+		./cmd/egressscan/ -count=1
+	@python3 tools/changeset6_conflict_transition.py --self-test
+	@python3 tools/changeset6_conflict_transition.py
+	@# 变更集 5 快照保持冻结；当前源码必须确定性重建为变更集 6 自有 post 冲突单元台账。
+	@cd backend && d=$$(mktemp -d) && trap "rm -rf $$d" EXIT; \
+		go run ./cmd/egressconflictinventory -output $$d >/dev/null && \
+		cmp -s $$d/full.json ../docs/changeset6/post-conflict-inventory/full.json && \
+		cmp -s $$d/governable.json ../docs/changeset6/post-conflict-inventory/governable.json || \
+		{ echo "🔴 变更集 6 post 冲突单元台账已漂移"; exit 1; }
+	@cd backend && go run -mod=mod github.com/google/wire/cmd/wire diff ./cmd/server
+	@# 四类终端发送栈必须证明 Guard 接入前后发送事实与结果不变。
+	@cd backend && go test ./internal/repository \
+		-run '^(TestChromePersona|TestHTTPUpstreamGuardPreservesOutOfScopeWireAndResult|TestReqProfileGuardPreservesOutOfScopeWireAndResult)' -count=1
+	@cd backend && go test ./internal/service \
+		-run '^(TestPrivacyProductionFunctionsBuildAllThreeBrowserRequests|TestWebSocketHandshakeGuardPreservesWireAndResult|TestChangeset3RuntimeSinksEnterExecutorWithoutLegacyFinalizers|TestChangeset5LegacyAttachFinalizerDefinitionsAndCallsAreExtinct|TestChangeset5LegacyExtinctionGateRejectsDefinitionsAndWrappedCalls|TestChangeset5WebSocketExecutorOwnsFinalHandshakeHeaders|TestChangeset5OriginalPreFinalWireIsByteExactAndFrozen|TestChangeset5NormalizedPreAppliesOnlyExactOAuthNoiseTransition|TestChangeset5NormalizationTransitionRejectsWrongOrExpandedApproval|TestChangeset5PostRefactorFinalWireIsFrozenAndMatchesPre)$$' -count=1
+	@cd backend && go test ./internal/pkg/httpclient \
+		-run '^(TestBuildTransportWithCustomDialKeepsHTTP2Disabled|TestSharedPoolGuardPreservesOutOfScopeWireAndResult)$$' -count=1
+	@# 防快照与生成文件陈旧：临时导出后比对。
+	@# 用 mktemp -d 而非固定 /tmp 路径，避免并行 CI 互相覆盖。
+	@cd backend && d=$$(mktemp -d) && trap "rm -rf $$d" EXIT; \
+		go run ./cmd/egressruntimedump -output $$d/runtime >/dev/null && \
+		diff -qr $$d/runtime internal/officialegress/catalogdata/runtime >/dev/null || \
+		{ echo "🔴 正式版本数据已漂移，请重跑 cmd/egressruntimedump 更新 catalogdata/runtime"; exit 1; }
+	@cd backend && d=$$(mktemp -d) && trap "rm -rf $$d" EXIT; \
+		go run ./cmd/egressprofiledump $$d/snap.json >/dev/null && \
+		cmp -s $$d/snap.json internal/officialegress/profilecontract/testdata/snapshots/0.145.0/e0b59772622f14717f1fdf5c15bfae5758226a04fe8f030110d8a616e20fdf6b.json || \
+		{ echo "🔴 画像快照已变更，请重跑 cmd/egressprofiledump 更新 testdata"; exit 1; }
+	@cd backend && d=$$(mktemp -d) && trap "rm -rf $$d" EXIT; \
+		go run ./cmd/egressprofiledump -enums \
+			internal/officialegress/profilecontract/testdata/snapshot-catalog.json $$d/enums.go >/dev/null && \
+		gofmt $$d/enums.go > $$d/fmt.go && \
+		cmp -s $$d/fmt.go internal/officialegress/profilecontract/enums_gen.go || \
+		{ echo "🔴 枚举生成结果已变更，请重跑 -enums 更新 enums_gen.go"; exit 1; }
+	@cd backend && d=$$(mktemp -d) && trap "rm -rf $$d" EXIT; \
+		go run ./cmd/egressreleasegraphdump $$d/release-graph.json >/dev/null && \
+		cmp -s $$d/release-graph.json internal/officialegress/releasecontract/testdata/release-graph.json || \
+		{ echo "🔴 official-client 发布图已变更，请更新 release-graph.json"; exit 1; }
+	@cd backend && d=$$(mktemp -d) && trap "rm -rf $$d" EXIT; \
+		go run ./cmd/egressbindingdump \
+			../docs/changeset0/sink-baseline.json $$d/release-bindings.json >/dev/null && \
+		cmp -s $$d/release-bindings.json internal/officialegress/bindingcontract/testdata/release-bindings.json || \
+		{ echo "🔴 ReleaseBinding 已与 sink 基线漂移，请更新 release-bindings.json"; exit 1; }
+	@cd backend && go build ./... >/dev/null
+
+# 用当前受审扫描器回放 bootstrap commit 的干净源码归档。当前工作区即使有未提交
+# 改动，也不会参与存在性证明；补录项必须在该历史源码中真实可扫描。
+check-egress-bootstrap-replay:
+	@d=$$(mktemp -d) && trap "rm -rf $$d" EXIT && \
+		mkdir -p $$d/source && \
+		cd backend && go build -o $$d/egressscan ./cmd/egressscan && \
+		cd .. && git archive $(EGRESS_BOOTSTRAP_COMMIT) | tar -x -C $$d/source && \
+		cd $$d/source/backend && $$d/egressscan -mode replay \
+			-baseline $(EGRESS_BOOTSTRAP_BASELINE) \
+			-supplements $(EGRESS_BOOTSTRAP_SUPPLEMENTS) \
+			-removals $(EGRESS_BOOTSTRAP_REMOVAL_RECEIPTS) \
+			-migration-receipts $(EGRESS_BOOTSTRAP_MIGRATION_RECEIPTS) \
+			-catalog-amendments $(EGRESS_CATALOG_AMENDMENTS) \
+			-inventory-lock $(EGRESS_BOOTSTRAP_INVENTORY_LOCK) \
+			-scanner-source-root $(EGRESS_SCANNER_SOURCE_ROOT)
 
 test-backend:
 	@$(MAKE) -C backend test

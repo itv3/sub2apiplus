@@ -60,7 +60,7 @@ func candidateTraceSHA256(value string) string {
 }
 
 func TestCandidateTraceCodex0145RuntimeAndBoundaryFacts(t *testing.T) {
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	require.NoError(t, err)
 
 	execUserAgent, err := profile.RenderUserAgent(officialCodexSurfaceExec, true)
@@ -75,11 +75,12 @@ func TestCandidateTraceCodex0145RuntimeAndBoundaryFacts(t *testing.T) {
 	require.True(t, strings.HasSuffix(tuiUserAgent, "(codex-tui; 0.145.0)"))
 	require.NotContains(t, modelsWithoutSuffix, "(codex_exec; 0.145.0)")
 
-	modelsState, err := resolveOfficialCodex0145RuntimeState(
+	modelsState, err := resolveOfficialCodexRuntimeState(
 		officialCodex0145RuntimeIngress(modelsWithoutSuffix, "codex_cli_rs"),
-		officialEgressTestAccount(145, PlatformOpenAI),
-		codex0145EndpointID(officialCodexEndpointModels),
-	)
+		officialEgressTestAccount(145, PlatformOpenAI), officialClientProfileModeActive,
+
+		codexEndpointID(officialCodexEndpointModels))
+
 	require.NoError(t, err)
 	require.Equal(t, officialCodexProcessPhaseInitialModels, modelsState.ProcessPhase)
 	require.False(t, modelsState.UserAgentSuffixEnabled)
@@ -119,7 +120,7 @@ func TestCandidateTraceCodex0145RuntimeAndBoundaryFacts(t *testing.T) {
 		"x-codex-turn-metadata",
 		`{"thread_source":"memory_consolidation"}`,
 	)
-	memgenState, err := resolveOfficialCodex0145RuntimeState(memgenIngress, account)
+	memgenState, err := resolveOfficialCodexRuntimeState(memgenIngress, account, officialClientProfileModeActive, officialClientProfileModeActive)
 	require.NoError(t, err)
 	require.Equal(t, "memory_consolidation", memgenState.ConditionalHeaders["x-openai-subagent"])
 	require.Equal(t, "true", memgenState.ConditionalHeaders["x-openai-memgen-request"])
@@ -132,7 +133,7 @@ func TestCandidateTraceCodex0145RuntimeAndBoundaryFacts(t *testing.T) {
 		"x-codex-turn-metadata",
 		`{"thread_source":"subagent","subagent_kind":"thread_spawn","parent_thread_id":"`+parentThreadID+`"}`,
 	)
-	spawnState, err := resolveOfficialCodex0145RuntimeState(spawnIngress, account)
+	spawnState, err := resolveOfficialCodexRuntimeState(spawnIngress, account, officialClientProfileModeActive, officialClientProfileModeActive)
 	require.NoError(t, err)
 	require.Equal(t, "collab_spawn", spawnState.ConditionalHeaders["x-openai-subagent"])
 	require.Equal(t, parentThreadID, spawnState.ConditionalHeaders["x-codex-parent-thread-id"])
@@ -154,9 +155,9 @@ func TestCandidateTraceCodex0145RuntimeAndBoundaryFacts(t *testing.T) {
 	})
 
 	unknownBody := []byte(`{"model":"gpt-5.6-sol","input":[],"tool_choice":"auto","parallel_tool_calls":false,"reasoning":{"effort":"high","context":"all_turns"},"store":false,"stream":true,"include":[],"candidate_unknown_sentinel":true}`)
-	unknownEgress, err := officialCodex0145ValidateAndOrderJSONBody(
+	unknownEgress, err := officialCodexValidateAndOrderJSONBody(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointResponsesHTTP),
+		codexEndpointID(officialCodexEndpointResponsesHTTP),
 		unknownBody,
 		nil,
 	)
@@ -168,16 +169,16 @@ func TestCandidateTraceCodex0145RuntimeAndBoundaryFacts(t *testing.T) {
 	})
 
 	nonLiteImageBody := []byte(`{"model":"gpt-5.6-sol","input":[],"tools":[{"type":"namespace","name":"image_gen","description":"生成图片","tools":[{"type":"function","name":"imagegen","description":"生成一张图片","strict":false,"parameters":{"type":"object"}}]}]}`)
-	require.NoError(t, officialCodex0145ValidateToolPresentation(
+	require.NoError(t, officialCodexValidateToolPresentation(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointResponsesHTTP),
+		codexEndpointID(officialCodexEndpointResponsesHTTP),
 		nonLiteImageBody,
 		false,
 	))
 	liteImageBody := []byte(`{"input":[{"type":"additional_tools","tools":[{"type":"namespace","name":"image_gen","description":"生成图片","tools":[{"type":"function","name":"imagegen","description":"生成一张图片","strict":false,"parameters":{"type":"object"}}]}]}]}`)
-	require.NoError(t, officialCodex0145ValidateToolPresentation(
+	require.NoError(t, officialCodexValidateToolPresentation(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointResponsesWS),
+		codexEndpointID(officialCodexEndpointResponsesWS),
 		liteImageBody,
 		true,
 	))
@@ -199,16 +200,16 @@ func TestCandidateTraceCodex0145RuntimeAndBoundaryFacts(t *testing.T) {
 	})
 
 	editBody := []byte(`{"images":[{"image_url":"data:image/png;base64,c291cmNl"}],"prompt":"replace background","background":"auto","model":"gpt-image-2","quality":"high","size":"1024x1024"}`)
-	orderedEdit, err := officialCodex0145ValidateAndOrderJSONBody(
+	orderedEdit, err := officialCodexValidateAndOrderJSONBody(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointImagesEdits),
+		codexEndpointID(officialCodexEndpointImagesEdits),
 		editBody,
 		nil,
 	)
 	require.NoError(t, err)
-	editEndpoint, err := resolveCodex0145Endpoint(
+	editEndpoint, err := resolveCodexEndpoint(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointImagesEdits),
+		codexEndpointID(officialCodexEndpointImagesEdits),
 	)
 	require.NoError(t, err)
 	imageURL := gjson.GetBytes(orderedEdit, "images.0.image_url").String()
@@ -310,7 +311,14 @@ func TestCandidateTraceCodex0145TurnStateFacts(t *testing.T) {
 	upstreamEvent := []byte(`{"type":"response.metadata","headers":{"X-Codex-Turn-State":"` + receivedTurnState + `"}}`)
 	wsReceived := extractOpenAIWSTurnStateFromUpstreamEvent(upstreamEvent)
 	require.Equal(t, receivedTurnState, wsReceived)
+	wsContext := WithOfficialEgressContext(
+		context.Background(),
+		NewOfficialEgressContext(OfficialEgressContextInput{
+			ProfileMode: officialClientProfileModeActive,
+		}),
+	)
 	wsFrame, err := injectOfficialOpenAIWSTurnState(
+		wsContext,
 		[]byte(`{"type":"response.create","model":"gpt-5.6-sol","input":[]}`),
 		wsReceived,
 	)
@@ -541,7 +549,7 @@ func TestCandidateTraceCodex0145OAuthFallbackSameInvocation(t *testing.T) {
 
 func TestCandidateTraceCodex0145HeaderAssembly(t *testing.T) {
 	stages := make([]string, 0, 6)
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	require.NoError(t, err)
 	require.Equal(t, officialCodexVersion0145, profile.Version)
 	stages = append(stages, "provider")
@@ -557,9 +565,9 @@ func TestCandidateTraceCodex0145HeaderAssembly(t *testing.T) {
 		"x-codex-turn-metadata": {`{"request_kind":"turn"}`},
 		"x-codex-window-id":     {uuid.NewString()},
 	}
-	fields, err := officialCodex0145ApplyHeaderContract(
+	fields, err := officialCodexApplyHeaderContract(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointResponsesHTTP),
+		codexEndpointID(officialCodexEndpointResponsesHTTP),
 		headers,
 		map[string]bool{officialCodexConditionRemoteCompactionV2: true},
 	)
@@ -568,9 +576,9 @@ func TestCandidateTraceCodex0145HeaderAssembly(t *testing.T) {
 	stages = append(stages, "endpoint_headers")
 
 	body := []byte(`{"model":"gpt-5.6-sol","input":[],"tool_choice":"auto","parallel_tool_calls":false,"reasoning":{"effort":"high","context":"all_turns"},"store":false,"stream":true,"include":[]}`)
-	orderedBody, err := officialCodex0145ValidateAndOrderJSONBody(
+	orderedBody, err := officialCodexValidateAndOrderJSONBody(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointResponsesHTTP),
+		codexEndpointID(officialCodexEndpointResponsesHTTP),
 		body,
 		nil,
 	)
@@ -578,18 +586,18 @@ func TestCandidateTraceCodex0145HeaderAssembly(t *testing.T) {
 	require.True(t, json.Valid(orderedBody))
 	stages = append(stages, "body")
 
-	tlsProfile, err := officialCodex0145ResolveEndpointTLSProfile(
+	tlsProfile, err := officialCodexResolveEndpointTLSProfile(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointResponsesHTTP),
+		codexEndpointID(officialCodexEndpointResponsesHTTP),
 	)
 	require.NoError(t, err)
 	require.Len(t, tlsProfile.CipherSuites, 30)
 	stages = append(stages, "configure")
 
-	target, err := officialCodex0145BuildEndpointURL(
+	target, err := officialCodexBuildEndpointURL(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointResponsesHTTP),
-		officialCodex0145EndpointURLInput{},
+		codexEndpointID(officialCodexEndpointResponsesHTTP),
+		officialCodexEndpointURLInput{},
 	)
 	require.NoError(t, err)
 	request, err := http.NewRequest(http.MethodPost, target.String(), bytes.NewReader(orderedBody))
@@ -602,9 +610,9 @@ func TestCandidateTraceCodex0145HeaderAssembly(t *testing.T) {
 		retryHeaders[field.Name] = []string{field.Value}
 	}
 	retryHeaders["authorization"] = []string{"Bearer refreshed"}
-	retryFields, err := officialCodex0145ApplyHeaderContract(
+	retryFields, err := officialCodexApplyHeaderContract(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointResponsesHTTP),
+		codexEndpointID(officialCodexEndpointResponsesHTTP),
 		retryHeaders,
 		map[string]bool{officialCodexConditionRemoteCompactionV2: true},
 	)
@@ -638,7 +646,7 @@ func TestCandidateTraceCodex0145AlphaSearchPhases(t *testing.T) {
 			"chatgpt_account_id": "candidate-alpha-account",
 		},
 	}
-	service := &OpenAIGatewayService{cfg: &config.Config{}}
+	service := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: &liveHTTPUpstreamStub{}}
 	commands := []string{
 		`{"search_query":[{"q":"candidate phase one"}]}`,
 		`{"open":[{"ref_id":"candidate phase two"}]}`,
@@ -690,23 +698,23 @@ func TestCandidateTraceCodex0145RealtimeChain(t *testing.T) {
 	require.NotEmpty(t, created.CallID)
 	require.NotNil(t, upstream.request)
 
-	sidebandEndpoint, err := resolveCodex0145Endpoint(
+	sidebandEndpoint, err := resolveCodexEndpoint(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointRealtimeSideband),
+		codexEndpointID(officialCodexEndpointRealtimeSideband),
 	)
 	require.NoError(t, err)
-	sidebandTarget, err := officialCodex0145BuildEndpointURL(
+	sidebandTarget, err := officialCodexBuildEndpointURL(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointRealtimeSideband),
-		officialCodex0145EndpointURLInput{QueryValues: map[string]string{"call_id": created.CallID}},
+		codexEndpointID(officialCodexEndpointRealtimeSideband),
+		officialCodexEndpointURLInput{QueryValues: map[string]string{"call_id": created.CallID}},
 	)
 	require.NoError(t, err)
 	sidebandCallID := sidebandTarget.Query().Get("call_id")
 	require.Equal(t, created.CallID, sidebandCallID)
 	require.Equal(t, "quicksilver=v1", upstream.request.Header.Get("openai-alpha"))
-	terminalEvent, err := officialCodex0145ValidateAndOrderJSONBody(
+	terminalEvent, err := officialCodexValidateAndOrderJSONBody(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointRealtimeSideband),
+		codexEndpointID(officialCodexEndpointRealtimeSideband),
 		[]byte(`{"type":"session.ended"}`),
 		nil,
 	)
@@ -728,9 +736,9 @@ func TestCandidateTraceCodex0145RealtimeChain(t *testing.T) {
 }
 
 func TestCandidateTraceCodex0145CompactionDecisions(t *testing.T) {
-	legacyEndpoint, err := resolveCodex0145Endpoint(
+	legacyEndpoint, err := resolveCodexEndpoint(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointResponsesCompact),
+		codexEndpointID(officialCodexEndpointResponsesCompact),
 	)
 	require.NoError(t, err)
 	require.Equal(t, "/backend-api/codex/responses/compact", legacyEndpoint.Path)
@@ -742,7 +750,7 @@ func TestCandidateTraceCodex0145CompactionDecisions(t *testing.T) {
 	for index, reason := range reasons {
 		c := newOfficialOpenAIHTTPTestContext(triggerBody, "/v1/responses")
 		c.Request.Header.Set("x-codex-turn-metadata", `{"compaction":{"reason":"`+reason+`"}}`)
-		metadata, ok := resolveDerivedOfficialOpenAICompactionMetadata(c, triggerBody)
+		metadata, ok := resolveDerivedOfficialOpenAICompactionMetadata(c, triggerBody, officialClientProfileModeActive)
 		require.True(t, ok)
 		require.Equal(t, reason, metadata.Reason)
 		require.Equal(t, "responses_compaction_v2", metadata.Implementation)
@@ -757,7 +765,7 @@ func TestCandidateTraceCodex0145CompactionDecisions(t *testing.T) {
 		candidateTraceLogFact(t, "a10.compaction-reason-"+reason, "A10", "compaction_decision", data)
 	}
 
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	require.NoError(t, err)
 	profileTokenBudgetEndpoints := 0
 	for _, endpoint := range profile.Endpoints {
@@ -776,6 +784,7 @@ func TestCandidateTraceCodex0145CompactionDecisions(t *testing.T) {
 	_, ok := resolveDerivedOfficialOpenAICompactionMetadata(
 		newOfficialOpenAIHTTPTestContext(triggerBody, "/v1/responses"),
 		triggerBody,
+		officialClientProfileModeActive,
 	)
 	require.True(t, ok)
 	afterCount := len(gjson.GetBytes(triggerBody, `input.#(type=="compaction_trigger")`).Array())

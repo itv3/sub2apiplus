@@ -84,27 +84,6 @@ func TestOfficialEgressOpenAIHTTPStripsInboundHostHeadersFromOfficialClient(t *t
 	require.Equal(t, openaiidentity.CodexUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 }
 
-// WebSocket 握手头与 HTTP 对称：宿主头不得随握手上行。
-func TestOfficialEgressOpenAIWSHandshakeStripsInboundHostHeaders(t *testing.T) {
-	ctx, _, _, _ := newOfficialOpenAIWSContextForTest(t)
-	headers := http.Header{
-		"User-Agent":         []string{"Kilo-Code/7.4.0"},
-		"Originator":         []string{"third-party"},
-		"Authorization":      []string{"Bearer oauth-test-token"},
-		"Chatgpt-Account-Id": []string{"chatgpt-test-account"},
-	}
-	for name, value := range inboundHostHeaderSamples {
-		headers.Set(name, value)
-	}
-
-	_, err := finalizeOpenAIOfficialEgressWSHandshakeHeaders(ctx, headers)
-
-	require.NoError(t, err)
-	requireNoInboundHostHeaders(t, headers)
-	require.Equal(t, openaiidentity.CodexUserAgent, headers.Get("User-Agent"))
-	require.Equal(t, openaiidentity.CodexOriginator, headers.Get("originator"))
-}
-
 // 官方进程关闭 enable_request_compression 时，HTTP Responses 保持明文。
 func TestOfficialEgressResponsesRespectsCompressionFeatureOff(t *testing.T) {
 	body := newOfficialOpenAIHTTPTestBody(t, true, false, false)
@@ -129,7 +108,7 @@ func TestOfficialEgressResponsesRespectsCompressionFeatureOn(t *testing.T) {
 	// 生产 body reader 会在解压后删除 Content-Encoding；画像必须消费此前冻结的
 	// 调用级 feature 快照，而不是在 Finalizer 阶段重新读取已变化的 header。
 	c.Request = c.Request.WithContext(
-		WithOfficialCodex0145IngressRuntime(c.Request.Context(), c),
+		WithOfficialCodexIngressRuntime(c.Request.Context(), c),
 	)
 	c.Request.Header.Del("Content-Encoding")
 	upstream := &httpUpstreamRecorder{

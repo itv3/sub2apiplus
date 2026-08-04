@@ -7,11 +7,17 @@ const {
   probeUpstreamBillingMock,
   importCodexSessionMock,
   createOpenAICodexPATMock,
+  createOpenAIFromOAuthMock,
+  generateAuthUrlMock,
+  exchangeCodeMock,
 } = vi.hoisted(() => ({
   createAccountMock: vi.fn(),
   probeUpstreamBillingMock: vi.fn(),
   importCodexSessionMock: vi.fn(),
   createOpenAICodexPATMock: vi.fn(),
+  createOpenAIFromOAuthMock: vi.fn(),
+  generateAuthUrlMock: vi.fn(),
+  exchangeCodeMock: vi.fn(),
 }))
 
 vi.mock('@/stores/app', () => ({
@@ -34,6 +40,9 @@ vi.mock('@/api/admin', () => ({
       checkMixedChannelRisk: vi.fn().mockResolvedValue({ has_risk: false }),
       importCodexSession: importCodexSessionMock,
       createOpenAICodexPAT: createOpenAICodexPATMock,
+      createOpenAIFromOAuth: createOpenAIFromOAuthMock,
+      generateAuthUrl: generateAuthUrlMock,
+      exchangeCode: exchangeCodeMock,
     },
     settings: {
       getWebSearchEmulationConfig: vi.fn().mockResolvedValue({ enabled: false, providers: [] }),
@@ -74,10 +83,11 @@ const OAuthAuthorizationFlowStub = defineComponent({
     showCodexPatOption: Boolean,
     initialInputMethod: String,
   },
-  data: () => ({ inputMethod: 'manual' }),
-  emits: ['import-codex-session', 'import-codex-pat'],
+  data: () => ({ inputMethod: 'manual', authCode: 'authorization-code', oauthState: 'oauth-state' }),
+  emits: ['generate-url', 'import-codex-session', 'import-codex-pat'],
   template: `
     <div>
+      <button data-testid="generate-oauth-url" @click="$emit('generate-url')">generate</button>
       <button data-testid="import-codex-session" @click="$emit('import-codex-session', 'session-json')">session</button>
       <button data-testid="import-codex-pat" @click="$emit('import-codex-pat', 'pat-token')">pat</button>
     </div>
@@ -158,6 +168,12 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
       warnings: [],
     })
     createOpenAICodexPATMock.mockReset().mockResolvedValue({})
+    createOpenAIFromOAuthMock.mockReset().mockResolvedValue({ id: 43, platform: 'openai', type: 'oauth' })
+    generateAuthUrlMock.mockReset().mockResolvedValue({
+      auth_url: 'https://auth.openai.com/oauth/authorize?state=oauth-state',
+      session_id: 'server-session-id'
+    })
+    exchangeCodeMock.mockReset()
   })
 
   it('sends false explicitly for normal OpenAI account creation by default', async () => {
@@ -211,6 +227,26 @@ describe('CreateAccountModal OpenAI long-context billing', () => {
     expect(flow.props('showAgentIdentityOption')).toBe(true)
     expect(flow.props('showCodexPatOption')).toBe(true)
     expect(flow.props('initialInputMethod')).toBe('manual')
+  })
+
+  it('creates an OpenAI OAuth account through the server-managed atomic endpoint', async () => {
+    const wrapper = await openCodexImportStep()
+    const flow = wrapper.getComponent(OAuthAuthorizationFlowStub)
+    await flow.get('[data-testid="generate-oauth-url"]').trigger('click')
+    await flushPromises()
+
+    await selectButtonByText(wrapper, 'admin.accounts.oauth.completeAuth')
+    await flushPromises()
+
+    expect(createOpenAIFromOAuthMock).toHaveBeenCalledTimes(1)
+    expect(createOpenAIFromOAuthMock).toHaveBeenCalledWith(expect.objectContaining({
+      session_id: 'server-session-id',
+      code: 'authorization-code',
+      state: 'oauth-state',
+      name: 'Codex import'
+    }))
+    expect(exchangeCodeMock).not.toHaveBeenCalled()
+    expect(createAccountMock).not.toHaveBeenCalled()
   })
 
   it.each([

@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/stretchr/testify/require"
 
@@ -139,11 +140,13 @@ func TestBuildCodexSparkWindowExtraUpdates_ContainsCodexKeys(t *testing.T) {
 						UsedPercent:        0.42,
 						LimitWindowSeconds: 18000, // 300 min = 5 h
 						ResetAfterSeconds:  3600,
+						usedPercentPresent: true, limitWindowPresent: true, resetAfterPresent: true,
 					},
 					SecondaryWindow: &OpenAIRateLimitWindow{
 						UsedPercent:        0.15,
 						LimitWindowSeconds: 604800, // 7 d
 						ResetAfterSeconds:  86400,
+						usedPercentPresent: true, limitWindowPresent: true, resetAfterPresent: true,
 					},
 				},
 			},
@@ -213,6 +216,7 @@ func TestResetCreditShadowRejected(t *testing.T) {
 }
 
 func TestResetCreditAgentIdentityUsesAssertionAndRecoversInvalidTaskOnce(t *testing.T) {
+	configureObserveGuardForLocalHTTPTest(t)
 	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
 	der, err := x509.MarshalPKCS8PrivateKey(privateKey)
@@ -419,6 +423,7 @@ func TestQueryUsageAgentIdentityUsesAssertionWithoutOAuthToken(t *testing.T) {
 }
 
 func TestQueryUsageAgentIdentityRecoversInvalidTaskOnce(t *testing.T) {
+	configureObserveGuardForLocalHTTPTest(t)
 	_, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
 	der, err := x509.MarshalPKCS8PrivateKey(privateKey)
@@ -658,12 +663,13 @@ func TestCodexWhamRequestsUseClosedBackendClientProfile(t *testing.T) {
 
 	upstream := newQuotaRedirectingUpstream(server)
 	service := NewOpenAIQuotaService(repo, nil, tokenProvider, upstream)
-	runtimeState := defaultOfficialCodex0145RuntimeState()
+	runtimeState := defaultOfficialCodexRuntimeState()
+	runtimeState.ProfileMode = officialClientProfileModeActive
 	runtimeState.SurfaceID = officialCodexSurfaceTUI
 	runtimeState.Originator = "codex-tui"
 	runtimeState.TerminalToken = "xterm-256color"
 	runtimeState.UserAgentSuffixEnabled = false
-	runtimeContext, err := withOfficialCodex0145RuntimeState(context.Background(), runtimeState)
+	runtimeContext, err := withOfficialCodexRuntimeState(context.Background(), runtimeState)
 	require.NoError(t, err)
 	_, err = service.QueryUsage(runtimeContext, account.ID)
 	require.NoError(t, err)
@@ -698,10 +704,12 @@ func TestCodexWhamRequestsUseClosedBackendClientProfile(t *testing.T) {
 		require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(request.Context()))
 		require.NotNil(t, upstream.tlsProfiles[index])
 		require.True(t, upstream.tlsProfiles[index].Transport.StrictH1Wire)
-		egressContext, ok := OfficialEgressContextFromContext(request.Context())
+		attempt, ok := officialegress.AttemptIdentityFromContext(request.Context())
 		require.True(t, ok)
-		require.Equal(t, expectedEndpointIDs[index], egressContext.CodexEndpointProfileID())
-		poolIDs = append(poolIDs, egressContext.ConnectionPoolID())
+		require.Equal(t, expectedEndpointIDs[index], attempt.EndpointID)
+		require.Equal(t, officialegress.SinkCodexQuotaWHAM, attempt.SinkID)
+		require.NotEmpty(t, attempt.BundleDigest)
+		poolIDs = append(poolIDs, attempt.ConnectionPoolDigest)
 		matchedWireRule := false
 		for _, rule := range upstream.tlsProfiles[index].Transport.H1HeaderOrders {
 			if rule.Method == request.Method && rule.Path == request.URL.EscapedPath() {
@@ -726,7 +734,15 @@ func TestCodexWhamRequestsUseClosedBackendClientProfile(t *testing.T) {
 	}
 	require.Equal(t, poolIDs[0], poolIDs[1])
 	require.Equal(t, poolIDs[1], poolIDs[2])
-	require.Contains(t, poolIDs[0], "invocation="+officialCodexClientBackendLongLived)
+	require.NotEmpty(t, poolIDs[0])
+	processRuntime, err := resolveOfficialEgressRuntime(nil, upstream)
+	require.NoError(t, err)
+	require.Equal(
+		t,
+		uint64(2),
+		processRuntime.BundleResolver.ResolveCount(),
+		"QueryUsage 的两个 WHAM endpoint 必须共用一次解析；独立 ResetCredit 再解析一次",
+	)
 
 	require.Empty(t, upstream.bodies[0])
 	require.Empty(t, upstream.bodies[1])

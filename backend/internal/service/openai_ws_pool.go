@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -64,6 +65,8 @@ type openAIWSAcquireRequest struct {
 	Account *Account
 	WSURL   string
 	Headers http.Header
+	// SinkID 由业务调用点提供，连接池仅为后台预热和延迟拨号保留并透传。
+	SinkID officialegress.SinkID
 	// HeadersFactory is evaluated inside dialConn. It exists so credentials
 	// whose authorization is per-dial (Agent Identity) are never cached in
 	// lastAcquire or delayed prewarm state.
@@ -74,6 +77,12 @@ type openAIWSAcquireRequest struct {
 	TransportKey string
 	// OfficialEgressContext 供后台预热沿用握手时已经冻结的画像上下文。
 	OfficialEgressContext *OfficialEgressContext
+	// AdmissionGuard 固定签发当前 attempt 的 runtime Guard，避免测试或多 runtime
+	// 场景误用进程默认 authority。仅 Executor adapter 可以设置。
+	AdmissionGuard openAIWSAdmissionGuard
+	// TokenBoundAcquire 表示本请求来自 Executor 当前 attempt。此类请求禁止被
+	// 后台预热复制，否则会重放已经消费过的 FinalizationToken。
+	TokenBoundAcquire bool
 	// ForceNewConn: 强制本次获取新连接（避免复用导致连接内续链状态互相污染）。
 	ForceNewConn bool
 	// ForcePreferredConn: 强制本次只使用 PreferredConnID，禁止漂移到其它连接。
@@ -88,6 +97,26 @@ type openAIWSConnLease struct {
 	connPick  time.Duration
 	reused    bool
 	released  atomic.Bool
+}
+
+// openAIWSLeaseSession 是业务转发器可见的最小会话能力。正式 Codex 实现会把
+// WriteSemanticJSONWithContextTimeout 收口到 Executor 的 PrepareFrame /
+// WritePreparedFrame；legacy 实现仅用于非 Codex 路径。
+type openAIWSLeaseSession interface {
+	ConnID() string
+	QueueWaitDuration() time.Duration
+	ConnPickDuration() time.Duration
+	Reused() bool
+	HandshakeHeader(name string) string
+	HandshakeHeaders() http.Header
+	IsPrewarmed() bool
+	MarkPrewarmed()
+	WriteSemanticJSONWithContextTimeout(ctx context.Context, value any, timeout time.Duration) error
+	ReadMessageWithContextTimeout(ctx context.Context, timeout time.Duration) ([]byte, error)
+	PingWithTimeout(timeout time.Duration) error
+	SupportsIdlePingWithoutReader() bool
+	MarkBroken()
+	Release()
 }
 
 func (l *openAIWSConnLease) activeConn() (*openAIWSConn, error) {
@@ -141,7 +170,7 @@ func (l *openAIWSConnLease) HandshakeHeader(name string) string {
 // 复用连接时拿到原值、新建连接时拿到新值；握手未下发时必须返回空串，把上一条连接的残留值
 // 一并清除。官方客户端契约要求 turn-state 只在同一 turn 内保持，跨 turn 或跨连接回放会导致
 // 上游粘性路由错误，因此调用方必须直接赋值，不得再加非空判断。
-func replaceOpenAIWSTurnStateFromLease(lease *openAIWSConnLease) string {
+func replaceOpenAIWSTurnStateFromLease(lease openAIWSLeaseSession) string {
 	if lease == nil {
 		return ""
 	}
@@ -183,6 +212,14 @@ func (l *openAIWSConnLease) WriteJSONWithContextTimeout(ctx context.Context, val
 		return err
 	}
 	return conn.writeJSONWithTimeout(ctx, value, timeout)
+}
+
+func (l *openAIWSConnLease) WriteSemanticJSONWithContextTimeout(
+	ctx context.Context,
+	value any,
+	timeout time.Duration,
+) error {
+	return l.WriteJSONWithContextTimeout(ctx, value, timeout)
 }
 
 func (l *openAIWSConnLease) WriteJSONContext(ctx context.Context, value any) error {
@@ -618,10 +655,23 @@ type openAIWSPoolMetrics struct {
 	scaleDownTotal        atomic.Int64
 }
 
+type openAIWSAdmissionGuard interface {
+	EvaluateConnectionAdmission(
+		request *http.Request,
+		backend officialegress.BackendKind,
+		protocol officialegress.WireProtocol,
+	) officialegress.GuardDecision
+}
+
 type openAIWSConnPool struct {
 	cfg *config.Config
 	// 通过接口解耦底层 WS 客户端实现，默认使用 coder/websocket。
 	clientDialer openAIWSClientDialer
+	// nil 表示每次读取进程默认 Guard；测试可注入隔离的 enforced Catalog。
+	guard openAIWSAdmissionGuard
+	// nil 表示使用生产 SinkCatalog 判定。测试可注入 canary/enforced
+	// 状态，验证无 Token 后台预热被 fail-close。
+	tokenlessPrewarmAllowed func(officialegress.SinkID) (bool, error)
 
 	accounts sync.Map // key: int64(accountID), value: *openAIWSAccountPool
 	seq      atomic.Uint64
@@ -675,6 +725,18 @@ func (p *openAIWSConnPool) setClientDialerForTest(dialer openAIWSClientDialer) {
 		return
 	}
 	p.clientDialer = dialer
+}
+
+func (p *openAIWSConnPool) allowsTokenlessBackgroundPrewarm(sinkID officialegress.SinkID) bool {
+	if sinkID == "" {
+		return true
+	}
+	check := officialegress.DefaultSinkAllowsTokenlessBackgroundPrewarm
+	if p != nil && p.tokenlessPrewarmAllowed != nil {
+		check = p.tokenlessPrewarmAllowed
+	}
+	allowed, err := check(sinkID)
+	return err == nil && allowed
 }
 
 // Close 停止后台 worker 并关闭所有空闲连接，应在优雅关闭时调用。
@@ -855,6 +917,51 @@ func (p *openAIWSConnPool) Acquire(ctx context.Context, req openAIWSAcquireReque
 			clonedRequest.TransportKey += "|identity=" + identityKey
 		}
 		clonedRequest.OfficialEgressContext = egressContext
+	}
+	if clonedRequest.SinkID != "" {
+		enforcementIdentity, err := officialegress.DefaultSinkEnforcementIdentity(clonedRequest.SinkID)
+		if err != nil {
+			return nil, err
+		}
+		clonedRequest.TransportKey += "|sink_enforcement=" + enforcementIdentity
+		admissionContext, err := preserveOfficialEgressSinkAttempt(ctx, clonedRequest.SinkID)
+		if err != nil {
+			return nil, fmt.Errorf("绑定 WebSocket Acquire SinkID：%w", err)
+		}
+		admissionRequest, err := http.NewRequestWithContext(
+			admissionContext,
+			http.MethodGet,
+			clonedRequest.WSURL,
+			nil,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("构造 WebSocket Acquire Guard 请求：%w", err)
+		}
+		admissionRequest.Header = cloneHeader(clonedRequest.Headers)
+		var guard openAIWSAdmissionGuard = clonedRequest.AdmissionGuard
+		if guard == nil && p != nil && p.guard != nil {
+			guard = p.guard
+		}
+		if guard == nil {
+			guard = officialegress.DefaultGuard()
+		}
+		decision := guard.EvaluateConnectionAdmission(
+			admissionRequest,
+			officialegress.BackendWebSocket,
+			officialegress.WireProtocolWebSocket,
+		)
+		if !decision.Allow {
+			return nil, officialegress.WrapRuntimeError(
+				officialegress.RuntimeErrorCodeGuardRejected,
+				"websocket.pool_guard_admission",
+				&officialegress.GuardRejectionError{
+					Reason: decision.RejectionReason, SinkID: clonedRequest.SinkID, Route: decision.Route.Key,
+				},
+			)
+		}
+		// 后续新拨号必须沿用 admission 已验证的同一 invocation；不能退回原始
+		// context 后重新生成只有 SinkID 的 legacy metadata。
+		ctx = admissionContext
 	}
 	return p.acquire(ctx, clonedRequest, 0)
 }
@@ -1478,6 +1585,12 @@ func (p *openAIWSConnPool) ensureTargetIdleAsync(accountID int64) {
 		return
 	}
 	req = cloneOpenAIWSAcquireRequest(*ap.lastAcquire)
+	if req.TokenBoundAcquire {
+		return
+	}
+	if !p.allowsTokenlessBackgroundPrewarm(req.SinkID) {
+		return
+	}
 	generation = ap.generation
 	ap.prewarmActive = true
 	if cooldown := p.prewarmCooldown(); cooldown > 0 {
@@ -1534,15 +1647,29 @@ func (p *openAIWSConnPool) prewarmConns(accountID int64, req openAIWSAcquireRequ
 	if len(generations) > 0 {
 		generation = generations[0]
 	}
+	remaining := total
 	defer func() {
 		if ap, ok := p.getAccountPool(accountID); ok && ap != nil {
 			ap.mu.Lock()
+			if remaining > ap.creating {
+				remaining = ap.creating
+			}
+			ap.creating -= remaining
 			ap.prewarmActive = false
+			ap.signalChangedLocked()
 			ap.mu.Unlock()
 		}
 	}()
 
 	for i := 0; i < total; i++ {
+		if req.TokenBoundAcquire {
+			return
+		}
+		// 调度后状态可能在 goroutine 真正运行前变化，因此拨号前
+		// 再次 fail-close，不能只依赖 ensureTargetIdleAsync 的首层判定。
+		if !p.allowsTokenlessBackgroundPrewarm(req.SinkID) {
+			return
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), p.dialTimeout()+openAIWSConnPrewarmExtraDelay)
 		conn, err := p.dialConn(ctx, req)
 		cancel()
@@ -1558,6 +1685,7 @@ func (p *openAIWSConnPool) prewarmConns(accountID int64, req openAIWSAcquireRequ
 		if ap.creating > 0 {
 			ap.creating--
 		}
+		remaining--
 		if err != nil {
 			ap.prewarmFails++
 			ap.prewarmFailAt = time.Now()
@@ -1692,6 +1820,7 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 		return nil, errors.New("openai ws client dialer is nil")
 	}
 	headers := cloneHeader(req.Headers)
+	dialContext := ctx
 	var err error
 	if req.HeadersFactory != nil {
 		headers, err = req.HeadersFactory(ctx, headers)
@@ -1699,9 +1828,14 @@ func (p *openAIWSConnPool) dialConn(ctx context.Context, req openAIWSAcquireRequ
 			return nil, err
 		}
 	}
-	dialContext := ctx
 	if req.OfficialEgressContext != nil {
 		dialContext = WithOfficialEgressContext(dialContext, req.OfficialEgressContext)
+	}
+	if req.SinkID != "" {
+		dialContext, err = preserveOfficialEgressSinkAttempt(dialContext, req.SinkID)
+		if err != nil {
+			return nil, fmt.Errorf("绑定 WebSocket 业务 SinkID：%w", err)
+		}
 	}
 	conn, status, handshakeHeaders, err := p.clientDialer.Dial(
 		dialContext,

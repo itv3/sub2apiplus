@@ -925,6 +925,11 @@ type GatewayConfig struct {
 	// OfficialClientProfiles: 官方客户端出站画像发布指针。
 	// active 使用当前抓包版本；previous 用于服务级紧急整体回退，不支持账号级混用。
 	OfficialClientProfiles GatewayOfficialClientProfilesConfig `mapstructure:"official_client_profiles"`
+	// OfficialEgressGuard: 官方出站 Guard 的两个未知项策略和 canary 参数。
+	// 变更集 1C 默认均为 enforce；临时 observe 只能通过绑定实例、route 和期限的策略覆盖启用。
+	OfficialEgressGuard GatewayOfficialEgressGuardConfig `mapstructure:"official_egress_guard"`
+	// OpenAIPrivacyBrowser: privacy 端点 Chrome 133/XHR 画像的独立灰度、回滚和失败冷却策略。
+	OpenAIPrivacyBrowser GatewayOpenAIPrivacyBrowserConfig `mapstructure:"openai_privacy_browser"`
 	// OpenAIWS: OpenAI Responses WebSocket 配置（默认开启，可按需回滚到 HTTP）
 	OpenAIWS GatewayOpenAIWSConfig `mapstructure:"openai_ws"`
 	// Live: ChatGPT Frameless Live 会话配置。
@@ -1018,6 +1023,34 @@ type GatewayConfig struct {
 // GatewayOfficialClientProfilesConfig 控制官方客户端画像的服务级发布指针。
 type GatewayOfficialClientProfilesConfig struct {
 	Mode string `mapstructure:"mode"`
+}
+
+// GatewayOfficialEgressGuardConfig 控制 Guard 的正交策略和紧急运行时回滚。
+type GatewayOfficialEgressGuardConfig struct {
+	UnknownRoutePolicy     string `mapstructure:"unknown_route_policy"`
+	UnregisteredSinkPolicy string `mapstructure:"unregistered_sink_policy"`
+	CanaryPercent          int    `mapstructure:"canary_percent"`
+	MaxUniqueLogSamples    int    `mapstructure:"max_unique_log_samples"`
+	// InstanceID 将限时策略覆盖绑定到单个部署实例；没有覆盖时可以为空。
+	InstanceID string `mapstructure:"instance_id"`
+	// SinkControlsJSON 是严格 JSON 清单，只允许 enforced→canary 降级和限时 observe 覆盖。
+	SinkControlsJSON string `mapstructure:"sink_controls_json"`
+	// PolicyOverridesJSON 是 unknown/unregistered 策略的实例、route/sink 范围化限时覆盖。
+	PolicyOverridesJSON string `mapstructure:"policy_overrides_json"`
+}
+
+// GatewayOpenAIPrivacyBrowserConfig 控制 privacy browser persona，不与 WHAM 发布开关耦合。
+type GatewayOpenAIPrivacyBrowserConfig struct {
+	// Enabled 是 Chrome 133/XHR 画像总开关；关闭时立即回退到原 Chrome 120 画像。
+	Enabled bool `mapstructure:"enabled"`
+	// CanaryPercent 按账号稳定分桶，仅在 Enabled=true 时生效。
+	CanaryPercent int `mapstructure:"canary_percent"`
+	// Platform 可取 auto/macos/windows/linux，auto 跟随部署环境。
+	Platform string `mapstructure:"platform"`
+	// AcceptLanguage 为空时从部署进程 locale 解析。
+	AcceptLanguage string `mapstructure:"accept_language"`
+	// FailureCooldownSeconds 是 Cloudflare/上游失败后下次自动重试的最短间隔。
+	FailureCooldownSeconds int `mapstructure:"failure_cooldown_seconds"`
 }
 
 // GatewayLiveConfig 控制 ChatGPT Frameless Live 会话。
@@ -2235,6 +2268,18 @@ func setDefaults() {
 	viper.SetDefault("gateway.openai_passthrough_allow_timeout_headers", false)
 	viper.SetDefault("gateway.openai_compact_model", "gpt-5.4")
 	viper.SetDefault("gateway.official_client_profiles.mode", "active")
+	viper.SetDefault("gateway.official_egress_guard.unknown_route_policy", "enforce")
+	viper.SetDefault("gateway.official_egress_guard.unregistered_sink_policy", "enforce")
+	viper.SetDefault("gateway.official_egress_guard.canary_percent", 100)
+	viper.SetDefault("gateway.official_egress_guard.max_unique_log_samples", 512)
+	viper.SetDefault("gateway.official_egress_guard.instance_id", "")
+	viper.SetDefault("gateway.official_egress_guard.sink_controls_json", "")
+	viper.SetDefault("gateway.official_egress_guard.policy_overrides_json", "")
+	viper.SetDefault("gateway.openai_privacy_browser.enabled", false)
+	viper.SetDefault("gateway.openai_privacy_browser.canary_percent", 0)
+	viper.SetDefault("gateway.openai_privacy_browser.platform", "auto")
+	viper.SetDefault("gateway.openai_privacy_browser.accept_language", "")
+	viper.SetDefault("gateway.openai_privacy_browser.failure_cooldown_seconds", 3600)
 	viper.SetDefault("gateway.live.max_session_duration_seconds", 3600)
 	// OpenAI Responses WebSocket（默认开启；可通过 force_http 紧急回滚）
 	viper.SetDefault("gateway.openai_ws.enabled", true)
@@ -3129,6 +3174,42 @@ func (c *Config) Validate() error {
 	case "active", "previous":
 	default:
 		return fmt.Errorf("gateway.official_client_profiles.mode must be one of: active/previous")
+	}
+	for name, policy := range map[string]string{
+		"unknown_route_policy":     c.Gateway.OfficialEgressGuard.UnknownRoutePolicy,
+		"unregistered_sink_policy": c.Gateway.OfficialEgressGuard.UnregisteredSinkPolicy,
+	} {
+		switch strings.ToLower(strings.TrimSpace(policy)) {
+		case "enforce":
+		default:
+			return fmt.Errorf("gateway.official_egress_guard.%s 在变更集 1C 只允许 enforce；临时 observe 必须使用范围化限时覆盖", name)
+		}
+	}
+	if c.Gateway.OfficialEgressGuard.CanaryPercent < 0 ||
+		c.Gateway.OfficialEgressGuard.CanaryPercent > 100 {
+		return fmt.Errorf("gateway.official_egress_guard.canary_percent must be between 0 and 100")
+	}
+	if c.Gateway.OfficialEgressGuard.MaxUniqueLogSamples <= 0 {
+		return fmt.Errorf("gateway.official_egress_guard.max_unique_log_samples must be positive")
+	}
+	if c.Gateway.OpenAIPrivacyBrowser.CanaryPercent < 0 ||
+		c.Gateway.OpenAIPrivacyBrowser.CanaryPercent > 100 {
+		return fmt.Errorf("gateway.openai_privacy_browser.canary_percent must be between 0 and 100")
+	}
+	switch strings.ToLower(strings.TrimSpace(c.Gateway.OpenAIPrivacyBrowser.Platform)) {
+	case "", "auto", "macos", "windows", "linux":
+	default:
+		return fmt.Errorf("gateway.openai_privacy_browser.platform must be one of: auto/macos/windows/linux")
+	}
+	if c.Gateway.OpenAIPrivacyBrowser.FailureCooldownSeconds < 0 ||
+		c.Gateway.OpenAIPrivacyBrowser.FailureCooldownSeconds > 7*24*60*60 {
+		return fmt.Errorf("gateway.openai_privacy_browser.failure_cooldown_seconds must be between 0 and 604800")
+	}
+	if c.Gateway.OpenAIPrivacyBrowser.FailureCooldownSeconds == 0 {
+		c.Gateway.OpenAIPrivacyBrowser.FailureCooldownSeconds = 3600
+	}
+	if value := c.Gateway.OpenAIPrivacyBrowser.AcceptLanguage; len(value) > 128 || strings.ContainsAny(value, "\r\n") {
+		return fmt.Errorf("gateway.openai_privacy_browser.accept_language must be at most 128 bytes and contain no line breaks")
 	}
 	if c.Gateway.Live.MaxSessionDurationSeconds <= 0 {
 		c.Gateway.Live.MaxSessionDurationSeconds = 3600

@@ -6,43 +6,56 @@ import (
 	"errors"
 	"io"
 	"sort"
+
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
+	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
 )
 
-// Responses 三种正文的顶层槽位直接来自不可变版本画像。序列化器只负责执行槽位，
-// 不再在 Go 代码里维护第二份字段清单；升级 Codex 时新增画像即可，避免 Finalizer 与
-// 传输结构体各自演化后形成“画像写对、实际发送仍用旧数组”的隐蔽偏离。
-var (
-	officialOpenAIHTTPFieldOrder = mustOfficialCodexBodyFieldOrder(
-		officialCodexEndpointResponsesHTTP,
+// officialCodexBodyFieldOrderForMode 每次从正式 ReleaseCatalog 投影字段槽位。
+// 字段序不再保存在包级 active 切片中；最终 compiler 仍会按调用级 Bundle 再校验。
+func officialCodexBodyFieldOrderForMode(mode, endpointID string) ([]string, error) {
+	release, err := officialegress.DefaultReleaseCatalog().Resolve(
+		officialegress.ReleaseMode(mode),
 	)
-	officialOpenAICompactFieldOrder = mustOfficialCodexBodyFieldOrder(
-		officialCodexEndpointResponsesCompact,
-	)
-	officialOpenAIWSFieldOrder = mustOfficialCodexBodyFieldOrder(
-		officialCodexEndpointResponsesWS,
-	)
-)
+	if err != nil {
+		return nil, err
+	}
+	return officialCodexBodyFieldOrderFromProfile(release.ExecutableProfile(), endpointID)
+}
 
-func mustOfficialCodexBodyFieldOrder(endpointID string) []string {
-	// 版本取自 registry 的 release 指针而不是编译期常量：字段顺序属于 wire 形态，
-	// 必须与 header、TLS 出自同一版本，否则升级后会出现新版本 header 搭配旧版本
-	// 字段序的组合。release 指针是编译期数据，因此启动时求值与运行时求值等价。
-	version, err := activeOfficialCodexVersion()
-	if err != nil {
-		panic(err)
+func officialCodexBodyFieldOrderFromProfile(
+	profile profilecontract.ExecutableProfile,
+	endpointID string,
+) ([]string, error) {
+	var selected profilecontract.ExecutableEndpointProfile
+	for _, endpoint := range profile.Endpoints() {
+		if endpoint.ID == endpointID {
+			selected = endpoint
+			break
+		}
 	}
-	endpoint, err := resolveCodex0145Endpoint(
-		version,
-		codex0145EndpointID(endpointID),
-	)
-	if err != nil {
-		panic(err)
+	if selected.ID == "" {
+		return nil, errors.New("ExecutableProfile 缺少 WS frame endpoint")
 	}
-	fields := make([]string, 0, len(endpoint.Body.Fields))
-	for _, field := range endpoint.Body.Fields {
+	fields := make([]string, 0, len(selected.Body.Fields))
+	for _, field := range selected.Body.Fields {
 		fields = append(fields, field.Name)
 	}
-	return fields
+	return fields, nil
+}
+
+func marshalOfficialOpenAIWSJSONFromProfile(
+	profile profilecontract.ExecutableProfile,
+	payload map[string]any,
+) ([]byte, error) {
+	order, err := officialCodexBodyFieldOrderFromProfile(
+		profile,
+		officialCodexEndpointResponsesWS,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return marshalOfficialOrderedJSONObjectPreservingRaw(payload, order, nil)
 }
 
 var officialOpenAITurnMetadataFieldOrder = []string{
@@ -57,36 +70,46 @@ func marshalOfficialOpenAITurnMetadata(payload map[string]any) ([]byte, error) {
 	return marshalOfficialOrderedJSONObject(payload, officialOpenAITurnMetadataFieldOrder)
 }
 
-func marshalOfficialOpenAIHTTPJSON(payload map[string]any, compact bool) ([]byte, error) {
-	return marshalOfficialOpenAIHTTPJSONPreservingRaw(payload, compact, nil)
+func marshalOfficialOpenAIHTTPJSON(mode string, payload map[string]any, compact bool) ([]byte, error) {
+	return marshalOfficialOpenAIHTTPJSONPreservingRaw(mode, payload, compact, nil)
 }
 
 func marshalOfficialOpenAIHTTPJSONPreservingRaw(
+	mode string,
 	payload map[string]any,
 	compact bool,
 	original []byte,
 ) ([]byte, error) {
-	order := officialOpenAIHTTPFieldOrder
+	endpointID := officialCodexEndpointResponsesHTTP
 	if compact {
-		order = officialOpenAICompactFieldOrder
+		endpointID = officialCodexEndpointResponsesCompact
+	}
+	order, err := officialCodexBodyFieldOrderForMode(
+		mode, endpointID,
+	)
+	if err != nil {
+		return nil, err
 	}
 	return marshalOfficialOrderedJSONObjectPreservingRaw(payload, order, original)
 }
 
-func marshalOfficialOpenAIWSJSON(payload map[string]any) ([]byte, error) {
-	return marshalOfficialOpenAIWSJSONPreservingRaw(payload, nil)
+func marshalOfficialOpenAIWSJSON(mode string, payload map[string]any) ([]byte, error) {
+	return marshalOfficialOpenAIWSJSONPreservingRaw(mode, payload, nil)
 
 }
 
 func marshalOfficialOpenAIWSJSONPreservingRaw(
+	mode string,
 	payload map[string]any,
 	original []byte,
 ) ([]byte, error) {
-	return marshalOfficialOrderedJSONObjectPreservingRaw(
-		payload,
-		officialOpenAIWSFieldOrder,
-		original,
+	order, err := officialCodexBodyFieldOrderForMode(
+		mode, officialCodexEndpointResponsesWS,
 	)
+	if err != nil {
+		return nil, err
+	}
+	return marshalOfficialOrderedJSONObjectPreservingRaw(payload, order, original)
 }
 
 // marshalOfficialOrderedJSONObject 只固定官方结构体可观察的顶层字段顺序；

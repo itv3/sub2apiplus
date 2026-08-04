@@ -1,0 +1,4568 @@
+{
+  "schema_version": "changeset6-workspace-baseline/v1",
+  "changeset": "6",
+  "task_status": "方案有条件通过",
+  "head": "38a9929eac35a39c86de2f27de8f7a805d7dae52",
+  "head_tree": "a8c3dee18a01a6138bfcea60860bb5ad11548c3a",
+  "workspace_path_count": 498,
+  "workspace_path_set_sha256": "b369b773c681bdcb4d50f44ffca0532c4e3ea0e7635474ffbb02fb82db0babf2",
+  "workspace_entries": [
+    {
+      "path": ".github/workflows/backend-ci.yml",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 3383,
+      "sha256": "323cff6f13e4fdf7c46c77f69f3ac7d099882c07de00fedf8c203d258b59d9ee",
+      "git_status": " M"
+    },
+    {
+      "path": ".gitignore",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 4457,
+      "sha256": "48dc589ef806a56cda1fbaccd7dc27572e7de7028f1bfae43ebcbf0cb088339a",
+      "git_status": " M"
+    },
+    {
+      "path": ".vite/vitest/results.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 351,
+      "sha256": "54fcdf5208ec1feaf30e28625df5f54b9e730336abfe90b760517f0c45dbada2",
+      "git_status": "??"
+    },
+    {
+      "path": "Makefile",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 9476,
+      "sha256": "eedc9abe0b25ce3a396fe2bb956662f865b7b06aa9810129d40f5e4e40d34813",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/-h",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 49164,
+      "sha256": "6b1b69ba293fb692fe506822a17325d7d2e5735fa3095e47da7ae78d00c9843d",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/cmd/egressbindingdump/main.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 782,
+      "sha256": "59eb014d29011675c172dc31ff9b0041ded7398f217cc4501309d15959d21e16",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/cmd/egressconflictinventory/main.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 20664,
+      "sha256": "8aaaa3af5ecb9f05dbc07d68241696cd9c4c81dcda77e1d3a5a9694a5c0b5491",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/cmd/egressprofiledump/genenums.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 5576,
+      "sha256": "90ea9e47d530429d7563c0d966058d1558a5d326d7db3995edf9511dfe09ff3d",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/cmd/egressprofiledump/genenums_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1549,
+      "sha256": "ba792c154fd87fd2ef31e9971aa20a83467daf70c229a6086dcf9271df39f1a4",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/cmd/egressprofiledump/main.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1704,
+      "sha256": "749e38435ebc56fc8972592250ca5939ea84ef40d44ce95fa3034cf06dfcaba7",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/cmd/egressreleasegraphdump/main.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 623,
+      "sha256": "0525f0424c7df7139a42371f498548581a797be383e1ae65700c2ddbe50b722f",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/cmd/egressscan/baseline.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 6067,
+      "sha256": "17ac1206e9244eb7f3843b0df5957adba356c0d0c1b4877bffe41cb3db01be25",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/cmd/egressscan/baseline_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 2914,
+      "sha256": "412d2f38375c3a1ee052115568347a9a0b30e9d110445f1c532f27f058d91380",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/cmd/egressscan/catalog_amendments.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 5940,
+      "sha256": "028f4bf89f545a4147a3e92bb61d9838a7728349faad556b9894ac8f40ca1b86",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/cmd/egressscan/changeset3_source_gate_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 9932,
+      "sha256": "bca974838a50fdb803fd72db591d313fdd4ac0f8689e3bc73601d62a9f909784",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/cmd/egressscan/classify.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 43384,
+      "sha256": "316d7a21f9ac1c0201f6e60cdd1ed03a249bfb29706b322f760776d296e28f2f",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/cmd/egressscan/dataflow.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 20693,
+      "sha256": "d8a127c5370f5aa9378688677e0c354ec1c8e5ce9561b5b8d28c47c99542b3cc",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/cmd/egressscan/inventory_lock.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 3344,
+      "sha256": "3d7ca71c7e356f2fff8d44304290ce483065629ab6879d441304d602cc7a319b",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/cmd/egressscan/lifecycle_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 3872,
+      "sha256": "e0045321b535e90a086e2907ddbace06e59f63585295f71d75468bda82e7ab52",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/cmd/egressscan/main.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 28877,
+      "sha256": "923eb4654ef80f87a6f58924d36a5cee6532e1225ca437d94fb7c7d0f459d700",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/cmd/egressscan/removals.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 9322,
+      "sha256": "05b8762683b1396aab4c3cdb32024aa162201a9746539338aaa34299229cdb88",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/cmd/egressscan/selftest.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 21016,
+      "sha256": "b1e3507c6434d81bc349210058b31f3d9e678bf5829a504f7c94db8b3bddcdee",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/cmd/egressscan/sinks.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 8489,
+      "sha256": "44f8ec830223a0768485a81c51fb6cb2ae84b33dcb3870d5726c8c0c7c61dcc9",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/cmd/egressscan/stats.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 3463,
+      "sha256": "f9d301b44de2573861c5856c274d47bf339f1d4d3aab4fa14864f854e0286ced",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/cmd/egressscan/supplements.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 13170,
+      "sha256": "3f18b1f38869071e65218110120015928a0c02d8430e9db298ad84c617f3c6dc",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/cmd/egressseal/main.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 5470,
+      "sha256": "d8a5086f15fdf70554ef157f2fe0378495a8d9887bbac472b160d76337d07b04",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/cmd/egressseal/main_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 4550,
+      "sha256": "79c595acd74e1bd8d7a36b75999fe13d5bf18a0c689c176c917ed245d41e272d",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/cmd/server/wire.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 10915,
+      "sha256": "d45e6e12894515256280e39dc63b26f9b343e98d43c8723c302435dfac033ed4",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/cmd/server/wire_gen.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 42570,
+      "sha256": "12b23f29f9912b87c8efcecfbac5e34077afb81a11b81fd9bbd127c2b297d05e",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/go.sum",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 46875,
+      "sha256": "93473d6fc6c3522ee3477f4ad4f62dd1611629b7afa69f2aa52aebb975e63019",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/config/config.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 186941,
+      "sha256": "c40e3b4848a5d09cb6697967e2a2d955f87e947df9d229709df31501ce06cd8e",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/config/config_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 91784,
+      "sha256": "933008059a29b6d2a442bee6517eaae9e5a6eb5451c82b4aba21049e0e513804",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/handler/admin/account_data.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 23233,
+      "sha256": "a9f5c22ba023f0b08d8aa5945f08e284dd166abdb18da2cd036cadacf69c17f3",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/handler/admin/account_handler.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 100812,
+      "sha256": "2b75c1e27d7fa4ccff76e7ca660cf7819365c3a2f19c16c2bdc4d07616682fd2",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/handler/admin/account_handler_long_context_billing_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 7529,
+      "sha256": "c3dbfa7098933022f52be45e5f0050a4ddf1d864d21bade5e78f5328c1b4055e",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/handler/admin/account_handler_privacy_create_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 8004,
+      "sha256": "54bcd7d79f4e1eaaae068ab9ec3a6bb7d4780d190d63430fb1e35bf29c4eb5b4",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/handler/admin/admin_service_stub_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 27608,
+      "sha256": "eb8f3d5d0cb5b77c4a58168e793096bfd04027198e5a029ef57dbedec850fa2c",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/handler/admin/openai_oauth_handler.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 17544,
+      "sha256": "0d732a087b44b6fe9c8903bdf246145d0b153b6cc703c378f5dd7b5b365be399",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/handler/admin/openai_oauth_handler_privacy_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 14724,
+      "sha256": "804626254826691c95aba4b80495438233e841766af8344be10e8622befe55c4",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/handler/auth_current_user_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 2609,
+      "sha256": "47ed41f8a533b2537cda513c4ddd555653ef11acb05737b3e4cb4e403c9d2c8d",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/handler/openai_gateway_compact_body_signal_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 8062,
+      "sha256": "a331dd60732869efb4302bf64fc822f15b7b139fc471c9a82db7773623339615",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/handler/openai_gateway_handler.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 121363,
+      "sha256": "d45dd7cbf0775211d33ec0f4785263d2186a70e7de044af3f650653402a61b61",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/handler/openai_live.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 7592,
+      "sha256": "88a608f17214ff7f9a296094867b8e807bff844cbd76c7aa0678e63eeb722db8",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/officialegress/bindingcontract/binding.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 21466,
+      "sha256": "c6d6e1fde8ec1ecac8d0f1620fa88b60f5919a62495c34d9f053900cc5462f13",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/bindingcontract/binding_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 7311,
+      "sha256": "d55222b50df3647ceb306b40671599715ee9cab142b8b7de7672ac74652881ca",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/bindingcontract/testdata/release-bindings.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 75658,
+      "sha256": "0302e9a1904aa4f95ecb2092a0df5e6b1265e9543615f465c3363bdaf585065b",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/bundle.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 18955,
+      "sha256": "6b489bafd85848602cf0559a3b37d2e22b150751a2e65991c62d8aecb87eb300",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/business_binding_ast_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 9007,
+      "sha256": "36ae53307172f39e46ffb4df1579accc85d123c112783ee63a715ace73ffdc72",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalog.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 17719,
+      "sha256": "5b356cdbbad114cd6116c81869642ba44978ca163c3990b028127516cdfc14aa",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalog_amendments.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 7475,
+      "sha256": "f88542864d7d8ba590afef18a36bd7b19a6f2de41f386059a88eff44512d3899",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/catalog-amendments.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 4396,
+      "sha256": "325e7f918147a9876b9ec3fcecc09c96219ba7425b686376767365725d1a46b5",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/changeset3-migration-receipts.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 90282,
+      "sha256": "0b79f524328a583064bab889b03a3519c27774354fbccec3798fd845b5deadd2",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/changeset3-removal-receipts.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0600",
+      "size": 33094,
+      "sha256": "85d81ea6018c776f9c7c15b23c9868fe447a59e7bed4ec00b582225d90fa7dfb",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/changeset4-transport-receipt-transitions.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 2281,
+      "sha256": "d9481311e72d81d17732731c49bdf8063aec8f570f3856020724ff4d4b642f35",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/README.md",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 425,
+      "sha256": "58b6d344195ea86ec7793cef3a4c8ada341c72e55d06869682c1c856b3d69c04",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset1b/codex_admin_test_compact/canary-acceptance.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 396,
+      "sha256": "b0c33f6a0c0f1b9413b1853d3bdd4fa617a4a437d6988ec1b8b7eaab75492aba",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset1b/codex_admin_test_compact/canary-observation.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 565,
+      "sha256": "b0857f9a2ffd93e2625817dc42796a22c9e4afb54ab6aaec348da7d45e083923",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset1b/codex_admin_test_compact/execution-verification.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 707,
+      "sha256": "88c08faeb1439af192c1bae53a8524829e68a332e9b668c501bd817095d798be",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset1b/codex_admin_test_compact/wire.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 976,
+      "sha256": "067be318397805c0a4c0319b2fd3c2974ef8c475a0de5f4b31ba6cc2412d2d42",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset1b/codex_admin_test_responses/canary-acceptance.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 398,
+      "sha256": "00ad671c9718403be31db67225f769095ea0fba5a525d6833c7575dc3a5d9aed",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset1b/codex_admin_test_responses/canary-observation.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 577,
+      "sha256": "ce0b4a83e0699c2ef886fa330f139edef1b3ea2a6051a41b7861d152f4e95ed2",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset1b/codex_admin_test_responses/execution-verification.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 700,
+      "sha256": "54dfce75ddbd738a541e398ee7dfa7df7a6453783ba8e9cc28aa5ab3cdadd4cf",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset1b/codex_admin_test_responses/wire.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1105,
+      "sha256": "a598b7bc90486d2f267338f23301ca0967bfe2dbe1036e0b9f6fb8d337190cdb",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset1b/codex_alpha_search_pat_fallback/canary-acceptance.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 403,
+      "sha256": "1abd46464f284d2f4e943a08c6d1adbd50bf9a0845aa3245c1bf5d82ac0741d1",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset1b/codex_alpha_search_pat_fallback/canary-observation.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 668,
+      "sha256": "80719f7864d4c5f0ecb020cf61b45fe38b6076012ae774947a8a951f6db32ac8",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset1b/codex_alpha_search_pat_fallback/execution-verification.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 714,
+      "sha256": "23ad4182a6fdaf0ad23c5efb7fea90efe0b3e36dd996609d0bd37ff18f440320",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset1b/codex_alpha_search_pat_fallback/wire.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1119,
+      "sha256": "8c1fa40066ac0a0740bca75257ca1f921f0b5d9dc06aab5eef604dfb235c1433",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset1b/codex_usage_probe/canary-acceptance.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 389,
+      "sha256": "4d163c2a91931f4f0b974b5442e8f59ec7e34ba9aaf3c48cf3ca63e098405b11",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset1b/codex_usage_probe/canary-observation.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 577,
+      "sha256": "a08210892f950f3f14d62dbe008fb92a875843ecae210fabda4ad1839b39efdc",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset1b/codex_usage_probe/execution-verification.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 682,
+      "sha256": "e5b21409ca0eae35bfd3176072fdedfc7d212fe73549f95a638403f545a3bde9",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset1b/codex_usage_probe/wire.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1087,
+      "sha256": "8eefec78f4399d67731b6215bd578ba5729bd901c3760c45e88fb08f799c1840",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_alpha_search_direct/canary-acceptance.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 410,
+      "sha256": "f2192a9715d531a5506dd3040106512a0048d8d7187f380e6cee60a401d0496e",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_alpha_search_direct/canary-observation.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 775,
+      "sha256": "9ce3ed42ab70a9de329f8e6c3fe55303cf76ea17239a7ce01bdec3b682544df6",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_alpha_search_direct/execution-verification.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1093,
+      "sha256": "6e9de5e0f2753d371af930eba3af806b626d2e7d9f943f488c8ad0c0d62334c2",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_alpha_search_direct/wire.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 12731,
+      "sha256": "a556bfe28363274ba599ac66ff6c4dd3f96d956f2c9904480f303f832ab8fe23",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_files_blob_upload/canary-acceptance.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 408,
+      "sha256": "d632dc6b13c1f6ff788d1aa624f2d7f47abbc03215d10f780545fb1a96f1e165",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_files_blob_upload/canary-observation.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 773,
+      "sha256": "9740819dab293cd0b6d35134194dc3faddb782a82af9cd4a11c112c6553716db",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_files_blob_upload/execution-verification.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1093,
+      "sha256": "e5e8a22b4d0e1a4776c128dc1f4aea00b3c5e73fc3fbef39c7db087dd7345d70",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_files_blob_upload/wire.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 8800,
+      "sha256": "0fa13648c79c9d3a6c78eb083f6b68cfa6a5a2bdb9493f72495e278fa1b72498",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_files_register/canary-acceptance.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 405,
+      "sha256": "27d83ae34e6bfc8d0d85ee8ea9f4e121f822f653d4e572a5c685e2e4891de78e",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_files_register/canary-observation.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 770,
+      "sha256": "37948ab0f85ba0863c220be48206893b0dd7c5d8d81110c8dce9f2dad817ae74",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_files_register/execution-verification-files-create.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1076,
+      "sha256": "bdabc331c2622952e33f8b12b56a2afc23ea4eacc11436fb91baff7b980517fa",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_files_register/execution-verification-files-uploaded.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1097,
+      "sha256": "261201e8ec63fda826cad8a22d16ef3462953d04004e23b8a113ecb240c88d9f",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_files_register/wire-files-create.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 9261,
+      "sha256": "38cb2db6eaa6d70c32d0d83441830c076ff9bfa5ef1f05db1bd4ffbd0befc414",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_files_register/wire-files-uploaded.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 9068,
+      "sha256": "3b429a3afa341883783cd155a8cb33d4bf2cbfc4b29f33c5161e2297ed953ed2",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_images_oauth_test/canary-acceptance.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 408,
+      "sha256": "6a2a58994ef3329e707a620e74a2412986504a20906cb2dae3cb7c767d72c81a",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_images_oauth_test/canary-observation.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 773,
+      "sha256": "9dfef84fd0a0ff91e01ba11f91866c3fa8c89c6cb2eab434e9f15a4f33bbd853",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_images_oauth_test/execution-verification-images-edits.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1089,
+      "sha256": "3905501def957f41e1c13517a6beeb035970f04e341d735533a578ecd575abd8",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_images_oauth_test/execution-verification-images-generations.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1101,
+      "sha256": "9e5a055e4bcf016eb644a13756e55be13a362bf240ee7455767f51468975a665",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_images_oauth_test/wire-images-edits.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 12007,
+      "sha256": "c9a83a2014f32a4eaaff2d6565c08c8929c2701c2d916c37d5ab63fc8f39adc7",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_images_oauth_test/wire-images-generations.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 11971,
+      "sha256": "d79f63721bff39f11e167c72f91e3411b6cb15ee72982077a9afe7ad61c0993d",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_images_responses/canary-acceptance.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 407,
+      "sha256": "e2af0c94923ed30a969b054e5ff6f1b68bf90600917a39c97444192164a996f1",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_images_responses/canary-observation.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 772,
+      "sha256": "3f9582fc0e3a700ef2f4aca792fca2efa43af6b8a281c7fc37fa09561d16c90f",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_images_responses/execution-verification-images-edits.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1084,
+      "sha256": "f98bb2aa949c209ad6016e949aa6f0001808d0032f23c814f2605d2a030475f9",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_images_responses/execution-verification-images-generations.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1096,
+      "sha256": "f84493630ab9269223966b26864f053538e0698fb669829cfe0aea4bb4aa4393",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_images_responses/wire-images-edits.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 11992,
+      "sha256": "8efeba51fac5a591d93672516a661524dc221ee103f150f3f595e03ead0670c8",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_images_responses/wire-images-generations.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 11956,
+      "sha256": "7433d8821e68001161de0dbdf2d47694765f46abfd00a8a852043baab20a1af8",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_models_list/canary-acceptance.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 402,
+      "sha256": "8a4bbf3a3207b480cc9ff699a86fa7b7f01b7aafa166fedbc972f6fca3c76e97",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_models_list/canary-observation.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 767,
+      "sha256": "0dda50bf3ae375c8eee41d047635a2f60437f0cbf090029d44fd34a50ee3f061",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_models_list/execution-verification.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1062,
+      "sha256": "7d34170e00d5c15897c23abf60cf715e96c3c46f9a9b6a32ae53d995bef17186",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_models_list/wire.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 10002,
+      "sha256": "eab4fc8e05ade7bb26e8a97d1b1ca4d902decec3e21594d893bed1234c570ac9",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_oauth_refresh/canary-acceptance.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 404,
+      "sha256": "1a020a35bd6434383f0c42ea13c5fb28dfa9b4c722b11c3807575b2bab6a8e56",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_oauth_refresh/canary-observation.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 769,
+      "sha256": "c65d6edd17443eb948832decdca65620a4000b30b5ae24bf1c77dbef50ebfaca",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_oauth_refresh/execution-verification.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1057,
+      "sha256": "44001666fbb53b109934e8c865cd4d46fba221c17b0b175937d1f6083d57d7fa",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_oauth_refresh/wire.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 9901,
+      "sha256": "c15aa26d59c60d97d1765fd6f6c18a1c8a8ba16a481b52acf75496a0d689c486",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_quota_wham/canary-acceptance.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 401,
+      "sha256": "6d5cde68adb37abffecaebe3ab966494f96ab3140b304a34d695eb36a48d5944",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_quota_wham/canary-observation.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 766,
+      "sha256": "556dc395271de784db0eb58fc00744b19ccda6f40ea4aef8d6df0f91931f3ad3",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_quota_wham/execution-verification-wham-rate-limit-reset-credits-consume.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1114,
+      "sha256": "f19ec2672234c87098113e62538c9bdd988bda70443480b8039a2afe04dd0a2e",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_quota_wham/execution-verification-wham-rate-limit-reset-credits.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1097,
+      "sha256": "c8921d16ac6f66a9859fc3c7fd6be6deb8ea4e56f85e4d91e25c514909dde01b",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_quota_wham/execution-verification-wham-usage.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1059,
+      "sha256": "1747f3197da4606d966fb3c58cab58975658a43d4c1ac9492b76b6bbffc945c4",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_quota_wham/wire-wham-rate-limit-reset-credits-consume.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 10036,
+      "sha256": "61a5369fedebdd2c83101e75475d0e0e0d1e9e29d76f12cbd8666b31d0978f7b",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_quota_wham/wire-wham-rate-limit-reset-credits.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 8479,
+      "sha256": "63ff8755a82608ff817dfdb452f3c044efc3710b7e5e741a96e7fcb049c66449",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_quota_wham/wire-wham-usage.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 8327,
+      "sha256": "fee374430fd3819d9c0e72f8a3d7bfae154c9bdf42f9d24ff03a9af7678a188b",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_realtime_calls/canary-acceptance.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 405,
+      "sha256": "d59019841c97ca44fd2c1e9f07c0f6e9dc79752cc1b8c7cc259d87d73da53e27",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_realtime_calls/canary-observation.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 770,
+      "sha256": "4ac3cc375adcae3ad42ee88b4e92396a4ba12d4244179b7416357b81a3790d71",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_realtime_calls/execution-verification.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1094,
+      "sha256": "6b2710e130cb7b73f24afb38735b8b4659d1d07b1c6ce9e6ae56fb5272f0e5d5",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_realtime_calls/wire.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 13272,
+      "sha256": "d1b6a6f30623438f0553f7613f53796ad31642dfe713e8b98bd10d2039d49af0",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_realtime_sideband/canary-acceptance.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 408,
+      "sha256": "33498ee856e942f219838b4d8fb75ddc811d323ac7bd6cbd6066e81c3dbec75a",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_realtime_sideband/canary-observation.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 773,
+      "sha256": "9fe06cab61c07ac7a2269378a86d4c4dd89f2cffa171ecb6b8bec628a58b5fa1",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_realtime_sideband/execution-verification.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1070,
+      "sha256": "524d6cab147f231d8ea82e002d53619e97a217200bcdc99fda83ab89efb00bf9",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_realtime_sideband/wire.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 15602,
+      "sha256": "e22c19d49c32b2f957456b28afb899f4769455cef25305b687f9f9fc91c54a70",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_anthropic_compat/canary-acceptance.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 417,
+      "sha256": "e23519528f3233b6a1032ff9aba121b2f14ed4bebc14496b12ed4d4212cbcc22",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_anthropic_compat/canary-observation.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 782,
+      "sha256": "e64ac3dfab91dbbd6d706c9494ef5bab31b00463a87d4ad0c781ac144acfd2fb",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_anthropic_compat/execution-verification.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1103,
+      "sha256": "8e1c6b8b88881ca181dad8f4a616ea106746b2aeca6e26d01a69746265350bb4",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_anthropic_compat/wire.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 18051,
+      "sha256": "261614aa1c606b6a690a6bcb4d223cf3d5c59b4f73f4a90e37ce24cb9e2b7468",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_chat_completions/canary-acceptance.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 417,
+      "sha256": "2cd683570226208ceb9c95e29dd4b195d372d1f515a345c5899095168d3a64b6",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_chat_completions/canary-observation.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 782,
+      "sha256": "6463d78e43cf67d03b4a8108fe84280ffe143fd71a0b0902644bea444272bb19",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_chat_completions/execution-verification.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1103,
+      "sha256": "b3cfa2a766479e32054b6a468d54d610198495472693876a772278be35c30eb9",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_chat_completions/wire.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 18051,
+      "sha256": "bd048284045a1e0d83e22cb4e77494e04994f8b2a9e63d32bef2f5c1b411544c",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_forward/canary-acceptance.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 408,
+      "sha256": "ab92afe9508f6ce92365c24896f0732807fd69f873b963523e176957ee670166",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_forward/canary-observation.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 773,
+      "sha256": "34592eefda5ddace0d15df1e71aed2be9ba9e9cb88afe0535782d5b5c28eb2d1",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_forward/execution-verification-responses-compact.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1098,
+      "sha256": "656a8420d6eca09cc37b1ba6a0d996fda5a9783b3e1f5b6655ba0cd32c9953ad",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_forward/execution-verification-responses-http.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1087,
+      "sha256": "243655e02e91203977dedebac6b5588f40508b8c1c322b024b6bb0629aae6c8f",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_forward/wire-responses-compact.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 16850,
+      "sha256": "8d11a8908ebfc1f440c151c5681ca51cd92ff8c15fcdf9b6ed4a2f726baca9f5",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_forward/wire-responses-http.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 18003,
+      "sha256": "190776075645613d39e5f7413fdcccbf3d5dd4f37bd0d1df689c6949af8b02e2",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_passthrough/canary-acceptance.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 412,
+      "sha256": "54dd1ff0f46ed886007669fd175a00e371abbd13c68349e4404b6f963edd6c44",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_passthrough/canary-observation.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 777,
+      "sha256": "b6f0b8e6ead853bce8b5d14e9dfc93672208f5d4b068f577608925e48126239f",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_passthrough/execution-verification-responses-compact.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1104,
+      "sha256": "c51678630feec6d37b7f2fb1dee533b1b236abd7174b092c9f2f105b63e93998",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_passthrough/execution-verification-responses-http.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1093,
+      "sha256": "a97e6a80c09e6c2d87679f7f1b34e92cebf1ecb8083863607169da17cbee148c",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_passthrough/wire-responses-compact.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 16868,
+      "sha256": "6a0d173e44452f5a4aa725353230ae66fbe95ade9f85795b98b879c6322bc7c5",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_passthrough/wire-responses-http.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 18021,
+      "sha256": "1c6292566e4b51f111095f34222287113fcf745d3b9b877d8cd6c179d08fb3ff",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_ws/canary-acceptance.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 403,
+      "sha256": "66d03cc24e050b06680e39929bee4c0cd4372226cd1360d237ea5bb5395d49ed",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_ws/canary-observation.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 768,
+      "sha256": "0937fa91f425a47133366374b40d1875b5f3e38248fe6544d47bf6a11ab9d294",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_ws/execution-verification.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1068,
+      "sha256": "0c719f46ee5d597602e82472433b32d05499c62480e10a95fb4bc604f049e6cc",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_ws/wire.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 19626,
+      "sha256": "f765624bb177cd3e38a78e2a8542bb7177967d4dbd38e66146c1c8edebf4f779",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_ws_http_bridge/canary-acceptance.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 415,
+      "sha256": "a79719726044c2a9a7f12154f88e6fc9053f33b53641f21b8051bb47df6a0517",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_ws_http_bridge/canary-observation.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 780,
+      "sha256": "63c06567ead8cdddd7250da963e55f7aa96b3af1e4d130eb3adb93395cd38e5d",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_ws_http_bridge/execution-verification.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1101,
+      "sha256": "29a436aa172ca6f29ee7c04094df932fa25c27cbb1940700996fee63f019e933",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_ws_http_bridge/wire.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 18045,
+      "sha256": "bdaa7082c76faea1a92c37deaa9a0424c54c88750403aeb02f8cf456f2c379ff",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_ws_v2_passthrough/canary-acceptance.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 418,
+      "sha256": "47a09d4ce34cf3cf1833f50a41fe02f9df34b0781660618343c151f420c5a761",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_ws_v2_passthrough/canary-observation.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 783,
+      "sha256": "fef94637791971fc8405befbaa449f70b0cbe6be96b6612e5cce55fb367ca9ff",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_ws_v2_passthrough/execution-verification.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1086,
+      "sha256": "e590c3043fbbe5c7c1dc7c487019cb3101d5c975fcb2dfb67ed5d03adb54107e",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-artifacts/changeset3/codex_responses_ws_v2_passthrough/wire.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 19680,
+      "sha256": "21e093acab320408fcdcbec41f075e1dab30f35b72d3e547d8e3095286d73919",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/migration-receipts.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 17306,
+      "sha256": "94ff0e21cded16b08ba5b9ed4cabd9950a367d0c1fba2924d8d2e1313a6ba4a7",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/pre-bootstrap-supplements.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 207,
+      "sha256": "1cc5679fed023d11aa22c78084d1c53f36981a74604276d0d4e3e08900e124a3",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/release-catalog.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 387,
+      "sha256": "aa2ad86b83c1be055e7986dfbc48e99168c62a8064b677a7a7e13e62002f44dc",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/changeset1c_evidence_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 13936,
+      "sha256": "933acf40634657d6dc81cb3719e06ea0d2e2b1d4b8d295941e0e97ea6e79ee93",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/changeset2_acceptance_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 8400,
+      "sha256": "c356513543edd5675a0e994f902469c6ea9efff586d215dfc3f7ae17258c7dd3",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/changeset2_baseline_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 11439,
+      "sha256": "8755371fa4c378748b3b4b89bb2350ec47f3998784dadb4719379bcfa59616dd",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/changeset2_current_source_gate_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 2740,
+      "sha256": "7c998351d3d08b06f9c6f9ba5b9d6fa654f2d8760ac32c11b53aa6d6b399de4f",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/changeset2_synthetic_rollback_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 11985,
+      "sha256": "4153f098bc6b2d4063c73d9c72a29ec3bee945e9b1a64afacae656dc0fd73e76",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/changeset3_acceptance_amendment_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 11488,
+      "sha256": "1cfe8d105bdeed32b1fc2b19f1f096acb9599f6448a05085d0aa46c5ad3f25cf",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/changeset3_baseline_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 6293,
+      "sha256": "9bf5036bb143d3144c53f1473f79e28ad9695efce4aaa185ac3ccbc3a609ffdd",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/changeset3_migration_receipts_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 17342,
+      "sha256": "97196c89d55ea0b982181cc6eb67cb29bfcf6dcf8079e327785728b5149f212a",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/changeset3_post_identity_authority_final_wire_frozen_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 11743,
+      "sha256": "e43f32b943d757278e89503d0297354e6e139c64819c3f243e32b0b04b6669d8",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/changeset3_post_identity_authority_final_wire_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 7382,
+      "sha256": "38ff9f1e9fa131712b44cff7d2f091e41104edb4f51fc1d33c10a41593ccdfb8",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/changeset3_pre_identity_authority_reference_frozen_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 4469,
+      "sha256": "68aff6404a6da328dd1fb9a8ee54f8fc5ce6423241db404646353bcfb08d9a89",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/changeset3_pre_identity_authority_reference_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 33641,
+      "sha256": "9d5cdec2657e73eef48c2f4d890161f3ffbe87c25d3b84076e96baef2faaf751",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/changeset3_receipt_rebuild_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 13657,
+      "sha256": "9ba6651d19264f307ce92f7817b024408b7a32b41bf1588b274b0789eee3cb16",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/changeset4_base_receipt_frozen_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 8889,
+      "sha256": "cf35f4ef32e7ba7032d7b5a97493d06645a12262ead32c470b10d77d08236f6f",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/changeset4_resource_lifecycle_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 5403,
+      "sha256": "856273e17c520fcd3c24354dd0f726cc0cad2d65f9391a1c0bd48c9a0d3ec9a9",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/changeset5_conflict_inventory_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 17515,
+      "sha256": "53f9913e195eae40ef446248056d7adbccf1e3f9675b7892570ab0f25eace698",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/changeset5_dependency_boundary_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 3364,
+      "sha256": "46c7f35c4c1717a1528cfb93c7540c61426cff5135c4fd3187c0b4cdbc00fee6",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/changeset5_inventory_locks_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 7931,
+      "sha256": "9b485fae3339b1311d7bb23d89f6efae5e83cc1040de280626c3b03a0a4c97c7",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/changeset5_workspace_baseline_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 11637,
+      "sha256": "c5fa0d5836f73d5ee44afe684a865df2afffba097b61fc81c1c9a1ccd96d076b",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/compiler.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 46363,
+      "sha256": "5e5ec6589b0576dcc8b682a8afdf558ab1580596786cde1829704c17b02021b5",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/compiler_body_authority_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 4834,
+      "sha256": "446bf5d55a9523d78e81d263a2b67d85397110dad5b87b259a440cb0577a14c4",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/compositioncontract/composition.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 8902,
+      "sha256": "3d6065ebd08e187ddd0cd5be886fd90ef7d06876ffbad473bce4b149ac77e4b9",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/compositioncontract/composition_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 11012,
+      "sha256": "497d1c05cd66c3963c65e430f5cec5c3df10e58d01fd4e43a15172a08666713a",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/endpoint_bindings.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 7289,
+      "sha256": "5ce51dcb8bf52a67b3744755e8f8c12a76b101f5226690c961864d10c152360a",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/execution_policy_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1854,
+      "sha256": "76472544060679250260a9df8a5c16b2018a923380d8b301eb2f527ff5f93e7a",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/executor.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 28600,
+      "sha256": "c09ba8acf44a45f4f2f5513f7a7a7d6587918d078f821b66f5e2920670421479",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/executor_invocation_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 21048,
+      "sha256": "6bff9f0ed4a8598c68c048762be5f494ebe3ddb976b8bfa68d6e50c60b37069a",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/finalwirecapture/capture.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 21091,
+      "sha256": "54551e40960261da6ccb51b4a86c166e263ac75224dbd7f7a97d3f94a985d48e",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/finalwirecontract/comparator.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 7347,
+      "sha256": "2126b21001c4582a35b993fb05d43d760d61bb3982cad36b8a8ad757c876aadf",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/finalwirecontract/comparator_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1515,
+      "sha256": "d37a50170f6de1bee2f3087ccfad607a3f0920d520b8b6873e81e0c502b5fae1",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/guard.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 23233,
+      "sha256": "3e0d88a6bdac801c25e2d6e96cdb992235d48b8952499357db575dc15a38d117",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/identity.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 9968,
+      "sha256": "0113b94b36cac8433e6c04da1f27c4d9c42ddbc729eda8d32289ea4abc56a503",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/legacy_baseline_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 7605,
+      "sha256": "c6615a1534d65ce1955429c79eb4e89e8ec05567f55c22b17538eb4f1591ed8f",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/legacy_dispatcher.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 4326,
+      "sha256": "e768cf00406809471af86405151bbc204aa109b6b31d9febfc8240295d4e6ac5",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/lifecycle_receipts_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 20685,
+      "sha256": "01676c3f92ccbeb3775fa8b01a59c38b8b522234fc150dae743783a973bfe9c7",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/migration_receipts.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 13134,
+      "sha256": "f6a730818e56eff5f7c1945113ca02f81bccad2682ed3b9bc4a75a3eb9d297c7",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/officialegress_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 49725,
+      "sha256": "e7bc0ac73bf58a4be12ae0a4a5e2d9df05b63ab1322fac2c9f6a80574b6f72df",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/physical_routes.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 4252,
+      "sha256": "fe8f1613707cb502650c3a92a04a61a20854cd62879c0bb5426429df386d491c",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/policy_overrides.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 5785,
+      "sha256": "0f2659f267939cc6839b072c8f856e0e7a3e0da9293f0e4f3fb41ec22edca091",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/policy_overrides_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 6728,
+      "sha256": "5d1b3338048fe95b40f1da3a5c282c56334d691c5ad1e05a2a262025f2529ec4",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/prebootstrap_supplements.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 8435,
+      "sha256": "2bad55bb7f627b8c8580d38b3581f5cd00dfdf9871a127ddeb6c8c5d4905622c",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/enumcatalog.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 5484,
+      "sha256": "f436e926c562b9b58dc95e4aa4a3538795b3a76d55096b2e81c2bd198f036184",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/enumcatalog_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1667,
+      "sha256": "008157eca6b438f7baec82cebaf01e7c030cd4f00708bb239d38b1ab9b26bdba",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/enums_gen.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 5022,
+      "sha256": "b9a86acf5da4814b601ce11d7e0309f23a759b82a626436fdc776516f544366a",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/executable_profile.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 23090,
+      "sha256": "639a4b1ce092d0fa2da014b6fd6998edbca1ce3237e7e0334eec4c321e5afe67",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/executable_profile_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 6575,
+      "sha256": "658b8926bd8f3aae91588b1f08f811e979c176cfdcefc012599e8949efb47c8a",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/profile.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 17120,
+      "sha256": "5e6974376e72867283c056d594e968135e2d5474e1e9206facc3b0857f90ca86",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/profile_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 17719,
+      "sha256": "305e665bde6a6494c43d3c51aae47c4cbc97370e8ee584388488757d023a9a97",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/snapshotcatalog.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 6649,
+      "sha256": "151b83a8f5645edf42cb7a08cc9468c5fa4d2f4d0db85fc3c536f272cd744ee3",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/snapshotcatalog_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 3482,
+      "sha256": "aff9b55e5cf6afe15aa3f998f547bd99264e6d2cd77ab3297d82e3e559f5acb8",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/snapshotdoc.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 7071,
+      "sha256": "eb13a038f46df2e391be4190574b09447cd3453677ec8dd34cf065827fe6dc88",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/testdata/snapshot-catalog.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 425,
+      "sha256": "a0bd44d512ec960c738f9f98797f7c7c1c43322d1d1988dea947257cb08497a9",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/testdata/snapshots/0.145.0/343991bad0f89614cd092778186f51eb23d5afbf4c98a198981639758bdf5431.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 49813,
+      "sha256": "ff503d73d7402fb0d6429a67b415aa7d2bc863a3002cf5e5ee9ab3baa3d7529f",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/testdata/snapshots/0.145.0/7d9c22ce150eb8395cb6ad66a5b77175c48840c1129710e32e484b50b9e63eb5.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 49164,
+      "sha256": "6b1b69ba293fb692fe506822a17325d7d2e5735fa3095e47da7ae78d00c9843d",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/testdata/snapshots/0.145.0/9b7dd12df50dbcff74594b1f05440161cd99b963019a4f316f20c08ed5f5ba1e.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 48944,
+      "sha256": "07270f6d86e0ae376815ce109d6678a4d3365680e9d45efdaf2fcb87004c8368",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/testdata/snapshots/0.145.0/e0b59772622f14717f1fdf5c15bfae5758226a04fe8f030110d8a616e20fdf6b.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 50032,
+      "sha256": "36c6c0e4464e6182347210d05d17ea85f6121e98f70f3c36b6ffc2b4230a5c66",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/zerovalues.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1498,
+      "sha256": "4ed41e488930f183bb5e1b4791e63c1bcdd6b35d1673e5f114105e922e49d16e",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/receipt_transport_transitions.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 5686,
+      "sha256": "b886c18c4662209100bee43c513c5a5eb593a8f748cb9cda907620f9edd32265",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/receiptcontract/receipt.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 13540,
+      "sha256": "e423f2227e98432a9147ddee5deb8586b52a788e0b85abcbc40d1412de07398f",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/release_catalog.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 9660,
+      "sha256": "0aac145c1321999491ff77b75245ad6e1da49dcea3e5a1dfdcf61ee0f5264234",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/releasecontract/releasegraph.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 11478,
+      "sha256": "fab9f923607754d524ca3742afc0cf1755b3e054132e6b9f24bee14c2df15ae3",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/releasecontract/releasegraph_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 5788,
+      "sha256": "b9763a9c3303d7cdd471558dec9fa5990053533aa6d634decc7ab71d9a6ac2fd",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/releasecontract/testdata/release-graph.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 3909,
+      "sha256": "54b20ae29a4bf0245998d7ed6692248738d8c8975c4af216f2705709b4fac5dd",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/route_catalog.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 15694,
+      "sha256": "01ec7e9fcae620127b2fe07dc46be960e68e4c402036e08a4baadda8acb61ac0",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/runtime_controls.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 4500,
+      "sha256": "3a9d3b21ad4c0eef6b2e2c4ffc70634bf86f79375abe367a0ace9a5668d5d98f",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/runtime_controls_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 7636,
+      "sha256": "63ea675b57557a472d7f1fe1873eea04de8d2516d1f50efb9dba8a69d4cde441",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/sealcontract/seal.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 12807,
+      "sha256": "f9039fd0d0ff1f4c83d8c25aa68486b610aed06aeb4a553bff7642167d6ef447",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/sealcontract/seal_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 7339,
+      "sha256": "a9e1485fec3ada3e0fa921f804f515b07779f5dcfff1b39ee810c68af19737ed",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/sink_ids.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 2132,
+      "sha256": "3d489e655661f0c4005c95d9dd4938c88ca3944171647921dcf43f98587288cb",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/telemetry.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 6293,
+      "sha256": "162ddd5bd3eb68c360e0ccf0a16874aab6cec715be0da2b1a6447ebe5ce24212",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/types.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 42117,
+      "sha256": "1da1d193ae34b1d88ab5db7dc9088bd46565d7e52e8320068ef74d95cfd00c0b",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/officialegress/websocket_session.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 12903,
+      "sha256": "7ec568ff77f3b304cc13b56f58218d25afd0f8116f40e9f9c9570c6ac39720f6",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/pkg/httpclient/pool.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 7230,
+      "sha256": "b7c8e35c4246f7a4e00cb5b22f95b43482b55f4be272b8480c827f082fb439a0",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/pkg/httpclient/pool_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 9669,
+      "sha256": "4f5ff79894e648beaafd349d955d83c6e385135a3e99cb69bdc672af7e887739",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/repository/http_upstream.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 55876,
+      "sha256": "4af2ed1fd42b4b2ccf5ab89f17574137e4c500b7fbeddc794df2e8a0c9bc6464",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/repository/http_upstream_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 47380,
+      "sha256": "e697c1e9bfecc9ea56839fe2a9d3414b048fb2d49cffe0735c67de997baab8cf",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/repository/official_egress_guard.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 8498,
+      "sha256": "f86d66c4dee37271244a8f398e8e766dd55661a2efb8d55c8ed15ec23af2bfe1",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/repository/official_egress_req_guard_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 4416,
+      "sha256": "4fc4fc33ed2a0aa7404829d765475cad0e2eeff1f48c90b2fc76ccd5e4f3bbba",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/repository/official_egress_runtime_controls_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1321,
+      "sha256": "674baec6bcee3eb886f2781c4664eb9110877c7d83855b6fa9f38b04c650e48b",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/repository/openai_oauth_service.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 7254,
+      "sha256": "33c7c215bf7b548be0ca47eab4065d92a0f0a4090e4c1e95a24608d28c68c059",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/repository/openai_oauth_service_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 10325,
+      "sha256": "36791cd4b9cca5ffdaebb965e9eb342f863611feeee7dcf00340573c8de7b6c8",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/repository/req_client_chrome_wire_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 15591,
+      "sha256": "d0c9cf41f422fdadef360be6a3356d4338ee95b8c33e8a334740edc7ad090a41",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/repository/req_client_pool.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 11280,
+      "sha256": "07adec9c0005700e0ab19e4138d41f83b9263c525212e36e9e156344d2e85f29",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/repository/req_client_pool_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 4975,
+      "sha256": "2f936260a29ab53985587e0de4ef823193e1b50ccb15b69a369af5902816b727",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/repository/wire.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 7531,
+      "sha256": "b792ae547b1ae02c252d52005671360e8084ae4bcbd803a04ec3c4dc955053f1",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/server/routes/admin.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 38805,
+      "sha256": "0ae2de61476cc58b10f355c8cad444d1a0d72958bc495005c0e8fd727a0a1acc",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/server/routes/composite_platform_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 9569,
+      "sha256": "a3687b9217df2d0dff41a8e43e3b3ea635c4f2c4e0d99d4311242828e1051480",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/server/routes/gateway.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 23748,
+      "sha256": "5715a7f55b933c51f038352105e8ee3061db2242328e4095209a6f6e45e4b97d",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/account_credential_shadow_skip_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 3364,
+      "sha256": "0ecc642327159b3320f0d9d9970c8e53eebc13ae9deacee04798d395d56e71a7",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/account_long_context_billing_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 10472,
+      "sha256": "b784c187ef5c94417c358cffaeb0408e70af01030deff0f39f622c601d6acdc9",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/account_test_service.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 75983,
+      "sha256": "31131d8e55d10873a84afc88243213fef9ed79eb938cbdd0017e74ef19d87bdd",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/account_test_service_openai_compact_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 15284,
+      "sha256": "3712719ee346944d6f3adf8ccb5683e4941982043c0ae0843b8858782cd1b5f7",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/account_test_service_openai_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 32045,
+      "sha256": "39802141e18d82ffc71075f60da377f1f49af457cf04631443a95afadef7fee7",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/account_usage_service.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 68183,
+      "sha256": "b383d2881c699dd9833af1d33bdbddd13de83936366970a821a6b34940de1d71",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/account_usage_service_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 8542,
+      "sha256": "641799d7845653c61aa50209a34a04ad495ccc85bf3046aba7c7616c148b8b10",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/admin_account.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 64275,
+      "sha256": "e790803e4e720e753b1a90c94f253715842c6c259e4354828bf9c3f868a2dde0",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/admin_service.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 31011,
+      "sha256": "3cb0ea412468213af89ada776210fa5b73f92ce928dbe371e5e1dab59b633c4d",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/oauth_service.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 11316,
+      "sha256": "4c91bcfef3f6e916734ce1884374194f7eabead1cd0fdf0c520848276c030633",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_client_profile_registry.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 20881,
+      "sha256": "73df05a3f05384834e3328dc629224b55c29d9221eeb7fbf775fe33b2cec5eff",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_client_profile_registry_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 3993,
+      "sha256": "59019508413c972f99267bb4be06ba7187405655e79e7967f18e67108bb90370",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_1a_binding.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 2966,
+      "sha256": "ee17db9cc376f9d4e5fb4f89bbb8b325ae921be0521a34186536db3a444e549e",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/official_egress_1a_transition.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1583,
+      "sha256": "ec105096676a26532732e2de819e26331719984d628516c4168e94bdfca99f41",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/official_egress_1a_transition_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1065,
+      "sha256": "ca0fee03bdaa6e631abcf1c30d88537d88530eb062dd0ce044d646ee11755d79",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/official_egress_1b_executor.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 14643,
+      "sha256": "35a5283720a4d492f2da8cad2e376187b6557dc180df8efa05cab4fd718d3c74",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/official_egress_1b_executor_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 3647,
+      "sha256": "234662695b52035b4c03efc339412bfa966b54b49c27bb415087a73b19b163ed",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/official_egress_1b_receipt_artifacts_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 9483,
+      "sha256": "f618bb1f8c4f6f3f2618a0259e4acd911e3db81fcaf86855ed2d5d00bd67f34c",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/official_egress_ast_test_helpers_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1050,
+      "sha256": "eab8125d9385c84af469de9d1bbacd6125c63a475d59295e7be9ded96ac6833d",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/official_egress_benchmark_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 3019,
+      "sha256": "66e0775b72be6456d71c5527b21664c1b06b9c743fdfb83515a808812331a846",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_changeset3_authority_ast_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 7003,
+      "sha256": "137fee752695c69ff277ed6fea0f0defe2e4151acf844bbd781e4ed88e1808d7",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/official_egress_changeset3_production_final_wire_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 37518,
+      "sha256": "0643f3acf17f40c341ca6d78b2918444cba45cdb230c70acab86830cfe65e886",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/official_egress_changeset5_final_wire_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 28708,
+      "sha256": "fdf8f9bd1a0c801deb352eca3b0f4eabb383e4df340b7266146fcbf70fc96442",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/official_egress_changeset5_legacy_extinction_ast_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 2792,
+      "sha256": "b4db9535afa4d51b35fdf769f8858346c64cf89e5fbe9ed92212483ef0607c12",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 29531,
+      "sha256": "58d1383eef95cb1224e47bf75cfe7369643f8fcc2879a5a9f9d148c711b17b96",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_0145_profile_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 42167,
+      "sha256": "aa19ff830453a815e790ce5321fdf00b9b75d427a3fbb1934004a5b1ea673d57",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_active_release.go",
+      "existence": "absent",
+      "file_type": "absent",
+      "mode": "",
+      "size": 0,
+      "sha256": "",
+      "git_status": " D"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 32554,
+      "sha256": "58affd5e0d5c3ec02b56b303a30ac388271a5868cf93116187e641959840ca7e",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_engine.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 37568,
+      "sha256": "4489f01e244ed5d027a417ba5d3d8485e4b6b67aea514fc3b13aee23a81d178d",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_engine_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 14464,
+      "sha256": "f87c705f3d0b92bef163b24edbb1a65c5054d16eb75fea1114fdd0dca8911225",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_files.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 17599,
+      "sha256": "9f4389d53158cff54932511db0cc25ac7c289646d35ab0b48a2201d965ff1ca5",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_files_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 14961,
+      "sha256": "74c37ee3bb1fddf60f538b0c5b74adf753358dd3562bf0f2f69d706891ac9d57",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_forward_runtime_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1400,
+      "sha256": "882bdb13b36a3730bbe1f9cd73ccb83dcb41fa7134d78556563b12b1894803f7",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_integration.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 26623,
+      "sha256": "d620fcecff1a94a32e0b43890e48d42660fcfe8ca755c4e82d34c0b1c20eb698",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_oauth.go",
+      "existence": "absent",
+      "file_type": "absent",
+      "mode": "",
+      "size": 0,
+      "sha256": "",
+      "git_status": " D"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_oauth_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 2029,
+      "sha256": "fd0b02f2180c85c1d58068d3063189945f04f6d65966826bed225be34667fc5a",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_release_projection.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 2634,
+      "sha256": "98bc8c4e7947d9a9d8c70fe85d78a0f2d0f7334338fe87d07570818ff0f8dafb",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_runtime_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 20829,
+      "sha256": "50fe022249183c1882e092bd1cb2fac067ae2d9abeebd0052822910607510160",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_version_upgrade_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1223,
+      "sha256": "4d3184afafd438702f380e6f756d9468d2c27bb40a90522457a46f409c27d0d2",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_finalizer_pairing_test.go",
+      "existence": "absent",
+      "file_type": "absent",
+      "mode": "",
+      "size": 0,
+      "sha256": "",
+      "git_status": " D"
+    },
+    {
+      "path": "backend/internal/service/official_egress_http_invocation.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 9986,
+      "sha256": "88c414efd01e8a3cd46dc3597ca16c3dee5b8287147213d87f7fcbbaa07c6bf5",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/official_egress_http_invocation_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 3469,
+      "sha256": "ff34032b91f345d55ebd3441158bf0024970afed1f08639fd6f3f03e77fadba8",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/official_egress_identity_authority.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 24836,
+      "sha256": "2f82dfdae81df71203e777163b680a4072132b8e9cc50e609ca275c022953cad",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/official_egress_inbound_host_headers_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 4581,
+      "sha256": "107a81ceedd00af012f6abcf930f5b233b08e57c1a833a39b67e246bd018c146",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_integration.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 17131,
+      "sha256": "5c9f958f3a6fb9146ede3cab1b6fc3298f6f057f709bd4c5ecab1e5b788bd4d7",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_legacy_dispatch.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 7484,
+      "sha256": "58610835e74dd99b52db1e87243192b772e6027457a6f0f1c02f44422a24fdd1",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_http.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 64821,
+      "sha256": "761b2cd67e0a794036987bf05ac2c6ab43f7c503bb10f7ce1fd635a19e020d24",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_http_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 64641,
+      "sha256": "19a794582d7539da585ead6a19f68009abac0a48fa613be085f2381020bcaaa1",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_json.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 13773,
+      "sha256": "3489b277dbb5c572ba44f94112bc0b5a218e36a4c533ce0df6e2c8cbcfecae20",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_json_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 5592,
+      "sha256": "7770ccb5d0c96db38fb706551ff5808ffa478c342e21b44e28599813a53da6c2",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_state.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 4433,
+      "sha256": "5d9447b33add4d18e60575c61ee497bc45c4b966981477863f8cff54f64a7e46",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_state_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 3223,
+      "sha256": "470a9e64584e6a617295f3dcc3b9c6914e9c46a9b0220bf92a487b44581734ab",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_ws.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 41692,
+      "sha256": "499f3aff3e94a80630cd9d0fac7dde23e194b46b36f84a42fc11a2046016b0ed",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_ws_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 37631,
+      "sha256": "04e82a4d903d5f7dfc9813898ad345f8531d2730be30efef3c14e928bf30d896",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_profile.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 42337,
+      "sha256": "2269dcfacea4b591d022670aaa5c2170fd91dc82c1f1faa992f4e2a27441e71a",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_test_helpers_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 2346,
+      "sha256": "cfd120b397603743c13873cd4ac38245d1ac19d46f3a20316cf085ff1a1da356",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/official_egress_transport.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 16270,
+      "sha256": "c0295b807d27232854bf7e0f045b4c26a082307f222cd3f51169092d3cd7e11d",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_transport_adapters.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 30261,
+      "sha256": "b9bf2d0c462eee41fb086f9798dea75f3fb80d366f36b66951b24aaf893b2f6b",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/official_egress_transport_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 11640,
+      "sha256": "f41ec770cc6ecb9809ed960101be8c3710fccc7afbab5f07e2fc9bc4c591a59a",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_version_leak_ast_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 52991,
+      "sha256": "201360c9a874296d054f3344272aaf76f444fc0d0eb3d244c790d764b8dc6190",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/official_egress_websocket_invocation.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 10160,
+      "sha256": "09c9d93c4b8db313a63f119fb92101b028a1566bccfbda53009ab5816f90f74b",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/official_egress_websocket_invocation_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 7424,
+      "sha256": "49bf534431c5cde4cdf0f56f787f22de7f0f59146f2fe20b6ecc7f739c097edf",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/official_egress_ws_guard_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 4775,
+      "sha256": "4023d6bf03b08ba2324687a5d4fcb8314a413efd47ec9bf5a3a77fdfb71353de",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/openai_agent_identity.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 17578,
+      "sha256": "2a581f2ff5be3629ab77a0fb7a8f897328538112c31ea391833ed06973d45ee7",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_agent_identity_compat_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 22447,
+      "sha256": "14d306d2d09a3e8a3b0400309083c361ab6125e32413c85dd812505962b7daad",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_agent_identity_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 8347,
+      "sha256": "694badb47f30cab137d85e96c9070fd821db69d5b5e258ea2818d351acc5e6f6",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_alpha_search.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 31127,
+      "sha256": "94fe9b253bf81f745b431d2ba8c754d88333b26fe930f130e6ec147833926cc4",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_alpha_search_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 27548,
+      "sha256": "cf043abdee853d94e20718cbb685ad25201f6d5eadde035951c266b0f30311b9",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_apikey_mimic_profile.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 7878,
+      "sha256": "050ceea6e968877c3145fef8ce017a4b2e6e7ef127febf61aefd581d179fa892",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_codex_models_service.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 34400,
+      "sha256": "6ed0f1e80ca8839c54e1d4f52256e75f476c2411770773f6c5338f72bd5a5266",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_codex_models_service_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 56566,
+      "sha256": "482b95cce39e4a4521fa52a7b131aba2a0f850005379008d428fce49efcd5783",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_codex_pat_service.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 6378,
+      "sha256": "0bc3a065f5fdbfa56c54b8de58d919eb86ff9dc87d234addcca9c19327a7c914",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_codex_pat_service_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 4629,
+      "sha256": "b75748811969eaa16de4e2bb5ecfe5163d0922e75a5ae6053274d7f93f47aa13",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_compact_probe.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 3504,
+      "sha256": "f392026335b79b445b77469e85f257677104e68f1557be9aba53a650e120f3d3",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_forward_plan.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 24296,
+      "sha256": "b182f97b108fa35a4cdcd5d731892cbe883fd254c414872d6bc3608b246e0fc7",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/openai_forward_plan_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 13973,
+      "sha256": "2dfe1d0c5558395549cc00b832665d59cebdc4c923c3daf2a4cd6d4bb0a7c16e",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_chat_completions.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 39592,
+      "sha256": "c95703e296c8674d1fadb6e82159ad3ef371ec273eb55cd9f182f6847311363d",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_forward.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 56588,
+      "sha256": "b4a6b64bd570ee7022c9209965b63c7a4b1ed0493dbbca6a6de59347c874d934",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_messages.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 46172,
+      "sha256": "3d499552ff51aeb02b9448455b2a1f47d6665c690b288d4855d6f791e00d22ec",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_passthrough.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 51705,
+      "sha256": "0ca664e9c7a74324316de4070725a135d7514dea5e4b9e376326dbd4a706d1c7",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_request_body.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 46685,
+      "sha256": "271db1e9a92fe5534fcc81ab87fb315afffb925aa2d75a97fa8968f0ea712157",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_service.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 42592,
+      "sha256": "7bfbfcf41bfa495ac9391f11ffa20850021d0277b327eef9df93317edd986304",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_images_responses.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 72169,
+      "sha256": "93462ad571b21733a7f055892bb2d9f9c6083021e10103d903d686baba65d700",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_images_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 75170,
+      "sha256": "5d33a8813be2df7fb0abcbc70b6bc125299e3660d19065789ead57f7b91bf52a",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_live.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 32876,
+      "sha256": "e6a3c5f5b54267f7053b8ee5068324486ce8698e1495af9ef846b94611bb1ad6",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_live_lifecycle_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 20794,
+      "sha256": "ad15a2857dcbc51b8331d10db6d3fa73f9d0d675d48567103c9d7bb2b779eaac",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_live_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 16575,
+      "sha256": "b50585b08bee43c629ff5f5d8780e412f3e2d1860530d31e18654bc2ab1a1c34",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_model_capabilities_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 10430,
+      "sha256": "8c922f2209dbe499d9e036456fdbc08cfbd06f37bf02527b6c3ee67ef5c46818",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_oauth_service.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 26042,
+      "sha256": "7804a34437a93841f6fe27a358eb96c0b893a34b8599e5f15904c59086c73ab3",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_oauth_service_refresh_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 9410,
+      "sha256": "f397d24af75e8e35b372a0d424134f42fea371f01e36527de53ff4eb08e4c91c",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_privacy_changeset1b_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 2465,
+      "sha256": "b3526efe3b4cc7d9edd481e199c4e6a0eb4f0eb839e04152992c8387c4013128",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/openai_privacy_production_chain_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 7190,
+      "sha256": "e82bfe8599d297f5c15d2848b3ff970642f68c5e19106054b85486c9de26df55",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/openai_privacy_retry_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 11624,
+      "sha256": "392f4f7337ea313d08350f4285881d0bda52dc508548344285779c66b89d3343",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_privacy_service.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 22952,
+      "sha256": "dbab4ebb565fe21b49234639edbc5e4fba196b11cacee89e3dbcef7ca5e2e635",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_quota_service.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 34275,
+      "sha256": "cca5be1e84b98719955277a39db77ae46a69b9e3e47826adac93573863d14c60",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_quota_spark_window_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 30817,
+      "sha256": "815f5ce4e12ddca6fde0af8fb7d6c1e2d4b076ead15559b720c57fcab17823f9",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_responses_lite_tools_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 11793,
+      "sha256": "4e3afa44c0391254a16b7ff599d98867ded7f3a92fd98e22faf8263e9b26ddc0",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_subscription_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 4587,
+      "sha256": "8a81da78f3d68b2aadfd8df10540aa5ce5a6e599f67ea5b20db33c0a8b9f38d5",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_upstream_http.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 9607,
+      "sha256": "2358d9f57a1d8ee52da6d6223e4357f499d90df2d8cef1cc374e1d3ac2b5d83e",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_upstream_http_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 14043,
+      "sha256": "bcb37a84740f4af90329bbffdd760de4c19bd5e7d38d01295d15b8d775f3368b",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_wham_changeset1b_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 12447,
+      "sha256": "b1269d043c24708af36096844b557179c92ddb6e4fcf7118cea2ab403cbcd20c",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/openai_wham_matrix.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 13613,
+      "sha256": "65b36c73e5b966fd0b3feb552840e1342e306ba8b14a7b3baa11735d99b8b12b",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/openai_wham_matrix_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 7183,
+      "sha256": "95cdae8be31c1728bdbd513b6de48c8699650a4e044145c7af421a7fa2a7c664",
+      "git_status": "??"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_client.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 11494,
+      "sha256": "65a9cb0580dd715e9d49b1680318d3224e92143ffcf7dbb7bcfaad521de4be85",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_client_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 3722,
+      "sha256": "43150d281da5cef8491b60231c15da81d1e2d921828a088c33aa3ec7927d1b31",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_ingress.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 75484,
+      "sha256": "41a3b5edf3ac81fe6d47667fa55193029ff04d8f158d3860f959a809a952c15c",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_payload.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 21920,
+      "sha256": "23bef7eaf41881b223c6d33ebfd54beeda81c8e7aff9dabf7b1a9a919882f90f",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_support.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 24827,
+      "sha256": "a3f21a097b4f9b82b0bba4f42d69d11989a7bae97ad79047a36d5cbb6b497be3",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_v2.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 31255,
+      "sha256": "355d5fb32b15f4a95a5e8883478f13cf1fc96b4d35bb6933b541c570baeb4582",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_http_bridge.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 22681,
+      "sha256": "6a4cf1a6809f18c6901d5b31493b27ec8292c194d462e2e465a67f9510a79121",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_http_bridge_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 44216,
+      "sha256": "3f2636b9c9d21d672f16a265d3f23bb48fddb5405cddcfafacbf9158b87a1c23",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_pool.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 53668,
+      "sha256": "9cf9cb230d0f11130b39dbaf817532124b60bff74e40e28a5df9ec95ea6d2193",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_pool_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 71191,
+      "sha256": "3902b80ec7a04d4751e7e98f99c757a050450c8a25823410b837ac44925de4f7",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_v2_passthrough_adapter.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 59448,
+      "sha256": "39b21ef04cc8e095885399027c119da1892100e1fc227ef1b985618ae21fcd3c",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/testdata/official_egress_version_leak_ast.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 5075,
+      "sha256": "aa6de35bee95dfeb6368b199efa5ad6826109d201add5905305d0274184f0401",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/token_refresh_service.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 47565,
+      "sha256": "24f573a922ad0b10fa487240bfa41511d1c62f91838227aaf6ba547fbfa5f608",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/token_refresh_service_candidates_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 7705,
+      "sha256": "d788570da376ae5c7a8bc8ff79f099ff5e44ddb3612fffd4f2348471ebef09ef",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/upstream_path_guard_test.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 6067,
+      "sha256": "0e63a0773bb2ce38f46a25a555d5594e9f7d5d0a54494ac350b0d53979c8c45b",
+      "git_status": " M"
+    },
+    {
+      "path": "backend/internal/service/wire.go",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 34210,
+      "sha256": "b987c2b87b65916d424d864cd2eadea5dc194ca8976a3685aafef7f75ab8ef70",
+      "git_status": " M"
+    },
+    {
+      "path": "deploy/config.example.yaml",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 61292,
+      "sha256": "4a6ad8b4895213f35eda9ff83abed59575739a645a78d8ae97a6a1797f497f66",
+      "git_status": " M"
+    },
+    {
+      "path": "docs/1.md",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 58940,
+      "sha256": "168444916f3fcadd715231a71b54e30ed35d3e753a9f53487770ab82c2c9b1a0",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/CODEX_CLI_0145_EGRESS_SPEC.md",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 95074,
+      "sha256": "e44716bd416596c28b0664453ddd2f52d68629e396866c546c54d1638bf7f0d3",
+      "git_status": " M"
+    },
+    {
+      "path": "docs/Claude_code_21220_EGRESS_SPEC.md",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 123242,
+      "sha256": "546336148378eadc38483949ff031d58ccc9befadd0d63ee844327fc0157ece8",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset0/README.md",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 7311,
+      "sha256": "517cbe6ca5202966fd9ac8e1099933700073211e4f75259660c1d99ed71242b1",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset0/guard-state-machine.md",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 11579,
+      "sha256": "234c96abd15228e4b7a06905138b104045a1d1344f8c22469092a07c2cdd5885",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset0/header-ownership.md",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 10001,
+      "sha256": "42a07a6fd28696e2d09089700ef098780298b59320496108b39dfd0a373ea2fc",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset0/package-api.md",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 11197,
+      "sha256": "d803ac80b42966372536e171696d4b6c22f4c9656014d3cb376f032d350d8b58",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset0/persona-catalog.md",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 9689,
+      "sha256": "5d8d24bce5966a6f4e7d698830940597eedfb545e115567d5e4a4ba4d797fbb3",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset0/probe-behavior.md",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 10642,
+      "sha256": "f9665c4449a71f88f4fb8629f74c74de6055e96f616c8b4c27b8752c0a9b98d0",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset0/sink-baseline.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 235867,
+      "sha256": "46593243b1bd315eafcb54335502a1f46bc2b8bfc0ecc2d3146da4e7087bfaeb",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset0/sink-inventory.md",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 19405,
+      "sha256": "aa9cc852c75400e40f18cd17662973d999cfad393a3e9e487f254d7a56e69ead",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset0/sink-stats.md",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1043,
+      "sha256": "dad459c1de02f772e8fdd11170afbf7fbf56b95c7e596ee309e3f2542ff3a836",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/README.md",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 9027,
+      "sha256": "1d6e79d6f6304eda830286e697a41d7e34df86d7f4fda8f548b2f4db66eb93f9",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/bootstrap-inventory-lock.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 766,
+      "sha256": "d51fc2b9ab74b71c875b73813e289c73a9ad1ccc5ba0be8875d3127e6aa90835",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/catalog-amendments.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 4396,
+      "sha256": "325e7f918147a9876b9ec3fcecc09c96219ba7425b686376767365725d1a46b5",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/legacy-baseline.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1073,
+      "sha256": "42c49c9000221d30671398b9870297c80d0d6c2b84dfc1e3918056cb7c4c68db",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/legacy-ceiling.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1031,
+      "sha256": "f744ab46c8f509577ee4a88050e426bc9c04152b39bc5f6f0d0877d4b99cc58d",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/legacy-seal-receipt.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 383,
+      "sha256": "d86a8a41a2a15b054f4b6dec2ec14909895c238eb5f4f50fc15d8ce4aed9a279",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/migration-artifacts/README.md",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 488,
+      "sha256": "d6779aeee68754a11715e584c67974445148b8dded0727b62023a5be116957d0",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/migration-artifacts/changeset1b/codex_admin_test_compact/canary-acceptance.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 396,
+      "sha256": "b0c33f6a0c0f1b9413b1853d3bdd4fa617a4a437d6988ec1b8b7eaab75492aba",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/migration-artifacts/changeset1b/codex_admin_test_compact/canary-observation.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 565,
+      "sha256": "b0857f9a2ffd93e2625817dc42796a22c9e4afb54ab6aaec348da7d45e083923",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/migration-artifacts/changeset1b/codex_admin_test_compact/execution-verification.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 707,
+      "sha256": "88c08faeb1439af192c1bae53a8524829e68a332e9b668c501bd817095d798be",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/migration-artifacts/changeset1b/codex_admin_test_compact/wire.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 976,
+      "sha256": "067be318397805c0a4c0319b2fd3c2974ef8c475a0de5f4b31ba6cc2412d2d42",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/migration-artifacts/changeset1b/codex_admin_test_responses/canary-acceptance.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 398,
+      "sha256": "00ad671c9718403be31db67225f769095ea0fba5a525d6833c7575dc3a5d9aed",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/migration-artifacts/changeset1b/codex_admin_test_responses/canary-observation.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 577,
+      "sha256": "ce0b4a83e0699c2ef886fa330f139edef1b3ea2a6051a41b7861d152f4e95ed2",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/migration-artifacts/changeset1b/codex_admin_test_responses/execution-verification.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 700,
+      "sha256": "54dfce75ddbd738a541e398ee7dfa7df7a6453783ba8e9cc28aa5ab3cdadd4cf",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/migration-artifacts/changeset1b/codex_admin_test_responses/wire.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1105,
+      "sha256": "a598b7bc90486d2f267338f23301ca0967bfe2dbe1036e0b9f6fb8d337190cdb",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/migration-artifacts/changeset1b/codex_alpha_search_pat_fallback/canary-acceptance.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 403,
+      "sha256": "1abd46464f284d2f4e943a08c6d1adbd50bf9a0845aa3245c1bf5d82ac0741d1",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/migration-artifacts/changeset1b/codex_alpha_search_pat_fallback/canary-observation.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 668,
+      "sha256": "80719f7864d4c5f0ecb020cf61b45fe38b6076012ae774947a8a951f6db32ac8",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/migration-artifacts/changeset1b/codex_alpha_search_pat_fallback/execution-verification.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 714,
+      "sha256": "23ad4182a6fdaf0ad23c5efb7fea90efe0b3e36dd996609d0bd37ff18f440320",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/migration-artifacts/changeset1b/codex_alpha_search_pat_fallback/wire.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1119,
+      "sha256": "8c1fa40066ac0a0740bca75257ca1f921f0b5d9dc06aab5eef604dfb235c1433",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/migration-artifacts/changeset1b/codex_usage_probe/canary-acceptance.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 389,
+      "sha256": "4d163c2a91931f4f0b974b5442e8f59ec7e34ba9aaf3c48cf3ca63e098405b11",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/migration-artifacts/changeset1b/codex_usage_probe/canary-observation.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 577,
+      "sha256": "a08210892f950f3f14d62dbe008fb92a875843ecae210fabda4ad1839b39efdc",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/migration-artifacts/changeset1b/codex_usage_probe/execution-verification.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 682,
+      "sha256": "e5b21409ca0eae35bfd3176072fdedfc7d212fe73549f95a638403f545a3bde9",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/migration-artifacts/changeset1b/codex_usage_probe/wire.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1087,
+      "sha256": "8eefec78f4399d67731b6215bd578ba5729bd901c3760c45e88fb08f799c1840",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/migration-receipts.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 17306,
+      "sha256": "94ff0e21cded16b08ba5b9ed4cabd9950a367d0c1fba2924d8d2e1313a6ba4a7",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/pre-bootstrap-supplements.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 207,
+      "sha256": "1cc5679fed023d11aa22c78084d1c53f36981a74604276d0d4e3e08900e124a3",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1a/removal-receipts.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 6647,
+      "sha256": "7d9d57cd30bcde5e1b7eacb35d8fcd2b65c80b8799955eb5537e91829bc90282",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1b/README.md",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 12498,
+      "sha256": "c72213888c27720770d1e32da64996e23a86002d72aa22a31f8ebf1d1d67a80d",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1b/chrome-live-capture.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1553,
+      "sha256": "2d496708cbc742845ec8fc47ee11ae16778b0184e93aa8d579db3ef33b3a0d16",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1c/README.md",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 2677,
+      "sha256": "4fe5f61d3e786a9569d9bf2d771f48ec82418b4c7a9679ff2055f237927e6960",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1c/active-exercises.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 6053,
+      "sha256": "88dc1e2dfed3ffa4dd78718cfc701ce917fdd0d447a86f25dfaf524a3aedb80b",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1c/guard-events.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 4158,
+      "sha256": "f98d39a7f5e3f489937d2a2fb65439d314d5c9a64314917465074689fdbe25d4",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset1c/verification.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 2130,
+      "sha256": "406790674b55bfdadc2dec4edc88457518b4001bb7a6f0feca42ff8445816017",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset2/README.md",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 3927,
+      "sha256": "57bfd67ded919c8524dfb2ba45288d3c9c91124643e8a5e369abe3158c1df3f6",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset2/active-source-inventory.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 3134,
+      "sha256": "ad5841e48f0e579b6949ae06d75f47c218a715df1cf253c66ff7958f72cfd44d",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset2/bootstrap-inventory-lock.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 868,
+      "sha256": "b829d76d47d6ed37f121a4b5619de4c8c40573eb9bc300af61cc9970cbe886e3",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset2/compatibility-lock.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 5480,
+      "sha256": "9bba3772a4cd657a16a331ca6c2b41b2380006de8b1936f550067b6c38bfde7b",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset2/oauth-evidence/README.md",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 966,
+      "sha256": "07197f9391f7de9fc04acc51259729026bf8d223aee4ec6f4c26168aa16c5b7b",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset2/oauth-evidence/SHA256SUMS",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 431,
+      "sha256": "a2c43990d2df3d7dab23a25262e05a7655a72126f3f804ea26885ccc81118ad1",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset2/oauth-evidence/authorization-code-exchange.raw",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 342,
+      "sha256": "743659b6d5323d2390189cd15b0d046642311abd90023e3e2158d6cd536083b6",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset2/oauth-evidence/environment.txt",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 439,
+      "sha256": "028f7c7bce37d5a6ee229933b1cff4079456f7d4e29ce163564cd575652924ea",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset2/oauth-evidence/oauth-refresh.raw",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 320,
+      "sha256": "a93ecceea7b2307774f8307a0aea24c63cf0f9d982352e113611cd9ae584a7da",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset2/oauth-evidence/secret-scan.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 325,
+      "sha256": "8412dcbfc813fcac88d22654042f73baca15a96d53aa4821e6b3b1dd10059498",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset2/oauth-evidence/verification.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1251,
+      "sha256": "91b216e6be1588ec76cc6807d406db4360f8fe26c408ebb9966b9afd83616531",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset2/removal-receipts.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 50081,
+      "sha256": "c9e0edee6deaa742ca4be85addc02b9c2e2dcd31f15302e676b7830c8e1f8d10",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset2/scanner-candidates.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 15491,
+      "sha256": "a08413d8ca81c407b0cbe4d54ca3081e4e8af239d5badf6954876099bfe92d6e",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset2/verification.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 4550,
+      "sha256": "fdaede271d00ef5060289c1fbc366ea4bf01507abf8e7f88e5d345865e2b1381",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset4/acceptance-report.md",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 4490,
+      "sha256": "24089b010460095e2a5cbffa2fadd18eb5f6979760d9ef8d9257d6ab67c901a0",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset4/base-files.sha256",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 75481,
+      "sha256": "701782a72cf23b032e9a11aed5d08de9978cc5041f52ed7aa731035c94e7369e",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset4/base-receipt.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1637,
+      "sha256": "95c11c24707242adca40456495c6be2113a56d37d5964696a00936c2973020bf",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset4/changeset3-source-transition.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 3234,
+      "sha256": "85cfb8e5324b5063b480f5e27cab1781500a5a3aba1957aae581f0ed0e62d478",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/0145-pre-refactor-inventory.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 42091,
+      "sha256": "6117360b2d179538717966ecce64771177818a5b950a2c8122b1c5737f3d9401",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/0145-symbol-allowlist.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 460,
+      "sha256": "6a8f74076c01e1af35aab6bca42c818b523edc45a8cd91751011954ff54cec09",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/acceptance-report.md",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 6568,
+      "sha256": "f6eedea5df1abaf89bc699b04c84ffef92632671622d28a2e6b435813d04a353",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/adapter-source-transition.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1800,
+      "sha256": "038ae2e40bc42bf4b497bb406795a1ed4019215bf45332ffdb597f62b2176e2e",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/bootstrap-inventory-lock.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 771,
+      "sha256": "7c1f89db30fc4164c5b6a186a338242433416d97695885ee62c2215e1d61c877",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/changeset3-source-transition.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1705,
+      "sha256": "e022d78b3af69a937a60a388009fa4ecafa8042410cf5602f32ecff7c29b176d",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/conflict-classification-amendments.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1676,
+      "sha256": "53fbdbad39153065aba599fe9b73fa576a1aefbabf89bf6fc870b391c65ff9a3",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/conflict-inventory/full.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 401083,
+      "sha256": "6fee65be361be40bd8abb1d16bc88b10f9877dc475899549e15afbae0870a470",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/conflict-inventory/governable.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 169002,
+      "sha256": "bc1ab9379486d510f40fb8d94fa660cd069af88d6d8fe5a3a99317fa19f93fcf",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/conflict-inventory/receipt.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 621,
+      "sha256": "8c2a8c81f7452d137f35408df8cdcb97b81357aa4735900d090d23357ded1785",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/conflict-migration-receipt.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 4762,
+      "sha256": "f81b127ba6198ff72be55b6d320cf2acf70bb398a55c598f3e5b139b7eb9e93a",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/egress-surface-inventory.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 6491,
+      "sha256": "569212ecc10787a9524ba69844fa3fcc4f6a45295f46e2492427461ebe680d60",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/final-wire-normalization-transition.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1609,
+      "sha256": "c037cc323431ac3180ab98e9e229d3cc1e6e3a34371b8c793dbf3ff25b7c2445",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/legacy-symbol-inventory.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1182,
+      "sha256": "7be87aeec0dfef8585d8b999becf4977ac726578a9ba85238718268a5dfa2648",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/normalized-pre-refactor-final-wire/manifest.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 377368,
+      "sha256": "51501f4c140a417d81c3d1a8f8525be4ef2f77c11248ffa63ca8e50150d011f7",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/normalized-pre-refactor-final-wire/receipt.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1251,
+      "sha256": "90e6ddfdaa9d200ec0a51523b4ff6cec8d56b6c67fd5ddb2d51d9b10382c8491",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/normalized-pre-refactor-final-wire/secret-scan.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 373,
+      "sha256": "281bcfae80abb2b60156a71fa8d3d3fe9667f52196762a0ba15794bf1c82e438",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/pairing-gate-retirement.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1425,
+      "sha256": "156795594c134f3bc0112c7f4605c0d4534dbadad0441014190f192c52f820db",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/post-refactor-conflict-inventory/full.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 381421,
+      "sha256": "6a3c0a45339da65a01ae2e5d591cb682046f33fe35464583c66155dfe318c816",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/post-refactor-conflict-inventory/governable.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 149339,
+      "sha256": "03c2d35555febf086caffdd7ab03625353be5f1146064c19aebfc50b44543118",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/post-refactor-conflict-inventory/receipt.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 648,
+      "sha256": "e263d3b6199f6c411c4c48c4a59c19be773c48e8a61df3d0301fe9b112bcc9b4",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/post-refactor-final-wire/manifest.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 377344,
+      "sha256": "3b1dfc541086da317c288bc064016acda9003780f907c3d5ae6c1720a7a78fb5",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/post-refactor-final-wire/receipt.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1529,
+      "sha256": "9a9c8d86f4b35a33f5f6615e27e21bec25e7860eae5e533fec9333897554c1de",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/post-refactor-final-wire/secret-scan.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 363,
+      "sha256": "ee808ca8738c8d04e5d4c5ad3ae09b4e649c32758c8f982f0b65874416f6ffc2",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/pre-refactor-final-wire/manifest.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 377368,
+      "sha256": "959b3179c0a54ffa81fa58057e43994e237f1f8565de0f28788a01f18e2d316d",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/pre-refactor-final-wire/receipt.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1060,
+      "sha256": "3cb84244a4a5b0a1d056bdff5616eea8bcc49c668f6c3039722c4c8e187edabd",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/pre-refactor-final-wire/secret-scan.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 362,
+      "sha256": "6446d2ce06d745dd1240a513b77d261cca89a719ab9e6e34164891fce60e7488",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/removal-receipts.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 2277,
+      "sha256": "6145bde9e8d6a34b64d3f3751224860d97a99be3f7862b244ecade0a68da84d7",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/workspace-baseline/manifest.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 199184,
+      "sha256": "c0d23f184627ff2d1b2aa7705db63d9a7f11c5bcc31adbe64cc9a72a11a50162",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/workspace-baseline/receipt.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 432,
+      "sha256": "97bea92fe429fcad67fa3cb3bca086f9e7f5aa03478cf8b4e333ce1f3700a33e",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/workspace-transition/manifest.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 44383,
+      "sha256": "5e144f2f88b62c27647ab0557a7020a19fb1a54dedb0ef598e13f6c387716698",
+      "git_status": "??"
+    },
+    {
+      "path": "docs/changeset5/workspace-transition/receipt.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 671,
+      "sha256": "e38384f401dcd2cb93f4e900926cb84b606f29685237c8394edb718ffaa87af1",
+      "git_status": "??"
+    },
+    {
+      "path": "frontend/src/api/__tests__/admin.accounts.openaiOAuth.spec.ts",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1511,
+      "sha256": "050d2057e133878dd367f85c30b7555891109f314e2ba6e04659a2e97e21734e",
+      "git_status": "??"
+    },
+    {
+      "path": "frontend/src/api/admin/accounts.ts",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 31410,
+      "sha256": "c8d4a58c8ad7c0800e5597b27975645a00c009e0ada521203ff667571efcf8c7",
+      "git_status": " M"
+    },
+    {
+      "path": "frontend/src/components/account/CreateAccountModal.vue",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 248888,
+      "sha256": "d6ee97e353588ec610e1b90bed75a3a48bfbc94e898d80e4bfd1fa637d782571",
+      "git_status": " M"
+    },
+    {
+      "path": "frontend/src/components/account/ReAuthAccountModal.vue",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 18046,
+      "sha256": "198471215b3acf6dd45906a42a39d1f8b25e8e05198e196b1f801228667832cb",
+      "git_status": " M"
+    },
+    {
+      "path": "frontend/src/components/account/__tests__/CreateAccountModal.spec.ts",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 12471,
+      "sha256": "d024dca0a29070505694e8eeb4ace7554d48ae4c1bbfcdf689bd2453a3a806d7",
+      "git_status": " M"
+    },
+    {
+      "path": "frontend/src/components/admin/account/ReAuthAccountModal.vue",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 19861,
+      "sha256": "1a790991d276326eb574e6d5f8c65c351c9200ff2a3375c36b58fe9f1cd2e979",
+      "git_status": " M"
+    },
+    {
+      "path": "frontend/src/components/admin/account/__tests__/ReAuthAccountModal.openaiOAuth.spec.ts",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 3343,
+      "sha256": "b4da43db0a6979ebb9dd80660d3c94f8764b6da7093b9804292a3472ef3a1b80",
+      "git_status": "??"
+    },
+    {
+      "path": "tools/changeset5_workspace_baseline.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 23980,
+      "sha256": "ee0969656d1f97d8b42fa3e3842075c1f8b1d56a21fbf1052363c82e588ab928",
+      "git_status": "??"
+    },
+    {
+      "path": "tools/check_changeset5_0145_symbols.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 7076,
+      "sha256": "284ebc0e98824d2795ac2700c34e330503d633547a82853d26cf56f51705aa4f",
+      "git_status": "??"
+    },
+    {
+      "path": "tools/check_ledger_completeness.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 8405,
+      "sha256": "f7e52121b3ea5178c5832cd776a6e8da906dbf0d512a6786ea0a8bb8b2052baa",
+      "git_status": " M"
+    },
+    {
+      "path": "tools/official_client_capture/addons/mitm_capture.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 13269,
+      "sha256": "5622963829b5425ae047c2b8d0028c071313231af6346c695542eb6cab9fd556",
+      "git_status": " M"
+    },
+    {
+      "path": "tools/official_client_capture/analyze_claude_21220_pending_evidence.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 74891,
+      "sha256": "d721c2d02fd0f8f325f65b5f3dacfb30723c34f0c6e137408370fbb1fb33011c",
+      "git_status": "??"
+    },
+    {
+      "path": "tools/official_client_capture/capture.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 52578,
+      "sha256": "8c6637d3ab956f293475bf1061ea7bc38c981180af97c8b0c2ddcb83a62cd32e",
+      "git_status": " M"
+    },
+    {
+      "path": "tools/official_client_capture/capturelib/environment.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 10262,
+      "sha256": "db5ccda5e8f271b777a7652dcfe5a01c25ed858cdc1d7bf66a03718e88a24166",
+      "git_status": " M"
+    },
+    {
+      "path": "tools/official_client_capture/capturelib/identity.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1872,
+      "sha256": "1574c01cf77ec69698a5b0a5e5c6ec2fa86cd38d1897bde8a5d6f67446efc59a",
+      "git_status": "??"
+    },
+    {
+      "path": "tools/official_client_capture/capturelib/lifecycle.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 17526,
+      "sha256": "21c5435bbde21f9c91e7d0b02d497015d349bd05ed3393cf6129ca3569735d81",
+      "git_status": " M"
+    },
+    {
+      "path": "tools/official_client_capture/capturelib/manifest.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 4728,
+      "sha256": "cdc00f016d20ccc0b181cc64e9a15bae03664c77b0794f7a0787a682ea7c8f65",
+      "git_status": " M"
+    },
+    {
+      "path": "tools/official_client_capture/capturelib/model.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 9743,
+      "sha256": "833d3697b80bebfc1780c96fef1250d69ee12a0ce9e802f6dad697df960148e8",
+      "git_status": " M"
+    },
+    {
+      "path": "tools/official_client_capture/capturelib/scenarios.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 44792,
+      "sha256": "ed27c7528b59fddd1981cd482586e35fa3dd3658f7b1ad0af769ea27afbc74df",
+      "git_status": " M"
+    },
+    {
+      "path": "tools/official_client_capture/capturelib/security.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 11501,
+      "sha256": "d339708cb78a9ada9b59f97d61c941adf55c4f84acb69ff44bfc0b17f3d8499b",
+      "git_status": " M"
+    },
+    {
+      "path": "tools/official_client_capture/claude_21220/check_coverage.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 157489,
+      "sha256": "3888380364ff2dd55a645e8489d7cff81b46174d18dd5a28453ec472a312485a",
+      "git_status": " M"
+    },
+    {
+      "path": "tools/official_client_capture/claude_21220/hitcc_2_1_197_coverage.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 147323,
+      "sha256": "ad76c56304ddd0aa11cd35cd91647b3ce7041f68d94ce51e2803bd7cc0440bc5",
+      "git_status": " M"
+    },
+    {
+      "path": "tools/official_client_capture/claude_21220/rules_2_1_220.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0600",
+      "size": 200601,
+      "sha256": "b27ab95b3910cca5610a9a60188acf8ab072fe3643032e6f9bfc9b6b7657c7bf",
+      "git_status": " M"
+    },
+    {
+      "path": "tools/official_client_capture/claude_21220/source_2_1_88_coverage.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0600",
+      "size": 704336,
+      "sha256": "be04643165027f798cfc48051577bcfcfb1c89cd0a00daf6b09616665737f6f8",
+      "git_status": " M"
+    },
+    {
+      "path": "tools/official_client_capture/extract_claude_bundle.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 23754,
+      "sha256": "6336bf7c8bafdaaa8a4c4c309e1613c93eb98cdf33830fdae25a122f3447ed82",
+      "git_status": " M"
+    },
+    {
+      "path": "tools/official_client_capture/post_run_secret_scan_receipt.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 21961,
+      "sha256": "af062e03f0e45315562577c07580185232d48b7db13be36cc31cba7d0626c035",
+      "git_status": "??"
+    },
+    {
+      "path": "tools/official_client_capture/runtime_host_receipt.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 6899,
+      "sha256": "7723376d7e8ef1f832ad1e3032b53ecb06ed8526946412f42135f18b10014a8a",
+      "git_status": "??"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_capture_validation.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 11345,
+      "sha256": "22b9032667cca75d2bb3066f16f227b05943b75504117cb947616c1aa4689ee0",
+      "git_status": " M"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_claude_21220_campaign_gate.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 8908,
+      "sha256": "848d833a5ae6513f961503d7131b1afd1655c634868c694aedadf2ec0950a3ce",
+      "git_status": "??"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_claude_21220_pending_evidence.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 22290,
+      "sha256": "8cfdf651b152faae000010b027409d41e14769e5620bb3b9bd694e473424ff0d",
+      "git_status": "??"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_commands.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 10156,
+      "sha256": "1f1b6fa7d59f7a0b752bb815595c1360330274800ade2f023ae58efcf39efe07",
+      "git_status": " M"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_environment.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 7969,
+      "sha256": "9f9a7a38027f677f34f7bac1a4ccb2387d5be987cd0e6a807c4e4ba3e71d79f4",
+      "git_status": " M"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_extract_claude_bundle.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 11680,
+      "sha256": "6bc5f685de1788d0d8650c6ecae4610f80cc86bb805235d30bac0bad7be02a87",
+      "git_status": "??"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_lifecycle.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 9571,
+      "sha256": "a4fa30fda888af838b5a3de466faa6bbaa54224847c25419a24bda144996944a",
+      "git_status": " M"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_mitm_capture_addon.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 3399,
+      "sha256": "5d1a010788a57d845d9dc42f148a201535a0ddb8d2f61e04bd8e9cf51aa3caa9",
+      "git_status": " M"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_post_run_secret_scan_receipt.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 18272,
+      "sha256": "87887df0d25735cfd4610c642dff1754a8a614d200427bcf0894ac630a065b78",
+      "git_status": "??"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_scenario_validation.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 18502,
+      "sha256": "3adc2754a9fc8dabad4ea77f34f4a0379f2615e0fd95110034cd360acaa51f31",
+      "git_status": " M"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_security.py",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 12255,
+      "sha256": "d901d7dd21ebe2bd35300ad076d3ba3f882558889d9d3b6f30bc9bd7cb21daaf",
+      "git_status": " M"
+    },
+    {
+      "path": "tools/scan_egress_sinks.py",
+      "existence": "absent",
+      "file_type": "absent",
+      "mode": "",
+      "size": 0,
+      "sha256": "",
+      "git_status": " D"
+    },
+    {
+      "path": "tools/version_leak_baseline.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 4016,
+      "sha256": "17a568895d6284f44db200cfd469f39fe8ab1ebd129b8388a716ef9564f55681",
+      "git_status": " M"
+    }
+  ],
+  "changeset5_post_final_wire": [
+    {
+      "path": "docs/changeset5/post-refactor-final-wire/manifest.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 377344,
+      "sha256": "3b1dfc541086da317c288bc064016acda9003780f907c3d5ae6c1720a7a78fb5"
+    },
+    {
+      "path": "docs/changeset5/post-refactor-final-wire/secret-scan.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 363,
+      "sha256": "ee808ca8738c8d04e5d4c5ad3ae09b4e649c32758c8f982f0b65874416f6ffc2"
+    },
+    {
+      "path": "docs/changeset5/post-refactor-final-wire/receipt.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 1529,
+      "sha256": "9a9c8d86f4b35a33f5f6615e27e21bec25e7860eae5e533fec9333897554c1de"
+    }
+  ],
+  "runtime_release_data": [
+    {
+      "path": "backend/internal/officialegress/catalogdata/release-catalog.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 387,
+      "sha256": "aa2ad86b83c1be055e7986dfbc48e99168c62a8064b677a7a7e13e62002f44dc"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/testdata/snapshot-catalog.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 425,
+      "sha256": "a0bd44d512ec960c738f9f98797f7c7c1c43322d1d1988dea947257cb08497a9"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/testdata/snapshots/0.145.0/343991bad0f89614cd092778186f51eb23d5afbf4c98a198981639758bdf5431.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 49813,
+      "sha256": "ff503d73d7402fb0d6429a67b415aa7d2bc863a3002cf5e5ee9ab3baa3d7529f"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/testdata/snapshots/0.145.0/e0b59772622f14717f1fdf5c15bfae5758226a04fe8f030110d8a616e20fdf6b.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 50032,
+      "sha256": "36c6c0e4464e6182347210d05d17ea85f6121e98f70f3c36b6ffc2b4230a5c66"
+    },
+    {
+      "path": "backend/internal/officialegress/releasecontract/testdata/release-graph.json",
+      "existence": "present",
+      "file_type": "regular",
+      "mode": "0644",
+      "size": 3909,
+      "sha256": "54b20ae29a4bf0245998d7ed6692248738d8c8975c4af216f2705709b4fac5dd"
+    }
+  ],
+  "rules": [
+    "完整冻结开发前 git status --porcelain=v1 -z --untracked-files=all 路径闭集",
+    "基线记录工作区实际字节，不以 HEAD 内容冒充已验收非 clean 工作区",
+    "每个路径冻结存在状态、普通文件类型、权限、大小和 SHA-256，符号链接禁止",
+    "变更集 5 post final-wire 三件套只读引用，禁止重新生成或覆盖",
+    "变更集 6 自身目录和基线生成器不倒灌进开发前路径闭集"
+  ]
+}

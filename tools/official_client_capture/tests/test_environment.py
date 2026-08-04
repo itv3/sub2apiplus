@@ -8,6 +8,8 @@ from pathlib import Path
 
 from tools.official_client_capture.capturelib.environment import (
     build_case_environment,
+    environment_manifest_view,
+    parse_injected_env,
     prepare_api_state,
 )
 from tools.official_client_capture.capturelib.model import build_campaign_plan
@@ -164,6 +166,31 @@ class EnvironmentTest(unittest.TestCase):
             "fresh-oauth-token",
         )
         self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", codex_environment)
+
+    def test_environment_manifest_view_covers_all_keys_without_secret_hash(self) -> None:
+        view = environment_manifest_view(
+            {
+                "PATH": "/usr/bin",
+                "CLAUDE_CODE_OAUTH_TOKEN": "CANARY-SECRET",
+                "CLAUDE_CODE_REMOTE_SESSION_ID": "probe-session",
+            },
+            {"oauth_access": "CANARY-SECRET"},
+        )
+        self.assertEqual(
+            view["keys"],
+            ["CLAUDE_CODE_OAUTH_TOKEN", "CLAUDE_CODE_REMOTE_SESSION_ID", "PATH"],
+        )
+        self.assertTrue(view["values"]["CLAUDE_CODE_OAUTH_TOKEN"]["redacted"])
+        self.assertEqual(
+            view["values"]["CLAUDE_CODE_REMOTE_SESSION_ID"], "probe-session"
+        )
+        self.assertNotIn("CANARY-SECRET", str(view))
+
+    def test_subagent_depth_probe_is_an_explicit_whitelisted_variable(self) -> None:
+        self.assertEqual(
+            parse_injected_env(["CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH=3"]),
+            {"CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH": "3"},
+        )
 
 
 if __name__ == "__main__":

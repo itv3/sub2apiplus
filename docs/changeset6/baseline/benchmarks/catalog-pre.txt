@@ -1,0 +1,16 @@
+goos: darwin
+goarch: arm64
+pkg: github.com/Wei-Shaw/sub2api/internal/officialegress
+cpu: Apple M4
+BenchmarkReleaseCatalogResolve-10    	  356479	      3164 ns/op	    4908 B/op	      10 allocs/op
+BenchmarkReleaseCatalogResolve-10    	  362238	      3338 ns/op	    4910 B/op	      10 allocs/op
+BenchmarkReleaseCatalogResolve-10    	  368881	      3287 ns/op	    4909 B/op	      10 allocs/op
+BenchmarkReleaseCatalogResolve-10    	  362472	      3297 ns/op	    4910 B/op	      10 allocs/op
+BenchmarkReleaseCatalogResolve-10    	  364778	      3286 ns/op	    4909 B/op	      10 allocs/op
+BenchmarkReleaseCatalogResolve-10    	  362553	      3309 ns/op	    4909 B/op	      10 allocs/op
+BenchmarkReleaseCatalogResolve-10    	  367434	      3296 ns/op	    4909 B/op	      10 allocs/op
+BenchmarkReleaseCatalogResolve-10    	  365524	      3307 ns/op	    4909 B/op	      10 allocs/op
+BenchmarkReleaseCatalogResolve-10    	  369114	      3435 ns/op	    4908 B/op	      10 allocs/op
+BenchmarkReleaseCatalogResolve-10    	  358796	      3320 ns/op	    4909 B/op	      10 allocs/op
+PASS
+ok  	github.com/Wei-Shaw/sub2api/internal/officialegress	13.303s

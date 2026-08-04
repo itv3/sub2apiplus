@@ -16,8 +16,8 @@ import (
 // 字段被改动，测试仍然全绿，与完整 Codex 版本画像的摘要锁定形成保护不对称。
 // 聚合摘要覆盖全部画像却只需锁定一个常量；它变化时必须回到抓包证据确认改动属实，
 // 再同步 §3.5 台账与本常量。
-func TestOfficialClientProfileRegistryDigestsAreLocked(t *testing.T) {
-	profiles := defaultOfficialClientProfileRegistry.profiles
+func TestAnthropicClientProfileCatalogDigestsAreLocked(t *testing.T) {
+	profiles := defaultAnthropicClientProfileCatalog.profiles
 	entries := make([]string, 0, len(profiles))
 	for id, profile := range profiles {
 		require.NotEmptyf(t, profile.Digest, "official client 画像 %s 缺少摘要", id)
@@ -27,11 +27,8 @@ func TestOfficialClientProfileRegistryDigestsAreLocked(t *testing.T) {
 	sum := sha256.Sum256([]byte(strings.Join(entries, "\n")))
 	aggregate := hex.EncodeToString(sum[:])
 
-	const expectedProfileCount = 14
-	// 最近一次变更：移除 OAuth responses HTTP／WS 两条 purpose 上无人消费的
-	// StaticHeaders（见 officialClientWireProfileDefinitions 的说明）。抓包来源与
-	// build 身份未变，变的只是 registry 不再重复声明由 Finalizer 负责的 header。
-	const expectedAggregateDigest = "56bcb55667f79ca082dd0b966d16a725b58b53faf74c0a9d4b5eda60987b086a"
+	const expectedProfileCount = 6
+	const expectedAggregateDigest = "37e0a5db1b0f8f4957e01ba885ccf61facec6a258de1fb7c461851483188108e"
 	require.Equalf(
 		t,
 		expectedProfileCount,
@@ -99,12 +96,12 @@ func TestOfficialClientProfileRegistryFailsClosed(t *testing.T) {
 	require.Error(t, err)
 }
 
-func TestOfficialClientProfileRegistryKeepsAPIKeyWebSocketInactive(t *testing.T) {
+func TestOfficialClientProfileCatalogProjectsAPIKeyWebSocketFromRelease(t *testing.T) {
 	profile, err := resolveOfficialClientProfile(
 		officialClientPurposeOpenAIAPIKeyResponsesWS,
 		officialClientProfileModeActive,
 	)
 	require.NoError(t, err)
-	require.Contains(t, profile.Wire.ID, "inactive")
+	require.Contains(t, profile.Wire.ID, "apikey_projection")
 	require.NotContains(t, profile.Wire.StaticHeaders, officialClientHeaderValue{Name: "version", Value: "0.145.0"})
 }

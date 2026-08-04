@@ -1,0 +1,86 @@
+{
+  "schema_version": 1,
+  "changeset": "2",
+  "task": "2.0",
+  "snapshot_kind": "before_removal",
+  "production_files": [
+    {
+      "category": "transition_adapter_and_provider",
+      "paths": [
+        "backend/cmd/server/wire_gen.go",
+        "backend/internal/officialegress/executor.go",
+        "backend/internal/service/official_egress_1a_transition.go",
+        "backend/internal/service/official_egress_1b_executor.go",
+        "backend/internal/service/wire.go"
+      ],
+      "symbols": [
+        "OfficialEgressTransitionAdapter",
+        "ReleaseProvider"
+      ]
+    },
+    {
+      "category": "service_registry_and_export_bridges",
+      "paths": [
+        "backend/cmd/egressprofiledump/main.go",
+        "backend/internal/service/official_client_profile_registry.go",
+        "backend/internal/service/official_client_release_graph_export_contract.go",
+        "backend/internal/service/official_egress_profile_export_contract.go"
+      ],
+      "symbols": [
+        "officialClientProfileRegistry",
+        "ExportActiveCodexProfileSnapshot"
+      ]
+    },
+    {
+      "category": "active_version_and_wrappers",
+      "paths": [
+        "backend/internal/service/account_test_service.go",
+        "backend/internal/service/official_egress_codex_0145_profile.go",
+        "backend/internal/service/official_egress_codex_active_release.go",
+        "backend/internal/service/official_egress_codex_files.go",
+        "backend/internal/service/official_egress_codex_integration.go",
+        "backend/internal/service/official_egress_codex_oauth.go",
+        "backend/internal/service/official_egress_codex_transport.go",
+        "backend/internal/service/openai_alpha_search.go",
+        "backend/internal/service/openai_codex_models_service.go",
+        "backend/internal/service/openai_gateway_forward.go",
+        "backend/internal/service/openai_images_responses.go",
+        "backend/internal/service/openai_live.go",
+        "backend/internal/service/openai_quota_service.go"
+      ],
+      "symbols": [
+        "activeOfficialCodexVersion",
+        "resolveActiveCodexVersionProfile",
+        "resolveActiveCodexEndpoint",
+        "buildActiveCodexEndpointURL",
+        "resolveActiveCodexEndpointTLSProfile",
+        "resolveActiveCodexEndpointTLSProfileForURL",
+        "applyActiveCodexHeaderContract",
+        "projectActiveCodexEndpointJSONBody",
+        "validateAndOrderActiveCodexFormBody"
+      ]
+    },
+    {
+      "category": "package_active_body_order",
+      "paths": [
+        "backend/internal/service/official_egress_openai_json.go"
+      ],
+      "symbols": [
+        "officialOpenAIHTTPFieldOrder",
+        "officialOpenAICompactFieldOrder",
+        "officialOpenAIWSFieldOrder"
+      ]
+    },
+    {
+      "category": "repository_reverse_active_builder",
+      "paths": [
+        "backend/internal/repository/openai_oauth_service.go"
+      ],
+      "symbols": [
+        "ResolveActiveCodexOAuthExchangeProfile",
+        "BuildActiveCodexOAuthRefreshRequest"
+      ]
+    }
+  ],
+  "completion_rule": "任务 2.7 必须以静态门禁证明上述生产事实源及其同义包装引用归零"
+}

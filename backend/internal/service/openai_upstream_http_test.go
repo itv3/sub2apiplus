@@ -1,6 +1,7 @@
 package service
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"strings"
@@ -307,16 +308,7 @@ func TestOpenAIMimicTLSDecisionMatchesBetweenGatewayAndAccountTest(t *testing.T)
 	}
 }
 
-func TestDoOpenAIOfficialEgressHTTPSelectsDirectAndProxyProfiles(t *testing.T) {
-	account := officialEgressTestAccount(94, PlatformOpenAI)
-	egressContext := resolveOfficialEgressT3HTTPContext(
-		t,
-		account,
-		"/v1/responses",
-		"chatgpt.com",
-		"",
-	)
-
+func TestOfficialCodexExecutorHTTPSelectsDirectAndProxyProfiles(t *testing.T) {
 	for _, testCase := range []struct {
 		name            string
 		proxyURL        string
@@ -335,25 +327,34 @@ func TestDoOpenAIOfficialEgressHTTPSelectsDirectAndProxyProfiles(t *testing.T) {
 		},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
+			account := &Account{
+				ID: 94, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+				Credentials: map[string]any{
+					"access_token":       "executor-profile-test",
+					"chatgpt_account_id": "acct-executor-profile-test",
+				},
+			}
+			body := newOfficialOpenAIHTTPTestBody(t, false, false, true)
 			req, err := http.NewRequest(
 				http.MethodPost,
 				"https://chatgpt.com/backend-api/codex/responses",
-				strings.NewReader("{}"),
+				strings.NewReader(string(body)),
 			)
 			require.NoError(t, err)
-			req = req.WithContext(
-				WithOfficialEgressContext(req.Context(), egressContext),
-			)
+			req.Header.Set("Authorization", "Bearer executor-profile-test")
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "text/event-stream")
+			setOpenAIChatGPTAccountHeaders(req.Header, account)
 
 			recorder := &openAIHTTPUpstreamChoiceRecorder{}
-			resp, err := doOpenAIHTTPUpstreamWithProfile(
-				recorder,
-				req,
-				testCase.proxyURL,
-				account,
-				nil,
-				openAIAPIKeyCodexMimicProfile{},
-			)
+			runtimeState, err := newOfficialEgressTestRuntime(recorder)
+			require.NoError(t, err)
+			resp, err := runtimeState.ExecuteCodexHTTP(context.Background(), OfficialCodexHTTPExecution{
+				SinkID: officialEgressSinkResponsesForward, EndpointID: officialCodexEndpointResponsesHTTP,
+				Account: account, ProxyURL: testCase.proxyURL, Request: req,
+				PolicyID: "changeset3.http-profile-test", PolicySource: "test",
+				ConcurrencyLimit: 1,
+			})
 			require.NoError(t, err)
 			require.NoError(t, resp.Body.Close())
 			require.True(t, recorder.doWithTLSCalled)

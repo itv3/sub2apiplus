@@ -1,0 +1,1268 @@
+{
+  "schema_version": "changeset5-workspace-transition/v1",
+  "changeset": "5",
+  "baseline_manifest_path": "docs/changeset5/workspace-baseline/manifest.json",
+  "baseline_manifest_sha256": "c0d23f184627ff2d1b2aa7705db63d9a7f11c5bcc31adbe64cc9a72a11a50162",
+  "baseline_receipt_path": "docs/changeset5/workspace-baseline/receipt.json",
+  "baseline_receipt_sha256": "97bea92fe429fcad67fa3cb3bca086f9e7f5aa03478cf8b4e333ce1f3700a33e",
+  "frozen_path_count": 558,
+  "entry_count": 50,
+  "entries": [
+    {
+      "path": "Makefile",
+      "classification": "changeset5_prerequisite_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 8007,
+        "sha256": "5f63d5260033d65351ccf3c25120a2a6acea633c6fb26cdd8f78afdcb0d86265"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 9476,
+        "sha256": "eedc9abe0b25ce3a396fe2bb956662f865b7b06aa9810129d40f5e4e40d34813"
+      },
+      "reason": "接入并强化变更集 5 证据闭集与当前状态复算门禁",
+      "migration_units": [
+        "changeset5:evidence_gate_integration"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "make check-egress-spec",
+        "TestChangeset5WorkspaceBaselineIsIndependentlyFrozen"
+      ]
+    },
+    {
+      "path": "backend/cmd/egressscan/changeset3_source_gate_test.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 6842,
+        "sha256": "2e2241d21e152c257e2c7aaec1055f423c2d84b392e5952ccb59d9e0cb7de836"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 9932,
+        "sha256": "bca974838a50fdb803fd72db591d313fdd4ac0f8689e3bc73601d62a9f909784"
+      },
+      "reason": "登记 scanner 生命周期迁移、移除收据及当前源码锁",
+      "migration_units": [
+        "changeset5:scanner_source_lifecycle_transition"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/bootstrap-inventory-lock.json",
+        "docs/changeset5/removal-receipts.json"
+      ]
+    },
+    {
+      "path": "backend/cmd/egressscan/classify.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 42183,
+        "sha256": "d0a2e36d1d885a6b45a6fe05d9f2f5e2d89536f85d3fc3ff5db1691ffae6d524"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 43384,
+        "sha256": "316d7a21f9ac1c0201f6e60cdd1ed03a249bfb29706b322f760776d296e28f2f"
+      },
+      "reason": "登记 scanner 生命周期迁移、移除收据及当前源码锁",
+      "migration_units": [
+        "changeset5:scanner_source_lifecycle_transition"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/bootstrap-inventory-lock.json",
+        "docs/changeset5/removal-receipts.json"
+      ]
+    },
+    {
+      "path": "backend/cmd/egressscan/lifecycle_test.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 3509,
+        "sha256": "df54229c885e6f0fc1fc684846c6533ce2073a698567dab7868e690343ef798f"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 3872,
+        "sha256": "e0045321b535e90a086e2907ddbace06e59f63585295f71d75468bda82e7ab52"
+      },
+      "reason": "登记 scanner 生命周期迁移、移除收据及当前源码锁",
+      "migration_units": [
+        "changeset5:scanner_source_lifecycle_transition"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/bootstrap-inventory-lock.json",
+        "docs/changeset5/removal-receipts.json"
+      ]
+    },
+    {
+      "path": "backend/internal/handler/openai_gateway_handler.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 121371,
+        "sha256": "55fda2ebff7fdc985464b5f27f768853293020ef3b36ea9f9cc461f07b053d13"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 121363,
+        "sha256": "d45dd7cbf0775211d33ec0f4785263d2186a70e7de044af3f650653402a61b61"
+      },
+      "reason": "迁移版本中立官方出站逻辑并薄化共享接入点，保持非官方 fork 片段不变",
+      "migration_units": [
+        "changeset5:official_egress_refactor"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/conflict-migration-receipt.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/changeset3_post_identity_authority_final_wire_frozen_test.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 8660,
+        "sha256": "b2f498fc84b9c62f1027c00a526c07d1e1477fa5201faa00af71d358c1ccc745"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 11743,
+        "sha256": "e43f32b943d757278e89503d0297354e6e139c64819c3f243e32b0b04b6669d8"
+      },
+      "reason": "串联变更集 5 源码迁移 receipt，同时保持变更集 3 历史 manifest 不变",
+      "migration_units": [
+        "changeset5:changeset3_source_transition"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/changeset3-source-transition.json"
+      ]
+    },
+    {
+      "path": "backend/internal/repository/official_egress_guard.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 3085,
+        "sha256": "ec9019e1d35cf92302f1ef0c9d6d8405b3a60951dd5f73c042a40b29972470ff"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 8498,
+        "sha256": "f86d66c4dee37271244a8f398e8e766dd55661a2efb8d55c8ed15ec23af2bfe1"
+      },
+      "reason": "按冲突单元清单机械迁移官方出站专属 transport/guard declaration",
+      "migration_units": [
+        "changeset5:declaration_migration"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/conflict-migration-receipt.json",
+        "TestChangeset5ConflictUnitsOnlyShrinkAndPreserveUnrelatedFork"
+      ]
+    },
+    {
+      "path": "backend/internal/repository/openai_oauth_service.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 11804,
+        "sha256": "6aa35b07bf9c4d38d69ae0c8758e70a6e237369661526cdb5d368cc9ad9eec4f"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 7254,
+        "sha256": "33c7c215bf7b548be0ca47eab4065d92a0f0a4090e4c1e95a24608d28c68c059"
+      },
+      "reason": "按冲突单元清单机械迁移官方出站专属 transport/guard declaration",
+      "migration_units": [
+        "changeset5:declaration_migration"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/conflict-migration-receipt.json",
+        "TestChangeset5ConflictUnitsOnlyShrinkAndPreserveUnrelatedFork"
+      ]
+    },
+    {
+      "path": "backend/internal/repository/req_client_pool.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 12068,
+        "sha256": "e988ffdbc31d98a19db1bf7dbb8e21cbba29636e1a816be79152613f0fd1c51c"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 11280,
+        "sha256": "07adec9c0005700e0ab19e4138d41f83b9263c525212e36e9e156344d2e85f29"
+      },
+      "reason": "按冲突单元清单机械迁移官方出站专属 transport/guard declaration",
+      "migration_units": [
+        "changeset5:declaration_migration"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/conflict-migration-receipt.json",
+        "TestChangeset5ConflictUnitsOnlyShrinkAndPreserveUnrelatedFork"
+      ]
+    },
+    {
+      "path": "backend/internal/service/account_test_service.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 75987,
+        "sha256": "27432464916f683cdbeb9080e0693ceb146cdfe06afbcde880de47e10ca1699b"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 75983,
+        "sha256": "31131d8e55d10873a84afc88243213fef9ed79eb938cbdd0017e74ef19d87bdd"
+      },
+      "reason": "迁移版本中立官方出站逻辑并薄化共享接入点，保持非官方 fork 片段不变",
+      "migration_units": [
+        "changeset5:official_egress_refactor"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/conflict-migration-receipt.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_changeset3_authority_ast_test.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 9826,
+        "sha256": "e804c96f8d78d291e10bee47f16eace1c96e9b26c4377bd1a2dd0ad3c3d62279"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 7003,
+        "sha256": "137fee752695c69ff277ed6fea0f0defe2e4151acf844bbd781e4ed88e1808d7"
+      },
+      "reason": "将旧链行为断言迁入 Executor、WS session、AST 闭集或版本中立测试",
+      "migration_units": [
+        "changeset5:replacement_test_migration"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./... -count=1"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_changeset3_pairing_audit_test.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 3879,
+        "sha256": "a6bde70831bd4d75c01ca605de83a49aed6300d1ff6607459baba87a3c05e507"
+      },
+      "after": {
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "reason": "替代 Executor、旧符号绝迹与 final-wire 门禁生效后删除旧 pairing 门禁",
+      "migration_units": [
+        "changeset5:legacy_pairing_gate_retirement"
+      ],
+      "deletion_allowed": true,
+      "machine_proofs": [
+        "docs/changeset5/pairing-gate-retirement.json",
+        "TestChangeset5LegacySymbolsDefinitionsAndCallsAreZero"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_changeset3_production_final_wire_test.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 36901,
+        "sha256": "3964bbd26488ee0d0bebe44693bc3a7957aaa9b094b0ca2fbc1f08d849ce6771"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 37518,
+        "sha256": "0643f3acf17f40c341ca6d78b2918444cba45cdb230c70acab86830cfe65e886"
+      },
+      "reason": "仅在测试采集边界固定 OAuth InvocationID，消除连接生命周期随机噪声",
+      "migration_units": [
+        "changeset5:oauth_capture_determinism"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/changeset3-source-transition.json",
+        "TestChangeset5NormalizationTransitionRejectsWrongOrExpandedApproval"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_changeset5_final_wire_test.go",
+      "classification": "changeset5_prerequisite_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 10599,
+        "sha256": "c31a96045e809587ec43becd7b8f615b1afb5634b272cebb183f6b4e86504df8"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 28708,
+        "sha256": "fdf8f9bd1a0c801deb352eca3b0f4eabb383e4df340b7266146fcbf70fc96442"
+      },
+      "reason": "建立 original pre、normalized pre 与 post 三段 final-wire 时间链及 mutation 门禁",
+      "migration_units": [
+        "changeset5:final_wire_normalization_transition"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/final-wire-normalization-transition.json",
+        "TestChangeset5NormalizedPreAppliesOnlyExactOAuthNoiseTransition"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 30940,
+        "sha256": "21ee812e8edd350c94544d3db44049d65977a8a49c8f9445093bdcf54c153146"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 29531,
+        "sha256": "58d1383eef95cb1224e47bf75cfe7369643f8fcc2879a5a9f9d148c711b17b96"
+      },
+      "reason": "清理版本无关生产符号中的 0145，并收紧到精确证据闭集",
+      "migration_units": [
+        "changeset5:version_neutral_symbol_cleanup"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/0145-symbol-allowlist.json",
+        "TestChangeset50145AllowlistIsIndependentlyLocked"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_0145_profile_test.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 42267,
+        "sha256": "7ef997ed45ee2f916bba3da1cee0509c8e6b2f89f134f27697ecffae2796046a"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 42167,
+        "sha256": "aa19ff830453a815e790ce5321fdf00b9b75d427a3fbb1934004a5b1ea673d57"
+      },
+      "reason": "清理版本无关生产符号中的 0145，并收紧到精确证据闭集",
+      "migration_units": [
+        "changeset5:version_neutral_symbol_cleanup"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/0145-symbol-allowlist.json",
+        "TestChangeset50145AllowlistIsIndependentlyLocked"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 32682,
+        "sha256": "4db9feea1a96caeb06ea43aebd21a869a07214566caa6bd8a7f2933c9aff876e"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 32554,
+        "sha256": "58affd5e0d5c3ec02b56b303a30ac388271a5868cf93116187e641959840ca7e"
+      },
+      "reason": "将旧链行为断言迁入 Executor、WS session、AST 闭集或版本中立测试",
+      "migration_units": [
+        "changeset5:replacement_test_migration"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./... -count=1"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_engine.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 37872,
+        "sha256": "6767de0e39dd787f0624cf00273b6e1f4b934daa59555b028dbe2a39adac397c"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 37568,
+        "sha256": "4489f01e244ed5d027a417ba5d3d8485e4b6b67aea514fc3b13aee23a81d178d"
+      },
+      "reason": "迁移版本中立官方出站逻辑并薄化共享接入点，保持非官方 fork 片段不变",
+      "migration_units": [
+        "changeset5:official_egress_refactor"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/conflict-migration-receipt.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_engine_test.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 14688,
+        "sha256": "93fa6172dfd1e693331f51fddba404625e76f3e7366f5a203358e75ddc9cd9a4"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 14464,
+        "sha256": "f87c705f3d0b92bef163b24edbb1a65c5054d16eb75fea1114fdd0dca8911225"
+      },
+      "reason": "将旧链行为断言迁入 Executor、WS session、AST 闭集或版本中立测试",
+      "migration_units": [
+        "changeset5:replacement_test_migration"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./... -count=1"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_files.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 17623,
+        "sha256": "dc9a1f3311d498656bc07412b67a6d8681d7d1bba36d2c702ec26e23b3dc04bb"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 17599,
+        "sha256": "9f4389d53158cff54932511db0cc25ac7c289646d35ab0b48a2201d965ff1ca5"
+      },
+      "reason": "迁移版本中立官方出站逻辑并薄化共享接入点，保持非官方 fork 片段不变",
+      "migration_units": [
+        "changeset5:official_egress_refactor"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/conflict-migration-receipt.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_files_test.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 14969,
+        "sha256": "033846a47a32bb9dfd9f984d3a0776471e551ad90889404ca2670f27eedd3be6"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 14961,
+        "sha256": "74c37ee3bb1fddf60f538b0c5b74adf753358dd3562bf0f2f69d706891ac9d57"
+      },
+      "reason": "将旧链行为断言迁入 Executor、WS session、AST 闭集或版本中立测试",
+      "migration_units": [
+        "changeset5:replacement_test_migration"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./... -count=1"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_forward_runtime_test.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 1416,
+        "sha256": "86b7cc38667efcde7957d4487dc66ae0740897cae458e63200e01e1134812c63"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 1400,
+        "sha256": "882bdb13b36a3730bbe1f9cd73ccb83dcb41fa7134d78556563b12b1894803f7"
+      },
+      "reason": "将旧链行为断言迁入 Executor、WS session、AST 闭集或版本中立测试",
+      "migration_units": [
+        "changeset5:replacement_test_migration"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./... -count=1"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_integration.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 35702,
+        "sha256": "ba7a9fa8a0eba8329a7ecd38df55f0b84866c056d1f2b9eab21bb3e87e3e88df"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 26623,
+        "sha256": "d620fcecff1a94a32e0b43890e48d42660fcfe8ca755c4e82d34c0b1c20eb698"
+      },
+      "reason": "迁移版本中立官方出站逻辑并薄化共享接入点，保持非官方 fork 片段不变",
+      "migration_units": [
+        "changeset5:official_egress_refactor"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/conflict-migration-receipt.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_runtime_test.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 22684,
+        "sha256": "4ce4fd3ff3f4abe50aa1ff78941e2afdbdf2366b0a0aa8da4b5fec263c0c1faf"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 20829,
+        "sha256": "50fe022249183c1882e092bd1cb2fac067ae2d9abeebd0052822910607510160"
+      },
+      "reason": "将旧链行为断言迁入 Executor、WS session、AST 闭集或版本中立测试",
+      "migration_units": [
+        "changeset5:replacement_test_migration"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./... -count=1"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_finalizer_pairing_test.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 27198,
+        "sha256": "dcde8bcd3cb8eed7c6d3a43d7bf30d3fcfcce75eba2da67ff117517bf6ee47fa"
+      },
+      "after": {
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "reason": "替代 Executor、旧符号绝迹与 final-wire 门禁生效后删除旧 pairing 门禁",
+      "migration_units": [
+        "changeset5:legacy_pairing_gate_retirement"
+      ],
+      "deletion_allowed": true,
+      "machine_proofs": [
+        "docs/changeset5/pairing-gate-retirement.json",
+        "TestChangeset5LegacySymbolsDefinitionsAndCallsAreZero"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_integration.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 17199,
+        "sha256": "f21279268b98d484a7d5e99b30de4622a2b6c6501c3429da61465c045b70a568"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 17131,
+        "sha256": "5c9f958f3a6fb9146ede3cab1b6fc3298f6f057f709bd4c5ecab1e5b788bd4d7"
+      },
+      "reason": "迁移版本中立官方出站逻辑并薄化共享接入点，保持非官方 fork 片段不变",
+      "migration_units": [
+        "changeset5:official_egress_refactor"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/conflict-migration-receipt.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_http.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 64841,
+        "sha256": "fc35a95e74687b8b3b520fc8d1c829e624c8f91869357aab18d0d7290b635264"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 64821,
+        "sha256": "761b2cd67e0a794036987bf05ac2c6ab43f7c503bb10f7ce1fd635a19e020d24"
+      },
+      "reason": "迁移版本中立官方出站逻辑并薄化共享接入点，保持非官方 fork 片段不变",
+      "migration_units": [
+        "changeset5:official_egress_refactor"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/conflict-migration-receipt.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_http_test.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 64649,
+        "sha256": "f5e017af1f9c6563d49dbbf558bd4fec6f97a5fd6814f916c4a7ccff50646ef9"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 64641,
+        "sha256": "19a794582d7539da585ead6a19f68009abac0a48fa613be085f2381020bcaaa1"
+      },
+      "reason": "将旧链行为断言迁入 Executor、WS session、AST 闭集或版本中立测试",
+      "migration_units": [
+        "changeset5:replacement_test_migration"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./... -count=1"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_ws.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 44678,
+        "sha256": "a1ce12b01637aa930e57b7b2ef87a49afb55be1087cdabc31bfd169755b30d66"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 41692,
+        "sha256": "499f3aff3e94a80630cd9d0fac7dde23e194b46b36f84a42fc11a2046016b0ed"
+      },
+      "reason": "迁移版本中立官方出站逻辑并薄化共享接入点，保持非官方 fork 片段不变",
+      "migration_units": [
+        "changeset5:official_egress_refactor"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/conflict-migration-receipt.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_ws_test.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 40870,
+        "sha256": "9ba1ed157400134a76c698bbff562a26638fee58b00de2ee7bee351eda112899"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 37631,
+        "sha256": "04e82a4d903d5f7dfc9813898ad345f8531d2730be30efef3c14e928bf30d896"
+      },
+      "reason": "将旧链行为断言迁入 Executor、WS session、AST 闭集或版本中立测试",
+      "migration_units": [
+        "changeset5:replacement_test_migration"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./... -count=1"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_profile.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 42433,
+        "sha256": "12213b0a63210558d04b4b8891d4f16097eb2ef4d6a960b50f090d6be7dc5b14"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 42337,
+        "sha256": "2269dcfacea4b591d022670aaa5c2170fd91dc82c1f1faa992f4e2a27441e71a"
+      },
+      "reason": "迁移版本中立官方出站逻辑并薄化共享接入点，保持非官方 fork 片段不变",
+      "migration_units": [
+        "changeset5:official_egress_refactor"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/conflict-migration-receipt.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_transport.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 16274,
+        "sha256": "90d66982d7a2895577b11e87c43898eb5ab063386b7702f8e739a74f146703e4"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 16270,
+        "sha256": "c0295b807d27232854bf7e0f045b4c26a082307f222cd3f51169092d3cd7e11d"
+      },
+      "reason": "迁移版本中立官方出站逻辑并薄化共享接入点，保持非官方 fork 片段不变",
+      "migration_units": [
+        "changeset5:official_egress_refactor"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/conflict-migration-receipt.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_transport_adapters.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 23583,
+        "sha256": "c7b788324a6e232c2be5f2805e199d4df098337fceda772121aa49bf2aba5081"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 30261,
+        "sha256": "b9bf2d0c462eee41fb086f9798dea75f3fb80d366f36b66951b24aaf893b2f6b"
+      },
+      "reason": "按冲突单元清单机械迁移官方出站专属 transport/guard declaration",
+      "migration_units": [
+        "changeset5:declaration_migration"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/conflict-migration-receipt.json",
+        "TestChangeset5ConflictUnitsOnlyShrinkAndPreserveUnrelatedFork"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_websocket_invocation_test.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 3500,
+        "sha256": "ae100d74927dd5d8a3830be39c877f6e1894375be2e33cf64d0397de3111b9e1"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 7424,
+        "sha256": "49bf534431c5cde4cdf0f56f787f22de7f0f59146f2fe20b6ecc7f739c097edf"
+      },
+      "reason": "将旧链行为断言迁入 Executor、WS session、AST 闭集或版本中立测试",
+      "migration_units": [
+        "changeset5:replacement_test_migration"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./... -count=1"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_alpha_search.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 31143,
+        "sha256": "fa33cdd73f6e873ff18cfae4d4402576164c5d9255259d714a98104b6d6ad0f3"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 31127,
+        "sha256": "94fe9b253bf81f745b431d2ba8c754d88333b26fe930f130e6ec147833926cc4"
+      },
+      "reason": "迁移版本中立官方出站逻辑并薄化共享接入点，保持非官方 fork 片段不变",
+      "migration_units": [
+        "changeset5:official_egress_refactor"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/conflict-migration-receipt.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_codex_models_service.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 34416,
+        "sha256": "d139812358e9530877d5004f58627a4f369b60b098bdac1320e757f287b3100c"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 34400,
+        "sha256": "6ed0f1e80ca8839c54e1d4f52256e75f476c2411770773f6c5338f72bd5a5266"
+      },
+      "reason": "迁移版本中立官方出站逻辑并薄化共享接入点，保持非官方 fork 片段不变",
+      "migration_units": [
+        "changeset5:official_egress_refactor"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/conflict-migration-receipt.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_forward.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 56600,
+        "sha256": "1047ade94788b9b15b9458e4d309ebaede37a7d8753650f1579dc79eaec38bac"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 56588,
+        "sha256": "b4a6b64bd570ee7022c9209965b63c7a4b1ed0493dbbca6a6de59347c874d934"
+      },
+      "reason": "迁移版本中立官方出站逻辑并薄化共享接入点，保持非官方 fork 片段不变",
+      "migration_units": [
+        "changeset5:official_egress_refactor"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/conflict-migration-receipt.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_images_responses.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 72185,
+        "sha256": "4ebc575d6ff6b95820b8a81cf027d51a144dd95bf7027637dd7de8abda7da37b"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 72169,
+        "sha256": "93462ad571b21733a7f055892bb2d9f9c6083021e10103d903d686baba65d700"
+      },
+      "reason": "清理 Codex Images Body 组装中的版本化内部标识符，并通过分类 overlay 纳入有效 governable 集合",
+      "migration_units": [
+        "changeset5:version_neutral_symbol_cleanup",
+        "changeset5:conflict_classification_overlay"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/conflict-classification-amendments.json",
+        "TestChangeset5ConflictOverlayDoesNotHideOtherNonOfficialDrift"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_live.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 32932,
+        "sha256": "928896fc3bd231838370af1f2f7d8aad2a3e286c07844f979c6b785e5effcb56"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 32876,
+        "sha256": "e6a3c5f5b54267f7053b8ee5068324486ce8698e1495af9ef846b94611bb1ad6"
+      },
+      "reason": "迁移版本中立官方出站逻辑并薄化共享接入点，保持非官方 fork 片段不变",
+      "migration_units": [
+        "changeset5:official_egress_refactor"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/conflict-migration-receipt.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_live_test.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 18069,
+        "sha256": "c2950254ddbfc04eaa18ae88816ae85303fce2a2942d461f0e4d0a277dac93cb"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 16575,
+        "sha256": "b50585b08bee43c629ff5f5d8780e412f3e2d1860530d31e18654bc2ab1a1c34"
+      },
+      "reason": "将旧链行为断言迁入 Executor、WS session、AST 闭集或版本中立测试",
+      "migration_units": [
+        "changeset5:replacement_test_migration"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./... -count=1"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_quota_service.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 34287,
+        "sha256": "b1b3318eaa83071d41e2d21a2abacca573061b9262204a7e60df4617bfa01e3f"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 34275,
+        "sha256": "cca5be1e84b98719955277a39db77ae46a69b9e3e47826adac93573863d14c60"
+      },
+      "reason": "迁移版本中立官方出站逻辑并薄化共享接入点，保持非官方 fork 片段不变",
+      "migration_units": [
+        "changeset5:official_egress_refactor"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/conflict-migration-receipt.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_quota_spark_window_test.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 30825,
+        "sha256": "5d09bf57daee0041140c5c808d2fac633f27a48b1585fc2012ac14ee7d98a2ce"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 30817,
+        "sha256": "815f5ce4e12ddca6fde0af8fb7d6c1e2d4b076ead15559b720c57fcab17823f9"
+      },
+      "reason": "将旧链行为断言迁入 Executor、WS session、AST 闭集或版本中立测试",
+      "migration_units": [
+        "changeset5:replacement_test_migration"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./... -count=1"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_upstream_http.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 9619,
+        "sha256": "630a2523e4a9913fc97c6dc06fb7f2137eab434dbbdf51ab3705c85655afeff9"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 9607,
+        "sha256": "2358d9f57a1d8ee52da6d6223e4357f499d90df2d8cef1cc374e1d3ac2b5d83e"
+      },
+      "reason": "迁移版本中立官方出站逻辑并薄化共享接入点，保持非官方 fork 片段不变",
+      "migration_units": [
+        "changeset5:official_egress_refactor"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/conflict-migration-receipt.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_ws_client.go",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 18161,
+        "sha256": "4542e1993bdd2dc1f15e8a6a97c040624d3254cd806c067e6a7375d841efb161"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 11494,
+        "sha256": "65a9cb0580dd715e9d49b1680318d3224e92143ffcf7dbb7bcfaad521de4be85"
+      },
+      "reason": "按冲突单元清单机械迁移官方出站专属 transport/guard declaration",
+      "migration_units": [
+        "changeset5:declaration_migration"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/conflict-migration-receipt.json",
+        "TestChangeset5ConflictUnitsOnlyShrinkAndPreserveUnrelatedFork"
+      ]
+    },
+    {
+      "path": "backend/internal/service/testdata/official_egress_version_leak_ast.json",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 5162,
+        "sha256": "5e77243c2dcbdcb8ee2fc3edaf5fa25ffd92b36aaaaa1fce6ce314187c30ca89"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 5075,
+        "sha256": "aa6de35bee95dfeb6368b199efa5ad6826109d201add5905305d0274184f0401"
+      },
+      "reason": "清理版本无关生产符号中的 0145，并收紧到精确证据闭集",
+      "migration_units": [
+        "changeset5:version_neutral_symbol_cleanup"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/0145-symbol-allowlist.json",
+        "TestChangeset50145AllowlistIsIndependentlyLocked"
+      ]
+    },
+    {
+      "path": "docs/1.md",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 57575,
+        "sha256": "da97cb0ddee847415df67fc98ef77435245b3673f763e899030977e5d9bb2442"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 58940,
+        "sha256": "168444916f3fcadd715231a71b54e30ed35d3e753a9f53487770ab82c2c9b1a0"
+      },
+      "reason": "同步变更集 5 已实施架构、证据口径与复审边界",
+      "migration_units": [
+        "changeset5:specification_update"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "python3 tools/check_spec_refs.py",
+        "docs/changeset5/acceptance-report.md"
+      ]
+    },
+    {
+      "path": "docs/CODEX_CLI_0145_EGRESS_SPEC.md",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 96270,
+        "sha256": "5e58e078d47e0404163999e0b661cd98e565d168b1ec6f926c05fa0d7b6b5d98"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 95074,
+        "sha256": "e44716bd416596c28b0664453ddd2f52d68629e396866c546c54d1638bf7f0d3"
+      },
+      "reason": "同步变更集 5 已实施架构、证据口径与复审边界",
+      "migration_units": [
+        "changeset5:specification_update"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "python3 tools/check_spec_refs.py",
+        "docs/changeset5/acceptance-report.md"
+      ]
+    },
+    {
+      "path": "tools/changeset5_workspace_baseline.py",
+      "classification": "changeset5_prerequisite_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 8862,
+        "sha256": "fab0e827bb98c3651016f6cb2731c7f4a1c3f459657316b6d473cf35b069e7ed"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 23980,
+        "sha256": "ee0969656d1f97d8b42fa3e3842075c1f8b1d56a21fbf1052363c82e588ab928"
+      },
+      "reason": "接入并强化变更集 5 证据闭集与当前状态复算门禁",
+      "migration_units": [
+        "changeset5:evidence_gate_integration"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "make check-egress-spec",
+        "TestChangeset5WorkspaceBaselineIsIndependentlyFrozen"
+      ]
+    },
+    {
+      "path": "tools/check_ledger_completeness.py",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 4923,
+        "sha256": "4bba8419416fddac3989c699a1efb3fe907d2f72cff84f2db9dfc7b0bd245d75"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 8405,
+        "sha256": "f7e52121b3ea5178c5832cd776a6e8da906dbf0d512a6786ea0a8bb8b2052baa"
+      },
+      "reason": "使用严格完整路径结构化比对 52 个出站面并识别迁移后的 WS declaration",
+      "migration_units": [
+        "changeset5:egress_surface_gate"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/egress-surface-inventory.json",
+        "TestChangeset5SurfaceInventoryIsIndependentlyLocked"
+      ]
+    },
+    {
+      "path": "tools/version_leak_baseline.json",
+      "classification": "protected_prior_artifacts",
+      "before": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 11331,
+        "sha256": "ebf5a3b79419f47f3e2fc073ef76377ee299a2306760a65ebb1ec3ac2152101c"
+      },
+      "after": {
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 4016,
+        "sha256": "17a568895d6284f44db200cfd469f39fe8ab1ebd129b8388a716ef9564f55681"
+      },
+      "reason": "清理版本无关生产符号中的 0145，并收紧到精确证据闭集",
+      "migration_units": [
+        "changeset5:version_neutral_symbol_cleanup"
+      ],
+      "deletion_allowed": false,
+      "machine_proofs": [
+        "docs/changeset5/0145-symbol-allowlist.json",
+        "TestChangeset50145AllowlistIsIndependentlyLocked"
+      ]
+    }
+  ],
+  "rules": [
+    "558 个冻结路径逐项复算；当前值必须等于基线值或被唯一 transition 精确覆盖",
+    "未变化路径禁止登记 transition；transition 外路径必须与冻结值逐字节一致",
+    "删除必须同时满足 before=regular、after=absent、deletion_allowed=true",
+    "文件类型、权限、内容、存在状态分别验证；符号链接一律拒绝"
+  ]
+}

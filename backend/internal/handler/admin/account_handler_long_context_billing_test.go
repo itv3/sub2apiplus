@@ -142,6 +142,35 @@ func TestApplyOAuthCredentialsRejectsMalformedOpenAILongContextBillingBeforeMuta
 	require.Zero(t, stub.updateAccountExtraCalls)
 }
 
+func TestApplyOAuthCredentialsRejectsManagedPrivacyExtraBeforeMutation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	stub := newStubAdminService()
+	stub.getAccountResult = &service.Account{
+		ID:       1,
+		Platform: service.PlatformOpenAI,
+		Type:     service.AccountTypeOAuth,
+	}
+	handler := NewAccountHandler(stub, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	router := gin.New()
+	router.POST("/accounts/:id/apply-oauth-credentials", handler.ApplyOAuthCredentials)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/accounts/1/apply-oauth-credentials", bytes.NewBufferString(
+		`{"type":"oauth","credentials":{"access_token":"new-token"},"extra":{"privacy_mode":"training_off","privacy_retry_after":"2099-01-01T00:00:00Z","privacy_browser_persona":"legacy_chrome_120","privacy_rollout_key":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}}`,
+	))
+	request.Header.Set("Content-Type", "application/json")
+
+	router.ServeHTTP(recorder, request)
+
+	require.Equal(t, http.StatusBadRequest, recorder.Code)
+	var responseBody struct {
+		Reason string `json:"reason"`
+	}
+	require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &responseBody))
+	require.Equal(t, "MANAGED_PRIVACY_EXTRA_FORBIDDEN", responseBody.Reason)
+	require.Zero(t, stub.updateAccountCalls)
+	require.Zero(t, stub.updateAccountExtraCalls)
+}
+
 func TestOpenAIOAuthCodexPATBoundaryRejectsMalformedOpenAILongContextBillingValueBeforeTokenValidation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	handler := NewOpenAIOAuthHandler(nil, newStubAdminService(), nil)

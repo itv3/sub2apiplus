@@ -83,7 +83,6 @@ func (h *OpenAIOAuthHandler) ExchangeCode(c *gin.Context) {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
-
 	tokenInfo, err := h.openaiOAuthService.ExchangeCode(c.Request.Context(), &service.OpenAIExchangeCodeInput{
 		SessionID:   req.SessionID,
 		Code:        req.Code,
@@ -109,6 +108,27 @@ type OpenAIRefreshTokenRequest struct {
 
 type OpenAICodexPATCreateRequest struct {
 	AccessToken             string         `json:"access_token" binding:"required"`
+	Name                    string         `json:"name"`
+	Notes                   *string        `json:"notes"`
+	GroupIDs                []int64        `json:"group_ids"`
+	ProxyID                 *int64         `json:"proxy_id"`
+	Concurrency             *int           `json:"concurrency"`
+	Priority                *int           `json:"priority"`
+	RateMultiplier          *float64       `json:"rate_multiplier"`
+	LoadFactor              *int           `json:"load_factor"`
+	ExpiresAt               *int64         `json:"expires_at"`
+	AutoPauseOnExpired      *bool          `json:"auto_pause_on_expired"`
+	CredentialExtras        map[string]any `json:"credential_extras"`
+	Extra                   map[string]any `json:"extra"`
+	SkipDefaultGroupBind    *bool          `json:"skip_default_group_bind"`
+	ConfirmMixedChannelRisk *bool          `json:"confirm_mixed_channel_risk"`
+}
+
+type OpenAIOAuthAccountCreateRequest struct {
+	SessionID               string         `json:"session_id" binding:"required"`
+	Code                    string         `json:"code" binding:"required"`
+	State                   string         `json:"state" binding:"required"`
+	RedirectURI             string         `json:"redirect_uri"`
 	Name                    string         `json:"name"`
 	Notes                   *string        `json:"notes"`
 	GroupIDs                []int64        `json:"group_ids"`
@@ -226,31 +246,42 @@ func (h *OpenAIOAuthHandler) RefreshAccountToken(c *gin.Context) {
 		response.ErrorFrom(c, err)
 		return
 	}
+	h.adminService.EnsureOpenAIPrivacy(c.Request.Context(), updatedAccount)
 
 	response.Success(c, dto.AccountFromService(updatedAccount))
 }
 
-// CreateAccountFromOAuth creates a new OpenAI OAuth account from token info
+// CreateAccountFromOAuth 在服务端完成授权码兑换、privacy 设置与账号原子创建。
 // POST /api/v1/admin/openai/create-from-oauth
 func (h *OpenAIOAuthHandler) CreateAccountFromOAuth(c *gin.Context) {
-	var req struct {
-		SessionID   string  `json:"session_id" binding:"required"`
-		Code        string  `json:"code" binding:"required"`
-		State       string  `json:"state" binding:"required"`
-		RedirectURI string  `json:"redirect_uri"`
-		ProxyID     *int64  `json:"proxy_id"`
-		Name        string  `json:"name"`
-		Concurrency int     `json:"concurrency"`
-		Priority    int     `json:"priority"`
-		GroupIDs    []int64 `json:"group_ids"`
-	}
+	var req OpenAIOAuthAccountCreateRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		response.BadRequest(c, "Invalid request: "+err.Error())
 		return
 	}
+	if err := service.ValidateOpenAILongContextBillingExtra(service.PlatformOpenAI, req.Extra); err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if req.Concurrency != nil && *req.Concurrency < 0 {
+		response.BadRequest(c, "concurrency must be >= 0")
+		return
+	}
+	if req.Priority != nil && *req.Priority < 0 {
+		response.BadRequest(c, "priority must be >= 0")
+		return
+	}
+	if req.RateMultiplier != nil && *req.RateMultiplier < 0 {
+		response.BadRequest(c, "rate_multiplier must be >= 0")
+		return
+	}
+	if req.LoadFactor != nil && *req.LoadFactor > 10000 {
+		response.BadRequest(c, "load_factor must be <= 10000")
+		return
+	}
 
-	// Exchange code for tokens
-	tokenInfo, err := h.openaiOAuthService.ExchangeCode(c.Request.Context(), &service.OpenAIExchangeCodeInput{
+	// 专用创建入口在账号写入前完成 privacy，并把完整结果与凭据一次落库。
+	tokenInfo, err := h.openaiOAuthService.ExchangeCodeForNewAccount(c.Request.Context(), &service.OpenAIExchangeCodeInput{
 		SessionID:   req.SessionID,
 		Code:        req.Code,
 		State:       req.State,
@@ -262,8 +293,10 @@ func (h *OpenAIOAuthHandler) CreateAccountFromOAuth(c *gin.Context) {
 		return
 	}
 
-	// Build credentials from token info
-	credentials := h.openaiOAuthService.BuildAccountCredentials(tokenInfo)
+	credentials := mergeCodexImportMap(
+		h.openaiOAuthService.BuildAccountCredentials(tokenInfo),
+		sanitizeCodexImportCredentialExtras(req.CredentialExtras),
+	)
 
 	platform := oauthPlatformFromPath(c)
 
@@ -276,17 +309,35 @@ func (h *OpenAIOAuthHandler) CreateAccountFromOAuth(c *gin.Context) {
 		name = "OpenAI OAuth Account"
 	}
 
-	// Create account
+	concurrency := 0
+	if req.Concurrency != nil {
+		concurrency = *req.Concurrency
+	}
+	priority := 0
+	if req.Priority != nil {
+		priority = *req.Priority
+	}
+	skipDefaultGroupBind := req.SkipDefaultGroupBind != nil && *req.SkipDefaultGroupBind
+
+	// 客户端只能提交普通账号配置；四个 privacy 字段以服务端结果为准。
 	account, err := h.adminService.CreateAccount(c.Request.Context(), &service.CreateAccountInput{
-		Name:        name,
-		Platform:    platform,
-		Type:        "oauth",
-		Credentials: credentials,
-		Extra:       nil,
-		ProxyID:     req.ProxyID,
-		Concurrency: req.Concurrency,
-		Priority:    req.Priority,
-		GroupIDs:    req.GroupIDs,
+		Name:                  name,
+		Notes:                 req.Notes,
+		Platform:              platform,
+		Type:                  service.AccountTypeOAuth,
+		Credentials:           credentials,
+		Extra:                 h.openaiOAuthService.BuildAccountExtra(nil, req.Extra),
+		ManagedPrivacyExtra:   h.openaiOAuthService.BuildAccountExtra(tokenInfo),
+		ProxyID:               req.ProxyID,
+		Concurrency:           concurrency,
+		Priority:              priority,
+		RateMultiplier:        req.RateMultiplier,
+		LoadFactor:            req.LoadFactor,
+		GroupIDs:              req.GroupIDs,
+		ExpiresAt:             req.ExpiresAt,
+		AutoPauseOnExpired:    req.AutoPauseOnExpired,
+		SkipDefaultGroupBind:  skipDefaultGroupBind,
+		SkipMixedChannelCheck: req.ConfirmMixedChannelRisk != nil && *req.ConfirmMixedChannelRisk,
 	})
 	if err != nil {
 		response.ErrorFrom(c, err)

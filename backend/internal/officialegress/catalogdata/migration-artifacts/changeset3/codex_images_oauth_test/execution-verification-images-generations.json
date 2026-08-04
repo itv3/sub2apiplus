@@ -1,0 +1,29 @@
+{
+  "schema_version": 2,
+  "result": "passed",
+  "sink_id": "codex.images.oauth_test",
+  "route": {
+    "method": "POST",
+    "host": "chatgpt.com",
+    "path": "/backend-api/codex/images/generations",
+    "purpose": "admin_test.images_oauth",
+    "protocol": "http"
+  },
+  "authority_kind": "codex_executor",
+  "authority_id": "codex.executor.changeset1b",
+  "token_issuer_id": "codex.executor.changeset1b",
+  "evidence_kind": "codex_endpoint",
+  "evidence_id": "images_generations",
+  "backend": "http_upstream",
+  "adapter_id": "officialegress.http_upstream",
+  "transport_id": "codex-0.145.0-http-ubuntu24-native",
+  "wire_fixture_sha256": "d79f63721bff39f11e167c72f91e3411b6cb15ee72982077a9afe7ad61c0993d",
+  "final_wire_manifest_sha256": "c824ffb0ab6e2429c09f9ac517cf3e6f96860c7c6ef77c229757fd690bdbcf0f",
+  "active_capture_sha256": "99733418b6c2528a93f989eac65bb94df4a6593cbb9b4ebfaa524bd17a9dbf2e",
+  "previous_capture_sha256": "a627dbd6b79c018a8622c84bada732a3964f2727c74e06452ea20af036b194c7",
+  "terminal_guard_allow": true,
+  "compared_release_modes": [
+    "active",
+    "previous"
+  ]
+}

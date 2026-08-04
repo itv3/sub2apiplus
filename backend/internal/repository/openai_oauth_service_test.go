@@ -7,12 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/openaiidentity"
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 )
@@ -26,8 +27,29 @@ type OpenAIOAuthServiceSuite struct {
 }
 
 func (s *OpenAIOAuthServiceSuite) SetupTest() {
-	s.ctx = context.Background()
+	var err error
+	s.ctx, err = officialegress.WithReleaseMode(
+		context.Background(), officialegress.ReleaseModeActive,
+	)
+	require.NoError(s.T(), err)
 	s.received = make(chan url.Values, 1)
+	configureObserveGuardForOpenAIOAuthLocalTest(s.T())
+}
+
+// configureObserveGuardForOpenAIOAuthLocalTest 仅允许本套件把官方 OAuth 请求重定向到
+// httptest 的本地地址。生产默认值从 1C 起保持 enforce，测试不得隐式依赖旧默认值。
+func configureObserveGuardForOpenAIOAuthLocalTest(t *testing.T) {
+	t.Helper()
+	previous := officialegress.DefaultGuard()
+	_, err := officialegress.ConfigureDefaultGuard(officialegress.GuardConfig{
+		UnknownRoutePolicy:     officialegress.UnknownRoutePolicy(officialegress.PolicyObserve),
+		UnregisteredSinkPolicy: officialegress.UnregisteredSinkPolicy(officialegress.PolicyObserve),
+	}, nil)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		_, restoreErr := officialegress.ConfigureDefaultGuard(previous.Config(), previous.Recorder())
+		require.NoError(t, restoreErr)
+	})
 }
 
 func (s *OpenAIOAuthServiceSuite) TearDownTest() {
@@ -45,8 +67,9 @@ func (s *OpenAIOAuthServiceSuite) setupServer(handler http.HandlerFunc) {
 func (s *OpenAIOAuthServiceSuite) TestExchangeCode_DefaultRedirectURI() {
 	errCh := make(chan string, 1)
 	s.setupServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(s.T(), openaiidentity.CodexUserAgent, r.Header.Get("User-Agent"))
-		require.Equal(s.T(), openaiidentity.CodexOriginator, r.Header.Get("originator"))
+		require.Empty(s.T(), r.Header.Get("User-Agent"))
+		require.Empty(s.T(), r.Header.Get("originator"))
+		require.Equal(s.T(), "*/*", r.Header.Get("Accept"))
 		if r.Method != http.MethodPost {
 			errCh <- "method mismatch"
 			w.WriteHeader(http.StatusBadRequest)
@@ -98,107 +121,25 @@ func (s *OpenAIOAuthServiceSuite) TestExchangeCode_DefaultRedirectURI() {
 	require.Equal(s.T(), "rt", resp.RefreshToken)
 }
 
-func (s *OpenAIOAuthServiceSuite) TestRefreshToken_ProfileDrivenFormFields() {
-	errCh := make(chan string, 1)
-	s.setupServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		require.Equal(s.T(), openaiidentity.CodexUserAgent, r.Header.Get("User-Agent"))
-		require.Empty(s.T(), r.Header.Get("originator"))
-		require.Equal(s.T(), "application/x-www-form-urlencoded", r.Header.Get("Content-Type"))
-		require.Equal(s.T(), "application/json", r.Header.Get("Accept"))
-		if err := r.ParseForm(); err != nil {
-			errCh <- "ParseForm failed"
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		if got := r.PostForm.Get("grant_type"); got != "refresh_token" {
-			errCh <- "grant_type mismatch"
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		if got := r.PostForm.Get("refresh_token"); got != "rt" {
-			errCh <- "refresh_token mismatch"
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		if got := r.PostForm.Get("client_id"); got != openai.ClientID {
-			errCh <- "client_id mismatch"
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		if got := r.PostForm.Get("scope"); got != openai.RefreshScopes {
-			errCh <- "scope mismatch"
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"access_token":"at2","refresh_token":"rt2","token_type":"bearer","expires_in":3600}`)
-	}))
-
-	resp, err := s.svc.RefreshToken(s.ctx, "rt", "")
-	require.NoError(s.T(), err, "RefreshToken")
-	select {
-	case msg := <-errCh:
-		require.Fail(s.T(), msg)
-	default:
+func (s *OpenAIOAuthServiceSuite) TestDecodeRefreshResponseSuccess() {
+	response := &http.Response{
+		StatusCode: http.StatusOK,
+		Body: io.NopCloser(strings.NewReader(
+			`{"access_token":"at2","refresh_token":"rt2","token_type":"bearer","expires_in":3600}`,
+		)),
 	}
-	require.Equal(s.T(), "at2", resp.AccessToken)
-	require.Equal(s.T(), "rt2", resp.RefreshToken)
+	decoded, err := s.svc.DecodeRefreshResponse(s.ctx, response, nil, "")
+	require.NoError(s.T(), err)
+	require.Equal(s.T(), "at2", decoded.AccessToken)
+	require.Equal(s.T(), "rt2", decoded.RefreshToken)
 }
 
 func (s *OpenAIOAuthServiceSuite) TestTokenClientUsesCodexTLSDialer() {
-	profile, err := service.ResolveActiveCodexOAuthExchangeProfile()
+	profile, err := resolveOpenAIExchangeTLSProfile(officialegress.ReleaseModeActive)
 	require.NoError(s.T(), err)
-	client, err := createOpenAIExchangeReqClient("", profile.TLSProfile)
+	client, err := createOpenAIExchangeReqClient("", profile)
 	require.NoError(s.T(), err)
 	require.NotNil(s.T(), client.GetTransport().DialTLSContext)
-}
-
-// TestRefreshToken_DefaultsToOpenAIClientID 验证未指定 client_id 时默认使用 OpenAI ClientID，
-// 且只发送一次请求（不再盲猜多个 client_id）。
-func (s *OpenAIOAuthServiceSuite) TestRefreshToken_DefaultsToOpenAIClientID() {
-	var seenClientIDs []string
-	s.setupServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseForm(); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		clientID := r.PostForm.Get("client_id")
-		seenClientIDs = append(seenClientIDs, clientID)
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"access_token":"at","refresh_token":"rt","token_type":"bearer","expires_in":3600}`)
-	}))
-
-	resp, err := s.svc.RefreshToken(s.ctx, "rt", "")
-	require.NoError(s.T(), err, "RefreshToken")
-	require.Equal(s.T(), "at", resp.AccessToken)
-	// 只发送了一次请求，使用默认的 OpenAI ClientID
-	require.Equal(s.T(), []string{openai.ClientID}, seenClientIDs)
-}
-
-func (s *OpenAIOAuthServiceSuite) TestRefreshToken_UseProvidedClientID() {
-	const customClientID = "custom-client-id"
-	var seenClientIDs []string
-	s.setupServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if err := r.ParseForm(); err != nil {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		clientID := r.PostForm.Get("client_id")
-		seenClientIDs = append(seenClientIDs, clientID)
-		if clientID != customClientID {
-			w.WriteHeader(http.StatusBadRequest)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, `{"access_token":"at-custom","refresh_token":"rt-custom","token_type":"bearer","expires_in":3600}`)
-	}))
-
-	resp, err := s.svc.RefreshTokenWithClientID(s.ctx, "rt", "", customClientID)
-	require.NoError(s.T(), err, "RefreshTokenWithClientID")
-	require.Equal(s.T(), "at-custom", resp.AccessToken)
-	require.Equal(s.T(), "rt-custom", resp.RefreshToken)
-	require.Equal(s.T(), []string{customClientID}, seenClientIDs)
 }
 
 func (s *OpenAIOAuthServiceSuite) TestNonSuccessStatus_IncludesBody() {
@@ -267,11 +208,20 @@ func (s *OpenAIOAuthServiceSuite) TestContextCancel() {
 		done <- err
 	}()
 
-	<-started
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		s.T().Fatal("OAuth 取消测试的本地服务器未收到请求")
+	}
 	cancel()
 	close(block)
 
-	err := <-done
+	var err error
+	select {
+	case err = <-done:
+	case <-time.After(2 * time.Second):
+		s.T().Fatal("OAuth 请求取消后未按时返回")
+	}
 	require.Error(s.T(), err)
 }
 
@@ -352,12 +302,11 @@ func (s *OpenAIOAuthServiceSuite) TestExchangeCode_SuccessButInvalidJSON() {
 }
 
 func (s *OpenAIOAuthServiceSuite) TestRefreshToken_NonSuccessStatus() {
-	s.setupServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-		_, _ = io.WriteString(w, "unauthorized")
-	}))
-
-	_, err := s.svc.RefreshToken(s.ctx, "rt", "")
+	response := &http.Response{
+		StatusCode: http.StatusUnauthorized,
+		Body:       io.NopCloser(strings.NewReader("unauthorized")),
+	}
+	_, err := s.svc.DecodeRefreshResponse(s.ctx, response, nil, "")
 	require.Error(s.T(), err, "expected error for non-2xx status")
 	require.ErrorContains(s.T(), err, "status 401")
 }

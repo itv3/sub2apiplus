@@ -2,11 +2,14 @@ package repository
 
 import (
 	"bytes"
+	"compress/gzip"
+	"context"
 	"crypto/x509"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +20,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	utls "github.com/refraction-networking/utls"
@@ -153,6 +157,117 @@ func TestHTTPUpstreamDoCanDisableRedirectsPerRequest(t *testing.T) {
 	require.Equal(t, http.StatusFound, resp.StatusCode)
 	require.NoError(t, resp.Body.Close())
 	require.Zero(t, redirectedCalls.Load())
+}
+
+type httpUpstreamGuardWireFact struct {
+	method     string
+	requestURI string
+	body       string
+	header     http.Header
+}
+
+// TestHTTPUpstreamGuardPreservesOutOfScopeWireAndResult 是 HTTPUpstream 栈的
+// 1A before/after 对照，证明插入 Guard 不改变第三方请求与响应事实。
+func TestHTTPUpstreamGuardPreservesOutOfScopeWireAndResult(t *testing.T) {
+	facts := make(chan httpUpstreamGuardWireFact, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, request *http.Request) {
+		body, err := io.ReadAll(request.Body)
+		require.NoError(t, err)
+		facts <- httpUpstreamGuardWireFact{
+			method: request.Method, requestURI: request.RequestURI,
+			body: string(body), header: request.Header.Clone(),
+		}
+		w.Header().Set("X-Test-Result", "same")
+		w.Header().Set("Content-Encoding", "gzip")
+		w.WriteHeader(http.StatusAccepted)
+		writer := gzip.NewWriter(w)
+		_, _ = writer.Write([]byte("same-response"))
+		require.NoError(t, writer.Close())
+	}))
+	t.Cleanup(server.Close)
+
+	newRequest := func() *http.Request {
+		request, err := http.NewRequest(
+			http.MethodPost,
+			server.URL+"/third-party/messages?mode=exact",
+			strings.NewReader("same-body"),
+		)
+		require.NoError(t, err)
+		request.Header.Set("X-Test-Header", "same-value")
+		return request
+	}
+	readResult := func(upstream *httpUpstreamService, response *http.Response, err error) string {
+		require.NoError(t, err)
+		upstream.mu.RLock()
+		require.Len(t, upstream.clients, 1)
+		var entry *upstreamClientEntry
+		for _, current := range upstream.clients {
+			entry = current
+		}
+		upstream.mu.RUnlock()
+		require.Equal(t, int64(1), atomic.LoadInt64(&entry.inFlight))
+		body, readErr := io.ReadAll(response.Body)
+		require.NoError(t, readErr)
+		require.NoError(t, response.Body.Close())
+		require.Equal(t, int64(0), atomic.LoadInt64(&entry.inFlight))
+		return response.Status + "|" + response.Header.Get("X-Test-Result") + "|" + string(body)
+	}
+
+	beforeUpstream := newHTTPUpstream(nil, nil).(*httpUpstreamService)
+	beforeResponse, beforeErr := beforeUpstream.Do(newRequest(), "", 77, 1)
+	before := readResult(beforeUpstream, beforeResponse, beforeErr)
+	recorder := officialegress.NewBoundedGuardRecorder(16, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	guard, err := officialegress.NewGuard(
+		officialegress.GuardConfig{},
+		officialegress.DefaultSinkCatalog(),
+		officialegress.DefaultOfficialRouteCatalog(),
+		recorder,
+	)
+	require.NoError(t, err)
+	afterUpstream := newHTTPUpstream(nil, guard).(*httpUpstreamService)
+	afterResponse, afterErr := afterUpstream.Do(newRequest(), "", 77, 1)
+	after := readResult(afterUpstream, afterResponse, afterErr)
+
+	require.Equal(t, before, after)
+	require.Equal(t, <-facts, <-facts)
+	metrics := recorder.Snapshot()
+	require.Len(t, metrics, 1)
+	require.Equal(t, officialegress.ReasonOutOfScopePassthrough, metrics[0].Reason)
+}
+
+func TestHTTPUpstreamGuardPreservesDeadlineAndURLError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+	}))
+	t.Cleanup(server.Close)
+	guard, err := officialegress.NewGuard(
+		officialegress.GuardConfig{}, officialegress.DefaultSinkCatalog(),
+		officialegress.DefaultOfficialRouteCatalog(), nil,
+	)
+	require.NoError(t, err)
+	for _, testCase := range []struct {
+		name  string
+		stack *httpUpstreamService
+	}{
+		{name: "before", stack: newHTTPUpstream(nil, nil).(*httpUpstreamService)},
+		{name: "after", stack: newHTTPUpstream(nil, guard).(*httpUpstreamService)},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+			defer cancel()
+			request, requestErr := http.NewRequestWithContext(ctx, http.MethodGet, server.URL, nil)
+			require.NoError(t, requestErr)
+			_, sendErr := testCase.stack.Do(request, "", 88, 1)
+			require.ErrorIs(t, sendErr, context.DeadlineExceeded)
+			var urlError *url.Error
+			require.ErrorAs(t, sendErr, &urlError)
+			testCase.stack.mu.RLock()
+			for _, entry := range testCase.stack.clients {
+				require.Zero(t, atomic.LoadInt64(&entry.inFlight))
+			}
+			testCase.stack.mu.RUnlock()
+		})
+	}
 }
 
 func TestHTTPUpstreamDoWithTLSPlainHTTPUsesConfiguredHTTPProxy(t *testing.T) {
@@ -343,6 +458,32 @@ func TestHTTPUpstreamDoAppliesGrokCLIIdentityBeforeOAuthRoundTrip(t *testing.T) 
 			require.Equal(t, "xai-grok-workspace/0.2.93", capturedHeaders.Get("User-Agent"))
 		})
 	}
+}
+
+func TestChangeset4ReleaseSwitchEventuallyEvictsOldIdleOfficialClient(t *testing.T) {
+	upstream := NewHTTPUpstream(nil).(*httpUpstreamService)
+	active, err := upstream.getClientEntry(
+		"", 40401, 1, service.HTTPUpstreamProfileOpenAI, false, false,
+		"release-active-pool-digest",
+	)
+	require.NoError(t, err)
+	previous, err := upstream.getClientEntry(
+		"", 40401, 1, service.HTTPUpstreamProfileOpenAI, false, false,
+		"release-previous-pool-digest",
+	)
+	require.NoError(t, err)
+	require.NotSame(t, active, previous)
+
+	now := time.Now()
+	atomic.StoreInt64(&active.lastUsed, now.Add(-upstream.clientIdleTTL()-time.Second).UnixNano())
+	atomic.StoreInt64(&previous.lastUsed, now.UnixNano())
+	upstream.mu.Lock()
+	upstream.evictIdleLocked(now)
+	upstream.mu.Unlock()
+
+	require.False(t, hasEntry(upstream, active), "切换后旧 release 的 idle client 未被淘汰")
+	require.True(t, hasEntry(upstream, previous), "当前 release client 被错误淘汰")
+	previous.client.CloseIdleConnections()
 }
 
 func TestHTTPUpstreamDoFallsBackToOfficialGrokAPIOnCLIAccessDenied(t *testing.T) {
@@ -676,9 +817,8 @@ func (s *HTTPUpstreamSuite) newService() *httpUpstreamService {
 func (s *HTTPUpstreamSuite) TestDefaultResponseHeaderTimeout() {
 	svc := s.newService()
 	entry := mustGetOrCreateClient(s.T(), svc, "", 0, 0)
-	transport, ok := entry.client.Transport.(*http.Transport)
-	require.True(s.T(), ok, "expected *http.Transport")
-	require.Equal(s.T(), time.Duration(0), transport.ResponseHeaderTimeout, "ResponseHeaderTimeout mismatch")
+	facts := mustGuardedHTTPTransportFacts(s.T(), entry.client.Transport)
+	require.Equal(s.T(), time.Duration(0), facts.ResponseHeaderTimeout, "ResponseHeaderTimeout mismatch")
 }
 
 // TestNilConfigResponseHeaderTimeoutFallback 验证 nil 配置使用代码级兜底值。
@@ -687,9 +827,8 @@ func (s *HTTPUpstreamSuite) TestNilConfigResponseHeaderTimeoutFallback() {
 	svc, ok := up.(*httpUpstreamService)
 	require.True(s.T(), ok, "expected *httpUpstreamService")
 	entry := mustGetOrCreateClient(s.T(), svc, "", 0, 0)
-	transport, ok := entry.client.Transport.(*http.Transport)
-	require.True(s.T(), ok, "expected *http.Transport")
-	require.Equal(s.T(), 300*time.Second, transport.ResponseHeaderTimeout, "ResponseHeaderTimeout mismatch")
+	facts := mustGuardedHTTPTransportFacts(s.T(), entry.client.Transport)
+	require.Equal(s.T(), 300*time.Second, facts.ResponseHeaderTimeout, "ResponseHeaderTimeout mismatch")
 }
 
 // TestCustomResponseHeaderTimeout 测试自定义响应头超时配置
@@ -698,9 +837,8 @@ func (s *HTTPUpstreamSuite) TestCustomResponseHeaderTimeout() {
 	s.cfg.Gateway = config.GatewayConfig{ResponseHeaderTimeout: 7}
 	svc := s.newService()
 	entry := mustGetOrCreateClient(s.T(), svc, "", 0, 0)
-	transport, ok := entry.client.Transport.(*http.Transport)
-	require.True(s.T(), ok, "expected *http.Transport")
-	require.Equal(s.T(), 7*time.Second, transport.ResponseHeaderTimeout, "ResponseHeaderTimeout mismatch")
+	facts := mustGuardedHTTPTransportFacts(s.T(), entry.client.Transport)
+	require.Equal(s.T(), 7*time.Second, facts.ResponseHeaderTimeout, "ResponseHeaderTimeout mismatch")
 }
 
 // TestGetOrCreateClient_InvalidURLReturnsError 测试无效代理 URL 返回错误
@@ -722,10 +860,9 @@ func (s *HTTPUpstreamSuite) TestOpenAIProfileDefaultsToHTTP2AndNoHeaderTimeout()
 	svc := s.newService()
 	entry, err := svc.getClientEntry("", 1, 1, service.HTTPUpstreamProfileOpenAI, false, false)
 	require.NoError(s.T(), err)
-	transport, ok := entry.client.Transport.(*http.Transport)
-	require.True(s.T(), ok, "expected *http.Transport")
-	require.Equal(s.T(), time.Duration(0), transport.ResponseHeaderTimeout, "OpenAI profile should not inherit generic header timeout")
-	require.True(s.T(), transport.ForceAttemptHTTP2, "OpenAI profile should prefer HTTP/2")
+	facts := mustGuardedHTTPTransportFacts(s.T(), entry.client.Transport)
+	require.Equal(s.T(), time.Duration(0), facts.ResponseHeaderTimeout, "OpenAI profile should not inherit generic header timeout")
+	require.True(s.T(), facts.ForceAttemptHTTP2, "OpenAI profile should prefer HTTP/2")
 	require.Equal(s.T(), upstreamProtocolModeOpenAIH2, entry.protocolMode)
 }
 
@@ -740,9 +877,8 @@ func (s *HTTPUpstreamSuite) TestOpenAIProfileCustomHeaderTimeout() {
 	svc := s.newService()
 	entry, err := svc.getClientEntry("", 1, 1, service.HTTPUpstreamProfileOpenAI, false, false)
 	require.NoError(s.T(), err)
-	transport, ok := entry.client.Transport.(*http.Transport)
-	require.True(s.T(), ok, "expected *http.Transport")
-	require.Equal(s.T(), 1800*time.Second, transport.ResponseHeaderTimeout)
+	facts := mustGuardedHTTPTransportFacts(s.T(), entry.client.Transport)
+	require.Equal(s.T(), 1800*time.Second, facts.ResponseHeaderTimeout)
 }
 
 func (s *HTTPUpstreamSuite) TestOpenAIProfileTLSFingerprintDoesNotInheritGenericHeaderTimeout() {
@@ -755,9 +891,8 @@ func (s *HTTPUpstreamSuite) TestOpenAIProfileTLSFingerprintDoesNotInheritGeneric
 	svc := s.newService()
 	entry, err := svc.getClientEntryWithTLS("", 1, 1, &tlsfingerprint.Profile{Name: "test"}, service.HTTPUpstreamProfileOpenAI, false, false)
 	require.NoError(s.T(), err)
-	transport, ok := entry.client.Transport.(*http.Transport)
-	require.True(s.T(), ok, "expected *http.Transport")
-	require.Equal(s.T(), time.Duration(0), transport.ResponseHeaderTimeout, "OpenAI TLS path should not inherit generic header timeout")
+	facts := mustGuardedHTTPTransportFacts(s.T(), entry.client.Transport)
+	require.Equal(s.T(), time.Duration(0), facts.ResponseHeaderTimeout, "OpenAI TLS path should not inherit generic header timeout")
 }
 
 func (s *HTTPUpstreamSuite) TestOpenAIProfileHTTP2DisabledUsesHTTP1Transport() {
@@ -767,10 +902,9 @@ func (s *HTTPUpstreamSuite) TestOpenAIProfileHTTP2DisabledUsesHTTP1Transport() {
 	svc := s.newService()
 	entry, err := svc.getClientEntry("", 1, 1, service.HTTPUpstreamProfileOpenAI, false, false)
 	require.NoError(s.T(), err)
-	transport, ok := entry.client.Transport.(*http.Transport)
-	require.True(s.T(), ok, "expected *http.Transport")
-	require.False(s.T(), transport.ForceAttemptHTTP2, "OpenAI HTTP/2 disabled should not force H2")
-	require.NotNil(s.T(), transport.TLSNextProto, "HTTP/1 mode should disable automatic H2 negotiation")
+	facts := mustGuardedHTTPTransportFacts(s.T(), entry.client.Transport)
+	require.False(s.T(), facts.ForceAttemptHTTP2, "OpenAI HTTP/2 disabled should not force H2")
+	require.True(s.T(), facts.TLSNextProtoConfigured, "HTTP/1 mode should disable automatic H2 negotiation")
 	require.Equal(s.T(), upstreamProtocolModeOpenAIH1, entry.protocolMode)
 }
 
@@ -786,9 +920,8 @@ func (s *HTTPUpstreamSuite) TestOpenAIHeaderTimeoutChangeRebuildsClient() {
 	entry2, err := svc.getClientEntry("", 1, 1, service.HTTPUpstreamProfileOpenAI, false, false)
 	require.NoError(s.T(), err)
 	require.NotSame(s.T(), entry1, entry2, "OpenAI header timeout changes must rebuild cached client")
-	transport, ok := entry2.client.Transport.(*http.Transport)
-	require.True(s.T(), ok, "expected *http.Transport")
-	require.Equal(s.T(), 1800*time.Second, transport.ResponseHeaderTimeout)
+	facts := mustGuardedHTTPTransportFacts(s.T(), entry2.client.Transport)
+	require.Equal(s.T(), 1800*time.Second, facts.ResponseHeaderTimeout)
 }
 
 func (s *HTTPUpstreamSuite) TestOpenAIHTTP2TimeoutDoesNotActivateProxyFallback() {
@@ -824,10 +957,9 @@ func (s *HTTPUpstreamSuite) TestOpenAIHTTP2ProxyCompatibilityErrorActivatesFallb
 
 	entry, err := svc.getClientEntry(proxyURL, 1, 1, service.HTTPUpstreamProfileOpenAI, false, false)
 	require.NoError(s.T(), err)
-	transport, ok := entry.client.Transport.(*http.Transport)
-	require.True(s.T(), ok, "expected *http.Transport")
-	require.False(s.T(), transport.ForceAttemptHTTP2)
-	require.NotNil(s.T(), transport.TLSNextProto)
+	facts := mustGuardedHTTPTransportFacts(s.T(), entry.client.Transport)
+	require.False(s.T(), facts.ForceAttemptHTTP2)
+	require.True(s.T(), facts.TLSNextProtoConfigured)
 	require.Equal(s.T(), upstreamProtocolModeOpenAIH1Fallback, entry.protocolMode)
 }
 
@@ -973,12 +1105,11 @@ func (s *HTTPUpstreamSuite) TestAccountConcurrencyOverridesPoolSettings() {
 	svc := s.newService()
 	// 账户并发数为 12
 	entry := mustGetOrCreateClient(s.T(), svc, "", 1, 12)
-	transport, ok := entry.client.Transport.(*http.Transport)
-	require.True(s.T(), ok, "expected *http.Transport")
+	facts := mustGuardedHTTPTransportFacts(s.T(), entry.client.Transport)
 	// 连接池参数应与并发数一致
-	require.Equal(s.T(), 12, transport.MaxConnsPerHost, "MaxConnsPerHost mismatch")
-	require.Equal(s.T(), 12, transport.MaxIdleConns, "MaxIdleConns mismatch")
-	require.Equal(s.T(), 12, transport.MaxIdleConnsPerHost, "MaxIdleConnsPerHost mismatch")
+	require.Equal(s.T(), 12, facts.MaxConnsPerHost, "MaxConnsPerHost mismatch")
+	require.Equal(s.T(), 12, facts.MaxIdleConns, "MaxIdleConns mismatch")
+	require.Equal(s.T(), 12, facts.MaxIdleConnsPerHost, "MaxIdleConnsPerHost mismatch")
 }
 
 // TestAccountConcurrencyFallbackToDefault 测试账户并发数为 0 时回退到默认配置
@@ -993,11 +1124,10 @@ func (s *HTTPUpstreamSuite) TestAccountConcurrencyFallbackToDefault() {
 	svc := s.newService()
 	// 账户并发数为 0，应使用全局配置
 	entry := mustGetOrCreateClient(s.T(), svc, "", 1, 0)
-	transport, ok := entry.client.Transport.(*http.Transport)
-	require.True(s.T(), ok, "expected *http.Transport")
-	require.Equal(s.T(), 66, transport.MaxConnsPerHost, "MaxConnsPerHost fallback mismatch")
-	require.Equal(s.T(), 77, transport.MaxIdleConns, "MaxIdleConns fallback mismatch")
-	require.Equal(s.T(), 55, transport.MaxIdleConnsPerHost, "MaxIdleConnsPerHost fallback mismatch")
+	facts := mustGuardedHTTPTransportFacts(s.T(), entry.client.Transport)
+	require.Equal(s.T(), 66, facts.MaxConnsPerHost, "MaxConnsPerHost fallback mismatch")
+	require.Equal(s.T(), 77, facts.MaxIdleConns, "MaxIdleConns fallback mismatch")
+	require.Equal(s.T(), 55, facts.MaxIdleConnsPerHost, "MaxIdleConnsPerHost fallback mismatch")
 }
 
 // TestEvictOverLimitRemovesOldestIdle 测试超出数量限制时的 LRU 淘汰
@@ -1076,6 +1206,14 @@ func mustGetOrCreateClient(t *testing.T, svc *httpUpstreamService, proxyURL stri
 	entry, err := svc.getOrCreateClient(proxyURL, accountID, concurrency)
 	require.NoError(t, err, "getOrCreateClient(%q, %d, %d)", proxyURL, accountID, concurrency)
 	return entry
+}
+
+// mustGuardedHTTPTransportFacts 读取 Guard 内部标准库 transport 的只读配置事实。
+func mustGuardedHTTPTransportFacts(t *testing.T, transport http.RoundTripper) officialegress.HTTPTransportFacts {
+	t.Helper()
+	facts, ok := officialegress.InspectHTTPTransport(transport)
+	require.Truef(t, ok, "期望 Guard 直属底层为 *http.Transport，实际为 %T", transport)
+	return facts
 }
 
 // hasEntry 检查客户端是否存在于缓存中

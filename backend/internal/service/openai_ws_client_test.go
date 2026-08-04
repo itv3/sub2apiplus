@@ -2,10 +2,10 @@ package service
 
 import (
 	"fmt"
-	"net/http"
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/stretchr/testify/require"
 )
 
@@ -105,9 +105,8 @@ func TestCoderOpenAIWSClientDialer_ProxyTransportTLSHandshakeTimeout(t *testing.
 	require.NoError(t, err)
 	require.NotNil(t, client)
 
-	transport, ok := client.Transport.(*http.Transport)
+	transport, ok := officialegress.InspectHTTPTransport(client.Transport)
 	require.True(t, ok)
-	require.NotNil(t, transport)
 	require.Equal(t, 10*time.Second, transport.TLSHandshakeTimeout)
 }
 

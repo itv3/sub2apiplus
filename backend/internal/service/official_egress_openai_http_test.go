@@ -63,18 +63,24 @@ func TestOpenAIOfficialEgressHTTPFinalizerUsesIngressLifecycle(t *testing.T) {
 	require.Equal(t, testOfficialOpenAICallID, gjson.GetBytes(wireBody, "input.4.call_id").String())
 	require.Equal(t, testOfficialOpenAISessionID, req.Header.Get("session-id"))
 	require.Equal(t, testOfficialOpenAISessionID, req.Header.Get("thread-id"))
-	require.Equal(t, testOfficialOpenAISessionID, req.Header.Get("x-client-request-id"))
+	require.Empty(t, req.Header.Get("x-client-request-id"), "compiler-owned Header 不应在语义构造阶段生成")
 	require.Equal(t, testOfficialOpenAISessionID+":0", req.Header.Get("x-codex-window-id"))
 	require.Equal(t, c.GetHeader("x-codex-turn-metadata"), req.Header.Get("x-codex-turn-metadata"))
-	require.Empty(t, req.Header.Get("session_id"))
-	require.Empty(t, req.Header.Get("conversation_id"))
-	require.Empty(t, req.Header.Get("OpenAI-Beta"))
+	semantic, err := prepareOfficialCodexSemanticAttempt(
+		req, wireBody, officialCodexEndpointResponsesHTTP,
+		"http-ingress-lifecycle-test", projectOfficialCodexIdentityAccount(account),
+	)
+	require.NoError(t, err)
+	require.Empty(t, semantic.Headers.Get("session_id"))
+	require.Empty(t, semantic.Headers.Get("conversation_id"))
+	require.Empty(t, semantic.Headers.Get("OpenAI-Beta"))
 
 	egressContext, ok := OfficialEgressContextFromContext(req.Context())
 	require.True(t, ok)
 	require.Equal(t, int64(94), egressContext.AccountID())
 	requireOfficialOpenAIField(t, egressContext, OfficialEgressFieldSessionID, testOfficialOpenAISessionID, OfficialEgressFieldLifecycleSession)
 	requireOfficialOpenAIField(t, egressContext, OfficialEgressFieldThreadID, testOfficialOpenAISessionID, OfficialEgressFieldLifecycleSession)
+	requireOfficialOpenAIField(t, egressContext, OfficialEgressFieldClientRequestID, testOfficialOpenAISessionID, OfficialEgressFieldLifecycleSession)
 	requireOfficialOpenAIField(t, egressContext, OfficialEgressFieldWindowID, testOfficialOpenAISessionID+":0", OfficialEgressFieldLifecycleSession)
 	requireOfficialOpenAIField(t, egressContext, OfficialEgressFieldTurnMetadata, c.GetHeader("x-codex-turn-metadata"), OfficialEgressFieldLifecycleTurn)
 	requireOfficialOpenAIField(t, egressContext, OfficialEgressFieldPromptCacheKey, testOfficialOpenAISessionID, OfficialEgressFieldLifecycleSession)
@@ -153,15 +159,12 @@ func TestOpenAIOfficialEgressHTTPFinalizerAcceptsGuardianIdentity(t *testing.T) 
 	wireBody := mustReadRequestBody(t, req)
 	require.Equal(t, testOfficialOpenAISessionID, req.Header.Get("session-id"))
 	require.Equal(t, testOfficialOpenAIChildThreadID, req.Header.Get("thread-id"))
-	require.Equal(t, testOfficialOpenAIChildThreadID, req.Header.Get("x-client-request-id"))
+	require.Empty(t, req.Header.Get("x-client-request-id"), "compiler-owned Header 不应在语义构造阶段生成")
 	require.Equal(t, testOfficialOpenAIChildThreadID+":0", req.Header.Get("x-codex-window-id"))
 	require.Equal(t, "guardian", req.Header.Get("x-openai-subagent"))
 	require.Equal(t, testOfficialOpenAISessionID, req.Header.Get("x-codex-parent-thread-id"))
-	require.Equal(t, "guardian:"+testOfficialOpenAISessionID, gjson.GetBytes(wireBody, "prompt_cache_key").String())
-	require.Equal(t, testOfficialOpenAISessionID, gjson.GetBytes(wireBody, "client_metadata.session_id").String())
-	require.Equal(t, testOfficialOpenAIChildThreadID, gjson.GetBytes(wireBody, "client_metadata.thread_id").String())
-	require.Equal(t, "guardian", gjson.GetBytes(wireBody, "client_metadata.x-openai-subagent").String())
-	require.Equal(t, testOfficialOpenAISessionID, gjson.GetBytes(wireBody, "client_metadata.x-codex-parent-thread-id").String())
+	require.False(t, gjson.GetBytes(wireBody, "prompt_cache_key").Exists())
+	require.False(t, gjson.GetBytes(wireBody, "client_metadata").Exists())
 
 	turnMetadata := gjson.Parse(req.Header.Get("x-codex-turn-metadata"))
 	require.Equal(t, testOfficialOpenAISessionID, turnMetadata.Get("session_id").String())
@@ -434,7 +437,7 @@ func TestResolveDerivedOfficialOpenAICompactionMetadataCoversAllReasons(t *testi
 			c := newOfficialOpenAIHTTPTestContext(body, "/v1/responses")
 			c.Request.Header.Set("x-codex-turn-metadata", `{"compaction":{"reason":"`+tt.reason+`"}}`)
 
-			metadata, ok := resolveDerivedOfficialOpenAICompactionMetadata(c, body)
+			metadata, ok := resolveDerivedOfficialOpenAICompactionMetadata(c, body, officialClientProfileModeActive)
 			require.True(t, ok)
 			require.Equal(t, tt.trigger, metadata.Trigger)
 			require.Equal(t, tt.phase, metadata.Phase)
@@ -451,7 +454,7 @@ func TestResolveDerivedOfficialOpenAICompactionMetadataLegacyImplementation(t *t
 	body := []byte(`{"model":"gpt-5.6-luna","input":[]}`)
 	c := newOfficialOpenAIHTTPTestContext(body, "/v1/responses/compact")
 
-	metadata, ok := resolveDerivedOfficialOpenAICompactionMetadata(c, body)
+	metadata, ok := resolveDerivedOfficialOpenAICompactionMetadata(c, body, officialClientProfileModeActive)
 	require.True(t, ok)
 	encoded, err := json.Marshal(metadata)
 	require.NoError(t, err)
@@ -496,7 +499,7 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPNonStreamAndSSE(t *testing.T) {
 			require.NotNil(t, result)
 			require.Equal(t, tt.stream, result.Stream)
 			require.NotNil(t, upstream.lastTLSProfile)
-			require.Contains(t, upstream.lastTLSProfile.Name, "Codex CLI 0.145.0 HTTP")
+			require.Contains(t, upstream.lastTLSProfile.Name, "Official Codex compiled")
 			require.False(t, gjson.GetBytes(upstream.lastBody, "instructions").Exists())
 			require.Equal(t, false, gjson.GetBytes(upstream.lastBody, "parallel_tool_calls").Bool())
 			require.Equal(t, "reasoning.encrypted_content", gjson.GetBytes(upstream.lastBody, "include.0").String())
@@ -621,7 +624,7 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPPassthroughUnaffectedByWSMode(t *
 			require.NoError(t, err)
 			require.NotNil(t, result)
 			require.NotNil(t, upstream.lastTLSProfile)
-			require.Contains(t, upstream.lastTLSProfile.Name, "Codex CLI 0.145.0 HTTP")
+			require.Contains(t, upstream.lastTLSProfile.Name, "Official Codex compiled")
 			require.False(t, gjson.GetBytes(upstream.lastBody, "instructions").Exists())
 			require.Equal(t, testOfficialOpenAICallID, gjson.GetBytes(upstream.lastBody, "input.3.call_id").String())
 			require.Equal(t, testOfficialOpenAISessionID, upstream.lastReq.Header.Get("session-id"))
@@ -805,6 +808,7 @@ func TestFinalizeOfficialOpenAIHTTPBodyPreservesNestedRawData(t *testing.T) {
 		newOfficialOpenAIHTTPTestAccount(94991),
 		body,
 		contract,
+		officialClientProfileModeActive,
 	)
 	require.NoError(t, err)
 
@@ -814,6 +818,7 @@ func TestFinalizeOfficialOpenAIHTTPBodyPreservesNestedRawData(t *testing.T) {
 		identity,
 		officialOpenAIReasoningDefaults{},
 		officialOpenAIHTTPBodyOptions{
+			ProfileMode:           officialClientProfileModeActive,
 			UseResponsesLite:      true,
 			SupportsParallelTools: true,
 		},
@@ -1260,6 +1265,7 @@ func TestFinalizeOfficialOpenAIHTTPBodyProjectsUnknownFieldsOnStrictIngress(t *t
 		newOfficialOpenAIHTTPTestAccount(94992),
 		body,
 		contract,
+		officialClientProfileModeActive,
 	)
 	require.NoError(t, err)
 
@@ -1269,6 +1275,7 @@ func TestFinalizeOfficialOpenAIHTTPBodyProjectsUnknownFieldsOnStrictIngress(t *t
 		identity,
 		officialOpenAIReasoningDefaults{},
 		officialOpenAIHTTPBodyOptions{
+			ProfileMode:           officialClientProfileModeActive,
 			StrictIngressIdentity: true,
 			SupportsParallelTools: true,
 			UserAgent:             "codex_exec/0.146.0 (Ubuntu 24.4.0; x86_64) unknown",
@@ -1298,6 +1305,7 @@ func TestFinalizeOfficialOpenAIHTTPBodyNormalizesToolChoiceOnStrictIngress(t *te
 		newOfficialOpenAIHTTPTestAccount(94993),
 		body,
 		contract,
+		officialClientProfileModeActive,
 	)
 	require.NoError(t, err)
 
@@ -1307,6 +1315,7 @@ func TestFinalizeOfficialOpenAIHTTPBodyNormalizesToolChoiceOnStrictIngress(t *te
 		identity,
 		officialOpenAIReasoningDefaults{},
 		officialOpenAIHTTPBodyOptions{
+			ProfileMode:           officialClientProfileModeActive,
 			StrictIngressIdentity: true,
 			SupportsParallelTools: true,
 		},
@@ -1344,20 +1353,23 @@ func TestStripNonOfficialOpenAITopLevelFieldsReportsRemovedNames(t *testing.T) {
 // 状态送进另一段；而缺失 turn-state 只会让该条件头不发出，那是官方最常见的合法形态。
 func TestOfficialOpenAIHTTPTurnStateStoreKeyRequiresExplicitAnchor(t *testing.T) {
 	derived := officialOpenAIHTTPIdentity{
-		sessionID: "session-94995",
-		turnID:    "turn-94995",
+		sessionID:         "session-94995",
+		turnID:            "turn-94995",
+		sessionProvenance: officialOpenAIProvenanceContentFallback,
+		turnProvenance:    officialOpenAIProvenanceContentFallback,
 	}
 	require.Empty(
 		t,
-		officialOpenAIHTTPTurnStateStoreKey(derived),
+		testOfficialOpenAITurnStateStoreKey(derived),
 		"内容兜底推导出的会话身份不得作为 turn-state 跨请求复用的依据",
 	)
 
 	explicit := derived
-	explicit.sessionAnchorExplicit = true
+	explicit.sessionProvenance = officialOpenAIProvenanceExplicitIngress
+	explicit.turnProvenance = officialOpenAIProvenanceExplicitSessionDerivedTurn
 	require.NotEmpty(
 		t,
-		officialOpenAIHTTPTurnStateStoreKey(explicit),
+		testOfficialOpenAITurnStateStoreKey(explicit),
 		"显式会话锚点下必须保留复用，否则工具结果续轮会丢失 turn",
 	)
 }
@@ -1373,18 +1385,20 @@ func TestDeriveOfficialOpenAIHTTPIdentityMarksAnchorSource(t *testing.T) {
 
 	withoutAnchor, _ := gin.CreateTestContext(httptest.NewRecorder())
 	withoutAnchor.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	derived, err := deriveOfficialOpenAIHTTPIdentity(withoutAnchor, account, body, contract)
+	derived, err := deriveOfficialOpenAIHTTPIdentity(withoutAnchor, account, body, contract, officialClientProfileModeActive)
 	require.NoError(t, err)
-	require.False(t, derived.sessionAnchorExplicit)
-	require.Empty(t, officialOpenAIHTTPTurnStateStoreKey(derived))
+	require.Equal(t, officialOpenAIProvenanceContentFallback, derived.sessionProvenance)
+	require.Equal(t, officialOpenAIProvenanceContentFallback, derived.turnProvenance)
+	require.Empty(t, testOfficialOpenAITurnStateStoreKey(derived))
 
 	withAnchor, _ := gin.CreateTestContext(httptest.NewRecorder())
 	withAnchor.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 	withAnchor.Request.Header.Set("X-Session-Id", "conversation-94996")
-	anchored, err := deriveOfficialOpenAIHTTPIdentity(withAnchor, account, body, contract)
+	anchored, err := deriveOfficialOpenAIHTTPIdentity(withAnchor, account, body, contract, officialClientProfileModeActive)
 	require.NoError(t, err)
-	require.True(t, anchored.sessionAnchorExplicit)
-	require.NotEmpty(t, officialOpenAIHTTPTurnStateStoreKey(anchored))
+	require.Equal(t, officialOpenAIProvenanceExplicitIngress, anchored.sessionProvenance)
+	require.Equal(t, officialOpenAIProvenanceExplicitSessionDerivedTurn, anchored.turnProvenance)
+	require.NotEmpty(t, testOfficialOpenAITurnStateStoreKey(anchored))
 	require.NotEqual(
 		t,
 		derived.sessionID,
@@ -1411,16 +1425,16 @@ func TestDeriveOfficialOpenAIHTTPIdentityContentFallbackCollides(t *testing.T) {
 	second, _ := gin.CreateTestContext(httptest.NewRecorder())
 	second.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
 
-	firstIdentity, err := deriveOfficialOpenAIHTTPIdentity(first, account, body, contract)
+	firstIdentity, err := deriveOfficialOpenAIHTTPIdentity(first, account, body, contract, officialClientProfileModeActive)
 	require.NoError(t, err)
-	secondIdentity, err := deriveOfficialOpenAIHTTPIdentity(second, account, body, contract)
+	secondIdentity, err := deriveOfficialOpenAIHTTPIdentity(second, account, body, contract, officialClientProfileModeActive)
 	require.NoError(t, err)
 
 	require.Equal(t, firstIdentity.sessionID, secondIdentity.sessionID)
 	require.Equal(t, firstIdentity.turnID, secondIdentity.turnID)
 	require.Empty(
 		t,
-		officialOpenAIHTTPTurnStateStoreKey(firstIdentity),
+		testOfficialOpenAITurnStateStoreKey(firstIdentity),
 		"身份可以碰撞，但碰撞不得传导为共享 turn-state",
 	)
 }
@@ -1429,7 +1443,7 @@ func TestDeriveOfficialOpenAIHTTPIdentityContentFallbackCollides(t *testing.T) {
 // 的 header 定型与版本画像绑定。
 //
 // 辅助端点（models/images/search/realtime/wham/files/OAuth refresh）与 WS 握手都经过
-// officialCodex0145ApplyHeaderContract，header 值由画像槽位声明直接生成；主链是唯一
+// officialCodexApplyHeaderContract，header 值由画像槽位声明直接生成；主链是唯一
 // 例外，它在 finalizeOfficialOpenAIHTTPHeaders 里手工写出。两处目前完全一致，但这份
 // 一致没有任何机器保证：升级时若只换画像不改 finalizer，辅助端点会跟随新版本而主链
 // 仍按旧值出站——同账号同 IP 上出现两种版本形态，正是 §3.1 列为最强识别特征的那类
@@ -1448,7 +1462,7 @@ func TestOfficialOpenAIHTTPFinalizerMatchesProfileHeaderContract(t *testing.T) {
 		turnMetadata:   `{"request_kind":"turn"}`,
 		clientRequest:  "0199aaaa-0000-7000-8000-000000000005",
 	}
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	require.NoError(t, err)
 
 	testCases := []struct {
@@ -1532,16 +1546,13 @@ func TestDeriveOfficialOpenAIHTTPIdentityRejectsGeneratedPromptCacheKey(t *testi
 	generated.promptCacheKey = "generated-cache-key-94998"
 	generated.promptCacheKeySet = false
 
-	derived, err := deriveOfficialOpenAIHTTPIdentity(nil, account, body, generated)
+	derived, err := deriveOfficialOpenAIHTTPIdentity(nil, account, body, generated, officialClientProfileModeActive)
 	require.NoError(t, err)
-	require.False(
-		t,
-		derived.sessionAnchorExplicit,
-		"内部生成的 prompt_cache_key 不得被当作入站显式锚点",
-	)
+	require.Equal(t, officialOpenAIProvenanceContentFallback, derived.sessionProvenance)
+	require.Equal(t, officialOpenAIProvenanceContentFallback, derived.turnProvenance)
 	require.Empty(
 		t,
-		officialOpenAIHTTPTurnStateStoreKey(derived),
+		testOfficialOpenAITurnStateStoreKey(derived),
 		"生成型缓存键不得成为 turn-state 跨请求复用的依据",
 	)
 
@@ -1551,8 +1562,19 @@ func TestDeriveOfficialOpenAIHTTPIdentityRejectsGeneratedPromptCacheKey(t *testi
 	explicitContract.promptCacheKey = "generated-cache-key-94998"
 	explicitContract.promptCacheKeySet = true
 
-	explicit, err := deriveOfficialOpenAIHTTPIdentity(nil, account, body, explicitContract)
+	explicit, err := deriveOfficialOpenAIHTTPIdentity(nil, account, body, explicitContract, officialClientProfileModeActive)
 	require.NoError(t, err)
-	require.True(t, explicit.sessionAnchorExplicit)
-	require.NotEmpty(t, officialOpenAIHTTPTurnStateStoreKey(explicit))
+	require.Equal(t, officialOpenAIProvenanceExplicitIngress, explicit.sessionProvenance)
+	require.Equal(t, officialOpenAIProvenanceExplicitSessionDerivedTurn, explicit.turnProvenance)
+	require.NotEmpty(t, testOfficialOpenAITurnStateStoreKey(explicit))
+}
+
+func testOfficialOpenAITurnStateStoreKey(identity officialOpenAIHTTPIdentity) string {
+	return newOfficialOpenAITurnStateScope(
+		94995,
+		94996,
+		"https://chatgpt.com:443",
+		strings.Repeat("a", 64),
+		identity,
+	).persistentStoreKey()
 }

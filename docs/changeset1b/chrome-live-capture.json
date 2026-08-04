@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "captured_at": "2026-08-02",
+  "capture_kind": "sanitized_local_live_chrome",
+  "browser": {
+    "family": "Google Chrome",
+    "major_version": 150,
+    "platform": "macOS",
+    "language": "zh,en;q=0.9,zh-CN;q=0.8"
+  },
+  "navigation": {
+    "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+    "accept_encoding": "gzip, deflate, br, zstd",
+    "sec_fetch_dest": "document",
+    "sec_fetch_mode": "navigate",
+    "sec_fetch_user": "?1",
+    "upgrade_insecure_requests": "1"
+  },
+  "xhr": {
+    "accept": "application/json",
+    "accept_encoding": "gzip, deflate, br, zstd",
+    "accept_language": "zh,en;q=0.9,zh-CN;q=0.8",
+    "sec_ch_ua_mobile": "?0",
+    "sec_ch_ua_platform": "\"macOS\"",
+    "sec_fetch_dest": "empty",
+    "sec_fetch_mode": "cors",
+    "sec_fetch_site": "same-origin"
+  },
+  "xhr_absent_headers": [
+    "sec-fetch-user",
+    "upgrade-insecure-requests",
+    "cache-control",
+    "pragma"
+  ],
+  "public_smoke": {
+    "origin": "https://chatgpt.com",
+    "result": "chatgpt_page_reached_without_challenge"
+  },
+  "safety": {
+    "raw_har_retained": false,
+    "cookies_collected": false,
+    "authorization_collected": false,
+    "response_body_collected": false,
+    "temporary_capture_service_deleted": true
+  },
+  "note": "本机 Chrome 150 用于真实 XHR 与导航语义对照；生产 Chrome 133 的精确 UA、Client Hint、TLS ClientHello 与 supported_groups 由固定 wire 测试验证。"
+}

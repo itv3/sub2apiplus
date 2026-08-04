@@ -1,0 +1,37 @@
+{
+  "schema_version": "sub2api.changeset4.base_receipt.v1",
+  "changeset": "4",
+  "created_at": "2026-08-03T22:27:37Z",
+  "git": {
+    "branch": "main",
+    "head": "38a9929eac35a39c86de2f27de8f7a805d7dae52",
+    "head_tree": "a8c3dee18a01a6138bfcea60860bb5ad11548c3a"
+  },
+  "working_tree": {
+    "status_porcelain_v1_z_sha256": "41bbc49a3fac0dcaa0cb43af0d091868d431028a7f43effc96d2fe9a5f20e243",
+    "diff_binary_full_index_against_head_sha256": "34ef83c3999345d2595a48df4d7ff1598dd025746c1076eda47cdd10d22135b9",
+    "tracked_dirty_path_count": 141,
+    "untracked_nonignored_path_count": 293,
+    "accepted_ignored_evidence_file_count": 157,
+    "base_file_manifest": "docs/changeset4/base-files.sha256",
+    "base_file_manifest_entry_count": 536,
+    "base_file_manifest_sha256": "701782a72cf23b032e9a11aed5d08de9978cc5041f52ed7aa731035c94e7369e"
+  },
+  "manifest_scope": [
+    "相对 HEAD 的全部已跟踪差异路径",
+    "全部未忽略的未跟踪路径",
+    "docs/changeset0 至 docs/changeset3 的已验收且被忽略证据文件"
+  ],
+  "baseline_verification": [
+    "go test ./internal/officialegress/... -count=1",
+    "状态键、WHAM、WS compression、连接池隔离相关聚焦 service 测试",
+    "git diff --check"
+  ],
+  "rules": [
+    "本收据只冻结变更集 4 开发前已验收脏工作区，不把 HEAD 冒充完整基线",
+    "后续变更必须以 HEAD 内容、base-files.sha256 与新增文件三者共同区分",
+    "原始 SnapshotDoc/ProfileSpec 证据层保持保真；执行层由 ExecutableProfile 承担",
+    "不得自动覆盖或原地重写本收据和 base-files.sha256"
+  ]
+}
+

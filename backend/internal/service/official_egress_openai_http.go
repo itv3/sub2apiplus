@@ -74,10 +74,9 @@ type officialOpenAIHTTPIdentity struct {
 	clientRequest  string
 	promptCacheKey string
 	source         OfficialEgressFieldSource
-	// sessionAnchorExplicit 表示会话身份来自入站的显式锚点（会话头或
-	// prompt_cache_key），而不是从消息内容兜底推导。只有显式锚点才能作为跨请求
-	// 复用 turn-state 的依据，理由见 officialOpenAIHTTPTurnStateStoreKey。
-	sessionAnchorExplicit bool
+	// session/turn 来源必须分别冻结；非空值不能替代来源证明。
+	sessionProvenance officialOpenAIIdentityProvenance
+	turnProvenance    officialOpenAIIdentityProvenance
 }
 
 type officialOpenAIIdentityKind string
@@ -356,9 +355,10 @@ func collectOfficialOpenAICallIDs(payload map[string]any) []officialOpenAIHTTPCa
 	return callIDs
 }
 
-// finalizeOpenAIOfficialEgressHTTPRequest 在请求发送前执行 T5 最小差异修正。
-// 没有 Profile 上下文时原样返回；存在时 Header 与 Body 必须能追溯到同一入口生命周期。
-func finalizeOpenAIOfficialEgressHTTPRequest(
+// prepareOpenAIOfficialEgressSemanticHTTPRequest 只完成 service 所有的业务语义
+// 派生与身份来源校验。Header 闭集、画像字段注入、Body 线序、压缩和长度均由
+// Executor/compiler 独占，避免在签名前形成第二套 wire 定型权威。
+func prepareOpenAIOfficialEgressSemanticHTTPRequest(
 	req *http.Request,
 	c *gin.Context,
 	account *Account,
@@ -395,11 +395,6 @@ func finalizeOpenAIOfficialEgressHTTPRequest(
 	if profile.TargetPlatform != PlatformOpenAI {
 		return nil, result, errors.New("OpenAI finalizer received non-OpenAI profile")
 	}
-	userAgent, originator, err := officialCodex0145ProcessIdentity(egressContext)
-	if err != nil {
-		return nil, result, err
-	}
-
 	strictIngressIdentity := isInboundOpenAIOfficialClient(c)
 	identity, err := resolveOfficialOpenAIHTTPIdentity(
 		c,
@@ -408,6 +403,7 @@ func finalizeOpenAIOfficialEgressHTTPRequest(
 		plan.OfficialEgressBodyContract,
 		strictIngressIdentity,
 		plan.IsCompact,
+		egressContext.ProfileMode(),
 	)
 	if err != nil {
 		return nil, result, err
@@ -418,9 +414,9 @@ func finalizeOpenAIOfficialEgressHTTPRequest(
 		if decodeErr != nil {
 			return nil, result, fmt.Errorf("解析 Codex 派生工具呈现：%w", decodeErr)
 		}
-		toolPresentationModified, err = officialCodex0145NormalizeDerivedToolPresentation(
+		toolPresentationModified, err = officialCodexNormalizeDerivedToolPresentation(
 			egressContext.ProfileVersion(),
-			codex0145EndpointID(egressContext.CodexEndpointProfileID()),
+			codexEndpointID(egressContext.CodexEndpointProfileID()),
 			payload,
 		)
 		if err != nil {
@@ -444,18 +440,11 @@ func finalizeOpenAIOfficialEgressHTTPRequest(
 			UseResponsesLite:      egressContext.responsesLite,
 			SupportsParallelTools: egressContext.parallelTools,
 			UserAgent:             officialOpenAIInboundUserAgent(c),
+			ProfileMode:           egressContext.ProfileMode(),
 		},
 	)
 	if err != nil {
 		return nil, result, err
-	}
-	finalBody, err = officialCodex0145FinalizeEndpointJSONBody(
-		egressContext,
-		finalBody,
-		nil,
-	)
-	if err != nil {
-		return nil, result, fmt.Errorf("按 Codex 版本画像定型 HTTP body：%w", err)
 	}
 	bodyModified = bodyModified || toolPresentationModified
 	if bodyModified {
@@ -467,57 +456,21 @@ func finalizeOpenAIOfficialEgressHTTPRequest(
 	if err := registerOfficialOpenAIHTTPIdentity(egressContext, identity, plan.IsCompact); err != nil {
 		return nil, result, err
 	}
-	finalizeOfficialOpenAIHTTPHeaders(
-		req.Header,
-		egressContext.ProfileVersion(),
-		userAgent,
-		originator,
-		identity,
-		plan.IsCompact,
-		egressContext.responsesLite,
-		plan.OfficialEgressTurnState,
-	)
-	result.Modifications = append(result.Modifications,
-		OfficialEgressModification{Kind: "header", Field: "session-id"},
-		OfficialEgressModification{Kind: "header", Field: "thread-id"},
-		OfficialEgressModification{Kind: "header", Field: "x-client-request-id"},
-		OfficialEgressModification{Kind: "header", Field: "x-codex-window-id"},
-		OfficialEgressModification{Kind: "header", Field: "x-codex-turn-metadata"},
-	)
-
+	if turnState := strings.TrimSpace(plan.OfficialEgressTurnState); turnState != "" {
+		if err := egressContext.RegisterField(
+			OfficialEgressFieldTurnState,
+			turnState,
+			OfficialEgressFieldSourceRedisSession,
+			OfficialEgressFieldLifecycleTurn,
+		); err != nil {
+			return nil, result, err
+		}
+	}
 	if err := ValidateOfficialEgressFinalState(egressContext, profile); err != nil {
 		return nil, result, err
 	}
 	logOfficialEgressProfileResolved(egressContext, profile)
 	resetOfficialEgressRequestBody(req, finalBody)
-	requestCompression, err := resolveOfficialOpenAIRequestCompression(egressContext)
-	if err != nil {
-		return nil, result, err
-	}
-	// compact 端点始终明文。普通 Responses 的画像默认开启 zstd；若入站本身是
-	// 官方 Codex HTTP fallback，则以它是否发送 content-encoding:zstd 还原该进程
-	// 的 feature 状态。该状态已在解压前冻结到版本运行态，不能再从当前 header 猜测。
-	if account != nil && account.IsOpenAIOAuth() && !plan.IsCompact && requestCompression.Enabled {
-		if err := compressOfficialOpenAIHTTPRequest(req, finalBody, requestCompression.Level); err != nil {
-			return nil, result, err
-		}
-		result.Modifications = append(result.Modifications,
-			OfficialEgressModification{Kind: "header", Field: "Content-Encoding"},
-		)
-	}
-	if plan.IsCompact || !requestCompression.Enabled {
-		deleteHeaderAllForms(req.Header, "content-encoding")
-	}
-	if _, err := officialCodex0145FinalizeEndpointHeaders(
-		egressContext,
-		req.Header,
-		map[string]bool{
-			officialCodexConditionResponsesLite:      egressContext.responsesLite,
-			officialCodexConditionRequestCompression: headerContainsToken(req.Header, "content-encoding", "zstd"),
-		},
-	); err != nil {
-		return nil, result, fmt.Errorf("按 Codex 版本画像定型 HTTP header：%w", err)
-	}
 	return req, result, nil
 }
 
@@ -532,15 +485,15 @@ func resolveOfficialOpenAIRequestCompression(
 	if egressContext == nil {
 		return officialOpenAIRequestCompressionPlan{}, errors.New("OpenAI official request compression requires egress context")
 	}
-	profile, err := resolveCodex0145VersionProfile(egressContext.ProfileVersion())
+	profile, err := resolveCodexVersionProfile(egressContext.ProfileVersion())
 	if err != nil {
 		return officialOpenAIRequestCompressionPlan{}, err
 	}
 	if !profile.FeatureDefaults.EnableRequestCompression {
 		return officialOpenAIRequestCompressionPlan{}, nil
 	}
-	state := cloneOfficialCodex0145RuntimeState(egressContext.codexRuntimeState)
-	if err := validateOfficialCodex0145RuntimeState(state); err != nil {
+	state := cloneOfficialCodexRuntimeState(egressContext.codexRuntimeState)
+	if err := validateOfficialCodexRuntimeState(state); err != nil {
 		return officialOpenAIRequestCompressionPlan{}, err
 	}
 	return officialOpenAIRequestCompressionPlan{
@@ -577,7 +530,8 @@ type officialOpenAIHTTPBodyOptions struct {
 	UseResponsesLite      bool
 	SupportsParallelTools bool
 	// UserAgent 只用于投影告警定位来源，不参与任何定型决策。
-	UserAgent string
+	UserAgent   string
+	ProfileMode string
 }
 
 func finalizeOfficialOpenAIHTTPBody(
@@ -601,9 +555,16 @@ func finalizeOfficialOpenAIHTTPBody(
 	}
 
 	modified := false
-	allowedTopLevel := officialOpenAIHTTPTopLevelAllowed
+	endpointID := officialCodexEndpointResponsesHTTP
 	if isCompact {
-		allowedTopLevel = officialOpenAICompactTopLevelAllowed
+		endpointID = officialCodexEndpointResponsesCompact
+	}
+	allowedTopLevel, err := officialOpenAITopLevelAllowSetForMode(
+		options.ProfileMode,
+		endpointID,
+	)
+	if err != nil {
+		return nil, false, err
 	}
 	if strictIngressIdentity {
 		// 官方入口出现画像闭集外的顶层字段，最可能的原因是官方客户端已经升级到新
@@ -667,7 +628,7 @@ func finalizeOfficialOpenAIHTTPBody(
 			useResponsesLite,
 			supportsParallelTools,
 			reasoningDefaults,
-			officialOpenAIHTTPTopLevelAllowed,
+			allowedTopLevel,
 			options.UserAgent,
 		)
 		if err != nil {
@@ -687,18 +648,6 @@ func finalizeOfficialOpenAIHTTPBody(
 		if strings.TrimSpace(currentPromptCacheKey) != contract.promptCacheKey {
 			return nil, false, errors.New("OpenAI official egress prompt_cache_key was modified")
 		}
-	} else if !isCompact {
-		expectedMetadata := buildOfficialOpenAIHTTPClientMetadata(identity)
-		currentMetadata, _ := payload["client_metadata"].(map[string]any)
-		if !reflect.DeepEqual(expectedMetadata, currentMetadata) {
-			payload["client_metadata"] = expectedMetadata
-			modified = true
-		}
-		currentPromptCacheKey, _ := payload["prompt_cache_key"].(string)
-		if strings.TrimSpace(currentPromptCacheKey) != identity.promptCacheKey {
-			payload["prompt_cache_key"] = identity.promptCacheKey
-			modified = true
-		}
 	}
 	if isCompact {
 		currentPromptCacheKey, _ := payload["prompt_cache_key"].(string)
@@ -706,12 +655,18 @@ func finalizeOfficialOpenAIHTTPBody(
 			if !contract.promptCacheKeySet {
 				return nil, false, errors.New("OpenAI official egress compact prompt_cache_key is missing")
 			}
-			if strings.TrimSpace(currentPromptCacheKey) != contract.promptCacheKey {
-				payload["prompt_cache_key"] = contract.promptCacheKey
-				modified = true
+			if strings.TrimSpace(currentPromptCacheKey) != "" &&
+				strings.TrimSpace(currentPromptCacheKey) != contract.promptCacheKey {
+				return nil, false, errors.New("OpenAI official egress compact prompt_cache_key was modified")
 			}
-		} else if strings.TrimSpace(currentPromptCacheKey) != identity.promptCacheKey {
-			payload["prompt_cache_key"] = identity.promptCacheKey
+		}
+	}
+	// prompt_cache_key 与 client_metadata 是 compiler-owned wire 字段。service
+	// 只校验其入口来源并把身份登记进不可变上下文，提交给 Executor 的语义 Body
+	// 必须移除二者，避免形成第二套身份/Body 定型权威。
+	for _, name := range []string{"prompt_cache_key", "client_metadata"} {
+		if _, exists := payload[name]; exists {
+			delete(payload, name)
 			modified = true
 		}
 	}
@@ -738,7 +693,9 @@ func finalizeOfficialOpenAIHTTPBody(
 	if !modified {
 		return body, false, nil
 	}
-	finalBody, err := marshalOfficialOpenAIHTTPJSONPreservingRaw(payload, isCompact, body)
+	finalBody, err := marshalOfficialOpenAIHTTPJSONPreservingRaw(
+		options.ProfileMode, payload, isCompact, body,
+	)
 	if err != nil {
 		return nil, false, fmt.Errorf("serialize OpenAI official egress body: %w", err)
 	}
@@ -752,11 +709,18 @@ func finalizeOfficialOpenAIHTTPBody(
 // 出现清单外的键。第三方入站的 truncation / top_logprobs / background / max_tool_calls
 // 乃至任意自定义字段若不剔除，会被保序序列化器当作未知字段追加到 body 末尾送达上游。
 // HTTP 与 WS 字段集不同（WS 多 type / previous_response_id / generate），故各用一份。
-var (
-	officialOpenAIHTTPTopLevelAllowed    = newOfficialOpenAITopLevelAllowSet(officialOpenAIHTTPFieldOrder)
-	officialOpenAICompactTopLevelAllowed = newOfficialOpenAITopLevelAllowSet(officialOpenAICompactFieldOrder)
-	officialOpenAIWSTopLevelAllowed      = newOfficialOpenAITopLevelAllowSet(officialOpenAIWSFieldOrder)
-)
+func officialOpenAITopLevelAllowSetForMode(
+	mode string,
+	endpointID string,
+) (map[string]struct{}, error) {
+	fields, err := officialCodexBodyFieldOrderForMode(
+		mode, endpointID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return newOfficialOpenAITopLevelAllowSet(fields), nil
+}
 
 // officialOpenAIReasoningDefaults 是 `/models` 清单在请求上下文中的冻结投影。
 // 它不是全局兜底：不同模型、不同账号清单可以给出不同默认值。
@@ -1275,6 +1239,7 @@ func resolveOfficialOpenAIHTTPIdentity(
 	contract *officialOpenAIHTTPBodyContract,
 	strictIngressIdentity bool,
 	isCompact bool,
+	profileMode string,
 ) (officialOpenAIHTTPIdentity, error) {
 	if contract == nil {
 		return officialOpenAIHTTPIdentity{}, errors.New("OpenAI official egress body contract is nil")
@@ -1282,7 +1247,7 @@ func resolveOfficialOpenAIHTTPIdentity(
 	if strictIngressIdentity {
 		return resolveExplicitOfficialOpenAIHTTPIdentity(c, contract, isCompact)
 	}
-	return deriveOfficialOpenAIHTTPIdentity(c, account, body, contract)
+	return deriveOfficialOpenAIHTTPIdentity(c, account, body, contract, profileMode)
 }
 
 func resolveExplicitOfficialOpenAIHTTPIdentity(
@@ -1298,7 +1263,8 @@ func resolveExplicitOfficialOpenAIHTTPIdentity(
 		promptCacheKey: contract.promptCacheKey,
 		source:         OfficialEgressFieldSourceIngressExplicit,
 		// 官方入口的整份身份都由入站显式携带，会话归属不存在歧义。
-		sessionAnchorExplicit: true,
+		sessionProvenance: officialOpenAIProvenanceExplicitIngress,
+		turnProvenance:    officialOpenAIProvenanceExplicitIngress,
 	}
 	if isCompact {
 		// 官方 compact schema 不包含 client_metadata；身份来自同一请求的
@@ -1403,6 +1369,7 @@ func deriveOfficialOpenAIHTTPIdentity(
 	account *Account,
 	body []byte,
 	contract *officialOpenAIHTTPBodyContract,
+	profileMode string,
 ) (officialOpenAIHTTPIdentity, error) {
 	accountID := int64(0)
 	if account != nil {
@@ -1424,7 +1391,7 @@ func deriveOfficialOpenAIHTTPIdentity(
 
 	firstUserAnchor, lastUserAnchor := officialOpenAIHTTPUserAnchors(body)
 	sessionAnchor := officialOpenAIHTTPSessionAnchor(c)
-	// 记录锚点是否来自入站显式声明：兜底锚点只保证“同内容得到同 ID”，
+	// 分别记录 session/turn 的来源：兜底锚点只保证“同内容得到同 ID”，
 	// 不保证“同 ID 属于同一个会话”。
 	sessionAnchorExplicit := sessionAnchor != ""
 	if sessionAnchor == "" && contract != nil {
@@ -1448,6 +1415,12 @@ func deriveOfficialOpenAIHTTPIdentity(
 	turnID := generateOfficialStableUUIDV7(
 		"openai-official-egress-turn|" + sessionID + "|" + lastUserAnchor,
 	)
+	sessionProvenance := officialOpenAIProvenanceContentFallback
+	turnProvenance := officialOpenAIProvenanceContentFallback
+	if sessionAnchorExplicit {
+		sessionProvenance = officialOpenAIProvenanceExplicitIngress
+		turnProvenance = officialOpenAIProvenanceExplicitSessionDerivedTurn
+	}
 	windowID := sessionID + ":0"
 
 	turnStartedAtUnixMS := resolveOfficialOpenAIHTTPTurnStart(
@@ -1465,7 +1438,7 @@ func deriveOfficialOpenAIHTTPIdentity(
 		"sandbox":                 "seccomp",
 		"turn_started_at_unix_ms": turnStartedAtUnixMS,
 	}
-	if compaction, ok := resolveDerivedOfficialOpenAICompactionMetadata(c, body); ok {
+	if compaction, ok := resolveDerivedOfficialOpenAICompactionMetadata(c, body, profileMode); ok {
 		turnMetadataValues["request_kind"] = "compaction"
 		turnMetadataValues["compaction"] = compaction
 	}
@@ -1476,16 +1449,17 @@ func deriveOfficialOpenAIHTTPIdentity(
 		return officialOpenAIHTTPIdentity{}, fmt.Errorf("构造 turn metadata：%w", err)
 	}
 	return officialOpenAIHTTPIdentity{
-		installationID:        installationID,
-		sessionID:             sessionID,
-		threadID:              sessionID,
-		windowID:              windowID,
-		turnID:                turnID,
-		turnMetadata:          string(turnMetadataBytes),
-		clientRequest:         sessionID,
-		promptCacheKey:        sessionID,
-		source:                OfficialEgressFieldSourceDerived,
-		sessionAnchorExplicit: sessionAnchorExplicit,
+		installationID:    installationID,
+		sessionID:         sessionID,
+		threadID:          sessionID,
+		windowID:          windowID,
+		turnID:            turnID,
+		turnMetadata:      string(turnMetadataBytes),
+		clientRequest:     sessionID,
+		promptCacheKey:    sessionID,
+		source:            OfficialEgressFieldSourceDerived,
+		sessionProvenance: sessionProvenance,
+		turnProvenance:    turnProvenance,
 	}, nil
 }
 
@@ -1495,9 +1469,11 @@ func deriveOfficialOpenAIHTTPIdentity(
 func resolveDerivedOfficialOpenAICompactionMetadata(
 	c *gin.Context,
 	body []byte,
+	profileMode string,
 ) (officialOpenAICompactionMetadata, bool) {
 	legacy := isOpenAIResponsesCompactPath(c)
-	remoteV2 := HasCompactionTriggerInInput(body) && OfficialCodexRemoteCompactionV2Default()
+	remoteV2 := HasCompactionTriggerInInput(body) &&
+		OfficialCodexRemoteCompactionV2Default(profileMode)
 	if !legacy && !remoteV2 {
 		return officialOpenAICompactionMetadata{}, false
 	}
@@ -1750,9 +1726,19 @@ func finalizeOfficialOpenAIHTTPHeaders(
 		"session_id",
 		"OpenAI-Beta",
 		"X-Codex-Installation-ID",
+		"x-codex-beta-features",
 		"x-codex-turn-state",
+		"x-codex-window-id",
+		"x-codex-turn-metadata",
 		"x-client-request-id",
+		"session-id",
+		"thread-id",
+		"accept",
+		"content-type",
+		"user-agent",
+		"originator",
 		"version",
+		responsesLiteHeader,
 	} {
 		deleteHeaderAllForms(header, name)
 	}

@@ -1,0 +1,28 @@
+{
+  "schema_version": "changeset5-pairing-gate-retirement/v1",
+  "changeset": "5",
+  "supersedes_receipt": "docs/changeset3/pairing-gate-evaluation.json",
+  "supersedes_receipt_sha256": "4fff8340dc7bf8d9b14bdeca94fda145c66b6a5c6ca2149d97d5c52ad0ae39dc",
+  "retired_gate": "backend/internal/service/official_egress_finalizer_pairing_test.go",
+  "retired_gate_lines": 825,
+  "replacement_gates": [
+    "backend/internal/service/official_egress_changeset3_authority_ast_test.go",
+    "backend/internal/service/official_egress_changeset5_legacy_extinction_ast_test.go",
+    "backend/internal/service/official_egress_websocket_invocation_test.go",
+    "backend/internal/service/official_egress_changeset5_final_wire_test.go"
+  ],
+  "final_production_counts": {
+    "legacy_definition_count": 0,
+    "legacy_call_count": 0
+  },
+  "deletion_conditions": {
+    "runtime_sinks_exact_21_and_enforced": true,
+    "runtime_sinks_only_use_unified_executor": true,
+    "websocket_header_assertions_migrated_to_executor": true,
+    "legacy_definitions_and_calls_zero": true,
+    "replacement_gate_has_mutation_negative_tests": true,
+    "pre_post_final_wire_strict_comparator_active": true
+  },
+  "decision": "retired",
+  "rationale": "旧 attach/finalizer 已无生产调用；WS Header 闭集、Host 清理、冻结身份与条件 Header 已迁入真实 Executor/WS Acquire 测试，旧定义和调用均由源码门禁强制为零。"
+}

@@ -229,6 +229,19 @@ func cloneAccountValuePointer[T any](value *T) *T {
 	return &cloned
 }
 
+// cloneAccountForAsyncPrivacy 为创建后的异步隐私任务生成独立快照。
+// Handler 会在 CreateAccount 返回后立即读取账号并构造响应，因此不能让后台任务
+// 同时修改同一个 Credentials 或 Extra map。
+func cloneAccountForAsyncPrivacy(account *Account) *Account {
+	if account == nil {
+		return nil
+	}
+	cloned := *account
+	cloned.Credentials = maps.Clone(account.Credentials)
+	cloned.Extra = maps.Clone(account.Extra)
+	return &cloned
+}
+
 // DuplicateAccount creates a paused account from source configuration without carrying first-class
 // runtime state. Credentials and extra configuration are deep-copied so normalization of the new
 // account cannot mutate the in-memory source. Linked credential shadows are excluded because they
@@ -514,7 +527,11 @@ func buildAccountForCreate(input *CreateAccountInput, accountExtra map[string]an
 }
 
 func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccountInput) (*Account, error) {
-	accountExtra, err := normalizeOpenAILongContextBillingExtra(input.Platform, input.Extra)
+	// 通用 Extra 永远不能提供服务端受管的 privacy 状态；只有内部字段会在
+	// 完成类型与内容校验后重新合并。
+	accountExtra := stripOpenAIPrivacyManagedExtra(input.Extra)
+	var err error
+	accountExtra, err = normalizeOpenAILongContextBillingExtra(input.Platform, accountExtra)
 	if err != nil {
 		return nil, err
 	}
@@ -522,6 +539,14 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 	if err != nil {
 		return nil, err
 	}
+	managedPrivacyExtra, err := validateOpenAIManagedPrivacyExtra(&Account{
+		Platform: input.Platform,
+		Type:     input.Type,
+	}, input.ManagedPrivacyExtra)
+	if err != nil {
+		return nil, err
+	}
+	accountExtra = mergeOpenAIPrivacyManagedExtra(accountExtra, managedPrivacyExtra)
 	if err = ValidateBuiltInOfficialEgressExtraTransition(input.Platform, input.Type, nil, accountExtra); err != nil {
 		return nil, err
 	}
@@ -573,28 +598,30 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 		}
 	}
 
-	// OAuth 账号：创建后异步设置隐私。
-	// 使用 Ensure（幂等）而非 Force：新建账号 Extra 为空时效果相同，但更安全。
+	// OAuth 账号：创建后通过唯一的自动入口异步设置隐私。
+	// 使用独立快照避免后台 Ensure 与 Handler 响应并发访问同一个 map；
+	// 持久化仍由 Ensure 写入仓储，显式管理端重试继续使用 Force。
 	if account.Type == AccountTypeOAuth {
+		privacyAccount := cloneAccountForAsyncPrivacy(account)
 		switch account.Platform {
 		case PlatformOpenAI:
-			go func() {
+			go func(privacyAccount *Account) {
 				defer func() {
 					if r := recover(); r != nil {
-						slog.Error("create_account_openai_privacy_panic", "account_id", account.ID, "recover", r)
+						slog.Error("create_account_openai_privacy_panic", "account_id", privacyAccount.ID, "recover", r)
 					}
 				}()
-				s.EnsureOpenAIPrivacy(context.Background(), account)
-			}()
+				s.EnsureOpenAIPrivacy(context.Background(), privacyAccount)
+			}(privacyAccount)
 		case PlatformAntigravity:
-			go func() {
+			go func(privacyAccount *Account) {
 				defer func() {
 					if r := recover(); r != nil {
-						slog.Error("create_account_antigravity_privacy_panic", "account_id", account.ID, "recover", r)
+						slog.Error("create_account_antigravity_privacy_panic", "account_id", privacyAccount.ID, "recover", r)
 					}
 				}()
-				s.EnsureAntigravityPrivacy(context.Background(), account)
-			}()
+				s.EnsureAntigravityPrivacy(context.Background(), privacyAccount)
+			}(privacyAccount)
 		}
 	}
 
@@ -603,6 +630,90 @@ func (s *adminServiceImpl) CreateAccount(ctx context.Context, input *CreateAccou
 
 type accountProbeEnabledAtomicUpdater interface {
 	UpdateWithUpstreamBillingProbeEnabled(context.Context, *Account, bool) error
+}
+
+// ValidateNoManagedPrivacyExtra 拒绝公共增量写入口携带服务端受管的 privacy 字段。
+// 创建入口使用剥离语义；更新入口使用显式拒绝，避免调用方误以为伪造状态已生效。
+func ValidateNoManagedPrivacyExtra(incoming map[string]any) error {
+	for _, key := range openAIPrivacyManagedExtraKeys {
+		if _, ok := incoming[key]; ok {
+			return infraerrors.BadRequest(
+				"MANAGED_PRIVACY_EXTRA_FORBIDDEN",
+				fmt.Sprintf("%s is managed by the server", key),
+			)
+		}
+	}
+	return nil
+}
+
+func stripOpenAIPrivacyManagedExtra(incoming map[string]any) map[string]any {
+	out := maps.Clone(incoming)
+	for _, key := range openAIPrivacyManagedExtraKeys {
+		delete(out, key)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// preserveAccountPrivacyManagedExtra 让通用账号更新只能修改普通 Extra。privacy_mode
+// 对所有平台均由服务端维护；OpenAI 另外保护冷却、画像和稳定分桶键。
+func preserveAccountPrivacyManagedExtra(account *Account, incoming map[string]any) map[string]any {
+	out := maps.Clone(incoming)
+	if out == nil {
+		out = make(map[string]any)
+	}
+	keys := []string{privacyModeExtraKey}
+	if account != nil && account.Platform == PlatformOpenAI {
+		keys = openAIPrivacyManagedExtraKeys[:]
+	}
+	for _, key := range keys {
+		delete(out, key)
+		if account != nil {
+			if value, ok := account.Extra[key]; ok {
+				out[key] = value
+			}
+		}
+	}
+	return out
+}
+
+func validateOpenAIManagedPrivacyExtra(account *Account, incoming map[string]any) (map[string]any, error) {
+	if len(incoming) == 0 {
+		return nil, nil
+	}
+	if account == nil || account.Platform != PlatformOpenAI || account.Type != AccountTypeOAuth || account.IsCredentialShadow() {
+		return nil, errors.New("managed privacy extra requires a writable OpenAI OAuth account")
+	}
+	out := make(map[string]any, len(incoming))
+	for key, value := range incoming {
+		if !isOpenAIPrivacyManagedExtraKey(key) {
+			return nil, fmt.Errorf("unsupported managed privacy extra key: %s", key)
+		}
+		text, ok := value.(string)
+		if !ok || strings.TrimSpace(text) == "" {
+			return nil, fmt.Errorf("managed privacy extra %s must be a non-empty string", key)
+		}
+		text = strings.TrimSpace(text)
+		switch key {
+		case privacyModeExtraKey:
+			if text != PrivacyModeTrainingOff && text != PrivacyModeFailed && text != PrivacyModeCFBlocked {
+				return nil, fmt.Errorf("unsupported OpenAI privacy mode: %s", text)
+			}
+		case privacyRetryAfterExtraKey:
+			if _, err := time.Parse(time.RFC3339, text); err != nil {
+				return nil, fmt.Errorf("invalid privacy retry-after: %w", err)
+			}
+		case privacyRolloutKeyExtraKey:
+			text = normalizeOpenAIPrivacyRolloutKey(text)
+			if text == "" {
+				return nil, errors.New("invalid privacy rollout key")
+			}
+		}
+		out[key] = text
+	}
+	return out, nil
 }
 
 func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *UpdateAccountInput) (*Account, error) {
@@ -640,6 +751,7 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		if err != nil {
 			return nil, err
 		}
+		normalizedExtra = preserveAccountPrivacyManagedExtra(account, normalizedExtra)
 	}
 	previousProbeIdentity := upstreamBillingProbeIdentity(account)
 	previousOllamaUsageIdentity := ollamaCloudUsageIdentity(account)
@@ -752,6 +864,18 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 		}
 		ComputeQuotaResetAt(account.Extra)
 		NormalizeFixedQuotaWindows(account.Extra)
+	}
+	if len(input.ManagedPrivacyExtra) > 0 {
+		managedPrivacyExtra, err := validateOpenAIManagedPrivacyExtra(account, input.ManagedPrivacyExtra)
+		if err != nil {
+			return nil, err
+		}
+		if account.Extra == nil {
+			account.Extra = make(map[string]any)
+		}
+		for key, value := range managedPrivacyExtra {
+			account.Extra[key] = value
+		}
 	}
 	// 影子代理恒继承母账号(由 propagateProxyToShadows 同步),不接受独立编辑——外审 B/P1;
 	// 否则要等母账号下次改 proxy 才被覆盖,期间影子会出现"有时继承、有时独立"的漂移。
@@ -881,6 +1005,9 @@ func (s *adminServiceImpl) UpdateAccount(ctx context.Context, id int64, input *U
 // UpdateAccountExtra 仅对 Extra JSONB 做 key 级合并，避免覆盖其它运行态键
 // （如 model_rate_limits / passive_usage_* 等）。
 func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, updates map[string]any) error {
+	if err := ValidateNoManagedPrivacyExtra(updates); err != nil {
+		return err
+	}
 	delete(updates, OllamaCloudUsageSessionExtraKey)
 	delete(updates, OllamaCloudUsageAutoRefreshExtraKey)
 	delete(updates, OllamaCloudUsageSnapshotExtraKey)
@@ -902,6 +1029,9 @@ func (s *adminServiceImpl) UpdateAccountExtra(ctx context.Context, id int64, upd
 // BulkUpdateAccounts updates multiple accounts in one request.
 // It merges credentials/extra keys instead of overwriting the whole object.
 func (s *adminServiceImpl) BulkUpdateAccounts(ctx context.Context, input *BulkUpdateAccountsInput) (*BulkUpdateAccountsResult, error) {
+	if err := ValidateNoManagedPrivacyExtra(input.Extra); err != nil {
+		return nil, err
+	}
 	// Managed probe/session state may only enter through dedicated typed endpoints.
 	delete(input.Extra, UpstreamBillingProbeEnabledExtraKey)
 	delete(input.Extra, UpstreamBillingProbeExtraKey)
@@ -1570,13 +1700,17 @@ func (s *adminServiceImpl) EnsureOpenAIPrivacy(ctx context.Context, account *Acc
 		}
 	}
 
-	mode := disableOpenAITraining(ctx, s.privacyClientFactory, token, proxyURL)
-	if mode == "" {
+	result := ensureOpenAIPrivacyForAccount(ctx, s.privacyClientFactory, account, proxyURL, false)
+	if result.Mode == "" {
 		return ""
 	}
 
-	_ = s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{"privacy_mode": mode})
-	return mode
+	if err := s.accountRepo.UpdateExtra(ctx, account.ID, result.ExtraUpdates()); err != nil {
+		logger.LegacyPrintf("service.admin", "update_openai_privacy_mode_failed: account_id=%d err=%v", account.ID, err)
+		return result.Mode
+	}
+	mergeAccountExtra(account, result.ExtraUpdates())
+	return result.Mode
 }
 
 // ForceOpenAIPrivacy 强制重新设置 OpenAI OAuth 账号隐私，无论当前状态。
@@ -1604,20 +1738,17 @@ func (s *adminServiceImpl) ForceOpenAIPrivacy(ctx context.Context, account *Acco
 		}
 	}
 
-	mode := disableOpenAITraining(ctx, s.privacyClientFactory, token, proxyURL)
-	if mode == "" {
+	result := ensureOpenAIPrivacyForAccount(ctx, s.privacyClientFactory, account, proxyURL, true)
+	if result.Mode == "" {
 		return ""
 	}
 
-	if err := s.accountRepo.UpdateExtra(ctx, account.ID, map[string]any{"privacy_mode": mode}); err != nil {
+	if err := s.accountRepo.UpdateExtra(ctx, account.ID, result.ExtraUpdates()); err != nil {
 		logger.LegacyPrintf("service.admin", "force_update_openai_privacy_mode_failed: account_id=%d err=%v", account.ID, err)
-		return mode
+		return result.Mode
 	}
-	if account.Extra == nil {
-		account.Extra = make(map[string]any)
-	}
-	account.Extra["privacy_mode"] = mode
-	return mode
+	mergeAccountExtra(account, result.ExtraUpdates())
+	return result.Mode
 }
 
 // EnsureAntigravityPrivacy 检查 Antigravity OAuth 账号隐私状态。

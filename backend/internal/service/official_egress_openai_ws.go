@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"reflect"
 	"strconv"
 	"strings"
@@ -61,7 +60,12 @@ func prepareOpenAIOfficialEgressWSContext(
 	if c == nil || c.Request == nil {
 		return errors.New("OpenAI official egress WebSocket ingress request is unavailable")
 	}
-	identity, err := resolveOfficialOpenAIWSIdentity(c, account, firstPayload)
+	identity, err := resolveOfficialOpenAIWSIdentity(
+		c,
+		account,
+		firstPayload,
+		egressContext.ProfileMode(),
+	)
 	if err != nil {
 		return err
 	}
@@ -75,9 +79,10 @@ func resolveOfficialOpenAIWSIdentity(
 	c *gin.Context,
 	account *Account,
 	firstPayload []byte,
+	profileMode string,
 ) (officialOpenAIWSIdentity, error) {
 	if !isInboundOpenAIOfficialClient(c) {
-		return deriveOfficialOpenAIWSIdentity(c, account, firstPayload)
+		return deriveOfficialOpenAIWSIdentity(c, account, firstPayload, profileMode)
 	}
 	return resolveExplicitOfficialOpenAIWSIdentity(c, firstPayload)
 }
@@ -217,12 +222,13 @@ func deriveOfficialOpenAIWSIdentity(
 	c *gin.Context,
 	account *Account,
 	firstPayload []byte,
+	profileMode string,
 ) (officialOpenAIWSIdentity, error) {
 	contract, err := captureOfficialOpenAIHTTPBodyContract(firstPayload)
 	if err != nil {
 		return officialOpenAIWSIdentity{}, err
 	}
-	base, err := deriveOfficialOpenAIHTTPIdentity(c, account, firstPayload, contract)
+	base, err := deriveOfficialOpenAIHTTPIdentity(c, account, firstPayload, contract, profileMode)
 	if err != nil {
 		return officialOpenAIWSIdentity{}, err
 	}
@@ -285,115 +291,6 @@ func registerOfficialOpenAIWSIdentity(
 	return nil
 }
 
-// finalizeOpenAIOfficialEgressWSHandshakeHeaders 在账号覆写之后执行终态修正。
-// 它删除旧下划线身份，只写入已经冻结且来源可追踪的官方连接级身份。
-func finalizeOpenAIOfficialEgressWSHandshakeHeaders(
-	ctx context.Context,
-	headers http.Header,
-) (OfficialEgressFinalizationResult, error) {
-	result := OfficialEgressFinalizationResult{}
-	egressContext, enabled := OfficialEgressContextFromContext(ctx)
-	if !enabled {
-		return result, nil
-	}
-	if headers == nil {
-		return result, errors.New("OpenAI official egress WebSocket headers are nil")
-	}
-	if !egressContext.IsFrozen() ||
-		egressContext.TargetPlatform() != PlatformOpenAI ||
-		egressContext.Transport() != OfficialEgressTransportWebSocket ||
-		egressContext.UpstreamHost() != "chatgpt.com" {
-		return result, errors.New(
-			"OpenAI official egress WebSocket context conflicts with handshake",
-		)
-	}
-	userAgent, originator, err := officialCodex0145ProcessIdentity(egressContext)
-	if err != nil {
-		return result, err
-	}
-
-	sessionID, err := requiredOfficialEgressFieldValue(
-		egressContext,
-		OfficialEgressFieldSessionID,
-	)
-	if err != nil {
-		return result, err
-	}
-	threadID, err := requiredOfficialEgressFieldValue(
-		egressContext,
-		OfficialEgressFieldThreadID,
-	)
-	if err != nil {
-		return result, err
-	}
-	clientRequestID, err := requiredOfficialEgressFieldValue(
-		egressContext,
-		OfficialEgressFieldClientRequestID,
-	)
-	if err != nil {
-		return result, err
-	}
-	windowID, err := requiredOfficialEgressFieldValue(
-		egressContext,
-		OfficialEgressFieldWindowID,
-	)
-	if err != nil {
-		return result, err
-	}
-	turnMetadata, err := requiredOfficialEgressFieldValue(
-		egressContext,
-		OfficialEgressFieldTurnMetadata,
-	)
-	if err != nil {
-		return result, err
-	}
-
-	for _, name := range []string{
-		"conversation_id",
-		"session_id",
-		"X-Codex-Installation-ID",
-	} {
-		headers.Del(name)
-	}
-	stripOfficialEgressInboundHostHeaders(headers)
-	headers.Set("session-id", sessionID)
-	headers.Set("thread-id", threadID)
-	headers.Set("x-client-request-id", clientRequestID)
-	headers.Set("x-codex-window-id", windowID)
-	headers.Set(openAIWSTurnMetadataHeader, turnMetadata)
-	headers.Set("User-Agent", userAgent)
-	headers.Set("originator", originator)
-	headers.Set("x-codex-beta-features", officialOpenAIHTTPBetaFeatures)
-	if _, err := officialCodex0145FinalizeEndpointHeaders(
-		egressContext,
-		headers,
-		map[string]bool{
-			officialCodexConditionRemoteCompactionV2: true,
-		},
-	); err != nil {
-		return result, fmt.Errorf("按 Codex 版本画像定型 WS 握手 header：%w", err)
-	}
-
-	for _, name := range []string{
-		"User-Agent",
-		"originator",
-		"x-codex-beta-features",
-		"session-id",
-		"thread-id",
-		"x-client-request-id",
-		"x-codex-window-id",
-		openAIWSTurnMetadataHeader,
-		"OpenAI-Beta",
-		"version",
-	} {
-		result.Modifications = append(result.Modifications, OfficialEgressModification{
-			Kind:  "header",
-			Field: name,
-		})
-	}
-	return result, nil
-}
-
 func requiredOfficialEgressFieldValue(
 	egressContext *OfficialEgressContext,
 	name OfficialEgressFieldName,
@@ -436,9 +333,9 @@ func isDerivedOpenAIOfficialEgressWSContext(ctx context.Context) bool {
 		egressContext.openAIWSDerived != nil
 }
 
-// finalizeOpenAIOfficialEgressWSFrame 对已知出站帧执行最小差异校验。
-// 未知帧必须逐字节保持；只有上游已经证明续链无效时，调用方才可声明受控回放。
-func finalizeOpenAIOfficialEgressWSFrame(
+// prepareOpenAIOfficialEgressSemanticWSFrame 只执行 service 所有的业务帧转换与
+// 身份来源校验。最终字段闭集、线序和一次性写能力由 ExecutorWebSocketSession 决定。
+func prepareOpenAIOfficialEgressSemanticWSFrame(
 	ctx context.Context,
 	original []byte,
 	candidate []byte,
@@ -458,7 +355,7 @@ func finalizeOpenAIOfficialEgressWSFrame(
 		)
 	}
 	if egressContext.openAIWSDerived != nil {
-		return finalizeDerivedOpenAIOfficialEgressWSFrame(
+		return prepareDerivedOpenAIOfficialEgressWSFrame(
 			egressContext,
 			original,
 			candidate,
@@ -494,9 +391,16 @@ func finalizeOpenAIOfficialEgressWSFrame(
 			"OpenAI official egress WebSocket frame type was modified",
 		)
 	}
+	allowedTopLevel, err := officialOpenAITopLevelAllowSetForMode(
+		egressContext.ProfileMode(),
+		officialCodexEndpointResponsesWS,
+	)
+	if err != nil {
+		return nil, result, err
+	}
 	if err := validateOfficialOpenAITopLevelContract(
 		candidatePayload,
-		officialOpenAIWSTopLevelAllowed,
+		allowedTopLevel,
 		true,
 	); err != nil {
 		return nil, result, err
@@ -556,13 +460,11 @@ func finalizeOpenAIOfficialEgressWSFrame(
 		return nil, result, err
 	}
 	if !modified {
-		finalized, err := officialCodex0145FinalizeEndpointJSONBody(egressContext, candidate, nil)
-		if err != nil {
-			return nil, result, fmt.Errorf("按 Codex 版本画像定型 WS frame：%w", err)
-		}
-		return finalized, result, nil
+		return candidate, result, nil
 	}
-	finalized, err := marshalOfficialOpenAIWSJSONPreservingRaw(candidatePayload, candidate)
+	finalized, err := marshalOfficialOpenAIWSJSONPreservingRaw(
+		egressContext.ProfileMode(), candidatePayload, candidate,
+	)
 	if err != nil {
 		return nil, result, fmt.Errorf(
 			"encode OpenAI official egress WebSocket item turn metadata: %w",
@@ -573,17 +475,13 @@ func finalizeOpenAIOfficialEgressWSFrame(
 		Kind:  "frame",
 		Field: "input.*." + officialOpenAIWSItemTurnMetadata + ".turn_id",
 	})
-	finalized, err = officialCodex0145FinalizeEndpointJSONBody(egressContext, finalized, nil)
-	if err != nil {
-		return nil, result, fmt.Errorf("按 Codex 版本画像定型 WS frame：%w", err)
-	}
 	return finalized, result, nil
 }
 
-// finalizeDerivedOpenAIOfficialEgressWSFrame 把第三方 response.create
-// 归一化为 Codex 0.145.0 的 WS 帧。业务输入、模型、reasoning 配置和
+// prepareDerivedOpenAIOfficialEgressWSFrame 把第三方 response.create
+// 归一化为 ProfileSpec 冻结版本的 WS 帧。业务输入、模型、reasoning 配置和
 // call_id 保持不变，只补齐官方固定外层与动态身份。
-func finalizeDerivedOpenAIOfficialEgressWSFrame(
+func prepareDerivedOpenAIOfficialEgressWSFrame(
 	egressContext *OfficialEgressContext,
 	original []byte,
 	candidate []byte,
@@ -607,9 +505,9 @@ func finalizeDerivedOpenAIOfficialEgressWSFrame(
 	}
 
 	originalCallIDs := collectOfficialOpenAICallIDs(payload)
-	toolPresentationModified, err := officialCodex0145NormalizeDerivedToolPresentation(
+	toolPresentationModified, err := officialCodexNormalizeDerivedToolPresentation(
 		egressContext.ProfileVersion(),
-		codex0145EndpointID(egressContext.CodexEndpointProfileID()),
+		codexEndpointID(egressContext.CodexEndpointProfileID()),
 		payload,
 	)
 	if err != nil {
@@ -628,12 +526,19 @@ func finalizeDerivedOpenAIOfficialEgressWSFrame(
 			return nil, result, err
 		}
 	}
+	allowedTopLevel, err := officialOpenAITopLevelAllowSetForMode(
+		egressContext.ProfileMode(),
+		officialCodexEndpointResponsesWS,
+	)
+	if err != nil {
+		return nil, result, err
+	}
 	if _, err := normalizeDerivedOfficialOpenAIHTTPBody(
 		payload,
 		egressContext.responsesLite,
 		egressContext.parallelTools,
 		officialOpenAIReasoningDefaultsFromContext(egressContext),
-		officialOpenAIWSTopLevelAllowed,
+		allowedTopLevel,
 		// WS 帧定型阶段拿不到入站 HTTP 头，投影告警只报告字段名与入口类型；
 		// 握手阶段的入站身份已由 WS 入口自行记录。
 		"",
@@ -660,16 +565,14 @@ func finalizeDerivedOpenAIOfficialEgressWSFrame(
 		)
 	}
 
-	finalized, err := marshalOfficialOpenAIWSJSONPreservingRaw(payload, candidate)
+	finalized, err := marshalOfficialOpenAIWSJSONPreservingRaw(
+		egressContext.ProfileMode(), payload, candidate,
+	)
 	if err != nil {
 		return nil, result, fmt.Errorf(
 			"encode derived OpenAI official egress WebSocket frame: %w",
 			err,
 		)
-	}
-	finalized, err = officialCodex0145FinalizeEndpointJSONBody(egressContext, finalized, nil)
-	if err != nil {
-		return nil, result, fmt.Errorf("按 Codex 版本画像定型派生 WS frame：%w", err)
 	}
 	for _, field := range []string{
 		"client_metadata",
@@ -695,6 +598,20 @@ func finalizeDerivedOpenAIOfficialEgressWSFrame(
 		})
 	}
 	return finalized, result, nil
+}
+
+// finalizeOpenAIOfficialEgressWSFrame 只服务既有冻结测试与非 Runtime 兼容验证；
+// 21 个 Runtime Sink 不得调用此符号。
+func finalizeOpenAIOfficialEgressWSFrame(
+	ctx context.Context,
+	original []byte,
+	candidate []byte,
+	expectedPreviousResponseID string,
+	allowControlledReplay bool,
+) ([]byte, OfficialEgressFinalizationResult, error) {
+	return prepareOpenAIOfficialEgressSemanticWSFrame(
+		ctx, original, candidate, expectedPreviousResponseID, allowControlledReplay,
+	)
 }
 
 // injectOfficialOpenAIWSTurnState 把上游握手返回的连接级 turn-state 写入
@@ -731,7 +648,11 @@ func extractOpenAIWSTurnStateFromUpstreamEvent(message []byte) string {
 	return turnState
 }
 
-func injectOfficialOpenAIWSTurnState(payload []byte, turnState string) ([]byte, error) {
+func injectOfficialOpenAIWSTurnState(
+	ctx context.Context,
+	payload []byte,
+	turnState string,
+) ([]byte, error) {
 	turnState = strings.TrimSpace(turnState)
 	if turnState == "" {
 		return payload, nil
@@ -746,7 +667,13 @@ func injectOfficialOpenAIWSTurnState(payload []byte, turnState string) ([]byte, 
 		body["client_metadata"] = metadata
 	}
 	metadata[openAIWSTurnStateHeader] = turnState
-	encoded, err := marshalOfficialOpenAIWSJSONPreservingRaw(body, payload)
+	egressContext, ok := OfficialEgressContextFromContext(ctx)
+	if !ok {
+		return nil, errors.New("WebSocket turn-state 缺少冻结出站上下文")
+	}
+	encoded, err := marshalOfficialOpenAIWSJSONPreservingRaw(
+		egressContext.ProfileMode(), body, payload,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("encode OpenAI official egress WebSocket turn-state frame: %w", err)
 	}
@@ -825,7 +752,9 @@ func buildDerivedOpenAIOfficialEgressWSPrewarmFrame(
 		return nil, false, err
 	}
 
-	prewarm, err := marshalOfficialOpenAIWSJSONPreservingRaw(payload, candidate)
+	prewarm, err := marshalOfficialOpenAIWSJSONPreservingRaw(
+		egressContext.ProfileMode(), payload, candidate,
+	)
 	if err != nil {
 		return nil, false, fmt.Errorf(
 			"encode derived OpenAI official egress WebSocket prewarm frame: %w",
@@ -902,7 +831,9 @@ func chainDerivedOpenAIOfficialEgressWSBusinessFrame(
 		return nil, err
 	}
 
-	finalized, err := marshalOfficialOpenAIWSJSONPreservingRaw(payload, candidate)
+	finalized, err := marshalOfficialOpenAIWSJSONPreservingRaw(
+		egressContext.ProfileMode(), payload, candidate,
+	)
 	if err != nil {
 		return nil, fmt.Errorf(
 			"encode derived OpenAI official egress WebSocket business frame: %w",
@@ -982,7 +913,9 @@ func buildDerivedOpenAIOfficialEgressWSToolContinuationFrame(
 		return nil, false, err
 	}
 
-	finalized, err := marshalOfficialOpenAIWSJSONPreservingRaw(payload, candidate)
+	finalized, err := marshalOfficialOpenAIWSJSONPreservingRaw(
+		egressContext.ProfileMode(), payload, candidate,
+	)
 	if err != nil {
 		return nil, false, fmt.Errorf(
 			"encode derived OpenAI official egress WebSocket tool continuation: %w",
@@ -1265,7 +1198,9 @@ func buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 	requestKind := "prewarm"
 	if !prewarm {
 		requestKind = "turn"
-		_, lastUserAnchor := officialOpenAIHTTPUserAnchorsFromPayload(payload)
+		_, lastUserAnchor := officialOpenAIHTTPUserAnchorsFromPayload(
+			egressContext.ProfileMode(), payload,
+		)
 		state := egressContext.openAIWSDerived
 		state.mu.Lock()
 		var seedErr error
@@ -1278,7 +1213,9 @@ func buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 			// 没有用户锚点时以整帧内容做 seed。marshal 失败不能静默退化成空
 			// seed：那会让本会话此后所有帧共用同一个 Turn ID，而定型链路其余
 			// 环节都观察不到异常。这里把错误交回调用方按定型失败处理。
-			frameBytes, marshalErr := marshalOfficialOpenAIWSJSON(payload)
+			frameBytes, marshalErr := marshalOfficialOpenAIWSJSON(
+				egressContext.ProfileMode(), payload,
+			)
 			if marshalErr != nil {
 				seedErr = fmt.Errorf("构造 WebSocket Turn ID seed：%w", marshalErr)
 			} else {
@@ -1336,9 +1273,10 @@ func buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 }
 
 func officialOpenAIHTTPUserAnchorsFromPayload(
+	mode string,
 	payload map[string]any,
 ) (string, string) {
-	body, err := marshalOfficialOpenAIWSJSON(payload)
+	body, err := marshalOfficialOpenAIWSJSON(mode, payload)
 	if err != nil {
 		return "", ""
 	}

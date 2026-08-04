@@ -358,28 +358,14 @@ const handleExchangeCode = async () => {
       return
     }
 
-    const tokenInfo = await oauthClient.exchangeAuthCode(
-      authCode.trim(),
-      sessionId,
-      stateToUse,
-      props.account.proxy_id
-    )
-    if (!tokenInfo) return
-
-    // Build credentials and extra info
-    const credentials = oauthClient.buildCredentials(tokenInfo)
-    const extra = oauthClient.buildExtraInfo(tokenInfo)
-
+    oauthClient.loading.value = true
+    oauthClient.error.value = ''
     try {
-      // Update account with new credentials
-      await adminAPI.accounts.update(props.account.id, {
-        type: 'oauth', // OpenAI OAuth is always 'oauth' type
-        credentials,
-        extra
+      await adminAPI.accounts.reauthorizeOpenAI(props.account.id, {
+        session_id: sessionId,
+        code: authCode.trim(),
+        state: stateToUse
       })
-
-      // Clear error status after successful re-authorization
-      await adminAPI.accounts.clearError(props.account.id)
 
       appStore.showSuccess(t('admin.accounts.reAuthorizedSuccess'))
       emit('reauthorized')
@@ -387,6 +373,8 @@ const handleExchangeCode = async () => {
     } catch (error: any) {
       oauthClient.error.value = error.response?.data?.detail || t('admin.accounts.oauth.authFailed')
       appStore.showError(oauthClient.error.value)
+    } finally {
+      oauthClient.loading.value = false
     }
   } else if (isGemini.value) {
     const sessionId = geminiOAuth.sessionId.value

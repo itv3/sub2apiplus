@@ -1,0 +1,29 @@
+{
+  "schema_version": 2,
+  "result": "passed",
+  "sink_id": "codex.quota.wham",
+  "route": {
+    "method": "POST",
+    "host": "chatgpt.com",
+    "path": "/backend-api/wham/rate-limit-reset-credits/consume",
+    "purpose": "quota_query",
+    "protocol": "http"
+  },
+  "authority_kind": "codex_executor",
+  "authority_id": "codex.executor.changeset1b",
+  "token_issuer_id": "codex.executor.changeset1b",
+  "evidence_kind": "codex_endpoint",
+  "evidence_id": "wham_rate_limit_reset_credits_consume",
+  "backend": "http_upstream",
+  "adapter_id": "officialegress.http_upstream",
+  "transport_id": "codex-0.145.0-http-ubuntu24-native",
+  "wire_fixture_sha256": "61a5369fedebdd2c83101e75475d0e0e0d1e9e29d76f12cbd8666b31d0978f7b",
+  "final_wire_manifest_sha256": "c824ffb0ab6e2429c09f9ac517cf3e6f96860c7c6ef77c229757fd690bdbcf0f",
+  "active_capture_sha256": "270c5c0b1e00b1b23eb30a027ea60c83eb8895fbfc8de80ed39eb02273308217",
+  "previous_capture_sha256": "6249a097b5799a36bbbb3883ad23b68353af6fde86aebb0a3b7bc215c9a09964",
+  "terminal_guard_allow": true,
+  "compared_release_modes": [
+    "active",
+    "previous"
+  ]
+}

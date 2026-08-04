@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "result": "passed",
+  "sink_id": "codex.alpha_search.pat_fallback",
+  "route": {
+    "method": "POST",
+    "host": "chatgpt.com",
+    "path": "/backend-api/codex/responses",
+    "purpose": "user_request.alpha_search_pat",
+    "protocol": "http"
+  },
+  "authority_kind": "codex_executor",
+  "authority_id": "codex.executor.changeset1b",
+  "token_issuer_id": "codex.executor.changeset1b",
+  "evidence_kind": "codex_endpoint",
+  "evidence_id": "responses_http",
+  "backend": "http_upstream",
+  "adapter_id": "officialegress.http_upstream",
+  "transport_id": "codex-0.145.0-http-ubuntu24-native",
+  "wire_fixture_sha256": "8c1fa40066ac0a0740bca75257ca1f921f0b5d9dc06aab5eef604dfb235c1433"
+}

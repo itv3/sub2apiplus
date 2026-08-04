@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "changeset": "1C",
+  "environment": "DMIT+local-ci",
+  "window": {
+    "started_at": "2026-08-03T00:20:47Z",
+    "ended_at": "2026-08-03T00:35:01Z",
+    "duration_seconds": 854,
+    "image_tag": "sub2apiplus:changeset1c-p1-8ee91809ac24",
+    "image_id": "4103b2eec89aec5f4170d469f32a5f77f420d37a351207ecb8aefc5f11edff59",
+    "binary_sha256": "8ee91809ac24584d66b5f03a3f8ea971b3dfc33a2e5b5927c1c98404bdbc2fe6",
+    "guard_log_path": "guard-events.json",
+    "guard_log_sha256": "f98d39a7f5e3f489937d2a2fb65439d314d5c9a64314917465074689fdbe25d4"
+  },
+  "final_state": {
+    "unknown_route_policy": "enforce",
+    "unregistered_sink_policy": "enforce",
+    "canary_percent": 100,
+    "sink_controls_empty": true,
+    "policy_overrides_empty": true
+  },
+  "exercise_ids": [
+    "agent_task_recovery",
+    "oauth_refresh",
+    "pat_whoami",
+    "privacy",
+    "scheduled_account_tests",
+    "spark_shadow",
+    "ws_http_fallback"
+  ],
+  "guard_event_counts": {
+    "unknown_route": 0,
+    "missing_sink_id": 0,
+    "unregistered_sink": 0,
+    "sink_binding_mismatch": 0,
+    "wrong_backend": 0,
+    "release_digest_mismatch": 0,
+    "missing_finalization_token": 4,
+    "wrong_executor": 4,
+    "canary_observe_passthrough": 1,
+    "sink_override_observed": 1
+  },
+  "rollback_drill": {
+    "canary": {
+      "sink_id": "codex.admin_test.compact",
+      "before_state": "enforced",
+      "rollback_state": "canary_enforce",
+      "canary_percent": 1,
+      "live_http_success": true,
+      "observed_reason": "canary_observe_passthrough"
+    },
+    "override": {
+      "sink_id": "codex.admin_test.responses",
+      "observe_until": "2026-08-03T00:24:07Z",
+      "owner": "changeset1c-acceptance",
+      "reason_code": "sink_override_expiry_exercise",
+      "live_http_success": true,
+      "observed_reason": "sink_override_observed",
+      "original_violation_logged": true,
+      "expiry_fail_close_verified": true
+    }
+  },
+  "panic_fatal_count": 0,
+  "reviewed_by": "codex-audit-changeset-1c-remediation",
+  "review_ref": "changeset-1c-remediation-audit/2026-08-03",
+  "approval_status": "accepted"
+}

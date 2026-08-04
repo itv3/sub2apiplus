@@ -10,6 +10,7 @@ import (
 )
 
 func TestOpenAIOAuthService_ValidateCodexPersonalAccessToken(t *testing.T) {
+	configureObserveGuardForLocalHTTPTest(t)
 	var gotAuthorization string
 	var gotOriginator string
 	var gotUserAgent string

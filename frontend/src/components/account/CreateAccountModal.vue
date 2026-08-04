@@ -5393,57 +5393,30 @@ const handleOpenAIExchange = async (authCode: string) => {
       return
     }
 
-    const tokenInfo = await oauthClient.exchangeAuthCode(
-      authCode.trim(),
-      oauthClient.sessionId.value,
-      stateToUse,
-      form.proxy_id
-    )
-    if (!tokenInfo) return
+    const credentialExtras = buildOpenAICodexImportCredentialExtras()
+    if (credentialExtras === null) return
+    const extra = buildOpenAIExtra()
 
-    const credentials = oauthClient.buildCredentials(tokenInfo)
-    const oauthExtra = oauthClient.buildExtraInfo(tokenInfo) as Record<string, unknown> | undefined
-    const extra = buildOpenAIExtra(oauthExtra)
-    const shouldCreateOpenAI = form.platform === 'openai'
-
-    // Add model mapping for OpenAI OAuth accounts（透传模式下不应用）
-    if (shouldCreateOpenAI && !isOpenAIModelRestrictionDisabled.value) {
-      const modelMapping = buildModelMappingObject(modelRestrictionMode.value, allowedModels.value, modelMappings.value)
-      if (modelMapping) {
-        credentials.model_mapping = modelMapping
-      }
-    }
-    if (shouldCreateOpenAI) {
-      const compactModelMapping = buildOpenAICompactModelMapping()
-      if (compactModelMapping) {
-        credentials.compact_model_mapping = compactModelMapping
-      }
-    }
-
-    // 应用临时不可调度配置
-    if (!applyTempUnschedConfig(credentials)) {
-      return
-    }
-
-    if (shouldCreateOpenAI) {
-      await adminAPI.accounts.create({
-        name: form.name,
-        notes: form.notes,
-        platform: 'openai',
-        type: 'oauth',
-        credentials,
-        extra,
-        proxy_id: form.proxy_id,
-        concurrency: form.concurrency,
-        load_factor: form.load_factor ?? undefined,
-        priority: form.priority,
-        rate_multiplier: form.rate_multiplier,
-        group_ids: form.group_ids,
-        expires_at: form.expires_at,
-        auto_pause_on_expired: autoPauseOnExpired.value
-      })
-      appStore.showSuccess(t('admin.accounts.accountCreated'))
-    }
+    // 服务端在一个请求中兑换 token、执行 privacy 并创建账号；前端不再搬运
+    // access token 或受管 privacy 状态。
+    await adminAPI.accounts.createOpenAIFromOAuth({
+      session_id: oauthClient.sessionId.value,
+      code: authCode.trim(),
+      state: stateToUse,
+      name: form.name,
+      notes: form.notes,
+      proxy_id: form.proxy_id,
+      concurrency: form.concurrency,
+      load_factor: form.load_factor ?? undefined,
+      priority: form.priority,
+      rate_multiplier: form.rate_multiplier,
+      group_ids: form.group_ids,
+      expires_at: form.expires_at,
+      auto_pause_on_expired: autoPauseOnExpired.value,
+      credential_extras: Object.keys(credentialExtras).length > 0 ? credentialExtras : undefined,
+      extra
+    })
+    appStore.showSuccess(t('admin.accounts.accountCreated'))
 
     emit('created')
     handleClose()

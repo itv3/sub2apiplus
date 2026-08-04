@@ -56,6 +56,33 @@ func TestOfficialEgressT3_ThreeTransportProvidersAreIndependent(t *testing.T) {
 	require.NotEqual(t, openAIHTTPSelection.ProfileID, openAIWSSelection.ProfileID)
 }
 
+func TestOfficialEgressT3_WHAMUsesExactLongLivedTransport(t *testing.T) {
+	account := officialEgressTestAccount(95, PlatformOpenAI)
+	egressContext := NewOfficialEgressContext(OfficialEgressContextInput{
+		AccountID:       account.ID,
+		TargetPlatform:  account.Platform,
+		InboundEndpoint: "/v1/responses",
+		Transport:       OfficialEgressTransportHTTP,
+		UpstreamHost:    "chatgpt.com",
+		ProfileVersion:  officialEgressActiveVersionForTest(account),
+		AccountType:     account.Type,
+		CodexEndpointID: officialCodexEndpointWhamUsage,
+		InvocationID:    "wham-long-lived-transport",
+	})
+	_, err := (DefaultOfficialEgressProfileResolver{}).ResolveHTTPProfile(
+		egressContext,
+		account,
+		"/v1/responses",
+	)
+	require.NoError(t, err)
+	require.Equal(t, officialCodexTransportHTTPLongLived, egressContext.TransportProfileID())
+
+	selection, err := resolveOfficialEgressTransportSelection(egressContext)
+	require.NoError(t, err)
+	require.Equal(t, officialCodexTransportHTTPLongLived, selection.ProfileID)
+	require.Len(t, selection.TLSProfile.CipherSuites, 30)
+}
+
 func TestOfficialEgressT3_HTTPTransportOverridesOnlyEnabledContext(t *testing.T) {
 	fallback := &tlsfingerprint.Profile{Name: "fallback"}
 	plainRequest, err := http.NewRequest(http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
@@ -215,6 +242,19 @@ func TestOfficialEgressT3_ProxyStateKeyDoesNotExposeCredentials(t *testing.T) {
 	require.NotContains(t, key, "capture-user")
 	require.NotContains(t, key, "capture-secret")
 	require.NotEqual(t, proxyURL, key)
+	require.Len(t, key, 64)
+	require.Equal(
+		t,
+		officialEgressProxyStateKey("http://capture-user:capture-secret@PROXY.EXAMPLE:8080"),
+		key,
+		"代理 hostname 大小写不应产生不同资源身份",
+	)
+	require.NotEqual(
+		t,
+		officialEgressProxyStateKey("http://capture-user:other-secret@proxy.example:8080"),
+		key,
+		"代理认证材料变化必须隔离客户端资源",
+	)
 }
 
 type officialEgressT3WSDialer struct {

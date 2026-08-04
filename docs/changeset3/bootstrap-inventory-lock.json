@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "bootstrap_commit": "38a9929eac35a39c86de2f27de8f7a805d7dae52",
+  "bootstrap_tree": "a8c3dee18a01a6138bfcea60860bb5ad11548c3a",
+  "inventory_sha256": "46593243b1bd315eafcb54335502a1f46bc2b8bfc0ecc2d3146da4e7087bfaeb",
+  "scanner_algorithm_sha256": "a4700ad8472fe9f0b5b05493f51eab7ceb5638265fd4611cc16409dca19814ff",
+  "reconstructed_at": "2026-08-03T00:00:00+08:00",
+  "reviewed_by": "codex-changeset3-self-audit",
+  "review_ref": "changeset-3-source-gate-audit/2026-08-03",
+  "rationale": "变更集 3 新增统一 WebSocket Executor Acquire adapter 的精确 infrastructure 分类，并允许已迁入统一 Executor、已持受审 MigrationReceipt 的业务 route 替代消失的物理 network candidate 完成覆盖证明；新增物理发送点仍必须逐候选分类。bootstrap inventory 原文、提交与树摘要保持不变。"
+}

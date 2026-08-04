@@ -1,0 +1,84 @@
+{
+  "schema_version": 2,
+  "bootstrap_commit": "38a9929eac35a39c86de2f27de8f7a805d7dae52",
+  "amendments": [
+    {
+      "kind": "runtime_scope_exclusion",
+      "sink_id": "codex.admin_test.chat_completions",
+      "source": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*AccountTestService.testOpenAIChatCompletionsConnection@backend/internal/service/account_test_service.go#facade_openai_upstream#1",
+        "ast_fingerprint": "93418efda9cf",
+        "file": "backend/internal/service/account_test_service.go",
+        "function": "*AccountTestService.testOpenAIChatCompletionsConnection",
+        "callee": "github.com/Wei-Shaw/sub2api/internal/service.doOpenAIHTTPUpstreamWithProfile",
+        "source_blob_sha256": "b932b28fdb708bd8b89d6f4cb7c865e90ffe8930e509d3f1912d6e32898f055e"
+      },
+      "routes": [],
+      "reviewed_by": "external_engineer",
+      "review_ref": "external-audit-2026-08-02:final-blocker-1",
+      "rationale": "该函数只处理通用 API-Key /v1/chat/completions 与自定义 base URL，不属于 OAuth Codex persona；保留历史候选但禁止运行时绑定。"
+    },
+    {
+      "kind": "runtime_scope_exclusion",
+      "sink_id": "codex.admin_test.keeper",
+      "source": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*AccountTestService.ProxyKeeperOpenAIAccount@backend/internal/service/account_test_service_keeper.go#facade_openai_upstream#1",
+        "ast_fingerprint": "d0e7cca6b855",
+        "file": "backend/internal/service/account_test_service_keeper.go",
+        "function": "*AccountTestService.ProxyKeeperOpenAIAccount",
+        "callee": "github.com/Wei-Shaw/sub2api/internal/service.doOpenAIHTTPUpstreamWithProfile",
+        "source_blob_sha256": "689a1fe132daa14beaad88a7ade54c1c8f4f1852ef1015563993392b9d9b85e0"
+      },
+      "routes": [],
+      "reviewed_by": "external_engineer",
+      "review_ref": "external-audit-2026-08-02:final-blocker-1",
+      "rationale": "Keeper 只接受 API-Key 账号并转发账号 base URL，不属于 OAuth Codex persona；保留历史候选但禁止运行时绑定。"
+    },
+    {
+      "kind": "route_evidence",
+      "sink_id": "codex.responses.forward",
+      "source": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.Forward@backend/internal/service/openai_gateway_forward.go#facade_openai_upstream_req#1",
+        "ast_fingerprint": "4fa501ed584c",
+        "file": "backend/internal/service/openai_gateway_forward.go",
+        "function": "*OpenAIGatewayService.Forward",
+        "callee": "(*github.com/Wei-Shaw/sub2api/internal/service.OpenAIGatewayService).doOpenAIHTTPUpstreamForRequest",
+        "source_blob_sha256": "a4eb2a6758efd7f18be88758cc2c511efb8d599ea4aa08934462db019237fbce"
+      },
+      "routes": [
+        {
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/responses/compact",
+          "protocol": "http"
+        }
+      ],
+      "reviewed_by": "external_engineer",
+      "review_ref": "external-audit-2026-08-02:blocker-2",
+      "rationale": "bootstrap 时已存在的动态 Responses 子路径遗漏；compact 具备 Codex ProfileSpec 端点证据。"
+    },
+    {
+      "kind": "route_evidence",
+      "sink_id": "codex.responses.passthrough",
+      "source": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.forwardOpenAIPassthrough@backend/internal/service/openai_gateway_passthrough.go#facade_openai_upstream#1",
+        "ast_fingerprint": "b2102a8241dd",
+        "file": "backend/internal/service/openai_gateway_passthrough.go",
+        "function": "*OpenAIGatewayService.forwardOpenAIPassthrough",
+        "callee": "github.com/Wei-Shaw/sub2api/internal/service.doOpenAIHTTPUpstreamWithProfile",
+        "source_blob_sha256": "396df38814bdcc3cea1b356808704ca6f5191f3880be595cad54b2c89f0b2c2f"
+      },
+      "routes": [
+        {
+          "method": "POST",
+          "host": "chatgpt.com",
+          "path": "/backend-api/codex/responses/compact",
+          "protocol": "http"
+        }
+      ],
+      "reviewed_by": "external_engineer",
+      "review_ref": "external-audit-2026-08-02:blocker-2",
+      "rationale": "bootstrap 时已存在的 passthrough 动态 Responses 子路径遗漏；compact 具备 Codex ProfileSpec 端点证据。"
+    }
+  ]
+}

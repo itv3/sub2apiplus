@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/gin-gonic/gin"
@@ -49,6 +50,13 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	if profileErr != nil {
 		return nil, profileErr
 	}
+	if routeErr := validateOpenAIOfficialResponsesSubpath(account, c); routeErr != nil {
+		MarkOpsClientBusinessLimited(c, OpsClientBusinessLimitedReasonLocalPolicyDenied)
+		c.JSON(http.StatusNotFound, gin.H{"error": gin.H{
+			"type": "not_found_error", "message": "Unsupported official OAuth responses subpath",
+		}})
+		return nil, routeErr
+	}
 	if officialProfileEnabled && account.IsOpenAIOAuth() {
 		if capabilityErr := s.ensureOpenAIModelCapability(ctx, account, body); capabilityErr != nil {
 			return nil, capabilityErr
@@ -56,8 +64,14 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 	wsDecision := resolveOpenAIWSProtocolForRequest(s.getOpenAIWSProtocolResolver(), ctx, account)
 	clientTransport := GetOpenAIClientTransport(c)
+	codexReleaseMode := ""
 	if account != nil && account.IsOpenAIOAuth() {
-		versionProfile, profileErr := resolveActiveCodexVersionProfile()
+		runtimeState, runtimeErr := resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream)
+		if runtimeErr != nil {
+			return nil, runtimeErr
+		}
+		codexReleaseMode = string(runtimeState.CodexReleaseMode)
+		versionProfile, profileErr := resolveCodexVersionProfileForMode(codexReleaseMode)
 		if profileErr != nil {
 			return nil, profileErr
 		}
@@ -86,13 +100,15 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	// 因此必须在任何分支早退之前冻结同一次调用的可信进程快照，保证刷新链和
 	// Responses 最终请求共享 TUI/exec、终端 token、suffix 与条件身份。
 	if account.IsOpenAIOAuth() {
-		endpointID := codex0145EndpointID(officialCodexEndpointResponsesHTTP)
+		endpointID := codexEndpointID(officialCodexEndpointResponsesHTTP)
 		if isOpenAIResponsesCompactPath(c) {
-			endpointID = codex0145EndpointID(officialCodexEndpointResponsesCompact)
+			endpointID = codexEndpointID(officialCodexEndpointResponsesCompact)
 		} else if !passthroughEnabled && wsDecision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2 {
-			endpointID = codex0145EndpointID(officialCodexEndpointResponsesWS)
+			endpointID = codexEndpointID(officialCodexEndpointResponsesWS)
 		}
-		ctx, err = bindOfficialCodex0145RuntimeStateFromIngress(ctx, c, account, endpointID)
+		ctx, err = bindOfficialCodexRuntimeStateFromIngress(
+			ctx, c, account, codexReleaseMode, endpointID,
+		)
 		if err != nil {
 			return nil, fmt.Errorf("解析 Codex 进程运行态：%w", err)
 		}
@@ -654,6 +670,9 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 	// Codex 0.145.0 内置 provider 默认先走 WS；只有可重试连接错误耗尽本次
 	// 调用的预算后，才把同一调用置为 force_http_fallback 并继续 HTTP。
+	var officialForwardPlan *OpenAIForwardInvocationPlan
+	var officialHTTPFallbackTarget officialegress.FallbackNode
+	officialHTTPFallbackPending := false
 	if wsDecision.Transport == OpenAIUpstreamTransportResponsesWebsocketV2 {
 		// WS 分支需要结构化 payload 与重连恢复，命中后再触发 full-map decode。
 		wsReqBody, err := ensureReqBody()
@@ -879,6 +898,22 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			s.writeOpenAIWSFallbackErrorResponse(c, account, wsErr)
 			return nil, wsErr
 		}
+		officialForwardPlan = officialCodexResponseForwardPlanFromHolder(
+			officialCodexBundleHolderForGin(c),
+			officialegress.SinkCodexResponsesWS,
+			account.ID,
+		)
+		if officialForwardPlan == nil {
+			return nil, errors.New("WS→HTTP fallback 缺少同一 OpenAI Forward invocation")
+		}
+		var fallbackFound bool
+		officialHTTPFallbackTarget, fallbackFound = officialForwardPlan.FallbackNode(
+			officialegress.SinkCodexResponsesWSHTTPBridge,
+		)
+		if !fallbackFound {
+			return nil, errors.New("WS→HTTP fallback target 不在冻结 Bundle 中")
+		}
+		officialHTTPFallbackPending = true
 		setOfficialCodexForceHTTPFallback(c, true)
 
 		// HTTP fallback 与 WS retry 属于同一次上层调用：不重新选账号，也不创建
@@ -905,6 +940,44 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			normalizeOpenAIWSLogValue(wsLastFailureReason),
 		)
 	}
+	if officialEgressEnabled && account.IsOpenAIOAuth() {
+		httpSinkID := officialEgressSinkResponsesForward
+		if officialHTTPFallbackPending {
+			httpSinkID = officialEgressSinkResponsesWSHTTPBridge
+		}
+		ctx, err = bindOfficialEgressSink(ctx, httpSinkID)
+		if err != nil {
+			return nil, fmt.Errorf("bind Responses official egress sink: %w", err)
+		}
+		if officialForwardPlan == nil {
+			runtimeState, runtimeErr := resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream)
+			if runtimeErr != nil {
+				return nil, runtimeErr
+			}
+			invocationID, invocationErr := officialEgressInvocationIDForRequest(c)
+			if invocationErr != nil {
+				return nil, invocationErr
+			}
+			proxyURL := ""
+			if account.ProxyID != nil && account.Proxy != nil {
+				proxyURL = account.Proxy.URL()
+			}
+			officialForwardPlan, err = officialCodexResponseForwardPlanForHolder(
+				ctx,
+				officialCodexBundleHolderForGin(c),
+				officialCodexResponseForwardPlanInput{
+					Runtime: runtimeState, Account: account,
+					PrimarySinkID: officialegress.SinkCodexResponsesForward,
+					InvocationID:  invocationID, ProxyURL: proxyURL,
+					PolicyID: "changeset3.responses.forward", PolicySource: "service.Forward",
+					AttemptBudget: officialCodexHTTPForwardAttemptBudget,
+				},
+			)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 
 	reasoningEffort := extractOpenAIReasoningEffortFromBody(body, upstreamModel, billingModel, originalModel)
 	// 国产模型默认 effort 补充：此处 reqModel 已被 mapping 重写为 billingModel。
@@ -924,6 +997,8 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	sameTurnState := ""
 	turnStateStoreKey := ""
 	turnStateGroupID := int64(0)
+	turnStateIdentity := officialOpenAIHTTPIdentity{}
+	turnStateScopePending := false
 	if officialOpenAIHTTPEnabled && officialEgressBodyContract != nil {
 		turnIdentity, identityErr := resolveOfficialOpenAIHTTPIdentity(
 			c,
@@ -932,15 +1007,14 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			officialEgressBodyContract,
 			isInboundOpenAIOfficialClient(c),
 			isCompactRequest,
+			codexReleaseMode,
 		)
 		if identityErr != nil {
 			return nil, identityErr
 		}
-		turnStateStoreKey = officialOpenAIHTTPTurnStateStoreKey(turnIdentity)
+		turnStateIdentity = turnIdentity
 		turnStateGroupID = getOpenAIGroupIDFromContext(c)
-		if store := s.getOpenAIWSStateStore(); store != nil && turnStateStoreKey != "" {
-			sameTurnState, _ = store.GetSessionTurnState(turnStateGroupID, turnStateStoreKey)
-		}
+		turnStateScopePending = true
 	}
 	for {
 		// Build upstream request
@@ -969,6 +1043,55 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			}
 			return nil, err
 		}
+		if turnStateScopePending {
+			turnStateScopePending = false
+			if officialForwardPlan != nil {
+				releaseDigest, authority, scopeErr := officialForwardPlan.validatedTurnStateScopeFacts(
+					upstreamReq.Method,
+					upstreamReq.URL,
+					officialegress.WireProtocolHTTP,
+				)
+				if scopeErr != nil {
+					if headerGuard != nil {
+						headerGuard.close()
+					}
+					return nil, fmt.Errorf("冻结 HTTP turn-state scope：%w", scopeErr)
+				}
+				scope := newOfficialOpenAITurnStateScope(
+					turnStateGroupID,
+					account.ID,
+					authority,
+					releaseDigest,
+					turnStateIdentity,
+				)
+				turnStateStoreKey = scope.persistentStoreKey()
+				if store := s.getOpenAIWSStateStore(); store != nil && turnStateStoreKey != "" {
+					sameTurnState, _ = store.GetSessionTurnState(turnStateGroupID, turnStateStoreKey)
+				}
+				if sameTurnState != "" {
+					upstreamReq, err = s.buildUpstreamRequest(
+						upstreamCtx,
+						c,
+						account,
+						body,
+						token,
+						openAIUpstreamRequestPlan{
+							IsStream: upstreamReqStream, IsCompact: isCompactRequest,
+							PromptCacheKey: promptCacheKey, IsCodexCLI: isCodexCLI,
+							APIKeyCodexMimic:           mimicProfile,
+							OfficialEgressBodyContract: officialEgressBodyContract,
+							OfficialEgressTurnState:    sameTurnState,
+						},
+					)
+					if err != nil {
+						if headerGuard != nil {
+							headerGuard.close()
+						}
+						return nil, err
+					}
+				}
+			}
+		}
 		// Get proxy URL
 		proxyURL := ""
 		if account.ProxyID != nil && account.Proxy != nil {
@@ -977,7 +1100,25 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 
 		// Send request
 		upstreamStart := time.Now()
-		resp, err := s.doOpenAIHTTPUpstreamForRequest(upstreamReq, proxyURL, account, mimicProfile)
+		var resp *http.Response
+		if officialForwardPlan != nil {
+			if officialHTTPFallbackPending {
+				resp, err = officialForwardPlan.TransitionHTTPFallback(
+					upstreamReq.Context(), upstreamReq, officialHTTPFallbackTarget,
+				)
+				officialHTTPFallbackPending = false
+			} else {
+				endpointID := officialCodexEndpointResponsesHTTP
+				if isCompactRequest {
+					endpointID = officialCodexEndpointResponsesCompact
+				}
+				resp, err = officialForwardPlan.ExecuteHTTPRequest(
+					upstreamReq.Context(), upstreamReq, endpointID,
+				)
+			}
+		} else {
+			resp, err = s.doOpenAIHTTPUpstreamForRequest(upstreamReq, proxyURL, account, mimicProfile)
+		}
 		SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 		if headerGuard != nil && headerGuard.stopHeaderWait() {
 			if resp != nil && resp.Body != nil {
@@ -1318,7 +1459,7 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	if err != nil {
 		return nil, fmt.Errorf("resolve official egress profile: %w", err)
 	}
-	req, _, err = finalizeOpenAIOfficialEgressHTTPRequest(req, c, account, body, plan)
+	req, _, err = prepareOpenAIOfficialEgressSemanticHTTPRequest(req, c, account, body, plan)
 	if err != nil {
 		return nil, fmt.Errorf("finalize OpenAI official egress request: %w", err)
 	}

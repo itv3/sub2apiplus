@@ -13,6 +13,8 @@ import (
 	"go.uber.org/zap"
 )
 
+const compactBodySignalTestProfileMode = "active"
+
 func newCompactBodySignalTestContext(t *testing.T, path string, body []byte) *gin.Context {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -39,7 +41,7 @@ func TestNormalizeOpenAIResponsesCompactRequest_RemoteV2StaysOnResponses(t *test
 	c := newCompactBodySignalTestContext(t, "/v1/responses", body)
 	c.Request.Header.Set("x-codex-beta-features", "responses_websockets_v2, remote_compaction_v2, another_feature")
 
-	normalized, ok := h.normalizeOpenAIResponsesCompactRequest(c, zap.NewNop(), body)
+	normalized, ok := h.normalizeOpenAIResponsesCompactRequest(c, zap.NewNop(), body, compactBodySignalTestProfileMode)
 	require.True(t, ok)
 
 	require.Equal(t, "/v1/responses", c.Request.URL.Path)
@@ -69,7 +71,7 @@ func TestNormalizeOpenAIResponsesCompactRequest_RemoteV2PathAliasesStayOnRespons
 			c := newCompactBodySignalTestContext(t, path, body)
 			c.Request.Header.Set("x-codex-beta-features", "remote_compaction_v2")
 
-			normalized, ok := h.normalizeOpenAIResponsesCompactRequest(c, zap.NewNop(), body)
+			normalized, ok := h.normalizeOpenAIResponsesCompactRequest(c, zap.NewNop(), body, compactBodySignalTestProfileMode)
 			require.True(t, ok)
 			require.Equal(t, path, c.Request.URL.Path)
 			require.Equal(t, body, normalized)
@@ -82,7 +84,7 @@ func TestNormalizeOpenAIResponsesCompactRequest_BodySignalTrailingSlashUsesDefau
 	body := []byte(`{"model":"gpt-5.5","input":[{"type":"compaction_trigger"}]}`)
 	c := newCompactBodySignalTestContext(t, "/v1/responses/", body)
 
-	_, ok := h.normalizeOpenAIResponsesCompactRequest(c, zap.NewNop(), body)
+	_, ok := h.normalizeOpenAIResponsesCompactRequest(c, zap.NewNop(), body, compactBodySignalTestProfileMode)
 	require.True(t, ok)
 	require.Equal(t, "/v1/responses/", c.Request.URL.Path)
 }
@@ -92,7 +94,7 @@ func TestNormalizeOpenAIResponsesCompactRequest_CodexDirectAliasUsesDefaultV2(t 
 	body := []byte(`{"model":"gpt-5.5","input":[{"type":"compaction_trigger"}]}`)
 	c := newCompactBodySignalTestContext(t, "/backend-api/codex/responses", body)
 
-	_, ok := h.normalizeOpenAIResponsesCompactRequest(c, zap.NewNop(), body)
+	_, ok := h.normalizeOpenAIResponsesCompactRequest(c, zap.NewNop(), body, compactBodySignalTestProfileMode)
 	require.True(t, ok)
 	require.Equal(t, "/backend-api/codex/responses", c.Request.URL.Path)
 }
@@ -137,7 +139,7 @@ func TestNormalizeOpenAIResponsesCompactRequest_DefaultV2IgnoresHeaderAndStream(
 				c.Request.Header.Set("x-codex-beta-features", tt.betaHeader)
 			}
 
-			normalized, ok := h.normalizeOpenAIResponsesCompactRequest(c, zap.NewNop(), tt.body)
+			normalized, ok := h.normalizeOpenAIResponsesCompactRequest(c, zap.NewNop(), tt.body, compactBodySignalTestProfileMode)
 			require.True(t, ok)
 			require.Equal(t, "/v1/responses", c.Request.URL.Path)
 			require.Equal(t, tt.body, normalized)
@@ -152,7 +154,7 @@ func TestNormalizeOpenAIResponsesCompactRequest_NoTriggerUntouched(t *testing.T)
 	body := []byte(`{"model":"gpt-5.5","stream":true,"input":[{"type":"message","role":"user","content":"hello"}]}`)
 	c := newCompactBodySignalTestContext(t, "/v1/responses", body)
 
-	normalized, ok := h.normalizeOpenAIResponsesCompactRequest(c, zap.NewNop(), body)
+	normalized, ok := h.normalizeOpenAIResponsesCompactRequest(c, zap.NewNop(), body, compactBodySignalTestProfileMode)
 	require.True(t, ok)
 	require.Equal(t, "/v1/responses", c.Request.URL.Path)
 	require.False(t, isOpenAIRemoteCompactPath(c))
@@ -166,7 +168,7 @@ func TestNormalizeOpenAIResponsesCompactRequest_PathBasedNoDoubleSuffix(t *testi
 	c := newCompactBodySignalTestContext(t, "/v1/responses/compact", body)
 	c.Request.Header.Set("x-codex-beta-features", "remote_compaction_v2")
 
-	normalized, ok := h.normalizeOpenAIResponsesCompactRequest(c, zap.NewNop(), body)
+	normalized, ok := h.normalizeOpenAIResponsesCompactRequest(c, zap.NewNop(), body, compactBodySignalTestProfileMode)
 	require.True(t, ok)
 	require.Equal(t, "/v1/responses/compact", c.Request.URL.Path)
 	require.False(t, gjson.GetBytes(normalized, "stream").Exists())
@@ -178,7 +180,7 @@ func TestNormalizeOpenAIResponsesCompactRequest_SubpathNotPromoted(t *testing.T)
 	body := []byte(`{"model":"gpt-5.5","input":[{"type":"compaction_trigger"}]}`)
 	c := newCompactBodySignalTestContext(t, "/v1/responses/resp_123/cancel", body)
 
-	normalized, ok := h.normalizeOpenAIResponsesCompactRequest(c, zap.NewNop(), body)
+	normalized, ok := h.normalizeOpenAIResponsesCompactRequest(c, zap.NewNop(), body, compactBodySignalTestProfileMode)
 	require.True(t, ok)
 	require.Equal(t, "/v1/responses/resp_123/cancel", c.Request.URL.Path)
 	require.Equal(t, body, normalized)
@@ -191,7 +193,7 @@ func TestNormalizeOpenAIResponsesCompactRequest_PathBasedStreamTrueNotMarked(t *
 	body := []byte(`{"model":"gpt-5.5","stream":true,"input":[{"type":"message","role":"user","content":"hello"}]}`)
 	c := newCompactBodySignalTestContext(t, "/v1/responses/compact", body)
 
-	_, ok := h.normalizeOpenAIResponsesCompactRequest(c, zap.NewNop(), body)
+	_, ok := h.normalizeOpenAIResponsesCompactRequest(c, zap.NewNop(), body, compactBodySignalTestProfileMode)
 	require.True(t, ok)
 	_, exists := c.Get(service.OpenAICompactClientStreamKeyForTest())
 	require.False(t, exists)

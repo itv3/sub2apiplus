@@ -215,6 +215,9 @@ func scanOfficialEgressVersionLiterals(
 		if readErr != nil {
 			return readErr
 		}
+		if isEgressContractOnlyBuildSource(source) {
+			return nil
+		}
 		// 不做文本预筛：归属由 AST 的父节点判定，预筛反而会放过全新文件——一个只写
 		// `Provider: PlatformOpenAI` 与 `Version: "0.146.0"` 的新文件既不含 officialCodex
 		// 标记（AST 不解析），也不含版本化符号（文本门禁不匹配），两侧都查不到。
@@ -233,6 +236,40 @@ func scanOfficialEgressVersionLiterals(
 		return nil
 	})
 	return hits, err
+}
+
+func TestOfficialEgressVersionLeakASTBuildTagBoundary(t *testing.T) {
+	tests := []struct {
+		name string
+		src  string
+		want bool
+	}{
+		{name: "纯契约文件", src: "//go:build egresscontract\n\npackage fixture\n", want: true},
+		{name: "生产或契约", src: "//go:build egresscontract || linux\n\npackage fixture\n", want: false},
+		{name: "正文同形注释不算", src: "package fixture\n\n//go:build egresscontract\n", want: false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := isEgressContractOnlyBuildSource([]byte(test.src)); got != test.want {
+				t.Fatalf("匹配结果=%v，期望 %v", got, test.want)
+			}
+		})
+	}
+}
+
+func isEgressContractOnlyBuildSource(source []byte) bool {
+	for _, rawLine := range bytes.Split(source, []byte{'\n'}) {
+		line := strings.TrimSpace(strings.TrimSuffix(string(rawLine), "\r"))
+		if strings.HasPrefix(line, "package ") {
+			return false
+		}
+		// 只接受文件头中单一、精确的构建标签。组合表达式仍可能进入生产构建；
+		// package 声明后的同形正文注释也不能获得豁免。
+		if line == "//go:build egresscontract" {
+			return true
+		}
+	}
+	return false
 }
 
 func scanFileVersionLiterals(

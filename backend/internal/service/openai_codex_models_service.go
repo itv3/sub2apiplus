@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
@@ -151,9 +152,12 @@ type codexModelsManifestRequest struct {
 	credentialAccount   *Account
 	accountConcurrency  int
 	useAPIKeyUpstream   bool
-	endpointID          codex0145EndpointID
+	endpointID          codexEndpointID
 	invocationID        string
-	useCodex0145Profile bool
+	useCodexProfile     bool
+	releaseMode         string
+	officialRuntime     *OfficialEgressTransitionRuntime
+	bundleHolder        *officialCodexBundleHolder
 }
 
 type codexModelsManifestCacheEntry struct {
@@ -254,11 +258,21 @@ func (s *OpenAIGatewayService) FetchCodexModelsManifest(
 			)
 		}
 		if account != nil && account.IsOpenAIOAuth() {
-			ctx, err = bindOfficialCodex0145RuntimeStateFromIngress(
+			runtimeState, runtimeErr := resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream)
+			if runtimeErr != nil {
+				return nil, infraerrors.Newf(
+					http.StatusInternalServerError,
+					"OPENAI_CODEX_MODELS_PROFILE_INVALID",
+					"resolve Codex models runtime: %v",
+					runtimeErr,
+				)
+			}
+			ctx, err = bindOfficialCodexRuntimeStateFromIngress(
 				ctx,
 				ingress[0],
 				account,
-				codex0145EndpointID(officialCodexEndpointModels),
+				string(runtimeState.CodexReleaseMode),
+				codexEndpointID(officialCodexEndpointModels),
 			)
 			if err != nil {
 				return nil, infraerrors.Newf(
@@ -305,26 +319,35 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifest(
 	requestMethod := http.MethodGet
 	requestHost := ""
 	var endpointProfile officialCodexEndpointProfile
-	endpointID := codex0145EndpointID(officialCodexEndpointModels)
+	endpointID := codexEndpointID(officialCodexEndpointModels)
 	invocationID := ""
 	if len(invocationIDs) > 0 {
 		invocationID = strings.TrimSpace(invocationIDs[0])
 	}
 	authToken := ""
 	useAPIKeyUpstream := false
-	useCodex0145Profile := false
+	useCodexProfile := false
+	releaseMode := ""
+	var officialRuntime *OfficialEgressTransitionRuntime
 	appendModelsPath := false
 	switch {
 	case credAccount.IsOpenAIOAuth():
-		endpointProfile, err = resolveActiveCodexEndpoint(
+		officialRuntime, err = resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream)
+		if err != nil {
+			return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_PROFILE_INVALID", "resolve official egress runtime: %v", err)
+		}
+		releaseMode = string(officialRuntime.CodexReleaseMode)
+		endpointProfile, err = resolveCodexEndpointForMode(
+			releaseMode,
 			endpointID,
 		)
 		if err != nil {
 			return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_PROFILE_INVALID", "resolve Codex models endpoint profile: %v", err)
 		}
-		profileURL, profileErr := buildActiveCodexEndpointURL(
+		profileURL, profileErr := buildCodexEndpointURLForMode(
+			releaseMode,
 			endpointID,
-			officialCodex0145EndpointURLInput{},
+			officialCodexEndpointURLInput{},
 		)
 		if profileErr != nil {
 			return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_PROFILE_INVALID", "resolve Codex models URL: %v", profileErr)
@@ -337,7 +360,7 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifest(
 		requestHost = endpointProfile.Host
 		if requestEndpoint == chatgptCodexModelsDefaultURL {
 			requestEndpoint = profileURL.String()
-			useCodex0145Profile = true
+			useCodexProfile = true
 		}
 		if invocationID == "" {
 			invocationID = uuid.NewString()
@@ -371,7 +394,7 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifest(
 	}
 
 	var requestURL *url.URL
-	if useCodex0145Profile {
+	if useCodexProfile {
 		requestURL, err = url.Parse(requestEndpoint)
 	} else {
 		requestURL, err = buildCodexModelsManifestURL(requestEndpoint, appendModelsPath, requestedClientVersion)
@@ -422,7 +445,9 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifest(
 		useAPIKeyUpstream:   useAPIKeyUpstream,
 		endpointID:          endpointID,
 		invocationID:        invocationID,
-		useCodex0145Profile: useCodex0145Profile,
+		useCodexProfile:     useCodexProfile,
+		releaseMode:         releaseMode, officialRuntime: officialRuntime,
+		bundleHolder: &officialCodexBundleHolder{httpAttemptBudget: 2},
 	}
 	if useAPIKeyUpstream {
 		return s.fetchCachedAPIKeyCodexModelsManifest(ctx, request, ifNoneMatch)
@@ -543,6 +568,11 @@ func (s *OpenAIGatewayService) refreshCachedAPIKeyCodexModelsManifest(cacheKey s
 func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstream(ctx context.Context, request codexModelsManifestRequest, ifNoneMatch string) (*CodexModelsManifest, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, codexModelsManifestRequestTimeout)
 	defer cancel()
+	boundCtx, bindErr := bindOfficialEgressSink(reqCtx, officialEgressSinkModelsList)
+	if bindErr != nil {
+		return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_REQUEST_FAILED", "bind Codex models official egress sink: %v", bindErr)
+	}
+	reqCtx = boundCtx
 	method := request.method
 	if method == "" {
 		method = http.MethodGet
@@ -559,33 +589,14 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstream(ctx context.Cont
 		if ifNoneMatch = strings.TrimSpace(ifNoneMatch); ifNoneMatch != "" {
 			req.Header.Set("If-None-Match", ifNoneMatch)
 		}
-	} else if request.useCodex0145Profile {
-		var egressContext *OfficialEgressContext
-		req, egressContext, err = attachOfficialCodex0145EndpointRequest(
-			req,
-			request.credentialAccount,
-			request.endpointID,
-			request.invocationID,
-		)
-		if err != nil {
-			return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_PROFILE_INVALID", "attach Codex models endpoint profile: %v", err)
-		}
-		userAgent, originator, identityErr := officialCodex0145ProcessIdentity(egressContext)
-		if identityErr != nil {
-			return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_PROFILE_INVALID", "resolve Codex models process identity: %v", identityErr)
-		}
-		req.Header.Set("User-Agent", userAgent)
-		req.Header.Set("Originator", originator)
-		if _, finalizeErr := officialCodex0145FinalizeEndpointHeaders(egressContext, req.Header, nil); finalizeErr != nil {
-			return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_PROFILE_INVALID", "finalize Codex models headers: %v", finalizeErr)
-		}
-	} else {
+	} else if !request.useCodexProfile {
 		// 非默认 URL 只用于包内测试桩；它不具备官方 host，不能绑定
 		// 出站上下文，但 header 仍由同一端点画像收敛。
-		if _, finalizeErr := applyActiveCodexHeaderContract(
+		if _, finalizeErr := applyCodexHeaderContractForMode(
+			request.releaseMode,
 			request.endpointID,
 			req.Header,
-			officialCodex0145ConditionsFromHeaders(req.Header),
+			officialCodexConditionsFromHeaders(req.Header),
 		); finalizeErr != nil {
 			return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_PROFILE_INVALID", "finalize Codex models test headers: %v", finalizeErr)
 		}
@@ -597,39 +608,53 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstream(ctx context.Cont
 			return nil, infraerrors.New(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_UPSTREAM_NOT_CONFIGURED", "Codex models upstream HTTP client is not configured")
 		}
 		req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
-		resp, err = s.httpUpstream.Do(req, request.proxyURL, request.accountID, request.accountConcurrency)
+		resp, err = doOpenAIAPIKeyHTTPTransport(
+			s.httpUpstream, req, request.proxyURL, request.credentialAccount, nil,
+		)
+	} else if request.useCodexProfile && s.httpUpstream != nil {
+		if request.officialRuntime == nil || request.credentialAccount == nil || request.bundleHolder == nil {
+			return nil, infraerrors.New(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_UPSTREAM_NOT_CONFIGURED", "Codex models official runtime is not configured")
+		}
+		request.bundleHolder.mu.Lock()
+		if request.bundleHolder.httpInvocation == nil {
+			request.bundleHolder.httpInvocation, err = newOfficialCodexHTTPInvocation(
+				reqCtx,
+				officialCodexHTTPInvocationInput{
+					Runtime: request.officialRuntime, Account: request.credentialAccount,
+					SinkID: officialegress.SinkCodexModelsList, InvocationID: request.invocationID,
+					ProxyURL: request.proxyURL, PolicyID: "changeset3.models.list",
+					PolicySource:  "service.fetchCodexModelsManifest",
+					AttemptBudget: request.bundleHolder.httpAttemptBudget,
+				},
+			)
+		}
+		if err == nil {
+			resp, err = request.bundleHolder.httpInvocation.Execute(
+				reqCtx,
+				officialCodexHTTPAttemptInput{
+					EndpointID: string(request.endpointID), Request: req,
+				},
+			)
+		}
+		request.bundleHolder.mu.Unlock()
 	} else {
 		// models 是画像声明的无 Cookie 辅助端点。请求只能使用端点画像生成的固定
 		// HTTP 传输与 header 集合，不能因为配置了代理而切换 ClientHello。
 		if s.httpUpstream != nil {
 			var tlsProfileErr error
 			var tlsProfile *tlsfingerprint.Profile
-			if request.useCodex0145Profile {
-				tlsProfile, tlsProfileErr = resolveActiveCodexEndpointTLSProfileForURL(
-					request.endpointID,
-					req.URL,
-				)
-			} else {
-				tlsProfile, tlsProfileErr = resolveActiveCodexEndpointTLSProfile(
-					request.endpointID,
-				)
-			}
+			tlsProfile, tlsProfileErr = resolveCodexEndpointTLSProfileForMode(
+				request.releaseMode,
+				request.endpointID,
+			)
 			if tlsProfileErr != nil {
 				return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_PROFILE_INVALID", "resolve Codex models TLS profile: %v", tlsProfileErr)
 			}
-			resp, err = s.httpUpstream.DoWithTLS(req, request.proxyURL, request.accountID, request.accountConcurrency, tlsProfile)
+			resp, err = doOpenAIAPIKeyHTTPTransport(
+				s.httpUpstream, req, request.proxyURL, request.credentialAccount, tlsProfile,
+			)
 		} else {
-			// httpUpstream 仅在未接线的单元测试里为 nil；生产由 wire 注入，必然非空。
-			// 这条兜底只为让不关心传输层的用例继续跑通，不参与官方画像路径。
-			client, clientErr := httpclient.GetClient(httpclient.Options{
-				ProxyURL:              request.proxyURL,
-				Timeout:               codexModelsManifestRequestTimeout,
-				ResponseHeaderTimeout: 10 * time.Second,
-			})
-			if clientErr != nil {
-				return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_PROXY_INVALID", "invalid proxy configuration: %v", clientErr)
-			}
-			resp, err = client.Do(req)
+			resp, err = doCodexModelsUnwiredTestTransport(req, request.proxyURL)
 		}
 	}
 	// HTTPUpstream 是接口，实现（含测试替身）可能在未出错时返回空响应；
@@ -711,6 +736,25 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstream(ctx context.Cont
 		}
 	}
 	return manifest, nil
+}
+
+// doCodexModelsUnwiredTestTransport 只服务未注入 HTTPUpstream 的包内测试桩。
+// 生产 wiring 必有 HTTPUpstream，正式 Codex 路径不得进入这里。
+func doCodexModelsUnwiredTestTransport(req *http.Request, proxyURL string) (*http.Response, error) {
+	client, err := httpclient.GetClient(httpclient.Options{
+		ProxyURL:              proxyURL,
+		Timeout:               codexModelsManifestRequestTimeout,
+		ResponseHeaderTimeout: 10 * time.Second,
+	})
+	if err != nil {
+		return nil, infraerrors.Newf(
+			http.StatusInternalServerError,
+			"OPENAI_CODEX_MODELS_PROXY_INVALID",
+			"invalid proxy configuration: %v",
+			err,
+		)
+	}
+	return client.Do(req)
 }
 
 func codexModelsManifestBodyETag(body []byte) string {

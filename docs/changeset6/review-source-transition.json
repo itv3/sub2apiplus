@@ -1,0 +1,16 @@
+{
+  "schema_version": "sub2api.changeset6.review_source_transition.v1",
+  "changeset": "6-review",
+  "reference_manifest": "docs/changeset3/post_identity_authority_refactor_final_wire/manifest.json",
+  "reference_manifest_sha256": "c824ffb0ab6e2429c09f9ac517cf3e6f96860c7c6ef77c229757fd690bdbcf0f",
+  "prior_transition": "docs/changeset6/changeset3-source-transition.json",
+  "prior_transition_sha256": "cdd6eab06acac15923e17562525eed974ee12e0e5cf3421e1303d01ecba549d7",
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/executor.go",
+      "from_sha256": "f60ef1232f2e2cc2be681a44e89cc42ba4e16821610ce7caaa0191bfedc47362",
+      "to_sha256": "12f38cb9eb0559192cef98640826a1d173663747ed72116f5f0607bca6b062a1",
+      "reason": "正式复审修正 execution policy 稳定错误码边界：BeginInvocation 错误保持原分类，仅在真实 executionPolicies.acquire 拒绝出口包装，并保留原错误链。"
+    }
+  ]
+}

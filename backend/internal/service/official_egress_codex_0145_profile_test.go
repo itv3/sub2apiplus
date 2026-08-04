@@ -2,14 +2,79 @@ package service
 
 import (
 	"encoding/hex"
+	"encoding/json"
+	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 )
 
+func officialCodex0145RequiredEndpointIDs() []string {
+	release, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseModeActive)
+	if err != nil {
+		panic(err)
+	}
+	endpoints := release.ExecutableProfile().Endpoints()
+	ids := make([]string, 0, len(endpoints))
+	for _, endpoint := range endpoints {
+		ids = append(ids, endpoint.ID)
+	}
+	return ids
+}
+
+func TestOfficialCodexRemoteCompactionV2DefaultFollowsExplicitReleaseMode(t *testing.T) {
+	base, err := resolveCodexVersionProfileForMode(officialClientProfileModeActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active, err := cloneOfficialCodexVersionProfile(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous, err := cloneOfficialCodexVersionProfile(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	active.FeatureDefaults.RemoteCompactionV2 = true
+	previous.FeatureDefaults.RemoteCompactionV2 = false
+
+	resolver := func(mode string) (*officialCodexVersionProfile, error) {
+		switch mode {
+		case officialClientProfileModeActive:
+			return &active, nil
+		case officialClientProfileModePrevious:
+			return &previous, nil
+		default:
+			return nil, fmt.Errorf("测试 release mode 非法：%s", mode)
+		}
+	}
+	activeEnabled, err := resolveOfficialCodexRemoteCompactionV2Default(
+		officialClientProfileModeActive,
+		resolver,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousEnabled, err := resolveOfficialCodexRemoteCompactionV2Default(
+		officialClientProfileModePrevious,
+		resolver,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !activeEnabled || previousEnabled {
+		t.Fatalf("compaction feature 发生跨 mode 混搭：active=%t previous=%t", activeEnabled, previousEnabled)
+	}
+	if _, err := resolveOfficialCodexRemoteCompactionV2Default("", resolver); err == nil {
+		t.Fatal("空 release mode 不得退化为 active")
+	}
+}
+
 func TestOfficialCodex0145ExactResolution(t *testing.T) {
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	if err != nil {
 		t.Fatalf("解析精确版本失败：%v", err)
 	}
@@ -18,7 +83,7 @@ func TestOfficialCodex0145ExactResolution(t *testing.T) {
 	}
 
 	for _, version := range []string{"", "0.145", "0.145.1", " 0.145.0", "0.145.0 ", "v0.145.0"} {
-		if _, err := resolveCodex0145VersionProfile(version); err == nil {
+		if _, err := resolveCodexVersionProfile(version); err == nil {
 			t.Errorf("近似或未知版本不应解析成功：%q", version)
 		}
 	}
@@ -64,7 +129,7 @@ func TestOfficialCodex0145ExactResolution(t *testing.T) {
 	}
 
 	for _, endpointID := range officialCodex0145RequiredEndpointIDs() {
-		endpoint, err := resolveCodex0145Endpoint(officialCodexVersion0145, codex0145EndpointID(endpointID))
+		endpoint, err := resolveCodexEndpoint(officialCodexVersion0145, codexEndpointID(endpointID))
 		if err != nil {
 			t.Errorf("解析必需端点 %s 失败：%v", endpointID, err)
 			continue
@@ -73,12 +138,12 @@ func TestOfficialCodex0145ExactResolution(t *testing.T) {
 			t.Errorf("端点 ID 不一致：实际 %s，期望 %s", endpoint.ID, endpointID)
 		}
 	}
-	for _, endpointID := range []codex0145EndpointID{"", "models ", "Models", "/backend-api/codex/models"} {
-		if _, err := resolveCodex0145Endpoint(officialCodexVersion0145, endpointID); err == nil {
+	for _, endpointID := range []codexEndpointID{"", "models ", "Models", "/backend-api/codex/models"} {
+		if _, err := resolveCodexEndpoint(officialCodexVersion0145, endpointID); err == nil {
 			t.Errorf("未知或近似端点不应解析成功：%q", endpointID)
 		}
 	}
-	if _, err := resolveCodex0145Endpoint("0.145.1", codex0145EndpointID(officialCodexEndpointModels)); err == nil {
+	if _, err := resolveCodexEndpoint("0.145.1", codexEndpointID(officialCodexEndpointModels)); err == nil {
 		t.Error("端点解析不得绕过精确版本检查")
 	}
 
@@ -92,7 +157,7 @@ func TestOfficialCodex0145ExactResolution(t *testing.T) {
 }
 
 func TestOfficialCodex0145RequiredRuleAndEndpointUniverse(t *testing.T) {
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,11 +174,19 @@ func TestOfficialCodex0145RequiredRuleAndEndpointUniverse(t *testing.T) {
 		"SPEC-EP-015", "SPEC-EP-019", "SPEC-EP-020", "SPEC-EP-021",
 		"SPEC-EP-022", "SPEC-EP-023",
 	}
-	if len(profile.RequiredRules) != 42 {
-		t.Fatalf("规则数量不为 42：%d", len(profile.RequiredRules))
+	if len(profile.RequiredRules) != 0 {
+		t.Fatalf("证据专用 RequiredRules 不得进入 service 可执行投影：%v", profile.RequiredRules)
 	}
-	if !reflect.DeepEqual(profile.RequiredRules, expectedRules) {
-		t.Fatalf("42 条 required SPEC ID 不一致：\n实际：%v\n期望：%v", profile.RequiredRules, expectedRules)
+	formal, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseModeActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var evidenceRules []string
+	if err := json.Unmarshal(formal.Profile().ToSnapshot().RequiredRules, &evidenceRules); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(evidenceRules, expectedRules) {
+		t.Fatalf("42 条 required SPEC ID 不一致：\n实际：%v\n期望：%v", evidenceRules, expectedRules)
 	}
 
 	expectedEndpoints := []string{
@@ -144,7 +217,7 @@ func TestOfficialCodex0145RequiredRuleAndEndpointUniverse(t *testing.T) {
 }
 
 func TestOfficialCodex0145FeatureAndTransportProfile(t *testing.T) {
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,9 +249,8 @@ func TestOfficialCodex0145FeatureAndTransportProfile(t *testing.T) {
 	if !reflect.DeepEqual(httpTransport.CipherSuites, expectedHTTPCiphers) {
 		t.Fatalf("默认 HTTP 30 cipher 画像不一致：%v", httpTransport.CipherSuites)
 	}
-	if len(httpTransport.ALPN) != 0 || !httpTransport.LowercaseHTTPHeaders ||
-		httpTransport.CrossCallConnectionReuse || !httpTransport.RetryReusesClient {
-		t.Fatalf("默认 HTTP ALPN、大小写或连接生命周期不一致：%+v", httpTransport)
+	if len(httpTransport.ALPN) != 0 || !httpTransport.LowercaseHTTPHeaders {
+		t.Fatalf("默认 HTTP ALPN 或大小写画像不一致：%+v", httpTransport)
 	}
 	if !reflect.DeepEqual(httpTransport.Extensions, []uint16{65281, 0, 11, 10, 35, 22, 23, 13, 43, 45, 51}) {
 		t.Fatalf("默认 HTTP 扩展集合不一致：%v", httpTransport.Extensions)
@@ -207,7 +279,7 @@ func TestOfficialCodex0145FeatureAndTransportProfile(t *testing.T) {
 }
 
 func TestOfficialCodex0145FilesFlowProfile(t *testing.T) {
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -230,7 +302,7 @@ func TestOfficialCodex0145FilesFlowProfile(t *testing.T) {
 }
 
 func TestOfficialCodex0145EndpointContracts(t *testing.T) {
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +430,7 @@ func TestOfficialCodex0145EndpointContracts(t *testing.T) {
 		},
 		{
 			id: officialCodexEndpointWhamUsage, method: http.MethodGet,
-			transportID: officialCodexTransportHTTPDefault, host: "chatgpt.com", path: "/backend-api/wham/usage",
+			transportID: officialCodexTransportHTTPLongLived, host: "chatgpt.com", path: "/backend-api/wham/usage",
 			accept: "*/*", compression: officialCodexCompressionNone,
 			clientLifecycle: officialCodexClientBackendLongLived, headerOrderMode: officialCodexHeaderOrderH1HeaderMap,
 			headerNames:  []string{"user-agent", "authorization", "chatgpt-account-id", "x-openai-fedramp", "accept", "host"},
@@ -366,7 +438,7 @@ func TestOfficialCodex0145EndpointContracts(t *testing.T) {
 		},
 		{
 			id: officialCodexEndpointWhamResetCredits, method: http.MethodGet,
-			transportID: officialCodexTransportHTTPDefault, host: "chatgpt.com", path: "/backend-api/wham/rate-limit-reset-credits",
+			transportID: officialCodexTransportHTTPLongLived, host: "chatgpt.com", path: "/backend-api/wham/rate-limit-reset-credits",
 			accept: "*/*", compression: officialCodexCompressionNone,
 			clientLifecycle: officialCodexClientBackendLongLived, headerOrderMode: officialCodexHeaderOrderH1HeaderMap,
 			headerNames:  []string{"user-agent", "authorization", "chatgpt-account-id", "x-openai-fedramp", "accept", "host"},
@@ -374,7 +446,7 @@ func TestOfficialCodex0145EndpointContracts(t *testing.T) {
 		},
 		{
 			id: officialCodexEndpointWhamConsumeResetCredit, method: http.MethodPost,
-			transportID: officialCodexTransportHTTPDefault, host: "chatgpt.com", path: "/backend-api/wham/rate-limit-reset-credits/consume",
+			transportID: officialCodexTransportHTTPLongLived, host: "chatgpt.com", path: "/backend-api/wham/rate-limit-reset-credits/consume",
 			accept: "*/*", contentType: "application/json", compression: officialCodexCompressionNone,
 			clientLifecycle: officialCodexClientBackendLongLived, headerOrderMode: officialCodexHeaderOrderH1HeaderMap,
 			headerNames:  []string{"user-agent", "authorization", "chatgpt-account-id", "x-openai-fedramp", "content-type", "accept", "host", "content-length"},
@@ -383,10 +455,10 @@ func TestOfficialCodex0145EndpointContracts(t *testing.T) {
 		{
 			id: officialCodexEndpointOAuthRefresh, method: http.MethodPost,
 			transportID: officialCodexTransportHTTPDefault, host: "auth.openai.com", path: "/oauth/token",
-			accept: "application/json", contentType: "application/x-www-form-urlencoded", compression: officialCodexCompressionNone,
+			accept: "*/*", contentType: "application/json", compression: officialCodexCompressionNone,
 			clientLifecycle: officialCodexClientPerUpperCall, headerOrderMode: officialCodexHeaderOrderExplicit,
-			headerNames:  []string{"content-type", "accept", "user-agent", "host", "content-length"},
-			bodyEncoding: "form_urlencoded", bodyClosed: true, bodyFields: []string{"client_id", "grant_type", "refresh_token", "scope"},
+			headerNames:  []string{"content-type", "accept", "originator", "user-agent", "x-openai-internal-codex-residency", "host", "content-length"},
+			bodyEncoding: "json", bodyClosed: true, bodyFields: []string{"client_id", "grant_type", "refresh_token"},
 		},
 		{
 			id: officialCodexEndpointFilesCreate, method: http.MethodPost,
@@ -455,9 +527,9 @@ func TestOfficialCodex0145ConnectionLifecycleComesFromEndpointProfile(t *testing
 		Type:     AccountTypeOAuth,
 		Extra:    map[string]any{},
 	}
-	resolvePoolID := func(endpointID codex0145EndpointID, invocationID string) string {
+	resolvePoolID := func(endpointID codexEndpointID, invocationID string) string {
 		t.Helper()
-		endpoint, err := resolveCodex0145Endpoint(officialCodexVersion0145, endpointID)
+		endpoint, err := resolveCodexEndpoint(officialCodexVersion0145, endpointID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -501,7 +573,7 @@ func TestOfficialCodex0145ConnectionLifecycleComesFromEndpointProfile(t *testing
 }
 
 func TestOfficialCodex0145ConditionalHeaderSlots(t *testing.T) {
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -609,11 +681,11 @@ func TestOfficialCodex0145ConditionalHeaderSlots(t *testing.T) {
 }
 
 func TestOfficialCodex0145DeepCopyAndDigest(t *testing.T) {
-	first, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	first, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pristine, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	pristine, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -623,13 +695,17 @@ func TestOfficialCodex0145DeepCopyAndDigest(t *testing.T) {
 	if first != pristine {
 		t.Fatal("两次版本解析返回了不同指针，只读单例契约被破坏")
 	}
-	if first.Digest != pristine.Digest || first.Digest != defaultOfficialCodex0145Snapshot.Digest {
-		t.Fatalf("版本画像摘要不稳定：%s / %s / %s", first.Digest, pristine.Digest, defaultOfficialCodex0145Snapshot.Digest)
+	formal, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseModeActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.Digest != pristine.Digest || first.Digest != formal.ExecutableProfileDigest() {
+		t.Fatalf("可执行画像摘要不稳定：%s / %s / %s", first.Digest, pristine.Digest, formal.ExecutableProfileDigest())
 	}
 	if decoded, err := hex.DecodeString(first.Digest); err != nil || len(decoded) != sha256DigestSize {
 		t.Fatalf("版本画像摘要不是 64 位十六进制 SHA-256：%q，错误：%v", first.Digest, err)
 	}
-	const expectedDigest = "9b7dd12df50dbcff74594b1f05440161cd99b963019a4f316f20c08ed5f5ba1e"
+	const expectedDigest = "dc5ac8042a8b46312047a16c3bd4e9685a16135d8cddef5a76ba073e49e4212c"
 	if first.Digest != expectedDigest {
 		t.Fatalf("Codex 0.145.0 稳定摘要变化：实际 %s，期望 %s", first.Digest, expectedDigest)
 	}
@@ -637,16 +713,13 @@ func TestOfficialCodex0145DeepCopyAndDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if recomputed != first.Digest {
-		t.Fatalf("全画像重算摘要不一致：实际 %s，期望 %s", recomputed, first.Digest)
-	}
+	serviceProjectionDigest := recomputed
 
 	// 显式深拷贝必须与只读单例完全隔离：改写副本不得影响后续任何一次解析。
 	mutable, err := cloneOfficialCodexVersionProfile(first)
 	if err != nil {
 		t.Fatal(err)
 	}
-	mutable.RequiredRules[0] = "MUTATED"
 	mutable.Surfaces[0].Product = "mutated"
 	mutable.ToolPresentation.EndpointIDs[0] = "mutated"
 	mutable.Subagents.Mappings[0].HeaderValue = "mutated"
@@ -655,7 +728,7 @@ func TestOfficialCodex0145DeepCopyAndDigest(t *testing.T) {
 	mutable.Endpoints[0].Query[0].Value = "mutated"
 	mutable.Endpoints[1].Headers[0].Name = "mutated"
 	mutable.Endpoints[1].Body.Fields[0].Name = "mutated"
-	fresh, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	fresh, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -670,15 +743,15 @@ func TestOfficialCodex0145DeepCopyAndDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if singletonDigest != expectedDigest {
-		t.Fatalf("只读单例在进程内被改写：摘要 %s，期望 %s", singletonDigest, expectedDigest)
+	if singletonDigest != serviceProjectionDigest {
+		t.Fatalf("只读单例在进程内被改写：摘要 %s，期望 %s", singletonDigest, serviceProjectionDigest)
 	}
 
-	endpointFirst, err := resolveCodex0145Endpoint(officialCodexVersion0145, codex0145EndpointID(officialCodexEndpointResponsesHTTP))
+	endpointFirst, err := resolveCodexEndpoint(officialCodexVersion0145, codexEndpointID(officialCodexEndpointResponsesHTTP))
 	if err != nil {
 		t.Fatal(err)
 	}
-	endpointPristine, err := resolveCodex0145Endpoint(officialCodexVersion0145, codex0145EndpointID(officialCodexEndpointResponsesHTTP))
+	endpointPristine, err := resolveCodexEndpoint(officialCodexVersion0145, codexEndpointID(officialCodexEndpointResponsesHTTP))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -686,7 +759,7 @@ func TestOfficialCodex0145DeepCopyAndDigest(t *testing.T) {
 	endpointFirst.Body.Fields[0].Name = "mutated"
 	orderedHeaders := endpointPristine.OrderedHeaders()
 	orderedHeaders[0].Name = "mutated"
-	endpointFresh, err := resolveCodex0145Endpoint(officialCodexVersion0145, codex0145EndpointID(officialCodexEndpointResponsesHTTP))
+	endpointFresh, err := resolveCodexEndpoint(officialCodexVersion0145, codexEndpointID(officialCodexEndpointResponsesHTTP))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -701,7 +774,6 @@ func TestOfficialCodex0145DeepCopyAndDigest(t *testing.T) {
 		name   string
 		mutate func(*officialCodexVersionProfile)
 	}{
-		{name: "规则", mutate: func(profile *officialCodexVersionProfile) { profile.RequiredRules[0] = "MUTATED" }},
 		{name: "入口", mutate: func(profile *officialCodexVersionProfile) { profile.Surfaces[0].Originator = "mutated" }},
 		{name: "终端", mutate: func(profile *officialCodexVersionProfile) { profile.Surfaces[0].TerminalTokenPattern = "mutated" }},
 		{name: "Feature", mutate: func(profile *officialCodexVersionProfile) { profile.FeatureDefaults.RequestCompressionLevel++ }},
@@ -716,7 +788,7 @@ func TestOfficialCodex0145DeepCopyAndDigest(t *testing.T) {
 	}
 	for _, mutation := range mutations {
 		t.Run(mutation.name, func(t *testing.T) {
-			profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+			profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -731,62 +803,8 @@ func TestOfficialCodex0145DeepCopyAndDigest(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if mutatedDigest == pristine.Digest {
+			if mutatedDigest == serviceProjectionDigest {
 				t.Fatalf("%s 变化没有进入全画像摘要", mutation.name)
-			}
-		})
-	}
-}
-
-func TestOfficialCodex0145ConstructionGates(t *testing.T) {
-	testCases := []struct {
-		name   string
-		mutate func(*officialCodexVersionProfile)
-	}{
-		{name: "错误版本", mutate: func(profile *officialCodexVersionProfile) { profile.Version = "0.145.1" }},
-		{name: "规则缺失", mutate: func(profile *officialCodexVersionProfile) { profile.RequiredRules = profile.RequiredRules[:41] }},
-		{name: "规则重复", mutate: func(profile *officialCodexVersionProfile) { profile.RequiredRules[41] = profile.RequiredRules[0] }},
-		{name: "规则未知", mutate: func(profile *officialCodexVersionProfile) { profile.RequiredRules[41] = "SPEC-UNKNOWN-001" }},
-		{name: "入口重复", mutate: func(profile *officialCodexVersionProfile) { profile.Surfaces[1] = profile.Surfaces[0] }},
-		{name: "Feature 错误", mutate: func(profile *officialCodexVersionProfile) { profile.FeatureDefaults.RemoteCompactionV2 = false }},
-		{name: "传输重复", mutate: func(profile *officialCodexVersionProfile) { profile.Transports[1].ID = profile.Transports[0].ID }},
-		{name: "TLS 项重复", mutate: func(profile *officialCodexVersionProfile) {
-			profile.Transports[0].CipherSuites[1] = profile.Transports[0].CipherSuites[0]
-		}},
-		{name: "端点缺失", mutate: func(profile *officialCodexVersionProfile) { profile.Endpoints = profile.Endpoints[:15] }},
-		{name: "端点重复", mutate: func(profile *officialCodexVersionProfile) { profile.Endpoints[15] = profile.Endpoints[0] }},
-		{name: "端点未知", mutate: func(profile *officialCodexVersionProfile) { profile.Endpoints[15].ID = "unknown" }},
-		{name: "传输引用未知", mutate: func(profile *officialCodexVersionProfile) { profile.Endpoints[0].TransportID = "unknown" }},
-		{name: "query 重复", mutate: func(profile *officialCodexVersionProfile) {
-			profile.Endpoints[0].Query = append(profile.Endpoints[0].Query, profile.Endpoints[0].Query[0])
-		}},
-		{name: "header 重复", mutate: func(profile *officialCodexVersionProfile) {
-			profile.Endpoints[0].Headers = append(profile.Endpoints[0].Headers, profile.Endpoints[0].Headers[0])
-		}},
-		{name: "header 槽位重复", mutate: func(profile *officialCodexVersionProfile) {
-			header := profile.Endpoints[0].Headers[0]
-			header.Name = "x-distinct-name"
-			header.WireName = "x-distinct-name"
-			profile.Endpoints[0].Headers = append(profile.Endpoints[0].Headers, header)
-		}},
-		{name: "普通 HTTP header 非小写", mutate: func(profile *officialCodexVersionProfile) { profile.Endpoints[0].Headers[0].WireName = "Version" }},
-		{name: "body 字段重复", mutate: func(profile *officialCodexVersionProfile) {
-			profile.Endpoints[1].Body.Fields = append(profile.Endpoints[1].Body.Fields, profile.Endpoints[1].Body.Fields[0])
-		}},
-		{name: "无 body 契约含字段", mutate: func(profile *officialCodexVersionProfile) {
-			profile.Endpoints[0].Body.Fields = []officialCodexBodyField{bf("unexpected", true, "")}
-		}},
-	}
-
-	for _, testCase := range testCases {
-		t.Run(testCase.name, func(t *testing.T) {
-			profile, err := newOfficialCodex0145VersionProfile()
-			if err != nil {
-				t.Fatalf("创建基准画像失败：%v", err)
-			}
-			testCase.mutate(&profile)
-			if err := validateOfficialCodexVersionProfile(profile); err == nil {
-				t.Fatal("损坏画像未被构造门禁拒绝")
 			}
 		})
 	}

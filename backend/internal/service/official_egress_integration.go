@@ -66,6 +66,19 @@ func attachOfficialEgressHTTPContext(
 	if len(cfgs) > 0 {
 		mode = officialClientProfileModeFromConfig(cfgs[0])
 	}
+	return attachOfficialEgressHTTPContextWithMode(req, c, account, targetPlatform, mode)
+}
+
+// attachOfficialEgressHTTPContextWithMode 使用调用开始时已冻结的发布模式，避免同一次
+// 账号尝试在旧 finalizer 上下文与 Executor Plan 之间重新读取配置。
+func attachOfficialEgressHTTPContextWithMode(
+	req *http.Request,
+	c *gin.Context,
+	account *Account,
+	targetPlatform string,
+	mode string,
+) (*http.Request, error) {
+	mode = normalizeOfficialClientProfileMode(mode)
 	enabled, version, err := resolveOfficialEgressAccountProfile(account, mode)
 	if err != nil {
 		return nil, err
@@ -89,12 +102,13 @@ func attachOfficialEgressHTTPContext(
 	if err != nil {
 		return nil, err
 	}
-	var codexRuntimeState officialCodex0145RuntimeState
+	var codexRuntimeState officialCodexRuntimeState
 	if strings.EqualFold(targetPlatform, PlatformOpenAI) {
-		codexRuntimeState, err = resolveBoundOrIngressOfficialCodex0145RuntimeState(
+		codexRuntimeState, err = resolveBoundOrIngressOfficialCodexRuntimeState(
 			req.Context(),
 			c,
 			account,
+			mode,
 		)
 		if err != nil {
 			return nil, err
@@ -225,12 +239,13 @@ func attachOfficialEgressWebSocketContext(
 	if err != nil {
 		return nil, err
 	}
-	var codexRuntimeState officialCodex0145RuntimeState
+	var codexRuntimeState officialCodexRuntimeState
 	if strings.EqualFold(account.Platform, PlatformOpenAI) {
-		codexRuntimeState, err = resolveBoundOrIngressOfficialCodex0145RuntimeState(
+		codexRuntimeState, err = resolveBoundOrIngressOfficialCodexRuntimeState(
 			ctx,
 			c,
 			account,
+			mode,
 		)
 		if err != nil {
 			return nil, err
@@ -300,22 +315,22 @@ func validateOfficialEgressHTTPRequest(req *http.Request, egressContext *Officia
 	expectedMethod := http.MethodPost
 	expectedPath := expectedOfficialEgressUpstreamPath(egressContext)
 	if egressContext.targetPlatform == PlatformOpenAI {
-		endpoint, err := resolveCodex0145Endpoint(
+		endpoint, err := resolveCodexEndpoint(
 			egressContext.profileVersion,
-			codex0145EndpointID(egressContext.codexEndpointProfileID),
+			codexEndpointID(egressContext.codexEndpointProfileID),
 		)
 		if err != nil {
 			return err
 		}
 		expectedMethod = endpoint.Method
-		if !officialCodex0145HostMatches(endpoint.Host, egressContext.upstreamHost) {
+		if !officialCodexHostMatches(endpoint.Host, egressContext.upstreamHost) {
 			return errors.New("Codex 端点画像 host 与上下文冲突")
 		}
 		if strings.TrimSpace(egressContext.codexRequestedEndpointID) != "" {
 			if req.Method != expectedMethod {
 				return fmt.Errorf("official egress rejected HTTP method: %s", req.Method)
 			}
-			if err := officialCodex0145ValidateEndpointTarget(endpoint, req.URL); err != nil {
+			if err := officialCodexValidateEndpointTarget(endpoint, req.URL); err != nil {
 				return err
 			}
 			return nil
@@ -333,14 +348,14 @@ func validateOfficialEgressHTTPRequest(req *http.Request, egressContext *Officia
 	return nil
 }
 
-func officialCodex0145ValidateEndpointTarget(endpoint officialCodexEndpointProfile, target *url.URL) error {
+func officialCodexValidateEndpointTarget(endpoint officialCodexEndpointProfile, target *url.URL) error {
 	if target == nil {
 		return errors.New("Codex 端点目标为空")
 	}
-	if !officialCodex0145HostMatches(endpoint.Host, target.Hostname()) {
+	if !officialCodexHostMatches(endpoint.Host, target.Hostname()) {
 		return fmt.Errorf("Codex 端点 %s 拒绝 host：%s", endpoint.ID, target.Hostname())
 	}
-	if !endpoint.HostFromResponse && !officialCodex0145PathMatches(endpoint.Path, target.EscapedPath()) {
+	if !endpoint.HostFromResponse && !officialCodexPathMatches(endpoint.Path, target.EscapedPath()) {
 		return fmt.Errorf("Codex 端点 %s 拒绝 path：%s", endpoint.ID, target.EscapedPath())
 	}
 	values, err := url.ParseQuery(target.RawQuery)
@@ -375,7 +390,7 @@ func officialCodex0145ValidateEndpointTarget(endpoint officialCodexEndpointProfi
 	return nil
 }
 
-func officialCodex0145PathMatches(template, escapedPath string) bool {
+func officialCodexPathMatches(template, escapedPath string) bool {
 	if template == escapedPath {
 		return true
 	}
@@ -412,9 +427,9 @@ func validateOfficialEgressWebSocketTarget(target *url.URL, egressContext *Offic
 		return fmt.Errorf("official egress rejected final WebSocket path: %s", target.Path)
 	}
 	if egressContext.targetPlatform == PlatformOpenAI {
-		endpoint, err := resolveCodex0145Endpoint(
+		endpoint, err := resolveCodexEndpoint(
 			egressContext.profileVersion,
-			codex0145EndpointID(egressContext.codexEndpointProfileID),
+			codexEndpointID(egressContext.codexEndpointProfileID),
 		)
 		if err != nil {
 			return err
@@ -423,7 +438,7 @@ func validateOfficialEgressWebSocketTarget(target *url.URL, egressContext *Offic
 			if endpoint.Upgrade != "websocket" {
 				return errors.New("Codex WebSocket 上下文绑定了非 WS 端点")
 			}
-			return officialCodex0145ValidateEndpointTarget(endpoint, target)
+			return officialCodexValidateEndpointTarget(endpoint, target)
 		}
 		if endpoint.Upgrade != "websocket" ||
 			normalizeOfficialEgressHost(endpoint.Host) != egressContext.upstreamHost ||
@@ -446,9 +461,9 @@ func expectedOfficialEgressUpstreamPath(egressContext *OfficialEgressContext) st
 		if endpointID == "" {
 			return ""
 		}
-		endpoint, err := resolveCodex0145Endpoint(
+		endpoint, err := resolveCodexEndpoint(
 			egressContext.profileVersion,
-			codex0145EndpointID(endpointID),
+			codexEndpointID(endpointID),
 		)
 		if err != nil {
 			return ""

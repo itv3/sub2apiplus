@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "bootstrap_commit": "38a9929eac35a39c86de2f27de8f7a805d7dae52",
+  "bootstrap_tree": "a8c3dee18a01a6138bfcea60860bb5ad11548c3a",
+  "lifecycle": "provisional",
+  "sealed_at": null,
+  "protected_base_commit": null,
+  "legacy_ceiling_sha256": null,
+  "pre_bootstrap_supplements_sha256": null,
+  "reviewed_by": null,
+  "review_ref": null,
+  "rationale": null
+}

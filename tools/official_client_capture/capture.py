@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import datetime as dt
 import json
 import os
 import platform
 import re
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -31,6 +33,10 @@ from tools.official_client_capture.capturelib.environment import (  # noqa: E402
     parse_injected_env,
     prepare_api_state,
 )
+from tools.official_client_capture.capturelib.identity import (  # noqa: E402
+    CAPTURE_SOURCE_RELATIVE_PATHS,
+    capture_source_bundle_identity,
+)
 from tools.official_client_capture.capturelib.lifecycle import (  # noqa: E402
     CampaignLock,
     build_capture_process,
@@ -38,6 +44,7 @@ from tools.official_client_capture.capturelib.lifecycle import (  # noqa: E402
 )
 from tools.official_client_capture.capturelib.manifest import Manifest  # noqa: E402
 from tools.official_client_capture.capturelib.model import (  # noqa: E402
+    CLAUDE_AGENT_SCENARIOS,
     EVIDENCE_MODES,
     SCENARIOS,
     SUBJECTS,
@@ -64,7 +71,7 @@ from tools.official_client_capture.capturelib.security import (  # noqa: E402
     ensure_private_directory,
     file_sha256,
     redact_known_secret,
-    scan_for_secret,
+    scan_for_secrets,
     scrub_known_secret,
     secure_write_text,
 )
@@ -81,6 +88,14 @@ DEFAULT_RUNTIME_IMAGE = (
     "sha256:3438c4e0909d7401ff8e076a985258608a8f031629e65262db16c1979ab1771c"
 )
 RUN_ROOT_MARKER = "official-client-capture-root/v1\n"
+HOST_RECEIPT_SCHEMA = "official-client-runtime-host-receipt/v1"
+RUN_NONCE_RE = re.compile(r"^[a-f0-9]{64}$")
+IMAGE_ID_RE = re.compile(r"^sha256:[a-f0-9]{64}$")
+CONTAINER_ID_RE = re.compile(r"^[a-f0-9]{64}$")
+CONTAINER_MOUNTINFO_RE = re.compile(
+    r"/var/lib/docker/containers/(?P<id>[a-f0-9]{64})/"
+    r"(?:hostname|hosts|resolv\.conf)(?:\s|$)"
+)
 
 
 class CaptureInterrupted(RuntimeError):
@@ -214,6 +229,105 @@ def _validate_static_directory(path: Path, description: str) -> None:
         raise ConfigurationError(f"{description} 所有者或写权限不安全：{path}")
 
 
+def _container_id_from_mountinfo(
+    path: Path = Path("/proc/self/mountinfo"),
+) -> str:
+    """从 Docker 管理的 /etc 绑定挂载反向取得当前容器 ID。"""
+
+    try:
+        contents = path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise ConfigurationError("无法读取当前容器 mountinfo。") from error
+    container_ids = {
+        match.group("id") for match in CONTAINER_MOUNTINFO_RE.finditer(contents)
+    }
+    if len(container_ids) != 1:
+        raise ConfigurationError(
+            "mountinfo 未唯一绑定当前 Docker 容器的完整 ID。"
+        )
+    return next(iter(container_ids))
+
+
+def _load_host_runtime_receipt(
+    arguments: argparse.Namespace,
+    source_identity: dict[str, Any],
+) -> dict[str, Any] | None:
+    """校验宿主 Docker daemon 生成的运行镜像凭据。"""
+
+    path = arguments.host_runtime_receipt
+    if path is None:
+        if arguments.require_complete_m:
+            raise ConfigurationError("完整 M 模式必须提供 --host-runtime-receipt。")
+        return None
+    _validate_static_file(path, "宿主运行镜像凭据", executable=False)
+    actual_sha256 = file_sha256(path)
+    if actual_sha256 != arguments.host_runtime_receipt_sha256:
+        raise ConfigurationError("宿主运行镜像凭据 SHA-256 不匹配。")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ConfigurationError("宿主运行镜像凭据不是合法 JSON。") from error
+    if not isinstance(payload, dict) or payload.get("schema_version") != HOST_RECEIPT_SCHEMA:
+        raise ConfigurationError("宿主运行镜像凭据 schema 不匹配。")
+    if payload.get("run_nonce") != arguments.run_nonce:
+        raise ConfigurationError("宿主运行镜像凭据 nonce 不匹配。")
+    if payload.get("runtime_image_reference") != arguments.runtime_image:
+        raise ConfigurationError("宿主运行镜像凭据与 --runtime-image 不一致。")
+    if payload.get("repo_digest_verified") is not True:
+        raise ConfigurationError("宿主运行镜像凭据未确认 RepoDigest。")
+    if not IMAGE_ID_RE.fullmatch(str(payload.get("runtime_image_id", ""))):
+        raise ConfigurationError("宿主运行镜像凭据的 image ID 非法。")
+    receipt_source = payload.get("capture_source_bundle")
+    if (
+        not isinstance(receipt_source, dict)
+        or receipt_source.get("sha256") != source_identity.get("sha256")
+        or receipt_source.get("files") != source_identity.get("files")
+    ):
+        raise ConfigurationError("宿主与容器内抓包执行源摘要不一致。")
+    container = payload.get("container")
+    if not isinstance(container, dict):
+        raise ConfigurationError("宿主运行镜像凭据缺少容器身份。")
+    hostname = socket.gethostname()
+    container_id = str(container.get("id", ""))
+    if container.get("hostname") != hostname:
+        raise ConfigurationError("宿主凭据绑定的容器与当前容器不一致。")
+    if not CONTAINER_ID_RE.fullmatch(container_id):
+        raise ConfigurationError("宿主凭据中的完整容器 ID 非法。")
+    if _container_id_from_mountinfo() != container_id:
+        raise ConfigurationError(
+            "宿主凭据的完整容器 ID 与当前 mountinfo 不一致。"
+        )
+    try:
+        issued = dt.datetime.fromisoformat(str(payload["issued_at_utc"]))
+    except (KeyError, ValueError) as error:
+        raise ConfigurationError("宿主运行镜像凭据签发时间非法。") from error
+    if issued.tzinfo is None:
+        raise ConfigurationError("宿主运行镜像凭据签发时间缺少时区。")
+    age = dt.datetime.now(dt.timezone.utc) - issued.astimezone(dt.timezone.utc)
+    if age < dt.timedelta(seconds=-60) or age > dt.timedelta(minutes=15):
+        raise ConfigurationError("宿主运行镜像凭据已过期或来自未来。")
+    return {
+        "path": str(path),
+        "sha256": actual_sha256,
+        "schema_version": payload["schema_version"],
+        "issued_at_utc": payload["issued_at_utc"],
+        "run_nonce": payload["run_nonce"],
+        "container": container,
+        "container_runtime_binding": {
+            "verified": True,
+            "method": "docker-managed-etc-mountinfo-and-hostname",
+            "container_id": container_id,
+            "hostname": hostname,
+        },
+        "runtime_image_reference": payload["runtime_image_reference"],
+        "runtime_image_id": payload["runtime_image_id"],
+        "repo_digest_verified": True,
+        "capture_source_bundle_sha256": receipt_source["sha256"],
+        "producer": payload.get("producer"),
+        "docker_server": payload.get("docker_server"),
+    }
+
+
 def _validate_run_root(arguments: argparse.Namespace, *, initialize: bool) -> None:
     """限定专用运行根，禁止把原始抓包写进源码树或宽泛目录。"""
 
@@ -267,7 +381,18 @@ def _preflight_dependencies(
         if run_dir.exists():
             raise ConfigurationError(f"运行目录已存在，拒绝覆盖：{run_dir}")
 
-    capture_tools: dict[str, Any] = {}
+    tool_root = Path(__file__).resolve().parent
+    for relative in CAPTURE_SOURCE_RELATIVE_PATHS:
+        _validate_static_file(
+            tool_root / relative,
+            f"抓包执行源 {relative}",
+            executable=False,
+        )
+    source_identity = capture_source_bundle_identity(tool_root)
+    host_receipt = _load_host_runtime_receipt(arguments, source_identity)
+    capture_tools: dict[str, Any] = {
+        "execution_sources": source_identity,
+    }
     _validate_static_file(CODEX_HOOK_PATH, "Codex PreToolUse hook", executable=False)
     capture_tools["codex_hook"] = {
         "path": str(CODEX_HOOK_PATH),
@@ -357,11 +482,14 @@ def _preflight_dependencies(
                     validated_codex_configs += 1
     return {
         "runtime_image_claim": arguments.runtime_image,
-        "runtime_image_verified": False,
+        "runtime_image_verified": host_receipt is not None,
         "runtime_image_limitation": (
-            "容器内无法独立反查 Docker image digest；该值来自调用方声明，"
-            "部署时仍须在宿主机用 docker inspect 复核。"
+            None
+            if host_receipt is not None
+            else "未提供经宿主 Docker daemon 验证并与本轮 nonce 绑定的运行镜像凭据。"
         ),
+        "host_runtime_receipt": host_receipt,
+        "m_binding_requested": bool(arguments.require_complete_m),
         "profile_version": arguments.profile_version,
         "platform": platform.platform(),
         "python": platform.python_version(),
@@ -528,6 +656,7 @@ def _run_case_scenario(
     codex_api_home: Path | None,
     scenario: str,
     journal: RecoveryJournal,
+    known_secrets: dict[str, str],
 ) -> dict[str, Any]:
     """执行一个不可混合的 product×transport×evidence×scenario 单元。"""
 
@@ -605,6 +734,7 @@ def _run_case_scenario(
                 output_dir=result_dir,
                 timeout=arguments.timeout,
                 runtime_secret=runtime_secret,
+                known_secrets=known_secrets,
             )
         else:
             summary = run_codex_scenario(
@@ -705,6 +835,7 @@ def _run_campaign(
     api_secret: str | None,
     oauth_claude_secret: str | None,
     runtime: dict[str, Any],
+    known_secrets: dict[str, str],
 ) -> dict[str, Any]:
     run_dir = arguments.run_root / plan.task / plan.run_id
     if run_dir.exists():
@@ -719,6 +850,20 @@ def _run_campaign(
     if plan.task == "api":
         claude_api_home, codex_api_home = prepare_api_state(run_dir)
 
+    def scan_report() -> dict[str, Any]:
+        return scan_for_secrets(run_dir, known_secrets)
+
+    def match_paths(report: dict[str, Any]) -> list[str]:
+        return sorted(
+            str(item.get("path"))
+            for item in report.get("matches", [])
+            if isinstance(item, dict) and item.get("path")
+        )
+
+    def scrub_all_known_secrets() -> None:
+        for value in known_secrets.values():
+            scrub_known_secret(run_dir, value)
+
     try:
         for case in plan.cases:
             for scenario in case.scenarios:
@@ -732,35 +877,30 @@ def _run_campaign(
                     codex_api_home=codex_api_home,
                     scenario=scenario,
                     journal=journal,
+                    known_secrets=known_secrets,
                 )
                 manifest.add_case_result(result)
-                runtime_secret = api_secret or oauth_claude_secret
-                secret_matches = scan_for_secret(run_dir, runtime_secret)
+                interim_report = scan_report()
+                secret_matches = match_paths(interim_report)
                 if secret_matches:
-                    scrub_known_secret(run_dir, runtime_secret)
+                    scrub_all_known_secrets()
                     raise SecretLeakDetected(secret_matches)
-        runtime_secret = api_secret or oauth_claude_secret
-        secret_matches = scan_for_secret(run_dir, runtime_secret)
+                if interim_report.get("scan_errors"):
+                    raise RuntimeError("秘密扫描无法读取全部运行产物。")
+        final_scan_report = scan_report()
+        secret_matches = match_paths(final_scan_report)
+        if arguments.require_complete_m and final_scan_report.get("passed") is not True:
+            raise RuntimeError("完整 M 模式的精确秘密扫描未通过。")
         journal.finalize(status="complete", cleanup_successful=True)
         manifest.finalize(
             status="complete",
             cleanup_successful=True,
             secret_matches=secret_matches,
-            secret_scan_scope=(
-                [
-                    "api_runtime_key_value"
-                    if api_secret is not None
-                    else "claude_oauth_runtime_token_value"
-                ]
-                if runtime_secret is not None
-                else []
-            ),
-            secret_scan_limitation=(
-                None
-                if runtime_secret is not None
-                else "OAuth 凭据未读入编排器内存，仅执行结构脱敏，未做值匹配扫描。"
-            ),
+            secret_scan_report=final_scan_report,
+            m_binding_required=arguments.require_complete_m,
         )
+        if arguments.require_complete_m and manifest.data["m_binding"]["complete"] is not True:
+            raise RuntimeError("完整 M 门禁缺少必要绑定。")
         return {
             "task": plan.task,
             "run_id": plan.run_id,
@@ -780,33 +920,24 @@ def _run_campaign(
         if isinstance(error, CaptureInterrupted):
             journal.note_signal(error.signum)
         journal.finalize(status=status, cleanup_successful=cleanup_successful)
-        runtime_secret = api_secret or oauth_claude_secret
-        safe_error = redact_known_secret(str(error), runtime_secret)
+        safe_error = str(error)
+        for value in known_secrets.values():
+            safe_error = redact_known_secret(safe_error, value)
+        failed_scan_report = scan_report()
         secret_matches = (
             error.matches
             if isinstance(error, SecretLeakDetected)
-            else scan_for_secret(run_dir, runtime_secret)
+            else match_paths(failed_scan_report)
         )
         if secret_matches:
-            scrub_known_secret(run_dir, runtime_secret)
+            scrub_all_known_secrets()
+            failed_scan_report = scan_report()
         manifest.finalize(
             status=status,
             cleanup_successful=cleanup_successful,
             secret_matches=secret_matches,
-            secret_scan_scope=(
-                [
-                    "api_runtime_key_value"
-                    if api_secret is not None
-                    else "claude_oauth_runtime_token_value"
-                ]
-                if runtime_secret is not None
-                else []
-            ),
-            secret_scan_limitation=(
-                None
-                if runtime_secret is not None
-                else "OAuth 凭据未读入编排器内存，仅执行结构脱敏，未做值匹配扫描。"
-            ),
+            secret_scan_report=failed_scan_report,
+            m_binding_required=arguments.require_complete_m,
             error=safe_error,
         )
         raise
@@ -847,7 +978,27 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--runtime-image",
         default=DEFAULT_RUNTIME_IMAGE,
-        help="capture-cli 镜像引用与 digest，仅用于可复现元数据",
+        help="capture-cli 的不可变 repository@sha256 镜像引用",
+    )
+    parser.add_argument(
+        "--host-runtime-receipt",
+        type=Path,
+        help="由 runtime_host_receipt.py 在 Docker 宿主机生成的运行身份凭据",
+    )
+    parser.add_argument(
+        "--host-runtime-receipt-sha256",
+        default="",
+        help="宿主运行身份凭据文件的 SHA-256",
+    )
+    parser.add_argument(
+        "--run-nonce",
+        default="",
+        help="与宿主运行身份凭据逐轮绑定的 64 位十六进制 nonce",
+    )
+    parser.add_argument(
+        "--require-complete-m",
+        action="store_true",
+        help="缺少宿主身份、实际调用、完整脱敏环境或精确秘密扫描时失败关闭",
     )
     parser.add_argument(
         "--profile-version",
@@ -900,6 +1051,12 @@ def _build_parser() -> argparse.ArgumentParser:
             "注入项会写进 manifest 供审计。凭据、上游地址、代理和 CA 类变量一律拒绝。"
         ),
     )
+    parser.add_argument(
+        "--secret-scan-env",
+        action="append",
+        metavar="ENV_NAME",
+        help="额外加入精确值秘密扫描、但不传给客户端的环境变量名；可重复",
+    )
     return parser
 
 
@@ -918,12 +1075,19 @@ def _validate_arguments(
     subjects = validate_choice_list(
         _parse_csv(arguments.subjects), SUBJECTS, "subjects"
     )
+    if any(item in CLAUDE_AGENT_SCENARIOS for item in scenarios) and subjects != (
+        "claude-http",
+    ):
+        raise ConfigurationError("a1/a2/a3 嵌套 Agent 场景只能单独用于 claude-http。")
     if arguments.claude_oauth_token_env and not ENV_NAME_RE.fullmatch(
         arguments.claude_oauth_token_env
     ):
         raise ConfigurationError(
             "--claude-oauth-token-env 必须是合法的大写环境变量名。"
         )
+    for value in arguments.secret_scan_env or ():
+        if not ENV_NAME_RE.fullmatch(value):
+            raise ConfigurationError("--secret-scan-env 必须是合法的大写环境变量名。")
     if arguments.timeout <= 0:
         raise ConfigurationError("--timeout 必须大于 0。")
     if not re.fullmatch(r"[A-Za-z0-9_.:-]{1,64}", arguments.interface):
@@ -943,6 +1107,21 @@ def _validate_arguments(
     validate_safe_name(arguments.profile_version, "profile_version")
     if not arguments.runtime_image.strip() or "sha256:" not in arguments.runtime_image:
         raise ConfigurationError("--runtime-image 必须包含镜像引用和 sha256 digest。")
+    receipt_fields = (
+        arguments.host_runtime_receipt is not None,
+        bool(arguments.host_runtime_receipt_sha256),
+        bool(arguments.run_nonce),
+    )
+    if any(receipt_fields) and not all(receipt_fields):
+        raise ConfigurationError(
+            "宿主运行凭据必须同时提供文件、SHA-256 与 run nonce。"
+        )
+    if arguments.host_runtime_receipt_sha256 and not SHA256_RE.fullmatch(
+        arguments.host_runtime_receipt_sha256
+    ):
+        raise ConfigurationError("--host-runtime-receipt-sha256 格式非法。")
+    if arguments.run_nonce and not RUN_NONCE_RE.fullmatch(arguments.run_nonce):
+        raise ConfigurationError("--run-nonce 必须是 64 位小写十六进制。")
     _validate_run_root(arguments, initialize=False)
     if (
         not arguments.lock_file.is_absolute()
@@ -960,6 +1139,13 @@ def _validate_arguments(
         raise ConfigurationError(
             "--execute 会产生真实模型请求，必须同时提供 --acknowledge-live-requests。"
         )
+    if arguments.require_complete_m and arguments.execute:
+        if subjects != ("claude-http",):
+            raise ConfigurationError("当前完整 M 门禁只允许单独采集 claude-http。")
+        if arguments.task in {"oauth", "all"} and not arguments.claude_oauth_token_env:
+            raise ConfigurationError(
+                "OAuth 完整 M 必须通过 --claude-oauth-token-env 提供本轮实际访问令牌。"
+            )
     # 解析后就地固化，后续所有环境构造与 manifest 记录都用这一份，避免两处解析漂移。
     arguments.injected_env = parse_injected_env(arguments.inject_env)
     return scenarios, evidence, subjects
@@ -987,6 +1173,11 @@ def main() -> int:
             "execution_order": [plan.task for plan in plans],
             "plans": [plan.to_dict() for plan in plans],
             "external_ab_executed": False,
+            "m_binding": {
+                "required": bool(arguments.require_complete_m),
+                "host_runtime_receipt_required": bool(arguments.require_complete_m),
+                "exact_secret_scan_required": bool(arguments.require_complete_m),
+            },
         }
         if arguments.dry_run:
             print(json.dumps(safe_plan, ensure_ascii=False, indent=2, sort_keys=True))
@@ -1011,6 +1202,12 @@ def main() -> int:
             raise ConfigurationError(
                 f"Claude OAuth 任务缺少环境变量 {arguments.claude_oauth_token_env}。"
             )
+        additional_secrets: dict[str, str] = {}
+        for name in dict.fromkeys(arguments.secret_scan_env or ()):
+            value = os.environ.get(name)
+            if not value:
+                raise ConfigurationError(f"秘密扫描环境变量 {name} 不存在或为空。")
+            additional_secrets[f"operator_scan_env:{name}"] = value
         results: list[dict[str, Any]] = []
         with CampaignLock(arguments.lock_file):
             _validate_run_root(arguments, initialize=True)
@@ -1047,6 +1244,13 @@ def main() -> int:
                         if plan.task == "oauth"
                         else {"kind": "sub2api_runtime_key", "present": True}
                     )
+                    known_secrets = dict(additional_secrets)
+                    if plan.task == "api" and api_secret:
+                        known_secrets["api_runtime_key_value"] = api_secret
+                    if plan.task == "oauth" and oauth_claude_secret:
+                        known_secrets[
+                            "claude_oauth_runtime_access_token_value"
+                        ] = oauth_claude_secret
                     results.append(
                         _run_campaign(
                             plan=plan,
@@ -1057,6 +1261,7 @@ def main() -> int:
                                 oauth_claude_secret if plan.task == "oauth" else None
                             ),
                             runtime=task_runtime,
+                            known_secrets=known_secrets,
                         )
                     )
         print(json.dumps({**safe_plan, "results": results}, ensure_ascii=False, indent=2))

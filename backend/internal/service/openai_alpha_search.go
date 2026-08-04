@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -43,16 +44,22 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 	var sanitizedBody []byte
 	var err error
 	if account.IsOpenAIOAuth() {
-		ctx, err = bindOfficialCodex0145RuntimeStateFromIngress(
+		runtimeState, runtimeErr := resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream)
+		if runtimeErr != nil {
+			return nil, runtimeErr
+		}
+		mode := string(runtimeState.CodexReleaseMode)
+		ctx, err = bindOfficialCodexRuntimeStateFromIngress(
 			ctx,
 			c,
 			account,
-			codex0145EndpointID(officialCodexEndpointAlphaSearch),
+			mode,
+			codexEndpointID(officialCodexEndpointAlphaSearch),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("resolve alpha search runtime state: %w", err)
 		}
-		sanitizedBody, err = sanitizeOpenAIAlphaSearchBody(body)
+		sanitizedBody, err = sanitizeOpenAIAlphaSearchBody(mode, body)
 	} else {
 		// API-key 自定义上游不受内置 OAuth 画像的封闭字段集约束，保持原有仅剔除
 		// 已知 Responses 专用字段的行为。
@@ -83,6 +90,10 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 	if account.IsOpenAIPersonalAccessToken() {
 		return s.forwardAlphaSearchViaResponsesWebSearch(ctx, c, account, body, token, proxyURL, requestedModel, upstreamModel)
 	}
+	ctx, err = bindOfficialEgressSink(ctx, officialEgressSinkAlphaSearchDirect)
+	if err != nil {
+		return nil, fmt.Errorf("bind alpha search official egress sink: %w", err)
+	}
 
 	req, err := s.buildOpenAIAlphaSearchRequest(ctx, c, account, body, token)
 	if err != nil {
@@ -92,26 +103,35 @@ func (s *OpenAIGatewayService) ForwardAlphaSearch(ctx context.Context, c *gin.Co
 	upstreamStart := time.Now()
 	// alpha/search 与 PAT 旁路都打官方域名，必须与业务请求同一 TLS 画像；
 	// 走标准 Transport 会在同账号同 IP 上暴露不同形态的 ClientHello。
-	tlsProfile := OpenAIOfficialEgressHTTPTLSProfile(false)
+	var resp *http.Response
 	if account.IsOpenAIOAuth() {
-		egressContext, ok := OfficialEgressContextFromContext(req.Context())
-		if !ok {
-			return nil, fmt.Errorf("alpha search request is missing Codex egress context")
+		runtimeState, runtimeErr := resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream)
+		if runtimeErr != nil {
+			return nil, runtimeErr
 		}
-		var profileErr error
-		tlsProfile, profileErr = officialCodex0145ResolveEndpointTLSProfileForURL(
-			egressContext.ProfileVersion(),
-			codex0145EndpointID(egressContext.CodexEndpointProfileID()),
-			req.URL,
+		attemptIdentity, _ := officialegress.AttemptIdentityFromContext(req.Context())
+		invocation, invocationErr := newOfficialCodexHTTPInvocation(
+			req.Context(),
+			officialCodexHTTPInvocationInput{
+				Runtime: runtimeState, Account: account,
+				SinkID:       officialEgressSinkAlphaSearchDirect,
+				InvocationID: attemptIdentity.InvocationID, ProxyURL: proxyURL,
+				PolicyID:     "changeset3.alpha_search.direct",
+				PolicySource: "service.ForwardAlphaSearch", AttemptBudget: 1,
+			},
 		)
-		if profileErr != nil {
-			return nil, fmt.Errorf("resolve alpha search TLS profile: %w", profileErr)
+		if invocationErr != nil {
+			return nil, invocationErr
 		}
+		resp, err = invocation.Execute(req.Context(), officialCodexHTTPAttemptInput{
+			EndpointID: officialCodexEndpointAlphaSearch, Request: req,
+		})
+	} else {
+		tlsProfile := OpenAIOfficialEgressHTTPTLSProfile(false)
+		resp, err = doOpenAIAPIKeyHTTPTransport(
+			s.httpUpstream, req, proxyURL, account, tlsProfile,
+		)
 	}
-	resp, err := s.httpUpstream.DoWithTLS(
-		req, proxyURL, account.ID, account.Concurrency,
-		tlsProfile,
-	)
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, true)
@@ -180,6 +200,11 @@ func (s *OpenAIGatewayService) forwardAlphaSearchViaResponsesWebSearch(
 	if upstreamModel == "" {
 		upstreamModel = requestedModel
 	}
+	boundCtx, bindErr := bindOfficialEgressSink(ctx, officialEgressSinkAlphaSearchPATFallback)
+	if bindErr != nil {
+		return nil, fmt.Errorf("bind alpha search PAT official egress sink: %w", bindErr)
+	}
+	ctx = boundCtx
 	responsesBody, err := buildOpenAIAlphaSearchResponsesWebSearchBody(alphaBody, upstreamModel)
 	if err != nil {
 		return nil, err
@@ -191,12 +216,18 @@ func (s *OpenAIGatewayService) forwardAlphaSearchViaResponsesWebSearch(
 	SetActualOpenAIUpstreamEndpoint(c, "/v1/responses")
 
 	upstreamStart := time.Now()
-	// alpha/search 与 PAT 旁路都打官方域名，必须与业务请求同一 TLS 画像；
-	// 走标准 Transport 会在同账号同 IP 上暴露不同形态的 ClientHello。
-	resp, err := s.httpUpstream.DoWithTLS(
-		req, proxyURL, account.ID, account.Concurrency,
-		OpenAIOfficialEgressHTTPTLSProfile(strings.TrimSpace(proxyURL) != ""),
-	)
+	officialEgress, runtimeErr := resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream)
+	if runtimeErr != nil {
+		return nil, fmt.Errorf("Codex Executor is not configured: %w", runtimeErr)
+	}
+	resp, err := officialEgress.ExecuteCodexHTTP(ctx, OfficialCodexHTTPExecution{
+		SinkID: officialEgressSinkAlphaSearchPATFallback, EndpointID: officialCodexEndpointResponsesHTTP,
+		// PAT fallback 的 Responses body 是服务端重建产物，不能把原
+		// alpha/search 入站误当成该 body 的完整官方 Responses 身份。
+		Account: account, ProxyURL: proxyURL, Request: req,
+		PolicyID: "changeset1b.alpha_search.pat_fallback.v1", PolicySource: "docs/1.md#changeset-1b",
+		ConcurrencyLimit: account.EffectiveLoadFactor(), HasBillingSideEffect: true,
+	})
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())
 	if err != nil {
 		return nil, s.handleOpenAIUpstreamTransportError(ctx, c, account, err, true)
@@ -278,9 +309,8 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchResponsesWebSearchRequest(c
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "text/event-stream")
 	req.Header.Del("OpenAI-Beta")
-	if turnMetadata := openAIAlphaSearchInboundHeader(c, "X-Codex-Turn-Metadata"); turnMetadata != "" {
-		req.Header.Set("X-Codex-Turn-Metadata", turnMetadata)
-	}
+	// PAT fallback 是独立的 Responses invocation，不得复用 alpha/search 入站
+	// turn metadata；Executor 会从本 invocation 的结构化事实生成新会话与轮次。
 	applyOpenAICodexAuxiliaryHeaders(req.Header)
 	apiKeyID := getAPIKeyIDFromContext(c)
 	if sessionID := strings.TrimSpace(gjson.GetBytes(alphaBody, "id").String()); sessionID != "" {
@@ -311,9 +341,13 @@ func buildOpenAIAlphaSearchResponsesWebSearchBody(alphaBody []byte, model string
 		}
 	}
 	payload := map[string]any{
-		"model":  model,
-		"stream": true,
-		"store":  false,
+		"model":               model,
+		"tool_choice":         "auto",
+		"parallel_tool_calls": false,
+		"reasoning":           map[string]any{},
+		"store":               false,
+		"stream":              true,
+		"include":             []any{"reasoning.encrypted_content"},
 		"input": []any{
 			map[string]any{
 				"role": "user",
@@ -366,16 +400,24 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchRequest(ctx context.Context
 	method := http.MethodPost
 	var endpointProfile officialCodexEndpointProfile
 	var err error
+	mode := ""
 	if account.IsOpenAIOAuth() {
-		endpointProfile, err = resolveActiveCodexEndpoint(
-			codex0145EndpointID(officialCodexEndpointAlphaSearch),
+		runtimeState, runtimeErr := resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream)
+		if runtimeErr != nil {
+			return nil, runtimeErr
+		}
+		mode = string(runtimeState.CodexReleaseMode)
+		endpointProfile, err = resolveCodexEndpointForMode(
+			mode,
+			codexEndpointID(officialCodexEndpointAlphaSearch),
 		)
 		if err != nil {
 			return nil, fmt.Errorf("resolve alpha search endpoint profile: %w", err)
 		}
-		profileURL, profileErr := buildActiveCodexEndpointURL(
-			codex0145EndpointID(endpointProfile.ID),
-			officialCodex0145EndpointURLInput{},
+		profileURL, profileErr := buildCodexEndpointURLForMode(
+			mode,
+			codexEndpointID(endpointProfile.ID),
+			officialCodexEndpointURLInput{},
 		)
 		if profileErr != nil {
 			return nil, fmt.Errorf("resolve alpha search endpoint URL: %w", profileErr)
@@ -392,6 +434,33 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchRequest(ctx context.Context
 	parsedURL, err := url.Parse(targetURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse alpha search URL: %w", err)
+	}
+	if account.IsOpenAIOAuth() {
+		if _, exists := OfficialEgressContextFromContext(ctx); !exists {
+			runtimeState, runtimeErr := resolveBoundOrIngressOfficialCodexRuntimeState(
+				ctx, c, account, mode, codexEndpointID(officialCodexEndpointAlphaSearch),
+			)
+			if runtimeErr != nil {
+				return nil, fmt.Errorf("resolve alpha search semantic runtime: %w", runtimeErr)
+			}
+			invocationID, invocationErr := officialEgressInvocationIDForRequest(c)
+			if invocationErr != nil {
+				return nil, invocationErr
+			}
+			proxyID := int64(0)
+			if account.ProxyID != nil {
+				proxyID = *account.ProxyID
+			}
+			egressContext := NewOfficialEgressContext(OfficialEgressContextInput{
+				AccountID: account.ID, TargetPlatform: PlatformOpenAI,
+				InboundEndpoint: c.Request.URL.Path, Transport: OfficialEgressTransportHTTP,
+				UpstreamHost: parsedURL.Host, ProfileVersion: officialCodexProfileVersion,
+				ProfileMode: mode, AccountType: account.Type, ProxyID: proxyID,
+				CodexEndpointID: officialCodexEndpointAlphaSearch,
+				InvocationID:    invocationID, CodexRuntimeState: runtimeState,
+			})
+			ctx = WithOfficialEgressContext(ctx, egressContext)
+		}
 	}
 	// OAuth 路径不透传入站 query：官方 provider 的 query_params 在所有构造点均为 None
 	// （model-provider-info/src/lib.rs:339,384,534），alpha/search 的 URL 不带任何
@@ -414,27 +483,8 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchRequest(ctx context.Context
 		return nil, err
 	}
 	req = req.WithContext(WithHTTPUpstreamProfile(req.Context(), HTTPUpstreamProfileOpenAI))
-	var egressContext *OfficialEgressContext
 	if account.IsOpenAIOAuth() {
 		req.Host = endpointProfile.Host
-		invocationID, invocationErr := officialEgressInvocationIDForRequest(c)
-		if invocationErr != nil {
-			return nil, fmt.Errorf("resolve alpha search invocation: %w", invocationErr)
-		}
-		req, egressContext, err = attachOfficialCodex0145EndpointRequest(
-			req,
-			account,
-			codex0145EndpointID(endpointProfile.ID),
-			invocationID,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("attach alpha search endpoint profile: %w", err)
-		}
-		body, err = officialCodex0145FinalizeEndpointJSONBody(egressContext, body, nil)
-		if err != nil {
-			return nil, fmt.Errorf("finalize alpha search body: %w", err)
-		}
-		resetOfficialEgressRequestBody(req, body)
 	}
 
 	authHeaders, err := s.buildOpenAIAuthenticationHeaders(ctx, account, token)
@@ -458,27 +508,23 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchRequest(ctx context.Context
 
 		turnMetadata := openAIAlphaSearchInboundHeader(c, "X-Codex-Turn-Metadata")
 		if turnMetadata == "" {
-			derived, deriveErr := deriveOfficialOpenAIHTTPIdentity(c, account, body, nil)
+			derived, deriveErr := deriveOfficialOpenAIHTTPIdentity(
+				c,
+				account,
+				body,
+				nil,
+				mode,
+			)
 			if deriveErr != nil {
 				return nil, fmt.Errorf("derive alpha search turn metadata: %w", deriveErr)
 			}
 			turnMetadata = derived.turnMetadata
 		}
 		req.Header.Set("X-Codex-Turn-Metadata", turnMetadata)
-		userAgent, originator, identityErr := officialCodex0145ProcessIdentity(egressContext)
-		if identityErr != nil {
-			return nil, fmt.Errorf("resolve alpha search process identity: %w", identityErr)
-		}
-		req.Header.Set("User-Agent", userAgent)
-		req.Header.Set("Originator", originator)
 	}
 
 	account.ApplyHeaderOverrides(req.Header)
-	if account.IsOpenAIOAuth() {
-		if _, err := officialCodex0145FinalizeEndpointHeaders(egressContext, req.Header, nil); err != nil {
-			return nil, fmt.Errorf("finalize alpha search endpoint headers: %w", err)
-		}
-	} else {
+	if !account.IsOpenAIOAuth() {
 		stripOpenAIAlphaSearchResponsesHeaders(req.Header)
 	}
 	return req, nil
@@ -537,13 +583,14 @@ var openAIAlphaSearchUnsupportedBodyFields = map[string]struct{}{
 // sanitizeOpenAIAlphaSearchBody 按 0.145.0 alpha-search 画像执行严格闭包。
 // 未知字段和 Responses 公共字段全部删除，六个必需字段缺一即失败，最终顺序固定为
 // id, model, input, commands, settings, max_output_tokens。
-func sanitizeOpenAIAlphaSearchBody(body []byte) ([]byte, error) {
+func sanitizeOpenAIAlphaSearchBody(mode string, body []byte) ([]byte, error) {
 	payload, err := decodeOfficialJSONObjectUseNumber(body)
 	if err != nil {
 		return nil, fmt.Errorf("decode alpha search body: %w", err)
 	}
-	return projectActiveCodexEndpointJSONBody(
-		codex0145EndpointID(officialCodexEndpointAlphaSearch),
+	return projectCodexEndpointJSONBodyForMode(
+		mode,
+		codexEndpointID(officialCodexEndpointAlphaSearch),
 		payload,
 		body,
 		nil,

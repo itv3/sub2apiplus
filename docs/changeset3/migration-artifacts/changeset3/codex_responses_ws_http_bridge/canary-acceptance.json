@@ -1,0 +1,9 @@
+{
+  "schema_version": 2,
+  "result": "accepted",
+  "sink_id": "codex.responses.ws_http_bridge",
+  "canary_receipt_digest": "ccddd6086ac786c2f4c5422479700f9f46e3b6a34c657fa2fa6e29fe7c2ba333",
+  "observation_digest": "63c06567ead8cdddd7250da963e55f7aa96b3af1e4d130eb3adb93395cd38e5d",
+  "reviewed_by": "codex-changeset3-final-wire-audit",
+  "review_ref": "changeset-3-post-identity-authority-final-wire/2026-08-03"
+}

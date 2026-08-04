@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
@@ -145,13 +146,18 @@ func TestAccountTestService_OpenAISuccessPersistsSnapshotFromHeaders(t *testing.
 		Platform:    PlatformOpenAI,
 		Type:        AccountTypeOAuth,
 		Concurrency: 1,
-		Credentials: map[string]any{"access_token": "test-token"},
+		Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "chatgpt-test"},
 	}
 
 	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
 	require.NoError(t, err)
 	require.Len(t, upstream.requests, 1)
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.requests[0].Context()))
+	identity, ok := officialegress.AttemptIdentityFromContext(upstream.requests[0].Context())
+	require.True(t, ok)
+	require.Equal(t, officialEgressSinkAdminTestResponses, identity.SinkID)
+	require.True(t, identity.HasFinalizationToken,
+		"管理端 Responses 探针必须由 Codex Executor 签发 FinalizationToken")
 	require.NotEmpty(t, repo.updatedExtra)
 	require.Equal(t, 42.0, repo.updatedExtra["codex_5h_used_percent"])
 	require.Equal(t, 88.0, repo.updatedExtra["codex_7d_used_percent"])
@@ -174,15 +180,14 @@ func TestAccountTestService_OpenAIOAuthTestNormalizesGPT56Alias(t *testing.T) {
 		Platform:    PlatformOpenAI,
 		Type:        AccountTypeOAuth,
 		Concurrency: 1,
-		Credentials: map[string]any{"access_token": "test-token"},
+		Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "chatgpt-test"},
 	}
 
 	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.6", "", "")
 	require.NoError(t, err)
 	require.Len(t, upstream.requests, 1)
 
-	body, err := io.ReadAll(upstream.requests[0].Body)
-	require.NoError(t, err)
+	body := mustReadRequestBody(t, upstream.requests[0])
 	require.Equal(t, "gpt-5.6-sol", gjson.GetBytes(body, "model").String())
 }
 
@@ -238,8 +243,7 @@ func TestAccountTestService_OpenAIShadowUsesParentCredentialsAndShadowModel(t *t
 	req := upstream.requests[0]
 	require.Equal(t, "Bearer parent-token", req.Header.Get("Authorization"))
 	require.Equal(t, "org-parent", req.Header.Get("chatgpt-account-id"))
-	body, err := io.ReadAll(req.Body)
-	require.NoError(t, err)
+	body := mustReadRequestBody(t, req)
 	require.Equal(t, "gpt-5.3-codex-spark", gjson.GetBytes(body, "model").String())
 	require.Contains(t, recorder.Body.String(), `"success":true`)
 }
@@ -262,6 +266,7 @@ func TestAccountTestService_OpenAIShadowMimicProtectsFinalHeaders(t *testing.T) 
 		Status:   StatusActive,
 		Credentials: map[string]any{
 			"access_token":               "parent-token",
+			"chatgpt_account_id":         "chatgpt-parent",
 			credKeyHeaderOverrideEnabled: true,
 			credKeyHeaderOverrides: map[string]any{
 				"user-agent":   "bad-client",
@@ -345,7 +350,7 @@ func TestAccountTestService_OpenAIStreamEOFBeforeCompletedFails(t *testing.T) {
 		Platform:    PlatformOpenAI,
 		Type:        AccountTypeOAuth,
 		Concurrency: 1,
-		Credentials: map[string]any{"access_token": "test-token"},
+		Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "chatgpt-test"},
 	}
 
 	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
@@ -375,7 +380,7 @@ func TestAccountTestService_OpenAI429PersistsSnapshotAndRateLimitState(t *testin
 		Type:        AccountTypeOAuth,
 		Status:      StatusError,
 		Concurrency: 1,
-		Credentials: map[string]any{"access_token": "test-token"},
+		Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "chatgpt-test"},
 	}
 
 	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
@@ -406,7 +411,7 @@ func TestAccountTestService_OpenAI429BodyOnlyPersistsRateLimitAndClearsStaleErro
 		Status:       StatusError,
 		ErrorMessage: "Access forbidden (403): account may be suspended or lack permissions",
 		Concurrency:  1,
-		Credentials:  map[string]any{"access_token": "test-token"},
+		Credentials:  map[string]any{"access_token": "test-token", "chatgpt_account_id": "chatgpt-test"},
 	}
 
 	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
@@ -435,7 +440,7 @@ func TestAccountTestService_OpenAI429SyncsObservedPlanType(t *testing.T) {
 		Type:        AccountTypeOAuth,
 		Status:      StatusActive,
 		Concurrency: 1,
-		Credentials: map[string]any{"access_token": "test-token", "plan_type": "plus"},
+		Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "chatgpt-test", "plan_type": "plus"},
 	}
 
 	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
@@ -462,7 +467,7 @@ func TestAccountTestService_OpenAI429ActiveAccountDoesNotClearError(t *testing.T
 		Type:        AccountTypeOAuth,
 		Status:      StatusActive,
 		Concurrency: 1,
-		Credentials: map[string]any{"access_token": "test-token"},
+		Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "chatgpt-test"},
 	}
 
 	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
@@ -490,7 +495,7 @@ func TestAccountTestService_OpenAI429WithoutResetSignalDoesNotMutateRuntimeState
 		Status:       StatusError,
 		ErrorMessage: "stale 403",
 		Concurrency:  1,
-		Credentials:  map[string]any{"access_token": "test-token"},
+		Credentials:  map[string]any{"access_token": "test-token", "chatgpt_account_id": "chatgpt-test"},
 	}
 
 	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
@@ -518,7 +523,7 @@ func TestAccountTestService_OpenAI401SetsPermanentErrorOnly(t *testing.T) {
 		Type:        AccountTypeOAuth,
 		Status:      StatusActive,
 		Concurrency: 1,
-		Credentials: map[string]any{"access_token": "test-token"},
+		Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "chatgpt-test"},
 	}
 
 	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")

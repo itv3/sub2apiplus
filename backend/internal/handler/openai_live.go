@@ -100,7 +100,7 @@ func (h *OpenAIGatewayHandler) Live(c *gin.Context) {
 	defer userRelease()
 
 	identity := liveCallIdentity(c, apiKey, subject.UserID, subscription)
-	liveContext := service.WithOfficialCodex0145IngressRuntime(c.Request.Context(), c)
+	liveContext := service.WithOfficialCodexIngressRuntime(c.Request.Context(), c)
 	created, err := h.gatewayService.CreateLiveCall(liveContext, request, identity, subject.Concurrency)
 	if err != nil {
 		h.writeLiveCreateError(c, err)

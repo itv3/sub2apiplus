@@ -1,0 +1,7 @@
+POST /oauth/token HTTP/1.1
+content-type: application/x-www-form-urlencoded
+accept: */*
+host: 127.0.0.1:18555
+content-length: 211
+
+grant_type=authorization_code&code=<synthetic>XXXXXXXXXXXXXXXXXXXXXX&redirect_uri=http%3A%2F%2F127.0.0.1%3A18555%2Fdeviceauth%2Fcallback&client_id=synthetic-client-0145&code_verifier=<synthetic>XXXXXXXXXXXXXXXXX

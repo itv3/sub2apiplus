@@ -1,0 +1,27 @@
+2026/08/04 04:11:12 Timezone initialized: UTC (UTC offset: +00:00)
+goos: darwin
+goarch: arm64
+pkg: github.com/Wei-Shaw/sub2api/internal/service
+cpu: Apple M4
+BenchmarkOfficialCodexVersionProfileResolve-10    	  172927	      7017 ns/op	    9558 B/op	      20 allocs/op
+BenchmarkOfficialCodexVersionProfileResolve-10    	  171142	      6984 ns/op	    9557 B/op	      20 allocs/op
+BenchmarkOfficialCodexVersionProfileResolve-10    	  169724	      6998 ns/op	    9557 B/op	      20 allocs/op
+BenchmarkOfficialCodexVersionProfileResolve-10    	  172173	      7006 ns/op	    9558 B/op	      20 allocs/op
+BenchmarkOfficialCodexVersionProfileResolve-10    	  169401	      7030 ns/op	    9557 B/op	      20 allocs/op
+BenchmarkOfficialCodexVersionProfileResolve-10    	  170920	      7024 ns/op	    9558 B/op	      20 allocs/op
+BenchmarkOfficialCodexVersionProfileResolve-10    	  169072	      7043 ns/op	    9557 B/op	      20 allocs/op
+BenchmarkOfficialCodexVersionProfileResolve-10    	  168152	      7317 ns/op	    9557 B/op	      20 allocs/op
+BenchmarkOfficialCodexVersionProfileResolve-10    	  166298	      7080 ns/op	    9557 B/op	      20 allocs/op
+BenchmarkOfficialCodexVersionProfileResolve-10    	  168225	      6652 ns/op	    9556 B/op	      20 allocs/op
+BenchmarkOfficialCodexEndpointResolve-10          	  166551	      7147 ns/op	   13535 B/op	      22 allocs/op
+BenchmarkOfficialCodexEndpointResolve-10          	  166924	      7166 ns/op	   13537 B/op	      22 allocs/op
+BenchmarkOfficialCodexEndpointResolve-10          	  164194	      7175 ns/op	   13537 B/op	      22 allocs/op
+BenchmarkOfficialCodexEndpointResolve-10          	  163410	      7181 ns/op	   13535 B/op	      22 allocs/op
+BenchmarkOfficialCodexEndpointResolve-10          	  166294	      7248 ns/op	   13535 B/op	      22 allocs/op
+BenchmarkOfficialCodexEndpointResolve-10          	  166604	      7204 ns/op	   13535 B/op	      22 allocs/op
+BenchmarkOfficialCodexEndpointResolve-10          	  165874	      7194 ns/op	   13537 B/op	      22 allocs/op
+BenchmarkOfficialCodexEndpointResolve-10          	  161287	      7216 ns/op	   13538 B/op	      22 allocs/op
+BenchmarkOfficialCodexEndpointResolve-10          	  164976	      7212 ns/op	   13536 B/op	      22 allocs/op
+BenchmarkOfficialCodexEndpointResolve-10          	  166358	      7189 ns/op	   13536 B/op	      22 allocs/op
+PASS
+ok  	github.com/Wei-Shaw/sub2api/internal/service	26.262s

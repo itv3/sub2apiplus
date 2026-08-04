@@ -418,6 +418,7 @@ type OpenAIGatewayService struct {
 	openAITokenProvider   *OpenAITokenProvider
 	grokTokenProvider     *GrokTokenProvider
 	tlsFPProfileService   *TLSFingerprintProfileService
+	officialEgress        *OfficialEgressTransitionRuntime
 	toolCorrector         *CodexToolCorrector
 	openaiWSResolver      OpenAIWSProtocolResolver
 	resolver              *ModelPricingResolver

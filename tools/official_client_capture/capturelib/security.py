@@ -9,7 +9,7 @@ import re
 import stat
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping, Sequence
 
 from .model import ConfigurationError
 
@@ -39,6 +39,10 @@ STABLE_BODY_STRING_KEYS = {
     "status",
     "type",
 }
+SENSITIVE_ARG_RE = re.compile(
+    r"(^|[-_])(api[-_]?key|authorization|cookie|token|secret|password|credential)($|[-_])",
+    re.I,
+)
 
 
 def ensure_private_directory(path: Path, root: Path | None = None) -> Path:
@@ -88,6 +92,65 @@ def secure_write_json(path: Path, payload: Any) -> None:
         path,
         json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
     )
+
+
+def canonical_json_sha256(value: Any) -> str:
+    """计算脱敏 JSON 结构的稳定摘要。"""
+
+    encoded = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def argv_manifest_view(
+    argv: Sequence[str], known_secrets: Mapping[str, str] | None = None
+) -> dict[str, Any]:
+    """生成实际 argv 的安全归档视图，不对原始秘密派生摘要。"""
+
+    secrets = {
+        source: value
+        for source, value in (known_secrets or {}).items()
+        if value
+    }
+    safe: list[str] = []
+    redactions: list[dict[str, Any]] = []
+    redact_next = False
+    for index, raw_value in enumerate(argv):
+        value = str(raw_value)
+        reasons: list[str] = []
+        if redact_next:
+            value = "<redacted-sensitive-argument>"
+            reasons.append("sensitive_option_value")
+            redact_next = False
+        else:
+            for source, secret in secrets.items():
+                if secret in value:
+                    value = value.replace(secret, "<redacted-runtime-secret>")
+                    reasons.append(source)
+            option_name = value.partition("=")[0]
+            if value.startswith("--") and SENSITIVE_ARG_RE.search(option_name):
+                if "=" in value:
+                    option, _separator, _option_value = value.partition("=")
+                    value = f"{option}=<redacted-sensitive-argument>"
+                    reasons.append("sensitive_option_inline_value")
+                else:
+                    redact_next = True
+        safe.append(value)
+        if reasons:
+            redactions.append({"index": index, "reasons": sorted(set(reasons))})
+    payload = {
+        "schema_version": "official-client-invocation/v1",
+        "shell": False,
+        "argv_redacted": safe,
+        "redactions": redactions,
+        "redaction_policy": "known-secret-and-sensitive-option/v1",
+    }
+    payload["argv_sha256"] = canonical_json_sha256(safe)
+    return payload
 
 
 def redact_known_secret(text: str, secret: str | None) -> str:
@@ -153,7 +216,9 @@ def inventory_artifacts(run_dir: Path) -> list[dict[str, Any]]:
         # 场景 summary 才可标为脱敏，避免把 SQLite、会话或 last-message
         # 仅因后缀不在名单中而误标为可公开材料。
         redacted = bool(parts and parts[0] == "analysis") or (
-            len(parts) >= 2 and parts[0] == "results" and path.name == "summary.json"
+            len(parts) >= 2
+            and parts[0] == "results"
+            and path.name in {"invocation.json", "summary.json"}
         )
         artifacts.append(
             {
@@ -170,24 +235,65 @@ def inventory_artifacts(run_dir: Path) -> list[dict[str, Any]]:
 def scan_for_secret(root: Path, secret: str | None) -> list[str]:
     """递归扫描文本产物，返回包含运行时秘密的相对路径。"""
 
-    if not secret:
-        return []
-    needle = secret.encode("utf-8")
-    matches: list[str] = []
-    binary_suffixes = {".pcap", ".pcapng", ".mitm", ".flow"}
-    for path in root.rglob("*"):
-        if (
-            path.is_symlink()
-            or not path.is_file()
-            or path.suffix.lower() in binary_suffixes
-        ):
+    report = scan_for_secrets(
+        root,
+        {"runtime_secret": secret} if secret else {},
+    )
+    return sorted(
+        str(item["path"])
+        for item in report["matches"]
+        if isinstance(item, dict) and item.get("path")
+    )
+
+
+def scan_for_secrets(
+    root: Path, known_secrets: Mapping[str, str] | None
+) -> dict[str, Any]:
+    """对运行目录全部普通文件做多秘密逐字节扫描并记录边界。"""
+
+    needles = {
+        source: value.encode("utf-8")
+        for source, value in (known_secrets or {}).items()
+        if value
+    }
+    matches: list[dict[str, Any]] = []
+    file_count = 0
+    byte_count = 0
+    scan_errors: list[str] = []
+    for path in sorted(root.rglob("*")):
+        if path.is_symlink() or not path.is_file():
             continue
+        relative = str(path.relative_to(root))
+        file_count += 1
         try:
-            if needle in path.read_bytes():
-                matches.append(str(path.relative_to(root)))
+            content = path.read_bytes()
         except OSError:
-            matches.append(str(path.relative_to(root)))
-    return matches
+            scan_errors.append(relative)
+            continue
+        byte_count += len(content)
+        sources = sorted(
+            source for source, needle in needles.items() if needle in content
+        )
+        if sources:
+            matches.append({"path": relative, "secret_sources": sources})
+    performed = bool(needles)
+    return {
+        "performed": performed,
+        "algorithm": "exact-byte-match/v1" if performed else None,
+        "scope": sorted(needles),
+        "included_root": ".",
+        "excluded": [],
+        "file_count": file_count,
+        "byte_count": byte_count,
+        "matches": matches,
+        "scan_errors": scan_errors,
+        "passed": performed and not matches and not scan_errors,
+        "limitation": (
+            None
+            if performed
+            else "没有把本轮实际凭据值交给编排器，无法执行精确值扫描。"
+        ),
+    }
 
 
 def scrub_known_secret(root: Path, secret: str | None) -> list[str]:

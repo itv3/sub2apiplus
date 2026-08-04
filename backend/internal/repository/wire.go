@@ -148,13 +148,15 @@ var ProviderSet = wire.NewSet(
 	ProvideImageStorageFactory,
 
 	// HTTP service ports (DI Strategy A: return interface directly)
+	ProvideOfficialEgressGuard,
+	ProvideOfficialCodexReqProfileTransportResource,
 	NewTurnstileVerifier,
 	ProvidePricingRemoteClient,
 	ProvideGitHubReleaseClient,
 	NewProxyExitInfoProber,
 	NewClaudeUsageFetcher,
 	NewClaudeOAuthClient,
-	NewHTTPUpstream,
+	ProvideHTTPUpstream,
 	NewOpenAIOAuthClient,
 	NewGrokOAuthClient,
 	NewGeminiOAuthClient,

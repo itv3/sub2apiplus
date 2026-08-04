@@ -1,0 +1,52 @@
+{
+  "schema_version": "changeset4-transport-receipt-transitions/v1",
+  "changeset": "4",
+  "base_receipt_sha256": "95c11c24707242adca40456495c6be2113a56d37d5964696a00936c2973020bf",
+  "entries": [
+    {
+      "sink_id": "codex.quota.wham",
+      "route": {
+        "method": "GET",
+        "host": "chatgpt.com",
+        "path": "/backend-api/wham/rate-limit-reset-credits",
+        "purpose": "quota_query",
+        "protocol": "http"
+      },
+      "evidence_id": "wham_rate_limit_reset_credits",
+      "previous_transport_id": "codex-0.145.0-http-ubuntu24-native",
+      "current_transport_id": "codex-0.145.0-http-ubuntu24-native-long-lived",
+      "current_lifecycle": "backend_client_long_lived",
+      "reason": "变更集 4 已验收将 WHAM 三端点绑定独立长期 transport；历史变更集 3 收据保持逐字节冻结，由本精确过渡收据连接当前 executable。"
+    },
+    {
+      "sink_id": "codex.quota.wham",
+      "route": {
+        "method": "GET",
+        "host": "chatgpt.com",
+        "path": "/backend-api/wham/usage",
+        "purpose": "quota_query",
+        "protocol": "http"
+      },
+      "evidence_id": "wham_usage",
+      "previous_transport_id": "codex-0.145.0-http-ubuntu24-native",
+      "current_transport_id": "codex-0.145.0-http-ubuntu24-native-long-lived",
+      "current_lifecycle": "backend_client_long_lived",
+      "reason": "变更集 4 已验收将 WHAM 三端点绑定独立长期 transport；历史变更集 3 收据保持逐字节冻结，由本精确过渡收据连接当前 executable。"
+    },
+    {
+      "sink_id": "codex.quota.wham",
+      "route": {
+        "method": "POST",
+        "host": "chatgpt.com",
+        "path": "/backend-api/wham/rate-limit-reset-credits/consume",
+        "purpose": "quota_query",
+        "protocol": "http"
+      },
+      "evidence_id": "wham_rate_limit_reset_credits_consume",
+      "previous_transport_id": "codex-0.145.0-http-ubuntu24-native",
+      "current_transport_id": "codex-0.145.0-http-ubuntu24-native-long-lived",
+      "current_lifecycle": "backend_client_long_lived",
+      "reason": "变更集 4 已验收将 WHAM 三端点绑定独立长期 transport；历史变更集 3 收据保持逐字节冻结，由本精确过渡收据连接当前 executable。"
+    }
+  ]
+}

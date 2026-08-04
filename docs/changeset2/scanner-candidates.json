@@ -1,0 +1,318 @@
+{
+  "schema_version": 1,
+  "changeset": "2",
+  "task": "2.0",
+  "captured_at": "2026-08-03T11:11:12+08:00",
+  "scanner": {
+    "mode": "bootstrap",
+    "build_contexts": [
+      "darwin/arm64",
+      "linux/amd64"
+    ],
+    "all_candidate_count": 179,
+    "all_candidate_ids_sha256": "319ff8169598f066d496c019e8fd5fff01bd398ba36fb649fad633cd653553b9",
+    "codex_business_candidate_count": 26,
+    "codex_business_candidate_ids_sha256": "33266a396cbb3177689b236ff2244ca12df7529b90d52a712a7ffb7cdbc5835c"
+  },
+  "candidates": [
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/repository.*openaiOAuthService.ExchangeCode@backend/internal/repository/openai_oauth_service.go#reqv3_post#1",
+      "ast_fingerprint": "1f967219ce9a",
+      "runtime_sink_id": "codex.oauth.exchange",
+      "purpose": "oauth_code_exchange",
+      "endpoint_evidence": "transport_only",
+      "routes": ["POST auth.openai.com/oauth/token"],
+      "protocol": "http",
+      "backend": "req_profile",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/repository.*openaiOAuthService.refreshTokenWithClientID@backend/internal/repository/openai_oauth_service.go#net_http_client_do#1",
+      "ast_fingerprint": "ff8decf0d9ca",
+      "runtime_sink_id": "codex.oauth.refresh",
+      "purpose": "oauth_refresh",
+      "endpoint_evidence": "codex_profile",
+      "routes": ["POST auth.openai.com/oauth/token"],
+      "protocol": "http",
+      "backend": "req_profile",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*AccountTestService.testOpenAIAccountConnection@backend/internal/service/account_test_service.go#facade_openai_upstream#1",
+      "ast_fingerprint": "93418efda9cf",
+      "runtime_sink_id": "codex.admin_test.responses",
+      "purpose": "admin_test.responses",
+      "endpoint_evidence": "codex_profile",
+      "routes": ["POST chatgpt.com/backend-api/codex/responses"],
+      "protocol": "http",
+      "backend": "http_upstream",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*AccountTestService.testOpenAICompactConnection@backend/internal/service/account_test_service.go#facade_openai_upstream#1",
+      "ast_fingerprint": "93418efda9cf",
+      "runtime_sink_id": "codex.admin_test.compact",
+      "purpose": "admin_test.compact",
+      "endpoint_evidence": "codex_profile",
+      "routes": ["POST chatgpt.com/backend-api/codex/responses/compact"],
+      "protocol": "http",
+      "backend": "http_upstream",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*AccountTestService.testOpenAIImageOAuth@backend/internal/service/account_test_service.go#facade_http_upstream_do_tls#1",
+      "ast_fingerprint": "976008177702",
+      "runtime_sink_id": "codex.images.oauth_test",
+      "purpose": "admin_test.images_oauth",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        "POST chatgpt.com/backend-api/codex/images/edits",
+        "POST chatgpt.com/backend-api/codex/images/generations"
+      ],
+      "protocol": "http",
+      "backend": "http_upstream",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.Forward@backend/internal/service/openai_gateway_forward.go#facade_openai_upstream_req#1",
+      "ast_fingerprint": "4fa501ed584c",
+      "runtime_sink_id": "codex.responses.forward",
+      "purpose": "user_request.responses",
+      "endpoint_evidence": "codex_profile",
+      "routes": ["POST chatgpt.com/backend-api/codex/responses"],
+      "protocol": "http",
+      "backend": "http_upstream",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.ForwardAlphaSearch@backend/internal/service/openai_alpha_search.go#facade_http_upstream_do_tls#1",
+      "ast_fingerprint": "976008177702",
+      "runtime_sink_id": "codex.alpha_search.direct",
+      "purpose": "user_request.alpha_search",
+      "endpoint_evidence": "codex_profile",
+      "routes": ["POST chatgpt.com/backend-api/codex/alpha/search"],
+      "protocol": "http",
+      "backend": "http_upstream",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.ForwardAsAnthropic@backend/internal/service/openai_gateway_messages.go#facade_openai_upstream_req#1",
+      "ast_fingerprint": "4fa501ed584c",
+      "runtime_sink_id": "codex.responses.anthropic_compat",
+      "purpose": "user_request.anthropic_compat",
+      "endpoint_evidence": "codex_profile",
+      "routes": ["POST chatgpt.com/backend-api/codex/responses"],
+      "protocol": "http",
+      "backend": "http_upstream",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.ForwardAsChatCompletions@backend/internal/service/openai_gateway_chat_completions.go#facade_openai_upstream_req#1",
+      "ast_fingerprint": "4fa501ed584c",
+      "runtime_sink_id": "codex.responses.chat_completions",
+      "purpose": "user_request.chat_completions",
+      "endpoint_evidence": "codex_profile",
+      "routes": ["POST chatgpt.com/backend-api/codex/responses"],
+      "protocol": "http",
+      "backend": "http_upstream",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.createUpstreamLiveCall@backend/internal/service/openai_live.go#facade_http_upstream_do_tls#1",
+      "ast_fingerprint": "b058a641669c",
+      "runtime_sink_id": "codex.realtime.calls",
+      "purpose": "user_request.realtime_calls",
+      "endpoint_evidence": "codex_profile",
+      "routes": ["POST chatgpt.com/backend-api/codex/realtime/calls"],
+      "protocol": "http",
+      "backend": "http_upstream",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.dialLiveSideband@backend/internal/service/openai_live.go#facade_ws_dialer#1",
+      "ast_fingerprint": "2b7126682dcb",
+      "runtime_sink_id": "codex.realtime.sideband",
+      "purpose": "user_request.realtime_sideband",
+      "endpoint_evidence": "codex_profile",
+      "routes": ["GET api.openai.com/v1/realtime (WebSocket)"],
+      "protocol": "websocket",
+      "backend": "websocket",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.fetchCodexModelsManifestUpstream@backend/internal/service/openai_codex_models_service.go#facade_http_upstream_do#1",
+      "ast_fingerprint": "b89fcd6bffe9",
+      "runtime_sink_id": "codex.models.list",
+      "purpose": "models_manifest",
+      "endpoint_evidence": "codex_profile",
+      "routes": ["GET chatgpt.com/backend-api/codex/models"],
+      "protocol": "http",
+      "backend": "http_upstream",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.fetchCodexModelsManifestUpstream@backend/internal/service/openai_codex_models_service.go#facade_http_upstream_do_tls#1",
+      "ast_fingerprint": "d8b36ca624a7",
+      "runtime_sink_id": "codex.models.list",
+      "purpose": "models_manifest",
+      "endpoint_evidence": "codex_profile",
+      "routes": ["GET chatgpt.com/backend-api/codex/models"],
+      "protocol": "http",
+      "backend": "http_upstream",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.fetchCodexModelsManifestUpstream@backend/internal/service/openai_codex_models_service.go#factory_httpclient_pool#1",
+      "ast_fingerprint": "01d0937254f5",
+      "runtime_sink_id": "codex.models.list",
+      "purpose": "models_manifest",
+      "endpoint_evidence": "codex_profile",
+      "routes": ["GET chatgpt.com/backend-api/codex/models"],
+      "protocol": "http",
+      "backend": "http_upstream",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.fetchCodexModelsManifestUpstream@backend/internal/service/openai_codex_models_service.go#net_http_client_do#1",
+      "ast_fingerprint": "6510439f9f68",
+      "runtime_sink_id": "codex.models.list",
+      "purpose": "models_manifest",
+      "endpoint_evidence": "codex_profile",
+      "routes": ["GET chatgpt.com/backend-api/codex/models"],
+      "protocol": "http",
+      "backend": "http_upstream",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.forwardOpenAIImagesOAuth@backend/internal/service/openai_images_responses.go#facade_http_upstream_do_tls#1",
+      "ast_fingerprint": "42671e416c2c",
+      "runtime_sink_id": "codex.images.responses",
+      "purpose": "user_request.images",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        "POST chatgpt.com/backend-api/codex/images/edits",
+        "POST chatgpt.com/backend-api/codex/images/generations"
+      ],
+      "protocol": "http",
+      "backend": "http_upstream",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.forwardOpenAIPassthrough@backend/internal/service/openai_gateway_passthrough.go#facade_openai_upstream#1",
+      "ast_fingerprint": "b2102a8241dd",
+      "runtime_sink_id": "codex.responses.passthrough",
+      "purpose": "user_request.passthrough",
+      "endpoint_evidence": "codex_profile",
+      "routes": ["POST chatgpt.com/backend-api/codex/responses"],
+      "protocol": "http",
+      "backend": "http_upstream",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.proxyOpenAIWSHTTPBridgeTurn@backend/internal/service/openai_ws_http_bridge.go#facade_http_upstream_do#1",
+      "ast_fingerprint": "5d4353cdb3dc",
+      "runtime_sink_id": "codex.responses.ws_http_bridge",
+      "purpose": "user_request.ws_http_fallback",
+      "endpoint_evidence": "codex_profile",
+      "routes": ["POST chatgpt.com/backend-api/codex/responses"],
+      "protocol": "http",
+      "backend": "http_upstream",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.proxyOpenAIWSHTTPBridgeTurn@backend/internal/service/openai_ws_http_bridge.go#facade_openai_upstream#1",
+      "ast_fingerprint": "b2102a8241dd",
+      "runtime_sink_id": "codex.responses.ws_http_bridge",
+      "purpose": "user_request.ws_http_fallback",
+      "endpoint_evidence": "codex_profile",
+      "routes": ["POST chatgpt.com/backend-api/codex/responses"],
+      "protocol": "http",
+      "backend": "http_upstream",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.proxyResponsesWebSocketV2Passthrough@backend/internal/service/openai_ws_v2_passthrough_adapter.go#facade_ws_dialer#1",
+      "ast_fingerprint": "70de9fdba1fc",
+      "runtime_sink_id": "codex.responses.ws_v2_passthrough",
+      "purpose": "user_request.responses_ws_v2",
+      "endpoint_evidence": "codex_profile",
+      "routes": ["GET chatgpt.com/backend-api/codex/responses (WebSocket)"],
+      "protocol": "websocket",
+      "backend": "websocket",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIQuotaService.doCodexQuotaRequest@backend/internal/service/openai_quota_service.go#facade_http_upstream_do_tls#1",
+      "ast_fingerprint": "1f0eb260f5fa",
+      "runtime_sink_id": "codex.quota.wham",
+      "purpose": "quota_query",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        "GET chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+        "GET chatgpt.com/backend-api/wham/usage",
+        "POST chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
+      ],
+      "protocol": "http",
+      "backend": "http_upstream",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*coderOpenAIWSClientDialer.Dial@backend/internal/service/openai_ws_client.go#ws_coder_dial#1",
+      "ast_fingerprint": "b83e9187f131",
+      "runtime_sink_id": "codex.responses.ws",
+      "purpose": "user_request.responses_ws",
+      "endpoint_evidence": "codex_profile",
+      "routes": ["GET chatgpt.com/backend-api/codex/responses (WebSocket)"],
+      "protocol": "websocket",
+      "backend": "websocket",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*coderOpenAIWSClientDialer.DialLiveSideband@backend/internal/service/openai_live.go#ws_coder_dial#1",
+      "ast_fingerprint": "cf19bc44d62b",
+      "runtime_sink_id": "codex.realtime.sideband",
+      "purpose": "user_request.realtime_sideband",
+      "endpoint_evidence": "codex_profile",
+      "routes": ["GET api.openai.com/v1/realtime (WebSocket)"],
+      "protocol": "websocket",
+      "backend": "websocket",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*officialCodexFileUploadCall.executeJSON@backend/internal/service/official_egress_codex_files.go#facade_http_upstream_do_tls#1",
+      "ast_fingerprint": "2ff84291db76",
+      "runtime_sink_id": "codex.files.register",
+      "purpose": "user_request.file_register",
+      "endpoint_evidence": "codex_profile",
+      "routes": [
+        "POST chatgpt.com/backend-api/files",
+        "POST chatgpt.com/backend-api/files/{file_id}/uploaded"
+      ],
+      "protocol": "http",
+      "backend": "http_upstream",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*officialCodexFileUploadCall.uploadBlob@backend/internal/service/official_egress_codex_files.go#facade_http_upstream_do_tls#1",
+      "ast_fingerprint": "2ff84291db76",
+      "runtime_sink_id": "codex.files.blob_upload",
+      "purpose": "user_request.file_blob",
+      "endpoint_evidence": "codex_profile",
+      "routes": ["PUT *.oaiusercontent.com/{server_returned_path}"],
+      "protocol": "http",
+      "backend": "http_upstream",
+      "enforcement_state": "legacy_observe"
+    },
+    {
+      "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*officialEgressWebSocketRoundTripper.RoundTrip@backend/internal/service/openai_ws_client.go#roundtripper_roundtrip#1",
+      "ast_fingerprint": "5d0a9e7a1188",
+      "runtime_sink_id": "codex.responses.ws",
+      "purpose": "user_request.responses_ws",
+      "endpoint_evidence": "codex_profile",
+      "routes": ["GET chatgpt.com/backend-api/codex/responses (WebSocket)"],
+      "protocol": "http",
+      "backend": "websocket",
+      "enforcement_state": "legacy_observe"
+    }
+  ]
+}

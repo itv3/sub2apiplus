@@ -1,0 +1,672 @@
+{
+  "schema_version": 3,
+  "bootstrap_commit": "38a9929eac35a39c86de2f27de8f7a805d7dae52",
+  "receipts": [
+    {
+      "candidate": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/repository.*openaiOAuthService.refreshTokenWithClientID@backend/internal/repository/openai_oauth_service.go#net_http_client_do#1",
+        "file": "backend/internal/repository/openai_oauth_service.go",
+        "func": "*openaiOAuthService.refreshTokenWithClientID",
+        "package": "github.com/Wei-Shaw/sub2api/internal/repository",
+        "callee": "(*net/http.Client).Do",
+        "receiver": "*net/http.Client",
+        "sink_kind": "net_http_client_do",
+        "protocol": "http",
+        "sink_type": "terminal",
+        "ast_fingerprint": "ff8decf0d9ca",
+        "target_resolution": "unknown",
+        "build_contexts": [
+          "darwin/arm64",
+          "linux/amd64"
+        ],
+        "official_host": false,
+        "runtime_sink_id": "codex.oauth.refresh",
+        "purpose": "oauth_refresh",
+        "persona": "codex-cli",
+        "endpoint_evidence": "codex_profile",
+        "routes": [
+          "POST auth.openai.com/oauth/token"
+        ],
+        "is_facade": false,
+        "backend": "req_profile",
+        "target_backend": "req_profile",
+        "enforcement_state": "legacy_observe",
+        "owner": "czs",
+        "migration_changeset": "2",
+        "expiry_condition": "变更集 2 改为消费 ReleaseBundle",
+        "rationale": "已画像；硬编码 active 待修；backend 保持 req_profile 不换栈",
+        "line_hint": 116
+      },
+      "kind": "migrated",
+      "replacement_sink_id": "codex.oauth.refresh",
+      "migration_receipt_digest": "84bdb6b2f5b28ed02b44c3eba31641bc289b7a67f5be24144dc1f2405efd65c4",
+      "source_blob_sha256": "9e3bbed91c2d06a016c338dfc384bc5371e0d6157b463089c7ed26d06ba83b03",
+      "reviewed_by": "codex-changeset3-self-audit",
+      "review_ref": "changeset-3-source-gate-audit/2026-08-03",
+      "rationale": "原业务或 legacy delegation 发送候选已真实消失；对应 Runtime Sink 已由统一 Executor 的 enforced MigrationReceipt 接管，物理 adapter 不承载业务 SinkID。"
+    },
+    {
+      "candidate": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*AccountTestService.testOpenAIImageOAuth@backend/internal/service/account_test_service.go#facade_http_upstream_do_tls#1",
+        "file": "backend/internal/service/account_test_service.go",
+        "func": "*AccountTestService.testOpenAIImageOAuth",
+        "package": "github.com/Wei-Shaw/sub2api/internal/service",
+        "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).DoWithTLS",
+        "receiver": "github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream",
+        "sink_kind": "facade_http_upstream_do_tls",
+        "protocol": "http",
+        "sink_type": "facade",
+        "ast_fingerprint": "976008177702",
+        "target_resolution": "dynamic",
+        "build_contexts": [
+          "darwin/arm64",
+          "linux/amd64"
+        ],
+        "official_host": false,
+        "runtime_sink_id": "codex.images.oauth_test",
+        "purpose": "admin_test.images_oauth",
+        "persona": "codex-cli",
+        "endpoint_evidence": "codex_profile",
+        "routes": [
+          "POST chatgpt.com/backend-api/codex/images/edits",
+          "POST chatgpt.com/backend-api/codex/images/generations"
+        ],
+        "is_facade": false,
+        "backend": "http_upstream",
+        "target_backend": "http_upstream",
+        "enforcement_state": "legacy_observe",
+        "owner": "czs",
+        "migration_changeset": "1B",
+        "expiry_condition": "1B 迁入 Executor",
+        "rationale": "OAuth 图片测试打官方端点",
+        "line_hint": 2075
+      },
+      "kind": "migrated",
+      "replacement_sink_id": "codex.images.oauth_test",
+      "migration_receipt_digest": "6d553a48df983df75515cbb2b4c52d5075133dd319f2c0d910183eae8ec825bb",
+      "source_blob_sha256": "b932b28fdb708bd8b89d6f4cb7c865e90ffe8930e509d3f1912d6e32898f055e",
+      "reviewed_by": "codex-changeset3-self-audit",
+      "review_ref": "changeset-3-source-gate-audit/2026-08-03",
+      "rationale": "原业务或 legacy delegation 发送候选已真实消失；对应 Runtime Sink 已由统一 Executor 的 enforced MigrationReceipt 接管，物理 adapter 不承载业务 SinkID。"
+    },
+    {
+      "candidate": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.ForwardAlphaSearch@backend/internal/service/openai_alpha_search.go#facade_http_upstream_do_tls#1",
+        "file": "backend/internal/service/openai_alpha_search.go",
+        "func": "*OpenAIGatewayService.ForwardAlphaSearch",
+        "package": "github.com/Wei-Shaw/sub2api/internal/service",
+        "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).DoWithTLS",
+        "receiver": "github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream",
+        "sink_kind": "facade_http_upstream_do_tls",
+        "protocol": "http",
+        "sink_type": "facade",
+        "ast_fingerprint": "976008177702",
+        "target_resolution": "unknown",
+        "build_contexts": [
+          "darwin/arm64",
+          "linux/amd64"
+        ],
+        "official_host": false,
+        "runtime_sink_id": "codex.alpha_search.direct",
+        "purpose": "user_request.alpha_search",
+        "persona": "codex-cli",
+        "endpoint_evidence": "codex_profile",
+        "routes": [
+          "POST chatgpt.com/backend-api/codex/alpha/search"
+        ],
+        "is_facade": false,
+        "backend": "http_upstream",
+        "target_backend": "http_upstream",
+        "enforcement_state": "legacy_observe",
+        "owner": "czs",
+        "migration_changeset": "3",
+        "expiry_condition": "变更集 3 迁入 Executor",
+        "rationale": "主路径已 fail-close：缺 egress context 直接报错",
+        "line_hint": 111
+      },
+      "kind": "migrated",
+      "replacement_sink_id": "codex.alpha_search.direct",
+      "migration_receipt_digest": "340620a5469c8234ec43e13ff5f6460f99b8c10b545809984099894556f5543b",
+      "source_blob_sha256": "a5b6ab8f3f985fd6ad3303ed94ee16b33688abff0f2d1b22624e159073c34a3c",
+      "reviewed_by": "codex-changeset3-self-audit",
+      "review_ref": "changeset-3-source-gate-audit/2026-08-03",
+      "rationale": "原业务或 legacy delegation 发送候选已真实消失；对应 Runtime Sink 已由统一 Executor 的 enforced MigrationReceipt 接管，物理 adapter 不承载业务 SinkID。"
+    },
+    {
+      "candidate": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.createUpstreamLiveCall@backend/internal/service/openai_live.go#facade_http_upstream_do_tls#1",
+        "file": "backend/internal/service/openai_live.go",
+        "func": "*OpenAIGatewayService.createUpstreamLiveCall",
+        "package": "github.com/Wei-Shaw/sub2api/internal/service",
+        "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).DoWithTLS",
+        "receiver": "github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream",
+        "sink_kind": "facade_http_upstream_do_tls",
+        "protocol": "http",
+        "sink_type": "facade",
+        "ast_fingerprint": "b058a641669c",
+        "target_resolution": "dynamic",
+        "build_contexts": [
+          "darwin/arm64",
+          "linux/amd64"
+        ],
+        "official_host": false,
+        "runtime_sink_id": "codex.realtime.calls",
+        "purpose": "user_request.realtime_calls",
+        "persona": "codex-cli",
+        "endpoint_evidence": "codex_profile",
+        "routes": [
+          "POST chatgpt.com/backend-api/codex/realtime/calls"
+        ],
+        "is_facade": false,
+        "backend": "http_upstream",
+        "target_backend": "http_upstream",
+        "enforcement_state": "legacy_observe",
+        "owner": "czs",
+        "migration_changeset": "3",
+        "expiry_condition": "变更集 3 迁入 Executor",
+        "rationale": "画像 TransportID=HTTPDefault，是 HTTP 端点而非 WebSocket",
+        "line_hint": 485
+      },
+      "kind": "migrated",
+      "replacement_sink_id": "codex.realtime.calls",
+      "migration_receipt_digest": "0db579e4b9b1f5ce1701a3bd8dacd517dcc21f785ca133088cc863b95c56a765",
+      "source_blob_sha256": "231cd12c51665f66953b2f02b35af4c984579a0657c9e118a93e467bb7533a84",
+      "reviewed_by": "codex-changeset3-self-audit",
+      "review_ref": "changeset-3-source-gate-audit/2026-08-03",
+      "rationale": "原业务或 legacy delegation 发送候选已真实消失；对应 Runtime Sink 已由统一 Executor 的 enforced MigrationReceipt 接管，物理 adapter 不承载业务 SinkID。"
+    },
+    {
+      "candidate": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.dialLiveSideband@backend/internal/service/openai_live.go#facade_ws_dialer#1",
+        "file": "backend/internal/service/openai_live.go",
+        "func": "*OpenAIGatewayService.dialLiveSideband",
+        "package": "github.com/Wei-Shaw/sub2api/internal/service",
+        "callee": "(github.com/Wei-Shaw/sub2api/internal/service.openAIWSClientDialer).Dial",
+        "receiver": "github.com/Wei-Shaw/sub2api/internal/service.openAIWSClientDialer",
+        "sink_kind": "facade_ws_dialer",
+        "protocol": "websocket",
+        "sink_type": "facade",
+        "ast_fingerprint": "2b7126682dcb",
+        "target_resolution": "dynamic",
+        "build_contexts": [
+          "darwin/arm64",
+          "linux/amd64"
+        ],
+        "resolved_methods": [
+          "GET"
+        ],
+        "official_host": false,
+        "runtime_sink_id": "codex.realtime.sideband",
+        "purpose": "user_request.realtime_sideband",
+        "persona": "codex-cli",
+        "endpoint_evidence": "codex_profile",
+        "routes": [
+          "GET api.openai.com/v1/realtime (WebSocket)"
+        ],
+        "is_facade": false,
+        "backend": "websocket",
+        "target_backend": "websocket",
+        "enforcement_state": "legacy_observe",
+        "owner": "czs",
+        "migration_changeset": "3",
+        "expiry_condition": "变更集 3 迁入 Executor.Dial",
+        "rationale": "经 openAIWSClientDialer 接口拨号；与 DialLiveSideband 同一 RuntimeSinkID",
+        "line_hint": 675
+      },
+      "kind": "migrated",
+      "replacement_sink_id": "codex.realtime.sideband",
+      "migration_receipt_digest": "c28fd5e55a92dfa47fa41bd0531cfbaf915a22d2c8e9b25f19acd89db5b35916",
+      "source_blob_sha256": "231cd12c51665f66953b2f02b35af4c984579a0657c9e118a93e467bb7533a84",
+      "reviewed_by": "codex-changeset3-self-audit",
+      "review_ref": "changeset-3-source-gate-audit/2026-08-03",
+      "rationale": "原业务或 legacy delegation 发送候选已真实消失；对应 Runtime Sink 已由统一 Executor 的 enforced MigrationReceipt 接管，物理 adapter 不承载业务 SinkID。"
+    },
+    {
+      "candidate": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.fetchCodexModelsManifestUpstream@backend/internal/service/openai_codex_models_service.go#facade_http_upstream_do#1",
+        "file": "backend/internal/service/openai_codex_models_service.go",
+        "func": "*OpenAIGatewayService.fetchCodexModelsManifestUpstream",
+        "package": "github.com/Wei-Shaw/sub2api/internal/service",
+        "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).Do",
+        "receiver": "github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream",
+        "sink_kind": "facade_http_upstream_do",
+        "protocol": "http",
+        "sink_type": "facade",
+        "ast_fingerprint": "b89fcd6bffe9",
+        "target_resolution": "dynamic",
+        "build_contexts": [
+          "darwin/arm64",
+          "linux/amd64"
+        ],
+        "resolved_methods": [
+          "GET"
+        ],
+        "official_host": false,
+        "runtime_sink_id": "codex.models.list",
+        "purpose": "models_manifest",
+        "persona": "codex-cli",
+        "endpoint_evidence": "codex_profile",
+        "routes": [
+          "GET chatgpt.com/backend-api/codex/models"
+        ],
+        "is_facade": false,
+        "backend": "http_upstream",
+        "target_backend": "http_upstream",
+        "enforcement_state": "legacy_observe",
+        "owner": "czs",
+        "migration_changeset": "1B",
+        "expiry_condition": "1B 移除其中的 httpclient.GetClient 分支",
+        "rationale": "三分支实现，其中一支用无 uTLS 客户端",
+        "line_hint": 600
+      },
+      "kind": "migrated",
+      "replacement_sink_id": "codex.models.list",
+      "migration_receipt_digest": "f7ce89736a6205e6a6007c31d376a34c7c8fd8f1614f4ca83effcace10418f2c",
+      "source_blob_sha256": "b8411f3f566db4f7d6d5000e93fdd274c2a15ed36caa5e1334f68ac37044fad1",
+      "reviewed_by": "codex-changeset3-self-audit",
+      "review_ref": "changeset-3-source-gate-audit/2026-08-03",
+      "rationale": "原业务或 legacy delegation 发送候选已真实消失；对应 Runtime Sink 已由统一 Executor 的 enforced MigrationReceipt 接管，物理 adapter 不承载业务 SinkID。"
+    },
+    {
+      "candidate": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.fetchCodexModelsManifestUpstream@backend/internal/service/openai_codex_models_service.go#facade_http_upstream_do_tls#1",
+        "file": "backend/internal/service/openai_codex_models_service.go",
+        "func": "*OpenAIGatewayService.fetchCodexModelsManifestUpstream",
+        "package": "github.com/Wei-Shaw/sub2api/internal/service",
+        "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).DoWithTLS",
+        "receiver": "github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream",
+        "sink_kind": "facade_http_upstream_do_tls",
+        "protocol": "http",
+        "sink_type": "facade",
+        "ast_fingerprint": "d8b36ca624a7",
+        "target_resolution": "dynamic",
+        "build_contexts": [
+          "darwin/arm64",
+          "linux/amd64"
+        ],
+        "resolved_methods": [
+          "GET"
+        ],
+        "official_host": false,
+        "runtime_sink_id": "codex.models.list",
+        "purpose": "models_manifest",
+        "persona": "codex-cli",
+        "endpoint_evidence": "codex_profile",
+        "routes": [
+          "GET chatgpt.com/backend-api/codex/models"
+        ],
+        "is_facade": false,
+        "backend": "http_upstream",
+        "target_backend": "http_upstream",
+        "enforcement_state": "legacy_observe",
+        "owner": "czs",
+        "migration_changeset": "1B",
+        "expiry_condition": "1B 移除其中的 httpclient.GetClient 分支",
+        "rationale": "三分支实现，其中一支用无 uTLS 客户端",
+        "line_hint": 620
+      },
+      "kind": "migrated",
+      "replacement_sink_id": "codex.models.list",
+      "migration_receipt_digest": "f7ce89736a6205e6a6007c31d376a34c7c8fd8f1614f4ca83effcace10418f2c",
+      "source_blob_sha256": "b8411f3f566db4f7d6d5000e93fdd274c2a15ed36caa5e1334f68ac37044fad1",
+      "reviewed_by": "codex-changeset3-self-audit",
+      "review_ref": "changeset-3-source-gate-audit/2026-08-03",
+      "rationale": "原业务或 legacy delegation 发送候选已真实消失；对应 Runtime Sink 已由统一 Executor 的 enforced MigrationReceipt 接管，物理 adapter 不承载业务 SinkID。"
+    },
+    {
+      "candidate": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.fetchCodexModelsManifestUpstream@backend/internal/service/openai_codex_models_service.go#factory_httpclient_pool#1",
+        "file": "backend/internal/service/openai_codex_models_service.go",
+        "func": "*OpenAIGatewayService.fetchCodexModelsManifestUpstream",
+        "package": "github.com/Wei-Shaw/sub2api/internal/service",
+        "callee": "github.com/Wei-Shaw/sub2api/internal/pkg/httpclient.GetClient",
+        "sink_kind": "factory_httpclient_pool",
+        "protocol": "http",
+        "sink_type": "factory",
+        "ast_fingerprint": "01d0937254f5",
+        "target_resolution": "unknown",
+        "build_contexts": [
+          "darwin/arm64",
+          "linux/amd64"
+        ],
+        "official_host": false,
+        "runtime_sink_id": "codex.models.list",
+        "purpose": "models_manifest",
+        "persona": "codex-cli",
+        "endpoint_evidence": "codex_profile",
+        "routes": [
+          "GET chatgpt.com/backend-api/codex/models"
+        ],
+        "is_facade": false,
+        "backend": "http_upstream",
+        "target_backend": "http_upstream",
+        "enforcement_state": "legacy_observe",
+        "owner": "czs",
+        "migration_changeset": "1B",
+        "expiry_condition": "1B 移除其中的 httpclient.GetClient 分支",
+        "rationale": "三分支实现，其中一支用无 uTLS 客户端",
+        "line_hint": 624
+      },
+      "kind": "migrated",
+      "replacement_sink_id": "codex.models.list",
+      "migration_receipt_digest": "f7ce89736a6205e6a6007c31d376a34c7c8fd8f1614f4ca83effcace10418f2c",
+      "source_blob_sha256": "b8411f3f566db4f7d6d5000e93fdd274c2a15ed36caa5e1334f68ac37044fad1",
+      "reviewed_by": "codex-changeset3-self-audit",
+      "review_ref": "changeset-3-source-gate-audit/2026-08-03",
+      "rationale": "原业务或 legacy delegation 发送候选已真实消失；对应 Runtime Sink 已由统一 Executor 的 enforced MigrationReceipt 接管，物理 adapter 不承载业务 SinkID。"
+    },
+    {
+      "candidate": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.fetchCodexModelsManifestUpstream@backend/internal/service/openai_codex_models_service.go#net_http_client_do#1",
+        "file": "backend/internal/service/openai_codex_models_service.go",
+        "func": "*OpenAIGatewayService.fetchCodexModelsManifestUpstream",
+        "package": "github.com/Wei-Shaw/sub2api/internal/service",
+        "callee": "(*net/http.Client).Do",
+        "receiver": "*net/http.Client",
+        "sink_kind": "net_http_client_do",
+        "protocol": "http",
+        "sink_type": "terminal",
+        "ast_fingerprint": "6510439f9f68",
+        "target_resolution": "dynamic",
+        "build_contexts": [
+          "darwin/arm64",
+          "linux/amd64"
+        ],
+        "resolved_methods": [
+          "GET"
+        ],
+        "official_host": false,
+        "runtime_sink_id": "codex.models.list",
+        "purpose": "models_manifest",
+        "persona": "codex-cli",
+        "endpoint_evidence": "codex_profile",
+        "routes": [
+          "GET chatgpt.com/backend-api/codex/models"
+        ],
+        "is_facade": false,
+        "backend": "http_upstream",
+        "target_backend": "http_upstream",
+        "enforcement_state": "legacy_observe",
+        "owner": "czs",
+        "migration_changeset": "1B",
+        "expiry_condition": "1B 移除其中的 httpclient.GetClient 分支",
+        "rationale": "三分支实现，其中一支用无 uTLS 客户端",
+        "line_hint": 632
+      },
+      "kind": "migrated",
+      "replacement_sink_id": "codex.models.list",
+      "migration_receipt_digest": "f7ce89736a6205e6a6007c31d376a34c7c8fd8f1614f4ca83effcace10418f2c",
+      "source_blob_sha256": "b8411f3f566db4f7d6d5000e93fdd274c2a15ed36caa5e1334f68ac37044fad1",
+      "reviewed_by": "codex-changeset3-self-audit",
+      "review_ref": "changeset-3-source-gate-audit/2026-08-03",
+      "rationale": "原业务或 legacy delegation 发送候选已真实消失；对应 Runtime Sink 已由统一 Executor 的 enforced MigrationReceipt 接管，物理 adapter 不承载业务 SinkID。"
+    },
+    {
+      "candidate": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.forwardOpenAIImagesOAuth@backend/internal/service/openai_images_responses.go#facade_http_upstream_do_tls#1",
+        "file": "backend/internal/service/openai_images_responses.go",
+        "func": "*OpenAIGatewayService.forwardOpenAIImagesOAuth",
+        "package": "github.com/Wei-Shaw/sub2api/internal/service",
+        "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).DoWithTLS",
+        "receiver": "github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream",
+        "sink_kind": "facade_http_upstream_do_tls",
+        "protocol": "http",
+        "sink_type": "facade",
+        "ast_fingerprint": "42671e416c2c",
+        "target_resolution": "unknown",
+        "build_contexts": [
+          "darwin/arm64",
+          "linux/amd64"
+        ],
+        "official_host": false,
+        "runtime_sink_id": "codex.images.responses",
+        "purpose": "user_request.images",
+        "persona": "codex-cli",
+        "endpoint_evidence": "codex_profile",
+        "routes": [
+          "POST chatgpt.com/backend-api/codex/images/edits",
+          "POST chatgpt.com/backend-api/codex/images/generations"
+        ],
+        "is_facade": false,
+        "backend": "http_upstream",
+        "target_backend": "http_upstream",
+        "enforcement_state": "legacy_observe",
+        "owner": "czs",
+        "migration_changeset": "3",
+        "expiry_condition": "变更集 3 迁入 Executor",
+        "rationale": "图片生成/编辑 OAuth 路径",
+        "line_hint": 1926
+      },
+      "kind": "migrated",
+      "replacement_sink_id": "codex.images.responses",
+      "migration_receipt_digest": "0dce5ab9c6eb117622e2baec06de3c09445b7c31ed647b87d9838996fdb06979",
+      "source_blob_sha256": "6e168fe8265cf6f867905ffb2c74583fa981310e37169622798d7c2db30bede4",
+      "reviewed_by": "codex-changeset3-self-audit",
+      "review_ref": "changeset-3-source-gate-audit/2026-08-03",
+      "rationale": "原业务或 legacy delegation 发送候选已真实消失；对应 Runtime Sink 已由统一 Executor 的 enforced MigrationReceipt 接管，物理 adapter 不承载业务 SinkID。"
+    },
+    {
+      "candidate": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.proxyResponsesWebSocketV2Passthrough@backend/internal/service/openai_ws_v2_passthrough_adapter.go#facade_ws_dialer#1",
+        "file": "backend/internal/service/openai_ws_v2_passthrough_adapter.go",
+        "func": "*OpenAIGatewayService.proxyResponsesWebSocketV2Passthrough",
+        "package": "github.com/Wei-Shaw/sub2api/internal/service",
+        "callee": "(github.com/Wei-Shaw/sub2api/internal/service.openAIWSClientDialer).Dial",
+        "receiver": "github.com/Wei-Shaw/sub2api/internal/service.openAIWSClientDialer",
+        "sink_kind": "facade_ws_dialer",
+        "protocol": "websocket",
+        "sink_type": "facade",
+        "ast_fingerprint": "70de9fdba1fc",
+        "target_resolution": "unknown",
+        "build_contexts": [
+          "darwin/arm64",
+          "linux/amd64"
+        ],
+        "resolved_methods": [
+          "GET"
+        ],
+        "official_host": false,
+        "runtime_sink_id": "codex.responses.ws_v2_passthrough",
+        "purpose": "user_request.responses_ws_v2",
+        "persona": "codex-cli",
+        "endpoint_evidence": "codex_profile",
+        "routes": [
+          "GET chatgpt.com/backend-api/codex/responses (WebSocket)"
+        ],
+        "is_facade": false,
+        "backend": "websocket",
+        "target_backend": "websocket",
+        "enforcement_state": "legacy_observe",
+        "owner": "czs",
+        "migration_changeset": "3",
+        "expiry_condition": "变更集 3 迁入 Executor.Dial",
+        "rationale": "WSv2 透传；经接口拨号，前一版扫描器完全看不见",
+        "line_hint": 915
+      },
+      "kind": "migrated",
+      "replacement_sink_id": "codex.responses.ws_v2_passthrough",
+      "migration_receipt_digest": "6b0aed8dbecf25d972f009d24c101248dac6af0682349a7aa6aad761ac1e65e2",
+      "source_blob_sha256": "4cb07a2602b0870b6688ccbb98b885ff46b9d33c49305b0fe1a9ee8175d7f615",
+      "reviewed_by": "codex-changeset3-self-audit",
+      "review_ref": "changeset-3-source-gate-audit/2026-08-03",
+      "rationale": "原业务或 legacy delegation 发送候选已真实消失；对应 Runtime Sink 已由统一 Executor 的 enforced MigrationReceipt 接管，物理 adapter 不承载业务 SinkID。"
+    },
+    {
+      "candidate": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIQuotaService.doCodexQuotaRequest@backend/internal/service/openai_quota_service.go#facade_http_upstream_do_tls#1",
+        "file": "backend/internal/service/openai_quota_service.go",
+        "func": "*OpenAIQuotaService.doCodexQuotaRequest",
+        "package": "github.com/Wei-Shaw/sub2api/internal/service",
+        "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).DoWithTLS",
+        "receiver": "github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream",
+        "sink_kind": "facade_http_upstream_do_tls",
+        "protocol": "http",
+        "sink_type": "facade",
+        "ast_fingerprint": "1f0eb260f5fa",
+        "target_resolution": "dynamic",
+        "build_contexts": [
+          "darwin/arm64",
+          "linux/amd64"
+        ],
+        "official_host": false,
+        "runtime_sink_id": "codex.quota.wham",
+        "purpose": "quota_query",
+        "persona": "codex-cli",
+        "endpoint_evidence": "codex_profile",
+        "routes": [
+          "GET chatgpt.com/backend-api/wham/rate-limit-reset-credits",
+          "GET chatgpt.com/backend-api/wham/usage",
+          "POST chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume"
+        ],
+        "is_facade": false,
+        "backend": "http_upstream",
+        "target_backend": "http_upstream",
+        "enforcement_state": "legacy_observe",
+        "owner": "czs",
+        "migration_changeset": "3",
+        "expiry_condition": "变更集 3 迁入 Executor",
+        "rationale": "WHAM 用量与重置额度；端点已在画像登记",
+        "line_hint": 403
+      },
+      "kind": "migrated",
+      "replacement_sink_id": "codex.quota.wham",
+      "migration_receipt_digest": "fd26796a5c9814bb94dde837a8d24a6e4d94a3d088cfd441b61a7f6081885a41",
+      "source_blob_sha256": "c9a985a76db1152080a3c81eb92b8d9915a2e24119302078a94c3a4091147670",
+      "reviewed_by": "codex-changeset3-self-audit",
+      "review_ref": "changeset-3-source-gate-audit/2026-08-03",
+      "rationale": "原业务或 legacy delegation 发送候选已真实消失；对应 Runtime Sink 已由统一 Executor 的 enforced MigrationReceipt 接管，物理 adapter 不承载业务 SinkID。"
+    },
+    {
+      "candidate": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*coderOpenAIWSClientDialer.DialLiveSideband@backend/internal/service/openai_live.go#ws_coder_dial#1",
+        "file": "backend/internal/service/openai_live.go",
+        "func": "*coderOpenAIWSClientDialer.DialLiveSideband",
+        "package": "github.com/Wei-Shaw/sub2api/internal/service",
+        "callee": "github.com/coder/websocket.Dial",
+        "sink_kind": "ws_coder_dial",
+        "protocol": "websocket",
+        "sink_type": "terminal",
+        "ast_fingerprint": "cf19bc44d62b",
+        "target_resolution": "dynamic",
+        "build_contexts": [
+          "darwin/arm64",
+          "linux/amd64"
+        ],
+        "resolved_methods": [
+          "GET"
+        ],
+        "official_host": false,
+        "runtime_sink_id": "codex.realtime.sideband",
+        "purpose": "user_request.realtime_sideband",
+        "persona": "codex-cli",
+        "endpoint_evidence": "codex_profile",
+        "routes": [
+          "GET api.openai.com/v1/realtime (WebSocket)"
+        ],
+        "is_facade": false,
+        "backend": "websocket",
+        "target_backend": "websocket",
+        "enforcement_state": "legacy_observe",
+        "owner": "czs",
+        "migration_changeset": "3",
+        "expiry_condition": "变更集 3 迁入 Executor.Dial",
+        "rationale": "realtime sideband：唯一在 api.openai.com 上的 codex-cli route",
+        "line_hint": 106
+      },
+      "kind": "migrated",
+      "replacement_sink_id": "codex.realtime.sideband",
+      "migration_receipt_digest": "c28fd5e55a92dfa47fa41bd0531cfbaf915a22d2c8e9b25f19acd89db5b35916",
+      "source_blob_sha256": "231cd12c51665f66953b2f02b35af4c984579a0657c9e118a93e467bb7533a84",
+      "reviewed_by": "codex-changeset3-self-audit",
+      "review_ref": "changeset-3-source-gate-audit/2026-08-03",
+      "rationale": "原业务或 legacy delegation 发送候选已真实消失；对应 Runtime Sink 已由统一 Executor 的 enforced MigrationReceipt 接管，物理 adapter 不承载业务 SinkID。"
+    },
+    {
+      "candidate": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*officialCodexFileUploadCall.executeJSON@backend/internal/service/official_egress_codex_files.go#facade_http_upstream_do_tls#1",
+        "file": "backend/internal/service/official_egress_codex_files.go",
+        "func": "*officialCodexFileUploadCall.executeJSON",
+        "package": "github.com/Wei-Shaw/sub2api/internal/service",
+        "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).DoWithTLS",
+        "receiver": "github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream",
+        "sink_kind": "facade_http_upstream_do_tls",
+        "protocol": "http",
+        "sink_type": "facade",
+        "ast_fingerprint": "2ff84291db76",
+        "target_resolution": "dynamic",
+        "build_contexts": [
+          "darwin/arm64",
+          "linux/amd64"
+        ],
+        "official_host": false,
+        "runtime_sink_id": "codex.files.register",
+        "purpose": "user_request.file_register",
+        "persona": "codex-cli",
+        "endpoint_evidence": "codex_profile",
+        "routes": [
+          "POST chatgpt.com/backend-api/files",
+          "POST chatgpt.com/backend-api/files/{file_id}/uploaded"
+        ],
+        "is_facade": false,
+        "backend": "http_upstream",
+        "target_backend": "http_upstream",
+        "enforcement_state": "legacy_observe",
+        "owner": "czs",
+        "migration_changeset": "3",
+        "expiry_condition": "变更集 3 迁入 Executor",
+        "rationale": "文件上传登记与确认（JSON 段）",
+        "line_hint": 399
+      },
+      "kind": "migrated",
+      "replacement_sink_id": "codex.files.register",
+      "migration_receipt_digest": "667956bbcd018fb6b243a73228767e41c991d1b3a20ca1f46a2c2c16e6b78003",
+      "source_blob_sha256": "b6e2f4d5881daf26925e03b217b6add89f4944f600a8041776f6ff9d4fb9b516",
+      "reviewed_by": "codex-changeset3-self-audit",
+      "review_ref": "changeset-3-source-gate-audit/2026-08-03",
+      "rationale": "原业务或 legacy delegation 发送候选已真实消失；对应 Runtime Sink 已由统一 Executor 的 enforced MigrationReceipt 接管，物理 adapter 不承载业务 SinkID。"
+    },
+    {
+      "candidate": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*officialCodexFileUploadCall.uploadBlob@backend/internal/service/official_egress_codex_files.go#facade_http_upstream_do_tls#1",
+        "file": "backend/internal/service/official_egress_codex_files.go",
+        "func": "*officialCodexFileUploadCall.uploadBlob",
+        "package": "github.com/Wei-Shaw/sub2api/internal/service",
+        "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).DoWithTLS",
+        "receiver": "github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream",
+        "sink_kind": "facade_http_upstream_do_tls",
+        "protocol": "http",
+        "sink_type": "facade",
+        "ast_fingerprint": "2ff84291db76",
+        "target_resolution": "dynamic",
+        "build_contexts": [
+          "darwin/arm64",
+          "linux/amd64"
+        ],
+        "official_host": false,
+        "runtime_sink_id": "codex.files.blob_upload",
+        "purpose": "user_request.file_blob",
+        "persona": "codex-cli",
+        "endpoint_evidence": "codex_profile",
+        "routes": [
+          "PUT *.oaiusercontent.com/{server_returned_path}"
+        ],
+        "is_facade": false,
+        "backend": "http_upstream",
+        "target_backend": "http_upstream",
+        "enforcement_state": "legacy_observe",
+        "owner": "czs",
+        "migration_changeset": "3",
+        "expiry_condition": "变更集 3 迁入 Executor 并补动态 host 的运行时 Guard",
+        "rationale": "HostFromResponse=true：host 与 path 均由上游响应给出，静态不可解析",
+        "line_hint": 233
+      },
+      "kind": "migrated",
+      "replacement_sink_id": "codex.files.blob_upload",
+      "migration_receipt_digest": "ab4a9de92b8d12bab3130bdb2d0a89cf628c94797af1e3ddaf9f85c9c3fb419d",
+      "source_blob_sha256": "b6e2f4d5881daf26925e03b217b6add89f4944f600a8041776f6ff9d4fb9b516",
+      "reviewed_by": "codex-changeset3-self-audit",
+      "review_ref": "changeset-3-source-gate-audit/2026-08-03",
+      "rationale": "原业务或 legacy delegation 发送候选已真实消失；对应 Runtime Sink 已由统一 Executor 的 enforced MigrationReceipt 接管，物理 adapter 不承载业务 SinkID。"
+    }
+  ]
+}

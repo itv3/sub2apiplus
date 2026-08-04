@@ -1,0 +1,49 @@
+{
+  "schema_version": 3,
+  "bootstrap_commit": "38a9929eac35a39c86de2f27de8f7a805d7dae52",
+  "receipts": [
+    {
+      "candidate": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*officialEgressWebSocketRoundTripper.RoundTrip@backend/internal/service/openai_ws_client.go#roundtripper_roundtrip#1",
+        "file": "backend/internal/service/openai_ws_client.go",
+        "func": "*officialEgressWebSocketRoundTripper.RoundTrip",
+        "package": "github.com/Wei-Shaw/sub2api/internal/service",
+        "callee": "(net/http.RoundTripper).RoundTrip",
+        "receiver": "net/http.RoundTripper",
+        "sink_kind": "roundtripper_roundtrip",
+        "protocol": "http",
+        "sink_type": "terminal",
+        "ast_fingerprint": "5d0a9e7a1188",
+        "target_resolution": "unknown",
+        "build_contexts": [
+          "darwin/arm64",
+          "linux/amd64"
+        ],
+        "official_host": false,
+        "runtime_sink_id": "codex.responses.ws",
+        "purpose": "user_request.responses_ws",
+        "persona": "codex-cli",
+        "endpoint_evidence": "codex_profile",
+        "routes": [
+          "GET chatgpt.com/backend-api/codex/responses (WebSocket)"
+        ],
+        "is_facade": false,
+        "backend": "websocket",
+        "target_backend": "websocket",
+        "enforcement_state": "legacy_observe",
+        "owner": "czs",
+        "migration_changeset": "3",
+        "expiry_condition": "变更集 3 迁入 Executor.Dial",
+        "rationale": "WS 握手的 RoundTripper 层，与 Dial 同属一个 RuntimeSinkID",
+        "line_hint": 377
+      },
+      "kind": "migrated",
+      "replacement_sink_id": "codex.responses.ws",
+      "migration_receipt_digest": "0ee273056a479818579a8c48fd931755099101c213b8e981cbce147765dac427",
+      "source_blob_sha256": "a9b24f30c7511d506342c6d3f964191970e738df075dd7e5b31969efd0010967",
+      "reviewed_by": "codex-changeset5-conflict-audit",
+      "review_ref": "changeset-5-source-relocation/2026-08-04",
+      "rationale": "旧 WebSocket RoundTripper 终端声明已从共享上游文件机械迁入 fork 独立 adapter；业务 Runtime Sink 继续由变更集 3 的 enforced Executor 收据接管，新位置只作为不承载业务 SinkID 的物理基础设施。"
+    }
+  ]
+}

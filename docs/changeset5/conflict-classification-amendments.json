@@ -1,0 +1,26 @@
+{
+  "schema_version": "changeset5-conflict-classification-amendments/v1",
+  "changeset": "5",
+  "classification_upstream_base": "26d894ef4f50645a4bf1030e378ac892f17d0223",
+  "pre_full_inventory_sha256": "6fee65be361be40bd8abb1d16bc88b10f9877dc475899549e15afbae0870a470",
+  "pre_raw_governable_inventory_sha256": "bc1ab9379486d510f40fb8d94fa660cd069af88d6d8fe5a3a99317fa19f93fcf",
+  "post_full_inventory_sha256": "6a3c0a45339da65a01ae2e5d591cb682046f33fe35464583c66155dfe318c816",
+  "post_raw_governable_inventory_sha256": "03c2d35555febf086caffdd7ab03625353be5f1146064c19aebfc50b44543118",
+  "amendments": [
+    {
+      "unit_key": "backend/internal/service/openai_images_responses.go\u0000declaration_added\u0000\u0000buildOpenAICodexImagesRequestBody",
+      "path": "backend/internal/service/openai_images_responses.go",
+      "unit_type": "declaration_added",
+      "receiver": "",
+      "name": "buildOpenAICodexImagesRequestBody",
+      "signature": "func .buildOpenAICodexImagesRequestBodyfunc(\n\tparsed *OpenAIImagesRequest,\n\tmodel string,\n\tmode string,\n) ([]byte, error)",
+      "original_ownership": "non_official",
+      "effective_ownership": "official_egress_exclusive",
+      "pre_original_ast_sha256": "2a3592c86ec09243d6ed916e796b2d50ce340555f636f62012c5b539000ea73c",
+      "post_original_ast_sha256": "db541514f6b170a5c4990f96a7fb642bc0d5b4986258a3d0fe3205da95bf4e60",
+      "reason": "开发前分类信号只识别 codex0145EndpointID，漏判了版本中立的 Codex Images Body 组装 declaration；该单元只服务官方 Codex Images 出站定型。"
+    }
+  ],
+  "effective_pre_governable_count": 104,
+  "effective_post_governable_count": 91
+}

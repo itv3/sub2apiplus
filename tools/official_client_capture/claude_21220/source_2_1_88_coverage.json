@@ -93,16 +93,34 @@
       "历史变化": 4
     },
     "by_target_static_status": {
-      "runtime_verified": 0,
+      "runtime_verified": 4,
       "unverified": 38,
       "out_of_scope": 18,
-      "static_only": 43,
+      "static_only": 39,
       "changed": 3
     }
   },
   "verification_audit": {
-    "full_historical_proposition_verified_ids": [],
-    "current_verified_spec_ids_snapshot": [],
+    "full_historical_proposition_verified_ids": [
+      "SRC2188-HDR-005",
+      "SRC2188-HDR-006",
+      "SRC2188-HDR-007",
+      "SRC2188-RETRY-006"
+    ],
+    "current_verified_spec_ids_snapshot": [
+      "SPEC-CONN-002",
+      "SPEC-CONN-003",
+      "SPEC-HDR-016",
+      "SPEC-HDR-017",
+      "SPEC-HDR-018",
+      "SPEC-HDR-019",
+      "SPEC-HDR-021",
+      "SPEC-HDR-022",
+      "SPEC-HDR-023",
+      "SPEC-HDR-024",
+      "SPEC-HDR-025",
+      "SPEC-HDR-026"
+    ],
     "machine_linkage": "runtime_verified 条目必须与 full_historical_proposition_verified_ids 双向一致，且其 spec_rule_ids 全部指向当前规则台账的 verified ID。",
     "manual_semantic_review_boundary": "checker 只能验证 ID、状态和映射集合，不能自动证明旧 proposition 的全部语义被当前 retained_claim 完整包含；完整承接仍需逐条人工语义复核。",
     "narrowed_current_subclaim_ids": [
@@ -119,7 +137,7 @@
       "SRC2188-HDR-006",
       "SRC2188-HDR-007"
     ],
-    "conclusion": "没有历史 proposition 达到当前正式 SPEC 准入；3 条完整历史命题与当前样本一致但其目标 SPEC 仍为复合 observed ID；7 条仅有收窄后的当前子命题观察，均不能计作旧机制整体证实。",
+    "conclusion": "4 条历史 proposition 已由 2.1.220 原子 verified SPEC 完整承接；另有 3 条完整历史命题仅与当前样本一致、7 条只有收窄后的当前子命题观察。其余旧源码命题仍不能计作目标版本整体证实。",
     "full_historical_proposition_observed_ids": [
       "SRC2188-HDR-001",
       "SRC2188-BODY-002",
@@ -18770,17 +18788,18 @@
       "target_static_status": "static_only",
       "spec_rule_ids": [
         "SPEC-EP-001",
+        "SPEC-EP-003",
         "SPEC-BODY-001",
         "SPEC-BODY-013"
       ],
       "current_evidence": [
-        "SPEC-EP-001 正式验证 POST /v1/messages?beta=true；SPEC-BODY-001 只观察到基线十键集合。",
+        "SPEC-EP-001 在受 /messages 预筛的 SCOPE-J6 中观察到精确 path，SPEC-EP-003 观察到 POST；两者均未达到 verified。SPEC-BODY-001 只观察到基线十键集合。",
         "SPEC-BODY-013 在两个 complete run 中观察到 stream=true，但没有 verified retained claim 承接内部 beta.messages.create 调用。"
       ],
       "required_probe": [
         "保留一个最小 OAuth 主请求作为每版回归探针。"
       ],
-      "notes": "端点已正式验证、stream 布尔值仅为基线观察；整条命题仍因内部 SDK 方法未证而只能标 static_only。"
+      "notes": "method、path 与 stream 都只是有限基线观察；整条命题仍因内部 SDK 方法未证而只能标 static_only。"
     },
     {
       "source_rule_id": "SRC2188-REQ-002",
@@ -18796,7 +18815,7 @@
         "SPEC-CONN-001"
       ],
       "current_evidence": [
-        "SPEC-CONN-001 只验证两轮单次 500 后重发且 X-Stainless-Retry-Count 保持 0。",
+        "SPEC-CONN-001 只观察到两轮单次 500 后重发且 X-Stainless-Retry-Count 保持 0。",
         "该运行事实不能证明每次 SDK 调用均显式设置 maxRetries=0，也不能单独证明应用层接管全部重试。"
       ],
       "required_probe": [
@@ -18894,7 +18913,7 @@
         "SPEC-HDR-002"
       ],
       "current_evidence": [
-        "SPEC-HDR-002 只验证 SCOPE-BASELINE 的精确值，没有完整承接动态模板及三个可选后缀。"
+        "SPEC-HDR-002 只观察到 SCOPE-BASELINE 的精确值，没有完整承接动态模板及三个可选后缀。"
       ],
       "required_probe": [
         "覆盖 interactive、sdk-cli、mcp、action 四种入口。"
@@ -18916,7 +18935,7 @@
         "SPEC-HDR-002"
       ],
       "current_evidence": [
-        "SPEC-HDR-002 只完整验证 SCOPE-BASELINE 的 sdk-cli 精确值；没有 verified 规则承接 cli、mcp 或 action 分支。"
+        "SPEC-HDR-002 只观察到 SCOPE-BASELINE 的 sdk-cli 精确值；没有 verified 规则承接 cli、mcp 或 action 分支。"
       ],
       "required_probe": [
         "分别启动交互、print、mcp、action 模式抓包。"
@@ -18943,7 +18962,7 @@
       "required_probe": [
         "验证同一逻辑会话跨重试、跨连接是否保持一致。"
       ],
-      "notes": "当前 wire 只验证同会话复用子命题，未完整验证旧版 client 构造与 session 生命周期机制。",
+      "notes": "当前解析样本只观察到同会话复用子命题，未证实旧版 client 构造与 session 生命周期机制。",
       "observed_subclaim": "已采集 s2/s4 的同一会话内，多个请求携带并共用同一个 X-Claude-Code-Session-Id。"
     },
     {
@@ -18955,17 +18974,18 @@
       ],
       "source_kind": "A3_历史源码",
       "target_version": "2.1.220",
-      "target_static_status": "static_only",
+      "target_static_status": "runtime_verified",
       "spec_rule_ids": [
-        "SPEC-HDR-017"
+        "SPEC-HDR-017",
+        "SPEC-HDR-023"
       ],
       "current_evidence": [
-        "SPEC-HDR-017 的 2.1.220 A1 候选使用同名 x-claude-remote-container-id；没有已归档运行正例。"
+        "2.1.220 A1 已定位同名条件构造；两轮非设置负例与两轮唯一值正例均以完整 M 归档，SPEC-HDR-017/023 分别承接存在性和值透传。"
       ],
       "required_probe": [
-        "设置唯一容器 ID 并抓取主请求。"
+        "若要外推为真实 remote-container 产品路径，仍需另采真实远程环境；该扩展不影响本条受控环境变量命题已验证。"
       ],
-      "notes": "已恢复 2.1.88 源码中的历史名称并纠正 SPEC 映射；静态同名不等于运行已证实。"
+      "notes": "历史命题只断言环境变量到 Header 的条件映射；受控正反实验已完整证实，不把它扩大为真实远程环境全集。"
     },
     {
       "source_rule_id": "SRC2188-HDR-006",
@@ -18976,17 +18996,18 @@
       ],
       "source_kind": "A3_历史源码",
       "target_version": "2.1.220",
-      "target_static_status": "static_only",
+      "target_static_status": "runtime_verified",
       "spec_rule_ids": [
-        "SPEC-HDR-018"
+        "SPEC-HDR-018",
+        "SPEC-HDR-024"
       ],
       "current_evidence": [
-        "SPEC-HDR-018 的 2.1.220 A1 候选使用同名 x-claude-remote-session-id；没有已归档运行正例。"
+        "2.1.220 A1 已定位同名条件构造；两轮非设置负例与两轮唯一值正例均以完整 M 归档，SPEC-HDR-018/024 分别承接存在性和值透传。"
       ],
       "required_probe": [
-        "设置唯一远程会话 ID 并抓取主请求。"
+        "真实 remote-session 生命周期仍需单独取证；该扩展不影响本条受控环境变量命题已验证。"
       ],
-      "notes": "已恢复 2.1.88 源码中的历史名称并纠正 SPEC 映射；仍需正例与负例。"
+      "notes": "已恢复历史名称并由目标版本正反运行验证同一条件映射；不与普通 X-Claude-Code-Session-Id 混同。"
     },
     {
       "source_rule_id": "SRC2188-HDR-007",
@@ -18997,17 +19018,18 @@
       ],
       "source_kind": "A3_历史源码",
       "target_version": "2.1.220",
-      "target_static_status": "static_only",
+      "target_static_status": "runtime_verified",
       "spec_rule_ids": [
-        "SPEC-HDR-016"
+        "SPEC-HDR-016",
+        "SPEC-HDR-021"
       ],
       "current_evidence": [
-        "SPEC-HDR-016 的 2.1.220 A1 候选使用同名 x-client-app；没有已归档运行正例。"
+        "2.1.220 A1 已定位同名条件构造；两轮非设置负例与两轮 probe-app-21220 正例均以完整 M 归档，SPEC-HDR-016/021 分别承接存在性和值透传。"
       ],
       "required_probe": [
-        "设置唯一 client-app 值并抓取，同时检查 UA 后缀。"
+        "空白值和带前后空格值仍属于扩展输入矩阵，不改变本条非空唯一值条件命题。"
       ],
-      "notes": "已恢复 2.1.88 源码中的历史名称并纠正 SPEC 映射；Header 与 UA 后缀仍应联动验证。"
+      "notes": "历史 Header 命题已完整承接；UA 联动由独立的 SPEC-HDR-022 处理，避免把两个载体合并计数。"
     },
     {
       "source_rule_id": "SRC2188-HDR-008",
@@ -19153,7 +19175,7 @@
         "SPEC-BODY-007"
       ],
       "current_evidence": [
-        "SPEC-HDR-020 的 verified replacement rule 承接 SCOPE-BASELINE 的 HTTP Header 缺席子命题；SPEC-BODY-007 承接 body 归因文本子命题。"
+        "SPEC-HDR-020 与 SPEC-BODY-007 分别在 SCOPE-J6 观察到 HTTP Header 缺席和 Body 归因文本前缀；两条都尚未达到 verified。"
       ],
       "required_probe": [
         "每个场景同时检查 Header 缺席和 system[0] 正例。"
@@ -19441,8 +19463,8 @@
         "SPEC-HDR-020"
       ],
       "current_evidence": [
-        "SPEC-BODY-007 完整承接 SCOPE-BASELINE 主请求的 system[0].text attribution。",
-        "SPEC-HDR-020 完整承接该声明范围内 HTTP Header 的缺席。"
+        "SPEC-BODY-007 在 SCOPE-J6 观察到 system[0].text attribution 前缀。",
+        "SPEC-HDR-020 在 SCOPE-J6 观察到同名 HTTP Header 缺席；两条都尚未达到 verified。"
       ],
       "required_probe": [
         "对主请求、子代理、无 attribution 条件分别保存原始 body 与 Header。"
@@ -19461,16 +19483,19 @@
       "target_version": "2.1.220",
       "target_static_status": "static_only",
       "spec_rule_ids": [
-        "SPEC-BODY-007"
+        "SPEC-BODY-007",
+        "SPEC-BODY-014",
+        "SPEC-BODY-015",
+        "SPEC-BODY-016"
       ],
       "current_evidence": [
-        "SPEC-BODY-007 只验证 cc_version、cc_entrypoint=sdk-cli 与五字符 cch。",
+        "SPEC-BODY-007 只观察归因文本前缀；SPEC-BODY-014/015/016 分别观察 cc_version、cc_entrypoint=sdk-cli 与五字符 cch。",
         "该规则明确将 cc_workload 列为未采集候选，因此原命题未被完整承接。"
       ],
       "required_probe": [
         "设置 workload 获取正例，并检查字段顺序与尾分号。"
       ],
-      "notes": "基础三字段在当前基线规则中已验证，但 workload 条件机制未证，旧命题整体只能标为 static_only。"
+      "notes": "基础三字段在当前基线规则中仅为 observed，workload 条件机制未证，旧命题整体只能标为 static_only。"
     },
     {
       "source_rule_id": "SRC2188-BODY-015",
@@ -19483,10 +19508,11 @@
       "target_version": "2.1.220",
       "target_static_status": "static_only",
       "spec_rule_ids": [
-        "SPEC-BODY-007"
+        "SPEC-BODY-007",
+        "SPEC-BODY-016"
       ],
       "current_evidence": [
-        "A1 静态线索出现 cch=00000 占位，SPEC-BODY-007 的 wire 证据只验证最终为五字符 cch。",
+        "A1 静态线索出现 cch=00000 占位；SPEC-BODY-016 的 J 证据只观察到最终为五字符 cch。",
         "最终输出差异不能单独证明由何层、何时或以何算法完成内部改写。"
       ],
       "required_probe": [
@@ -19505,10 +19531,11 @@
       "target_version": "2.1.220",
       "target_static_status": "static_only",
       "spec_rule_ids": [
-        "SPEC-BODY-003"
+        "SPEC-BODY-007",
+        "CAND-BODY-BILLING-CONDITIONS"
       ],
       "current_evidence": [
-        "2.1.220 默认运行有归因；当前静态锚点存在关闭逻辑。"
+        "SPEC-BODY-007 只在 SCOPE-J6 观察到 attribution 前缀；当前 A1 静态锚点存在关闭逻辑，CAND-BODY-BILLING-CONDITIONS 保留 gate 条件。"
       ],
       "required_probe": [
         "显式设置所有真/假值变体并检查 system[0]。"
@@ -19614,7 +19641,8 @@
       "target_version": "2.1.220",
       "target_static_status": "static_only",
       "spec_rule_ids": [
-        "SPEC-HDR-003"
+        "SPEC-HDR-003",
+        "SPEC-BODY-011"
       ],
       "current_evidence": [
         "当前样本只观察到 context_management 与 beta 共现；SPEC-HDR-003 未承接启用条件与联动因果。"
@@ -19841,7 +19869,7 @@
         "SPEC-HDR-003"
       ],
       "current_evidence": [
-        "当前静态锚点支持 scope；运行证据主要确认相关 beta。"
+        "当前静态锚点支持 scope；运行样本只观察到相关 beta。"
       ],
       "required_probe": [
         "抓取包含 scope 的 body 正例，并验证无 beta 时的反例。"
@@ -19859,7 +19887,8 @@
       "target_version": "2.1.220",
       "target_static_status": "static_only",
       "spec_rule_ids": [
-        "SPEC-BODY-003"
+        "SPEC-BODY-003",
+        "SPEC-BODY-006"
       ],
       "current_evidence": [
         "2.1.220 主请求与子代理观察到不同 system 块数，但这与历史条件化拆块命题相容，不构成变化证据。"
@@ -19880,10 +19909,11 @@
       "target_version": "2.1.220",
       "target_static_status": "static_only",
       "spec_rule_ids": [
-        "SPEC-BODY-003"
+        "SPEC-BODY-003",
+        "SPEC-BODY-007"
       ],
       "current_evidence": [
-        "SPEC-BODY-007 完整承接 attribution 位于 system[0]；SPEC-BODY-003 只说明索引 2、3 含 cache_control。",
+        "SPEC-BODY-007 在 SCOPE-J6 观察到 attribution 位于 system[0]；SPEC-BODY-003 只说明索引 2、3 含 cache_control。",
         "retained claim 没有明确承接 system[0] 必然不带 cache_control。"
       ],
       "required_probe": [
@@ -20236,7 +20266,7 @@
       ],
       "current_evidence": [
         "当前仓库没有实际 529 运行证据。",
-        "SPEC-CONN-001 只验证单次 500 后重发；SPEC-CONN-002 也明确把 2.1.220 完整重试策略保留为 candidate。"
+        "SPEC-CONN-001 只观察到单次 500 后重发；SPEC-CONN-002 也明确把 2.1.220 完整重试策略保留为 candidate。"
       ],
       "required_probe": [
         "再覆盖带/不带 Retry-After。"
@@ -20312,17 +20342,17 @@
       ],
       "source_kind": "A3_历史源码",
       "target_version": "2.1.220",
-      "target_static_status": "static_only",
+      "target_static_status": "runtime_verified",
       "spec_rule_ids": [
         "SPEC-CONN-002"
       ],
       "current_evidence": [
-        "当前 32–39 秒量级样本与旧公式相容，但不足以证明 2.1.220 常量未变。"
+        "2.1.220 A1 锚点确认 500ms 基值、32s 指数基值封顶和 0–25% 正向抖动；3/5/9 连续 500 各两轮的 api_retry 延迟与单调时钟间隔均落入逐 attempt 理论区间。"
       ],
       "required_probe": [
-        "采集多个尝试级别和足量重复样本，拟合基础值、封顶和抖动区间。"
+        "Retry-After、其他状态码与持久重试是独立命题，继续保留在候选矩阵。"
       ],
-      "notes": "第二章若写约 35 秒上限会丢失 32s 基值加抖动的机制边界。"
+      "notes": "目标版本使用 Math.round；本条历史命题未断言舍入方法，因此由 SPEC-CONN-002 完整承接。"
     },
     {
       "source_rule_id": "SRC2188-RETRY-007",
@@ -20765,7 +20795,7 @@
         "SPEC-HDR-006"
       ],
       "current_evidence": [
-        "2.1.220 wire 的 x-stainless-package-version 为 0.94.0。",
+        "2.1.220 的 SCOPE-J6 解析 Header 中 x-stainless-package-version 为 0.94.0。",
         "2.1.88 冻结依赖清单确定为 0.74.0。"
       ],
       "required_probe": [
@@ -20805,7 +20835,8 @@
       "target_version": "2.1.220",
       "target_static_status": "changed",
       "spec_rule_ids": [
-        "SPEC-BODY-006"
+        "SPEC-BODY-006",
+        "CAND-BODY-BILLING-CONDITIONS"
       ],
       "current_evidence": [
         "2.1.220 子代理原始 body 明确出现 cc_is_subagent=true。",
@@ -20827,7 +20858,9 @@
       "source_kind": "A3_历史源码",
       "target_version": "2.1.220",
       "target_static_status": "static_only",
-      "spec_rule_ids": [],
+      "spec_rule_ids": [
+        "CAND-BODY-BILLING-CONDITIONS"
+      ],
       "current_evidence": [
         "当前静态线索指向 previous request 关联能力；现有运行证据尚未稳定闭合 cc_prev_req。"
       ],

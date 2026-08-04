@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "bootstrap_commit": "38a9929eac35a39c86de2f27de8f7a805d7dae52",
+  "bootstrap_tree": "a8c3dee18a01a6138bfcea60860bb5ad11548c3a",
+  "inventory_sha256": "46593243b1bd315eafcb54335502a1f46bc2b8bfc0ecc2d3146da4e7087bfaeb",
+  "scanner_algorithm_sha256": "1ece3437e3a970565db243f8ac9b7aa723c53ae23ac68f2e960da32d6f97e635",
+  "reconstructed_at": "2026-08-02T00:00:00+08:00",
+  "reviewed_by": "user-approved-changesets-0-1a-1b",
+  "review_ref": "changeset-1b-final-review/2026-08-02",
+  "rationale": "变更集 0、1A、1B 已由用户验收通过；本次复审确认 1B 新增的精确 terminal delegation 分类及 usage probe 旧扫描事实移除符合设计，冻结更新后的扫描算法摘要。后续任一变化仍须重新审核。"
+}

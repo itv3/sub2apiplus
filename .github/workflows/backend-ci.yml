@@ -22,11 +22,26 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
-      - name: Codex egress spec gates
-        run: make check-egress-spec
+      - name: Codex 出站规格与封存门禁
+        run: |
+          default_branch="${{ github.event.repository.default_branch }}"
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            base_ref="${{ github.event.pull_request.base.sha }}"
+          elif [ "${{ github.ref }}" = "refs/heads/${default_branch}" ]; then
+            base_ref="${{ github.event.before }}"
+          else
+            git fetch --no-tags origin "$default_branch"
+            base_ref="$(git rev-parse FETCH_HEAD)"
+          fi
+          if ! git rev-parse --verify "${base_ref}^{commit}" >/dev/null 2>&1; then
+            base_ref="$(git rev-parse HEAD^)"
+          fi
+          EGRESS_SEAL_BASE_REF="$base_ref" make check-egress-spec
 
   shell:
     runs-on: macos-15

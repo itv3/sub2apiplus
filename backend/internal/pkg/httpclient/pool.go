@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyutil"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
@@ -84,14 +85,26 @@ func GetClient(opts Options) (*http.Client, error) {
 }
 
 func buildClient(opts Options) (*http.Client, error) {
+	return buildClientWithGuard(opts, nil)
+}
+
+// buildClientWithGuard 供生产默认 Guard 与包内 wire 对照测试复用同一构造路径。
+func buildClientWithGuard(opts Options, guard *officialegress.Guard) (*http.Client, error) {
 	transport, err := buildTransport(opts)
 	if err != nil {
 		return nil, err
 	}
 
-	var rt http.RoundTripper = transport
+	// Guard 必须无条件位于共享池的 socket 出口；不能只挂在可选的
+	// ValidateResolvedIP 分支，否则 usage/PAT/Agent 三条普通客户端路径会漏检。
+	var rt http.RoundTripper = officialegress.NewGuardedRoundTripper(
+		transport,
+		guard,
+		officialegress.BackendPlainNetHTTP,
+		officialegress.WireProtocolHTTP,
+	)
 	if opts.ValidateResolvedIP && !opts.AllowPrivateHosts {
-		rt = newValidatedTransport(transport)
+		rt = newValidatedTransport(rt)
 	}
 	rt = servertiming.WrapRoundTripper(rt)
 	return &http.Client{

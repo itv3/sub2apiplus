@@ -413,7 +413,7 @@ func compositeTargetPlatformMiddleware(resolver *service.CompositeRouteResolver)
 		// 后续具体 Handler 的重复捕获由幂等入口保留首次 wire 事实。
 		if c.Request != nil {
 			c.Request = c.Request.WithContext(
-				service.WithOfficialCodex0145IngressRuntime(c.Request.Context(), c),
+				service.WithOfficialCodexIngressRuntime(c.Request.Context(), c),
 			)
 		}
 		apiKey, ok := middleware.GetAPIKeyFromContext(c)

@@ -263,7 +263,8 @@ func TestOpenAIGatewayServiceForward_NormalizesResponsesLiteToolsForOAuth(t *tes
 			c, _ := gin.CreateTestContext(rec)
 			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(nil))
 			c.Request.Header.Set("User-Agent", "codex_cli_rs/0.144.1")
-			c.Request.Header.Set(responsesLiteHeader, "true")
+			// 客户端自报不能决定 Lite 画像；故意声明 false，最终仍应由可信模型清单改写。
+			c.Request.Header.Set(responsesLiteHeader, "false")
 			upstream := &httpUpstreamRecorder{resp: &http.Response{
 				StatusCode: http.StatusOK,
 				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
@@ -273,6 +274,9 @@ func TestOpenAIGatewayServiceForward_NormalizesResponsesLiteToolsForOAuth(t *tes
 				)),
 			}}
 			svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
+			svc.openaiModelCapabilities.replaceFromManifest(501, []byte(
+				`{"models":[{"slug":"gpt-5.6-terra","visibility":"list","use_responses_lite":true,"supports_parallel_tool_calls":true}]}`,
+			))
 			account := &Account{
 				ID: 501, Name: "responses-lite", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 				Concurrency: 1, Status: StatusActive, Schedulable: true, RateMultiplier: f64p(1),

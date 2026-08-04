@@ -1,0 +1,3017 @@
+{
+  "schema_version": "changeset3-final-wire-approved-deltas/v1",
+  "reference_path": "docs/changeset3/pre_identity_authority_refactor_reference/manifest.json",
+  "reference_sha256": "95ae1518698f0b26beead7a7374f9cd372b3c44c176ff774df4ac7b6aabc017a",
+  "entries": [
+    {
+      "capture_key": "active\u0000codex.admin_test.compact\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.admin_test.compact\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "13671077b66a29874a2578b5240319092ef2a1043228e433e9b006b5e53e7513",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.admin_test.compact\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/ordered_fields",
+      "before_sha256": "ec39a35e47054d4a853106d4eac59c8ec7681a2f47f1486653db421be8fd2980",
+      "after_sha256": "ed2ed5cf528880faaf71eaa8c14cdffa64e151091b139afab37066559f211e1a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.admin_test.compact\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "3f8a1d2238303444feba31051d6a965e6b0712831958242babeab338c0182da7",
+      "after_sha256": "0df633a52e6ff33472f4a7b9ca796368ac1d676869b307dd1e049455150ab12b",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.admin_test.compact\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/type_shape",
+      "before_sha256": "553a58d9a24696cb528d4a13a56f9c444d1a3add40d0ac0bb1d44e33c0864883",
+      "after_sha256": "ac6daea231efdb8948022592d96b8de974a898c70c0448ab12ac65ac35b25c87",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.admin_test.compact\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "ffb4d93cdcf7139d978d6f70e5da34d51e4967dc9b92eb266ef3ffd2d43954d3",
+      "after_sha256": "ba2460205f1898754a2b72e7f5f43341f591bf52e96d7a09a669319b0c7ae1bf",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.admin_test.compact\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "b2202f00ce95be2ef830b42c2e124ec47041ecbb21f41fb21010dc9cccbb40a9",
+      "after_sha256": "0f3ea05c465b3f9af535b57d0456d2b3af3ca4bb9db723a7d1d1cda180174266",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.admin_test.compact\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "b6dca4778f8b8f049bf4b29c722cf27180faeac9f859a7a04ae58cc99e0e654e",
+      "after_sha256": "aad3d739f3e19a83f64c2f6c03fcc5b7deb1aa7808782974bb66d5724b7c8604",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.admin_test.compact\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "5bd09e9d8daa1bd425560e3346260044fd5b66944465fde0f284829ad1c70dd4",
+      "after_sha256": "8a07aa04ad422f8b7ecccdd7a5d3801e06320336be14f66c347317354e50d840",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.admin_test.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "708fda4ef286eb890eafba977ebc34d99168cf51a00a3a2ff9331f98da9f660a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.admin_test.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "a30f4ef42176d28f0e2293533c5f532e9c9c5696c68813b35315d17edc44f6b1",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.admin_test.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/ordered_fields",
+      "before_sha256": "a6b6b8f84faf6045d4448068326034bef273b8be96538bce8642226b0d6583a3",
+      "after_sha256": "6af85310248af197674038039b0d1c730a2fc9e194f78f86a1565b3a6bf88f9a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.admin_test.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "09f4b98cae7d4a8e3a3319da068f55e94d2a80c2f16e137b54f7d3d87916afe5",
+      "after_sha256": "dda9c246c715eec046a121e5f74797ecb8d4be44eddccf6b1fb78237d8cd1c26",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.admin_test.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/type_shape",
+      "before_sha256": "e3d2c7a618abb519c13bbcef88aac0769d2864eb39357ca0ce16461c65e8c21e",
+      "after_sha256": "5c8cd4aed431db785d119988e2781b725288f864e4a33d60ba06270b9cdb2dd7",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.admin_test.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "8a32e50c0cffbb29012f6ca97f4cd8c985e714e2341c7ab73ace896eeb8226d0",
+      "after_sha256": "c07bf2cda4ee8160434910ba83d6d1ba69a6b25b18ffd6188d737cdfee93bcae",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.admin_test.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "84aaa02d70fa2e41dd9f3f905f4b2f477b2f7124ba60414680c9512d7579893c",
+      "after_sha256": "5086786669c4e746eebe81b0e29ada3dbf7cd3df86a7d271561d4c334823de0b",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.admin_test.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "926a621cc23baccf57275ffdfa7368f85362a2d14e4b96f8c4301ea371444159",
+      "after_sha256": "638d1953fe4ba6b4f67c3d433d5aabbfd343e58914294afc0148843c1d210ce3",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.admin_test.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "a629d181f3d3dc19ac3e76fc97bf1ca3d03e6ddb79fde231f150cdd7661c35d2",
+      "after_sha256": "9ecc0c5da9cc042e5c6d234058f678855ded9667e18a9ae1bdb6e2fddabe5acc",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.alpha_search.direct\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/alpha/search\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.alpha_search.direct\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/alpha/search\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "1253e9373e781b7500266caa55150e08e210bc8cd8cc70d89985e3600155e860",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.alpha_search.direct\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/alpha/search\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "8d0ccf467e181a082b5c964f862e41a8ab269ee4942e5d6bf5b9bc4918ec6c14",
+      "after_sha256": "aaad1653cb7f9db1bab1438dbdc6996512a335587db210e6b9e8ef61ccc55e71",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.alpha_search.direct\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/alpha/search\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "a6f5f4641b9a76aa093625b30c459ecde201e497d9587d8a30b4499b5a830a55",
+      "after_sha256": "4131fa7facdcfebb1355f4619e726dfe8d578f62975221b5109f6a101352fce6",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.alpha_search.direct\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/alpha/search\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "17544d29842600a471cdb16c1a14240722498f7b1bca45dbe13ae2a5acf5bdd6",
+      "after_sha256": "2daf00ded030cc1ae011cdd5003a0525bed9dd4bd44fd5c8d965a75c07c16b6e",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.alpha_search.direct\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/alpha/search\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "bc1e821abb173c13a92161fd45e3d20b29a3b00c812511753d53b80208f27157",
+      "after_sha256": "3dfc1ac05045687a3df95768366cba61cdc4b7b6ee4b82b7378e233201b00ea5",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.alpha_search.pat_fallback\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "708fda4ef286eb890eafba977ebc34d99168cf51a00a3a2ff9331f98da9f660a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.alpha_search.pat_fallback\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "a30f4ef42176d28f0e2293533c5f532e9c9c5696c68813b35315d17edc44f6b1",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.alpha_search.pat_fallback\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/ordered_fields",
+      "before_sha256": "a6b6b8f84faf6045d4448068326034bef273b8be96538bce8642226b0d6583a3",
+      "after_sha256": "6af85310248af197674038039b0d1c730a2fc9e194f78f86a1565b3a6bf88f9a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.alpha_search.pat_fallback\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "09f4b98cae7d4a8e3a3319da068f55e94d2a80c2f16e137b54f7d3d87916afe5",
+      "after_sha256": "dda9c246c715eec046a121e5f74797ecb8d4be44eddccf6b1fb78237d8cd1c26",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.alpha_search.pat_fallback\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/type_shape",
+      "before_sha256": "e3d2c7a618abb519c13bbcef88aac0769d2864eb39357ca0ce16461c65e8c21e",
+      "after_sha256": "5c8cd4aed431db785d119988e2781b725288f864e4a33d60ba06270b9cdb2dd7",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.alpha_search.pat_fallback\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "51ed5b82ee1afd17489ade49edf00b8cee437596314efb37cfe4acea3bdc3151",
+      "after_sha256": "a09cbb2c208b8e8e0738de4e7cdc5138a1fc8695e526b187ad50a108215c3957",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.alpha_search.pat_fallback\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "6053573bfb0ec6ca447b3868d2dc110ddf7bb6b8f2de3eb722e222ebdaf0aed2",
+      "after_sha256": "2c06d3a3efeae322edc43f37148871a368b38dc6ab330cdf5e6e691a177cc5eb",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.alpha_search.pat_fallback\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "e2df5470fc7285499b18ddc50d21f0a64ddb3c26cb6da7bb981eec5e59c47261",
+      "after_sha256": "c119b5c22fd9d956332b4c64dd513c041cfeb2d1459a831932ba835bda78e55d",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.alpha_search.pat_fallback\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "a629d181f3d3dc19ac3e76fc97bf1ca3d03e6ddb79fde231f150cdd7661c35d2",
+      "after_sha256": "9ecc0c5da9cc042e5c6d234058f678855ded9667e18a9ae1bdb6e2fddabe5acc",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.files.blob_upload\u0000PUT\u0000*.oaiusercontent.com\u0000/{server_returned_path}\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.files.blob_upload\u0000PUT\u0000*.oaiusercontent.com\u0000/{server_returned_path}\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "b7a56873cd771f2c446d369b649430b65a756ba278ff97ec81bb6f55b2e73569",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.files.blob_upload\u0000PUT\u0000*.oaiusercontent.com\u0000/{server_returned_path}\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "46809ec8814311f5417e1b62cf461b747bdac19a4690a2e98ca1e2b840817303",
+      "after_sha256": "7c30de74706c5d5d1212e89318781375073aa21a8e4454ae6f939d9f6e8f60ed",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.files.blob_upload\u0000PUT\u0000*.oaiusercontent.com\u0000/{server_returned_path}\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "07293b4a9ad7fd5a5263d3b60fc22d67737eecb844eb80e310a71f4877ce7c1e",
+      "after_sha256": "81fb5d0d48881cd6fb54e0a1c801a585637f1f5ceac51f2bcc9521ac42a09b3d",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.files.blob_upload\u0000PUT\u0000*.oaiusercontent.com\u0000/{server_returned_path}\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "14f2657e667b8fd0da9fd8cb9684f7e78b21ffcbd8fa555d1f443d1d123afbb1",
+      "after_sha256": "9900ccce4e913e9e1253b69eb36949c52e1e63d67081151f58a4056fd92a32c6",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.files.blob_upload\u0000PUT\u0000*.oaiusercontent.com\u0000/{server_returned_path}\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "80bb238e204fb47ef3e620764bc0134c926c37b4be6414e9bae8d17cd6253686",
+      "after_sha256": "de9c252e411618e0418fa0ac0076053110618b3f04a897d8f963f13ae9e74e23",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "da4ea2a5506f2693eae190d9360a1f31793c98a1adade51d93533a6f520ace1c",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files\u0000http",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "53d9e477789d7577b49cb3564a64510f21d8e122b81f684fa0f76053e619853d",
+      "after_sha256": "0d17e191b4dd720ae06ca735c9f5cc0fc42d76cb41a217c9bd6ed2fb47a46040",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "6cf652f00b819162d028ad92826389d2040c344ef21fc3e9ffe8baae8c61561f",
+      "after_sha256": "eb18e0df8bc6033413f33950bf9e4c2c94d47d3a16b57c7b2672d4e25b3f223f",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "c8d7521b84bde3ee3128c90497d3edeaaddef58a2f4715943e5f1dd6fcb8bb30",
+      "after_sha256": "3be5a9a8cbfe5f2020736aa4260950b64879f734793879789773356c6eb607af",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "68f52623d9699cd0f965ff05a8b79929eb5976eac797d4b4a847f46163b77e89",
+      "after_sha256": "9a9a17a4fd2e56ef9d581ff0067a592f336e6b27f0e4f6b65ac9ddf88ec9b5d8",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "dea9d4fee386dcb43992c27cd81413796ce7d7d1b364569a3a4a8b4cd6497c15",
+      "after_sha256": "7fca4f99a74156a4c411022eb64fb4597ff9457772cbf80c91dd5837bfa4f2c3",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files/{file_id}/uploaded\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files/{file_id}/uploaded\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files/{file_id}/uploaded\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "6cf652f00b819162d028ad92826389d2040c344ef21fc3e9ffe8baae8c61561f",
+      "after_sha256": "fee29ed2d58add64e1f81a4d28ef5e88a160a7510b58c519cd7ac25511320770",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files/{file_id}/uploaded\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "c8d7521b84bde3ee3128c90497d3edeaaddef58a2f4715943e5f1dd6fcb8bb30",
+      "after_sha256": "128095e696c0f7fb7aaeb6a660238d65d304c16a191ac27b1703c8c73c8e56d1",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files/{file_id}/uploaded\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "b8938b3d9d7e8f4412839a0b939a050bdda621e55bf28b8f169141c96c8fc072",
+      "after_sha256": "93e17f8b278d96c0b3308f3bd02d5abd6d24c444a5c76acb0849ae5727c987a4",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files/{file_id}/uploaded\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "dea9d4fee386dcb43992c27cd81413796ce7d7d1b364569a3a4a8b4cd6497c15",
+      "after_sha256": "bd3e6325b9303a21c6805f04926bb6f7c4a17c809fabc556dad916ce0c4a2204",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.images.oauth_test\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/edits\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.images.oauth_test\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/edits\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "da4ea2a5506f2693eae190d9360a1f31793c98a1adade51d93533a6f520ace1c",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.images.oauth_test\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/edits\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "9ec07dde8c82a78298d99b45e063dab92fa254da8b8b45995a3a03b7505234db",
+      "after_sha256": "5ed81080f853007115729a68bc94bbf56372a748cd446233bac9e2c4a8f0ea65",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.images.oauth_test\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/edits\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "8861b6031cd67b177763d3886f3a36b6e09e9092b876fc06f6fb34f50196d4f2",
+      "after_sha256": "0835f642db98625e0d3681332518693870de60a2559651e5f3bff4602d43d4c1",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.images.oauth_test\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/edits\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "9ffe001bc516413a934a5dc374557123f02c286d77a00efe8fd4a5184525f29f",
+      "after_sha256": "21a43b891754bf620261516a98d6910658464fa3271f7d9184a2513747e9f8f6",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.images.oauth_test\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/edits\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "1a29349d28a49ee61cef20513d80b8a81314ba7f1e890e87429d4aa25bd7048a",
+      "after_sha256": "da71d30e05e2c9b8ab507158b9a8deb7ef5ec130848d75c0b48aa1205efcebc9",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.images.oauth_test\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/generations\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.images.oauth_test\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/generations\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "031b4af5197ec30a926f48cf40e11a7dbc470048a21e4003b7a3c07c5dab1baa",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.images.oauth_test\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/generations\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "9ec07dde8c82a78298d99b45e063dab92fa254da8b8b45995a3a03b7505234db",
+      "after_sha256": "d3866486a4aa2c89721e6f6d220c664c6624846ba137857400deac02af2238fc",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.images.oauth_test\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/generations\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "8861b6031cd67b177763d3886f3a36b6e09e9092b876fc06f6fb34f50196d4f2",
+      "after_sha256": "f486f9850778bb2dd41f557f89bb9d0e98151efeb69adfc28d55188e4d251578",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.images.oauth_test\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/generations\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "25c6a953b56eb073d02612d3c7e38de1910f49e7b02c55ea7c91f4b5b929343c",
+      "after_sha256": "d0fcce25334d208a72bffc2924f1d130c399d66ae401e99c8f3899f3f9bbf8b9",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.images.oauth_test\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/generations\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "1a29349d28a49ee61cef20513d80b8a81314ba7f1e890e87429d4aa25bd7048a",
+      "after_sha256": "395396d2f81d0ac08795a1b02f27570f6eac561f56ba287ee6d61ad86bd1c077",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.images.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/edits\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.images.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/edits\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "da4ea2a5506f2693eae190d9360a1f31793c98a1adade51d93533a6f520ace1c",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.images.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/edits\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "b26ba9836448262682ca3e2a625ddae3bedbfbed14d7f488517f15162a4f5eb7",
+      "after_sha256": "5633c3ff42eb41a34fa42fa9e849950284dae586826be3b397a3c320d675dc20",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.images.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/edits\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "53d4451cac3103c8d02e130b416079a2d46410e35f3d92baf80e057dbcaa6a7d",
+      "after_sha256": "2b4fe0f9aefb16aa4d7189eff67415a9e2b8a862e6fc2510efec0a9b3a193ec9",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.images.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/edits\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "cb7a0d9ff8e8a24f6d337b97e427124512b6d52a3d6512c6ae516836de7d5240",
+      "after_sha256": "a20bf8f4fcb2f4d1eb72f20370843fe106c84745f98276b16cd79a04afcb459f",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.images.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/edits\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "1a29349d28a49ee61cef20513d80b8a81314ba7f1e890e87429d4aa25bd7048a",
+      "after_sha256": "da71d30e05e2c9b8ab507158b9a8deb7ef5ec130848d75c0b48aa1205efcebc9",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.images.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/generations\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.images.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/generations\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "031b4af5197ec30a926f48cf40e11a7dbc470048a21e4003b7a3c07c5dab1baa",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.images.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/generations\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "b26ba9836448262682ca3e2a625ddae3bedbfbed14d7f488517f15162a4f5eb7",
+      "after_sha256": "eeb986cd736f5d1daac1819f96f216ea154bba3480bd1ba713b6e6c2a4ad34e2",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.images.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/generations\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "53d4451cac3103c8d02e130b416079a2d46410e35f3d92baf80e057dbcaa6a7d",
+      "after_sha256": "e684c9f3e882433df3a619a93792f4c233932055bd532de8fd09a2b58d9d4586",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.images.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/generations\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "412b8e56e8b25bab219067b5ddabfe791eaadec699081c195b8f96ad40ef2e5f",
+      "after_sha256": "540a583168b7b0f1884e0850ef5ab76ab3bea6096feaf1e3ab9e3cce13e8a76e",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.images.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/generations\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "1a29349d28a49ee61cef20513d80b8a81314ba7f1e890e87429d4aa25bd7048a",
+      "after_sha256": "395396d2f81d0ac08795a1b02f27570f6eac561f56ba287ee6d61ad86bd1c077",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.models.list\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/models\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.models.list\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/models\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "4d986d0aa17e40002dc98d574ea85d9fd4d2847a308a274fa2a6a98996e28387",
+      "after_sha256": "cf1729839c0ea356227e50cc50eb9f9f5f314b397473d050615dcd7fdaa95c75",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.models.list\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/models\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "ded85d8762e09c49fb210aa4ce7613fe22e321573ee25c12de9161926d1cb1d6",
+      "after_sha256": "3257da886bd1d767fa4166b996221884c292198295640a3581735c7136027b13",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.models.list\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/models\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "b378fad128219070179d30bb2023bd36f41a8b3c9468e13e1812e5f90d19236f",
+      "after_sha256": "12c7f8cab4ddbff6fb661ccf4010c88dc9412da8b6929c052da5e3b3840e97fd",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.models.list\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/models\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "e5ff51b5a2f6daf882951fa70654eac5091ff4c33509589352216fb2097ec382",
+      "after_sha256": "a741baf47e9ac5ebb105b0488281787b72a4f0da2c00f718fbdf53dd38d3aa62",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.oauth.refresh\u0000POST\u0000auth.openai.com\u0000/oauth/token\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.oauth.refresh\u0000POST\u0000auth.openai.com\u0000/oauth/token\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "482d9673cfee5de391f97fde4d1c84f9f8d6f2cf0784fcffb958b4032de7236c",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.oauth.refresh\u0000POST\u0000auth.openai.com\u0000/oauth/token\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "9c21a3c9c7be9009c82c569cc9b0645ccc6fe7452c2f709f8c3673cd98b28381",
+      "after_sha256": "7e373452101a2a2031eda8a7ff6b75180a3e1c2b7627a89ec2cdc7ba8971110c",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.oauth.refresh\u0000POST\u0000auth.openai.com\u0000/oauth/token\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "98f1a9e5abb7f626c71fe08a61c505a5cc3d53692ae47bc6f0a7ea8e12b9552c",
+      "after_sha256": "4dd946f5d8cf67127f9db131c7cac1aaa67284dab159c74d81538bc5a4a18108",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.oauth.refresh\u0000POST\u0000auth.openai.com\u0000/oauth/token\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "e24d0e04e77d091ca0f123540ed197478298854c5ce9be0b3bf0ee2c916a64d7",
+      "after_sha256": "cac6afb998245990cc99cdcb27e72a657e9280183c57f3f9e24e45d2423b21b2",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.oauth.refresh\u0000POST\u0000auth.openai.com\u0000/oauth/token\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "72853e81da5bf6bc4ef74db09eb979b0c517dd47cafbcb6d214286fc47a945d8",
+      "after_sha256": "eb0061bbc747f27e3704e8fda3a5532d587c4d372b7cbe0ba689841dc3a09f06",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.quota.wham\u0000GET\u0000chatgpt.com\u0000/backend-api/wham/rate-limit-reset-credits\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.quota.wham\u0000GET\u0000chatgpt.com\u0000/backend-api/wham/rate-limit-reset-credits\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "fe77a8b58baf57bd0a42db71b55f770dfa561a1fd681a5ed4482ea0913fda858",
+      "after_sha256": "c293983ac46dc8309c0c8caba1f9a62b093e2102bf70f7232630ed55d5d4b2ed",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.quota.wham\u0000GET\u0000chatgpt.com\u0000/backend-api/wham/rate-limit-reset-credits\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "b0c9875d777f7e3e970b80abe0c1b4c3d3f52c9118231ce610dc40017a572e3c",
+      "after_sha256": "73b61851ffafd88fce894f5f3dee358fa639488056d8267e25c33cfac7cdabe9",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.quota.wham\u0000GET\u0000chatgpt.com\u0000/backend-api/wham/rate-limit-reset-credits\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "213d72ec89eb185316079950430664eb7be25c69d210a41366a23123a734e705",
+      "after_sha256": "36e699f52f9fb1050933547cc6fba9f14045b9c6612e0b198079e4e4482b8ee6",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.quota.wham\u0000GET\u0000chatgpt.com\u0000/backend-api/wham/rate-limit-reset-credits\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "0a41184011c76e48fd708f71770bee243b40bfad871193ad59831b5357be9a05",
+      "after_sha256": "6ca4c82365ebffeb10b3ec0bf00f7bf112010fc3f57a099780af6cb45645c2a8",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.quota.wham\u0000GET\u0000chatgpt.com\u0000/backend-api/wham/usage\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.quota.wham\u0000GET\u0000chatgpt.com\u0000/backend-api/wham/usage\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "fe77a8b58baf57bd0a42db71b55f770dfa561a1fd681a5ed4482ea0913fda858",
+      "after_sha256": "85114d63f8024b8a34db53f13326a34cb35cecc403997ea92c09f80c43eb09f0",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.quota.wham\u0000GET\u0000chatgpt.com\u0000/backend-api/wham/usage\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "b0c9875d777f7e3e970b80abe0c1b4c3d3f52c9118231ce610dc40017a572e3c",
+      "after_sha256": "03956746b4f1bc09d1b94241e561b4799b40727c41cd36ae489b69782ecec61a",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.quota.wham\u0000GET\u0000chatgpt.com\u0000/backend-api/wham/usage\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "213d72ec89eb185316079950430664eb7be25c69d210a41366a23123a734e705",
+      "after_sha256": "f60ac01f9b867a81b65db9671e933e62f0b2372a9eddc74fcda67454dfcd356e",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.quota.wham\u0000GET\u0000chatgpt.com\u0000/backend-api/wham/usage\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "0a41184011c76e48fd708f71770bee243b40bfad871193ad59831b5357be9a05",
+      "after_sha256": "6ca4c82365ebffeb10b3ec0bf00f7bf112010fc3f57a099780af6cb45645c2a8",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.quota.wham\u0000POST\u0000chatgpt.com\u0000/backend-api/wham/rate-limit-reset-credits/consume\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.quota.wham\u0000POST\u0000chatgpt.com\u0000/backend-api/wham/rate-limit-reset-credits/consume\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "031b4af5197ec30a926f48cf40e11a7dbc470048a21e4003b7a3c07c5dab1baa",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.quota.wham\u0000POST\u0000chatgpt.com\u0000/backend-api/wham/rate-limit-reset-credits/consume\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "fe77a8b58baf57bd0a42db71b55f770dfa561a1fd681a5ed4482ea0913fda858",
+      "after_sha256": "67b2baded0ecf0166a78d3a57994e6a1ab1e1a7ec194061b02fc2a2328ade644",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.quota.wham\u0000POST\u0000chatgpt.com\u0000/backend-api/wham/rate-limit-reset-credits/consume\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "b0c9875d777f7e3e970b80abe0c1b4c3d3f52c9118231ce610dc40017a572e3c",
+      "after_sha256": "f5ff832e35ed721fa0882b5a0103548ee8fe6362f5ea8f361ccf0f7b8f9ebf98",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.quota.wham\u0000POST\u0000chatgpt.com\u0000/backend-api/wham/rate-limit-reset-credits/consume\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "213d72ec89eb185316079950430664eb7be25c69d210a41366a23123a734e705",
+      "after_sha256": "408efce8c18a83c565a14c376225c04bfd45e588fa5b2b7a5672c62714f58f88",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.quota.wham\u0000POST\u0000chatgpt.com\u0000/backend-api/wham/rate-limit-reset-credits/consume\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "c6061973f5207478b6f52463fe48c08f3e21c618a12fbca73affbc0ef0f14ae1",
+      "after_sha256": "f4cef0934d33f8225d6fb6072012a8cf375cc83b7c362383d804ce81bbca59cc",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.realtime.calls\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/realtime/calls\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.realtime.calls\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/realtime/calls\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "76a50887d8f1c2e9301755428990ad81479ee21c25b43215cf524541e0503269",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.realtime.calls\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/realtime/calls\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "4dc0f28679aa6ad85936b1a1fb8bc291b979397218eaf3590623cbe61752ac3b",
+      "after_sha256": "faabd7d60e01749d8c2c3a39f4905e7b2da47f940bc7dee0ee7bf2267f2d0f18",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.realtime.calls\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/realtime/calls\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "da35b859c68735521b97c6cc411a83511e41f65eb53688f38c29fdfc544127fb",
+      "after_sha256": "3ff8d8d43822ba8761bb36b4072b6240df3f51591aa8b7eeeaaebcc04f88533f",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.realtime.calls\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/realtime/calls\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "3ecfdf00958f280ac9e9921a3fbea066061176a36734ab97d3484dacb0b197c0",
+      "after_sha256": "fb44d815248c7b4bb6a869369cff658c8f6fbb0dda8890722064232bc41edb4d",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.realtime.calls\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/realtime/calls\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "38a2d0d76e79edc61c99e367cce6944cbedc9e5c020de5a1d45503d61bc35ca6",
+      "after_sha256": "fbae67ed46797f2cff4f5489db7ec5e29d34ad6cae0dea3bdf9bfce04a9eddeb",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.realtime.sideband\u0000GET\u0000api.openai.com\u0000/v1/realtime\u0000websocket",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.realtime.sideband\u0000GET\u0000api.openai.com\u0000/v1/realtime\u0000websocket",
+      "path": "/body/ordered_fields",
+      "before_sha256": "3303cb6e3abf9576a7a76239fe6908cd8874d7561caca536c9fef609efa8f89f",
+      "after_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.realtime.sideband\u0000GET\u0000api.openai.com\u0000/v1/realtime\u0000websocket",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "fe70d1cdc55974f6e2fc2d07dcb36198c74b2ad1a7e4ebc69768a501552ddca7",
+      "after_sha256": "b4b16dad390bac4c7ce42014c594fa668910b49ec1b7771a17891c187d71e0ab",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.realtime.sideband\u0000GET\u0000api.openai.com\u0000/v1/realtime\u0000websocket",
+      "path": "/body/type_shape",
+      "before_sha256": "65ba2c3652820cdb3959727ac090470b2f98338874abe9a766407542133d8286",
+      "after_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.realtime.sideband\u0000GET\u0000api.openai.com\u0000/v1/realtime\u0000websocket",
+      "path": "/bundle_digest",
+      "before_sha256": "1ccc219b8f68311d664ba79a4cbd396afe9e56afaabc97502d93a350c6d3e5b5",
+      "after_sha256": "d44270495290e91c41943e633308a5ddcbbffd118b3b561fcf861133731cf7a2",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.realtime.sideband\u0000GET\u0000api.openai.com\u0000/v1/realtime\u0000websocket",
+      "path": "/connection_identity_digest",
+      "before_sha256": "acac93f1cb45a6898036dd6db1f0ef960e29103a61341d5950d6e1cc0038d395",
+      "after_sha256": "f5b64228ccb571691f6f7c3266048b511b4d7b20f6d0ef54e7d8b4818bf2be5b",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.realtime.sideband\u0000GET\u0000api.openai.com\u0000/v1/realtime\u0000websocket",
+      "path": "/connection_pool_digest",
+      "before_sha256": "9c683d692d52df24852d39a624150117fd70c3a16def075a4ad7aaf7a7658d28",
+      "after_sha256": "c92907be7477cd7623aef4efd870c92f6b96f50de7605ea26bc0026d9cdfe837",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.realtime.sideband\u0000GET\u0000api.openai.com\u0000/v1/realtime\u0000websocket",
+      "path": "/ordered_headers",
+      "before_sha256": "a5afc2192d9991f78b5004e4258d28ba3c7d34b293a5312b64441ea24ae105f5",
+      "after_sha256": "7744719705fa854ca6ad5950741e168141476454e811441274abddb4b68f2931",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.realtime.sideband\u0000GET\u0000api.openai.com\u0000/v1/realtime\u0000websocket",
+      "path": "/websocket/event_matrix",
+      "before_sha256": "5802ae77a96db98b54b16864055ad255de6b91eb52c1d9225e421341a3005c29",
+      "after_sha256": "af3626ca079a0daffeaca1fa41627e5e0948bfdc93cac7c7890d452989127b2c",
+      "reason": "WebSocket 握手压缩与出站帧改由 Executor session 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.realtime.sideband\u0000GET\u0000api.openai.com\u0000/v1/realtime\u0000websocket",
+      "path": "/websocket/handshake_generated_headers",
+      "before_sha256": "45e7933183c9a05648d2aec2d359aabf3c9f5d322246b0080922492a529ca107",
+      "after_sha256": "6249426974ec4d6d1719b4f027d7bb028d616520d2317f8cc0ece9b9aa8cb8f3",
+      "reason": "WebSocket 握手压缩与出站帧改由 Executor session 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.anthropic_compat\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "708fda4ef286eb890eafba977ebc34d99168cf51a00a3a2ff9331f98da9f660a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.anthropic_compat\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "a30f4ef42176d28f0e2293533c5f532e9c9c5696c68813b35315d17edc44f6b1",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.anthropic_compat\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/ordered_fields",
+      "before_sha256": "a6b6b8f84faf6045d4448068326034bef273b8be96538bce8642226b0d6583a3",
+      "after_sha256": "6af85310248af197674038039b0d1c730a2fc9e194f78f86a1565b3a6bf88f9a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.anthropic_compat\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "09f4b98cae7d4a8e3a3319da068f55e94d2a80c2f16e137b54f7d3d87916afe5",
+      "after_sha256": "dda9c246c715eec046a121e5f74797ecb8d4be44eddccf6b1fb78237d8cd1c26",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.anthropic_compat\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/type_shape",
+      "before_sha256": "e3d2c7a618abb519c13bbcef88aac0769d2864eb39357ca0ce16461c65e8c21e",
+      "after_sha256": "5c8cd4aed431db785d119988e2781b725288f864e4a33d60ba06270b9cdb2dd7",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.anthropic_compat\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "46dece5e07862c3320d95c009c6efcdac9153ec746b3fd6692c4e9d53021896c",
+      "after_sha256": "c2f58f571ca9e4d2e927d696765603e428da8d8c7b9b8b27fac43f03a77cf464",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.anthropic_compat\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "9cfa5145595688a21fa1e48fb6ffbea63b94041bc637ef1c3c7a4e6b527f5dd5",
+      "after_sha256": "8acf3defb5ccc5e022d5c21a27e3c6d4fd9e1621adecae5e6bb44cdb4456946d",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.anthropic_compat\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "8ba16bc1b7258ec17edd250678ea3e0132fc25c08735326368d68f682aa2b26b",
+      "after_sha256": "e468b3e0c9de4f36d58282618be810a0413eba0b223fdd30e4ecc7812443e4c1",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.anthropic_compat\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "a629d181f3d3dc19ac3e76fc97bf1ca3d03e6ddb79fde231f150cdd7661c35d2",
+      "after_sha256": "9ecc0c5da9cc042e5c6d234058f678855ded9667e18a9ae1bdb6e2fddabe5acc",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.chat_completions\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "708fda4ef286eb890eafba977ebc34d99168cf51a00a3a2ff9331f98da9f660a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.chat_completions\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "a30f4ef42176d28f0e2293533c5f532e9c9c5696c68813b35315d17edc44f6b1",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.chat_completions\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/ordered_fields",
+      "before_sha256": "a6b6b8f84faf6045d4448068326034bef273b8be96538bce8642226b0d6583a3",
+      "after_sha256": "6af85310248af197674038039b0d1c730a2fc9e194f78f86a1565b3a6bf88f9a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.chat_completions\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "09f4b98cae7d4a8e3a3319da068f55e94d2a80c2f16e137b54f7d3d87916afe5",
+      "after_sha256": "dda9c246c715eec046a121e5f74797ecb8d4be44eddccf6b1fb78237d8cd1c26",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.chat_completions\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/type_shape",
+      "before_sha256": "e3d2c7a618abb519c13bbcef88aac0769d2864eb39357ca0ce16461c65e8c21e",
+      "after_sha256": "5c8cd4aed431db785d119988e2781b725288f864e4a33d60ba06270b9cdb2dd7",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.chat_completions\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "a19f8210317f3c3739912b4c71cdf93d306cf64392bd73854b17400d2aaff6b5",
+      "after_sha256": "501410b99ebe296f1d374a361793ba11cedab0758b00b9fbd8377655d9487f29",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.chat_completions\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "3235f74cdfe6e9237d5dfdd42e48395c4e450d6d20e0e14d62104af087b86bb4",
+      "after_sha256": "2e08efab6b7b74ca05e1d8adf4ed8dcba242371046f9072efe8782bbde0f6b9f",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.chat_completions\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "d2f0747cb996926d9b626c5d835a0f13e6d89ac00f62070e14eabc5bbd034c1a",
+      "after_sha256": "108f5a33e19b4978d727a3621003ca195e84f88caa6587d53a3e0292595a50ef",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.chat_completions\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "a629d181f3d3dc19ac3e76fc97bf1ca3d03e6ddb79fde231f150cdd7661c35d2",
+      "after_sha256": "9ecc0c5da9cc042e5c6d234058f678855ded9667e18a9ae1bdb6e2fddabe5acc",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "708fda4ef286eb890eafba977ebc34d99168cf51a00a3a2ff9331f98da9f660a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "a30f4ef42176d28f0e2293533c5f532e9c9c5696c68813b35315d17edc44f6b1",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/ordered_fields",
+      "before_sha256": "a6b6b8f84faf6045d4448068326034bef273b8be96538bce8642226b0d6583a3",
+      "after_sha256": "6af85310248af197674038039b0d1c730a2fc9e194f78f86a1565b3a6bf88f9a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "09f4b98cae7d4a8e3a3319da068f55e94d2a80c2f16e137b54f7d3d87916afe5",
+      "after_sha256": "dda9c246c715eec046a121e5f74797ecb8d4be44eddccf6b1fb78237d8cd1c26",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/type_shape",
+      "before_sha256": "e3d2c7a618abb519c13bbcef88aac0769d2864eb39357ca0ce16461c65e8c21e",
+      "after_sha256": "5c8cd4aed431db785d119988e2781b725288f864e4a33d60ba06270b9cdb2dd7",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "4d52968a6c66aab6eaca2a6a66861296171b89586d8a69687d8100b51dbd8775",
+      "after_sha256": "9b97dd045b235aac74c682119b99bb728fb264fd8dbedc8e7d9bf4d7dcce53fc",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "b7eb36a22a557724ad53e83dd85eee96cf4f38761abc6c1b6650792f70f3084f",
+      "after_sha256": "f4de291deae31f52aa48d62b6a332a651ac577cac4df2546d21efed7acaf9b6b",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "adc706362c8757cdd735cf12b44c178202b7b391f07363de16b94fa7a4dc78b9",
+      "after_sha256": "a8e2bec21925a7b3506542c87d9760395810e50bf4fe50de62c3847bd4cd6d8e",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "a629d181f3d3dc19ac3e76fc97bf1ca3d03e6ddb79fde231f150cdd7661c35d2",
+      "after_sha256": "9ecc0c5da9cc042e5c6d234058f678855ded9667e18a9ae1bdb6e2fddabe5acc",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "13671077b66a29874a2578b5240319092ef2a1043228e433e9b006b5e53e7513",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/ordered_fields",
+      "before_sha256": "ec39a35e47054d4a853106d4eac59c8ec7681a2f47f1486653db421be8fd2980",
+      "after_sha256": "ed2ed5cf528880faaf71eaa8c14cdffa64e151091b139afab37066559f211e1a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "3f8a1d2238303444feba31051d6a965e6b0712831958242babeab338c0182da7",
+      "after_sha256": "0e4f652dd5aa607aabadf80e2542cd92f84303c12e4ca4201a6c2903d6e090a9",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/type_shape",
+      "before_sha256": "553a58d9a24696cb528d4a13a56f9c444d1a3add40d0ac0bb1d44e33c0864883",
+      "after_sha256": "ac6daea231efdb8948022592d96b8de974a898c70c0448ab12ac65ac35b25c87",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "4d52968a6c66aab6eaca2a6a66861296171b89586d8a69687d8100b51dbd8775",
+      "after_sha256": "e741bd43dd1e2bbdb976d71cf52d98824cdebd7812f382d0b7f7e412d7cb92af",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "b7eb36a22a557724ad53e83dd85eee96cf4f38761abc6c1b6650792f70f3084f",
+      "after_sha256": "905f2ea65a4fbad01bb29a84c6e7ceeb9de844e76ffd413b7fb795f91e854eef",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "a9c1d37f07ec4d52cc39198faf0efcfc5ea1ec97f0d9dc75f3e3adb74e18eeac",
+      "after_sha256": "bf4e163841bdedee325450a7fa2b4b158915e38d89a01fe57ba71fcffd746a44",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "5bd09e9d8daa1bd425560e3346260044fd5b66944465fde0f284829ad1c70dd4",
+      "after_sha256": "05c605ed324c91189dc78419277e4ebddf21b9498e9dcebc5a8ffdb2292f161c",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "708fda4ef286eb890eafba977ebc34d99168cf51a00a3a2ff9331f98da9f660a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "a30f4ef42176d28f0e2293533c5f532e9c9c5696c68813b35315d17edc44f6b1",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/ordered_fields",
+      "before_sha256": "a6b6b8f84faf6045d4448068326034bef273b8be96538bce8642226b0d6583a3",
+      "after_sha256": "6af85310248af197674038039b0d1c730a2fc9e194f78f86a1565b3a6bf88f9a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "09f4b98cae7d4a8e3a3319da068f55e94d2a80c2f16e137b54f7d3d87916afe5",
+      "after_sha256": "dda9c246c715eec046a121e5f74797ecb8d4be44eddccf6b1fb78237d8cd1c26",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/type_shape",
+      "before_sha256": "e3d2c7a618abb519c13bbcef88aac0769d2864eb39357ca0ce16461c65e8c21e",
+      "after_sha256": "5c8cd4aed431db785d119988e2781b725288f864e4a33d60ba06270b9cdb2dd7",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "0eccd7642123a038dab3771242c2b4a5af822ffd215aca195083ffc1981f615b",
+      "after_sha256": "660ec5cd3f9bbeffd2d093483694cb5fee917c09206eaac0406125796283379c",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "e729bb02b3c1255045273f921daf345902d84a0c42c1edf92ca53769f472d626",
+      "after_sha256": "2a91d170c8e6933a04bbc875702796bd5050d2c0c8315595aece1b0a0e476c33",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "7e39c49def15ad6e0d1533eb8c68f6b19f6d4536dfa09602cd95e2bc007d363a",
+      "after_sha256": "f55df1918ef57dc291ac5748b4529be1c441d79a8ab5ed0a32f8c5866a8cda33",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "a629d181f3d3dc19ac3e76fc97bf1ca3d03e6ddb79fde231f150cdd7661c35d2",
+      "after_sha256": "9ecc0c5da9cc042e5c6d234058f678855ded9667e18a9ae1bdb6e2fddabe5acc",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "13671077b66a29874a2578b5240319092ef2a1043228e433e9b006b5e53e7513",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/ordered_fields",
+      "before_sha256": "ec39a35e47054d4a853106d4eac59c8ec7681a2f47f1486653db421be8fd2980",
+      "after_sha256": "ed2ed5cf528880faaf71eaa8c14cdffa64e151091b139afab37066559f211e1a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "3f8a1d2238303444feba31051d6a965e6b0712831958242babeab338c0182da7",
+      "after_sha256": "0e4f652dd5aa607aabadf80e2542cd92f84303c12e4ca4201a6c2903d6e090a9",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/type_shape",
+      "before_sha256": "553a58d9a24696cb528d4a13a56f9c444d1a3add40d0ac0bb1d44e33c0864883",
+      "after_sha256": "ac6daea231efdb8948022592d96b8de974a898c70c0448ab12ac65ac35b25c87",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "0eccd7642123a038dab3771242c2b4a5af822ffd215aca195083ffc1981f615b",
+      "after_sha256": "5ea438d5f930f8346694dc7525f90c3bcb4f9263d80f0082a6f8ba035c4cb545",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "e729bb02b3c1255045273f921daf345902d84a0c42c1edf92ca53769f472d626",
+      "after_sha256": "59842eec381a540337996a8aae6b6706d654025ebb8cd405be97d0d8044c01b8",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "6a3bdff64d91d6bcf38e1b44d652fcfd6c497a1f085281673da72dab04397478",
+      "after_sha256": "5ccf08b538b2a7cb164d096dfdd0bde49e6d0bf655f4df9f6978420cfd54eb66",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "5bd09e9d8daa1bd425560e3346260044fd5b66944465fde0f284829ad1c70dd4",
+      "after_sha256": "05c605ed324c91189dc78419277e4ebddf21b9498e9dcebc5a8ffdb2292f161c",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/body/ordered_fields",
+      "before_sha256": "147d2d6b1c2319922b7d5a76e17c615e160af823ec069db232bc63fb09e5af3f",
+      "after_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "4a7123bc019e059b9aa63b0ad5e4a6aeed9cfeeee1f1407fcd977e5dd3a8f320",
+      "after_sha256": "b4b16dad390bac4c7ce42014c594fa668910b49ec1b7771a17891c187d71e0ab",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/body/type_shape",
+      "before_sha256": "3253f7e5cdf5eef77956a73f57f7ef992f3bb6a2553849523245d18f734c6f0d",
+      "after_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/bundle_digest",
+      "before_sha256": "9e25463f6a7bc47b61b30a8822ee1c57eb42ef17fc1c80fd39d73146b5764898",
+      "after_sha256": "33b34c75cf7c66224e427d43333f946f4c20d367fd4a01b2d9c69f1f5d81b9b0",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/connection_identity_digest",
+      "before_sha256": "c9eb03e98c254beb5bd9f74ea633c1284972e3ee352f107765aaa67869a7b299",
+      "after_sha256": "935b21ec5db6078c3db4804930119af390b1d4e530118dbac58168651c223882",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/connection_pool_digest",
+      "before_sha256": "95891d0c1d558e71f7f4027ae1559187f5eed7b5a8865f6bc046074deb36028c",
+      "after_sha256": "a8795229c22dc7aa3aaf329ef0222389b3646e13d61c12a75e3b3dab72d172fc",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/ordered_headers",
+      "before_sha256": "956df1da6980b46d6c2955c7f48dfc94702ed5fe125e903f7e56f96db7d15ecb",
+      "after_sha256": "44b02ce87aeb4142b4205af2ea87067b9106fcf14a7dcc3bad8332a8d8e61b53",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/terminal_guard_allow",
+      "before_sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa",
+      "after_sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+      "reason": "terminal Guard 在正式 adapter 后验证当前 FinalizationToken"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/terminal_guard_reason",
+      "before_sha256": "db1a7489dd56d935ddc3a0ea42f963baa60e8ffe9e1302fefa6eeb8e27dbf4ef",
+      "after_sha256": "missing",
+      "reason": "terminal Guard 在正式 adapter 后验证当前 FinalizationToken"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/websocket/event_matrix",
+      "before_sha256": "fdc496e3b955851ec46ed567d7b53e9e6abd327f3ae1978b1702ae800182c6d6",
+      "after_sha256": "27c7eca993132c2fb78e6be29e37a3266426787fab8305c4742566e1fdbc6c5e",
+      "reason": "WebSocket 握手压缩与出站帧改由 Executor session 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/websocket/handshake_generated_headers",
+      "before_sha256": "45e7933183c9a05648d2aec2d359aabf3c9f5d322246b0080922492a529ca107",
+      "after_sha256": "6249426974ec4d6d1719b4f027d7bb028d616520d2317f8cc0ece9b9aa8cb8f3",
+      "reason": "WebSocket 握手压缩与出站帧改由 Executor session 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws_http_bridge\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "708fda4ef286eb890eafba977ebc34d99168cf51a00a3a2ff9331f98da9f660a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws_http_bridge\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "a30f4ef42176d28f0e2293533c5f532e9c9c5696c68813b35315d17edc44f6b1",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws_http_bridge\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/ordered_fields",
+      "before_sha256": "a6b6b8f84faf6045d4448068326034bef273b8be96538bce8642226b0d6583a3",
+      "after_sha256": "6af85310248af197674038039b0d1c730a2fc9e194f78f86a1565b3a6bf88f9a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws_http_bridge\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "09f4b98cae7d4a8e3a3319da068f55e94d2a80c2f16e137b54f7d3d87916afe5",
+      "after_sha256": "dda9c246c715eec046a121e5f74797ecb8d4be44eddccf6b1fb78237d8cd1c26",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws_http_bridge\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/type_shape",
+      "before_sha256": "e3d2c7a618abb519c13bbcef88aac0769d2864eb39357ca0ce16461c65e8c21e",
+      "after_sha256": "5c8cd4aed431db785d119988e2781b725288f864e4a33d60ba06270b9cdb2dd7",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws_http_bridge\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "c3d56d34bf815c2ab0cdda1de089a9b3167b8c82af2e52d33284475eacb5b97c",
+      "after_sha256": "0eafca0d75b9ba035a761c5069c5bf4c4efce03034e1d271398bdd2e546fc4f3",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws_http_bridge\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "f637a3bfef28b576e70eec602124146453288a8483ea99e69bbef95e3c0cd840",
+      "after_sha256": "643518d266520bb088c12bdac775dac974f13181cf11221f045760a9ee7b73ca",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws_http_bridge\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "f9dc2d4352459441a90ae30274b9f53a77cfebc0cc086c264816712ab64c320f",
+      "after_sha256": "5f9ef678f2b2b8f9ac1a16a32fd8d9367b30038f409109325684dc3154a3b762",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws_http_bridge\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "a629d181f3d3dc19ac3e76fc97bf1ca3d03e6ddb79fde231f150cdd7661c35d2",
+      "after_sha256": "9ecc0c5da9cc042e5c6d234058f678855ded9667e18a9ae1bdb6e2fddabe5acc",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws_v2_passthrough\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws_v2_passthrough\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/body/ordered_fields",
+      "before_sha256": "147d2d6b1c2319922b7d5a76e17c615e160af823ec069db232bc63fb09e5af3f",
+      "after_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws_v2_passthrough\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "4a7123bc019e059b9aa63b0ad5e4a6aeed9cfeeee1f1407fcd977e5dd3a8f320",
+      "after_sha256": "b4b16dad390bac4c7ce42014c594fa668910b49ec1b7771a17891c187d71e0ab",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws_v2_passthrough\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/body/type_shape",
+      "before_sha256": "3253f7e5cdf5eef77956a73f57f7ef992f3bb6a2553849523245d18f734c6f0d",
+      "after_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws_v2_passthrough\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/bundle_digest",
+      "before_sha256": "fa0312baf0b5d6d2e9435ce24d8a18a836a19f8f60fcc1b8298e35c8d3af3c38",
+      "after_sha256": "67026437465b40e0408382a75cc6cee56eb5935dbbae69f17c1fc415621b94cb",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws_v2_passthrough\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/connection_identity_digest",
+      "before_sha256": "01b9d285fc033b5dea6b42732a361e44b224453f85fe61bc85370dd8e39f20cf",
+      "after_sha256": "c7695ce9df642fd92d7b1be5cfce54d47d7e3c4bfbdfff87b563f1c2aa60ce63",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws_v2_passthrough\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/connection_pool_digest",
+      "before_sha256": "c3e577e80dc5c150a5b6c4631781cbee7f0a1518679909a091c5068efdb03e37",
+      "after_sha256": "52a64e2c0fdede290f7d769fa1b3ad32cf0c6d1920e9f0e0d372acd5ba0005c0",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws_v2_passthrough\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/ordered_headers",
+      "before_sha256": "956df1da6980b46d6c2955c7f48dfc94702ed5fe125e903f7e56f96db7d15ecb",
+      "after_sha256": "44b02ce87aeb4142b4205af2ea87067b9106fcf14a7dcc3bad8332a8d8e61b53",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws_v2_passthrough\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/terminal_guard_allow",
+      "before_sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa",
+      "after_sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+      "reason": "terminal Guard 在正式 adapter 后验证当前 FinalizationToken"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws_v2_passthrough\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/terminal_guard_reason",
+      "before_sha256": "db1a7489dd56d935ddc3a0ea42f963baa60e8ffe9e1302fefa6eeb8e27dbf4ef",
+      "after_sha256": "missing",
+      "reason": "terminal Guard 在正式 adapter 后验证当前 FinalizationToken"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws_v2_passthrough\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/websocket/event_matrix",
+      "before_sha256": "fdc496e3b955851ec46ed567d7b53e9e6abd327f3ae1978b1702ae800182c6d6",
+      "after_sha256": "27c7eca993132c2fb78e6be29e37a3266426787fab8305c4742566e1fdbc6c5e",
+      "reason": "WebSocket 握手压缩与出站帧改由 Executor session 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.responses.ws_v2_passthrough\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/websocket/handshake_generated_headers",
+      "before_sha256": "45e7933183c9a05648d2aec2d359aabf3c9f5d322246b0080922492a529ca107",
+      "after_sha256": "6249426974ec4d6d1719b4f027d7bb028d616520d2317f8cc0ece9b9aa8cb8f3",
+      "reason": "WebSocket 握手压缩与出站帧改由 Executor session 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.usage.probe\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "708fda4ef286eb890eafba977ebc34d99168cf51a00a3a2ff9331f98da9f660a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.usage.probe\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "a30f4ef42176d28f0e2293533c5f532e9c9c5696c68813b35315d17edc44f6b1",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.usage.probe\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/ordered_fields",
+      "before_sha256": "a6b6b8f84faf6045d4448068326034bef273b8be96538bce8642226b0d6583a3",
+      "after_sha256": "6af85310248af197674038039b0d1c730a2fc9e194f78f86a1565b3a6bf88f9a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.usage.probe\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "09f4b98cae7d4a8e3a3319da068f55e94d2a80c2f16e137b54f7d3d87916afe5",
+      "after_sha256": "dda9c246c715eec046a121e5f74797ecb8d4be44eddccf6b1fb78237d8cd1c26",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.usage.probe\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/type_shape",
+      "before_sha256": "e3d2c7a618abb519c13bbcef88aac0769d2864eb39357ca0ce16461c65e8c21e",
+      "after_sha256": "5c8cd4aed431db785d119988e2781b725288f864e4a33d60ba06270b9cdb2dd7",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "active\u0000codex.usage.probe\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "34a3446dfce741f767f5f4da525c2f367b1ba677d33eb76f6a89c69fd056fe60",
+      "after_sha256": "396ca025ff5449749a84a199959cb03bf57852e1c41e13e0b50c95a9325f38e2",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.usage.probe\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "193207359c5e61a2314e85b6ba7a31460812d362e611cd1534e7059f1a33000e",
+      "after_sha256": "059ec325f22088eb999a7887ee1cdc39aae665af721f9b3f8ca432090da6aaff",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.usage.probe\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "0f57cb0d3cf74980c49afd801cca24ca34cab63c68f4ca6a53aa362cec4a0637",
+      "after_sha256": "b5c9f172f3bf0b5f9432825c267574426e0ca2398fd4f4f96cb5c122b6529b8a",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "active\u0000codex.usage.probe\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "a629d181f3d3dc19ac3e76fc97bf1ca3d03e6ddb79fde231f150cdd7661c35d2",
+      "after_sha256": "9ecc0c5da9cc042e5c6d234058f678855ded9667e18a9ae1bdb6e2fddabe5acc",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.admin_test.compact\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.admin_test.compact\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "13671077b66a29874a2578b5240319092ef2a1043228e433e9b006b5e53e7513",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.admin_test.compact\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/ordered_fields",
+      "before_sha256": "ec39a35e47054d4a853106d4eac59c8ec7681a2f47f1486653db421be8fd2980",
+      "after_sha256": "ed2ed5cf528880faaf71eaa8c14cdffa64e151091b139afab37066559f211e1a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.admin_test.compact\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "3f8a1d2238303444feba31051d6a965e6b0712831958242babeab338c0182da7",
+      "after_sha256": "0df633a52e6ff33472f4a7b9ca796368ac1d676869b307dd1e049455150ab12b",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.admin_test.compact\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/type_shape",
+      "before_sha256": "553a58d9a24696cb528d4a13a56f9c444d1a3add40d0ac0bb1d44e33c0864883",
+      "after_sha256": "ac6daea231efdb8948022592d96b8de974a898c70c0448ab12ac65ac35b25c87",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.admin_test.compact\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "af2fe647fd927a798502bf3060d54d8f437c860dcc17df3817ba0bc13f8c08b4",
+      "after_sha256": "d14d48a282ebb1b3cae9700b1c77e1d6d13106e475cacb1c12f856059f747a99",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.admin_test.compact\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "08fab076a4acc9797744474f9af19aee9570e1d9330cff8899357ac2b5b9abb1",
+      "after_sha256": "e369d167072c12fb7566f037f433892d8567fc8fa5d13017024c54bb56986ad8",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.admin_test.compact\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "356f304963d86fdec8333b4e2921bc5607d59e27719705da7f8907c26f84a871",
+      "after_sha256": "7eccbfca4cd8e14e9af44fd3141f1947c799c9b058409c408c28dcaabdf621fc",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.admin_test.compact\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "5bd09e9d8daa1bd425560e3346260044fd5b66944465fde0f284829ad1c70dd4",
+      "after_sha256": "cb30793d4cf8d10ae2dae97e8be3fa89c54b694f81568a253b66fd69c348fc21",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.admin_test.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "708fda4ef286eb890eafba977ebc34d99168cf51a00a3a2ff9331f98da9f660a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.admin_test.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "a30f4ef42176d28f0e2293533c5f532e9c9c5696c68813b35315d17edc44f6b1",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.admin_test.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/ordered_fields",
+      "before_sha256": "a6b6b8f84faf6045d4448068326034bef273b8be96538bce8642226b0d6583a3",
+      "after_sha256": "6af85310248af197674038039b0d1c730a2fc9e194f78f86a1565b3a6bf88f9a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.admin_test.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "09f4b98cae7d4a8e3a3319da068f55e94d2a80c2f16e137b54f7d3d87916afe5",
+      "after_sha256": "dda9c246c715eec046a121e5f74797ecb8d4be44eddccf6b1fb78237d8cd1c26",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.admin_test.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/type_shape",
+      "before_sha256": "e3d2c7a618abb519c13bbcef88aac0769d2864eb39357ca0ce16461c65e8c21e",
+      "after_sha256": "5c8cd4aed431db785d119988e2781b725288f864e4a33d60ba06270b9cdb2dd7",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.admin_test.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "4291d1b18e8376ac5541673c20bfad7de8acdf5a2ab4c44cd98621e4b77e382c",
+      "after_sha256": "4b60b86163723a4ba37bb9111105886b162f8d348119e24aa0d66c0bd9783729",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.admin_test.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "dfc016ae61197c7624de537bac059a4c2186d81aad5d729c85374e78073bc5f0",
+      "after_sha256": "4cc16efb01b83bd3c9c786f22d95a37c076c2d02a0db831b7e8811f7e5375777",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.admin_test.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "53b5306295e8f02a79704bbdaf425e042e1ba568b66cf46d78b5c1a3bdbbc8a2",
+      "after_sha256": "2edb41314b3dbecc6ce2903bf8f3afb783e5f692fc9805a1717c6bbf112ea849",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.admin_test.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "a629d181f3d3dc19ac3e76fc97bf1ca3d03e6ddb79fde231f150cdd7661c35d2",
+      "after_sha256": "7e2454d90e78ecc34a261174bd7401314c37a77ea84072810357994bdb1d75b5",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.alpha_search.direct\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/alpha/search\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.alpha_search.direct\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/alpha/search\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "1253e9373e781b7500266caa55150e08e210bc8cd8cc70d89985e3600155e860",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.alpha_search.direct\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/alpha/search\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "77391f3ab6a67d84e076149b012f55d0c14344668f42f5e6b5884e588d52b4e4",
+      "after_sha256": "7f20cf8495b07f390f503c6c86252c281ccd8753d4c79fdbcbb4123ad722d62d",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.alpha_search.direct\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/alpha/search\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "18e9550e9a2c5cebaa01088a816b2b42e2d18a440e5a6a987006383976d3b2d6",
+      "after_sha256": "a1c01269702c2d7bc35dd610eada3df5384eb4dfd82db4029dd6c6be080077d1",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.alpha_search.direct\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/alpha/search\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "c3223dacd6ea2943c3b9b50540f4b9df983e45d0cb64e4621cb250cb002f04aa",
+      "after_sha256": "6b74da7475d98ab79e242d190a988085f2e1c873ef2b6b9bd89385918e96b290",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.alpha_search.direct\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/alpha/search\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "bc1e821abb173c13a92161fd45e3d20b29a3b00c812511753d53b80208f27157",
+      "after_sha256": "15071885d10102f09cc1efd74615cfbc1d823ab45393b0652cf461308e4adb94",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.alpha_search.pat_fallback\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "708fda4ef286eb890eafba977ebc34d99168cf51a00a3a2ff9331f98da9f660a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.alpha_search.pat_fallback\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "a30f4ef42176d28f0e2293533c5f532e9c9c5696c68813b35315d17edc44f6b1",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.alpha_search.pat_fallback\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/ordered_fields",
+      "before_sha256": "a6b6b8f84faf6045d4448068326034bef273b8be96538bce8642226b0d6583a3",
+      "after_sha256": "6af85310248af197674038039b0d1c730a2fc9e194f78f86a1565b3a6bf88f9a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.alpha_search.pat_fallback\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "09f4b98cae7d4a8e3a3319da068f55e94d2a80c2f16e137b54f7d3d87916afe5",
+      "after_sha256": "dda9c246c715eec046a121e5f74797ecb8d4be44eddccf6b1fb78237d8cd1c26",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.alpha_search.pat_fallback\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/type_shape",
+      "before_sha256": "e3d2c7a618abb519c13bbcef88aac0769d2864eb39357ca0ce16461c65e8c21e",
+      "after_sha256": "5c8cd4aed431db785d119988e2781b725288f864e4a33d60ba06270b9cdb2dd7",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.alpha_search.pat_fallback\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "df09ae1ee1461510401175796eaa9902d762f9523d182fed1331f6580bb4a3bf",
+      "after_sha256": "6001ed1522e3fcfacf50e0a9c39f5b3e874c6f73a84847425d103d760365b255",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.alpha_search.pat_fallback\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "159f75942537b439c67e55e2e9b73cfec761181b84fe30f74d716a2521b020ac",
+      "after_sha256": "794106f92a239a1b5e8adc730661ed19a2a5043197e70b42234200cca79e6c92",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.alpha_search.pat_fallback\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "6e21b18cbc397cf440a478d668fff4d25374f9b53677c26f73e4509a459b352f",
+      "after_sha256": "120d1c67532b45f893521fc774c71f25d78dacb47d1b9305878292e3143b61a6",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.alpha_search.pat_fallback\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "a629d181f3d3dc19ac3e76fc97bf1ca3d03e6ddb79fde231f150cdd7661c35d2",
+      "after_sha256": "7e2454d90e78ecc34a261174bd7401314c37a77ea84072810357994bdb1d75b5",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.files.blob_upload\u0000PUT\u0000*.oaiusercontent.com\u0000/{server_returned_path}\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.files.blob_upload\u0000PUT\u0000*.oaiusercontent.com\u0000/{server_returned_path}\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "b7a56873cd771f2c446d369b649430b65a756ba278ff97ec81bb6f55b2e73569",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.files.blob_upload\u0000PUT\u0000*.oaiusercontent.com\u0000/{server_returned_path}\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "bc778445343bd5d1a5d802a789501e09d03c474bded6b4a980c3b0360a10f527",
+      "after_sha256": "9d1c3da9c2537711a89671fe57c18ab979a677afbd8619821866a1be70ddcad0",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.files.blob_upload\u0000PUT\u0000*.oaiusercontent.com\u0000/{server_returned_path}\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "99ed84d65da147f2e76e3ec913e4dff425ecd52b9d6d55ec3fc87a6c9fcc060a",
+      "after_sha256": "ad923f57ec192214641855b58784cfbeb3864e7cda24508f8a935b2146d2220c",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.files.blob_upload\u0000PUT\u0000*.oaiusercontent.com\u0000/{server_returned_path}\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "609757d55f1d89b053bce5709a6f5fa188738315d1d1a8732ea45f6b1d15d345",
+      "after_sha256": "6072fa4fcb84dfcaf17e0788862f35173c354f3c1235b0aec2f78dbf38b86b9a",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.files.blob_upload\u0000PUT\u0000*.oaiusercontent.com\u0000/{server_returned_path}\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "80bb238e204fb47ef3e620764bc0134c926c37b4be6414e9bae8d17cd6253686",
+      "after_sha256": "de9c252e411618e0418fa0ac0076053110618b3f04a897d8f963f13ae9e74e23",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "da4ea2a5506f2693eae190d9360a1f31793c98a1adade51d93533a6f520ace1c",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files\u0000http",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "53d9e477789d7577b49cb3564a64510f21d8e122b81f684fa0f76053e619853d",
+      "after_sha256": "0d17e191b4dd720ae06ca735c9f5cc0fc42d76cb41a217c9bd6ed2fb47a46040",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "d95dd4e5e2b051a0f2fe0fba6f0fb5823712043e192d20a8ca7710db98f223ce",
+      "after_sha256": "e39a28494e9bc0130182de72d73da887182a9e503bbb361c4a942d179b0b13f1",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "b2ef9cc8b3a87168ef0179fd6fb5714145f8b871feab44d2f5fea300fc6b8658",
+      "after_sha256": "895fda61821bc14ed4caf37d828526a06a82b8951d8f31f97c59387855a341f4",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "dacedf9c408b2876f7047ecd4f338ce754b8d2c60e74d950dd3d986e903598db",
+      "after_sha256": "0de6b1b843ef54946666093a7449811af92880ccc044447c195736f499ee1f14",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "dea9d4fee386dcb43992c27cd81413796ce7d7d1b364569a3a4a8b4cd6497c15",
+      "after_sha256": "7fca4f99a74156a4c411022eb64fb4597ff9457772cbf80c91dd5837bfa4f2c3",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files/{file_id}/uploaded\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files/{file_id}/uploaded\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "d4735e3a265e16eee03f59718b9b5d03019c07d8b6c51f90da3a666eec13ab35",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files/{file_id}/uploaded\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "d95dd4e5e2b051a0f2fe0fba6f0fb5823712043e192d20a8ca7710db98f223ce",
+      "after_sha256": "5962f7ba10e71403a2da52cca39abd4f2304cd231d486dca8fd287dc8533b85b",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files/{file_id}/uploaded\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "b2ef9cc8b3a87168ef0179fd6fb5714145f8b871feab44d2f5fea300fc6b8658",
+      "after_sha256": "b11cd828a6b8acc94c99c51d80e9e40c4542a0f1b3ffcfc4eb4574069a236952",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files/{file_id}/uploaded\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "371b79000ff24c347f50833ec9a9fdbc9902f99eff64f01fa39aa9420e052076",
+      "after_sha256": "2dcf354afd570d17929b5ebe9fef54fb2e1c0d53aa6eb5ab939911948113ee75",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.files.register\u0000POST\u0000chatgpt.com\u0000/backend-api/files/{file_id}/uploaded\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "dea9d4fee386dcb43992c27cd81413796ce7d7d1b364569a3a4a8b4cd6497c15",
+      "after_sha256": "bd3e6325b9303a21c6805f04926bb6f7c4a17c809fabc556dad916ce0c4a2204",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.images.oauth_test\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/edits\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.images.oauth_test\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/edits\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "da4ea2a5506f2693eae190d9360a1f31793c98a1adade51d93533a6f520ace1c",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.images.oauth_test\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/edits\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "7305f3ef2f54b1068968f3808ac664366e74890699fed0e1e405eb3ca6ba500b",
+      "after_sha256": "1108940e16df0e6d23292ed67a0fead07e3371ca98c1098cff916d16746cc6f0",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.images.oauth_test\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/edits\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "fdf4ad08d1a9b1aba1709b425bc2817fff6f7f0f6edbf384ff33f384a86d518c",
+      "after_sha256": "67721767a50ca4301aae1a0e4da819d74f5d221398622b9bf84778ab584721c1",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.images.oauth_test\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/edits\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "a11429e8f9b85a3b1ceabac28a61a746497e38ef371e3badbce8e11edbdc2434",
+      "after_sha256": "d4d2bd8b8a584380480656e94510de33306cae7c07261bf129bf899af5d103eb",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.images.oauth_test\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/edits\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "1a29349d28a49ee61cef20513d80b8a81314ba7f1e890e87429d4aa25bd7048a",
+      "after_sha256": "5dc4d416595b8bcdb4285503d72bae1656cfe5d4c90f9bf6a737f71f8c200ad2",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.images.oauth_test\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/generations\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.images.oauth_test\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/generations\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "031b4af5197ec30a926f48cf40e11a7dbc470048a21e4003b7a3c07c5dab1baa",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.images.oauth_test\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/generations\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "7305f3ef2f54b1068968f3808ac664366e74890699fed0e1e405eb3ca6ba500b",
+      "after_sha256": "f9ca52c87b6e837b6c43a1e1f5dc6f39d06a37e357c204110000c1ea99ade914",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.images.oauth_test\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/generations\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "fdf4ad08d1a9b1aba1709b425bc2817fff6f7f0f6edbf384ff33f384a86d518c",
+      "after_sha256": "c58058967648ddf35e1ea6c983a6225c9353424b74eee639dc020a61f54ff52a",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.images.oauth_test\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/generations\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "8e4602bb2918064cb7ccda0727b5ad189f4be70fce759c745a8f10fa5f1da89e",
+      "after_sha256": "0c04c765d7dcd0fed1356417c8b75abaf0de06ab513769e79217710478be9953",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.images.oauth_test\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/generations\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "1a29349d28a49ee61cef20513d80b8a81314ba7f1e890e87429d4aa25bd7048a",
+      "after_sha256": "602c7f6f54e3254e49f429e7f870f48bde711a307c85ed87e599b641ef584798",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.images.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/edits\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.images.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/edits\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "da4ea2a5506f2693eae190d9360a1f31793c98a1adade51d93533a6f520ace1c",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.images.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/edits\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "31f79647aaecba6e909f1579d6e11800ea8d32f9718ef9841f07bfc1fe7880e0",
+      "after_sha256": "c4b895a0aa05c6c5b8c443d553dbf2978ef1a63340d10afe4a9461a71f0676e6",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.images.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/edits\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "36736a0963deb0d55dff303d6873d8f3b966abb77f4e9b5be647176767f98284",
+      "after_sha256": "86736e1b0774735868a4a0c786d6bb0798749ca4ba9e159a1653435acfa59a74",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.images.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/edits\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "6eb0f3d0341afd218820fa7c0c5adc6be46325ad847aca92dbd58d9c1abdaf3a",
+      "after_sha256": "2d509c44c58ad9587cb2c41c73d9de7ab5999949299ac50b48966792381ad65d",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.images.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/edits\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "1a29349d28a49ee61cef20513d80b8a81314ba7f1e890e87429d4aa25bd7048a",
+      "after_sha256": "5dc4d416595b8bcdb4285503d72bae1656cfe5d4c90f9bf6a737f71f8c200ad2",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.images.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/generations\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.images.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/generations\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "031b4af5197ec30a926f48cf40e11a7dbc470048a21e4003b7a3c07c5dab1baa",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.images.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/generations\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "31f79647aaecba6e909f1579d6e11800ea8d32f9718ef9841f07bfc1fe7880e0",
+      "after_sha256": "fc5afabb7da18da3e8e2c5bc543a925944bd69d7c3a4e3200c2e77e88fa14a3b",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.images.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/generations\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "36736a0963deb0d55dff303d6873d8f3b966abb77f4e9b5be647176767f98284",
+      "after_sha256": "0b4b235af4a1e677a5489d13788966284903d4afca125ec1b179b938be793eab",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.images.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/generations\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "080c0e850b4a1747a285cc863b0e7d3c4e997819f96318ba6b750c31de64182f",
+      "after_sha256": "71c7032d6631e8c846d0cfe8107eec597b1ec940ba74556df6b1ac97845385a6",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.images.responses\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/images/generations\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "1a29349d28a49ee61cef20513d80b8a81314ba7f1e890e87429d4aa25bd7048a",
+      "after_sha256": "602c7f6f54e3254e49f429e7f870f48bde711a307c85ed87e599b641ef584798",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.models.list\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/models\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.models.list\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/models\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "6cb85b423f9773b0ec930b6637b58612f54ff346bc28cef47798adc5e7cd7662",
+      "after_sha256": "e20b9d37c6c1c4ddfbce7b500e63882aa03be241371a3c189ae8edbe959a998e",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.models.list\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/models\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "5221dea6dac7d4ea6af5b986f3dbb70dec005e2760e7d809e55b9ac505fd0045",
+      "after_sha256": "93eb9304fd2446ca8004eb4a9610b4c220a15d218c178f5c2db9f11add4c49c5",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.models.list\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/models\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "8d597e514e33b8e94295fbcc36b55e2070f79a2dc3a6506910f44b02752abead",
+      "after_sha256": "9da4330e2781a1bfc62bebaf678461289e0e7365bf5830577c1410f751a6e833",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.models.list\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/models\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "e5ff51b5a2f6daf882951fa70654eac5091ff4c33509589352216fb2097ec382",
+      "after_sha256": "9a6b961f5b0dca7fade1450044f29aca787e2b30d10591067d0627b87dfdf7b7",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.oauth.refresh\u0000POST\u0000auth.openai.com\u0000/oauth/token\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.oauth.refresh\u0000POST\u0000auth.openai.com\u0000/oauth/token\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "482d9673cfee5de391f97fde4d1c84f9f8d6f2cf0784fcffb958b4032de7236c",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.oauth.refresh\u0000POST\u0000auth.openai.com\u0000/oauth/token\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "1f5ecc1a371b1675514f2b3c356570c8f9618a80350ca9b1e40253d602952928",
+      "after_sha256": "f3c2a9ee3e1c54310e82e85d8cb4cc73093a2b7f93983f7b562e50e750813ce0",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.oauth.refresh\u0000POST\u0000auth.openai.com\u0000/oauth/token\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "9205b0bce88bff533581acd6830722663eecda76bb49658c991e6b00a4aff731",
+      "after_sha256": "6fcd75803beba487d03248782cb63331b2e5b807ab3c7a1f5f3718ed6bcfbb0b",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.oauth.refresh\u0000POST\u0000auth.openai.com\u0000/oauth/token\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "42afe8e893d13dbb5a0714762a1edb61523c58db45bba63226323b7083688333",
+      "after_sha256": "b623bafbec8466bab87d3741b0cc5ece4718abc5a80c5fb297dcebd90437c4e7",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.oauth.refresh\u0000POST\u0000auth.openai.com\u0000/oauth/token\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "72853e81da5bf6bc4ef74db09eb979b0c517dd47cafbcb6d214286fc47a945d8",
+      "after_sha256": "11e1b198cfe4776e532039b466fc51805eb301191bbca94682f41512f85a5661",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.quota.wham\u0000GET\u0000chatgpt.com\u0000/backend-api/wham/rate-limit-reset-credits\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.quota.wham\u0000GET\u0000chatgpt.com\u0000/backend-api/wham/rate-limit-reset-credits\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "ee8d1c7050ec7aa46f0c178e7cef9235029dcbde5af372ce0140c33b7a0ee187",
+      "after_sha256": "3bc8966f76f1f0b905194e775e8c39a44e468bc15fd7d2e56f52716ba1826607",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.quota.wham\u0000GET\u0000chatgpt.com\u0000/backend-api/wham/rate-limit-reset-credits\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "268b5b169363c496c67b003b8abbb1face596d694d34c845011244c082a6b573",
+      "after_sha256": "2b98fad6e1413d36d64eb7d4ace400f2ad47cc3f4f9208d80daf081a6a6358bf",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.quota.wham\u0000GET\u0000chatgpt.com\u0000/backend-api/wham/rate-limit-reset-credits\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "106463a354dd33215ddbbc6d94b37674b5fdbe1498536355cedead11c9b9d8e3",
+      "after_sha256": "c941cecacb9cf592ce14bf3de5e18770678684265e9978489dd68745423fbab2",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.quota.wham\u0000GET\u0000chatgpt.com\u0000/backend-api/wham/rate-limit-reset-credits\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "0a41184011c76e48fd708f71770bee243b40bfad871193ad59831b5357be9a05",
+      "after_sha256": "2332233312443d17b4fa6cb086623f3f5416ad97ce624568b6ca3272f739476c",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.quota.wham\u0000GET\u0000chatgpt.com\u0000/backend-api/wham/usage\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.quota.wham\u0000GET\u0000chatgpt.com\u0000/backend-api/wham/usage\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "ee8d1c7050ec7aa46f0c178e7cef9235029dcbde5af372ce0140c33b7a0ee187",
+      "after_sha256": "8727b7c978a739b3a6731077a5f0850ab87461f941c51683430560915ff256f8",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.quota.wham\u0000GET\u0000chatgpt.com\u0000/backend-api/wham/usage\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "268b5b169363c496c67b003b8abbb1face596d694d34c845011244c082a6b573",
+      "after_sha256": "45a7fe34d8c573fbb3f537e0bd569bc0d5e4e26854d5392ca6249d5dd81c5be3",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.quota.wham\u0000GET\u0000chatgpt.com\u0000/backend-api/wham/usage\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "106463a354dd33215ddbbc6d94b37674b5fdbe1498536355cedead11c9b9d8e3",
+      "after_sha256": "3ecc81029305a11ff67be01b073724cd96d3cf3184500c666cd163f7fcadcb30",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.quota.wham\u0000GET\u0000chatgpt.com\u0000/backend-api/wham/usage\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "0a41184011c76e48fd708f71770bee243b40bfad871193ad59831b5357be9a05",
+      "after_sha256": "2332233312443d17b4fa6cb086623f3f5416ad97ce624568b6ca3272f739476c",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.quota.wham\u0000POST\u0000chatgpt.com\u0000/backend-api/wham/rate-limit-reset-credits/consume\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.quota.wham\u0000POST\u0000chatgpt.com\u0000/backend-api/wham/rate-limit-reset-credits/consume\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "031b4af5197ec30a926f48cf40e11a7dbc470048a21e4003b7a3c07c5dab1baa",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.quota.wham\u0000POST\u0000chatgpt.com\u0000/backend-api/wham/rate-limit-reset-credits/consume\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "ee8d1c7050ec7aa46f0c178e7cef9235029dcbde5af372ce0140c33b7a0ee187",
+      "after_sha256": "b12a3b263e6039e869b91872350bfd0e92dd61b5f08615aac176b6f742ce7dd0",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.quota.wham\u0000POST\u0000chatgpt.com\u0000/backend-api/wham/rate-limit-reset-credits/consume\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "268b5b169363c496c67b003b8abbb1face596d694d34c845011244c082a6b573",
+      "after_sha256": "37db092cbf696c10fd5c2c4fc1c978d8d3ed0d7b5a99c6817bba660411081d40",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.quota.wham\u0000POST\u0000chatgpt.com\u0000/backend-api/wham/rate-limit-reset-credits/consume\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "106463a354dd33215ddbbc6d94b37674b5fdbe1498536355cedead11c9b9d8e3",
+      "after_sha256": "2af9f0361a3621f9d4584705cc40d5f8764faad10196b06122f08ec2924ee778",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.quota.wham\u0000POST\u0000chatgpt.com\u0000/backend-api/wham/rate-limit-reset-credits/consume\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "c6061973f5207478b6f52463fe48c08f3e21c618a12fbca73affbc0ef0f14ae1",
+      "after_sha256": "05dfe93fb0db7fe5143baa96b5aa1c7d05d259c85e48828ccc65068961da2215",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.realtime.calls\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/realtime/calls\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.realtime.calls\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/realtime/calls\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "76a50887d8f1c2e9301755428990ad81479ee21c25b43215cf524541e0503269",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.realtime.calls\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/realtime/calls\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "4124ef64a87a2e58779246176cff726cae40dc02f5cfaf793fe88fc16842e421",
+      "after_sha256": "a1589fc03b3652b3b106847abf3d4a215230127930c19cd8e0a3d7331598212c",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.realtime.calls\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/realtime/calls\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "1393310cbe8dc5da31344785120d48cb988c6b33c3987d4e06d6ecafbfc4bb08",
+      "after_sha256": "aee9a65132f4745de086f7f7c32cb9607609c5397873ca94673b74826b14643b",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.realtime.calls\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/realtime/calls\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "dad7f5fffab6b584834f40845ad3b85bc633df6dfd248ffa82361377dee775e5",
+      "after_sha256": "31069556348f01477c8e88e46b262114e094f61626ce60bfecccf947adb509b8",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.realtime.calls\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/realtime/calls\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "38a2d0d76e79edc61c99e367cce6944cbedc9e5c020de5a1d45503d61bc35ca6",
+      "after_sha256": "9194dc26719eb7683c0b032f4abd41777ed040ec11dd6a4b98d50ec87b5c3cb4",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.realtime.sideband\u0000GET\u0000api.openai.com\u0000/v1/realtime\u0000websocket",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.realtime.sideband\u0000GET\u0000api.openai.com\u0000/v1/realtime\u0000websocket",
+      "path": "/body/ordered_fields",
+      "before_sha256": "3303cb6e3abf9576a7a76239fe6908cd8874d7561caca536c9fef609efa8f89f",
+      "after_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.realtime.sideband\u0000GET\u0000api.openai.com\u0000/v1/realtime\u0000websocket",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "fe70d1cdc55974f6e2fc2d07dcb36198c74b2ad1a7e4ebc69768a501552ddca7",
+      "after_sha256": "b4b16dad390bac4c7ce42014c594fa668910b49ec1b7771a17891c187d71e0ab",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.realtime.sideband\u0000GET\u0000api.openai.com\u0000/v1/realtime\u0000websocket",
+      "path": "/body/type_shape",
+      "before_sha256": "65ba2c3652820cdb3959727ac090470b2f98338874abe9a766407542133d8286",
+      "after_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.realtime.sideband\u0000GET\u0000api.openai.com\u0000/v1/realtime\u0000websocket",
+      "path": "/bundle_digest",
+      "before_sha256": "9273b796dd31aa187daf957cf6534b8e13f1343aaa48a24a6a3697a77d3152ab",
+      "after_sha256": "c66c94bf708b962840d248c278fc6cef47fd93b5f7ab612ea89763cf5f41c9ca",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.realtime.sideband\u0000GET\u0000api.openai.com\u0000/v1/realtime\u0000websocket",
+      "path": "/connection_identity_digest",
+      "before_sha256": "f0034e596c4e94a9fc37fd64c5b7d4ca493dcd93e46acabb7367ae1de2d46ab3",
+      "after_sha256": "7c13d6f4de2332c10fa2c1873eee04ae44d8d282811c49f8e3539f875843bddf",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.realtime.sideband\u0000GET\u0000api.openai.com\u0000/v1/realtime\u0000websocket",
+      "path": "/connection_pool_digest",
+      "before_sha256": "04ae0460300e0dac29467819198a954bae0863d5f68e9cfd28cb5b4c2b11b8e8",
+      "after_sha256": "cce956bbdccb5aafde738a9bedf10dd074133304a53dac5bc3c5ffd781fee9b9",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.realtime.sideband\u0000GET\u0000api.openai.com\u0000/v1/realtime\u0000websocket",
+      "path": "/ordered_headers",
+      "before_sha256": "df8d19fca23f010e12046058ddf5cf42d9254478cebda5eadd641b5e03169275",
+      "after_sha256": "e1db3a4a65744f99d20454c6a59e316d455ebd2474e7281588e1e53614bd1238",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.realtime.sideband\u0000GET\u0000api.openai.com\u0000/v1/realtime\u0000websocket",
+      "path": "/websocket/event_matrix",
+      "before_sha256": "5802ae77a96db98b54b16864055ad255de6b91eb52c1d9225e421341a3005c29",
+      "after_sha256": "af3626ca079a0daffeaca1fa41627e5e0948bfdc93cac7c7890d452989127b2c",
+      "reason": "WebSocket 握手压缩与出站帧改由 Executor session 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.realtime.sideband\u0000GET\u0000api.openai.com\u0000/v1/realtime\u0000websocket",
+      "path": "/websocket/handshake_generated_headers",
+      "before_sha256": "45e7933183c9a05648d2aec2d359aabf3c9f5d322246b0080922492a529ca107",
+      "after_sha256": "6249426974ec4d6d1719b4f027d7bb028d616520d2317f8cc0ece9b9aa8cb8f3",
+      "reason": "WebSocket 握手压缩与出站帧改由 Executor session 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.anthropic_compat\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "708fda4ef286eb890eafba977ebc34d99168cf51a00a3a2ff9331f98da9f660a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.anthropic_compat\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "a30f4ef42176d28f0e2293533c5f532e9c9c5696c68813b35315d17edc44f6b1",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.anthropic_compat\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/ordered_fields",
+      "before_sha256": "a6b6b8f84faf6045d4448068326034bef273b8be96538bce8642226b0d6583a3",
+      "after_sha256": "6af85310248af197674038039b0d1c730a2fc9e194f78f86a1565b3a6bf88f9a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.anthropic_compat\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "09f4b98cae7d4a8e3a3319da068f55e94d2a80c2f16e137b54f7d3d87916afe5",
+      "after_sha256": "dda9c246c715eec046a121e5f74797ecb8d4be44eddccf6b1fb78237d8cd1c26",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.anthropic_compat\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/type_shape",
+      "before_sha256": "e3d2c7a618abb519c13bbcef88aac0769d2864eb39357ca0ce16461c65e8c21e",
+      "after_sha256": "5c8cd4aed431db785d119988e2781b725288f864e4a33d60ba06270b9cdb2dd7",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.anthropic_compat\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "2437fcb12b530e2f5b4a285002c5ecf327e36538871be35cdbfe38b16eaa2ce1",
+      "after_sha256": "c22771a5d86c0f6fbac800e3ce6d8c02bdc5cfdb901319abb297556eb54c50b1",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.anthropic_compat\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "9d52f286f4ab866d7fbe917abc0e847fb91bb13310ba936c02adbe0db4427587",
+      "after_sha256": "eab879c96f667728961ac5593d8a6e6dd42d28d38d6734852bb9d85d2c1e8088",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.anthropic_compat\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "fbbfd73f76e03ad00e9184ddacde06cb06ee2036e745d4beb15cbc685a3a2e84",
+      "after_sha256": "b957d31e5b02c0517bed51c2274e969e773af561b45ed2ae0f953e454fd3f9d0",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.anthropic_compat\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "a629d181f3d3dc19ac3e76fc97bf1ca3d03e6ddb79fde231f150cdd7661c35d2",
+      "after_sha256": "7e2454d90e78ecc34a261174bd7401314c37a77ea84072810357994bdb1d75b5",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.chat_completions\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "708fda4ef286eb890eafba977ebc34d99168cf51a00a3a2ff9331f98da9f660a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.chat_completions\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "a30f4ef42176d28f0e2293533c5f532e9c9c5696c68813b35315d17edc44f6b1",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.chat_completions\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/ordered_fields",
+      "before_sha256": "a6b6b8f84faf6045d4448068326034bef273b8be96538bce8642226b0d6583a3",
+      "after_sha256": "6af85310248af197674038039b0d1c730a2fc9e194f78f86a1565b3a6bf88f9a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.chat_completions\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "09f4b98cae7d4a8e3a3319da068f55e94d2a80c2f16e137b54f7d3d87916afe5",
+      "after_sha256": "dda9c246c715eec046a121e5f74797ecb8d4be44eddccf6b1fb78237d8cd1c26",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.chat_completions\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/type_shape",
+      "before_sha256": "e3d2c7a618abb519c13bbcef88aac0769d2864eb39357ca0ce16461c65e8c21e",
+      "after_sha256": "5c8cd4aed431db785d119988e2781b725288f864e4a33d60ba06270b9cdb2dd7",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.chat_completions\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "d2d8eadb3e5ac7bdc4061c35d6e123a637c58eb13b9dc07ee5cd49fee1720d02",
+      "after_sha256": "a8948539ec480adfe4fd70145d816d3c225ce7786a39ef0e36dc62e9dd3c1271",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.chat_completions\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "b8691c53e69601fd44a7f2316f73c31bd59a900bb073a42b78d3edcb2ad55c0b",
+      "after_sha256": "7c975c63a13e480621a2da26087298788a62ad8873250566a1599c0f8d586024",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.chat_completions\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "d8123c2a5226c275d5e6ec599c78df070c3a78db9e357fed99bd73a54f5f7ef1",
+      "after_sha256": "c40c3b12047a47d105b5f1d610366c2fe75646e40cbb55d3e7edc7f9429c99c7",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.chat_completions\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "a629d181f3d3dc19ac3e76fc97bf1ca3d03e6ddb79fde231f150cdd7661c35d2",
+      "after_sha256": "7e2454d90e78ecc34a261174bd7401314c37a77ea84072810357994bdb1d75b5",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "708fda4ef286eb890eafba977ebc34d99168cf51a00a3a2ff9331f98da9f660a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "a30f4ef42176d28f0e2293533c5f532e9c9c5696c68813b35315d17edc44f6b1",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/ordered_fields",
+      "before_sha256": "a6b6b8f84faf6045d4448068326034bef273b8be96538bce8642226b0d6583a3",
+      "after_sha256": "6af85310248af197674038039b0d1c730a2fc9e194f78f86a1565b3a6bf88f9a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "09f4b98cae7d4a8e3a3319da068f55e94d2a80c2f16e137b54f7d3d87916afe5",
+      "after_sha256": "dda9c246c715eec046a121e5f74797ecb8d4be44eddccf6b1fb78237d8cd1c26",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/type_shape",
+      "before_sha256": "e3d2c7a618abb519c13bbcef88aac0769d2864eb39357ca0ce16461c65e8c21e",
+      "after_sha256": "5c8cd4aed431db785d119988e2781b725288f864e4a33d60ba06270b9cdb2dd7",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "8c0b9819345c554f19a9bcb57dbbbae7d28dd25f5afe909e0473a8f43fae5357",
+      "after_sha256": "088e793b9b28154a44fad163fa1a31c49bdfc260ea6bf6f8f22b7906877b4a83",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "f9ad209206942a4b760830887190bb8511e763ce1c2d1397aba9e42b3137e4a9",
+      "after_sha256": "5d9a64cf889d917a6170c56541ca03cc1757f82f4ca3426540ed03cb3e82998b",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "7a72ac0370cbfcd74217637ed643ce2aea71692536ce4f5f0ca9b0c8eee373d2",
+      "after_sha256": "841802ee9853b3768a2ba64aff3abc25c09c554a4f8bce92a9eaaa4d22341bb3",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "a629d181f3d3dc19ac3e76fc97bf1ca3d03e6ddb79fde231f150cdd7661c35d2",
+      "after_sha256": "7e2454d90e78ecc34a261174bd7401314c37a77ea84072810357994bdb1d75b5",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "13671077b66a29874a2578b5240319092ef2a1043228e433e9b006b5e53e7513",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/ordered_fields",
+      "before_sha256": "ec39a35e47054d4a853106d4eac59c8ec7681a2f47f1486653db421be8fd2980",
+      "after_sha256": "ed2ed5cf528880faaf71eaa8c14cdffa64e151091b139afab37066559f211e1a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "3f8a1d2238303444feba31051d6a965e6b0712831958242babeab338c0182da7",
+      "after_sha256": "0e4f652dd5aa607aabadf80e2542cd92f84303c12e4ca4201a6c2903d6e090a9",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/type_shape",
+      "before_sha256": "553a58d9a24696cb528d4a13a56f9c444d1a3add40d0ac0bb1d44e33c0864883",
+      "after_sha256": "ac6daea231efdb8948022592d96b8de974a898c70c0448ab12ac65ac35b25c87",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "8c0b9819345c554f19a9bcb57dbbbae7d28dd25f5afe909e0473a8f43fae5357",
+      "after_sha256": "c8c757b2dc452591089190f9793f2b2686407139b38cb0bfbc8982b0fc83dd31",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "f9ad209206942a4b760830887190bb8511e763ce1c2d1397aba9e42b3137e4a9",
+      "after_sha256": "c3fc008076d67693e45de01626701f42926316bce30344b2f7c6143dfe2c356a",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "08a2cf229560755ba1b74c178fa95309c61763fdd774794b5f54b4fb4eb7c5a4",
+      "after_sha256": "4467522c6007d973e5bd3cf24df4403a72ce0ef5129d9e6a56f259ebd9b728e8",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.forward\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "5bd09e9d8daa1bd425560e3346260044fd5b66944465fde0f284829ad1c70dd4",
+      "after_sha256": "5438025a651f332e6d3aea71025c128227452704dd6d342b4e3b2e70bc57d5a9",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "708fda4ef286eb890eafba977ebc34d99168cf51a00a3a2ff9331f98da9f660a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "a30f4ef42176d28f0e2293533c5f532e9c9c5696c68813b35315d17edc44f6b1",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/ordered_fields",
+      "before_sha256": "a6b6b8f84faf6045d4448068326034bef273b8be96538bce8642226b0d6583a3",
+      "after_sha256": "6af85310248af197674038039b0d1c730a2fc9e194f78f86a1565b3a6bf88f9a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "09f4b98cae7d4a8e3a3319da068f55e94d2a80c2f16e137b54f7d3d87916afe5",
+      "after_sha256": "dda9c246c715eec046a121e5f74797ecb8d4be44eddccf6b1fb78237d8cd1c26",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/type_shape",
+      "before_sha256": "e3d2c7a618abb519c13bbcef88aac0769d2864eb39357ca0ce16461c65e8c21e",
+      "after_sha256": "5c8cd4aed431db785d119988e2781b725288f864e4a33d60ba06270b9cdb2dd7",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "fc4a9780965bc9f01b88d864ecc5aed4f66a745c04fe658a09a5b4c1d7660285",
+      "after_sha256": "bbccb36841986ebf66255d46fab3a8e5a37d3d6501e8c8dfa93916f9bcd2138d",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "da9e20b8c0a93a1147c6875afcacf90ee8255240dd7321cd69e9ab9b79b61c97",
+      "after_sha256": "a0b0a733c1b83be29883dee936bb1f6fdf183416b2f7beb928660b44728fe8ac",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "a7b4eebd842eb58fc47b6769ef80b25df4182e9b37fad149dbc29112f62db1aa",
+      "after_sha256": "4373990cd6339bb29ffb50614c4563a3d4ff70404ad6dacc86e230edad663dc8",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "a629d181f3d3dc19ac3e76fc97bf1ca3d03e6ddb79fde231f150cdd7661c35d2",
+      "after_sha256": "7e2454d90e78ecc34a261174bd7401314c37a77ea84072810357994bdb1d75b5",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "13671077b66a29874a2578b5240319092ef2a1043228e433e9b006b5e53e7513",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/ordered_fields",
+      "before_sha256": "ec39a35e47054d4a853106d4eac59c8ec7681a2f47f1486653db421be8fd2980",
+      "after_sha256": "ed2ed5cf528880faaf71eaa8c14cdffa64e151091b139afab37066559f211e1a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "3f8a1d2238303444feba31051d6a965e6b0712831958242babeab338c0182da7",
+      "after_sha256": "0e4f652dd5aa607aabadf80e2542cd92f84303c12e4ca4201a6c2903d6e090a9",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/body/type_shape",
+      "before_sha256": "553a58d9a24696cb528d4a13a56f9c444d1a3add40d0ac0bb1d44e33c0864883",
+      "after_sha256": "ac6daea231efdb8948022592d96b8de974a898c70c0448ab12ac65ac35b25c87",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "fc4a9780965bc9f01b88d864ecc5aed4f66a745c04fe658a09a5b4c1d7660285",
+      "after_sha256": "631291129d65918cc067b76eb260df56a081944835fa1baf9bab34f92617c929",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "da9e20b8c0a93a1147c6875afcacf90ee8255240dd7321cd69e9ab9b79b61c97",
+      "after_sha256": "0394461d98b824abb12f689da72aa8fc251af5b15dafdcebece08374996e6fbb",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "c7ed96833078bec6c99b449c33227d46a25d9f1c77d43b0f0d5964112b3bf0ed",
+      "after_sha256": "3e42d7e2051846e71ac1d42b7265c6b2303a0c7d04dd1a78667c8a91f32199ce",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.passthrough\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses/compact\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "5bd09e9d8daa1bd425560e3346260044fd5b66944465fde0f284829ad1c70dd4",
+      "after_sha256": "5438025a651f332e6d3aea71025c128227452704dd6d342b4e3b2e70bc57d5a9",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/body/ordered_fields",
+      "before_sha256": "147d2d6b1c2319922b7d5a76e17c615e160af823ec069db232bc63fb09e5af3f",
+      "after_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "4a7123bc019e059b9aa63b0ad5e4a6aeed9cfeeee1f1407fcd977e5dd3a8f320",
+      "after_sha256": "b4b16dad390bac4c7ce42014c594fa668910b49ec1b7771a17891c187d71e0ab",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/body/type_shape",
+      "before_sha256": "3253f7e5cdf5eef77956a73f57f7ef992f3bb6a2553849523245d18f734c6f0d",
+      "after_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/bundle_digest",
+      "before_sha256": "7bd91114a7a0096c91c627280721c87f65e4a3b5389934ad9668d9fc6022de2a",
+      "after_sha256": "b533854c424d23b7c9c95803dd8ec5a749af2ccfb0e71e81347e2cf1e7380ee1",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/connection_identity_digest",
+      "before_sha256": "ed38196d5a7a6a00586f039e077d0370c8e5cd566e0e544342c8c3fb46f7d369",
+      "after_sha256": "01661c953a565a03c59752b1d6e310f38b2b471dbbd4f920e590925550821fb9",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/connection_pool_digest",
+      "before_sha256": "f02e483c955d92e4a62f01becfea667dd2d99ab190dfdb7430082537fcc3e8f9",
+      "after_sha256": "bde1b1ad0583b4e54ccb6f5f1bd305ac29268bd693f5b04f7061f38d9ae7c77e",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/ordered_headers",
+      "before_sha256": "46329116a325947447557dd5a3ffaf3653a8b80a259b0dcbbbff93946a6c7b6a",
+      "after_sha256": "08c982b22ec15499943d784ddd3b392de4ebdebd711d20ddeedb31c54785b380",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/terminal_guard_allow",
+      "before_sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa",
+      "after_sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+      "reason": "terminal Guard 在正式 adapter 后验证当前 FinalizationToken"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/terminal_guard_reason",
+      "before_sha256": "db1a7489dd56d935ddc3a0ea42f963baa60e8ffe9e1302fefa6eeb8e27dbf4ef",
+      "after_sha256": "missing",
+      "reason": "terminal Guard 在正式 adapter 后验证当前 FinalizationToken"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/websocket/event_matrix",
+      "before_sha256": "fdc496e3b955851ec46ed567d7b53e9e6abd327f3ae1978b1702ae800182c6d6",
+      "after_sha256": "27c7eca993132c2fb78e6be29e37a3266426787fab8305c4742566e1fdbc6c5e",
+      "reason": "WebSocket 握手压缩与出站帧改由 Executor session 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/websocket/handshake_generated_headers",
+      "before_sha256": "45e7933183c9a05648d2aec2d359aabf3c9f5d322246b0080922492a529ca107",
+      "after_sha256": "6249426974ec4d6d1719b4f027d7bb028d616520d2317f8cc0ece9b9aa8cb8f3",
+      "reason": "WebSocket 握手压缩与出站帧改由 Executor session 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws_http_bridge\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "708fda4ef286eb890eafba977ebc34d99168cf51a00a3a2ff9331f98da9f660a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws_http_bridge\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "a30f4ef42176d28f0e2293533c5f532e9c9c5696c68813b35315d17edc44f6b1",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws_http_bridge\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/ordered_fields",
+      "before_sha256": "a6b6b8f84faf6045d4448068326034bef273b8be96538bce8642226b0d6583a3",
+      "after_sha256": "6af85310248af197674038039b0d1c730a2fc9e194f78f86a1565b3a6bf88f9a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws_http_bridge\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "09f4b98cae7d4a8e3a3319da068f55e94d2a80c2f16e137b54f7d3d87916afe5",
+      "after_sha256": "dda9c246c715eec046a121e5f74797ecb8d4be44eddccf6b1fb78237d8cd1c26",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws_http_bridge\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/type_shape",
+      "before_sha256": "e3d2c7a618abb519c13bbcef88aac0769d2864eb39357ca0ce16461c65e8c21e",
+      "after_sha256": "5c8cd4aed431db785d119988e2781b725288f864e4a33d60ba06270b9cdb2dd7",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws_http_bridge\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "02f46798afce9639649cc5b8d07a9a2494847731eb055b343e0ed4ecb3324657",
+      "after_sha256": "17a7480eaf27278ff1e1affe5c5f58203226cc480a1125914700a3611672b50e",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws_http_bridge\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "793a16810cfad01a75bb9e543a0d91c6c738f626a3638b4dc973f5ab32f4623b",
+      "after_sha256": "282767fc40ef7130d7f49ea124009e0ae0dba3a82c4749c9d298a06529f5661d",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws_http_bridge\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "87190fc76e0de720450a02f7e09880289e0416dc5344fa47c478e169dfe6d185",
+      "after_sha256": "c36d09e7afc41901bc7b5724097331e41886d42bcb2439fd4ba1992ac5319dff",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws_http_bridge\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "a629d181f3d3dc19ac3e76fc97bf1ca3d03e6ddb79fde231f150cdd7661c35d2",
+      "after_sha256": "7e2454d90e78ecc34a261174bd7401314c37a77ea84072810357994bdb1d75b5",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws_v2_passthrough\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "30a0924a3360be687d1df9fcbbfdff62c01bc0fd14036ab9076cf7f451568666",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws_v2_passthrough\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/body/ordered_fields",
+      "before_sha256": "147d2d6b1c2319922b7d5a76e17c615e160af823ec069db232bc63fb09e5af3f",
+      "after_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws_v2_passthrough\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "4a7123bc019e059b9aa63b0ad5e4a6aeed9cfeeee1f1407fcd977e5dd3a8f320",
+      "after_sha256": "b4b16dad390bac4c7ce42014c594fa668910b49ec1b7771a17891c187d71e0ab",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws_v2_passthrough\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/body/type_shape",
+      "before_sha256": "3253f7e5cdf5eef77956a73f57f7ef992f3bb6a2553849523245d18f734c6f0d",
+      "after_sha256": "74234e98afe7498fb5daf1f36ac2d78acc339464f950703b8c019892f982b90b",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws_v2_passthrough\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/bundle_digest",
+      "before_sha256": "24160f1362b77696dda0f74d703b25664d7d9b70a874f9fefac502b022e23264",
+      "after_sha256": "458e5ee45b842263a33c04f85eb7c04dcd8f0199e17cf8fd859336be6a75ad1c",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws_v2_passthrough\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/connection_identity_digest",
+      "before_sha256": "ef36555c2412d67165c8c11f5733dc4f7fff035e9a2231ec8aa7a0a484dcb91c",
+      "after_sha256": "624507e73d1e940eb762f5c7ecb87b1e92927dd62e982c6c7be5bc4b2b13f6db",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws_v2_passthrough\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/connection_pool_digest",
+      "before_sha256": "342d2c1b3887508b4dff8ec1312722d4a6e7bd0bff8077b39f3c0eec8fc29c00",
+      "after_sha256": "c065f3fd06ba5d850a1bb518482f44abf6056caf3a250109c7abf4e140d676d4",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws_v2_passthrough\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/ordered_headers",
+      "before_sha256": "46329116a325947447557dd5a3ffaf3653a8b80a259b0dcbbbff93946a6c7b6a",
+      "after_sha256": "08c982b22ec15499943d784ddd3b392de4ebdebd711d20ddeedb31c54785b380",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws_v2_passthrough\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/terminal_guard_allow",
+      "before_sha256": "fcbcf165908dd18a9e49f7ff27810176db8e9f63b4352213741664245224f8aa",
+      "after_sha256": "b5bea41b6c623f7c09f1bf24dcae58ebab3c0cdd90ad966bc43a45b44867e12b",
+      "reason": "terminal Guard 在正式 adapter 后验证当前 FinalizationToken"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws_v2_passthrough\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/terminal_guard_reason",
+      "before_sha256": "db1a7489dd56d935ddc3a0ea42f963baa60e8ffe9e1302fefa6eeb8e27dbf4ef",
+      "after_sha256": "missing",
+      "reason": "terminal Guard 在正式 adapter 后验证当前 FinalizationToken"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws_v2_passthrough\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/websocket/event_matrix",
+      "before_sha256": "fdc496e3b955851ec46ed567d7b53e9e6abd327f3ae1978b1702ae800182c6d6",
+      "after_sha256": "27c7eca993132c2fb78e6be29e37a3266426787fab8305c4742566e1fdbc6c5e",
+      "reason": "WebSocket 握手压缩与出站帧改由 Executor session 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.responses.ws_v2_passthrough\u0000GET\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000websocket",
+      "path": "/websocket/handshake_generated_headers",
+      "before_sha256": "45e7933183c9a05648d2aec2d359aabf3c9f5d322246b0080922492a529ca107",
+      "after_sha256": "6249426974ec4d6d1719b4f027d7bb028d616520d2317f8cc0ece9b9aa8cb8f3",
+      "reason": "WebSocket 握手压缩与出站帧改由 Executor session 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.usage.probe\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/applied_compression",
+      "before_sha256": "missing",
+      "after_sha256": "708fda4ef286eb890eafba977ebc34d99168cf51a00a3a2ff9331f98da9f660a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.usage.probe\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/final_wire_bytes",
+      "before_sha256": "missing",
+      "after_sha256": "a30f4ef42176d28f0e2293533c5f532e9c9c5696c68813b35315d17edc44f6b1",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.usage.probe\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/ordered_fields",
+      "before_sha256": "a6b6b8f84faf6045d4448068326034bef273b8be96538bce8642226b0d6583a3",
+      "after_sha256": "6af85310248af197674038039b0d1c730a2fc9e194f78f86a1565b3a6bf88f9a",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.usage.probe\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/synthetic_sha256",
+      "before_sha256": "09f4b98cae7d4a8e3a3319da068f55e94d2a80c2f16e137b54f7d3d87916afe5",
+      "after_sha256": "dda9c246c715eec046a121e5f74797ecb8d4be44eddccf6b1fb78237d8cd1c26",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.usage.probe\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/body/type_shape",
+      "before_sha256": "e3d2c7a618abb519c13bbcef88aac0769d2864eb39357ca0ce16461c65e8c21e",
+      "after_sha256": "5c8cd4aed431db785d119988e2781b725288f864e4a33d60ba06270b9cdb2dd7",
+      "reason": "Body 字段线序、omit、compiler-owned 注入、压缩与长度改由 compiler 最终定型"
+    },
+    {
+      "capture_key": "previous\u0000codex.usage.probe\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/bundle_digest",
+      "before_sha256": "88ca5f79e48e928f917935ed08e43620a9567eb04e2510a369c82adef637be8f",
+      "after_sha256": "b29f351e7f78450c4f1e57f9f5df22df4ee358685726ac9984ecbc105b44cc43",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.usage.probe\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_identity_digest",
+      "before_sha256": "7361a326781acfe33dbd3baf7a8193cdc03725228713056e25de536b22a9534d",
+      "after_sha256": "b3f7ca94b88a25676df09ae37c6a6e0f1945de9302813111ae8c50fb39a46d6b",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.usage.probe\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/connection_pool_digest",
+      "before_sha256": "a848f490fe14b8c27cb4f1d60a94dc2bae72de6e47a89898b28344e260d808ce",
+      "after_sha256": "dc694ecda7924288b5e0a251f67ef2a1a22ea2a2f13e4d390f5a979b9703e36c",
+      "reason": "捕获链由合成 Plan 改为 production invocation 后，Bundle 与连接身份绑定真实生产策略"
+    },
+    {
+      "capture_key": "previous\u0000codex.usage.probe\u0000POST\u0000chatgpt.com\u0000/backend-api/codex/responses\u0000http",
+      "path": "/ordered_headers",
+      "before_sha256": "a629d181f3d3dc19ac3e76fc97bf1ca3d03e6ddb79fde231f150cdd7661c35d2",
+      "after_sha256": "7e2454d90e78ecc34a261174bd7401314c37a77ea84072810357994bdb1d75b5",
+      "reason": "保护身份 Header 改由 compiler 根据结构化事实生成并记录安全值或摘要"
+    }
+  ]
+}

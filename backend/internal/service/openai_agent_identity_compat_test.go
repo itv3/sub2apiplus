@@ -57,6 +57,7 @@ func TestAccountTestServiceOpenAICompactAgentIdentityUsesFreshAssertion(t *testi
 }
 
 func TestAccountTestServiceOpenAICompactAgentIdentityRecoversInvalidTaskOnce(t *testing.T) {
+	configureObserveGuardForLocalHTTPTest(t)
 	gin.SetMode(gin.TestMode)
 	key, privateKey := newTestAgentIdentityKey(t)
 	account := &Account{
@@ -132,12 +133,15 @@ func TestOpenAIAgentIdentityPassthroughUsesBuiltInOfficialIdentity(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, "AgentAssertion", strings.SplitN(req.Header.Get("Authorization"), " ", 2)[0])
 	require.Equal(t, "account-agent-passthrough", req.Header.Get("chatgpt-account-id"))
-	require.Empty(t, req.Header.Get("session_id"))
-	require.Empty(t, req.Header.Get("conversation_id"))
-	require.NoError(t, uuid.Validate(req.Header.Get("session-id")))
-	require.Equal(t, req.Header.Get("session-id"), req.Header.Get("thread-id"))
-	requestBody := mustReadRequestBody(t, req)
-	require.Contains(t, string(requestBody), `"prompt_cache_key":"`+req.Header.Get("session-id")+`"`)
+	semantic, err := prepareOfficialCodexSemanticAttempt(
+		req, mustReadRequestBody(t, req), officialCodexEndpointResponsesHTTP,
+		"agent-identity-structured-test", projectOfficialCodexIdentityAccount(account),
+	)
+	require.NoError(t, err)
+	require.Empty(t, semantic.Headers.Get("session_id"))
+	require.Empty(t, semantic.Headers.Get("conversation_id"))
+	require.NoError(t, uuid.Validate(semantic.IdentityFacts.SessionID.Value))
+	require.Equal(t, semantic.IdentityFacts.SessionID.Value, semantic.IdentityFacts.ThreadID.Value)
 
 	// Authentication mode must not affect session isolation or prompt-cache
 	// behavior. Compare the same request with the existing OAuth path instead
@@ -157,8 +161,13 @@ func TestOpenAIAgentIdentityPassthroughUsesBuiltInOfficialIdentity(t *testing.T)
 	oauthContext.Request.Header.Set("conversation_id", "client-conversation")
 	oauthReq, err := svc.buildUpstreamRequestOpenAIPassthrough(context.Background(), oauthContext, oauthAccount, body, "oauth-token")
 	require.NoError(t, err)
-	require.Equal(t, oauthReq.Header.Get("session-id"), req.Header.Get("session-id"))
-	require.Equal(t, oauthReq.Header.Get("thread-id"), req.Header.Get("thread-id"))
+	oauthSemantic, err := prepareOfficialCodexSemanticAttempt(
+		oauthReq, mustReadRequestBody(t, oauthReq), officialCodexEndpointResponsesHTTP,
+		"oauth-identity-structured-test", projectOfficialCodexIdentityAccount(oauthAccount),
+	)
+	require.NoError(t, err)
+	require.Equal(t, oauthSemantic.IdentityFacts.SessionID.Value, semantic.IdentityFacts.SessionID.Value)
+	require.Equal(t, oauthSemantic.IdentityFacts.ThreadID.Value, semantic.IdentityFacts.ThreadID.Value)
 }
 
 func TestOpenAIAgentIdentityErrorRedactionDoesNotLeakCredentialValues(t *testing.T) {
@@ -290,6 +299,7 @@ func TestOpenAIWSConnPoolHeadersFactoryRunsAtDialAndStalePrewarmIsDiscarded(t *t
 }
 
 func TestOpenAIAgentIdentityTaskInvalidRetriesExactlyOnce(t *testing.T) {
+	configureObserveGuardForLocalHTTPTest(t)
 	gin.SetMode(gin.TestMode)
 	key, privateKey := newTestAgentIdentityKey(t)
 	account := &Account{
@@ -376,6 +386,7 @@ func TestOpenAIAgentIdentityTaskInvalidRetriesExactlyOnce(t *testing.T) {
 }
 
 func TestOpenAIAgentIdentityCompatRoutesRecoverInvalidTaskOnce(t *testing.T) {
+	configureObserveGuardForLocalHTTPTest(t)
 	gin.SetMode(gin.TestMode)
 	tests := []struct {
 		name string

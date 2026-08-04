@@ -11,9 +11,9 @@ import (
 	"time"
 	"unsafe"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
-	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/imroc/req/v3"
 	"github.com/stretchr/testify/require"
 )
@@ -114,9 +114,9 @@ func TestGetSharedReqClient_ProxyURLMissingHost(t *testing.T) {
 
 func TestCreateOpenAIExchangeReqClient_Timeout120Seconds(t *testing.T) {
 	sharedReqClients = sync.Map{}
-	profile, err := service.ResolveActiveCodexOAuthExchangeProfile()
+	profile, err := resolveOpenAIExchangeTLSProfile(officialegress.ReleaseModeActive)
 	require.NoError(t, err)
-	client, err := createOpenAIExchangeReqClient("http://proxy.local:8080", profile.TLSProfile)
+	client, err := createOpenAIExchangeReqClient("http://proxy.local:8080", profile)
 	require.NoError(t, err)
 	require.Equal(t, 120*time.Second, client.GetClient().Timeout)
 }

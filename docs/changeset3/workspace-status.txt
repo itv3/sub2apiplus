@@ -1,0 +1,181 @@
+ M .github/workflows/backend-ci.yml
+ M .gitignore
+ M Makefile
+ M backend/cmd/server/wire.go
+ M backend/cmd/server/wire_gen.go
+ M backend/go.sum
+ M backend/internal/config/config.go
+ M backend/internal/config/config_test.go
+ M backend/internal/handler/admin/account_data.go
+ M backend/internal/handler/admin/account_handler.go
+ M backend/internal/handler/admin/account_handler_long_context_billing_test.go
+ M backend/internal/handler/admin/admin_service_stub_test.go
+ M backend/internal/handler/admin/openai_oauth_handler.go
+ M backend/internal/handler/openai_gateway_compact_body_signal_test.go
+ M backend/internal/handler/openai_gateway_handler.go
+ M backend/internal/pkg/httpclient/pool.go
+ M backend/internal/pkg/httpclient/pool_test.go
+ M backend/internal/repository/http_upstream.go
+ M backend/internal/repository/http_upstream_test.go
+ M backend/internal/repository/openai_oauth_service.go
+ M backend/internal/repository/openai_oauth_service_test.go
+ M backend/internal/repository/req_client_pool.go
+ M backend/internal/repository/req_client_pool_test.go
+ M backend/internal/repository/wire.go
+ M backend/internal/server/routes/admin.go
+ M backend/internal/service/account_credential_shadow_skip_test.go
+ M backend/internal/service/account_long_context_billing_test.go
+ M backend/internal/service/account_test_service.go
+ M backend/internal/service/account_test_service_openai_compact_test.go
+ M backend/internal/service/account_test_service_openai_test.go
+ M backend/internal/service/account_usage_service.go
+ M backend/internal/service/account_usage_service_test.go
+ M backend/internal/service/admin_account.go
+ M backend/internal/service/admin_service.go
+ M backend/internal/service/oauth_service.go
+ M backend/internal/service/official_client_profile_registry.go
+ M backend/internal/service/official_client_profile_registry_test.go
+ M backend/internal/service/official_egress_codex_0145_profile.go
+ M backend/internal/service/official_egress_codex_0145_profile_test.go
+ D backend/internal/service/official_egress_codex_active_release.go
+ M backend/internal/service/official_egress_codex_candidate_trace_acceptance_test.go
+ M backend/internal/service/official_egress_codex_engine.go
+ M backend/internal/service/official_egress_codex_engine_test.go
+ M backend/internal/service/official_egress_codex_files.go
+ M backend/internal/service/official_egress_codex_files_test.go
+ M backend/internal/service/official_egress_codex_forward_runtime_test.go
+ M backend/internal/service/official_egress_codex_integration.go
+ D backend/internal/service/official_egress_codex_oauth.go
+ M backend/internal/service/official_egress_codex_oauth_test.go
+ M backend/internal/service/official_egress_codex_runtime_test.go
+ M backend/internal/service/official_egress_codex_version_upgrade_test.go
+ M backend/internal/service/official_egress_finalizer_pairing_test.go
+ M backend/internal/service/official_egress_integration.go
+ M backend/internal/service/official_egress_openai_http.go
+ M backend/internal/service/official_egress_openai_http_test.go
+ M backend/internal/service/official_egress_openai_json.go
+ M backend/internal/service/official_egress_openai_json_test.go
+ M backend/internal/service/official_egress_openai_ws.go
+ M backend/internal/service/official_egress_openai_ws_test.go
+ M backend/internal/service/official_egress_profile.go
+ M backend/internal/service/official_egress_transport.go
+ M backend/internal/service/official_egress_version_leak_ast_test.go
+ M backend/internal/service/openai_agent_identity.go
+ M backend/internal/service/openai_agent_identity_compat_test.go
+ M backend/internal/service/openai_agent_identity_test.go
+ M backend/internal/service/openai_alpha_search.go
+ M backend/internal/service/openai_alpha_search_test.go
+ M backend/internal/service/openai_apikey_mimic_profile.go
+ M backend/internal/service/openai_codex_models_service.go
+ M backend/internal/service/openai_codex_models_service_test.go
+ M backend/internal/service/openai_codex_pat_service.go
+ M backend/internal/service/openai_codex_pat_service_test.go
+ M backend/internal/service/openai_compact_probe.go
+ M backend/internal/service/openai_gateway_chat_completions.go
+ M backend/internal/service/openai_gateway_forward.go
+ M backend/internal/service/openai_gateway_messages.go
+ M backend/internal/service/openai_gateway_passthrough.go
+ M backend/internal/service/openai_gateway_request_body.go
+ M backend/internal/service/openai_gateway_service.go
+ M backend/internal/service/openai_images_responses.go
+ M backend/internal/service/openai_images_test.go
+ M backend/internal/service/openai_live.go
+ M backend/internal/service/openai_live_lifecycle_test.go
+ M backend/internal/service/openai_live_test.go
+ M backend/internal/service/openai_model_capabilities_test.go
+ M backend/internal/service/openai_oauth_service.go
+ M backend/internal/service/openai_oauth_service_refresh_test.go
+ M backend/internal/service/openai_privacy_retry_test.go
+ M backend/internal/service/openai_privacy_service.go
+ M backend/internal/service/openai_quota_service.go
+ M backend/internal/service/openai_quota_spark_window_test.go
+ M backend/internal/service/openai_responses_lite_tools_test.go
+ M backend/internal/service/openai_subscription_test.go
+ M backend/internal/service/openai_upstream_http.go
+ M backend/internal/service/openai_upstream_http_test.go
+ M backend/internal/service/openai_ws_client.go
+ M backend/internal/service/openai_ws_client_test.go
+ M backend/internal/service/openai_ws_forwarder_ingress.go
+ M backend/internal/service/openai_ws_forwarder_v2.go
+ M backend/internal/service/openai_ws_http_bridge.go
+ M backend/internal/service/openai_ws_http_bridge_test.go
+ M backend/internal/service/openai_ws_pool.go
+ M backend/internal/service/openai_ws_pool_test.go
+ M backend/internal/service/openai_ws_v2_passthrough_adapter.go
+ M backend/internal/service/token_refresh_service.go
+ M backend/internal/service/token_refresh_service_candidates_test.go
+ M backend/internal/service/upstream_path_guard_test.go
+ M backend/internal/service/wire.go
+ M deploy/config.example.yaml
+ M docs/CODEX_CLI_0145_EGRESS_SPEC.md
+ M frontend/src/api/admin/accounts.ts
+ M frontend/src/components/account/CreateAccountModal.vue
+ M frontend/src/components/account/ReAuthAccountModal.vue
+ M frontend/src/components/account/__tests__/CreateAccountModal.spec.ts
+ M frontend/src/components/admin/account/ReAuthAccountModal.vue
+ M tools/check_ledger_completeness.py
+ M tools/official_client_capture/addons/mitm_capture.py
+ M tools/official_client_capture/capture.py
+ M tools/official_client_capture/capturelib/environment.py
+ M tools/official_client_capture/capturelib/lifecycle.py
+ M tools/official_client_capture/capturelib/manifest.py
+ M tools/official_client_capture/capturelib/model.py
+ M tools/official_client_capture/capturelib/scenarios.py
+ M tools/official_client_capture/capturelib/security.py
+ M tools/official_client_capture/claude_21220/check_coverage.py
+ M tools/official_client_capture/claude_21220/hitcc_2_1_197_coverage.json
+ M tools/official_client_capture/claude_21220/rules_2_1_220.json
+ M tools/official_client_capture/claude_21220/source_2_1_88_coverage.json
+ M tools/official_client_capture/extract_claude_bundle.py
+ M tools/official_client_capture/tests/test_capture_validation.py
+ M tools/official_client_capture/tests/test_commands.py
+ M tools/official_client_capture/tests/test_environment.py
+ M tools/official_client_capture/tests/test_lifecycle.py
+ M tools/official_client_capture/tests/test_mitm_capture_addon.py
+ M tools/official_client_capture/tests/test_scenario_validation.py
+ M tools/official_client_capture/tests/test_security.py
+ D tools/scan_egress_sinks.py
+?? .vite/
+?? backend/cmd/egressbindingdump/
+?? backend/cmd/egressprofiledump/
+?? backend/cmd/egressreleasegraphdump/
+?? backend/cmd/egressscan/
+?? backend/cmd/egressseal/
+?? backend/internal/handler/admin/account_handler_privacy_create_test.go
+?? backend/internal/handler/admin/openai_oauth_handler_privacy_test.go
+?? backend/internal/officialegress/
+?? backend/internal/repository/official_egress_guard.go
+?? backend/internal/repository/official_egress_req_guard_test.go
+?? backend/internal/repository/official_egress_runtime_controls_test.go
+?? backend/internal/repository/req_client_chrome_wire_test.go
+?? backend/internal/service/official_egress_1a_binding.go
+?? backend/internal/service/official_egress_1a_transition.go
+?? backend/internal/service/official_egress_1a_transition_test.go
+?? backend/internal/service/official_egress_1b_executor.go
+?? backend/internal/service/official_egress_1b_executor_test.go
+?? backend/internal/service/official_egress_1b_receipt_artifacts_test.go
+?? backend/internal/service/official_egress_codex_release_projection.go
+?? backend/internal/service/official_egress_legacy_dispatch.go
+?? backend/internal/service/official_egress_legacy_ws_dispatch.go
+?? backend/internal/service/official_egress_test_helpers_test.go
+?? backend/internal/service/official_egress_ws_guard_test.go
+?? backend/internal/service/openai_privacy_changeset1b_test.go
+?? backend/internal/service/openai_privacy_production_chain_test.go
+?? backend/internal/service/openai_wham_changeset1b_test.go
+?? docs/1.md
+?? docs/Claude_code_21220_EGRESS_SPEC.md
+?? docs/changeset0/
+?? docs/changeset1a/
+?? docs/changeset1b/
+?? docs/changeset1c/
+?? docs/changeset2/
+?? frontend/src/api/__tests__/admin.accounts.openaiOAuth.spec.ts
+?? frontend/src/components/admin/account/__tests__/ReAuthAccountModal.openaiOAuth.spec.ts
+?? tools/official_client_capture/analyze_claude_21220_pending_evidence.py
+?? tools/official_client_capture/capturelib/identity.py
+?? tools/official_client_capture/post_run_secret_scan_receipt.py
+?? tools/official_client_capture/runtime_host_receipt.py
+?? tools/official_client_capture/tests/test_claude_21220_campaign_gate.py
+?? tools/official_client_capture/tests/test_claude_21220_pending_evidence.py
+?? tools/official_client_capture/tests/test_extract_claude_bundle.py
+?? tools/official_client_capture/tests/test_post_run_secret_scan_receipt.py

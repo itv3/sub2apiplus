@@ -874,10 +874,6 @@ func (h *AccountHandler) Create(c *gin.Context) {
 			return nil, execErr
 		}
 		createdAccount = account
-		// Antigravity OAuth: 新账号直接设置隐私
-		h.adminService.ForceAntigravityPrivacy(ctx, account)
-		// OpenAI OAuth: 新账号直接设置隐私
-		h.adminService.ForceOpenAIPrivacy(ctx, account)
 		return h.buildAccountResponseWithRuntime(ctx, account), nil
 	})
 	if err != nil {
@@ -1417,6 +1413,84 @@ type ApplyOAuthCredentialsRequest struct {
 	Extra       map[string]any `json:"extra"`
 }
 
+type ReauthorizeOpenAIRequest struct {
+	SessionID   string `json:"session_id" binding:"required"`
+	Code        string `json:"code" binding:"required"`
+	State       string `json:"state" binding:"required"`
+	RedirectURI string `json:"redirect_uri"`
+}
+
+// ReauthorizeOpenAI 在服务端持有账号上下文的情况下完成授权码兑换。账号现有冷却状态
+// 与稳定 rollout key 会在任何 browser 请求前冻结，Credentials 和受管 privacy Extra
+// 通过一次 UpdateAccount 原子写入。
+// POST /api/v1/admin/openai/accounts/:id/reauthorize
+func (h *AccountHandler) ReauthorizeOpenAI(c *gin.Context) {
+	accountID, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		response.BadRequest(c, "Invalid account ID")
+		return
+	}
+	var req ReauthorizeOpenAIRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		response.BadRequest(c, "Invalid request: "+err.Error())
+		return
+	}
+	if h.openaiOAuthService == nil {
+		response.ErrorFrom(c, infraerrors.New(http.StatusServiceUnavailable, "OPENAI_OAUTH_UNAVAILABLE", "OpenAI OAuth service is unavailable"))
+		return
+	}
+
+	ctx := c.Request.Context()
+	account, err := h.adminService.GetAccount(ctx, accountID)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+	if account.Platform != service.PlatformOpenAI || !account.IsOAuth() || account.IsCredentialShadow() {
+		response.ErrorFrom(c, infraerrors.BadRequest("OPENAI_OAUTH_INVALID_ACCOUNT", "account is not a writable OpenAI OAuth account"))
+		return
+	}
+
+	tokenInfo, err := h.openaiOAuthService.ExchangeCodeForAccount(ctx, &service.OpenAIExchangeCodeInput{
+		SessionID:   req.SessionID,
+		Code:        req.Code,
+		State:       req.State,
+		RedirectURI: req.RedirectURI,
+		ProxyID:     account.ProxyID,
+	}, account)
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	credentials := service.MergeCredentials(
+		account.Credentials,
+		h.openaiOAuthService.BuildAccountCredentials(tokenInfo),
+	)
+	credentials = service.NormalizeOpenAIPersonalAccessTokenCredentials(account, tokenInfo, credentials)
+	updatedAccount, err := h.adminService.UpdateAccount(ctx, accountID, &service.UpdateAccountInput{
+		Credentials:         credentials,
+		ManagedPrivacyExtra: h.openaiOAuthService.BuildAccountExtra(tokenInfo),
+	})
+	if err != nil {
+		response.ErrorFrom(c, err)
+		return
+	}
+
+	if cleared, clearErr := h.adminService.ClearAccountError(ctx, accountID); clearErr != nil {
+		slog.Warn("reauthorize_openai.clear_error_failed", "account_id", accountID, "err", clearErr)
+	} else if cleared != nil {
+		updatedAccount = cleared
+	}
+	if h.tokenCacheInvalidator != nil {
+		if invalidateErr := h.tokenCacheInvalidator.InvalidateToken(ctx, updatedAccount); invalidateErr != nil {
+			slog.Warn("reauthorize_openai.invalidate_token_failed", "account_id", accountID, "err", invalidateErr)
+		}
+	}
+
+	response.Success(c, h.buildAccountResponseWithRuntime(ctx, updatedAccount))
+}
+
 // ApplyOAuthCredentials 将"重新授权"得到的新凭据原子落库。
 // POST /api/v1/admin/accounts/:id/apply-oauth-credentials
 //
@@ -1453,6 +1527,10 @@ func (h *AccountHandler) ApplyOAuthCredentials(c *gin.Context) {
 	}
 	if !existing.IsOAuth() {
 		response.ErrorFrom(c, infraerrors.BadRequest("NOT_OAUTH", "cannot apply oauth credentials to non-OAuth account"))
+		return
+	}
+	if err := service.ValidateNoManagedPrivacyExtra(req.Extra); err != nil {
+		response.ErrorFrom(c, err)
 		return
 	}
 	if err := service.ValidateOpenAILongContextBillingExtra(existing.Platform, req.Extra); err != nil {
@@ -1763,9 +1841,6 @@ func (h *AccountHandler) BatchCreate(c *gin.Context) {
 		success := 0
 		failed := 0
 		results := make([]gin.H, 0, len(req.Accounts))
-		// 收集需要异步设置隐私的 OAuth 账号
-		var antigravityPrivacyAccounts []*service.Account
-		var openaiPrivacyAccounts []*service.Account
 
 		for _, item := range req.Accounts {
 			if item.RateMultiplier != nil && *item.RateMultiplier < 0 {
@@ -1808,15 +1883,6 @@ func (h *AccountHandler) BatchCreate(c *gin.Context) {
 				})
 				continue
 			}
-			// 收集需要异步设置隐私的 OAuth 账号
-			if account.Type == service.AccountTypeOAuth {
-				switch account.Platform {
-				case service.PlatformAntigravity:
-					antigravityPrivacyAccounts = append(antigravityPrivacyAccounts, account)
-				case service.PlatformOpenAI:
-					openaiPrivacyAccounts = append(openaiPrivacyAccounts, account)
-				}
-			}
 			// OpenAI APIKey 账号异步探测 /v1/responses 能力。
 			h.scheduleOpenAIResponsesProbe(account)
 			h.scheduleGrokImportProbe(account)
@@ -1826,37 +1892,6 @@ func (h *AccountHandler) BatchCreate(c *gin.Context) {
 				"id":      account.ID,
 				"success": true,
 			})
-		}
-
-		// 异步设置隐私，避免批量创建时阻塞请求
-		adminSvc := h.adminService
-		if len(antigravityPrivacyAccounts) > 0 {
-			accounts := antigravityPrivacyAccounts
-			go func() {
-				defer func() {
-					if r := recover(); r != nil {
-						slog.Error("batch_create_antigravity_privacy_panic", "recover", r)
-					}
-				}()
-				bgCtx := context.Background()
-				for _, acc := range accounts {
-					adminSvc.ForceAntigravityPrivacy(bgCtx, acc)
-				}
-			}()
-		}
-		if len(openaiPrivacyAccounts) > 0 {
-			accounts := openaiPrivacyAccounts
-			go func() {
-				defer func() {
-					if r := recover(); r != nil {
-						slog.Error("batch_create_openai_privacy_panic", "recover", r)
-					}
-				}()
-				bgCtx := context.Background()
-				for _, acc := range accounts {
-					adminSvc.ForceOpenAIPrivacy(bgCtx, acc)
-				}
-			}()
 		}
 
 		return gin.H{

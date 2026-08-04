@@ -1,0 +1,28 @@
+{
+  "schema_version": "sub2api.changeset5.changeset3_source_transition.v1",
+  "changeset": "5",
+  "reference_manifest": "docs/changeset3/post_identity_authority_refactor_final_wire/manifest.json",
+  "reference_manifest_sha256": "c824ffb0ab6e2429c09f9ac517cf3e6f96860c7c6ef77c229757fd690bdbcf0f",
+  "prior_transition": "docs/changeset4/changeset3-source-transition.json",
+  "prior_transition_sha256": "85cfb8e5324b5063b480f5e27cab1781500a5a3aba1957aae581f0ed0e62d478",
+  "transitions": [
+    {
+      "path": "backend/internal/service/official_egress_codex_files.go",
+      "from_sha256": "dc9a1f3311d498656bc07412b67a6d8681d7d1bba36d2c702ec26e23b3dc04bb",
+      "to_sha256": "9f4389d53158cff54932511db0cc25ac7c289646d35ab0b48a2201d965ff1ca5",
+      "reason": "仅删除版本无关生产标识符中的 0145 片段，外部稳定 ID、控制流与 wire 不变"
+    },
+    {
+      "path": "backend/internal/service/official_egress_transport_adapters.go",
+      "from_sha256": "c7b788324a6e232c2be5f2805e199d4df098337fceda772121aa49bf2aba5081",
+      "to_sha256": "b9bf2d0c462eee41fb086f9798dea75f3fb80d366f36b66951b24aaf893b2f6b",
+      "reason": "从共享上游文件机械迁入 WebSocket transport 与客户端缓存适配单元，调用签名和最终 wire 不变"
+    },
+    {
+      "path": "backend/internal/service/official_egress_changeset3_production_final_wire_test.go",
+      "from_sha256": "3964bbd26488ee0d0bebe44693bc3a7957aaa9b094b0ca2fbc1f08d849ce6771",
+      "to_sha256": "0643f3acf17f40c341ca6d78b2918444cba45cdb230c70acab86830cfe65e886",
+      "reason": "测试采集边界固定 OAuth InvocationID，消除 connection_pool_digest 随机噪声；不修改生产发送逻辑"
+    }
+  ]
+}

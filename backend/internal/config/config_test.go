@@ -40,6 +40,41 @@ func TestLoadServerTimingConfig(t *testing.T) {
 	})
 }
 
+func TestLoadOfficialEgressGuardRuntimeControlsFromEnvironment(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	controls := `{"schema_version":1,"controls":[{"sink_id":"codex.admin_test.compact","state":"canary_enforce"}]}`
+	policyOverrides := `{"schema_version":2,"overrides":[]}`
+	t.Setenv("GATEWAY_OFFICIAL_EGRESS_GUARD_UNKNOWN_ROUTE_POLICY", "enforce")
+	t.Setenv("GATEWAY_OFFICIAL_EGRESS_GUARD_UNREGISTERED_SINK_POLICY", "enforce")
+	t.Setenv("GATEWAY_OFFICIAL_EGRESS_GUARD_INSTANCE_ID", "DMIT")
+	t.Setenv("GATEWAY_OFFICIAL_EGRESS_GUARD_SINK_CONTROLS_JSON", controls)
+	t.Setenv("GATEWAY_OFFICIAL_EGRESS_GUARD_POLICY_OVERRIDES_JSON", policyOverrides)
+
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "enforce", cfg.Gateway.OfficialEgressGuard.UnknownRoutePolicy)
+	require.Equal(t, "enforce", cfg.Gateway.OfficialEgressGuard.UnregisteredSinkPolicy)
+	require.Equal(t, "DMIT", cfg.Gateway.OfficialEgressGuard.InstanceID)
+	require.Equal(t, controls, cfg.Gateway.OfficialEgressGuard.SinkControlsJSON)
+	require.Equal(t, policyOverrides, cfg.Gateway.OfficialEgressGuard.PolicyOverridesJSON)
+}
+
+func TestLoadOfficialEgressGuardDefaultsToFailClose(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "enforce", cfg.Gateway.OfficialEgressGuard.UnknownRoutePolicy)
+	require.Equal(t, "enforce", cfg.Gateway.OfficialEgressGuard.UnregisteredSinkPolicy)
+	require.Equal(t, 100, cfg.Gateway.OfficialEgressGuard.CanaryPercent)
+}
+
+func TestLoadOfficialEgressGuardRejectsPermanentGlobalObserve(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	t.Setenv("GATEWAY_OFFICIAL_EGRESS_GUARD_UNKNOWN_ROUTE_POLICY", "observe")
+	_, err := Load()
+	require.ErrorContains(t, err, "只允许 enforce")
+}
+
 func TestLoadRedisUsernameFromEnvironment(t *testing.T) {
 	resetViperWithJWTSecret(t)
 	t.Setenv("REDIS_USERNAME", "app-user")
@@ -405,6 +440,32 @@ func TestOfficialClientProfilesDefaultAndValidation(t *testing.T) {
 	require.NoError(t, cfg.Validate())
 	cfg.Gateway.OfficialClientProfiles.Mode = "invalid"
 	require.ErrorContains(t, cfg.Validate(), "gateway.official_client_profiles.mode")
+}
+
+func TestOpenAIPrivacyBrowserDefaultsAndValidation(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.False(t, cfg.Gateway.OpenAIPrivacyBrowser.Enabled,
+		"审核前不得自动提升 browser persona 灰度")
+	require.Zero(t, cfg.Gateway.OpenAIPrivacyBrowser.CanaryPercent)
+	require.Equal(t, "auto", cfg.Gateway.OpenAIPrivacyBrowser.Platform)
+	require.Equal(t, 3600, cfg.Gateway.OpenAIPrivacyBrowser.FailureCooldownSeconds)
+
+	cfg.Gateway.OpenAIPrivacyBrowser.Enabled = true
+	cfg.Gateway.OpenAIPrivacyBrowser.CanaryPercent = 25
+	cfg.Gateway.OpenAIPrivacyBrowser.Platform = "linux"
+	cfg.Gateway.OpenAIPrivacyBrowser.AcceptLanguage = "en-US,en;q=0.9"
+	require.NoError(t, cfg.Validate())
+
+	cfg.Gateway.OpenAIPrivacyBrowser.CanaryPercent = 101
+	require.ErrorContains(t, cfg.Validate(), "gateway.openai_privacy_browser.canary_percent")
+	cfg.Gateway.OpenAIPrivacyBrowser.CanaryPercent = 25
+	cfg.Gateway.OpenAIPrivacyBrowser.Platform = "ios"
+	require.ErrorContains(t, cfg.Validate(), "gateway.openai_privacy_browser.platform")
+	cfg.Gateway.OpenAIPrivacyBrowser.Platform = "auto"
+	cfg.Gateway.OpenAIPrivacyBrowser.AcceptLanguage = "en-US\r\nX-Injected: true"
+	require.ErrorContains(t, cfg.Validate(), "gateway.openai_privacy_browser.accept_language")
 }
 
 func TestLoadOpenAIFirstOutputTimeoutsFromEnv(t *testing.T) {

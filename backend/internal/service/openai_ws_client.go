@@ -12,8 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	openaiwsv2 "github.com/Wei-Shaw/sub2api/internal/service/openai_ws_v2"
 	coderws "github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
@@ -112,7 +111,25 @@ func (d *coderOpenAIWSClientDialer) Dial(
 		HTTPHeader:      cloneHeader(headers),
 		CompressionMode: coderws.CompressionContextTakeover,
 	}
-	if egressContext, enabled := OfficialEgressContextFromContext(ctx); enabled {
+	if compiled, enabled := ctx.Value(officialCompiledWSTransportContextKey{}).(officialCompiledWSTransport); enabled {
+		if compiled.target != targetURL || !headersEqualForCompiledWebSocket(compiled.headers, headers) {
+			return nil, 0, nil, errors.New("compiled WebSocket 握手与发送参数不一致")
+		}
+		officialClient, err := d.compiledOfficialEgressHTTPClient(compiled, proxyURL)
+		if err != nil {
+			return nil, 0, nil, err
+		}
+		opts.HTTPClient = officialClient
+		compression := compiled.transport.Normalization
+		if strings.TrimSpace(compression.WebSocketCompressionOffer) == "" {
+			opts.CompressionMode = coderws.CompressionDisabled
+		} else if compression.WebSocketContextTakeover &&
+			compression.WebSocketCompressedTextRSV1 && compression.WebSocketRawDeflatePayload {
+			opts.CompressionMode = coderws.CompressionContextTakeover
+		} else {
+			return nil, 0, nil, errors.New("compiled WebSocket 压缩执行组合非法")
+		}
+	} else if egressContext, enabled := OfficialEgressContextFromContext(ctx); enabled {
 		officialClient, err := d.officialEgressHTTPClient(egressContext, targetURL, proxyURL)
 		if err != nil {
 			return nil, 0, nil, err
@@ -124,6 +141,8 @@ func (d *coderOpenAIWSClientDialer) Dial(
 			return nil, 0, nil, err
 		}
 		opts.HTTPClient = proxyClient
+	} else {
+		opts.HTTPClient = guardedOpenAIWSDefaultClient
 	}
 
 	conn, resp, err := coderws.Dial(ctx, targetURL, opts)
@@ -151,101 +170,22 @@ func (d *coderOpenAIWSClientDialer) Dial(
 	return &coderOpenAIWSClientConn{conn: conn}, 0, respHeaders, nil
 }
 
-func (d *coderOpenAIWSClientDialer) officialEgressHTTPClient(
-	egressContext *OfficialEgressContext,
-	targetURL string,
-	proxyURL string,
-) (*http.Client, error) {
-	if d == nil {
-		return nil, errors.New("openai ws dialer is nil")
+func headersEqualForCompiledWebSocket(expected, actual http.Header) bool {
+	if len(expected) != len(actual) {
+		return false
 	}
-	if egressContext == nil || !egressContext.frozen {
-		return nil, errors.New("official egress WebSocket context must be frozen before dialing")
+	for name, values := range expected {
+		other, ok := actual[http.CanonicalHeaderKey(name)]
+		if !ok || len(values) != len(other) {
+			return false
+		}
+		for index := range values {
+			if values[index] != other[index] {
+				return false
+			}
+		}
 	}
-	parsedTarget, err := url.Parse(strings.TrimSpace(targetURL))
-	if err != nil {
-		return nil, fmt.Errorf("invalid official egress WebSocket URL: %w", err)
-	}
-	if !strings.EqualFold(parsedTarget.Scheme, "wss") ||
-		normalizeOfficialEgressHost(parsedTarget.Host) != egressContext.upstreamHost {
-		return nil, errors.New("official egress WebSocket URL conflicts with frozen context")
-	}
-	tlsProfile, err := resolveOfficialEgressWebSocketTransportProfile(egressContext)
-	if err != nil {
-		return nil, err
-	}
-	cacheKey := "official:" + egressContext.connectionPoolID +
-		"|proxy_state=" + officialEgressProxyStateKey(strings.TrimSpace(proxyURL))
-	now := time.Now().UnixNano()
-
-	d.proxyMu.Lock()
-	defer d.proxyMu.Unlock()
-	if entry, ok := d.proxyClients[cacheKey]; ok && entry != nil && entry.client != nil {
-		entry.lastUsedUnixNano = now
-		d.proxyHits.Add(1)
-		return entry.client, nil
-	}
-	d.cleanupProxyClientsLocked(now)
-	transport, err := buildOpenAIOfficialEgressWSTransport(tlsProfile, proxyURL)
-	if err != nil {
-		return nil, err
-	}
-	client := &http.Client{
-		Transport: &officialEgressWebSocketRoundTripper{base: transport},
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-	d.proxyClients[cacheKey] = &openAIWSProxyClientEntry{
-		client:           client,
-		lastUsedUnixNano: now,
-	}
-	d.ensureProxyClientCapacityLocked()
-	d.proxyMisses.Add(1)
-	return client, nil
-}
-
-func buildOpenAIOfficialEgressWSTransport(
-	profile *tlsfingerprint.Profile,
-	rawProxyURL string,
-) (*http.Transport, error) {
-	if profile == nil {
-		return nil, errors.New("official egress WebSocket TLS profile is nil")
-	}
-	transport := &http.Transport{
-		MaxIdleConns:        openAIWSProxyTransportMaxIdleConns,
-		MaxIdleConnsPerHost: openAIWSProxyTransportMaxIdleConnsPerHost,
-		IdleConnTimeout:     openAIWSProxyTransportIdleConnTimeout,
-		TLSHandshakeTimeout: 10 * time.Second,
-		ForceAttemptHTTP2:   false,
-		DisableCompression:  profile.Transport.DisableCompression,
-	}
-	_, parsedProxyURL, err := proxyurl.Parse(rawProxyURL)
-	if err != nil {
-		return nil, err
-	}
-	if parsedProxyURL == nil {
-		transport.DialTLSContext = tlsfingerprint.NewDialer(profile, nil).DialTLSContext
-		return transport, nil
-	}
-	switch strings.ToLower(parsedProxyURL.Scheme) {
-	case "http", "https":
-		transport.DialTLSContext = tlsfingerprint.NewHTTPProxyDialer(
-			profile,
-			parsedProxyURL,
-		).DialTLSContext
-	case "socks5", "socks5h":
-		transport.DialTLSContext = tlsfingerprint.NewSOCKS5ProxyDialer(
-			profile,
-			parsedProxyURL,
-		).DialTLSContext
-	default:
-		return nil, fmt.Errorf(
-			"official egress WebSocket proxy scheme is unsupported: %s",
-			parsedProxyURL.Scheme,
-		)
-	}
-	return transport, nil
+	return true
 }
 
 func (d *coderOpenAIWSClientDialer) proxyHTTPClient(proxy string) (*http.Client, error) {
@@ -278,7 +218,12 @@ func (d *coderOpenAIWSClientDialer) proxyHTTPClient(proxy string) (*http.Client,
 		TLSHandshakeTimeout: 10 * time.Second,
 		ForceAttemptHTTP2:   true,
 	}
-	client := &http.Client{Transport: transport}
+	client := &http.Client{Transport: officialegress.NewGuardedRoundTripper(
+		transport,
+		nil,
+		officialegress.BackendWebSocket,
+		officialegress.WireProtocolWebSocket,
+	)}
 	d.proxyClients[normalizedProxy] = &openAIWSProxyClientEntry{
 		client:           client,
 		lastUsedUnixNano: now,
@@ -349,40 +294,6 @@ func closeOpenAIWSProxyClient(client *http.Client) {
 	}
 	if transport, ok := client.Transport.(interface{ CloseIdleConnections() }); ok && transport != nil {
 		transport.CloseIdleConnections()
-	}
-}
-
-// officialEgressWebSocketRoundTripper 在 coder/websocket 生成握手请求后补齐
-// 官方 Codex 的压缩扩展提议；底层压缩协商和帧处理仍由 coder/websocket 负责。
-type officialEgressWebSocketRoundTripper struct {
-	base http.RoundTripper
-}
-
-func (r *officialEgressWebSocketRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
-	if r == nil || r.base == nil {
-		return nil, errors.New("official egress WebSocket transport is nil")
-	}
-	if req == nil {
-		return nil, errors.New("official egress WebSocket request is nil")
-	}
-	cloned := req.Clone(req.Context())
-	cloned.Header = cloneHeader(req.Header)
-	if strings.EqualFold(strings.TrimSpace(cloned.Header.Get("Upgrade")), "websocket") &&
-		strings.EqualFold(
-			strings.TrimSpace(cloned.Header.Get("Sec-WebSocket-Extensions")),
-			"permessage-deflate",
-		) {
-		cloned.Header.Set("Sec-WebSocket-Extensions", officialOpenAIWSCompressionOffer)
-	}
-	return r.base.RoundTrip(cloned)
-}
-
-func (r *officialEgressWebSocketRoundTripper) CloseIdleConnections() {
-	if r == nil || r.base == nil {
-		return
-	}
-	if closer, ok := r.base.(interface{ CloseIdleConnections() }); ok {
-		closer.CloseIdleConnections()
 	}
 }
 

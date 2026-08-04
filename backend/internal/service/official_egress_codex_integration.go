@@ -3,12 +3,13 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"sort"
 	"strings"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -20,7 +21,7 @@ const (
 	officialCodexRuntimeMetricsAccountExtra = "official_codex_runtime_metrics"
 )
 
-var officialCodex0145TrustedConditionalHeaders = map[string]string{
+var officialCodexTrustedConditionalHeaders = map[string]string{
 	"x-openai-internal-codex-residency":     officialCodexConditionResidency,
 	"x-openai-subagent":                     officialCodexConditionSubagent,
 	"x-openai-memgen-request":               officialCodexConditionMemoryGeneration,
@@ -28,10 +29,10 @@ var officialCodex0145TrustedConditionalHeaders = map[string]string{
 	"x-responsesapi-include-timing-metrics": officialCodexConditionRuntimeMetrics,
 }
 
-type officialCodex0145RuntimeStateContextKey struct{}
-type officialCodex0145IngressRuntimeContextKey struct{}
+type officialCodexRuntimeStateContextKey struct{}
+type officialCodexIngressRuntimeContextKey struct{}
 
-type officialCodex0145IngressRuntimeSnapshot struct {
+type officialCodexIngressRuntimeSnapshot struct {
 	OfficialClient            bool
 	UserAgent                 string
 	Originator                string
@@ -42,30 +43,30 @@ type officialCodex0145IngressRuntimeSnapshot struct {
 	TurnMetadata              string
 }
 
-// WithOfficialCodex0145IngressRuntime 在路由入口保存原始进程身份与 feature。
+// WithOfficialCodexIngressRuntime 在路由入口保存原始进程身份与 feature。
 // 它不判定账号 requirements，也不生成出站 header；账号选定后仍须由版本画像完成
 // 配对和条件关系校验。必须在 body 解压前调用，避免 Content-Encoding 被标准化删除后
 // 丢失官方进程的 request compression 状态。重复调用保持首次快照，不能用已经标准化
 // 的请求覆盖原始 wire 事实；realtime 也用同一入口跨调度边界冻结身份。
-func WithOfficialCodex0145IngressRuntime(ctx context.Context, c *gin.Context) context.Context {
+func WithOfficialCodexIngressRuntime(ctx context.Context, c *gin.Context) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if _, captured := officialCodex0145IngressRuntimeSnapshotFromContext(ctx); captured {
+	if _, captured := officialCodexIngressRuntimeSnapshotFromContext(ctx); captured {
 		return ctx
 	}
 	return context.WithValue(
 		ctx,
-		officialCodex0145IngressRuntimeContextKey{},
-		officialCodex0145IngressRuntimeSnapshotFromGin(c),
+		officialCodexIngressRuntimeContextKey{},
+		officialCodexIngressRuntimeSnapshotFromGin(c),
 	)
 }
 
-func officialCodex0145IngressRuntimeSnapshotFromGin(c *gin.Context) officialCodex0145IngressRuntimeSnapshot {
+func officialCodexIngressRuntimeSnapshotFromGin(c *gin.Context) officialCodexIngressRuntimeSnapshot {
 	if c == nil || c.Request == nil {
-		return officialCodex0145IngressRuntimeSnapshot{}
+		return officialCodexIngressRuntimeSnapshot{}
 	}
-	return officialCodex0145IngressRuntimeSnapshot{
+	return officialCodexIngressRuntimeSnapshot{
 		OfficialClient:            isInboundOpenAIOfficialClient(c),
 		UserAgent:                 strings.TrimSpace(c.GetHeader("user-agent")),
 		Originator:                strings.TrimSpace(c.GetHeader("originator")),
@@ -77,24 +78,24 @@ func officialCodex0145IngressRuntimeSnapshotFromGin(c *gin.Context) officialCode
 	}
 }
 
-func officialCodex0145IngressRuntimeSnapshotFromContext(
+func officialCodexIngressRuntimeSnapshotFromContext(
 	ctx context.Context,
-) (officialCodex0145IngressRuntimeSnapshot, bool) {
+) (officialCodexIngressRuntimeSnapshot, bool) {
 	if ctx == nil {
-		return officialCodex0145IngressRuntimeSnapshot{}, false
+		return officialCodexIngressRuntimeSnapshot{}, false
 	}
-	snapshot, ok := ctx.Value(officialCodex0145IngressRuntimeContextKey{}).(officialCodex0145IngressRuntimeSnapshot)
+	snapshot, ok := ctx.Value(officialCodexIngressRuntimeContextKey{}).(officialCodexIngressRuntimeSnapshot)
 	return snapshot, ok
 }
 
-// withOfficialCodex0145RuntimeState 把已经完成来源校验的进程快照绑定到业务上下文。
+// withOfficialCodexRuntimeState 把已经完成来源校验的进程快照绑定到业务上下文。
 // models、alpha-search、images 等辅助端点会在协议转换后重新构造请求，因此不能
 // 再从最终 header 猜测入口；它们只消费这里冻结的值。
-func withOfficialCodex0145RuntimeState(
+func withOfficialCodexRuntimeState(
 	ctx context.Context,
-	state officialCodex0145RuntimeState,
+	state officialCodexRuntimeState,
 ) (context.Context, error) {
-	if err := validateOfficialCodex0145RuntimeState(state); err != nil {
+	if err := validateOfficialCodexRuntimeState(state); err != nil {
 		return nil, err
 	}
 	if ctx == nil {
@@ -102,111 +103,129 @@ func withOfficialCodex0145RuntimeState(
 	}
 	return context.WithValue(
 		ctx,
-		officialCodex0145RuntimeStateContextKey{},
-		cloneOfficialCodex0145RuntimeState(state),
+		officialCodexRuntimeStateContextKey{},
+		cloneOfficialCodexRuntimeState(state),
 	), nil
 }
 
-func officialCodex0145RuntimeStateFromContext(
+func officialCodexRuntimeStateFromContext(
 	ctx context.Context,
-) (officialCodex0145RuntimeState, bool, error) {
+) (officialCodexRuntimeState, bool, error) {
 	if ctx == nil {
-		return officialCodex0145RuntimeState{}, false, nil
+		return officialCodexRuntimeState{}, false, nil
 	}
-	state, ok := ctx.Value(officialCodex0145RuntimeStateContextKey{}).(officialCodex0145RuntimeState)
+	state, ok := ctx.Value(officialCodexRuntimeStateContextKey{}).(officialCodexRuntimeState)
 	if !ok {
-		return officialCodex0145RuntimeState{}, false, nil
+		return officialCodexRuntimeState{}, false, nil
 	}
-	state = cloneOfficialCodex0145RuntimeState(state)
-	if err := validateOfficialCodex0145RuntimeState(state); err != nil {
-		return officialCodex0145RuntimeState{}, false, err
+	state = cloneOfficialCodexRuntimeState(state)
+	if err := validateOfficialCodexRuntimeState(state); err != nil {
+		return officialCodexRuntimeState{}, false, err
 	}
 	return state, true, nil
 }
 
-// resolveBoundOrIngressOfficialCodex0145RuntimeState 统一所有 attach 路径的
+// resolveBoundOrIngressOfficialCodexRuntimeState 统一所有 attach 路径的
 // 运行态来源优先级：先消费 token 刷新前冻结的 context；只有调用方尚未绑定时，
 // 才从当前入站对象解析。辅助端点可传 nil ingress，并得到受管理账号条件与默认
 // exec 画像。该入口避免 HTTP、WS 和辅助链各自重新猜测进程状态。
-func resolveBoundOrIngressOfficialCodex0145RuntimeState(
+func resolveBoundOrIngressOfficialCodexRuntimeState(
 	ctx context.Context,
 	c *gin.Context,
 	account *Account,
-	endpointIDs ...codex0145EndpointID,
-) (officialCodex0145RuntimeState, error) {
-	state, bound, err := officialCodex0145RuntimeStateFromContext(ctx)
+	mode string,
+	endpointIDs ...codexEndpointID,
+) (officialCodexRuntimeState, error) {
+	state, bound, err := officialCodexRuntimeStateFromContext(ctx)
 	if err != nil {
-		return officialCodex0145RuntimeState{}, err
+		return officialCodexRuntimeState{}, err
 	}
 	if bound {
 		return state, nil
 	}
-	if snapshot, captured := officialCodex0145IngressRuntimeSnapshotFromContext(ctx); captured {
-		return resolveOfficialCodex0145RuntimeStateFromSnapshot(snapshot, account, endpointIDs...)
+	if snapshot, captured := officialCodexIngressRuntimeSnapshotFromContext(ctx); captured {
+		return resolveOfficialCodexRuntimeStateFromSnapshot(snapshot, account, mode, endpointIDs...)
 	}
 	if c != nil && c.Request != nil {
-		if snapshot, captured := officialCodex0145IngressRuntimeSnapshotFromContext(c.Request.Context()); captured {
-			return resolveOfficialCodex0145RuntimeStateFromSnapshot(snapshot, account, endpointIDs...)
+		if snapshot, captured := officialCodexIngressRuntimeSnapshotFromContext(c.Request.Context()); captured {
+			return resolveOfficialCodexRuntimeStateFromSnapshot(snapshot, account, mode, endpointIDs...)
 		}
 	}
-	return resolveOfficialCodex0145RuntimeState(c, account, endpointIDs...)
+	return resolveOfficialCodexRuntimeState(c, account, mode, endpointIDs...)
 }
 
-func bindOfficialCodex0145RuntimeStateFromIngress(
+func bindOfficialCodexRuntimeStateFromIngress(
 	ctx context.Context,
 	c *gin.Context,
 	account *Account,
-	endpointIDs ...codex0145EndpointID,
+	mode string,
+	endpointIDs ...codexEndpointID,
 ) (context.Context, error) {
-	state, err := resolveBoundOrIngressOfficialCodex0145RuntimeState(
+	state, err := resolveBoundOrIngressOfficialCodexRuntimeState(
 		ctx,
 		c,
 		account,
+		mode,
 		endpointIDs...,
 	)
 	if err != nil {
 		return nil, err
 	}
-	return withOfficialCodex0145RuntimeState(ctx, state)
+	return withOfficialCodexRuntimeState(ctx, state)
 }
 
-// BindOfficialCodex0145ResponsesWebSocketRuntime 在 handler 已选定 OAuth 账号后，
+// BindOfficialCodexResponsesWebSocketRuntime 在 handler 已选定 OAuth 账号后，
 // 通过单一版本画像冻结 WS 入站进程状态。调用方必须在 token 刷新之前使用返回的
 // context，并把同一 context 继续传给 WS 代理，避免刷新与最终握手出现两套身份。
-func BindOfficialCodex0145ResponsesWebSocketRuntime(
+func BindOfficialCodexResponsesWebSocketRuntime(
 	ctx context.Context,
 	c *gin.Context,
 	account *Account,
+	modes ...string,
 ) (context.Context, error) {
 	if account == nil || !account.IsOpenAIOAuth() {
 		return nil, fmt.Errorf("Codex 0.145.0 Responses WebSocket 仅允许 OpenAI OAuth 账号")
 	}
-	return bindOfficialCodex0145RuntimeStateFromIngress(
+	mode := ""
+	if len(modes) > 0 {
+		mode = normalizeOfficialClientProfileMode(modes[0])
+	} else {
+		var err error
+		mode, err = officialCodexProcessProfileMode()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return bindOfficialCodexRuntimeStateFromIngress(
 		ctx,
 		c,
 		account,
-		codex0145EndpointID(officialCodexEndpointResponsesWS),
+		mode,
+		codexEndpointID(officialCodexEndpointResponsesWS),
 	)
 }
 
-func bindOfficialCodex0145RuntimeStateFromCapturedIngress(
+func bindOfficialCodexRuntimeStateFromCapturedIngress(
 	ctx context.Context,
 	account *Account,
-	endpointIDs ...codex0145EndpointID,
-) (context.Context, officialCodex0145RuntimeState, error) {
-	snapshot := officialCodex0145IngressRuntimeSnapshot{}
+	mode string,
+	endpointIDs ...codexEndpointID,
+) (context.Context, officialCodexRuntimeState, error) {
+	snapshot := officialCodexIngressRuntimeSnapshot{}
 	if ctx != nil {
-		if captured, ok := ctx.Value(officialCodex0145IngressRuntimeContextKey{}).(officialCodex0145IngressRuntimeSnapshot); ok {
+		if captured, ok := ctx.Value(officialCodexIngressRuntimeContextKey{}).(officialCodexIngressRuntimeSnapshot); ok {
 			snapshot = captured
 		}
 	}
-	state, err := resolveOfficialCodex0145RuntimeStateFromSnapshot(snapshot, account, endpointIDs...)
+	state, err := resolveOfficialCodexRuntimeStateFromSnapshot(
+		snapshot, account, mode, endpointIDs...,
+	)
 	if err != nil {
-		return nil, officialCodex0145RuntimeState{}, err
+		return nil, officialCodexRuntimeState{}, err
 	}
-	bound, err := withOfficialCodex0145RuntimeState(ctx, state)
+	bound, err := withOfficialCodexRuntimeState(ctx, state)
 	if err != nil {
-		return nil, officialCodex0145RuntimeState{}, err
+		return nil, officialCodexRuntimeState{}, err
 	}
 	return bound, state, nil
 }
@@ -228,175 +247,18 @@ func isOfficialCodexForceHTTPFallback(c *gin.Context) bool {
 	return exists && ok && enabled
 }
 
-// activeOfficialCodexVersion 从 registry 的 release 指针解析当前 active Codex 版本。
-// 端点级入口据此取版本而不写死常量：升级画像时只需登记新版本快照并调整 release
-// 指针，无需改动本文件或 §3.5.2 的其他共享接入点。
-func activeOfficialCodexVersion() (string, error) {
-	resolved, err := resolveOfficialClientProfile(
-		officialClientPurposeOpenAIOAuthResponsesHTTP,
-		officialClientProfileModeActive,
-	)
+// officialCodexVersionForMode 只从 officialegress 的正式 ReleaseCatalog 读取发布事实。
+func officialCodexVersionForMode(mode string) (string, error) {
+	releaseMode := officialegress.ReleaseMode(mode)
+	resolved, err := officialegress.DefaultReleaseCatalog().Resolve(releaseMode)
 	if err != nil {
 		return "", err
 	}
-	version := strings.TrimSpace(resolved.Build.Version)
+	version := strings.TrimSpace(resolved.Version())
 	if version == "" {
-		return "", fmt.Errorf("official client registry 未提供 Codex 版本")
+		return "", fmt.Errorf("正式 ReleaseCatalog 未提供 Codex 版本")
 	}
 	return version, nil
-}
-
-// attachOfficialCodex0145EndpointRequest 为 models/images/search/realtime/wham/files
-// 等辅助端点绑定与主 Responses 相同的完整版本画像和调用级连接生命周期。
-// invocationID 为空时创建新调用；同一次业务重试重建请求时必须显式复用返回上下文中的 ID。
-func attachOfficialCodex0145EndpointRequest(
-	req *http.Request,
-	account *Account,
-	endpointID codex0145EndpointID,
-	invocationID string,
-) (*http.Request, *OfficialEgressContext, error) {
-	if req == nil || req.URL == nil {
-		return nil, nil, fmt.Errorf("Codex 辅助端点请求为空")
-	}
-	if account == nil || !account.IsOpenAIOAuth() {
-		return nil, nil, fmt.Errorf("Codex 辅助端点只支持 OpenAI OAuth 账号")
-	}
-	version, err := activeOfficialCodexVersion()
-	if err != nil {
-		return nil, nil, err
-	}
-	endpoint, err := resolveCodex0145Endpoint(version, endpointID)
-	if err != nil {
-		return nil, nil, err
-	}
-	if endpoint.Upgrade != "" {
-		return nil, nil, fmt.Errorf("Codex 端点 %s 不是 HTTP 请求", endpoint.ID)
-	}
-	if strings.TrimSpace(invocationID) == "" {
-		invocationID = uuid.NewString()
-	}
-	proxyID := int64(0)
-	if account.ProxyID != nil {
-		proxyID = *account.ProxyID
-	}
-	runtimeState, err := resolveBoundOrIngressOfficialCodex0145RuntimeState(
-		req.Context(),
-		nil,
-		account,
-		endpointID,
-	)
-	if err != nil {
-		return nil, nil, err
-	}
-	egressContext := NewOfficialEgressContext(OfficialEgressContextInput{
-		AccountID:         account.ID,
-		TargetPlatform:    PlatformOpenAI,
-		InboundEndpoint:   req.URL.Path,
-		Transport:         OfficialEgressTransportHTTP,
-		UpstreamHost:      req.URL.Hostname(),
-		ProfileVersion:    version,
-		ProfileMode:       officialClientProfileModeActive,
-		AccountType:       account.Type,
-		ProxyID:           proxyID,
-		InvocationID:      invocationID,
-		CodexEndpointID:   endpoint.ID,
-		CodexRuntimeState: runtimeState,
-	})
-	egressContext.cookieJar = HTTPUpstreamCookieJarFromContext(req.Context())
-	profile, err := defaultOfficialEgressProfileResolver.ResolveHTTPProfile(
-		egressContext,
-		account,
-		egressContext.InboundEndpoint(),
-	)
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := ValidateOfficialEgressFinalState(egressContext, profile); err != nil {
-		return nil, nil, err
-	}
-	requestContext := WithHTTPUpstreamRedirectsDisabled(req.Context())
-	requestContext = WithOfficialEgressContext(requestContext, egressContext)
-	req = req.WithContext(requestContext)
-	if err := validateOfficialEgressHTTPRequest(req, egressContext); err != nil {
-		return nil, nil, err
-	}
-	logOfficialEgressProfileResolved(egressContext, profile)
-	return req, egressContext, nil
-}
-
-// attachOfficialCodex0145EndpointWebSocketContext 为 realtime sideband 等辅助
-// WebSocket 绑定端点画像。每次调用都形成独立连接上下文，且在拨号前冻结。
-func attachOfficialCodex0145EndpointWebSocketContext(
-	ctx context.Context,
-	account *Account,
-	endpointID codex0145EndpointID,
-	targetURL string,
-) (context.Context, *OfficialEgressContext, error) {
-	if account == nil || !account.IsOpenAIOAuth() {
-		return nil, nil, fmt.Errorf("Codex 辅助 WebSocket 只支持 OpenAI OAuth 账号")
-	}
-	target, err := url.Parse(strings.TrimSpace(targetURL))
-	if err != nil {
-		return nil, nil, fmt.Errorf("解析 Codex 辅助 WebSocket URL：%w", err)
-	}
-	version, err := activeOfficialCodexVersion()
-	if err != nil {
-		return nil, nil, err
-	}
-	endpoint, err := resolveCodex0145Endpoint(version, endpointID)
-	if err != nil {
-		return nil, nil, err
-	}
-	if endpoint.Upgrade != "websocket" {
-		return nil, nil, fmt.Errorf("Codex 端点 %s 不是 WebSocket", endpoint.ID)
-	}
-	proxyID := int64(0)
-	if account.ProxyID != nil {
-		proxyID = *account.ProxyID
-	}
-	runtimeState, err := resolveBoundOrIngressOfficialCodex0145RuntimeState(
-		ctx,
-		nil,
-		account,
-		endpointID,
-	)
-	if err != nil {
-		return nil, nil, err
-	}
-	egressContext := NewOfficialEgressContext(OfficialEgressContextInput{
-		AccountID:         account.ID,
-		TargetPlatform:    PlatformOpenAI,
-		InboundEndpoint:   target.Path,
-		Transport:         OfficialEgressTransportWebSocket,
-		UpstreamHost:      target.Hostname(),
-		ProfileVersion:    version,
-		ProfileMode:       officialClientProfileModeActive,
-		AccountType:       account.Type,
-		ProxyID:           proxyID,
-		InvocationID:      uuid.NewString(),
-		CodexEndpointID:   endpoint.ID,
-		CodexRuntimeState: runtimeState,
-	})
-	profile, err := defaultOfficialEgressProfileResolver.ResolveWebSocketProfile(
-		egressContext,
-		account,
-		egressContext.InboundEndpoint(),
-	)
-	if err != nil {
-		return nil, nil, err
-	}
-	frozen, err := egressContext.Freeze()
-	if err != nil {
-		return nil, nil, err
-	}
-	if err := ValidateOfficialEgressFinalState(frozen, profile); err != nil {
-		return nil, nil, err
-	}
-	if err := validateOfficialEgressWebSocketTarget(target, frozen); err != nil {
-		return nil, nil, err
-	}
-	logOfficialEgressProfileResolved(frozen, profile)
-	return WithOfficialEgressContext(ctx, frozen), frozen, nil
 }
 
 // resolveOfficialCodex0145RuntimeState 把入口身份与敏感条件头收敛成可信进程快照。
@@ -404,27 +266,31 @@ func attachOfficialCodex0145EndpointWebSocketContext(
 // 普通第三方入口始终模拟已初始化的 exec，且不能通过伪造 header 激活受管理或
 // 内部 feature。只有已识别的官方 0.145.0 exec/TUI 入口可以把对应运行态带入
 // 出站上下文；值和条件关系在冻结前一次性校验。
-func resolveOfficialCodex0145RuntimeState(
+func resolveOfficialCodexRuntimeState(
 	c *gin.Context,
 	account *Account,
-	endpointIDs ...codex0145EndpointID,
-) (officialCodex0145RuntimeState, error) {
-	return resolveOfficialCodex0145RuntimeStateFromSnapshot(
-		officialCodex0145IngressRuntimeSnapshotFromGin(c),
+	mode string,
+	endpointIDs ...codexEndpointID,
+) (officialCodexRuntimeState, error) {
+	return resolveOfficialCodexRuntimeStateFromSnapshot(
+		officialCodexIngressRuntimeSnapshotFromGin(c),
 		account,
+		mode,
 		endpointIDs...,
 	)
 }
 
-func resolveOfficialCodex0145RuntimeStateFromSnapshot(
-	snapshot officialCodex0145IngressRuntimeSnapshot,
+func resolveOfficialCodexRuntimeStateFromSnapshot(
+	snapshot officialCodexIngressRuntimeSnapshot,
 	account *Account,
-	endpointIDs ...codex0145EndpointID,
-) (officialCodex0145RuntimeState, error) {
-	state := defaultOfficialCodex0145RuntimeState()
-	profile, err := resolveActiveCodexVersionProfile()
+	mode string,
+	endpointIDs ...codexEndpointID,
+) (officialCodexRuntimeState, error) {
+	state := defaultOfficialCodexRuntimeState()
+	state.ProfileMode = normalizeOfficialClientProfileMode(mode)
+	profile, err := resolveCodexVersionProfileForMode(state.ProfileMode)
 	if err != nil {
-		return officialCodex0145RuntimeState{}, err
+		return officialCodexRuntimeState{}, err
 	}
 	// 普通第三方入口只消费不可变画像默认值；官方入口随后用解压前冻结的实值覆盖。
 	state.RequestCompressionEnabled = profile.FeatureDefaults.EnableRequestCompression
@@ -432,7 +298,7 @@ func resolveOfficialCodex0145RuntimeStateFromSnapshot(
 		residency := strings.TrimSpace(account.GetExtraString(officialCodexResidencyAccountExtraKey))
 		if residency != "" {
 			if residency != "us" {
-				return officialCodex0145RuntimeState{}, fmt.Errorf(
+				return officialCodexRuntimeState{}, fmt.Errorf(
 					"OpenAI OAuth 账号的 %s 只允许 us",
 					officialCodexResidencyAccountExtraKey,
 				)
@@ -444,7 +310,7 @@ func resolveOfficialCodex0145RuntimeStateFromSnapshot(
 		}
 	}
 	if !snapshot.OfficialClient {
-		return state, validateOfficialCodex0145RuntimeState(state)
+		return state, validateOfficialCodexRuntimeState(state)
 	}
 	userAgent := snapshot.UserAgent
 	originator := snapshot.Originator
@@ -485,7 +351,7 @@ func resolveOfficialCodex0145RuntimeStateFromSnapshot(
 			userAgent,
 			originator,
 		)
-		return state, validateOfficialCodex0145RuntimeState(state)
+		return state, validateOfficialCodexRuntimeState(state)
 	}
 	state.RequestCompressionEnabled = snapshot.RequestCompressionEnabled
 	state.SurfaceID = selectedSurface.ID
@@ -494,7 +360,7 @@ func resolveOfficialCodex0145RuntimeStateFromSnapshot(
 	state.ProcessPhase = officialCodexProcessPhaseInitialized
 	state.Originator = selectedSurface.Originator
 	if originator != selectedSurface.Originator {
-		endpointID := codex0145EndpointID("")
+		endpointID := codexEndpointID("")
 		if len(endpointIDs) > 0 {
 			endpointID = endpointIDs[0]
 		}
@@ -504,7 +370,7 @@ func resolveOfficialCodex0145RuntimeStateFromSnapshot(
 		if originator == selectedSurface.InitialModelsOriginator &&
 			!state.UserAgentSuffixEnabled &&
 			selectedSurface.InitialModelsMayOmit &&
-			endpointID == codex0145EndpointID(officialCodexEndpointModels) {
+			endpointID == codexEndpointID(officialCodexEndpointModels) {
 			state.ProcessPhase = officialCodexProcessPhaseInitialModels
 			state.Originator = originator
 		} else {
@@ -531,7 +397,7 @@ func resolveOfficialCodex0145RuntimeStateFromSnapshot(
 		threadSource := officialOpenAIString(turnMetadata, "thread_source")
 		subagentKind := officialOpenAIString(turnMetadata, "subagent_kind")
 		metadataParent := officialOpenAIString(turnMetadata, "parent_thread_id")
-		subagentErr := officialCodex0145ValidateSubagentRuntime(
+		subagentErr := officialCodexValidateSubagentRuntime(
 			profile.Subagents,
 			subagent,
 			memgen,
@@ -572,13 +438,13 @@ func resolveOfficialCodex0145RuntimeStateFromSnapshot(
 			}
 		}
 	}
-	if err := validateOfficialCodex0145RuntimeState(state); err != nil {
-		return officialCodex0145RuntimeState{}, err
+	if err := validateOfficialCodexRuntimeState(state); err != nil {
+		return officialCodexRuntimeState{}, err
 	}
 	return state, nil
 }
 
-func officialCodex0145ValidateSubagentRuntime(
+func officialCodexValidateSubagentRuntime(
 	profile officialCodexSubagentProfile,
 	headerValue string,
 	memgenValue string,
@@ -617,8 +483,11 @@ func officialCodex0145ValidateSubagentRuntime(
 	return fmt.Errorf("Codex 0.145.0 subagent 条件不在版本画像中：header=%q kind=%q source=%q memgen=%t", headerValue, metadataKind, threadSource, memoryGeneration)
 }
 
-func validateOfficialCodex0145RuntimeState(state officialCodex0145RuntimeState) error {
-	profile, err := resolveActiveCodexVersionProfile()
+func validateOfficialCodexRuntimeState(state officialCodexRuntimeState) error {
+	if strings.TrimSpace(state.ProfileMode) == "" {
+		return errors.New("Codex runtime state 缺少冻结 ProfileMode")
+	}
+	profile, err := resolveCodexVersionProfileForMode(state.ProfileMode)
 	if err != nil {
 		return err
 	}
@@ -656,7 +525,7 @@ func validateOfficialCodex0145RuntimeState(state officialCodex0145RuntimeState) 
 	for rawName, rawValue := range state.ConditionalHeaders {
 		name := strings.ToLower(strings.TrimSpace(rawName))
 		value := strings.TrimSpace(rawValue)
-		if _, ok := officialCodex0145TrustedConditionalHeaders[name]; !ok {
+		if _, ok := officialCodexTrustedConditionalHeaders[name]; !ok {
 			return fmt.Errorf("Codex 0.145.0 运行态包含未知条件头：%s", rawName)
 		}
 		if value == "" {
@@ -687,17 +556,36 @@ func validateOfficialCodex0145RuntimeState(state officialCodex0145RuntimeState) 
 	return nil
 }
 
-// officialCodex0145ProcessIdentity 从冻结上下文中的入口和进程状态生成身份。
-func officialCodex0145ProcessIdentity(egressContext *OfficialEgressContext) (string, string, error) {
+// officialCodexProcessIdentity 从冻结上下文中的入口和进程状态生成身份。
+func officialCodexProcessIdentity(egressContext *OfficialEgressContext) (string, string, error) {
 	if egressContext == nil {
 		return "", "", fmt.Errorf("Codex 0.145.0 进程身份缺少出站上下文")
 	}
-	profile, err := resolveCodex0145VersionProfile(egressContext.ProfileVersion())
+	if egressContext.accountType == AccountTypeOAuth &&
+		egressContextProfileMode(egressContext) == officialClientProfileModePrevious {
+		release, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseModePrevious)
+		if err != nil {
+			return "", "", err
+		}
+		purpose := officialegress.RegistryPurposeOpenAIOAuthHTTP
+		if egressContext.transport == OfficialEgressTransportWebSocket {
+			purpose = officialegress.RegistryPurposeOpenAIOAuthWS
+		}
+		node, ok := release.Node(purpose)
+		if !ok || strings.TrimSpace(node.Build.UserAgent) == "" ||
+			strings.TrimSpace(node.Build.Originator) == "" {
+			return "", "", fmt.Errorf("Codex previous release 缺少冻结的进程身份")
+		}
+		// previous 是完整发布指针，不只是版本号。回滚时必须使用该指针绑定的
+		// 静态 UA/originator，不能再由 active 运行态把 xterm 覆盖成 unknown。
+		return node.Build.UserAgent, node.Build.Originator, nil
+	}
+	profile, err := resolveCodexVersionProfile(egressContext.ProfileVersion())
 	if err != nil {
 		return "", "", err
 	}
 	state := egressContext.codexRuntimeState
-	if err := validateOfficialCodex0145RuntimeState(state); err != nil {
+	if err := validateOfficialCodexRuntimeState(state); err != nil {
 		return "", "", err
 	}
 	userAgent, err := profile.RenderUserAgentWithTerminal(
@@ -714,74 +602,9 @@ func officialCodex0145ProcessIdentity(egressContext *OfficialEgressContext) (str
 	return "", "", fmt.Errorf("Codex %s 缺少 %s 进程阶段 originator", profile.Version, state.ProcessPhase)
 }
 
-// officialCodex0145FinalizeEndpointHeaders 是版本画像与具体请求之间的唯一薄层。
-// 调用方只提供运行态条件；允许的 header、常量值与线序全部由不可变端点画像决定。
-func officialCodex0145FinalizeEndpointHeaders(
-	egressContext *OfficialEgressContext,
-	headers http.Header,
-	conditionOverrides map[string]bool,
-) ([]officialCodex0145HeaderField, error) {
-	if egressContext == nil {
-		return nil, fmt.Errorf("Codex 0.145.0 header 定型缺少出站上下文")
-	}
-	version := egressContext.ProfileVersion()
-	endpointID := codex0145EndpointID(egressContext.CodexEndpointProfileID())
-	endpoint, err := resolveCodex0145Endpoint(version, endpointID)
-	if err != nil {
-		return nil, err
-	}
-
-	// 入站白名单只决定哪些语义可以进入 Finalizer；最终出站必须再次按端点画像
-	// 收敛为闭集，Accept-Language 等客户端环境噪声不能泄漏到官方 wire。
-	allowed := make(map[string]struct{}, len(endpoint.Headers))
-	for _, slot := range endpoint.Headers {
-		allowed[strings.ToLower(slot.Name)] = struct{}{}
-	}
-	for name := range headers {
-		if _, ok := allowed[strings.ToLower(name)]; !ok {
-			headers.Del(name)
-		}
-	}
-	// 五个敏感条件只能由冻结运行态回填。先删除请求/账号覆写中的同名值，
-	// 再写入已经通过来源和值校验的快照，避免把“header 恰好存在”当作 feature。
-	for name := range officialCodex0145TrustedConditionalHeaders {
-		headers.Del(name)
-		if _, endpointAllows := allowed[name]; !endpointAllows {
-			continue
-		}
-		if value := strings.TrimSpace(egressContext.codexRuntimeState.ConditionalHeaders[name]); value != "" {
-			headers.Set(name, value)
-		}
-	}
-
-	conditions := officialCodex0145ConditionsFromHeaders(headers)
-	for name, enabled := range conditionOverrides {
-		if headerName, protected := officialCodex0145HeaderForTrustedCondition(name); protected {
-			expected := strings.TrimSpace(egressContext.codexRuntimeState.ConditionalHeaders[headerName]) != ""
-			if enabled != expected {
-				return nil, fmt.Errorf("Codex 0.145.0 条件 %s 不能绕过冻结运行态", name)
-			}
-		}
-		conditions[name] = enabled
-	}
-	for headerName, condition := range officialCodex0145TrustedConditionalHeaders {
-		conditions[condition] = strings.TrimSpace(egressContext.codexRuntimeState.ConditionalHeaders[headerName]) != ""
-	}
-	return officialCodex0145ApplyHeaderContract(version, endpointID, headers, conditions)
-}
-
-func officialCodex0145HeaderForTrustedCondition(condition string) (string, bool) {
-	for headerName, candidate := range officialCodex0145TrustedConditionalHeaders {
-		if candidate == condition {
-			return headerName, true
-		}
-	}
-	return "", false
-}
-
-// officialCodex0145ConditionsFromHeaders 只把动态值映射成画像条件，不包含端点判断。
+// officialCodexConditionsFromHeaders 只把动态值映射成画像条件，不包含端点判断。
 // 因而新增端点时只需扩展画像，不需要在业务代码追加 path/endpoint 分支。
-func officialCodex0145ConditionsFromHeaders(headers http.Header) map[string]bool {
+func officialCodexConditionsFromHeaders(headers http.Header) map[string]bool {
 	present := func(name string) bool {
 		return strings.TrimSpace(headers.Get(name)) != ""
 	}
@@ -816,47 +639,36 @@ func headerContainsToken(headers http.Header, name, expected string) bool {
 	return false
 }
 
-// officialCodex0145FinalizeEndpointJSONBody 校验端点绑定后，再由同一画像完成闭集
-// 校验与稳定字段排序。它拒绝上下文端点和调用端点发生漂移。
-func officialCodex0145FinalizeEndpointJSONBody(
-	egressContext *OfficialEgressContext,
-	body []byte,
-	conditions map[string]bool,
-) ([]byte, error) {
-	if egressContext == nil {
-		return nil, fmt.Errorf("Codex 0.145.0 body 定型缺少出站上下文")
-	}
-	finalized, err := officialCodex0145ValidateAndOrderJSONBody(
-		egressContext.ProfileVersion(),
-		codex0145EndpointID(egressContext.CodexEndpointProfileID()),
-		body,
-		conditions,
-	)
-	if err != nil {
-		return nil, err
-	}
-	if err := officialCodex0145ValidateToolPresentation(
-		egressContext.ProfileVersion(),
-		codex0145EndpointID(egressContext.CodexEndpointProfileID()),
-		finalized,
-		egressContext.responsesLite,
-	); err != nil {
-		return nil, err
-	}
-	return finalized, nil
-}
-
-// officialCodex0145ProjectEndpointJSONBody 用于第三方协议到 Codex 协议的派生路径：
+// officialCodexProjectEndpointJSONBody 用于第三方协议到 Codex 协议的派生路径：
 // 先按画像字段闭集投影，再交给严格执行器校验省略条件和最终顺序。未知入站字段
 // 只会在这一明确的“派生”入口被丢弃；官方直通请求仍使用严格函数并拒绝未知字段。
-func officialCodex0145ProjectEndpointJSONBody(
+func officialCodexProjectEndpointJSONBody(
 	version string,
-	endpointID codex0145EndpointID,
+	endpointID codexEndpointID,
 	payload map[string]any,
 	original []byte,
 	conditions map[string]bool,
 ) ([]byte, error) {
-	endpoint, err := resolveCodex0145Endpoint(version, endpointID)
+	profile, err := resolveOfficialCodexVersionProfile(version)
+	if err != nil {
+		return nil, err
+	}
+	return projectOfficialCodexEndpointJSONBody(
+		profile, string(endpointID), payload, original, conditions,
+	)
+}
+
+func projectOfficialCodexEndpointJSONBody(
+	profile *officialCodexVersionProfile,
+	endpointID string,
+	payload map[string]any,
+	original []byte,
+	conditions map[string]bool,
+) ([]byte, error) {
+	if profile == nil {
+		return nil, errors.New("Codex JSON 投影画像为空")
+	}
+	endpoint, err := profile.ResolveEndpoint(endpointID)
 	if err != nil {
 		return nil, err
 	}
@@ -895,10 +707,5 @@ func officialCodex0145ProjectEndpointJSONBody(
 	if err != nil {
 		return nil, fmt.Errorf("编码 Codex 端点 %s 派生 body：%w", endpoint.ID, err)
 	}
-	return officialCodex0145ValidateAndOrderJSONBody(
-		version,
-		endpointID,
-		encoded,
-		conditions,
-	)
+	return validateAndOrderOfficialCodexJSONBody(profile, endpointID, encoded, conditions)
 }

@@ -1,0 +1,59 @@
+{
+  "schema_version": "changeset3-acceptance-matrix/v1",
+  "status": "approved_for_implementation_with_constraints",
+  "already_enforced_anchors": [
+    "codex.admin_test.compact",
+    "codex.admin_test.responses",
+    "codex.alpha_search.pat_fallback",
+    "codex.usage.probe"
+  ],
+  "pending_migration": [
+    "codex.admin_test.chat_completions",
+    "codex.admin_test.keeper",
+    "codex.alpha_search.direct",
+    "codex.files.blob_upload",
+    "codex.files.register",
+    "codex.images.oauth_test",
+    "codex.images.responses",
+    "codex.models.list",
+    "codex.oauth.refresh",
+    "codex.quota.wham",
+    "codex.realtime.calls",
+    "codex.realtime.sideband",
+    "codex.responses.anthropic_compat",
+    "codex.responses.chat_completions",
+    "codex.responses.forward",
+    "codex.responses.passthrough",
+    "codex.responses.ws",
+    "codex.responses.ws_http_bridge",
+    "codex.responses.ws_v2_passthrough"
+  ],
+  "facade_evidence": [
+    "codex.facade.oauth_client",
+    "codex.facade.upstream",
+    "codex.facade.ws_pool"
+  ],
+  "transport_only_exception": {
+    "sink_id": "codex.oauth.exchange",
+    "endpoint_evidence": "transport_only",
+    "endpoint_id": "",
+    "release_selection": "unavailable",
+    "migration_receipt": "forbidden",
+    "finalization_token": "unavailable",
+    "enforcement_state": "legacy_observe"
+  },
+  "final_acceptance": {
+    "codex_profile_runtime_legacy_count": 0,
+    "codex_profile_runtime_enforced_count": 23,
+    "codex_transport_only_legacy": [
+      "codex.oauth.exchange"
+    ],
+    "codex_facade_runtime_binding_count": 0
+  },
+  "non_regression": {
+    "executor_id": "codex.executor.changeset1b",
+    "existing_receipts_must_remain_byte_identical": true,
+    "existing_binding_digests_must_remain_unchanged": true,
+    "existing_wire_fixtures_must_remain_unchanged": true
+  }
+}

@@ -144,6 +144,50 @@ export async function create(accountData: CreateAccountRequest): Promise<Account
   return data
 }
 
+export interface OpenAIOAuthCodePayload {
+  session_id: string
+  code: string
+  state: string
+  redirect_uri?: string
+}
+
+export interface CreateOpenAIFromOAuthRequest extends OpenAIOAuthCodePayload {
+  name?: string
+  notes?: string | null
+  proxy_id?: number | null
+  concurrency?: number
+  priority?: number
+  rate_multiplier?: number
+  load_factor?: number | null
+  group_ids?: number[]
+  expires_at?: number | null
+  auto_pause_on_expired?: boolean
+  credential_extras?: Record<string, unknown>
+  extra?: Record<string, unknown>
+  skip_default_group_bind?: boolean
+  confirm_mixed_channel_risk?: boolean
+}
+
+// OpenAI OAuth 新建账号由服务端完成 token/privacy 与账号的一次写入。
+export async function createOpenAIFromOAuth(
+  payload: CreateOpenAIFromOAuthRequest
+): Promise<Account> {
+  const { data } = await apiClient.post<Account>('/admin/openai/create-from-oauth', payload)
+  return data
+}
+
+// OpenAI 重授权不再由前端搬运 token 或 privacy 状态。
+export async function reauthorizeOpenAI(
+  id: number,
+  payload: OpenAIOAuthCodePayload
+): Promise<Account> {
+  const { data } = await apiClient.post<Account>(
+    `/admin/openai/accounts/${id}/reauthorize`,
+    payload
+  )
+  return data
+}
+
 /**
  * Duplicate an account while keeping credentials on the server.
  * @param id - Source account ID
@@ -994,6 +1038,8 @@ export const accountsAPI = {
   listWithEtag,
   getById,
   create,
+  createOpenAIFromOAuth,
+  reauthorizeOpenAI,
   duplicate,
   update,
   updateExtra,

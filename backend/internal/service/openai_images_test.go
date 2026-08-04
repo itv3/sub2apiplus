@@ -1694,7 +1694,7 @@ func TestBuildOpenAICodexImagesRequestBody_ClosesGenerationBodyAndOmitsN(t *test
 		Style:      "vivid",
 	}
 
-	body, err := buildOpenAICodexImagesRequestBody(parsed, "gpt-image-2")
+	body, err := buildOpenAICodexImagesRequestBody(parsed, "gpt-image-2", officialClientProfileModeActive)
 	require.NoError(t, err)
 	require.Equal(t, `{"prompt":"draw a cat","background":"opaque","model":"gpt-image-2","quality":"medium","size":"1024x1536"}`, string(body))
 	require.False(t, gjson.GetBytes(body, "n").Exists())
@@ -1709,7 +1709,7 @@ func TestBuildOpenAICodexImagesRequestBody_GenerationOmitsAbsentOptionalFields(t
 		N:        2,
 	}
 
-	body, err := buildOpenAICodexImagesRequestBody(parsed, "dall-e-3")
+	body, err := buildOpenAICodexImagesRequestBody(parsed, "dall-e-3", officialClientProfileModeActive)
 	require.NoError(t, err)
 	require.Equal(t, `{"prompt":"draw a cat","model":"dall-e-3"}`, string(body))
 	require.False(t, gjson.GetBytes(body, "n").Exists())
@@ -1726,7 +1726,7 @@ func TestBuildOpenAICodexImagesRequestBody_EditStartsWithDataURLImages(t *testin
 		},
 	}
 
-	body, err := buildOpenAICodexImagesRequestBody(parsed, "gpt-image-2")
+	body, err := buildOpenAICodexImagesRequestBody(parsed, "gpt-image-2", officialClientProfileModeActive)
 	require.NoError(t, err)
 	require.Equal(t, `{"images":[{"image_url":"data:image/png;base64,c291cmNl"}],"prompt":"replace background","model":"gpt-image-2"}`, string(body))
 	require.False(t, gjson.GetBytes(body, "input_fidelity").Exists())
@@ -1738,7 +1738,7 @@ func TestBuildOpenAICodexImagesRequestBody_EditRejectsRemoteURL(t *testing.T) {
 		Prompt:         "replace background",
 		InputImageURLs: []string{"https://example.com/source.png"},
 	}
-	_, err := buildOpenAICodexImagesRequestBody(parsed, "gpt-image-2")
+	_, err := buildOpenAICodexImagesRequestBody(parsed, "gpt-image-2", officialClientProfileModeActive)
 	require.EqualError(t, err, "Codex image edit only accepts data URL inputs")
 }
 

@@ -1,0 +1,24 @@
+{
+  "schema_version": "changeset6-baseline-receipt/v1",
+  "changeset": "6",
+  "task_status": "baseline_and_pre_benchmarks_frozen",
+  "workspace_manifest": {
+    "path": "docs/changeset6/baseline/workspace-manifest.json",
+    "sha256": "c8c6e6452390abd076ae771b17b11bf079a2a3c45359707cf6ac8fb11ed5c760",
+    "expanded_path_count": 498,
+    "path_set_sha256": "b369b773c681bdcb4d50f44ffca0532c4e3ea0e7635474ffbb02fb82db0babf2"
+  },
+  "benchmark_metadata": {
+    "path": "docs/changeset6/baseline/benchmark-metadata.json",
+    "sha256": "bb206905aeae5933e5a6c254bf39677b14bb279169af307421ecde4bdee835ca",
+    "fixture_sha256": "7698cddeadace650567e46e7be9b66286212e26e983edb29e78da423ac713e08"
+  },
+  "changeset5_post_final_wire": {
+    "manifest_sha256": "3b1dfc541086da317c288bc064016acda9003780f907c3d5ae6c1720a7a78fb5",
+    "secret_scan_sha256": "ee808ca8738c8d04e5d4c5ad3ae09b4e649c32758c8f982f0b65874416f6ffc2",
+    "receipt_sha256": "9a9c8d86f4b35a33f5f6615e27e21bec25e7860eae5e533fec9333897554c1de",
+    "policy": "只读引用，变更集 6 禁止重新生成或覆盖"
+  },
+  "runtime_release_data_count": 5,
+  "result": "passed"
+}

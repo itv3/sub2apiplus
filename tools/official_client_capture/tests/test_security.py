@@ -15,8 +15,10 @@ from tools.official_client_capture.capturelib.analysis import (
 from tools.official_client_capture.capturelib.manifest import Manifest
 from tools.official_client_capture.capturelib.model import build_campaign_plan
 from tools.official_client_capture.capturelib.security import (
+    argv_manifest_view,
     normalize_json_shape,
     scan_for_secret,
+    scan_for_secrets,
     scrub_known_secret,
     secure_write_text,
 )
@@ -43,6 +45,44 @@ class SecurityTest(unittest.TestCase):
             self.assertNotIn(
                 "CANARY-SECRET", (root / "bad.log").read_text(encoding="utf-8")
             )
+
+    def test_multi_secret_scan_includes_binary_and_never_echoes_values(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "traffic.pcap").write_bytes(b"prefix\x00SECOND-SECRET\xff")
+            secure_write_text(root / "safe.log", "nothing sensitive")
+            report = scan_for_secrets(
+                root,
+                {
+                    "oauth_access": "FIRST-SECRET",
+                    "oauth_refresh": "SECOND-SECRET",
+                },
+            )
+            self.assertTrue(report["performed"])
+            self.assertFalse(report["passed"])
+            self.assertEqual(report["file_count"], 2)
+            self.assertEqual(report["matches"][0]["path"], "traffic.pcap")
+            self.assertEqual(
+                report["matches"][0]["secret_sources"], ["oauth_refresh"]
+            )
+            self.assertNotIn("FIRST-SECRET", str(report))
+            self.assertNotIn("SECOND-SECRET", str(report))
+
+    def test_argv_manifest_redacts_inline_and_known_secret_values(self) -> None:
+        view = argv_manifest_view(
+            [
+                "/bin/client",
+                "--token=CANARY-SECRET",
+                "--model",
+                "model-a",
+            ],
+            {"oauth_access": "CANARY-SECRET"},
+        )
+        self.assertNotIn("CANARY-SECRET", str(view))
+        self.assertEqual(
+            view["argv_redacted"][1], "--token=<redacted-sensitive-argument>"
+        )
+        self.assertEqual(len(view["argv_sha256"]), 64)
 
     def test_json_shape_keeps_structure_but_removes_text_and_ids(self) -> None:
         result = normalize_json_shape(
@@ -196,6 +236,54 @@ class SecurityTest(unittest.TestCase):
             self.assertFalse(manifest.data["secret_scan"]["performed"])
             self.assertEqual(manifest.data["secret_scan"]["scope"], [])
             self.assertIn("未读入", manifest.data["secret_scan"]["limitation"])
+
+    def test_manifest_complete_m_requires_every_binding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "oauth-run"
+            run_dir.mkdir(mode=0o700)
+            plan = build_campaign_plan(
+                task="oauth",
+                batch_id="manifest-complete-m",
+                scenarios=("s1",),
+                evidence_modes=("mitm",),
+                sub2api_base_url=None,
+                api_key_env="SUB2API_CAPTURE_API_KEY",
+                subjects=("claude-http",),
+                oauth_claude_token_env="CLAUDE_CAPTURE_OAUTH_TOKEN",
+            )
+            manifest = Manifest(plan, run_dir)
+            manifest.set_runtime(
+                {
+                    "runtime_image_verified": True,
+                    "capture_tools": {
+                        "execution_sources": {"sha256": "a" * 64}
+                    },
+                }
+            )
+            manifest.add_case_result(
+                {
+                    "scenario_result": {
+                        "invocation": {
+                            "argv_sha256": "b" * 64,
+                            "environment": {"sha256": "c" * 64},
+                        }
+                    }
+                }
+            )
+            manifest.finalize(
+                status="complete",
+                cleanup_successful=True,
+                secret_matches=[],
+                secret_scan_report={
+                    "performed": True,
+                    "passed": True,
+                    "scope": ["oauth_access"],
+                    "matches": [],
+                    "limitation": None,
+                },
+                m_binding_required=True,
+            )
+            self.assertTrue(manifest.data["m_binding"]["complete"])
 
     def test_compare_uses_only_normalized_records(self) -> None:
         baseline = {"records": [{"kind": "http_exchange"}]}

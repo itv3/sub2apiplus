@@ -35,9 +35,11 @@ JavaScript。提取之后，控制流、常量和条件都在，静态能力等�
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 import hashlib
 import json
 import pathlib
+import re
 import struct
 import subprocess
 import sys
@@ -267,6 +269,138 @@ ANCHOR_TOKENS = 45
 SINK_WINDOW = 20000
 
 
+@dataclass(frozen=True)
+class StructuredProbe:
+    """用结构正则锁定不能由单字面量证明的构造点。
+
+    `literal` 是 2.1.220 Linux bundle 中便于人工核对的典型字面量，
+    不参与定位。真正定位由 `locator_pattern` 完成：它用命名回溯约束
+    minify 变量间的同值关系，因此 Linux 与 Darwin 符号名漂移时仍能
+    命中同一段语义。`anchor_group` 指定用于 α-归一化的命名组，
+    避免长正则从起点取窗时截丢核心表达式。
+    """
+
+    candidate: str
+    literal: str
+    locator_pattern: str
+    anchor_group: str
+    rule_ids: tuple[str, ...]
+    before_tokens: int = ANCHOR_TOKENS
+    after_tokens: int = ANCHOR_TOKENS
+
+
+# JavaScript 标识符只用 ASCII 子集；这与 Bun/esbuild 的 minify 产物一致。
+_JS_ID = r"[A-Za-z_$][A-Za-z0-9_$]*"
+
+# 这七个探针只针对已绑定的 Claude Code 2.1.220 产物。四个 Header
+# 探针同时约束「来源值→条件展开→原值写入」；retry 探针分别锁定
+# 公式、常量块与主会话 messages.create 调用点，避免把 SDK 内置 retry
+# 或 bundle 中的示例文档误当成 Claude Code 主请求链。
+CLAUDE_2_1_220_STRUCTURED_PROBES = [
+    StructuredProbe(
+        candidate="CAND-HDR-CLIENT-APP-CONSTRUCTION",
+        literal='"x-client-app"',
+        locator_pattern=(
+            rf"(?P<value>{_JS_ID})=process\.env\.CLAUDE_AGENT_SDK_CLIENT_APP"
+            rf"[\s\S]{{0,512}}?\.\.\.(?P=value)&&"
+            rf'\{{"(?P<header_name>x-client-app)":(?P=value)\}}'
+        ),
+        anchor_group="header_name",
+        rule_ids=("SPEC-HDR-016", "SPEC-HDR-021", "SPEC-HDR-022"),
+        before_tokens=60,
+        after_tokens=30,
+    ),
+    StructuredProbe(
+        candidate="CAND-HDR-REMOTE-CONTAINER-CONSTRUCTION",
+        literal='"x-claude-remote-container-id"',
+        locator_pattern=(
+            rf"(?P<value>{_JS_ID})=process\.env\.CLAUDE_CODE_CONTAINER_ID"
+            rf"[\s\S]{{0,512}}?\.\.\.(?P=value)&&"
+            rf'\{{"(?P<header_name>x-claude-remote-container-id)":(?P=value)\}}'
+        ),
+        anchor_group="header_name",
+        rule_ids=("SPEC-HDR-017", "SPEC-HDR-023"),
+        before_tokens=60,
+        after_tokens=30,
+    ),
+    StructuredProbe(
+        candidate="CAND-HDR-REMOTE-SESSION-CONSTRUCTION",
+        literal='"x-claude-remote-session-id"',
+        locator_pattern=(
+            rf"(?P<value>{_JS_ID})=process\.env\.CLAUDE_CODE_REMOTE_SESSION_ID"
+            rf"[\s\S]{{0,512}}?\.\.\.(?P=value)&&"
+            rf'\{{"(?P<header_name>x-claude-remote-session-id)":(?P=value)\}}'
+        ),
+        anchor_group="header_name",
+        rule_ids=("SPEC-HDR-018", "SPEC-HDR-024"),
+        before_tokens=60,
+        after_tokens=30,
+    ),
+    StructuredProbe(
+        candidate="CAND-HDR-PARENT-AGENT-CONSTRUCTION",
+        literal='"x-claude-code-parent-agent-id"',
+        locator_pattern=(
+            rf"(?P<context>{_JS_ID})\?\.parentAgentId&&"
+            rf'\{{"(?P<header_name>x-claude-code-parent-agent-id)":'
+            rf"(?P<encoder>{_JS_ID})\("
+            rf"(?P=context)\.parentAgentId\)\}}"
+        ),
+        anchor_group="header_name",
+        rule_ids=("SPEC-HDR-019", "SPEC-HDR-025"),
+        before_tokens=60,
+        after_tokens=30,
+    ),
+    StructuredProbe(
+        candidate="CAND-RETRY-DELAY-FORMULA",
+        literal="Math.round(n+Math.random()*0.25*n)",
+        locator_pattern=(
+            rf"function\s+(?P<function>{_JS_ID})\("
+            rf"(?P<attempt>{_JS_ID}),(?P<retry_after>{_JS_ID}),"
+            rf"(?P<cap>{_JS_ID})=32000\)\{{let\s+"
+            rf"(?P<base>{_JS_ID})=Math\.min\("
+            rf"(?P<base_constant>{_JS_ID})\*Math\.pow\(2,(?P=attempt)-1\),"
+            rf"(?P=cap)\),(?P<delay>{_JS_ID})=Math\.round\("
+            rf"(?P=base)\+Math\.random\(\)\*0\.25\*(?P=base)\)"
+        ),
+        anchor_group="cap",
+        rule_ids=("SPEC-CONN-002",),
+    ),
+    StructuredProbe(
+        candidate="CAND-RETRY-CONSTANT-BLOCK",
+        literal="qU_=500,VU_=60000,zU_=300000,Flp=21600000,KU_=30000",
+        locator_pattern=(
+            rf"(?P<base>{_JS_ID})=500,"
+            rf"(?P<retry_after_limit>{_JS_ID})=60000,"
+            rf"(?P<persistent_cap>{_JS_ID})=300000,"
+            rf"(?P<persistent_reset_cap>{_JS_ID})=21600000,"
+            rf"(?P<heartbeat>{_JS_ID})=30000"
+        ),
+        anchor_group="base",
+        rule_ids=("SPEC-CONN-002", "SPEC-CONN-003"),
+    ),
+    StructuredProbe(
+        candidate="CAND-RETRY-MAIN-MESSAGES-CREATE",
+        literal=(
+            "stream:!0},{signal:o,...Object.keys(pi).length>0&&"
+            "{headers:pi}}).withResponse()"
+        ),
+        locator_pattern=(
+            rf"await\s+(?P<client>{_JS_ID})\.beta\.messages\.create\("
+            rf"\{{\.\.\.(?P<params>{_JS_ID}),"
+            rf"\.\.\.(?P<credit>{_JS_ID})!==void\s+0&&"
+            rf"\{{(?P<credit_key>{_JS_ID}):(?P=credit)\}},stream:!0\}},"
+            rf"\{{signal:(?P<signal>{_JS_ID}),\.\.\.Object\.keys\("
+            rf"(?P<headers>{_JS_ID})\)\.length>0&&"
+            rf"\{{headers:(?P=headers)\}}\}}\)\.withResponse\(\)"
+        ),
+        anchor_group="headers",
+        rule_ids=("SPEC-CONN-002", "SPEC-CONN-003"),
+        before_tokens=50,
+        after_tokens=20,
+    ),
+]
+
+
 def build_reachability_index(bundle_path: pathlib.Path) -> dict:
     """对主 bundle 生成 sink 索引与候选锚点。"""
     from claude_bundle_reachability import SINK_PATTERNS, BundleIndex
@@ -302,6 +436,46 @@ def build_reachability_index(bundle_path: pathlib.Path) -> dict:
         probes.append({"candidate": probe_id, "literal": literal,
                        "hit_count": len(hits), "hits": hits})
 
+    for probe in CLAUDE_2_1_220_STRUCTURED_PROBES:
+        hits = []
+        pattern = re.compile(probe.locator_pattern)
+        for match in pattern.finditer(src):
+            anchor = match.start(probe.anchor_group)
+            text, digest = index.alpha_normalize_around(
+                anchor,
+                before=probe.before_tokens,
+                after=probe.after_tokens,
+            )
+            sym = index.enclosing_symbol(anchor)
+            window = src[
+                max(0, anchor - SINK_WINDOW):anchor + SINK_WINDOW
+            ]
+            matched = match.group(0).encode("utf-8")
+            hits.append({
+                "offset": anchor,
+                "match_start": match.start(),
+                "match_end": match.end(),
+                "match_sha256": hashlib.sha256(matched).hexdigest(),
+                "nearest_symbol": sym["name"] if sym else None,
+                "alpha_sha256": digest,
+                "alpha_text": text[:600],
+                "sinks_within_window": sorted(
+                    kind
+                    for kind, sink_pattern in SINK_PATTERNS.items()
+                    if sink_pattern.search(window)
+                ),
+            })
+        probes.append({
+            "candidate": probe.candidate,
+            "literal": probe.literal,
+            "locator_kind": "regex",
+            "locator_pattern": probe.locator_pattern,
+            "anchor_group": probe.anchor_group,
+            "rule_ids": list(probe.rule_ids),
+            "hit_count": len(hits),
+            "hits": hits,
+        })
+
     return {
         "bundle": str(bundle_path),
         "bundle_sha256": sha256_file(bundle_path),
@@ -319,6 +493,8 @@ def build_reachability_index(bundle_path: pathlib.Path) -> dict:
             "不等于严格意义上的所属函数。",
             "sinks_within_window 只说明写入点附近存在出站动作，不构成数据流证明。",
             "α-归一化摘要跨平台稳定，可用于比对 Darwin 与 Linux 是否同一逻辑。",
+            "结构化 regex 探针只证明命名回溯所约束的局部语义；"
+            "其中的 minify 符号名不得被当成跨版本接口。",
         ],
     }
 

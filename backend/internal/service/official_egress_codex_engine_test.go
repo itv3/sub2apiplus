@@ -11,7 +11,7 @@ import (
 )
 
 func TestOfficialCodex0145EngineUsesProfileDrivenImageToolPresentation(t *testing.T) {
-	profile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	require.NoError(t, err)
 	require.False(t, profile.ToolPresentation.HostedImageGenerationAllowed)
 	require.Equal(t, "image_generation", profile.ToolPresentation.HostedImageGenerationType)
@@ -24,18 +24,18 @@ func TestOfficialCodex0145EngineUsesProfileDrivenImageToolPresentation(t *testin
 			map[string]any{"type": "image_generation", "output_format": "png"},
 		},
 	}
-	changed, err := officialCodex0145NormalizeDerivedToolPresentation(
+	changed, err := officialCodexNormalizeDerivedToolPresentation(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointResponsesHTTP),
+		codexEndpointID(officialCodexEndpointResponsesHTTP),
 		hostedPayload,
 	)
 	require.False(t, changed)
 	require.ErrorContains(t, err, "必须由客户端提供完整 image_gen/imagegen")
 
 	body := []byte(`{"tools":[{"type":"namespace","name":"image_gen","description":"生成图片","tools":[{"type":"function","name":"imagegen","description":"生成一张图片","strict":false,"parameters":{"type":"object"}}]}],"input":[]}`)
-	require.NoError(t, officialCodex0145ValidateToolPresentation(
+	require.NoError(t, officialCodexValidateToolPresentation(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointResponsesHTTP),
+		codexEndpointID(officialCodexEndpointResponsesHTTP),
 		body,
 		false,
 	))
@@ -43,34 +43,34 @@ func TestOfficialCodex0145EngineUsesProfileDrivenImageToolPresentation(t *testin
 
 func TestOfficialCodex0145EngineRejectsHostedImageToolAndWrongLiteCarrier(t *testing.T) {
 	hosted := []byte(`{"tools":[{"type":"image_generation"}],"input":[]}`)
-	err := officialCodex0145ValidateToolPresentation(
+	err := officialCodexValidateToolPresentation(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointResponsesHTTP),
+		codexEndpointID(officialCodexEndpointResponsesHTTP),
 		hosted,
 		false,
 	)
 	require.ErrorContains(t, err, "禁止 hosted")
 
 	namespace := []byte(`{"tools":[{"type":"namespace","name":"image_gen","description":"生成图片","tools":[{"type":"function","name":"imagegen","description":"生成一张图片","strict":false,"parameters":{"type":"object"}}]}],"input":[]}`)
-	err = officialCodex0145ValidateToolPresentation(
+	err = officialCodexValidateToolPresentation(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointResponsesHTTP),
+		codexEndpointID(officialCodexEndpointResponsesHTTP),
 		namespace,
 		true,
 	)
 	require.ErrorContains(t, err, "错误载体")
 
 	lite := []byte(`{"input":[{"type":"additional_tools","tools":[{"type":"namespace","name":"image_gen","description":"生成图片","tools":[{"type":"function","name":"imagegen","description":"生成一张图片","strict":false,"parameters":{"type":"object"}}]}]}]}`)
-	require.NoError(t, officialCodex0145ValidateToolPresentation(
+	require.NoError(t, officialCodexValidateToolPresentation(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointResponsesWS),
+		codexEndpointID(officialCodexEndpointResponsesWS),
 		lite,
 		true,
 	))
 }
 
 func TestOfficialCodex0145EngineTLSProfileComesFromImmutableSnapshot(t *testing.T) {
-	httpProfile, err := officialCodex0145ResolveTLSProfile(
+	httpProfile, err := officialCodexResolveTLSProfile(
 		officialCodexVersion0145,
 		officialCodexTransportHTTPDefault,
 	)
@@ -83,7 +83,7 @@ func TestOfficialCodex0145EngineTLSProfileComesFromImmutableSnapshot(t *testing.
 	require.True(t, httpProfile.Transport.StrictH1Wire)
 	require.NotEmpty(t, httpProfile.Transport.H1HeaderOrders)
 
-	versionProfile, err := resolveCodex0145VersionProfile(officialCodexVersion0145)
+	versionProfile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	require.NoError(t, err)
 	httpEndpointCount := 0
 	for _, endpoint := range versionProfile.Endpoints {
@@ -103,7 +103,7 @@ func TestOfficialCodex0145EngineTLSProfileComesFromImmutableSnapshot(t *testing.
 	// 返回值是独占深拷贝，任何调用点误改都不能污染下一次画像解析。
 	httpProfile.CipherSuites[0] = 0
 	httpProfile.Transport.H1HeaderOrders[0].Order[0] = "mutated"
-	fresh, err := officialCodex0145ResolveTLSProfile(
+	fresh, err := officialCodexResolveTLSProfile(
 		officialCodexVersion0145,
 		officialCodexTransportHTTPDefault,
 	)
@@ -113,9 +113,9 @@ func TestOfficialCodex0145EngineTLSProfileComesFromImmutableSnapshot(t *testing.
 }
 
 func TestOfficialCodex0145EngineCompilesExactHTTPAndWSSwapRemoveRules(t *testing.T) {
-	httpProfile, err := officialCodex0145ResolveEndpointTLSProfile(
+	httpProfile, err := officialCodexResolveEndpointTLSProfile(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointResponsesHTTP),
+		codexEndpointID(officialCodexEndpointResponsesHTTP),
 	)
 	require.NoError(t, err)
 	httpRule := officialCodex0145FindH1Rule(
@@ -129,9 +129,9 @@ func TestOfficialCodex0145EngineCompilesExactHTTPAndWSSwapRemoveRules(t *testing
 	require.Less(t, indexOfOfficialCodex0145TestHeader(httpRule.Order, "user-agent"), indexOfOfficialCodex0145TestHeader(httpRule.Order, "host"))
 	require.Less(t, indexOfOfficialCodex0145TestHeader(httpRule.Order, "host"), indexOfOfficialCodex0145TestHeader(httpRule.Order, "content-length"))
 
-	wsProfile, err := officialCodex0145ResolveEndpointTLSProfile(
+	wsProfile, err := officialCodexResolveEndpointTLSProfile(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointResponsesWS),
+		codexEndpointID(officialCodexEndpointResponsesWS),
 	)
 	require.NoError(t, err)
 	require.True(t, wsProfile.Transport.StrictH1Wire)
@@ -163,44 +163,44 @@ func TestOfficialCodex0145EngineCompilesExactHTTPAndWSSwapRemoveRules(t *testing
 }
 
 func TestOfficialCodex0145EngineRejectsUnknownVersionTransportAndEndpoint(t *testing.T) {
-	_, err := officialCodex0145ResolveTLSProfile("0.145.1", officialCodexTransportHTTPDefault)
+	_, err := officialCodexResolveTLSProfile("0.145.1", officialCodexTransportHTTPDefault)
 	require.ErrorContains(t, err, "未知")
-	_, err = officialCodex0145ResolveTLSProfile(officialCodexVersion0145, "http-default")
+	_, err = officialCodexResolveTLSProfile(officialCodexVersion0145, "http-default")
 	require.ErrorContains(t, err, "不支持传输画像")
-	_, err = officialCodex0145ResolveEndpointTLSProfile(
+	_, err = officialCodexResolveEndpointTLSProfile(
 		officialCodexVersion0145,
-		codex0145EndpointID("responses"),
+		codexEndpointID("responses"),
 	)
 	require.ErrorContains(t, err, "不支持端点画像")
 }
 
 func TestOfficialCodex0145EngineBuildsClosedEndpointURL(t *testing.T) {
-	modelsURL, err := officialCodex0145BuildEndpointURL(
+	modelsURL, err := officialCodexBuildEndpointURL(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointModels),
-		officialCodex0145EndpointURLInput{},
+		codexEndpointID(officialCodexEndpointModels),
+		officialCodexEndpointURLInput{},
 	)
 	require.NoError(t, err)
 	require.Equal(t, "https://chatgpt.com/backend-api/codex/models?client_version=0.145.0", modelsURL.String())
 
-	sidebandURL, err := officialCodex0145BuildEndpointURL(
+	sidebandURL, err := officialCodexBuildEndpointURL(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointRealtimeSideband),
-		officialCodex0145EndpointURLInput{QueryValues: map[string]string{"call_id": "call / 1"}},
+		codexEndpointID(officialCodexEndpointRealtimeSideband),
+		officialCodexEndpointURLInput{QueryValues: map[string]string{"call_id": "call / 1"}},
 	)
 	require.NoError(t, err)
 	require.Equal(t, "wss://api.openai.com/v1/realtime?intent=quicksilver&call_id=call+%2F+1", sidebandURL.String())
 
-	uploadedURL, err := officialCodex0145BuildEndpointURL(
+	uploadedURL, err := officialCodexBuildEndpointURL(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointFilesUploaded),
-		officialCodex0145EndpointURLInput{PathValues: map[string]string{"file_id": "file/a"}},
+		codexEndpointID(officialCodexEndpointFilesUploaded),
+		officialCodexEndpointURLInput{PathValues: map[string]string{"file_id": "file/a"}},
 	)
 	require.NoError(t, err)
 	require.Equal(t, "https://chatgpt.com/backend-api/files/file%2Fa/uploaded", uploadedURL.String())
-	uploadedTLS, err := officialCodex0145ResolveEndpointTLSProfileForURL(
+	uploadedTLS, err := officialCodexResolveEndpointTLSProfileForURL(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointFilesUploaded),
+		codexEndpointID(officialCodexEndpointFilesUploaded),
 		uploadedURL,
 	)
 	require.NoError(t, err)
@@ -212,43 +212,43 @@ func TestOfficialCodex0145EngineBuildsClosedEndpointURL(t *testing.T) {
 	)
 
 	returned := "https://upload.oaiusercontent.com/blob/a?sig=a%2Fb&se=1"
-	blobURL, err := officialCodex0145BuildEndpointURL(
+	blobURL, err := officialCodexBuildEndpointURL(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointFilesBlobUpload),
-		officialCodex0145EndpointURLInput{ReturnedURL: returned},
+		codexEndpointID(officialCodexEndpointFilesBlobUpload),
+		officialCodexEndpointURLInput{ReturnedURL: returned},
 	)
 	require.NoError(t, err)
 	require.Equal(t, returned, blobURL.String())
-	blobTLS, err := officialCodex0145ResolveEndpointTLSProfileForURL(
+	blobTLS, err := officialCodexResolveEndpointTLSProfileForURL(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointFilesBlobUpload),
+		codexEndpointID(officialCodexEndpointFilesBlobUpload),
 		blobURL,
 	)
 	require.NoError(t, err)
 	officialCodex0145FindH1Rule(t, blobTLS.Transport.H1HeaderOrders, http.MethodPut, "/blob/a")
 
-	_, err = officialCodex0145BuildEndpointURL(
+	_, err = officialCodexBuildEndpointURL(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointRealtimeSideband),
-		officialCodex0145EndpointURLInput{},
+		codexEndpointID(officialCodexEndpointRealtimeSideband),
+		officialCodexEndpointURLInput{},
 	)
 	require.ErrorContains(t, err, "缺少 query")
-	_, err = officialCodex0145BuildEndpointURL(
+	_, err = officialCodexBuildEndpointURL(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointModels),
-		officialCodex0145EndpointURLInput{QueryValues: map[string]string{"client_version": "0.145.1"}},
+		codexEndpointID(officialCodexEndpointModels),
+		officialCodexEndpointURLInput{QueryValues: map[string]string{"client_version": "0.145.1"}},
 	)
 	require.ErrorContains(t, err, "不允许覆盖")
-	_, err = officialCodex0145BuildEndpointURL(
+	_, err = officialCodexBuildEndpointURL(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointFilesBlobUpload),
-		officialCodex0145EndpointURLInput{ReturnedURL: "https://upload.oaiusercontent.com/blob/a"},
+		codexEndpointID(officialCodexEndpointFilesBlobUpload),
+		officialCodexEndpointURLInput{ReturnedURL: "https://upload.oaiusercontent.com/blob/a"},
 	)
 	require.ErrorContains(t, err, "缺少必需 query")
-	_, err = officialCodex0145BuildEndpointURL(
+	_, err = officialCodexBuildEndpointURL(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointFilesBlobUpload),
-		officialCodex0145EndpointURLInput{ReturnedURL: "https://evil.example/blob?sig=1"},
+		codexEndpointID(officialCodexEndpointFilesBlobUpload),
+		officialCodexEndpointURLInput{ReturnedURL: "https://evil.example/blob?sig=1"},
 	)
 	require.ErrorContains(t, err, "不匹配画像")
 }
@@ -266,9 +266,9 @@ func TestOfficialCodex0145EngineAppliesHeaderSlotsAndCompactAlternate(t *testing
 		"Originator":              {"codex_exec"},
 		"User-Agent":              {"codex_exec/0.145.0"},
 	}
-	fields, err := officialCodex0145ApplyHeaderContract(
+	fields, err := officialCodexApplyHeaderContract(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointResponsesCompact),
+		codexEndpointID(officialCodexEndpointResponsesCompact),
 		headers,
 		map[string]bool{
 			officialCodexConditionBetaFeatures: true,
@@ -292,9 +292,9 @@ func TestOfficialCodex0145EngineAppliesHeaderSlotsAndCompactAlternate(t *testing
 
 	invalid := headers.Clone()
 	invalid.Set("x-unknown", "leak")
-	_, err = officialCodex0145ApplyHeaderContract(
+	_, err = officialCodexApplyHeaderContract(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointResponsesCompact),
+		codexEndpointID(officialCodexEndpointResponsesCompact),
 		invalid,
 		nil,
 	)
@@ -309,9 +309,9 @@ func TestOfficialCodex0145EngineValidatesClosedJSONAndOrdersFields(t *testing.T)
 		"model": "gpt-5",
 		"reasoning": null
 	}`)
-	ordered, err := officialCodex0145ValidateAndOrderJSONBody(
+	ordered, err := officialCodexValidateAndOrderJSONBody(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointResponsesCompact),
+		codexEndpointID(officialCodexEndpointResponsesCompact),
 		body,
 		nil,
 	)
@@ -319,25 +319,25 @@ func TestOfficialCodex0145EngineValidatesClosedJSONAndOrdersFields(t *testing.T)
 	require.JSONEq(t, `{"model":"gpt-5","input":[{"role":"user"}],"parallel_tool_calls":true}`, string(ordered))
 	require.True(t, strings.HasPrefix(string(ordered), `{"model":"gpt-5","input":`))
 
-	_, err = officialCodex0145ValidateAndOrderJSONBody(
+	_, err = officialCodexValidateAndOrderJSONBody(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointResponsesCompact),
+		codexEndpointID(officialCodexEndpointResponsesCompact),
 		[]byte(`{"model":"gpt-5","input":[],"parallel_tool_calls":true,"unknown":1}`),
 		nil,
 	)
 	require.ErrorContains(t, err, "不允许 JSON 字段")
-	_, err = officialCodex0145ValidateAndOrderJSONBody(
+	_, err = officialCodexValidateAndOrderJSONBody(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointResponsesCompact),
+		codexEndpointID(officialCodexEndpointResponsesCompact),
 		[]byte(`{"model":"gpt-5","input":[]}`),
 		nil,
 	)
 	require.ErrorContains(t, err, "parallel_tool_calls")
 
 	// sideband 是开放事件契约，但 discriminator 仍必须存在且排在画像字段最前。
-	sideband, err := officialCodex0145ValidateAndOrderJSONBody(
+	sideband, err := officialCodexValidateAndOrderJSONBody(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointRealtimeSideband),
+		codexEndpointID(officialCodexEndpointRealtimeSideband),
 		[]byte(`{"event_id":"evt-1","type":"session.update"}`),
 		nil,
 	)
@@ -371,9 +371,9 @@ func indexOfOfficialCodex0145TestHeader(headers []string, expected string) int {
 }
 
 func TestOfficialCodex0145EngineHeaderResultIsDeterministic(t *testing.T) {
-	endpoint, err := resolveCodex0145Endpoint(
+	endpoint, err := resolveCodexEndpoint(
 		officialCodexVersion0145,
-		codex0145EndpointID(officialCodexEndpointModels),
+		codexEndpointID(officialCodexEndpointModels),
 	)
 	require.NoError(t, err)
 	first := endpoint.OrderedHeaders()

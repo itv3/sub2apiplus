@@ -6,12 +6,12 @@ import (
 	"errors"
 	"io"
 	"net/http"
-	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	coderws "github.com/coder/websocket"
 	"github.com/stretchr/testify/require"
@@ -166,25 +166,17 @@ func TestCreateUpstreamLiveCallPreservesSession(t *testing.T) {
 	}, lowerLiveHeaderNames(upstream.request.Header))
 	require.NotNil(t, upstream.tlsProfile)
 	require.True(t, upstream.tlsProfile.Transport.StrictH1Wire)
-	require.Contains(t, upstream.tlsProfile.Name, officialCodexVersion0145)
+	require.Contains(t, upstream.tlsProfile.Name, "Official Codex compiled")
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.request.Context()))
 	require.True(t, HTTPUpstreamRedirectsDisabled(upstream.request.Context()))
-	egressContext, ok := OfficialEgressContextFromContext(upstream.request.Context())
+	attempt, ok := officialegress.AttemptIdentityFromContext(upstream.request.Context())
 	require.True(t, ok)
-	require.Equal(t, account.ID, egressContext.AccountID())
-	require.Equal(t, PlatformOpenAI, egressContext.TargetPlatform())
-	require.Equal(t, OfficialEgressTransportHTTP, egressContext.Transport())
-	require.Equal(t, "chatgpt.com", egressContext.UpstreamHost())
-	require.Equal(t, "/backend-api/codex/realtime/calls", egressContext.InboundEndpoint())
-	require.Equal(t, officialCodexVersion0145, egressContext.ProfileVersion())
-	require.Equal(t, officialCodexEndpointRealtimeCalls, egressContext.CodexEndpointProfileID())
-	require.Equal(t, realtimeSessionID, egressContext.InvocationID())
-	require.NotEmpty(t, egressContext.ClientProfileID())
-	require.NotEmpty(t, egressContext.ClientProfileDigest())
-	require.NotEmpty(t, egressContext.CodexVersionProfileID())
-	require.NotEmpty(t, egressContext.CodexVersionProfileDigest())
-	require.NotEmpty(t, egressContext.TransportProfileID())
-	require.NotEmpty(t, egressContext.ConnectionPoolID())
+	require.Equal(t, officialegress.SinkCodexRealtimeCalls, attempt.SinkID)
+	require.Equal(t, realtimeSessionID, attempt.InvocationID)
+	require.Equal(t, officialegress.ReleaseModeActive, attempt.ReleaseMode)
+	require.NotEmpty(t, attempt.ReleaseDigest)
+	require.NotEmpty(t, attempt.BundleDigest)
+	require.NotEmpty(t, attempt.ConnectionPoolDigest)
 }
 
 func TestLiveAttestationCipherRoundTripAndRejectsOtherInstanceKey(t *testing.T) {
@@ -286,10 +278,10 @@ func TestLiveRealtimeSessionIDIsStableForLease(t *testing.T) {
 }
 
 func TestLiveSidebandUsesCodex0145EndpointAndClosedHeaders(t *testing.T) {
-	target, err := officialCodex0145BuildEndpointURL(
+	target, err := officialCodexBuildEndpointURL(
 		officialCodexVersion0145,
 		officialCodexEndpointRealtimeSideband,
-		officialCodex0145EndpointURLInput{
+		officialCodexEndpointURLInput{
 			QueryValues: map[string]string{"call_id": "call/value"},
 		},
 	)
@@ -316,36 +308,25 @@ func TestLiveSidebandUsesCodex0145EndpointAndClosedHeaders(t *testing.T) {
 		accountRepo:           &liveTestAccountRepo{account: account},
 		liveAttestationCipher: cipher,
 	}
-	wsContext, egressContext, err := attachOfficialCodex0145EndpointWebSocketContext(
-		context.Background(),
-		account,
-		officialCodexEndpointRealtimeSideband,
-		target.String(),
-	)
-	require.NoError(t, err)
 	realtimeSessionID := liveRealtimeSessionID("lease-sideband")
-	headers, err := service.liveSidebandHeaders(wsContext, account, egressContext, record)
+	headers, err := service.liveSidebandHeaders(context.Background(), account, nil, record)
 	require.NoError(t, err)
-	require.Equal(t, "quicksilver=v1", headers.Get("OpenAI-Alpha"))
+	require.Empty(t, headers.Get("OpenAI-Alpha"), "画像常量只能由 Executor compiler 生成")
 	require.Equal(t, realtimeSessionID, headers.Get("X-Session-Id"))
-	require.Equal(t, "codex_exec", headers.Get("Originator"))
-	require.Equal(t, codexCLIUserAgent, headers.Get("User-Agent"))
+	require.Empty(t, headers.Get("Originator"), "进程身份只能由 Executor compiler 生成")
+	require.Empty(t, headers.Get("User-Agent"), "进程身份只能由 Executor compiler 生成")
 	require.Equal(t, "Bearer sideband-token", headers.Get("Authorization"))
 	require.Equal(t, "acct-sideband", headers.Get("Chatgpt-Account-Id"))
 	require.Equal(t, "true", headers.Get("X-OpenAI-FedRAMP"))
 	require.Equal(t, `{"v":1,"s":0,"t":"v1.sideband"}`, headers.Get(liveAttestationHeader))
-	require.Equal(t, officialCodexVersion0145, headers.Get("Version"))
+	require.Empty(t, headers.Get("Version"), "版本身份只能由 Executor compiler 生成")
 
 	require.ElementsMatch(t, []string{
-		"user-agent",
-		"originator",
 		"chatgpt-account-id",
 		"x-openai-fedramp",
 		"authorization",
 		"x-session-id",
 		"x-oai-attestation",
-		"version",
-		"openai-alpha",
 	}, lowerLiveHeaderNames(headers))
 	require.Empty(t, headers.Get("Host"))
 	require.Empty(t, headers.Get("Connection"))
@@ -353,18 +334,6 @@ func TestLiveSidebandUsesCodex0145EndpointAndClosedHeaders(t *testing.T) {
 	require.Empty(t, headers.Get("Sec-WebSocket-Version"))
 	require.Empty(t, headers.Get("Sec-WebSocket-Key"))
 	require.Empty(t, headers.Get("Sec-WebSocket-Extensions"))
-	require.True(t, egressContext.IsFrozen())
-	require.Equal(t, account.ID, egressContext.AccountID())
-	require.Equal(t, PlatformOpenAI, egressContext.TargetPlatform())
-	require.Equal(t, OfficialEgressTransportWebSocket, egressContext.Transport())
-	require.Equal(t, "api.openai.com", egressContext.UpstreamHost())
-	require.Equal(t, "/v1/realtime", egressContext.InboundEndpoint())
-	require.Equal(t, officialCodexVersion0145, egressContext.ProfileVersion())
-	require.Equal(t, officialCodexEndpointRealtimeSideband, egressContext.CodexEndpointProfileID())
-	require.NotEmpty(t, egressContext.InvocationID())
-	require.NotEmpty(t, egressContext.ClientProfileDigest())
-	require.NotEmpty(t, egressContext.CodexVersionProfileDigest())
-	require.NotEmpty(t, egressContext.ConnectionPoolID())
 }
 
 func TestLiveSidebandRestoresFrozenTUIRuntimeState(t *testing.T) {
@@ -399,31 +368,20 @@ func TestLiveSidebandRestoresFrozenTUIRuntimeState(t *testing.T) {
 	record.AttestationCiphertext, err = cipher.Encrypt(`{"v":1,"s":0,"t":"v1.sideband"}`)
 	require.NoError(t, err)
 
-	ctx, restored, err := restoreLiveCodexRuntimeState(context.Background(), account, record)
+	ctx, restored, err := restoreLiveCodexRuntimeState(
+		context.Background(), account, record, officialClientProfileModeActive,
+	)
 	require.NoError(t, err)
 	require.Equal(t, "us", restored.ConditionalHeaders["x-openai-internal-codex-residency"])
-	target, err := officialCodex0145BuildEndpointURL(
-		officialCodexVersion0145,
-		officialCodexEndpointRealtimeSideband,
-		officialCodex0145EndpointURLInput{QueryValues: map[string]string{"call_id": record.CallID}},
-	)
-	require.NoError(t, err)
-	wsContext, egressContext, err := attachOfficialCodex0145EndpointWebSocketContext(
-		ctx,
-		account,
-		officialCodexEndpointRealtimeSideband,
-		target.String(),
-	)
-	require.NoError(t, err)
 	service := &OpenAIGatewayService{
 		accountRepo:           &liveTestAccountRepo{account: account},
 		liveAttestationCipher: cipher,
 	}
-	headers, err := service.liveSidebandHeaders(wsContext, account, egressContext, record)
+	headers, err := service.liveSidebandHeaders(ctx, account, nil, record)
 	require.NoError(t, err)
-	require.Equal(t, "codex-tui", headers.Get("originator"))
-	require.Equal(t, "codex-tui/0.145.0 (Ubuntu 24.4.0; x86_64) xterm-256color", headers.Get("user-agent"))
-	require.Equal(t, "us", headers.Get("x-openai-internal-codex-residency"))
+	require.Empty(t, headers.Get("originator"), "TUI 身份只登记为结构化运行态")
+	require.Empty(t, headers.Get("user-agent"), "TUI 身份只登记为结构化运行态")
+	require.Empty(t, headers.Get("x-openai-internal-codex-residency"), "managed identity 只登记为结构化事实")
 }
 
 func lowerLiveHeaderNames(headers http.Header) []string {
@@ -435,36 +393,54 @@ func lowerLiveHeaderNames(headers http.Header) []string {
 }
 
 func TestLiveSidebandDialDisablesWebSocketCompression(t *testing.T) {
-	extensionCh := make(chan string, 1)
-	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		extensionCh <- request.Header.Get("Sec-WebSocket-Extensions")
-		connection, err := coderws.Accept(writer, request, &coderws.AcceptOptions{
-			CompressionMode: coderws.CompressionDisabled,
-		})
-		if err != nil {
-			return
-		}
-		_ = connection.Close(coderws.StatusNormalClosure, "")
-	}))
-	defer server.Close()
-
-	dialer, ok := newDefaultOpenAIWSClientDialer().(liveSidebandClientDialer)
-	require.True(t, ok)
-	connection, _, _, err := dialer.DialLiveSideband(
+	runtimeState, err := newOfficialEgressTestRuntime(&liveHTTPUpstreamStub{})
+	require.NoError(t, err)
+	account := &Account{
+		ID: 891, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{"chatgpt_account_id": "acct-live-compression"},
+	}
+	invocation, err := newOfficialCodexWebSocketInvocation(
 		context.Background(),
-		"ws"+strings.TrimPrefix(server.URL, "http"),
-		http.Header{"openai-alpha": {"quicksilver=v1"}},
-		"",
+		officialCodexWebSocketInvocationInput{
+			Runtime: runtimeState, Account: account,
+			SinkID:       officialegress.SinkCodexRealtimeSideband,
+			InvocationID: "test-live-sideband-compression",
+			PolicyID:     "test.realtime.sideband", PolicySource: "openai_live_test",
+			AttemptBudget: 1,
+		},
 	)
 	require.NoError(t, err)
-	defer func() { _ = connection.Close() }()
+	dialer := &liveCompiledTransportCaptureDialer{}
+	connection, _, _, err := invocation.DialDirect(
+		context.Background(), dialer,
+		openAIWSAcquireRequest{
+			Account: account,
+			WSURL:   "wss://api.openai.com/v1/realtime?intent=quicksilver&call_id=call_123",
+			Headers: http.Header{"Authorization": {"Bearer token"}},
+		},
+		officialCodexEndpointRealtimeSideband,
+	)
+	require.NoError(t, err)
+	require.NoError(t, connection.Close())
+	require.Empty(t, dialer.transport.Normalization.WebSocketCompressionOffer)
+}
 
-	select {
-	case extension := <-extensionCh:
-		require.Empty(t, extension)
-	case <-time.After(time.Second):
-		t.Fatal("未收到 Live sideband 握手")
+type liveCompiledTransportCaptureDialer struct {
+	transport officialegress.TransportSpec
+}
+
+func (d *liveCompiledTransportCaptureDialer) Dial(
+	ctx context.Context,
+	_ string,
+	_ http.Header,
+	_ string,
+) (openAIWSClientConn, int, http.Header, error) {
+	compiled, ok := ctx.Value(officialCompiledWSTransportContextKey{}).(officialCompiledWSTransport)
+	if !ok {
+		return nil, 0, nil, errors.New("测试未收到终端 WebSocket transport")
 	}
+	d.transport = compiled.transport.Clone()
+	return candidateTraceFailingWSConn{}, http.StatusSwitchingProtocols, nil, nil
 }
 
 func TestRequestTypeLive(t *testing.T) {

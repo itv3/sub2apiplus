@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 )
@@ -187,12 +188,14 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	}
 	var officialEgressBodyContract *officialOpenAIHTTPBodyContract
 	upstreamRequestContext := c
+	managedOfficialBridge := false
 	if account.Platform == PlatformOpenAI {
 		officialEgressEnabled, _, configErr := resolveOfficialEgressAccountProfile(account)
 		if configErr != nil {
 			return nil, fmt.Errorf("resolve official egress config: %w", configErr)
 		}
 		if officialEgressEnabled {
+			managedOfficialBridge = true
 			officialEgressBodyContract, err = captureOfficialOpenAIHTTPBodyContractForRequest(c, body)
 			if err != nil {
 				return nil, fmt.Errorf("capture OpenAI HTTP bridge body contract: %w", err)
@@ -201,6 +204,12 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 			if err != nil {
 				return nil, err
 			}
+		}
+	}
+	if managedOfficialBridge {
+		ctx, err = bindOfficialEgressSink(ctx, officialEgressSinkResponsesWSHTTPBridge)
+		if err != nil {
+			return nil, fmt.Errorf("bind WebSocket HTTP bridge official egress sink: %w", err)
 		}
 	}
 
@@ -260,11 +269,53 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 		c.Set("openai_passthrough", true)
 		c.Set("openai_ws_http_bridge", true)
 	}
+	var officialForwardPlan *OpenAIForwardInvocationPlan
+	var officialFallbackTarget officialegress.FallbackNode
+	officialFallbackPending := false
+	if managedOfficialBridge {
+		holder := officialCodexBundleHolderForGin(c)
+		officialForwardPlan = officialCodexResponseForwardPlanFromHolder(
+			holder, officialegress.SinkCodexResponsesWS, account.ID,
+		)
+		if officialForwardPlan != nil {
+			if officialForwardPlan.CurrentSinkID() == officialegress.SinkCodexResponsesWS {
+				var found bool
+				officialFallbackTarget, found = officialForwardPlan.FallbackNode(
+					officialegress.SinkCodexResponsesWSHTTPBridge,
+				)
+				if !found {
+					return nil, errors.New("WS HTTP bridge fallback 不在冻结 Bundle 中")
+				}
+				officialFallbackPending = true
+			}
+		} else {
+			officialForwardPlan, err = s.officialCodexResponseForwardPlan(
+				ctx, c, account,
+				officialegress.SinkCodexResponsesWSHTTPBridge,
+				"changeset3.responses.ws_http_bridge",
+				"service.proxyOpenAIWSHTTPBridgeTurn",
+				officialCodexIngressForwardAttemptBudget,
+			)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
 
 	turnStart := time.Now()
 	var resp *http.Response
 	if account.Platform == PlatformGrok {
 		resp, err = s.httpUpstream.Do(upstreamReq, proxyURL, account.ID, account.Concurrency)
+	} else if officialForwardPlan != nil {
+		if officialFallbackPending {
+			resp, err = officialForwardPlan.TransitionHTTPFallback(
+				upstreamReq.Context(), upstreamReq, officialFallbackTarget,
+			)
+		} else {
+			resp, err = officialForwardPlan.ExecuteHTTPRequest(
+				upstreamReq.Context(), upstreamReq, officialCodexEndpointResponsesHTTP,
+			)
+		}
 	} else {
 		resp, err = doOpenAIHTTPUpstreamWithProfile(
 			s.httpUpstream,

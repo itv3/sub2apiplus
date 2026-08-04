@@ -81,6 +81,7 @@ func TestDecryptAgentTaskIDSupportsCodexSealedBoxResponse(t *testing.T) {
 }
 
 func TestRegisterAgentIdentityTaskAcceptsPlaintextAndEncryptedResponses(t *testing.T) {
+	configureObserveGuardForLocalHTTPTest(t)
 	key, privateKey := newTestAgentIdentityKey(t)
 	requestCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -128,6 +129,7 @@ func TestRegisterAgentIdentityTaskAcceptsPlaintextAndEncryptedResponses(t *testi
 }
 
 func TestEnsureAgentIdentityTaskPersistsAndRedactsCredentials(t *testing.T) {
+	configureObserveGuardForLocalHTTPTest(t)
 	key, privateKey := newTestAgentIdentityKey(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"task_id":"task-persisted"}`))
@@ -159,6 +161,7 @@ func TestEnsureAgentIdentityTaskPersistsAndRedactsCredentials(t *testing.T) {
 }
 
 func TestEnsureAgentIdentityTaskSharesLockAcrossServicesForSameAccount(t *testing.T) {
+	configureObserveGuardForLocalHTTPTest(t)
 	key, privateKey := newTestAgentIdentityKey(t)
 	account := &Account{ID: 9001, Type: AccountTypeOAuth, Platform: PlatformOpenAI, Credentials: map[string]any{
 		"auth_mode":         OpenAIAuthModeAgentIdentity,

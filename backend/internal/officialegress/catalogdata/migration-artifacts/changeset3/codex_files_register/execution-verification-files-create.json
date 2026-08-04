@@ -1,0 +1,29 @@
+{
+  "schema_version": 2,
+  "result": "passed",
+  "sink_id": "codex.files.register",
+  "route": {
+    "method": "POST",
+    "host": "chatgpt.com",
+    "path": "/backend-api/files",
+    "purpose": "user_request.file_register",
+    "protocol": "http"
+  },
+  "authority_kind": "codex_executor",
+  "authority_id": "codex.executor.changeset1b",
+  "token_issuer_id": "codex.executor.changeset1b",
+  "evidence_kind": "codex_endpoint",
+  "evidence_id": "files_create",
+  "backend": "http_upstream",
+  "adapter_id": "officialegress.http_upstream",
+  "transport_id": "codex-0.145.0-http-ubuntu24-native",
+  "wire_fixture_sha256": "38cb2db6eaa6d70c32d0d83441830c076ff9bfa5ef1f05db1bd4ffbd0befc414",
+  "final_wire_manifest_sha256": "c824ffb0ab6e2429c09f9ac517cf3e6f96860c7c6ef77c229757fd690bdbcf0f",
+  "active_capture_sha256": "4bf0a6c558f4acc66f2f53a207cc3c706f911a72694eacec8def67661d17cbdc",
+  "previous_capture_sha256": "e2b19124ddc5973593707db45ab7fc8d893e152152385e25642e47b98678c4be",
+  "terminal_guard_allow": true,
+  "compared_release_modes": [
+    "active",
+    "previous"
+  ]
+}

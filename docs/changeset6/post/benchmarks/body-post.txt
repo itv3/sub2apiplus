@@ -1,0 +1,47 @@
+2026/08/04 04:49:25 Timezone initialized: UTC (UTC offset: +00:00)
+goos: darwin
+goarch: arm64
+pkg: github.com/Wei-Shaw/sub2api/internal/service
+cpu: Apple M4
+BenchmarkBodyCompileLargeUnchanged-10    	     229	   5169119 ns/op	 241.02 MB/s	39561034 B/op	     533 allocs/op
+BenchmarkBodyCompileLargeUnchanged-10    	     226	   5228109 ns/op	 238.30 MB/s	39561319 B/op	     534 allocs/op
+BenchmarkBodyCompileLargeUnchanged-10    	     229	   5216531 ns/op	 238.83 MB/s	39561216 B/op	     534 allocs/op
+BenchmarkBodyCompileLargeUnchanged-10    	     230	   5251503 ns/op	 237.24 MB/s	39561787 B/op	     534 allocs/op
+BenchmarkBodyCompileLargeUnchanged-10    	     226	   5214297 ns/op	 238.93 MB/s	39561452 B/op	     534 allocs/op
+BenchmarkBodyCompileLargeUnchanged-10    	     230	   5263723 ns/op	 236.69 MB/s	39561219 B/op	     534 allocs/op
+BenchmarkBodyCompileLargeUnchanged-10    	     223	   5260798 ns/op	 236.82 MB/s	39561085 B/op	     533 allocs/op
+BenchmarkBodyCompileLargeUnchanged-10    	     228	   5228445 ns/op	 238.28 MB/s	39561385 B/op	     534 allocs/op
+BenchmarkBodyCompileLargeUnchanged-10    	     223	   5234868 ns/op	 237.99 MB/s	39560875 B/op	     534 allocs/op
+BenchmarkBodyCompileLargeUnchanged-10    	     226	   5276572 ns/op	 236.11 MB/s	39560876 B/op	     533 allocs/op
+BenchmarkBodyCompileLargeDirty-10        	     228	   5277698 ns/op	 236.06 MB/s	39560593 B/op	     533 allocs/op
+BenchmarkBodyCompileLargeDirty-10        	     222	   5272842 ns/op	 236.27 MB/s	39560269 B/op	     532 allocs/op
+BenchmarkBodyCompileLargeDirty-10        	     225	   5245323 ns/op	 237.51 MB/s	39560739 B/op	     533 allocs/op
+BenchmarkBodyCompileLargeDirty-10        	     228	   5239966 ns/op	 237.75 MB/s	39560487 B/op	     533 allocs/op
+BenchmarkBodyCompileLargeDirty-10        	     224	   5343153 ns/op	 233.16 MB/s	39560341 B/op	     533 allocs/op
+BenchmarkBodyCompileLargeDirty-10        	     229	   5270163 ns/op	 236.39 MB/s	39560560 B/op	     533 allocs/op
+BenchmarkBodyCompileLargeDirty-10        	     223	   5225385 ns/op	 238.42 MB/s	39560243 B/op	     532 allocs/op
+BenchmarkBodyCompileLargeDirty-10        	     229	   5338901 ns/op	 233.35 MB/s	39560364 B/op	     532 allocs/op
+BenchmarkBodyCompileLargeDirty-10        	     229	   5305169 ns/op	 234.83 MB/s	39560481 B/op	     533 allocs/op
+BenchmarkBodyCompileLargeDirty-10        	     229	   5493611 ns/op	 226.78 MB/s	39561226 B/op	     534 allocs/op
+BenchmarkBodyCompileRetry-10             	      97	  11362302 ns/op	 219.29 MB/s	79121166 B/op	    1066 allocs/op
+BenchmarkBodyCompileRetry-10             	     100	  10883562 ns/op	 228.94 MB/s	79120775 B/op	    1066 allocs/op
+BenchmarkBodyCompileRetry-10             	     100	  10944979 ns/op	 227.65 MB/s	79119960 B/op	    1066 allocs/op
+BenchmarkBodyCompileRetry-10             	     100	  10965316 ns/op	 227.23 MB/s	79120012 B/op	    1065 allocs/op
+BenchmarkBodyCompileRetry-10             	      99	  10967297 ns/op	 227.19 MB/s	79120728 B/op	    1066 allocs/op
+BenchmarkBodyCompileRetry-10             	      92	  11212514 ns/op	 222.22 MB/s	79120656 B/op	    1066 allocs/op
+BenchmarkBodyCompileRetry-10             	      94	  11021197 ns/op	 226.08 MB/s	79119447 B/op	    1065 allocs/op
+BenchmarkBodyCompileRetry-10             	      97	  11183913 ns/op	 222.79 MB/s	79119849 B/op	    1065 allocs/op
+BenchmarkBodyCompileRetry-10             	     100	  11080412 ns/op	 224.87 MB/s	79119797 B/op	    1065 allocs/op
+BenchmarkBodyCompileRetry-10             	      96	  11160326 ns/op	 223.26 MB/s	79120652 B/op	    1067 allocs/op
+BenchmarkBodyCompileOpenWS-10            	     334	   4523217 ns/op	 275.30 MB/s	 6724043 B/op	     208 allocs/op
+BenchmarkBodyCompileOpenWS-10            	     327	   4132273 ns/op	 301.35 MB/s	 6724016 B/op	     208 allocs/op
+BenchmarkBodyCompileOpenWS-10            	     286	   3763393 ns/op	 330.88 MB/s	 6724990 B/op	     210 allocs/op
+BenchmarkBodyCompileOpenWS-10            	     327	   3728263 ns/op	 334.00 MB/s	 6723924 B/op	     208 allocs/op
+BenchmarkBodyCompileOpenWS-10            	     334	   3568323 ns/op	 348.97 MB/s	 6722542 B/op	     205 allocs/op
+BenchmarkBodyCompileOpenWS-10            	     336	   3577461 ns/op	 348.08 MB/s	 6722546 B/op	     205 allocs/op
+BenchmarkBodyCompileOpenWS-10            	     337	   3563796 ns/op	 349.42 MB/s	 6722710 B/op	     206 allocs/op
+BenchmarkBodyCompileOpenWS-10            	     338	   3553674 ns/op	 350.41 MB/s	 6722649 B/op	     206 allocs/op
+BenchmarkBodyCompileOpenWS-10            	     330	   3564447 ns/op	 349.35 MB/s	 6723039 B/op	     206 allocs/op
+BenchmarkBodyCompileOpenWS-10            	     331	   3611847 ns/op	 344.77 MB/s	 6725435 B/op	     210 allocs/op
+PASS
+ok  	github.com/Wei-Shaw/sub2api/internal/service	62.792s

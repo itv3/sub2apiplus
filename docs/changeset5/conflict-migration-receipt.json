@@ -1,0 +1,108 @@
+{
+  "schema_version": "changeset5-conflict-migration-receipt/v1",
+  "changeset": "5",
+  "classification_upstream_base": "26d894ef4f50645a4bf1030e378ac892f17d0223",
+  "observed_remote_head": "825ca7b1fc9335f904bc077f051de815fb61e47f",
+  "upstream_sync_performed": false,
+  "pre_inventory": {
+    "full_sha256": "6fee65be361be40bd8abb1d16bc88b10f9877dc475899549e15afbae0870a470",
+    "raw_governable_sha256": "bc1ab9379486d510f40fb8d94fa660cd069af88d6d8fe5a3a99317fa19f93fcf",
+    "full_unit_count": 260,
+    "raw_governable_unit_count": 103,
+    "effective_governable_unit_count": 104
+  },
+  "post_inventory": {
+    "full_sha256": "6a3c0a45339da65a01ae2e5d591cb682046f33fe35464583c66155dfe318c816",
+    "raw_governable_sha256": "03c2d35555febf086caffdd7ab03625353be5f1146064c19aebfc50b44543118",
+    "full_unit_count": 247,
+    "raw_governable_unit_count": 90,
+    "effective_governable_unit_count": 91
+  },
+  "modified_upstream_declarations": {
+    "pre_count": 136,
+    "post_count": 136,
+    "pre_fingerprint_sha256": "e6071ec3247da5eb7bd570ac651dc8230e7333ff220dd74d7ac5d92fd2cd633b",
+    "post_fingerprint_sha256": "e6071ec3247da5eb7bd570ac651dc8230e7333ff220dd74d7ac5d92fd2cd633b",
+    "post_is_subset_of_pre": true,
+    "new_modified_upstream_declaration_count": 0,
+    "renamed_or_deleted_upstream_declaration_count": 0
+  },
+  "retained_changes": {
+    "changed_unit_count": 28,
+    "changed_unit_fingerprint_sha256": "e17e3a68a0b6c326d1b7b8ad42b9a44c3733337b21f87bb29d49991a9615f047",
+    "version_neutral_identifier_only_unit_count": 26,
+    "normalized_diff_expansion_count": 0,
+    "proof": "26 个单元仅删除标识符中的 0145 版本片段，不改变语句、控制流或行数；剩余 2 个 file_structure 单元只删除随迁移声明带走的 import。"
+  },
+  "governable_classification_amendment": {
+    "overlay_path": "docs/changeset5/conflict-classification-amendments.json",
+    "overlay_sha256": "53fbdbad39153065aba599fe9b73fa576a1aefbabf89bf6fc870b391c65ff9a3",
+    "unit_key": "backend/internal/service/openai_images_responses.go\u0000declaration_added\u0000\u0000buildOpenAICodexImagesRequestBody",
+    "original_ownership": "non_official",
+    "effective_ownership": "official_egress_exclusive",
+    "reason": "开发前分类信号漏判版本中立的 Codex Images Body 组装；原始 inventory 不覆盖，有效 governable 集合统一通过 overlay 计算。"
+  },
+  "moved_units": {
+    "count": 13,
+    "fingerprint_sha256": "d6d6b8da80acb350003102b19de97909d3b8bee263fdb30f2b67711de8448331",
+    "migrations": [
+      {
+        "source": "backend/internal/service/openai_ws_client.go",
+        "target": "backend/internal/service/official_egress_transport_adapters.go",
+        "names": [
+          "buildOpenAIOfficialEgressWSTransport",
+          "guardedOpenAIWSDefaultClient",
+          "officialEgressWebSocketRoundTripper",
+          "(*coderOpenAIWSClientDialer).compiledOfficialEgressHTTPClient",
+          "(*coderOpenAIWSClientDialer).officialEgressHTTPClient",
+          "(*officialEgressWebSocketRoundTripper).CloseIdleConnections",
+          "(*officialEgressWebSocketRoundTripper).RoundTrip"
+        ]
+      },
+      {
+        "source": "backend/internal/repository/openai_oauth_service.go",
+        "target": "backend/internal/repository/official_egress_guard.go",
+        "names": [
+          "ProvideOfficialCodexReqProfileTransportResource",
+          "resolveOpenAIExchangeTLSProfile",
+          "tlsProfileFromOfficialTransport",
+          "(openAIOAuthReqProfileTransport).Do",
+          "(openAIOAuthReqProfileTransport).SendOfficialCodexReqProfile"
+        ]
+      },
+      {
+        "source": "backend/internal/repository/req_client_pool.go",
+        "target": "backend/internal/repository/official_egress_guard.go",
+        "names": [
+          "instrumentReqClientWithGuard"
+        ]
+      }
+    ]
+  },
+  "file_structure_changes": [
+    {
+      "path": "backend/internal/service/openai_ws_client.go",
+      "removed_imports": [
+        "github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl",
+        "github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
+      ],
+      "added_imports": [],
+      "non_official_fragment_changed": false
+    },
+    {
+      "path": "backend/internal/repository/req_client_pool.go",
+      "removed_imports": [
+        "net/http",
+        "github.com/Wei-Shaw/sub2api/internal/officialegress",
+        "github.com/Wei-Shaw/sub2api/internal/pkg/servertiming"
+      ],
+      "added_imports": [],
+      "non_official_fragment_changed": false
+    }
+  ],
+  "non_go_and_generated": {
+    "dockerfile_hunk_unchanged": true,
+    "wire_gen_units_unchanged": true,
+    "wire_gen_rebuild_command": "go run -mod=mod github.com/google/wire/cmd/wire diff ./cmd/server"
+  }
+}

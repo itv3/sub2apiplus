@@ -1,0 +1,20 @@
+{
+  "schema_version": "changeset5-workspace-transition-receipt/v1",
+  "changeset": "5",
+  "manifest_path": "docs/changeset5/workspace-transition/manifest.json",
+  "manifest_sha256": "5e144f2f88b62c27647ab0557a7020a19fb1a54dedb0ef598e13f6c387716698",
+  "frozen_path_count": 558,
+  "transition_entry_count": 50,
+  "transition_counts": {
+    "protected_prior_artifacts": 47,
+    "incidental_non_authoritative_paths": 0,
+    "changeset5_prerequisite_artifacts": 3
+  },
+  "unchanged_counts": {
+    "protected_prior_artifacts": 499,
+    "incidental_non_authoritative_paths": 2,
+    "changeset5_prerequisite_artifacts": 7
+  },
+  "deleted_entry_count": 2,
+  "result": "passed"
+}

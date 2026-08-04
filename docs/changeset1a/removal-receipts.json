@@ -1,0 +1,146 @@
+{
+  "schema_version": 2,
+  "bootstrap_commit": "38a9929eac35a39c86de2f27de8f7a805d7dae52",
+  "receipts": [
+    {
+      "candidate": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*AccountUsageService.probeOpenAICodexSnapshot@backend/internal/service/account_usage_service.go#factory_httpclient_pool#1",
+        "file": "backend/internal/service/account_usage_service.go",
+        "func": "*AccountUsageService.probeOpenAICodexSnapshot",
+        "package": "github.com/Wei-Shaw/sub2api/internal/service",
+        "callee": "github.com/Wei-Shaw/sub2api/internal/pkg/httpclient.GetClient",
+        "sink_kind": "factory_httpclient_pool",
+        "protocol": "http",
+        "sink_type": "factory",
+        "ast_fingerprint": "01d0937254f5",
+        "target_resolution": "unknown",
+        "build_contexts": [
+          "darwin/arm64",
+          "linux/amd64"
+        ],
+        "official_host": false,
+        "runtime_sink_id": "codex.usage.probe",
+        "purpose": "usage_probe",
+        "persona": "codex-cli",
+        "endpoint_evidence": "codex_profile",
+        "routes": [
+          "POST chatgpt.com/backend-api/codex/responses"
+        ],
+        "is_facade": false,
+        "backend": "plain_net_http",
+        "target_backend": "http_upstream",
+        "enforcement_state": "legacy_observe",
+        "owner": "czs",
+        "migration_changeset": "1B",
+        "expiry_condition": "1B 改 WHAM-first 后本 sink 消失",
+        "rationale": "P0：httpclient.GetClient 无 uTLS 直打官方推理端点",
+        "line_hint": 777
+      },
+      "kind": "migrated",
+      "replacement_sink_id": "codex.usage.probe",
+      "migration_receipt_digest": "064a0276531e352ec5b0d9d5f8870e376c49317ed2744890ae30f85442fa7d4d",
+      "source_blob_sha256": "889c7499e85194fe22caa266b8b3bbf228942be2d29aa600a6ed3c5943696816",
+      "reviewed_by": "user-approved-changesets-0-1a-1b",
+      "review_ref": "changeset-1b-receipt-closure/2026-08-02",
+      "rationale": "Usage fallback 已改由固定 Authority 的 Codex Executor 签发 FinalizationToken，旧的通用 HTTP 客户端工厂候选已移除。"
+    },
+    {
+      "candidate": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*AccountUsageService.probeOpenAICodexSnapshot@backend/internal/service/account_usage_service.go#net_http_client_do#1",
+        "file": "backend/internal/service/account_usage_service.go",
+        "func": "*AccountUsageService.probeOpenAICodexSnapshot",
+        "package": "github.com/Wei-Shaw/sub2api/internal/service",
+        "callee": "(*net/http.Client).Do",
+        "receiver": "*net/http.Client",
+        "sink_kind": "net_http_client_do",
+        "protocol": "http",
+        "sink_type": "terminal",
+        "ast_fingerprint": "6510439f9f68",
+        "target_resolution": "constructed",
+        "build_contexts": [
+          "darwin/arm64",
+          "linux/amd64"
+        ],
+        "resolved_hosts": [
+          "chatgpt.com"
+        ],
+        "resolved_methods": [
+          "POST"
+        ],
+        "resolved_paths": [
+          "/backend-api/codex/responses"
+        ],
+        "resolved_targets": [
+          "https://chatgpt.com/backend-api/codex/responses"
+        ],
+        "official_host": true,
+        "runtime_sink_id": "codex.usage.probe",
+        "purpose": "usage_probe",
+        "persona": "codex-cli",
+        "endpoint_evidence": "codex_profile",
+        "routes": [
+          "POST chatgpt.com/backend-api/codex/responses"
+        ],
+        "is_facade": false,
+        "backend": "plain_net_http",
+        "target_backend": "http_upstream",
+        "enforcement_state": "legacy_observe",
+        "owner": "czs",
+        "migration_changeset": "1B",
+        "expiry_condition": "1B 改 WHAM-first 后本 sink 消失",
+        "rationale": "P0：httpclient.GetClient 无 uTLS 直打官方推理端点",
+        "line_hint": 785
+      },
+      "kind": "migrated",
+      "replacement_sink_id": "codex.usage.probe",
+      "migration_receipt_digest": "064a0276531e352ec5b0d9d5f8870e376c49317ed2744890ae30f85442fa7d4d",
+      "source_blob_sha256": "889c7499e85194fe22caa266b8b3bbf228942be2d29aa600a6ed3c5943696816",
+      "reviewed_by": "user-approved-changesets-0-1a-1b",
+      "review_ref": "changeset-1b-receipt-closure/2026-08-02",
+      "rationale": "Usage fallback 已改由固定 Authority 的 Codex Executor 签发 FinalizationToken，旧的 net/http 终端候选已移除。"
+    },
+    {
+      "candidate": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.forwardAlphaSearchViaResponsesWebSearch@backend/internal/service/openai_alpha_search.go#facade_http_upstream_do_tls#1",
+        "file": "backend/internal/service/openai_alpha_search.go",
+        "func": "*OpenAIGatewayService.forwardAlphaSearchViaResponsesWebSearch",
+        "package": "github.com/Wei-Shaw/sub2api/internal/service",
+        "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).DoWithTLS",
+        "receiver": "github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream",
+        "sink_kind": "facade_http_upstream_do_tls",
+        "protocol": "http",
+        "sink_type": "facade",
+        "ast_fingerprint": "33276ecf03af",
+        "target_resolution": "unknown",
+        "build_contexts": [
+          "darwin/arm64",
+          "linux/amd64"
+        ],
+        "official_host": false,
+        "runtime_sink_id": "codex.alpha_search.pat_fallback",
+        "purpose": "user_request.alpha_search_pat",
+        "persona": "codex-cli",
+        "endpoint_evidence": "codex_profile",
+        "routes": [
+          "POST chatgpt.com/backend-api/codex/responses"
+        ],
+        "is_facade": false,
+        "backend": "http_upstream",
+        "target_backend": "http_upstream",
+        "enforcement_state": "legacy_observe",
+        "owner": "czs",
+        "migration_changeset": "1B",
+        "expiry_condition": "1B 补 finalize",
+        "rationale": "半旁路：TLS 有画像，Header/Body 手工构造且无 finalize",
+        "line_hint": 196
+      },
+      "kind": "migrated",
+      "replacement_sink_id": "codex.alpha_search.pat_fallback",
+      "migration_receipt_digest": "43cc528c5583f4e0942af0a8d3171369ee5389ea9f5b54376fe0fb7691aabd69",
+      "source_blob_sha256": "a5b6ab8f3f985fd6ad3303ed94ee16b33688abff0f2d1b22624e159073c34a3c",
+      "reviewed_by": "user-approved-changesets-0-1a-1b",
+      "review_ref": "changeset-1b-receipt-closure/2026-08-02",
+      "rationale": "PAT Alpha fallback 已改由固定 Authority 的 Codex Executor 签发 FinalizationToken，旧 HTTPUpstream facade 候选已移除。"
+    }
+  ]
+}

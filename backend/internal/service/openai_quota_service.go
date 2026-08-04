@@ -6,14 +6,18 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 )
 
@@ -38,6 +42,43 @@ type OpenAIRateLimitWindow struct {
 	LimitWindowSeconds int64   `json:"limit_window_seconds"`
 	ResetAfterSeconds  int64   `json:"reset_after_seconds"`
 	ResetAt            int64   `json:"reset_at"`
+
+	usedPercentPresent bool
+	limitWindowPresent bool
+	resetAfterPresent  bool
+	resetAtPresent     bool
+}
+
+// UnmarshalJSON 保存字段是否真实出现，避免把缺字段产生的零值与合法的
+// used_percent=0 混为一谈。严格 WHAM 映射只接受结构完整的窗口。
+func (w *OpenAIRateLimitWindow) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		UsedPercent        *float64 `json:"used_percent"`
+		LimitWindowSeconds *int64   `json:"limit_window_seconds"`
+		ResetAfterSeconds  *int64   `json:"reset_after_seconds"`
+		ResetAt            *int64   `json:"reset_at"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*w = OpenAIRateLimitWindow{}
+	if raw.UsedPercent != nil {
+		w.UsedPercent = *raw.UsedPercent
+		w.usedPercentPresent = true
+	}
+	if raw.LimitWindowSeconds != nil {
+		w.LimitWindowSeconds = *raw.LimitWindowSeconds
+		w.limitWindowPresent = true
+	}
+	if raw.ResetAfterSeconds != nil {
+		w.ResetAfterSeconds = *raw.ResetAfterSeconds
+		w.resetAfterPresent = true
+	}
+	if raw.ResetAt != nil {
+		w.ResetAt = *raw.ResetAt
+		w.resetAtPresent = true
+	}
+	return nil
 }
 
 // OpenAIRateLimit is a rate-limit envelope (primary + optional secondary window).
@@ -111,6 +152,7 @@ type OpenAIQuotaService struct {
 	proxyRepo           ProxyRepository
 	tokenProvider       *OpenAITokenProvider
 	httpUpstream        HTTPUpstream
+	officialEgress      *OfficialEgressTransitionRuntime
 	agentIdentityTaskMu sync.Mutex
 	agentIdentityWS     agentIdentityWSConnectionInvalidator
 }
@@ -131,20 +173,47 @@ func NewOpenAIQuotaService(
 	}
 }
 
-// QueryUsage 获取 OpenAI OAuth 账号最新的限流和额度快照。
+// QueryUsage 获取 OpenAI OAuth 账号最新的限流和额度快照，并按管理端显式操作补查
+// reset-credit details。后台周期刷新不得调用本方法，因为它会产生第二次官方请求。
 func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*OpenAIQuotaUsage, error) {
+	return s.queryUsage(ctx, accountID, true)
+}
+
+// QueryUsageOnly 只执行 GET /wham/usage。它是 1B 周期刷新的专用入口，成功时
+// 严格保证只产生一次官方请求，不会隐式查询 reset-credit details。
+func (s *OpenAIQuotaService) QueryUsageOnly(ctx context.Context, accountID int64) (*OpenAIQuotaUsage, error) {
+	return s.queryUsage(ctx, accountID, false)
+}
+
+func (s *OpenAIQuotaService) queryUsage(
+	ctx context.Context,
+	accountID int64,
+	includeResetCreditDetails bool,
+) (*OpenAIQuotaUsage, error) {
 	accessToken, chatGPTAccountID, proxyURL, _, err := s.prepareUpstreamCall(ctx, accountID)
 	if err != nil {
 		return nil, err
 	}
+	runtimeState, err := resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream)
+	if err != nil {
+		return nil, err
+	}
+	mode := string(runtimeState.CodexReleaseMode)
 
 	callCtx, cancel := context.WithTimeout(ctx, openaiQuotaUpstreamTimeout)
 	defer cancel()
+	callCtx = context.WithValue(
+		callCtx,
+		officialCodexBundleHolderContextKey{},
+		&officialCodexBundleHolder{httpAttemptBudget: 3},
+	)
 	agentIdentity := s.isAgentIdentityAccount(ctx, accountID)
 
 	var payload OpenAIQuotaUsage
 	for recovered := false; ; {
-		quotaHeaders, expectedTaskID, headerErr := s.buildCodexQuotaHeaders(callCtx, accountID, accessToken, chatGPTAccountID)
+		quotaHeaders, expectedTaskID, headerErr := s.buildCodexQuotaHeaders(
+			callCtx, mode, accountID, accessToken, chatGPTAccountID,
+		)
 		if headerErr != nil {
 			return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_QUOTA_AUTH_FAILED", "failed to build upstream authentication: %v", headerErr)
 		}
@@ -169,7 +238,13 @@ func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*
 			}
 			body := truncate(s.redactQuotaErrorBody(ctx, accountID, string(responseBody)), 240)
 			slog.Warn("openai_quota_query_failed", "account_id", accountID, "status", status, "body", body)
-			return nil, infraerrors.Newf(mapUpstreamStatus(status), "OPENAI_QUOTA_UPSTREAM_ERROR", "upstream returned %d: %s", status, body)
+			return nil, infraerrors.Newf(
+				mapUpstreamStatus(status),
+				"OPENAI_QUOTA_UPSTREAM_ERROR",
+				"upstream returned %d: %s",
+				status,
+				body,
+			).WithMetadata(map[string]string{"upstream_status": strconv.Itoa(status)})
 		}
 		if err := json.Unmarshal(responseBody, &payload); err != nil {
 			return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_QUOTA_RESPONSE_INVALID", "failed to decode upstream response: %v", err)
@@ -178,6 +253,9 @@ func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*
 	}
 
 	payload.FetchedAt = time.Now().Unix()
+	if !includeResetCreditDetails {
+		return &payload, nil
+	}
 	details := s.queryResetCreditDetails(callCtx, accessToken, chatGPTAccountID, proxyURL, accountID)
 	if details != nil {
 		hasDetailCount := details.AvailableCount != nil
@@ -198,7 +276,14 @@ func (s *OpenAIQuotaService) QueryUsage(ctx context.Context, accountID int64) (*
 }
 
 func (s *OpenAIQuotaService) queryResetCreditDetails(ctx context.Context, accessToken, chatGPTAccountID, proxyURL string, accountID int64) *openAIRateLimitResetCreditDetails {
-	quotaHeaders, _, headerErr := s.buildCodexQuotaHeaders(ctx, accountID, accessToken, chatGPTAccountID)
+	runtimeState, runtimeErr := resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream)
+	if runtimeErr != nil {
+		slog.Warn("openai_quota_reset_credit_details_runtime_failed", "account_id", accountID, "error", runtimeErr)
+		return nil
+	}
+	quotaHeaders, _, headerErr := s.buildCodexQuotaHeaders(
+		ctx, string(runtimeState.CodexReleaseMode), accountID, accessToken, chatGPTAccountID,
+	)
 	if headerErr != nil {
 		slog.Warn("openai_quota_reset_credit_details_auth_failed", "account_id", accountID, "error", headerErr)
 		return nil
@@ -258,6 +343,11 @@ func (s *OpenAIQuotaService) ResetCredit(ctx context.Context, accountID int64) (
 	if err != nil {
 		return nil, err
 	}
+	runtimeState, err := resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream)
+	if err != nil {
+		return nil, err
+	}
+	mode := string(runtimeState.CodexReleaseMode)
 
 	redeemRequestID, err := generateRedeemRequestID()
 	if err != nil {
@@ -266,6 +356,11 @@ func (s *OpenAIQuotaService) ResetCredit(ctx context.Context, accountID int64) (
 
 	callCtx, cancel := context.WithTimeout(ctx, openaiQuotaUpstreamTimeout)
 	defer cancel()
+	callCtx = context.WithValue(
+		callCtx,
+		officialCodexBundleHolderContextKey{},
+		&officialCodexBundleHolder{httpAttemptBudget: 3},
+	)
 	agentIdentity := s.isAgentIdentityAccount(ctx, accountID)
 	body, err := json.Marshal(struct {
 		RedeemRequestID string `json:"redeem_request_id"`
@@ -276,7 +371,9 @@ func (s *OpenAIQuotaService) ResetCredit(ctx context.Context, accountID int64) (
 
 	var payload OpenAIQuotaResetResult
 	for recovered := false; ; {
-		headers, expectedTaskID, headerErr := s.buildCodexQuotaHeaders(callCtx, accountID, accessToken, chatGPTAccountID)
+		headers, expectedTaskID, headerErr := s.buildCodexQuotaHeaders(
+			callCtx, mode, accountID, accessToken, chatGPTAccountID,
+		)
 		if headerErr != nil {
 			return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_QUOTA_AUTH_FAILED", "failed to build upstream authentication: %v", headerErr)
 		}
@@ -324,7 +421,7 @@ func (s *OpenAIQuotaService) doCodexQuotaRequest(
 	ctx context.Context,
 	accountID int64,
 	proxyURL string,
-	endpointID codex0145EndpointID,
+	endpointID codexEndpointID,
 	headers http.Header,
 	body []byte,
 ) (int, []byte, error) {
@@ -335,13 +432,19 @@ func (s *OpenAIQuotaService) doCodexQuotaRequest(
 	if err != nil {
 		return 0, nil, err
 	}
-	endpoint, err := resolveActiveCodexEndpoint(endpointID)
+	runtimeState, err := resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream)
 	if err != nil {
 		return 0, nil, err
 	}
-	target, err := buildActiveCodexEndpointURL(
+	mode := string(runtimeState.CodexReleaseMode)
+	endpoint, err := resolveCodexEndpointForMode(mode, endpointID)
+	if err != nil {
+		return 0, nil, err
+	}
+	target, err := buildCodexEndpointURLForMode(
+		mode,
 		endpointID,
-		officialCodex0145EndpointURLInput{},
+		officialCodexEndpointURLInput{},
 	)
 	if err != nil {
 		return 0, nil, err
@@ -353,8 +456,12 @@ func (s *OpenAIQuotaService) doCodexQuotaRequest(
 		return 0, nil, fmt.Errorf("Codex %s 端点不允许请求体", endpoint.ID)
 	}
 
-	requestContext := WithHTTPUpstreamRedirectsDisabled(
-		WithHTTPUpstreamProfile(ctx, HTTPUpstreamProfileOpenAI),
+	requestContext, err := bindOfficialEgressSink(ctx, officialEgressSinkQuotaWHAM)
+	if err != nil {
+		return 0, nil, fmt.Errorf("绑定 Codex 配额 SinkID：%w", err)
+	}
+	requestContext = WithHTTPUpstreamRedirectsDisabled(
+		WithHTTPUpstreamProfile(requestContext, HTTPUpstreamProfileOpenAI),
 	)
 	var bodyReader io.Reader
 	if len(body) != 0 {
@@ -369,43 +476,30 @@ func (s *OpenAIQuotaService) doCodexQuotaRequest(
 	if request.Header == nil {
 		request.Header = make(http.Header)
 	}
-	request, egressContext, err := attachOfficialCodex0145EndpointRequest(
-		request,
-		account,
-		endpointID,
-		"",
-	)
-	if err != nil {
-		return 0, nil, err
+	holder, _ := ctx.Value(officialCodexBundleHolderContextKey{}).(*officialCodexBundleHolder)
+	if holder == nil {
+		holder = &officialCodexBundleHolder{httpAttemptBudget: 1}
 	}
-	if len(body) != 0 {
-		body, err = officialCodex0145FinalizeEndpointJSONBody(
-			egressContext,
-			body,
-			officialCodex0145ConditionsFromHeaders(request.Header),
+	holder.mu.Lock()
+	defer holder.mu.Unlock()
+	if holder.httpInvocation == nil {
+		holder.httpInvocation, err = newOfficialCodexHTTPInvocation(
+			request.Context(),
+			officialCodexHTTPInvocationInput{
+				Runtime: runtimeState, Account: account,
+				SinkID: officialEgressSinkQuotaWHAM, ProxyURL: proxyURL,
+				PolicyID: "changeset3.quota.wham", PolicySource: "docs/1.md#changeset-3",
+				BehaviorKind:  officialegress.BehaviorQuotaQuery,
+				AttemptBudget: holder.httpAttemptBudget,
+			},
 		)
 		if err != nil {
 			return 0, nil, err
 		}
-		resetOfficialEgressRequestBody(request, body)
 	}
-	if _, err := officialCodex0145FinalizeEndpointHeaders(egressContext, request.Header, nil); err != nil {
-		return 0, nil, err
-	}
-	tlsProfile, err := resolveActiveCodexEndpointTLSProfileForURL(
-		endpointID,
-		request.URL,
-	)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	response, err := s.httpUpstream.DoWithTLS(
-		request,
-		proxyURL,
-		account.ID,
-		account.Concurrency,
-		tlsProfile,
+	response, err := holder.httpInvocation.Execute(
+		request.Context(),
+		officialCodexHTTPAttemptInput{EndpointID: string(endpointID), Request: request},
 	)
 	if err != nil {
 		return 0, nil, err
@@ -559,8 +653,14 @@ func (s *OpenAIQuotaService) isAgentIdentityAccount(ctx context.Context, account
 	return account.IsOpenAIAgentIdentity()
 }
 
-func (s *OpenAIQuotaService) buildCodexQuotaHeaders(ctx context.Context, accountID int64, accessToken, chatGPTAccountID string) (http.Header, string, error) {
-	headers, err := buildCodexCommonHeaders(ctx, accessToken, chatGPTAccountID)
+func (s *OpenAIQuotaService) buildCodexQuotaHeaders(
+	ctx context.Context,
+	mode string,
+	accountID int64,
+	accessToken string,
+	chatGPTAccountID string,
+) (http.Header, string, error) {
+	headers, err := buildCodexCommonHeaders(ctx, mode, accessToken, chatGPTAccountID)
 	if err != nil {
 		return nil, "", err
 	}
@@ -615,17 +715,23 @@ func (s *OpenAIQuotaService) redactQuotaErrorBody(ctx context.Context, accountID
 
 // buildCodexCommonHeaders 只生成 backend-client 画像所需的运行态基础头。
 // accept 及其他常量由端点 Finalizer 注入；FedRAMP 则在凭据账号解析后按条件加入。
-func buildCodexCommonHeaders(ctx context.Context, accessToken, chatGPTAccountID string) (http.Header, error) {
-	profile, err := resolveActiveCodexVersionProfile()
+func buildCodexCommonHeaders(
+	ctx context.Context,
+	mode string,
+	accessToken string,
+	chatGPTAccountID string,
+) (http.Header, error) {
+	profile, err := resolveCodexVersionProfileForMode(mode)
 	if err != nil {
 		return nil, err
 	}
-	state, bound, err := officialCodex0145RuntimeStateFromContext(ctx)
+	state, bound, err := officialCodexRuntimeStateFromContext(ctx)
 	if err != nil {
 		return nil, err
 	}
 	if !bound {
-		state = defaultOfficialCodex0145RuntimeState()
+		state = defaultOfficialCodexRuntimeState()
+		state.ProfileMode = normalizeOfficialClientProfileMode(mode)
 	}
 	userAgent, err := profile.RenderUserAgentWithTerminal(state.SurfaceID, state.TerminalToken, state.UserAgentSuffixEnabled)
 	if err != nil {
@@ -674,62 +780,119 @@ func buildCodexSparkWindowExtraUpdates(usage *OpenAIQuotaUsage, now time.Time) m
 	if spark == nil {
 		return nil
 	}
-
-	// Reuse OpenAICodexUsageSnapshot / Normalize to map primary/secondary windows
-	// to canonical 5h/7d buckets (same logic as probeOpenAICodexSnapshot).
-	snap := &OpenAICodexUsageSnapshot{}
-	if w := spark.PrimaryWindow; w != nil {
-		p := w.UsedPercent
-		snap.PrimaryUsedPercent = &p
-		ra := int(w.ResetAfterSeconds)
-		snap.PrimaryResetAfterSeconds = &ra
-		wm := int(w.LimitWindowSeconds / 60)
-		snap.PrimaryWindowMinutes = &wm
-	}
-	if w := spark.SecondaryWindow; w != nil {
-		p := w.UsedPercent
-		snap.SecondaryUsedPercent = &p
-		ra := int(w.ResetAfterSeconds)
-		snap.SecondaryResetAfterSeconds = &ra
-		wm := int(w.LimitWindowSeconds / 60)
-		snap.SecondaryWindowMinutes = &wm
-	}
-
-	normalized := snap.Normalize()
-	if normalized == nil {
+	updates, err := buildStrictCodexWHAMWindowExtraUpdates(spark, now)
+	if err != nil {
 		return nil
 	}
-
-	updates := make(map[string]any)
-	if normalized.Used5hPercent != nil {
-		updates["codex_5h_used_percent"] = *normalized.Used5hPercent
-	}
-	if normalized.Reset5hSeconds != nil {
-		updates["codex_5h_reset_after_seconds"] = *normalized.Reset5hSeconds
-	}
-	if normalized.Window5hMinutes != nil {
-		updates["codex_5h_window_minutes"] = *normalized.Window5hMinutes
-	}
-	if normalized.Used7dPercent != nil {
-		updates["codex_7d_used_percent"] = *normalized.Used7dPercent
-	}
-	if normalized.Reset7dSeconds != nil {
-		updates["codex_7d_reset_after_seconds"] = *normalized.Reset7dSeconds
-	}
-	if normalized.Window7dMinutes != nil {
-		updates["codex_7d_window_minutes"] = *normalized.Window7dMinutes
-	}
-	if r := codexResetAtRFC3339(now, normalized.Reset5hSeconds); r != nil {
-		updates["codex_5h_reset_at"] = *r
-	}
-	if r := codexResetAtRFC3339(now, normalized.Reset7dSeconds); r != nil {
-		updates["codex_7d_reset_at"] = *r
-	}
-	if len(updates) == 0 {
-		return nil
-	}
-	updates["codex_usage_updated_at"] = now.Format(time.RFC3339)
 	return updates
+}
+
+// buildCodexGlobalWindowExtraUpdates 从普通 OAuth 的顶层 rate_limit 读取全局窗口。
+func buildCodexGlobalWindowExtraUpdates(usage *OpenAIQuotaUsage, now time.Time) (map[string]any, error) {
+	if usage == nil || usage.RateLimit == nil {
+		return nil, errors.New("wham_rate_limit_missing")
+	}
+	return buildStrictCodexWHAMWindowExtraUpdates(usage.RateLimit, now)
+}
+
+const (
+	codexWHAMFiveHourSeconds = int64(5 * time.Hour / time.Second)
+	codexWHAMSevenDaySeconds = int64(7 * 24 * time.Hour / time.Second)
+)
+
+type strictCodexWHAMWindow struct {
+	usedPercent       float64
+	resetAfterSeconds int
+	windowMinutes     int
+}
+
+func buildStrictCodexWHAMWindowExtraUpdates(
+	rateLimit *OpenAIRateLimit,
+	now time.Time,
+) (map[string]any, error) {
+	if rateLimit == nil {
+		return nil, errors.New("wham_rate_limit_missing")
+	}
+	windows := []*OpenAIRateLimitWindow{rateLimit.PrimaryWindow, rateLimit.SecondaryWindow}
+	resolved := make(map[int64]strictCodexWHAMWindow, 2)
+	for _, window := range windows {
+		if window == nil {
+			continue
+		}
+		parsed, err := strictCodexWHAMWindowFromWire(window, now)
+		if err != nil {
+			return nil, err
+		}
+		if _, duplicate := resolved[window.LimitWindowSeconds]; duplicate {
+			return nil, fmt.Errorf("wham_window_duplicate_%d", window.LimitWindowSeconds)
+		}
+		resolved[window.LimitWindowSeconds] = parsed
+	}
+	if _, ok := resolved[codexWHAMFiveHourSeconds]; !ok {
+		return nil, errors.New("wham_window_5h_missing")
+	}
+	if _, ok := resolved[codexWHAMSevenDaySeconds]; !ok {
+		return nil, errors.New("wham_window_7d_missing")
+	}
+
+	updates := make(map[string]any, 9)
+	for duration, window := range resolved {
+		prefix := ""
+		switch duration {
+		case codexWHAMFiveHourSeconds:
+			prefix = "codex_5h_"
+		case codexWHAMSevenDaySeconds:
+			prefix = "codex_7d_"
+		default:
+			// 上游解析已经拒绝未知时长；本分支防止未来改动把 30d 等
+			// 窗口静默吞成 7d。
+			return nil, fmt.Errorf("wham_window_unknown_%d", duration)
+		}
+		updates[prefix+"used_percent"] = window.usedPercent
+		updates[prefix+"reset_after_seconds"] = window.resetAfterSeconds
+		updates[prefix+"window_minutes"] = window.windowMinutes
+		if resetAt := codexResetAtRFC3339(now, &window.resetAfterSeconds); resetAt != nil {
+			updates[prefix+"reset_at"] = *resetAt
+		}
+	}
+	updates["codex_usage_updated_at"] = now.UTC().Format(time.RFC3339)
+	return updates, nil
+}
+
+func strictCodexWHAMWindowFromWire(
+	window *OpenAIRateLimitWindow,
+	now time.Time,
+) (strictCodexWHAMWindow, error) {
+	if window == nil {
+		return strictCodexWHAMWindow{}, errors.New("wham_window_missing")
+	}
+	if !window.usedPercentPresent || !window.limitWindowPresent ||
+		(!window.resetAfterPresent && !window.resetAtPresent) {
+		return strictCodexWHAMWindow{}, errors.New("wham_window_incomplete")
+	}
+	if math.IsNaN(window.UsedPercent) || math.IsInf(window.UsedPercent, 0) ||
+		window.UsedPercent < 0 || window.UsedPercent > 100 {
+		return strictCodexWHAMWindow{}, errors.New("wham_window_used_percent_invalid")
+	}
+	if window.LimitWindowSeconds != codexWHAMFiveHourSeconds &&
+		window.LimitWindowSeconds != codexWHAMSevenDaySeconds {
+		return strictCodexWHAMWindow{}, fmt.Errorf("wham_window_unknown_%d", window.LimitWindowSeconds)
+	}
+	resetAfter := window.ResetAfterSeconds
+	if !window.resetAfterPresent {
+		if window.ResetAt <= 0 {
+			return strictCodexWHAMWindow{}, errors.New("wham_window_reset_invalid")
+		}
+		resetAfter = window.ResetAt - now.Unix()
+	}
+	if resetAfter < 0 {
+		return strictCodexWHAMWindow{}, errors.New("wham_window_reset_invalid")
+	}
+	return strictCodexWHAMWindow{
+		usedPercent:       window.UsedPercent,
+		resetAfterSeconds: int(resetAfter),
+		windowMinutes:     int(window.LimitWindowSeconds / 60),
+	}, nil
 }
 
 // mapUpstreamStatus collapses upstream HTTP statuses into a stable set we

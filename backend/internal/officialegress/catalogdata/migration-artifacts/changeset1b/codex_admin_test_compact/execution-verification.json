@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "result": "passed",
+  "sink_id": "codex.admin_test.compact",
+  "route": {
+    "method": "POST",
+    "host": "chatgpt.com",
+    "path": "/backend-api/codex/responses/compact",
+    "purpose": "admin_test.compact",
+    "protocol": "http"
+  },
+  "authority_kind": "codex_executor",
+  "authority_id": "codex.executor.changeset1b",
+  "token_issuer_id": "codex.executor.changeset1b",
+  "evidence_kind": "codex_endpoint",
+  "evidence_id": "responses_compact",
+  "backend": "http_upstream",
+  "adapter_id": "officialegress.http_upstream",
+  "transport_id": "codex-0.145.0-http-ubuntu24-native",
+  "wire_fixture_sha256": "067be318397805c0a4c0319b2fd3c2974ef8c475a0de5f4b31ba6cc2412d2d42"
+}

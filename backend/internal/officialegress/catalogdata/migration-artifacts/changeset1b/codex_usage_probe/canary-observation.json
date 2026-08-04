@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "sink_id": "codex.usage.probe",
+  "result": "accepted",
+  "environment": "DMIT",
+  "observed_at": "2026-08-02T15:49:26Z",
+  "exercise_kind": "live_canary",
+  "evidence": [
+    "Free 账号 95 的 active force usage 返回 HTTP 200",
+    "结构化日志确认 plan_not_pro 在同一次请求进入 Responses fallback",
+    "100% canary Guard 下该 Sink 拒绝数为 0"
+  ],
+  "guard_canary_percent": 100,
+  "guard_rejections": 0,
+  "reviewed_by": "codex-audit-changeset-1c-remediation",
+  "review_ref": "changeset-1c-remediation-audit/2026-08-03"
+}

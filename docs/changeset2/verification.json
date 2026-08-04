@@ -1,0 +1,111 @@
+{
+  "schema_version": "changeset2-verification/v1",
+  "changeset": "2",
+  "status": "accepted",
+  "verified_at": "2026-08-03T16:28:55+08:00",
+  "accepted_at": "2026-08-03T16:38:18+08:00",
+  "approval_status": "accepted",
+  "frozen_acceptance": {
+    "single_bundle_resolution": "pass",
+    "oauth_authoritative_disambiguation": "pass_with_exchange_transport_only",
+    "compiled_request_transport_inseparable": "pass",
+    "receipt_binding_enforcement_compatible": "pass",
+    "legacy_active_sources_zero": "pass"
+  },
+  "final_remediation": {
+    "legacy_capability_opaque_and_atomic": "pass",
+    "resolved_release_node_deep_immutable": "pass",
+    "current_source_active_synonyms_zero": "pass",
+    "synthetic_active_previous_rollback_matrix": "pass",
+    "responses_compaction_feature_uses_frozen_mode": "pass"
+  },
+  "oauth_evidence": {
+    "refresh_application_wire": "pass",
+    "exchange_status": "exchange_evidence_deferred",
+    "exchange_persona": "transport_only",
+    "alpn_capability_matrix": "not_complete",
+    "connection_lifecycle_matrix": "not_complete",
+    "verification_sha256": "91b216e6be1588ec76cc6807d406db4360f8fe26c408ebb9966b9afd83616531"
+  },
+  "gates": [
+    {
+      "command": "make check-egress-spec",
+      "status": "pass"
+    },
+    {
+      "command": "cd backend && go test -count=1 ./...",
+      "status": "pass"
+    },
+    {
+      "command": "cd backend && go test -count=1 ./internal/service ./internal/repository",
+      "status": "pass"
+    },
+    {
+      "command": "cd backend && go test -count=1 ./internal/officialegress -run '^TestChangeset2'",
+      "status": "pass"
+    },
+    {
+      "command": "cd backend && go test -race -count=1 ./internal/service -run '^(TestOfficialCodexRemoteCompactionV2DefaultFollowsExplicitReleaseMode|TestResolveDerivedOfficialOpenAICompactionMetadata|TestCandidateTraceCodex0145CompactionDecisions)$'",
+      "status": "pass"
+    },
+    {
+      "command": "cd backend && go test -race -count=1 ./internal/handler -run '^TestNormalizeOpenAIResponsesCompactRequest_'",
+      "status": "pass"
+    },
+    {
+      "command": "cd backend && go test -race -count=1 ./internal/officialegress/...",
+      "status": "pass"
+    },
+    {
+      "command": "cd backend && go test -race -count=1 ./internal/repository",
+      "status": "pass"
+    },
+    {
+      "command": "cd backend && go test -race -count=1 ./internal/service -run '^(TestChangeset1BReceiptArtifactsReplayProductionExecutor|TestUploadOfficialCodexFileExecutesProfileDrivenThreeStepFlow|TestCodexWhamRequestsUseClosedBackendClientProfile|TestProxyLiveSidebandForwardsTextAndBinary|TestOpenAIOAuthServiceRefresh)'",
+      "status": "pass"
+    },
+    {
+      "command": "make test-capture-tools",
+      "status": "pass",
+      "tests": 326,
+      "skipped": 3
+    },
+    {
+      "command": "pnpm --dir frontend run typecheck",
+      "status": "pass"
+    },
+    {
+      "command": "pnpm --dir frontend exec vitest run src/api/__tests__/admin.accounts.openaiOAuth.spec.ts src/components/account/__tests__/CreateAccountModal.spec.ts src/components/admin/account/__tests__/ReAuthAccountModal.openaiOAuth.spec.ts",
+      "status": "pass",
+      "tests": 19
+    }
+  ],
+  "scanner": {
+    "bootstrap_candidates": 180,
+    "reviewed_supplements": 0,
+    "reviewed_removals": 22,
+    "infrastructure_candidates": 11,
+    "legacy_baseline_expanded": false,
+    "migration_receipts_modified": false
+  },
+  "active_source_inventory": {
+    "production_match_count": 0,
+    "categories": [
+      "transition_adapter_and_provider",
+      "service_registry_and_export_bridges",
+      "active_version_and_wrappers",
+      "package_active_body_order",
+      "repository_reverse_active_builder"
+    ]
+  },
+  "artifacts": {
+    "compatibility_lock_sha256": "9bba3772a4cd657a16a331ca6c2b41b2380006de8b1936f550067b6c38bfde7b",
+    "removal_receipts_sha256": "c9e0edee6deaa742ca4be85addc02b9c2e2dcd31f15302e676b7830c8e1f8d10",
+    "bootstrap_inventory_lock_sha256": "b829d76d47d6ed37f121a4b5619de4c8c40573eb9bc300af61cc9970cbe886e3",
+    "release_catalog_manifest_sha256": "4a8cf2712f2558f3b0bdb151e781054f141b5632309865a54cdeee4a1326ede6",
+    "release_graph_sha256": "9f98c88d0881f4e5ed8593854021b295dc1f6cbcdba4423759e2a934643f969e",
+    "snapshot_catalog_sha256": "5d423ba45dae03061524017cb366ee15e8bbd0510fa21bee213fec1fdd6755f0",
+    "active_snapshot_file_sha256": "6b1b69ba293fb692fe506822a17325d7d2e5735fa3095e47da7ae78d00c9843d",
+    "active_profile_digest": "7d9c22ce150eb8395cb6ad66a5b77175c48840c1129710e32e484b50b9e63eb5"
+  }
+}

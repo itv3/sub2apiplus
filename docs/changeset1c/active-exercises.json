@@ -1,0 +1,141 @@
+{
+  "schema_version": 1,
+  "changeset": "1C",
+  "result": "passed",
+  "observed_at": "2026-08-03T00:35:01Z",
+  "exercises": [
+    {
+      "exercise_id": "agent_task_recovery",
+      "mode": "deterministic_active_exercise",
+      "environment": "local-ci",
+      "result": "passed",
+      "evidence": [
+        "TestAccountTestServiceOpenAICompactAgentIdentityRecoversInvalidTaskOnce 通过",
+        "invalid_task_id 只触发一次 task register，并使用新 task 重试成功",
+        "凭据未写入测试输出"
+      ]
+    },
+    {
+      "exercise_id": "oauth_refresh",
+      "mode": "mixed",
+      "environment": "DMIT+local-ci",
+      "result": "passed",
+      "evidence": [
+        "DMIT Free 账号 95 的 OAuth refresh 返回 HTTP 200",
+        "TestOpenAIOAuthService_RefreshAccountTokenDoesNotBypassPrivacyCooldown 通过",
+        "token 轮换后继续使用稳定 privacy rollout key",
+        "冷却期内不会重复发送 settings 请求"
+      ]
+    },
+    {
+      "exercise_id": "pat_whoami",
+      "mode": "deterministic_active_exercise",
+      "environment": "local-ci",
+      "result": "passed",
+      "evidence": [
+        "DMIT 当前无 active PAT 账号，按低频路径规则执行确定性主动演练",
+        "TestOpenAIOAuthService_ValidateCodexPersonalAccessToken 通过",
+        "whoami 请求携带受控 Codex 身份且响应字段映射通过"
+      ]
+    },
+    {
+      "exercise_id": "privacy",
+      "mode": "mixed",
+      "environment": "DMIT+local-ci",
+      "result": "passed",
+      "evidence": [
+        "DMIT Free 账号 95 的 Chrome 133 privacy 三端点返回 HTTP 200、code=0",
+        "TestPrivacyProductionFunctionsBuildAllThreeBrowserRequests 通过",
+        "三个 browser 请求保持同一稳定 rollout key"
+      ]
+    },
+    {
+      "exercise_id": "scheduled_account_tests",
+      "mode": "mixed",
+      "environment": "DMIT+local-ci",
+      "result": "passed",
+      "evidence": [
+        "DMIT 最终空控制清单下，Free 账号 95 的 Responses 与 Compact 管理端测试均返回 HTTP 200",
+        "两条 SSE 均包含 success=true 的 test_complete",
+        "TestAccountTestService_OpenAISuccessPersistsSnapshotFromHeaders 通过"
+      ]
+    },
+    {
+      "exercise_id": "spark_shadow",
+      "mode": "deterministic_active_exercise",
+      "environment": "local-ci",
+      "result": "passed",
+      "evidence": [
+        "DMIT 无适合制造影子账号上游流量的安全前置条件，按低频路径规则主动演练",
+        "TestQueryUsageShadowResolve_EndToEnd 通过",
+        "影子账号解析母账号凭据并注入母账号 chatgpt-account-id"
+      ]
+    },
+    {
+      "exercise_id": "ws_http_fallback",
+      "mode": "mixed",
+      "environment": "DMIT+local-ci",
+      "result": "passed",
+      "evidence": [
+        "DMIT gpt-5.6-luna 主请求返回 HTTP 200、completed，已登记主链保持可用",
+        "TestOpenAIGatewayService_Forward_HTTPIngressStaysHTTPWhenWSEnabled 通过",
+        "HTTP 入站代表客户端已选择 fallback，不会被服务端重新升级为 WS"
+      ]
+    }
+  ],
+  "validations": [
+    {
+      "validation_id": "dmit_enforced_live",
+      "environment": "DMIT",
+      "result": "passed",
+      "evidence": [
+        "镜像 sub2apiplus:changeset1c-p1-8ee91809ac24 健康，镜像 ID sha256:4103b2eec89aec5f4170d469f32a5f77f420d37a351207ecb8aefc5f11edff59",
+        "UnknownRoutePolicy 与 UnregisteredSinkPolicy 均为 enforce，最终 sink_controls_json 与 policy_overrides_json 均为空",
+        "最终启动后的 Responses/Compact、usage force、OAuth refresh 与 privacy 均为 HTTP 200",
+        "最终稳定扫描持续 610 秒，六类阻断 Guard 事件与 panic/fatal 均为 0；身份事件只来自 legacy_observe Sink"
+      ]
+    },
+    {
+      "validation_id": "facade_signature_scan",
+      "environment": "local-ci",
+      "result": "passed",
+      "evidence": [
+        "make check-egress-spec 通过",
+        "bootstrap=180、受审移除=3、变更集 1A 基础设施=2",
+        "10 类发送栈与双平台构建矩阵通过"
+      ]
+    },
+    {
+      "validation_id": "runtime_fail_close",
+      "environment": "DMIT+local-ci",
+      "result": "passed",
+      "evidence": [
+        "DMIT 已确认 UnknownRoutePolicy=enforce、UnregisteredSinkPolicy=enforce，永久全局 observe 配置会启动失败",
+        "TestChangeset1CEnforceUnknownAndUnregisteredWhileLegacyRemainsAvailable 通过",
+        "未知 route 与缺失、未登记、绑定不符 SinkBinding 分别 fail-close",
+        "存在 canary_enforce 控制时生产 wiring 与 Guard 都拒绝 canary_percent=0；全量 observe 只能使用限时覆盖",
+        "Unknown Route 覆盖使用安全命名空间模板加精确 EscapedPath SHA-256；目标路径放行时兄弟未知路径仍 fail-close",
+        "范围化 policy override 必须绑定 DMIT 实例、精确 route/sink 和截止时间；到期恢复 fail-close"
+      ]
+    },
+    {
+      "validation_id": "single_sink_rollback_contract",
+      "environment": "DMIT+local-ci",
+      "result": "passed",
+      "evidence": [
+        "同一镜像 ID 下将 Compact enforced 降为 canary_enforce 且 canary_percent=1，实测 HTTP 200 并记录 canary_observe_passthrough",
+        "canary_enforce 与 canary_percent=0 的无期限全量 observe 组合已由生产 wiring 和 Guard 构造反例拒绝",
+        "同一镜像 ID 下为 Responses 设置 observe_until、owner、reason_code，实测 HTTP 200 并记录 sink_override_observed",
+        "覆盖到期后再次请求未记录覆盖事件；单元测试同时验证原始违规仍记账且到期 fail-close",
+        "DMIT 最终已恢复 canary_percent=100 和空控制清单"
+      ]
+    }
+  ],
+  "reviewed_by": "codex-audit-changeset-1c-remediation",
+  "review_ref": "changeset-1c-remediation-audit/2026-08-03",
+  "approval_status": "accepted",
+  "verification": {
+    "path": "verification.json",
+    "sha256": "406790674b55bfdadc2dec4edc88457518b4001bb7a6f0feca42ff8445816017"
+  }
+}

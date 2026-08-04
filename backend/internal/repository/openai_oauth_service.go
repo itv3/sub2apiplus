@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
@@ -27,12 +28,27 @@ type openaiOAuthService struct {
 	tokenURL string
 }
 
+type openAIOAuthReqProfileTransport struct{}
+
 func (s *openaiOAuthService) ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI, proxyURL, clientID string) (*openai.TokenResponse, error) {
-	exchangeProfile, err := service.ResolveActiveCodexOAuthExchangeProfile()
+	boundCtx, bindErr := officialegress.StartDefaultSinkAttempt(ctx, officialegress.SinkCodexOAuthExchange)
+	if bindErr != nil {
+		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_REQUEST_INVALID", "bind OAuth exchange official egress sink: %v", bindErr)
+	}
+	ctx = boundCtx
+	releaseMode, ok := officialegress.ReleaseModeFromContext(ctx)
+	if !ok {
+		return nil, infraerrors.New(
+			http.StatusBadGateway,
+			"OPENAI_OAUTH_RELEASE_MODE_MISSING",
+			"OAuth exchange 缺少进程级冻结 release mode",
+		)
+	}
+	exchangeProfile, err := resolveOpenAIExchangeTLSProfile(releaseMode)
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_EXCHANGE_PROFILE_FAILED", "resolve OAuth exchange profile: %v", err)
 	}
-	client, err := createOpenAIExchangeReqClient(proxyURL, exchangeProfile.TLSProfile)
+	client, err := createOpenAIExchangeReqClient(proxyURL, exchangeProfile)
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_CLIENT_INIT_FAILED", "create HTTP client: %v", err)
 	}
@@ -45,20 +61,24 @@ func (s *openaiOAuthService) ExchangeCode(ctx context.Context, code, codeVerifie
 		clientID = openai.ClientID
 	}
 
-	formData := url.Values{}
-	formData.Set("grant_type", "authorization_code")
-	formData.Set("client_id", clientID)
-	formData.Set("code", code)
-	formData.Set("redirect_uri", redirectURI)
-	formData.Set("code_verifier", codeVerifier)
+	// 官方 0.145.0 exchange 使用 raw auth client。这里显式写入抓包确认的
+	// form 字段顺序，并清空 req/v3 默认 User-Agent，避免伪装成 refresh client。
+	formBody := strings.Join([]string{
+		"grant_type=" + url.QueryEscape("authorization_code"),
+		"code=" + url.QueryEscape(code),
+		"redirect_uri=" + url.QueryEscape(redirectURI),
+		"client_id=" + url.QueryEscape(clientID),
+		"code_verifier=" + url.QueryEscape(codeVerifier),
+	}, "&")
 
 	var tokenResp openai.TokenResponse
 
 	resp, err := client.R().
 		SetContext(ctx).
-		SetHeader("User-Agent", exchangeProfile.UserAgent).
-		SetHeader("originator", exchangeProfile.Originator).
-		SetFormDataFromValues(formData).
+		SetHeader("Content-Type", "application/x-www-form-urlencoded").
+		SetHeader("Accept", "*/*").
+		SetHeader("User-Agent", "").
+		SetBodyString(formBody).
 		SetSuccessResult(&tokenResp).
 		Post(s.tokenURL)
 
@@ -90,36 +110,34 @@ func (s *openaiOAuthService) RefreshTokenWithClientID(ctx context.Context, refre
 }
 
 func (s *openaiOAuthService) refreshTokenWithClientID(ctx context.Context, refreshToken, proxyURL, clientID string) (*openai.TokenResponse, error) {
-	request, tlsProfile, err := service.BuildActiveCodexOAuthRefreshRequest(
-		ctx,
-		clientID,
-		refreshToken,
-		openai.RefreshScopes,
+	if _, err := officialegress.StartDefaultSinkAttempt(ctx, officialegress.SinkCodexOAuthRefresh); err != nil {
+		return nil, err
+	}
+	return nil, infraerrors.New(
+		http.StatusBadGateway,
+		"OPENAI_OAUTH_COMPILED_REQUEST_REQUIRED",
+		"OAuth refresh 必须由 service/orchestrator 提交 CompiledExecution",
 	)
-	if err != nil {
-		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_REQUEST_INVALID", "build refresh request: %v", err)
-	}
-	// tokenURL 仅为仓库测试保留本地 server 注入点；生产构造始终来自 active Codex
-	// 端点画像，不能由配置改写 auth.openai.com。
-	if override := strings.TrimSpace(s.tokenURL); override != "" && override != openai.TokenURL {
-		overrideURL, parseErr := url.Parse(override)
-		if parseErr != nil {
-			return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_REQUEST_INVALID", "parse test token URL: %v", parseErr)
-		}
-		request.URL = overrideURL
-		request.Host = overrideURL.Host
-	}
-	client, err := createOpenAIReqClientWithProfile(proxyURL, tlsProfile)
-	if err != nil {
-		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_CLIENT_INIT_FAILED", "create HTTP client: %v", err)
-	}
-	resp, err := client.GetClient().Do(request)
+}
 
-	if err != nil {
-		if shouldReturnOpenAIDirectConnectionHint(ctx, proxyURL, err) {
-			return nil, newOpenAIDirectConnectionError(err)
+func (s *openaiOAuthService) DecodeRefreshResponse(
+	ctx context.Context,
+	resp *http.Response,
+	transportErr error,
+	proxyURL string,
+) (*openai.TokenResponse, error) {
+	if transportErr != nil {
+		if shouldReturnOpenAIDirectConnectionHint(ctx, proxyURL, transportErr) {
+			return nil, newOpenAIDirectConnectionError(transportErr)
 		}
-		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_REQUEST_FAILED", "request failed: %v", err)
+		return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_OAUTH_REQUEST_FAILED", "request failed: %v", transportErr)
+	}
+	if resp == nil {
+		return nil, infraerrors.New(
+			http.StatusBadGateway,
+			"OPENAI_OAUTH_REQUEST_FAILED",
+			"req-profile adapter 返回空响应",
+		)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	responseBody, err := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
