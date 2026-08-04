@@ -86,7 +86,10 @@ func TestCandidateTraceCodex0145HTTPConnectionLifecycle(t *testing.T) {
 	cfg.Security.URLAllowlist.Enabled = false
 	cfg.Gateway.ConnectionPoolIsolation = config.ConnectionPoolIsolationProxy
 	cfg.Gateway.OpenAIHTTP2.Enabled = false
-	upstream := NewHTTPUpstream(cfg).(*httpUpstreamService)
+	upstream, ok := NewHTTPUpstream(cfg).(*httpUpstreamService)
+	if !ok {
+		t.Fatal("NewHTTPUpstream 未返回 *httpUpstreamService")
+	}
 	t.Cleanup(func() {
 		upstream.mu.Lock()
 		defer upstream.mu.Unlock()

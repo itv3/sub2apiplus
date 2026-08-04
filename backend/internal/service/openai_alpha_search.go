@@ -620,7 +620,7 @@ func sanitizeOpenAIAPIKeyAlphaSearchBody(body []byte) ([]byte, error) {
 		return body, nil
 	}
 	var buf bytes.Buffer
-	buf.WriteByte('{')
+	_ = buf.WriteByte('{')
 	first := true
 	parsed.ForEach(func(key, value gjson.Result) bool {
 		name := key.String()
@@ -628,19 +628,19 @@ func sanitizeOpenAIAPIKeyAlphaSearchBody(body []byte) ([]byte, error) {
 			return true
 		}
 		if !first {
-			buf.WriteByte(',')
+			_ = buf.WriteByte(',')
 		}
 		first = false
 		encodedKey, err := json.Marshal(name)
 		if err != nil {
 			return true
 		}
-		buf.Write(encodedKey)
-		buf.WriteByte(':')
-		buf.WriteString(value.Raw)
+		_, _ = buf.Write(encodedKey)
+		_ = buf.WriteByte(':')
+		_, _ = buf.WriteString(value.Raw)
 		return true
 	})
-	buf.WriteByte('}')
+	_ = buf.WriteByte('}')
 	return buf.Bytes(), nil
 }
 

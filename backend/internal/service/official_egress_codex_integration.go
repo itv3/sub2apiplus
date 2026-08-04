@@ -556,52 +556,6 @@ func validateOfficialCodexRuntimeState(state officialCodexRuntimeState) error {
 	return nil
 }
 
-// officialCodexProcessIdentity 从冻结上下文中的入口和进程状态生成身份。
-func officialCodexProcessIdentity(egressContext *OfficialEgressContext) (string, string, error) {
-	if egressContext == nil {
-		return "", "", fmt.Errorf("Codex 0.145.0 进程身份缺少出站上下文")
-	}
-	if egressContext.accountType == AccountTypeOAuth &&
-		egressContextProfileMode(egressContext) == officialClientProfileModePrevious {
-		release, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseModePrevious)
-		if err != nil {
-			return "", "", err
-		}
-		purpose := officialegress.RegistryPurposeOpenAIOAuthHTTP
-		if egressContext.transport == OfficialEgressTransportWebSocket {
-			purpose = officialegress.RegistryPurposeOpenAIOAuthWS
-		}
-		node, ok := release.Node(purpose)
-		if !ok || strings.TrimSpace(node.Build.UserAgent) == "" ||
-			strings.TrimSpace(node.Build.Originator) == "" {
-			return "", "", fmt.Errorf("Codex previous release 缺少冻结的进程身份")
-		}
-		// previous 是完整发布指针，不只是版本号。回滚时必须使用该指针绑定的
-		// 静态 UA/originator，不能再由 active 运行态把 xterm 覆盖成 unknown。
-		return node.Build.UserAgent, node.Build.Originator, nil
-	}
-	profile, err := resolveCodexVersionProfile(egressContext.ProfileVersion())
-	if err != nil {
-		return "", "", err
-	}
-	state := egressContext.codexRuntimeState
-	if err := validateOfficialCodexRuntimeState(state); err != nil {
-		return "", "", err
-	}
-	userAgent, err := profile.RenderUserAgentWithTerminal(
-		state.SurfaceID,
-		state.TerminalToken,
-		state.UserAgentSuffixEnabled,
-	)
-	if err != nil {
-		return "", "", err
-	}
-	if strings.TrimSpace(state.Originator) != "" {
-		return userAgent, state.Originator, nil
-	}
-	return "", "", fmt.Errorf("Codex %s 缺少 %s 进程阶段 originator", profile.Version, state.ProcessPhase)
-}
-
 // officialCodexConditionsFromHeaders 只把动态值映射成画像条件，不包含端点判断。
 // 因而新增端点时只需扩展画像，不需要在业务代码追加 path/endpoint 分支。
 func officialCodexConditionsFromHeaders(headers http.Header) map[string]bool {

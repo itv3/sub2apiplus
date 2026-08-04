@@ -474,34 +474,6 @@ func prepareOpenAIOfficialEgressSemanticHTTPRequest(
 	return req, result, nil
 }
 
-type officialOpenAIRequestCompressionPlan struct {
-	Enabled bool
-	Level   int
-}
-
-func resolveOfficialOpenAIRequestCompression(
-	egressContext *OfficialEgressContext,
-) (officialOpenAIRequestCompressionPlan, error) {
-	if egressContext == nil {
-		return officialOpenAIRequestCompressionPlan{}, errors.New("OpenAI official request compression requires egress context")
-	}
-	profile, err := resolveCodexVersionProfile(egressContext.ProfileVersion())
-	if err != nil {
-		return officialOpenAIRequestCompressionPlan{}, err
-	}
-	if !profile.FeatureDefaults.EnableRequestCompression {
-		return officialOpenAIRequestCompressionPlan{}, nil
-	}
-	state := cloneOfficialCodexRuntimeState(egressContext.codexRuntimeState)
-	if err := validateOfficialCodexRuntimeState(state); err != nil {
-		return officialOpenAIRequestCompressionPlan{}, err
-	}
-	return officialOpenAIRequestCompressionPlan{
-		Enabled: state.RequestCompressionEnabled,
-		Level:   profile.FeatureDefaults.RequestCompressionLevel,
-	}, nil
-}
-
 // compressOfficialOpenAIHTTPRequest 在所有 JSON 终态修正完成后执行官方 Codex
 // 请求压缩。level 由不可变版本画像传入；reset helper 同步 Body、ContentLength
 // 与 GetBody，确保重定向、重试和抓包读取到同一份压缩字节。
@@ -1656,19 +1628,6 @@ func officialOpenAIHTTPMessageContentText(content any) string {
 		return strings.TrimSpace(strings.Join(parts, "\n"))
 	default:
 		return ""
-	}
-}
-
-func buildOfficialOpenAIHTTPClientMetadata(
-	identity officialOpenAIHTTPIdentity,
-) map[string]any {
-	return map[string]any{
-		"x-codex-installation-id": identity.installationID,
-		"session_id":              identity.sessionID,
-		"thread_id":               identity.threadID,
-		"turn_id":                 identity.turnID,
-		"x-codex-window-id":       identity.windowID,
-		"x-codex-turn-metadata":   identity.turnMetadata,
 	}
 }
 

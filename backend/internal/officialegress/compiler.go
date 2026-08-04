@@ -894,34 +894,6 @@ func compilerDecodeOrderedJSONObject(raw []byte) ([]orderedJSONField, error) {
 	return append([]orderedJSONField(nil), document.fields...), nil
 }
 
-func encodeOrderedJSONObject(fields []orderedJSONField) ([]byte, error) {
-	var out bytes.Buffer
-	out.WriteByte('{')
-	for index, field := range fields {
-		if index > 0 {
-			out.WriteByte(',')
-		}
-		nameRaw, err := json.Marshal(field.name)
-		if err != nil {
-			return nil, err
-		}
-		out.Write(nameRaw)
-		out.WriteByte(':')
-		out.Write(field.value)
-	}
-	out.WriteByte('}')
-	return out.Bytes(), nil
-}
-
-func orderedJSONFieldExists(fields []orderedJSONField, name string) bool {
-	for _, field := range fields {
-		if field.name == name {
-			return true
-		}
-	}
-	return false
-}
-
 func orderJSONBody(raw []byte, contract profilecontract.BodyContractProfile) ([]byte, error) {
 	return orderJSONBodyWithPolicy(
 		raw, contract, profilecontract.FeatureDefaults{}, CodexRequestConditions{},

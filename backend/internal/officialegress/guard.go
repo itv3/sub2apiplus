@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -718,11 +717,4 @@ func ConfigureDefaultGuardWithSinkCatalog(
 	}
 	defaultGuardPointer.Store(guard)
 	return guard, nil
-}
-
-// guardReasonsSorted 仅供确定性测试和诊断快照使用。
-func guardReasonsSorted(reasons []GuardReason) []GuardReason {
-	out := append([]GuardReason(nil), reasons...)
-	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
-	return out
 }

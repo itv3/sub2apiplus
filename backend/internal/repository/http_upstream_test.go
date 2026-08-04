@@ -213,7 +213,8 @@ func TestHTTPUpstreamGuardPreservesOutOfScopeWireAndResult(t *testing.T) {
 		return response.Status + "|" + response.Header.Get("X-Test-Result") + "|" + string(body)
 	}
 
-	beforeUpstream := newHTTPUpstream(nil, nil).(*httpUpstreamService)
+	beforeUpstream, ok := newHTTPUpstream(nil, nil).(*httpUpstreamService)
+	require.True(t, ok)
 	beforeResponse, beforeErr := beforeUpstream.Do(newRequest(), "", 77, 1)
 	before := readResult(beforeUpstream, beforeResponse, beforeErr)
 	recorder := officialegress.NewBoundedGuardRecorder(16, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -224,7 +225,8 @@ func TestHTTPUpstreamGuardPreservesOutOfScopeWireAndResult(t *testing.T) {
 		recorder,
 	)
 	require.NoError(t, err)
-	afterUpstream := newHTTPUpstream(nil, guard).(*httpUpstreamService)
+	afterUpstream, ok := newHTTPUpstream(nil, guard).(*httpUpstreamService)
+	require.True(t, ok)
 	afterResponse, afterErr := afterUpstream.Do(newRequest(), "", 77, 1)
 	after := readResult(afterUpstream, afterResponse, afterErr)
 
@@ -245,12 +247,16 @@ func TestHTTPUpstreamGuardPreservesDeadlineAndURLError(t *testing.T) {
 		officialegress.DefaultOfficialRouteCatalog(), nil,
 	)
 	require.NoError(t, err)
+	beforeStack, ok := newHTTPUpstream(nil, nil).(*httpUpstreamService)
+	require.True(t, ok)
+	afterStack, ok := newHTTPUpstream(nil, guard).(*httpUpstreamService)
+	require.True(t, ok)
 	for _, testCase := range []struct {
 		name  string
 		stack *httpUpstreamService
 	}{
-		{name: "before", stack: newHTTPUpstream(nil, nil).(*httpUpstreamService)},
-		{name: "after", stack: newHTTPUpstream(nil, guard).(*httpUpstreamService)},
+		{name: "before", stack: beforeStack},
+		{name: "after", stack: afterStack},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
@@ -461,7 +467,8 @@ func TestHTTPUpstreamDoAppliesGrokCLIIdentityBeforeOAuthRoundTrip(t *testing.T) 
 }
 
 func TestChangeset4ReleaseSwitchEventuallyEvictsOldIdleOfficialClient(t *testing.T) {
-	upstream := NewHTTPUpstream(nil).(*httpUpstreamService)
+	upstream, ok := NewHTTPUpstream(nil).(*httpUpstreamService)
+	require.True(t, ok)
 	active, err := upstream.getClientEntry(
 		"", 40401, 1, service.HTTPUpstreamProfileOpenAI, false, false,
 		"release-active-pool-digest",

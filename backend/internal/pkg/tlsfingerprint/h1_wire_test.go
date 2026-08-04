@@ -127,7 +127,7 @@ func TestH1WireConnEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	names := make(chan []string, 1)
 	go func() {
@@ -135,7 +135,7 @@ func TestH1WireConnEndToEnd(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		var got []string
 		scanner := bufio.NewScanner(conn)
 		for scanner.Scan() {
@@ -179,8 +179,8 @@ func TestH1WireConnEndToEnd(t *testing.T) {
 
 func TestH1WireConnPassesWebSocketFramesAfterUpgrade(t *testing.T) {
 	client, server := net.Pipe()
-	defer client.Close()
-	defer server.Close()
+	defer func() { _ = client.Close() }()
+	defer func() { _ = server.Close() }()
 	if err := server.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
 		t.Fatal(err)
 	}

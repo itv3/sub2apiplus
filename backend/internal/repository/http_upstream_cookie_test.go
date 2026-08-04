@@ -46,3 +46,37 @@ func TestHTTPClientWithCookieJarConsumesAndReplaysSetCookie(t *testing.T) {
 	require.NoError(t, second.Body.Close())
 	require.Contains(t, secondCookie, "_cfuvid=abc")
 }
+
+func TestResponseOnlyCookieJarDoesNotModifyFinalizedRequestAndStoresResponse(t *testing.T) {
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	target := "https://chatgpt.com/backend-api/codex/responses"
+
+	requestCookie := "__cf_bm=signed-cookie"
+	seenCookie := ""
+	base := &http.Client{Transport: cookieRoundTripper(func(req *http.Request) (*http.Response, error) {
+		seenCookie = req.Header.Get("Cookie")
+		response := &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader("{}")),
+			Request:    req,
+		}
+		response.Header.Add("Set-Cookie", "_cfuvid=response-cookie; Path=/; Secure; HttpOnly")
+		return response, nil
+	})}
+	client := httpClientWithCookieJar(base, &responseOnlyCookieJar{delegate: jar})
+	request, err := http.NewRequest(http.MethodPost, target, strings.NewReader("{}"))
+	require.NoError(t, err)
+	request.Header.Set("Cookie", requestCookie)
+
+	response, err := client.Do(request)
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+	require.Equal(t, requestCookie, seenCookie)
+
+	stored := jar.Cookies(request.URL)
+	require.Len(t, stored, 1)
+	require.Equal(t, "_cfuvid", stored[0].Name)
+	require.Equal(t, "response-cookie", stored[0].Value)
+}

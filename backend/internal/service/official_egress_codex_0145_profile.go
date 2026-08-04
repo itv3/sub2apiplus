@@ -323,14 +323,22 @@ func resolveOfficialCodexReleaseProfile(
 ) (*officialCodexVersionProfile, error) {
 	executable := release.ExecutableProfile()
 	if cached, ok := officialCodexFormalProfileCache.Load(executable.Digest()); ok {
-		return cached.(*officialCodexVersionProfile), nil
+		profile, valid := cached.(*officialCodexVersionProfile)
+		if !valid {
+			return nil, errors.New("service 正式版本画像缓存类型非法")
+		}
+		return profile, nil
 	}
 	profile := projectExecutableCodexProfile(executable)
 	if profile.Digest != release.ExecutableProfileDigest() {
 		return nil, errors.New("service 投影与正式 ExecutableProfileDigest 不一致")
 	}
 	actual, _ := officialCodexFormalProfileCache.LoadOrStore(executable.Digest(), &profile)
-	return actual.(*officialCodexVersionProfile), nil
+	cachedProfile, valid := actual.(*officialCodexVersionProfile)
+	if !valid {
+		return nil, errors.New("service 正式版本画像缓存类型非法")
+	}
+	return cachedProfile, nil
 }
 
 // projectExecutableCodexProfile 是旧 service 数据形状的兼容投影。它只从启动期已验证的
@@ -500,11 +508,6 @@ func resolveCodexEndpoint(version string, endpointID codexEndpointID) (officialC
 // resolveOfficialCodexVersionProfile 保留旧接入名，统一委托给严格版本解析器。
 func resolveOfficialCodexVersionProfile(version string) (*officialCodexVersionProfile, error) {
 	return resolveCodexVersionProfile(version)
-}
-
-// resolveOfficialCodexEndpointProfile 保留旧接入名，统一委托给严格端点解析器。
-func resolveOfficialCodexEndpointProfile(version, endpointID string) (officialCodexEndpointProfile, error) {
-	return resolveCodexEndpoint(version, codexEndpointID(endpointID))
 }
 
 // resolveOfficialCodexTransportTLSProfileByID 是传输层使用的版本中立接缝。

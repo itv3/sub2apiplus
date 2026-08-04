@@ -62,8 +62,8 @@ func renderBaselineStats(baseline Baseline) []byte {
 	}
 
 	var builder strings.Builder
-	builder.WriteString("<!-- 此文件由 backend/cmd/egressscan -mode stats 生成，请勿手工修改。 -->\n")
-	builder.WriteString("# 发送面基线统计\n\n")
+	_, _ = builder.WriteString("<!-- 此文件由 backend/cmd/egressscan -mode stats 生成，请勿手工修改。 -->\n")
+	_, _ = builder.WriteString("# 发送面基线统计\n\n")
 	fmt.Fprintf(&builder, "> 数据源：`sink-baseline.json`；bootstrap commit：`%s`。\n\n", baseline.BootstrapCommit)
 	fmt.Fprintf(&builder, "- 基线记录：%d 条；\n", len(baseline.Sinks))
 	fmt.Fprintf(&builder, "- 构建上下文：%s；包-上下文：%d 个；类型检查兜底文件：%d 个；\n",
@@ -95,5 +95,5 @@ func writeCountTable(builder *strings.Builder, title, keyHeader string, counts m
 	for _, key := range keys {
 		fmt.Fprintf(builder, "| `%s` | %d |\n", key, counts[key])
 	}
-	builder.WriteString("\n")
+	_, _ = builder.WriteString("\n")
 }

@@ -494,25 +494,6 @@ func valueSpecOwnerName(spec *ast.ValueSpec, stack []ast.Node, at int) (string, 
 	return "", false
 }
 
-// assignStmtOwnerName 按字面量位于 Rhs 的序号取对应 Lhs 名称。
-func assignStmtOwnerName(assign *ast.AssignStmt, stack []ast.Node, at int) string {
-	var child ast.Node
-	if at+1 < len(stack) {
-		child = stack[at+1]
-	}
-	if len(assign.Lhs) == len(assign.Rhs) {
-		for position, rhs := range assign.Rhs {
-			if child != nil && (rhs == child || astNodeContains(rhs, child)) {
-				return exprIdentText(assign.Lhs[position])
-			}
-		}
-	}
-	if len(assign.Lhs) == 1 {
-		return exprIdentText(assign.Lhs[0])
-	}
-	return ""
-}
-
 func astNodeContains(root, target ast.Node) bool {
 	found := false
 	ast.Inspect(root, func(node ast.Node) bool {

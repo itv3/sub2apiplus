@@ -180,8 +180,8 @@ func TestChangeset2ScannerAndActiveSourceSnapshotsAreComplete(t *testing.T) {
 			t.Fatalf("scanner 候选未按旧身份完整冻结：%+v", candidate)
 		}
 		previousID = candidate.ScanCandidateID
-		candidateIDs.WriteString(candidate.ScanCandidateID)
-		candidateIDs.WriteByte('\n')
+		_, _ = candidateIDs.WriteString(candidate.ScanCandidateID)
+		_ = candidateIDs.WriteByte('\n')
 		seenSink[candidate.RuntimeSinkID] = true
 	}
 	assertChangeset2SHA256(t, []byte(candidateIDs.String()), scanner.Scanner.CodexBusinessCandidateIDsSHA256, "Codex 业务候选 ID")

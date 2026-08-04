@@ -1023,7 +1023,11 @@ func TestOfficialEgressCoreHasNoReverseDependency(t *testing.T) {
 				continue
 			}
 			for _, spec := range importDecl.Specs {
-				path := strings.Trim(spec.(*ast.ImportSpec).Path.Value, `"`)
+				importSpec, ok := spec.(*ast.ImportSpec)
+				if !ok {
+					t.Fatalf("核心文件 %s 包含非 import spec 节点：%T", file, spec)
+				}
+				path := strings.Trim(importSpec.Path.Value, `"`)
 				for _, forbidden := range []string{
 					"/internal/service", "/internal/repository", "github.com/gin-gonic/gin", "github.com/imroc/req",
 				} {

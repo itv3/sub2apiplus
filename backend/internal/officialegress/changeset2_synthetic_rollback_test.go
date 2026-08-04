@@ -1,6 +1,7 @@
 package officialegress
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -168,7 +169,7 @@ func compileSyntheticChangeset2Endpoint(
 	}
 	identityFacts := executorInvocationIdentityFacts(t)
 	identityFacts.Conditions.BetaFeaturesPresent = true
-	execution, err := NewCompiler().Compile(nil, bundle, CodexEgressPlan{
+	execution, err := NewCompiler().Compile(context.Background(), bundle, CodexEgressPlan{
 		SinkID: sinkID, Purpose: binding.Purpose(), EndpointID: endpointID,
 		InvocationID: "changeset2-synthetic-" + string(bundle.Mode()) + "-" + endpointID,
 		Mode:         bundle.Mode(), Protocol: protocol, Method: method, URL: target,

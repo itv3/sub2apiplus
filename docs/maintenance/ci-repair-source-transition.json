@@ -1,0 +1,38 @@
+{
+  "schema_version": "official-egress-ci-repair-source-transition/v1",
+  "prior_transition": "docs/maintenance/official-egress-consolidation-retirement.json",
+  "prior_transition_sha256": "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36",
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/compiler.go",
+      "from_sha256": "a13b3f8bc3796857ae77899a858b253dba00af5519e9bb0df3d5bb457222531e",
+      "to_sha256": "a46b59cfc7ca0d9d9ab7fdc51c3dcded379d62c922a10950bd4ce7053ae4ba6b",
+      "reason": "删除已无调用方的有序 JSON 兼容编码辅助函数；Compiler 的现行 Body 定型路径不变。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_changeset3_production_final_wire_test.go",
+      "from_sha256": "01e6e5493ee8ce9f5cd5039bb30b7829d76e565bd195feffa2806475bd5aab23",
+      "to_sha256": "f2732d83a5d33aa0effe98c372cfa0f7f7f1d77327068ae532200e9b53167842",
+      "reason": "显式确认确定性 bytes.Buffer 写入结果以满足 errcheck；56 份 capture 的输入、输出与断言不变。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_files.go",
+      "from_sha256": "9f4389d53158cff54932511db0cc25ac7c289646d35ab0b48a2201d965ff1ca5",
+      "to_sha256": "f52e89fb7659ac5af8b3321fb98bc2af7dd68d5fcce95f2478ac79a5387e14f0",
+      "reason": "删除可由右值推导的冗余 io.Reader 类型声明；blob 上传语义和 single-use 约束不变。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_http_invocation.go",
+      "from_sha256": "ed4a9e36401e1db0d4fb235feea6dc8b6edaa370cfa10c20a0f72d9b755e87e5",
+      "to_sha256": "32841f6a17c86652153ba3e5a94c6b36410940477aa8e8583c5beb72fd4b30e4",
+      "reason": "移除立即被覆盖的零值赋值；Bundle、Body 和 ExecutorInvocation 的构造语义不变。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_websocket_invocation.go",
+      "from_sha256": "5a0febd6f92e0117579711c48b44126a3b61cea83be95f0713f7e29f198c6864",
+      "to_sha256": "39fa0dfbaf9683daef1ec6cc4c7eaa0ac2da69b679693f82a4377340affd9bcc",
+      "reason": "删除已无调用方的 holder WebSocket invocation 兼容缓存；当前 WS 调用统一走显式 invocation 生命周期。"
+    }
+  ],
+  "result": "passed"
+}

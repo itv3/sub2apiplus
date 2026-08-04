@@ -949,7 +949,7 @@ func validateAndOrderOfficialCodexJSONBody(
 	}
 
 	var output bytes.Buffer
-	output.WriteByte('{')
+	_ = output.WriteByte('{')
 	wroteField := false
 	for _, name := range orderedNames {
 		value, present := values[name]
@@ -957,66 +957,20 @@ func validateAndOrderOfficialCodexJSONBody(
 			continue
 		}
 		if wroteField {
-			output.WriteByte(',')
+			_ = output.WriteByte(',')
 		}
 		encodedName, _ := json.Marshal(name)
-		output.Write(encodedName)
-		output.WriteByte(':')
+		_, _ = output.Write(encodedName)
+		_ = output.WriteByte(':')
 		var compacted bytes.Buffer
 		if err := json.Compact(&compacted, value); err != nil {
 			return nil, fmt.Errorf("Codex 端点 %s 的 JSON 字段 %s 无效：%w", endpoint.ID, name, err)
 		}
-		output.Write(compacted.Bytes())
+		_, _ = output.Write(compacted.Bytes())
 		wroteField = true
 	}
-	output.WriteByte('}')
+	_ = output.WriteByte('}')
 	return output.Bytes(), nil
-}
-
-// officialCodexValidateAndOrderFormBody 对 form_urlencoded 端点执行与 JSON
-// Finalizer 相同的闭集和稳定顺序校验。OAuth refresh 的字段顺序来自版本画像，
-// 不能依赖调用方 map 或通用表单库的排序实现。
-func officialCodexValidateAndOrderFormBody(
-	version string,
-	endpointID codexEndpointID,
-	values url.Values,
-) ([]byte, error) {
-	endpoint, err := resolveCodexEndpoint(version, endpointID)
-	if err != nil {
-		return nil, err
-	}
-	if endpoint.Body.Encoding != "form_urlencoded" || !endpoint.Body.Closed {
-		return nil, fmt.Errorf("Codex 端点 %s 不是封闭 form_urlencoded 目标", endpoint.ID)
-	}
-	contractFields := make(map[string]officialCodexBodyField, len(endpoint.Body.Fields))
-	for _, field := range endpoint.Body.Fields {
-		contractFields[field.Name] = field
-	}
-	for name, fieldValues := range values {
-		if _, allowed := contractFields[name]; !allowed {
-			return nil, fmt.Errorf("Codex 端点 %s 不允许表单字段：%s", endpoint.ID, name)
-		}
-		if len(fieldValues) != 1 {
-			return nil, fmt.Errorf("Codex 端点 %s 的表单字段 %s 必须恰好一个值", endpoint.ID, name)
-		}
-	}
-
-	parts := make([]string, 0, len(endpoint.Body.Fields))
-	for _, field := range endpoint.Body.Fields {
-		fieldValues, present := values[field.Name]
-		value := ""
-		if present && len(fieldValues) == 1 {
-			value = fieldValues[0]
-		}
-		if field.Required && strings.TrimSpace(value) == "" {
-			return nil, fmt.Errorf("Codex 端点 %s 缺少必需表单字段：%s", endpoint.ID, field.Name)
-		}
-		if !present {
-			continue
-		}
-		parts = append(parts, url.QueryEscape(field.Name)+"="+url.QueryEscape(value))
-	}
-	return []byte(strings.Join(parts, "&")), nil
 }
 
 type officialCodexJSONPair struct {

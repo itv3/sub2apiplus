@@ -266,16 +266,16 @@ func qualifiedCallee(info *types.Info, call *ast.CallExpr) (qualified, receiver 
 // otherReq 可能意味着从已定型请求换成未定型请求，因此必须产生漂移。
 func astFingerprint(qualified string, call *ast.CallExpr) string {
 	var b strings.Builder
-	b.WriteString(qualified)
+	_, _ = b.WriteString(qualified)
 	for _, arg := range call.Args {
-		b.WriteString("|")
-		b.WriteString(fmt.Sprintf("%T", arg))
+		_, _ = b.WriteString("|")
+		_, _ = b.WriteString(fmt.Sprintf("%T", arg))
 		// 同时纳入实参的标识符/选择器路径。
 		//
 		// 只取语法节点类型的话，Do(req) 与 Do(otherReq) 指纹相同——把一个已定型的
 		// 请求换成另一个未定型的请求，这类改动恰恰是最需要被发现的。
-		b.WriteString(":")
-		b.WriteString(exprIdentPath(arg))
+		_, _ = b.WriteString(":")
+		_, _ = b.WriteString(exprIdentPath(arg))
 	}
 	sum := sha256.Sum256([]byte(b.String()))
 	return hex.EncodeToString(sum[:])[:12]
@@ -488,10 +488,10 @@ func funcDisplayName(fn *ast.FuncDecl) string {
 func printRecv(b *strings.Builder, expr ast.Expr) error {
 	switch t := expr.(type) {
 	case *ast.StarExpr:
-		b.WriteString("*")
+		_, _ = b.WriteString("*")
 		return printRecv(b, t.X)
 	case *ast.Ident:
-		b.WriteString(t.Name)
+		_, _ = b.WriteString(t.Name)
 		return nil
 	case *ast.IndexExpr:
 		return printRecv(b, t.X)

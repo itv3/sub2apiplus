@@ -125,7 +125,6 @@ type officialCodexBundleHolder struct {
 	mu                sync.Mutex
 	httpInvocation    *officialCodexHTTPInvocation
 	httpAttemptBudget int
-	wsInvocations     map[officialegress.SinkID]*officialCodexWebSocketInvocation
 	forwardPlans      map[officialCodexForwardPlanKey]*OpenAIForwardInvocationPlan
 }
 

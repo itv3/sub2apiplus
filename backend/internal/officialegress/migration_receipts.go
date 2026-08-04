@@ -106,14 +106,6 @@ func applyMigrationReceipts(
 	return applyTransportReceiptTransitions(inputs)
 }
 
-func applyMigrationReceiptManifest(
-	manifest migrationReceiptManifest,
-	evidenceBySink map[string]bindingcontract.ReleaseBindingDoc,
-	inputs []SinkBindingInput,
-) ([]SinkBindingInput, error) {
-	return applyMigrationReceiptManifestWithFS(manifest, migrationReceiptFS, evidenceBySink, inputs)
-}
-
 func applyMigrationReceiptManifestWithFS(
 	manifest migrationReceiptManifest,
 	artifacts fs.FS,

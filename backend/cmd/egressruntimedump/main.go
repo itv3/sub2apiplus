@@ -106,7 +106,7 @@ func writeRuntimeSelector(output string, file officialegress.RuntimeCatalogFile)
 		return err
 	}
 	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
+	defer func() { _ = os.Remove(temporaryPath) }()
 	if err := temporary.Chmod(0o644); err != nil {
 		_ = temporary.Close()
 		return err

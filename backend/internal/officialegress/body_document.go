@@ -203,7 +203,7 @@ func (d *orderedJSONDocument) encodeNames(names []string) []byte {
 		capacity += len(d.source)
 	}
 	out := bytes.NewBuffer(make([]byte, 0, capacity))
-	out.WriteByte('{')
+	_ = out.WriteByte('{')
 	written := 0
 	for _, name := range names {
 		value, present := d.value(name)
@@ -211,15 +211,15 @@ func (d *orderedJSONDocument) encodeNames(names []string) []byte {
 			continue
 		}
 		if written > 0 {
-			out.WriteByte(',')
+			_ = out.WriteByte(',')
 		}
 		quotedName := strconv.AppendQuote(nil, name)
-		out.Write(quotedName)
-		out.WriteByte(':')
-		out.Write(value)
+		_, _ = out.Write(quotedName)
+		_ = out.WriteByte(':')
+		_, _ = out.Write(value)
 		written++
 	}
-	out.WriteByte('}')
+	_ = out.WriteByte('}')
 	return out.Bytes()
 }
 

@@ -270,12 +270,3 @@ func (a AttemptAuthentication) take() (AttemptAuthenticationInput, error) {
 	a.state.material = AttemptAuthenticationInput{}
 	return material, nil
 }
-
-func (a AttemptAuthentication) hasMaterial() bool {
-	if a.state == nil {
-		return false
-	}
-	a.state.mu.Lock()
-	defer a.state.mu.Unlock()
-	return !a.state.consumed && a.state.material != (AttemptAuthenticationInput{})
-}

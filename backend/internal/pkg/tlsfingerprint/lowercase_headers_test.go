@@ -103,7 +103,7 @@ func TestLowercaseHeaderRoundTripperWithoutUserAgentOmitsItOnWire(t *testing.T) 
 	if err != nil {
 		t.Fatalf("监听失败: %v", err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	head := make(chan []string, 1)
 	go func() {
@@ -111,7 +111,7 @@ func TestLowercaseHeaderRoundTripperWithoutUserAgentOmitsItOnWire(t *testing.T) 
 		if acceptErr != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		var lines []string
 		scanner := bufio.NewScanner(conn)
 		for scanner.Scan() {
@@ -135,7 +135,9 @@ func TestLowercaseHeaderRoundTripperWithoutUserAgentOmitsItOnWire(t *testing.T) 
 	if err != nil {
 		t.Fatalf("RoundTrip 失败: %v", err)
 	}
-	resp.Body.Close()
+	if err := resp.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, line := range <-head {
 		if strings.HasPrefix(strings.ToLower(line), "user-agent:") {
@@ -173,7 +175,7 @@ func TestLowercaseHeaderRoundTripperPreservesWebSocketHandshakeCase(t *testing.T
 	if err != nil {
 		t.Fatalf("监听失败: %v", err)
 	}
-	defer listener.Close()
+	defer func() { _ = listener.Close() }()
 
 	names := make(chan []string, 1)
 	go func() {
@@ -181,7 +183,7 @@ func TestLowercaseHeaderRoundTripperPreservesWebSocketHandshakeCase(t *testing.T
 		if err != nil {
 			return
 		}
-		defer conn.Close()
+		defer func() { _ = conn.Close() }()
 		var got []string
 		scanner := bufio.NewScanner(conn)
 		for scanner.Scan() {
@@ -215,7 +217,9 @@ func TestLowercaseHeaderRoundTripperPreservesWebSocketHandshakeCase(t *testing.T
 	if err != nil {
 		t.Fatalf("RoundTrip 失败: %v", err)
 	}
-	resp.Body.Close()
+	if err := resp.Body.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	onWire := <-names
 	present := make(map[string]bool, len(onWire))

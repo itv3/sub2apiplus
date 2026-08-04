@@ -269,27 +269,3 @@ func (i *officialCodexWebSocketInvocation) Bundle() officialegress.ReleaseBundle
 	}
 	return i.bundle
 }
-
-func officialCodexWebSocketInvocationForHolder(
-	ctx context.Context,
-	holder *officialCodexBundleHolder,
-	input officialCodexWebSocketInvocationInput,
-) (*officialCodexWebSocketInvocation, error) {
-	if holder == nil {
-		return newOfficialCodexWebSocketInvocation(ctx, input)
-	}
-	holder.mu.Lock()
-	defer holder.mu.Unlock()
-	if holder.wsInvocations == nil {
-		holder.wsInvocations = make(map[officialegress.SinkID]*officialCodexWebSocketInvocation)
-	}
-	if existing := holder.wsInvocations[input.SinkID]; existing != nil {
-		return existing, nil
-	}
-	invocation, err := newOfficialCodexWebSocketInvocation(ctx, input)
-	if err != nil {
-		return nil, err
-	}
-	holder.wsInvocations[input.SinkID] = invocation
-	return invocation, nil
-}

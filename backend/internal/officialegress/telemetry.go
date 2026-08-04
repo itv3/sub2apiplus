@@ -125,13 +125,11 @@ func (r *BoundedGuardRecorder) RecordOfficialEgressEvent(event GuardEvent) error
 		return nil
 	}
 	level := slog.LevelWarn
-	if event.Reason == ReasonOutOfScopePassthrough ||
-		event.Reason == ReasonLegacyObservePassthrough {
+	switch event.Reason {
+	case ReasonOutOfScopePassthrough, ReasonLegacyObservePassthrough:
 		level = slog.LevelDebug
-	} else if event.Reason == ReasonCanaryObservePassthrough ||
-		event.Reason == ReasonSinkOverrideObserved ||
-		event.Reason == ReasonUnknownRouteOverrideObserved ||
-		event.Reason == ReasonUnregisteredSinkOverrideObserved {
+	case ReasonCanaryObservePassthrough, ReasonSinkOverrideObserved,
+		ReasonUnknownRouteOverrideObserved, ReasonUnregisteredSinkOverrideObserved:
 		// 回滚与限时覆盖必须形成生产可见的审计记录；有界去重避免正常灰度产生日志风暴。
 		level = slog.LevelInfo
 	}

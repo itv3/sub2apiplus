@@ -11,6 +11,19 @@ linters:
     - staticcheck
     - unused
 
+  exclusions:
+    rules:
+      # 该 benchmark driver 的完整源码摘要属于变更集 6 冻结证据；只能由
+      # changeset6_benchmark_evidence.py 校验，不能为 errcheck 改写字节。
+      - path: internal/service/official_egress_changeset6_benchmark_test.go
+        linters:
+          - errcheck
+      # ST1005 只按英文句法检查首字母；中文错误信息以 Codex、Sink 等专有名词
+      # 开头时不应破坏标准拼写。其余 staticcheck 规则继续保持启用。
+      - linters:
+          - staticcheck
+        text: "ST1005:"
+
   settings:
     depguard:
       rules:

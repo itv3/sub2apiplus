@@ -46,7 +46,7 @@ func TestReqProfileGuardPreservesOutOfScopeWireAndResult(t *testing.T) {
 			SetBodyString("same-body").
 			Post(server.URL + "/third-party/messages?mode=exact")
 		require.NoError(t, err)
-		return response.Response.Status + "|" + response.Header.Get("X-Test-Result") + "|" + response.String()
+		return response.Status + "|" + response.Header.Get("X-Test-Result") + "|" + response.String()
 	}
 
 	before := send(req.C())
@@ -127,7 +127,7 @@ func TestReqProfileGuardPreservesErrorCancellationAndRedirect(t *testing.T) {
 		}
 		response, sendErr := client.R().Get(redirect.URL)
 		require.NoError(t, sendErr)
-		results = append(results, response.Response.Status+"|"+response.String())
+		results = append(results, response.Status+"|"+response.String())
 	}
 	require.Equal(t, results[0], results[1])
 }

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
+	"net/url"
 	"runtime"
 	"strings"
 	"sync"
@@ -510,8 +512,78 @@ func TestOpenAIForwardInvocationPlanLinuxLiteHTTPFallbackPassesTerminalGuard(t *
 	require.NoError(t, response.Body.Close())
 	require.True(t, upstream.decision.Allow, "%+v", upstream.decision)
 	require.NotNil(t, upstream.request)
-	require.Equal(t, "true", upstream.request.Header[responsesLiteHeaderKey][0])
-	require.Equal(t, "zstd", upstream.request.Header["content-encoding"][0])
+	headerValues := func(name string) []string {
+		for rawName, values := range upstream.request.Header {
+			if strings.EqualFold(rawName, name) {
+				return values
+			}
+		}
+		return nil
+	}
+	require.Equal(t, []string{"true"}, headerValues(responsesLiteHeaderKey))
+	require.Equal(t, []string{"zstd"}, headerValues("content-encoding"))
+}
+
+func TestOpenAIForwardInvocationPlanMaterializesCookieBeforeFinalization(t *testing.T) {
+	guard, err := officialegress.NewGuard(
+		officialegress.DefaultGuard().Config(),
+		officialegress.DefaultSinkCatalog(),
+		officialegress.DefaultOfficialRouteCatalog(),
+		nil,
+	)
+	require.NoError(t, err)
+	upstream := &openAIForwardPlanTerminalGuardUpstream{guard: guard}
+	runtimeState, err := newOfficialEgressTransitionRuntimeWithExecutor(
+		guard,
+		upstream,
+		officialCodexExecutorID,
+		officialegress.ReleaseModeActive,
+	)
+	require.NoError(t, err)
+
+	account := &Account{
+		ID: 715, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{"chatgpt_account_id": "acct-cookie-finalization"},
+	}
+	jar, err := cookiejar.New(nil)
+	require.NoError(t, err)
+	target, err := url.Parse(chatgptCodexURL)
+	require.NoError(t, err)
+	jar.SetCookies(target, []*http.Cookie{{
+		Name: "__cf_bm", Value: "cookie-before-finalize", Path: "/", Secure: true,
+	}})
+	ctx := WithHTTPUpstreamCookieJar(context.Background(), jar)
+	plan, err := newOfficialCodexResponseForwardPlan(ctx, officialCodexResponseForwardPlanInput{
+		Runtime: runtimeState, Account: account,
+		PrimarySinkID: officialEgressSinkResponsesChatCompletions,
+		InvocationID:  "cookie-before-finalization",
+		PolicyID:      "cookie-finalization", PolicySource: "test",
+		AttemptBudget: 1,
+	})
+	require.NoError(t, err)
+
+	body := `{"model":"gpt-5.6-luna","input":[],"tool_choice":"auto","parallel_tool_calls":false,"reasoning":{},"store":false,"stream":true,"include":[]}`
+	request, err := http.NewRequestWithContext(
+		ctx,
+		http.MethodPost,
+		chatgptCodexURL,
+		bytes.NewBufferString(body),
+	)
+	require.NoError(t, err)
+	request.Header.Set("Authorization", "Bearer cookie-finalization-token")
+	response, err := plan.ExecuteHTTPRequest(ctx, request, officialCodexEndpointResponsesHTTP)
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+	require.True(t, upstream.decision.Allow, "%+v", upstream.decision)
+	require.NotNil(t, upstream.request)
+
+	var cookieValues []string
+	for name, values := range upstream.request.Header {
+		if strings.EqualFold(name, "cookie") {
+			cookieValues = append(cookieValues, values...)
+		}
+	}
+	require.Equal(t, []string{"__cf_bm=cookie-before-finalize"}, cookieValues)
 }
 
 func openAIForwardPlanAttemptInput(

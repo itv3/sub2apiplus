@@ -62,8 +62,8 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactOAuthSuccessPersi
 	// conversation-id（SPEC-HDR-007，官方 compact 16 项线序的第 5、6 位）。
 	require.NotEmpty(t, upstream.lastReq.Header.Get("session-id"))
 	require.NotEmpty(t, upstream.lastReq.Header.Get("thread-id"))
-	require.Empty(t, upstream.lastReq.Header["Session_ID"])
-	require.Empty(t, upstream.lastReq.Header["Conversation_ID"])
+	require.Empty(t, upstream.lastReq.Header.Values(http.CanonicalHeaderKey("Session_ID")))
+	require.Empty(t, upstream.lastReq.Header.Values(http.CanonicalHeaderKey("Conversation_ID")))
 	require.Empty(t, upstream.lastReq.Header.Get("Conversation-Id"))
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.lastReq.Context()))
 	require.Equal(t, codexCLIUserAgent, upstream.lastReq.Header.Get("User-Agent"))

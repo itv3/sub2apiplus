@@ -178,6 +178,7 @@ func TestChrome133PersonaTLSAndHTTPVersionsMatch(t *testing.T) {
 	}))
 	srv.EnableHTTP2 = true
 	srv.TLS = &tls.Config{
+		MinVersion: tls.VersionTLS12,
 		GetConfigForClient: func(chi *tls.ClientHelloInfo) (*tls.Config, error) {
 			hello = chi
 			return nil, nil
@@ -272,6 +273,7 @@ func startRawTLSCapture(t *testing.T) (addr string, lines <-chan []string) {
 	ln, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		NextProtos:   []string{"http/1.1"},
+		MinVersion:   tls.VersionTLS12,
 	})
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ln.Close() })

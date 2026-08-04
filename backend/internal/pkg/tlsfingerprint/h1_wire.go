@@ -85,7 +85,7 @@ func (c *h1WireConn) Write(p []byte) (int, error) {
 			continue
 		}
 
-		c.pending.Write(p)
+		_, _ = c.pending.Write(p)
 		p = nil
 
 		idx := bytes.Index(c.pending.Bytes(), []byte("\r\n\r\n"))
@@ -324,15 +324,15 @@ func rewriteH1HeadWithMode(
 		if literal, hit := preserve[name]; hit {
 			name = literal
 		}
-		builder.WriteString(name)
-		builder.WriteString(": ")
-		builder.WriteString(value)
-		builder.WriteString("\r\n")
+		_, _ = builder.WriteString(name)
+		_, _ = builder.WriteString(": ")
+		_, _ = builder.WriteString(value)
+		_, _ = builder.WriteString("\r\n")
 	}
 
 	var builder strings.Builder
-	builder.WriteString(requestLine)
-	builder.WriteString("\r\n")
+	_, _ = builder.WriteString(requestLine)
+	_, _ = builder.WriteString("\r\n")
 
 	written := make(map[string]bool, len(fields))
 	for _, name := range order {
@@ -358,7 +358,7 @@ func rewriteH1HeadWithMode(
 	if contentLength != "" && !contentLengthOrdered {
 		emit(&builder, "content-length", contentLength)
 	}
-	builder.WriteString("\r\n")
+	_, _ = builder.WriteString("\r\n")
 	return []byte(builder.String()), length, false, true
 }
 

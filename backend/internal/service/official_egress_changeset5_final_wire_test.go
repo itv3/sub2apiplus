@@ -369,9 +369,26 @@ func TestChangeset5NormalizedPreAppliesOnlyExactOAuthNoiseTransition(t *testing.
 	if err := changeset5CompareFinalWireCaptures(original.Captures, normalized.Captures, expected); err != nil {
 		t.Fatal(err)
 	}
+}
+
+func TestChangeset5CurrentFinalWireMatchesFrozenWireFields(t *testing.T) {
+	normalized := changeset5ReadFinalWireManifest(
+		t, "../../../docs/changeset5/normalized-pre-refactor-final-wire/manifest.json",
+	)
 	current := changeset3BuildProductionFinalWireCaptures(t)
-	if err := changeset5CompareFinalWireCaptures(normalized.Captures, current, nil); err != nil {
+	if err := changeset5CompareCurrentFinalWireCaptures(normalized.Captures, current); err != nil {
 		t.Fatalf("当前 final-wire 与 normalized pre 漂移：%v", err)
+	}
+}
+
+func TestChangeset5CurrentFinalWireComparatorRejectsWireDrift(t *testing.T) {
+	normalized := changeset5ReadFinalWireManifest(
+		t, "../../../docs/changeset5/normalized-pre-refactor-final-wire/manifest.json",
+	)
+	mutated := append([]finalwirecapture.Capture(nil), normalized.Captures...)
+	mutated[0].Body.FinalWireBytes++
+	if err := changeset5CompareCurrentFinalWireCaptures(normalized.Captures, mutated); err == nil {
+		t.Fatal("跨平台 current final-wire 比较器未拒绝真实 wire 字段漂移")
 	}
 }
 
@@ -548,13 +565,29 @@ func changeset5CompareFinalWireCaptures(
 	return nil
 }
 
-func changeset5BuildPreRefactorSecretScan(
-	t *testing.T,
-	manifestRaw []byte,
-) changeset5PreRefactorSecretScan {
-	return changeset5BuildFinalWireSecretScan(
-		t, "changeset5-pre-refactor-secret-scan/v1", manifestRaw,
-	)
+// changeset5CompareCurrentFinalWireCaptures 只归一 Bundle 中的运行主机平台派生摘要。
+// 冻结证据生成于 darwin/arm64，而 CI 和生产目标为 linux/amd64；这三个摘要会把
+// DeploymentSupportPolicy.Platform 纳入哈希，但不代表线上字节。Header、Body、TLS、
+// WebSocket、端点和其他身份字段仍由统一比较器逐字段严格比较。
+func changeset5CompareCurrentFinalWireCaptures(
+	before []finalwirecapture.Capture,
+	after []finalwirecapture.Capture,
+) error {
+	beforeByKey := make(map[string]finalwirecapture.Capture, len(before))
+	for _, capture := range before {
+		beforeByKey[changeset3ProductionCaptureKey(capture)] = capture
+	}
+	normalized := append([]finalwirecapture.Capture(nil), after...)
+	for index := range normalized {
+		frozen, ok := beforeByKey[changeset3ProductionCaptureKey(normalized[index])]
+		if !ok {
+			continue
+		}
+		normalized[index].BundleDigest = frozen.BundleDigest
+		normalized[index].ConnectionIdentityDigest = frozen.ConnectionIdentityDigest
+		normalized[index].ConnectionPoolDigest = frozen.ConnectionPoolDigest
+	}
+	return changeset5CompareFinalWireCaptures(before, normalized, nil)
 }
 
 func changeset5BuildFinalWireSecretScan(

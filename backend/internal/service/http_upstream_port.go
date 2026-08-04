@@ -10,7 +10,8 @@ import (
 type httpUpstreamCookieJarContextKey struct{}
 
 // WithHTTPUpstreamCookieJar 将账号级 Cookie jar 绑定到一次上游请求。
-// repository 只负责把它安装到实际 http.Client，不需要感知账号凭据。
+// Official Egress 在签名前从中固化请求 Cookie；repository 仅负责让实际
+// http.Client 回写响应 Set-Cookie。普通非签名请求仍保持 net/http 默认行为。
 func WithHTTPUpstreamCookieJar(ctx context.Context, jar http.CookieJar) context.Context {
 	if ctx == nil {
 		ctx = context.Background()

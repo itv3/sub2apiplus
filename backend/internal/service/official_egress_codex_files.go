@@ -86,7 +86,7 @@ func newOfficialCodexBlobUploadSemanticRequest(
 	if target == nil || target.Hostname() == "" {
 		return nil, errors.New("Codex blob 上传 target 非法")
 	}
-	var body io.Reader = contents
+	body := contents
 	if fileSizeBytes == 0 {
 		body = http.NoBody
 	}

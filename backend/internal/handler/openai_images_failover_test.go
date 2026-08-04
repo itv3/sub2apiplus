@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
@@ -94,6 +95,53 @@ func (u *openAIImagesFailoverHTTPUpstream) calls() []int64 {
 	return append([]int64(nil), u.accountIDs...)
 }
 
+func newOpenAIFailoverGatewayService(
+	t *testing.T,
+	accountRepo service.AccountRepository,
+	upstream service.HTTPUpstream,
+	cfg *config.Config,
+) *service.OpenAIGatewayService {
+	t.Helper()
+	baseGuard := officialegress.DefaultGuard()
+	guard, err := officialegress.NewGuard(
+		baseGuard.Config(),
+		officialegress.DefaultSinkCatalog(),
+		officialegress.DefaultOfficialRouteCatalog(),
+		baseGuard.Recorder(),
+	)
+	require.NoError(t, err)
+	runtimeState, err := service.BuildOfficialEgressTransitionRuntime(
+		guard, upstream, cfg, nil,
+	)
+	require.NoError(t, err)
+	return service.ProvideOpenAIGatewayService(
+		accountRepo,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		cfg,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		upstream,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		nil,
+		runtimeState,
+	)
+}
+
 func TestOpenAIGatewayHandlerImages_ServerErrorFailsOverAndReturnsClearErrorWhenExhausted(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	groupID := int64(3130)
@@ -130,31 +178,7 @@ func TestOpenAIGatewayHandlerImages_ServerErrorFailsOverAndReturnsClearErrorWhen
 	accountRepo := openAIImagesFailoverAccountRepo{accounts: accounts}
 	upstream := &openAIImagesFailoverHTTPUpstream{}
 	cfg := &config.Config{RunMode: config.RunModeSimple}
-	gatewayService := service.NewOpenAIGatewayService(
-		accountRepo,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		cfg,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		upstream,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-		nil,
-	)
+	gatewayService := newOpenAIFailoverGatewayService(t, accountRepo, upstream, cfg)
 	billingService := service.NewBillingCacheService(nil, nil, nil, nil, nil, nil, cfg, nil)
 	t.Cleanup(billingService.Stop)
 	concurrencyService := service.NewConcurrencyService(nil)

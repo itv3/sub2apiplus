@@ -720,21 +720,21 @@ func changeset3ProductionSemanticBody(
 		pairs = append(pairs, pair{name: field.Name, value: value})
 	}
 	var output bytes.Buffer
-	output.WriteByte('{')
+	_ = output.WriteByte('{')
 	for index, pair := range pairs {
 		if index > 0 {
-			output.WriteByte(',')
+			_ = output.WriteByte(',')
 		}
 		nameRaw, _ := json.Marshal(pair.name)
 		valueRaw, err := json.Marshal(pair.value)
 		if err != nil {
 			t.Fatal(err)
 		}
-		output.Write(nameRaw)
-		output.WriteByte(':')
-		output.Write(valueRaw)
+		_, _ = output.Write(nameRaw)
+		_ = output.WriteByte(':')
+		_, _ = output.Write(valueRaw)
 	}
-	output.WriteByte('}')
+	_ = output.WriteByte('}')
 	return output.Bytes()
 }
 

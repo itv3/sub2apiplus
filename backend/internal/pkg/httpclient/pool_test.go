@@ -188,7 +188,7 @@ func TestSharedPoolGuardPreservesOutOfScopeWireAndResult(t *testing.T) {
 	}
 	readResult := func(response *http.Response, err error) string {
 		require.NoError(t, err)
-		defer response.Body.Close()
+		defer func() { require.NoError(t, response.Body.Close()) }()
 		body, readErr := io.ReadAll(response.Body)
 		require.NoError(t, readErr)
 		return response.Status + "|" + response.Header.Get("X-Test-Result") + "|" + string(body)

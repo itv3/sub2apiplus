@@ -130,7 +130,7 @@ func newOfficialCodexHTTPInvocation(
 		ProxyIdentityDigest: officialEgressProxyStateKey(input.ProxyURL),
 		SupportedBackends:   []officialegress.BackendKind{officialegress.BackendHTTPUpstream},
 	}
-	bundle := officialegress.ReleaseBundle{}
+	var bundle officialegress.ReleaseBundle
 	if input.Bundle != nil {
 		bundle = *input.Bundle
 		if bundle.PrimarySinkID() != input.SinkID {
@@ -201,7 +201,7 @@ func (i *officialCodexHTTPInvocation) Execute(
 		request.Context(), i.identityFacts,
 	))
 	request.Header = input.Request.Header.Clone()
-	body := officialegress.NewReplayableRequestBody(nil)
+	var body officialegress.RequestBody
 	semantic := officialCodexSemanticAttempt{}
 	var err error
 	if i.singleUseBody {

@@ -93,7 +93,7 @@ func TestSingleUseRequestBodyCloneStillSharesConsumptionCapability(t *testing.T)
 
 func assertReaderBytes(t *testing.T, reader io.ReadCloser, want []byte) {
 	t.Helper()
-	defer reader.Close()
+	defer func() { _ = reader.Close() }()
 	got, err := io.ReadAll(reader)
 	if err != nil {
 		t.Fatal(err)

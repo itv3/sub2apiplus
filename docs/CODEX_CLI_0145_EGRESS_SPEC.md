@@ -103,6 +103,10 @@ R 类只做等长秘密替换，保持名称、大小写、偏移、长度和帧
 make check-egress-spec
 ```
 
+该命令是本地完整门禁，额外读取被 `.gitignore` 排除的 Codex CLI 源码镜像以校验规格引用。
+GitHub Actions 使用 `make check-egress-spec-ci`，只跳过这项本地源码引用检查，其余提交态
+证据、执行契约和回归测试完全一致。
+
 新版本抓包、候选抓包、比较和验收只使用：
 
 ```bash
@@ -1020,7 +1024,8 @@ Anthropic 画像，会把 §1.1 已排除的供应商路径卷进来。Anthropic
 台账由以下门禁自动复算：
 
 ```bash
-make check-egress-spec   # 判据自测 + 台账完整性 + 版本泄漏 + 规格引用
+make check-egress-spec      # 本地完整门禁，包含本地 Codex CLI 源码引用
+make check-egress-spec-ci   # CI 提交态闭集，仅省略被忽略的本地源码引用
 ```
 
 检查覆盖完整发送面、§3.5.1 路径、§3.5.2 来源与计数；文本规则和 Go AST 指纹基线共同

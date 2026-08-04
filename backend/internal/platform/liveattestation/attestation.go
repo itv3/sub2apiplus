@@ -35,11 +35,3 @@ type CandidateCaptureScope struct {
 func WithCandidateCaptureScope(ctx context.Context, scope CandidateCaptureScope) context.Context {
 	return context.WithValue(ctx, candidateCaptureScopeContextKey{}, scope)
 }
-
-func candidateCaptureScopeFromContext(ctx context.Context) (CandidateCaptureScope, bool) {
-	if ctx == nil {
-		return CandidateCaptureScope{}, false
-	}
-	scope, ok := ctx.Value(candidateCaptureScopeContextKey{}).(CandidateCaptureScope)
-	return scope, ok
-}

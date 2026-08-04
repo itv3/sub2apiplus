@@ -212,7 +212,10 @@ func (s *httpUpstreamService) Do(req *http.Request, proxyURL string, accountID i
 
 	// 执行请求
 	client := httpClientForUpstreamRequest(entry.client, req)
-	client = httpClientWithCookieJar(client, service.HTTPUpstreamCookieJarFromContext(req.Context()))
+	client = httpClientWithCookieJar(
+		client,
+		cookieJarForUpstreamRequest(req, service.HTTPUpstreamCookieJarFromContext(req.Context())),
+	)
 	client = httpClientWithGrokAccessDeniedFallback(client)
 	resp, err := servertiming.Do(client, req)
 	if err != nil {
@@ -286,7 +289,10 @@ func (s *httpUpstreamService) DoWithTLS(req *http.Request, proxyURL string, acco
 	}
 
 	client := httpClientForUpstreamRequest(entry.client, req)
-	client = httpClientWithCookieJar(client, service.HTTPUpstreamCookieJarFromContext(req.Context()))
+	client = httpClientWithCookieJar(
+		client,
+		cookieJarForUpstreamRequest(req, service.HTTPUpstreamCookieJarFromContext(req.Context())),
+	)
 	client = httpClientWithGrokAccessDeniedFallback(client)
 	resp, err := servertiming.Do(client, req)
 	if err != nil {
@@ -324,6 +330,34 @@ func httpClientWithCookieJar(client *http.Client, jar http.CookieJar) *http.Clie
 	clone := *client
 	clone.Jar = jar
 	return &clone
+}
+
+// responseOnlyCookieJar 让 net/http 继续把上游 Set-Cookie 写回账号级 Jar，
+// 但禁止 Client.send 在已签名请求上再次补 Cookie。已有 Cookie 已由
+// official egress Compiler 在 FinalizationToken 之前固化，这里只保留响应侧更新能力。
+type responseOnlyCookieJar struct {
+	delegate http.CookieJar
+}
+
+func (j *responseOnlyCookieJar) SetCookies(target *url.URL, cookies []*http.Cookie) {
+	if j != nil && j.delegate != nil {
+		j.delegate.SetCookies(target, cookies)
+	}
+}
+
+func (*responseOnlyCookieJar) Cookies(*url.URL) []*http.Cookie {
+	return nil
+}
+
+func cookieJarForUpstreamRequest(req *http.Request, jar http.CookieJar) http.CookieJar {
+	if req == nil || jar == nil {
+		return jar
+	}
+	identity, ok := officialegress.AttemptIdentityFromContext(req.Context())
+	if !ok || !identity.HasFinalizationToken {
+		return jar
+	}
+	return &responseOnlyCookieJar{delegate: jar}
 }
 
 // grokAccessDeniedFallbackTransport preserves the subscription CLI proxy as

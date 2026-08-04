@@ -1,4 +1,4 @@
-.PHONY: build build-backend build-frontend test test-backend test-frontend test-frontend-critical test-capture-tools check-egress-spec check-egress-bootstrap-replay check-egress-seal
+.PHONY: build build-backend build-frontend test test-backend test-frontend test-frontend-critical test-capture-tools check-egress-spec check-egress-spec-ci check-egress-spec-local-source check-egress-bootstrap-replay check-egress-seal
 
 EGRESS_BOOTSTRAP_COMMIT := 38a9929eac35a39c86de2f27de8f7a805d7dae52
 EGRESS_BOOTSTRAP_BASELINE := $(CURDIR)/docs/changeset0/sink-baseline.json
@@ -48,7 +48,14 @@ check-egress-seal:
 		-baseline "$(EGRESS_LEGACY_BASELINE)" \
 		-protected-base-ref "$(EGRESS_SEAL_BASE_REF)"
 
-check-egress-spec: check-egress-bootstrap-replay check-egress-seal
+check-egress-spec: check-egress-spec-local-source check-egress-spec-ci
+
+# 本地完整门禁额外校验被 .gitignore 排除的 Codex CLI 源码引用；CI checkout
+# 不包含 local-analysis，因此只执行下面的可复现提交态闭集。
+check-egress-spec-local-source:
+	@python3 tools/check_spec_refs.py
+
+check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal
 	@python3 tools/check_version_leak.py --self-test
 	@python3 tools/check_version_leak.py
 	@python3 tools/check_changeset5_0145_symbols.py --self-test
@@ -60,7 +67,6 @@ check-egress-spec: check-egress-bootstrap-replay check-egress-seal
 	@python3 tools/changeset6_benchmark_evidence.py --self-test
 	@python3 tools/changeset6_benchmark_evidence.py
 	@python3 tools/check_ledger_completeness.py
-	@python3 tools/check_spec_refs.py
 	@cd backend && go run ./cmd/egressscan -mode self-test
 	@cd backend && go run ./cmd/egressscan -mode check \
 		-baseline ../docs/changeset0/sink-baseline.json \
@@ -113,7 +119,7 @@ check-egress-spec: check-egress-bootstrap-replay check-egress-seal
 	@cd backend && go test ./internal/repository \
 		-run '^(TestChromePersona|TestHTTPUpstreamGuardPreservesOutOfScopeWireAndResult|TestReqProfileGuardPreservesOutOfScopeWireAndResult)' -count=1
 	@cd backend && go test ./internal/service \
-		-run '^(TestPrivacyProductionFunctionsBuildAllThreeBrowserRequests|TestWebSocketHandshakeGuardPreservesWireAndResult|TestChangeset3RuntimeSinksEnterExecutorWithoutLegacyFinalizers|TestChangeset5LegacyAttachFinalizerDefinitionsAndCallsAreExtinct|TestChangeset5LegacyExtinctionGateRejectsDefinitionsAndWrappedCalls|TestChangeset5WebSocketExecutorOwnsFinalHandshakeHeaders|TestChangeset5OriginalPreFinalWireIsByteExactAndFrozen|TestChangeset5NormalizedPreAppliesOnlyExactOAuthNoiseTransition|TestChangeset5NormalizationTransitionRejectsWrongOrExpandedApproval|TestChangeset5PostRefactorFinalWireIsFrozenAndMatchesPre)$$' -count=1
+		-run '^(TestPrivacyProductionFunctionsBuildAllThreeBrowserRequests|TestWebSocketHandshakeGuardPreservesWireAndResult|TestChangeset3RuntimeSinksEnterExecutorWithoutLegacyFinalizers|TestChangeset5LegacyAttachFinalizerDefinitionsAndCallsAreExtinct|TestChangeset5LegacyExtinctionGateRejectsDefinitionsAndWrappedCalls|TestChangeset5WebSocketExecutorOwnsFinalHandshakeHeaders|TestChangeset5OriginalPreFinalWireIsByteExactAndFrozen|TestChangeset5NormalizedPreAppliesOnlyExactOAuthNoiseTransition|TestChangeset5CurrentFinalWireMatchesFrozenWireFields|TestChangeset5CurrentFinalWireComparatorRejectsWireDrift|TestChangeset5NormalizationTransitionRejectsWrongOrExpandedApproval|TestChangeset5PostRefactorFinalWireIsFrozenAndMatchesPre)$$' -count=1
 	@cd backend && go test ./internal/pkg/httpclient \
 		-run '^(TestBuildTransportWithCustomDialKeepsHTTP2Disabled|TestSharedPoolGuardPreservesOutOfScopeWireAndResult)$$' -count=1
 	@# 防快照与生成文件陈旧：临时导出后比对。

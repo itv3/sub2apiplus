@@ -24,14 +24,22 @@ func init() {
 			// Go 分配器复用相同地址，导致新 recorder 错绑到旧 Runtime。
 			key := httpUpstream
 			if cached, exists := officialEgressTestRuntimes.Load(key); exists {
-				return cached.(*OfficialEgressTransitionRuntime), nil
+				runtimeState, valid := cached.(*OfficialEgressTransitionRuntime)
+				if !valid {
+					return nil, errors.New("测试 Codex Executor runtime 缓存类型非法")
+				}
+				return runtimeState, nil
 			}
 			runtimeState, err := newOfficialEgressTestRuntime(httpUpstream)
 			if err != nil {
 				return nil, err
 			}
 			actual, _ := officialEgressTestRuntimes.LoadOrStore(key, runtimeState)
-			return actual.(*OfficialEgressTransitionRuntime), nil
+			cachedRuntime, valid := actual.(*OfficialEgressTransitionRuntime)
+			if !valid {
+				return nil, errors.New("测试 Codex Executor runtime 缓存类型非法")
+			}
+			return cachedRuntime, nil
 		}
 		return newOfficialEgressTestRuntime(httpUpstream)
 	}

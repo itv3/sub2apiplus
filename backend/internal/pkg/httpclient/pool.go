@@ -97,7 +97,7 @@ func buildClientWithGuard(opts Options, guard *officialegress.Guard) (*http.Clie
 
 	// Guard 必须无条件位于共享池的 socket 出口；不能只挂在可选的
 	// ValidateResolvedIP 分支，否则 usage/PAT/Agent 三条普通客户端路径会漏检。
-	var rt http.RoundTripper = officialegress.NewGuardedRoundTripper(
+	rt := officialegress.NewGuardedRoundTripper(
 		transport,
 		guard,
 		officialegress.BackendPlainNetHTTP,

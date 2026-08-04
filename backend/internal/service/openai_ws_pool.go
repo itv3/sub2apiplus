@@ -938,7 +938,7 @@ func (p *openAIWSConnPool) Acquire(ctx context.Context, req openAIWSAcquireReque
 			return nil, fmt.Errorf("构造 WebSocket Acquire Guard 请求：%w", err)
 		}
 		admissionRequest.Header = cloneHeader(clonedRequest.Headers)
-		var guard openAIWSAdmissionGuard = clonedRequest.AdmissionGuard
+		guard := clonedRequest.AdmissionGuard
 		if guard == nil && p != nil && p.guard != nil {
 			guard = p.guard
 		}

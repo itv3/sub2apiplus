@@ -95,18 +95,31 @@ func ProvideOfficialEgressTransitionRuntime(
 	cfg *config.Config,
 	reqProfileResource OfficialCodexReqProfileTransportResource,
 ) (*OfficialEgressTransitionRuntime, error) {
-	runtimeState, err := newOfficialEgressTransitionRuntimeWithExecutor(
-		guard,
-		httpUpstream,
-		officialCodexExecutorID,
-		officialEgressReleaseModeFromConfig(cfg),
-		reqProfileResource,
+	runtimeState, err := BuildOfficialEgressTransitionRuntime(
+		guard, httpUpstream, cfg, reqProfileResource,
 	)
 	if err != nil {
 		return nil, err
 	}
 	processOfficialEgressRuntime.Store(runtimeState)
 	return runtimeState, nil
+}
+
+// BuildOfficialEgressTransitionRuntime 组装一个不写入进程级状态的完整 Runtime。
+// 生产 provider 在构造后统一发布进程级实例；需要隔离状态的测试可显式注入返回值。
+func BuildOfficialEgressTransitionRuntime(
+	guard *officialegress.Guard,
+	httpUpstream HTTPUpstream,
+	cfg *config.Config,
+	reqProfileResource OfficialCodexReqProfileTransportResource,
+) (*OfficialEgressTransitionRuntime, error) {
+	return newOfficialEgressTransitionRuntimeWithExecutor(
+		guard,
+		httpUpstream,
+		officialCodexExecutorID,
+		officialEgressReleaseModeFromConfig(cfg),
+		reqProfileResource,
+	)
 }
 
 func officialEgressReleaseModeFromConfig(cfg *config.Config) officialegress.ReleaseMode {
@@ -394,20 +407,4 @@ func readReplayableHTTPRequestBody(request *http.Request) ([]byte, error) {
 	}
 	resetOfficialEgressRequestBody(request, body)
 	return body, nil
-}
-
-func syntheticCodexExecutorIngress(
-	ctx context.Context,
-	endpointID string,
-	source *gin.Context,
-) *gin.Context {
-	path := "/v1/responses"
-	if endpointID == officialCodexEndpointResponsesCompact {
-		path += "/compact"
-	}
-	request, _ := http.NewRequestWithContext(ctx, http.MethodPost, "https://sub2api.invalid"+path, nil)
-	if source != nil && source.Request != nil {
-		request.Header = source.Request.Header.Clone()
-	}
-	return &gin.Context{Request: request}
 }

@@ -1,0 +1,14 @@
+{
+  "schema_version": "official-egress-http-cookie-finalization-source-transition/v1",
+  "prior_transition": "docs/maintenance/ci-repair-source-transition.json",
+  "prior_transition_sha256": "b2a395259b2b0b8b95aca993f1a5aaf93e4928878cefd8675f34844a8b7fb3a5",
+  "transitions": [
+    {
+      "path": "backend/internal/service/official_egress_identity_authority.go",
+      "from_sha256": "4ba01a6a2840d422d626cfc4bc04eee8789b01e19c31b9252f9f70faeaaf53ad",
+      "to_sha256": "28632da0dde806746955da08c4f5b10e9f021337af77cdf082c5808464ae849a",
+      "reason": "在 Executor 生成 FinalizationToken 前固化账号级 Cloudflare Cookie，使 Cookie 进入 Compiler 与最终请求摘要；terminal Guard 继续严格校验完整请求，不放宽任何安全规则。"
+    }
+  ],
+  "result": "passed"
+}

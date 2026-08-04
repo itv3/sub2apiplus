@@ -55,18 +55,6 @@ func resolveCodexEndpointTLSProfileForMode[T ~string](
 	return resolveOfficialCodexEndpointTLSProfile(profile, string(endpointID), nil)
 }
 
-func resolveCodexEndpointTLSProfileForURLAndMode[T ~string](
-	mode string,
-	endpointID T,
-	target *url.URL,
-) (*tlsfingerprint.Profile, error) {
-	profile, err := resolveCodexVersionProfileForMode(mode)
-	if err != nil {
-		return nil, err
-	}
-	return resolveOfficialCodexEndpointTLSProfile(profile, string(endpointID), target)
-}
-
 func applyCodexHeaderContractForMode[T ~string](
 	mode string,
 	endpointID T,

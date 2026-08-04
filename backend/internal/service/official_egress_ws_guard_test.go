@@ -48,7 +48,7 @@ func TestWebSocketHandshakeGuardPreservesWireAndResult(t *testing.T) {
 	}
 	readResult := func(response *http.Response, err error) string {
 		require.NoError(t, err)
-		defer response.Body.Close()
+		defer func() { _ = response.Body.Close() }()
 		return response.Status + "|" + response.Header.Get("X-Test-Result")
 	}
 

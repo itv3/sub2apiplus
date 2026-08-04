@@ -3,9 +3,9 @@
   "bootstrap_commit": "38a9929eac35a39c86de2f27de8f7a805d7dae52",
   "bootstrap_tree": "a8c3dee18a01a6138bfcea60860bb5ad11548c3a",
   "inventory_sha256": "46593243b1bd315eafcb54335502a1f46bc2b8bfc0ecc2d3146da4e7087bfaeb",
-  "scanner_algorithm_sha256": "d45d2898be2bc1b2759bafaf93fc276c301d455884d5e93a9c95510458cc059c",
+  "scanner_algorithm_sha256": "3a0affa5a31a7fa9807d5815cfcdc0ec6b8dcc6e5f7b768914e4fa69e361878b",
   "reconstructed_at": "2026-08-04T00:00:00+08:00",
-  "reviewed_by": "upstream-v0.1.170-merge-audit",
-  "review_ref": "v0.1.170/source-gate/2026-08-04",
-  "rationale": "保持 bootstrap commit、tree 与 inventory 原文不变；在既有退休规则之上，仅增加范围外发送点重构收据类型及 v0.1.170 内容审核、SMTP 新候选的精确闭集。"
+  "reviewed_by": "ci-repair-audit",
+  "review_ref": "ci-repair/scanner-errcheck/2026-08-04",
+  "rationale": "保持 bootstrap commit、tree、inventory 原文及扫描语义不变；仅显式确认 strings.Builder 的确定性写入结果，以满足 errcheck。"
 }

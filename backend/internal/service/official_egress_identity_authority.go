@@ -145,6 +145,7 @@ func prepareOfficialCodexSemanticAttempt(
 	if request == nil || request.URL == nil || account.ID <= 0 {
 		return officialCodexSemanticAttempt{}, errors.New("Codex 语义 attempt 输入不完整")
 	}
+	materializeOfficialCodexCookieJar(request)
 	headers := request.Header.Clone()
 	semanticBody, ownedFields, err := officialegress.PrepareOfficialCodexAttemptBody(endpointID, body)
 	if err != nil {
@@ -196,6 +197,26 @@ func prepareOfficialCodexSemanticAttempt(
 		},
 		IdentityFacts: facts, Authentication: authentication,
 	}, nil
+}
+
+// materializeOfficialCodexCookieJar 在 Executor 生成 FinalizationToken 前把账号级
+// Cloudflare Cookie 固化到本次语义请求。net/http 默认会在 Client.send 阶段才从 Jar
+// 补 Cookie，该时点已经晚于 Executor 签名，terminal Guard 会将这种合法补充
+// 误判为 request_modified_after_finalize。提前固化后，Cookie 的名称、值与顺序
+// 都进入 Compiler 和最终请求摘要，Guard 仍保持 fail-close。
+func materializeOfficialCodexCookieJar(request *http.Request) {
+	if request == nil || request.URL == nil {
+		return
+	}
+	jar := HTTPUpstreamCookieJarFromContext(request.Context())
+	if jar == nil {
+		return
+	}
+	for _, cookie := range jar.Cookies(request.URL) {
+		if cookie != nil {
+			request.AddCookie(cookie)
+		}
+	}
 }
 
 func buildOfficialCodexIdentityFacts(

@@ -290,7 +290,7 @@ func digestRegistryProfile(build ReleaseBuildDoc, wire ReleaseWireDoc) (string, 
 	toHeaders := func(values []HeaderValueDoc) []registryHeader {
 		out := make([]registryHeader, len(values))
 		for i, value := range values {
-			out[i] = registryHeader{Name: value.Name, Value: value.Value}
+			out[i] = registryHeader(value)
 		}
 		return out
 	}

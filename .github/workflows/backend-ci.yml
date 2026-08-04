@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
   pull_request:
 
 permissions:
@@ -41,7 +43,7 @@ jobs:
           if ! git rev-parse --verify "${base_ref}^{commit}" >/dev/null 2>&1; then
             base_ref="$(git rev-parse HEAD^)"
           fi
-          EGRESS_SEAL_BASE_REF="$base_ref" make check-egress-spec
+          EGRESS_SEAL_BASE_REF="$base_ref" make check-egress-spec-ci
 
   shell:
     runs-on: macos-15

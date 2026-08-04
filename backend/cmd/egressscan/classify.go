@@ -838,8 +838,8 @@ func (e *unclassifiedError) Error() string {
 		for _, s := range e.sinks {
 			fmt.Fprintf(&b, "  - %s\n", s)
 		}
-		b.WriteString("\n新增发送点必须在 cmd/egressscan/classify.go 显式登记。\n")
-		b.WriteString("in-scope 必须用 funcExact 精确到函数：多平台共用文件里，文件级通配会产生错误绑定。\n")
+		_, _ = b.WriteString("\n新增发送点必须在 cmd/egressscan/classify.go 显式登记。\n")
+		_, _ = b.WriteString("in-scope 必须用 funcExact 精确到函数：多平台共用文件里，文件级通配会产生错误绑定。\n")
 	}
 	if len(e.problems) > 0 {
 		fmt.Fprintf(&b, "\n%d 条分类结果不完整：\n", len(e.problems))
