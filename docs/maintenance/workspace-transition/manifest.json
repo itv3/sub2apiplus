@@ -5061,8 +5061,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 114116,
-        "sha256": "cb8ea7ed679cc52187fdbd99966aaa8c02711fef2d5a36c3ff09c48aab366e9f"
+        "size": 91572,
+        "sha256": "1f2a559d1a1070e632ff53d760e9b169830f5763446f956ab1967e956055dfa6"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
