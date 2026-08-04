@@ -104,6 +104,9 @@ var reviewedPostBootstrapInfrastructure = map[string]string{
 	"github.com/Wei-Shaw/sub2api/internal/service.doCodexModelsUnwiredTestTransport@backend/internal/service/openai_codex_models_service.go#factory_httpclient_pool#1":                                 "变更集 2 保留未注入 HTTPUpstream 的包内 models 测试桩，生产 wiring 不可达",
 	"github.com/Wei-Shaw/sub2api/internal/service.doCodexModelsUnwiredTestTransport@backend/internal/service/openai_codex_models_service.go#net_http_client_do#1":                                      "变更集 2 保留未注入 HTTPUpstream 的包内 models 测试桩，生产 wiring 不可达",
 	"github.com/Wei-Shaw/sub2api/internal/service.dialOpenAIWSV2UnwiredTest@backend/internal/service/openai_ws_v2_passthrough_adapter.go#facade_ws_dialer#1":                                           "变更集 2 保留未注入 runtime 的包内 WSv2 测试桩，生产 wiring 不可达",
+	"github.com/Wei-Shaw/sub2api/internal/service.*ContentModerationService.moderationHTTPClient@backend/internal/service/content_moderation.go#factory_httpclient_pool#1":                             "本次上游同步为范围外内容审核增加可配置代理客户端工厂，不承载 Codex persona",
+	"github.com/Wei-Shaw/sub2api/internal/service.*EmailService.connectSMTP@backend/internal/service/email_service.go#raw_tls_dial_dialer#1":                                                           "本次上游同步将范围外 SMTP TLS 拨号收口到共享连接函数，不承载 Codex persona",
+	"github.com/Wei-Shaw/sub2api/internal/service.*EmailService.connectSMTPStartTLS@backend/internal/service/email_service.go#raw_dialer_dial#1":                                                       "本次上游同步将范围外 SMTP STARTTLS 拨号收口到共享连接函数，不承载 Codex persona",
 }
 
 var classifyRules = []classifyRule{

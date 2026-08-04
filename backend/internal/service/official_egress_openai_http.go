@@ -650,6 +650,14 @@ func finalizeOfficialOpenAIHTTPBody(
 		}
 	}
 	if isCompact {
+		// compact 的官方 Rust 请求结构体始终序列化该字段；第三方派生入口可以
+		// 省略，因此在画像终态补成固定值。精确官方入口仍要求客户端自行携带。
+		if !strictIngressIdentity {
+			if current, ok := payload["parallel_tool_calls"].(bool); !ok || current {
+				payload["parallel_tool_calls"] = false
+				modified = true
+			}
+		}
 		currentPromptCacheKey, _ := payload["prompt_cache_key"].(string)
 		if strictIngressIdentity {
 			if !contract.promptCacheKeySet {

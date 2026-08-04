@@ -19,7 +19,7 @@ func TestLifecycleReceiptsFreezeCompleteCandidates(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var runtimeCandidate, deadCandidate SinkRecord
+	var runtimeCandidate, deadCandidate, outOfScopeCandidate SinkRecord
 	for _, candidate := range baseline.Sinks {
 		if runtimeCandidate.ScanCandidateID == "" && candidate.RuntimeSinkID != "" &&
 			!candidate.IsFacade && candidate.EnforcementState == "legacy_observe" {
@@ -29,9 +29,13 @@ func TestLifecycleReceiptsFreezeCompleteCandidates(t *testing.T) {
 			(candidate.Persona == "dead-code" || candidate.EnforcementState == "pending_removal") {
 			deadCandidate = candidate
 		}
+		if outOfScopeCandidate.ScanCandidateID == "" && candidate.Persona == "out-of-scope" {
+			outOfScopeCandidate = candidate
+		}
 	}
-	if runtimeCandidate.ScanCandidateID == "" || deadCandidate.ScanCandidateID == "" {
-		t.Fatal("测试基线缺少 runtime/dead 候选")
+	if runtimeCandidate.ScanCandidateID == "" || deadCandidate.ScanCandidateID == "" ||
+		outOfScopeCandidate.ScanCandidateID == "" {
+		t.Fatal("测试基线缺少 runtime/dead/out-of-scope 候选")
 	}
 	digest := strings.Repeat("a", 64)
 	supplement := reviewedSupplement{
@@ -91,6 +95,17 @@ func TestLifecycleReceiptsFreezeCompleteCandidates(t *testing.T) {
 	if err := validateRemovalReceipt(retired, nil); err != nil {
 		t.Fatalf("legacy facade 退休收据被拒绝：%v", err)
 	}
+	outOfScopeRefactor := removalReceipt{
+		Candidate: outOfScopeCandidate, Kind: "out_of_scope_refactored", SourceBlobSHA256: digest,
+		ReviewedBy: "reviewer", ReviewRef: "review/ref", Rationale: "范围外发送点由上游重构收口",
+	}
+	if err := validateRemovalReceipt(outOfScopeRefactor, nil); err != nil {
+		t.Fatalf("范围外重构收据被拒绝：%v", err)
+	}
+	outOfScopeRefactor.ReplacementSinkID = "forbidden"
+	if err := validateRemovalReceipt(outOfScopeRefactor, nil); err == nil {
+		t.Fatal("范围外重构收据声明迁移目标时未被拒绝")
+	}
 }
 
 func TestBootstrapInventoryLockMatchesCurrentReviewedScanner(t *testing.T) {
@@ -107,7 +122,7 @@ func TestBootstrapInventoryLockMatchesCurrentReviewedScanner(t *testing.T) {
 		t.Fatal(err)
 	}
 	currentLockSum := sha256.Sum256(currentLockRaw)
-	if hex.EncodeToString(currentLockSum[:]) != "41eed029b9e2b718ad8df12f38dbf9545fcefbeae60cfeaee51d8537a17df9f2" {
+	if hex.EncodeToString(currentLockSum[:]) != "02050904f46954bcbda0b11f4776a6e229e3d9c89dac8cbed0f3b3365d7d559c" {
 		t.Fatal("当前 bootstrap inventory lock 摘要漂移")
 	}
 	baseline, err := os.ReadFile("../../../docs/changeset0/sink-baseline.json")

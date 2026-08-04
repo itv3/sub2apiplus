@@ -2,7 +2,6 @@ package service
 
 import (
 	"errors"
-	"fmt"
 	"reflect"
 	"sync"
 	"testing"
@@ -21,7 +20,9 @@ func init() {
 		}
 		value := reflect.ValueOf(httpUpstream)
 		if value.Kind() == reflect.Pointer && !value.IsNil() {
-			key := fmt.Sprintf("%T:%x", httpUpstream, value.Pointer())
+			// 直接以接口中的指针作为键并由 map 持有它，避免前一用例对象被回收后，
+			// Go 分配器复用相同地址，导致新 recorder 错绑到旧 Runtime。
+			key := httpUpstream
 			if cached, exists := officialEgressTestRuntimes.Load(key); exists {
 				return cached.(*OfficialEgressTransitionRuntime), nil
 			}

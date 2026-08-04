@@ -201,6 +201,13 @@ func validateRemovalReceipt(receipt removalReceipt, migrations migrationReceiptI
 			receipt.DelegationCandidateID != "" {
 			return fmt.Errorf("legacy facade 退休字段或冻结状态非法: %s", candidate.ScanCandidateID)
 		}
+	case "out_of_scope_refactored":
+		if candidate.Persona != "out-of-scope" ||
+			candidate.EnforcementState != "not_applicable" ||
+			candidate.RuntimeSinkID != "" || receipt.ReplacementSinkID != "" ||
+			receipt.MigrationReceiptDigest != "" || receipt.DelegationCandidateID != "" {
+			return fmt.Errorf("范围外重构收据字段或冻结状态非法: %s", candidate.ScanCandidateID)
+		}
 	default:
 		return fmt.Errorf("移除收据 kind 非法: %s", receipt.Kind)
 	}

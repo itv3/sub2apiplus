@@ -106,12 +106,8 @@ check-egress-spec: check-egress-bootstrap-replay check-egress-seal
 	@python3 tools/changeset6_conflict_transition.py
 	@python3 tools/maintenance_conflict_transition.py --self-test
 	@python3 tools/maintenance_conflict_transition.py
-	@# 历史快照保持冻结；当前源码必须确定性重建为本次维护 post 冲突单元台账。
-	@cd backend && d=$$(mktemp -d) && trap "rm -rf $$d" EXIT; \
-		go run ./cmd/egressconflictinventory -output $$d >/dev/null && \
-		cmp -s $$d/full.json ../docs/maintenance/post-conflict-inventory/full.json && \
-		cmp -s $$d/governable.json ../docs/maintenance/post-conflict-inventory/governable.json || \
-		{ echo "🔴 官方出站维护 post 冲突单元台账已漂移"; exit 1; }
+	@# 36 文件冲突 inventory 是旧基线下的历史收缩证据，由上述 transition 固定原文与摘要。
+	@# 当前源码闭集改由 §3.5 的 v0.1.170 路径复算覆盖，禁止再用旧基线重建并改写历史快照。
 	@cd backend && go run -mod=mod github.com/google/wire/cmd/wire diff ./cmd/server
 	@# 四类终端发送栈必须证明 Guard 接入前后发送事实与结果不变。
 	@cd backend && go test ./internal/repository \

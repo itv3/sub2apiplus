@@ -1138,11 +1138,12 @@ images、compact、alpha-search、realtime、wham、OAuth refresh 和文件上�
 保持自包含；`上游接入点`表示合并时最容易冲突的共享文件，必须逐项复核。测试文件与生产
 文件同名或在对应目录内，不逐个重复解释，但不能在合并时省略。
 
-本次来源分类使用 upstream 基线 `26d894ef4f50645a4bf1030e378ac892f17d0223`
-（2026-07-31，合并 v0.1.169 时的上游 tip）。以后合并上游时必须先记录新的明确 commit，
-再刷新本台账；不能用未更新的远端引用继续判断“上游已有”。
+当前来源分类使用 upstream 基线 `c043c24774228ba891ddf90d783aa6dc7d0855b5`
+（2026-08-02，`v0.1.170^{}`）。`upstream/main` 仍可能停留在旧提交，因此来源判定只认本节
+冻结 commit，不认本地远端跟踪引用。以后合并上游时必须先记录新的明确 commit，再刷新本
+台账；不能用未更新的远端引用继续判断“上游已有”。
 
-上一版基线 `12d811bd7`（2026-07-09，v0.1.149）长期未刷新，其间已合并 13 次上游，
+历史基线 `12d811bd7`（2026-07-09，v0.1.149）曾长期未刷新，其间合并了 13 次上游，
 后果有两处：一是把上游自身演进算成了 fork 改动，冲突面因此高估约 2.4 倍；二是
 `openai_live.go`（handler 与 service 两处）、`openai_alpha_search.go`、
 `attestation.go` 在这段时间里进入上游，却仍被标为“Fork 已有”。本地 `upstream/main`
@@ -1154,7 +1155,7 @@ ClientHello 与握手线序。判据刻意不使用通用的 `OfficialEgress` �
 Anthropic 画像，会把 §1.1 已排除的供应商路径卷进来。Anthropic、API Key mimic 及其他
 供应商路径不在本台账范围内。
 
-**同步机制。** 本台账曾长期手工维护且无同步机制，因而漏登 10 个出站定型文件，其中
+**同步机制。** 本台账曾长期手工维护且无同步机制，因而漏登过出站定型文件，其中
 包含 WS TLS 画像解析、连接池身份 key 和 OAuth count_tokens 的 TLS 复用。现由门禁
 按上述判据自动复算：
 
@@ -1162,7 +1163,8 @@ Anthropic 画像，会把 §1.1 已排除的供应商路径卷进来。Anthropic
 make check-egress-spec   # 判据自测 + 台账完整性 + 版本泄漏 + 规格引用
 ```
 
-台账检查比对应登记文件集合与本节实际登记内容；版本泄漏检查按
+台账检查同时验证完整发送面、§3.5.1 路径存在性、§3.5.2 当前基线来源分类和人工复核
+闭集计数；版本泄漏检查按
 `tools/version_leak_baseline.json` 的基线，禁止共享业务层与通用执行层新增版本标识符。
 四项均已接入 `.github/workflows/backend-ci.yml`，不再依赖人工执行。
 
@@ -1220,9 +1222,7 @@ Codex/OpenAI 配置写死版本是泄漏，Anthropic 画像的版本按 §1.1 �
 | `backend/internal/officialegress/profilecontract/profile.go` | 生产画像的版本化 header、body、transport 与端点契约模型 |
 | `backend/internal/officialegress/profilecontract/snapshotdoc.go` | 画像快照文档模型的生产只读契约 |
 | `backend/internal/officialegress/profilecontract/zerovalues.go` | 画像字段零值约束的生产校验 |
-| `backend/internal/service/official_client_release_graph_export_contract.go` | 1A ReleaseProvider 读取现有发布图的生产桥 |
-| `backend/internal/service/official_egress_profile_export_contract.go` | 1A RequestCompiler 读取现有画像的生产桥 |
-| `backend/internal/service/official_egress_1a_transition.go` | 16 条业务 route 到 2 个发布 purpose 的过渡 Provider/Compiler |
+| `backend/internal/service/official_egress_1a_transition.go` | 进程级不可变 BundleResolver、Guard、Executor、发布模式和 SinkCatalog 容器；临时 Provider/Compiler 已删除 |
 | `backend/internal/service/official_egress_1b_executor.go` | 1B 已迁移 Responses/compact sink 的版本中立 Executor 与 HTTPUpstream terminal adapter |
 | `backend/internal/service/official_egress_identity_authority.go` | 变更集 3 将账号投影、可信运行条件与 attempt-local 认证材料转换为版本中立结构化身份事实；不持有凭据或最终 Header 所有权 |
 | `backend/internal/service/official_egress_http_invocation.go` | 变更集 3 独立 HTTP sink 的统一 invocation/attempt 执行边界 |
@@ -1230,7 +1230,6 @@ Codex/OpenAI 配置写死版本是泄漏，Anthropic 画像的版本按 §1.1 �
 | `backend/internal/service/official_egress_transport_adapters.go` | HTTP、req-profile、WebSocket 三类生产 adapter 接线与 WS Acquire 令牌准入 |
 | `backend/internal/repository/official_egress_guard.go` | req-profile Guard 包装、OAuth transport 画像转换与受信物理资源接线 |
 | `backend/internal/service/openai_forward_plan.go` | Forward invocation、attempt、预算与 WS→HTTP fallback transition 模型 |
-| `backend/internal/service/openai_oauth_service.go` | OAuth refresh 的业务事实组装与统一 Executor 调用入口 |
 
 对应的 `*_test.go` 覆盖画像摘要、端点全集、字段闭集、连接生命周期、OAuth、文件上传、
 HTTP/WS、候选 trace 和配置失败关闭。新增版本时应新建版本画像及测试，不复制一套执行引擎。
@@ -1254,18 +1253,18 @@ final-wire 用统一严格比较器验证。源码绝迹门禁自带“包装函
 `上游已有`表示该文件存在于本轮记录的 upstream 基线；`Fork 已有`表示文件由本项目其他
 能力先行引入，但本次伪装实现仍修改了它。两类都不是画像私有文件，合并时必须检查。
 
-这里记录的是**初次接入的影响面和以后合并上游的风险面**，不是薄层核心的文件数量。
-相对 §3.5 记录的上游基线，以下 36 个共享生产文件存在累计变更。它们是“与上游重叠的
-冲突面”，与 52 个完整出站定型文件不是同一口径：前者证明重叠区域只减不增，后者防止
-遗漏新发送路径，任何一套都不能替代另一套。
+这里记录的是**初次接入的影响面和以后合并上游的人工复核边界**，不是薄层核心的文件数量。
+相对当前 `v0.1.170` 基线，下表为 **56 个生产路径**的闭集：其中既有上游文件，也有处在
+共享业务层、不能按画像私有文件处理的 Fork 文件。它与 52 个机器扫描的完整出站定型文件
+不是同一口径：前者约束人工合并复核，后者防止遗漏直接发送路径，任何一套都不能替代另一套。
+`tools/check_ledger_completeness.py` 会校验闭集计数、路径存在性、来源分类和必要接入点，避免
+再次出现“正文写 36、表格实际 37”、已删除文件残留或上游文件误标为 Fork 新增。
 
-变更集 5 不同步上游，分类基线固定为
-`26d894ef4f50645a4bf1030e378ac892f17d0223`；启动时观察到的远端 HEAD
-`825ca7b1fc9335f904bc077f051de815fb61e47f` 只作事实记录。按 declaration 与文件结构
-变更单元复算后，全量单元从 `260` 收缩为 `247`；raw governable 清单保持不可变的
-`103 → 90`，分类 amendment overlay 将一个漏判的 Codex Images declaration 纳入后，
-effective governable 集合为 `104 → 91`。共迁出 13 个官方出站专属单元；136 个被修改的
-既有上游 declaration 集合保持完全相同，未新增修改、删除或重命名。完整证据见
+下述变更集 5 数字是**不可改写的历史收缩证据**，不是当前 `v0.1.170` 文件数。其分类基线为
+`26d894ef4f50645a4bf1030e378ac892f17d0223`，当时的冲突文件闭集为 36 个；按 declaration
+与文件结构变更单元复算后，全量单元从 `260` 收缩为 `247`，raw governable 为
+`103 → 90`，分类 amendment overlay 后 effective governable 为 `104 → 91`。共迁出
+13 个官方出站专属单元；136 个被修改的既有上游 declaration 集合保持完全相同。完整证据见
 `docs/changeset5/conflict-inventory/`、`post-refactor-conflict-inventory/`、
 `conflict-classification-amendments.json` 与 `conflict-migration-receipt.json`。
 
@@ -1277,8 +1276,8 @@ post 对 56 份 capture 使用空允许列表严格比较。工作区证据另�
 实际变化必须唯一匹配前后文件类型、权限、存在状态和 SHA-256。
 
 **统计必须以已明确冻结的分类基线为准。** 本地 `upstream/main` 仍停在 `12d811bd7`，
-不得用它判断当前远端状态；远端观察值也不能在本变更集中临时替换分类基线。下次同步上游
-必须先建立新的明确基线和前置台账，再重新分类，不能把两个基线的差异混进本次收缩结果。
+不得用它判断 `v0.1.170` 来源；历史收缩收据也不能原位改写成新基线。下次同步上游必须先
+建立新的明确基线和前置台账，再重新分类，不能把两个基线的差异混进历史收缩结果。
 薄的是画像驱动的最终定型核心；初次改造仍须把原有多个入口、独立端点和传输旁路一次性
 接到核心。后续 Codex 版本升级若再次大面积修改这些文件，说明版本差异已经泄漏到业务层。
 
@@ -1287,18 +1286,35 @@ post 对 56 份 capture 使用空允许列表严格比较。工作区证据另�
 
 | 来源 | 文件或文件组 | 接入内容 | 合并上游时检查 |
 |---|---|---|---|
+| 上游已有 | `backend/internal/config/config.go` | active/previous、Guard 与运行时发布配置 | 默认值和环境变量兼容不能绕过 ReleaseCatalog／Guard |
 | 上游已有 | `backend/internal/handler/openai_gateway_handler.go` | 在 body 标准化前保存官方客户端运行身份 | 调用顺序是否仍早于解压和协议转换 |
 | Fork 已有 | `backend/internal/pkg/openaiidentity/codex.go` | Codex 版本和 surface 身份解析 | 新官方 UA 不能被旧正则静默接受 |
+| 上游已有 | `backend/internal/pkg/apicompat/chatcompletions_responses_bridge.go` | Chat/Responses 桥接保留 additional_tools | 上游新增工具形态不能在桥接时丢失 |
+| 上游已有 | `backend/internal/pkg/apicompat/responses_namespace.go` | namespace 摊平和回程恢复的共享语义 | 工具声明、调用名和回程恢复必须成对 |
+| 上游已有 | `backend/internal/pkg/httpclient/pool.go` | 通用 HTTP Client socket 出口挂载 Guard | 共享池不得生成无 Guard 的裸 transport |
 | 上游已有 | `backend/internal/pkg/tlsfingerprint/dialer.go` | 应用 TLS、h1 wire 与大小写适配 | transport 包装顺序和连接复用是否漂移 |
 | 上游已有 | `backend/internal/repository/req_client_pool.go` | Client 池和调用内 retry 生命周期 | 不能恢复为跨上层调用的无条件复用 |
+| 上游已有 | `backend/internal/repository/http_upstream.go` | HTTP terminal、TLS 画像、CookieJar 和连接池身份 | profile/PoolID 必须进入缓存键，Guard 必须紧邻 socket |
+| 上游已有 | `backend/internal/service/account.go` | OAuth persona 对账号级 header/base_url/TLS 开关的所有权 | 内置画像生效时账号配置只能休眠，不能覆盖官方身份 |
+| 上游已有 | `backend/internal/service/openai_gateway_service.go` | 当前 Codex 身份常量、header 白名单与运行时依赖 | 主请求和辅助请求必须共用 Release 身份源 |
 | 上游已有 | `backend/internal/service/openai_gateway_forward.go` | Compatible／Responses 到最终出站的公共路径 | 画像必须在协议适配后、发包前应用 |
 | 上游已有 | `backend/internal/service/openai_gateway_chat_completions.go` | Chat Completions 派生到 Responses | 派生语义不能绕过 body 闭集 |
 | 上游已有 | `backend/internal/service/openai_gateway_messages.go` | Anthropic 兼容入站派生到 Codex Responses | 入站协议转换不得改变同 invocation 的 Bundle 或绕过 Executor |
 | 上游已有 | `backend/internal/service/openai_gateway_passthrough.go` | 直通路径冻结 Plan 并进入统一 HTTP invocation／Executor | 直通不得恢复旧 finalizer 或绕过 Executor |
+| 上游已有 | `backend/internal/service/openai_gateway_request_body.go` | OAuth 子路由闭集、unsupported 字段和 JSON 数值保真 | 新字段不得未经画像证据直接进入 ChatGPT Codex 出口 |
 | 上游已有 | `backend/internal/service/openai_gateway_count_tokens.go` | OAuth count_tokens 复用官方 HTTP TLS 画像 | 必须与业务请求同画像，否则同账号同 IP 暴露两种 ClientHello |
+| 上游已有 | `backend/internal/service/openai_codex_identity.go` | models、usage、search、PAT 等辅助端点共用发布身份 | 辅助链不得保留旧 UA/version 或扩散端点专属 Beta 头 |
+| 上游已有 | `backend/internal/service/openai_codex_transform.go` | Compatible 输入到 Codex Responses 的语义标准化 | Lite/非 Lite、instructions、tools 和 reasoning 不能互相污染 |
+| 上游已有 | `backend/internal/service/openai_content_session_seed.go` | prompt cache／session 稳定种子边界 | 不得只按租户和模型把无关请求聚合为同一身份 |
+| Fork 已有 | `backend/internal/service/openai_cookie_jar.go` | 按账号和代理隔离 ChatGPT Cloudflare CookieJar | 代理切换后不得复用旧出口 IP 的 Cookie 状态 |
+| Fork 已有 | `backend/internal/service/openai_model_capabilities.go` | manifest 与内置快照驱动 Responses Lite | 能力刷新失败不能静默改变同版本画像语义 |
+| 上游已有 | `backend/internal/service/openai_responses_lite_tools.go` | Lite additional_tools 归一化与有序重编码 | namespace 和大整数不能在转换时丢失或改写 |
+| 上游已有 | `backend/internal/service/openai_responses_namespace.go` | 原生 namespace 保留、兼容摊平与 input 清理 | OAuth 普通 responses、compact、WS 和 API Key 必须按出口区分 |
 | Fork 已有 | `backend/internal/service/openai_apikey_mimic_profile.go` | `openAIUpstreamRequestPlan` 承载 body 契约与 turn-state | turn-state 只能由终态 Header Finalizer 写入 |
 | Fork 已有 | `backend/internal/service/openai_upstream_http.go` | API Key／custom provider HTTP 最终发送；Codex 官方上下文误入时 fail-close | API Key mimic 画像保持同源，OAuth 不得绕过 Executor |
+| 上游已有 | `backend/internal/service/openai_ws_forwarder.go` | WS turn-state／turn-metadata 事件与 header 常量 | HTTP 与 WS 的状态名和事件来源必须保持一致 |
 | 上游已有 | `backend/internal/service/openai_ws_forwarder_ingress.go` | WS 入站身份与首帧 | 官方／第三方入口不能混用未绑定上下文 |
+| 上游已有 | `backend/internal/service/openai_ws_protocol_resolver.go` | 请求级 HTTP/WS 选择和 API Key mimic 降级 | OAuth 发布默认、客户端传输和 mimic 限制的优先级不能漂移 |
 | 上游已有 | `backend/internal/service/openai_ws_forwarder_support.go` | WS 能力、预热和 fallback | 画像默认值优先于模型名猜测 |
 | 上游已有 | `backend/internal/service/openai_ws_forwarder_payload.go` | WS 握手 header 终态定型 | 握手头不得在 Finalizer 之后被补写 |
 | 上游已有 | `backend/internal/service/openai_ws_forwarder_v2.go` | WS 最终连接与帧处理 | 握手、压缩和 fallback 仍按画像 |
@@ -1317,6 +1333,7 @@ post 对 56 份 capture 使用空允许列表严格比较。工作区证据另�
 | 上游已有 | `backend/internal/handler/openai_live.go` | realtime 入口保存运行上下文 | 第一跳和 sideband 是否保持同一身份 |
 | 上游已有 | `backend/internal/repository/gateway_cache.go` | realtime 跨阶段保存画像运行身份 | cache key 和序列化必须保留影响出站的版本身份 |
 | 上游已有 | `backend/internal/repository/openai_oauth_service.go` | OAuth refresh 接入版本化端点和传输画像 | refresh 不得丢失 surface／版本 |
+| 上游已有 | `backend/internal/service/openai_oauth_service.go` | OAuth exchange/refresh 的业务事实组装与统一 Executor 调用入口 | 令牌请求、重试和 browser persona 不得混用 Codex 请求画像 |
 | 上游已有 | `backend/internal/service/openai_images_responses.go` | 模型工具和独立 images 端点分流 | hosted tool 与 namespace/imagegen 不得混淆 |
 | 上游已有 | `backend/internal/service/openai_alpha_search.go` | alpha-search 两阶段端点 | header/body 和会话状态必须走画像 |
 | 上游已有 | `backend/internal/service/openai_compact_probe.go` | compact 选择与 reason | 不得重复压缩或丢失触发原因 |
@@ -1332,7 +1349,7 @@ post 对 56 份 capture 使用空允许列表严格比较。工作区证据另�
 | 来源 | 文件或文件组 | 接入内容 | 合并上游时检查 |
 |---|---|---|---|
 | 上游已有 | `backend/internal/server/routes/gateway.go` | HTTP／WS 路由接入 | 新入口必须进入相同画像选择点 |
-| 上游已有 | `backend/cmd/server/wire_gen.go`、`backend/internal/service/wire.go` | 新组件依赖注入 | 上游重新生成 wire 后必须复核注入仍存在 |
+| 上游已有 | `backend/cmd/server/wire.go`、`backend/cmd/server/wire_gen.go`、`backend/internal/service/wire.go` | 新组件依赖注入和应用生命周期 | 上游重新生成 wire 后必须复核 Runtime、Guard 与清理函数仍存在 |
 | 上游已有 | `backend/internal/repository/wire.go` | 受信传输资源与 Guard 的 repository 接线 | 只注入窄资源，不得把画像规则下沉到 repository |
 | 上游已有 | `Dockerfile` | 候选镜像所需运行工具／身份 | 构建结果必须重新绑定 image digest |
 
@@ -1447,8 +1464,8 @@ fallback 掩盖。
   refresh 均进入统一 Executor；
 - 画像已进入内容寻址运行时目录，ReleaseCatalog 启动期预编译 active／previous；
 - attempt Body 已实现单次顶层解析、duplicate fail-close、不可变 backing 和最终单次有序输出；
-- 52 个完整出站定型文件与 36 个上游冲突文件使用两套独立口径门禁；冲突变更单元已从
-  effective `104` 收缩到 `91`，共享上游已有 declaration 集合没有扩大；
+- 52 个机器扫描的完整出站定型文件与 56 个 `v0.1.170` 人工复核路径使用两套独立口径
+  门禁；历史变更集 5 的 36 文件冲突闭集内，effective 单元已从 `104` 收缩到 `91`；
 - active／previous 共 56 份 final-wire capture 使用空允许列表严格比较；
 - 2026-08-04 已在 DMIT 使用 OAuth 与 API Key 连续真实请求通过实机验收。
 
@@ -1681,7 +1698,7 @@ PostgreSQL、Redis、keeper、环境文件和数据卷。标准流程为：
 | `docs/EVIDENCE_INDEX.md` | 从本文件和证据映射生成的审核索引 |
 | `docs/maintenance/official-egress-consolidation-retirement.json` | 单文档合并、旧 Dispatcher 退休、facade／源码摘要过渡和删除事实 |
 | `docs/maintenance/bootstrap-inventory-lock.json` | 旧 facade 退休后当前 scanner 算法的复审锁；历史变更集 5 锁保持不变 |
-| `docs/maintenance/removal-receipts.json` | 将四条历史 `legacy_delegated` facade 收据单调提升为已退休状态 |
+| `docs/maintenance/removal-receipts.json` | 将四条历史 `legacy_delegated` facade 收据提升为已退休状态，并冻结 v0.1.170 的三条范围外 SMTP 重构移除 |
 | `docs/maintenance/post-conflict-inventory/` | 记录本次维护后的冲突面清单、生成收据，以及相对变更集 6 冻结清单的精确过渡 |
 | `docs/maintenance/workspace-transition/` | 从执行前基准 commit 独立复算本次完整变更集，防止新增、修改或删除文件漏出审核范围 |
 | `tools/spec_source_deps/` | 第二部分 L2 引用的锁定依赖 |

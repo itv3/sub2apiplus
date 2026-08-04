@@ -22,6 +22,7 @@ import hashlib
 import json
 import pathlib
 import re
+import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -31,6 +32,32 @@ INVENTORY = ROOT / "docs" / "changeset5" / "egress-surface-inventory.json"
 CHANGESET6_TRANSITION = ROOT / "docs" / "changeset6" / "egress-surface-transition.json"
 MAINTENANCE_RETIREMENT = ROOT / "docs" / "maintenance" / "official-egress-consolidation-retirement.json"
 MAINTENANCE_RETIREMENT_SHA256 = "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36"
+CURRENT_UPSTREAM_BASE = "c043c24774228ba891ddf90d783aa6dc7d0855b5"
+CURRENT_REVIEW_PATH_COUNT = 56
+
+# 这些文件直接改变 Codex body、namespace、能力、身份、连接或 Guard，但不一定
+# 命中 SURFACE_RE。单独冻结必要集合，防止人工表格在保持总数不变时用无关路径替换。
+REQUIRED_REVIEW_TOUCHPOINTS = {
+    "backend/cmd/server/wire.go",
+    "backend/internal/config/config.go",
+    "backend/internal/pkg/apicompat/chatcompletions_responses_bridge.go",
+    "backend/internal/pkg/apicompat/responses_namespace.go",
+    "backend/internal/pkg/httpclient/pool.go",
+    "backend/internal/repository/http_upstream.go",
+    "backend/internal/service/account.go",
+    "backend/internal/service/openai_codex_identity.go",
+    "backend/internal/service/openai_codex_transform.go",
+    "backend/internal/service/openai_content_session_seed.go",
+    "backend/internal/service/openai_cookie_jar.go",
+    "backend/internal/service/openai_gateway_request_body.go",
+    "backend/internal/service/openai_gateway_service.go",
+    "backend/internal/service/openai_model_capabilities.go",
+    "backend/internal/service/openai_oauth_service.go",
+    "backend/internal/service/openai_responses_lite_tools.go",
+    "backend/internal/service/openai_responses_namespace.go",
+    "backend/internal/service/openai_ws_forwarder.go",
+    "backend/internal/service/openai_ws_protocol_resolver.go",
+}
 
 # Codex/OpenAI 出站定型专属符号。命中即表示该文件参与官方出站形态的产生，
 # 无论它是否携带版本字面量——WS 传输、连接池与握手定型点都不含版本号。
@@ -80,6 +107,111 @@ def ledger_text() -> str:
         raise SystemExit("🔴 未找到 §3.5 源码改动台账")
     end = text.find("\n## ", start + 1)
     return text[start:end if end > 0 else len(text)]
+
+
+def ledger_subsection(ledger: str, heading: str, next_heading: str) -> str:
+    start = ledger.find(heading)
+    if start < 0:
+        raise RuntimeError(f"未找到台账小节：{heading}")
+    end = ledger.find(next_heading, start + len(heading))
+    if end < 0:
+        raise RuntimeError(f"未找到台账小节结束标记：{next_heading}")
+    return ledger[start:end]
+
+
+def git_path_exists(commit: str, path: str) -> bool:
+    result = subprocess.run(
+        ["git", "cat-file", "-e", f"{commit}:{path}"],
+        cwd=ROOT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def git_path_differs(commit: str, path: str) -> bool:
+    result = subprocess.run(
+        ["git", "diff", "--quiet", commit, "--", path],
+        cwd=ROOT,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    return result.returncode == 1
+
+
+def table_paths(section: str, sources: set[str]) -> dict[str, str]:
+    """读取来源表第二列中的生产路径，并拒绝重复或无法识别的来源。"""
+
+    paths: dict[str, str] = {}
+    for line in section.splitlines():
+        if not line.startswith("|"):
+            continue
+        cells = [cell.strip() for cell in line.split("|")]
+        if len(cells) < 4 or cells[1] not in sources:
+            continue
+        for path in re.findall(r"`([^`]+)`", cells[2]):
+            if not (path == "Dockerfile" or path.startswith("backend/")):
+                continue
+            if path in paths:
+                raise RuntimeError(f"§3.5 台账路径重复：{path}")
+            paths[path] = cells[1]
+    return paths
+
+
+def fork_table_paths(section: str) -> set[str]:
+    """读取 §3.5.1 第一列中的 Fork 文件或目录。"""
+
+    paths: set[str] = set()
+    for line in section.splitlines():
+        if not line.startswith("| `"):
+            continue
+        cells = [cell.strip() for cell in line.split("|")]
+        if len(cells) < 3:
+            continue
+        matches = re.findall(r"`([^`]+)`", cells[1])
+        for path in matches:
+            if not path.startswith("backend/"):
+                continue
+            if path in paths:
+                raise RuntimeError(f"§3.5.1 台账路径重复：{path}")
+            paths.add(path)
+    return paths
+
+
+def validate_source_tables(ledger: str) -> None:
+    """校验 Fork 私有表和当前 upstream 人工复核闭集。"""
+
+    fork_section = ledger_subsection(ledger, "### 3.5.1", "### 3.5.2")
+    fork_rows = fork_table_paths(fork_section)
+    for path in fork_rows:
+        if not (ROOT / path).exists():
+            raise RuntimeError(f"§3.5.1 登记路径不存在：{path}")
+        if git_path_exists(CURRENT_UPSTREAM_BASE, path):
+            raise RuntimeError(f"§3.5.1 把 upstream 已有路径误标为 Fork 新增：{path}")
+
+    review_section = ledger_subsection(ledger, "### 3.5.2", "### 3.5.3")
+    review_rows = table_paths(review_section, {"上游已有", "Fork 已有"})
+    if len(review_rows) != CURRENT_REVIEW_PATH_COUNT:
+        raise RuntimeError(
+            f"§3.5.2 当前人工复核闭集应为 {CURRENT_REVIEW_PATH_COUNT} 个生产路径，"
+            f"实际为 {len(review_rows)} 个"
+        )
+    missing_required = sorted(REQUIRED_REVIEW_TOUCHPOINTS - set(review_rows))
+    if missing_required:
+        raise RuntimeError(f"§3.5.2 缺少必要接入点：{missing_required}")
+    for path, source in review_rows.items():
+        if not (ROOT / path).is_file():
+            raise RuntimeError(f"§3.5.2 登记路径不是普通文件：{path}")
+        upstream_exists = git_path_exists(CURRENT_UPSTREAM_BASE, path)
+        expected_source = "上游已有" if upstream_exists else "Fork 已有"
+        if source != expected_source:
+            raise RuntimeError(
+                f"§3.5.2 来源分类错误：{path}，登记={source}，实际={expected_source}"
+            )
+        if not git_path_differs(CURRENT_UPSTREAM_BASE, path):
+            raise RuntimeError(f"§3.5.2 路径相对当前 upstream 基线没有差异：{path}")
 
 
 def sha256(raw: bytes) -> str:
@@ -153,6 +285,12 @@ def main() -> int:
 
     ledger = ledger_text()
     surface = scan_surface_files()
+
+    try:
+        validate_source_tables(ledger)
+    except RuntimeError as exc:
+        print(f"🔴 {exc}", file=sys.stderr)
+        return 1
 
     if args.write_inventory:
         authoritative = [rel for rel in surface if rel not in SCOPE_EXCLUSIONS]
@@ -266,6 +404,7 @@ def main() -> int:
     print(
         f"✅ §3.5 台账完整：变更集 5 冻结 52 面 + 变更集 6 增量 {len(additions)} 面"
         f" - 维护退休 {len(removal_paths)} 面 = {covered} 个出站定型文件全部登记"
+        f"；v0.1.170 人工复核闭集 {CURRENT_REVIEW_PATH_COUNT} 个生产路径来源正确"
         + (f"，另有 {len(SCOPE_EXCLUSIONS)} 个工具自引用排除" if SCOPE_EXCLUSIONS else "")
     )
     return 0

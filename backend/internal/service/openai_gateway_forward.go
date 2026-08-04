@@ -20,6 +20,7 @@ import (
 // Forward forwards request to OpenAI API
 func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
 	clearGrokResponsesClientToolMapping(c)
+	clearOpenAIResponsesNamespaceNames(c)
 	startTime := time.Now()
 	ctx = WithOpenAIAPIKeyMimicRequestContext(ctx, c)
 	// 固定渠道映射后的请求级 canonical body；账号 normalize/strip 不得改写跨 failover hint。
@@ -114,9 +115,10 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		}
 	}
 	useResponsesLite := s.normalizeOpenAIResponsesLiteIngressHeader(c, account, body)
+	compactPath := isOpenAIResponsesCompactPath(c)
 	// namespace 冲突必须在 Lite 工具归一化之前校验；非 Lite HTTP 再执行摊平。
 	// 否则转换可能先丢失命名空间结构，让冲突请求绕过 400 校验。
-	if shouldFlattenOpenAIResponsesNamespaces(account, wsDecision.Transport, passthroughEnabled) {
+	if shouldFlattenOpenAIResponsesNamespaces(account, wsDecision.Transport, passthroughEnabled, compactPath) {
 		if useResponsesLite {
 			err = validateOpenAIResponsesNamespaces(body)
 		} else {
@@ -150,9 +152,18 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	officialOpenAIHTTPEnabled := officialEgressEnabled &&
 		account.Platform == PlatformOpenAI &&
 		account.Type == AccountTypeOAuth &&
-		wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2
+		// passthrough 分支当前固定走 HTTP，不能因为版本画像默认选择 WSv2 就跳过
+		// HTTP Executor；否则已定型官方身份会误入通用 HTTP 入口并被 fail-close。
+		(passthroughEnabled || wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2)
 	if shouldStripOpenAIResponsesInputNamespaces(account, wsDecision.Transport, passthroughEnabled) {
-		body, err = stripOpenAIResponsesInputNamespaces(body)
+		// 精确官方 0.145.0 入口的契约没有 input namespace；若出现只能视为
+		// 画像闭集外残留并清理。派生入口则按 v0.1.170 的上游修复保留
+		// OAuth 普通 /responses 工具调用 namespace，避免上游报 Missing namespace。
+		keepToolCallNamespaces := !isInboundOpenAIOfficialClient(c) &&
+			shouldKeepOpenAIResponsesToolCallNamespaces(
+				account, wsDecision.Transport, passthroughEnabled, compactPath,
+			)
+		body, err = stripOpenAIResponsesInputNamespaces(body, keepToolCallNamespaces)
 		if err != nil {
 			setOpsUpstreamError(c, http.StatusBadRequest, err.Error(), "")
 			c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
@@ -366,7 +377,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		markPatchSet("model", billingModel)
 	}
 	upstreamModel := billingModel
-	isCompactRequest := isOpenAIResponsesCompactPath(c)
+	isCompactRequest := compactPath
 	compactMapped := false
 	if isCompactRequest {
 		compactMappedModel := resolveOpenAICompactForwardModel(account, billingModel)
