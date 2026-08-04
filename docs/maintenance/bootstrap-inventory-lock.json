@@ -1,0 +1,11 @@
+{
+  "schema_version": 1,
+  "bootstrap_commit": "38a9929eac35a39c86de2f27de8f7a805d7dae52",
+  "bootstrap_tree": "a8c3dee18a01a6138bfcea60860bb5ad11548c3a",
+  "inventory_sha256": "46593243b1bd315eafcb54335502a1f46bc2b8bfc0ecc2d3146da4e7087bfaeb",
+  "scanner_algorithm_sha256": "fa350bbff954abba67b6885944a4227ecf66d0487a75745c4f9d02115f0865e0",
+  "reconstructed_at": "2026-08-04T00:00:00+08:00",
+  "reviewed_by": "official-egress-consolidation-retirement",
+  "review_ref": "docs/maintenance/official-egress-consolidation-retirement.json",
+  "rationale": "保持 bootstrap commit、tree 与 inventory 原文不变；仅从当前 scanner 精确闭集中删除已经退休且生产定义为零的 LegacyCompiledDispatcher facade、终端展开和历史 OAuth legacy facade。"
+}

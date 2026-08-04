@@ -17,6 +17,9 @@ BASELINE_PATH = ROOT / "docs" / "changeset6" / "baseline" / "workspace-manifest.
 TRANSITION_DIR = ROOT / "docs" / "changeset6" / "workspace-transition"
 MANIFEST_PATH = TRANSITION_DIR / "manifest.json"
 RECEIPT_PATH = TRANSITION_DIR / "receipt.json"
+FROZEN_BASELINE_SHA256 = "c8c6e6452390abd076ae771b17b11bf079a2a3c45359707cf6ac8fb11ed5c760"
+FROZEN_MANIFEST_SHA256 = "4835f90e4ee0d45f92de6cf2bf6866310960a48e67127bfc94f1ad6d2076c7a0"
+FROZEN_RECEIPT_SHA256 = "f0494d0c016aaaa2a0b49ef7067e47e3a5ed03ae241c9bee174bd266c6592046"
 EXCLUDED_PATHS = {
     MANIFEST_PATH.relative_to(ROOT).as_posix(),
     RECEIPT_PATH.relative_to(ROOT).as_posix(),
@@ -299,6 +302,30 @@ def validate_transition() -> None:
     )
 
 
+def validate_frozen_transition() -> None:
+    """只验证已接受变更集 6 的历史证据原文，不拿它约束后续工作区。"""
+
+    baseline_raw = BASELINE_PATH.read_bytes()
+    manifest_raw = MANIFEST_PATH.read_bytes()
+    receipt_raw = RECEIPT_PATH.read_bytes()
+    if sha256(baseline_raw) != FROZEN_BASELINE_SHA256:
+        raise RuntimeError("变更集 6 工作区基线历史原文漂移")
+    if sha256(manifest_raw) != FROZEN_MANIFEST_SHA256:
+        raise RuntimeError("变更集 6 工作区 transition 历史原文漂移")
+    if sha256(receipt_raw) != FROZEN_RECEIPT_SHA256:
+        raise RuntimeError("变更集 6 工作区 transition receipt 历史原文漂移")
+    manifest = json.loads(manifest_raw)
+    receipt = json.loads(receipt_raw)
+    if (
+        manifest.get("schema_version") != "changeset6-workspace-transition/v1"
+        or receipt.get("schema_version") != "changeset6-workspace-transition-receipt/v1"
+        or receipt.get("manifest_sha256") != FROZEN_MANIFEST_SHA256
+        or receipt.get("baseline_manifest_sha256") != FROZEN_BASELINE_SHA256
+    ):
+        raise RuntimeError("变更集 6 工作区 transition 历史元数据非法")
+    print("变更集 6 工作区 transition 历史原文与摘要链有效")
+
+
 def self_test() -> None:
     present = {
         "existence": "present",
@@ -328,11 +355,15 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write-transition", action="store_true", help="确定性生成最终 transition")
     parser.add_argument("--self-test", action="store_true", help="运行 transition 判据 mutation 自测")
+    parser.add_argument("--frozen-only", action="store_true", help="只验证已接受历史 transition 的原文摘要")
     args = parser.parse_args()
     if args.write_transition:
         write_transition()
     if args.self_test:
         self_test()
+        return 0
+    if args.frozen_only:
+        validate_frozen_transition()
         return 0
     validate_transition()
     return 0

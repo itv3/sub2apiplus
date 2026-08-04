@@ -138,8 +138,8 @@ func (g *Guard) Recorder() GuardRecorder {
 }
 
 // ProcessSinkCatalog 返回 Guard 实际执行的同一份进程级 Catalog 快照。
-// BundleResolver、Executor 与 LegacyCompiledDispatcher 必须共享该快照，避免
-// runtime control 应用后各组件观察到不同 enforcement state。
+// BundleResolver 与 Executor 必须共享该快照，避免 runtime control 应用后各组件观察到
+// 不同 enforcement state。
 func (g *Guard) ProcessSinkCatalog() SinkCatalog {
 	if g == nil {
 		return SinkCatalog{}

@@ -925,7 +925,7 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 	resp, err := officialEgress.ExecuteCodexHTTP(reqCtx, OfficialCodexHTTPExecution{
 		SinkID: officialEgressSinkUsageProbe, EndpointID: officialCodexEndpointResponsesHTTP,
 		Account: account, ProxyURL: proxyURL, Request: req,
-		PolicyID: "changeset1b.usage.responses_fallback.v1", PolicySource: "docs/1.md#changeset-1b",
+		PolicyID: "changeset1b.usage.responses_fallback.v1", PolicySource: "docs/CODEX_CLI_0145_EGRESS_SPEC.md#policy-changeset-1b",
 		MinimumInterval: openAIProbeCacheTTL, ConcurrencyLimit: 1, HasBillingSideEffect: true,
 	})
 	if err != nil {

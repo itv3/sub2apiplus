@@ -16,6 +16,7 @@ var changeset5ExtinctLegacySymbols = map[string]bool{
 	"officialCodex0145FinalizeEndpointJSONBody":       true,
 	"officialCodex0145FinalizeEndpointHeaders":        true,
 	"finalizeOpenAIOfficialEgressWSHandshakeHeaders":  true,
+	"DispatchCodexLegacyHTTP":                         true,
 }
 
 // TestChangeset5LegacyAttachFinalizerDefinitionsAndCallsAreExtinct 同时约束定义和

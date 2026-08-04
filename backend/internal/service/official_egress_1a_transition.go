@@ -10,8 +10,6 @@ import (
 // 名称暂为兼容既有 service 字段；1A 的临时 provider/compiler 适配器已删除。
 type OfficialEgressTransitionRuntime struct {
 	BundleResolver   *officialegress.BundleResolver
-	RequestCompiler  *officialegress.Compiler
-	LegacyDispatcher *officialegress.LegacyCompiledDispatcher
 	Guard            *officialegress.Guard
 	CodexExecutor    *officialegress.Executor
 	webSocketPort    *officialCodexWebSocketPort
@@ -30,8 +28,6 @@ func (r *OfficialEgressTransitionRuntime) BindCodexWebSocketAcquirer(
 
 func NewOfficialEgressTransitionRuntime(
 	resolver *officialegress.BundleResolver,
-	compiler *officialegress.Compiler,
-	dispatcher *officialegress.LegacyCompiledDispatcher,
 	guard *officialegress.Guard,
 	modes ...officialegress.ReleaseMode,
 ) *OfficialEgressTransitionRuntime {
@@ -40,8 +36,7 @@ func NewOfficialEgressTransitionRuntime(
 		mode = modes[0]
 	}
 	return &OfficialEgressTransitionRuntime{
-		BundleResolver: resolver, RequestCompiler: compiler,
-		LegacyDispatcher: dispatcher, Guard: guard, CodexReleaseMode: mode,
+		BundleResolver: resolver, Guard: guard, CodexReleaseMode: mode,
 		ProcessSinks: guard.ProcessSinkCatalog(),
 	}
 }

@@ -3,12 +3,12 @@
 EGRESS_BOOTSTRAP_COMMIT := 38a9929eac35a39c86de2f27de8f7a805d7dae52
 EGRESS_BOOTSTRAP_BASELINE := $(CURDIR)/docs/changeset0/sink-baseline.json
 EGRESS_BOOTSTRAP_SUPPLEMENTS := $(CURDIR)/docs/changeset1a/pre-bootstrap-supplements.json
-EGRESS_REMOVAL_RECEIPTS := $(CURDIR)/docs/changeset2/removal-receipts.json,$(CURDIR)/docs/changeset3/removal-receipts.json,$(CURDIR)/docs/changeset5/removal-receipts.json
+EGRESS_REMOVAL_RECEIPTS := $(CURDIR)/docs/changeset2/removal-receipts.json,$(CURDIR)/docs/changeset3/removal-receipts.json,$(CURDIR)/docs/changeset5/removal-receipts.json,$(CURDIR)/docs/maintenance/removal-receipts.json
 EGRESS_MIGRATION_RECEIPTS := $(CURDIR)/docs/changeset1a/migration-receipts.json,$(CURDIR)/docs/changeset3/migration-receipts.json
 EGRESS_BOOTSTRAP_REMOVAL_RECEIPTS := $(CURDIR)/docs/changeset2/removal-receipts.json
 EGRESS_BOOTSTRAP_MIGRATION_RECEIPTS := $(CURDIR)/docs/changeset1a/migration-receipts.json
 EGRESS_CATALOG_AMENDMENTS := $(CURDIR)/docs/changeset1a/catalog-amendments.json
-EGRESS_BOOTSTRAP_INVENTORY_LOCK := $(CURDIR)/docs/changeset5/bootstrap-inventory-lock.json
+EGRESS_BOOTSTRAP_INVENTORY_LOCK := $(CURDIR)/docs/maintenance/bootstrap-inventory-lock.json
 EGRESS_SCANNER_SOURCE_ROOT := $(CURDIR)/backend/cmd/egressscan
 EGRESS_LEGACY_BASELINE := $(CURDIR)/docs/changeset1a/legacy-baseline.json
 EGRESS_LEGACY_CEILING := $(CURDIR)/docs/changeset1a/legacy-ceiling.json
@@ -54,7 +54,9 @@ check-egress-spec: check-egress-bootstrap-replay check-egress-seal
 	@python3 tools/check_changeset5_0145_symbols.py --self-test
 	@python3 tools/check_changeset5_0145_symbols.py
 	@python3 tools/changeset6_workspace_transition.py --self-test
-	@python3 tools/changeset6_workspace_transition.py
+	@python3 tools/changeset6_workspace_transition.py --frozen-only
+	@python3 tools/maintenance_workspace_transition.py --self-test
+	@python3 tools/maintenance_workspace_transition.py
 	@python3 tools/changeset6_benchmark_evidence.py --self-test
 	@python3 tools/changeset6_benchmark_evidence.py
 	@python3 tools/check_ledger_completeness.py
@@ -102,12 +104,14 @@ check-egress-spec: check-egress-bootstrap-replay check-egress-seal
 		./cmd/egressscan/ -count=1
 	@python3 tools/changeset6_conflict_transition.py --self-test
 	@python3 tools/changeset6_conflict_transition.py
-	@# 变更集 5 快照保持冻结；当前源码必须确定性重建为变更集 6 自有 post 冲突单元台账。
+	@python3 tools/maintenance_conflict_transition.py --self-test
+	@python3 tools/maintenance_conflict_transition.py
+	@# 历史快照保持冻结；当前源码必须确定性重建为本次维护 post 冲突单元台账。
 	@cd backend && d=$$(mktemp -d) && trap "rm -rf $$d" EXIT; \
 		go run ./cmd/egressconflictinventory -output $$d >/dev/null && \
-		cmp -s $$d/full.json ../docs/changeset6/post-conflict-inventory/full.json && \
-		cmp -s $$d/governable.json ../docs/changeset6/post-conflict-inventory/governable.json || \
-		{ echo "🔴 变更集 6 post 冲突单元台账已漂移"; exit 1; }
+		cmp -s $$d/full.json ../docs/maintenance/post-conflict-inventory/full.json && \
+		cmp -s $$d/governable.json ../docs/maintenance/post-conflict-inventory/governable.json || \
+		{ echo "🔴 官方出站维护 post 冲突单元台账已漂移"; exit 1; }
 	@cd backend && go run -mod=mod github.com/google/wire/cmd/wire diff ./cmd/server
 	@# 四类终端发送栈必须证明 Guard 接入前后发送事实与结果不变。
 	@cd backend && go test ./internal/repository \

@@ -152,14 +152,8 @@ func newOfficialEgressTransitionRuntimeWithExecutor(
 		return nil, fmt.Errorf("构造正式 BundleResolver：%w", err)
 	}
 	compiler := officialegress.NewCompiler()
-	dispatcher, err := officialegress.NewLegacyCompiledDispatcher(
-		compiler, processSinks,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("构造 LegacyCompiledDispatcher：%w", err)
-	}
 	runtimeState := NewOfficialEgressTransitionRuntime(
-		resolver, compiler, dispatcher, guard, releaseMode,
+		resolver, guard, releaseMode,
 	)
 	port := &officialCodexHTTPUpstreamPort{httpUpstream: httpUpstream}
 	httpAdapter, err := officialegress.NewHTTPUpstreamTransportAdapter(port)

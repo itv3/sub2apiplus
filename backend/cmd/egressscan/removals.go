@@ -127,7 +127,9 @@ func loadRemovalManifest(path string, migrations migrationReceiptIndex) (removal
 			}
 			candidateID := receipt.Candidate.ScanCandidateID
 			if previous, duplicate := byCandidate[candidateID]; duplicate {
-				if previous.Kind != "legacy_delegated" || receipt.Kind != "migrated" ||
+				validPromotion := previous.Kind == "legacy_delegated" &&
+					(receipt.Kind == "migrated" || receipt.Kind == "legacy_retired")
+				if !validPromotion ||
 					!sameFrozenCandidate(previous.Candidate, receipt.Candidate) {
 					return removalManifest{}, fmt.Errorf("移除收据重复或非法状态提升: %s", candidateID)
 				}
@@ -192,6 +194,13 @@ func validateRemovalReceipt(receipt removalReceipt, migrations migrationReceiptI
 			strings.TrimSpace(receipt.DelegationCandidateID) == "" || receipt.MigrationReceiptDigest != "" {
 			return fmt.Errorf("legacy delegation 字段或冻结状态非法: %s", candidate.ScanCandidateID)
 		}
+	case "legacy_retired":
+		if !candidate.IsFacade || candidate.RuntimeSinkID == "" ||
+			candidate.EnforcementState != "legacy_observe" ||
+			receipt.ReplacementSinkID != "" || receipt.MigrationReceiptDigest != "" ||
+			receipt.DelegationCandidateID != "" {
+			return fmt.Errorf("legacy facade 退休字段或冻结状态非法: %s", candidate.ScanCandidateID)
+		}
 	default:
 		return fmt.Errorf("移除收据 kind 非法: %s", receipt.Kind)
 	}
@@ -221,7 +230,7 @@ func validateLegacyDelegationTarget(receipt removalReceipt, current SinkRecord) 
 	if current.SinkKind != "facade_legacy_compiled_http" &&
 		current.SinkKind != "facade_legacy_compiled_ws" &&
 		current.SinkKind != "facade_legacy_compiled_req_profile" {
-		return fmt.Errorf("delegation target 未进入受审 LegacyCompiledDispatcher")
+		return fmt.Errorf("delegation target 未进入受审 legacy delegation 入口")
 	}
 	return nil
 }

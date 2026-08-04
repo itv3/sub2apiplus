@@ -342,7 +342,7 @@ func changeset3CaptureProductionRoute(
 		t.Fatal(err)
 	}
 	runtimeState := NewOfficialEgressTransitionRuntime(
-		resolver, officialegress.NewCompiler(), nil, guard, mode,
+		resolver, guard, mode,
 	)
 	runtimeState.CodexExecutor = executor
 	account := changeset3ProductionAccount(routeIndex)

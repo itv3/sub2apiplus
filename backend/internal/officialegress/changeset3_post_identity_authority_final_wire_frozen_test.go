@@ -16,6 +16,7 @@ const (
 	changeset5SourceTransitionSHA256 = "e022d78b3af69a937a60a388009fa4ecafa8042410cf5602f32ecff7c29b176d"
 	changeset6SourceTransitionSHA256 = "cdd6eab06acac15923e17562525eed974ee12e0e5cf3421e1303d01ecba549d7"
 	changeset6ReviewTransitionSHA256 = "75044063ea497e07ad9818d0061f3f7fe4d7a7fa350fa4f6c554dfc108322fe2"
+	maintenanceRetirementSHA256      = "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36"
 )
 
 func TestChangeset3PostIdentityAuthorityFinalWireIsFrozen(t *testing.T) {
@@ -43,6 +44,7 @@ func TestChangeset3PostIdentityAuthorityFinalWireIsFrozen(t *testing.T) {
 	changeset5Transition := loadChangeset5SourceTransition(t)
 	changeset6Transition := loadChangeset6SourceTransition(t)
 	changeset6ReviewTransition := loadChangeset6ReviewSourceTransition(t)
+	maintenanceTransition := loadMaintenanceFinalWireSourceTransition(t)
 	for _, source := range manifest.SourceMaterial {
 		sourcePath := source.Path
 		if !filepath.IsAbs(sourcePath) {
@@ -82,14 +84,21 @@ func TestChangeset3PostIdentityAuthorityFinalWireIsFrozen(t *testing.T) {
 			expected = approved.ToSHA256
 			delete(changeset6ReviewTransition, source.Path)
 		}
+		if approved, ok := maintenanceTransition[source.Path]; ok {
+			if approved.FromSHA256 != expected || strings.TrimSpace(approved.Reason) == "" {
+				t.Fatalf("维护退休 source transition 未承接上一层摘要：%s", source.Path)
+			}
+			expected = approved.ToSHA256
+			delete(maintenanceTransition, source.Path)
+		}
 		if got != expected {
 			t.Fatalf("post-refactor 捕获源码已漂移：%s got=%s want=%s", source.Path, got, expected)
 		}
 	}
 	if len(changeset4Transition) != 0 || len(changeset5Transition) != 0 || len(changeset6Transition) != 0 ||
-		len(changeset6ReviewTransition) != 0 {
-		t.Fatalf("source transition 含未发生的漂移：changeset4=%v changeset5=%v changeset6=%v changeset6_review=%v",
-			changeset4Transition, changeset5Transition, changeset6Transition, changeset6ReviewTransition)
+		len(changeset6ReviewTransition) != 0 || len(maintenanceTransition) != 0 {
+		t.Fatalf("source transition 含未发生的漂移：changeset4=%v changeset5=%v changeset6=%v changeset6_review=%v maintenance=%v",
+			changeset4Transition, changeset5Transition, changeset6Transition, changeset6ReviewTransition, maintenanceTransition)
 	}
 	modes := map[ReleaseMode]int{}
 	wsCaptureCount := 0
@@ -368,4 +377,32 @@ func loadChangeset6ReviewSourceTransition(t *testing.T) map[string]changeset4Sou
 		result[entry.Path] = entry
 	}
 	return result
+}
+
+func loadMaintenanceFinalWireSourceTransition(t *testing.T) map[string]changeset4SourceTransitionEntry {
+	t.Helper()
+	receiptPath := "../../../docs/maintenance/official-egress-consolidation-retirement.json"
+	raw, err := os.ReadFile(receiptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := changeset3ReferenceSHA256(raw); got != maintenanceRetirementSHA256 {
+		t.Fatalf("维护退休收据摘要漂移：got=%s want=%s", got, maintenanceRetirementSHA256)
+	}
+	var receipt struct {
+		SchemaVersion             string                          `json:"schema_version"`
+		BaseCommit                string                          `json:"base_commit"`
+		FinalWireSourceTransition changeset4SourceTransitionEntry `json:"final_wire_source_transition"`
+	}
+	if err := json.Unmarshal(raw, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	entry := receipt.FinalWireSourceTransition
+	if receipt.SchemaVersion != "official-egress-consolidation-retirement/v1" ||
+		receipt.BaseCommit != "ba485663c3bc0af6802cf6dfc4e19139ef00e371" ||
+		strings.TrimSpace(entry.Path) == "" || strings.TrimSpace(entry.FromSHA256) == "" ||
+		strings.TrimSpace(entry.ToSHA256) == "" || strings.TrimSpace(entry.Reason) == "" {
+		t.Fatalf("维护退休 source transition 非法：%+v", receipt)
+	}
+	return map[string]changeset4SourceTransitionEntry{entry.Path: entry}
 }

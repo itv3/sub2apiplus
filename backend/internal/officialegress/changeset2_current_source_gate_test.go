@@ -2,6 +2,7 @@ package officialegress
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -65,7 +66,6 @@ func TestChangeset2CurrentSourceHasNoActiveSynonyms(t *testing.T) {
 		}
 	}
 	legacyFiles := []string{
-		"../service/official_egress_legacy_dispatch.go",
 		"../repository/openai_oauth_service.go",
 	}
 	for _, file := range legacyFiles {
@@ -76,6 +76,41 @@ func TestChangeset2CurrentSourceHasNoActiveSynonyms(t *testing.T) {
 		for _, token := range []string{"TakeHTTPRequest(", ".Transport()", ".PoolDigest()"} {
 			if strings.Contains(string(raw), token) {
 				t.Fatalf("legacy 生产源码 %s 重新拆解 capability：%q", file, token)
+			}
+		}
+	}
+	for _, file := range []string{
+		"legacy_dispatcher.go",
+		"../service/official_egress_legacy_dispatch.go",
+	} {
+		if _, err := os.Stat(file); !os.IsNotExist(err) {
+			t.Fatalf("已退休 legacy 生产文件重新出现：%s err=%v", file, err)
+		}
+	}
+	forbiddenLegacySymbols := []string{
+		"LegacyCompiledDispatcher",
+		"LegacyCompiledRequest",
+		"DispatchCodexLegacyHTTP",
+		"OfficialCodexLegacyHTTPDispatch",
+		"officialCodexLegacyHTTPResource",
+	}
+	for _, pattern := range []string{"*.go", "../service/*.go"} {
+		files, err := filepath.Glob(pattern)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, file := range files {
+			if strings.HasSuffix(file, "_test.go") {
+				continue
+			}
+			raw, err := os.ReadFile(file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, symbol := range forbiddenLegacySymbols {
+				if strings.Contains(string(raw), symbol) {
+					t.Fatalf("已退休 legacy 符号重新进入生产源码：file=%s symbol=%s", file, symbol)
+				}
 			}
 		}
 	}

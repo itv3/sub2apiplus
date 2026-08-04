@@ -82,23 +82,40 @@ func TestLifecycleReceiptsFreezeCompleteCandidates(t *testing.T) {
 	if err := validateRemovalReceipt(delegated, nil); err != nil {
 		t.Fatalf("legacy delegation 收据被拒绝：%v", err)
 	}
+	retired := delegated
+	retired.Candidate.IsFacade = true
+	retired.Kind = "legacy_retired"
+	retired.ReplacementSinkID = ""
+	retired.DelegationCandidateID = ""
+	retired.Rationale = "旧 facade 已由 fail-close 与 Executor 绝迹门禁替代"
+	if err := validateRemovalReceipt(retired, nil); err != nil {
+		t.Fatalf("legacy facade 退休收据被拒绝：%v", err)
+	}
 }
 
 func TestBootstrapInventoryLockMatchesCurrentReviewedScanner(t *testing.T) {
-	lockRaw, err := os.ReadFile("../../../docs/changeset5/bootstrap-inventory-lock.json")
+	historicalLockRaw, err := os.ReadFile("../../../docs/changeset5/bootstrap-inventory-lock.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	lockSum := sha256.Sum256(lockRaw)
-	if hex.EncodeToString(lockSum[:]) != "7c1f89db30fc4164c5b6a186a338242433416d97695885ee62c2215e1d61c877" {
+	historicalLockSum := sha256.Sum256(historicalLockRaw)
+	if hex.EncodeToString(historicalLockSum[:]) != "7c1f89db30fc4164c5b6a186a338242433416d97695885ee62c2215e1d61c877" {
 		t.Fatal("变更集 5 bootstrap inventory lock 摘要漂移")
+	}
+	currentLockRaw, err := os.ReadFile("../../../docs/maintenance/bootstrap-inventory-lock.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentLockSum := sha256.Sum256(currentLockRaw)
+	if hex.EncodeToString(currentLockSum[:]) != "41eed029b9e2b718ad8df12f38dbf9545fcefbeae60cfeaee51d8537a17df9f2" {
+		t.Fatal("当前 bootstrap inventory lock 摘要漂移")
 	}
 	baseline, err := os.ReadFile("../../../docs/changeset0/sink-baseline.json")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := verifyBootstrapInventoryLock(
-		"../../../docs/changeset5/bootstrap-inventory-lock.json",
+		"../../../docs/maintenance/bootstrap-inventory-lock.json",
 		baseline,
 		".",
 	); err != nil {

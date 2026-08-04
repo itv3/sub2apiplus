@@ -1,0 +1,12 @@
+{
+  "schema_version": "changeset5-conflict-unit-inventory-receipt/v1",
+  "changeset": "5",
+  "full_inventory_path": "docs/maintenance/post-conflict-inventory/full.json",
+  "full_inventory_sha256": "71d83129b22e4a386048d391dd07fc652bbd288ca89f4ecffdff3a85ebd36b62",
+  "full_unit_count": 247,
+  "governable_inventory_path": "docs/maintenance/post-conflict-inventory/governable.json",
+  "governable_inventory_sha256": "6cc7b891bbeef865107740f02a0230cf61a3b248d6a4f12a879738b03647d17a",
+  "governable_unit_count": 90,
+  "governable_is_strict_subset": true,
+  "classification_upstream_base": "26d894ef4f50645a4bf1030e378ac892f17d0223"
+}

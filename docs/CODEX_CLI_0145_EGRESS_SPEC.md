@@ -929,14 +929,18 @@ python3 tools/official_client_capture/codex_upgrade.py --help
 OAuth 请求在最终出站前进入版本画像驱动的定型层。
 
 ```text
-客户端请求
-→ 路由与协议适配
-→ OAuth 账号选择
-→ Official Client Profile Registry
-→ Codex 版本解析
-→ 不可变 0.145.0 Profile
-→ Endpoint / Header / Body / State Finalizer
-→ HTTP / WebSocket 传输画像
+HTTP／WS 入口、辅助端点与内部任务
+→ IngressSnapshot（脱离 Gin）
+→ OfficialRouteCatalog 两阶段解析物理 route 与权威 SinkBinding
+→ 按 persona 进入对应逻辑出口
+   ├─ codex-cli → ReleaseCatalog（每次 invocation 只解析一次）
+   │             → 不可变 ReleaseBundle
+   │             → CodexEgressPlan
+   │             → CodexEgressExecutor
+   └─ chatgpt-web/chrome → BrowserEgressPlan → 浏览器身份出口
+→ PreparedRequest + FinalizationToken + TransportSpec
+→ HTTPUpstream／req-profile／WebSocket adapter
+→ persona-aware Runtime Guard
 → OpenAI 上游
 ```
 
@@ -1173,7 +1177,6 @@ Codex/OpenAI 配置写死版本是泄漏，Anthropic 画像的版本按 §1.1 �
 | `backend/internal/repository/official_egress_guard.go` | req-profile Guard 包装、OAuth transport 画像转换与受信物理资源接线 |
 | `backend/internal/service/openai_forward_plan.go` | Forward invocation、attempt、预算与 WS→HTTP fallback transition 模型 |
 | `backend/internal/service/openai_oauth_service.go` | OAuth refresh 的业务事实组装与统一 Executor 调用入口 |
-| `backend/internal/service/official_egress_legacy_dispatch.go` | 变更集 2 尚未迁入 Executor 的 legacy_observe HTTP sink 的封闭编译与发送边界 |
 
 对应的 `*_test.go` 覆盖画像摘要、端点全集、字段闭集、连接生命周期、OAuth、文件上传、
 HTTP/WS、候选 trace 和配置失败关闭。新增版本时应新建版本画像及测试，不复制一套执行引擎。
@@ -1240,7 +1243,7 @@ post 对 56 份 capture 使用空允许列表严格比较。工作区证据另�
 | 上游已有 | `backend/internal/service/openai_gateway_passthrough.go` | 直通路径冻结 Plan 并进入统一 HTTP invocation／Executor | 直通不得恢复旧 finalizer 或绕过 Executor |
 | 上游已有 | `backend/internal/service/openai_gateway_count_tokens.go` | OAuth count_tokens 复用官方 HTTP TLS 画像 | 必须与业务请求同画像，否则同账号同 IP 暴露两种 ClientHello |
 | Fork 已有 | `backend/internal/service/openai_apikey_mimic_profile.go` | `openAIUpstreamRequestPlan` 承载 body 契约与 turn-state | turn-state 只能由终态 Header Finalizer 写入 |
-| Fork 已有 | `backend/internal/service/openai_upstream_http.go` | HTTP 最终发送和 retry | endpoint、Client 和 header 顺序仍来自画像 |
+| Fork 已有 | `backend/internal/service/openai_upstream_http.go` | API Key／custom provider HTTP 最终发送；Codex 官方上下文误入时 fail-close | API Key mimic 画像保持同源，OAuth 不得绕过 Executor |
 | 上游已有 | `backend/internal/service/openai_ws_forwarder_ingress.go` | WS 入站身份与首帧 | 官方／第三方入口不能混用未绑定上下文 |
 | 上游已有 | `backend/internal/service/openai_ws_forwarder_support.go` | WS 能力、预热和 fallback | 画像默认值优先于模型名猜测 |
 | 上游已有 | `backend/internal/service/openai_ws_forwarder_payload.go` | WS 握手 header 终态定型 | 握手头不得在 Finalizer 之后被补写 |
@@ -1313,6 +1316,176 @@ OpenAI 路径时，应先判断能否进入现有稳定接入点，再决定是�
 Sub2API 是多账号网关，并发度、跨账号调度和整体请求节奏不会变成单用户 CLI；这些服务级
 统计特征不属于 42 项。工具只能证明声明范围内的请求和恢复事实，不能替代生产备份、SSH
 主机证明或任意未知秘密扫描。
+
+## 3.7 长期架构原则与 persona 边界
+
+本节给出已经落地、后续升级仍必须保持的架构边界。目标不是把所有官方域名请求都伪装成
+Codex CLI，而是确保一个请求的端点行为、Header、Body、TLS／HTTP／WebSocket 画像、触发
+时机和连接生命周期来自同一个 `persona`。
+
+必须同时满足以下原则：
+
+1. `codex-cli` 请求只能由 `CodexEgressExecutor` 这个逻辑出口发送；Executor 可以编排多个
+   transport backend，但业务调用方不能绕过它直接发送。
+2. route 不能只按 host 或调用方声明识别。先按物理 `method + host + path + protocol`
+   匹配，再用 `SinkCatalog` 的权威 purpose、persona 和 backend 检查 SinkBinding。
+3. Release 在 invocation、账号尝试或独立系统调用开始时只解析一次；retry、fallback、WS
+   连接和辅助端点沿用同一个不可变 Bundle，禁止下游重新查询 active。
+4. 调用方只能提交未定型 Plan；最终请求、TransportSpec 和 FinalizationToken 由 Executor
+   生成并直接交给受信 adapter，定型后不得回交业务层继续修改。
+5. Runtime Guard 与 source-to-sink 静态门禁必须同时存在：前者检查真实物理发送，后者阻止
+   新增裸 sink、未登记 facade 和受审调用链外的发送代码。
+6. 灰度、回滚和紧急覆盖按单个 Sink 生效；不得用一个全局开关静默放开全部官方出站。
+
+persona 与出口的当前边界如下：
+
+| persona／状态 | 端点范围 | 逻辑出口 | 约束 |
+|---|---|---|---|
+| `codex-cli` | ReleaseBundle 登记的 Codex 端点闭集 | `CodexEgressExecutor` | URL、Header、Body、传输、状态与生命周期由同一 Bundle 驱动 |
+| `chatgpt-web/chrome` | privacy settings、accounts check、subscriptions | 浏览器身份 Plan／client | 保持独立 Chrome TLS／HTTP2／XHR 语义，禁止套用 Codex 画像 |
+| `transport_only` | authorization-code OAuth exchange | 独立受审 transport | 只复用有证据的传输事实，不冒充 refresh 的 Body／行为契约 |
+| `unclassified` | PAT whoami、Agent Identity task register | 精确登记的遗留路径 | 完成官方行为举证前不得凭官方 host 自动归入 Codex persona |
+| 未登记 | Catalog 未知 route 或 SinkBinding | 无长期出口 | enforce 状态下 fail-close |
+
+## 3.8 包边界、依赖方向与上游合并缝
+
+fork 自有的画像、Catalog、Compiler、Executor 和 Guard 位于
+`backend/internal/officialegress`。上游高频变化的 `service` 文件只负责采集业务事实、构造
+Plan 和调用 Executor；`repository` 只提供连接池、代理和底层资源，不持有身份规则。
+
+```text
+service ───────────────────→ officialegress core
+repository ────────────────→ officialegress core 的窄 port
+officialegress/adapter/* ───→ core + 受信物理资源
+wiring ────────────────────→ 注入闭集 adapter
+```
+
+`officialegress` 不得 import `service` 或 `repository`。Executor 的公共边界使用中立 Plan、
+Release、Compiler port 和 transport port，不能暴露可继续修改的 `*http.Request`、
+`*req.Client` 或具体仓储类型。真正操作 socket 的 adapter 属受信边界，其可信性来自闭集
+登记、AdapterID／FinalizationToken、wire 契约测试和静态门禁，而不是形式上的只读 getter。
+
+此依赖缝是降低上游合并冲突的核心：Codex CLI 换版原则上只新增内容寻址画像与发布图节点；
+Sub2API 上游合并原则上只复核稳定接入钩子。只有端点机制本身无法由现有 Plan／Executor 表达
+时，才允许修改共享业务文件，并必须记录原因和专项复验。
+
+## 3.9 ReleaseBundle、Plan 与最终发送所有权
+
+ReleaseCatalog 在启动时确定性加载并校验全部版本，active／previous 指向完整 release ID。
+画像以 `version + digest` 为不可变坐标；相同版本字符串但 digest 不同，仍是两个不同发布。
+ReleaseBundle 至少冻结以下事实：
+
+- release mode、version、release／profile ID 和全部摘要；
+- surface、User-Agent、originator 与身份变体；
+- HTTP／WS 端点、Header、Body 字段序和 feature；
+- TLS、压缩、连接生命周期和端点对应的 TransportSpec；
+- ExecutionPolicy、DeploymentSupportPolicy、BehaviorPolicy 与 fallback 图。
+
+CodexEgressPlan 保存业务事实、IdentityMode、深拷贝后的 Header Override、HeaderPolicy、
+BodyPolicy、BehaviorPolicy 和 attempt-owned Body。`TransportSpec` 不属于 Plan：它只能由端点
+画像决定，否则调用方就能自行选择 backend 并绕过画像。
+
+Header 所有权固定为：
+
+| Header 类别 | 所有者与优先级 |
+|---|---|
+| Transport、Auth、Host、长度和 Body framing | 系统最终所有，账号及入站不能覆盖 |
+| Release identity | strict／mimic／proxy 模式下由画像最终决定 |
+| Account extensions | 普通 API Key 按产品规则覆盖；mimic／proxy 仅允许非保护字段 |
+| Endpoint closed set | OAuth 官方端点删除画像闭集之外的字段 |
+| Ingress headers | 最低优先级，只进入明确允许的字段 |
+
+编译器只做语义定型；Executor 原子签发 FinalizationToken、注入 TransportSpec 并选择
+HTTPUpstream、req-profile 或 WebSocket adapter。adapter 只能执行 Token 中
+`WireNormalizationPlan` 明确允许的等价变换，例如 HTTP 小写化、默认 User-Agent 抑制以及
+WS 库内部 `wss → https` 的安全协议规范化；其他 URL、Header 或 Body 修改必须拒发。
+
+replayable Body 绑定精确内容摘要，可从同一语义输入为 retry 创建新 attempt。single-use
+stream 不得在 Prepare／Guard 中预读或复制，只绑定不可伪造 capability 与 ContentLength，
+并强制 `MaxAttempts=1`、`Replayable=false` 和单次消费。
+
+## 3.10 Guard、逐 Sink 灰度与静态门禁
+
+Runtime Guard 的判定顺序固定如下：
+
+1. 完全忽略未验证的 purpose／persona，按真实 method、host、path、protocol 匹配物理 route；
+2. 未匹配 route 时应用 UnknownRoutePolicy；
+3. 已匹配 route 但 SinkID 缺失、未登记或 binding 不符时应用 UnregisteredSinkPolicy；
+4. 使用 Catalog 权威 binding 二次解析，再按 SinkEnforcementState 决策；
+5. canary／enforced 路径必须验证 FinalizationToken、Release／Profile／Pool digest 和 adapter；
+6. 检查最终请求摘要，发现 finalize 后篡改立即 fail-close。
+
+逐 Sink 状态机为：
+
+```text
+legacy_observe → canary_enforce → enforced
+                       ↑              │
+                       └──── 回滚 ────┘
+```
+
+`legacy_observe` 只允许封存基线中的历史 sink，且必须有责任人和到期条件；bootstrap 后新增
+sink 不得进入该状态。`canary_enforce` 只对指定实例、账号或 route 拒绝违规。`enforced` 是
+正式状态；紧急 `observe_until` 必须按 Sink、有截止时间、持续记录违规且不能扩大 legacy
+基线。未登记 route 与无效 SinkBinding 即使处在观察窗口，也必须使用不同 reason code。
+
+静态门禁使用 `go/packages + go/types + AST` 识别 net/http、HTTPUpstream、req/v3、WS、
+项目 facade 和 client factory 的完整限定签名，并把请求构造事实与实际发送参数绑定。它必须
+覆盖函数值、接口转发、多层包装和生产构建矩阵，且用变异测试证明能发现裸 client、
+`DoWithTLS` 半旁路、req/v3 直发和 WS 直拨，同时不误报数据库或 singleflight 的同名 `Do`。
+
+legacy 基线一经 seal 只能凭 MigrationReceipt／RemovalReceipt 单调减少。历史 receipt、ceiling、
+supplement 与受保护 base commit 的摘要不可协调改写；facade 和 dead code 只留在证据目录，
+不能继续进入运行时 allowlist。
+
+## 3.11 行为策略与稳定策略来源
+
+非用户直接触发的请求不仅要“长得像 Codex”，还必须有官方等价行为、触发条件、频率、
+抖动、并发上限、副作用和删除期限。普通 OAuth 用量刷新采用 WHAM-first：优先请求
+`GET /backend-api/wham/usage`，只接受结构完整且窗口时长属于已知闭集的 RateLimit；仅在同一
+刷新调用内、兼容性条件满足时进入画像化 Responses fallback，凭据失效和安全错误不得被
+fallback 掩盖。
+
+以下 ASCII anchor 是生产策略 `PolicySource` 的稳定引用。标题可以演进，anchor 不得复用：
+
+<a id="policy-changeset-1b"></a>
+
+- `policy-changeset-1b`：WHAM-first、管理端 Responses／compact、alpha-search 及已知画像修复。
+
+<a id="policy-changeset-2"></a>
+
+- `policy-changeset-2`：不可变 ReleaseBundle、单次解析、transport adapter 与正式回滚。
+
+<a id="policy-changeset-3"></a>
+
+- `policy-changeset-3`：21 个 Codex Runtime Sink 的统一 Executor、Forward 与辅助端点收敛。
+
+## 3.12 当前实施状态与兼容代码边界
+
+变更集 0 至 6 已全部完成。当前正式运行状态为：
+
+- 21 个 `codex_profile` Runtime Sink、28 条 route 全部为 `enforced`，0 个 Codex
+  `legacy_observe`；HTTP、WS、fallback、models、images、files、alpha-search、WHAM 和 OAuth
+  refresh 均进入统一 Executor；
+- 画像已进入内容寻址运行时目录，ReleaseCatalog 启动期预编译 active／previous；
+- attempt Body 已实现单次顶层解析、duplicate fail-close、不可变 backing 和最终单次有序输出；
+- 52 个完整出站定型文件与 36 个上游冲突文件使用两套独立口径门禁；冲突变更单元已从
+  effective `104` 收缩到 `91`，共享上游已有 declaration 集合没有扩大；
+- active／previous 共 56 份 final-wire capture 使用空允许列表严格比较；
+- 2026-08-04 已在 DMIT 使用 OAuth 与 API Key 连续真实请求通过首次实机验收。
+
+兼容机制按“是否仍承担运行责任”分类：
+
+| 分类 | 当前决定 | 原因 |
+|---|---|---|
+| active／previous、per-sink canary／override、FinalizationToken | 长期保留 | 这是平滑升级、回滚和防旁路能力，不是过渡垃圾 |
+| browser persona、OAuth exchange transport-only、unclassified sink | 保留并独立治理 | 它们不是 Codex Executor 的旧实现，错误删除会混淆 persona 或破坏低频流程 |
+| service 画像 DTO／projection | 暂时保留 | API Key mimic、旧业务读取面和迁移证据仍有真实消费者；迁移消费者后才能删除 |
+| 旧 attach／finalizer／pairing gate | 已删除 | 21 个 Runtime Sink 已由 Executor、AST 门禁与 final-wire 证据替代 |
+| unsigned `LegacyCompiledDispatcher` HTTP 执行路径 | 退休 | 仅接受 `legacy_observe`，与当前全部 enforced 的 Codex Runtime Catalog 不再相容；旧上下文误入通用发送入口时直接 fail-close |
+
+判断兼容代码能否删除必须同时满足：生产定义和调用为零，替代路径有负例门禁，wire 对比无
+变化，active／previous 均通过，并有可追溯退休收据。只因名称包含 `transition`、`legacy` 或
+版本号不能作为删除理由。
 
 ---
 
@@ -1475,13 +1648,68 @@ Campaign、attempt、`run_nonce`，并位于 attempt 开始与 client checkpoint
 删除 Campaign、覆盖画像或重建数据容器；回滚后复核服务、数据挂载、账号、keeper、
 代理／CA 残留和旧版入口。
 
-## 4.9 文档、工具与证据保留
+## 4.9 低侵入上游同步工作法
+
+上游 Sub2API 更新与 Codex CLI 换版必须拆成两个独立变更集，不能在一次 diff 中同时解释
+业务变化和画像变化。推荐顺序是：
+
+1. 记录明确的 upstream commit，冻结当前 52 文件完整发送面和 36 文件冲突面；
+2. 只合并上游业务代码，解决稳定接入钩子的冲突，不修改版本画像；
+3. 重生 wire 等生成代码，复算 source-to-sink 台账并处理新增 route；
+4. 运行全量测试、静态门禁和当前画像 final-wire 对比；
+5. 从合并后的源码构建新候选镜像并完成实机验收；
+6. 如需升级 Codex CLI，再单独新建版本 Campaign，只追加快照、发布图、场景与规则迁移。
+
+共享文件只保留 Snapshot、Plan 和 Executor 调用。发现上游新增官方出站时，先登记 route、
+persona、SinkID 和 backend，再部署调用代码；不得先临时放行裸 client。删除路径时则先删除
+调用，再凭 RemovalReceipt 删除 Catalog 项。
+
+## 4.10 兼容代码退休流程
+
+每次清理按以下顺序执行：
+
+1. 用类型扫描和调用图证明候选兼容层的全部生产消费者；
+2. 将真实消费者迁到当前接口，并为旧入口添加明确 fail-close；
+3. active／previous、HTTP／WS／fallback 和辅助端点负例全部通过；
+4. 删除旧类型、字段、构造接线、scanner 分类及只验证旧实现的测试；
+5. 收紧源码绝迹门禁，禁止通过别名或 wrapper 恢复；
+6. 使用空 wire 允许列表比较变更前后；
+7. 写入机器退休收据，再进行实机部署。
+
+不得删除仍承担平滑升级、回滚、非 Codex persona 或 API Key 产品语义的兼容层。若一个旧
+入口在当前 Catalog 下只能失败，则应替换成清晰错误并删除不可达执行能力，避免未来错误地
+重新激活 unsigned 路径。
+
+## 4.11 DMIT 部署与真实验收
+
+DMIT 验收只替换 Sub2API 主应用，禁止执行 `compose down`、`pull`、`prune`，禁止重建或修改
+PostgreSQL、Redis、keeper、环境文件和数据卷。标准流程为：
+
+1. 在独立临时目录同步精确源码树，记录 commit／tree digest；
+2. 使用唯一镜像标签构建，并记录 OCI revision、image ID 和镜像摘要；
+3. 保存当前应用镜像与 compose 配置作为回滚点；
+4. 只替换主应用容器，确认 health、日志和 `/v1/models`；
+5. 使用服务器既有凭据分别执行 OAuth 与 API Key 真实请求，覆盖 Responses 流式完成事件；
+6. 在条件允许时覆盖 WS、HTTP fallback、管理端探针和辅助端点；
+7. 检查不存在 `request_modified_after_finalize`、缺 Token、legacy passthrough 或其他 Guard
+   violation；
+8. 验收失败立即恢复旧应用镜像；成功后清理临时构建目录和无用缓存，但保留回滚镜像与报告。
+
+凭据、Cookie、完整代理 URL 和请求 Body 不得进入日志或报告。HTTP 200 不是唯一成功标准；
+必须看到目标业务完成事件，并确认数据库、Redis、keeper 和应用健康状态没有变化。
+
+## 4.12 文档、工具与证据保留
 
 本文件是唯一叙事文档；以下内容仍作为机器资产保留：
 
 | 资产 | 保留原因 |
 |---|---|
 | `docs/EVIDENCE_INDEX.md` | 从本文件和证据映射生成的审核索引 |
+| `docs/maintenance/official-egress-consolidation-retirement.json` | 单文档合并、旧 Dispatcher 退休、facade／源码摘要过渡和删除事实 |
+| `docs/maintenance/bootstrap-inventory-lock.json` | 旧 facade 退休后当前 scanner 算法的复审锁；历史变更集 5 锁保持不变 |
+| `docs/maintenance/removal-receipts.json` | 将四条历史 `legacy_delegated` facade 收据单调提升为已退休状态 |
+| `docs/maintenance/post-conflict-inventory/` | 记录本次维护后的冲突面清单、生成收据，以及相对变更集 6 冻结清单的精确过渡 |
+| `docs/maintenance/workspace-transition/` | 从执行前基准 commit 独立复算本次完整变更集，防止新增、修改或删除文件漏出审核范围 |
 | `tools/spec_source_deps/` | 第二部分 L2 引用的锁定依赖 |
 | `tools/official_client_capture/` 正式入口、场景依赖和 Schema | 重新抓包和验收所必需 |
 | `local-analysis/sources/codex-cli-0.145/` | 第二部分 L1 引用的官方生产源码 |
@@ -1499,3 +1727,8 @@ Campaign、attempt、`run_nonce`，并位于 attempt 开始与 client checkpoint
 3 个已被当前证据替代的历史 Campaign、11 个根目录一次性脚本、历史过程文档和生成缓存；
 共清理 3533 个抓包文件，约 738 MiB。删除前后均通过证据索引、样本计数、缺口、规格引用、
 抓包工具测试和 Kilo 摘要校验；上述保留资产未改写。
+
+2026-08-04 起，原“Sub2API 官方出站身份伪装优化方案”的长期架构、实施状态、升级、回滚、
+兼容代码和部署规则已并入本文件；原文件删除。本文件同时承担 0.145.0 版本规格和长期架构
+手册职责。历史 changeset manifest 中保留的旧路径及 SHA-256 是不可变审计事实，不表示旧文档
+仍是有效权威来源，也不得为了消除字符串引用而改写历史证据。

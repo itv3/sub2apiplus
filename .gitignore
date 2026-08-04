@@ -136,8 +136,10 @@ deploy/docker-compose.override.yml
 .gocache/
 vite.config.js
 docs/*
-# 官方出站身份伪装的主方案与已实施变更集证据必须一起进入评审；只放行精确文件和目录。
-!docs/1.md
+# 官方出站身份伪装的唯一叙事文档、维护收据与已实施变更集证据必须一起进入评审；
+# 只放行精确文件和目录。
+!docs/maintenance/
+!docs/maintenance/**
 # 变更集 0/1A/1B/1C/2 的产出必须进版本控制：基线清单是 make check-egress-spec 的
 # 输入，缺失会让干净 checkout 上的 CI 直接失败；其余文档是 SinkCatalog 与 persona
 # 分类的权威来源，需要随代码一起演进和评审。

@@ -86,15 +86,11 @@ var projectFacades = map[string]sinkKindMeta{
 	// 但连接池与 v2 passthrough 是通过 openAIWSClientDialer **接口**发起拨号的
 	// （p.clientDialer.Dial / dialer.Dial）。只登记具体类型会漏掉这些真实的
 	// WS 出站调用点，而它们恰恰是业务调用点、是 RuntimeSinkID 的锚点。
-	"(github.com/Wei-Shaw/sub2api/internal/service.openAIWSClientDialer).Dial":                                     {kind: "facade_ws_dialer", protocol: "websocket"},
-	"(github.com/Wei-Shaw/sub2api/internal/service.openAIWSTransportMetricsDialer).Dial":                           {kind: "facade_ws_dialer_metrics", protocol: "websocket"},
-	"(*github.com/Wei-Shaw/sub2api/internal/service.OfficialEgressTransitionRuntime).DispatchCodexLegacyHTTP":      {kind: "facade_legacy_compiled_http", protocol: "http"},
-	"(*github.com/Wei-Shaw/sub2api/internal/service.OfficialEgressTransitionRuntime).DispatchCodexLegacyWebSocket": {kind: "facade_legacy_compiled_ws", protocol: "websocket"},
-	"(github.com/Wei-Shaw/sub2api/internal/repository.openAIOAuthCompiledTransport).Do":                            {kind: "facade_legacy_compiled_req_profile", protocol: "http"},
-	"github.com/Wei-Shaw/sub2api/internal/repository.dispatchOpenAIOAuthLegacy":                                    {kind: "facade_legacy_compiled_req_profile", protocol: "http"},
-	"github.com/Wei-Shaw/sub2api/internal/pkg/httpclient.GetClient":                                                {kind: "factory_httpclient_pool", protocol: "http"},
-	"github.com/Wei-Shaw/sub2api/internal/repository.CreatePrivacyReqClient":                                       {kind: "factory_privacy_chrome", protocol: "http"},
-	"github.com/Wei-Shaw/sub2api/internal/repository.getSharedReqClient":                                           {kind: "factory_shared_req", protocol: "http"},
+	"(github.com/Wei-Shaw/sub2api/internal/service.openAIWSClientDialer).Dial":           {kind: "facade_ws_dialer", protocol: "websocket"},
+	"(github.com/Wei-Shaw/sub2api/internal/service.openAIWSTransportMetricsDialer).Dial": {kind: "facade_ws_dialer_metrics", protocol: "websocket"},
+	"github.com/Wei-Shaw/sub2api/internal/pkg/httpclient.GetClient":                      {kind: "factory_httpclient_pool", protocol: "http"},
+	"github.com/Wei-Shaw/sub2api/internal/repository.CreatePrivacyReqClient":             {kind: "factory_privacy_chrome", protocol: "http"},
+	"github.com/Wei-Shaw/sub2api/internal/repository.getSharedReqClient":                 {kind: "factory_shared_req", protocol: "http"},
 }
 
 type sinkKindMeta struct {

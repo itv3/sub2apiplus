@@ -4,6 +4,7 @@ import (
 	"context"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -222,6 +223,35 @@ func TestDoOpenAIHTTPUpstreamSkipsMimicTLSWhenRequestProfileDisabled(t *testing.
 	require.True(t, recorder.doCalled)
 	require.False(t, recorder.doWithTLSCalled)
 	require.Nil(t, recorder.lastTLSProfile)
+}
+
+func TestDoOpenAIHTTPUpstreamRejectsCodexOfficialContextOutsideExecutor(t *testing.T) {
+	body := newOfficialOpenAIHTTPTestBody(t, true, false, false)
+	ingress := newOfficialOpenAIHTTPTestContext(body, "/v1/responses")
+	account := newOfficialOpenAIHTTPTestAccount(991)
+	request := httptest.NewRequest(
+		http.MethodPost,
+		"https://chatgpt.com/backend-api/codex/responses",
+		strings.NewReader(string(body)),
+	)
+	request, err := attachOfficialEgressHTTPContext(
+		request, ingress, account, PlatformOpenAI,
+	)
+	require.NoError(t, err)
+
+	recorder := &openAIHTTPUpstreamChoiceRecorder{}
+	response, err := doOpenAIHTTPUpstreamWithProfile(
+		recorder,
+		request,
+		"",
+		account,
+		&TLSFingerprintProfileService{},
+		openAIAPIKeyCodexMimicProfile{},
+	)
+	require.Nil(t, response)
+	require.ErrorContains(t, err, "必须通过 CodexEgressExecutor")
+	require.False(t, recorder.doCalled)
+	require.False(t, recorder.doWithTLSCalled)
 }
 
 // TestOpenAIMimicTLSDecisionMatchesBetweenGatewayAndAccountTest 固定验收点：账号测试

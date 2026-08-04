@@ -1,0 +1,71 @@
+{
+  "schema_version": "official-egress-consolidation-retirement/v1",
+  "date": "2026-08-04",
+  "base_commit": "ba485663c3bc0af6802cf6dfc4e19139ef00e371",
+  "document_consolidation": {
+    "retired_source": "docs/1.md",
+    "retired_source_sha256": "aadc61db49a18749d6a685a4aa66d2402fc548a7a2437bd7a7711a729185388a",
+    "canonical_document": "docs/CODEX_CLI_0145_EGRESS_SPEC.md",
+    "canonical_document_sha256": "767d707a78a2e97e24b9813e1931023b9762fc2b098e108f166b43e4b12a3215",
+    "historical_manifest_references_preserved": true,
+    "decision": "原方案的长期架构、实施状态、升级、回滚、兼容代码和 DMIT 部署规则已并入唯一叙事文档；旧文件删除，历史清单不改写。"
+  },
+  "retired_production_sources": [
+    {
+      "path": "backend/internal/officialegress/legacy_dispatcher.go",
+      "sha256_before_removal": "e768cf00406809471af86405151bbc204aa109b6b31d9febfc8240295d4e6ac5",
+      "reason": "unsigned capability 只允许 legacy_observe，而当前 21 个 Codex Runtime Sink 已全部 enforced。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_legacy_dispatch.go",
+      "sha256_before_removal": "58610835e74dd99b52db1e87243192b772e6027457a6f0f1c02f44422a24fdd1",
+      "reason": "全部 Codex Runtime Sink 已由统一 Executor 接管；旧通用发送入口改为显式 fail-close。"
+    }
+  ],
+  "retired_facade_candidate": {
+    "reference_audit": "docs/changeset3/facade-audit.json",
+    "reference_audit_sha256": "cc2eec638bee28f95f35e8f0e8629c2f2d1f43e64a8447a9eae942987726bbd4",
+    "candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.doOpenAIHTTPUpstreamWithProfile@backend/internal/service/openai_upstream_http.go#facade_legacy_compiled_http#1",
+    "sink_id": "codex.facade.upstream",
+    "replacement": "doOpenAIHTTPUpstreamWithProfile 仅承载 API Key／custom provider；检测到 Codex 官方上下文时在物理发送前 fail-close。",
+    "reason": "删除 LegacyCompiledDispatcher 后，该 facade 不再存在 legacy compiled 分支，历史审计原文保持冻结。"
+  },
+  "legacy_delegation_retirement": {
+    "receipt_path": "docs/maintenance/removal-receipts.json",
+    "receipt_sha256": "424740d59d58fc295283178f090797629cb26262974e3c5595ab5d87561550a8",
+    "retired_candidate_count": 4,
+    "transition": "legacy_delegated → legacy_retired",
+    "reason": "四条冻结 facade 候选不承载业务 Runtime Sink；unsigned delegation 删除后，以精确退休收据替代永久 legacy 目标。"
+  },
+  "final_wire_source_transition": {
+    "path": "backend/internal/service/official_egress_changeset3_production_final_wire_test.go",
+    "from_sha256": "0643f3acf17f40c341ca6d78b2918444cba45cdb230c70acab86830cfe65e886",
+    "to_sha256": "01e6e5493ee8ce9f5cd5039bb30b7829d76e565bd195feffa2806475bd5aab23",
+    "reason": "仅删除测试运行时构造器中已经退休的 dispatcher 参数及无消费者 compiler 参数；56 份历史 capture 与 wire 断言不改写。"
+  },
+  "scanner_lock_transition": {
+    "historical_lock": "docs/changeset5/bootstrap-inventory-lock.json",
+    "historical_lock_sha256": "7c1f89db30fc4164c5b6a186a338242433416d97695885ee62c2215e1d61c877",
+    "current_lock": "docs/maintenance/bootstrap-inventory-lock.json",
+    "current_lock_sha256": "41eed029b9e2b718ad8df12f38dbf9545fcefbeae60cfeaee51d8537a17df9f2",
+    "from_algorithm_sha256": "7d42ed8bec41ac755bf9010c08612c11623b3054c75b0e9d5b40f3ff0963c0b4",
+    "to_algorithm_sha256": "fa350bbff954abba67b6885944a4227ecf66d0487a75745c4f9d02115f0865e0"
+  },
+  "retained_compatibility": [
+    "active/previous 发布切换",
+    "逐 Sink canary、enforced 与限时 override",
+    "FinalizationToken 与 Runtime Guard",
+    "browser persona",
+    "OAuth exchange transport-only",
+    "unclassified 低频 sink",
+    "仍由 API Key mimic 和业务读取面消费的 service 画像投影"
+  ],
+  "required_verification": [
+    "旧生产文件和符号绝迹",
+    "Codex 官方上下文误入通用 HTTP 发送入口时 fail-close 且不调用上游",
+    "21 个 Codex Runtime Sink 精确 enforced",
+    "active/previous final-wire 空允许列表比较",
+    "本地全量测试、race、vet、build",
+    "DMIT OAuth 与 API Key 真实请求"
+  ]
+}

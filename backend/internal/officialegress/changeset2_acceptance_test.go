@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/url"
-	"reflect"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/officialegress/releasecontract"
@@ -28,13 +27,6 @@ func changeset2BundleRequest(sinkID SinkID, fallback ...SinkID) BundleResolveReq
 			ID: "changeset2-acceptance", Source: "test", Kind: BehaviorUserRequest,
 			FallbackSinkIDs: fallback, AttemptBudget: 3,
 		},
-	}
-}
-
-func TestChangeset2LegacyCapabilityHasNoSplitGetters(t *testing.T) {
-	typeOfCapability := reflect.TypeOf(LegacyCompiledRequest{})
-	if typeOfCapability.NumMethod() != 1 || typeOfCapability.Method(0).Name != "Dispatch" {
-		t.Fatalf("legacy capability 暴露了可拆分方法：%v", typeOfCapability)
 	}
 }
 
@@ -202,19 +194,5 @@ func TestChangeset2DynamicTargetFreezesOnlyAtCompile(t *testing.T) {
 	}, EndpointDynamicInputs{ReturnedURL: other})
 	if err == nil {
 		t.Fatal("与 Plan 不一致的 sibling ReturnedURL 未被拒绝")
-	}
-}
-
-func TestChangeset2LegacyDispatcherRejectsEnforcedSink(t *testing.T) {
-	dispatcher, err := NewLegacyCompiledDispatcher(NewCompiler(), DefaultSinkCatalog())
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = dispatcher.Compile(context.Background(), ReleaseBundle{}, CodexEgressPlan{
-		SinkID: SinkCodexResponsesForward, Purpose: "user_request.responses",
-		DeclaredPersona: PersonaCodexCLI,
-	}, EndpointDynamicInputs{})
-	if err == nil {
-		t.Fatal("enforced sink 获得了 unsigned legacy capability")
 	}
 }

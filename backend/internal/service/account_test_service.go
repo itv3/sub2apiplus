@@ -774,7 +774,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		resp, err = officialEgress.ExecuteCodexHTTP(ctx, OfficialCodexHTTPExecution{
 			SinkID: officialEgressSinkAdminTestResponses, EndpointID: officialCodexEndpointResponsesHTTP,
 			Account: credentialAccount, ProxyURL: proxyURL, Request: req, Ingress: c,
-			PolicyID: "changeset1b.admin_test.responses.v1", PolicySource: "docs/1.md#changeset-1b",
+			PolicyID: "changeset1b.admin_test.responses.v1", PolicySource: "docs/CODEX_CLI_0145_EGRESS_SPEC.md#policy-changeset-1b",
 			ConcurrencyLimit: 1, HasBillingSideEffect: true,
 		})
 	} else {
@@ -1132,7 +1132,7 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 		resp, err = officialEgress.ExecuteCodexHTTP(ctx, OfficialCodexHTTPExecution{
 			SinkID: officialEgressSinkAdminTestCompact, EndpointID: officialCodexEndpointResponsesCompact,
 			Account: credentialAccount, ProxyURL: proxyURL, Request: req, Ingress: c,
-			PolicyID: "changeset1b.admin_test.compact.v1", PolicySource: "docs/1.md#changeset-1b",
+			PolicyID: "changeset1b.admin_test.compact.v1", PolicySource: "docs/CODEX_CLI_0145_EGRESS_SPEC.md#policy-changeset-1b",
 			ConcurrencyLimit: 1, HasBillingSideEffect: true,
 		})
 	} else {

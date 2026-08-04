@@ -13,7 +13,7 @@ func TestOfficialEgressRuntimeUsesFormalReleaseCatalog(t *testing.T) {
 	)
 	require.NoError(t, err)
 	runtimeState := NewOfficialEgressTransitionRuntime(
-		resolver, officialegress.NewCompiler(), nil, officialegress.DefaultGuard(),
+		resolver, officialegress.DefaultGuard(),
 		officialegress.ReleaseModePrevious,
 	)
 	require.Same(t, resolver, runtimeState.BundleResolver)

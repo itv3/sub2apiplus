@@ -29,6 +29,8 @@ SPEC = ROOT / "docs" / "CODEX_CLI_0145_EGRESS_SPEC.md"
 SCAN_ROOT = ROOT / "backend"
 INVENTORY = ROOT / "docs" / "changeset5" / "egress-surface-inventory.json"
 CHANGESET6_TRANSITION = ROOT / "docs" / "changeset6" / "egress-surface-transition.json"
+MAINTENANCE_RETIREMENT = ROOT / "docs" / "maintenance" / "official-egress-consolidation-retirement.json"
+MAINTENANCE_RETIREMENT_SHA256 = "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36"
 
 # Codex/OpenAI 出站定型专属符号。命中即表示该文件参与官方出站形态的产生，
 # 无论它是否携带版本字面量——WS 传输、连接池与握手定型点都不含版本号。
@@ -114,6 +116,32 @@ def changeset6_additions(inventory_raw: bytes) -> list[dict[str, str]]:
     return additions
 
 
+def maintenance_removals(frozen_paths: set[str]) -> list[str]:
+    """读取本次退休收据，只允许删除收据绑定且确已不存在的历史出站面。"""
+
+    raw = MAINTENANCE_RETIREMENT.read_bytes()
+    if sha256(raw) != MAINTENANCE_RETIREMENT_SHA256:
+        raise RuntimeError("官方出站维护退休收据摘要漂移")
+    receipt = json.loads(raw)
+    if receipt.get("schema_version") != "official-egress-consolidation-retirement/v1":
+        raise RuntimeError("官方出站维护退休收据 schema 非法")
+    retired = receipt.get("retired_production_sources")
+    if not isinstance(retired, list):
+        raise RuntimeError("官方出站维护退休收据缺少生产源码清单")
+    removals = sorted(
+        item.get("path")
+        for item in retired
+        if isinstance(item, dict) and item.get("path") in frozen_paths
+    )
+    expected = ["backend/internal/service/official_egress_legacy_dispatch.go"]
+    if removals != expected:
+        raise RuntimeError(f"维护出站面退休集合漂移：{removals!r}")
+    for path in removals:
+        if (ROOT / path).exists():
+            raise RuntimeError(f"已退休出站面仍存在：{path}")
+    return removals
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -187,6 +215,13 @@ def main() -> int:
         return 1
     declared.extend(additions)
     declared_paths.extend(addition_paths)
+    try:
+        removal_paths = maintenance_removals(set(declared_paths))
+    except (OSError, json.JSONDecodeError, RuntimeError) as exc:
+        print(f"🔴 {exc}", file=sys.stderr)
+        return 1
+    declared = [item for item in declared if item["path"] not in set(removal_paths)]
+    declared_paths = [path for path in declared_paths if path not in set(removal_paths)]
     if set(exclusion_paths) != set(SCOPE_EXCLUSIONS):
         print("🔴 工具自引用排除项与源码门禁不一致", file=sys.stderr)
         return 1
@@ -230,7 +265,7 @@ def main() -> int:
     covered = len(declared_paths)
     print(
         f"✅ §3.5 台账完整：变更集 5 冻结 52 面 + 变更集 6 增量 {len(additions)} 面"
-        f" = {covered} 个出站定型文件全部登记"
+        f" - 维护退休 {len(removal_paths)} 面 = {covered} 个出站定型文件全部登记"
         + (f"，另有 {len(SCOPE_EXCLUSIONS)} 个工具自引用排除" if SCOPE_EXCLUSIONS else "")
     )
     return 0

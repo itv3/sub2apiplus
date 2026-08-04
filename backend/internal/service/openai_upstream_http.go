@@ -1,10 +1,8 @@
 package service
 
 import (
-	"context"
 	"fmt"
 	"net/http"
-	"strings"
 	"sync"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -118,19 +116,13 @@ func newOpenAIAPIKeyCodexTLSOnlyProfile(useProxy bool) *tlsfingerprint.Profile {
 //
 // 这样 header/body 画像与 TLS 画像必然出自同一个服务级 active/previous 指针，
 // 消除 mode=previous 下「Desktop header + active CLI TLS」的跨画像混用。
-// 不做 mimic 的路径（passthrough、WS-HTTP 桥接）传零值画像即表示不套 mimic TLS。
+// 不做 mimic 的路径（API Key passthrough、API Key WS-HTTP 桥接）传零值画像即表示不套
+// mimic TLS。Codex OAuth 请求必须在调用方进入 Executor；如果旧官方上下文误入本入口，
+// 立即 fail-close，禁止恢复已经退休的 unsigned 发送路径。
 type officialCodexBundleHolderContextKey struct{}
-type officialCodexLegacyPolicyContextKey struct{}
-
-type officialCodexLegacyPolicyContext struct {
-	policyID        string
-	policySource    string
-	fallbackSinkIDs []officialegress.SinkID
-}
 
 type officialCodexBundleHolder struct {
 	mu                sync.Mutex
-	bundle            *officialegress.ReleaseBundle
 	httpInvocation    *officialCodexHTTPInvocation
 	httpAttemptBudget int
 	wsInvocations     map[officialegress.SinkID]*officialCodexWebSocketInvocation
@@ -146,51 +138,12 @@ func doOpenAIHTTPUpstreamWithProfile(httpUpstream HTTPUpstream, req *http.Reques
 	if httpUpstream == nil {
 		return nil, fmt.Errorf("http upstream unavailable")
 	}
-	officialTLSProfile, officialEnabled, err := resolveOfficialEgressHTTPTransportProfile(req, nil)
+	_, officialEnabled, err := resolveOfficialEgressHTTPTransportProfile(req, nil)
 	if err != nil {
 		return nil, fmt.Errorf("resolve official egress HTTP transport: %w", err)
 	}
 	if officialEnabled {
-		if account == nil {
-			return nil, fmt.Errorf("official egress HTTP account is unavailable")
-		}
-		_ = officialTLSProfile // 旧上下文只用于识别正式 Codex 路径，传输事实改由 Bundle 注入。
-		runtimeState, runtimeErr := resolveOfficialEgressRuntime(nil, httpUpstream)
-		if runtimeErr != nil {
-			return nil, runtimeErr
-		}
-		identity, exists := officialegress.AttemptIdentityFromContext(req.Context())
-		if !exists || identity.SinkID == "" {
-			return nil, fmt.Errorf("official egress HTTP 请求缺少权威 SinkID")
-		}
-		holder, _ := req.Context().Value(officialCodexBundleHolderContextKey{}).(*officialCodexBundleHolder)
-		if holder == nil {
-			holder = &officialCodexBundleHolder{}
-			*req = *req.WithContext(context.WithValue(req.Context(), officialCodexBundleHolderContextKey{}, holder))
-		}
-		holder.mu.Lock()
-		defer holder.mu.Unlock()
-		policy := officialCodexLegacyPolicyContext{
-			policyID: "codex.http.legacy", policySource: "docs/1.md#changeset-2",
-		}
-		if frozen, ok := req.Context().Value(officialCodexLegacyPolicyContextKey{}).(officialCodexLegacyPolicyContext); ok &&
-			strings.TrimSpace(frozen.policyID) != "" && strings.TrimSpace(frozen.policySource) != "" {
-			policy = frozen
-		}
-		response, bundle, dispatchErr := runtimeState.DispatchCodexLegacyHTTP(
-			req.Context(),
-			httpUpstream,
-			OfficialCodexLegacyHTTPDispatch{
-				Bundle: holder.bundle, SinkID: identity.SinkID, Account: account,
-				Request: req, ProxyURL: proxyURL, PolicyID: policy.policyID,
-				PolicySource: policy.policySource, InvocationID: identity.InvocationID,
-				FallbackSinkIDs: append([]officialegress.SinkID(nil), policy.fallbackSinkIDs...),
-			},
-		)
-		if bundle.BundleDigest() != "" {
-			holder.bundle = &bundle
-		}
-		return response, dispatchErr
+		return nil, fmt.Errorf("Codex 官方出站请求禁止进入通用 HTTP 发送入口，必须通过 CodexEgressExecutor")
 	}
 	if mimicProfile.ShouldUseTLSFingerprint(account) {
 		if tlsProfile := resolveOpenAIAPIKeyCodexTLSProfileForClient(account, tlsFPProfileService, mimicProfile.Client, proxyURL); tlsProfile != nil {

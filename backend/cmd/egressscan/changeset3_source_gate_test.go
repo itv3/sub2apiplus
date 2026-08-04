@@ -16,6 +16,8 @@ import (
 
 const changeset3RemovalReceiptRebuildOutputEnv = "CHANGESET3_REMOVAL_RECEIPT_REBUILD_OUTPUT"
 
+const maintenanceRetirementReceiptSHA256 = "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36"
+
 type changeset3FacadeAudit struct {
 	SchemaVersion string `json:"schema_version"`
 	ReviewedBy    string `json:"reviewed_by"`
@@ -172,6 +174,9 @@ func TestChangeset3FacadeAuditMatchesCurrentSourceAndAdapters(t *testing.T) {
 	if hex.EncodeToString(auditSum[:]) != "cc2eec638bee28f95f35e8f0e8629c2f2d1f43e64a8447a9eae942987726bbd4" {
 		t.Fatal("变更集 3 facade audit 历史原文漂移")
 	}
+	retiredFacadeCandidate, retiredFacadeSinkID := loadMaintenanceFacadeRetirement(
+		t, hex.EncodeToString(auditSum[:]),
+	)
 	transitionRaw, err := os.ReadFile("../../../docs/changeset5/adapter-source-transition.json")
 	if err != nil {
 		t.Fatal(err)
@@ -206,6 +211,7 @@ func TestChangeset3FacadeAuditMatchesCurrentSourceAndAdapters(t *testing.T) {
 		currentByID[candidate.ScanCandidateID] = candidate
 	}
 	var auditedFacadeIDs []string
+	retiredFacadeSeen := false
 	for _, facade := range audit.Facades {
 		auditedFacadeIDs = append(auditedFacadeIDs, facade.SinkID)
 		if facade.Disposition != "retained_transport_infrastructure" || facade.RemovalReceipt ||
@@ -214,10 +220,20 @@ func TestChangeset3FacadeAuditMatchesCurrentSourceAndAdapters(t *testing.T) {
 		}
 		for _, candidateID := range facade.CurrentCandidateIDs {
 			candidate, exists := currentByID[candidateID]
+			if candidateID == retiredFacadeCandidate {
+				if exists || facade.SinkID != retiredFacadeSinkID {
+					t.Fatalf("已退休 facade candidate 重新出现或 SinkID 漂移：%s", candidateID)
+				}
+				retiredFacadeSeen = true
+				continue
+			}
 			if !exists || candidate.RuntimeSinkID != facade.SinkID || !candidate.IsFacade {
 				t.Fatalf("facade 审计引用的候选不存在或身份不符: %s", candidateID)
 			}
 		}
+	}
+	if !retiredFacadeSeen {
+		t.Fatal("维护退休收据没有精确承接历史 facade candidate")
 	}
 	sort.Strings(auditedFacadeIDs)
 	wantFacades := []string{"codex.facade.oauth_client", "codex.facade.upstream", "codex.facade.ws_pool"}
@@ -250,4 +266,37 @@ func TestChangeset3FacadeAuditMatchesCurrentSourceAndAdapters(t *testing.T) {
 		wsCandidate.EnforcementState != "not_applicable" || wsCandidate.RuntimeSinkID != "" {
 		t.Fatal("变更集 5 WebSocket RoundTripper 新位置未进入物理基础设施闭集")
 	}
+}
+
+func loadMaintenanceFacadeRetirement(t *testing.T, referenceAuditSHA256 string) (string, string) {
+	t.Helper()
+	raw, err := os.ReadFile("../../../docs/maintenance/official-egress-consolidation-retirement.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(raw)
+	if hex.EncodeToString(sum[:]) != maintenanceRetirementReceiptSHA256 {
+		t.Fatal("维护退休收据摘要漂移")
+	}
+	var receipt struct {
+		SchemaVersion          string `json:"schema_version"`
+		RetiredFacadeCandidate struct {
+			ReferenceAuditSHA256 string `json:"reference_audit_sha256"`
+			CandidateID          string `json:"candidate_id"`
+			SinkID               string `json:"sink_id"`
+			Replacement          string `json:"replacement"`
+			Reason               string `json:"reason"`
+		} `json:"retired_facade_candidate"`
+	}
+	if err := json.Unmarshal(raw, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	retired := receipt.RetiredFacadeCandidate
+	if receipt.SchemaVersion != "official-egress-consolidation-retirement/v1" ||
+		retired.ReferenceAuditSHA256 != referenceAuditSHA256 ||
+		strings.TrimSpace(retired.CandidateID) == "" || strings.TrimSpace(retired.SinkID) == "" ||
+		strings.TrimSpace(retired.Replacement) == "" || strings.TrimSpace(retired.Reason) == "" {
+		t.Fatalf("维护 facade 退休事实非法：%+v", retired)
+	}
+	return retired.CandidateID, retired.SinkID
 }
