@@ -7,8 +7,8 @@
   "baseline_head_tree": "a8c3dee18a01a6138bfcea60860bb5ad11548c3a",
   "baseline_workspace_path_count": 498,
   "candidate_path_count": 530,
-  "transition_entry_count": 25,
-  "transition_path_set_sha256": "8ee49829f6cc1e690e9598c9bc0d5c3b1532d7527f029803f5a8c9acdde53559",
+  "transition_entry_count": 31,
+  "transition_path_set_sha256": "8f8f1857261107035039544c9f367cf469c568b32089c9645b139d170bc93316",
   "entries": [
     {
       "path": ".gitignore",
@@ -347,6 +347,54 @@
       ]
     },
     {
+      "path": "backend/internal/service/account_test_service.go",
+      "scope": "service_attempt_boundary",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 75983,
+        "sha256": "31131d8e55d10873a84afc88243213fef9ed79eb938cbdd0017e74ef19d87bdd"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 76752,
+        "sha256": "bbb3e01f88f8b04186ccaa787baec1cac69d9be95b68e18155406be880c23ab7"
+      },
+      "deletion_allowed": false,
+      "reason": "变更集 6 已确认方案、实现或验收证据的确定性工作区迁移",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "docs/changeset6/post/acceptance-report.md"
+      ]
+    },
+    {
+      "path": "backend/internal/service/account_test_service_openai_test.go",
+      "scope": "service_attempt_boundary",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 32045,
+        "sha256": "39802141e18d82ffc71075f60da377f1f49af457cf04631443a95afadef7fee7"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 32844,
+        "sha256": "04660e4aa7ac6e5eb98e8b14beeeb7f3d0e30aac15915753d18411b5879ac5ea"
+      },
+      "deletion_allowed": false,
+      "reason": "变更集 6 已确认方案、实现或验收证据的确定性工作区迁移",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "docs/changeset6/post/acceptance-report.md"
+      ]
+    },
+    {
       "path": "backend/internal/service/official_egress_1b_executor.go",
       "scope": "service_attempt_boundary",
       "before": {
@@ -578,6 +626,102 @@
         "mode": "0644",
         "size": 95265,
         "sha256": "56a0ff02ced36021365523160f129cf21efe015a45be7075df99a3b29aab307f"
+      },
+      "deletion_allowed": false,
+      "reason": "变更集 6 已确认方案、实现或验收证据的确定性工作区迁移",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "docs/changeset6/post/acceptance-report.md"
+      ]
+    },
+    {
+      "path": "docs/changeset6/post-conflict-inventory/full.json",
+      "scope": "changeset6_evidence",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 381421,
+        "sha256": "a3fa810d7bc25f2ed94916b8fc28c8df6ba8e021679a413a7da67bff5d662b7f"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 381421,
+        "sha256": "40719b6a58208b368b2b0a99657f8ab5871cc6aed54168f4074152a03d4860da"
+      },
+      "deletion_allowed": false,
+      "reason": "变更集 6 已确认方案、实现或验收证据的确定性工作区迁移",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "docs/changeset6/post/acceptance-report.md"
+      ]
+    },
+    {
+      "path": "docs/changeset6/post-conflict-inventory/governable.json",
+      "scope": "changeset6_evidence",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 149339,
+        "sha256": "3a13b91659ae5444bb0bf470ca5aca74855058a548731e36b60b595c7388efdc"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 149339,
+        "sha256": "5f5a595c5334b856220e97861767841475606f6a75bcef6cb9f41427eb8c3caa"
+      },
+      "deletion_allowed": false,
+      "reason": "变更集 6 已确认方案、实现或验收证据的确定性工作区迁移",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "docs/changeset6/post/acceptance-report.md"
+      ]
+    },
+    {
+      "path": "docs/changeset6/post-conflict-inventory/receipt.json",
+      "scope": "changeset6_evidence",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 630,
+        "sha256": "73812d158a7d07148fbcec0ae0f28f4edadaec700c92374e234f983e61c7494f"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 630,
+        "sha256": "e3b2836e5b9811f8ceaefa6ee868642ee4dc8b528189e18368fffe70f607802c"
+      },
+      "deletion_allowed": false,
+      "reason": "变更集 6 已确认方案、实现或验收证据的确定性工作区迁移",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "docs/changeset6/post/acceptance-report.md"
+      ]
+    },
+    {
+      "path": "docs/changeset6/post-conflict-inventory/transition.json",
+      "scope": "changeset6_evidence",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 7302,
+        "sha256": "9986794562e0540dda123383e8d44e8479b496a674978a64d2784b052f061f9b"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 14321,
+        "sha256": "b4d2d9722f53ad359dcb51cc25cfcb07b097fc037e534b72b38266d12b93e002"
       },
       "deletion_allowed": false,
       "reason": "变更集 6 已确认方案、实现或验收证据的确定性工作区迁移",

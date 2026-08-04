@@ -1641,28 +1641,41 @@ func createOpenAITestPayload(modelID string, prompt string, isOAuth bool, maxOut
 		testPrompt = "hi"
 	}
 
-	payload := map[string]any{
-		"model": modelID,
-		"input": []map[string]any{
+	message := map[string]any{
+		"role": "user",
+		"content": []map[string]any{
 			{
-				"role": "user",
-				"content": []map[string]any{
-					{
-						"type": "input_text",
-						"text": testPrompt,
-					},
-				},
+				"type": "input_text",
+				"text": testPrompt,
 			},
 		},
+	}
+	if isOAuth {
+		// ChatGPT Codex 的 InputItem 是带 type 判别字段的 message。通用
+		// API-Key 探针继续保留原来的 Responses 兼容形态，避免要求第三方上游
+		// 同时实现 Codex 内部结构。
+		message["type"] = "message"
+	}
+
+	payload := map[string]any{
+		"model":  modelID,
+		"input":  []map[string]any{message},
 		"stream": true,
 	}
-	if maxOutputTokens > 0 {
+	if maxOutputTokens > 0 && !isOAuth {
 		payload["max_output_tokens"] = maxOutputTokens
 	}
 
-	// OAuth accounts using ChatGPT internal API require store: false
+	// OAuth 探针直接进入 Codex Executor，不经过通用 Responses 入站归一化。
+	// 因而必须在 attempt 边界前构造完整的当前正式 Responses Body；否则
+	// Compiler 会正确地对缺失必需字段失败关闭。reasoning 外层对象需要存在，
+	// 具体 effort/summary 对连通性探针保持未指定，交由模型默认值处理。
 	if isOAuth {
+		payload["tool_choice"] = "auto"
+		payload["parallel_tool_calls"] = false
+		payload["reasoning"] = map[string]any{}
 		payload["store"] = false
+		payload["include"] = []string{"reasoning.encrypted_content"}
 	}
 
 	// All accounts require instructions for Responses API

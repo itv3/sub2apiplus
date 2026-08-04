@@ -2,10 +2,10 @@
   "schema_version": "changeset5-conflict-unit-inventory-receipt/v1",
   "changeset": "5",
   "full_inventory_path": "docs/changeset6/post-conflict-inventory/full.json",
-  "full_inventory_sha256": "a3fa810d7bc25f2ed94916b8fc28c8df6ba8e021679a413a7da67bff5d662b7f",
+  "full_inventory_sha256": "40719b6a58208b368b2b0a99657f8ab5871cc6aed54168f4074152a03d4860da",
   "full_unit_count": 247,
   "governable_inventory_path": "docs/changeset6/post-conflict-inventory/governable.json",
-  "governable_inventory_sha256": "3a13b91659ae5444bb0bf470ca5aca74855058a548731e36b60b595c7388efdc",
+  "governable_inventory_sha256": "5f5a595c5334b856220e97861767841475606f6a75bcef6cb9f41427eb8c3caa",
   "governable_unit_count": 90,
   "governable_is_strict_subset": true,
   "classification_upstream_base": "26d894ef4f50645a4bf1030e378ac892f17d0223"

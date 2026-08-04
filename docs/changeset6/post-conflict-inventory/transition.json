@@ -9,9 +9,9 @@
   },
   "post": {
     "directory": "docs/changeset6/post-conflict-inventory",
-    "full_sha256": "a3fa810d7bc25f2ed94916b8fc28c8df6ba8e021679a413a7da67bff5d662b7f",
-    "governable_sha256": "3a13b91659ae5444bb0bf470ca5aca74855058a548731e36b60b595c7388efdc",
-    "receipt_sha256": "73812d158a7d07148fbcec0ae0f28f4edadaec700c92374e234f983e61c7494f"
+    "full_sha256": "40719b6a58208b368b2b0a99657f8ab5871cc6aed54168f4074152a03d4860da",
+    "governable_sha256": "5f5a595c5334b856220e97861767841475606f6a75bcef6cb9f41427eb8c3caa",
+    "receipt_sha256": "e3b2836e5b9811f8ceaefa6ee868642ee4dc8b528189e18368fffe70f607802c"
   },
   "comparison": {
     "conflict_file_count_before": 36,
@@ -24,8 +24,31 @@
     "full_removed_unit_ids": [],
     "governable_added_unit_ids": [],
     "governable_removed_unit_ids": [],
-    "changed_full_unit_count": 20,
+    "changed_full_unit_count": 43,
     "changed_full_unit_ids": [
+      "backend/internal/service/account_test_service.go\u0000declaration_added\u0000\u0000anthropicAPIKeyMimicTestToolNames\u0000var anthropicAPIKeyMimicTestToolNames",
+      "backend/internal/service/account_test_service.go\u0000declaration_added\u0000\u0000applyAccountTestHeaderOverrides\u0000func .applyAccountTestHeaderOverridesfunc(account *Account, h http.Header)",
+      "backend/internal/service/account_test_service.go\u0000declaration_added\u0000\u0000applyAccountTestHeaderOverridesForOfficialClientProxy\u0000func .applyAccountTestHeaderOverridesForOfficialClientProxyfunc(account *Account, h http.Header)",
+      "backend/internal/service/account_test_service.go\u0000declaration_added\u0000\u0000applyAccountTestHeaderOverridesWithProtectedIdentity\u0000func .applyAccountTestHeaderOverridesWithProtectedIdentityfunc(account *Account, h http.Header, protectOfficialIdentity bool)",
+      "backend/internal/service/account_test_service.go\u0000declaration_added\u0000\u0000claudeTestUnavailableMessage\u0000const claudeTestUnavailableMessage",
+      "backend/internal/service/account_test_service.go\u0000declaration_added\u0000\u0000createAnthropicAPIKeyMimicTestPayload\u0000func .createAnthropicAPIKeyMimicTestPayloadfunc(modelID string) map[string]any",
+      "backend/internal/service/account_test_service.go\u0000declaration_added\u0000\u0000isClaudeTestUnavailableResponse\u0000func .isClaudeTestUnavailableResponsefunc(text string) bool",
+      "backend/internal/service/account_test_service.go\u0000declaration_modified\u0000\u0000AccountTestService\u0000type AccountTestService *ast.StructType",
+      "backend/internal/service/account_test_service.go\u0000declaration_modified\u0000\u0000NewAccountTestService\u0000func .NewAccountTestServicefunc(\n\taccountRepo AccountRepository,\n\tgeminiTokenProvider *GeminiTokenProvider,\n\tclaudeTokenProvider *ClaudeTokenProvider,\n\tgrokTokenProvider *GrokTokenProvider,\n\tantigravityGatewayService *AntigravityGatewayService,\n\tgatewayService *GatewayService,\n\thttpUpstream HTTPUpstream,\n\tcfg *config.Config,\n\ttlsFPProfileService *TLSFingerprintProfileService,\n) *AccountTestService",
+      "backend/internal/service/account_test_service.go\u0000declaration_modified\u0000\u0000TestEvent\u0000type TestEvent *ast.StructType",
+      "backend/internal/service/account_test_service.go\u0000declaration_modified\u0000\u0000createOpenAITestPayload\u0000func .createOpenAITestPayloadfunc(modelID string, prompt string, isOAuth bool, maxOutputTokens int) map[string]any",
+      "backend/internal/service/account_test_service.go\u0000declaration_modified\u0000\u0000parseTestSSEOutput\u0000func .parseTestSSEOutputfunc(body string) (responseText, errMsg string)",
+      "backend/internal/service/account_test_service.go\u0000declaration_modified\u0000*AccountTestService\u0000RunTestBackground\u0000func *AccountTestService.RunTestBackgroundfunc(ctx context.Context, accountID int64, modelID string) (*ScheduledTestResult, error)",
+      "backend/internal/service/account_test_service.go\u0000declaration_modified\u0000*AccountTestService\u0000TestAccountConnection\u0000func *AccountTestService.TestAccountConnectionfunc(c *gin.Context, accountID int64, modelID string, prompt string, mode string, maxOutputTokens ...int) error",
+      "backend/internal/service/account_test_service.go\u0000declaration_modified\u0000*AccountTestService\u0000processClaudeStream\u0000func *AccountTestService.processClaudeStreamfunc(c *gin.Context, body io.Reader) error",
+      "backend/internal/service/account_test_service.go\u0000declaration_modified\u0000*AccountTestService\u0000processOpenAIStream\u0000func *AccountTestService.processOpenAIStreamfunc(c *gin.Context, body io.Reader) error",
+      "backend/internal/service/account_test_service.go\u0000declaration_modified\u0000*AccountTestService\u0000testClaudeAccountConnection\u0000func *AccountTestService.testClaudeAccountConnectionfunc(c *gin.Context, account *Account, modelID string) error",
+      "backend/internal/service/account_test_service.go\u0000declaration_modified\u0000*AccountTestService\u0000testOpenAIAccountConnection\u0000func *AccountTestService.testOpenAIAccountConnectionfunc(c *gin.Context, account *Account, modelID string, prompt string, mode string, maxOutputTokens ...int) error",
+      "backend/internal/service/account_test_service.go\u0000declaration_modified\u0000*AccountTestService\u0000testOpenAIChatCompletionsConnection\u0000func *AccountTestService.testOpenAIChatCompletionsConnectionfunc(\n\tc *gin.Context,\n\taccount *Account,\n\ttestModelID string,\n\tprompt string,\n\tnormalizedBaseURL string,\n\tauthToken string,\n\tmimicProfile openAIAPIKeyCodexMimicProfile,\n) error",
+      "backend/internal/service/account_test_service.go\u0000declaration_modified\u0000*AccountTestService\u0000testOpenAICompactConnection\u0000func *AccountTestService.testOpenAICompactConnectionfunc(c *gin.Context, account *Account, credentialAccount *Account, testModelID string) error",
+      "backend/internal/service/account_test_service.go\u0000declaration_modified\u0000*AccountTestService\u0000testOpenAIImageAPIKey\u0000func *AccountTestService.testOpenAIImageAPIKeyfunc(c *gin.Context, ctx context.Context, account *Account, modelID, prompt string) error",
+      "backend/internal/service/account_test_service.go\u0000declaration_modified\u0000*AccountTestService\u0000testOpenAIImageOAuth\u0000func *AccountTestService.testOpenAIImageOAuthfunc(c *gin.Context, ctx context.Context, account *Account, modelID, prompt string) error",
+      "backend/internal/service/account_test_service.go\u0000file_structure_or_non_go_modified\u0000\u0000<file_structure>\u0000package/import/build-tag/comment structure",
       "backend/internal/service/openai_ws_pool.go\u0000declaration_added\u0000\u0000openAIWSAdmissionGuard\u0000type openAIWSAdmissionGuard *ast.InterfaceType",
       "backend/internal/service/openai_ws_pool.go\u0000declaration_added\u0000\u0000openAIWSLeaseSession\u0000type openAIWSLeaseSession *ast.InterfaceType",
       "backend/internal/service/openai_ws_pool.go\u0000declaration_added\u0000\u0000replaceOpenAIWSTurnStateFromLease\u0000func .replaceOpenAIWSTurnStateFromLeasefunc(lease openAIWSLeaseSession) string",
@@ -47,8 +70,13 @@
       "backend/internal/service/openai_ws_pool.go\u0000declaration_modified\u0000*openAIWSConnPool\u0000prewarmConns\u0000func *openAIWSConnPool.prewarmConnsfunc(accountID int64, req openAIWSAcquireRequest, total int, generations ...uint64)",
       "backend/internal/service/openai_ws_pool.go\u0000file_structure_or_non_go_modified\u0000\u0000<file_structure>\u0000package/import/build-tag/comment structure"
     ],
-    "changed_governable_unit_count": 7,
+    "changed_governable_unit_count": 12,
     "changed_governable_unit_ids": [
+      "backend/internal/service/account_test_service.go\u0000declaration_modified\u0000\u0000AccountTestService\u0000type AccountTestService *ast.StructType",
+      "backend/internal/service/account_test_service.go\u0000declaration_modified\u0000*AccountTestService\u0000testOpenAIAccountConnection\u0000func *AccountTestService.testOpenAIAccountConnectionfunc(c *gin.Context, account *Account, modelID string, prompt string, mode string, maxOutputTokens ...int) error",
+      "backend/internal/service/account_test_service.go\u0000declaration_modified\u0000*AccountTestService\u0000testOpenAICompactConnection\u0000func *AccountTestService.testOpenAICompactConnectionfunc(c *gin.Context, account *Account, credentialAccount *Account, testModelID string) error",
+      "backend/internal/service/account_test_service.go\u0000declaration_modified\u0000*AccountTestService\u0000testOpenAIImageOAuth\u0000func *AccountTestService.testOpenAIImageOAuthfunc(c *gin.Context, ctx context.Context, account *Account, modelID, prompt string) error",
+      "backend/internal/service/account_test_service.go\u0000file_structure_or_non_go_modified\u0000\u0000<file_structure>\u0000package/import/build-tag/comment structure",
       "backend/internal/service/openai_ws_pool.go\u0000declaration_added\u0000\u0000openAIWSAdmissionGuard\u0000type openAIWSAdmissionGuard *ast.InterfaceType",
       "backend/internal/service/openai_ws_pool.go\u0000declaration_added\u0000*openAIWSConnPool\u0000allowsTokenlessBackgroundPrewarm\u0000func *openAIWSConnPool.allowsTokenlessBackgroundPrewarmfunc(sinkID officialegress.SinkID) bool",
       "backend/internal/service/openai_ws_pool.go\u0000declaration_modified\u0000\u0000openAIWSAcquireRequest\u0000type openAIWSAcquireRequest *ast.StructType",
@@ -58,6 +86,7 @@
       "backend/internal/service/openai_ws_pool.go\u0000file_structure_or_non_go_modified\u0000\u0000<file_structure>\u0000package/import/build-tag/comment structure"
     ],
     "changed_path_closure": [
+      "backend/internal/service/account_test_service.go",
       "backend/internal/service/openai_ws_pool.go"
     ]
   },

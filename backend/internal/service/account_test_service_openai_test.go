@@ -149,7 +149,7 @@ func TestAccountTestService_OpenAISuccessPersistsSnapshotFromHeaders(t *testing.
 		Credentials: map[string]any{"access_token": "test-token", "chatgpt_account_id": "chatgpt-test"},
 	}
 
-	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "")
+	err := svc.testOpenAIAccountConnection(ctx, account, "gpt-5.4", "", "", 64)
 	require.NoError(t, err)
 	require.Len(t, upstream.requests, 1)
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.requests[0].Context()))
@@ -158,6 +158,18 @@ func TestAccountTestService_OpenAISuccessPersistsSnapshotFromHeaders(t *testing.
 	require.Equal(t, officialEgressSinkAdminTestResponses, identity.SinkID)
 	require.True(t, identity.HasFinalizationToken,
 		"管理端 Responses 探针必须由 Codex Executor 签发 FinalizationToken")
+	body := mustReadRequestBody(t, upstream.requests[0])
+	require.Equal(t, "message", gjson.GetBytes(body, "input.0.type").String())
+	require.Equal(t, "auto", gjson.GetBytes(body, "tool_choice").String())
+	require.True(t, gjson.GetBytes(body, "parallel_tool_calls").Exists())
+	require.False(t, gjson.GetBytes(body, "parallel_tool_calls").Bool())
+	require.True(t, gjson.GetBytes(body, "reasoning").IsObject())
+	require.True(t, gjson.GetBytes(body, "store").Exists())
+	require.False(t, gjson.GetBytes(body, "store").Bool())
+	require.True(t, gjson.GetBytes(body, "stream").Bool())
+	require.Equal(t, "reasoning.encrypted_content", gjson.GetBytes(body, "include.0").String())
+	require.False(t, gjson.GetBytes(body, "max_output_tokens").Exists(),
+		"Codex OAuth 画像闭集不包含 max_output_tokens")
 	require.NotEmpty(t, repo.updatedExtra)
 	require.Equal(t, 42.0, repo.updatedExtra["codex_5h_used_percent"])
 	require.Equal(t, 88.0, repo.updatedExtra["codex_7d_used_percent"])
