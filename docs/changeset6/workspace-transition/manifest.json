@@ -7,8 +7,8 @@
   "baseline_head_tree": "a8c3dee18a01a6138bfcea60860bb5ad11548c3a",
   "baseline_workspace_path_count": 498,
   "candidate_path_count": 530,
-  "transition_entry_count": 26,
-  "transition_path_set_sha256": "802b94e8cdb30597058e1f2b3162076f984cced8e6be02cbe138f8fd2a200b4c",
+  "transition_entry_count": 25,
+  "transition_path_set_sha256": "8ee49829f6cc1e690e9598c9bc0d5c3b1532d7527f029803f5a8c9acdde53559",
   "entries": [
     {
       "path": ".gitignore",
@@ -578,30 +578,6 @@
         "mode": "0644",
         "size": 95265,
         "sha256": "56a0ff02ced36021365523160f129cf21efe015a45be7075df99a3b29aab307f"
-      },
-      "deletion_allowed": false,
-      "reason": "变更集 6 已确认方案、实现或验收证据的确定性工作区迁移",
-      "machine_proofs": [
-        "make check-egress-spec",
-        "docs/changeset6/post/acceptance-report.md"
-      ]
-    },
-    {
-      "path": "docs/changeset6/post/dmit-hotfix-report.md",
-      "scope": "changeset6_evidence",
-      "before": {
-        "existence": "absent",
-        "file_type": "absent",
-        "mode": "",
-        "size": 0,
-        "sha256": ""
-      },
-      "after": {
-        "existence": "present",
-        "file_type": "regular",
-        "mode": "0644",
-        "size": 2032,
-        "sha256": "d035e69f3edda66076de6ce14ea7ac07e018f2c8d24edcc13f754f85dd1ace2d"
       },
       "deletion_allowed": false,
       "reason": "变更集 6 已确认方案、实现或验收证据的确定性工作区迁移",
