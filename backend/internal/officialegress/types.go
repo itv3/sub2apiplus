@@ -1112,7 +1112,7 @@ func requestDigest(
 	}
 	hash := sha256.New()
 	_, _ = io.WriteString(hash, strings.ToUpper(req.Method))
-	_, _ = io.WriteString(hash, "\x00"+req.URL.Scheme+"\x00"+req.URL.Host+"\x00"+req.URL.EscapedPath()+"\x00"+req.URL.RawQuery)
+	_, _ = io.WriteString(hash, "\x00"+canonicalRequestScheme(req.URL.Scheme, protocol)+"\x00"+req.URL.Host+"\x00"+req.URL.EscapedPath()+"\x00"+req.URL.RawQuery)
 	effectiveHost := req.Host
 	if effectiveHost == "" {
 		effectiveHost = req.URL.Host
@@ -1189,6 +1189,25 @@ func requestDigest(
 		_, _ = io.WriteString(hash, fmt.Sprintf(":%d", attestation.contentLength))
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+// canonicalRequestScheme 将 WebSocket 拨号器交给 HTTP RoundTripper 前必然发生的
+// 协议别名转换收敛为同一个摘要事实。coder/websocket 会把 wss/ws 分别改写为
+// https/http；二者只是在不同调用层表达同一条安全或非安全连接，不能被 Guard
+// 误判为定型后篡改。安全与非安全连接仍保持不同摘要。
+func canonicalRequestScheme(scheme string, protocol WireProtocol) string {
+	normalized := strings.ToLower(strings.TrimSpace(scheme))
+	if protocol != WireProtocolWebSocket {
+		return normalized
+	}
+	switch normalized {
+	case "https":
+		return "wss"
+	case "http":
+		return "ws"
+	default:
+		return normalized
+	}
 }
 
 type singleUseBodyContextKey struct{}

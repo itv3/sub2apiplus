@@ -778,12 +778,15 @@ func TestWebSocketCompressionNormalizationHasStableSemanticDigest(t *testing.T) 
 		WebSocketCompressedTextRSV1: true,
 		WebSocketRawDeflatePayload:  true,
 	}
-	before, err := http.NewRequest(http.MethodGet, "https://chatgpt.com/backend-api/codex/responses", nil)
+	before, err := http.NewRequest(http.MethodGet, "wss://chatgpt.com/backend-api/codex/responses", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	before.Header.Set("Upgrade", "websocket")
 	after := before.Clone(before.Context())
+	// coder/websocket 在进入用户提供的 HTTP RoundTripper 前会把 wss 转为 https。
+	// 这项协议别名转换必须与 transport 自动握手头一样保持同一语义摘要。
+	after.URL.Scheme = "https"
 	after.Header = before.Header.Clone()
 	after.Header.Set("Connection", "Upgrade")
 	after.Header.Set("Upgrade", "websocket")
@@ -799,7 +802,7 @@ func TestWebSocketCompressionNormalizationHasStableSemanticDigest(t *testing.T) 
 		t.Fatal(err)
 	}
 	if beforeDigest != afterDigest {
-		t.Fatalf("计划内 compression 扩展改变了语义摘要：before=%s after=%s", beforeDigest, afterDigest)
+		t.Fatalf("计划内 WS 协议别名或 compression 扩展改变了语义摘要：before=%s after=%s", beforeDigest, afterDigest)
 	}
 	if err := validateFinalWireNormalization(after, plan, WireProtocolWebSocket); err != nil {
 		t.Fatalf("合法最终 WS offer 被拒绝：%v", err)
@@ -807,6 +810,17 @@ func TestWebSocketCompressionNormalizationHasStableSemanticDigest(t *testing.T) 
 	after.Header.Set("Sec-WebSocket-Extensions", "permessage-deflate; server_no_context_takeover")
 	if err := validateFinalWireNormalization(after, plan, WireProtocolWebSocket); err == nil {
 		t.Fatal("未授权的 WS compression 变换未被拒绝")
+	}
+
+	insecure := after.Clone(after.Context())
+	insecure.URL.Scheme = "http"
+	insecure.Header.Set("Sec-WebSocket-Extensions", "permessage-deflate; client_max_window_bits")
+	insecureDigest, err := requestDigest(insecure, plan, WireProtocolWebSocket)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if insecureDigest == beforeDigest {
+		t.Fatal("wss 与 ws 被错误归并为同一个请求摘要")
 	}
 }
 

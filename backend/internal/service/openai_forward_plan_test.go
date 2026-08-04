@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 
@@ -24,6 +25,72 @@ type openAIForwardPlanUpstream struct {
 type openAIForwardPlanWebSocketAcquirer struct {
 	mu         sync.Mutex
 	identities []officialegress.AttemptIdentity
+}
+
+type openAIForwardPlanTerminalGuardUpstream struct {
+	guard    *officialegress.Guard
+	request  *http.Request
+	decision officialegress.GuardDecision
+}
+
+func (u *openAIForwardPlanTerminalGuardUpstream) Do(
+	request *http.Request,
+	_ string,
+	_ int64,
+	_ int,
+) (*http.Response, error) {
+	return u.evaluateHTTP(request)
+}
+
+func (u *openAIForwardPlanTerminalGuardUpstream) DoWithTLS(
+	request *http.Request,
+	_ string,
+	_ int64,
+	_ int,
+	_ *tlsfingerprint.Profile,
+) (*http.Response, error) {
+	return u.evaluateHTTP(request)
+}
+
+func (u *openAIForwardPlanTerminalGuardUpstream) evaluateHTTP(
+	request *http.Request,
+) (*http.Response, error) {
+	// 生产 HTTPUpstream 在 terminal Guard 之前执行画像声明的全小写适配。
+	// 测试替身必须复刻该顺序，才能验证真正的最终线而非适配前中间态。
+	cloned := request.Clone(request.Context())
+	lowered := make(http.Header, len(request.Header)+1)
+	userAgent := ""
+	for name, values := range request.Header {
+		if strings.EqualFold(name, "User-Agent") {
+			if len(values) > 0 && userAgent == "" {
+				userAgent = values[0]
+			}
+			continue
+		}
+		lowered[strings.ToLower(name)] = append([]string(nil), values...)
+	}
+	lowered["User-Agent"] = []string{""}
+	if userAgent != "" {
+		lowered["user-agent"] = []string{userAgent}
+	}
+	cloned.Header = lowered
+	request = cloned
+	u.request = request
+	u.decision = u.guard.Evaluate(
+		request,
+		officialegress.BackendHTTPUpstream,
+		officialegress.WireProtocolHTTP,
+	)
+	if !u.decision.Allow {
+		return nil, errors.New("Linux HTTP 最终线 Guard 拒绝请求")
+	}
+	return &http.Response{
+		StatusCode: http.StatusOK,
+		Status:     "200 OK",
+		Header:     make(http.Header),
+		Body:       io.NopCloser(bytes.NewReader(nil)),
+		Request:    request,
+	}, nil
 }
 
 func (a *openAIForwardPlanWebSocketAcquirer) AcquireOfficialCodexWebSocket(
@@ -355,6 +422,96 @@ func TestOpenAIForwardInvocationPlanAcquireThenHTTPFallbackUsesOneBundle(t *test
 	require.True(t, ok)
 	require.Equal(t, uint32(2), identity.AttemptOrdinal)
 	require.Equal(t, string(officialegress.AttemptReasonFallback), identity.AttemptReason)
+}
+
+func TestOpenAIForwardInvocationPlanLinuxLiteHTTPFallbackPassesTerminalGuard(t *testing.T) {
+	guard := officialegress.DefaultGuard()
+	upstream := &openAIForwardPlanTerminalGuardUpstream{guard: guard}
+	runtimeState, err := newOfficialEgressTransitionRuntimeWithExecutor(
+		guard,
+		upstream,
+		officialCodexExecutorID,
+		officialegress.ReleaseModeActive,
+	)
+	require.NoError(t, err)
+	require.NoError(t, runtimeState.BindCodexWebSocketAcquirer(&openAIForwardPlanWebSocketAcquirer{}))
+
+	account := &Account{
+		ID: 714, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{"chatgpt_account_id": "acct-linux-lite"},
+	}
+	plan, err := newOpenAIForwardInvocationPlan(context.Background(), openAIForwardInvocationPlanInput{
+		Runtime: runtimeState, Account: account,
+		PrimarySinkID: officialEgressSinkResponsesWS,
+		InvocationID:  "linux-lite-http-fallback",
+		IdentityMode:  officialegress.IdentityCodexOAuthStrict,
+		HeaderPolicy: officialegress.HeaderPolicy{
+			ID: "linux-lite.headers", Source: "test",
+		},
+		ExecutionPolicy: officialegress.ExecutionPolicy{
+			ID: "linux-lite.execution", Source: "test", MaxAttempts: 2,
+			Replayable: true, ConcurrencyLimit: 1,
+		},
+		BehaviorPolicy: officialegress.BehaviorPolicy{
+			ID: "linux-lite.behavior", Source: "test",
+			Kind: officialegress.BehaviorUserRequest,
+			FallbackSinkIDs: []officialegress.SinkID{
+				officialEgressSinkResponsesWSHTTPBridge,
+			},
+			AttemptBudget: 2,
+		},
+		DeploymentPolicy: officialegress.DeploymentSupportPolicy{
+			ID: "linux-lite.deployment", Source: "test", Platform: "linux/amd64",
+			ProxyMode: "direct", SupportedBackends: []officialegress.BackendKind{
+				officialegress.BackendHTTPUpstream,
+				officialegress.BackendReqProfile,
+				officialegress.BackendWebSocket,
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	wsTarget, err := http.NewRequest(http.MethodGet, "wss://chatgpt.com/backend-api/codex/responses", nil)
+	require.NoError(t, err)
+	first, err := plan.NewAttempt(openAIForwardAttemptInput{
+		Reason: officialegress.AttemptReasonInitial,
+		SinkID: officialEgressSinkResponsesWS, EndpointID: officialCodexEndpointResponsesWS,
+		Protocol: officialegress.WireProtocolWebSocket,
+		Method:   http.MethodGet, URL: wsTarget.URL,
+		Headers:        make(http.Header),
+		Authentication: http.Header{"Authorization": []string{"Bearer ws-token"}},
+		Body:           officialegress.NewReplayableRequestBody(nil),
+	})
+	require.NoError(t, err)
+	result, err := plan.ExecuteAttempt(context.Background(), first)
+	require.NoError(t, err)
+	require.NoError(t, result.WebSocket().Close())
+
+	target, found := plan.FallbackNode(officialEgressSinkResponsesWSHTTPBridge)
+	require.True(t, found)
+	body := `{"model":"gpt-5.6-luna","input":[],"tool_choice":"auto","parallel_tool_calls":false,"reasoning":{},"store":false,"stream":true,"include":[]}`
+	request, err := http.NewRequest(
+		http.MethodPost,
+		"https://chatgpt.com/backend-api/codex/responses",
+		bytes.NewBufferString(body),
+	)
+	require.NoError(t, err)
+	request.Header.Set("Authorization", "Bearer http-token")
+	request = request.WithContext(WithOfficialEgressContext(
+		request.Context(),
+		NewOfficialEgressContext(OfficialEgressContextInput{
+			TargetPlatform: PlatformOpenAI,
+			ResponsesLite:  true,
+		}),
+	))
+
+	response, err := plan.TransitionHTTPFallback(request.Context(), request, target)
+	require.NoError(t, err)
+	require.NoError(t, response.Body.Close())
+	require.True(t, upstream.decision.Allow, "%+v", upstream.decision)
+	require.NotNil(t, upstream.request)
+	require.Equal(t, "true", upstream.request.Header[responsesLiteHeaderKey][0])
+	require.Equal(t, "zstd", upstream.request.Header["content-encoding"][0])
 }
 
 func openAIForwardPlanAttemptInput(
