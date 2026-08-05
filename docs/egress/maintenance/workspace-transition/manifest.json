@@ -597,8 +597,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 8,
-        "sha256": "dab1db4bf902acc35d3ce4731b9930dc05961094d926b0ba631a25fc05e6528a"
+        "size": 10,
+        "sha256": "7ca14696e29b34d5b19add6219312a6a7be6c5a291df2d555ddf7262b7a4d4c9"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
