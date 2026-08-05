@@ -598,7 +598,7 @@
         "file_type": "regular",
         "mode": "0644",
         "size": 10,
-        "sha256": "7ca14696e29b34d5b19add6219312a6a7be6c5a291df2d555ddf7262b7a4d4c9"
+        "sha256": "11d2e4777f129e10bcc310946da5d476c134b89e870b67c04065479cbccbdb1d"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
