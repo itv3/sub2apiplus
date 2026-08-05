@@ -305,11 +305,14 @@ func TestOpenAIGatewayServiceForward_NormalizesResponsesLiteToolsForOAuth(t *tes
 			require.Equal(t, "true", upstream.lastReq.Header.Get(responsesLiteHeader))
 			require.Equal(t, "high", gjson.GetBytes(upstream.lastBody, "reasoning.effort").String())
 			require.Equal(t, "all_turns", gjson.GetBytes(upstream.lastBody, "reasoning.context").String())
-			require.False(t, gjson.GetBytes(upstream.lastBody, `tools.#(type=="namespace")`).Exists())
-			require.Equal(t, "shell", gjson.GetBytes(upstream.lastBody, `tools.#(type=="function").name`).String())
-			require.Equal(t, "exec", gjson.GetBytes(upstream.lastBody, `tools.#(type=="custom").name`).String())
-			require.True(t, gjson.GetBytes(upstream.lastBody, `tools.#(type=="tool_search")`).Exists())
+			// 官方 Lite 画像会把全部工具无损移动到首个 input.additional_tools，
+			// 顶层 tools 必须删除，避免测试继续固化合并前的旧出站形态。
+			require.False(t, gjson.GetBytes(upstream.lastBody, "tools").Exists())
+			require.Equal(t, "additional_tools", gjson.GetBytes(upstream.lastBody, "input.0.type").String())
 			require.Equal(t, "collaboration", gjson.GetBytes(upstream.lastBody, `input.#(type=="additional_tools").tools.0.name`).String())
+			require.Equal(t, "shell", gjson.GetBytes(upstream.lastBody, `input.#(type=="additional_tools").tools.#(type=="function").name`).String())
+			require.Equal(t, "exec", gjson.GetBytes(upstream.lastBody, `input.#(type=="additional_tools").tools.#(type=="custom").name`).String())
+			require.True(t, gjson.GetBytes(upstream.lastBody, `input.#(type=="additional_tools").tools.#(type=="tool_search")`).Exists())
 			require.Equal(t, "auto", gjson.GetBytes(upstream.lastBody, "tool_choice").String())
 		})
 	}
