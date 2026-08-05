@@ -12,7 +12,7 @@ import (
 
 func loadBaseline(t *testing.T) []byte {
 	t.Helper()
-	raw, err := os.ReadFile("../../../../docs/changeset0/sink-baseline.json")
+	raw, err := os.ReadFile("../../../../docs/egress/foundation/sink-baseline.json")
 	if err != nil {
 		t.Fatal(err)
 	}

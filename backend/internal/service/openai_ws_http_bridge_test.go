@@ -124,9 +124,10 @@ func TestProxyOpenAIWSHTTPBridgeTurnOfficialEgressUsesHTTPProfile(t *testing.T) 
 	require.True(t, ok)
 	require.Equal(t, OfficialEgressTransportHTTP, egressContext.Transport())
 	require.Equal(t, officialCodexTransportHTTPDefault, egressContext.TransportProfileID())
-	require.Equal(t, testOfficialOpenAISessionID, upstream.lastReq.Header.Get("session-id"))
+	sessionID := requireUnifiedOfficialOpenAIWireSession(t, upstream.lastReq)
 	require.Empty(t, upstream.lastReq.Header.Get(responsesLiteHeader), "客户端自报不得顶回 OAuth 非 Lite Header")
-	require.Equal(t, string(bridgeTurnMetadataBytes), upstream.lastReq.Header.Get("x-codex-turn-metadata"))
+	require.Equal(t, sessionID, gjson.Get(upstream.lastReq.Header.Get("x-codex-turn-metadata"), "session_id").String())
+	require.NotEqual(t, string(bridgeTurnMetadataBytes), upstream.lastReq.Header.Get("x-codex-turn-metadata"))
 	require.Equal(t, testOfficialOpenAICallID, gjson.GetBytes(upstream.lastBody, "input.3.call_id").String())
 }
 

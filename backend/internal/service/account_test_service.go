@@ -749,8 +749,9 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		req.Header.Set("accept", "text/event-stream")
 		applyOpenAICodexAuxiliaryHeaders(req.Header)
 		setOpenAIChatGPTAccountHeaders(req.Header, credentialAccount)
-		// 与真实转发一致：originator 与最终 User-Agent 首段配套，否则上游 404（issue #3901）。
-		enforceCodexIdentityHeaders(req.Header)
+		// 与真实转发一致：账号级自定义 UA 同样作为管理员显式配置传入，否则测试用的身份
+		// 与该账号真实出站的身份不是同一个（issue #3901 的配对不变式由收口保证）。
+		enforceCodexIdentityHeadersWithUA(req.Header, credentialAccount.GetOpenAIUserAgent())
 	}
 	if accountMimicCodexCLI {
 		mimicProfile.ApplyHeaders(req, true)
@@ -2106,6 +2107,9 @@ func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Co
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "*/*")
 	setOpenAIChatGPTAccountHeaders(req.Header, credentialAccount)
+	// 账号测试与真实转发共用同一候选身份归一化入口；严格画像仍由后续
+	// CodexEgressExecutor 终局重建，账号配置不能覆盖受保护的版本与平台字段。
+	enforceCodexIdentityHeadersWithUA(req.Header, credentialAccount.GetOpenAIUserAgent())
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {

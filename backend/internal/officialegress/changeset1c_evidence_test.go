@@ -112,7 +112,7 @@ type changeset1CGuardLog struct {
 }
 
 func TestChangeset1CActiveExerciseEvidenceIsComplete(t *testing.T) {
-	raw, err := os.ReadFile("../../../docs/changeset1c/active-exercises.json")
+	raw, err := os.ReadFile("../../../docs/egress/guard/active-exercises.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func readChangeset1CVerificationArtifact(t *testing.T, ref changeset1CArtifactRe
 	if ref.Path != "verification.json" || len(ref.SHA256) != sha256.Size*2 {
 		t.Fatalf("1C 验证产物引用非法：%+v", ref)
 	}
-	raw, err := os.ReadFile("../../../docs/changeset1c/" + ref.Path)
+	raw, err := os.ReadFile("../../../docs/egress/guard/" + ref.Path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,7 +273,7 @@ func readChangeset1CGuardLog(t *testing.T, path, wantSHA256 string) changeset1CG
 	if path != "guard-events.json" {
 		t.Fatalf("1C Guard 日志路径非法：%s", path)
 	}
-	raw, err := os.ReadFile("../../../docs/changeset1c/" + path)
+	raw, err := os.ReadFile("../../../docs/egress/guard/" + path)
 	if err != nil {
 		t.Fatal(err)
 	}

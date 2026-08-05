@@ -1,21 +1,23 @@
 .PHONY: build build-backend build-frontend test test-backend test-frontend test-frontend-critical test-capture-tools check-egress-spec check-egress-spec-ci check-egress-spec-local-source check-egress-bootstrap-replay check-egress-seal
 
 EGRESS_BOOTSTRAP_COMMIT := 38a9929eac35a39c86de2f27de8f7a805d7dae52
-EGRESS_BOOTSTRAP_BASELINE := $(CURDIR)/docs/changeset0/sink-baseline.json
-EGRESS_BOOTSTRAP_SUPPLEMENTS := $(CURDIR)/docs/changeset1a/pre-bootstrap-supplements.json
-EGRESS_REMOVAL_RECEIPTS := $(CURDIR)/docs/changeset2/removal-receipts.json,$(CURDIR)/docs/changeset3/removal-receipts.json,$(CURDIR)/docs/changeset5/removal-receipts.json,$(CURDIR)/docs/maintenance/removal-receipts.json
-EGRESS_MIGRATION_RECEIPTS := $(CURDIR)/docs/changeset1a/migration-receipts.json,$(CURDIR)/docs/changeset3/migration-receipts.json
-EGRESS_BOOTSTRAP_REMOVAL_RECEIPTS := $(CURDIR)/docs/changeset2/removal-receipts.json
-EGRESS_BOOTSTRAP_MIGRATION_RECEIPTS := $(CURDIR)/docs/changeset1a/migration-receipts.json
-EGRESS_CATALOG_AMENDMENTS := $(CURDIR)/docs/changeset1a/catalog-amendments.json
-EGRESS_BOOTSTRAP_INVENTORY_LOCK := $(CURDIR)/docs/maintenance/bootstrap-inventory-lock.json
+EGRESS_BOOTSTRAP_BASELINE := $(CURDIR)/docs/egress/foundation/sink-baseline.json
+EGRESS_BOOTSTRAP_SUPPLEMENTS := $(CURDIR)/docs/egress/lifecycle/pre-bootstrap-supplements.json
+EGRESS_REMOVAL_RECEIPTS := $(CURDIR)/docs/egress/release/removal-receipts.json,$(CURDIR)/docs/egress/migration/removal-receipts.json,$(CURDIR)/docs/egress/consolidation/removal-receipts.json,$(CURDIR)/docs/egress/maintenance/removal-receipts.json
+EGRESS_MIGRATION_RECEIPTS := $(CURDIR)/docs/egress/lifecycle/migration-receipts.json,$(CURDIR)/docs/egress/migration/migration-receipts.json
+EGRESS_BOOTSTRAP_REMOVAL_RECEIPTS := $(CURDIR)/docs/egress/release/removal-receipts.json
+EGRESS_BOOTSTRAP_MIGRATION_RECEIPTS := $(CURDIR)/docs/egress/lifecycle/migration-receipts.json
+EGRESS_CATALOG_AMENDMENTS := $(CURDIR)/docs/egress/lifecycle/catalog-amendments.json
+EGRESS_BOOTSTRAP_INVENTORY_LOCK := $(CURDIR)/docs/egress/maintenance/bootstrap-inventory-lock.json
 EGRESS_SCANNER_SOURCE_ROOT := $(CURDIR)/backend/cmd/egressscan
-EGRESS_LEGACY_BASELINE := $(CURDIR)/docs/changeset1a/legacy-baseline.json
-EGRESS_LEGACY_CEILING := $(CURDIR)/docs/changeset1a/legacy-ceiling.json
-EGRESS_LEGACY_SEAL_RECEIPT := $(CURDIR)/docs/changeset1a/legacy-seal-receipt.json
+EGRESS_LEGACY_BASELINE := $(CURDIR)/docs/egress/lifecycle/legacy-baseline.json
+EGRESS_LEGACY_CEILING := $(CURDIR)/docs/egress/lifecycle/legacy-ceiling.json
+EGRESS_LEGACY_SEAL_RECEIPT := $(CURDIR)/docs/egress/lifecycle/legacy-seal-receipt.json
 EGRESS_SEAL_BASE_REF ?=
 
 FRONTEND_CRITICAL_VITEST := \
+	src/api/__tests__/client.spec.ts \
+	src/api/__tests__/tokenRefresh.spec.ts \
 	src/views/auth/__tests__/LinuxDoCallbackView.spec.ts \
 	src/views/auth/__tests__/WechatCallbackView.spec.ts \
 	src/views/user/__tests__/PaymentView.spec.ts \
@@ -69,17 +71,17 @@ check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal
 	@python3 tools/check_ledger_completeness.py
 	@cd backend && go run ./cmd/egressscan -mode self-test
 	@cd backend && go run ./cmd/egressscan -mode check \
-		-baseline ../docs/changeset0/sink-baseline.json \
-		-supplements ../docs/changeset1a/pre-bootstrap-supplements.json \
+		-baseline ../docs/egress/foundation/sink-baseline.json \
+		-supplements ../docs/egress/lifecycle/pre-bootstrap-supplements.json \
 		-removals "$(EGRESS_REMOVAL_RECEIPTS)" \
 		-migration-receipts "$(EGRESS_MIGRATION_RECEIPTS)" \
-		-catalog-amendments ../docs/changeset1a/catalog-amendments.json \
+		-catalog-amendments ../docs/egress/lifecycle/catalog-amendments.json \
 		-inventory-lock "$(EGRESS_BOOTSTRAP_INVENTORY_LOCK)" \
 		-scanner-source-root ./cmd/egressscan
 	@cd backend && d=$$(mktemp -d) && trap "rm -rf $$d" EXIT; \
 		go run ./cmd/egressscan -mode stats \
-			-baseline ../docs/changeset0/sink-baseline.json -out $$d/sink-stats.md && \
-		cmp -s $$d/sink-stats.md ../docs/changeset0/sink-stats.md || \
+			-baseline ../docs/egress/foundation/sink-baseline.json -out $$d/sink-stats.md && \
+		cmp -s $$d/sink-stats.md ../docs/egress/foundation/sink-stats.md || \
 		{ echo "🔴 发送面统计已与基线漂移，请重新生成 sink-stats.md"; exit 1; }
 	@cd backend && test -z "$$(gofmt -l \
 		./internal/officialegress/ \
@@ -144,7 +146,7 @@ check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal
 		{ echo "🔴 official-client 发布图已变更，请更新 release-graph.json"; exit 1; }
 	@cd backend && d=$$(mktemp -d) && trap "rm -rf $$d" EXIT; \
 		go run ./cmd/egressbindingdump \
-			../docs/changeset0/sink-baseline.json $$d/release-bindings.json >/dev/null && \
+			../docs/egress/foundation/sink-baseline.json $$d/release-bindings.json >/dev/null && \
 		cmp -s $$d/release-bindings.json internal/officialegress/bindingcontract/testdata/release-bindings.json || \
 		{ echo "🔴 ReleaseBinding 已与 sink 基线漂移，请更新 release-bindings.json"; exit 1; }
 	@cd backend && go build ./... >/dev/null

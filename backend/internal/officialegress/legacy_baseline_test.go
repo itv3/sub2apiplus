@@ -49,7 +49,7 @@ type legacyRemovalManifest struct {
 }
 
 func TestProvisionalLegacyBaselineMatchesUnfinalizedReachableCatalog(t *testing.T) {
-	raw, err := os.ReadFile("../../../docs/changeset1a/legacy-baseline.json")
+	raw, err := os.ReadFile("../../../docs/egress/lifecycle/legacy-baseline.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func TestProvisionalLegacyBaselineMatchesUnfinalizedReachableCatalog(t *testing.
 	default:
 		t.Fatalf("legacy lifecycle 非法：%s", manifest.Lifecycle)
 	}
-	supplementRaw, err := os.ReadFile("../../../docs/changeset1a/pre-bootstrap-supplements.json")
+	supplementRaw, err := os.ReadFile("../../../docs/egress/lifecycle/pre-bootstrap-supplements.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +94,7 @@ func TestProvisionalLegacyBaselineMatchesUnfinalizedReachableCatalog(t *testing.
 		t.Fatalf("legacy 基线与 pre-bootstrap 补录清单生命周期不一致：legacy=%+v supplements=%+v",
 			manifest, supplementManifest)
 	}
-	ceilingRaw, err := os.ReadFile("../../../docs/changeset1a/legacy-ceiling.json")
+	ceilingRaw, err := os.ReadFile("../../../docs/egress/lifecycle/legacy-ceiling.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +108,7 @@ func TestProvisionalLegacyBaselineMatchesUnfinalizedReachableCatalog(t *testing.
 		ceiling.Lifecycle != manifest.Lifecycle {
 		t.Fatalf("legacy ceiling 与运行时清单生命周期不一致：legacy=%+v ceiling=%+v", manifest, ceiling)
 	}
-	sealReceiptRaw, err := os.ReadFile("../../../docs/changeset1a/legacy-seal-receipt.json")
+	sealReceiptRaw, err := os.ReadFile("../../../docs/egress/lifecycle/legacy-seal-receipt.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -176,7 +176,7 @@ func TestProvisionalLegacyBaselineMatchesUnfinalizedReachableCatalog(t *testing.
 				t.Fatalf("sealed 后 legacy 只能减少，禁止新增：%s", id)
 			}
 		}
-		removalRaw, err := os.ReadFile("../../../docs/changeset1a/removal-receipts.json")
+		removalRaw, err := os.ReadFile("../../../docs/egress/lifecycle/removal-receipts.json")
 		if err != nil {
 			t.Fatal(err)
 		}

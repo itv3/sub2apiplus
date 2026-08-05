@@ -12,8 +12,8 @@ from typing import Any
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-BASE_DIR = ROOT / "docs" / "changeset6" / "post-conflict-inventory"
-POST_DIR = ROOT / "docs" / "maintenance" / "post-conflict-inventory"
+BASE_DIR = ROOT / "docs" / "egress" / "validation" / "post-conflict-inventory"
+POST_DIR = ROOT / "docs" / "egress" / "maintenance" / "post-conflict-inventory"
 TRANSITION_PATH = POST_DIR / "transition.json"
 UPSTREAM_BASE = "26d894ef4f50645a4bf1030e378ac892f17d0223"
 BASE_FULL_SHA256 = "40719b6a58208b368b2b0a99657f8ab5871cc6aed54168f4074152a03d4860da"

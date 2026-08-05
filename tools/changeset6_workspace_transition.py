@@ -13,8 +13,8 @@ from typing import Any
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-BASELINE_PATH = ROOT / "docs" / "changeset6" / "baseline" / "workspace-manifest.json"
-TRANSITION_DIR = ROOT / "docs" / "changeset6" / "workspace-transition"
+BASELINE_PATH = ROOT / "docs" / "egress" / "validation" / "baseline" / "workspace-manifest.json"
+TRANSITION_DIR = ROOT / "docs" / "egress" / "validation" / "workspace-transition"
 MANIFEST_PATH = TRANSITION_DIR / "manifest.json"
 RECEIPT_PATH = TRANSITION_DIR / "receipt.json"
 FROZEN_BASELINE_SHA256 = "c8c6e6452390abd076ae771b17b11bf079a2a3c45359707cf6ac8fb11ed5c760"
@@ -129,7 +129,7 @@ def status_paths() -> set[str]:
 def changeset6_evidence_paths() -> set[str]:
     """显式枚举被仓库 docs/* 规则忽略的变更集 6 证据，避免 git status 漏记。"""
 
-    evidence_root = ROOT / "docs" / "changeset6"
+    evidence_root = ROOT / "docs" / "egress" / "validation"
     paths: set[str] = set()
     if not evidence_root.exists():
         return paths
@@ -159,7 +159,7 @@ def load_baseline() -> tuple[bytes, dict[str, Any], dict[str, dict[str, Any]]]:
 
 
 def scope_of(path: str) -> str:
-    if path.startswith("docs/changeset6/") or path.startswith("tools/changeset6_"):
+    if path.startswith("docs/egress/validation/") or path.startswith("tools/changeset6_"):
         return "changeset6_evidence"
     if path.startswith("backend/internal/officialegress/catalogdata/runtime/") or path.endswith(
         "runtime_catalog_files.go"
@@ -199,7 +199,8 @@ def build_transition() -> tuple[dict[str, Any], dict[str, Any]]:
                 "reason": "变更集 6 已确认方案、实现或验收证据的确定性工作区迁移",
                 "machine_proofs": [
                     "make check-egress-spec",
-                    "docs/changeset6/post/acceptance-report.md",
+                    "docs/egress/validation/post/benchmark-calculation.json",
+                    "docs/egress/validation/post-final-wire/receipt.json",
                 ],
             }
         )
@@ -208,7 +209,7 @@ def build_transition() -> tuple[dict[str, Any], dict[str, Any]]:
     manifest = {
         "schema_version": "changeset6-workspace-transition/v1",
         "changeset": "6",
-        "baseline_manifest_path": "docs/changeset6/baseline/workspace-manifest.json",
+        "baseline_manifest_path": "docs/egress/validation/baseline/workspace-manifest.json",
         "baseline_manifest_sha256": sha256(baseline_raw),
         "baseline_head": baseline["head"],
         "baseline_head_tree": baseline["head_tree"],
@@ -232,7 +233,7 @@ def build_transition() -> tuple[dict[str, Any], dict[str, Any]]:
     receipt = {
         "schema_version": "changeset6-workspace-transition-receipt/v1",
         "changeset": "6",
-        "manifest_path": "docs/changeset6/workspace-transition/manifest.json",
+        "manifest_path": "docs/egress/validation/workspace-transition/manifest.json",
         "manifest_sha256": sha256(manifest_raw),
         "baseline_manifest_sha256": sha256(baseline_raw),
         "baseline_workspace_path_count": len(frozen),

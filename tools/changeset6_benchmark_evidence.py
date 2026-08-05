@@ -13,16 +13,16 @@ from typing import Any
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-BASELINE_METADATA = ROOT / "docs" / "changeset6" / "baseline" / "benchmark-metadata.json"
-POST_METADATA = ROOT / "docs" / "changeset6" / "post" / "benchmark-metadata.json"
-CALCULATION_PATH = ROOT / "docs" / "changeset6" / "post" / "benchmark-calculation.json"
+BASELINE_METADATA = ROOT / "docs" / "egress" / "validation" / "baseline" / "benchmark-metadata.json"
+POST_METADATA = ROOT / "docs" / "egress" / "validation" / "post" / "benchmark-metadata.json"
+CALCULATION_PATH = ROOT / "docs" / "egress" / "validation" / "post" / "benchmark-calculation.json"
 
 LIVE_BODY_DRIVER = ROOT / "backend" / "internal" / "service" / "official_egress_changeset6_benchmark_test.go"
 LIVE_CATALOG_DRIVER = ROOT / "backend" / "internal" / "officialegress" / "release_catalog_benchmark_test.go"
 LIVE_PROFILE_DRIVER = ROOT / "backend" / "internal" / "service" / "official_egress_benchmark_test.go"
 
-PRE_DRIVER_DIR = ROOT / "docs" / "changeset6" / "baseline" / "benchmark-drivers"
-POST_DRIVER_DIR = ROOT / "docs" / "changeset6" / "post" / "benchmark-drivers"
+PRE_DRIVER_DIR = ROOT / "docs" / "egress" / "validation" / "baseline" / "benchmark-drivers"
+POST_DRIVER_DIR = ROOT / "docs" / "egress" / "validation" / "post" / "benchmark-drivers"
 PRE_BODY_DRIVER = PRE_DRIVER_DIR / "body-pre_test.go"
 PRE_CATALOG_DRIVER = PRE_DRIVER_DIR / "catalog-pre_test.go"
 PRE_PROFILE_DRIVER = PRE_DRIVER_DIR / "profile-pre_test.go"
@@ -69,8 +69,25 @@ def relative(path: pathlib.Path) -> str:
     return path.relative_to(ROOT).as_posix()
 
 
+def resolve_recorded_path(value: str) -> pathlib.Path:
+    """把封存收据中的旧目录路径映射到当前语义目录，不改写历史原文。"""
+    prefix = "docs/changeset6/"
+    if value.startswith(prefix):
+        value = "docs/egress/validation/" + value[len(prefix) :]
+    return ROOT / pathlib.PurePosixPath(value)
+
+
+def historical_recorded_path(path: pathlib.Path) -> str:
+    """返回封存 metadata 使用的历史路径，供原文摘要链核对。"""
+    value = relative(path)
+    prefix = "docs/egress/validation/"
+    if value.startswith(prefix):
+        return "docs/changeset6/" + value[len(prefix) :]
+    return value
+
+
 def artifact(path: pathlib.Path) -> dict[str, str]:
-    return {"path": relative(path), "sha256": sha256(path.read_bytes())}
+    return {"path": historical_recorded_path(path), "sha256": sha256(path.read_bytes())}
 
 
 def load_json(path: pathlib.Path) -> dict[str, Any]:
@@ -276,7 +293,7 @@ def metadata_artifacts(metadata: dict[str, Any], key: str) -> list[dict[str, str
     for item in values:
         if not isinstance(item, dict) or not isinstance(item.get("path"), str):
             raise RuntimeError(f"benchmark metadata 条目非法：{item!r}")
-        path = ROOT / pathlib.PurePosixPath(item["path"])
+        path = resolve_recorded_path(item["path"])
         if sha256(path.read_bytes()) != item.get("sha256"):
             raise RuntimeError(f"benchmark metadata 摘要与文件不一致：{item['path']}")
         result.append({"path": item["path"], "sha256": item["sha256"]})
@@ -303,12 +320,12 @@ def build_calculation() -> dict[str, Any]:
     post_results = metadata_artifacts(post_metadata, "results")
     paths = {item["path"]: item for item in baseline_raw + post_results}
 
-    body_pre_path = ROOT / "docs/changeset6/baseline/benchmarks/body-pre.txt"
-    body_post_path = ROOT / "docs/changeset6/post/benchmarks/body-post.txt"
-    catalog_pre_path = ROOT / "docs/changeset6/baseline/benchmarks/catalog-pre.txt"
-    catalog_post_path = ROOT / "docs/changeset6/post/benchmarks/catalog-post.txt"
-    profile_pre_path = ROOT / "docs/changeset6/baseline/benchmarks/profile-pre.txt"
-    profile_post_path = ROOT / "docs/changeset6/post/benchmarks/profile-post.txt"
+    body_pre_path = ROOT / "docs/egress/validation/baseline/benchmarks/body-pre.txt"
+    body_post_path = ROOT / "docs/egress/validation/post/benchmarks/body-post.txt"
+    catalog_pre_path = ROOT / "docs/egress/validation/baseline/benchmarks/catalog-pre.txt"
+    catalog_post_path = ROOT / "docs/egress/validation/post/benchmarks/catalog-post.txt"
+    profile_pre_path = ROOT / "docs/egress/validation/baseline/benchmarks/profile-pre.txt"
+    profile_post_path = ROOT / "docs/egress/validation/post/benchmarks/profile-post.txt"
     for path in (
         body_pre_path,
         body_post_path,
@@ -317,7 +334,7 @@ def build_calculation() -> dict[str, Any]:
         profile_pre_path,
         profile_post_path,
     ):
-        if relative(path) not in paths:
+        if historical_recorded_path(path) not in paths:
             raise RuntimeError(f"原始 benchmark 未进入 metadata 摘要链：{relative(path)}")
 
     body_pre = parse_benchmark(body_pre_path, BODY_CASES)

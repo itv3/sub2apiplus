@@ -97,7 +97,7 @@ type changeset5WorkspaceTransitionReceipt struct {
 }
 
 func TestChangeset5WorkspaceBaselineIsIndependentlyFrozen(t *testing.T) {
-	root := filepath.Join("../../..", "docs", "changeset5", "workspace-baseline")
+	root := filepath.Join("../../..", "docs", "egress", "consolidation", "workspace-baseline")
 	manifestRaw, err := os.ReadFile(filepath.Join(root, "manifest.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -150,7 +150,7 @@ func TestChangeset5WorkspaceBaselineIsIndependentlyFrozen(t *testing.T) {
 }
 
 func TestChangeset5WorkspaceTransitionIsIndependentlyFrozen(t *testing.T) {
-	root := filepath.Join("../../..", "docs", "changeset5", "workspace-transition")
+	root := filepath.Join("../../..", "docs", "egress", "consolidation", "workspace-transition")
 	manifestRaw, err := os.ReadFile(filepath.Join(root, "manifest.json"))
 	if err != nil {
 		t.Fatal(err)

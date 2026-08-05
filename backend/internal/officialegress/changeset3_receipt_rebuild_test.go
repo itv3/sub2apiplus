@@ -108,7 +108,7 @@ func changeset3BuildRebuiltReceipts(
 		t.Fatal(err)
 	}
 	postRaw, err := os.ReadFile(
-		"../../../docs/changeset3/post_identity_authority_refactor_final_wire/manifest.json",
+		"../../../docs/egress/migration/post_identity_authority_refactor_final_wire/manifest.json",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -154,11 +154,11 @@ func changeset3BuildRebuiltReceipts(
 				ReleaseModes:       []ReleaseMode{ReleaseModeActive, ReleaseModePrevious},
 				CredentialMaterial: "synthetic_attempt_local_redacted",
 				FinalWireManifest: changeset3FinalWireArtifactRef{
-					Path:   "docs/changeset3/post_identity_authority_refactor_final_wire/manifest.json",
+					Path:   "docs/egress/migration/post_identity_authority_refactor_final_wire/manifest.json",
 					SHA256: changeset3PostFinalWireSHA256,
 				},
 				SecretScan: changeset3FinalWireArtifactRef{
-					Path:   "docs/changeset3/post_identity_authority_refactor_final_wire/secret-scan.json",
+					Path:   "docs/egress/migration/post_identity_authority_refactor_final_wire/secret-scan.json",
 					SHA256: changeset3PostSecretScanSHA256,
 				},
 				ActiveCaptureDigest:   changeset3DigestFinalWireCapture(t, active),

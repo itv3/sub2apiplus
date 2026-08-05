@@ -101,7 +101,7 @@ type changeset2ActiveSourceInventory struct {
 
 func TestChangeset2CompatibilityBaselinePreservesReceiptsAndRouteIdentity(t *testing.T) {
 	var lock changeset2CompatibilityLock
-	readChangeset2StrictJSON(t, "../../../docs/changeset2/compatibility-lock.json", &lock)
+	readChangeset2StrictJSON(t, "../../../docs/egress/release/compatibility-lock.json", &lock)
 	if lock.SchemaVersion != 1 || lock.Changeset != "2" || lock.Task != "2.0" ||
 		lock.Status != "completed_baseline_frozen" || lock.BootstrapCommit != BootstrapCommit {
 		t.Fatalf("变更集 2 基线元数据非法：%+v", lock)
@@ -161,7 +161,7 @@ func TestChangeset2CompatibilityBaselinePreservesReceiptsAndRouteIdentity(t *tes
 
 func TestChangeset2ScannerAndActiveSourceSnapshotsAreComplete(t *testing.T) {
 	var scanner changeset2ScannerSnapshot
-	readChangeset2StrictJSON(t, "../../../docs/changeset2/scanner-candidates.json", &scanner)
+	readChangeset2StrictJSON(t, "../../../docs/egress/release/scanner-candidates.json", &scanner)
 	if scanner.SchemaVersion != 1 || scanner.Changeset != "2" || scanner.Task != "2.0" ||
 		scanner.Scanner.Mode != "bootstrap" || scanner.Scanner.AllCandidateCount != 179 ||
 		scanner.Scanner.CodexBusinessCandidateCount != len(scanner.Candidates) || len(scanner.Candidates) != 26 ||
@@ -202,7 +202,7 @@ func TestChangeset2ScannerAndActiveSourceSnapshotsAreComplete(t *testing.T) {
 	}
 
 	var inventory changeset2ActiveSourceInventory
-	readChangeset2StrictJSON(t, "../../../docs/changeset2/active-source-inventory.json", &inventory)
+	readChangeset2StrictJSON(t, "../../../docs/egress/release/active-source-inventory.json", &inventory)
 	wantCategories := []string{
 		"transition_adapter_and_provider", "service_registry_and_export_bridges",
 		"active_version_and_wrappers", "package_active_body_order",
@@ -249,6 +249,8 @@ func readChangeset2WorkspaceArtifact(t *testing.T, path string) []byte {
 	if strings.TrimSpace(path) == "" || strings.HasPrefix(path, "/") || strings.Contains(path, "..") {
 		t.Fatalf("变更集 2 基线引用路径非法：%s", path)
 	}
+	path = strings.Replace(path, "docs/changeset1a/", "docs/egress/lifecycle/", 1)
+	path = strings.Replace(path, "docs/changeset2/", "docs/egress/release/", 1)
 	raw, err := os.ReadFile("../../../" + path)
 	if err != nil {
 		t.Fatal(err)

@@ -1,0 +1,70 @@
+{
+  "schema_version": "official-egress-documentation-cleanup-retirement/v1",
+  "date": "2026-08-05",
+  "prior_transition": "docs/egress/maintenance/evidence-directory-consolidation-source-transition.json",
+  "prior_transition_sha256": "524364297baf9b8492802c49fcf3963be15c0b320fa1558966487d62ea03d96f",
+  "removed_narrative_files": [
+    {
+      "path": "docs/egress/source-freeze/acceptance-report.md",
+      "sha256_before_removal": "24089b010460095e2a5cbffa2fadd18eb5f6979760d9ef8d9257d6ab67c901a0",
+      "replacement_machine_proofs": [
+        {
+          "path": "docs/egress/source-freeze/base-receipt.json",
+          "sha256": "95c11c24707242adca40456495c6be2113a56d37d5964696a00936c2973020bf"
+        },
+        {
+          "path": "docs/egress/source-freeze/base-files.sha256",
+          "sha256": "701782a72cf23b032e9a11aed5d08de9978cc5041f52ed7aa731035c94e7369e"
+        },
+        {
+          "path": "docs/egress/source-freeze/changeset3-source-transition.json",
+          "sha256": "85cfb8e5324b5063b480f5e27cab1781500a5a3aba1957aae581f0ed0e62d478"
+        }
+      ]
+    },
+    {
+      "path": "docs/egress/consolidation/acceptance-report.md",
+      "sha256_before_removal": "f6eedea5df1abaf89bc699b04c84ffef92632671622d28a2e6b435813d04a353",
+      "replacement_machine_proofs": [
+        {
+          "path": "docs/egress/consolidation/workspace-transition/receipt.json",
+          "sha256": "e38384f401dcd2cb93f4e900926cb84b606f29685237c8394edb718ffaa87af1"
+        },
+        {
+          "path": "docs/egress/consolidation/post-refactor-final-wire/receipt.json",
+          "sha256": "9a9c8d86f4b35a33f5f6615e27e21bec25e7860eae5e533fec9333897554c1de"
+        },
+        {
+          "path": "docs/egress/consolidation/conflict-migration-receipt.json",
+          "sha256": "f81b127ba6198ff72be55b6d320cf2acf70bb398a55c598f3e5b139b7eb9e93a"
+        }
+      ]
+    },
+    {
+      "path": "docs/egress/validation/post/acceptance-report.md",
+      "sha256_before_removal": "b42e027def9a0abe4356b54a46995cde8a56021ba52cbcc1b1ccd474af46f603",
+      "replacement_machine_proofs": [
+        {
+          "path": "docs/egress/validation/post/benchmark-calculation.json",
+          "sha256": "076e4de68bf2f222a795fb2965e05abd10316677ad8b9a2442ee2a36e5c5240b"
+        },
+        {
+          "path": "docs/egress/validation/post-final-wire/receipt.json",
+          "sha256": "444c357ec788540cbd523694eab9b19df4ab1c8844624eb8e6df59a95c980634"
+        },
+        {
+          "path": "docs/egress/validation/workspace-transition/receipt.json",
+          "sha256": "f0494d0c016aaaa2a0b49ef7067e47e3a5ed03ae241c9bee174bd266c6592046"
+        }
+      ]
+    }
+  ],
+  "rewritten_current_catalog": {
+    "path": "docs/egress/foundation/persona-catalog.md",
+    "from_sha256": "5d8d24bce5966a6f4e7d698830940597eedfb545e115567d5e4a4ba4d797fbb3",
+    "to_sha256": "bced4154e6c7a9ea7a317ffcf6ddc7e07ea67accfa6b2d1dd5747420368f9ef5",
+    "result": "current_rules_only"
+  },
+  "runtime_behavior_changed": false,
+  "result": "passed"
+}

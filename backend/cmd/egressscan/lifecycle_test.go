@@ -11,7 +11,7 @@ import (
 )
 
 func TestLifecycleReceiptsFreezeCompleteCandidates(t *testing.T) {
-	raw, err := os.ReadFile("../../../docs/changeset0/sink-baseline.json")
+	raw, err := os.ReadFile("../../../docs/egress/foundation/sink-baseline.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func TestLifecycleReceiptsFreezeCompleteCandidates(t *testing.T) {
 }
 
 func TestBootstrapInventoryLockMatchesCurrentReviewedScanner(t *testing.T) {
-	historicalLockRaw, err := os.ReadFile("../../../docs/changeset5/bootstrap-inventory-lock.json")
+	historicalLockRaw, err := os.ReadFile("../../../docs/egress/consolidation/bootstrap-inventory-lock.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -117,7 +117,7 @@ func TestBootstrapInventoryLockMatchesCurrentReviewedScanner(t *testing.T) {
 	if hex.EncodeToString(historicalLockSum[:]) != "7c1f89db30fc4164c5b6a186a338242433416d97695885ee62c2215e1d61c877" {
 		t.Fatal("变更集 5 bootstrap inventory lock 摘要漂移")
 	}
-	currentLockRaw, err := os.ReadFile("../../../docs/maintenance/bootstrap-inventory-lock.json")
+	currentLockRaw, err := os.ReadFile("../../../docs/egress/maintenance/bootstrap-inventory-lock.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,12 +125,12 @@ func TestBootstrapInventoryLockMatchesCurrentReviewedScanner(t *testing.T) {
 	if hex.EncodeToString(currentLockSum[:]) != "d9d9aab9911d3b0f6c4d9b30bec6b664daac971111a2826319c70a6a7150b8a4" {
 		t.Fatal("当前 bootstrap inventory lock 摘要漂移")
 	}
-	baseline, err := os.ReadFile("../../../docs/changeset0/sink-baseline.json")
+	baseline, err := os.ReadFile("../../../docs/egress/foundation/sink-baseline.json")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := verifyBootstrapInventoryLock(
-		"../../../docs/maintenance/bootstrap-inventory-lock.json",
+		"../../../docs/egress/maintenance/bootstrap-inventory-lock.json",
 		baseline,
 		".",
 	); err != nil {

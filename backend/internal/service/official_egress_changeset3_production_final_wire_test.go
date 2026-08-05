@@ -144,7 +144,7 @@ func TestGenerateChangeset3ExactApprovedDeltas(t *testing.T) {
 		t.Fatal("approved delta 输出必须是绝对路径")
 	}
 	captures := changeset3BuildProductionFinalWireCaptures(t)
-	referencePath := "../../../docs/changeset3/pre_identity_authority_refactor_reference/manifest.json"
+	referencePath := "../../../docs/egress/migration/pre_identity_authority_refactor_reference/manifest.json"
 	referenceRaw, err := os.ReadFile(referencePath)
 	if err != nil {
 		t.Fatal(err)
@@ -771,7 +771,7 @@ func changeset3CompareProductionToScopedReference(
 	captures []finalwirecapture.Capture,
 ) changeset3ProductionComparison {
 	t.Helper()
-	referencePath := "../../../docs/changeset3/pre_identity_authority_refactor_reference/manifest.json"
+	referencePath := "../../../docs/egress/migration/pre_identity_authority_refactor_reference/manifest.json"
 	referenceRaw, err := os.ReadFile(referencePath)
 	if err != nil {
 		t.Fatal(err)
@@ -782,7 +782,7 @@ func changeset3CompareProductionToScopedReference(
 	if err := json.Unmarshal(referenceRaw, &reference); err != nil {
 		t.Fatal(err)
 	}
-	approvedPath := "../../../docs/changeset3/post_identity_authority_refactor_final_wire/approved-deltas.json"
+	approvedPath := "../../../docs/egress/migration/post_identity_authority_refactor_final_wire/approved-deltas.json"
 	approvedRaw, err := os.ReadFile(approvedPath)
 	if err != nil {
 		t.Fatal(err)
@@ -983,7 +983,7 @@ func changeset3ProductionMarshal(t *testing.T, value any) []byte {
 
 func TestChangeset3FrozenPostManifestRebuildsFromProductionSemanticBridge(t *testing.T) {
 	const frozenManifestSHA256 = "c824ffb0ab6e2429c09f9ac517cf3e6f96860c7c6ef77c229757fd690bdbcf0f"
-	frozenPath := "../../../docs/changeset3/post_identity_authority_refactor_final_wire/manifest.json"
+	frozenPath := "../../../docs/egress/migration/post_identity_authority_refactor_final_wire/manifest.json"
 	frozenRaw, err := os.ReadFile(frozenPath)
 	if err != nil {
 		t.Fatal(err)

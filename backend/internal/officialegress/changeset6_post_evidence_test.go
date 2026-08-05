@@ -4,19 +4,19 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
 const (
 	changeset6BenchmarkPostMetadataSHA256 = "0ec6d4c81cff93d8d6d2661016dc1a79c688e8bb2e4ccf1047a9b4c461ed6f5b"
 	changeset6BenchmarkCalculationSHA256  = "076e4de68bf2f222a795fb2965e05abd10316677ad8b9a2442ee2a36e5c5240b"
-	changeset6AcceptanceReportSHA256      = "b42e027def9a0abe4356b54a46995cde8a56021ba52cbcc1b1ccd474af46f603"
 	changeset6BenchmarkFixtureSHA256      = "7698cddeadace650567e46e7be9b66286212e26e983edb29e78da423ac713e08"
 	changeset6BenchmarkPostDriverSHA256   = "bce3b5c5aace49adee353ce45d893a048b3c577d4244242fa34a911f1f847b4f"
 )
 
 func TestChangeset6BenchmarkPostEvidenceIsFrozen(t *testing.T) {
-	metadataPath := "../../../docs/changeset6/post/benchmark-metadata.json"
+	metadataPath := "../../../docs/egress/validation/post/benchmark-metadata.json"
 	raw, err := os.ReadFile(metadataPath)
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +66,8 @@ func TestChangeset6BenchmarkPostEvidenceIsFrozen(t *testing.T) {
 		t.Fatalf("变更集 6 benchmark post 元数据非法：%+v", metadata)
 	}
 	for _, result := range metadata.Results {
-		resultRaw, readErr := os.ReadFile(filepath.Join("../../..", filepath.FromSlash(result.Path)))
+		path := strings.Replace(result.Path, "docs/changeset6/", "docs/egress/validation/", 1)
+		resultRaw, readErr := os.ReadFile(filepath.Join("../../..", filepath.FromSlash(path)))
 		if readErr != nil {
 			t.Fatal(readErr)
 		}
@@ -75,9 +76,9 @@ func TestChangeset6BenchmarkPostEvidenceIsFrozen(t *testing.T) {
 		}
 	}
 	for path, expected := range map[string]string{
-		"../../../docs/changeset6/post/benchmark-drivers/body-post_test.go":    changeset6BenchmarkPostDriverSHA256,
-		"../../../docs/changeset6/post/benchmark-drivers/catalog-post_test.go": "f7731b9f5a2999e94ab869f245ba74e20654c22b018af74ab7a6f430f1822aed",
-		"../../../docs/changeset6/post/benchmark-drivers/profile-post_test.go": "66e0775b72be6456d71c5527b21664c1b06b9c743fdfb83515a808812331a846",
+		"../../../docs/egress/validation/post/benchmark-drivers/body-post_test.go":    changeset6BenchmarkPostDriverSHA256,
+		"../../../docs/egress/validation/post/benchmark-drivers/catalog-post_test.go": "f7731b9f5a2999e94ab869f245ba74e20654c22b018af74ab7a6f430f1822aed",
+		"../../../docs/egress/validation/post/benchmark-drivers/profile-post_test.go": "66e0775b72be6456d71c5527b21664c1b06b9c743fdfb83515a808812331a846",
 	} {
 		driverRaw, readErr := os.ReadFile(path)
 		if readErr != nil {
@@ -87,7 +88,7 @@ func TestChangeset6BenchmarkPostEvidenceIsFrozen(t *testing.T) {
 			t.Fatalf("变更集 6 post benchmark driver 摘要漂移：path=%s got=%s", path, got)
 		}
 	}
-	calculationRaw, err := os.ReadFile("../../../docs/changeset6/post/benchmark-calculation.json")
+	calculationRaw, err := os.ReadFile("../../../docs/egress/validation/post/benchmark-calculation.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,12 +127,5 @@ func TestChangeset6BenchmarkPostEvidenceIsFrozen(t *testing.T) {
 		if item.Result != "passed" {
 			t.Fatalf("变更集 6 benchmark case 未通过原始结果复算：%+v", item)
 		}
-	}
-	reportRaw, err := os.ReadFile("../../../docs/changeset6/post/acceptance-report.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := changeset3ReferenceSHA256(reportRaw); got != changeset6AcceptanceReportSHA256 {
-		t.Fatalf("变更集 6 性能验收报告漂移：got=%s", got)
 	}
 }

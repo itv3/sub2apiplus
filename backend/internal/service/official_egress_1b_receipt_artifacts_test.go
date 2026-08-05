@@ -127,7 +127,7 @@ func replayChangeset1BReceiptArtifact(
 	response, err := runtimeState.ExecuteCodexHTTP(requestContext, OfficialCodexHTTPExecution{
 		SinkID: testCase.sinkID, EndpointID: testCase.endpointID,
 		Account: account, Request: request,
-		PolicyID: "changeset1b.migration-receipt.v1", PolicySource: "docs/changeset1b/README.md",
+		PolicyID: "changeset1b.migration-receipt.v1", PolicySource: "docs/CODEX_CLI_0145_EGRESS_SPEC.md#policy-changeset-1b",
 		ConcurrencyLimit: 1, HasBillingSideEffect: true,
 	})
 	require.NoError(t, err)
@@ -218,7 +218,7 @@ func assertOrUpdateChangeset1BArtifact(t *testing.T, path string, want []byte) {
 		require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 		require.NoError(t, os.WriteFile(path, want, 0o644))
 		docsPath := filepath.Join(
-			"..", "..", "..", "docs", "changeset1a", "migration-artifacts",
+			"..", "..", "..", "docs", "egress", "lifecycle", "migration-artifacts",
 			strings.TrimPrefix(path, filepath.Join("..", "officialegress", "catalogdata", "migration-artifacts")+string(filepath.Separator)),
 		)
 		require.NoError(t, os.MkdirAll(filepath.Dir(docsPath), 0o755))

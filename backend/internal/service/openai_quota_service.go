@@ -28,10 +28,11 @@ import (
 // errors.Is still matches it by identity since ResetCredit returns this var.
 var ErrSparkShadowResetNotSupported = infraerrors.New(http.StatusConflict, "SPARK_SHADOW_RESET_NOT_SUPPORTED", "spark shadow account does not support credit reset; reset the parent account")
 
-// Endpoints used by the OpenAI/ChatGPT/Codex quota query and reset feature.
+// OpenAI/ChatGPT/Codex 配额查询与重置使用的运行参数。
 const (
 	openaiQuotaUpstreamTimeout   = 20 * time.Second
 	openaiQuotaUpstreamBodyLimit = 2 << 20
+	openaiQuotaResetCreditsKey   = "codex_reset_credit_snapshot"
 )
 
 // OpenAIRateLimitWindow describes a single rate-limit window returned by
@@ -273,6 +274,32 @@ func (s *OpenAIQuotaService) queryUsage(
 		}
 	}
 	return &payload, nil
+}
+
+// CacheResetCreditsSnapshot 在管理端显式刷新后保存完整的重置额度快照。
+// 快照写入被查询的账号行；对于 Spark 影子账号，这仍是影子行，因为缓存只服务于
+// 该行的展示，并不会赋予影子账号消费额度的能力。
+//
+// 若上游仅返回可用数量却缺少过期明细，则保留旧缓存。否则读取端无法淘汰过期额度，
+// 可能持续展示已经失效的数据。调用方应把此错误视为“上游读取成功、缓存刷新失败”。
+func (s *OpenAIQuotaService) CacheResetCreditsSnapshot(ctx context.Context, accountID int64, credits *OpenAIRateLimitResetCredits) error {
+	if credits == nil || (credits.AvailableCount > 0 && len(credits.Credits) == 0) {
+		return infraerrors.New(
+			http.StatusBadGateway,
+			"OPENAI_QUOTA_RESET_CREDITS_REFRESH_FAILED",
+			"failed to refresh reset-credit expiration details; cached data was preserved",
+		)
+	}
+	if err := s.accountRepo.UpdateExtra(ctx, accountID, map[string]any{
+		openaiQuotaResetCreditsKey: credits,
+	}); err != nil {
+		return infraerrors.New(
+			http.StatusInternalServerError,
+			"OPENAI_QUOTA_CACHE_WRITE_FAILED",
+			"failed to cache reset-credit details",
+		).WithCause(err)
+	}
+	return nil
 }
 
 func (s *OpenAIQuotaService) queryResetCreditDetails(ctx context.Context, accessToken, chatGPTAccountID, proxyURL string, accountID int64) *openAIRateLimitResetCreditDetails {

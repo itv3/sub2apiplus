@@ -82,8 +82,11 @@ func TestCandidateTraceCodex0145RuntimeAndBoundaryFacts(t *testing.T) {
 		codexEndpointID(officialCodexEndpointModels))
 
 	require.NoError(t, err)
-	require.Equal(t, officialCodexProcessPhaseInitialModels, modelsState.ProcessPhase)
-	require.False(t, modelsState.UserAgentSuffixEnabled)
+	// 生产入口不能再用入站 UA 切换 wire 运行态；统一编译器始终采用 release
+	// Build 默认身份。画像仍独立保留启动 models 可无 suffix 的官方观测能力。
+	require.Equal(t, officialCodexProcessPhaseInitialized, modelsState.ProcessPhase)
+	require.True(t, modelsState.UserAgentSuffixEnabled)
+	require.Equal(t, "codex_exec", modelsState.Originator)
 
 	candidateTraceLogFact(t, "a15.surface-exec", "A15", "surface_identity", map[string]any{
 		"endpoint":          "models",
@@ -103,7 +106,7 @@ func TestCandidateTraceCodex0145RuntimeAndBoundaryFacts(t *testing.T) {
 	})
 	candidateTraceLogFact(t, "a15.models-no-suffix", "A15", "surface_identity", map[string]any{
 		"endpoint":          "models",
-		"originator":        modelsState.Originator,
+		"originator":        "codex_cli_rs",
 		"surface":           "exec",
 		"suffix_state":      "absent",
 		"user_agent_prefix": strings.Fields(modelsWithoutSuffix)[0],

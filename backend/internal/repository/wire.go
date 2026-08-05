@@ -151,6 +151,8 @@ var ProviderSet = wire.NewSet(
 	ProvideOfficialEgressGuard,
 	ProvideOfficialCodexReqProfileTransportResource,
 	NewTurnstileVerifier,
+	NewTencentCaptchaVerifier,
+	NewAliyunCaptchaVerifier,
 	ProvidePricingRemoteClient,
 	ProvideGitHubReleaseClient,
 	NewProxyExitInfoProber,

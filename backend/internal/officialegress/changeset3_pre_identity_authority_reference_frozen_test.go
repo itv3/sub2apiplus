@@ -11,7 +11,7 @@ import (
 const changeset3PreIdentityReferenceSHA256 = "95ae1518698f0b26beead7a7374f9cd372b3c44c176ff774df4ac7b6aabc017a"
 
 func TestChangeset3PreIdentityAuthorityReferenceIsFrozen(t *testing.T) {
-	manifestPath := "../../../docs/changeset3/pre_identity_authority_refactor_reference/manifest.json"
+	manifestPath := "../../../docs/egress/migration/pre_identity_authority_refactor_reference/manifest.json"
 	raw, err := os.ReadFile(manifestPath)
 	if err != nil {
 		t.Fatal(err)
@@ -83,7 +83,7 @@ func TestChangeset3PreIdentityAuthorityReferenceIsFrozen(t *testing.T) {
 		)
 	}
 	secretRaw, err := os.ReadFile(
-		"../../../docs/changeset3/pre_identity_authority_refactor_reference/secret-scan.json",
+		"../../../docs/egress/migration/pre_identity_authority_refactor_reference/secret-scan.json",
 	)
 	if err != nil {
 		t.Fatal(err)

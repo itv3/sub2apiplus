@@ -363,17 +363,17 @@ func changeset3CapturePreIdentityRoute(
 		t.Fatal(err)
 	}
 	execution := ExecutionPolicy{
-		ID: "changeset3.pre-reference.execution", Source: "docs/changeset3",
+		ID: "changeset3.pre-reference.execution", Source: "docs/egress/migration",
 		MaxAttempts: 1, Replayable: binding.ID() != SinkCodexFilesBlobUpload,
 		ConcurrencyLimit: 1,
 	}
 	deployment := DeploymentSupportPolicy{
-		ID: "changeset3.pre-reference.deployment", Source: "docs/changeset3",
+		ID: "changeset3.pre-reference.deployment", Source: "docs/egress/migration",
 		Platform: runtime.GOOS + "/" + runtime.GOARCH, ProxyMode: "direct",
 		SupportedBackends: []BackendKind{BackendHTTPUpstream, BackendReqProfile, BackendWebSocket},
 	}
 	behavior := BehaviorPolicy{
-		ID: "changeset3.pre-reference.behavior", Source: "docs/changeset3",
+		ID: "changeset3.pre-reference.behavior", Source: "docs/egress/migration",
 		Kind: BehaviorUserRequest, AttemptBudget: 1,
 	}
 	bundle, err := resolver.Resolve(BundleResolveRequest{
@@ -410,7 +410,7 @@ func changeset3CapturePreIdentityRoute(
 			SinkID: binding.ID(), Purpose: binding.Purpose(), EndpointID: endpointID,
 			Mode: mode, Protocol: route.Protocol, Method: route.Key.Method, URL: target,
 			Headers: headers, IdentityMode: IdentityCodexOAuthStrict,
-			HeaderPolicy:   HeaderPolicy{ID: "changeset3.pre-reference.headers", Source: "docs/changeset3"},
+			HeaderPolicy:   HeaderPolicy{ID: "changeset3.pre-reference.headers", Source: "docs/egress/migration"},
 			BehaviorPolicy: behavior, Body: requestBody,
 			InvocationID:    fmt.Sprintf("pre-reference-%s-%s-%d", mode, strings.ReplaceAll(string(binding.ID()), ".", "-"), routeIndex),
 			DeclaredPersona: PersonaCodexCLI,

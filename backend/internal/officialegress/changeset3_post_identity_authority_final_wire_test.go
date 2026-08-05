@@ -64,7 +64,7 @@ func changeset3PostCaptureKey(capture changeset3PreIdentityReferenceCapture) str
 }
 
 func TestChangeset3FinalWireComparatorRejectsRequiredMutations(t *testing.T) {
-	raw, err := os.ReadFile("../../../docs/changeset3/post_identity_authority_refactor_final_wire/manifest.json")
+	raw, err := os.ReadFile("../../../docs/egress/migration/post_identity_authority_refactor_final_wire/manifest.json")
 	if err != nil {
 		t.Fatal(err)
 	}

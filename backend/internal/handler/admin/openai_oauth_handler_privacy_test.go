@@ -61,7 +61,7 @@ func TestCreateAccountFromOAuthValidatesExtraBeforeExchange(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	handler := NewOpenAIOAuthHandler(oauthService, &stubAdminService{}, nil)
+	handler := NewOpenAIOAuthHandler(oauthService, &stubAdminService{}, nil, nil)
 	router := gin.New()
 	router.POST("/api/v1/admin/openai/create-from-oauth", handler.CreateAccountFromOAuth)
 	recorder := httptest.NewRecorder()
@@ -161,7 +161,7 @@ func createOAuthAccountWithInitialPrivacy(
 	recorder := httptest.NewRecorder()
 
 	adminService := &stubAdminService{}
-	handler := NewOpenAIOAuthHandler(oauthService, adminService, nil)
+	handler := NewOpenAIOAuthHandler(oauthService, adminService, nil, nil)
 	router := gin.New()
 	router.POST("/api/v1/admin/openai/create-from-oauth", handler.CreateAccountFromOAuth)
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/admin/openai/create-from-oauth", bytes.NewReader(payload))
@@ -228,7 +228,7 @@ func TestExchangeCodeDoesNotSendUnpersistedPrivacySettings(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	handler := NewOpenAIOAuthHandler(oauthService, &stubAdminService{}, nil)
+	handler := NewOpenAIOAuthHandler(oauthService, &stubAdminService{}, nil, nil)
 	router := gin.New()
 	router.POST("/api/v1/admin/openai/exchange-code", handler.ExchangeCode)
 	recorder := httptest.NewRecorder()

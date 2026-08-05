@@ -870,6 +870,10 @@ README 只保留当前契约和操作入口；详细设计、抓包步骤与运�
 | [`优化方案.md`](优化方案.md) | 官方客户端画像的架构方案、任务分解和完成状态。 |
 | [`tools/official_client_capture/README.md`](tools/official_client_capture/README.md) | Codex 官方出站工具目录的权威文档链接和唯一编排入口。 |
 | [`backend/internal/service/testdata/official_egress/README.md`](backend/internal/service/testdata/official_egress/README.md) | OAuth、API Key、Kilo、AnyRouter 和 Vircs 的脱敏实证索引。 |
+| [`docs/CODEX_CLI_0145_EGRESS_SPEC.md`](docs/CODEX_CLI_0145_EGRESS_SPEC.md) | Codex CLI 0.145.0 出站规则、当前实现和升级规范。 |
+| [`docs/EVIDENCE_INDEX.md`](docs/EVIDENCE_INDEX.md) | Codex 官方规则编号与证据文件的机器生成索引。 |
+| [`docs/Claude_code_21220_EGRESS_SPEC.md`](docs/Claude_code_21220_EGRESS_SPEC.md) | Claude Code 2.1.220 出站规格与证据状态。 |
+| [`docs/COMPOSITE_GROUPS.md`](docs/COMPOSITE_GROUPS.md) | Composite Groups 路由、管理流程和使用边界。 |
 | [`deploy/APPLE_CONTAINER.md`](deploy/APPLE_CONTAINER.md) | Apple silicon Mac 的原生容器部署、升级、备份和限制说明。 |
 | [`deploy/EDGE_SECURITY.md`](deploy/EDGE_SECURITY.md) | CDN、反向代理可信链和真实客户端 IP 的安全配置说明。 |
 | [`docs/PAYMENT_CN.md`](docs/PAYMENT_CN.md) | 支付能力中文说明。 |

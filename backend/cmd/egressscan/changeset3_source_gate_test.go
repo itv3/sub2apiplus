@@ -63,7 +63,7 @@ func TestGenerateChangeset3RemovalReceiptDigestReferences(t *testing.T) {
 		t.Fatal("RemovalReceipt 重建输出必须是绝对路径")
 	}
 	migrations, err := loadMigrationReceiptIndex(
-		"../../../docs/changeset1a/migration-receipts.json,../../../docs/changeset3/migration-receipts.json",
+		"../../../docs/egress/lifecycle/migration-receipts.json,../../../docs/egress/migration/migration-receipts.json",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -74,7 +74,7 @@ func TestGenerateChangeset3RemovalReceiptDigestReferences(t *testing.T) {
 			enforcedBySink[document.SinkID] = digest
 		}
 	}
-	raw, err := os.ReadFile("../../../docs/changeset3/removal-receipts.json")
+	raw, err := os.ReadFile("../../../docs/egress/migration/removal-receipts.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -111,12 +111,12 @@ func TestGenerateChangeset3RemovalReceiptDigestReferences(t *testing.T) {
 
 func TestChangeset3RemovalReceiptsUpgradeOnlyDisappearedDelegations(t *testing.T) {
 	migrations, err := loadMigrationReceiptIndex(
-		"../../../docs/changeset1a/migration-receipts.json,../../../docs/changeset3/migration-receipts.json",
+		"../../../docs/egress/lifecycle/migration-receipts.json,../../../docs/egress/migration/migration-receipts.json",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	changeset3, err := loadRemovalManifest("../../../docs/changeset3/removal-receipts.json", migrations)
+	changeset3, err := loadRemovalManifest("../../../docs/egress/migration/removal-receipts.json", migrations)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -141,7 +141,7 @@ func TestChangeset3RemovalReceiptsUpgradeOnlyDisappearedDelegations(t *testing.T
 		}
 	}
 	combined, err := loadRemovalManifest(
-		"../../../docs/changeset2/removal-receipts.json,../../../docs/changeset3/removal-receipts.json",
+		"../../../docs/egress/release/removal-receipts.json,../../../docs/egress/migration/removal-receipts.json",
 		migrations,
 	)
 	if err != nil {
@@ -156,7 +156,7 @@ func TestChangeset3RemovalReceiptsUpgradeOnlyDisappearedDelegations(t *testing.T
 }
 
 func TestChangeset3FacadeAuditMatchesCurrentSourceAndAdapters(t *testing.T) {
-	raw, err := os.ReadFile("../../../docs/changeset3/facade-audit.json")
+	raw, err := os.ReadFile("../../../docs/egress/migration/facade-audit.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -177,7 +177,7 @@ func TestChangeset3FacadeAuditMatchesCurrentSourceAndAdapters(t *testing.T) {
 	retiredFacadeCandidate, retiredFacadeSinkID := loadMaintenanceFacadeRetirement(
 		t, hex.EncodeToString(auditSum[:]),
 	)
-	transitionRaw, err := os.ReadFile("../../../docs/changeset5/adapter-source-transition.json")
+	transitionRaw, err := os.ReadFile("../../../docs/egress/consolidation/adapter-source-transition.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -197,7 +197,7 @@ func TestChangeset3FacadeAuditMatchesCurrentSourceAndAdapters(t *testing.T) {
 		t.Fatalf("变更集 5 adapter source transition 元数据非法：%+v", transition)
 	}
 	migrations, err := loadMigrationReceiptIndex(
-		"../../../docs/changeset1a/migration-receipts.json,../../../docs/changeset3/migration-receipts.json",
+		"../../../docs/egress/lifecycle/migration-receipts.json,../../../docs/egress/migration/migration-receipts.json",
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -270,7 +270,7 @@ func TestChangeset3FacadeAuditMatchesCurrentSourceAndAdapters(t *testing.T) {
 
 func loadMaintenanceFacadeRetirement(t *testing.T, referenceAuditSHA256 string) (string, string) {
 	t.Helper()
-	raw, err := os.ReadFile("../../../docs/maintenance/official-egress-consolidation-retirement.json")
+	raw, err := os.ReadFile("../../../docs/egress/maintenance/official-egress-consolidation-retirement.json")
 	if err != nil {
 		t.Fatal(err)
 	}

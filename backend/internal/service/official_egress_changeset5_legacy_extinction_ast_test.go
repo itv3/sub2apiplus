@@ -23,7 +23,7 @@ var changeset5ExtinctLegacySymbols = map[string]bool{
 // 调用为零，防止旧链以后通过包装函数、别名或“仅保留兼容定义”复活。
 func TestChangeset5LegacyAttachFinalizerDefinitionsAndCallsAreExtinct(t *testing.T) {
 	const inventorySHA256 = "7be87aeec0dfef8585d8b999becf4977ac726578a9ba85238718268a5dfa2648"
-	raw, err := os.ReadFile("../../../docs/changeset5/legacy-symbol-inventory.json")
+	raw, err := os.ReadFile("../../../docs/egress/consolidation/legacy-symbol-inventory.json")
 	if err != nil {
 		t.Fatal(err)
 	}

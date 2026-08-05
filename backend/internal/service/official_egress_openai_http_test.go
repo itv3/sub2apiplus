@@ -27,7 +27,7 @@ const (
 	testOfficialOpenAICallID         = "call_5FYHRGgugSt5anQYPCM8LO1B"
 )
 
-func TestOpenAIOfficialEgressHTTPFinalizerUsesIngressLifecycle(t *testing.T) {
+func TestOpenAIOfficialEgressHTTPFinalizerUsesUnifiedDerivedLifecycle(t *testing.T) {
 	body := newOfficialOpenAIHTTPTestBody(t, false, false, true)
 	contract, err := captureOfficialOpenAIHTTPBodyContract(body)
 	require.NoError(t, err)
@@ -59,13 +59,10 @@ func TestOpenAIOfficialEgressHTTPFinalizerUsesIngressLifecycle(t *testing.T) {
 	require.NoError(t, err)
 	wireBody := mustReadRequestBody(t, req)
 	require.False(t, gjson.GetBytes(wireBody, "instructions").Exists())
-	require.Equal(t, testOfficialOpenAICallID, gjson.GetBytes(wireBody, "input.3.call_id").String())
-	require.Equal(t, testOfficialOpenAICallID, gjson.GetBytes(wireBody, "input.4.call_id").String())
-	require.Equal(t, testOfficialOpenAISessionID, req.Header.Get("session-id"))
-	require.Equal(t, testOfficialOpenAISessionID, req.Header.Get("thread-id"))
+	finalPayload, decodeErr := decodeOfficialJSONObjectUseNumber(wireBody)
+	require.NoError(t, decodeErr)
+	require.Equal(t, contract.callIDs, collectOfficialOpenAICallIDs(finalPayload))
 	require.Empty(t, req.Header.Get("x-client-request-id"), "compiler-owned Header 不应在语义构造阶段生成")
-	require.Equal(t, testOfficialOpenAISessionID+":0", req.Header.Get("x-codex-window-id"))
-	require.Equal(t, c.GetHeader("x-codex-turn-metadata"), req.Header.Get("x-codex-turn-metadata"))
 	semantic, err := prepareOfficialCodexSemanticAttempt(
 		req, wireBody, officialCodexEndpointResponsesHTTP,
 		"http-ingress-lifecycle-test", projectOfficialCodexIdentityAccount(account),
@@ -78,15 +75,19 @@ func TestOpenAIOfficialEgressHTTPFinalizerUsesIngressLifecycle(t *testing.T) {
 	egressContext, ok := OfficialEgressContextFromContext(req.Context())
 	require.True(t, ok)
 	require.Equal(t, int64(94), egressContext.AccountID())
-	requireOfficialOpenAIField(t, egressContext, OfficialEgressFieldSessionID, testOfficialOpenAISessionID, OfficialEgressFieldLifecycleSession)
-	requireOfficialOpenAIField(t, egressContext, OfficialEgressFieldThreadID, testOfficialOpenAISessionID, OfficialEgressFieldLifecycleSession)
-	requireOfficialOpenAIField(t, egressContext, OfficialEgressFieldClientRequestID, testOfficialOpenAISessionID, OfficialEgressFieldLifecycleSession)
-	requireOfficialOpenAIField(t, egressContext, OfficialEgressFieldWindowID, testOfficialOpenAISessionID+":0", OfficialEgressFieldLifecycleSession)
-	requireOfficialOpenAIField(t, egressContext, OfficialEgressFieldTurnMetadata, c.GetHeader("x-codex-turn-metadata"), OfficialEgressFieldLifecycleTurn)
-	requireOfficialOpenAIField(t, egressContext, OfficialEgressFieldPromptCacheKey, testOfficialOpenAISessionID, OfficialEgressFieldLifecycleSession)
+	sessionID := mustOfficialEgressField(t, egressContext, OfficialEgressFieldSessionID).Value()
+	turnMetadata := mustOfficialEgressField(t, egressContext, OfficialEgressFieldTurnMetadata).Value()
+	require.NoError(t, uuid.Validate(sessionID))
+	require.Equal(t, sessionID, gjson.Get(turnMetadata, "session_id").String())
+	requireOfficialOpenAIField(t, egressContext, OfficialEgressFieldSessionID, sessionID, OfficialEgressFieldLifecycleSession)
+	requireOfficialOpenAIField(t, egressContext, OfficialEgressFieldThreadID, sessionID, OfficialEgressFieldLifecycleSession)
+	requireOfficialOpenAIField(t, egressContext, OfficialEgressFieldClientRequestID, sessionID, OfficialEgressFieldLifecycleSession)
+	requireOfficialOpenAIField(t, egressContext, OfficialEgressFieldWindowID, sessionID+":0", OfficialEgressFieldLifecycleSession)
+	requireOfficialOpenAIField(t, egressContext, OfficialEgressFieldTurnMetadata, turnMetadata, OfficialEgressFieldLifecycleTurn)
+	requireOfficialOpenAIField(t, egressContext, OfficialEgressFieldPromptCacheKey, sessionID, OfficialEgressFieldLifecycleSession)
 }
 
-func TestOpenAIOfficialEgressHTTPFinalizerPreservesExplicitInstructions(t *testing.T) {
+func TestOpenAIOfficialEgressHTTPFinalizerNormalizesExplicitInstructions(t *testing.T) {
 	body := newOfficialOpenAIHTTPTestBody(t, false, true, false)
 	contract, err := captureOfficialOpenAIHTTPBodyContract(body)
 	require.NoError(t, err)
@@ -108,17 +109,24 @@ func TestOpenAIOfficialEgressHTTPFinalizerPreservesExplicitInstructions(t *testi
 
 	require.NoError(t, err)
 	wireBody := mustReadRequestBody(t, req)
-	require.Equal(t, "入口显式指令", gjson.GetBytes(wireBody, "instructions").String())
+	require.False(t, gjson.GetBytes(wireBody, "instructions").Exists())
+	require.Contains(t, string(wireBody), "入口显式指令")
 }
 
-func TestOpenAIOfficialEgressHTTPFinalizerRejectsIdentityConflict(t *testing.T) {
+func TestOpenAIOfficialEgressHTTPFinalizerProjectsCodexDesktop0147IdentityConflict(t *testing.T) {
 	body := newOfficialOpenAIHTTPTestBody(t, false, false, false)
 	contract, err := captureOfficialOpenAIHTTPBodyContract(body)
 	require.NoError(t, err)
 	c := newOfficialOpenAIHTTPTestContext(body, "/v1/responses")
-	c.Request.Header.Set("thread-id", "019f9577-d69f-7892-809e-8a3a4198c672")
+	conflictingThreadID := "019f9577-d69f-7892-809e-8a3a4198c672"
+	c.Request.Header.Set("thread-id", conflictingThreadID)
+	c.Request.Header.Set(
+		"User-Agent",
+		"Codex Desktop/0.147.0-alpha.1.2 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.730.61309)",
+	)
+	c.Request.Header.Set("originator", "Codex Desktop")
 
-	_, err = (&OpenAIGatewayService{}).buildUpstreamRequest(
+	req, err := (&OpenAIGatewayService{}).buildUpstreamRequest(
 		c.Request.Context(),
 		c,
 		newOfficialOpenAIHTTPTestAccount(94),
@@ -132,7 +140,16 @@ func TestOpenAIOfficialEgressHTTPFinalizerRejectsIdentityConflict(t *testing.T) 
 		},
 	)
 
-	require.ErrorContains(t, err, "ingress headers conflict with body identity")
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(mustReadRequestBody(t, req), "client_metadata").Exists())
+	egressContext, exists := OfficialEgressContextFromContext(req.Context())
+	require.True(t, exists)
+	sessionID := mustOfficialEgressField(t, egressContext, OfficialEgressFieldSessionID).Value()
+	threadID := mustOfficialEgressField(t, egressContext, OfficialEgressFieldThreadID).Value()
+	require.NotEqual(t, conflictingThreadID, threadID)
+	require.Equal(t, sessionID, threadID)
+	require.Equal(t, sessionID+":0", mustOfficialEgressField(t, egressContext, OfficialEgressFieldWindowID).Value())
+	require.Equal(t, OfficialEgressFieldSourceDerived, mustOfficialEgressField(t, egressContext, OfficialEgressFieldSessionID).Source)
 }
 
 func TestOpenAIOfficialEgressHTTPFinalizerAcceptsGuardianIdentity(t *testing.T) {
@@ -157,19 +174,53 @@ func TestOpenAIOfficialEgressHTTPFinalizerAcceptsGuardianIdentity(t *testing.T) 
 
 	require.NoError(t, err)
 	wireBody := mustReadRequestBody(t, req)
-	require.Equal(t, testOfficialOpenAISessionID, req.Header.Get("session-id"))
-	require.Equal(t, testOfficialOpenAIChildThreadID, req.Header.Get("thread-id"))
+	egressContext, exists := OfficialEgressContextFromContext(req.Context())
+	require.True(t, exists)
+	sessionID := mustOfficialEgressField(t, egressContext, OfficialEgressFieldSessionID).Value()
+	require.NoError(t, uuid.Validate(sessionID))
+	threadID := mustOfficialEgressField(t, egressContext, OfficialEgressFieldThreadID).Value()
+	require.NoError(t, uuid.Validate(threadID))
+	require.NotEqual(t, sessionID, threadID)
 	require.Empty(t, req.Header.Get("x-client-request-id"), "compiler-owned Header 不应在语义构造阶段生成")
-	require.Equal(t, testOfficialOpenAIChildThreadID+":0", req.Header.Get("x-codex-window-id"))
-	require.Equal(t, "guardian", req.Header.Get("x-openai-subagent"))
-	require.Equal(t, testOfficialOpenAISessionID, req.Header.Get("x-codex-parent-thread-id"))
+	require.Equal(t, threadID+":0", mustOfficialEgressField(t, egressContext, OfficialEgressFieldWindowID).Value())
+	require.Equal(t, "guardian", egressContext.codexRuntimeState.ConditionalHeaders["x-openai-subagent"])
+	require.Equal(t, sessionID, egressContext.codexRuntimeState.ConditionalHeaders["x-codex-parent-thread-id"])
+	require.Equal(t, "guardian:"+sessionID, mustOfficialEgressField(t, egressContext, OfficialEgressFieldPromptCacheKey).Value())
 	require.False(t, gjson.GetBytes(wireBody, "prompt_cache_key").Exists())
 	require.False(t, gjson.GetBytes(wireBody, "client_metadata").Exists())
 
-	turnMetadata := gjson.Parse(req.Header.Get("x-codex-turn-metadata"))
-	require.Equal(t, testOfficialOpenAISessionID, turnMetadata.Get("session_id").String())
-	require.Equal(t, testOfficialOpenAIChildThreadID, turnMetadata.Get("thread_id").String())
-	require.Equal(t, testOfficialOpenAIChildThreadID+":0", turnMetadata.Get("window_id").String())
+	turnMetadata := gjson.Parse(mustOfficialEgressField(t, egressContext, OfficialEgressFieldTurnMetadata).Value())
+	require.Equal(t, sessionID, turnMetadata.Get("session_id").String())
+	require.Equal(t, threadID, turnMetadata.Get("thread_id").String())
+	require.Equal(t, threadID+":0", turnMetadata.Get("window_id").String())
+	require.Equal(t, sessionID, turnMetadata.Get("parent_thread_id").String())
+	require.Equal(t, "guardian", turnMetadata.Get("subagent_kind").String())
+}
+
+func TestOpenAIGatewayForwardOfficialEgressHTTPRebuildsGuardianWireIdentity(t *testing.T) {
+	body := newOfficialOpenAIGuardianHTTPBody(t)
+	c := newOfficialOpenAIGuardianHTTPContext(t, body, "/v1/responses")
+	upstream := &httpUpstreamRecorder{resp: newOfficialOpenAIHTTPSSECompletedResponse("resp_guardian")}
+
+	result, err := newOfficialOpenAIHTTPTestService(upstream).Forward(
+		context.Background(),
+		c,
+		newOfficialOpenAIHTTPTestAccount(94),
+		body,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	sessionID := upstream.lastReq.Header.Get("session-id")
+	threadID := upstream.lastReq.Header.Get("thread-id")
+	require.NoError(t, uuid.Validate(sessionID))
+	require.NoError(t, uuid.Validate(threadID))
+	require.NotEqual(t, sessionID, threadID)
+	require.Equal(t, threadID+":0", upstream.lastReq.Header.Get("x-codex-window-id"))
+	require.Equal(t, "guardian", upstream.lastReq.Header.Get("x-openai-subagent"))
+	require.Equal(t, sessionID, upstream.lastReq.Header.Get("x-codex-parent-thread-id"))
+	require.Equal(t, "guardian:"+sessionID, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
+	require.Equal(t, sessionID, gjson.GetBytes(upstream.lastBody, "client_metadata.session_id").String())
+	require.Equal(t, threadID, gjson.GetBytes(upstream.lastBody, "client_metadata.thread_id").String())
 }
 
 func TestResolveExplicitOfficialOpenAIHTTPIdentityAcceptsMemoryConsolidation(t *testing.T) {
@@ -505,13 +556,13 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPNonStreamAndSSE(t *testing.T) {
 			require.Equal(t, "reasoning.encrypted_content", gjson.GetBytes(upstream.lastBody, "include.0").String())
 			require.Equal(t, testOfficialOpenAICallID, gjson.GetBytes(upstream.lastBody, "input.3.call_id").String())
 			require.Equal(t, testOfficialOpenAICallID, gjson.GetBytes(upstream.lastBody, "input.4.call_id").String())
-			require.Equal(t, testOfficialOpenAISessionID, upstream.lastReq.Header.Get("session-id"))
-			require.Equal(t, testOfficialOpenAISessionID, upstream.lastReq.Header.Get("thread-id"))
+			sessionID := requireUnifiedOfficialOpenAIWireSession(t, upstream.lastReq)
+			require.Equal(t, sessionID, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
 		})
 	}
 }
 
-func TestOpenAIGatewayForwardOfficialEgressHTTPCompactPreservesExplicitContract(t *testing.T) {
+func TestOpenAIGatewayForwardOfficialEgressHTTPCompactNormalizesExplicitContract(t *testing.T) {
 	bodyWithMetadata := newOfficialOpenAIHTTPTestBody(t, false, true, true)
 	turnMetadata := gjson.GetBytes(bodyWithMetadata, "client_metadata.x-codex-turn-metadata").String()
 	var compactPayload map[string]any
@@ -541,12 +592,15 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPCompactPreservesExplicitContract(
 	require.Equal(t, chatgptCodexURL+"/compact", upstream.lastReq.URL.String())
 	// 官方 compact 走 execute，端点层不设 accept，由 reqwest 补默认 */*（SPEC-HDR-006）。
 	require.Equal(t, "*/*", upstream.lastReq.Header.Get("Accept"))
-	require.Equal(t, testOfficialOpenAISessionID, upstream.lastReq.Header.Get("session-id"))
-	require.Equal(t, "入口显式指令", gjson.GetBytes(upstream.lastBody, "instructions").String())
-	require.Equal(t, testOfficialOpenAICallID, gjson.GetBytes(upstream.lastBody, "input.3.call_id").String())
-	require.Equal(t, testOfficialOpenAISessionID, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
+	sessionID := requireUnifiedOfficialOpenAIWireSession(t, upstream.lastReq)
+	require.False(t, gjson.GetBytes(upstream.lastBody, "instructions").Exists())
+	require.Contains(t, string(upstream.lastBody), "入口显式指令")
+	finalPayload, decodeErr := decodeOfficialJSONObjectUseNumber(upstream.lastBody)
+	require.NoError(t, decodeErr)
+	require.Equal(t, contractCallIDsForTest(t, body), collectOfficialOpenAICallIDs(finalPayload))
+	require.Equal(t, sessionID, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "client_metadata").Exists())
-	require.Equal(t, testOfficialOpenAIInstallationID, upstream.lastReq.Header.Get("X-Codex-Installation-ID"))
+	require.NoError(t, uuid.Validate(upstream.lastReq.Header.Get("X-Codex-Installation-ID")))
 }
 
 func TestOpenAIGatewayForwardOfficialEgressHTTPCompactRestoresOnlyCapturedSeed(t *testing.T) {
@@ -560,10 +614,9 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPCompactRestoresOnlyCapturedSeed(t
 	for _, tt := range []struct {
 		name        string
 		captureSeed bool
-		wantError   string
 	}{
 		{name: "原始 seed 已捕获", captureSeed: true},
-		{name: "没有显式 seed", wantError: "requires complete identity from official ingress"},
+		{name: "没有显式 seed"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			c := newOfficialOpenAIHTTPTestContext(originalBody, "/v1/responses/compact")
@@ -583,17 +636,11 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPCompactRestoresOnlyCapturedSeed(t
 				newOfficialOpenAIHTTPTestAccount(94),
 				normalizedBody,
 			)
-			if tt.wantError != "" {
-				require.ErrorContains(t, forwardErr, tt.wantError)
-				require.Nil(t, result)
-				require.Nil(t, upstream.lastReq)
-				return
-			}
-
 			require.NoError(t, forwardErr)
 			require.NotNil(t, result)
 			require.NotNil(t, upstream.lastReq)
-			require.Equal(t, testOfficialOpenAISessionID, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
+			sessionID := requireUnifiedOfficialOpenAIWireSession(t, upstream.lastReq)
+			require.Equal(t, sessionID, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
 			require.False(t, gjson.GetBytes(upstream.lastBody, "client_metadata").Exists())
 		})
 	}
@@ -627,8 +674,7 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPPassthroughUnaffectedByWSMode(t *
 			require.Contains(t, upstream.lastTLSProfile.Name, "Official Codex compiled")
 			require.False(t, gjson.GetBytes(upstream.lastBody, "instructions").Exists())
 			require.Equal(t, testOfficialOpenAICallID, gjson.GetBytes(upstream.lastBody, "input.3.call_id").String())
-			require.Equal(t, testOfficialOpenAISessionID, upstream.lastReq.Header.Get("session-id"))
-			require.Equal(t, testOfficialOpenAISessionID, upstream.lastReq.Header.Get("thread-id"))
+			requireUnifiedOfficialOpenAIWireSession(t, upstream.lastReq)
 			require.Empty(t, upstream.lastReq.Header.Get("session_id"))
 			require.Empty(t, upstream.lastReq.Header.Get("conversation_id"))
 		})
@@ -862,7 +908,7 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPProactiveNamespaceStripPreservesI
 	require.NotNil(t, result)
 	require.Len(t, upstream.requests, 1)
 	require.False(t, gjson.GetBytes(upstream.bodies[0], "input.3.namespace").Exists())
-	require.Equal(t, testOfficialOpenAISessionID, upstream.requests[0].Header.Get("session-id"))
+	requireUnifiedOfficialOpenAIWireSession(t, upstream.requests[0])
 	require.Equal(t, testOfficialOpenAICallID, gjson.GetBytes(mustReadRequestBody(t, upstream.requests[0]), "input.3.call_id").String())
 	_, contextOK := OfficialEgressContextFromContext(upstream.requests[0].Context())
 	require.True(t, contextOK)
@@ -896,8 +942,11 @@ func TestOpenAIOfficialEgressHTTPAccountSwitchRebuildsContext(t *testing.T) {
 	require.Equal(t, int64(94), firstContext.AccountID())
 	require.Equal(t, int64(95), secondContext.AccountID())
 	require.NotEqual(t, firstContext.ConnectionPoolID(), secondContext.ConnectionPoolID())
-	requireOfficialOpenAIField(t, firstContext, OfficialEgressFieldSessionID, testOfficialOpenAISessionID, OfficialEgressFieldLifecycleSession)
-	requireOfficialOpenAIField(t, secondContext, OfficialEgressFieldSessionID, testOfficialOpenAISessionID, OfficialEgressFieldLifecycleSession)
+	firstSession := mustOfficialEgressField(t, firstContext, OfficialEgressFieldSessionID).Value()
+	secondSession := mustOfficialEgressField(t, secondContext, OfficialEgressFieldSessionID).Value()
+	require.NotEqual(t, firstSession, secondSession)
+	requireOfficialOpenAIField(t, firstContext, OfficialEgressFieldSessionID, firstSession, OfficialEgressFieldLifecycleSession)
+	requireOfficialOpenAIField(t, secondContext, OfficialEgressFieldSessionID, secondSession, OfficialEgressFieldLifecycleSession)
 }
 
 func newOfficialOpenAIGuardianHTTPBody(t *testing.T) []byte {
@@ -1230,6 +1279,23 @@ func mustReadRequestBody(t *testing.T, req *http.Request) []byte {
 	return data
 }
 
+func requireUnifiedOfficialOpenAIWireSession(t *testing.T, req *http.Request) string {
+	t.Helper()
+	require.NotNil(t, req)
+	sessionID := req.Header.Get("session-id")
+	require.NoError(t, uuid.Validate(sessionID))
+	require.Equal(t, sessionID, req.Header.Get("thread-id"))
+	require.Equal(t, sessionID+":0", req.Header.Get("x-codex-window-id"))
+	return sessionID
+}
+
+func contractCallIDsForTest(t *testing.T, body []byte) []officialOpenAIHTTPCallID {
+	t.Helper()
+	contract, err := captureOfficialOpenAIHTTPBodyContract(body)
+	require.NoError(t, err)
+	return contract.callIDs
+}
+
 func requireOfficialOpenAIField(
 	t *testing.T,
 	egressContext *OfficialEgressContext,
@@ -1241,19 +1307,18 @@ func requireOfficialOpenAIField(
 	field, ok := egressContext.Field(name)
 	require.True(t, ok)
 	require.Equal(t, wantValue, field.Value())
-	require.Equal(t, OfficialEgressFieldSourceIngressExplicit, field.Source)
+	require.Equal(t, OfficialEgressFieldSourceDerived, field.Source)
 	require.Equal(t, wantLifecycle, field.Lifecycle)
 }
 
-// TestFinalizeOfficialOpenAIHTTPBodyProjectsUnknownFieldsOnStrictIngress 锁定 §3.1
-// 对严格入口的要求：画像闭集外的顶层字段按投影丢弃并告警，而不是拒绝请求。
+// TestFinalizeOfficialOpenAIHTTPBodyProjectsUnknownFieldsOnUnifiedIngress 锁定 §3.1：
+// 任意入口的画像闭集外顶层字段都按投影丢弃并告警，而不是拒绝请求。
 //
 // 直接场景是官方客户端先于画像升级——0.146 客户端新增顶层字段时，网关必须继续可用，
 // 只丢掉尚未纳入画像的字段。此前这里返回 error，整个升级窗口内真·官方新版客户端
 // 都会被拒，而这恰恰是最不该发生失败的时刻。
-func TestFinalizeOfficialOpenAIHTTPBodyProjectsUnknownFieldsOnStrictIngress(t *testing.T) {
-	// 严格入口的前提是入站已携带完整官方身份，这里按真实官方请求形态构造，
-	// 只额外加入一个画像尚未覆盖的顶层字段。
+func TestFinalizeOfficialOpenAIHTTPBodyProjectsUnknownFieldsOnUnifiedIngress(t *testing.T) {
+	// 按真实官方请求形态构造，只额外加入一个画像尚未覆盖的顶层字段。
 	body := []byte(`{"model":"gpt-5.6-luna","input":"hi","tool_choice":"auto",` +
 		`"client_metadata":{"session_id":"019f9577-d69f-7892-809e-8a3a4198c671",` +
 		`"turn_id":"7a46fb58-2930-4d6c-9cca-ea1124fcc871"},` +
@@ -1276,7 +1341,6 @@ func TestFinalizeOfficialOpenAIHTTPBodyProjectsUnknownFieldsOnStrictIngress(t *t
 		officialOpenAIReasoningDefaults{},
 		officialOpenAIHTTPBodyOptions{
 			ProfileMode:           officialClientProfileModeActive,
-			StrictIngressIdentity: true,
 			SupportsParallelTools: true,
 			UserAgent:             "codex_exec/0.146.0 (Ubuntu 24.4.0; x86_64) unknown",
 		},
@@ -1291,10 +1355,9 @@ func TestFinalizeOfficialOpenAIHTTPBodyProjectsUnknownFieldsOnStrictIngress(t *t
 	require.Equal(t, "auto", gjson.GetBytes(finalized, "tool_choice").String())
 }
 
-// TestFinalizeOfficialOpenAIHTTPBodyNormalizesToolChoiceOnStrictIngress 锁定
-// SPEC-BODY-005 在严格入口上的投影语义：已知字段的值不合契约时按画像规范化，
-// 与派生路径使用同一套处理，而不是单独拒绝。
-func TestFinalizeOfficialOpenAIHTTPBodyNormalizesToolChoiceOnStrictIngress(t *testing.T) {
+// TestFinalizeOfficialOpenAIHTTPBodyNormalizesToolChoiceOnUnifiedIngress 锁定
+// SPEC-BODY-005 的统一投影语义：已知字段的值不合契约时按画像规范化。
+func TestFinalizeOfficialOpenAIHTTPBodyNormalizesToolChoiceOnUnifiedIngress(t *testing.T) {
 	body := []byte(`{"model":"gpt-5.6-luna","input":"hi","tool_choice":"required",` +
 		`"client_metadata":{"session_id":"019f9577-d69f-7892-809e-8a3a4198c671",` +
 		`"turn_id":"7a46fb58-2930-4d6c-9cca-ea1124fcc871"}}`)
@@ -1316,7 +1379,6 @@ func TestFinalizeOfficialOpenAIHTTPBodyNormalizesToolChoiceOnStrictIngress(t *te
 		officialOpenAIReasoningDefaults{},
 		officialOpenAIHTTPBodyOptions{
 			ProfileMode:           officialClientProfileModeActive,
-			StrictIngressIdentity: true,
 			SupportsParallelTools: true,
 		},
 	)

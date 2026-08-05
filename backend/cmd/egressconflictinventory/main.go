@@ -135,7 +135,7 @@ type receipt struct {
 }
 
 func main() {
-	output := flag.String("output", "docs/changeset5/conflict-inventory", "输出目录（相对仓库根或绝对路径）")
+	output := flag.String("output", "docs/egress/consolidation/conflict-inventory", "输出目录（相对仓库根或绝对路径）")
 	flag.Parse()
 	root, err := repositoryRoot()
 	check(err)

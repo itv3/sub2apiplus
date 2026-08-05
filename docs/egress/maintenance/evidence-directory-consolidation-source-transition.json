@@ -1,0 +1,45 @@
+{
+  "schema_version": "official-egress-evidence-directory-consolidation-source-transition/v1",
+  "prior_transition": "docs/egress/maintenance/http-cookie-finalization-source-transition.json",
+  "prior_transition_sha256": "0c6f4c6a73bf7005c0472e4f43a271f9314ea36b1a0fabe82cad7a32d77fd97f",
+  "path_mappings": [
+    {"from": "docs/changeset0", "to": "docs/egress/foundation"},
+    {"from": "docs/changeset1a", "to": "docs/egress/lifecycle"},
+    {"from": "docs/changeset1b", "to": "docs/egress/browser"},
+    {"from": "docs/changeset1c", "to": "docs/egress/guard"},
+    {"from": "docs/changeset2", "to": "docs/egress/release"},
+    {"from": "docs/changeset3", "to": "docs/egress/migration"},
+    {"from": "docs/changeset4", "to": "docs/egress/source-freeze"},
+    {"from": "docs/changeset5", "to": "docs/egress/consolidation"},
+    {"from": "docs/changeset6", "to": "docs/egress/validation"},
+    {"from": "docs/maintenance", "to": "docs/egress/maintenance"}
+  ],
+  "removed_narrative_files": [
+    "docs/changeset0/README.md",
+    "docs/changeset0/guard-state-machine.md",
+    "docs/changeset0/header-ownership.md",
+    "docs/changeset0/package-api.md",
+    "docs/changeset0/probe-behavior.md",
+    "docs/changeset0/sink-inventory.md",
+    "docs/changeset1a/README.md",
+    "docs/changeset1a/migration-artifacts/README.md",
+    "docs/changeset1b/README.md",
+    "docs/changeset1c/README.md",
+    "docs/changeset2/README.md",
+    "docs/changeset3/README.md",
+    "docs/changeset3/acceptance-report.md",
+    "docs/changeset3/post_identity_authority_refactor_final_wire/README.md",
+    "docs/changeset3/pre_identity_authority_refactor_reference/README.md",
+    "docs/changeset6/post/dmit-hotfix-report.md"
+  ],
+  "retained_product_directories": ["docs/legal"],
+  "transitions": [
+    {
+      "path": "backend/internal/service/official_egress_changeset3_production_final_wire_test.go",
+      "from_sha256": "f2732d83a5d33aa0effe98c372cfa0f7f7f1d77327068ae532200e9b53167842",
+      "to_sha256": "964c942e3c1a202276e44f14c87411f6e66da9ee9a21027275144ca3a8d4b8d8",
+      "reason": "证据目录迁入 docs/egress；测试读取新语义路径，封存 manifest 内的历史路径与 wire 内容保持不变"
+    }
+  ],
+  "result": "passed"
+}

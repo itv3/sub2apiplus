@@ -1020,17 +1020,16 @@ func TestForwardAsAnthropic_OAuthValidatesOrDerivesCodexIdentity(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	const tuiUA = "codex-tui/9.9.9 (Mac OS X 14.0; arm64) iTerm (codex-tui; 9.9.9)"
+	// messages 桥接不区分官方或第三方入口，统一由 Executor 派生完整 strict 身份。
 	tests := []struct {
 		name       string
 		userAgent  string
 		originator string
-		wantError  bool
 	}{
 		{
-			name:       "官方入口缺少完整身份时拒绝请求",
+			name:       "官方入口缺少完整身份时统一派生",
 			userAgent:  tuiUA,
 			originator: "opencode",
-			wantError:  true,
 		},
 		{
 			name:       "第三方入口生成完整Codex身份",
@@ -1067,11 +1066,6 @@ func TestForwardAsAnthropic_OAuthValidatesOrDerivesCodexIdentity(t *testing.T) {
 			}
 
 			result, err := svc.ForwardAsAnthropic(context.Background(), c, account, body, "", "gpt-5.4")
-			if tt.wantError {
-				require.ErrorContains(t, err, "requires complete identity from official ingress")
-				require.Nil(t, result)
-				return
-			}
 			require.NoError(t, err)
 			require.NotNil(t, result)
 			requireOpenAIMessagesCodexIdentity(t, upstream.lastReq)

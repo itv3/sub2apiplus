@@ -9,7 +9,7 @@ import (
 
 func loadCheckedInBaseline(t *testing.T) []byte {
 	t.Helper()
-	raw, err := os.ReadFile("../../../docs/changeset0/sink-baseline.json")
+	raw, err := os.ReadFile("../../../docs/egress/foundation/sink-baseline.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +88,7 @@ func TestCheckedInBaselineStatsAreFresh(t *testing.T) {
 	if err != nil {
 		t.Fatalf("当前基线无法严格解析：%v", err)
 	}
-	checkedIn, err := os.ReadFile("../../../docs/changeset0/sink-stats.md")
+	checkedIn, err := os.ReadFile("../../../docs/egress/foundation/sink-stats.md")
 	if err != nil {
 		t.Fatal(err)
 	}

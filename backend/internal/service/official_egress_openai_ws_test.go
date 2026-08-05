@@ -11,31 +11,23 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 )
 
 const testOfficialOpenAIWSTurnID = "7a46fb58-2930-4d6c-9cca-ea1124fcc871"
 
-func TestOpenAIOfficialEgressWSContextFreezesIngressIdentity(t *testing.T) {
+func TestOpenAIOfficialEgressWSContextFreezesUnifiedDerivedIdentity(t *testing.T) {
 	ctx, egressContext, c, _ := newOfficialOpenAIWSContextForTest(t)
 
 	require.True(t, egressContext.IsFrozen())
-	require.Equal(
-		t,
-		testOfficialOpenAISessionID,
-		mustOfficialEgressField(t, egressContext, OfficialEgressFieldSessionID).Value(),
-	)
-	require.Equal(
-		t,
-		testOfficialOpenAISessionID,
-		mustOfficialEgressField(t, egressContext, OfficialEgressFieldClientRequestID).Value(),
-	)
-	require.Equal(
-		t,
-		c.GetHeader(openAIWSTurnMetadataHeader),
-		mustOfficialEgressField(t, egressContext, OfficialEgressFieldTurnMetadata).Value(),
-	)
+	sessionID := mustOfficialEgressField(t, egressContext, OfficialEgressFieldSessionID).Value()
+	require.NoError(t, uuid.Validate(sessionID))
+	require.Equal(t, sessionID, mustOfficialEgressField(t, egressContext, OfficialEgressFieldClientRequestID).Value())
+	require.NotEqual(t, c.GetHeader(openAIWSTurnMetadataHeader), mustOfficialEgressField(t, egressContext, OfficialEgressFieldTurnMetadata).Value())
+	require.Equal(t, OfficialEgressFieldSourceDerived, mustOfficialEgressField(t, egressContext, OfficialEgressFieldSessionID).Source)
+	require.NotNil(t, egressContext.openAIWSDerived)
 	_, enabled := OfficialEgressContextFromContext(ctx)
 	require.True(t, enabled)
 }
@@ -80,10 +72,10 @@ func TestOpenAIOfficialEgressWSContextUsesRuntimeFrozenBeforeTokenRefresh(t *tes
 	require.NoError(t, err)
 	egressContext, exists := OfficialEgressContextFromContext(ctx)
 	require.True(t, exists)
-	require.Equal(t, officialCodexSurfaceTUI, egressContext.codexRuntimeState.SurfaceID)
-	require.Equal(t, "codex-tui", egressContext.codexRuntimeState.Originator)
-	require.Equal(t, "xterm-256color", egressContext.codexRuntimeState.TerminalToken)
-	require.False(t, egressContext.codexRuntimeState.UserAgentSuffixEnabled)
+	require.Equal(t, officialCodexSurfaceExec, egressContext.codexRuntimeState.SurfaceID)
+	require.Equal(t, "codex_exec", egressContext.codexRuntimeState.Originator)
+	require.Equal(t, "unknown", egressContext.codexRuntimeState.TerminalToken)
+	require.True(t, egressContext.codexRuntimeState.UserAgentSuffixEnabled)
 }
 
 func TestBindOfficialCodex0145ResponsesWebSocketRuntimeRejectsNonOAuthAccount(t *testing.T) {
@@ -107,7 +99,7 @@ func TestBindOfficialCodex0145ResponsesWebSocketRuntimeRejectsNonOAuthAccount(t 
 	}
 }
 
-func TestOpenAIOfficialEgressWSContextAcceptsGuardianIdentity(t *testing.T) {
+func TestOpenAIOfficialEgressWSContextNormalizesGuardianIdentity(t *testing.T) {
 	firstPayload := newOfficialOpenAIGuardianWSFirstFrameForTest(t)
 	c := newOfficialOpenAIWSIngressContextForTest(t, firstPayload)
 	applyOfficialOpenAIGuardianWSHeadersForTest(c, firstPayload)
@@ -122,10 +114,16 @@ func TestOpenAIOfficialEgressWSContextAcceptsGuardianIdentity(t *testing.T) {
 	require.NoError(t, err)
 	egressContext, exists := OfficialEgressContextFromContext(ctx)
 	require.True(t, exists)
-	require.Equal(t, testOfficialOpenAISessionID, mustOfficialEgressField(t, egressContext, OfficialEgressFieldSessionID).Value())
-	require.Equal(t, testOfficialOpenAIChildThreadID, mustOfficialEgressField(t, egressContext, OfficialEgressFieldThreadID).Value())
-	require.Equal(t, testOfficialOpenAIChildThreadID, mustOfficialEgressField(t, egressContext, OfficialEgressFieldClientRequestID).Value())
-	require.Equal(t, "guardian:"+testOfficialOpenAISessionID, mustOfficialEgressField(t, egressContext, OfficialEgressFieldPromptCacheKey).Value())
+	sessionID := mustOfficialEgressField(t, egressContext, OfficialEgressFieldSessionID).Value()
+	require.NoError(t, uuid.Validate(sessionID))
+	threadID := mustOfficialEgressField(t, egressContext, OfficialEgressFieldThreadID).Value()
+	require.NoError(t, uuid.Validate(threadID))
+	require.NotEqual(t, sessionID, threadID)
+	require.Equal(t, threadID, mustOfficialEgressField(t, egressContext, OfficialEgressFieldClientRequestID).Value())
+	require.Equal(t, "guardian:"+sessionID, mustOfficialEgressField(t, egressContext, OfficialEgressFieldPromptCacheKey).Value())
+	require.Equal(t, "guardian", egressContext.codexRuntimeState.ConditionalHeaders["x-openai-subagent"])
+	require.Equal(t, sessionID, egressContext.codexRuntimeState.ConditionalHeaders["x-codex-parent-thread-id"])
+	require.Equal(t, OfficialEgressFieldSourceDerived, mustOfficialEgressField(t, egressContext, OfficialEgressFieldSessionID).Source)
 
 }
 
@@ -633,9 +631,11 @@ func TestOpenAIOfficialEgressWSFramePreservesValidContinuation(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.NotEmpty(t, result.Modifications)
+	currentTurnID := gjson.GetBytes(finalized, "client_metadata.turn_id").String()
+	require.NoError(t, uuid.Validate(currentTurnID))
 	require.Equal(
 		t,
-		testOfficialOpenAIWSTurnID,
+		currentTurnID,
 		gjson.GetBytes(
 			finalized,
 			"input.0."+officialOpenAIWSItemTurnMetadata+".turn_id",
@@ -686,7 +686,7 @@ func TestOpenAIOfficialEgressWSFrameRejectsHistoryExpansionAndIdentityChanges(t 
 		"previous_response_id":"resp_valid_previous",
 		"prompt_cache_key":"019f9577-d69f-7892-809e-8a3a4198c671",
 		"input":[
-			{"type":"additional_tools","tools":[{"type":"custom","name":"exec"}]},
+			{"type":"message","role":"user","content":[{"type":"input_text","text":"非法扩张历史"}]},
 			{"type":"custom_tool_call_output","call_id":"call_t6","output":"ok"}
 		]
 	}`))
@@ -708,9 +708,11 @@ func TestOpenAIOfficialEgressWSFrameRejectsHistoryExpansionAndIdentityChanges(t 
 		true,
 	)
 	require.NoError(t, err)
+	currentTurnID := gjson.GetBytes(finalized, "client_metadata.turn_id").String()
+	require.NoError(t, uuid.Validate(currentTurnID))
 	require.Equal(
 		t,
-		testOfficialOpenAIWSTurnID,
+		currentTurnID,
 		gjson.GetBytes(
 			finalized,
 			"input.1."+officialOpenAIWSItemTurnMetadata+".turn_id",
@@ -746,7 +748,9 @@ func TestOpenAIOfficialEgressWSFrameAddsHistoricalAndCurrentTurnMetadata(t *test
 		"input.0."+officialOpenAIWSItemTurnMetadata+".turn_id",
 	).String()
 	require.NotEmpty(t, historicalTurnID)
-	require.NotEqual(t, testOfficialOpenAIWSTurnID, historicalTurnID)
+	currentTurnID := gjson.GetBytes(finalized, "client_metadata.turn_id").String()
+	require.NoError(t, uuid.Validate(currentTurnID))
+	require.NotEqual(t, currentTurnID, historicalTurnID)
 	for index := 0; index < 4; index++ {
 		require.Equal(
 			t,
@@ -760,7 +764,7 @@ func TestOpenAIOfficialEgressWSFrameAddsHistoricalAndCurrentTurnMetadata(t *test
 	for index := 4; index < 6; index++ {
 		require.Equal(
 			t,
-			testOfficialOpenAIWSTurnID,
+			currentTurnID,
 			gjson.GetBytes(
 				finalized,
 				"input."+strconv.Itoa(index)+"."+officialOpenAIWSItemTurnMetadata+".turn_id",

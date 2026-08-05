@@ -89,7 +89,7 @@ func TestOfficialCodex0145RuntimeStateUsesManagedAccountConditions(t *testing.T)
 	require.ErrorContains(t, err, "只允许 us")
 }
 
-func TestOfficialCodex0145RuntimeStateProjectsMismatchedIdentityToProfile(t *testing.T) {
+func TestOfficialCodex0145RuntimeStateIgnoresIngressWireIdentity(t *testing.T) {
 	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	require.NoError(t, err)
 
@@ -110,8 +110,10 @@ func TestOfficialCodex0145RuntimeStateProjectsMismatchedIdentityToProfile(t *tes
 			c := officialCodex0145RuntimeIngress(userAgent, testCase.originator)
 			state, resolveErr := resolveOfficialCodexRuntimeState(c, officialEgressTestAccount(145, PlatformOpenAI), officialClientProfileModeActive, officialClientProfileModeActive)
 			require.NoError(t, resolveErr)
-			require.Equal(t, testCase.surfaceID, state.SurfaceID)
-			require.Equal(t, testCase.includeSuffix, state.UserAgentSuffixEnabled)
+			require.Equal(t, officialCodexSurfaceExec, state.SurfaceID)
+			require.True(t, state.UserAgentSuffixEnabled)
+			require.Equal(t, "unknown", state.TerminalToken)
+			require.Equal(t, "codex_exec", state.Originator)
 		})
 	}
 	xtermUserAgent, err := profile.RenderUserAgentWithTerminal(
@@ -127,7 +129,7 @@ func TestOfficialCodex0145RuntimeStateProjectsMismatchedIdentityToProfile(t *tes
 		officialClientProfileModeActive)
 
 	require.NoError(t, err)
-	require.Equal(t, "xterm-256color", xtermState.TerminalToken)
+	require.Equal(t, "unknown", xtermState.TerminalToken)
 
 	// 出站一律按 active 画像定型：入站 originator 与 surface 不一致时不再拒绝，
 	// 改用画像 originator 出站。
@@ -223,9 +225,10 @@ func TestOfficialCodex0145RuntimeStateModelsBootstrapIsProfilePhase(t *testing.T
 			codexEndpointID(officialCodexEndpointModels))
 
 		require.NoError(t, resolveErr)
-		require.Equal(t, officialCodexProcessPhaseInitialModels, state.ProcessPhase)
-		require.Equal(t, "codex_cli_rs", state.Originator)
-		require.False(t, state.UserAgentSuffixEnabled)
+		require.Equal(t, officialCodexProcessPhaseInitialized, state.ProcessPhase)
+		require.Equal(t, officialCodexSurfaceExec, state.SurfaceID)
+		require.Equal(t, "codex_exec", state.Originator)
+		require.True(t, state.UserAgentSuffixEnabled)
 
 		// codex_cli_rs 只在 models 首跳成立；用在其他端点时不再拒绝，改按画像
 		// originator 与 initialized 阶段出站。
@@ -325,10 +328,10 @@ func TestOfficialCodex0145HTTPAttachUsesRuntimeFrozenBeforeTokenRefresh(t *testi
 	require.NoError(t, err)
 	egressContext, exists := OfficialEgressContextFromContext(req.Context())
 	require.True(t, exists)
-	require.Equal(t, officialCodexSurfaceTUI, egressContext.codexRuntimeState.SurfaceID)
-	require.Equal(t, "codex-tui", egressContext.codexRuntimeState.Originator)
-	require.Equal(t, "xterm-256color", egressContext.codexRuntimeState.TerminalToken)
-	require.False(t, egressContext.codexRuntimeState.UserAgentSuffixEnabled)
+	require.Equal(t, officialCodexSurfaceExec, egressContext.codexRuntimeState.SurfaceID)
+	require.Equal(t, "codex_exec", egressContext.codexRuntimeState.Originator)
+	require.Equal(t, "unknown", egressContext.codexRuntimeState.TerminalToken)
+	require.True(t, egressContext.codexRuntimeState.UserAgentSuffixEnabled)
 }
 
 func TestOfficialCodex0145HTTPCompressionFeatureSurvivesIngressBodyDecode(t *testing.T) {
@@ -362,7 +365,7 @@ func TestOfficialCodex0145HTTPCompressionFeatureSurvivesIngressBodyDecode(t *tes
 	require.True(t, state.RequestCompressionEnabled)
 }
 
-func TestOfficialCodex0145HTTPCompressionFeatureIgnoresLateHeaderMutation(t *testing.T) {
+func TestOfficialCodex0145HTTPCompressionUsesProfileDefaultDespiteLateHeaderMutation(t *testing.T) {
 	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	require.NoError(t, err)
 	userAgent, err := profile.RenderUserAgent(officialCodexSurfaceExec, true)
@@ -385,7 +388,7 @@ func TestOfficialCodex0145HTTPCompressionFeatureIgnoresLateHeaderMutation(t *tes
 	state, found, err := officialCodexRuntimeStateFromContext(ctx)
 	require.NoError(t, err)
 	require.True(t, found)
-	require.False(t, state.RequestCompressionEnabled)
+	require.True(t, state.RequestCompressionEnabled)
 }
 
 func TestWithOfficialCodex0145IngressRuntimeKeepsFirstWireSnapshot(t *testing.T) {

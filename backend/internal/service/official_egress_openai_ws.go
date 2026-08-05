@@ -34,10 +34,13 @@ type officialOpenAIWSIdentity struct {
 	turnMetadata   string
 	clientRequest  string
 	promptCacheKey string
+	parentThreadID string
+	subagent       string
+	memoryGenerate bool
 	source         OfficialEgressFieldSource
 }
 
-// officialOpenAIWSDerivedState 仅保存普通第三方 WS 会话的逐轮身份。
+// officialOpenAIWSDerivedState 保存所有 WS 会话统一派生的逐轮身份。
 // 连接级身份在拨号前冻结；逐轮 Turn ID 则必须在工具续轮中延续，因此单独按
 // 当前下游 WebSocket 会话串行维护。
 type officialOpenAIWSDerivedState struct {
@@ -46,8 +49,8 @@ type officialOpenAIWSDerivedState struct {
 	lastTurnStartedAtMS int64
 }
 
-// prepareOpenAIOfficialEgressWSContext 从入口首帧和握手头登记真实身份。
-// 这些字段在拨号前冻结，后续帧只能验证，不能改写连接级身份。
+// prepareOpenAIOfficialEgressWSContext 从入口首帧和握手头提取语义锚点，再登记
+// active 画像统一派生的身份。这些字段在拨号前冻结，后续帧不能改写连接级身份。
 func prepareOpenAIOfficialEgressWSContext(
 	egressContext *OfficialEgressContext,
 	c *gin.Context,
@@ -69,6 +72,12 @@ func prepareOpenAIOfficialEgressWSContext(
 	if err != nil {
 		return err
 	}
+	normalizeOfficialCodexConditionalIdentity(
+		egressContext,
+		identity.subagent,
+		identity.parentThreadID,
+		identity.memoryGenerate,
+	)
 	if identity.source == OfficialEgressFieldSourceDerived {
 		egressContext.openAIWSDerived = &officialOpenAIWSDerivedState{}
 	}
@@ -81,12 +90,12 @@ func resolveOfficialOpenAIWSIdentity(
 	firstPayload []byte,
 	profileMode string,
 ) (officialOpenAIWSIdentity, error) {
-	if !isInboundOpenAIOfficialClient(c) {
-		return deriveOfficialOpenAIWSIdentity(c, account, firstPayload, profileMode)
-	}
-	return resolveExplicitOfficialOpenAIWSIdentity(c, firstPayload)
+	return deriveOfficialOpenAIWSIdentity(c, account, firstPayload, profileMode)
 }
 
+// resolveExplicitOfficialOpenAIWSIdentity 只用于离线 fixture 与诊断，验证某份
+// 握手/首帧样本内部是否自洽。生产出站统一调用 resolveOfficialOpenAIWSIdentity
+// 派生 active 画像身份，绝不让入站客户端类型取得 wire 身份所有权。
 func resolveExplicitOfficialOpenAIWSIdentity(
 	c *gin.Context,
 	firstPayload []byte,
@@ -215,7 +224,7 @@ func resolveExplicitOfficialOpenAIWSIdentity(
 	return identity, nil
 }
 
-// deriveOfficialOpenAIWSIdentity 为 Kilo 等第三方客户端派生连接级身份。
+// deriveOfficialOpenAIWSIdentity 为所有客户端统一派生连接级身份。
 // 握手使用官方 prewarm metadata；真正的 turn metadata 在每个
 // response.create 出站前重新生成。
 func deriveOfficialOpenAIWSIdentity(
@@ -257,6 +266,9 @@ func deriveOfficialOpenAIWSIdentity(
 		turnMetadata:   string(turnMetadataBytes),
 		clientRequest:  base.clientRequest,
 		promptCacheKey: base.promptCacheKey,
+		parentThreadID: base.parentThreadID,
+		subagent:       base.subagent,
+		memoryGenerate: base.memoryGenerate,
 		source:         OfficialEgressFieldSourceDerived,
 	}, nil
 }
@@ -359,6 +371,8 @@ func prepareOpenAIOfficialEgressSemanticWSFrame(
 			egressContext,
 			original,
 			candidate,
+			expectedPreviousResponseID,
+			allowControlledReplay,
 		)
 	}
 
@@ -478,15 +492,25 @@ func prepareOpenAIOfficialEgressSemanticWSFrame(
 	return finalized, result, nil
 }
 
-// prepareDerivedOpenAIOfficialEgressWSFrame 把第三方 response.create
+// prepareDerivedOpenAIOfficialEgressWSFrame 把任意入口的 response.create
 // 归一化为 ProfileSpec 冻结版本的 WS 帧。业务输入、模型、reasoning 配置和
 // call_id 保持不变，只补齐官方固定外层与动态身份。
 func prepareDerivedOpenAIOfficialEgressWSFrame(
 	egressContext *OfficialEgressContext,
 	original []byte,
 	candidate []byte,
+	expectedPreviousResponseID string,
+	allowControlledReplay bool,
 ) ([]byte, OfficialEgressFinalizationResult, error) {
 	result := OfficialEgressFinalizationResult{}
+	if err := validateUnifiedOpenAIWSBusinessContract(
+		original,
+		candidate,
+		expectedPreviousResponseID,
+		allowControlledReplay,
+	); err != nil {
+		return nil, result, err
+	}
 	payload, err := decodeOfficialJSONObjectUseNumber(candidate)
 	if err != nil {
 		return nil, result, fmt.Errorf(
@@ -598,6 +622,94 @@ func prepareDerivedOpenAIOfficialEgressWSFrame(
 		})
 	}
 	return finalized, result, nil
+}
+
+// validateUnifiedOpenAIWSBusinessContract 只保护业务语义，不校验 wire 身份。
+// client_metadata、prompt_cache_key 与身份头都由 active 画像重建，因此入口冲突
+// 不能成为 502；但适配器擅自删除续链或扩张历史输入仍属于业务破坏，必须拒绝。
+func validateUnifiedOpenAIWSBusinessContract(
+	original []byte,
+	candidate []byte,
+	expectedPreviousResponseID string,
+	allowControlledReplay bool,
+) error {
+	originalPayload, err := decodeOfficialJSONObjectUseNumber(original)
+	if err != nil {
+		return fmt.Errorf("decode unified OpenAI official egress ingress WebSocket frame: %w", err)
+	}
+	if strings.TrimSpace(officialOpenAIString(originalPayload, "type")) != officialOpenAIWSResponseCreateType {
+		if !bytes.Equal(original, candidate) {
+			return errors.New("OpenAI official egress unknown WebSocket frame was modified")
+		}
+		return nil
+	}
+	candidatePayload, err := decodeOfficialJSONObjectUseNumber(candidate)
+	if err != nil {
+		return fmt.Errorf("decode unified OpenAI official egress outbound WebSocket frame: %w", err)
+	}
+	if strings.TrimSpace(officialOpenAIString(candidatePayload, "type")) != officialOpenAIWSResponseCreateType {
+		return errors.New("OpenAI official egress WebSocket frame type was modified")
+	}
+	if allowControlledReplay {
+		return nil
+	}
+	originalPrevious, originalPreviousPresent := originalPayload["previous_response_id"]
+	candidatePrevious, candidatePreviousPresent := candidatePayload["previous_response_id"]
+	if originalPreviousPresent != candidatePreviousPresent || !reflect.DeepEqual(originalPrevious, candidatePrevious) {
+		return errors.New("OpenAI official egress WebSocket previous_response_id was modified")
+	}
+	if originalPreviousPresent {
+		originalValue, _ := originalPrevious.(string)
+		if strings.TrimSpace(expectedPreviousResponseID) != "" &&
+			strings.TrimSpace(originalValue) != strings.TrimSpace(expectedPreviousResponseID) {
+			return errors.New("OpenAI official egress WebSocket previous_response_id conflicts with prior response")
+		}
+	}
+	originalHistory, err := canonicalOfficialOpenAIWSBusinessHistory(originalPayload)
+	if err != nil {
+		return err
+	}
+	candidateHistory, err := canonicalOfficialOpenAIWSBusinessHistory(candidatePayload)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(originalHistory, candidateHistory) {
+		return errors.New("OpenAI official egress WebSocket input was modified")
+	}
+	return nil
+}
+
+// canonicalOfficialOpenAIWSBusinessHistory 把允许变化的表示层字段剥离后再比较。
+// additional_tools 与逐项 turn metadata 都由画像/适配器合法重建；消息、工具调用、
+// 工具输出及其业务参数仍必须保持一致。
+func canonicalOfficialOpenAIWSBusinessHistory(payload map[string]any) ([]byte, error) {
+	cloned := cloneOfficialOpenAIMap(payload)
+	if _, err := normalizeDerivedOfficialOpenAIInput(cloned); err != nil {
+		return nil, fmt.Errorf("normalize OpenAI official egress WebSocket business history: %w", err)
+	}
+	input, _ := cloned["input"].([]any)
+	filtered := make([]any, 0, len(input))
+	for _, rawItem := range input {
+		item, ok := rawItem.(map[string]any)
+		if !ok {
+			filtered = append(filtered, rawItem)
+			continue
+		}
+		if officialOpenAIString(item, "type") == officialOpenAIAdditionalToolsType {
+			continue
+		}
+		itemClone := cloneOfficialOpenAIMap(item)
+		delete(itemClone, officialOpenAIWSItemTurnMetadata)
+		if officialOpenAIString(itemClone, "type") == "message" {
+			itemClone["content"] = officialOpenAIHTTPMessageContentText(itemClone["content"])
+		}
+		filtered = append(filtered, itemClone)
+	}
+	encoded, err := json.Marshal(filtered)
+	if err != nil {
+		return nil, fmt.Errorf("encode OpenAI official egress WebSocket business history: %w", err)
+	}
+	return encoded, nil
 }
 
 // finalizeOpenAIOfficialEgressWSFrame 只服务既有冻结测试与非 Runtime 兼容验证；

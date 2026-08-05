@@ -13,13 +13,13 @@ import subprocess
 from typing import Any
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-OUTPUT_DIR = ROOT / "docs" / "changeset5" / "workspace-baseline"
+OUTPUT_DIR = ROOT / "docs" / "egress" / "consolidation" / "workspace-baseline"
 MANIFEST_PATH = OUTPUT_DIR / "manifest.json"
 RECEIPT_PATH = OUTPUT_DIR / "receipt.json"
-TRANSITION_DIR = ROOT / "docs" / "changeset5" / "workspace-transition"
+TRANSITION_DIR = ROOT / "docs" / "egress" / "consolidation" / "workspace-transition"
 TRANSITION_MANIFEST_PATH = TRANSITION_DIR / "manifest.json"
 TRANSITION_RECEIPT_PATH = TRANSITION_DIR / "receipt.json"
-CHANGESET4_BASE = ROOT / "docs" / "changeset4" / "base-files.sha256"
+CHANGESET4_BASE = ROOT / "docs" / "egress" / "source-freeze" / "base-files.sha256"
 
 INCIDENTAL_PATHS = {
     ".vite/vitest/results.json",
@@ -28,7 +28,7 @@ INCIDENTAL_PATHS = {
 
 # 这些路径属于变更集 5 的前置证据或门禁实现，不冒充变更集 4 已验收成果。
 PREREQUISITE_PREFIXES = (
-    "docs/changeset5/",
+    "docs/egress/consolidation/",
     "tools/changeset5_",
     "backend/cmd/egressconflictinventory/",
     "backend/internal/officialegress/receipt_transport_transitions.go",
@@ -149,7 +149,7 @@ def build_manifest() -> dict[str, Any]:
         "changeset": "5",
         "classification_upstream_base": "26d894ef4f50645a4bf1030e378ac892f17d0223",
         "observed_remote_head": "825ca7b1fc9335f904bc077f051de815fb61e47f",
-        "changeset4_base_manifest": "docs/changeset4/base-files.sha256",
+        "changeset4_base_manifest": "docs/egress/source-freeze/base-files.sha256",
         "changeset4_base_manifest_sha256": sha256(CHANGESET4_BASE.read_bytes()),
         **groups,
         "rules": [
@@ -182,13 +182,13 @@ def transition_metadata(path: str) -> tuple[str, list[str], list[str]]:
         return (
             "替代 Executor、旧符号绝迹与 final-wire 门禁生效后删除旧 pairing 门禁",
             ["changeset5:legacy_pairing_gate_retirement"],
-            ["docs/changeset5/pairing-gate-retirement.json", "TestChangeset5LegacySymbolsDefinitionsAndCallsAreZero"],
+            ["docs/egress/consolidation/pairing-gate-retirement.json", "TestChangeset5LegacySymbolsDefinitionsAndCallsAreZero"],
         )
     if path.startswith("backend/cmd/egressscan/"):
         return (
             "登记 scanner 生命周期迁移、移除收据及当前源码锁",
             ["changeset5:scanner_source_lifecycle_transition"],
-            ["docs/changeset5/bootstrap-inventory-lock.json", "docs/changeset5/removal-receipts.json"],
+            ["docs/egress/consolidation/bootstrap-inventory-lock.json", "docs/egress/consolidation/removal-receipts.json"],
         )
     if path in {
         "backend/internal/repository/official_egress_guard.go",
@@ -200,25 +200,25 @@ def transition_metadata(path: str) -> tuple[str, list[str], list[str]]:
         return (
             "按冲突单元清单机械迁移官方出站专属 transport/guard declaration",
             ["changeset5:declaration_migration"],
-            ["docs/changeset5/conflict-migration-receipt.json", "TestChangeset5ConflictUnitsOnlyShrinkAndPreserveUnrelatedFork"],
+            ["docs/egress/consolidation/conflict-migration-receipt.json", "TestChangeset5ConflictUnitsOnlyShrinkAndPreserveUnrelatedFork"],
         )
     if path == "backend/internal/service/official_egress_changeset5_final_wire_test.go":
         return (
             "建立 original pre、normalized pre 与 post 三段 final-wire 时间链及 mutation 门禁",
             ["changeset5:final_wire_normalization_transition"],
-            ["docs/changeset5/final-wire-normalization-transition.json", "TestChangeset5NormalizedPreAppliesOnlyExactOAuthNoiseTransition"],
+            ["docs/egress/consolidation/final-wire-normalization-transition.json", "TestChangeset5NormalizedPreAppliesOnlyExactOAuthNoiseTransition"],
         )
     if path == "backend/internal/service/official_egress_changeset3_production_final_wire_test.go":
         return (
             "仅在测试采集边界固定 OAuth InvocationID，消除连接生命周期随机噪声",
             ["changeset5:oauth_capture_determinism"],
-            ["docs/changeset5/changeset3-source-transition.json", "TestChangeset5NormalizationTransitionRejectsWrongOrExpandedApproval"],
+            ["docs/egress/consolidation/changeset3-source-transition.json", "TestChangeset5NormalizationTransitionRejectsWrongOrExpandedApproval"],
         )
     if path == "backend/internal/officialegress/changeset3_post_identity_authority_final_wire_frozen_test.go":
         return (
             "串联变更集 5 源码迁移 receipt，同时保持变更集 3 历史 manifest 不变",
             ["changeset5:changeset3_source_transition"],
-            ["docs/changeset5/changeset3-source-transition.json"],
+            ["docs/egress/consolidation/changeset3-source-transition.json"],
         )
     if path in {"Makefile", "tools/changeset5_workspace_baseline.py"}:
         return (
@@ -230,25 +230,28 @@ def transition_metadata(path: str) -> tuple[str, list[str], list[str]]:
         return (
             "同步变更集 5 已实施架构、证据口径与复审边界",
             ["changeset5:specification_update"],
-            ["python3 tools/check_spec_refs.py", "docs/changeset5/acceptance-report.md"],
+            [
+                "python3 tools/check_spec_refs.py",
+                "docs/egress/consolidation/egress-surface-inventory.json",
+            ],
         )
     if path == "tools/check_ledger_completeness.py":
         return (
             "使用严格完整路径结构化比对 52 个出站面并识别迁移后的 WS declaration",
             ["changeset5:egress_surface_gate"],
-            ["docs/changeset5/egress-surface-inventory.json", "TestChangeset5SurfaceInventoryIsIndependentlyLocked"],
+            ["docs/egress/consolidation/egress-surface-inventory.json", "TestChangeset5SurfaceInventoryIsIndependentlyLocked"],
         )
     if path == "tools/version_leak_baseline.json" or "0145" in path or path.endswith("official_egress_version_leak_ast.json"):
         return (
             "清理版本无关生产符号中的 0145，并收紧到精确证据闭集",
             ["changeset5:version_neutral_symbol_cleanup"],
-            ["docs/changeset5/0145-symbol-allowlist.json", "TestChangeset50145AllowlistIsIndependentlyLocked"],
+            ["docs/egress/consolidation/0145-symbol-allowlist.json", "TestChangeset50145AllowlistIsIndependentlyLocked"],
         )
     if path == "backend/internal/service/openai_images_responses.go":
         return (
             "清理 Codex Images Body 组装中的版本化内部标识符，并通过分类 overlay 纳入有效 governable 集合",
             ["changeset5:version_neutral_symbol_cleanup", "changeset5:conflict_classification_overlay"],
-            ["docs/changeset5/conflict-classification-amendments.json", "TestChangeset5ConflictOverlayDoesNotHideOtherNonOfficialDrift"],
+            ["docs/egress/consolidation/conflict-classification-amendments.json", "TestChangeset5ConflictOverlayDoesNotHideOtherNonOfficialDrift"],
         )
     if path.endswith("_test.go"):
         return (
@@ -259,7 +262,7 @@ def transition_metadata(path: str) -> tuple[str, list[str], list[str]]:
     return (
         "迁移版本中立官方出站逻辑并薄化共享接入点，保持非官方 fork 片段不变",
         ["changeset5:official_egress_refactor"],
-        ["docs/changeset5/conflict-migration-receipt.json", "make check-egress-spec"],
+        ["docs/egress/consolidation/conflict-migration-receipt.json", "make check-egress-spec"],
     )
 
 
@@ -300,9 +303,9 @@ def build_transition() -> tuple[dict[str, Any], dict[str, Any]]:
     manifest = {
         "schema_version": "changeset5-workspace-transition/v1",
         "changeset": "5",
-        "baseline_manifest_path": "docs/changeset5/workspace-baseline/manifest.json",
+        "baseline_manifest_path": "docs/egress/consolidation/workspace-baseline/manifest.json",
         "baseline_manifest_sha256": sha256(baseline_raw),
-        "baseline_receipt_path": "docs/changeset5/workspace-baseline/receipt.json",
+        "baseline_receipt_path": "docs/egress/consolidation/workspace-baseline/receipt.json",
         "baseline_receipt_sha256": sha256(baseline_receipt_raw),
         "frozen_path_count": sum(len(baseline[name]) for name in counts),
         "entry_count": len(entries),
@@ -318,7 +321,7 @@ def build_transition() -> tuple[dict[str, Any], dict[str, Any]]:
     receipt = {
         "schema_version": "changeset5-workspace-transition-receipt/v1",
         "changeset": "5",
-        "manifest_path": "docs/changeset5/workspace-transition/manifest.json",
+        "manifest_path": "docs/egress/consolidation/workspace-transition/manifest.json",
         "manifest_sha256": sha256(manifest_raw),
         "frozen_path_count": manifest["frozen_path_count"],
         "transition_entry_count": len(entries),
@@ -343,7 +346,7 @@ def write() -> None:
     receipt = {
         "schema_version": "changeset5-workspace-baseline-receipt/v1",
         "changeset": "5",
-        "manifest_path": "docs/changeset5/workspace-baseline/manifest.json",
+        "manifest_path": "docs/egress/consolidation/workspace-baseline/manifest.json",
         "manifest_sha256": sha256(manifest_raw),
         "protected_prior_count": len(manifest["protected_prior_artifacts"]),
         "incidental_non_authoritative_count": len(manifest["incidental_non_authoritative_paths"]),
@@ -461,7 +464,7 @@ def validate_transition() -> None:
     expected_receipt = {
         "schema_version": "changeset5-workspace-transition-receipt/v1",
         "changeset": "5",
-        "manifest_path": "docs/changeset5/workspace-transition/manifest.json",
+        "manifest_path": "docs/egress/consolidation/workspace-transition/manifest.json",
         "manifest_sha256": sha256(transition_raw),
         "frozen_path_count": len(frozen),
         "transition_entry_count": len(by_path),

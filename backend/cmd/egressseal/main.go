@@ -13,10 +13,10 @@ import (
 )
 
 const (
-	protectedReceiptPath     = "docs/changeset1a/legacy-seal-receipt.json"
-	protectedCeilingPath     = "docs/changeset1a/legacy-ceiling.json"
-	protectedSupplementsPath = "docs/changeset1a/pre-bootstrap-supplements.json"
-	protectedBaselinePath    = "docs/changeset1a/legacy-baseline.json"
+	protectedReceiptPath     = "docs/egress/lifecycle/legacy-seal-receipt.json"
+	protectedCeilingPath     = "docs/egress/lifecycle/legacy-ceiling.json"
+	protectedSupplementsPath = "docs/egress/lifecycle/pre-bootstrap-supplements.json"
+	protectedBaselinePath    = "docs/egress/lifecycle/legacy-baseline.json"
 )
 
 func main() {

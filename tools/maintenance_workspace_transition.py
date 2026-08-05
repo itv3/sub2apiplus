@@ -14,9 +14,9 @@ from typing import Any
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 RETIREMENT_RECEIPT_PATH = (
-    ROOT / "docs" / "maintenance" / "official-egress-consolidation-retirement.json"
+    ROOT / "docs" / "egress" / "maintenance" / "official-egress-consolidation-retirement.json"
 )
-TRANSITION_DIR = ROOT / "docs" / "maintenance" / "workspace-transition"
+TRANSITION_DIR = ROOT / "docs" / "egress" / "maintenance" / "workspace-transition"
 MANIFEST_PATH = TRANSITION_DIR / "manifest.json"
 RECEIPT_PATH = TRANSITION_DIR / "receipt.json"
 EXCLUDED_PATHS = {
@@ -139,7 +139,7 @@ def validate_state(value: Any, path: str) -> None:
 
 
 def scope_of(path: str) -> str:
-    if path.startswith("docs/maintenance/") or path == "docs/CODEX_CLI_0145_EGRESS_SPEC.md":
+    if path.startswith("docs/egress/maintenance/") or path == "docs/CODEX_CLI_0145_EGRESS_SPEC.md":
         return "documentation_and_receipts"
     if path.startswith("backend/internal/officialegress/"):
         return "officialegress_core"
@@ -188,7 +188,7 @@ def build_transition() -> tuple[dict[str, Any], dict[str, Any]]:
                 and after["file_type"] == "absent",
                 "reason": "官方出站单文档合并与已失效执行兼容层退休",
                 "machine_proofs": [
-                    "docs/maintenance/official-egress-consolidation-retirement.json",
+                    "docs/egress/maintenance/official-egress-consolidation-retirement.json",
                     "make check-egress-spec",
                 ],
             }

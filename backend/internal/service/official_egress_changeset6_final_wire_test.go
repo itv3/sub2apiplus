@@ -44,7 +44,7 @@ func TestGenerateChangeset6PostFinalWire(t *testing.T) {
 	if !filepath.IsAbs(output) {
 		t.Fatal("变更集 6 post final-wire 输出目录必须是绝对路径")
 	}
-	baselineRaw, err := os.ReadFile("../../../docs/changeset5/post-refactor-final-wire/manifest.json")
+	baselineRaw, err := os.ReadFile("../../../docs/egress/consolidation/post-refactor-final-wire/manifest.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,11 +80,11 @@ func TestGenerateChangeset6PostFinalWire(t *testing.T) {
 	receipt := changeset6PostFinalWireReceipt{
 		SchemaVersion:          "changeset6-post-final-wire-receipt/v1",
 		Changeset:              "6",
-		BaselineManifestPath:   "docs/changeset5/post-refactor-final-wire/manifest.json",
+		BaselineManifestPath:   "docs/egress/consolidation/post-refactor-final-wire/manifest.json",
 		BaselineManifestSHA256: changeset5PostRefactorManifestSHA256,
-		ManifestPath:           "docs/changeset6/post-final-wire/manifest.json",
+		ManifestPath:           "docs/egress/validation/post-final-wire/manifest.json",
 		ManifestSHA256:         finalwirecapture.SHA256(manifestRaw),
-		SecretScanPath:         "docs/changeset6/post-final-wire/secret-scan.json",
+		SecretScanPath:         "docs/egress/validation/post-final-wire/secret-scan.json",
 		SecretScanSHA256:       finalwirecapture.SHA256(scanRaw),
 		RouteCount:             manifest.RouteCount,
 		CaptureCount:           manifest.CaptureCount,
@@ -112,7 +112,7 @@ func TestGenerateChangeset6PostFinalWire(t *testing.T) {
 }
 
 func TestChangeset6PostFinalWireIsFrozenAndMatchesChangeset5(t *testing.T) {
-	root := "../../../docs/changeset6/post-final-wire"
+	root := "../../../docs/egress/validation/post-final-wire"
 	manifestRaw, err := os.ReadFile(filepath.Join(root, "manifest.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -130,7 +130,7 @@ func TestChangeset6PostFinalWireIsFrozenAndMatchesChangeset5(t *testing.T) {
 		finalwirecapture.SHA256(receiptRaw) != changeset6PostFinalWireReceiptSHA256 {
 		t.Fatal("变更集 6 post final-wire 三件套摘要漂移")
 	}
-	baselineRaw, err := os.ReadFile("../../../docs/changeset5/post-refactor-final-wire/manifest.json")
+	baselineRaw, err := os.ReadFile("../../../docs/egress/consolidation/post-refactor-final-wire/manifest.json")
 	if err != nil {
 		t.Fatal(err)
 	}

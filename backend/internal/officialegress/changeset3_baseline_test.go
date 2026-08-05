@@ -47,15 +47,15 @@ type changeset3AcceptanceMatrix struct {
 
 func TestChangeset3BaselineArtifactsAreFrozen(t *testing.T) {
 	artifacts := map[string]string{
-		"../../../docs/changeset3/workspace-status.txt":      "48d68ea2eb30649a621e3db9091dd339e5a103304798dcfb541b1dcceaa33b2d",
-		"../../../docs/changeset3/untracked-files.sha256":    "3cfcc8d787a476227b74858eddaa8d783a90107d5418e181c16bc2e87c0c525a",
-		"../../../docs/changeset3/codex-binding-freeze.json": "30e7814c10370278ce4940e00e5b2943b2243e763b9537dbb5069c7c0e310304",
-		"../../../docs/changeset3/acceptance-matrix.json":    "2dc2acb8247bde3a9afadaaa0e7f57e482d2fdcaefd0f08211c11a1b702f9d56",
-		"catalogdata/migration-receipts.json":                "94ff0e21cded16b08ba5b9ed4cabd9950a367d0c1fba2924d8d2e1313a6ba4a7",
-		"../../../docs/changeset1a/legacy-baseline.json":     "42c49c9000221d30671398b9870297c80d0d6c2b84dfc1e3918056cb7c4c68db",
-		"../../../docs/changeset1a/legacy-ceiling.json":      "f744ab46c8f509577ee4a88050e426bc9c04152b39bc5f6f0d0877d4b99cc58d",
-		"../../../docs/changeset1a/removal-receipts.json":    "7d9d57cd30bcde5e1b7eacb35d8fcd2b65c80b8799955eb5537e91829bc90282",
-		"../../../docs/changeset2/removal-receipts.json":     "c9e0edee6deaa742ca4be85addc02b9c2e2dcd31f15302e676b7830c8e1f8d10",
+		"../../../docs/egress/migration/workspace-status.txt":      "48d68ea2eb30649a621e3db9091dd339e5a103304798dcfb541b1dcceaa33b2d",
+		"../../../docs/egress/migration/untracked-files.sha256":    "3cfcc8d787a476227b74858eddaa8d783a90107d5418e181c16bc2e87c0c525a",
+		"../../../docs/egress/migration/codex-binding-freeze.json": "30e7814c10370278ce4940e00e5b2943b2243e763b9537dbb5069c7c0e310304",
+		"../../../docs/egress/migration/acceptance-matrix.json":    "2dc2acb8247bde3a9afadaaa0e7f57e482d2fdcaefd0f08211c11a1b702f9d56",
+		"catalogdata/migration-receipts.json":                      "94ff0e21cded16b08ba5b9ed4cabd9950a367d0c1fba2924d8d2e1313a6ba4a7",
+		"../../../docs/egress/lifecycle/legacy-baseline.json":      "42c49c9000221d30671398b9870297c80d0d6c2b84dfc1e3918056cb7c4c68db",
+		"../../../docs/egress/lifecycle/legacy-ceiling.json":       "f744ab46c8f509577ee4a88050e426bc9c04152b39bc5f6f0d0877d4b99cc58d",
+		"../../../docs/egress/lifecycle/removal-receipts.json":     "7d9d57cd30bcde5e1b7eacb35d8fcd2b65c80b8799955eb5537e91829bc90282",
+		"../../../docs/egress/release/removal-receipts.json":       "c9e0edee6deaa742ca4be85addc02b9c2e2dcd31f15302e676b7830c8e1f8d10",
 	}
 	for path, want := range artifacts {
 		raw, err := os.ReadFile(path)
@@ -71,7 +71,7 @@ func TestChangeset3BaselineArtifactsAreFrozen(t *testing.T) {
 
 func TestChangeset3BindingAndAcceptanceMatrixAreComplete(t *testing.T) {
 	var freeze changeset3BindingFreeze
-	readChangeset3JSON(t, "../../../docs/changeset3/codex-binding-freeze.json", &freeze)
+	readChangeset3JSON(t, "../../../docs/egress/migration/codex-binding-freeze.json", &freeze)
 	if freeze.SchemaVersion != "changeset3-codex-binding-freeze/v1" ||
 		freeze.Totals.CodexCLI != 27 || freeze.Totals.CodexProfile != 23 ||
 		freeze.Totals.AlreadyEnforced != 4 || freeze.Totals.PendingMigration != 19 ||
@@ -81,7 +81,7 @@ func TestChangeset3BindingAndAcceptanceMatrixAreComplete(t *testing.T) {
 	}
 
 	var matrix changeset3AcceptanceMatrix
-	readChangeset3JSON(t, "../../../docs/changeset3/acceptance-matrix.json", &matrix)
+	readChangeset3JSON(t, "../../../docs/egress/migration/acceptance-matrix.json", &matrix)
 	anchors := []string{
 		"codex.admin_test.compact",
 		"codex.admin_test.responses",

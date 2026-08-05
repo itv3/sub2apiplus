@@ -174,7 +174,8 @@ func TestOfficialEgressT1_OpenAIHTTPBuiltInProfileOwnsBodyAndIdentity(t *testing
 
 	// 已经正确的字段必须保持，避免后续 Profile 全量重写。
 	require.Equal(t, "additional_tools", gjson.GetBytes(upstream.lastBody, "input.0.type").String())
-	require.Equal(t, testOfficialOpenAISessionID, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
+	sessionID := requireUnifiedOfficialOpenAIWireSession(t, upstream.lastReq)
+	require.Equal(t, sessionID, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
 	require.Equal(t, "reasoning.encrypted_content", gjson.GetBytes(upstream.lastBody, "include.0").String())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "parallel_tool_calls").Bool())
 
@@ -183,9 +184,7 @@ func TestOfficialEgressT1_OpenAIHTTPBuiltInProfileOwnsBodyAndIdentity(t *testing
 	require.Equal(t, testOfficialOpenAICallID, gjson.GetBytes(upstream.lastBody, "input.4.call_id").String())
 	require.Empty(t, upstream.lastReq.Header.Get("session_id"))
 	require.Empty(t, upstream.lastReq.Header.Get("conversation_id"))
-	require.Equal(t, testOfficialOpenAISessionID, upstream.lastReq.Header.Get("session-id"))
-	require.Equal(t, testOfficialOpenAISessionID, upstream.lastReq.Header.Get("thread-id"))
-	require.Equal(t, testOfficialOpenAISessionID+":0", upstream.lastReq.Header.Get("x-codex-window-id"))
+	require.Equal(t, sessionID, upstream.lastReq.Header.Get("session-id"))
 }
 
 func TestOfficialEgressT1_OpenAIWSCharacterizesHandshakeAndContinuationRewrite(t *testing.T) {

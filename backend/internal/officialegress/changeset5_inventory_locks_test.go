@@ -49,7 +49,7 @@ type changeset5SurfaceInventory struct {
 }
 
 func TestChangeset50145AllowlistIsIndependentlyLocked(t *testing.T) {
-	raw, err := os.ReadFile("../../../docs/changeset5/0145-symbol-allowlist.json")
+	raw, err := os.ReadFile("../../../docs/egress/consolidation/0145-symbol-allowlist.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,7 +66,7 @@ func TestChangeset50145AllowlistIsIndependentlyLocked(t *testing.T) {
 }
 
 func TestChangeset5SurfaceInventoryIsIndependentlyLocked(t *testing.T) {
-	raw, err := os.ReadFile("../../../docs/changeset5/egress-surface-inventory.json")
+	raw, err := os.ReadFile("../../../docs/egress/consolidation/egress-surface-inventory.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +84,7 @@ func TestChangeset5SurfaceInventoryIsIndependentlyLocked(t *testing.T) {
 }
 
 func TestChangeset5SurfaceInventoryLockRejectsCoordinatedMutation(t *testing.T) {
-	raw, err := os.ReadFile("../../../docs/changeset5/egress-surface-inventory.json")
+	raw, err := os.ReadFile("../../../docs/egress/consolidation/egress-surface-inventory.json")
 	if err != nil {
 		t.Fatal(err)
 	}

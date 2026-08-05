@@ -23,15 +23,15 @@ func TestRuntimeReceiptManifestsMatchReviewedDocs(t *testing.T) {
 		embedded []byte
 	}{
 		{
-			name: "pre-bootstrap supplements", docPath: "../../../docs/changeset1a/pre-bootstrap-supplements.json",
+			name: "pre-bootstrap supplements", docPath: "../../../docs/egress/lifecycle/pre-bootstrap-supplements.json",
 			embedded: mustReadEmbeddedTestFile(t, preBootstrapSupplementFS, "catalogdata/pre-bootstrap-supplements.json"),
 		},
 		{
-			name: "migration receipts", docPath: "../../../docs/changeset1a/migration-receipts.json",
+			name: "migration receipts", docPath: "../../../docs/egress/lifecycle/migration-receipts.json",
 			embedded: mustReadEmbeddedTestFile(t, migrationReceiptFS, "catalogdata/migration-receipts.json"),
 		},
 		{
-			name: "catalog amendments", docPath: "../../../docs/changeset1a/catalog-amendments.json",
+			name: "catalog amendments", docPath: "../../../docs/egress/lifecycle/catalog-amendments.json",
 			embedded: mustReadEmbeddedTestFile(t, catalogAmendmentFS, "catalogdata/catalog-amendments.json"),
 		},
 	}
@@ -60,7 +60,7 @@ func TestReferencedMigrationArtifactsMatchReviewedCopies(t *testing.T) {
 			t.Fatalf("迁移产物不在受控目录：%s", ref.Path)
 		}
 		embedded := mustReadEmbeddedTestFile(t, migrationReceiptFS, ref.Path)
-		reviewedPath := "../../../docs/changeset1a/migration-artifacts/" + strings.TrimPrefix(ref.Path, prefix)
+		reviewedPath := "../../../docs/egress/lifecycle/migration-artifacts/" + strings.TrimPrefix(ref.Path, prefix)
 		reviewed, readErr := os.ReadFile(reviewedPath)
 		if readErr != nil {
 			t.Fatal(readErr)
@@ -94,7 +94,7 @@ func TestChangeset1BMigrationReceiptManifestMatchesProductionEvidence(t *testing
 	const updateEnv = "EGRESS_UPDATE_CHANGESET1B_MIGRATION_MANIFEST"
 	paths := []string{
 		"catalogdata/migration-receipts.json",
-		"../../../docs/changeset1a/migration-receipts.json",
+		"../../../docs/egress/lifecycle/migration-receipts.json",
 	}
 	for _, manifestPath := range paths {
 		if os.Getenv(updateEnv) == "1" {
@@ -186,7 +186,7 @@ func buildChangeset1BMigrationReceiptManifest(t *testing.T) migrationReceiptMani
 
 		observationPath := artifactDirectory + "/canary-observation.json"
 		observationRaw := mustReadEmbeddedTestFile(t, migrationReceiptFS, observationPath)
-		reviewedObservationPath := "../../../docs/changeset1a/migration-artifacts/" +
+		reviewedObservationPath := "../../../docs/egress/lifecycle/migration-artifacts/" +
 			strings.TrimPrefix(observationPath, "catalogdata/migration-artifacts/")
 		reviewedObservation, err := os.ReadFile(reviewedObservationPath)
 		if err != nil {
@@ -489,7 +489,7 @@ func sha256Hex(raw []byte) string {
 }
 
 func TestSupplementCandidateDeterministicallyBuildsRuntimeBinding(t *testing.T) {
-	raw, err := os.ReadFile("../../../docs/changeset0/sink-baseline.json")
+	raw, err := os.ReadFile("../../../docs/egress/foundation/sink-baseline.json")
 	if err != nil {
 		t.Fatal(err)
 	}

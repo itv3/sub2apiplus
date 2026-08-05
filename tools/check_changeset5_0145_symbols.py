@@ -12,8 +12,8 @@ import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SCAN_ROOT = ROOT / "backend"
-PRE_INVENTORY = ROOT / "docs" / "changeset5" / "0145-pre-refactor-inventory.json"
-ALLOWLIST = ROOT / "docs" / "changeset5" / "0145-symbol-allowlist.json"
+PRE_INVENTORY = ROOT / "docs" / "egress" / "consolidation" / "0145-pre-refactor-inventory.json"
+ALLOWLIST = ROOT / "docs" / "egress" / "consolidation" / "0145-symbol-allowlist.json"
 IDENTIFIER_RE = re.compile(r"\b[A-Za-z_][A-Za-z0-9_]*0145[A-Za-z0-9_]*\b")
 
 

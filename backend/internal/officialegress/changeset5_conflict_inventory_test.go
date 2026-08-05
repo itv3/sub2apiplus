@@ -73,14 +73,14 @@ func TestChangeset5ConflictUnitsOnlyShrinkAndPreserveUnrelatedFork(t *testing.T)
 		amendmentSHA      = "53fbdbad39153065aba599fe9b73fa576a1aefbabf89bf6fc870b391c65ff9a3"
 	)
 	paths := map[string]string{
-		"../../../docs/changeset5/conflict-inventory/full.json":                     preFullSHA,
-		"../../../docs/changeset5/conflict-inventory/governable.json":               preGovernableSHA,
-		"../../../docs/changeset5/conflict-inventory/receipt.json":                  preReceiptSHA,
-		"../../../docs/changeset5/post-refactor-conflict-inventory/full.json":       postFullSHA,
-		"../../../docs/changeset5/post-refactor-conflict-inventory/governable.json": postGovernableSHA,
-		"../../../docs/changeset5/post-refactor-conflict-inventory/receipt.json":    postReceiptSHA,
-		"../../../docs/changeset5/conflict-migration-receipt.json":                  migrationSHA,
-		"../../../docs/changeset5/conflict-classification-amendments.json":          amendmentSHA,
+		"../../../docs/egress/consolidation/conflict-inventory/full.json":                     preFullSHA,
+		"../../../docs/egress/consolidation/conflict-inventory/governable.json":               preGovernableSHA,
+		"../../../docs/egress/consolidation/conflict-inventory/receipt.json":                  preReceiptSHA,
+		"../../../docs/egress/consolidation/post-refactor-conflict-inventory/full.json":       postFullSHA,
+		"../../../docs/egress/consolidation/post-refactor-conflict-inventory/governable.json": postGovernableSHA,
+		"../../../docs/egress/consolidation/post-refactor-conflict-inventory/receipt.json":    postReceiptSHA,
+		"../../../docs/egress/consolidation/conflict-migration-receipt.json":                  migrationSHA,
+		"../../../docs/egress/consolidation/conflict-classification-amendments.json":          amendmentSHA,
 	}
 	for path, expected := range paths {
 		if actual := changeset5FileSHA256(t, path); actual != expected {
@@ -89,19 +89,19 @@ func TestChangeset5ConflictUnitsOnlyShrinkAndPreserveUnrelatedFork(t *testing.T)
 	}
 
 	pre := changeset5ReadConflictInventory(
-		t, "../../../docs/changeset5/conflict-inventory/full.json",
+		t, "../../../docs/egress/consolidation/conflict-inventory/full.json",
 	)
 	preGovernable := changeset5ReadConflictInventory(
-		t, "../../../docs/changeset5/conflict-inventory/governable.json",
+		t, "../../../docs/egress/consolidation/conflict-inventory/governable.json",
 	)
 	post := changeset5ReadConflictInventory(
-		t, "../../../docs/changeset5/post-refactor-conflict-inventory/full.json",
+		t, "../../../docs/egress/consolidation/post-refactor-conflict-inventory/full.json",
 	)
 	postGovernable := changeset5ReadConflictInventory(
-		t, "../../../docs/changeset5/post-refactor-conflict-inventory/governable.json",
+		t, "../../../docs/egress/consolidation/post-refactor-conflict-inventory/governable.json",
 	)
 	overlay := changeset5ReadConflictClassificationOverlay(
-		t, "../../../docs/changeset5/conflict-classification-amendments.json",
+		t, "../../../docs/egress/consolidation/conflict-classification-amendments.json",
 	)
 	if overlay.SchemaVersion != "changeset5-conflict-classification-amendments/v1" ||
 		overlay.Changeset != "5" ||

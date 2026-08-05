@@ -52,7 +52,7 @@ type changeset4BaseWorkingTree struct {
 }
 
 func TestChangeset4BaseReceiptIsIndependentlyFrozen(t *testing.T) {
-	receiptPath := filepath.Join("../../..", "docs", "changeset4", "base-receipt.json")
+	receiptPath := filepath.Join("../../..", "docs", "egress", "source-freeze", "base-receipt.json")
 	receiptRaw, err := os.ReadFile(receiptPath)
 	if err != nil {
 		t.Fatal(err)
@@ -67,7 +67,10 @@ func TestChangeset4BaseReceiptIsIndependentlyFrozen(t *testing.T) {
 	}
 	changeset4RequireBaseReceiptFacts(t, receipt)
 
-	manifestPath := filepath.Join("../../..", filepath.FromSlash(receipt.WorkingTree.BaseFileManifest))
+	manifestPath := filepath.Join("../../..", filepath.FromSlash(strings.Replace(
+		receipt.WorkingTree.BaseFileManifest,
+		"docs/changeset4/", "docs/egress/source-freeze/", 1,
+	)))
 	manifestRaw, err := os.ReadFile(manifestPath)
 	if err != nil {
 		t.Fatal(err)

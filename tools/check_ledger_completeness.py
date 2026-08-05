@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-"""检查 §3.5 源码改动台账是否覆盖全部 Codex/OpenAI 出站定型面。
+"""检查 §3.5 人工合并缝与机器精确台账是否覆盖 Codex/OpenAI 出站定型面。
 
-§4.7 第 9 步要求每次合并上游后更新台账，但台账是手工维护的表格，没有任何机制
-保证它与代码同步。本脚本用可复算的判据重新计算“应当登记”的文件集合，与文档
-实际登记的内容比对，把台账完整性从人工承诺变成机器断言。
+§4.7 要求每次合并上游后刷新台账。文档只保留少量高风险合并缝；完整路径集合由本脚本
+相对冻结 upstream commit 自动复算，并与结构化 JSON 比对，避免继续人工维护几十行路径。
 
 判据是「生产 Go 代码中引用了 Codex/OpenAI 出站定型专属符号」。该判据刻意不使用
 通用的 OfficialEgress 前缀：那个前缀同时覆盖 Anthropic 画像，会把 §1.1 明确排除
@@ -28,12 +27,13 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SPEC = ROOT / "docs" / "CODEX_CLI_0145_EGRESS_SPEC.md"
 SCAN_ROOT = ROOT / "backend"
-INVENTORY = ROOT / "docs" / "changeset5" / "egress-surface-inventory.json"
-CHANGESET6_TRANSITION = ROOT / "docs" / "changeset6" / "egress-surface-transition.json"
-MAINTENANCE_RETIREMENT = ROOT / "docs" / "maintenance" / "official-egress-consolidation-retirement.json"
+INVENTORY = ROOT / "docs" / "egress" / "consolidation" / "egress-surface-inventory.json"
+CHANGESET6_TRANSITION = ROOT / "docs" / "egress" / "validation" / "egress-surface-transition.json"
+MAINTENANCE_RETIREMENT = ROOT / "docs" / "egress" / "maintenance" / "official-egress-consolidation-retirement.json"
+UPSTREAM_MERGE_LEDGER = ROOT / "docs" / "egress" / "maintenance" / "upstream-v0.1.171-egress-merge-ledger.json"
 MAINTENANCE_RETIREMENT_SHA256 = "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36"
-CURRENT_UPSTREAM_BASE = "c043c24774228ba891ddf90d783aa6dc7d0855b5"
-CURRENT_REVIEW_PATH_COUNT = 56
+CURRENT_UPSTREAM_TAG = "v0.1.171"
+CURRENT_UPSTREAM_BASE = "f0e7a9c7a23a7d02fb159b62fa809621eb0475a6"
 
 # 这些文件直接改变 Codex body、namespace、能力、身份、连接或 Guard，但不一定
 # 命中 SURFACE_RE。单独冻结必要集合，防止人工表格在保持总数不变时用无关路径替换。
@@ -57,6 +57,43 @@ REQUIRED_REVIEW_TOUCHPOINTS = {
     "backend/internal/service/openai_responses_namespace.go",
     "backend/internal/service/openai_ws_forwarder.go",
     "backend/internal/service/openai_ws_protocol_resolver.go",
+    "backend/internal/service/official_egress_upstream_identity_bridge.go",
+}
+
+# 上游 v0.1.171 新增的身份发现/归一化基础设施不一定直接命中 strict surface 扫描，
+# 但它们决定“发现值是否能越权成为 active wire 身份”，必须进入机器合并台账。
+IDENTITY_BOUNDARY_TOUCHPOINTS = {
+    "backend/internal/handler/admin/setting_handler.go",
+    "backend/internal/handler/admin/setting_handler_update.go",
+    "backend/internal/handler/dto/settings.go",
+    "backend/internal/pkg/openai/request.go",
+    "backend/internal/service/domain_constants.go",
+    "backend/internal/service/openai_codex_version_sync_service.go",
+    "backend/internal/service/setting_gateway_runtime.go",
+    "backend/internal/service/setting_parse.go",
+    "backend/internal/service/setting_update.go",
+    "backend/internal/service/settings_view.go",
+    "backend/internal/service/wire.go",
+    "frontend/src/api/admin/settings.ts",
+    "frontend/src/i18n/locales/en/admin/settings.ts",
+    "frontend/src/i18n/locales/zh/admin/settings.ts",
+    "frontend/src/views/admin/SettingsView.vue",
+}
+
+# 人类文档只需解释这些高风险边界；完整文件闭集由结构化机器台账负责。
+HUMAN_REVIEW_SEAMS = {
+    "backend/internal/pkg/openai/request.go",
+    "backend/internal/service/openai_codex_identity.go",
+    "backend/internal/service/openai_codex_version_sync_service.go",
+    "backend/internal/service/official_egress_upstream_identity_bridge.go",
+    "backend/internal/service/official_egress_identity_authority.go",
+    "backend/internal/officialegress/compiler.go",
+    "backend/internal/officialegress/executor.go",
+    "backend/internal/service/openai_ws_forwarder_payload.go",
+    "backend/internal/service/openai_quota_service.go",
+    "backend/internal/service/setting_gateway_runtime.go",
+    "backend/internal/service/wire.go",
+    "frontend/src/views/admin/SettingsView.vue",
 }
 
 # Codex/OpenAI 出站定型专属符号。命中即表示该文件参与官方出站形态的产生，
@@ -138,80 +175,81 @@ def git_path_differs(commit: str, path: str) -> bool:
         stderr=subprocess.DEVNULL,
         check=False,
     )
+    if result.returncode not in {0, 1}:
+        raise RuntimeError(f"无法比较 upstream 路径：{path}")
     return result.returncode == 1
 
 
-def table_paths(section: str, sources: set[str]) -> dict[str, str]:
-    """读取来源表第二列中的生产路径，并拒绝重复或无法识别的来源。"""
-
-    paths: dict[str, str] = {}
-    for line in section.splitlines():
-        if not line.startswith("|"):
-            continue
-        cells = [cell.strip() for cell in line.split("|")]
-        if len(cells) < 4 or cells[1] not in sources:
-            continue
-        for path in re.findall(r"`([^`]+)`", cells[2]):
-            if not (path == "Dockerfile" or path.startswith("backend/")):
-                continue
-            if path in paths:
-                raise RuntimeError(f"§3.5 台账路径重复：{path}")
-            paths[path] = cells[1]
-    return paths
-
-
-def fork_table_paths(section: str) -> set[str]:
-    """读取 §3.5.1 第一列中的 Fork 文件或目录。"""
-
-    paths: set[str] = set()
-    for line in section.splitlines():
-        if not line.startswith("| `"):
-            continue
-        cells = [cell.strip() for cell in line.split("|")]
-        if len(cells) < 3:
-            continue
-        matches = re.findall(r"`([^`]+)`", cells[1])
-        for path in matches:
-            if not path.startswith("backend/"):
-                continue
-            if path in paths:
-                raise RuntimeError(f"§3.5.1 台账路径重复：{path}")
-            paths.add(path)
-    return paths
-
-
-def validate_source_tables(ledger: str) -> None:
-    """校验 Fork 私有表和当前 upstream 人工复核闭集。"""
-
-    fork_section = ledger_subsection(ledger, "### 3.5.1", "### 3.5.2")
-    fork_rows = fork_table_paths(fork_section)
-    for path in fork_rows:
-        if not (ROOT / path).exists():
-            raise RuntimeError(f"§3.5.1 登记路径不存在：{path}")
-        if git_path_exists(CURRENT_UPSTREAM_BASE, path):
-            raise RuntimeError(f"§3.5.1 把 upstream 已有路径误标为 Fork 新增：{path}")
+def validate_human_ledger(ledger: str) -> None:
+    """校验 Markdown 只保留且完整解释高风险合并缝。"""
 
     review_section = ledger_subsection(ledger, "### 3.5.2", "### 3.5.3")
-    review_rows = table_paths(review_section, {"上游已有", "Fork 已有"})
-    if len(review_rows) != CURRENT_REVIEW_PATH_COUNT:
-        raise RuntimeError(
-            f"§3.5.2 当前人工复核闭集应为 {CURRENT_REVIEW_PATH_COUNT} 个生产路径，"
-            f"实际为 {len(review_rows)} 个"
-        )
-    missing_required = sorted(REQUIRED_REVIEW_TOUCHPOINTS - set(review_rows))
-    if missing_required:
-        raise RuntimeError(f"§3.5.2 缺少必要接入点：{missing_required}")
-    for path, source in review_rows.items():
+    missing = sorted(path for path in HUMAN_REVIEW_SEAMS if path not in review_section)
+    if missing:
+        raise RuntimeError(f"§3.5.2 缺少高风险人工复核缝：{missing}")
+    for path in HUMAN_REVIEW_SEAMS:
         if not (ROOT / path).is_file():
-            raise RuntimeError(f"§3.5.2 登记路径不是普通文件：{path}")
-        upstream_exists = git_path_exists(CURRENT_UPSTREAM_BASE, path)
-        expected_source = "上游已有" if upstream_exists else "Fork 已有"
-        if source != expected_source:
-            raise RuntimeError(
-                f"§3.5.2 来源分类错误：{path}，登记={source}，实际={expected_source}"
-            )
+            raise RuntimeError(f"§3.5.2 高风险合并缝不是普通文件：{path}")
+
+
+def current_upstream_merge_entries(surface: list[str]) -> list[dict[str, object]]:
+    """生成相对当前 upstream 基线的 Codex 出站 overlay 精确闭集。"""
+
+    strict_surface = set(surface) - set(SCOPE_EXCLUSIONS)
+    candidates = strict_surface | REQUIRED_REVIEW_TOUCHPOINTS | IDENTITY_BOUNDARY_TOUCHPOINTS
+    entries: list[dict[str, object]] = []
+    for path in sorted(candidates):
+        if not (ROOT / path).is_file():
+            raise RuntimeError(f"机器合并台账候选不是普通文件：{path}")
         if not git_path_differs(CURRENT_UPSTREAM_BASE, path):
-            raise RuntimeError(f"§3.5.2 路径相对当前 upstream 基线没有差异：{path}")
+            continue
+        scopes: list[str] = []
+        if path in strict_surface:
+            scopes.append("strict_surface")
+        if path in REQUIRED_REVIEW_TOUCHPOINTS:
+            scopes.append("required_review_touchpoint")
+        if path in IDENTITY_BOUNDARY_TOUCHPOINTS:
+            scopes.append("identity_boundary")
+        entries.append(
+            {
+                "path": path,
+                "source": "upstream" if git_path_exists(CURRENT_UPSTREAM_BASE, path) else "fork",
+                "scopes": scopes,
+            }
+        )
+    return entries
+
+
+def upstream_merge_ledger_payload(entries: list[dict[str, object]]) -> dict[str, object]:
+    """构造可精确重放的 upstream overlay 台账。"""
+
+    canonical = json.dumps(entries, ensure_ascii=False, separators=(",", ":")).encode()
+    return {
+        "schema_version": "upstream-egress-merge-ledger/v1",
+        "upstream_tag": CURRENT_UPSTREAM_TAG,
+        "upstream_commit": CURRENT_UPSTREAM_BASE,
+        "generation_rule": "strict_surface ∪ required_review_touchpoint ∪ identity_boundary 中相对 upstream 有差异的普通文件",
+        "overlay_count": len(entries),
+        "overlay_sha256": sha256(canonical),
+        "overlays": entries,
+    }
+
+
+def validate_upstream_merge_ledger(expected: dict[str, object]) -> None:
+    """要求结构化台账与当前工作树复算结果逐字段一致。"""
+
+    try:
+        actual = json.loads(UPSTREAM_MERGE_LEDGER.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(
+            "无法读取 v0.1.171 机器合并台账；请先运行 "
+            "python3 tools/check_ledger_completeness.py --write-upstream-merge-ledger："
+            f"{exc}"
+        ) from exc
+    if actual != expected:
+        raise RuntimeError(
+            "v0.1.171 机器合并台账与当前源码 overlay 不一致；请重生成后审阅 JSON 差异"
+        )
 
 
 def sha256(raw: bytes) -> str:
@@ -276,10 +314,16 @@ def maintenance_removals(frozen_paths: set[str]) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument(
+    writes = parser.add_mutually_exclusive_group()
+    writes.add_argument(
         "--write-inventory",
         action="store_true",
         help="按当前受审扫描结果写入变更集 5 的结构化完整性清单",
+    )
+    writes.add_argument(
+        "--write-upstream-merge-ledger",
+        action="store_true",
+        help="按当前源码写入相对 v0.1.171 的结构化 Codex 出站 overlay 台账",
     )
     args = parser.parse_args()
 
@@ -287,7 +331,27 @@ def main() -> int:
     surface = scan_surface_files()
 
     try:
-        validate_source_tables(ledger)
+        validate_human_ledger(ledger)
+        upstream_entries = current_upstream_merge_entries(surface)
+        upstream_payload = upstream_merge_ledger_payload(upstream_entries)
+    except RuntimeError as exc:
+        print(f"🔴 {exc}", file=sys.stderr)
+        return 1
+
+    if args.write_upstream_merge_ledger:
+        UPSTREAM_MERGE_LEDGER.parent.mkdir(parents=True, exist_ok=True)
+        UPSTREAM_MERGE_LEDGER.write_text(
+            json.dumps(upstream_payload, ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        print(
+            f"✅ 已写入 {len(upstream_entries)} 个 v0.1.171 出站 overlay："
+            f"{UPSTREAM_MERGE_LEDGER}"
+        )
+        return 0
+
+    try:
+        validate_upstream_merge_ledger(upstream_payload)
     except RuntimeError as exc:
         print(f"🔴 {exc}", file=sys.stderr)
         return 1
@@ -378,21 +442,9 @@ def main() -> int:
             print(f"🔴 出站定型路径不是已登记的普通文件：{rel}", file=sys.stderr)
             return 1
 
-    missing: list[str] = []
-    for rel in declared_paths:
-        # 只接受完整仓库相对路径；basename 兜底会让同名文件错误借用登记。
-        if rel in ledger:
-            continue
-        missing.append(rel)
-
     stale = [rel for rel in SCOPE_EXCLUSIONS if rel not in surface]
 
-    if missing or stale:
-        for rel in missing:
-            print(
-                f"🔴 {rel} 参与 Codex/OpenAI 出站定型，但未登记进 §3.5 台账",
-                file=sys.stderr,
-            )
+    if stale:
         for rel in stale:
             print(
                 f"🔴 {rel} 已不在出站定型面上，应从 SCOPE_EXCLUSIONS 删除",
@@ -404,7 +456,8 @@ def main() -> int:
     print(
         f"✅ §3.5 台账完整：变更集 5 冻结 52 面 + 变更集 6 增量 {len(additions)} 面"
         f" - 维护退休 {len(removal_paths)} 面 = {covered} 个出站定型文件全部登记"
-        f"；v0.1.170 人工复核闭集 {CURRENT_REVIEW_PATH_COUNT} 个生产路径来源正确"
+        f"；v0.1.171 机器 overlay {len(upstream_entries)} 个文件逐项一致"
+        f"；人工只保留 {len(HUMAN_REVIEW_SEAMS)} 个高风险合并缝"
         + (f"，另有 {len(SCOPE_EXCLUSIONS)} 个工具自引用排除" if SCOPE_EXCLUSIONS else "")
     )
     return 0

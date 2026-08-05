@@ -45,7 +45,7 @@ func TestChangeset3MigrationReceiptsMatchRuntimeContracts(t *testing.T) {
 	embeddedRaw := mustReadEmbeddedTestFile(
 		t, migrationReceiptFS, "catalogdata/changeset3-migration-receipts.json",
 	)
-	reviewedRaw, err := os.ReadFile("../../../docs/changeset3/migration-receipts.json")
+	reviewedRaw, err := os.ReadFile("../../../docs/egress/migration/migration-receipts.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -249,7 +249,7 @@ func changeset3LoadAuthoritativePostCaptures(
 	t *testing.T,
 ) map[string]changeset3PreIdentityReferenceCapture {
 	t.Helper()
-	raw, err := os.ReadFile("../../../docs/changeset3/post_identity_authority_refactor_final_wire/manifest.json")
+	raw, err := os.ReadFile("../../../docs/egress/migration/post_identity_authority_refactor_final_wire/manifest.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +394,7 @@ func changeset3AssertReviewedBytes(t *testing.T, artifactPath string, embedded [
 	if !strings.HasPrefix(artifactPath, prefix) {
 		t.Fatalf("产物路径不受控: %s", artifactPath)
 	}
-	reviewedPath := "../../../docs/changeset3/migration-artifacts/" +
+	reviewedPath := "../../../docs/egress/migration/migration-artifacts/" +
 		strings.TrimPrefix(artifactPath, prefix)
 	reviewed, err := os.ReadFile(reviewedPath)
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -73,7 +74,7 @@ type changeset6BenchmarkMetadata struct {
 }
 
 func TestChangeset6BaselineIsIndependentlyFrozen(t *testing.T) {
-	root := filepath.Join("../../..", "docs", "changeset6", "baseline")
+	root := filepath.Join("../../..", "docs", "egress", "validation", "baseline")
 	workspaceRaw := changeset6ReadBaselineFile(t, filepath.Join(root, "workspace-manifest.json"))
 	metadataRaw := changeset6ReadBaselineFile(t, filepath.Join(root, "benchmark-metadata.json"))
 	receiptRaw := changeset6ReadBaselineFile(t, filepath.Join(root, "receipt.json"))
@@ -131,7 +132,8 @@ func TestChangeset6BaselineIsIndependentlyFrozen(t *testing.T) {
 		}
 	}
 	for _, result := range metadata.RawResults {
-		raw := changeset6ReadBaselineFile(t, filepath.Join("../../..", result.Path))
+		path := strings.Replace(result.Path, "docs/changeset6/", "docs/egress/validation/", 1)
+		raw := changeset6ReadBaselineFile(t, filepath.Join("../../..", path))
 		if changeset6BaselineSHA256(raw) != result.SHA256 {
 			t.Fatalf("变更集 6 benchmark 原始结果摘要漂移：%s", result.Path)
 		}

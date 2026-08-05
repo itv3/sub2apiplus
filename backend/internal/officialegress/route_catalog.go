@@ -273,7 +273,7 @@ func (c OfficialRouteCatalog) ReleaseSelection(
 	}
 	selection := ReleaseSelectionPolicy{
 		ID:              "selection:" + route.Key.String() + ":" + string(route.Protocol),
-		Source:          "docs/changeset0/persona-catalog.md+release-graph.json",
+		Source:          "docs/egress/foundation/persona-catalog.md+release-graph.json",
 		BusinessPurpose: route.Key.Purpose,
 		FamilyID:        route.FamilyID,
 		RegistryPurpose: route.RegistryPurpose,

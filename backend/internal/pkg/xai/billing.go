@@ -15,8 +15,10 @@ const (
 	CLITokenAuthHeader     = "x-xai-token-auth"
 	CLITokenAuthValue      = "xai-grok-cli"
 	CLIClientVersionHeader = "x-grok-client-version"
-	// 与 https://x.ai/cli/stable 保持同步。
-	CLIClientVersion = "0.2.93"
+	// CLIClientVersion 是 Grok CLI 固定版本的唯一来源。repository 与 service
+	// 均由此构造客户端身份，一次升级即可同时覆盖 OAuth 流量和计费探针。
+	// 该值需与 https://x.ai/cli/stable 保持同步。
+	CLIClientVersion = "0.2.114"
 	CLIUserAgent     = "grok-pager/" + CLIClientVersion + " grok-shell/" + CLIClientVersion + " (macos; aarch64)"
 
 	BillingWeeklyPath  = "/billing?format=credits"

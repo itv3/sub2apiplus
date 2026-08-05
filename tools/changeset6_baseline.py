@@ -14,7 +14,7 @@ from typing import Any
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-BASELINE_DIR = ROOT / "docs" / "changeset6" / "baseline"
+BASELINE_DIR = ROOT / "docs" / "egress" / "validation" / "baseline"
 WORKSPACE_MANIFEST = BASELINE_DIR / "workspace-manifest.json"
 RELEASE_CATALOG = (
     ROOT
@@ -24,10 +24,10 @@ RELEASE_CATALOG = (
     / "catalogdata"
     / "release-catalog.json"
 )
-FINAL_WIRE_DIR = ROOT / "docs" / "changeset5" / "post-refactor-final-wire"
+FINAL_WIRE_DIR = ROOT / "docs" / "egress" / "consolidation" / "post-refactor-final-wire"
 
 # 这些文件属于变更集 6 自身，不能倒灌进开发前工作区闭集。
-CHANGESET6_PREFIXES = ("docs/changeset6/",)
+CHANGESET6_PREFIXES = ("docs/egress/validation/",)
 CHANGESET6_EXACT = {"tools/changeset6_baseline.py"}
 
 

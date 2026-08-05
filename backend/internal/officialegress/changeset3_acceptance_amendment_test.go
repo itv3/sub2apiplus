@@ -85,7 +85,7 @@ type changeset3HistoricalAcceptanceMatrix struct {
 }
 
 func TestChangeset3AcceptanceAmendmentIsImmutableAndClosesHistoricalContradiction(t *testing.T) {
-	amendmentRaw := mustReadChangeset3AcceptanceFile(t, "../../../docs/changeset3/acceptance-amendment.json")
+	amendmentRaw := mustReadChangeset3AcceptanceFile(t, "../../../docs/egress/migration/acceptance-amendment.json")
 	if changeset3AcceptanceSHA256(amendmentRaw) != changeset3AcceptanceAmendmentSHA256 {
 		t.Fatal("变更集 3 Acceptance Amendment 发生未审核漂移")
 	}
@@ -95,7 +95,7 @@ func TestChangeset3AcceptanceAmendmentIsImmutableAndClosesHistoricalContradictio
 }
 
 func TestChangeset3AcceptanceAmendmentRejectsMissingOrMutatedAuthority(t *testing.T) {
-	raw := mustReadChangeset3AcceptanceFile(t, "../../../docs/changeset3/acceptance-amendment.json")
+	raw := mustReadChangeset3AcceptanceFile(t, "../../../docs/egress/migration/acceptance-amendment.json")
 	cases := map[string][]byte{
 		"缺少 amendment": nil,
 		"父摘要漂移": bytes.Replace(
@@ -158,6 +158,7 @@ func validateChangeset3AcceptanceAmendment(raw []byte) error {
 			return fmt.Errorf("Acceptance Amendment 父事实漂移: %s", name)
 		}
 		diskPath := "../../../" + got.Path
+		diskPath = strings.Replace(diskPath, "../../../docs/changeset3/", "../../../docs/egress/migration/", 1)
 		if name == "catalog" {
 			diskPath = "catalogdata/catalog-amendments.json"
 		}
@@ -171,7 +172,7 @@ func validateChangeset3AcceptanceAmendment(raw []byte) error {
 	}
 
 	var historical changeset3HistoricalAcceptanceMatrix
-	historicalRaw, err := os.ReadFile("../../../docs/changeset3/acceptance-matrix.json")
+	historicalRaw, err := os.ReadFile("../../../docs/egress/migration/acceptance-matrix.json")
 	if err != nil {
 		return err
 	}

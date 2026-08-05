@@ -84,8 +84,8 @@ func TestOfficialEgressOpenAIHTTPStripsInboundHostHeadersFromOfficialClient(t *t
 	require.Equal(t, openaiidentity.CodexUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 }
 
-// 官方进程关闭 enable_request_compression 时，HTTP Responses 保持明文。
-func TestOfficialEgressResponsesRespectsCompressionFeatureOff(t *testing.T) {
+// 入站未声明压缩时，HTTP Responses 仍使用 active 画像默认压缩。
+func TestOfficialEgressResponsesUsesProfileCompressionDefault(t *testing.T) {
 	body := newOfficialOpenAIHTTPTestBody(t, true, false, false)
 	c := newOfficialOpenAIHTTPTestContext(body, "/v1/responses")
 	upstream := &httpUpstreamRecorder{
@@ -97,7 +97,7 @@ func TestOfficialEgressResponsesRespectsCompressionFeatureOff(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.NotNil(t, upstream.lastReq)
-	require.Empty(t, upstream.lastReq.Header.Get("Content-Encoding"))
+	require.Equal(t, "zstd", upstream.lastReq.Header.Get("Content-Encoding"))
 }
 
 // 官方进程默认开启压缩时，入站 zstd feature 状态必须在终态重新编码后保留。

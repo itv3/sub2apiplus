@@ -79,10 +79,8 @@
       "70bd285418373670": 1,
       "74cc863d8a71da19": 1,
       "7794c85cd38bf62a": 1,
-      "7d27241b562d149b": 1,
       "873b324de0d61765": 1,
       "b7f926a2a21be7a1": 1,
-      "d0a2305ecb4dec11": 1,
       "eb30bc818c41d2f0": 1,
       "fb77648cb8bc58af": 1,
       "fe9c90efa76a3916": 1
@@ -117,7 +115,6 @@
       "93852d5b7051aca0": 1
     },
     "backend/internal/service/openai_codex_identity.go": {
-      "5ded7fdfd189ba9f": 1,
       "dd0d8e01f559711d": 1
     },
     "backend/internal/service/openai_codex_transform.go": {

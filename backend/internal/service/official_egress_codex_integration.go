@@ -261,11 +261,9 @@ func officialCodexVersionForMode(mode string) (string, error) {
 	return version, nil
 }
 
-// resolveOfficialCodex0145RuntimeState 把入口身份与敏感条件头收敛成可信进程快照。
-//
-// 普通第三方入口始终模拟已初始化的 exec，且不能通过伪造 header 激活受管理或
-// 内部 feature。只有已识别的官方 0.145.0 exec/TUI 入口可以把对应运行态带入
-// 出站上下文；值和条件关系在冻结前一次性校验。
+// resolveOfficialCodexRuntimeState 把入口语义与敏感条件头收敛成可信进程快照。
+// surface、终端指纹、originator、版本和压缩开关只来自 active 画像默认值；
+// 入站客户端类型不得参与 wire 身份选择。子代理等条件事实仍在冻结前独立校验。
 func resolveOfficialCodexRuntimeState(
 	c *gin.Context,
 	account *Account,
@@ -292,7 +290,19 @@ func resolveOfficialCodexRuntimeStateFromSnapshot(
 	if err != nil {
 		return officialCodexRuntimeState{}, err
 	}
-	// 普通第三方入口只消费不可变画像默认值；官方入口随后用解压前冻结的实值覆盖。
+	trustedClient, err := resolveOfficialClientProfile(
+		officialClientPurposeOpenAIOAuthResponsesHTTP,
+		state.ProfileMode,
+	)
+	if err != nil {
+		return officialCodexRuntimeState{}, err
+	}
+	if err := applyOfficialCodexTrustedBuildRuntimeDefaults(&state, profile, trustedClient.Build); err != nil {
+		return officialCodexRuntimeState{}, err
+	}
+	// 所有入口只消费不可变 release Build 与版本画像默认值；入站 UA、originator
+	// 与压缩声明不反向覆盖。这样 active/previous 可保留各自冻结的终端画像，
+	// 同时官方客户端和第三方客户端仍共享同一个 wire 身份编译入口。
 	state.RequestCompressionEnabled = profile.FeatureDefaults.EnableRequestCompression
 	if account != nil {
 		residency := strings.TrimSpace(account.GetExtraString(officialCodexResidencyAccountExtraKey))
@@ -309,81 +319,7 @@ func resolveOfficialCodexRuntimeStateFromSnapshot(
 			state.ConditionalHeaders["x-responsesapi-include-timing-metrics"] = "true"
 		}
 	}
-	if !snapshot.OfficialClient {
-		return state, validateOfficialCodexRuntimeState(state)
-	}
-	userAgent := snapshot.UserAgent
-	originator := snapshot.Originator
-	var selectedSurface *officialCodexSurfaceProfile
-	selectedTerminalToken := ""
-	selectedSuffixEnabled := false
-	for _, surface := range profile.Surfaces {
-		prefix := surface.Product + "/" + surface.Version + " " + surface.PlatformPrefix + " "
-		if !strings.HasPrefix(userAgent, prefix) {
-			continue
-		}
-		remainder := strings.TrimPrefix(userAgent, prefix)
-		suffix := " (" + surface.SuffixName + "; " + surface.SuffixVersion + ")"
-		includeSuffix := strings.HasSuffix(remainder, suffix)
-		terminalToken := remainder
-		if includeSuffix {
-			terminalToken = strings.TrimSuffix(remainder, suffix)
-		}
-		rendered, renderErr := profile.RenderUserAgentWithTerminal(surface.ID, terminalToken, includeSuffix)
-		if renderErr == nil && rendered == userAgent {
-			candidate := surface
-			selectedSurface = &candidate
-			selectedTerminalToken = terminalToken
-			selectedSuffixEnabled = includeSuffix
-			break
-		}
-	}
-	if selectedSurface == nil {
-		// 出站形态一律由账号绑定的 active 画像定型，入站声明的版本与平台对上游
-		// 不可见，因此任何官方或第三方入口都投影到该画像，不因身份对不上而拒绝
-		// 服务。此处曾经失败关闭，既误拒新版本客户端，也误拒真正的官方同版本
-		// 客户端——画像平台串固定为 Ubuntu，macOS/Windows 上的官方 CLI 同样
-		// 通不过完整线形校验。
-		logger.LegacyPrintf(
-			"service.official_egress_codex",
-			"[Codex] 入站身份未匹配 %s 画像 surface，按 active 画像投影出站：user-agent=%q originator=%q",
-			profile.Version,
-			userAgent,
-			originator,
-		)
-		return state, validateOfficialCodexRuntimeState(state)
-	}
-	state.RequestCompressionEnabled = snapshot.RequestCompressionEnabled
-	state.SurfaceID = selectedSurface.ID
-	state.TerminalToken = selectedTerminalToken
-	state.UserAgentSuffixEnabled = selectedSuffixEnabled
-	state.ProcessPhase = officialCodexProcessPhaseInitialized
-	state.Originator = selectedSurface.Originator
-	if originator != selectedSurface.Originator {
-		endpointID := codexEndpointID("")
-		if len(endpointIDs) > 0 {
-			endpointID = endpointIDs[0]
-		}
-		// 启动首次 models 省略 originator 是官方真实行为（SPEC-HDR-005），仍需
-		// 识别以产生正确的进程阶段。其余不一致一律按画像 originator 出站：出站
-		// 值本就来自画像，入站写了什么不影响最终线序，不构成拒绝服务的理由。
-		if originator == selectedSurface.InitialModelsOriginator &&
-			!state.UserAgentSuffixEnabled &&
-			selectedSurface.InitialModelsMayOmit &&
-			endpointID == codexEndpointID(officialCodexEndpointModels) {
-			state.ProcessPhase = officialCodexProcessPhaseInitialModels
-			state.Originator = originator
-		} else {
-			logger.LegacyPrintf(
-				"service.official_egress_codex",
-				"[Codex] 入站 originator 与 %s 画像 surface %q 不一致，按画像值出站：originator=%q endpoint=%q",
-				profile.Version,
-				selectedSurface.ID,
-				originator,
-				endpointID,
-			)
-		}
-	}
+	_ = endpointIDs
 
 	subagent := snapshot.Subagent
 	memgen := snapshot.MemoryGeneration
@@ -442,6 +378,49 @@ func resolveOfficialCodexRuntimeStateFromSnapshot(
 		return officialCodexRuntimeState{}, err
 	}
 	return state, nil
+}
+
+// applyOfficialCodexTrustedBuildRuntimeDefaults 把 ReleaseCatalog 已签入的 Build UA
+// 还原成结构化运行态。这里的输入是内部发布事实，不是入站客户端声明；因此它只负责
+// 保留 active/previous 的冻结 surface、终端指纹与 suffix，不构成入口 UA 匹配分支。
+func applyOfficialCodexTrustedBuildRuntimeDefaults(
+	state *officialCodexRuntimeState,
+	profile *officialCodexVersionProfile,
+	build officialClientBuild,
+) error {
+	if state == nil || profile == nil {
+		return errors.New("Codex release Build 运行态投影输入为空")
+	}
+	userAgent := strings.TrimSpace(build.UserAgent)
+	if userAgent == "" || strings.TrimSpace(build.Version) != profile.Version {
+		return fmt.Errorf("Codex release Build 与版本画像不一致：build=%q profile=%q", build.Version, profile.Version)
+	}
+	for _, surface := range profile.Surfaces {
+		prefix := strings.TrimSpace(surface.Product+"/"+surface.Version+" "+surface.PlatformPrefix) + " "
+		if !strings.HasPrefix(userAgent, prefix) {
+			continue
+		}
+		terminalToken := strings.TrimPrefix(userAgent, prefix)
+		includeSuffix := false
+		if surface.SuffixName != "" && surface.SuffixVersion != "" {
+			suffix := fmt.Sprintf(" (%s; %s)", surface.SuffixName, surface.SuffixVersion)
+			if strings.HasSuffix(terminalToken, suffix) {
+				terminalToken = strings.TrimSuffix(terminalToken, suffix)
+				includeSuffix = true
+			}
+		}
+		rendered, err := profile.RenderUserAgentWithTerminal(surface.ID, terminalToken, includeSuffix)
+		if err != nil || rendered != userAgent || strings.TrimSpace(build.Originator) != surface.Originator {
+			continue
+		}
+		state.SurfaceID = surface.ID
+		state.ProcessPhase = officialCodexProcessPhaseInitialized
+		state.Originator = surface.Originator
+		state.TerminalToken = terminalToken
+		state.UserAgentSuffixEnabled = includeSuffix
+		return nil
+	}
+	return fmt.Errorf("Codex release Build UA 无法由版本画像解释：%q", userAgent)
 }
 
 func officialCodexValidateSubagentRuntime(

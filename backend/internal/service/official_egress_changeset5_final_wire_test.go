@@ -158,13 +158,13 @@ func TestGenerateChangeset5NormalizedPreFinalWire(t *testing.T) {
 	receipt := changeset5NormalizedPreFinalWireReceipt{
 		SchemaVersion: "changeset5-normalized-pre-refactor-final-wire-receipt/v1",
 		Changeset:     "5", Baseline: manifest.Baseline,
-		ManifestPath:                "docs/changeset5/normalized-pre-refactor-final-wire/manifest.json",
+		ManifestPath:                "docs/egress/consolidation/normalized-pre-refactor-final-wire/manifest.json",
 		ManifestSHA256:              finalwirecapture.SHA256(manifestRaw),
-		SecretScanPath:              "docs/changeset5/normalized-pre-refactor-final-wire/secret-scan.json",
+		SecretScanPath:              "docs/egress/consolidation/normalized-pre-refactor-final-wire/secret-scan.json",
 		SecretScanSHA256:            finalwirecapture.SHA256(scanRaw),
-		OriginalPreManifestPath:     "docs/changeset5/pre-refactor-final-wire/manifest.json",
+		OriginalPreManifestPath:     "docs/egress/consolidation/pre-refactor-final-wire/manifest.json",
 		OriginalPreManifestSHA256:   changeset5OriginalPreManifestSHA256,
-		NormalizationTransitionPath: "docs/changeset5/final-wire-normalization-transition.json",
+		NormalizationTransitionPath: "docs/egress/consolidation/final-wire-normalization-transition.json",
 		RouteCount:                  manifest.RouteCount, CaptureCount: manifest.CaptureCount,
 		CaptureKeySetSHA256: changeset5CaptureKeySetSHA256(captures),
 		Rules: []string{
@@ -194,7 +194,7 @@ func TestGenerateChangeset5PostRefactorFinalWire(t *testing.T) {
 	if !filepath.IsAbs(output) {
 		t.Fatal("变更集 5 完成后 final-wire 输出目录必须是绝对路径")
 	}
-	normalizedRaw, err := os.ReadFile("../../../docs/changeset5/normalized-pre-refactor-final-wire/manifest.json")
+	normalizedRaw, err := os.ReadFile("../../../docs/egress/consolidation/normalized-pre-refactor-final-wire/manifest.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -231,13 +231,13 @@ func TestGenerateChangeset5PostRefactorFinalWire(t *testing.T) {
 	receipt := changeset5PostRefactorFinalWireReceipt{
 		SchemaVersion: "changeset5-post-refactor-final-wire-receipt/v1",
 		Changeset:     "5", Baseline: manifest.Baseline,
-		ManifestPath:                "docs/changeset5/post-refactor-final-wire/manifest.json",
+		ManifestPath:                "docs/egress/consolidation/post-refactor-final-wire/manifest.json",
 		ManifestSHA256:              finalwirecapture.SHA256(manifestRaw),
-		SecretScanPath:              "docs/changeset5/post-refactor-final-wire/secret-scan.json",
+		SecretScanPath:              "docs/egress/consolidation/post-refactor-final-wire/secret-scan.json",
 		SecretScanSHA256:            finalwirecapture.SHA256(scanRaw),
-		NormalizedPreManifestPath:   "docs/changeset5/normalized-pre-refactor-final-wire/manifest.json",
+		NormalizedPreManifestPath:   "docs/egress/consolidation/normalized-pre-refactor-final-wire/manifest.json",
 		NormalizedPreManifestSHA256: changeset5NormalizedPreManifestSHA256,
-		NormalizationTransitionPath: "docs/changeset5/final-wire-normalization-transition.json",
+		NormalizationTransitionPath: "docs/egress/consolidation/final-wire-normalization-transition.json",
 		NormalizationTransitionSHA:  changeset5NormalizationTransitionSHA256,
 		RouteCount:                  manifest.RouteCount, CaptureCount: manifest.CaptureCount,
 		CaptureKeySetSHA256:     changeset5CaptureKeySetSHA256(captures),
@@ -264,7 +264,7 @@ func TestGenerateChangeset5PostRefactorFinalWire(t *testing.T) {
 }
 
 func TestChangeset5OriginalPreFinalWireIsByteExactAndFrozen(t *testing.T) {
-	root := "../../../docs/changeset5/pre-refactor-final-wire"
+	root := "../../../docs/egress/consolidation/pre-refactor-final-wire"
 	manifestRaw, err := os.ReadFile(filepath.Join(root, "manifest.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -309,11 +309,11 @@ func TestChangeset5OriginalPreFinalWireIsByteExactAndFrozen(t *testing.T) {
 }
 
 func TestChangeset5NormalizedPreAppliesOnlyExactOAuthNoiseTransition(t *testing.T) {
-	originalRaw, err := os.ReadFile("../../../docs/changeset5/pre-refactor-final-wire/manifest.json")
+	originalRaw, err := os.ReadFile("../../../docs/egress/consolidation/pre-refactor-final-wire/manifest.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	root := "../../../docs/changeset5/normalized-pre-refactor-final-wire"
+	root := "../../../docs/egress/consolidation/normalized-pre-refactor-final-wire"
 	normalizedRaw, err := os.ReadFile(filepath.Join(root, "manifest.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -326,7 +326,7 @@ func TestChangeset5NormalizedPreAppliesOnlyExactOAuthNoiseTransition(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	transitionRaw, err := os.ReadFile("../../../docs/changeset5/final-wire-normalization-transition.json")
+	transitionRaw, err := os.ReadFile("../../../docs/egress/consolidation/final-wire-normalization-transition.json")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -373,7 +373,7 @@ func TestChangeset5NormalizedPreAppliesOnlyExactOAuthNoiseTransition(t *testing.
 
 func TestChangeset5CurrentFinalWireMatchesFrozenWireFields(t *testing.T) {
 	normalized := changeset5ReadFinalWireManifest(
-		t, "../../../docs/changeset5/normalized-pre-refactor-final-wire/manifest.json",
+		t, "../../../docs/egress/consolidation/normalized-pre-refactor-final-wire/manifest.json",
 	)
 	current := changeset3BuildProductionFinalWireCaptures(t)
 	if err := changeset5CompareCurrentFinalWireCaptures(normalized.Captures, current); err != nil {
@@ -383,7 +383,7 @@ func TestChangeset5CurrentFinalWireMatchesFrozenWireFields(t *testing.T) {
 
 func TestChangeset5CurrentFinalWireComparatorRejectsWireDrift(t *testing.T) {
 	normalized := changeset5ReadFinalWireManifest(
-		t, "../../../docs/changeset5/normalized-pre-refactor-final-wire/manifest.json",
+		t, "../../../docs/egress/consolidation/normalized-pre-refactor-final-wire/manifest.json",
 	)
 	mutated := append([]finalwirecapture.Capture(nil), normalized.Captures...)
 	mutated[0].Body.FinalWireBytes++
@@ -393,8 +393,8 @@ func TestChangeset5CurrentFinalWireComparatorRejectsWireDrift(t *testing.T) {
 }
 
 func TestChangeset5NormalizationTransitionRejectsWrongOrExpandedApproval(t *testing.T) {
-	original := changeset5ReadFinalWireManifest(t, "../../../docs/changeset5/pre-refactor-final-wire/manifest.json")
-	normalized := changeset5ReadFinalWireManifest(t, "../../../docs/changeset5/normalized-pre-refactor-final-wire/manifest.json")
+	original := changeset5ReadFinalWireManifest(t, "../../../docs/egress/consolidation/pre-refactor-final-wire/manifest.json")
+	normalized := changeset5ReadFinalWireManifest(t, "../../../docs/egress/consolidation/normalized-pre-refactor-final-wire/manifest.json")
 	valid := changeset5NormalizationApprovedDeltas()
 	mutations := map[string][]finalwirecontract.ApprovedDelta{
 		"错误 capture": append([]finalwirecontract.ApprovedDelta(nil), valid...),
@@ -418,11 +418,11 @@ func TestChangeset5NormalizationTransitionRejectsWrongOrExpandedApproval(t *test
 }
 
 func TestChangeset5PostRefactorFinalWireIsFrozenAndMatchesPre(t *testing.T) {
-	normalizedRaw, err := os.ReadFile("../../../docs/changeset5/normalized-pre-refactor-final-wire/manifest.json")
+	normalizedRaw, err := os.ReadFile("../../../docs/egress/consolidation/normalized-pre-refactor-final-wire/manifest.json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	root := "../../../docs/changeset5/post-refactor-final-wire"
+	root := "../../../docs/egress/consolidation/post-refactor-final-wire"
 	manifestRaw, err := os.ReadFile(filepath.Join(root, "manifest.json"))
 	if err != nil {
 		t.Fatal(err)

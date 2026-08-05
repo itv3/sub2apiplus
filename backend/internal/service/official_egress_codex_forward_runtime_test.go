@@ -36,6 +36,6 @@ func TestOfficialCodexRuntimeSnapshotBindsBeforeRefreshCompilation(t *testing.T)
 	state, ok, err := officialCodexRuntimeStateFromContext(bound)
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.Equal(t, officialCodexSurfaceTUI, state.SurfaceID)
-	require.Equal(t, "xterm-256color", state.TerminalToken)
+	require.Equal(t, officialCodexSurfaceExec, state.SurfaceID)
+	require.Equal(t, "unknown", state.TerminalToken)
 }
