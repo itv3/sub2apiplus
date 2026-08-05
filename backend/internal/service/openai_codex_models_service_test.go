@@ -1589,3 +1589,20 @@ func TestFetchCodexModelsManifestAPIKeyRejectsOfficialOpenAIBaseURL(t *testing.T
 		})
 	}
 }
+
+func TestFetchCodexModelsManifestAPIKeyRejectsConcreteEndpointAndAllowsFailover(t *testing.T) {
+	s := newCodexModelsAPIKeyTestService(&codexModelsHTTPUpstreamStub{do: func(_ *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+		t.Fatal("具体 Chat Completions 端点不得被拼接为模型清单 URL")
+		return nil, nil
+	}})
+
+	_, err := s.FetchCodexModelsManifest(
+		context.Background(),
+		newCodexModelsAPIKeyTestAccount("https://opencode.example/zen/go/v1/chat/completions"),
+		"0.147.0",
+		"",
+	)
+	require.Error(t, err)
+	require.Equal(t, "OPENAI_CODEX_MODELS_API_KEY_UPSTREAM_INVALID", infraerrors.Reason(err))
+	require.True(t, IsRetryableCodexModelsManifestError(err))
+}

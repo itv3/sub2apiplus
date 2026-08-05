@@ -2752,17 +2752,11 @@ func shouldLogOpenAIForwardFailureAsWarn(c *gin.Context, wroteFallback bool) boo
 	return c.Writer.Written()
 }
 
-// openAIForwardErrorAlreadyCommunicated reports whether Forward returned an
-// error after it had already written the upstream terminal error response to
-// the client.
+// openAIForwardErrorAlreadyCommunicated 判断 Forward 返回错误前是否已向客户端写出完整终态响应。
 //
-// This matters for Responses streams: upstream may return HTTP 200 with a
-// non-retryable `response.failed` event (for example a policy/safety rejection).
-// The service layer forwards that terminal event verbatim, then returns an
-// error so the caller can log/account for the failed upstream response. The
-// handler must not append its generic fallback `response.failed`, otherwise
-// strict clients may see the useful upstream message replaced by "Upstream
-// request failed" or receive duplicate terminal events.
+// 它既覆盖服务层显式标记的本地 JSON 错误，也覆盖已原样透传的上游终态
+// response.failed。若处理层再追加通用 response.failed，严格客户端会收到被污染的
+// JSON/SSE 响应，或看到重复终止事件。
 func openAIForwardErrorAlreadyCommunicated(c *gin.Context, writerSizeBeforeForward int, err error) bool {
 	if err == nil || c == nil || c.Writer == nil {
 		return false
@@ -2772,6 +2766,9 @@ func openAIForwardErrorAlreadyCommunicated(c *gin.Context, writerSizeBeforeForwa
 	if service.OpenAICompactKeepaliveAdjustedWrittenSize(c) == writerSizeBeforeForward ||
 		service.OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c) == writerSizeBeforeForward {
 		return false
+	}
+	if service.IsResponseCommitted(c) {
+		return true
 	}
 
 	// cyber_policy 命中时上游原始错误体已透传给客户端（非流式 c.Data 写出 400 body，

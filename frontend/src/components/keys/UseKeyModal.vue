@@ -709,19 +709,22 @@ function generateOpenAIFiles(baseUrl: string, apiKey: string): FileConfig[] {
   const isWindows = activeTab.value === 'windows'
   const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
 
-  // config.toml content
+  // 生成 config.toml 内容
   const configContent = `model_provider = "OpenAI"
-model = "gpt-5.5"
-review_model = "gpt-5.5"
+model = "gpt-5.6-sol"
+review_model = "gpt-5.6-sol"
 model_reasoning_effort = "xhigh"
 disable_response_storage = true
 network_access = "enabled"
 windows_wsl_setup_acknowledged = true
+web_search = "live"
 
 [model_providers.OpenAI]
 name = "OpenAI"
 base_url = "${baseUrl}"
 wire_api = "responses"
+supports_websockets = true
+supports_standalone_web_search = true
 ${generateCodexProviderAuthConfig()}
 
 [features]
@@ -818,24 +821,25 @@ function generateOpenAIWsFiles(baseUrl: string, apiKey: string): FileConfig[] {
   const isWindows = activeTab.value === 'windows'
   const configDir = isWindows ? '%userprofile%\\.codex' : '~/.codex'
 
-  // config.toml content with WebSocket v2
+  // 生成启用 WebSocket 的 config.toml 内容
   const configContent = `model_provider = "OpenAI"
-model = "gpt-5.5"
-review_model = "gpt-5.5"
+model = "gpt-5.6-sol"
+review_model = "gpt-5.6-sol"
 model_reasoning_effort = "xhigh"
 disable_response_storage = true
 network_access = "enabled"
 windows_wsl_setup_acknowledged = true
+web_search = "live"
 
 [model_providers.OpenAI]
 name = "OpenAI"
 base_url = "${baseUrl}"
 wire_api = "responses"
 supports_websockets = true
+supports_standalone_web_search = true
 ${generateCodexProviderAuthConfig()}
 
 [features]
-responses_websockets_v2 = true
 goals = true`
 
   // auth.json content

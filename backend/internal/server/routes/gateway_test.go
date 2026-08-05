@@ -106,6 +106,18 @@ func TestGatewayRoutesAlphaSearchRejectsNonOpenAIGroup(t *testing.T) {
 	require.Contains(t, w.Body.String(), "only available for OpenAI groups")
 }
 
+func TestGatewayRoutesAlphaSearchAllowsResolvedOpenAICompositeGroup(t *testing.T) {
+	router := newGatewayRoutesTestRouter(service.PlatformComposite)
+	req := httptest.NewRequest(http.MethodPost, "/v1/alpha/search", strings.NewReader(`{"model":"gpt-5.6-sol"}`))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	require.NotEqual(t, http.StatusNotFound, w.Code)
+	require.NotContains(t, w.Body.String(), "only available for OpenAI groups")
+}
+
 func TestGatewayRoutesOpenAIImagesPathsAreRegistered(t *testing.T) {
 	router := newGatewayRoutesTestRouter()
 

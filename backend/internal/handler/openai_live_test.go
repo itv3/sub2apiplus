@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	middleware2 "github.com/Wei-Shaw/sub2api/internal/server/middleware"
 	"github.com/Wei-Shaw/sub2api/internal/service"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -87,6 +88,35 @@ func TestLiveEnabledForAPIKey(t *testing.T) {
 	require.True(t, liveEnabledForAPIKey(&service.APIKey{
 		Group: &service.Group{Platform: service.PlatformOpenAI, AllowLive: true},
 	}))
+	require.True(t, liveEnabledForAPIKey(&service.APIKey{
+		Group: &service.Group{Platform: service.PlatformComposite, AllowLive: true},
+	}))
+}
+
+func TestLiveCompositeGroupUsesResolvedOpenAIPlatform(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	context, _ := gin.CreateTestContext(recorder)
+	context.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/backend-api/codex/realtime/calls",
+		bytes.NewBufferString(`{"sdp":"v=0\\r\\n","session":{"model":"gpt-realtime"}}`),
+	)
+	context.Request.Header.Set("Content-Type", "application/json")
+	context.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+		ID:      7,
+		GroupID: int64Pointer(8),
+		Group:   &service.Group{ID: 8, Platform: service.PlatformComposite, AllowLive: true},
+	})
+	context.Set(string(middleware2.ContextKeyUser), middleware2.AuthSubject{UserID: 1, Concurrency: 1})
+
+	(&OpenAIGatewayHandler{}).Live(context)
+
+	require.Equal(t, http.StatusServiceUnavailable, recorder.Code)
+	require.NotContains(t, recorder.Body.String(), "Live is not supported for this platform")
+	platform, ok := service.ResolvedTargetPlatformFromContext(context.Request.Context())
+	require.True(t, ok)
+	require.Equal(t, service.PlatformOpenAI, platform)
 }
 
 func TestLiveAttestationErrorIsExplicit(t *testing.T) {
@@ -115,4 +145,8 @@ func jsonPathString(t *testing.T, raw json.RawMessage, keys ...string) string {
 	result, ok := current.(string)
 	require.True(t, ok)
 	return result
+}
+
+func int64Pointer(value int64) *int64 {
+	return &value
 }

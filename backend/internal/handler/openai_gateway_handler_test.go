@@ -2916,6 +2916,28 @@ data: {"type":"response.failed","error":{"message":"This content was flagged"}}
 		require.False(t, reported)
 	})
 
+	t.Run("committed local JSON error is already communicated", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, EndpointResponses, nil)
+		before := c.Writer.Size()
+		service.MarkResponseCommitted(c)
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
+			"type":    "invalid_request_error",
+			"message": `responses Lite does not support top-level tool type "web_search" at index 19`,
+			"param":   "tools",
+		}})
+		completedBody := w.Body.String()
+
+		require.True(t, openAIForwardErrorAlreadyCommunicated(c, before, errors.New("responses Lite validation failed")))
+		h := &OpenAIGatewayHandler{}
+		require.False(t, h.ensureForwardErrorResponse(c, true))
+		require.Equal(t, completedBody, w.Body.String())
+		require.True(t, json.Valid(w.Body.Bytes()), w.Body.String())
+		require.NotContains(t, w.Body.String(), "event:")
+		require.NotContains(t, w.Body.String(), "data:")
+	})
+
 	// H-2: cyber_policy 命中且响应已写出时，即便 err 前缀不在白名单（非流式 400 cyber
 	// 返回 "openai cyber_policy:"、透传账号返回 "upstream error:"），也须判定已透传，避免
 	// ensureForwardErrorResponse 在已写出的完整响应尾部追加 SSE 污染响应体。

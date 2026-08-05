@@ -29,7 +29,14 @@ func (h *OpenAIGatewayHandler) Live(c *gin.Context) {
 		h.errorResponse(c, http.StatusInternalServerError, "api_error", "User context not found")
 		return
 	}
-	if apiKey.Group == nil || apiKey.Group.Platform != service.PlatformOpenAI {
+	request, err := parseLiveCallRequest(c)
+	if err != nil {
+		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
+	model := strings.TrimSpace(gjson.GetBytes(request.Session, "model").String())
+	ensureCompositeTargetPlatform(c, apiKey, model)
+	if effectiveAPIKeyPlatform(c, apiKey) != service.PlatformOpenAI {
 		h.errorResponse(c, http.StatusNotFound, "not_found_error", "Live is not supported for this platform")
 		return
 	}
@@ -37,12 +44,6 @@ func (h *OpenAIGatewayHandler) Live(c *gin.Context) {
 		h.errorResponse(c, http.StatusForbidden, "permission_error", "Live is not enabled for this group")
 		return
 	}
-	request, err := parseLiveCallRequest(c)
-	if err != nil {
-		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", err.Error())
-		return
-	}
-	model := strings.TrimSpace(gjson.GetBytes(request.Session, "model").String())
 	reqLog := requestLogger(
 		c,
 		"handler.openai_gateway.live",
@@ -230,8 +231,9 @@ func (h *OpenAIGatewayHandler) LiveSideband(c *gin.Context) {
 }
 
 func liveEnabledForAPIKey(apiKey *service.APIKey) bool {
-	return apiKey != nil &&
-		apiKey.Group != nil &&
-		apiKey.Group.Platform == service.PlatformOpenAI &&
-		apiKey.Group.AllowLive
+	if apiKey == nil || apiKey.Group == nil || !apiKey.Group.AllowLive {
+		return false
+	}
+	return apiKey.Group.Platform == service.PlatformOpenAI ||
+		apiKey.Group.Platform == service.PlatformComposite
 }

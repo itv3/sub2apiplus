@@ -67,7 +67,24 @@ func (e *codexModelsManifestUpstreamError) Unwrap() error { return e.err }
 // API Key 上游继续沿用 401 不故障转移的行为，因为其 /models 鉴权语义不能代表账号状态。
 func IsRetryableCodexModelsManifestError(err error) bool {
 	var upstreamErr *codexModelsManifestUpstreamError
-	return errors.As(err, &upstreamErr) && upstreamErr.retryable
+	if errors.As(err, &upstreamErr) {
+		return upstreamErr.retryable
+	}
+	// 下列错误只说明当前候选账号无法提供 Codex 模型清单，不代表同组其他
+	// OpenAI OAuth/API Key 账号也不可用。允许 Handler 排除该账号后继续尝试，
+	// 避免 Composite 的无模型参数请求被单个 Chat Completions 专用账号阻断。
+	switch infraerrors.Reason(err) {
+	case "OPENAI_CODEX_MODELS_CREDENTIALS_FAILED",
+		"OPENAI_CODEX_MODELS_TOKEN_MISSING",
+		"OPENAI_CODEX_MODELS_API_KEY_UPSTREAM_UNSUPPORTED",
+		"OPENAI_CODEX_MODELS_API_KEY_MISSING",
+		"OPENAI_CODEX_MODELS_API_KEY_UPSTREAM_INVALID",
+		"OPENAI_CODEX_MODELS_ACCOUNT_TYPE_UNSUPPORTED",
+		"OPENAI_CODEX_MODELS_AUTH_FAILED":
+		return true
+	default:
+		return false
+	}
 }
 
 func isRetryableCodexModelsManifestTransportError(err error) bool {
@@ -963,6 +980,9 @@ func buildCodexModelsManifestURL(endpoint string, appendModelsPath bool, clientV
 	requestURL.RawQuery = ""
 	requestURL.ForceQuery = false
 	if appendModelsPath {
+		if isConcreteOpenAIEndpointPath(requestURL.Path) {
+			return nil, fmt.Errorf("base URL points to a concrete OpenAI endpoint")
+		}
 		requestURL, err = url.Parse(buildOpenAIModelsURL(requestURL.String()))
 		if err != nil {
 			return nil, err
@@ -971,4 +991,21 @@ func buildCodexModelsManifestURL(endpoint string, appendModelsPath bool, clientV
 	query.Set("client_version", clientVersion)
 	requestURL.RawQuery = query.Encode()
 	return requestURL, nil
+}
+
+func isConcreteOpenAIEndpointPath(path string) bool {
+	normalized := strings.ToLower(strings.TrimRight(strings.TrimSpace(path), "/"))
+	for _, suffix := range []string{
+		"/chat/completions",
+		"/responses",
+		"/embeddings",
+		"/images/generations",
+		"/images/edits",
+		"/alpha/search",
+	} {
+		if strings.HasSuffix(normalized, suffix) {
+			return true
+		}
+	}
+	return false
 }

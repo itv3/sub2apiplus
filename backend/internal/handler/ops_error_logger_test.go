@@ -73,6 +73,26 @@ func TestOpsErrorLogQueueByteBudget(t *testing.T) {
 	}
 }
 
+func TestClassifyOpsErrorLog_ResponsesLiteHostedWebSearchIsClientRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodPost, EndpointResponses, nil)
+
+	phase, isBusinessLimited, owner, source := classifyOpsErrorLog(
+		c,
+		"invalid_request_error",
+		`responses Lite does not support top-level tool type "web_search" at index 19`,
+		"",
+		http.StatusBadRequest,
+	)
+
+	require.Equal(t, "request", phase)
+	require.False(t, isBusinessLimited)
+	require.Equal(t, "client", owner)
+	require.Equal(t, "client_request", source)
+}
+
 func TestEstimateOpsErrorLogJobBytesIncludesVariablePayloads(t *testing.T) {
 	base := estimateOpsErrorLogJobBytes(&service.OpsInsertErrorLogInput{})
 	message := "upstream message"
