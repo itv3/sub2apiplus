@@ -124,6 +124,7 @@ func changeset3FindProductionFunction(
 	file := files[fileName]
 	if file == nil {
 		t.Fatalf("缺少生产文件：%s", fileName)
+		return nil
 	}
 	for _, decl := range file.Decls {
 		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Name.Name == function {
