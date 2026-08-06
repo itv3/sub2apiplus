@@ -711,6 +711,10 @@ func (s *OpenAIGatewayService) forwardOpenAIWSV2(
 				emitStreamMessage(message, true)
 			}
 			if !reqStream {
+				// 非流式错误体在此已完整写出；必须标记 committed，否则 handler 的
+				// ensureForwardErrorResponse 会把"已写字节"误判为流式已开始，在
+				// JSON 尾部追加 response.failed SSE，污染响应。
+				MarkResponseCommitted(c)
 				c.JSON(statusCode, gin.H{
 					"error": gin.H{
 						"type":    "upstream_error",

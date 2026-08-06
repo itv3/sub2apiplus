@@ -2736,6 +2736,14 @@ func (h *OpenAIGatewayHandler) ensureForwardErrorResponse(c *gin.Context, stream
 		return false
 	}
 	if c.Writer.Written() && !imageKeepalivePaddingOnly {
+		// 已写字节不等于 SSE 流已开始：若响应头声明的是非 SSE 形态（服务层已写出
+		// JSON 错误体等），任何追加都会污染既有响应，也无法改写状态码，只能放弃
+		// 补写。Content-Type 为空（裸 ping 先行 flush）或 text/event-stream 时才升级
+		// 为流内终止事件补写。
+		contentType := strings.ToLower(strings.TrimSpace(c.Writer.Header().Get("Content-Type")))
+		if contentType != "" && !strings.Contains(contentType, "text/event-stream") {
+			return false
+		}
 		streamStarted = true
 	}
 	h.handleStreamingAwareError(c, http.StatusBadGateway, "upstream_error", "Upstream request failed", streamStarted)
@@ -2776,6 +2784,16 @@ func openAIForwardErrorAlreadyCommunicated(c *gin.Context, writerSizeBeforeForwa
 	// fallback —— 否则在已写出的完整响应尾部追加 SSE（responses 端点尾随
 	// response.failed、chat 端点尾随 event:error），污染响应体。Size 已变化证明响应确已写出。
 	if service.GetOpsCyberPolicy(c) != nil {
+		return true
+	}
+
+	// 服务层以非 SSE 形态写过响应体（如 WS error 事件的非流式 JSON 错误、
+	// chat-completions 回退链路的本地 JSON 错误）即视为已完整传达：此时再追加
+	// SSE 会把 JSON 响应污染成 JSON+SSE 拼接体，openai SDK 直接 JSONDecodeError。
+	// 与 Anthropic 侧 gatewayForwardErrorAlreadyCommunicated 的 Content-Type 判据
+	// 对齐；SSE 流上的既写终态仍由下方错误前缀白名单判定。
+	contentType := strings.ToLower(strings.TrimSpace(c.Writer.Header().Get("Content-Type")))
+	if contentType != "" && !strings.Contains(contentType, "text/event-stream") {
 		return true
 	}
 

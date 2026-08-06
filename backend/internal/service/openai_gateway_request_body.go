@@ -1095,6 +1095,8 @@ func writeOpenAIFastPolicyBlockedResponse(c *gin.Context, err *OpenAIFastBlocked
 		writeOpenAICompactSSEFailureMessage(c, http.StatusForbidden, "permission_error", err.Message)
 		return
 	}
+	// 标记 committed：错误体已完整写出，handler 不得再追加 SSE fallback。
+	MarkResponseCommitted(c)
 	c.JSON(http.StatusForbidden, gin.H{
 		"error": gin.H{
 			"type":    "permission_error",

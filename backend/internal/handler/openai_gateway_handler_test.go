@@ -253,26 +253,50 @@ func TestOpenAIEnsureForwardErrorResponse_WritesFallbackWhenNotWritten(t *testin
 	assert.Equal(t, "Upstream request failed", errorObj["message"])
 }
 
-// Writer 已写后 ensureForwardErrorResponse 必须仍然把错误信息以 SSE
-// 形式追加给客户端（streamStarted 强制 true）。
-// 这是 case B 修复：旧实现遇到 Writer.Written 直接 return false，
-// 客户端只能拿到 silent EOF；Codex CLI 报 "stream closed before response.completed"。
+// SSE 流已开头（Content-Type: text/event-stream，部分事件已 flush）后
+// ensureForwardErrorResponse 必须仍然把错误信息以 SSE 形式追加给客户端
+// （streamStarted 强制 true），否则客户端只能拿到 silent EOF；
+// Codex CLI 报 "stream closed before response.completed"。
 func TestOpenAIEnsureForwardErrorResponse_AppendsSSEAfterWritten(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
-	c.String(http.StatusTeapot, "already written")
+	c.Header("Content-Type", "text/event-stream")
+	_, _ = c.Writer.WriteString("data: {\"type\":\"ping\"}\n\n")
 
 	h := &OpenAIGatewayHandler{}
 	wrote := h.ensureForwardErrorResponse(c, false)
 
 	require.True(t, wrote, "must attempt to communicate the failure to the client via SSE")
-	// 状态码改不了（headers 已 flush），但 body 应该追加 SSE 错误事件。
-	require.Equal(t, http.StatusTeapot, w.Code)
-	assert.Contains(t, w.Body.String(), "already written")
+	assert.Contains(t, w.Body.String(), `data: {"type":"ping"}`)
 	// 非 /responses 路径走 legacy event: error 分支。
 	assert.Contains(t, w.Body.String(), "event: error\n")
+}
+
+// 已写出的字节属于非 SSE 形态（如服务层写出的 JSON 错误体，但未标记
+// committed）时，ensureForwardErrorResponse 不得把"已写字节"误判为流式已
+// 开始而追加 SSE——那会把 JSON 响应污染成 JSON+SSE 拼接体（2026-08-06
+// Vircs 生产事故：openai-python 对拼接体抛 JSONDecodeError，真实上游错误
+// 被掩盖）。
+func TestOpenAIEnsureForwardErrorResponse_NonSSEWrittenReturnsFalse(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, EndpointResponses, nil)
+	c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
+		"type":    "upstream_error",
+		"message": "[OneOfParam] input and prompt cannot be used together",
+	}})
+	completedBody := w.Body.String()
+
+	h := &OpenAIGatewayHandler{}
+	wrote := h.ensureForwardErrorResponse(c, false)
+
+	require.False(t, wrote, "a completed JSON error body must not be extended with SSE")
+	require.Equal(t, completedBody, w.Body.String())
+	require.True(t, json.Valid(w.Body.Bytes()), w.Body.String())
+	require.NotContains(t, w.Body.String(), "event:")
 }
 
 // case B 回归测试：/responses 路径，Writer 已被写过（模拟 ping flushed），
@@ -378,7 +402,8 @@ func TestOpenAIEnsureForwardErrorResponse_ImageJSONKeepalivePreservesCompletedJS
 	completedBody := w.Body.String()
 	require.True(t, json.Valid([]byte(completedBody)), completedBody)
 	require.Greater(t, service.OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c), before)
-	require.False(t, openAIForwardErrorAlreadyCommunicated(c, before, errors.New("read upstream trailer: unexpected EOF")))
+	// 完整 JSON（application/json）已写出：Content-Type 判据视为已传达，禁止追加。
+	require.True(t, openAIForwardErrorAlreadyCommunicated(c, before, errors.New("read upstream trailer: unexpected EOF")))
 
 	h := &OpenAIGatewayHandler{}
 	wrote := h.ensureForwardErrorResponse(c, false)
@@ -408,7 +433,8 @@ func TestOpenAIEnsureForwardErrorResponse_FastImageJSONKeepalivePreservesComplet
 	completedBody := w.Body.String()
 	require.True(t, json.Valid([]byte(completedBody)), completedBody)
 	require.Greater(t, service.OpenAIImagesJSONKeepaliveAdjustedWrittenSize(c), before)
-	require.False(t, openAIForwardErrorAlreadyCommunicated(c, before, errors.New("read upstream trailer: unexpected EOF")))
+	// 完整 JSON（application/json）已写出：Content-Type 判据视为已传达，禁止追加。
+	require.True(t, openAIForwardErrorAlreadyCommunicated(c, before, errors.New("read upstream trailer: unexpected EOF")))
 
 	h := &OpenAIGatewayHandler{}
 	wrote := h.ensureForwardErrorResponse(c, false)
@@ -502,7 +528,7 @@ func TestOpenAIRecoverResponsesPanic_NoPanicNoWrite(t *testing.T) {
 	assert.Equal(t, "", w.Body.String())
 }
 
-// Panic 在已 flush 的 /v1/responses 流中：状态码无法改（已 written），
+// Panic 在已 flush 的 /v1/responses SSE 流中：状态码无法改（已 written），
 // 但 body 应追加 response.failed 让客户端识别为合规截断而不是 silent EOF。
 func TestOpenAIRecoverResponsesPanic_AppendsResponseFailedAfterWritten(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -510,7 +536,8 @@ func TestOpenAIRecoverResponsesPanic_AppendsResponseFailedAfterWritten(t *testin
 	w := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(w)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	c.String(http.StatusTeapot, "already written")
+	c.Header("Content-Type", "text/event-stream")
+	_, _ = c.Writer.WriteString("data: {\"type\":\"response.created\"}\n\n")
 
 	h := &OpenAIGatewayHandler{}
 	streamStarted := false
@@ -521,10 +548,38 @@ func TestOpenAIRecoverResponsesPanic_AppendsResponseFailedAfterWritten(t *testin
 		}()
 	})
 
-	require.Equal(t, http.StatusTeapot, w.Code)
 	body := w.Body.String()
-	assert.Contains(t, body, "already written")
+	assert.Contains(t, body, `data: {"type":"response.created"}`)
 	assert.Contains(t, body, "event: response.failed\n")
+}
+
+// Panic 前已写出非 SSE JSON（如服务层错误体）时，恢复逻辑不得再追加 SSE
+// 污染 JSON 响应——保持既有 body 原样。
+func TestOpenAIRecoverResponsesPanic_PreservesWrittenJSON(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+	c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
+		"type":    "upstream_error",
+		"message": "[OneOfParam] invalid",
+	}})
+	completedBody := w.Body.String()
+
+	h := &OpenAIGatewayHandler{}
+	streamStarted := false
+	require.NotPanics(t, func() {
+		func() {
+			defer h.recoverResponsesPanic(c, &streamStarted)
+			panic("test panic")
+		}()
+	})
+
+	require.Equal(t, http.StatusBadRequest, w.Code)
+	require.Equal(t, completedBody, w.Body.String())
+	require.True(t, json.Valid(w.Body.Bytes()), w.Body.String())
+	require.NotContains(t, w.Body.String(), "event:")
 }
 
 func TestOpenAIMissingResponsesDependencies(t *testing.T) {
@@ -2960,5 +3015,43 @@ data: {"type":"response.failed","error":{"message":"This content was flagged"}}
 		service.MarkOpsCyberPolicy(c, service.CyberPolicyMark{Message: "blocked", UpstreamStatus: 400})
 
 		require.False(t, openAIForwardErrorAlreadyCommunicated(c, c.Writer.Size(), errors.New("openai cyber_policy: blocked")))
+	})
+
+	// 2026-08-06 Vircs 生产事故回归：WS 转发收到上游 error 事件，非流式分支
+	// 写出 JSON 错误体但未标记 committed、错误前缀（openai ws error event:）也
+	// 不在白名单。Content-Type 判据必须判定"已传达"，且 ensureForwardErrorResponse
+	// 不得追加 response.failed SSE，保证客户端拿到的是纯 JSON。
+	t.Run("uncommitted non-sse json error is already communicated", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, EndpointResponses, nil)
+		before := c.Writer.Size()
+		c.JSON(http.StatusBadRequest, gin.H{"error": gin.H{
+			"type":    "upstream_error",
+			"message": "[OneOfParam] input and prompt cannot be used together",
+		}})
+		completedBody := w.Body.String()
+
+		require.True(t, openAIForwardErrorAlreadyCommunicated(c, before, errors.New("openai ws error event: [OneOfParam] input and prompt cannot be used together")))
+
+		h := &OpenAIGatewayHandler{}
+		require.False(t, h.ensureForwardErrorResponse(c, false))
+		require.Equal(t, completedBody, w.Body.String())
+		require.True(t, json.Valid(w.Body.Bytes()), w.Body.String())
+		require.NotContains(t, w.Body.String(), "event:")
+		require.NotContains(t, w.Body.String(), "data:")
+	})
+
+	// SSE 流上已写真实事件 + 非白名单错误：Content-Type 判据不得把 SSE 流误判
+	// 为"已传达"，handler 仍要补协议级终止事件。
+	t.Run("sse stream error still needs terminal fallback", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, EndpointResponses, nil)
+		c.Header("Content-Type", "text/event-stream")
+		before := c.Writer.Size()
+		_, _ = c.Writer.WriteString("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"ok\"}\n\n")
+
+		require.False(t, openAIForwardErrorAlreadyCommunicated(c, before, errors.New("openai ws error event: internal error")))
 	})
 }

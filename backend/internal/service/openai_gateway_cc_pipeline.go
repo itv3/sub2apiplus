@@ -338,8 +338,10 @@ func (s *OpenAIGatewayService) readCCUpstreamJSONResponse(
 }
 
 // writeOpenAIResponsesFallbackError 以 /v1/responses 回退路径的既有错误格式回写
-// （裸 error 对象；不调用 MarkResponseCommitted，与原内联写法保持一致）。
+// （裸 error 对象）。标记 committed：该错误体已完整传达，handler 不得再追加
+// SSE fallback 污染 JSON 响应。
 func writeOpenAIResponsesFallbackError(c *gin.Context, statusCode int, errType, message string) {
+	MarkResponseCommitted(c)
 	c.JSON(statusCode, gin.H{
 		"error": gin.H{
 			"type":    errType,

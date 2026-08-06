@@ -872,6 +872,8 @@ func (s *OpenAIGatewayService) writeOpenAIWSFallbackErrorResponse(c *gin.Context
 			Message:            upstreamMessage,
 		})
 	}
+	// 标记 committed：告知 handler 错误已完整写出，禁止再追加 SSE fallback。
+	MarkResponseCommitted(c)
 	c.JSON(statusCode, gin.H{
 		"error": gin.H{
 			"type":    errType,

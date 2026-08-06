@@ -128,6 +128,9 @@ func writeOpenAICompactSSEFailureMessage(c *gin.Context, statusCode int, errType
 	if err != nil {
 		return
 	}
+	// 终止事件即完整错误传达；标记 committed，避免 handler 在其后再补一个
+	// 重复的 response.failed。
+	MarkResponseCommitted(c)
 	_, _ = c.Writer.Write([]byte("event: response.failed\ndata: "))
 	_, _ = c.Writer.Write(payload)
 	_, _ = c.Writer.Write([]byte("\n\n"))
