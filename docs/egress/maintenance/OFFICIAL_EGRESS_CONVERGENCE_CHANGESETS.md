@@ -1,9 +1,8 @@
 # Official Egress 当前必要变更与换版验收清单
 
-> 文档状态：CHG-03 经审核撤销（见撤销记录）；CHG-01 已完成并按规则移出本表，
-> 实施与复审记录见 [CHG-01_COMPILER_STATIC_URL_CLOSURE.md](CHG-01_COMPILER_STATIC_URL_CLOSURE.md) §10 与 git 历史
+> 文档状态：当前无待实施变更集；CHG-03 经审核撤销（见撤销记录）
 > 最后更新：2026-08-06
-> 当前代码基线：`9c7adb8eb3`
+> 当前代码基线：`ffdf43f30`
 > 适用范围：Sub2API 上游小侵入、Codex CLI 画像升级与 official egress 兼容层
 
 ## 1. 文档目的
@@ -21,10 +20,7 @@
 
 ## 2. 当前变更集
 
-当前无待实施变更集。CHG-01（Compiler 静态 URL 封闭）已于 2026-08-06 完成三方审核并验收
-通过，按下述规则移出本表；实施、测试、final-wire 证据与两轮复审记录见
-[CHG-01_COMPILER_STATIC_URL_CLOSURE.md](CHG-01_COMPILER_STATIC_URL_CLOSURE.md) §10。
-CHG-03 已于 2026-08-06 经审核撤销，见下方撤销记录。
+当前无待实施变更集。CHG-03 已于 2026-08-06 经审核撤销，见下方撤销记录。
 
 已完成的变更集从本表和正文中移除，实施记录以 git 历史为准。
 
