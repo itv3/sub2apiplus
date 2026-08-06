@@ -3,9 +3,9 @@
   "base_commit": "ba485663c3bc0af6802cf6dfc4e19139ef00e371",
   "retirement_receipt": "docs/egress/maintenance/official-egress-consolidation-retirement.json",
   "retirement_receipt_sha256": "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36",
-  "candidate_path_count": 774,
-  "transition_entry_count": 774,
-  "transition_path_set_sha256": "9d02839ba0828b86772b276c7e7ef83f90b155c4c7eabad15b4f59d4817ec9e7",
+  "candidate_path_count": 773,
+  "transition_entry_count": 773,
+  "transition_path_set_sha256": "96618cef726fee26d8c267700ef38d372a5e6ae63cad09781dda9495b516cd4f",
   "entries": [
     {
       "path": ".github/workflows/backend-ci.yml",
@@ -575,30 +575,6 @@
         "mode": "0644",
         "size": 2737,
         "sha256": "e9074da89d1a1aaed2aeb1981af9187955c7ee5543f5b7858d91489c3a61c69b"
-      },
-      "deletion_allowed": false,
-      "reason": "官方出站单文档合并与已失效执行兼容层退休",
-      "machine_proofs": [
-        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
-        "make check-egress-spec"
-      ]
-    },
-    {
-      "path": "backend/cmd/server/VERSION",
-      "scope": "repository_support",
-      "before": {
-        "existence": "present",
-        "file_type": "regular",
-        "mode": "0644",
-        "size": 10,
-        "sha256": "d732431f7b628c43b28f9810356b0f459d0d8307428c010cc0953e8742d4e964"
-      },
-      "after": {
-        "existence": "present",
-        "file_type": "regular",
-        "mode": "0644",
-        "size": 10,
-        "sha256": "8269b21094e57aad8fd8b68aca2ca7ee598f29ab22f0368a196110a22815cd6e"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
@@ -9885,8 +9861,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 82958,
-        "sha256": "f57f35a462a6295dfdc84f133139213dd778f041daf138736fbf965787ce45f9"
+        "size": 78664,
+        "sha256": "96ce3ae34ead192093fffa53e7c91e25c43c326d290ed24d3252a72e00d58624"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
@@ -11949,8 +11925,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 10864,
-        "sha256": "f07e46049bd0355c17921ba4e0077bd183c20ed8288273b3b1175116d9536eec"
+        "size": 10995,
+        "sha256": "83d5e024cd575a797689f669343ddecd8b7b34597c72217ac9df4b8cd665819d"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
@@ -18501,8 +18477,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 11731,
-        "sha256": "c04f5f1b86679e80cba8a846e0185463fa449b5c4aefe40452db4dc79077f3cc"
+        "size": 12298,
+        "sha256": "658c658646b71379e55cf285aa112f4746d1cff36863aabbb1c206b52e02175f"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
@@ -18588,6 +18564,6 @@
     "基准提交后的已提交路径与当前完整 git status 路径取并集",
     "before 固定来自基准提交，after 来自当前普通文件或明确缺失",
     "存在状态、类型、权限、大小和 SHA-256 全部纳入比较",
-    "manifest 与 receipt 因自引用循环排除，其余变化必须唯一登记"
+    "manifest 与 receipt 因自引用循环排除，VERSION 因发版流水线自动回写排除，其余变化必须唯一登记"
   ]
 }

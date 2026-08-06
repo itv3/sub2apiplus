@@ -111,7 +111,8 @@
 
 **验收收益：**证明新画像全部端点仍处于 Compiler 静态 URL/query 封闭与 ReturnedURL 独立
 验证模型之内，避免新增调用链绕过 `server_response` 可信值通道形成假绿。行为契约见
-[CHG-01_COMPILER_STATIC_URL_CLOSURE.md](CHG-01_COMPILER_STATIC_URL_CLOSURE.md) §4。
+[docs/CODEX_CLI_0145_EGRESS_SPEC.md](../../CODEX_CLI_0145_EGRESS_SPEC.md) §3.3.2 与 §3.7；
+[CHG-01_COMPILER_STATIC_URL_CLOSURE.md](CHG-01_COMPILER_STATIC_URL_CLOSURE.md) 只保留实施、测试与复审记录。
 
 执行分层：正例全量验证（端点枚举、合法 URL 编译、静态/动态区分）在**每次真实换版固定执行**，
 即使新画像 endpoint/query 定义与旧版完全相同；新增负例与生产可信链证明在 endpoint、query

@@ -19,9 +19,15 @@ RETIREMENT_RECEIPT_PATH = (
 TRANSITION_DIR = ROOT / "docs" / "egress" / "maintenance" / "workspace-transition"
 MANIFEST_PATH = TRANSITION_DIR / "manifest.json"
 RECEIPT_PATH = TRANSITION_DIR / "receipt.json"
+# 发版流水线 release.yml 的 sync-version-file 作业在每次发 tag 后自动改写该文件并推回
+# 默认分支，其内容不由人工提交产生；若纳入登记，冻结的哈希会在下一次发版立即过期并使
+# 门禁失败。该路径 scope 为 repository_support，与官方出站画像和规格封闭无关，故与自
+# 引用的 manifest／receipt 一并排除。
+VERSION_PATH = ROOT / "backend" / "cmd" / "server" / "VERSION"
 EXCLUDED_PATHS = {
     MANIFEST_PATH.relative_to(ROOT).as_posix(),
     RECEIPT_PATH.relative_to(ROOT).as_posix(),
+    VERSION_PATH.relative_to(ROOT).as_posix(),
 }
 
 
@@ -208,7 +214,8 @@ def build_transition() -> tuple[dict[str, Any], dict[str, Any]]:
             "基准提交后的已提交路径与当前完整 git status 路径取并集",
             "before 固定来自基准提交，after 来自当前普通文件或明确缺失",
             "存在状态、类型、权限、大小和 SHA-256 全部纳入比较",
-            "manifest 与 receipt 因自引用循环排除，其余变化必须唯一登记",
+            "manifest 与 receipt 因自引用循环排除，VERSION 因发版流水线自动回写排除，"
+            "其余变化必须唯一登记",
         ],
     }
     manifest_raw = canonical_json(manifest)
