@@ -1,13 +1,14 @@
 # Official Egress 当前必要变更与换版验收清单
 
-> 文档状态：CHG-03 经审核撤销（见撤销记录）；仅存 CHG-01，其实施方案尚未确认
+> 文档状态：CHG-03 经审核撤销（见撤销记录）；CHG-01 已完成并按规则移出本表，
+> 实施与复审记录见 [CHG-01_COMPILER_STATIC_URL_CLOSURE.md](CHG-01_COMPILER_STATIC_URL_CLOSURE.md) §10 与 git 历史
 > 最后更新：2026-08-06
-> 当前代码基线：`58d0827c3`
+> 当前代码基线：`9c7adb8eb3`
 > 适用范围：Sub2API 上游小侵入、Codex CLI 画像升级与 official egress 兼容层
 
 ## 1. 文档目的
 
-本文只跟踪当前已有明确证据、值得单独实施的小变更（当前为一个），并记录下一次 Codex CLI 换版必须
+本文只跟踪当前已有明确证据、值得单独实施的小变更（当前为空），并记录下一次 Codex CLI 换版必须
 通过的验收门禁。换版门禁不是当前开发任务，不分配负责人、排期或预先重构稳定代码。
 
 全部工作遵守以下原则：
@@ -20,12 +21,10 @@
 
 ## 2. 当前变更集
 
-| 序 | ID | 变更集 | 优先级 | 依赖 | 状态 |
-|---:|---|---|---:|---|---|
-| 1 | CHG-01 | Compiler 静态 URL 封闭 | 高 | 无 | 待启动 |
-
-CHG-01 单独推进，必须在下一次 Codex CLI 换版之前完成——换版后 Active/Previous 变为异版本，
-其覆盖全部静态端点的回归验证成本会翻倍。CHG-03 已于 2026-08-06 经审核撤销，见下方撤销记录。
+当前无待实施变更集。CHG-01（Compiler 静态 URL 封闭）已于 2026-08-06 完成三方审核并验收
+通过，按下述规则移出本表；实施、测试、final-wire 证据与两轮复审记录见
+[CHG-01_COMPILER_STATIC_URL_CLOSURE.md](CHG-01_COMPILER_STATIC_URL_CLOSURE.md) §10。
+CHG-03 已于 2026-08-06 经审核撤销，见下方撤销记录。
 
 已完成的变更集从本表和正文中移除，实施记录以 git 历史为准。
 
@@ -67,46 +66,6 @@ CHG-01 单独推进，必须在下一次 Codex CLI 换版之前完成——换�
 
 **复活条件：**出现真实 mixed-version wire、生产 catalog 可分叉路径，或 §3.2 实证检查失败时，
 按当时事实重新立项最小修复。
-
----
-
-## CHG-01：Compiler 静态 URL 封闭
-
-**实施收益：**完成后，Compiler 不会为 scheme、端口、userinfo、fragment 或 query 偏离画像的
-静态 URL 签发有效执行结果。即使未来新增调用方漏做 service 前置校验，最终权威边界仍能拒绝
-错误目标。
-
-**状态：**待启动
-**优先级：**高
-**依据：**当前 `validateCompilerTarget` 对静态 endpoint 直接复制调用方 URL，路由解析只匹配
-method、hostname、path 和 protocol，未完整封闭静态 URL。
-
-### 实施范围
-
-- 在 Compiler 内从画像生成静态 URL，或精确验证调用方 URL 与画像契约一致。
-- 校验 scheme、hostname、显式端口、userinfo、fragment、固定 path 和固定 query。
-- 保留 ReturnedURL 动态端点的独立验证模型。
-- Guard 继续独立复核签发后的请求没有被修改。
-
-### 非目标
-
-- 不将该问题描述为当前已可从公网利用的漏洞。
-- 不修改 OAuth custom base URL 或第三方 API Key 的产品语义。
-- 不调整 Header、Body、TLS 或业务路由。
-
-### 验收标准
-
-- `http`/`ws` 降级、非画像端口、额外或改写 query、userinfo 和 fragment 均被拒绝。
-- 合法静态端点以及合法 ReturnedURL 全部通过。
-- 被拒绝请求不签发执行结果，也不调用 adapter。
-- Active/Previous 的合法 final-wire 基线不变。
-
-### 跟踪记录
-
-- 方案：待补充
-- 实现：待补充
-- 测试与证据：待补充
-- 完成日期：待补充
 
 ---
 

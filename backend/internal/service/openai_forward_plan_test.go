@@ -302,7 +302,11 @@ func TestOpenAIForwardInvocationPlanRequiresExplicitWebSocketHTTPFallback(t *tes
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), runtimeState.BundleResolver.ResolveCount())
 
-	wsTarget, err := http.NewRequest(http.MethodGet, chatgptCodexURL, nil)
+	// 生产 WS 路径在进入 Compiler 前由 buildOpenAIResponsesWSURL 把 https 转成 wss；
+	// 实际提交 WS Executor 的 attempt target 必须使用 wss。
+	wsTarget, err := http.NewRequest(
+		http.MethodGet, strings.Replace(chatgptCodexURL, "https://", "wss://", 1), nil,
+	)
 	require.NoError(t, err)
 	first, err := plan.NewAttempt(openAIForwardAttemptInput{
 		Reason: officialegress.AttemptReasonInitial,

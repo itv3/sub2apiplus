@@ -1606,6 +1606,25 @@ func TestOpenAIWSConn_AdditionalGuardBranches(t *testing.T) {
 	closeOpenAIWSConns([]*openAIWSConn{nil, connOK})
 }
 
+func TestCloneOpenAIWSAcquireRequestDetachesServerResponseQuery(t *testing.T) {
+	original := openAIWSAcquireRequest{
+		WSURL:               "wss://api.openai.com/v1/realtime?intent=quicksilver&call_id=call-1",
+		Headers:             http.Header{"Authorization": []string{"Bearer token"}},
+		ServerResponseQuery: map[string]string{"call_id": "call-1"},
+	}
+	// clone 写入 lastAcquire 等池状态；可信 server_response 值必须是完整快照，
+	// 调用方随后修改原 map 不得改变已克隆的请求。
+	copied := cloneOpenAIWSAcquireRequest(original)
+	original.ServerResponseQuery["call_id"] = "mutated-after-clone"
+	original.ServerResponseQuery["injected"] = "extra"
+	require.Equal(t, "call-1", copied.ServerResponseQuery["call_id"])
+	require.Len(t, copied.ServerResponseQuery, 1)
+
+	pointerCopied := cloneOpenAIWSAcquireRequestPtr(&original)
+	original.ServerResponseQuery["call_id"] = "mutated-again"
+	require.Equal(t, "mutated-after-clone", pointerCopied.ServerResponseQuery["call_id"])
+}
+
 func TestOpenAIWSConnLease_MarkBrokenEvictsConn(t *testing.T) {
 	pool := newOpenAIWSConnPool(&config.Config{})
 	accountID := int64(5001)
@@ -2046,6 +2065,10 @@ func newWSExecutorAttemptContextForSink(
 	require.NoError(t, err)
 	target, err := url.Parse("https://chatgpt.com/backend-api/codex/responses")
 	require.NoError(t, err)
+	// 入站 semantic 请求保持 https 语义；提交 Compiler 的出站 WS target 与生产
+	// buildOpenAIResponsesWSURL 一致使用 wss。
+	wsPoolTarget, err := url.Parse("wss://chatgpt.com/backend-api/codex/responses")
+	require.NoError(t, err)
 	semanticRequest := &http.Request{
 		Method: http.MethodGet, URL: target,
 		Header: http.Header{"Authorization": []string{"Bearer ws-pool-test-token"}},
@@ -2062,7 +2085,7 @@ func newWSExecutorAttemptContextForSink(
 		Plan: officialegress.CodexEgressPlan{
 			SinkID:  sinkID,
 			Purpose: binding.Purpose(), EndpointID: "responses_ws",
-			Mode: officialegress.ReleaseModeActive, Method: http.MethodGet, URL: target,
+			Mode: officialegress.ReleaseModeActive, Method: http.MethodGet, URL: wsPoolTarget,
 			Protocol:       officialegress.WireProtocolWebSocket,
 			Headers:        semantic.Headers,
 			IdentityMode:   officialegress.IdentityCodexOAuthStrict,

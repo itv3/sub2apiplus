@@ -374,7 +374,7 @@ func changeset3CaptureProductionRoute(
 		_ = response.Body.Close()
 	case route.Protocol == officialegress.WireProtocolWebSocket:
 		changeset3CaptureProductionWebSocket(
-			t, ctx, runtimeState, account, binding, endpoint, target, routeIndex,
+			t, ctx, runtimeState, account, binding, endpoint, target, dynamic, routeIndex,
 		)
 	case endpoint.ID == "responses_http" || endpoint.ID == "responses_compact":
 		changeset3CaptureProductionForward(
@@ -514,6 +514,7 @@ func changeset3CaptureProductionWebSocket(
 	binding officialegress.SinkBinding,
 	endpoint profilecontract.EndpointProfile,
 	target *url.URL,
+	dynamic officialegress.EndpointDynamicInputs,
 	routeIndex int,
 ) {
 	t.Helper()
@@ -529,7 +530,8 @@ func changeset3CaptureProductionWebSocket(
 	}
 	request := openAIWSAcquireRequest{
 		Account: account, WSURL: target.String(), SinkID: binding.ID(),
-		Headers: http.Header{"Authorization": []string{"Bearer synthetic-access-token"}},
+		Headers:             http.Header{"Authorization": []string{"Bearer synthetic-access-token"}},
+		ServerResponseQuery: dynamic.ServerResponseQuery,
 	}
 	session, _, _, err := invocation.DialDirect(
 		ctx, changeset3UnusedWSDialer{}, request, endpoint.ID,
@@ -655,6 +657,7 @@ func changeset3ProductionTarget(
 		scheme = "wss"
 	}
 	target := &url.URL{Scheme: scheme, Host: host, Path: path}
+	dynamic := officialegress.EndpointDynamicInputs{}
 	query := target.Query()
 	for _, field := range endpoint.Query {
 		if field.Name == "*" {
@@ -666,9 +669,16 @@ func changeset3ProductionTarget(
 			value = "synthetic-" + strings.ReplaceAll(field.Name, "_", "-")
 		}
 		query.Set(field.Name, value)
+		// 静态端点的 server_response query 值必须同时作为可信动态事实提交，
+		// 与生产链（如 dialLiveSideband 传 record.CallID）一致。
+		if !endpoint.HostFromResponse && field.Source == profilecontract.SourceServerResponse {
+			if dynamic.ServerResponseQuery == nil {
+				dynamic.ServerResponseQuery = map[string]string{}
+			}
+			dynamic.ServerResponseQuery[field.Name] = value
+		}
 	}
 	target.RawQuery = query.Encode()
-	dynamic := officialegress.EndpointDynamicInputs{}
 	if endpoint.HostFromResponse {
 		dynamic.ReturnedURL = target
 	}

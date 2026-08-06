@@ -139,6 +139,9 @@ docs/*
 # 官方出站机器证据统一保存在语义目录中，必须随代码一起演进和评审。
 !docs/egress/
 !docs/egress/**
+# !docs/egress/** 会重新纳入 Finder 生成的 .DS_Store，破坏维护工作区 transition
+# 的确定性复算；在重新包含之后再次排除。
+docs/egress/**/.DS_Store
 !docs/P0-P2_OFFICIAL_EGRESS_FIX_20260726.md
 !docs/P0-P2_OFFICIAL_EGRESS_REVIEW_FIX_20260727.md
 !docs/P0-P2_OFFICIAL_EGRESS_FINAL_REVIEW_FIX_20260727.md

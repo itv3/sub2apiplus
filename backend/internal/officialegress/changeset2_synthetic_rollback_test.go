@@ -240,7 +240,7 @@ func TestChangeset2SyntheticProfileRollbackMatrixHasNoMixedFacts(t *testing.T) {
 			`{"model":"m","input":[],"tool_choice":"auto","parallel_tool_calls":false,"reasoning":{},"store":false,"stream":true,"include":[]}`,
 			WireProtocolHTTP},
 		{SinkCodexResponsesWS, "responses_ws", http.MethodGet,
-			"https://chatgpt.com/backend-api/codex/responses",
+			"wss://chatgpt.com/backend-api/codex/responses",
 			`{"type":"response.create","model":"m","input":[],"tool_choice":"auto","parallel_tool_calls":false,"reasoning":{},"store":false,"stream":true,"include":[]}`,
 			WireProtocolWebSocket},
 		{SinkCodexAlphaSearchDirect, "alpha_search", http.MethodPost,

@@ -588,6 +588,9 @@ func (s *OpenAIGatewayService) dialLiveSideband(ctx context.Context, record *Liv
 		openAIWSAcquireRequest{
 			Account: account, WSURL: target.String(), Headers: headers,
 			ProxyURL: resolveAccountProxyURL(account),
+			// call_id 的可信值来自 realtime call 建立响应（record.CallID），
+			// Compiler 将拒绝 URL 中与该值不一致的 call_id。
+			ServerResponseQuery: map[string]string{"call_id": record.CallID},
 		},
 		string(endpointID),
 	)

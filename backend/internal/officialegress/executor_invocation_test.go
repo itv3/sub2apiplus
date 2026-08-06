@@ -432,7 +432,7 @@ func newExecutorInvocationTestFixture(
 	if !ok {
 		t.Fatal("缺少 Responses WS binding")
 	}
-	target, err := url.Parse("https://chatgpt.com/backend-api/codex/responses")
+	target, err := url.Parse("wss://chatgpt.com/backend-api/codex/responses")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -472,6 +472,11 @@ func executorRequestForFallback(
 	request.Plan.EndpointID = target.EndpointID
 	request.Plan.Protocol = target.Protocol
 	request.Plan.Method = http.MethodPost
+	fallbackURL, err := url.Parse("https://chatgpt.com/backend-api/codex/responses")
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Plan.URL = fallbackURL
 	request.Plan.Headers = nil
 	request.Plan.Body = NewReplayableRequestBody([]byte(
 		`{"model":"gpt-test","input":[],"tool_choice":"auto","parallel_tool_calls":false,"reasoning":{},"store":false,"stream":true,"include":[]}`,

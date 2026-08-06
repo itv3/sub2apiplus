@@ -232,6 +232,15 @@ func (i *officialCodexWebSocketInvocation) executeAcquire(
 	acquireInput.guard = i.runtime.Guard
 	acquireInput.poolRequest = request
 	transportContext := withOfficialCodexWebSocketAcquire(ctx, acquireInput)
+	dynamicInputs := officialegress.EndpointDynamicInputs{}
+	if len(request.ServerResponseQuery) != 0 {
+		dynamicInputs.ServerResponseQuery = make(
+			map[string]string, len(request.ServerResponseQuery),
+		)
+		for name, value := range request.ServerResponseQuery {
+			dynamicInputs.ServerResponseQuery[name] = value
+		}
+	}
 	result, err := i.invocation.ExecuteAttempt(transportContext, officialegress.ExecutorRequest{
 		Bundle: i.bundle,
 		Plan: officialegress.CodexEgressPlan{
@@ -250,6 +259,7 @@ func (i *officialCodexWebSocketInvocation) executeAcquire(
 			BehaviorPolicy: i.behavior, Body: semantic.Body,
 			InvocationID: i.invocation.InvocationID(), DeclaredPersona: officialegress.PersonaCodexCLI,
 		},
+		DynamicInputs: dynamicInputs,
 		AttemptReason: reason, ExpectedAttemptOrdinal: ordinal,
 		ExecutionScopeKey: fmt.Sprintf("account:%d", i.accountID),
 	})

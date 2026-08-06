@@ -1112,7 +1112,9 @@ func requestDigest(
 	}
 	hash := sha256.New()
 	_, _ = io.WriteString(hash, strings.ToUpper(req.Method))
-	_, _ = io.WriteString(hash, "\x00"+canonicalRequestScheme(req.URL.Scheme, protocol)+"\x00"+req.URL.Host+"\x00"+req.URL.EscapedPath()+"\x00"+req.URL.RawQuery)
+	// ForceQuery 是独立摘要字段：签发后新增或删除裸 “?” 必须改变摘要，即使 RawQuery
+	// 保持为空也不能与无 “?” 的请求同摘要。
+	_, _ = io.WriteString(hash, "\x00"+canonicalRequestScheme(req.URL.Scheme, protocol)+"\x00"+req.URL.Host+"\x00"+req.URL.EscapedPath()+"\x00"+strconv.FormatBool(req.URL.ForceQuery)+"\x00"+req.URL.RawQuery)
 	effectiveHost := req.Host
 	if effectiveHost == "" {
 		effectiveHost = req.URL.Host

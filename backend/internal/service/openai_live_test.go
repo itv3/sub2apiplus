@@ -417,6 +417,9 @@ func TestLiveSidebandDialDisablesWebSocketCompression(t *testing.T) {
 			Account: account,
 			WSURL:   "wss://api.openai.com/v1/realtime?intent=quicksilver&call_id=call_123",
 			Headers: http.Header{"Authorization": {"Bearer token"}},
+			// 与生产 dialLiveSideband 一致：call_id 的可信值来自 realtime call
+			// 建立响应，作为受信动态事实随请求提交。
+			ServerResponseQuery: map[string]string{"call_id": "call_123"},
 		},
 		officialCodexEndpointRealtimeSideband,
 	)

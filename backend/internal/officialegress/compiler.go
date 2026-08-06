@@ -88,6 +88,10 @@ func (p HeaderPolicy) Validate() error {
 // EndpointDynamicInputs 只承载编译时才能获得的可信动态事实。
 type EndpointDynamicInputs struct {
 	ReturnedURL *url.URL
+	// ServerResponseQuery 承载静态 endpoint 画像中 Source==server_response 的
+	// query 可信值，键为画像 query 名称。值必须来自受信服务器响应链
+	// （如 realtime call 建立响应的 call_id），不能来自调用方 URL 本身。
+	ServerResponseQuery map[string]string
 }
 
 func (in EndpointDynamicInputs) clone() EndpointDynamicInputs {
@@ -95,6 +99,12 @@ func (in EndpointDynamicInputs) clone() EndpointDynamicInputs {
 	if in.ReturnedURL != nil {
 		cloned := *in.ReturnedURL
 		out.ReturnedURL = &cloned
+	}
+	if in.ServerResponseQuery != nil {
+		out.ServerResponseQuery = make(map[string]string, len(in.ServerResponseQuery))
+		for name, value := range in.ServerResponseQuery {
+			out.ServerResponseQuery[name] = value
+		}
 	}
 	return out
 }
@@ -382,13 +392,25 @@ func validateCompilerTarget(
 		return nil, nil, errors.New("编译 target 为空")
 	}
 	cloned := *target
+	// 可信动态事实在入口统一冻结为私有克隆；后续所有分支只读取克隆值，调用方
+	// 在编译期间修改原 map 或 URL 不会影响本次判定。
+	dynamic = dynamic.clone()
 	if !endpoint.DynamicTarget() {
 		if dynamic.ReturnedURL != nil {
 			return nil, nil, errors.New("静态 endpoint 禁止提交 ReturnedURL")
 		}
+		if err := validateStaticCompilerTarget(
+			endpoint.template, target, dynamic.ServerResponseQuery,
+		); err != nil {
+			return nil, nil, err
+		}
 		return &cloned, nil, nil
 	}
-	dynamic = dynamic.clone()
+	// ReturnedURL 动态端点的 query 权威是服务器返回 URL 整体，与静态
+	// ServerResponseQuery 可信通道互斥；混合提交 fail-close。
+	if len(dynamic.ServerResponseQuery) != 0 {
+		return nil, nil, errors.New("动态 endpoint 禁止提交 ServerResponseQuery")
+	}
 	if dynamic.ReturnedURL == nil || dynamic.ReturnedURL.String() != target.String() {
 		return nil, nil, errors.New("动态 endpoint 缺少与 Plan 一致的 ReturnedURL")
 	}
@@ -402,6 +424,184 @@ func validateCompilerTarget(
 		path: target.EscapedPath(),
 	}
 	return &cloned, validated, nil
+}
+
+// validateStaticCompilerTarget 以当前 Bundle 画像为权威封闭静态 endpoint 的调用方 URL：
+// scheme、authority、path 只接受规范形态；query 按画像闭集做结构化语义封闭，其中
+// server_response 值必须与 trusted（EndpointDynamicInputs.ServerResponseQuery）逐字一致。
+// scheme 不使用 EqualFold 或 canonicalRequestScheme 放宽——后者只承担签发后受信
+// WebSocket adapter 的摘要等价，不参与 Compiler 输入合法性判断。
+func validateStaticCompilerTarget(
+	template EndpointPlanTemplate,
+	target *url.URL,
+	trusted map[string]string,
+) error {
+	if target.Opaque != "" {
+		return errors.New("静态 endpoint target 禁止 opaque 形态")
+	}
+	if target.User != nil {
+		return errors.New("静态 endpoint target 禁止 userinfo")
+	}
+	if target.Fragment != "" || target.RawFragment != "" {
+		return errors.New("静态 endpoint target 禁止 fragment")
+	}
+	if target.ForceQuery {
+		return errors.New("静态 endpoint target 禁止空 query 标记")
+	}
+	switch template.route.Protocol {
+	case WireProtocolWebSocket:
+		if target.Scheme != "wss" {
+			return fmt.Errorf("WebSocket 静态 endpoint 只接受精确小写 wss scheme：%q", target.Scheme)
+		}
+	case WireProtocolHTTP:
+		if target.Scheme != "https" {
+			return fmt.Errorf("HTTP 静态 endpoint 只接受精确小写 https scheme：%q", target.Scheme)
+		}
+	default:
+		return fmt.Errorf("静态 endpoint 协议缺少 scheme 封闭规则：%s", template.route.Protocol)
+	}
+	if target.Port() != "" {
+		return fmt.Errorf("静态 endpoint target 禁止显式端口：%q", target.Port())
+	}
+	if target.Host != template.endpoint.Host {
+		return fmt.Errorf("静态 endpoint target host 与画像不一致：%q", target.Host)
+	}
+	if err := validateStaticCompilerPath(template.endpoint.Path, target.EscapedPath()); err != nil {
+		return err
+	}
+	return validateStaticCompilerQuery(template.endpoint.Query, target, trusted)
+}
+
+// validateStaticCompilerPath 要求 EscapedPath 与画像 path 模板段数相等、字面段逐字相等、
+// {param} 段非空。含 %2F 等 escaped 字符的参数在 EscapedPath 中保持单段，不会被拆开。
+func validateStaticCompilerPath(templatePath, actualPath string) error {
+	if !strings.HasPrefix(templatePath, "/") {
+		return fmt.Errorf("静态 endpoint 画像 path 非法：%q", templatePath)
+	}
+	if !strings.HasPrefix(actualPath, "/") {
+		return fmt.Errorf("静态 endpoint target path 必须以 / 开头：%q", actualPath)
+	}
+	templateParts := strings.Split(templatePath[1:], "/")
+	actualParts := strings.Split(actualPath[1:], "/")
+	if len(templateParts) != len(actualParts) {
+		return fmt.Errorf("静态 endpoint target path 段数与画像不一致：%q", actualPath)
+	}
+	for index, expected := range templateParts {
+		if strings.HasPrefix(expected, "{") && strings.HasSuffix(expected, "}") {
+			if actualParts[index] == "" {
+				return fmt.Errorf("静态 endpoint target path 参数段为空：%s", expected)
+			}
+			continue
+		}
+		if expected != actualParts[index] {
+			return fmt.Errorf("静态 endpoint target path 字面段与画像不一致：%q", actualParts[index])
+		}
+	}
+	return nil
+}
+
+// validateStaticCompilerQuery 先封闭画像 query 定义，再对调用方 RawQuery 做结构化语义
+// 封闭。键顺序与合法等价转义保持宽容，通过验证的原始 RawQuery 原表示保留；空 component
+// 不属于合法等价表示。server_response 键的值语义以 trusted 可信输入为权威：值必须存在
+// 且逐字一致，仅“非空”不构成来源封闭。
+func validateStaticCompilerQuery(
+	fields []profilecontract.QueryFieldProfile,
+	target *url.URL,
+	trusted map[string]string,
+) error {
+	declared := make(map[string]profilecontract.QueryFieldProfile, len(fields))
+	serverResponseNames := make(map[string]bool, len(fields))
+	for _, field := range fields {
+		if field.Name == "" || field.Name == "*" {
+			return fmt.Errorf("静态 endpoint 画像 query 名称非法：%q", field.Name)
+		}
+		if _, duplicated := declared[field.Name]; duplicated {
+			return fmt.Errorf("静态 endpoint 画像 query 名称重复：%s", field.Name)
+		}
+		switch field.Source {
+		case profilecontract.SourceConstant:
+			if field.Required && field.Value == "" {
+				return fmt.Errorf("静态 endpoint 画像 constant required query 值为空：%s", field.Name)
+			}
+		case profilecontract.SourceServerResponse:
+			serverResponseNames[field.Name] = true
+		default:
+			return fmt.Errorf("静态 endpoint query source 尚无明确执行语义，fail-close：%s", field.Source)
+		}
+		declared[field.Name] = field
+	}
+	trustedNames := make([]string, 0, len(trusted))
+	for name := range trusted {
+		trustedNames = append(trustedNames, name)
+	}
+	sort.Strings(trustedNames)
+	for _, name := range trustedNames {
+		if !serverResponseNames[name] {
+			return fmt.Errorf("可信 query 输入不在画像 server_response 闭集：%s", name)
+		}
+	}
+	if len(declared) == 0 {
+		if target.RawQuery != "" {
+			return errors.New("画像未声明 query 的静态 endpoint 禁止携带 query")
+		}
+		return nil
+	}
+	if target.RawQuery != "" {
+		for _, component := range strings.Split(target.RawQuery, "&") {
+			if component == "" {
+				return errors.New("静态 endpoint query 禁止空 component")
+			}
+		}
+	}
+	values, err := url.ParseQuery(target.RawQuery)
+	if err != nil {
+		return fmt.Errorf("静态 endpoint query 解析失败：%w", err)
+	}
+	names := make([]string, 0, len(values))
+	for name := range values {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		decoded := values[name]
+		if len(decoded) > 1 {
+			return fmt.Errorf("静态 endpoint query 键禁止多值：%s", name)
+		}
+		field, ok := declared[name]
+		if !ok {
+			return fmt.Errorf("静态 endpoint query 键不在画像闭集：%s", name)
+		}
+		switch field.Source {
+		case profilecontract.SourceConstant:
+			if decoded[0] != field.Value {
+				return fmt.Errorf("静态 endpoint constant query 值与画像不一致：%s", name)
+			}
+		case profilecontract.SourceServerResponse:
+			if decoded[0] == "" {
+				return fmt.Errorf("静态 endpoint server_response query 值为空：%s", name)
+			}
+			trustedValue, bound := trusted[name]
+			if !bound {
+				return fmt.Errorf("静态 endpoint server_response query 缺少可信输入：%s", name)
+			}
+			if decoded[0] != trustedValue {
+				return fmt.Errorf("静态 endpoint server_response query 与可信输入不一致：%s", name)
+			}
+		}
+	}
+	requiredNames := make([]string, 0, len(declared))
+	for name, field := range declared {
+		if field.Required {
+			requiredNames = append(requiredNames, name)
+		}
+	}
+	sort.Strings(requiredNames)
+	for _, name := range requiredNames {
+		if _, ok := values[name]; !ok {
+			return fmt.Errorf("静态 endpoint required query 缺失：%s", name)
+		}
+	}
+	return nil
 }
 
 func compileEndpointHeaders(

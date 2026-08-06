@@ -73,6 +73,10 @@ type openAIWSAcquireRequest struct {
 	HeadersFactory  func(context.Context, http.Header) (http.Header, error)
 	ProxyURL        string
 	PreferredConnID string
+	// ServerResponseQuery 承载画像 server_response query 的可信值（如 realtime
+	// sideband 的 call_id），作为 EndpointDynamicInputs 传给 Compiler 做逐字封闭；
+	// 值必须来自受信服务器响应，不得取自调用方 URL。
+	ServerResponseQuery map[string]string
 	// TransportKey 隔离 Profile、Host、代理、CA 与 TLS 画像，禁止跨画像复用。
 	TransportKey string
 	// OfficialEgressContext 供后台预热沿用握手时已经冻结的画像上下文。
@@ -2035,6 +2039,14 @@ func cloneOpenAIWSAcquireRequest(req openAIWSAcquireRequest) openAIWSAcquireRequ
 	copied.ProxyURL = stringsTrim(req.ProxyURL)
 	copied.PreferredConnID = stringsTrim(req.PreferredConnID)
 	copied.TransportKey = stringsTrim(req.TransportKey)
+	// 可信 server_response 值必须随 clone 形成完整快照；lastAcquire 等池状态
+	// 不得与调用方共享同一个可变 map。
+	if req.ServerResponseQuery != nil {
+		copied.ServerResponseQuery = make(map[string]string, len(req.ServerResponseQuery))
+		for name, value := range req.ServerResponseQuery {
+			copied.ServerResponseQuery[name] = value
+		}
+	}
 	return copied
 }
 

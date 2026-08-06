@@ -1,0 +1,26 @@
+{
+  "schema_version": "official-egress-compiler-static-url-closure-source-transition/v1",
+  "prior_transition": "docs/egress/maintenance/evidence-directory-consolidation-source-transition.json",
+  "prior_transition_sha256": "524364297baf9b8492802c49fcf3963be15c0b320fa1558966487d62ea03d96f",
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/compiler.go",
+      "from_sha256": "a46b59cfc7ca0d9d9ab7fdc51c3dcded379d62c922a10950bd4ce7053ae4ba6b",
+      "to_sha256": "2a8140afc8899259665daf77676cf8c52c9b94f488b18da0e2b1d99d1dc34391",
+      "reason": "CHG-01 Compiler 静态 URL 封闭：validateCompilerTarget 静态分支从原样克隆调用方 URL 改为以当前 Bundle 画像为权威 fail-close 校验 scheme、authority、path 与 query 结构语义；server_response query 值必须与 EndpointDynamicInputs.ServerResponseQuery 可信输入逐字一致，可信动态事实在 validateCompilerTarget 入口统一冻结为私有克隆；动态 ReturnedURL 分支既有验证模型不变，仅对新增的 ServerResponseQuery 可信通道 fail-close。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_changeset3_production_final_wire_test.go",
+      "from_sha256": "964c942e3c1a202276e44f14c87411f6e66da9ee9a21027275144ca3a8d4b8d8",
+      "to_sha256": "b64895b506b140f7fc6b996220fd337d0bd45501d9011ba02f75ad8d5dac75ab",
+      "reason": "CHG-01：capture 构造为静态端点的 server_response query（realtime_sideband 的 call_id）同步生成可信动态事实并经 openAIWSAcquireRequest 传入真实调用链，与生产 dialLiveSideband 提交 record.CallID 的通道一致；最终 wire 字节不变。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_websocket_invocation.go",
+      "from_sha256": "39fa0dfbaf9683daef1ec6cc4c7eaa0ac2da69b679693f82a4377340affd9bcc",
+      "to_sha256": "a0bffaaee8ac38d346043b2b94a2450c185b6792a13e465cf09639b4e91685d1",
+      "reason": "CHG-01：executeAcquire 把 openAIWSAcquireRequest.ServerResponseQuery 作为 EndpointDynamicInputs 传给 Executor，使 Compiler 能以受信服务器响应值封闭 server_response query；不改变 Header、Body、连接生命周期或 adapter 行为。"
+    }
+  ],
+  "result": "passed"
+}
