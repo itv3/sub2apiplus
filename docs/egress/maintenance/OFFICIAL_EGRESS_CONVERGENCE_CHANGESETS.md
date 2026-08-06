@@ -1,8 +1,8 @@
 # Official Egress 当前必要变更与换版验收清单
 
-> 文档状态：当前无待实施变更集；CHG-03 经审核撤销（见撤销记录）
+> 文档状态：当前无待实施变更集；CHG-03 经审核撤销（墓碑见 §2.2）
 > 最后更新：2026-08-06
-> 当前代码基线：`ffdf43f30`
+> 最近验收的 production-code 基线：`ffdf43f30`
 > 适用范围：Sub2API 上游小侵入、Codex CLI 画像升级与 official egress 兼容层
 
 ## 1. 文档目的
@@ -18,9 +18,28 @@
 4. 当前 wire 没有错误时，不因结构看起来重复而修改生产路径。
 5. Previous 仍依赖的兼容能力不得提前退休。
 
+### 1.1 清单来历
+
+本清单由 2026-08-05 的原 15 项调研清单（CS 编号，全文见 git `600775f89`）经必要性复核与
+2026-08-06 范围裁剪（git `01dbf1edf`）演化而来。处置对照：
+
+| 原条目 | 处置 | 现所在 |
+|---|---|---|
+| CS-01 Compiler 静态 URL 封闭 | 更名 CHG-01，2026-08-06 实施完成并合入 | git `ffdf43f30`；行为契约与实施、复审记录见 [CHG-01_COMPILER_STATIC_URL_CLOSURE.md](CHG-01_COMPILER_STATIC_URL_CLOSURE.md) |
+| CS-09 alpha-search 版本权威 | 更名 CHG-03，2026-08-06 审核撤销 | §2.2 墓碑与 [CHG-03_ALPHA_SEARCH_VERSION_AUTHORITY.md](CHG-03_ALPHA_SEARCH_VERSION_AUTHORITY.md) |
+| CS-06 Makefile 与工具链版本参数化 | 转换版门禁 | §3.1 |
+| CS-05 Campaign/candidate 边界修订 | 坐标生成与校验要求并入门禁，其余删除 | §3.1（部分） |
+| CS-07 真实异画像 active/previous 演练 | 转换版门禁 | §3.2 |
+| CS-10 Body 差分测试与单一权威门禁 | 转换版门禁 | §3.4 |
+| CS-11 service DTO 字段覆盖与条件退休 | 转换版门禁 | §3.5 |
+| CS-02 CompilerRejected 契约、CS-03 版本中立 ADR、CS-04 上游入侵面 ratchet | 范围裁剪时删除（无当前证据，不预先重构） | 仅 git 历史 |
+| CS-08、CS-11B、CS-12、CS-13 | 创建当日已降级/删除/合并 | 见 `600775f89` §3.1 处置表 |
+
+§3.3（Compiler endpoint 封闭）源自 CHG-01 完成后新建立的换版约束，不对应原 CS 条目。
+
 ## 2. 当前变更集
 
-当前无待实施变更集。CHG-03 已于 2026-08-06 经审核撤销，见下方撤销记录。
+当前无待实施变更集。
 
 已完成的变更集从本表和正文中移除，实施记录以 git 历史为准。
 
@@ -29,51 +48,45 @@
 - 实施范围、非目标和验收标准全部满足；
 - 相关单元、集成或 final-wire 测试通过；
 - 没有扩大未授权的上游修改面；
-- 涉及旧路径删除时，完整执行规格 §4.9 的退休流程。
+- 涉及旧路径删除时，完整执行
+  [docs/CODEX_CLI_0145_EGRESS_SPEC.md](../../CODEX_CLI_0145_EGRESS_SPEC.md) §4.9
+  兼容代码退休流程。
 
----
+### 2.1 非阻塞遗留判定
 
-## CHG-03：alpha-search 版本单一权威（已撤销）
+以下事项有明确证据但不构成当前待实施变更集；在触发条件出现前只跟踪，不启动修复。
 
-**撤销日期：**2026-08-06（基线 `58d0827c3`，三方审核 `changes_requested`，复核逐条属实）
+| 项目 | 当前状态 | 触发条件 |
+|---|---|---|
+| alpha-search 固定 `ProfileVersion` 传参 | 待判定；定性为疑似无效兼容残留，不是正确性修复。四个 accessor 的生产消费者仍存在 | 下一真实版本换版时按 [CHG-03_ALPHA_SEARCH_VERSION_AUTHORITY.md](CHG-03_ALPHA_SEARCH_VERSION_AUTHORITY.md) 的遗留判定流程执行 mutation 判定与退休决策 |
+| changeset3 final-wire 生成器基线漂移 | 历史生成器当前不可复现（2026-08-06 实跑确认：首个 capture 六个 digest 与旧 approved delta 不符）；当前可复现 evidence authority 是 changeset6 生成器 | 任何工作准备重新引用 changeset3 生成器之前，先修复或按规格 §4.9 正式退休；在此之前不为让历史工具变绿而修改代码或重建历史证据 |
 
-**撤销依据要点：**
+### 2.2 CHG-03：alpha-search 版本单一权威（已撤销 · 墓碑）
 
-1. alpha-search 的 target 解析与 Executor 的 bundle 解析查询的是同一个 `sync.OnceValues`
-   进程级不可变单例 `DefaultReleaseCatalog()`，生产 wiring 无第二 catalog 注入口，mode 在
-   请求内冻结。「URL 来自全局 catalog、bundle 来自 runtime catalog 且可能分叉」无生产可达
-   失败链；换版在现有架构下是同一 catalog 装两个版本、按 mode 各查各槽位，不形成混搭。
-2. 原方案需先新增公共导出与 runtime catalog 参数化，才能在测试中制造生产不存在的分叉条件，
-   再以此证明修复必要——论证倒置，且与本文原则 3/4 冲突。
-3. 原方案 §6 引用的 changeset3 final-wire 门禁在当前基线不可复现（生成器实跑失败，六个
-   digest 与旧 approved delta 不符）；且其 alpha-search capture 由测试自建 target 直进
-   `invocation.Execute`，不经过 `ForwardAlphaSearch`/`buildOpenAIAlphaSearchRequest`，
-   不能作为被改路径的回归证据。
-4. 固定 `ProfileVersion` 传参当前证据只支持「疑似无效兼容残留」，不构成「版本权威正确性
-   修复」的必要性；其判定与退休作为独立遗留项跟踪。
-
-**后续处置：**
-
-- alpha-search target 与执行 bundle 的同源性验证降级为换版门禁 §3.2 的实证检查项。
-- 固定 `ProfileVersion` 残留判定与退休流程见
-  [CHG-03_ALPHA_SEARCH_VERSION_AUTHORITY.md](CHG-03_ALPHA_SEARCH_VERSION_AUTHORITY.md)
-  （已改写为撤销记录与遗留判定项）。
-- changeset3 final-wire 生成器基线漂移是独立现存问题，单独排查，不随本撤销关闭。
-
-**复活条件：**出现真实 mixed-version wire、生产 catalog 可分叉路径，或 §3.2 实证检查失败时，
-按当时事实重新立项最小修复。
-
----
+- **撤销日期：**2026-08-06（基线 `58d0827c3`，三方审核 `changes_requested`，复核逐条属实）。
+- **核心原因：**alpha-search 的 target 解析与 Executor 的 bundle 解析同源于进程级不可变单例
+  `DefaultReleaseCatalog()`，生产 wiring 无第二 catalog 注入口，「URL 与 bundle 可能分叉」无
+  生产可达失败链；原方案需先新增导出与参数化制造生产不存在的分叉条件才能证明修复必要，
+  论证倒置，与本文原则 3/4 冲突。
+- **完整撤销记录：**[CHG-03_ALPHA_SEARCH_VERSION_AUTHORITY.md](CHG-03_ALPHA_SEARCH_VERSION_AUTHORITY.md)
+  （含全部撤销依据与遗留判定项）。
+- **遗留判定项：**见 §2.1；alpha-search target 与执行 bundle 的同源性验证降级为 §3.2 实证检查项。
+- **复活条件：**出现真实 mixed-version wire、生产 catalog 可分叉路径，或 §3.2 实证检查失败时，
+  按当时事实重新立项最小修复。
 
 ## 3. 下一次 Codex CLI 换版验收门禁
 
 本节不是当前待开发列表。只有出现第二个真实 Codex CLI 版本及其目标画像时才触发；每项先用
 新版本事实验证是否存在问题，只有门禁失败时才提出最小修复方案。
 
+合成异版本画像只允许用于工具链预检、mutation 和门禁判据自测；正式换版验收必须使用两个
+真实 Codex CLI 版本对应的完整画像与发布坐标。
+
 | 门禁 | 触发条件 | 默认动作 |
 |---|---|---|
 | 工具链版本坐标 | 准备第二个真实画像 | 先运行现有工具；仅修复阻断新坐标的行为硬编码 |
 | 异画像 Active/Previous | 新版本 Campaign 已达到可验收状态 | 执行切换和回滚演练，不预先改运行架构 |
+| Compiler endpoint 封闭 | 新画像 endpoint、query 集合或值来源发生任何变化 | 逐端点验证静态封闭与可信值生产链；语义未定义的 source fail-close |
 | Body 语义差分 | 新画像增加或改变 Body 条件、枚举或字段 | 先补差分测试；只有可达差异才改生产路径 |
 | service 投影字段覆盖 | 新画像增加 service 消费的执行字段 | 先证明投影完整；不以此启动 DTO 迁移工程 |
 
@@ -93,7 +106,7 @@
 同一 0.145.0 画像进行逻辑模拟。
 
 - Active 和 Previous 必须具有不同 version、profile digest 和 release digest。
-- 覆盖 Responses HTTP/WS、compact、alpha、images、models、quota、live、files 和 account-test。
+- 覆盖 Responses HTTP/WS、compact、alpha、images、models、quota、live、files 和 admin-test。
 - 证明在途 invocation 保持旧 Bundle，新 invocation 使用新 Active。
 - 证明 fallback 不跨 Bundle，连接池按画像身份隔离。
 - 完成 canary、切换、回滚和恢复后的 final-wire 验证。
@@ -103,11 +116,32 @@
 - 上述实证的捕获链必须真实经过 `ForwardAlphaSearch → buildOpenAIAlphaSearchRequest →
   invocation.Execute`，且所用 final-wire 生成器在当前基线可复现；绕过 service 层的通用
   Executor capture 不得作为证据。
-- 若使用合成异版本画像，必须整体替换全部行为相关版本坐标（正式画像共 34 处 `0.145.0`，
-  含 `version` header、User-Agent 与 `client_version` query）并自检无残留；`profilecontract`
-  不做跨字段一致性校验，只改顶层 `Version` 会假绿。
+- 若使用合成异版本画像（按本节前言仅限工具链预检、mutation 与门禁判据自测，不得作为正式
+  换版验收证据），必须整体替换全部行为相关版本坐标：当前每份正式 0.145.0 画像各有 34 处
+  版本坐标（含 `version` header、User-Agent 与 `client_version` query），构造单个合成目标
+  快照时必须替换对该快照机器扫描得到的全部命中，并在生成前后输出命中集合与集合摘要；
+  「34」只是当前基线事实，不作为未来固定常量。`profilecontract` 不做跨字段一致性校验，
+  只改顶层 `Version` 会假绿。
 
-### 3.3 Body 语义差分
+### 3.3 Compiler endpoint 封闭
+
+**验收收益：**证明新画像全部端点仍处于 Compiler 静态 URL/query 封闭与 ReturnedURL 独立
+验证模型之内，避免新增调用链绕过 `server_response` 可信值通道形成假绿。行为契约见
+[CHG-01_COMPILER_STATIC_URL_CLOSURE.md](CHG-01_COMPILER_STATIC_URL_CLOSURE.md) §4。
+
+- 逐个枚举新旧 endpoint，区分静态 target 与 ReturnedURL 动态端点。
+- Active/Previous 下所有合法静态 URL 均可编译。
+- 新增或变化的 query source 必须有明确 Compiler 执行语义，否则 fail-close
+  （当前有执行语义的闭集：`constant`、`server_response`）。
+- 每个 `server_response` query 必须通过真实 service 生产链证明可信值来源与透传
+  （如 realtime sideband 由 `dialLiveSideband` 提交 `record.CallID`）；通用 final-wire
+  捕获器会为画像内 `server_response` query 自动合成 `ServerResponseQuery`，其通过不能
+  单独作为证据。
+- 覆盖缺失可信值、伪造可信值、画像外可信键，以及动态端点混入静态可信 map 的负例。
+- URL tuple 至少覆盖 scheme、Host、显式端口、userinfo、fragment、EscapedPath、RawQuery
+  和 ForceQuery。
+
+### 3.4 Body 语义差分
 
 **验收收益：**在新画像真正使用新 Body 条件前发现 service 与 core 的语义差异，避免为了消除
 理论上的重复解析而提前重构稳定链路。
@@ -117,7 +151,7 @@
 - 明确差异是否进入真实生产路径；不可达差异只记录测试，不修改生产代码。
 - 只有可达差异或实际维护成本成立时，才另行确认单一权威收敛方案。
 
-### 3.4 service 投影字段覆盖
+### 3.5 service 投影字段覆盖
 
 **验收收益：**防止新画像字段在 service DTO/projection 中静默遗漏，同时避免在消费者仍存在时
 提前删除兼容模型。
@@ -125,7 +159,8 @@
 - 盘点新字段是否被 OAuth、Previous、API Key mimic、非 Codex persona 或辅助端点消费。
 - 用字段覆盖或逐叶变异测试证明需要的字段均进入投影。
 - 同源 digest 比较不能作为字段完整性证明。
-- 若没有漏字段，保持现有 DTO；只有消费者归零时才按 §4.9 讨论退休。
+- 若没有漏字段，保持现有 DTO；只有消费者归零时才按
+  [docs/CODEX_CLI_0145_EGRESS_SPEC.md](../../CODEX_CLI_0145_EGRESS_SPEC.md) §4.9 讨论退休。
 
 ## 4. 更新与执行规则
 
