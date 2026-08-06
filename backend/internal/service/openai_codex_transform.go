@@ -311,6 +311,10 @@ func applyCodexOAuthTransformWithOptions(reqBody map[string]any, opts codexOAuth
 			input = normalizedInput
 			result.Modified = true
 		}
+		if normalizedInput, modified := normalizeCodexMessageContentPartTypes(input); modified {
+			input = normalizedInput
+			result.Modified = true
+		}
 		input = filterCodexInputWithOptions(input, codexInputFilterOptions{
 			PreserveReferences: needsToolContinuation,
 			PreserveCallIDs:    opts.PreserveToolCallIDs,
@@ -373,6 +377,10 @@ func applyCodexResponsesNormalization(reqBody map[string]any, opts codexResponse
 	if input, ok := reqBody["input"].([]any); ok {
 		if opts.NormalizeBareRoleContentMessages {
 			if normalized, changed := normalizeCodexBareRoleContentMessages(input); changed {
+				input = normalized
+				modified = true
+			}
+			if normalized, changed := normalizeCodexMessageContentPartTypes(input); changed {
 				input = normalized
 				modified = true
 			}
@@ -497,8 +505,8 @@ func normalizeCodexBareRoleContentMessages(input []any) ([]any, bool) {
 			normalized = append(normalized, item)
 			continue
 		}
-		if strings.TrimSpace(firstNonEmptyString(m["type"])) != "" ||
-			strings.TrimSpace(firstNonEmptyString(m["role"])) == "" {
+		role := strings.TrimSpace(firstNonEmptyString(m["role"]))
+		if strings.TrimSpace(firstNonEmptyString(m["type"])) != "" || role == "" {
 			normalized = append(normalized, item)
 			continue
 		}
@@ -513,7 +521,7 @@ func normalizeCodexBareRoleContentMessages(input []any) ([]any, bool) {
 			next[key] = value
 		}
 		next["type"] = "message"
-		if normalizedContent, changed := normalizeCodexBareMessageContent(content); changed {
+		if normalizedContent, changed := normalizeCodexBareMessageContent(content, role); changed {
 			next["content"] = normalizedContent
 		}
 		normalized = append(normalized, next)
@@ -525,14 +533,22 @@ func normalizeCodexBareRoleContentMessages(input []any) ([]any, bool) {
 	return normalized, true
 }
 
-func normalizeCodexBareMessageContent(content any) (any, bool) {
+// normalizeCodexBareMessageContent 将裸字符串 content 包装为 responses 协议的 parts 数组。
+// 上游按角色校验文本 part 类型：assistant 消息只接受 output_text/refusal，
+// 其余角色（user/system/developer）用 input_text。必须按 role 选择包装类型，
+// 否则 assistant 历史消息会被上游以 invalid_enum_value（HTTP 400）拒绝。
+func normalizeCodexBareMessageContent(content any, role string) (any, bool) {
 	text, ok := content.(string)
 	if !ok {
 		return content, false
 	}
+	partType := "input_text"
+	if strings.EqualFold(role, "assistant") {
+		partType = "output_text"
+	}
 	return []any{
 		map[string]any{
-			"type": "input_text",
+			"type": partType,
 			"text": text,
 		},
 	}, true
@@ -757,6 +773,86 @@ func normalizeCodexMessageContentText(input []any) ([]any, bool) {
 				newPart[key] = value
 			}
 			newPart["text"] = stringifyCodexContentText(text)
+			newParts[i] = newPart
+			modified = true
+		}
+
+		if newItem != nil {
+			newItem["content"] = newParts
+			normalized = append(normalized, newItem)
+			continue
+		}
+		normalized = append(normalized, item)
+	}
+	if !modified {
+		return input, false
+	}
+	return normalized, true
+}
+
+// normalizeCodexMessageContentPartTypes 按消息角色归一化 content part 的文本类型。
+// 上游校验规则：assistant 消息的文本 part 只接受 output_text（或 refusal），
+// 其余角色只接受 input_text。部分客户端拼接会话历史时方向写反（典型如把
+// assistant 历史消息写成 input_text），此处双向改写救回这类请求；
+// "text" 属 chat_completions 习惯写法、responses 协议不合法，一并按角色纠正。
+// refusal 与非文本 part（input_image 等）保持不动。
+func normalizeCodexMessageContentPartTypes(input []any) ([]any, bool) {
+	if len(input) == 0 {
+		return input, false
+	}
+
+	modified := false
+	normalized := make([]any, 0, len(input))
+	for _, item := range input {
+		m, ok := item.(map[string]any)
+		if !ok || strings.TrimSpace(firstNonEmptyString(m["type"])) != "message" {
+			normalized = append(normalized, item)
+			continue
+		}
+		role := strings.TrimSpace(firstNonEmptyString(m["role"]))
+		if role == "" {
+			normalized = append(normalized, item)
+			continue
+		}
+		wantType, wrongType := "input_text", "output_text"
+		if strings.EqualFold(role, "assistant") {
+			wantType, wrongType = "output_text", "input_text"
+		}
+		parts, ok := m["content"].([]any)
+		if !ok {
+			normalized = append(normalized, item)
+			continue
+		}
+
+		var newItem map[string]any
+		var newParts []any
+		ensureItemCopy := func() {
+			if newItem != nil {
+				return
+			}
+			newItem = make(map[string]any, len(m))
+			for key, value := range m {
+				newItem[key] = value
+			}
+			newParts = make([]any, len(parts))
+			copy(newParts, parts)
+		}
+
+		for i, rawPart := range parts {
+			part, ok := rawPart.(map[string]any)
+			if !ok {
+				continue
+			}
+			partType := strings.TrimSpace(firstNonEmptyString(part["type"]))
+			if partType != wrongType && partType != "text" {
+				continue
+			}
+			ensureItemCopy()
+			newPart := make(map[string]any, len(part))
+			for key, value := range part {
+				newPart[key] = value
+			}
+			newPart["type"] = wantType
 			newParts[i] = newPart
 			modified = true
 		}

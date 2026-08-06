@@ -405,6 +405,81 @@ func TestApplyCodexOAuthTransform_NormalizesBareRoleContentMessages(t *testing.T
 	require.Equal(t, []any{map[string]any{"type": "input_text", "text": "hello"}}, user["content"])
 }
 
+func TestApplyCodexOAuthTransform_NormalizesAssistantBareContentToOutputText(t *testing.T) {
+	// 还原 2026-08-06 Hermes Agent 线上事故：客户端以裸字符串提交 assistant 历史消息
+	//（OpenAI 官方接受的合法简写），旧实现不分角色统一包装为 input_text，
+	// 被上游以 invalid_enum_value（HTTP 400）拒绝。
+	reqBody := map[string]any{
+		"model": "gpt-5.5",
+		"input": []any{
+			map[string]any{"role": "user", "content": "question"},
+			map[string]any{"role": "assistant", "content": "previous answer"},
+		},
+	}
+
+	applyCodexOAuthTransform(reqBody, true, false)
+
+	input, ok := reqBody["input"].([]any)
+	require.True(t, ok)
+	require.Len(t, input, 2)
+
+	user, ok := input[0].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "message", user["type"])
+	require.Equal(t, []any{map[string]any{"type": "input_text", "text": "question"}}, user["content"])
+
+	assistant, ok := input[1].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "message", assistant["type"])
+	require.Equal(t, []any{map[string]any{"type": "output_text", "text": "previous answer"}}, assistant["content"])
+}
+
+func TestApplyCodexOAuthTransform_NormalizesMessageContentPartTypesByRole(t *testing.T) {
+	reqBody := map[string]any{
+		"model": "gpt-5.5",
+		"input": []any{
+			// assistant 的文本 part 显式写错为 input_text → 改写为 output_text；refusal 保持不动。
+			map[string]any{
+				"type": "message",
+				"role": "assistant",
+				"content": []any{
+					map[string]any{"type": "input_text", "text": "wrong direction"},
+					map[string]any{"type": "refusal", "refusal": "nope"},
+				},
+			},
+			// user 的文本 part 显式写错为 output_text → 改写回 input_text；input_image 保持不动。
+			map[string]any{
+				"type": "message",
+				"role": "user",
+				"content": []any{
+					map[string]any{"type": "output_text", "text": "user text"},
+					map[string]any{"type": "input_image", "image_url": "https://example.com/a.png"},
+				},
+			},
+		},
+	}
+
+	applyCodexOAuthTransform(reqBody, true, false)
+
+	input, ok := reqBody["input"].([]any)
+	require.True(t, ok)
+	require.Len(t, input, 2)
+
+	assistant, ok := input[0].(map[string]any)
+	require.True(t, ok)
+	assistantParts, ok := assistant["content"].([]any)
+	require.True(t, ok)
+	require.Equal(t, map[string]any{"type": "output_text", "text": "wrong direction"}, assistantParts[0])
+	require.Equal(t, map[string]any{"type": "refusal", "refusal": "nope"}, assistantParts[1])
+
+	user, ok := input[1].(map[string]any)
+	require.True(t, ok)
+	userParts, ok := user["content"].([]any)
+	require.True(t, ok)
+	require.Equal(t, map[string]any{"type": "input_text", "text": "user text"}, userParts[0])
+	require.Equal(t, map[string]any{"type": "input_image", "image_url": "https://example.com/a.png"}, userParts[1])
+}
+
 func TestApplyCodexOAuthTransform_DowngradesUnknownToolChoice(t *testing.T) {
 	reqBody := map[string]any{
 		"model": "gpt-5.4",
