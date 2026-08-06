@@ -1057,8 +1057,10 @@ func TestGatewayService_AnthropicAPIKeyMimicDoesNotGloballyReverseTitleCaseTools
 
 func TestAnthropicAPIKeyMimicExtraBetasOnlyForKnownContext1MModels(t *testing.T) {
 	require.Contains(t, anthropicAPIKeyMimicExtraBetas("claude-opus-4-8"), claude.BetaContext1M)
-	require.Contains(t, anthropicAPIKeyMimicExtraBetas("claude-opus-4-6-thinking"), claude.BetaContext1M)
-	require.Contains(t, anthropicAPIKeyMimicExtraBetas("claude-sonnet-4-5-20250929"), claude.BetaContext1M)
+	require.Contains(t, anthropicAPIKeyMimicExtraBetas("claude-opus-5"), claude.BetaContext1M)
+	require.Contains(t, anthropicAPIKeyMimicExtraBetas("claude-fable-5"), claude.BetaContext1M)
+	require.Empty(t, anthropicAPIKeyMimicExtraBetas("claude-opus-4-6-thinking"))
+	require.Empty(t, anthropicAPIKeyMimicExtraBetas("claude-sonnet-4-5-20250929"))
 	require.Empty(t, anthropicAPIKeyMimicExtraBetas("claude-haiku-4-5-20251001"))
 }
 

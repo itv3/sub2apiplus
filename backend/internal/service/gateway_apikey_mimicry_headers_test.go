@@ -119,9 +119,9 @@ func TestAPIKeyMimicKeepsContext1MDespiteDefaultBetaPolicy(t *testing.T) {
 		},
 		Credentials: map[string]any{"api_key": "anthropic-key"},
 	}
-	body := []byte(`{"model":"claude-opus-4-6","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
+	body := []byte(`{"model":"claude-opus-5","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`)
 	req, _, err := svc.buildUpstreamRequest(
-		context.Background(), nil, account, body, "anthropic-key", "apikey", "claude-opus-4-6", true, true,
+		context.Background(), nil, account, body, "anthropic-key", "apikey", "claude-opus-5", true, true,
 	)
 	require.NoError(t, err)
 	beta := getHeaderRaw(req.Header, "anthropic-beta")

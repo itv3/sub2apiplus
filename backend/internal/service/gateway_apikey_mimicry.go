@@ -59,7 +59,7 @@ func defaultAPIKeyCountTokensMimicBetaHeader(body []byte) string {
 	if err != nil {
 		return ""
 	}
-	beta := buildDefaultAPIKeyMimicBetaHeaderForProfile(body, false, profile)
+	beta := buildDefaultAPIKeyMimicBetaHeaderForProfile(body, false, true, profile)
 	return mergeAnthropicBeta([]string{beta, "token-counting-2024-11-01"}, "")
 }
 
@@ -74,13 +74,16 @@ func buildDefaultAPIKeyMimicBetaHeader(body []byte, selectStructuredOutputs bool
 	if err != nil {
 		return ""
 	}
-	return buildDefaultAPIKeyMimicBetaHeaderForProfile(body, selectStructuredOutputs, profile)
+	return buildDefaultAPIKeyMimicBetaHeaderForProfile(body, selectStructuredOutputs, true, profile)
 }
 
-func buildDefaultAPIKeyMimicBetaHeaderForProfile(body []byte, selectStructuredOutputs bool, profile officialClientResolvedProfile) string {
+// buildDefaultAPIKeyMimicBetaHeaderForProfile 构造官方客户端画像的 beta 头。
+// injectContext1M 只允许 API Key mimic 构造链传 true：1M 自动补全是第三方中转
+// 对 API Key 兼容请求的要求；OAuth 官方出站画像基线不含 context-1m，不得注入。
+func buildDefaultAPIKeyMimicBetaHeaderForProfile(body []byte, selectStructuredOutputs bool, injectContext1M bool, profile officialClientResolvedProfile) string {
 	modelID := gjson.GetBytes(body, "model").String()
 	betas := splitAnthropicBetaTokens(profile.Wire.BetaHeader)
-	if requiresContext1MBetaForAPIKeyMimic(modelID) {
+	if injectContext1M && requiresContext1MBetaForAPIKeyMimic(modelID) {
 		// Claude Code 2.1.220 通过 --betas 启用 1M 时，会把 context-1m
 		// 放在 effort 之前。AnyRouter 又要求这些模型显式携带 1M beta，
 		// 因此动态补齐时也必须保持同一顺序，不能简单追加到末尾。
@@ -166,10 +169,8 @@ func anthropicAPIKeyMimicExtraBetas(modelID string) []string {
 
 func requiresContext1MBetaForAPIKeyMimic(modelID string) bool {
 	modelID = strings.ToLower(strings.TrimSpace(modelID))
-	return strings.HasPrefix(modelID, "claude-opus-4-6") ||
-		strings.HasPrefix(modelID, "claude-opus-4-7") ||
-		strings.HasPrefix(modelID, "claude-opus-4-8") ||
-		strings.HasPrefix(modelID, "claude-sonnet-4") ||
+	return strings.HasPrefix(modelID, "claude-opus-4-8") ||
+		strings.HasPrefix(modelID, "claude-opus-5") ||
 		strings.HasPrefix(modelID, "claude-fable-5")
 }
 
@@ -197,7 +198,7 @@ func (s *GatewayService) buildAnthropicAPIKeyCLIMimicRequest(
 	// token 从 drop set 中移除。不能让全局 BetaPolicy 把 context-1m 等身份 beta 剥掉，
 	// 否则会偏离实抓画像，且多数中转站会直接 400 要求启用 1m。
 	// 注意：不要把这些 token 再以 required 方式重复合并，否则会破坏官方顺序。
-	defaultBetaHeader := buildDefaultAPIKeyMimicBetaHeaderForProfile(body, true, profile)
+	defaultBetaHeader := buildDefaultAPIKeyMimicBetaHeaderForProfile(body, true, true, profile)
 	// 只保护静态身份基线；structured-outputs 等按 body 动态替换的 beta
 	// 仍必须受 BetaPolicy 控制。
 	effectiveDropSet = removeTokensFromSetCopy(effectiveDropSet, splitAnthropicBetaTokens(profile.Wire.BetaHeader)...)
@@ -495,7 +496,7 @@ func (s *GatewayService) buildAnthropicAPIKeyCLICountTokensMimicRequest(
 	body = sanitizeCountTokensRequestBody(body)
 	modelID := gjson.GetBytes(body, "model").String()
 	// 与 /v1/messages mimic 一致：保护当前客户端基线 beta，避免全局策略剥掉身份特征。
-	defaultBetaHeader := buildDefaultAPIKeyMimicBetaHeaderForProfile(body, false, profile)
+	defaultBetaHeader := buildDefaultAPIKeyMimicBetaHeaderForProfile(body, false, true, profile)
 	effectiveDropSet = removeTokensFromSetCopy(effectiveDropSet, splitAnthropicBetaTokens(profile.Wire.BetaHeader)...)
 	effectiveDropSet = removeTokensFromSetCopy(effectiveDropSet, anthropicAPIKeyMimicExtraBetas(modelID)...)
 	finalBetaHeader := stripBetaTokensWithSet(defaultBetaHeader, effectiveDropSet)

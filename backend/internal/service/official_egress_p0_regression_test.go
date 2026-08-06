@@ -27,11 +27,11 @@ func TestOfficialAnthropicBetaHeaderPreservesDynamicCapabilities(t *testing.T) {
 	}`)
 	betas := splitAnthropicBetaTokens(buildOfficialAnthropicBetaHeader(profile, body))
 
-	require.Contains(t, betas, claude.BetaContext1M)
+	// claude-fable-5 命中 API Key mimic 的 1M 清单，但 OAuth 官方出站与 mimic
+	// 是两条独立链路：官方 CLI 默认流量不带 context-1m，OAuth 侧不得自动补全。
+	require.NotContains(t, betas, claude.BetaContext1M)
 	require.Contains(t, betas, AnthropicAPIKeyBetaStructuredOutputs)
 	require.Contains(t, betas, "advanced-tool-use-2025-11-20")
-	require.Less(t, indexOfString(betas, claude.BetaContext1M), indexOfString(betas, claude.BetaEffort))
-	require.Equal(t, 1, countString(betas, claude.BetaContext1M))
 	require.Equal(t, 1, countString(betas, AnthropicAPIKeyBetaStructuredOutputs))
 	require.Equal(t, 1, countString(betas, "advanced-tool-use-2025-11-20"))
 }

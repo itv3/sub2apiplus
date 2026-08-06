@@ -1165,15 +1165,28 @@ MigrationReceipt／RemovalReceipt 单调迁移或删除。
 
 ## 4.1 何时必须启动升级
 
-出现以下任一变化都要新建版本 Campaign：
+Campaign 冻结的是目标 Codex 事实。出现以下任一变化都要新建版本 Campaign：
 
 - Codex CLI 版本或官方二进制 SHA-256 变化；
 - Cargo.lock、网络依赖、TLS 后端或目标平台变化；
 - 官方默认 feature、端点、header、body、连接或状态路径变化；
-- Sub2API 源码树、候选镜像、构建 ID 或版本画像变化；
+- 经 `classify` 批准的目标版本画像或规则清单变化；
 - 合并上游后统一应用点、Client 生命周期或协议适配发生变化。
 
-每个目标版本必须具备独立运行证据，不得复用其他版本的验收结论。
+同一目标 Codex 事实下，Sub2API 侧的实现迭代不新建 Campaign，改用新的 `--candidate-id`
+在同一 Campaign 内追加候选：
+
+- Sub2API 源码树、候选镜像或构建 ID 变化；
+- 候选部署版本、OCI digest、image ID 或候选侧 profile digest 绑定变化。
+
+候选的 `--profile-id` / `--profile-digest` 只证明该候选实现绑定了本 Campaign 已批准的
+画像，不构成第二个画像事实源；画像本身变化仍属上面的 Campaign 级条件。
+
+每个 candidate 独立绑定源码树、镜像、构建 ID、测试结果和最终身份，互不覆盖；
+`capture-candidate`、`compare`、`accept` 按 candidate 分目录封存。
+
+每个目标版本必须具备独立运行证据，不得复用其他版本的验收结论；同一 Campaign 内的
+不同 candidate 也不得复用彼此的候选抓包、断言或验收结论。
 
 ## 4.2 版本化五份清单
 

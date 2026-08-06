@@ -314,9 +314,11 @@ API Key 官方客户端兼容让 Kilo / Cline / Cursor / Roo Code 等非官方�
 
 Profile 数据集中在 `official_client_profile_registry.go`，每个 Wire Profile 都包含不可变 ID、抓包来源、适用端点、传输画像和 SHA-256 digest。服务级指针由 `gateway.official_client_profiles.mode` 单独控制，只允许 `active`/`previous` 整体切换，未知模式或不完整画像会 fail-closed。历史账号字段 `openai_apikey_mimic_codex_profile` 仅作 dormant 数据保留，运行时不再覆盖服务级指针。
 
-**Anthropic 1M beta**：active 画像会按最终映射模型自动补
-`context-1m-2025-08-07`，不要求 Kilo / Cline / Cursor / Roo Code 自己发送。适用模型前缀为
-`claude-opus-4-6`、`claude-opus-4-7`、`claude-opus-4-8`、`claude-sonnet-4` 和
+**Anthropic 1M beta**：1M 自动补全只作用于开启了 API Key 官方客户端兼容的
+API 账号构造链——按最终映射模型自动补 `context-1m-2025-08-07`，不要求
+Kilo / Cline / Cursor / Roo Code 自己发送。OAuth / SetupToken 官方出站是独立链路，
+官方 CLI 默认流量不携带该 beta，因此不做任何 1M 自动补全。适用模型前缀为
+`claude-opus-4-8`、`claude-opus-5` 和
 `claude-fable-5`；其他模型不凭空添加。补齐后的顺序与 Claude Code `2.1.220 --betas context-1m-2025-08-07`
 实抓请求一致：`context-1m-2025-08-07` 位于 `effort-2025-11-24` 之前，且不会重复。
 默认 BetaPolicy 不得过滤这项身份 beta；`structured-outputs-2025-12-15` 等按 Body

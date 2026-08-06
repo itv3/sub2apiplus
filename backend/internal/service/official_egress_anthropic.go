@@ -909,9 +909,8 @@ func (s *GatewayService) finalizeOfficialAnthropicHeaders(
 }
 
 // resolveOfficialAnthropicBetaHeader 在生成官方动态 beta 后再次执行管理员策略。
-// 静态客户端身份 beta 与模型要求的 1M beta 不能被 filter 静默剥离；动态能力
-// beta 可以被策略过滤，但请求确实依赖该能力时必须显式失败，不能带着被削弱的
-// 请求继续访问上游。
+// 静态客户端身份 beta 不能被 filter 静默剥离；动态能力 beta 可以被策略过滤，
+// 但请求确实依赖该能力时必须显式失败，不能带着被削弱的请求继续访问上游。
 func (s *GatewayService) resolveOfficialAnthropicBetaHeader(
 	req *http.Request,
 	c *gin.Context,
@@ -923,7 +922,6 @@ func (s *GatewayService) resolveOfficialAnthropicBetaHeader(
 	betas := splitAnthropicBetaTokens(buildOfficialAnthropicBetaHeader(profile, body))
 	filterSet := s.getBetaPolicyFilterSet(req.Context(), c, account, modelID)
 	filterSet = removeTokensFromSetCopy(filterSet, splitAnthropicBetaTokens(profile.Wire.BetaHeader)...)
-	filterSet = removeTokensFromSetCopy(filterSet, anthropicAPIKeyMimicExtraBetas(modelID)...)
 	betas = filterBetaTokens(betas, filterSet)
 	betaHeader := strings.Join(betas, ",")
 
@@ -942,8 +940,12 @@ func (s *GatewayService) resolveOfficialAnthropicBetaHeader(
 	return betaHeader, nil
 }
 
+// buildOfficialAnthropicBetaHeader 构造 OAuth 官方出站的 beta 头。
+// OAuth 链路与 API Key mimic 链路彼此独立：官方 CLI 默认流量不携带 context-1m，
+// 因此这里不做 1M 自动补全（injectContext1M=false）；1M 补全仅属于开启了
+// API Key 官方客户端兼容的 API 账号构造链。
 func buildOfficialAnthropicBetaHeader(profile officialClientResolvedProfile, body []byte) string {
-	betaHeader := buildDefaultAPIKeyMimicBetaHeaderForProfile(body, true, profile)
+	betaHeader := buildDefaultAPIKeyMimicBetaHeaderForProfile(body, true, false, profile)
 	betas := splitAnthropicBetaTokens(betaHeader)
 	if officialAnthropicBodyRequiresAdvancedToolUse(body) {
 		betas = appendAnthropicBetaToken(betas, "advanced-tool-use-2025-11-20")
