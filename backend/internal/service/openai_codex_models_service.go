@@ -585,11 +585,16 @@ func (s *OpenAIGatewayService) refreshCachedAPIKeyCodexModelsManifest(cacheKey s
 func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstream(ctx context.Context, request codexModelsManifestRequest, ifNoneMatch string) (*CodexModelsManifest, error) {
 	reqCtx, cancel := context.WithTimeout(ctx, codexModelsManifestRequestTimeout)
 	defer cancel()
-	boundCtx, bindErr := bindOfficialEgressSink(reqCtx, officialEgressSinkModelsList)
-	if bindErr != nil {
-		return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_REQUEST_FAILED", "bind Codex models official egress sink: %v", bindErr)
+	// API-Key 自定义上游是通用第三方发送，不得通过非空 SinkID 纳入官方受管
+	// 闭集：绑定后 Guard 会按 codex.models.list 的官方 route 校验第三方 URL，
+	// fail-closed 直接拒发（unknown_route）。仅官方链路绑定出站身份。
+	if !request.useAPIKeyUpstream {
+		boundCtx, bindErr := bindOfficialEgressSink(reqCtx, officialEgressSinkModelsList)
+		if bindErr != nil {
+			return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_REQUEST_FAILED", "bind Codex models official egress sink: %v", bindErr)
+		}
+		reqCtx = boundCtx
 	}
-	reqCtx = boundCtx
 	method := request.method
 	if method == "" {
 		method = http.MethodGet
