@@ -33,6 +33,8 @@
 | CS-10 Body 差分测试与单一权威门禁 | 转换版门禁 | §3.4 |
 | CS-11 service DTO 字段覆盖与条件退休 | 转换版门禁 | §3.5 |
 | CS-02 CompilerRejected 契约、CS-03 版本中立 ADR、CS-04 上游入侵面 ratchet | 范围裁剪时删除（无当前证据，不预先重构） | 仅 git 历史 |
+| CS-14 admin-test/images/quota 薄 Hook 可行性 | 创建当日降级为 OBS-02（仅上游冲突证明净收益后逐文件立项），范围裁剪后删除 | 仅 git 历史 |
+| CS-15 WS ordinal 语义与代理 context 取消 | 创建当日移出收敛主线转独立 Backlog（CS-15A/CS-15B），范围裁剪后删除 | 仅 git 历史 |
 | CS-08、CS-11B、CS-12、CS-13 | 创建当日已降级/删除/合并 | 见 `600775f89` §3.1 处置表 |
 
 §3.3（Compiler endpoint 封闭）源自 CHG-01 完成后新建立的换版约束，不对应原 CS 条目。
@@ -59,7 +61,7 @@
 | 项目 | 当前状态 | 触发条件 |
 |---|---|---|
 | alpha-search 固定 `ProfileVersion` 传参 | 待判定；定性为疑似无效兼容残留，不是正确性修复。四个 accessor 的生产消费者仍存在 | 下一真实版本换版时按 [CHG-03_ALPHA_SEARCH_VERSION_AUTHORITY.md](CHG-03_ALPHA_SEARCH_VERSION_AUTHORITY.md) 的遗留判定流程执行 mutation 判定与退休决策 |
-| changeset3 final-wire 生成器基线漂移 | 历史生成器当前不可复现（2026-08-06 实跑确认：首个 capture 六个 digest 与旧 approved delta 不符）；当前可复现 evidence authority 是 changeset6 生成器 | 任何工作准备重新引用 changeset3 生成器之前，先修复或按规格 §4.9 正式退休；在此之前不为让历史工具变绿而修改代码或重建历史证据 |
+| changeset3 历史生成入口与旧 approved-delta 契约漂移 | 不可复现的是旧生成入口（`TestGenerateChangeset3ProductionFinalWire`、`TestGenerateChangeset3ExactApprovedDeltas`）及其与旧 approved delta 的比较契约（2026-08-06 实跑确认：首个 capture 六个 digest 不符）；changeset6 生成器仍复用共享的 `changeset3BuildProductionFinalWireCaptures` 且可复现，是当前通用 56 面 final-wire authority，但不替代 §3.2 要求的 alpha-search 真实 service 链证据 | 重新引用旧生成入口前必须先修复；若决定删除旧入口或旧 approved-delta 契约，使用专用 gate/evidence retirement receipt（先例：`docs/egress/consolidation/pairing-gate-retirement.json`），并证明 changeset6 仍依赖的共享 capture builder 保持完整；规格 §4.9 面向生产兼容层，不适用于纯历史测试生成器。在此之前不为让历史工具变绿而修改代码或重建历史证据 |
 
 ### 2.2 CHG-03：alpha-search 版本单一权威（已撤销 · 墓碑）
 
@@ -86,7 +88,7 @@
 |---|---|---|
 | 工具链版本坐标 | 准备第二个真实画像 | 先运行现有工具；仅修复阻断新坐标的行为硬编码 |
 | 异画像 Active/Previous | 新版本 Campaign 已达到可验收状态 | 执行切换和回滚演练，不预先改运行架构 |
-| Compiler endpoint 封闭 | 新画像 endpoint、query 集合或值来源发生任何变化 | 逐端点验证静态封闭与可信值生产链；语义未定义的 source fail-close |
+| Compiler endpoint 封闭 | 准备第二个真实画像；endpoint、query 或值来源变化时，额外扩展结构与可信源负例 | 正例全量验证每次换版固定执行；语义未定义的 source fail-close |
 | Body 语义差分 | 新画像增加或改变 Body 条件、枚举或字段 | 先补差分测试；只有可达差异才改生产路径 |
 | service 投影字段覆盖 | 新画像增加 service 消费的执行字段 | 先证明投影完整；不以此启动 DTO 迁移工程 |
 
@@ -106,7 +108,10 @@
 同一 0.145.0 画像进行逻辑模拟。
 
 - Active 和 Previous 必须具有不同 version、profile digest 和 release digest。
-- 覆盖 Responses HTTP/WS、compact、alpha、images、models、quota、live、files 和 admin-test。
+- 覆盖 ReleaseCatalog 中全部 Runtime Sink 与 endpoint ID；当前至少包括 Responses HTTP/WS、
+  compact、alpha、images、models、OAuth refresh、quota/usage、live、files 和 admin-test。
+  必须以机器断言收口：已验证 endpoint ID 集合 == 新旧 ReleaseCatalog endpoint ID 并集，
+  防止未来新增端点因文档清单未更新而假绿。
 - 证明在途 invocation 保持旧 Bundle，新 invocation 使用新 Active。
 - 证明 fallback 不跨 Bundle，连接池按画像身份隔离。
 - 完成 canary、切换、回滚和恢复后的 final-wire 验证。
@@ -128,6 +133,10 @@
 **验收收益：**证明新画像全部端点仍处于 Compiler 静态 URL/query 封闭与 ReturnedURL 独立
 验证模型之内，避免新增调用链绕过 `server_response` 可信值通道形成假绿。行为契约见
 [CHG-01_COMPILER_STATIC_URL_CLOSURE.md](CHG-01_COMPILER_STATIC_URL_CLOSURE.md) §4。
+
+执行分层：正例全量验证（端点枚举、合法 URL 编译、静态/动态区分）在**每次真实换版固定执行**，
+即使新画像 endpoint/query 定义与旧版完全相同；新增负例与生产可信链证明在 endpoint、query
+或值来源发生变化时**增量执行**。
 
 - 逐个枚举新旧 endpoint，区分静态 target 与 ReturnedURL 动态端点。
 - Active/Previous 下所有合法静态 URL 均可编译。

@@ -67,10 +67,19 @@ header/body/TLS/release 由 bundle 编译，该值当前恰与 Active/Previous �
 
 ## 4. 衍生现存问题（不随本撤销关闭）
 
-- **changeset3 final-wire 生成器基线漂移**（撤销依据 #4）：独立排查中，结论决定更新
-  approved delta、重建基线 wire 资产，还是改用可复现的 changeset6 生成器资产。
+- **changeset3 历史生成入口与旧 approved-delta 契约漂移**（撤销依据 #4）：不可复现的是
+  旧生成入口（`TestGenerateChangeset3ProductionFinalWire`、
+  `TestGenerateChangeset3ExactApprovedDeltas`）及其与旧 approved delta 的比较契约，
+  不是共享的 `changeset3BuildProductionFinalWireCaptures`——changeset6 生成器仍复用该
+  builder 且可复现，是当前通用 56 面 final-wire authority，但不替代换版清单
+  （[OFFICIAL_EGRESS_CONVERGENCE_CHANGESETS.md](OFFICIAL_EGRESS_CONVERGENCE_CHANGESETS.md)）
+  §3.2 降级检查项要求的 alpha-search 真实 service 链证据。
   当前可复现的对照组：`CHANGESET6_POST_FINAL_WIRE_OUTPUT=<临时目录> go test ./internal/service
   -run TestGenerateChangeset6PostFinalWire -count=1`。
+- 重新引用旧生成入口前必须先修复；若决定删除旧入口或旧 approved-delta 契约，使用专用
+  gate/evidence retirement receipt（先例：`docs/egress/consolidation/pairing-gate-retirement.json`），
+  并证明 changeset6 仍依赖的共享 capture builder 保持完整。规格 §4.9 面向生产兼容层，
+  不适用于纯历史测试生成器。在此之前不为让历史工具变绿而修改代码或重建历史证据。
 - 任何后续变更集引用 final-wire 资产做门禁前，必须先验证：生成器在当前基线可复现，且
   捕获链真实经过被改的生产函数。两条有一条不成立，该门禁即无效。
 
