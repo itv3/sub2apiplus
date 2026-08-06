@@ -1,13 +1,13 @@
 # Official Egress 当前必要变更与换版验收清单
 
-> 文档状态：范围裁剪已确认；两个变更集的具体实施方案尚未确认
+> 文档状态：CHG-03 经审核撤销（见撤销记录）；仅存 CHG-01，其实施方案尚未确认
 > 最后更新：2026-08-06
 > 当前代码基线：`58d0827c3`
 > 适用范围：Sub2API 上游小侵入、Codex CLI 画像升级与 official egress 兼容层
 
 ## 1. 文档目的
 
-本文只跟踪当前已有明确证据、值得单独实施的小变更（当前为两个），并记录下一次 Codex CLI 换版必须
+本文只跟踪当前已有明确证据、值得单独实施的小变更（当前为一个），并记录下一次 Codex CLI 换版必须
 通过的验收门禁。换版门禁不是当前开发任务，不分配负责人、排期或预先重构稳定代码。
 
 全部工作遵守以下原则：
@@ -22,13 +22,10 @@
 
 | 序 | ID | 变更集 | 优先级 | 依赖 | 状态 |
 |---:|---|---|---:|---|---|
-| 1 | CHG-03 | alpha-search 版本单一权威 | 中 | 无 | 待启动 |
-| 2 | CHG-01 | Compiler 静态 URL 封闭 | 高 | 无 | 待启动 |
+| 1 | CHG-01 | Compiler 静态 URL 封闭 | 高 | 无 | 待启动 |
 
-执行顺序为 CHG-03 → CHG-01，与优先级次序不同：CHG-01 优先级高是因为它关系最终权威边界，
-但它当前不可从公网利用，且回归面覆盖全部静态端点，需要独立的验证窗口；CHG-03 影响面限于
-单端点，先做可以在低风险改动上先跑通流程。两项都必须在下一次 Codex CLI 换版之前完成——
-换版后 Active/Previous 变为异版本，两项的验证成本都会翻倍。
+CHG-01 单独推进，必须在下一次 Codex CLI 换版之前完成——换版后 Active/Previous 变为异版本，
+其覆盖全部静态端点的回归验证成本会翻倍。CHG-03 已于 2026-08-06 经审核撤销，见下方撤销记录。
 
 已完成的变更集从本表和正文中移除，实施记录以 git 历史为准。
 
@@ -41,50 +38,35 @@
 
 ---
 
-## CHG-03：alpha-search 版本单一权威
+## CHG-03：alpha-search 版本单一权威（已撤销）
 
-**实施收益：**完成后，alpha-search 的出站 target 与 Executor 编译的 header、body、TLS 和执行
-release 都来自同一个已冻结 ReleaseBundle，不会在未来 Active/Previous 使用不同 Codex CLI 版本时
-出现「请求 URL 来自全局 catalog、bundle 来自 runtime catalog」的分叉。该调整只消除一个明确的
-版本权威分叉，不改动 alpha-search 业务语义。
+**撤销日期：**2026-08-06（基线 `58d0827c3`，三方审核 `changes_requested`，复核逐条属实）
 
-**状态：**待启动
-**优先级：**中
-**依据：**OAuth alpha-search 已按 mode 解析 runtime state 和 endpoint，但创建
-`OfficialEgressContext` 时仍提交固定 `officialCodexProfileVersion`，且 endpoint 与 URL 各查一次
-全局 catalog，与 Executor 持有的 bundle 之间只有 mode 字符串这一层弱等价。
+**撤销依据要点：**
 
-### 实施范围
+1. alpha-search 的 target 解析与 Executor 的 bundle 解析查询的是同一个 `sync.OnceValues`
+   进程级不可变单例 `DefaultReleaseCatalog()`，生产 wiring 无第二 catalog 注入口，mode 在
+   请求内冻结。「URL 来自全局 catalog、bundle 来自 runtime catalog 且可能分叉」无生产可达
+   失败链；换版在现有架构下是同一 catalog 装两个版本、按 mode 各查各槽位，不形成混搭。
+2. 原方案需先新增公共导出与 runtime catalog 参数化，才能在测试中制造生产不存在的分叉条件，
+   再以此证明修复必要——论证倒置，且与本文原则 3/4 冲突。
+3. 原方案 §6 引用的 changeset3 final-wire 门禁在当前基线不可复现（生成器实跑失败，六个
+   digest 与旧 approved delta 不符）；且其 alpha-search capture 由测试自建 target 直进
+   `invocation.Execute`，不经过 `ForwardAlphaSearch`/`buildOpenAIAlphaSearchRequest`，
+   不能作为被改路径的回归证据。
+4. 固定 `ProfileVersion` 传参当前证据只支持「疑似无效兼容残留」，不构成「版本权威正确性
+   修复」的必要性；其判定与退休作为独立遗留项跟踪。
 
-- 删除 alpha-search Executor 路径中无消费者的固定 `ProfileVersion`；若前置判定证明该兼容字段
-  仍有消费者，则改为从已冻结 ReleaseBundle 唯一派生。
-- 保证 mode、endpoint、URL 与 Executor 执行来自同一个 bundle 实例。
-- 增加 Active/Previous 版本不同的 alpha-search 夹具测试；合成画像必须内部一致，不得只改顶层
-  `Version`（其余行为相关版本坐标不同步会形成假绿）。
-- 只处理 alpha-search 生产路径中的行为相关固定版本。
+**后续处置：**
 
-### 非目标
+- alpha-search target 与执行 bundle 的同源性验证降级为换版门禁 §3.2 的实证检查项。
+- 固定 `ProfileVersion` 残留判定与退休流程见
+  [CHG-03_ALPHA_SEARCH_VERSION_AUTHORITY.md](CHG-03_ALPHA_SEARCH_VERSION_AUTHORITY.md)
+  （已改写为撤销记录与遗留判定项）。
+- changeset3 final-wire 生成器基线漂移是独立现存问题，单独排查，不随本撤销关闭。
 
-- 不将当前同版本 Active/Previous 下的潜在问题定级为生产故障。
-- 不改 alpha-search、PAT Responses fallback 或 API Key 的产品语义。
-- 不机械删除历史证据、画像和测试夹具中的 `0.145.0`。
-- 不重构 alpha-search 的 ingress runtime 绑定与 body 预投影（二者仍按冻结 mode 消费全局
-  catalog，与出站 bundle 无关）。
-
-### 验收标准
-
-- alpha-search 生产路径不再同时持有 mode 与独立固定 version 权威。
-- 两个不同版本夹具可以分别解析自己的 endpoint/profile，且合成画像通过内部一致性自检。
-- 异版本断言绑定到执行期 bundle 编译出的 wire 事实（`version` header、User-Agent、TLS 摘要），
-  而非 `bundle.Version()` 这一个标量。
-- 当前 0.145.0 OAuth、API Key 和 PAT 行为不变，final-wire 空允许列表零差异。
-
-### 跟踪记录
-
-- 方案：[CHG-03_ALPHA_SEARCH_VERSION_AUTHORITY.md](CHG-03_ALPHA_SEARCH_VERSION_AUTHORITY.md)（待审核）
-- 实现：待补充
-- 测试：待补充
-- 完成日期：待补充
+**复活条件：**出现真实 mixed-version wire、生产 catalog 可分叉路径，或 §3.2 实证检查失败时，
+按当时事实重新立项最小修复。
 
 ---
 
@@ -160,6 +142,15 @@ method、hostname、path 和 protocol，未完整封闭静态 URL。
 - 证明在途 invocation 保持旧 Bundle，新 invocation 使用新 Active。
 - 证明 fallback 不跨 Bundle，连接池按画像身份隔离。
 - 完成 canary、切换、回滚和恢复后的 final-wire 验证。
+- alpha-search direct 路径逐 mode 实证 target（URL、method、Host）与 invocation bundle 编译
+  产物（`version` header、User-Agent、TLS 摘要、release/profile digest）同源
+  （CHG-03 撤销后降级至此；实证失败才立最小修复项）。
+- 上述实证的捕获链必须真实经过 `ForwardAlphaSearch → buildOpenAIAlphaSearchRequest →
+  invocation.Execute`，且所用 final-wire 生成器在当前基线可复现；绕过 service 层的通用
+  Executor capture 不得作为证据。
+- 若使用合成异版本画像，必须整体替换全部行为相关版本坐标（正式画像共 34 处 `0.145.0`，
+  含 `version` header、User-Agent 与 `client_version` query）并自检无残留；`profilecontract`
+  不做跨字段一致性校验，只改顶层 `Version` 会假绿。
 
 ### 3.3 Body 语义差分
 

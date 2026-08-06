@@ -218,15 +218,6 @@ func TestOfficialEgressWebSocketAliasUsesCanonicalEndpoint(t *testing.T) {
 	require.Equal(t, "/v1/responses", egressContext.InboundEndpoint())
 }
 
-func indexOfString(values []string, target string) int {
-	for index, value := range values {
-		if value == target {
-			return index
-		}
-	}
-	return -1
-}
-
 func countString(values []string, target string) int {
 	count := 0
 	for _, value := range values {
