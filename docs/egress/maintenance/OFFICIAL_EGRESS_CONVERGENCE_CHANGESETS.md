@@ -18,26 +18,8 @@
 4. 当前 wire 没有错误时，不因结构看起来重复而修改生产路径。
 5. Previous 仍依赖的兼容能力不得提前退休。
 
-### 1.1 清单来历
-
-本清单由 2026-08-05 的原 15 项调研清单（CS 编号，全文见 git `600775f89`）经必要性复核与
-2026-08-06 范围裁剪（git `01dbf1edf`）演化而来。处置对照：
-
-| 原条目 | 处置 | 现所在 |
-|---|---|---|
-| CS-01 Compiler 静态 URL 封闭 | 更名 CHG-01，2026-08-06 实施完成并合入 | git `ffdf43f30`；行为契约与实施、复审记录见 [CHG-01_COMPILER_STATIC_URL_CLOSURE.md](CHG-01_COMPILER_STATIC_URL_CLOSURE.md) |
-| CS-09 alpha-search 版本权威 | 更名 CHG-03，2026-08-06 审核撤销 | §2.2 墓碑与 [CHG-03_ALPHA_SEARCH_VERSION_AUTHORITY.md](CHG-03_ALPHA_SEARCH_VERSION_AUTHORITY.md) |
-| CS-06 Makefile 与工具链版本参数化 | 转换版门禁 | §3.1 |
-| CS-05 Campaign/candidate 边界修订 | 坐标生成与校验要求并入门禁，其余删除 | §3.1（部分） |
-| CS-07 真实异画像 active/previous 演练 | 转换版门禁 | §3.2 |
-| CS-10 Body 差分测试与单一权威门禁 | 转换版门禁 | §3.4 |
-| CS-11 service DTO 字段覆盖与条件退休 | 转换版门禁 | §3.5 |
-| CS-02 CompilerRejected 契约、CS-03 版本中立 ADR、CS-04 上游入侵面 ratchet | 范围裁剪时删除（无当前证据，不预先重构） | 仅 git 历史 |
-| CS-14 admin-test/images/quota 薄 Hook 可行性 | 创建当日降级为 OBS-02（仅上游冲突证明净收益后逐文件立项），范围裁剪后删除 | 仅 git 历史 |
-| CS-15 WS ordinal 语义与代理 context 取消 | 创建当日移出收敛主线转独立 Backlog（CS-15A/CS-15B），范围裁剪后删除 | 仅 git 历史 |
-| CS-08、CS-11B、CS-12、CS-13 | 创建当日已降级/删除/合并 | 见 `600775f89` §3.1 处置表 |
-
-§3.3（Compiler endpoint 封闭）源自 CHG-01 完成后新建立的换版约束，不对应原 CS 条目。
+本清单由原 15 项调研清单（git `600775f89`）经 2026-08-06 范围裁剪（git `01dbf1edf`）演化
+而来，被裁剪条目的处置以该两个提交为准。
 
 ## 2. 当前变更集
 
@@ -66,13 +48,11 @@
 ### 2.2 CHG-03：alpha-search 版本单一权威（已撤销 · 墓碑）
 
 - **撤销日期：**2026-08-06（基线 `58d0827c3`，三方审核 `changes_requested`，复核逐条属实）。
-- **核心原因：**alpha-search 的 target 解析与 Executor 的 bundle 解析同源于进程级不可变单例
-  `DefaultReleaseCatalog()`，生产 wiring 无第二 catalog 注入口，「URL 与 bundle 可能分叉」无
-  生产可达失败链；原方案需先新增导出与参数化制造生产不存在的分叉条件才能证明修复必要，
-  论证倒置，与本文原则 3/4 冲突。
+- **核心原因：**目标解析与 bundle 解析同源于进程级不可变单例 catalog，无生产可达分叉链；
+  原方案需先制造生产不存在的条件才能证明修复必要，论证倒置。
 - **完整撤销记录：**[CHG-03_ALPHA_SEARCH_VERSION_AUTHORITY.md](CHG-03_ALPHA_SEARCH_VERSION_AUTHORITY.md)
   （含全部撤销依据与遗留判定项）。
-- **遗留判定项：**见 §2.1；alpha-search target 与执行 bundle 的同源性验证降级为 §3.2 实证检查项。
+- **遗留判定项：**见 §2.1 与 §3.2 降级检查项。
 - **复活条件：**出现真实 mixed-version wire、生产 catalog 可分叉路径，或 §3.2 实证检查失败时，
   按当时事实重新立项最小修复。
 
@@ -121,8 +101,7 @@
 - 上述实证的捕获链必须真实经过 `ForwardAlphaSearch → buildOpenAIAlphaSearchRequest →
   invocation.Execute`，且所用 final-wire 生成器在当前基线可复现；绕过 service 层的通用
   Executor capture 不得作为证据。
-- 若使用合成异版本画像（按本节前言仅限工具链预检、mutation 与门禁判据自测，不得作为正式
-  换版验收证据），必须整体替换全部行为相关版本坐标：当前每份正式 0.145.0 画像各有 34 处
+- 若使用合成异版本画像（用途限定见本节前言），必须整体替换全部行为相关版本坐标：当前每份正式 0.145.0 画像各有 34 处
   版本坐标（含 `version` header、User-Agent 与 `client_version` query），构造单个合成目标
   快照时必须替换对该快照机器扫描得到的全部命中，并在生成前后输出命中集合与集合摘要；
   「34」只是当前基线事实，不作为未来固定常量。`profilecontract` 不做跨字段一致性校验，
