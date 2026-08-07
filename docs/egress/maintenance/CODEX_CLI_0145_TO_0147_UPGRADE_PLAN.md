@@ -1,6 +1,6 @@
 # Codex CLI 0.145.0 → 0.147.0 Official Egress 升级计划（执行中）
 
-> 状态：DOC-PRE、P0 与 P0 最小修复已完成；下一步执行第 6 章正式 Campaign
+> 状态：正式 Campaign 已到达 `planned`；下一步执行 `capture-official run/seal`
 > 创建日期：2026-08-07
 > 审阅基线：commit `abf236375f66aa096580092e646c4e33d37bb135`
 > 基线画像：Codex CLI `0.145.0`
@@ -279,9 +279,16 @@ final-wire 可用，但不能替代 alpha 真实 service 链或 `server_response
 - 0.145→临时完整 0.147 异版本 mutation 的 dump、三坐标和 Compiler 并集门禁全绿；
 - P0 最终 `plan` 加载 42 条规则、25 个任务，工具身份 80 项、摘要 `fa8fc9fa…`；
 - 未发送真实请求、未切 Active、未把合成画像写入仓库。
+- Vircs 已新增独立 `capture-cli-0147`，主 CLI/relay 均为 0.147.0，二进制摘要
+  `cb0a1556…`；原 `capture-cli` 与 `codex-0.145.0` 保留且可运行；
+- 正式 Campaign 为 `codex-0145-to-0147-20260807T161000Z`，目录位于
+  `Vircs:/root/oauth-capture/campaigns/`，`campaign.json` 摘要 `110fdfcd…`；
+- 正式 Campaign 冻结 Linux/x86_64、目标源码摘要 `1909e288…`、42 条规则、25 个任务和
+  工具摘要 `fa8fc9fa…`，状态为 `planned`；
+- 首次 `T160500Z` Campaign 在创建后复核发现源码归档带入 AppleDouble 文件，摘要不符；
+  该目录保持不可变并废弃，不进入任何后续阶段。
 
-下一步严格执行第 6 章：只能在 Ubuntu 24.04 / x86_64 的 Vircs 抓包环境复核
-runtime image RepoDigest、解压后二进制和 `codex --version`，然后在持久目录创建正式
-Campaign。不得把本机 P0 Campaign 当正式 Campaign。
+下一步严格执行第 6.2 节：在上述正式 Campaign 中运行并封存 0.147 官方证据；任何失败
+必须创建新 attempt，不得复用废弃 Campaign 或 P0 临时证据。
 
 用户已授权按第 5→6→7→8→9 章连续执行；每个变更集完成并自复核后自动进入下一项。
