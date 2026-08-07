@@ -1,6 +1,6 @@
 # Codex CLI 0.145.0 → 0.147.0 Official Egress 升级计划（执行中）
 
-> 状态：正式 Campaign 已完成 `official_sealed`；分类已完成 `profile_approved`；下一步建立 0.147 候选画像
+> 状态：当前 Campaign 已完成 `profile_approved`，但第 7 章候选画像生成因摘要不一致阻断；待修正画像摘要后重新开立 Campaign
 > 创建日期：2026-08-07
 > 审阅基线：commit `abf236375f66aa096580092e646c4e33d37bb135`
 > 基线画像：Codex CLI `0.145.0`
@@ -256,6 +256,19 @@ Campaign 的 `classification/approved/`，并通过 stage-contract、文件摘�
 8. **Body/投影**：只有新增或变化的条件、枚举、字段才触发生产改动；不可达差异只记录
    测试。新增 service 消费字段必须做字段覆盖或逐叶 mutation，digest 相同不能证明完整。
 
+### 7.3 本次候选生成阻断
+
+对批准的 `profile.json` 执行 `egresscatalogstage` 时，机器复算为
+`0d86e033716ab2b7d2161a7015ad000bc0d7cedfaa9e130342eec4ba0637ef9f`，而清单声明为
+`5b209c2400321feda8c45592d80dcdf82dd4806235daf4bfdd30acba20becc43`。差异来自分类封存时
+对画像嵌套 JSON 的键序规范化，而画像摘要仍按未排序源序计算；这不是版本行为证据，不能
+通过只改顶层版本或放宽导入器校验解决。
+
+已完成最小工具修复（`7de2404bd`）：候选导入先压缩 RawMessage 空白并增加格式化批准副本
+测试；`make check-egress-spec` 已复核通过。当前 Campaign 仍不可变，不删除或覆盖其
+`official/`、`classification/approved/`；必须以 Go 画像准备器生成正确摘要，重新建立
+独立 Campaign 并重新完成官方取证/分类，禁止复用当前 Campaign 的目标证据。
+
 ## 8. Candidate、比较与 `ready`
 
 Candidate 必须固定 commit/tree/build ID/deploy version/OCI digest/image ID/profile digest，
@@ -307,8 +320,8 @@ final-wire 可用，但不能替代 alpha 真实 service 链或 `server_response
 - Vircs 保留原 `capture-cli`/0.145 运行点，并新增 `capture-cli-0147`；正式采集使用
   `--pid host`、Linux/x86_64、runtime image `oauth-egress-capture-capture-cli@sha256:3438c4e0…`；
 - 旧的 `T160500Z`、`T161000Z`、`T163600Z` Campaign/attempt 均保持不可变并标记失败或废弃，
-  不复用其证据；当前 `T170500Z` 已完成 `official_sealed` 与 `profile_approved`；
-- 下一步严格执行第 7 节：先生成并复核不切 Active 的内容寻址 0.147 画像候选，再执行第二
-  版本门禁；当前目标 Profile digest 为 `5b209c24…`，分类联合摘要为 `548e9fd7…`。
+  不复用其证据；当前 `T170500Z` 的官方取证与分类已封存，但候选生成被 §7.3 阻断；
+- 下一步重新执行第 6 章：以 Go 画像准备器生成正确摘要、建立新 Campaign 并重新完成官方
+  取证和分类；当前 Campaign 的目标证据不迁移、不复用。
 
 用户已授权按第 5→6→7→8→9 章连续执行；每个变更集完成并自复核后自动进入下一项。
