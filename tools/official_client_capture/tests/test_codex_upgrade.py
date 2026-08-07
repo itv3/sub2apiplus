@@ -1131,7 +1131,9 @@ class CodexUpgradeTest(unittest.TestCase):
             / "candidate_rule_expectations_0_145_0.json"
         )
         payload = json.loads(frozen_path.read_text(encoding="utf-8"))
-        payload["codex_version"] = version
+        payload = json.loads(
+            json.dumps(payload, ensure_ascii=False).replace("0.145.0", version)
+        )
         spec_path = Path(__file__).resolve().parents[3] / (
             "docs/CODEX_CLI_0145_EGRESS_SPEC.md"
         )
@@ -1636,6 +1638,97 @@ class CodexUpgradeTest(unittest.TestCase):
             )
             self.assertEqual(return_code, 1)
             self.assertIn("断言画像 codex_version 不一致", stderr)
+
+    def test_classify_draft_rewrites_every_nested_version_coordinate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            campaign_dir, manifest = self._create_campaign(root)
+            self._seal_official_stage(root, campaign_dir, manifest)
+
+            receipt = codex_upgrade.classify_campaign(campaign_dir)
+            self.assertEqual(receipt["status"], "draft")
+            replacement = receipt["assertion_version_replacements"]
+            self.assertEqual(replacement["baseline_version"], "0.145.0")
+            self.assertEqual(replacement["target_version"], "0.146.0")
+            self.assertEqual(replacement["count"], 11)
+            self.assertEqual(len(replacement["paths"]), 11)
+
+            assertion_profile = json.loads(
+                (Path(receipt["path"]) / "assertion-profile.json").read_text(
+                    encoding="utf-8"
+                )
+            )
+            self.assertNotIn(
+                "0.145.0",
+                json.dumps(assertion_profile, ensure_ascii=False),
+            )
+            coordinates = codex_upgrade._assertion_profile_version_coordinates(
+                assertion_profile
+            )
+            self.assertTrue(coordinates)
+            self.assertEqual({version for _, version in coordinates}, {"0.146.0"})
+
+    def test_classify_rejects_nested_baseline_version_after_top_level_update(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            campaign_dir, manifest = self._create_campaign(root)
+            self._seal_official_stage(root, campaign_dir, manifest)
+            target, migration, scenario, profile, assertion_profile, _ = (
+                self._write_classification_manifests(root)
+            )
+            payload = json.loads(assertion_profile.read_text(encoding="utf-8"))
+            identity = next(
+                check["assertion"]["value"]
+                for rule in payload["rules"]
+                for check in rule["checks"]
+                if isinstance(check["assertion"].get("value"), dict)
+                and "user_agent_prefix" in check["assertion"]["value"]
+            )
+            identity["user_agent_prefix"] = "codex_exec/0.145.0"
+            self._write_json(assertion_profile, payload)
+
+            return_code, _, stderr = self._run_main(
+                self._classification_arguments(
+                    campaign_dir,
+                    (target, migration, scenario, profile, assertion_profile),
+                )
+            )
+            self.assertEqual(return_code, 1)
+            self.assertIn("仍残留 baseline 版本坐标", stderr)
+
+    def test_classify_rejects_non_target_behavior_version_coordinate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            campaign_dir, manifest = self._create_campaign(root)
+            self._seal_official_stage(root, campaign_dir, manifest)
+            target, migration, scenario, profile, assertion_profile, _ = (
+                self._write_classification_manifests(root)
+            )
+            payload = json.loads(assertion_profile.read_text(encoding="utf-8"))
+            query_pair = next(
+                pair
+                for rule in payload["rules"]
+                for check in rule["checks"]
+                for pair in (
+                    check["assertion"].get("value", {}).get("query_pairs", [])
+                    if isinstance(check["assertion"].get("value"), dict)
+                    else []
+                )
+                if pair[0] == "client_version"
+            )
+            query_pair[1] = "0.144.0"
+            self._write_json(assertion_profile, payload)
+
+            return_code, _, stderr = self._run_main(
+                self._classification_arguments(
+                    campaign_dir,
+                    (target, migration, scenario, profile, assertion_profile),
+                )
+            )
+            self.assertEqual(return_code, 1)
+            self.assertIn("行为版本坐标与 target_version 不一致", stderr)
 
     def test_classify_supports_explicit_rule_add_delete_and_change(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

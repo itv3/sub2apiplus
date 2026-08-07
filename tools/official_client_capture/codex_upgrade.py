@@ -111,6 +111,10 @@ MIGRATION_CLASSIFICATIONS = {
 ASSERTION_STATUSES = {"pass", "fail", "blocked", "not_applicable"}
 REQUIRED_CLIENT_BINDINGS = frozenset({"kilo-compatible", "kilo-responses"})
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
+CODEX_USER_AGENT_VERSION_RE = re.compile(
+    r"(?:codex_exec|codex-tui|codex_cli_rs)/(\d+\.\d+\.\d+)"
+    r"|\((?:codex_exec|codex-tui|codex_cli_rs);\s*(\d+\.\d+\.\d+)\)"
+)
 SHA256_RE = re.compile(r"^[a-f0-9]{64}$")
 RUN_NONCE_RE = SHA256_RE
 SAFE_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
@@ -5599,6 +5603,132 @@ def _classification_differences(
     return source_diff, official_diff
 
 
+def _json_pointer(path: tuple[str, ...]) -> str:
+    """把 JSON 遍历路径编码为稳定、可审核的 JSON Pointer。"""
+
+    if not path:
+        return ""
+    return "/" + "/".join(
+        part.replace("~", "~0").replace("/", "~1") for part in path
+    )
+
+
+def _replace_json_string_literal(
+    value: Any,
+    old: str,
+    new: str,
+    path: tuple[str, ...] = (),
+) -> tuple[Any, list[str]]:
+    """只替换 JSON 字符串中的版本字面，并返回全部受影响坐标。"""
+
+    if isinstance(value, dict):
+        result: dict[str, Any] = {}
+        changed: list[str] = []
+        for key, child in value.items():
+            replaced, child_paths = _replace_json_string_literal(
+                child,
+                old,
+                new,
+                (*path, str(key)),
+            )
+            result[key] = replaced
+            changed.extend(child_paths)
+        return result, changed
+    if isinstance(value, list):
+        result_list: list[Any] = []
+        changed = []
+        for index, child in enumerate(value):
+            replaced, child_paths = _replace_json_string_literal(
+                child,
+                old,
+                new,
+                (*path, str(index)),
+            )
+            result_list.append(replaced)
+            changed.extend(child_paths)
+        return result_list, changed
+    if isinstance(value, str) and old in value:
+        return value.replace(old, new), [_json_pointer(path)]
+    return value, []
+
+
+def _json_string_paths_containing(
+    value: Any,
+    literal: str,
+    path: tuple[str, ...] = (),
+) -> list[str]:
+    """列出仍含指定版本字面的所有 JSON 字符串坐标。"""
+
+    if isinstance(value, dict):
+        return [
+            pointer
+            for key, child in value.items()
+            for pointer in _json_string_paths_containing(
+                child,
+                literal,
+                (*path, str(key)),
+            )
+        ]
+    if isinstance(value, list):
+        return [
+            pointer
+            for index, child in enumerate(value)
+            for pointer in _json_string_paths_containing(
+                child,
+                literal,
+                (*path, str(index)),
+            )
+        ]
+    if isinstance(value, str) and literal in value:
+        return [_json_pointer(path)]
+    return []
+
+
+def _assertion_profile_version_coordinates(
+    value: Any,
+    path: tuple[str, ...] = (),
+) -> list[tuple[str, str]]:
+    """提取断言画像中具有 Codex 版本语义的字段、header/query 与 UA 坐标。"""
+
+    coordinates: list[tuple[str, str]] = []
+    if isinstance(value, dict):
+        for key, child in value.items():
+            child_path = (*path, str(key))
+            if (
+                key in {"codex_version", "client_version", "version"}
+                and isinstance(child, str)
+                and VERSION_RE.fullmatch(child)
+            ):
+                coordinates.append((_json_pointer(child_path), child))
+            coordinates.extend(
+                _assertion_profile_version_coordinates(child, child_path)
+            )
+        return coordinates
+    if isinstance(value, list):
+        if (
+            len(value) == 2
+            and isinstance(value[0], str)
+            and value[0].lower() in {"client_version", "version"}
+            and isinstance(value[1], str)
+            and VERSION_RE.fullmatch(value[1])
+        ):
+            coordinates.append((_json_pointer((*path, "1")), value[1]))
+        for index, child in enumerate(value):
+            coordinates.extend(
+                _assertion_profile_version_coordinates(
+                    child,
+                    (*path, str(index)),
+                )
+            )
+        return coordinates
+    if isinstance(value, str):
+        matches = CODEX_USER_AGENT_VERSION_RE.finditer(value)
+        for index, match in enumerate(matches, 1):
+            version = next(group for group in match.groups() if group is not None)
+            coordinates.append((f"{_json_pointer(path)}#ua-{index}", version))
+    return coordinates
+
+
 def _write_classification_draft(
     campaign_dir: Path,
     manifest: dict[str, Any],
@@ -5687,6 +5817,11 @@ def _write_classification_draft(
         json.dumps(assertion_profile, ensure_ascii=False)
     )
     assertion_profile["codex_version"] = manifest["target_version"]
+    assertion_profile, assertion_version_paths = _replace_json_string_literal(
+        assertion_profile,
+        manifest["baseline_version"],
+        manifest["target_version"],
+    )
     secure_write_json(draft_root / "target-rules.json", target_rules)
     secure_write_json(draft_root / "rule-migration.json", migration)
     secure_write_json(draft_root / "scenarios.json", scenario)
@@ -5699,6 +5834,12 @@ def _write_classification_draft(
         "source_added": source_diff.get("added_count", 0),
         "dynamic_added": official_diff.get("added_count", 0),
         "blocked_discoveries": len(discoveries),
+        "assertion_version_replacements": {
+            "baseline_version": manifest["baseline_version"],
+            "target_version": manifest["target_version"],
+            "count": len(assertion_version_paths),
+            "paths": assertion_version_paths,
+        },
     }
     secure_write_json(draft_root / "draft.json", receipt)
     return receipt
@@ -5707,6 +5848,7 @@ def _write_classification_draft(
 def _validate_assertion_profile_manifest(
     payload: dict[str, Any],
     *,
+    baseline_version: str,
     target_version: str,
     target_rules: tuple[str, ...],
 ) -> None:
@@ -5716,6 +5858,30 @@ def _validate_assertion_profile_manifest(
         raise ConfigurationError("目标断言画像 schema_version 不受支持。")
     if payload.get("codex_version") != target_version:
         raise ConfigurationError("目标断言画像 codex_version 不一致。")
+    stale_paths = _json_string_paths_containing(payload, baseline_version)
+    if baseline_version != target_version and stale_paths:
+        raise ConfigurationError(
+            "目标断言画像仍残留 baseline 版本坐标："
+            + ", ".join(stale_paths[:8])
+        )
+    version_coordinates = _assertion_profile_version_coordinates(payload)
+    behavior_coordinates = [
+        (path, version)
+        for path, version in version_coordinates
+        if path != "/codex_version"
+    ]
+    if not behavior_coordinates:
+        raise ConfigurationError("目标断言画像缺少可审核的行为版本坐标。")
+    mismatches = [
+        (path, version)
+        for path, version in behavior_coordinates
+        if version != target_version
+    ]
+    if mismatches:
+        raise ConfigurationError(
+            "目标断言画像行为版本坐标与 target_version 不一致："
+            + ", ".join(f"{path}={version}" for path, version in mismatches[:8])
+        )
     source_spec = payload.get("source_spec")
     source_sha = payload.get("source_spec_sha256")
     if not isinstance(source_spec, str) or not SHA256_RE.fullmatch(str(source_sha)):
@@ -5869,6 +6035,7 @@ def classify_campaign(
     )
     _validate_assertion_profile_manifest(
         assertion_profile_payload,
+        baseline_version=manifest["baseline_version"],
         target_version=manifest["target_version"],
         target_rules=target_rules,
     )
