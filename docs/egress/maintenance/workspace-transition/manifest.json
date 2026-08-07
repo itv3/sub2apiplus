@@ -3,9 +3,9 @@
   "base_commit": "ba485663c3bc0af6802cf6dfc4e19139ef00e371",
   "retirement_receipt": "docs/egress/maintenance/official-egress-consolidation-retirement.json",
   "retirement_receipt_sha256": "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36",
-  "candidate_path_count": 776,
-  "transition_entry_count": 776,
-  "transition_path_set_sha256": "ddece0eed0a1e08183d7669c9ce918f236811032a67003b13a95f153ccb82d71",
+  "candidate_path_count": 777,
+  "transition_entry_count": 777,
+  "transition_path_set_sha256": "21dd7efbe64cdbf7d12096d5a4267a6c3078e9ef25552854908baeb87757f599",
   "entries": [
     {
       "path": ".github/workflows/backend-ci.yml",
@@ -11903,6 +11903,30 @@
         "mode": "0644",
         "size": 7236,
         "sha256": "a1a9dcf9c7781ce217b294eae1fb311a28ece8bb98a78f032d1897d26b703108"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "docs/egress/maintenance/CODEX_CLI_0145_TO_0147_P0_REPORT.md",
+      "scope": "documentation_and_receipts",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 8017,
+        "sha256": "a18ebfcd70800e6d3b350fb3ad7f0bb0dd65121fae42be1fbe7bfc6bfeef015e"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
