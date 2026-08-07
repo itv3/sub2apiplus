@@ -41,6 +41,13 @@ CONTAINER_STATUS_VALUES = {
 }
 CONTAINER_HEALTH_VALUES = {"none", "starting", "healthy", "unhealthy"}
 MOUNT_TYPE_VALUES = {"bind", "volume", "tmpfs", "npipe", "cluster"}
+ACCOUNT_MUTABLE_EXTRA_KEY_PATTERNS = (
+    "codex_primary_*",
+    "codex_secondary_*",
+    "codex_5h_*",
+    "codex_7d_*",
+    "codex_usage_updated_at",
+)
 STATE_FILES = {
     "service": "service-state.json",
     "containers": "containers-state.json",
@@ -531,7 +538,18 @@ SELECT json_build_object(
             false
         ) FROM selected),
     'extra_digest',
-        (SELECT md5(COALESCE((row_data->'extra')::text, 'null')) FROM selected)
+        (SELECT md5(COALESCE((
+            SELECT jsonb_object_agg(extra_entry.key, extra_entry.value)
+            FROM jsonb_each(COALESCE(row_data->'extra', '{{}}'::jsonb))
+                AS extra_entry(key, value)
+            WHERE NOT (
+                extra_entry.key LIKE 'codex_primary_%'
+                OR extra_entry.key LIKE 'codex_secondary_%'
+                OR extra_entry.key LIKE 'codex_5h_%'
+                OR extra_entry.key LIKE 'codex_7d_%'
+                OR extra_entry.key = 'codex_usage_updated_at'
+            )
+        ), '{{}}'::jsonb)::text) FROM selected)
 );
 """
     key_sql = f"""
@@ -578,6 +596,8 @@ SELECT json_build_object(
             "exists": account_exists,
             "extra_digest": extra_digest,
             "extra_digest_algorithm": "md5",
+            "extra_digest_scope": "stable_extra_v1",
+            "extra_ignored_key_patterns": list(ACCOUNT_MUTABLE_EXTRA_KEY_PATTERNS),
             "id": _require_int(
                 account.get("id"),
                 "账号 ID",
