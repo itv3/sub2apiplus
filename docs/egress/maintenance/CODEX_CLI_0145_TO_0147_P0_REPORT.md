@@ -1,6 +1,6 @@
 # Codex CLI 0.145.0 → 0.147.0 P0 预检报告
 
-> 状态：P0 已完成，正式 Campaign 暂不允许创建
+> 状态：P0 与全部最小修复已完成；允许在 Vircs 环境创建正式 Campaign
 > 执行日期：2026-08-07
 > 执行基线：commit `136cef5c5035aeb9b9fdc75bccb2081e17d62cdf`
 > 实施依据：[`CODEX_CLI_0145_TO_0147_UPGRADE_PLAN.md`](CODEX_CLI_0145_TO_0147_UPGRADE_PLAN.md) §5
@@ -8,8 +8,8 @@
 ## 1. 结论
 
 P0 未发送真实请求、未创建正式 Campaign、未修改生产画像。健康基线全部通过；使用真实
-0.147 源码和官方 Linux CLI 身份完成的预检确认了 12 项阻断。必须按第 7 节逐个修复并
-复验，全部完成后才能进入实施计划 §6。
+0.147 源码和官方 Linux CLI 身份完成的预检确认了 12 项阻断，现已按第 7 节逐项修复、
+独立复核并提交。P0 总复验通过，可以进入实施计划 §6。
 
 原先怀疑的三处 baseline `0.145.0` 默认值不是 `plan` 静默回退。原始 `plan` 的首个真实
 失败是场景清单绑定的 SPEC 第二章摘要过期；仅在临时副本修正该摘要后，42 条规则和 25
@@ -109,19 +109,21 @@ release graph、binding 和 enums dump 在临时旁路画像上均可复算。�
 `candidate_test_trace.py` 还把版本固定为 `0.145.0` 且无显式目标版本输入。上述工具都必须
 在正式 `plan` 前完成修复，否则 Campaign 会冻结错误的工具身份。
 
-## 7. 后续最小变更集顺序
+## 7. 最小变更集完成记录
 
-严格一次一个变更集，每项完成后复核并跑完整门禁，再进入下一项：
+已严格按以下顺序一次完成一个变更集；每项均在提交前完成定向测试、完整门禁和自复核：
 
-1. `P0-A-ENV01`：修复扫描器对 package load error 的假绿；
-2. `P0-B01/D06`：补齐 SPEC/画像摘要扇出和完整性测试；
-3. `P0-D01/D04`：建立 candidate target-version 单一权威，参数化脚本、relay、gateway、guard、trace 与版本化 Schema；
-4. `P0-D02`：classify 草案与批准校验增加全行为坐标一致性门禁；
-5. `P0-C01/C02/C03/C04/C05`：补齐异版本 Catalog、transport receipt、Makefile、文件数、Compiler 并集门禁；
-6. `P0-D03`：新增 approved Profile → 内容寻址 RuntimeCatalog 的确定性导入/校验入口。
+1. `e887085fb`：`P0-A-ENV01`，package load error 失败关闭；
+2. `1ccb981d3`：`P0-B01/D06`，SPEC/画像摘要扇出对齐；
+3. `4f187e5c0`：`P0-D01/D04`，candidate target-version 单一权威；
+4. `21c2ab2b9`：`P0-D02`，classify 全行为坐标一致性门禁；
+5. `15f23be87`：`P0-C01～C05`，异版本 Catalog/transport/Compiler 门禁；
+6. `1bde77d62`：`P0-D03`，approved Profile → 内容寻址 RuntimeCatalog 离线生成链。
 
-全部修复后重新执行本报告的 P0-A/B/C/D。只有健康基线全绿、所有 mutation 均按预期
-fail-close、真实 `plan` 在 Vircs 成功且工作区干净，才允许进入正式 Campaign。
+总复验结果：`make test-capture-tools` 340 项通过、3 项跳过；`make check-egress-spec`
+全绿；完整异版本 mutation 的 Active/Previous 三坐标、runtime/profile dump 和 Compiler
+并集门禁通过；最终 P0 `plan` 加载 42 条规则和 25 个任务，工具身份为 80 项、摘要
+`fa8fc9fa…`。该 P0 Campaign 位于临时目录，只证明工具可用，不能转为正式 Campaign。
 
 ## 8. 复核摘要
 
@@ -129,4 +131,4 @@ fail-close、真实 `plan` 在 Vircs 成功且工作区干净，才允许进入�
 - 未把临时 0.147 合成资产写入仓库；
 - 未触发真实网络请求或生产部署；
 - `plan` 的 baseline 规则/场景默认值已证明语义正确；
-- 当前结论：`blocked_before_formal_campaign`。
+- 当前结论：`p0_complete_formal_campaign_allowed_on_vircs`。

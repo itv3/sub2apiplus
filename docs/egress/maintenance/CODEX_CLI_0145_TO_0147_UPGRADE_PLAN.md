@@ -1,6 +1,6 @@
-# Codex CLI 0.145.0 → 0.147.0 Official Egress 升级计划（待审核）
+# Codex CLI 0.145.0 → 0.147.0 Official Egress 升级计划（执行中）
 
-> 状态：精简稿待审核，未授权 P0、真实请求、生产改动或部署
+> 状态：DOC-PRE、P0 与 P0 最小修复已完成；下一步执行第 6 章正式 Campaign
 > 创建日期：2026-08-07
 > 审阅基线：commit `abf236375f66aa096580092e646c4e33d37bb135`
 > 基线画像：Codex CLI `0.145.0`
@@ -41,9 +41,9 @@ Previous = 0.145.0
 | 当前画像 | Active/Previous 均为 `0.145.0`，共享 `e0b597…` Snapshot |
 | 本地源码 | 只有 `local-analysis/sources/codex-cli-0.145/`，尚无 0.147 源码树 |
 | 本机 Codex | ChatGPT.app 内为 `0.147.0-alpha.6.5`，不得作为 stable 证据 |
-| 工具身份 | 当前受管 80 个 `.py/.sh/.json`，摘要 `766d31df…`；P0 必须重算 |
+| 工具身份 | P0 收口时受管 80 个 `.py/.sh/.json`，摘要 `fa8fc9fa…` |
 | 基线回放 | 健康环境下通过：基线 180、补录 0、移除 22 |
-| 当前门禁 | 本文尚未登记，完整门禁只在 maintenance transition 复算处失败 |
+| 当前门禁 | DOC-PRE/P0 transition 已登记，`make check-egress-spec` 全绿 |
 
 工具身份枚举必须递归扫描 `tools/official_client_capture/`，排除 `tests/`、`versions/`、
 `__pycache__/`，并记录路径清单、文件数和集合摘要。
@@ -143,18 +143,16 @@ Types/TypesInfo、fallback 文件集合、已加载包数、扫描器退出码�
 - 检查 classify 草案是否只改顶层版本而遗漏行为字段；
 - 若缺少从批准 Profile 生成内容寻址 RuntimeCatalog 的入口，登记阻断，不手拼正式 JSON。
 
-### 5.6 当前已知阻断/风险
+### 5.6 P0 已确认阻断及处置
 
-| ID | 已核实事实 | 后续动作 |
+| ID | 已核实事实 | 处置状态 |
 |---|---|---|
-| P0-A-ENV01 | pattern-level 加载错误可产生 `p.Errors` 非空但 GoFiles=0 的合成包；fallback 无文件可登记，最终误报 16-route | P0 正式复现；如需修扫描器另立变更集 |
-| P0-B01/D06 | scenario SPEC 摘要仍为 `81f0…`，应为 `07daf…`；test trace 画像摘要仍为 `0732…`，应为 `b52c…` | 一个最小修复变更集、两个独立验收点 |
-| P0-C01 | Makefile 将 Active profile dump 固定比较到 0.145 Snapshot | 改为按 Active version+digest 动态验证 |
-| P0-C02 | acceptance test 要求 Active.Version == Previous.Version | 改为异版本三坐标均不同 |
-| P0-C03 | runtime catalog 文件数固定为 5 | 改为由 catalog 数量推导 |
-| P0-D01 | candidate 脚本、guard、trace、Schema 存在 0.145 行为硬编码 | 参数化并做错误/空值/正确值 mutation |
-| P0-D02 | classify 草案可能只改顶层版本 | 五份清单逐字段审核，禁止假绿 |
-| P0-D03 | 尚无批准 Profile → RuntimeCatalog 的明确安全入口 | 先补生成/导入契约，禁止手拼正式资产 |
+| P0-A-ENV01 | package load 不完整可假绿 | `e887085fb` 已改为失败关闭并补 mutation |
+| P0-B01/D06 | scenario SPEC 与 test trace 摘要过期 | `1ccb981d3` 已统一真实摘要并补扇出测试 |
+| P0-D01/D04 | candidate 工具存在 0.145 行为硬编码 | `4f187e5c0` 已建立 target-version 单一权威 |
+| P0-D02 | classify 只改顶层版本可假绿 | `21c2ab2b9` 已增加全行为坐标校验 |
+| P0-C01～C05 | Makefile、异版本、文件数、transport、Compiler 门禁不完整 | `15f23be87` 已补齐并通过真实异版本 mutation |
+| P0-D03 | 缺少批准 Profile → RuntimeCatalog 安全入口 | `1bde77d62` 已新增确定性离线候选生成链 |
 
 P0 报告必须包含所有命令和输入摘要、临时资产 inventory/hash、三组缓存 mutation、
 失败分类、最小候选修复范围，以及“是否可创建正式 Campaign”的结论。
@@ -271,23 +269,19 @@ final-wire 可用，但不能替代 alpha 真实 service 链或 `server_response
 回滚不删除 Campaign、不覆盖 0.147 Snapshot、不重建数据容器。回滚后重新检查服务、
 挂载、账号、keeper、代理/CA、新旧入口和 final-wire，并保留失败证据。
 
-## 10. 当前状态与审核项
+## 10. 当前执行状态
 
-当前验证：
+已完成：
 
-- 健康环境 bootstrap replay 通过：180/0/22；
-- 完整门禁通过 bootstrap 等前置项，只因本文尚未登记 transition 而失败；
-- transition 复算仅新增本文，无删除或既有 entry 变化；
-- GOCACHE 两类失败路径已完成审核期诊断，仍须 P0 正式复现；
-- 本文无异常行尾空白，本地权威文档链接有效。
+- DOC-PRE、P0 报告和 6 个最小修复变更集均已独立提交并复核；
+- `make test-capture-tools`：340 项通过，3 项按环境跳过；
+- `make check-egress-spec` 全绿；健康 bootstrap replay 为 180/0/22；
+- 0.145→临时完整 0.147 异版本 mutation 的 dump、三坐标和 Compiler 并集门禁全绿；
+- P0 最终 `plan` 加载 42 条规则、25 个任务，工具身份 80 项、摘要 `fa8fc9fa…`；
+- 未发送真实请求、未切 Active、未把合成画像写入仓库。
 
-开始 P0 前必须审核确认：
+下一步严格执行第 6 章：只能在 Ubuntu 24.04 / x86_64 的 Vircs 抓包环境复核
+runtime image RepoDigest、解压后二进制和 `codex --version`，然后在持久目录创建正式
+Campaign。不得把本机 P0 Campaign 当正式 Campaign。
 
-- [ ] 同意追加 0.147、保留 0.145，并在启用后形成异版本 Active/Previous；
-- [ ] 同意先完成 DOC-PRE，再从干净 HEAD 执行 P0；
-- [ ] 同意 P0 只记录真实失败，不自动修复、不发送真实请求；
-- [ ] 同意 baseline 的 0.145 默认值不是目标静默回退；
-- [ ] 同意不预设新增 0.147 专用 Go profile 文件；
-- [ ] 同意保留 SPEC 路径，Sub2API upstream 合并另立变更集。
-
-本文内容获批后，先单独审核并合并 DOC-PRE transition；P0 及后续每个状态均需再次授权。
+用户已授权按第 5→6→7→8→9 章连续执行；每个变更集完成并自复核后自动进入下一项。
