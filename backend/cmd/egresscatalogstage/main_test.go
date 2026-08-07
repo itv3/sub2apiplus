@@ -1,8 +1,6 @@
 package main
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -10,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/officialegress"
+	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
 )
 
 func approvedProfileManifestForStageTest(t *testing.T) []byte {
@@ -27,13 +26,10 @@ func approvedProfileManifestForStageTest(t *testing.T) []byte {
 	if err := json.Unmarshal(raw, &snapshot); err != nil {
 		t.Fatal(err)
 	}
-	snapshot.Digest = ""
-	digestInput, err := json.Marshal(snapshot)
+	snapshot, err = profilecontract.PrepareSnapshotForManifest(snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	digest := sha256.Sum256(digestInput)
-	snapshot.Digest = hex.EncodeToString(digest[:])
 	payload, err := json.Marshal(snapshot)
 	if err != nil {
 		t.Fatal(err)

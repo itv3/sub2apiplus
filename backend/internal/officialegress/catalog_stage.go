@@ -75,7 +75,14 @@ func BuildStagedReleaseCatalog(
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return StagedReleaseCatalog{}, errors.New("批准画像 profile_payload 含多余 JSON")
 	}
-	if snapshot.Version != input.TargetVersion || snapshot.Digest != input.ProfileDigest {
+	declaredVersion := snapshot.Version
+	declaredDigest := snapshot.Digest
+	snapshot, err = profilecontract.CompactSnapshotRawMessages(snapshot)
+	if err != nil {
+		return StagedReleaseCatalog{}, fmt.Errorf("规范化批准画像 profile_payload: %w", err)
+	}
+	if declaredVersion != input.TargetVersion || declaredDigest != input.ProfileDigest ||
+		snapshot.Version != input.TargetVersion || snapshot.Digest != input.ProfileDigest {
 		return StagedReleaseCatalog{}, errors.New("批准画像 version/digest 与导入坐标不一致")
 	}
 	computedDigest, err := profilecontract.OfficialSnapshotDigest(snapshot)

@@ -1,8 +1,7 @@
 package officialegress
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"bytes"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -25,13 +24,10 @@ func stagedCatalogTestInput(t *testing.T) CatalogStageInput {
 	if err := json.Unmarshal(raw, &snapshot); err != nil {
 		t.Fatal(err)
 	}
-	snapshot.Digest = ""
-	digestInput, err := json.Marshal(snapshot)
+	snapshot, err = profilecontract.PrepareSnapshotForManifest(snapshot)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sum := sha256.Sum256(digestInput)
-	snapshot.Digest = hex.EncodeToString(sum[:])
 	payload, err := json.Marshal(snapshot)
 	if err != nil {
 		t.Fatal(err)
@@ -93,6 +89,27 @@ func TestBuildStagedReleaseCatalogKeepsActiveAndPlacesTargetInPrevious(t *testin
 		receipt["production_selector_changed"] != false ||
 		receipt["candidate_release_mode"] != string(ReleaseModePrevious) {
 		t.Fatalf("候选收据越权声明生产切换：%v", receipt)
+	}
+}
+
+func TestBuildStagedReleaseCatalogCanonicalizesFormattedApprovedPayload(t *testing.T) {
+	input := stagedCatalogTestInput(t)
+	var formatted bytes.Buffer
+	if err := json.Indent(&formatted, input.ProfilePayload, "", "  "); err != nil {
+		t.Fatal(err)
+	}
+	input.ProfilePayload = formatted.Bytes()
+	staged, err := BuildStagedReleaseCatalog(DefaultReleaseCatalog(), input)
+	if err != nil {
+		t.Fatalf("格式化后的批准画像不应因 JSON 空白失败: %v", err)
+	}
+	_, raw := staged.TargetSnapshot()
+	snapshot, err := profilecontract.ParseSnapshot(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snapshot.Digest != input.ProfileDigest {
+		t.Fatalf("候选 Snapshot digest=%s，期望=%s", snapshot.Digest, input.ProfileDigest)
 	}
 }
 

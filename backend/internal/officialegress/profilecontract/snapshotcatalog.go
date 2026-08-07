@@ -136,6 +136,26 @@ func OfficialSnapshotDigest(snapshot SnapshotDoc) (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
+// CompactSnapshotRawMessages 去除 Snapshot 横切 RawMessage 字段的格式化空白，保留
+// 字段顺序，确保批准清单被重新格式化后仍得到同一官方摘要。
+func CompactSnapshotRawMessages(snapshot SnapshotDoc) (SnapshotDoc, error) {
+	fields := []*json.RawMessage{
+		&snapshot.RequiredRules,
+		&snapshot.Surfaces,
+		&snapshot.ToolPresentation,
+		&snapshot.Subagents,
+		&snapshot.Files,
+	}
+	for _, field := range fields {
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, *field); err != nil {
+			return SnapshotDoc{}, err
+		}
+		*field = append((*field)[:0], compact.Bytes()...)
+	}
+	return snapshot, nil
+}
+
 // PrepareSnapshotForManifest 先规范化 RawMessage 横切字段，再写入按官方算法复算的
 // Digest。这样画像嵌入 sort_keys 规范化清单后，复算结果仍稳定一致。
 func PrepareSnapshotForManifest(snapshot SnapshotDoc) (SnapshotDoc, error) {
