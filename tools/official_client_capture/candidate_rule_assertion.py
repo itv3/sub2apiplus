@@ -48,7 +48,7 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
     "tools/official_client_capture/candidate_rule_expectations_0_145_0.json"
 )
 FROZEN_PROFILE_SHA256 = (
-    "0732af76f7452bc83c2aa59da9c5edbc8629f9da31386222d30c25a82cbbbc6c"
+    "b52c11ea9a7f8c9e7a32cf39ca1e13bd59b054ffc399d4c9405d23a0cb874841"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RULE_ID_RE = re.compile(r"^SPEC-[A-Z0-9]+-[0-9]{3}$")

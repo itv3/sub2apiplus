@@ -3,9 +3,9 @@
   "base_commit": "ba485663c3bc0af6802cf6dfc4e19139ef00e371",
   "retirement_receipt": "docs/egress/maintenance/official-egress-consolidation-retirement.json",
   "retirement_receipt_sha256": "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36",
-  "candidate_path_count": 773,
-  "transition_entry_count": 773,
-  "transition_path_set_sha256": "96618cef726fee26d8c267700ef38d372a5e6ae63cad09781dda9495b516cd4f",
+  "candidate_path_count": 775,
+  "transition_entry_count": 775,
+  "transition_path_set_sha256": "871adc35d7fd385413411e142870010692757e043c6ebc1e9e75fd8c13ad79ca",
   "entries": [
     {
       "path": ".github/workflows/backend-ci.yml",
@@ -18479,6 +18479,54 @@
         "mode": "0644",
         "size": 12298,
         "sha256": "658c658646b71379e55cf285aa112f4746d1cff36863aabbb1c206b52e02175f"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/candidate_rule_assertion.py",
+      "scope": "source_gate",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 58500,
+        "sha256": "2f2d394e1902df33d4217ddca0a734522326d3309189237f0da740b8063bfb0c"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 58500,
+        "sha256": "eb8bb24eb6874a5ea879fd935ada1214498e79c3725746114f42ad954ebfea42"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/candidate_rule_expectations_0_145_0.json",
+      "scope": "source_gate",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 61620,
+        "sha256": "0732af76f7452bc83c2aa59da9c5edbc8629f9da31386222d30c25a82cbbbc6c"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 61620,
+        "sha256": "b52c11ea9a7f8c9e7a32cf39ca1e13bd59b054ffc399d4c9405d23a0cb874841"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
