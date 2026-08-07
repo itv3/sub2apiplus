@@ -35,6 +35,7 @@ import (
 
 const (
 	scanPattern           = "github.com/Wei-Shaw/sub2api/..."
+	modulePackagePrefix   = "github.com/Wei-Shaw/sub2api/"
 	legacyBootstrapCommit = "38a9929eac35a39c86de2f27de8f7a805d7dae52"
 )
 
@@ -187,6 +188,9 @@ func loadPackages(build scanBuildContext) ([]*packages.Package, []string, error)
 	if err != nil {
 		return nil, nil, err
 	}
+	if err := validateLoadedPackages(pkgs, build.id); err != nil {
+		return nil, nil, err
+	}
 
 	fallback := collectTypecheckFallback(pkgs, build.id)
 	return pkgs, fallback, nil
@@ -224,6 +228,46 @@ func collectTypecheckFallback(pkgs []*packages.Package, contextID string) []stri
 		}
 	})
 	return uniqueSorted(fallback)
+}
+
+// validateLoadedPackages 区分“有源码且仍能取得局部类型信息”的普通类型错误，和
+// go/packages 因缓存、权限或 pattern 加载失败而返回的空壳 package。前者继续进入
+// SyntaxFallback 并扫描仍可解析的调用；后者没有任何文件可登记，若继续执行会把
+// “没有加载到源码”误报成“没有网络发送”，因此必须失败关闭。
+func validateLoadedPackages(pkgs []*packages.Package, contextID string) error {
+	var problems []string
+	packages.Visit(pkgs, nil, func(p *packages.Package) {
+		if p == nil {
+			problems = append(problems, "package=<nil>")
+			return
+		}
+		if len(p.Errors) > 0 && len(p.GoFiles) == 0 && len(p.Syntax) == 0 {
+			problems = append(problems, packageLoadProblem(p, "错误 package 没有可审计源码"))
+			return
+		}
+		if strings.HasPrefix(p.PkgPath, modulePackagePrefix) && len(p.GoFiles) > 0 &&
+			(p.Types == nil || p.TypesInfo == nil || len(p.Syntax) == 0) {
+			problems = append(problems, packageLoadProblem(p, "仓库 package 类型或语法信息不完整"))
+		}
+	})
+	problems = uniqueSorted(problems)
+	if len(problems) > 0 {
+		return fmt.Errorf("package 加载未完整关闭（%s）：%s", contextID, strings.Join(problems, "; "))
+	}
+	return nil
+}
+
+func packageLoadProblem(p *packages.Package, reason string) string {
+	messages := make([]string, 0, len(p.Errors))
+	for _, packageError := range p.Errors {
+		message := strings.Join(strings.Fields(packageError.Error()), " ")
+		if message != "" {
+			messages = append(messages, message)
+		}
+	}
+	messages = uniqueSorted(messages)
+	return fmt.Sprintf("package=%q path=%q reason=%s errors=%q",
+		p.ID, p.PkgPath, reason, strings.Join(messages, " | "))
 }
 
 // qualifiedCallee 返回调用目标的完整限定名。

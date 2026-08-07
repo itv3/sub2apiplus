@@ -11,6 +11,7 @@ package main
 import (
 	"fmt"
 	"go/ast"
+	"go/types"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -259,6 +260,9 @@ func runSelfTest() int {
 	if fallbackFailures := runSyntaxFallbackSelfTest(tmp); len(fallbackFailures) > 0 {
 		failures = append(failures, fallbackFailures...)
 	}
+	if loadFailures := runPackageLoadCompletenessSelfTest(); len(loadFailures) > 0 {
+		failures = append(failures, loadFailures...)
+	}
 
 	if len(failures) > 0 {
 		fmt.Println("❌ 扫描器判据自测失败：")
@@ -274,7 +278,7 @@ func runSelfTest() int {
 		}
 		return 1
 	}
-	fmt.Printf("✅ 扫描器判据自测通过：%d 条合成用例 + method/path/host 反向变异 + 类型失败兜底 + 双平台矩阵 + %d 类发送栈 + %d 条真实请求事实断言\n",
+	fmt.Printf("✅ 扫描器判据自测通过：%d 条合成用例 + method/path/host 反向变异 + 类型失败兜底 + package load 失败关闭 + 双平台矩阵 + %d 类发送栈 + %d 条真实请求事实断言\n",
 		len(selfTestCases), len(realRepoCoverage), len(realRequestEvidence))
 	return 0
 }
@@ -290,6 +294,9 @@ func scanDir(dir string) ([]SinkRecord, error) {
 	}
 	pkgs, err := packages.Load(cfg, "./...")
 	if err != nil {
+		return nil, err
+	}
+	if err := validateLoadedPackages(pkgs, "selftest"); err != nil {
 		return nil, err
 	}
 	var records []SinkRecord
@@ -521,6 +528,33 @@ func send(client *http.Client, req *http.Request) {
 		// Do(req) 的 method 由入参决定，本例应保持未知；这里仅防止未来误把无关常量
 		// 当作请求事实。候选存在本身才是本测试的主要验收。
 		return []string{fmt.Sprintf("语法兜底：动态请求被错误补造 method %v", record.ResolvedMethods)}
+	}
+	return nil
+}
+
+// runPackageLoadCompletenessSelfTest 锁定 P0-A-ENV01：pattern/cache 失败产生的空壳
+// package 必须拒绝；普通类型错误仍可通过已有 SyntaxFallback 继续审计。
+func runPackageLoadCompletenessSelfTest() []string {
+	patternFailure := &packages.Package{
+		ID: "./...", PkgPath: "./...",
+		Errors: []packages.Error{{Msg: "pattern ./...: open cache-index: permission denied"}},
+	}
+	if err := validateLoadedPackages([]*packages.Package{patternFailure}, "mutation"); err == nil {
+		return []string{"package load 失败关闭：无源码 pattern error 被错误放行"}
+	}
+
+	typeFailure := &packages.Package{
+		ID: "sample", PkgPath: "sample",
+		GoFiles:   []string{"/tmp/sample.go"},
+		Syntax:    []*ast.File{{}},
+		TypesInfo: &types.Info{},
+		Errors:    []packages.Error{{Msg: "undefined: mutationSymbol"}},
+	}
+	if err := validateLoadedPackages([]*packages.Package{typeFailure}, "mutation"); err != nil {
+		return []string{fmt.Sprintf("package load 失败关闭：可审计类型错误被拒绝 %v", err)}
+	}
+	if fallback := collectTypecheckFallback([]*packages.Package{typeFailure}, "mutation"); len(fallback) != 1 || !strings.HasSuffix(fallback[0], "sample.go") {
+		return []string{fmt.Sprintf("package load 失败关闭：类型错误未进入 fallback %v", fallback)}
 	}
 	return nil
 }
