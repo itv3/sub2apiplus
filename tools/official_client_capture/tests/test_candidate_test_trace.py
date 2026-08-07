@@ -7,6 +7,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from tools.official_client_capture import candidate_rule_assertion
+from tools.official_client_capture import candidate_test_trace
 from tools.official_client_capture.candidate_rule_assertion import (
     load_observations,
 )
@@ -25,6 +27,25 @@ FACT_ID = "a07.transport-fallback"
 
 
 class CandidateTestTraceTest(unittest.TestCase):
+    def test_frozen_input_digests_match_checked_in_assets(self) -> None:
+        tool_root = Path(__file__).resolve().parents[1]
+        profile = tool_root / "candidate_rule_expectations_0_145_0.json"
+        mapping = tool_root / "candidate_test_fact_map_0_145_0.json"
+
+        profile_sha256 = file_sha256(profile)
+        self.assertEqual(
+            candidate_rule_assertion.FROZEN_PROFILE_SHA256,
+            profile_sha256,
+        )
+        self.assertEqual(
+            candidate_test_trace.FROZEN_PROFILE_SHA256,
+            profile_sha256,
+        )
+        self.assertEqual(
+            candidate_test_trace.FROZEN_MAPPING_SHA256,
+            file_sha256(mapping),
+        )
+
     def _fixture(
         self,
         root: Path,

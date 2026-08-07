@@ -45,7 +45,7 @@ FROZEN_MAPPING_SHA256 = (
 	"13eb15f45c92f216b2eb023d859d91f02c70a6026c4a5b7c252f861239e65319"
 )
 FROZEN_PROFILE_SHA256 = (
-    "0732af76f7452bc83c2aa59da9c5edbc8629f9da31386222d30c25a82cbbbc6c"
+    "b52c11ea9a7f8c9e7a32cf39ca1e13bd59b054ffc399d4c9405d23a0cb874841"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 TEST_NAME_RE = re.compile(r"^Test[A-Za-z0-9_]+$")

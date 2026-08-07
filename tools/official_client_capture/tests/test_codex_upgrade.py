@@ -28,6 +28,36 @@ from tools.official_client_capture.codex_upgrade import Job
 
 
 class CodexUpgradeTest(unittest.TestCase):
+    def test_checked_in_baseline_scenario_bindings_match_sources(self) -> None:
+        tool_root = Path(__file__).resolve().parents[1]
+        repo_root = tool_root.parents[1]
+        scenario_path = tool_root / "codex_upgrade_scenarios_0_145_0.json"
+        scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
+
+        self.assertEqual(scenario["codex_version"], "0.145.0")
+
+        source_spec = scenario["source_spec"]
+        source_spec_path = repo_root / source_spec["path"]
+        self.assertEqual(
+            source_spec["sha256"],
+            codex_upgrade.source_spec_section_sha256(
+                source_spec_path,
+                source_spec["fragment"],
+            ),
+        )
+
+        rule_binding = scenario["rule_manifest"]
+        rule_path = repo_root / rule_binding["path"]
+        self.assertEqual(
+            rule_binding["sha256"],
+            codex_upgrade.file_sha256(rule_path),
+        )
+        rule_manifest = json.loads(rule_path.read_text(encoding="utf-8"))
+        self.assertEqual(
+            rule_binding["rule_count"],
+            len(rule_manifest["required_rules"]),
+        )
+
     @staticmethod
     def _write_json(path: Path, payload: object) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
