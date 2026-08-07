@@ -285,8 +285,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 5554,
-        "sha256": "c24a3dcd0dc3505eabcc2f4a575804e5bd0bab6c9ee95739d3feb2011ef733b4"
+        "size": 5509,
+        "sha256": "915bdfa87007ccdc4c6620570ce22e15af72d0c92597358b268bcc8db5f08c0b"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
@@ -2589,8 +2589,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 12989,
-        "sha256": "f1b8b8059b2d9d3a273e74e8be4dc29c3811afa9d1fe49766ad977ec440e1732"
+        "size": 13330,
+        "sha256": "7cead886dbe846f3f57fd16e42133aeb78ae87f45834e6b1fcb6babc1e251044"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
@@ -2613,8 +2613,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 3551,
-        "sha256": "e6972e18e2ab7f529f1c5f05f06661e148ca2bc89a821d2ff111959682464b3a"
+        "size": 4179,
+        "sha256": "5530bb3dbfe54c119b7e93d901451a5ba76159ebf393294ddfc20fb575548fb6"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
@@ -3357,8 +3357,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 8236,
-        "sha256": "f0b4a06531e626600c0060972392c994c6796c1e764bbaeaaf9544345123ae81"
+        "size": 8883,
+        "sha256": "4c1575491fb79436eca99878a52924fbe4b550bd328cdb32b4f5fd22f30b305f"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
