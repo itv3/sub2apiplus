@@ -2129,6 +2129,20 @@ def _validate_jobs(jobs: list[Job], rules: tuple[str, ...]) -> None:
     )
     if duplicate_jobs:
         raise ConfigurationError(f"任务 ID 重复：{duplicate_jobs}")
+    evidence_owners: dict[tuple[str, str], list[str]] = {}
+    for job in jobs:
+        for root in job.evidence_roots:
+            evidence_owners.setdefault((job.phase, root), []).append(job.job_id)
+    duplicate_roots = {
+        f"{phase}:{root}": sorted(set(job_ids))
+        for (phase, root), job_ids in evidence_owners.items()
+        if len(set(job_ids)) > 1
+    }
+    if duplicate_roots:
+        raise ConfigurationError(
+            "同一阶段的证据根必须由单一任务独占："
+            f"{duplicate_roots}"
+        )
     unknown_rules = sorted({rule for job in jobs for rule in job.covers} - set(rules))
     if unknown_rules:
         raise ConfigurationError(f"任务引用规则清单外编号：{unknown_rules}")

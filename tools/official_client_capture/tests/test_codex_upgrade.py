@@ -69,6 +69,19 @@ class CodexUpgradeTest(unittest.TestCase):
                     "{target_version}",
                 )
 
+        evidence_owners: dict[tuple[str, str], str] = {}
+        for job in scenario["capture_jobs"]:
+            for root in job["evidence_roots"]:
+                owner_key = (job["phase"], root)
+                self.assertNotIn(owner_key, evidence_owners)
+                evidence_owners[owner_key] = job["id"]
+
+        serialized_scenario = json.dumps(scenario, ensure_ascii=False)
+        self.assertNotIn(
+            "/capture/tools/official_client_capture",
+            serialized_scenario,
+        )
+
         mutated = json.loads(json.dumps(scenario))
         candidate = next(
             job for job in mutated["capture_jobs"] if job["phase"] == "candidate"
@@ -79,6 +92,45 @@ class CodexUpgradeTest(unittest.TestCase):
             "Campaign target_version",
         ):
             codex_upgrade._validate_scenario_manifest_shape(mutated)
+
+    def test_campaign_capture_scripts_bind_frozen_tool_root(self) -> None:
+        tool_root = Path(__file__).resolve().parents[1]
+        scripts = (
+            "run_official_codex_compact_capture.sh",
+            "run_official_http_fallback_baseline.sh",
+            "run_official_relay_scenario.sh",
+            "run_sub2api_direct_matrix.sh",
+            "run_sub2api_openai_mitm_matrix.sh",
+            "run_h1_wire_probe.sh",
+            "run_images_wire_probe.sh",
+        )
+        for name in scripts:
+            content = (tool_root / name).read_text(encoding="utf-8")
+            self.assertIn("capture_tool_root=", content, name)
+            self.assertNotIn(
+                "/capture/tools/official_client_capture",
+                content,
+                name,
+            )
+
+    def test_job_validation_rejects_shared_phase_evidence_root(self) -> None:
+        jobs = [
+            Job(
+                job_id=job_id,
+                phase="official",
+                suites=("full",),
+                description=job_id,
+                steps=({"argv": ["true"], "environment": {}, "timeout": 60},),
+                evidence_roots=("/tmp/shared-evidence",),
+                covers=(),
+            )
+            for job_id in ("official-one", "official-two")
+        ]
+        with self.assertRaisesRegex(
+            codex_upgrade.ConfigurationError,
+            "证据根必须由单一任务独占",
+        ):
+            codex_upgrade._validate_jobs(jobs, ())
 
     @staticmethod
     def _write_json(path: Path, payload: object) -> None:

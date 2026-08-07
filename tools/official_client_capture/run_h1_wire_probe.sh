@@ -18,6 +18,7 @@ api_key_id=${API_KEY_ID:-1}
 model=${MODEL:-gpt-5.6-luna}
 capture_container=${CAPTURE_CONTAINER:-capture-cli}
 capture_root=${CAPTURE_ROOT:-/root/oauth-capture}
+capture_tool_root=${CAPTURE_TOOL_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}
 run_id=${RUN_ID:?必须提供 RUN_ID}
 window_id=$(date -u +%Y%m%dT%H%M%SZ)
 
@@ -111,7 +112,7 @@ fi
 
 docker exec "$capture_container" mkdir -p "/capture/runs/$run_id/tls"
 docker exec -d "$capture_container" python3 \
-  /capture/tools/official_client_capture/h1_wire_probe.py \
+  "$capture_tool_root/h1_wire_probe.py" \
   --cert "/capture/runs/$run_id/tls/probe.crt" --key "/capture/runs/$run_id/tls/probe.key" \
   --port 443 --output "/capture/runs/$run_id/h1-wire.json" --expect "${EXPECT_REQUESTS:-3}" --timeout 120 --idle-timeout 8
 probe_started=1

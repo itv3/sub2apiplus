@@ -17,6 +17,7 @@ umask 077
 
 capture_container=${CAPTURE_CONTAINER:-capture-cli}
 capture_root=${CAPTURE_ROOT:-/root/oauth-capture}
+capture_tool_root=${CAPTURE_TOOL_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}
 run_id=${RUN_ID:?必须提供 RUN_ID}
 model=${MODEL:-gpt-5.6-luna}
 expect_connections=${EXPECT_CONNECTIONS:-3}
@@ -58,7 +59,7 @@ openssl x509 -req -in "$tls_dir/probe.csr" -CA "$ca_full" -CAkey "$ca_full" \
 chmod 600 "$tls_dir"/*
 
 docker exec -d -e H1_PROBE_DROP_WS=1 "$capture_container" python3 \
-  /capture/tools/official_client_capture/h1_wire_probe.py \
+  "$capture_tool_root/h1_wire_probe.py" \
   --cert "/capture/runs/$run_id/tls/probe.crt" --key "/capture/runs/$run_id/tls/probe.key" \
   --port 443 --output "/capture/runs/$run_id/h1-wire.json" \
   --expect "$expect_connections" --timeout 90 --idle-timeout 10

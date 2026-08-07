@@ -28,6 +28,7 @@ umask 077
 
 capture_container=${CAPTURE_CONTAINER:-capture-cli}
 capture_root=${CAPTURE_ROOT:-/root/oauth-capture}
+capture_tool_root=${CAPTURE_TOOL_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}
 run_id=${RUN_ID:?必须提供 RUN_ID}
 model=${MODEL:-gpt-5.6-luna}
 codex_version=${CODEX_VERSION:-0.145.0}
@@ -224,7 +225,7 @@ if [[ -n ${RELAY_RETRY_PROBE:-} ]]; then
   fi
 fi
 docker exec -d "$capture_container" python3 \
-  /capture/tools/official_client_capture/upstream_byte_relay.py \
+  "$capture_tool_root/upstream_byte_relay.py" \
   --cert "/capture/runs/$run_id/tls/relay.crt" --key "/capture/runs/$run_id/tls/relay.key" \
   --mode direct --port "$relay_port" \
   --upstream-host chatgpt.com --upstream-ip "$upstream_ip" \
@@ -435,7 +436,7 @@ echo "=== 场景 $scenario，$turns 轮 ==="
 if [[ $prompt == "__REALTIME__" ]]; then
   # shellcheck disable=SC2086
   docker exec "$capture_container" timeout 120 python3 \
-    /capture/tools/official_client_capture/drive_codex_realtime.py \
+    "$capture_tool_root/drive_codex_realtime.py" \
     --codex-version "$codex_version" \
     --model "$model" --transport webrtc --output-modality audio \
     ${DISABLE_FEATURES:+$(for f in $DISABLE_FEATURES; do printf -- '--disable %s ' "$f"; done)} \
@@ -445,7 +446,7 @@ elif [[ $prompt == "__COMPACT_TUI__" ]]; then
   [[ -n ${CONTEXT_WINDOW:-} ]] && ctx_opt="--context-window $CONTEXT_WINDOW"
   # shellcheck disable=SC2086
   docker exec "$capture_container" python3 \
-    /capture/tools/official_client_capture/drive_codex_tui.py \
+    "$capture_tool_root/drive_codex_tui.py" \
     --model "$model" --cwd /tmp/tui-probe $ctx_opt \
     --warmup "${TUI_WARMUP:-请用一段话介绍什么是 TCP 三次握手。}" \
     --slash "${TUI_SLASH:-/compact}" \
@@ -457,7 +458,7 @@ elif [[ $prompt == "__COMPACT_TUI__" ]]; then
     --log "/capture/runs/$run_id/tui.log" 2>&1 | tail -12 || true
 elif [[ $prompt == "__PROMPT_TUI_IMAGE__" ]]; then
   docker exec "$capture_container" python3 \
-    /capture/tools/official_client_capture/drive_codex_tui.py \
+    "$capture_tool_root/drive_codex_tui.py" \
     --model "$model" --cwd /tmp/tui-probe \
     --prompt '请调用图片生成工具生成一张红色狐狸的简单插画；必须实际调用工具。' \
     --prompt '请再次调用图片生成工具生成一张蓝色鲸鱼的简单插画；必须实际调用工具。' \
@@ -466,7 +467,7 @@ elif [[ $prompt == "__PROMPT_TUI_IMAGE__" ]]; then
     --log "/capture/runs/$run_id/tui.log" 2>&1 | tail -16 || true
 elif [[ $prompt == "__PROMPT_TUI_SEARCH__" ]]; then
   docker exec "$capture_container" python3 \
-    /capture/tools/official_client_capture/drive_codex_tui.py \
+    "$capture_tool_root/drive_codex_tui.py" \
     --model "$model" --cwd /tmp/tui-probe \
     --prompt '请联网搜索 Rust 1.90 的发布日期；必须实际调用联网搜索工具，只回复日期。' \
     --prompt '请再次联网搜索 Python 3.14 的发布日期；必须实际调用联网搜索工具，只回复日期。' \
@@ -475,7 +476,7 @@ elif [[ $prompt == "__PROMPT_TUI_SEARCH__" ]]; then
     --log "/capture/runs/$run_id/tui.log" 2>&1 | tail -16 || true
 elif [[ $prompt == "__GUARDIAN_TUI__" ]]; then
   docker exec "$capture_container" python3 \
-    /capture/tools/official_client_capture/drive_codex_tui.py \
+    "$capture_tool_root/drive_codex_tui.py" \
     --model "$model" --cwd /work --no-bypass \
     --approval-policy on-request --sandbox-mode workspace-write \
     --config 'approvals_reviewer="auto_review"' \
@@ -490,7 +491,7 @@ elif [[ $prompt == "__MEMGEN__" ]]; then
      cp /root/.codex/auth.json '$memgen_home/auth.json' && \
      cp /root/.codex/config.toml '$memgen_home/config.toml'"
   docker exec -e CODEX_HOME="$memgen_home" "$capture_container" timeout 540 python3 \
-    /capture/tools/official_client_capture/drive_codex_memgen.py \
+    "$capture_tool_root/drive_codex_memgen.py" \
     --codex-version "$codex_version" \
     --model "$model" --cwd /tmp/memgen-probe \
     --relay-dir "/capture/runs/$run_id/relay" --hold "${MEMGEN_HOLD:-360}" \
@@ -500,7 +501,7 @@ elif [[ $prompt == "__COMPACTION_REASON__" ]]; then
   catalog_opt=()
   [[ -n $compaction_catalog ]] && catalog_opt=(--model-catalog-json "$compaction_catalog")
   docker exec "$capture_container" timeout 420 python3 \
-    /capture/tools/official_client_capture/drive_codex_compaction_reason.py \
+    "$capture_tool_root/drive_codex_compaction_reason.py" \
     --codex-bin "$codex_bin" \
     --codex-version "$codex_version" \
     --first-model "$compaction_first_model" --second-model "$compaction_second_model" \
@@ -576,7 +577,7 @@ elif [[ $prompt == "__REVIEW_TUI__" ]]; then
   "
   # shellcheck disable=SC2086
   docker exec "$capture_container" python3 \
-    /capture/tools/official_client_capture/drive_codex_tui.py \
+    "$capture_tool_root/drive_codex_tui.py" \
     --model "$model" --cwd "$work" \
     --warmup "${TUI_WARMUP:-请只回复 READY，不要做任何其他事。}" \
     --warmup-ready "${TUI_READY:-READY}" \
@@ -642,7 +643,7 @@ fi
 if [[ $prompt == "__COMPACTION_REASON__" ]]; then
   echo "=== 压缩原因最小脱敏证据 ==="
   docker exec "$capture_container" python3 \
-    /capture/tools/official_client_capture/extract_compaction_reason.py \
+    "$capture_tool_root/extract_compaction_reason.py" \
     --relay-dir "/capture/runs/$run_id/relay" \
     --expected-reason "$compaction_reason" \
     --output "/capture/runs/$run_id/compaction-reason.json"
@@ -654,7 +655,7 @@ fi
 # 那时结论已经写进文档了。
 echo "=== 样本完整性自检 ==="
 docker exec "$capture_container" python3 \
-  /capture/tools/official_client_capture/check_sample_integrity.py \
+  "$capture_tool_root/check_sample_integrity.py" \
   "/capture/runs/$run_id/relay" || echo "⚠ 样本不洁净，谨慎使用" >&2
 docker exec "$capture_container" jq \
   '{schema_version, mode, upstream_host, connection_count: (.connections | length),

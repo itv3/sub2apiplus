@@ -4,6 +4,7 @@ umask 077
 
 capture_container=${CAPTURE_CONTAINER:-capture-cli}
 capture_root=${CAPTURE_ROOT:-/root/oauth-capture}
+capture_tool_root=${CAPTURE_TOOL_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}
 codex_model=${CODEX_MODEL:-gpt-5.4}
 codex_version=${CODEX_VERSION:-0.145.0}
 run_id=${RUN_ID:-"official-codex-compact-$(date -u +%Y%m%dT%H%M%SZ)"}
@@ -30,7 +31,7 @@ docker exec "$capture_container" /opt/oauth-capture/scripts/start_direct.sh \
   "$run_id" "$subject" "$capture_container"
 direct_started=1
 docker exec "$capture_container" \
-  python3 /capture/tools/official_client_capture/run_codex_compact_scenario.py \
+  python3 "$capture_tool_root/run_codex_compact_scenario.py" \
   --mode official-http --model "$codex_model" --codex-version "$codex_version" \
   --output-dir "$direct_output" --timeout 300
 docker exec "$capture_container" /opt/oauth-capture/scripts/stop_direct.sh "$subject"
@@ -45,7 +46,7 @@ docker exec \
   -e https_proxy=http://127.0.0.1:18080 \
   -e SSL_CERT_FILE=/opt/mitm/mitmproxy-ca-cert.pem \
   "$capture_container" \
-  python3 /capture/tools/official_client_capture/run_codex_compact_scenario.py \
+  python3 "$capture_tool_root/run_codex_compact_scenario.py" \
   --mode official-http --model "$codex_model" --codex-version "$codex_version" \
   --output-dir "/capture/runs/$run_id/result/mitm" --timeout 300
 docker exec "$capture_container" /opt/oauth-capture/scripts/stop_mitm.sh

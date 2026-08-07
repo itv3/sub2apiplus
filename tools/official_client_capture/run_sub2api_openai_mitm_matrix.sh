@@ -9,6 +9,7 @@ postgres_container=${POSTGRES_CONTAINER:-sub2apiplus-postgres}
 codex_account_id=${CODEX_ACCOUNT_ID:-90}
 api_key_id=${API_KEY_ID:-1}
 capture_root=${CAPTURE_ROOT:-/root/oauth-capture}
+capture_tool_root=${CAPTURE_TOOL_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}
 subjects=${SUBJECTS:-"codex-http codex-ws"}
 scenarios=${SCENARIOS:-"s1 s2 s4"}
 codex_model=${CODEX_MODEL:-gpt-5.6-luna}
@@ -196,7 +197,7 @@ for subject in $subjects; do
         exit 2
       fi
       docker exec -e SUB2API_API_KEY="$api_key" "$capture_container" \
-        python3 /capture/tools/official_client_capture/run_codex_compact_scenario.py \
+        python3 "$capture_tool_root/run_codex_compact_scenario.py" \
         --mode sub2api-http --model "$codex_model" --codex-version "$codex_version" \
         --output-dir "$output_dir" --timeout 300
     else
