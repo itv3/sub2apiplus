@@ -1733,6 +1733,27 @@ def _build_parser() -> argparse.ArgumentParser:
     classify.add_argument("--assertion-profile-manifest", type=Path)
     classify.add_argument("--approve-manifest-sha256")
 
+    prepare_profile = subparsers.add_parser(
+        "prepare-profile",
+        help="把完整 Snapshot 规范化为待人工审核的目标画像清单",
+    )
+    add_campaign_reference(prepare_profile)
+    prepare_profile.add_argument("--snapshot", type=Path, required=True)
+    prepare_profile.add_argument("--profile-id", required=True)
+    prepare_profile.add_argument("--output", type=Path, required=True)
+
+    stage_profile = subparsers.add_parser(
+        "stage-profile",
+        help="把已批准完整画像编译成不切 Active 的候选 RuntimeCatalog",
+    )
+    add_campaign_reference(stage_profile)
+    stage_profile.add_argument(
+        "--output",
+        type=Path,
+        required=True,
+        help="不存在的候选目录绝对路径；不会修改仓库或生产 selector。",
+    )
+
     candidate = subparsers.add_parser(
         "capture-candidate", help="运行或封存一个 Sub2API 候选"
     )
@@ -6154,6 +6175,254 @@ def _profile_binding_from_manifest(
     )
 
 
+def prepare_profile_manifest(
+    campaign_dir: Path,
+    snapshot: Path,
+    profile_id: str,
+    output: Path,
+) -> dict[str, Any]:
+    """把官方取证形成的完整 Snapshot 规范化为 classify 审核输入。"""
+
+    _validate_existing_campaign_path(campaign_dir)
+    _reject_contaminated_campaign(campaign_dir)
+    manifest = load_campaign_manifest(campaign_dir)
+    _verify_plan_identity(campaign_dir, manifest)
+    if campaign_status(campaign_dir, None).get("status") != "official_sealed":
+        raise ConfigurationError("prepare-profile 只允许从 official_sealed 状态执行。")
+    if not SAFE_ID_RE.fullmatch(profile_id):
+        raise ConfigurationError("--profile-id 格式非法。")
+    if not snapshot.is_file() or snapshot.is_symlink():
+        raise ConfigurationError("--snapshot 必须是非符号链接普通文件。")
+    if not output.is_absolute() or output.is_symlink() or output.exists():
+        raise ConfigurationError("--output 必须是不存在的非符号链接绝对路径。")
+    resolved_output = output.resolve(strict=False)
+    if resolved_output in {
+        Path("/").resolve(),
+        Path.home().resolve(),
+        Path("/tmp").resolve(),
+    }:
+        raise ConfigurationError("--output 不能是根目录、HOME 或 /tmp 本身。")
+    try:
+        resolved_output.relative_to(campaign_dir.resolve(strict=True))
+    except ValueError:
+        pass
+    else:
+        raise ConfigurationError("画像草案不得写入不可变 Campaign 目录。")
+    repository_root = Path(__file__).resolve().parents[2]
+    completed = subprocess.run(
+        [
+            "go",
+            "run",
+            "./cmd/egresscatalogstage",
+            "-prepare-snapshot",
+            str(snapshot),
+            "-prepare-profile-id",
+            profile_id,
+            "-prepare-output",
+            str(output),
+        ],
+        cwd=repository_root / "backend",
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise ConfigurationError("画像草案生成器失败：" + (detail or "无错误输出"))
+    try:
+        profile = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise ConfigurationError("画像草案生成器未返回合法 JSON。") from error
+    if (
+        not isinstance(profile, dict)
+        or profile.get("status") != "draft"
+        or profile.get("codex_version") != manifest["target_version"]
+        or profile.get("profile_id") != profile_id
+        or not SHA256_RE.fullmatch(str(profile.get("profile_digest", "")))
+        or not output.is_file()
+        or output.is_symlink()
+        or _fingerprint(_read_json(output, "画像草案")) != _fingerprint(profile)
+    ):
+        raise ConfigurationError("画像草案身份、版本或落盘内容不一致。")
+    profile["output"] = str(output)
+    return profile
+
+
+def stage_profile_catalog(campaign_dir: Path, output: Path) -> dict[str, Any]:
+    """验证 profile_approved 身份并调用 Go 契约生成离线候选目录。"""
+
+    _validate_existing_campaign_path(campaign_dir)
+    _reject_contaminated_campaign(campaign_dir)
+    manifest = load_campaign_manifest(campaign_dir)
+    _verify_plan_identity(campaign_dir, manifest)
+    status = campaign_status(campaign_dir, None)
+    if status.get("status") != "profile_approved":
+        raise ConfigurationError("stage-profile 只允许从 profile_approved 状态执行。")
+    classification = _load_stage_result(campaign_dir, "classify")
+    if (
+        classification.get("status") != "complete"
+        or classification.get("migration", {}).get("unclassified_count") != 0
+    ):
+        raise ConfigurationError("分类尚未完整批准或仍有未分类项。")
+    references = {
+        key: classification.get(key)
+        for key in (
+            "target_rule_manifest",
+            "migration_manifest",
+            "scenario_manifest",
+            "profile_manifest",
+            "assertion_profile_manifest",
+        )
+    }
+    for label, reference in references.items():
+        if not isinstance(reference, dict):
+            raise ConfigurationError(f"批准分类缺少引用：{label}")
+        approved_path = _campaign_file(
+            campaign_dir,
+            str(reference.get("path", "")),
+        )
+        if (
+            not approved_path.is_file()
+            or approved_path.is_symlink()
+            or file_sha256(approved_path) != reference.get("sha256")
+        ):
+            raise ConfigurationError(f"批准分类引用摘要不一致：{label}")
+    joint_digest = _fingerprint(
+        {
+            key: reference["sha256"]
+            for key, reference in references.items()
+            if isinstance(reference, dict)
+        }
+    )
+    if joint_digest != classification.get("joint_manifest_sha256"):
+        raise ConfigurationError("五份批准清单联合摘要不一致。")
+    profile_reference = references["profile_manifest"]
+    assert isinstance(profile_reference, dict)
+    profile_path = _campaign_file(campaign_dir, profile_reference["path"])
+    profile = _read_json(profile_path, "批准画像清单")
+    if (
+        profile.get("status") != "approved"
+        or profile.get("codex_version") != manifest.get("target_version")
+        or not SHA256_RE.fullmatch(str(profile.get("profile_digest", "")))
+    ):
+        raise ConfigurationError("批准画像身份不完整或与 Campaign 目标版本不一致。")
+
+    if not output.is_absolute() or output.is_symlink():
+        raise ConfigurationError("--output 必须是非符号链接绝对路径。")
+    resolved_output = output.resolve(strict=False)
+    if resolved_output in {
+        Path("/").resolve(),
+        Path.home().resolve(),
+        Path("/tmp").resolve(),
+    }:
+        raise ConfigurationError("--output 不能是根目录、HOME 或 /tmp 本身。")
+    if output.exists():
+        raise ConfigurationError("--output 已存在，禁止覆盖候选目录。")
+    try:
+        resolved_output.relative_to(campaign_dir.resolve(strict=True))
+    except ValueError:
+        pass
+    else:
+        raise ConfigurationError("候选 RuntimeCatalog 不得写入不可变 Campaign 目录。")
+
+    repository_root = Path(__file__).resolve().parents[2]
+    backend_root = repository_root / "backend"
+    command = [
+        "go",
+        "run",
+        "./cmd/egresscatalogstage",
+        "-profile-manifest",
+        str(profile_path),
+        "-campaign-id",
+        str(manifest["campaign_id"]),
+        "-classification-sha256",
+        joint_digest,
+        "-output",
+        str(output),
+    ]
+    completed = subprocess.run(
+        command,
+        cwd=backend_root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if completed.returncode != 0:
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        raise ConfigurationError(
+            "候选 RuntimeCatalog 生成器失败：" + (detail or "无错误输出")
+        )
+    try:
+        receipt = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise ConfigurationError("候选 RuntimeCatalog 生成器未返回合法收据。") from error
+    if (
+        not isinstance(receipt, dict)
+        or receipt.get("campaign_id") != manifest["campaign_id"]
+        or receipt.get("classification_sha256") != joint_digest
+        or receipt.get("target_version") != manifest["target_version"]
+        or receipt.get("target_profile_digest") != profile["profile_digest"]
+        or receipt.get("active_unchanged") is not True
+        or receipt.get("production_selector_changed") is not False
+        or receipt.get("candidate_release_mode") != "previous"
+    ):
+        raise ConfigurationError("候选 RuntimeCatalog 收据身份或权限边界不一致。")
+    _verify_catalog_stage_output(output, receipt)
+    receipt["output"] = str(output)
+    return receipt
+
+
+def _verify_catalog_stage_output(output: Path, receipt: dict[str, Any]) -> None:
+    """逐文件重算候选目录，拒绝收据与落盘资产分离。"""
+
+    if not output.is_dir() or output.is_symlink():
+        raise ConfigurationError("候选 RuntimeCatalog 输出目录不存在或不可信。")
+    receipt_path = output / "catalog-stage-receipt.json"
+    if not receipt_path.is_file() or receipt_path.is_symlink():
+        raise ConfigurationError("候选 RuntimeCatalog 缺少可信生成收据。")
+    stored_receipt = _read_json(receipt_path, "候选 RuntimeCatalog 收据")
+    if _fingerprint(stored_receipt) != _fingerprint(receipt):
+        raise ConfigurationError("候选 RuntimeCatalog 标准输出与落盘收据不一致。")
+    inventory = receipt.get("inventory")
+    if not isinstance(inventory, list) or not inventory:
+        raise ConfigurationError("候选 RuntimeCatalog inventory 为空。")
+    if _fingerprint(inventory) != receipt.get("inventory_sha256"):
+        raise ConfigurationError("候选 RuntimeCatalog inventory 摘要不一致。")
+    seen: set[str] = set()
+    for item in inventory:
+        if not isinstance(item, dict):
+            raise ConfigurationError("候选 RuntimeCatalog inventory 条目非法。")
+        relative_raw = item.get("path")
+        if not isinstance(relative_raw, str):
+            raise ConfigurationError("候选 RuntimeCatalog inventory 路径非法。")
+        relative = Path(relative_raw)
+        if (
+            relative.is_absolute()
+            or relative.as_posix() != relative_raw
+            or ".." in relative.parts
+            or relative_raw in seen
+        ):
+            raise ConfigurationError("候选 RuntimeCatalog inventory 路径越界或重复。")
+        seen.add(relative_raw)
+        target = output / relative
+        if (
+            not target.is_file()
+            or target.is_symlink()
+            or file_sha256(target) != item.get("sha256")
+            or target.stat().st_size != item.get("size")
+        ):
+            raise ConfigurationError(
+                f"候选 RuntimeCatalog inventory 文件漂移：{relative_raw}"
+            )
+    actual = {
+        path.relative_to(output).as_posix()
+        for path in output.rglob("*")
+        if path.is_file() and path.name != "catalog-stage-receipt.json"
+    }
+    if actual != seen:
+        raise ConfigurationError("候选 RuntimeCatalog inventory 未精确覆盖输出文件。")
+
+
 def _verify_stage_evidence(stage: dict[str, Any], label: str) -> None:
     expected_inventory = stage.get("evidence_inventory")
     if not isinstance(expected_inventory, dict):
@@ -7219,6 +7488,8 @@ def _normalize_legacy_argv(argv: list[str]) -> tuple[list[str], str | None]:
         "plan",
         "capture-official",
         "classify",
+        "prepare-profile",
+        "stage-profile",
         "capture-candidate",
         "compare",
         "accept",
@@ -7398,6 +7669,17 @@ def main(argv: list[str] | None = None) -> int:
                 approve_manifest_sha256=arguments.approve_manifest_sha256,
             )
             return_code = 0 if result.get("status") == "complete" else 2
+        elif command == "prepare-profile":
+            result = prepare_profile_manifest(
+                arguments.campaign_dir,
+                arguments.snapshot,
+                arguments.profile_id,
+                arguments.output,
+            )
+            return_code = 0
+        elif command == "stage-profile":
+            result = stage_profile_catalog(arguments.campaign_dir, arguments.output)
+            return_code = 0
         elif command == "capture-candidate":
             if arguments.capture_action == "run":
                 result = _run_capture_attempt(arguments, "candidate")

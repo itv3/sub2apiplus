@@ -94,7 +94,7 @@ func NewSnapshotCatalog(doc SnapshotCatalogDoc, load SnapshotLoader) (SnapshotCa
 		if err != nil {
 			return SnapshotCatalog{}, fmt.Errorf("解析快照 %s: %w", entry.File, err)
 		}
-		computedDigest, err := computeOfficialSnapshotDigest(snapshot)
+		computedDigest, err := OfficialSnapshotDigest(snapshot)
 		if err != nil {
 			return SnapshotCatalog{}, fmt.Errorf("计算快照 %s 的官方摘要: %w", entry.File, err)
 		}
@@ -124,7 +124,9 @@ func NewSnapshotCatalog(doc SnapshotCatalogDoc, load SnapshotLoader) (SnapshotCa
 //
 // SnapshotDoc 及其嵌套 DTO 的字段顺序刻意与官方结构体一致。若只信任快照里的
 // Digest 字段，攻击者或误操作可以修改画像内容后保留旧摘要，目录仍会假绿。
-func computeOfficialSnapshotDigest(snapshot SnapshotDoc) (string, error) {
+// OfficialSnapshotDigest 按官方 Snapshot 结构字段顺序复算完整画像摘要。
+// 离线导入工具必须用它绑定 profile manifest，禁止自行猜测 JSON 字节序。
+func OfficialSnapshotDigest(snapshot SnapshotDoc) (string, error) {
 	snapshot.Digest = ""
 	encoded, err := json.Marshal(snapshot)
 	if err != nil {
@@ -132,6 +134,36 @@ func computeOfficialSnapshotDigest(snapshot SnapshotDoc) (string, error) {
 	}
 	sum := sha256.Sum256(encoded)
 	return hex.EncodeToString(sum[:]), nil
+}
+
+// PrepareSnapshotForManifest 先规范化 RawMessage 横切字段，再写入按官方算法复算的
+// Digest。这样画像嵌入 sort_keys 规范化清单后，复算结果仍稳定一致。
+func PrepareSnapshotForManifest(snapshot SnapshotDoc) (SnapshotDoc, error) {
+	fields := []*json.RawMessage{
+		&snapshot.RequiredRules,
+		&snapshot.Surfaces,
+		&snapshot.ToolPresentation,
+		&snapshot.Subagents,
+		&snapshot.Files,
+	}
+	for _, field := range fields {
+		var value any
+		if err := json.Unmarshal(*field, &value); err != nil {
+			return SnapshotDoc{}, err
+		}
+		raw, err := json.Marshal(value)
+		if err != nil {
+			return SnapshotDoc{}, err
+		}
+		*field = raw
+	}
+	snapshot.Digest = ""
+	digest, err := OfficialSnapshotDigest(snapshot)
+	if err != nil {
+		return SnapshotDoc{}, err
+	}
+	snapshot.Digest = digest
+	return snapshot, nil
 }
 
 func validateSnapshotEntry(entry SnapshotCatalogEntry) error {

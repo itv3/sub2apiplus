@@ -172,7 +172,7 @@ func validateReleaseNode(node ReleaseNodeDoc) error {
 	if !isSHA256Hex(node.Wire.Digest) {
 		return fmt.Errorf("purpose %s mode %s 的 wire digest 非法", node.Purpose, node.Mode)
 	}
-	expected, err := digestRegistryProfile(node.Build, node.Wire)
+	expected, err := RegistryProfileDigest(node.Build, node.Wire)
 	if err != nil {
 		return err
 	}
@@ -254,10 +254,10 @@ func CanonicalJSON(value any) ([]byte, error) {
 	return json.Marshal(generic)
 }
 
-// digestRegistryProfile 复刻 official-client registry 的摘要输入格式。
+// RegistryProfileDigest 复刻 official-client registry 的摘要输入格式。
 //
 // 这不是创建第二个发布事实源，而是验证导出图中的 digest 确实对应同一节点内容。
-func digestRegistryProfile(build ReleaseBuildDoc, wire ReleaseWireDoc) (string, error) {
+func RegistryProfileDigest(build ReleaseBuildDoc, wire ReleaseWireDoc) (string, error) {
 	type registryHeader struct {
 		Name  string `json:"name"`
 		Value string `json:"value"`

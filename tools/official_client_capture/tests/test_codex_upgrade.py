@@ -1416,6 +1416,8 @@ class CodexUpgradeTest(unittest.TestCase):
                 "plan",
                 "capture-official",
                 "classify",
+                "prepare-profile",
+                "stage-profile",
                 "capture-candidate",
                 "compare",
                 "accept",
@@ -1729,6 +1731,140 @@ class CodexUpgradeTest(unittest.TestCase):
             )
             self.assertEqual(return_code, 1)
             self.assertIn("行为版本坐标与 target_version 不一致", stderr)
+
+    def test_stage_profile_requires_profile_approved_campaign(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            campaign_dir, _ = self._create_campaign(root)
+            return_code, _, stderr = self._run_main(
+                [
+                    "stage-profile",
+                    "--campaign-dir",
+                    str(campaign_dir),
+                    "--output",
+                    str(root / "catalog-stage"),
+                ]
+            )
+            self.assertEqual(return_code, 1)
+            self.assertIn("只允许从 profile_approved 状态执行", stderr)
+
+    def test_prepare_profile_binds_official_sealed_target_version(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            campaign_dir, manifest = self._create_campaign(root)
+            self._seal_official_stage(root, campaign_dir, manifest)
+            snapshot = root / "snapshot.json"
+            snapshot.write_text("{}\n", encoding="utf-8")
+            output = root / "profile-draft.json"
+            profile = {
+                "schema_version": codex_upgrade.PROFILE_SCHEMA,
+                "codex_version": manifest["target_version"],
+                "profile_id": "codex-0.146.0-prepared",
+                "profile_digest": "d" * 64,
+                "profile_payload": {"prepared": True},
+                "profile_payload_sha256": codex_upgrade._fingerprint(
+                    {"prepared": True}
+                ),
+                "status": "draft",
+            }
+
+            def prepare(*_args: object, **_kwargs: object) -> argparse.Namespace:
+                output.write_text(json.dumps(profile), encoding="utf-8")
+                return argparse.Namespace(
+                    returncode=0,
+                    stdout=json.dumps(profile),
+                    stderr="",
+                )
+
+            with mock.patch.object(
+                codex_upgrade.subprocess,
+                "run",
+                side_effect=prepare,
+            ) as run:
+                return_code, stdout, stderr = self._run_main(
+                    [
+                        "prepare-profile",
+                        "--campaign-dir",
+                        str(campaign_dir),
+                        "--snapshot",
+                        str(snapshot),
+                        "--profile-id",
+                        profile["profile_id"],
+                        "--output",
+                        str(output),
+                    ]
+                )
+            self.assertEqual(return_code, 0, stderr)
+            self.assertIn('"status": "draft"', stdout)
+            self.assertIn("-prepare-snapshot", run.call_args.args[0])
+
+    def test_stage_profile_binds_approved_identity_without_changing_active(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            campaign_dir, manifest, _ = self._create_classified_campaign(root)
+            classification = codex_upgrade._load_stage_result(
+                campaign_dir,
+                "classify",
+            )
+            receipt = {
+                "schema_version": "official-egress-catalog-stage/v1",
+                "campaign_id": manifest["campaign_id"],
+                "classification_sha256": classification[
+                    "joint_manifest_sha256"
+                ],
+                "target_version": manifest["target_version"],
+                "target_profile_digest": "c" * 64,
+                "candidate_release_mode": "previous",
+                "active_unchanged": True,
+                "production_selector_changed": False,
+            }
+            output = root / "catalog-stage"
+            asset = b"{}\n"
+            inventory = [
+                {
+                    "path": "catalogdata/runtime/release-catalog.json",
+                    "sha256": hashlib.sha256(asset).hexdigest(),
+                    "size": len(asset),
+                }
+            ]
+            receipt["inventory"] = inventory
+            receipt["inventory_sha256"] = codex_upgrade._fingerprint(inventory)
+
+            def run_stage(*_args: object, **_kwargs: object) -> argparse.Namespace:
+                target = output / "catalogdata/runtime/release-catalog.json"
+                target.parent.mkdir(parents=True)
+                target.write_bytes(asset)
+                (output / "catalog-stage-receipt.json").write_text(
+                    json.dumps(receipt),
+                    encoding="utf-8",
+                )
+                return argparse.Namespace(
+                    returncode=0,
+                    stdout=json.dumps(receipt),
+                    stderr="",
+                )
+
+            with mock.patch.object(
+                codex_upgrade.subprocess,
+                "run",
+                side_effect=run_stage,
+            ) as run:
+                return_code, stdout, stderr = self._run_main(
+                    [
+                        "stage-profile",
+                        "--campaign-dir",
+                        str(campaign_dir),
+                        "--output",
+                        str(output),
+                    ]
+                )
+            self.assertEqual(return_code, 0, stderr)
+            self.assertIn('"active_unchanged": true', stdout)
+            command = run.call_args.args[0]
+            self.assertIn("./cmd/egresscatalogstage", command)
+            self.assertIn(str(output), command)
 
     def test_classify_supports_explicit_rule_add_delete_and_change(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

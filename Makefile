@@ -86,6 +86,7 @@ check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal
 	@cd backend && test -z "$$(gofmt -l \
 		./internal/officialegress/ \
 		./cmd/egressruntimedump/ \
+		./cmd/egresscatalogstage/ \
 		./cmd/egressprofiledump/ \
 		./cmd/egressreleasegraphdump/ \
 		./cmd/egressbindingdump/ \
@@ -95,6 +96,7 @@ check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal
 	@cd backend && go vet \
 		./internal/officialegress/... \
 		./cmd/egressruntimedump/ \
+		./cmd/egresscatalogstage/ \
 		./cmd/egressprofiledump/ \
 		./cmd/egressreleasegraphdump/ \
 		./cmd/egressbindingdump/ \
@@ -104,6 +106,7 @@ check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal
 	@cd backend && go test \
 		./internal/officialegress/... \
 		./cmd/egressruntimedump/ \
+		./cmd/egresscatalogstage/ \
 		./cmd/egressprofiledump/ \
 		./cmd/egressreleasegraphdump/ \
 		./cmd/egressbindingdump/ \
