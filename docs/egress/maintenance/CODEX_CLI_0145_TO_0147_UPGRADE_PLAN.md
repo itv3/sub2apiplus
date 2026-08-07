@@ -1,6 +1,6 @@
 # Codex CLI 0.145.0 → 0.147.0 Official Egress 升级计划（执行中）
 
-> 状态：正式 Campaign 已完成 `official_sealed`；下一步执行 `classify`
+> 状态：正式 Campaign 已完成 `official_sealed`；分类已完成 `profile_approved`；下一步建立 0.147 候选画像
 > 创建日期：2026-08-07
 > 审阅基线：commit `abf236375f66aa096580092e646c4e33d37bb135`
 > 基线画像：Codex CLI `0.145.0`
@@ -208,6 +208,24 @@ host/path/query/header、framing、代理、TLS 或连接复用。
 新出站面不是失败；未发现、未分类或静默回落旧画像才失败。删除规则必须同时具备源码
 不可达结论、正反场景、旧引用清单和 RemovalReceipt，否则保持 `blocked`。
 
+本次已完成：Campaign `codex-0145-to-0147-20260807T170500Z` 的分类结果为
+`complete`，联合摘要为
+`548e9fd7469e090693d39d52d1a3e3a5cfe2c8e85b498ea3df10506067ee03a8`；42 条规则、2759 条
+发现全部完成分类，`blocked=0`。批准清单及摘要如下：
+
+| 清单 | 封存 SHA-256 |
+|---|---|
+| `target-rules.json` | `91616975b1a7e3e3717a99c72a937b8f6901a921c434decb2ee7fdab85c4f75b` |
+| `rule-migration.json` | `2d2915ae0c25ccec9292513827b5f97d5130886784e629ad70cbeecf3a7f4777` |
+| `scenarios.json` | `32af1f9a1375c321b65e9de74497f3c1fc50f69566ef87d9f2b0da206e6503a0` |
+| `profile.json` | `24c0c63a34f59962cac5df3697ab9b2b4762ea710a75d273fb5a60f5469b47a0` |
+| `assertion-profile.json` | `9e51781f6d2d92a7f8363e4859f8699c21290ae2cc01ab0539f69de17080feac` |
+
+目标画像为 `codex-0.147.0-official-v1`，Profile digest 为
+`5b209c2400321feda8c45592d80dcdf82dd4806235daf4bfdd30acba20becc43`。五份清单已写入
+Campaign 的 `classification/approved/`，并通过 stage-contract、文件摘要、画像 payload
+摘要和场景覆盖复核；尚未写入仓库 Active selector。
+
 ## 7. 建立 0.147 画像与第二版本门禁
 
 ### 7.1 画像资产
@@ -289,8 +307,8 @@ final-wire 可用，但不能替代 alpha 真实 service 链或 `server_response
 - Vircs 保留原 `capture-cli`/0.145 运行点，并新增 `capture-cli-0147`；正式采集使用
   `--pid host`、Linux/x86_64、runtime image `oauth-egress-capture-capture-cli@sha256:3438c4e0…`；
 - 旧的 `T160500Z`、`T161000Z`、`T163600Z` Campaign/attempt 均保持不可变并标记失败或废弃，
-  不复用其证据；当前 `T170500Z` 已完成 `official_sealed`；
-- 下一步严格执行第 6.4 节：对同一 Campaign 运行 `classify`，生成并审核五份完整 0.147
-  清单；未完成 `profile_approved` 前不得建立画像、切 Active 或开始 candidate。
+  不复用其证据；当前 `T170500Z` 已完成 `official_sealed` 与 `profile_approved`；
+- 下一步严格执行第 7 节：先生成并复核不切 Active 的内容寻址 0.147 画像候选，再执行第二
+  版本门禁；当前目标 Profile digest 为 `5b209c24…`，分类联合摘要为 `548e9fd7…`。
 
 用户已授权按第 5→6→7→8→9 章连续执行；每个变更集完成并自复核后自动进入下一项。
