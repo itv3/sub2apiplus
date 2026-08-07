@@ -16,6 +16,7 @@ import stat
 import string
 import subprocess
 import sys
+import tarfile
 import tempfile
 import time
 import tomllib
@@ -1685,6 +1686,14 @@ def _build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--baseline-evidence", type=Path, required=True)
     plan.add_argument("--target-sha256", required=True)
     plan.add_argument(
+        "--target-package",
+        type=Path,
+        required=True,
+        help="官方 codex-package 压缩包的持久绝对路径。",
+    )
+    plan.add_argument("--target-package-sha256", required=True)
+    plan.add_argument("--target-code-mode-host-sha256", required=True)
+    plan.add_argument(
         "--runtime-image",
         required=True,
         help="官方采集运行时的 repository@sha256 不可变镜像引用。",
@@ -1711,6 +1720,14 @@ def _build_parser() -> argparse.ArgumentParser:
     plan.add_argument("--redis-container", default="sub2apiplus-redis")
     plan.add_argument("--capture-codex-bin", default="/usr/local/bin/codex-capture")
     plan.add_argument("--relay-codex-bin", default="/root/.local/bin/codex")
+    plan.add_argument(
+        "--capture-code-mode-host-bin",
+        default="/usr/local/bin/codex-code-mode-host",
+    )
+    plan.add_argument(
+        "--relay-code-mode-host-bin",
+        default="/root/.local/bin/codex-code-mode-host",
+    )
     plan.add_argument("--codex-account-id", type=int, default=90)
     plan.add_argument("--api-key-id", type=int, default=1)
 
@@ -1826,6 +1843,14 @@ def _validate_arguments(arguments: argparse.Namespace) -> None:
             raise ConfigurationError(f"{field} 必须是三段版本号。")
     if not SHA256_RE.fullmatch(arguments.target_sha256):
         raise ConfigurationError("--target-sha256 必须是 64 位小写 SHA-256。")
+    if not SHA256_RE.fullmatch(arguments.target_package_sha256):
+        raise ConfigurationError(
+            "--target-package-sha256 必须是 64 位小写 SHA-256。"
+        )
+    if not SHA256_RE.fullmatch(arguments.target_code_mode_host_sha256):
+        raise ConfigurationError(
+            "--target-code-mode-host-sha256 必须是 64 位小写 SHA-256。"
+        )
     if not IMMUTABLE_IMAGE_RE.fullmatch(arguments.runtime_image):
         raise ConfigurationError(
             "--runtime-image 必须是 repository@sha256:<manifest-digest>。"
@@ -1863,7 +1888,28 @@ def _validate_arguments(arguments: argparse.Namespace) -> None:
         value = str(getattr(arguments, field))
         if not SAFE_ID_RE.fullmatch(value):
             raise ConfigurationError(f"--{field.replace('_', '-')} 格式非法。")
-    for field in ("capture_codex_bin", "relay_codex_bin"):
+    if (
+        not arguments.target_package.is_absolute()
+        or not SAFE_ABSOLUTE_PATH_RE.fullmatch(str(arguments.target_package))
+        or arguments.target_package.is_symlink()
+        or not arguments.target_package.is_file()
+    ):
+        raise ConfigurationError(
+            "--target-package 必须是存在、非符号链接的安全绝对文件。"
+        )
+    arguments.target_package_identity = _verify_codex_package(
+        arguments.target_package,
+        expected_version=arguments.target_version,
+        expected_package_sha256=arguments.target_package_sha256,
+        expected_binary_sha256=arguments.target_sha256,
+        expected_code_mode_host_sha256=arguments.target_code_mode_host_sha256,
+    )
+    for field in (
+        "capture_codex_bin",
+        "relay_codex_bin",
+        "capture_code_mode_host_bin",
+        "relay_code_mode_host_bin",
+    ):
         value = str(getattr(arguments, field))
         if not SAFE_ABSOLUTE_PATH_RE.fullmatch(value):
             raise ConfigurationError(f"--{field.replace('_', '-')} 路径不安全。")
@@ -2044,6 +2090,114 @@ def _source_identity(root: Path, version: str) -> tuple[dict[str, Any], dict[str
         "git_commit": _git_commit(root),
     }
     return identity, inventory
+
+
+def _verify_codex_package(
+    package: Path,
+    *,
+    expected_version: str,
+    expected_package_sha256: str,
+    expected_binary_sha256: str,
+    expected_code_mode_host_sha256: str,
+) -> dict[str, Any]:
+    """验证官方 package 内的 CLI 与 Code Mode helper 形成同一身份闭包。"""
+
+    if file_sha256(package) != expected_package_sha256:
+        raise ConfigurationError("官方 codex-package 压缩包摘要不一致。")
+    required_members = {
+        "codex-package.json",
+        "bin/codex",
+        "bin/codex-code-mode-host",
+    }
+    try:
+        with tarfile.open(package, mode="r:gz") as archive:
+            members_by_name: dict[str, list[tarfile.TarInfo]] = {}
+            for member in archive.getmembers():
+                members_by_name.setdefault(member.name.removeprefix("./"), []).append(
+                    member
+                )
+            if any(
+                len(members_by_name.get(name, [])) != 1
+                for name in required_members
+            ):
+                raise ConfigurationError(
+                    "官方 codex-package 缺少必要成员或存在重名成员。"
+                )
+            selected = {
+                name: members_by_name[name][0] for name in required_members
+            }
+            if any(not member.isfile() for member in selected.values()):
+                raise ConfigurationError(
+                    "官方 codex-package 必要成员必须是普通文件。"
+                )
+
+            def member_bytes(name: str, *, limit: int | None = None) -> bytes:
+                member = selected[name]
+                if limit is not None and member.size > limit:
+                    raise ConfigurationError(
+                        f"官方 codex-package 成员过大：{name}"
+                    )
+                stream = archive.extractfile(member)
+                if stream is None:
+                    raise ConfigurationError(
+                        f"无法读取官方 codex-package 成员：{name}"
+                    )
+                return stream.read()
+
+            def member_sha256(name: str) -> str:
+                stream = archive.extractfile(selected[name])
+                if stream is None:
+                    raise ConfigurationError(
+                        f"无法读取官方 codex-package 成员：{name}"
+                    )
+                digest = hashlib.sha256()
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(chunk)
+                return digest.hexdigest()
+
+            metadata = json.loads(
+                member_bytes("codex-package.json", limit=1024 * 1024).decode(
+                    "utf-8"
+                )
+            )
+            binary_sha256 = member_sha256("bin/codex")
+            helper_sha256 = member_sha256("bin/codex-code-mode-host")
+    except ConfigurationError:
+        raise
+    except (
+        OSError,
+        tarfile.TarError,
+        UnicodeDecodeError,
+        json.JSONDecodeError,
+    ) as error:
+        raise ConfigurationError("无法验证官方 codex-package。") from error
+    if not isinstance(metadata, dict):
+        raise ConfigurationError("官方 codex-package 元数据必须是对象。")
+    package_target = metadata.get("target")
+    if (
+        metadata.get("layoutVersion") != 1
+        or metadata.get("version") != expected_version
+        or metadata.get("variant") != "codex"
+        or metadata.get("entrypoint") != "bin/codex"
+        or not isinstance(package_target, str)
+        or not re.fullmatch(r"[A-Za-z0-9._-]+", package_target)
+    ):
+        raise ConfigurationError("官方 codex-package 元数据与目标坐标不一致。")
+    if binary_sha256 != expected_binary_sha256:
+        raise ConfigurationError("官方 package 内 Codex CLI 摘要不一致。")
+    if helper_sha256 != expected_code_mode_host_sha256:
+        raise ConfigurationError(
+            "官方 package 内 codex-code-mode-host 摘要不一致。"
+        )
+    return {
+        "asset_sha256": expected_package_sha256,
+        "layout_version": 1,
+        "target": package_target,
+        "variant": "codex",
+        "entrypoint": "bin/codex",
+        "binary_sha256": binary_sha256,
+        "code_mode_host_sha256": helper_sha256,
+    }
 
 
 def _tool_identity(*, include_git: bool = True) -> dict[str, Any]:
@@ -2242,6 +2396,7 @@ def create_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
     official_identity = {
         "cli_version": arguments.target_version,
         "binary_sha256": arguments.target_sha256,
+        "package": arguments.target_package_identity,
         "source_tree_sha256": target_identity["source_tree_sha256"],
         "cargo_lock_sha256": target_identity["cargo_lock_sha256"],
         "git_commit": target_identity["git_commit"],
@@ -2296,6 +2451,7 @@ def create_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
         "configuration": {
             "baseline_source": str(arguments.baseline_source.resolve()),
             "target_source": str(arguments.target_source.resolve()),
+            "target_package": str(arguments.target_package.resolve()),
             "baseline_evidence": str(arguments.baseline_evidence.resolve()),
             "runtime_image": arguments.runtime_image,
             "model": arguments.model,
@@ -2307,6 +2463,8 @@ def create_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
             "redis_container": arguments.redis_container,
             "capture_codex_bin": arguments.capture_codex_bin,
             "relay_codex_bin": arguments.relay_codex_bin,
+            "capture_code_mode_host_bin": arguments.capture_code_mode_host_bin,
+            "relay_code_mode_host_bin": arguments.relay_code_mode_host_bin,
             "codex_account_id": arguments.codex_account_id,
             "api_key_id": arguments.api_key_id,
         },
@@ -3251,6 +3409,14 @@ def _campaign_arguments(
         target_source=Path(configuration["target_source"]),
         baseline_evidence=Path(configuration["baseline_evidence"]),
         target_sha256=manifest["target_sha256"],
+        target_package=Path(configuration["target_package"]),
+        target_package_sha256=manifest["official_identity"]["package"][
+            "asset_sha256"
+        ],
+        target_code_mode_host_sha256=manifest["official_identity"]["package"][
+            "code_mode_host_sha256"
+        ],
+        target_package_identity=manifest["official_identity"]["package"],
         runtime_image=runtime_image or configuration["runtime_image"],
         output=campaign_dir,
         campaign_dir=campaign_dir,
@@ -3276,6 +3442,8 @@ def _campaign_arguments(
         redis_container=configuration["redis_container"],
         capture_codex_bin=configuration["capture_codex_bin"],
         relay_codex_bin=configuration["relay_codex_bin"],
+        capture_code_mode_host_bin=configuration["capture_code_mode_host_bin"],
+        relay_code_mode_host_bin=configuration["relay_code_mode_host_bin"],
         codex_account_id=int(configuration["codex_account_id"]),
         api_key_id=int(configuration["api_key_id"]),
         candidate_id=candidate_id,
@@ -3399,6 +3567,20 @@ def _verify_plan_identity(campaign_dir: Path, manifest: dict[str, Any]) -> None:
     for field, value in current_identity.items():
         if value != expected.get(field):
             raise ConfigurationError(f"官方目标身份漂移：{field}")
+    package_identity = expected.get("package")
+    if not isinstance(package_identity, dict):
+        raise ConfigurationError("官方目标身份缺少 package 闭包。")
+    current_package_identity = _verify_codex_package(
+        Path(manifest["configuration"]["target_package"]),
+        expected_version=manifest["target_version"],
+        expected_package_sha256=str(package_identity.get("asset_sha256", "")),
+        expected_binary_sha256=manifest["target_sha256"],
+        expected_code_mode_host_sha256=str(
+            package_identity.get("code_mode_host_sha256", "")
+        ),
+    )
+    if current_package_identity != package_identity:
+        raise ConfigurationError("官方目标 package 身份漂移。")
     current_tool = _tool_identity(include_git=False)
     if current_tool["files_sha256"] != manifest["tool_identity"]["files_sha256"]:
         raise ConfigurationError("升级工具摘要在 plan 后发生变化。")
@@ -3563,7 +3745,11 @@ def _verify_official_binaries(manifest: dict[str, Any]) -> dict[str, Any]:
         )
 
     host_relay = Path(configuration["relay_codex_bin"])
-    if host_relay.is_symlink() or not host_relay.is_file() or not os.access(host_relay, os.X_OK):
+    if (
+        host_relay.is_symlink()
+        or not host_relay.is_file()
+        or not os.access(host_relay, os.X_OK)
+    ):
         raise ConfigurationError("宿主机 relay_codex_bin 不存在、不可信或不可执行。")
     try:
         host_version = subprocess.run(
@@ -3586,6 +3772,75 @@ def _verify_official_binaries(manifest: dict[str, Any]) -> dict[str, Any]:
             label="host:relay_codex_bin",
         )
     )
+    package_identity = manifest["official_identity"].get("package")
+    if not isinstance(package_identity, dict):
+        raise ConfigurationError("官方目标身份缺少 package 闭包。")
+    expected_helper_sha256 = str(
+        package_identity.get("code_mode_host_sha256", "")
+    )
+    helper_probe = (
+        "import hashlib,json,os,pathlib,sys;"
+        "p=pathlib.Path(sys.argv[1]);"
+        "print(json.dumps({'is_file':p.is_file(),'is_symlink':p.is_symlink(),"
+        "'executable':os.access(p,os.X_OK),'sha256':"
+        "hashlib.sha256(p.read_bytes()).hexdigest() if p.is_file() else ''}))"
+    )
+    helpers: list[dict[str, str]] = []
+    for name in ("capture_code_mode_host_bin", "relay_code_mode_host_bin"):
+        helper = str(configuration[name])
+        try:
+            result = subprocess.run(
+                [
+                    "docker",
+                    "exec",
+                    container,
+                    "python3",
+                    "-c",
+                    helper_probe,
+                    helper,
+                ],
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=60,
+            )
+            payload = json.loads(result.stdout)
+        except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as error:
+            raise ConfigurationError(f"无法验证容器内 {name}：{error}") from error
+        if (
+            not isinstance(payload, dict)
+            or payload.get("is_file") is not True
+            or payload.get("is_symlink") is not False
+            or payload.get("executable") is not True
+            or payload.get("sha256") != expected_helper_sha256
+        ):
+            raise ConfigurationError(f"容器内 {name} 与官方 package 不一致。")
+        helpers.append(
+            {
+                "label": f"container:{name}",
+                "path": helper,
+                "sha256": expected_helper_sha256,
+            }
+        )
+
+    host_helper = Path(configuration["relay_code_mode_host_bin"])
+    if (
+        host_helper.is_symlink()
+        or not host_helper.is_file()
+        or not os.access(host_helper, os.X_OK)
+        or file_sha256(host_helper) != expected_helper_sha256
+    ):
+        raise ConfigurationError(
+            "宿主机 relay_code_mode_host_bin 与官方 package 不一致。"
+        )
+    helpers.append(
+        {
+            "label": "host:relay_code_mode_host_bin",
+            "path": str(host_helper),
+            "sha256": expected_helper_sha256,
+        }
+    )
     return {
         "passed": True,
         "expected_version": expected_version,
@@ -3593,6 +3848,8 @@ def _verify_official_binaries(manifest: dict[str, Any]) -> dict[str, Any]:
         "runtime_image_reference": runtime_image_reference,
         "runtime_image_id": runtime_image_id,
         "identities": identities,
+        "package": package_identity,
+        "helpers": helpers,
     }
 
 
@@ -6466,11 +6723,18 @@ def _verify_sealed_official_binaries(
 ) -> bool:
     verification = official.get("binary_verification")
     identities = verification.get("identities") if isinstance(verification, dict) else None
+    helpers = verification.get("helpers") if isinstance(verification, dict) else None
     expected_labels = {
         "container:capture_codex_bin",
         "container:relay_codex_bin",
         "host:relay_codex_bin",
     }
+    expected_helper_labels = {
+        "container:capture_code_mode_host_bin",
+        "container:relay_code_mode_host_bin",
+        "host:relay_code_mode_host_bin",
+    }
+    package_identity = manifest.get("official_identity", {}).get("package")
     return bool(
         isinstance(verification, dict)
         and verification.get("passed") is True
@@ -6487,6 +6751,17 @@ def _verify_sealed_official_binaries(
             and item.get("version") == manifest.get("target_version")
             and item.get("sha256") == manifest.get("target_sha256")
             for item in identities
+        )
+        and isinstance(package_identity, dict)
+        and verification.get("package") == package_identity
+        and isinstance(helpers, list)
+        and {item.get("label") for item in helpers if isinstance(item, dict)}
+        == expected_helper_labels
+        and all(
+            isinstance(item, dict)
+            and item.get("sha256")
+            == package_identity.get("code_mode_host_sha256")
+            for item in helpers
         )
     )
 

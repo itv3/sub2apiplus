@@ -7,6 +7,7 @@ import contextlib
 import hashlib
 import io
 import json
+import tarfile
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -80,6 +81,20 @@ class CodexUpgradeTest(unittest.TestCase):
         self.assertNotIn(
             "/capture/tools/official_client_capture",
             serialized_scenario,
+        )
+        wham_job = next(
+            job for job in scenario["capture_jobs"] if job["id"] == "official-wham-safe"
+        )
+        wham_command = wham_job["steps"][1]["argv"][2]
+        self.assertIn("basicConstraints=critical,CA:TRUE", wham_command)
+        self.assertIn("basicConstraints=critical,CA:FALSE", wham_command)
+        self.assertIn(
+            "SSL_CERT_FILE=/capture/runtime/{campaign_id}-official-wham-safe/ca.crt",
+            wham_command,
+        )
+        self.assertNotIn(
+            "SSL_CERT_FILE=/capture/runtime/{campaign_id}-official-wham-safe/server.crt",
+            wham_command,
         )
 
         mutated = json.loads(json.dumps(scenario))
@@ -403,6 +418,32 @@ class CodexUpgradeTest(unittest.TestCase):
             version="0.145.0",
             name="scenarios.json",
         )
+        package_path = root / "codex-package-x86_64-unknown-linux-musl.tar.gz"
+        binary_bytes = b"codex-cli-test-binary"
+        code_mode_host_bytes = b"codex-code-mode-host-test-binary"
+        package_metadata = json.dumps(
+            {
+                "layoutVersion": 1,
+                "version": "0.146.0",
+                "target": "x86_64-unknown-linux-musl",
+                "variant": "codex",
+                "entrypoint": "bin/codex",
+                "resourcesDir": "codex-resources",
+                "pathDir": "codex-path",
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+        with tarfile.open(package_path, mode="w:gz") as archive:
+            for name, content, mode in (
+                ("codex-package.json", package_metadata, 0o644),
+                ("bin/codex", binary_bytes, 0o755),
+                ("bin/codex-code-mode-host", code_mode_host_bytes, 0o755),
+            ):
+                member = tarfile.TarInfo(name)
+                member.size = len(content)
+                member.mode = mode
+                member.mtime = 0
+                archive.addfile(member, io.BytesIO(content))
         return argparse.Namespace(
             command="plan",
             campaign_dir=root / "campaign",
@@ -415,7 +456,12 @@ class CodexUpgradeTest(unittest.TestCase):
             baseline_source=baseline_source,
             target_source=target_source,
             baseline_evidence=baseline_evidence,
-            target_sha256="a" * 64,
+            target_sha256=hashlib.sha256(binary_bytes).hexdigest(),
+            target_package=package_path,
+            target_package_sha256=codex_upgrade.file_sha256(package_path),
+            target_code_mode_host_sha256=hashlib.sha256(
+                code_mode_host_bytes
+            ).hexdigest(),
             runtime_image=f"capture-runtime@sha256:{'b' * 64}",
             rule_manifest=baseline_rule_manifest,
             scenario_manifest=scenario_manifest,
@@ -431,6 +477,8 @@ class CodexUpgradeTest(unittest.TestCase):
             redis_container="sub2apiplus-redis",
             capture_codex_bin="/usr/local/bin/codex-capture",
             relay_codex_bin="/root/.local/bin/codex",
+            capture_code_mode_host_bin="/usr/local/bin/codex-code-mode-host",
+            relay_code_mode_host_bin="/root/.local/bin/codex-code-mode-host",
             codex_account_id=90,
             api_key_id=1,
             candidate_id=None,
@@ -957,10 +1005,11 @@ class CodexUpgradeTest(unittest.TestCase):
         }
         binary_verification: dict[str, object] | None = None
         if phase == "official":
+            package_identity = campaign_manifest["official_identity"]["package"]
             binary_verification = {
                 "passed": True,
                 "expected_version": "0.146.0",
-                "expected_sha256": "a" * 64,
+                "expected_sha256": campaign_manifest["target_sha256"],
                 "runtime_image_reference": f"capture-runtime@sha256:{'b' * 64}",
                 "runtime_image_id": f"sha256:{'c' * 64}",
                 "identities": [
@@ -969,12 +1018,34 @@ class CodexUpgradeTest(unittest.TestCase):
                         "path": path,
                         "version": "0.146.0",
                         "version_output": "codex-cli 0.146.0",
-                        "sha256": "a" * 64,
+                        "sha256": campaign_manifest["target_sha256"],
                     }
                     for label, path in (
                         ("container:capture_codex_bin", "/usr/local/bin/codex-capture"),
                         ("container:relay_codex_bin", "/root/.local/bin/codex"),
                         ("host:relay_codex_bin", "/root/.local/bin/codex"),
+                    )
+                ],
+                "package": package_identity,
+                "helpers": [
+                    {
+                        "label": label,
+                        "path": path,
+                        "sha256": package_identity["code_mode_host_sha256"],
+                    }
+                    for label, path in (
+                        (
+                            "container:capture_code_mode_host_bin",
+                            "/usr/local/bin/codex-code-mode-host",
+                        ),
+                        (
+                            "container:relay_code_mode_host_bin",
+                            "/root/.local/bin/codex-code-mode-host",
+                        ),
+                        (
+                            "host:relay_code_mode_host_bin",
+                            "/root/.local/bin/codex-code-mode-host",
+                        ),
                     )
                 ],
             }
@@ -1551,6 +1622,12 @@ class CodexUpgradeTest(unittest.TestCase):
                     str(arguments.baseline_evidence),
                     "--target-sha256",
                     arguments.target_sha256,
+                    "--target-package",
+                    str(arguments.target_package),
+                    "--target-package-sha256",
+                    arguments.target_package_sha256,
+                    "--target-code-mode-host-sha256",
+                    arguments.target_code_mode_host_sha256,
                     "--runtime-image",
                     arguments.runtime_image,
                     "--rule-manifest",
@@ -1568,6 +1645,16 @@ class CodexUpgradeTest(unittest.TestCase):
             )
             self.assertEqual(status_code, 0, status_stderr)
             self.assertEqual(json.loads(status_stdout)["status"], "planned")
+
+    def test_plan_rejects_package_helper_digest_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            arguments = self._campaign_arguments(Path(directory))
+            arguments.target_code_mode_host_sha256 = "f" * 64
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "codex-code-mode-host 摘要不一致",
+            ):
+                codex_upgrade.create_campaign(arguments)
 
     def test_candidate_stage_never_overwrites_an_existing_candidate_id(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
