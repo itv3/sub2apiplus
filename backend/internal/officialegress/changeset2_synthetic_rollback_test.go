@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
@@ -136,6 +137,190 @@ func syntheticChangeset2ReleaseCatalog(t *testing.T) ReleaseCatalog {
 		t.Fatal(err)
 	}
 	return catalog
+}
+
+// syntheticChangeset2MixedVersionReleaseCatalog 构造只用于门禁自测的异版本目录。
+// 它完整替换画像中的行为版本坐标，并让 active=0.147.0、previous=0.145.0；
+// 该目录不写入 runtime，也不得作为正式画像或取证结果。
+func syntheticChangeset2MixedVersionReleaseCatalog(t *testing.T) ReleaseCatalog {
+	t.Helper()
+	base := DefaultReleaseCatalog()
+	graphDoc := base.graph.ToDoc()
+	baselineNode, ok := base.graph.Resolve(
+		RegistryPurposeOpenAIOAuthHTTP,
+		releasecontract.ReleaseModePrevious,
+	)
+	if !ok {
+		t.Fatal("正式 previous HTTP release 缺失")
+	}
+	if baselineNode.Snapshot.Version != "0.145.0" {
+		baselineNode, ok = base.graph.Resolve(
+			RegistryPurposeOpenAIOAuthHTTP,
+			releasecontract.ReleaseModeActive,
+		)
+		if !ok || baselineNode.Snapshot.Version != "0.145.0" {
+			t.Fatal("正式 ReleaseGraph 不再引用 0.145.0 baseline")
+		}
+	}
+	var sourceEntry profilecontract.SnapshotCatalogEntry
+	for _, entry := range base.snapshots.ToDoc().Snapshots {
+		if entry.Version == baselineNode.Snapshot.Version &&
+			entry.Digest == baselineNode.Snapshot.Digest {
+			sourceEntry = entry
+			break
+		}
+	}
+	if sourceEntry.File == "" {
+		t.Fatal("正式 active snapshot entry 缺失")
+	}
+	baselineRaw, err := releaseCatalogFS.ReadFile("catalogdata/runtime/" + sourceEntry.File)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetRaw := []byte(strings.ReplaceAll(string(baselineRaw), "0.145.0", "0.147.0"))
+	if strings.Contains(string(targetRaw), "0.145.0") {
+		t.Fatal("异版本合成画像仍残留 0.145.0 行为坐标")
+	}
+	var targetDoc profilecontract.SnapshotDoc
+	if err := json.Unmarshal(targetRaw, &targetDoc); err != nil {
+		t.Fatal(err)
+	}
+	targetDoc.Digest = ""
+	digestInput, err := json.Marshal(targetDoc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetSum := sha256.Sum256(digestInput)
+	targetDoc.Digest = hex.EncodeToString(targetSum[:])
+	targetRaw, err = json.Marshal(targetDoc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	targetFile := fmt.Sprintf(
+		"snapshots/%s/%s.json",
+		targetDoc.Version,
+		targetDoc.Digest,
+	)
+	snapshotDoc := profilecontract.SnapshotCatalogDoc{
+		SchemaVersion: profilecontract.SnapshotCatalogSchemaVersion,
+		Snapshots: []profilecontract.SnapshotCatalogEntry{
+			sourceEntry,
+			{Version: targetDoc.Version, Digest: targetDoc.Digest, File: targetFile},
+		},
+	}
+	snapshots, err := profilecontract.NewSnapshotCatalog(
+		snapshotDoc,
+		func(path string) ([]byte, error) {
+			switch path {
+			case sourceEntry.File:
+				return append([]byte(nil), baselineRaw...), nil
+			case targetFile:
+				return append([]byte(nil), targetRaw...), nil
+			default:
+				return nil, fmt.Errorf("未知异版本合成 snapshot: %s", path)
+			}
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacer := strings.NewReplacer("0.145.0", "0.147.0", "0_145_0", "0_147_0")
+	for index := range graphDoc.Nodes {
+		node := &graphDoc.Nodes[index]
+		if node.Mode != releasecontract.ReleaseModeActive {
+			continue
+		}
+		node.Build.ID = replacer.Replace(node.Build.ID)
+		node.Build.Version = targetDoc.Version
+		node.Build.UserAgent = replacer.Replace(node.Build.UserAgent)
+		node.Build.Source = "synthetic:0.145.0-to-0.147.0"
+		node.Wire.ID = replacer.Replace(node.Wire.ID)
+		node.Wire.BuildID = node.Build.ID
+		node.Wire.TransportProfileID = replacer.Replace(node.Wire.TransportProfileID)
+		node.Wire.Source = "synthetic:0.145.0-to-0.147.0"
+		node.Snapshot = releasecontract.SnapshotReferenceDoc{
+			Version: targetDoc.Version,
+			Digest:  targetDoc.Digest,
+		}
+		node.Wire.Digest = syntheticChangeset2RegistryDigest(t, node.Build, node.Wire)
+	}
+	graph, err := releasecontract.NewReleaseGraph(graphDoc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := newReleaseCatalog(graph, snapshots, "synthetic-mixed-version", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return catalog
+}
+
+func syntheticChangeset2RegistryDigest(
+	t *testing.T,
+	build releasecontract.ReleaseBuildDoc,
+	wire releasecontract.ReleaseWireDoc,
+) string {
+	t.Helper()
+	type registryHeader struct {
+		Name  string `json:"name"`
+		Value string `json:"value"`
+	}
+	type registryBuild struct {
+		ID             string           `json:"id"`
+		Provider       string           `json:"provider"`
+		Product        string           `json:"product"`
+		Surface        string           `json:"surface"`
+		Version        string           `json:"version"`
+		UserAgent      string           `json:"user_agent"`
+		Originator     string           `json:"originator,omitempty"`
+		RuntimeHeaders []registryHeader `json:"runtime_headers,omitempty"`
+		Source         string           `json:"source"`
+	}
+	type registryWire struct {
+		ID                 string           `json:"id"`
+		Purpose            string           `json:"purpose"`
+		BuildID            string           `json:"build_id"`
+		AuthMode           string           `json:"auth_mode"`
+		Endpoint           string           `json:"endpoint"`
+		Transport          string           `json:"transport"`
+		NetworkVariant     string           `json:"network_variant"`
+		StaticHeaders      []registryHeader `json:"static_headers,omitempty"`
+		BetaHeader         string           `json:"beta_header,omitempty"`
+		TransportProfileID string           `json:"transport_profile_id"`
+		Source             string           `json:"source"`
+		Digest             string           `json:"digest"`
+	}
+	toHeaders := func(values []releasecontract.HeaderValueDoc) []registryHeader {
+		result := make([]registryHeader, len(values))
+		for index, value := range values {
+			result[index] = registryHeader(value)
+		}
+		return result
+	}
+	payload := struct {
+		Build   registryBuild `json:"build"`
+		Profile registryWire  `json:"profile"`
+	}{
+		Build: registryBuild{
+			ID: build.ID, Provider: build.Provider, Product: build.Product,
+			Surface: build.Surface, Version: build.Version, UserAgent: build.UserAgent,
+			Originator: build.Originator, RuntimeHeaders: toHeaders(build.RuntimeHeaders),
+			Source: build.Source,
+		},
+		Profile: registryWire{
+			ID: wire.ID, Purpose: wire.Purpose, BuildID: wire.BuildID,
+			AuthMode: wire.AuthMode, Endpoint: wire.Endpoint, Transport: wire.Transport,
+			NetworkVariant: wire.NetworkVariant, StaticHeaders: toHeaders(wire.StaticHeaders),
+			BetaHeader: wire.BetaHeader, TransportProfileID: wire.TransportProfileID,
+			Source: wire.Source, Digest: "",
+		},
+	}
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
 }
 
 func compileSyntheticChangeset2Endpoint(

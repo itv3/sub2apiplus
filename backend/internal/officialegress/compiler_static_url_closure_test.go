@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -357,6 +359,7 @@ func TestValidateStaticCompilerTargetRejectsQueryViolations(t *testing.T) {
 		return target
 	}
 	sidebandTrusted := staticClosureDynamicInputs(sidebandPlan.template).ServerResponseQuery
+	modelsQuery := staticClosureLegalTarget(modelsPlan.template).RawQuery
 	callerCases := []struct {
 		name     string
 		template EndpointPlanTemplate
@@ -366,7 +369,7 @@ func TestValidateStaticCompilerTargetRejectsQueryViolations(t *testing.T) {
 		{"画像空 query 配 RawQuery", httpPlan.template,
 			withQuery(httpPlan.template, "x=1"), nil},
 		{"画像外键", modelsPlan.template,
-			withQuery(modelsPlan.template, "client_version=0.145.0&extra=1"), nil},
+			withQuery(modelsPlan.template, modelsQuery+"&extra=1"), nil},
 		{"constant 值改写", modelsPlan.template,
 			withQuery(modelsPlan.template, "client_version=9.9.9"), nil},
 		{"required 缺失", modelsPlan.template,
@@ -382,18 +385,18 @@ func TestValidateStaticCompilerTargetRejectsQueryViolations(t *testing.T) {
 			withQuery(sidebandPlan.template, "intent=quicksilver&call_id=synthetic-call-id"),
 			nil},
 		{"可信输入含画像外键", modelsPlan.template,
-			withQuery(modelsPlan.template, "client_version=0.145.0"),
+			withQuery(modelsPlan.template, modelsQuery),
 			map[string]string{"call_id": "synthetic-call-id"}},
 		{"重复键", modelsPlan.template,
-			withQuery(modelsPlan.template, "client_version=0.145.0&client_version=0.145.0"), nil},
+			withQuery(modelsPlan.template, modelsQuery+"&"+modelsQuery), nil},
 		{"解析失败", modelsPlan.template,
 			withQuery(modelsPlan.template, "client_version=%zz"), nil},
 		{"分号分隔符", modelsPlan.template,
-			withQuery(modelsPlan.template, "client_version=0.145.0;a=b"), nil},
+			withQuery(modelsPlan.template, modelsQuery+";a=b"), nil},
 		{"前导 &", modelsPlan.template,
-			withQuery(modelsPlan.template, "&client_version=0.145.0"), nil},
+			withQuery(modelsPlan.template, "&"+modelsQuery), nil},
 		{"尾随 &", modelsPlan.template,
-			withQuery(modelsPlan.template, "client_version=0.145.0&"), nil},
+			withQuery(modelsPlan.template, modelsQuery+"&"), nil},
 		{"连续 &&", sidebandPlan.template,
 			withQuery(sidebandPlan.template, "intent=quicksilver&&call_id=synthetic"),
 			sidebandTrusted},
@@ -521,15 +524,27 @@ func TestValidateCompilerTargetRejectsServerResponseQueryForDynamicEndpoint(t *t
 
 func TestCompilerAcceptsProfileShapedStaticTargetsAcrossModes(t *testing.T) {
 	compiler := NewCompiler()
+	expectedEndpointIDs := map[string]bool{}
+	validatedEndpointIDs := map[string]bool{}
 	for _, mode := range []ReleaseMode{ReleaseModeActive, ReleaseModePrevious} {
-		staticEndpoints := map[string]bool{}
+		release, err := DefaultReleaseCatalog().Resolve(mode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, endpoint := range release.ExecutableProfile().Endpoints() {
+			if !endpoint.HostFromResponse {
+				expectedEndpointIDs[endpoint.ID] = true
+			}
+		}
+	}
+	for _, mode := range []ReleaseMode{ReleaseModeActive, ReleaseModePrevious} {
 		for _, binding := range codexProfileSinkBindings(t) {
 			bundle := staticClosureBundle(t, mode, binding.ID())
 			for _, plan := range bundle.EndpointPlans() {
 				if plan.DynamicTarget() {
 					continue
 				}
-				staticEndpoints[plan.EndpointID()] = true
+				validatedEndpointIDs[plan.EndpointID()] = true
 				target := staticClosureLegalTarget(plan.template)
 				invocationID := fmt.Sprintf(
 					"chg01-%s-%s-%s", mode, plan.SinkID(), plan.EndpointID(),
@@ -553,11 +568,24 @@ func TestCompilerAcceptsProfileShapedStaticTargetsAcrossModes(t *testing.T) {
 				}
 			}
 		}
-		// 与当前画像 §3 端点清单对齐：15 个静态端点全部覆盖。
-		if len(staticEndpoints) != 15 {
-			t.Fatalf("%s 静态端点覆盖数错误：%d %v", mode, len(staticEndpoints), staticEndpoints)
-		}
 	}
+	validated := sortedStringSet(validatedEndpointIDs)
+	expected := sortedStringSet(expectedEndpointIDs)
+	if !slices.Equal(validated, expected) {
+		t.Fatalf(
+			"已验证 endpoint ID 集合不等于 Active/Previous ReleaseCatalog 并集：validated=%v expected=%v",
+			validated, expected,
+		)
+	}
+}
+
+func sortedStringSet(values map[string]bool) []string {
+	result := make([]string, 0, len(values))
+	for value := range values {
+		result = append(result, value)
+	}
+	sort.Strings(result)
+	return result
 }
 
 // ----------------------------------------------------------------------------
@@ -568,17 +596,21 @@ func TestCompilerPreservesLegalQueryEquivalentRepresentations(t *testing.T) {
 	cases := []struct {
 		name       string
 		endpointID string
-		rawQuery   string
+		rewrite    func(string) string
 	}{
-		{"键顺序不同", "realtime_sideband", "call_id=synthetic-call-id&intent=quicksilver"},
-		{"合法转义不同", "models", "client_version=0%2E145%2E0"},
+		{"键顺序不同", "realtime_sideband", func(string) string {
+			return "call_id=synthetic-call-id&intent=quicksilver"
+		}},
+		{"合法转义不同", "models", func(raw string) string {
+			return strings.ReplaceAll(raw, ".", "%2E")
+		}},
 	}
 	compiler := NewCompiler()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			bundle, plan := staticClosurePlanForEndpoint(t, ReleaseModeActive, tc.endpointID)
 			target := staticClosureLegalTarget(plan.template)
-			target.RawQuery = tc.rawQuery
+			target.RawQuery = tc.rewrite(target.RawQuery)
 			egressPlan := staticClosureEgressPlan(
 				t, bundle, plan, target, "chg01-query-equivalent-"+tc.endpointID,
 			)
@@ -589,9 +621,9 @@ func TestCompilerPreservesLegalQueryEquivalentRepresentations(t *testing.T) {
 			if err != nil {
 				t.Fatalf("结构语义合法的等价 query 被拒绝：%v", err)
 			}
-			if execution.request.URL().RawQuery != tc.rawQuery {
+			if execution.request.URL().RawQuery != target.RawQuery {
 				t.Fatalf("调用方合法 RawQuery 原表示未保留：%q vs %q",
-					execution.request.URL().RawQuery, tc.rawQuery)
+					execution.request.URL().RawQuery, target.RawQuery)
 			}
 		})
 	}

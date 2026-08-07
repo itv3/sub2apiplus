@@ -17,8 +17,9 @@ func TestRuntimeCatalogFilesDeterministicallyRebuildEmbeddedTree(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(files) != 5 {
-		t.Fatalf("正式版本数据文件数=%d，期望 5", len(files))
+	wantFileCount := len(catalog.snapshots.ToDoc().Snapshots) + 3
+	if len(files) != wantFileCount {
+		t.Fatalf("正式版本数据文件数=%d，期望 %d", len(files), wantFileCount)
 	}
 	seen := make(map[string]bool, len(files))
 	for _, file := range files {

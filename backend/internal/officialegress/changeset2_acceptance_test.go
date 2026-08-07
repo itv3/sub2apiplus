@@ -118,7 +118,7 @@ func TestChangeset2BundleResolvesOnceAcrossRetryAndFallback(t *testing.T) {
 	}
 }
 
-func TestChangeset2ActivePreviousAndDigestSemanticsStayDistinct(t *testing.T) {
+func TestChangeset2ActivePreviousReleaseIdentitiesStayDistinct(t *testing.T) {
 	catalog := DefaultReleaseCatalog()
 	active, err := catalog.Resolve(ReleaseModeActive)
 	if err != nil {
@@ -134,8 +134,30 @@ func TestChangeset2ActivePreviousAndDigestSemanticsStayDistinct(t *testing.T) {
 	if active.ProfileDigest() == active.ReleaseDigest() {
 		t.Fatal("ProfileDigest 与 ReleaseDigest 语义仍被混用")
 	}
-	if active.Version() != previous.Version() {
-		t.Fatal("本合成回滚门禁要求同版本不同 Build/Wire identity")
+	if active.Version() != previous.Version() &&
+		active.ProfileDigest() == previous.ProfileDigest() {
+		t.Fatal("异版本 active/previous 错误共享 ProfileDigest")
+	}
+}
+
+func TestChangeset2MixedVersionCatalogRequiresThreeDistinctCoordinates(t *testing.T) {
+	catalog := syntheticChangeset2MixedVersionReleaseCatalog(t)
+	active, err := catalog.Resolve(ReleaseModeActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous, err := catalog.Resolve(ReleaseModePrevious)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if active.Version() == previous.Version() ||
+		active.ProfileDigest() == previous.ProfileDigest() ||
+		active.ReleaseDigest() == previous.ReleaseDigest() {
+		t.Fatalf(
+			"异版本三坐标未全部分离：active=%s/%s/%s previous=%s/%s/%s",
+			active.Version(), active.ProfileDigest(), active.ReleaseDigest(),
+			previous.Version(), previous.ProfileDigest(), previous.ReleaseDigest(),
+		)
 	}
 }
 

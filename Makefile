@@ -132,7 +132,9 @@ check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal
 		{ echo "🔴 正式版本数据已漂移，请重跑 cmd/egressruntimedump 更新 catalogdata/runtime"; exit 1; }
 	@cd backend && d=$$(mktemp -d) && trap "rm -rf $$d" EXIT; \
 		go run ./cmd/egressprofiledump $$d/snap.json >/dev/null && \
-		cmp -s $$d/snap.json internal/officialegress/profilecontract/testdata/snapshots/0.145.0/e0b59772622f14717f1fdf5c15bfae5758226a04fe8f030110d8a616e20fdf6b.json || \
+		key=$$(python3 -c 'import json,sys; d=json.load(open(sys.argv[1])); print(d["Version"] + "/" + d["Digest"])' $$d/snap.json) && \
+		test -n "$$key" && \
+		cmp -s $$d/snap.json internal/officialegress/profilecontract/testdata/snapshots/$$key.json || \
 		{ echo "🔴 画像快照已变更，请重跑 cmd/egressprofiledump 更新 testdata"; exit 1; }
 	@cd backend && d=$$(mktemp -d) && trap "rm -rf $$d" EXIT; \
 		go run ./cmd/egressprofiledump -enums \

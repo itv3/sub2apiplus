@@ -447,7 +447,8 @@ func (g *Guard) finalizationIdentityReasons(
 			binding.migrationReceipt.authorityID != token.AuthorityID ||
 			binding.migrationReceipt.tokenIssuerID != token.IssuerID ||
 			claim.backend != backend || claim.adapterID != token.AdapterID ||
-			claim.transportID != token.TransportID || claim.evidenceID != token.EndpointID {
+			!claim.matchesTransport(token.ReleaseDigest, token.TransportID) ||
+			claim.evidenceID != token.EndpointID {
 			reasons = append(reasons, ReasonWrongExecutor)
 		} else {
 			expectedEvidenceID = claim.evidenceID

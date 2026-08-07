@@ -26,12 +26,20 @@ type migrationReceiptDoc = receiptcontract.Document
 type migrationCandidateEvidence = receiptcontract.CandidateEvidence
 
 type migrationRouteClaim struct {
-	route        CatalogRoute
-	evidenceKind string
-	evidenceID   string
-	backend      BackendKind
-	adapterID    AdapterID
-	transportID  string
+	route                 CatalogRoute
+	evidenceKind          string
+	evidenceID            string
+	backend               BackendKind
+	adapterID             AdapterID
+	transportID           string
+	transportIDsByRelease map[string]string
+}
+
+func (c migrationRouteClaim) matchesTransport(releaseDigest, transportID string) bool {
+	if len(c.transportIDsByRelease) == 0 {
+		return c.transportID == transportID
+	}
+	return c.transportIDsByRelease[releaseDigest] == transportID
 }
 
 // MigrationReceipt 是一次 Sink 迁移验收的只读机器收据。其字段不导出，且只有在
@@ -103,7 +111,62 @@ func applyMigrationReceipts(
 	if err != nil {
 		return nil, err
 	}
-	return applyTransportReceiptTransitions(inputs)
+	inputs, err = applyTransportReceiptTransitions(inputs)
+	if err != nil {
+		return nil, err
+	}
+	return bindMigrationReceiptTransports(inputs, DefaultReleaseCatalog())
+}
+
+// bindMigrationReceiptTransports 把历史收据中的 endpoint 证据重新绑定到每个
+// ReleaseDigest 的可执行 transport。历史 transportID 继续原样保留作收据锚点；
+// Guard 只接受 token 所属 ReleaseDigest 对应的 transport，禁止跨 Bundle 混用。
+func bindMigrationReceiptTransports(
+	inputs []SinkBindingInput,
+	releaseCatalog ReleaseCatalog,
+) ([]SinkBindingInput, error) {
+	releases := make([]ResolvedCodexRelease, 0, 2)
+	for _, mode := range []ReleaseMode{ReleaseModeActive, ReleaseModePrevious} {
+		release, err := releaseCatalog.Resolve(mode)
+		if err != nil {
+			return nil, err
+		}
+		releases = append(releases, release)
+	}
+	for inputIndex := range inputs {
+		input := &inputs[inputIndex]
+		if input.Persona != PersonaCodexCLI || input.migrationReceipt == nil {
+			continue
+		}
+		for claimIndex := range input.migrationReceipt.routeClaims {
+			claim := &input.migrationReceipt.routeClaims[claimIndex]
+			transportIDs := make(map[string]string, len(releases))
+			for _, release := range releases {
+				transportID := ""
+				for _, endpoint := range release.ExecutableProfile().Endpoints() {
+					if endpoint.ID == claim.evidenceID {
+						transportID = endpoint.TransportID
+						break
+					}
+				}
+				if transportID == "" {
+					return nil, fmt.Errorf(
+						"MigrationReceipt endpoint 未进入 %s executable：%s/%s",
+						release.Mode(), input.ID, claim.evidenceID,
+					)
+				}
+				if existing := transportIDs[release.ReleaseDigest()]; existing != "" && existing != transportID {
+					return nil, fmt.Errorf(
+						"同一 ReleaseDigest 映射多个 transport：%s/%s",
+						input.ID, claim.evidenceID,
+					)
+				}
+				transportIDs[release.ReleaseDigest()] = transportID
+			}
+			claim.transportIDsByRelease = transportIDs
+		}
+	}
+	return inputs, nil
 }
 
 func applyMigrationReceiptManifestWithFS(

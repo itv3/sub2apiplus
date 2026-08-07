@@ -70,7 +70,13 @@ func applyTransportReceiptTransitions(inputs []SinkBindingInput) ([]SinkBindingI
 	}
 	seen := make(map[string]bool, len(manifest.Entries))
 	for _, entry := range manifest.Entries {
-		if err := applyTransportReceiptTransitionEntry(inputs, indexBySink, entry, seen); err != nil {
+		if err := applyTransportReceiptTransitionEntry(
+			inputs,
+			indexBySink,
+			entry,
+			seen,
+			DefaultReleaseCatalog(),
+		); err != nil {
 			return nil, err
 		}
 	}
@@ -82,6 +88,7 @@ func applyTransportReceiptTransitionEntry(
 	indexBySink map[SinkID]int,
 	entry transportReceiptTransition,
 	seen map[string]bool,
+	releaseCatalog ReleaseCatalog,
 ) error {
 	if strings.TrimSpace(entry.Reason) == "" ||
 		entry.CurrentLifecycle != profilecontract.LifecycleBackendClientLongLived ||
@@ -123,7 +130,7 @@ func applyTransportReceiptTransitionEntry(
 	}
 
 	for _, mode := range []ReleaseMode{ReleaseModeActive, ReleaseModePrevious} {
-		release, err := DefaultReleaseCatalog().Resolve(mode)
+		release, err := releaseCatalog.Resolve(mode)
 		if err != nil {
 			return err
 		}
@@ -133,8 +140,7 @@ func applyTransportReceiptTransitionEntry(
 				continue
 			}
 			matched = true
-			if endpoint.TransportID != entry.CurrentTransportID ||
-				endpoint.ResourceLifecycle.Lifecycle != entry.CurrentLifecycle {
+			if endpoint.ResourceLifecycle.Lifecycle != entry.CurrentLifecycle {
 				return fmt.Errorf("transport 过渡条目与 %s executable 不一致：%s", mode, identity)
 			}
 		}
@@ -142,6 +148,9 @@ func applyTransportReceiptTransitionEntry(
 			return fmt.Errorf("transport 过渡条目在 %s executable 缺少 endpoint：%s", mode, entry.EvidenceID)
 		}
 	}
+	// CurrentTransportID 属于摘要冻结的变更集 4 历史锚点；当前 Active/Previous 的
+	// transport 由各自完整画像决定，并按 ReleaseDigest 精确绑定，避免未来换版仍被
+	// 0.145.0 的 transport ID 锁死，也禁止两套 Bundle 跨版本混用 transport。
 	receipt.routeClaims[claimIndex].transportID = entry.CurrentTransportID
 	return nil
 }
