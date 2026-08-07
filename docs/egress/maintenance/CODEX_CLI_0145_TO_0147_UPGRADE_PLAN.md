@@ -1,6 +1,6 @@
 # Codex CLI 0.145.0 → 0.147.0 Official Egress 升级计划（执行中）
 
-> 状态：正式 Campaign 已到达 `planned`；下一步执行 `capture-official run/seal`
+> 状态：正式 Campaign 已完成 `official_sealed`；下一步执行 `classify`
 > 创建日期：2026-08-07
 > 审阅基线：commit `abf236375f66aa096580092e646c4e33d37bb135`
 > 基线画像：Codex CLI `0.145.0`
@@ -39,11 +39,11 @@ Previous = 0.145.0
 | 官方版本 | `rust-v0.147.0` 已发布；目标 commit 为 `be6e8eac029b183056b7e4402879f15d2c85f61b` |
 | 累计差异 | 必须覆盖 `0.146.0 + 0.147.0`，不能只看 0.147 release 摘要 |
 | 当前画像 | Active/Previous 均为 `0.145.0`，共享 `e0b597…` Snapshot |
-| 本地源码 | 只有 `local-analysis/sources/codex-cli-0.145/`，尚无 0.147 源码树 |
+| 正式源码 | Vircs 已冻结 `formal-codex-cli-0.147.0/codex-rs`，commit `be6e8eac…`，源码树摘要 `1909e288…` |
 | 本机 Codex | ChatGPT.app 内为 `0.147.0-alpha.6.5`，不得作为 stable 证据 |
 | 工具身份 | P0 收口时受管 80 个 `.py/.sh/.json`，摘要 `fa8fc9fa…` |
 | 基线回放 | 健康环境下通过：基线 180、补录 0、移除 22 |
-| 当前门禁 | DOC-PRE/P0 transition 已登记，`make check-egress-spec` 全绿 |
+| 当前门禁 | DOC-PRE/P0 与官方封存复核通过；`make check-egress-spec` 全绿 |
 
 工具身份枚举必须递归扫描 `tools/official_client_capture/`，排除 `tests/`、`versions/`、
 `__pycache__/`，并记录路径清单、文件数和集合摘要。
@@ -175,6 +175,13 @@ P0 报告必须包含所有命令和输入摘要、临时资产 inventory/hash�
 - L1/L2 源码调用链、原始与脱敏抓包、inventory、attempt result；
 - TLS/HTTP/WS/Body/endpoint/跨请求状态、恢复、secret scan 和 evidence seal。
 
+本次已完成：Campaign `codex-0145-to-0147-20260807T170500Z`，attempt
+`20260807T170652Z-cc0ea97643acf9a7`，17/17 必需任务完成；封存摘要
+`031a187f45f1570cf5de35b7e3de2260b034b12003087915debdb1c7cfbb4190`，证据清单
+449 个文件、inventory digest `5a619423…`，恢复 5 项通过、秘密扫描 0 命中。
+官方二进制为 `0.147.0`，CLI SHA `cb0a1556…`，Code Mode helper SHA
+`00ecf5d0…`，package asset SHA `bd758d53…`；原始证据仍只保留在 Vircs 私有采集根。
+
 ### 6.3 累计变化取证
 
 官方 Full Changelog、合入 PR 和 0.147 tag 只证明源码级变化，不等于 wire 已确认：
@@ -279,16 +286,11 @@ final-wire 可用，但不能替代 alpha 真实 service 链或 `server_response
 - 0.145→临时完整 0.147 异版本 mutation 的 dump、三坐标和 Compiler 并集门禁全绿；
 - P0 最终 `plan` 加载 42 条规则、25 个任务，工具身份 80 项、摘要 `fa8fc9fa…`；
 - 未发送真实请求、未切 Active、未把合成画像写入仓库。
-- Vircs 已新增独立 `capture-cli-0147`，主 CLI/relay 均为 0.147.0，二进制摘要
-  `cb0a1556…`；原 `capture-cli` 与 `codex-0.145.0` 保留且可运行；
-- 正式 Campaign 为 `codex-0145-to-0147-20260807T161000Z`，目录位于
-  `Vircs:/root/oauth-capture/campaigns/`，`campaign.json` 摘要 `110fdfcd…`；
-- 正式 Campaign 冻结 Linux/x86_64、目标源码摘要 `1909e288…`、42 条规则、25 个任务和
-  工具摘要 `fa8fc9fa…`，状态为 `planned`；
-- 首次 `T160500Z` Campaign 在创建后复核发现源码归档带入 AppleDouble 文件，摘要不符；
-  该目录保持不可变并废弃，不进入任何后续阶段。
-
-下一步严格执行第 6.2 节：在上述正式 Campaign 中运行并封存 0.147 官方证据；任何失败
-必须创建新 attempt，不得复用废弃 Campaign 或 P0 临时证据。
+- Vircs 保留原 `capture-cli`/0.145 运行点，并新增 `capture-cli-0147`；正式采集使用
+  `--pid host`、Linux/x86_64、runtime image `oauth-egress-capture-capture-cli@sha256:3438c4e0…`；
+- 旧的 `T160500Z`、`T161000Z`、`T163600Z` Campaign/attempt 均保持不可变并标记失败或废弃，
+  不复用其证据；当前 `T170500Z` 已完成 `official_sealed`；
+- 下一步严格执行第 6.4 节：对同一 Campaign 运行 `classify`，生成并审核五份完整 0.147
+  清单；未完成 `profile_approved` 前不得建立画像、切 Active 或开始 candidate。
 
 用户已授权按第 5→6→7→8→9 章连续执行；每个变更集完成并自复核后自动进入下一项。
