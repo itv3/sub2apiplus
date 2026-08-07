@@ -14,6 +14,12 @@ if [[ ${ENABLE_CANDIDATE_CORE_SYNTHETIC:-} != "$required_gate" ]]; then
   exit 2
 fi
 
+codex_version=${CODEX_VERSION:?必须由 Campaign 提供 CODEX_VERSION}
+if [[ ! $codex_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "CODEX_VERSION 必须是完整的 x.y.z 版本。" >&2
+  exit 2
+fi
+
 capture_container=${CAPTURE_CONTAINER:-capture-cli}
 service_container=${SERVICE_CONTAINER:-sub2apiplus}
 keeper_container=${KEEPER_CONTAINER:-sub2apiplus-keeper}
@@ -254,7 +260,7 @@ write_summary() {
     "$work_dir" "$run_id" "$final_status" "$exit_code" \
     "$original_proxy_state" "$restored_proxy_equal" "$restored_extra_equal" \
     "$restored_hosts_hash" "$original_hosts_hash" \
-    "$restored_ca_hash" "$original_ca_hash" <<'PY'
+    "$restored_ca_hash" "$original_ca_hash" "$codex_version" <<'PY'
 import hashlib
 import json
 import os
@@ -289,6 +295,7 @@ for scenario_id in ("A03", "A04", "A05", "A06", "A07", "A08", "A10", "A15"):
 
 payload = {
     "schema_version": "candidate-core-capture/v1",
+    "codex_version": sys.argv[12],
     "run_id": sys.argv[2],
     "status": sys.argv[3],
     "exit_code": int(sys.argv[4]),
@@ -489,14 +496,20 @@ if ! docker exec "$capture_container" sh -c 'command -v tcpdump' >/dev/null; the
   echo "capture 容器缺少 tcpdump。" >&2
   exit 1
 fi
-if ! docker exec "$capture_container" python3 "$relay_tool" --help 2>&1 |
-  grep -q 'candidate-core-v1'; then
-  echo "capture 容器中的 relay 尚未同步 candidate-core-v1。" >&2
+relay_help=$(docker exec "$capture_container" python3 "$relay_tool" --help 2>&1 || true)
+if ! grep -q 'candidate-core-v1' <<<"$relay_help" ||
+  ! grep -q -- '--codex-version' <<<"$relay_help"; then
+  echo "capture 容器中的 relay 尚未同步目标版本参数或 candidate-core-v1。" >&2
   exit 1
 fi
-if [[ ! -r $gateway_ws_driver ]] ||
-  ! python3 "$gateway_ws_driver" --help 2>&1 | grep -q 'api-key-fd'; then
-  echo "候选网关 WebSocket 双轮驱动器缺失或不可用。" >&2
+if [[ ! -r $gateway_ws_driver ]]; then
+  echo "候选网关 WebSocket 双轮驱动器缺失。" >&2
+  exit 1
+fi
+gateway_help=$(python3 "$gateway_ws_driver" --help 2>&1 || true)
+if ! grep -q -- '--api-key-fd' <<<"$gateway_help" ||
+  ! grep -q -- '--codex-version' <<<"$gateway_help"; then
+  echo "候选网关 WebSocket 双轮驱动器缺失或没有目标版本参数。" >&2
   exit 1
 fi
 
@@ -566,13 +579,14 @@ start_capture() {
     umask 077
     python3 "$1" --cert "$2" --key "$3" --mode connect --port "$4" \
       --upstream-host chatgpt.com --output "$5" --timeout 420 \
+      --codex-version "$8" \
       --synthetic-profile candidate-core-v1 --allow-synthetic-responses \
       --candidate-core-scenario "$6" --candidate-core-ws-failures "$7" \
-      >"$8" 2>&1 &
-    echo $! >"$9"
+      >"$9" 2>&1 &
+    echo $! >"${10}"
   ' sh "$relay_tool" "$container_tls_dir/relay.crt" "$container_tls_dir/relay.key" \
     "$relay_port" "$container_scenario_root/relay-private" "$scenario" \
-    "$ws_failure_count" "$container_scenario_root/relay.log" \
+    "$ws_failure_count" "$codex_version" "$container_scenario_root/relay.log" \
     "$container_scenario_root/relay.pid"
   relay_started=1
 
@@ -718,7 +732,7 @@ if subagent_header:
 if parent_thread_id:
     payload["client_metadata"]["x-codex-parent-thread-id"] = parent_thread_id
 if mode == "lite":
-    # Codex 0.145.0 已根据模型 manifest 完成 Lite 定型后才进入严格入口：
+    # 目标 Codex 已根据模型 manifest 完成 Lite 定型后才进入严格入口：
     # 顶层 instructions/tools 不存在，开发者指令与工具目录分别成为 input
     # 前缀，且 Lite 固定关闭并行工具调用。严格入口只校验该形态，不代替
     # 官方客户端执行结构变换。
@@ -858,8 +872,8 @@ raise SystemExit(1)
 PY
 }
 
-exec_ua='codex_exec/0.145.0 (Ubuntu 24.4.0; x86_64) unknown (codex_exec; 0.145.0)'
-tui_ua='codex-tui/0.145.0 (Ubuntu 24.4.0; x86_64) xterm-256color (codex-tui; 0.145.0)'
+exec_ua="codex_exec/$codex_version (Ubuntu 24.4.0; x86_64) unknown (codex_exec; $codex_version)"
+tui_ua="codex-tui/$codex_version (Ubuntu 24.4.0; x86_64) xterm-256color (codex-tui; $codex_version)"
 gateway_driver_ua='sub2apiplus-candidate-capture/1.0'
 gateway_driver_originator='sub2apiplus_candidate_capture'
 session_id=11111111-1111-4111-8111-111111111111
@@ -873,7 +887,7 @@ official_headers() {
   printf '%s\n' \
     "User-Agent: $ua" \
     "Originator: $originator" \
-    'Version: 0.145.0' \
+    "Version: $codex_version" \
     'X-Codex-Terminal: unknown' \
     "Session-Id: $session_id" \
     "Thread-Id: $thread_id" \
@@ -920,6 +934,7 @@ run_response_ws_session() {
     --first-output "$trigger_root/first.sse" \
     --second-output "$trigger_root/continuation.sse" \
     --summary "$trigger_root/ws-session.json" \
+    --codex-version "$codex_version" \
     --session-affinity candidate-core-a06 \
     --timeout 180 \
     --api-key-fd 3 \
@@ -970,7 +985,7 @@ restore_account_features
 wait_action A04 responses_http_success 4
 stop_capture
 
-# A05：普通 HTTP 入口让网关扮演 0.145.0 Codex 客户端并默认选择 WS；
+# A05：普通 HTTP 入口让网关扮演 Campaign 目标 Codex 客户端并默认选择 WS；
 # 官方 HTTP 入口代表 CLI 已耗尽自身 WS 预算，生产代码会按画像强制 HTTP fallback。
 start_capture A05
 trigger_root="$work_dir/scenarios/A05/trigger"
@@ -1053,21 +1068,21 @@ for variant in exec-suffix tui-suffix initial-no-suffix; do
     exec-suffix) ua=$exec_ua; originator=codex_exec ;;
     tui-suffix) ua=$tui_ua; originator=codex-tui ;;
     initial-no-suffix)
-      ua='codex_exec/0.145.0 (Ubuntu 24.4.0; x86_64) unknown'
+      ua="codex_exec/$codex_version (Ubuntu 24.4.0; x86_64) unknown"
       originator=codex_cli_rs
       ;;
   esac
   code=$(request_with_token "$api_key" --output "$trigger_root/models-$variant.json" \
     --write-out '%{http_code}' -H "User-Agent: $ua" -H "Originator: $originator" \
-    -H 'Version: 0.145.0' \
-    "$service_base_url/backend-api/codex/models?client_version=0.145.0")
+    -H "Version: $codex_version" \
+    "$service_base_url/backend-api/codex/models?client_version=$codex_version")
   assert_2xx "A15-models-$variant" "$code"
 done
 wait_action A15 models_manifest 3
 stop_capture
 
 # 冻结动作和无生产转发门禁。A03 的 zstd 与 A10 的 trigger 直接在 scrubbed raw 中复核。
-python3 - "$work_dir" "$ws_failure_count" <<'PY'
+python3 - "$work_dir" "$ws_failure_count" "$codex_version" <<'PY'
 import json
 import sys
 from collections import Counter
@@ -1075,6 +1090,7 @@ from pathlib import Path
 
 root = Path(sys.argv[1])
 ws_failures = int(sys.argv[2])
+codex_version = sys.argv[3]
 minimums = {
     "A03": {"responses_http_success": 4},
     "A04": {"responses_http_success": 4},
@@ -1090,6 +1106,8 @@ for scenario, wanted in minimums.items():
     manifest = json.loads((scenario_root / "relay.json").read_text(encoding="utf-8"))
     if manifest.get("synthetic_profile") != "candidate-core-v1":
         raise SystemExit(f"{scenario} relay 未绑定 candidate-core-v1")
+    if manifest.get("codex_version") != codex_version:
+        raise SystemExit(f"{scenario} relay Codex 版本与 Campaign 目标不一致")
     if manifest.get("candidate_core_scenario") != scenario:
         raise SystemExit(f"{scenario} relay 场景绑定错误")
     if manifest.get("production_forwarding_enabled") is not False:

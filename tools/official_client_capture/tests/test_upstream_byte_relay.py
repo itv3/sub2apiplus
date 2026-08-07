@@ -156,12 +156,12 @@ class UpstreamByteRelaySyntheticAuxTest(unittest.TestCase):
     @staticmethod
     def response(host: str, line: str, headers: bytes = b"", body: bytes = b""):
         head = line.encode("ascii") + b"\r\n" + headers + b"\r\n"
-        return _synthetic_aux_response(host, line, head, body)
+        return _synthetic_aux_response(host, line, head, body, "0.147.0")
 
     def test_a09_auxiliary_endpoints_are_allowlisted(self) -> None:
         cases = (
             (
-                "GET /backend-api/codex/models?client_version=0.145.0 HTTP/1.1",
+                "GET /backend-api/codex/models?client_version=0.147.0 HTTP/1.1",
                 "models_manifest",
             ),
             ("POST /backend-api/codex/responses/compact HTTP/1.1", "legacy_compact"),
@@ -360,6 +360,39 @@ class UpstreamByteRelaySyntheticAuxTest(unittest.TestCase):
         self.assertEqual(result.returncode, 2)
         self.assertIn("必须同时提供", result.stderr)
 
+    def test_synthetic_profile_requires_valid_campaign_version(self) -> None:
+        script = Path(__file__).parents[1] / "upstream_byte_relay.py"
+        base = [
+            sys.executable,
+            str(script),
+            "--cert",
+            "missing.crt",
+            "--key",
+            "missing.key",
+            "--output",
+            "missing-output",
+            "--synthetic-profile",
+            "candidate-aux-v1",
+            "--allow-synthetic-responses",
+        ]
+        missing = subprocess.run(
+            base,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(missing.returncode, 2)
+        self.assertIn("必须提供 --codex-version", missing.stderr)
+
+        invalid = subprocess.run(
+            [*base, "--codex-version", "not-a-version"],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(invalid.returncode, 2)
+        self.assertIn("完整的 x.y.z 版本", invalid.stderr)
+
     def test_synthetic_profile_rejects_production_upstream_map(self) -> None:
         script = Path(__file__).parents[1] / "upstream_byte_relay.py"
         result = subprocess.run(
@@ -375,6 +408,8 @@ class UpstreamByteRelaySyntheticAuxTest(unittest.TestCase):
                 "--synthetic-profile",
                 "candidate-aux-v1",
                 "--allow-synthetic-responses",
+                "--codex-version",
+                "0.147.0",
                 "--upstream-ip",
                 "203.0.113.10",
             ],
@@ -403,6 +438,7 @@ class UpstreamByteRelaySyntheticCoreTest(unittest.TestCase):
             head,
             body,
             ordinal,
+            "0.147.0",
         )
 
     def test_a03_four_response_cookie_and_turn_state_sequence(self) -> None:
@@ -473,7 +509,7 @@ class UpstreamByteRelaySyntheticCoreTest(unittest.TestCase):
     def test_models_manifest_covers_lite_and_non_lite(self) -> None:
         result = self.response(
             "A04",
-            "GET /backend-api/codex/models?client_version=0.145.0 HTTP/1.1",
+            "GET /backend-api/codex/models?client_version=0.147.0 HTTP/1.1",
         )
         self.assertIsNotNone(result)
         self.assertEqual(result.action, "models_manifest")
@@ -523,6 +559,7 @@ class UpstreamByteRelaySyntheticCoreTest(unittest.TestCase):
                 b"POST /oauth/token HTTP/1.1\r\n\r\n",
                 b"",
                 1,
+                "0.147.0",
             )
         )
 
@@ -559,6 +596,8 @@ class UpstreamByteRelaySyntheticCoreTest(unittest.TestCase):
                 "--synthetic-profile",
                 "candidate-core-v1",
                 "--allow-synthetic-responses",
+                "--codex-version",
+                "0.147.0",
             ],
             text=True,
             capture_output=True,
@@ -580,6 +619,8 @@ class UpstreamByteRelaySyntheticCoreTest(unittest.TestCase):
                 "--synthetic-profile",
                 "candidate-core-v1",
                 "--allow-synthetic-responses",
+                "--codex-version",
+                "0.147.0",
                 "--candidate-core-scenario",
                 "A03",
                 "--upstream-map",

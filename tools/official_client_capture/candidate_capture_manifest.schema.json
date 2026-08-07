@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://sub2apiplus.local/schemas/candidate-capture-manifest-v1.json",
-  "title": "Codex CLI 0.145.0 候选侧统一抓包清单",
+  "title": "Codex CLI 候选侧统一抓包清单",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -16,7 +16,8 @@
       "const": "codex-candidate-capture-manifest/v1"
     },
     "codex_version": {
-      "const": "0.145.0"
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
     },
     "capture_id": {
       "type": "string",

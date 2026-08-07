@@ -32,7 +32,6 @@ MAP_SCHEMA_VERSION = "codex-candidate-test-fact-map/v1"
 FACT_SCHEMA_VERSION = "codex-candidate-test-fact/v1"
 OBSERVATION_SCHEMA_VERSION = "codex-candidate-observation/v1"
 RECEIPT_SCHEMA_VERSION = "codex-candidate-test-trace-receipt/v1"
-CODEX_VERSION = "0.145.0"
 FACT_PREFIX = "CANDIDATE_TRACE_FACT "
 DEFAULT_MAPPING_RELATIVE_PATH = (
     "tools/official_client_capture/candidate_test_fact_map_0_145_0.json"
@@ -48,6 +47,7 @@ FROZEN_PROFILE_SHA256 = (
     "b52c11ea9a7f8c9e7a32cf39ca1e13bd59b054ffc399d4c9405d23a0cb874841"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 TEST_NAME_RE = re.compile(r"^Test[A-Za-z0-9_]+$")
 FACT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9._-]+$")
 SCENARIO_RE = re.compile(r"^A[0-9]{2}$")
@@ -222,12 +222,17 @@ class TestSpec:
 def load_mapping(
     path: Path,
     *,
-    verify_frozen_digest: bool = True,
+    expected_codex_version: str,
+    expected_sha256: str,
 ) -> tuple[dict[str, Any], tuple[TestSpec, ...]]:
     """加载并严格校验测试名到抽象事实的冻结映射。"""
 
+    if not VERSION_RE.fullmatch(expected_codex_version):
+        raise CandidateTestTraceError("期望 Codex 版本必须是完整的 x.y.z 版本")
+    if not SHA256_RE.fullmatch(expected_sha256):
+        raise CandidateTestTraceError("期望测试事实映射 SHA-256 非法")
     value = _load_json(path, "测试事实冻结映射")
-    if verify_frozen_digest and file_sha256(path) != FROZEN_MAPPING_SHA256:
+    if file_sha256(path) != expected_sha256:
         raise CandidateTestTraceError("测试事实冻结映射 SHA-256 不匹配")
     if not isinstance(value, dict):
         raise CandidateTestTraceError("测试事实冻结映射顶层必须是对象")
@@ -244,8 +249,8 @@ def load_mapping(
     )
     if value.get("schema_version") != MAP_SCHEMA_VERSION:
         raise CandidateTestTraceError("测试事实冻结映射 schema_version 不匹配")
-    if value.get("codex_version") != CODEX_VERSION:
-        raise CandidateTestTraceError("测试事实冻结映射 Codex 版本不匹配")
+    if value.get("codex_version") != expected_codex_version:
+        raise CandidateTestTraceError("测试事实冻结映射 Codex 版本与 Campaign 目标不匹配")
     if value.get("fact_prefix") != FACT_PREFIX:
         raise CandidateTestTraceError("测试事实冻结映射 fact_prefix 不匹配")
     if value.get("forbidden_record_types") != sorted(FORBIDDEN_RECORD_TYPES):
@@ -423,13 +428,14 @@ def verify_source_snapshot(source_root: Path, tests: Sequence[TestSpec]) -> list
 def load_capture_manifest(
     path: Path,
     evidence_root: Path,
+    expected_codex_version: str,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
     """校验基础 manifest 以及它声明的每一份原始文件。"""
 
     manifest_relative = _relative_existing_file(evidence_root, path, "基础 capture manifest")
     manifest = _load_json(path, "基础 capture manifest")
     try:
-        artifacts = _validate_capture_manifest(manifest)
+        artifacts = _validate_capture_manifest(manifest, expected_codex_version)
     except ValueError as error:
         raise CandidateTestTraceError(str(error)) from error
     for index, artifact in enumerate(artifacts):
@@ -647,25 +653,37 @@ def generate_test_traces(
     trace_dir: str,
     output_manifest: str,
     output_receipt: str,
-    verify_frozen_mapping: bool = True,
-    verify_frozen_profile: bool = True,
+    expected_codex_version: str,
+    expected_mapping_sha256: str,
+    expected_profile_sha256: str,
 ) -> dict[str, Any]:
     """生成 trace、新 capture manifest 与摘要回执，所有输出均拒绝覆盖。"""
 
     mapping, tests = load_mapping(
         mapping_path,
-        verify_frozen_digest=verify_frozen_mapping,
+        expected_codex_version=expected_codex_version,
+        expected_sha256=expected_mapping_sha256,
     )
     mapping_sha = file_sha256(mapping_path)
     if profile_path.is_symlink() or not profile_path.is_file():
         raise CandidateTestTraceError("冻结规则画像必须是非符号链接普通文件")
     profile_sha = file_sha256(profile_path)
-    if verify_frozen_profile and profile_sha != FROZEN_PROFILE_SHA256:
+    if (
+        not SHA256_RE.fullmatch(expected_profile_sha256)
+        or profile_sha != expected_profile_sha256
+    ):
         raise CandidateTestTraceError("冻结规则画像 SHA-256 不匹配")
+    profile = _load_json(profile_path, "冻结规则画像")
+    if (
+        not isinstance(profile, dict)
+        or profile.get("codex_version") != expected_codex_version
+    ):
+        raise CandidateTestTraceError("冻结规则画像 Codex 版本与 Campaign 目标不匹配")
     source_files = verify_source_snapshot(source_root, tests)
     manifest, artifacts, base_manifest_relative = load_capture_manifest(
         capture_manifest_path,
         evidence_root,
+        expected_codex_version,
     )
 
     go_relative = _relative_path(go_test_artifact, "go-test-artifact")
@@ -792,7 +810,10 @@ def generate_test_traces(
         ],
     }
     try:
-        _validate_capture_manifest(output_manifest_value)
+        _validate_capture_manifest(
+            output_manifest_value,
+            expected_codex_version,
+        )
     except ValueError as error:
         raise CandidateTestTraceError(str(error)) from error
     manifest_payload = _canonical_json_bytes(output_manifest_value) + b"\n"
@@ -810,7 +831,7 @@ def generate_test_traces(
     ).as_posix()
     receipt = {
         "schema_version": RECEIPT_SCHEMA_VERSION,
-        "codex_version": CODEX_VERSION,
+        "codex_version": expected_codex_version,
         "status": "pass",
         "base_capture_manifest": {
             "path": base_manifest_relative,
@@ -856,6 +877,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--go-test-artifact", required=True)
     parser.add_argument("--mapping", type=Path)
     parser.add_argument("--profile", type=Path)
+    parser.add_argument("--expected-codex-version", required=True)
+    parser.add_argument("--expected-mapping-sha256", required=True)
+    parser.add_argument("--expected-profile-sha256", required=True)
     parser.add_argument("--trace-dir", required=True)
     parser.add_argument("--output-manifest", required=True)
     parser.add_argument("--output-receipt", required=True)
@@ -878,6 +902,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             trace_dir=args.trace_dir,
             output_manifest=args.output_manifest,
             output_receipt=args.output_receipt,
+            expected_codex_version=args.expected_codex_version,
+            expected_mapping_sha256=args.expected_mapping_sha256,
+            expected_profile_sha256=args.expected_profile_sha256,
         )
     except CandidateTestTraceError as error:
         print(f"candidate-test-trace: fail: {error}", file=sys.stderr)

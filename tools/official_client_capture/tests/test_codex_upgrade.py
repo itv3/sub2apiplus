@@ -58,6 +58,28 @@ class CodexUpgradeTest(unittest.TestCase):
             len(rule_manifest["required_rules"]),
         )
 
+        candidate_jobs = [
+            job for job in scenario["capture_jobs"] if job["phase"] == "candidate"
+        ]
+        self.assertTrue(candidate_jobs)
+        for job in candidate_jobs:
+            for step in job["steps"]:
+                self.assertEqual(
+                    step["environment"].get("CODEX_VERSION"),
+                    "{target_version}",
+                )
+
+        mutated = json.loads(json.dumps(scenario))
+        candidate = next(
+            job for job in mutated["capture_jobs"] if job["phase"] == "candidate"
+        )
+        candidate["steps"][0]["environment"]["CODEX_VERSION"] = "0.146.0"
+        with self.assertRaisesRegex(
+            codex_upgrade.ConfigurationError,
+            "Campaign target_version",
+        ):
+            codex_upgrade._validate_scenario_manifest_shape(mutated)
+
     @staticmethod
     def _write_json(path: Path, payload: object) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -214,6 +236,13 @@ class CodexUpgradeTest(unittest.TestCase):
                         "required": True,
                         "sensitive": False,
                         "description": "测试 Campaign 根目录。",
+                    },
+                    {
+                        "name": "target_version",
+                        "type": "string",
+                        "required": True,
+                        "sensitive": False,
+                        "description": "测试 Campaign 目标版本。",
                     }
                 ],
                 "evidence_scenarios": [
@@ -255,7 +284,9 @@ class CodexUpgradeTest(unittest.TestCase):
                         "steps": [
                             {
                                 "argv": ["true"],
-                                "environment": {},
+                                "environment": {
+                                    "CODEX_VERSION": "{target_version}",
+                                },
                                 "timeout_seconds": 60,
                             }
                         ],

@@ -3,9 +3,9 @@
   "base_commit": "ba485663c3bc0af6802cf6dfc4e19139ef00e371",
   "retirement_receipt": "docs/egress/maintenance/official-egress-consolidation-retirement.json",
   "retirement_receipt_sha256": "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36",
-  "candidate_path_count": 782,
-  "transition_entry_count": 782,
-  "transition_path_set_sha256": "51f35f1aa6a637c6e34838c26b9a42f9669b25123448ea3d350c5f07f29309c9",
+  "candidate_path_count": 799,
+  "transition_entry_count": 799,
+  "transition_path_set_sha256": "6e65c4b9e9c30601938554d1cff4e11770fe7bfb43feb655f850305db047a3b9",
   "entries": [
     {
       "path": ".github/workflows/backend-ci.yml",
@@ -18584,6 +18584,54 @@
       ]
     },
     {
+      "path": "tools/official_client_capture/candidate_capture_manifest.schema.json",
+      "scope": "source_gate",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 3218,
+        "sha256": "60a8bbe643eb0f22b829422fc3ddbb968267c46f099cf93e3c4fec642e0cdb67"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 3255,
+        "sha256": "d287518e35bda98fb7df22733845f64d02754097ad89b7b4bfa51e8fce8a43ec"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/candidate_evidence_guard.py",
+      "scope": "source_gate",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 20192,
+        "sha256": "dc5132a23deb0fcfed4c97e8d1dc7afc2de348a105d3fecf7701b0e956401032"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 20790,
+        "sha256": "6b3529595327af7c9e6f65b4ca1dd0476b7c35712f9f8831adf6d1b03b305629"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
       "path": "tools/official_client_capture/candidate_rule_assertion.py",
       "scope": "source_gate",
       "before": {
@@ -18632,6 +18680,30 @@
       ]
     },
     {
+      "path": "tools/official_client_capture/candidate_test_fact_map.schema.json",
+      "scope": "source_gate",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 4411,
+        "sha256": "b1119513622b3983dc44615366d127f68ae2bfadcce0dea58ae660df055c5965"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 4448,
+        "sha256": "f1d35c27a6ce1024115ea926288108b443d638cab54fb878a80af9d0526ec0cd"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
       "path": "tools/official_client_capture/candidate_test_fact_map_0_145_0.json",
       "scope": "source_gate",
       "before": {
@@ -18669,8 +18741,80 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 37089,
-        "sha256": "accc2855e95baa88e7f53035eaf1bef6993ea274fe473cf5b5b416060c0a0454"
+        "size": 38375,
+        "sha256": "be6e92cc100995d5171c27229e74b60db83c676308bf30bceed76dcc879f2923"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/candidate_test_trace_receipt.schema.json",
+      "scope": "source_gate",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 3235,
+        "sha256": "f6288ad31973403ea383fbdfa8ca9c43972e91e9c9b655c8c93cfcc05903b6a1"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 3284,
+        "sha256": "654cc9707e08468401f80f01f6943b482b01833260e188ff0e4e858fae6cf36c"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade.py",
+      "scope": "source_gate",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 299645,
+        "sha256": "a6652023600771c6a9e15c08dd91516871609e8bce31174791977b2070a24f5d"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 300035,
+        "sha256": "029fc807366816e541671a251f4eb0994ed496b090ba2214df809c1961e716a3"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_scenarios.schema.json",
+      "scope": "source_gate",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 7896,
+        "sha256": "aea8740aae24cc4d72765dd435cbbbd34412c23ec27d466ecb1ed78bff3ef2ce"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 8555,
+        "sha256": "c08dec152bf77044e85f484bfa1226b087fa6150937a6b1ceaae838e810db9f1"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
@@ -18693,8 +18837,200 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 46883,
-        "sha256": "de5309dd08c512e90d42513e57fdf602f51aef8f45c8803165aa132e55e822a2"
+        "size": 47177,
+        "sha256": "77fddb8fd0f08f45ab1da6e5678c092438cabe2825b36cd0d863e089f78168c9"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/drive_candidate_gateway_ws.py",
+      "scope": "source_gate",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 24469,
+        "sha256": "7f3dbf4ea7a0fb06a56d404bc754512c38ca268a46abd9c943f9ecf5f9ac78df"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 24902,
+        "sha256": "ea98431bf495a07a9a0134bb3b9b37b0eac0b9d62d84cfef9149f277e3041092"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/run_candidate_aux_capture.sh",
+      "scope": "source_gate",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0755",
+        "size": 36936,
+        "sha256": "b9fa106ed65c66de8b95595e1333691cf36021124a029414f326a050248675ba"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0755",
+        "size": 37601,
+        "sha256": "0fe28e8298fa93579a21342f5c314f8b19b22406cc89304a671eef917ad8017b"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/run_candidate_core_capture.sh",
+      "scope": "source_gate",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0755",
+        "size": 44819,
+        "sha256": "3c7439376a3168052e2dbbc750704675f43043e5e827ede95a70855d5f7410cf"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0755",
+        "size": 45718,
+        "sha256": "daa8109512139877e7c237b46faf494afe6d7f35b2f7bc1342ec8d6fec6fb918"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/run_sub2api_direct_matrix.sh",
+      "scope": "source_gate",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 9100,
+        "sha256": "e69b0363fa2b9cf584a9a0b22a54f9312ad131e03f2dc609f6327c816dc6fb78"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 9266,
+        "sha256": "bcb71347a1dcc0282ce200885ca886cebcf90233c92e568530dadead2df0c1fa"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/run_sub2api_openai_mitm_matrix.sh",
+      "scope": "source_gate",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0755",
+        "size": 9100,
+        "sha256": "dfc56bf7f6334aec8869b2906cc2a6521d6d3db5e252ff445e05252fad79376f"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0755",
+        "size": 9266,
+        "sha256": "fb3d6e4d9357d5cbfe3ffb0ccc06a164ef5e6801188b8a25568d4119c4323a8d"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_candidate_evidence_guard.py",
+      "scope": "source_gate",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 8793,
+        "sha256": "4aad664611886e4304680f10c6dd3f80027897cee68c2ca4e91e1e7877d7bb39"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 9615,
+        "sha256": "975a67c9439371b2a54dbfdb58b9886dc771435e264e0e47903fffcdd4af4776"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_candidate_gateway_ws.py",
+      "scope": "source_gate",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 17086,
+        "sha256": "83a7a304fa78dff4f10f18ee9a21978d45a6124510bbdf6293467c34543e4c1d"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 18336,
+        "sha256": "9bdfbb9b9261d993f833e4fc117df69b2b64b98d0c4524734fb3d73474800efe"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_candidate_rule_assertion.py",
+      "scope": "source_gate",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 24232,
+        "sha256": "6b06bbecf7f5a590331bc0741180bd6979e34db23f5971651855c0fd6f0892ec"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 24380,
+        "sha256": "8862fa92cda9cfb89f2f59edf754b944d106bede81b20d49eb6f16ad325aa38f"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
@@ -18717,8 +19053,32 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 14743,
-        "sha256": "0f18e439c3ccd248462e6386fbbf6bef79c6f5928fc27c7947e855965109e664"
+        "size": 17916,
+        "sha256": "6e779d767fffa8b941cf3c6220168bd25d5145df20fa5ec7d4b03424f40b367d"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_candidate_version_authority.py",
+      "scope": "source_gate",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 2691,
+        "sha256": "c88983a677bb8f97ce648f50a71a515cff111bf5316d5aa63cf9b5ce26e31656"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
@@ -18741,8 +19101,56 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 91550,
-        "sha256": "e28c21c080d58b6148699eabb08191ead488cc70001eee19cc953eb747c4f20a"
+        "size": 92787,
+        "sha256": "6e035d08fc4905daf81bf9ac702ff0fe8f2dbea64c594d43d1f9c09e9972357e"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_upstream_byte_relay.py",
+      "scope": "source_gate",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 24058,
+        "sha256": "9e6f93d09632f146bac40a46f8c636980528a31670bf03f77d300911e7e3ca32"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 25351,
+        "sha256": "366641f09d6730fb104abe4f6b0a48fbdd586e53e66871dbe7588a004b650368"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/upstream_byte_relay.py",
+      "scope": "source_gate",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 82243,
+        "sha256": "ebc081315a58fed9660565528e8f4ce2ad52dde53915e51b89c98f0f75dc31fb"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 83058,
+        "sha256": "d1a4da68eb63d917bf83e9bc525902be6dcf5445c25544e3727cd1de842cf200"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",

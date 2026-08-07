@@ -706,6 +706,7 @@
             "SUBJECTS": "codex-http codex-ws",
             "SCENARIOS": "s1 s2 s4",
             "CODEX_MODEL": "{model}",
+            "CODEX_VERSION": "{target_version}",
             "RUN_ID": "{campaign_id}-candidate-direct-core"
           },
           "timeout_seconds": 3600
@@ -778,6 +779,7 @@
             "SUBJECTS": "codex-http codex-ws",
             "SCENARIOS": "s1 s2 s4",
             "CODEX_MODEL": "{model}",
+            "CODEX_VERSION": "{target_version}",
             "RUN_ID_PREFIX": "{campaign_id}-candidate-mitm-core",
             "WINDOW_ID": "run"
           },
@@ -840,6 +842,7 @@
             "POSTGRES_CONTAINER": "{postgres_container}",
             "ACCOUNT_ID": "{codex_account_id}",
             "API_KEY_ID": "{api_key_id}",
+            "CODEX_VERSION": "{target_version}",
             "MODEL": "{model}",
             "RUN_ID": "{campaign_id}-candidate-h1"
           },
@@ -1521,6 +1524,7 @@
             "POSTGRES_CONTAINER": "{postgres_container}",
             "ACCOUNT_ID": "{codex_account_id}",
             "API_KEY_ID": "{api_key_id}",
+            "CODEX_VERSION": "{target_version}",
             "RUN_ID": "{campaign_id}-candidate-frozen-core"
           },
           "timeout_seconds": 5400
@@ -1564,6 +1568,7 @@
             "POSTGRES_CONTAINER": "{postgres_container}",
             "ACCOUNT_ID": "{codex_account_id}",
             "API_KEY_ID": "{api_key_id}",
+            "CODEX_VERSION": "{target_version}",
             "RUN_ID": "{campaign_id}-candidate-frozen-aux",
             "MODEL": "{model}"
           },
@@ -1607,6 +1612,7 @@
             "POSTGRES_CONTAINER": "{postgres_container}",
             "ACCOUNT_ID": "{codex_account_id}",
             "API_KEY_ID": "{api_key_id}",
+            "CODEX_VERSION": "{target_version}",
             "MODEL": "{model}",
             "RUN_ID": "{campaign_id}-candidate-images"
           },

@@ -13,7 +13,11 @@ subjects=${SUBJECTS:-"claude-http codex-http codex-ws"}
 scenarios=${SCENARIOS:-"s1 s2 s4"}
 claude_model=${CLAUDE_MODEL:-claude-sonnet-5}
 codex_model=${CODEX_MODEL:-gpt-5.6-luna}
-codex_version=${CODEX_VERSION:-0.145.0}
+codex_version=${CODEX_VERSION:?必须由 Campaign 提供 CODEX_VERSION}
+if [[ ! $codex_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "CODEX_VERSION 必须是完整的 x.y.z 版本。" >&2
+  exit 2
+fi
 run_id_prefix=${RUN_ID_PREFIX:-p0-p2-review-fix-direct-0.1.165-3}
 run_id=${RUN_ID:-"$run_id_prefix-$(date -u +%Y%m%dT%H%M%SZ)"}
 

@@ -25,6 +25,7 @@ MAX_FRAME_BYTES = 8 * 1024 * 1024
 MAX_MESSAGE_BYTES = 16 * 1024 * 1024
 MAX_TURN_EVENTS = 512
 RESPONSE_ID_PATTERN = re.compile(r"^resp_[A-Za-z0-9._:-]+$")
+VERSION_PATTERN = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 SUCCESS_TERMINALS = {"response.completed", "response.done"}
 FAILURE_TERMINALS = {
     "response.failed",
@@ -282,6 +283,7 @@ def _open_gateway(
     port: int,
     path: str,
     api_key: str,
+    codex_version: str,
     first_body: Path,
     session_affinity: str,
     timeout: float,
@@ -294,6 +296,8 @@ def _open_gateway(
         "session affinity": session_affinity,
     }.items():
         _reject_header_control(label, value)
+    if not VERSION_PATTERN.fullmatch(codex_version):
+        raise ValueError("Codex 版本必须是完整的 x.y.z 版本。")
     if not path.startswith("/") or " " in path:
         raise ValueError("WebSocket path 必须是绝对路径且不能包含空格。")
     turn_metadata = _read_limited_text(
@@ -320,7 +324,7 @@ def _open_gateway(
         f"Authorization: Bearer {api_key}",
         "User-Agent: sub2apiplus-candidate-capture/1.0",
         "Originator: sub2apiplus_candidate_capture",
-        "Version: 0.145.0",
+        f"Version: {codex_version}",
         "X-Codex-Terminal: unknown",
         "Session-Id: 11111111-1111-4111-8111-111111111111",
         f"Thread-Id: {thread_id}",
@@ -480,6 +484,7 @@ def run_session(
     port: int,
     path: str,
     api_key: str,
+    codex_version: str,
     first_body_path: Path,
     second_body_path: Path,
     first_output_path: Path,
@@ -504,6 +509,7 @@ def run_session(
         port=port,
         path=path,
         api_key=api_key,
+        codex_version=codex_version,
         first_body=first_body_path,
         session_affinity=session_affinity,
         timeout=timeout,
@@ -532,6 +538,7 @@ def run_session(
 
         summary = {
             "schema_version": "candidate-gateway-ws/v1",
+            "codex_version": codex_version,
             "status": "complete",
             "transport": "websocket",
             "http_status": 101,
@@ -570,6 +577,7 @@ def main() -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--path", default="/v1/responses")
+    parser.add_argument("--codex-version", required=True)
     parser.add_argument("--first-body", type=Path, required=True)
     parser.add_argument("--second-body", type=Path, required=True)
     parser.add_argument("--first-output", type=Path, required=True)
@@ -592,6 +600,7 @@ def main() -> int:
             port=arguments.port,
             path=arguments.path,
             api_key=api_key,
+            codex_version=arguments.codex_version,
             first_body_path=arguments.first_body,
             second_body_path=arguments.second_body,
             first_output_path=arguments.first_output,

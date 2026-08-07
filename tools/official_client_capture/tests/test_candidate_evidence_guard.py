@@ -170,7 +170,7 @@ class CandidateEvidenceGuardTest(unittest.TestCase):
                 json.dumps(
                     {
                         "schema_version": "codex-candidate-capture-manifest/v1",
-                        "codex_version": "0.145.0",
+                        "codex_version": "0.147.0",
                         "capture_id": "guard-test",
                         "status": "complete",
                         "artifacts": [
@@ -197,10 +197,28 @@ class CandidateEvidenceGuardTest(unittest.TestCase):
                 after=after,
                 capture_manifest=manifest,
                 evidence_root=evidence_root,
+                expected_codex_version="0.147.0",
             )
             self.assertEqual(report["status"], "pass")
+            self.assertEqual(report["codex_version"], "0.147.0")
             self.assertTrue(report["restoration"]["byte_identical"])
             self.assertEqual(report["secret_scan"]["file_count"], 4)
+            with self.assertRaisesRegex(EvidenceGuardError, "期望 Codex 版本"):
+                verify_evidence_guard(
+                    before=before,
+                    after=after,
+                    capture_manifest=manifest,
+                    evidence_root=evidence_root,
+                    expected_codex_version="",
+                )
+            with self.assertRaisesRegex(EvidenceGuardError, "Campaign 目标"):
+                verify_evidence_guard(
+                    before=before,
+                    after=after,
+                    capture_manifest=manifest,
+                    evidence_root=evidence_root,
+                    expected_codex_version="0.146.0",
+                )
 
 
 if __name__ == "__main__":

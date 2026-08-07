@@ -25,6 +25,7 @@ STATE_SCHEMA_VERSION = "codex-candidate-normalized-state/v1"
 GUARD_REPORT_SCHEMA_VERSION = "codex-candidate-evidence-guard-report/v1"
 CAPTURE_MANIFEST_SCHEMA_VERSION = "codex-candidate-capture-manifest/v1"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")
 SENSITIVE_STATE_KEYS = frozenset(
     {
         "access_token",
@@ -325,17 +326,21 @@ def _archive_relative_file(
 
 
 def manifest_artifacts(
-    capture_manifest: Path, evidence_root: Path
+    capture_manifest: Path,
+    evidence_root: Path,
+    expected_codex_version: str,
 ) -> list[tuple[str, Path]]:
     """解析统一 capture manifest，并绑定每份 artifact 的实际 SHA。"""
 
+    if not VERSION_RE.fullmatch(expected_codex_version):
+        raise EvidenceGuardError("期望 Codex 版本必须是完整的 x.y.z 版本")
     value = _load_json(capture_manifest, "capture manifest")
     if not isinstance(value, dict):
         raise EvidenceGuardError("capture manifest 顶层必须是对象")
     if value.get("schema_version") != CAPTURE_MANIFEST_SCHEMA_VERSION:
         raise EvidenceGuardError("capture manifest schema_version 不匹配")
-    if value.get("codex_version") != "0.145.0":
-        raise EvidenceGuardError("capture manifest Codex 版本必须是 0.145.0")
+    if value.get("codex_version") != expected_codex_version:
+        raise EvidenceGuardError("capture manifest Codex 版本与 Campaign 目标不一致")
     if not isinstance(value.get("capture_id"), str) or not value[
         "capture_id"
     ].strip():
@@ -451,6 +456,7 @@ def verify_evidence_guard(
     after: Path,
     capture_manifest: Path,
     evidence_root: Path,
+    expected_codex_version: str,
     secret_env_names: Sequence[str] = (),
 ) -> dict[str, Any]:
     """执行 restoration 和全 artifact secret scan。"""
@@ -465,7 +471,11 @@ def verify_evidence_guard(
         capture_manifest, evidence_root, "capture manifest"
     )
     restoration = verify_restoration(before_path, after_path)
-    artifacts = manifest_artifacts(manifest_path, evidence_root)
+    artifacts = manifest_artifacts(
+        manifest_path,
+        evidence_root,
+        expected_codex_version,
+    )
     state_files = [
         (before_relative, before_path),
         (after_relative, after_path),
@@ -476,6 +486,7 @@ def verify_evidence_guard(
     )
     return {
         "schema_version": GUARD_REPORT_SCHEMA_VERSION,
+        "codex_version": expected_codex_version,
         "status": "pass" if secret_scan["passed"] else "fail",
         "restoration": restoration,
         "secret_scan": secret_scan,
@@ -504,6 +515,7 @@ def _build_parser() -> argparse.ArgumentParser:
     verify.add_argument("--after", type=Path, required=True)
     verify.add_argument("--capture-manifest", type=Path, required=True)
     verify.add_argument("--evidence-root", type=Path, required=True)
+    verify.add_argument("--expected-codex-version", required=True)
     verify.add_argument("--secret-env", action="append", default=[])
     verify.add_argument("--report", type=Path, required=True)
     return parser
@@ -526,6 +538,7 @@ def main(argv: Iterable[str] | None = None) -> int:
                 after=args.after,
                 capture_manifest=args.capture_manifest,
                 evidence_root=args.evidence_root,
+                expected_codex_version=args.expected_codex_version,
                 secret_env_names=args.secret_env,
             )
             _write_json(args.report, report)
@@ -538,6 +551,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             "error": str(error),
         }
         if args.command == "verify":
+            payload["codex_version"] = args.expected_codex_version
             _write_json(args.report, payload)
         exit_code = 1
     json.dump(payload, sys.stdout, ensure_ascii=False, indent=2)

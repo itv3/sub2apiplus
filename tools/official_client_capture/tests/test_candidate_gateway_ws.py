@@ -132,7 +132,7 @@ class FakeGateway:
                     "sec-websocket-version": "13",
                     "user-agent": "sub2apiplus-candidate-capture/1.0",
                     "originator": "sub2apiplus_candidate_capture",
-                    "version": "0.145.0",
+                    "version": "0.147.0",
                     "x-session-affinity": "candidate-core-a06",
                 }
                 for name, expected in required.items():
@@ -246,6 +246,30 @@ class FakeGateway:
 
 
 class CandidateGatewayWebSocketDriverTest(unittest.TestCase):
+    def test_invalid_campaign_version_fails_before_network(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            first = root / "first.json"
+            second = root / "second.json"
+            payload = {"model": "gpt-5.5", "input": []}
+            first.write_text(json.dumps(payload), encoding="utf-8")
+            second.write_text(json.dumps(payload), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "完整的 x.y.z 版本"):
+                driver.run_session(
+                    host="127.0.0.1",
+                    port=1,
+                    path="/v1/responses",
+                    api_key="unit-test-key",
+                    codex_version="",
+                    first_body_path=first,
+                    second_body_path=second,
+                    first_output_path=root / "first.sse",
+                    second_output_path=root / "second.sse",
+                    summary_path=root / "summary.json",
+                    session_affinity="candidate-version-test",
+                    timeout=1,
+                )
+
     def test_cli_runs_two_turns_on_one_connection_without_persisting_key(self) -> None:
         """真实套接字覆盖握手尾字节、分片、PING/PONG、续链与密钥门禁。"""
 
@@ -315,6 +339,8 @@ class CandidateGatewayWebSocketDriverTest(unittest.TestCase):
                 "127.0.0.1",
                 "--port",
                 str(gateway.port),
+                "--codex-version",
+                "0.147.0",
                 "--first-body",
                 str(first_body),
                 "--second-body",
@@ -345,6 +371,7 @@ class CandidateGatewayWebSocketDriverTest(unittest.TestCase):
             )
             receipt = json.loads(summary.read_text(encoding="utf-8"))
             self.assertTrue(receipt["same_connection"])
+            self.assertEqual(receipt["codex_version"], "0.147.0")
             self.assertEqual(
                 [turn["response_id"] for turn in receipt["turns"]],
                 ["resp_candidate_core_a06_0002", "resp_candidate_core_a06_0003"],

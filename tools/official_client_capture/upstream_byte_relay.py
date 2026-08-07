@@ -174,6 +174,7 @@ def _synthetic_aux_response(
     request_line: str,
     head: bytes,
     body: bytes,
+    codex_version: str,
 ) -> SyntheticAuxResponse | None:
     """返回候选 A09/A11/A12/A13/A14 的白名单受控响应。
 
@@ -195,7 +196,7 @@ def _synthetic_aux_response(
         if (method, path, query_pairs) == (
             "GET",
             "/backend-api/codex/models",
-            [("client_version", "0.145.0")],
+            [("client_version", codex_version)],
         ):
             payload = (
                 b'{"models":[{"slug":"gpt-5.6-sol","display_name":"GPT-5.6 Sol",'
@@ -449,6 +450,7 @@ def _synthetic_core_response(
     head: bytes,
     body: bytes,
     ordinal: int,
+    codex_version: str,
 ) -> SyntheticCoreResponse | None:
     """返回 A03/A04/A05/A06/A07/A08/A10/A15 的冻结白名单响应。"""
 
@@ -467,7 +469,7 @@ def _synthetic_core_response(
         method == "GET"
         and parsed.path == "/backend-api/codex/models"
         and parse_qsl(parsed.query, keep_blank_values=True)
-        == [("client_version", "0.145.0")]
+        == [("client_version", codex_version)]
     ):
         return _synthetic_core_models_response()
     if parsed.query or parsed.path != "/backend-api/codex/responses":
@@ -1365,6 +1367,7 @@ class Relay:
                             request_line,
                             initial_head,
                             initial_body,
+                            self.args.codex_version,
                         )
                     else:
                         is_core_ws = (
@@ -1393,6 +1396,7 @@ class Relay:
                                     initial_head,
                                     initial_body,
                                     0,
+                                    self.args.codex_version,
                                 )
                         else:
                             http_ordinal = 0
@@ -1405,6 +1409,7 @@ class Relay:
                                 initial_head,
                                 initial_body,
                                 http_ordinal,
+                                self.args.codex_version,
                             )
                             if (
                                 synthetic is not None
@@ -1448,6 +1453,7 @@ class Relay:
                         await asyncio.sleep(0.2)
                     meta["valid"] = True
                     meta["synthetic_profile"] = self.args.synthetic_profile
+                    meta["codex_version"] = self.args.codex_version
                     meta["intervention"] = synthetic.action
                     meta["production_forwarded"] = False
                     if self.args.synthetic_profile == "candidate-core-v1":
@@ -1743,6 +1749,7 @@ class Relay:
             json.dump({"schema_version": "byte-relay/v1",
                        "mode": self.args.mode,
                        "upstream_host": self.args.upstream_host,
+                       "codex_version": self.args.codex_version or None,
                        "synthetic_profile": self.args.synthetic_profile or None,
                        "candidate_core_scenario": self.args.candidate_core_scenario or None,
                        "candidate_core_ws_failures": (
@@ -1766,6 +1773,8 @@ def main() -> None:
                     help="direct=hosts 劫持；connect=显式 HTTP 代理")
     ap.add_argument("--port", type=int, default=443)
     ap.add_argument("--upstream-host", default="chatgpt.com")
+    ap.add_argument("--codex-version", default="",
+                    help="候选合成画像绑定的 Campaign 目标 Codex 版本")
     ap.add_argument("--upstream-map", default="",
                     help="多域名上游映射 host=ip[,host=ip…]，"
                          "**必须在劫持 hosts 之前解析好**")
@@ -1833,6 +1842,13 @@ def main() -> None:
         ap.error("--inject-ws-turn-state 只能包含字母、数字、点、下划线和连字符")
     if bool(args.synthetic_profile) != bool(args.allow_synthetic_responses):
         ap.error("--synthetic-profile 与 --allow-synthetic-responses 必须同时提供")
+    if args.codex_version and not re.fullmatch(
+        r"[0-9]+\.[0-9]+\.[0-9]+",
+        args.codex_version,
+    ):
+        ap.error("--codex-version 必须是完整的 x.y.z 版本")
+    if args.synthetic_profile and not args.codex_version:
+        ap.error("候选合成画像必须提供 --codex-version")
     if args.synthetic_profile and (args.upstream_ip or args.upstream_map):
         ap.error("候选合成模式禁止配置任何生产上游 IP/map")
     if args.synthetic_profile and any((

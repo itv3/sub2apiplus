@@ -1107,6 +1107,15 @@ def _validate_scenario_manifest_shape(payload: dict[str, Any]) -> None:
                 raise ConfigurationError(
                     f"场景任务 {index} 步骤 {step_index} 环境或超时非法。"
                 )
+            if (
+                job.get("phase") == "candidate"
+                and step["environment"].get("CODEX_VERSION")
+                != "{target_version}"
+            ):
+                raise ConfigurationError(
+                    f"候选场景任务 {index} 步骤 {step_index} 必须从 Campaign "
+                    "target_version 注入 CODEX_VERSION。"
+                )
 
     clients = payload.get("required_client_bindings")
     if (

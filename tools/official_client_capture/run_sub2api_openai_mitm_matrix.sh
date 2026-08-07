@@ -12,7 +12,11 @@ capture_root=${CAPTURE_ROOT:-/root/oauth-capture}
 subjects=${SUBJECTS:-"codex-http codex-ws"}
 scenarios=${SCENARIOS:-"s1 s2 s4"}
 codex_model=${CODEX_MODEL:-gpt-5.6-luna}
-codex_version=${CODEX_VERSION:-0.145.0}
+codex_version=${CODEX_VERSION:?必须由 Campaign 提供 CODEX_VERSION}
+if [[ ! $codex_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "CODEX_VERSION 必须是完整的 x.y.z 版本。" >&2
+  exit 2
+fi
 run_id_prefix=${RUN_ID_PREFIX:-p0-p2-review-fix-mitm-openai-0.1.165-3}
 window_id=${WINDOW_ID:-$(date -u +%Y%m%dT%H%M%SZ)}
 ca_source="$capture_root/state/mitm/mitmproxy-ca-cert.pem"

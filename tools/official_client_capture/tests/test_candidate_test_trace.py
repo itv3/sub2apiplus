@@ -56,6 +56,7 @@ class CandidateTestTraceTest(unittest.TestCase):
         include_fact: bool = True,
         include_raw: bool = True,
         cached: bool = False,
+        codex_version: str = "0.145.0",
     ) -> dict[str, Path | str]:
         source_root = root / "source"
         evidence_root = root / "evidence"
@@ -68,10 +69,14 @@ class CandidateTestTraceTest(unittest.TestCase):
         profile.parent.mkdir(parents=True)
         test_file.write_text("package service\n// 测试快照\n", encoding="utf-8")
         source_file.write_text("package service\n// 生产快照\n", encoding="utf-8")
-        profile.write_text('{"profile":"unit-test"}\n', encoding="utf-8")
+        profile.write_text(
+            json.dumps({"codex_version": codex_version, "profile": "unit-test"})
+            + "\n",
+            encoding="utf-8",
+        )
         mapping_value = {
             "schema_version": "codex-candidate-test-fact-map/v1",
-            "codex_version": "0.145.0",
+            "codex_version": codex_version,
             "fact_prefix": FACT_PREFIX,
             "forbidden_record_types": [
                 "http_request",
@@ -194,7 +199,7 @@ class CandidateTestTraceTest(unittest.TestCase):
             json.dumps(
                 {
                     "schema_version": "codex-candidate-capture-manifest/v1",
-                    "codex_version": "0.145.0",
+                    "codex_version": codex_version,
                     "capture_id": "unit-test",
                     "status": "complete",
                     "artifacts": artifacts,
@@ -210,6 +215,7 @@ class CandidateTestTraceTest(unittest.TestCase):
             "profile": profile,
             "manifest": manifest,
             "test_file": test_file,
+            "codex_version": codex_version,
         }
 
     def _generate(self, fixture: dict[str, Path | str]) -> dict[str, object]:
@@ -223,9 +229,58 @@ class CandidateTestTraceTest(unittest.TestCase):
             trace_dir="generated/test-traces",
             output_manifest="generated/capture-with-test-traces.json",
             output_receipt="generated/test-trace-receipt.json",
-            verify_frozen_mapping=False,
-            verify_frozen_profile=False,
+            expected_codex_version=fixture["codex_version"],  # type: ignore[arg-type]
+            expected_mapping_sha256=file_sha256(
+                fixture["mapping"]  # type: ignore[arg-type]
+            ),
+            expected_profile_sha256=file_sha256(
+                fixture["profile"]  # type: ignore[arg-type]
+            ),
         )
+
+    def test_target_version_is_bound_across_inputs_and_receipt(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self._fixture(Path(directory), codex_version="0.147.0")
+            receipt = self._generate(fixture)
+            self.assertEqual(receipt["codex_version"], "0.147.0")
+            output_manifest = (
+                fixture["evidence_root"]  # type: ignore[operator]
+                / "generated/capture-with-test-traces.json"
+            )
+            self.assertEqual(
+                json.loads(output_manifest.read_text(encoding="utf-8"))[
+                    "codex_version"
+                ],
+                "0.147.0",
+            )
+
+    def test_empty_or_wrong_target_version_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            fixture = self._fixture(Path(directory), codex_version="0.147.0")
+            common = {
+                "source_root": fixture["source_root"],
+                "evidence_root": fixture["evidence_root"],
+                "capture_manifest_path": fixture["manifest"],
+                "go_test_artifact": "candidate/go-test.jsonl",
+                "mapping_path": fixture["mapping"],
+                "profile_path": fixture["profile"],
+                "trace_dir": "generated/test-traces",
+                "output_manifest": "generated/capture.json",
+                "output_receipt": "generated/receipt.json",
+                "expected_mapping_sha256": file_sha256(
+                    fixture["mapping"]  # type: ignore[arg-type]
+                ),
+                "expected_profile_sha256": file_sha256(
+                    fixture["profile"]  # type: ignore[arg-type]
+                ),
+            }
+            with self.assertRaisesRegex(CandidateTestTraceError, "期望 Codex 版本"):
+                generate_test_traces(expected_codex_version="", **common)  # type: ignore[arg-type]
+            with self.assertRaisesRegex(CandidateTestTraceError, "Campaign 目标"):
+                generate_test_traces(
+                    expected_codex_version="0.146.0",
+                    **common,  # type: ignore[arg-type]
+                )
 
     def test_passed_exact_test_generates_bound_observation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -302,7 +357,10 @@ class CandidateTestTraceTest(unittest.TestCase):
             with self.assertRaisesRegex(CandidateTestTraceError, "不是允许的抽象事实"):
                 load_mapping(
                     fixture["mapping"],  # type: ignore[arg-type]
-                    verify_frozen_digest=False,
+                    expected_codex_version="0.145.0",
+                    expected_sha256=file_sha256(
+                        fixture["mapping"]  # type: ignore[arg-type]
+                    ),
                 )
 
     def test_output_paths_are_never_overwritten(self) -> None:
@@ -337,12 +395,22 @@ class CandidateTestTraceTest(unittest.TestCase):
             receipt_schema["properties"]["schema_version"]["const"],
             "codex-candidate-test-trace-receipt/v1",
         )
+        version_pattern = "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+        self.assertEqual(
+            mapping_schema["properties"]["codex_version"]["pattern"],
+            version_pattern,
+        )
+        self.assertEqual(
+            receipt_schema["properties"]["codex_version"]["pattern"],
+            version_pattern,
+        )
 
     def test_default_mapping_digest_and_fact_universe_are_frozen(self) -> None:
         tool_root = Path(__file__).resolve().parents[1]
         _, tests = load_mapping(
             tool_root / "candidate_test_fact_map_0_145_0.json",
-            verify_frozen_digest=True,
+            expected_codex_version="0.145.0",
+            expected_sha256=candidate_test_trace.FROZEN_MAPPING_SHA256,
         )
         fact_ids = {
             fact.fact_id

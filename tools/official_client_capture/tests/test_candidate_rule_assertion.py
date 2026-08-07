@@ -110,6 +110,10 @@ class CandidateRuleExpectationTest(unittest.TestCase):
             "codex-candidate-capture-manifest/v1",
         )
         self.assertEqual(
+            capture_schema["properties"]["codex_version"]["pattern"],
+            "^[0-9]+\\.[0-9]+\\.[0-9]+$",
+        )
+        self.assertEqual(
             observation_schema["properties"]["schema_version"]["const"],
             "codex-candidate-observation/v1",
         )

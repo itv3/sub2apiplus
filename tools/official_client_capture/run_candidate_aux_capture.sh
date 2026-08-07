@@ -17,6 +17,12 @@ if [[ ${ENABLE_CANDIDATE_AUX_SYNTHETIC:-} != "$required_gate" ]]; then
   exit 2
 fi
 
+codex_version=${CODEX_VERSION:?必须由 Campaign 提供 CODEX_VERSION}
+if [[ ! $codex_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  echo "CODEX_VERSION 必须是完整的 x.y.z 版本。" >&2
+  exit 2
+fi
+
 capture_container=${CAPTURE_CONTAINER:-capture-cli}
 service_container=${SERVICE_CONTAINER:-sub2apiplus}
 keeper_container=${KEEPER_CONTAINER:-sub2apiplus-keeper}
@@ -269,7 +275,8 @@ write_summary() {
   python3 - \
     "$work_dir" "$run_id" "$final_status" "$exit_code" \
     "$original_proxy_state" "$restored_hosts_hash" "$original_hosts_hash" \
-    "$restored_ca_hash" "$original_ca_hash" "$model_mapping_restored" <<'PY'
+    "$restored_ca_hash" "$original_ca_hash" "$model_mapping_restored" \
+    "$codex_version" <<'PY'
 import hashlib
 import json
 import os
@@ -285,6 +292,7 @@ original_proxy = sys.argv[5]
 restored_hosts_hash, original_hosts_hash = sys.argv[6:8]
 restored_ca_hash, original_ca_hash = sys.argv[8:10]
 model_mapping_restored = sys.argv[10] == "1"
+codex_version = sys.argv[11]
 
 scenarios = []
 for scenario_id in ("A09", "A11", "A12", "A13", "A14"):
@@ -315,6 +323,7 @@ for scenario_id in ("A09", "A11", "A12", "A13", "A14"):
 
 payload = {
     "schema_version": "candidate-aux-capture/v1",
+    "codex_version": codex_version,
     "run_id": run_id,
     "status": status,
     "exit_code": exit_code,
@@ -568,9 +577,10 @@ if ! docker exec "$capture_container" sh -c 'command -v tcpdump' >/dev/null; the
   echo "capture 容器缺少 tcpdump，无法形成 A11/A13/A14 的 SNI pcap。" >&2
   exit 1
 fi
-if ! docker exec "$capture_container" python3 "$relay_tool" --help 2>&1 |
-  grep -q 'candidate-aux-v1'; then
-  echo "capture 容器中的 relay 尚未同步候选辅助合成画像。" >&2
+relay_help=$(docker exec "$capture_container" python3 "$relay_tool" --help 2>&1 || true)
+if ! grep -q 'candidate-aux-v1' <<<"$relay_help" ||
+  ! grep -q -- '--codex-version' <<<"$relay_help"; then
+  echo "capture 容器中的 relay 尚未同步目标版本参数或候选辅助合成画像。" >&2
   exit 1
 fi
 
@@ -653,11 +663,12 @@ start_capture() {
     umask 077
     python3 "$1" --cert "$2" --key "$3" --mode connect --port "$4" \
       --upstream-host chatgpt.com --output "$5" --timeout 300 \
+      --codex-version "$6" \
       --synthetic-profile candidate-aux-v1 --allow-synthetic-responses \
-      >"$6" 2>&1 &
-    echo $! >"$7"
+      >"$7" 2>&1 &
+    echo $! >"$8"
   ' sh "$relay_tool" "$container_tls_dir/relay.crt" "$container_tls_dir/relay.key" \
-    "$relay_port" "$container_scenario_root/relay-private" \
+    "$relay_port" "$container_scenario_root/relay-private" "$codex_version" \
     "$container_scenario_root/relay.log" "$container_scenario_root/relay.pid"
   relay_started=1
 
@@ -729,11 +740,11 @@ wait_live_cleanup() {
   return 1
 }
 
-official_ua='codex_exec/0.145.0 (Ubuntu 24.4.0; x86_64) unknown (codex_exec; 0.145.0)'
+official_ua="codex_exec/$codex_version (Ubuntu 24.4.0; x86_64) unknown (codex_exec; $codex_version)"
 common_gateway_headers=(
   -H "User-Agent: $official_ua"
   -H 'Originator: codex_exec'
-  -H 'Version: 0.145.0'
+  -H "Version: $codex_version"
   -H 'X-Codex-Terminal: unknown'
 )
 
@@ -742,7 +753,7 @@ start_capture A09
 trigger_root="$work_dir/scenarios/A09/trigger"
 code=$(request_with_token "$api_key" --output "$trigger_root/models.json" --write-out '%{http_code}' \
   "${common_gateway_headers[@]}" \
-  "$service_base_url/backend-api/codex/models?client_version=0.145.0")
+  "$service_base_url/backend-api/codex/models?client_version=$codex_version")
 assert_2xx A09-models "$code"
 
 compact_installation_id=33333333-3333-4333-8333-333333333333
@@ -879,13 +890,14 @@ stop_capture
 
 # 冻结动作计数与“绝不生产转发”最终门禁。任何多余/缺失动作都让本轮失败；摘要仍由
 # EXIT 恢复钩子生成，并带出恢复核验状态。
-python3 - "$work_dir" <<'PY'
+python3 - "$work_dir" "$codex_version" <<'PY'
 import json
 import sys
 from collections import Counter
 from pathlib import Path
 
 root = Path(sys.argv[1])
+codex_version = sys.argv[2]
 expected = {
     "A09": {
         "models_manifest": 1,
@@ -905,6 +917,8 @@ for scenario, wanted in expected.items():
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     if manifest.get("synthetic_profile") != "candidate-aux-v1":
         raise SystemExit(f"{scenario} relay 未绑定冻结合成画像")
+    if manifest.get("codex_version") != codex_version:
+        raise SystemExit(f"{scenario} relay Codex 版本与 Campaign 目标不一致")
     if manifest.get("production_forwarding_enabled") is not False:
         raise SystemExit(f"{scenario} relay 仍允许生产转发")
     for connection in manifest.get("connections", []):

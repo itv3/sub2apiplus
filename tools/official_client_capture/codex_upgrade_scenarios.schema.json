@@ -289,6 +289,32 @@
     "captureJob": {
       "type": "object",
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "phase": {"const": "candidate"}
+            },
+            "required": ["phase"]
+          },
+          "then": {
+            "properties": {
+              "steps": {
+                "items": {
+                  "properties": {
+                    "environment": {
+                      "required": ["CODEX_VERSION"],
+                      "properties": {
+                        "CODEX_VERSION": {"const": "{target_version}"}
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ],
       "required": [
         "id",
         "phase",
