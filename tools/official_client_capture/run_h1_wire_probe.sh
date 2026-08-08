@@ -39,6 +39,23 @@ probe_started=0
 ca_installed=0
 hosts_patched=0
 keeper_was_running=false
+account_gate_before=""
+
+# 探针把 chatgpt.com 劫持到容器内端口；探针停止后仍在途的真实出站会拿到
+# connection refused，Sub2API 据此把账号临时熔断。熔断是本脚本自身的副作用，
+# 不恢复就会让同一 attempt 的后续任务全部 503，因此按运行前值精确回写。
+restore_account_gate() {
+  local until_hex reason_hex
+  [[ -n $account_gate_before ]] || return 0
+  until_hex=${account_gate_before%%|*}
+  reason_hex=${account_gate_before##*|}
+  [[ $until_hex =~ ^[0-9a-f]*$ && $reason_hex =~ ^[0-9a-f]*$ ]] || return 1
+  db_query "update accounts set temp_unschedulable_until = nullif(convert_from(decode('$until_hex','hex'),'UTF8'),'')::timestamptz, temp_unschedulable_reason = nullif(convert_from(decode('$reason_hex','hex'),'UTF8'),'') where id = $account_id" >/dev/null
+}
+
+account_gate_state() {
+  db_query "select coalesce(encode(convert_to(coalesce(temp_unschedulable_until::text,''),'UTF8'),'hex'),'') || '|' || coalesce(encode(convert_to(coalesce(temp_unschedulable_reason,''),'UTF8'),'hex'),'') from accounts where id = $account_id"
+}
 
 cleanup() {
   local status=$?
@@ -64,7 +81,14 @@ cleanup() {
   if [[ $keeper_was_running == true ]]; then
     docker start "$keeper_container" >/dev/null 2>&1 || true
   fi
-  echo "环境已恢复：hosts、CA 与 keeper 均回到采集前状态。"
+  if ! restore_account_gate; then
+    echo "账号 #$account_id 的临时熔断状态未能恢复，请人工检查。" >&2
+    status=97
+  elif [[ -n $account_gate_before && $(account_gate_state) != "$account_gate_before" ]]; then
+    echo "账号 #$account_id 的临时熔断状态与运行前不一致。" >&2
+    status=97
+  fi
+  echo "环境已恢复：hosts、CA、keeper 与账号调度门均回到采集前状态。"
   exit $status
 }
 trap cleanup EXIT
@@ -76,6 +100,11 @@ db_query() { docker exec "$postgres_container" psql -U "$db_user" -d "$db_name" 
 current_proxy=$(db_query "select coalesce(proxy_id::text,'NULL') from accounts where id = $account_id")
 if [[ $current_proxy != NULL ]]; then
   echo "账号 #$account_id 已绑定代理，探针要求直连画像，拒绝继续。" >&2
+  exit 1
+fi
+account_gate_before=$(account_gate_state)
+if [[ ! $account_gate_before =~ ^[0-9a-f]*\|[0-9a-f]*$ ]]; then
+  echo "无法读取账号 #$account_id 的调度门状态，拒绝继续。" >&2
   exit 1
 fi
 

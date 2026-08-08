@@ -150,6 +150,8 @@ keeper_was_running=false
 restore_failed=0
 capture_status=failed
 original_proxy_state=""
+original_gate_state=""
+restored_gate_equal=false
 original_model_mapping_state=""
 restored_model_mapping_state=""
 model_mapping_restore_armed=0
@@ -159,6 +161,22 @@ original_ca_hash=""
 restored_hosts_hash=""
 restored_ca_hash=""
 dummy_refresh=""
+
+# 合成 relay 把 chatgpt.com 劫持到容器内端口；relay 停止后仍在途的真实出站会拿到
+# connection refused，Sub2API 据此把账号临时熔断。熔断是本脚本自身的副作用，不恢复
+# 就会让同一 attempt 的后续任务全部 503，因此按运行前值精确回写并复核。
+account_gate_state() {
+  db_query "select coalesce(encode(convert_to(coalesce(temp_unschedulable_until::text,''),'UTF8'),'hex'),'') || '|' || coalesce(encode(convert_to(coalesce(temp_unschedulable_reason,''),'UTF8'),'hex'),'') from accounts where id = $account_id"
+}
+
+restore_account_gate() {
+  local until_hex reason_hex
+  [[ -n $original_gate_state ]] || return 0
+  until_hex=${original_gate_state%%|*}
+  reason_hex=${original_gate_state##*|}
+  [[ $until_hex =~ ^[0-9a-f]*$ && $reason_hex =~ ^[0-9a-f]*$ ]] || return 1
+  db_query "update accounts set temp_unschedulable_until = nullif(convert_from(decode('$until_hex','hex'),'UTF8'),'')::timestamptz, temp_unschedulable_reason = nullif(convert_from(decode('$reason_hex','hex'),'UTF8'),'') where id = $account_id" >/dev/null
+}
 
 stop_container_process() {
   local pid=$1
@@ -430,6 +448,12 @@ restore_environment() {
     docker start "$keeper_container" >/dev/null 2>&1 || restore_failed=1
   fi
 
+  if restore_account_gate && [[ $(account_gate_state) == "$original_gate_state" ]]; then
+    restored_gate_equal=true
+  else
+    restore_failed=1
+  fi
+
   current_proxy_state=$(db_query \
     "select coalesce(proxy_id::text,'NULL') || '|' || coalesce(proxy_fallback_origin_id::text,'NULL') from accounts where id = $account_id" \
     2>/dev/null)
@@ -496,6 +520,11 @@ original_proxy_state=$(db_query \
   "select coalesce(proxy_id::text,'NULL') || '|' || coalesce(proxy_fallback_origin_id::text,'NULL') from accounts where id = $account_id")
 if [[ ! $original_proxy_state =~ ^(NULL|[0-9]+)\|(NULL|[0-9]+)$ ]]; then
   echo "无法读取账号 proxy/fallback 初始状态。" >&2
+  exit 1
+fi
+original_gate_state=$(account_gate_state)
+if [[ ! $original_gate_state =~ ^[0-9a-f]*\|[0-9a-f]*$ ]]; then
+  echo "无法读取账号 #$account_id 的调度门初始状态。" >&2
   exit 1
 fi
 account_shape=$(db_query \
