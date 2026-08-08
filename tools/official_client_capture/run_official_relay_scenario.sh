@@ -29,6 +29,7 @@ umask 077
 capture_container=${CAPTURE_CONTAINER:-capture-cli}
 capture_root=${CAPTURE_ROOT:-/root/oauth-capture}
 capture_tool_root=${CAPTURE_TOOL_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}
+scrub_tool="$capture_tool_root/scrub_raw_bytes.py"
 run_id=${RUN_ID:?必须提供 RUN_ID}
 model=${MODEL:-gpt-5.6-luna}
 codex_version=${CODEX_VERSION:-0.145.0}
@@ -639,6 +640,17 @@ if ! docker exec "$capture_container" test -s "/capture/runs/$run_id/relay/relay
   echo "❌ 中继未写出 relay.json，样本不完整。" >&2
   exit 1
 fi
+
+# 中继原始字节包含真实 Authorization/Cookie；在证据离开采集机前必须等长脱敏。
+# 先写入新目录并复扫，再替换原目录，避免留下未脱敏副本；字节长度和偏移保持不变。
+scrubbed_relay="$work_dir/relay-scrubbed"
+rm -rf -- "$scrubbed_relay"
+python3 "$scrub_tool" \
+  --src "$work_dir/relay" \
+  --dst "$scrubbed_relay" \
+  --verify
+rm -rf -- "$work_dir/relay"
+mv -- "$scrubbed_relay" "$work_dir/relay"
 
 if [[ $prompt == "__COMPACTION_REASON__" ]]; then
   echo "=== 压缩原因最小脱敏证据 ==="
