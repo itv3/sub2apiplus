@@ -1730,6 +1730,16 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     plan.add_argument("--codex-account-id", type=int, default=90)
     plan.add_argument("--api-key-id", type=int, default=1)
+    plan.add_argument(
+        "--live-attestation-compose-dir",
+        default="",
+        help="候选部署的 compose 工作目录；A11 需据此重建服务启用 candidatecapture provider。",
+    )
+    plan.add_argument(
+        "--live-attestation-compose-files",
+        default="",
+        help="候选部署的 compose -f 参数串，恢复时按同一串拉回。",
+    )
 
     official = subparsers.add_parser(
         "capture-official", help="运行或封存目标官方 CLI 证据"
@@ -2270,6 +2280,14 @@ def _job_context(arguments: argparse.Namespace) -> dict[str, str]:
         "relay_codex_bin": arguments.relay_codex_bin,
         "codex_account_id": str(arguments.codex_account_id),
         "api_key_id": str(arguments.api_key_id),
+        # A11 的 Live attestation 只读进程环境，采集侧需按本轮四元组重建候选服务；
+        # 缺省为空表示不注入，届时 A11 会以断言失败暴露而不是静默跳过。
+        "live_attestation_compose_dir": str(
+            getattr(arguments, "live_attestation_compose_dir", "") or ""
+        ),
+        "live_attestation_compose_files": str(
+            getattr(arguments, "live_attestation_compose_files", "") or ""
+        ),
     }
 
 
@@ -2467,6 +2485,12 @@ def create_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
             "relay_code_mode_host_bin": arguments.relay_code_mode_host_bin,
             "codex_account_id": arguments.codex_account_id,
             "api_key_id": arguments.api_key_id,
+            "live_attestation_compose_dir": str(
+                getattr(arguments, "live_attestation_compose_dir", "") or ""
+            ),
+            "live_attestation_compose_files": str(
+                getattr(arguments, "live_attestation_compose_files", "") or ""
+            ),
         },
         "required_rules": list(rules),
         "coverage_plan": plan["coverage_plan"],
@@ -3446,6 +3470,12 @@ def _campaign_arguments(
         relay_code_mode_host_bin=configuration["relay_code_mode_host_bin"],
         codex_account_id=int(configuration["codex_account_id"]),
         api_key_id=int(configuration["api_key_id"]),
+        live_attestation_compose_dir=str(
+            configuration.get("live_attestation_compose_dir", "") or ""
+        ),
+        live_attestation_compose_files=str(
+            configuration.get("live_attestation_compose_files", "") or ""
+        ),
         candidate_id=candidate_id,
         profile_id=profile_id,
         profile_digest=profile_digest,

@@ -163,6 +163,20 @@
       "required": false,
       "sensitive": false,
       "description": "候选源码树摘要；官方阶段为空。"
+    },
+    {
+      "name": "live_attestation_compose_dir",
+      "type": "absolute_path",
+      "required": false,
+      "sensitive": false,
+      "description": "候选部署的 docker compose 工作目录；A11 需按本轮四元组重建服务以启用 candidatecapture provider。"
+    },
+    {
+      "name": "live_attestation_compose_files",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "description": "候选部署的 compose -f 参数串；恢复时按同一串拉回原部署。"
     }
   ],
   "required_client_bindings": [
@@ -1570,7 +1584,9 @@
             "API_KEY_ID": "{api_key_id}",
             "CODEX_VERSION": "{target_version}",
             "RUN_ID": "{campaign_id}-candidate-frozen-aux",
-            "MODEL": "{model}"
+            "MODEL": "{model}",
+            "LIVE_ATTESTATION_COMPOSE_DIR": "{live_attestation_compose_dir}",
+            "LIVE_ATTESTATION_COMPOSE_FILES": "{live_attestation_compose_files}"
           },
           "timeout_seconds": 5400
         }

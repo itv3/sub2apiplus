@@ -118,6 +118,48 @@ restart_service() {
   wait_healthy
 }
 
+# A11 的第一跳要求 Live attestation。Linux 生不出 DeviceCheck 值，Sub2API 为隔离抓包
+# 提供了 candidatecapture 构建：只补这一个值，Live 调度、首跳、Sideband、TLS 与版本画像
+# 都不改动，且必须逐项匹配本轮的 api_key／group／account／临时代理四元组才生效。
+# 该 provider 只读进程环境，因此要重建容器而不是 docker restart；恢复时按原 compose 拉回。
+live_attestation_armed=0
+
+deploy_with_live_attestation() {
+  local expires_at
+  [[ -n ${LIVE_ATTESTATION_COMPOSE_DIR:-} && -n ${LIVE_ATTESTATION_COMPOSE_FILES:-} ]] || return 0
+  group_id=$(db_query "select group_id from api_keys where id = $api_key_id")
+  [[ $group_id =~ ^[0-9]+$ ]] || { echo "无法读取 API Key 分组，跳过 Live attestation 注入。" >&2; return 1; }
+  expires_at=$(( $(date -u +%s) + 900 ))
+  install -d -m 0700 "$capture_root/runtime/live-attestation"
+  cat > "$capture_root/runtime/live-attestation/$run_id.override.yml" <<YML
+services:
+  sub2api:
+    environment:
+      SUB2API_LIVE_ATTESTATION_CAPTURE_MODE: synthetic-only
+      SUB2API_LIVE_ATTESTATION_CAPTURE_ACK: YES_I_ACCEPT_SYNTHETIC_ONLY
+      SUB2API_LIVE_ATTESTATION_CAPTURE_API_KEY_ID: "$api_key_id"
+      SUB2API_LIVE_ATTESTATION_CAPTURE_GROUP_ID: "$group_id"
+      SUB2API_LIVE_ATTESTATION_CAPTURE_ACCOUNT_ID: "$account_id"
+      SUB2API_LIVE_ATTESTATION_CAPTURE_PROXY_NAME: "$proxy_name"
+      SUB2API_LIVE_ATTESTATION_CAPTURE_PROXY_HOST: "$capture_container"
+      SUB2API_LIVE_ATTESTATION_CAPTURE_PROXY_PORT: "$relay_port"
+      SUB2API_LIVE_ATTESTATION_CAPTURE_EXPIRES_AT_UNIX: "$expires_at"
+YML
+  chmod 600 "$capture_root/runtime/live-attestation/$run_id.override.yml"
+  live_attestation_armed=1
+  (cd "$LIVE_ATTESTATION_COMPOSE_DIR" && eval docker compose $LIVE_ATTESTATION_COMPOSE_FILES \
+    -f "$capture_root/runtime/live-attestation/$run_id.override.yml" up -d sub2api) >/dev/null || return 1
+  wait_healthy
+}
+
+restore_deploy_without_live_attestation() {
+  [[ $live_attestation_armed == 1 ]] || return 0
+  live_attestation_armed=0
+  (cd "$LIVE_ATTESTATION_COMPOSE_DIR" && eval docker compose $LIVE_ATTESTATION_COMPOSE_FILES up -d sub2api) >/dev/null || return 1
+  wait_healthy
+  rm -f "$capture_root/runtime/live-attestation/$run_id.override.yml"
+}
+
 auth_config() {
   # curl 从匿名 fd 读取 header，凭据不进入命令行参数或抓包目录。
   printf 'header = "Authorization: Bearer %s"\n' "$1"
@@ -453,6 +495,8 @@ restore_environment() {
         >/dev/null 2>&1 || restore_failed=1
     fi
   fi
+
+  restore_deploy_without_live_attestation || restore_failed=1
 
   if [[ $keeper_was_running == true ]]; then
     docker start "$keeper_container" >/dev/null 2>&1 || restore_failed=1
@@ -862,7 +906,9 @@ wait_action A09 alpha_search 2
 stop_capture
 
 # A11：第一跳返回 call_id，生产 observer 自动建立 api.openai.com sideband；relay
-# 发送 session.ended，候选走真实终止清理路径。
+# 发送 session.ended，候选走真实终止清理路径。第一跳前先按本轮四元组重建服务，
+# 使 candidatecapture provider 生效；未提供 compose 坐标时保持原样并由断言暴露。
+deploy_with_live_attestation || echo "Live attestation 注入未生效，A11 将按原样执行。" >&2
 start_capture A11
 trigger_root="$work_dir/scenarios/A11/trigger"
 live_body='{"sdp":"v=0\\r\\n","session":{"model":"gpt-realtime","modalities":["audio","text"]}}'
