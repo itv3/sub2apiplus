@@ -95,6 +95,11 @@ class AccountGateRestorationTest(unittest.TestCase):
                 if name.startswith("run_candidate_"):
                     # frozen 类每个场景开始时清一次。
                     self.assertRegex(source, r"current_scenario=\$scenario\n\s*clear_account_gate")
+                    # 场景级还不够：relay 上线后后台流量会立刻再次熔断，必须紧贴每次触发请求。
+                    self.assertRegex(
+                        source,
+                        r"request_with_token\(\) \{[\s\S]{0,400}?clear_account_gate[\s\S]{0,120}?curl",
+                    )
                 else:
                     # 探针类在 hosts 劫持生效后清一次。
                     self.assertRegex(source, r"hosts_patched=1[\s\S]{0,200}?clear_account_gate")

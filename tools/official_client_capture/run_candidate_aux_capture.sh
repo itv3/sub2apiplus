@@ -126,6 +126,9 @@ auth_config() {
 request_with_token() {
   local token=$1
   shift
+  # relay 一上线，Sub2API 的后台流量就会打到只接受特定形态的 relay 上并被拒，账号随即
+  # 进入临时熔断；清一次不够，必须紧贴每次触发请求，否则请求本身会拿到 503。
+  clear_account_gate
   curl --silent --show-error --max-time 120 --config <(auth_config "$token") "$@"
 }
 
