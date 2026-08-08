@@ -165,6 +165,13 @@ dummy_refresh=""
 # 合成 relay 把 chatgpt.com 劫持到容器内端口；relay 停止后仍在途的真实出站会拿到
 # connection refused，Sub2API 据此把账号临时熔断。熔断是本脚本自身的副作用，不恢复
 # 就会让同一 attempt 的后续任务全部 503，因此按运行前值精确回写并复核。
+# 合成 relay 上线后，Sub2API 的任何出站（含后台任务）都会打到只接受特定形态的 relay 上；
+# 被拒的连接会让账号进入临时熔断，紧接着要采集的场景就拿到 503。每个场景开始时主动清一次，
+# 退出时仍按 original_gate_state 的原值恢复，真实故障照旧以场景失败的形式暴露。
+clear_account_gate() {
+  db_query "update accounts set temp_unschedulable_until = null, temp_unschedulable_reason = null where id = $account_id" >/dev/null
+}
+
 account_gate_state() {
   db_query "select coalesce(encode(convert_to(coalesce(temp_unschedulable_until::text,''),'UTF8'),'hex'),'') || '|' || coalesce(encode(convert_to(coalesce(temp_unschedulable_reason,''),'UTF8'),'hex'),'') from accounts where id = $account_id"
 }
@@ -687,6 +694,7 @@ start_capture() {
   docker exec "$capture_container" mkdir -p \
     "$container_scenario_root/relay-private" "$container_scenario_root/trigger"
   current_scenario=$scenario
+  clear_account_gate
 
   docker exec "$capture_container" sh -c '
     umask 077

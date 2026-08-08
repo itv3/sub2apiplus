@@ -57,10 +57,11 @@ class AccountGateRestorationTest(unittest.TestCase):
                     "temp_unschedulable_until = nullif(convert_from(decode(",
                     source,
                 )
-                # 无条件置空会掩盖运行前就存在的真实熔断。
+                # 退出路径必须按原值回写：无条件置空会掩盖运行前就存在的真实熔断。
+                restore_body = source.split("restore_account_gate() {", 1)[1].split("\n}", 1)[0]
                 self.assertNotIn(
                     "set temp_unschedulable_until = null, temp_unschedulable_reason = null",
-                    source,
+                    restore_body,
                 )
 
     def test_恢复结果失败关闭(self) -> None:
@@ -78,6 +79,25 @@ class AccountGateRestorationTest(unittest.TestCase):
             with self.subTest(script=name):
                 self.assertRegex(source, r"调度门(初始)?状态")
                 self.assertIn("exit 1", source)
+
+    def test_运行期主动清除熔断且退出仍按原值恢复(self) -> None:
+        """劫持生效后账号必须保持可调度，否则采集自己会把自己打成 503。"""
+
+        for name, source in self.sources.items():
+            with self.subTest(script=name):
+                self.assertIn("clear_account_gate()", source)
+                self.assertIn(
+                    "set temp_unschedulable_until = null, temp_unschedulable_reason = null",
+                    source,
+                )
+                # 清除只能发生在运行期；退出路径必须仍走按原值回写。
+                self.assertIn("restore_account_gate", source)
+                if name.startswith("run_candidate_"):
+                    # frozen 类每个场景开始时清一次。
+                    self.assertRegex(source, r"current_scenario=\$scenario\n\s*clear_account_gate")
+                else:
+                    # 探针类在 hosts 劫持生效后清一次。
+                    self.assertRegex(source, r"hosts_patched=1[\s\S]{0,200}?clear_account_gate")
 
 
 if __name__ == "__main__":

@@ -53,6 +53,13 @@ restore_account_gate() {
   db_query "update accounts set temp_unschedulable_until = nullif(convert_from(decode('$until_hex','hex'),'UTF8'),'')::timestamptz, temp_unschedulable_reason = nullif(convert_from(decode('$reason_hex','hex'),'UTF8'),'') where id = $account_id" >/dev/null
 }
 
+# 劫持生效后，Sub2API 的任何出站（含后台任务）都会打到只接受特定请求的探针上；被拒的
+# 连接会让账号进入临时熔断，紧接着要采集的请求就拿到 503。运行期间主动清一次熔断，
+# 退出时仍按 account_gate_before 的原值恢复，真实故障照旧以请求失败的形式暴露。
+clear_account_gate() {
+  db_query "update accounts set temp_unschedulable_until = null, temp_unschedulable_reason = null where id = $account_id" >/dev/null
+}
+
 account_gate_state() {
   db_query "select coalesce(encode(convert_to(coalesce(temp_unschedulable_until::text,''),'UTF8'),'hex'),'') || '|' || coalesce(encode(convert_to(coalesce(temp_unschedulable_reason,''),'UTF8'),'hex'),'') from accounts where id = $account_id"
 }
@@ -170,6 +177,7 @@ docker exec "$service_container" sh -c 'grep -v " chatgpt.com$" /etc/hosts > /tm
 docker exec "$service_container" sh -c "printf '%s chatgpt.com\n' '$probe_ip' >> /etc/hosts"
 hosts_patched=1
 docker exec "$service_container" sh -c "grep chatgpt.com /etc/hosts" >/dev/null
+clear_account_gate
 
 api_key=$(db_query "select key from api_keys where id = $api_key_id")
 port=$(docker port "$service_container" | sed -n 's/.*127.0.0.1:\([0-9]*\)/\1/p' | head -1)
