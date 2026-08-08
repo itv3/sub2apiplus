@@ -295,6 +295,41 @@ cleanup 的重启后变为 `510664dc…`。
 Campaign `…-k22` 不可共存：按 §6.1 与 §7.3 先例重新建立独立 Campaign 并重做官方取证与
 分类，k22 保持不可变、其目标证据不迁移不复用。
 
+### 7.5 候选账号调度门恢复
+
+`run_h1_wire_probe.sh`、`run_images_wire_probe.sh`、`run_candidate_core_capture.sh` 与
+`run_candidate_aux_capture.sh` 会把 `chatgpt.com` 劫持到容器内探针或合成 relay。探针停止后
+仍在途的真实出站拿到 `connection refused`，Sub2API 据此写入 `temp_unschedulable_until`
+把账号临时熔断。四个脚本恢复了 hosts、CA、keeper 与账号代理，唯独没有恢复这个调度门。
+
+实证：k23 候选采集的 `candidate-compact-mitm`、`candidate-frozen-core`、
+`candidate-frozen-aux`、`candidate-images-wire` 连续失败，入站记录全部是
+`503 Service temporarily unavailable`，服务日志为 `openai.account_select_failed`
+（`no available accounts`、`excluded_account_count=0`），账号 #90 的
+`temp_unschedulable_reason` 记录为
+`Post "https://chatgpt.com/backend-api/codex/responses": dial tcp 172.21.0.6:443:
+connect: connection refused`，`172.21.0.6` 即 capture-cli 容器。k17、k18 的失败模式相同。
+
+修复（`c9d9e11eb`）：四个脚本运行前以 hex 冻结 `temp_unschedulable_until` 与
+`temp_unschedulable_reason`，cleanup 按原值回写并复核，不一致即失败关闭。按原值回写而不是
+无条件清空，运行前就存在的真实熔断不会被掩盖。
+
+### 7.6 运行画像激活事实
+
+`capture-candidate seal` 要求一份由运行中服务产生的画像观测收据，但服务此前没有任何代码
+产出它；`egressruntimedump` 只能导出二进制内编译了哪些画像，证明不了当前发布指针实际解析
+到哪个。k15～k23 的候选 seal 因此从未走通。
+
+修复（`1bbebb8de`）分两侧：
+
+- 服务侧在启动装配完成后按当前发布指针解析画像，记录 profile digest、release digest、
+  codex 版本与画像模式；构建期身份由部署方经环境变量声明，服务把声明中的 profile digest
+  与自己解析出的 digest 逐字比对，不一致拒绝落盘。`event_id` 用事实内容寻址而非随机数。
+  生产默认只写启动日志，只有显式设置 `GATEWAY_EGRESS_ACTIVATION_FACT_PATH` 才落盘；
+- 采集侧 `build_observed_profile_runtime_audit.py` 校验事实的 schema、来源、事件类型与全部
+  身份字段后，补上 attempt 坐标（campaign／attempt／run_nonce／candidate）——这些坐标是采集
+  侧自身的权威事实，服务启动时无从得知。工具不生成 `event_id` 与观测时刻，只承接服务事实。
+
 ## 8. Candidate、比较与 `ready`
 
 Candidate 必须固定 commit/tree/build ID/deploy version/OCI digest/image ID/profile digest，

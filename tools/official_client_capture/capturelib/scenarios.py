@@ -189,6 +189,25 @@ def _stop_owned_cli_process(process: subprocess.Popen[str]) -> None:
             stream.close()
 
 
+# 上游对高需求模型会间歇性返回「无容量」，与画像、账号额度和客户端行为都无关：
+# 同一模型同一传输在几分钟内可以一次失败一次成功。一次 official-core 要跑 6 个场景，
+# 任一场景命中就让整个 attempt 作废、需要归档证据后全量重跑 17 项，因此对这一类上游
+# 资源错误做有限重试。重试只认这一种错误，其余失败一律原样上报。
+UPSTREAM_CAPACITY_MESSAGE = "Selected model is at capacity"
+UPSTREAM_CAPACITY_RETRY_LIMIT = 4
+UPSTREAM_CAPACITY_RETRY_DELAY_SECONDS = 20
+
+
+def _upstream_capacity_error(events: list[dict[str, Any]]) -> bool:
+    """仅识别上游临时无容量，避免把真实缺陷重试掉。"""
+
+    return any(
+        event.get("type") == "error"
+        and UPSTREAM_CAPACITY_MESSAGE in str(event.get("message", ""))
+        for event in events
+    )
+
+
 def _run_owned_cli_command(
     command: list[str], environment: dict[str, str], timeout: int
 ) -> subprocess.CompletedProcess[str]:
@@ -1217,7 +1236,15 @@ def run_codex_scenario(
         if index > 1:
             command.append(thread_id)
         command.append(prompt)
-        completed = _run_owned_cli_command(command, environment, timeout)
+        remaining_capacity_retries = UPSTREAM_CAPACITY_RETRY_LIMIT
+        while True:
+            completed = _run_owned_cli_command(command, environment, timeout)
+            if completed.returncode == 0 or remaining_capacity_retries <= 0:
+                break
+            if not _upstream_capacity_error(_load_json_lines(completed.stdout)):
+                break
+            remaining_capacity_retries -= 1
+            time.sleep(UPSTREAM_CAPACITY_RETRY_DELAY_SECONDS)
         raw_last_message = (
             last_message_path.read_text(encoding="utf-8")
             if last_message_path.exists()
