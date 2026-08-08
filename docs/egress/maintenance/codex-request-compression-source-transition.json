@@ -1,0 +1,14 @@
+{
+  "schema_version": "official-egress-codex-request-compression-source-transition/v1",
+  "prior_transition": "docs/egress/maintenance/compiler-static-url-closure-source-transition.json",
+  "prior_transition_sha256": "c9a0765c332e0b28fe866fe444522613bbe99bacd1bf1ce520e17e15ec5b5e4b",
+  "transitions": [
+    {
+      "path": "backend/internal/service/official_egress_identity_authority.go",
+      "from_sha256": "28632da0dde806746955da08c4f5b10e9f021337af77cdf082c5808464ae849a",
+      "to_sha256": "6fa05184e2ece9d087c4c094f4bea4839307242f424b522080334f9aaf307843",
+      "reason": "Codex 请求压缩条件投影收口：buildOfficialCodexIdentityFacts 的 CompressionEligible 由 attemptConditions 与 runtimeState 的或运算，改为按所有权分层判定——官方入站 wire 快照在 body 解压前已冻结 zstd 事实时以该快照为准，避免解压删除 Content-Encoding 后用晚到 Header 反推；模型清单证明的 Responses Lite 保持独立无条件压缩。判定输入与写入字段均未新增，Header、Body、端点与连接生命周期不变。"
+    }
+  ],
+  "result": "passed"
+}

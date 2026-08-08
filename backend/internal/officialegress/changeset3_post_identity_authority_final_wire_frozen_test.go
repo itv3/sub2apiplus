@@ -11,17 +11,18 @@ import (
 )
 
 const (
-	changeset3PostFinalWireSHA256     = "c824ffb0ab6e2429c09f9ac517cf3e6f96860c7c6ef77c229757fd690bdbcf0f"
-	changeset3PostSecretScanSHA256    = "94e400de321b64784203041ac6320186b6b8757723205681306333318f372050"
-	changeset4SourceTransitionSHA256  = "85cfb8e5324b5063b480f5e27cab1781500a5a3aba1957aae581f0ed0e62d478"
-	changeset5SourceTransitionSHA256  = "e022d78b3af69a937a60a388009fa4ecafa8042410cf5602f32ecff7c29b176d"
-	changeset6SourceTransitionSHA256  = "cdd6eab06acac15923e17562525eed974ee12e0e5cf3421e1303d01ecba549d7"
-	changeset6ReviewTransitionSHA256  = "75044063ea497e07ad9818d0061f3f7fe4d7a7fa350fa4f6c554dfc108322fe2"
-	maintenanceRetirementSHA256       = "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36"
-	maintenanceCIRepairSHA256         = "b2a395259b2b0b8b95aca993f1a5aaf93e4928878cefd8675f34844a8b7fb3a5"
-	maintenanceCookieFinalizeSHA256   = "0c6f4c6a73bf7005c0472e4f43a271f9314ea36b1a0fabe82cad7a32d77fd97f"
-	evidenceDirectoryTransitionSHA256 = "524364297baf9b8492802c49fcf3963be15c0b320fa1558966487d62ea03d96f"
-	staticURLClosureTransitionSHA256  = "c9a0765c332e0b28fe866fe444522613bbe99bacd1bf1ce520e17e15ec5b5e4b"
+	changeset3PostFinalWireSHA256      = "c824ffb0ab6e2429c09f9ac517cf3e6f96860c7c6ef77c229757fd690bdbcf0f"
+	changeset3PostSecretScanSHA256     = "94e400de321b64784203041ac6320186b6b8757723205681306333318f372050"
+	changeset4SourceTransitionSHA256   = "85cfb8e5324b5063b480f5e27cab1781500a5a3aba1957aae581f0ed0e62d478"
+	changeset5SourceTransitionSHA256   = "e022d78b3af69a937a60a388009fa4ecafa8042410cf5602f32ecff7c29b176d"
+	changeset6SourceTransitionSHA256   = "cdd6eab06acac15923e17562525eed974ee12e0e5cf3421e1303d01ecba549d7"
+	changeset6ReviewTransitionSHA256   = "75044063ea497e07ad9818d0061f3f7fe4d7a7fa350fa4f6c554dfc108322fe2"
+	maintenanceRetirementSHA256        = "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36"
+	maintenanceCIRepairSHA256          = "b2a395259b2b0b8b95aca993f1a5aaf93e4928878cefd8675f34844a8b7fb3a5"
+	maintenanceCookieFinalizeSHA256    = "0c6f4c6a73bf7005c0472e4f43a271f9314ea36b1a0fabe82cad7a32d77fd97f"
+	evidenceDirectoryTransitionSHA256  = "524364297baf9b8492802c49fcf3963be15c0b320fa1558966487d62ea03d96f"
+	staticURLClosureTransitionSHA256   = "c9a0765c332e0b28fe866fe444522613bbe99bacd1bf1ce520e17e15ec5b5e4b"
+	requestCompressionTransitionSHA256 = "aae6b2569aa7d80e2fffdc7ff51b2b79a825e2d7ec9f2375b820b7bfdaa026fc"
 )
 
 func TestChangeset3PostIdentityAuthorityFinalWireIsFrozen(t *testing.T) {
@@ -54,6 +55,7 @@ func TestChangeset3PostIdentityAuthorityFinalWireIsFrozen(t *testing.T) {
 	cookieFinalizeTransition := loadMaintenanceCookieFinalizeSourceTransition(t)
 	directoryTransition := loadEvidenceDirectoryConsolidationSourceTransition(t)
 	staticURLClosureTransition := loadCompilerStaticURLClosureSourceTransition(t)
+	requestCompressionTransition := loadCodexRequestCompressionSourceTransition(t)
 	for _, source := range manifest.SourceMaterial {
 		sourcePath := source.Path
 		if !filepath.IsAbs(sourcePath) {
@@ -128,17 +130,25 @@ func TestChangeset3PostIdentityAuthorityFinalWireIsFrozen(t *testing.T) {
 			expected = approved.ToSHA256
 			delete(staticURLClosureTransition, source.Path)
 		}
+		if approved, ok := requestCompressionTransition[source.Path]; ok {
+			if approved.FromSHA256 != expected || strings.TrimSpace(approved.Reason) == "" {
+				t.Fatalf("Codex 请求压缩 source transition 未承接上一层摘要：%s", source.Path)
+			}
+			expected = approved.ToSHA256
+			delete(requestCompressionTransition, source.Path)
+		}
 		if got != expected {
 			t.Fatalf("post-refactor 捕获源码已漂移：%s got=%s want=%s", source.Path, got, expected)
 		}
 	}
 	if len(changeset4Transition) != 0 || len(changeset5Transition) != 0 || len(changeset6Transition) != 0 ||
 		len(changeset6ReviewTransition) != 0 || len(maintenanceTransition) != 0 || len(ciRepairTransition) != 0 ||
-		len(cookieFinalizeTransition) != 0 || len(directoryTransition) != 0 || len(staticURLClosureTransition) != 0 {
-		t.Fatalf("source transition 含未发生的漂移：changeset4=%v changeset5=%v changeset6=%v changeset6_review=%v maintenance=%v ci_repair=%v cookie_finalize=%v directory=%v static_url_closure=%v",
+		len(cookieFinalizeTransition) != 0 || len(directoryTransition) != 0 || len(staticURLClosureTransition) != 0 ||
+		len(requestCompressionTransition) != 0 {
+		t.Fatalf("source transition 含未发生的漂移：changeset4=%v changeset5=%v changeset6=%v changeset6_review=%v maintenance=%v ci_repair=%v cookie_finalize=%v directory=%v static_url_closure=%v request_compression=%v",
 			changeset4Transition, changeset5Transition, changeset6Transition, changeset6ReviewTransition,
 			maintenanceTransition, ciRepairTransition, cookieFinalizeTransition, directoryTransition,
-			staticURLClosureTransition)
+			staticURLClosureTransition, requestCompressionTransition)
 	}
 	modes := map[ReleaseMode]int{}
 	wsCaptureCount := 0
@@ -568,6 +578,42 @@ func loadEvidenceDirectoryConsolidationSourceTransition(t *testing.T) map[string
 	if strings.TrimSpace(entry.Path) == "" || strings.TrimSpace(entry.FromSHA256) == "" ||
 		strings.TrimSpace(entry.ToSHA256) == "" || strings.TrimSpace(entry.Reason) == "" {
 		t.Fatalf("证据目录收口 source transition 条目不完整：%+v", entry)
+	}
+	return map[string]changeset4SourceTransitionEntry{entry.Path: entry}
+}
+
+func loadCodexRequestCompressionSourceTransition(t *testing.T) map[string]changeset4SourceTransitionEntry {
+	t.Helper()
+	receiptPath := "../../../docs/egress/maintenance/codex-request-compression-source-transition.json"
+	raw, err := os.ReadFile(receiptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := changeset3ReferenceSHA256(raw); got != requestCompressionTransitionSHA256 {
+		t.Fatalf("Codex 请求压缩 source transition 摘要漂移：got=%s want=%s", got, requestCompressionTransitionSHA256)
+	}
+	var receipt struct {
+		SchemaVersion         string                            `json:"schema_version"`
+		PriorTransition       string                            `json:"prior_transition"`
+		PriorTransitionSHA256 string                            `json:"prior_transition_sha256"`
+		Transitions           []changeset4SourceTransitionEntry `json:"transitions"`
+		Result                string                            `json:"result"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.SchemaVersion != "official-egress-codex-request-compression-source-transition/v1" ||
+		receipt.PriorTransition != "docs/egress/maintenance/compiler-static-url-closure-source-transition.json" ||
+		receipt.PriorTransitionSHA256 != staticURLClosureTransitionSHA256 ||
+		receipt.Result != "passed" || len(receipt.Transitions) != 1 {
+		t.Fatalf("Codex 请求压缩 source transition 顶层事实非法：%+v", receipt)
+	}
+	entry := receipt.Transitions[0]
+	if strings.TrimSpace(entry.Path) == "" || strings.TrimSpace(entry.FromSHA256) == "" ||
+		strings.TrimSpace(entry.ToSHA256) == "" || strings.TrimSpace(entry.Reason) == "" {
+		t.Fatalf("Codex 请求压缩 source transition 条目不完整：%+v", entry)
 	}
 	return map[string]changeset4SourceTransitionEntry{entry.Path: entry}
 }
