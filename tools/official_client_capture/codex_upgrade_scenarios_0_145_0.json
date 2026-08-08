@@ -1613,6 +1613,7 @@
             "ACCOUNT_ID": "{codex_account_id}",
             "API_KEY_ID": "{api_key_id}",
             "CODEX_VERSION": "{target_version}",
+            "EXPECT_REQUESTS": "1",
             "MODEL": "{model}",
             "RUN_ID": "{campaign_id}-candidate-images"
           },
