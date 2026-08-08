@@ -401,6 +401,11 @@ func buildOfficialCodexIdentityFacts(
 		return officialegress.CodexIdentityFacts{}, err
 	}
 	compressionEligible := attemptConditions.CompressionEligible || runtimeState.RequestCompressionEnabled
+	if ingress, captured := officialCodexIngressRuntimeSnapshotFromContext(request.Context()); captured {
+		// body 解压会删除 Content-Encoding；只有解压前已冻结的官方客户端
+		// wire 事实可以恢复本次请求的 zstd 条件，晚到 Header 不具备所有权。
+		compressionEligible = ingress.OfficialClient && ingress.RequestCompressionEnabled
+	}
 	if hasEgressContext && egressContext.responsesLite {
 		// Lite 是模型清单证明的独立压缩条件；普通 Responses 仅在官方入站
 		// wire 已冻结 zstd 时保持压缩，不能由画像默认值无条件开启。

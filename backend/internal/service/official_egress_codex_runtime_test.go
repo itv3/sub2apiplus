@@ -366,7 +366,7 @@ func TestOfficialCodex0145HTTPCompressionFeatureSurvivesIngressBodyDecode(t *tes
 	require.True(t, state.RequestCompressionEnabled)
 }
 
-func TestOfficialCodex0145HTTPCompressionIgnoresLateHeaderMutationAfterSnapshot(t *testing.T) {
+func TestOfficialCodex0145HTTPCompressionUsesProfileDefaultDespiteLateHeaderMutation(t *testing.T) {
 	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	require.NoError(t, err)
 	userAgent, err := profile.RenderUserAgent(officialCodexSurfaceExec, true)
@@ -389,7 +389,7 @@ func TestOfficialCodex0145HTTPCompressionIgnoresLateHeaderMutationAfterSnapshot(
 	state, found, err := officialCodexRuntimeStateFromContext(ctx)
 	require.NoError(t, err)
 	require.True(t, found)
-	require.False(t, state.RequestCompressionEnabled)
+	require.True(t, state.RequestCompressionEnabled)
 }
 
 func TestOfficialCodexCompressionRequiresResponsesLiteModelCapability(t *testing.T) {
