@@ -400,6 +400,13 @@ func buildOfficialCodexIdentityFacts(
 	); err != nil {
 		return officialegress.CodexIdentityFacts{}, err
 	}
+	compressionEligible := attemptConditions.CompressionEligible || runtimeState.RequestCompressionEnabled
+	if hasEgressContext {
+		// 0.145/0.147 的 Responses HTTP 压缩能力由模型清单的 Lite 条件
+		// 门控；画像默认值只表示客户端支持 zstd，不能让普通 Responses 请求
+		// 也携带压缩头。入站已有 zstd 事实同样必须经过同一 Lite 门控。
+		compressionEligible = egressContext.responsesLite && compressionEligible
+	}
 	facts.Conditions = officialegress.CodexRequestConditions{
 		TurnStatePresent:        facts.TurnState.Value != "",
 		SubagentPresent:         facts.Subagent.Value != "",
@@ -410,13 +417,9 @@ func buildOfficialCodexIdentityFacts(
 		FedRAMPAccount:          account.FedRAMP,
 		ManagedResidencyPresent: facts.ManagedResidency.Value != "",
 		CookiePresent:           attemptConditions.CookiePresent,
-		// 0.145/0.147 的 Responses HTTP 压缩能力由模型清单的 Lite 条件
-		// 门控；画像默认值只表示客户端支持 zstd，不能让普通 Responses 请求
-		// 也携带压缩头。入站已有 zstd 事实同样必须经过同一 Lite 门控。
-		CompressionEligible: hasEgressContext && egressContext.responsesLite &&
-			(attemptConditions.CompressionEligible || runtimeState.RequestCompressionEnabled),
-		ModelSupportsLite:   hasEgressContext && egressContext.responsesLite,
-		BetaFeaturesPresent: conditionalField("x-codex-beta-features") != "",
+		CompressionEligible:     compressionEligible,
+		ModelSupportsLite:       hasEgressContext && egressContext.responsesLite,
+		BetaFeaturesPresent:     conditionalField("x-codex-beta-features") != "",
 	}
 	managedRaw, _ := json.Marshal(struct {
 		Residency string
