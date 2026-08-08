@@ -19,14 +19,30 @@ class DockerFixture:
 
     secret = "sk-proj-environment-probe-secret-value"
 
+    # Docker 生成的真实 /etc/hosts：末尾两行是同一容器在两个网络上的地址记录。
+    default_hosts_lines = (
+        "127.0.0.1\tlocalhost",
+        "::1\tlocalhost ip6-localhost ip6-loopback",
+        "fe00::\tip6-localnet",
+        "ff00::\tip6-mcastprefix",
+        "ff02::1\tip6-allnodes",
+        "ff02::2\tip6-allrouters",
+        "172.18.1.2\t04d138013b9a",
+        "172.21.0.4\t04d138013b9a",
+    )
+
     def __init__(
         self,
         *,
         fail_first: bool = False,
         duplicate_account_key: bool = False,
+        hosts_lines: tuple[str, ...] | None = None,
     ) -> None:
         self.fail_first = fail_first
         self.duplicate_account_key = duplicate_account_key
+        self.hosts_lines = (
+            self.default_hosts_lines if hosts_lines is None else hosts_lines
+        )
         self.calls: list[list[str]] = []
 
     def _completed(
@@ -100,6 +116,11 @@ class DockerFixture:
             return self._completed(arguments, stdout="PONG\n")
         if inner[:2] == ["test", "-f"]:
             return self._completed(arguments)
+        if inner == ["cat", "/etc/hosts"]:
+            return self._completed(
+                arguments,
+                stdout="".join(f"{line}\n" for line in self.hosts_lines),
+            )
         if inner[:1] == ["sha256sum"]:
             digest = hashlib.sha256(
                 f"{arguments[2]}:{inner[1]}".encode("utf-8")
@@ -273,6 +294,61 @@ class EnvironmentProbeTest(unittest.TestCase):
             self.assertEqual(stat.S_IMODE(output_dir.stat().st_mode), 0o700)
             for path in output_dir.iterdir():
                 self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
+    def _configuration_snapshot(self, hosts_lines: tuple[str, ...], root: Path) -> bytes:
+        fixture = DockerFixture(hosts_lines=hosts_lines)
+        with mock.patch.object(probe.subprocess, "run", side_effect=fixture):
+            probe.run_probe(self._arguments(root))
+        return (root / "configuration-state.json").read_bytes()
+
+    def test_hosts_line_order_alone_does_not_break_configuration_restore(self) -> None:
+        """docker restart 重建 /etc/hosts 时地址行会换序，不得判成环境未恢复。"""
+
+        before_lines = DockerFixture.default_hosts_lines
+        after_lines = (
+            *before_lines[:6],
+            before_lines[7],
+            before_lines[6],
+        )
+        self.assertNotEqual(before_lines, after_lines)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            before = self._configuration_snapshot(before_lines, root / "before")
+            after = self._configuration_snapshot(after_lines, root / "after")
+            self.assertEqual(before, after)
+            record = next(
+                item
+                for item in json.loads(before)["state"]["records"]
+                if item["role"] == "service"
+            )
+            self.assertEqual(record["hosts_digest_mode"], "sorted_lines_sha256")
+            self.assertEqual(
+                record["hosts_sha256"],
+                hashlib.sha256(
+                    "".join(f"{line}\n" for line in sorted(before_lines)).encode(
+                        "utf-8"
+                    )
+                ).hexdigest(),
+            )
+
+    def test_hosts_entry_drift_is_still_detected(self) -> None:
+        """新增、删除或改写条目仍必须改变摘要，规范化不得吸收真实漂移。"""
+
+        baseline = DockerFixture.default_hosts_lines
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            before = self._configuration_snapshot(baseline, root / "before")
+            drifted = {
+                "added": (*baseline, "172.21.0.9\tchatgpt.com"),
+                "removed": baseline[:-1],
+                "rewritten": (*baseline[:-1], "172.21.0.5\t04d138013b9a"),
+            }
+            for name, lines in drifted.items():
+                with self.subTest(drift=name):
+                    self.assertNotEqual(
+                        before,
+                        self._configuration_snapshot(lines, root / name),
+                    )
 
     def test_normalized_structure_is_stable_and_marks_watermarks_non_byte_equal(
         self,

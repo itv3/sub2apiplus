@@ -25,6 +25,8 @@ from tools.official_client_capture.candidate_evidence_guard import normalize_sta
 
 PROBE_MANIFEST_SCHEMA = "codex-upgrade-environment-probe/v1"
 COMMAND_TIMEOUT_SECONDS = 30
+# /etc/hosts 的比较基准：行排序后再哈希，吸收 Docker 重建文件时的行顺序抖动。
+HOSTS_DIGEST_MODE = "sorted_lines_sha256"
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 MD5_RE = re.compile(r"^[0-9a-f]{32}$")
 DATABASE_IDENTIFIER_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_$-]{0,62}$")
@@ -720,6 +722,30 @@ def _container_file_sha256(container: str, path: str, role: str) -> str | None:
     return digest
 
 
+def _container_hosts_digest(container: str, role: str) -> str | None:
+    """按行排序后计算容器 /etc/hosts 摘要。
+
+    Docker 每次启动容器都会重建 /etc/hosts，多网络容器的地址行顺序取决于运行时
+    遍历网络的顺序，同一环境连续两次重启即可得到不同字节序列。原始字节摘要会把
+    这种顺序抖动误判成环境漂移，因此恢复比较基准改为行排序后的摘要：条目的新增、
+    删除、地址或主机名改写仍然改变摘要，只有纯顺序变化被吸收。
+    """
+
+    exists = _run_command(
+        ["docker", "exec", container, "test", "-f", "/etc/hosts"],
+        description=f"{role} hosts 存在性检查",
+        allow_failure=True,
+    )
+    if exists.returncode != 0:
+        return None
+    completed = _run_command(
+        ["docker", "exec", container, "cat", "/etc/hosts"],
+        description=f"{role} hosts 内容读取",
+    )
+    payload = "".join(f"{line}\n" for line in sorted(completed.stdout.splitlines()))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
 def _configuration_state(arguments: ProbeArguments) -> dict[str, Any]:
     roles = (
         ("service", arguments.service_container),
@@ -728,11 +754,7 @@ def _configuration_state(arguments: ProbeArguments) -> dict[str, Any]:
     )
     records: list[dict[str, Any]] = []
     for role, container in roles:
-        hosts_digest = _container_file_sha256(
-            container,
-            "/etc/hosts",
-            role,
-        )
+        hosts_digest = _container_hosts_digest(container, role)
         if hosts_digest is None:
             raise EnvironmentProbeError(f"{role} 容器缺少 /etc/hosts")
         ca_digest = _container_file_sha256(
@@ -745,6 +767,7 @@ def _configuration_state(arguments: ProbeArguments) -> dict[str, Any]:
                 "ca_bundle_exists": ca_digest is not None,
                 "ca_bundle_sha256": ca_digest,
                 "container": container,
+                "hosts_digest_mode": HOSTS_DIGEST_MODE,
                 "hosts_sha256": hosts_digest,
                 "role": role,
             }

@@ -175,12 +175,11 @@ P0 报告必须包含所有命令和输入摘要、临时资产 inventory/hash�
 - L1/L2 源码调用链、原始与脱敏抓包、inventory、attempt result；
 - TLS/HTTP/WS/Body/endpoint/跨请求状态、恢复、secret scan 和 evidence seal。
 
-本次已完成：Campaign `codex-0145-to-0147-20260807T170500Z`，attempt
-`20260807T170652Z-cc0ea97643acf9a7`，17/17 必需任务完成；封存摘要
-`031a187f45f1570cf5de35b7e3de2260b034b12003087915debdb1c7cfbb4190`，证据清单
-449 个文件、inventory digest `5a619423…`，恢复 5 项通过、秘密扫描 0 命中。
-官方二进制为 `0.147.0`，CLI SHA `cb0a1556…`，Code Mode helper SHA
-`00ecf5d0…`，package asset SHA `bd758d53…`；原始证据仍只保留在 Vircs 私有采集根。
+本次已完成：Campaign `codex-0145-to-0147-20260808T054501Z-k22` 的
+`official_sealed` 已完成，`official/result.json` 状态为 `complete`，
+`stage=capture-official`，封存时间为 `2026-08-08T07:12:23Z`。官方二进制为 `0.147.0`，
+CLI SHA `cb0a1556…`，Code Mode helper SHA `00ecf5d0…`，package asset SHA
+`bd758d53…`；原始证据仍只保留在 Vircs 私有采集根。
 
 ### 6.3 累计变化取证
 
@@ -208,21 +207,22 @@ host/path/query/header、framing、代理、TLS 或连接复用。
 新出站面不是失败；未发现、未分类或静默回落旧画像才失败。删除规则必须同时具备源码
 不可达结论、正反场景、旧引用清单和 RemovalReceipt，否则保持 `blocked`。
 
-本次已完成：Campaign `codex-0145-to-0147-20260807T170500Z` 的分类结果为
-`complete`，联合摘要为
-`548e9fd7469e090693d39d52d1a3e3a5cfe2c8e85b498ea3df10506067ee03a8`；42 条规则、2759 条
+本次已完成：Campaign `codex-0145-to-0147-20260808T054501Z-k22` 的分类结果为
+`complete`，`classification/result.json` 状态为 `complete`，`stage=classify`，封存时间为
+`2026-08-08T07:38:37Z`。联合摘要为
+`61dc9a7422bb491c580b445ead8ad3ec7ae72c3bb1d47e29ead12ee0534ffafe`；42 条规则、2769 条
 发现全部完成分类，`blocked=0`。批准清单及摘要如下：
 
 | 清单 | 封存 SHA-256 |
 |---|---|
 | `target-rules.json` | `91616975b1a7e3e3717a99c72a937b8f6901a921c434decb2ee7fdab85c4f75b` |
-| `rule-migration.json` | `2d2915ae0c25ccec9292513827b5f97d5130886784e629ad70cbeecf3a7f4777` |
-| `scenarios.json` | `32af1f9a1375c321b65e9de74497f3c1fc50f69566ef87d9f2b0da206e6503a0` |
-| `profile.json` | `24c0c63a34f59962cac5df3697ab9b2b4762ea710a75d273fb5a60f5469b47a0` |
+| `rule-migration.json` | `4c8984faa65c7fe5d6eaad28067550b4323f3996d84adf30c363edb830454b04` |
+| `scenarios.json` | `ea49de32cb5898547ae8ccf251ba0ecd24ad2ee27517a47ac1a95a7e365d1715` |
+| `profile.json` | `fe7734954b12df6338f69cb659e334d280ae1629e3e2ac9197bcade9c0c2e038` |
 | `assertion-profile.json` | `9e51781f6d2d92a7f8363e4859f8699c21290ae2cc01ab0539f69de17080feac` |
 
-目标画像为 `codex-0.147.0-official-v1`，Profile digest 为
-`5b209c2400321feda8c45592d80dcdf82dd4806235daf4bfdd30acba20becc43`。五份清单已写入
+目标画像为 `codex-0.147.0-official-k22-v1`，Profile digest 为
+`0d86e033716ab2b7d2161a7015ad000bc0d7cedfaa9e130342eec4ba0637ef9f`。五份清单已写入
 Campaign 的 `classification/approved/`，并通过 stage-contract、文件摘要、画像 payload
 摘要和场景覆盖复核；尚未写入仓库 Active selector。
 
@@ -256,18 +256,44 @@ Campaign 的 `classification/approved/`，并通过 stage-contract、文件摘�
 8. **Body/投影**：只有新增或变化的条件、枚举、字段才触发生产改动；不可达差异只记录
    测试。新增 service 消费字段必须做字段覆盖或逐叶 mutation，digest 相同不能证明完整。
 
-### 7.3 本次候选生成阻断
+### 7.3 画像摘要阻断（已解除）
 
-对批准的 `profile.json` 执行 `egresscatalogstage` 时，机器复算为
+旧 Campaign `codex-0145-to-0147-20260807T170500Z` 对批准的 `profile.json` 执行
+`egresscatalogstage` 时，机器复算为
 `0d86e033716ab2b7d2161a7015ad000bc0d7cedfaa9e130342eec4ba0637ef9f`，而清单声明为
 `5b209c2400321feda8c45592d80dcdf82dd4806235daf4bfdd30acba20becc43`。差异来自分类封存时
 对画像嵌套 JSON 的键序规范化，而画像摘要仍按未排序源序计算；这不是版本行为证据，不能
 通过只改顶层版本或放宽导入器校验解决。
 
-已完成最小工具修复（`7de2404bd`）：候选导入先压缩 RawMessage 空白并增加格式化批准副本
-测试；`make check-egress-spec` 已复核通过。当前 Campaign 仍不可变，不删除或覆盖其
-`official/`、`classification/approved/`；必须以 Go 画像准备器生成正确摘要，重新建立
-独立 Campaign 并重新完成官方取证/分类，禁止复用当前 Campaign 的目标证据。
+最小工具修复为 `7de2404bd`：候选导入先压缩 RawMessage 空白并增加格式化批准副本测试。
+按该结论重新建立的 Campaign `codex-0145-to-0147-20260808T054501Z-k22` 已用 Go 画像准备器
+完成，批准清单声明与机器复算同为 `0d86e033…`，阻断解除；旧 Campaign 保持不可变，其目标
+证据不迁移、不复用。
+
+### 7.4 候选环境恢复判据修复
+
+`codex_upgrade_environment_probe.py` 原先用容器内 `sha256sum /etc/hosts` 的原始字节摘要
+参与 `configuration_state_restored` 的 `byte_equal` 比较。服务容器同时接入两个 Docker
+网络，每次 `docker restart` 由 Docker 重建 `/etc/hosts`，两条地址行的先后顺序不确定，
+同一环境连续两次重启即可得到不同字节序列。候选任务链路本身包含大量服务重启，导致
+before/after 摘要随机不等。
+
+实证：Campaign `k15`、`k16`、`k17`、`k18` 四次候选 run 全部以
+`configuration_state_restored 恢复验证失败：环境未恢复：before 与 after 字节不一致`
+被标记 `environment-contaminated` 而废弃，差异每次都只在 `sub2apiplus` 的 `hosts_sha256`；
+`k19` 排障期同一容器 `73257dff9d3a` 的三份 hosts 快照出现 `172.21.0.4` 与 `172.18.1.2`
+两种排列、三个不同摘要；`k18` attempt 全程 hosts 摘要均为 `16ae3f7d…`，仅在最后一个任务
+cleanup 的重启后变为 `510664dc…`。
+
+最小修复：探针改为对 `/etc/hosts` 按行排序后再哈希，并在快照中记录
+`hosts_digest_mode = sorted_lines_sha256` 声明算法。条目的新增、删除、地址或主机名改写
+仍然改变摘要并 fail-close，只有纯行顺序变化被吸收；CA bundle 与其余状态判据不变。已补
+正反测试：顺序翻转必须逐字节相等，新增／删除／改写条目必须不等。
+
+该修复改变工具身份摘要（80 项，`051a25d9…` → `725dbcbd…`）。`capture-candidate run` 入口
+的 `_verify_plan_identity` 会以「升级工具摘要在 plan 后发生变化」拒绝继续，因此修复与
+Campaign `…-k22` 不可共存：按 §6.1 与 §7.3 先例重新建立独立 Campaign 并重做官方取证与
+分类，k22 保持不可变、其目标证据不迁移不复用。
 
 ## 8. Candidate、比较与 `ready`
 
@@ -316,12 +342,33 @@ final-wire 可用，但不能替代 alpha 真实 service 链或 `server_response
 - `make check-egress-spec` 全绿；健康 bootstrap replay 为 180/0/22；
 - 0.145→临时完整 0.147 异版本 mutation 的 dump、三坐标和 Compiler 并集门禁全绿；
 - P0 最终 `plan` 加载 42 条规则、25 个任务，工具身份 80 项、摘要 `fa8fc9fa…`；
-- 未发送真实请求、未切 Active、未把合成画像写入仓库。
-- Vircs 保留原 `capture-cli`/0.145 运行点，并新增 `capture-cli-0147`；正式采集使用
-  `--pid host`、Linux/x86_64、runtime image `oauth-egress-capture-capture-cli@sha256:3438c4e0…`；
-- 旧的 `T160500Z`、`T161000Z`、`T163600Z` Campaign/attempt 均保持不可变并标记失败或废弃，
-  不复用其证据；当前 `T170500Z` 的官方取证与分类已封存，但候选生成被 §7.3 阻断；
-- 下一步重新执行第 6 章：以 Go 画像准备器生成正确摘要、建立新 Campaign 并重新完成官方
-  取证和分类；当前 Campaign 的目标证据不迁移、不复用。
+- 远端 Vircs 当前正式 Campaign 为 `codex-0145-to-0147-20260808T054501Z-k22`，`official/result.json` 与
+  `classification/result.json` 均已 `complete`，`status` 为 `profile_approved`、
+  `next_command` 为 `capture-candidate`，`candidates/` 尚不存在；
+- 候选服务已按 §7 部署：镜像
+  `127.0.0.1:5000/sub2api/codex0147-candidate-k22@sha256:166c3d20…`，
+  `GATEWAY_OFFICIAL_CLIENT_PROFILES_MODE=previous`，Release graph 中 Active 仍为 `0.145.0`、
+  候选 `0.147.0` 挂在 previous；候选源码 `/root/oauth-capture/candidate-source-k22` 内
+  catalogdata 画像与批准清单同为 `0d86e033…`；
+- `tools/official_client_capture/run_sub2api_direct_matrix.sh` 与 Vircs 私有副本
+  `/root/oauth-capture/private-tools/codex0147-912c242e2-k22/tools/official_client_capture/run_sub2api_direct_matrix.sh`
+  的默认 `subjects` 已同步为 `codex-http codex-ws`，不再默认跑 `claude-http`；
+- 之前落到 `_failed/...candidate-direct-core-*` 的失败是手工直接执行脚本、且只跑到
+  `claude-http/s1` 的历史失败；正式 `capture-candidate` 由 Campaign 显式注入
+  `SUBJECTS=codex-http codex-ws`，不受脚本默认值影响；
+- compression 系列四次提交遗漏的 changeset3 冻结源码登记已补齐（`758847871`）：新增
+  `codex-request-compression-source-transition.json`，`make check-egress-spec` 由不绿恢复全绿；
+- §7.4 的候选环境恢复判据修复已完成：`make test-capture-tools` 345 项通过、3 项按环境跳过，
+  `make check-egress-spec` 全绿；工具身份 80 项、摘要 `725dbcbd…`。
+
+进行中：
+
+- k22 因 §7.4 的工具摘要变化不可继续，候选阶段改在新 Campaign 上执行：同步 Vircs 私有工具
+  副本 → `plan` 建立 k23 → 重做 `capture-official run/seal` 与 `classify`；
+- 之后执行 `capture-candidate run`，按 Campaign 顺序覆盖 `candidate-core-direct`、
+  `candidate-core-mitm`、`candidate-h1-wire`、`candidate-compact-direct`、`candidate-compact-mitm`、
+  `candidate-frozen-core`、`candidate-frozen-aux`、`candidate-images-wire` 共 8 个必需任务；
+- 再继续 `capture-candidate seal`、compare、accept/ready 与生产启用；
+- `Active/Previous` 尚未切换，0.147 画像也尚未正式替换 0.145。
 
 用户已授权按第 5→6→7→8→9 章连续执行；每个变更集完成并自复核后自动进入下一项。
