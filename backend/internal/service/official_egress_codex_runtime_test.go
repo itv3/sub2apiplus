@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	pkghttputil "github.com/Wei-Shaw/sub2api/internal/pkg/httputil"
@@ -389,6 +390,46 @@ func TestOfficialCodex0145HTTPCompressionUsesProfileDefaultDespiteLateHeaderMuta
 	require.NoError(t, err)
 	require.True(t, found)
 	require.True(t, state.RequestCompressionEnabled)
+}
+
+func TestOfficialCodexCompressionRequiresResponsesLiteModelCapability(t *testing.T) {
+	for _, testCase := range []struct {
+		name          string
+		responsesLite bool
+		wantEnabled   bool
+	}{
+		{name: "非 Lite 请求不压缩", responsesLite: false, wantEnabled: false},
+		{name: "Lite 请求允许压缩", responsesLite: true, wantEnabled: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			req := httptest.NewRequest(
+				http.MethodPost,
+				"https://chatgpt.com/backend-api/codex/responses",
+				strings.NewReader(`{"model":"gpt-5.6-luna","input":[]}`),
+			)
+			egressContext := NewOfficialEgressContext(OfficialEgressContextInput{
+				AccountID:         145,
+				TargetPlatform:    PlatformOpenAI,
+				ResponsesLite:     testCase.responsesLite,
+				ProfileVersion:    officialCodexVersion0145,
+				ProfileMode:       officialClientProfileModeActive,
+				Transport:         OfficialEgressTransportHTTP,
+				UpstreamHost:      "chatgpt.com",
+				CodexRuntimeState: defaultOfficialCodexRuntimeState(),
+			})
+			req = req.WithContext(WithOfficialEgressContext(req.Context(), egressContext))
+
+			attempt, err := prepareOfficialCodexSemanticAttempt(
+				req,
+				[]byte(`{"model":"gpt-5.6-luna","input":[]}`),
+				string(officialCodexEndpointResponsesHTTP),
+				"compression-capability-test",
+				projectOfficialCodexIdentityAccount(officialEgressTestAccount(145, PlatformOpenAI)),
+			)
+			require.NoError(t, err)
+			require.Equal(t, testCase.wantEnabled, attempt.IdentityFacts.Conditions.CompressionEligible)
+		})
+	}
 }
 
 func TestWithOfficialCodex0145IngressRuntimeKeepsFirstWireSnapshot(t *testing.T) {
