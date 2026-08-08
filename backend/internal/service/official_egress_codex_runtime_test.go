@@ -366,7 +366,7 @@ func TestOfficialCodex0145HTTPCompressionFeatureSurvivesIngressBodyDecode(t *tes
 	require.True(t, state.RequestCompressionEnabled)
 }
 
-func TestOfficialCodex0145HTTPCompressionUsesProfileDefaultDespiteLateHeaderMutation(t *testing.T) {
+func TestOfficialCodex0145HTTPCompressionIgnoresLateHeaderMutationAfterSnapshot(t *testing.T) {
 	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	require.NoError(t, err)
 	userAgent, err := profile.RenderUserAgent(officialCodexSurfaceExec, true)
@@ -389,7 +389,7 @@ func TestOfficialCodex0145HTTPCompressionUsesProfileDefaultDespiteLateHeaderMuta
 	state, found, err := officialCodexRuntimeStateFromContext(ctx)
 	require.NoError(t, err)
 	require.True(t, found)
-	require.True(t, state.RequestCompressionEnabled)
+	require.False(t, state.RequestCompressionEnabled)
 }
 
 func TestOfficialCodexCompressionRequiresResponsesLiteModelCapability(t *testing.T) {
@@ -407,6 +407,8 @@ func TestOfficialCodexCompressionRequiresResponsesLiteModelCapability(t *testing
 				"https://chatgpt.com/backend-api/codex/responses",
 				strings.NewReader(`{"model":"gpt-5.6-luna","input":[]}`),
 			)
+			runtimeState := defaultOfficialCodexRuntimeState()
+			runtimeState.RequestCompressionEnabled = false
 			egressContext := NewOfficialEgressContext(OfficialEgressContextInput{
 				AccountID:         145,
 				TargetPlatform:    PlatformOpenAI,
@@ -415,7 +417,7 @@ func TestOfficialCodexCompressionRequiresResponsesLiteModelCapability(t *testing
 				ProfileMode:       officialClientProfileModeActive,
 				Transport:         OfficialEgressTransportHTTP,
 				UpstreamHost:      "chatgpt.com",
-				CodexRuntimeState: defaultOfficialCodexRuntimeState(),
+				CodexRuntimeState: runtimeState,
 			})
 			req = req.WithContext(WithOfficialEgressContext(req.Context(), egressContext))
 

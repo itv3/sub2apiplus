@@ -401,11 +401,10 @@ func buildOfficialCodexIdentityFacts(
 		return officialegress.CodexIdentityFacts{}, err
 	}
 	compressionEligible := attemptConditions.CompressionEligible || runtimeState.RequestCompressionEnabled
-	if hasEgressContext {
-		// 0.145/0.147 的 Responses HTTP 压缩能力由模型清单的 Lite 条件
-		// 门控；画像默认值只表示客户端支持 zstd，不能让普通 Responses 请求
-		// 也携带压缩头。入站已有 zstd 事实同样必须经过同一 Lite 门控。
-		compressionEligible = egressContext.responsesLite && compressionEligible
+	if hasEgressContext && egressContext.responsesLite {
+		// Lite 是模型清单证明的独立压缩条件；普通 Responses 仅在官方入站
+		// wire 已冻结 zstd 时保持压缩，不能由画像默认值无条件开启。
+		compressionEligible = true
 	}
 	facts.Conditions = officialegress.CodexRequestConditions{
 		TurnStatePresent:        facts.TurnState.Value != "",

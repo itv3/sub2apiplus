@@ -262,8 +262,8 @@ func officialCodexVersionForMode(mode string) (string, error) {
 }
 
 // resolveOfficialCodexRuntimeState 把入口语义与敏感条件头收敛成可信进程快照。
-// surface、终端指纹、originator、版本和压缩开关只来自 active 画像默认值；
-// 入站客户端类型不得参与 wire 身份选择。子代理等条件事实仍在冻结前独立校验。
+// surface、终端指纹、originator 和版本只来自 active 画像默认值；压缩开关
+// 由官方客户端在解压前冻结的 wire 状态决定。子代理等条件事实仍在冻结前独立校验。
 func resolveOfficialCodexRuntimeState(
 	c *gin.Context,
 	account *Account,
@@ -300,10 +300,11 @@ func resolveOfficialCodexRuntimeStateFromSnapshot(
 	if err := applyOfficialCodexTrustedBuildRuntimeDefaults(&state, profile, trustedClient.Build); err != nil {
 		return officialCodexRuntimeState{}, err
 	}
-	// 所有入口只消费不可变 release Build 与版本画像默认值；入站 UA、originator
-	// 与压缩声明不反向覆盖。这样 active/previous 可保留各自冻结的终端画像，
-	// 同时官方客户端和第三方客户端仍共享同一个 wire 身份编译入口。
-	state.RequestCompressionEnabled = profile.FeatureDefaults.EnableRequestCompression
+	// 画像只决定是否支持压缩；一次普通 Responses 请求是否已经启用压缩，必须
+	// 使用 body 解压前冻结的官方客户端 wire 状态。第三方客户端即使伪造
+	// Content-Encoding，也不能取得该条件的所有权；Lite 模型能力在后续身份投影
+	// 中独立启用画像支持的压缩。
+	state.RequestCompressionEnabled = snapshot.OfficialClient && snapshot.RequestCompressionEnabled
 	if account != nil {
 		residency := strings.TrimSpace(account.GetExtraString(officialCodexResidencyAccountExtraKey))
 		if residency != "" {
