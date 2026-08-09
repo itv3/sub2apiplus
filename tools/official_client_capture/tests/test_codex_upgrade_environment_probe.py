@@ -37,9 +37,12 @@ class DockerFixture:
         fail_first: bool = False,
         duplicate_account_key: bool = False,
         hosts_lines: tuple[str, ...] | None = None,
+        container_id_salt: str = "",
     ) -> None:
         self.fail_first = fail_first
         self.duplicate_account_key = duplicate_account_key
+        # compose 重建会换实例 ID；salt 用来在测试里模拟同名容器的新实例。
+        self.container_id_salt = container_id_salt
         self.hosts_lines = (
             self.default_hosts_lines if hosts_lines is None else hosts_lines
         )
@@ -76,7 +79,9 @@ class DockerFixture:
 
         if arguments[:2] == ["docker", "inspect"]:
             container = arguments[2]
-            suffix = hashlib.sha256(container.encode("utf-8")).hexdigest()
+            suffix = hashlib.sha256(
+                (self.container_id_salt + container).encode("utf-8")
+            ).hexdigest()
             document = {
                 "Id": suffix,
                 "Image": f"sha256:{'1' * 64}",
@@ -295,8 +300,31 @@ class EnvironmentProbeTest(unittest.TestCase):
             for path in output_dir.iterdir():
                 self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
-    def _configuration_snapshot(self, hosts_lines: tuple[str, ...], root: Path) -> bytes:
-        fixture = DockerFixture(hosts_lines=hosts_lines)
+    @staticmethod
+    def _self_hostname(container: str, salt: str = "") -> str:
+        """fixture 里同名容器的实例 ID 前 12 位，即 Docker 写入 hosts 的主机名。"""
+
+        return hashlib.sha256((salt + container).encode("utf-8")).hexdigest()[:12]
+
+    def _service_hosts_digest(
+        self,
+        hosts_lines: tuple[str, ...],
+        root: Path,
+        salt: str = "",
+    ) -> str:
+        payload = json.loads(self._configuration_snapshot(hosts_lines, root, salt))
+        record = next(
+            item for item in payload["state"]["records"] if item["role"] == "service"
+        )
+        return record["hosts_sha256"]
+
+    def _configuration_snapshot(
+        self,
+        hosts_lines: tuple[str, ...],
+        root: Path,
+        salt: str = "",
+    ) -> bytes:
+        fixture = DockerFixture(hosts_lines=hosts_lines, container_id_salt=salt)
         with mock.patch.object(probe.subprocess, "run", side_effect=fixture):
             probe.run_probe(self._arguments(root))
         return (root / "configuration-state.json").read_bytes()
@@ -329,6 +357,50 @@ class EnvironmentProbeTest(unittest.TestCase):
                         "utf-8"
                     )
                 ).hexdigest(),
+            )
+
+    def test_container_rebuild_alone_does_not_break_configuration_restore(self) -> None:
+        """A11 注入 Live attestation 必须 compose 重建服务容器。
+
+        重建换实例 ID，Docker 随之改写 `<容器 IP> <实例 ID 前 12 位>` 自引用行；
+        这两行由 Docker 生成、不表达采集副作用，保留就会把必然发生的重建误判成
+        环境污染——k27 正是这样被整个作废的。
+        """
+
+        base = DockerFixture.default_hosts_lines[:6]
+        before_lines = (
+            *base,
+            f"172.18.1.2\t{self._self_hostname('sub2apiplus')}",
+            f"172.21.0.4\t{self._self_hostname('sub2apiplus')}",
+        )
+        after_lines = (
+            *base,
+            f"172.18.9.9\t{self._self_hostname('sub2apiplus', 'rebuilt')}",
+            f"172.21.7.7\t{self._self_hostname('sub2apiplus', 'rebuilt')}",
+        )
+        self.assertNotEqual(before_lines, after_lines)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            # fixture 对三个角色返回同一份 hosts，换实例 ID 会连带影响 keeper／capture
+            # 的自引用判定；此处只断言被重建的 service 记录。
+            before = self._service_hosts_digest(before_lines, root / "before")
+            after = self._service_hosts_digest(after_lines, root / "after", "rebuilt")
+            self.assertEqual(before, after)
+
+    def test_hijack_line_survives_container_rebuild_normalization(self) -> None:
+        """剔除自引用行不得连带放过人为劫持：主机名不是实例 ID 就必须被检出。"""
+
+        base = DockerFixture.default_hosts_lines[:6]
+        clean = (
+            *base,
+            f"172.18.1.2\t{self._self_hostname('sub2apiplus')}",
+        )
+        hijacked = (*clean, "172.18.1.9\tchatgpt.com")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.assertNotEqual(
+                self._service_hosts_digest(clean, root / "clean"),
+                self._service_hosts_digest(hijacked, root / "hijacked"),
             )
 
     def test_hosts_entry_drift_is_still_detected(self) -> None:

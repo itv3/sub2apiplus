@@ -261,10 +261,13 @@ def _container_state(
             }
         )
     mounts.sort(key=lambda item: (item["destination"], item["type"]))
+    # 不记录容器实例 ID：A11 的 Live attestation 注入必须 compose 重建服务容器，
+    # 重建必然换实例 ID，而恢复检查按 byte_equal 比较，会把这种必然变化误判成
+    # 环境污染。恢复要证明的是「同名容器在同一镜像、同样挂载下重新就绪」，
+    # 实例 ID 不承载该语义；镜像 ID、挂载集合、运行与健康状态仍然逐字比较。
     return {
         "container": container,
         "health": health,
-        "id": container_id,
         "image": image_id,
         "mounts": mounts,
         "role": role,
@@ -722,13 +725,19 @@ def _container_file_sha256(container: str, path: str, role: str) -> str | None:
     return digest
 
 
-def _container_hosts_digest(container: str, role: str) -> str | None:
+def _container_hosts_digest(container: str, role: str, container_id: str) -> str | None:
     """按行排序后计算容器 /etc/hosts 摘要。
 
     Docker 每次启动容器都会重建 /etc/hosts，多网络容器的地址行顺序取决于运行时
     遍历网络的顺序，同一环境连续两次重启即可得到不同字节序列。原始字节摘要会把
     这种顺序抖动误判成环境漂移，因此恢复比较基准改为行排序后的摘要：条目的新增、
     删除、地址或主机名改写仍然改变摘要，只有纯顺序变化被吸收。
+
+    同理还要剔除 Docker 为容器自身写入的 `<容器 IP> <容器 ID 前 12 位>` 行：
+    A11 的 Live attestation 注入必须 compose 重建服务容器，重建后实例 ID 与容器
+    网段地址都会变，这两行随之改写。它们由 Docker 生成、不表达任何采集副作用，
+    保留就会把必然发生的重建误判成环境污染。人为写入的劫持行（chatgpt.com 等）
+    主机名不等于容器 ID，仍然会改变摘要。
     """
 
     exists = _run_command(
@@ -738,15 +747,43 @@ def _container_hosts_digest(container: str, role: str) -> str | None:
     )
     if exists.returncode != 0:
         return None
+    self_names = _container_self_hostnames(container_id)
     completed = _run_command(
         ["docker", "exec", container, "cat", "/etc/hosts"],
         description=f"{role} hosts 内容读取",
     )
-    payload = "".join(f"{line}\n" for line in sorted(completed.stdout.splitlines()))
+    retained = [
+        line
+        for line in completed.stdout.splitlines()
+        if not _is_container_self_reference(line, self_names)
+    ]
+    payload = "".join(f"{line}\n" for line in sorted(retained))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
-def _configuration_state(arguments: ProbeArguments) -> dict[str, Any]:
+def _container_self_hostnames(container_id: str) -> frozenset[str]:
+    """容器自引用行使用的主机名：Docker 默认写入实例 ID 的前 12 位。"""
+
+    identifier = container_id.strip()
+    if not CONTAINER_ID_RE.fullmatch(identifier):
+        raise EnvironmentProbeError("容器 ID 格式非法，无法识别 hosts 自引用行")
+    return frozenset({identifier, identifier[:12]})
+
+
+def _is_container_self_reference(line: str, self_names: frozenset[str]) -> bool:
+    """判断该 hosts 行是否只是 Docker 为容器自身写的地址映射。"""
+
+    fields = line.split()
+    if len(fields) != 2:
+        # 自引用行恒为「地址 + 单个主机名」；多主机名行一律保留比较。
+        return False
+    return fields[1] in self_names
+
+
+def _configuration_state(
+    arguments: ProbeArguments,
+    container_ids: Mapping[str, str],
+) -> dict[str, Any]:
     roles = (
         ("service", arguments.service_container),
         ("keeper", arguments.keeper_container),
@@ -754,7 +791,7 @@ def _configuration_state(arguments: ProbeArguments) -> dict[str, Any]:
     )
     records: list[dict[str, Any]] = []
     for role, container in roles:
-        hosts_digest = _container_hosts_digest(container, role)
+        hosts_digest = _container_hosts_digest(container, role, container_ids[role])
         if hosts_digest is None:
             raise EnvironmentProbeError(f"{role} 容器缺少 /etc/hosts")
         ca_digest = _container_file_sha256(
@@ -878,6 +915,9 @@ def run_probe(arguments: ProbeArguments) -> dict[str, Any]:
         role: _container_state(role, container_names[role], inspected[role])
         for role in container_names
     }
+    container_ids = {
+        role: str(inspected[role].get("Id", "")) for role in container_names
+    }
     database_user, database_name = _database_identity(inspected["postgres"])
 
     states = {
@@ -895,7 +935,7 @@ def run_probe(arguments: ProbeArguments) -> dict[str, Any]:
         },
         "database": _database_state(arguments, database_user, database_name),
         "account": _account_state(arguments, database_user, database_name),
-        "configuration": _configuration_state(arguments),
+        "configuration": _configuration_state(arguments, container_ids),
     }
     payloads = {kind: normalize_state(state) for kind, state in states.items()}
 
