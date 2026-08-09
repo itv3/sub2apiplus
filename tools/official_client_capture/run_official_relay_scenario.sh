@@ -377,12 +377,30 @@ case "$scenario" in
     # 文本发给模型，模型"照字面理解"做段摘要，看着像压缩其实不是（SPEC-EP-024）。
     prompt='__COMPACT_FILL__' ;;
   comp-hash-changed)
-    # 生产模型目录中的 comp_hash 自然跨组：3000 -> 2911。第二轮开始前会由
-    # maybe_run_previous_model_inline_compact 触发 CompHashChanged。
+    # CompHashChanged 只要求换模前后的 comp_hash 不同：第二轮开始前由
+    # maybe_run_previous_model_inline_compact 触发。
+    #
+    # 原先直接借生产目录里 gpt-5.6-luna -> gpt-5.4 的自然跨组（3000 -> 2911），
+    # 但那让本场景的成败绑死在某个特定模型的上游可用性上——实测 gpt-5.6-luna
+    # 间歇性连第一轮 turn 都跑不完（turn/completed 状态 failed、压缩事件为 0），
+    # 整轮 official 采集因此反复作废。改为与 model-downshift 同样的受控目录：
+    # 只把两个 hash 设成不同，模型固定用采集主模型及其 mini 变体。
+    # 这是明确记录的 I 类触发干预；官方 CLI、OAuth、V2 压缩实现与出站均不替换。
     prompt='__COMPACTION_REASON__'
     compaction_reason='comp_hash_changed'
-    compaction_first_model='gpt-5.6-luna'
-    compaction_second_model='gpt-5.4' ;;
+    compaction_first_model='gpt-5.4'
+    compaction_second_model='gpt-5.4-mini'
+    compaction_catalog="/capture/runs/$run_id/comp-hash-catalog.json"
+    docker exec "$capture_container" jq '
+      {models: [
+        .models[]
+        | select(.slug == "gpt-5.4" or .slug == "gpt-5.4-mini")
+        | if .slug == "gpt-5.4"
+          then .comp_hash = "comp-hash-probe-first"
+          else .comp_hash = "comp-hash-probe-second"
+          end
+      ]}' /root/.codex/models_cache.json > "$work_dir/comp-hash-catalog.json"
+    chmod 600 "$work_dir/comp-hash-catalog.json" ;;
   model-downshift)
     # ModelDownshift 需旧窗口 > 新窗口且当前 token 已超新模型阈值。默认阈值约
     # 115k，纯为触发灌入该体量会造成数十万 input token。这里保留生产模型的

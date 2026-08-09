@@ -3,9 +3,9 @@
   "base_commit": "ba485663c3bc0af6802cf6dfc4e19139ef00e371",
   "retirement_receipt": "docs/egress/maintenance/official-egress-consolidation-retirement.json",
   "retirement_receipt_sha256": "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36",
-  "candidate_path_count": 837,
-  "transition_entry_count": 837,
-  "transition_path_set_sha256": "272243aec22b76aa3434c092402d98608b3df538249ad32cf5d0bbf1c4555baa",
+  "candidate_path_count": 838,
+  "transition_entry_count": 838,
+  "transition_path_set_sha256": "37a375cb3e750811071de927e32d57b99f338f78d34967f78fd4093e0912aaf0",
   "entries": [
     {
       "path": ".github/workflows/backend-ci.yml",
@@ -19605,8 +19605,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0755",
-        "size": 37401,
-        "sha256": "89a8a4cc2a31ee4cfcd6f328c1c185f202984ca4bfc25440b74632562cd6c9ab"
+        "size": 38480,
+        "sha256": "a15003efa07619c57627b191bb9620581fb4e149ac6b3dbca81d6ddf33f80a5f"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
@@ -19943,6 +19943,30 @@
         "mode": "0644",
         "size": 21511,
         "sha256": "d49b657647f922fa94430cd428b9337872d5605750a3defd532a3deddb77271f"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_compaction_scenario_models.py",
+      "scope": "source_gate",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 2647,
+        "sha256": "66d03c81581cade7b7a0bafcf7bca1194787a74dbe0cb62ed2a4585a1fda5da3"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
