@@ -109,7 +109,7 @@ func getSharedReqClient(opts reqClientOptions) (*req.Client, error) {
 	if trimmed != "" && !proxyHandledByTLSDialer {
 		client.SetProxyURL(trimmed)
 	}
-	client = instrumentReqClient(client)
+	client = instrumentReqClientWithProfile(client, opts.TLSProfile)
 
 	actual, _ := sharedReqClients.LoadOrStore(key, client)
 	if c, ok := actual.(*req.Client); ok {
@@ -119,7 +119,12 @@ func getSharedReqClient(opts reqClientOptions) (*req.Client, error) {
 }
 
 func instrumentReqClient(client *req.Client) *req.Client {
-	return instrumentReqClientWithGuard(client, nil)
+	return instrumentReqClientWithGuard(client, nil, nil)
+}
+
+// instrumentReqClientWithProfile 让 Guard 与画像声明的 wire 形态在同一条链上生效。
+func instrumentReqClientWithProfile(client *req.Client, profile *tlsfingerprint.Profile) *req.Client {
+	return instrumentReqClientWithGuard(client, nil, profile)
 }
 
 func buildReqClientKey(opts reqClientOptions) string {

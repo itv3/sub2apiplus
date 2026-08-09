@@ -58,7 +58,7 @@ func TestReqProfileGuardPreservesOutOfScopeWireAndResult(t *testing.T) {
 		recorder,
 	)
 	require.NoError(t, err)
-	after := send(instrumentReqClientWithGuard(req.C(), guard))
+	after := send(instrumentReqClientWithGuard(req.C(), guard, nil))
 
 	require.Equal(t, before, after)
 	first, second := <-facts, <-facts
@@ -84,7 +84,7 @@ func TestReqProfileGuardPreservesErrorCancellationAndRedirect(t *testing.T) {
 			return func(*http.Request) (*http.Response, error) { return nil, sentinel }
 		})
 		if guarded {
-			client = instrumentReqClientWithGuard(client, guard)
+			client = instrumentReqClientWithGuard(client, guard, nil)
 		}
 		return client
 	}
@@ -102,7 +102,7 @@ func TestReqProfileGuardPreservesErrorCancellationAndRedirect(t *testing.T) {
 	for _, guarded := range []bool{false, true} {
 		client := req.C()
 		if guarded {
-			client = instrumentReqClientWithGuard(client, guard)
+			client = instrumentReqClientWithGuard(client, guard, nil)
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
 		_, sendErr := client.R().SetContext(ctx).Get(slow.URL)
@@ -123,7 +123,7 @@ func TestReqProfileGuardPreservesErrorCancellationAndRedirect(t *testing.T) {
 	for _, guarded := range []bool{false, true} {
 		client := req.C()
 		if guarded {
-			client = instrumentReqClientWithGuard(client, guard)
+			client = instrumentReqClientWithGuard(client, guard, nil)
 		}
 		response, sendErr := client.R().Get(redirect.URL)
 		require.NoError(t, sendErr)

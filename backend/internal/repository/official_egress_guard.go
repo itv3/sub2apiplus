@@ -84,9 +84,18 @@ func ProvideHTTPUpstream(
 
 // instrumentReqClientWithGuard 让包内 before/after wire 测试注入独立 Guard，避免修改
 // 进程默认配置；生产始终由 instrumentReqClient 使用 wiring 后的默认 Guard。
-func instrumentReqClientWithGuard(client *req.Client, guard *officialegress.Guard) *req.Client {
+func instrumentReqClientWithGuard(
+	client *req.Client,
+	guard *officialegress.Guard,
+	profile *tlsfingerprint.Profile,
+) *req.Client {
 	if client == nil {
 		return nil
+	}
+	lowercaseWire := profile != nil && profile.Transport.LowercaseHeaders
+	preserveCase := []string(nil)
+	if profile != nil {
+		preserveCase = append(preserveCase, profile.Transport.PreserveHeaderCase...)
 	}
 	client.GetTransport().WrapRoundTripFunc(func(rt http.RoundTripper) req.HttpRoundTripFunc {
 		guarded := officialegress.NewGuardedRoundTripper(
@@ -96,7 +105,15 @@ func instrumentReqClientWithGuard(client *req.Client, guard *officialegress.Guar
 			officialegress.WireProtocolHTTP,
 		)
 		timed := servertiming.WrapRoundTripper(guarded)
-		return timed.RoundTrip
+		if !lowercaseWire {
+			return timed.RoundTrip
+		}
+		// Guard 校验的是最终 wire 形态，因此小写化必须发生在 Guard 之外——与
+		// http_upstream 链的 lowercase(Guard(base)) 顺序保持一致。顺序反了，Guard 看到的
+		// 仍是 Go 规范化后的名字（Accept），会把画像声明的 lowercase 计划误判成
+		// request_modified_after_finalize。
+		lowered := tlsfingerprint.NewLowercaseHeaderRoundTripper(timed, preserveCase)
+		return lowered.RoundTrip
 	})
 	return client
 }

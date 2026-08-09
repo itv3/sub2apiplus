@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -59,19 +60,28 @@ type GuardDecision struct {
 	SinkState       SinkEnforcementState
 	Reasons         []GuardReason
 	RejectionReason GuardReason
+	// Diagnostic 只在拒绝时填充，描述形态差异，不含头值。
+	Diagnostic string
 }
 
 type GuardRejectionError struct {
 	Reason GuardReason
 	SinkID SinkID
 	Route  RouteKey
+	// Diagnostic 只描述形态差异（例如最终 header 名集合），不含任何头值或凭据，
+	// 用于把 request_modified_after_finalize 这类同名原因区分到具体环节。
+	Diagnostic string
 }
 
 func (e *GuardRejectionError) Error() string {
 	if e == nil {
 		return ErrGuardRejected.Error()
 	}
-	return fmt.Sprintf("%s: reason=%s sink_id=%s route=%s", ErrGuardRejected, e.Reason, e.SinkID, e.Route)
+	message := fmt.Sprintf("%s: reason=%s sink_id=%s route=%s", ErrGuardRejected, e.Reason, e.SinkID, e.Route)
+	if strings.TrimSpace(e.Diagnostic) != "" {
+		message += " diagnostic=" + e.Diagnostic
+	}
+	return message
 }
 
 func (e *GuardRejectionError) Unwrap() error { return ErrGuardRejected }
@@ -294,7 +304,9 @@ func (g *Guard) evaluate(
 		binding, resolvedRoute, metadata, backend, protocol, trustedToken,
 	)
 	if terminal && len(tokenReasons) == 0 {
-		tokenReasons = append(tokenReasons, g.finalizationWireReasons(req, metadata, protocol)...)
+		wireReasons, wireDiagnostic := g.finalizationWireReasons(req, metadata, protocol)
+		tokenReasons = append(tokenReasons, wireReasons...)
+		decision.Diagnostic = wireDiagnostic
 	}
 	decision.Reasons = append(decision.Reasons, tokenReasons...)
 	for _, reason := range tokenReasons {
@@ -481,20 +493,45 @@ func (g *Guard) finalizationWireReasons(
 	req *http.Request,
 	metadata attemptMetadata,
 	protocol WireProtocol,
-) []GuardReason {
+) ([]GuardReason, string) {
 	if metadata.Token == nil {
-		return []GuardReason{ReasonMissingFinalizationToken, ReasonWrongExecutor}
+		return []GuardReason{ReasonMissingFinalizationToken, ReasonWrongExecutor}, ""
 	}
 	token := metadata.Token.payload
 	reasons := make([]GuardReason, 0, 1)
+	// 规范化不符与摘要不符共用同一个 GuardReason，排查时必须能区分：前者指向 header
+	// 形态，后者指向定型后被改写。诊断只描述形态，不含任何头值。
+	diagnostics := make([]string, 0, 2)
 	if err := validateFinalWireNormalization(req, token.Normalization, protocol); err != nil {
+		diagnostics = append(diagnostics, "normalization="+err.Error())
 		reasons = append(reasons, ReasonRequestModifiedAfterFinalize)
 	}
 	digest, err := requestDigest(req, token.Normalization, protocol)
-	if err != nil || digest != token.RequestDigest {
+	switch {
+	case err != nil:
+		diagnostics = append(diagnostics, "digest_error="+err.Error())
+		reasons = append(reasons, ReasonRequestModifiedAfterFinalize)
+	case digest != token.RequestDigest:
+		diagnostics = append(
+			diagnostics,
+			"digest_mismatch final_header_names=["+strings.Join(sortedHeaderNames(req), ",")+"]",
+		)
 		reasons = append(reasons, ReasonRequestModifiedAfterFinalize)
 	}
-	return uniqueGuardReasons(reasons)
+	return uniqueGuardReasons(reasons), strings.Join(diagnostics, "; ")
+}
+
+// sortedHeaderNames 只返回 header 名，用于定位定型后被谁加了头；绝不返回头值。
+func sortedHeaderNames(req *http.Request) []string {
+	if req == nil {
+		return nil
+	}
+	names := make([]string, 0, len(req.Header))
+	for name := range req.Header {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
 }
 
 func uniqueGuardReasons(input []GuardReason) []GuardReason {
@@ -659,9 +696,10 @@ func (r *guardedRoundTripper) RoundTrip(req *http.Request) (*http.Response, erro
 	decision := guard.Evaluate(req, r.backend, r.protocol)
 	if !decision.Allow {
 		return nil, WrapRuntimeError(RuntimeErrorCodeGuardRejected, "guard.round_trip", &GuardRejectionError{
-			Reason: decision.RejectionReason,
-			SinkID: attemptSinkID(req),
-			Route:  decision.Route.Key,
+			Reason:     decision.RejectionReason,
+			SinkID:     attemptSinkID(req),
+			Route:      decision.Route.Key,
+			Diagnostic: decision.Diagnostic,
 		})
 	}
 	return r.base.RoundTrip(req)
