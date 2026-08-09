@@ -1437,13 +1437,24 @@ class CodexUpgradeTest(unittest.TestCase):
         approved_rules = (
             campaign_dir / rule_reference["path"]
         ).resolve(strict=True)
+        validation_modes = codex_upgrade._acceptance_validation_modes(
+            campaign_dir, classification, tuple(rules)
+        )
+        official_authority = codex_upgrade._classification_official_authority(
+            classification
+        )
         for index, rule in enumerate(selected_rules):
             machine_bindings: dict[str, dict[str, str]] = {}
             commands: dict[str, list[str]] = {}
-            for side, stage in (
-                ("official", official),
-                ("candidate", candidate),
-            ):
+            expected_check_ids = codex_upgrade._acceptance_expected_check_ids(
+                campaign_dir, classification, rule
+            )
+            sides = (
+                (("official", official), ("candidate", candidate))
+                if validation_modes[rule] == "dual_wire"
+                else (("candidate", candidate),)
+            )
+            for side, stage in sides:
                 machine_path = machine_root / side / f"{rule}.json"
                 context = stage["assertion_context"]
                 command = codex_upgrade.build_machine_assertion_command(
@@ -1469,21 +1480,14 @@ class CodexUpgradeTest(unittest.TestCase):
                     ),
                     "checks": [
                         {
-                            "id": "positive-shape",
-                            "description": "目标形态存在",
+                            "id": check_id,
+                            "description": f"{check_id} 判据",
                             "passed": True,
                             "expected": {"present": True},
                             "actual": {"present": True},
                             "evidence_paths": ["surface.json"],
-                        },
-                        {
-                            "id": "negative-shape",
-                            "description": "禁止形态不存在",
-                            "passed": True,
-                            "expected": {"forbidden": False},
-                            "actual": {"forbidden": False},
-                            "evidence_paths": ["surface.json"],
-                        },
+                        }
+                        for check_id in expected_check_ids
                     ],
                 }
                 self._write_json(machine_path, machine_result)
@@ -1492,42 +1496,43 @@ class CodexUpgradeTest(unittest.TestCase):
                     machine_path.relative_to(campaign_dir).as_posix(),
                 )
                 commands[side] = command
-            rows.append(
-                {
-                    "rule": rule,
-                    "status": first_rule_status if index == 0 else "pass",
-                    "official_evidence_refs": [
-                        {
-                            "path": official_relative,
-                            "sha256": hashlib.sha256(
-                                official_evidence.read_bytes()
-                            ).hexdigest(),
-                        }
-                    ],
-                    "candidate_evidence_refs": [
-                        {
-                            "path": candidate_relative,
-                            "sha256": hashlib.sha256(
-                                candidate_evidence.read_bytes()
-                            ).hexdigest(),
-                        }
-                    ],
-                    "official_machine_result": machine_bindings["official"],
-                    "candidate_machine_result": machine_bindings["candidate"],
-                    "official_command": commands["official"],
-                    "candidate_command": commands["candidate"],
-                    "positive_assertions": ["positive-shape"],
-                    "negative_assertions": ["negative-shape"],
-                    "evidence_level": (
-                        first_rule_evidence_level if index == 0 else "full"
-                    ),
-                    "rationale": "离线机器断言逐规则通过",
-                }
-            )
+            row: dict[str, object] = {
+                "rule": rule,
+                "validation_mode": validation_modes[rule],
+                "status": first_rule_status if index == 0 else "pass",
+                "candidate_evidence_refs": [
+                    {
+                        "path": candidate_relative,
+                        "sha256": hashlib.sha256(
+                            candidate_evidence.read_bytes()
+                        ).hexdigest(),
+                    }
+                ],
+                "candidate_machine_result": machine_bindings["candidate"],
+                "candidate_command": commands["candidate"],
+                "evidence_level": (
+                    first_rule_evidence_level if index == 0 else "full"
+                ),
+                "rationale": "离线机器断言逐规则通过",
+            }
+            if validation_modes[rule] == "dual_wire":
+                row["official_evidence_refs"] = [
+                    {
+                        "path": official_relative,
+                        "sha256": hashlib.sha256(
+                            official_evidence.read_bytes()
+                        ).hexdigest(),
+                    }
+                ]
+                row["official_machine_result"] = machine_bindings["official"]
+                row["official_command"] = commands["official"]
+            else:
+                row["official_authority"] = dict(official_authority)
+            rows.append(row)
         self._write_json(
             assertions_path,
             {
-                "schema_version": codex_upgrade.ASSERTION_SCHEMA,
+                "schema_version": codex_upgrade.RESULTS_SCHEMA_V2,
                 "document_kind": "results",
                 "candidate_id": candidate_id,
                 "target_version": "0.146.0",
@@ -1536,6 +1541,11 @@ class CodexUpgradeTest(unittest.TestCase):
                 "official_package_digest": official["package_digest"],
                 "candidate_package_digest": candidate["package_digest"],
                 "comparison_package_digest": comparison["package_digest"],
+                "acceptance_contract_sha256": (
+                    codex_upgrade._acceptance_contract_sha256(
+                        campaign_dir, classification
+                    )
+                ),
                 "rules": rows,
             },
         )
@@ -2328,6 +2338,96 @@ class CodexUpgradeTest(unittest.TestCase):
                 codex_upgrade.accept_campaign(
                     campaign_dir, "candidate-a", assertions
                 )
+
+    def _accept_with_mutated_results(
+        self,
+        root: Path,
+        mutate,
+    ):
+        """构造合法 v2 results 后按需变异，返回 accept 调用结果或异常。"""
+
+        campaign_dir, _, rules = self._create_classified_campaign(root)
+        _, identity = self._seal_candidate_stage(root, campaign_dir)
+        codex_upgrade.compare_campaign(campaign_dir, "candidate-a")
+        assertions = self._write_assertions(root, rules, identity)
+        document = json.loads(assertions.read_text(encoding="utf-8"))
+        mutate(document)
+        self._write_json(assertions, document)
+        with mock.patch.object(codex_upgrade, "_rerun_machine_assertion"):
+            return codex_upgrade.accept_campaign(
+                campaign_dir, "candidate-a", assertions
+            )
+
+    def test_accept_rejects_legacy_v1_results_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            def mutate(document: dict) -> None:
+                document["schema_version"] = "codex-egress-rule-assertions/v1"
+
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError, "旧 schema 已废除"
+            ):
+                self._accept_with_mutated_results(Path(directory), mutate)
+
+    def test_accept_rejects_wrong_validation_mode(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            def mutate(document: dict) -> None:
+                for row in document["rules"]:
+                    if row["validation_mode"] == "dual_wire":
+                        row["validation_mode"] = "candidate_profile"
+                        break
+
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError, "validation_mode 与验收契约不一致"
+            ):
+                self._accept_with_mutated_results(Path(directory), mutate)
+
+    def test_accept_rejects_candidate_profile_row_carrying_official_side(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            def mutate(document: dict) -> None:
+                for row in document["rules"]:
+                    if row["validation_mode"] == "candidate_profile":
+                        row["official_command"] = ["python3", "fake.py"]
+                        break
+
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError, "字段不闭合"
+            ):
+                self._accept_with_mutated_results(Path(directory), mutate)
+
+    def test_accept_rejects_forged_official_authority(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            def mutate(document: dict) -> None:
+                for row in document["rules"]:
+                    if row["validation_mode"] == "candidate_profile":
+                        row["official_authority"]["review_sha256"] = "f" * 64
+                        break
+
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError, "官方权威"
+            ):
+                self._accept_with_mutated_results(Path(directory), mutate)
+
+    def test_accept_rejects_contract_digest_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            def mutate(document: dict) -> None:
+                document["acceptance_contract_sha256"] = "0" * 64
+
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError, "冻结验收契约摘要"
+            ):
+                self._accept_with_mutated_results(Path(directory), mutate)
+
+    def test_accept_rejects_missing_positive_negative_leftovers(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            def mutate(document: dict) -> None:
+                document["rules"][0]["positive_assertions"] = ["x"]
+
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError, "字段不闭合"
+            ):
+                self._accept_with_mutated_results(Path(directory), mutate)
 
     def test_candidate_specific_status_does_not_leak_between_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -18981,8 +18981,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 12680,
-        "sha256": "5d46b2b4b521af14e0306f42c614a712742d8979b0b871886d05cd628d9b67a5"
+        "size": 13281,
+        "sha256": "513711e6ee4e24e8e500da2aa4ebfb6589ab45d952eb4a42a0f775dd95180ea8"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
@@ -19125,8 +19125,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 11478,
-        "sha256": "c42085c9b8ee34803df7e14557024302f3edc2b0e9f02ddb933bd44bd7ab1e0b"
+        "size": 16378,
+        "sha256": "823f3edb3597687cab747e75a049cee48d31b22d830adc5ff594a93c1b6c7ee9"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
@@ -19365,8 +19365,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 338803,
-        "sha256": "9f29b622cecdcaa7b584bb7e04b39f1d0762d741aa923ed56c3bfbf8c015c124"
+        "size": 343719,
+        "sha256": "f3e7c34c9d5bb84441aaba4e17c9777f301f0c610df02894a9067456b8c71f75"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
@@ -19965,8 +19965,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 6084,
-        "sha256": "58311a77eaee9735ae290c18a1f8d8dd553b32331b56538fa5854d6a6811f83b"
+        "size": 8795,
+        "sha256": "81985fddbb2c53591c3a751d7f2eec4e7dd804ed4c06257460a1940db5fa38c9"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
@@ -20133,8 +20133,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 109334,
-        "sha256": "690b90f36003461963948102aa1a90800c02545bbce5207f784d4b50eca1f70f"
+        "size": 113684,
+        "sha256": "723f5c86ad825f5105b31e9c83c1202c407f5d8abaa3c3f312b6830e8249f0d0"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",

@@ -16,6 +16,16 @@
 契约载荷刻意不含 ``codex_version``：规则集跨版本未变时摘要恒定，批准画像与仓库
 画像推导出的载荷必须命中同一冻结摘要；任何规则集变化都会使摘要漂移并 fail-close，
 强制显式重审本契约。
+
+**两处消费者的权威边界不同**：
+
+- ``seal`` 的断言门禁（ACC-03）在 classify 之前执行，此时尚无批准画像，只能以
+  仓库冻结画像做证据充分性预检，并用 ``verify_frozen_contract`` 证明仓库画像
+  未漂移；
+- ``compare``／``accept``（ACC-04）以本 Campaign **批准的** `assertion-profile.json`
+  推导契约——目标规则集允许相对基线增删，验收权威必须随批准画像走，不能被仓库
+  基线覆盖。批准画像已在 classify 阶段人工批准并摘要绑定，契约仍是机器推导，
+  不可手写。
 """
 
 from __future__ import annotations

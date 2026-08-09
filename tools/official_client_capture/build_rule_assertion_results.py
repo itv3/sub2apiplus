@@ -1,19 +1,22 @@
 #!/usr/bin/env python3
-"""编排官方／候选双侧逐规则断言，并汇总成 accept 所需的验收结果文档。
+"""按验收契约编排逐规则断言，汇总为 accept 所需的 v2 验收结果文档。
 
-`accept` 要一份 `codex-egress-rule-assertions/v1` 的 results 文档：每条必需规则都要给出
-**双侧**证据绑定、机器执行结果、执行命令与正负断言清单。仓库里只有单规则执行器
-（`candidate_rule_assertion.py`）和这份 schema，没有把两者接起来的编排／汇总入口——
-accept 因此从未走通。
+§10.8.10 验收模型：每条规则的 ``validation_mode`` 由冻结验收契约
+（``acceptance_contract.py``）从批准断言画像机器推导，禁止手写——
 
-本工具做两件事，都不替代判断：
+- ``dual_wire``（25 条 wire 规则）：官方／候选两侧各执行一次单规则断言，
+  双侧 check 集合必须与契约 check 全集逐项一致；
+- ``candidate_profile``（17 条内部规则）：只在候选侧执行机器断言；官方权威
+  是批准画像链，行内逐字绑定批准断言画像 SHA-256、classification package
+  digest 与联合 ``review_sha256``，不再伪造官方侧机器结果。
 
-1. 对每条规则在官方侧与候选侧各执行一次单规则断言，原样保留执行器的退出码与结果文件；
-2. 把两侧结果汇总成 results 文档，正负断言清单直接取自执行器报告的 check 结果
-   （`passed` 为真进 positive，为假进 negative），不做任何重写。
+v1 的人工 ``positive_assertions``／``negative_assertions`` 已废除：accept 从
+批准画像复算应有 check ID 并离线重放，正负语义由画像判据本身表达。
 
-任一侧断言失败即整体失败：schema 只接受 `status: "pass"`，把失败规则写进文档等于伪造
-验收结论。`evidence_level` 固定为 `full`——双侧都提供了完整原始证据绑定才走到这一步。
+evidence refs 以 ``<evidence_prefix>/<相对路径>`` 的 inventory 逻辑路径写入
+（§10.8.5 的路径空间统一），accept 端只做精确路径＋摘要匹配。任一侧断言
+失败即整体失败：schema 只接受 ``status: "pass"``，把失败规则写进文档等于
+伪造验收结论。
 """
 
 from __future__ import annotations
@@ -29,12 +32,27 @@ from typing import Any, Mapping
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-RESULTS_SCHEMA = "codex-egress-rule-assertions/v1"
+from tools.official_client_capture.acceptance_contract import (  # noqa: E402
+    AcceptanceContractError,
+    MODE_CANDIDATE_PROFILE,
+    MODE_DUAL_WIRE,
+    RESULTS_SCHEMA_V2,
+    contract_sha256,
+    load_profile,
+    repository_profile_path,
+    verify_frozen_contract,
+)
+
 SINGLE_SCHEMA = "codex-candidate-rule-assertion/v1"
+AUTHORITY_FIELDS = (
+    "assertion_profile_sha256",
+    "classification_package_digest",
+    "review_sha256",
+)
 
 
 class RuleAssertionError(RuntimeError):
-    """双侧断言不足以支撑验收结论。"""
+    """断言编排不足以支撑验收结论。"""
 
 
 def _file_sha256(path: Path) -> str:
@@ -60,10 +78,8 @@ def run_side_assertion(
     evidence_root: Path,
     output: Path,
     expected_codex_version: str,
-    extra_arguments: list[str] | None = None,
+    extra_arguments: Any = None,
 ) -> tuple[list[str], dict[str, Any]]:
-    """执行一侧的单规则断言，返回命令与结果文档。"""
-
     command = [
         sys.executable,
         str(executor),
@@ -78,10 +94,14 @@ def run_side_assertion(
         "--output",
         str(output),
     ]
-    command.extend(extra_arguments or [])
+    if extra_arguments:
+        if not isinstance(extra_arguments, list) or any(
+            not isinstance(value, str) or not value for value in extra_arguments
+        ):
+            raise RuleAssertionError("extra_arguments 必须是非空字符串数组")
+        command.extend(extra_arguments)
     completed = subprocess.run(
         command,
-        check=False,
         capture_output=True,
         text=True,
         stdin=subprocess.DEVNULL,
@@ -104,27 +124,42 @@ def run_side_assertion(
     return command, document
 
 
-def split_assertions(document: Mapping[str, Any]) -> tuple[list[str], list[str]]:
-    """按执行器报告的 check 结果切分正负断言，不重写任何判断。"""
+def verify_check_closure(
+    document: Mapping[str, Any],
+    expected_check_ids: list[str],
+    *,
+    rule_id: str,
+    label: str,
+) -> None:
+    """机器结果的 check ID 必须与契约复算的全集逐项一致且全部通过。"""
 
-    positive: list[str] = []
-    negative: list[str] = []
-    for check in document.get("checks") or []:
+    checks = document.get("checks") or []
+    seen: list[str] = []
+    for check in checks:
         check_id = check.get("id")
         if not isinstance(check_id, str) or not check_id:
-            raise RuleAssertionError("断言结果存在缺少 id 的 check")
-        (positive if check.get("passed") else negative).append(check_id)
-    if not positive and not negative:
-        raise RuleAssertionError("断言结果没有任何 check，不能作为验收依据")
-    return positive, negative
+            raise RuleAssertionError(f"{rule_id} {label}存在缺少 id 的 check")
+        if check.get("passed") is not True:
+            raise RuleAssertionError(
+                f"{rule_id} {label}存在未通过 check：{check_id}"
+            )
+        seen.append(check_id)
+    if sorted(seen) != sorted(expected_check_ids) or len(seen) != len(set(seen)):
+        raise RuleAssertionError(
+            f"{rule_id} {label}check 集合与验收契约不一致："
+            f"实际 {sorted(seen)}，应有 {sorted(expected_check_ids)}"
+        )
 
 
 def collect_evidence_bindings(
     document: Mapping[str, Any],
     evidence_root: Path,
+    evidence_prefix: str,
 ) -> list[dict[str, str]]:
-    """把 check 引用到的原始证据绑定成 path+sha256，去重后排序。"""
+    """把 check 引用的证据绑定为 inventory 逻辑路径＋sha256，去重排序。"""
 
+    if not isinstance(evidence_prefix, str) or not evidence_prefix.strip():
+        raise RuleAssertionError("evidence_prefix 不能为空")
     seen: dict[str, dict[str, str]] = {}
     for check in document.get("checks") or []:
         for reference in check.get("evidence_paths") or []:
@@ -133,10 +168,32 @@ def collect_evidence_bindings(
             path = evidence_root / reference
             if not path.is_file() or path.is_symlink():
                 raise RuleAssertionError(f"断言引用的证据不存在：{reference}")
-            seen[reference] = _binding(path, evidence_root)
+            logical = f"{evidence_prefix}/{reference}"
+            seen[logical] = {
+                "path": logical,
+                "sha256": _file_sha256(path),
+            }
     if not seen:
         raise RuleAssertionError("断言结果未绑定任何原始证据")
     return [seen[key] for key in sorted(seen)]
+
+
+def validate_official_authority(value: Any) -> dict[str, str]:
+    if not isinstance(value, Mapping) or set(value) != set(AUTHORITY_FIELDS):
+        raise RuleAssertionError(
+            "official_authority 必须且只含批准画像链三摘要"
+        )
+    authority: dict[str, str] = {}
+    for field in AUTHORITY_FIELDS:
+        digest = value.get(field)
+        if (
+            not isinstance(digest, str)
+            or len(digest) != 64
+            or any(ch not in "0123456789abcdef" for ch in digest)
+        ):
+            raise RuleAssertionError(f"official_authority.{field} 必须是 SHA-256")
+        authority[field] = digest
+    return authority
 
 
 def build_results_document(
@@ -148,12 +205,13 @@ def build_results_document(
     official_package_digest: str,
     candidate_package_digest: str,
     comparison_package_digest: str,
+    acceptance_contract_sha256_value: str,
     rules: list[dict[str, Any]],
 ) -> dict[str, Any]:
     if not rules:
         raise RuleAssertionError("验收结果必须至少覆盖一条规则")
     return {
-        "schema_version": RESULTS_SCHEMA,
+        "schema_version": RESULTS_SCHEMA_V2,
         "document_kind": "results",
         "candidate_id": candidate_id,
         "target_version": target_version,
@@ -162,48 +220,76 @@ def build_results_document(
         "official_package_digest": official_package_digest,
         "candidate_package_digest": candidate_package_digest,
         "comparison_package_digest": comparison_package_digest,
+        "acceptance_contract_sha256": acceptance_contract_sha256_value,
         "rules": sorted(rules, key=lambda item: item["rule"]),
     }
 
 
-def build_rule_result(
+def build_dual_wire_result(
     *,
     rule_id: str,
+    expected_check_ids: list[str],
     official: tuple[list[str], dict[str, Any], Path],
     candidate: tuple[list[str], dict[str, Any], Path],
     official_root: Path,
     candidate_root: Path,
+    official_prefix: str,
+    candidate_prefix: str,
     results_root: Path,
     rationale: str,
 ) -> dict[str, Any]:
     official_command, official_document, official_output = official
     candidate_command, candidate_document, candidate_output = candidate
-
-    official_positive, official_negative = split_assertions(official_document)
-    candidate_positive, candidate_negative = split_assertions(candidate_document)
-    # 双侧检查的语义集合必须一致，否则"官方通过、候选也通过"比较的不是同一件事。
-    if sorted(official_positive) != sorted(candidate_positive) or sorted(
-        official_negative
-    ) != sorted(candidate_negative):
-        raise RuleAssertionError(
-            f"{rule_id} 的官方与候选断言集合不一致，无法作为同一规则的双侧证据"
-        )
-
+    verify_check_closure(
+        official_document, expected_check_ids, rule_id=rule_id, label="官方"
+    )
+    verify_check_closure(
+        candidate_document, expected_check_ids, rule_id=rule_id, label="候选"
+    )
     return {
         "rule": rule_id,
+        "validation_mode": MODE_DUAL_WIRE,
         "status": "pass",
         "official_evidence_refs": collect_evidence_bindings(
-            official_document, official_root
+            official_document, official_root, official_prefix
         ),
         "candidate_evidence_refs": collect_evidence_bindings(
-            candidate_document, candidate_root
+            candidate_document, candidate_root, candidate_prefix
         ),
         "official_machine_result": _binding(official_output, results_root),
         "candidate_machine_result": _binding(candidate_output, results_root),
         "official_command": official_command,
         "candidate_command": candidate_command,
-        "positive_assertions": sorted(candidate_positive),
-        "negative_assertions": sorted(candidate_negative),
+        "evidence_level": "full",
+        "rationale": rationale,
+    }
+
+
+def build_candidate_profile_result(
+    *,
+    rule_id: str,
+    expected_check_ids: list[str],
+    candidate: tuple[list[str], dict[str, Any], Path],
+    candidate_root: Path,
+    candidate_prefix: str,
+    official_authority: dict[str, str],
+    results_root: Path,
+    rationale: str,
+) -> dict[str, Any]:
+    candidate_command, candidate_document, candidate_output = candidate
+    verify_check_closure(
+        candidate_document, expected_check_ids, rule_id=rule_id, label="候选"
+    )
+    return {
+        "rule": rule_id,
+        "validation_mode": MODE_CANDIDATE_PROFILE,
+        "status": "pass",
+        "official_authority": dict(official_authority),
+        "candidate_evidence_refs": collect_evidence_bindings(
+            candidate_document, candidate_root, candidate_prefix
+        ),
+        "candidate_machine_result": _binding(candidate_output, results_root),
+        "candidate_command": candidate_command,
         "evidence_level": "full",
         "rationale": rationale,
     }
@@ -211,7 +297,7 @@ def build_rule_result(
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="编排双侧逐规则断言并汇总为 accept 验收结果"
+        description="按验收契约编排逐规则断言并汇总为 v2 验收结果"
     )
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -223,30 +309,41 @@ def main() -> int:
     except (OSError, json.JSONDecodeError) as error:
         raise SystemExit(f"无法读取配置：{error}") from error
 
+    try:
+        profile = load_profile(repository_profile_path())
+        contract = verify_frozen_contract(profile)
+    except AcceptanceContractError as error:
+        raise SystemExit(f"验收契约不可用：{error}") from error
+    validation_modes = contract["validation_modes"]
+    expected_by_rule = contract["expected_check_ids"]
+
     executor = Path(config["executor"]).resolve(strict=True)
     official_root = Path(config["official_evidence_root"]).resolve(strict=True)
     candidate_root = Path(config["candidate_evidence_root"]).resolve(strict=True)
     official_manifest = Path(config["official_capture_manifest"]).resolve(strict=True)
     candidate_manifest = Path(config["candidate_capture_manifest"]).resolve(strict=True)
+    official_prefix = str(config["official_evidence_prefix"])
+    candidate_prefix = str(config["candidate_evidence_prefix"])
     target_version = str(config["target_version"])
     rule_ids = list(config["rules"])
+    try:
+        official_authority = validate_official_authority(
+            config.get("official_authority")
+        )
+    except RuleAssertionError as error:
+        raise SystemExit(f"配置非法：{error}") from error
+    unknown_rules = sorted(set(rule_ids) - set(validation_modes))
+    if unknown_rules:
+        raise SystemExit(f"配置引用契约外规则：{unknown_rules}")
 
     results_dir = arguments.results_dir
     results_dir.mkdir(parents=True, exist_ok=True)
 
     rule_results: list[dict[str, Any]] = []
     for rule_id in rule_ids:
-        official_output = results_dir / f"{rule_id}.official.json"
+        mode = validation_modes[rule_id]
+        expected_check_ids = list(expected_by_rule[rule_id])
         candidate_output = results_dir / f"{rule_id}.candidate.json"
-        official = run_side_assertion(
-            executor=executor,
-            rule_id=rule_id,
-            capture_manifest=official_manifest,
-            evidence_root=official_root,
-            output=official_output,
-            expected_codex_version=target_version,
-            extra_arguments=config.get("official_extra_arguments"),
-        )
         candidate = run_side_assertion(
             executor=executor,
             rule_id=rule_id,
@@ -256,22 +353,53 @@ def main() -> int:
             expected_codex_version=target_version,
             extra_arguments=config.get("candidate_extra_arguments"),
         )
-        rule_results.append(
-            build_rule_result(
+        if mode == MODE_DUAL_WIRE:
+            official_output = results_dir / f"{rule_id}.official.json"
+            official = run_side_assertion(
+                executor=executor,
                 rule_id=rule_id,
-                official=(*official, official_output),
-                candidate=(*candidate, candidate_output),
-                official_root=official_root,
-                candidate_root=candidate_root,
-                results_root=results_dir,
-                rationale=(
-                    f"{rule_id} 在官方 {target_version} 证据与候选证据上分别由 "
-                    "candidate_rule_assertion.py 独立执行并全部通过；"
-                    "两侧检查集合一致，结论只来自机器断言。"
-                ),
+                capture_manifest=official_manifest,
+                evidence_root=official_root,
+                output=official_output,
+                expected_codex_version=target_version,
+                extra_arguments=config.get("official_extra_arguments"),
             )
-        )
-        print(f"{rule_id} 双侧通过", flush=True)
+            rule_results.append(
+                build_dual_wire_result(
+                    rule_id=rule_id,
+                    expected_check_ids=expected_check_ids,
+                    official=(*official, official_output),
+                    candidate=(*candidate, candidate_output),
+                    official_root=official_root,
+                    candidate_root=candidate_root,
+                    official_prefix=official_prefix,
+                    candidate_prefix=candidate_prefix,
+                    results_root=results_dir,
+                    rationale=(
+                        f"{rule_id} 在官方 {target_version} 证据与候选证据上分别由 "
+                        "candidate_rule_assertion.py 独立执行并全部通过；"
+                        "check 集合与批准画像逐项一致，结论只来自机器断言。"
+                    ),
+                )
+            )
+            print(f"{rule_id} dual_wire 双侧通过", flush=True)
+        else:
+            rule_results.append(
+                build_candidate_profile_result(
+                    rule_id=rule_id,
+                    expected_check_ids=expected_check_ids,
+                    candidate=(*candidate, candidate_output),
+                    candidate_root=candidate_root,
+                    candidate_prefix=candidate_prefix,
+                    official_authority=official_authority,
+                    results_root=results_dir,
+                    rationale=(
+                        f"{rule_id} 描述 Sub2API 内部实现事实，由候选侧机器断言"
+                        "通过；官方权威为批准断言画像链，行内逐字绑定其摘要。"
+                    ),
+                )
+            )
+            print(f"{rule_id} candidate_profile 候选通过", flush=True)
 
     document = build_results_document(
         candidate_id=str(config["candidate_id"]),
@@ -281,6 +409,7 @@ def main() -> int:
         official_package_digest=str(config["official_package_digest"]),
         candidate_package_digest=str(config["candidate_package_digest"]),
         comparison_package_digest=str(config["comparison_package_digest"]),
+        acceptance_contract_sha256_value=contract_sha256(contract),
         rules=rule_results,
     )
     arguments.output.write_text(

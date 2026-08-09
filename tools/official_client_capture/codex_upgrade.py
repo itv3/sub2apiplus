@@ -40,6 +40,11 @@ from tools.official_client_capture.capturelib.security import (
 )
 from tools.official_client_capture.acceptance_contract import (
     AcceptanceContractError,
+    LEGACY_RESULTS_SCHEMAS,
+    MODE_DUAL_WIRE,
+    RESULTS_SCHEMA_V2,
+    build_contract_payload as build_acceptance_contract,
+    contract_sha256 as acceptance_contract_sha256,
     load_profile as load_acceptance_profile,
     repository_profile_path as acceptance_profile_path,
     verify_frozen_contract,
@@ -94,8 +99,6 @@ SOURCE_SCHEMA = "codex-egress-source-inventory/v1"
 EXTRA_JOB_SCHEMA = "codex-upgrade-extra-jobs/v1"
 CAMPAIGN_SCHEMA = "codex-upgrade-campaign/v1"
 MIGRATION_SCHEMA = "codex-upgrade-rule-migration/v1"
-ASSERTION_SCHEMA = "codex-egress-rule-assertions/v1"
-ASSERTIONS_SCHEMA = ASSERTION_SCHEMA
 ASSERTION_TEMPLATE_SCHEMA = "codex-egress-rule-assertion-template/v1"
 ASSERTION_PROFILE_SCHEMA = "codex-candidate-rule-expectations/v1"
 PROFILE_SCHEMA = "codex-egress-profile/v1"
@@ -7119,46 +7122,51 @@ def compare_campaign(campaign_dir: Path, candidate_id: str) -> dict[str, Any]:
     )
     ensure_private_directory(machine_root / "official", campaign_dir)
     ensure_private_directory(machine_root / "candidate", campaign_dir)
+    validation_modes = _acceptance_validation_modes(
+        campaign_dir, classification, rules
+    )
+    official_authority = _classification_official_authority(classification)
     template_rules: list[dict[str, Any]] = []
     for rule in rules:
         official_output = machine_root / "official" / f"{rule}.json"
         candidate_output = machine_root / "candidate" / f"{rule}.json"
-        template_rules.append(
-            {
-                "rule": rule,
-                "status": "blocked",
-                "official_evidence_refs": [],
-                "candidate_evidence_refs": [],
-                "official_machine_result": {
-                    "path": official_output.relative_to(campaign_dir).as_posix(),
-                    "sha256": None,
-                },
-                "candidate_machine_result": {
-                    "path": candidate_output.relative_to(campaign_dir).as_posix(),
-                    "sha256": None,
-                },
-                "official_command": _campaign_machine_command(
-                    campaign_dir,
-                    manifest,
-                    classification,
-                    official,
-                    rule=rule,
-                    output=official_output,
-                ),
-                "candidate_command": _campaign_machine_command(
-                    campaign_dir,
-                    manifest,
-                    classification,
-                    candidate,
-                    rule=rule,
-                    output=candidate_output,
-                ),
-                "positive_assertions": [],
-                "negative_assertions": [],
-                "evidence_level": "unreviewed",
-                "rationale": "待执行两侧机器断言并复核。",
+        row: dict[str, Any] = {
+            "rule": rule,
+            "validation_mode": validation_modes[rule],
+            "status": "blocked",
+            "candidate_evidence_refs": [],
+            "candidate_machine_result": {
+                "path": candidate_output.relative_to(campaign_dir).as_posix(),
+                "sha256": None,
+            },
+            "candidate_command": _campaign_machine_command(
+                campaign_dir,
+                manifest,
+                classification,
+                candidate,
+                rule=rule,
+                output=candidate_output,
+            ),
+            "evidence_level": "unreviewed",
+            "rationale": "待执行机器断言并复核。",
+        }
+        if validation_modes[rule] == "dual_wire":
+            row["official_evidence_refs"] = []
+            row["official_machine_result"] = {
+                "path": official_output.relative_to(campaign_dir).as_posix(),
+                "sha256": None,
             }
-        )
+            row["official_command"] = _campaign_machine_command(
+                campaign_dir,
+                manifest,
+                classification,
+                official,
+                rule=rule,
+                output=official_output,
+            )
+        else:
+            row["official_authority"] = dict(official_authority)
+        template_rules.append(row)
     skeleton = {
         "schema_version": ASSERTION_TEMPLATE_SCHEMA,
         "document_kind": "template",
@@ -7179,6 +7187,92 @@ def compare_campaign(campaign_dir: Path, candidate_id: str) -> dict[str, Any]:
         secure_write_json(skeleton_path, skeleton)
     report["assertion_template"] = str(skeleton_path)
     return report
+
+
+def _acceptance_contract(
+    campaign_dir: Path,
+    classification: dict[str, Any],
+) -> dict[str, Any]:
+    """从本 Campaign **批准的**断言画像机器推导验收契约。
+
+    权威是 classify 阶段人工批准并摘要绑定的 `assertion-profile.json`，不是仓库
+    冻结画像——目标规则集允许相对基线增删，契约必须随批准画像走。仓库冻结摘要
+    只用于 seal 前预检与工具自检（见 `acceptance_contract.FROZEN_CONTRACT_SHA256`）。
+    """
+
+    reference = classification.get("assertion_profile_manifest")
+    if not isinstance(reference, dict):
+        raise ConfigurationError("分类收据缺少批准断言画像。")
+    path = _campaign_file(campaign_dir, str(reference.get("path", "")))
+    if path.is_symlink() or not path.is_file() or file_sha256(path) != reference.get(
+        "sha256"
+    ):
+        raise ConfigurationError("批准断言画像在封存后漂移或丢失。")
+    try:
+        return build_acceptance_contract(load_acceptance_profile(path))
+    except AcceptanceContractError as error:
+        raise ConfigurationError(f"验收契约不可用：{error}") from error
+
+
+def _acceptance_validation_modes(
+    campaign_dir: Path,
+    classification: dict[str, Any],
+    rules: tuple[str, ...],
+) -> dict[str, str]:
+    """推导每条规则的 validation_mode；规则集与批准画像不符即失败关闭。"""
+
+    modes = _acceptance_contract(campaign_dir, classification)["validation_modes"]
+    missing = sorted(set(rules) - set(modes))
+    extra = sorted(set(modes) - set(rules))
+    if missing or extra:
+        raise ConfigurationError(
+            f"目标规则集与批准断言画像不一致：缺失 {missing}，多余 {extra}。"
+        )
+    return {rule: modes[rule] for rule in rules}
+
+
+def _acceptance_contract_sha256(
+    campaign_dir: Path,
+    classification: dict[str, Any],
+) -> str:
+    return acceptance_contract_sha256(
+        _acceptance_contract(campaign_dir, classification)
+    )
+
+
+def _acceptance_expected_check_ids(
+    campaign_dir: Path,
+    classification: dict[str, Any],
+    rule: str,
+) -> list[str]:
+    contract = _acceptance_contract(campaign_dir, classification)
+    expected = contract["expected_check_ids"].get(rule)
+    if not isinstance(expected, list) or not expected:
+        raise ConfigurationError(f"批准断言画像缺少规则 {rule} 的 check 全集。")
+    return list(expected)
+
+
+def _classification_official_authority(
+    classification: dict[str, Any],
+) -> dict[str, str]:
+    """candidate_profile 行的官方权威：批准画像链的三个逐字摘要。"""
+
+    reference = classification.get("assertion_profile_manifest")
+    if not isinstance(reference, dict) or not SHA256_RE.fullmatch(
+        str(reference.get("sha256", ""))
+    ):
+        raise ConfigurationError("分类收据缺少批准断言画像摘要。")
+    package_digest = classification.get("package_digest")
+    joint = classification.get("joint_manifest_sha256")
+    if not SHA256_RE.fullmatch(str(package_digest or "")):
+        raise ConfigurationError("分类收据缺少 classification package digest。")
+    if not SHA256_RE.fullmatch(str(joint or "")):
+        raise ConfigurationError("分类收据缺少批准联合摘要。")
+    return {
+        "assertion_profile_sha256": str(reference["sha256"]),
+        "classification_package_digest": str(package_digest),
+        "review_sha256": str(joint),
+    }
 
 
 def _inventory_index(stage: dict[str, Any], label: str) -> dict[str, str]:
@@ -7631,12 +7725,22 @@ def _validate_assertion_results(
         "official_package_digest",
         "candidate_package_digest",
         "comparison_package_digest",
+        "acceptance_contract_sha256",
         "rules",
     }
+    if assertions.get("schema_version") in LEGACY_RESULTS_SCHEMAS:
+        raise ConfigurationError(
+            "逐规则断言旧 schema 已废除：v1 的双侧同构与正负例契约没有事实来源，"
+            "必须按 codex-egress-rule-assertions/v2 重新生成。"
+        )
+    if assertions.get("schema_version") != RESULTS_SCHEMA_V2:
+        raise ConfigurationError("逐规则断言 schema_version 不受支持。")
     if not required_top_fields.issubset(assertions) or set(assertions) - required_top_fields - {"$schema"}:
         raise ConfigurationError("逐规则断言结果顶层字段不闭合。")
-    if assertions.get("schema_version") not in {ASSERTION_SCHEMA, ASSERTIONS_SCHEMA}:
-        raise ConfigurationError("逐规则断言 schema_version 不受支持。")
+    if assertions.get("acceptance_contract_sha256") != _acceptance_contract_sha256(
+        campaign_dir, classification
+    ):
+        raise ConfigurationError("逐规则断言未绑定冻结验收契约摘要。")
     if assertions.get("document_kind") != "results":
         raise ConfigurationError("逐规则断言 document_kind 必须是 results。")
     for field, expected in (
@@ -7662,59 +7766,58 @@ def _validate_assertion_results(
         raise ConfigurationError("逐规则断言 rules 必须是数组。")
     official_inventory = _inventory_index(official, "官方")
     candidate_inventory = _inventory_index(candidate, "候选")
+    validation_modes = _acceptance_validation_modes(
+        campaign_dir, classification, rules
+    )
+    official_authority = _classification_official_authority(classification)
     seen: list[str] = []
     passed = 0
     for index, row in enumerate(rows, 1):
         if not isinstance(row, dict):
             raise ConfigurationError(f"逐规则断言 {index} 必须是对象。")
-        required_row_fields = {
+        rule = row.get("rule")
+        if rule not in rules:
+            raise ConfigurationError(f"逐规则断言 {index} 引用清单外规则。")
+        mode = validation_modes[str(rule)]
+        if row.get("validation_mode") != mode:
+            raise ConfigurationError(
+                f"逐规则断言 {rule} 的 validation_mode 与验收契约不一致。"
+            )
+        common_row_fields = {
             "rule",
+            "validation_mode",
             "status",
-            "official_evidence_refs",
             "candidate_evidence_refs",
-            "official_machine_result",
             "candidate_machine_result",
-            "official_command",
             "candidate_command",
-            "positive_assertions",
-            "negative_assertions",
             "evidence_level",
             "rationale",
         }
+        if mode == MODE_DUAL_WIRE:
+            required_row_fields = common_row_fields | {
+                "official_evidence_refs",
+                "official_machine_result",
+                "official_command",
+            }
+        else:
+            required_row_fields = common_row_fields | {"official_authority"}
         if set(row) != required_row_fields:
             raise ConfigurationError(f"逐规则断言 {index} 字段不闭合。")
-        rule = row.get("rule", row.get("rule_id"))
-        status = row.get("status")
-        if rule not in rules:
-            raise ConfigurationError(f"逐规则断言 {index} 引用清单外规则。")
-        if status != "pass":
+        if row.get("status") != "pass":
             raise ConfigurationError(f"逐规则断言 {rule} 没有机器通过，不得接受。")
-        official_paths = _validate_evidence_bindings(
-            row.get("official_evidence_refs"),
-            official_inventory,
-            rule=str(rule),
-            label="官方",
+        if row.get("evidence_level") != "full":
+            raise ConfigurationError(f"逐规则断言 {rule} 证据等级不是 full。")
+        rationale = row.get("rationale")
+        if not isinstance(rationale, str) or not rationale.strip():
+            raise ConfigurationError(f"逐规则断言 {rule} 缺少 rationale。")
+        expected_check_ids = set(
+            _acceptance_expected_check_ids(campaign_dir, classification, str(rule))
         )
         candidate_paths = _validate_evidence_bindings(
             row.get("candidate_evidence_refs"),
             candidate_inventory,
             rule=str(rule),
             label="候选",
-        )
-        if row.get("evidence_level") != "full":
-            raise ConfigurationError(f"逐规则断言 {rule} 证据等级不是 full。")
-        rationale = row.get("rationale")
-        if not isinstance(rationale, str) or not rationale.strip():
-            raise ConfigurationError(f"逐规则断言 {rule} 缺少 rationale。")
-        official_check_ids = _validate_machine_assertion(
-            campaign_dir,
-            manifest,
-            classification,
-            official,
-            row,
-            str(rule),
-            official_paths,
-            side="official",
         )
         candidate_check_ids = _validate_machine_assertion(
             campaign_dir,
@@ -7726,22 +7829,36 @@ def _validate_assertion_results(
             candidate_paths,
             side="candidate",
         )
-        positive = row.get("positive_assertions")
-        negative = row.get("negative_assertions")
-        common_check_ids = official_check_ids & candidate_check_ids
-        if (
-            not isinstance(positive, list)
-            or not positive
-            or not all(isinstance(value, str) for value in positive)
-            or not isinstance(negative, list)
-            or not negative
-            or not all(isinstance(value, str) for value in negative)
-            or set(positive) & set(negative)
-            or not (set(positive) | set(negative)).issubset(common_check_ids)
-        ):
+        if candidate_check_ids != expected_check_ids:
             raise ConfigurationError(
-                f"逐规则断言 {rule} 正例／负例未同时绑定两侧机器检查 ID。"
+                f"逐规则断言 {rule} 候选机器检查与批准画像 check 全集不一致。"
             )
+        if mode == MODE_DUAL_WIRE:
+            official_paths = _validate_evidence_bindings(
+                row.get("official_evidence_refs"),
+                official_inventory,
+                rule=str(rule),
+                label="官方",
+            )
+            official_check_ids = _validate_machine_assertion(
+                campaign_dir,
+                manifest,
+                classification,
+                official,
+                row,
+                str(rule),
+                official_paths,
+                side="official",
+            )
+            if official_check_ids != expected_check_ids:
+                raise ConfigurationError(
+                    f"逐规则断言 {rule} 官方机器检查与批准画像 check 全集不一致。"
+                )
+        else:
+            if row.get("official_authority") != official_authority:
+                raise ConfigurationError(
+                    f"逐规则断言 {rule} 未逐字绑定批准画像官方权威。"
+                )
         seen.append(str(rule))
         passed += 1
     if sorted(seen) != sorted(rules) or len(seen) != len(set(seen)):
