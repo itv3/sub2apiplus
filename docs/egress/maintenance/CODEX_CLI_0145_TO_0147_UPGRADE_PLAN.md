@@ -822,10 +822,26 @@ check；机器结果另含通用 `scenario-artifact-coverage`，它也不是负�
 | ACC-03 seal 门禁 | `e34051ccd` | `assertion_gate.py` 与 seal／stage 契约接线 |
 | ACC-04 编排与 accept | `cd779ba71` | `build_rule_assertion_results.py` 重写、accept 分模式校验 |
 | ACC-05 端到端复验 | `5440acf96` | `test_acceptance_end_to_end.py` |
+| ACC-06 采集流程接线 | `9453131b3`、`e617ea4f2` | `assertion-bundle` 在真实 seal 路径上落位 |
 
 ACC-05 复验另逮住两处集成缺陷并一并修掉：编排器自造断言命令（与 accept 用
 `build_assertion_command` 复算的期望命令永不相等）、编排器仍从仓库冻结画像推导契约
 （与 accept 取批准画像的权威不一致，规则集增删时两端各说各话）。
+
+**ACC-06 是 ACC-01～05 完成后发现的接线缺口**：ACC-02／02b 的产出从未接进采集流程，
+`_capture_assertion_context` 返回的 `evidence_root` 是 job／attempt 根，名字永远不是
+`assertion-bundle`，ACC-03 门禁会让**任何真实 seal 失败**；既有测试走的是构造好的
+stage payload，没覆盖 `_seal_capture_attempt` 的门禁路径，所以没暴露。修复要点：
+
+- capture manifest 必须位于证据根内的 `assertion-bundle/` 子目录；`assertion_context`
+  返回 bundle 自身为 `evidence_root`、`<所属根前缀>/assertion-bundle` 为
+  `evidence_prefix`，机器 check 的相对路径加前缀后逐字命中封存 inventory；
+- bundle 与派生产物权限 0400、目录逐层 0700。`Path.mkdir(parents=True, mode=)` 的 mode
+  只作用于最末层，中间层沿用 umask 默认 0755，会被 `_evidence_permissions_private`
+  拒绝封存；
+- 门禁禁止 bundle 收口自身内容（自引用会让 provenance 看似闭环却未追溯到原始证据）；
+- 权限断言改查 mode 位：采集机以 root 运行，`os.access(W_OK)` 对 0400 文件仍返回真，
+  该差异正是在 Vircs 上跑工具自检时暴露的。
 
 **契约权威边界**：`seal` 门禁在 classify 之前执行，只能以仓库冻结画像做证据充分性
 预检并证明仓库画像未漂移（`FROZEN_CONTRACT_SHA256 = 14e9e336…`，机器推导得
@@ -833,9 +849,12 @@ ACC-05 复验另逮住两处集成缺陷并一并修掉：编排器自造断言�
 `assertion-profile.json` 推导契约——目标规则集允许相对基线增删，验收权威必须随批准
 画像走。
 
-**重新冻结的工具身份**：受管 89 个 `.py/.sh/.json`（原 80 个，新增 6 个工具与 3 份
-schema／契约文件），集合摘要 `246d20de7ecbed21432729f726b045144a85d492d25a011de4784ebae767b282`。
-按 §6.1，新建 Campaign 前该摘要不得再变化。
+**重新冻结的工具身份**：受管 89 个 `.py/.sh/.json`（k34 为 84 个，新增
+`acceptance_contract.py`、`assertion_gate.py`、`build_assertion_bundle.py`、
+`derive_official_observations.py`、`codex_upgrade_rule_assertions_v2.schema.json`），
+集合摘要 `3b6c672ea8b6b2ee40018e2bc95dc1ceef4a53c3c2c2589273f21502d7d46709`
+（本机与 Vircs `candidate-source-k35` 逐字一致，两侧 `make test-capture-tools` 507 项
+全绿）。按 §6.1，新建 Campaign 后该摘要不得再变化。
 
 原始清单（实施依据）：
 
