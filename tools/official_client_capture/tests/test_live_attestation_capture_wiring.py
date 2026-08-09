@@ -73,6 +73,13 @@ class LiveAttestationCaptureWiringTest(unittest.TestCase):
         self.assertIn("update-ca-certificates", body)
         self.assertIn("restart_service", body)
 
+    def test_恢复部署早于_hosts_回灌(self) -> None:
+        """恢复部署会重建容器、Docker 重新生成 hosts；顺序反了复核必然不一致。"""
+
+        redeploy = self.script.index("restore_deploy_without_live_attestation || restore_failed=1")
+        hosts_restore = self.script.index('hosts.before" "$service_container:/tmp/candidate-aux-hosts.restore"')
+        self.assertLess(redeploy, hosts_restore)
+
     def test_缺少坐标时不静默跳过(self) -> None:
         # 未提供 compose 坐标只是不注入，A11 仍会执行并由 assert_2xx 暴露失败。
         self.assertIn(

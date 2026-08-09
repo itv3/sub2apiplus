@@ -483,6 +483,10 @@ restore_environment() {
   fi
 
   # Docker restart 会重建 /etc/hosts；最后按字节恢复运行前快照，随后不再重启。
+  # 恢复部署会重建容器、由 Docker 重新生成 /etc/hosts，必须先拉回原部署，
+  # 再把运行前的 hosts 回灌进最终这个容器，否则复核必然不一致。
+  restore_deploy_without_live_attestation || restore_failed=1
+
   if [[ -s $runtime_dir/hosts.before ]]; then
     docker cp "$runtime_dir/hosts.before" "$service_container:/tmp/candidate-aux-hosts.restore" \
       >/dev/null 2>&1 || restore_failed=1
@@ -501,8 +505,6 @@ restore_environment() {
         >/dev/null 2>&1 || restore_failed=1
     fi
   fi
-
-  restore_deploy_without_live_attestation || restore_failed=1
 
   if [[ $keeper_was_running == true ]]; then
     docker start "$keeper_container" >/dev/null 2>&1 || restore_failed=1
