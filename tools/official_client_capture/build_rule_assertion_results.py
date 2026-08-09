@@ -32,15 +32,17 @@ from typing import Any, Mapping
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from tools.official_client_capture.candidate_rule_assertion import (  # noqa: E402
+    build_assertion_command,
+)
 from tools.official_client_capture.acceptance_contract import (  # noqa: E402
     AcceptanceContractError,
     MODE_CANDIDATE_PROFILE,
     MODE_DUAL_WIRE,
     RESULTS_SCHEMA_V2,
+    build_contract_payload,
     contract_sha256,
     load_profile,
-    repository_profile_path,
-    verify_frozen_contract,
 )
 
 SINGLE_SCHEMA = "codex-candidate-rule-assertion/v1"
@@ -72,39 +74,40 @@ def _binding(path: Path, root: Path) -> dict[str, str]:
 
 def run_side_assertion(
     *,
-    executor: Path,
     rule_id: str,
     capture_manifest: Path,
     evidence_root: Path,
     output: Path,
+    profile: Path,
+    rule_manifest: Path,
     expected_codex_version: str,
-    extra_arguments: Any = None,
+    expected_profile_sha256: str,
 ) -> tuple[list[str], dict[str, Any]]:
-    command = [
-        sys.executable,
-        str(executor),
-        "--rule-id",
-        rule_id,
-        "--capture-manifest",
-        str(capture_manifest),
-        "--evidence-root",
-        str(evidence_root),
-        "--expected-codex-version",
-        expected_codex_version,
-        "--output",
-        str(output),
-    ]
-    if extra_arguments:
-        if not isinstance(extra_arguments, list) or any(
-            not isinstance(value, str) or not value for value in extra_arguments
-        ):
-            raise RuleAssertionError("extra_arguments 必须是非空字符串数组")
-        command.extend(extra_arguments)
+    """执行单规则断言并返回**与 accept 期望逐字一致**的命令。
+
+    命令必须由 `candidate_rule_assertion.build_assertion_command` 这一权威
+    构造器产出：accept 用同一构造器复算期望命令并逐元素比对，编排器另造一套
+    参数形态（解释器路径、executor 绝对路径、缺 profile／rule-manifest）会让
+    结果文档永远无法通过 accept——这是 builder → accept 此前未集成的表现之一。
+    """
+
+    command = build_assertion_command(
+        rule_id=rule_id,
+        capture_manifest=str(capture_manifest),
+        evidence_root=str(evidence_root),
+        profile=str(profile),
+        rule_manifest=str(rule_manifest),
+        expected_codex_version=expected_codex_version,
+        expected_profile_sha256=expected_profile_sha256,
+        output=str(output),
+    )
+    # 命令里的 checker 是仓库相对路径，执行时在仓库根解析，产出的命令保持原样。
     completed = subprocess.run(
         command,
         capture_output=True,
         text=True,
         stdin=subprocess.DEVNULL,
+        cwd=Path(__file__).resolve().parents[2],
     )
     if completed.returncode != 0:
         raise RuleAssertionError(
@@ -309,15 +312,18 @@ def main() -> int:
     except (OSError, json.JSONDecodeError) as error:
         raise SystemExit(f"无法读取配置：{error}") from error
 
+    # 契约权威是本 Campaign 批准的断言画像，不是仓库冻结基线：目标规则集允许
+    # 相对基线增删，验收模型必须随批准画像走（与 accept 侧同源，见 ACC-04）。
+    profile_path = Path(config["assertion_profile"]).resolve(strict=True)
     try:
-        profile = load_profile(repository_profile_path())
-        contract = verify_frozen_contract(profile)
+        contract = build_contract_payload(load_profile(profile_path))
     except AcceptanceContractError as error:
         raise SystemExit(f"验收契约不可用：{error}") from error
     validation_modes = contract["validation_modes"]
     expected_by_rule = contract["expected_check_ids"]
 
-    executor = Path(config["executor"]).resolve(strict=True)
+    rule_manifest_path = Path(config["rule_manifest"]).resolve(strict=True)
+    expected_profile_sha256 = str(config["expected_profile_sha256"])
     official_root = Path(config["official_evidence_root"]).resolve(strict=True)
     candidate_root = Path(config["candidate_evidence_root"]).resolve(strict=True)
     official_manifest = Path(config["official_capture_manifest"]).resolve(strict=True)
@@ -345,24 +351,26 @@ def main() -> int:
         expected_check_ids = list(expected_by_rule[rule_id])
         candidate_output = results_dir / f"{rule_id}.candidate.json"
         candidate = run_side_assertion(
-            executor=executor,
             rule_id=rule_id,
             capture_manifest=candidate_manifest,
             evidence_root=candidate_root,
             output=candidate_output,
+            profile=profile_path,
+            rule_manifest=rule_manifest_path,
             expected_codex_version=target_version,
-            extra_arguments=config.get("candidate_extra_arguments"),
+            expected_profile_sha256=expected_profile_sha256,
         )
         if mode == MODE_DUAL_WIRE:
             official_output = results_dir / f"{rule_id}.official.json"
             official = run_side_assertion(
-                executor=executor,
                 rule_id=rule_id,
                 capture_manifest=official_manifest,
                 evidence_root=official_root,
                 output=official_output,
+                profile=profile_path,
+                rule_manifest=rule_manifest_path,
                 expected_codex_version=target_version,
-                extra_arguments=config.get("official_extra_arguments"),
+                expected_profile_sha256=expected_profile_sha256,
             )
             rule_results.append(
                 build_dual_wire_result(
