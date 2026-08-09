@@ -1,6 +1,6 @@
 # Codex CLI 0.145.0 → 0.147.0 Official Egress 升级计划（执行中）
 
-> 状态：当前 Campaign 已完成 `profile_approved`，但第 7 章候选画像生成因摘要不一致阻断；待修正画像摘要后重新开立 Campaign
+> 状态：Campaign `…-k34` 已到 `compared`，§5～§7 完成、§8 剩 accept → `ready`；Active 仍为 0.145。详见 §10
 > 创建日期：2026-08-07
 > 审阅基线：commit `abf236375f66aa096580092e646c4e33d37bb135`
 > 基线画像：Codex CLI `0.145.0`
@@ -175,11 +175,14 @@ P0 报告必须包含所有命令和输入摘要、临时资产 inventory/hash�
 - L1/L2 源码调用链、原始与脱敏抓包、inventory、attempt result；
 - TLS/HTTP/WS/Body/endpoint/跨请求状态、恢复、secret scan 和 evidence seal。
 
-本次已完成：Campaign `codex-0145-to-0147-20260808T054501Z-k22` 的
-`official_sealed` 已完成，`official/result.json` 状态为 `complete`，
-`stage=capture-official`，封存时间为 `2026-08-08T07:12:23Z`。官方二进制为 `0.147.0`，
+当前有效记录（Campaign `codex-0145-to-0147-20260809T101826Z-k34`）：17 个官方场景一次
+全过，`official/result.json` 状态为 `complete`，`stage=capture-official`，封存时间
+`2026-08-09T10:37:18Z`，共 409 份证据、secret scan findings 0。官方二进制为 `0.147.0`，
 CLI SHA `cb0a1556…`，Code Mode helper SHA `00ecf5d0…`，package asset SHA
 `bd758d53…`；原始证据仍只保留在 Vircs 私有采集根。
+
+k22 及其之前各轮的官方证据保持不可变，但因 §7.4 的工具身份变化已不可继续使用，
+不迁移、不复用。
 
 ### 6.3 累计变化取证
 
@@ -207,24 +210,28 @@ host/path/query/header、framing、代理、TLS 或连接复用。
 新出站面不是失败；未发现、未分类或静默回落旧画像才失败。删除规则必须同时具备源码
 不可达结论、正反场景、旧引用清单和 RemovalReceipt，否则保持 `blocked`。
 
-本次已完成：Campaign `codex-0145-to-0147-20260808T054501Z-k22` 的分类结果为
-`complete`，`classification/result.json` 状态为 `complete`，`stage=classify`，封存时间为
-`2026-08-08T07:38:37Z`。联合摘要为
-`61dc9a7422bb491c580b445ead8ad3ec7ae72c3bb1d47e29ead12ee0534ffafe`；42 条规则、2769 条
-发现全部完成分类，`blocked=0`。批准清单及摘要如下：
+当前有效记录（Campaign `codex-0145-to-0147-20260809T101826Z-k34`）：`classification/result.json`
+状态为 `complete`，`stage=classify`，封存时间 `2026-08-09T10:40:03Z`。联合摘要为
+`d762e73bc980b202d2d9387f3da8bb1b6c361cba8390a63e26be7ab6c5639cba`，classification package
+digest 为 `16e36c8aaa818e3803edd05f66b971a5fe255c50170bb88bb28ba9977ef4e3f0`；42 条规则、
+2750 条发现全部完成分类，`unclassified_count=0`、`blocked=false`。批准清单及摘要如下：
 
 | 清单 | 封存 SHA-256 |
 |---|---|
 | `target-rules.json` | `91616975b1a7e3e3717a99c72a937b8f6901a921c434decb2ee7fdab85c4f75b` |
-| `rule-migration.json` | `4c8984faa65c7fe5d6eaad28067550b4323f3996d84adf30c363edb830454b04` |
-| `scenarios.json` | `ea49de32cb5898547ae8ccf251ba0ecd24ad2ee27517a47ac1a95a7e365d1715` |
-| `profile.json` | `fe7734954b12df6338f69cb659e334d280ae1629e3e2ac9197bcade9c0c2e038` |
+| `rule-migration.json` | `3e8f751eaaeeea6be35af792d7bcc642a5b7bc99c31f192a01a830e40044d792` |
+| `scenarios.json` | `99d1202ea0500ffa96de74434426dac9095be89f932dc412f0642bf5aeb4606f` |
+| `profile.json` | `d9cb89a3d930c5a5466079356cd43a3a8210e0f753aadd6e05606771331eecb6` |
 | `assertion-profile.json` | `9e51781f6d2d92a7f8363e4859f8699c21290ae2cc01ab0539f69de17080feac` |
 
-目标画像为 `codex-0.147.0-official-k22-v1`，Profile digest 为
+目标画像为 `codex-0.147.0-official-k34-v1`，Profile digest 为
 `0d86e033716ab2b7d2161a7015ad000bc0d7cedfaa9e130342eec4ba0637ef9f`。五份清单已写入
 Campaign 的 `classification/approved/`，并通过 stage-contract、文件摘要、画像 payload
 摘要和场景覆盖复核；尚未写入仓库 Active selector。
+
+`target-rules.json` 与 `assertion-profile.json` 的摘要与 k22 逐字相同——规则集本身未变；
+`profile.json` 因 `profile_id` 随 Campaign 变化而摘要不同，但其 payload digest
+（`0d86e033…`）跨轮次恒定，这正是画像内容未漂移的证据。
 
 ## 7. 建立 0.147 画像与第二版本门禁
 
