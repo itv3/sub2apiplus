@@ -3,9 +3,9 @@
   "base_commit": "ba485663c3bc0af6802cf6dfc4e19139ef00e371",
   "retirement_receipt": "docs/egress/maintenance/official-egress-consolidation-retirement.json",
   "retirement_receipt_sha256": "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36",
-  "candidate_path_count": 858,
-  "transition_entry_count": 858,
-  "transition_path_set_sha256": "5841a96c289d958c96ad8ca5a9e0d75495a44b45919f7433d3f0ace15190709e",
+  "candidate_path_count": 859,
+  "transition_entry_count": 859,
+  "transition_path_set_sha256": "8c443114073b81a5bbe7faa55052ced4a77187be7d4b413c2d92772ea2a2db9f",
   "entries": [
     {
       "path": ".github/workflows/backend-ci.yml",
@@ -20567,6 +20567,30 @@
         "mode": "0644",
         "size": 83058,
         "sha256": "d1a4da68eb63d917bf83e9bc525902be6dcf5445c25544e3727cd1de842cf200"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "tools/prepare_assertion_bundle.sh",
+      "scope": "source_gate",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 4752,
+        "sha256": "132606f514d9832e1c3d264e910008a99150842ecd1bec82d56b65a121ac0417"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
