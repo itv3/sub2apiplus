@@ -4540,9 +4540,83 @@ def _prior_complete_results(
             completed.append(item)
         if len({item["id"] for item in completed}) != len(completed):
             raise ConfigurationError("先前失败 attempt 含重复任务收据。")
-        # 旧 attempt 的日志和原始证据不跨 attempt 复用；全部任务重新执行。
-        return []
+        # 承接上一轮已完成的任务，只重跑失败项。这不是无条件复用：调用方必须在本轮
+        # before 探针采完后调用 _verify_environment_continuity，证明「上一轮 after」到
+        # 「本轮 before」之间环境没有漂移。窗口因此首尾相接，被承接的证据仍处在探针
+        # 证明范围内；一旦环境变了，旧证据的前提就不成立，必须整轮重采。
+        for item in completed:
+            item["carried_from_attempt"] = attempt.name
+        return completed
     raise ConfigurationError("--rerun-failed 找不到同身份失败 attempt。")
+
+
+# 承接旧结果时要求逐字相同的探针种类。database 必然随采集增长（usage_logs 等水位表），
+# 由 restoration 的 before_subset 规则单独覆盖，不在此处比较。
+CONTINUITY_PROBE_KINDS = ("service", "containers", "account", "configuration")
+
+
+def _probe_snapshot_digests(manifest: Mapping[str, Any]) -> dict[str, str]:
+    digests: dict[str, str] = {}
+    for snapshot in manifest.get("snapshots") or []:
+        if not isinstance(snapshot, dict):
+            continue
+        kind = snapshot.get("kind")
+        digest = snapshot.get("sha256")
+        if isinstance(kind, str) and isinstance(digest, str):
+            digests[kind] = digest
+    return digests
+
+
+def _verify_environment_continuity(
+    campaign_dir: Path,
+    relative: Path,
+    carried_attempt_ids: set[str],
+    before_manifest: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """证明被承接 attempt 的收尾环境与本轮起始环境一致。
+
+    承接旧任务结果的前提是环境没有在两轮之间发生漂移——否则那些证据描述的是另一套
+    环境。比较 service／containers／account／configuration 四类探针快照；database 会随
+    采集自然增长，由 restoration 的 before_subset 规则单独覆盖。
+    """
+
+    if not carried_attempt_ids:
+        return None
+    if len(carried_attempt_ids) != 1:
+        raise ConfigurationError("承接结果必须全部来自同一个先前 attempt。")
+    source_attempt = next(iter(carried_attempt_ids))
+    after_path = (
+        campaign_dir
+        / relative
+        / "attempts"
+        / source_attempt
+        / "evidence"
+        / "environment"
+        / "after"
+        / "probe-manifest.json"
+    )
+    if after_path.is_symlink() or not after_path.is_file():
+        raise ConfigurationError("被承接 attempt 缺少 after 环境探针，无法证明连续性。")
+    after_manifest = _read_json(after_path, "被承接 attempt 的 after 探针")
+    previous = _probe_snapshot_digests(after_manifest)
+    current = _probe_snapshot_digests(before_manifest)
+    drifted = [
+        kind
+        for kind in CONTINUITY_PROBE_KINDS
+        if previous.get(kind) != current.get(kind)
+    ]
+    if drifted:
+        raise ConfigurationError(
+            "承接失败：上一轮结束后环境已漂移（"
+            + "、".join(drifted)
+            + "），被承接任务的证据前提不再成立，请不带 --rerun-failed 整轮重采。"
+        )
+    return {
+        "schema_version": "codex-upgrade-attempt-continuity/v1",
+        "source_attempt_id": source_attempt,
+        "compared_kinds": list(CONTINUITY_PROBE_KINDS),
+        "source_after_probe_sha256": file_sha256(after_path),
+    }
 
 
 def _capture_attempt_relative(phase: str, candidate_id: str | None) -> Path:
@@ -5258,9 +5332,20 @@ def _run_capture_attempt(
     after_manifest: dict[str, Any] | None = None
     restoration_path: Path | None = None
     restoration_receipt: dict[str, Any] | None = None
+    continuity: dict[str, Any] | None = None
     try:
         before_manifest = _probe_capture_environment(
             manifest, environment_root / "before", "before"
+        )
+        continuity = _verify_environment_continuity(
+            campaign_dir,
+            attempt_relative,
+            {
+                str(item.get("carried_from_attempt"))
+                for item in prior_results
+                if item.get("carried_from_attempt")
+            },
+            before_manifest,
         )
     except BaseException as error:
         execution_error = error
@@ -5373,6 +5458,7 @@ def _run_capture_attempt(
             "phase": phase,
             "candidate_id": candidate_id,
             "status": status,
+            "continuity": continuity,
             "identity": identity,
             "results": results,
             "evidence_roots": [str(root) for root in evidence_roots],
