@@ -527,12 +527,27 @@ artifact、集合相同、顺序种类 ≥`minimum_distinct_orders` 的子集。
 `candidate-ws-handshake-repeat` 两个 job，用独立 batch-id 与独立证据根重跑
 `codex-ws direct`，把 A02 的 artifact 数由 3 提升到 6。
 
-#### 10.9.3 处置原则与待定案项
+#### 10.9.3 逐场景定案（已实施）
 
-每个缺口须逐项判定属于哪一类，**不得由执行者临时决定**（历轮 capture-manifest 由执行者手写正是缺陷来源）：
+每个缺口按三类判定，**不由执行者临时决定**（历轮 capture-manifest 由执行者手写正是
+缺陷来源）：
 
-1. **该采而未采** → 补 capture job（如 A02 的处置）；
-2. **场景定义写错** → 修订该场景的 `required_artifact_kinds`，附实证；
-3. **判据与采集能力错配** → classify 标 `change` 并附实证（如 SPEC-TLS-003）。
+| 场景 | 判定 | 处置 |
+|---|---|---|
+| A05／A06 | 编目漏标 | relay 字节里本就到处是 WS 升级（relay-compact 12 个、各 job 1-2 个）。`rsv1_deflate` 只能从原始帧得到（mitm 记录已解压），故绑到 turnstate-compact（Lite）与 runtime-metrics（非 Lite） |
+| A12 | 编目 kind 选错 | `request.bin` 是明文 H1 请求字节，`wire_dump` → `relay_binary` |
+| A01 | 场景定义与采集形态不符 | `[pcap, relay_binary]` → `[pcap, process_trace]`：official-core 是 direct+mitm 矩阵，不产字节中继，明文观测经 mitm 派生 |
+| A15 | 同上 | `[process_trace, relay_binary]` → `[process_trace]` |
+| A11／A14 | 真缺证据 | realtime-webrtc 与 file-upload 开启 `CAPTURE_CLIENT_HELLO` 抓包 |
+| A13 | 真缺 job | 新增 `official-relay-oauth-refresh` |
 
-8 个缺口尚未定案，是 §6.2 `seal` 的唯一阻塞项。定案并实施后，按 §10.7 顺序推进。
+**relay 劫持不影响 SNI 证据**：中继按 hosts 把域名劫持到 127.0.0.1，但 SNI 由客户端
+填写、与实际 IP 无关，因此抓到的域名就是 CLI 真实意图连接的
+`api.openai.com`／`auth.openai.com`／`*.oaiusercontent.com`——SPEC-EP-002 正是验这一点。
+
+**A13 的触发属 I 类干预**：只把 `auth.json` 的 `last_refresh` 提前，让官方 CLI 自行
+判定需要刷新；`access_token`／`refresh_token`／账号绑定一律不改，退出时逐字还原。
+刷新请求本身由官方 CLI 构造并发出，出站形态未被替换。
+
+定案后 15 个场景全部有 job 绑定，工具身份随之变化，k35 作废并按 §6.1 新建 k36
+（28 个 job）重做官方取证。
