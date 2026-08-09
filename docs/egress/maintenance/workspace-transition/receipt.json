@@ -1,7 +1,7 @@
 {
   "schema_version": "official-egress-maintenance-workspace-transition-receipt/v1",
   "manifest_path": "docs/egress/maintenance/workspace-transition/manifest.json",
-  "manifest_sha256": "e357a110e7da944de18071ed456a3ad99be2beadec2e3a0fceb948b98a34b5b6",
+  "manifest_sha256": "b0d9ae89605e37b1b2a90dbcc747831217c18ad705abac1a01075a55d66fc2d0",
   "base_commit": "ba485663c3bc0af6802cf6dfc4e19139ef00e371",
   "retirement_receipt_sha256": "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36",
   "transition_entry_count": 841,
