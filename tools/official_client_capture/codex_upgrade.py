@@ -38,6 +38,17 @@ from tools.official_client_capture.capturelib.security import (
     secure_write_json,
     secure_write_text,
 )
+from tools.official_client_capture.acceptance_contract import (
+    AcceptanceContractError,
+    load_profile as load_acceptance_profile,
+    repository_profile_path as acceptance_profile_path,
+    verify_frozen_contract,
+)
+from tools.official_client_capture.assertion_gate import (
+    AssertionGateError,
+    run_assertion_gate,
+    validate_gate_receipt,
+)
 from tools.official_client_capture.candidate_evidence_guard import (
     scan_files_for_secrets,
 )
@@ -2652,12 +2663,22 @@ def _validate_stage_contract(document: dict[str, Any]) -> None:
             "surface",
             "client_bindings",
             "assertion_context",
+            "assertion_gate",
             "restoration",
             "security",
         }
         missing = sorted(required - set(document))
         if missing:
             raise ConfigurationError(f"抓包阶段收据缺少字段：{missing}")
+        try:
+            validate_gate_receipt(
+                document.get("assertion_gate"),
+                side="official" if stage == "capture-official" else "candidate",
+            )
+        except AssertionGateError as error:
+            raise ConfigurationError(
+                f"抓包阶段断言门禁收据非法：{error}"
+            ) from error
         if not isinstance(document["results"], list) or not document["results"]:
             raise ConfigurationError("抓包阶段 results 不能为空。")
         _require_file_binding(document.get("attempt"), "抓包 attempt")
@@ -4102,6 +4123,40 @@ def _capture_assertion_context(
         "evidence_root": str(evidence_root),
         "evidence_prefix": prefix,
     }
+
+
+def _run_seal_assertion_gate(
+    assertion_context: dict[str, Any],
+    roots: list[Path],
+    *,
+    phase: str,
+    target_version: str,
+) -> dict[str, Any]:
+    """ACC-03：seal 前按分侧验收契约执行断言门禁，任一失败拒绝封存。"""
+
+    bundle_dir = Path(assertion_context["evidence_root"])
+    bundle_resolved = bundle_dir.resolve(strict=False)
+    # bundle 自身不是复制来源；其余证据根按 inventory 前缀参与 provenance 重放。
+    source_roots = {
+        prefix: root
+        for root, prefix in _evidence_root_map(roots)
+        if root != bundle_resolved
+    }
+    try:
+        profile = load_acceptance_profile(acceptance_profile_path())
+        contract = verify_frozen_contract(profile)
+        return run_assertion_gate(
+            bundle_dir=bundle_dir,
+            source_roots=source_roots,
+            side="official" if phase == "official" else "candidate",
+            profile=profile,
+            contract=contract,
+            target_version=target_version,
+        )
+    except (AcceptanceContractError, AssertionGateError) as error:
+        raise ConfigurationError(
+            f"{phase} seal 断言门禁失败：{error}"
+        ) from error
 
 
 def _validate_restoration_report(
@@ -5718,6 +5773,12 @@ def _seal_capture_attempt(
         roots,
         target_version=manifest["target_version"],
     )
+    assertion_gate = _run_seal_assertion_gate(
+        assertion_context,
+        roots,
+        phase=phase,
+        target_version=manifest["target_version"],
+    )
     client_bindings: list[dict[str, Any]] = []
     observed_profile: dict[str, str] | None = None
     if phase == "candidate":
@@ -5811,6 +5872,7 @@ def _seal_capture_attempt(
         "surface": surface_binding,
         "client_bindings": client_bindings,
         "assertion_context": assertion_context,
+        "assertion_gate": assertion_gate,
         "restoration": restoration,
         "security": {"raw_evidence_private": raw_evidence_private, **security},
     }

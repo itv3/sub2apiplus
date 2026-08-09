@@ -1119,6 +1119,22 @@ class CodexUpgradeTest(unittest.TestCase):
                 "evidence_root": str(evidence_root.resolve()),
                 "evidence_prefix": prefix,
             },
+            "assertion_gate": {
+                "side": "official" if phase == "official" else "candidate",
+                "bundle_dir_name": "assertion-bundle",
+                "bundle_provenance_sha256": "1" * 64,
+                "bundle_entry_count": 1,
+                "derived_provenance_sha256": None,
+                "capture_manifest": {
+                    "path": "capture-manifest.json",
+                    "sha256": capture_binding["sha256"],
+                },
+                "acceptance_contract_sha256": "2" * 64,
+                "artifact_count": 1,
+                "observation_count": 1,
+                "checked_rule_count": 1,
+                "checked_check_count": 1,
+            },
             "restoration": restoration,
             "security": {
                 "raw_evidence_private": True,
