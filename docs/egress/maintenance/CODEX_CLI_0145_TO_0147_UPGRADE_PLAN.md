@@ -1,6 +1,6 @@
 # Codex CLI 0.145.0 → 0.147.0 Official Egress 升级计划（执行中）
 
-> 状态：Campaign `…-k34` 已到 `compared`，§5～§7 完成、§8 剩 accept → `ready`；Active 仍为 0.145。详见 §10
+> 状态：Campaign `…-k34` 已到 `compared`；§8 的 `accept` 实证阻断，根因见 §10.8，**待第三方审核后再动工**。Active 仍为 0.145
 > 创建日期：2026-08-07
 > 审阅基线：commit `abf236375f66aa096580092e646c4e33d37bb135`
 > 基线画像：Codex CLI `0.145.0`
@@ -523,3 +523,155 @@ capture-candidate run（8 个任务）
 4. 收尾：恢复分组 9 的 `allow_image_generation`（原值 false）。
 
 用户已授权按第 5→6→7→8→9 章连续执行；每个变更集完成并自复核后自动进入下一项。
+
+### 10.8 `accept` 实证阻断与根因（待第三方审核，未修复）
+
+> §10.7 第 1 项已在 k34 上实测阻断。本节记录实证、根因与建议，**尚未实施任何修复**。
+> 结论供第三方工程师复核后再决定是否动工。
+
+#### 10.8.1 阻断现象
+
+在 k34（`compared`）上按 compare 阶段自动生成的
+`assertions/<candidate-id>/results.template.json` 中的权威命令执行单规则断言，
+SPEC-TLS-001 四个 check 全部失败，且 `actual.values` 为**空数组**——不是取值不符，
+而是一条记录都没被选中：
+
+```
+scenario-artifact-coverage  FAIL  actual=null
+http-clienthello-count      FAIL  actual=null
+cipher-count                FAIL  actual=[]
+alpn-absent                 FAIL  actual=[]
+```
+
+复现：取 `results.template.json` 中任一规则的 `official_command` 原样执行即可。
+所用参数（manifest／evidence-root／profile／`--expected-profile-sha256`）与模板逐字一致，
+排除调用方配置错误。
+
+#### 10.8.2 已核实：原始证据齐备，无需重采
+
+初次排查曾误判为"证据缺失"，原因是只枚举了单个 run 目录。以 `official/result.json` 的
+`evidence_inventory` 为准，409 条证据分布在 **20 个 run 目录**：
+
+| run 目录 | 条目数 |
+|---|---|
+| `oauth-<campaign>` | 142 |
+| `<campaign>-official-relay-compact` | 55 |
+| `<campaign>-official-image-edit` | 17 |
+| 其余 17 个 relay／辅助 run 目录 | 195 |
+
+17 个官方 job 中 14 个为 relay job，k34 全部通过。relay 产物形如
+`relay/conn022.client_to_upstream.bin`，内容为明文 HTTP/1.1：
+
+```
+GET /backend-api/codex/responses HTTP/1.1
+Host: chatgpt.com
+Connection: Upgrade
+Upgrade: websocket
+```
+
+`candidate_rule_assertion.py` 的 `h1_request_stream` 解析器本就支持该形态，可直接产出
+`http_request` 与 `websocket_frame` 记录（覆盖 42 条规则中 25 条所需的全部记录类型）。
+**因此不需要新增观测派生器，也不需要重新采集。**
+
+#### 10.8.3 缺陷一：capture-manifest 覆盖不全（本次操作失误）
+
+两侧 `capture-manifest.json` 各只登记 6 个 pcap，其余 403 份证据未登记；且标签语义与
+断言画像不一致：
+
+| | 取值 |
+|---|---|
+| 断言画像 `select.where` 要求 | `labels.transport == "http"`、`labels.ca_mode == "system"` |
+| manifest 实际 | `transport: "direct"`，无 `ca_mode` |
+
+`transport` 在两处不同义：manifest 用于表达"直连／代理"，断言画像用于表达协议面。
+该 manifest 由本次执行者在 k33／k34 为通过 seal 临时编写的规则文件生成，只覆盖了主
+run 目录，属操作失误。但**即使登记完整，10.8.4 与 10.8.5 仍会使 accept 失败**。
+
+#### 10.8.4 缺陷二：机器命令只取 20 个证据根中的 1 个
+
+`tools/official_client_capture/codex_upgrade.py:7389`：
+
+```python
+evidence_root=str(context.get("evidence_root", "")),
+```
+
+`_campaign_machine_command`（同文件 `:7368`）以**单数** `evidence_root` 构造断言命令，
+而 official stage 实际封存的是 `evidence_roots`（复数，本轮 20 个，见
+`official/result.json`）。因此模板为每条规则生成的命令只能看到约 1/20 的证据，
+relay 证据全部在断言器视野之外。
+
+#### 10.8.5 缺陷三：断言证据路径与 inventory 路径空间不一致
+
+`_validate_evidence_bindings`（`codex_upgrade.py:7338`）以
+`inventory.get(path) != digest` 逐条校验断言引用的证据：
+
+- inventory 条目路径带 run 目录名前缀，如
+  `oauth-<campaign>/mitm/codex-http/s1/models-http.jsonl`；
+- 断言器产出的 `evidence_paths` 相对单个 `--evidence-root`，如
+  `mitm/codex-http/s1/models-http.jsonl`。
+
+两者不在同一路径空间，校验必然失败。该缺陷与 10.8.4 同源：多根证据被单根接口消费。
+
+#### 10.8.6 缺陷四：`seal` 不校验场景证据充分性
+
+`codex_upgrade_scenarios_0_145_0.json` 同时定义了 `evidence_scenarios`（每个场景的
+`required_artifact_kinds`）与 `capture_jobs`（每个 job 的 `scenario_ids`），但两者之间
+没有任何强制校验，`seal` 也不检查 capture-manifest 是否满足各场景的
+`required_artifact_kinds`。因此一份只登记 6 个 pcap 的 manifest 仍可通过封存，
+缺陷一直到 accept 才暴露。
+
+15 个在用场景的要求为：
+
+```
+A01 pcap,relay_binary          A09 relay_binary,process_trace
+A02 pcap                        A10 relay_binary,process_trace
+A03 relay_binary,process_trace  A11 pcap,relay_binary,process_trace
+A04 relay_binary,process_trace  A12 relay_binary
+A05 relay_binary,websocket_trace A13 pcap,relay_binary
+A06 relay_binary,websocket_trace A14 pcap,relay_binary,process_trace
+A07 relay_binary,process_trace  A15 relay_binary,process_trace
+A08 relay_binary,process_trace
+```
+
+#### 10.8.7 已验证可行的部分
+
+在不触碰封存证据的前提下（临时 evidence root，证据只读复制）验证过两点：
+
+1. 由官方 mitm 流记录派生 `codex-candidate-observation/v1` 记录并登记 manifest 后，
+   SPEC-EP-006 的 `models-method-path-query` **通过**；
+2. observation 的 `source_artifacts` 必须同为 manifest 内登记项，否则报
+   "结构化 trace 引用了 manifest 外证据"——原始证据需以 `opaque_bound_source` 一并登记。
+
+说明断言判据、画像加载、`--expected-profile-sha256` 覆盖冻结摘要的用法均正常，
+阻断集中在证据索引与路径接线层。
+
+#### 10.8.8 另需复核：验收结果编排器的正负例划分
+
+`accept` 对 results 文档的要求（`codex_upgrade.py:7598` 起）为：每条规则
+`status == "pass"`、`evidence_level == "full"`、`positive_assertions` 与
+`negative_assertions` **均非空**且互不相交、且同为双侧机器 check ID 交集的子集。
+
+`build_rule_assertion_results.py`（`0930a05aa`）按 check 的 `passed` 真假划分正负例，
+与上述语义不符：正负例是对检查项的**语义分类**（正向断言／反向断言），不是执行结果。
+该工具尚未实跑过，需一并修订。
+
+#### 10.8.9 建议的修复范围（未实施）
+
+1. `_campaign_machine_command` 与断言器接口支持多证据根，或统一改为以 inventory
+   路径空间为准；
+2. `_validate_evidence_bindings` 与断言器 `evidence_paths` 对齐同一路径基准；
+3. `seal` 增加场景证据充分性门禁：manifest 必须覆盖各在用场景的
+   `required_artifact_kinds`，不满足即失败关闭；
+4. 重写两侧 capture-manifest 生成规则：覆盖全部 run 目录，标签语义对齐断言画像的
+   `select.where`；
+5. 修订 `build_rule_assertion_results.py` 的正负例划分。
+
+第 1～3 项位于受管工具目录，一经改动 k34 即作废（工具身份冻结），需按 §6.1 重新
+建立 Campaign 并重做官方取证、分类与候选采集。故建议五项一次性完成后再开新 Campaign。
+
+#### 10.8.10 结论
+
+历史 25 个 Campaign 中无任何一个产出过 `assertions/<candidate-id>/results.json`，
+k34 是首个到达 `compared` 的轮次。`accept` 从未被走通的原因不是证据不足、也不是本
+升级计划的阶段划分有误，而是**该环节的多根证据接线从未接通**；前序轮次均阻断于候选
+seal，未触及此处，因此长期未暴露。

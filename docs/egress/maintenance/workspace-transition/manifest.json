@@ -12357,8 +12357,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 32309,
-        "sha256": "19c1f513631f7334b592f23c2c56a12a62b34cfcbfa304950082fa03b06b7cb9"
+        "size": 39648,
+        "sha256": "37c2ee807937f0186365b40e2e5c54d93dbc8339797c9c9cf6b016252109b185"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
