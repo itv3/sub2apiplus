@@ -776,9 +776,12 @@ def _structured_records(path: Path, parser: str) -> list[Any]:
                 object_pairs_hook=_unique_json_object,
             )
             return payload if isinstance(payload, list) else [payload]
+        # 按 \n 切分而非 splitlines()：后者会在 \x85／\u2028 等 Unicode 行
+        # 分隔符处误切，而它们可合法出现在 JSON 字符串内部（真实 mitm 记录即含
+        # \x85），会把一条记录截断成两条非法 JSON。
         return [
             json.loads(line, object_pairs_hook=_unique_json_object)
-            for line in path.read_text(encoding="utf-8").splitlines()
+            for line in path.read_text(encoding="utf-8").split("\n")
             if line.strip()
         ]
     except (OSError, UnicodeError, json.JSONDecodeError) as error:

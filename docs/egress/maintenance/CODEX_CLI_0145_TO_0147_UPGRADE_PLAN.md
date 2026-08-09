@@ -1,6 +1,6 @@
 # Codex CLI 0.145.0 → 0.147.0 Official Egress 升级计划（执行中）
 
-> 状态：Campaign `…-k34` 停在 `compared`（不可变、不再推进）；§8 的 `accept` 实证阻断，根因见 §10.8。ACC-01～05 六项修复已实施且门禁全绿，**待第三方审核后按 §6.1 新建 Campaign**。Active 仍为 0.145
+> 状态：当前 Campaign `…-k35`，位于 **§6 之内**（官方 `run` 17/17 完成，`seal` 未通过）。第一层的验收链路接线已闭环（§10.8，ACC-01～07）；当前阻塞项是第二层的采集覆盖缺口（§10.9，8／15 场景待定案）。k34 已作废停在 `compared`。Active 仍为 0.145
 > 创建日期：2026-08-07
 > 审阅基线：commit `abf236375f66aa096580092e646c4e33d37bb135`
 > 基线画像：Codex CLI `0.145.0`
@@ -420,26 +420,27 @@ final-wire 可用，但不能替代 alpha 真实 service 链或 `server_response
 
 ## 10. 当前执行状态
 
-> 时间：2026-08-09。当前 Campaign `codex-0145-to-0147-20260809T101826Z-k34`，状态 `compared`。
+> 时间：2026-08-10。当前 Campaign `codex-0145-to-0147-20260809T170000Z-k35`。
 > **Active 仍为 0.145，0.147 尚未替换。**
 
 ### 10.1 按章节的真实进度
 
+**当前位置：§6 之内，卡在 §6.2 `official_sealed` 之前。§6.4 classify 从未执行过。**
+
 | 章节 | 状态 | 依据 |
 |---|---|---|
-| §5 DOC-PRE 与 P0 | **完成** | 不依赖 Campaign，结论长期有效 |
-| §6 Campaign／官方取证／分类 | **完成** | 官方采集 17/17 一次通过；封存 409 文件、findings 0；classify 42 规则 complete |
-| §7 建立 0.147 画像 | **完成** | `stage-profile` 产出候选 RuntimeCatalog，`production_selector_changed: false` |
-| §8 Candidate／比较／`ready` | **阻断** | k34 候选采集 8/8、封存 complete（528 文件、findings 0）、compare complete；`accept` 实证阻断，根因与修复见 §10.8，k34 停在 `compared` |
-| §9 生产启用与回滚 | **未开始** | |
+| §5 DOC-PRE 与 P0 | 完成 | 不依赖 Campaign，结论长期有效 |
+| §6 Campaign／官方取证／分类 | **进行中** | k35 `planned` 完成；官方 `run` 17/17 complete；`seal` 未通过，见 §10.9 |
+| §7 建立 0.147 画像 | 未开始 | |
+| §8 Candidate／比较／`ready` | 未开始 | |
+| §9 生产启用与回滚 | 未开始 | |
 
-以上 §5～§7 的"完成"针对 k34。因 ACC-01～05 改变了受管工具身份，正式验收必须按新
-Campaign 重做官方取证、分类、画像与候选采集；k34 的证据只用于根因复现、只读分析与
-离线测试夹具，不迁移为新 Campaign 的正式证据。
+k34 曾到达 `compared`，但 ACC-01～07 改变了受管工具身份，k34 已作废并停在 `compared`，
+其证据只用于根因复现与离线夹具，不迁移。**ACC-01～07 全部发生在「§6.2 seal 之前」这
+一个点上**，是让 seal 有可能通过的前置修复，不构成章节推进。
 
-0.147 画像 digest `0d86e033716ab2b7d2161a7015ad000bc0d7cedfaa9e130342eec4ba0637ef9f`，
-经 k26／k27／k28／k29／k33／k34 六次独立产出逐字一致；compare 的
-`profile_binding_matches` 为真。
+0.147 画像 digest `0d86e033716ab2b7d2161a7015ad000bc0d7cedfaa9e130342eec4ba0637ef9f`
+由 k26～k34 六次独立产出逐字一致，可作为后续画像复算的对照。
 
 ### 10.2 候选验收链路的正确顺序（此前一直做反）
 
@@ -523,31 +524,25 @@ capture-candidate run（8 个任务）
 
 ### 10.7 剩余路径
 
-> k34 不再推进（§10.8）。以下为**新 Campaign** 的路径；ACC-01～05 已实施，等待审核。
-
-1. 第三方审核 ACC-01～05（§10.8.11），通过后按 §6.1 新建 Campaign；
-2. 重做官方取证、分类、画像与候选采集、比较（工具身份已变，k34 证据不迁移）；
-3. `accept`：按 §10.8.10 的 `dual_wire`／`candidate_profile` 两种模式执行 42 条必需规则并汇总，
-   由 `build_rule_assertion_results.py` 编排；不再对 17 条内部事实规则强制执行官方侧同构断言；
-4. `ready`：重放 accept、收据、安全与 evidence seal；
+1. **§10.9 的采集覆盖缺口**：8／15 场景待逐项定案（补 job／改场景定义／classify 标
+   `change`），这是当前唯一阻塞项；
+2. `official_sealed`：编目 → 收口 → 派生 → seal 门禁 → 封存；
+3. `profile_approved`：classify 42 规则，含 SPEC-TLS-003 的判据修订（§10.9.2）；
+4. §7 建立画像 → §8 候选采集、compare、新 `accept` → `ready`；
 5. §9 生产启用：canary、切换、回滚演练、恢复后 final-wire，最终 Active=0.147 / Previous=0.145；
 6. 收尾：恢复分组 9 的 `allow_image_generation`（原值 false）。
 
-用户已授权按第 5→6→7→8→9 章连续执行；每个变更集完成并自复核后自动进入下一项。第 1 项
-的审核门是 §10.8.11 明确要求的例外，不在该连续执行授权范围内。
+用户已授权按第 5→6→7→8→9 章连续执行；涉及规则判据变更或场景定义变更时须先定案。
 
-### 10.8 `accept` 实证阻断与根因（审核后收敛，未修复）
+### 10.8 第一层：验收链路接线（已闭环）
 
-> §10.7 第 1 项已在 k34 上实测阻断。第三方审核确认：多证据根接线缺陷属实，但原结论
-> 把问题过度收窄为索引接线，遗漏了双侧证据模型和正负例契约缺陷。本节记录审核后的
-> 完整结论与最小安全闭环，**尚未实施任何修复，也不授权继续推进 k34**。
+> **本节六项缺陷已全部修复并在 k35 真实证据上验证通过**（ACC-01～07，见 §10.8.11）。
+> 验收模型（§10.8.10）成立，不需重做。
 >
-> 本节的验收模型取代 §10.7 第 1 项“42 条规则双侧各执行一次（84 次）”的旧表述；旧表述
-> 只保留为 k34 的阻断路径，不再作为后续 Campaign 的实施依据。
->
-> 二次复核（2026-08-09）确认六项根因与验收模型方向成立，另发现官方侧 21／25 条 wire
-> 规则的场景 artifact 覆盖依赖 `process_trace`／`websocket_trace` 结构化记录而无正式
-> 产出器；已按复核结论增补 10.8.9 实证、10.8.10 分侧覆盖语义与 10.8.11 的 ACC-02b。
+> 但本节有一个未经验证的前提：「证据齐备，只是接线错了」。§10.8.9 的实证只覆盖单条
+> 规则、单个证据根，不足以支撑该前提。修好接线、真正跑通编目后暴露出**第二层问题**：
+> 场景定义与采集能力错配，见 §10.9。两层是不同问题——接线不通就跑不到编目，跑不到
+> 编目就看不见证据缺口。
 
 #### 10.8.1 阻断现象
 
@@ -808,11 +803,10 @@ check；机器结果另含通用 `scenario-artifact-coverage`，它也不是负�
 该模型保持升级目标不变：以真实官方 0.147 画像为权威，证明候选完整实现 42 条规则；只移除
 “官方侧必须生成 Sub2API 内部事实”和“每条规则人工填写正负列表”两个没有事实来源的要求。
 
-#### 10.8.11 实施变更集与开工条件（六项已实施，待审核）
+#### 10.8.11 实施记录（全部完成）
 
-> 2026-08-09 已按下列顺序逐项实施并自复核，每项独立提交、`make test-capture-tools`
-> 与 `make check-egress-spec` 全绿。**尚未新建 Campaign**，Active 仍为 0.145，k34
-> 保持不可变并停在 `compared`。
+七项变更集已实施并自复核，每项独立提交，`make test-capture-tools`（524 项）与
+`make check-egress-spec` 全绿：
 
 | 变更集 | 提交 | 交付物 |
 |---|---|---|
@@ -823,25 +817,21 @@ check；机器结果另含通用 `scenario-artifact-coverage`，它也不是负�
 | ACC-04 编排与 accept | `cd779ba71` | `build_rule_assertion_results.py` 重写、accept 分模式校验 |
 | ACC-05 端到端复验 | `5440acf96` | `test_acceptance_end_to_end.py` |
 | ACC-06 采集流程接线 | `9453131b3`、`e617ea4f2` | `assertion-bundle` 在真实 seal 路径上落位 |
+| ACC-07 证据编目 | 待提交 | `build_evidence_catalog.py`、`codex_upgrade_evidence_labels_0_145_0.json` |
 
-ACC-05 复验另逮住两处集成缺陷并一并修掉：编排器自造断言命令（与 accept 用
-`build_assertion_command` 复算的期望命令永不相等）、编排器仍从仓库冻结画像推导契约
-（与 accept 取批准画像的权威不一致，规则集增删时两端各说各话）。
+实施中另发现并修复四处真实缺陷：编排器自造断言命令（与 accept 复算的期望命令永不
+相等）、编排器与 accept 的契约权威不同源、`assertion-bundle` 从未接进采集流程（任何
+真实 seal 都会被门禁拒绝）、`str.splitlines()` 在 JSON 内的 `\x85`／`\u2028` 处误切
+JSON Lines（真实 mitm 记录含 `\x85`，一条记录被截断成两条非法 JSON）。
 
-**ACC-06 是 ACC-01～05 完成后发现的接线缺口**：ACC-02／02b 的产出从未接进采集流程，
-`_capture_assertion_context` 返回的 `evidence_root` 是 job／attempt 根，名字永远不是
-`assertion-bundle`，ACC-03 门禁会让**任何真实 seal 失败**；既有测试走的是构造好的
-stage payload，没覆盖 `_seal_capture_attempt` 的门禁路径，所以没暴露。修复要点：
+**k35 实证**：编目 94 项收口、105 项派生、199 个 artifact；`SPEC-TLS-001` 三条 check
+全部通过——历史上第一次有官方侧 wire 规则在真实 0.147 证据上跑出 pass。
 
-- capture manifest 必须位于证据根内的 `assertion-bundle/` 子目录；`assertion_context`
-  返回 bundle 自身为 `evidence_root`、`<所属根前缀>/assertion-bundle` 为
-  `evidence_prefix`，机器 check 的相对路径加前缀后逐字命中封存 inventory；
-- bundle 与派生产物权限 0400、目录逐层 0700。`Path.mkdir(parents=True, mode=)` 的 mode
-  只作用于最末层，中间层沿用 umask 默认 0755，会被 `_evidence_permissions_private`
-  拒绝封存；
-- 门禁禁止 bundle 收口自身内容（自引用会让 provenance 看似闭环却未追溯到原始证据）；
-- 权限断言改查 mode 位：采集机以 root 运行，`os.access(W_OK)` 对 0400 文件仍返回真，
-  该差异正是在 Vircs 上跑工具自检时暴露的。
+**证据标签权威**（ACC-07 的核心边界）：manifest 的 `labels` 一律来自冻结声明，描述
+采集时已确定的**实验条件**（CA 模式、协议面、residency 等）；编目器只做路径匹配，
+不打开任何证据文件。判据独立性要求：标签不得由该标签所选中的判据正在验证的属性反推，
+否则判据退化为同义反复。声明每条规则必须给出 `rationale` 说明标签如何由采集参数或
+场景 precondition 得出。
 
 **契约权威边界**：`seal` 门禁在 classify 之前执行，只能以仓库冻结画像做证据充分性
 预检并证明仓库画像未漂移（`FROZEN_CONTRACT_SHA256 = 14e9e336…`，机器推导得
@@ -897,3 +887,63 @@ stage payload，没覆盖 `_seal_capture_attempt` 的门禁路径，所以没暴
 k34 的官方／候选证据和 compare 结论仍有诊断价值，但因工具身份与验收契约将变化，不得迁移
 为新 Campaign 的正式证据。后续只实现 10.8.10 定义的最小安全闭环，不借本次画像升级继续
 扩张无关验收基础设施；新 Campaign 到达 `ready` 前，Active 始终保持 0.145。
+
+### 10.9 第二层：采集覆盖与判据错配（当前阻塞项）
+
+修好验收链路、真正跑通编目后暴露的问题：**场景定义的 `required_artifact_kinds` 与
+capture job 实际产出的证据类型系统性错配**。与 §10.8 不是同一层——接线不通就跑不到
+编目，跑不到编目就看不见证据缺口。
+
+根因同 §10.8.12：历史 25 个 Campaign 无一产出过 `results.json`，链路错配与证据错配
+两层问题一直并存，只能逐层剥离。
+
+#### 10.9.1 缺口清单（k35 官方侧实测，8／15 场景）
+
+| 场景 | 要求 kinds | 实际可编目 | 缺 |
+|---|---|---|---|
+| A01 | pcap, relay_binary | pcap | `relay_binary` |
+| A05 | relay_binary, websocket_trace | 无 | 两者 |
+| A06 | relay_binary, websocket_trace | 无 | 两者 |
+| A11 | pcap, process_trace, relay_binary | process_trace, relay_binary | `pcap` |
+| A12 | relay_binary | pcap, process_trace, wire_dump | `relay_binary` |
+| A13 | pcap, relay_binary | **无任何证据** | 两者 |
+| A14 | pcap, process_trace, relay_binary | process_trace, relay_binary | `pcap` |
+| A15 | process_trace, relay_binary | process_trace, wire_dump | `relay_binary` |
+
+典型成因：
+
+- **A01** 绑定 `official-core`，而该 job 只做 direct／mitm 采集，不产 relay 字节；
+- **A05／A06** 要求 `websocket_trace`，但没有任何 job 产出该 kind；
+- **A13**（OAuth refresh）官方侧完全没有 job 覆盖——§7.7 记录过它属候选侧辅助采集。
+
+#### 10.9.2 SPEC-TLS-003 判据缺陷（同类问题的独立实例）
+
+判据 `same_set_distinct_order` 要求全部选中记录的扩展集合相等、来自 ≥4 个 artifact。
+实测：每份 `codex-ws` pcap 都同时含 native-tls（30 cipher／11 扩展）与 rustls
+（10 cipher／10 扩展）两种握手——Codex CLI 每次启动都拉 models，那是 HTTP 握手，
+必然与随后的 WS 握手落进同一份 pcap。集合不等，判据恒假；补采同构 pcap 无效。
+
+**不能靠标签分流绕开**：可用于分流的信号（cipher 数、扩展集合、ALPN）恰好是共用
+`labels.transport` 的 `SPEC-TLS-001`／`SPEC-PROTO-001` 正在验证的属性，用它分流会使
+判据退化为同义反复。加密抓包下不存在第四个独立信号；抓包窗口覆盖整个 case，采集侧
+也无法分离。
+
+**定案**：走 §6.4 规则变更流程，classify 阶段标 `change`，把断言算子改为**存在性子集**
+语义——在选中记录中存在一个大小 ≥`minimum_records`、来自 ≥`minimum_artifacts` 个
+artifact、集合相同、顺序种类 ≥`minimum_distinct_orders` 的子集。不降低判据强度，
+只是不再因混入其他栈的握手而恒假。完整实证见
+[`SPEC_TLS_003_JUDGMENT_DEFECT.md`](SPEC_TLS_003_JUDGMENT_DEFECT.md)。
+
+配套增量（已实施）：新增 `official-ws-handshake-repeat` 与
+`candidate-ws-handshake-repeat` 两个 job，用独立 batch-id 与独立证据根重跑
+`codex-ws direct`，把 A02 的 artifact 数由 3 提升到 6。
+
+#### 10.9.3 处置原则与待定案项
+
+每个缺口须逐项判定属于哪一类，**不得由执行者临时决定**（那正是 §10.8.3 批评的做法）：
+
+1. **该采而未采** → 补 capture job（如 A02 的处置）；
+2. **场景定义写错** → 修订该场景的 `required_artifact_kinds`，附实证；
+3. **判据与采集能力错配** → classify 标 `change` 并附实证（如 SPEC-TLS-003）。
+
+8 个缺口尚未定案，是 §6.2 `seal` 的唯一阻塞项。定案并实施后，按 §10.7 顺序推进。

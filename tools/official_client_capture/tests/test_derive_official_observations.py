@@ -374,6 +374,39 @@ class DerivationNegativeTest(DerivationTestBase):
         with self.assertRaises(derive.ObservationDerivationError):
             derive.verify_derivation(self.bundle_dir)
 
+    def test_unicode_line_separator_inside_json_is_not_a_record_break(self) -> None:
+        """JSON 字符串内的 \x85／\u2028 不得被当成 JSON Lines 的记录分隔符。
+
+        真实 mitm 记录含 \x85；用 str.splitlines() 切分会把一条记录截成两半，
+        派生器随即报「不是 JSON」——k35 官方证据上实测到该失败。
+        """
+
+        line = dict(MITM_LINE)
+        line["request"] = dict(
+            MITM_LINE["request"],
+            body={"length": 3, "json": {"note": "a\x85b\u2028c"}},
+        )
+        path = self.source_root / "mitm" / "models-http.jsonl"
+        path.write_text(
+            json.dumps(line, ensure_ascii=False) + "\n", encoding="utf-8"
+        )
+        self.assertGreater(
+            len(path.read_text(encoding="utf-8").splitlines()),
+            len([x for x in path.read_text(encoding="utf-8").split("\n") if x]),
+            "夹具必须真的含会让 splitlines() 多切的字符",
+        )
+        rebuilt = self.workdir / "assertion-bundle-sep"
+        bundle.build_bundle(
+            self.roots,
+            bundle.load_plan(self.workdir / "bundle-plan.json"),
+            rebuilt,
+        )
+        self.derivation_plan = [self.derivation_plan[2]]
+        receipt = derive.derive_observations(
+            rebuilt, derive.load_derivation_plan(self._write_derivation_plan())
+        )
+        self.assertEqual(receipt["entries"][0]["record_count"], 1)
+
     def test_tampered_receipt_rejected(self) -> None:
         self._derive()
         path = self.bundle_dir / derive.DERIVED_PROVENANCE_RELATIVE_PATH

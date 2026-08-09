@@ -67,7 +67,9 @@ DERIVATION_PROVENANCE_SCHEMA = "codex-derived-observation-provenance/v1"
 
 PARSER_H1 = "h1_request_stream"
 PARSER_MITM = "mitm_http_jsonl"
-ALLOWED_SOURCE_PARSERS = frozenset({PARSER_H1, PARSER_MITM})
+PARSER_H1_PROBE = "h1_wire_probe"
+ALLOWED_SOURCE_PARSERS = frozenset({PARSER_H1, PARSER_MITM, PARSER_H1_PROBE})
+H1_PROBE_SCHEMA = "h1-wire-probe/v1"
 ALLOWED_TARGET_KINDS = frozenset({"process_trace", "websocket_trace"})
 ALLOWED_DERIVED_RECORD_TYPES = frozenset({"http_request", "websocket_frame"})
 
@@ -249,6 +251,79 @@ def _derive_from_h1(
     return records
 
 
+def _derive_from_h1_probe(
+    payload: bytes,
+    entry: Mapping[str, str],
+) -> list[dict[str, Any]]:
+    """把 h1 探针的结构化输出投影为与 relay 解析同构的 http_request 记录。
+
+    探针已按 wire 顺序记录 request_line 与 headers，字段语义与
+    ``parse_h1_stream`` 的输出一致；这里只做同构映射，不做任何推断。
+    """
+
+    try:
+        document = json.loads(payload.decode("utf-8", errors="strict"))
+    except ValueError as error:
+        raise ObservationDerivationError(
+            f"h1 探针记录不是 JSON：{entry['source']}"
+        ) from error
+    if (
+        not isinstance(document, dict)
+        or document.get("schema_version") != H1_PROBE_SCHEMA
+    ):
+        raise ObservationDerivationError(
+            f"h1 探针记录 schema_version 必须是 {H1_PROBE_SCHEMA}：{entry['source']}"
+        )
+    requests = document.get("requests")
+    if not isinstance(requests, list) or not requests:
+        raise ObservationDerivationError(
+            f"h1 探针记录 requests 为空：{entry['source']}"
+        )
+    records: list[dict[str, Any]] = []
+    for index, request in enumerate(requests):
+        if not isinstance(request, dict):
+            raise ObservationDerivationError(
+                f"h1 探针第 {index + 1} 条记录必须是对象：{entry['source']}"
+            )
+        line = _parse_request_line(request.get("request_line"))
+        headers = request.get("headers")
+        if not isinstance(headers, list):
+            raise ObservationDerivationError(
+                f"h1 探针第 {index + 1} 条缺少 headers：{entry['source']}"
+            )
+        normalized = [
+            {
+                "name": item.get("name"),
+                "value": redact(str(item.get("name")), str(item.get("value"))),
+            }
+            for item in headers
+            if isinstance(item, dict) and isinstance(item.get("name"), str)
+        ]
+        header_names = [item["name"] for item in normalized]
+        data = {
+            **line,
+            "connection_id": entry["connection_id"],
+            "request_index": index,
+            "wire_protocol": _wire_protocol(header_names),
+            "header_names_in_order": header_names,
+            "remaining_header_names": header_names[5:],
+            "header_values": _header_values({"headers": normalized}),
+            "body": None,
+        }
+        records.append(
+            _observation_record(
+                target=entry["target"],
+                scenario_id=entry["scenario_id"],
+                record_type="http_request",
+                record_index=index,
+                index_kind="request",
+                data=data,
+                source=entry["source"],
+            )
+        )
+    return records
+
+
 def _mitm_body_summary(body: Any) -> dict[str, Any] | None:
     """把 mitm 明文 body 收敛为 relay ``summarize_body`` 同构的结构摘要。"""
 
@@ -270,9 +345,12 @@ def _derive_from_mitm(
     entry: Mapping[str, str],
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
+    # JSON Lines 以 \n 分隔记录。str.splitlines() 还会在 \x85、\u2028 等
+    # Unicode 行分隔符处切分，而这些字符可以合法出现在 JSON 字符串内部——真实
+    # mitm 记录就含 \x85，用 splitlines() 会把一条记录截成两半并报「不是 JSON」。
     lines = [
         line
-        for line in payload.decode("utf-8", errors="strict").splitlines()
+        for line in payload.decode("utf-8", errors="strict").split("\n")
         if line.strip()
     ]
     if not lines:
@@ -385,6 +463,8 @@ def _derive_entry(
         )
     if entry["parser"] == PARSER_H1:
         records = _derive_from_h1(payload, entry)
+    elif entry["parser"] == PARSER_H1_PROBE:
+        records = _derive_from_h1_probe(payload, entry)
     else:
         records = _derive_from_mitm(payload, entry)
     if not records:

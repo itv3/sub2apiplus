@@ -602,6 +602,60 @@
       ]
     },
     {
+      "id": "official-ws-handshake-repeat",
+      "phase": "official",
+      "suites": [
+        "core",
+        "full"
+      ],
+      "scenario_ids": [
+        "A02"
+      ],
+      "description": "官方 Responses WS 握手补采：A02 要求至少四份彼此独立的 WS ClientHello，而 official-core 的 s1/s2/s4 只产三份 pcap，且每份都混有 models 的 native-tls 握手。本 job 用独立 batch-id 与独立证据根重跑 codex-ws direct，把 artifact 数补足到 SPEC-TLS-003 的 minimum_artifacts。",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "docker",
+            "exec",
+            "{capture_container}",
+            "python3",
+            "{repo_root}/tools/official_client_capture/capture.py",
+            "--task",
+            "oauth",
+            "--batch-id",
+            "{campaign_id}-ws-repeat",
+            "--scenarios",
+            "s1,s2,s4",
+            "--subjects",
+            "codex-ws",
+            "--evidence",
+            "direct",
+            "--expected-codex-version",
+            "{target_version}",
+            "--expected-codex-sha256",
+            "{target_sha256}",
+            "--runtime-image",
+            "{runtime_image}",
+            "--profile-version",
+            "codex-{target_version}-upgrade-v1",
+            "--codex-bin",
+            "{capture_codex_bin}",
+            "--execute",
+            "--acknowledge-live-requests"
+          ],
+          "environment": {},
+          "timeout_seconds": 3600
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/official-client/oauth/oauth-{campaign_id}-ws-repeat"
+      ],
+      "covers": [
+        "SPEC-TLS-003"
+      ]
+    },
+    {
       "id": "official-compact",
       "phase": "official",
       "suites": [
@@ -754,6 +808,47 @@
         "SPEC-EP-006",
         "SPEC-EP-009",
         "SPEC-EP-013"
+      ]
+    },
+    {
+      "id": "candidate-ws-handshake-repeat",
+      "phase": "candidate",
+      "suites": [
+        "core",
+        "full"
+      ],
+      "scenario_ids": [
+        "A02"
+      ],
+      "description": "候选 Responses WS 握手补采：与 official-ws-handshake-repeat 同构，把候选侧 A02 的独立 WS ClientHello artifact 数补足到 SPEC-TLS-003 要求。",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_sub2api_direct_matrix.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "SERVICE_CONTAINER": "{service_container}",
+            "POSTGRES_CONTAINER": "{postgres_container}",
+            "CODEX_ACCOUNT_ID": "{codex_account_id}",
+            "API_KEY_ID": "{api_key_id}",
+            "SUBJECTS": "codex-ws",
+            "SCENARIOS": "s1 s2 s4",
+            "CODEX_MODEL": "{model}",
+            "CODEX_VERSION": "{target_version}",
+            "RUN_ID": "{campaign_id}-candidate-ws-repeat"
+          },
+          "timeout_seconds": 3600
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-candidate-ws-repeat"
+      ],
+      "covers": [
+        "SPEC-TLS-003"
       ]
     },
     {

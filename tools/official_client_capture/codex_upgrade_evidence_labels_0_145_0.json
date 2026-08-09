@@ -1,0 +1,604 @@
+{
+  "$schema": "./codex_upgrade_evidence_labels.schema.json",
+  "schema_version": "codex-upgrade-evidence-labels/v1",
+  "codex_version": "0.145.0",
+  "description": "把每个 capture job 的证据子路径映射到冻结场景、artifact kind、parser 与实验条件标签。标签描述的是采集时就已确定的实验条件（CA 模式、协议面、residency 等），不是对证据内容的观测结论；编目器只按本声明贴标签，禁止读取文件内容决定任何字段。",
+  "authority": [
+    "labels 必须能由 job 的采集参数与场景 precondition 推出，不得由被该标签选中的判据所验证的属性反推——否则判据退化为同义反复。",
+    "同一原始文件在 manifest 中只能二选一：以原生 parser 直接解析，或以 opaque_bound_source 登记并由 ACC-02b 派生器产出结构化观测。",
+    "本声明随场景清单在 plan 阶段冻结摘要；任何修改都必须重新审核并重建 Campaign。"
+  ],
+  "entries": [
+    {
+      "job_id": "official-core",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "direct/codex-http/*/traffic.pcap",
+          "scenario_ids": [
+            "A01"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "http",
+            "ca_mode": "system",
+            "surface": "codex-http"
+          },
+          "rationale": "direct 面未配置自定义 CA（A01 precondition），subject 为 codex-http，全部握手为 HTTP 出站栈。"
+        },
+        {
+          "glob": "direct/codex-ws/*/traffic.pcap",
+          "scenario_ids": [
+            "A02"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "websocket",
+            "ca_mode": "system",
+            "surface": "codex-ws"
+          },
+          "rationale": "direct 面未配置自定义 CA，subject 为 codex-ws。注意该 pcap 同时含启动期 models 的 HTTP 握手，判据缺陷见 SPEC_TLS_003_JUDGMENT_DEFECT.md。"
+        },
+        {
+          "glob": "mitm/codex-http/*/codex-http.jsonl",
+          "scenario_ids": [
+            "A09"
+          ],
+          "kind": "wire_dump",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "mitm_http_jsonl",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "ca_mode": "custom",
+            "surface": "codex-http",
+            "provider": "openai_oauth"
+          },
+          "rationale": "mitm 面经受控 CA 解密，subject codex-http 的 Responses 出站；由派生器投影为 wire 观测。"
+        },
+        {
+          "glob": "mitm/codex-http/*/models-http.jsonl",
+          "scenario_ids": [
+            "A09"
+          ],
+          "kind": "wire_dump",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "mitm_http_jsonl",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "ca_mode": "custom",
+            "surface": "models",
+            "endpoint_class": "auxiliary",
+            "provider": "openai_oauth"
+          },
+          "rationale": "models 端点属辅助出站面（endpoint_class=auxiliary），与 Responses 主链路分开登记。"
+        },
+        {
+          "glob": "mitm/codex-ws/*/codex-http.jsonl",
+          "scenario_ids": [
+            "A15"
+          ],
+          "kind": "wire_dump",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "mitm_http_jsonl",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "ca_mode": "custom",
+            "surface": "codex-ws",
+            "provider": "openai_oauth"
+          },
+          "rationale": "mitm 面 codex-ws subject 的握手与升级请求。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-ws-handshake-repeat",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "direct/codex-ws/*/traffic.pcap",
+          "scenario_ids": [
+            "A02"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "websocket",
+            "ca_mode": "system",
+            "surface": "codex-ws"
+          },
+          "rationale": "A02 补采：独立 batch-id 重跑 codex-ws direct，把独立 WS 握手 artifact 数补足到 minimum_artifacts。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-http-response",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A03"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "mode": "lite",
+            "compression": "zstd",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A03 场景 precondition 固化 use_responses_lite=true 与 enable_request_compression=true；这些是采集配置而非观测结论。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-residency-us",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A04"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "mode": "non_lite",
+            "residency": "us",
+            "variant": "default",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "本 job 显式以 US residency 分支触发，residency=us 由 job 参数决定。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-runtime-metrics",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A04"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "mode": "non_lite",
+            "residency": "unset",
+            "variant": "default",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "runtime metrics 分支不设置 residency，构成 A04 residency 判据的负例样本。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-turnstate-compact",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A03",
+            "A09"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "mode": "lite",
+            "variant": "turn_state",
+            "session_header_scope": "responses_or_compact",
+            "compression": "zstd",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "受控上游在首轮注入 turn-state（A03 trigger），变体由采集脚本固定。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-image",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A03",
+            "A09"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "endpoint_class": "images",
+            "mode": "non_lite",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "生图端点属 images 出站面，由 job 目标端点决定。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-image-edit",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A03",
+            "A09"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "endpoint_class": "images",
+            "mode": "non_lite",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "图片编辑复用 images 出站面。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-search",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A09"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "endpoint_class": "auxiliary",
+            "mode": "non_lite",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "alpha-search 属辅助端点面。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-conn-retry",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A07",
+            "A08"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "mode": "non_lite",
+            "variant": "default",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "受控中继按冻结场景配置注入可重试失败（A07／A08 trigger）。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-http-fallback",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "h1-wire.json",
+          "scenario_ids": [
+            "A07"
+          ],
+          "kind": "wire_dump",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_wire_probe",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "variant": "http_default",
+            "mode": "lite",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "WS 重试预算耗尽后改发 HTTP POST，由 h1 探针记录最终 wire 形态。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-compact",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "direct/codex-compact/egress.pcap",
+          "scenario_ids": [
+            "A09"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "http",
+            "ca_mode": "system",
+            "surface": "codex-compact"
+          },
+          "rationale": "compact 场景 direct 面握手，未配置自定义 CA。"
+        },
+        {
+          "glob": "mitm/codex-compact/codex-http.jsonl",
+          "scenario_ids": [
+            "A09",
+            "A10"
+          ],
+          "kind": "wire_dump",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "mitm_http_jsonl",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "ca_mode": "custom",
+            "compaction_mode": "manual",
+            "mode": "non_lite",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "手动 compact 由 job 显式触发；mitm 面经受控 CA 解密。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-compact",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A10"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "compaction_mode": "auto",
+            "mode": "non_lite",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "自动 compact 分支。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-comp-hash-changed",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A10"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "compaction_mode": "auto",
+            "mode": "non_lite",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "compaction hash 变化分支，受控模型目录触发。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-model-downshift",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A10"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "compaction_mode": "auto",
+            "mode": "non_lite",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "模型降级分支。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-realtime-webrtc",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A11"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "endpoint_class": "auxiliary",
+            "mode": "non_lite",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "Realtime／WebRTC session 与 call-create 属辅助端点面。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-file-upload",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A14"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "endpoint_class": "auxiliary",
+            "mode": "non_lite",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "Files create／Blob PUT／finalize 链路。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-wham-safe",
+      "side": "official",
+      "rules": [
+        {
+          "root_suffix": "official-wham-safe",
+          "glob": "request.bin",
+          "scenario_ids": [
+            "A12"
+          ],
+          "kind": "wire_dump",
+          "parser": "opaque_bound_source",
+          "labels": {
+            "transport": "http",
+            "endpoint_class": "auxiliary",
+            "mode": "non_lite",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "WHAM 安全分支的出站请求原始字节。",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          }
+        },
+        {
+          "root_suffix": "official-wham-get",
+          "glob": "direct/codex-compact/egress.pcap",
+          "scenario_ids": [
+            "A12"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "http",
+            "ca_mode": "system",
+            "surface": "codex-compact"
+          },
+          "rationale": "WHAM GET 分支的 direct 面握手。"
+        },
+        {
+          "root_suffix": "official-wham-get",
+          "glob": "mitm/codex-compact/codex-http.jsonl",
+          "scenario_ids": [
+            "A12"
+          ],
+          "kind": "wire_dump",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "mitm_http_jsonl",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "ca_mode": "custom",
+            "endpoint_class": "auxiliary",
+            "mode": "non_lite",
+            "variant": "default",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "WHAM GET 分支的 mitm 面出站记录。"
+        }
+      ]
+    }
+  ]
+}
