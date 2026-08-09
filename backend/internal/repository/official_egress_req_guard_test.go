@@ -3,6 +3,9 @@ package repository
 import (
 	"context"
 	"errors"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"log/slog"
 	"net/http"
@@ -12,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/officialegress"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/imroc/req/v3"
 	"github.com/stretchr/testify/require"
 )
@@ -69,6 +73,109 @@ func TestReqProfileGuardPreservesOutOfScopeWireAndResult(t *testing.T) {
 	metrics := recorder.Snapshot()
 	require.Len(t, metrics, 1)
 	require.Equal(t, officialegress.ReasonOutOfScopePassthrough, metrics[0].Reason)
+}
+
+// TestReqProfileGuardLowercasesFinalWire 验证 lowercase 计划确实作用到了最终 wire。
+//
+// 注意这条只证明"到达 wire 的名字是小写"，证明不了 Guard 在链上的位置——链的最内层
+// 无论包装顺序如何都在 lowercase 之内。位置由
+// TestReqClientGuardWrapsBaseTransportDirectly 锁定。
+func TestReqProfileGuardLowercasesFinalWire(t *testing.T) {
+	var observed []string
+	client := req.C()
+	client.GetTransport().WrapRoundTripFunc(func(http.RoundTripper) req.HttpRoundTripFunc {
+		return func(request *http.Request) (*http.Response, error) {
+			for name := range request.Header {
+				observed = append(observed, name)
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK, Body: http.NoBody,
+				Header: make(http.Header), Request: request,
+			}, nil
+		}
+	})
+
+	guard, err := officialegress.NewGuard(
+		officialegress.GuardConfig{}, officialegress.DefaultSinkCatalog(),
+		officialegress.DefaultOfficialRouteCatalog(), nil,
+	)
+	require.NoError(t, err)
+	profile := &tlsfingerprint.Profile{}
+	profile.Transport.LowercaseHeaders = true
+	profile.Transport.PreserveHeaderCase = []string{"X-Keep-Case"}
+
+	_, sendErr := instrumentReqClientWithGuard(client, guard, profile).R().
+		SetHeader("Accept", "text/event-stream").
+		SetHeader("X-Keep-Case", "kept").
+		Get("https://example.com/anything")
+	require.NoError(t, sendErr)
+
+	require.Contains(t, observed, "accept", "Accept 必须在到达 wire 前被小写化")
+	require.NotContains(t, observed, "Accept")
+	require.Contains(t, observed, "X-Keep-Case", "PreserveHeaderCase 必须原样保留")
+}
+
+// TestReqClientGuardWrapsBaseTransportDirectly 锁住 req.Client 链的包装顺序。
+//
+// 画像声明 lowercase wire 名时，compiler 用 headers.Set() 写入的名字会被 Go 规范化成
+// Accept。Guard 校验的是最终 wire，所以小写化必须发生在 Guard 之外——即 Guard 直接包裹
+// 原始 transport，lowercase 包在 Guard 之上，与 http_upstream 链的 lowercase(Guard(base))
+// 一致。顺序反了 Guard 看到的仍是 Accept，会把画像自己的 lowercase 计划误判成
+// request_modified_after_finalize 并拒绝出站——OAuth token 刷新曾因此在生产上完全不可用。
+//
+// 这个事实无法从链外观测（任何外部探针都落在 lowercase 的同一侧），只能对源码断言。
+func TestReqClientGuardWrapsBaseTransportDirectly(t *testing.T) {
+	const baseIdent = "rt" // WrapRoundTripFunc 回调收到的原始 transport 形参
+
+	fileSet := token.NewFileSet()
+	parsed, err := parser.ParseFile(fileSet, "official_egress_guard.go", nil, 0)
+	require.NoError(t, err)
+
+	var target *ast.FuncDecl
+	ast.Inspect(parsed, func(node ast.Node) bool {
+		if decl, ok := node.(*ast.FuncDecl); ok && decl.Name.Name == "instrumentReqClientWithGuard" {
+			target = decl
+			return false
+		}
+		return true
+	})
+	require.NotNil(t, target, "未找到 instrumentReqClientWithGuard")
+
+	firstArgIdent := func(call *ast.CallExpr) string {
+		if len(call.Args) == 0 {
+			return ""
+		}
+		ident, ok := call.Args[0].(*ast.Ident)
+		if !ok {
+			return ""
+		}
+		return ident.Name
+	}
+
+	var guardedBase, loweredBase string
+	ast.Inspect(target, func(node ast.Node) bool {
+		call, ok := node.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		selector, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		switch selector.Sel.Name {
+		case "NewGuardedRoundTripper":
+			guardedBase = firstArgIdent(call)
+		case "NewLowercaseHeaderRoundTripper":
+			loweredBase = firstArgIdent(call)
+		}
+		return true
+	})
+
+	require.Equal(t, baseIdent, guardedBase,
+		"Guard 必须直接包裹原始 transport；包在 lowercase 之内会让它看不到最终 wire")
+	require.NotEmpty(t, loweredBase, "未找到 NewLowercaseHeaderRoundTripper 调用")
+	require.NotEqual(t, baseIdent, loweredBase,
+		"lowercase 必须包在 Guard 之上，不能直接包裹原始 transport")
 }
 
 func TestReqProfileGuardPreservesErrorCancellationAndRedirect(t *testing.T) {

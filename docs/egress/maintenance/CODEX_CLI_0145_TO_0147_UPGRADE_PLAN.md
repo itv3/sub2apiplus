@@ -330,6 +330,49 @@ connect: connection refused`，`172.21.0.6` 即 capture-cli 容器。k17、k18 �
   身份字段后，补上 attempt 坐标（campaign／attempt／run_nonce／candidate）——这些坐标是采集
   侧自身的权威事实，服务启动时无从得知。工具不生成 `event_id` 与观测时刻，只承接服务事实。
 
+### 7.7 A13 OAuth refresh 被自身 Guard 拒绝（既有缺陷）
+
+候选辅助采集 A13（OAuth refresh）在 k26 被 `request_modified_after_finalize` 拒绝。用
+0.145 画像做对照实验同样失败，确认是既有缺陷，与本次升级无关——它此前没被发现，只是因为
+候选验收从未跑到过 A13。
+
+根因是两条出站链的包装顺序不一致：
+
+- `http_upstream` 链是 `lowercase(Guard(base))`，Guard 看到的是最终 wire；
+- `req.Client` 链是 `Guard(lowercase(base))`，lowercase 在 Guard 内层。
+
+OAuth refresh 端点画像声明 lowercase header wire 名（`accept` 等），`compiler.go` 用
+`headers.Set()` 写入时被 Go 规范化成 `Accept`。`http_upstream` 链上 Guard 校验的是转换后的
+最终 wire，能通过；`req.Client` 链上 Guard 先于 lowercase 执行，看到的仍是 `Accept`，判定
+定型后被改写并拒绝。**这意味着生产环境里所有走 `req.Client` 且画像要求 lowercase wire 的
+官方出站端点都不可用，OAuth token 刷新即在其中。**
+
+修复（`31768d0a6`）把 `req.Client` 链的包装顺序对齐 `http_upstream`：
+`instrumentReqClientWithGuard` 接收 `*tlsfingerprint.Profile`，lowercase 提到 Guard 之外。
+
+同时给 `GuardDecision`／`GuardRejectionError` 增加 `Diagnostic` 字段，区分 normalization
+不符与 digest 不符——原先两类失败共用同一个 reason，无法定位。诊断只输出 header 名，不输出值。
+
+验证：修复前调用 refresh 端点返回 Guard 拒绝；修复后返回上游真实的
+`401 token_expired`（用的是构造的无效 token），说明请求已真正送达 `auth.openai.com`。
+
+### 7.8 A11 Live attestation 在 Linux 的接线
+
+A11 需要 ChatGPT DeviceCheck attestation，而 `Provider` 只实现了 macOS。官方 Codex CLI 源码
+没有平台门禁，因此这不是"Linux 跑不了"，只是 Sub2API 侧缺实现。仓库早有
+`candidatecapture` 构建标签与合成 provider，但从未接通——`attestation_candidate_capture.go`
+引用的 `candidateCaptureScopeFromContext` 根本不存在，该分支平时既不构建也不测试。
+
+处置：补齐缺失函数；新增 `build_matrix_test.go` 对 linux/amd64 同时编译默认与
+`candidatecapture` 两种配置，防止该分支再次腐烂；候选镜像以 `-tags "embed,candidatecapture"`
+构建。合成 provider 只在进程环境声明的本轮四元组（api_key／group／account／临时代理）匹配时
+才生成值，有效期上限 20 分钟。
+
+采集侧 `run_candidate_aux_capture.sh` 在 A11 第一跳前按本轮四元组重建服务，采集结束按原
+compose 拉回。两处易错点已加断言固化：compose 重建产生全新容器，必须补装抓包 CA 并重启，
+否则第一跳在 TLS 阶段被自己的 relay 证书挡下；恢复部署必须早于 hosts 回灌，否则最终容器
+hosts 与复核基线不一致。
+
 ## 8. Candidate、比较与 `ready`
 
 Candidate 必须固定 commit/tree/build ID/deploy version/OCI digest/image ID/profile digest，
