@@ -48,6 +48,10 @@ ARG COMMIT=docker
 ARG DATE
 ARG GOPROXY
 ARG GOSUMDB
+# BUILD_TAGS 只为官方出站候选抓包保留扩展位：候选镜像需要额外的
+# candidatecapture 标签（Linux 上生不出 DeviceCheck，改用受四元组约束的合成
+# provider）。生产构建保持默认 embed，不受影响。
+ARG BUILD_TAGS=embed
 
 ENV GOPROXY=${GOPROXY}
 ENV GOSUMDB=${GOSUMDB}
@@ -73,7 +77,7 @@ RUN VERSION_VALUE="${VERSION}" && \
     if [ -z "${VERSION_VALUE}" ]; then VERSION_VALUE="$(./scripts/resolve-version.sh)"; fi && \
     DATE_VALUE="${DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" && \
     CGO_ENABLED=0 GOOS=linux go build \
-    -tags embed \
+    -tags "${BUILD_TAGS}" \
     -ldflags="-s -w -X main.Version=${VERSION_VALUE} -X main.Commit=${COMMIT} -X main.Date=${DATE_VALUE} -X main.BuildType=release" \
     -o /app/sub2api \
     ./cmd/server
