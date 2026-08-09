@@ -1001,7 +1001,11 @@ expected = {
         "images_edit": 1,
     },
     "A11": {"realtime_first_hop": 1, "realtime_sideband": 1},
-    "A12": {"wham_usage": 1, "wham_credit_details": 1, "wham_safe_consume": 1},
+    # ResetQuota 消费额度后必然再查一次用量刷新显示缓存（openai_oauth_handler.go
+    # 的 Step 2，用 WithoutCancel + 独立超时，不受入口 context 取消影响），因此
+    # A12 的两次入口调用共产生两轮 usage/credit_details。这是 Sub2API 自身行为，
+    # 与 Codex 画像版本无关；此前 A12 从未跑通，错误的期望值一直没有暴露。
+    "A12": {"wham_usage": 2, "wham_credit_details": 2, "wham_safe_consume": 1},
     "A13": {"oauth_dummy_invalid_grant": 1},
     "A14": {"files_create": 1, "files_blob_put": 1, "files_uploaded": 1},
 }

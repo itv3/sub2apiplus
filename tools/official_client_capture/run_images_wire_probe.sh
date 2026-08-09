@@ -15,6 +15,7 @@ keeper_container=${KEEPER_CONTAINER:-sub2apiplus-keeper}
 postgres_container=${POSTGRES_CONTAINER:-sub2apiplus-postgres}
 account_id=${ACCOUNT_ID:?必须提供 ACCOUNT_ID}
 api_key_id=${API_KEY_ID:-1}
+image_model=${IMAGE_MODEL:-gpt-image-1}
 model=${MODEL:-gpt-5.6-luna}
 capture_container=${CAPTURE_CONTAINER:-capture-cli}
 capture_root=${CAPTURE_ROOT:-/root/oauth-capture}
@@ -37,6 +38,8 @@ ca_backup="$capture_root/runtime/ca-certificates.crt.before-h1-$window_id"
 
 probe_started=0
 ca_installed=0
+model_mapping_restore_armed=0
+original_model_mapping_state=""
 hosts_patched=0
 keeper_was_running=false
 account_gate_before=""
@@ -88,6 +91,29 @@ cleanup() {
   if [[ $keeper_was_running == true ]]; then
     docker start "$keeper_container" >/dev/null 2>&1 || true
   fi
+  # 图片端点要求图片模型出现在账号的显式 model_mapping 白名单里，否则请求在入口
+  # 就被判 model_not_found、根本不出站，h1 探针永远等不到数据。只恢复该字段，不
+  # 重写 credentials 中的 OAuth 凭据。
+  if [[ $model_mapping_restore_armed == 1 ]]; then
+    case "$original_model_mapping_state" in
+      present:*)
+        db_query "update accounts set credentials = jsonb_set(
+          coalesce(credentials,'{}'::jsonb),
+          '{model_mapping}',
+          convert_from(decode('${original_model_mapping_state#present:}','hex'),'UTF8')::jsonb,
+          true
+        ) where id = $account_id" >/dev/null 2>&1 || status=97
+        ;;
+      missing:)
+        db_query "update accounts set credentials = coalesce(credentials,'{}'::jsonb) - 'model_mapping'
+          where id = $account_id" >/dev/null 2>&1 || status=97
+        ;;
+      *)
+        echo "账号 #$account_id 的 model_mapping 原值缺失，无法恢复。" >&2
+        status=97
+        ;;
+    esac
+  fi
   if ! restore_account_gate; then
     echo "账号 #$account_id 的临时熔断状态未能恢复，请人工检查。" >&2
     status=97
@@ -95,7 +121,7 @@ cleanup() {
     echo "账号 #$account_id 的临时熔断状态与运行前不一致。" >&2
     status=97
   fi
-  echo "环境已恢复：hosts、CA、keeper 与账号调度门均回到采集前状态。"
+  echo "环境已恢复：hosts、CA、keeper、账号调度门与 model_mapping 均回到采集前状态。"
   exit $status
 }
 trap cleanup EXIT
@@ -159,6 +185,29 @@ chmod 600 "$hosts_backup"
 docker cp "$service_container:/etc/ssl/certs/ca-certificates.crt" "$ca_backup" >/dev/null
 chmod 600 "$ca_backup"
 
+# 图片模型必须先进入账号的显式 model_mapping 白名单，否则生图请求在入口就被判
+# model_not_found（HTTP 404）、根本不会出站。原值先冻结成 hex，由 EXIT 钩子逐字回写。
+if [[ ! $image_model =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "IMAGE_MODEL 含非法字符。" >&2
+  exit 1
+fi
+original_model_mapping_state=$(db_query "select case
+  when credentials ? 'model_mapping'
+  then 'present:' || encode(convert_to((credentials->'model_mapping')::text,'UTF8'),'hex')
+  else 'missing:' end from accounts where id = $account_id")
+case "$original_model_mapping_state" in
+  present:*|missing:) ;;
+  *) echo "无法读取账号 #$account_id 的 model_mapping 初始状态。" >&2; exit 1 ;;
+esac
+model_mapping_restore_armed=1
+db_query "update accounts set credentials = jsonb_set(
+  coalesce(credentials,'{}'::jsonb),
+  '{model_mapping}',
+  coalesce(credentials->'model_mapping','{}'::jsonb) ||
+    jsonb_build_object('$image_model','$image_model'),
+  true
+) where id = $account_id" >/dev/null
+
 docker cp "$ca_cert" "$service_container:$custom_ca_path" >/dev/null
 docker exec "$service_container" update-ca-certificates >/dev/null 2>&1
 ca_installed=1
@@ -187,7 +236,7 @@ curl -s -m 60 -o /dev/null -X POST "http://127.0.0.1:${port:-3001}/v1/images/gen
   -H "Authorization: Bearer $api_key" \
   -H "Content-Type: application/json" \
   -H "User-Agent: h1-wire-probe/1.0" \
-  -d '{"model":"gpt-image-1","prompt":"a red fox","n":1,"size":"1024x1024"}' || true
+  -d "{\"model\":\"$image_model\",\"prompt\":\"a red fox\",\"n\":1,\"size\":\"1024x1024\"}" || true
 
 for _ in $(seq 1 30); do
   docker exec "$capture_container" test -f "/capture/runs/$run_id/h1-wire.json" && break

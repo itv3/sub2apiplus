@@ -107,3 +107,48 @@ class AccountGateRestorationTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ImagesWireModelMappingTest(unittest.TestCase):
+    """images-wire 必须自己准备图片模型映射，且按原值恢复。
+
+    aux 脚本会临时把图片模型写进账号的显式 model_mapping 白名单并由 EXIT 钩子恢复，
+    images-wire 此前没有这一步：生图请求在入口就被判 model_not_found（HTTP 404）、
+    根本不出站，h1 探针永远等不到数据，job 只留下一行 `h1-wire.json 不存在`。
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        root = Path(__file__).parents[1]
+        cls.path = root / "run_images_wire_probe.sh"
+        cls.source = cls.path.read_text(encoding="utf-8")
+
+    def test_shell_syntax_is_valid(self) -> None:
+        result = subprocess.run(
+            ["bash", "-n", str(self.path)], text=True, capture_output=True, check=False
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_运行前冻结原值并武装恢复(self) -> None:
+        self.assertIn("original_model_mapping_state=$(db_query", self.source)
+        self.assertIn("model_mapping_restore_armed=1", self.source)
+        # 原值必须区分「本来就有」与「本来没有」，否则恢复会凭空造出该字段。
+        self.assertIn("'present:' || encode(convert_to(", self.source)
+        self.assertIn("else 'missing:' end", self.source)
+
+    def test_写入映射早于服务重启(self) -> None:
+        """model_mapping 变更要重启才进入进程；顺序反了等于没写。"""
+
+        write = self.source.index("jsonb_build_object('$image_model','$image_model')")
+        restart = self.source.index('docker restart "$service_container" >/dev/null\n')
+        self.assertLess(write, restart)
+
+    def test_恢复按原值回写而不是删键了事(self) -> None:
+        self.assertIn("convert_from(decode('${original_model_mapping_state#present:}'", self.source)
+        self.assertIn("coalesce(credentials,'{}'::jsonb) - 'model_mapping'", self.source)
+        # 恢复失败必须失败关闭，不能静默留下白名单。
+        self.assertIn("status=97", self.source)
+
+    def test_模型名参数化且做字符校验(self) -> None:
+        self.assertIn("image_model=${IMAGE_MODEL:-gpt-image-1}", self.source)
+        self.assertIn("^[A-Za-z0-9._-]+$", self.source)
