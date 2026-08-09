@@ -35,3 +35,10 @@ type CandidateCaptureScope struct {
 func WithCandidateCaptureScope(ctx context.Context, scope CandidateCaptureScope) context.Context {
 	return context.WithValue(ctx, candidateCaptureScopeContextKey{}, scope)
 }
+
+// candidateCaptureScopeFromContext 读回调度身份。只有 candidatecapture 构建的 provider
+// 消费它；普通构建不引用，因此对生产二进制没有任何行为影响。
+func candidateCaptureScopeFromContext(ctx context.Context) (CandidateCaptureScope, bool) {
+	scope, ok := ctx.Value(candidateCaptureScopeContextKey{}).(CandidateCaptureScope)
+	return scope, ok
+}
