@@ -104,16 +104,33 @@ def _require_utc(value: Any, label: str) -> str:
     )
 
 
-def _client_version_from_user_agent(user_agent: str) -> str:
-    """从服务端记录的 User-Agent 取客户端版本，例如 Kilo-Code/7.4.2001。"""
+# Kilo 两条入口用不同的 SDK 发请求：Compatible 走 ai-sdk，User-Agent 带 Kilo-Code；
+# Responses 的 WebSocket 走 OpenAI 官方 JS SDK，User-Agent 就是 SDK 自己的标识。
+# 二者都是同一个客户端的真实行为，不能要求两条路径的 UA 形态一致。
+KNOWN_SDK_USER_AGENT_RE = re.compile(r"^(OpenAI/JS|openai-python|OpenAI/Python)[/ ]")
+
+
+def _client_version_from_user_agent(user_agent: str, fallback: str) -> str:
+    """取客户端版本：UA 自报时以 UA 为准，SDK UA 则回落到安装事实。
+
+    UA 里出现 Kilo-Code 时必须能解析出版本，并由调用方与安装事实逐字比对——这是最强的
+    一手证据。走 OpenAI SDK 的那条入口，UA 描述的是 SDK 而不是宿主客户端，此时客户端版本
+    只能来自本机安装事实（可执行文件路径 + 内容摘要），UA 原文仍如实写进收据备查。
+
+    两者都不是则拒绝：那说明这次调用并非来自已声明的 Kilo 安装。
+    """
 
     match = re.search(r"Kilo-Code/([0-9]+\.[0-9]+\.[0-9]+)", user_agent)
-    if not match:
-        raise KiloReceiptError(f"User-Agent 不含 Kilo-Code 版本：{user_agent}")
-    version = match.group(1)
-    if not VERSION_RE.fullmatch(version):
-        raise KiloReceiptError(f"客户端版本不是三段数字：{version}")
-    return version
+    if match:
+        version = match.group(1)
+        if not VERSION_RE.fullmatch(version):
+            raise KiloReceiptError(f"客户端版本不是三段数字：{version}")
+        return version
+    if KNOWN_SDK_USER_AGENT_RE.match(user_agent):
+        return fallback
+    raise KiloReceiptError(
+        f"User-Agent 既不含 Kilo-Code 版本，也不是已知 SDK 形态：{user_agent}"
+    )
 
 
 def _validate_identity(identity: Mapping[str, Any]) -> None:
@@ -165,6 +182,7 @@ def build_ingress(
     installation_id: str,
     client_version: str,
     model: str,
+    observed_user_agent: str,
     received_at_utc: str,
 ) -> dict[str, Any]:
     contract = CLIENT_CONTRACTS[client_id]
@@ -191,6 +209,7 @@ def build_ingress(
         "model": model,
         "candidate_id": identity["candidate_id"],
         "target_version": identity["target_version"],
+        "observed_user_agent": observed_user_agent,
         "received_at_utc": _require_utc(received_at_utc, "ingress.received_at_utc"),
     }
 
@@ -291,7 +310,9 @@ def build_client_receipts(
         )
 
     user_agent = _require(observation.get("user_agent"), "observation.user_agent")
-    client_version = _client_version_from_user_agent(user_agent)
+    client_version = _client_version_from_user_agent(
+        user_agent, installation["client_version"]
+    )
     if client_version != installation["client_version"]:
         raise KiloReceiptError(
             "服务端观测到的客户端版本与安装事实不一致："
@@ -309,6 +330,7 @@ def build_client_receipts(
             installation_id=installation_id,
             client_version=client_version,
             model=_require(observation.get("model"), "observation.model"),
+            observed_user_agent=user_agent,
             received_at_utc=_require(
                 observation.get("received_at_utc"), "observation.received_at_utc"
             ),

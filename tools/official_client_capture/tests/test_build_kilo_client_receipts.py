@@ -86,6 +86,38 @@ class KiloReceiptBuilderTest(unittest.TestCase):
                 installation=_installation(),
             )
 
+    def test_SDK_形态的_UA_回落到安装事实(self) -> None:
+        """Responses 的 WS 入口走 OpenAI 官方 JS SDK，UA 描述的是 SDK 而非宿主客户端。
+
+        两条入口用不同 SDK 是 Kilo 的真实行为；此时客户端版本只能来自本机安装事实，
+        UA 原文仍如实写进收据备查。既不自报 Kilo 也不是已知 SDK 的一律拒绝。
+        """
+
+        receipts = builder.build_client_receipts(
+            identity=IDENTITY,
+            client_id="kilo-responses",
+            observation={
+                **OBSERVATION,
+                "entrypoint": "/v1/responses",
+                "user_agent": "OpenAI/JS 6.45.0",
+            },
+            installation=_installation(),
+        )
+        self.assertEqual(receipts["ingress"]["client_version"], "7.4.2001")
+        self.assertEqual(receipts["ingress"]["observed_user_agent"], "OpenAI/JS 6.45.0")
+
+        with self.assertRaises(builder.KiloReceiptError):
+            builder.build_client_receipts(
+                identity=IDENTITY,
+                client_id="kilo-responses",
+                observation={
+                    **OBSERVATION,
+                    "entrypoint": "/v1/responses",
+                    "user_agent": "curl/8.1.2",
+                },
+                installation=_installation(),
+            )
+
     def test_客户端版本必须与安装事实一致(self) -> None:
         """服务端观测到的版本与本机安装文件对不上，收据就不能成立。"""
 
