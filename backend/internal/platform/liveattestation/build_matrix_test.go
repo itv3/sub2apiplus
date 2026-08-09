@@ -60,6 +60,19 @@ func TestProductionDockerfileDoesNotDefaultToCandidateCapture(t *testing.T) {
 	if !strings.Contains(text, `-tags "${BUILD_TAGS}"`) {
 		t.Fatal("go build 必须使用 ${BUILD_TAGS}，否则该参数形同虚设")
 	}
+
+	// prebuilt 前端只为抓包机内存受限保留；生产镜像必须真构建前端，否则会嵌进
+	// 一份来源不明、可能与后端不匹配的 dist。
+	frontend := regexp.MustCompile(`(?m)^ARG FRONTEND_SOURCE=(.*)$`).FindStringSubmatch(text)
+	if frontend == nil {
+		t.Fatal("Dockerfile 缺少 ARG FRONTEND_SOURCE 声明")
+	}
+	if got := strings.TrimSpace(frontend[1]); got != "build" {
+		t.Fatalf("FRONTEND_SOURCE 默认值必须是 build，实际为 %q", got)
+	}
+	if !strings.Contains(text, "FROM frontend-${FRONTEND_SOURCE} AS frontend-builder") {
+		t.Fatal("frontend-builder 必须由 FRONTEND_SOURCE 选定，否则该参数形同虚设")
+	}
 	for _, line := range strings.Split(text, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "#") {

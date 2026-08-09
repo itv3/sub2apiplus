@@ -12,10 +12,16 @@ ARG ALPINE_IMAGE=alpine:3.20
 ARG GOPROXY=https://goproxy.cn,direct
 ARG GOSUMDB=sum.golang.google.cn
 
+# FRONTEND_SOURCE 选择前端产物来源：默认 build 走完整 Node 构建；prebuilt 直接采用
+# 调用方预先放在 backend/internal/web/dist 的产物。后者只为官方出站候选抓包保留——
+# 抓包机内存不足以跑 pnpm build，而候选镜像验证的是出站画像，与前端无关。
+# 生产构建必须保持 build，否则镜像里会嵌进一份来源不明、可能过期的 dist。
+ARG FRONTEND_SOURCE=build
+
 # -----------------------------------------------------------------------------
 # Stage 1: Frontend Builder
 # -----------------------------------------------------------------------------
-FROM ${NODE_IMAGE} AS frontend-builder
+FROM ${NODE_IMAGE} AS frontend-build
 
 WORKDIR /app/frontend
 ENV NODE_OPTIONS=--max-old-space-size=1536
@@ -36,6 +42,15 @@ RUN pnpm install --frozen-lockfile
 COPY frontend/ ./
 COPY docs/legal/ /app/docs/legal/
 RUN pnpm run build
+
+# -----------------------------------------------------------------------------
+# Stage 1b: 候选抓包专用的前端来源——不构建，直接采用调用方备好的 dist。
+# -----------------------------------------------------------------------------
+FROM scratch AS frontend-prebuilt
+COPY backend/internal/web/dist /app/backend/internal/web/dist
+
+# 由 FRONTEND_SOURCE 选定实际使用哪一个前端阶段。
+FROM frontend-${FRONTEND_SOURCE} AS frontend-builder
 
 # -----------------------------------------------------------------------------
 # Stage 2: Backend Builder
