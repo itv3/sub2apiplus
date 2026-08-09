@@ -515,13 +515,20 @@ def _nonnegative_integer(value: Any, label: str) -> int:
 
 
 def _http_status(value: Any, label: str) -> int:
+    """入站响应必须是成功状态：2xx，或 WebSocket 升级成功的 101。
+
+    Kilo 的 Responses 入口走 WebSocket（`usage_logs.openai_ws_mode` 为真），服务端
+    据此记录 `101 Switching Protocols`——那是该链路成功的唯一正确状态码，与 2xx 同属
+    成功语义。原判据只认 2xx，会把 Kilo 的真实行为判成失败；验收要覆盖客户端的真实
+    形态，而不是反过来要求客户端改用 HTTP 迁就判据。101 之外的 1xx 仍然拒绝。
+    """
+
     if (
         not isinstance(value, int)
         or isinstance(value, bool)
-        or value < 200
-        or value >= 300
+        or (value != 101 and not 200 <= value < 300)
     ):
-        raise ReceiptFinalizerError(f"{label}必须是 2xx 整数")
+        raise ReceiptFinalizerError(f"{label}必须是 2xx 整数或 WebSocket 升级的 101")
     return value
 
 
