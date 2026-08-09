@@ -1,6 +1,6 @@
 # Codex CLI 0.145.0 → 0.147.0 Official Egress 升级计划（执行中）
 
-> 状态：当前 Campaign `…-k35`，位于 **§6 之内**（官方 `run` 17/17 完成，`seal` 未通过）。第一层的验收链路接线已闭环（§10.8，ACC-01～07）；当前阻塞项是第二层的采集覆盖缺口（§10.9，8／15 场景待定案）。k34 已作废停在 `compared`。Active 仍为 0.145
+> 状态：当前 Campaign `…-k36`，位于 **§6 之内**（官方 `run` 19/19 完成，`seal` 未执行）。第一层的验收链路接线已闭环（§10.8，ACC-01～07）；第二层 8 个采集覆盖缺口中 5 个已解决，**A11／A13／A14 的补采失败并阻断 SPEC-EP-002，待外部审核**（§10.9.4）。Active 仍为 0.145
 > 创建日期：2026-08-07
 > 审阅基线：commit `abf236375f66aa096580092e646c4e33d37bb135`
 > 基线画像：Codex CLI `0.145.0`
@@ -486,7 +486,15 @@ capture job 实际产出的证据类型系统性错配**。与 §10.8 不是同�
 根因与第一层相同：历史 25 个 Campaign 无一产出过 `results.json`，链路错配与证据错配
 两层问题一直并存，只能逐层剥离。
 
-#### 10.9.1 缺口清单（k35 官方侧实测，8／15 场景）
+> **⛔ 当前阻断（待外部工程师审核）**：8 个缺口中 5 个已定案实施（§10.9.3），但
+> **A11／A13／A14 的补采失败**——k36 已按新 job 完成 19/19 官方取证，抓包机制正常，
+> 但官方 CLI 在这三个场景下**从未向 `auth.openai.com`／`api.openai.com`／
+> `*.oaiusercontent.com` 发起过任何连接**，pcap 与中继两个独立观测点一致。
+> `SPEC-EP-002` 的三条 SNI check 因此无证据可依。完整实证、已排除的手段、三个备选
+> 方案与待回答问题见 [`SPEC_EP_002_EVIDENCE_BLOCKER.md`](SPEC_EP_002_EVIDENCE_BLOCKER.md)。
+> **`seal` 未执行**，等待裁定。
+
+#### 10.9.1 缺口清单（k35 官方侧实测，8／15 场景）与当前状态
 
 | 场景 | 要求 kinds | 实际可编目 | 缺 |
 |---|---|---|---|
@@ -504,6 +512,13 @@ capture job 实际产出的证据类型系统性错配**。与 §10.8 不是同�
 - **A01** 绑定 `official-core`，而该 job 只做 direct／mitm 采集，不产 relay 字节；
 - **A05／A06** 要求 `websocket_trace`，但没有任何 job 产出该 kind；
 - **A13**（OAuth refresh）官方侧完全没有 job 覆盖——§7.7 记录过它属候选侧辅助采集。
+
+按 §10.9.3 定案实施并在 k36 重采后的状态：
+
+| 场景 | 处置 | 结果 |
+|---|---|---|
+| A01／A05／A06／A12／A15 | 编目修正／场景定义修订 | **已解决** |
+| A11／A13／A14 | 补采集（新 job ＋ 开启抓包） | **未解决**，见 §10.9.4 |
 
 #### 10.9.2 SPEC-TLS-003 判据缺陷（同类问题的独立实例）
 
@@ -551,3 +566,28 @@ artifact、集合相同、顺序种类 ≥`minimum_distinct_orders` 的子集。
 
 定案后 15 个场景全部有 job 绑定，工具身份随之变化，k35 作废并按 §6.1 新建 k36
 （28 个 job）重做官方取证。
+
+#### 10.9.4 A11／A13／A14 补采失败：SPEC-EP-002 无证据可依（待外部审核）
+
+按 §10.9.3 定案给三个 job 补了抓包与新 job，k36 官方取证 19/19 全过、抓包机制正常，
+但**目标域名一个都没出现**：
+
+| job | 期望 SNI | pcap 实测 | 中继记录 |
+|---|---|---|---|
+| `official-relay-oauth-refresh` | `auth.openai.com` | `chatgpt.com` ×3 | `chatgpt.com` ×3 |
+| `official-relay-realtime-webrtc` | `api.openai.com` | `chatgpt.com` ×3 | `chatgpt.com` ×3 |
+| `official-relay-file-upload` | `*.oaiusercontent.com` | `chatgpt.com` ×4 | `chatgpt.com` ×4 |
+
+pcap 与中继两个独立观测点一致，证明**官方 CLI 从未向这三个域名发起连接**，不是抓包
+遗漏或劫持配置问题。三个触发假设均告失败：改 `last_refresh` 未触发 token 刷新
+（CLI 大概率看 JWT 的 `exp`）、realtime 未走到 sideband 那一跳、文件上传未走到区域 URL。
+
+`SPEC-EP-002` 的 `auth-sni`／`api-sni`／`regional-file-sni` 三条 check 因此无证据可依。
+继续追下去的手段（伪造 JWT `exp`、置空 access_token 触发 401、深度干预 realtime 协商、
+构造假区域 URL）都会**替换官方出站形态**，违反 §5.2／§6.2，已全部排除。
+
+完整实证、复现命令、已排除手段的逐条理由、三个备选方案与待回答问题见
+[`SPEC_EP_002_EVIDENCE_BLOCKER.md`](SPEC_EP_002_EVIDENCE_BLOCKER.md)。
+
+**当前状态**：k36 官方证据完好但未封存（`awaiting_receipts`），`seal` 未执行，
+等待外部裁定后决定「改判据重建 Campaign」还是「按新的触发方式重采」。
