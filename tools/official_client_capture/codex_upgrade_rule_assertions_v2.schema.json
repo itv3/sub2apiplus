@@ -1,0 +1,252 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-egress-rule-assertions-v2.json",
+  "title": "Codex 出站逐规则验收结果 v2",
+  "description": "§10.8.10 验收模型的 results 文档：每条规则显式声明 validation_mode。dual_wire 行要求官方／候选双侧命令、机器结果与证据绑定；candidate_profile 行不携带官方侧三件套，改为逐字绑定批准断言画像 SHA-256、classification package digest 与联合 review_sha256。全量废除人工 positive/negative_assertions——accept 从批准画像复算应有 check ID 并离线重放。旧 v1 results 一律拒绝。",
+  "$ref": "#/$defs/resultDocument",
+  "$defs": {
+    "nonEmptyText": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "ruleId": {
+      "type": "string",
+      "pattern": "^SPEC-[A-Z0-9]+-[0-9]{3}$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "fileBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "sha256"
+      ],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "command": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "$ref": "#/$defs/nonEmptyText"
+      }
+    },
+    "evidenceBindings": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "$ref": "#/$defs/fileBinding"
+      }
+    },
+    "officialAuthority": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "assertion_profile_sha256",
+        "classification_package_digest",
+        "review_sha256"
+      ],
+      "properties": {
+        "assertion_profile_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "classification_package_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "review_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "dualWireRuleResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule",
+        "validation_mode",
+        "status",
+        "official_evidence_refs",
+        "candidate_evidence_refs",
+        "official_machine_result",
+        "candidate_machine_result",
+        "official_command",
+        "candidate_command",
+        "evidence_level",
+        "rationale"
+      ],
+      "properties": {
+        "rule": {
+          "$ref": "#/$defs/ruleId"
+        },
+        "validation_mode": {
+          "const": "dual_wire"
+        },
+        "status": {
+          "const": "pass"
+        },
+        "official_evidence_refs": {
+          "$ref": "#/$defs/evidenceBindings"
+        },
+        "candidate_evidence_refs": {
+          "$ref": "#/$defs/evidenceBindings"
+        },
+        "official_machine_result": {
+          "$ref": "#/$defs/fileBinding"
+        },
+        "candidate_machine_result": {
+          "$ref": "#/$defs/fileBinding"
+        },
+        "official_command": {
+          "$ref": "#/$defs/command"
+        },
+        "candidate_command": {
+          "$ref": "#/$defs/command"
+        },
+        "evidence_level": {
+          "const": "full"
+        },
+        "rationale": {
+          "$ref": "#/$defs/nonEmptyText"
+        }
+      }
+    },
+    "candidateProfileRuleResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rule",
+        "validation_mode",
+        "status",
+        "official_authority",
+        "candidate_evidence_refs",
+        "candidate_machine_result",
+        "candidate_command",
+        "evidence_level",
+        "rationale"
+      ],
+      "properties": {
+        "rule": {
+          "$ref": "#/$defs/ruleId"
+        },
+        "validation_mode": {
+          "const": "candidate_profile"
+        },
+        "status": {
+          "const": "pass"
+        },
+        "official_authority": {
+          "$ref": "#/$defs/officialAuthority"
+        },
+        "candidate_evidence_refs": {
+          "$ref": "#/$defs/evidenceBindings"
+        },
+        "candidate_machine_result": {
+          "$ref": "#/$defs/fileBinding"
+        },
+        "candidate_command": {
+          "$ref": "#/$defs/command"
+        },
+        "evidence_level": {
+          "const": "full"
+        },
+        "rationale": {
+          "$ref": "#/$defs/nonEmptyText"
+        }
+      }
+    },
+    "ruleResult": {
+      "oneOf": [
+        {
+          "$ref": "#/$defs/dualWireRuleResult"
+        },
+        {
+          "$ref": "#/$defs/candidateProfileRuleResult"
+        }
+      ]
+    },
+    "resultDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "document_kind",
+        "candidate_id",
+        "target_version",
+        "profile_id",
+        "profile_digest",
+        "official_package_digest",
+        "candidate_package_digest",
+        "comparison_package_digest",
+        "acceptance_contract_sha256",
+        "rules"
+      ],
+      "properties": {
+        "$schema": {
+          "type": "string",
+          "minLength": 1
+        },
+        "schema_version": {
+          "const": "codex-egress-rule-assertions/v2"
+        },
+        "document_kind": {
+          "const": "results"
+        },
+        "candidate_id": {
+          "$ref": "#/$defs/safeId"
+        },
+        "target_version": {
+          "$ref": "#/$defs/version"
+        },
+        "profile_id": {
+          "$ref": "#/$defs/safeId"
+        },
+        "profile_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "official_package_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "candidate_package_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "comparison_package_digest": {
+          "$ref": "#/$defs/sha256"
+        },
+        "acceptance_contract_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "rules": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/ruleResult"
+          }
+        }
+      }
+    }
+  }
+}
