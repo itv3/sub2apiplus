@@ -1374,13 +1374,20 @@ def _terminate_process(process: subprocess.Popen[Any]) -> None:
         process.wait(timeout=5)
 
 
-def run_job(job: Job, log_root: Path) -> dict[str, Any]:
-    """顺序执行任务步骤，并保留不含命令环境值的日志。"""
+def run_job(job: Job, log_root: Path, attempt_index: int = 1) -> dict[str, Any]:
+    """顺序执行任务步骤，并保留不含命令环境值的日志。
+
+    attempt_index 只用于在同一 attempt 内区分补跑的第几次，写进任务收据供审计。
+    """
 
     started = time.time()
     step_results: list[dict[str, Any]] = []
     for index, step in enumerate(job.steps, 1):
-        log_path = log_root / f"{job.job_id}-{index}.log"
+        log_path = log_root / (
+            f"{job.job_id}-{index}.log"
+            if attempt_index == 1
+            else f"{job.job_id}-retry{attempt_index}-{index}.log"
+        )
         environment = os.environ.copy()
         environment.update(step.get("environment", {}))
         argv = list(step["argv"])
@@ -1452,6 +1459,7 @@ def run_job(job: Job, log_root: Path) -> dict[str, Any]:
         "required": job.required,
         "execution_sha256": _job_execution_sha256(job),
         "status": status,
+        "attempt_index": attempt_index,
         "description": job.description,
         "duration_seconds": round(time.time() - started, 3),
         "steps": step_results,
@@ -1461,6 +1469,53 @@ def run_job(job: Job, log_root: Path) -> dict[str, Any]:
         "covers": list(job.covers),
         "scenario_ids": list(job.scenario_ids),
     }
+
+
+# 上游波动（模型 at capacity、压缩原因未触发、CLI 偶发多一次信任提示）会让个别任务
+# 落空。这类失败重跑即消失，但整轮 official 采集要 20 分钟——不在同一 attempt 内补跑，
+# 就只能靠 resume 整轮重来，而重来同样要赌全部 17 项一次全过，收敛极慢。
+#
+# 在同一 attempt 内补跑不等于跨 attempt 拼接证据：run_nonce、环境探针边界、Campaign
+# 身份全程不变，产出的仍然是同一次采集的证据。补跑前把上一次的证据目录整体归档，避免
+# 与新证据混在一起；补跑次数写进任务收据，供审计还原真实执行过程。
+JOB_RETRY_LIMIT = 2
+JOB_RETRY_DELAY_SECONDS = 30
+
+
+def _archive_failed_job_evidence(result: dict[str, Any], attempt_index: int) -> None:
+    """把失败那次的证据目录整体挪走，让补跑从干净状态开始。"""
+
+    for value in result.get("evidence_roots") or []:
+        root = Path(value)
+        if not root.exists() or root.is_symlink():
+            continue
+        archived = root.with_name(f"{root.name}.failed-attempt{attempt_index}")
+        suffix = 1
+        while archived.exists():
+            suffix += 1
+            archived = root.with_name(
+                f"{root.name}.failed-attempt{attempt_index}-{suffix}"
+            )
+        try:
+            root.rename(archived)
+        except OSError:
+            # 归档失败不能吞掉：证据残留会让补跑在旧样本上得出结论。
+            raise ConfigurationError(f"无法归档失败任务的证据目录：{root}")
+
+
+def _run_job_with_retry(job: Job, log_root: Path) -> dict[str, Any]:
+    """在同一 attempt 内对失败任务做有限补跑，返回最后一次的收据。"""
+
+    attempt_index = 1
+    while True:
+        result = run_job(job, log_root, attempt_index)
+        if result.get("status") == "complete":
+            return result
+        if not job.required or attempt_index > JOB_RETRY_LIMIT:
+            return result
+        _archive_failed_job_evidence(result, attempt_index)
+        attempt_index += 1
+        time.sleep(JOB_RETRY_DELAY_SECONDS)
 
 
 def build_coverage(
@@ -5212,7 +5267,7 @@ def _run_capture_attempt(
     else:
         try:
             for job in jobs:
-                result = run_job(job, log_root)
+                result = _run_job_with_retry(job, log_root)
                 results.append(result)
                 _secure_write_json_once(
                     attempt_root / f"job-{job.job_id}.json", result
