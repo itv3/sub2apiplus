@@ -3,9 +3,9 @@
   "base_commit": "ba485663c3bc0af6802cf6dfc4e19139ef00e371",
   "retirement_receipt": "docs/egress/maintenance/official-egress-consolidation-retirement.json",
   "retirement_receipt_sha256": "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36",
-  "candidate_path_count": 844,
-  "transition_entry_count": 844,
-  "transition_path_set_sha256": "73304ac4e7071f72bd1154109c9d9d3fedba8273540296dc16821e12bb6a3813",
+  "candidate_path_count": 846,
+  "transition_entry_count": 846,
+  "transition_path_set_sha256": "3625746c7979b1009dacea58d530f68618393f47cf6e5b9dcf13df9957b8f694",
   "entries": [
     {
       "path": ".github/workflows/backend-ci.yml",
@@ -18992,6 +18992,30 @@
       ]
     },
     {
+      "path": "tools/official_client_capture/build_assertion_bundle.py",
+      "scope": "source_gate",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 15774,
+        "sha256": "7b97d6a630c94a4a3e4f4f2f7fbf26a3cb8fb28d279347d238cc0b938f3ef093"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
       "path": "tools/official_client_capture/build_capture_manifest.py",
       "scope": "source_gate",
       "before": {
@@ -19775,6 +19799,30 @@
         "mode": "0644",
         "size": 4256,
         "sha256": "42298819a3017686a0ed7a247261222d53a568f7176d8b91c105e4c5718150cb"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_build_assertion_bundle.py",
+      "scope": "source_gate",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 10256,
+        "sha256": "6e756d2d7f51b50846b7ab641a9d0a888f3bbc4136cdea845b612f4828596cfe"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
