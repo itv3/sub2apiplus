@@ -64,6 +64,15 @@ class LiveAttestationCaptureWiringTest(unittest.TestCase):
         self.assertIn("restore_deploy_without_live_attestation", self.script)
         self.assertIn("restore_failed=1", self.script)
 
+    def test_重建容器后补装抓包_CA(self) -> None:
+        """compose 重建是全新容器，不补 CA 会在第一跳 TLS 阶段被自己的 relay 证书挡下。"""
+
+        inject = self.script.index("deploy_with_live_attestation() {")
+        body = self.script[inject : self.script.index("\nrestore_deploy_without_live_attestation")]
+        self.assertIn('docker cp "$ca_cert"', body)
+        self.assertIn("update-ca-certificates", body)
+        self.assertIn("restart_service", body)
+
     def test_缺少坐标时不静默跳过(self) -> None:
         # 未提供 compose 坐标只是不注入，A11 仍会执行并由 assert_2xx 暴露失败。
         self.assertIn(

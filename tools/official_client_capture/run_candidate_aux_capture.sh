@@ -149,14 +149,20 @@ YML
   live_attestation_armed=1
   (cd "$LIVE_ATTESTATION_COMPOSE_DIR" && eval docker compose $LIVE_ATTESTATION_COMPOSE_FILES \
     -f "$capture_root/runtime/live-attestation/$run_id.override.yml" up -d sub2api) >/dev/null || return 1
-  wait_healthy
+  wait_healthy || return 1
+  # compose 重建的是全新容器，之前 docker cp 进去的抓包 CA 随旧容器一起消失；
+  # 不补装，第一跳会在 TLS 阶段被自己的 relay 证书挡下（bad certificate）。
+  docker cp "$ca_cert" "$service_container:$custom_ca_path" >/dev/null || return 1
+  docker exec "$service_container" update-ca-certificates >/dev/null 2>&1 || return 1
+  restart_service
 }
 
 restore_deploy_without_live_attestation() {
   [[ $live_attestation_armed == 1 ]] || return 0
   live_attestation_armed=0
   (cd "$LIVE_ATTESTATION_COMPOSE_DIR" && eval docker compose $LIVE_ATTESTATION_COMPOSE_FILES up -d sub2api) >/dev/null || return 1
-  wait_healthy
+  wait_healthy || return 1
+  # 恢复部署同样是新容器：CA 由 EXIT 钩子按基线清理，这里只需保证服务已就绪。
   rm -f "$capture_root/runtime/live-attestation/$run_id.override.yml"
 }
 
