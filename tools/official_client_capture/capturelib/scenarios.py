@@ -11,7 +11,7 @@ import subprocess
 import threading
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from .model import CaptureCase
 from .environment import environment_manifest_view
@@ -195,6 +195,10 @@ def _stop_owned_cli_process(process: subprocess.Popen[str]) -> None:
 # 资源错误做有限重试。重试只认这一种错误，其余失败一律原样上报。
 UPSTREAM_CAPACITY_MESSAGE = "Selected model is at capacity"
 UPSTREAM_CAPACITY_RETRY_LIMIT = 4
+# 官方 CLI 偶尔多触发一次 sandbox 信任提示，使 s4 的 hook_allowed_count 从 1 变成 2；
+# 这类波动重跑即消失，但整轮 official 采集要 20 分钟，不重试就得整轮重来。
+CODEX_SCENARIO_RETRY_LIMIT = 3
+CODEX_SCENARIO_RETRY_DELAY_SECONDS = 5
 UPSTREAM_CAPACITY_RETRY_DELAY_SECONDS = 20
 
 
@@ -1194,7 +1198,69 @@ def _validate_codex(
     return summary
 
 
+def _transient_codex_failure(summary: Mapping[str, Any]) -> bool:
+    """判断这次不通过是否属于官方 CLI 的偶发波动，可以原样重跑。
+
+    只认「CLI 正常退出、上游没有报错，但校验没过」这一种形态：例如 s4 偶尔多触发一次
+    sandbox 信任提示，使 hook_allowed_count 从 1 变成 2。这类波动重跑就会消失。
+
+    markers 缺失、工具输出不符、密钥泄漏这些是行为层面的真实结论，重跑同样不会变，
+    因此不在可重试范围内——把它们重试掉等于掩盖真实差异。
+    """
+
+    if summary.get("valid"):
+        return False
+    if summary.get("error_event_count") != 0:
+        return False
+    if summary.get("runtime_secret_exposed"):
+        return False
+    if not all(code == 0 for code in summary.get("return_codes") or [1]):
+        return False
+    if not summary.get("markers_present"):
+        return False
+    return summary.get("unexpected_tool_item_count") == 0
+
+
 def run_codex_scenario(
+    *,
+    codex_bin: str,
+    model: str,
+    case: CaptureCase,
+    scenario: str,
+    environment: dict[str, str],
+    output_dir: Path,
+    timeout: int,
+    runtime_secret: str | None,
+    api_key_env: str,
+    codex_version: str = "0.145.0",
+) -> dict[str, Any]:
+    """执行并校验一个 Codex 场景；对官方 CLI 的偶发波动做有限重跑。"""
+
+    remaining = CODEX_SCENARIO_RETRY_LIMIT
+    while True:
+        summary = _run_codex_scenario_once(
+            codex_bin=codex_bin,
+            model=model,
+            case=case,
+            scenario=scenario,
+            environment=environment,
+            output_dir=output_dir,
+            timeout=timeout,
+            runtime_secret=runtime_secret,
+            api_key_env=api_key_env,
+            codex_version=codex_version,
+        )
+        if remaining <= 0 or not _transient_codex_failure(summary):
+            return summary
+        remaining -= 1
+        # 重跑前清空产物，避免上一轮的 turn 文件与本轮混在同一目录里。
+        for stale in sorted(output_dir.iterdir()):
+            if stale.is_file() and not stale.is_symlink():
+                stale.unlink()
+        time.sleep(CODEX_SCENARIO_RETRY_DELAY_SECONDS)
+
+
+def _run_codex_scenario_once(
     *,
     codex_bin: str,
     model: str,

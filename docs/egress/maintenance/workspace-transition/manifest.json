@@ -3,9 +3,9 @@
   "base_commit": "ba485663c3bc0af6802cf6dfc4e19139ef00e371",
   "retirement_receipt": "docs/egress/maintenance/official-egress-consolidation-retirement.json",
   "retirement_receipt_sha256": "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36",
-  "candidate_path_count": 836,
-  "transition_entry_count": 836,
-  "transition_path_set_sha256": "12e061fafe079e898d1c038fdeb74e225e582eedbc5b7e70eb77c8bf0972b952",
+  "candidate_path_count": 837,
+  "transition_entry_count": 837,
+  "transition_path_set_sha256": "272243aec22b76aa3434c092402d98608b3df538249ad32cf5d0bbf1c4555baa",
   "entries": [
     {
       "path": ".github/workflows/backend-ci.yml",
@@ -19269,8 +19269,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 46084,
-        "sha256": "9442137e5fdf8ade6091c9ec50001b15c4b6e655600401a2e96df29a47bce6d2"
+        "size": 48626,
+        "sha256": "a7c4c39e647afe502d553472d2f6528d52670ca9f16a6f337e7a59a8c69738db"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
@@ -19871,6 +19871,30 @@
         "mode": "0644",
         "size": 2691,
         "sha256": "c88983a677bb8f97ce648f50a71a515cff111bf5316d5aa63cf9b5ce26e31656"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_scenario_retry.py",
+      "scope": "source_gate",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 2263,
+        "sha256": "5169edfeed5ad4b9853df1336160590ebac3634c41ead5ddfdf497d2a4d90393"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
