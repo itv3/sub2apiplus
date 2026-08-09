@@ -43,6 +43,7 @@ INSTALLATION_SCHEMA = "kilo-installation/v1"
 INGRESS_SCHEMA = "kilo-ingress-witness/v1"
 RESPONSE_SCHEMA = "kilo-response-witness/v1"
 USAGE_SCHEMA = "sub2api-usage-audit/v1"
+RUNTIME_AUDIT_SCHEMA = "codex-egress-runtime-audit/v1"
 
 CLIENT_CONTRACTS = {
     "kilo-compatible": {
@@ -182,7 +183,7 @@ def build_ingress(
     installation_id: str,
     client_version: str,
     model: str,
-    observed_user_agent: str,
+    request_id: str,
     received_at_utc: str,
 ) -> dict[str, Any]:
     contract = CLIENT_CONTRACTS[client_id]
@@ -192,12 +193,14 @@ def build_ingress(
         "client_id": client_id,
         "installation_id": installation_id,
         "received_at_utc": received_at_utc,
+        "request_id": request_id,
         "run_nonce": identity["run_nonce"],
     }
     return {
         "schema_version": INGRESS_SCHEMA,
         "source": "kilo-ingress",
         "witness_id": _content_id("ingress", body),
+        "request_id": request_id,
         "campaign_id": identity["campaign_id"],
         "attempt_id": identity["attempt_id"],
         "run_nonce": identity["run_nonce"],
@@ -209,7 +212,6 @@ def build_ingress(
         "model": model,
         "candidate_id": identity["candidate_id"],
         "target_version": identity["target_version"],
-        "observed_user_agent": observed_user_agent,
         "received_at_utc": _require_utc(received_at_utc, "ingress.received_at_utc"),
     }
 
@@ -289,6 +291,76 @@ def build_usage(
     }
 
 
+def build_runtime_audit(
+    *,
+    identity: Mapping[str, Any],
+    client_id: str,
+    installation_id: str,
+    ingress_witness_id: str,
+    request_id: str,
+    model: str,
+    oauth_account_id: int,
+    upstream_endpoint: str,
+    transport: str,
+    observed_at_utc: str,
+    candidate_image_id: str,
+    source_tree_sha256: str,
+    build_id: str,
+    deployed_version: str,
+) -> dict[str, Any]:
+    """记录这次入站调用在服务内部实际走了哪条出站链路。
+
+    与 observed-profile 那份 runtime-audit 不是一回事：那份描述服务整体解析到哪个画像，
+    这份描述**单次调用**的出站形态——传输方式、上游端点、认证模式。内容全部来自服务端
+    对该次请求的记录（usage_logs 的 upstream_endpoint 与 openai_ws_mode），工具不推断。
+    """
+
+    if transport not in {"http", "websocket"}:
+        raise KiloReceiptError(f"transport 只能是 http 或 websocket：{transport}")
+    if client_id == "kilo-compatible" and transport != "http":
+        raise KiloReceiptError("kilo-compatible 的出站事实必须是 HTTP 传输")
+    if not isinstance(oauth_account_id, int) or oauth_account_id <= 0:
+        raise KiloReceiptError("oauth_account_id 必须是正整数")
+    contract = CLIENT_CONTRACTS[client_id]
+    body = {
+        "attempt_id": identity["attempt_id"],
+        "campaign_id": identity["campaign_id"],
+        "client_id": client_id,
+        "request_id": request_id,
+        "run_nonce": identity["run_nonce"],
+        "transport": transport,
+    }
+    return {
+        "schema_version": RUNTIME_AUDIT_SCHEMA,
+        "source": "sub2api-runtime",
+        "event_type": "oauth_request_forwarded",
+        "event_id": _content_id("runtime", body),
+        "request_id": request_id,
+        "campaign_id": identity["campaign_id"],
+        "attempt_id": identity["attempt_id"],
+        "run_nonce": identity["run_nonce"],
+        "ingress_witness_id": ingress_witness_id,
+        "installation_id": installation_id,
+        "client_id": client_id,
+        "protocol": contract["protocol"],
+        "entrypoint": contract["entrypoint"],
+        "model": model,
+        "candidate_id": identity["candidate_id"],
+        "target_version": identity["target_version"],
+        "profile_id": identity["profile_id"],
+        "profile_digest": identity["profile_digest"],
+        "image_id": candidate_image_id,
+        "source_tree_sha256": source_tree_sha256,
+        "build_id": build_id,
+        "deployed_version": deployed_version,
+        "auth_mode": "oauth",
+        "oauth_account_id": oauth_account_id,
+        "upstream_endpoint": upstream_endpoint,
+        "transport": transport,
+        "affected_branches": [transport],
+        "observed_at_utc": _require_utc(observed_at_utc, "runtime_audit.observed_at_utc"),
+    }
+
 def build_client_receipts(
     *,
     identity: Mapping[str, Any],
@@ -323,18 +395,19 @@ def build_client_receipts(
     response_id = _require(observation.get("response_id"), "observation.response_id")
     installation_id = installation["installation_id"]
 
-    return {
-        "ingress": build_ingress(
-            identity=identity,
-            client_id=client_id,
-            installation_id=installation_id,
-            client_version=client_version,
-            model=_require(observation.get("model"), "observation.model"),
-            observed_user_agent=user_agent,
-            received_at_utc=_require(
-                observation.get("received_at_utc"), "observation.received_at_utc"
-            ),
+    ingress = build_ingress(
+        identity=identity,
+        client_id=client_id,
+        installation_id=installation_id,
+        client_version=client_version,
+        model=_require(observation.get("model"), "observation.model"),
+        request_id=request_id,
+        received_at_utc=_require(
+            observation.get("received_at_utc"), "observation.received_at_utc"
         ),
+    )
+    result = {
+        "ingress": ingress,
         "response": build_response(
             identity=identity,
             client_id=client_id,
@@ -357,6 +430,33 @@ def build_client_receipts(
             ),
         ),
     }
+    result["runtime_audit"] = build_runtime_audit(
+        identity=identity,
+        client_id=client_id,
+        installation_id=installation_id,
+        ingress_witness_id=ingress["witness_id"],
+        request_id=request_id,
+        model=ingress["model"],
+        oauth_account_id=observation.get("oauth_account_id"),
+        upstream_endpoint=_require(
+            observation.get("upstream_endpoint"), "observation.upstream_endpoint"
+        ),
+        transport=_require(observation.get("transport"), "observation.transport"),
+        observed_at_utc=_require(
+            observation.get("completed_at_utc"), "observation.completed_at_utc"
+        ),
+        candidate_image_id=_require(
+            identity.get("candidate_image_id"), "identity.candidate_image_id"
+        ),
+        source_tree_sha256=_require(
+            identity.get("source_tree_sha256"), "identity.source_tree_sha256"
+        ),
+        build_id=_require(identity.get("build_id"), "identity.build_id"),
+        deployed_version=_require(
+            identity.get("deployed_version"), "identity.deployed_version"
+        ),
+    )
+    return result
 
 
 def main() -> int:

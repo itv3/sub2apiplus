@@ -23,6 +23,12 @@ IDENTITY = {
     "run_nonce": "ed357e12eb0ab97a497d423f35cb7d10d1edc9b8886eb6a8f3b60c92675cccce",
     "candidate_id": "candidate-20260809T050149Z-k29-r1",
     "target_version": "0.147.0",
+    "profile_id": "codex-0.147.0-official-k29-v1",
+    "profile_digest": "0d86e033716ab2b7d2161a7015ad000bc0d7cedfaa9e130342eec4ba0637ef9f",
+    "candidate_image_id": "sha256:" + "a" * 64,
+    "source_tree_sha256": "b" * 64,
+    "build_id": "0.1.171-7-docker",
+    "deployed_version": "0.1.171-7",
 }
 
 INSTALLATION_FACTS = {
@@ -45,6 +51,8 @@ OBSERVATION = {
     "received_at_utc": "2026-08-09T13:22:52.521+08:00",
     "completed_at_utc": "2026-08-09T13:22:52.725+08:00",
     "recorded_at_utc": "2026-08-09T13:22:52.725+08:00",
+    "upstream_endpoint": "/v1/responses",
+    "transport": "http",
 }
 
 
@@ -100,11 +108,11 @@ class KiloReceiptBuilderTest(unittest.TestCase):
                 **OBSERVATION,
                 "entrypoint": "/v1/responses",
                 "user_agent": "OpenAI/JS 6.45.0",
+                "transport": "websocket",
             },
             installation=_installation(),
         )
         self.assertEqual(receipts["ingress"]["client_version"], "7.4.2001")
-        self.assertEqual(receipts["ingress"]["observed_user_agent"], "OpenAI/JS 6.45.0")
 
         with self.assertRaises(builder.KiloReceiptError):
             builder.build_client_receipts(
@@ -213,6 +221,7 @@ class KiloReceiptBuilderTest(unittest.TestCase):
                 **OBSERVATION,
                 "entrypoint": "/v1/responses",
                 "http_status": 101,
+                "transport": "websocket",
             },
             installation=_installation(),
         )
@@ -236,7 +245,7 @@ class KiloReceiptBuilderTest(unittest.TestCase):
         responses = builder.build_client_receipts(
             identity=IDENTITY,
             client_id="kilo-responses",
-            observation={**OBSERVATION, "entrypoint": "/v1/responses"},
+            observation={**OBSERVATION, "entrypoint": "/v1/responses", "transport": "websocket"},
             installation=_installation(),
         )
         self.assertEqual(responses["ingress"]["protocol"], "openai-responses")
