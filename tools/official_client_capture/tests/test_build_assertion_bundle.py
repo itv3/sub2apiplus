@@ -75,7 +75,9 @@ class AssertionBundleBuildTest(AssertionBundleTestBase):
         self.assertEqual(entry["source_sha256"], entry["target_sha256"])
         target = self.bundle_dir / entry["target_path"]
         self.assertEqual(target.read_bytes(), b"models-flow\n")
-        self.assertFalse(os.access(target, os.W_OK))
+        # 直接查权限位而不是 os.access：采集机以 root 运行，root 对 0400
+        # 文件仍可写，os.access 会返回 True 而掩盖权限回归。
+        self.assertEqual(target.stat().st_mode & 0o777, 0o400)
         replay = bundle.verify_bundle(self.roots, self.bundle_dir)
         self.assertEqual(
             replay["provenance_sha256"], provenance["provenance_sha256"]
