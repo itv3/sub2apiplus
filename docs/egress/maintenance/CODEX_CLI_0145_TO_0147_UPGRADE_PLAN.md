@@ -413,40 +413,101 @@ final-wire 可用，但不能替代 alpha 真实 service 链或 `server_response
 
 ## 10. 当前执行状态
 
-已完成：
+> 时间：2026-08-09。当前 Campaign 为 `codex-0145-to-0147-20260809T034525Z-k28`，
+> 官方采集执行中；Active 仍为 0.145，0.147 尚未替换。
 
-- DOC-PRE、P0 报告和 6 个最小修复变更集均已独立提交并复核；
-- `make test-capture-tools`：340 项通过，3 项按环境跳过；
-- `make check-egress-spec` 全绿；健康 bootstrap replay 为 180/0/22；
-- 0.145→临时完整 0.147 异版本 mutation 的 dump、三坐标和 Compiler 并集门禁全绿；
-- P0 最终 `plan` 加载 42 条规则、25 个任务，工具身份 80 项、摘要 `fa8fc9fa…`；
-- 远端 Vircs 当前正式 Campaign 为 `codex-0145-to-0147-20260808T054501Z-k22`，`official/result.json` 与
-  `classification/result.json` 均已 `complete`，`status` 为 `profile_approved`、
-  `next_command` 为 `capture-candidate`，`candidates/` 尚不存在；
-- 候选服务已按 §7 部署：镜像
-  `127.0.0.1:5000/sub2api/codex0147-candidate-k22@sha256:166c3d20…`，
-  `GATEWAY_OFFICIAL_CLIENT_PROFILES_MODE=previous`，Release graph 中 Active 仍为 `0.145.0`、
-  候选 `0.147.0` 挂在 previous；候选源码 `/root/oauth-capture/candidate-source-k22` 内
-  catalogdata 画像与批准清单同为 `0d86e033…`；
-- `tools/official_client_capture/run_sub2api_direct_matrix.sh` 与 Vircs 私有副本
-  `/root/oauth-capture/private-tools/codex0147-912c242e2-k22/tools/official_client_capture/run_sub2api_direct_matrix.sh`
-  的默认 `subjects` 已同步为 `codex-http codex-ws`，不再默认跑 `claude-http`；
-- 之前落到 `_failed/...candidate-direct-core-*` 的失败是手工直接执行脚本、且只跑到
-  `claude-http/s1` 的历史失败；正式 `capture-candidate` 由 Campaign 显式注入
-  `SUBJECTS=codex-http codex-ws`，不受脚本默认值影响；
-- compression 系列四次提交遗漏的 changeset3 冻结源码登记已补齐（`758847871`）：新增
-  `codex-request-compression-source-transition.json`，`make check-egress-spec` 由不绿恢复全绿；
-- §7.4 的候选环境恢复判据修复已完成：`make test-capture-tools` 345 项通过、3 项按环境跳过，
-  `make check-egress-spec` 全绿；工具身份 80 项、摘要 `725dbcbd…`。
+### 10.1 已确立的产物
 
-进行中：
+0.147 画像已经确定，且经过一次有效的交叉验证：k26 与 k27 两次独立走完
+`prepare-profile` → `stage-profile`，得到的 profile digest 逐字相同，
+`profile_id` 不参与内容寻址。
 
-- k22 因 §7.4 的工具摘要变化不可继续，候选阶段改在新 Campaign 上执行：同步 Vircs 私有工具
-  副本 → `plan` 建立 k23 → 重做 `capture-official run/seal` 与 `classify`；
-- 之后执行 `capture-candidate run`，按 Campaign 顺序覆盖 `candidate-core-direct`、
-  `candidate-core-mitm`、`candidate-h1-wire`、`candidate-compact-direct`、`candidate-compact-mitm`、
-  `candidate-frozen-core`、`candidate-frozen-aux`、`candidate-images-wire` 共 8 个必需任务；
-- 再继续 `capture-candidate seal`、compare、accept/ready 与生产启用；
-- `Active/Previous` 尚未切换，0.147 画像也尚未正式替换 0.145。
+| 项目 | 值 |
+|---|---|
+| 目标画像 digest | `0d86e033716ab2b7d2161a7015ad000bc0d7cedfaa9e130342eec4ba0637ef9f` |
+| Snapshot 输入 | `/root/oauth-capture/profile-inputs/codex-0147-snapshot-223000Z.json`（16 endpoint） |
+| 必需规则 | 42 条，`blocked=0` |
+| 发现分类 | 2768 条，由 `runtime/classify_k26_discoveries.py` 确定性归类 |
+
+k27 的官方证据封存已通过（426 个文件、93MB，secret 扫描无发现），classify 亦已
+`complete`；这些结论在 k28 需按同一路径重做，但输入与审核依据不变。
+
+### 10.2 本轮修复的缺陷
+
+均已独立提交并通过 mutation 验证。
+
+**A13：`req.Client` 链的 Guard 包装顺序（`31768d0a6`）**——既有缺陷，与本次升级无关。
+详见 §7.7。生产上所有走 `req.Client` 且画像要求 lowercase wire 的官方出站端点都被自身
+Guard 拒绝，OAuth token 刷新即在其中；此前没被发现，只因候选验收从未跑到 A13。修复后
+调用 refresh 端点返回上游真实的 `401 token_expired`，证明请求已送达 `auth.openai.com`。
+
+**A11：Linux 上的 Live attestation 接线**——详见 §7.8。`candidatecapture` 分支引用的
+`candidateCaptureScopeFromContext` 根本不存在，该分支平时既不构建也不测试。补齐后
+A11 在 k27 首次跑通（`realtime_first_hop` + `realtime_sideband`，pcap 16710 字节）。
+
+**环境恢复判据把容器重建判成污染（`e5717d678`）**——A11 注入 attestation 必须 compose
+重建服务容器，而恢复检查对 containers 与 configuration 用 `byte_equal`：重建换实例 ID，
+容器状态的 `id` 字段随之改变，Docker 写入 `/etc/hosts` 的
+`<容器 IP> <实例 ID 前 12 位>` 自引用行也随之改写。两者都由 Docker 生成、不表达任何
+采集副作用，却必然让 Campaign 被判 `environment_contaminated`——**k27 正是这样整个作废的**。
+修复为收窄判据而非放宽比较：容器状态不再记录实例 ID（镜像 ID、挂载集合、运行与健康
+状态仍逐字比较），hosts 摘要剔除自引用行（仅剔除“单主机名且主机名等于实例 ID 前 12 位”
+的行，人为劫持行仍会改变摘要）。database 一项本就无碍——探针早已区分 protected 表与
+watermark 表，比较用 `before_subset`，允许 `usage_logs` 等增长。
+
+**候选镜像的可复现构建（`e78a7556a`、`ee7170c32`）**——此前候选镜像只能靠一份未入库的
+临时 Dockerfile 构建，候选身份无法从仓库复现。现由标准 Dockerfile 的两个构建参数覆盖：
+`BUILD_TAGS`（默认 `embed`，候选传 `embed,candidatecapture`）与 `FRONTEND_SOURCE`
+（默认 `build`，候选传 `prebuilt`——抓包机 7G 内存跑 `pnpm run build` 会 OOM）。两个
+默认值都有断言守护：合成 attestation provider 进生产镜像会让 Live 请求带着合成值出站，
+来源不明的 dist 则可能与后端不匹配。
+
+### 10.3 采集脚手架的两处不一致（已绕过，未修）
+
+这两处不改动受管工具即可绕过，故未纳入本轮变更集，但会在下一次工具变更窗口修正：
+
+- **`run_images_wire_probe.sh` 不准备模型映射**。`run_candidate_aux_capture.sh` 会临时给
+  账号写入图片模型映射（`gpt-image-2`）并由 EXIT 钩子恢复，而 images-wire 硬编码
+  `gpt-image-1` 却没有这一步，导致生图请求在入口就 404、根本不出站，h1 探针等不到数据。
+  本轮按 aux 的同样方式手工补了映射，原值存档于
+  `runtime/k27-account90-model-mapping.before`，采集结束后恢复。
+- **`ADMIN_BEARER_TOKEN` 不在 scenarios 的 environment 声明中**。编排器用
+  `os.environ.copy()` 继承调用进程环境，因此该变量必须由调用方显式带入，否则
+  `candidate-frozen-aux` 会在第 60 行直接退出。
+
+另需注意：`sub2api-admin-token` 是 24 小时有效的 JWT，容器内 `ADMIN_PASSWORD` 为空、
+走不了登录接口；用仓库自带的 `backend/cmd/jwtgen` 重签即可（它按第一个 active admin 签发）。
+
+### 10.4 运维要点
+
+- **重跑必须全量归档**。`resume --rerun-failed` 始终重跑整个 attempt 的全部任务、不跨
+  attempt 复用证据，因此必须把 `runs/<campaign>-*` 与
+  `runs/official-client/oauth/oauth-<campaign>` **全部**移走，只归档失败那一个会让其余
+  任务撞上“运行目录已存在，拒绝覆盖”。候选阶段的 resume 还须重申
+  `--candidate-id` 与全套身份参数（`runtime-image`／`candidate-image-id`／`build-id`／
+  `deployed-version`／`profile-id`／`profile-digest`）。
+- **`official-relay-comp-hash-changed` 属概率性失败**。它靠 `gpt-5.6-luna → gpt-5.4` 换模、
+  依赖两者 comp_hash 在生产模型目录中跨组自然触发，判据是 `exact_match_count=0`，靠重试解决。
+- **候选采集跑在 previous 模式**。stage-profile 把 0.147 放在发布图的 `previous` 位、
+  0.145 留在 `active`（`production_selector_changed: false`），因此候选部署用
+  `GATEWAY_OFFICIAL_CLIENT_PROFILES_MODE=previous` 验证 0.147；§9 验收通过后才对调指针。
+- **Vircs 没有 Go**。`prepare-profile` 与 `stage-profile` 都要 `go run ./cmd/egresscatalogstage`，
+  交叉编译该工具后用 shim 转发即可（`/root/oauth-capture/go-shim-k27/go`）。
+- **证据权限**。official seal 要求目录 `0700`、文件 `0600`，归档或重跑后需复位。
+- **capture-manifest 每轮自建**。`runs/official-client/oauth/oauth-<campaign>/capture-manifest.json`
+  由每轮的 `runtime/gen_official_k<N>_manifest.py` 生成（改路径即可）。
+- **macOS 传输**。`tar` 会带出 AppleDouble 伴随文件，传完需 `find -name "._*" -delete`。
+
+### 10.5 待办
+
+1. k28 官方采集 → seal → classify → stage-profile；
+2. 构建并推送候选镜像（`BUILD_TAGS=embed,candidatecapture`、`FRONTEND_SOURCE=prebuilt`），
+   以 `repository@sha256:<manifest-digest>` 形式登记；
+3. 候选采集 8 个必需任务，覆盖 A11–A14；
+4. **需用户配合**：用 ZLF Code（Kilo 内核）各发一次请求——OpenAI Compatible →
+   `/v1/chat/completions`，OpenAI Responses → `/v1/responses`，模型 `gpt-5.4`，API Key `id=15`；
+5. `capture-candidate seal` → compare → accept/ready；
+6. §9 生产启用：canary、切换、回滚演练、恢复后 final-wire，最终 Active=0.147 / Previous=0.145；
+7. 恢复账号 90 的 `model_mapping`（去掉 `gpt-image-1`）与分组 9 的 `allow_image_generation`。
 
 用户已授权按第 5→6→7→8→9 章连续执行；每个变更集完成并自复核后自动进入下一项。
