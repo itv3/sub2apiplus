@@ -153,6 +153,14 @@ def run_assertion_gate(
         )
     except AssertionBundleError as error:
         raise _gate_wrap(error, "bundle provenance 重放失败") from error
+    # bundle 位于 attempt 证据根内，必须禁止把 bundle 自身的内容再收口一次：
+    # 自引用会让 provenance 看似闭环，实际未追溯到任何原始 job 证据。
+    for entry in bundle_provenance["entries"]:
+        if f"/{BUNDLE_DIR_NAME}/" in f"/{entry['source_path']}":
+            raise AssertionGateError(
+                "断言证据包禁止收口自身内容，来源必须是原始采集证据："
+                f"{entry['source_inventory_path']}"
+            )
     derived_provenance_sha256 = None
     if (bundle_dir / DERIVED_PREFIX.rstrip("/")).exists():
         try:

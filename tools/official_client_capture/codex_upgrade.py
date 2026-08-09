@@ -51,6 +51,7 @@ from tools.official_client_capture.acceptance_contract import (
 )
 from tools.official_client_capture.assertion_gate import (
     AssertionGateError,
+    BUNDLE_DIR_NAME as ASSERTION_BUNDLE_DIR_NAME,
     run_assertion_gate,
     validate_gate_receipt,
 )
@@ -4105,25 +4106,50 @@ def _capture_assertion_context(
     *,
     target_version: str,
 ) -> dict[str, Any]:
+    """定位断言证据包并返回单根断言上下文。
+
+    §10.8.10 第 2／3 条：断言器只读取一个证据根，即 attempt 内的
+    `assertion-bundle/`；它由 ACC-02 从各 job 根只读收口而来，自包含 manifest、
+    原件与派生观测。因此这里返回的 `evidence_root` 是 bundle 目录本身，而
+    `evidence_prefix` 是 bundle 在封存 inventory 中的逻辑前缀（`<所属根>/
+    assertion-bundle`）——两者不同源正是 §10.8.5 路径空间失配的修复点：
+    机器 check 的相对路径加上该前缀后，必须逐字命中 inventory 条目。
+    """
+
     path = _resolve_receipt(
         manifest_path,
         evidence_roots,
         "capture-manifest.json",
         label="统一 capture manifest",
     )
-    binding, evidence_root, prefix = _evidence_file_binding(
+    binding, owning_root, owning_prefix = _evidence_file_binding(
         path, evidence_roots, label="统一 capture manifest"
     )
-    if requested_root is not None and requested_root.resolve(strict=True) != evidence_root:
-        raise ConfigurationError("--assertion-evidence-root 与 capture manifest 所属根不一致。")
+    bundle_dir = path.parent.resolve(strict=True)
+    if bundle_dir.name != ASSERTION_BUNDLE_DIR_NAME:
+        raise ConfigurationError(
+            "统一 capture manifest 必须位于 attempt 的 "
+            f"{ASSERTION_BUNDLE_DIR_NAME}/ 断言证据包内。"
+        )
+    if bundle_dir == owning_root:
+        raise ConfigurationError(
+            f"{ASSERTION_BUNDLE_DIR_NAME}/ 必须是已收集证据根内的子目录，"
+            "不能自成独立证据根。"
+        )
+    relative_bundle = bundle_dir.relative_to(owning_root).as_posix()
+    prefix = f"{owning_prefix}/{relative_bundle}"
+    if requested_root is not None and requested_root.resolve(strict=True) != bundle_dir:
+        raise ConfigurationError(
+            "--assertion-evidence-root 与断言证据包目录不一致。"
+        )
     try:
-        load_assertion_observations(path, evidence_root, target_version)
+        load_assertion_observations(path, bundle_dir, target_version)
     except (OSError, ValueError) as error:
         raise ConfigurationError(f"统一 capture manifest 验证失败：{error}") from error
     return {
         "capture_manifest": binding,
         "capture_manifest_path": str(path.resolve(strict=True)),
-        "evidence_root": str(evidence_root),
+        "evidence_root": str(bundle_dir),
         "evidence_prefix": prefix,
     }
 
@@ -4138,13 +4164,9 @@ def _run_seal_assertion_gate(
     """ACC-03：seal 前按分侧验收契约执行断言门禁，任一失败拒绝封存。"""
 
     bundle_dir = Path(assertion_context["evidence_root"])
-    bundle_resolved = bundle_dir.resolve(strict=False)
-    # bundle 自身不是复制来源；其余证据根按 inventory 前缀参与 provenance 重放。
-    source_roots = {
-        prefix: root
-        for root, prefix in _evidence_root_map(roots)
-        if root != bundle_resolved
-    }
+    # provenance 里的 source_root 名即封存 inventory 的逻辑前缀，重放时按同一
+    # 映射回到真实目录；bundle 是某个根内的子目录，不单独充当来源根。
+    source_roots = {prefix: root for root, prefix in _evidence_root_map(roots)}
     try:
         profile = load_acceptance_profile(acceptance_profile_path())
         contract = verify_frozen_contract(profile)

@@ -78,6 +78,25 @@ def _assert_regular_source(path: Path, label: str) -> None:
         raise AssertionBundleError(f"{label} 禁止硬链接：{path}")
 
 
+def make_private_parents(root: Path, relative: str) -> None:
+    """逐层创建目标父目录并置 0700。
+
+    `Path.mkdir(parents=True, mode=...)` 的 mode 只作用于最末一层，中间层沿用
+    umask 默认值（常见为 0755）。bundle 位于 attempt 证据根内，任何一层对
+    group/other 开放都会让 seal 的 `_evidence_permissions_private` 拒绝封存。
+    """
+
+    current = root
+    for segment in relative.split("/")[:-1]:
+        current = current / segment
+        if current.is_symlink():
+            raise AssertionBundleError(f"目标路径沿途存在符号链接：{current}")
+        if not current.exists():
+            current.mkdir(mode=0o700)
+        else:
+            current.chmod(0o700)
+
+
 def _assert_no_symlink_segments(root: Path, relative: str, label: str) -> None:
     current = root
     for segment in relative.split("/"):
@@ -150,7 +169,9 @@ def build_bundle(
 ) -> dict[str, Any]:
     if bundle_dir.exists():
         raise AssertionBundleError(f"bundle 目录必须全新创建：{bundle_dir}")
-    bundle_dir.mkdir(parents=True)
+    # bundle 位于 attempt 证据根内，必须满足原始证据权限门禁（目录 0700／
+    # 文件 0600 以内），否则 seal 的 _evidence_permissions_private 会拒绝封存。
+    bundle_dir.mkdir(parents=True, mode=0o700)
     records: list[dict[str, str]] = []
     for entry in plan:
         root_name = entry["root"]
@@ -162,11 +183,11 @@ def build_bundle(
         _assert_regular_source(source, "来源文件")
         source_sha256 = _file_sha256(source)
         target = bundle_dir / entry["target"]
-        target.parent.mkdir(parents=True, exist_ok=True)
+        make_private_parents(bundle_dir, entry["target"])
         if target.exists() or target.is_symlink():
             raise AssertionBundleError(f"目标已存在：{entry['target']}")
         target.write_bytes(source.read_bytes())
-        target.chmod(0o444)
+        target.chmod(0o400)
         target_sha256 = _file_sha256(target)
         if target_sha256 != source_sha256:
             raise AssertionBundleError(
@@ -200,7 +221,7 @@ def build_bundle(
         json.dumps(provenance, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    provenance_path.chmod(0o444)
+    provenance_path.chmod(0o400)
     return provenance
 
 

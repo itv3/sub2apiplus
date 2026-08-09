@@ -4,6 +4,11 @@ k34 暴露的不是某一处接线错，而是整条验收链从未集成过。�
 真实链路：只读收口证据、确定性派生官方观测、生成 manifest、执行 seal 门禁、
 用编排器产出 v2 results、再用 accept 的同一套校验（含命令逐字比对与离线重放）
 验收。任何一环各说各话都会在这里失败。
+
+本测试直接把 bundle 目录喂给门禁与编排器，因此不涉及 bundle 在 attempt 内的
+落位；真实 seal 路径上的落位（bundle 必须是证据根内的 `assertion-bundle/`
+子目录、逻辑前缀与 inventory 对齐、权限满足 0700／0600）由 ACC-06 的
+`test_assertion_bundle_wiring.py` 覆盖。
 """
 
 from __future__ import annotations

@@ -45,6 +45,7 @@ if __package__ in {None, ""}:
 from tools.official_client_capture.build_assertion_bundle import (  # noqa: E402
     AssertionBundleError,
     load_provenance,
+    make_private_parents,
     validate_relative_path,
 )
 from tools.official_client_capture.candidate_rule_assertion import (  # noqa: E402
@@ -444,17 +445,18 @@ def derive_observations(
         }
     )
     for path, rendered in outputs:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        # 与 bundle 同在 attempt 证据根内，必须满足 0700／0600 权限门禁。
+        make_private_parents(bundle_dir, path.relative_to(bundle_dir).as_posix())
         if path.exists() or path.is_symlink():
             raise ObservationDerivationError(f"派生目标已存在：{path}")
         path.write_bytes(rendered)
-        path.chmod(0o444)
+        path.chmod(0o400)
     receipt_path = bundle_dir / DERIVED_PROVENANCE_RELATIVE_PATH
     receipt_path.write_text(
         json.dumps(receipt, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
     )
-    receipt_path.chmod(0o444)
+    receipt_path.chmod(0o400)
     return receipt
 
 
