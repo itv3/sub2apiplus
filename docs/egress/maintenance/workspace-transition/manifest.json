@@ -3,9 +3,9 @@
   "base_commit": "ba485663c3bc0af6802cf6dfc4e19139ef00e371",
   "retirement_receipt": "docs/egress/maintenance/official-egress-consolidation-retirement.json",
   "retirement_receipt_sha256": "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36",
-  "candidate_path_count": 846,
-  "transition_entry_count": 846,
-  "transition_path_set_sha256": "3625746c7979b1009dacea58d530f68618393f47cf6e5b9dcf13df9957b8f694",
+  "candidate_path_count": 848,
+  "transition_entry_count": 848,
+  "transition_path_set_sha256": "3eb0f23baa88d5915c9854817458a89968b457bc75533c9369de3912dbd13752",
   "entries": [
     {
       "path": ".github/workflows/backend-ci.yml",
@@ -19496,6 +19496,30 @@
       ]
     },
     {
+      "path": "tools/official_client_capture/derive_official_observations.py",
+      "scope": "source_gate",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 22881,
+        "sha256": "00edc82d20f3d7b769d5c3e5993b0ac037cb5dcacb178f53719a520c286d73f5"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
       "path": "tools/official_client_capture/drive_candidate_gateway_ws.py",
       "scope": "source_gate",
       "before": {
@@ -20135,6 +20159,30 @@
         "mode": "0644",
         "size": 2647,
         "sha256": "66d03c81581cade7b7a0bafcf7bca1194787a74dbe0cb62ed2a4585a1fda5da3"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_derive_official_observations.py",
+      "scope": "source_gate",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 14914,
+        "sha256": "9f278eb8a6b1b8ac3aeea3c2eff6c8b95e56139af2e613ef212adc88c61456f8"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
