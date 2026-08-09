@@ -1,6 +1,6 @@
 # Codex CLI 0.145.0 → 0.147.0 Official Egress 升级计划（执行中）
 
-> 状态：Campaign `…-k34` 已到 `compared`；§8 的 `accept` 实证阻断，根因见 §10.8，**待第三方审核后再动工**。Active 仍为 0.145
+> 状态：Campaign `…-k34` 停在 `compared`（不可变、不再推进）；§8 的 `accept` 实证阻断，根因见 §10.8。ACC-01～05 六项修复已实施且门禁全绿，**待第三方审核后按 §6.1 新建 Campaign**。Active 仍为 0.145
 > 创建日期：2026-08-07
 > 审阅基线：commit `abf236375f66aa096580092e646c4e33d37bb135`
 > 基线画像：Codex CLI `0.145.0`
@@ -430,8 +430,12 @@ final-wire 可用，但不能替代 alpha 真实 service 链或 `server_response
 | §5 DOC-PRE 与 P0 | **完成** | 不依赖 Campaign，结论长期有效 |
 | §6 Campaign／官方取证／分类 | **完成** | 官方采集 17/17 一次通过；封存 409 文件、findings 0；classify 42 规则 complete |
 | §7 建立 0.147 画像 | **完成** | `stage-profile` 产出候选 RuntimeCatalog，`production_selector_changed: false` |
-| §8 Candidate／比较／`ready` | **进行中** | 候选采集 8/8、候选封存 complete（528 文件、findings 0）、compare complete；**剩 accept → ready** |
+| §8 Candidate／比较／`ready` | **阻断** | k34 候选采集 8/8、封存 complete（528 文件、findings 0）、compare complete；`accept` 实证阻断，根因与修复见 §10.8，k34 停在 `compared` |
 | §9 生产启用与回滚 | **未开始** | |
+
+以上 §5～§7 的"完成"针对 k34。因 ACC-01～05 改变了受管工具身份，正式验收必须按新
+Campaign 重做官方取证、分类、画像与候选采集；k34 的证据只用于根因复现、只读分析与
+离线测试夹具，不迁移为新 Campaign 的正式证据。
 
 0.147 画像 digest `0d86e033716ab2b7d2161a7015ad000bc0d7cedfaa9e130342eec4ba0637ef9f`，
 经 k26／k27／k28／k29／k33／k34 六次独立产出逐字一致；compare 的
@@ -514,16 +518,23 @@ capture-candidate run（8 个任务）
 | Kilo 两条入口 UA 形态不同 | `88937e40b` | 详见 §10.5 |
 | 四类收据无产出方 | `65983ce15`、`0930a05aa` | capture-manifest、逐规则验收结果、Kilo 收据 |
 | kilo-binding 缺单次调用 runtime_audit | `58cd4b670` | 与 observed-profile 的整体审计不同种，见 §10.4；内容承接服务端记录，工具不推断 |
+| 编排器自造断言命令 | `5440acf96` | 与 accept 用 `build_assertion_command` 复算的期望命令永不相等，results 无法通过 accept |
+| 编排器与 accept 契约权威不同源 | `5440acf96` | 编排器取仓库冻结画像、accept 取批准画像，规则集增删时两端各说各话 |
 
 ### 10.7 剩余路径
 
-1. `accept`：按 §10.8.10 的 `dual_wire`／`candidate_profile` 两种模式执行 42 条必需规则并汇总，
-   由 `build_rule_assertion_results.py` 编排；不再对 17 条内部事实规则强制执行官方侧同构断言；
-2. `ready`：重放 accept、收据、安全与 evidence seal；
-3. §9 生产启用：canary、切换、回滚演练、恢复后 final-wire，最终 Active=0.147 / Previous=0.145；
-4. 收尾：恢复分组 9 的 `allow_image_generation`（原值 false）。
+> k34 不再推进（§10.8）。以下为**新 Campaign** 的路径；ACC-01～05 已实施，等待审核。
 
-用户已授权按第 5→6→7→8→9 章连续执行；每个变更集完成并自复核后自动进入下一项。
+1. 第三方审核 ACC-01～05（§10.8.11），通过后按 §6.1 新建 Campaign；
+2. 重做官方取证、分类、画像与候选采集、比较（工具身份已变，k34 证据不迁移）；
+3. `accept`：按 §10.8.10 的 `dual_wire`／`candidate_profile` 两种模式执行 42 条必需规则并汇总，
+   由 `build_rule_assertion_results.py` 编排；不再对 17 条内部事实规则强制执行官方侧同构断言；
+4. `ready`：重放 accept、收据、安全与 evidence seal；
+5. §9 生产启用：canary、切换、回滚演练、恢复后 final-wire，最终 Active=0.147 / Previous=0.145；
+6. 收尾：恢复分组 9 的 `allow_image_generation`（原值 false）。
+
+用户已授权按第 5→6→7→8→9 章连续执行；每个变更集完成并自复核后自动进入下一项。第 1 项
+的审核门是 §10.8.11 明确要求的例外，不在该连续执行授权范围内。
 
 ### 10.8 `accept` 实证阻断与根因（审核后收敛，未修复）
 
@@ -797,9 +808,36 @@ check；机器结果另含通用 `scenario-artifact-coverage`，它也不是负�
 该模型保持升级目标不变：以真实官方 0.147 画像为权威，证明候选完整实现 42 条规则；只移除
 “官方侧必须生成 Sub2API 内部事实”和“每条规则人工填写正负列表”两个没有事实来源的要求。
 
-#### 10.8.11 实施变更集与开工条件
+#### 10.8.11 实施变更集与开工条件（六项已实施，待审核）
 
-严格按以下顺序一次只实施一个变更集；每项完成测试与复核后才能进入下一项：
+> 2026-08-09 已按下列顺序逐项实施并自复核，每项独立提交、`make test-capture-tools`
+> 与 `make check-egress-spec` 全绿。**尚未新建 Campaign**，Active 仍为 0.145，k34
+> 保持不可变并停在 `compared`。
+
+| 变更集 | 提交 | 交付物 |
+|---|---|---|
+| ACC-01 验收契约 | `c632e6155` | `acceptance_contract.py`、results v2 schema |
+| ACC-02 证据包 | `f04f6830a` | `build_assertion_bundle.py` |
+| ACC-02b 官方观测派生器 | `04b17f50a` | `derive_official_observations.py` |
+| ACC-03 seal 门禁 | `e34051ccd` | `assertion_gate.py` 与 seal／stage 契约接线 |
+| ACC-04 编排与 accept | `cd779ba71` | `build_rule_assertion_results.py` 重写、accept 分模式校验 |
+| ACC-05 端到端复验 | `5440acf96` | `test_acceptance_end_to_end.py` |
+
+ACC-05 复验另逮住两处集成缺陷并一并修掉：编排器自造断言命令（与 accept 用
+`build_assertion_command` 复算的期望命令永不相等）、编排器仍从仓库冻结画像推导契约
+（与 accept 取批准画像的权威不一致，规则集增删时两端各说各话）。
+
+**契约权威边界**：`seal` 门禁在 classify 之前执行，只能以仓库冻结画像做证据充分性
+预检并证明仓库画像未漂移（`FROZEN_CONTRACT_SHA256 = 14e9e336…`，机器推导得
+`dual_wire=25`／`candidate_profile=17`）；`compare`／`accept` 一律以本 Campaign 批准的
+`assertion-profile.json` 推导契约——目标规则集允许相对基线增删，验收权威必须随批准
+画像走。
+
+**重新冻结的工具身份**：受管 89 个 `.py/.sh/.json`（原 80 个，新增 6 个工具与 3 份
+schema／契约文件），集合摘要 `246d20de7ecbed21432729f726b045144a85d492d25a011de4784ebae767b282`。
+按 §6.1，新建 Campaign 前该摘要不得再变化。
+
+原始清单（实施依据）：
 
 1. **ACC-01 验收契约**：冻结 25／17 规则分组、`validation_mode`、新 results schema（含
    `candidate_profile` 行的官方侧画像绑定字段，见 10.8.10 第 5 条）、旧 schema 拒绝策略及
@@ -826,6 +864,9 @@ check；机器结果另含通用 `scenario-artifact-coverage`，它也不是负�
 上述六项均会改变受管工具身份，k34 必须保持不可变并停在 `compared`。六项全部审核通过、
 `make test-capture-tools` 与 `make check-egress-spec` 全绿、工作区干净且工具摘要重新冻结后，
 才允许按 §6.1 新建 Campaign，重做官方取证、分类、画像、候选采集、比较和新 `accept`。
+
+当前状态：六项已实施且门禁全绿、工作区干净、工具摘要已重新冻结；**唯一未满足的开工
+条件是第三方审核**。审核通过后即可按 §6.1 新建 Campaign。
 
 #### 10.8.12 结论
 
