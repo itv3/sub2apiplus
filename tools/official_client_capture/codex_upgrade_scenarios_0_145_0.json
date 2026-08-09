@@ -195,7 +195,7 @@
       ],
       "required_artifact_kinds": [
         "pcap",
-        "relay_binary"
+        "process_trace"
       ],
       "covers": [
         "SPEC-TLS-001",
@@ -506,7 +506,6 @@
         "不接受 curl 伪造入口头"
       ],
       "required_artifact_kinds": [
-        "relay_binary",
         "process_trace"
       ],
       "covers": [
@@ -1150,6 +1149,7 @@
       ],
       "scenario_ids": [
         "A03",
+        "A05",
         "A09"
       ],
       "description": "官方复杂状态链：turnstate-compact",
@@ -1358,7 +1358,8 @@
             "MODEL": "{model}",
             "RUN_ID": "{campaign_id}-official-realtime-webrtc",
             "SCENARIO": "realtime-webrtc",
-            "RELAY_HOSTS": "chatgpt.com api.openai.com"
+            "RELAY_HOSTS": "chatgpt.com api.openai.com",
+            "CAPTURE_CLIENT_HELLO": "1"
           },
           "timeout_seconds": 1800
         }
@@ -1378,7 +1379,8 @@
         "full"
       ],
       "scenario_ids": [
-        "A04"
+        "A04",
+        "A06"
       ],
       "description": "官方复杂状态链：runtime-metrics",
       "required": true,
@@ -1405,6 +1407,47 @@
       ],
       "covers": [
         "SPEC-HDR-008"
+      ]
+    },
+    {
+      "id": "official-relay-oauth-refresh",
+      "phase": "official",
+      "suites": [
+        "core",
+        "full"
+      ],
+      "scenario_ids": [
+        "A13"
+      ],
+      "description": "官方 OAuth token 刷新：A13 要求 auth.openai.com 的握手与刷新请求形态，官方侧此前无任何 job 覆盖。",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-oauth-refresh",
+            "SCENARIO": "oauth-refresh",
+            "RELAY_HOSTS": "chatgpt.com auth.openai.com",
+            "CAPTURE_CLIENT_HELLO": "1"
+          },
+          "timeout_seconds": 3600
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-oauth-refresh"
+      ],
+      "covers": [
+        "SPEC-EP-002",
+        "SPEC-H1-001",
+        "SPEC-H1-003"
       ]
     },
     {
@@ -1542,7 +1585,8 @@
             "RUN_ID": "{campaign_id}-official-file-upload",
             "SCENARIO": "file-upload",
             "DISABLE_FEATURES": "plugins",
-            "RELAY_HOSTS": "chatgpt.com auth.openai.com api.openai.com sdmntprwestus3.oaiusercontent.com"
+            "RELAY_HOSTS": "chatgpt.com auth.openai.com api.openai.com sdmntprwestus3.oaiusercontent.com",
+            "CAPTURE_CLIENT_HELLO": "1"
           },
           "timeout_seconds": 1800
         }

@@ -198,6 +198,66 @@
             "provider": "openai_oauth"
           },
           "rationale": "runtime metrics 分支不设置 residency，构成 A04 residency 判据的负例样本。"
+        },
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A06"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "websocket_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "mode": "non_lite",
+            "variant": "default",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A06 是非 Lite WS 会话；本 job 以非 Lite 模型触发，relay 字节含 WS 帧。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-oauth-refresh",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "direct/traffic.pcap",
+          "scenario_ids": [
+            "A13"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "http",
+            "ca_mode": "system",
+            "surface": "oauth"
+          },
+          "rationale": "A13 需 auth.openai.com 的刷新握手；relay 劫持不改变客户端填写的 SNI。"
+        },
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A13"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "mode": "non_lite",
+            "variant": "default",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "刷新请求的明文形态由字节中继记录。"
         }
       ]
     },
@@ -227,6 +287,27 @@
             "provider": "openai_oauth"
           },
           "rationale": "受控上游在首轮注入 turn-state（A03 trigger），变体由采集脚本固定。"
+        },
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A05"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "websocket_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "mode": "lite",
+            "variant": "turn_state",
+            "compression": "zstd",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A05 是 Lite WS 会话＋turn-state；本 job 的 relay 字节含 WS 升级与帧，rsv1／压缩上下文只能从原始帧得到（mitm 记录已解压）。"
         }
       ]
     },
@@ -506,6 +587,20 @@
             "provider": "openai_oauth"
           },
           "rationale": "Realtime／WebRTC session 与 call-create 属辅助端点面。"
+        },
+        {
+          "glob": "direct/traffic.pcap",
+          "scenario_ids": [
+            "A11"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "http",
+            "ca_mode": "system",
+            "surface": "realtime"
+          },
+          "rationale": "A11 需 api.openai.com 的 sideband 握手；relay 劫持不改变客户端填写的 SNI。"
         }
       ]
     },
@@ -532,6 +627,20 @@
             "provider": "openai_oauth"
           },
           "rationale": "Files create／Blob PUT／finalize 链路。"
+        },
+        {
+          "glob": "direct/traffic.pcap",
+          "scenario_ids": [
+            "A14"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "http",
+            "ca_mode": "system",
+            "surface": "files"
+          },
+          "rationale": "A14 需区域文件域名（*.oaiusercontent.com）的握手，同上。"
         }
       ]
     },
@@ -545,7 +654,7 @@
           "scenario_ids": [
             "A12"
           ],
-          "kind": "wire_dump",
+          "kind": "relay_binary",
           "parser": "opaque_bound_source",
           "labels": {
             "transport": "http",

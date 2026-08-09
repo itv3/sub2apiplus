@@ -37,7 +37,7 @@ codex_version=${CODEX_VERSION:-0.145.0}
 # 无 NET_ADMIN 的容器里不可用。
 relay_port=${RELAY_PORT:-443}
 turns=${TURNS:-1}
-scenario=${SCENARIO:?必须提供 SCENARIO: tool|conn-retry|turnstate-compact|http-response|residency-us|image|image-edit|image-repeat-tui|search|search-repeat-tui|compact|compact-exec-negative|compact-tui|comp-hash-changed|model-downshift|review-tui|guardian-tui|memgen|realtime-webrtc|runtime-metrics|ws-special-headers|file-upload}
+scenario=${SCENARIO:?必须提供 SCENARIO: tool|conn-retry|turnstate-compact|http-response|residency-us|image|image-edit|image-repeat-tui|search|search-repeat-tui|compact|compact-exec-negative|compact-tui|comp-hash-changed|model-downshift|review-tui|guardian-tui|memgen|realtime-webrtc|runtime-metrics|ws-special-headers|oauth-refresh|file-upload}
 extra_args=""
 compaction_reason=""
 compaction_first_model=""
@@ -80,10 +80,17 @@ if [[ -e $work_dir ]]; then
 fi
 
 relay_started=0
+# CAPTURE_CLIENT_HELLO=1 时额外抓 loopback，取 CLI 发往中继的 ClientHello。
+# 中继按 hosts 劫持到 127.0.0.1，但 SNI 由客户端填写、不受劫持影响，因此
+# 抓到的域名就是 CLI 真实意图连接的域名——SPEC-EP-002 正是验这一点。
+capture_client_hello=${CAPTURE_CLIENT_HELLO:-0}
+tcpdump_started=0
+pcap_dir="$capture_root/runs/${RUN_ID:-unset}/direct"
 requirements_changed=0
 requirements_backup="/tmp/codex-requirements-$run_id.toml"
 memgen_home=""
 file_upload_home=""
+auth_backup=""
 
 stop_relay() {
   if [[ $relay_started != 1 ]]; then
@@ -105,8 +112,27 @@ stop_relay() {
   relay_started=0
 }
 
+stop_tcpdump() {
+  if [[ $tcpdump_started != 1 ]]; then
+    return
+  fi
+  # 先给 tcpdump 一点时间把缓冲写盘，再停；否则末尾握手可能丢失。
+  sleep 1
+  docker exec "$capture_container" pkill -TERM -f '[t]cpdump -i lo' >/dev/null 2>&1 || true
+  for _ in $(seq 1 20); do
+    if ! docker exec "$capture_container" pgrep -f '[t]cpdump -i lo' >/dev/null 2>&1; then
+      tcpdump_started=0
+      return
+    fi
+    sleep 0.25
+  done
+  docker exec "$capture_container" pkill -KILL -f '[t]cpdump -i lo' >/dev/null 2>&1 || true
+  tcpdump_started=0
+}
+
 cleanup() {
   local status=$?
+  stop_tcpdump
   stop_relay
   # hosts 与临时 CA 一律还原，避免污染后续采集
   for h in ${RELAY_HOSTS:-chatgpt.com}; do
@@ -130,6 +156,12 @@ cleanup() {
   fi
   if [[ -n $file_upload_home ]]; then
     docker exec "$capture_container" rm -rf -- "$file_upload_home" >/dev/null 2>&1 || true
+  fi
+  if [[ -n $auth_backup ]]; then
+    # 登录态必须原样还原：本场景只改 last_refresh 触发一次刷新，不改变账号绑定。
+    docker exec "$capture_container" sh -c \
+      "test -f '$auth_backup' && cat '$auth_backup' > /root/.codex/auth.json && \
+       chmod 600 /root/.codex/auth.json && rm -f '$auth_backup'" >/dev/null 2>&1 || true
   fi
   docker exec "$capture_container" rm -f /tmp/codex-guardian-probe.txt >/dev/null 2>&1 || true
   echo "环境已恢复：中继已停止，hosts 与系统信任库中的临时 CA 均已还原。"
@@ -224,6 +256,14 @@ if [[ -n ${RELAY_RETRY_PROBE:-} ]]; then
     esac
     relay_intervention_args+=(--retry-probe-target "$RELAY_RETRY_PROBE_TARGET")
   fi
+fi
+if [[ $capture_client_hello == 1 ]]; then
+  install -d -m 0700 "$pcap_dir"
+  docker exec -d "$capture_container" sh -c \
+    "tcpdump -i lo -s 0 -U -w /capture/runs/$run_id/direct/traffic.pcap 'tcp port $relay_port' \
+     > /capture/runs/$run_id/direct/tcpdump.log 2>&1"
+  tcpdump_started=1
+  sleep 1
 fi
 docker exec -d "$capture_container" python3 \
   "$capture_tool_root/upstream_byte_relay.py" \
@@ -424,6 +464,26 @@ case "$scenario" in
           end
       ]}' /root/.codex/models_cache.json > "$work_dir/model-downshift-catalog.json"
     chmod 600 "$work_dir/model-downshift-catalog.json" ;;
+  oauth-refresh)
+    # 采 SPEC-EP-002 的 auth-sni：官方 CLI 的 OAuth token 刷新走 auth.openai.com。
+    # ⚠ 属 I 类触发干预：只把 auth.json 的 last_refresh 提前，让 CLI 在本次调用前
+    # 判定需要刷新；access_token／refresh_token／账号绑定一律不改，退出时逐字还原。
+    # 刷新请求本身仍由官方 CLI 自己构造并发出，出站形态未被替换。
+    auth_backup="/tmp/codex-auth-$run_id.json"
+    docker exec "$capture_container" sh -c \
+      "cp /root/.codex/auth.json '$auth_backup' && chmod 600 '$auth_backup'"
+    docker exec "$capture_container" python3 - <<'PY'
+import json, datetime
+path = "/root/.codex/auth.json"
+with open(path) as handle:
+    doc = json.load(handle)
+stale = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
+doc["last_refresh"] = stale.isoformat().replace("+00:00", "Z")
+with open(path, "w") as handle:
+    json.dump(doc, handle)
+PY
+    docker exec "$capture_container" chmod 600 /root/.codex/auth.json
+    prompt='只回复 OAUTH_REFRESH_OK，不要调用任何工具。' ;;
   file-upload)
     # 采 SPEC-EP-002 的生产文件上传三跳：
     #   POST /backend-api/files -> PUT <服务端预签名 URL>

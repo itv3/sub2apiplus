@@ -122,10 +122,12 @@ def _validate_rule(
     root_suffix = rule.get("root_suffix")
     if root_suffix is not None:
         _require_str(root_suffix, f"job {job_id} 的 root_suffix")
-    key = (root_suffix or "", glob)
+    derive_kind = (rule.get("derive") or {}).get("kind", "")
+    key = (root_suffix or "", glob, rule.get("kind", ""), derive_kind,
+           ",".join(sorted(rule.get("scenario_ids") or [])))
     if key in seen_globs:
         raise EvidenceCatalogError(
-            f"job {job_id} 的 glob 在同一 root_suffix 下重复：{glob}"
+            f"job {job_id} 的 glob 在同一 root_suffix／kind／场景组合下重复：{glob}"
         )
     seen_globs.add(key)
     scenario_ids = rule.get("scenario_ids")
@@ -238,27 +240,38 @@ def build_catalog(
                     target = f"{prefix}/{relative}"
                     validate_relative_path(target, f"job {job_id} 的收口目标")
                     if target in claimed_targets:
-                        raise EvidenceCatalogError(f"收口目标重复：{target}")
-                    claimed_targets.add(target)
-                    bundle_entries.append(
-                        {"root": prefix, "path": relative, "target": target}
-                    )
-                    artifacts.append(
-                        {
-                            "path": target,
-                            "kind": rule["kind"],
-                            "parser": rule["parser"],
-                            "scenario_ids": list(rule["scenario_ids"]),
-                            "labels": dict(rule["labels"]),
-                        }
-                    )
+                        # 同一原件被多条规则引用（不同场景／kind）：只收口一次，
+                        # 但把新场景并入已登记 artifact 的 scenario_ids。
+                        for existing in artifacts:
+                            if existing["path"] == target:
+                                merged = sorted(
+                                    set(existing["scenario_ids"])
+                                    | set(rule["scenario_ids"])
+                                )
+                                existing["scenario_ids"] = merged
+                                break
+                    else:
+                        claimed_targets.add(target)
+                        bundle_entries.append(
+                            {"root": prefix, "path": relative, "target": target}
+                        )
+                        artifacts.append(
+                            {
+                                "path": target,
+                                "kind": rule["kind"],
+                                "parser": rule["parser"],
+                                "scenario_ids": list(rule["scenario_ids"]),
+                                "labels": dict(rule["labels"]),
+                            }
+                        )
                     derive = rule.get("derive")
                     if derive is None:
                         continue
                     for scenario_id in rule["scenario_ids"]:
                         stem = f"{prefix}_{relative}".replace("/", "_")
                         derived_target = (
-                            f"{DERIVED_PREFIX}{scenario_id}/{stem}.observation.jsonl"
+                            f"{DERIVED_PREFIX}{scenario_id}/{derive['kind']}/"
+                            f"{stem}.observation.jsonl"
                         )
                         if derived_target in claimed_targets:
                             raise EvidenceCatalogError(
