@@ -1081,6 +1081,22 @@ class OfficialCaptureScriptTest(unittest.TestCase):
         self.assertNotIn("access_token", observation)
 
 
+    def test_cleanup_必须在_set_加e_下跑(self) -> None:
+        """set -Eeuo pipefail 下，EXIT trap 里一条非 0 就让整个 cleanup 中止。
+
+        k37 实证：cleanup 执行到第一个 stop_tcpdump 的 return 就停，hosts 从未被
+        还原，「环境已恢复」这句从未出现在任何 job 日志里。
+        """
+
+        body = self.source[self.source.index("cleanup() {") :]
+        body = body[: body.index("\n}\n")]
+        self.assertIn("set +e", body)
+        # hosts 还原必须排在停进程之前——它是污染后续采集的唯一途径。
+        hosts = body.index("for h in ${RELAY_HOSTS:-chatgpt.com}")
+        # 找实际调用行（行首缩进），不是注释里提到的名字。
+        stop = body.index("\n  stop_tcpdump\n")
+        self.assertLess(hosts, stop)
+
     def test_trap_覆盖信号且还原留下证明(self) -> None:
         self.assertIn("trap cleanup EXIT INT TERM", self.source)
         self.assertIn("restore_auth_json", self.source)

@@ -802,3 +802,36 @@ proactive token refresh before returning … triggers the normal refresh-token f
 `jwt_exp_observation.within_refresh_window: const true` 改为
 `trigger: enum [app_server_refresh_request, natural_expiry_window]`，两条官方路径都
 接受。伪造 `last_refresh` 仍在枚举之外。
+
+## 18. cleanup 从未跑完：`set -e` 让环境恢复整段落空
+
+§17.1 记的 hosts 残留不是偶发，根因已定位并修复。
+
+`run_official_relay_scenario.sh` 顶部是 `set -Eeuo pipefail`。在 EXIT trap 里，
+**任何一条命令返回非 0 都会让 cleanup 当场中止**，后面的恢复全部不执行。
+
+实证（k37，`bash -x` 追踪真实脚本）：
+
+```text
++ cleanup
++ local status=1
++ stop_tcpdump
++ [[ 0 != 1 ]]
++ return          ← 到此为止，stop_relay 都没跑到
+```
+
+「环境已恢复」这句**从未出现在任何一轮 job 日志里**——k37 的 19 个 job 全部如此。
+hosts 劫持因此一直残留在采集容器里，而中继早已停止，于是此后所有出站都打向
+`127.0.0.1:443` 被拒。A13 的首次手工复现正是栽在这上面：调用返回成功、
+`Refreshing token` 日志也打了，但 0 个 ClientHello、auth.json 纹丝不动。
+
+这个缺陷比表面看起来严重：它让**每一轮采集结束后容器都处于被污染状态**，任何后续
+观测都不可信，而且没有任何告警。
+
+**修复**：
+
+1. cleanup 开头 `set +e`——清理函数必须逐条执行完，不能第一个非 0 就放弃；
+2. hosts 与临时 CA 的还原提到最前，排在停进程之前——它们是污染后续采集的唯一途径。
+
+验证：用真实脚本（主体截断为立即 `exit 1`）跑修复前后对照，修复后输出「环境已恢复」
+且预置的残留劫持被清除。新增测试断言 `set +e` 存在、且 hosts 还原早于停进程。

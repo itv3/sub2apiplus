@@ -353,9 +353,15 @@ restore_auth_json() {
 
 cleanup() {
   local status=$?
-  stop_tcpdump
-  stop_relay
-  # hosts 与临时 CA 一律还原，避免污染后续采集
+  # ⚠ 清理函数必须在 set +e 下跑。脚本顶部是 `set -Eeuo pipefail`，而 EXIT trap 里
+  # 任何一条命令返回非 0 都会让 cleanup 当场中止，后面的恢复全部落空。
+  #
+  # 实证（k37）：`bash -x` 显示 cleanup 执行到第一个 `stop_tcpdump` 的 return 就停，
+  # 连 stop_relay 都没跑到，「环境已恢复」这句从未出现在任何一轮 job 日志里；采集
+  # 容器的 /etc/hosts 因此一直残留着劫持，中继停掉后所有出站都打向 127.0.0.1 被拒。
+  # 这个残留会静默污染此后一切在该容器里的观测——A13 的首次手工复现就栽在这上面。
+  set +e
+  # hosts 与临时 CA 最先还原：它们是污染后续采集的唯一途径，必须排在最前面。
   for h in ${RELAY_HOSTS:-chatgpt.com}; do
     docker exec "$capture_container" sh -c \
       "grep -v \" $h\$\" /etc/hosts > /tmp/.hr && cat /tmp/.hr > /etc/hosts && rm -f /tmp/.hr" \
@@ -363,6 +369,9 @@ cleanup() {
   done
   docker exec "$capture_container" rm -f /usr/local/share/ca-certificates/relay-ca.crt >/dev/null 2>&1 || true
   docker exec "$capture_container" update-ca-certificates --fresh >/dev/null 2>&1 || true
+  # 环境已还原，再停进程与做其余清理。
+  stop_tcpdump
+  stop_relay
   if [[ $requirements_changed == 1 ]]; then
     if docker exec "$capture_container" test -f "$requirements_backup"; then
       docker exec "$capture_container" sh -c \
