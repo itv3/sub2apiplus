@@ -1050,6 +1050,22 @@ class OfficialCaptureScriptTest(unittest.TestCase):
         # 只接受 completed 的调用；in_progress 不算工具真的跑完。
         self.assertIn('call.get("status") != "completed"', self.source)
         self.assertIn("A14-tool-call.json", self.source)
+        # 模型侧称其为 Sites.save_site_version，裸名／带命名空间都要认。
+        self.assertIn("qualified", self.source)
+
+    def test_A14_提示词放行工具检索(self) -> None:
+        """k37 实测：禁止调用其他工具会让模型无法先检索出该工具，一个请求都发不出。"""
+
+        self.assertNotIn("不要调用任何其他工具。参数必须是", self.source)
+        self.assertIn("这些检索调用是允许且必要的", self.source)
+        # 安全约束仍在。
+        self.assertIn("不要创建站点、不要发布或部署", self.source)
+
+    def test_A13_探针必须分配_stdin(self) -> None:
+        """docker exec 不带 -i 时 heredoc 传不进容器，探针静默输出空。"""
+
+        self.assertIn('docker exec -i "$capture_container" python3 -', self.source)
+        self.assertIn("JWT 探针无输出", self.source)
 
     def test_A13_观测不落_token_本体(self) -> None:
         """只记 exp 与 token 摘要；解析在容器内完成，token 不离开容器。"""

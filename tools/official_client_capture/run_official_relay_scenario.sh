@@ -187,11 +187,18 @@ try:
             call = details.get("mcp_tool_call") or details.get("McpToolCall")
             if not isinstance(call, dict):
                 continue
-            if call.get("tool") != expected or call.get("status") != "completed":
+            if call.get("status") != "completed":
                 continue
-            found = {"tool_name": call["tool"], "tool_call_id": str(item.get("id") or "")}
-            if call.get("server"):
-                found["tool_server"] = call["server"]
+            # 模型侧把这个工具称作 `Sites.save_site_version`，而事件里的 tool 字段
+            # 可能只有裸名、server 另开一列。三种形态都认，但都必须是目标工具。
+            tool = str(call.get("tool") or "")
+            server = str(call.get("server") or "")
+            qualified = f"{server}.{tool}" if server else tool
+            if expected not in {tool, qualified} and not tool.endswith(f".{expected}"):
+                continue
+            found = {"tool_name": tool, "tool_call_id": str(item.get("id") or "")}
+            if server:
+                found["tool_server"] = server
 except OSError:
     found = None
 print(json.dumps(found, ensure_ascii=False) if found and found["tool_call_id"] else "")
@@ -207,7 +214,9 @@ PY
 a13_probe_jwt() {
   # 在容器内解析 access token 的 exp，只输出非秘密结论。
   # token 本体绝不离开容器、绝不落盘——收据里只保留 exp 与 token 摘要。
-  docker exec "$capture_container" python3 - "${A13_REFRESH_WINDOW_MINUTES:-5}" <<'PY'
+  # 必须带 -i：不分配 stdin 时 heredoc 传不进容器，python3 读到空脚本后静默退出，
+  # 探针输出为空、字段全取不到，失败原因会被误报成「仍未进入刷新窗口」。
+  docker exec -i "$capture_container" python3 - "${A13_REFRESH_WINDOW_MINUTES:-5}" <<'PY'
 import base64, datetime, hashlib, json, sys
 
 window = int(sys.argv[1])
@@ -661,6 +670,11 @@ case "$scenario" in
       exit 1
     fi
     a13_wait=$(a13_field "$jwt_probe" seconds_until_window)
+    if [[ -z $a13_wait ]]; then
+      # 探针没输出等于什么都没测到，绝不能当成「已在窗口内」继续。
+      echo "❌ JWT 探针无输出，无法判定刷新窗口（检查容器与 auth.json 可读性）。" >&2
+      exit 1
+    fi
     if (( a13_wait > 0 )); then
       # 等待上限受 job 的 3600s 超时约束；超出即如实失败，不伪造 exp、不动凭据。
       a13_budget=${A13_MAX_WAIT_SECONDS:-2400}
@@ -703,7 +717,11 @@ case "$scenario" in
       "printf '{\"project_id\":\"ep002-probe-do-not-exist\"}\n' > '$file_upload_home/site/.openai/hosting.json' && \
        printf '<!doctype html><title>EP002 probe</title>\n' > '$file_upload_home/site/index.html' && \
        tar -C '$file_upload_home/site' -czf '$file_upload_home/ep002-probe.tar.gz' ."
-    prompt="这是经过授权的官方客户端出站采集。请严格只调用一次内置 Sites 的 save_site_version 工具，不要调用任何其他工具。参数必须是：project_id=ep002-probe-do-not-exist，commit_sha=0000000000000000000000000000000000000000，archive=$file_upload_home/ep002-probe.tar.gz。即使工具报错也立即停止，不要创建站点、不要发布或部署。" ;;
+    # k37 实测：内置 Sites 工具默认不直接暴露在会话里，模型需要先做一次工具检索
+    # 才能取到它。原提示词写的是「不要调用任何其他工具」，反而把这条路堵死——模型
+    # 明确回答「若要发现并调用它，需要先用别的工具做检索/加载，这会违反你的要求」，
+    # 于是一个请求都没发。现在显式放行检索步骤，同时保留不创建/不发布的安全约束。
+    prompt="这是经过授权的官方客户端出站采集。目标：调用一次内置 Sites 的 ${A14_TOOL_NAME:-save_site_version} 工具。如果该工具尚未在当前会话中直接暴露，请先执行必要的工具检索或加载步骤把它取出来——这些检索调用是允许且必要的。取到后只调用它一次，参数必须是：project_id=ep002-probe-do-not-exist，commit_sha=0000000000000000000000000000000000000000，archive=$file_upload_home/ep002-probe.tar.gz。即使工具报错也立即停止，不要重试、不要创建站点、不要发布或部署。" ;;
   *) echo "未知 SCENARIO: $scenario" >&2; exit 2 ;;
 esac
 
