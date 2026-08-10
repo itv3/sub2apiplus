@@ -19653,8 +19653,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 21724,
-        "sha256": "944f4f8f092dac8e38fddc63992d89d1a8959e834222378bdf9a0c5f61da5f1b"
+        "size": 22435,
+        "sha256": "8b7db4bd580794cb1b825ae574e6b82427876b3dcf6669fc8fc6cf946b26e3cb"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",

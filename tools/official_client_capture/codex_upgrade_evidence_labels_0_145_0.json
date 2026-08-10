@@ -81,6 +81,26 @@
           "rationale": "models 端点属辅助出站面（endpoint_class=auxiliary），与 Responses 主链路分开登记。"
         },
         {
+          "glob": "mitm/codex-http/*/models-http.jsonl",
+          "scenario_ids": [
+            "A01"
+          ],
+          "kind": "wire_dump",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "mitm_http_jsonl",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "ca_mode": "custom",
+            "surface": "models",
+            "endpoint_class": "auxiliary",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A01 的 models 请求明文观测：official-core 无字节中继，由 mitm 面同一份 models-http.jsonl 经派生器投影为 process_trace。"
+        },
+        {
           "glob": "mitm/codex-ws/*/codex-http.jsonl",
           "scenario_ids": [
             "A15"
