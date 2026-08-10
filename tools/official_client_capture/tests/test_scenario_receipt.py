@@ -104,6 +104,24 @@ def _response(status: int, body: bytes) -> bytes:
     ).encode("latin-1") + body
 
 
+SDP_ANSWER = (
+    b"v=0\r\no=- 3356858930863409685 1786344426 IN IP4 0.0.0.0\r\ns=-\r\nt=0 0\r\n"
+    b"a=ice-lite\r\na=group:BUNDLE 0 1\r\nm=audio 9 UDP/TLS/RTP/SAVPF 111\r\n"
+)
+
+
+def _call_create_response(call_id: str) -> bytes:
+    """WebRTC call-create 的真实形态：201 + Location 头 + text/plain 的 SDP answer。"""
+
+    return (
+        f"HTTP/1.1 201 Created\r\n"
+        f"Content-Type: text/plain; charset=utf-8\r\n"
+        f"location: /v1/realtime/calls/{call_id}\r\n"
+        f"access-control-expose-headers: Location, X-Request-Id\r\n"
+        f"Content-Length: {len(SDP_ANSWER)}\r\n\r\n"
+    ).encode("latin-1") + SDP_ANSWER
+
+
 def _ws_upgrade(target: str) -> bytes:
     """V3 sideband 的 WS 升级请求：call_id 拼在路径末段，不是 query。"""
 
@@ -266,17 +284,19 @@ class ScenarioFactsPassTest(ScenarioFixtureBase):
         """A11 成功形态：call-create 2xx + V3 sideband 同 call_id + api SNI。"""
 
         root = self._run_root()
+        # 真实形态（k37 观测）：201 Created + Location 头带 call_id + text/plain 的
+        # SDP answer 响应体——call_id 不在 JSON 体里。
         self._write_relay(
             root,
             1,
-            _request("POST", "/backend-api/codex/realtime/calls", b"{}"),
-            _response(201, b'{"call_id":"call-abc"}'),
+            _request("POST", "/backend-api/codex/realtime/calls?intent=quicksilver", b"{}"),
+            _call_create_response("rtc_u0_EBE4oHU6FYPaFejVfBpPW"),
         )
         # V3 的 sideband 把 call_id 拼在路径末段（methods.rs:985-993）。
         self._write_relay(
             root,
             2,
-            _ws_upgrade(sideband_target or "/v1/live/call-abc"),
+            _ws_upgrade(sideband_target or "/v1/live/rtc_u0_EBE4oHU6FYPaFejVfBpPW"),
             _response(101, b""),
         )
         (root / "direct" / "traffic.pcap").write_bytes(
@@ -305,7 +325,7 @@ class ScenarioFactsPassTest(ScenarioFixtureBase):
         self.assertEqual(document["facts"]["call_create_status"], 201)
         self.assertEqual(
             document["facts"]["call_id_sha256"],
-            hashlib.sha256(b"call-abc").hexdigest(),
+            hashlib.sha256(b"rtc_u0_EBE4oHU6FYPaFejVfBpPW").hexdigest(),
         )
         self.assertEqual(document["facts"]["async_error_count"], 0)
         self.assertTrue(document["facts"]["sideband_call_id_linked"])
@@ -313,7 +333,7 @@ class ScenarioFactsPassTest(ScenarioFixtureBase):
     def test_A11_接受_V1_形态的_query_call_id(self) -> None:
         """V1／V2 用 query 传 call_id；两种形态都算真实关联。"""
 
-        root = self._a11_run(sideband_target="/v1/realtime?call_id=call-abc")
+        root = self._a11_run(sideband_target="/v1/realtime?call_id=rtc_u0_EBE4oHU6FYPaFejVfBpPW")
         document = facts_builder.build("A11", "official-relay-realtime-webrtc", RUN_ID, root)
         self.assertTrue(document["facts"]["sideband_call_id_linked"])
 
@@ -404,7 +424,7 @@ class ScenarioFactsNegativeTest(ScenarioFixtureBase):
 
         passer = ScenarioFactsPassTest()
         passer.root = self.root
-        root = passer._a11_run(sideband_target="/v1/live/call-other")
+        root = passer._a11_run(sideband_target="/v1/live/rtc_other")
         with self.assertRaises(facts_builder.ScenarioFactsError):
             facts_builder.build("A11", "official-relay-realtime-webrtc", RUN_ID, root)
         self._assert_no_facts(root, "A11")
@@ -413,11 +433,13 @@ class ScenarioFactsNegativeTest(ScenarioFixtureBase):
         """只有 call-create 成功、sideband 从未建立，场景不成立。"""
 
         root = self._run_root()
+        # 真实形态（k37 观测）：201 Created + Location 头带 call_id + text/plain 的
+        # SDP answer 响应体——call_id 不在 JSON 体里。
         self._write_relay(
             root,
             1,
-            _request("POST", "/backend-api/codex/realtime/calls", b"{}"),
-            _response(201, b'{"call_id":"call-abc"}'),
+            _request("POST", "/backend-api/codex/realtime/calls?intent=quicksilver", b"{}"),
+            _call_create_response("rtc_u0_EBE4oHU6FYPaFejVfBpPW"),
         )
         (root / "direct" / "traffic.pcap").write_bytes(
             _pcap([(1_780_000_000.0, "api.openai.com")])

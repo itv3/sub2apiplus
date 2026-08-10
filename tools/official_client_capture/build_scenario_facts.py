@@ -56,6 +56,8 @@ EVIDENCE_ROOT_ROLE = "job_evidence"
 MIN_PCAP_BYTES = 25
 MAX_EVIDENCE_BYTES = 512 * 1024 * 1024
 REGIONAL_SNI_RE = re.compile(r"^[a-z0-9.-]+\.oaiusercontent\.com$")
+# 真实观测形态：`Location: /v1/realtime/calls/rtc_u0_EBE4oHU6FYPaFejVfBpPW`。
+CALL_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,128}$")
 
 
 class ScenarioFactsError(ValueError):
@@ -339,13 +341,15 @@ def _facts_a11(evidence: EvidenceSet, root: Path) -> dict[str, Any]:
         raise ScenarioFactsError(
             f"realtime call-create 返回 {response['status']}，目标分支未成立。"
         )
-    try:
-        document = json.loads(response["body"].decode("utf-8"))
-    except (UnicodeError, json.JSONDecodeError) as error:
-        raise ScenarioFactsError(f"call-create 响应体不可解析：{error}") from error
-    call_id = document.get("call_id") or (document.get("call") or {}).get("id")
-    if not isinstance(call_id, str) or not call_id:
-        raise ScenarioFactsError("call-create 响应没有 call_id。")
+    # WebRTC 的 call-create 返回 201 + text/plain 的 SDP answer，**响应体不是 JSON**；
+    # call_id 由 `Location: /v1/realtime/calls/{call_id}` 给出，随后 V3 sideband 用
+    # 同一个 id 走 `/v1/live/{call_id}`。这是 k37 真实采集观测到的形态。
+    location = response["headers"].get("location", "")
+    call_id = location.rstrip("/").rsplit("/", 1)[-1] if "/" in location else ""
+    if not call_id or not CALL_ID_RE.fullmatch(call_id):
+        raise ScenarioFactsError(
+            f"call-create 响应的 Location 未给出 call_id：{location[:120]!r}"
+        )
 
     events = _load_observation(evidence, root, "A11-realtime-events.json")
     notifications = _require(events, "notifications", "A11 事件日志")
