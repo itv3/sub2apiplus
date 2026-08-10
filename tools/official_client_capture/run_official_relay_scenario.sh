@@ -161,6 +161,49 @@ verify_pcap() {
   return 0
 }
 
+extract_a14_tool_call() {
+  # 从 `codex exec --json` 的 JSONL 事件流里取出成功完成的 Apps 工具调用。
+  # 只提取，不推断：没有 completed 的工具调用就不写观测，收据构建器据此失败关闭——
+  # k36 的形态正是模型压根没调用工具，却仍被记成 job 完成。
+  local log=$1
+  local extracted
+  extracted=$(python3 - "$log" "${A14_TOOL_NAME:-save_site_version}" <<'PY'
+import json, sys
+
+path, expected = sys.argv[1], sys.argv[2]
+found = None
+try:
+    with open(path, encoding="utf-8", errors="replace") as handle:
+        for line in handle:
+            line = line.strip()
+            if not line.startswith("{"):
+                continue
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            item = event.get("item") or event
+            details = item.get("details") or {}
+            call = details.get("mcp_tool_call") or details.get("McpToolCall")
+            if not isinstance(call, dict):
+                continue
+            if call.get("tool") != expected or call.get("status") != "completed":
+                continue
+            found = {"tool_name": call["tool"], "tool_call_id": str(item.get("id") or "")}
+            if call.get("server"):
+                found["tool_server"] = call["server"]
+except OSError:
+    found = None
+print(json.dumps(found, ensure_ascii=False) if found and found["tool_call_id"] else "")
+PY
+)
+  if [[ -z $extracted ]]; then
+    echo "⚠ 事件流中没有已完成的 ${A14_TOOL_NAME:-save_site_version} 工具调用，A14 不会产出成功收据。" >&2
+    return 0
+  fi
+  write_observation "A14-tool-call.json" "$extracted"
+}
+
 a13_probe_jwt() {
   # 在容器内解析 access token 的 exp，只输出非秘密结论。
   # token 本体绝不离开容器、绝不落盘——收据里只保留 exp 与 token 摘要。
@@ -865,12 +908,20 @@ else
   for i in $(seq 1 "$turns"); do
     echo "--- 第 $i 轮 ---"
     exec_status=0
+    # A14 需要从事件流里取真实的工具调用记录（`ExecThreadItem.details.mcp_tool_call`
+    # 含 server／tool／status），人读格式取不到，故只对该场景加 --json。
+    exec_json_args=""
+    [[ $scenario == "file-upload" ]] && exec_json_args="--json"
     # shellcheck disable=SC2086 —— extra_args 需按空格拆成多个参数
     # shellcheck disable=SC2086
     docker exec "$capture_container" timeout 180 "$codex_bin" exec \
       --model "$model" --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox \
-      $disable_args $extra_args "$prompt" > "$work_dir/exec-$i.log" 2>&1 || exec_status=$?
+      $exec_json_args $disable_args $extra_args "$prompt" \
+      > "$work_dir/exec-$i.log" 2>&1 || exec_status=$?
     tail -3 "$work_dir/exec-$i.log" || true
+    if [[ $scenario == "file-upload" ]]; then
+      extract_a14_tool_call "$work_dir/exec-$i.log"
+    fi
     # A13／A14 是 SCN-REALITY-01 的目标场景，驱动失败必须留痕；其余场景沿用
     # 既有的宽松语义，本轮不批量改动。
     if (( exec_status != 0 )) && [[ $scenario == "oauth-refresh" || $scenario == "file-upload" ]]; then

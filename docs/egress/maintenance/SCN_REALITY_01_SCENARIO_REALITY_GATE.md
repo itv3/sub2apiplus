@@ -669,3 +669,49 @@ R0 的判据是 `before_sha256 == after_sha256`，前提是「脚本篡改了 `l
 
 **仍未验证的部分**：真实账号的 JWT 何时进入窗口、上游是否按预期返回新凭据，只能在
 k37 的真实官方采集中回答。R3 交付的是「按 exp 自然到期正确等待并触发」的能力。
+
+## 15. R4 实施结果：A14 工具调用与三跳时序（2026-08-10）
+
+### 15.1 核实到的两点
+
+**`save_site_version` 不在 0.147 源码里**——它是服务端 `/ps/mcp` 返回的动态 Apps
+工具，不是 CLI 内置。`Feature::Apps`（key `apps`）与 `Feature::Plugins`（key
+`plugins`）是两个独立的 Stable 特性且默认启用，`apps_enabled_for_auth =
+enabled(Feature::Apps) && has_chatgpt_auth`（`features/src/lib.rs:406-408`、
+`:1129-1134`、`:1195-1200`）。现有 job 只禁了 `plugins`，Apps 本身是开的——k36 拿不到
+该工具是服务端未返回，属采集账号的 App 安装状态，不是被特性开关挡住。
+
+**人读输出取不到工具调用事实。** `codex exec --json` 输出 JSONL 事件流，
+`ExecThreadItem` 带 `id`，`details.mcp_tool_call` 带 `server`／`tool`／`status`
+（`exec/src/exec_events.rs:284-290`、`exec/src/event_processor_with_jsonl_output.rs:206-232`），
+这是唯一可靠的提取源。
+
+### 15.2 三跳时序需要共同的墙钟基准
+
+A14 要证明 create → 区域 PUT → uploaded 的先后，但三跳分处两套证据：create 与
+uploaded 经中继（relay 字节），区域 PUT **直连不经中继**，只在 pcap 里可见。
+relay 的 `segments.t_ms` 是相对 monotonic 毫秒，与 pcap 的捕获时刻无法比较。
+
+因此给 relay 连接记录增加 `opened_at_unix_ms`／`closed_at_unix_ms`（纯增量，既有
+`t_ms` 不动），构建器据此与 pcap 的 Unix 捕获时刻直接排序。**顺序判据不再读脚本写的
+声明**，而是从两侧原始证据自己算——这与「只提取，不推断」一致，也去掉了
+`A14-upload-sequence.json` 这个可被随手写成想要值的中间文件。
+
+### 15.3 落地清单
+
+| 内容 | 落点 |
+|---|---|
+| 工具调用提取 | `run_official_relay_scenario.sh` 新增 `extract_a14_tool_call`，file-upload 走 `codex exec --json`；只接受 `status == completed` |
+| 墙钟基准 | `upstream_byte_relay.py` 的连接记录增加 `opened_at_unix_ms`／`closed_at_unix_ms` |
+| 顺序判据 | `build_scenario_facts.py` 新增 `_upload_chain_times`，从 relay.json 取时刻与 pcap 比较；删除对 `A14-upload-sequence.json` 的依赖 |
+| 区域主机 | 沿用 R1 的 `-i any` 与移除预列主机，`regional_host_from_response` 要求 pcap 的区域 SNI 等于 create 响应返回的 host |
+
+### 15.4 验收
+
+`make test-capture-tools` 580 项通过，`make check-egress-spec` 全绿。新增负例：
+上传顺序颠倒（uploaded 早于区域 PUT）、relay 缺墙钟时刻（无共同基准）、事件流中只有
+`in_progress` 而无 `completed` 的工具调用，均拒绝产出事实。
+
+**仍未验证、且不属于代码问题的部分**：采集账号必须真的安装了提供
+`save_site_version` 的 App，服务端 `/ps/mcp` 才会把它返回给模型。这是 k37 采集前的
+环境准备项，代码侧只能做到「工具没被调用就失败关闭」，无法凭空让它可见。

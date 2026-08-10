@@ -144,6 +144,15 @@ class ScenarioFixtureBase(unittest.TestCase):
         (root / "relay" / f"conn{index:03d}.client_to_upstream.bin").write_bytes(up)
         (root / "relay" / f"conn{index:03d}.upstream_to_client.bin").write_bytes(down)
 
+    def _write_relay_manifest(self, root: Path, connections: list[dict]) -> None:
+        (root / "relay" / "relay.json").write_text(
+            json.dumps(
+                {"schema_version": "byte-relay/v1", "connections": connections},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+
     def _write_observation(self, root: Path, name: str, payload: dict) -> None:
         (root / "scenario-observations" / name).write_text(
             json.dumps(payload, ensure_ascii=False), encoding="utf-8"
@@ -344,15 +353,22 @@ class ScenarioFactsPassTest(ScenarioFixtureBase):
             "A14-tool-call.json",
             {"tool_name": "save_site_version", "tool_call_id": "call-1"},
         )
-        # 三跳时间线必须真实自洽：create → 区域 PUT → uploaded。
-        self._write_observation(
+        # 三跳顺序从 relay.json 的连接墙钟时刻推导，不读脚本写的顺序声明。
+        # 区域 PUT 直连不经中继，只在 pcap 里可见，两侧必须有共同的 Unix 基准。
+        self._write_relay_manifest(
             root,
-            "A14-upload-sequence.json",
-            {
-                "create_event": "file_create_response",
-                "create_at_utc": facts_builder._utc(REGIONAL_TS - 60),
-                "uploaded_at_utc": facts_builder._utc(REGIONAL_TS + 60),
-            },
+            [
+                {
+                    "connection_id": 1,
+                    "opened_at_unix_ms": int((REGIONAL_TS - 60) * 1000),
+                    "closed_at_unix_ms": int((REGIONAL_TS - 50) * 1000),
+                },
+                {
+                    "connection_id": 2,
+                    "opened_at_unix_ms": int((REGIONAL_TS + 50) * 1000),
+                    "closed_at_unix_ms": int((REGIONAL_TS + 60) * 1000),
+                },
+            ],
         )
         return root
 
@@ -498,6 +514,45 @@ class ScenarioFactsNegativeTest(ScenarioFixtureBase):
         with self.assertRaises(facts_builder.ScenarioFactsError):
             facts_builder.build("A13", JOB_ID, RUN_ID, root)
         self._assert_no_facts(root, "A13")
+
+    def test_A14_上传顺序颠倒_拒绝产出(self) -> None:
+        """uploaded 早于区域 PUT，三跳链不成立。"""
+
+        passer = ScenarioFactsPassTest()
+        passer.root = self.root
+        root = passer._a14_run("sdmntprwestus3.oaiusercontent.com")
+        # 把 uploaded 连接挪到区域连接之前。
+        passer._write_relay_manifest(
+            root,
+            [
+                {
+                    "connection_id": 1,
+                    "opened_at_unix_ms": int((REGIONAL_TS - 60) * 1000),
+                    "closed_at_unix_ms": int((REGIONAL_TS - 55) * 1000),
+                },
+                {
+                    "connection_id": 2,
+                    "opened_at_unix_ms": int((REGIONAL_TS - 50) * 1000),
+                    "closed_at_unix_ms": int((REGIONAL_TS - 40) * 1000),
+                },
+            ],
+        )
+        with self.assertRaises(facts_builder.ScenarioFactsError):
+            facts_builder.build("A14", "official-relay-file-upload", RUN_ID, root)
+        self._assert_no_facts(root, "A14")
+
+    def test_A14_relay_缺墙钟时刻_拒绝产出(self) -> None:
+        """没有共同时间基准就无法证明三跳顺序。"""
+
+        passer = ScenarioFactsPassTest()
+        passer.root = self.root
+        root = passer._a14_run("sdmntprwestus3.oaiusercontent.com")
+        passer._write_relay_manifest(
+            root, [{"connection_id": 1}, {"connection_id": 2}]
+        )
+        with self.assertRaises(facts_builder.ScenarioFactsError):
+            facts_builder.build("A14", "official-relay-file-upload", RUN_ID, root)
+        self._assert_no_facts(root, "A14")
 
     def test_A14_区域_SNI_与响应主机不一致_拒绝产出(self) -> None:
         """模拟 RELAY_HOSTS 预列域名凑出的 SNI：响应返回另一个分片。"""
@@ -964,6 +1019,16 @@ class OfficialCaptureScriptTest(unittest.TestCase):
         self.assertIn("超过等待预算", self.source)
         self.assertIn("仍未进入刷新窗口", self.source)
 
+    def test_A14_用_json_事件流提取工具调用(self) -> None:
+        """R4：人读输出取不到 tool/status，必须走 --json 的事件流。"""
+
+        self.assertIn("extract_a14_tool_call", self.source)
+        self.assertIn("exec_json_args", self.source)
+        self.assertIn("mcp_tool_call", self.source)
+        # 只接受 completed 的调用；in_progress 不算工具真的跑完。
+        self.assertIn('call.get("status") != "completed"', self.source)
+        self.assertIn("A14-tool-call.json", self.source)
+
     def test_A13_观测不落_token_本体(self) -> None:
         """只记 exp 与 token 摘要；解析在容器内完成，token 不离开容器。"""
 
@@ -991,6 +1056,22 @@ class OfficialCaptureScriptTest(unittest.TestCase):
         build = self.source.index('"$capture_tool_root/build_scenario_facts.py"')
         self.assertLess(scrub, restore)
         self.assertLess(restore, build)
+
+
+class RelayWallClockTest(unittest.TestCase):
+    """R4：区域 PUT 直连不经中继，跨 relay／pcap 排序需要共同的墙钟基准。"""
+
+    def setUp(self) -> None:
+        self.source = (TOOL_ROOT / "upstream_byte_relay.py").read_text(encoding="utf-8")
+
+    def test_连接记录带绝对时刻(self) -> None:
+        self.assertIn("opened_at_unix_ms", self.source)
+        self.assertIn("closed_at_unix_ms", self.source)
+
+    def test_相对_t_ms_仍然保留(self) -> None:
+        """新增是纯增量，既有 segments 的相对时间不动。"""
+
+        self.assertIn('"t_ms"', self.source)
 
 
 class RealtimeDriverV3Test(unittest.TestCase):

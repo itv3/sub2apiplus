@@ -710,6 +710,7 @@ class ByteRecorder:
         self.offsets: dict[str, int] = {}
         self.segments: list[dict] = []
         self.t0 = time.monotonic()
+        self.opened_at_unix_ms = round(time.time() * 1000)
 
     def _stream(self, direction: str):
         if direction not in self.files:
@@ -746,6 +747,11 @@ class ByteRecorder:
             "bytes": {d: self.offsets[d] for d in self.offsets},
             "sha256": {d: h.hexdigest() for d, h in self.digests.items()},
             "segments": self.segments,
+            # 绝对时刻。segments 里的 t_ms 是相对 monotonic 起点，无法与 pcap 的捕获
+            # 时间比较；A14 要证明 create → 区域 PUT → uploaded 的先后，而区域 PUT
+            # 直连不经中继、只在 pcap 里可见，必须有共同的墙钟基准才能跨两侧排序。
+            "opened_at_unix_ms": self.opened_at_unix_ms,
+            "closed_at_unix_ms": round(time.time() * 1000),
         }
 
 

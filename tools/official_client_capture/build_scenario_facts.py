@@ -487,14 +487,14 @@ def _facts_a14(evidence: EvidenceSet, root: Path) -> dict[str, Any]:
         )
 
     tool = _load_observation(evidence, root, "A14-tool-call.json")
-    sequence = _load_observation(evidence, root, "A14-upload-sequence.json")
-    create_at = _require(sequence, "create_at_utc", "A14 上传顺序记录")
-    uploaded_at = _require(sequence, "uploaded_at_utc", "A14 上传顺序记录")
+    # 三跳顺序从原始证据推导，不读脚本写的顺序声明：relay.json 的连接墙钟时刻与
+    # pcap 的捕获时刻同为 Unix 时间，可直接比较。
+    create_at, uploaded_at = _upload_chain_times(evidence, root)
     first_seen = min(regional_times)
     last_seen = max(regional_times)
-    if not _ordered(create_at, _utc(first_seen)):
+    if not create_at <= first_seen:
         raise ScenarioFactsError("create 不早于区域连接，上传顺序不成立。")
-    if not _ordered(_utc(last_seen), uploaded_at):
+    if not last_seen <= uploaded_at:
         raise ScenarioFactsError("区域连接不早于 uploaded，上传顺序不成立。")
 
     return {
@@ -506,7 +506,7 @@ def _facts_a14(evidence: EvidenceSet, root: Path) -> dict[str, Any]:
             "status_2xx": True,
         },
         "upload_url_source_event": {
-            "event": _require(sequence, "create_event", "A14 上传顺序记录"),
+            "event": "file_create_response",
             "host": host,
             "url_sha256": hashlib.sha256(upload_url.encode("utf-8")).hexdigest(),
         },
@@ -515,6 +515,7 @@ def _facts_a14(evidence: EvidenceSet, root: Path) -> dict[str, Any]:
             "sni": host,
             "first_seen_at_utc": _utc(first_seen),
             "last_seen_at_utc": _utc(last_seen),
+
         },
         "uploaded_event": {
             "method": uploaded_request["method"],
@@ -528,6 +529,51 @@ def _facts_a14(evidence: EvidenceSet, root: Path) -> dict[str, Any]:
             "regional_before_uploaded": True,
         },
     }
+
+
+def _upload_chain_times(evidence: EvidenceSet, root: Path) -> tuple[float, float]:
+    """从 relay.json 取出 create 与 uploaded 所在连接的墙钟时刻（Unix 秒）。
+
+    relay 的 segments 用相对 monotonic 毫秒，无法与 pcap 的捕获时间比较；连接记录
+    额外带 `opened_at_unix_ms`／`closed_at_unix_ms` 才能跨两侧排序。区域 PUT 直连
+    不经中继，只在 pcap 里可见，所以这个共同基准是三跳判据成立的前提。
+    """
+
+    manifest_path = root / RELAY_DIR / "relay.json"
+    if manifest_path.is_symlink() or not manifest_path.is_file():
+        raise ScenarioFactsError("缺少 relay.json，无法取得连接时刻。")
+    evidence.bind(manifest_path)
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ScenarioFactsError(f"relay.json 不可解析：{error}") from error
+    times: dict[str, float] = {}
+    for connection in manifest.get("connections") or []:
+        identifier = connection.get("connection_id")
+        opened = connection.get("opened_at_unix_ms")
+        closed = connection.get("closed_at_unix_ms")
+        if not isinstance(identifier, int) or not isinstance(opened, (int, float)):
+            continue
+        stem = f"conn{identifier:03d}.client_to_upstream.bin"
+        path = root / RELAY_DIR / stem
+        if path.is_symlink() or not path.is_file():
+            continue
+        for request in _iter_requests(path.read_bytes()):
+            target = _path_of(request["target"])
+            if request["method"] != "POST":
+                continue
+            if target == "/backend-api/files" and "create" not in times:
+                times["create"] = float(opened) / 1000.0
+            elif target.endswith("/uploaded"):
+                # uploaded 取连接关闭时刻的上界；缺失时退回打开时刻。
+                times["uploaded"] = float(
+                    closed if isinstance(closed, (int, float)) else opened
+                ) / 1000.0
+    if "create" not in times or "uploaded" not in times:
+        raise ScenarioFactsError(
+            "relay.json 缺少 create 或 uploaded 连接的墙钟时刻，无法证明三跳顺序。"
+        )
+    return times["create"], times["uploaded"]
 
 
 def _ordered(earlier: str, later: str) -> bool:
