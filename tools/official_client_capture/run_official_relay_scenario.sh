@@ -592,6 +592,7 @@ if [[ $prompt == "__REALTIME__" ]]; then
     "$capture_tool_root/drive_codex_realtime.py" \
     --codex-version "$codex_version" \
     --model "$model" --transport webrtc --output-modality audio \
+    --realtime-version "${REALTIME_VERSION:-v3}" \
     ${DISABLE_FEATURES:+$(for f in $DISABLE_FEATURES; do printf -- '--disable %s ' "$f"; done)} \
     --events-output "/capture/runs/$run_id/scenario-observations/A11-realtime-events.json" \
     --hold "${REALTIME_HOLD:-20}" > "$work_dir/realtime-driver.log" 2>&1 || realtime_status=$?

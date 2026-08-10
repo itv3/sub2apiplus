@@ -363,9 +363,8 @@ def _facts_a11(evidence: EvidenceSet, root: Path) -> dict[str, Any]:
             final_event = "sdp_answer"
     if final_event is None:
         raise ScenarioFactsError("realtime 没有 started／SDP 最终事件。")
-    linked = _require(events, "sideband_call_id", "A11 事件日志")
-    if not isinstance(linked, str) or linked != call_id:
-        raise ScenarioFactsError("sideband 未与 call-create 的 call_id 关联。")
+    if not _sideband_joins_call(evidence, root, call_id):
+        raise ScenarioFactsError("relay 字节中没有与 call-create 同 call_id 的 sideband 连接。")
 
     hellos = _client_hellos(evidence, root)
     _require_sni(hellos, "api.openai.com")
@@ -381,6 +380,31 @@ def _facts_a11(evidence: EvidenceSet, root: Path) -> dict[str, Any]:
 
 def _method_of(item: Any) -> str:
     return item.get("method", "") if isinstance(item, dict) else ""
+
+
+def _sideband_joins_call(evidence: EvidenceSet, root: Path, call_id: str) -> bool:
+    """在 relay 字节里找出与 call-create 同 call_id 的 sideband WS 升级请求。
+
+    V3（FramelessBidi）把 call_id 拼在**路径末段**（`/v1/live/{call_id}`），
+    V1／V2 才用 query `?call_id=`（`codex-api/.../methods.rs:985-993`）。两种形态都
+    接受，但都必须是本轮 call-create 返回的那个 call_id——这正是 sideband 与第一跳
+    真实关联的证明，而不是驱动自己声称的。
+    """
+
+    relay_root = root / RELAY_DIR
+    for path in sorted(relay_root.glob("conn*.client_to_upstream.bin")):
+        evidence.bind(path)
+        for request in _iter_requests(path.read_bytes()):
+            if request["headers"].get("upgrade", "").lower() != "websocket":
+                continue
+            target = request["target"]
+            path_part = _path_of(target)
+            query = target[len(path_part) + 1 :] if "?" in target else ""
+            if path_part.rstrip("/").endswith(f"/{call_id}"):
+                return True
+            if f"call_id={call_id}" in query:
+                return True
+    return False
 
 
 def _facts_a13(evidence: EvidenceSet, root: Path) -> dict[str, Any]:

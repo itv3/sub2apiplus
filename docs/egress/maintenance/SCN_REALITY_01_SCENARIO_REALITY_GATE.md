@@ -543,3 +543,65 @@ R1 完成的判据是：上表全绿，且用 **k36 的真实证据**作离线�
   （`A11-realtime-events.json`、`A13-jwt-exp.json`、`A14-tool-call.json`、
   `A14-upload-sequence.json`）契约已由构建器固定，缺失即失败关闭；
 - 受管工具身份已变化，按 §11.1 必须新建 k37 完整重采，k36 不迁移、不复用。
+
+## 13. R2 实施结果：A11 走官方 V3（2026-08-10）
+
+### 13.1 根因（0.147 冻结树核实）
+
+k36 的 A11 报 `400 invalid_quicksilver_alpha_header`，根因在版本默认值：
+
+```rust
+let version = params.version.unwrap_or(match &transport {
+    ConversationStartTransport::Websocket => config.realtime.version,
+    ConversationStartTransport::Webrtc { .. } => RealtimeWsVersion::V1,
+});
+```
+
+（`core/src/realtime_conversation.rs:1170-1172`）驱动走 WebRTC 且从不声明 `version`，
+于是落到 **V1**，发出 `openai-alpha: quicksilver=v1`，而上游已不再接受该值。
+
+逐项核实的协议事实：
+
+| 项 | V1（此前的实际路径） | V3（目标） |
+|---|---|---|
+| `openai-alpha` | `quicksilver=v1` | `quicksilver=v2`（命名错位，官方实现如此，`:1647-1661`） |
+| event parser | `V1` | `FramelessBidi` |
+| sideband call_id 位置 | query `?call_id=` | **路径末段** `/v1/live/{call_id}`（`codex-api/.../methods.rs:985-993`） |
+| 默认模型 | `DEFAULT_REALTIME_MODEL` | `DEFAULT_FRAMELESS_REALTIME_MODEL` |
+
+另有两条硬约束：WebRTC 只接受 v1／v3，v2 会被 `validate_avas_webrtc_start`
+（`:1232-1247`）拒绝；v1／v3 **不能用 text 输出模态**，否则报
+「text realtime output modality requires realtime v2」（`:1336-1342`）——现有采集已用
+audio，无需改动。
+
+### 13.2 同时修正 R1 的一处错误假设
+
+`ThreadRealtimeStartResponse` 是**空对象**（`app-server-protocol/src/protocol/v2/realtime.rs:161-165`），
+call_id 根本不在 start 响应里。R1 的事件日志从 `started.callId` 取值，结果恒为空，
+收据构建器据此做的 `sideband_call_id_linked` 判据永远不可能成立。
+
+改为：call_id 只从 relay 字节的 call-create 响应体取；`sideband_call_id_linked` 由
+构建器在 relay 字节的 WS 升级请求里匹配——V3 认路径末段、V1／V2 认 query，两种形态
+都接受，但都必须等于本轮 call-create 返回的那个 call_id。这样关联是从原始字节互相
+印证出来的，而不是驱动自己声称的。
+
+### 13.3 落地清单
+
+| 内容 | 落点 |
+|---|---|
+| 显式声明版本 | `drive_codex_realtime.py` 新增 `--realtime-version`（默认 `v3`），写入 `thread/realtime/start` 的 `version` 字段 |
+| 等待最终事件 | 新增 `wait_for_notification`，等 `started`／`sdp`／`error`／`closed`，不再无条件 sleep 到 hold 结束 |
+| 事件日志升版 | `codex-egress-realtime-events/v2`：记 `requested_version`、`negotiated_version`、`realtime_session_id`，不再产出 call_id |
+| 关联判据 | `build_scenario_facts.py` 新增 `_sideband_joins_call`，按 V3／V1 两种形态匹配 |
+| 采集脚本 | 传 `--realtime-version "${REALTIME_VERSION:-v3}"` |
+
+### 13.4 验收
+
+`make test-capture-tools` 571 项通过（较 R1 新增 7 项），`make check-egress-spec` 全绿。
+新增负例：sideband join 到别的 call_id、完全没有 sideband 连接，均拒绝产出事实。
+端到端冒烟（假 app-server）确认 `"version": "v3"` 真实进入请求参数，驱动等到
+`thread/realtime/started` 才继续，事件日志记录协商版本。
+
+**仍未验证的部分**：真实上游是否接受 V3、是否返回 2xx 与 call_id，只能在 k37 的真实
+官方采集中回答。R2 交付的是「按官方 V3 正确发起并等待最终事件」的能力，不是该场景
+已成立的结论。

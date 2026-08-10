@@ -104,6 +104,19 @@ def _response(status: int, body: bytes) -> bytes:
     ).encode("latin-1") + body
 
 
+def _ws_upgrade(target: str) -> bytes:
+    """V3 sideband 的 WS 升级请求：call_id 拼在路径末段，不是 query。"""
+
+    return (
+        f"GET {target} HTTP/1.1\r\n"
+        f"Host: api.openai.com\r\n"
+        f"Upgrade: websocket\r\n"
+        f"Connection: Upgrade\r\n"
+        f"Sec-WebSocket-Version: 13\r\n"
+        f"Content-Length: 0\r\n\r\n"
+    ).encode("latin-1")
+
+
 class ScenarioFixtureBase(unittest.TestCase):
     def setUp(self) -> None:
         self.root = Path(tempfile.mkdtemp())
@@ -231,13 +244,22 @@ class ScenarioFactsPassTest(ScenarioFixtureBase):
             self.assertTrue(target.is_file())
             self.assertEqual(target.stat().st_size, binding["bytes"])
 
-    def test_A11_成功形态产出事实(self) -> None:
+    def _a11_run(self, sideband_target: str | None = None) -> Path:
+        """A11 成功形态：call-create 2xx + V3 sideband 同 call_id + api SNI。"""
+
         root = self._run_root()
         self._write_relay(
             root,
             1,
             _request("POST", "/backend-api/codex/realtime/calls", b"{}"),
             _response(201, b'{"call_id":"call-abc"}'),
+        )
+        # V3 的 sideband 把 call_id 拼在路径末段（methods.rs:985-993）。
+        self._write_relay(
+            root,
+            2,
+            _ws_upgrade(sideband_target or "/v1/live/call-abc"),
+            _response(101, b""),
         )
         (root / "direct" / "traffic.pcap").write_bytes(
             _pcap([(1_780_000_000.0, "api.openai.com")])
@@ -246,10 +268,20 @@ class ScenarioFactsPassTest(ScenarioFixtureBase):
             root,
             "A11-realtime-events.json",
             {
-                "notifications": [{"method": "thread/realtime/started"}],
-                "sideband_call_id": "call-abc",
+                "notifications": [
+                    {
+                        "method": "thread/realtime/started",
+                        "params": {"realtimeSessionId": "sess-1", "version": "v3"},
+                    }
+                ],
+                "requested_version": "v3",
+                "negotiated_version": "v3",
             },
         )
+        return root
+
+    def test_A11_成功形态产出事实(self) -> None:
+        root = self._a11_run()
         document = facts_builder.build("A11", "official-relay-realtime-webrtc", RUN_ID, root)
         self.assertEqual(document["final_state"], "sideband_established")
         self.assertEqual(document["facts"]["call_create_status"], 201)
@@ -258,6 +290,14 @@ class ScenarioFactsPassTest(ScenarioFixtureBase):
             hashlib.sha256(b"call-abc").hexdigest(),
         )
         self.assertEqual(document["facts"]["async_error_count"], 0)
+        self.assertTrue(document["facts"]["sideband_call_id_linked"])
+
+    def test_A11_接受_V1_形态的_query_call_id(self) -> None:
+        """V1／V2 用 query 传 call_id；两种形态都算真实关联。"""
+
+        root = self._a11_run(sideband_target="/v1/realtime?call_id=call-abc")
+        document = facts_builder.build("A11", "official-relay-realtime-webrtc", RUN_ID, root)
+        self.assertTrue(document["facts"]["sideband_call_id_linked"])
 
     def test_A14_成功形态区域主机来自响应(self) -> None:
         root = self._a14_run("sdmntprwestus3.oaiusercontent.com")
@@ -329,6 +369,38 @@ class ScenarioFactsNegativeTest(ScenarioFixtureBase):
             root,
             "A11-realtime-events.json",
             {"notifications": [{"method": "thread/realtime/error"}], "sideband_call_id": ""},
+        )
+        with self.assertRaises(facts_builder.ScenarioFactsError):
+            facts_builder.build("A11", "official-relay-realtime-webrtc", RUN_ID, root)
+        self._assert_no_facts(root, "A11")
+
+    def test_A11_sideband_关联到别的_call_id_拒绝产出(self) -> None:
+        """sideband 存在但 join 的不是本轮 call_id，不算关联成立。"""
+
+        passer = ScenarioFactsPassTest()
+        passer.root = self.root
+        root = passer._a11_run(sideband_target="/v1/live/call-other")
+        with self.assertRaises(facts_builder.ScenarioFactsError):
+            facts_builder.build("A11", "official-relay-realtime-webrtc", RUN_ID, root)
+        self._assert_no_facts(root, "A11")
+
+    def test_A11_无_sideband_连接拒绝产出(self) -> None:
+        """只有 call-create 成功、sideband 从未建立，场景不成立。"""
+
+        root = self._run_root()
+        self._write_relay(
+            root,
+            1,
+            _request("POST", "/backend-api/codex/realtime/calls", b"{}"),
+            _response(201, b'{"call_id":"call-abc"}'),
+        )
+        (root / "direct" / "traffic.pcap").write_bytes(
+            _pcap([(1_780_000_000.0, "api.openai.com")])
+        )
+        self._write_observation(
+            root,
+            "A11-realtime-events.json",
+            {"notifications": [{"method": "thread/realtime/started", "params": {}}]},
         )
         with self.assertRaises(facts_builder.ScenarioFactsError):
             facts_builder.build("A11", "official-relay-realtime-webrtc", RUN_ID, root)
@@ -840,6 +912,12 @@ class OfficialCaptureScriptTest(unittest.TestCase):
         self.assertIn("exec_status=$?", self.source)
         self.assertIn("--events-output", self.source)
 
+    def test_realtime_显式声明_v3(self) -> None:
+        """R2：WebRTC 不传版本会默认 v1，header quicksilver=v1 已被上游拒绝。"""
+
+        self.assertIn('--realtime-version "${REALTIME_VERSION:-v3}"', self.source)
+
+
     def test_trap_覆盖信号且还原留下证明(self) -> None:
         self.assertIn("trap cleanup EXIT INT TERM", self.source)
         self.assertIn("restore_auth_json", self.source)
@@ -857,6 +935,34 @@ class OfficialCaptureScriptTest(unittest.TestCase):
         build = self.source.index('"$capture_tool_root/build_scenario_facts.py"')
         self.assertLess(scrub, restore)
         self.assertLess(restore, build)
+
+
+class RealtimeDriverV3Test(unittest.TestCase):
+    """R2：驱动必须显式走 V3 并等待最终事件。"""
+
+    def setUp(self) -> None:
+        self.source = (TOOL_ROOT / "drive_codex_realtime.py").read_text(encoding="utf-8")
+
+    def test_默认版本为_v3_且进入请求参数(self) -> None:
+        self.assertIn('choices=["v1", "v2", "v3"], default="v3"', self.source)
+        self.assertIn('"version": args.realtime_version', self.source)
+
+    def test_等待最终事件而不是无条件_sleep(self) -> None:
+        self.assertIn("wait_for_notification", self.source)
+        for method in (
+            "thread/realtime/started",
+            "thread/realtime/sdp",
+            "thread/realtime/error",
+            "thread/realtime/closed",
+        ):
+            self.assertIn(method, self.source)
+
+    def test_不再从空的_start_响应取_call_id(self) -> None:
+        """ThreadRealtimeStartResponse 是空对象，call_id 只在 relay 字节里。"""
+
+        self.assertNotIn('started.get("callId")', self.source)
+        self.assertIn("realtime_session_id", self.source)
+        self.assertIn("negotiated_version", self.source)
 
 
 if __name__ == "__main__":
