@@ -1,6 +1,9 @@
 # Codex CLI 0.145.0 → 0.147.0 Official Egress 升级计划（执行中）
 
-> 状态：当前 Campaign `…-k36`，位于 **§6 之内**（官方 `run` 19/19 完成，`seal` 未执行）。第一层的验收链路接线已闭环（§10.8，ACC-01～07）；第二层 8 个采集覆盖缺口中 5 个已解决，**A11／A13／A14 的补采失败并阻断 SPEC-EP-002，待外部审核**（§10.9.4）。Active 仍为 0.145
+> 状态：当前 Campaign `…-k36` 位于 **§6 之内**。官方 attempt 的 19 个 job 均结束，
+> 但 A11／A13／A14 没有到达各自目标协议分支，因而这只是**编排完成**，不是场景成立；
+> attempt 保持 `awaiting_receipts`，`seal` 未执行。审核结论与下一步见 §10.9.4。
+> Active 仍为 0.145。
 > 创建日期：2026-08-07
 > 审阅基线：commit `abf236375f66aa096580092e646c4e33d37bb135`
 > 基线画像：Codex CLI `0.145.0`
@@ -175,7 +178,8 @@ P0 报告必须包含所有命令和输入摘要、临时资产 inventory/hash�
 - L1/L2 源码调用链、原始与脱敏抓包、inventory、attempt result；
 - TLS/HTTP/WS/Body/endpoint/跨请求状态、恢复、secret scan 和 evidence seal。
 
-当前有效记录（Campaign `codex-0145-to-0147-20260809T101826Z-k34`）：17 个官方场景一次
+历史记录（Campaign `codex-0145-to-0147-20260809T101826Z-k34`，已因后续受管工具身份变化
+作废）：17 个官方场景一次
 全过，`official/result.json` 状态为 `complete`，`stage=capture-official`，封存时间
 `2026-08-09T10:37:18Z`，共 409 份证据、secret scan findings 0。官方二进制为 `0.147.0`，
 CLI SHA `cb0a1556…`，Code Mode helper SHA `00ecf5d0…`，package asset SHA
@@ -210,7 +214,8 @@ host/path/query/header、framing、代理、TLS 或连接复用。
 新出站面不是失败；未发现、未分类或静默回落旧画像才失败。删除规则必须同时具备源码
 不可达结论、正反场景、旧引用清单和 RemovalReceipt，否则保持 `blocked`。
 
-当前有效记录（Campaign `codex-0145-to-0147-20260809T101826Z-k34`）：`classification/result.json`
+历史记录（Campaign `codex-0145-to-0147-20260809T101826Z-k34`，不得迁移或复用）：
+`classification/result.json`
 状态为 `complete`，`stage=classify`，封存时间 `2026-08-09T10:40:03Z`。联合摘要为
 `d762e73bc980b202d2d9387f3da8bb1b6c361cba8390a63e26be7ab6c5639cba`，classification package
 digest 为 `16e36c8aaa818e3803edd05f66b971a5fe255c50170bb88bb28ba9977ef4e3f0`；42 条规则、
@@ -420,7 +425,8 @@ final-wire 可用，但不能替代 alpha 真实 service 链或 `server_response
 
 ## 10. 当前执行状态
 
-> 时间：2026-08-10。当前 Campaign `codex-0145-to-0147-20260809T170000Z-k35`。
+> 时间：2026-08-10。当前 Campaign `codex-0145-to-0147-20260810T000000Z-k36`，
+> campaign_id `codex-0_147_0-20260809T221440Z`。
 > **Active 仍为 0.145，0.147 尚未替换。**
 
 ### 10.1 按章节的真实进度
@@ -430,7 +436,7 @@ final-wire 可用，但不能替代 alpha 真实 service 链或 `server_response
 | 章节 | 状态 | 依据 |
 |---|---|---|
 | §5 DOC-PRE 与 P0 | 完成 | 不依赖 Campaign，结论长期有效 |
-| §6 Campaign／官方取证／分类 | **进行中** | k35 `planned` 完成；官方 `run` 17/17 complete；`seal` 未通过，见 §10.9 |
+| §6 Campaign／官方取证／分类 | **进行中** | k36 `planned` 完成；官方 attempt 的 19/19 job 编排完成，但 3 个目标场景未成立；`seal` 未执行，见 §10.9 |
 | §7 建立 0.147 画像 | 未开始 | |
 | §8 Candidate／比较／`ready` | 未开始 | |
 | §9 生产启用与回滚 | 未开始 | |
@@ -451,15 +457,19 @@ k34 曾到达 `compared`，但 ACC-01～07 改变了受管工具身份，k34 已
 
 ### 10.7 剩余路径
 
-1. **§10.9 的采集覆盖缺口**：8／15 场景待逐项定案（补 job／改场景定义／classify 标
-   `change`），这是当前唯一阻塞项；
-2. `official_sealed`：编目 → 收口 → 派生 → seal 门禁 → 封存；
-3. `profile_approved`：classify 42 规则，含 SPEC-TLS-003 的判据修订（§10.9.2）；
-4. §7 建立画像 → §8 候选采集、compare、新 `accept` → `ready`；
-5. §9 生产启用：canary、切换、回滚演练、恢复后 final-wire，最终 Active=0.147 / Previous=0.145；
-6. 收尾：恢复分组 9 的 `allow_image_generation`（原值 false）。
+1. 先以独立变更集实现 `SCN-REALITY-01`：job 退出码之外，必须校验目标协议分支的成功
+   收据；缺少收据一律失败关闭，禁止再把脚本结束记为场景成立；
+2. 分别修正 A11／A13／A14 的安全触发方式，并以 §10.9.4 的场景成功条件做测试；
+3. 触发工具与场景定义冻结后新建 k37；k36 只保留为诊断夹具，不迁移、不封存、不复用；
+4. k37 重新执行官方取证，完成编目 → 收口 → 派生 → `seal` → `official_sealed`；
+5. `profile_approved`：classify 42 条规则，含 SPEC-TLS-003 的判据修订（§10.9.2）；
+6. §7 建立画像 → §8 候选采集、compare、新 `accept` → `ready`；
+7. §9 生产启用：canary、切换、回滚演练、恢复后 final-wire，最终
+   Active=0.147 / Previous=0.145；
+8. 收尾：恢复分组 9 的 `allow_image_generation`（原值 false）。
 
-用户已授权按第 5→6→7→8→9 章连续执行；涉及规则判据变更或场景定义变更时须先定案。
+本次只修订审核文档；`SCN-REALITY-01`、触发逻辑、重采与 `seal` 均须作为后继变更集另行
+审核后实施。
 
 ### 10.8 第一层：验收链路接线（已闭环）
 
@@ -477,22 +487,21 @@ artifact 覆盖、旧 `accept` 错把两类规则强制成同一种双侧模型�
 单个证据根。修好接线、真正跑通编目后暴露出第二层问题，见 §10.9。两层不是同一件事：
 接线不通就跑不到编目，跑不到编目就看不见证据缺口。
 
-### 10.9 第二层：采集覆盖与判据错配（当前阻塞项）
+### 10.9 第二、三层：采集覆盖、判据与场景真实性错配（当前阻塞项）
 
-修好验收链路、真正跑通编目后暴露的问题：**场景定义的 `required_artifact_kinds` 与
-capture job 实际产出的证据类型系统性错配**。与 §10.8 不是同一层——接线不通就跑不到
-编目，跑不到编目就看不见证据缺口。
+修好验收链路、真正跑通编目后先暴露第二层问题：**场景定义的
+`required_artifact_kinds` 与 capture job 实际产出的证据类型系统性错配**。k36 又暴露
+第三层问题：**job 脚本退出成功不等于目标协议分支已被触发**。与 §10.8 不是同一层——
+接线不通就跑不到编目，证据类型不匹配就无法断言，而目标分支未触发则产出的只是无关证据。
 
 根因与第一层相同：历史 25 个 Campaign 无一产出过 `results.json`，链路错配与证据错配
 两层问题一直并存，只能逐层剥离。
 
-> **⛔ 当前阻断（待外部工程师审核）**：8 个缺口中 5 个已定案实施（§10.9.3），但
-> **A11／A13／A14 的补采失败**——k36 已按新 job 完成 19/19 官方取证，抓包机制正常，
-> 但官方 CLI 在这三个场景下**从未向 `auth.openai.com`／`api.openai.com`／
-> `*.oaiusercontent.com` 发起过任何连接**，pcap 与中继两个独立观测点一致。
-> `SPEC-EP-002` 的三条 SNI check 因此无证据可依。完整实证、已排除的手段、三个备选
-> 方案与待回答问题见 [`SPEC_EP_002_EVIDENCE_BLOCKER.md`](SPEC_EP_002_EVIDENCE_BLOCKER.md)。
-> **`seal` 未执行**，等待裁定。
+> **⛔ 当前阻断（审核结论已明确）**：8 个缺口中 5 个已解决；A11／A13／A14 的 job
+> 虽被编排器记为 `complete`，目标协议分支实际均未成立。pcap 与中继一致说明目标连接
+> 没有发生，但不能据此推导规则不可观测，更不能把判据改成“未观测即通过”。应先增加
+> 场景真实性失败关闭，再修正安全触发并新建 Campaign 重采。完整证据和方案见
+> [`SPEC_EP_002_EVIDENCE_BLOCKER.md`](SPEC_EP_002_EVIDENCE_BLOCKER.md)。`seal` 未执行。
 
 #### 10.9.1 缺口清单（k35 官方侧实测，8／15 场景）与当前状态
 
@@ -560,34 +569,160 @@ artifact、集合相同、顺序种类 ≥`minimum_distinct_orders` 的子集。
 填写、与实际 IP 无关，因此抓到的域名就是 CLI 真实意图连接的
 `api.openai.com`／`auth.openai.com`／`*.oaiusercontent.com`——SPEC-EP-002 正是验这一点。
 
-**A13 的触发属 I 类干预**：只把 `auth.json` 的 `last_refresh` 提前，让官方 CLI 自行
-判定需要刷新；`access_token`／`refresh_token`／账号绑定一律不改，退出时逐字还原。
-刷新请求本身由官方 CLI 构造并发出，出站形态未被替换。
+**k36 已推翻 A13 的原触发假设**：只把 `auth.json` 的 `last_refresh` 提前并不会触发正常
+JWT 的刷新。0.147 源码先读取 access token JWT 的 `exp`，只有无法取得有效期时才回退到
+`last_refresh`（正式冻结树 `login/src/auth/manager.rs:2762-2783`）。因此该操作虽会逐字还原凭据，
+却没有建立 A13 场景，不能再标为有效的 I 类触发。
 
 定案后 15 个场景全部有 job 绑定，工具身份随之变化，k35 作废并按 §6.1 新建 k36
 （28 个 job）重做官方取证。
 
-#### 10.9.4 A11／A13／A14 补采失败：SPEC-EP-002 无证据可依（待外部审核）
+#### 10.9.4 A11／A13／A14：job 完成，但目标场景未成立
 
-按 §10.9.3 定案给三个 job 补了抓包与新 job，k36 官方取证 19/19 全过、抓包机制正常，
-但**目标域名一个都没出现**：
+k36 attempt 的 19 个 job 都结束并由编排器记为 `complete`，但三个补采脚本会吞掉目标
+分支失败，故 `19/19` 只能表述为 **job 编排完成**。逐场景审核结果：
 
-| job | 期望 SNI | pcap 实测 | 中继记录 |
+| 场景 | 实际观测 | 源码核对 | 结论与后继成功条件 |
 |---|---|---|---|
-| `official-relay-oauth-refresh` | `auth.openai.com` | `chatgpt.com` ×3 | `chatgpt.com` ×3 |
-| `official-relay-realtime-webrtc` | `api.openai.com` | `chatgpt.com` ×3 | `chatgpt.com` ×3 |
-| `official-relay-file-upload` | `*.oaiusercontent.com` | `chatgpt.com` ×4 | `chatgpt.com` ×4 |
+| A11 realtime sideband | `POST /backend-api/codex/realtime/calls` 返回 400：`invalid_quicksilver_alpha_header`；无 `call_id`，随后只有 `thread/realtime/error` | 0.147 版本映射和 V1/V3 header 分别见 `core/src/realtime_conversation.rs:1297-1335,1647-1661`；sideband 默认 API base 与 call-id join 见 `codex-api/src/endpoint/realtime_websocket/methods.rs:709-791,976-992` | 显式走官方 V3，等待异步 started/SDP 或 error；只有 call-create 2xx、取得 `call_id`/SDP 且出现 `api.openai.com` SNI 才算成功 |
+| A13 OAuth refresh | 只发生 models／Responses／WHAM 业务请求，无 refresh 请求 | 正常 JWT 的 `exp` 优先于 `last_refresh`（`login/src/auth/manager.rs:2762-2783`） | 在隔离采集账号和隔离 `CODEX_HOME` 中等待自然进入 5 分钟刷新窗口；只有真实 `POST auth.openai.com/oauth/token` 与对应 SNI 同时出现才算成功 |
+| A14 file upload | CLI 明确报告当前接口没有可调用的 `save_site_version`；无 `/backend-api/files` 请求 | 文件 create→PUT→uploaded 完整顺序见 `codex-api/src/files.rs:126-275` | 先冻结模型可见的 Apps 工具调用契约；只有 create、响应 host、区域 SNI、uploaded 2xx 和三事件顺序成立才算成功；官方 pcap 不声称取得加密 PUT URL |
 
-pcap 与中继两个独立观测点一致，证明**官方 CLI 从未向这三个域名发起连接**，不是抓包
-遗漏或劫持配置问题。三个触发假设均告失败：改 `last_refresh` 未触发 token 刷新
-（CLI 大概率看 JWT 的 `exp`）、realtime 未走到 sideband 那一跳、文件上传未走到区域 URL。
+pcap 与中继记录一致，只能证明**本次目标连接没有发生**，不能证明规则不可观测，也不能
+证明当前抓包对任意区域上传主机都完备。A14 目前只在 loopback 抓包，且 `RELAY_HOSTS` 预列
+固定区域主机；这与规格要求的“按端口捕获所有主机”仍有差距。
 
-`SPEC-EP-002` 的 `auth-sni`／`api-sni`／`regional-file-sni` 三条 check 因此无证据可依。
-继续追下去的手段（伪造 JWT `exp`、置空 access_token 触发 401、深度干预 realtime 协商、
-构造假区域 URL）都会**替换官方出站形态**，违反 §5.2／§6.2，已全部排除。
+**审核决定**：
 
-完整实证、复现命令、已排除手段的逐条理由、三个备选方案与待回答问题见
+1. 保留 `SPEC-EP-002` 的三条必现 SNI 判据，不采用“未观测即通过”的条件化方案；
+2. k36 作为诊断夹具保持 `awaiting_receipts`，不执行 `seal`，不把其中的 3 个 job 当作
+   场景成功证据；
+3. 后继独立变更集先实现 `SCN-REALITY-01`，把上表成功条件变成机器收据并失败关闭；
+4. 再修正三个安全触发。任何受管工具或场景定义变化后都冻结新身份并创建 k37，完整重采；
+5. 只有在正确触发仍被证明不可观测时，才回到 §6.4 讨论 `blocked` 或规则变更。
+
+完整实证与执行方案见
 [`SPEC_EP_002_EVIDENCE_BLOCKER.md`](SPEC_EP_002_EVIDENCE_BLOCKER.md)。
 
-**当前状态**：k36 官方证据完好但未封存（`awaiting_receipts`），`seal` 未执行，
-等待外部裁定后决定「改判据重建 Campaign」还是「按新的触发方式重采」。
+## 11. 后继实施计划（`SCN-REALITY-01` → k37）
+
+本节是当前升级工作的**实施计划**。它把 §10.9.4 的审核决定拆成可执行的独立变更集；
+在前一阶段退出条件未满足前，不得进入下一阶段，不得在 k36 上续跑或执行 `seal`。
+
+### 11.0 执行前置要求
+
+本升级包含两条相互独立的执行轨道，不能把官方 CLI 采集和 Sub2API 服务更新混为一件事：
+
+1. **官方 CLI 采集轨道**：可以继续在 Vircs 上进行。采集使用独立的 Campaign、relay、容器和
+   evidence root；只要不修改 Sub2API 的服务进程、生产配置、生产端口、生产数据和
+   Active/Previous，就不影响 Vircs 当前对外提供的 Sub2API 服务。
+2. **Sub2API 服务验证轨道**：不得直接在正在对外服务的 Vircs 实例上试验。先在独立的
+   ARM64 Sub2API 环境完成测试和验证，全部通过后再准备 Vircs 更新。
+
+ARM64 环境的最低验证范围：
+
+- 编译、单元测试、启动和健康检查；
+- HTTP API、WebSocket、数据库迁移与恢复；
+- 官方出站请求、TLS、代理、超时和错误恢复；
+- 基本并发／资源使用检查以及可回滚性。
+
+ARM64 全部通过后，**不得直接把 ARM64 结果视为 Vircs 上线通过**。上线前还必须：
+
+1. 冻结源码、镜像、配置、数据库迁移和依赖摘要；
+2. 确认 Vircs 实际架构与镜像架构（只读核对 `uname -m`、镜像 `Architecture` 和实际二进制）；
+3. 在 Vircs 部署独立 canary／旁路实例，完成启动、健康、API、WebSocket、出站 TLS 和错误率检查；
+4. canary 通过后才允许更新正式实例；失败则保留证据并回滚，不得直接替换生产实例。
+
+架构边界必须明确：
+
+- 当前冻结的官方 Codex CLI 资产是 Linux `x86_64`，正式官方采集仍须在 Ubuntu 24.04 / x86_64
+  环境完成；ARM64 Sub2API 验证不能替代官方 CLI 采集验证；
+- 如果 Vircs 实际为 `aarch64`，ARM64 验证是服务更新的必要前置，但仍需在 Vircs 做最终 canary；
+- 如果 Vircs 实际为 `x86_64`，ARM64 验证属于额外兼容性验证，不能替代 Vircs x86_64 canary。
+
+在 ARM64 staging 和 Vircs canary 阶段均使用独立账号、独立 `CODEX_HOME`、独立配置和独立
+证据目录；不得触碰生产凭据、全局 `/etc/hosts`、生产 relay 或生产 Active/Previous。上述门禁
+只约束 Sub2API 服务更新，不阻塞已经隔离的官方 CLI 采集轨道。
+
+### 11.1 总体目标与不变约束
+
+目标是在不替换官方出站形态的前提下，证明 A11／A13／A14 真实进入目标协议分支，并为
+`SPEC-EP-002` 的三条必现 SNI check 生成可封存证据。
+
+不变约束：
+
+- Active/Previous 继续保持 `0.145.0 / 0.145.0`；
+- k36 只作诊断夹具，证据不迁移、不复用、不封存；
+- 不伪造 JWT、上游响应、Realtime sideband 或文件上传 URL；
+- 不修改日常登录目录，不使用未隔离的真实凭据做过期触发；
+- 任意工具身份、场景定义、抓包范围或收据 schema 变化，都必须冻结新摘要并新建 k37。
+
+### 11.2 变更集与退出条件
+
+| 变更集 | 实施内容 | 必交付物 | 退出条件 |
+|---|---|---|---|
+| R0 方案冻结 | 固定 A11／A13／A14 的成功事件、证据字段、超时、负例和恢复边界；定义 `scenario_receipt` 与 job 状态的关系 | `SCN-REALITY-01` 方案、字段表、状态机、测试矩阵 | **已完成**；无“脚本退出即成功”的路径 |
+| R1 真实性门禁 | 记录原始事件、生成成功 receipt、job 缺 receipt 失败关闭；不在 R1 伪造或补写协议字段 | 门禁实现、正反测试、receipt schema 校验 | A11 400、A13 无 refresh、A14 无工具调用等负例均失败关闭 |
+| R2 A11 触发修正 | 使用官方 0.147 V3／`quicksilver=v2` 路径；只调用官方 CLI，不手工拼 sideband | realtime 成功 receipt、call_id/SDP/started 关联、api SNI 记录 | call-create 2xx、异步 started/SDP、sideband SNI 三者同时存在 |
+| R3 A13 触发修正 | 隔离账号与 `CODEX_HOME`；在 JWT 自然进入 5 分钟刷新窗口时采集；采集前后逐字核对隔离状态 | refresh request receipt、auth SNI、凭据恢复摘要 | 真实 `POST /oauth/token` 与 `auth.openai.com` SNI 同时存在；活跃凭据无非预期变化 |
+| R4 A14 触发与抓包修正 | 冻结 Apps 工具可见性与调用契约；要求 create→响应 `upload_url`→PUT→uploaded；按端口覆盖响应返回的所有上传主机 | tool-call receipt、URL provenance、PUT/uploaded receipt、动态 host inventory | 工具调用和完整上传链成立；区域 SNI 来自真实响应，不依赖硬编码主机 |
+| R5 P0 与身份冻结 | 在临时目录做可丢弃预检，运行全套工具测试，冻结源码／工具／场景／镜像摘要 | P0 报告、inventory、工具身份 receipt | 工作区干净；身份校验通过；不得触碰 Active/Previous |
+| R6 k37 官方重采 | 新建独立 Campaign，执行官方 `run`，逐 job 校验真实性 receipt，再执行 `seal` | k37 campaign、attempt、results、证据根、secret scan、seal receipt | 19 个 job 的 job 状态与场景状态均为成功；三条 SNI check 均有官方证据 |
+| R7 后续升级门禁 | 重新编目、classify、建立 0.147 画像，完成 candidate、compare、accept 和 `ready` | profile/release/compare/accept 收据 | `blocked=0`、无未登记漂移、双版本隔离和全部 seal 通过 |
+
+### 11.3 `SCN-REALITY-01` 收据最低字段
+
+| 场景 | 最低字段 |
+|---|---|
+| A11 | `call_create_status`、`call_id_sha256`、`sdp_or_started_event`、`async_error_count`、`sideband_sni`、`final_state` |
+| A13 | `token_request_method`、`token_request_path`、`oauth_sni`、`jwt_exp_observation`、`credential_restore`、`final_state` |
+| A14 | `tool_name`、`tool_call_id`、`create_request`、`upload_url_source_event`、`put_destination`、`upload_sequence`、`uploaded_event`、`regional_sni`、`final_state` |
+
+字段值必须来自官方 CLI、relay、pcap 或驱动的原始事件；编排器不得根据 job 退出码
+自行补写目标字段。缺字段、状态矛盾、异步 error 或来源不一致均为失败关闭。
+
+### 11.4 执行顺序
+
+```text
+R0 方案冻结
+  ↓
+R1 真实性门禁与负例
+  ↓
+R2 A11 V3 与最终事件等待
+  ↓
+R3 A13 JWT 自然刷新
+  ↓
+R4 A14 Apps 工具与动态区域 SNI
+  ↓
+R5 P0 预检与工具身份冻结
+  ↓
+R6 新建 k37、官方 run → receipt 校验 → seal
+  ↓
+R7 classify → profile → candidate → compare → accept → ready
+```
+
+任一阶段失败，保留原始失败证据并停止；不得通过改写判据、补写 receipt、复用 k36
+证据或静默回退 0.145 来推进流程。只有 R6 完成且 `SPEC-EP-002` 三条目标 SNI 均有
+真实官方证据，才允许进入 R7。
+
+### 11.5 当前执行起点
+
+**R0 已完成，下一步从 R1 开始**：
+[`SCN_REALITY_01_SCENARIO_REALITY_GATE.md`](SCN_REALITY_01_SCENARIO_REALITY_GATE.md)。
+该文冻结了 `scenario_receipt` 契约、job 判定的第四条件、状态机与正反测试矩阵。按仓库既有
+「收据只表达成功态」的约定，判定改为**缺收据即失败**，而不是读取收据里的成功标志——
+后者只需改一个字段值即可伪造，前者要伪造整条 producer 链。
+
+R1 编码时必须一并处置以下五项已登记要求（详见该文 §3、§11）：
+
+1. 两份场景清单的 `required_artifact_kinds` 已分叉；批准画像若沿用旧 kinds，A01／A15 的
+   定案仍会在 accept 阶段失效，必须同步清单、批准画像交叉校验和冻结契约摘要；
+2. A11／A13／A14 的场景定义仍只有候选侧受控触发，必须在 R1 引入 official/candidate 双侧
+   trigger 契约；
+3. 收据固定路径、attempt 身份传递、retry 归档及 A13 cleanup 后原始字节恢复证明尚未闭合；
+4. A14 直连 PUT 后，官方侧只能证明响应 host、区域 SNI、事件顺序和 uploaded 2xx，不能声称
+   从加密 pcap 取得 PUT URL；
+5. R1 还需补齐 attempt `jobResult` schema、运行时精确校验和正式冻结源码坐标。
+
+当前只从 R1 开始文档对应的真实性门禁变更；R1 通过后再按 11.4 进入 R2、R3、R4。R1 及
+后续阶段不得直接替换 Vircs 正式服务，不执行未经 canary 验证的生产更新。

@@ -3,9 +3,9 @@
   "base_commit": "ba485663c3bc0af6802cf6dfc4e19139ef00e371",
   "retirement_receipt": "docs/egress/maintenance/official-egress-consolidation-retirement.json",
   "retirement_receipt_sha256": "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36",
-  "candidate_path_count": 860,
-  "transition_entry_count": 860,
-  "transition_path_set_sha256": "4190c65222c0576f60a465d2761e2247f7fd40b0b6f5e41a0af3e3d12191b6ba",
+  "candidate_path_count": 861,
+  "transition_entry_count": 861,
+  "transition_path_set_sha256": "3184f5c52b33ffa8fbcb873c1a7ab02f3e67a75b5c59c1e515a6a39f005d8101",
   "entries": [
     {
       "path": ".github/workflows/backend-ci.yml",
@@ -12405,8 +12405,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 36510,
-        "sha256": "1664758ef790bcefb8b839a8374f8008de86293ccbebe4b2c0cc43a9cc818fe8"
+        "size": 46663,
+        "sha256": "52e39ad00650cc68c3cb67b63dc3fb19c8acbc5d50ee152ca1066284d59c0558"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
@@ -12440,6 +12440,30 @@
       ]
     },
     {
+      "path": "docs/egress/maintenance/SCN_REALITY_01_SCENARIO_REALITY_GATE.md",
+      "scope": "documentation_and_receipts",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 31691,
+        "sha256": "26c3b0cbab91c3230b751b28f67362cf50eaaf1209bcb410eaca9953b10c8c0f"
+      },
+      "deletion_allowed": false,
+      "reason": "官方出站单文档合并与已失效执行兼容层退休",
+      "machine_proofs": [
+        "docs/egress/maintenance/official-egress-consolidation-retirement.json",
+        "make check-egress-spec"
+      ]
+    },
+    {
       "path": "docs/egress/maintenance/SPEC_EP_002_EVIDENCE_BLOCKER.md",
       "scope": "documentation_and_receipts",
       "before": {
@@ -12453,8 +12477,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 7231,
-        "sha256": "99b1ba45303c05ad05285c17ed1959b875cafd403b939cf4ccb5ab34daabab2e"
+        "size": 10006,
+        "sha256": "b567efba9bfd0a73cdfcbdadc5b4830dfffeed62d616292da7d17782d0bd243f"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
