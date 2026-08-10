@@ -83,6 +83,14 @@ func (p candidateCaptureProvider) Generate(ctx context.Context) (string, error) 
 	return candidateAttestation, nil
 }
 
+// candidateCaptureScopeFromContext 读回 WithCandidateCaptureScope 注入的调度身份。
+// 与唯一的使用者同处 candidatecapture 构建标签下——放在无标签的 attestation.go 会让
+// 默认构建把它算作未使用而被 lint 拦下。
+func candidateCaptureScopeFromContext(ctx context.Context) (CandidateCaptureScope, bool) {
+	scope, ok := ctx.Value(candidateCaptureScopeContextKey{}).(CandidateCaptureScope)
+	return scope, ok
+}
+
 func (p candidateCaptureProvider) validateScope(ctx context.Context) error {
 	if !time.Now().Before(p.expiresAt) {
 		return errCandidateCaptureScopeMismatch

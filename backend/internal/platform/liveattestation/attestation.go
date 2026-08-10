@@ -36,9 +36,6 @@ func WithCandidateCaptureScope(ctx context.Context, scope CandidateCaptureScope)
 	return context.WithValue(ctx, candidateCaptureScopeContextKey{}, scope)
 }
 
-// candidateCaptureScopeFromContext 读回调度身份。只有 candidatecapture 构建的 provider
-// 消费它；普通构建不引用，因此对生产二进制没有任何行为影响。
-func candidateCaptureScopeFromContext(ctx context.Context) (CandidateCaptureScope, bool) {
-	scope, ok := ctx.Value(candidateCaptureScopeContextKey{}).(CandidateCaptureScope)
-	return scope, ok
-}
+// 读回调度身份的 candidateCaptureScopeFromContext 只有 candidatecapture 构建的 provider
+// 消费，放在本文件会让默认构建把它算作未使用（golangci-lint 的 unused 会失败），因此
+// 定义在 attestation_candidate_capture.go 内，与唯一的使用者同一构建标签。
