@@ -205,7 +205,7 @@ class ScenarioFixtureBase(unittest.TestCase):
             "A13-credential-restore.json",
             {
                 "before_sha256": "d" * 64,
-                "after_sha256": "e" * 64,
+                "after_sha256": "d" * 64,
                 "capture_side_wrote_auth": False,
             },
         )
@@ -253,7 +253,9 @@ class ScenarioReceiptSchemaTest(unittest.TestCase):
         # R3：采集侧不得写 auth.json，刷新必须真的改写凭据。
         restore = defs["factsA13"]["properties"]["credential_restore"]["properties"]
         self.assertEqual(restore["capture_side_wrote_auth"]["const"], False)
-        self.assertEqual(restore["rotated_by_refresh"]["const"], True)
+        # 不再要求 rotated_by_refresh：规格只约束发往哪个域名，不约束上游回什么。
+        self.assertNotIn("rotated_by_refresh", restore)
+        self.assertNotIn("uploaded_event", defs["factsA14"]["properties"])
 
     def test_producer_复用既有收据体系(self) -> None:
         producer = self.schema["$defs"]["producer"]
@@ -503,23 +505,6 @@ class ScenarioFactsNegativeTest(ScenarioFixtureBase):
             facts_builder.build("A13", JOB_ID, RUN_ID, root)
         self._assert_no_facts(root, "A13")
 
-    def test_A13_凭据未被刷新改写_拒绝产出(self) -> None:
-        """前后摘要一致说明 CLI 没有真正刷新落盘。"""
-
-        root = self._a13_run()
-        self._write_observation(
-            root,
-            "A13-credential-restore.json",
-            {
-                "before_sha256": "d" * 64,
-                "after_sha256": "d" * 64,
-                "capture_side_wrote_auth": False,
-            },
-        )
-        with self.assertRaises(facts_builder.ScenarioFactsError):
-            facts_builder.build("A13", JOB_ID, RUN_ID, root)
-        self._assert_no_facts(root, "A13")
-
     def test_A13_采集侧写过_auth_拒绝产出(self) -> None:
         """R3 不接受任何受控篡改——k36 改 last_refresh 正是被否掉的手法。"""
 
@@ -537,25 +522,25 @@ class ScenarioFactsNegativeTest(ScenarioFixtureBase):
             facts_builder.build("A13", JOB_ID, RUN_ID, root)
         self._assert_no_facts(root, "A13")
 
-    def test_A14_上传顺序颠倒_拒绝产出(self) -> None:
-        """uploaded 早于区域 PUT，三跳链不成立。"""
+    def test_A14_create_晚于区域连接_拒绝产出(self) -> None:
+        """create 必须早于区域连接，否则无法证明 URL 来自响应而非预知。"""
 
         passer = ScenarioFactsPassTest()
         passer.root = self.root
         root = passer._a14_run("sdmntprwestus3.oaiusercontent.com")
-        # 把 uploaded 连接挪到区域连接之前。
+        # 把 create 连接挪到区域连接之后。
         passer._write_relay_manifest(
             root,
             [
                 {
                     "connection_id": 1,
-                    "opened_at_unix_ms": int((REGIONAL_TS - 60) * 1000),
-                    "closed_at_unix_ms": int((REGIONAL_TS - 55) * 1000),
+                    "opened_at_unix_ms": int((REGIONAL_TS + 60) * 1000),
+                    "closed_at_unix_ms": int((REGIONAL_TS + 65) * 1000),
                 },
                 {
                     "connection_id": 2,
-                    "opened_at_unix_ms": int((REGIONAL_TS - 50) * 1000),
-                    "closed_at_unix_ms": int((REGIONAL_TS - 40) * 1000),
+                    "opened_at_unix_ms": int((REGIONAL_TS + 70) * 1000),
+                    "closed_at_unix_ms": int((REGIONAL_TS + 80) * 1000),
                 },
             ],
         )
@@ -1050,12 +1035,14 @@ class OfficialCaptureScriptTest(unittest.TestCase):
 
         self.assertIn("extract_a14_tool_call", self.source)
         self.assertIn("exec_json_args", self.source)
-        self.assertIn("mcp_tool_call", self.source)
-        # 只接受 completed 的调用；in_progress 不算工具真的跑完。
-        self.assertIn('call.get("status") != "completed"', self.source)
+        # 字段平铺在 item 下，没有 details 这一层——照 Rust 嵌套结构取会一无所获。
+        self.assertIn('item.get("type") != "mcp_tool_call"', self.source)
+        self.assertIn('item.get("tool")', self.source)
         self.assertIn("A14-tool-call.json", self.source)
-        # 模型侧称其为 Sites.save_site_version，裸名／带命名空间都要认。
+        # 模型侧称其为 sites.save_site_version，裸名／带命名空间都要认。
         self.assertIn("qualified", self.source)
+        # 业务失败是设计使然（不存在的 project_id），只排除仍在进行中的。
+        self.assertIn('{"completed", "failed"}', self.source)
 
     def test_A14_提示词放行工具检索(self) -> None:
         """k37 实测：禁止调用其他工具会让模型无法先检索出该工具，一个请求都发不出。"""

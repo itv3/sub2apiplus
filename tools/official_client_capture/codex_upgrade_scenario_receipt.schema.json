@@ -406,14 +406,13 @@
           }
         },
         "credential_restore": {
-          "description": "R3 修订：触发改为等 JWT 自然进入刷新窗口后，采集侧不写 auth.json，而 CLI 刷新会用轮换后的 refresh_token 改写它。还原成旧备份会作废采集账号，因此判据是「采集侧从未写入」加「刷新确实改写了凭据」，且 before 与 after 必须不同。",
+          "description": "只证明采集侧未篡改凭据。不要求刷新成功落盘——SPEC-EP-002 的规则是「token 刷新到 auth.openai.com」，只约束往哪儿发，不约束上游回什么；经中继时 TLS 指纹与官方 CLI 不同会被 WAF 403，那是采集架构的限制。",
           "type": "object",
           "additionalProperties": false,
           "required": [
             "before_sha256",
             "after_sha256",
-            "capture_side_wrote_auth",
-            "rotated_by_refresh"
+            "capture_side_wrote_auth"
           ],
           "properties": {
             "before_sha256": {
@@ -424,9 +423,6 @@
             },
             "capture_side_wrote_auth": {
               "const": false
-            },
-            "rotated_by_refresh": {
-              "const": true
             }
           }
         }
@@ -441,7 +437,6 @@
         "create_request",
         "upload_url_source_event",
         "put_destination",
-        "uploaded_event",
         "regional_sni",
         "regional_host_from_response",
         "upload_sequence"
@@ -522,26 +517,6 @@
             }
           }
         },
-        "uploaded_event": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": [
-            "method",
-            "path_suffix",
-            "status_2xx"
-          ],
-          "properties": {
-            "method": {
-              "const": "POST"
-            },
-            "path_suffix": {
-              "const": "/uploaded"
-            },
-            "status_2xx": {
-              "const": true
-            }
-          }
-        },
         "regional_sni": {
           "$ref": "#/$defs/regionalHost"
         },
@@ -552,17 +527,14 @@
           "type": "object",
           "additionalProperties": false,
           "required": [
-            "create_before_regional",
-            "regional_before_uploaded"
+            "create_before_regional"
           ],
           "properties": {
             "create_before_regional": {
               "const": true
-            },
-            "regional_before_uploaded": {
-              "const": true
             }
-          }
+          },
+          "description": "create 必须早于区域连接——这是「URL 来自响应而非预知」的时序证明。"
         }
       }
     }

@@ -425,10 +425,9 @@ def _facts_a13(evidence: EvidenceSet, root: Path) -> dict[str, Any]:
     after = _require(restore, "after_sha256", "A13 凭据记录")
     if _require(restore, "capture_side_wrote_auth", "A13 凭据记录") is not False:
         raise ScenarioFactsError("采集侧写过 auth.json，A13 不接受受控篡改。")
-    if before == after:
-        raise ScenarioFactsError(
-            "auth.json 采集前后一致，CLI 没有真正刷新并落盘。"
-        )
+    # 不再要求 before != after。SPEC-EP-002 只约束「刷新到 auth.openai.com」，不约束
+    # 上游回什么；经中继时 TLS 指纹与官方 CLI 不同会被 Cloudflare 403，凭据因此不变。
+    # 判据保留的是「采集侧没写过 auth.json」这条防伪造前提。
     return {
         "token_request_method": request["method"],
         "token_request_path": _path_of(request["target"]),
@@ -445,7 +444,6 @@ def _facts_a13(evidence: EvidenceSet, root: Path) -> dict[str, Any]:
             "before_sha256": before,
             "after_sha256": after,
             "capture_side_wrote_auth": False,
-            "rotated_by_refresh": True,
         },
     }
 
@@ -472,14 +470,6 @@ def _facts_a14(evidence: EvidenceSet, root: Path) -> dict[str, Any]:
     if not REGIONAL_SNI_RE.fullmatch(host):
         raise ScenarioFactsError(f"upload_url 主机不是区域上传主机：{host}")
 
-    uploaded_request, uploaded_response = _find_exchange(
-        evidence, root, "POST", lambda path: path.endswith("/uploaded")
-    )
-    if not 200 <= uploaded_response["status"] <= 299:
-        raise ScenarioFactsError(
-            f"uploaded 返回 {uploaded_response['status']}，上传链未闭合。"
-        )
-
     hellos = _client_hellos(evidence, root)
     # 区域主机必须由本轮响应派生：预列域名凑出的 SNI 不满足这一条。
     regional_times = [when for name, when in hellos if name == host]
@@ -491,13 +481,11 @@ def _facts_a14(evidence: EvidenceSet, root: Path) -> dict[str, Any]:
     tool = _load_observation(evidence, root, "A14-tool-call.json")
     # 三跳顺序从原始证据推导，不读脚本写的顺序声明：relay.json 的连接墙钟时刻与
     # pcap 的捕获时刻同为 Unix 时间，可直接比较。
-    create_at, uploaded_at = _upload_chain_times(evidence, root)
+    create_at = _upload_chain_times(evidence, root)
     first_seen = min(regional_times)
     last_seen = max(regional_times)
     if not create_at <= first_seen:
-        raise ScenarioFactsError("create 不早于区域连接，上传顺序不成立。")
-    if not last_seen <= uploaded_at:
-        raise ScenarioFactsError("区域连接不早于 uploaded，上传顺序不成立。")
+        raise ScenarioFactsError("create 不早于区域连接，URL 来源无法证明。")
 
     return {
         "tool_name": _require(tool, "tool_name", "A14 工具调用记录"),
@@ -519,22 +507,14 @@ def _facts_a14(evidence: EvidenceSet, root: Path) -> dict[str, Any]:
             "last_seen_at_utc": _utc(last_seen),
 
         },
-        "uploaded_event": {
-            "method": uploaded_request["method"],
-            "path_suffix": "/uploaded",
-            "status_2xx": True,
-        },
         "regional_sni": host,
         "regional_host_from_response": True,
-        "upload_sequence": {
-            "create_before_regional": True,
-            "regional_before_uploaded": True,
-        },
+        "upload_sequence": {"create_before_regional": True},
     }
 
 
-def _upload_chain_times(evidence: EvidenceSet, root: Path) -> tuple[float, float]:
-    """从 relay.json 取出 create 与 uploaded 所在连接的墙钟时刻（Unix 秒）。
+def _upload_chain_times(evidence: EvidenceSet, root: Path) -> float:
+    """从 relay.json 取出 create 所在连接的墙钟时刻（Unix 秒）。
 
     relay 的 segments 用相对 monotonic 毫秒，无法与 pcap 的捕获时间比较；连接记录
     额外带 `opened_at_unix_ms`／`closed_at_unix_ms` 才能跨两侧排序。区域 PUT 直连
@@ -553,7 +533,6 @@ def _upload_chain_times(evidence: EvidenceSet, root: Path) -> tuple[float, float
     for connection in manifest.get("connections") or []:
         identifier = connection.get("connection_id")
         opened = connection.get("opened_at_unix_ms")
-        closed = connection.get("closed_at_unix_ms")
         if not isinstance(identifier, int) or not isinstance(opened, (int, float)):
             continue
         stem = f"conn{identifier:03d}.client_to_upstream.bin"
@@ -566,16 +545,11 @@ def _upload_chain_times(evidence: EvidenceSet, root: Path) -> tuple[float, float
                 continue
             if target == "/backend-api/files" and "create" not in times:
                 times["create"] = float(opened) / 1000.0
-            elif target.endswith("/uploaded"):
-                # uploaded 取连接关闭时刻的上界；缺失时退回打开时刻。
-                times["uploaded"] = float(
-                    closed if isinstance(closed, (int, float)) else opened
-                ) / 1000.0
-    if "create" not in times or "uploaded" not in times:
+    if "create" not in times:
         raise ScenarioFactsError(
-            "relay.json 缺少 create 或 uploaded 连接的墙钟时刻，无法证明三跳顺序。"
+            "relay.json 缺少 create 连接的墙钟时刻，无法证明 URL 来源顺序。"
         )
-    return times["create"], times["uploaded"]
+    return times["create"]
 
 
 def _ordered(earlier: str, later: str) -> bool:

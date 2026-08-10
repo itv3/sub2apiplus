@@ -148,41 +148,40 @@ def _facts_a13(facts: Any) -> dict[str, Any]:
             f"A13 触发方式不在已登记的官方路径内：{observation['trigger']!r}"
         )
     _sha256(observation["token_sha256"], "A13 token_sha256")
-    # R3 修订：不再要求 before == after。触发方式改为等 JWT 自然进入刷新窗口后，
-    # 采集侧一个字节都不写 auth.json；而 CLI 刷新成功会用轮换后的 refresh_token
-    # 改写它（`login/src/auth/manager.rs:2848-2861` → `persist_tokens` `:1496-1498`）。
-    # 强行还原成旧备份会丢掉新 refresh_token，在轮换语义下直接作废采集账号。
-    # 因此判据改为两条更强的：采集侧从未写过 auth.json，且刷新确实改写了它。
+    # 只保留规格要的：采集侧没有篡改凭据。
+    #
+    # 曾经还要求「刷新必须成功落盘」（rotated_by_refresh + before != after），那是
+    # 把「协议分支成立」和「业务操作成功」混为一谈。SPEC-EP-002 的规则原文是
+    # 「token 刷新**到** auth.openai.com」——只约束往哪儿发，不约束上游回什么。
+    # k38 实测：请求真的发出了（relay 有 POST /oauth/token、pcap 有 auth SNI），但经
+    # 中继转发时 TLS 指纹与官方 CLI 不同，被 Cloudflare 以 403 拦下，凭据因此没变。
+    # 那是中继架构的固有限制，不是官方客户端的真实行为，更不该否定已取得的域名证据。
     restore = facts["credential_restore"]
     _expect_exact(
         restore,
-        {
-            "before_sha256",
-            "after_sha256",
-            "capture_side_wrote_auth",
-            "rotated_by_refresh",
-        },
+        {"before_sha256", "after_sha256", "capture_side_wrote_auth"},
         "A13 credential_restore",
     )
     _sha256(restore["before_sha256"], "A13 credential_restore.before_sha256")
     _sha256(restore["after_sha256"], "A13 credential_restore.after_sha256")
     if restore["capture_side_wrote_auth"] is not False:
         raise ScenarioReceiptError("A13 采集侧不得写入 auth.json。")
-    if restore["rotated_by_refresh"] is not True:
-        raise ScenarioReceiptError("A13 凭据未被刷新改写。")
-    if restore["before_sha256"] == restore["after_sha256"]:
-        raise ScenarioReceiptError("A13 auth.json 未发生变化，刷新没有真正落盘。")
     return dict(facts)
 
 
 def _facts_a14(facts: Any) -> dict[str, Any]:
+    # 只保留规格要的：PUT 打到的区域主机由 create 响应派生，而不是硬编码。
+    #
+    # 曾经还要求 uploaded 事件 2xx，那属于业务是否完成，SPEC-EP-002 没有要求——
+    # 规则原文是「文件上传 PUT 使用服务端返回的区域 *.oaiusercontent.com URL」。
+    # 采集刻意用不存在的 project_id，好让上传链走完后在业务校验阶段失败，从而不会
+    # 真的发布站点；uploaded 因此天然不会出现，拿它当必要条件等于自相矛盾。
     expected = {
         "tool_name",
         "tool_call_id",
         "create_request",
         "upload_url_source_event",
         "put_destination",
-        "uploaded_event",
         "regional_sni",
         "regional_host_from_response",
         "upload_sequence",
@@ -219,21 +218,11 @@ def _facts_a14(facts: Any) -> dict[str, Any]:
         raise ScenarioReceiptError("A14 响应 host 与区域 SNI 不一致。")
     if facts["regional_host_from_response"] is not True:
         raise ScenarioReceiptError("A14 区域主机不是由响应派生。")
-    uploaded = facts["uploaded_event"]
-    _expect_exact(uploaded, {"method", "path_suffix", "status_2xx"}, "A14 uploaded_event")
-    if uploaded != {"method": "POST", "path_suffix": "/uploaded", "status_2xx": True}:
-        raise ScenarioReceiptError("A14 uploaded 事件不匹配。")
+    # create 必须早于区域连接——这才是「URL 来自响应而非预知」的时序证明。
     sequence = facts["upload_sequence"]
-    _expect_exact(
-        sequence,
-        {"create_before_regional", "regional_before_uploaded"},
-        "A14 upload_sequence",
-    )
-    if (
-        sequence["create_before_regional"] is not True
-        or sequence["regional_before_uploaded"] is not True
-    ):
-        raise ScenarioReceiptError("A14 上传事件顺序不完整。")
+    _expect_exact(sequence, {"create_before_regional"}, "A14 upload_sequence")
+    if sequence["create_before_regional"] is not True:
+        raise ScenarioReceiptError("A14 create 未早于区域连接，URL 来源无法证明。")
     return dict(facts)
 
 

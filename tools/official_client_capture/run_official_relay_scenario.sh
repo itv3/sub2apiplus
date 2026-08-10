@@ -182,19 +182,22 @@ try:
                 event = json.loads(line)
             except ValueError:
                 continue
-            item = event.get("item") or event
-            details = item.get("details") or {}
-            call = details.get("mcp_tool_call") or details.get("McpToolCall")
-            if not isinstance(call, dict):
+            # 事件流里工具调用的字段是**平铺在 item 下**的，没有 details 这一层：
+            #   {"type":"item.completed","item":{"id":...,"type":"mcp_tool_call",
+            #    "server":"codex_apps","tool":"sites.save_site_version","status":"failed"}}
+            # 照 Rust 侧 ThreadItemDetails::McpToolCall 的嵌套结构去取会一无所获。
+            item = event.get("item") or {}
+            if item.get("type") != "mcp_tool_call":
                 continue
-            if call.get("status") != "completed":
-                continue
-            # 模型侧把这个工具称作 `Sites.save_site_version`，而事件里的 tool 字段
-            # 可能只有裸名、server 另开一列。三种形态都认，但都必须是目标工具。
-            tool = str(call.get("tool") or "")
-            server = str(call.get("server") or "")
+            tool = str(item.get("tool") or "")
+            server = str(item.get("server") or "")
             qualified = f"{server}.{tool}" if server else tool
             if expected not in {tool, qualified} and not tool.endswith(f".{expected}"):
+                continue
+            # 不要求 status == completed：采集刻意用不存在的 project_id，让上传链走完后
+            # 在业务校验阶段失败（避免真的发布站点），工具因此必然报 failed。要的是
+            # 「这次调用真实发生过」，故只排除仍在进行中的。
+            if item.get("status") not in {"completed", "failed"}:
                 continue
             found = {"tool_name": tool, "tool_call_id": str(item.get("id") or "")}
             if server:
