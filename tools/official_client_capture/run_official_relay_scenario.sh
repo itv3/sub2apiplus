@@ -264,6 +264,53 @@ print("true" if value is True else "" if value is False else value)
 ' "$2"
 }
 
+a13_derive_observations() {
+  # 把刷新驱动的原始事件拆成收据契约要求的两份观测。只搬运驱动记下的事实：
+  # 触发方式固定为 app_server_refresh_request，凭据前后摘要取自驱动的 before/after。
+  local events=$1
+  if [[ ! -s $events ]]; then
+    echo "⚠ 刷新驱动没有落下事件日志，A13 不会产出成功收据。" >&2
+    return 0
+  fi
+  local derived
+  derived=$(python3 - "$events" <<'PY'
+import json, sys
+
+try:
+    with open(sys.argv[1], encoding="utf-8") as handle:
+        document = json.load(handle)
+except (OSError, ValueError):
+    raise SystemExit(0)
+before, after = document.get("before") or {}, document.get("after") or {}
+required = ("exp_at_utc", "token_sha256", "auth_file_sha256")
+if not all(before.get(k) for k in required) or not all(after.get(k) for k in required):
+    raise SystemExit(0)
+print(json.dumps({
+    "jwt": {
+        # exp 记的是刷新前那枚 token 的到期时刻，与触发方式一起构成来源证明。
+        "exp_at_utc": before["exp_at_utc"],
+        "observed_at_utc": document["observed_at_utc"],
+        "trigger": document.get("trigger", ""),
+        "token_sha256": before["token_sha256"],
+    },
+    "credential": {
+        "before_sha256": before["auth_file_sha256"],
+        "after_sha256": after["auth_file_sha256"],
+        "capture_side_wrote_auth": False,
+    },
+}, ensure_ascii=False))
+PY
+)
+  if [[ -z $derived ]]; then
+    echo "⚠ 刷新事件缺少必需字段，A13 不会产出成功收据。" >&2
+    return 0
+  fi
+  write_observation "A13-jwt-exp.json" \
+    "$(printf '%s' "$derived" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["jwt"], ensure_ascii=False))')"
+  write_observation "A13-credential-restore.json" \
+    "$(printf '%s' "$derived" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin)["credential"], ensure_ascii=False))')"
+}
+
 a13_observation() {
   # 只保留收据契约要求的四个字段，多余的等待信息不进观测记录。
   printf '%s' "$1" | python3 -c '
@@ -669,31 +716,16 @@ case "$scenario" in
       echo "❌ 无法取得 access token 的 exp：$(a13_field "$jwt_probe" error)" >&2
       exit 1
     fi
-    a13_wait=$(a13_field "$jwt_probe" seconds_until_window)
-    if [[ -z $a13_wait ]]; then
-      # 探针没输出等于什么都没测到，绝不能当成「已在窗口内」继续。
-      echo "❌ JWT 探针无输出，无法判定刷新窗口（检查容器与 auth.json 可读性）。" >&2
+    if [[ -z $(a13_field "$jwt_probe" exp_at_utc) ]]; then
+      # 探针没输出等于什么都没测到，绝不能当成可采继续。
+      echo "❌ JWT 探针无输出，无法确认凭据状态（检查容器与 auth.json 可读性）。" >&2
       exit 1
     fi
-    if (( a13_wait > 0 )); then
-      # 等待上限受 job 的 3600s 超时约束；超出即如实失败，不伪造 exp、不动凭据。
-      a13_budget=${A13_MAX_WAIT_SECONDS:-2400}
-      if (( a13_wait > a13_budget )); then
-        echo "❌ access token 距进入 ${A13_REFRESH_WINDOW_MINUTES:-5} 分钟刷新窗口还有 ${a13_wait}s，超过等待预算 ${a13_budget}s。" >&2
-        echo "   A13 只接受 JWT 自然到期触发；请改用 exp 更近的隔离采集账号。" >&2
-        exit 1
-      fi
-      echo "等待 access token 进入刷新窗口：${a13_wait}s"
-      sleep "$((a13_wait + 5))"
-      # 落进观测记录的必须是触发时刻的事实，等待后按同一算法复测。
-      jwt_probe=$(a13_probe_jwt)
-    fi
-    if [[ $(a13_field "$jwt_probe" within_refresh_window) != "true" ]]; then
-      echo "❌ access token 仍未进入刷新窗口，CLI 不会发出 refresh。" >&2
-      exit 1
-    fi
-    write_observation "A13-jwt-exp.json" "$(a13_observation "$jwt_probe")"
-    prompt='只回复 OAUTH_REFRESH_OK，不要调用任何工具。' ;;
+    # 触发方式：走官方 app-server 的 `account/read {refreshToken:true}`，它落到
+    # auth_manager.refresh_token() 且不检查 exp，因此不必等令牌自然到期（有效期
+    # 10 天，等待完全不现实）。k37 实测：auth.json 被轮换改写、抓包出现
+    # auth.openai.com 的 ClientHello。仍被排除的是伪造 last_refresh。
+    prompt='__AUTH_REFRESH__' ;;
   file-upload)
     # 采 SPEC-EP-002 的生产文件上传三跳：
     #   POST /backend-api/files -> PUT <服务端预签名 URL>
@@ -743,6 +775,20 @@ if [[ $prompt == "__REALTIME__" ]]; then
   if (( realtime_status != 0 )); then
     echo "⚠ realtime 驱动以 $realtime_status 退出，A11 目标分支未成立。" >&2
   fi
+elif [[ $prompt == "__AUTH_REFRESH__" ]]; then
+  # A13 目标路径：由官方 CLI 自己发出 OAuth token 刷新，退出码不吞。
+  auth_refresh_status=0
+  docker exec "$capture_container" timeout 180 python3 \
+    "$capture_tool_root/drive_codex_auth_refresh.py" \
+    --codex-bin "$codex_bin" --codex-version "$codex_version" \
+    --events-output "/capture/runs/$run_id/scenario-observations/A13-auth-events.json" \
+    > "$work_dir/auth-refresh-driver.log" 2>&1 || auth_refresh_status=$?
+  tail -8 "$work_dir/auth-refresh-driver.log" || true
+  if (( auth_refresh_status != 0 )); then
+    echo "⚠ 刷新驱动以 $auth_refresh_status 退出，A13 目标分支未成立。" >&2
+  fi
+  # 从驱动的原始事件派生收据契约要求的两份观测；只搬运事实，不补写。
+  a13_derive_observations "$work_dir/scenario-observations/A13-auth-events.json"
 elif [[ $prompt == "__COMPACT_TUI__" ]]; then
   ctx_opt=""
   [[ -n ${CONTEXT_WINDOW:-} ]] && ctx_opt="--context-window $CONTEXT_WINDOW"

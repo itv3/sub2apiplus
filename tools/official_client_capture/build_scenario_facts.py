@@ -438,9 +438,7 @@ def _facts_a13(evidence: EvidenceSet, root: Path) -> dict[str, Any]:
             "observed_at_utc": _require(
                 observation, "observed_at_utc", "A13 JWT 观测"
             ),
-            "within_refresh_window": _require(
-                observation, "within_refresh_window", "A13 JWT 观测"
-            ),
+            "trigger": _require(observation, "trigger", "A13 JWT 观测"),
             "token_sha256": _require(observation, "token_sha256", "A13 JWT 观测"),
         },
         "credential_restore": {

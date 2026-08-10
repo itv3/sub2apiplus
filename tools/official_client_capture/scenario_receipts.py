@@ -41,6 +41,8 @@ FINAL_STATES = {
 }
 # R0 §4.3 只为三个已证实失效的目标场景定义收据，其余场景不引入真实性收据。
 SUPPORTED_SCENARIOS = tuple(sorted(FINAL_STATES))
+# A13 的两条合法触发路径，都由官方 CLI 自己发出刷新请求；伪造 last_refresh 不在其中。
+A13_TRIGGERS = ("app_server_refresh_request", "natural_expiry_window")
 
 
 class ScenarioReceiptError(ValueError):
@@ -131,13 +133,20 @@ def _facts_a13(facts: Any) -> dict[str, Any]:
     observation = facts["jwt_exp_observation"]
     _expect_exact(
         observation,
-        {"exp_at_utc", "observed_at_utc", "within_refresh_window", "token_sha256"},
+        {"exp_at_utc", "observed_at_utc", "trigger", "token_sha256"},
         "A13 jwt_exp_observation",
     )
     _rfc3339(observation["exp_at_utc"], "A13 exp_at_utc")
     _rfc3339(observation["observed_at_utc"], "A13 observed_at_utc")
-    if observation["within_refresh_window"] is not True:
-        raise ScenarioReceiptError("A13 JWT 不在自然刷新窗口。")
+    # 两种合法触发：等 JWT 自然进入 5 分钟窗口，或用官方 app-server 的
+    # `account/read {refreshToken:true}` 显式请求刷新。后者走的是 CLI 自身的
+    # `auth_manager.refresh_token()`，不检查 exp，随时可复现——k37 已实测：
+    # auth.json 被轮换改写，抓包里出现 auth.openai.com 的 ClientHello。
+    # 被排除的是伪造 last_refresh：0.147 的 exp 优先级高于它，那条路本就无效。
+    if observation["trigger"] not in A13_TRIGGERS:
+        raise ScenarioReceiptError(
+            f"A13 触发方式不在已登记的官方路径内：{observation['trigger']!r}"
+        )
     _sha256(observation["token_sha256"], "A13 token_sha256")
     # R3 修订：不再要求 before == after。触发方式改为等 JWT 自然进入刷新窗口后，
     # 采集侧一个字节都不写 auth.json；而 CLI 刷新成功会用轮换后的 refresh_token

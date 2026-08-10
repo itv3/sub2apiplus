@@ -378,13 +378,13 @@
           "const": "auth.openai.com"
         },
         "jwt_exp_observation": {
-          "description": "证明刷新由 JWT 自然进入 5 分钟窗口所致，而非改写 last_refresh 伪造；只记 exp 与 token 摘要，绝不落 token 本体。",
+          "description": "证明刷新由官方 CLI 自身路径发出：等 JWT 自然进入 5 分钟窗口，或用 app-server 的 account/read {refreshToken:true} 显式请求。伪造 last_refresh 不在其中——0.147 的 exp 优先级高于它。只记 exp 与 token 摘要，绝不落 token 本体。",
           "type": "object",
           "additionalProperties": false,
           "required": [
             "exp_at_utc",
             "observed_at_utc",
-            "within_refresh_window",
+            "trigger",
             "token_sha256"
           ],
           "properties": {
@@ -394,11 +394,14 @@
             "observed_at_utc": {
               "$ref": "#/$defs/timestamp"
             },
-            "within_refresh_window": {
-              "const": true
-            },
             "token_sha256": {
               "$ref": "#/$defs/sha256"
+            },
+            "trigger": {
+              "enum": [
+                "app_server_refresh_request",
+                "natural_expiry_window"
+              ]
             }
           }
         },

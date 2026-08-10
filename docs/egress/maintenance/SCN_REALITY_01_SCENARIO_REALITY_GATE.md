@@ -765,3 +765,40 @@ R6 是「新建 k37 → 官方 `run` → 逐 job 校验真实性收据 → `seal
 
 第 3～5 项若不满足，对应 job 会因收据缺失判 `failed`，attempt 无法进入 `seal`——
 这正是门禁的预期行为，不应通过放宽判据绕过。
+
+## 17. A13 不必等令牌自然到期（2026-08-10，k37 实测推翻 §14）
+
+§14 定的触发方式是「等 JWT 自然进入 5 分钟刷新窗口」。实测发现这既不必要也不可行：
+access token 有效期是 **10 天**（`last_refresh 2026-08-08` → `exp 2026-08-18`），
+采集要卡在到期前那 5 分钟，等待完全不现实。
+
+官方自己提供了显式入口：app-server v2 的 `account/read`，参数 `refreshToken: true`
+（`app-server-protocol/src/protocol/v2/account.rs:481-489`，注释写明「requests a
+proactive token refresh before returning … triggers the normal refresh-token flow」）。
+它经 `account_processor.rs:1024-1030` 落到 `auth_manager.refresh_token()`，而后者
+（`manager.rs:2623-2660`）**不检查 exp**，只对 API key 与 PAT 提前返回。
+
+这不是绕过：走的是 CLI 自身的正常代码路径，刷新请求仍由官方 CLI 构造并发出。仍被
+排除的是伪造 `last_refresh`——0.147 的 exp 优先级高于它，那条路本就无效。
+
+**实测结果**（capture-cli-0147，Pro 账号）：
+
+- `auth.json` 摘要 `c25a58e8…` → `4a200123…`，`last_refresh` 更新为 07:15:26，
+  新 exp 为 2026-08-20（又是 10 天）；
+- 抓包出现 **`auth.openai.com` 的 ClientHello**——SPEC-EP-002 要的正是这条。
+
+### 17.1 一个必须记住的环境陷阱
+
+首次实测失败：调用返回成功、`Refreshing token` 日志也打了，但 `auth.json` 纹丝不动。
+抓包显示 **0 个 ClientHello，全部流量打向 `127.0.0.1:443`**——采集容器的 `/etc/hosts`
+残留着上一轮的三条劫持（`chatgpt.com`／`auth.openai.com`／`api.openai.com`），而中继
+早已停止，于是所有出站都连本地被拒。清掉残留劫持与临时 CA 后一次成功。
+
+**这说明 k37 采集结束后 hosts 没有被完全恢复**。脚本 `cleanup()` 里有恢复逻辑，但至少
+在补跑路径上没有生效，属独立缺陷，需另行排查——它会污染此后一切在该容器里的观测。
+
+### 17.2 判据修订
+
+`jwt_exp_observation.within_refresh_window: const true` 改为
+`trigger: enum [app_server_refresh_request, natural_expiry_window]`，两条官方路径都
+接受。伪造 `last_refresh` 仍在枚举之外。

@@ -195,7 +195,7 @@ class ScenarioFixtureBase(unittest.TestCase):
             {
                 "exp_at_utc": "2026-08-10T00:04:00Z",
                 "observed_at_utc": "2026-08-10T00:00:00Z",
-                "within_refresh_window": True,
+                "trigger": "app_server_refresh_request",
                 "token_sha256": "c" * 64,
             },
         )
@@ -243,9 +243,9 @@ class ScenarioReceiptSchemaTest(unittest.TestCase):
         )
         self.assertEqual(
             defs["factsA13"]["properties"]["jwt_exp_observation"]["properties"][
-                "within_refresh_window"
-            ]["const"],
-            True,
+                "trigger"
+            ]["enum"],
+            ["app_server_refresh_request", "natural_expiry_window"],
         )
         self.assertEqual(
             defs["factsA14"]["properties"]["regional_host_from_response"]["const"], True
@@ -1032,14 +1032,18 @@ class OfficialCaptureScriptTest(unittest.TestCase):
         self.assertNotIn('doc["last_refresh"] = stale', self.source)
         self.assertNotIn("datetime.datetime(2020, 1, 1", self.source)
 
-    def test_A13_等待_JWT_自然进入刷新窗口(self) -> None:
-        self.assertIn("a13_probe_jwt", self.source)
-        self.assertIn("seconds_until_window", self.source)
-        self.assertIn("A13_MAX_WAIT_SECONDS", self.source)
+    def test_A13_走官方显式刷新而不是干等到期(self) -> None:
+        """access token 有效期 10 天，等自然到期不现实；官方 app-server 有显式入口。"""
+
+        self.assertIn("__AUTH_REFRESH__", self.source)
+        self.assertIn("drive_codex_auth_refresh.py", self.source)
+        self.assertIn("auth_refresh_status=$?", self.source)
+        self.assertIn("a13_derive_observations", self.source)
         self.assertIn("A13-jwt-exp.json", self.source)
-        # 超出等待预算、或等待后仍未进窗口，都必须硬失败而不是继续采集。
-        self.assertIn("超过等待预算", self.source)
-        self.assertIn("仍未进入刷新窗口", self.source)
+        self.assertIn("A13-credential-restore.json", self.source)
+        # 采集前仍要确认凭据可读，探针无输出即失败关闭。
+        self.assertIn("a13_probe_jwt", self.source)
+        self.assertIn("JWT 探针无输出", self.source)
 
     def test_A14_用_json_事件流提取工具调用(self) -> None:
         """R4：人读输出取不到 tool/status，必须走 --json 的事件流。"""
@@ -1094,6 +1098,34 @@ class OfficialCaptureScriptTest(unittest.TestCase):
         build = self.source.index('"$capture_tool_root/build_scenario_facts.py"')
         self.assertLess(scrub, restore)
         self.assertLess(restore, build)
+
+
+class AuthRefreshDriverTest(unittest.TestCase):
+    """A13 的显式刷新驱动：走 v2 account/read，不看 exp 窗口。"""
+
+    def setUp(self) -> None:
+        self.source = (TOOL_ROOT / "drive_codex_auth_refresh.py").read_text(encoding="utf-8")
+
+    def test_走_v2_的_account_read(self) -> None:
+        self.assertIn('srv.call("account/read", {"refreshToken": True}', self.source)
+        # v1 的 getAuthStatus 在 v2 模式下不生效，实测调用成功却不发刷新。
+        self.assertNotIn('srv.call("getAuthStatus"', self.source)
+
+    def test_触发值与收据枚举一致(self) -> None:
+        self.assertIn('"trigger": "app_server_refresh_request"', self.source)
+        self.assertIn("app_server_refresh_request", scenario_receipts.A13_TRIGGERS)
+
+    def test_刷新未落盘必须失败(self) -> None:
+        self.assertIn("auth.json 未发生变化，刷新没有真正落盘", self.source)
+        self.assertIn("return 3", self.source)
+
+    def test_不落_token_本体(self) -> None:
+        """只记 exp、token 摘要与文件摘要。"""
+
+        observe = self.source[self.source.index("def _observe_auth") :]
+        observe = observe[: observe.index("\ndef ")]
+        self.assertIn("token_sha256", observe)
+        self.assertNotIn('"access_token": token', observe)
 
 
 class RelayWallClockTest(unittest.TestCase):
