@@ -150,7 +150,7 @@ class ScenarioFixtureBase(unittest.TestCase):
         )
 
     def _a13_run(self, name: str = "run") -> Path:
-        """A13 成功形态：真实 POST /oauth/token + auth SNI + 逐字还原。"""
+        """A13 成功形态：真实 POST /oauth/token + auth SNI + 凭据被刷新改写。"""
 
         root = self._run_root(name)
         self._write_relay(
@@ -172,10 +172,15 @@ class ScenarioFixtureBase(unittest.TestCase):
                 "token_sha256": "c" * 64,
             },
         )
+        # 刷新成功后 CLI 用轮换后的 refresh_token 改写 auth.json，前后摘要必然不同。
         self._write_observation(
             root,
             "A13-credential-restore.json",
-            {"before_sha256": "d" * 64, "after_sha256": "d" * 64, "restored": True},
+            {
+                "before_sha256": "d" * 64,
+                "after_sha256": "e" * 64,
+                "capture_side_wrote_auth": False,
+            },
         )
         return root
 
@@ -218,6 +223,10 @@ class ScenarioReceiptSchemaTest(unittest.TestCase):
         self.assertEqual(
             defs["factsA14"]["properties"]["regional_host_from_response"]["const"], True
         )
+        # R3：采集侧不得写 auth.json，刷新必须真的改写凭据。
+        restore = defs["factsA13"]["properties"]["credential_restore"]["properties"]
+        self.assertEqual(restore["capture_side_wrote_auth"]["const"], False)
+        self.assertEqual(restore["rotated_by_refresh"]["const"], True)
 
     def test_producer_复用既有收据体系(self) -> None:
         producer = self.schema["$defs"]["producer"]
@@ -456,12 +465,35 @@ class ScenarioFactsNegativeTest(ScenarioFixtureBase):
             facts_builder.build("A13", JOB_ID, RUN_ID, root)
         self._assert_no_facts(root, "A13")
 
-    def test_A13_还原摘要不等_拒绝产出(self) -> None:
+    def test_A13_凭据未被刷新改写_拒绝产出(self) -> None:
+        """前后摘要一致说明 CLI 没有真正刷新落盘。"""
+
         root = self._a13_run()
         self._write_observation(
             root,
             "A13-credential-restore.json",
-            {"before_sha256": "d" * 64, "after_sha256": "e" * 64, "restored": True},
+            {
+                "before_sha256": "d" * 64,
+                "after_sha256": "d" * 64,
+                "capture_side_wrote_auth": False,
+            },
+        )
+        with self.assertRaises(facts_builder.ScenarioFactsError):
+            facts_builder.build("A13", JOB_ID, RUN_ID, root)
+        self._assert_no_facts(root, "A13")
+
+    def test_A13_采集侧写过_auth_拒绝产出(self) -> None:
+        """R3 不接受任何受控篡改——k36 改 last_refresh 正是被否掉的手法。"""
+
+        root = self._a13_run()
+        self._write_observation(
+            root,
+            "A13-credential-restore.json",
+            {
+                "before_sha256": "d" * 64,
+                "after_sha256": "e" * 64,
+                "capture_side_wrote_auth": True,
+            },
         )
         with self.assertRaises(facts_builder.ScenarioFactsError):
             facts_builder.build("A13", JOB_ID, RUN_ID, root)
@@ -916,6 +948,30 @@ class OfficialCaptureScriptTest(unittest.TestCase):
         """R2：WebRTC 不传版本会默认 v1，header quicksilver=v1 已被上游拒绝。"""
 
         self.assertIn('--realtime-version "${REALTIME_VERSION:-v3}"', self.source)
+
+    def test_A13_不再改写_last_refresh(self) -> None:
+        """R3：正常 JWT 的 exp 优先于 last_refresh，改后者一次刷新都触发不了。"""
+
+        self.assertNotIn('doc["last_refresh"] = stale', self.source)
+        self.assertNotIn("datetime.datetime(2020, 1, 1", self.source)
+
+    def test_A13_等待_JWT_自然进入刷新窗口(self) -> None:
+        self.assertIn("a13_probe_jwt", self.source)
+        self.assertIn("seconds_until_window", self.source)
+        self.assertIn("A13_MAX_WAIT_SECONDS", self.source)
+        self.assertIn("A13-jwt-exp.json", self.source)
+        # 超出等待预算、或等待后仍未进窗口，都必须硬失败而不是继续采集。
+        self.assertIn("超过等待预算", self.source)
+        self.assertIn("仍未进入刷新窗口", self.source)
+
+    def test_A13_观测不落_token_本体(self) -> None:
+        """只记 exp 与 token 摘要；解析在容器内完成，token 不离开容器。"""
+
+        self.assertIn("token_sha256", self.source)
+        self.assertNotIn("access_token\\\":", self.source)
+        observation = self.source[self.source.index("a13_observation() {") :]
+        observation = observation[: observation.index("\n}\n")]
+        self.assertNotIn("access_token", observation)
 
 
     def test_trap_覆盖信号且还原留下证明(self) -> None:

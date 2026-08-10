@@ -417,10 +417,14 @@ def _facts_a13(evidence: EvidenceSet, root: Path) -> dict[str, Any]:
 
     observation = _load_observation(evidence, root, "A13-jwt-exp.json")
     restore = _load_observation(evidence, root, "A13-credential-restore.json")
-    before = _require(restore, "before_sha256", "A13 凭据还原记录")
-    after = _require(restore, "after_sha256", "A13 凭据还原记录")
-    if before != after:
-        raise ScenarioFactsError("auth.json 未逐字还原，拒绝生成 A13 成功事实。")
+    before = _require(restore, "before_sha256", "A13 凭据记录")
+    after = _require(restore, "after_sha256", "A13 凭据记录")
+    if _require(restore, "capture_side_wrote_auth", "A13 凭据记录") is not False:
+        raise ScenarioFactsError("采集侧写过 auth.json，A13 不接受受控篡改。")
+    if before == after:
+        raise ScenarioFactsError(
+            "auth.json 采集前后一致，CLI 没有真正刷新并落盘。"
+        )
     return {
         "token_request_method": request["method"],
         "token_request_path": _path_of(request["target"]),
@@ -438,7 +442,8 @@ def _facts_a13(evidence: EvidenceSet, root: Path) -> dict[str, Any]:
         "credential_restore": {
             "before_sha256": before,
             "after_sha256": after,
-            "restored": _require(restore, "restored", "A13 凭据还原记录"),
+            "capture_side_wrote_auth": False,
+            "rotated_by_refresh": True,
         },
     }
 

@@ -161,32 +161,94 @@ verify_pcap() {
   return 0
 }
 
+a13_probe_jwt() {
+  # 在容器内解析 access token 的 exp，只输出非秘密结论。
+  # token 本体绝不离开容器、绝不落盘——收据里只保留 exp 与 token 摘要。
+  docker exec "$capture_container" python3 - "${A13_REFRESH_WINDOW_MINUTES:-5}" <<'PY'
+import base64, datetime, hashlib, json, sys
+
+window = int(sys.argv[1])
+try:
+    with open("/root/.codex/auth.json") as handle:
+        document = json.load(handle)
+except OSError as error:
+    print(json.dumps({"error": f"无法读取 auth.json：{error}"}))
+    raise SystemExit(0)
+token = ((document.get("tokens") or {}).get("access_token")) or ""
+if not token:
+    print(json.dumps({"error": "auth.json 没有 access_token"}))
+    raise SystemExit(0)
+try:
+    payload = token.split(".")[1]
+    payload += "=" * (-len(payload) % 4)
+    expires_at = datetime.datetime.fromtimestamp(
+        int(json.loads(base64.urlsafe_b64decode(payload))["exp"]),
+        datetime.timezone.utc,
+    )
+except Exception as error:  # noqa: BLE001 - 解不出 exp 就无法按 R3 自然触发
+    print(json.dumps({"error": f"无法解析 JWT exp：{error}"}))
+    raise SystemExit(0)
+now = datetime.datetime.now(datetime.timezone.utc)
+# 与 should_refresh_proactively 同一判据：exp <= now + 窗口。
+seconds_until_window = (expires_at - now).total_seconds() - window * 60
+print(json.dumps({
+    "exp_at_utc": expires_at.isoformat().replace("+00:00", "Z"),
+    "observed_at_utc": now.isoformat().replace("+00:00", "Z"),
+    "within_refresh_window": seconds_until_window <= 0,
+    "seconds_until_window": int(seconds_until_window),
+    "token_sha256": hashlib.sha256(token.encode("utf-8")).hexdigest(),
+}))
+PY
+}
+
+a13_field() {
+  printf '%s' "$1" | python3 -c '
+import json, sys
+try:
+    value = json.load(sys.stdin).get(sys.argv[1], "")
+except ValueError:
+    value = ""
+print("true" if value is True else "" if value is False else value)
+' "$2"
+}
+
+a13_observation() {
+  # 只保留收据契约要求的四个字段，多余的等待信息不进观测记录。
+  printf '%s' "$1" | python3 -c '
+import json, sys
+document = json.load(sys.stdin)
+print(json.dumps({
+    key: document[key]
+    for key in ("exp_at_utc", "observed_at_utc", "within_refresh_window", "token_sha256")
+}, ensure_ascii=False))
+'
+}
+
 restore_auth_json() {
-  # 幂等：还原成功后清空 auth_backup，cleanup 再调一次不会重复执行。
+  # 幂等：记录一次后清空 auth_backup，cleanup 再调一次不会重复执行。
   #
-  # 登录态必须原样还原：本场景只改 last_refresh 触发一次刷新，不改变账号绑定。
-  # 保留宽松错误处理以免中断其余清理，但把结果如实写进观测记录——还原失败时
-  # before/after 摘要不等，收据构建器据此拒绝产出 A13 成功事实。
+  # ⚠ 这里**刻意不还原 auth.json**。R3 之前脚本会改写 last_refresh，所以必须逐字
+  # 还原；现在触发改为等 JWT 自然进入刷新窗口，采集侧一个字节都不写。而 CLI 刷新
+  # 成功后会用**轮换后的** refresh_token 改写 auth.json
+  # （`login/src/auth/manager.rs:2848-2861` → `persist_tokens` `:1496-1498`）。
+  # 此时把旧备份灌回去，会丢掉新 refresh_token——在轮换语义下旧值已作废，采集账号
+  # 将再也刷新不了，必须重新登录。
+  #
+  # 备份仍然保留，只作离线对照与人工兜底；这里只如实记录前后摘要。
   if [[ -z $auth_backup ]]; then
     return 0
   fi
-  local restored="false" auth_after_sha256=""
-  if docker exec "$capture_container" sh -c \
-    "test -f '$auth_backup' && cat '$auth_backup' > /root/.codex/auth.json && \
-     chmod 600 /root/.codex/auth.json" >/dev/null 2>&1; then
-    auth_after_sha256=$(docker exec "$capture_container" sh -c \
-      "sha256sum /root/.codex/auth.json | cut -d' ' -f1" 2>/dev/null || printf '')
-    if [[ -n $auth_after_sha256 && $auth_after_sha256 == "$auth_before_sha256" ]]; then
-      restored="true"
-    else
-      echo "⚠ auth.json 还原后的摘要与备份不一致，A13 不会产出成功收据。" >&2
-    fi
-    docker exec "$capture_container" rm -f "$auth_backup" >/dev/null 2>&1 || true
-  else
-    echo "⚠ auth.json 还原失败，登录态可能仍停留在被篡改的状态。" >&2
+  local auth_after_sha256=""
+  auth_after_sha256=$(docker exec "$capture_container" sh -c \
+    "sha256sum /root/.codex/auth.json | cut -d' ' -f1" 2>/dev/null || printf '')
+  if [[ -z $auth_after_sha256 ]]; then
+    echo "⚠ 无法读取采集后的 auth.json 摘要，A13 不会产出成功收据。" >&2
+  elif [[ $auth_after_sha256 == "$auth_before_sha256" ]]; then
+    echo "⚠ auth.json 采集前后一致，CLI 没有真正刷新落盘。" >&2
   fi
+  echo "auth.json 备份保留在容器 $auth_backup（不自动回灌，避免作废轮换后的 refresh_token）。"
   write_observation "A13-credential-restore.json" \
-    "{\"before_sha256\":\"$auth_before_sha256\",\"after_sha256\":\"$auth_after_sha256\",\"restored\":$restored}"
+    "{\"before_sha256\":\"$auth_before_sha256\",\"after_sha256\":\"$auth_after_sha256\",\"capture_side_wrote_auth\":false}"
   auth_backup=""
 }
 
@@ -533,27 +595,47 @@ case "$scenario" in
     chmod 600 "$work_dir/model-downshift-catalog.json" ;;
   oauth-refresh)
     # 采 SPEC-EP-002 的 auth-sni：官方 CLI 的 OAuth token 刷新走 auth.openai.com。
-    # ⚠ 属 I 类触发干预：只把 auth.json 的 last_refresh 提前，让 CLI 在本次调用前
-    # 判定需要刷新；access_token／refresh_token／账号绑定一律不改，退出时逐字还原。
-    # 刷新请求本身仍由官方 CLI 自己构造并发出，出站形态未被替换。
+    #
+    # 触发方式按 R3 定案，**不再改写 last_refresh**。0.147 的
+    # `should_refresh_proactively`（`login/src/auth/manager.rs:2762-2783`）先解 access
+    # token JWT 的 exp，能解出就直接按 `exp <= now + 5min` 判定并返回；只有解不出
+    # 有效期时才回退到 last_refresh。k36 改 last_refresh 之所以一次刷新都没触发，
+    # 正是因为正常 JWT 走的是前一条路径。
+    #
+    # 现在改为等待 JWT 自然进入 5 分钟刷新窗口
+    # （`CHATGPT_ACCESS_TOKEN_REFRESH_WINDOW_MINUTES = 5`），窗口内 CLI 的任何一次
+    # 取认证（`auth()`，`:2238-2251`）都会自己发出真实 refresh。凭据一字不改。
     auth_backup="/tmp/codex-auth-$run_id.json"
     docker exec "$capture_container" sh -c \
       "cp /root/.codex/auth.json '$auth_backup' && chmod 600 '$auth_backup'"
-    # 篡改前的原始字节摘要。cleanup 还原后必须与之逐字相等，否则不允许生成 A13
-    # 成功收据——此前还原是一条 `|| true` 短路链，备份缺失会静默跳过而无任何告警。
+    # 采集前后的原始字节摘要必须相等。本场景不写 auth.json，但 CLI 刷新成功后会自己
+    # 改写它——还原链据此把账号恢复到采集前状态，两摘要不等即不产出 A13 成功收据。
     auth_before_sha256=$(docker exec "$capture_container" sh -c \
       "sha256sum '$auth_backup' | cut -d' ' -f1")
-    docker exec "$capture_container" python3 - <<'PY'
-import json, datetime
-path = "/root/.codex/auth.json"
-with open(path) as handle:
-    doc = json.load(handle)
-stale = datetime.datetime(2020, 1, 1, tzinfo=datetime.timezone.utc)
-doc["last_refresh"] = stale.isoformat().replace("+00:00", "Z")
-with open(path, "w") as handle:
-    json.dump(doc, handle)
-PY
-    docker exec "$capture_container" chmod 600 /root/.codex/auth.json
+    jwt_probe=$(a13_probe_jwt)
+    if [[ -n $(a13_field "$jwt_probe" error) ]]; then
+      echo "❌ 无法取得 access token 的 exp：$(a13_field "$jwt_probe" error)" >&2
+      exit 1
+    fi
+    a13_wait=$(a13_field "$jwt_probe" seconds_until_window)
+    if (( a13_wait > 0 )); then
+      # 等待上限受 job 的 3600s 超时约束；超出即如实失败，不伪造 exp、不动凭据。
+      a13_budget=${A13_MAX_WAIT_SECONDS:-2400}
+      if (( a13_wait > a13_budget )); then
+        echo "❌ access token 距进入 ${A13_REFRESH_WINDOW_MINUTES:-5} 分钟刷新窗口还有 ${a13_wait}s，超过等待预算 ${a13_budget}s。" >&2
+        echo "   A13 只接受 JWT 自然到期触发；请改用 exp 更近的隔离采集账号。" >&2
+        exit 1
+      fi
+      echo "等待 access token 进入刷新窗口：${a13_wait}s"
+      sleep "$((a13_wait + 5))"
+      # 落进观测记录的必须是触发时刻的事实，等待后按同一算法复测。
+      jwt_probe=$(a13_probe_jwt)
+    fi
+    if [[ $(a13_field "$jwt_probe" within_refresh_window) != "true" ]]; then
+      echo "❌ access token 仍未进入刷新窗口，CLI 不会发出 refresh。" >&2
+      exit 1
+    fi
+    write_observation "A13-jwt-exp.json" "$(a13_observation "$jwt_probe")"
     prompt='只回复 OAUTH_REFRESH_OK，不要调用任何工具。' ;;
   file-upload)
     # 采 SPEC-EP-002 的生产文件上传三跳：

@@ -139,16 +139,30 @@ def _facts_a13(facts: Any) -> dict[str, Any]:
     if observation["within_refresh_window"] is not True:
         raise ScenarioReceiptError("A13 JWT 不在自然刷新窗口。")
     _sha256(observation["token_sha256"], "A13 token_sha256")
+    # R3 修订：不再要求 before == after。触发方式改为等 JWT 自然进入刷新窗口后，
+    # 采集侧一个字节都不写 auth.json；而 CLI 刷新成功会用轮换后的 refresh_token
+    # 改写它（`login/src/auth/manager.rs:2848-2861` → `persist_tokens` `:1496-1498`）。
+    # 强行还原成旧备份会丢掉新 refresh_token，在轮换语义下直接作废采集账号。
+    # 因此判据改为两条更强的：采集侧从未写过 auth.json，且刷新确实改写了它。
     restore = facts["credential_restore"]
     _expect_exact(
         restore,
-        {"before_sha256", "after_sha256", "restored"},
+        {
+            "before_sha256",
+            "after_sha256",
+            "capture_side_wrote_auth",
+            "rotated_by_refresh",
+        },
         "A13 credential_restore",
     )
     _sha256(restore["before_sha256"], "A13 credential_restore.before_sha256")
     _sha256(restore["after_sha256"], "A13 credential_restore.after_sha256")
-    if restore["restored"] is not True or restore["before_sha256"] != restore["after_sha256"]:
-        raise ScenarioReceiptError("A13 auth.json 未逐字恢复。")
+    if restore["capture_side_wrote_auth"] is not False:
+        raise ScenarioReceiptError("A13 采集侧不得写入 auth.json。")
+    if restore["rotated_by_refresh"] is not True:
+        raise ScenarioReceiptError("A13 凭据未被刷新改写。")
+    if restore["before_sha256"] == restore["after_sha256"]:
+        raise ScenarioReceiptError("A13 auth.json 未发生变化，刷新没有真正落盘。")
     return dict(facts)
 
 

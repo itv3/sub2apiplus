@@ -605,3 +605,67 @@ call_id 根本不在 start 响应里。R1 的事件日志从 `started.callId` �
 **仍未验证的部分**：真实上游是否接受 V3、是否返回 2xx 与 call_id，只能在 k37 的真实
 官方采集中回答。R2 交付的是「按官方 V3 正确发起并等待最终事件」的能力，不是该场景
 已成立的结论。
+
+## 14. R3 实施结果：A13 等 JWT 自然刷新（2026-08-10）
+
+### 14.1 触发方式（0.147 冻结树核实）
+
+`should_refresh_proactively`（`login/src/auth/manager.rs:2762-2783`）先解 access token
+JWT 的 `exp`，**解得出就直接返回判定**，只有取不到有效期时才回退 `last_refresh`：
+
+```rust
+if let Some(tokens) = auth_dot_json.tokens.as_ref()
+    && let Ok(Some(expires_at)) = parse_jwt_expiration(&tokens.access_token)
+{
+    return expires_at <= Utc::now()
+        + chrono::Duration::minutes(CHATGPT_ACCESS_TOKEN_REFRESH_WINDOW_MINUTES);
+}
+```
+
+窗口常量 `CHATGPT_ACCESS_TOKEN_REFRESH_WINDOW_MINUTES = 5`（`:184`）。唯一调用点是
+`auth()`（`:2238-2251`），即**每次取认证都会检查**——窗口内做任意一次需要认证的
+调用即可触发真实 refresh，不需要改动任何文件。这也解释了 k36 改 `last_refresh`
+为何一次刷新都没触发：正常 JWT 走的是前一条路径。
+
+采集脚本据此改为：容器内解 `exp` → 未进窗口就等待（默认预算
+`A13_MAX_WAIT_SECONDS=2400`，超出即如实失败）→ 进窗口后复测并落
+`A13-jwt-exp.json` → 由官方 CLI 自己发出 refresh。token 本体不出容器、不落盘，
+只记 `exp` 与 token 摘要。
+
+### 14.2 R0 §4.3 的 `credential_restore` 契约必须修订
+
+R0 的判据是 `before_sha256 == after_sha256`，前提是「脚本篡改了 `last_refresh`，
+所以必须逐字还原」。R3 取消篡改后这个前提失效，而且**照旧还原会损坏采集账号**：
+
+刷新成功后 CLI 会用**轮换后的** refresh_token 改写 `auth.json`
+（`manager.rs:2848-2861` 的 `persist_tokens(..., refresh_response.refresh_token)`
+→ `:1496-1498` 的 `tokens.refresh_token = refresh_token`）。此时把旧备份灌回去就
+丢掉了新 refresh_token；在轮换语义下旧值已作废，采集账号将再也刷新不了。
+
+**修订**（本轮实施，需外部复核）：
+
+| | R0 原判据 | R3 修订后 |
+|---|---|---|
+| 字段 | `{before_sha256, after_sha256, restored}` | `{before_sha256, after_sha256, capture_side_wrote_auth, rotated_by_refresh}` |
+| 成立条件 | `before == after` 且 `restored=true` | `capture_side_wrote_auth=false`、`rotated_by_refresh=true`、**`before != after`** |
+| 语义 | 证明篡改后已还原 | 证明采集侧从未写入，且刷新确实落盘 |
+
+修订后的判据**更强**：`capture_side_wrote_auth=false` 说明根本没动过（比「动了又还原」
+强），而 `before != after` 让「刷新真实发生」多了一条独立于 relay 字节的旁证——
+前后一致反而说明 CLI 没刷新，现在会被拒绝。
+
+脚本相应改为**不回灌** `auth.json`，备份仍保留在容器内供离线对照与人工兜底。
+
+### 14.3 落地与验收
+
+| 内容 | 落点 |
+|---|---|
+| JWT 窗口探测与等待 | `run_official_relay_scenario.sh` 新增 `a13_probe_jwt`／`a13_field`／`a13_observation`，删除 `last_refresh` 篡改 |
+| 不回灌凭据 | `restore_auth_json` 改为只记录前后摘要并保留备份 |
+| 判据修订 | `scenario_receipts.py`、`codex_upgrade_scenario_receipt.schema.json`、`build_scenario_facts.py` 同步 |
+
+`make test-capture-tools` 575 项通过，`make check-egress-spec` 全绿。新增负例：
+前后摘要一致（刷新没落盘）、`capture_side_wrote_auth=true`（采集侧篡改），均拒绝产出。
+
+**仍未验证的部分**：真实账号的 JWT 何时进入窗口、上游是否按预期返回新凭据，只能在
+k37 的真实官方采集中回答。R3 交付的是「按 exp 自然到期正确等待并触发」的能力。

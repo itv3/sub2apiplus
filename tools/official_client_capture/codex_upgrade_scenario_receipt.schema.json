@@ -403,13 +403,14 @@
           }
         },
         "credential_restore": {
-          "description": "before_sha256 == after_sha256 才能证明 auth.json 被逐字还原。",
+          "description": "R3 修订：触发改为等 JWT 自然进入刷新窗口后，采集侧不写 auth.json，而 CLI 刷新会用轮换后的 refresh_token 改写它。还原成旧备份会作废采集账号，因此判据是「采集侧从未写入」加「刷新确实改写了凭据」，且 before 与 after 必须不同。",
           "type": "object",
           "additionalProperties": false,
           "required": [
             "before_sha256",
             "after_sha256",
-            "restored"
+            "capture_side_wrote_auth",
+            "rotated_by_refresh"
           ],
           "properties": {
             "before_sha256": {
@@ -418,7 +419,10 @@
             "after_sha256": {
               "$ref": "#/$defs/sha256"
             },
-            "restored": {
+            "capture_side_wrote_auth": {
+              "const": false
+            },
+            "rotated_by_refresh": {
               "const": true
             }
           }
