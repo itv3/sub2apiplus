@@ -715,3 +715,53 @@ relay 的 `segments.t_ms` 是相对 monotonic 毫秒，与 pcap 的捕获时刻�
 **仍未验证、且不属于代码问题的部分**：采集账号必须真的安装了提供
 `save_site_version` 的 App，服务端 `/ps/mcp` 才会把它返回给模型。这是 k37 采集前的
 环境准备项，代码侧只能做到「工具没被调用就失败关闭」，无法凭空让它可见。
+
+## 16. R5：P0 预检与工具身份冻结（2026-08-10）
+
+### 16.1 预检结果
+
+| 项 | 结果 |
+|---|---|
+| 工作区干净 | ✓（R1～R4 已全部提交） |
+| `make test-capture-tools` | 580 项通过 |
+| `make check-egress-spec` | 全绿 |
+| 工具身份复算稳定 | 连算两次一致 |
+| Active/Previous | 未触碰，`backend/` 零改动 |
+
+### 16.2 冻结的工具身份
+
+按 §2.1 递归扫描 `tools/official_client_capture/`（排除 `tests/`、`versions/`、
+`__pycache__/`）：
+
+| | P0 收口时 | 本轮（R1～R4 后） |
+|---|---|---|
+| 受管文件数 | 80 | **94** |
+| 集合摘要 | `fa8fc9fa…` | **`ef84b3d24d969434c7cbee0a0612ee1b683dfb2a68c9fedeb4d26f64ffc43bc2`** |
+
+R1～R4 触及的受管文件（16 个，不含 `tests/`）：`acceptance_contract.py`、
+`build_scenario_facts.py`、`candidate_rule_assertion.py`、
+`candidate_rule_expectations_0_145_0.json`、`candidate_test_trace.py`、
+`codex_upgrade.py`、`codex_upgrade_capture_attempt.schema.json`、
+`codex_upgrade_receipt_finalizer.py`、`codex_upgrade_scenario_receipt.schema.json`、
+`codex_upgrade_scenarios.schema.json`、`codex_upgrade_scenarios_0_145_0.json`、
+`drive_codex_realtime.py`、`pcap_clienthello.py`、`run_official_relay_scenario.sh`、
+`scenario_receipts.py`、`upstream_byte_relay.py`。
+
+身份已变，按 §11.1 与 §6.1，**k36 不可继续使用，必须新建 k37 完整重采**。
+
+### 16.3 R6 的执行前置（代码侧无法自行满足）
+
+R6 是「新建 k37 → 官方 `run` → 逐 job 校验真实性收据 → `seal`」，必须在 Vircs 的
+真实官方采集环境执行，且以下几项属环境准备，不是代码问题：
+
+1. **真实出站授权**：官方 `run` 需显式 `--acknowledge-live-requests`，会发真实请求；
+2. **隔离采集账号与 `CODEX_HOME`**（§11.1）：A13 会让该账号真实刷新并轮换
+   refresh_token，采集后不回灌（见 §14.2），不得使用日常登录目录；
+3. **A13 的等待窗口**：需要一个 access token 的 `exp` 距当前 ≤ `A13_MAX_WAIT_SECONDS`
+   （默认 2400s）的账号；超出预算脚本会如实失败而不是伪造；
+4. **A14 的 App 安装状态**：采集账号必须已安装提供 `save_site_version` 的 App，
+   服务端 `/ps/mcp` 才会把它返回给模型（见 §15.1）；
+5. **A11 的上游接受度**：V3／`quicksilver=v2` 是否被真实上游接受，只有跑了才知道。
+
+第 3～5 项若不满足，对应 job 会因收据缺失判 `failed`，attempt 无法进入 `seal`——
+这正是门禁的预期行为，不应通过放宽判据绕过。
