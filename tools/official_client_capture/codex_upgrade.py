@@ -78,7 +78,16 @@ from tools.official_client_capture.codex_upgrade_receipt_finalizer import (
     RESTORATION_SCHEMA as FINALIZED_RESTORATION_SCHEMA,
     ReceiptFinalizerError,
     finalize_restoration,
+    finalize_scenario,
     replay_receipt,
+)
+from tools.official_client_capture.scenario_receipts import (
+    FACTS_SCHEMA_VERSION as SCENARIO_FACTS_SCHEMA,
+    SCHEMA_VERSION as SCENARIO_RECEIPT_SCHEMA,
+    SUPPORTED_SCENARIOS as SCENARIO_RECEIPT_SCENARIOS,
+    ScenarioReceiptError,
+    validate_facts_document as validate_scenario_facts_document,
+    validate_receipt as validate_scenario_receipt,
 )
 from tools.official_client_capture.pcap_clienthello import (
     iter_packets,
@@ -212,6 +221,10 @@ class Job:
     covers: tuple[str, ...]
     scenario_ids: tuple[str, ...] = ()
     required: bool = True
+    # SCN-REALITY-01：本 job 必须为哪些场景产出真实性收据。不复用 scenario_ids——
+    # 后者表达「该 job 覆盖哪些场景」，official-core 一个 job 就覆盖 9 个场景，
+    # 不可能逐个产收据；真实性门禁只约束已证实失效的目标场景。
+    required_scenario_receipts: tuple[str, ...] = ()
 
 
 def _fingerprint(payload: dict[str, Any]) -> str:
@@ -225,7 +238,12 @@ def _fingerprint(payload: dict[str, Any]) -> str:
 
 
 def _job_execution_sha256(job: Job) -> str:
-    """绑定真实执行定义，同时允许批准场景重新映射规则与场景说明。"""
+    """绑定真实执行定义，同时允许批准场景重新映射规则与场景说明。
+
+    required_scenario_receipts 不属于「场景说明」而属于执行契约：它决定这个 job
+    算不算成功。若不入指纹，同一个 execution_sha256 下门禁要求可被悄改，而
+    _validate_capture_job_results 与 _prior_complete_results 都检测不到。
+    """
 
     return _fingerprint(
         {
@@ -235,6 +253,7 @@ def _job_execution_sha256(job: Job) -> str:
             "steps": [dict(step) for step in job.steps],
             "evidence_roots": list(job.evidence_roots),
             "required": job.required,
+            "required_scenario_receipts": list(job.required_scenario_receipts),
         }
     )
 
@@ -994,6 +1013,48 @@ def load_extra_jobs(path: Path | None, context: dict[str, str]) -> list[Job]:
     return jobs
 
 
+def _validate_side_triggers(scenario: dict[str, Any]) -> None:
+    """校验分侧触发契约。
+
+    A11／A13／A14 的单一 trigger 原文描述的是候选侧受控形态，官方侧照抄会让
+    「受控第二跳」「dummy token」这类手法被当成合法触发——k36 用的正是场景定义里
+    根本没写的改 last_refresh 手法。分侧后两侧各自独立声明，不再互相沿用。
+    """
+
+    side_triggers = scenario.get("side_triggers")
+    if side_triggers is None:
+        return
+    scenario_id = scenario.get("scenario_id")
+    if not isinstance(side_triggers, dict) or set(side_triggers) != {
+        "official",
+        "candidate",
+    }:
+        raise ConfigurationError(f"证据场景 {scenario_id} 的分侧触发必须同时声明两侧。")
+    for side, contract in side_triggers.items():
+        if not isinstance(contract, dict) or set(contract) != {
+            "trigger",
+            "preconditions",
+        }:
+            raise ConfigurationError(
+                f"证据场景 {scenario_id} 的 {side} 触发契约字段不闭合。"
+            )
+        if not isinstance(contract["trigger"], str) or not contract["trigger"].strip():
+            raise ConfigurationError(
+                f"证据场景 {scenario_id} 的 {side} 触发描述不能为空。"
+            )
+        preconditions = contract["preconditions"]
+        if (
+            not isinstance(preconditions, list)
+            or not preconditions
+            or not all(
+                isinstance(item, str) and item.strip() for item in preconditions
+            )
+        ):
+            raise ConfigurationError(
+                f"证据场景 {scenario_id} 的 {side} 前置条件非法。"
+            )
+
+
 def _validate_scenario_manifest_shape(payload: dict[str, Any]) -> None:
     """在无第三方 JSON Schema 依赖时执行同等失败关闭的场景结构校验。"""
 
@@ -1060,8 +1121,16 @@ def _validate_scenario_manifest_shape(payload: dict[str, Any]) -> None:
             "required_artifact_kinds",
             "covers",
         }
-        if not isinstance(scenario, dict) or set(scenario) != required:
+        # side_triggers 是唯一登记的可选字段：A11／A13／A14 的官方侧与候选侧触发
+        # 形态本就不同，用同一个 trigger 描述会让 official 沿用候选侧受控手法。
+        optional = {"side_triggers"}
+        if (
+            not isinstance(scenario, dict)
+            or not required.issubset(scenario)
+            or set(scenario) - required - optional
+        ):
             raise ConfigurationError(f"证据场景 {index} 字段不闭合。")
+        _validate_side_triggers(scenario)
         scenario_id = scenario.get("scenario_id")
         if (
             not isinstance(scenario_id, str)
@@ -1101,11 +1170,28 @@ def _validate_scenario_manifest_shape(payload: dict[str, Any]) -> None:
             "steps",
             "evidence_roots",
             "covers",
+            "required_scenario_receipts",
         }
         if not isinstance(job, dict) or set(job) != required:
             raise ConfigurationError(f"场景任务 {index} 字段不闭合。")
         if not isinstance(job.get("required"), bool):
             raise ConfigurationError(f"场景任务 {index} required 必须是布尔值。")
+        receipts = job.get("required_scenario_receipts")
+        if (
+            not isinstance(receipts, list)
+            or len(set(map(str, receipts))) != len(receipts)
+            or not all(
+                isinstance(item, str) and item in SCENARIO_RECEIPT_SCENARIOS
+                for item in receipts
+            )
+        ):
+            raise ConfigurationError(
+                f"场景任务 {index} required_scenario_receipts 只能声明已登记的目标场景。"
+            )
+        if not set(receipts).issubset(set(job.get("scenario_ids") or [])):
+            raise ConfigurationError(
+                f"场景任务 {index} 声明的真实性收据场景必须在自身 scenario_ids 内。"
+            )
         steps = job.get("steps")
         if not isinstance(steps, list) or not steps:
             raise ConfigurationError(f"场景任务 {index} steps 不能为空。")
@@ -1357,6 +1443,9 @@ def load_scenario_jobs(
                 covers=tuple(covers),
                 scenario_ids=tuple(str(item) for item in scenario_ids),
                 required=raw["required"],
+                required_scenario_receipts=tuple(
+                    str(item) for item in raw["required_scenario_receipts"]
+                ),
             )
         )
     if not jobs:
@@ -1389,10 +1478,161 @@ def _terminate_process(process: subprocess.Popen[Any]) -> None:
         process.wait(timeout=5)
 
 
-def run_job(job: Job, log_root: Path, attempt_index: int = 1) -> dict[str, Any]:
+@dataclass(frozen=True)
+class ScenarioReceiptContext:
+    """场景真实性收据所需的 attempt 身份与落盘位置。
+
+    这三元身份是编排侧的权威事实，采集脚本无从得知也不能自行声明；由 run 阶段
+    透传给外层 finalizer 注入，防止跨轮次复用收据。
+    """
+
+    campaign_id: str
+    attempt_id: str
+    run_nonce: str
+    evidence_root: Path
+    campaign_dir: Path
+
+
+# 采集脚本把原始事实写在本 job 证据根的这个子目录下，文件名按场景固定。
+SCENARIO_FACTS_DIR = "scenario-facts"
+# facts 与收据里 evidence_bindings 共用的证据根角色名。
+SCENARIO_EVIDENCE_ROOT_ROLE = "job_evidence"
+
+
+def _job_run_id(job: Job) -> str:
+    """取出 job 步骤声明的 RUN_ID，它把收据绑定到具体证据根。"""
+
+    values = {
+        str(step.get("environment", {}).get("RUN_ID"))
+        for step in job.steps
+        if step.get("environment", {}).get("RUN_ID")
+    }
+    if len(values) != 1:
+        raise ConfigurationError(
+            f"{job.job_id} 必须恰好声明一个 RUN_ID 才能产出场景真实性收据。"
+        )
+    return values.pop()
+
+
+def _finalize_scenario_receipt(
+    job: Job,
+    scenario_id: str,
+    job_root: Path,
+    context: ScenarioReceiptContext,
+    attempt_index: int,
+) -> dict[str, Any]:
+    """校验采集侧原始事实并承接为收据；任一环节不成立即抛错，不产出收据。"""
+
+    run_id = _job_run_id(job)
+    facts_source = job_root / SCENARIO_FACTS_DIR / f"{scenario_id}-facts.json"
+    if facts_source.is_symlink() or not facts_source.is_file():
+        raise ConfigurationError(
+            f"{job.job_id} 未产出 {scenario_id} 的场景原始事实，目标协议分支未成立。"
+        )
+    try:
+        payload = json.loads(facts_source.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ConfigurationError(f"{scenario_id} 场景原始事实不可读：{error}") from error
+    # 逐条按本 job 的证据根复核 evidence_bindings 的路径、大小与 SHA-256。
+    approved_roots = {SCENARIO_EVIDENCE_ROOT_ROLE: job_root}
+    validate_scenario_facts_document(
+        payload,
+        scenario_id=scenario_id,
+        job_id=job.job_id,
+        run_id=run_id,
+        approved_roots=approved_roots,
+    )
+    receipt_dir = ensure_private_directory(
+        context.evidence_root
+        / "receipts"
+        / "scenarios"
+        / job.job_id
+        / f"retry-{attempt_index}",
+        context.campaign_dir,
+    )
+    facts_copy = receipt_dir / f"{scenario_id}-facts.json"
+    _secure_write_json_once(facts_copy, payload)
+    output = receipt_dir / f"{scenario_id}-scenario-receipt.json"
+    receipt = finalize_scenario(
+        argparse.Namespace(
+            evidence_root=context.evidence_root,
+            output=output,
+            scenario_id=scenario_id,
+            job_id=job.job_id,
+            campaign_id=context.campaign_id,
+            attempt_id=context.attempt_id,
+            run_nonce=context.run_nonce,
+            run_id=run_id,
+            facts=facts_copy,
+        )
+    )
+    validate_scenario_receipt(
+        receipt,
+        scenario_id=scenario_id,
+        job_id=job.job_id,
+        campaign_id=context.campaign_id,
+        attempt_id=context.attempt_id,
+        run_nonce=context.run_nonce,
+        run_id=run_id,
+        approved_roots=approved_roots,
+    )
+    return {
+        "scenario_id": scenario_id,
+        "path": str(output),
+        "sha256": file_sha256(output),
+        "final_state": receipt["final_state"],
+    }
+
+
+def _collect_scenario_receipts(
+    job: Job,
+    existing_roots: list[Path],
+    context: ScenarioReceiptContext | None,
+    attempt_index: int,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """按 job 声明逐场景产出真实性收据，失败原因逐条记录。"""
+
+    receipts: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    if not job.required_scenario_receipts:
+        return receipts, failures
+    for scenario_id in job.required_scenario_receipts:
+        try:
+            if context is None:
+                raise ConfigurationError(
+                    "声明了场景真实性收据的任务必须在 attempt 上下文内执行。"
+                )
+            if len(existing_roots) != 1:
+                raise ConfigurationError(
+                    f"{job.job_id} 必须恰好命中一个证据根才能绑定场景收据。"
+                )
+            receipts.append(
+                _finalize_scenario_receipt(
+                    job, scenario_id, existing_roots[0], context, attempt_index
+                )
+            )
+        except (
+            ConfigurationError,
+            ReceiptFinalizerError,
+            ScenarioReceiptError,
+            OSError,
+        ) as error:
+            failures.append(
+                {"scenario_id": scenario_id, "reason": str(error)[:512] or "未知失败"}
+            )
+    return receipts, failures
+
+
+def run_job(
+    job: Job,
+    log_root: Path,
+    attempt_index: int = 1,
+    scenario_context: ScenarioReceiptContext | None = None,
+) -> dict[str, Any]:
     """顺序执行任务步骤，并保留不含命令环境值的日志。
 
     attempt_index 只用于在同一 attempt 内区分补跑的第几次，写进任务收据供审计。
+    scenario_context 携带 attempt 身份，供声明了真实性收据的任务承接原始事实。
     """
 
     started = time.time()
@@ -1463,9 +1703,20 @@ def run_job(job: Job, log_root: Path, attempt_index: int = 1) -> dict[str, Any]:
     steps_ok = len(step_results) == len(job.steps) and all(
         item["return_code"] == 0 for item in step_results
     )
+    scenario_receipts_found, scenario_receipt_failures = _collect_scenario_receipts(
+        job, existing_roots, scenario_context, attempt_index
+    )
+    # SCN-REALITY-01 的第四条件：声明的场景收据必须齐备且合法。退出码为 0、证据
+    # 目录非空但目标协议分支一跳未发生，正是 k36 的实际形态，必须判失败。
+    scenario_receipts_ok = not scenario_receipt_failures and len(
+        scenario_receipts_found
+    ) == len(job.required_scenario_receipts)
     status = (
         "complete"
-        if steps_ok and not missing_patterns and not empty_patterns
+        if steps_ok
+        and not missing_patterns
+        and not empty_patterns
+        and scenario_receipts_ok
         else "failed"
     )
     return {
@@ -1483,6 +1734,8 @@ def run_job(job: Job, log_root: Path, attempt_index: int = 1) -> dict[str, Any]:
         "empty_evidence_patterns": empty_patterns,
         "covers": list(job.covers),
         "scenario_ids": list(job.scenario_ids),
+        "scenario_receipts": scenario_receipts_found,
+        "scenario_receipt_failures": scenario_receipt_failures,
     }
 
 
@@ -1518,12 +1771,16 @@ def _archive_failed_job_evidence(result: dict[str, Any], attempt_index: int) -> 
             raise ConfigurationError(f"无法归档失败任务的证据目录：{root}")
 
 
-def _run_job_with_retry(job: Job, log_root: Path) -> dict[str, Any]:
+def _run_job_with_retry(
+    job: Job,
+    log_root: Path,
+    scenario_context: ScenarioReceiptContext | None = None,
+) -> dict[str, Any]:
     """在同一 attempt 内对失败任务做有限补跑，返回最后一次的收据。"""
 
     attempt_index = 1
     while True:
-        result = run_job(job, log_root, attempt_index)
+        result = run_job(job, log_root, attempt_index, scenario_context)
         if result.get("status") == "complete":
             return result
         if not job.required or attempt_index > JOB_RETRY_LIMIT:
@@ -5430,9 +5687,16 @@ def _run_capture_attempt(
     except BaseException as error:
         execution_error = error
     else:
+        scenario_context = ScenarioReceiptContext(
+            campaign_id=str(manifest["campaign_id"]),
+            attempt_id=attempt_root.name,
+            run_nonce=str(reservation["run_nonce"]),
+            evidence_root=evidence_root,
+            campaign_dir=campaign_dir,
+        )
         try:
             for job in jobs:
-                result = _run_job_with_retry(job, log_root)
+                result = _run_job_with_retry(job, log_root, scenario_context)
                 results.append(result)
                 _secure_write_json_once(
                     attempt_root / f"job-{job.job_id}.json", result

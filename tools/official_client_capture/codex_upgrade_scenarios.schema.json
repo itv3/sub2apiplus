@@ -255,6 +255,43 @@
           "items": {
             "$ref": "#/$defs/ruleId"
           }
+        },
+        "side_triggers": {
+          "description": "分侧触发契约。A11／A13／A14 的官方侧与候选侧触发形态本就不同，共用一个 trigger 会让 official 沿用候选侧受控手法（受控第二跳、dummy token、生产 service 上传）。声明时必须两侧齐备。",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "official",
+            "candidate"
+          ],
+          "properties": {
+            "official": {
+              "$ref": "#/$defs/sideTrigger"
+            },
+            "candidate": {
+              "$ref": "#/$defs/sideTrigger"
+            }
+          }
+        }
+      }
+    },
+    "sideTrigger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trigger",
+        "preconditions"
+      ],
+      "properties": {
+        "trigger": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "preconditions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/nonEmptyText"
+          }
         }
       }
     },
@@ -324,7 +361,8 @@
         "required",
         "steps",
         "evidence_roots",
-        "covers"
+        "covers",
+        "required_scenario_receipts"
       ],
       "properties": {
         "id": {
@@ -379,6 +417,18 @@
         "minItems": 1,
         "items": {
             "$ref": "#/$defs/ruleId"
+          }
+        },
+        "required_scenario_receipts": {
+          "description": "SCN-REALITY-01：本 job 必须产出真实性收据的目标场景，必须是自身 scenario_ids 的子集。空数组表示该 job 不承担场景真实性证明。不复用 scenario_ids——official-core 一个 job 覆盖 9 个场景，不可能逐个产收据。",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "A11",
+              "A13",
+              "A14"
+            ]
           }
         }
       }

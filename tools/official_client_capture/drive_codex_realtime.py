@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import pathlib
 import re
 import subprocess
 import sys
@@ -90,6 +91,9 @@ class AppServer:
         )
         self.responses: dict[int, dict] = {}
         self.notifications: list[dict] = []
+        # 收据构建器要按原始事件判定 started/SDP 与异步 error，因此调用层的失败
+        # 也必须留痕——此前 realtime/start 的返回值被整个丢弃，没有任何消费者。
+        self.call_errors: list[dict] = []
         self.lock = threading.Lock()
         threading.Thread(target=self._pump_stdout, daemon=True).start()
         threading.Thread(target=self._pump_stderr, daemon=True).start()
@@ -137,11 +141,13 @@ class AppServer:
                     if "error" in msg:
                         print(f"    ✗ {json.dumps(msg['error'], ensure_ascii=False)[:200]}",
                               flush=True)
+                        self.call_errors.append({"method": method, "error": msg["error"]})
                         return None
                     print("    ✓", flush=True)
                     return msg.get("result")
             time.sleep(0.1)
         print(f"    ✗ 超时 {timeout}s", flush=True)
+        self.call_errors.append({"method": method, "error": {"message": f"timeout {timeout}s"}})
         return None
 
     def close(self):
@@ -168,6 +174,8 @@ def main() -> int:
     ap.add_argument("--output-modality", choices=["text", "audio"], default="text")
     ap.add_argument("--disable", action="append", default=[],
                     help="传给 codex 的 --disable <FEATURE>，可重复")
+    ap.add_argument("--events-output", default=None,
+                    help="落原始 JSON-RPC 通知流，供 SCN-REALITY-01 收据构建器解析")
     args = ap.parse_args()
     if not re.fullmatch(r"\d+\.\d+\.\d+", args.codex_version):
         ap.error("--codex-version 必须是三段数字")
@@ -180,6 +188,8 @@ def main() -> int:
         argv += ["--disable", f]
     print(f"启动: {' '.join(argv)}", flush=True)
     srv = AppServer(argv)
+    # 提前 return 的分支也要走 finally 落事件日志，因此先初始化。
+    started: dict | None = None
     try:
         # `thread/realtime/start` 标了 `#[experimental(...)]`，未声明该能力时
         # app-server 直接拒绝："… requires experimentalApi capability"
@@ -222,13 +232,51 @@ def main() -> int:
             # 不是真的建成 WebRTC 会话——所以给一个结构合法的最小 offer 即可；
             # 即便后续 SDP 协商失败，call-create 那一跳已经上线了。
             params["transport"] = {"type": "webrtc", "sdp": MINIMAL_SDP_OFFER}
-        srv.call("thread/realtime/start", params, timeout=60)
+        # 这一跳的返回值此前被整个丢弃：上游拒绝 SDP、feature 未开、60s 超时，
+        # 全都只打一行 ✗ 而函数照样 return 0。现在判空并向外传播。
+        started = srv.call("thread/realtime/start", params, timeout=60)
 
         print(f"--- 保持 {args.hold}s，让 realtime 握手与首帧走完 ---", flush=True)
         time.sleep(args.hold)
     finally:
+        _write_events(args.events_output, srv, started)
         srv.close()
+    if started is None:
+        print("thread/realtime/start 失败，目标协议分支未成立", flush=True)
+        return 2
     return 0
+
+
+def _write_events(output: str | None, srv: "AppServer", started: dict | None) -> None:
+    """落一份原始事件流。收据构建器只解析，不推断——R1 不在此处判定成败。"""
+
+    if not output:
+        return
+    import os
+
+    with srv.lock:
+        notifications = list(srv.notifications)
+        errors = list(srv.call_errors)
+    call_id = ""
+    if isinstance(started, dict):
+        candidate = started.get("callId") or started.get("call_id")
+        if isinstance(candidate, str):
+            call_id = candidate
+    payload = {
+        "schema_version": "codex-egress-realtime-events/v1",
+        "notifications": notifications,
+        "call_errors": errors,
+        "sideband_call_id": call_id,
+        "realtime_start_returned": started is not None,
+    }
+    path = pathlib.Path(output)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    descriptor = os.open(path, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
+        handle.write("\n")
+    print(f"  事件日志: {path}（{len(notifications)} 条通知，{len(errors)} 次调用失败）",
+          flush=True)
 
 
 if __name__ == "__main__":

@@ -1,0 +1,563 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-egress-scenario-receipt-v1.json",
+  "title": "Codex 出站场景真实性收据",
+  "description": "SCN-REALITY-01 门禁的成功收据：证明某个 capture job 真实进入了目标协议分支。收据在结构上只允许成功态——场景未成立时不产出收据，job 判定看的是声明的收据是否齐备且合法，而不是收据里的某个布尔值。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "scenario_id",
+    "job_id",
+    "campaign_id",
+    "attempt_id",
+    "run_nonce",
+    "run_id",
+    "status",
+    "final_state",
+    "observed_at_utc",
+    "evidence_bindings",
+    "facts",
+    "producer"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-egress-scenario-receipt/v1"
+    },
+    "scenario_id": {
+      "$ref": "#/$defs/scenarioId"
+    },
+    "job_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "campaign_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "attempt_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "run_nonce": {
+      "$ref": "#/$defs/runNonce"
+    },
+    "run_id": {
+      "$ref": "#/$defs/safeId"
+    },
+    "status": {
+      "const": "success"
+    },
+    "final_state": {
+      "enum": [
+        "sideband_established",
+        "token_refreshed",
+        "upload_chain_complete"
+      ]
+    },
+    "observed_at_utc": {
+      "$ref": "#/$defs/timestamp"
+    },
+    "evidence_bindings": {
+      "$ref": "#/$defs/evidenceBindings"
+    },
+    "facts": {
+      "type": "object"
+    },
+    "producer": {
+      "$ref": "#/$defs/producer"
+    }
+  },
+  "allOf": [
+    {
+      "$ref": "#/$defs/scenarioFactsDispatch"
+    }
+  ],
+  "$defs": {
+    "safeId": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "scenarioId": {
+      "type": "string",
+      "pattern": "^A[0-9]{2}$"
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "runNonce": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "timestamp": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\\.[0-9]+)?(?:Z|[+-][0-9]{2}:[0-9]{2})$"
+    },
+    "absolutePath": {
+      "type": "string",
+      "pattern": "^/[^\\x00]*$"
+    },
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*(?:^|/)\\.(?:/|$))(?!.*\\\\).+$"
+    },
+    "regionalHost": {
+      "type": "string",
+      "pattern": "^[a-z0-9.-]+\\.oaiusercontent\\.com$"
+    },
+    "namedFileBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "path",
+        "sha256",
+        "bytes"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "path": {
+          "$ref": "#/$defs/relativePath"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "evidenceBindings": {
+      "description": "字段值所依据的原始证据；path 相对已批准的 job 证据根，root_role 绑定 root 身份。run 阶段按本 job 的证据根逐条复核字节。",
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "root_role",
+          "path",
+          "sha256",
+          "bytes"
+        ],
+        "properties": {
+          "root_role": {
+            "type": "string",
+            "minLength": 1
+          },
+          "path": {
+            "$ref": "#/$defs/relativePath"
+          },
+          "sha256": {
+            "$ref": "#/$defs/sha256"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "tool",
+        "subcommand",
+        "canonical_arguments",
+        "input_bindings",
+        "command_sha256"
+      ],
+      "properties": {
+        "schema_version": {
+          "const": "codex-egress-receipt-producer/v1"
+        },
+        "tool": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "path",
+            "sha256"
+          ],
+          "properties": {
+            "path": {
+              "$ref": "#/$defs/absolutePath"
+            },
+            "sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "subcommand": {
+          "const": "scenario"
+        },
+        "canonical_arguments": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "evidence_root",
+            "output",
+            "scenario_id",
+            "job_id",
+            "campaign_id",
+            "attempt_id",
+            "run_nonce",
+            "run_id"
+          ],
+          "properties": {
+            "evidence_root": {
+              "$ref": "#/$defs/absolutePath"
+            },
+            "output": {
+              "$ref": "#/$defs/relativePath"
+            },
+            "scenario_id": {
+              "$ref": "#/$defs/scenarioId"
+            },
+            "job_id": {
+              "$ref": "#/$defs/safeId"
+            },
+            "campaign_id": {
+              "$ref": "#/$defs/safeId"
+            },
+            "attempt_id": {
+              "$ref": "#/$defs/safeId"
+            },
+            "run_nonce": {
+              "$ref": "#/$defs/runNonce"
+            },
+            "run_id": {
+              "$ref": "#/$defs/safeId"
+            }
+          }
+        },
+        "input_bindings": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 1,
+          "items": {
+            "$ref": "#/$defs/namedFileBinding"
+          }
+        },
+        "command_sha256": {
+          "$ref": "#/$defs/sha256"
+        }
+      }
+    },
+    "scenarioFactsDispatch": {
+      "description": "逐场景钉死 facts 字段。分支内部各自闭合 additionalProperties，因为 allOf 子 schema 的 properties 对父级的 additionalProperties 不可见。",
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "scenario_id": {
+                "const": "A11"
+              }
+            },
+            "required": [
+              "scenario_id"
+            ]
+          },
+          "then": {
+            "properties": {
+              "final_state": {
+                "const": "sideband_established"
+              },
+              "facts": {
+                "$ref": "#/$defs/factsA11"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "scenario_id": {
+                "const": "A13"
+              }
+            },
+            "required": [
+              "scenario_id"
+            ]
+          },
+          "then": {
+            "properties": {
+              "final_state": {
+                "const": "token_refreshed"
+              },
+              "facts": {
+                "$ref": "#/$defs/factsA13"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "scenario_id": {
+                "const": "A14"
+              }
+            },
+            "required": [
+              "scenario_id"
+            ]
+          },
+          "then": {
+            "properties": {
+              "final_state": {
+                "const": "upload_chain_complete"
+              },
+              "facts": {
+                "$ref": "#/$defs/factsA14"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "factsA11": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "call_create_status",
+        "call_id_sha256",
+        "sdp_or_started_event",
+        "async_error_count",
+        "sideband_sni",
+        "sideband_call_id_linked"
+      ],
+      "properties": {
+        "call_create_status": {
+          "type": "integer",
+          "minimum": 200,
+          "maximum": 299
+        },
+        "call_id_sha256": {
+          "$ref": "#/$defs/sha256"
+        },
+        "sdp_or_started_event": {
+          "enum": [
+            "sdp_answer",
+            "thread_realtime_started"
+          ]
+        },
+        "async_error_count": {
+          "const": 0
+        },
+        "sideband_sni": {
+          "const": "api.openai.com"
+        },
+        "sideband_call_id_linked": {
+          "const": true
+        }
+      }
+    },
+    "factsA13": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "token_request_method",
+        "token_request_path",
+        "oauth_sni",
+        "jwt_exp_observation",
+        "credential_restore"
+      ],
+      "properties": {
+        "token_request_method": {
+          "const": "POST"
+        },
+        "token_request_path": {
+          "const": "/oauth/token"
+        },
+        "oauth_sni": {
+          "const": "auth.openai.com"
+        },
+        "jwt_exp_observation": {
+          "description": "证明刷新由 JWT 自然进入 5 分钟窗口所致，而非改写 last_refresh 伪造；只记 exp 与 token 摘要，绝不落 token 本体。",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "exp_at_utc",
+            "observed_at_utc",
+            "within_refresh_window",
+            "token_sha256"
+          ],
+          "properties": {
+            "exp_at_utc": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "observed_at_utc": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "within_refresh_window": {
+              "const": true
+            },
+            "token_sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "credential_restore": {
+          "description": "before_sha256 == after_sha256 才能证明 auth.json 被逐字还原。",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "before_sha256",
+            "after_sha256",
+            "restored"
+          ],
+          "properties": {
+            "before_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "after_sha256": {
+              "$ref": "#/$defs/sha256"
+            },
+            "restored": {
+              "const": true
+            }
+          }
+        }
+      }
+    },
+    "factsA14": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "tool_name",
+        "tool_call_id",
+        "create_request",
+        "upload_url_source_event",
+        "put_destination",
+        "uploaded_event",
+        "regional_sni",
+        "regional_host_from_response",
+        "upload_sequence"
+      ],
+      "properties": {
+        "tool_name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "tool_call_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "create_request": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "method",
+            "path",
+            "status_2xx"
+          ],
+          "properties": {
+            "method": {
+              "const": "POST"
+            },
+            "path": {
+              "const": "/backend-api/files"
+            },
+            "status_2xx": {
+              "const": true
+            }
+          }
+        },
+        "upload_url_source_event": {
+          "description": "host 必须由 create 响应体派生，不得来自配置或预列域名。",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "event",
+            "host",
+            "url_sha256"
+          ],
+          "properties": {
+            "event": {
+              "type": "string",
+              "minLength": 1
+            },
+            "host": {
+              "$ref": "#/$defs/regionalHost"
+            },
+            "url_sha256": {
+              "$ref": "#/$defs/sha256"
+            }
+          }
+        },
+        "put_destination": {
+          "description": "来自 -i any pcap 的区域 ClientHello；官方侧不声称从加密 pcap 取得 PUT URL。",
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "host",
+            "sni",
+            "first_seen_at_utc",
+            "last_seen_at_utc"
+          ],
+          "properties": {
+            "host": {
+              "$ref": "#/$defs/regionalHost"
+            },
+            "sni": {
+              "$ref": "#/$defs/regionalHost"
+            },
+            "first_seen_at_utc": {
+              "$ref": "#/$defs/timestamp"
+            },
+            "last_seen_at_utc": {
+              "$ref": "#/$defs/timestamp"
+            }
+          }
+        },
+        "uploaded_event": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "method",
+            "path_suffix",
+            "status_2xx"
+          ],
+          "properties": {
+            "method": {
+              "const": "POST"
+            },
+            "path_suffix": {
+              "const": "/uploaded"
+            },
+            "status_2xx": {
+              "const": true
+            }
+          }
+        },
+        "regional_sni": {
+          "$ref": "#/$defs/regionalHost"
+        },
+        "regional_host_from_response": {
+          "const": true
+        },
+        "upload_sequence": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "create_before_regional",
+            "regional_before_uploaded"
+          ],
+          "properties": {
+            "create_before_regional": {
+              "const": true
+            },
+            "regional_before_uploaded": {
+              "const": true
+            }
+          }
+        }
+      }
+    }
+  }
+}

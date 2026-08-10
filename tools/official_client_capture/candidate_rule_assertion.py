@@ -47,8 +47,10 @@ CHECKER_RELATIVE_PATH = (
 DEFAULT_PROFILE_RELATIVE_PATH = (
     "tools/official_client_capture/candidate_rule_expectations_0_145_0.json"
 )
+# 2026-08-10（SCN-REALITY-01 §3.1）：随 A01／A15 的 required_artifact_kinds 与
+# codex_upgrade_scenarios 对齐而更新，验收契约摘要的逐项复核见 acceptance_contract。
 FROZEN_PROFILE_SHA256 = (
-    "b52c11ea9a7f8c9e7a32cf39ca1e13bd59b054ffc399d4c9405d23a0cb874841"
+    "78a0ec3f69206e54ce8f5b7dda19c7db9abb0ff9cb03ad9a715cefe27e747f1e"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RULE_ID_RE = re.compile(r"^SPEC-[A-Z0-9]+-[0-9]{3}$")

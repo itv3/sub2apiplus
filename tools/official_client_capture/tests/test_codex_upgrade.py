@@ -341,6 +341,7 @@ class CodexUpgradeTest(unittest.TestCase):
                         ],
                         "covers": list(rules),
                         "scenario_ids": ["A01"],
+                        "required_scenario_receipts": [],
                     },
                     {
                         "id": "candidate-test",
@@ -362,6 +363,7 @@ class CodexUpgradeTest(unittest.TestCase):
                         ],
                         "covers": list(rules),
                         "scenario_ids": ["A01"],
+                        "required_scenario_receipts": [],
                     },
                 ],
             },

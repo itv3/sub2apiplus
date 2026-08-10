@@ -220,7 +220,10 @@ class CaptureLifecycleTest(unittest.TestCase):
             order: list[str] = []
 
             def complete_job(
-                current: codex_upgrade.Job, log_root: Path, attempt_index: int = 1
+                current: codex_upgrade.Job,
+                log_root: Path,
+                attempt_index: int = 1,
+                scenario_context: object | None = None,
             ) -> dict[str, object]:
                 del log_root
                 order.append("job")
@@ -262,7 +265,10 @@ class CaptureLifecycleTest(unittest.TestCase):
             order: list[str] = []
 
             def interrupt_job(
-                current: codex_upgrade.Job, log_root: Path, attempt_index: int = 1
+                current: codex_upgrade.Job,
+                log_root: Path,
+                attempt_index: int = 1,
+                scenario_context: object | None = None,
             ) -> dict[str, object]:
                 del current, log_root
                 order.append("job")
@@ -294,7 +300,10 @@ class CaptureLifecycleTest(unittest.TestCase):
             order: list[str] = []
 
             def complete_job(
-                current: codex_upgrade.Job, log_root: Path, attempt_index: int = 1
+                current: codex_upgrade.Job,
+                log_root: Path,
+                attempt_index: int = 1,
+                scenario_context: object | None = None,
             ) -> dict[str, object]:
                 del log_root
                 order.append("job")
@@ -853,7 +862,10 @@ class CaptureLifecycleTest(unittest.TestCase):
             order: list[str] = []
 
             def complete_job(
-                current: codex_upgrade.Job, log_root: Path, attempt_index: int = 1
+                current: codex_upgrade.Job,
+                log_root: Path,
+                attempt_index: int = 1,
+                scenario_context: object | None = None,
             ) -> dict[str, object]:
                 del log_root
                 order.append("job")

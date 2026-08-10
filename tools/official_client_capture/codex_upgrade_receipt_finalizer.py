@@ -20,6 +20,7 @@ if __package__ in {None, ""}:
     # 允许从仓库根目录直接执行本文件。
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from tools.official_client_capture import scenario_receipts
 from tools.official_client_capture.candidate_evidence_guard import (
     EvidenceGuardError,
     normalize_state,
@@ -30,6 +31,7 @@ from tools.official_client_capture.candidate_evidence_guard import (
 RESTORATION_SCHEMA = "codex-egress-restoration-report/v2"
 OBSERVED_PROFILE_SCHEMA = "codex-egress-observed-profile/v2"
 CLIENT_BINDING_SCHEMA = "codex-egress-client-binding/v2"
+SCENARIO_RECEIPT_SCHEMA = "codex-egress-scenario-receipt/v1"
 PRODUCER_SCHEMA = "codex-egress-receipt-producer/v1"
 RUNTIME_AUDIT_SCHEMA = "codex-egress-runtime-audit/v1"
 KILO_INGRESS_SCHEMA = "kilo-ingress-witness/v1"
@@ -75,6 +77,7 @@ RECEIPT_SUBCOMMAND_BY_SCHEMA = {
     RESTORATION_SCHEMA: "restoration",
     OBSERVED_PROFILE_SCHEMA: "observed-profile",
     CLIENT_BINDING_SCHEMA: "kilo-binding",
+    SCENARIO_RECEIPT_SCHEMA: "scenario",
 }
 REPLAY_INPUT_NAMES = {
     "restoration": (
@@ -97,6 +100,7 @@ REPLAY_INPUT_NAMES = {
         "runtime_audit",
         "usage_audit",
     ),
+    "scenario": ("facts",),
 }
 REPLAY_CANONICAL_FIELDS = {
     "restoration": {
@@ -141,6 +145,16 @@ REPLAY_CANONICAL_FIELDS = {
         "build_id",
         "deployed_version",
         "model",
+    },
+    "scenario": {
+        "evidence_root",
+        "output",
+        "scenario_id",
+        "job_id",
+        "campaign_id",
+        "attempt_id",
+        "run_nonce",
+        "run_id",
     },
 }
 ALLOWED_BRANCHES = frozenset(
@@ -1688,6 +1702,83 @@ def finalize_kilo_binding(
     return receipt
 
 
+def _scenario_identity_from_args(args: argparse.Namespace) -> dict[str, str]:
+    scenario_id = _safe_id(args.scenario_id, "scenario_id")
+    if scenario_id not in scenario_receipts.SUPPORTED_SCENARIOS:
+        raise ReceiptFinalizerError("scenario_id 不是已登记的真实性门禁场景")
+    return {
+        "scenario_id": scenario_id,
+        "job_id": _safe_id(args.job_id, "job_id"),
+        "campaign_id": _safe_id(args.campaign_id, "campaign_id"),
+        "attempt_id": _safe_id(args.attempt_id, "attempt_id"),
+        "run_nonce": _run_nonce(args.run_nonce, "run_nonce"),
+        "run_id": _safe_id(args.run_id, "run_id"),
+    }
+
+
+def finalize_scenario(
+    args: argparse.Namespace,
+    *,
+    write_output: bool = True,
+) -> dict[str, Any]:
+    """把采集侧的原始场景事实承接为带 attempt 身份的成功收据。
+
+    本函数只承接、不推断：final_state、observed_at_utc、evidence_bindings 与
+    facts 全部原样取自事实文件，编排器不得根据 job 退出码补写目标字段。事实
+    文件本身只在目标协议分支真实成立时才由采集侧产出。
+    """
+
+    root = _validate_root(args.evidence_root)
+    if write_output:
+        output_path, output_relative = _output_location(root, args.output)
+    else:
+        output_path, output_relative = _existing_output_location(root, args.output)
+    identity = _scenario_identity_from_args(args)
+    facts_document = _load_document(root, args.facts, "facts")
+    try:
+        validated = scenario_receipts.validate_facts_document(
+            facts_document.payload,
+            scenario_id=identity["scenario_id"],
+            job_id=identity["job_id"],
+            run_id=identity["run_id"],
+        )
+    except scenario_receipts.ScenarioReceiptError as error:
+        raise ReceiptFinalizerError(f"场景原始事实不可信：{error}") from error
+    facts_document = _reload_same(root, facts_document, "facts")
+    producer = _producer(
+        "scenario",
+        root,
+        output_relative,
+        identity,
+        {"facts": facts_document},
+    )
+    receipt = {
+        "schema_version": SCENARIO_RECEIPT_SCHEMA,
+        **identity,
+        "status": "success",
+        "final_state": validated["final_state"],
+        "observed_at_utc": validated["observed_at_utc"],
+        "evidence_bindings": validated["evidence_bindings"],
+        "facts": validated["facts"],
+        "producer": producer,
+    }
+    try:
+        scenario_receipts.validate_receipt(
+            receipt,
+            scenario_id=identity["scenario_id"],
+            job_id=identity["job_id"],
+            campaign_id=identity["campaign_id"],
+            attempt_id=identity["attempt_id"],
+            run_nonce=identity["run_nonce"],
+            run_id=identity["run_id"],
+        )
+    except scenario_receipts.ScenarioReceiptError as error:
+        raise ReceiptFinalizerError(f"场景收据未通过结构校验：{error}") from error
+    if write_output:
+        _write_json_once(output_path, receipt)
+    return receipt
+
+
 def _replay_input_paths(
     producer: Mapping[str, Any],
     subcommand: str,
@@ -1877,6 +1968,8 @@ def replay_receipt(
         recomputed = finalize_restoration(arguments, write_output=False)
     elif subcommand == "observed-profile":
         recomputed = finalize_observed_profile(arguments, write_output=False)
+    elif subcommand == "scenario":
+        recomputed = finalize_scenario(arguments, write_output=False)
     else:
         recomputed = finalize_kilo_binding(arguments, write_output=False)
     receipt = _reload_same(root, receipt, "待重放收据")
@@ -1960,6 +2053,23 @@ def build_parser() -> argparse.ArgumentParser:
     kilo.add_argument("--response-witness", type=Path, required=True)
     kilo.add_argument("--usage-audit", type=Path, required=True)
     kilo.set_defaults(handler=finalize_kilo_binding)
+
+    scenario = subparsers.add_parser(
+        "scenario", help="把采集侧场景原始事实承接为真实性收据"
+    )
+    _add_common_output(scenario)
+    scenario.add_argument(
+        "--scenario-id",
+        choices=tuple(scenario_receipts.SUPPORTED_SCENARIOS),
+        required=True,
+    )
+    scenario.add_argument("--job-id", required=True)
+    scenario.add_argument("--campaign-id", required=True)
+    scenario.add_argument("--attempt-id", required=True)
+    scenario.add_argument("--run-nonce", required=True)
+    scenario.add_argument("--run-id", required=True)
+    scenario.add_argument("--facts", type=Path, required=True)
+    scenario.set_defaults(handler=finalize_scenario)
     return parser
 
 

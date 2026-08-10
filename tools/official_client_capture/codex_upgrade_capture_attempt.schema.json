@@ -535,7 +535,9 @@
         "missing_evidence_patterns",
         "empty_evidence_patterns",
         "covers",
-        "scenario_ids"
+        "scenario_ids",
+        "scenario_receipts",
+        "scenario_receipt_failures"
       ],
       "properties": {
         "id": {
@@ -605,6 +607,60 @@
           "uniqueItems": true,
           "items": {
             "$ref": "#/$defs/scenarioId"
+          }
+        },
+        "scenario_receipts": {
+          "description": "SCN-REALITY-01：本 job 声明的目标场景真实性收据。收据只表达成功态，缺失即 job 失败。",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "scenario_id",
+              "path",
+              "sha256",
+              "final_state"
+            ],
+            "properties": {
+              "scenario_id": {
+                "$ref": "#/$defs/scenarioId"
+              },
+              "path": {
+                "$ref": "#/$defs/absolutePath"
+              },
+              "sha256": {
+                "$ref": "#/$defs/sha256"
+              },
+              "final_state": {
+                "enum": [
+                  "sideband_established",
+                  "token_refreshed",
+                  "upload_chain_complete"
+                ]
+              }
+            }
+          }
+        },
+        "scenario_receipt_failures": {
+          "description": "真实性门禁的失败原因，仅供排障；任一条目存在即 job 状态为 failed。",
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "scenario_id",
+              "reason"
+            ],
+            "properties": {
+              "scenario_id": {
+                "$ref": "#/$defs/scenarioId"
+              },
+              "reason": {
+                "$ref": "#/$defs/nonEmptyText"
+              }
+            }
           }
         }
       }

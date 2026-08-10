@@ -9,7 +9,7 @@
       "description": "默认系统 CA 的 HTTP ClientHello 与 models 请求",
       "trigger": "使用隔离账号执行一次启动 models 和一次 HTTP Responses 调用",
       "preconditions": ["Ubuntu 24.04", "未配置有效自定义 CA", "候选出站 netns 抓包已启动"],
-      "required_artifact_kinds": ["pcap", "relay_binary"]
+      "required_artifact_kinds": ["pcap", "process_trace"]
     },
     {
       "scenario_id": "A02",
@@ -107,7 +107,7 @@
       "description": "exec、TUI 与启动 models UA 画像",
       "trigger": "分别由 Codex 0.145.0 exec 和 TUI 入口触发，并取得启动 models 有 suffix 与无 suffix 两种样本",
       "preconditions": ["入口 surface 由 process trace 证明", "UA 已解析为前缀和 suffix", "不接受 curl 伪造入口头"],
-      "required_artifact_kinds": ["relay_binary", "process_trace"]
+      "required_artifact_kinds": ["process_trace"]
     }
   ],
   "rules": [

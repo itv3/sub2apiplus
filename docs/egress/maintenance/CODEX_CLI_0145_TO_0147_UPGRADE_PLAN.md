@@ -662,7 +662,7 @@ ARM64 全部通过后，**不得直接把 ARM64 结果视为 Vircs 上线通过*
 | 变更集 | 实施内容 | 必交付物 | 退出条件 |
 |---|---|---|---|
 | R0 方案冻结 | 固定 A11／A13／A14 的成功事件、证据字段、超时、负例和恢复边界；定义 `scenario_receipt` 与 job 状态的关系 | `SCN-REALITY-01` 方案、字段表、状态机、测试矩阵 | **已完成**；无“脚本退出即成功”的路径 |
-| R1 真实性门禁 | 记录原始事件、生成成功 receipt、job 缺 receipt 失败关闭；不在 R1 伪造或补写协议字段 | 门禁实现、正反测试、receipt schema 校验 | A11 400、A13 无 refresh、A14 无工具调用等负例均失败关闭 |
+| R1 真实性门禁 | 记录原始事件、生成成功 receipt、job 缺 receipt 失败关闭；不在 R1 伪造或补写协议字段 | 门禁实现、正反测试、receipt schema 校验 | **已完成**；A11 400、A13 无 refresh、A14 无工具调用等负例均失败关闭，实施记录见 `SCN_REALITY_01_SCENARIO_REALITY_GATE.md` §12 |
 | R2 A11 触发修正 | 使用官方 0.147 V3／`quicksilver=v2` 路径；只调用官方 CLI，不手工拼 sideband | realtime 成功 receipt、call_id/SDP/started 关联、api SNI 记录 | call-create 2xx、异步 started/SDP、sideband SNI 三者同时存在 |
 | R3 A13 触发修正 | 隔离账号与 `CODEX_HOME`；在 JWT 自然进入 5 分钟刷新窗口时采集；采集前后逐字核对隔离状态 | refresh request receipt、auth SNI、凭据恢复摘要 | 真实 `POST /oauth/token` 与 `auth.openai.com` SNI 同时存在；活跃凭据无非预期变化 |
 | R4 A14 触发与抓包修正 | 冻结 Apps 工具可见性与调用契约；要求 create→响应 `upload_url`→PUT→uploaded；按端口覆盖响应返回的所有上传主机 | tool-call receipt、URL provenance、PUT/uploaded receipt、动态 host inventory | 工具调用和完整上传链成立；区域 SNI 来自真实响应，不依赖硬编码主机 |
@@ -707,22 +707,23 @@ R7 classify → profile → candidate → compare → accept → ready
 
 ### 11.5 当前执行起点
 
-**R0 已完成，下一步从 R1 开始**：
-[`SCN_REALITY_01_SCENARIO_REALITY_GATE.md`](SCN_REALITY_01_SCENARIO_REALITY_GATE.md)。
-该文冻结了 `scenario_receipt` 契约、job 判定的第四条件、状态机与正反测试矩阵。按仓库既有
-「收据只表达成功态」的约定，判定改为**缺收据即失败**，而不是读取收据里的成功标志——
-后者只需改一个字段值即可伪造，前者要伪造整条 producer 链。
+**R0 与 R1 均已完成，下一步从 R2 开始。**
+[`SCN_REALITY_01_SCENARIO_REALITY_GATE.md`](SCN_REALITY_01_SCENARIO_REALITY_GATE.md)
+的 §1～§11 是 R0 冻结的契约，§12 是 R1 的实施记录。按仓库既有「收据只表达成功态」的
+约定，判定为**缺收据即失败**，而不是读取收据里的成功标志——后者只需改一个字段值即可
+伪造，前者要伪造整条 producer 链。
 
-R1 编码时必须一并处置以下五项已登记要求（详见该文 §3、§11）：
+R0 登记的五项要求在 R1 已全部处置：两份场景清单的 `required_artifact_kinds` 已对齐并
+补交叉一致性测试、三处冻结摘要按逐项复核后重算（25／17 分组未变）；A11／A13／A14 已
+引入 `side_triggers` 分侧契约且不覆盖候选侧定义；收据固定路径、attempt 身份透传、
+retry 独立目录与 A13 还原前后摘要证明均已闭合；A14 官方侧只声称响应 host、区域 SNI、
+事件顺序与 uploaded 2xx；attempt `jobResult` schema 与不依赖 `jsonschema` 的运行时精确
+校验已补齐。
 
-1. 两份场景清单的 `required_artifact_kinds` 已分叉；批准画像若沿用旧 kinds，A01／A15 的
-   定案仍会在 accept 阶段失效，必须同步清单、批准画像交叉校验和冻结契约摘要；
-2. A11／A13／A14 的场景定义仍只有候选侧受控触发，必须在 R1 引入 official/candidate 双侧
-   trigger 契约；
-3. 收据固定路径、attempt 身份传递、retry 归档及 A13 cleanup 后原始字节恢复证明尚未闭合；
-4. A14 直连 PUT 后，官方侧只能证明响应 host、区域 SNI、事件顺序和 uploaded 2xx，不能声称
-   从加密 pcap 取得 PUT URL；
-5. R1 还需补齐 attempt `jobResult` schema、运行时精确校验和正式冻结源码坐标。
+R1 的效果已用 k36 的实际形态复现：子进程退出 0、证据目录非空、但目标协议分支一跳未发生
+时，三个目标 job 全部判 `failed`。**这也意味着触发问题仍然存在**——R1 只保证「没触发」
+不再被记成「完成」，真正的触发修正是 R2（A11 走官方 V3 并等待 started／SDP）、
+R3（A13 等 JWT 自然进入刷新窗口）、R4（A14 冻结 Apps 工具契约与动态区域 SNI）。
 
-当前只从 R1 开始文档对应的真实性门禁变更；R1 通过后再按 11.4 进入 R2、R3、R4。R1 及
+受管工具身份已随 R1 变化，按 §11.1 必须新建 k37 完整重采，k36 不迁移、不复用。R2 及
 后续阶段不得直接替换 Vircs 正式服务，不执行未经 canary 验证的生产更新。

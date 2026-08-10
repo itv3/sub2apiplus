@@ -81,8 +81,15 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 
 # 由 `python3 acceptance_contract.py --print-digest` 生成；画像规则集变化时本摘要
 # 必然漂移，必须连同 25／17 分组与覆盖矩阵一起重新审核后才能更新。
+#
+# 2026-08-10 更新（SCN-REALITY-01 §3.1）：两份场景清单的 required_artifact_kinds
+# 曾在 9023af97c 分叉，A01 与 A15 的 §10.9.3 定案只落到 codex_upgrade_scenarios，
+# 没同步到本画像。对齐后逐项复核：25／17 分组不变，validation_modes 与
+# expected_check_ids 无任何变化，side_coverage 只有 A01（pcap+relay_binary →
+# pcap+process_trace）与 A15（relay_binary+process_trace → process_trace）两项按
+# 定案变化——official-core 是 direct+mitm 矩阵，不产字节中继。
 FROZEN_CONTRACT_SHA256 = (
-    "14e9e33652ea01e7fa5a9cd51eeffce32b20e73d48bc93ea99ba40af069df957"
+    "1689ab3016dee918df50b843eef3d6d2ab71f81c2bae237bc7ec7272696d58c2"
 )
 
 

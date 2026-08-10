@@ -91,6 +91,17 @@ requirements_backup="/tmp/codex-requirements-$run_id.toml"
 memgen_home=""
 file_upload_home=""
 auth_backup=""
+auth_before_sha256=""
+# SCN-REALITY-01：目标场景的原始观测落在这里，供 build_scenario_facts.py 解析。
+observation_dir="$capture_root/runs/${RUN_ID:-unset}/scenario-observations"
+
+write_observation() {
+  # 只写事实，不判成败；判定由收据构建器按契约做。
+  local name=$1 payload=$2
+  install -d -m 0700 "$observation_dir" 2>/dev/null || return 0
+  printf '%s\n' "$payload" > "$observation_dir/$name" || return 0
+  chmod 600 "$observation_dir/$name" 2>/dev/null || true
+}
 
 stop_relay() {
   if [[ $relay_started != 1 ]]; then
@@ -118,16 +129,65 @@ stop_tcpdump() {
   fi
   # 先给 tcpdump 一点时间把缓冲写盘，再停；否则末尾握手可能丢失。
   sleep 1
-  docker exec "$capture_container" pkill -TERM -f '[t]cpdump -i lo' >/dev/null 2>&1 || true
+  docker exec "$capture_container" pkill -TERM -f '[t]cpdump -i any' >/dev/null 2>&1 || true
   for _ in $(seq 1 20); do
-    if ! docker exec "$capture_container" pgrep -f '[t]cpdump -i lo' >/dev/null 2>&1; then
+    if ! docker exec "$capture_container" pgrep -f '[t]cpdump -i any' >/dev/null 2>&1; then
       tcpdump_started=0
       return
     fi
     sleep 0.25
   done
-  docker exec "$capture_container" pkill -KILL -f '[t]cpdump -i lo' >/dev/null 2>&1 || true
+  docker exec "$capture_container" pkill -KILL -f '[t]cpdump -i any' >/dev/null 2>&1 || true
   tcpdump_started=0
+}
+
+verify_pcap() {
+  # pcap 此前是「写了就算」：无非空检查、无可解析校验。24 字节是 pcap 全局头长度，
+  # 只有头没有包说明抓包从未生效或写盘失败，据此产出的场景收据是假的。
+  if [[ $capture_client_hello != 1 ]]; then
+    return 0
+  fi
+  local pcap="/capture/runs/$run_id/direct/traffic.pcap"
+  local size
+  size=$(docker exec "$capture_container" sh -c "stat -c '%s' '$pcap' 2>/dev/null || printf '0'")
+  if (( size <= 24 )); then
+    echo "❌ pcap 只有全局头（$size 字节），没有捕获到任何数据包。" >&2
+    return 1
+  fi
+  if ! docker exec "$capture_container" tcpdump -nn -r "$pcap" -c 1 >/dev/null 2>&1; then
+    echo "❌ pcap 无法解析出首个数据包。" >&2
+    return 1
+  fi
+  return 0
+}
+
+restore_auth_json() {
+  # 幂等：还原成功后清空 auth_backup，cleanup 再调一次不会重复执行。
+  #
+  # 登录态必须原样还原：本场景只改 last_refresh 触发一次刷新，不改变账号绑定。
+  # 保留宽松错误处理以免中断其余清理，但把结果如实写进观测记录——还原失败时
+  # before/after 摘要不等，收据构建器据此拒绝产出 A13 成功事实。
+  if [[ -z $auth_backup ]]; then
+    return 0
+  fi
+  local restored="false" auth_after_sha256=""
+  if docker exec "$capture_container" sh -c \
+    "test -f '$auth_backup' && cat '$auth_backup' > /root/.codex/auth.json && \
+     chmod 600 /root/.codex/auth.json" >/dev/null 2>&1; then
+    auth_after_sha256=$(docker exec "$capture_container" sh -c \
+      "sha256sum /root/.codex/auth.json | cut -d' ' -f1" 2>/dev/null || printf '')
+    if [[ -n $auth_after_sha256 && $auth_after_sha256 == "$auth_before_sha256" ]]; then
+      restored="true"
+    else
+      echo "⚠ auth.json 还原后的摘要与备份不一致，A13 不会产出成功收据。" >&2
+    fi
+    docker exec "$capture_container" rm -f "$auth_backup" >/dev/null 2>&1 || true
+  else
+    echo "⚠ auth.json 还原失败，登录态可能仍停留在被篡改的状态。" >&2
+  fi
+  write_observation "A13-credential-restore.json" \
+    "{\"before_sha256\":\"$auth_before_sha256\",\"after_sha256\":\"$auth_after_sha256\",\"restored\":$restored}"
+  auth_backup=""
 }
 
 cleanup() {
@@ -157,17 +217,14 @@ cleanup() {
   if [[ -n $file_upload_home ]]; then
     docker exec "$capture_container" rm -rf -- "$file_upload_home" >/dev/null 2>&1 || true
   fi
-  if [[ -n $auth_backup ]]; then
-    # 登录态必须原样还原：本场景只改 last_refresh 触发一次刷新，不改变账号绑定。
-    docker exec "$capture_container" sh -c \
-      "test -f '$auth_backup' && cat '$auth_backup' > /root/.codex/auth.json && \
-       chmod 600 /root/.codex/auth.json && rm -f '$auth_backup'" >/dev/null 2>&1 || true
-  fi
+  restore_auth_json
   docker exec "$capture_container" rm -f /tmp/codex-guardian-probe.txt >/dev/null 2>&1 || true
   echo "环境已恢复：中继已停止，hosts 与系统信任库中的临时 CA 均已还原。"
   exit $status
 }
-trap cleanup EXIT
+# 编排器超时走 _terminate_process 发信号，只挂 EXIT 时还原不保证执行——
+# A13 的 auth.json 会永久停留在被篡改的状态。
+trap cleanup EXIT INT TERM
 
 install -d -m 0700 "$work_dir" "$tls_dir"
 
@@ -258,9 +315,19 @@ if [[ -n ${RELAY_RETRY_PROBE:-} ]]; then
   fi
 fi
 if [[ $capture_client_hello == 1 ]]; then
+  # 容器缺 tcpdump 时 `docker exec -d` 静默返回 0，整轮跑完才发现没有 pcap。
+  # 候选侧早有这道预检（run_candidate_aux_capture.sh），官方侧此前是缺的。
+  if ! docker exec "$capture_container" sh -c 'command -v tcpdump' >/dev/null 2>&1; then
+    echo "❌ capture 容器缺少 tcpdump，无法形成 A11／A13／A14 的 SNI pcap。" >&2
+    exit 1
+  fi
   install -d -m 0700 "$pcap_dir"
+  # `-i any` 而不是 `-i lo`：响应返回的区域上传主机不在 RELAY_HOSTS 里就不被
+  # hosts 劫持，流量走真实网卡，回环抓包完全看不到。按端口捕获所有主机，与候选侧
+  # 及 SPEC-TLS-003 的既有先例一致。pcap linktype 变为 LINUX_SLL／SLL2，
+  # pcap_clienthello.py 已支持，无需改解析器。
   docker exec -d "$capture_container" sh -c \
-    "tcpdump -i lo -s 0 -U -w /capture/runs/$run_id/direct/traffic.pcap 'tcp port $relay_port' \
+    "tcpdump -i any -s 0 -U -w /capture/runs/$run_id/direct/traffic.pcap 'tcp port $relay_port' \
      > /capture/runs/$run_id/direct/tcpdump.log 2>&1"
   tcpdump_started=1
   sleep 1
@@ -472,6 +539,10 @@ case "$scenario" in
     auth_backup="/tmp/codex-auth-$run_id.json"
     docker exec "$capture_container" sh -c \
       "cp /root/.codex/auth.json '$auth_backup' && chmod 600 '$auth_backup'"
+    # 篡改前的原始字节摘要。cleanup 还原后必须与之逐字相等，否则不允许生成 A13
+    # 成功收据——此前还原是一条 `|| true` 短路链，备份缺失会静默跳过而无任何告警。
+    auth_before_sha256=$(docker exec "$capture_container" sh -c \
+      "sha256sum '$auth_backup' | cut -d' ' -f1")
     docker exec "$capture_container" python3 - <<'PY'
 import json, datetime
 path = "/root/.codex/auth.json"
@@ -513,13 +584,21 @@ esac
 
 echo "=== 场景 $scenario，$turns 轮 ==="
 if [[ $prompt == "__REALTIME__" ]]; then
+  # A11 目标路径：退出码不再被 `| tail -N || true` 吞掉。驱动落一份原始事件流，
+  # 由 build_scenario_facts.py 判定 started/SDP 与异步 error；这里只如实记录成败。
+  realtime_status=0
   # shellcheck disable=SC2086
   docker exec "$capture_container" timeout 120 python3 \
     "$capture_tool_root/drive_codex_realtime.py" \
     --codex-version "$codex_version" \
     --model "$model" --transport webrtc --output-modality audio \
     ${DISABLE_FEATURES:+$(for f in $DISABLE_FEATURES; do printf -- '--disable %s ' "$f"; done)} \
-    --hold "${REALTIME_HOLD:-20}" 2>&1 | tail -10 || true
+    --events-output "/capture/runs/$run_id/scenario-observations/A11-realtime-events.json" \
+    --hold "${REALTIME_HOLD:-20}" > "$work_dir/realtime-driver.log" 2>&1 || realtime_status=$?
+  tail -10 "$work_dir/realtime-driver.log" || true
+  if (( realtime_status != 0 )); then
+    echo "⚠ realtime 驱动以 $realtime_status 退出，A11 目标分支未成立。" >&2
+  fi
 elif [[ $prompt == "__COMPACT_TUI__" ]]; then
   ctx_opt=""
   [[ -n ${CONTEXT_WINDOW:-} ]] && ctx_opt="--context-window $CONTEXT_WINDOW"
@@ -702,11 +781,18 @@ print('预置图片', len(png), '字节')
 else
   for i in $(seq 1 "$turns"); do
     echo "--- 第 $i 轮 ---"
+    exec_status=0
     # shellcheck disable=SC2086 —— extra_args 需按空格拆成多个参数
     # shellcheck disable=SC2086
     docker exec "$capture_container" timeout 180 "$codex_bin" exec \
       --model "$model" --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox \
-      $disable_args $extra_args "$prompt" 2>&1 | tail -3 || true
+      $disable_args $extra_args "$prompt" > "$work_dir/exec-$i.log" 2>&1 || exec_status=$?
+    tail -3 "$work_dir/exec-$i.log" || true
+    # A13／A14 是 SCN-REALITY-01 的目标场景，驱动失败必须留痕；其余场景沿用
+    # 既有的宽松语义，本轮不批量改动。
+    if (( exec_status != 0 )) && [[ $scenario == "oauth-refresh" || $scenario == "file-upload" ]]; then
+      echo "⚠ 第 $i 轮 codex exec 以 $exec_status 退出，$scenario 目标分支未必成立。" >&2
+    fi
   done
 fi
 
@@ -716,6 +802,13 @@ stop_relay
 
 if ! docker exec "$capture_container" test -s "/capture/runs/$run_id/relay/relay.json"; then
   echo "❌ 中继未写出 relay.json，样本不完整。" >&2
+  exit 1
+fi
+
+# tcpdump 此前只在 EXIT 陷阱里停，导致后置处理全都发生在它仍在运行时，pcap
+# 从未在流程内被确认可用。这里显式收口，再校验。
+stop_tcpdump
+if ! verify_pcap; then
   exit 1
 fi
 
@@ -729,6 +822,31 @@ python3 "$scrub_tool" \
   --verify
 rm -rf -- "$work_dir/relay"
 mv -- "$scrubbed_relay" "$work_dir/relay"
+
+# 还原必须早于场景事实构建：A13 的成功收据要求 auth.json 逐字还原的前后摘要相等，
+# 而还原结果此前只在 EXIT 陷阱里产生，那时事实早已构建完。
+restore_auth_json
+
+# SCN-REALITY-01：从脱敏后的最终字节提取目标协议分支是否真实成立。
+# 证据不足即退出非 0 且不产出成功事实，编排器据此判 job 失败——
+# 「脚本退出 0 且证据目录非空」不再等于场景成立。
+case "$scenario" in
+  realtime-webrtc) target_scenario="A11" ;;
+  oauth-refresh)   target_scenario="A13" ;;
+  file-upload)     target_scenario="A14" ;;
+  *)               target_scenario="" ;;
+esac
+if [[ -n $target_scenario ]]; then
+  echo "=== 场景真实性事实（$target_scenario）==="
+  if ! python3 "$capture_tool_root/build_scenario_facts.py" \
+    --scenario "$target_scenario" \
+    --job-id "${SCENARIO_JOB_ID:-official-relay-$scenario}" \
+    --run-id "$run_id" \
+    --run-root "$work_dir"; then
+    echo "❌ $target_scenario 目标协议分支未成立，不产出场景收据。" >&2
+    exit 1
+  fi
+fi
 
 if [[ $prompt == "__COMPACTION_REASON__" ]]; then
   echo "=== 压缩原因最小脱敏证据 ==="

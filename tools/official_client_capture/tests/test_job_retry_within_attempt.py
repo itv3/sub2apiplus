@@ -32,13 +32,14 @@ class _Job:
         self.scenario_ids = ()
         self.suites = ()
         self.description = "测试任务"
+        self.required_scenario_receipts = ()
 
 
 class JobRetryWithinAttemptTest(unittest.TestCase):
     def test_失败任务在同一_attempt_内补跑(self) -> None:
         calls: list[int] = []
 
-        def fake(job, log_root, attempt_index=1):
+        def fake(job, log_root, attempt_index=1, scenario_context=None):
             calls.append(attempt_index)
             status = "complete" if attempt_index == 2 else "failed"
             return {"id": job.job_id, "status": status, "evidence_roots": []}
@@ -55,7 +56,7 @@ class JobRetryWithinAttemptTest(unittest.TestCase):
 
         calls: list[int] = []
 
-        def always_fail(job, log_root, attempt_index=1):
+        def always_fail(job, log_root, attempt_index=1, scenario_context=None):
             calls.append(attempt_index)
             return {"id": job.job_id, "status": "failed", "evidence_roots": []}
 
@@ -69,7 +70,7 @@ class JobRetryWithinAttemptTest(unittest.TestCase):
     def test_非必需任务不补跑(self) -> None:
         calls: list[int] = []
 
-        def fail_once(job, log_root, attempt_index=1):
+        def fail_once(job, log_root, attempt_index=1, scenario_context=None):
             calls.append(attempt_index)
             return {"id": job.job_id, "status": "failed", "evidence_roots": []}
 

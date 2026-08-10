@@ -43,8 +43,13 @@ NATIVE_TLS_EXTENSION_ORDER = (
 )
 
 
-def iter_packets(path: pathlib.Path):
-    """逐包产出 (linktype, 原始字节)。只支持经典 pcap，不支持 pcapng。"""
+def iter_timed_packets(path: pathlib.Path):
+    """逐包产出 (linktype, 捕获时刻 Unix 秒, 原始字节)。
+
+    时间戳是 SCN-REALITY-01 判定 A14 上传三跳先后顺序的唯一被动来源，因此不能
+    像 iter_packets 那样丢弃。纳秒精度 pcap（magic 0xA1B23C4D／0x4D3CB2A1）的
+    第二个字段是纳秒而非微秒，除数不同。
+    """
     with path.open("rb") as f:
         gh = f.read(24)
         if len(gh) < 24:
@@ -54,16 +59,23 @@ def iter_packets(path: pathlib.Path):
             print(f"  ⚠ {path.name} 是 pcapng 格式，跳过", file=sys.stderr)
             return
         endian = "<" if magic in (0xA1B2C3D4, 0xA1B23C4D) else ">"
+        divisor = 1_000_000_000 if magic in (0xA1B23C4D, 0x4D3CB2A1) else 1_000_000
         link = struct.unpack(endian + "I", gh[20:24])[0]
         while True:
             ph = f.read(16)
             if len(ph) < 16:
                 break
-            _, _, incl, _ = struct.unpack(endian + "IIII", ph)
+            seconds, fraction, incl, _ = struct.unpack(endian + "IIII", ph)
             data = f.read(incl)
             if len(data) < incl:
                 break
-            yield link, data
+            yield link, seconds + fraction / divisor, data
+
+
+def iter_packets(path: pathlib.Path):
+    """逐包产出 (linktype, 原始字节)。只支持经典 pcap，不支持 pcapng。"""
+    for link, _, data in iter_timed_packets(path):
+        yield link, data
 
 
 def tcp_payload(link: int, data: bytes):

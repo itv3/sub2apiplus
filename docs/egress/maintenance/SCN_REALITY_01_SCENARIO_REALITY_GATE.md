@@ -1,7 +1,8 @@
-# `SCN-REALITY-01`：场景真实性门禁 — R0 已完成方案
+# `SCN-REALITY-01`：场景真实性门禁 — R0 方案与 R1 实施
 
-> 状态：**R0 已完成**。本文是升级计划 §11.2 中 R0 的交付物，只冻结契约与实现边界，
-> 不含任何代码改动。下一步从 R1 真实性门禁开始；R1 前不重采、不创建 k37、不改变 Active/Previous。
+> 状态：**R0 已完成，R1 已实施**（§12 记录实施结果）。本文原为升级计划 §11.2 中 R0
+> 的交付物，冻结契约与实现边界；R1 按 §6 的九项范围完成编码，尚未重采、未创建 k37、
+> 未改变 Active/Previous。下一步是 R2（A11 触发修正）。
 > 日期：2026-08-10
 > 上游结论：升级计划 §10.9.4、[`SPEC_EP_002_EVIDENCE_BLOCKER.md`](SPEC_EP_002_EVIDENCE_BLOCKER.md) §5.1
 > 适用 Campaign：k37（尚未创建）；k36 仅作诊断夹具，不适用本门禁
@@ -481,3 +482,64 @@ R1 完成的判据是：上表全绿，且用 **k36 的真实证据**作离线�
 本方案已补齐：收据生命周期与 retry 归档、cleanup 后 A13 原始字节恢复证明、attempt schema
 与运行时精确校验、双侧 trigger、批准画像交叉校验及正式源码坐标。下一步进入 R1；R1 完成前
 不重采、不创建 k37、不改变 Active/Previous。
+
+## 12. R1 实施结果（2026-08-10）
+
+§6 的九项实施范围已全部落地，§7 测试矩阵新增 40 条用例，本地与 ARM64 双侧门禁通过。
+触发逻辑一律未改——A11／A13／A14 仍不会进入目标协议分支，这正是 R1 的预期状态：
+门禁保证「没触发」不再被记成「完成」，真正的触发修正属 R2／R3／R4。
+
+### 12.1 落地清单
+
+| § | 内容 | 落点 |
+|---|---|---|
+| 6.1 | 收据 schema 与 attempt `jobResult` | 新增 `codex_upgrade_scenario_receipt.schema.json`；`codex_upgrade_capture_attempt.schema.json` 的 `jobResult` 增 `scenario_receipts`／`scenario_receipt_failures` |
+| 6.2 | 原始事实构建器与外层 finalizer | 新增 `build_scenario_facts.py`、`scenario_receipts.py`；finalizer 新增 `scenario` 子命令 |
+| 6.3 | `Job.required_scenario_receipts` 并入执行指纹 | `codex_upgrade.py` 的 `Job`、`_job_execution_sha256`、`_validate_scenario_manifest_shape`、`load_scenario_jobs` |
+| 6.4 | `run_job` 第四条件与 attempt 上下文 | 新增 `ScenarioReceiptContext`，沿 `_run_capture_attempt` → `_run_job_with_retry` → `run_job` 透传 |
+| 6.5 | finalizer 五处登记 | `RECEIPT_SUBCOMMAND_BY_SCHEMA`／`REPLAY_INPUT_NAMES`／`REPLAY_CANONICAL_FIELDS`／`build_parser`／`replay_receipt` 显式 `elif` |
+| 6.6 | 目标驱动路径错误传播与还原证明 | `run_official_relay_scenario.sh`：`realtime_status`／`exec_status`、`restore_auth_json` 幂等函数、`trap cleanup EXIT INT TERM` |
+| 6.7 | 抓包范围与 pcap 校验 | `-i lo` → `-i any`，新增 tcpdump 预检、`verify_pcap`（≤24 字节与不可解析均失败） |
+| 6.8 | 驱动原始事件日志 | `drive_codex_realtime.py` 新增 `--events-output`，不再丢弃 `thread/realtime/start` 返回值 |
+| 6.9 | 清单 kinds 对齐与双侧 trigger | 两份清单 A01／A15 对齐；三个目标场景新增 `side_triggers`；重算三处冻结摘要 |
+
+`producer` 复用既有 `codex-egress-receipt-producer/v1`，不另造一套，重放器按同一规则复算。
+收据落在 `<attempt>/evidence/receipts/scenarios/<job_id>/retry-<n>/`，补跑写独立目录，
+旧收据不参与新一轮判定。
+
+### 12.2 冻结摘要变更与审核
+
+对齐 A01／A15 的 `required_artifact_kinds` 会改变验收契约摘要。逐项复核结果：
+**25／17 分组不变**（`dual_wire=25`、`candidate_profile=17`），`validation_modes` 与
+`expected_check_ids` 无任何变化，`side_coverage` 只有 A01（`pcap+relay_binary` →
+`pcap+process_trace`）与 A15（`relay_binary+process_trace` → `process_trace`）两项按
+§10.9.3 定案变化。旧摘要经复算与冻结值逐字相同，证明对比基准准确。
+
+| 常量 | 旧值 | 新值 |
+|---|---|---|
+| `acceptance_contract.FROZEN_CONTRACT_SHA256` | `14e9e336…` | `1689ab30…` |
+| `candidate_rule_assertion.FROZEN_PROFILE_SHA256` | `b52c11ea…` | `78a0ec3f…` |
+| `candidate_test_trace.FROZEN_PROFILE_SHA256` | `b52c11ea…` | `78a0ec3f…` |
+
+### 12.3 验收证据
+
+`make test-capture-tools` 564 项通过（新增 40 项），`make check-egress-spec` 全绿。
+
+§8 的核心判据已复现：用 k36 的实际形态（子进程退出 0、`tls/relay.crt` 与 `relay/`
+存在且非空、无任何场景事实）重跑三个目标 job 的判定逻辑，
+`official-relay-realtime-webrtc`／`official-relay-oauth-refresh`／`official-relay-file-upload`
+**全部判 `failed`**，失败原因均为「未产出场景原始事实，目标协议分支未成立」。
+
+按升级计划 §11.0，在 ARM64（`ss.3ab.in`，`aarch64`／Python 3.12.3）复验：Python 套件
+564 项全过；容器内 `go build ./...` 成功，`internal/service`、`internal/repository`、
+`internal/pkg/httpclient` 三包 `go test` 的 `--- FAIL` 落盘计数为 0（不经管道判定，
+避免退出码被吞）。ARM64 结果不视为 Vircs 上线通过，本变更集也不触碰任何生产实例。
+
+### 12.4 R1 未覆盖、留给后继阶段的部分
+
+- A11 的 V3／`quicksilver=v2` 路径与 started／SDP 最终事件等待属 R2；
+- A13 等待 JWT 自然进入刷新窗口的采集策略属 R3；
+- A14 的 Apps 工具可见性与调用契约冻结属 R4。三者所需的采集侧观测文件
+  （`A11-realtime-events.json`、`A13-jwt-exp.json`、`A14-tool-call.json`、
+  `A14-upload-sequence.json`）契约已由构建器固定，缺失即失败关闭；
+- 受管工具身份已变化，按 §11.1 必须新建 k37 完整重采，k36 不迁移、不复用。
