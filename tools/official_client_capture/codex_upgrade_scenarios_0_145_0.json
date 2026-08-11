@@ -1214,8 +1214,7 @@
         "{capture_root}/runs/{campaign_id}-official-http-response-plain"
       ],
       "covers": [
-        "SPEC-BODY-002",
-        "SPEC-EP-005"
+        "SPEC-BODY-002"
       ],
       "required_scenario_receipts": [],
       "track": "main",

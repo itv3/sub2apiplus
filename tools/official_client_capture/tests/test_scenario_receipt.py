@@ -1037,6 +1037,29 @@ class ScenarioManifestContractTest(unittest.TestCase):
                 }
             )
 
+    def test_job_的_covers_必须被自身绑定场景证明(self) -> None:
+        """plan 的升级审计会拒绝「covers 的规则不在本 job 场景里」的 job。
+
+        新增 official-relay-http-response-plain 时就撞上过：它只绑 A04，却把
+        SPEC-EP-005（A03／A09）写进 covers，直到 plan 才报错。把同一条约束前移到
+        离线测试，改清单时立刻可见，不必等到远端建 Campaign。
+        """
+
+        scenarios_by_rule = {
+            rule["rule_id"]: set(rule["scenario_ids"])
+            for rule in self.expectations["rules"]
+        }
+        for job in self.scenarios["capture_jobs"]:
+            job_scenarios = set(job["scenario_ids"])
+            for rule_id in job["covers"]:
+                expected = scenarios_by_rule.get(rule_id)
+                if expected is None:
+                    continue
+                self.assertTrue(
+                    expected & job_scenarios,
+                    f"{job['id']} 声称覆盖 {rule_id}，但两者场景不相交",
+                )
+
     def test_R8_主线模型变量冻结为非_Lite_模型(self) -> None:
         """§10.11.1：主线固定 gpt-5.4，变量默认值不得再回落到 Lite 模型。
 
