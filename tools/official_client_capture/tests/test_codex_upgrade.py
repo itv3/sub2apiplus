@@ -1857,7 +1857,19 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertTrue(coordinates)
             self.assertEqual({version for _, version in coordinates}, {"0.146.0"})
 
-    def test_0147_draft_applies_wham_expectation_override(self) -> None:
+    def test_0147_没有期望覆盖时画像逐字不变(self) -> None:
+        """R9 复核后撤销了唯一一条 override，0.147 现在不应有任何期望变更。
+
+        原 override 把 `wham-get-paths` 的 `wham/usage` 改成 `wham/settings/user`，
+        依据是「0.147 用后者替代了前者」。这条判定已被双重证伪：0.147 的
+        `backend-client/src/client/rate_limit_resets.rs:83` 仍然构造 `{}/wham/usage`，
+        而 `settings/user` 在 `client.rs:640` 是另一个独立调用点；relay 面实测
+        A12（配额查询）发的正是 usage ＋ rate-limit-reset-credits，与 0.145 一致。
+
+        原判定来自 mitm 面证据，那个采集面恰好只捕到 `settings/user`——是证据面
+        选错，不是版本行为变化。
+        """
+
         base_path = (
             Path(__file__).resolve().parents[1]
             / "candidate_rule_expectations_0_145_0.json"
@@ -1867,10 +1879,20 @@ class CodexUpgradeTest(unittest.TestCase):
             profile,
             target_version="0.147.0",
         )
-        self.assertEqual(count, 1)
+        self.assertEqual(count, 0)
+        self.assertEqual(updated, profile)
+
+    def test_wham_get_paths_保持_0145_原期望(self) -> None:
+        """防回归：不得再把 usage 换成 settings/user。"""
+
+        base_path = (
+            Path(__file__).resolve().parents[1]
+            / "candidate_rule_expectations_0_145_0.json"
+        )
+        profile = json.loads(base_path.read_text(encoding="utf-8"))
         check = next(
             check
-            for rule in updated["rules"]
+            for rule in profile["rules"]
             if rule["rule_id"] == "SPEC-EP-019"
             for check in rule["checks"]
             if check["id"] == "wham-get-paths"
@@ -1878,18 +1900,22 @@ class CodexUpgradeTest(unittest.TestCase):
         self.assertEqual(
             check["assertion"]["value"],
             [
-                "/backend-api/wham/settings/user",
+                "/backend-api/wham/usage",
                 "/backend-api/wham/rate-limit-reset-credits",
             ],
         )
-        original = next(
-            check
+        # settings/user 属另一个调用点，不进 A12 的路径集合；画像别处已按
+        # not_equal 显式排除它，这里一并锁住，避免两端再次各说各话。
+        excluded = [
+            condition
             for rule in profile["rules"]
-            if rule["rule_id"] == "SPEC-EP-019"
-            for check in rule["checks"]
-            if check["id"] == "wham-get-paths"
-        )
-        self.assertEqual(original["assertion"]["value"][0], "/backend-api/wham/usage")
+            for check_item in rule["checks"]
+            for condition in check_item["select"].get("where", [])
+            if condition.get("value") == "/backend-api/wham/settings/user"
+        ]
+        self.assertTrue(excluded)
+        for condition in excluded:
+            self.assertEqual(condition["operator"], "not_equal")
 
     def test_classify_rejects_nested_baseline_version_after_top_level_update(
         self,

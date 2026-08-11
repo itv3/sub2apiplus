@@ -1,9 +1,9 @@
 # Codex CLI 0.145.0 → 0.147.0 Official Egress 升级计划（执行中）
 
 > 状态：Campaign `codex-0145-to-0147-20260811T070000Z-k41` 已达成 `official_sealed`；
-> **R8 双轨变更集已完成并冻结新的工具身份（98 项，`ac00085c…`），当前停在 R9 之前**。
+> **R8 双轨变更集已完成，k42 因 §10.11.4 的判定被证伪而在采集首个 job 时主动作废，
+> 当前身份为 97 项 `3b08f42d…`，下一步创建 k43 完整双轨重采**。
 > k36～k40 仅保留为历史诊断夹具，不迁移、不复用、不续跑；k41 不得续跑或追加证据。
-> 下一步是按新身份创建 Campaign k42 并完整双轨重采。
 > Active 仍为 0.145，0.147 尚未替换。
 > 创建日期：2026-08-07
 > 审阅基线：commit `abf236375f66aa096580092e646c4e33d37bb135`
@@ -724,7 +724,7 @@ artifact 级标签选，把 GET 一并选中），6 处补 `labels.ca_mode absen
 | 补采集样本 | 4 | `BODY-006/nonlite-*`×2（无 non_lite 的 POST responses）、`PROTO-001/h1-wire`（A01 只有 mitm 证据）、`EP-019/wham-get-headers`（同上） | `official-relay-http-response` 改为主线双绑：`conn001` 供 A01 的原始 H1 请求行，其余连接供 A04 的非 Lite POST；新增 `official-relay-wham-get` 用字节中继取 Wham GET 原始头序 |
 | 修采集脚本 | 2 | `EP-014/legacy-turn-state-slot`（`RELAY_INJECT_TURN_STATE` 注入失效）、`WS-002/default-swap-remove-order`（混入 runtime-metrics 的头） | 改用 `RELAY_INJECT_WS_TURN_STATE`，在 WS `response.metadata` 边界注入，让随后的真实 legacy compact 自然回送第三槽；新增 `official-relay-ws-default` 承担默认握手，runtime-metrics 改标 `variant=runtime_metrics` 不再冒充默认 |
 | 实现新算子 | 1 | `TLS-003`：§10.9.2 定案的「存在性子集」算子至今未实现 | `same_set_distinct_order` 改为按扩展集合分组后逐组核对 record／artifact／排列数，任一组同时达标即通过；非列表记录一律计入 `invalid_record_ids` 并失败关闭 |
-| 直接改期望 | 1 | `EP-019/wham-get-paths`：`wham/usage` → `wham/settings/user`，已源码核实 | 落在 `candidate_rule_expectation_overrides_0_147_0.json`，classify 时按 `before` 精确命中后应用；基线 0.145 画像不动 |
+| ~~直接改期望~~ | 1 | `EP-019/wham-get-paths`：`wham/usage` → `wham/settings/user` | **判定被证伪，已撤销**，见 §10.11.4 |
 
 **硬约束**：任一规则在其适用轨道上标 `blocked`，联合 classify 即为 `blocked` 状态，accept
 的 `classification_unblocked` 门禁不通过，流程**永远走不到 `ready`**。Lite-only 规则在
@@ -765,6 +765,49 @@ artifact 级标签选，把 GET 一并选中），6 处补 `labels.ca_mode absen
 
 四项均已补上防回归测试，其中「官方 job 想声明 Lite，就必须同时是 lite 轨道、固定
 `gpt-5.6-luna` 且产出模型条件收据」是一条通用不变量，覆盖全部官方标签声明。
+
+#### 10.11.4 `EP-019/wham-get-paths`：§10.10 第四类的判定被证伪
+
+k42 启动后、正式采集展开前，用上一轮留在 Vircs 的 R8 预检 relay 证据做交叉复核，
+发现 §10.10「第四类：0.147 真实行为变化」对本条的判定**是错的**，override 已撤销。
+
+**实测**（同一批 0.147 预检，按 relay 原始字节逐连接解析）：
+
+| 触发路径 | 观测到的 wham GET | 头序 |
+|---|---|---|
+| TUI 配额查询（`compact-tui`，即 `official-relay-wham-get`） | `wham/usage`、`wham/rate-limit-reset-credits` | `user-agent, authorization, chatgpt-account-id, accept, cookie, host` |
+| 普通 turn 启动（`ws-default`／`http-response`） | `wham/settings/user` | `user-agent, authorization, chatgpt-account-id, **cache-control**, accept, cookie, host` |
+
+**源码复核**：0.147 的 `backend-client/src/client/rate_limit_resets.rs:83` 仍然构造
+`{}/wham/usage`，`:93` 构造 `{}/wham/rate-limit-reset-credits`；而 `settings/user` 在
+`backend-client/src/client.rs:640`，是 git-attribution 用户设置查询的**另一个独立调用
+点**。两者并存，不是替代关系。
+
+**原判定错在哪**：§10.10 的观测来自 `official-wham-get` 的 `misc-http.jsonl`，那是
+**mitm 面**，其采集窗口恰好只捕到 `settings/user`。R8 给该条 selector 补了
+`labels.ca_mode absent`（排除 mitm 重构面）之后，实际选中的已经是 relay 面证据——
+而 relay 面发的正是 `usage`＋`rate-limit-reset-credits`，**与 0.145 原期望逐字一致**。
+
+也就是说，本条属于 §10.10 的**第二类（证据面／标签问题）**，R8 补 `ca_mode absent`
+时就已经把它修好了；再叠一层 override 反而会把一条本该通过的判据改成必然失败。
+画像别处早已用 `not_equal` 显式排除 `settings/user`（§10.11 的 17 处修正之一），
+两处口径本就该一致，是 override 让它们各说各话。
+
+**处置**：删除 `candidate_rule_expectation_overrides_0_147_0.json`，0.147 目前没有任何
+期望覆盖；补两条回归测试锁定「无 override 时画像逐字不变」与「`wham-get-paths` 保持
+0.145 原期望」。
+
+> **教训与 §10.11.1 同源**：判据失败要先查「条件是否真的成立」「证据是不是取自正确的
+> 采集面」，再查「是不是新版行为变了」。这次是**证据面**选错——mitm 面与 relay 面看到
+> 的是同一个客户端的不同请求子集，拿其中一面的缺失去论证「版本行为变化」并不成立。
+
+**同时暴露、留待 classify 定性的一项**：`EP-019/wham-get-headers` 的实测头序含
+`cookie`，而基线期望是 `[user-agent, authorization, chatgpt-account-id, accept, host]`。
+两版 `backend-client` 都装了 cloudflare cookie store（0.145 `client.rs:164`、0.147
+`client.rs:168`），因此这**不是**版本行为差异，更像基线画像当初没有真实 wire 证据、
+按源码推导写漏了 `cookie`。0.145 的 baseline evidence 里没有任何 wham 记录，无法离线
+对照。**不在 R9 前动这条期望**——它不影响 `seal`（selector 可达即可），留到 classify
+阶段按 §6.4 规则变更流程，用 k43 的真实证据定性。
 
 ## 11. 后继实施计划（k41 → 双轨重采 → k42）
 
@@ -837,8 +880,8 @@ ARM64 全部通过后，**不得直接把 ARM64 结果视为 Vircs 上线通过*
 | R5 P0 与身份冻结 | 在临时目录做可丢弃预检，运行全套工具测试，冻结源码／工具／场景／镜像摘要 | P0 报告、inventory、工具身份 receipt | 工作区干净；身份校验通过；不得触碰 Active/Previous |
 | R6 k41 官方重采 | **已完成**：k41 执行官方 `run`，逐 job 校验真实性 receipt 并执行 `seal` | k41 campaign、attempt、results、证据根、secret scan、seal receipt | 22/22 job 完成；三条 SNI check 均有官方证据；`official_sealed` 已达成 |
 | R7 classify | 复核 17 处 selector 修正，并拆分主线与 Lite 专项的适用规则 | 双轨 classification draft、selector 测试、模型条件记录 | **已完成**；通过 59→70、失败 23→12、selector 缺口全程 0 |
-| R8 双轨变更集 | 主线保持 `gpt-5.4`；新增 `gpt-5.6-luna` Lite 专项 job；补采样本、修脚本、实现 `TLS-003`、修正 `EP-019` 期望值，并更新场景／收据契约 | 变更集、测试、双轨场景清单、收据 schema、selector/profile 修正摘要 | **已完成**；§10.11.2 的 12 项与 §10.11.3 的 4 项全部处置；607 项测试通过、`check-egress-spec` 全绿、transition 875 项复算一致、`backend/` 零改动；工具身份冻结为 98 项 `ac00085c…` |
-| R9 k42 官方双轨重采（当前） | 创建新 Campaign，按双轨执行官方 `run`，逐 job 校验 receipt，再执行 `seal` | k42 campaign、attempt、results、双证据根、secret scan、seal receipt | 两条轨道的适用 job 全部成功；三条 SNI check 有官方证据；`official_sealed` 达成 |
+| R8 双轨变更集 | 主线保持 `gpt-5.4`；新增 `gpt-5.6-luna` Lite 专项 job；补采样本、修脚本、实现 `TLS-003`、修正 `EP-019` 期望值，并更新场景／收据契约 | 变更集、测试、双轨场景清单、收据 schema、selector/profile 修正摘要 | **已完成**；§10.11.2 的 12 项与 §10.11.3 的 4 项全部处置，§10.11.4 撤销一条被证伪的 override；608 项测试通过、`check-egress-spec` 全绿、`backend/` 零改动；工具身份 97 项 `3b08f42d…` |
+| R9 官方双轨重采（当前） | 创建新 Campaign，按双轨执行官方 `run`，逐 job 校验 receipt，再执行 `seal` | campaign、attempt、results、双证据根、secret scan、seal receipt | 两条轨道的适用 job 全部成功；三条 SNI check 有官方证据；`official_sealed` 达成 |
 | R10 后续升级门禁 | 重新 classify、建立 0.147 画像，完成 candidate、compare、accept 和 `ready` | profile/release/compare/accept 收据 | `blocked=0`、无未登记漂移、双版本隔离和全部 seal 通过 |
 
 ### 11.3 `SCN-REALITY-01` 收据最低字段
@@ -905,7 +948,9 @@ SNI、secret scan、环境恢复和 `seal` 均通过，才允许进入 R10。
 | k40 | 作废 | 采集与缺口修复均成功（缺口 0、`alpha/search` 采到），但 seal 的秘密扫描暴露工具缺陷（见下），修复即改工具身份 |
 | **k41** | **`official_sealed`** | 22／22 job `complete`；秘密扫描 850 文件／148 MB 零命中；环境五项全 `restored`、数据库 426 主键零缺失；**历史首次达成** |
 | **R7 classify** | 完成 | 主线固定 `gpt-5.4` 非 Lite；Lite-only 规则转入 `gpt-5.6-luna` 专项；17 处 select 修正后通过 59→70、失败 23→12、selector 缺口全程 0；剩 12 条见 §10.11.2 |
-| **R8 双轨变更集** | **完成** | §10.11.2 的 12 项与 §10.11.3 的 4 项一次改完；受管工具 96→98 项，身份 `ac00085c…`（连算两次一致）；607 项测试与 `check-egress-spec` 全绿 |
+| **R8 双轨变更集** | **完成** | §10.11.2 的 12 项与 §10.11.3 的 4 项一次改完；608 项测试与 `check-egress-spec` 全绿 |
+| k42 | **作废** | 采集首个 job 期间用预检 relay 证据交叉复核，发现 §10.10 第四类对 `EP-019/wham-get-paths` 的判定被源码与实测双重证伪；override 属受管文件，撤销即改身份，故在只跑了一个 job 时主动停止止损。停止后容器与宿主 hosts 均无劫持残留 |
+| **当前身份** | 已冻结 | 受管工具 97 项，`3b08f42d…`（连算两次一致）；下一步据此创建 k43 |
 
 k40 的死因单独记一笔：`relay_extract.shape_value` 把 >24 字符的串降成 `str:<len=N>`，
 而 `candidate_evidence_guard` 的 `json-secret-field` 白名单只认 `<redacted`／`<secret`，
@@ -919,12 +964,15 @@ Lite 专项而不改变 `gpt-5.4` 主线、补 `non_lite` 与 A01 relay 证据�
 变更收进目标版本 override，并合并 17 处 selector 修正。场景清单、`track`／模型字段和收据
 schema 同步更新，受管工具由 96 项增至 98 项、身份为 `ac00085c…`。
 
-**R9（下一步执行）**：按新身份创建 Campaign k42 并完整双轨重采。清单中的官方侧 job 由 19 个
-增至 26 个（R8 新增 7 个），其中 2 个是 Lite 专项。**不得在 k41 上续跑**——身份已变。
+**R9（执行中）**：按当前身份（97 项 `3b08f42d…`）创建 Campaign k43 并完整双轨重采。清单中的
+官方侧 job 由 19 个增至 26 个（R8 新增 7 个），其中 2 个是 Lite 专项。**不得在 k41／k42 上
+续跑**——身份已两次变化。
 执行前须复核 §11.0 的隔离要求：独立账号、独立 `CODEX_HOME`、独立证据目录，不触碰生产凭据、
 全局 `/etc/hosts`、生产 relay 或 Active/Previous。
 
-R9 完成后仍须用与 §10.10 相同的**全量 selector 扫描**复核，不能只看 job 是否 `complete`：
+R9 完成后仍须用与 §10.10 相同的**全量 selector 扫描**复核，不能只看 job 是否 `complete`。
+§10.11.4 正是这条纪律提前生效的结果——它是在 k42 的第一个 job 还在重试时，靠交叉核对
+预检 relay 证据发现的，因而只损失了一个 job 的采集量：
 
 1. §10.11.2 的 12 条判据是否真的从「失败／选不到」转为通过；
 2. 两个 Lite 专项 job 的 `/models` 原文是否实际证明 `use_responses_lite=true`——模型条件
