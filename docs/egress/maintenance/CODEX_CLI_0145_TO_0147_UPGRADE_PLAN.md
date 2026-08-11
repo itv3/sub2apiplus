@@ -1,12 +1,14 @@
 # Codex CLI 0.145.0 → 0.147.0 Official Egress 升级计划（执行中）
 
-> 状态：Campaign `codex-0145-to-0147-20260811T034436Z-k47` 于 2026-08-11 依次达成
-> **`official_sealed`** 与 **`profile_approved`**，官方取证与分类全部完成。
-> 当前 `next_command: capture-candidate`——**跨入服务部署域，须先按 §11.0 完成 ARM64
-> 服务侧验证，不得直接动 Vircs 正式实例**。
-> k34～k46 仅保留为历史诊断夹具，不迁移、不复用、不续跑（唯一例外见 §10.11.10 的
-> source 发现继承）；**k47 的 sealed 证据与已批准清单不可变，其间不得修改任何受管工具**。
-> 五轮作废的死因与由此固化的门禁见 §10.11.11。
+> 状态：Campaign `codex-0145-to-0147-20260811T070624Z-k48` 已依次达成 **`official_sealed`**
+> 与 **`profile_approved`**——官方取证与分类全部完成，28/28 job、九份收据、`UNREACHABLE`
+> 归零、目标画像 57/57 断言通过。
+> **当前卡在 R10-b 候选采集**：搬到 ARM64 后因 qemu 不支持抓包而无法进行（§10.11.14），
+> 但 k48 **未被污染**、官方成果完好，换到能抓包的机器即可 `resume` 接续。
+> 两条待决路径（Vircs 独立候选栈 vs 直接用生产实例）见 §10.11.14，**须人工决策**。
+> k34～k47 仅保留为历史诊断夹具，不迁移、不复用（唯一例外见 §10.11.10 的 source 发现
+> 继承）；**k48 的 sealed 证据与已批准清单不可变，其间不得修改任何受管工具**。
+> 历轮死因见 §10.11.11（判据／采集缺陷五轮）与 §10.11.13（k47 操作失误）。
 > Active 仍为 0.145，0.147 尚未替换。
 > 创建日期：2026-08-07
 > 审阅基线：commit `abf236375f66aa096580092e646c4e33d37bb135`
@@ -430,26 +432,26 @@ final-wire 可用，但不能替代 alpha 真实 service 链或 `server_response
 
 ## 10. 当前执行状态
 
-> 时间：2026-08-11。当前 Campaign `codex-0145-to-0147-20260811T034436Z-k47`，
-> campaign_id `codex-0_147_0-20260811T034439Z`，官方 attempt
-> `20260811T034557Z-05b06ad48567bba8`，状态 **`profile_approved`**，
-> `next_command: capture-candidate`。
+> 时间：2026-08-11。当前 Campaign `codex-0145-to-0147-20260811T070624Z-k48`，
+> campaign_id `codex-0_147_0-20260811T070629Z`，官方 attempt
+> `20260811T073229Z-89711293b69cae09`，状态 **`candidate_selection_required`**
+> （官方阶段已 `profile_approved`，候选侧首次尝试失败但未污染）。
 > **Active 仍为 0.145，0.147 尚未替换。**
 
 ### 10.1 按章节的真实进度
 
-**当前位置：§6.4 已完成，停在 §8 candidate 之前。** k47 是双轨采集下第一个走通的
-Campaign：官方 28／28 job 一次跑通、九份收据齐备、seal 前 selector 缺口归零，随后
-classify 以 `blocked=0` 达成 `profile_approved`。下一命令 `capture-candidate`
-**跨入服务部署域**，须先按 §11.0 完成 ARM64 验证，且不得直接动 Vircs 正式实例。
+**当前位置：§6.4 已完成，卡在 §8 candidate。** k47 首次走通双轨官方采集，但因采集期间
+改动环境被判污染而作废（§10.11.13）；k48 重走后同样达成 `official_sealed` ＋
+`profile_approved`。候选采集搬到 ARM64 后受阻于 qemu 无法抓包（§10.11.14），k48 未被污染、
+可 `resume` 接续，但**必须先在两条路径间人工决策**。
 
 | 章节 | 状态 | 依据 |
 |---|---|---|
 | §5 DOC-PRE 与 P0 | 完成 | 不依赖 Campaign，结论长期有效 |
-| §6.1～6.3 Campaign／官方取证／seal | **完成** | k47 官方采集 28／28 job 全 `complete`；6 份模型条件收据（主线 3×`gpt-5.4`／非 Lite，专项 3×`gpt-5.6-luna`／Lite）＋ 3 份场景收据；秘密扫描 986 文件／163 MB 零命中；环境五项全 `restored`、数据库 426 主键零缺失；`official_sealed` 达成 |
-| §6.4 classify | **完成** | 42 条规则 41 `inherit`＋1 `change`；2808 条发现 2604 `change`＋204 `condition_change`；`unclassified_count=0`、`blocked=0`；目标画像 57 PASS／0 FAIL／0 UNREACHABLE；`profile_approved` 达成，详见 §10.11.10 |
-| §7 建立 0.147 画像 | **完成** | `profile_digest=0d86e033…`，与跨轮基准逐字一致（第七次独立复算）；五份清单已批准封存 |
-| §8 Candidate／比较／`ready` | **当前** | `next_command: capture-candidate`；前置见 §11.0 |
+| §6.1～6.3 Campaign／官方取证／seal | **完成** | k48 官方采集 28／28 job 全 `complete`；6 份模型条件收据（主线 3×`gpt-5.4`／非 Lite，专项 3×`gpt-5.6-luna`／Lite）＋ 3 份场景收据；秘密扫描 939 文件零命中；环境五项全 `restored`；`official_sealed` 达成。A11 首轮＋首次补跑均遇上游 WS 重置，第二次 `resume` 成立 |
+| §6.4 classify | **完成** | k48：42 条规则 41 `inherit`＋1 `change`；2802 条发现 2604 `change`＋198 `condition_change`；`blocked=0`；目标画像在 k48 自身证据上 **57 PASS／0 FAIL／0 UNREACHABLE**；`profile_approved` 达成。方法与四处修正见 §10.11.10 |
+| §7 建立 0.147 画像 | **完成** | `profile_digest=0d86e033…`，与跨轮基准逐字一致（k47／k48 分别复算，累计第八次）；五份清单已批准封存 |
+| §8 Candidate／比较／`ready` | **受阻** | 候选采集需要能抓包的 amd64 机器；ARM64 路线已证伪（§10.11.14）。两条路径待决 |
 | §9 生产启用与回滚 | 未开始 | |
 
 k34 曾到达 `compared`，但 ACC-01～07 改变了受管工具身份，k34 已作废并停在 `compared`，
@@ -1076,13 +1078,17 @@ seal 被拒。k41 之所以能过，是它的 bundle 当时被手工改成过 06
 
 期间受管工具测试由 601 增至 617 项，新增的 16 条全部来自这六轮的真实踩坑。
 
-#### 10.11.12 R10-b 起步：候选采集迁至 ARM64
+#### 10.11.12 R10-b 尝试把候选采集迁至 ARM64（**结论已被推翻，见 §10.11.14**）
 
-**判定依据**：`run_candidate_core_capture.sh`、`run_candidate_aux_capture.sh`、
+> ⚠ **本节的结论是错的**：候选采集**不能**在 ARM64 完成。判定时只核对了「是否依赖 Codex
+> CLI」，漏了「capture 容器镜像被 campaign 冻结为 amd64」以及「qemu 用户态模拟不支持抓包」
+> 这两条。完整推翻依据见 §10.11.14。本节保留为审核记录，其中的 campaign 可迁移性、账号
+> 坐标对齐与候选镜像构建三项仍然有效。
+
+**当时的判定依据**：`run_candidate_core_capture.sh`、`run_candidate_aux_capture.sh`、
 `run_h1_wire_probe.sh`、`run_images_wire_probe.sh` 全部不引用 Codex CLI 二进制——候选侧
 客户端是 `drive_candidate_gateway_ws.py`，配 `upstream_byte_relay.py` 做合成上游。
-Codex CLI（x86_64）只在官方侧用到，那部分已在 Vircs 完成并 sealed。因此候选采集可以整体
-放到 ARM64 测试环境，Vircs 的生产服务完全不必参与。
+Codex CLI（x86_64）只在官方侧用到。据此**误判**候选采集可以整体放到 ARM64。
 
 **campaign 可迁移**：`_verify_plan_identity` 校验的是 `target_source` 目录树摘要、
 `target_package` 包摘要与工具身份摘要，**不绑定 campaign 目录路径**。把以下资产按原绝对
@@ -1109,6 +1115,65 @@ DeviceCheck，改用受四元组约束的合成 provider）。候选源码树用
 `stage-profile` 产出的 staged catalog 覆盖到
 `backend/internal/officialegress/catalogdata/`——覆盖后 `profiles/` 同时含 `0.145.0` 与
 `0.147.0`，`release-catalog.json` 的 `source` 指向 k47 的 classification 摘要。
+
+#### 10.11.13 k47 作废：采集运行期间改动环境
+
+k47 的候选采集被判 `environment_contaminated` 并封锁整个 Campaign，直接原因是**在候选
+采集正在运行时重建了 `capture-cli-0147` 容器**（为把挂载的 ARM64 `docker` 二进制换成
+amd64 版）。收据 finalizer 如实报出：
+
+```
+container_state_restored 恢复验证失败：环境未恢复：before 与 after 字节不一致
+```
+
+采集脚本在开始前后各做一次容器状态快照并要求逐字一致，中途换容器必然触发。门禁是按设计
+工作的——**问题在操作：要改环境，必须先停采集**。
+
+封锁后 `_reject_contaminated_campaign` 只允许只读 `status`，要求人工恢复后新建 Campaign。
+k47 的 `official_sealed` 与 `profile_approved` 收据本身仍然有效，但走不到 candidate，
+故整轮作废，改建 k48。
+
+> 与 §10.11.11 那五轮不同：那五轮是**判据／采集设计**的缺陷，每次都换来一条固化的门禁；
+> 这一轮是**操作失误**，没有产生新的不变量，只应作为纪律记录：采集期间环境冻结。
+
+#### 10.11.14 候选采集不能在 ARM64 完成：qemu 不支持抓包
+
+k48 官方阶段在 Vircs 顺利完成（`official_sealed` ＋ `profile_approved`），候选采集搬到
+ARM64 后 6 个 job 立即失败于同一点：
+
+```
+tcpdump: can't get TPACKET_V3 header len on packet socket: Operation not supported
+tcpdump: eth0: SIOCETHTOOL(ETHTOOL_GET_TS_INFO) ioctl failed: Inappropriate ioctl for device
+```
+
+**根因**：campaign 在 `plan` 时把 `runtime_image` 冻结成 amd64 的
+`oauth-egress-capture-capture-cli@sha256:3438c4e…`，ARM64 上只能靠 qemu 用户态模拟运行。
+qemu 能跑普通程序（实测 amd64 的 Codex CLI 在 ARM64 上 0.6 秒返回 `codex-cli 0.147.0`），
+但**不转译网络相关的 ioctl**，`-i any`／`-i eth0`／`-i lo` 全部失败。而候选采集的 direct
+面必须产出 pcap——`SPEC-TLS-*` 的 ClientHello 证据只能从抓包得到。
+
+**为什么不能换 arm64 版 capture 镜像**：官方与候选**共用同一个 campaign、同一个
+`runtime_image`**。官方采集必须 amd64（Codex CLI 只有 x86_64 且只在 Vircs），因此该镜像
+只能是 amd64，候选采集也就被绑定在 amd64 机器上。**一个 campaign 装不下两个架构**——这是
+工具设计的结构性约束，不是配置能绕开的。
+
+**k48 未被污染**：本次失败的 attempt `restoration_error` 为 `null`、无封锁标记、hosts 无
+残留、账号与服务状态均已恢复。Campaign 状态为 `candidate_selection_required`，官方阶段的
+成果完好，**只要换到能抓包的机器就可 `resume --rerun-failed` 接着跑**。
+
+**两条可行路径**（须人工决策，因为都涉及生产侧取舍）：
+
+| 路径 | 做法 | 生产影响 | 代价 |
+|---|---|---|---|
+| A | Vircs 上另起独立候选栈（独立容器名／端口／数据卷），**新建 campaign** 指向它 | 零 | 官方采集重跑一轮（约 1 小时） |
+| B | 沿用 k48，候选采集直接用 Vircs 的生产 `sub2apiplus` | 约 15 分钟：容器重建 ×2，其间 `synthetic-only` 模式 | 无需重采 |
+
+路径 A 需要新建 campaign，是因为候选侧的容器坐标（`service_container` 等）同样在 `plan`
+时冻结、`capture-candidate` 无参数可覆盖——与 §10.11.12 记录的账号坐标是同一类约束。
+
+> ARM64 侧已就绪但暂时用不上的资产：qemu binfmt、amd64 capture 容器（含 amd64 `docker`
+> CLI）、账号 90 与占位账号 50、候选镜像、跑在 0.147 画像上的候选服务。若改走路径 A，
+> 这些可整体迁到 Vircs 的独立候选栈复用。
 
 ## 11. 后继实施计划（R0～R10）
 
@@ -1146,10 +1211,11 @@ ARM64 全部通过后，**不得直接把 ARM64 结果视为 Vircs 上线通过*
 
 - 当前冻结的官方 Codex CLI 资产是 Linux `x86_64`，正式官方采集仍须在 Ubuntu 24.04 / x86_64
   环境完成；ARM64 Sub2API 验证不能替代官方 CLI 采集验证；
-- **但候选侧采集不受此约束**：`run_candidate_*` 全套脚本都不引用 Codex CLI 二进制，客户端是
-  `drive_candidate_gateway_ws.py`（Python 实现的网关 WebSocket 驱动）配
-  `upstream_byte_relay.py` 合成上游。因此候选采集可以在 ARM64 完成，官方采集留在 Vircs
-  ——这正是两条轨道天然的分界；
+- **候选采集同样被绑定在 amd64**：虽然 `run_candidate_*` 全套脚本都不引用 Codex CLI 二进制
+  （客户端是 `drive_candidate_gateway_ws.py` 配 `upstream_byte_relay.py` 合成上游），但它仍
+  必须在 campaign 冻结的 amd64 capture 容器内抓包，而 qemu 用户态模拟不支持 packet socket
+  ——ARM64 路线已实测证伪，见 §10.11.14。**官方与候选共用一个 `runtime_image`，一个 campaign
+  装不下两个架构**；
 - 如果 Vircs 实际为 `aarch64`，ARM64 验证是服务更新的必要前置，但仍需在 Vircs 做最终 canary；
 - 如果 Vircs 实际为 `x86_64`，ARM64 验证属于额外兼容性验证，不能替代 Vircs x86_64 canary。
 
@@ -1271,9 +1337,10 @@ TLS／代理／超时、并发与可回滚性。
 | **R7 classify** | 完成 | 主线固定 `gpt-5.4` 非 Lite；Lite-only 规则转入 `gpt-5.6-luna` 专项；17 处 select 修正后通过 59→70、失败 23→12、selector 缺口全程 0；剩 12 条见 §10.11.2 |
 | **R8 双轨变更集** | **完成** | §10.11.2 的 12 项与 §10.11.3 的 4 项一次改完；608 项测试与 `check-egress-spec` 全绿 |
 | k42～k46 | 全部**作废** | 五轮各自暴露一类缺陷并固化为门禁，逐轮死因与不变量见 §10.11.11 |
-| **R9 / k47** | **`official_sealed`** | 28/28 一次跑通、九份收据齐备、`UNREACHABLE` 归零、秘密扫描 986 文件／163 MB 零命中（§10.11.9） |
-| **R10 classify** | **`profile_approved`** | 42 条规则 41 `inherit`＋1 `change`；2808 条发现零 `blocked`；目标画像 57 PASS／0 FAIL／0 UNREACHABLE；画像 digest 与跨轮基准逐字一致（§10.11.10） |
-| **R10 candidate 起** | **当前** | 跨入服务部署域，前置见 §11.0；工具身份锁定在 97 项 `cacf51be…` |
+| k47 | **作废** | 官方阶段达成 `official_sealed` ＋ `profile_approved`，但候选采集期间重建 capture 容器致环境校验失败、Campaign 被封锁（§10.11.13）。操作失误，非设计缺陷 |
+| **R9 / k48** | **`official_sealed`** | 28/28 job、九份收据齐备、`UNREACHABLE` 归零、秘密扫描 939 文件零命中；A11 经两次 `resume` 成立 |
+| **R10-a classify** | **`profile_approved`** | 42 条规则 41 `inherit`＋1 `change`；2802 条发现零 `blocked`；目标画像在 k48 自身证据上 57 PASS／0 FAIL／0 UNREACHABLE；画像 digest 与跨轮基准逐字一致 |
+| **R10-b candidate** | **受阻，待决策** | ARM64 路线证伪（qemu 无法抓包，§10.11.14）；k48 未污染可 `resume`。两条路径见 §10.11.14 |
 
 k40 的死因单独记一笔：`relay_extract.shape_value` 把 >24 字符的串降成 `str:<len=N>`，
 而 `candidate_evidence_guard` 的 `json-secret-field` 白名单只认 `<redacted`／`<secret`，
