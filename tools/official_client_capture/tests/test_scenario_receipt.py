@@ -1096,6 +1096,46 @@ class ScenarioManifestContractTest(unittest.TestCase):
                     f"{job['id']} 声称覆盖 {rule_id}，但两者场景不相交",
                 )
 
+    def test_目标型_job_必须声明必现请求(self) -> None:
+        """"跑完了但没触发"必须失败关闭，不能靠别的门禁碰巧挡住。
+
+        此前这件事没有任何显式检查，只是碰巧被模型条件收据挡住——收据要从 HTTP
+        POST 请求体取 model，目标请求没发出时它自然报错。给收据补上 WS 帧路径后
+        这个隐含门禁就消失了：k46 的 lite compact 一个 compact 请求都没发，job 却
+        是 complete，直到 seal 前扫描才发现 EP-014／EP-020 不可达。
+
+        收据的语义是「模型条件成立」，不是「目标分支已触发」，两件事必须各自显式。
+        """
+
+        expected = {
+            "official-relay-legacy-compact-default": (
+                "POST", "/backend-api/codex/responses/compact"),
+            "official-lite-legacy-compact-default": (
+                "POST", "/backend-api/codex/responses/compact"),
+            "official-relay-legacy-compact-beta": (
+                "POST", "/backend-api/codex/responses/compact"),
+            "official-relay-turnstate-compact": (
+                "POST", "/backend-api/codex/responses/compact"),
+            "official-relay-http-response": ("POST", "/backend-api/codex/responses"),
+            "official-lite-http-response": ("POST", "/backend-api/codex/responses"),
+            "official-relay-http-response-plain": (
+                "POST", "/backend-api/codex/responses"),
+            "official-relay-wham-get": ("GET", "/backend-api/wham/usage"),
+        }
+        by_id = {job["id"]: job for job in self.scenarios["capture_jobs"]}
+        for job_id, (method, path) in expected.items():
+            environment = by_id[job_id]["steps"][0]["environment"]
+            self.assertEqual(environment.get("REQUIRE_REQUEST_METHOD"), method, job_id)
+            self.assertEqual(environment.get("REQUIRE_REQUEST_PATH"), path, job_id)
+
+    def test_Lite_compact_触发阈值低于主线(self) -> None:
+        """Lite 轨道的 auto-compact 触发不如主线稳，k46 整轮一次都没触发。"""
+
+        by_id = {job["id"]: job for job in self.scenarios["capture_jobs"]}
+        lite = by_id["official-lite-legacy-compact-default"]["steps"][0]["environment"]
+        self.assertIn("COMPACT_TOKEN_LIMIT", lite)
+        self.assertLess(int(lite["COMPACT_TOKEN_LIMIT"]), 4000)
+
     def test_官方_job_不得靠工具默认值决定模型(self) -> None:
         """模型坐标必须由清单显式给出，不能落到某个工具的 default。
 
@@ -1244,6 +1284,18 @@ class OfficialCaptureScriptTest(unittest.TestCase):
         """§10.11.1：默认值是没传 MODEL 时的权威坐标，不能落回 Lite 模型。"""
 
         self.assertIn("model=${MODEL:-gpt-5.4}", self.source)
+
+    def test_采集脚本对目标请求失败关闭(self) -> None:
+        """声明了 REQUIRE_REQUEST_PATH 就必须真的校验，且缺失时非零退出。"""
+
+        self.assertIn("REQUIRE_REQUEST_PATH", self.source)
+        self.assertIn("未发出目标请求", self.source)
+        # 校验必须发生在中继写出 relay.json 之后——早于它就没有字节可读。
+        self.assertLess(
+            self.source.index("中继未写出 relay.json"),
+            self.source.index("REQUIRE_REQUEST_PATH:-"),
+        )
+        self.assertIn("compact_token_limit=${COMPACT_TOKEN_LIMIT:-4000}", self.source)
 
     def test_R8_h1_探针清单覆盖两条轨道且_Lite_标志与上游一致(self) -> None:
         """探针是受控上游，模型元数据由它权威给出，写错即等于伪造 Lite 条件。

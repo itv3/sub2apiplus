@@ -1161,7 +1161,9 @@
             "SCENARIO_JOB_ID": "official-relay-http-response",
             "REQUIRE_MODEL_CONDITION_RECEIPT": "1",
             "MODEL_TRACK": "main",
-            "EXPECT_USE_RESPONSES_LITE": "false"
+            "EXPECT_USE_RESPONSES_LITE": "false",
+            "REQUIRE_REQUEST_METHOD": "POST",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses"
           },
           "timeout_seconds": 1800
         }
@@ -1209,7 +1211,9 @@
             "SCENARIO_JOB_ID": "official-relay-http-response-plain",
             "REQUIRE_MODEL_CONDITION_RECEIPT": "1",
             "MODEL_TRACK": "main",
-            "EXPECT_USE_RESPONSES_LITE": "false"
+            "EXPECT_USE_RESPONSES_LITE": "false",
+            "REQUIRE_REQUEST_METHOD": "POST",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses"
           },
           "timeout_seconds": 1800
         }
@@ -1254,7 +1258,9 @@
             "SCENARIO_JOB_ID": "official-lite-http-response",
             "REQUIRE_MODEL_CONDITION_RECEIPT": "1",
             "MODEL_TRACK": "lite",
-            "EXPECT_USE_RESPONSES_LITE": "true"
+            "EXPECT_USE_RESPONSES_LITE": "true",
+            "REQUIRE_REQUEST_METHOD": "POST",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses"
           },
           "timeout_seconds": 1800
         }
@@ -1342,7 +1348,9 @@
             "MODEL": "{model}",
             "RUN_ID": "{campaign_id}-official-turnstate-compact",
             "SCENARIO": "turnstate-compact",
-            "RELAY_INJECT_WS_TURN_STATE": "upgrade-turn-state"
+            "RELAY_INJECT_WS_TURN_STATE": "upgrade-turn-state",
+            "REQUIRE_REQUEST_METHOD": "POST",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses/compact"
           },
           "timeout_seconds": 1800
         }
@@ -1383,7 +1391,9 @@
             "SCENARIO_JOB_ID": "official-relay-legacy-compact-default",
             "REQUIRE_MODEL_CONDITION_RECEIPT": "1",
             "MODEL_TRACK": "main",
-            "EXPECT_USE_RESPONSES_LITE": "false"
+            "EXPECT_USE_RESPONSES_LITE": "false",
+            "REQUIRE_REQUEST_METHOD": "POST",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses/compact"
           },
           "timeout_seconds": 1800
         }
@@ -1429,7 +1439,10 @@
             "SCENARIO_JOB_ID": "official-lite-legacy-compact-default",
             "REQUIRE_MODEL_CONDITION_RECEIPT": "1",
             "MODEL_TRACK": "lite",
-            "EXPECT_USE_RESPONSES_LITE": "true"
+            "EXPECT_USE_RESPONSES_LITE": "true",
+            "REQUIRE_REQUEST_METHOD": "POST",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses/compact",
+            "COMPACT_TOKEN_LIMIT": "2000"
           },
           "timeout_seconds": 1800
         }
@@ -1522,7 +1535,9 @@
             "CODEX_BIN": "{relay_codex_bin}",
             "MODEL": "{model}",
             "RUN_ID": "{campaign_id}-official-legacy-compact-beta",
-            "SCENARIO": "legacy-compact-beta"
+            "SCENARIO": "legacy-compact-beta",
+            "REQUIRE_REQUEST_METHOD": "POST",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses/compact"
           },
           "timeout_seconds": 1800
         }
@@ -2066,7 +2081,9 @@
             "CODEX_BIN": "{relay_codex_bin}",
             "MODEL": "{model}",
             "RUN_ID": "{campaign_id}-official-wham-wire",
-            "SCENARIO": "compact-tui"
+            "SCENARIO": "compact-tui",
+            "REQUIRE_REQUEST_METHOD": "GET",
+            "REQUIRE_REQUEST_PATH": "/backend-api/wham/usage"
           },
           "timeout_seconds": 1800
         }

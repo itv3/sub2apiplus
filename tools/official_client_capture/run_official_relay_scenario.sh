@@ -76,6 +76,15 @@ if [[ ! $UPSTREAM_CAPACITY_RETRY_LIMIT =~ ^[0-9]+$ || ! $UPSTREAM_CAPACITY_RETRY
   exit 2
 fi
 
+# legacy compact 靠上下文越过该门限自动触发。Lite 轨道的触发不如主线稳——k46
+# 整轮一次都没触发，job 却因收据仍能从 WS 帧取到模型而判 complete，直到 seal 前
+# 扫描才发现 EP-014/EP-020 不可达。调用方可据轨道下调阈值提高确定性。
+compact_token_limit=${COMPACT_TOKEN_LIMIT:-4000}
+if [[ ! $compact_token_limit =~ ^[0-9]+$ ]]; then
+  echo "COMPACT_TOKEN_LIMIT 必须是非负整数。" >&2
+  exit 2
+fi
+
 require_model_receipt=${REQUIRE_MODEL_CONDITION_RECEIPT:-0}
 model_track=${MODEL_TRACK:-}
 expect_lite=${EXPECT_USE_RESPONSES_LITE:-}
@@ -558,7 +567,7 @@ case "$scenario" in
     # 先由模型产生工具调用，再在同一 turn 内超过自动压缩阈值；关闭 V2 后会走
     # legacy /responses/compact。配合中继注入 turn-state，直接验证 compact 回送头。
     prompt='请用 shell 工具执行一条命令：echo turnstate-compact-probe。执行后只回复 TOOL-OK。'
-    extra_args='--disable remote_compaction_v2 -c model_auto_compact_token_limit=4000' ;;
+    extra_args="--disable remote_compaction_v2 -c model_auto_compact_token_limit=$compact_token_limit" ;;
   legacy-compact-default)
     # SPEC-EP-014 legacy-default-headers／SPEC-EP-020 legacy-observed-subset 的
     # 默认样本：与 turnstate-compact 同样走 legacy /responses/compact，但**不**由
@@ -567,7 +576,7 @@ case "$scenario" in
     # x-codex-beta-features，自然落到 x-codex-window-id——这正是判据要的默认线序。
     # 无任何干预，属自然基线。调用方必须不设 RELAY_INJECT_TURN_STATE。
     prompt='请用 shell 工具执行一条命令：echo legacy-compact-default-probe。执行后只回复 TOOL-OK。'
-    extra_args='--disable remote_compaction_v2 -c model_auto_compact_token_limit=4000' ;;
+    extra_args="--disable remote_compaction_v2 -c model_auto_compact_token_limit=$compact_token_limit" ;;
   ws-optional-missing)
     # SPEC-WS-002 optional-missing-covered 要"至少保留一个缺少可选头后的独立扰动
     # 样本"（断言只是 count_at_least=1）。
@@ -603,7 +612,7 @@ case "$scenario" in
     # permission_profile.network_sandbox_policy().is_enabled() 才真正启用代理；
     # 而 beta 头只看 features.enabled()。调用方必须不设 RELAY_INJECT_TURN_STATE。
     prompt='请用 shell 工具执行一条命令：echo legacy-compact-beta-probe。执行后只回复 TOOL-OK。'
-    extra_args='--disable remote_compaction_v2 --enable network_proxy -c model_auto_compact_token_limit=4000' ;;
+    extra_args="--disable remote_compaction_v2 --enable network_proxy -c model_auto_compact_token_limit=$compact_token_limit" ;;
   http-response-plain)
     # SPEC-BODY-002 要证明「Responses 尊重压缩开关」，因此需要一个**真正关闭压缩**
     # 的负样本：判据 responses-plain 断言选中的请求不带 content-encoding。
@@ -1121,6 +1130,62 @@ stop_relay
 if ! docker exec "$capture_container" test -s "/capture/runs/$run_id/relay/relay.json"; then
   echo "❌ 中继未写出 relay.json，样本不完整。" >&2
   exit 1
+fi
+
+# 目标请求必须真的发出，否则这一轮采的是"跑完了但没触发"的空样本。
+#
+# 此前这件事没有任何显式检查，只是**碰巧**被模型条件收据挡住——收据要从 HTTP
+# POST /responses(/compact) 的请求体里取 model，目标请求没发出时它自然报错，job
+# 因此判 failed（k43 的 lite compact 正是这样暴露的）。后来给收据补上 WS 帧路径，
+# WS 会话里取得到模型，这个隐含门禁就消失了：k46 的 lite compact 一个 compact
+# 请求都没发，job 却是 complete，直到 seal 前的 selector 扫描才发现
+# EP-014/legacy-default-headers 与 EP-020 不可达。
+#
+# 收据的语义是"模型条件成立"，不是"目标分支已触发"。两件事必须各自显式表达。
+if [[ -n ${REQUIRE_REQUEST_PATH:-} ]]; then
+  echo "=== 目标请求校验（$REQUIRE_REQUEST_METHOD ${REQUIRE_REQUEST_PATH}）==="
+  if ! docker exec "$capture_container" python3 - \
+      "/capture/runs/$run_id/relay" \
+      "${REQUIRE_REQUEST_METHOD:-POST}" \
+      "$REQUIRE_REQUEST_PATH" <<'PY'
+import sys
+from pathlib import Path
+
+relay, method, target = Path(sys.argv[1]), sys.argv[2], sys.argv[3]
+found = 0
+for path in sorted(relay.glob("conn*.client_to_upstream.bin")):
+    data = path.read_bytes()
+    offset = 0
+    while offset < len(data):
+        end = data.find(b"\r\n\r\n", offset)
+        if end < 0:
+            break
+        head = data[offset:end].decode("latin-1", "replace")
+        lines = head.split("\r\n")
+        if not lines or " HTTP/1." not in lines[0]:
+            break
+        parts = lines[0].split(" ")
+        if len(parts) >= 2 and parts[0] == method and parts[1].split("?", 1)[0] == target:
+            found += 1
+        headers = {}
+        for line in lines[1:]:
+            if ":" in line:
+                name, _, value = line.partition(":")
+                headers.setdefault(name.strip().lower(), value.strip())
+        if headers.get("transfer-encoding", "").lower() == "chunked":
+            break
+        try:
+            body = int(headers.get("content-length", "0"))
+        except ValueError:
+            body = 0
+        offset = end + 4 + body
+print(f"命中 {found} 条 {method} {target}")
+sys.exit(0 if found else 1)
+PY
+  then
+    echo "❌ 本轮未发出目标请求 ${REQUIRE_REQUEST_METHOD:-POST} ${REQUIRE_REQUEST_PATH}，样本不成立。" >&2
+    exit 1
+  fi
 fi
 
 # tcpdump 此前只在 EXIT 陷阱里停，导致后置处理全都发生在它仍在运行时，pcap
