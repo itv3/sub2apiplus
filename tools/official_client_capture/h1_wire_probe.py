@@ -40,8 +40,16 @@ SSE_RESPONSE = (
 
 # 观测官方 CLI 时，模型清单必须回一份能解析的载荷，否则 CLI 在清单阶段就退出，
 # 后续的 /responses 请求根本不会发出，也就采集不到真正要对比的 POST 形态。
+#
+# 两条轨道的模型都必须在清单里有条目，且 use_responses_lite 必须与真实上游元数据
+# 一致（k41 的 /models 原文：gpt-5.4=false、gpt-5.6-*=true）。缺条目时 CLI 查不到
+# 模型元数据会落到默认值，采集条件就与标签声明脱节——本探针是受控上游，元数据
+# 由这里权威给出，写错即等于伪造 Lite 条件。
 MODELS_BODY = (
-    b'{"models":[{"slug":"gpt-5.6-luna","display_name":"GPT-5.6 Luna",'
+    b'{"models":[{"slug":"gpt-5.4","display_name":"GPT-5.4",'
+    b'"visibility":"list","use_responses_lite":false,'
+    b'"supports_parallel_tool_calls":true},'
+    b'{"slug":"gpt-5.6-luna","display_name":"GPT-5.6 Luna",'
     b'"visibility":"list","use_responses_lite":true,'
     b'"supports_parallel_tool_calls":true}]}'
 )

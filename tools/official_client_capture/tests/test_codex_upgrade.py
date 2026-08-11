@@ -29,6 +29,18 @@ from tools.official_client_capture.codex_upgrade import Job
 
 
 class CodexUpgradeTest(unittest.TestCase):
+    def test_0145_to_0147_main_model_default_is_gpt_5_4(self) -> None:
+        parser = codex_upgrade._build_parser()
+        plan_parser = next(
+            action.choices["plan"]
+            for action in parser._actions
+            if getattr(action, "choices", None) and "plan" in action.choices
+        )
+        model_action = next(
+            action for action in plan_parser._actions if action.dest == "model"
+        )
+        self.assertEqual(model_action.default, "gpt-5.4")
+
     def test_checked_in_baseline_scenario_bindings_match_sources(self) -> None:
         tool_root = Path(__file__).resolve().parents[1]
         repo_root = tool_root.parents[1]
@@ -1004,6 +1016,14 @@ class CodexUpgradeTest(unittest.TestCase):
             "empty_evidence_patterns": [],
             "covers": [],
             "scenario_ids": ["A01"],
+            "scenario_receipts": [],
+            "scenario_receipt_failures": [],
+            "track": "main",
+            "model_id": "gpt-5.6-luna",
+            "expected_use_responses_lite": False,
+            "required_model_receipt": False,
+            "model_condition_receipt": None,
+            "model_condition_receipt_failure": None,
         }
         binary_verification: dict[str, object] | None = None
         if phase == "official":
@@ -1836,6 +1856,40 @@ class CodexUpgradeTest(unittest.TestCase):
             )
             self.assertTrue(coordinates)
             self.assertEqual({version for _, version in coordinates}, {"0.146.0"})
+
+    def test_0147_draft_applies_wham_expectation_override(self) -> None:
+        base_path = (
+            Path(__file__).resolve().parents[1]
+            / "candidate_rule_expectations_0_145_0.json"
+        )
+        profile = json.loads(base_path.read_text(encoding="utf-8"))
+        updated, count = codex_upgrade._apply_assertion_profile_overrides(
+            profile,
+            target_version="0.147.0",
+        )
+        self.assertEqual(count, 1)
+        check = next(
+            check
+            for rule in updated["rules"]
+            if rule["rule_id"] == "SPEC-EP-019"
+            for check in rule["checks"]
+            if check["id"] == "wham-get-paths"
+        )
+        self.assertEqual(
+            check["assertion"]["value"],
+            [
+                "/backend-api/wham/settings/user",
+                "/backend-api/wham/rate-limit-reset-credits",
+            ],
+        )
+        original = next(
+            check
+            for rule in profile["rules"]
+            if rule["rule_id"] == "SPEC-EP-019"
+            for check in rule["checks"]
+            if check["id"] == "wham-get-paths"
+        )
+        self.assertEqual(original["assertion"]["value"][0], "/backend-api/wham/usage")
 
     def test_classify_rejects_nested_baseline_version_after_top_level_update(
         self,

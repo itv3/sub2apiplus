@@ -47,10 +47,15 @@ CHECKER_RELATIVE_PATH = (
 DEFAULT_PROFILE_RELATIVE_PATH = (
     "tools/official_client_capture/candidate_rule_expectations_0_145_0.json"
 )
-# 2026-08-10（SCN-REALITY-01 §3.1）：随 A01／A15 的 required_artifact_kinds 与
-# codex_upgrade_scenarios 对齐而更新，验收契约摘要的逐项复核见 acceptance_contract。
+# 2026-08-11（R8）：合并 17 项 selector 修正、双轨 track selector、A04 压缩
+# 分流与 Wham 原始字节 selector；逐项依据见升级计划 §10.11／§11。
+# 同日补一项：BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束。原先
+# 只按 A04＋mode=non_lite 选，会把 residency-us／runtime-metrics 里的启动 models
+# GET 一并选中，断言 body 字段必然失败；R8 补出非 Lite 的 HTTP POST 样本后，这两条
+# 约束不再造成「选不到」。验收契约载荷逐字未变（25／17 分组、42 条 validation_modes
+# 与 expected_check_ids 全部不变），故 acceptance_contract 的冻结摘要不随之漂移。
 FROZEN_PROFILE_SHA256 = (
-    "78a0ec3f69206e54ce8f5b7dda19c7db9abb0ff9cb03ad9a715cefe27e747f1e"
+    "af4cfea8437d465284523bcd5b80feb199877f64953d7fc27d8f0dbca2271ed0"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RULE_ID_RE = re.compile(r"^SPEC-[A-Z0-9]+-[0-9]{3}$")
@@ -1194,26 +1199,87 @@ def _evaluate_assertion(
         minimum_records = assertion.get("minimum_records")
         minimum_artifacts = assertion.get("minimum_artifacts")
         minimum_orders = assertion.get("minimum_distinct_orders")
-        sequences = [value for value in values if isinstance(value, list)]
-        artifact_count = len({item.artifact_path for item in matched})
-        sets = [set(sequence) for sequence in sequences]
-        distinct_orders = len({json.dumps(sequence) for sequence in sequences})
-        passed = (
-            isinstance(minimum_records, int)
-            and isinstance(minimum_artifacts, int)
-            and isinstance(minimum_orders, int)
-            and len(sequences) >= minimum_records
-            and artifact_count >= minimum_artifacts
-            and bool(sets)
-            and all(item == sets[0] for item in sets)
-            and distinct_orders >= minimum_orders
-        )
+        if not all(
+            isinstance(value, int) and not isinstance(value, bool) and value > 0
+            for value in (minimum_records, minimum_artifacts, minimum_orders)
+        ):
+            raise AssertionConfigurationError(
+                "same_set_distinct_order 的三个 minimum_* 必须是正整数"
+            )
+
+        # 同一个 selector 可能同时选中 native-tls 与 rustls 等多个 TLS 实现。
+        # 规则要证明的是“存在至少一组扩展集合相同、但线序有扰动的独立样本”，
+        # 不能要求 selector 命中的所有实现共享同一扩展集合。按集合分组后逐组核对
+        # record、artifact 与排列数；只有同一组同时达到三个阈值才算通过。
+        groups: dict[str, dict[str, Any]] = {}
+        invalid_record_ids: list[str] = []
+        for observation, sequence in zip(matched, values, strict=True):
+            if not isinstance(sequence, list):
+                invalid_record_ids.append(observation.record_id)
+                continue
+            try:
+                set_key = json.dumps(
+                    sorted(
+                        {
+                            json.dumps(
+                                _json_safe(item),
+                                ensure_ascii=False,
+                                sort_keys=True,
+                            )
+                            for item in sequence
+                        }
+                    ),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            except (TypeError, ValueError) as error:
+                raise AssertionConfigurationError(
+                    "same_set_distinct_order 的序列元素无法形成稳定集合"
+                ) from error
+            group = groups.setdefault(
+                set_key,
+                {
+                    "values": [],
+                    "artifacts": set(),
+                    "orders": set(),
+                    "record_ids": [],
+                },
+            )
+            group["values"].append(sequence)
+            group["artifacts"].add(observation.artifact_path)
+            group["orders"].add(
+                json.dumps(
+                    _json_safe(sequence),
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+            group["record_ids"].append(observation.record_id)
+
+        summaries = [
+            {
+                "extension_set": json.loads(set_key),
+                "record_count": len(group["values"]),
+                "artifact_count": len(group["artifacts"]),
+                "distinct_order_count": len(group["orders"]),
+                "record_ids": group["record_ids"],
+                "values": group["values"],
+            }
+            for set_key, group in sorted(groups.items())
+        ]
+        qualifying = [
+            group
+            for group in summaries
+            if group["record_count"] >= minimum_records
+            and group["artifact_count"] >= minimum_artifacts
+            and group["distinct_order_count"] >= minimum_orders
+        ]
+        passed = bool(qualifying) and not invalid_record_ids
         return passed, {
-            "record_count": len(sequences),
-            "artifact_count": artifact_count,
-            "distinct_order_count": distinct_orders,
-            "sets_equal": bool(sets) and all(item == sets[0] for item in sets),
-            "values": sequences,
+            "matching_group_count": len(qualifying),
+            "selected_group": qualifying[0] if qualifying else None,
+            "groups": summaries,
+            "invalid_record_ids": invalid_record_ids,
         }
     if operator == "all_fields_equal":
         left_path = assertion.get("left_path")

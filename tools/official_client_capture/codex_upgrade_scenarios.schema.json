@@ -430,6 +430,18 @@
               "A14"
             ]
           }
+        },
+        "track": {
+          "enum": ["main", "lite"]
+        },
+        "model_id": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "expected_use_responses_lite": {
+          "type": "boolean"
+        },
+        "required_model_receipt": {
+          "type": "boolean"
         }
       }
     }

@@ -146,7 +146,57 @@
       "side": "official",
       "rules": [
         {
-          "glob": "relay/*.client_to_upstream.bin",
+          "glob": "relay/conn001.client_to_upstream.bin",
+          "scenario_ids": [
+            "A01"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "surface": "models",
+            "endpoint_class": "auxiliary",
+            "provider": "openai_oauth",
+            "variant": "no_cookie"
+          },
+          "rationale": "主线 job 固定 gpt-5.4；首个中继连接是启动期 models GET，为 A01 提供未经过 mitm 重构的 HTTP/1.1 原始请求行。"
+        },
+        {
+          "glob": "relay/conn00[!1].client_to_upstream.bin",
+          "scenario_ids": [
+            "A04"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "compression": "zstd",
+            "body_length": "automatic",
+            "provider": "openai_oauth",
+            "variant": "http_default"
+          },
+          "rationale": "主线模型条件收据证明 gpt-5.4 的 use_responses_lite=false；method/path selector 只会取 POST Responses，补齐 BODY-006 两个非 Lite 样本。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-lite-http-response",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/conn001.client_to_upstream.bin",
           "scenario_ids": [
             "A03"
           ],
@@ -158,12 +208,57 @@
           },
           "labels": {
             "transport": "http",
+            "track": "lite",
+            "mode": "lite",
+            "compression": "zstd",
+            "body_length": "automatic",
+            "provider": "openai_oauth",
+            "variant": "no_cookie"
+          },
+          "rationale": "Lite 专项固定 gpt-5.6-luna；首个连接的 models GET 与模型条件收据共同证明 use_responses_lite=true。"
+        },
+        {
+          "glob": "relay/conn003.client_to_upstream.bin",
+          "scenario_ids": [
+            "A03"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "lite",
+            "mode": "lite",
+            "compression": "zstd",
+            "body_length": "automatic",
+            "provider": "openai_oauth",
+            "variant": "http_default"
+          },
+          "rationale": "Lite 专项第三个连接固定为 POST Responses；若连接顺序漂移，path/method selector 会失败关闭。"
+        },
+        {
+          "glob": "relay/conn00[!13].client_to_upstream.bin",
+          "scenario_ids": [
+            "A03"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "lite",
             "mode": "lite",
             "compression": "zstd",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "A03 场景 precondition 固化 use_responses_lite=true 与 enable_request_compression=true；这些是采集配置而非观测结论。"
+          "rationale": "收口 Lite 专项 conn001／conn003 之外的独立连接；标签来自 job 的冻结模型坐标与成功收据，不从被测 body 反推。"
         }
       ]
     },
@@ -232,12 +327,13 @@
           },
           "labels": {
             "transport": "websocket",
+            "track": "main",
             "mode": "non_lite",
-            "variant": "default",
+            "variant": "runtime_metrics",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "A06 是非 Lite WS 会话；本 job 以非 Lite 模型触发，relay 字节含 WS 帧。"
+          "rationale": "A06 是非 Lite WS 会话；本 job 显式开启 runtime_metrics，只能作为条件头正例，禁止再冒充默认握手。"
         }
       ]
     },
@@ -288,7 +384,6 @@
         {
           "glob": "relay/*.client_to_upstream.bin",
           "scenario_ids": [
-            "A03",
             "A09"
           ],
           "kind": "relay_binary",
@@ -299,19 +394,113 @@
           },
           "labels": {
             "transport": "http",
-            "mode": "lite",
+            "track": "main",
+            "mode": "non_lite",
             "variant": "turn_state",
             "session_header_scope": "responses_or_compact",
             "compression": "zstd",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "受控上游在首轮注入 turn-state（A03 trigger），变体由采集脚本固定。"
-        },
+          "rationale": "主线以 gpt-5.4 建立普通 WS turn，中继在 response.metadata 边界注入 turn-state；随后真实 legacy compact 必须自然回送第三槽。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-legacy-compact-default",
+      "side": "official",
+      "rules": [
         {
           "glob": "relay/*.client_to_upstream.bin",
           "scenario_ids": [
-            "A05"
+            "A09"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "variant": "default",
+            "session_header_scope": "responses_or_compact",
+            "compression": "zstd",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "主线 gpt-5.4 的 legacy compact 默认槽位样本；模型条件收据必须证明 use_responses_lite=false，本样本不进入 Lite-only selector。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-lite-legacy-compact-default",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A09"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "lite",
+            "mode": "lite",
+            "variant": "default",
+            "session_header_scope": "responses_or_compact",
+            "compression": "zstd",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "Lite 专项固定 gpt-5.6-luna，模型条件收据证明 use_responses_lite=true；仅本 track 可命中 EP-014 默认头序与 EP-020 默认 body 子集。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-legacy-compact-beta",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A09"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "variant": "beta",
+            "session_header_scope": "responses_or_compact",
+            "compression": "zstd",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "legacy compact beta 槽位样本：采集脚本在关闭 remote_compaction_v2 的同时打开 network_proxy（0.147 与 0.145 唯一的 Stage::Experimental feature），使 x-codex-beta-features 出现在第三槽。属 I 类且与 0.145 基线同款条件，非本次新增干预；network_proxy 只作用于沙箱，不改 API 出站路径。本 job 走主线 {model}=gpt-5.4，上游 models 元数据给出 use_responses_lite=false，故 mode 只能是 non_lite。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-ws-default",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A06"
           ],
           "kind": "relay_binary",
           "parser": "opaque_bound_source",
@@ -321,13 +510,42 @@
           },
           "labels": {
             "transport": "websocket",
-            "mode": "lite",
-            "variant": "turn_state",
+            "track": "main",
+            "mode": "non_lite",
+            "variant": "default",
             "compression": "zstd",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "A05 是 Lite WS 会话＋turn-state；本 job 的 relay 字节含 WS 升级与帧，rsv1／压缩上下文只能从原始帧得到（mitm 记录已解压）。"
+          "rationale": "独立默认 WS 样本不开 runtime_metrics、不注入头、不切 provider，专门承担 SPEC-WS-002 default-swap-remove-order。"
+        }
+      ]
+    },
+    {
+      "job_id": "official-relay-ws-optional-missing",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A06"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "websocket_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "track": "main",
+            "mode": "non_lite",
+            "variant": "optional_missing",
+            "compression": "zstd",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "WS 可选头缺失扰动样本：采集脚本以 --disable remote_compaction_v2 关闭该 Stable feature，使 x-codex-beta-features 整条从握手中消失（该头只收录 Stage::Experimental feature 或 RemoteCompactionV2，后者 default_enabled=true 故默认存在）。变体由采集配置固定，非观测结论。"
         }
       ]
     },
@@ -455,12 +673,13 @@
           },
           "labels": {
             "transport": "http",
+            "track": "main",
             "variant": "http_default",
-            "mode": "lite",
+            "mode": "non_lite",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "WS 重试预算耗尽后改发 HTTP POST，由 h1 探针记录最终 wire 形态。"
+          "rationale": "WS 重试预算耗尽后改发 HTTP POST，由 h1 探针记录最终 wire 形态。本 job 走主线 {model}=gpt-5.4，探针受控清单对该模型给出 use_responses_lite=false，与真实上游元数据一致，故 mode 只能是 non_lite。"
         }
       ]
     },
@@ -665,6 +884,33 @@
       ]
     },
     {
+      "job_id": "official-relay-wham-get",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A12"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "endpoint_class": "auxiliary",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "TUI 的 Wham GET 经字节中继保存客户端原始 HTTP/1.1 header；labels 不含 ca_mode，使 selector 明确排除 mitm 重构面。"
+        }
+      ]
+    },
+    {
       "job_id": "official-wham-safe",
       "side": "official",
       "rules": [
@@ -726,6 +972,29 @@
             "provider": "openai_oauth"
           },
           "rationale": "WHAM GET 分支的 mitm 面出站记录。"
+        },
+        {
+          "root_suffix": "official-wham-get",
+          "glob": "mitm/codex-compact/misc-http.jsonl",
+          "scenario_ids": [
+            "A12"
+          ],
+          "kind": "wire_dump",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "mitm_http_jsonl",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "ca_mode": "custom",
+            "endpoint_class": "auxiliary",
+            "mode": "non_lite",
+            "variant": "default",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "同一 mitm 面把 codex 主干之外的请求（含 SPEC-EP-019 判据所依赖的 wham GET）单独写入 misc-http.jsonl；此前只声明了 codex-http.jsonl，这一半证据从未进入 manifest，A12 因而选不到任何 wham GET 观测。"
         }
       ]
     }

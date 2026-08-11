@@ -27,9 +27,9 @@
     },
     {
       "scenario_id": "A04",
-      "description": "Responses HTTP 非 Lite、明文及条件 Header 矩阵",
+      "description": "Responses HTTP 非 Lite、按样本标注压缩条件及条件 Header 矩阵",
       "trigger": "使用非 Lite 模型分别触发 residency、subagent、memgen、parent thread 和 runtime metrics 分支",
-      "preconditions": ["use_responses_lite=false", "enable_request_compression=false", "各条件分支分别留有正负样本"],
+      "preconditions": ["use_responses_lite=false", "压缩开启与关闭样本分别以 labels.compression 标注", "各条件分支分别留有正负样本"],
       "required_artifact_kinds": ["relay_binary", "process_trace"]
     },
     {
@@ -239,13 +239,13 @@
         {
           "id": "no-body-host-last",
           "description": "models 无 body 请求以 host 结尾",
-          "select": {"record_type": "http_request", "where": [{"path": "data.path", "operator": "equal", "value": "/backend-api/codex/models"}]},
+          "select": {"record_type": "http_request", "where": [{"path": "data.path", "operator": "equal", "value": "/backend-api/codex/models"}, {"path": "labels.ca_mode", "operator": "absent"}]},
           "assertion": {"operator": "all_list_suffix", "path": "data.header_names_in_order", "value": ["host"]}
         },
         {
           "id": "body-host-before-length",
           "description": "自动长度请求保持 host、content-length 尾序",
-          "select": {"record_type": "http_request", "where": [{"path": "labels.body_length", "operator": "equal", "value": "automatic"}]},
+          "select": {"record_type": "http_request", "where": [{"path": "labels.body_length", "operator": "equal", "value": "automatic"}, {"path": "data.method", "operator": "equal", "value": "POST"}]},
           "assertion": {"operator": "all_list_suffix", "path": "data.header_names_in_order", "value": ["host", "content-length"]}
         }
       ]
@@ -258,7 +258,7 @@
         {
           "id": "automatic-length-tail",
           "description": "所有自动长度 HTTP 请求均以 host、content-length 结尾",
-          "select": {"record_type": "http_request", "where": [{"path": "labels.body_length", "operator": "equal", "value": "automatic"}]},
+          "select": {"record_type": "http_request", "where": [{"path": "labels.body_length", "operator": "equal", "value": "automatic"}, {"path": "data.method", "operator": "equal", "value": "POST"}, {"path": "labels.ca_mode", "operator": "absent"}]},
           "assertion": {"operator": "all_list_suffix", "path": "data.header_names_in_order", "value": ["host", "content-length"]}
         }
       ]
@@ -397,7 +397,7 @@
         {
           "id": "default-identity-headers",
           "description": "普通内置请求均含 originator 与 user-agent",
-          "select": {"record_type": "http_request", "where": [{"path": "labels.provider", "operator": "equal", "value": "openai_oauth"}]},
+          "select": {"record_type": "http_request", "where": [{"path": "labels.provider", "operator": "equal", "value": "openai_oauth"}, {"path": "labels.ca_mode", "operator": "absent"}, {"path": "labels.transport", "operator": "equal", "value": "http"}, {"path": "data.path", "operator": "not_equal", "value": "/backend-api/wham/settings/user"}]},
           "assertion": {"operator": "all_contains", "path": "data.header_names_in_order", "value": "originator"}
         },
         {
@@ -409,7 +409,7 @@
         {
           "id": "residency-positive",
           "description": "受管理 residency=us 时发送精确值",
-          "select": {"record_type": "http_request", "scenario_ids": ["A04"], "where": [{"path": "labels.residency", "operator": "equal", "value": "us"}]},
+          "select": {"record_type": "http_request", "scenario_ids": ["A04"], "where": [{"path": "labels.residency", "operator": "equal", "value": "us"}, {"path": "labels.ca_mode", "operator": "absent"}, {"path": "data.path", "operator": "not_equal", "value": "/backend-api/wham/settings/user"}]},
           "assertion": {"operator": "all_equal", "path": "data.header_values.x-openai-internal-codex-residency", "value": ["us"]}
         },
         {
@@ -472,7 +472,7 @@
         {
           "id": "responses-http-sse",
           "description": "HTTP Responses 使用 text/event-stream",
-          "select": {"record_type": "http_request", "scenario_ids": ["A03"], "where": [{"path": "data.path", "operator": "equal", "value": "/backend-api/codex/responses"}]},
+          "select": {"record_type": "http_request", "scenario_ids": ["A03"], "where": [{"path": "data.path", "operator": "equal", "value": "/backend-api/codex/responses"}, {"path": "data.method", "operator": "equal", "value": "POST"}]},
           "assertion": {"operator": "all_equal", "path": "data.header_values.accept", "value": ["text/event-stream"]}
         },
         {
@@ -484,7 +484,7 @@
         {
           "id": "auxiliary-wildcard",
           "description": "辅助端点使用 */*",
-          "select": {"record_type": "http_request", "scenario_ids": ["A09"], "where": [{"path": "labels.endpoint_class", "operator": "equal", "value": "auxiliary"}]},
+          "select": {"record_type": "http_request", "scenario_ids": ["A09"], "where": [{"path": "labels.endpoint_class", "operator": "equal", "value": "auxiliary"}, {"path": "labels.ca_mode", "operator": "absent"}, {"path": "data.path", "operator": "not_equal", "value": "/backend-api/codex/responses"}]},
           "assertion": {"operator": "all_equal", "path": "data.header_values.accept", "value": ["*/*"]}
         }
       ]
@@ -497,13 +497,13 @@
         {
           "id": "responses-session-id",
           "description": "Responses 和 compact 均包含 session-id",
-          "select": {"record_type": "http_request", "where": [{"path": "labels.session_header_scope", "operator": "equal", "value": "responses_or_compact"}]},
+          "select": {"record_type": "http_request", "where": [{"path": "labels.session_header_scope", "operator": "equal", "value": "responses_or_compact"}, {"path": "data.method", "operator": "equal", "value": "POST"}]},
           "assertion": {"operator": "all_contains", "path": "data.header_names_in_order", "value": "session-id"}
         },
         {
           "id": "responses-thread-id",
           "description": "Responses 和 compact 均包含 thread-id",
-          "select": {"record_type": "http_request", "where": [{"path": "labels.session_header_scope", "operator": "equal", "value": "responses_or_compact"}]},
+          "select": {"record_type": "http_request", "where": [{"path": "labels.session_header_scope", "operator": "equal", "value": "responses_or_compact"}, {"path": "data.method", "operator": "equal", "value": "POST"}]},
           "assertion": {"operator": "all_contains", "path": "data.header_names_in_order", "value": "thread-id"}
         },
         {
@@ -590,13 +590,13 @@
         {
           "id": "responses-zstd",
           "description": "压缩开启时 Responses 使用 zstd",
-          "select": {"record_type": "http_request", "scenario_ids": ["A03"], "where": [{"path": "labels.compression", "operator": "equal", "value": "zstd"}]},
+          "select": {"record_type": "http_request", "scenario_ids": ["A03"], "where": [{"path": "labels.compression", "operator": "equal", "value": "zstd"}, {"path": "data.method", "operator": "equal", "value": "POST"}, {"path": "labels.ca_mode", "operator": "absent"}, {"path": "data.path", "operator": "equal", "value": "/backend-api/codex/responses"}]},
           "assertion": {"operator": "all_equal", "path": "data.header_values.content-encoding", "value": ["zstd"]}
         },
         {
           "id": "responses-plain",
           "description": "压缩关闭时 Responses 不发送 content-encoding",
-          "select": {"record_type": "http_request", "scenario_ids": ["A04"], "where": [{"path": "data.path", "operator": "equal", "value": "/backend-api/codex/responses"}]},
+          "select": {"record_type": "http_request", "scenario_ids": ["A04"], "where": [{"path": "data.path", "operator": "equal", "value": "/backend-api/codex/responses"}, {"path": "labels.compression", "operator": "equal", "value": "plain"}]},
           "assertion": {"operator": "all_absent", "path": "data.header_values.content-encoding"}
         },
         {
@@ -653,7 +653,7 @@
         {
           "id": "http-tool-choice",
           "description": "HTTP body 的 tool_choice 为字符串 auto",
-          "select": {"record_type": "http_request", "scenario_ids": ["A03", "A04"], "where": [{"path": "data.path", "operator": "equal", "value": "/backend-api/codex/responses"}]},
+          "select": {"record_type": "http_request", "scenario_ids": ["A03", "A04"], "where": [{"path": "data.path", "operator": "equal", "value": "/backend-api/codex/responses"}, {"path": "data.method", "operator": "equal", "value": "POST"}]},
           "assertion": {"operator": "all_equal", "path": "data.body.shape.tool_choice", "value": "str:auto"}
         },
         {
@@ -672,25 +672,25 @@
         {
           "id": "lite-top-level-omission",
           "description": "Lite 顶层省略 instructions 与 tools",
-          "select": {"record_type": "http_request", "scenario_ids": ["A03"], "where": [{"path": "labels.mode", "operator": "equal", "value": "lite"}]},
+          "select": {"record_type": "http_request", "scenario_ids": ["A03"], "where": [{"path": "labels.mode", "operator": "equal", "value": "lite"}, {"path": "labels.track", "operator": "equal", "value": "lite"}, {"path": "data.method", "operator": "equal", "value": "POST"}]},
           "assertion": {"operator": "all_not_contains", "path": "data.body.top_level_fields_in_order", "value": "instructions"}
         },
         {
           "id": "lite-tools-omission",
           "description": "Lite 顶层不发送 tools",
-          "select": {"record_type": "http_request", "scenario_ids": ["A03"], "where": [{"path": "labels.mode", "operator": "equal", "value": "lite"}]},
+          "select": {"record_type": "http_request", "scenario_ids": ["A03"], "where": [{"path": "labels.mode", "operator": "equal", "value": "lite"}, {"path": "labels.track", "operator": "equal", "value": "lite"}, {"path": "data.method", "operator": "equal", "value": "POST"}]},
           "assertion": {"operator": "all_not_contains", "path": "data.body.top_level_fields_in_order", "value": "tools"}
         },
         {
           "id": "nonlite-fields-present",
-          "description": "非 Lite 保留 instructions 和 tools",
-          "select": {"record_type": "http_request", "scenario_ids": ["A04"], "where": [{"path": "labels.mode", "operator": "equal", "value": "non_lite"}]},
+          "description": "非 Lite 的 Responses 请求体保留 instructions 和 tools",
+          "select": {"record_type": "http_request", "scenario_ids": ["A04"], "where": [{"path": "labels.mode", "operator": "equal", "value": "non_lite"}, {"path": "data.method", "operator": "equal", "value": "POST"}, {"path": "data.path", "operator": "equal", "value": "/backend-api/codex/responses"}]},
           "assertion": {"operator": "all_contains", "path": "data.body.top_level_fields_in_order", "value": "instructions"}
         },
         {
           "id": "nonlite-tools-present",
-          "description": "非 Lite 保留 tools",
-          "select": {"record_type": "http_request", "scenario_ids": ["A04"], "where": [{"path": "labels.mode", "operator": "equal", "value": "non_lite"}]},
+          "description": "非 Lite 的 Responses 请求体保留 tools",
+          "select": {"record_type": "http_request", "scenario_ids": ["A04"], "where": [{"path": "labels.mode", "operator": "equal", "value": "non_lite"}, {"path": "data.method", "operator": "equal", "value": "POST"}, {"path": "data.path", "operator": "equal", "value": "/backend-api/codex/responses"}]},
           "assertion": {"operator": "all_contains", "path": "data.body.top_level_fields_in_order", "value": "tools"}
         }
       ]
@@ -880,7 +880,7 @@
         {
           "id": "legacy-default-headers",
           "description": "默认 legacy compact header 线序精确匹配",
-          "select": {"record_type": "http_request", "where": [{"path": "data.path", "operator": "equal", "value": "/backend-api/codex/responses/compact"}, {"path": "labels.variant", "operator": "equal", "value": "default"}]},
+          "select": {"record_type": "http_request", "where": [{"path": "data.path", "operator": "equal", "value": "/backend-api/codex/responses/compact"}, {"path": "labels.variant", "operator": "equal", "value": "default"}, {"path": "labels.track", "operator": "equal", "value": "lite"}]},
           "assertion": {"operator": "all_equal", "path": "data.header_names_in_order", "value": ["version", "x-codex-installation-id", "x-codex-window-id", "x-codex-turn-metadata", "session-id", "thread-id", "x-openai-internal-codex-responses-lite", "authorization", "chatgpt-account-id", "content-type", "accept", "originator", "user-agent", "cookie", "host", "content-length"]}
         },
         {
@@ -930,13 +930,13 @@
         {
           "id": "wham-get-paths",
           "description": "两个 GET 路径均出现且无额外 wham GET",
-          "select": {"record_type": "http_request", "where": [{"path": "data.method", "operator": "equal", "value": "GET"}, {"path": "data.path", "operator": "match", "value": "^/backend-api/wham/"}]},
+          "select": {"record_type": "http_request", "where": [{"path": "data.method", "operator": "equal", "value": "GET"}, {"path": "data.path", "operator": "match", "value": "^/backend-api/wham/"}, {"path": "labels.ca_mode", "operator": "absent"}]},
           "assertion": {"operator": "distinct_values_equal", "path": "data.path", "value": ["/backend-api/wham/usage", "/backend-api/wham/rate-limit-reset-credits"]}
         },
         {
           "id": "wham-get-headers",
           "description": "两个 GET 使用 backend-client 精确线序",
-          "select": {"record_type": "http_request", "where": [{"path": "data.method", "operator": "equal", "value": "GET"}, {"path": "data.path", "operator": "match", "value": "^/backend-api/wham/"}]},
+          "select": {"record_type": "http_request", "where": [{"path": "data.method", "operator": "equal", "value": "GET"}, {"path": "data.path", "operator": "match", "value": "^/backend-api/wham/"}, {"path": "labels.ca_mode", "operator": "absent"}]},
           "assertion": {"operator": "all_equal", "path": "data.header_names_in_order", "value": ["user-agent", "authorization", "chatgpt-account-id", "accept", "host"]}
         },
         {
@@ -967,7 +967,7 @@
         {
           "id": "legacy-observed-subset",
           "description": "默认样本字段与官方 0.145.0 wire 子集一致",
-          "select": {"record_type": "http_request", "where": [{"path": "data.path", "operator": "equal", "value": "/backend-api/codex/responses/compact"}, {"path": "labels.variant", "operator": "equal", "value": "default"}]},
+          "select": {"record_type": "http_request", "where": [{"path": "data.path", "operator": "equal", "value": "/backend-api/codex/responses/compact"}, {"path": "labels.variant", "operator": "equal", "value": "default"}, {"path": "labels.track", "operator": "equal", "value": "lite"}]},
           "assertion": {"operator": "all_equal", "path": "data.body.top_level_fields_in_order", "value": ["model", "input", "parallel_tool_calls", "reasoning", "prompt_cache_key", "text"]}
         }
       ]

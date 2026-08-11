@@ -537,7 +537,13 @@
         "covers",
         "scenario_ids",
         "scenario_receipts",
-        "scenario_receipt_failures"
+        "scenario_receipt_failures",
+        "track",
+        "model_id",
+        "expected_use_responses_lite",
+        "required_model_receipt",
+        "model_condition_receipt",
+        "model_condition_receipt_failure"
       ],
       "properties": {
         "id": {
@@ -662,6 +668,51 @@
               }
             }
           }
+        },
+        "track": {
+          "enum": ["main", "lite"]
+        },
+        "model_id": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "expected_use_responses_lite": {
+          "type": "boolean"
+        },
+        "required_model_receipt": {
+          "type": "boolean"
+        },
+        "model_condition_receipt": {
+          "anyOf": [
+            {"type": "null"},
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "path",
+                "sha256",
+                "track",
+                "model_id",
+                "models_response_sha256",
+                "use_responses_lite",
+                "model_fallback"
+              ],
+              "properties": {
+                "path": {"$ref": "#/$defs/absolutePath"},
+                "sha256": {"$ref": "#/$defs/sha256"},
+                "track": {"enum": ["main", "lite"]},
+                "model_id": {"$ref": "#/$defs/nonEmptyText"},
+                "models_response_sha256": {"$ref": "#/$defs/sha256"},
+                "use_responses_lite": {"type": "boolean"},
+                "model_fallback": {"const": false}
+              }
+            }
+          ]
+        },
+        "model_condition_receipt_failure": {
+          "anyOf": [
+            {"type": "null"},
+            {"$ref": "#/$defs/nonEmptyText"}
+          ]
         }
       }
     },

@@ -514,7 +514,11 @@
         "steps",
         "evidence_roots",
         "covers",
-        "scenario_ids"
+        "scenario_ids",
+        "track",
+        "model_id",
+        "expected_use_responses_lite",
+        "required_model_receipt"
       ],
       "properties": {
         "id": {
@@ -557,6 +561,18 @@
             "type": "string",
             "pattern": "^A[0-9]{2}$"
           }
+        },
+        "track": {
+          "enum": ["main", "lite"]
+        },
+        "model_id": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
+        "expected_use_responses_lite": {
+          "type": "boolean"
+        },
+        "required_model_receipt": {
+          "type": "boolean"
         }
       }
     }

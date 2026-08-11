@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/codex-egress-model-condition-receipt-v1.json",
+  "title": "Codex 出站模型条件成功收据",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "status",
+    "job_id",
+    "run_id",
+    "track",
+    "model_id",
+    "models_response_sha256",
+    "use_responses_lite",
+    "model_fallback",
+    "observed_request_models",
+    "evidence_root",
+    "evidence_bindings"
+  ],
+  "properties": {
+    "schema_version": {"const": "codex-egress-model-condition-receipt/v1"},
+    "status": {"const": "success"},
+    "job_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "run_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+    "track": {"enum": ["main", "lite"]},
+    "model_id": {"type": "string", "minLength": 1},
+    "models_response_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "use_responses_lite": {"type": "boolean"},
+    "model_fallback": {"const": false},
+    "observed_request_models": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "evidence_root": {"type": "string", "pattern": "^/[^\\x00]*$"},
+    "evidence_bindings": {
+      "type": "array",
+      "minItems": 2,
+      "uniqueItems": true,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["path", "sha256", "bytes"],
+        "properties": {
+          "path": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\).+$"},
+          "sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+          "bytes": {"type": "integer", "minimum": 1}
+        }
+      }
+    }
+  }
+}

@@ -925,6 +925,61 @@ class ScenarioManifestContractTest(unittest.TestCase):
                 job["id"],
             )
 
+    def test_R8_双轨模型_job_与收据契约独立(self) -> None:
+        by_id = {job["id"]: job for job in self.scenarios["capture_jobs"]}
+        pairs = (
+            ("official-relay-http-response", "official-lite-http-response"),
+            (
+                "official-relay-legacy-compact-default",
+                "official-lite-legacy-compact-default",
+            ),
+        )
+        for main_id, lite_id in pairs:
+            main = by_id[main_id]
+            lite = by_id[lite_id]
+            self.assertEqual(main["track"], "main")
+            self.assertEqual(main["model_id"], "{model}")
+            self.assertFalse(main["expected_use_responses_lite"])
+            self.assertTrue(main["required_model_receipt"])
+            self.assertEqual(lite["track"], "lite")
+            self.assertEqual(lite["model_id"], "gpt-5.6-luna")
+            self.assertTrue(lite["expected_use_responses_lite"])
+            self.assertTrue(lite["required_model_receipt"])
+            self.assertNotEqual(main["evidence_roots"], lite["evidence_roots"])
+            self.assertEqual(
+                main["steps"][0]["environment"]["MODEL_TRACK"], "main"
+            )
+            self.assertEqual(
+                lite["steps"][0]["environment"]["MODEL_TRACK"], "lite"
+            )
+
+    def test_R8_turn_state_从_WS_metadata_进入状态仓库(self) -> None:
+        by_id = {job["id"]: job for job in self.scenarios["capture_jobs"]}
+        environment = by_id["official-relay-turnstate-compact"]["steps"][0][
+            "environment"
+        ]
+        self.assertEqual(
+            environment["RELAY_INJECT_WS_TURN_STATE"], "upgrade-turn-state"
+        )
+        self.assertNotIn("RELAY_INJECT_TURN_STATE", environment)
+
+    def test_R8_WS_默认样本不再复用_runtime_metrics(self) -> None:
+        labels = json.loads(
+            (TOOL_ROOT / "codex_upgrade_evidence_labels_0_145_0.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        by_id = {entry["job_id"]: entry for entry in labels["entries"]}
+        metrics = [
+            rule
+            for rule in by_id["official-relay-runtime-metrics"]["rules"]
+            if "A06" in rule["scenario_ids"]
+        ]
+        self.assertEqual(metrics[0]["labels"]["variant"], "runtime_metrics")
+        default = by_id["official-relay-ws-default"]["rules"][0]
+        self.assertEqual(default["labels"]["variant"], "default")
+        self.assertEqual(default["labels"]["track"], "main")
+
     def test_两份清单的_required_artifact_kinds_逐场景相等(self) -> None:
         """§3.1：分叉会让 A01／A15 的定案在 accept 阶段失效。"""
 
@@ -982,6 +1037,100 @@ class ScenarioManifestContractTest(unittest.TestCase):
                 }
             )
 
+    def test_R8_主线模型变量冻结为非_Lite_模型(self) -> None:
+        """§10.11.1：主线固定 gpt-5.4，变量默认值不得再回落到 Lite 模型。
+
+        变量默认值是没有显式传参时的权威坐标；留着 gpt-5.6-luna 会让主线在
+        default 路径上悄悄变成 Lite 轨道，而标签仍按 non_lite 声明。
+        """
+
+        variables = {item["name"]: item for item in self.scenarios["variable_contract"]}
+        self.assertEqual(variables["model"]["default"], "gpt-5.4")
+
+    def test_R8_官方标签的_Lite_声明必须由_Lite_轨道_job_支撑(self) -> None:
+        """标签 authority 原则：mode=lite 只能出现在固定 Lite 模型的 job 上。
+
+        A03 的 precondition 写 use_responses_lite=true，历史上却由主线模型的 job
+        贴 mode=lite——条件从未成立。这条不变量把「声明」与「采集坐标」绑死：
+        任何官方 job 想声明 Lite，就必须同时是 lite 轨道、固定 gpt-5.6-luna 且
+        产出模型条件收据。
+        """
+
+        labels = json.loads(
+            (TOOL_ROOT / "codex_upgrade_evidence_labels_0_145_0.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        by_id = {job["id"]: job for job in self.scenarios["capture_jobs"]}
+        for entry in labels["entries"]:
+            if entry["side"] != "official":
+                continue
+            job = by_id[entry["job_id"]]
+            lite_job = (
+                job.get("track") == "lite"
+                and job.get("model_id") == "gpt-5.6-luna"
+                and job.get("expected_use_responses_lite") is True
+                and job.get("required_model_receipt") is True
+            )
+            for rule in entry["rules"]:
+                mode = rule["labels"].get("mode")
+                track = rule["labels"].get("track")
+                if mode == "lite" or track == "lite":
+                    self.assertTrue(
+                        lite_job,
+                        f"{entry['job_id']} 未固定 Lite 模型坐标却声明 Lite",
+                    )
+                if lite_job:
+                    self.assertNotEqual(
+                        mode, "non_lite", f"{entry['job_id']} Lite job 声明 non_lite"
+                    )
+                    self.assertNotEqual(
+                        track, "main", f"{entry['job_id']} Lite job 声明主线轨道"
+                    )
+
+    def test_R8_两条轨道的证据根与运行标识不相交(self) -> None:
+        """§11.1：混用 evidence root 会让主线未触发 Lite 被当成 Lite 失败。"""
+
+        roots: dict[str, str] = {}
+        run_ids: dict[str, str] = {}
+        for job in self.scenarios["capture_jobs"]:
+            if job.get("phase") != "official":
+                continue
+            for root in job["evidence_roots"]:
+                self.assertNotIn(root, roots, f"{job['id']} 与 {roots.get(root)} 共用证据根")
+                roots[root] = job["id"]
+            run_id = job["steps"][0]["environment"].get("RUN_ID")
+            if run_id is not None:
+                self.assertNotIn(
+                    run_id, run_ids, f"{job['id']} 与 {run_ids.get(run_id)} 共用 RUN_ID"
+                )
+                run_ids[run_id] = job["id"]
+
+    def test_R8_非_Lite_body_判据只选_Responses_的_POST(self) -> None:
+        """§10.11.2：A04＋mode=non_lite 会把启动 models GET 一并选中。
+
+        residency-us 与 runtime-metrics 用整目录 glob 绑 A04，其 relay 字节里必然
+        含启动期的 GET /models；不约束 method 与 path，body 断言必然失败，R8 补出
+        的非 Lite POST 样本也就白采。
+        """
+
+        rules = {rule["rule_id"]: rule for rule in self.expectations["rules"]}
+        checks = {
+            check["id"]: check
+            for check in rules["SPEC-BODY-006"]["checks"]
+        }
+        for check_id in ("nonlite-fields-present", "nonlite-tools-present"):
+            where = {
+                (item["path"], item["operator"]): item.get("value")
+                for item in checks[check_id]["select"]["where"]
+            }
+            self.assertEqual(where[("data.method", "equal")], "POST", check_id)
+            self.assertEqual(
+                where[("data.path", "equal")],
+                "/backend-api/codex/responses",
+                check_id,
+            )
+
 
 class OfficialCaptureScriptTest(unittest.TestCase):
     """采集脚本的错误传播、抓包范围与恢复证明。"""
@@ -1010,6 +1159,34 @@ class OfficialCaptureScriptTest(unittest.TestCase):
         """R2：WebRTC 不传版本会默认 v1，header quicksilver=v1 已被上游拒绝。"""
 
         self.assertIn('--realtime-version "${REALTIME_VERSION:-v3}"', self.source)
+
+    def test_R8_中继脚本默认模型是主线非_Lite(self) -> None:
+        """§10.11.1：默认值是没传 MODEL 时的权威坐标，不能落回 Lite 模型。"""
+
+        self.assertIn("model=${MODEL:-gpt-5.4}", self.source)
+
+    def test_R8_h1_探针清单覆盖两条轨道且_Lite_标志与上游一致(self) -> None:
+        """探针是受控上游，模型元数据由它权威给出，写错即等于伪造 Lite 条件。
+
+        清单缺主线模型时 CLI 查不到元数据会落到默认值，采集条件与标签声明脱节；
+        k41 的 /models 原文已核实 gpt-5.4=false、gpt-5.6-*=true。
+        """
+
+        source = (TOOL_ROOT / "h1_wire_probe.py").read_text(encoding="utf-8")
+        start = source.index("MODELS_BODY = (")
+        end = source.index(")", source.index("]}'", start))
+        literal = source[start:end]
+        payload = json.loads(
+            "".join(
+                line.strip().removeprefix("b'").removesuffix("'")
+                for line in literal.splitlines()[1:]
+            )
+        )
+        lite_by_slug = {
+            item["slug"]: item["use_responses_lite"] for item in payload["models"]
+        }
+        self.assertIs(lite_by_slug["gpt-5.4"], False)
+        self.assertIs(lite_by_slug["gpt-5.6-luna"], True)
 
     def test_A13_不再改写_last_refresh(self) -> None:
         """R3：正常 JWT 的 exp 优先于 last_refresh，改后者一次刷新都触发不了。"""

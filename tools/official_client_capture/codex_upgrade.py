@@ -89,6 +89,10 @@ from tools.official_client_capture.scenario_receipts import (
     validate_facts_document as validate_scenario_facts_document,
     validate_receipt as validate_scenario_receipt,
 )
+from tools.official_client_capture.model_condition_receipts import (
+    ModelConditionReceiptError,
+    validate_receipt as validate_model_condition_receipt,
+)
 from tools.official_client_capture.pcap_clienthello import (
     iter_packets,
     parse_client_hello,
@@ -225,6 +229,10 @@ class Job:
     # 后者表达「该 job 覆盖哪些场景」，official-core 一个 job 就覆盖 9 个场景，
     # 不可能逐个产收据；真实性门禁只约束已证实失效的目标场景。
     required_scenario_receipts: tuple[str, ...] = ()
+    track: str = "main"
+    model_id: str = ""
+    expected_use_responses_lite: bool = False
+    required_model_receipt: bool = False
 
 
 def _fingerprint(payload: dict[str, Any]) -> str:
@@ -254,6 +262,12 @@ def _job_execution_sha256(job: Job) -> str:
             "evidence_roots": list(job.evidence_roots),
             "required": job.required,
             "required_scenario_receipts": list(job.required_scenario_receipts),
+            "track": getattr(job, "track", "main"),
+            "model_id": getattr(job, "model_id", ""),
+            "expected_use_responses_lite": getattr(
+                job, "expected_use_responses_lite", False
+            ),
+            "required_model_receipt": getattr(job, "required_model_receipt", False),
         }
     )
 
@@ -1172,8 +1186,32 @@ def _validate_scenario_manifest_shape(payload: dict[str, Any]) -> None:
             "covers",
             "required_scenario_receipts",
         }
-        if not isinstance(job, dict) or set(job) != required:
+        model_fields = {
+            "track",
+            "model_id",
+            "expected_use_responses_lite",
+            "required_model_receipt",
+        }
+        if (
+            not isinstance(job, dict)
+            or not required.issubset(job)
+            or set(job) - required - model_fields
+            or (set(job) & model_fields and not model_fields.issubset(job))
+        ):
             raise ConfigurationError(f"场景任务 {index} 字段不闭合。")
+        if model_fields.issubset(job):
+            if (
+                job["track"] not in {"main", "lite"}
+                or not isinstance(job["model_id"], str)
+                or not job["model_id"].strip()
+                or not isinstance(job["expected_use_responses_lite"], bool)
+                or not isinstance(job["required_model_receipt"], bool)
+                or (
+                    job["track"] == "lite"
+                    and job["expected_use_responses_lite"] is not True
+                )
+            ):
+                raise ConfigurationError(f"场景任务 {index} 的模型轨道契约非法。")
         if not isinstance(job.get("required"), bool):
             raise ConfigurationError(f"场景任务 {index} required 必须是布尔值。")
         receipts = job.get("required_scenario_receipts")
@@ -1270,6 +1308,8 @@ def _validate_scenario_variable_contract(
     template_values: list[str] = []
     for job in payload["capture_jobs"]:
         template_values.extend(str(value) for value in job["evidence_roots"])
+        if "model_id" in job:
+            template_values.append(job["model_id"])
         for step in job["steps"]:
             template_values.extend(step["argv"])
             template_values.extend(step["environment"].values())
@@ -1445,6 +1485,16 @@ def load_scenario_jobs(
                 required=raw["required"],
                 required_scenario_receipts=tuple(
                     str(item) for item in raw["required_scenario_receipts"]
+                ),
+                track=str(raw.get("track", "main")),
+                model_id=_format_template(
+                    str(raw.get("model_id", "{model}")), context
+                ),
+                expected_use_responses_lite=bool(
+                    raw.get("expected_use_responses_lite", False)
+                ),
+                required_model_receipt=bool(
+                    raw.get("required_model_receipt", False)
                 ),
             )
         )
@@ -1623,6 +1673,102 @@ def _collect_scenario_receipts(
     return receipts, failures
 
 
+def _collect_model_condition_receipt(
+    job: Job,
+    existing_roots: list[Path],
+) -> tuple[dict[str, Any] | None, str | None]:
+    """复核 job 证据根内的模型条件成功收据。"""
+
+    if not getattr(job, "required_model_receipt", False):
+        return None, None
+    try:
+        if len(existing_roots) != 1:
+            raise ConfigurationError(
+                f"{job.job_id} 必须恰好命中一个证据根才能绑定模型条件收据。"
+            )
+        root = existing_roots[0]
+        path = root / "model-condition-receipt.json"
+        if path.is_symlink() or not path.is_file():
+            raise ConfigurationError(f"{job.job_id} 未产出模型条件成功收据。")
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, json.JSONDecodeError) as error:
+            raise ConfigurationError(f"模型条件收据不可读：{error}") from error
+        validated = validate_model_condition_receipt(
+            payload,
+            root=root,
+            job_id=job.job_id,
+            track=getattr(job, "track", "main"),
+            model_id=getattr(job, "model_id", ""),
+            use_responses_lite=getattr(job, "expected_use_responses_lite", False),
+        )
+        return {
+            "path": str(path),
+            "sha256": file_sha256(path),
+            "track": validated["track"],
+            "model_id": validated["model_id"],
+            "models_response_sha256": validated["models_response_sha256"],
+            "use_responses_lite": validated["use_responses_lite"],
+            "model_fallback": validated["model_fallback"],
+        }, None
+    except (ConfigurationError, ModelConditionReceiptError, OSError) as error:
+        return None, str(error)[:512] or "未知失败"
+
+
+def _revalidate_model_condition_result(job: Job, result: dict[str, Any]) -> None:
+    """在 seal／resume 时重放模型收据，拒绝 run 后篡改证据或结果字段。"""
+
+    expected_coordinates = {
+        "track": job.track,
+        "model_id": job.model_id,
+        "expected_use_responses_lite": job.expected_use_responses_lite,
+        "required_model_receipt": job.required_model_receipt,
+    }
+    if any(result.get(key) != value for key, value in expected_coordinates.items()):
+        raise ConfigurationError(f"{job.job_id} 的模型轨道结果坐标漂移。")
+    receipt_reference = result.get("model_condition_receipt")
+    failure = result.get("model_condition_receipt_failure")
+    if not job.required_model_receipt:
+        if receipt_reference is not None or failure is not None:
+            raise ConfigurationError(f"{job.job_id} 未声明模型收据却携带模型结果。")
+        return
+    roots = result.get("evidence_roots")
+    if not isinstance(roots, list) or len(roots) != 1:
+        raise ConfigurationError(f"{job.job_id} 的模型收据必须绑定唯一 evidence root。")
+    root = Path(roots[0])
+    path = root / "model-condition-receipt.json"
+    if (
+        failure is not None
+        or not isinstance(receipt_reference, dict)
+        or receipt_reference.get("path") != str(path)
+        or not path.is_file()
+        or path.is_symlink()
+        or receipt_reference.get("sha256") != file_sha256(path)
+    ):
+        raise ConfigurationError(f"{job.job_id} 的模型条件收据缺失或摘要不一致。")
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as error:
+        raise ConfigurationError(f"{job.job_id} 的模型条件收据不可读：{error}") from error
+    validated = validate_model_condition_receipt(
+        payload,
+        root=root,
+        job_id=job.job_id,
+        track=job.track,
+        model_id=job.model_id,
+        use_responses_lite=job.expected_use_responses_lite,
+    )
+    for key in (
+        "track",
+        "model_id",
+        "models_response_sha256",
+        "use_responses_lite",
+        "model_fallback",
+    ):
+        if receipt_reference.get(key) != validated[key]:
+            raise ConfigurationError(f"{job.job_id} 的模型条件结果字段 {key} 不一致。")
+
+
 def run_job(
     job: Job,
     log_root: Path,
@@ -1711,12 +1857,20 @@ def run_job(
     scenario_receipts_ok = not scenario_receipt_failures and len(
         scenario_receipts_found
     ) == len(job.required_scenario_receipts)
+    model_receipt, model_receipt_failure = _collect_model_condition_receipt(
+        job, existing_roots
+    )
+    model_receipt_ok = (
+        model_receipt_failure is None
+        and (not getattr(job, "required_model_receipt", False) or model_receipt is not None)
+    )
     status = (
         "complete"
         if steps_ok
         and not missing_patterns
         and not empty_patterns
         and scenario_receipts_ok
+        and model_receipt_ok
         else "failed"
     )
     return {
@@ -1736,6 +1890,14 @@ def run_job(
         "scenario_ids": list(job.scenario_ids),
         "scenario_receipts": scenario_receipts_found,
         "scenario_receipt_failures": scenario_receipt_failures,
+        "track": getattr(job, "track", "main"),
+        "model_id": getattr(job, "model_id", ""),
+        "expected_use_responses_lite": getattr(
+            job, "expected_use_responses_lite", False
+        ),
+        "required_model_receipt": getattr(job, "required_model_receipt", False),
+        "model_condition_receipt": model_receipt,
+        "model_condition_receipt_failure": model_receipt_failure,
     }
 
 
@@ -1847,15 +2009,17 @@ def _validate_capture_job_results(
             raise ConfigurationError(f"{phase} 抓包任务收据身份非法或重复。")
         seen.add(job_id)
         if job_id in expected:
+            expected_job = expected[job_id]
             if (
                 result.get("phase") != phase
                 or result.get("status") != "complete"
                 or result.get("execution_sha256")
-                != _job_execution_sha256(expected[job_id])
+                != _job_execution_sha256(expected_job)
             ):
                 raise ConfigurationError(
                     f"{phase} 必需抓包任务 {job_id} 未完成或执行定义漂移。"
                 )
+            _revalidate_model_condition_result(expected_job, result)
     missing = set(expected) - seen
     if missing:
         raise ConfigurationError(f"{phase} 缺少必需抓包任务收据：{sorted(missing)}")
@@ -2038,7 +2202,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default="",
         help="留空时按目标版本和 UTC 时间生成。",
     )
-    plan.add_argument("--model", default="gpt-5.6-luna")
+    plan.add_argument(
+        "--model",
+        default="gpt-5.4",
+        help="主升级线模型；本升级固定为 gpt-5.4，Lite job 在场景清单中独立声明。",
+    )
     plan.add_argument("--capture-root", type=Path, default=Path("/root/oauth-capture"))
     plan.add_argument("--capture-container", default="capture-cli")
     plan.add_argument("--service-container", default="sub2apiplus")
@@ -2178,6 +2346,15 @@ def _validate_arguments(arguments: argparse.Namespace) -> None:
     ):
         if not VERSION_RE.fullmatch(value):
             raise ConfigurationError(f"{field} 必须是三段版本号。")
+    if (
+        arguments.baseline_version == "0.145.0"
+        and arguments.target_version == "0.147.0"
+        and arguments.model != "gpt-5.4"
+    ):
+        raise ConfigurationError(
+            "0.145→0.147 主升级线固定使用 gpt-5.4；"
+            "gpt-5.6-luna 只能由场景清单中的 Lite 专项 job 使用。"
+        )
     if not SHA256_RE.fullmatch(arguments.target_sha256):
         raise ConfigurationError("--target-sha256 必须是 64 位小写 SHA-256。")
     if not SHA256_RE.fullmatch(arguments.target_package_sha256):
@@ -2297,6 +2474,10 @@ def _safe_plan(
                 "evidence_roots": list(job.evidence_roots),
                 "covers": list(job.covers),
                 "scenario_ids": list(job.scenario_ids),
+                "track": job.track,
+                "model_id": job.model_id,
+                "expected_use_responses_lite": job.expected_use_responses_lite,
+                "required_model_receipt": job.required_model_receipt,
             }
             for job in jobs
         ],
@@ -6543,6 +6724,77 @@ def _assertion_profile_version_coordinates(
     return coordinates
 
 
+def _apply_assertion_profile_overrides(
+    profile: dict[str, Any],
+    *,
+    target_version: str,
+) -> tuple[dict[str, Any], int]:
+    """把版本专属、人工审核过的期望变更确定性应用到 classify 草案。
+
+    selector 修正属于基线画像自身的缺陷，直接修在基线画像；真正的版本行为变化
+    则必须留在目标版本 override 中。这样不会为了让 0.147 通过而反向篡改 0.145
+    的冻结期望，同时每个变更都要求 before 精确命中，画像漂移时会失败关闭。
+    """
+
+    path = Path(__file__).with_name(
+        f"candidate_rule_expectation_overrides_{target_version.replace('.', '_')}.json"
+    )
+    if not path.exists():
+        return profile, 0
+    payload = _read_json(path, "目标版本断言期望覆盖清单")
+    required = {
+        "schema_version",
+        "base_codex_version",
+        "target_codex_version",
+        "base_profile_sha256",
+        "operations",
+    }
+    if not isinstance(payload, dict) or set(payload) != required:
+        raise ConfigurationError("目标版本断言期望覆盖清单字段不闭合。")
+    if payload["schema_version"] != "codex-candidate-rule-expectation-overrides/v1":
+        raise ConfigurationError("目标版本断言期望覆盖清单 schema_version 不受支持。")
+    if payload["base_codex_version"] != profile.get("codex_version"):
+        raise ConfigurationError("目标版本断言期望覆盖清单基线版本不一致。")
+    if payload["target_codex_version"] != target_version:
+        raise ConfigurationError("目标版本断言期望覆盖清单目标版本不一致。")
+    base_path = Path(__file__).with_name("candidate_rule_expectations_0_145_0.json")
+    if payload["base_profile_sha256"] != file_sha256(base_path):
+        raise ConfigurationError("目标版本断言期望覆盖清单绑定的基线画像摘要不一致。")
+    operations = payload["operations"]
+    if not isinstance(operations, list) or not operations:
+        raise ConfigurationError("目标版本断言期望覆盖清单 operations 不能为空。")
+
+    updated = json.loads(json.dumps(profile, ensure_ascii=False))
+    seen: set[tuple[str, str]] = set()
+    for index, operation in enumerate(operations, 1):
+        expected_keys = {"rule_id", "check_id", "before", "after", "rationale"}
+        if not isinstance(operation, dict) or set(operation) != expected_keys:
+            raise ConfigurationError(f"断言期望覆盖操作 {index} 字段不闭合。")
+        identity = (operation["rule_id"], operation["check_id"])
+        if (
+            not all(isinstance(item, str) and item for item in identity)
+            or identity in seen
+            or not isinstance(operation["rationale"], str)
+            or not operation["rationale"].strip()
+        ):
+            raise ConfigurationError(f"断言期望覆盖操作 {index} 身份非法或重复。")
+        seen.add(identity)
+        matches = [
+            check
+            for rule in updated.get("rules", [])
+            if rule.get("rule_id") == identity[0]
+            for check in rule.get("checks", [])
+            if check.get("id") == identity[1]
+        ]
+        if len(matches) != 1:
+            raise ConfigurationError(f"断言期望覆盖操作 {index} 未唯一命中 check。")
+        assertion = matches[0].get("assertion")
+        if not isinstance(assertion, dict) or assertion.get("value") != operation["before"]:
+            raise ConfigurationError(f"断言期望覆盖操作 {index} 的 before 不匹配。")
+        assertion["value"] = operation["after"]
+    return updated, len(operations)
+
+
 def _write_classification_draft(
     campaign_dir: Path,
     manifest: dict[str, Any],
@@ -6627,6 +6879,10 @@ def _write_classification_draft(
         Path(__file__).with_name("candidate_rule_expectations_0_145_0.json"),
         "基线断言画像",
     )
+    assertion_profile, assertion_override_count = _apply_assertion_profile_overrides(
+        assertion_profile,
+        target_version=manifest["target_version"],
+    )
     assertion_profile = json.loads(
         json.dumps(assertion_profile, ensure_ascii=False)
     )
@@ -6654,6 +6910,7 @@ def _write_classification_draft(
             "count": len(assertion_version_paths),
             "paths": assertion_version_paths,
         },
+        "assertion_override_count": assertion_override_count,
     }
     secure_write_json(draft_root / "draft.json", receipt)
     return receipt

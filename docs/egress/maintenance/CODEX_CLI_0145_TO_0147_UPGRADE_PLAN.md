@@ -1,9 +1,10 @@
 # Codex CLI 0.145.0 → 0.147.0 Official Egress 升级计划（执行中）
 
-> 状态：当前 Campaign `…-k36` 位于 **§6 之内**。官方 attempt 的 19 个 job 均结束，
-> 但 A11／A13／A14 没有到达各自目标协议分支，因而这只是**编排完成**，不是场景成立；
-> attempt 保持 `awaiting_receipts`，`seal` 未执行。审核结论与下一步见 §10.9.4。
-> Active 仍为 0.145。
+> 状态：Campaign `codex-0145-to-0147-20260811T070000Z-k41` 已达成 `official_sealed`；
+> **R8 双轨变更集已完成并冻结新的工具身份（98 项，`ac00085c…`），当前停在 R9 之前**。
+> k36～k40 仅保留为历史诊断夹具，不迁移、不复用、不续跑；k41 不得续跑或追加证据。
+> 下一步是按新身份创建 Campaign k42 并完整双轨重采。
+> Active 仍为 0.145，0.147 尚未替换。
 > 创建日期：2026-08-07
 > 审阅基线：commit `abf236375f66aa096580092e646c4e33d37bb135`
 > 基线画像：Codex CLI `0.145.0`
@@ -209,7 +210,8 @@ host/path/query/header、framing、代理、TLS 或连接复用。
 运行 classify 后逐规则标记 `inherit/change/add/delete/condition_change/blocked`，并人工批准
 五份完整 0.147 清单：`target-rules.json`、`rule-migration.json`、`scenarios.json`、
 `profile.json`、`assertion-profile.json`。每份记录 SHA-256，并批准联合 `review_sha256`；
-必须 `blocked=0`。
+必须 `blocked=0`。双轨采集允许在轨道级事实中记录 `track_not_applicable`，但该状态不得
+替代联合结论；每条 Lite-only 规则必须在 Lite 专项轨道取得最终分类。
 
 新出站面不是失败；未发现、未分类或静默回落旧画像才失败。删除规则必须同时具备源码
 不可达结论、正反场景、旧引用清单和 RemovalReceipt，否则保持 `blocked`。
@@ -425,18 +427,23 @@ final-wire 可用，但不能替代 alpha 真实 service 链或 `server_response
 
 ## 10. 当前执行状态
 
-> 时间：2026-08-10。当前 Campaign `codex-0145-to-0147-20260810T000000Z-k36`，
-> campaign_id `codex-0_147_0-20260809T221440Z`。
+> 时间：2026-08-10。当前 Campaign `codex-0145-to-0147-20260811T070000Z-k41`，
+> campaign_id `codex-0_147_0-20260810T140047Z`，官方 attempt
+> `20260810T140200Z-a203d6324a2bee5d`，状态 **`official_sealed`**。
 > **Active 仍为 0.145，0.147 尚未替换。**
 
 ### 10.1 按章节的真实进度
 
-**当前位置：§6 之内，卡在 §6.2 `official_sealed` 之前。§6.4 classify 从未执行过。**
+**当前位置：§6.4 classify 之内，R8 变更集已完成。`official_sealed` 已于 k41 首次达成；
+classify 出 draft 后逐条定性，剩 12 条判据无法在 k41 证据上成立（见 §10.11），其处置已在
+R8 一次性落地并冻结新的工具身份，最终定性要等 k42 双轨证据。模型策略冻结为“主线
+`gpt-5.4` 非 Lite + `gpt-5.6-luna` Lite 专项”，不得把整个 Campaign 切换到 luna。**
 
 | 章节 | 状态 | 依据 |
 |---|---|---|
 | §5 DOC-PRE 与 P0 | 完成 | 不依赖 Campaign，结论长期有效 |
-| §6 Campaign／官方取证／分类 | **进行中** | k36 `planned` 完成；官方 attempt 的 19/19 job 编排完成，但 3 个目标场景未成立；`seal` 未执行，见 §10.9 |
+| §6.1～6.3 Campaign／官方取证／seal | **完成** | k41 官方采集 22／22 job 全 `complete`、零 execution_error；秘密扫描 850 文件／148 MB 零命中；环境五项全 `restored`、数据库 426 主键零缺失；`official_sealed` 达成 |
+| §6.4 classify | **进行中** | draft 已出；主线固定为 `gpt-5.4` 非 Lite，4 条 Lite 判据转入独立 `gpt-5.6-luna` 专项；§10.11.2 的 12 项已在 R8 全部处置，等 k42 实证 |
 | §7 建立 0.147 画像 | 未开始 | |
 | §8 Candidate／比较／`ready` | 未开始 | |
 | §9 生产启用与回滚 | 未开始 | |
@@ -444,6 +451,10 @@ final-wire 可用，但不能替代 alpha 真实 service 链或 `server_response
 k34 曾到达 `compared`，但 ACC-01～07 改变了受管工具身份，k34 已作废并停在 `compared`，
 其证据只用于根因复现与离线夹具，不迁移。**ACC-01～07 全部发生在「§6.2 seal 之前」这
 一个点上**，是让 seal 有可能通过的前置修复，不构成章节推进。
+
+k36～k39 的处置：k36 用于暴露第三层问题（§10.9）；k37 死于三个采集脚本缺陷、k38 死于
+判据过严与工具调用字段路径错误、k39 完成 19／19 且首次同时取得 A11／A13／A14 三份场景
+收据，但在 seal 预检处暴露第四层问题（§10.10）。四者证据均不迁移、不封存。
 
 0.147 画像 digest `0d86e033716ab2b7d2161a7015ad000bc0d7cedfaa9e130342eec4ba0637ef9f`
 由 k26～k34 六次独立产出逐字一致，可作为后续画像复算的对照。
@@ -455,21 +466,21 @@ k34 曾到达 `compared`，但 ACC-01～07 改变了受管工具身份，k34 已
 [`CAPTURE_OPERATIONS_NOTES.md`](CAPTURE_OPERATIONS_NOTES.md)。这些不随单个 Campaign
 变化，采集前必读。
 
-### 10.7 剩余路径
+### 10.7 剩余路径（k41 之后）
 
-1. 先以独立变更集实现 `SCN-REALITY-01`：job 退出码之外，必须校验目标协议分支的成功
-   收据；缺少收据一律失败关闭，禁止再把脚本结束记为场景成立；
-2. 分别修正 A11／A13／A14 的安全触发方式，并以 §10.9.4 的场景成功条件做测试；
-3. 触发工具与场景定义冻结后新建 k37；k36 只保留为诊断夹具，不迁移、不封存、不复用；
-4. k37 重新执行官方取证，完成编目 → 收口 → 派生 → `seal` → `official_sealed`；
-5. `profile_approved`：classify 42 条规则，含 SPEC-TLS-003 的判据修订（§10.9.2）；
-6. §7 建立画像 → §8 候选采集、compare、新 `accept` → `ready`；
-7. §9 生产启用：canary、切换、回滚演练、恢复后 final-wire，最终
-   Active=0.147 / Previous=0.145；
-8. 收尾：恢复分组 9 的 `allow_image_generation`（原值 false）。
+1. 保持 k41 `official_sealed` 不变，不在 k41 上续跑或追加证据；
+2. 以 R8 一次性冻结双轨采集契约：主线使用 `gpt-5.4` 验证非 Lite 行为，Lite 专项使用
+   `gpt-5.6-luna`，两条轨道独立 job、标签、证据根和收据；
+3. 在 R8 同一变更集中处理 §10.11.2 的 12 项补采、脚本修复、`TLS-003` 算子、`EP-019` 期望值
+   和 17 处 selector 修正，并通过 P0、测试和身份摘要复核；
+4. 创建新的 Campaign（暂定 k42），按双轨完整重采，完成编目 → 收口 → 派生 → `seal`；
+5. 主线和 Lite 专项各自完成适用规则验收，联合 `classify` 必须无 `blocked`，再进入
+   `profile_approved`；
+6. 继续 §7 建立画像 → §8 Candidate、compare、accept → `ready`；
+7. 最后按 §9 执行 canary、切换、回滚演练和恢复后 final-wire，最终
+   Active=0.147 / Previous=0.145。
 
-本次只修订审核文档；`SCN-REALITY-01`、触发逻辑、重采与 `seal` 均须作为后继变更集另行
-审核后实施。
+本节之前关于 k36→k37 的步骤保留为历史审核记录，不再作为当前执行指令。
 
 ### 10.8 第一层：验收链路接线（已闭环）
 
@@ -497,11 +508,12 @@ artifact 覆盖、旧 `accept` 错把两类规则强制成同一种双侧模型�
 根因与第一层相同：历史 25 个 Campaign 无一产出过 `results.json`，链路错配与证据错配
 两层问题一直并存，只能逐层剥离。
 
-> **⛔ 当前阻断（审核结论已明确）**：8 个缺口中 5 个已解决；A11／A13／A14 的 job
-> 虽被编排器记为 `complete`，目标协议分支实际均未成立。pcap 与中继一致说明目标连接
-> 没有发生，但不能据此推导规则不可观测，更不能把判据改成“未观测即通过”。应先增加
-> 场景真实性失败关闭，再修正安全触发并新建 Campaign 重采。完整证据和方案见
-> [`SPEC_EP_002_EVIDENCE_BLOCKER.md`](SPEC_EP_002_EVIDENCE_BLOCKER.md)。`seal` 未执行。
+> **✅ 已解除（k39，2026-08-10）**：8 个缺口全部解决。A11／A13／A14 在 §11 的
+> R1～R4 完成后于 k39 首次同时成立，三份场景收据齐备（`sideband_established`、
+> `token_refreshed`、`upload_chain_complete`），19／19 job 通过。原始诊断与方案见
+> [`SPEC_EP_002_EVIDENCE_BLOCKER.md`](SPEC_EP_002_EVIDENCE_BLOCKER.md)。
+> **但 `seal` 仍未执行**——k39 在 ACC-03 的 seal 预检处暴露了性质不同的第四层问题，
+> 见 §10.10。
 
 #### 10.9.1 缺口清单（k35 官方侧实测，8／15 场景）与当前状态
 
@@ -604,16 +616,168 @@ pcap 与中继记录一致，只能证明**本次目标连接没有发生**，�
 完整实证与执行方案见
 [`SPEC_EP_002_EVIDENCE_BLOCKER.md`](SPEC_EP_002_EVIDENCE_BLOCKER.md)。
 
-## 11. 后继实施计划（`SCN-REALITY-01` → k37）
+### 10.10 第四层：seal 预检的 selector 可达性（k39 暴露，当前阻塞项）
 
-本节是当前升级工作的**实施计划**。它把 §10.9.4 的审核决定拆成可执行的独立变更集；
-在前一阶段退出条件未满足前，不得进入下一阶段，不得在 k36 上续跑或执行 `seal`。
+k39 首次做到 19／19 且三份场景收据齐备，`seal` 仍未通过。拦截点是 ACC-03 引入的
+`assertion_gate._verify_selector_reachability`：**每条 `dual_wire` 规则的每条 check
+都必须在该侧命中至少一条观测**，命中不了即失败关闭。
+
+这一层与前三层性质不同。前三层是「链路不通／证据类型不匹配／目标分支没触发」，这一层
+是**判据的 selector 与采集侧的标签体系从未对齐**——历史上从没有 Campaign 走到过这道
+门禁，所以两边的错位一直没有暴露。
+
+用 k39 真实证据做全量扫描（不 fail-fast）：**48 条 check 命中、9 条选不到**，涉及 6 条
+规则。逐条核对 0.147／0.145 源码后分四类：
+
+| 类 | 性质 | 缺口 | 处置 |
+|---|---|---|---|
+| 一 | 标签 glob 漏覆盖：证据已采到但没进 manifest | `official-wham-get` 的 `misc-http.jsonl`（22 行，含 wham GET）未声明；A01 的 `models-http.jsonl` 同类 | 补标签声明，**不需重采** |
+| 二 | 证据已采到，只差 `variant` 标签 | `SPEC-H1-004` 的 `models-order`／`responses-order` | 补标签声明，**不需重采** |
+| 三 | 采集侧从未构造过该条件样本 | `SPEC-EP-014`×2、`SPEC-EP-020`、`SPEC-WS-002 optional-missing-covered`、`SPEC-EP-008 alpha-search-endpoint` | 改采集驱动，**必须重采** |
+| 四 | 0.147 真实行为变化，补证据即伪造 | `SPEC-EP-019`×2 | 走画像更新，见下 |
+
+**第一、二类已修复并离线验证**（用 k39 现成证据重跑编目→收口→派生→门禁）：
+selector 缺口 9 → **5**，`dual_wire` 断言通过 52 → **54**，零回归。`variant` 按单个
+relay 连接文件精确绑定——每个 `conn00N.client_to_upstream.bin` 只含一个请求，且
+select 同时约束 `data.path`，标签贴错只会选不到而失败关闭，不会误判通过。
+
+**第四类的实证**：`SPEC-EP-019` 断言 wham GET 路径集合恰好是
+`{wham/usage, wham/rate-limit-reset-credits}`，而 0.147 实际发的是
+`wham/settings/user`——该端点在 0.147 源码中出现 12 处、**0.145 中零处**，是 0.147 为
+git-attribution 新增的。补标签后该 check 从「选不到」变为「选得到但断言失败」，真实
+差异因此浮出。**不得为满足门禁去构造 0.147 根本不发的请求**；该条应在 R7 的 classify／
+compare 阶段按规则变更处理。
+
+> ⚠ 另需注意：`wham-get-headers` 的实际观测来自 mitm 面，而 mitm 记录不含 `host` 头，
+> 因此该条的头序差异里混有采集面差异。**用 mitm 来源的观测做头序断言本身不可靠**，
+> 修画像时须一并处理。
+
+**第三类已按 §11 R6-B 补齐**（4 个样本，全部落在建 k40 之前以免工具身份漂移）：
+
+| 判据 | 触发方式 | 性质 |
+|---|---|---|
+| `SPEC-EP-008` alpha-search | `--enable standalone_web_search` | 补触发条件。调用点 `ext/web-search/src/tool.rs:139`，注册条件见 `core/src/tools/spec_plan.rs:854`；该 feature 为 `UnderDevelopment`、默认关闭，官方集成测试同样显式打开 |
+| `SPEC-EP-014` default／`SPEC-EP-020` | 走 legacy compact，不注入 turn-state、不开任何 `Stage::Experimental` feature | 自然基线，零干预 |
+| `SPEC-EP-014` beta | 走 legacy compact ＋ `--enable network_proxy` | **I 类**，见下 |
+| `SPEC-WS-002` optional-missing | `--disable remote_compaction_v2` 使 `x-codex-beta-features` 整条消失 | 关闭一个 Stable feature，不改 WS 传输参数 |
+
+`x-codex-beta-features` 只收录 `Stage::Experimental` 的 feature 或 `RemoteCompactionV2`，
+而 legacy compact 必须关掉后者；0.147 与 0.145 全树 `Stage::Experimental` **都只有
+`network_proxy` 一个**，两版的 `build_model_client_beta_features_header` 逐字相同。
+因此该 I 类干预**不是本次新增，而是复现 0.145 定基线时的同等条件**——不在同等条件下
+采 0.147，「采不到」会被误读成行为变化。判据为 `all_list_prefix`，只断言槽位不断言头值；
+`network_proxy` 的下游全在 `core/src/sandboxing/`，不改 API 出站路径。
+
+**结果（k41）**：§10.10 的四类全部处置完毕，selector 缺口 **9 → 0**，`official_sealed`
+首次达成。`alpha/search` 采到 4 条观测（前一轮为 0），两个新 compact job 的第三槽分别落在
+`x-codex-window-id` 与 `x-codex-beta-features`，与设计一致。
+
+### 10.11 第五层：判据 selector 缺陷与采集条件失真（classify 阶段，当前阻塞项）
+
+seal 通过后 classify 才第一次真正评估 42 条规则的断言：起点**通过 59／失败 23**，
+对目标画像做 17 处 select 修正后为**通过 70／失败 12**，selector 缺口全程为 0。
+
+修正只做一件事——把 description 已写明、而 select 漏写的约束补回去：9 处补
+`method=POST`（description 写的是「自动长度请求」「HTTP body 的」，原 select 只按
+artifact 级标签选，把 GET 一并选中），6 处补 `labels.ca_mode absent`（判据要验的是客户端
+发出的原始字节，而 mitm 是代理重构的——protocol 报 `HTTP/2.0`、`host` 落在 `:authority`
+不在头列表；relay 规则的 labels 不带 `ca_mode`），5 处补端点／传输约束（排除 WS 握手、
+排除走独立 backend-client 形态的 `wham/settings/user`）。**每处都先试选一次，加了约束会
+导致「选不到」的一律不加**——`BODY-006/nonlite-*` 两条即因此被排除。
+
+#### 10.11.1 双轨模型策略：主线 `gpt-5.4`，Lite 专项 `gpt-5.6-luna`
+
+**4 条判据失败的共同根因，也是本层最重要的发现。**
+
+`use_responses_lite` 既不由源码也不由 `config.toml` 决定，而是上游 models 响应下发的模型
+元数据，没有任何配置键能覆盖。从 k41 的 models 响应原文读出：`gpt-5.6-*` 系列与
+`codex-auto-review` 为 `true`，而 **Campaign 一直用的 `gpt-5.4` 为 `false`**。
+场景 A03 的 precondition 却写着 `use_responses_lite=true`，标签据此打 `mode=lite`（涉及
+6 个 job）——**这个条件从未成立**，违反标签声明自身的 authority 原则。
+
+受影响的 4 条：`BODY-006/lite-*`×2、`EP-014/legacy-default-headers`（缺
+`x-openai-internal-codex-responses-lite`）、`EP-020`。
+
+> ⚠ 这 4 条一度被当成「0.147 的 Lite 语义变了」。核实后两版 lite 分支返回值**逐字相同**
+> ——`(String::new(), None)`，顶层字段置空后靠 serde `skip_serializing_if` 省略。
+> **判据失败要先查「条件是否真的成立」，再查「是不是新版行为变了」。**
+
+本轮冻结双轨模型策略，不把整个 Campaign 切换到 `gpt-5.6-luna`：
+
+1. **主升级线**：继续使用 `gpt-5.4`，只验收 `use_responses_lite=false` 的普通非 Lite 行为；
+2. **Lite 专项**：仅为上述 4 条 Lite 判据增加独立 job，固定使用 `gpt-5.6-luna`，并要求
+   每个 job 的 `/models` 原文实际证明 `use_responses_lite=true`；
+3. 两条轨道必须使用独立的 `track` 标签、job、evidence root 和 receipt，禁止把 Lite 专项
+   证据混入主线，也禁止把主线未触发 Lite 当成 Lite 失败；
+4. 主线对 Lite-only 规则记录 `track_not_applicable`，Lite 专项必须对这 4 条规则分别给出
+   `inherit`／`change`／`condition_change` 结论。联合 `classify` 仍要求两条轨道的适用规则
+   均无 `blocked`；
+5. 若 Lite 专项要证明“0.145→0.147 的版本差异”，则 0.145 与 0.147 两侧必须使用同一个
+   `gpt-5.6-luna` 并保持同一采集条件；只有一侧使用 luna 时，结论只能是 0.147 的条件覆盖，
+   不得写成纯版本差异。
+
+#### 10.11.2 剩余 12 条与硬约束
+
+| 需要的动作 | 条数 | 判据 | R8 处置 |
+|---|---|---|---|
+| 建立 Lite 专项模型轨道 | 4 | `BODY-006/lite-*`×2、`EP-014/legacy-default-headers`、`EP-020`；专项固定 `gpt-5.6-luna`，主线继续 `gpt-5.4` | 新增 `official-lite-http-response`、`official-lite-legacy-compact-default` 两个 lite job（独立 `track`／`RUN_ID`／证据根），四条判据 select 补 `labels.track=lite`；模型条件收据见 §10.11.3 |
+| 补采集样本 | 4 | `BODY-006/nonlite-*`×2（无 non_lite 的 POST responses）、`PROTO-001/h1-wire`（A01 只有 mitm 证据）、`EP-019/wham-get-headers`（同上） | `official-relay-http-response` 改为主线双绑：`conn001` 供 A01 的原始 H1 请求行，其余连接供 A04 的非 Lite POST；新增 `official-relay-wham-get` 用字节中继取 Wham GET 原始头序 |
+| 修采集脚本 | 2 | `EP-014/legacy-turn-state-slot`（`RELAY_INJECT_TURN_STATE` 注入失效）、`WS-002/default-swap-remove-order`（混入 runtime-metrics 的头） | 改用 `RELAY_INJECT_WS_TURN_STATE`，在 WS `response.metadata` 边界注入，让随后的真实 legacy compact 自然回送第三槽；新增 `official-relay-ws-default` 承担默认握手，runtime-metrics 改标 `variant=runtime_metrics` 不再冒充默认 |
+| 实现新算子 | 1 | `TLS-003`：§10.9.2 定案的「存在性子集」算子至今未实现 | `same_set_distinct_order` 改为按扩展集合分组后逐组核对 record／artifact／排列数，任一组同时达标即通过；非列表记录一律计入 `invalid_record_ids` 并失败关闭 |
+| 直接改期望 | 1 | `EP-019/wham-get-paths`：`wham/usage` → `wham/settings/user`，已源码核实 | 落在 `candidate_rule_expectation_overrides_0_147_0.json`，classify 时按 `before` 精确命中后应用；基线 0.145 画像不动 |
+
+**硬约束**：任一规则在其适用轨道上标 `blocked`，联合 classify 即为 `blocked` 状态，accept
+的 `classification_unblocked` 门禁不通过，流程**永远走不到 `ready`**。Lite-only 规则在
+主线只能标 `track_not_applicable`，不得伪造为通过；Lite 专项必须把这 4 条全部落在
+`inherit`／`change`／`condition_change` 上。因此：
+
+```
+主线只采 gpt-5.4 → Lite 4 条在主线 `track_not_applicable`；Lite 专项用 gpt-5.6-luna
+补齐 → 两条轨道联合无 blocked → 才能继续替换
+```
+
+**模型决策已冻结**：不全局切换模型；主线固定 `gpt-5.4`，Lite 专项固定 `gpt-5.6-luna`。
+专项 job 必须把 `model_id`、`models_response_sha256`、`use_responses_lite` 和 fallback 状态
+写入收据；任一值缺失或与预期不一致即失败关闭。
+
+17 处修正原先只落在 draft 的 `assertion-profile.fixed.json`；R8 已连同下节的四项修正一并
+合并进冻结基线画像并重算摘要。
+
+#### 10.11.3 R8 复核时新发现的四项条件失真
+
+12 项本身之外，R8 在逐项复核「标签声明 ↔ 采集坐标」一致性时又查出四处同源缺陷。它们与
+§10.11.1 是同一个根因——**声明了一个采集侧从未成立的条件**——只是此前没人从这个方向扫过：
+
+| # | 缺陷 | 后果 | 处置 |
+|---|---|---|---|
+| 1 | `official-relay-legacy-compact-beta` 标 `mode=lite`，实际走主线 `{model}`=`gpt-5.4` | 与 A03 的历史错标同源；Lite 判据一旦放宽 track 约束就会误选 | 改 `mode=non_lite` 并补 `track=main` |
+| 2 | `official-http-fallback` 标 `mode=lite`，同样走 `gpt-5.4` | 同上 | 改 `mode=non_lite` 并补 `track=main` |
+| 3 | `variable_contract.model` 的 default 仍是 `gpt-5.6-luna` | 不显式传 `--model` 时主线会静默变成 Lite 轨道，而标签仍按 `non_lite` 声明 | default 改 `gpt-5.4`，并写明 Lite 专项不经本变量 |
+| 4 | `BODY-006/nonlite-*`×2 只按 `A04＋mode=non_lite` 选 | `residency-us`／`runtime-metrics` 用整目录 glob 绑 A04，其 relay 字节必含启动期 `GET /models`，body 断言必然失败——补出的非 Lite 样本会白采 | select 补 `method=POST` 与 `/backend-api/codex/responses` 路径约束 |
+
+第 4 项是**这轮唯一会直接决定 k42 成败的一项**：§10.11 当初把这两条排除，理由是「加约束会
+选不到」——那是因为当时根本没有非 Lite 的 HTTP POST 样本。R8 补出样本后约束才成立，若不补
+约束，补采本身就没有意义。
+
+配套的 `h1_wire_probe.py` 受控清单原先只声明 `gpt-5.6-luna`，主线模型查不到元数据会落到
+默认值；已补 `gpt-5.4`（`use_responses_lite=false`），与 k41 的 `/models` 原文一致。**探针是
+受控上游，元数据由它权威给出，写错即等于伪造 Lite 条件。**
+
+四项均已补上防回归测试，其中「官方 job 想声明 Lite，就必须同时是 lite 轨道、固定
+`gpt-5.6-luna` 且产出模型条件收据」是一条通用不变量，覆盖全部官方标签声明。
+
+## 11. 后继实施计划（k41 → 双轨重采 → k42）
+
+本节是当前升级工作的**实施计划**。k41 已完成 `official_sealed`，本节不再描述
+`SCN-REALITY-01 → k41` 的历史路径，而是定义当前 classify 阻塞解除、双轨重采和后续
+升级门禁。不得在 k41 上续跑、追加证据或执行新的 `seal`。
 
 ### 11.0 执行前置要求
+Vircs 和 ARM64 都是远程服务器，使用 SSH 连接。
 
 本升级包含两条相互独立的执行轨道，不能把官方 CLI 采集和 Sub2API 服务更新混为一件事：
 
-1. **官方 CLI 采集轨道**：可以继续在 Vircs 上进行。采集使用独立的 Campaign、relay、容器和
+1. **官方 CLI 采集轨道**：可以继续在远程服务器 Vircs 上进行。采集使用独立的 Campaign、relay、容器和
    evidence root；只要不修改 Sub2API 的服务进程、生产配置、生产端口、生产数据和
    Active/Previous，就不影响 Vircs 当前对外提供的 Sub2API 服务。
 2. **Sub2API 服务验证轨道**：不得直接在正在对外服务的 Vircs 实例上试验。先在独立的
@@ -652,10 +816,14 @@ ARM64 全部通过后，**不得直接把 ARM64 结果视为 Vircs 上线通过*
 不变约束：
 
 - Active/Previous 继续保持 `0.145.0 / 0.145.0`；
-- k36 只作诊断夹具，证据不迁移、不复用、不封存；
+- k36～k40 只作诊断夹具，证据不迁移、不复用、不封存；k41 的 sealed 证据保持不可变；
 - 不伪造 JWT、上游响应、Realtime sideband 或文件上传 URL；
 - 不修改日常登录目录，不使用未隔离的真实凭据做过期触发；
-- 任意工具身份、场景定义、抓包范围或收据 schema 变化，都必须冻结新摘要并新建 k37。
+- 主升级线固定使用 `gpt-5.4`，只验证普通非 Lite 行为；
+- Lite 专项固定使用 `gpt-5.6-luna`，只验证 `use_responses_lite=true` 的 4 条 Lite 判据；
+- 两条轨道必须使用独立 job、`track` 标签、evidence root、模型收据和结果摘要；
+- 任意工具身份、场景定义、抓包范围、模型坐标或收据 schema 变化，都必须冻结新摘要并
+  创建新的 Campaign（暂定 k42），不得修改或续跑 k41。
 
 ### 11.2 变更集与退出条件
 
@@ -664,22 +832,27 @@ ARM64 全部通过后，**不得直接把 ARM64 结果视为 Vircs 上线通过*
 | R0 方案冻结 | 固定 A11／A13／A14 的成功事件、证据字段、超时、负例和恢复边界；定义 `scenario_receipt` 与 job 状态的关系 | `SCN-REALITY-01` 方案、字段表、状态机、测试矩阵 | **已完成**；无“脚本退出即成功”的路径 |
 | R1 真实性门禁 | 记录原始事件、生成成功 receipt、job 缺 receipt 失败关闭；不在 R1 伪造或补写协议字段 | 门禁实现、正反测试、receipt schema 校验 | **已完成**；A11 400、A13 无 refresh、A14 无工具调用等负例均失败关闭，实施记录见 `SCN_REALITY_01_SCENARIO_REALITY_GATE.md` §12 |
 | R2 A11 触发修正 | 使用官方 0.147 V3／`quicksilver=v2` 路径；只调用官方 CLI，不手工拼 sideband | realtime 成功 receipt、call_id/SDP/started 关联、api SNI 记录 | call-create 2xx、异步 started/SDP、sideband SNI 三者同时存在 |
-| R3 A13 触发修正 | 隔离账号与 `CODEX_HOME`；在 JWT 自然进入 5 分钟刷新窗口时采集；采集前后逐字核对隔离状态 | refresh request receipt、auth SNI、凭据恢复摘要 | 真实 `POST /oauth/token` 与 `auth.openai.com` SNI 同时存在；活跃凭据无非预期变化 |
+| R3 A13 触发修正 | 隔离账号与 `CODEX_HOME`；优先走官方 `account/read {refreshToken:true}` 主动刷新，或按收据记录自然刷新窗口；采集前后核对隔离状态 | refresh request receipt、auth SNI、凭据摘要 | 真实 `POST /oauth/token` 与 `auth.openai.com` SNI 同时存在；刷新路径和凭据变化与收据一致 |
 | R4 A14 触发与抓包修正 | 冻结 Apps 工具可见性与调用契约；要求 create→响应 `upload_url`→PUT→uploaded；按端口覆盖响应返回的所有上传主机 | tool-call receipt、URL provenance、PUT/uploaded receipt、动态 host inventory | 工具调用和完整上传链成立；区域 SNI 来自真实响应，不依赖硬编码主机 |
 | R5 P0 与身份冻结 | 在临时目录做可丢弃预检，运行全套工具测试，冻结源码／工具／场景／镜像摘要 | P0 报告、inventory、工具身份 receipt | 工作区干净；身份校验通过；不得触碰 Active/Previous |
-| R6 k37 官方重采 | 新建独立 Campaign，执行官方 `run`，逐 job 校验真实性 receipt，再执行 `seal` | k37 campaign、attempt、results、证据根、secret scan、seal receipt | 19 个 job 的 job 状态与场景状态均为成功；三条 SNI check 均有官方证据 |
-| R7 后续升级门禁 | 重新编目、classify、建立 0.147 画像，完成 candidate、compare、accept 和 `ready` | profile/release/compare/accept 收据 | `blocked=0`、无未登记漂移、双版本隔离和全部 seal 通过 |
+| R6 k41 官方重采 | **已完成**：k41 执行官方 `run`，逐 job 校验真实性 receipt 并执行 `seal` | k41 campaign、attempt、results、证据根、secret scan、seal receipt | 22/22 job 完成；三条 SNI check 均有官方证据；`official_sealed` 已达成 |
+| R7 classify | 复核 17 处 selector 修正，并拆分主线与 Lite 专项的适用规则 | 双轨 classification draft、selector 测试、模型条件记录 | **已完成**；通过 59→70、失败 23→12、selector 缺口全程 0 |
+| R8 双轨变更集 | 主线保持 `gpt-5.4`；新增 `gpt-5.6-luna` Lite 专项 job；补采样本、修脚本、实现 `TLS-003`、修正 `EP-019` 期望值，并更新场景／收据契约 | 变更集、测试、双轨场景清单、收据 schema、selector/profile 修正摘要 | **已完成**；§10.11.2 的 12 项与 §10.11.3 的 4 项全部处置；607 项测试通过、`check-egress-spec` 全绿、transition 875 项复算一致、`backend/` 零改动；工具身份冻结为 98 项 `ac00085c…` |
+| R9 k42 官方双轨重采（当前） | 创建新 Campaign，按双轨执行官方 `run`，逐 job 校验 receipt，再执行 `seal` | k42 campaign、attempt、results、双证据根、secret scan、seal receipt | 两条轨道的适用 job 全部成功；三条 SNI check 有官方证据；`official_sealed` 达成 |
+| R10 后续升级门禁 | 重新 classify、建立 0.147 画像，完成 candidate、compare、accept 和 `ready` | profile/release/compare/accept 收据 | `blocked=0`、无未登记漂移、双版本隔离和全部 seal 通过 |
 
 ### 11.3 `SCN-REALITY-01` 收据最低字段
 
 | 场景 | 最低字段 |
 |---|---|
 | A11 | `call_create_status`、`call_id_sha256`、`sdp_or_started_event`、`async_error_count`、`sideband_sni`、`final_state` |
-| A13 | `token_request_method`、`token_request_path`、`oauth_sni`、`jwt_exp_observation`、`credential_restore`、`final_state` |
+| A13 | `trigger`、`token_request_method`、`token_request_path`、`oauth_sni`、`jwt_exp_observation`（自然窗口路径必填）、`capture_side_wrote_auth`、`rotated_by_refresh`、`final_state` |
 | A14 | `tool_name`、`tool_call_id`、`create_request`、`upload_url_source_event`、`put_destination`、`upload_sequence`、`uploaded_event`、`regional_sni`、`final_state` |
 
-字段值必须来自官方 CLI、relay、pcap 或驱动的原始事件；编排器不得根据 job 退出码
-自行补写目标字段。缺字段、状态矛盾、异步 error 或来源不一致均为失败关闭。
+每份收据还必须记录 `track`、`model_id`、`models_response_sha256`、`use_responses_lite`、
+`model_fallback` 和 evidence root。字段值必须来自官方 CLI、relay、pcap 或驱动的原始事件；
+编排器不得根据 job 退出码自行补写目标字段。缺字段、状态矛盾、异步 error、模型条件不符
+或来源不一致均为失败关闭。
 
 ### 11.4 执行顺序
 
@@ -690,24 +863,89 @@ R1 真实性门禁与负例
   ↓
 R2 A11 V3 与最终事件等待
   ↓
-R3 A13 JWT 自然刷新
+R3 A13 官方刷新路径与最终事件
   ↓
 R4 A14 Apps 工具与动态区域 SNI
   ↓
 R5 P0 预检与工具身份冻结
   ↓
-R6 新建 k37、官方 run → receipt 校验 → seal
+R6 k41 official_sealed（已完成）
   ↓
-R7 classify → profile → candidate → compare → accept → ready
+R7 当前 classify 双轨拆分
+  ↓
+R8 双轨变更集与 P0
+  ↓
+R9 新建 k42、官方双轨 run → receipt 校验 → seal
+  ↓
+R10 classify → profile → candidate → compare → accept → ready
 ```
 
-任一阶段失败，保留原始失败证据并停止；不得通过改写判据、补写 receipt、复用 k36
-证据或静默回退 0.145 来推进流程。只有 R6 完成且 `SPEC-EP-002` 三条目标 SNI 均有
-真实官方证据，才允许进入 R7。
+任一阶段失败，保留原始失败证据并停止；不得通过改写判据、补写 receipt、复用 k36～k41
+证据或静默回退 0.145 来推进流程。只有 R9 完成且双轨适用规则、`SPEC-EP-002` 三条目标
+SNI、secret scan、环境恢复和 `seal` 均通过，才允许进入 R10。
 
 ### 11.5 当前执行起点
 
-**R0 与 R1 均已完成，下一步从 R2 开始。**
+**R0～R8 均已完成，`official_sealed` 于 k41 首次达成，R8 双轨变更集已落地并冻结新的工具
+身份；当前停在 R9 之前，等待创建 Campaign k42 并完整双轨重采。模型策略已冻结：主线继续
+`gpt-5.4`，Lite 专项使用 `gpt-5.6-luna`。ARM64 只读验证已完成：独立临时源码树上的
+`test-capture-tools`、`/health`、HTTP API 和 WebSocket 握手均已通过；这只用于服务更新前的
+兼容性确认，不改变官方 CLI 采集轨道。**
+
+| 阶段 | 状态 | 结果 |
+|---|---|---|
+| R0／R1 | 完成 | `SCN-REALITY-01` 场景真实性门禁落地，见下文 |
+| R2 A11 | 完成 | 显式走官方 V3 并等待最终事件；call_id 判据改从 `Location` 头取（201＋`text/plain` SDP，非 JSON body） |
+| R3 A13 | 完成 | 走 `account/read {refreshToken:true}`，绕开 `exp` 检查触发刷新 |
+| R4 A14 | 完成 | 冻结 Apps 工具契约；工具调用事件字段是扁平 `item.{tool,server,status}`，非 Rust `ThreadItemDetails` 的嵌套形态 |
+| R5 | 完成 | P0 预检与工具身份冻结 |
+| R6 | 完成 | k41 达成 22／22、三份场景收据和 `official_sealed`；第四、第五层问题转入 §10.10～§10.11 |
+| R6-A | 完成 | 9 条 selector 缺口逐条甄别，分四类 |
+| R6-B | 完成 | 第一、二类补标签（缺口 9→5、断言 52→54、零回归）；第三类补 4 个条件／扰动样本 |
+| k40 | 作废 | 采集与缺口修复均成功（缺口 0、`alpha/search` 采到），但 seal 的秘密扫描暴露工具缺陷（见下），修复即改工具身份 |
+| **k41** | **`official_sealed`** | 22／22 job `complete`；秘密扫描 850 文件／148 MB 零命中；环境五项全 `restored`、数据库 426 主键零缺失；**历史首次达成** |
+| **R7 classify** | 完成 | 主线固定 `gpt-5.4` 非 Lite；Lite-only 规则转入 `gpt-5.6-luna` 专项；17 处 select 修正后通过 59→70、失败 23→12、selector 缺口全程 0；剩 12 条见 §10.11.2 |
+| **R8 双轨变更集** | **完成** | §10.11.2 的 12 项与 §10.11.3 的 4 项一次改完；受管工具 96→98 项，身份 `ac00085c…`（连算两次一致）；607 项测试与 `check-egress-spec` 全绿 |
+
+k40 的死因单独记一笔：`relay_extract.shape_value` 把 >24 字符的串降成 `str:<len=N>`，
+而 `candidate_evidence_guard` 的 `json-secret-field` 白名单只认 `<redacted`／`<secret`，
+于是把已脱敏的 `"refresh_token":"str:<len=211>"` 判成明文凭据——**两侧脱敏格式从未对齐**。
+修法是给负向前瞻加「`str:<len=` ＋纯数字 ＋ `>`」一种确定形态，并用 8 例验证短值保留原文、
+伪造长度、占位符后有残留三类仍照常命中，没有放宽安全边界。
+
+**R8（已完成）**：一次性完成了 §10.11.2 的 12 项与 §10.11.3 的 4 项——建立 `gpt-5.6-luna`
+Lite 专项而不改变 `gpt-5.4` 主线、补 `non_lite` 与 A01 relay 证据、改用 WS `response.metadata`
+注入 turn-state、新增独立 WS 默认样本、实现 `TLS-003` 分组存在性算子、把 `EP-019` 期望值
+变更收进目标版本 override，并合并 17 处 selector 修正。场景清单、`track`／模型字段和收据
+schema 同步更新，受管工具由 96 项增至 98 项、身份为 `ac00085c…`。
+
+**R9（下一步执行）**：按新身份创建 Campaign k42 并完整双轨重采。清单中的官方侧 job 由 19 个
+增至 26 个（R8 新增 7 个），其中 2 个是 Lite 专项。**不得在 k41 上续跑**——身份已变。
+执行前须复核 §11.0 的隔离要求：独立账号、独立 `CODEX_HOME`、独立证据目录，不触碰生产凭据、
+全局 `/etc/hosts`、生产 relay 或 Active/Previous。
+
+R9 完成后仍须用与 §10.10 相同的**全量 selector 扫描**复核，不能只看 job 是否 `complete`：
+
+1. §10.11.2 的 12 条判据是否真的从「失败／选不到」转为通过；
+2. 两个 Lite 专项 job 的 `/models` 原文是否实际证明 `use_responses_lite=true`——模型条件
+   收据缺字段、值不符或发生 fallback 都必须失败关闭，不得事后补写；
+3. `official-relay-http-response` 的连接序号假设是否成立（`conn001` 为启动 models、其余为
+   POST Responses）；序号漂移时 path／method selector 会失败关闭，属预期行为而非误报；
+4. `official-relay-ws-default` 的握手是否真的不含 runtime_metrics 条件头。
+
+k37～k39 的死因依次是：采集脚本三处缺陷（cleanup 在 `set -e` 下中止致 hosts 劫持残留、
+A13 探针缺 `docker exec -i`、A11 call_id 取错来源）；判据过严加工具调用字段路径错误；
+以及第四层的 selector 可达性。三者证据均不迁移。
+
+k40 采集完成后仍待验证的事项，按风险排序：
+
+1. 5 条剩余 selector 缺口是否真的转为可达；
+2. `alpha/search` 是否真的发出——前一轮正是「以为会触发但没触发」栽的跟头，本轮虽已
+   逐项核对注册条件，但模型是否调用 `web_run` 仍取决于它对 prompt 的反应；
+3. 三个新 job 的 `variant` 是否落到正确请求上，特别是 compact 第三槽是否分别为
+   `x-codex-window-id` 与 `x-codex-beta-features`。
+
+**采集完成不等于缺口补上**，上述三项须用与 §10.10 相同的全量扫描复核后才能进入 seal。
 [`SCN_REALITY_01_SCENARIO_REALITY_GATE.md`](SCN_REALITY_01_SCENARIO_REALITY_GATE.md)
 的 §1～§11 是 R0 冻结的契约，§12 是 R1 的实施记录。按仓库既有「收据只表达成功态」的
 约定，判定为**缺收据即失败**，而不是读取收据里的成功标志——后者只需改一个字段值即可
@@ -723,7 +961,14 @@ retry 独立目录与 A13 还原前后摘要证明均已闭合；A14 官方侧�
 R1 的效果已用 k36 的实际形态复现：子进程退出 0、证据目录非空、但目标协议分支一跳未发生
 时，三个目标 job 全部判 `failed`。**这也意味着触发问题仍然存在**——R1 只保证「没触发」
 不再被记成「完成」，真正的触发修正是 R2（A11 走官方 V3 并等待 started／SDP）、
-R3（A13 等 JWT 自然进入刷新窗口）、R4（A14 冻结 Apps 工具契约与动态区域 SNI）。
+R3（A13 走官方刷新路径并记录触发类型）、R4（A14 冻结 Apps 工具契约与动态区域 SNI）。
 
-受管工具身份已随 R1 变化，按 §11.1 必须新建 k37 完整重采，k36 不迁移、不复用。R2 及
-后续阶段不得直接替换 Vircs 正式服务，不执行未经 canary 验证的生产更新。
+受管工具身份已随 R1～R6-B 多次变化，按 §11.1 每次都新建了 Campaign 完整重采；
+k36～k39 不迁移、不复用。k40 因秘密扫描工具缺陷作废。当前身份冻结于 k41 的 plan，
+**在 R8 一次性改完受管工具之前不得零散修改**——每改一次就要重建 Campaign 完整重采。R7 及后续阶段不得
+直接替换 Vircs 正式服务，不执行未经 canary 验证的生产更新。
+
+> 操作提醒：向 Vircs 传源码树时除 `chmod` 700／600 外还必须 `chown -R root:root`。
+> 从 macOS 打包的 tar 会带着本地 uid／gid，解包后驱动脚本会以
+> `[Errno 13] Permission denied` 失败，k40 的第一个 attempt 即因此全废。
+> 权限与属主都不进工具身份摘要，修正不影响已建 Campaign。

@@ -85,9 +85,15 @@ HEURISTIC_PATTERNS: tuple[tuple[str, re.Pattern[bytes]], ...] = (
     ),
     (
         "json-secret-field",
+        # 白名单必须同时认 `relay_extract.shape_value` 的长度占位符：body 摘要对
+        # >24 字符的串一律降成 `str:<len=N>`，refresh_token 这类长凭据只剩长度。
+        # 原先的负向前瞻只认 `<redacted`／`<secret`，会把已脱敏的
+        # `"refresh_token":"str:<len=211>"` 判成明文凭据（k40 的 A13 派生观测即
+        # 因此在 seal 处失败关闭）。这里只放行「`str:<len=` ＋纯数字 ＋ `>`」这一种
+        # 确定形态——`str:` 后跟原文的短值（≤24 字符，如短 api_key）仍然照常命中。
         re.compile(
             rb'(?i)"(?:access_token|refresh_token|id_token|api_key|password|secret)"'
-            rb'\s*:\s*"(?!<(?:redacted|secret))[^"\r\n]{8,}"'
+            rb'\s*:\s*"(?!<(?:redacted|secret)|str:<len=\d+>")[^"\r\n]{8,}"'
         ),
     ),
     (

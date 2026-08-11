@@ -31,13 +31,13 @@ capture_root=${CAPTURE_ROOT:-/root/oauth-capture}
 capture_tool_root=${CAPTURE_TOOL_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}
 scrub_tool="$capture_tool_root/scrub_raw_bytes.py"
 run_id=${RUN_ID:?必须提供 RUN_ID}
-model=${MODEL:-gpt-5.6-luna}
+model=${MODEL:-gpt-5.4}
 codex_version=${CODEX_VERSION:-0.145.0}
 # 直接监听 443：客户端打的就是 443，容器内该端口空闲，且 iptables 重定向在
 # 无 NET_ADMIN 的容器里不可用。
 relay_port=${RELAY_PORT:-443}
 turns=${TURNS:-1}
-scenario=${SCENARIO:?必须提供 SCENARIO: tool|conn-retry|turnstate-compact|http-response|residency-us|image|image-edit|image-repeat-tui|search|search-repeat-tui|compact|compact-exec-negative|compact-tui|comp-hash-changed|model-downshift|review-tui|guardian-tui|memgen|realtime-webrtc|runtime-metrics|ws-special-headers|oauth-refresh|file-upload}
+scenario=${SCENARIO:?必须提供 SCENARIO: tool|conn-retry|turnstate-compact|legacy-compact-default|legacy-compact-beta|ws-default|ws-optional-missing|http-response|residency-us|image|image-edit|image-repeat-tui|search|search-repeat-tui|compact|compact-exec-negative|compact-tui|comp-hash-changed|model-downshift|review-tui|guardian-tui|memgen|realtime-webrtc|runtime-metrics|ws-special-headers|oauth-refresh|file-upload}
 extra_args=""
 compaction_reason=""
 compaction_first_model=""
@@ -65,6 +65,19 @@ fi
 if [[ ! $codex_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "CODEX_VERSION 必须是三段数字。" >&2
   exit 2
+fi
+require_model_receipt=${REQUIRE_MODEL_CONDITION_RECEIPT:-0}
+model_track=${MODEL_TRACK:-}
+expect_lite=${EXPECT_USE_RESPONSES_LITE:-}
+if [[ $require_model_receipt == 1 ]]; then
+  if [[ $model_track != main && $model_track != lite ]]; then
+    echo "MODEL_TRACK 必须是 main 或 lite。" >&2
+    exit 2
+  fi
+  if [[ $expect_lite != true && $expect_lite != false ]]; then
+    echo "EXPECT_USE_RESPONSES_LITE 必须是 true 或 false。" >&2
+    exit 2
+  fi
 fi
 
 work_dir="$capture_root/runs/$run_id"
@@ -536,6 +549,51 @@ case "$scenario" in
     # legacy /responses/compact。配合中继注入 turn-state，直接验证 compact 回送头。
     prompt='请用 shell 工具执行一条命令：echo turnstate-compact-probe。执行后只回复 TOOL-OK。'
     extra_args='--disable remote_compaction_v2 -c model_auto_compact_token_limit=4000' ;;
+  legacy-compact-default)
+    # SPEC-EP-014 legacy-default-headers／SPEC-EP-020 legacy-observed-subset 的
+    # 默认样本：与 turnstate-compact 同样走 legacy /responses/compact，但**不**由
+    # 中继注入 turn-state，也不打开任何 Stage::Experimental feature。
+    # 于是 installation-id 之后的第三槽既不是 x-codex-turn-state 也不是
+    # x-codex-beta-features，自然落到 x-codex-window-id——这正是判据要的默认线序。
+    # 无任何干预，属自然基线。调用方必须不设 RELAY_INJECT_TURN_STATE。
+    prompt='请用 shell 工具执行一条命令：echo legacy-compact-default-probe。执行后只回复 TOOL-OK。'
+    extra_args='--disable remote_compaction_v2 -c model_auto_compact_token_limit=4000' ;;
+  ws-optional-missing)
+    # SPEC-WS-002 optional-missing-covered 要"至少保留一个缺少可选头后的独立扰动
+    # 样本"（断言只是 count_at_least=1）。
+    #
+    # WS 握手头里天然可选的是 x-codex-beta-features：它由
+    # build_model_client_beta_features_header 拼装，只收录 Stage::Experimental 的
+    # feature 或 RemoteCompactionV2。而 remote_compaction_v2 是 Stable 且
+    # default_enabled=true，所以默认握手**带**该头（值为 remote_compaction_v2），
+    # 判据的 default 期望序里也确实有它。把它关掉，该头整条消失——这就是判据要的
+    # "可选头缺失"扰动，且不改任何 WS 传输参数。
+    #
+    # 只关一个 feature，不注入头、不改 provider，因此仍是官方默认 WS 形态减去一项。
+    prompt='请只回复 OK，不要做任何其他事。'
+    extra_args='--disable remote_compaction_v2' ;;
+  ws-default)
+    # SPEC-WS-002 默认线序必须来自没有 runtime_metrics 等条件 feature 的独立样本。
+    # 只执行普通 WS turn，不注入头、不切 provider、不改 feature。
+    prompt='请只回复 OK，不要做任何其他事。' ;;
+  legacy-compact-beta)
+    # SPEC-EP-014 legacy-beta-slot 的 beta 样本：第三槽为 x-codex-beta-features。
+    #
+    # 该头由 `core/src/session/mod.rs` 的 build_model_client_beta_features_header
+    # 拼装，只收录 `Stage::Experimental` 的 feature 或 RemoteCompactionV2。而 legacy
+    # compact 本身要求关掉 RemoteCompactionV2，所以只能靠前者——0.147 全树
+    # Stage::Experimental 仅剩 `network_proxy` 一个。
+    #
+    # ⚠ 属 I 类：靠打开 feature 让该头出现，采到的是"当此头存在时官方怎么写线序"。
+    # 但**这不是本次新增的干预**：0.145 的同名函数逐字相同、Experimental 集合也同样
+    # 只有 network_proxy，基线判据当初只可能这么采。不在同等条件下采 0.147，
+    # "采不到"会被误读成行为变化。判据是 all_list_prefix，只断言槽位不断言头值。
+    #
+    # network_proxy 不污染出站：下游全在 core/src/sandboxing/，且还要
+    # permission_profile.network_sandbox_policy().is_enabled() 才真正启用代理；
+    # 而 beta 头只看 features.enabled()。调用方必须不设 RELAY_INJECT_TURN_STATE。
+    prompt='请用 shell 工具执行一条命令：echo legacy-compact-beta-probe。执行后只回复 TOOL-OK。'
+    extra_args='--disable remote_compaction_v2 --enable network_proxy -c model_auto_compact_token_limit=4000' ;;
   http-response)
     # 用官方 CLI + OpenAI OAuth 的干净 HTTP Responses 分支补原始 h1 字节。
     # 内置 provider 支持 WS，无法靠已移除的 feature 开关强制 HTTP；这里创建一个
@@ -571,15 +629,20 @@ case "$scenario" in
     # 路径不存在会直接 RespondToModel 报错，根本发不出请求。
     prompt='__IMAGE_EDIT__' ;;
   search)
-    # 试探 alpha-search（SPEC-EP-015）。`--search` 的 help 写的是
-    # "the native Responses `web_search` tool is available"——**未必**等于打
-    # `{base}/alpha/search`：那条路来自 ext/web-search 扩展，与模型侧内置
-    # web_search 工具可能是两条独立链路。本次采集正是要分辨这一点：
-    #   - 若出现 POST /backend-api/codex/alpha/search → EP-015 拿到基线
-    #   - 若只在 /responses 的 tools 里声明 web_search → 说明 alpha-search
-    #     另有触发方式，须回到源码找调用点
+    # 采 alpha-search（SPEC-EP-008／EP-015）。
+    #
+    # 早期只给搜索 prompt 采不到 `{base}/alpha/search`——上一轮实测确认它与模型侧
+    # 内置 web_search 确是两条独立链路。调用点在 `ext/web-search/src/tool.rs:139`
+    # （`SearchEndpoint::search()` → `POST alpha/search`），注册条件见
+    # `core/src/tools/spec_plan.rs:854` 的 `standalone_web_search_enabled()`：
+    #   namespace_tools ∧ provider.capabilities().web_search
+    #     ∧ (model_info.use_responses_lite ∨ Feature::StandaloneWebSearch)
+    # 前两项内置 openai provider 默认为真；第三项里 `standalone_web_search` 是
+    # Stage::UnderDevelopment、default_enabled=false，必须显式打开——官方自己的
+    # 集成测试（app-server/tests/suite/v2/web_search.rs:110）也是这么开的。
+    # 不依赖任何交互，与 runtime-metrics 同款做法。
     prompt='请联网搜索一下 2026 年 Rust 1.9 版本有哪些新特性，简要总结三点。'
-    extra_args='' ;;
+    extra_args='--enable standalone_web_search' ;;
   search-repeat-tui)
     prompt='__PROMPT_TUI_SEARCH__' ;;
   realtime-webrtc)
@@ -1032,6 +1095,20 @@ python3 "$scrub_tool" \
   --verify
 rm -rf -- "$work_dir/relay"
 mv -- "$scrubbed_relay" "$work_dir/relay"
+
+# 双轨模型条件收据：字段全部从脱敏后的最终 relay 原始字节提取。编排器只声明
+# 预期坐标，不能根据 job 退出码补写 model、Lite 或 fallback 状态。
+if [[ $require_model_receipt == 1 ]]; then
+  echo "=== 模型条件收据（$model_track / $model）==="
+  python3 "$capture_tool_root/model_condition_receipts.py" \
+    --run-root "$work_dir" \
+    --output "$work_dir/model-condition-receipt.json" \
+    --job-id "${SCENARIO_JOB_ID:?模型收据要求 SCENARIO_JOB_ID}" \
+    --run-id "$run_id" \
+    --track "$model_track" \
+    --model "$model" \
+    --expect-use-responses-lite "$expect_lite"
+fi
 
 # 还原必须早于场景事实构建：A13 的成功收据要求 auth.json 逐字还原的前后摘要相等，
 # 而还原结果此前只在 EXIT 陷阱里产生，那时事实早已构建完。

@@ -12,6 +12,8 @@ from pathlib import Path
 
 from tools.official_client_capture.candidate_rule_assertion import (
     AssertionConfigurationError,
+    Observation,
+    _evaluate_assertion,
     build_assertion_command,
     build_assertion_result,
     command_sha256,
@@ -157,6 +159,98 @@ class CandidateRuleExpectationTest(unittest.TestCase):
 
 
 class CandidateRuleAssertionTest(unittest.TestCase):
+    @staticmethod
+    def _tls_observation(
+        index: int,
+        sequence: list[int],
+        *,
+        artifact: str | None = None,
+    ) -> Observation:
+        return Observation(
+            record_id=f"tls-{index}",
+            scenario_id="A02",
+            record_type="tls_client_hello",
+            artifact_path=artifact or f"direct/ws-{index}.pcap",
+            evidence_paths=(artifact or f"direct/ws-{index}.pcap",),
+            labels={"transport": "websocket"},
+            data={"extension_types": sequence},
+        )
+
+    def test_tls_order_operator_accepts_one_qualifying_subset(self) -> None:
+        observations = [
+            self._tls_observation(1, [0, 11, 10]),
+            self._tls_observation(2, [11, 0, 10]),
+            self._tls_observation(3, [0, 10, 11]),
+            self._tls_observation(4, [10, 0, 11]),
+            # 同一 selector 里的另一种 TLS 实现拥有不同扩展集合；它不应把
+            # 上面已经成立的四份官方 WS 子集整体否掉。
+            self._tls_observation(5, [0, 11, 10, 35]),
+        ]
+        passed, actual = _evaluate_assertion(
+            observations,
+            {
+                "operator": "same_set_distinct_order",
+                "path": "data.extension_types",
+                "minimum_records": 4,
+                "minimum_artifacts": 4,
+                "minimum_distinct_orders": 2,
+            },
+        )
+        self.assertTrue(passed)
+        self.assertEqual(actual["matching_group_count"], 1)
+        self.assertEqual(actual["selected_group"]["artifact_count"], 4)
+
+    def test_tls_order_operator_requires_independent_artifacts(self) -> None:
+        observations = [
+            self._tls_observation(
+                index,
+                [0, 11, 10] if index % 2 else [11, 0, 10],
+                artifact="direct/shared.pcap",
+            )
+            for index in range(1, 5)
+        ]
+        passed, actual = _evaluate_assertion(
+            observations,
+            {
+                "operator": "same_set_distinct_order",
+                "path": "data.extension_types",
+                "minimum_records": 4,
+                "minimum_artifacts": 4,
+                "minimum_distinct_orders": 2,
+            },
+        )
+        self.assertFalse(passed)
+        self.assertEqual(actual["groups"][0]["artifact_count"], 1)
+
+    def test_tls_order_operator_rejects_non_list_observation(self) -> None:
+        observations = [
+            self._tls_observation(1, [0, 11, 10]),
+            self._tls_observation(2, [11, 0, 10]),
+            self._tls_observation(3, [0, 10, 11]),
+            self._tls_observation(4, [10, 0, 11]),
+            Observation(
+                record_id="tls-invalid",
+                scenario_id="A02",
+                record_type="tls_client_hello",
+                artifact_path="direct/ws-invalid.pcap",
+                evidence_paths=("direct/ws-invalid.pcap",),
+                labels={"transport": "websocket"},
+                data={"extension_types": "not-a-list"},
+            ),
+        ]
+        passed, actual = _evaluate_assertion(
+            observations,
+            {
+                "operator": "same_set_distinct_order",
+                "path": "data.extension_types",
+                "minimum_records": 4,
+                "minimum_artifacts": 4,
+                "minimum_distinct_orders": 2,
+            },
+        )
+        self.assertFalse(passed)
+        self.assertEqual(actual["invalid_record_ids"], ["tls-invalid"])
+
     @staticmethod
     def _masked_text_frame(value: dict[str, object]) -> bytes:
         payload = json.dumps(value, separators=(",", ":")).encode("utf-8")
