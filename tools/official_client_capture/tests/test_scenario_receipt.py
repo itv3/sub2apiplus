@@ -1037,6 +1037,42 @@ class ScenarioManifestContractTest(unittest.TestCase):
                 }
             )
 
+    def test_官方侧每个受契约要求的场景都必须有标签产出所需_kind(self) -> None:
+        """场景失去全部证据是静默的：seal 才会以 selector 不可达失败关闭。
+
+        A05 就这样丢过一次——它原先绑在主线 turnstate-compact 上并标 mode=lite，
+        而该 job 用的是非 Lite 模型；撤销这个错误标注后没人补回 A05 的证据，直到
+        k44 的 seal 前扫描才暴露 ws-beta／ws-no-accept 选不到观测。契约的
+        side_coverage 是权威要求，这里逐场景比对标签实际能产出的 kind。
+        """
+
+        import tools.official_client_capture.acceptance_contract as ac
+
+        profile = ac.load_profile(TOOL_ROOT / "candidate_rule_expectations_0_145_0.json")
+        coverage = ac.verify_frozen_contract(profile)["side_coverage"]["official"]
+        labels = json.loads(
+            (TOOL_ROOT / "codex_upgrade_evidence_labels_0_145_0.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        produced: dict[str, set[str]] = {}
+        for entry in labels["entries"]:
+            if entry.get("side") != "official":
+                continue
+            for rule in entry["rules"]:
+                for scenario_id in rule["scenario_ids"]:
+                    kinds = produced.setdefault(scenario_id, set())
+                    kinds.add(rule["kind"])
+                    if rule.get("derive"):
+                        kinds.add(rule["derive"]["kind"])
+        for scenario_id, required in sorted(coverage.items()):
+            missing = set(required) - produced.get(scenario_id, set())
+            self.assertFalse(
+                missing,
+                f"官方侧场景 {scenario_id} 缺少 kind {sorted(missing)}，"
+                "没有任何标签声明能产出——seal 会以 selector 不可达失败关闭",
+            )
+
     def test_job_的_covers_必须被自身绑定场景证明(self) -> None:
         """plan 的升级审计会拒绝「covers 的规则不在本 job 场景里」的 job。
 

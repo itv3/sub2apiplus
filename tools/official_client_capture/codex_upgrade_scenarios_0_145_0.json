@@ -1444,6 +1444,57 @@
       "required_model_receipt": true
     },
     {
+      "id": "official-lite-ws-turnstate",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A05"
+      ],
+      "description": "Lite 专项 gpt-5.6-luna：Lite WS 会话与受控 turn-state 回送（A05 唯一证据来源）",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "gpt-5.6-luna",
+            "RUN_ID": "{campaign_id}-lite-ws-turnstate",
+            "SCENARIO": "tool",
+            "SCENARIO_JOB_ID": "official-lite-ws-turnstate",
+            "REQUIRE_MODEL_CONDITION_RECEIPT": "1",
+            "MODEL_TRACK": "lite",
+            "EXPECT_USE_RESPONSES_LITE": "true",
+            "RELAY_INJECT_WS_TURN_STATE": "lite-ws-turn-state",
+            "TURNS": "2"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-lite-ws-turnstate"
+      ],
+      "covers": [
+        "SPEC-WS-001",
+        "SPEC-WS-002",
+        "SPEC-HDR-004",
+        "SPEC-HDR-006",
+        "SPEC-BODY-005"
+      ],
+      "required_scenario_receipts": [],
+      "track": "lite",
+      "model_id": "gpt-5.6-luna",
+      "expected_use_responses_lite": true,
+      "required_model_receipt": true
+    },
+    {
       "id": "official-relay-legacy-compact-beta",
       "phase": "official",
       "suites": [

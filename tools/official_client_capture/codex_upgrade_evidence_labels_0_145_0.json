@@ -493,6 +493,34 @@
       ]
     },
     {
+      "job_id": "official-lite-ws-turnstate",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A05"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "websocket_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "track": "lite",
+            "mode": "lite",
+            "variant": "turn_state",
+            "compression": "zstd",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A05 唯一的证据来源：Lite 专项固定 gpt-5.6-luna，模型条件收据证明 use_responses_lite=true；两轮 WS 会话由中继在 response.metadata 边界回送 turn-state，permessage-deflate 由握手自身协商。此前 A05 曾被绑在主线 turnstate-compact 上并标 mode=lite——那个条件从未成立，R8 撤销后 A05 一度失去全部证据，本 job 补回。"
+        }
+      ]
+    },
+    {
       "job_id": "official-relay-legacy-compact-beta",
       "side": "official",
       "rules": [
