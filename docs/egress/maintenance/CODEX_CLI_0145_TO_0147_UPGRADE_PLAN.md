@@ -1,9 +1,10 @@
 # Codex CLI 0.145.0 → 0.147.0 Official Egress 升级计划（执行中）
 
 > 状态：Campaign `codex-0145-to-0147-20260811T070000Z-k41` 已达成 `official_sealed`；
-> **R9 已完成：Campaign `codex-0145-to-0147-20260811T034436Z-k47` 于 2026-08-11 达成
-> `official_sealed`，这是双轨采集下的首次成功。k42～k46 五轮先后作废（§10.11.4～§10.11.8），
-> 每一次都是靠真实证据在 seal 之前发现的。当前停在 §6.4 classify（R10 起点）。**
+> **R9 与 R10 的 classify 已完成：Campaign `codex-0145-to-0147-20260811T034436Z-k47` 于
+> 2026-08-11 依次达成 `official_sealed` 与 `profile_approved`。k42～k46 五轮先后作废
+> （§10.11.4～§10.11.8），每一次都是靠真实证据在 seal 之前发现的。
+> 当前 `next_command: capture-candidate`——**跨入服务部署域，须先按 §11.0 走 ARM64 验证**。
 > k36～k43 仅保留为历史诊断夹具，不迁移、不复用、不续跑；k41 不得续跑或追加证据。
 > Active 仍为 0.145，0.147 尚未替换。
 > 创建日期：2026-08-07
@@ -444,7 +445,7 @@ R8 一次性落地并冻结新的工具身份，最终定性要等 k42 双轨证
 |---|---|---|
 | §5 DOC-PRE 与 P0 | 完成 | 不依赖 Campaign，结论长期有效 |
 | §6.1～6.3 Campaign／官方取证／seal | **完成** | k41 官方采集 22／22 job 全 `complete`、零 execution_error；秘密扫描 850 文件／148 MB 零命中；环境五项全 `restored`、数据库 426 主键零缺失；`official_sealed` 达成 |
-| §6.4 classify | **进行中** | draft 已出；主线固定为 `gpt-5.4` 非 Lite，4 条 Lite 判据转入独立 `gpt-5.6-luna` 专项；§10.11.2 的 12 项已在 R8 全部处置，等 k42 实证 |
+| §6.4 classify | **完成** | draft 已出；主线固定为 `gpt-5.4` 非 Lite，4 条 Lite 判据转入独立 `gpt-5.6-luna` 专项；§10.11.2 的 12 项已在 R8 全部处置，等 k42 实证 |
 | §7 建立 0.147 画像 | 未开始 | |
 | §8 Candidate／比较／`ready` | 未开始 | |
 | §9 生产启用与回滚 | 未开始 | |
@@ -993,6 +994,53 @@ seal 被拒。k41 之所以能过，是它的 bundle 当时被手工改成过 06
 `EP-019/wham-get-paths`、`EP-019/wham-get-headers`（0.147 新增 `wham/settings/user`
 调用点，属 `change`，源码依据见 §10.11.4）、`PROTO-001/h1-wire`、`H1-004/responses-order`
 （命中数少，逐条核对 selector 精度即可）。
+
+#### 10.11.10 k47 classify：`profile_approved`
+
+五份 0.147 清单已批准封存，联合摘要
+`2ff8f3358cd5870753dd81320e306ec6f1ba2b5649a75d65cf51d1734b9371ab`：
+
+| 清单 | 封存 SHA-256 |
+|---|---|
+| `target-rules.json` | `91616975b1a7e3e3717a99c72a937b8f6901a921c434decb2ee7fdab85c4f75b` |
+| `rule-migration.json` | `110c20f540949043dd458784fe2f762f96a775dbd8c814bb69fb366a750473d1` |
+| `scenarios.json` | `4938ae56730bd4ebc9c4ad669a66de7a225798a112da244b6c641fb4f38df17b` |
+| `profile.json` | `b41dd002e40e35f512d0960664290f8987d7592d148c560b94739be20a6eec70` |
+| `assertion-profile.json` | `bb7d5b160ff24cf07d174c241d3577e9161e32bb296d17da5472d2d70d87af73` |
+
+`target-rules.json` 的摘要与 k34 **逐字相同**——规则集本身未变。画像 `profile_digest`
+为 `0d86e033…`，与 §10.1 记录的跨轮基准一致、payload 与 k34 逐字相同，这是第七次独立
+复算出同一结果。
+
+**分类结果**：42 条规则 41 `inherit` ＋ 1 `change`；2808 条发现 2604 `change` ＋
+204 `condition_change`；`unclassified_count=0`、**`blocked=0`**。
+
+- **source 发现（2604 条）**与 k34 指纹逐条相同（同一对源码树），直接继承其已批准分类，
+  不重新臆断；继承时逐条校验指纹命中，缺一即失败关闭。
+- **dynamic 发现（204 条，其中 153 条为 k34 所无）**是双轨采集与 R8 新增 job 采到的新
+  出站面，按 kind／path 的出站子系统语义映射：`websocket_frame`→`WS-004`、
+  `tls_client_hello`→`TLS-001`、`http_request` 按 path 映射。k47 新出现的
+  `alpha/search`→`EP-008`、`files`／`oauth/token`→`EP-002`、`v1/live/`→`EP-012`
+  依据各规则自身 description 补齐。
+
+**目标画像的 4 处修正**（只落在目标版本画像，基线画像与受管工具零改动）：
+
+| 判据 | 修正 | 依据 |
+|---|---|---|
+| `PROTO-001/h1-wire` | 补 `labels.ca_mode absent` | 5 条命中里 4 条报 `HTTP/2.0`，来自 mitm 面（代理把 h1 重构成 h2）。§10.11 当初没补是因为 A01 只有 mitm 证据，R8 补出 relay 原始请求行后才成立 |
+| `H1-004/responses-order` | 期望补 `x-openai-internal-codex-responses-lite` | A03 的 precondition 就是 `use_responses_lite=true`；基线期望缺该头源于 §10.11.1「A03 长期被非 Lite 模型采集」。两版 `core/src/client.rs` 的 `add_responses_lite_header` 注入条件逐字相同（0.145:616／0.147:629），故属画像缺陷而非版本差异 |
+| `EP-019/wham-get-paths` | 期望扩为三条路径 | 0.147 新增 `wham/settings/user`（`client.rs:640`，0.145 零处），`wham/usage` 仍在（`rate_limit_resets.rs:83`）——新增而非替代 |
+| `EP-019/wham-get-headers` | 排除 `settings/user` | 该端点走独立 backend-client 形态（头序含 `cache-control`）；其线序覆盖属后续规则扩展，已在 `rule-migration` 中作为 `change` 登记 |
+
+修正后在 k47 的 sealed 证据上重跑：**57 PASS／0 FAIL／0 UNREACHABLE**。
+
+> 只有 `EP-019` 被定性为 `change`——它是本次唯一经源码与 wire 双重证实的 0.147 出站面
+> 变化。其余两处是画像自身的缺陷修正，规则行为并未改变，故仍记 `inherit` 并在 rationale
+> 中写明修正内容与依据。
+
+**环境侧补充**：Vircs 未装 Go，而 `prepare-profile` 内部硬编码 `go run ./cmd/...`。
+已用 `golang:1.26-bookworm` 容器提供 `go` 转发脚本（项目要求 1.26.5），并补传
+`backend/`（不含构建产物）。两者都不进工具身份摘要，身份仍为 97 项 `cacf51be…`。
 
 ## 11. 后继实施计划（k41 → 双轨重采 → k42）
 
