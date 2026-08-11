@@ -1076,6 +1076,40 @@ seal 被拒。k41 之所以能过，是它的 bundle 当时被手工改成过 06
 
 期间受管工具测试由 601 增至 617 项，新增的 16 条全部来自这六轮的真实踩坑。
 
+#### 10.11.12 R10-b 起步：候选采集迁至 ARM64
+
+**判定依据**：`run_candidate_core_capture.sh`、`run_candidate_aux_capture.sh`、
+`run_h1_wire_probe.sh`、`run_images_wire_probe.sh` 全部不引用 Codex CLI 二进制——候选侧
+客户端是 `drive_candidate_gateway_ws.py`，配 `upstream_byte_relay.py` 做合成上游。
+Codex CLI（x86_64）只在官方侧用到，那部分已在 Vircs 完成并 sealed。因此候选采集可以整体
+放到 ARM64 测试环境，Vircs 的生产服务完全不必参与。
+
+**campaign 可迁移**：`_verify_plan_identity` 校验的是 `target_source` 目录树摘要、
+`target_package` 包摘要与工具身份摘要，**不绑定 campaign 目录路径**。把以下资产按原绝对
+路径同步到 ARM64 后，`status` 在 ARM64 上复算通过，仍为 `profile_approved`：
+
+| 资产 | 体积 | 用途 |
+|---|---|---|
+| campaign 目录 | 65 M | 已 sealed 的官方证据、classify 已批准清单 |
+| 官方证据根（31 个） | 160 M | seal 记录的 inventory 要逐项复算 |
+| 0.147 源码树 | 89 M | `target_source` 身份校验 |
+| codex package | 114 M | `target_package` 身份校验 |
+| 受管工具树 | 63 M | 工具身份必须逐字一致 |
+
+Vircs 无到 ARM64 的私钥，经本地管道中转（数据流经不落盘）。
+
+**账号坐标对齐**：campaign 冻结了 `codex_account_id: 90`，而 ARM64 上没有该 ID。按指示改用
+ARM64 现有的 OAuth 账号（`c_zs@163.com`，原 ID 19），在事务内把其主键对齐到 90：外键
+`update_rule` 均为 `NO ACTION`，故先摘 `account_groups` 关联、改主键、再按原值插回；改前已
+`pg_dump` 备份 `accounts` 与 `account_groups`。该账号原本就在 group 2，与
+`api_key_id=1` 同组，正是采集要求的配对；账号总数保持 19，未新增记录。
+
+**候选镜像**：`deploy/Dockerfile` 的 `BUILD_TAGS` 需加 `candidatecapture`（Linux 生不出
+DeviceCheck，改用受四元组约束的合成 provider）。候选源码树用干净副本，并把
+`stage-profile` 产出的 staged catalog 覆盖到
+`backend/internal/officialegress/catalogdata/`——覆盖后 `profiles/` 同时含 `0.145.0` 与
+`0.147.0`，`release-catalog.json` 的 `source` 指向 k47 的 classification 摘要。
+
 ## 11. 后继实施计划（R0～R10）
 
 本节是当前升级工作的**实施计划**。R0～R9 与 R10 的 classify／profile 已随 k47 完成，
@@ -1112,6 +1146,10 @@ ARM64 全部通过后，**不得直接把 ARM64 结果视为 Vircs 上线通过*
 
 - 当前冻结的官方 Codex CLI 资产是 Linux `x86_64`，正式官方采集仍须在 Ubuntu 24.04 / x86_64
   环境完成；ARM64 Sub2API 验证不能替代官方 CLI 采集验证；
+- **但候选侧采集不受此约束**：`run_candidate_*` 全套脚本都不引用 Codex CLI 二进制，客户端是
+  `drive_candidate_gateway_ws.py`（Python 实现的网关 WebSocket 驱动）配
+  `upstream_byte_relay.py` 合成上游。因此候选采集可以在 ARM64 完成，官方采集留在 Vircs
+  ——这正是两条轨道天然的分界；
 - 如果 Vircs 实际为 `aarch64`，ARM64 验证是服务更新的必要前置，但仍需在 Vircs 做最终 canary；
 - 如果 Vircs 实际为 `x86_64`，ARM64 验证属于额外兼容性验证，不能替代 Vircs x86_64 canary。
 
