@@ -37,7 +37,7 @@ codex_version=${CODEX_VERSION:-0.145.0}
 # 无 NET_ADMIN 的容器里不可用。
 relay_port=${RELAY_PORT:-443}
 turns=${TURNS:-1}
-scenario=${SCENARIO:?必须提供 SCENARIO: tool|conn-retry|turnstate-compact|legacy-compact-default|legacy-compact-beta|ws-default|ws-optional-missing|http-response|residency-us|image|image-edit|image-repeat-tui|search|search-repeat-tui|compact|compact-exec-negative|compact-tui|comp-hash-changed|model-downshift|review-tui|guardian-tui|memgen|realtime-webrtc|runtime-metrics|ws-special-headers|oauth-refresh|file-upload}
+scenario=${SCENARIO:?必须提供 SCENARIO: tool|conn-retry|turnstate-compact|legacy-compact-default|legacy-compact-beta|ws-default|ws-optional-missing|http-response|http-response-plain|residency-us|image|image-edit|image-repeat-tui|search|search-repeat-tui|compact|compact-exec-negative|compact-tui|comp-hash-changed|model-downshift|review-tui|guardian-tui|memgen|realtime-webrtc|runtime-metrics|ws-special-headers|oauth-refresh|file-upload}
 extra_args=""
 compaction_reason=""
 compaction_first_model=""
@@ -66,6 +66,16 @@ if [[ ! $codex_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   echo "CODEX_VERSION 必须是三段数字。" >&2
   exit 2
 fi
+# 与 capturelib/scenarios.py 的 UPSTREAM_CAPACITY_* 保持同一语义与量级；那边覆盖
+# official-core 路径，这里覆盖中继路径。两处都只认这一条错误消息。
+UPSTREAM_CAPACITY_MESSAGE="Selected model is at capacity"
+UPSTREAM_CAPACITY_RETRY_LIMIT=${UPSTREAM_CAPACITY_RETRY_LIMIT:-4}
+UPSTREAM_CAPACITY_RETRY_DELAY=${UPSTREAM_CAPACITY_RETRY_DELAY:-20}
+if [[ ! $UPSTREAM_CAPACITY_RETRY_LIMIT =~ ^[0-9]+$ || ! $UPSTREAM_CAPACITY_RETRY_DELAY =~ ^[0-9]+$ ]]; then
+  echo "UPSTREAM_CAPACITY_RETRY_LIMIT／DELAY 必须是非负整数。" >&2
+  exit 2
+fi
+
 require_model_receipt=${REQUIRE_MODEL_CONDITION_RECEIPT:-0}
 model_track=${MODEL_TRACK:-}
 expect_lite=${EXPECT_USE_RESPONSES_LITE:-}
@@ -594,6 +604,20 @@ case "$scenario" in
     # 而 beta 头只看 features.enabled()。调用方必须不设 RELAY_INJECT_TURN_STATE。
     prompt='请用 shell 工具执行一条命令：echo legacy-compact-beta-probe。执行后只回复 TOOL-OK。'
     extra_args='--disable remote_compaction_v2 --enable network_proxy -c model_auto_compact_token_limit=4000' ;;
+  http-response-plain)
+    # SPEC-BODY-002 要证明「Responses 尊重压缩开关」，因此需要一个**真正关闭压缩**
+    # 的负样本：判据 responses-plain 断言选中的请求不带 content-encoding。
+    #
+    # 此前 A04 的 precondition 写着 enable_request_compression=false，但没有任何 job
+    # 真的关过它——所有 relay 样本都是 zstd，标签也只有 zstd。R7 给该条 select 补
+    # labels.compression=plain 之后就变成恒定选不到，seal 的 selector 可达性会失败
+    # 关闭。补上本 job 才让声明与采集对齐。
+    #
+    # enable_request_compression 是 Stage::Stable、default_enabled=true 的 feature
+    # （features/src/lib.rs:1085），关掉它只影响请求体是否 zstd，不改端点、头序或
+    # 传输形态，与 ws-optional-missing 关 remote_compaction_v2 是同款做法。
+    prompt='请只回复 OK，不要做任何其他事。'
+    extra_args="--disable enable_request_compression -c model_provider=openai-http-probe -c model_providers.openai-http-probe.name=OpenAI -c model_providers.openai-http-probe.base_url=https://chatgpt.com/backend-api/codex -c model_providers.openai-http-probe.wire_api=responses -c model_providers.openai-http-probe.supports_websockets=false -c model_providers.openai-http-probe.requires_openai_auth=true -c model_providers.openai-http-probe.http_headers.version=$codex_version" ;;
   http-response)
     # 用官方 CLI + OpenAI OAuth 的干净 HTTP Responses 分支补原始 h1 字节。
     # 内置 provider 支持 WS，无法靠已移除的 feature 开关强制 HTTP；这里创建一个
@@ -1051,12 +1075,33 @@ else
     # 含 server／tool／status），人读格式取不到，故只对该场景加 --json。
     exec_json_args=""
     [[ $scenario == "file-upload" ]] && exec_json_args="--json"
-    # shellcheck disable=SC2086 —— extra_args 需按空格拆成多个参数
-    # shellcheck disable=SC2086
-    docker exec "$capture_container" timeout 180 "$codex_bin" exec \
-      --model "$model" --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox \
-      $exec_json_args $disable_args $extra_args "$prompt" \
-      > "$work_dir/exec-$i.log" 2>&1 || exec_status=$?
+    # 上游对高需求模型间歇返回「无容量」，与画像、账号额度和客户端行为都无关：
+    # 同一模型几分钟内可以一次失败一次成功。`capturelib/scenarios.py` 早已对
+    # official-core 路径做了这类有限重试，但中继路径一直没有，于是 Lite 专项
+    # （固定 gpt-5.6-luna，恰好是容量最紧张的一档）会被一次波动整轮打死——k43 的
+    # lite-legacy-compact-default 连续三个 attempt 都死在这里，一个 compact 请求
+    # 都没发出。
+    #
+    # 与既有实现同款语义：**只认这一种错误**，其余失败一律原样上报，不放宽边界。
+    capacity_remaining=$UPSTREAM_CAPACITY_RETRY_LIMIT
+    while true; do
+      exec_status=0
+      # shellcheck disable=SC2086 —— extra_args 需按空格拆成多个参数
+      docker exec "$capture_container" timeout 180 "$codex_bin" exec \
+        --model "$model" --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox \
+        $exec_json_args $disable_args $extra_args "$prompt" \
+        > "$work_dir/exec-$i.log" 2>&1 || exec_status=$?
+      if ! grep -qF "$UPSTREAM_CAPACITY_MESSAGE" "$work_dir/exec-$i.log"; then
+        break
+      fi
+      if (( capacity_remaining <= 0 )); then
+        echo "❌ 上游连续 $UPSTREAM_CAPACITY_RETRY_LIMIT 次报「$UPSTREAM_CAPACITY_MESSAGE」，放弃本轮。" >&2
+        break
+      fi
+      capacity_remaining=$((capacity_remaining - 1))
+      echo "⚠ 上游报无容量，${UPSTREAM_CAPACITY_RETRY_DELAY}s 后重试（剩余 $capacity_remaining 次）。" >&2
+      sleep "$UPSTREAM_CAPACITY_RETRY_DELAY"
+    done
     tail -3 "$work_dir/exec-$i.log" || true
     if [[ $scenario == "file-upload" ]]; then
       extract_a14_tool_call "$work_dir/exec-$i.log"

@@ -1,9 +1,9 @@
 # Codex CLI 0.145.0 → 0.147.0 Official Egress 升级计划（执行中）
 
 > 状态：Campaign `codex-0145-to-0147-20260811T070000Z-k41` 已达成 `official_sealed`；
-> **R8 双轨变更集已完成，k42 因 §10.11.4 的判定被证伪而在采集首个 job 时主动作废，
-> 当前身份为 97 项 `3b08f42d…`，下一步创建 k43 完整双轨重采**。
-> k36～k40 仅保留为历史诊断夹具，不迁移、不复用、不续跑；k41 不得续跑或追加证据。
+> **R8 双轨变更集已完成；k42 因 §10.11.4、k43 因 §10.11.5 先后主动作废，两次都是在采集
+> 早期用真实证据交叉复核发现的。当前身份为 97 项 `b396e1fe…`，下一步创建 k44 完整双轨重采**。
+> k36～k43 仅保留为历史诊断夹具，不迁移、不复用、不续跑；k41 不得续跑或追加证据。
 > Active 仍为 0.145，0.147 尚未替换。
 > 创建日期：2026-08-07
 > 审阅基线：commit `abf236375f66aa096580092e646c4e33d37bb135`
@@ -809,6 +809,51 @@ k42 启动后、正式采集展开前，用上一轮留在 Vircs 的 R8 预检 r
 对照。**不在 R9 前动这条期望**——它不影响 `seal`（selector 可达即可），留到 classify
 阶段按 §6.4 规则变更流程，用 k43 的真实证据定性。
 
+#### 10.11.5 k43 的两项实证缺陷：压缩负样本缺失与中继侧无容量重试
+
+k43 跑到第 18 个 job 时用同一批 relay 原始字节做了一次全量交叉复核，又查出两项**必然
+让 `seal` 失败**的缺陷。两项都不是判据问题，而是采集侧从未产出对应条件的样本。
+
+**其一：`BODY-002/responses-plain` 没有任何负样本。**
+该规则要证明「Responses 尊重压缩开关」，需要正负两个样本：`responses-zstd`（A03，
+压缩开启）有 Lite 专项样本；`responses-plain`（A04，压缩关闭）却**从来没有任何 job
+真的关过压缩**——全部 relay 样本都是 zstd，标签也只有 `zstd` 一种取值。A04 的
+precondition 原先写着 `enable_request_compression=false`，是又一处「声明了采集侧从未
+成立的条件」。R7 给该条 select 补 `labels.compression=plain` 之后，它就从「选中 zstd
+样本去断言无压缩」变成恒定选不到，而 `seal` 的 selector 可达性是失败关闭的。
+
+处置：新增 `official-relay-http-response-plain`（主线 `gpt-5.4`，
+`--disable enable_request_compression`）。该 feature 是 `Stage::Stable`、
+`default_enabled=true`（`features/src/lib.rs:1085`），关掉只影响请求体是否 zstd，不改
+端点、头序或传输形态，与 `ws-optional-missing` 关 `remote_compaction_v2` 同款做法。
+
+**其二：中继采集路径没有上游容量重试。**
+`capturelib/scenarios.py` 早有 `UPSTREAM_CAPACITY_RETRY_LIMIT=4`，但它只覆盖
+official-core 路径；`run_official_relay_scenario.sh` 一直没有。于是 Lite 专项固定的
+`gpt-5.6-luna`——恰好是容量最紧张的一档——碰上一次波动就整轮打死：k43 的
+`lite-legacy-compact-default` 连续三个 attempt 全部死于
+`Selected model is at capacity`，**一个 compact 请求都没发出**，`EP-014/legacy-default-headers`
+与 `EP-020/legacy-observed-subset` 因此仍然不可达。同一轮里同样用 luna 的
+`lite-http-response` 却成功了，可见是间歇性的。
+
+处置：给中继脚本加同款有限重试（4 次、间隔 20 秒），**只认这一条错误消息**，其余失败
+一律原样上报，不放宽安全边界。
+
+**k43 已实证有效、无需再改的部分**（同一批证据）：
+
+| 验证项 | 实测结果 |
+|---|---|
+| 双轨模型策略 | Lite 轨道的 POST Responses 带 `x-openai-internal-codex-responses-lite`，主线同一请求没有——`gpt-5.6-luna` 与 `gpt-5.4` 的 Lite 差异被真实 wire 证实 |
+| `EP-014/legacy-turn-state-slot` | 第三槽为 `x-codex-turn-state`，`RELAY_INJECT_WS_TURN_STATE` 改造生效 |
+| `EP-014/legacy-beta-slot` | 第三槽为 `x-codex-beta-features` |
+| `EP-014` 默认槽位（主线） | 第三槽为 `x-codex-window-id`，与设计一致 |
+| `WS-002/optional-missing` | 握手整条不含 `x-codex-beta-features`，扰动成立 |
+| `WS-002/default` | 握手含 `x-codex-beta-features` 且不含 runtime_metrics 条件头 |
+| §10.11.3 第 4 项 | `official-relay-http-response` 的 `conn002` 实际是 wham GET；正是补上的 `method=POST` 与 responses 路径约束把它挡在 `BODY-006/nonlite-*` 之外 |
+
+最后一行值得单独记：那条约束当初是按「description 已写明、select 漏写」补的，属于
+推理；k43 的真实连接顺序把它变成了实证——**不补就一定失败**。
+
 ## 11. 后继实施计划（k41 → 双轨重采 → k42）
 
 本节是当前升级工作的**实施计划**。k41 已完成 `official_sealed`，本节不再描述
@@ -880,7 +925,7 @@ ARM64 全部通过后，**不得直接把 ARM64 结果视为 Vircs 上线通过*
 | R5 P0 与身份冻结 | 在临时目录做可丢弃预检，运行全套工具测试，冻结源码／工具／场景／镜像摘要 | P0 报告、inventory、工具身份 receipt | 工作区干净；身份校验通过；不得触碰 Active/Previous |
 | R6 k41 官方重采 | **已完成**：k41 执行官方 `run`，逐 job 校验真实性 receipt 并执行 `seal` | k41 campaign、attempt、results、证据根、secret scan、seal receipt | 22/22 job 完成；三条 SNI check 均有官方证据；`official_sealed` 已达成 |
 | R7 classify | 复核 17 处 selector 修正，并拆分主线与 Lite 专项的适用规则 | 双轨 classification draft、selector 测试、模型条件记录 | **已完成**；通过 59→70、失败 23→12、selector 缺口全程 0 |
-| R8 双轨变更集 | 主线保持 `gpt-5.4`；新增 `gpt-5.6-luna` Lite 专项 job；补采样本、修脚本、实现 `TLS-003`、修正 `EP-019` 期望值，并更新场景／收据契约 | 变更集、测试、双轨场景清单、收据 schema、selector/profile 修正摘要 | **已完成**；§10.11.2 的 12 项与 §10.11.3 的 4 项全部处置，§10.11.4 撤销一条被证伪的 override；608 项测试通过、`check-egress-spec` 全绿、`backend/` 零改动；工具身份 97 项 `3b08f42d…` |
+| R8 双轨变更集 | 主线保持 `gpt-5.4`；新增 `gpt-5.6-luna` Lite 专项 job；补采样本、修脚本、实现 `TLS-003`、修正 `EP-019` 期望值，并更新场景／收据契约 | 变更集、测试、双轨场景清单、收据 schema、selector/profile 修正摘要 | **已完成**；§10.11.2 的 12 项与 §10.11.3 的 4 项全部处置，§10.11.4 撤销一条被证伪的 override；608 项测试通过、`check-egress-spec` 全绿、`backend/` 零改动；工具身份 97 项 `b396e1fe…` |
 | R9 官方双轨重采（当前） | 创建新 Campaign，按双轨执行官方 `run`，逐 job 校验 receipt，再执行 `seal` | campaign、attempt、results、双证据根、secret scan、seal receipt | 两条轨道的适用 job 全部成功；三条 SNI check 有官方证据；`official_sealed` 达成 |
 | R10 后续升级门禁 | 重新 classify、建立 0.147 画像，完成 candidate、compare、accept 和 `ready` | profile/release/compare/accept 收据 | `blocked=0`、无未登记漂移、双版本隔离和全部 seal 通过 |
 
@@ -950,7 +995,8 @@ SNI、secret scan、环境恢复和 `seal` 均通过，才允许进入 R10。
 | **R7 classify** | 完成 | 主线固定 `gpt-5.4` 非 Lite；Lite-only 规则转入 `gpt-5.6-luna` 专项；17 处 select 修正后通过 59→70、失败 23→12、selector 缺口全程 0；剩 12 条见 §10.11.2 |
 | **R8 双轨变更集** | **完成** | §10.11.2 的 12 项与 §10.11.3 的 4 项一次改完；608 项测试与 `check-egress-spec` 全绿 |
 | k42 | **作废** | 采集首个 job 期间用预检 relay 证据交叉复核，发现 §10.10 第四类对 `EP-019/wham-get-paths` 的判定被源码与实测双重证伪；override 属受管文件，撤销即改身份，故在只跑了一个 job 时主动停止止损。停止后容器与宿主 hosts 均无劫持残留 |
-| **当前身份** | 已冻结 | 受管工具 97 项，`3b08f42d…`（连算两次一致）；下一步据此创建 k43 |
+| k43 | **作废** | 跑到第 18 个 job 时全量交叉复核，查出 §10.11.5 的两项必然导致 seal 失败的采集缺陷（压缩负样本缺失、中继侧无上游容量重试）。同一批证据也实证了 R8 六项设计意图成立。停止后已清理容器 hosts 劫持残留 |
+| **当前身份** | 已冻结 | 受管工具 97 项，`b396e1fe…`（连算两次一致）；官方侧 job 27 个；下一步据此创建 k44 |
 
 k40 的死因单独记一笔：`relay_extract.shape_value` 把 >24 字符的串降成 `str:<len=N>`，
 而 `candidate_evidence_guard` 的 `json-secret-field` 白名单只认 `<redacted`／`<secret`，
@@ -964,9 +1010,8 @@ Lite 专项而不改变 `gpt-5.4` 主线、补 `non_lite` 与 A01 relay 证据�
 变更收进目标版本 override，并合并 17 处 selector 修正。场景清单、`track`／模型字段和收据
 schema 同步更新，受管工具由 96 项增至 98 项、身份为 `ac00085c…`。
 
-**R9（执行中）**：按当前身份（97 项 `3b08f42d…`）创建 Campaign k43 并完整双轨重采。清单中的
-官方侧 job 由 19 个增至 26 个（R8 新增 7 个），其中 2 个是 Lite 专项。**不得在 k41／k42 上
-续跑**——身份已两次变化。
+**R9（执行中）**：按当前身份（97 项 `b396e1fe…`）创建 Campaign k44 并完整双轨重采。清单中的
+官方侧 job 由 19 个增至 27 个，其中 2 个是 Lite 专项。**不得在 k41～k43 上续跑**——身份已多次变化。
 执行前须复核 §11.0 的隔离要求：独立账号、独立 `CODEX_HOME`、独立证据目录，不触碰生产凭据、
 全局 `/etc/hosts`、生产 relay 或 Active/Previous。
 

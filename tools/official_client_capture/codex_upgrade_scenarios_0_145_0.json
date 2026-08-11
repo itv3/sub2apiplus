@@ -1178,6 +1178,52 @@
       "required_model_receipt": true
     },
     {
+      "id": "official-relay-http-response-plain",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A04"
+      ],
+      "description": "主线 gpt-5.4：关闭请求压缩的非 Lite HTTP Responses 负样本",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-http-response-plain",
+            "SCENARIO": "http-response-plain",
+            "SCENARIO_JOB_ID": "official-relay-http-response-plain",
+            "REQUIRE_MODEL_CONDITION_RECEIPT": "1",
+            "MODEL_TRACK": "main",
+            "EXPECT_USE_RESPONSES_LITE": "false"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-http-response-plain"
+      ],
+      "covers": [
+        "SPEC-BODY-002",
+        "SPEC-EP-005"
+      ],
+      "required_scenario_receipts": [],
+      "track": "main",
+      "model_id": "{model}",
+      "expected_use_responses_lite": false,
+      "required_model_receipt": true
+    },
+    {
       "id": "official-lite-http-response",
       "phase": "official",
       "suites": [

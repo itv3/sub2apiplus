@@ -192,6 +192,34 @@
       ]
     },
     {
+      "job_id": "official-relay-http-response-plain",
+      "side": "official",
+      "rules": [
+        {
+          "glob": "relay/conn00[!12].client_to_upstream.bin",
+          "scenario_ids": [
+            "A04"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "compression": "plain",
+            "body_length": "automatic",
+            "provider": "openai_oauth",
+            "variant": "http_default"
+          },
+          "rationale": "采集脚本以 --disable enable_request_compression 关闭 Stage::Stable 的压缩 feature，故本 job 的 Responses 请求体不带 content-encoding；compression=plain 由采集配置权威给出，不从被测 body 反推。这是 SPEC-BODY-002 responses-plain 唯一的负样本来源。"
+        }
+      ]
+    },
+    {
       "job_id": "official-lite-http-response",
       "side": "official",
       "rules": [

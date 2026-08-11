@@ -3,7 +3,7 @@
   "base_commit": "ba485663c3bc0af6802cf6dfc4e19139ef00e371",
   "retirement_receipt": "docs/egress/maintenance/official-egress-consolidation-retirement.json",
   "retirement_receipt_sha256": "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36",
-  "candidate_path_count": 875,
+  "candidate_path_count": 874,
   "transition_entry_count": 874,
   "transition_path_set_sha256": "130a8b65b9502becba633f5066b9dafded468fc68c896d8bc048bf567ee4d49a",
   "entries": [
@@ -12429,8 +12429,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 72612,
-        "sha256": "1f942d2e10ec7cf183f3571b6b2e569495b834573f137720b1d69963b3a2e99b"
+        "size": 76341,
+        "sha256": "076fcc1cc6af8f5f03da61c2e75e4aff02cf481eb29dda141c3aa193474b9a7c"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
@@ -19653,8 +19653,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 32171,
-        "sha256": "9605f7e9352b1fa35e5c38d38241d8ce1108399a545647a5dfaa00041feeef6b"
+        "size": 33223,
+        "sha256": "9a510dc8223efc87a49510121445e14f07901851403b01adf80da15dd4ce201f"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
@@ -19797,8 +19797,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 66217,
-        "sha256": "03d16140b65abd0e7808abdfec1c5764da6cfa571e21a83d6692946edd2d09e1"
+        "size": 67680,
+        "sha256": "b42e8f7112d2131ec1a75db36aae47eb456e6288fc24ac4c3bd454a048586ee3"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
@@ -20133,8 +20133,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0755",
-        "size": 62694,
-        "sha256": "b679844f86f3292ca3fb987023d931d71f382348a778d841dc16251eeb18a7cd"
+        "size": 65972,
+        "sha256": "68f0d75283ec37c78640fd9b9a706fe1c4bf66912ed6fd72246b6cac4a446945"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
