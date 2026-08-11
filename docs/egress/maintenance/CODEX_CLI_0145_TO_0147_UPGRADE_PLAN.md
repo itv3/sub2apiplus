@@ -1,11 +1,12 @@
 # Codex CLI 0.145.0 → 0.147.0 Official Egress 升级计划（执行中）
 
-> 状态：Campaign `codex-0145-to-0147-20260811T070000Z-k41` 已达成 `official_sealed`；
-> **R9 与 R10 的 classify 已完成：Campaign `codex-0145-to-0147-20260811T034436Z-k47` 于
-> 2026-08-11 依次达成 `official_sealed` 与 `profile_approved`。k42～k46 五轮先后作废
-> （§10.11.4～§10.11.8），每一次都是靠真实证据在 seal 之前发现的。
-> 当前 `next_command: capture-candidate`——**跨入服务部署域，须先按 §11.0 走 ARM64 验证**。
-> k36～k43 仅保留为历史诊断夹具，不迁移、不复用、不续跑；k41 不得续跑或追加证据。
+> 状态：Campaign `codex-0145-to-0147-20260811T034436Z-k47` 于 2026-08-11 依次达成
+> **`official_sealed`** 与 **`profile_approved`**，官方取证与分类全部完成。
+> 当前 `next_command: capture-candidate`——**跨入服务部署域，须先按 §11.0 完成 ARM64
+> 服务侧验证，不得直接动 Vircs 正式实例**。
+> k34～k46 仅保留为历史诊断夹具，不迁移、不复用、不续跑（唯一例外见 §10.11.10 的
+> source 发现继承）；**k47 的 sealed 证据与已批准清单不可变，其间不得修改任何受管工具**。
+> 五轮作废的死因与由此固化的门禁见 §10.11.11。
 > Active 仍为 0.145，0.147 尚未替换。
 > 创建日期：2026-08-07
 > 审阅基线：commit `abf236375f66aa096580092e646c4e33d37bb135`
@@ -429,37 +430,38 @@ final-wire 可用，但不能替代 alpha 真实 service 链或 `server_response
 
 ## 10. 当前执行状态
 
-> 时间：2026-08-10。当前 Campaign `codex-0145-to-0147-20260811T070000Z-k41`，
-> campaign_id `codex-0_147_0-20260810T140047Z`，官方 attempt
-> `20260810T140200Z-a203d6324a2bee5d`，状态 **`official_sealed`**。
+> 时间：2026-08-11。当前 Campaign `codex-0145-to-0147-20260811T034436Z-k47`，
+> campaign_id `codex-0_147_0-20260811T034439Z`，官方 attempt
+> `20260811T034557Z-05b06ad48567bba8`，状态 **`profile_approved`**，
+> `next_command: capture-candidate`。
 > **Active 仍为 0.145，0.147 尚未替换。**
 
 ### 10.1 按章节的真实进度
 
-**当前位置：§6.4 classify 之内，R8 变更集已完成。`official_sealed` 已于 k41 首次达成；
-classify 出 draft 后逐条定性，剩 12 条判据无法在 k41 证据上成立（见 §10.11），其处置已在
-R8 一次性落地并冻结新的工具身份，最终定性要等 k42 双轨证据。模型策略冻结为“主线
-`gpt-5.4` 非 Lite + `gpt-5.6-luna` Lite 专项”，不得把整个 Campaign 切换到 luna。**
+**当前位置：§6.4 已完成，停在 §8 candidate 之前。** k47 是双轨采集下第一个走通的
+Campaign：官方 28／28 job 一次跑通、九份收据齐备、seal 前 selector 缺口归零，随后
+classify 以 `blocked=0` 达成 `profile_approved`。下一命令 `capture-candidate`
+**跨入服务部署域**，须先按 §11.0 完成 ARM64 验证，且不得直接动 Vircs 正式实例。
 
 | 章节 | 状态 | 依据 |
 |---|---|---|
 | §5 DOC-PRE 与 P0 | 完成 | 不依赖 Campaign，结论长期有效 |
-| §6.1～6.3 Campaign／官方取证／seal | **完成** | k41 官方采集 22／22 job 全 `complete`、零 execution_error；秘密扫描 850 文件／148 MB 零命中；环境五项全 `restored`、数据库 426 主键零缺失；`official_sealed` 达成 |
-| §6.4 classify | **完成** | draft 已出；主线固定为 `gpt-5.4` 非 Lite，4 条 Lite 判据转入独立 `gpt-5.6-luna` 专项；§10.11.2 的 12 项已在 R8 全部处置，等 k42 实证 |
-| §7 建立 0.147 画像 | 未开始 | |
-| §8 Candidate／比较／`ready` | 未开始 | |
+| §6.1～6.3 Campaign／官方取证／seal | **完成** | k47 官方采集 28／28 job 全 `complete`；6 份模型条件收据（主线 3×`gpt-5.4`／非 Lite，专项 3×`gpt-5.6-luna`／Lite）＋ 3 份场景收据；秘密扫描 986 文件／163 MB 零命中；环境五项全 `restored`、数据库 426 主键零缺失；`official_sealed` 达成 |
+| §6.4 classify | **完成** | 42 条规则 41 `inherit`＋1 `change`；2808 条发现 2604 `change`＋204 `condition_change`；`unclassified_count=0`、`blocked=0`；目标画像 57 PASS／0 FAIL／0 UNREACHABLE；`profile_approved` 达成，详见 §10.11.10 |
+| §7 建立 0.147 画像 | **完成** | `profile_digest=0d86e033…`，与跨轮基准逐字一致（第七次独立复算）；五份清单已批准封存 |
+| §8 Candidate／比较／`ready` | **当前** | `next_command: capture-candidate`；前置见 §11.0 |
 | §9 生产启用与回滚 | 未开始 | |
 
 k34 曾到达 `compared`，但 ACC-01～07 改变了受管工具身份，k34 已作废并停在 `compared`，
 其证据只用于根因复现与离线夹具，不迁移。**ACC-01～07 全部发生在「§6.2 seal 之前」这
 一个点上**，是让 seal 有可能通过的前置修复，不构成章节推进。
 
-k36～k39 的处置：k36 用于暴露第三层问题（§10.9）；k37 死于三个采集脚本缺陷、k38 死于
-判据过严与工具调用字段路径错误、k39 完成 19／19 且首次同时取得 A11／A13／A14 三份场景
-收据，但在 seal 预检处暴露第四层问题（§10.10）。四者证据均不迁移、不封存。
+**k34～k46 全部作废、证据不迁移不复用**，各自死因与由此固化的不变量见 §10.11.11 的总表。
+唯一例外是 k34 已批准的 `discovery_classifications`：k47 的 source 发现与它**指纹逐条
+相同**（同一对源码树），故 classify 时直接继承并逐条校验命中，见 §10.11.10。
 
 0.147 画像 digest `0d86e033716ab2b7d2161a7015ad000bc0d7cedfaa9e130342eec4ba0637ef9f`
-由 k26～k34 六次独立产出逐字一致，可作为后续画像复算的对照。
+由 k26～k34 六次独立产出逐字一致，k47 第七次复算仍逐字相同，是画像内容未漂移的直接证据。
 
 ### 10.2 采集操作要点
 
@@ -468,21 +470,27 @@ k36～k39 的处置：k36 用于暴露第三层问题（§10.9）；k37 死于�
 [`CAPTURE_OPERATIONS_NOTES.md`](CAPTURE_OPERATIONS_NOTES.md)。这些不随单个 Campaign
 变化，采集前必读。
 
-### 10.7 剩余路径（k41 之后）
+### 10.7 剩余路径（k47 之后）
 
-1. 保持 k41 `official_sealed` 不变，不在 k41 上续跑或追加证据；
-2. 以 R8 一次性冻结双轨采集契约：主线使用 `gpt-5.4` 验证非 Lite 行为，Lite 专项使用
-   `gpt-5.6-luna`，两条轨道独立 job、标签、证据根和收据；
-3. 在 R8 同一变更集中处理 §10.11.2 的 12 项补采、脚本修复、`TLS-003` 算子、`EP-019` 期望值
-   和 17 处 selector 修正，并通过 P0、测试和身份摘要复核；
-4. 创建新的 Campaign（暂定 k42），按双轨完整重采，完成编目 → 收口 → 派生 → `seal`；
-5. 主线和 Lite 专项各自完成适用规则验收，联合 `classify` 必须无 `blocked`，再进入
-   `profile_approved`；
-6. 继续 §7 建立画像 → §8 Candidate、compare、accept → `ready`；
-7. 最后按 §9 执行 canary、切换、回滚演练和恢复后 final-wire，最终
-   Active=0.147 / Previous=0.145。
+前六步已随 k47 完成（双轨契约冻结 → 官方重采 → `seal` → classify → 画像批准）。剩余：
 
-本节之前关于 k36→k37 的步骤保留为历史审核记录，不再作为当前执行指令。
+1. **保持 k47 的 sealed 证据与已批准清单不可变**，不在 k47 上续跑官方 `run` 或改受管工具
+   ——工具漂移会让本轮 sealed 证据无法继续使用；
+2. 按 §11.0 先在**独立 ARM64 环境**完成 Sub2API 服务侧验证（编译、单测、启动、健康检查、
+   HTTP／WS、迁移与恢复、出站 TLS／代理／超时、并发与可回滚性）；
+3. `stage-profile` 把已批准画像编译成**不切 Active** 的候选 RuntimeCatalog；
+4. `capture-candidate run/seal`：在**独立候选实例**上采集，注意 §10.2 的三条硬约束
+   ——验收链路顺序、源码树在 run／seal 之间不可触碰、收据的两层结构；
+5. `compare` 离线比较官方与候选证据，`accept` 执行逐规则验收门禁，达成 `ready`；
+6. 最后按 §9 在 Vircs 部署独立 canary，通过后才更新正式实例；失败保留证据并回滚。
+   最终 Active=0.147 / Previous=0.145。
+
+**待办（须等 k47 整条流程走完再动）**：`build_assertion_bundle.py:190` 把收口文件写成
+`0400`，而 seal 的原始证据预检要求文件 `0600`／目录 `0700`，两处硬编码常量彼此矛盾
+（详见 §10.11.9）。修它会改工具身份，因此**不能在 k47 的 candidate／compare／accept
+走完之前进行**。
+
+本节之前关于 k36→k37、k41→k42 的步骤保留为历史审核记录，不再作为当前执行指令。
 
 ### 10.8 第一层：验收链路接线（已闭环）
 
@@ -500,7 +508,7 @@ artifact 覆盖、旧 `accept` 错把两类规则强制成同一种双侧模型�
 单个证据根。修好接线、真正跑通编目后暴露出第二层问题，见 §10.9。两层不是同一件事：
 接线不通就跑不到编目，跑不到编目就看不见证据缺口。
 
-### 10.9 第二、三层：采集覆盖、判据与场景真实性错配（当前阻塞项）
+### 10.9 第二、三层：采集覆盖、判据与场景真实性错配（已解除）
 
 修好验收链路、真正跑通编目后先暴露第二层问题：**场景定义的
 `required_artifact_kinds` 与 capture job 实际产出的证据类型系统性错配**。k36 又暴露
@@ -618,7 +626,7 @@ pcap 与中继记录一致，只能证明**本次目标连接没有发生**，�
 完整实证与执行方案见
 [`SPEC_EP_002_EVIDENCE_BLOCKER.md`](SPEC_EP_002_EVIDENCE_BLOCKER.md)。
 
-### 10.10 第四层：seal 预检的 selector 可达性（k39 暴露，当前阻塞项）
+### 10.10 第四层：seal 预检的 selector 可达性（k39 暴露，已于 k47 归零）
 
 k39 首次做到 19／19 且三份场景收据齐备，`seal` 仍未通过。拦截点是 ACC-03 引入的
 `assertion_gate._verify_selector_reachability`：**每条 `dual_wire` 规则的每条 check
@@ -674,7 +682,7 @@ compare 阶段按规则变更处理。
 首次达成。`alpha/search` 采到 4 条观测（前一轮为 0），两个新 compact job 的第三槽分别落在
 `x-codex-window-id` 与 `x-codex-beta-features`，与设计一致。
 
-### 10.11 第五层：判据 selector 缺陷与采集条件失真（classify 阶段，当前阻塞项）
+### 10.11 第五层：判据 selector 缺陷与采集条件失真（已解除，k47 完成 classify）
 
 seal 通过后 classify 才第一次真正评估 42 条规则的断言：起点**通过 59／失败 23**，
 对目标画像做 17 处 select 修正后为**通过 70／失败 12**，selector 缺口全程为 0。
@@ -1042,11 +1050,38 @@ seal 被拒。k41 之所以能过，是它的 bundle 当时被手工改成过 06
 已用 `golang:1.26-bookworm` 容器提供 `go` 转发脚本（项目要求 1.26.5），并补传
 `backend/`（不含构建产物）。两者都不进工具身份摘要，身份仍为 97 项 `cacf51be…`。
 
-## 11. 后继实施计划（k41 → 双轨重采 → k42）
+#### 10.11.11 k42～k47 六轮总表：每次作废换来一条不变量
 
-本节是当前升级工作的**实施计划**。k41 已完成 `official_sealed`，本节不再描述
-`SCN-REALITY-01 → k41` 的历史路径，而是定义当前 classify 阻塞解除、双轨重采和后续
-升级门禁。不得在 k41 上续跑、追加证据或执行新的 `seal`。
+六轮里有五轮作废，**每一次都是在 `seal` 之前用真实证据查出来的**，不是 seal 失败后回头
+找。代价是重采，收益是每条缺陷都变成了机器可执行的门禁。
+
+| 轮次 | 死因 | 性质 | 固化的不变量 |
+|---|---|---|---|
+| k42 | `EP-019` override 把 `wham/usage` 改成 `settings/user` | 证据面误读：原判定取自 mitm 面，而修正后的 selector 选的是 relay 面 | 无 override 时画像逐字不变；`wham-get-paths` 期望锁定 |
+| k43 | ① `BODY-002/responses-plain` 从来没有负样本 ② 中继路径无上游容量重试 | 声明了采集侧从未成立的条件；`capturelib` 的重试不覆盖 relay | 逐场景比对契约 `side_coverage` 与标签产出；中继侧同款有限重试 |
+| k44 | A05 失去全部标签绑定 | §10.11.3 撤销一个错误 `mode=lite` 标注时的连带效应，**场景静默失去证据** | 官方侧每个受契约要求的场景都必须有标签产出所需 kind |
+| k45 | ① 模型收据不支持 WS 传输 ② `official-core` 靠 `capture.py` 默认值跑在 Lite 模型上 | 收据只认单一传输形态；模型坐标隐式 | WS 帧提取（含 deflate 上下文接管）；禁止官方 job 靠工具默认值决定模型 |
+| k46 | Lite compact 整轮未触发目标请求，job 却判 `complete` | **补强收据反而拆掉了一个隐含门禁**——原先「收据生成失败」意外充当了「目标请求没发出」的检测器 | `REQUIRE_REQUEST_PATH` 显式失败关闭；`COMPACT_TOKEN_LIMIT` 参数化 |
+| **k47** | — | — | **28/28 一次跑通 → `official_sealed` → `profile_approved`** |
+
+**贯穿六轮的两条方法论**：
+
+1. **判据失败要按固定顺序排查**：① 条件是否真的成立（采集侧有没有产出该条件的样本）
+   → ② 证据面是否取对（mitm 面与 relay 面看到的是同一客户端的不同请求子集）
+   → ③ 会话状态是否可比（cookie store 等在预检与正式采集里不同）
+   → ④ **最后**才考虑「是不是新版行为变了」。k42 与「预检 cookie」两次误判都栽在跳步。
+2. **每个门禁只能表达一件事**。k46 的教训最典型：收据的语义是「模型条件成立」，不是
+   「目标分支已触发」；靠一个门禁的副作用挡住另一类失败，迟早会在补强前者时失去后者。
+   这与 `SCN-REALITY-01` 当初的定案同源——那次是「job 退出成功 ≠ 目标分支已触发」。
+
+期间受管工具测试由 601 增至 617 项，新增的 16 条全部来自这六轮的真实踩坑。
+
+## 11. 后继实施计划（R0～R10）
+
+本节是当前升级工作的**实施计划**。R0～R9 与 R10 的 classify／profile 已随 k47 完成，
+本节保留完整的变更集定义与退出条件作为审核依据，当前有效的执行指令集中在 §11.5。
+**不得在 k47 上续跑官方 `run`、追加证据或修改受管工具**——工具漂移会让本轮 sealed 证据
+与已批准清单失效。
 
 ### 11.0 执行前置要求
 Vircs 和 ARM64 都是远程服务器，使用 SSH 连接。
@@ -1086,20 +1121,23 @@ ARM64 全部通过后，**不得直接把 ARM64 结果视为 Vircs 上线通过*
 
 ### 11.1 总体目标与不变约束
 
-目标是在不替换官方出站形态的前提下，证明 A11／A13／A14 真实进入目标协议分支，并为
-`SPEC-EP-002` 的三条必现 SNI check 生成可封存证据。
+原目标是在不替换官方出站形态的前提下，证明 A11／A13／A14 真实进入目标协议分支，并为
+`SPEC-EP-002` 的三条必现 SNI check 生成可封存证据——**已随 k47 达成**（三份场景收据齐备、
+三条 SNI check 均有官方证据）。剩余目标是完成候选侧验收并安全切换 Active。
 
 不变约束：
 
-- Active/Previous 继续保持 `0.145.0 / 0.145.0`；
-- k36～k40 只作诊断夹具，证据不迁移、不复用、不封存；k41 的 sealed 证据保持不可变；
+- Active/Previous 在 `ready` 之前继续保持 `0.145.0 / 0.145.0`；
+- k34～k46 只作诊断夹具，证据不迁移、不复用、不封存；**k47 的 sealed 证据与已批准清单
+  保持不可变**；
 - 不伪造 JWT、上游响应、Realtime sideband 或文件上传 URL；
 - 不修改日常登录目录，不使用未隔离的真实凭据做过期触发；
 - 主升级线固定使用 `gpt-5.4`，只验证普通非 Lite 行为；
-- Lite 专项固定使用 `gpt-5.6-luna`，只验证 `use_responses_lite=true` 的 4 条 Lite 判据；
+- Lite 专项固定使用 `gpt-5.6-luna`，只验证 `use_responses_lite=true` 的 Lite 判据；
 - 两条轨道必须使用独立 job、`track` 标签、evidence root、模型收据和结果摘要；
 - 任意工具身份、场景定义、抓包范围、模型坐标或收据 schema 变化，都必须冻结新摘要并
-  创建新的 Campaign（暂定 k42），不得修改或续跑 k41。
+  创建新的 Campaign，**不得修改或续跑 k47**——那会让已 sealed 的证据与五份已批准清单
+  一并失效，整条流程要从官方重采开始。
 
 ### 11.2 变更集与退出条件
 
@@ -1115,7 +1153,9 @@ ARM64 全部通过后，**不得直接把 ARM64 结果视为 Vircs 上线通过*
 | R7 classify | 复核 17 处 selector 修正，并拆分主线与 Lite 专项的适用规则 | 双轨 classification draft、selector 测试、模型条件记录 | **已完成**；通过 59→70、失败 23→12、selector 缺口全程 0 |
 | R8 双轨变更集 | 主线保持 `gpt-5.4`；新增 `gpt-5.6-luna` Lite 专项 job；补采样本、修脚本、实现 `TLS-003`、修正 `EP-019` 期望值，并更新场景／收据契约 | 变更集、测试、双轨场景清单、收据 schema、selector/profile 修正摘要 | **已完成**；§10.11.2 的 12 项与 §10.11.3 的 4 项全部处置，§10.11.4 撤销一条被证伪的 override；608 项测试通过、`check-egress-spec` 全绿、`backend/` 零改动；工具身份 97 项 `cacf51be…` |
 | R9 官方双轨重采 | 创建新 Campaign，按双轨执行官方 `run`，逐 job 校验 receipt，再执行 `seal` | campaign、attempt、results、双证据根、secret scan、seal receipt | **已完成**（k47）：28/28 job、9 份收据、`UNREACHABLE` 归零、秘密扫描零命中、`official_sealed` 达成 |
-| R10 后续升级门禁（当前） | 重新 classify、建立 0.147 画像，完成 candidate、compare、accept 和 `ready` | profile/release/compare/accept 收据 | `blocked=0`、无未登记漂移、双版本隔离和全部 seal 通过 |
+| R10-a classify／画像 | 重新 classify、建立并批准 0.147 画像 | 五份已批准清单、profile digest | **已完成**（k47）：`blocked=0`、`unclassified_count=0`、画像 digest 与跨轮基准逐字一致、`profile_approved` 达成 |
+| R10-b 候选验收（当前） | ARM64 服务侧验证 → `stage-profile` → candidate run/seal → compare → accept | ARM64 验证记录、RuntimeCatalog、candidate 收据、compare/accept 收据 | 无未登记漂移、双版本隔离、全部 seal 通过，达成 `ready` |
+| R10-c 生产切换 | 按 §9 执行 canary、切换、回滚演练与恢复后 final-wire | canary 记录、切换收据、回滚演练记录 | Vircs canary 通过后才更新正式实例；失败保留证据并回滚 |
 
 ### 11.3 `SCN-REALITY-01` 收据最低字段
 
@@ -1133,40 +1173,50 @@ ARM64 全部通过后，**不得直接把 ARM64 结果视为 Vircs 上线通过*
 ### 11.4 执行顺序
 
 ```text
-R0 方案冻结
+R0 方案冻结                                          ✅
   ↓
-R1 真实性门禁与负例
+R1 真实性门禁与负例                                  ✅
   ↓
-R2 A11 V3 与最终事件等待
+R2 A11 V3 与最终事件等待                             ✅
   ↓
-R3 A13 官方刷新路径与最终事件
+R3 A13 官方刷新路径与最终事件                        ✅
   ↓
-R4 A14 Apps 工具与动态区域 SNI
+R4 A14 Apps 工具与动态区域 SNI                       ✅
   ↓
-R5 P0 预检与工具身份冻结
+R5 P0 预检与工具身份冻结                             ✅
   ↓
-R6 k41 official_sealed（已完成）
+R6 k41 official_sealed                               ✅
   ↓
-R7 当前 classify 双轨拆分
+R7 classify 双轨拆分                                 ✅
   ↓
-R8 双轨变更集与 P0
+R8 双轨变更集与 P0                                   ✅
   ↓
-R9 新建 k42、官方双轨 run → receipt 校验 → seal
+R9 官方双轨 run → receipt 校验 → seal                ✅ k47（k42～k46 作废，见 §10.11.11）
   ↓
-R10 classify → profile → candidate → compare → accept → ready
+R10 ├─ classify → profile                            ✅ k47 profile_approved
+    ├─ ARM64 服务侧验证（§11.0）                     ← 当前
+    ├─ stage-profile → candidate run/seal
+    ├─ compare → accept → ready
+    └─ §9 canary → 切换 → 回滚演练                   ← 生产域，须逐步确认
 ```
 
-任一阶段失败，保留原始失败证据并停止；不得通过改写判据、补写 receipt、复用 k36～k41
-证据或静默回退 0.145 来推进流程。只有 R9 完成且双轨适用规则、`SPEC-EP-002` 三条目标
-SNI、secret scan、环境恢复和 `seal` 均通过，才允许进入 R10。
+任一阶段失败，保留原始失败证据并停止；不得通过改写判据、补写 receipt、复用 k34～k46
+证据或静默回退 0.145 来推进流程。R10 后半段跨入生产域，**每一步都须先在隔离环境完成
+验证**，不得直接更新正在对外服务的实例。
 
 ### 11.5 当前执行起点
 
-**R0～R8 均已完成，`official_sealed` 于 k41 首次达成，R8 双轨变更集已落地并冻结新的工具
-身份；当前停在 R9 之前，等待创建 Campaign k42 并完整双轨重采。模型策略已冻结：主线继续
-`gpt-5.4`，Lite 专项使用 `gpt-5.6-luna`。ARM64 只读验证已完成：独立临时源码树上的
-`test-capture-tools`、`/health`、HTTP API 和 WebSocket 握手均已通过；这只用于服务更新前的
-兼容性确认，不改变官方 CLI 采集轨道。**
+**R0～R9 与 R10 的前半段（classify → profile）均已完成。** k47 依次达成
+`official_sealed` 与 `profile_approved`，`next_command: capture-candidate`。模型策略保持
+冻结：主线 `gpt-5.4`，Lite 专项 `gpt-5.6-luna`。
+
+**当前停在服务部署域之前**。已完成的 ARM64 只读验证（独立临时源码树上的
+`test-capture-tools`、`/health`、HTTP API 与 WebSocket 握手）只是兼容性确认，**不能替代
+§11.0 要求的完整服务侧验证**——后者要覆盖编译、单测、启动、数据库迁移与恢复、出站
+TLS／代理／超时、并发与可回滚性。
+
+**k47 的证据与清单必须保持不可变**：在 candidate／compare／accept 走完之前不得修改任何
+受管工具，否则工具漂移会让本轮 sealed 证据作废。§10.7 登记的收口器权限待办同受此约束。
 
 | 阶段 | 状态 | 结果 |
 |---|---|---|
@@ -1182,12 +1232,10 @@ SNI、secret scan、环境恢复和 `seal` 均通过，才允许进入 R10。
 | **k41** | **`official_sealed`** | 22／22 job `complete`；秘密扫描 850 文件／148 MB 零命中；环境五项全 `restored`、数据库 426 主键零缺失；**历史首次达成** |
 | **R7 classify** | 完成 | 主线固定 `gpt-5.4` 非 Lite；Lite-only 规则转入 `gpt-5.6-luna` 专项；17 处 select 修正后通过 59→70、失败 23→12、selector 缺口全程 0；剩 12 条见 §10.11.2 |
 | **R8 双轨变更集** | **完成** | §10.11.2 的 12 项与 §10.11.3 的 4 项一次改完；608 项测试与 `check-egress-spec` 全绿 |
-| k42 | **作废** | 采集首个 job 期间用预检 relay 证据交叉复核，发现 §10.10 第四类对 `EP-019/wham-get-paths` 的判定被源码与实测双重证伪；override 属受管文件，撤销即改身份，故在只跑了一个 job 时主动停止止损。停止后容器与宿主 hosts 均无劫持残留 |
-| k46 | **作废** | 28/28 全 `complete`、六份模型收据齐备，但 seal 前扫描发现 Lite compact 整轮未触发目标请求而 job 仍判 complete（§10.11.8）——§10.11.7 补强收据时拆掉了一个隐含门禁 |
-| k45 | **作废** | 26/28 complete。新增的 A05 job 因模型条件收据不支持 WS 传输而三次失败（§10.11.7）；`official-core` 则暴露出长期靠 `capture.py` 默认值跑在 `gpt-5.6-luna` 上 |
-| k44 | **作废** | 27/27 job 全 `complete`、五份模型收据与三份场景收据齐备，但 seal 前扫描发现 A05 已在 R8 中失去全部标签绑定（§10.11.6），补 job 即改身份 |
-| k43 | **作废** | 跑到第 18 个 job 时全量交叉复核，查出 §10.11.5 的两项必然导致 seal 失败的采集缺陷（压缩负样本缺失、中继侧无上游容量重试）。同一批证据也实证了 R8 六项设计意图成立。停止后已清理容器 hosts 劫持残留 |
-| **k47** | **`official_sealed`** | 28/28 一次跑通、九份收据齐备、`UNREACHABLE` 归零、秘密扫描零命中（§10.11.9）。**双轨采集首次成功**；工具身份 97 项 `cacf51be…`，classify 走完前不得再改受管工具 |
+| k42～k46 | 全部**作废** | 五轮各自暴露一类缺陷并固化为门禁，逐轮死因与不变量见 §10.11.11 |
+| **R9 / k47** | **`official_sealed`** | 28/28 一次跑通、九份收据齐备、`UNREACHABLE` 归零、秘密扫描 986 文件／163 MB 零命中（§10.11.9） |
+| **R10 classify** | **`profile_approved`** | 42 条规则 41 `inherit`＋1 `change`；2808 条发现零 `blocked`；目标画像 57 PASS／0 FAIL／0 UNREACHABLE；画像 digest 与跨轮基准逐字一致（§10.11.10） |
+| **R10 candidate 起** | **当前** | 跨入服务部署域，前置见 §11.0；工具身份锁定在 97 项 `cacf51be…` |
 
 k40 的死因单独记一笔：`relay_extract.shape_value` 把 >24 字符的串降成 `str:<len=N>`，
 而 `candidate_evidence_guard` 的 `json-secret-field` 白名单只认 `<redacted`／`<secret`，
@@ -1202,34 +1250,29 @@ Lite 专项而不改变 `gpt-5.4` 主线、补 `non_lite` 与 A01 relay 证据�
 schema 同步更新，受管工具由 96 项增至 98 项、身份为 `ac00085c…`。
 
 **R9（已完成）**：k47 于 2026-08-11 达成 `official_sealed`，官方侧 28 个 job（3 个 Lite 专项）
-一次跑通。**k41～k46 的证据一律不迁移、不复用**。
-执行前须复核 §11.0 的隔离要求：独立账号、独立 `CODEX_HOME`、独立证据目录，不触碰生产凭据、
-全局 `/etc/hosts`、生产 relay 或 Active/Previous。
+一次跑通。**k34～k46 的证据一律不迁移、不复用**（唯一例外见 §10.11.10 的 source 发现继承）。
 
-R9 完成后仍须用与 §10.10 相同的**全量 selector 扫描**复核，不能只看 job 是否 `complete`。
-§10.11.4 正是这条纪律提前生效的结果——它是在 k42 的第一个 job 还在重试时，靠交叉核对
-预检 relay 证据发现的，因而只损失了一个 job 的采集量：
+**「全量 selector 扫描先于 seal」这条纪律必须继续沿用到候选侧。** 它在 k42～k46 五轮里
+每次都提前拦下了本会浪费整轮的缺陷——最省的一次（§10.11.4）只损失了一个 job 的采集量。
+k47 官方侧的四项复核已全部通过：12 条判据转为可达且断言成立、两个 Lite 专项 job 的
+`/models` 原文实证 `use_responses_lite=true`、连接序号假设成立、WS 默认握手不含
+runtime_metrics 条件头。
 
-1. §10.11.2 的 12 条判据是否真的从「失败／选不到」转为通过；
-2. 两个 Lite 专项 job 的 `/models` 原文是否实际证明 `use_responses_lite=true`——模型条件
-   收据缺字段、值不符或发生 fallback 都必须失败关闭，不得事后补写；
-3. `official-relay-http-response` 的连接序号假设是否成立（`conn001` 为启动 models、其余为
-   POST Responses）；序号漂移时 path／method selector 会失败关闭，属预期行为而非误报；
-4. `official-relay-ws-default` 的握手是否真的不含 runtime_metrics 条件头。
+**R10（进行中）**：classify 与画像已完成（§10.11.10）。候选侧执行前须复核 §11.0 的隔离
+要求：独立账号、独立 `CODEX_HOME`、独立证据目录与独立实例，不触碰生产凭据、全局
+`/etc/hosts`、生产 relay 或 Active/Previous。候选采集另有三条硬约束见 §10.2——验收链路
+顺序、源码树在 run／seal 之间不可触碰、收据的两层结构。
 
 k37～k39 的死因依次是：采集脚本三处缺陷（cleanup 在 `set -e` 下中止致 hosts 劫持残留、
 A13 探针缺 `docker exec -i`、A11 call_id 取错来源）；判据过严加工具调用字段路径错误；
 以及第四层的 selector 可达性。三者证据均不迁移。
 
-k40 采集完成后仍待验证的事项，按风险排序：
+k40 当时登记的三项待验（selector 缺口是否真转可达、`alpha/search` 是否真的发出、三个新
+job 的 `variant` 是否落到正确请求上）**已在 k47 全部得到实证**：缺口归零、`alpha/search`
+采到 3 条、compact 第三槽分别落在 `x-codex-window-id` 与 `x-codex-beta-features`。
 
-1. 5 条剩余 selector 缺口是否真的转为可达；
-2. `alpha/search` 是否真的发出——前一轮正是「以为会触发但没触发」栽的跟头，本轮虽已
-   逐项核对注册条件，但模型是否调用 `web_run` 仍取决于它对 prompt 的反应；
-3. 三个新 job 的 `variant` 是否落到正确请求上，特别是 compact 第三槽是否分别为
-   `x-codex-window-id` 与 `x-codex-beta-features`。
-
-**采集完成不等于缺口补上**，上述三项须用与 §10.10 相同的全量扫描复核后才能进入 seal。
+**采集完成不等于缺口补上**——这条在 k43～k46 又反复应验了四次，任何一轮都须用与 §10.10
+相同的全量扫描复核后才能进入 seal。
 [`SCN_REALITY_01_SCENARIO_REALITY_GATE.md`](SCN_REALITY_01_SCENARIO_REALITY_GATE.md)
 的 §1～§11 是 R0 冻结的契约，§12 是 R1 的实施记录。按仓库既有「收据只表达成功态」的
 约定，判定为**缺收据即失败**，而不是读取收据里的成功标志——后者只需改一个字段值即可
