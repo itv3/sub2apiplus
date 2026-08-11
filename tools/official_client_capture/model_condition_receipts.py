@@ -14,6 +14,7 @@ import hashlib
 import json
 import re
 import sys
+import zlib
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -152,6 +153,96 @@ def _json_body(message: dict[str, Any]) -> Any:
         raise ModelConditionReceiptError("模型条件 HTTP body 不是 UTF-8 JSON。") from error
 
 
+def _ws_request_models(raw: bytes) -> list[str]:
+    """从 WS 帧里取出客户端声明的模型。
+
+    `relay_extract.parse_ws_frames` 刻意只保留结构、不留取值（payload 含对话
+    内容），因此这里必须自己解一遍帧。解法与那边逐字一致：客户端帧带 mask 要
+    先解掩码；permessage-deflate 默认**上下文接管**，滑动窗口跨帧共享，所以整条
+    连接只能用一个解压器——逐帧新建会让第 2 帧起全部失败。
+
+    只取顶层 `model` 字段的值。取不到就返回空列表，由调用方决定是否失败关闭。
+    """
+
+    inflater = zlib.decompressobj(-zlib.MAX_WBITS)
+    models: list[str] = []
+    # 跳过握手，帧区从第一个空行之后开始。
+    head_end = raw.find(b"\r\n\r\n")
+    if head_end < 0:
+        return models
+    data = raw[head_end + 4:]
+    pos = 0
+    payload_buffer = bytearray()
+    message_compressed = False
+    collecting = False
+
+    def flush() -> None:
+        nonlocal collecting, message_compressed
+        if not collecting:
+            return
+        body = bytes(payload_buffer)
+        if message_compressed:
+            try:
+                body = inflater.decompress(body + b"\x00\x00\xff\xff")
+            except zlib.error:
+                payload_buffer.clear()
+                collecting = False
+                message_compressed = False
+                return
+        try:
+            obj = json.loads(body.decode("utf-8", "replace"))
+        except ValueError:
+            obj = None
+        if isinstance(obj, dict):
+            model = obj.get("model")
+            if isinstance(model, str) and model:
+                models.append(model)
+        payload_buffer.clear()
+        collecting = False
+        message_compressed = False
+
+    while pos + 2 <= len(data):
+        b0, b1 = data[pos], data[pos + 1]
+        fin, opcode = bool(b0 & 0x80), b0 & 0x0F
+        rsv1 = bool(b0 & 0x40)
+        masked, length = bool(b1 & 0x80), b1 & 0x7F
+        cur = pos + 2
+        if length == 126:
+            if cur + 2 > len(data):
+                break
+            length = int.from_bytes(data[cur:cur + 2], "big")
+            cur += 2
+        elif length == 127:
+            if cur + 8 > len(data):
+                break
+            length = int.from_bytes(data[cur:cur + 8], "big")
+            cur += 8
+        mask = b""
+        if masked:
+            if cur + 4 > len(data):
+                break
+            mask = data[cur:cur + 4]
+            cur += 4
+        if cur + length > len(data):
+            break
+        payload = data[cur:cur + length]
+        if masked and mask:
+            payload = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+        if opcode == 0x1:
+            payload_buffer.clear()
+            payload_buffer.extend(payload)
+            message_compressed = rsv1
+            collecting = True
+            if fin:
+                flush()
+        elif opcode == 0x0 and collecting:
+            payload_buffer.extend(payload)
+            if fin:
+                flush()
+        pos = cur + length
+    return models
+
+
 def _load_relay(root: Path) -> dict[str, Any]:
     path = root / "relay" / "relay.json"
     if path.is_symlink() or not path.is_file():
@@ -238,8 +329,9 @@ def build_receipt(
     actual_lite = expected_lite
     request_models: list[str] = []
     for request_path in sorted((root / "relay").glob("conn*.client_to_upstream.bin")):
+        raw = request_path.read_bytes()
         used = False
-        for request in _iter_messages(request_path.read_bytes(), response=False):
+        for request in _iter_messages(raw, response=False):
             path = request["target"].split("?", 1)[0]
             if request["method"] != "POST" or path not in {
                 "/backend-api/codex/responses",
@@ -252,10 +344,19 @@ def build_receipt(
                 raise ModelConditionReceiptError("Responses 请求体缺少字符串 model。")
             request_models.append(model)
             used = True
+        # WS 传输下 Responses 不是 HTTP POST：握手是 GET + Upgrade，真正的请求体在
+        # WS 帧里，而官方协商了 permessage-deflate，帧 payload 是 raw deflate，
+        # 明文搜不到 model。因此 HTTP 路径取不到时再走帧路径，两者取并集后一起
+        # 参与 fallback 判定——判据强度不变，只是把 WS 形态也纳入证明范围。
+        for model in _ws_request_models(raw):
+            request_models.append(model)
+            used = True
         if used:
             bindings.append(_bind(root, request_path))
     if not request_models:
-        raise ModelConditionReceiptError("未见可绑定的 Responses／compact 原始请求模型。")
+        raise ModelConditionReceiptError(
+            "未见可绑定的 Responses／compact 原始请求模型（HTTP 与 WS 帧均未取到）。"
+        )
     fallback = any(model != expected_model for model in request_models)
     if fallback:
         raise ModelConditionReceiptError(

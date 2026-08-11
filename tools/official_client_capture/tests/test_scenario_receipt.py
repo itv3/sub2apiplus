@@ -1096,6 +1096,27 @@ class ScenarioManifestContractTest(unittest.TestCase):
                     f"{job['id']} 声称覆盖 {rule_id}，但两者场景不相交",
                 )
 
+    def test_官方_job_不得靠工具默认值决定模型(self) -> None:
+        """模型坐标必须由清单显式给出，不能落到某个工具的 default。
+
+        official-core 与 official-ws-handshake-repeat 此前不传 --codex-model，于是
+        用了 capture.py 的默认值 gpt-5.6-luna——既与「主线固定 gpt-5.4」矛盾，也让
+        A01/A02/A09/A15 的证据一直跑在容量最紧张的那一档上，k45 就是因此三次重试
+        全挂。默认值是隐式的，清单改模型时不会跟着变，必须显式绑定。
+        """
+
+        for job in self.scenarios["capture_jobs"]:
+            if job.get("phase") != "official":
+                continue
+            for step in job["steps"]:
+                argv = [str(item) for item in step["argv"]]
+                if not any("capture.py" in item for item in argv):
+                    continue
+                self.assertIn("--codex-model", argv, job["id"])
+                self.assertEqual(
+                    argv[argv.index("--codex-model") + 1], "{model}", job["id"]
+                )
+
     def test_R8_主线模型变量冻结为非_Lite_模型(self) -> None:
         """§10.11.1：主线固定 gpt-5.4，变量默认值不得再回落到 Lite 模型。
 

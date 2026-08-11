@@ -84,6 +84,109 @@ class ModelConditionReceiptTest(unittest.TestCase):
         )
         return root
 
+    def _ws_fixture(
+        self,
+        root: Path,
+        *,
+        request_model: str = "gpt-5.6-luna",
+        lite: bool = True,
+        compressed: bool = True,
+        fragmented: bool = False,
+    ) -> Path:
+        """WS 传输下的 Lite 会话：Responses 不是 HTTP POST，模型在帧里。"""
+
+        import struct
+        import zlib
+
+        self._fixture(root, request_model=request_model, lite=lite)
+        relay = root / "relay"
+
+        def frame(payload: bytes, *, opcode: int, fin: bool, rsv1: bool) -> bytes:
+            mask = b"\xa1\xb2\xc3\xd4"
+            masked = bytes(b ^ mask[i % 4] for i, b in enumerate(payload))
+            b0 = (0x80 if fin else 0) | (0x40 if rsv1 else 0) | opcode
+            if len(masked) < 126:
+                header = struct.pack("!BB", b0, 0x80 | len(masked))
+            else:
+                header = struct.pack("!BBH", b0, 0x80 | 126, len(masked))
+            return header + mask + masked
+
+        handshake = (
+            b"GET /backend-api/codex/responses HTTP/1.1\r\n"
+            b"host: chatgpt.com\r\nupgrade: websocket\r\n"
+            b"sec-websocket-extensions: permessage-deflate\r\n\r\n"
+        )
+        body = json.dumps({"model": request_model, "input": []}).encode()
+        if compressed:
+            # 上下文接管：整条连接共用一个压缩器，两条消息必须依次压。
+            deflater = zlib.compressobj(-1, zlib.DEFLATED, -zlib.MAX_WBITS)
+            first = deflater.compress(body) + deflater.flush(zlib.Z_SYNC_FLUSH)
+            first = first[:-4] if first.endswith(b"\x00\x00\xff\xff") else first
+            second = deflater.compress(body) + deflater.flush(zlib.Z_SYNC_FLUSH)
+            second = second[:-4] if second.endswith(b"\x00\x00\xff\xff") else second
+            payloads = [first, second]
+        else:
+            payloads = [body, body]
+        frames = b""
+        for payload in payloads:
+            if fragmented:
+                half = len(payload) // 2
+                frames += frame(payload[:half], opcode=0x1, fin=False, rsv1=compressed)
+                frames += frame(payload[half:], opcode=0x0, fin=True, rsv1=False)
+            else:
+                frames += frame(payload, opcode=0x1, fin=True, rsv1=compressed)
+        (relay / "conn002.client_to_upstream.bin").write_bytes(handshake + frames)
+        return root
+
+    def test_ws_传输从压缩帧取出模型(self) -> None:
+        """WS 下 Responses 走帧，且 permessage-deflate 让明文搜不到 model。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._ws_fixture(Path(directory) / "run")
+            self.assertNotIn(
+                b"gpt-5.6-luna",
+                (root / "relay" / "conn002.client_to_upstream.bin").read_bytes(),
+                "夹具必须真的压缩，否则测不到解压路径",
+            )
+            receipt = build_receipt(
+                root=root,
+                job_id="official-lite-ws-turnstate",
+                run_id="campaign-lite-ws",
+                track="lite",
+                expected_model="gpt-5.6-luna",
+                expected_lite=True,
+            )
+            self.assertEqual(receipt["observed_request_models"], ["gpt-5.6-luna"])
+            self.assertFalse(receipt["model_fallback"])
+
+    def test_ws_分片消息也能取出模型(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._ws_fixture(Path(directory) / "run", fragmented=True)
+            receipt = build_receipt(
+                root=root,
+                job_id="official-lite-ws-turnstate",
+                run_id="campaign-lite-ws",
+                track="lite",
+                expected_model="gpt-5.6-luna",
+                expected_lite=True,
+            )
+            self.assertEqual(receipt["observed_request_models"], ["gpt-5.6-luna"])
+
+    def test_ws_传输同样拦截模型_fallback(self) -> None:
+        """WS 路径不得成为绕过 fallback 判定的后门。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = self._ws_fixture(Path(directory) / "run", request_model="gpt-5.4")
+            with self.assertRaises(ModelConditionReceiptError):
+                build_receipt(
+                    root=root,
+                    job_id="official-lite-ws-turnstate",
+                    run_id="campaign-lite-ws",
+                    track="lite",
+                    expected_model="gpt-5.6-luna",
+                    expected_lite=True,
+                )
+
     def test_builds_and_revalidates_lite_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = self._fixture(Path(directory) / "run")
