@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import stat
 import subprocess
 import tempfile
@@ -217,6 +218,70 @@ class EnvironmentProbeTest(unittest.TestCase):
             account_id=41,
             api_key_id=73,
             phase=phase,
+        )
+
+    def test_受管_extra_键的常量与_SQL_必须一致(self) -> None:
+        """忽略清单在 Python 常量与 SQL 里各写了一份，漂移会让门禁静默失真。
+
+        SQL 用 LIKE 前缀匹配通配项、用等值匹配精确项；这里按同样语义把常量翻译成
+        应当出现在 SQL 中的判定，逐条核对，任何一侧新增而另一侧漏改都会失败。
+        """
+
+        import inspect
+
+        source = inspect.getsource(probe)
+        for pattern in probe.ACCOUNT_MUTABLE_EXTRA_KEY_PATTERNS:
+            if pattern.endswith("*"):
+                expected = f"extra_entry.key LIKE '{pattern[:-1]}%'"
+            else:
+                expected = f"extra_entry.key = '{pattern}'"
+            self.assertIn(expected, source, f"SQL 缺少忽略项：{pattern}")
+        # 反向：SQL 里不得出现常量之外的忽略项
+        for matched in re.findall(r"extra_entry\.key (?:LIKE '([^']+)%'|= '([^']+)')", source):
+            key = (matched[0] + "*") if matched[0] else matched[1]
+            self.assertIn(
+                key,
+                probe.ACCOUNT_MUTABLE_EXTRA_KEY_PATTERNS,
+                f"SQL 忽略了常量未声明的键：{key}",
+            )
+
+    def test_privacy_受管键逐字对齐服务端声明(self) -> None:
+        """privacy 是服务端托管字段，排除清单必须与服务端定义同源。
+
+        候选采集经由 Sub2API 发请求，服务会原子写回 privacy 结果，若不排除则
+        「采集必然改 extra → 门禁必然判污染」成为死结（k48 首次暴露）。但只允许排除
+        服务端明确声明托管的键——用等值而非 `privacy_*` 通配，避免将来新增的账号级
+        privacy 配置被顺带放行。
+        """
+
+        service_file = (
+            Path(__file__).resolve().parents[3]
+            / "backend/internal/service/openai_privacy_service.go"
+        )
+        if not service_file.is_file():
+            self.skipTest("服务端源码不在此检出中")
+        text = service_file.read_text(encoding="utf-8")
+        block = text.split("openAIPrivacyManagedExtraKeys = [...]string{", 1)[1].split("}", 1)[0]
+        constants = [line.strip().rstrip(",") for line in block.splitlines() if line.strip()]
+        declared = set()
+        for name in constants:
+            match = re.search(rf'{re.escape(name)}\s*=\s*"([^"]+)"', text)
+            self.assertIsNotNone(match, f"未能解析受管键常量：{name}")
+            declared.add(match.group(1))
+        ignored = set(probe.ACCOUNT_MUTABLE_EXTRA_KEY_PATTERNS)
+        self.assertTrue(
+            declared <= ignored,
+            f"服务端托管的 privacy 键未被排除：{sorted(declared - ignored)}",
+        )
+        privacy_ignored = {k for k in ignored if k.startswith("privacy")}
+        self.assertEqual(
+            privacy_ignored,
+            declared,
+            "排除清单里的 privacy 键必须与服务端声明逐字相同，不得多也不得少",
+        )
+        self.assertFalse(
+            any(k.startswith("privacy") and k.endswith("*") for k in ignored),
+            "privacy 键不得用通配符排除",
         )
 
     def test_probe_does_not_persist_environment_or_secret_values(self) -> None:

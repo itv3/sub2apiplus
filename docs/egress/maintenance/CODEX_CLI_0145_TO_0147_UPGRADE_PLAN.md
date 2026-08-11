@@ -1,11 +1,10 @@
 # Codex CLI 0.145.0 → 0.147.0 Official Egress 升级计划（执行中）
 
-> 状态：Campaign `codex-0145-to-0147-20260811T070624Z-k48` 已依次达成 **`official_sealed`**
-> 与 **`profile_approved`**——官方取证与分类全部完成，28/28 job、九份收据、`UNREACHABLE`
-> 归零、目标画像 57/57 断言通过。
-> **当前卡在 R10-b 候选采集**：搬到 ARM64 后因 qemu 不支持抓包而无法进行（§10.11.14），
-> 但 k48 **未被污染**、官方成果完好，换到能抓包的机器即可 `resume` 接续。
-> 两条待决路径（Vircs 独立候选栈 vs 直接用生产实例）见 §10.11.14，**须人工决策**。
+> 状态：**候选采集环境已在 DMIT 打通**（x86_64 测试机，抓包链路已验证），账号坐标已对齐。
+> k48 曾达成 `official_sealed` ＋ `profile_approved`，但候选采集暴露出 privacy 托管字段
+> 与环境恢复门禁的死结（§10.11.15）——判据缺口已修复，代价是工具身份变更
+> （`cacf51be…` → `eb153b8e…`），**k48 随之作废，需新建 Campaign 重采官方**。
+> 官方采集固定在 Vircs（Codex CLI 只在那里），候选采集固定在 DMIT。
 > k34～k47 仅保留为历史诊断夹具，不迁移、不复用（唯一例外见 §10.11.10 的 source 发现
 > 继承）；**k48 的 sealed 证据与已批准清单不可变，其间不得修改任何受管工具**。
 > 历轮死因见 §10.11.11（判据／采集缺陷五轮）与 §10.11.13（k47 操作失误）。
@@ -1174,6 +1173,61 @@ qemu 能跑普通程序（实测 amd64 的 Codex CLI 在 ARM64 上 0.6 秒返回
 > ARM64 侧已就绪但暂时用不上的资产：qemu binfmt、amd64 capture 容器（含 amd64 `docker`
 > CLI）、账号 90 与占位账号 50、候选镜像、跑在 0.147 画像上的候选服务。若改走路径 A，
 > 这些可整体迁到 Vircs 的独立候选栈复用。
+
+#### 10.11.15 候选采集与 privacy 托管字段的死结（门禁缺口，已修）
+
+k48 的候选采集在 DMIT 上被判 `environment_contaminated`：
+
+```
+account_state_preserved 恢复验证失败：before 与 after 字节不一致
+extra_digest: be4f24bd… → 9f1ca937…
+```
+
+**根因是判据缺口，不是环境真被污染**。账号状态快照比对 `accounts.extra` 的摘要，原先只
+排除配额类键（`codex_primary_*`／`codex_secondary_*`／`codex_5h_*`／`codex_7d_*`／
+`codex_usage_updated_at`），**未排除 privacy 类键**。而候选采集是**经由 Sub2API 服务**发
+请求的，服务在该路径上会重新评估 OpenAI 训练数据授权并把结果原子写回账号 `extra`
+（`service/openai_privacy_service.go` 的 `ExtraUpdates`／`mergeOpenAIPrivacyManagedExtra`）。
+
+于是形成死结：**采集必然改 extra → 门禁必然判污染**。官方采集直连 Codex CLI、不经服务，
+所以从未踩到——这也是它到 k48 才第一次暴露的原因。
+
+**处置**：把服务端声明托管的四个 privacy 键加入排除清单
+（`privacy_mode`／`privacy_retry_after`／`privacy_browser_persona`／`privacy_rollout_key`），
+Python 常量与 SQL 两处同步。三条约束保证这不是放宽污染检测：
+
+1. **逐字对齐服务端定义**，取自 `openAIPrivacyManagedExtraKeys`，不是自拟清单；
+2. **用等值而非 `privacy_*` 通配**——将来新增的账号级 privacy 配置必须显式加入，不会被
+   顺带放行；
+3. 补两条测试：一条锁定 Python 常量与 SQL **双向**一致（任一侧新增而另一侧漏改即失败），
+   一条锁定 privacy 排除项与服务端声明**逐字相同、不多不少且不得用通配**。
+
+> 判据缺口与「环境被污染」是两回事。配额与 privacy 同属服务端托管、随正常运行自然变动的
+> 字段，前者早已排除、后者漏了；补齐的是同一条语义，不是为了让采集通过而降低门槛。
+
+改受管工具即改工具身份：`cacf51be…` → `eb153b8e…`，k48 因此作废，需新建 Campaign 重采。
+
+#### 10.11.16 DMIT 作为候选采集环境：逐项补齐的环境差异
+
+ARM64 路线证伪后（§10.11.14），改用 DMIT——x86_64 原生测试机，**tcpdump 可用**，且容器名
+与 campaign 冻结坐标天然一致。搭建过程中逐项补齐了三处差异，均为环境配置、不涉及受管工具：
+
+| 症状 | 根因 | 处置 |
+|---|---|---|
+| `tcpdump 启动失败`，日志为空 | capture 容器漏挂 `/root/oauth-capture -> /root/oauth-capture`——抓包脚本把 pcap 与日志写到该容器内路径 | 补齐全部 9 项挂载 |
+| `nsenter: cannot open /proc/<pid>/ns/net` | 漏了 `--pid=host`，容器看不到宿主 PID | 补 `--pid=host` |
+| `/capture/scripts/start_ingress.sh: no such file` | DMIT 缺 `scripts/` 目录（96K） | 从 Vircs 同步 |
+
+前两项源于同一个操作失误：抄 Vircs 容器配置时 `docker inspect` 加了 `head -6`，把 13 条
+挂载截成 6 条，后续一直照残缺配置搭。**抓包链路补齐后已手工验证通过**——`nsenter` 进候选
+服务 netns、tcpdump 正常写出 pcap。
+
+**账号坐标**：DMIT 的 `accounts` 表 96 行中 95 行是软删除，活账号仅 1 个。按指示把它
+（`1494190723@qq.com`，openai/oauth/active、group 3、与 `api_key 1` 同组）对齐到 campaign
+冻结的 `codex_account_id=90`：因外键 `update_rule` 为 `NO ACTION` 无法直接改主键，改为
+「插 id=90 完整副本 → 迁 `usage_logs`／`account_groups` 引用 → 原记录退役为软删除」。
+软删除的 50 保留原 ID（有 4207 条历史用量），仅清其代理以通过门禁——它只被读状态，
+`SUBJECTS` 只含 codex-*，不发任何请求。改前已 `pg_dump` 备份。
 
 ## 11. 后继实施计划（R0～R10）
 

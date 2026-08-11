@@ -43,12 +43,27 @@ CONTAINER_STATUS_VALUES = {
 }
 CONTAINER_HEALTH_VALUES = {"none", "starting", "healthy", "unhealthy"}
 MOUNT_TYPE_VALUES = {"bind", "volume", "tmpfs", "npipe", "cluster"}
+# 服务端托管、随正常运行必然变动的 extra 键；它们的变化不表示"环境被污染"。
+#
+# 前五项是配额观测。后四项是 OpenAI 训练数据授权（privacy）状态：候选采集**经由
+# Sub2API 服务**发请求，服务在该路径上会重新评估并原子写回 privacy 结果
+# （`service/openai_privacy_service.go` 的 `ExtraUpdates`／`mergeOpenAIPrivacyManagedExtra`），
+# 于是"采集必然改 extra → 门禁必然判污染"成为死结。官方采集直连 Codex CLI、不经服务，
+# 所以从未踩到，k48 的候选采集是第一次暴露。
+#
+# 这四个键**逐字对齐**服务端的 `openAIPrivacyManagedExtraKeys`，不用通配符：privacy 前缀
+# 下只有受管键才允许被忽略，将来若新增账号级 privacy 配置项，必须显式加入而不是被
+# `privacy_*` 顺带放行——排除清单只放服务端声明托管的字段，不放宽污染检测本身。
 ACCOUNT_MUTABLE_EXTRA_KEY_PATTERNS = (
     "codex_primary_*",
     "codex_secondary_*",
     "codex_5h_*",
     "codex_7d_*",
     "codex_usage_updated_at",
+    "privacy_mode",
+    "privacy_retry_after",
+    "privacy_browser_persona",
+    "privacy_rollout_key",
 )
 STATE_FILES = {
     "service": "service-state.json",
@@ -553,6 +568,10 @@ SELECT json_build_object(
                 OR extra_entry.key LIKE 'codex_5h_%'
                 OR extra_entry.key LIKE 'codex_7d_%'
                 OR extra_entry.key = 'codex_usage_updated_at'
+                OR extra_entry.key = 'privacy_mode'
+                OR extra_entry.key = 'privacy_retry_after'
+                OR extra_entry.key = 'privacy_browser_persona'
+                OR extra_entry.key = 'privacy_rollout_key'
             )
         ), '{{}}'::jsonb)::text) FROM selected)
 );
