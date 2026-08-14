@@ -80,6 +80,14 @@ func TestChangeset3MigrationReceiptsMatchRuntimeContracts(t *testing.T) {
 	}
 	seenCanary := make(map[string]string, len(targets))
 	seenEnforced := make(map[string]bool, len(targets))
+	versionRoutes, err := loadVersionRouteReceiptManifest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	versionRouteCountBySink := make(map[string]int)
+	for _, receipt := range versionRoutes.Receipts {
+		versionRouteCountBySink[receipt.SinkID]++
+	}
 	for _, document := range manifest.Receipts {
 		if !targetSet[document.SinkID] {
 			t.Fatalf("变更集 3 收据包含范围外 Sink: %s", document.SinkID)
@@ -94,8 +102,8 @@ func TestChangeset3MigrationReceiptsMatchRuntimeContracts(t *testing.T) {
 			document.TokenIssuerID != document.AuthorityID {
 			t.Fatalf("收据 authority 漂移: %s", document.SinkID)
 		}
-		if len(document.Routes) != len(binding.Routes()) {
-			t.Fatalf("收据未覆盖完整 route: %s", document.SinkID)
+		if len(document.Routes)+versionRouteCountBySink[document.SinkID] != len(binding.Routes()) {
+			t.Fatalf("历史收据与追加版本收据未覆盖完整 route: %s", document.SinkID)
 		}
 		for _, proof := range document.Routes {
 			route, ok := changeset3FindCatalogRoute(binding.Routes(), proof.Route)

@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "bootstrap_commit": "38a9929eac35a39c86de2f27de8f7a805d7dae52",
+  "receipts": [
+    {
+      "sink_id": "codex.quota.wham",
+      "prior_receipt_digest": "fd26796a5c9814bb94dde837a8d24a6e4d94a3d088cfd441b61a7f6081885a41",
+      "binding_digest": "8acabedfaec1c4630eeea202af501dc0fef0a900016de61d4f7a9a1115820749",
+      "route": {
+        "route": {
+          "method": "GET",
+          "host": "chatgpt.com",
+          "path": "/backend-api/wham/settings/user",
+          "purpose": "quota_query",
+          "protocol": "http"
+        },
+        "evidence_kind": "codex_endpoint",
+        "evidence_id": "wham_settings_user",
+        "backend": "http_upstream",
+        "adapter_id": "officialegress.http_upstream",
+        "transport_id": "codex-0.147.0-http-ubuntu24-native-long-lived",
+        "wire_fixture": {
+          "path": "catalogdata/version-route-migration-artifacts/codex_quota_wham/wire.json",
+          "sha256": "c94681c6d2af3aa4d390f4a9e20909ac0c766f82b207fc0c43f36bf63cd4fd56"
+        },
+        "execution_verification": {
+          "path": "catalogdata/version-route-migration-artifacts/codex_quota_wham/execution-verification.json",
+          "sha256": "6d0f298ac736d48f7c8be2a3376049810de5122ad243d6601541ef1e4ea4573c"
+        }
+      },
+      "profile_digests": [
+        "94071c8eb93cfd337ac6eabc291d878084e3dcec8a9e618e04e6f68792d1a7bc"
+      ],
+      "source": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*OpenAIQuotaService.doCodexQuotaRequest@backend/internal/service/openai_quota_service.go#facade_http_upstream_do_tls#1",
+        "ast_fingerprint": "1f0eb260f5fa",
+        "file": "backend/internal/service/openai_quota_service.go",
+        "function": "*OpenAIQuotaService.doCodexQuotaRequest",
+        "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).DoWithTLS",
+        "source_blob_sha256": "e0de5b2a84f25fee74cdacb845863eca65c7c32193a35d40132565024df5af7e"
+      },
+      "canary_acceptance": {
+        "path": "catalogdata/version-route-migration-artifacts/codex_quota_wham/canary-acceptance.json",
+        "sha256": "ad50333046c922809451e9c4b7d4fe5775bd2dbf052c1336c267c956f8315358"
+      },
+      "reviewed_by": "codex-version-route-audit",
+      "review_ref": "codex-0.147.0-settings-user/2026-08-14",
+      "rationale": "0.147 新增 settings/user endpoint；正式 Compiler、Executor、adapter 与 terminal Guard 的合成无外部流量捕获已通过。"
+    }
+  ]
+}

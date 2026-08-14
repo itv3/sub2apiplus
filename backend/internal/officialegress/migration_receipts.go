@@ -91,6 +91,16 @@ func applyMigrationReceipts(
 	evidenceBySink map[string]bindingcontract.ReleaseBindingDoc,
 	inputs []SinkBindingInput,
 ) ([]SinkBindingInput, error) {
+	versionRoutes, err := loadVersionRouteReceiptManifest()
+	if err != nil {
+		return nil, err
+	}
+	// 历史 MigrationReceipt 必须继续验证它当时的 binding tuple。版本新增 route
+	// 必须尚未混入历史 binding；历史收据完成状态提升后，再由追加收据单调并入。
+	inputs, err = prepareVersionRouteReceiptInputs(versionRoutes, evidenceBySink, inputs)
+	if err != nil {
+		return nil, err
+	}
 	manifest, err := loadMigrationReceiptManifest()
 	if err != nil {
 		return nil, err
@@ -112,6 +122,10 @@ func applyMigrationReceipts(
 		return nil, err
 	}
 	inputs, err = applyTransportReceiptTransitions(inputs)
+	if err != nil {
+		return nil, err
+	}
+	inputs, err = applyVersionRouteReceipts(versionRoutes, evidenceBySink, inputs)
 	if err != nil {
 		return nil, err
 	}
@@ -150,10 +164,9 @@ func bindMigrationReceiptTransports(
 					}
 				}
 				if transportID == "" {
-					return nil, fmt.Errorf(
-						"MigrationReceipt endpoint 未进入 %s executable：%s/%s",
-						release.Mode(), input.ID, claim.evidenceID,
-					)
+					// 版本新增端点只绑定实际包含它的画像；不存在该端点的 Release
+					// 无法生成对应 Bundle/Token，因此不能伪造 transport 映射。
+					continue
 				}
 				if existing := transportIDs[release.ReleaseDigest()]; existing != "" && existing != transportID {
 					return nil, fmt.Errorf(
@@ -162,6 +175,12 @@ func bindMigrationReceiptTransports(
 					)
 				}
 				transportIDs[release.ReleaseDigest()] = transportID
+			}
+			if len(transportIDs) == 0 {
+				return nil, fmt.Errorf(
+					"MigrationReceipt endpoint 未进入任何 Active/Previous executable：%s/%s",
+					input.ID, claim.evidenceID,
+				)
 			}
 			claim.transportIDsByRelease = transportIDs
 		}
@@ -333,19 +352,35 @@ func resolveReceiptEndpointBinding(
 	if err != nil {
 		return EndpointBinding{}, false
 	}
-	release, err := DefaultReleaseCatalog().Resolve(ReleaseModeActive)
-	if err != nil {
-		return EndpointBinding{}, false
-	}
-	bindings, err := NewEndpointBindingCatalog(sinks, physical, release.ExecutableProfile())
-	if err != nil {
-		return EndpointBinding{}, false
-	}
 	sink, ok := sinks.Resolve(input.ID)
 	if !ok {
 		return EndpointBinding{}, false
 	}
-	return bindings.ResolveBindingRoute(sink, route, physical)
+	var resolved EndpointBinding
+	found := false
+	seenProfiles := make(map[string]bool)
+	for _, mode := range []ReleaseMode{ReleaseModeActive, ReleaseModePrevious} {
+		release, err := DefaultReleaseCatalog().Resolve(mode)
+		if err != nil || seenProfiles[release.ProfileDigest()] {
+			continue
+		}
+		seenProfiles[release.ProfileDigest()] = true
+		bindings, err := NewEndpointBindingCatalog(sinks, physical, release.ExecutableProfile())
+		if err != nil {
+			return EndpointBinding{}, false
+		}
+		candidate, ok := bindings.ResolveBindingRoute(sink, route, physical)
+		if !ok {
+			continue
+		}
+		if found && (candidate.EndpointID() != resolved.EndpointID() ||
+			candidate.ReleasePurpose() != resolved.ReleasePurpose()) {
+			return EndpointBinding{}, false
+		}
+		resolved = candidate
+		found = true
+	}
+	return resolved, found
 }
 
 func (r MigrationReceipt) validFor(input SinkBindingInput) bool {

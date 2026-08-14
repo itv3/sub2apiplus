@@ -331,9 +331,26 @@ func changeset3CapturePreIdentityRoute(
 	anchor bool,
 	routeIndex int,
 ) changeset3PreIdentityReferenceCapture {
+	return changeset3CaptureRouteWithCatalogs(
+		t, authority, mode, binding, route, anchor, routeIndex,
+		DefaultSinkCatalog(), DefaultOfficialRouteCatalog(),
+	)
+}
+
+func changeset3CaptureRouteWithCatalogs(
+	t *testing.T,
+	authority ExecutorID,
+	mode ReleaseMode,
+	binding SinkBinding,
+	route CatalogRoute,
+	anchor bool,
+	routeIndex int,
+	sinks SinkCatalog,
+	routes OfficialRouteCatalog,
+) changeset3PreIdentityReferenceCapture {
 	t.Helper()
 	baseGuard := DefaultGuard()
-	guard, err := NewGuard(baseGuard.Config(), DefaultSinkCatalog(), DefaultOfficialRouteCatalog(), baseGuard.Recorder())
+	guard, err := NewGuard(baseGuard.Config(), sinks, routes, baseGuard.Recorder())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -358,7 +375,7 @@ func changeset3CapturePreIdentityRoute(
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolver, err := NewBundleResolver(DefaultReleaseCatalog(), DefaultSinkCatalog())
+	resolver, err := NewBundleResolver(DefaultReleaseCatalog(), sinks)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -385,7 +402,21 @@ func changeset3CapturePreIdentityRoute(
 	}
 	target, endpointID, dynamic := changeset3ReferenceTarget(t, bundle, route)
 	body, singleUse := changeset3ReferenceSyntheticBody(t, bundle, endpointID)
-	headers := changeset3ReferenceSyntheticHeaders(t, bundle, endpointID)
+	identityFacts := executorInvocationIdentityFacts(t)
+	authenticationInput := AttemptAuthenticationInput{BearerToken: "synthetic-access-token"}
+	if endpoint, ok := changeset3ReferenceEndpoint(bundle.Release().Profile(), endpointID); ok {
+		for _, slot := range endpoint.Headers {
+			if slot.Condition == profilecontract.ConditionCookiePresent {
+				identityFacts.Conditions.CookiePresent = true
+				authenticationInput.Cookie = "synthetic-cookie"
+				break
+			}
+		}
+	}
+	authentication, err := NewAttemptAuthentication(authenticationInput)
+	if err != nil {
+		t.Fatal(err)
+	}
 	requestBody := NewReplayableRequestBody(body)
 	if singleUse {
 		requestBody, err = NewSingleUseRequestBody(io.NopCloser(bytes.NewReader(body)), int64(len(body)))
@@ -409,8 +440,10 @@ func changeset3CapturePreIdentityRoute(
 		Plan: CodexEgressPlan{
 			SinkID: binding.ID(), Purpose: binding.Purpose(), EndpointID: endpointID,
 			Mode: mode, Protocol: route.Protocol, Method: route.Key.Method, URL: target,
-			Headers: headers, IdentityMode: IdentityCodexOAuthStrict,
+			Headers: make(http.Header), IdentityMode: IdentityCodexOAuthStrict,
+			IdentityFacts: identityFacts, Authentication: authentication,
 			HeaderPolicy:   HeaderPolicy{ID: "changeset3.pre-reference.headers", Source: "docs/egress/migration"},
+			BodyPolicy:     BodyPolicy{ID: "changeset3.pre-reference.body", Source: "docs/egress/migration"},
 			BehaviorPolicy: behavior, Body: requestBody,
 			InvocationID:    fmt.Sprintf("pre-reference-%s-%s-%d", mode, strings.ReplaceAll(string(binding.ID()), ".", "-"), routeIndex),
 			DeclaredPersona: PersonaCodexCLI,
@@ -655,7 +688,7 @@ func changeset3ReferenceHeaders(
 		value, _ := changeset3ReferenceExactHeaderEntry(request.Header, name)
 		entry := changeset3ReferenceHeader{Name: strings.ToLower(name), WireName: name}
 		switch strings.ToLower(name) {
-		case "authorization":
+		case "authorization", "cookie":
 			entry.ValueKind = "attempt_authentication"
 		case "chatgpt-account-id", "session-id", "conversation-id", "thread-id", "x-client-request-id":
 			entry.ValueKind = "synthetic_dynamic_identity"

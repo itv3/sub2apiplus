@@ -65,13 +65,22 @@ func NewOfficialRouteCatalog(sinks SinkCatalog) (OfficialRouteCatalog, error) {
 	if err != nil {
 		return OfficialRouteCatalog{}, err
 	}
-	release, err := DefaultReleaseCatalog().Resolve(ReleaseModeActive)
-	if err != nil {
-		return OfficialRouteCatalog{}, err
-	}
-	endpointBindings, err := NewEndpointBindingCatalog(sinks, physical, release.ExecutableProfile())
-	if err != nil {
-		return OfficialRouteCatalog{}, err
+	endpointBindings := make([]EndpointBindingCatalog, 0, 2)
+	seenProfiles := make(map[string]bool)
+	for _, mode := range []ReleaseMode{ReleaseModeActive, ReleaseModePrevious} {
+		release, resolveErr := DefaultReleaseCatalog().Resolve(mode)
+		if resolveErr != nil {
+			return OfficialRouteCatalog{}, resolveErr
+		}
+		if seenProfiles[release.ProfileDigest()] {
+			continue
+		}
+		seenProfiles[release.ProfileDigest()] = true
+		bindings, bindingErr := NewEndpointBindingCatalog(sinks, physical, release.ExecutableProfile())
+		if bindingErr != nil {
+			return OfficialRouteCatalog{}, bindingErr
+		}
+		endpointBindings = append(endpointBindings, bindings)
 	}
 	entries := make([]officialRouteEntry, 0)
 	managedPurposes := make(map[Purpose]struct{})
@@ -95,10 +104,26 @@ func NewOfficialRouteCatalog(sinks SinkCatalog) (OfficialRouteCatalog, error) {
 			// transport_only（例如 authorization-code exchange）只登记物理事实。
 			if sink.Persona() == PersonaCodexCLI &&
 				sink.EndpointEvidence() == EndpointEvidenceCodexProfile {
-				binding, ok := endpointBindings.ResolveBindingRoute(sink, route, physical)
-				if !ok {
+				var binding EndpointBinding
+				found := false
+				for _, catalog := range endpointBindings {
+					candidate, ok := catalog.ResolveBindingRoute(sink, route, physical)
+					if !ok {
+						continue
+					}
+					if found && (candidate.EndpointID() != binding.EndpointID() ||
+						candidate.ReleasePurpose() != binding.ReleasePurpose()) {
+						return OfficialRouteCatalog{}, fmt.Errorf(
+							"Codex Sink %s 的 route 在 Active/Previous 画像中连接到不同 EndpointBinding: %s",
+							sink.ID(), route.Key,
+						)
+					}
+					binding = candidate
+					found = true
+				}
+				if !found {
 					return OfficialRouteCatalog{}, fmt.Errorf(
-						"Codex Sink %s 的 route 没有 ReleaseSelection: %s",
+						"Codex Sink %s 的 route 在 Active/Previous 画像中均没有 ReleaseSelection: %s",
 						sink.ID(),
 						route.Key,
 					)

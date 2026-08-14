@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "result": "accepted",
+  "sink_id": "codex.quota.wham",
+  "route": {
+    "method": "GET",
+    "host": "chatgpt.com",
+    "path": "/backend-api/wham/settings/user",
+    "purpose": "quota_query",
+    "protocol": "http"
+  },
+  "profile_digests": [
+    "94071c8eb93cfd337ac6eabc291d878084e3dcec8a9e618e04e6f68792d1a7bc"
+  ],
+  "wire_fixture_sha256": "c94681c6d2af3aa4d390f4a9e20909ac0c766f82b207fc0c43f36bf63cd4fd56",
+  "execution_verification_sha256": "6d0f298ac736d48f7c8be2a3376049810de5122ad243d6601541ef1e4ea4573c",
+  "observation_digest": "f40333058165fb31bf5d3a20fcd1486b466ca66ac1dd99b95da8bcb02029a45b",
+  "external_traffic": false,
+  "reviewed_by": "codex-version-route-audit",
+  "review_ref": "codex-0.147.0-settings-user/2026-08-14"
+}

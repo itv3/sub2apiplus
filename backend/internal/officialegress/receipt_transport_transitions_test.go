@@ -81,16 +81,37 @@ func TestTransportReceiptTransitionBindsTransportPerReleaseDigest(t *testing.T) 
 }
 
 func TestEveryCodexMigrationClaimHasReleaseScopedTransport(t *testing.T) {
+	releases := make(map[string]ResolvedCodexRelease)
+	for _, mode := range []ReleaseMode{ReleaseModeActive, ReleaseModePrevious} {
+		release, err := DefaultReleaseCatalog().Resolve(mode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		releases[release.ReleaseDigest()] = release
+	}
 	for _, binding := range DefaultSinkCatalog().Bindings() {
 		if binding.Persona() != PersonaCodexCLI || binding.migrationReceipt == nil {
 			continue
 		}
 		for _, claim := range binding.migrationReceipt.routeClaims {
-			if len(claim.transportIDsByRelease) != 2 {
+			expected := make(map[string]string)
+			for releaseDigest, release := range releases {
+				for _, endpoint := range release.ExecutableProfile().Endpoints() {
+					if endpoint.ID == claim.evidenceID {
+						expected[releaseDigest] = endpoint.TransportID
+					}
+				}
+			}
+			if len(expected) == 0 || len(claim.transportIDsByRelease) != len(expected) {
 				t.Fatalf(
-					"Codex MigrationReceipt 未绑定 Active/Previous transport：%s/%s",
+					"Codex MigrationReceipt 未精确绑定包含端点的 release：%s/%s",
 					binding.ID(), claim.evidenceID,
 				)
+			}
+			for releaseDigest, transportID := range expected {
+				if !claim.matchesTransport(releaseDigest, transportID) {
+					t.Fatalf("Codex MigrationReceipt transport 不匹配：%s/%s", binding.ID(), claim.evidenceID)
+				}
 			}
 		}
 	}

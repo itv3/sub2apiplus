@@ -257,7 +257,14 @@ func validateChangeset3AcceptanceAmendment(raw []byte) error {
 	}
 	sort.Strings(excludedIDs)
 	wantExcludedIDs := []string{"codex.admin_test.chat_completions", "codex.admin_test.keeper"}
-	if runtimeEnforced != 21 || runtimeLegacy != 0 || runtimeRoutes != 28 ||
+	versionRoutes, err := loadVersionRouteReceiptManifest()
+	if err != nil {
+		return err
+	}
+	// Acceptance Amendment 的 28 条是变更集 3 历史终点；后续版本 route
+	// 使用独立追加收据，因此当前运行时总数应单调增加而不改写父事实。
+	expectedRuntimeRoutes := 28 + len(versionRoutes.Receipts)
+	if runtimeEnforced != 21 || runtimeLegacy != 0 || runtimeRoutes != expectedRuntimeRoutes ||
 		!slices.Equal(excludedIDs, wantExcludedIDs) {
 		return fmt.Errorf(
 			"最终 Runtime 口径不符合 amendment: enforced=%d legacy=%d routes=%d excluded=%v",

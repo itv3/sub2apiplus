@@ -59,9 +59,15 @@ func NewEndpointBindingCatalog(
 			if !ok {
 				return EndpointBindingCatalog{}, fmt.Errorf("Sink %s 缺少物理路由", sink.ID())
 			}
-			endpoint, err := resolveProfileEndpointForBinding(sink, physicalID, physicalKey, profile)
+			endpoint, present, err := resolveProfileEndpointForBinding(sink, physicalID, physicalKey, profile)
 			if err != nil {
 				return EndpointBindingCatalog{}, err
+			}
+			if !present {
+				// 版本新增端点允许只在包含它的画像中生成 binding。跨画像至少命中一次
+				// 的不变量由 BundleResolver 与 RouteCatalog 在同时看到两种 mode 时校验；
+				// 此处只吸收“零匹配”，多匹配和 override 错误仍然失败关闭。
+				continue
 			}
 			releasePurpose := RegistryPurposeOpenAIOAuthHTTP
 			if route.Protocol == WireProtocolWebSocket {
@@ -93,7 +99,7 @@ func resolveProfileEndpointForBinding(
 	physicalID PhysicalRouteID,
 	physical PhysicalRouteKey,
 	profile profilecontract.ExecutableProfile,
-) (profilecontract.ExecutableEndpointProfile, error) {
+) (profilecontract.ExecutableEndpointProfile, bool, error) {
 	matches := make([]profilecontract.ExecutableEndpointProfile, 0, 1)
 	for _, endpoint := range profile.Endpoints() {
 		protocol := WireProtocolHTTP
@@ -116,21 +122,24 @@ func resolveProfileEndpointForBinding(
 	if overrideID != "" {
 		for _, endpoint := range matches {
 			if endpoint.ID == overrideID {
-				return endpoint, nil
+				return endpoint, true, nil
 			}
 		}
-		return profilecontract.ExecutableEndpointProfile{}, fmt.Errorf(
+		return profilecontract.ExecutableEndpointProfile{}, false, fmt.Errorf(
 			"Sink %s 的 EndpointBinding override %s 不在 ProfileSpec",
 			sink.ID(), overrideID,
 		)
 	}
+	if len(matches) == 0 {
+		return profilecontract.ExecutableEndpointProfile{}, false, nil
+	}
 	if len(matches) != 1 {
-		return profilecontract.ExecutableEndpointProfile{}, fmt.Errorf(
+		return profilecontract.ExecutableEndpointProfile{}, false, fmt.Errorf(
 			"Sink %s 的业务 route 必须唯一连接 EndpointBinding，实际匹配 %d 个",
 			sink.ID(), len(matches),
 		)
 	}
-	return matches[0], nil
+	return matches[0], true, nil
 }
 
 func uniqueProfileEndpointForPhysical(

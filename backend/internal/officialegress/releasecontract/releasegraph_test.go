@@ -11,18 +11,23 @@ import (
 	r "github.com/Wei-Shaw/sub2api/internal/officialegress/releasecontract"
 )
 
-func loadReleaseGraphRaw(t *testing.T) []byte {
+func loadReleaseGraphRawFrom(t *testing.T, path string) []byte {
 	t.Helper()
-	raw, err := os.ReadFile("testdata/release-graph.json")
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("读取发布图: %v", err)
 	}
 	return raw
 }
 
-func mustReleaseGraph(t *testing.T) r.ReleaseGraph {
+func loadReleaseGraphRaw(t *testing.T) []byte {
 	t.Helper()
-	doc, err := r.ParseReleaseGraph(loadReleaseGraphRaw(t))
+	return loadReleaseGraphRawFrom(t, "testdata/release-graph.json")
+}
+
+func mustReleaseGraphFrom(t *testing.T, path string) r.ReleaseGraph {
+	t.Helper()
+	doc, err := r.ParseReleaseGraph(loadReleaseGraphRawFrom(t, path))
 	if err != nil {
 		t.Fatalf("解析发布图: %v", err)
 	}
@@ -31,6 +36,11 @@ func mustReleaseGraph(t *testing.T) r.ReleaseGraph {
 		t.Fatalf("构造发布图: %v", err)
 	}
 	return graph
+}
+
+func mustReleaseGraph(t *testing.T) r.ReleaseGraph {
+	t.Helper()
+	return mustReleaseGraphFrom(t, "testdata/release-graph.json")
 }
 
 func TestReleaseGraphCanonicalRoundTrip(t *testing.T) {
@@ -53,7 +63,9 @@ func TestReleaseGraphCanonicalRoundTrip(t *testing.T) {
 }
 
 func TestReleaseGraphKeepsPurposeAndModeIdentity(t *testing.T) {
-	graph := mustReleaseGraph(t)
+	// 该性质必须排除“版本号天然不同”带来的假通过，因此使用升级前冻结的
+	// 同版本历史夹具；运行时共享夹具继续表达当前 Active/Previous 混版本状态。
+	graph := mustReleaseGraphFrom(t, "testdata/release-graph-same-version.json")
 	for _, purpose := range []string{
 		"openai_oauth_responses_http",
 		"openai_oauth_responses_ws",

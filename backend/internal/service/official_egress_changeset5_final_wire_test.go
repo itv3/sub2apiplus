@@ -375,10 +375,77 @@ func TestChangeset5CurrentFinalWireMatchesFrozenWireFields(t *testing.T) {
 	normalized := changeset5ReadFinalWireManifest(
 		t, "../../../docs/egress/consolidation/normalized-pre-refactor-final-wire/manifest.json",
 	)
-	current := changeset3BuildProductionFinalWireCaptures(t)
-	if err := changeset5CompareCurrentFinalWireCaptures(normalized.Captures, current); err != nil {
+	current := changeset5BuildCurrentActiveFinalWireCaptures(t)
+	// 变更集 5 冻结时 Active/Previous 都是 0.145；升级候选阶段 Previous
+	// 已合法指向 0.147。此历史非回归门只比较仍作为生产指针的 Active，
+	// 0.147 Previous 由升级 Campaign 与版本 route 收据验证。
+	filterActive := func(captures []finalwirecapture.Capture) []finalwirecapture.Capture {
+		filtered := make([]finalwirecapture.Capture, 0, len(captures)/2)
+		for _, capture := range captures {
+			if capture.ReleaseMode == officialegress.ReleaseModeActive {
+				filtered = append(filtered, capture)
+			}
+		}
+		return filtered
+	}
+	if err := changeset5CompareCurrentFinalWireCaptures(
+		filterActive(normalized.Captures), current,
+	); err != nil {
 		t.Fatalf("当前 final-wire 与 normalized pre 漂移：%v", err)
 	}
+}
+
+func changeset5BuildCurrentActiveFinalWireCaptures(t *testing.T) []finalwirecapture.Capture {
+	t.Helper()
+	release, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseModeActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	anchors := map[officialegress.SinkID]bool{
+		officialegress.SinkCodexAdminTestCompact:       true,
+		officialegress.SinkCodexAdminTestResponses:     true,
+		officialegress.SinkCodexAlphaSearchPATFallback: true,
+		officialegress.SinkCodexUsageProbe:             true,
+	}
+	var captures []finalwirecapture.Capture
+	for _, binding := range officialegress.DefaultSinkCatalog().Bindings() {
+		if binding.Persona() != officialegress.PersonaCodexCLI ||
+			binding.EndpointEvidence() != officialegress.EndpointEvidenceCodexProfile ||
+			!binding.RuntimeBindable() || binding.EnforcementState() != officialegress.SinkStateEnforced {
+			continue
+		}
+		for routeIndex, route := range binding.Routes() {
+			matches := 0
+			for _, endpoint := range release.Profile().Endpoints() {
+				protocol := officialegress.WireProtocolHTTP
+				if endpoint.Upgrade != "" {
+					protocol = officialegress.WireProtocolWebSocket
+				}
+				pathMatches := endpoint.Path == route.Key.Path ||
+					strings.TrimPrefix(endpoint.Path, "/") == strings.TrimPrefix(route.Key.Path, "/")
+				if endpoint.Method == route.Key.Method && endpoint.Host == route.Key.Host &&
+					pathMatches && protocol == route.Protocol {
+					matches++
+				}
+			}
+			if matches > 1 {
+				t.Fatalf("Active route 非唯一：%s matches=%d", route.Key.String(), matches)
+			}
+			if matches == 0 {
+				continue
+			}
+			captures = append(captures, changeset3CaptureProductionRoute(
+				t, officialegress.ReleaseModeActive, binding, route, anchors[binding.ID()], routeIndex,
+			))
+		}
+	}
+	sort.Slice(captures, func(i, j int) bool {
+		return changeset3ProductionCaptureKey(captures[i]) < changeset3ProductionCaptureKey(captures[j])
+	})
+	if len(captures) != 28 {
+		t.Fatalf("变更集 5 当前 Active final-wire 范围错误：captures=%d", len(captures))
+	}
+	return captures
 }
 
 func TestChangeset5CurrentFinalWireComparatorRejectsWireDrift(t *testing.T) {
@@ -528,7 +595,7 @@ func changeset5CompareFinalWireCaptures(
 	after []finalwirecapture.Capture,
 	approved []finalwirecontract.ApprovedDelta,
 ) error {
-	if len(before) != 56 || len(after) != 56 {
+	if len(before) == 0 || len(before) != len(after) {
 		return fmt.Errorf("变更集 5 final-wire capture 数量漂移：before=%d after=%d", len(before), len(after))
 	}
 	beforeByKey := make(map[string]finalwirecapture.Capture, len(before))

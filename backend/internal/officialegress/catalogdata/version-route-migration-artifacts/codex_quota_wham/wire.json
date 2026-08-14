@@ -1,0 +1,94 @@
+{
+  "sink_id": "codex.quota.wham",
+  "anchor": true,
+  "release_mode": "previous",
+  "method": "GET",
+  "host_template": "chatgpt.com",
+  "final_host": "chatgpt.com",
+  "path_template": "/backend-api/wham/settings/user",
+  "final_path": "/backend-api/wham/settings/user",
+  "protocol": "http",
+  "purpose": "quota_query",
+  "endpoint_id": "wham_settings_user",
+  "authority_id": "codex.executor.changeset1b",
+  "has_finalization_token": true,
+  "terminal_guard_allow": true,
+  "profile_validation_result": "passed",
+  "attempt_ordinal": 1,
+  "attempt_reason": "initial",
+  "release_digest": "7847db45c9fbd928b3c689104b95522bc6a330d5e4274619940b0173dd18f4b0",
+  "profile_digest": "94071c8eb93cfd337ac6eabc291d878084e3dcec8a9e618e04e6f68792d1a7bc",
+  "bundle_digest": "635ee44fd0767a6c502fe1f68a71ccc9b21b0cc42a6a3086071c6e9be64e5eb8",
+  "backend": "http_upstream",
+  "adapter_id": "officialegress.http_upstream",
+  "transport_id": "codex-0.147.0-http-ubuntu24-native-long-lived",
+  "connection_identity_digest": "7cfe53741dd749a60eb9d296532512296d48683484ee549e5a096e647a638986",
+  "connection_pool_digest": "d0689d9c33cd3e6e10ea205c6cd6b25b8a726ae5944cbc1930bb636142b46a58",
+  "tls_profile_digest": "bce43ccfa3512a9f761926bc31b3fac33cce921c700f36ebbea05626b4937650",
+  "normalization": {
+    "HeaderMode": "lowercase",
+    "SuppressDefaultUserAgent": true,
+    "WebSocketCompressionOffer": ""
+  },
+  "ordered_headers": [
+    {
+      "name": "user-agent",
+      "wire_name": "user-agent",
+      "value_kind": "static_or_synthetic_safe",
+      "safe_value": "codex_exec/0.147.0 (Ubuntu 24.4.0; x86_64) unknown (codex_exec; 0.147.0)",
+      "value_sha256": "4935637e5ee513e3c3bbebed39e0ccd15fa45f53d7ee8068c68f45284f56dc6b"
+    },
+    {
+      "name": "authorization",
+      "wire_name": "authorization",
+      "value_kind": "attempt_authentication"
+    },
+    {
+      "name": "chatgpt-account-id",
+      "wire_name": "chatgpt-account-id",
+      "value_kind": "synthetic_dynamic_identity"
+    },
+    {
+      "name": "x-openai-fedramp",
+      "wire_name": "x-openai-fedramp",
+      "value_kind": "static_or_synthetic_safe",
+      "value_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "cache-control",
+      "wire_name": "cache-control",
+      "value_kind": "static_or_synthetic_safe",
+      "safe_value": "no-cache, no-store",
+      "value_sha256": "a38e5635652a2b14f2b86f50336d6134e7cfab3b656b67bdb8e6ecb56ba117cc"
+    },
+    {
+      "name": "accept",
+      "wire_name": "accept",
+      "value_kind": "static_or_synthetic_safe",
+      "safe_value": "*/*",
+      "value_sha256": "7994750c119d1c03615dde46677ccae5429cdbfc2687b51224f0ae6c5609a63d"
+    },
+    {
+      "name": "cookie",
+      "wire_name": "cookie",
+      "value_kind": "attempt_authentication"
+    },
+    {
+      "name": "host",
+      "wire_name": "host",
+      "value_kind": "static_or_synthetic_safe",
+      "value_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "body": {
+    "encoding": "",
+    "ordered_fields": null,
+    "type_shape": null,
+    "synthetic_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "compression": "",
+    "compression_level": 3,
+    "credential_bearing": false
+  },
+  "single_use_raw_stream": false,
+  "single_use_consumption_count": 0
+}

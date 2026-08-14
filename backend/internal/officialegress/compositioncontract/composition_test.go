@@ -29,9 +29,9 @@ func loadBindings(t *testing.T) bindingcontract.BindingCatalog {
 	return catalog
 }
 
-func loadReleases(t *testing.T) releasecontract.ReleaseGraph {
+func loadReleasesFrom(t *testing.T, path string) releasecontract.ReleaseGraph {
 	t.Helper()
-	raw, err := os.ReadFile("../releasecontract/testdata/release-graph.json")
+	raw, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -44,6 +44,11 @@ func loadReleases(t *testing.T) releasecontract.ReleaseGraph {
 		t.Fatal(err)
 	}
 	return graph
+}
+
+func loadReleases(t *testing.T) releasecontract.ReleaseGraph {
+	t.Helper()
+	return loadReleasesFrom(t, "../releasecontract/testdata/release-graph.json")
 }
 
 func loadSnapshots(t *testing.T) profilecontract.SnapshotCatalog {
@@ -69,6 +74,15 @@ func loadSnapshots(t *testing.T) profilecontract.SnapshotCatalog {
 func mustComposer(t *testing.T) c.Composer {
 	t.Helper()
 	return c.NewComposer(loadBindings(t), loadReleases(t), loadSnapshots(t))
+}
+
+func mustSameVersionComposer(t *testing.T) c.Composer {
+	t.Helper()
+	return c.NewComposer(
+		loadBindings(t),
+		loadReleasesFrom(t, "testdata/release-graph-same-version.json"),
+		loadSnapshots(t),
+	)
 }
 
 func releasePurposeForTest(binding bindingcontract.ReleaseBindingDoc) string {
@@ -126,7 +140,9 @@ func TestOAuthExchangeCannotMasqueradeAsRefreshEndpoint(t *testing.T) {
 }
 
 func TestPurposeAndModeRemainExplicitCoordinates(t *testing.T) {
-	composer := mustComposer(t)
+	// 该性质必须在同版本、同 Snapshot 下验证，避免混版本夹具让 Build/Wire
+	// 身份差异天然成立而失去检出能力。
+	composer := mustSameVersionComposer(t)
 	active, err := composer.Compose(c.CompositionRequest{
 		SinkID:         "codex.responses.forward",
 		ReleasePurpose: c.CodexOAuthHTTPReleasePurpose,

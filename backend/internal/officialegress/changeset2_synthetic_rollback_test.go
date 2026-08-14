@@ -15,6 +15,13 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/officialegress/releasecontract"
 )
 
+// 合成异版本目录用的目标坐标。刻意避开 0.147.0：升级期间正式 previous 已指向真实
+// 0.147.0 画像，撞车会让「异版本」退化成同版本，三坐标里的 version 一维不再分离。
+const (
+	syntheticHigherVersion           = "0.149.0"
+	syntheticHigherVersionUnderscore = "0_149_0"
+)
+
 func syntheticChangeset2ReleaseCatalog(t *testing.T) ReleaseCatalog {
 	t.Helper()
 	base := DefaultReleaseCatalog()
@@ -120,13 +127,42 @@ func syntheticChangeset2ReleaseCatalog(t *testing.T) ReleaseCatalog {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// 合成的 previous 画像是 active（0.145.0）的变体，版本与 active 相同——本函数要验证的
+	// 是「同版本回滚时 active/previous 的事实不串」。升级期间正式 previous 的 Build 已指向
+	// 目标版本，若只替换 Snapshot 而不动 Build，节点内部就会出现「快照版本与 Build 版本不
+	// 一致」。故把 previous 节点的发布坐标一并降回合成画像的版本。
+	downgrade := strings.NewReplacer(
+		syntheticHigherVersion, previousDoc.Version,
+		syntheticHigherVersionUnderscore, strings.ReplaceAll(previousDoc.Version, ".", "_"),
+	)
 	for nodeIndex := range graphDoc.Nodes {
-		if graphDoc.Nodes[nodeIndex].Mode == releasecontract.ReleaseModePrevious {
-			graphDoc.Nodes[nodeIndex].Snapshot = releasecontract.SnapshotReferenceDoc{
-				Version: previousDoc.Version,
-				Digest:  previousDoc.Digest,
-			}
+		node := &graphDoc.Nodes[nodeIndex]
+		if node.Mode != releasecontract.ReleaseModePrevious {
+			continue
 		}
+		node.Snapshot = releasecontract.SnapshotReferenceDoc{
+			Version: previousDoc.Version,
+			Digest:  previousDoc.Digest,
+		}
+		if node.Build.Version == previousDoc.Version {
+			continue
+		}
+		stale := strings.NewReplacer(
+			node.Build.Version, previousDoc.Version,
+			strings.ReplaceAll(node.Build.Version, ".", "_"),
+			strings.ReplaceAll(previousDoc.Version, ".", "_"),
+		)
+		node.Build.ID = stale.Replace(downgrade.Replace(node.Build.ID))
+		node.Build.UserAgent = stale.Replace(downgrade.Replace(node.Build.UserAgent))
+		node.Build.Source = "synthetic:rollback-same-version"
+		node.Build.Version = previousDoc.Version
+		node.Wire.ID = stale.Replace(downgrade.Replace(node.Wire.ID))
+		node.Wire.TransportProfileID = stale.Replace(
+			downgrade.Replace(node.Wire.TransportProfileID),
+		)
+		node.Wire.BuildID = node.Build.ID
+		node.Wire.Source = "synthetic:rollback-same-version"
+		node.Wire.Digest = syntheticChangeset2RegistryDigest(t, node.Build, node.Wire)
 	}
 	graph, err := releasecontract.NewReleaseGraph(graphDoc)
 	if err != nil {
@@ -140,7 +176,10 @@ func syntheticChangeset2ReleaseCatalog(t *testing.T) ReleaseCatalog {
 }
 
 // syntheticChangeset2MixedVersionReleaseCatalog 构造只用于门禁自测的异版本目录。
-// 它完整替换画像中的行为版本坐标，并让 active=0.147.0、previous=0.145.0；
+// 它完整替换画像中的行为版本坐标，让 active 指向一个合成的更高版本、previous 保留
+// 正式发布图的取值。合成版本刻意避开 0.147.0：升级期间正式 previous 已指向真实
+// 0.147.0 画像，若合成 active 也用 0.147.0，三坐标里的 version 一维就不再分离，
+// 本测试要验证的「异版本三坐标全部分离」失去意义。
 // 该目录不写入 runtime，也不得作为正式画像或取证结果。
 func syntheticChangeset2MixedVersionReleaseCatalog(t *testing.T) ReleaseCatalog {
 	t.Helper()
@@ -177,7 +216,7 @@ func syntheticChangeset2MixedVersionReleaseCatalog(t *testing.T) ReleaseCatalog 
 	if err != nil {
 		t.Fatal(err)
 	}
-	targetRaw := []byte(strings.ReplaceAll(string(baselineRaw), "0.145.0", "0.147.0"))
+	targetRaw := []byte(strings.ReplaceAll(string(baselineRaw), "0.145.0", syntheticHigherVersion))
 	if strings.Contains(string(targetRaw), "0.145.0") {
 		t.Fatal("异版本合成画像仍残留 0.145.0 行为坐标")
 	}
@@ -201,12 +240,60 @@ func syntheticChangeset2MixedVersionReleaseCatalog(t *testing.T) ReleaseCatalog 
 		targetDoc.Version,
 		targetDoc.Digest,
 	)
+	// 本合成 catalog 只改写 Active 节点，Previous 节点原样保留正式发布图的取值。
+	// 升级期间正式 previous 已指向真实 0.147 画像（§7.1 的候选阶段状态：active=0.145、
+	// previous=目标版本），若 snapshots 里只放 baseline 与合成画像，Previous 引用的那份
+	// 就查不到，newReleaseCatalog 会以「release mode previous 引用了未知 Snapshot」失败。
+	// 故把发布图里所有非 Active 节点引用的真实 snapshot 一并纳入，保持合成 catalog 自洽。
+	carried := map[profilecontract.SnapshotKey][]byte{}
+	baseSnapshotDoc := base.snapshots.ToDoc()
+	for _, node := range graphDoc.Nodes {
+		if node.Mode == releasecontract.ReleaseModeActive {
+			continue
+		}
+		key := profilecontract.SnapshotKey{
+			Version: node.Snapshot.Version, Digest: node.Snapshot.Digest,
+		}
+		if key.Version == sourceEntry.Version && key.Digest == sourceEntry.Digest {
+			continue
+		}
+		if _, ok := carried[key]; ok {
+			continue
+		}
+		var entry profilecontract.SnapshotCatalogEntry
+		for _, candidate := range baseSnapshotDoc.Snapshots {
+			if candidate.Version == key.Version && candidate.Digest == key.Digest {
+				entry = candidate
+				break
+			}
+		}
+		if entry.File == "" {
+			t.Fatalf("正式 previous snapshot entry 缺失：%s/%s", key.Version, key.Digest)
+		}
+		raw, err := releaseCatalogFS.ReadFile("catalogdata/runtime/" + entry.File)
+		if err != nil {
+			t.Fatal(err)
+		}
+		carried[key] = raw
+	}
+
+	snapshotEntries := []profilecontract.SnapshotCatalogEntry{
+		sourceEntry,
+		{Version: targetDoc.Version, Digest: targetDoc.Digest, File: targetFile},
+	}
+	carriedFiles := map[string][]byte{}
+	for key, raw := range carried {
+		for _, candidate := range baseSnapshotDoc.Snapshots {
+			if candidate.Version == key.Version && candidate.Digest == key.Digest {
+				snapshotEntries = append(snapshotEntries, candidate)
+				carriedFiles[candidate.File] = raw
+				break
+			}
+		}
+	}
 	snapshotDoc := profilecontract.SnapshotCatalogDoc{
 		SchemaVersion: profilecontract.SnapshotCatalogSchemaVersion,
-		Snapshots: []profilecontract.SnapshotCatalogEntry{
-			sourceEntry,
-			{Version: targetDoc.Version, Digest: targetDoc.Digest, File: targetFile},
-		},
+		Snapshots:     snapshotEntries,
 	}
 	snapshots, err := profilecontract.NewSnapshotCatalog(
 		snapshotDoc,
@@ -217,6 +304,9 @@ func syntheticChangeset2MixedVersionReleaseCatalog(t *testing.T) ReleaseCatalog 
 			case targetFile:
 				return append([]byte(nil), targetRaw...), nil
 			default:
+				if raw, ok := carriedFiles[path]; ok {
+					return append([]byte(nil), raw...), nil
+				}
 				return nil, fmt.Errorf("未知异版本合成 snapshot: %s", path)
 			}
 		},
@@ -224,7 +314,10 @@ func syntheticChangeset2MixedVersionReleaseCatalog(t *testing.T) ReleaseCatalog 
 	if err != nil {
 		t.Fatal(err)
 	}
-	replacer := strings.NewReplacer("0.145.0", "0.147.0", "0_145_0", "0_147_0")
+	replacer := strings.NewReplacer(
+		"0.145.0", syntheticHigherVersion,
+		"0_145_0", syntheticHigherVersionUnderscore,
+	)
 	for index := range graphDoc.Nodes {
 		node := &graphDoc.Nodes[index]
 		if node.Mode != releasecontract.ReleaseModeActive {
@@ -233,11 +326,11 @@ func syntheticChangeset2MixedVersionReleaseCatalog(t *testing.T) ReleaseCatalog 
 		node.Build.ID = replacer.Replace(node.Build.ID)
 		node.Build.Version = targetDoc.Version
 		node.Build.UserAgent = replacer.Replace(node.Build.UserAgent)
-		node.Build.Source = "synthetic:0.145.0-to-0.147.0"
+		node.Build.Source = "synthetic:0.145.0-to-" + syntheticHigherVersion
 		node.Wire.ID = replacer.Replace(node.Wire.ID)
 		node.Wire.BuildID = node.Build.ID
 		node.Wire.TransportProfileID = replacer.Replace(node.Wire.TransportProfileID)
-		node.Wire.Source = "synthetic:0.145.0-to-0.147.0"
+		node.Wire.Source = "synthetic:0.145.0-to-" + syntheticHigherVersion
 		node.Snapshot = releasecontract.SnapshotReferenceDoc{
 			Version: targetDoc.Version,
 			Digest:  targetDoc.Digest,
@@ -374,7 +467,26 @@ func compileSyntheticChangeset2Endpoint(
 
 func TestChangeset2SyntheticProfileRollbackMatrixHasNoMixedFacts(t *testing.T) {
 	catalog := syntheticChangeset2ReleaseCatalog(t)
-	resolver, err := NewBundleResolver(catalog, DefaultSinkCatalog())
+	// 本测试冻结的是版本 route 出现前的 0.145 合成回滚矩阵，只保留本矩阵
+	// 实际覆盖的四个 Sink，避免把 0.147 独有端点伪造进历史画像。
+	var rollbackInputs []SinkBindingInput
+	for _, sinkID := range []SinkID{
+		SinkCodexResponsesForward, SinkCodexResponsesWS,
+		SinkCodexAlphaSearchDirect, SinkCodexOAuthRefresh,
+	} {
+		binding, ok := DefaultSinkCatalog().Resolve(sinkID)
+		if !ok {
+			t.Fatalf("合成回滚矩阵缺少 Sink：%s", sinkID)
+		}
+		input := sinkBindingInputForVersionRoute(binding)
+		input.migrationReceipt = binding.migrationReceipt
+		rollbackInputs = append(rollbackInputs, input)
+	}
+	rollbackSinks, err := NewSinkCatalog(rollbackInputs)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolver, err := NewBundleResolver(catalog, rollbackSinks)
 	if err != nil {
 		t.Fatal(err)
 	}

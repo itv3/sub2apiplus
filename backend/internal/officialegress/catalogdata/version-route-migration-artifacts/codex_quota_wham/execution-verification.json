@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "result": "passed",
+  "sink_id": "codex.quota.wham",
+  "route": {
+    "method": "GET",
+    "host": "chatgpt.com",
+    "path": "/backend-api/wham/settings/user",
+    "purpose": "quota_query",
+    "protocol": "http"
+  },
+  "authority_kind": "codex_executor",
+  "authority_id": "codex.executor.changeset1b",
+  "token_issuer_id": "codex.executor.changeset1b",
+  "evidence_kind": "codex_endpoint",
+  "evidence_id": "wham_settings_user",
+  "backend": "http_upstream",
+  "adapter_id": "officialegress.http_upstream",
+  "transport_id": "codex-0.147.0-http-ubuntu24-native-long-lived",
+  "wire_fixture_sha256": "c94681c6d2af3aa4d390f4a9e20909ac0c766f82b207fc0c43f36bf63cd4fd56",
+  "profile_digests": [
+    "94071c8eb93cfd337ac6eabc291d878084e3dcec8a9e618e04e6f68792d1a7bc"
+  ],
+  "terminal_guard_allow": true,
+  "external_traffic": false
+}

@@ -155,14 +155,20 @@ func applyCatalogAmendments(
 			if err := route.Validate(); err != nil {
 				return nil, fmt.Errorf("Catalog route 补充非法: %s", amendment.SinkID)
 			}
-			release, releaseErr := DefaultReleaseCatalog().Resolve(ReleaseModeActive)
-			if releaseErr != nil {
-				return nil, releaseErr
+			matched := false
+			for _, mode := range []ReleaseMode{ReleaseModeActive, ReleaseModePrevious} {
+				release, releaseErr := DefaultReleaseCatalog().Resolve(mode)
+				if releaseErr != nil {
+					return nil, releaseErr
+				}
+				if _, ok := uniqueProfileEndpointForPhysical(
+					release.ExecutableProfile(), physicalRouteFromCatalogRoute(route),
+				); ok {
+					matched = true
+				}
 			}
-			if _, ok := uniqueProfileEndpointForPhysical(
-				release.ExecutableProfile(), physicalRouteFromCatalogRoute(route),
-			); !ok {
-				return nil, fmt.Errorf("Catalog route 补充没有 ProfileSpec endpoint: %s", amendment.SinkID)
+			if !matched {
+				return nil, fmt.Errorf("Catalog route 补充在 Active/Previous 中均没有 ProfileSpec endpoint: %s", amendment.SinkID)
 			}
 			duplicate := false
 			for _, existing := range input.Routes {

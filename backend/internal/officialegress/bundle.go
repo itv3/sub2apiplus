@@ -336,6 +336,7 @@ func NewBundleResolver(releases ReleaseCatalog, sinks SinkCatalog) (*BundleResol
 		releases: releases, sinks: sinks, physical: physical,
 		bindingsByProfile: make(map[string]EndpointBindingCatalog),
 	}
+	coveredRoutes := make(map[string]bool)
 	for _, mode := range []ReleaseMode{ReleaseModeActive, ReleaseModePrevious} {
 		release, err := releases.Resolve(mode)
 		if err != nil {
@@ -349,6 +350,28 @@ func NewBundleResolver(releases ReleaseCatalog, sinks SinkCatalog) (*BundleResol
 			return nil, err
 		}
 		resolver.bindingsByProfile[release.ProfileDigest()] = bindings
+		for _, binding := range bindings.Bindings() {
+			coveredRoutes[binding.Key().identity()] = true
+		}
+	}
+	for _, sink := range sinks.Bindings() {
+		if !sink.RuntimeBindable() || sink.Persona() != PersonaCodexCLI ||
+			sink.EndpointEvidence() != EndpointEvidenceCodexProfile {
+			continue
+		}
+		for _, route := range sink.Routes() {
+			physicalID, _, ok := physical.ResolveRoute(route)
+			if !ok {
+				return nil, fmt.Errorf("Sink %s 缺少物理路由", sink.ID())
+			}
+			key := EndpointBindingKey{
+				SinkID: sink.ID(), Purpose: sink.Purpose(), PhysicalRouteID: physicalID,
+				Protocol: route.Protocol,
+			}
+			if !coveredRoutes[key.identity()] {
+				return nil, fmt.Errorf("Sink %s 的 route 在 Active/Previous 画像中均无 EndpointBinding", sink.ID())
+			}
+		}
 	}
 	return resolver, nil
 }
@@ -407,11 +430,16 @@ func (r *BundleResolver) Resolve(request BundleResolveRequest) (ReleaseBundle, e
 		if !containsBackend(request.Deployment.SupportedBackends, sink.TargetBackend()) {
 			return ReleaseBundle{}, fmt.Errorf("Sink %s 的 backend 不受部署支持", sinkID)
 		}
+		sinkPlanCount := 0
 		for _, route := range sink.Routes() {
 			binding, ok := endpointBindings.ResolveBindingRoute(sink, route, r.physical)
 			if !ok {
-				return ReleaseBundle{}, fmt.Errorf("Sink %s 缺少 EndpointBinding", sinkID)
+				// route 可能只属于另一版本画像；当前 mode 不生成 plan。构造器已经
+				// 断言每条 route 至少在 Active/Previous 之一存在，因此这里不会
+				// 把拼写错误或两侧同时缺失静默放行。
+				continue
 			}
+			sinkPlanCount++
 			endpoint, transport, err := resolveBundleProfileFacts(release.ExecutableProfile(), binding.EndpointID())
 			if err != nil {
 				return ReleaseBundle{}, err
@@ -441,6 +469,9 @@ func (r *BundleResolver) Resolve(request BundleResolveRequest) (ReleaseBundle, e
 					EndpointID:      binding.EndpointID(), Protocol: route.Protocol,
 				})
 			}
+		}
+		if sinkPlanCount == 0 {
+			return ReleaseBundle{}, fmt.Errorf("Sink %s 在当前 Release 中没有 EndpointBinding", sinkID)
 		}
 	}
 	sort.Slice(fallbackNodes, func(i, j int) bool {
