@@ -13,8 +13,13 @@ from pathlib import Path
 
 from tools.official_client_capture.candidate_evidence_guard import scan_files_for_secrets
 from tools.official_client_capture.relay_extract import parse_ws_frames
-from tools.official_client_capture.scrub_raw_bytes import rewrite_relay_manifest, scrub
+from tools.official_client_capture.scrub_raw_bytes import (
+    GENERIC_TOKEN,
+    rewrite_relay_manifest,
+    scrub,
+)
 from tools.official_client_capture.upstream_byte_relay import (
+    _synthetic_aux_response,
     _SYNTHETIC_AUX_CFUV_COOKIE,
     _SYNTHETIC_AUX_TURN_STATE,
     _SYNTHETIC_FILE_HOST,
@@ -154,9 +159,17 @@ class UpstreamByteRelayWebSocketTest(unittest.TestCase):
 
 class UpstreamByteRelaySyntheticAuxTest(unittest.TestCase):
     @staticmethod
-    def response(host: str, line: str, headers: bytes = b"", body: bytes = b""):
+    def response(
+        host: str,
+        line: str,
+        headers: bytes = b"",
+        body: bytes = b"",
+        legacy_compact_ordinal: int = 0,
+    ):
         head = line.encode("ascii") + b"\r\n" + headers + b"\r\n"
-        return _synthetic_aux_response(host, line, head, body, "0.147.0")
+        return _synthetic_aux_response(
+            host, line, head, body, "0.147.0", legacy_compact_ordinal
+        )
 
     def test_a09_auxiliary_endpoints_are_allowlisted(self) -> None:
         cases = (
@@ -207,10 +220,14 @@ class UpstreamByteRelaySyntheticAuxTest(unittest.TestCase):
         )
 
     def test_a09_compact_prime_sets_cookie_and_beta_sets_turn_state(self) -> None:
+        # prime 按到达序号识别。这里刻意**不**喂 capture_variant：网关按画像重新
+        # 生成 x-codex-turn-metadata，该字段不会出现在出站字节里，用它构造请求
+        # 等于测试一个真实链路上不存在的输入——旧版本正是这样通过的，而实际采集
+        # 中 Cookie 从未下发过（k56 实测 A09 九个连接全无 cookie）。
         prime = self.response(
             "chatgpt.com",
             "POST /backend-api/codex/responses/compact HTTP/1.1",
-            b'x-codex-turn-metadata: {"capture_variant":"prime"}\r\n',
+            legacy_compact_ordinal=1,
         )
         self.assertIsNotNone(prime)
         self.assertIn(
@@ -221,11 +238,13 @@ class UpstreamByteRelaySyntheticAuxTest(unittest.TestCase):
         default = self.response(
             "chatgpt.com",
             "POST /backend-api/codex/responses/compact HTTP/1.1",
+            legacy_compact_ordinal=2,
         )
         beta = self.response(
             "chatgpt.com",
             "POST /backend-api/codex/responses/compact HTTP/1.1",
             b"x-codex-beta-features: candidate_aux_beta\r\n",
+            legacy_compact_ordinal=3,
         )
         self.assertIsNotNone(default)
         self.assertIsNotNone(beta)
@@ -666,6 +685,85 @@ class ScrubbedRelayEvidenceTest(unittest.TestCase):
             path.write_bytes(scrubbed)
             result = scan_files_for_secrets([("candidate/A13/relay.bin", path)])
         self.assertTrue(result["passed"], result["findings"])
+
+    def test_identity_signal_token_is_scrubbed_in_header_and_body(self) -> None:
+        """A13 刷新响应里的 identity-signal 令牌必须与 access_token 同等脱敏。
+
+        它的形态是 `ois1.eyJ<载荷>.<签名>`，JWT 主体被 `ois1.` 前缀隔开：首版规则
+        既不认 `x-oai-is-update` 头也不认 `oai_is` 字段，令牌明文留在 relay 原始
+        字节里，直到 evidence guard 的 jwt-shape 才拦下（k52）。
+        """
+
+        jwt_body = b"eyJ" + b"A" * 60 + b"." + b"B" * 40 + b"." + b"C" * 30
+        source = (
+            b"HTTP/1.1 200 OK\r\n"
+            b"content-type: application/json\r\n"
+            b"x-oai-is-update: ois1." + jwt_body + b"\r\n\r\n"
+            b'{"oai_is": "ois1.' + jwt_body + b'"}'
+        )
+        scrubbed, replacements = scrub(source)
+        self.assertEqual(len(scrubbed), len(source))
+        self.assertEqual(replacements, 2)
+        self.assertNotIn(b"eyJ", scrubbed)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "relay.bin"
+            path.write_bytes(scrubbed)
+            result = scan_files_for_secrets([("official/A13/relay.bin", path)])
+        self.assertTrue(result["passed"], result["findings"])
+
+    def test_rescan_flags_identity_signal_token_left_in_clear(self) -> None:
+        """复扫判据必须与 evidence guard 对齐，否则漏网的是真凭据而非告警。"""
+
+        raw = b"x-oai-is-update: ois1.eyJ" + b"A" * 60 + b"." + b"B" * 40
+        self.assertTrue(GENERIC_TOKEN.search(raw))
+
+
+class AuxLegacyCompactPrimeTest(unittest.TestCase):
+    """prime 轮只能按到达序号识别，不能看 turn-metadata 里的客户端自造字段。
+
+    网关按画像重新生成 `x-codex-turn-metadata`，采集脚本塞进去的 capture_variant
+    不会出现在出站字节里。旧实现据此判定 prime，因而 Cookie 从未下发过——k56 实测
+    A09 九个连接全部无 cookie，EP-015／EP-022 的头序判据随之必败。
+    """
+
+    LINE = "POST /backend-api/codex/responses/compact HTTP/1.1"
+
+    def _head(self, *, beta: bool = False, capture_variant: str = "") -> bytes:
+        metadata = '{"installation_id":"dcaa827b","session_id":"019ff289"'
+        if capture_variant:
+            metadata += f',"capture_variant":"{capture_variant}"'
+        metadata += "}"
+        rows = [self.LINE, "host: chatgpt.com"]
+        if beta:
+            rows.append("x-codex-beta-features: candidate_aux_beta")
+        rows.append(f"x-codex-turn-metadata: {metadata}")
+        return ("\r\n".join(rows) + "\r\n\r\n").encode("ascii")
+
+    def _wire(self, head: bytes, ordinal: int) -> bytes:
+        response = _synthetic_aux_response(
+            "chatgpt.com", self.LINE, head, b"{}", "0.147.0", ordinal
+        )
+        self.assertIsNotNone(response)
+        return response.wire.lower()
+
+    def test_first_compact_sets_cookie(self):
+        self.assertIn(b"set-cookie", self._wire(self._head(), 1))
+
+    def test_later_compacts_do_not_set_cookie(self):
+        for ordinal in (2, 3, 4):
+            self.assertNotIn(b"set-cookie", self._wire(self._head(), ordinal))
+
+    def test_capture_variant_alone_never_triggers_cookie(self):
+        """出站不可能带 capture_variant；即便带了也不得作为判定依据。"""
+        head = self._head(capture_variant="prime")
+        self.assertNotIn(b"set-cookie", self._wire(head, 2))
+
+    def test_beta_header_still_drives_turn_state(self):
+        wire = self._wire(self._head(beta=True), 3)
+        self.assertIn(b"x-codex-turn-state", wire)
+        self.assertNotIn(b"set-cookie", wire)
+
 
 if __name__ == "__main__":
     unittest.main()

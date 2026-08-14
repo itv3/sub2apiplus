@@ -60,6 +60,12 @@ ACCOUNT_MUTABLE_EXTRA_KEY_PATTERNS = (
     "codex_5h_*",
     "codex_7d_*",
     "codex_usage_updated_at",
+    # 与上面四类同源的配额缓存：账号被真实调用后由服务端自动刷新
+    # （`OpenAIQuotaService.CacheResetCreditsSnapshot` 写入 accounts.extra），
+    # 不表达任何采集副作用。k62 实证：候选采集窗口内无任何管理端 quota reset 调用，
+    # 该键仍从 `{"available_count": 0}` 变为含 credits 明细，导致 extra_digest 漂移、
+    # 整个 Campaign 被判 environment_contaminated——只要账号被用过就必然复现。
+    "codex_reset_credit_snapshot",
     "privacy_mode",
     "privacy_retry_after",
     "privacy_browser_persona",
@@ -568,6 +574,7 @@ SELECT json_build_object(
                 OR extra_entry.key LIKE 'codex_5h_%'
                 OR extra_entry.key LIKE 'codex_7d_%'
                 OR extra_entry.key = 'codex_usage_updated_at'
+                OR extra_entry.key = 'codex_reset_credit_snapshot'
                 OR extra_entry.key = 'privacy_mode'
                 OR extra_entry.key = 'privacy_retry_after'
                 OR extra_entry.key = 'privacy_browser_persona'

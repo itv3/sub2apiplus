@@ -137,13 +137,13 @@ class CandidateCoreCaptureScriptTest(unittest.TestCase):
 
     def test_a03_primes_cookie_before_two_lite_turns_and_requires_four(self) -> None:
         prime = self.source.index(
-            'write_request_body "$trigger_root/prime.json" gpt-5.5 non_lite'
+            'write_request_body "$trigger_root/prime.json" "$main_model" non_lite'
         )
         default = self.source.index(
-            'write_request_body "$trigger_root/default.json" gpt-5.5 non_lite'
+            'write_request_body "$trigger_root/default.json" "$main_model" non_lite'
         )
         lite = self.source.index(
-            'write_request_body "$trigger_root/lite.json" gpt-5.6-sol lite'
+            'write_request_body "$trigger_root/lite.json" "$lite_model" lite'
         )
         self.assertLess(prime, default)
         self.assertLess(default, lite)
@@ -184,3 +184,44 @@ class CandidateCoreCaptureScriptTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CandidateCoreAccountGateTest(unittest.TestCase):
+    """熔断清理必须覆盖每一条触发路径，HTTP 与 WS 不能只顾一头。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.source = (
+            Path(__file__).resolve().parents[1] / "run_candidate_core_capture.sh"
+        ).read_text()
+
+    def test_ws_session_clears_account_gate_before_driving(self) -> None:
+        start = self.source.index("run_response_ws_session() {")
+        driver = self.source.index('python3 "$gateway_ws_driver"', start)
+        self.assertIn("clear_account_gate", self.source[start:driver])
+
+    def test_http_request_helper_clears_account_gate(self) -> None:
+        body = self.source[
+            self.source.index("request_with_token() {") : self.source.index(
+                "assert_2xx() {"
+            )
+        ]
+        self.assertIn("clear_account_gate", body)
+
+
+class MitmMatrixProxyHostTest(unittest.TestCase):
+    """临时代理的 host 必须与可达性检查用的是同一个变量。
+
+    两处不一致时 DNS 检查照样通过，真正出站却解析不到，账号被判 upstream transport
+    error 而熔断，后续 job 一路 503／WS 1013——症状离根因很远（k54）。
+    """
+
+    def test_proxy_row_uses_capture_container_variable(self) -> None:
+        source = (
+            Path(__file__).resolve().parents[1] / "run_sub2api_openai_mitm_matrix.sh"
+        ).read_text()
+        insert = next(
+            line for line in source.splitlines() if "insert into proxies" in line
+        )
+        self.assertIn("'$capture_container'", insert)
+        self.assertNotIn("'capture-cli'", insert)

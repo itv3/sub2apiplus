@@ -285,6 +285,19 @@ def _port_is_open(host: str, port: int) -> bool:
         return sock.connect_ex((host, port)) == 0
 
 
+def ensure_mitm_port_available(port: int) -> None:
+    """确认 MITM 端口未被占用，占用即抛错。
+
+    两处共用：开跑前的整轮预检（capture.py 的 _preflight_dependencies）与单个 mitm
+    case 启动前的兜底检查（CaptureProcess.start）。此前只有后者，而 mitm case 排在
+    队列中间，撞上时前面的 direct case 已经跑掉——前轮残留的 mitmdump 占着端口，要到
+    采集中途才暴露（k61 因此报废一轮）。预检提前到整轮开跑前，占用就拒绝启动。
+    """
+
+    if _port_is_open("127.0.0.1", port):
+        raise CaptureProcessError(f"MITM 端口 {port} 已被其他进程占用。")
+
+
 class CaptureProcess:
     """只管理由当前 Python 进程直接创建的抓包子进程。"""
 
@@ -324,10 +337,13 @@ class CaptureProcess:
         descriptor = os.open(log_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
         self.log_stream = os.fdopen(descriptor, "wb", buffering=0)
 
-        if self.case.evidence == "mitm" and _port_is_open("127.0.0.1", self.mitm_port):
-            self.log_stream.close()
-            self.log_stream = None
-            raise CaptureProcessError(f"MITM 端口 {self.mitm_port} 已被其他进程占用。")
+        if self.case.evidence == "mitm":
+            try:
+                ensure_mitm_port_available(self.mitm_port)
+            except CaptureProcessError:
+                self.log_stream.close()
+                self.log_stream = None
+                raise
 
         try:
             safety_options = _popen_safety_options()

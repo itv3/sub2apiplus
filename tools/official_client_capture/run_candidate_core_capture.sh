@@ -31,6 +31,12 @@ api_key_id=${API_KEY_ID:-1}
 run_id=${RUN_ID:?必须提供 RUN_ID}
 relay_port=${RELAY_PORT:-18443}
 ws_failure_count=${A07_WS_FAILURE_COUNT:-6}
+# 主线与 Lite 轨的模型坐标，权威定义在 capturelib.model 的 MAIN_TRACK_MODELS／
+# LITE_TRACK_MODELS，tests/test_main_track_models.py 锁定这里的默认值与之一致。
+# 原先 Lite 触发写死 gpt-5.6-sol：Vircs 的 pro 账号两个 Lite 模型都有，从没暴露；
+# 换到 free 账号的候选机上，A03-lite 第一跳就是 404，整个 frozen-core 停在那里。
+main_model=${MAIN_MODEL:-gpt-5.5}
+lite_model=${LITE_MODEL:-gpt-5.6-luna}
 
 for numeric in "$account_id" "$api_key_id" "$relay_port" "$ws_failure_count"; do
   if [[ ! $numeric =~ ^[0-9]+$ ]]; then
@@ -965,6 +971,10 @@ run_response_ws_session() {
   local first_body=$1
   local continuation_body=$2
   local trigger_root=$3
+  # 与 request_with_token 同一条理由：relay 在场的整个窗口里，Sub2API 的后台出站会持续
+  # 触发临时熔断，只在 start_capture 清一次不够。WS 驱动原先漏了这一步，A06 因此在
+  # 握手阶段被服务端以 1013 关闭，pcap 里一个包都没有。
+  clear_account_gate
   python3 "$gateway_ws_driver" \
     --host 127.0.0.1 \
     --port "$service_port" \
@@ -985,15 +995,15 @@ run_response_ws_session() {
 # 随后执行两轮 Lite zstd，由首轮 Lite 响应建立 turn-state 闭环。
 start_capture A03
 trigger_root="$work_dir/scenarios/A03/trigger"
-write_request_body "$trigger_root/prime.json" gpt-5.5 non_lite a03-cookie-prime
+write_request_body "$trigger_root/prime.json" "$main_model" non_lite a03-cookie-prime
 compress_zstd "$trigger_root/prime.json" "$trigger_root/prime.zst"
 run_response_request A03 prime "$trigger_root/prime.zst" \
   "$exec_ua" codex_exec -H 'Content-Encoding: zstd'
-write_request_body "$trigger_root/default.json" gpt-5.5 non_lite a03-default
+write_request_body "$trigger_root/default.json" "$main_model" non_lite a03-default
 compress_zstd "$trigger_root/default.json" "$trigger_root/default.zst"
 run_response_request A03 default "$trigger_root/default.zst" \
   "$exec_ua" codex_exec -H 'Content-Encoding: zstd'
-write_request_body "$trigger_root/lite.json" gpt-5.6-sol lite a03-turn
+write_request_body "$trigger_root/lite.json" "$lite_model" lite a03-turn
 compress_zstd "$trigger_root/lite.json" "$trigger_root/lite.zst"
 for turn in 1 2; do
   run_response_request A03 "lite-turn-$turn" "$trigger_root/lite.zst" \
@@ -1005,18 +1015,18 @@ stop_capture
 # A04：非 Lite 明文；账号管理态与经过 metadata 交叉验证的条件头分别形成正负样本。
 start_capture A04
 trigger_root="$work_dir/scenarios/A04/trigger"
-write_request_body "$trigger_root/non-lite.json" gpt-5.5 non_lite a04-baseline
+write_request_body "$trigger_root/non-lite.json" "$main_model" non_lite a04-baseline
 set_account_features unset false
 run_response_request A04 baseline "$trigger_root/non-lite.json" "$exec_ua" codex_exec
 set_account_features us false
 run_response_request A04 residency-us "$trigger_root/non-lite.json" "$exec_ua" codex_exec
 set_account_features unset true
-write_request_body "$trigger_root/memgen.json" gpt-5.5 non_lite a04-memgen \
+write_request_body "$trigger_root/memgen.json" "$main_model" non_lite a04-memgen \
   '' false memory_consolidation '' '' '' memory_consolidation
 run_response_request A04 memgen "$trigger_root/memgen.json" "$exec_ua" codex_exec \
   -H 'X-OpenAI-Subagent: memory_consolidation' \
   -H 'X-OpenAI-Memgen-Request: true'
-write_request_body "$trigger_root/parent-thread.json" gpt-5.5 non_lite a04-parent \
+write_request_body "$trigger_root/parent-thread.json" "$main_model" non_lite a04-parent \
   '' false subagent thread_spawn "$parent_id" '' collab_spawn
 run_response_request A04 parent-thread "$trigger_root/parent-thread.json" "$exec_ua" codex_exec \
   -H 'X-OpenAI-Subagent: collab_spawn' \
@@ -1029,7 +1039,7 @@ stop_capture
 # 官方 HTTP 入口代表 CLI 已耗尽自身 WS 预算，生产代码会按画像强制 HTTP fallback。
 start_capture A05
 trigger_root="$work_dir/scenarios/A05/trigger"
-write_request_body "$trigger_root/lite.json" gpt-5.6-sol lite a05-turn
+write_request_body "$trigger_root/lite.json" "$lite_model" lite a05-turn
 for turn in 1 2; do
   run_response_request A05 "turn-$turn" "$trigger_root/lite.json" \
     "$gateway_driver_ua" "$gateway_driver_originator" \
@@ -1043,8 +1053,8 @@ stop_capture
 # 真实业务 response.id。上游依次出现预热、首轮业务和前缀复用续轮三帧。
 start_capture A06
 trigger_root="$work_dir/scenarios/A06/trigger"
-write_request_body "$trigger_root/first.json" gpt-5.5 non_lite a06-first
-write_request_body "$trigger_root/continuation.json" gpt-5.5 non_lite a06-continuation
+write_request_body "$trigger_root/first.json" "$main_model" non_lite a06-first
+write_request_body "$trigger_root/continuation.json" "$main_model" non_lite a06-continuation
 prepare_a06_bodies "$trigger_root/first.json" "$trigger_root/continuation.json"
 run_response_ws_session \
   "$trigger_root/first.json" \
@@ -1068,7 +1078,7 @@ stop_capture
 # A07：单次生产入口调用；冻结次数的 502 WS 握手失败后才允许 HTTP SSE 成功。
 start_capture A07
 trigger_root="$work_dir/scenarios/A07/trigger"
-write_request_body "$trigger_root/fallback.json" gpt-5.5 non_lite a07-fallback
+write_request_body "$trigger_root/fallback.json" "$main_model" non_lite a07-fallback
 run_response_request A07 fallback "$trigger_root/fallback.json" \
   "$gateway_driver_ua" "$gateway_driver_originator" \
   -H 'X-Session-Affinity: candidate-core-a07'
@@ -1082,7 +1092,7 @@ restart_service
 # A08：只采真实跨上层调用连接。retry 内部关系由结构化测试补证，不在这里伪造。
 start_capture A08
 trigger_root="$work_dir/scenarios/A08/trigger"
-write_request_body "$trigger_root/http.json" gpt-5.5 non_lite a08-cross-call
+write_request_body "$trigger_root/http.json" "$main_model" non_lite a08-cross-call
 for call in 1 2 3; do
   run_response_request A08 "call-$call" "$trigger_root/http.json" "$exec_ua" codex_exec
 done
@@ -1093,7 +1103,7 @@ stop_capture
 start_capture A10
 trigger_root="$work_dir/scenarios/A10/trigger"
 for reason in user_requested context_limit model_downshift comp_hash_changed; do
-  write_request_body "$trigger_root/$reason.json" gpt-5.5 non_lite "a10-$reason" \
+  write_request_body "$trigger_root/$reason.json" "$main_model" non_lite "a10-$reason" \
     '' true user '' '' "$reason"
   run_response_request A10 "$reason" "$trigger_root/$reason.json" "$tui_ua" codex-tui
 done

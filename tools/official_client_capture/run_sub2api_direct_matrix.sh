@@ -11,7 +11,8 @@ api_key_id=${API_KEY_ID:-1}
 capture_root=${CAPTURE_ROOT:-/root/oauth-capture}
 capture_tool_root=${CAPTURE_TOOL_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}
 subjects=${SUBJECTS:-"codex-http codex-ws"}
-scenarios=${SCENARIOS:-"s1 s2 s4"}
+# A02 的 TLS 扩展多样性需要四份独立 WS pcap；s3 不是可选样本。
+scenarios=${SCENARIOS:-"s1 s2 s3 s4"}
 claude_model=${CLAUDE_MODEL:-claude-sonnet-5}
 codex_model=${CODEX_MODEL:-gpt-5.6-luna}
 codex_version=${CODEX_VERSION:?必须由 Campaign 提供 CODEX_VERSION}
@@ -167,19 +168,19 @@ run_case() {
         -e ANTHROPIC_BASE_URL=http://127.0.0.1:18081 \
         "$capture_container" python3 /capture/scripts/run_claude_scenario.py \
         --mode sub2api --scenario "$scenario" --model "$claude_model" \
-        --output-dir "$output_dir" --timeout 300
+        --output-dir "$output_dir" --timeout 70
       ;;
     codex-http)
       docker exec -e SUB2API_API_KEY="$api_key" "$capture_container" \
         python3 /capture/scripts/run_codex_scenario.py \
         --mode sub2api-http --scenario "$scenario" --model "$codex_model" \
-        --output-dir "$output_dir" --timeout 300
+        --output-dir "$output_dir" --timeout 70
       ;;
     codex-ws)
       docker exec -e SUB2API_API_KEY="$api_key" "$capture_container" \
         python3 /capture/scripts/run_codex_scenario.py \
         --mode sub2api-ws --scenario "$scenario" --model "$codex_model" \
-        --output-dir "$output_dir" --timeout 300
+        --output-dir "$output_dir" --timeout 70
       ;;
     codex-compact)
       if [[ $scenario != compact ]]; then
@@ -189,7 +190,7 @@ run_case() {
       docker exec -e SUB2API_API_KEY="$api_key" "$capture_container" \
         python3 "$capture_tool_root/run_codex_compact_scenario.py" \
         --mode sub2api-http --model "$codex_model" --codex-version "$codex_version" \
-        --output-dir "$output_dir" --timeout 300
+        --output-dir "$output_dir" --timeout 70
       ;;
     *)
       echo "未知主体：$subject" >&2

@@ -35,6 +35,7 @@ if __package__ in {None, ""}:
 from tools.official_client_capture.acceptance_contract import (  # noqa: E402
     MODE_DUAL_WIRE,
     WIRE_RECORD_TYPES,
+    check_applies_to_side,
     contract_sha256,
 )
 from tools.official_client_capture.build_assertion_bundle import (  # noqa: E402
@@ -58,6 +59,14 @@ BUNDLE_DIR_NAME = "assertion-bundle"
 MANIFEST_FILENAME = "capture-manifest.json"
 OBSERVATION_PARSERS = frozenset({"observation_json", "observation_jsonl"})
 SIDES = frozenset({"official", "candidate"})
+
+# 候选侧 internal record type 的唯一来源目录：``candidate_test_trace.py`` 把
+# 部署源码快照的 go test -json 事实按冻结映射投影到这里。它与 ``derived/`` 同类
+# ——都是 bundle 内的派生产物，不由 ACC-02 收口 provenance 覆盖，而由各自的收据
+# 自证。因此这里放行前缀，同时由 ``_verify_candidate_trace`` 强制重放其收据。
+CANDIDATE_TRACE_PREFIX = "candidate-trace/"
+TRACE_RECEIPT_RELATIVE_PATH = f"{CANDIDATE_TRACE_PREFIX}trace-receipt.json"
+TRACE_RECEIPT_SCHEMA = "codex-candidate-test-trace-receipt/v1"
 
 
 class AssertionGateError(RuntimeError):
@@ -99,6 +108,95 @@ def _verify_wire_observation_exclusivity(
                 )
 
 
+def _verify_candidate_trace(bundle_dir: Path, manifest: Mapping[str, Any]) -> str | None:
+    """重放候选结构化 trace 的收据；无该目录时返回 None。
+
+    ``candidate-trace/`` 被排除在收口 provenance 之外，若不另行校验就等于在 bundle
+    里开了一个不受约束的目录。这里强制四件事：收据存在且 schema 正确、状态为
+    ``pass``、它声明的每份 trace 产物在 bundle 内摘要逐字一致、且这些产物都已登记进
+    capture manifest。go test 日志本身的绑定由 ``candidate_test_trace`` 在生成时校验，
+    其摘要随收据一并封存。
+    """
+
+    trace_dir = bundle_dir / CANDIDATE_TRACE_PREFIX.rstrip("/")
+    if not trace_dir.exists():
+        return None
+    if trace_dir.is_symlink() or not trace_dir.is_dir():
+        raise AssertionGateError(f"候选 trace 目录不可信：{trace_dir}")
+    receipt_path = bundle_dir / TRACE_RECEIPT_RELATIVE_PATH
+    if receipt_path.is_symlink() or not receipt_path.is_file():
+        raise AssertionGateError(
+            f"候选结构化 trace 缺少自证收据：{TRACE_RECEIPT_RELATIVE_PATH}"
+        )
+    try:
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise AssertionGateError(f"候选 trace 收据无法解析：{error}") from error
+    if not isinstance(receipt, dict) or receipt.get("schema_version") != TRACE_RECEIPT_SCHEMA:
+        raise AssertionGateError(
+            f"候选 trace 收据 schema_version 必须是 {TRACE_RECEIPT_SCHEMA}"
+        )
+    if receipt.get("status") != "pass":
+        raise AssertionGateError(
+            f"候选 trace 收据状态不是 pass：{receipt.get('status')!r}"
+        )
+    generated = receipt.get("generated")
+    if not isinstance(generated, dict):
+        raise AssertionGateError("候选 trace 收据缺少 generated 段")
+    trace_artifacts = generated.get("trace_artifacts")
+    if not isinstance(trace_artifacts, list) or not trace_artifacts:
+        raise AssertionGateError("候选 trace 收据未声明任何 trace 产物")
+
+    manifest_digests = {
+        artifact["path"]: artifact["sha256"] for artifact in manifest["artifacts"]
+    }
+    declared: set[str] = set()
+    for artifact in trace_artifacts:
+        if not isinstance(artifact, dict):
+            raise AssertionGateError("候选 trace 产物条目必须是对象")
+        relative = artifact.get("path")
+        digest = artifact.get("sha256")
+        if not isinstance(relative, str) or not relative.startswith(
+            CANDIDATE_TRACE_PREFIX
+        ):
+            raise AssertionGateError(
+                f"候选 trace 产物路径必须位于 {CANDIDATE_TRACE_PREFIX}：{relative!r}"
+            )
+        path = bundle_dir / relative
+        if path.is_symlink() or not path.is_file():
+            raise AssertionGateError(f"候选 trace 收据引用的产物不存在：{relative}")
+        actual = _file_sha256(path)
+        if actual != digest:
+            raise AssertionGateError(
+                f"候选 trace 产物相对收据发生漂移：{relative}"
+            )
+        if manifest_digests.get(relative) != actual:
+            raise AssertionGateError(
+                "候选 trace 产物未按同一摘要登记进 capture manifest："
+                f"{relative}"
+            )
+        declared.add(relative)
+
+    # 目录内不得存在收据未声明的额外文件——否则等于绕过 provenance 夹带证据。
+    allowed = declared | {TRACE_RECEIPT_RELATIVE_PATH}
+    manifest_binding = generated.get("capture_manifest")
+    if isinstance(manifest_binding, dict) and isinstance(
+        manifest_binding.get("path"), str
+    ):
+        allowed.add(manifest_binding["path"])
+    for path in sorted(trace_dir.rglob("*")):
+        if path.is_symlink():
+            raise AssertionGateError(f"候选 trace 目录禁止符号链接：{path}")
+        if not path.is_file():
+            continue
+        relative = path.relative_to(bundle_dir).as_posix()
+        if relative not in allowed:
+            raise AssertionGateError(
+                f"候选 trace 目录存在收据未声明的文件：{relative}"
+            )
+    return _file_sha256(receipt_path)
+
+
 def _verify_selector_reachability(
     profile: Mapping[str, Any],
     contract: Mapping[str, Any],
@@ -114,6 +212,21 @@ def _verify_selector_reachability(
             continue
         checked_rules += 1
         for check in rule["checks"]:
+            if not check_applies_to_side(contract, rule_id, check["id"], side):
+                # 侧别限定 check：本侧结构性造不出该实验条件，可达性不适用。
+                # 依据登记在 acceptance_contract.SIDE_RESTRICTED_CHECKS。
+                continue
+            assertion = check.get("assertion") or {}
+            if (
+                assertion.get("operator") == "count_equal"
+                and assertion.get("value") == 0
+            ):
+                # 负向存在性判据（如 SPEC-EP-021 v2-no-legacy-call：默认 V2 批次
+                # 不得请求 /responses/compact）的通过形态恰是 select 命中为空；
+                # 对它强制"至少命中一条"会与判据语义互斥，可达性预检跳过，
+                # 其真实评估仍由 accept 的离线重放完成。
+                checked_checks += 1
+                continue
             matched = _select_observations(
                 observations, check["select"], rule["scenario_ids"]
             )
@@ -149,7 +262,11 @@ def run_assertion_gate(
         bundle_provenance = verify_bundle(
             source_roots,
             bundle_dir,
-            allowed_extra_prefixes=(DERIVED_PREFIX, MANIFEST_FILENAME),
+            allowed_extra_prefixes=(
+                DERIVED_PREFIX,
+                CANDIDATE_TRACE_PREFIX,
+                MANIFEST_FILENAME,
+            ),
         )
     except AssertionBundleError as error:
         raise _gate_wrap(error, "bundle provenance 重放失败") from error
@@ -187,6 +304,7 @@ def run_assertion_gate(
     except AssertionBundleError as error:
         raise _gate_wrap(error, "场景 artifact 覆盖不足") from error
     _verify_wire_observation_exclusivity(manifest, observations)
+    candidate_trace_receipt_sha256 = _verify_candidate_trace(bundle_dir, manifest)
     checked_rules, checked_checks = _verify_selector_reachability(
         profile, contract, observations, side
     )
@@ -196,6 +314,7 @@ def run_assertion_gate(
         "bundle_provenance_sha256": bundle_provenance["provenance_sha256"],
         "bundle_entry_count": bundle_provenance["entry_count"],
         "derived_provenance_sha256": derived_provenance_sha256,
+        "candidate_trace_receipt_sha256": candidate_trace_receipt_sha256,
         "capture_manifest": {
             "path": MANIFEST_FILENAME,
             "sha256": _file_sha256(manifest_path),
@@ -217,6 +336,7 @@ def validate_gate_receipt(value: Any, *, side: str) -> dict[str, Any]:
         "bundle_provenance_sha256",
         "bundle_entry_count",
         "derived_provenance_sha256",
+        "candidate_trace_receipt_sha256",
         "capture_manifest",
         "acceptance_contract_sha256",
         "artifact_count",

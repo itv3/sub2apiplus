@@ -11,7 +11,8 @@ api_key_id=${API_KEY_ID:-1}
 capture_root=${CAPTURE_ROOT:-/root/oauth-capture}
 capture_tool_root=${CAPTURE_TOOL_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)}
 subjects=${SUBJECTS:-"codex-http codex-ws"}
-scenarios=${SCENARIOS:-"s1 s2 s4"}
+# 与 direct 矩阵保持同一四场景覆盖，避免 A02 只落三份 WS pcap。
+scenarios=${SCENARIOS:-"s1 s2 s3 s4"}
 codex_model=${CODEX_MODEL:-gpt-5.6-luna}
 codex_version=${CODEX_VERSION:?必须由 Campaign 提供 CODEX_VERSION}
 if [[ ! $codex_version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
@@ -156,7 +157,11 @@ if [[ $keeper_was_running == true ]]; then
 fi
 
 proxy_id=$(
-  db_query "insert into proxies (name,protocol,host,port,status,fallback_mode) values ('$proxy_name','http','capture-cli',18080,'active','none') returning id"
+  # host 必须用 $capture_container，不能写死容器名：第 135 行的 DNS 可达性检查用的就是
+  # 它，两处不一致时检查照样通过，而服务真正出站时解析不到写死的名字，报
+  # `connect to proxy: lookup capture-cli: no such host`，账号随即被判 upstream
+  # transport error 而临时熔断——后续 job 全部拿到 503／WS 1013，看起来像时序问题。
+  db_query "insert into proxies (name,protocol,host,port,status,fallback_mode) values ('$proxy_name','http','$capture_container',18080,'active','none') returning id"
 )
 if [[ ! $proxy_id =~ ^[0-9]+$ ]]; then
   echo "创建临时代理失败。" >&2
@@ -199,12 +204,12 @@ for subject in $subjects; do
       docker exec -e SUB2API_API_KEY="$api_key" "$capture_container" \
         python3 "$capture_tool_root/run_codex_compact_scenario.py" \
         --mode sub2api-http --model "$codex_model" --codex-version "$codex_version" \
-        --output-dir "$output_dir" --timeout 300
+        --output-dir "$output_dir" --timeout 70
     else
       docker exec -e SUB2API_API_KEY="$api_key" "$capture_container" \
         python3 /capture/scripts/run_codex_scenario.py \
         --mode "$mode" --scenario "$scenario" --model "$codex_model" \
-        --output-dir "$output_dir" --timeout 300
+        --output-dir "$output_dir" --timeout 70
     fi
   done
   stop_pair

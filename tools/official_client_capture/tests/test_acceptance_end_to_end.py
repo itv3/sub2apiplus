@@ -362,6 +362,7 @@ class AcceptanceEndToEndTest(unittest.TestCase):
             rule_manifest=str(self.rule_manifest_path.resolve(strict=True)),
             expected_codex_version=TARGET_VERSION,
             expected_profile_sha256=self.profile_sha256,
+            side="official",
             output=str(results_dir / "SPEC-H1-001.official.json"),
         )
         self.assertEqual(row["official_command"], expected)

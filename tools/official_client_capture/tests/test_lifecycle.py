@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import os
 import signal
 import socket
@@ -20,6 +21,7 @@ from tools.official_client_capture.capturelib.lifecycle import (
     _arm_linux_parent_death_signal,
     _popen_safety_options,
     build_capture_process,
+    ensure_mitm_port_available,
     resolve_target_addresses,
 )
 from tools.official_client_capture.capturelib.model import build_campaign_plan
@@ -245,3 +247,55 @@ class LifecycleTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MitmPortPreflightTest(unittest.TestCase):
+    """开跑前的 MITM 端口预检。
+
+    k61 的第一次报废：前轮异常收尾遗留的 mitmdump 占着 18080，而端口检查只在单个
+    mitm case 启动时才做，于是排在它前面的 direct case 全部跑完、真实请求都发出去了，
+    才在采集中途暴露。预检必须在整轮开跑前完成。
+    """
+
+    def test_free_port_passes(self) -> None:
+        with contextlib.closing(socket.socket()) as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+        ensure_mitm_port_available(port)
+
+    def test_occupied_port_is_rejected_with_port_in_message(self) -> None:
+        with contextlib.closing(socket.socket()) as occupier:
+            occupier.bind(("127.0.0.1", 0))
+            occupier.listen(1)
+            port = occupier.getsockname()[1]
+            with self.assertRaises(CaptureProcessError) as raised:
+                ensure_mitm_port_available(port)
+        self.assertIn(str(port), str(raised.exception))
+
+    def test_capture_process_start_reuses_the_same_guard(self) -> None:
+        """单 case 启动前的兜底检查与预检必须同源，避免两处消息或判断分叉。"""
+
+        with contextlib.closing(socket.socket()) as occupier:
+            occupier.bind(("127.0.0.1", 0))
+            occupier.listen(1)
+            port = occupier.getsockname()[1]
+            with tempfile.TemporaryDirectory() as tmp:
+                plan = build_campaign_plan(
+                    task="oauth",
+                    batch_id="lifecycle-test",
+                    scenarios=("s1",),
+                    evidence_modes=("mitm",),
+                    sub2api_base_url=None,
+                    api_key_env="SUB2API_CAPTURE_API_KEY",
+                )
+                process = CaptureProcess(
+                    case=plan.cases[0],
+                    # start() 先建私有输出目录且拒绝覆盖已存在的，故给一个未创建的子路径
+                    output_dir=Path(tmp) / "out",
+                    command=["/bin/true"],
+                    environment={},
+                    mitm_port=port,
+                )
+                with self.assertRaises(CaptureProcessError) as raised:
+                    process.start()
+        self.assertIn(str(port), str(raised.exception))

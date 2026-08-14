@@ -48,6 +48,37 @@ MODE_CANDIDATE_PROFILE = "candidate_profile"
 
 COVERAGE_CHECK_ID = "scenario-artifact-coverage"
 
+SIDES = ("official", "candidate")
+
+# 侧别限定 check：判据依赖的**实验条件**在某一侧结构性不可能成立时，强制双侧执行
+# 会把"这一侧造不出该条件"误判成"证据缺失"，逼着执行者去凑一个语义不符的样本——
+# 那正是 §10.9.3 警告的「选中错误样本让判据虚假通过」。
+#
+# 登记一条的门槛：必须能指出该侧**没有任何产出路径**的机器可核依据，而不是"本轮没采到"。
+# 采集遗漏必须重采，只有结构性不可达才登记在此。每条都要写清依据，并由离线测试锁定。
+#
+# 本表任何变动都会改变契约摘要并 fail-close，强制连同 25／17 分组与覆盖矩阵重审。
+SIDE_RESTRICTED_CHECKS: dict[tuple[str, str], tuple[str, ...]] = {
+    # SPEC-WS-002 的 optional-missing-covered 要求一份「相对默认握手缺少某个可选头」
+    # 的独立扰动样本。官方侧由 CLI 启动参数制造：job official-relay-ws-optional-missing
+    # 以 `--disable remote_compaction_v2` 关闭该 Stable feature，使 x-codex-beta-features
+    # 整条从握手消失。
+    #
+    # 候选侧没有等价物，且不是采集没覆盖到，是画像与编译器决定的结构性不可达：
+    #   - responses_ws 端点的 x-codex-beta-features 槽位 condition 是 remote_compaction_v2
+    #     （不是 beta_features_present，即与入站头无关）；
+    #   - officialegress/compiler.go 对该 condition 只返回 features.RemoteCompactionV2；
+    #   - 该值来自版本画像常量 FeatureDefaults.RemoteCompactionV2，0.145／0.147 均为 true，
+    #     没有任何请求级、账号级或分组级开关可以翻转。
+    # 因此候选侧的 WS 握手必然携带该头，其余可选头（subagent／memgen／parent-thread／
+    # runtime-metrics／residency／fedramp）在默认握手里本就缺席，构不成"相对默认少一个"
+    # 的扰动。该 check 因而是官方侧的采集覆盖要求，候选侧记录为侧别不适用。
+    #
+    # 候选侧对 WS 线序的验收并未因此变弱：同规则的 remaining-lowercase 与
+    # default-swap-remove-order 仍在候选侧逐条执行。
+    ("SPEC-WS-002", "optional-missing-covered"): ("official",),
+}
+
 WIRE_RECORD_TYPES = frozenset(
     {"http_request", "websocket_frame", "tls_client_hello"}
 )
@@ -88,8 +119,14 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # expected_check_ids 无任何变化，side_coverage 只有 A01（pcap+relay_binary →
 # pcap+process_trace）与 A15（relay_binary+process_trace → process_trace）两项按
 # 定案变化——official-core 是 direct+mitm 矩阵，不产字节中继。
+#
+# 2026-08-12 更新：新增 side_restricted_checks 载荷字段，登记
+# SPEC-WS-002／optional-missing-covered 为官方侧专属（依据见 SIDE_RESTRICTED_CHECKS
+# 注释：候选侧该扰动样本由版本画像常量决定，结构性不可达）。逐项复核：25／17 分组、
+# validation_modes、expected_check_ids 与 side_coverage 全部逐字不变，摘要漂移只来自
+# 新增字段本身。
 FROZEN_CONTRACT_SHA256 = (
-    "1689ab3016dee918df50b843eef3d6d2ab71f81c2bae237bc7ec7272696d58c2"
+    "bd2ccc521c1b7b9a6e871a99cd79391247992140559f0310df66ac942b77fbac"
 )
 
 
@@ -200,6 +237,66 @@ def derive_expected_check_ids(profile: Mapping[str, Any]) -> dict[str, list[str]
     return expected
 
 
+def derive_side_restricted_checks(
+    profile: Mapping[str, Any],
+) -> dict[str, dict[str, list[str]]]:
+    """把侧别限定表投影成 {rule_id: {check_id: [适用侧, ...]}}，并校验其仍然指向真实 check。
+
+    登记项若在画像里找不到对应 check，说明画像已变而本表未同步——此时必须失败关闭，
+    否则一条早已失效的豁免会静默留在契约里。
+    """
+
+    checks_by_rule = {
+        _require_str(rule.get("rule_id"), "rule_id"): {
+            _require_str(check.get("id"), "check id")
+            for check in rule.get("checks") or []
+        }
+        for rule in profile["rules"]
+    }
+    restricted: dict[str, dict[str, list[str]]] = {}
+    for (rule_id, check_id), sides in SIDE_RESTRICTED_CHECKS.items():
+        # 画像整条规则都不存在时，豁免自然不适用（目标规则集允许相对基线增删，
+        # 离线夹具画像也只含被测规则子集），跳过而非报错。只有规则还在、而它的
+        # check 变了名或被删掉，才说明画像已改而本表未同步——那必须失败关闭。
+        if rule_id not in checks_by_rule:
+            continue
+        if check_id not in checks_by_rule[rule_id]:
+            raise AcceptanceContractError(
+                f"侧别限定表引用了规则 {rule_id} 中不存在的 check：{check_id}；"
+                "画像已变更，必须重新审核该豁免是否仍然成立"
+            )
+        if not sides or any(side not in SIDES for side in sides):
+            raise AcceptanceContractError(
+                f"侧别限定 {rule_id}／{check_id} 的适用侧非法：{sides}"
+            )
+        restricted.setdefault(rule_id, {})[check_id] = sorted(sides)
+    return {rule_id: dict(sorted(items.items())) for rule_id, items in sorted(restricted.items())}
+
+
+def check_applies_to_side(
+    contract: Mapping[str, Any], rule_id: str, check_id: str, side: str
+) -> bool:
+    """契约是否要求该 check 在本侧执行；未登记的 check 双侧都执行。"""
+
+    sides = contract.get("side_restricted_checks", {}).get(rule_id, {}).get(check_id)
+    return side in sides if isinstance(sides, list) else True
+
+
+def expected_check_ids_for_side(
+    contract: Mapping[str, Any], rule_id: str, side: str
+) -> list[str]:
+    """本侧应执行的 check 全集：契约 check 全集去掉侧别不适用项。"""
+
+    expected = contract["expected_check_ids"].get(rule_id)
+    if not isinstance(expected, list) or not expected:
+        raise AcceptanceContractError(f"验收契约缺少规则 {rule_id} 的 check 全集")
+    return [
+        check_id
+        for check_id in expected
+        if check_applies_to_side(contract, rule_id, check_id, side)
+    ]
+
+
 def derive_side_coverage(
     profile: Mapping[str, Any],
     modes: Mapping[str, str],
@@ -246,6 +343,7 @@ def build_contract_payload(profile: Mapping[str, Any]) -> dict[str, Any]:
         "expected_check_ids": dict(
             sorted(derive_expected_check_ids(profile).items())
         ),
+        "side_restricted_checks": derive_side_restricted_checks(profile),
         "side_coverage": derive_side_coverage(profile, modes),
     }
     counts = {

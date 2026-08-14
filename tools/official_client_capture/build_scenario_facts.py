@@ -355,18 +355,48 @@ def _facts_a11(evidence: EvidenceSet, root: Path) -> dict[str, Any]:
     notifications = _require(events, "notifications", "A11 事件日志")
     if not isinstance(notifications, list):
         raise ScenarioFactsError("A11 事件日志 notifications 必须是数组。")
-    errors = [item for item in notifications if _method_of(item) == "thread/realtime/error"]
-    if errors:
-        raise ScenarioFactsError(f"realtime 出现 {len(errors)} 次异步 error。")
+    # 目标事件（started／sdp）的最后位置：它之前的 error 说明会话没建立起来，
+    # 属真实失败；它之后、且只与关闭序列同现的 error，是上游收尾方式的差异。
     final_event = None
-    for item in notifications:
+    final_index = -1
+    for index, item in enumerate(notifications):
         method = _method_of(item)
         if method == "thread/realtime/started":
             final_event = "thread_realtime_started"
-        elif method == "thread/realtime/sdp" and final_event is None:
-            final_event = "sdp_answer"
+            final_index = index
+        elif method == "thread/realtime/sdp":
+            if final_event is None:
+                final_event = "sdp_answer"
+            final_index = index
     if final_event is None:
         raise ScenarioFactsError("realtime 没有 started／SDP 最终事件。")
+
+    # 会话期内的 error 一律失败关闭；收尾 error 单独计数并写进事实，不静默丢弃。
+    #
+    # 判据只回答「realtime 会话能否建立、sideband 能否绑定 call_id」，不回答
+    # 「上游用什么方式结束连接」。实测同一场景两次采集的 wire 逐字等价——上行
+    # 2055／15778／2348、四个连接、sideband 已建立——唯一差别是收尾时上游一次走
+    # 优雅关闭、一次直接 reset（`Connection reset without closing handshake`）。
+    # 原实现把后者判成失败，等价证据因此被拒，且重试无法绕过：reset 发生在会话
+    # 结束那一刻，与 hold 时长无关。
+    in_session_errors = 0
+    teardown_errors = 0
+    for index, item in enumerate(notifications):
+        if _method_of(item) != "thread/realtime/error":
+            continue
+        if index <= final_index:
+            in_session_errors += 1
+            continue
+        # 位于目标事件之后：只有当其后再无任何非关闭类通知时才算收尾。
+        tail = {_method_of(x) for x in notifications[index + 1 :]}
+        if tail - {"thread/realtime/closed", "thread/realtime/error"}:
+            in_session_errors += 1
+        else:
+            teardown_errors += 1
+    if in_session_errors:
+        raise ScenarioFactsError(
+            f"realtime 会话期内出现 {in_session_errors} 次异步 error。"
+        )
     if not _sideband_joins_call(evidence, root, call_id):
         raise ScenarioFactsError("relay 字节中没有与 call-create 同 call_id 的 sideband 连接。")
 
@@ -377,6 +407,7 @@ def _facts_a11(evidence: EvidenceSet, root: Path) -> dict[str, Any]:
         "call_id_sha256": hashlib.sha256(call_id.encode("utf-8")).hexdigest(),
         "sdp_or_started_event": final_event,
         "async_error_count": 0,
+        "teardown_error_count": teardown_errors,
         "sideband_sni": "api.openai.com",
         "sideband_call_id_linked": True,
     }

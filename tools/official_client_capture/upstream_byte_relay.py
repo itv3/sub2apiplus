@@ -175,6 +175,7 @@ def _synthetic_aux_response(
     head: bytes,
     body: bytes,
     codex_version: str,
+    legacy_compact_ordinal: int = 0,
 ) -> SyntheticAuxResponse | None:
     """返回候选 A09/A11/A12/A13/A14 的白名单受控响应。
 
@@ -199,7 +200,7 @@ def _synthetic_aux_response(
             [("client_version", codex_version)],
         ):
             payload = (
-                b'{"models":[{"slug":"gpt-5.6-sol","display_name":"GPT-5.6 Sol",'
+                b'{"models":[{"slug":"gpt-5.6-luna","display_name":"GPT-5.6 Luna",'
                 b'"use_responses_lite":true}]}'
             )
             return SyntheticAuxResponse(
@@ -215,11 +216,18 @@ def _synthetic_aux_response(
             # compact 按 prime → default → beta → turn-state 顺序触发。models 端点
             # 不绑定账号 Cookie jar，故只能由同一 jar 的 prime compact 下发 Cookie；
             # beta 响应再下发 turn-state，使下一次请求由生产状态仓库自然回放。
+            #
+            # prime 只能按**到达序号**识别，不能看 turn-metadata 里的 capture_variant：
+            # 网关按画像重新生成该 header，客户端塞进去的字段不会出现在出站字节里，
+            # 基于它的判定恒为假，Cookie 因此从未下发过（k56 实测 A09 九个连接全无
+            # cookie，EP-015／EP-022 的头序判据随之必败）。core 侧一直用 ordinal，
+            # 这里对齐同一做法。
             headers: tuple[tuple[str, str], ...] = ()
-            turn_metadata = _request_header_value(head, "x-codex-turn-metadata")
-            if '"capture_variant":"prime"' in turn_metadata:
+            if legacy_compact_ordinal == 1:
                 headers = (("set-cookie", _SYNTHETIC_AUX_CFUV_COOKIE),)
             elif _request_header_value(head, "x-codex-beta-features"):
+                # turn-state 仍按 beta 头下发：该头是画像条件槽位的真实产物，
+                # 出站确实存在（与 capture_variant 那种客户端自造字段不同）。
                 headers = (("x-codex-turn-state", _SYNTHETIC_AUX_TURN_STATE),)
             return SyntheticAuxResponse(
                 "legacy_compact",
@@ -795,6 +803,10 @@ class Relay:
         self._core_http_responses = 0
         self._core_ws_handshakes = 0
         self._core_ws_response_creates = 0
+        # aux 侧 legacy compact 的到达序号。prime 轮必须靠它识别：网关按画像重新
+        # 生成 x-codex-turn-metadata，客户端放进去的 capture_variant 不会出现在
+        # 出站字节里，任何基于该字段的判定都恒为假。
+        self._core_aux_legacy_compacts = 0
         self._core_counter_lock = asyncio.Lock()
         self._stop_requested = False
         self._stop_event: asyncio.Event | None = None
@@ -1368,12 +1380,20 @@ class Relay:
                         rec.write("client_to_upstream", recorded_body)
 
                     if self.args.synthetic_profile == "candidate-aux-v1":
+                        legacy_compact_ordinal = 0
+                        if request_line == (
+                            "POST /backend-api/codex/responses/compact HTTP/1.1"
+                        ):
+                            legacy_compact_ordinal = await self._claim_core_counter(
+                                "aux_legacy_compacts"
+                            )
                         synthetic = _synthetic_aux_response(
                             target_host,
                             request_line,
                             initial_head,
                             initial_body,
                             self.args.codex_version,
+                            legacy_compact_ordinal,
                         )
                     else:
                         is_core_ws = (

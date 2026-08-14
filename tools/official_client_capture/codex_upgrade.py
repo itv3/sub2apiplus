@@ -25,12 +25,16 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from collections.abc import Mapping
 from typing import Any, Iterable
 
 if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
-from tools.official_client_capture.capturelib.model import ConfigurationError
+from tools.official_client_capture.capturelib.model import (
+    MAIN_TRACK_MODELS,
+    ConfigurationError,
+)
 from tools.official_client_capture.capturelib.security import (
     ensure_private_directory,
     file_sha256,
@@ -45,6 +49,7 @@ from tools.official_client_capture.acceptance_contract import (
     RESULTS_SCHEMA_V2,
     build_contract_payload as build_acceptance_contract,
     contract_sha256 as acceptance_contract_sha256,
+    expected_check_ids_for_side,
     load_profile as load_acceptance_profile,
     repository_profile_path as acceptance_profile_path,
     verify_frozen_contract,
@@ -1908,6 +1913,15 @@ def run_job(
 # 在同一 attempt 内补跑不等于跨 attempt 拼接证据：run_nonce、环境探针边界、Campaign
 # 身份全程不变，产出的仍然是同一次采集的证据。补跑前把上一次的证据目录整体归档，避免
 # 与新证据混在一起；补跑次数写进任务收据，供审计还原真实执行过程。
+# attempt_index 从 1 起算、判定为 `attempt_index > JOB_RETRY_LIMIT`，故总尝试次数 = 本值 + 1：
+# 值 2 即总共 3 次（首次 + retry2 + retry3）。
+#
+# **这个常量是 official 与 candidate 共用的，不要为了给候选侧提速而下调。**
+# k64 实证：改为 1（总共 2 次）后，官方侧 `official-core` 连续两次栽在 codex-ws 的 s4／s2
+# 上（双轮对话与工具调用场景，本就最易受上游抖动影响），28/28 退化为 27/28 —— 而这类失败
+# 恰恰需要第三次机会（§10.8.2 记录的 k56 `official-relay-realtime-webrtc` 就是第 3 次才成功）。
+# 候选侧的提速改由场景超时承担（`run_sub2api_*_matrix.sh` 的 --timeout 300→70），
+# 那两处只作用于候选矩阵，不波及官方链路。
 JOB_RETRY_LIMIT = 2
 JOB_RETRY_DELAY_SECONDS = 30
 
@@ -2205,7 +2219,10 @@ def _build_parser() -> argparse.ArgumentParser:
     plan.add_argument(
         "--model",
         default="gpt-5.4",
-        help="主升级线模型；本升级固定为 gpt-5.4，Lite job 在场景清单中独立声明。",
+        help=(
+            "主升级线模型，必须是 capturelib.model.MAIN_TRACK_MODELS 之一"
+            "（上游 use_responses_lite=false）；Lite job 在场景清单中独立声明。"
+        ),
     )
     plan.add_argument("--capture-root", type=Path, default=Path("/root/oauth-capture"))
     plan.add_argument("--capture-container", default="capture-cli")
@@ -2349,11 +2366,12 @@ def _validate_arguments(arguments: argparse.Namespace) -> None:
     if (
         arguments.baseline_version == "0.145.0"
         and arguments.target_version == "0.147.0"
-        and arguments.model != "gpt-5.4"
+        and arguments.model not in MAIN_TRACK_MODELS
     ):
         raise ConfigurationError(
-            "0.145→0.147 主升级线固定使用 gpt-5.4；"
-            "gpt-5.6-luna 只能由场景清单中的 Lite 专项 job 使用。"
+            "0.145→0.147 主升级线只能使用 "
+            f"{'／'.join(MAIN_TRACK_MODELS)}（上游 use_responses_lite=false）；"
+            "Lite 模型只能由场景清单中的 Lite 专项 job 使用。"
         )
     if not SHA256_RE.fullmatch(arguments.target_sha256):
         raise ConfigurationError("--target-sha256 必须是 64 位小写 SHA-256。")
@@ -2718,8 +2736,66 @@ def _verify_codex_package(
     }
 
 
-def _tool_identity(*, include_git: bool = True) -> dict[str, Any]:
-    tool_root = Path(__file__).resolve().parent
+# 评估侧受管文件：只读既有证据做判定、汇总与编目，不决定任何证据的字节内容。
+#
+# 这份清单是**白名单**，且必须逐个论证——判定依据是「该文件的改动能否改变已封存证据
+# 的字节」。未登记的文件一律按产出侧处理（见 _tool_identity_sides 的 fail-close），
+# 新增文件因此默认落到严格侧，不会因为忘记登记而被静默放行。
+#
+# 之所以要这个划分：Campaign 建立后工具身份一旦漂移就整轮作废，而历史上多数作废源于
+# 判据／门禁类修复（k43 的负样本契约、k46 的门禁语义、k56 的四处 seal 门禁修复）。
+# 这些修复改的是「怎么判断」，不是「采到什么」，把它们与采集脚本同等对待，代价是
+# 每修一次就重采一轮官方证据。
+#
+# 放宽的边界很窄：评估侧文件改动后，已封存证据逐字节不变，只是重新评估一遍即可；
+# 因此承接（resume）成立。产出侧（采集驱动、探针、中继、脱敏、收据生成、环境快照）
+# 任何改动都可能改变证据本身，仍然严格拒绝。
+_EVALUATION_SIDE_FILES = frozenset(
+    {
+        # 从批准断言画像推导验收模型；只读画像与规则，不接触证据字节。
+        "acceptance_contract.py",
+        # seal 前把 accept 的证据前提失败关闭；只读已收口的 bundle。
+        "assertion_gate.py",
+        # 按显式规则把已存在的证据根扫描成 manifest；不写证据。
+        "build_capture_manifest.py",
+        # 按冻结声明把多 job 根编目成三份计划；不写证据。
+        "build_evidence_catalog.py",
+        # 编排逐规则断言并汇总为 accept 所需结果文档；不写证据。
+        "build_rule_assertion_results.py",
+        # 对候选抓包执行逐规则断言；只读抓包。
+        "candidate_rule_assertion.py",
+        # 采集后校验中继样本完整性；只读样本。
+        "check_sample_integrity.py",
+        # capture manifest 的校验 schema；只约束校验严格度，不产生内容。
+        "candidate_capture_manifest.schema.json",
+    }
+)
+
+
+def _tool_identity_sides(entries: list[dict[str, Any]]) -> dict[str, Any]:
+    """把受管文件按证据影响面分成两组，并各自计算摘要。
+
+    fail-close：只有显式登记在 _EVALUATION_SIDE_FILES 里的路径才进评估侧，
+    其余（含任何新增文件）全部计入产出侧。
+    """
+
+    production = [e for e in entries if e["path"] not in _EVALUATION_SIDE_FILES]
+    evaluation = [e for e in entries if e["path"] in _EVALUATION_SIDE_FILES]
+    return {
+        "production_count": len(production),
+        "production_sha256": _fingerprint({"entries": production}),
+        "evaluation_count": len(evaluation),
+        "evaluation_sha256": _fingerprint({"entries": evaluation}),
+    }
+
+
+def _tool_tree_entries(tool_root: Path) -> list[dict[str, Any]]:
+    """按受管口径列出一棵工具树的文件摘要。
+
+    抽成独立函数供两处共用：`_tool_identity` 算受管树自身的身份，
+    `_verify_execution_tree` 用同一口径比对采集实际执行的那份副本。
+    """
+
     files = sorted(
         path
         for path in tool_root.rglob("*")
@@ -2734,7 +2810,7 @@ def _tool_identity(*, include_git: bool = True) -> dict[str, Any]:
             and "__pycache__" not in path.relative_to(tool_root).parts
         )
     )
-    entries = [
+    return [
         {
             "path": path.relative_to(tool_root).as_posix(),
             "sha256": file_sha256(path),
@@ -2742,6 +2818,51 @@ def _tool_identity(*, include_git: bool = True) -> dict[str, Any]:
         for path in files
         if path.is_file() and not path.is_symlink()
     ]
+
+
+def _verify_execution_tree(capture_root: Path | None) -> None:
+    """确认采集实际执行的工具副本与受管树逐字一致。
+
+    `_tool_identity` 只扫描本文件所在的受管树，而采集脚本与 relay 由
+    `$CAPTURE_MOUNT/tools/official_client_capture/` 执行——那是**另一份副本**。
+    k71 因此出现「工具身份校验通过、跑的却是旧代码」：受管树里
+    `upstream_byte_relay.py` 的 `legacy_compact_ordinal`（Cookie 按到达序号下发）
+    与 job 定义里写死的 `gpt-5.6-luna`（Lite 轨）都已就位，执行副本却停在更早版本，
+    `EP-015`／`EP-022`／`EP-014`／`BODY-006` 四条判据随之必败，且没有任何门禁报警。
+    职责边界：本校验只回答「存在的那份执行副本有没有漂移」。执行位置不存在时直接放行
+    ——那不是漂移，而是路径配置问题，真实采集会在脚本解析
+    `$CAPTURE_MOUNT/tools/...` 时自己失败；把「必须存在」也塞进来，只会让所有用假
+    capture_root 的单元测试无法运行。存在但有文件缺失或摘要不符时 fail-close 拒绝。
+    """
+
+    if capture_root is None:
+        return
+    managed_root = Path(__file__).resolve().parent
+    execution_root = capture_root / "tools" / "official_client_capture"
+    if not execution_root.is_dir() or execution_root.is_symlink():
+        return
+    if execution_root.resolve() == managed_root.resolve():
+        return
+    actual = {
+        entry["path"]: entry["sha256"]
+        for entry in _tool_tree_entries(execution_root)
+    }
+    drift = [
+        entry["path"]
+        for entry in _tool_tree_entries(managed_root)
+        if actual.get(entry["path"]) != entry["sha256"]
+    ]
+    if drift:
+        raise ConfigurationError(
+            "采集执行位置与受管工具树不一致，实际会跑到未受校验的副本："
+            + f"{execution_root}；共 {len(drift)} 个文件漂移，前几个："
+            + ", ".join(drift[:5])
+        )
+
+
+def _tool_identity(*, include_git: bool = True) -> dict[str, Any]:
+    tool_root = Path(__file__).resolve().parent
+    entries = _tool_tree_entries(tool_root)
     return {
         "git_commit": (
             _git_commit(Path(__file__).resolve().parents[2])
@@ -2751,6 +2872,35 @@ def _tool_identity(*, include_git: bool = True) -> dict[str, Any]:
         "entry_count": len(entries),
         "files_sha256": _fingerprint({"entries": entries}),
         "entries": entries,
+        **_tool_identity_sides(entries),
+    }
+
+
+def _tool_identity_drift(
+    current: Mapping[str, Any],
+    expected: Mapping[str, Any],
+) -> dict[str, list[str]]:
+    """逐文件比对两份工具身份，按证据影响面归类变化路径。"""
+
+    def index(identity: Mapping[str, Any]) -> dict[str, str]:
+        raw = identity.get("entries")
+        if not isinstance(raw, list):
+            return {}
+        return {
+            str(item.get("path")): str(item.get("sha256"))
+            for item in raw
+            if isinstance(item, dict)
+        }
+
+    now, before = index(current), index(expected)
+    changed = sorted(
+        path
+        for path in set(now) | set(before)
+        if now.get(path) != before.get(path)
+    )
+    return {
+        "production": [p for p in changed if p not in _EVALUATION_SIDE_FILES],
+        "evaluation": [p for p in changed if p in _EVALUATION_SIDE_FILES],
     }
 
 
@@ -2939,6 +3089,9 @@ def create_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
             }
         ),
     }
+    # 冻结工具身份之前先确认执行副本与受管树一致：这里记进 manifest 的是受管树的
+    # 摘要，若执行位置此刻已经漂移，整轮采集都会跑在未受校验的代码上（k71 即此）。
+    _verify_execution_tree(getattr(arguments, "capture_root", None))
     plan = _safe_plan(arguments, jobs, rules)
     manifest = {
         "schema_version": CAMPAIGN_SCHEMA,
@@ -4130,8 +4283,98 @@ def _verify_plan_identity(campaign_dir: Path, manifest: dict[str, Any]) -> None:
     if current_package_identity != package_identity:
         raise ConfigurationError("官方目标 package 身份漂移。")
     current_tool = _tool_identity(include_git=False)
-    if current_tool["files_sha256"] != manifest["tool_identity"]["files_sha256"]:
-        raise ConfigurationError("升级工具摘要在 plan 后发生变化。")
+    expected_tool = manifest["tool_identity"]
+    if current_tool["files_sha256"] == expected_tool["files_sha256"]:
+        return
+    # 工具确实变了。按证据影响面分级判定，而不是一律拒绝：产出侧改动会改变证据字节，
+    # 必须整轮重来；评估侧改动只改变「怎么判断」，已封存证据逐字节不变，重新评估即可。
+    #
+    # 兼容：plan 时未记录分组摘要的旧 Campaign 无法证明其分级前提，退回严格拒绝。
+    if "production_sha256" not in expected_tool:
+        raise ConfigurationError(
+            "升级工具摘要在 plan 后发生变化（该 Campaign 的 plan 未记录分组摘要，"
+            "无法分级判定，只能整轮重建）。"
+        )
+    drift = _tool_identity_drift(current_tool, expected_tool)
+    if drift["production"] or (
+        current_tool["production_sha256"] != expected_tool["production_sha256"]
+    ):
+        raise ConfigurationError(
+            "升级工具的产出侧在 plan 后发生变化，证据字节前提已不成立："
+            + "、".join(drift["production"] or ["<摘要不一致但无法定位文件>"])
+        )
+    # 只有评估侧变化：放行，但把变化清单落进台账供审计，避免静默放行。
+    _record_evaluation_side_drift(campaign_dir, current_tool, expected_tool, drift)
+
+
+TOOL_EVALUATION_DRIFT_SCHEMA = "codex-upgrade-tool-evaluation-drift/v1"
+
+
+def _record_evaluation_side_drift(
+    campaign_dir: Path,
+    current_tool: Mapping[str, Any],
+    expected_tool: Mapping[str, Any],
+    drift: Mapping[str, list[str]],
+) -> None:
+    """把被放行的评估侧漂移追加进独立台账，作为不可省略的审计痕迹。
+
+    放行不等于无痕：每次评估侧改动都要留下「改了哪些文件、放行时的新摘要」，
+    否则 accept 阶段无法解释某轮结果是用哪一版判据算出来的。
+
+    台账另立文件而不写回 `campaign.json`——后者由 `campaign.sha256` 保护且一次封存
+    不可变，追加内容会直接破坏 Campaign 完整性校验。
+    """
+
+    if not drift["evaluation"]:
+        return
+    path = campaign_dir / "tool-evaluation-drift.json"
+    if path.is_symlink():
+        raise ConfigurationError("评估侧漂移台账不允许是符号链接。")
+    if path.is_file():
+        ledger = _read_json(path, "评估侧漂移台账")
+        if ledger.get("schema_version") != TOOL_EVALUATION_DRIFT_SCHEMA:
+            raise ConfigurationError("评估侧漂移台账 schema_version 不受支持。")
+        records = ledger.get("records")
+        if not isinstance(records, list):
+            raise ConfigurationError("评估侧漂移台账结构非法。")
+    else:
+        records = []
+    record = {
+        "changed_files": list(drift["evaluation"]),
+        "plan_evaluation_sha256": str(expected_tool.get("evaluation_sha256", "")),
+        "current_evaluation_sha256": current_tool["evaluation_sha256"],
+        "production_sha256": current_tool["production_sha256"],
+        "files_sha256": current_tool["files_sha256"],
+    }
+    # 同一份评估侧状态重复进入不再追加，台账按「不同的评估侧版本」计数。
+    if records and records[-1].get("current_evaluation_sha256") == (
+        record["current_evaluation_sha256"]
+    ):
+        return
+    records.append(record)
+    payload = {
+        "schema_version": TOOL_EVALUATION_DRIFT_SCHEMA,
+        "plan_production_sha256": str(expected_tool.get("production_sha256", "")),
+        "records": records,
+    }
+    ensure_private_directory(path.parent)
+    descriptor, temporary_name = tempfile.mkstemp(
+        prefix=f".{path.name}.", suffix=".tmp", dir=path.parent
+    )
+    temporary = Path(temporary_name)
+    try:
+        os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(
+                json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True)
+                + "\n"
+            )
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 def _directory_tree_digest(root: Path) -> str:
@@ -5726,6 +5969,9 @@ def _run_capture_attempt(
     """执行真实抓包，并以独立前后探针自动证明环境恢复。"""
 
     _reject_contaminated_campaign(arguments.campaign_dir)
+    # 采集脚本与 relay 从 capture_root 下的副本执行，不是本文件所在的受管树；
+    # 两者漂移会让「工具身份校验通过、跑的却是旧代码」，见 _verify_execution_tree。
+    _verify_execution_tree(getattr(arguments, "capture_root", None))
     seal_only = {
         "attempt_id": getattr(arguments, "attempt_id", None),
         "capture_manifest": getattr(arguments, "capture_manifest", None),
@@ -7689,6 +7935,7 @@ def compare_campaign(campaign_dir: Path, candidate_id: str) -> dict[str, Any]:
                 candidate,
                 rule=rule,
                 output=candidate_output,
+                side="candidate",
             ),
             "evidence_level": "unreviewed",
             "rationale": "待执行机器断言并复核。",
@@ -7706,6 +7953,7 @@ def compare_campaign(campaign_dir: Path, candidate_id: str) -> dict[str, Any]:
                 official,
                 rule=rule,
                 output=official_output,
+                side="official",
             )
         else:
             row["official_authority"] = dict(official_authority)
@@ -7787,12 +8035,18 @@ def _acceptance_expected_check_ids(
     campaign_dir: Path,
     classification: dict[str, Any],
     rule: str,
+    side: str,
 ) -> list[str]:
+    """本侧应执行的 check 全集；侧别限定项由验收契约按登记依据剔除。"""
+
     contract = _acceptance_contract(campaign_dir, classification)
     expected = contract["expected_check_ids"].get(rule)
     if not isinstance(expected, list) or not expected:
         raise ConfigurationError(f"批准断言画像缺少规则 {rule} 的 check 全集。")
-    return list(expected)
+    try:
+        return expected_check_ids_for_side(contract, rule, side)
+    except AcceptanceContractError as error:
+        raise ConfigurationError(f"批准断言画像 check 全集不可用：{error}") from error
 
 
 def _classification_official_authority(
@@ -8072,6 +8326,7 @@ def _campaign_machine_command(
     *,
     rule: str,
     output: Path,
+    side: str,
 ) -> list[str]:
     context = capture_stage.get("assertion_context")
     if not isinstance(context, dict):
@@ -8090,6 +8345,7 @@ def _campaign_machine_command(
         rule_manifest=str(rule_path.resolve(strict=True)),
         expected_codex_version=manifest["target_version"],
         expected_profile_sha256=str(profile_reference.get("sha256", "")),
+        side=side,
         output=str(output.resolve()),
     )
 
@@ -8198,6 +8454,7 @@ def _validate_machine_assertion(
         capture_stage,
         rule=rule,
         output=result_path,
+        side=side,
     )
     if command != expected_command:
         raise ConfigurationError(f"逐规则断言 {rule} {label}机器命令未精确绑定当前版本 Campaign。")
@@ -8353,8 +8610,10 @@ def _validate_assertion_results(
         rationale = row.get("rationale")
         if not isinstance(rationale, str) or not rationale.strip():
             raise ConfigurationError(f"逐规则断言 {rule} 缺少 rationale。")
-        expected_check_ids = set(
-            _acceptance_expected_check_ids(campaign_dir, classification, str(rule))
+        candidate_expected_check_ids = set(
+            _acceptance_expected_check_ids(
+                campaign_dir, classification, str(rule), "candidate"
+            )
         )
         candidate_paths = _validate_evidence_bindings(
             row.get("candidate_evidence_refs"),
@@ -8372,7 +8631,7 @@ def _validate_assertion_results(
             candidate_paths,
             side="candidate",
         )
-        if candidate_check_ids != expected_check_ids:
+        if candidate_check_ids != candidate_expected_check_ids:
             raise ConfigurationError(
                 f"逐规则断言 {rule} 候选机器检查与批准画像 check 全集不一致。"
             )
@@ -8393,7 +8652,12 @@ def _validate_assertion_results(
                 official_paths,
                 side="official",
             )
-            if official_check_ids != expected_check_ids:
+            official_expected_check_ids = set(
+                _acceptance_expected_check_ids(
+                    campaign_dir, classification, str(rule), "official"
+                )
+            )
+            if official_check_ids != official_expected_check_ids:
                 raise ConfigurationError(
                     f"逐规则断言 {rule} 官方机器检查与批准画像 check 全集不一致。"
                 )

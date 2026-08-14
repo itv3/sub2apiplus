@@ -234,7 +234,12 @@ class ScenarioReceiptSchemaTest(unittest.TestCase):
         defs = self.schema["$defs"]
         for name in ("factsA11", "factsA13", "factsA14"):
             self.assertFalse(defs[name]["additionalProperties"], name)
+        # 会话期错误恒为 0；收尾阶段的连接重置单列，允许非负整数。
         self.assertEqual(defs["factsA11"]["properties"]["async_error_count"]["const"], 0)
+        self.assertEqual(
+            defs["factsA11"]["properties"]["teardown_error_count"],
+            {"type": "integer", "minimum": 0},
+        )
         self.assertEqual(
             defs["factsA11"]["properties"]["sideband_sni"]["const"], "api.openai.com"
         )
@@ -282,7 +287,11 @@ class ScenarioFactsPassTest(ScenarioFixtureBase):
             self.assertTrue(target.is_file())
             self.assertEqual(target.stat().st_size, binding["bytes"])
 
-    def _a11_run(self, sideband_target: str | None = None) -> Path:
+    def _a11_run(
+        self,
+        sideband_target: str | None = None,
+        notifications: list | None = None,
+    ) -> Path:
         """A11 成功形态：call-create 2xx + V3 sideband 同 call_id + api SNI。"""
 
         root = self._run_root()
@@ -308,7 +317,9 @@ class ScenarioFactsPassTest(ScenarioFixtureBase):
             root,
             "A11-realtime-events.json",
             {
-                "notifications": [
+                "notifications": notifications
+                if notifications is not None
+                else [
                     {
                         "method": "thread/realtime/started",
                         "params": {"realtimeSessionId": "sess-1", "version": "v3"},
@@ -331,6 +342,51 @@ class ScenarioFactsPassTest(ScenarioFixtureBase):
         )
         self.assertEqual(document["facts"]["async_error_count"], 0)
         self.assertTrue(document["facts"]["sideband_call_id_linked"])
+
+    def test_A11_容忍收尾阶段的连接重置(self) -> None:
+        """目标事实达成后上游未走优雅关闭：证据等价，判据不得因此失败。
+
+        实测同场景两次采集的 wire 逐字等价（上行 2055／15778／2348、四连接、
+        sideband 已建立），唯一差别是收尾时上游一次优雅关闭、一次直接 reset。
+        reset 发生在会话结束那一刻，与 hold 时长无关，重试也绕不过去。
+        """
+        root = self._a11_run(
+            notifications=[
+                {"method": "thread/realtime/started", "params": {"version": "v3"}},
+                {"method": "thread/realtime/sdp", "params": {}},
+                {"method": "thread/realtime/error", "params": {}},
+                {"method": "thread/realtime/closed", "params": {}},
+            ]
+        )
+        document = facts_builder.build("A11", "official-relay-realtime-webrtc", RUN_ID, root)
+        self.assertEqual(document["final_state"], "sideband_established")
+        self.assertEqual(document["facts"]["async_error_count"], 0)
+        self.assertEqual(document["facts"]["teardown_error_count"], 1)
+
+    def test_A11_会话期内的_error_仍然失败关闭(self) -> None:
+        """error 出现在 started／sdp 之前：会话没建立起来，属真实失败。"""
+        root = self._a11_run(
+            notifications=[
+                {"method": "thread/realtime/error", "params": {}},
+                {"method": "thread/realtime/started", "params": {"version": "v3"}},
+            ]
+        )
+        with self.assertRaises(Exception) as caught:
+            facts_builder.build("A11", "official-relay-realtime-webrtc", RUN_ID, root)
+        self.assertIn("会话期内", str(caught.exception))
+
+    def test_A11_目标事件后仍有实质事件则不算收尾(self) -> None:
+        """error 之后还出现非关闭类通知，说明会话仍在进行，不得豁免。"""
+        root = self._a11_run(
+            notifications=[
+                {"method": "thread/realtime/started", "params": {"version": "v3"}},
+                {"method": "thread/realtime/error", "params": {}},
+                {"method": "thread/realtime/sdp_retry", "params": {}},
+            ]
+        )
+        with self.assertRaises(Exception) as caught:
+            facts_builder.build("A11", "official-relay-realtime-webrtc", RUN_ID, root)
+        self.assertIn("会话期内", str(caught.exception))
 
     def test_A11_接受_V1_形态的_query_call_id(self) -> None:
         """V1／V2 用 query 传 call_id；两种形态都算真实关联。"""

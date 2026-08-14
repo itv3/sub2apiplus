@@ -936,7 +936,7 @@
         "A15"
       ],
       "description": "Sub2API HTTP／WS 的应用层核心矩阵",
-      "required": true,
+      "required": false,
       "steps": [
         {
           "argv": [
@@ -1000,6 +1000,7 @@
         "full"
       ],
       "scenario_ids": [
+        "A01",
         "A03"
       ],
       "description": "Sub2API HTTP/1.1 原始 header 线序",
@@ -1029,6 +1030,7 @@
         "{capture_root}/runs/{campaign_id}-candidate-h1"
       ],
       "covers": [
+        "SPEC-PROTO-001",
         "SPEC-H1-001",
         "SPEC-H1-002",
         "SPEC-H1-003",
@@ -1095,7 +1097,7 @@
         "A10"
       ],
       "description": "Sub2API compact 的应用层证据",
-      "required": true,
+      "required": false,
       "steps": [
         {
           "argv": [
@@ -2223,7 +2225,7 @@
             "API_KEY_ID": "{api_key_id}",
             "CODEX_VERSION": "{target_version}",
             "RUN_ID": "{campaign_id}-candidate-frozen-aux",
-            "MODEL": "{model}",
+            "MODEL": "gpt-5.6-luna",
             "LIVE_ATTESTATION_COMPOSE_DIR": "{live_attestation_compose_dir}",
             "LIVE_ATTESTATION_COMPOSE_FILES": "{live_attestation_compose_files}"
           },

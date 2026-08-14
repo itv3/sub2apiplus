@@ -134,7 +134,8 @@ class RuleResultTest(unittest.TestCase):
             candidate_out.write_text(json.dumps(_document(PASSING)), encoding="utf-8")
             result = builder.build_dual_wire_result(
                 rule_id="SPEC-TLS-001",
-                expected_check_ids=EXPECTED_CHECKS,
+                official_expected_check_ids=EXPECTED_CHECKS,
+                candidate_expected_check_ids=EXPECTED_CHECKS,
                 official=(["python3", "assert.py"], _document(PASSING), official_out),
                 candidate=(["python3", "assert.py"], _document(PASSING), candidate_out),
                 official_root=root,

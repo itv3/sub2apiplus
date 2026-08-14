@@ -29,21 +29,26 @@ FACT_ID = "a07.transport-fallback"
 class CandidateTestTraceTest(unittest.TestCase):
     def test_frozen_input_digests_match_checked_in_assets(self) -> None:
         tool_root = Path(__file__).resolve().parents[1]
-        profile = tool_root / "candidate_rule_expectations_0_145_0.json"
-        mapping = tool_root / "candidate_test_fact_map_0_145_0.json"
+        # 两侧冻结的是不同东西，不能再共用一份摘要：
+        # - candidate_rule_assertion 冻结 0.145.0 基线画像——它是 classify 的迁移基线
+        #   （codex_upgrade.py 的 base_path），升级期间保持不动；
+        # - candidate_test_trace 冻结的映射与画像都要与 Campaign 目标同版本，否则
+        #   load_mapping／load_profile 的 codex_version 校验直接拒绝。
+        baseline_profile = tool_root / "candidate_rule_expectations_0_145_0.json"
+        target_profile = tool_root / "candidate_rule_expectations_0_147_0.json"
+        target_mapping = tool_root / "candidate_test_fact_map_0_147_0.json"
 
-        profile_sha256 = file_sha256(profile)
         self.assertEqual(
             candidate_rule_assertion.FROZEN_PROFILE_SHA256,
-            profile_sha256,
+            file_sha256(baseline_profile),
         )
         self.assertEqual(
             candidate_test_trace.FROZEN_PROFILE_SHA256,
-            profile_sha256,
+            file_sha256(target_profile),
         )
         self.assertEqual(
             candidate_test_trace.FROZEN_MAPPING_SHA256,
-            file_sha256(mapping),
+            file_sha256(target_mapping),
         )
 
     def _fixture(
@@ -408,8 +413,8 @@ class CandidateTestTraceTest(unittest.TestCase):
     def test_default_mapping_digest_and_fact_universe_are_frozen(self) -> None:
         tool_root = Path(__file__).resolve().parents[1]
         _, tests = load_mapping(
-            tool_root / "candidate_test_fact_map_0_145_0.json",
-            expected_codex_version="0.145.0",
+            tool_root / "candidate_test_fact_map_0_147_0.json",
+            expected_codex_version="0.147.0",
             expected_sha256=candidate_test_trace.FROZEN_MAPPING_SHA256,
         )
         fact_ids = {

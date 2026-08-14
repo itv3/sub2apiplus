@@ -67,6 +67,14 @@ class CandidateVersionAuthorityTest(unittest.TestCase):
         self.assertIn('--codex-version "$6"', auxiliary)
         self.assertIn('"$codex_version" \\\n', auxiliary)
 
+    def test_direct_and_mitm_default_to_four_tls_scenarios(self) -> None:
+        for script_name in (
+            "run_sub2api_direct_matrix.sh",
+            "run_sub2api_openai_mitm_matrix.sh",
+        ):
+            source = (TOOL_ROOT / script_name).read_text(encoding="utf-8")
+            self.assertIn('scenarios=${SCENARIOS:-"s1 s2 s3 s4"}', source)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1053,6 +1053,1059 @@
           "rationale": "同一 mitm 面把 codex 主干之外的请求（含 SPEC-EP-019 判据所依赖的 wham GET）单独写入 misc-http.jsonl；此前只声明了 codex-http.jsonl，这一半证据从未进入 manifest，A12 因而选不到任何 wham GET 观测。"
         }
       ]
+    },
+    {
+      "job_id": "candidate-core-direct",
+      "side": "candidate",
+      "rules": [
+        {
+          "glob": "direct/codex-http-*/egress.pcap",
+          "scenario_ids": [
+            "A01"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "http",
+            "ca_mode": "system",
+            "surface": "direct"
+          },
+          "rationale": "direct 面不安装自定义 CA（A01 precondition），subject 为 codex-http。"
+        }
+      ]
+    },
+    {
+      "job_id": "candidate-ws-handshake-repeat",
+      "side": "candidate",
+      "rules": [
+        {
+          "glob": "direct/codex-ws-*/egress.pcap",
+          "scenario_ids": [
+            "A02"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "websocket",
+            "ca_mode": "system",
+            "surface": "direct"
+          },
+          "rationale": "direct 面不安装自定义 CA，subject 为 codex-ws，用于 WS 握手重复观测。"
+        }
+      ]
+    },
+    {
+      "job_id": "candidate-core-mitm",
+      "side": "candidate",
+      "rules": [
+        {
+          "root_suffix": "codex-http-run",
+          "glob": "mitm/codex-http/codex-http.jsonl",
+          "scenario_ids": [
+            "A01",
+            "A09"
+          ],
+          "kind": "wire_dump",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "mitm_http_jsonl",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "ca_mode": "custom",
+            "surface": "mitm",
+            "provider": "openai_oauth"
+          },
+          "rationale": "mitm 面由抓包 CA 解密（ca_mode=custom），是代理重构面：判据凡要求客户端原始字节者均以 labels.ca_mode absent 排除本面；provider 由账号类型（OpenAI OAuth）推出。"
+        },
+        {
+          "root_suffix": "codex-ws-run",
+          "glob": "ingress/codex-ws/codex-ingress-http.jsonl",
+          "scenario_ids": [
+            "A02"
+          ],
+          "kind": "wire_dump",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "mitm_http_jsonl",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "ca_mode": "custom",
+            "surface": "ingress"
+          },
+          "rationale": "ws subject 的 ingress 面 HTTP jsonl（WS 升级前的握手请求），由抓包 CA 解密；ingress 是入站面，同样以 ca_mode=custom 被原始字节判据排除。"
+        }
+      ]
+    },
+    {
+      "job_id": "candidate-h1-wire",
+      "side": "candidate",
+      "rules": [
+        {
+          "glob": "h1-wire.json",
+          "scenario_ids": [
+            "A01",
+            "A03"
+          ],
+          "kind": "wire_dump",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_wire_probe",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "surface": "probe",
+            "provider": "openai_oauth",
+            "variant": "no_cookie"
+          },
+          "rationale": "h1 探针以受控证书终止 TLS 并记录网关出站的原始 HTTP/1.1 请求行（启动 models GET 与 WS 升级），与官方侧 official-http-fallback 同面。同归 A01 与 A03：驱动序列就是 A01 trigger 描述的『启动 models ＋ 一次 Responses 调用』，其 models GET 是候选侧 A01 唯一的非重构证据来源（direct 面只有密文 pcap，mitm 面是代理重构且带 ca_mode）；probe 记录客户端真实字节，故不标 ca_mode。2026-08-13（R10）补 variant=no_cookie：官方侧同一面的 models GET 由 official-relay-http-response／official-lite-http-response 两条 relay 规则标为 no_cookie，候选侧此前没有任何规则给 models 面标 variant，导致 SPEC-H1-004／models-order（selector 要求 path=/backend-api/codex/models 且 variant=no_cookie）在候选侧选不到观测、seal 预检失败。该请求实际不带 cookie（头序 version, authorization, chatgpt-account-id, accept, originator, user-agent, host 与判据期望逐字一致），标注属两侧标签语义对齐而非放宽判据。"
+        }
+      ]
+    },
+    {
+      "job_id": "candidate-compact-direct",
+      "side": "candidate",
+      "rules": [
+        {
+          "glob": "direct/codex-compact-*/egress.pcap",
+          "scenario_ids": [
+            "A10"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "http",
+            "ca_mode": "system",
+            "surface": "direct"
+          },
+          "rationale": "compact direct 面不装自定义 CA，subject 为 codex-compact。"
+        },
+        {
+          "glob": "ingress/codex-compact-*/codex-ingress-http.jsonl",
+          "scenario_ids": [
+            "A10"
+          ],
+          "kind": "wire_dump",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "mitm_http_jsonl",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "ca_mode": "custom",
+            "surface": "ingress"
+          },
+          "rationale": "ingress 面记录客户端到网关的 compact 请求（入站 /v1/responses），由抓包 CA 解密；不标 compaction_mode——该维度专属网关出站 relay 面，入站面标注会让 EP-021 selector 误选。"
+        }
+      ]
+    },
+    {
+      "job_id": "candidate-compact-mitm",
+      "side": "candidate",
+      "rules": [
+        {
+          "root_suffix": "codex-compact-run",
+          "glob": "mitm/codex-compact/codex-http.jsonl",
+          "scenario_ids": [
+            "A10"
+          ],
+          "kind": "wire_dump",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "mitm_http_jsonl",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "ca_mode": "custom",
+            "surface": "mitm"
+          },
+          "rationale": "compact mitm 面记录的是网关出站 WS 升级请求（A10 驱动经 TUI 入口默认选 WS），transport 按实际记录面标 websocket；ca_mode=custom 使原始字节判据排除本面。不标 compaction_mode：WS 升级请求与 /backend-api/codex/responses 同路径，若标注会被 EP-021 v2-compaction-trigger 误选而其无 body。"
+        }
+      ]
+    },
+    {
+      "job_id": "candidate-frozen-core",
+      "side": "candidate",
+      "rules": [
+        {
+          "glob": "scenarios/A03/relay/conn001.client_to_upstream.bin",
+          "scenario_ids": [
+            "A03"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "lite",
+            "mode": "lite",
+            "variant": "no_cookie",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A03 job 固定 Lite 模型（LITE_MODEL 默认 gpt-5.6-luna）；首个中继连接是启动期 models GET，此时 cookie jar 为冷（prime 轮尚未执行），variant=no_cookie 由连接顺序推出。"
+        },
+        {
+          "glob": "scenarios/A03/relay/conn002.client_to_upstream.bin",
+          "scenario_ids": [
+            "A03"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "compression": "zstd",
+            "body_length": "automatic",
+            "session_header_scope": "responses_or_compact",
+            "provider": "openai_oauth"
+          },
+          "rationale": "驱动序列第 1 个 POST 是 prime 轮：非 Lite 模型（MAIN_MODEL）、zstd 压缩（脚本显式 -H Content-Encoding: zstd），用于建立冷 cookie jar，故不标 variant（cookie 缺席使其不属于任何官方变体）。"
+        },
+        {
+          "glob": "scenarios/A03/relay/conn003.client_to_upstream.bin",
+          "scenario_ids": [
+            "A03"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "compression": "zstd",
+            "body_length": "automatic",
+            "session_header_scope": "responses_or_compact",
+            "provider": "openai_oauth"
+          },
+          "rationale": "驱动序列第 2 个 POST 是 default 轮：非 Lite、zstd、cookie jar 已由 prime 轮建立。不标 variant——A03 的 variant 维度由 Lite 轨承载（该场景 precondition 是 use_responses_lite=true），非 Lite 轮只作为 mode 对照。"
+        },
+        {
+          "glob": "scenarios/A03/relay/conn004.client_to_upstream.bin",
+          "scenario_ids": [
+            "A03"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "lite",
+            "mode": "lite",
+            "variant": "http_default",
+            "compression": "zstd",
+            "body_length": "automatic",
+            "session_header_scope": "responses_or_compact",
+            "provider": "openai_oauth"
+          },
+          "rationale": "驱动序列第 3 个 POST 是首轮 Lite turn：Lite 模型、zstd、cookie jar 已建立、尚未注入 turn-state，是 A03 场景（precondition use_responses_lite=true）的默认完整 HTTP Responses 形态，故 variant=http_default。若连接顺序漂移，H1-004 的精确头序断言会失败关闭。"
+        },
+        {
+          "glob": "scenarios/A03/relay/conn005.client_to_upstream.bin",
+          "scenario_ids": [
+            "A03"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "lite",
+            "mode": "lite",
+            "compression": "zstd",
+            "body_length": "automatic",
+            "session_header_scope": "responses_or_compact",
+            "provider": "openai_oauth"
+          },
+          "rationale": "驱动序列第 4 个 POST 是次轮 Lite turn：受控上游已在首轮响应注入 turn-state，本轮自然回送，握手因而多一个 x-codex-turn-state 头，不再是默认形态，故不标 variant。"
+        },
+        {
+          "glob": "scenarios/A03/egress.pcap",
+          "scenario_ids": [
+            "A03"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "http",
+            "ca_mode": "custom",
+            "surface": "relay"
+          },
+          "rationale": "抓包面与 relay 同一跳，TLS ClientHello 由 pcap 直接解析；服务容器已装抓包 CA（ca_mode=custom），pcap 面才标 ca_mode。"
+        },
+        {
+          "glob": "scenarios/A04/relay/conn00[145].client_to_upstream.bin",
+          "scenario_ids": [
+            "A04"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A04 的三次 models GET（账号特性变更前后网关启动期各一次），非 Lite 主线模型；GET 无 body，不标 body_length/compression。"
+        },
+        {
+          "glob": "scenarios/A04/relay/conn002.client_to_upstream.bin",
+          "scenario_ids": [
+            "A04"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "residency": "unset",
+            "compression": "plain",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "驱动第 1 个 POST 是 baseline 轮：set_account_features unset false（不设置 residency），请求体明文（脚本不带 Content-Encoding），构成 residency 负例与 BODY-002 responses-plain 的 plain 样本。"
+        },
+        {
+          "glob": "scenarios/A04/relay/conn003.client_to_upstream.bin",
+          "scenario_ids": [
+            "A04"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "residency": "us",
+            "compression": "plain",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "驱动第 2 个 POST 是 residency-us 轮：set_account_features us false 将账号 extra 的 official_codex_enforce_residency 置 us，residency=us 由该采集参数推出，供 HDR-002 residency 正例选样。"
+        },
+        {
+          "glob": "scenarios/A04/relay/conn00[67].client_to_upstream.bin",
+          "scenario_ids": [
+            "A04"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "residency": "unset",
+            "compression": "plain",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "驱动第 3、4 个 POST 是 memgen 与 parent-thread 条件头轮（set_account_features unset true，residency 未设置）；条件头判据走 conditional_header 内部记录，出站样本只承担 residency 负例与非 Lite body 判据。"
+        },
+        {
+          "glob": "scenarios/A04/egress.pcap",
+          "scenario_ids": [
+            "A04"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "http",
+            "ca_mode": "custom",
+            "surface": "relay"
+          },
+          "rationale": "抓包面与 relay 同一跳，TLS ClientHello 由 pcap 直接解析；服务容器已装抓包 CA（ca_mode=custom），pcap 面才标 ca_mode。"
+        },
+        {
+          "glob": "scenarios/A05/relay/conn001.client_to_upstream.bin",
+          "scenario_ids": [
+            "A05"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "lite",
+            "mode": "lite",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A05 首连接是启动期 models GET（HTTP），Lite 模型 job；派生 process_trace 与实际记录形态一致。"
+        },
+        {
+          "glob": "scenarios/A05/relay/conn00[23].client_to_upstream.bin",
+          "scenario_ids": [
+            "A05"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "websocket_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "track": "lite",
+            "mode": "lite",
+            "variant": "default",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A05 两轮 Lite WS 会话：驱动不注入条件头、不关闭任何 feature，握手为默认完整形态（variant=default 由驱动参数推出）；permessage-deflate 由握手自身协商，turn-state 由受控上游在 response.metadata 边界回送。"
+        },
+        {
+          "glob": "scenarios/A05/egress.pcap",
+          "scenario_ids": [
+            "A05"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "websocket",
+            "ca_mode": "custom",
+            "surface": "relay"
+          },
+          "rationale": "抓包面与 relay 同一跳，TLS ClientHello 由 pcap 直接解析；服务容器已装抓包 CA（ca_mode=custom），pcap 面才标 ca_mode。"
+        },
+        {
+          "glob": "scenarios/A06/relay/conn001.client_to_upstream.bin",
+          "scenario_ids": [
+            "A06"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "websocket_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "track": "main",
+            "mode": "non_lite",
+            "variant": "default",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A06 单一 WS 连接串行承载预热、首轮与前缀复用续轮（非 Lite 主线模型，默认完整握手）；驱动断言首轮业务 response.id 为受控序列第 2 个，证明第 1 个 response.create 帧是网关预热（frame_role=warmup 由此推出，绑定帧索引 0）。",
+          "frame_labels": {
+            "0": {
+              "frame_role": "warmup"
+            }
+          }
+        },
+        {
+          "glob": "scenarios/A06/egress.pcap",
+          "scenario_ids": [
+            "A06"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "websocket",
+            "ca_mode": "custom",
+            "surface": "relay"
+          },
+          "rationale": "抓包面与 relay 同一跳，TLS ClientHello 由 pcap 直接解析；服务容器已装抓包 CA（ca_mode=custom），pcap 面才标 ca_mode。"
+        },
+        {
+          "glob": "scenarios/A07/relay/conn00[!7].client_to_upstream.bin",
+          "scenario_ids": [
+            "A07"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "track": "main",
+            "mode": "non_lite",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A07 前六个连接是受控中继按冻结次数（A07_WS_FAILURE_COUNT=6）注入 502 的 WS 握手重试；transport=websocket 由升级请求形态与场景配置共同推出。"
+        },
+        {
+          "glob": "scenarios/A07/relay/conn007.client_to_upstream.bin",
+          "scenario_ids": [
+            "A07"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "variant": "http_default",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "WS 重试预算耗尽后同一调用降级为 HTTP POST（第 7 个连接），与官方 official-http-fallback 的 http_default 同语义；判据本体走 transport_fallback 内部记录。"
+        },
+        {
+          "glob": "scenarios/A07/egress.pcap",
+          "scenario_ids": [
+            "A07"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "http",
+            "ca_mode": "custom",
+            "surface": "relay"
+          },
+          "rationale": "抓包面与 relay 同一跳，TLS ClientHello 由 pcap 直接解析；服务容器已装抓包 CA（ca_mode=custom），pcap 面才标 ca_mode。"
+        },
+        {
+          "glob": "scenarios/A08/relay/conn001.client_to_upstream.bin",
+          "scenario_ids": [
+            "A08"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A08 首连接为启动期 models GET；生命周期判据走 connection_lifecycle 内部记录，relay 样本提供跨调用连接的原始字节佐证。"
+        },
+        {
+          "glob": "scenarios/A08/relay/conn00[!1].client_to_upstream.bin",
+          "scenario_ids": [
+            "A08"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "body_length": "automatic",
+            "session_header_scope": "responses_or_compact",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A08 其余连接为三分支（跨上层调用、keepalive 500 重试、受控断连重试）的 POST Responses 出站，标签由 job 冻结驱动配置推出。"
+        },
+        {
+          "glob": "scenarios/A08/egress.pcap",
+          "scenario_ids": [
+            "A08"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "http",
+            "ca_mode": "custom",
+            "surface": "relay"
+          },
+          "rationale": "抓包面与 relay 同一跳，TLS ClientHello 由 pcap 直接解析；服务容器已装抓包 CA（ca_mode=custom），pcap 面才标 ca_mode。"
+        },
+        {
+          "glob": "scenarios/A10/relay/conn001.client_to_upstream.bin",
+          "scenario_ids": [
+            "A10"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "compaction_mode": "manual",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A10 驱动序列第 1 轮 reason=user_requested，即 manual compaction；compaction_mode 由驱动轮次推出，remote_compaction_v2 保持默认开启。"
+        },
+        {
+          "glob": "scenarios/A10/relay/conn00[!1].client_to_upstream.bin",
+          "scenario_ids": [
+            "A10"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "main",
+            "mode": "non_lite",
+            "compaction_mode": "auto",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A10 驱动序列第 2～4 轮 reason 依次为 context_limit、model_downshift、comp_hash_changed，均属自动触发（compaction_mode=auto）；TokenBudget 分支零出站，由结构化测试证明。"
+        },
+        {
+          "glob": "scenarios/A10/egress.pcap",
+          "scenario_ids": [
+            "A10"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "http",
+            "ca_mode": "custom",
+            "surface": "relay"
+          },
+          "rationale": "抓包面与 relay 同一跳，TLS ClientHello 由 pcap 直接解析；服务容器已装抓包 CA（ca_mode=custom），pcap 面才标 ca_mode。"
+        },
+        {
+          "glob": "scenarios/A15/relay/conn*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A15"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A15 三个连接依次为 exec-suffix、tui-suffix、initial-no-suffix 三种冻结身份的 models GET 出站；入口 surface 本体由 surface_identity 内部记录证明，relay 样本供 HDR-002 的身份头存在性判据选样。"
+        },
+        {
+          "glob": "scenarios/A15/egress.pcap",
+          "scenario_ids": [
+            "A15"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "http",
+            "ca_mode": "custom",
+            "surface": "relay"
+          },
+          "rationale": "抓包面与 relay 同一跳，TLS ClientHello 由 pcap 直接解析；服务容器已装抓包 CA（ca_mode=custom），pcap 面才标 ca_mode。"
+        },
+        {
+          "glob": "candidate-go-test.jsonl",
+          "scenario_ids": [
+            "A03",
+            "A04",
+            "A05",
+            "A06",
+            "A07",
+            "A08",
+            "A09",
+            "A10",
+            "A11",
+            "A14",
+            "A15"
+          ],
+          "kind": "stdout_log",
+          "parser": "opaque_bound_source",
+          "labels": {
+            "surface": "test",
+            "provider": "openai_oauth"
+          },
+          "rationale": "候选部署源码快照的 go test -json 原始日志。SPEC-PROTO-002 等判据要的 transport_fallback／connection_lifecycle 属内部状态记录，抓包面不存在，只能由 candidate_test_trace 从这份日志按冻结映射投影；日志本身以 opaque 登记，由派生出的 trace 反向引用为来源，形成可回放的 provenance。"
+        }
+      ]
+    },
+    {
+      "job_id": "candidate-frozen-aux",
+      "side": "candidate",
+      "rules": [
+        {
+          "glob": "scenarios/A09/relay/conn001.client_to_upstream.bin",
+          "scenario_ids": [
+            "A09"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "lite",
+            "mode": "lite",
+            "endpoint_class": "auxiliary",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A09 job 固定 Lite 模型（MODEL 默认 gpt-5.6-luna）；首连接是 models GET，models 属辅助出站面（endpoint_class=auxiliary），供 HDR-006 auxiliary-wildcard 与 EP-005 选样。"
+        },
+        {
+          "glob": "scenarios/A09/relay/conn002.client_to_upstream.bin",
+          "scenario_ids": [
+            "A09"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "lite",
+            "mode": "lite",
+            "session_header_scope": "responses_or_compact",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A09 compact 驱动序列第 1 轮是 prime（为 turn-state 闭环准备受控状态），不属于任何官方变体，不标 variant；compact 端点属 session_header_scope=responses_or_compact。"
+        },
+        {
+          "glob": "scenarios/A09/relay/conn003.client_to_upstream.bin",
+          "scenario_ids": [
+            "A09"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "lite",
+            "mode": "lite",
+            "variant": "default",
+            "session_header_scope": "responses_or_compact",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "compact 驱动序列第 2 轮是 default：不注入条件头，构成 EP-014/EP-020 legacy compact 默认槽位样本；track=lite 由 job 冻结模型坐标（gpt-5.6-luna，use_responses_lite=true）推出。"
+        },
+        {
+          "glob": "scenarios/A09/relay/conn004.client_to_upstream.bin",
+          "scenario_ids": [
+            "A09"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "lite",
+            "mode": "lite",
+            "variant": "beta",
+            "session_header_scope": "responses_or_compact",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "compact 驱动序列第 3 轮是 beta：入站显式携带 X-Codex-Beta-Features: candidate_aux_beta（脚本 extra_headers），variant=beta 由该采集参数推出，供 EP-014 beta 插槽判据选样。"
+        },
+        {
+          "glob": "scenarios/A09/relay/conn005.client_to_upstream.bin",
+          "scenario_ids": [
+            "A09"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "lite",
+            "mode": "lite",
+            "variant": "turn_state",
+            "session_header_scope": "responses_or_compact",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "compact 驱动序列第 4 轮是 turn_state：与 beta 轮共用同一 session+turn 坐标，由 beta 轮响应向状态仓库回送 turn-state 后触发，variant=turn_state 由驱动轮次推出，供 EP-014 turn-state 插槽判据选样。"
+        },
+        {
+          "glob": "scenarios/A09/relay/conn00[67].client_to_upstream.bin",
+          "scenario_ids": [
+            "A09"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "track": "lite",
+            "mode": "lite",
+            "endpoint_class": "auxiliary",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "compact 之后两连接是两阶段 alpha-search（phase 1/2），alpha-search 属辅助端点面。"
+        },
+        {
+          "glob": "scenarios/A09/relay/conn00[89].client_to_upstream.bin",
+          "scenario_ids": [
+            "A09"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "endpoint_class": "images",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "最后两连接是图像生成与图像编辑（IMAGE_MODEL），属 images 出站面（endpoint_class=images），供 EP-001/EP-022 选样；images 端点与 Lite 语义无关，不标 track/mode。"
+        },
+        {
+          "glob": "scenarios/A09/egress.pcap",
+          "scenario_ids": [
+            "A09"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "http",
+            "ca_mode": "custom",
+            "surface": "relay"
+          },
+          "rationale": "抓包面与 relay 同一跳，TLS ClientHello 由 pcap 直接解析；服务容器已装抓包 CA（ca_mode=custom），pcap 面才标 ca_mode。"
+        },
+        {
+          "glob": "scenarios/A11/relay/conn001.client_to_upstream.bin",
+          "scenario_ids": [
+            "A11"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "endpoint_class": "auxiliary",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A11 第一跳是 realtime call-create（POST /backend-api/codex/realtime/calls），属辅助端点面，与官方 official-relay-realtime-webrtc 同语义。"
+        },
+        {
+          "glob": "scenarios/A11/relay/conn002.client_to_upstream.bin",
+          "scenario_ids": [
+            "A11"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "websocket",
+            "endpoint_class": "auxiliary",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A11 第二跳是 sideband WS（GET /v1/realtime），由生产 observer 依据第一跳 call_id 自动建立。"
+        },
+        {
+          "glob": "scenarios/A11/egress.pcap",
+          "scenario_ids": [
+            "A11"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "http",
+            "ca_mode": "custom",
+            "surface": "relay"
+          },
+          "rationale": "抓包面与 relay 同一跳，TLS ClientHello 由 pcap 直接解析；服务容器已装抓包 CA（ca_mode=custom），pcap 面才标 ca_mode。"
+        },
+        {
+          "glob": "scenarios/A12/relay/conn*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A12"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "endpoint_class": "auxiliary",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A12 五个连接是 QueryUsage 自然发出的 usage/credit-details 两对 GET 与 ResetQuota 的安全 consume POST；wham 属辅助端点面，relay 记录客户端原始字节故不标 ca_mode，供 EP-019 的 GET 判据选样。"
+        },
+        {
+          "glob": "scenarios/A12/egress.pcap",
+          "scenario_ids": [
+            "A12"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "http",
+            "ca_mode": "custom",
+            "surface": "relay"
+          },
+          "rationale": "抓包面与 relay 同一跳，TLS ClientHello 由 pcap 直接解析；服务容器已装抓包 CA（ca_mode=custom），pcap 面才标 ca_mode。"
+        },
+        {
+          "glob": "scenarios/A13/relay/conn*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A13"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "body_length": "automatic",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A13 是 raw 管理入口提交 dummy refresh-token 触发的真实 /oauth/token 出站，relay 记录明文形态；供 H1-001/H1-003 的 A13 样本选样。"
+        },
+        {
+          "glob": "scenarios/A13/egress.pcap",
+          "scenario_ids": [
+            "A13"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "http",
+            "ca_mode": "custom",
+            "surface": "relay"
+          },
+          "rationale": "抓包面与 relay 同一跳，TLS ClientHello 由 pcap 直接解析；服务容器已装抓包 CA（ca_mode=custom），pcap 面才标 ca_mode。"
+        },
+        {
+          "glob": "scenarios/A14/relay/conn*.client_to_upstream.bin",
+          "scenario_ids": [
+            "A14"
+          ],
+          "kind": "relay_binary",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_request_stream",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "transport": "http",
+            "endpoint_class": "auxiliary",
+            "provider": "openai_oauth"
+          },
+          "rationale": "A14 三连接为 create → 区域 Blob PUT → uploaded 三跳链，区域 URL 由 create 响应派生；files 属辅助端点面。PUT 的 body 长度语义由 EP-002 file_upload_chain 内部记录证明，不在此标注。"
+        },
+        {
+          "glob": "scenarios/A14/egress.pcap",
+          "scenario_ids": [
+            "A14"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "http",
+            "ca_mode": "custom",
+            "surface": "relay"
+          },
+          "rationale": "抓包面与 relay 同一跳，TLS ClientHello 由 pcap 直接解析；服务容器已装抓包 CA（ca_mode=custom），pcap 面才标 ca_mode。"
+        }
+      ]
+    },
+    {
+      "job_id": "candidate-images-wire",
+      "side": "candidate",
+      "rules": [
+        {
+          "glob": "h1-wire.json",
+          "scenario_ids": [
+            "A09"
+          ],
+          "kind": "wire_dump",
+          "parser": "opaque_bound_source",
+          "derive": {
+            "parser": "h1_wire_probe",
+            "kind": "process_trace"
+          },
+          "labels": {
+            "surface": "probe",
+            "endpoint_class": "images",
+            "provider": "openai_oauth"
+          },
+          "rationale": "images 探针以受控证书终止 TLS，记录图片生成端点的原始 HTTP/1.1 请求行；probe 面与官方 h1 探针同级，不标 ca_mode，endpoint_class=images 由探针目标端点推出。"
+        }
+      ]
     }
   ]
 }

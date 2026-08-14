@@ -208,12 +208,34 @@ class RepositoryDeclarationTest(unittest.TestCase):
         )
 
     def test_declared_scenarios_belong_to_job(self) -> None:
+        """wire 证据的场景归属必须落在 job 的冻结场景内。
+
+        唯一例外是 ``stdout_log``：候选侧的 ``candidate-go-test.jsonl`` 是源码快照
+        的**全量** ``go test -json`` 输出，本身不是任何单个场景的 wire 证据，而是
+        internal record type 的跨场景来源——它由 candidate_test_trace 按冻结事实
+        映射投影到各场景，覆盖面由映射决定而非产出它的 job 决定。这类来源仍受
+        两道约束：场景必须是冻结场景清单里的真实场景，且投影结果必须逐条绑定
+        同场景的原始 relay 字节（由 load_observations 的跨场景来源校验强制）。
+        """
+
         by_id = {job["id"]: job for job in self.scenarios["capture_jobs"]}
+        known_scenarios = {
+            scenario["scenario_id"] for scenario in self.scenarios["evidence_scenarios"]
+        }
         for entry in self.declaration["entries"]:
             job = by_id[entry["job_id"]]
             allowed = set(job["scenario_ids"])
             for rule in entry["rules"]:
-                extra = set(rule["scenario_ids"]) - allowed
+                declared = set(rule["scenario_ids"])
+                if rule["kind"] == "stdout_log":
+                    unknown = declared - known_scenarios
+                    self.assertFalse(
+                        unknown,
+                        f"{entry['job_id']} 的 {rule['glob']} 引用了冻结清单外的场景："
+                        f"{sorted(unknown)}",
+                    )
+                    continue
+                extra = declared - allowed
                 self.assertFalse(
                     extra,
                     f"{entry['job_id']} 的 {rule['glob']} 引用了 job 未声明的场景：{sorted(extra)}",
@@ -243,6 +265,69 @@ class RepositoryDeclarationTest(unittest.TestCase):
                     unknown,
                     f"{entry['job_id']} 的 {rule['glob']} 使用了画像未知的标签键："
                     f"{sorted(unknown)}",
+                )
+
+    def test_ca_mode_only_on_reconstructed_or_tls_faces(self) -> None:
+        """``ca_mode`` 只允许出现在 pcap 与代理重构面。
+
+        判据凡要求**客户端发出的原始字节**者，一律写 ``labels.ca_mode absent``
+        来排除 mitm／ingress 这类由代理重构的观测（protocol 报 HTTP/2.0、host 落在
+        ``:authority``）。因此 relay 与 probe 面绝不能标 ``ca_mode``——k56 的候选侧
+        曾给所有 relay 规则统一标 ``ca_mode: custom``，结果 35 条 selector 一条都
+        选不中，且不报错（§10.9.3）。这条测试把该语义钉死在两类面上。
+        """
+
+        # 重构面由证据的产出路径决定，不由标签自述——mitm/ 与 ingress/ 下的记录
+        # 都经过代理解密重放，其余（relay/、h1-wire.json、request.bin）是客户端字节。
+        for entry in self.declaration["entries"]:
+            for rule in entry["rules"]:
+                if "ca_mode" not in rule["labels"]:
+                    continue
+                glob = rule["glob"]
+                reconstructed = glob.startswith(("mitm/", "ingress/"))
+                self.assertTrue(
+                    rule["kind"] == "pcap" or reconstructed,
+                    f"{entry['job_id']} 的 {glob} 标了 ca_mode，但既不是 pcap "
+                    "也不产自 mitm／ingress 重构面——"
+                    "原始字节面标 ca_mode 会被判据的 absent 约束整体排除",
+                )
+
+    def test_candidate_relay_and_probe_wire_faces_carry_no_ca_mode(self) -> None:
+        """反向锁定：候选侧 relay／probe 的**非 pcap** 面必须不带 ca_mode。
+
+        同一 relay 跳会同时产出两类证据：``egress.pcap`` 记录 TLS 握手（ca_mode 是
+        它的真实实验条件），``conn*.client_to_upstream.bin`` 记录解密后的客户端原始
+        字节（判据以 ``ca_mode absent`` 选它）。只有后者不得标。
+        """
+
+        for entry in self.declaration["entries"]:
+            if entry["side"] != "candidate":
+                continue
+            for rule in entry["rules"]:
+                if rule["kind"] == "pcap":
+                    continue
+                if rule["labels"].get("surface") not in {"relay", "probe"}:
+                    continue
+                self.assertNotIn(
+                    "ca_mode",
+                    rule["labels"],
+                    f"{entry['job_id']} 的 {rule['glob']} 是客户端原始字节面，"
+                    "不得标 ca_mode",
+                )
+
+    def test_frame_labels_only_on_websocket_trace_derivation(self) -> None:
+        """帧级标签只能挂在能产出 websocket_frame 观测的规则上。"""
+
+        for entry in self.declaration["entries"]:
+            for rule in entry["rules"]:
+                if "frame_labels" not in rule:
+                    continue
+                derive_kind = (rule.get("derive") or {}).get("kind")
+                self.assertTrue(
+                    derive_kind == "websocket_trace"
+                    or rule["parser"] == "h1_request_stream",
+                    f"{entry['job_id']} 的 {rule['glob']} 声明了 frame_labels，"
+                    f"但既不派生 websocket_trace 也不是 h1_request_stream",
                 )
 
 

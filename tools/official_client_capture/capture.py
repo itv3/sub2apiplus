@@ -40,6 +40,7 @@ from tools.official_client_capture.capturelib.identity import (  # noqa: E402
 from tools.official_client_capture.capturelib.lifecycle import (  # noqa: E402
     CampaignLock,
     build_capture_process,
+    ensure_mitm_port_available,
     resolve_target_addresses,
 )
 from tools.official_client_capture.capturelib.manifest import Manifest  # noqa: E402
@@ -432,6 +433,10 @@ def _preflight_dependencies(
 
     ca_info: dict[str, Any] | None = None
     if "mitm" in evidence:
+        # 本轮含 mitm case 时，在任何请求发出前先确认端口空闲。CaptureProcess.start
+        # 里也有同一检查，但那要排到第一个 mitm case 才触发——前面的 direct case 已经
+        # 跑掉了，前轮残留的 mitmdump 于是在采集中途才暴露（k61）。
+        ensure_mitm_port_available(arguments.mitm_port)
         _validate_static_file(arguments.mitmdump_bin, "mitmdump", executable=True)
         _validate_static_file(arguments.mitm_addon, "MITM addon", executable=False)
         _validate_static_file(arguments.ca_bundle, "MITM CA", executable=False)

@@ -90,6 +90,9 @@ def _facts_a11(facts: Any) -> dict[str, Any]:
         "call_id_sha256",
         "sdp_or_started_event",
         "async_error_count",
+        # 收尾阶段的连接重置次数：目标事实全部达成后上游未走优雅关闭握手的次数。
+        # 与 async_error_count 分开计，前者仍必须为 0（会话期内不容许任何异步错误）。
+        "teardown_error_count",
         "sideband_sni",
         "sideband_call_id_linked",
     }
@@ -107,7 +110,10 @@ def _facts_a11(facts: Any) -> dict[str, Any]:
     }:
         raise ScenarioReceiptError("A11 缺少成功的 started/SDP 事件。")
     if facts["async_error_count"] != 0 or isinstance(facts["async_error_count"], bool):
-        raise ScenarioReceiptError("A11 不允许存在异步 error。")
+        raise ScenarioReceiptError("A11 会话期内不允许存在异步 error。")
+    teardown = facts["teardown_error_count"]
+    if not isinstance(teardown, int) or isinstance(teardown, bool) or teardown < 0:
+        raise ScenarioReceiptError("A11 teardown_error_count 必须是非负整数。")
     if facts["sideband_sni"] != "api.openai.com":
         raise ScenarioReceiptError("A11 sideband SNI 不匹配。")
     if facts["sideband_call_id_linked"] is not True:

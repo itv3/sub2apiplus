@@ -42,6 +42,7 @@ from tools.official_client_capture.acceptance_contract import (  # noqa: E402
     RESULTS_SCHEMA_V2,
     build_contract_payload,
     contract_sha256,
+    expected_check_ids_for_side,
     load_profile,
 )
 
@@ -82,6 +83,7 @@ def run_side_assertion(
     rule_manifest: Path,
     expected_codex_version: str,
     expected_profile_sha256: str,
+    side: str,
 ) -> tuple[list[str], dict[str, Any]]:
     """执行单规则断言并返回**与 accept 期望逐字一致**的命令。
 
@@ -99,6 +101,7 @@ def run_side_assertion(
         rule_manifest=str(rule_manifest),
         expected_codex_version=expected_codex_version,
         expected_profile_sha256=expected_profile_sha256,
+        side=side,
         output=str(output),
     )
     # 命令里的 checker 是仓库相对路径，执行时在仓库根解析，产出的命令保持原样。
@@ -231,7 +234,8 @@ def build_results_document(
 def build_dual_wire_result(
     *,
     rule_id: str,
-    expected_check_ids: list[str],
+    official_expected_check_ids: list[str],
+    candidate_expected_check_ids: list[str],
     official: tuple[list[str], dict[str, Any], Path],
     candidate: tuple[list[str], dict[str, Any], Path],
     official_root: Path,
@@ -244,10 +248,10 @@ def build_dual_wire_result(
     official_command, official_document, official_output = official
     candidate_command, candidate_document, candidate_output = candidate
     verify_check_closure(
-        official_document, expected_check_ids, rule_id=rule_id, label="官方"
+        official_document, official_expected_check_ids, rule_id=rule_id, label="官方"
     )
     verify_check_closure(
-        candidate_document, expected_check_ids, rule_id=rule_id, label="候选"
+        candidate_document, candidate_expected_check_ids, rule_id=rule_id, label="候选"
     )
     return {
         "rule": rule_id,
@@ -348,7 +352,14 @@ def main() -> int:
     rule_results: list[dict[str, Any]] = []
     for rule_id in rule_ids:
         mode = validation_modes[rule_id]
-        expected_check_ids = list(expected_by_rule[rule_id])
+        # 侧别限定 check 不在本侧执行，期望集合必须按侧复算，否则闭合校验会
+        # 拿全集去比对一份合法缺项的结果文档。
+        candidate_expected_check_ids = expected_check_ids_for_side(
+            contract, rule_id, "candidate"
+        )
+        official_expected_check_ids = expected_check_ids_for_side(
+            contract, rule_id, "official"
+        )
         candidate_output = results_dir / f"{rule_id}.candidate.json"
         candidate = run_side_assertion(
             rule_id=rule_id,
@@ -359,6 +370,7 @@ def main() -> int:
             rule_manifest=rule_manifest_path,
             expected_codex_version=target_version,
             expected_profile_sha256=expected_profile_sha256,
+            side="candidate",
         )
         if mode == MODE_DUAL_WIRE:
             official_output = results_dir / f"{rule_id}.official.json"
@@ -371,11 +383,13 @@ def main() -> int:
                 rule_manifest=rule_manifest_path,
                 expected_codex_version=target_version,
                 expected_profile_sha256=expected_profile_sha256,
+                side="official",
             )
             rule_results.append(
                 build_dual_wire_result(
                     rule_id=rule_id,
-                    expected_check_ids=expected_check_ids,
+                    official_expected_check_ids=official_expected_check_ids,
+                    candidate_expected_check_ids=candidate_expected_check_ids,
                     official=(*official, official_output),
                     candidate=(*candidate, candidate_output),
                     official_root=official_root,
@@ -395,7 +409,7 @@ def main() -> int:
             rule_results.append(
                 build_candidate_profile_result(
                     rule_id=rule_id,
-                    expected_check_ids=expected_check_ids,
+                    expected_check_ids=candidate_expected_check_ids,
                     candidate=(*candidate, candidate_output),
                     candidate_root=candidate_root,
                     candidate_prefix=candidate_prefix,

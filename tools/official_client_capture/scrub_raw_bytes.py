@@ -44,6 +44,13 @@ RULES: list[tuple[re.Pattern[bytes], int]] = [
     (re.compile(rb"(?i)(set-cookie:\s*)([^\r\n]+)"), 2),
     # WS/JSON 帧里以字段形式出现的 token
     (re.compile(rb'("(?:access_token|id_token|refresh_token)"\s*:\s*")([^"]+)'), 2),
+    # 上游在 POST /oauth/token 响应里下发的 identity-signal 令牌，形如
+    # `ois1.<段>.<段>`，同时出现在 x-oai-is-update 响应头与响应体的 oai_is 字段。
+    # k52 的 A13 首次观测到它——k49／k50／k51 的同一 job 都没有，属上游新增下发；
+    # 首版脱敏规则不认这两个名字，令牌以明文留在 relay 原始字节里，被 seal 的
+    # jwt-shape 规则当场拦下。它是与账号绑定的短期凭据，必须与 access_token 同等对待。
+    (re.compile(rb"(?i)(x-oai-is-update:\s*)([^\r\n]+)"), 2),
+    (re.compile(rb'("oai_is"\s*:\s*")([^"]+)'), 2),
     # 分页游标：base64 解开是 {"scope":…,"creator_account_user_id":…}，含账号标识。
     # 出现在两处——响应体的 JSON 字段，与请求 URL 的 query。首版规则漏了这两个，
     # 复扫时残留 755 处（403 + 352）。
@@ -63,8 +70,13 @@ RULES: list[tuple[re.Pattern[bytes], int]] = [
 
 # 通用 token 特征——仅用于复扫告警。加密的 TLS 记录与压缩流里会有随机字节碰巧
 # 以 `eyJ` 开头，那不是凭据；因此复扫时只统计**前面有明确字段名**的命中。
+#
+# `ois1.` 也算明确前缀：identity-signal 令牌的形态是 `ois1.eyJ<载荷>.<签名>`，
+# JWT 主体前面隔着这个前缀，原先只认 bearer／引号／等号的前瞻一律漏过——k52 的
+# A13 因此复扫报 0 残留，却被 evidence guard 的 jwt-shape 拦下。复扫与 guard 判据
+# 一旦不齐，漏网的是真凭据而不是告警。
 GENERIC_TOKEN = re.compile(
-    rb"(?:bearer\s+|[\"']|=)(eyJ[A-Za-z0-9_\-]{40,}|sk-[A-Za-z0-9]{20,})", re.I
+    rb"(?:bearer\s+|[\"']|=|ois1\.)(eyJ[A-Za-z0-9_\-]{40,}|sk-[A-Za-z0-9]{20,})", re.I
 )
 
 # 占位前缀须同时满足两件事：一眼可知是脱敏值，并被最终 evidence guard 明确认作

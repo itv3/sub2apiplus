@@ -328,6 +328,7 @@
         "call_id_sha256",
         "sdp_or_started_event",
         "async_error_count",
+        "teardown_error_count",
         "sideband_sni",
         "sideband_call_id_linked"
       ],
@@ -354,6 +355,10 @@
         },
         "sideband_call_id_linked": {
           "const": true
+        },
+        "teardown_error_count": {
+          "type": "integer",
+          "minimum": 0
         }
       }
     },

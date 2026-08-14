@@ -34,19 +34,46 @@ OBSERVATION_SCHEMA_VERSION = "codex-candidate-observation/v1"
 RECEIPT_SCHEMA_VERSION = "codex-candidate-test-trace-receipt/v1"
 FACT_PREFIX = "CANDIDATE_TRACE_FACT "
 DEFAULT_MAPPING_RELATIVE_PATH = (
-    "tools/official_client_capture/candidate_test_fact_map_0_145_0.json"
+    "tools/official_client_capture/candidate_test_fact_map_0_147_0.json"
 )
 DEFAULT_PROFILE_RELATIVE_PATH = (
-    "tools/official_client_capture/candidate_rule_expectations_0_145_0.json"
+    "tools/official_client_capture/candidate_rule_expectations_0_147_0.json"
 )
 # 冻结映射内容完成后由离线测试固定；任何修改都必须显式更新并重新审核。
+#
+# 2026-08-13（R10）：随升级目标切到 0.147.0。映射会校验自身 codex_version 与 Campaign
+# 目标一致，0_145_0 那份声明 0.145.0，用在 0.147 Campaign 上必然报「版本与 Campaign
+# 目标不匹配」；而 0_147_0 那份的摘要又不等于旧冻结值——两份都用不了，trace 因此生成
+# 不出来，seal 卡在「opaque 原始证据未被结构化 trace 绑定」。两个常量必须与默认路径
+# 同批次更新，只改一个仍然是死锁。
+#
+# 映射内含 source_snapshot（13 个生产源码文件的摘要），trace 生成时会逐个复算比对。
+# 本次连带更新 `official_egress_codex_0145_profile.go` 那条（4 处引用）：该文件因补
+# `wham_settings_user` 端点定义（§10.2.1 第 4 条）而变更，映射建于补齐之前。
 FROZEN_MAPPING_SHA256 = (
-	"13eb15f45c92f216b2eb023d859d91f02c70a6026c4a5b7c252f861239e65319"
+    "7f1f560707737c3f7d25831093454413df1016c5465f5fefcae8dad3e8031a3f"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。
+#
+# 2026-08-13（R10）：0_147_0 断言画像由 k67 的 classify 迁移结果（
+# `classification/approved/assertion-profile.json`，已批准）原样承接，去掉批准态字段
+# 后与 0_145_0 模板同构；相对 0_145_0 有 7 条 rules 实质差异，含 0.147 新增出站面
+# `SPEC-EP-019`／wham-get-paths。
+#
+# 2026-08-14（R10）：把 k71 accept 期间收紧的 4 条 selector 同步回本树——此前它们只存在
+# 于 campaign 的批准清单里靠逐轮继承传递，下一轮从工具树重新迁移就会丢失。收紧的是
+# TLS-001／TLS-003 限定 `data.sni=chatgpt.com`（原先选中 api.github.com 等噪声）、
+# BODY-001／EP-022 用 `absent` 排除无 `labels.surface` 的探针面（原先用 `not_equal`，
+# 而字节中继面根本没有该标签，会被一并排除）。至此本树与 k71 批准清单 42 条逐字一致，
+# 相对 0_145_0 的实质差异由 7 条增至 11 条。
+#
+# 同步前已按冻结摘要变更纪律做载荷审核：验收契约 `bd2ccc52…` **未漂移**，
+# `rule_counts` 仍是 dual_wire=25／candidate_profile=17，`validation_modes`、
+# `expected_check_ids`、`side_restricted_checks`、`side_coverage` 四类载荷逐字不变
+# ——改动纯粹是 selector 收紧，不触及验收契约。
 FROZEN_PROFILE_SHA256 = (
-    "af4cfea8437d465284523bcd5b80feb199877f64953d7fc27d8f0dbca2271ed0"
+    "c3f655a2d9d8c3f3198219a31ee6aab67728afaf286d15754ae25e9e34a071ae"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

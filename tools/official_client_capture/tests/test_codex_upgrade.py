@@ -1147,6 +1147,7 @@ class CodexUpgradeTest(unittest.TestCase):
                 "bundle_provenance_sha256": "1" * 64,
                 "bundle_entry_count": 1,
                 "derived_provenance_sha256": None,
+                "candidate_trace_receipt_sha256": None,
                 "capture_manifest": {
                     "path": "capture-manifest.json",
                     "sha256": capture_binding["sha256"],
@@ -1468,15 +1469,15 @@ class CodexUpgradeTest(unittest.TestCase):
         for index, rule in enumerate(selected_rules):
             machine_bindings: dict[str, dict[str, str]] = {}
             commands: dict[str, list[str]] = {}
-            expected_check_ids = codex_upgrade._acceptance_expected_check_ids(
-                campaign_dir, classification, rule
-            )
             sides = (
                 (("official", official), ("candidate", candidate))
                 if validation_modes[rule] == "dual_wire"
                 else (("candidate", candidate),)
             )
             for side, stage in sides:
+                expected_check_ids = codex_upgrade._acceptance_expected_check_ids(
+                    campaign_dir, classification, rule, side
+                )
                 machine_path = machine_root / side / f"{rule}.json"
                 context = stage["assertion_context"]
                 command = codex_upgrade.build_machine_assertion_command(
@@ -1487,6 +1488,7 @@ class CodexUpgradeTest(unittest.TestCase):
                     rule_manifest=str(approved_rules),
                     expected_codex_version="0.146.0",
                     expected_profile_sha256=profile_reference["sha256"],
+                    side=side,
                     output=str(machine_path.resolve()),
                 )
                 machine_result = {
@@ -2794,5 +2796,184 @@ class CodexUpgradeTest(unittest.TestCase):
             )
 
 
+class ToolIdentitySideSplitTest(unittest.TestCase):
+    """工具身份按证据影响面分级：产出侧严格、评估侧放行且留痕。
+
+    这套判定替代了原先「任何工具漂移一律拒绝」的一刀切。分级的前提是评估侧文件
+    只读既有证据，改动后已封存字节逐字不变；因此本测试必须同时锁死两件事——
+    产出侧不得被放行，未登记的新文件不得被当成评估侧。
+    """
+
+    def _identity(self, entries):
+        payload = {
+            "entry_count": len(entries),
+            "files_sha256": codex_upgrade._fingerprint({"entries": entries}),
+            "entries": entries,
+            **codex_upgrade._tool_identity_sides(entries),
+        }
+        return payload
+
+    def test_real_tree_splits_into_both_sides(self):
+        identity = codex_upgrade._tool_identity(include_git=False)
+        self.assertEqual(
+            identity["entry_count"],
+            identity["production_count"] + identity["evaluation_count"],
+        )
+        self.assertGreater(identity["evaluation_count"], 0)
+        # 白名单里的每一项都必须真实存在，否则是登记了不存在的豁免。
+        paths = {entry["path"] for entry in identity["entries"]}
+        self.assertEqual(codex_upgrade._EVALUATION_SIDE_FILES - paths, set())
+
+    def test_unlisted_file_falls_back_to_production(self):
+        """fail-close：未登记文件必须落到产出侧，不能因为忘记登记被静默放行。"""
+        entries = [{"path": "brand_new_tool.py", "sha256": "a" * 64}]
+        sides = codex_upgrade._tool_identity_sides(entries)
+        self.assertEqual(sides["production_count"], 1)
+        self.assertEqual(sides["evaluation_count"], 0)
+
+    def test_drift_classifies_changed_paths(self):
+        before = [
+            {"path": "assertion_gate.py", "sha256": "a" * 64},
+            {"path": "run_candidate_core_capture.sh", "sha256": "b" * 64},
+        ]
+        after = [
+            {"path": "assertion_gate.py", "sha256": "c" * 64},
+            {"path": "run_candidate_core_capture.sh", "sha256": "b" * 64},
+        ]
+        drift = codex_upgrade._tool_identity_drift(
+            self._identity(after), self._identity(before)
+        )
+        self.assertEqual(drift["evaluation"], ["assertion_gate.py"])
+        self.assertEqual(drift["production"], [])
+
+    def test_drift_detects_added_and_removed_files(self):
+        before = [{"path": "assertion_gate.py", "sha256": "a" * 64}]
+        after = [
+            {"path": "assertion_gate.py", "sha256": "a" * 64},
+            {"path": "run_new_capture.sh", "sha256": "d" * 64},
+        ]
+        drift = codex_upgrade._tool_identity_drift(
+            self._identity(after), self._identity(before)
+        )
+        self.assertEqual(drift["production"], ["run_new_capture.sh"])
+        drift_removed = codex_upgrade._tool_identity_drift(
+            self._identity(before), self._identity(after)
+        )
+        self.assertEqual(drift_removed["production"], ["run_new_capture.sh"])
+
+    def test_evaluation_drift_ledger_appends_and_dedupes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            campaign = Path(directory)
+            before = [{"path": "assertion_gate.py", "sha256": "a" * 64}]
+            after = [{"path": "assertion_gate.py", "sha256": "c" * 64}]
+            expected, current = self._identity(before), self._identity(after)
+            drift = codex_upgrade._tool_identity_drift(current, expected)
+            codex_upgrade._record_evaluation_side_drift(
+                campaign, current, expected, drift
+            )
+            ledger_path = campaign / "tool-evaluation-drift.json"
+            self.assertTrue(ledger_path.is_file())
+            self.assertEqual(ledger_path.stat().st_mode & 0o777, 0o600)
+            ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+            self.assertEqual(
+                ledger["schema_version"],
+                codex_upgrade.TOOL_EVALUATION_DRIFT_SCHEMA,
+            )
+            self.assertEqual(len(ledger["records"]), 1)
+            self.assertEqual(
+                ledger["records"][0]["changed_files"], ["assertion_gate.py"]
+            )
+            # 同一评估侧状态重复放行不再追加。
+            codex_upgrade._record_evaluation_side_drift(
+                campaign, current, expected, drift
+            )
+            ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+            self.assertEqual(len(ledger["records"]), 1)
+            # 再次变化则必须留下第二条。
+            third = self._identity([{"path": "assertion_gate.py", "sha256": "e" * 64}])
+            codex_upgrade._record_evaluation_side_drift(
+                campaign,
+                third,
+                expected,
+                codex_upgrade._tool_identity_drift(third, expected),
+            )
+            ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+            self.assertEqual(len(ledger["records"]), 2)
+
+    def test_production_only_drift_writes_no_ledger(self):
+        with tempfile.TemporaryDirectory() as directory:
+            campaign = Path(directory)
+            before = [{"path": "run_candidate_core_capture.sh", "sha256": "a" * 64}]
+            after = [{"path": "run_candidate_core_capture.sh", "sha256": "b" * 64}]
+            expected, current = self._identity(before), self._identity(after)
+            drift = codex_upgrade._tool_identity_drift(current, expected)
+            self.assertEqual(drift["production"], ["run_candidate_core_capture.sh"])
+            codex_upgrade._record_evaluation_side_drift(
+                campaign, current, expected, drift
+            )
+            self.assertFalse((campaign / "tool-evaluation-drift.json").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class ExecutionTreeVerificationTest(unittest.TestCase):
+    """采集执行副本必须与受管树逐字一致。
+
+    k71 的根因：`_tool_identity` 只扫描本文件所在的受管树，而采集脚本与 relay 由
+    `$CAPTURE_MOUNT/tools/official_client_capture/` 执行，是另一份副本。两者漂移时
+    工具身份校验照样通过，跑的却是旧代码——受管树里 Cookie 与 Lite 两组修复都已就位，
+    执行副本停在更早版本，四条判据必败且无任何报警。
+    """
+
+    def _mirror(self, root: Path) -> Path:
+        """按受管口径把当前工具树复制一份到 root/tools/official_client_capture。"""
+
+        managed = Path(codex_upgrade.__file__).resolve().parent
+        target = root / "tools" / "official_client_capture"
+        for entry in codex_upgrade._tool_tree_entries(managed):
+            dst = target / entry["path"]
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes((managed / entry["path"]).read_bytes())
+        return target
+
+    def test_identical_copy_passes(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            self._mirror(root)
+            codex_upgrade._verify_execution_tree(root)
+
+    def test_drifted_copy_is_rejected_and_names_the_file(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = self._mirror(root)
+            drifted = target / "upstream_byte_relay.py"
+            drifted.write_bytes(drifted.read_bytes() + "\n# 旧副本\n".encode("utf-8"))
+            with self.assertRaises(codex_upgrade.ConfigurationError) as raised:
+                codex_upgrade._verify_execution_tree(root)
+        self.assertIn("upstream_byte_relay.py", str(raised.exception))
+
+    def test_missing_file_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            target = self._mirror(root)
+            (target / "upstream_byte_relay.py").unlink()
+            with self.assertRaises(codex_upgrade.ConfigurationError):
+                codex_upgrade._verify_execution_tree(root)
+
+    def test_absent_execution_root_is_skipped(self) -> None:
+        """执行位置不存在不是漂移，是路径配置问题，由采集脚本自身的解析负责。
+
+        本校验若把「必须存在」也管上，所有用假 capture_root 的单元测试都跑不了，
+        而真实采集机上该目录必然存在——收紧这一条只有代价没有收益。
+        """
+
+        with tempfile.TemporaryDirectory() as tmp:
+            codex_upgrade._verify_execution_tree(Path(tmp))
+
+    def test_execution_root_equal_to_managed_tree_is_allowed(self) -> None:
+        """本地直接在仓库内跑时两者同一目录，不应自我否决。"""
+
+        repo_root = Path(codex_upgrade.__file__).resolve().parents[2]
+        codex_upgrade._verify_execution_tree(repo_root)

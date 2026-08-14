@@ -23,6 +23,21 @@ PRODUCT_TRANSPORTS = (
 SUBJECTS = tuple(f"{product}-{transport}" for product, transport in PRODUCT_TRANSPORTS)
 SAFE_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 
+# 0.145→0.147 双轨采集的模型坐标权威定义。
+#
+# 收录进主线的唯一条件是上游 /models 元数据给出 use_responses_lite=false：主线判据
+# （BODY-006、EP-014、H1-004 等）整体建立在非 Lite 形态上，混进一个 Lite 模型会让
+# 全部主线样本的语义翻转，而不是少采一条。两个集合都实测自官方 /models 原文，
+# k51 官方证据：gpt-5.4／gpt-5.5／gpt-5.4-mini／gpt-5.3-codex-spark 为 false，
+# gpt-5.6-* 全系为 true。
+#
+# 主线只收录已在本升级中实际采过或即将采的两个，而不是所有 non-lite 模型——没被
+# 实测过的模型不进白名单，保持 fail-closed。改这两个集合必须同步 h1_wire_probe 的
+# 受控 /models 载荷与 extract_compaction_reason 的 ALLOWED_MODELS，
+# test_main_track_models.py 锁定三者一致。
+MAIN_TRACK_MODELS = ("gpt-5.4", "gpt-5.5")
+LITE_TRACK_MODELS = ("gpt-5.6-luna",)
+
 
 class ConfigurationError(ValueError):
     """抓包配置不满足安全或可比性约束。"""

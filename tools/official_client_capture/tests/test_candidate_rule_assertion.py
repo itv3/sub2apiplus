@@ -126,9 +126,11 @@ class CandidateRuleExpectationTest(unittest.TestCase):
             frame_labels_schema["propertyNames"]["pattern"],
             "^(0|[1-9][0-9]*)$",
         )
+        # 帧级标签的两条合法路径：直接解析原始字节（h1_request_stream），或候选侧
+        # 走 opaque+derive 后由派生 jsonl 承载帧观测（observation_jsonl）。
         self.assertEqual(
-            artifact_schema["allOf"][0]["then"]["properties"]["parser"]["const"],
-            "h1_request_stream",
+            artifact_schema["allOf"][0]["then"]["properties"]["parser"]["enum"],
+            ["h1_request_stream", "observation_jsonl"],
         )
 
     def test_profile_missing_rule_fails_closed(self) -> None:
@@ -474,7 +476,8 @@ class CandidateRuleAssertionTest(unittest.TestCase):
                 parser="opaque_bound_source",
             )
             with self.assertRaisesRegex(
-                AssertionConfigurationError, "仅支持 h1_request_stream"
+                AssertionConfigurationError,
+                "仅支持 h1_request_stream 或 observation_jsonl",
             ):
                 load_observations(manifest, evidence_root)
 
@@ -486,6 +489,129 @@ class CandidateRuleAssertionTest(unittest.TestCase):
             )
             with self.assertRaisesRegex(
                 AssertionConfigurationError, "不能覆盖 artifact labels"
+            ):
+                load_observations(manifest, evidence_root)
+
+    def test_frame_labels_merge_into_derived_observation_frames(self) -> None:
+        """候选侧 relay 走 opaque+derive，帧观测在派生 jsonl 里——标签必须同样落到帧上。
+
+        官方侧 relay 原件可直接以 h1_request_stream 解析，候选侧则先收口为
+        opaque_bound_source 再由 ACC-02b 派生器投影，两条路径的帧级标签语义必须一致，
+        否则 A06 的 warmup 帧在候选侧永远选不中。
+        """
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence_root = root / "evidence"
+            trace = evidence_root / "derived/A06/websocket_trace/conn001.jsonl"
+            trace.parent.mkdir(parents=True)
+            records = [
+                {
+                    "schema_version": "codex-candidate-observation/v1",
+                    "record_id": "conn001#frame-0",
+                    "scenario_id": "A06",
+                    "record_type": "websocket_frame",
+                    "data": {
+                        "opcode": "TEXT",
+                        "event_type": "response.create",
+                        "frame_index": 0,
+                    },
+                },
+                {
+                    "schema_version": "codex-candidate-observation/v1",
+                    "record_id": "conn001#frame-1",
+                    "scenario_id": "A06",
+                    "record_type": "websocket_frame",
+                    "data": {
+                        "opcode": "TEXT",
+                        "event_type": "response.create",
+                        "frame_index": 1,
+                    },
+                },
+            ]
+            trace.write_text(
+                "\n".join(json.dumps(record, ensure_ascii=False) for record in records)
+                + "\n",
+                encoding="utf-8",
+            )
+            manifest = root / "capture-manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "codex-candidate-capture-manifest/v1",
+                        "codex_version": "0.145.0",
+                        "capture_id": "frame-label-derived",
+                        "status": "complete",
+                        "artifacts": [
+                            {
+                                "path": "derived/A06/websocket_trace/conn001.jsonl",
+                                "sha256": file_sha256(trace),
+                                "kind": "websocket_trace",
+                                "parser": "observation_jsonl",
+                                "scenario_ids": ["A06"],
+                                "labels": {"variant": "default"},
+                                "frame_labels": {"0": {"frame_role": "warmup"}},
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            _, observations = load_observations(manifest, evidence_root)
+
+            self.assertEqual(len(observations), 2)
+            self.assertEqual(observations[0].labels["frame_role"], "warmup")
+            self.assertEqual(observations[0].labels["variant"], "default")
+            self.assertNotIn("frame_role", observations[1].labels)
+
+    def test_derived_frame_labels_reject_missing_frame_index(self) -> None:
+        """派生路径同样要求帧索引真实存在，防止标签指向不存在的帧而静默失效。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence_root = root / "evidence"
+            trace = evidence_root / "derived/A06/websocket_trace/conn001.jsonl"
+            trace.parent.mkdir(parents=True)
+            trace.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "codex-candidate-observation/v1",
+                        "record_id": "conn001#frame-0",
+                        "scenario_id": "A06",
+                        "record_type": "websocket_frame",
+                        "data": {"opcode": "TEXT", "frame_index": 0},
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            manifest = root / "capture-manifest.json"
+            manifest.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "codex-candidate-capture-manifest/v1",
+                        "codex_version": "0.145.0",
+                        "capture_id": "frame-label-derived-missing",
+                        "status": "complete",
+                        "artifacts": [
+                            {
+                                "path": "derived/A06/websocket_trace/conn001.jsonl",
+                                "sha256": file_sha256(trace),
+                                "kind": "websocket_trace",
+                                "parser": "observation_jsonl",
+                                "scenario_ids": ["A06"],
+                                "labels": {"variant": "default"},
+                                "frame_labels": {"3": {"frame_role": "warmup"}},
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(
+                AssertionConfigurationError, "不存在的 WebSocket 帧"
             ):
                 load_observations(manifest, evidence_root)
 

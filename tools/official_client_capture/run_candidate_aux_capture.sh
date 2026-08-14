@@ -34,7 +34,9 @@ account_id=${ACCOUNT_ID:?必须提供专用 OpenAI OAuth ACCOUNT_ID}
 api_key_id=${API_KEY_ID:-1}
 run_id=${RUN_ID:?必须提供 RUN_ID}
 relay_port=${RELAY_PORT:-18443}
-model=${MODEL:-gpt-5.6-sol}
+# 默认取 Lite 轨的权威模型（capturelib.model.LITE_TRACK_MODELS[0]），
+# tests/test_main_track_models.py 锁定一致；原默认 gpt-5.6-sol 在 free 账号上 404。
+model=${MODEL:-gpt-5.6-luna}
 image_model=${IMAGE_MODEL:-gpt-image-2}
 
 for numeric in "$account_id" "$api_key_id" "$relay_port"; do
@@ -60,6 +62,48 @@ if [[ -z $admin_token || ! $admin_token =~ ^[A-Za-z0-9._~-]+$ ]]; then
   echo "必须通过 ADMIN_BEARER_TOKEN 或只读 token 文件提供管理凭据。" >&2
   exit 2
 fi
+
+# 校验 token 剩余有效期。管理 token 只签 24 小时，过期时的失败极具迷惑性：走普通 API
+# 的 A09／A11 流量与 pcap 全部正常，只有依赖管理接口的 A12／A13／A14 三个场景 actions
+# 全空、pcap 0～24 字节（k71 因此半失败）。格式合法不等于还能用，必须看 exp。
+admin_token_min_ttl=${ADMIN_TOKEN_MIN_TTL_SECONDS:-1800}
+if [[ ! $admin_token_min_ttl =~ ^[0-9]+$ ]]; then
+  echo "ADMIN_TOKEN_MIN_TTL_SECONDS 必须是非负整数。" >&2
+  exit 2
+fi
+admin_token_ttl_report=$(
+  ADMIN_TOKEN_VALUE="$admin_token" MIN_TTL="$admin_token_min_ttl" python3 - <<'PY'
+import base64, json, os, sys, time
+
+token = os.environ["ADMIN_TOKEN_VALUE"]
+min_ttl = int(os.environ["MIN_TTL"])
+parts = token.split(".")
+if len(parts) != 3:
+    sys.exit("管理 token 不是三段式 JWT，无法解析有效期。")
+payload_raw = parts[1]
+try:
+    padded = payload_raw + "=" * (-len(payload_raw) % 4)
+    payload = json.loads(base64.urlsafe_b64decode(padded))
+except Exception as error:  # noqa: BLE001 —— 任何解析失败都必须拒绝启动
+    sys.exit(f"管理 token 载荷无法解码：{error}")
+exp = payload.get("exp")
+if not isinstance(exp, int):
+    sys.exit("管理 token 载荷缺少整数 exp，拒绝启动。")
+remaining = exp - int(time.time())
+expires_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(exp))
+if remaining < min_ttl:
+    sys.exit(
+        f"管理 token 剩余有效期 {remaining}s 少于要求的 {min_ttl}s"
+        f"（过期时刻 {expires_at}）。请在服务容器内用 state/jwtgen-bin 重签，"
+        "输出按 ^JWT= 提取后重试。"
+    )
+print(f"管理 token 剩余 {remaining}s，过期时刻 {expires_at}")
+PY
+) || {
+  echo "$admin_token_ttl_report" >&2
+  exit 2
+}
+echo "$admin_token_ttl_report"
 
 work_dir="$capture_root/runs/$run_id"
 container_work_dir="$capture_mount/runs/$run_id"
@@ -211,6 +255,7 @@ original_hosts_hash=""
 original_ca_hash=""
 restored_hosts_hash=""
 restored_ca_hash=""
+service_container_id_before=""
 dummy_refresh=""
 
 # 合成 relay 把 chatgpt.com 劫持到容器内端口；relay 停止后仍在途的真实出站会拿到
@@ -423,6 +468,29 @@ print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
 PY
 }
 
+# 从 stdin 读 /etc/hosts 内容，剔除 Docker 为容器自身写的
+# 「<地址> <实例 ID 前 12 位>」行后按行排序取摘要。
+# 算法必须与 codex_upgrade_environment_probe.py 的 _container_hosts_digest 逐字一致，
+# 否则本脚本自查通过、环境探针却判定漂移。
+hosts_digest_excluding_self() {
+  CANDIDATE_AUX_SELF_ID="$1" python3 -c '
+import hashlib
+import os
+import sys
+
+identifier = os.environ["CANDIDATE_AUX_SELF_ID"].strip()
+self_names = {identifier, identifier[:12]}
+retained = []
+for line in sys.stdin.read().splitlines():
+    fields = line.split()
+    if len(fields) == 2 and fields[1] in self_names:
+        continue
+    retained.append(line)
+payload = "".join(f"{line}\n" for line in sorted(retained))
+print(hashlib.sha256(payload.encode("utf-8")).hexdigest())
+'
+}
+
 restore_environment() {
   local original_exit_code=$?
   local proxy_value fallback_value current_proxy_state
@@ -483,11 +551,22 @@ restore_environment() {
   fi
 
   # Docker restart 会重建 /etc/hosts；最后按字节恢复运行前快照，随后不再重启。
-  # 恢复部署会重建容器、由 Docker 重新生成 /etc/hosts，必须先拉回原部署，
-  # 再把运行前的 hosts 回灌进最终这个容器，否则复核必然不一致。
   restore_deploy_without_live_attestation || restore_failed=1
 
-  if [[ -s $runtime_dir/hosts.before ]]; then
+  # 只有容器实例没被换掉时才回灌快照。
+  #
+  # 恢复部署会 compose 重建服务容器，Docker 为新实例重新生成 /etc/hosts，其中的
+  # 自引用行是「<容器 IP> <新实例 ID 前 12 位>」。环境探针
+  # （codex_upgrade_environment_probe.py 的 _container_hosts_digest）正是靠
+  # 「主机名等于当前容器 ID」来识别并剔除这两行，从而吸收 A11 必然发生的重建。
+  # 此时若把运行前快照按字节灌回去，自引用行会带上旧实例 ID，探针认不出、只能
+  # 按「人为写入的劫持行」保留，after 摘要必然偏离 before —— 恢复动作本身反而
+  # 制造出 environment_contaminated。重建后的 hosts 由 Docker 全新生成，不含任何
+  # 采集期写入的劫持行，不回灌才是与 before 等价的状态。
+  service_container_id_after=$(docker inspect -f '{{.Id}}' "$service_container" 2>/dev/null || true)
+  if [[ -s $runtime_dir/hosts.before
+        && -n $service_container_id_before
+        && $service_container_id_after == "$service_container_id_before" ]]; then
     docker cp "$runtime_dir/hosts.before" "$service_container:/tmp/candidate-aux-hosts.restore" \
       >/dev/null 2>&1 || restore_failed=1
     docker exec "$service_container" sh -c \
@@ -535,7 +614,18 @@ restore_environment() {
       restore_failed=1
     fi
   fi
-  restored_hosts_hash=$(docker exec "$service_container" sha256sum /etc/hosts 2>/dev/null | awk '{print $1}')
+  if [[ -n $service_container_id_before
+        && $service_container_id_after == "$service_container_id_before" ]]; then
+    # 容器实例未变：hosts 已按字节回灌，用最严格的字节比对。
+    restored_hosts_hash=$(docker exec "$service_container" sha256sum /etc/hosts 2>/dev/null | awk '{print $1}')
+  else
+    # 容器被 compose 重建：自引用行必然改写，字节比对恒不成立。改用环境探针的
+    # 同一语义（剔除自引用行后按行排序）比对，两端摘要都按该语义重算才可比。
+    original_hosts_hash=$(hosts_digest_excluding_self "$service_container_id_before" \
+      <"$runtime_dir/hosts.before" 2>/dev/null || true)
+    restored_hosts_hash=$(docker exec "$service_container" cat /etc/hosts 2>/dev/null |
+      hosts_digest_excluding_self "$service_container_id_after" 2>/dev/null || true)
+  fi
   restored_ca_hash=$(docker exec "$service_container" sha256sum \
     /etc/ssl/certs/ca-certificates.crt 2>/dev/null | awk '{print $1}')
   [[ $restored_hosts_hash == "$original_hosts_hash" ]] || restore_failed=1
@@ -676,6 +766,7 @@ if ! grep -q 'candidate-aux-v1' <<<"$relay_help" ||
 fi
 
 docker cp "$service_container:/etc/hosts" "$runtime_dir/hosts.before" >/dev/null
+service_container_id_before=$(docker inspect -f '{{.Id}}' "$service_container")
 docker cp "$service_container:/etc/ssl/certs/ca-certificates.crt" \
   "$runtime_dir/ca-certificates.before" >/dev/null
 chmod 0600 "$runtime_dir/hosts.before" "$runtime_dir/ca-certificates.before"
@@ -852,7 +943,7 @@ compact_installation_id=33333333-3333-4333-8333-333333333333
 compact_session_id=11111111-1111-4111-8111-111111111111
 compact_window_id="$compact_session_id:0"
 compact_body=$(printf \
-  '{"model":"%s","input":[],"parallel_tool_calls":false,"prompt_cache_key":"%s","text":{"verbosity":"low"}}' \
+  '{"model":"%s","input":[],"parallel_tool_calls":false,"reasoning":{"effort":"medium"},"prompt_cache_key":"%s","text":{"verbosity":"low"}}' \
   "$model" "$compact_session_id")
 for variant in prime default beta turn_state; do
   extra_headers=()

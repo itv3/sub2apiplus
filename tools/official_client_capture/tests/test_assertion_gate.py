@@ -301,13 +301,19 @@ class GateFixture(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def _run(self, side: str) -> dict:
+    def _run(
+        self,
+        side: str,
+        *,
+        profile: dict | None = None,
+        contract: dict | None = None,
+    ) -> dict:
         return gate.run_assertion_gate(
             bundle_dir=self.bundle_dir,
             source_roots=self.roots,
             side=side,
-            profile=self.profile,
-            contract=self.contract,
+            profile=profile if profile is not None else self.profile,
+            contract=contract if contract is not None else self.contract,
             target_version=TARGET_VERSION,
         )
 
@@ -336,6 +342,222 @@ class AssertionGatePassTest(GateFixture):
         with self.assertRaises(gate.AssertionGateError) as raised:
             self._run("candidate")
         self.assertIn("SPEC-INT-001", str(raised.exception))
+
+    def test_negative_existence_check_is_exempt_from_reachability(self) -> None:
+        """``count_equal: 0`` 的通过形态就是选不中，可达性预检不得据此拒绝封存。
+
+        SPEC-EP-021 的 v2-no-legacy-call 正属此类：默认 V2 批次**不得**出现
+        /responses/compact 请求。强制它"至少命中一条"会与判据语义直接互斥。
+        判据本身仍由 accept 的离线重放评估。
+        """
+
+        self._build_bundle(include_candidate_trace=False)
+        self._write_manifest(include_candidate_trace=False)
+        profile = _profile()
+        profile["rules"][0]["checks"].append(
+            {
+                "id": "absent-endpoint",
+                "description": "不得出现该端点",
+                "select": {
+                    "record_type": "http_request",
+                    "where": [
+                        {
+                            "path": "data.path",
+                            "operator": "equal",
+                            "value": "/backend-api/codex/responses/compact",
+                        }
+                    ],
+                },
+                "assertion": {"operator": "count_equal", "value": 0},
+            }
+        )
+        receipt = self._run(
+            "official",
+            profile=profile,
+            contract=contract_module.build_contract_payload(profile),
+        )
+        # 该 check 计入已核对总数，但不要求命中任何观测。
+        self.assertEqual(receipt["checked_check_count"], 3)
+
+    def test_side_restricted_check_skipped_on_excluded_side(self) -> None:
+        """侧别限定 check 在不适用的一侧不参与可达性——依据登记在验收契约。
+
+        这里用真实登记项 SPEC-WS-002／optional-missing-covered：它 select 的
+        ``labels.variant == optional_missing`` 在候选侧结构性造不出（见
+        acceptance_contract.SIDE_RESTRICTED_CHECKS），官方侧则必须照常要求命中。
+        """
+
+        self._build_bundle(include_candidate_trace=True)
+        self._write_manifest(include_candidate_trace=True)
+        profile = _profile()
+        profile["rules"].append(
+            {
+                "rule_id": "SPEC-WS-002",
+                "scenario_ids": ["A05"],
+                "description": "WS 线序",
+                "checks": [
+                    {
+                        "id": "optional-missing-covered",
+                        "description": "至少保留一个缺少可选头后的独立扰动样本",
+                        "select": {
+                            "record_type": "http_request",
+                            "where": [
+                                {
+                                    "path": "labels.variant",
+                                    "operator": "equal",
+                                    "value": "optional_missing",
+                                }
+                            ],
+                        },
+                        "assertion": {"operator": "count_at_least", "value": 1},
+                    }
+                ],
+            }
+        )
+        payload = contract_module.build_contract_payload(profile)
+        self.assertEqual(
+            payload["side_restricted_checks"],
+            {"SPEC-WS-002": {"optional-missing-covered": ["official"]}},
+        )
+
+        # 候选侧：跳过该 check，其余规则照常通过。
+        receipt = self._run("candidate", profile=profile, contract=payload)
+        self.assertEqual(receipt["checked_rule_count"], 4)
+
+        # 官方侧：该 check 仍受可达性约束，证据里没有该样本就必须拒绝封存。
+        with self.assertRaises(gate.AssertionGateError) as raised:
+            self._run("official", profile=profile, contract=payload)
+        self.assertIn("optional-missing-covered", str(raised.exception))
+
+
+class CandidateTraceGateTest(GateFixture):
+    """``candidate-trace/`` 被排除在收口 provenance 之外，必须由收据自证。
+
+    候选侧 internal record type（transport_fallback／connection_lifecycle 等）在抓包面
+    根本不存在，只能由 candidate_test_trace 从 go test -json 日志投影到该目录。放行
+    这个前缀等于在 bundle 里开了一个不受 provenance 约束的目录，因此门禁必须逐项
+    重放收据：产物摘要、manifest 登记、目录内无夹带文件。
+    """
+
+    def _write_trace(
+        self,
+        *,
+        status: str = "pass",
+        tamper_artifact: bool = False,
+        extra_file: bool = False,
+        omit_receipt: bool = False,
+        register_in_manifest: bool = True,
+    ) -> None:
+        trace_dir = self.bundle_dir / "candidate-trace"
+        trace_dir.mkdir()
+        payload = (
+            json.dumps(
+                {
+                    **CANDIDATE_TRACE_RECORD,
+                    "record_id": "trace-surface-1",
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        trace_path = trace_dir / "A03" / "facts.jsonl"
+        trace_path.parent.mkdir()
+        trace_path.write_text(payload, encoding="utf-8")
+        digest = hashlib.sha256(trace_path.read_bytes()).hexdigest()
+        if tamper_artifact:
+            trace_path.write_text(payload + "\n", encoding="utf-8")
+        if extra_file:
+            (trace_dir / "stray.jsonl").write_text("{}\n", encoding="utf-8")
+        if not omit_receipt:
+            (trace_dir / "trace-receipt.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": gate.TRACE_RECEIPT_SCHEMA,
+                        "status": status,
+                        "generated": {
+                            "capture_manifest": {
+                                "path": "candidate-trace/trace-manifest.json",
+                                "sha256": "0" * 64,
+                            },
+                            "trace_artifacts": [
+                                {
+                                    "path": "candidate-trace/A03/facts.jsonl",
+                                    "sha256": digest,
+                                    "kind": "process_trace",
+                                }
+                            ],
+                        },
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+        # 把 trace 产物登记进 manifest，与真实合并 manifest 的形态一致。
+        manifest_path = self.bundle_dir / gate.MANIFEST_FILENAME
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if register_in_manifest:
+            manifest["artifacts"].append(
+                {
+                    "path": "candidate-trace/A03/facts.jsonl",
+                    "sha256": hashlib.sha256(trace_path.read_bytes()).hexdigest(),
+                    "kind": "process_trace",
+                    "parser": "observation_jsonl",
+                    "scenario_ids": ["A03"],
+                    "labels": {"transport": "http"},
+                }
+            )
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+
+    def test_candidate_trace_receipt_is_replayed(self) -> None:
+        self._build_bundle(include_candidate_trace=True)
+        self._write_manifest(include_candidate_trace=True)
+        self._write_trace()
+        receipt = self._run("candidate")
+        self.assertIsNotNone(receipt["candidate_trace_receipt_sha256"])
+
+    def test_absent_trace_dir_leaves_receipt_field_null(self) -> None:
+        self._build_bundle(include_candidate_trace=True)
+        self._write_manifest(include_candidate_trace=True)
+        receipt = self._run("candidate")
+        self.assertIsNone(receipt["candidate_trace_receipt_sha256"])
+
+    def test_trace_without_receipt_fails(self) -> None:
+        self._build_bundle(include_candidate_trace=True)
+        self._write_manifest(include_candidate_trace=True)
+        self._write_trace(omit_receipt=True)
+        with self.assertRaisesRegex(gate.AssertionGateError, "缺少自证收据"):
+            self._run("candidate")
+
+    def test_tampered_trace_artifact_fails(self) -> None:
+        self._build_bundle(include_candidate_trace=True)
+        self._write_manifest(include_candidate_trace=True)
+        self._write_trace(tamper_artifact=True)
+        with self.assertRaisesRegex(gate.AssertionGateError, "相对收据发生漂移"):
+            self._run("candidate")
+
+    def test_unregistered_trace_artifact_fails(self) -> None:
+        self._build_bundle(include_candidate_trace=True)
+        self._write_manifest(include_candidate_trace=True)
+        self._write_trace(register_in_manifest=False)
+        with self.assertRaisesRegex(gate.AssertionGateError, "未按同一摘要登记"):
+            self._run("candidate")
+
+    def test_stray_file_in_trace_dir_fails(self) -> None:
+        self._build_bundle(include_candidate_trace=True)
+        self._write_manifest(include_candidate_trace=True)
+        self._write_trace(extra_file=True)
+        with self.assertRaisesRegex(gate.AssertionGateError, "收据未声明的文件"):
+            self._run("candidate")
+
+    def test_failed_trace_status_is_rejected(self) -> None:
+        self._build_bundle(include_candidate_trace=True)
+        self._write_manifest(include_candidate_trace=True)
+        self._write_trace(status="fail")
+        with self.assertRaisesRegex(gate.AssertionGateError, "状态不是 pass"):
+            self._run("candidate")
 
 
 class AssertionGateNegativeTest(GateFixture):
@@ -415,6 +637,7 @@ class GateReceiptContractTest(unittest.TestCase):
             "bundle_provenance_sha256": "0" * 64,
             "bundle_entry_count": 1,
             "derived_provenance_sha256": None,
+            "candidate_trace_receipt_sha256": None,
             "capture_manifest": {"path": gate.MANIFEST_FILENAME, "sha256": "0" * 64},
             "acceptance_contract_sha256": "0" * 64,
             "artifact_count": 1,

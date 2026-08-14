@@ -107,6 +107,7 @@ def _validate_rule(
         "kind",
         "parser",
         "labels",
+        "frame_labels",
         "derive",
         "rationale",
     }
@@ -164,6 +165,45 @@ def _validate_rule(
             raise EvidenceCatalogError(
                 f"job {job_id} 声明派生时原件 parser 必须是 opaque_bound_source：{glob}"
             )
+    frame_labels = rule.get("frame_labels")
+    if frame_labels is not None:
+        # 帧级标签只在能产出 websocket_frame 观测的规则上有意义：
+        # 派生 websocket_trace，或直接以 h1_request_stream 解析。
+        if (derive or {}).get("kind") != "websocket_trace" and rule.get(
+            "parser"
+        ) != "h1_request_stream":
+            raise EvidenceCatalogError(
+                f"job {job_id} 的 frame_labels 仅支持派生 websocket_trace "
+                f"或 h1_request_stream 解析：{glob}"
+            )
+        if not isinstance(frame_labels, dict) or not frame_labels:
+            raise EvidenceCatalogError(
+                f"job {job_id} 的 frame_labels 必须是非空对象：{glob}"
+            )
+        labels = rule["labels"]
+        for frame_index, values in frame_labels.items():
+            if not isinstance(frame_index, str) or not frame_index.isdigit():
+                raise EvidenceCatalogError(
+                    f"job {job_id} 的 frame_labels 索引非法：{frame_index!r}"
+                )
+            if (
+                not isinstance(values, dict)
+                or not values
+                or any(
+                    not isinstance(k, str) or not isinstance(v, str) or not v.strip()
+                    for k, v in values.items()
+                )
+            ):
+                raise EvidenceCatalogError(
+                    f"job {job_id} 的 frame_labels[{frame_index!r}] "
+                    f"必须是非空字符串映射：{glob}"
+                )
+            conflicts = sorted(set(labels) & set(values))
+            if conflicts:
+                raise EvidenceCatalogError(
+                    f"job {job_id} 的 frame_labels[{frame_index!r}] "
+                    f"不能覆盖 labels：{conflicts}"
+                )
 
 
 def _relative_files(root: Path) -> list[str]:
@@ -288,15 +328,21 @@ def build_catalog(
                                 "connection_id": Path(relative).stem,
                             }
                         )
-                        artifacts.append(
-                            {
-                                "path": derived_target,
-                                "kind": derive["kind"],
-                                "parser": "observation_jsonl",
-                                "scenario_ids": [scenario_id],
-                                "labels": dict(rule["labels"]),
+                        derived_artifact = {
+                            "path": derived_target,
+                            "kind": derive["kind"],
+                            "parser": "observation_jsonl",
+                            "scenario_ids": [scenario_id],
+                            "labels": dict(rule["labels"]),
+                        }
+                        # 帧级标签只挂在产出 websocket_frame 观测的派生 artifact 上，
+                        # 由断言加载器按 data.frame_index 叠加到帧事实。
+                        if rule.get("frame_labels"):
+                            derived_artifact["frame_labels"] = {
+                                key: dict(value)
+                                for key, value in rule["frame_labels"].items()
                             }
-                        )
+                        artifacts.append(derived_artifact)
         if not matched_any:
             raise EvidenceCatalogError(f"job {job_id} 未编目任何证据")
 

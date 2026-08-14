@@ -170,6 +170,107 @@ class AcceptanceContractMutationTest(unittest.TestCase):
             contract.load_profile(path)
 
 
+class SideRestrictedChecksTest(unittest.TestCase):
+    """侧别限定 check：只允许结构性不可达，且必须逐条可核。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.profile = _load_repository_profile()
+        cls.payload = contract.build_contract_payload(cls.profile)
+
+    def test_only_ws002_optional_missing_is_restricted(self) -> None:
+        """登记表就是全部豁免；新增一条必须在此显式露出。"""
+
+        self.assertEqual(
+            contract.SIDE_RESTRICTED_CHECKS,
+            {("SPEC-WS-002", "optional-missing-covered"): ("official",)},
+        )
+        self.assertEqual(
+            self.payload["side_restricted_checks"],
+            {"SPEC-WS-002": {"optional-missing-covered": ["official"]}},
+        )
+
+    def test_restricted_check_runs_official_only(self) -> None:
+        self.assertTrue(
+            contract.check_applies_to_side(
+                self.payload, "SPEC-WS-002", "optional-missing-covered", "official"
+            )
+        )
+        self.assertFalse(
+            contract.check_applies_to_side(
+                self.payload, "SPEC-WS-002", "optional-missing-covered", "candidate"
+            )
+        )
+
+    def test_unlisted_checks_run_on_both_sides(self) -> None:
+        for check_id in ("remaining-lowercase", "default-swap-remove-order"):
+            for side in ("official", "candidate"):
+                self.assertTrue(
+                    contract.check_applies_to_side(
+                        self.payload, "SPEC-WS-002", check_id, side
+                    ),
+                    f"{check_id} 不应被侧别限定排除（{side}）",
+                )
+
+    def test_expected_check_ids_differ_only_by_restricted_entry(self) -> None:
+        official = contract.expected_check_ids_for_side(
+            self.payload, "SPEC-WS-002", "official"
+        )
+        candidate = contract.expected_check_ids_for_side(
+            self.payload, "SPEC-WS-002", "candidate"
+        )
+        self.assertEqual(official, self.payload["expected_check_ids"]["SPEC-WS-002"])
+        self.assertEqual(
+            set(official) - set(candidate), {"optional-missing-covered"}
+        )
+
+    def test_other_rules_keep_identical_check_sets_on_both_sides(self) -> None:
+        for rule_id, expected in self.payload["expected_check_ids"].items():
+            if rule_id == "SPEC-WS-002":
+                continue
+            for side in ("official", "candidate"):
+                self.assertEqual(
+                    contract.expected_check_ids_for_side(self.payload, rule_id, side),
+                    expected,
+                    f"{rule_id} 不应有侧别差异",
+                )
+
+    def test_renamed_check_breaks_closed(self) -> None:
+        """规则还在但 check 改名／被删——豁免已失效，必须失败关闭而非静默留存。"""
+
+        mutated = copy.deepcopy(self.profile)
+        for rule in mutated["rules"]:
+            if rule["rule_id"] != "SPEC-WS-002":
+                continue
+            for check in rule["checks"]:
+                if check["id"] == "optional-missing-covered":
+                    check["id"] = "optional-missing-covered-v2"
+        with self.assertRaisesRegex(
+            contract.AcceptanceContractError, "不存在的 check"
+        ):
+            contract.derive_side_restricted_checks(mutated)
+
+    def test_absent_rule_skips_restriction(self) -> None:
+        """画像整条规则缺席时豁免不适用——夹具画像与规则增删都会走到这里。"""
+
+        mutated = copy.deepcopy(self.profile)
+        mutated["rules"] = [
+            rule for rule in mutated["rules"] if rule["rule_id"] != "SPEC-WS-002"
+        ]
+        self.assertEqual(contract.derive_side_restricted_checks(mutated), {})
+
+    def test_restriction_does_not_change_rule_grouping(self) -> None:
+        """豁免只影响 check 执行侧，不得改变 25／17 分组或覆盖矩阵。"""
+
+        self.assertEqual(
+            self.payload["validation_modes"]["SPEC-WS-002"], contract.MODE_DUAL_WIRE
+        )
+        self.assertEqual(self.payload["rule_counts"][contract.MODE_DUAL_WIRE], 25)
+        self.assertEqual(
+            self.payload["rule_counts"][contract.MODE_CANDIDATE_PROFILE], 17
+        )
+
+
 class _temporary_profile:
     """把变异画像落成临时文件供 load_profile 走完整读取路径。"""
 

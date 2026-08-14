@@ -34,6 +34,10 @@ from tools.official_client_capture.relay_extract import (
     parse_h1_stream,
     parse_ws_frames,
 )
+from tools.official_client_capture.acceptance_contract import (
+    check_applies_to_side,
+    derive_side_restricted_checks,
+)
 
 
 PROFILE_SCHEMA_VERSION = "codex-candidate-rule-expectations/v1"
@@ -564,9 +568,13 @@ def _validate_capture_manifest(
         if not isinstance(labels, dict):
             raise AssertionConfigurationError(f"artifacts[{index}].labels 必须是对象")
         if "frame_labels" in artifact:
-            if parser != "h1_request_stream":
+            # 帧级标签只对能产出 websocket_frame 观测的两条路径有意义：
+            # h1_request_stream 直接解析原始字节，或派生器产出的 observation_jsonl
+            # （candidate 侧 relay 走 opaque+derive，帧观测在派生 jsonl 中）。
+            if parser not in {"h1_request_stream", "observation_jsonl"}:
                 raise AssertionConfigurationError(
-                    f"artifacts[{index}].frame_labels 仅支持 h1_request_stream"
+                    f"artifacts[{index}].frame_labels 仅支持 h1_request_stream "
+                    "或 observation_jsonl"
                 )
             frame_labels = artifact["frame_labels"]
             if not isinstance(frame_labels, dict) or not frame_labels:
@@ -804,7 +812,10 @@ def _trace_observations(
     scenario_ids: Sequence[str],
     labels: Mapping[str, Any],
     declared_artifact_scenarios: Mapping[str, set[str]],
+    frame_labels: Mapping[str, Mapping[str, str]] | None = None,
 ) -> list[Observation]:
+    frame_labels = frame_labels or {}
+    seen_frame_indexes: set[int] = set()
     observations: list[Observation] = []
     for index, record in enumerate(_structured_records(path, parser)):
         if not isinstance(record, dict):
@@ -864,6 +875,14 @@ def _trace_observations(
                 f"{cross_scenario_sources}"
             )
         evidence_paths = tuple(dict.fromkeys([artifact_path, *source_artifacts]))
+        # 帧级标签与 _h1_observations 同语义：只叠加到 websocket_frame 事实，
+        # 帧索引取派生记录 data 内的 frame_index。
+        observation_labels = dict(labels)
+        if record_type == "websocket_frame":
+            frame_index = data.get("frame_index")
+            if isinstance(frame_index, int) and not isinstance(frame_index, bool):
+                seen_frame_indexes.add(frame_index)
+                observation_labels.update(frame_labels.get(str(frame_index), {}))
         observations.append(
             Observation(
                 record_id=record_id,
@@ -871,9 +890,19 @@ def _trace_observations(
                 record_type=record_type,
                 artifact_path=artifact_path,
                 evidence_paths=evidence_paths,
-                labels=dict(labels),
+                labels=observation_labels,
                 data=data,
             )
+        )
+    missing_frame_indexes = sorted(
+        int(frame_index)
+        for frame_index in frame_labels
+        if int(frame_index) not in seen_frame_indexes
+    )
+    if missing_frame_indexes:
+        raise AssertionConfigurationError(
+            f"artifact frame_labels 引用了不存在的 WebSocket 帧："
+            f"{artifact_path}: {missing_frame_indexes}"
         )
     if not observations:
         raise AssertionConfigurationError(f"结构化 trace 为空：{artifact_path}")
@@ -937,6 +966,7 @@ def load_observations(
                 artifact["scenario_ids"],
                 artifact["labels"],
                 declared_artifact_scenarios,
+                artifact.get("frame_labels"),
             )
         if not parsed:
             raise AssertionConfigurationError(
@@ -1321,13 +1351,25 @@ def _expected_payload(assertion: Mapping[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in assertion.items()}
 
 
+def _side_restriction_contract(profile: Mapping[str, Any]) -> dict[str, Any]:
+    """只取侧别限定投影，不构造完整契约——本模块不承担契约冻结校验。"""
+
+    return {"side_restricted_checks": derive_side_restricted_checks(profile)}
+
+
 def evaluate_rule(
     profile: Mapping[str, Any],
     rule_id: str,
     observations: Sequence[Observation],
     capture_manifest: Mapping[str, Any],
+    side: str | None = None,
 ) -> list[dict[str, Any]]:
-    """执行一条冻结规则的全部检查并返回结构化结果。"""
+    """执行一条冻结规则的全部检查并返回结构化结果。
+
+    给出 ``side`` 时跳过验收契约登记为本侧不适用的 check——这类 check 依赖的实验
+    条件在本侧结构性不可能成立（依据见 acceptance_contract.SIDE_RESTRICTED_CHECKS），
+    强制执行只会把"造不出该条件"记成失败。不给 ``side`` 时按全集评估。
+    """
 
     rules = {
         rule["rule_id"]: rule
@@ -1378,7 +1420,12 @@ def evaluate_rule(
             "evidence_paths": sorted(coverage_paths),
         }
     ]
+    side_contract = _side_restriction_contract(profile) if side else None
     for check in rule["checks"]:
+        if side_contract is not None and not check_applies_to_side(
+            side_contract, rule_id, check["id"], side
+        ):
+            continue
         matched = _select_observations(
             observations, check["select"], rule["scenario_ids"]
         )
@@ -1427,6 +1474,7 @@ def build_assertion_command(
     rule_manifest: str = "tools/official_client_capture/codex_upgrade_rules_0_145_0.json",
     expected_codex_version: str | None = None,
     expected_profile_sha256: str | None = None,
+    side: str | None = None,
 ) -> list[str]:
     """构造应写入验收 submission 的稳定 checker 参数数组。"""
 
@@ -1448,6 +1496,8 @@ def build_assertion_command(
         command.extend(["--expected-codex-version", expected_codex_version])
     if expected_profile_sha256 is not None:
         command.extend(["--expected-profile-sha256", expected_profile_sha256])
+    if side is not None:
+        command.extend(["--side", side])
     command.extend(["--output", output])
     return command
 
@@ -1502,6 +1552,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--expected-codex-version")
     parser.add_argument("--expected-profile-sha256")
+    parser.add_argument(
+        "--side",
+        choices=("official", "candidate"),
+        help="验收侧；给出时跳过契约登记为本侧不适用的 check",
+    )
     parser.add_argument("--output", type=Path, required=True)
     return parser
 
@@ -1525,7 +1580,7 @@ def main(argv: Iterable[str] | None = None) -> int:
             expected_version,
         )
         checks = evaluate_rule(
-            profile, args.rule_id, observations, capture_manifest
+            profile, args.rule_id, observations, capture_manifest, args.side
         )
     except (AssertionConfigurationError, OSError, ValueError) as error:
         checks = [

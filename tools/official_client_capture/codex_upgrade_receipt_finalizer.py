@@ -1034,11 +1034,19 @@ def finalize_restoration(
                     if (
                         after_watermark.row_count is None
                         or before_watermark.row_count is None
-                        or after_watermark.row_count < before_watermark.row_count
                     ):
                         raise ReceiptFinalizerError(
-                            f"database_state_preserved 的 {table} 行数水位下降"
+                            f"database_state_preserved 的 {table} 行数水位缺失"
                         )
+                    # 行数下降本身不再致命：这些表由服务的保留期清理任务周期性删除过期
+                    # 记录，清理周期一旦落进采集窗口就会让行数净减，与采集无关。
+                    # k65 实证：usage_logs 的 max_id 从 100585 增至 100641（采集确实在写入），
+                    # 行数却由 99946 减至 99942，仅因窗口内跑了两轮 [Cleanup]。
+                    #
+                    # 真正的防篡改由另外两道把关，二者都不受保留期清理影响：
+                    #   1. 上方 primary_key_fingerprints 差集——采集前已存在的记录若被删除
+                    #      即报「缺少前置主键指纹」，本轮未触发，说明删的是更早的老记录；
+                    #   2. 下方 max_id 单调性——删表重建或回滚会让最大 ID 回落。
                     before_max_id = before_watermark.max_id or 0
                     after_max_id = after_watermark.max_id or 0
                     if after_max_id < before_max_id:

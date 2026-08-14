@@ -80,7 +80,9 @@ class CandidateAuxCaptureScriptTest(unittest.TestCase):
         self.assertIn('"legacy_compact": 4', self.source)
 
     def test_text_and_image_scenarios_use_separate_models(self) -> None:
-        self.assertIn("model=${MODEL:-gpt-5.6-sol}", self.source)
+        # 文本模型默认值由 test_main_track_models 钉在 LITE_TRACK_MODELS 上；
+        # 这里只要求两者是**不同的两个变量**，不再重复锁定具体取值。
+        self.assertIn("model=${MODEL:-gpt-5.6-luna}", self.source)
         self.assertIn("image_model=${IMAGE_MODEL:-gpt-image-2}", self.source)
 
         compact = self.source[
