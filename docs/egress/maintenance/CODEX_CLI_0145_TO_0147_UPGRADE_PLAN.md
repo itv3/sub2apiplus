@@ -622,12 +622,12 @@ k71 是本次升级第一次拿到真实 accept 重放结论：**候选侧 42 �
 | # | 判据／check | 实测现象 | 定性与下一步 |
 |---|---|---|---|
 | 1 | `SPEC-TLS-003`／`extension-order-diversity` | `artifact_count=3`，判据要 4 | **挂账**。`minimum_distinct_orders` 已按 §10.8.8 降为 1；`minimum_artifacts=4` 刻意保留——缺的那份 WS pcap 来自已登记的 mitm 缺口（§10.8.10）。**判据不迁就采集缺口**，缺口恢复后自然通过 |
-| 2 | `SPEC-EP-015`／`search-header-order` | 出站无 `cookie`（官方侧每条都带） | 真实行为差异。relay prime 修复未生效，须查 relay 是否收到 `Set-Cookie`、网关是否透传 |
+| 2 | `SPEC-EP-015`／`search-header-order` | 出站无 `cookie`（官方侧每条都带） | **根因已解决**：修复（`legacy_compact_ordinal`）一直在受管树里，但采集执行的是 `/root/oauth-capture/tools/` 下的旧副本（§10.8.14）。执行位置已于 2026-08-14 同步，等重跑验证 |
 | 3 | `SPEC-EP-022`／`image-header-order` | 同上 | 与第 2 条同源，一处修复覆盖两条 |
-| 4 | `SPEC-EP-014`／`legacy-default-headers` | 缺 `x-openai-internal-codex-responses-lite` | Lite 轨样本仍未产出。aux job 已写死 `gpt-5.6-luna`（§10.3），但头仍缺 |
-| 5 | `SPEC-BODY-006`／`lite-top-level-omission`＋`lite-tools-omission` | k71 换同源画像后新暴露 | Lite 轨相关，与第 4 条可能同源，一并排查 |
+| 4 | `SPEC-EP-014`／`legacy-default-headers` | 缺 `x-openai-internal-codex-responses-lite` | **根因同第 2 条**（§10.8.14）：job 定义里的 `gpt-5.6-luna` 只在受管树，执行副本 `gpt-5.6` 零命中。执行位置已同步，等重跑验证 |
+| 5 | `SPEC-BODY-006`／`lite-top-level-omission`＋`lite-tools-omission` | k71 换同源画像后新暴露 | 同第 4 条，根因为执行副本漂移（§10.8.14），已同步，等重跑验证 |
 | 6 | `SPEC-EP-019`／`wham-get-paths` | 只发 `usage`＋`rate-limit`，缺 `settings/user` | **修复已写好但没进镜像**（2026-08-14 查明）：镜像来自 `candidate-build-k57`，其门控是 `mode == previous`，候选采集时不成立故不发请求；工作区与 k70 采集树早已改成按端点存在性判断。B 轮重建镜像即解决。专述见 §10.2.1 |
-| 7 | `SPEC-HDR-002`／`residency-positive` | `x-openai-internal-codex-residency` 为 `<absent>` | 新暴露。待确认是账号不具备 us residency（条件未造出）还是真实缺陷 |
+| 7 | `SPEC-HDR-002`／`residency-positive` | `x-openai-internal-codex-residency` 为 `<absent>`（选中 1 条观测：`candidate-frozen-core/A04/relay/conn003`） | **不是「条件未造出」，也不是代码缺陷**（2026-08-14 定性）：采集脚本确实造了条件（`set_account_features us` 改账号 extra 的`official_codex_enforce_residency` 并 `restart_service`）；画像 10 个端点都有 `managed_residency_present`／Slot 85 槽位；代码链路自洽——`integration.go:319` 写 `ConditionalHeaders` →`identity_authority.go:388` 的 `conditionalField` 填 `facts.ManagedResidency` → compiler 的条件（`:764`）与取值（`:839`）都读它，`identity.go:168` 还有一致性校验。**断点在运行时数据**：请求时 `account.GetExtraString` 读不到 `us`。首要怀疑是 §10.8 k48 记录的机制——候选流量经服务重新评估授权后**原子写回** `accounts.extra`，把采集脚本设的值覆盖掉。下一轮重跑时先查 DB 与 `runtime_audit` 坐实 |
 
 第 2～7 条都**改判据解决不了**，必须动 `backend/` 并重新构建候选镜像——那是独立变更集。
 其中**第 6 条 `EP-019` 的代码已经写好**（在工作区与 k70 采集树里，见 §10.2.1），
