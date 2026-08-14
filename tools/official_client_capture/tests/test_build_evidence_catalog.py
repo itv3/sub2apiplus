@@ -207,6 +207,64 @@ class RepositoryDeclarationTest(unittest.TestCase):
             declared <= known, f"声明引用了不存在的 job：{sorted(declared - known)}"
         )
 
+    def test_candidate_core_direct_catalogs_both_http_and_websocket_pcaps(self) -> None:
+        """核心 direct 的 HTTP 与 WS 抓包必须同时进入目录。"""
+
+        entry = next(
+            item
+            for item in self.declaration["entries"]
+            if item["job_id"] == "candidate-core-direct"
+        )
+        by_glob = {rule["glob"]: rule for rule in entry["rules"]}
+        websocket = by_glob["direct/codex-ws-*/egress.pcap"]
+        self.assertEqual(websocket["scenario_ids"], ["A02"])
+        self.assertEqual(websocket["parser"], "pcap_client_hello")
+        self.assertEqual(
+            websocket["labels"],
+            {
+                "transport": "websocket",
+                "ca_mode": "system",
+                "surface": "direct",
+            },
+        )
+
+    def test_a04_models_and_residency_connections_do_not_overlap(self) -> None:
+        """A04 的启动 models GET 不得占用 residency 正例连接。"""
+
+        entry = next(
+            item
+            for item in self.declaration["entries"]
+            if item["job_id"] == "candidate-frozen-core"
+        )
+        by_glob = {rule["glob"]: rule for rule in entry["rules"]}
+        models = by_glob[
+            "scenarios/A04/relay/conn00[135].client_to_upstream.bin"
+        ]
+        residency = by_glob[
+            "scenarios/A04/relay/conn004.client_to_upstream.bin"
+        ]
+        self.assertNotIn("residency", models["labels"])
+        self.assertEqual(residency["labels"]["residency"], "us")
+
+    def test_ep022_header_order_excludes_standalone_probe(self) -> None:
+        """Cookie 线序只验收 prime 后的 generation/edit 双样本。"""
+
+        profile_path = (
+            Path(__file__).resolve().parents[1]
+            / "candidate_rule_expectations_0_147_0.json"
+        )
+        profile = json.loads(profile_path.read_text(encoding="utf-8"))
+        rule = next(
+            item for item in profile["rules"] if item["rule_id"] == "SPEC-EP-022"
+        )
+        check = next(
+            item for item in rule["checks"] if item["id"] == "image-header-order"
+        )
+        self.assertIn(
+            {"operator": "absent", "path": "labels.surface"},
+            check["select"]["where"],
+        )
+
     def test_declared_scenarios_belong_to_job(self) -> None:
         """wire 证据的场景归属必须落在 job 的冻结场景内。
 

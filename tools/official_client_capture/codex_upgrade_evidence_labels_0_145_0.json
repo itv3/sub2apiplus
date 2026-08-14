@@ -1071,6 +1071,20 @@
             "surface": "direct"
           },
           "rationale": "direct 面不安装自定义 CA（A01 precondition），subject 为 codex-http。"
+        },
+        {
+          "glob": "direct/codex-ws-*/egress.pcap",
+          "scenario_ids": [
+            "A02"
+          ],
+          "kind": "pcap",
+          "parser": "pcap_client_hello",
+          "labels": {
+            "transport": "websocket",
+            "ca_mode": "system",
+            "surface": "direct"
+          },
+          "rationale": "核心 direct 矩阵与补采矩阵使用独立批次真实触发 codex-ws；两批 pcap 共同构成 A02 的独立握手样本，避免已采集字节因目录漏登记而被静默排除。"
         }
       ]
     },
@@ -1357,7 +1371,7 @@
           "rationale": "抓包面与 relay 同一跳，TLS ClientHello 由 pcap 直接解析；服务容器已装抓包 CA（ca_mode=custom），pcap 面才标 ca_mode。"
         },
         {
-          "glob": "scenarios/A04/relay/conn00[145].client_to_upstream.bin",
+          "glob": "scenarios/A04/relay/conn00[135].client_to_upstream.bin",
           "scenario_ids": [
             "A04"
           ],
@@ -1398,7 +1412,7 @@
           "rationale": "驱动第 1 个 POST 是 baseline 轮：set_account_features unset false（不设置 residency），请求体明文（脚本不带 Content-Encoding），构成 residency 负例与 BODY-002 responses-plain 的 plain 样本。"
         },
         {
-          "glob": "scenarios/A04/relay/conn003.client_to_upstream.bin",
+          "glob": "scenarios/A04/relay/conn004.client_to_upstream.bin",
           "scenario_ids": [
             "A04"
           ],
@@ -1417,7 +1431,7 @@
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "驱动第 2 个 POST 是 residency-us 轮：set_account_features us false 将账号 extra 的 official_codex_enforce_residency 置 us，residency=us 由该采集参数推出，供 HDR-002 residency 正例选样。"
+          "rationale": "账号特性切换会重启服务并先产生一条 models GET，因此第 2 个 POST 是 conn004：set_account_features us false 将账号 extra 的 official_codex_enforce_residency 置 us，residency=us 由该采集参数与驱动轮次共同推出，供 HDR-002 residency 正例选样。"
         },
         {
           "glob": "scenarios/A04/relay/conn00[67].client_to_upstream.bin",

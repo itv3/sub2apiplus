@@ -72,8 +72,12 @@ FROZEN_MAPPING_SHA256 = (
 # `rule_counts` 仍是 dual_wire=25／candidate_profile=17，`validation_modes`、
 # `expected_check_ids`、`side_restricted_checks`、`side_coverage` 四类载荷逐字不变
 # ——改动纯粹是 selector 收紧，不触及验收契约。
+#
+# 2026-08-15（R11）：EP-022/image-header-order 排除带 `labels.surface` 的
+# 独立 images 探针。该探针没有 Cookie 建立前置，只用于端点和 body 取证；
+# Cookie 线序仍由 frozen-aux 中经过 prime 的 generation/edit 双样本验收。
 FROZEN_PROFILE_SHA256 = (
-    "c3f655a2d9d8c3f3198219a31ee6aab67728afaf286d15754ae25e9e34a071ae"
+    "459a45c065e32236d46bfa126c34df69263c5d077cee70634744ca56063884ac"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

@@ -3129,6 +3129,10 @@
                 "operator": "equal",
                 "path": "labels.endpoint_class",
                 "value": "images"
+              },
+              {
+                "operator": "absent",
+                "path": "labels.surface"
               }
             ]
           }
