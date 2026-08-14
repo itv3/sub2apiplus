@@ -211,12 +211,38 @@ func (s *OpenAIQuotaService) queryUsage(
 	agentIdentity := s.isAgentIdentityAccount(ctx, accountID)
 
 	var payload OpenAIQuotaUsage
+	settingsQueried := false
+	// 该端点的有无由**当前发布指针解析到的画像**决定，不按 active/previous 槽位判断：
+	// 槽位只表达「哪一份发布在生效」，与版本没有固定对应——候选期把目标画像装进
+	// previous，生产启用后 Active 才是目标版本，用槽位当版本开关两个阶段必错一个。
+	// 画像里没有该端点时，settingsSupported 为 false，本次调用维持原有两条 GET。
+	_, settingsProfileErr := resolveCodexEndpointForMode(
+		mode, codexEndpointID(officialCodexEndpointWhamSettingsUser),
+	)
+	settingsSupported := settingsProfileErr == nil
 	for recovered := false; ; {
 		quotaHeaders, expectedTaskID, headerErr := s.buildCodexQuotaHeaders(
 			callCtx, mode, accountID, accessToken, chatGPTAccountID,
 		)
 		if headerErr != nil {
 			return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_QUOTA_AUTH_FAILED", "failed to build upstream authentication: %v", headerErr)
+		}
+		if includeResetCreditDetails && settingsSupported && !settingsQueried {
+			// 官方 WHAM 客户端在配额链路前先读一次用户设置（0.147 受控出站面实测
+			// 34 次）。设置响应只作为客户端行为收据，不参与配额投影，因此失败只告警、
+			// 不影响配额查询本身。
+			settingsQueried = true
+			settingsStatus, _, settingsErr := s.doCodexQuotaRequest(
+				callCtx,
+				accountID,
+				proxyURL,
+				officialCodexEndpointWhamSettingsUser,
+				quotaHeaders,
+				nil,
+			)
+			if settingsErr != nil || settingsStatus < http.StatusOK || settingsStatus >= http.StatusMultipleChoices {
+				slog.Warn("openai_quota_settings_user_failed", "account_id", accountID, "status", settingsStatus, "error", settingsErr)
+			}
 		}
 		status, responseBody, err := s.doCodexQuotaRequest(
 			callCtx,

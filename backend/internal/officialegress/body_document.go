@@ -306,7 +306,7 @@ func extractCompilerOwnedBodyFields(
 	if endpointID == "responses_compact" {
 		for _, name := range []string{
 			"tool_choice", "store", "stream", "stream_options", "include",
-			"service_tier", "text", "client_metadata",
+			"service_tier", "client_metadata",
 		} {
 			if _, present := document.value(name); present {
 				document.omit(name)

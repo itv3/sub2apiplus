@@ -25,6 +25,28 @@ import (
 
 const candidateTraceFactPrefix = "CANDIDATE_TRACE_FACT "
 
+// candidateTraceTargetProfile 解析本源码树的**目标**画像，而不是写死某个版本号。
+//
+// 依据是候选构建的既定槽位约定：egresscatalogstage 把待验收的目标画像装进
+// previous 槽位并保持 Active 不变（catalog_stage.go 的 candidate_release_mode
+// 固定为 previous，且导入时机器断言「候选导入意外修改了当前 Active」）。因此
+//   - 主仓库：active 与 previous 同为 0.145.0，本函数返回 0.145.0；
+//   - 候选源码树：active=0.145.0、previous=目标版本，本函数返回目标版本。
+//
+// surface identity 事实（a15.*）的 user_agent_prefix 必须随目标画像变化，否则
+// 候选验收侧的 SPEC-HDR-005 会拿到上一版本的 UA。写死版本号则两侧只能满足一
+// 侧：写 0.145 候选侧判据失败，写 0.147 主仓库根本没有该画像、测试直接报
+// 「未知 Codex 官方出站版本画像」。
+//
+// 这里不额外断言"必须是 0.147"：目标版本是候选树的属性，测试不重复声明它。
+// 版本若解析错误，产出的 user_agent_prefix 随即不符，accept 重放照样失败关闭。
+func candidateTraceTargetProfile(t *testing.T) *officialCodexVersionProfile {
+	t.Helper()
+	profile, err := resolveCodexVersionProfileForMode(officialClientProfileModePrevious)
+	require.NoError(t, err)
+	return profile
+}
+
 type candidateTraceFactEnvelope struct {
 	SchemaVersion string         `json:"schema_version"`
 	FactID        string         `json:"fact_id"`
@@ -60,8 +82,8 @@ func candidateTraceSHA256(value string) string {
 }
 
 func TestCandidateTraceCodex0145RuntimeAndBoundaryFacts(t *testing.T) {
-	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
-	require.NoError(t, err)
+	profile := candidateTraceTargetProfile(t)
+	targetVersion := profile.Version
 
 	execUserAgent, err := profile.RenderUserAgent(officialCodexSurfaceExec, true)
 	require.NoError(t, err)
@@ -69,11 +91,11 @@ func TestCandidateTraceCodex0145RuntimeAndBoundaryFacts(t *testing.T) {
 	require.NoError(t, err)
 	modelsWithoutSuffix, err := profile.RenderUserAgent(officialCodexSurfaceExec, false)
 	require.NoError(t, err)
-	require.True(t, strings.HasPrefix(execUserAgent, "codex_exec/0.145.0 "))
-	require.True(t, strings.HasSuffix(execUserAgent, "(codex_exec; 0.145.0)"))
-	require.True(t, strings.HasPrefix(tuiUserAgent, "codex-tui/0.145.0 "))
-	require.True(t, strings.HasSuffix(tuiUserAgent, "(codex-tui; 0.145.0)"))
-	require.NotContains(t, modelsWithoutSuffix, "(codex_exec; 0.145.0)")
+	require.True(t, strings.HasPrefix(execUserAgent, "codex_exec/"+targetVersion+" "))
+	require.True(t, strings.HasSuffix(execUserAgent, "(codex_exec; "+targetVersion+")"))
+	require.True(t, strings.HasPrefix(tuiUserAgent, "codex-tui/"+targetVersion+" "))
+	require.True(t, strings.HasSuffix(tuiUserAgent, "(codex-tui; "+targetVersion+")"))
+	require.NotContains(t, modelsWithoutSuffix, "(codex_exec; "+targetVersion+")")
 
 	modelsState, err := resolveOfficialCodexRuntimeState(
 		officialCodex0145RuntimeIngress(modelsWithoutSuffix, "codex_cli_rs"),

@@ -45,6 +45,7 @@ const (
 	officialCodexEndpointWhamUsage              = "wham_usage"
 	officialCodexEndpointWhamResetCredits       = "wham_rate_limit_reset_credits"
 	officialCodexEndpointWhamConsumeResetCredit = "wham_rate_limit_reset_credits_consume"
+	officialCodexEndpointWhamSettingsUser       = "wham_settings_user"
 	officialCodexEndpointOAuthRefresh           = "oauth_refresh"
 	officialCodexEndpointFilesCreate            = "files_create"
 	officialCodexEndpointFilesBlobUpload        = "files_blob_upload"

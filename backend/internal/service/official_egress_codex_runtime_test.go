@@ -90,6 +90,25 @@ func TestOfficialCodex0145RuntimeStateUsesManagedAccountConditions(t *testing.T)
 	require.ErrorContains(t, err, "只允许 us")
 }
 
+func TestOfficialCodex0145RuntimeStateProjectsIngressBetaPresence(t *testing.T) {
+	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
+	require.NoError(t, err)
+	userAgent, err := profile.RenderUserAgent(officialCodexSurfaceExec, true)
+	require.NoError(t, err)
+	ingress := officialCodex0145RuntimeIngress(userAgent, "codex_exec")
+	ingress.Request.Header.Set("x-codex-beta-features", "candidate_aux_beta")
+
+	state, err := resolveOfficialCodexRuntimeState(
+		ingress,
+		officialEgressTestAccount(145, PlatformOpenAI),
+		officialClientProfileModeActive,
+		officialClientProfileModeActive,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "present", state.ConditionalHeaders["x-codex-beta-features"])
+	require.NoError(t, validateOfficialCodexRuntimeState(state))
+}
+
 func TestOfficialCodex0145RuntimeStateIgnoresIngressWireIdentity(t *testing.T) {
 	profile, err := resolveCodexVersionProfile(officialCodexVersion0145)
 	require.NoError(t, err)

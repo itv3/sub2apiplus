@@ -23,6 +23,7 @@ const (
 
 var officialCodexTrustedConditionalHeaders = map[string]string{
 	"x-openai-internal-codex-residency":     officialCodexConditionResidency,
+	"x-codex-beta-features":                 officialCodexConditionBetaFeatures,
 	"x-openai-subagent":                     officialCodexConditionSubagent,
 	"x-openai-memgen-request":               officialCodexConditionMemoryGeneration,
 	"x-codex-parent-thread-id":              officialCodexConditionParentThread,
@@ -41,6 +42,7 @@ type officialCodexIngressRuntimeSnapshot struct {
 	MemoryGeneration          string
 	ParentThreadID            string
 	TurnMetadata              string
+	BetaFeatures              string
 }
 
 // WithOfficialCodexIngressRuntime 在路由入口保存原始进程身份与 feature。
@@ -75,6 +77,7 @@ func officialCodexIngressRuntimeSnapshotFromGin(c *gin.Context) officialCodexIng
 		MemoryGeneration:          strings.TrimSpace(c.GetHeader("x-openai-memgen-request")),
 		ParentThreadID:            strings.TrimSpace(c.GetHeader("x-codex-parent-thread-id")),
 		TurnMetadata:              strings.TrimSpace(c.GetHeader("x-codex-turn-metadata")),
+		BetaFeatures:              strings.TrimSpace(c.GetHeader("x-codex-beta-features")),
 	}
 }
 
@@ -319,6 +322,12 @@ func resolveOfficialCodexRuntimeStateFromSnapshot(
 			state.ConditionalHeaders["x-responsesapi-include-timing-metrics"] = "true"
 		}
 	}
+	// compact 的 beta 槽位由入站请求明确携带时成立。只冻结“非空存在”这一
+	// 结构化事实，出站值仍由版本画像的 constant/feature 规则生成，避免把
+	// 任意入站字符串原样转发到官方上游。
+	if strings.TrimSpace(snapshot.BetaFeatures) != "" {
+		state.ConditionalHeaders["x-codex-beta-features"] = "present"
+	}
 	_ = endpointIDs
 
 	subagent := snapshot.Subagent
@@ -522,6 +531,15 @@ func validateOfficialCodexRuntimeState(state officialCodexRuntimeState) error {
 		case "x-codex-parent-thread-id":
 			if _, parseErr := uuid.Parse(value); parseErr != nil {
 				return fmt.Errorf("Codex 0.145.0 parent thread 必须是 UUID")
+			}
+		case "x-codex-beta-features":
+			// 这条消息刻意不带版本字面量。SPEC §3.1 要求稳定执行引擎不散落按版本
+			// 的常量，同 switch 内其余分支的带版本前缀是基线已容忍的历史遗留：本
+			// 函数在候选发布指针下校验的是目标版本运行态，那些前缀届时都是误导。
+			// 新增分支不再复制该写法，否则 official_egress_version_leak_ast_test.go
+			// 会按 §3.1 拦下（该门禁连注释里的三段版本字面量一并扫描）。
+			if value != "present" {
+				return fmt.Errorf("Codex 条件头 %s 只允许存在性标记", name)
 			}
 		}
 	}

@@ -40,6 +40,20 @@ func TestAttemptBodyDocumentExtractsOwnedFieldsWithoutRebuildingSource(t *testin
 	}
 }
 
+func TestAttemptBodyDocumentKeepsCompactTextField(t *testing.T) {
+	body, _, err := PrepareOfficialCodexAttemptBody(
+		"responses_compact",
+		[]byte(`{"model":"gpt-5.6-luna","input":[],"parallel_tool_calls":false,"reasoning":{"effort":"medium"},"text":{"verbosity":"low"}}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	semantic, ok := body.ReplayableBytes()
+	if !ok || !bytes.Contains(semantic, []byte(`"text":{"verbosity":"low"}`)) {
+		t.Fatalf("compact text 字段在语义 Body 抽取阶段被错误删除：%q", semantic)
+	}
+}
+
 func TestAttemptBodyDocumentCloneAndRetryDoNotShareDirtyOverlay(t *testing.T) {
 	raw := []byte(`{"model":"gpt-5","prompt_cache_key":"caller","input":[]}`)
 	body, _, err := PrepareOfficialCodexAttemptBody("responses_http", raw)

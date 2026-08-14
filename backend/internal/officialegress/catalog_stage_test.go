@@ -3,6 +3,7 @@ package officialegress
 import (
 	"bytes"
 	"encoding/json"
+	"path"
 	"strings"
 	"testing"
 
@@ -59,11 +60,26 @@ func TestBuildStagedReleaseCatalogKeepsActiveAndPlacesTargetInPrevious(t *testin
 		previous.ReleaseDigest() == active.ReleaseDigest() {
 		t.Fatal("目标画像未进入独立 Previous 候选坐标")
 	}
+	baseFiles, err := base.RuntimeCatalogFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
 	files, err := staged.RuntimeCatalogFiles()
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantFiles := len(base.snapshots.ToDoc().Snapshots) + 1 + 3
+	wantFiles := len(baseFiles)
+	targetFile := path.Join("profiles", input.TargetVersion, input.ProfileDigest+".json")
+	targetExists := false
+	for _, file := range baseFiles {
+		if file.Path == targetFile {
+			targetExists = true
+			break
+		}
+	}
+	if !targetExists {
+		wantFiles++
+	}
 	if len(files) != wantFiles {
 		t.Fatalf("候选 RuntimeCatalog 文件数=%d，期望 %d", len(files), wantFiles)
 	}
