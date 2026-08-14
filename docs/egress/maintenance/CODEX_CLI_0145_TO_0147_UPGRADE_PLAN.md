@@ -571,33 +571,67 @@ campaign 冻结的 amd64 capture 容器内抓包。而**官方与候选共用同
 |---|---|---|
 | ① | `stage-profile` 产出资产 | ✅ 已完成 |
 | ② | 资产放进源码树 `backend/internal/officialegress/` | ✅ 已放（4 新增 3 改动，0.145 两份逐字保留） |
-| ③ | **过 6 个契约测试** | ❌ **卡在这，需要决策** |
+| ③ | **过 6 个契约测试** | 🔄 **已修 3 个，剩 3 个**（见下） |
 | ④ | 提交 | — |
 | ⑤ | 重建候选镜像（ARM64 交叉编译，约 7 分钟） | — |
 | ⑥ | 部署到 DMIT → 候选采集 → Kilo 两入口 → seal → compare → accept | — |
 
-**第 ③ 步的 6 个测试**（`officialegress` 4 个 ＋ `compositioncontract` 1 ＋ `releasecontract` 1），前提都假设 active/previous 同版本，而夹具现在正确地变成了
-active=0.145／previous=0.147（正是 §7.1 要的候选阶段状态）：
+**第 ③ 步的 6 个测试**，前提都假设 active/previous 同版本，而夹具现在正确地变成了
+active=0.145／previous=0.147（正是 §7.1 要的候选阶段状态）。逐个查完，**不是原先以为的
+「4 纯适配 ＋ 2 取舍」，而是 3／1／2**：
 
-- **4 个是纯适配，必须做**：3 个是合成 catalog 只改 Active、Previous 却指向真实 0.147 而
-  合成 snapshots 里没有它；1 个是 `validated` 端点集合缺 `wham_settings_user`
-  （画像 17 个端点，sink 侧只接了 16 个）。
-- **2 个涉及取舍**（`compositioncontract` 的 `TestPurposeAndModeRemainExplicitCoordinates`
-  与 `releasecontract` 的 `TestReleaseGraphKeepsPurposeAndModeIdentity`）：它们要证明
-  「purpose+mode 是显式坐标、不被版本号折叠」，特意用同版本夹具排除「靠版本号区分」这条
-  捷径。夹具变混版本后 `BuildID`／`WireID` 本来就不同，**这两个测试原本的检出能力随之消失**。
+| 测试 | 性质 | 状态 |
+|---|---|---|
+| `TestChangeset2MixedVersionCatalogRequiresThreeDistinctCoordinates` | 合成 catalog 只改 Active，Previous 却指向真实 0.147，而合成 snapshots 里没有它 | ✅ **已修**：把发布图里所有非 Active 节点引用的真实 snapshot 一并纳入 |
+| `TestTransportReceiptTransitionBindsTransportPerReleaseDigest` | 同上 | ✅ **已修**：同上 |
+| `TestChangeset2SyntheticProfileRollbackMatrixHasNoMixedFacts` | 只替换 previous 的 Snapshot、没动 Build，节点内「快照版本与 Build 版本不一致」 | ✅ **已修**：previous 节点的发布坐标一并降回合成画像版本 |
+| `TestCompilerAcceptsProfileShapedStaticTargetsAcrossModes` | `validated` 端点集合缺 `wham_settings_user` | ❌ **不是纯适配**，见下 |
+| `TestPurposeAndModeRemainExplicitCoordinates`（`compositioncontract`） | 前提「active/previous 应当版本号相同」 | ❌ **待决策** |
+| `TestReleaseGraphKeepsPurposeAndModeIdentity`（`releasecontract`） | 前提「当前夹具应证明同版本、同画像快照可以对应不同发布」 | ❌ **待决策** |
 
-> ### ⚠️ 待决策：这 2 个测试怎么改
+> 合成的异版本目标已从 `0.147.0` 改为 `0.149.0`（提为文件级常量
+> `syntheticHigherVersion`）：真实 previous 已是 0.147，撞车会让「异版本」退化成同版本，
+> 那个测试就白测了。版本泄漏门禁的基线里 23 个文件**没有一个是 `_test.go`**，
+> 测试文件的版本字面量不受该门禁管。
+
+> ### ⚠️ 待决策一：`wham_settings_user` 接进 sink（原以为是纯适配，实测不是）
+>
+> 链路：画像有 17 个端点 → `validated` 集合由 **enforced** 的 sink 的 bundle 决定 →
+> `codex.quota.wham` 运行时确实是 enforced（由迁移收据提升，`release-bindings.json` 里
+> 它记的是 `legacy_observe`），但只有 3 条路由（`rate-limit-reset-credits`／`usage`／
+> `consume`），缺 `settings/user`。
+>
+> **给它加路由会 panic**：`MigrationReceipt codex.quota.wham: binding digest 不匹配`
+> ——每个 binding 被迁移收据用 `binding_digest`（`aa805a4d…`）钉死，改路由必须同步重签
+> 收据。**这是受管变更，不是适配**（已实测验证，改动当场回退，工作区干净）。
+>
+> 这一步是 §7.2 门禁第 2 条要求的正当工作（「每次真实换版都枚举新旧完整 endpoint，
+> 并机器断言 validated == 新旧 ReleaseCatalog 并集」），但触及迁移收据层，需要决定
+> 走哪条正式路径。
+
+> ### ⚠️ 待决策二：那 2 个前提失效的测试怎么改
+>
+> 它们要证明「purpose+mode 是显式坐标、不被版本号折叠」，特意用同版本夹具排除
+> 「靠版本号区分」这条捷径。夹具变混版本后 `BuildID`／`WireID` 本来就不同，
+> **这两个测试原本的检出能力随之消失**。
 >
 > | 方案 | 做法 | 代价 |
 > |---|---|---|
 > | **A** | 放宽前提断言，允许混版本 | 最快。但混版本下后续断言必然通过，**等于在升级期间关掉这两道门禁**——而这正是最需要它们的时候 |
-> | **B** | 为这两个包各造一套合成的同版本夹具，专门验证该性质 | 保住检出能力。工作量比 §10.1 前面几步都大 |
->
-> 也可第三种：`git stash` 搁置画像资产改动，把 §7 这块留到专门的时段处理——代价是
-> 候选采集这轮跑不了，§10.2 那 7 条继续悬着。
+> | **B** | 为这两个包各造一套合成的同版本夹具，专门验证该性质 | 保住检出能力，工作量明显更大 |
 >
 > **未决策前不要动这两个测试**：改错方向会让门禁在升级期间静默失效，而失效不会有任何报错。
+
+### 10.1.1 工作区未提交改动（接手必读）
+
+`make check-egress-spec` 目前是**红的**（就是上面那 3 个失败）。工作区未提交的改动里，**`backend/` 下 8 项**是本轮实质产物（另有文档自身与 `workspace-transition` 的manifest／receipt，随文档提交即可）：
+
+| 文件 | 性质 |
+|---|---|
+| `catalogdata/runtime/release-catalog.json`（改）<br>`catalogdata/runtime/release-graphs/25751ad8….json`（新）<br>`catalogdata/runtime/snapshot-catalogs/0e66972c….json`（新）<br>`catalogdata/runtime/profiles/0.147.0/94071c8e….json`（新）<br>`profilecontract/testdata/snapshot-catalog.json`（改）<br>`profilecontract/testdata/snapshots/0.147.0/94071c8e….json`（新）<br>`releasecontract/testdata/release-graph.json`（改） | **`stage-profile` 的产出**，原样放入，未做任何人工编辑。0.145 的两份画像逐字保留。产物副本另存于 DMIT `runtime/k72-staged-profile` 与 Vircs 同名路径 |
+| `changeset2_synthetic_rollback_test.go`（改） | 上表 3 个「已修」测试的适配 |
+
+**要放弃这一轮可 `git stash`**：门禁立刻恢复绿，代价是候选采集停摆、②③ 要重做（① 的产物在两台机上还在，不用重跑 `stage-profile`）。
 
 > **由此固化顺序**：`stage-profile` → **资产进源码树** → 建候选镜像 → 候选采集。
 > 本轮把建镜像做在了 `stage-profile` 之前，是返工的原因。
