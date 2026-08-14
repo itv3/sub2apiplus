@@ -20205,8 +20205,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0755",
-        "size": 48850,
-        "sha256": "c648d6ca1b95dd7c70b73f8522931dce17f914baa087501b457bfe1479568876"
+        "size": 50178,
+        "sha256": "efa9428ba87aa7ca3839f4d88095432466a1e749b4852937a9c0cd61ddfe6acf"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",

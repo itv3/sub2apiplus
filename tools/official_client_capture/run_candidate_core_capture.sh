@@ -683,6 +683,22 @@ set_account_features() {
   db_query "update accounts set extra = (extra - 'official_codex_enforce_residency' - 'official_codex_runtime_metrics') || '$patch'::jsonb where id = $account_id" \
     >/dev/null
   restart_service
+  # 条件造完必须自证。此前这里设完就跑，update 影响了几行、字段是否真的落库全不查——
+  # 条件没造出来时脚本一无所知，照样往下走，最后只在 accept 阶段以「头缺失」的形式暴露，
+  # 中间隔着十几个步骤。k71 的 HDR-002/residency-positive 就卡在这：链路每一环（采集顺序、
+  # 生产代码、画像槽位、账号 ID）事后逐层复查都对，唯独采集当时的账号状态没留证据，
+  # 无法还原。加这道断言后，下一轮同样失败时可立即分清是哪一侧：
+  # 断言过了头还缺 → 生产代码或画像；断言没过 → 条件根本没造出来。
+  local expected_residency="null"
+  local expected_metrics="null"
+  [[ $residency == us ]] && expected_residency='"us"'
+  [[ $metrics == true ]] && expected_metrics="true"
+  local observed
+  observed=$(db_query "select coalesce(extra->'official_codex_enforce_residency','null'::jsonb)::text || '|' || coalesce(extra->'official_codex_runtime_metrics','null'::jsonb)::text from accounts where id = $account_id")
+  if [[ $observed != "$expected_residency|$expected_metrics" ]]; then
+    echo "账号 $account_id 的受管字段未按预期落库：期望 $expected_residency|$expected_metrics，实际 ${observed:-<空>}。" >&2
+    return 1
+  fi
 }
 
 restore_account_features() {
