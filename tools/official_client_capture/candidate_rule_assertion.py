@@ -301,8 +301,16 @@ def load_profile(
             "scenarios",
             "rules",
         },
+        optional={"status"},
         description="冻结规则画像",
     )
+    # classify 批准后的权威画像会在原始断言载荷外补充批准态。compare/accept
+    # 明确绑定这份批准文件及其完整摘要，因此 checker 必须接受该元数据；但只
+    # 允许 approved，避免 draft、blocked 等中间态混入正式验收。
+    if "status" in profile and profile["status"] != "approved":
+        raise AssertionConfigurationError(
+            "冻结规则画像 status 存在时必须为 approved"
+        )
     if profile.get("schema_version") != PROFILE_SCHEMA_VERSION:
         raise AssertionConfigurationError("冻结规则画像 schema_version 不匹配")
     if profile.get("codex_version") != expected_codex_version:

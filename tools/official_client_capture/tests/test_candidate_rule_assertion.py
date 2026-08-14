@@ -159,6 +159,36 @@ class CandidateRuleExpectationTest(unittest.TestCase):
             ):
                 load_profile(path, RULE_MANIFEST_PATH)
 
+    def test_approved_profile_status_is_accepted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profile.json"
+            profile = json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
+            profile["status"] = "approved"
+            path.write_text(json.dumps(profile), encoding="utf-8")
+            loaded = load_profile(
+                path,
+                RULE_MANIFEST_PATH,
+                verify_frozen_digest=False,
+                expected_profile_sha256=file_sha256(path),
+            )
+            self.assertEqual(loaded["status"], "approved")
+
+    def test_nonapproved_profile_status_fails_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "profile.json"
+            profile = json.loads(PROFILE_PATH.read_text(encoding="utf-8"))
+            profile["status"] = "draft"
+            path.write_text(json.dumps(profile), encoding="utf-8")
+            with self.assertRaisesRegex(
+                AssertionConfigurationError,
+                "status 存在时必须为 approved",
+            ):
+                load_profile(
+                    path,
+                    RULE_MANIFEST_PATH,
+                    verify_frozen_digest=False,
+                )
+
 
 class CandidateRuleAssertionTest(unittest.TestCase):
     @staticmethod
