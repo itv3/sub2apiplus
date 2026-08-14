@@ -783,7 +783,16 @@ turn-state 仍按 `x-codex-beta-features` 头下发——那是画像条件槽�
 > `_verify_plan_identity`、环境恢复写在退出路径上），带上下文的历史记录见 §10.8 总表的
 > k47／k55／k61 行。本节只留两类**当场用得上**的：开跑前要查的，和失败后按症状反查的。
 
-**开跑前必查**（两项都该脚本化，靠记得去查不可靠）
+**开跑前必查**（前两项都该脚本化，靠记得去查不可靠）
+
+0. **候选树内跑任何 python 都要带 `PYTHONDONTWRITEBYTECODE=1`**，并在开跑前确认树里
+   没有 `__pycache__`。`_directory_tree_digest` 的 `SKIP_DIRECTORIES` 只排除
+   `.git／target／node_modules／vendor／fixtures／snapshots`，**不排除 `__pycache__`**
+   （`_tool_identity` 反倒排除了它，所以工具身份不受影响，只有树摘要受影响）。
+   而 `seal` 会重算树摘要与 run 时的值比对，不一致即报「候选源码树在 run／seal 之间
+   发生漂移」。2026-08-14 实测：两台机文件内容 4066 项逐字相同，仅因各自 import 生成的
+   `.pyc` 不同，树摘要就分叉成 `a428294e…` 与 `255b9021…`；清掉后同为 `92149474…`。
+   **连验证动作本身都会污染被验证对象**——复算树摘要的脚本自己 import 一次就写入 `.pyc`。
 
 1. **18080 与 18081 两个端口**。18081 是 ingress、18080 是 mitm；前轮异常收尾会同时留下
    两个 pid_file 与存活进程，只查其一会让 mitm 轨在采集中途才暴露。
