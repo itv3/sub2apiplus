@@ -39,18 +39,64 @@ trap 'rm -rf "$work_dir"' EXIT
 
 # 1) 由 campaign.json 的 job 定义与 attempt 已绑定的证据根，推出 job→(前缀, 路径)
 python3 - "$campaign_dir" "$attempt_dir" "$side" > "$work_dir/jobroots.txt" <<'PY'
-import json, sys, pathlib
+import fnmatch, json, sys, pathlib
 campaign = json.loads((pathlib.Path(sys.argv[1]) / "campaign.json").read_text())
 attempt = json.loads((pathlib.Path(sys.argv[2]) / "attempt.json").read_text())
 side = sys.argv[3]
-bound = {str(pathlib.Path(r).resolve()) for r in attempt["evidence_roots"]}
+bound = {str(pathlib.Path(r).resolve()): pathlib.Path(r) for r in attempt["evidence_roots"]}
+
+# 候选侧的 run 目录名比 campaign.json 里的 job 定义多一段 candidate_id：plan 阶段还不
+# 知道会由哪个候选来跑，模板只展开到 {campaign_id}，实际运行时插入的是
+# `{campaign_id}-{candidate_id}-…`。官方侧没有这一段，直接等值匹配即可。
+# 不做这层归一化，候选侧会一个证据根都匹配不上，脚本以「没有可编目的证据根」退出。
+campaign_id = str(campaign["campaign_id"])
+candidate_id = attempt.get("candidate_id") or ""
+
+
+def suffix(name: str, *prefixes: str) -> str:
+    for prefix in prefixes:
+        head = f"{prefix}-"
+        if name.startswith(head):
+            name = name[len(head):]
+    return name
+
+
+by_suffix = {}
+if side == "candidate" and candidate_id:
+    for resolved, path in bound.items():
+        by_suffix.setdefault(suffix(path.name, campaign_id, candidate_id), resolved)
+
 for job in campaign["jobs"]:
     if job["phase"] != side:
         continue
     for root in job["evidence_roots"]:
         p = pathlib.Path(root)
-        if str(p.resolve()) in bound:
+        resolved = str(p.resolve())
+        if resolved in bound:
             print(f'{job["id"]}={p.name}={root}')
+            continue
+        # 候选侧的根名比 job 定义多一段 candidate_id；此外 mitm 系列的 job 定义本身就是
+        # 带通配符的模式（…-candidate-mitm-core-*-run），一条模式对应多个实际根，
+        # 必须按 fnmatch 展开，否则这两个 job 会整个从编目里消失——而且不会报错，
+        # 因为「没匹配到根」和「该 job 没有证据」在下游看起来一样。
+        wanted = suffix(p.name, campaign_id)
+        matched = by_suffix.get(wanted)
+        if matched:
+            actual = bound[matched]
+            print(f'{job["id"]}={actual.name}={matched}')
+            continue
+        if "*" in wanted or "?" in wanted:
+            for cand_suffix, cand_resolved in sorted(by_suffix.items()):
+                if not fnmatch.fnmatch(cand_suffix, wanted):
+                    continue
+                # mitm 系列的 setup 根只承载代理自身的启动日志，没有任何 wire 证据：
+                # 登记为 opaque 会被断言器以「无派生引用」拒绝，不登记又会让编目报
+                # 「该根没有适用规则」。它不是证据面，显式跳过并打印，不静默丢。
+                if cand_suffix.endswith("-setup-run"):
+                    print(f'# skip {job["id"]} setup-only root: {cand_suffix}', file=sys.stderr)
+                    continue
+                actual = bound[cand_resolved]
+                print(f'{job["id"]}={actual.name}={cand_resolved}')
 PY
 
 catalog_args=()
