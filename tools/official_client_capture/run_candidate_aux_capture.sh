@@ -1025,8 +1025,9 @@ live_call_id=${live_call_id##*/}
 wait_live_cleanup "$live_call_id" "$trigger_root/live-cleanup.txt"
 stop_capture
 
-# A12：QueryUsage 自然发出 usage + details；ResetQuota 的 consume 仍由同一生产
-# service 路径生成 redeem_request_id，但 TLS 隧道只到纯合成 relay。
+# A12：目标画像下 QueryUsage 自然发出 settings/user + usage + details；
+# ResetQuota 的 consume 仍由同一生产 service 路径生成 redeem_request_id，
+# 但 TLS 隧道只到纯合成 relay。
 start_capture A12
 trigger_root="$work_dir/scenarios/A12/trigger"
 code=$(request_with_token "$admin_token" --output "$trigger_root/quota.json" --write-out '%{http_code}' \
@@ -1094,9 +1095,15 @@ expected = {
     "A11": {"realtime_first_hop": 1, "realtime_sideband": 1},
     # ResetQuota 消费额度后必然再查一次用量刷新显示缓存（openai_oauth_handler.go
     # 的 Step 2，用 WithoutCancel + 独立超时，不受入口 context 取消影响），因此
-    # A12 的两次入口调用共产生两轮 usage/credit_details。这是 Sub2API 自身行为，
-    # 与 Codex 画像版本无关；此前 A12 从未跑通，错误的期望值一直没有暴露。
-    "A12": {"wham_usage": 2, "wham_credit_details": 2, "wham_safe_consume": 1},
+    # A12 的两次入口调用共产生两轮 settings/user、usage 与 credit_details。
+    # settings/user 只在当前画像登记该端点时出现；本 job 绑定的目标画像已登记，
+    # 所以它与其余两条 GET 一样必须计入受控出站事实。
+    "A12": {
+        "wham_settings_user": 2,
+        "wham_usage": 2,
+        "wham_credit_details": 2,
+        "wham_safe_consume": 1,
+    },
     "A13": {"oauth_dummy_invalid_grant": 1},
     "A14": {"files_create": 1, "files_blob_put": 1, "files_uploaded": 1},
 }

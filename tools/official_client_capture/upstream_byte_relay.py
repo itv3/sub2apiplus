@@ -272,6 +272,14 @@ def _synthetic_aux_response(
                 b'"rate_limit_reset_credits":{"available_count":1}}'
             )
             return SyntheticAuxResponse("wham_usage", _h1_response(200, "OK", payload))
+        if method == "GET" and path == "/backend-api/wham/settings/user" and not query_pairs:
+            # 目标画像存在该端点时，配额链路会在 usage 前读取一次用户设置。
+            # 生产侧只把这次调用作为官方客户端行为收据，不消费响应字段，因此
+            # 合成面返回最小 JSON 对象即可；路径、方法与无 query 仍严格白名单化。
+            return SyntheticAuxResponse(
+                "wham_settings_user",
+                _h1_response(200, "OK", b"{}"),
+            )
         if (method == "GET"
                 and path == "/backend-api/wham/rate-limit-reset-credits"
                 and not query_pairs):

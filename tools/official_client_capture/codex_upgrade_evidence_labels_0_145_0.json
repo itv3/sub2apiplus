@@ -2001,7 +2001,7 @@
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "A12 五个连接是 QueryUsage 自然发出的 usage/credit-details 两对 GET 与 ResetQuota 的安全 consume POST；wham 属辅助端点面，relay 记录客户端原始字节故不标 ca_mode，供 EP-019 的 GET 判据选样。"
+          "rationale": "A12 七个连接是两轮 QueryUsage 自然发出的 settings/user、usage、credit-details GET，以及 ResetQuota 的安全 consume POST；wham 属辅助端点面，relay 记录客户端原始字节故不标 ca_mode，供 EP-019 的 GET 判据选样。"
         },
         {
           "glob": "scenarios/A12/egress.pcap",

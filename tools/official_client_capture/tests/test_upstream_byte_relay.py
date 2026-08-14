@@ -282,6 +282,10 @@ class UpstreamByteRelaySyntheticAuxTest(unittest.TestCase):
 
     def test_wham_consume_is_a_local_synthetic_response(self) -> None:
         for request_line, action in (
+            (
+                "GET /backend-api/wham/settings/user HTTP/1.1",
+                "wham_settings_user",
+            ),
             ("GET /backend-api/wham/usage HTTP/1.1", "wham_usage"),
             (
                 "GET /backend-api/wham/rate-limit-reset-credits HTTP/1.1",

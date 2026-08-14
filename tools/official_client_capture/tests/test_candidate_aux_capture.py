@@ -60,6 +60,12 @@ class CandidateAuxCaptureScriptTest(unittest.TestCase):
         self.assertNotIn("--upstream-ip", self.source)
         self.assertNotIn("--upstream-map", self.source)
 
+    def test_a12_counts_target_profile_settings_request(self) -> None:
+        self.assertIn('"wham_settings_user": 2', self.source)
+        self.assertIn('"wham_usage": 2', self.source)
+        self.assertIn('"wham_credit_details": 2', self.source)
+        self.assertIn('"wham_safe_consume": 1', self.source)
+
     def test_compact_trigger_carries_strict_official_identity(self) -> None:
         self.assertIn('"prompt_cache_key":"%s"', self.source)
         self.assertIn('"text":{"verbosity":"low"}', self.source)
