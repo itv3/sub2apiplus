@@ -83,6 +83,13 @@ GENERIC_TOKEN = re.compile(
 # 安全占位。剩余长度仍用 X 填充，因此总长度、Content-Length 和后续字节偏移不变。
 SECRET_MARKER = b"<secret>"
 FILL = b"X"
+HTTP_START_LINE = re.compile(
+    rb"(?:[A-Z]+\s+\S+\s+HTTP/1\.[01]|HTTP/1\.[01]\s+\d{3}(?:\s+.*)?)"
+)
+CONTENT_LENGTH_HEADER = re.compile(rb"(?im)^content-length:\s*(\d+)\s*$")
+ZSTD_CONTENT_ENCODING_HEADER = re.compile(
+    rb"(?im)^content-encoding:\s*[^\r\n]*\bzstd\b[^\r\n]*\r?$"
+)
 
 
 def placeholder(length: int) -> bytes:
@@ -91,6 +98,43 @@ def placeholder(length: int) -> bytes:
     if length >= len(SECRET_MARKER):
         return SECRET_MARKER + FILL * (length - len(SECRET_MARKER))
     return FILL * length
+
+
+def _zstd_body_spans(data: bytes) -> list[tuple[int, int]]:
+    """定位 HTTP/1.x 消息里的 zstd body，避免把压缩字节误当明文凭据。
+
+    relay 文件可能连续包含多个 HTTP 消息，因此按 Content-Length 逐条前进；
+    无法闭合解析时停止保护，交给最终秘密扫描失败关闭。
+    """
+
+    spans: list[tuple[int, int]] = []
+    cursor = 0
+    while cursor < len(data):
+        header_end = data.find(b"\r\n\r\n", cursor)
+        if header_end < 0:
+            break
+        first_line_end = data.find(b"\r\n", cursor, header_end)
+        if first_line_end < 0 or not HTTP_START_LINE.fullmatch(
+            data[cursor:first_line_end]
+        ):
+            break
+        header = data[cursor:header_end]
+        is_zstd = ZSTD_CONTENT_ENCODING_HEADER.search(header) is not None
+        length_match = CONTENT_LENGTH_HEADER.search(header)
+        if length_match is None:
+            if is_zstd:
+                raise ValueError("zstd HTTP 消息缺少可验证的 Content-Length")
+            break
+        body_start = header_end + 4
+        body_end = body_start + int(length_match.group(1))
+        if body_end > len(data):
+            if is_zstd:
+                raise ValueError("zstd HTTP 消息体短于 Content-Length")
+            break
+        if is_zstd:
+            spans.append((body_start, body_end))
+        cursor = body_end
+    return spans
 
 
 def scrub(data: bytes) -> tuple[bytes, int]:
@@ -105,9 +149,25 @@ def scrub(data: bytes) -> tuple[bytes, int]:
         # 用同样长度的占位替换值本身，前缀（header 名与冒号空格）原样保留
         return whole[: len(whole) - len(value)] + placeholder(len(value))
 
-    out = data
-    for pattern, group in RULES:
-        out = pattern.sub(lambda m, g=group: repl(m, g), out)
+    protected = _zstd_body_spans(data)
+    chunks: list[tuple[bytes, bool]] = []
+    cursor = 0
+    for start, end in protected:
+        chunks.append((data[cursor:start], False))
+        chunks.append((data[start:end], True))
+        cursor = end
+    chunks.append((data[cursor:], False))
+
+    rewritten: list[bytes] = []
+    for chunk, is_protected in chunks:
+        if is_protected:
+            rewritten.append(chunk)
+            continue
+        out = chunk
+        for pattern, group in RULES:
+            out = pattern.sub(lambda m, g=group: repl(m, g), out)
+        rewritten.append(out)
+    out = b"".join(rewritten)
     return out, count
 
 

@@ -246,8 +246,8 @@ class RepositoryDeclarationTest(unittest.TestCase):
         self.assertNotIn("residency", models["labels"])
         self.assertEqual(residency["labels"]["residency"], "us")
 
-    def test_a03_prime_and_models_connections_keep_their_actual_modes(self) -> None:
-        """A03 的 prime POST 与启动 models GET 不得互换 Lite 标签。"""
+    def test_a03_models_and_prime_connections_keep_their_actual_modes(self) -> None:
+        """A03 的启动 models GET 与 prime POST 不得互换 Lite 标签。"""
 
         entry = next(
             item
@@ -255,20 +255,20 @@ class RepositoryDeclarationTest(unittest.TestCase):
             if item["job_id"] == "candidate-frozen-core"
         )
         by_glob = {rule["glob"]: rule for rule in entry["rules"]}
-        prime = by_glob[
+        models = by_glob[
             "scenarios/A03/relay/conn001.client_to_upstream.bin"
         ]
-        models = by_glob[
+        prime = by_glob[
             "scenarios/A03/relay/conn002.client_to_upstream.bin"
         ]
 
+        self.assertEqual(models["labels"]["mode"], "lite")
+        self.assertEqual(models["labels"]["track"], "lite")
+        self.assertEqual(models["labels"]["variant"], "no_cookie")
         self.assertEqual(prime["labels"]["mode"], "non_lite")
         self.assertEqual(prime["labels"]["track"], "main")
         self.assertEqual(prime["labels"]["compression"], "zstd")
         self.assertNotIn("variant", prime["labels"])
-        self.assertEqual(models["labels"]["mode"], "lite")
-        self.assertEqual(models["labels"]["track"], "lite")
-        self.assertEqual(models["labels"]["variant"], "no_cookie")
 
     def test_ep022_header_order_excludes_standalone_probe(self) -> None:
         """Cookie 线序只验收 prime 后的 generation/edit 双样本。"""

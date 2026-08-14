@@ -690,6 +690,22 @@ class ScrubbedRelayEvidenceTest(unittest.TestCase):
             result = scan_files_for_secrets([("candidate/A13/relay.bin", path)])
         self.assertTrue(result["passed"], result["findings"])
 
+    def test_zstd_body_is_never_scanned_as_plaintext(self) -> None:
+        """压缩体内偶然出现 query 形态字节时，不得破坏 zstd 帧。"""
+
+        body = b"\x28\xb5\x2f\xfdcompressed-random&uI=secret-bytes"
+        source = (
+            b"POST /backend-api/codex/responses HTTP/1.1\r\n"
+            b"authorization: Bearer real-token-value-123456789\r\n"
+            b"content-encoding: zstd\r\n"
+            + f"content-length: {len(body)}\r\n\r\n".encode("ascii")
+            + body
+        )
+        scrubbed, replacements = scrub(source)
+        self.assertEqual(replacements, 1)
+        self.assertNotIn(b"real-token-value", scrubbed)
+        self.assertEqual(scrubbed[-len(body):], body)
+
     def test_identity_signal_token_is_scrubbed_in_header_and_body(self) -> None:
         """A13 刷新响应里的 identity-signal 令牌必须与 access_token 同等脱敏。
 
