@@ -17,7 +17,7 @@ side=${SIDE:-official}
 # ⚠ 本脚本刻意**不放在** tools/official_client_capture/ 下：那里的 .py/.sh/.json
 # 参与 Campaign 的工具身份摘要，新增文件会让已建 Campaign 的 seal 以「工具漂移」
 # 拒绝继续。本脚本只编排受管工具、不产生新的证据语义，故置于其外。
-repo_root=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
+repo_root=${REPO_ROOT:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)}
 tool_root=${TOOL_ROOT:-"$repo_root/tools/official_client_capture"}
 declaration=${DECLARATION:-"$tool_root/codex_upgrade_evidence_labels_0_145_0.json"}
 
@@ -44,6 +44,7 @@ campaign = json.loads((pathlib.Path(sys.argv[1]) / "campaign.json").read_text())
 attempt = json.loads((pathlib.Path(sys.argv[2]) / "attempt.json").read_text())
 side = sys.argv[3]
 bound = {str(pathlib.Path(r).resolve()): pathlib.Path(r) for r in attempt["evidence_roots"]}
+result_by_job = {result["id"]: result for result in attempt["results"]}
 
 # 候选侧的 run 目录名比 campaign.json 里的 job 定义多一段 candidate_id：plan 阶段还不
 # 知道会由哪个候选来跑，模板只展开到 {campaign_id}，实际运行时插入的是
@@ -68,6 +69,20 @@ if side == "candidate" and candidate_id:
 
 for job in campaign["jobs"]:
     if job["phase"] != side:
+        continue
+    result = result_by_job.get(job["id"])
+    if result is None:
+        raise SystemExit(f'job {job["id"]} 缺少 attempt 结果，拒绝编目')
+    if result.get("status") != "complete":
+        # 可选轨失败不构成候选失败，也不能把其不完整目录伪装成证据根。必需轨若未完成，
+        # 则 attempt 本身不具备密封资格，必须在这里继续失败关闭。
+        if result.get("required", job.get("required", True)):
+            raise SystemExit(f'必需 job {job["id"]} 未完成，拒绝编目')
+        print(
+            f'# skip optional non-complete job: {job["id"]} '
+            f'status={result.get("status")}',
+            file=sys.stderr,
+        )
         continue
     for root in job["evidence_roots"]:
         p = pathlib.Path(root)

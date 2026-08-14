@@ -1259,13 +1259,14 @@
           },
           "labels": {
             "transport": "http",
-            "track": "lite",
-            "mode": "lite",
-            "variant": "no_cookie",
+            "track": "main",
+            "mode": "non_lite",
+            "compression": "zstd",
             "body_length": "automatic",
+            "session_header_scope": "responses_or_compact",
             "provider": "openai_oauth"
           },
-          "rationale": "A03 job 固定 Lite 模型（LITE_MODEL 默认 gpt-5.6-luna）；首个中继连接是启动期 models GET，此时 cookie jar 为冷（prime 轮尚未执行），variant=no_cookie 由连接顺序推出。"
+          "rationale": "驱动序列第 1 个连接是 prime 轮 POST：非 Lite 模型（MAIN_MODEL）、zstd 压缩（脚本显式 -H Content-Encoding: zstd），用于建立冷 cookie jar，故不标 variant（cookie 缺席使其不属于任何官方变体）。"
         },
         {
           "glob": "scenarios/A03/relay/conn002.client_to_upstream.bin",
@@ -1280,14 +1281,13 @@
           },
           "labels": {
             "transport": "http",
-            "track": "main",
-            "mode": "non_lite",
-            "compression": "zstd",
+            "track": "lite",
+            "mode": "lite",
+            "variant": "no_cookie",
             "body_length": "automatic",
-            "session_header_scope": "responses_or_compact",
             "provider": "openai_oauth"
           },
-          "rationale": "驱动序列第 1 个 POST 是 prime 轮：非 Lite 模型（MAIN_MODEL）、zstd 压缩（脚本显式 -H Content-Encoding: zstd），用于建立冷 cookie jar，故不标 variant（cookie 缺席使其不属于任何官方变体）。"
+          "rationale": "A03 job 固定 Lite 模型（LITE_MODEL 默认 gpt-5.6-luna）；第 2 个连接是 prime 轮之后的启动期 models GET，且请求不带 cookie，故标记 variant=no_cookie。"
         },
         {
           "glob": "scenarios/A03/relay/conn003.client_to_upstream.bin",
