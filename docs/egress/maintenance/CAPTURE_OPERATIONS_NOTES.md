@@ -285,7 +285,7 @@ checked_rule_count=42  checked_check_count=108
 |---|---|---|
 | 采集容器挂载 | 与 Vircs 逐项一致（13 项），含 `/root/oauth-capture` 与 `/capture` 双挂载 | tcpdump 无处落盘、日志为空 |
 | 采集容器 PID 命名空间 | `--pid=host` | `nsenter: cannot open /proc/<pid>/ns/net` |
-| 采集容器镜像 | 必须有与 campaign 冻结值逐字相同的 RepoDigests（`docker save\|load` 会丢失，需重新导入并保留 tag） | `--runtime-image 不是运行镜像实际 RepoDigests 中的不可变引用` |
+| 采集容器镜像 | 必须有与 campaign 冻结值逐字相同的 RepoDigests。**docker 29.x（containerd 镜像存储）下 `save`／`load` 会保留 digest，2026-08-14 实测 k72 镜像 load 后 RepoDigests 完好、`_image_repo_digests` 校验通过**；旧版本会丢失，那时需重新导入并保留 tag | `--runtime-image 不是运行镜像实际 RepoDigests 中的不可变引用` |
 | 宿主目录 | `scripts/`、`addons/`、`tools/` 三个顶层目录 | `/capture/scripts/start_ingress.sh: no such file` |
 | Codex CLI | 候选驱动客户端就是官方 codex 0.147.0，须挂载到 `/usr/local/bin/codex-capture` 等四处 | `FileNotFoundError: /usr/local/bin/codex-capture` |
 | 候选镜像构建标签 | `BUILD_TAGS="embed candidatecapture"`——Linux 生不出 DeviceCheck，A11 靠受四元组约束的合成 provider | A11 第一跳被上游拒 |

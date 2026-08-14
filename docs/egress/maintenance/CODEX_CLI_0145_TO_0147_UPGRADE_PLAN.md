@@ -565,6 +565,19 @@ campaign 冻结的 amd64 capture 容器内抓包。而**官方与候选共用同
 > **前置清单缺项不会在启动时报错**，而是在采集中途以 404／503／1013／「无可编目证据根」
 > 等形态暴露——所以必须开跑前核对，不能靠跑起来验证。
 
+> **B 的准备工作已于 2026-08-14 完成，只差账号可用后开跑**：
+>
+> | 项 | 状态 | 坐标 |
+> |---|---|---|
+> | 工具三项修复＋判据同步 | ✅ 已提交 | `8ccb0c61e`；工具身份产出侧 `4023ef1f…`／评估侧 `f126aa19…`（99 项） |
+> | backend 四处行为修复 | ✅ 已提交 | `03922a68d`（8 文件 125 行） |
+> | 受管候选树 | ✅ 已建 | `/root/oauth-capture/candidate-source-k72`（DMIT），工具身份与本地逐字一致 |
+> | 采集执行位置 | ✅ 已同步 | `/root/oauth-capture/tools/` 与 k72 树一致；新门禁实测放行，改一字节即拦截并点名文件 |
+> | 候选镜像 | ✅ 已重建 | `sub2apiplus@sha256:0ca14fa0dfdf8bcb1d45c528f6fe58f64e2d1688ce409a6d5589c0357edfb87d`<br>image_id 同值；ARM64 交叉编译 linux/amd64，二进制摘要 `312be606…`（k59 为 `33b92bfb…`） |
+>
+> 下一轮 `plan` 用上表的 `--runtime-image` 与 `--candidate-source`。**开跑前先确认
+> `stage-profile` 已执行**（k71 漏做的那一步）。
+
 **B 这一轮还要顺带落地两项采集工具的前置检查**。它们把 §10.4「开跑前必查」那两条从
 「靠记得去查」变成「查不过就拒绝启动」——k61 与 k71 各因其中一条报废过一轮。两处都属
 **产出侧**，会改动工具身份摘要，因此**必须赶在下一轮 `plan` 之前落地**（§6.1.1）：
@@ -861,6 +874,7 @@ go test，DMIT 也编译不动 backend（ent 单包峰值 1.93G > 1.9G 物理内
 | 账号刚被调用就判 `environment_contaminated` | §10.8.9（豁免清单漏了 `codex_reset_credit_snapshot`） |
 | classify 产出 `blocked`／`target_rule` 全 null | §10.8.3（两个卡点与继承脚本） |
 | 判据选中 0 条观测，或选中了不该选的面 | §10.8.13（selector 覆盖过宽的四条实例） |
+| 修复明明写了却「没生效」，判据照旧失败 | §10.8.14（执行副本与受管树漂移；先确认改动在**实际执行的位置**上） |
 
 **动手前必读的纪律**
 
@@ -1228,3 +1242,39 @@ k69 accept 的 9 条失败里有 4 条并非画像行为问题，而是 selector
 k56 跑通结果：bundle provenance 重放 81 项、派生收据重放 62 项、capture manifest
 154 artifact／377 观测、分侧 kind 覆盖与 selector 可达全过，`checked_rule_count=42`、
 `checked_check_count=108`。
+#### 10.8.14 执行副本与受管树漂移——k71 四条判据的共同根因
+
+`_tool_identity` 只扫描 `codex_upgrade.py` 自身所在的受管树，而采集脚本与 relay 由
+`$CAPTURE_MOUNT/tools/official_client_capture/` 执行（`$CAPTURE_MOUNT` 就是
+`/root/oauth-capture`）——**那是另一份副本**。两者漂移时工具身份校验照样通过，
+跑的却是旧代码，且没有任何门禁报警。
+
+k71 的实证：
+
+| 文件 | campaign 记录（受管树 k70） | 实际执行（`/root/oauth-capture/tools`） |
+|---|---|---|
+| `upstream_byte_relay.py` | `60d786cf…`，含 `legacy_compact_ordinal` | `d1a4da68…`，2026-08-07 旧副本，**无该分支** |
+| `run_candidate_aux_capture.sh` | `3a27b4ec…` | `b9fa106e…` |
+| `codex_upgrade_scenarios_0_145_0.json` | 写死 `gpt-5.6-luna` | `gpt-5.6` **零命中** |
+
+一个根因解释了四条判据：`EP-015`／`EP-022`（Cookie 从未下发——A09 九个连接的响应里
+一个 `set-cookie` 都没有，conn002 是第一个 compact、intervention 走的正是
+`legacy_compact`，只是那份代码里根本没有 `ordinal == 1` 的分支）与
+`EP-014`／`BODY-006`（Lite 轨样本从未产出）。
+
+**修复**（`8ccb0c61e`）：抽出 `_tool_tree_entries` 让身份计算与执行副本校验共用同一
+扫描口径，新增 `_verify_execution_tree` 接在 `plan`（冻结 `tool_identity` 之前）与
+`_run_capture_attempt` 两处，漂移即 fail-close 并点名文件。职责边界只管「存在的那份
+有没有漂移」——执行位置不存在时放行，那是路径配置问题，真实采集会在脚本解析
+`$CAPTURE_MOUNT` 时自己失败；把「必须存在」也管上会让所有用假 `capture_root` 的
+单元测试无法运行（第一版如此，32 个测试当场全挂）。
+
+> **由此固化一条**：**校验的树必须就是执行的树**。§10.8.11 说的是候选源码树要与镜像
+> 同源，这一条是它的姊妹——工具树也有「被校验的那份」与「真正跑的那份」之分。
+> 判断一个修复是否生效，看它在受管树里不算数，要看它在**实际执行的位置**上。
+
+> **`strings` 只能证明符号存在，不能证明代码路径可达**（§10.2.1 的 `EP-019` 同理）。
+> 排查中还栽过两次工具坑：`grep -c` 对无换行的二进制永远返回 1（新旧镜像都「命中 1」
+> 是假象，要用 `grep -a -o | wc -l`）；`strings` 默认只提取 ASCII 序列，中文字符串
+> 一律找不到，用它验证带中文的错误消息会得到「新旧都是 0」的假阴性。
+
