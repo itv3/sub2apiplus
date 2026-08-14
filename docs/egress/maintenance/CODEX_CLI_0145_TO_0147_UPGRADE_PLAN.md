@@ -541,44 +541,71 @@ campaign 冻结的 amd64 capture 容器内抓包。而**官方与候选共用同
 |---|---|---|---|---|
 | §5 DOC-PRE 与 P0 | ✅ 完成 | — | — | — |
 | §6 Campaign / 官方取证 / classify | ✅ 完成 | — | — | — |
-| §7 建立 0.147 画像 | ⚠️ 画像已批准，Snapshot/Release 资产**没建**（k71 漏做，见下） | **并入 B**：下一轮 classify 完成后、候选采集开始前执行 `stage-profile`。**不能单独补做** | DMIT | 否 |
-| §8 Candidate / compare / accept | ⚠️ 首次跑通，35 pass / 7 fail | **B** 改 5 条行为差异 ＋ 两项工具前置检查（见下）→ 重建候选镜像（`EP-019` 的修复已就绪，只差这一步）→ 重跑一轮验证。7 条构成见 §10.2 | 本地＋DMIT | 是（Kilo 发两条请求） |
-| §9 生产启用与回滚 | ❌ 未开始 | **C** 依赖 B 收口后才能动 | **Vircs 生产** | 是（每步确认） |
+| §7 建立 0.147 画像 | ✅ **`stage-profile` 已执行**（k72，2026-08-14），Snapshot/Release 资产已产出 | 资产入源码树后有 6 个契约测试待适配（见下方第 ③ 步） | DMIT＋本地 | 否 |
+| §8 Candidate / compare / accept | 🔄 **k72 轮进行中**：plan／官方 28-28／classify 均已完成，候选采集卡在镜像缺画像 | 解决下方第 ③ 步后重建镜像 → 候选采集 → Kilo 两入口 → seal → compare → accept | 本地＋DMIT | 是（Kilo 发两条请求） |
+| §9 生产启用与回滚 | ❌ 未开始 | 依赖 §8 跑完 accept 才能动 | **Vircs 生产** | 是（每步确认） |
 
-> **原先「A 与 B 互不依赖、可并行」的判断已作废（2026-08-14 核实）。** `stage-profile`
-> 只允许从 `profile_approved` 状态执行，而 k71 现在是 `compared`——状态由不可变阶段收据
-> 单向推导，回不去，**在 k71 上补不了**。全盘只有 k49 建过 staged 产物
-> （`runtime/k49-staged-profile`），其 `campaign_id` 与画像都是补端点之前的，不可复用。
+
+本轮 Campaign `codex-0145-to-0147-20260814T103757Z-k72`／campaign_id
+`codex-0_147_0-20260814T103807Z`／候选树 `candidate-source-k72`（两台机同名同路径，
+摘要 `c290e53c…`）／候选镜像 `sub2apiplus@sha256:0ca14fa0…`。
+
+| 步 | 状态 | 关键数字 |
+|---|---|---|
+| `plan` | ✅ | 37 job（official 28／candidate 9）、42 必需规则；工具身份冻结产出侧 `43720c6d…`／评估侧 `f126aa19…` |
+| 官方采集 → seal | ✅ | **28/28** complete、零失败；seal 扫描 974 文件零命中；`review_sha256=23512457…` |
+| `classify` | ✅ | 2799 条 discovery **全部归类、blocked 残留 0**（`change` 2604 按指纹继承 ＋ `condition_change` 195）；联合摘要 `c6bec3e3…` |
+| **`stage-profile`** | ✅ | **k71 漏做的那步已补**；产出 17 端点画像 `94071c8e…`、`production_selector_changed=false` |
+| 候选采集 | ❌ **卡住** | 一次都没成功启动（`candidates: []`）。DMIT 服务**已切到 `candidate-k72` 并 healthy 运行**，但该镜像没有 0.147 画像，启动时报「声明的 profile digest 与运行时解析结果不一致」——**服务在带错运行，重跑候选采集前必须先换成含画像的镜像** |
+
+**为什么镜像里没有画像。** 画像由 `release_catalog.go` 的
+`go:embed catalogdata/runtime/…` **编进二进制**，而仓库 HEAD 的
+`catalogdata/runtime/profiles/` 只有 `0.145.0/` 两份。画像内容本身早就有（k59 批准的
+17 端点 `94071c8e…`，跨轮没变），缺的是「进源码树 → 编进镜像」这一步——它从来没做过。
+以前几轮能跑，是因为 `candidate-build-k57` 那棵构建树里**手工塞过**
+`profiles/0.147.0/`；k71 漏做 `stage-profile`，缺口就一直被手工绕过，按正规流程走才浮出来。
+
+**让镜像拿到 0.147 画像的完整路径**（`stage-profile` 是正规入口，不再手工塞）：
+
+| 步 | 做什么 | 状态 |
+|---|---|---|
+| ① | `stage-profile` 产出资产 | ✅ 已完成 |
+| ② | 资产放进源码树 `backend/internal/officialegress/` | ✅ 已放（4 新增 3 改动，0.145 两份逐字保留） |
+| ③ | **过 6 个契约测试** | ❌ **卡在这，需要决策** |
+| ④ | 提交 | — |
+| ⑤ | 重建候选镜像（ARM64 交叉编译，约 7 分钟） | — |
+| ⑥ | 部署到 DMIT → 候选采集 → Kilo 两入口 → seal → compare → accept | — |
+
+**第 ③ 步的 6 个测试**（`officialegress` 4 个 ＋ `compositioncontract` 1 ＋ `releasecontract` 1），前提都假设 active/previous 同版本，而夹具现在正确地变成了
+active=0.145／previous=0.147（正是 §7.1 要的候选阶段状态）：
+
+- **4 个是纯适配，必须做**：3 个是合成 catalog 只改 Active、Previous 却指向真实 0.147 而
+  合成 snapshots 里没有它；1 个是 `validated` 端点集合缺 `wham_settings_user`
+  （画像 17 个端点，sink 侧只接了 16 个）。
+- **2 个涉及取舍**（`compositioncontract` 的 `TestPurposeAndModeRemainExplicitCoordinates`
+  与 `releasecontract` 的 `TestReleaseGraphKeepsPurposeAndModeIdentity`）：它们要证明
+  「purpose+mode 是显式坐标、不被版本号折叠」，特意用同版本夹具排除「靠版本号区分」这条
+  捷径。夹具变混版本后 `BuildID`／`WireID` 本来就不同，**这两个测试原本的检出能力随之消失**。
+
+> ### ⚠️ 待决策：这 2 个测试怎么改
 >
-> **k71 为什么会漏**：`stage-profile` 在状态机里的位置是 classify 完成 →
-> **`stage-profile`** → 候选采集，而 `campaign_status` 的 `stages` 字段只收录
-> `capture-official` 与 `classify` 两项，跳过它不会留下任何缺失痕迹，`next_command`
-> 也直接指向 `capture-candidate`。**下一轮必须在候选采集前手动确认这一步已执行。**
-
-**B 重跑那一轮的前置门槛**（全部满足才可 `plan`）：**产出侧**工具摘要不再变化
-（§6.1.1；评估侧修复不受此限）；**0.147 映射已在候选源码树内**——它的路径基准是源码树，
-采集之后再放进去无效；操作笔记「候选机环境前置清单」13 项逐项核对（属主权限、账号模型
-映射、分组开关、候选身份注入等），候选机已持有官方原始证据完整副本（§10.0）。
-流程：官方采集（Vircs）→ classify → **`stage-profile`（k71 漏做的一步，§7 资产由此产出）**
-→ 候选采集（DMIT）→ Kilo 两入口 → seal → compare → accept。
-
-> **前置清单缺项不会在启动时报错**，而是在采集中途以 404／503／1013／「无可编目证据根」
-> 等形态暴露——所以必须开跑前核对，不能靠跑起来验证。
-
-> **B 的准备工作已于 2026-08-14 完成，只差账号可用后开跑**：
->
-> | 项 | 状态 | 坐标 |
+> | 方案 | 做法 | 代价 |
 > |---|---|---|
-> | 工具三项修复＋判据同步 | ✅ 已提交 | `8ccb0c61e`；工具身份产出侧 `4023ef1f…`／评估侧 `f126aa19…`（99 项） |
-> | backend 四处行为修复 | ✅ 已提交 | `03922a68d`（8 文件 125 行） |
-> | 受管候选树 | ✅ 已建 | `/root/oauth-capture/candidate-source-k72`（DMIT），工具身份与本地逐字一致 |
-> | 采集执行位置 | ✅ 已同步 | `/root/oauth-capture/tools/` 与 k72 树一致；新门禁实测放行，改一字节即拦截并点名文件 |
-> | 候选镜像 | ✅ 已重建 | `sub2apiplus@sha256:0ca14fa0dfdf8bcb1d45c528f6fe58f64e2d1688ce409a6d5589c0357edfb87d`<br>image_id 同值；ARM64 交叉编译 linux/amd64，二进制摘要 `312be606…`（k59 为 `33b92bfb…`） |
+> | **A** | 放宽前提断言，允许混版本 | 最快。但混版本下后续断言必然通过，**等于在升级期间关掉这两道门禁**——而这正是最需要它们的时候 |
+> | **B** | 为这两个包各造一套合成的同版本夹具，专门验证该性质 | 保住检出能力。工作量比 §10.1 前面几步都大 |
 >
-> 下一轮 `plan` 用上表的 `--runtime-image` 与 `--candidate-source`。**开跑前先确认
-> `stage-profile` 已执行**（k71 漏做的那一步）。
+> 也可第三种：`git stash` 搁置画像资产改动，把 §7 这块留到专门的时段处理——代价是
+> 候选采集这轮跑不了，§10.2 那 7 条继续悬着。
+>
+> **未决策前不要动这两个测试**：改错方向会让门禁在升级期间静默失效，而失效不会有任何报错。
 
-**B 这一轮还要顺带落地两项采集工具的前置检查**。它们把 §10.4「开跑前必查」那两条从
+> **由此固化顺序**：`stage-profile` → **资产进源码树** → 建候选镜像 → 候选采集。
+> 本轮把建镜像做在了 `stage-profile` 之前，是返工的原因。
+
+那 7 条 accept 待解决（§10.2）**一条都还没验证**——修改都做完了，但要跑到 accept
+才见分晓，而 accept 在候选采集之后。
+
+**k72 这一轮已顺带落地两项采集工具的前置检查**（`8ccb0c61e`，两台机执行位置均已同步）。它们把 §10.4「开跑前必查」那两条从
 「靠记得去查」变成「查不过就拒绝启动」——k61 与 k71 各因其中一条报废过一轮。两处都属
 **产出侧**，会改动工具身份摘要，因此**必须赶在下一轮 `plan` 之前落地**（§6.1.1）：
 
@@ -604,7 +631,7 @@ bundle → trace → seal 的顺序、`compare`、accept 重放。操作要点�
 > 本文档不复制——k59 的旧数字曾在此滞留十余轮。
 
 
-### 10.2 accept 待解决的 7 条（k71 实测）
+### 10.2 accept 待解决的 7 条（k71 实测；k72 尚未跑到 accept，故本节结论仍是上一轮的）
 
 k71 是本次升级第一次拿到真实 accept 重放结论：**候选侧 42 条规则，35 `pass` / 7 `fail`**。
 原先那份「13 条根因」是 k56 证据上的预演，逐条核对后 8 条已通过，本节只保留**仍未通过的**。
