@@ -1388,12 +1388,14 @@ class CodexUpgradeTest(unittest.TestCase):
         *,
         candidate_id: str = "candidate-a",
         profile_digest: str | None = None,
+        git_commit: str | None = "f" * 40,
+        include_new_surface: bool = False,
         restoration_passed: bool = True,
-    ) -> tuple[Path, dict[str, str]]:
+    ) -> tuple[Path, dict[str, object]]:
         profile_digest = profile_digest or "c" * 64
         evidence_root = root / f"{candidate_id}-evidence"
         identity = {
-            "git_commit": "f" * 40,
+            "git_commit": git_commit,
             "source_tree_sha256": "d" * 64,
             "image_reference": f"sub2apiplus@sha256:{'9' * 64}",
             "image_digest": f"sha256:{'9' * 64}",
@@ -1409,6 +1411,7 @@ class CodexUpgradeTest(unittest.TestCase):
             phase="candidate",
             identity=identity,
             candidate_id=candidate_id,
+            include_new_surface=include_new_surface,
             restoration_passed=restoration_passed,
         )
         return evidence_root, identity
@@ -2385,6 +2388,63 @@ class CodexUpgradeTest(unittest.TestCase):
             )
             status = codex_upgrade.campaign_status(campaign_dir)
             self.assertEqual(status["status"], "ready")
+
+    def test_accept_uses_rule_contract_instead_of_raw_surface_set_equality(self) -> None:
+        """28／7 任务计划的完整指纹集合可不同，验收结论必须来自批准规则重放。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            campaign_dir, _, rules = self._create_classified_campaign(root)
+            _, identity = self._seal_candidate_stage(
+                root,
+                campaign_dir,
+                include_new_surface=True,
+            )
+            comparison = codex_upgrade.compare_campaign(
+                campaign_dir, "candidate-a"
+            )
+            self.assertFalse(comparison["equal"])
+            assertions = self._write_assertions(root, rules, identity)
+            with mock.patch.object(codex_upgrade, "_rerun_machine_assertion"):
+                acceptance = codex_upgrade.accept_campaign(
+                    campaign_dir, "candidate-a", assertions
+                )
+            self.assertTrue(acceptance["accepted"])
+            self.assertFalse(acceptance["equal"])
+            self.assertTrue(acceptance["gates"]["comparison_complete"])
+
+    def test_blocked_accept_is_written_to_unique_attempt(self) -> None:
+        """门禁不通过时必须保留结果，不能因缺失目录 helper 在收尾阶段崩溃。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            campaign_dir, _, rules = self._create_classified_campaign(root)
+            _, identity = self._seal_candidate_stage(
+                root,
+                campaign_dir,
+                git_commit=None,
+            )
+            codex_upgrade.compare_campaign(campaign_dir, "candidate-a")
+            assertions = self._write_assertions(root, rules, identity)
+            with mock.patch.object(codex_upgrade, "_rerun_machine_assertion"):
+                acceptance = codex_upgrade.accept_campaign(
+                    campaign_dir, "candidate-a", assertions
+                )
+            self.assertFalse(acceptance["accepted"])
+            self.assertEqual(
+                acceptance["failed_gates"], ["candidate_identity_complete"]
+            )
+            attempts = sorted(
+                (campaign_dir / "acceptance" / "candidate-a" / "attempts").glob(
+                    "*/result.json"
+                )
+            )
+            self.assertEqual(len(attempts), 1)
+            blocked = json.loads(attempts[0].read_text(encoding="utf-8"))
+            self.assertEqual(blocked["status"], "blocked")
+            self.assertEqual(
+                blocked["failed_gates"], ["candidate_identity_complete"]
+            )
 
     def test_accept_rejects_handwritten_machine_pass_without_replay(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -8699,6 +8699,36 @@ def _required_client_bindings(
     return set(raw)
 
 
+def _write_blocked_acceptance_attempt(
+    campaign_dir: Path,
+    candidate_id: str,
+    result: dict[str, Any],
+) -> Path:
+    """把未通过的 accept 结果写入独立 attempt，保留失败门禁供复核。
+
+    accept 成功结果按 candidate-id 只封存一次；失败结果则允许修复后重跑，因此不能写入
+    成功结果的规范路径，也不能覆盖上一轮失败。这里沿用抓包 attempt 的时间戳加随机后缀
+    规则，为每次失败建立不可覆盖的私有目录。
+    """
+
+    if not SAFE_ID_RE.fullmatch(candidate_id):
+        raise ConfigurationError("accept candidate-id 格式非法。")
+    attempts_root = ensure_private_directory(
+        campaign_dir / "acceptance" / candidate_id / "attempts",
+        campaign_dir,
+    )
+    attempt_id = (
+        time.strftime("%Y%m%dT%H%M%SZ", time.gmtime())
+        + f"-{secrets.token_hex(8)}"
+    )
+    attempt_root = attempts_root / attempt_id
+    if attempt_root.exists() or attempt_root.is_symlink():
+        raise ConfigurationError("accept attempt-id 随机碰撞。")
+    ensure_private_directory(attempt_root, campaign_dir)
+    secure_write_json(attempt_root / "result.json", result)
+    return attempt_root
+
+
 def accept_campaign(
     campaign_dir: Path,
     candidate_id: str,
@@ -8837,7 +8867,12 @@ def accept_campaign(
         "candidate_identity_complete": identity_complete,
         "profile_binding_matches": bool(comparison.get("profile_binding_matches"))
         and observed_profile_receipt.get("status") == "active",
-        "official_candidate_surface_equal": bool(comparison.get("equal")),
+        # compare 的完整动态形态差异用于发现与复核，不能直接充当验收门禁：官方侧与候选
+        # 侧的采集计划分别是 28 个任务和 7 个必需任务，完整指纹集合天然不等。行为等价性
+        # 由批准断言画像推导的 42 条规则逐侧重放负责；这里仅要求 compare 本身已离线完成，
+        # 其 package digest、证据 inventory 与画像绑定仍由下方独立门禁逐项校验。
+        "comparison_complete": comparison.get("status") == "complete"
+        and comparison.get("offline_only") is True,
         "rule_evidence_coverage": bool(official.get("results"))
         and bool(candidate.get("results"))
         and bool(coverage.get("complete")),
@@ -8879,6 +8914,8 @@ def accept_campaign(
         "classification_package_digest": classification["package_digest"],
         "official_evidence_inventory_digest": official_inventory_digest,
         "candidate_evidence_inventory_digest": candidate_inventory_digest,
+        # 保留原始集合是否逐项相等的诊断事实，但不把不同采集计划造成的差集伪装成失败。
+        "equal": bool(comparison.get("equal")),
     }
     if accepted:
         acceptance_root = ensure_private_directory(
@@ -8922,10 +8959,7 @@ def accept_campaign(
         }
         save_stage_result(campaign_dir, "accept", result, candidate_id=candidate_id)
     else:
-        attempt_root = _attempt_directory(
-            campaign_dir, Path("acceptance") / candidate_id
-        )
-        secure_write_json(attempt_root / "result.json", result)
+        _write_blocked_acceptance_attempt(campaign_dir, candidate_id, result)
     return result
 
 
