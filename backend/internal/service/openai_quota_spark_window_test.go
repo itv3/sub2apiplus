@@ -467,11 +467,6 @@ func TestQueryUsageAgentIdentityRecoversInvalidTaskOnce(t *testing.T) {
 			_, _ = w.Write([]byte(`{}`))
 			return
 		}
-		if strings.Contains(r.URL.Path, "/settings/user") {
-			w.WriteHeader(http.StatusNotFound)
-			_, _ = w.Write([]byte(`{}`))
-			return
-		}
 		usageCalls++
 		if usageCalls == 1 {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -590,7 +585,7 @@ func TestQueryUsageIncludesResetCreditExpirations_EndToEnd(t *testing.T) {
 	require.Equal(t, 2, usage.RateLimitResetCredits.AvailableCount)
 	require.Equal(t, 1, detailCalls)
 	require.Empty(t, capturedHeaders.Get("OpenAI-Beta"))
-	require.Equal(t, activeOpenAICodexUserAgentForTest(), capturedHeaders.Get("User-Agent"))
+	require.Equal(t, codexCLIUserAgent, capturedHeaders.Get("User-Agent"))
 	require.Equal(t, "*/*", capturedHeaders.Get("Accept"))
 	require.Empty(t, capturedHeaders.Get("Version"))
 	require.Empty(t, capturedHeaders.Get("Originator"))
@@ -736,8 +731,6 @@ func TestCodexWhamRequestsUseClosedBackendClientProfile(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		writer.Header().Set("content-type", "application/json")
 		switch request.URL.Path {
-		case "/backend-api/wham/settings/user":
-			_, _ = writer.Write([]byte(`{}`))
 		case "/backend-api/wham/usage":
 			_, _ = writer.Write([]byte(`{}`))
 		case "/backend-api/wham/rate-limit-reset-credits":
@@ -765,16 +758,14 @@ func TestCodexWhamRequestsUseClosedBackendClientProfile(t *testing.T) {
 	_, err = service.ResetCredit(runtimeContext, account.ID)
 	require.NoError(t, err)
 
-	require.Len(t, upstream.requests, 4)
-	require.Len(t, upstream.tlsProfiles, 4)
+	require.Len(t, upstream.requests, 3)
+	require.Len(t, upstream.tlsProfiles, 3)
 	expectedTargets := []string{
-		"https://chatgpt.com/backend-api/wham/settings/user",
 		"https://chatgpt.com/backend-api/wham/usage",
 		"https://chatgpt.com/backend-api/wham/rate-limit-reset-credits",
 		"https://chatgpt.com/backend-api/wham/rate-limit-reset-credits/consume",
 	}
 	expectedEndpointIDs := []string{
-		officialCodexEndpointWhamSettingsUser,
 		officialCodexEndpointWhamUsage,
 		officialCodexEndpointWhamResetCredits,
 		officialCodexEndpointWhamConsumeResetCredit,
@@ -788,7 +779,7 @@ func TestCodexWhamRequestsUseClosedBackendClientProfile(t *testing.T) {
 		require.Equal(t, "*/*", request.Header.Get("Accept"))
 		require.Equal(
 			t,
-			"codex-tui/"+activeOpenAICodexVersionForTest()+" (Ubuntu 24.4.0; x86_64) xterm-256color",
+			"codex-tui/0.145.0 (Ubuntu 24.4.0; x86_64) xterm-256color",
 			request.Header.Get("User-Agent"),
 		)
 		require.True(t, HTTPUpstreamRedirectsDisabled(request.Context()))
@@ -815,10 +806,7 @@ func TestCodexWhamRequestsUseClosedBackendClientProfile(t *testing.T) {
 			headerNames = append(headerNames, strings.ToLower(name))
 		}
 		expectedHeaders := []string{"user-agent", "authorization", "chatgpt-account-id", "accept"}
-		if index == 0 {
-			expectedHeaders = append(expectedHeaders, "cache-control")
-		}
-		if index == 3 {
+		if index == 2 {
 			expectedHeaders = append(expectedHeaders, "content-type")
 			require.Equal(t, "application/json", request.Header.Get("Content-Type"))
 		} else {
@@ -828,7 +816,6 @@ func TestCodexWhamRequestsUseClosedBackendClientProfile(t *testing.T) {
 	}
 	require.Equal(t, poolIDs[0], poolIDs[1])
 	require.Equal(t, poolIDs[1], poolIDs[2])
-	require.Equal(t, poolIDs[2], poolIDs[3])
 	require.NotEmpty(t, poolIDs[0])
 	processRuntime, err := resolveOfficialEgressRuntime(nil, upstream)
 	require.NoError(t, err)
@@ -841,9 +828,8 @@ func TestCodexWhamRequestsUseClosedBackendClientProfile(t *testing.T) {
 
 	require.Empty(t, upstream.bodies[0])
 	require.Empty(t, upstream.bodies[1])
-	require.Empty(t, upstream.bodies[2])
 	var consumeBody map[string]string
-	require.NoError(t, json.Unmarshal(upstream.bodies[3], &consumeBody))
+	require.NoError(t, json.Unmarshal(upstream.bodies[2], &consumeBody))
 	require.Len(t, consumeBody, 1)
 	require.NotEmpty(t, consumeBody["redeem_request_id"])
 }

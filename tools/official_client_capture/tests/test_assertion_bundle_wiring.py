@@ -43,7 +43,7 @@ H1_STREAM = (
 PROFILE = {
     "schema_version": "codex-candidate-rule-expectations/v1",
     "codex_version": TARGET_VERSION,
-    "source_spec": "docs/CODEX_CLI_0145_EGRESS_SPEC.md#第二章",
+    "source_spec": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md#第二章",
     "source_spec_sha256": "0" * 64,
     "scenarios": [
         {

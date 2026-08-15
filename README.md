@@ -40,9 +40,9 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 | `0.1.165-4` | 阶段构建 | — | 三路径完整抓包对照，逐路径结论的原始来源 |
 | `0.1.165-5` | 正式发布（Releases `v0.1.165-5`，镜像 `ghcr.io/itv3/sub2apiplus:0.1.165-5`），生产已切换为该镜像 | 数据保真、Lite 判定分裂、重复键 panic、API Key 画像 TLS 决策来源 | 未重跑三路径对照，逐路径结论沿用 `0.1.165-4`；历史过程材料已在规格收口后清理 |
 | `0.1.165-6` | 未发布，仅由 Vircs 以阶段镜像验收 | 入站宿主头泄漏、WS turn-state 跨连接沿用、模型能力合并语义、Chat Completions/Messages 入口 JSON 保真、passthrough 预热缺失 | 只重跑 OpenAI 侧：官方 Codex CLI `0.145.0` 基准（HTTP/WS × direct/MITM × S1/S2/S4）与第三方定向 HTTP/WS 候选出站逐项对照通过，宿主头剥离与预热帧序列均有真实 wire 证据；turn-state 两项因上游始终未下发该头只达代码级验收。未重跑 Anthropic 三路径与 Kilo 六组合；历史过程材料已在规格收口后清理 |
-| `0.1.165-8` | 未发布，仅由 Vircs 以阶段镜像验收 | h1 header 名全小写、compact 不压缩、models 请求纳入官方画像、未知顶层字段改白名单、三条旁路端点（count_tokens/images/alpha-search）纳入画像、WS turn-state 改从 `response.metadata` 事件提取 | 新建 h1 直连探针并取得首份 h1 wire 证据；当前规则与保留证据统一见 Codex 0.145.0 出站规格 |
+| `0.1.165-8` | 未发布，仅由 Vircs 以阶段镜像验收 | h1 header 名全小写、compact 不压缩、models 请求纳入官方画像、未知顶层字段改白名单、三条旁路端点（count_tokens/images/alpha-search）纳入画像、WS turn-state 改从 `response.metadata` 事件提取 | 新建 h1 直连探针并取得首份 h1 wire 证据；当时规则与保留证据统一见 Codex 0.145.0 基线 |
 | `0.1.165-9`·`-10` | 未发布，仅由 Vircs 以阶段镜像验收 | WS 握手头大小写修回 tungstenite 形态（前 5 项为大写驼峰，`0.1.165-8` 曾误压为小写）、h2 `MAX_HEADER_LIST_SIZE` 由 10MB 对齐到官方 16KB | **新建 h2 帧层探针**（CONNECT 代理 + h2 服务端），取得官方 SETTINGS/WINDOW_UPDATE/伪头顺序基线；mitmproxy 用自己的 h2 栈重建连接，看不到这些。残留差异见 §1.1.1.2 |
-| `0.1.165-11` | 正式发布（Releases `v0.1.165-11`，镜像 `ghcr.io/itv3/sub2apiplus:0.1.165-11`），Vircs 已切换为该镜像 | 官方 OAuth 定型层按版本画像重建：Codex `0.145.0` 完整画像、稳定执行引擎、文件直传、OAuth、turn-state 隔离及失败关闭验收链 | Codex 0.145.0 的规则来源、42 项范围、伪装方案实现、源码改动台账和升级流程统一见[出站规格、实现与演进手册](docs/CODEX_CLI_0145_EGRESS_SPEC.md)；官方侧逐项证据路径由[证据索引](docs/EVIDENCE_INDEX.md)生成。发布状态本身不替代绑定具体源码树、镜像和画像摘要的 Campaign 验收。 |
+| `0.1.165-11` | 正式发布（Releases `v0.1.165-11`，镜像 `ghcr.io/itv3/sub2apiplus:0.1.165-11`），Vircs 已切换为该镜像 | 官方 OAuth 定型层按版本画像重建：Codex `0.145.0` 完整画像、稳定执行引擎、文件直传、OAuth、turn-state 隔离及失败关闭验收链 | Codex 0.145.0 的规则来源、42 项范围、客户端仿真实现、源码改动台账和升级流程统一见[客户端仿真与版本演进手册](docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md)；官方侧逐项证据路径由[证据索引](docs/EVIDENCE_INDEX.md)生成。发布状态本身不替代绑定具体源码树、镜像和画像摘要的 Campaign 验收。 |
 | `0.1.165-12` | 正式发布（Releases `v0.1.165-12`，镜像 `ghcr.io/itv3/sub2apiplus:0.1.165-12`） | 入站身份失败关闭改为投影出站：删除 5 个拒绝点（UA 不匹配 surface、originator 不匹配、turn metadata 解析失败、subagent 校验失败、parent thread 冲突），官方 `0.146` 与非 Ubuntu 平台的官方 `0.145.0` 客户端不再被拒；新增版本快照注册表与 release 指针取版本；补齐投影降级与 body 闭集丢弃字段的可观测信号 | **画像摘要 `9b7dd12d…` 未变，出站形态不变**，本轮只改变失败关闭策略与代码结构，未重跑候选 Campaign。新增两道实现侧门禁（版本标识符泄漏基线、§3.5 台账完整性复算）与逐调用点终态定型配对检查；§3.5 台账补登 10 个此前漏登的出站定型文件，统计口径由单提交改为冻结上游基线累计。按 §4.1，源码树变化严格上仍应有候选验收，本次发布未执行 |
 
 `0.1.165-6` 的宿主头剥离清单由三条路径共用，但只在 OpenAI HTTP/WS 侧取得 wire 证据；Anthropic 侧该项已无同版本证据，只能按共享逻辑外推，按 §1.1.2.3 的版本边界须重抓后才能计入实测结论。
@@ -100,11 +100,11 @@ API Key active 画像的 AnyRouter A/B 见 §1.2。
 引入回归并在 `0.1.165-9` 修回。
 
 官方形态的逐条规则、证据等级、观测通道、实现和升级流程统一见
-[Codex CLI 0.145.0 出站规格、实现与演进手册](docs/CODEX_CLI_0145_EGRESS_SPEC.md)。
+[Codex CLI 客户端仿真与版本演进手册](docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md)。
 
 #### 1.1.2 抓包方法、分组与证据边界
 
-> **抓包与升级操作手册**：Codex CLI 0.145.0 的证据生成、抓包、复算、验收和升级流程统一见[出站规格、实现与演进手册](docs/CODEX_CLI_0145_EGRESS_SPEC.md)；[工具目录 README](tools/official_client_capture/README.md)只保留入口导航。抓包验证环境在本文统称 Vircs。
+> **抓包与升级操作手册**：Codex CLI 0.145.0 的证据生成、抓包、复算、验收和升级流程统一见[客户端仿真与版本演进手册](docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md)；[工具目录 README](tools/official_client_capture/README.md)只保留入口导航。抓包验证环境在本文统称 Vircs。
 
 本地分析资料统一放在 `local-analysis/`（已被 `.gitignore` 整目录忽略，不进 Git，新环境需自行下载准备）：
 
@@ -265,8 +265,8 @@ Profile 只在入口端点受支持，且目标平台、OAuth 账号、实际出
 以上是六种协议转换与路由组合，不是六套伪装实现。以后修改入站协议转换、模型/账号路由、Finalizer 或 Transport 时必须重跑受影响组合；修改公共 Resolver 或目标平台公共出站链路时必须重跑全部六种组合。
 
 2026-07-27 的最终复核任务没有重跑 Kilo；本节 Kilo 表仅保留历史回归结果，不能作为
-`0.1.165-4` 的本轮新证据。当前 Codex 0.145.0 范围、证据和验收边界统一见
-[出站规格、实现与演进手册](docs/CODEX_CLI_0145_EGRESS_SPEC.md)。
+`0.1.165-4` 的本轮新证据。当前 Codex 0.147.0 范围、证据和验收边界统一见
+[客户端仿真与版本演进手册](docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md)。
 
 ##### 1.1.3.5 编码任务分解（已完成）
 
@@ -872,7 +872,7 @@ README 只保留当前契约和操作入口；详细设计、抓包步骤与运�
 | [`优化方案.md`](优化方案.md) | 官方客户端画像的架构方案、任务分解和完成状态。 |
 | [`tools/official_client_capture/README.md`](tools/official_client_capture/README.md) | Codex 官方出站工具目录的权威文档链接和唯一编排入口。 |
 | [`backend/internal/service/testdata/official_egress/README.md`](backend/internal/service/testdata/official_egress/README.md) | OAuth、API Key、Kilo、AnyRouter 和 Vircs 的脱敏实证索引。 |
-| [`docs/CODEX_CLI_0145_EGRESS_SPEC.md`](docs/CODEX_CLI_0145_EGRESS_SPEC.md) | Codex CLI 0.145.0 出站规则、当前实现和升级规范。 |
+| [`docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md`](docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md) | Codex CLI 客户端规则、Sub2API 仿真实现和版本演进规范；当前 active 基线为 0.147.0。 |
 | [`docs/EVIDENCE_INDEX.md`](docs/EVIDENCE_INDEX.md) | Codex 官方规则编号与证据文件的机器生成索引。 |
 | [`docs/Claude_code_21220_EGRESS_SPEC.md`](docs/Claude_code_21220_EGRESS_SPEC.md) | Claude Code 2.1.220 出站规格与证据状态。 |
 | [`docs/COMPOSITE_GROUPS.md`](docs/COMPOSITE_GROUPS.md) | Composite Groups 路由、管理流程和使用边界。 |

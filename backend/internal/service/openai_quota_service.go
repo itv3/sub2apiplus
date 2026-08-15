@@ -541,7 +541,7 @@ func (s *OpenAIQuotaService) doCodexQuotaRequest(
 			officialCodexHTTPInvocationInput{
 				Runtime: runtimeState, Account: account,
 				SinkID: officialEgressSinkQuotaWHAM, ProxyURL: proxyURL,
-				PolicyID: "changeset3.quota.wham", PolicySource: "docs/CODEX_CLI_0145_EGRESS_SPEC.md#policy-changeset-3",
+				PolicyID: "changeset3.quota.wham", PolicySource: "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md#policy-changeset-3",
 				BehaviorKind:  officialegress.BehaviorQuotaQuery,
 				AttemptBudget: holder.httpAttemptBudget,
 			},

@@ -15,7 +15,6 @@ import (
 
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	openaipkg "github.com/Wei-Shaw/sub2api/internal/pkg/openai"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/openaiidentity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/pagination"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/timezone"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
@@ -114,8 +113,6 @@ const (
 	openAIProbeCacheTTL = 10 * time.Minute
 	grokProbeRetryTTL   = 1 * time.Minute
 	grokFreeQuotaWindow = 24 * time.Hour
-	// 探针属于严格 wire 画像，版本必须来自已验收的发布画像，不能跟随发现值自动漂移。
-	openAICodexProbeVersion = openaiidentity.CodexVersion
 )
 
 // UsageCache 封装账户使用量相关的缓存
@@ -927,7 +924,7 @@ func (s *AccountUsageService) probeOpenAICodexSnapshot(ctx context.Context, acco
 	resp, err := officialEgress.ExecuteCodexHTTP(reqCtx, OfficialCodexHTTPExecution{
 		SinkID: officialEgressSinkUsageProbe, EndpointID: officialCodexEndpointResponsesHTTP,
 		Account: account, ProxyURL: proxyURL, Request: req,
-		PolicyID: "changeset1b.usage.responses_fallback.v1", PolicySource: "docs/CODEX_CLI_0145_EGRESS_SPEC.md#policy-changeset-1b",
+		PolicyID: "changeset1b.usage.responses_fallback.v1", PolicySource: "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md#policy-changeset-1b",
 		MinimumInterval: openAIProbeCacheTTL, ConcurrencyLimit: 1, HasBillingSideEffect: true,
 	})
 	if err != nil {

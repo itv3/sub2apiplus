@@ -145,7 +145,10 @@ def validate_state(value: Any, path: str) -> None:
 
 
 def scope_of(path: str) -> str:
-    if path.startswith("docs/egress/maintenance/") or path == "docs/CODEX_CLI_0145_EGRESS_SPEC.md":
+    if path.startswith("docs/egress/maintenance/") or path in {
+        "docs/CODEX_CLI_0145_EGRESS_SPEC.md",
+        "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+    }:
         return "documentation_and_receipts"
     if path.startswith("backend/internal/officialegress/"):
         return "officialegress_core"

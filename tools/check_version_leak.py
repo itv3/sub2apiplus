@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """检查生产 Go 代码中把 Codex 版本焊进符号名或注释的写法。
 
-§3.1 要求稳定执行引擎“不包含按版本散落的常量和模型特判”，§4.5.13 要求新 Codex
+§3.2 要求稳定执行引擎“不包含按版本散落的常量和模型特判”，§4.3.2 要求新 Codex
 版本原则上只新增画像、版本清单和测试，不修改 §3.5.2 的共享接入点。两条约束依赖
 同一个可机器复算的事实：除版本快照本身以外，生产代码不应把某个具体版本写进代码结构。
 
@@ -156,7 +156,7 @@ SELF_TEST_CASES: list[tuple[str, bool, str]] = [
     # 以免在没有语法信息的情况下猜测供应商归属。
     ('{Name: "version", Value: "0.146.0"},', False, "裸版本交给 AST 门禁"),
     ('Version:    "2.1.220",', False, "Anthropic 版本不属本脚本范围"),
-    ("// 见 §3.5.2 与 §4.5.13 的约定", False, "文档章节号"),
+    ("// 见 §3.5.2 与 §4.3.2 的约定", False, "文档章节号"),
     ("// coder/websocket@v1.8.14 Conn.Write is synchronous", False, "依赖库版本"),
     ('proxyURL = "http://192.168.1.10:8080"', False, "内网地址"),
     ('grokCLIStableVersion = "0.2.93"', False, "其他供应商 CLI 版本"),

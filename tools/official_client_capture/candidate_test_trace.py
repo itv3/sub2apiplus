@@ -50,8 +50,12 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 映射内含 source_snapshot（13 个生产源码文件的摘要），trace 生成时会逐个复算比对。
 # 本次连带更新 `official_egress_codex_0145_profile.go` 那条（4 处引用）：该文件因补
 # `wham_settings_user` 端点定义（§10.2.1 第 4 条）而变更，映射建于补齐之前。
+#
+# 2026-08-16（R12）：版本泄漏纠正把共享生产代码中的硬编码版本改为画像驱动，
+# `official_egress_openai_http.go` 与 `openai_alpha_search.go` 的源码摘要随之变化。
+# 映射只更新这两份源码快照，不改变测试、事实或规则语义。
 FROZEN_MAPPING_SHA256 = (
-    "7f1f560707737c3f7d25831093454413df1016c5465f5fefcae8dad3e8031a3f"
+    "7e11d0de1805cbc0631938ab4f9c0cca155b8542dd0f921cc11eeaf4fa121fd4"
 )
 # 2026-08-11（R8）：与双轨 selector 修订后的冻结断言画像保持同一摘要，
 # 含 BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束的修订。
@@ -76,8 +80,10 @@ FROZEN_MAPPING_SHA256 = (
 # 2026-08-15（R11）：EP-022/image-header-order 排除带 `labels.surface` 的
 # 独立 images 探针。该探针没有 Cookie 建立前置，只用于端点和 body 取证；
 # Cookie 线序仍由 frozen-aux 中经过 prime 的 generation/edit 双样本验收。
+# 同日主文档 active 规则升级为 0.147；本画像同步重绑 source_spec 章节摘要，并修正
+# EP-019 的人类可读描述为三个 GET。机器断言与验收契约载荷不变。
 FROZEN_PROFILE_SHA256 = (
-    "459a45c065e32236d46bfa126c34df69263c5d077cee70634744ca56063884ac"
+    "0ccbd50e37569fdf18ca2b4d2faf1b2a10105a33435f05b0e3ea68924945e162"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

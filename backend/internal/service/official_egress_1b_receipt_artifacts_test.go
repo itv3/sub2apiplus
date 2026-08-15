@@ -127,7 +127,7 @@ func replayChangeset1BReceiptArtifact(
 	response, err := runtimeState.ExecuteCodexHTTP(requestContext, OfficialCodexHTTPExecution{
 		SinkID: testCase.sinkID, EndpointID: testCase.endpointID,
 		Account: account, Request: request,
-		PolicyID: "changeset1b.migration-receipt.v1", PolicySource: "docs/CODEX_CLI_0145_EGRESS_SPEC.md#policy-changeset-1b",
+		PolicyID: "changeset1b.migration-receipt.v1", PolicySource: "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md#policy-changeset-1b",
 		ConcurrencyLimit: 1, HasBillingSideEffect: true,
 	})
 	require.NoError(t, err)

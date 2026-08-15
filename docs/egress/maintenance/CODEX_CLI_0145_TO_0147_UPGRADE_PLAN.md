@@ -1,10 +1,20 @@
-# Codex CLI 0.145.0 → 0.147.0 Official Egress 升级计划（生产切换已完成）
+# Codex CLI 0.145.0 → 0.147.0 Official Egress 升级计划（生产切换已完成，终态门禁待纠正）
 
-> 状态：**§5～§9 已全部完成**。正式 k80 Campaign 已通过 `accept`：42/42 规则通过、
-> 15 项门禁全绿、`accepted=true`；k71 遗留的 7 条已全部验证解决，详见 §10.2。
+> 状态：**候选行为验收与生产运行闭环完成，promotion 后仓库终态门禁待纠正**。正式 k80
+> Campaign 已通过 `accept`：42/42 规则通过、15 项 Campaign 门禁全绿、`accepted=true`；
+> k71 遗留的 7 条已全部验证解决，详见 §10.2。
 > 仓库与 Vircs 生产 ReleaseCatalog 均已晋升为 Active=0.147／Previous=0.145；正式实例
 > 运行 k80 `0.1.171-14` 镜像，不再设置强制 `previous`。独立 canary、0.145 全镜像回滚
 > 演练及 k80 恢复后复核均已通过，详见 §9 与生产激活收据。
+>
+> **完成后复核更正（2026-08-15）**：上述结论证明候选行为验收、生产激活和回滚闭环，
+> 不证明 promotion 后的正式源码树通过了仓库总门禁。复核在 Campaign 冻结抓包镜像中对
+> `test_mitm_capture_addon.py` 的 3 项测试分别于 DMIT 候选树和 Vircs 正式树执行，均为
+> 3/3 通过、0 跳过；宿主机缺少 `mitmproxy` 导致的跳过不属于正式结果。另一方面，Vircs
+> `/root/oauth-capture/production-source-k80` 执行 `tools/check_version_leak.py` 返回 1，
+> 在 5 个共享生产文件中检出 10 个基线外文本指纹。因此，下文“门禁全绿”只适用于
+> promotion 前 candidate；在纠正共享代码并封存终态门禁收据前，不得据此声称正式源码树
+> 已通过完整 `make check-egress-spec`。
 >
 > 官方采集固定在 Vircs（Codex CLI 只在那里），候选采集固定在 DMIT（x86_64 测试机）。
 > 进度与下一步见 §10.1，accept 验收结果见 §10.2，历轮死因与由此固化的不变量见 §10.8。
@@ -23,7 +33,7 @@
 
 权威顺序：
 
-1. [`CODEX_CLI_0145_EGRESS_SPEC.md`](../../CODEX_CLI_0145_EGRESS_SPEC.md) 第四部分；
+1. [`CODEX_CLI_CLIENT_EMULATION_GUIDE.md`](../../CODEX_CLI_CLIENT_EMULATION_GUIDE.md) 第四部分；
 2. [`OFFICIAL_EGRESS_CONVERGENCE_CHANGESETS.md`](OFFICIAL_EGRESS_CONVERGENCE_CHANGESETS.md) §3；
 3. [`CHG-03_ALPHA_SEARCH_VERSION_AUTHORITY.md`](CHG-03_ALPHA_SEARCH_VERSION_AUTHORITY.md)；
 4. 本计划。
@@ -54,7 +64,7 @@ Previous = 0.145.0
 | 本机 Codex | ChatGPT.app 内为 `0.147.0-alpha.6.5`，不得作为 stable 证据 |
 | 工具身份 | P0 收口时受管 80 个 `.py/.sh/.json`，摘要 `fa8fc9fa…` |
 | 基线回放 | 健康环境下通过：基线 180、补录 0、移除 22 |
-| 当前门禁 | DOC-PRE/P0 与官方封存复核通过；`make check-egress-spec` 全绿 |
+| 当前门禁 | promotion 前 DOC-PRE/P0、candidate 与官方封存复核通过；promotion 后 Vircs 正式源码树的文本版本泄漏门禁返回 1，命中 10 个基线外指纹，终态总门禁待纠正 |
 
 工具身份枚举必须递归扫描 `tools/official_client_capture/`，排除 `tests/`、`versions/`、
 `__pycache__/`，并记录路径清单、文件数和集合摘要。
@@ -343,7 +353,7 @@ Campaign 的 `classification/approved/`，并通过 stage-contract、文件摘�
    `ForwardAlphaSearch → buildOpenAIAlphaSearchRequest → invocation.Execute`，逐 mode 核对
    URL/method/Host、version header、UA、TLS、release/profile digest；通用 Executor 无效；
 7. **alpha 遗留判定**：对固定 ProfileVersion 做错误值、空值、正确值 mutation；有消费者
-   才提 bundle 派生最小修复，无消费者才走规格 §4.9 退休；
+   才提 bundle 派生最小修复，无消费者才走规格 §5.2 退休；
 8. **Body/投影**：只有新增或变化的条件、枚举、字段才触发生产改动；不可达差异只记录
    测试。新增 service 消费字段必须做字段覆盖或逐叶 mutation，digest 相同不能证明完整。
 
@@ -524,14 +534,28 @@ Keeper、网络与挂载状态，并落实以下两件事：
    keeper、挂载、代理和 CA；
 6. 验收通过后保持 Active=0.147、Previous=0.145。
 
+promotion 与正式构建之间还必须完成以下终态检查；任何一项缺失都不得构建、canary 或激活：
+
+1. 以 candidate tree digest、promotion inventory 和 promotion receipt 复算 production tree
+   差异；只允许 Catalog、contract 和 receipt 的确定性输出；
+2. 清单外共享代码、依赖、画像、测试或门禁基线发生变化时停止 promotion，返回新 candidate
+   或 Campaign，重新执行 compare／accept；
+3. 在 Vircs 的最终 production 源码树运行 `make check-egress-spec`、完整回归和目标架构测试；
+4. 封存终态门禁收据，绑定 production tree digest、命令、退出码、版本泄漏文本／Go AST 基线
+   摘要和测试通过／失败／跳过数量；激活收据必须校验该收据且失败关闭。
+
+版本泄漏 baseline 只能在命中减少后用于收紧旧债；不得通过接纳本轮新增指纹让 promotion 变绿。
+
 上线动作之前还必须：冻结源码／镜像／配置／迁移与依赖摘要；只读核对 Vircs 实际架构与镜像
 架构一致；部署**独立 canary** 完成启动、健康、API、WebSocket、出站 TLS 与错误率检查，
 canary 通过后才允许更新正式实例。全程使用独立账号、独立 `CODEX_HOME`、独立配置和独立
 证据目录，不触碰生产凭据、全局 `/etc/hosts`、生产 relay 或生产 Active/Previous。
 
-> **完成（2026-08-15T09:16:35Z）。** 晋升工具把已验收的 0.147 Release 从 Previous
+> **行为与生产切换完成（2026-08-15T09:16:35Z）。** 晋升工具把已验收的 0.147 Release 从 Previous
 > 迁到 Active，并把 0.145 保留为 Previous；晋升不改写两个 Snapshot。生产源码树在
 > Vircs 原生 `linux/amd64` 上通过 officialegress 全族、晋升命令与 service 全量测试后构建。
+> 这些 Go 包测试不包含 `tools/check_version_leak.py`，不能替代上文新增的终态总门禁；本轮
+> production tree 的 10 个基线外文本指纹仍待纠正。
 
 正式结果：
 
@@ -542,6 +566,7 @@ canary 通过后才允许更新正式实例。全程使用独立账号、独立 
 | 正式镜像 | `127.0.0.1:5000/sub2api/codex0147-k80@sha256:fc8d235c570d3611ee05ba7ed312ad85ef2bf27170c065d7d5b9213e65f8f469`；`linux/amd64`；Sub2API `0.1.171-14` |
 | 独立 canary | 独立 PostgreSQL/Redis、无生产凭据；health 通过，首页 200，未授权 `/v1/models` 401，Active=0.147，fatal=0；通过后已删除临时容器、tmpfs 和网络 |
 | 协议与传输 | k80 accept 已覆盖 42/42，并由 Kilo 完成 Compatible HTTP 与 Responses WebSocket；晋升后的同源树再于 Vircs 执行全量 service/transport/TLS 测试 |
+| 终态仓库门禁 | ❌ 完成后复核发现 `tools/check_version_leak.py` 返回 1：5 个共享生产文件、10 个基线外文本指纹；不影响既有 42/42 行为验收事实，但不得宣称正式源码树总门禁全绿 |
 | 正式 compose | `/root/Docker/sub2apiplus/deployments/codex0147-k80/image.override.yml`；旧 k34 override 不再属于运行 compose |
 | 最终激活事实 | Active=`0.147.0`，profile=`codex-0.147.0-official-k59-v1`，profile digest=`94071c8e…`，release digest=`caa19484…`，强制 mode 环境变量计数 0 |
 | 生产完整性 | health 通过，首页 200，未授权 `/v1/models` 401；85 张表、100 个账号、6 个用户、15 把 API Key 前后不变；Redis/keeper 正常；fatal 与关键 Guard 失败均为 0 |
@@ -564,8 +589,9 @@ Release＋镜像＋compose。只有正式切换已证明 Previous=0.145 时，�
 
 ## 10. 当前执行状态与跨轮知识
 
-2026-08-15 · k80 · **§5～§9 已全部完成；Vircs 正式运行 k80 Active=0.147，
-Previous=0.145，独立 canary、0.145 回滚演练和恢复后复核均通过。**
+2026-08-15 · k80 · **候选行为验收、生产切换、独立 canary、0.145 回滚演练和恢复后复核均已
+完成；Vircs 正式运行 k80 Active=0.147、Previous=0.145。promotion 后终态仓库门禁尚未闭环：
+正式源码树仍有 10 个基线外文本版本指纹。**
 
 本章装着两类性质不同的内容，按需要读，不必通读：
 
@@ -642,7 +668,7 @@ Ubuntu 24.04 / x86_64 的 Vircs 完成；候选服务和候选采集也在 x86_6
 | §6 Campaign / 官方取证 / classify | ✅ **完成**：k80 官方 seal 与分类均 `complete`，2788 条 discovery 全部归类、`blocked=false` | — | Vircs | 否 |
 | §7 建立 0.147 画像 | ✅ **完成**：17 端点画像、Snapshot/Release、版本专属 route binding 与受管收据均已入库；契约测试已适配并通过 | — | Vircs＋本地 | 否 |
 | §8 Candidate / compare / accept | ✅ **完成**：k80 正式 Campaign 已由机器验收，42/42 规则通过、15 项门禁全绿、`accepted=true` | — | Vircs＋DMIT＋本地 Kilo | 是（已完成两入口请求） |
-| §9 生产启用与回滚 | ✅ **完成**：晋升、Vircs amd64 构建、独立 canary、正式切换、0.145 全镜像回滚演练、恢复后复核全部通过 | 维持 Active=0.147／Previous=0.145；按常规生产监控，不再使用 k34 override | **Vircs 生产** | 是（已确认并完成） |
+| §9 生产启用与回滚 | 🟡 **行为与运行闭环完成，仓库终态门禁待纠正**：晋升、Vircs amd64 构建、独立 canary、正式切换、0.145 全镜像回滚演练、恢复后复核通过；正式源码树仍有 10 个基线外文本版本指纹 | 修复共享代码版本硬编码，在最终 Vircs production tree 重跑总门禁并封存纠正收据；Active／Previous 与当前生产镜像在纠正发布前保持不变 | **Vircs 生产** | 是（纠正发布另行确认） |
 
 本轮正式 Campaign：
 
@@ -671,12 +697,15 @@ Ubuntu 24.04 / x86_64 的 Vircs 完成；候选服务和候选采集也在 x86_6
 | 候选 `seal` | ✅ | 42 条规则／108 项检查；154 个 artifact、396 条 observation；安全扫描 668 文件、31,546,089 字节、0 finding |
 | `compare` | ✅ | `status=complete`、`offline_only=true`、`profile_binding_matches=true`、规则覆盖 42/42；原始包 `equal=false` 是两侧实现证据不逐字相同，不是 acceptance contract 的失败条件 |
 | `accept` | ✅ | `accepted=true`、42/42 `pass`、0 fail、0 N/A；15 项 gate 全为 true；acceptance result SHA-256 `b6bc412789534e1de3b7df9326b684ad1d8935ce4949b0491fcec98105a40372` |
-| Vircs 原生测试与构建 | ✅ | `go1.26.6 linux/amd64`；officialegress 全族、晋升命令、service 全量通过；正式镜像 Sub2API `0.1.171-14`，image digest `fc8d235c…` |
+| Vircs 原生 Go 测试与构建 | ✅ | `go1.26.6 linux/amd64`；officialegress 全族、晋升命令、service 全量通过；这些范围不包含 Python 文本版本泄漏门禁；正式镜像 Sub2API `0.1.171-14`，image digest `fc8d235c…` |
+| Vircs 终态仓库门禁 | ❌ | 正式源码树执行 `tools/check_version_leak.py` 返回 1：5 个共享生产文件、10 个基线外文本指纹；须纠正后重跑 `make check-egress-spec` |
 | canary／切换／回滚／恢复 | ✅ | 独立 canary 通过；正式 Active=0.147；固定 0.145 镜像回滚通过；恢复 k80 后 health、激活事实、数据库、Redis、Keeper 与 Guard 日志复核通过 |
 
-**升级计划已执行完成。** 后续只做常规生产监控；如触发 §9.2 的失败条件，使用已演练的
+**候选行为验收与生产运行闭环已经完成，仓库终态门禁尚未完成。** 纠正发布前继续维持当前
+Active／Previous 和生产镜像并进行常规监控；如触发 §9.2 的运行失败条件，使用已演练的
 `codex0145-k80-rollback/image.override.yml` 仅替换应用容器。不得重新启用旧 k34 override，
-也不得删除 0.145 Previous、回滚镜像、Campaign 或两份正式激活收据。
+也不得删除 0.145 Previous、回滚镜像、Campaign 或两份正式激活收据。纠正 10 个文本版本
+指纹后，必须在最终 production tree 重跑总门禁、完整回归和 canary，并另行封存纠正收据。
 
 ### 10.1.1 正式证据锚点（接手必读）
 
@@ -693,7 +722,8 @@ Ubuntu 24.04 / x86_64 的 Vircs 完成；候选服务和候选采集也在 x86_6
 
 前六项相对路径均以本轮 Campaign 目录为根，后两项位于仓库 maintenance 目录。Campaign
 验收时工作区实现与工具修复已分别提交且 `git status` 为空；生产晋升变更随后作为独立
-变更集实施，§7 契约门禁、本地全后端回归与 Vircs amd64 同源回归均已通过。
+变更集实施，§7 契约门禁、本地全后端回归与 Vircs amd64 指定 Go 包回归均已通过；该记录
+不包含 promotion 后正式源码树的 Python 文本版本泄漏门禁，不能作为终态总门禁收据。
 
 ### 10.2 accept 原待解决的 7 条（k80 已全部验收解决）
 

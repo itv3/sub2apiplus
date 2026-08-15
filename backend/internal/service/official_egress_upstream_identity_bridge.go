@@ -1,6 +1,30 @@
 package service
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
+)
+
+// mustResolveActiveCodexIdentity 在进程启动时从正式发布目录读取唯一默认身份。
+// 默认身份被多个兼容路径复用，因此目录异常必须 fail-close，不能静默退回硬编码值。
+func mustResolveActiveCodexIdentity() (string, string) {
+	release, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseModeActive)
+	if err != nil {
+		panic(fmt.Errorf("解析 Active Codex ReleaseCatalog: %w", err))
+	}
+	node, ok := release.Node(officialegress.RegistryPurposeOpenAIOAuthHTTP)
+	if !ok {
+		panic("Active Codex ReleaseCatalog 缺少 OpenAI OAuth HTTP 节点")
+	}
+	userAgent := strings.TrimSpace(node.Build.UserAgent)
+	version := NormalizeCodexClientVersion(node.Build.Version)
+	if userAgent == "" || version == "" {
+		panic("Active Codex ReleaseCatalog 的客户端身份不完整")
+	}
+	return userAgent, version
+}
 
 // resolveVerifiedCodexCanonicalUserAgent 是上游 header 身份基础设施与本项目
 // strict wire 画像之间的唯一桥接点。它只读取 ReleaseCatalog 的 active 指针；

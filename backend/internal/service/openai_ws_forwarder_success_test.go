@@ -755,13 +755,13 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T
 	require.True(t, gjson.Get(requestJSON, "stream").Bool(), "OAuth Codex 规范化后应强制 stream=true")
 	require.Equal(t, "native-wsv2", gjson.Get(requestJSON, "input.0.namespace").String(), "OAuth WSv2 应保留原生 namespace")
 	require.Equal(t, openAIWSBetaV2Value, captureDialer.lastHeaders.Get("OpenAI-Beta"))
-	require.Equal(t, activeOpenAICodexVersionForTest(), captureDialer.lastHeaders.Get("version"))
+	require.Equal(t, codexCLIVersion, captureDialer.lastHeaders.Get("version"))
 	require.Equal(t, "remote_compaction_v2", captureDialer.lastHeaders.Get("x-codex-beta-features"))
-	require.Equal(t, activeOpenAICodexUserAgentForTest(), captureDialer.lastHeaders.Get("user-agent"))
+	require.Equal(t, codexCLIUserAgent, captureDialer.lastHeaders.Get("user-agent"))
 	require.Equal(t, officialOpenAIHTTPOriginator, captureDialer.lastHeaders.Get("originator"))
 	require.Equal(t, "Bearer oauth-token-1", captureDialer.lastHeaders.Get("authorization"))
 	require.Equal(t, "chatgpt-test-account-29", captureDialer.lastHeaders.Get("chatgpt-account-id"))
-	// 当前 Active 画像删除旧下划线身份头，只保留连字符形式的会话身份。
+	// 0.145.0 画像删除旧下划线身份头，只保留连字符形式的会话身份。
 	require.Empty(t, captureDialer.lastHeaders.Get("session_id"))
 	require.Empty(t, captureDialer.lastHeaders.Get("conversation_id"))
 	sessionID, err := uuid.Parse(captureDialer.lastHeaders.Get("session-id"))
@@ -779,10 +779,10 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthStoreFalseByDefault(t *testing.T
 	require.True(t, gjson.Get(requestJSON, "client_metadata").IsObject())
 }
 
-func TestOpenAIGatewayService_Forward_WSv2_OAuthUsesActiveCodexCanonicalIdentity(t *testing.T) {
+func TestOpenAIGatewayService_Forward_WSv2_OAuthUsesCodex0145CanonicalIdentity(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	// 第三方 HTTP 入站经 WS 出站时，最终身份由当前 Active 版本画像定型，
+	// 第三方 HTTP 入站经 WS 出站时，最终身份由 0.145.0 版本画像定型，
 	// 不再透传任意历史 Codex 版本或桌面端身份。
 	tests := []struct {
 		name       string
@@ -860,8 +860,8 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthUsesActiveCodexCanonicalIdentity
 			require.NoError(t, err)
 			require.NotNil(t, result)
 			require.Equal(t, officialOpenAIHTTPOriginator, captureDialer.lastHeaders.Get("originator"))
-			require.Equal(t, activeOpenAICodexUserAgentForTest(), captureDialer.lastHeaders.Get("user-agent"))
-			require.Equal(t, activeOpenAICodexVersionForTest(), captureDialer.lastHeaders.Get("version"))
+			require.Equal(t, codexCLIUserAgent, captureDialer.lastHeaders.Get("user-agent"))
+			require.Equal(t, codexCLIVersion, captureDialer.lastHeaders.Get("version"))
 			require.Equal(t, "chatgpt-test-account-129", captureDialer.lastHeaders.Get("chatgpt-account-id"))
 		})
 	}
@@ -933,8 +933,8 @@ func TestOpenAIGatewayService_Forward_WSv2_OAuthAccountUserAgentCannotOverrideSt
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, officialOpenAIHTTPOriginator, captureDialer.lastHeaders.Get("originator"))
-	require.Equal(t, activeOpenAICodexUserAgentForTest(), captureDialer.lastHeaders.Get("user-agent"))
-	require.Equal(t, activeOpenAICodexVersionForTest(), captureDialer.lastHeaders.Get("version"))
+	require.Equal(t, officialOpenAIHTTPUserAgent, captureDialer.lastHeaders.Get("user-agent"))
+	require.Equal(t, codexCLIVersion, captureDialer.lastHeaders.Get("version"))
 	require.NotContains(t, captureDialer.lastHeaders.Get("user-agent"), "0.125.0")
 }
 

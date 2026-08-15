@@ -246,8 +246,8 @@ class RepositoryDeclarationTest(unittest.TestCase):
         self.assertNotIn("residency", models["labels"])
         self.assertEqual(residency["labels"]["residency"], "us")
 
-    def test_a03_first_connection_does_not_infer_mode_from_order(self) -> None:
-        """A03 首连接只绑定无 Cookie 前提，不按缓存刷新时点推断模式。"""
+    def test_a03_models_and_prime_connections_keep_their_actual_modes(self) -> None:
+        """A03 的启动 models GET 与 prime POST 不得互换 Lite 标签。"""
 
         entry = next(
             item
@@ -255,16 +255,16 @@ class RepositoryDeclarationTest(unittest.TestCase):
             if item["job_id"] == "candidate-frozen-core"
         )
         by_glob = {rule["glob"]: rule for rule in entry["rules"]}
-        first_connection = by_glob[
+        models = by_glob[
             "scenarios/A03/relay/conn001.client_to_upstream.bin"
         ]
         prime = by_glob[
             "scenarios/A03/relay/conn002.client_to_upstream.bin"
         ]
 
-        self.assertNotIn("mode", first_connection["labels"])
-        self.assertNotIn("track", first_connection["labels"])
-        self.assertEqual(first_connection["labels"]["variant"], "no_cookie")
+        self.assertEqual(models["labels"]["mode"], "lite")
+        self.assertEqual(models["labels"]["track"], "lite")
+        self.assertEqual(models["labels"]["variant"], "no_cookie")
         self.assertEqual(prime["labels"]["mode"], "non_lite")
         self.assertEqual(prime["labels"]["track"], "main")
         self.assertEqual(prime["labels"]["compression"], "zstd")

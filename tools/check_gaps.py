@@ -7,7 +7,7 @@ import pathlib
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-SPEC = ROOT / "docs" / "CODEX_CLI_0145_EGRESS_SPEC.md"
+SPEC = ROOT / "docs" / "CODEX_CLI_CLIENT_EMULATION_GUIDE.md"
 sys.path.insert(0, str(ROOT / "tools"))
 
 import evidence_index as evidence  # noqa: E402

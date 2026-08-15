@@ -15,7 +15,7 @@ from __future__ import annotations
 import pathlib, re, sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-SPEC = ROOT / "docs/CODEX_CLI_0145_EGRESS_SPEC.md"
+SPEC = ROOT / "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md"
 RAW  = ROOT / "local-analysis/captures/raw-scrubbed"
 
 # 匹配「`运行号`（… N 连接 …）」这类标注。运行号与数字之间允许有任意修饰文字

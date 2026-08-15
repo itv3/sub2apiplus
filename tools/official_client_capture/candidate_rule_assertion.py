@@ -58,8 +58,10 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # GET 一并选中，断言 body 字段必然失败；R8 补出非 Lite 的 HTTP POST 样本后，这两条
 # 约束不再造成「选不到」。验收契约载荷逐字未变（25／17 分组、42 条 validation_modes
 # 与 expected_check_ids 全部不变），故 acceptance_contract 的冻结摘要不随之漂移。
+# 2026-08-15 主文档 active 规则升级为 0.147；本文件继续保留 0.145 历史断言载荷，
+# 仅重绑 source_spec 章节摘要供基线复算使用。
 FROZEN_PROFILE_SHA256 = (
-    "af4cfea8437d465284523bcd5b80feb199877f64953d7fc27d8f0dbca2271ed0"
+    "4aefd2b7c585d78aecb53e57037c0ef4e0002ccb6a6f001423604103263cd6f5"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RULE_ID_RE = re.compile(r"^SPEC-[A-Z0-9]+-[0-9]{3}$")
@@ -472,9 +474,9 @@ def source_spec_section_sha256(source_path: Path, fragment: str) -> str:
     if not fragment:
         return file_sha256(source_path)
     headings = {
-        "第二章": "# 第二部分 规则",
-        "第二部分": "# 第二部分 规则",
-        "第二部分-规则": "# 第二部分 规则",
+        "第二章": "# 第二部分 Codex CLI 客户端规则画像",
+        "第二部分": "# 第二部分 Codex CLI 客户端规则画像",
+        "第二部分-规则": "# 第二部分 Codex CLI 客户端规则画像",
     }
     expected_heading = headings.get(fragment)
     if expected_heading is None:

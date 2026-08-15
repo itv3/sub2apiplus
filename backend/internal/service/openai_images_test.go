@@ -728,7 +728,7 @@ func findOpenAIImageTestSSEEvent(events []openAIImageTestSSEEvent, name string) 
 	return openAIImageTestSSEEvent{}, false
 }
 
-func TestOpenAIGatewayServiceForwardImages_OAuthUsesActiveCodexGenerationsContract(t *testing.T) {
+func TestOpenAIGatewayServiceForwardImages_OAuthUsesCodex0145GenerationsContract(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"gpt-image-2","prompt":"draw a cat","size":"1024x1024","quality":"high","background":"auto","n":3}`)
 
@@ -784,7 +784,7 @@ func TestOpenAIGatewayServiceForwardImages_OAuthUsesActiveCodexGenerationsContra
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.lastReq.Context()))
 	require.Equal(t, "application/json", upstream.lastReq.Header.Get("Content-Type"))
 	require.Equal(t, "*/*", upstream.lastReq.Header.Get("Accept"))
-	require.Equal(t, activeOpenAICodexVersionForTest(), upstream.lastReq.Header.Get("Version"))
+	require.Equal(t, officialCodexVersion0145, upstream.lastReq.Header.Get("Version"))
 	require.Equal(t, "acct-123", upstream.lastReq.Header.Get("chatgpt-account-id"))
 	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"),
 		"OAuth 图像请求不得携带 OpenAI-Beta")

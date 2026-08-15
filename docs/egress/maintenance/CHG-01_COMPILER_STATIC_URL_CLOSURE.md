@@ -223,7 +223,7 @@ connection、Header、Body、TLS 等 final-wire 字段不变。capture 不记录
 - 不在本变更集统一 query 的键顺序或合法等价转义表示。
 - 不修改 OAuth custom base URL、第三方 API Key、非 Codex persona 或画像外 route 的产品语义。
 - 不调整 Header、Body、TLS 画像、业务路由、连接生命周期或 adapter 行为。
-- 不删除旧路径或兼容层，不触发规格 §4.9 退休流程。
+- 不删除旧路径或兼容层，不触发规格 §5.2 退休流程。
 
 ## 9. 风险、侵入面与回滚
 

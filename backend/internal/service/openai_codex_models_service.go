@@ -329,7 +329,7 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifest(
 
 	requestedClientVersion := strings.TrimSpace(clientVersion)
 	if requestedClientVersion == "" {
-		requestedClientVersion = openAICodexProbeVersion
+		requestedClientVersion = resolveVerifiedCodexClientVersion()
 	}
 
 	requestEndpoint := chatgptCodexModelsURL

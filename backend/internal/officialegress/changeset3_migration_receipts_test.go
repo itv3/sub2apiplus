@@ -58,19 +58,9 @@ func TestChangeset3MigrationReceiptsMatchRuntimeContracts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var release ResolvedCodexRelease
-	for _, mode := range []ReleaseMode{ReleaseModeActive, ReleaseModePrevious} {
-		candidate, resolveErr := DefaultReleaseCatalog().Resolve(mode)
-		if resolveErr != nil {
-			t.Fatal(resolveErr)
-		}
-		if candidate.Version() == "0.145.0" {
-			release = candidate
-			break
-		}
-	}
-	if release.Version() != "0.145.0" {
-		t.Fatal("变更集 3 历史收据缺少 0.145 Release")
+	release, err := DefaultReleaseCatalog().Resolve(ReleaseModeActive)
+	if err != nil {
+		t.Fatal(err)
 	}
 	endpointBindings, err := NewEndpointBindingCatalog(catalog, physical, release.ExecutableProfile())
 	if err != nil {

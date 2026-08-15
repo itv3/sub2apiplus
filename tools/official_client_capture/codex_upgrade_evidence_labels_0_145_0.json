@@ -1259,11 +1259,13 @@
           },
           "labels": {
             "transport": "http",
+            "track": "lite",
+            "mode": "lite",
             "variant": "no_cookie",
             "body_length": "automatic",
             "provider": "openai_oauth"
           },
-          "rationale": "A03 第一个连接不带 cookie，但启动期 models GET 可能因进程内模型缓存刷新时点落在第一个或第二个连接。这里仅标记由请求前提确定的 variant=no_cookie，不再按连接序号推断 Lite track/mode；Lite 正例由驱动明确产生的 conn004/conn005 独立标注。"
+          "rationale": "A03 首次请求会先触发目标服务的启动期 models GET；该请求不带 cookie，且返回清单同时承载 Lite 模型条件，故标记 track/mode=lite 与 variant=no_cookie。"
         },
         {
           "glob": "scenarios/A03/relay/conn002.client_to_upstream.bin",

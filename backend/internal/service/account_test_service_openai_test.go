@@ -679,7 +679,7 @@ func TestAccountTestService_OpenAIAPIKeyCodexMimicUsesResponsesProbe(t *testing.
 	require.Empty(t, upstream.lastReq.Header.Get("session_id"))
 	require.Regexp(t, openAICodexUUIDPattern, upstream.lastReq.Header.Get("session-id"))
 	require.NotNil(t, upstream.lastTLSProfile)
-	require.Contains(t, upstream.lastTLSProfile.Name, "Codex CLI "+activeOpenAICodexVersionForTest())
+	require.Contains(t, upstream.lastTLSProfile.Name, "Codex CLI 0.145.0")
 	require.Empty(t, upstream.lastTLSProfile.ALPNProtocols)
 	require.Equal(t, "message", gjson.GetBytes(upstream.lastBody, "input.0.type").String())
 	require.Equal(t, "gpt-5.4", gjson.GetBytes(upstream.lastBody, "model").String())

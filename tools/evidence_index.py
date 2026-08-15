@@ -18,7 +18,7 @@ from dataclasses import dataclass
 import spec_status
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-SPEC = ROOT / "docs" / "CODEX_CLI_0145_EGRESS_SPEC.md"
+SPEC = ROOT / "docs" / "CODEX_CLI_CLIENT_EMULATION_GUIDE.md"
 OUT = ROOT / "docs" / "EVIDENCE_INDEX.md"
 CAPTURES = ROOT / "local-analysis" / "captures"
 RAW = CAPTURES / "raw-scrubbed"

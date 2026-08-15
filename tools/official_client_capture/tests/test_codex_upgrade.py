@@ -271,7 +271,7 @@ class CodexUpgradeTest(unittest.TestCase):
         name: str,
     ) -> Path:
         spec_path = Path(__file__).resolve().parents[3] / "docs" / (
-            "CODEX_CLI_0145_EGRESS_SPEC.md"
+            "CODEX_CLI_CLIENT_EMULATION_GUIDE.md"
         )
         scenario_manifest = root / name
         self._write_json(
@@ -285,7 +285,7 @@ class CodexUpgradeTest(unittest.TestCase):
                     else "codex-0.145.0-upgrade-v1"
                 ),
                 "source_spec": {
-                    "path": "docs/CODEX_CLI_0145_EGRESS_SPEC.md",
+                    "path": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
                     "fragment": "第二章",
                     "sha256": codex_upgrade.source_spec_section_sha256(
                         spec_path, "第二章"
@@ -1297,7 +1297,7 @@ class CodexUpgradeTest(unittest.TestCase):
             json.dumps(payload, ensure_ascii=False).replace("0.145.0", version)
         )
         spec_path = Path(__file__).resolve().parents[3] / (
-            "docs/CODEX_CLI_0145_EGRESS_SPEC.md"
+            "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md"
         )
         payload["source_spec_sha256"] = (
             codex_upgrade.source_spec_section_sha256(spec_path, "第二章")

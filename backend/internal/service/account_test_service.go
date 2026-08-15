@@ -225,7 +225,7 @@ func createAnthropicAPIKeyMimicTestPayload(modelID string) map[string]any {
 // All account types use full Claude Code client characteristics, only auth header differs
 // modelID is optional - if empty, defaults to claude.DefaultTestModel
 // mode 可选；compact 执行 /responses/compact 探针，official_files_probe 执行
-// Codex 0.147.0 Files 三段式出站探针。
+// 当前 Active Codex Files 三段式出站探针。
 func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int64, modelID string, prompt string, mode string, maxOutputTokens ...int) error {
 	ctx := c.Request.Context()
 
@@ -775,7 +775,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		resp, err = officialEgress.ExecuteCodexHTTP(ctx, OfficialCodexHTTPExecution{
 			SinkID: officialEgressSinkAdminTestResponses, EndpointID: officialCodexEndpointResponsesHTTP,
 			Account: credentialAccount, ProxyURL: proxyURL, Request: req, Ingress: c,
-			PolicyID: "changeset1b.admin_test.responses.v1", PolicySource: "docs/CODEX_CLI_0145_EGRESS_SPEC.md#policy-changeset-1b",
+			PolicyID: "changeset1b.admin_test.responses.v1", PolicySource: "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md#policy-changeset-1b",
 			ConcurrencyLimit: 1, HasBillingSideEffect: true,
 		})
 	} else {
@@ -1133,7 +1133,7 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 		resp, err = officialEgress.ExecuteCodexHTTP(ctx, OfficialCodexHTTPExecution{
 			SinkID: officialEgressSinkAdminTestCompact, EndpointID: officialCodexEndpointResponsesCompact,
 			Account: credentialAccount, ProxyURL: proxyURL, Request: req, Ingress: c,
-			PolicyID: "changeset1b.admin_test.compact.v1", PolicySource: "docs/CODEX_CLI_0145_EGRESS_SPEC.md#policy-changeset-1b",
+			PolicyID: "changeset1b.admin_test.compact.v1", PolicySource: "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md#policy-changeset-1b",
 			ConcurrencyLimit: 1, HasBillingSideEffect: true,
 		})
 	} else {

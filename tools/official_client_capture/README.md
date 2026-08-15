@@ -1,10 +1,10 @@
 # Codex 官方出站抓包工具
 
 本目录只保存抓包、解析、比较和验收工具，不维护另一套操作手册。Codex CLI 0.145.0 的
-证据生成、规则正文、Sub2API 伪装实现、工具责任、安全约束及升级流程，唯一以
-[`docs/CODEX_CLI_0145_EGRESS_SPEC.md`](../../docs/CODEX_CLI_0145_EGRESS_SPEC.md) 为准。
+证据生成、规则正文、Sub2API 客户端仿真实现、工具责任、安全约束及升级流程，唯一以
+[`docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md`](../../docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md) 为准。
 
-执行任何抓包或升级任务前，必须先阅读主文档 §1.5 和 §4.3～§4.5。
+执行任何抓包或升级任务前，必须先阅读主文档 §2.1、第四部分前置约定和 §4.1～§4.6。
 
 唯一编排入口：
 

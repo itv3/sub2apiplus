@@ -115,7 +115,7 @@ func TestCompositeTargetPlatformMiddlewareCapturesCodexRuntimeBeforeBodyDecode(t
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(compressed))
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Content-Encoding", "zstd")
-	req.Header.Set("User-Agent", openaiidentity.CodexUserAgent)
+	req.Header.Set("User-Agent", openaiidentity.CodexOriginator+"/test")
 	req.Header.Set("originator", openaiidentity.CodexOriginator)
 	w := httptest.NewRecorder()
 

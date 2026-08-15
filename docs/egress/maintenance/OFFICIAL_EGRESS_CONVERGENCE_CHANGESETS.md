@@ -33,7 +33,7 @@
 - 相关单元、集成或 final-wire 测试通过；
 - 没有扩大未授权的上游修改面；
 - 涉及旧路径删除时，完整执行
-  [docs/CODEX_CLI_0145_EGRESS_SPEC.md](../../CODEX_CLI_0145_EGRESS_SPEC.md) §4.9
+  [docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md](../../CODEX_CLI_CLIENT_EMULATION_GUIDE.md) §5.2
   兼容代码退休流程。
 
 ### 2.1 非阻塞遗留判定
@@ -43,7 +43,7 @@
 | 项目 | 当前状态 | 触发条件 |
 |---|---|---|
 | alpha-search 固定 `ProfileVersion` 传参 | 待判定；定性为疑似无效兼容残留，不是正确性修复。四个 accessor 的生产消费者仍存在 | 下一真实版本换版时按 [CHG-03_ALPHA_SEARCH_VERSION_AUTHORITY.md](CHG-03_ALPHA_SEARCH_VERSION_AUTHORITY.md) 的遗留判定流程执行 mutation 判定与退休决策 |
-| changeset3 历史生成入口与旧 approved-delta 契约漂移 | 不可复现的是旧生成入口（`TestGenerateChangeset3ProductionFinalWire`、`TestGenerateChangeset3ExactApprovedDeltas`）及其与旧 approved delta 的比较契约（2026-08-06 实跑确认：首个 capture 六个 digest 不符）；changeset6 生成器仍复用共享的 `changeset3BuildProductionFinalWireCaptures` 且可复现，是当前通用 56 面 final-wire authority，但不替代 §3.2 要求的 alpha-search 真实 service 链证据 | 重新引用旧生成入口前必须先修复；若决定删除旧入口或旧 approved-delta 契约，使用专用 gate/evidence retirement receipt（先例：`docs/egress/consolidation/pairing-gate-retirement.json`），并证明 changeset6 仍依赖的共享 capture builder 保持完整；规格 §4.9 面向生产兼容层，不适用于纯历史测试生成器。在此之前不为让历史工具变绿而修改代码或重建历史证据 |
+| changeset3 历史生成入口与旧 approved-delta 契约漂移 | 不可复现的是旧生成入口（`TestGenerateChangeset3ProductionFinalWire`、`TestGenerateChangeset3ExactApprovedDeltas`）及其与旧 approved delta 的比较契约（2026-08-06 实跑确认：首个 capture 六个 digest 不符）；changeset6 生成器仍复用共享的 `changeset3BuildProductionFinalWireCaptures` 且可复现，是当前通用 56 面 final-wire authority，但不替代 §3.2 要求的 alpha-search 真实 service 链证据 | 重新引用旧生成入口前必须先修复；若决定删除旧入口或旧 approved-delta 契约，使用专用 gate/evidence retirement receipt（先例：`docs/egress/consolidation/pairing-gate-retirement.json`），并证明 changeset6 仍依赖的共享 capture builder 保持完整；规格 §5.2 面向生产兼容层，不适用于纯历史测试生成器。在此之前不为让历史工具变绿而修改代码或重建历史证据 |
 
 ### 2.2 CHG-03：alpha-search 版本单一权威（已撤销 · 墓碑）
 
@@ -111,7 +111,7 @@
 
 **验收收益：**证明新画像全部端点仍处于 Compiler 静态 URL/query 封闭与 ReturnedURL 独立
 验证模型之内，避免新增调用链绕过 `server_response` 可信值通道形成假绿。行为契约见
-[docs/CODEX_CLI_0145_EGRESS_SPEC.md](../../CODEX_CLI_0145_EGRESS_SPEC.md) §3.3.2 与 §3.7；
+[docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md](../../CODEX_CLI_CLIENT_EMULATION_GUIDE.md) §3.3.2 与 §3.7；
 [CHG-01_COMPILER_STATIC_URL_CLOSURE.md](CHG-01_COMPILER_STATIC_URL_CLOSURE.md) 只保留实施、测试与复审记录。
 
 执行分层：正例全量验证（端点枚举、合法 URL 编译、静态/动态区分）在**每次真实换版固定执行**，
@@ -149,7 +149,7 @@
 - 用字段覆盖或逐叶变异测试证明需要的字段均进入投影。
 - 同源 digest 比较不能作为字段完整性证明。
 - 若没有漏字段，保持现有 DTO；只有消费者归零时才按
-  [docs/CODEX_CLI_0145_EGRESS_SPEC.md](../../CODEX_CLI_0145_EGRESS_SPEC.md) §4.9 讨论退休。
+  [docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md](../../CODEX_CLI_CLIENT_EMULATION_GUIDE.md) §5.2 讨论退休。
 
 ## 4. 更新与执行规则
 

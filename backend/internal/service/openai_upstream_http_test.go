@@ -65,7 +65,7 @@ func TestResolveOpenAIAPIKeyCodexTLSProfileUsesCurrentCLIDefault(t *testing.T) {
 	}
 	got := resolveOpenAIAPIKeyCodexTLSProfile(account, &TLSFingerprintProfileService{}, nil)
 	require.NotNil(t, got)
-	require.Contains(t, got.Name, "Codex CLI "+activeOpenAICodexVersionForTest())
+	require.Contains(t, got.Name, "Codex CLI 0.145.0")
 	require.Len(t, got.CipherSuites, 30)
 	require.Empty(t, got.ALPNProtocols)
 	require.Equal(t, []uint16{0x11ec, 0x001d, 0x0017, 0x001e, 0x0018, 0x0019, 0x0100, 0x0101}, got.Curves)
@@ -78,7 +78,7 @@ func TestResolveOpenAIAPIKeyCodexTLSProfileUsesCurrentCLIDefault(t *testing.T) {
 	account.Extra["tls_fingerprint_profile_id"] = int64(42)
 	got = resolveOpenAIAPIKeyCodexTLSProfile(account, &TLSFingerprintProfileService{}, nil)
 	require.NotNil(t, got)
-	require.Contains(t, got.Name, "Codex CLI "+activeOpenAICodexVersionForTest())
+	require.Contains(t, got.Name, "Codex CLI 0.145.0")
 
 	svc := &TLSFingerprintProfileService{
 		localCache: map[int64]*model.TLSFingerprintProfile{
@@ -109,7 +109,7 @@ func TestResolveOpenAIAPIKeyCodexTLSProfileIgnoresDormantAccountProfile(t *testi
 
 	got := resolveOpenAIAPIKeyCodexTLSProfile(account, &TLSFingerprintProfileService{}, nil)
 	require.NotNil(t, got)
-	require.Contains(t, got.Name, "Codex CLI "+activeOpenAICodexVersionForTest())
+	require.Contains(t, got.Name, "Codex CLI 0.145.0")
 	require.Len(t, got.CipherSuites, 30)
 	require.NotEmpty(t, got.Extensions)
 	require.True(t, got.Transport.DisableCompression)
@@ -134,7 +134,7 @@ func TestResolveOpenAIAPIKeyCodexTLSProfilePreviousModeFallsBackToStandardTransp
 	// 同一账号在 active 模式下仍使用当前 CLI 实抓画像，证明差异只来自服务级指针。
 	got := resolveOpenAIAPIKeyCodexTLSProfile(account, &TLSFingerprintProfileService{}, nil)
 	require.NotNil(t, got)
-	require.Contains(t, got.Name, "Codex CLI "+activeOpenAICodexVersionForTest())
+	require.Contains(t, got.Name, "Codex CLI 0.145.0")
 }
 
 func TestDoOpenAIHTTPUpstreamUsesCurrentCLITLSProfileByDefault(t *testing.T) {
@@ -157,7 +157,7 @@ func TestDoOpenAIHTTPUpstreamUsesCurrentCLITLSProfileByDefault(t *testing.T) {
 	require.False(t, recorder.doCalled)
 	require.True(t, recorder.doWithTLSCalled)
 	require.NotNil(t, recorder.lastTLSProfile)
-	require.Contains(t, recorder.lastTLSProfile.Name, "Codex CLI "+activeOpenAICodexVersionForTest())
+	require.Contains(t, recorder.lastTLSProfile.Name, "Codex CLI 0.145.0")
 	require.Empty(t, recorder.lastTLSProfile.ALPNProtocols)
 	require.Equal(t, []uint16{utls.VersionTLS13, utls.VersionTLS12}, recorder.lastTLSProfile.SupportedVersions)
 	require.Equal(t, uint16(0x0304), recorder.lastTLSProfile.TLSVersMax)
@@ -199,7 +199,7 @@ func TestDoOpenAIHTTPUpstreamIgnoresDormantAccountProfile(t *testing.T) {
 	require.False(t, recorder.doCalled)
 	require.True(t, recorder.doWithTLSCalled)
 	require.NotNil(t, recorder.lastTLSProfile)
-	require.Contains(t, recorder.lastTLSProfile.Name, "Codex CLI "+activeOpenAICodexVersionForTest())
+	require.Contains(t, recorder.lastTLSProfile.Name, "Codex CLI 0.145.0")
 }
 
 func TestDoOpenAIHTTPUpstreamSkipsMimicTLSWhenRequestProfileDisabled(t *testing.T) {
@@ -278,7 +278,7 @@ func TestOpenAIMimicTLSDecisionMatchesBetweenGatewayAndAccountTest(t *testing.T)
 			name:            "active 画像套用当前 CLI 指纹",
 			cfg:             nil,
 			wantTLS:         true,
-			wantProfileName: "Codex CLI " + activeOpenAICodexVersionForTest(),
+			wantProfileName: "Codex CLI 0.145.0",
 		},
 		{
 			name:    "previous 画像两侧都走标准 Transport",

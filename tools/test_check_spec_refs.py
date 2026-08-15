@@ -14,7 +14,7 @@ import unittest
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 CHECKER = ROOT / "tools" / "check_spec_refs.py"
-SPEC = ROOT / "docs" / "CODEX_CLI_0145_EGRESS_SPEC.md"
+SPEC = ROOT / "docs" / "CODEX_CLI_CLIENT_EMULATION_GUIDE.md"
 DEPENDENCIES = ROOT / "tools" / "spec_source_deps"
 
 
@@ -71,16 +71,16 @@ class SpecRefGateTests(unittest.TestCase):
 
     def test_wrong_line_fails_rule_anchor(self) -> None:
         mutated = self.replace_once(
-            "- **源码**：[L1] `codex-api/src/common.rs:223`、`core/src/client.rs:896`。",
-            "- **源码**：[L1] `codex-api/src/common.rs:259`、`core/src/client.rs:896`。",
+            "- **源码**：[L1] `codex-api/src/common.rs:259`、`core/src/client.rs:923`。",
+            "- **源码**：[L1] `codex-api/src/common.rs:260`、`core/src/client.rs:923`。",
         )
         result = self.run_gate(mutated)
         self.assert_failed_with(result, "SPEC-BODY-005 的源码引用与锚点清单不一致")
 
     def test_bare_filename_ambiguity_fails(self) -> None:
         mutated = self.replace_once(
-            "`core/src/client.rs:141`、`core/src/client.rs:1094`",
-            "`client.rs:141`、`core/src/client.rs:1094`",
+            "`core/src/client.rs:142`、`core/src/client.rs:1113`",
+            "`client.rs:142`、`core/src/client.rs:1113`",
         )
         result = self.run_gate(mutated)
         self.assert_failed_with(result, "裸文件名有")
@@ -88,12 +88,12 @@ class SpecRefGateTests(unittest.TestCase):
 
     def test_cfg_test_reference_fails(self) -> None:
         mutated = self.replace_once(
-            "- **源码**：[L1] `codex-api/src/common.rs:223`、`core/src/client.rs:896`。",
-            "- **源码**：[L1] `codex-api/src/endpoint/responses_websocket.rs:922`、`core/src/client.rs:896`。",
+            "- **源码**：[L1] `codex-api/src/common.rs:259`、`core/src/client.rs:923`。",
+            "- **源码**：[L1] `codex-api/src/endpoint/responses_websocket.rs:901`、`core/src/client.rs:923`。",
         )
         result = self.run_gate(mutated)
         self.assert_failed_with(result, "测试代码引用")
-        self.assert_failed_with(result, "responses_websocket.rs:922")
+        self.assert_failed_with(result, "responses_websocket.rs:901")
 
     def test_l2_without_exact_line_fails(self) -> None:
         mutated = self.replace_once(

@@ -195,12 +195,12 @@ func TestFetchCodexModelsManifestPassthrough(t *testing.T) {
 	require.Equal(t, `W/"abc123"`, manifest.ETag)
 	require.NotNil(t, gotRequest)
 	require.Equal(t, http.MethodGet, gotRequest.Method)
-	require.Equal(t, "https://chatgpt.com/backend-api/codex/models?client_version="+activeOpenAICodexVersionForTest(), gotRequest.URL.String())
+	require.Equal(t, "https://chatgpt.com/backend-api/codex/models?client_version=0.145.0", gotRequest.URL.String())
 	require.Equal(t, "chatgpt.com", gotRequest.Host)
 	require.Equal(t, "Bearer test-access-token", gotRequest.Header.Get("Authorization"))
 	require.Equal(t, "acc-123", gotRequest.Header.Get("chatgpt-account-id"))
 	require.Equal(t, officialOpenAIHTTPOriginator, gotRequest.Header.Get("Originator"))
-	require.Equal(t, activeOpenAICodexVersionForTest(), gotRequest.Header.Get("Version"))
+	require.Equal(t, officialCodexVersion0145, gotRequest.Header.Get("Version"))
 	require.Equal(t, "*/*", gotRequest.Header.Get("Accept"))
 	require.Empty(t, gotRequest.Header.Get("Cookie"))
 	require.Empty(t, gotRequest.Header.Get("If-None-Match"))
@@ -484,8 +484,8 @@ func TestFetchCodexModelsManifestDefaultClientVersion(t *testing.T) {
 	if _, err := s.FetchCodexModelsManifest(context.Background(), newCodexModelsTestAccount(), "", ""); err != nil {
 		t.Fatalf("FetchCodexModelsManifest returned error: %v", err)
 	}
-	if gotClientVersion != activeOpenAICodexVersionForTest() {
-		t.Errorf("default client_version: got %q, want %q", gotClientVersion, activeOpenAICodexVersionForTest())
+	if gotClientVersion != officialCodexVersion0145 {
+		t.Errorf("default client_version: got %q, want %q", gotClientVersion, officialCodexVersion0145)
 	}
 }
 

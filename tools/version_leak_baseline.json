@@ -13,31 +13,15 @@
       "550fac6b73fda6cf": 1,
       "e71b2a7aa62791de": 1
     },
-    "backend/internal/pkg/openaiidentity/codex.go": {
-      "59a7c9eef8fc4ad3": 1,
-      "7a5c2d3a84f6d1de": 1,
-      "d41e7aed4732f35d": 1
-    },
     "backend/internal/server/routes/gateway.go": {
       "5173c9686b5e89c0": 1
     },
     "backend/internal/service/account_test_service.go": {
-      "33e582af7e03f6f3": 1,
-      "659392b58614aeca": 1
-    },
-    "backend/internal/service/account_test_service_openai_files.go": {
-      "02c431b9beaac7d0": 1,
-      "1fc62e847c6b9203": 1,
-      "cc3d7fc04df6d182": 1,
-      "ea9ba8225e544032": 1
+      "33e582af7e03f6f3": 1
     },
     "backend/internal/service/domain_constants.go": {
       "8fb62be7f5d0067c": 1,
       "c7a7a037a8ef7216": 1
-    },
-    "backend/internal/service/official_client_profile_registry.go": {
-      "7f4afb4b98eaffba": 1,
-      "b0d7a7ea5607ed35": 1
     },
     "backend/internal/service/official_egress_codex_engine.go": {
       "08c2b1f7a413eb1e": 1,
@@ -97,9 +81,6 @@
     },
     "backend/internal/service/openai_codex_transform.go": {
       "dd55499681f22168": 2
-    },
-    "backend/internal/service/openai_compact_probe.go": {
-      "da380ca26ef67091": 1
     },
     "backend/internal/service/openai_gateway_forward.go": {
       "147f09906fcb5f11": 1

@@ -8,9 +8,11 @@ import (
 	"github.com/google/uuid"
 )
 
-// officialFilesProbePayload 是管理员显式触发 Files 探针时唯一允许上传的内容。
-// 探针不读取请求中的 prompt、文件路径或任意外部内容。
-const officialFilesProbePayload = "sub2apiplus Codex 0.147.0 Files probe\n"
+// officialFilesProbePayload 返回管理员显式触发 Files 探针时唯一允许上传的内容。
+// 版本来自 Active ReleaseCatalog；探针不读取 prompt、文件路径或任意外部内容。
+func officialFilesProbePayload(version string) string {
+	return fmt.Sprintf("sub2apiplus Codex %s Files probe\n", version)
+}
 
 // testOpenAIOfficialFilesProbe 通过选定的 OpenAI OAuth 账号执行官方 Files
 // create、blob PUT、uploaded 三段式流程。完成结果只用于判定成功，任何服务端
@@ -30,10 +32,11 @@ func (s *AccountTestService) testOpenAIOfficialFilesProbe(c *gin.Context, accoun
 	c.Writer.Flush()
 
 	s.sendEvent(c, TestEvent{Type: "test_start"})
-	s.sendEvent(c, TestEvent{Type: "status", Text: "正在验证 Codex 0.147.0 Files 三段式出站"})
+	version := resolveVerifiedCodexClientVersion()
+	s.sendEvent(c, TestEvent{Type: "status", Text: fmt.Sprintf("正在验证 Codex %s Files 三段式出站", version)})
 
-	payload := []byte(officialFilesProbePayload)
-	fileName := fmt.Sprintf("sub2apiplus-codex-0.147.0-files-probe-%s.txt", uuid.NewString())
+	payload := []byte(officialFilesProbePayload(version))
+	fileName := fmt.Sprintf("sub2apiplus-codex-%s-files-probe-%s.txt", version, uuid.NewString())
 	uploaded, err := s.openAIGatewayService.UploadOfficialCodexFile(
 		c.Request.Context(),
 		account,
@@ -51,7 +54,7 @@ func (s *AccountTestService) testOpenAIOfficialFilesProbe(c *gin.Context, accoun
 		return s.sendErrorAndEnd(c, "Codex Files 出站探针未返回完成状态")
 	}
 
-	s.sendEvent(c, TestEvent{Type: "status", Text: "已通过 Codex 0.147.0 Files 三段式出站验证"})
+	s.sendEvent(c, TestEvent{Type: "status", Text: fmt.Sprintf("已通过 Codex %s Files 三段式出站验证", version)})
 	s.sendEvent(c, TestEvent{Type: "test_complete", Success: true})
 	return nil
 }

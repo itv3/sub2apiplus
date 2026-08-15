@@ -1,8 +1,8 @@
 {
   "schema_version": "codex-candidate-rule-expectations/v1",
   "codex_version": "0.147.0",
-  "source_spec": "docs/CODEX_CLI_0145_EGRESS_SPEC.md#第二章",
-  "source_spec_sha256": "07dafb94ee9988fb96b370e3f94607fc3492d3463c55173ef456519e36c9e54b",
+  "source_spec": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md#第二章",
+  "source_spec_sha256": "bd0e7a2c29c615baf2d9b76537810bb4ae3c2b5fba260e839fe892ea8455eb55",
   "scenarios": [
     {
       "description": "默认系统 CA 的 HTTP ClientHello 与 models 请求",
@@ -2820,7 +2820,7 @@
               "/backend-api/wham/settings/user"
             ]
           },
-          "description": "两个 GET 路径均出现且无额外 wham GET",
+          "description": "三个 GET 路径均出现且无额外 WHAM GET",
           "id": "wham-get-paths",
           "select": {
             "record_type": "http_request",
@@ -2854,7 +2854,7 @@
               "host"
             ]
           },
-          "description": "两个 GET 使用 backend-client 精确线序",
+          "description": "前两个 GET 使用 backend-client 精确线序",
           "id": "wham-get-headers",
           "select": {
             "record_type": "http_request",
@@ -2933,7 +2933,7 @@
           }
         }
       ],
-      "description": "wham 两个 GET 与安全 consume 使用独立 backend-client 形态",
+      "description": "WHAM 三个 GET 与安全 consume 使用独立 backend-client 形态",
       "rule_id": "SPEC-EP-019",
       "scenario_ids": [
         "A12"

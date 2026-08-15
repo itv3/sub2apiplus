@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """检查 §3.5 人工合并缝与机器精确台账是否覆盖 Codex/OpenAI 出站定型面。
 
-§4.7 要求每次合并上游后刷新台账。文档只保留少量高风险合并缝；完整路径集合由本脚本
+§5.1 要求每次合并上游后刷新台账。文档只保留少量高风险合并缝；完整路径集合由本脚本
 相对冻结 upstream commit 自动复算，并与结构化 JSON 比对，避免继续人工维护几十行路径。
 
 判据是「生产 Go 代码中引用了 Codex/OpenAI 出站定型专属符号」。该判据刻意不使用
@@ -25,7 +25,7 @@ import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-SPEC = ROOT / "docs" / "CODEX_CLI_0145_EGRESS_SPEC.md"
+SPEC = ROOT / "docs" / "CODEX_CLI_CLIENT_EMULATION_GUIDE.md"
 SCAN_ROOT = ROOT / "backend"
 INVENTORY = ROOT / "docs" / "egress" / "consolidation" / "egress-surface-inventory.json"
 CHANGESET6_TRANSITION = ROOT / "docs" / "egress" / "validation" / "egress-surface-transition.json"

@@ -39,7 +39,7 @@ build-frontend:
 # 运行测试（后端 + 前端）
 test: test-backend test-frontend test-capture-tools check-egress-spec
 
-# Codex 出站规格门禁，见 docs/CODEX_CLI_0145_EGRESS_SPEC.md §3.5 与 §4.7。
+# Codex 客户端仿真门禁，见 docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md §3.5 与 §5.1。
 # 这些检查此前只能手工执行，因而无法阻止回归；--self-test 先校验判据本身是否
 # 仍与版本号解耦，再用它扫描仓库。全部只读且不联网。
 check-egress-seal:

@@ -16,10 +16,11 @@ from typing import Any
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-DEFAULT_SPEC = ROOT / "docs" / "CODEX_CLI_0145_EGRESS_SPEC.md"
+DEFAULT_SPEC = ROOT / "docs" / "CODEX_CLI_CLIENT_EMULATION_GUIDE.md"
 DEFAULT_ANCHOR_MANIFEST = ROOT / "tools" / "spec_ref_anchors.json"
 DEFAULT_DEPENDENCY_MANIFEST = ROOT / "tools" / "spec_source_deps" / "manifest.json"
-CODEX_SOURCE_ROOT = ROOT / "local-analysis" / "sources" / "codex-cli-0.145"
+CODEX_SOURCE_ROOT = ROOT / "local-analysis" / "sources" / "codex-cli-0.147"
+CODEX_SOURCE_VERSION = "0.147.0"
 DEPENDENCY_SOURCE_ROOT = ROOT / "tools" / "spec_source_deps"
 SEARCH_ROOTS = [CODEX_SOURCE_ROOT, ROOT / "backend", DEPENDENCY_SOURCE_ROOT]
 
@@ -31,7 +32,7 @@ SOURCE_FIELD_RE = re.compile(
     re.M | re.S,
 )
 
-# 这些 Go 标准库或外部模块引用不属于 Codex 0.145.0 与已固化的五个 Rust 依赖。
+# 这些 Go 标准库或外部模块引用不属于 Codex 0.147.0 与已固化的 Rust 依赖。
 EXTERNAL_PREFIXES = (
     "x/net/",
     "internal/httpcommon/",
@@ -68,10 +69,13 @@ def parse_refs(text: str) -> list[SourceRef]:
 
 
 def chapter_two(text: str) -> str:
-    try:
-        return text.split("# 第二部分 规则", 1)[1].split("# 第三部分 方案", 1)[0]
-    except IndexError as exc:
-        raise ValueError("规格表缺少第二部分或第三部分边界") from exc
+    start = re.search(r"^# 第二部分 Codex CLI 客户端规则画像\s*$", text, re.M)
+    if start is None:
+        raise ValueError("规格表缺少第二部分客户端规则画像")
+    end = re.search(r"^# 第三部分(?:\s|$)", text[start.end() :], re.M)
+    if end is None:
+        raise ValueError("规格表缺少第二部分之后的第三部分边界")
+    return text[start.end() : start.end() + end.start()]
 
 
 def extract_rule_source_fields(text: str) -> dict[str, str]:
@@ -345,9 +349,9 @@ def codex_version_error() -> str | None:
         re.M,
     )
     version = match.group(1) if match else "?"
-    if version != "0.145.0":
-        return f"源码树版本为 {version}，规格表要求 0.145.0"
-    print("源码基线：codex-cli 0.145.0 ✅")
+    if version != CODEX_SOURCE_VERSION:
+        return f"源码树版本为 {version}，规格表要求 {CODEX_SOURCE_VERSION}"
+    print(f"源码基线：codex-cli {CODEX_SOURCE_VERSION} ✅")
     return None
 
 

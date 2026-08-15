@@ -62,8 +62,8 @@ def main() -> int:
 
     manifest = {
         "schema_version": 1,
-        "spec": "docs/CODEX_CLI_0145_EGRESS_SPEC.md",
-        "source_version": "0.145.0",
+        "spec": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+        "source_version": "0.147.0",
         "rules": output_rules,
     }
     args.output.write_text(

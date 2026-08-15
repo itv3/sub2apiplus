@@ -22,7 +22,7 @@ func approvedProfileManifestForStageTest(t *testing.T) []byte {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw = []byte(strings.ReplaceAll(string(raw), active.Version(), "0.148.0"))
+	raw = []byte(strings.ReplaceAll(string(raw), "0.145.0", "0.147.0"))
 	if err := json.Unmarshal(raw, &snapshot); err != nil {
 		t.Fatal(err)
 	}
@@ -40,8 +40,8 @@ func approvedProfileManifestForStageTest(t *testing.T) []byte {
 	}
 	manifest := approvedProfileManifest{
 		SchemaVersion:        "codex-egress-profile/v1",
-		CodexVersion:         "0.148.0",
-		ProfileID:            "codex-0.148.0-stage-test",
+		CodexVersion:         "0.147.0",
+		ProfileID:            "codex-0.147.0-stage-test",
 		ProfileDigest:        snapshot.Digest,
 		ProfilePayload:       payload,
 		ProfilePayloadSHA256: canonicalSHA256(canonicalPayload),
@@ -128,7 +128,7 @@ func TestPrepareProfileManifestSurvivesSortedApprovalCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw = []byte(strings.ReplaceAll(string(raw), active.Version(), "0.148.0"))
+	raw = []byte(strings.ReplaceAll(string(raw), "0.145.0", "0.147.0"))
 	root := t.TempDir()
 	resolvedRoot, err := filepath.EvalSymlinks(root)
 	if err != nil {
@@ -141,7 +141,7 @@ func TestPrepareProfileManifestSurvivesSortedApprovalCopy(t *testing.T) {
 	draftPath := filepath.Join(resolvedRoot, "profile-draft.json")
 	draft, err := prepareProfileManifest(
 		snapshotPath,
-		"codex-0.148.0-prepared",
+		"codex-0.147.0-prepared",
 		draftPath,
 	)
 	if err != nil {

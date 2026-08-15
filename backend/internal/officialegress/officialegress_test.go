@@ -147,9 +147,8 @@ func TestCodexRoutesMapToTwoReleaseFamiliesWithoutInventingPurposes(t *testing.T
 	if _, ok := purposes[RegistryPurposeOpenAIOAuthWS]; !ok {
 		t.Fatal("缺少 WS registry purpose")
 	}
-	expectedEndpoints := len(release.ExecutableProfile().Endpoints())
-	if len(endpoints) != expectedEndpoints {
-		t.Fatalf("画像 endpoint 映射不唯一：got=%d want=%d", len(endpoints), expectedEndpoints)
+	if len(endpoints) != 16 {
+		t.Fatalf("画像 endpoint 映射不唯一：%d", len(endpoints))
 	}
 }
 

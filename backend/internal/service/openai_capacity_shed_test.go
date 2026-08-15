@@ -71,12 +71,11 @@ func TestStreamFailedEventCapacityShedRetriesOnSameAccount(t *testing.T) {
 	require.False(t, openAIStreamFailedEventRetryableOnSameAccount(nonPool, other, "boom"))
 }
 
-// 出站身份的版本声明只能有一个来源：UA 的版本段、version 头、探针版本三处必须同源，
+// 出站身份的版本声明只能有一个来源：UA 的版本段、version 头与辅助探针必须同源，
 // 各自硬编码会漂移成互相矛盾的身份，而自相矛盾或陈旧的身份会被上游优先降载。
 func TestCodexOutboundVersionHasSingleSource(t *testing.T) {
 	require.Equal(t, codexCLIVersion, openai.CodexUserAgentVersion(codexCLIUserAgent),
 		"codexCLIUserAgent=%q 的版本段必须等于 codexCLIVersion=%q", codexCLIUserAgent, codexCLIVersion)
-	require.Equal(t, codexCLIVersion, openAICodexProbeVersion)
 	activeVersion := activeOpenAICodexVersionForTest()
 	require.Equal(t, activeVersion, resolveVerifiedCodexClientVersion())
 	require.GreaterOrEqual(t, CompareVersions(activeVersion, codexUpstreamMinVersion), 0,

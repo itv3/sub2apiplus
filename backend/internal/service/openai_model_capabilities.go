@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/openaiidentity"
 	"github.com/gin-gonic/gin"
 	"github.com/tidwall/gjson"
 	"golang.org/x/sync/singleflight"
@@ -342,7 +341,7 @@ func (s *OpenAIGatewayService) ensureOpenAIModelCapability(
 			_, err := s.fetchCodexModelsManifest(
 				loadCtx,
 				account,
-				openaiidentity.CodexVersion,
+				resolveVerifiedCodexClientVersion(),
 				"",
 				false,
 			)

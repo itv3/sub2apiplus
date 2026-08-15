@@ -6,7 +6,7 @@
 > 日期：2026-08-10
 > 上游结论：升级计划 §10.9.4、[`SPEC_EP_002_EVIDENCE_BLOCKER.md`](SPEC_EP_002_EVIDENCE_BLOCKER.md) §5.1
 > 适用 Campaign：k37（尚未创建）；k36 仅作诊断夹具，不适用本门禁
-> 权威顺序：本文低于 [`CODEX_CLI_0145_EGRESS_SPEC.md`](../../CODEX_CLI_0145_EGRESS_SPEC.md) 第四部分与升级计划，冲突时以后者为准
+> 权威顺序：本文低于 [`CODEX_CLI_CLIENT_EMULATION_GUIDE.md`](../../CODEX_CLI_CLIENT_EMULATION_GUIDE.md) 第四部分与升级计划，冲突时以后者为准
 
 ## 1. 目标与定性
 
@@ -267,7 +267,7 @@ official/candidate 分侧前置条件；两侧均须与 §4.3 收据字段一一
 | `upload_sequence` | 对象 `{create_before_regional: const true, regional_before_uploaded: const true}` | relay 与 pcap 原始时间戳；结合冻结源码证明 uploaded 只在 PUT 成功后发出 |
 
 `regional_host_from_response` 是规格「不得硬编码单一区域上传 host」
-（`docs/CODEX_CLI_0145_EGRESS_SPEC.md:609`）的机器表达：只有当 pcap 里观测到的区域主机
+（`docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md:612`）的机器表达：只有当 pcap 里观测到的区域主机
 **等于本轮响应返回的主机**时才成立，预列域名凑出的 SNI 无法满足。
 
 ### 4.4 抓包范围修正（A14 盲区）

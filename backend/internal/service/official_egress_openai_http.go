@@ -21,7 +21,6 @@ import (
 )
 
 const (
-	officialOpenAIHTTPUserAgent     = openaiidentity.CodexUserAgent
 	officialOpenAIHTTPOriginator    = openaiidentity.CodexOriginator
 	officialOpenAIHTTPBetaFeatures  = "remote_compaction_v2"
 	officialOpenAIHTTPResponsesLite = "true"
@@ -29,6 +28,9 @@ const (
 	officialOpenAIHTTPTurnStartTTL  = 2 * time.Hour
 	officialOpenAIHTTPTurnStartMax  = 8192
 )
+
+// HTTP 与其他 Codex 出站路径共享 Active ReleaseCatalog 派生的默认身份。
+var officialOpenAIHTTPUserAgent = codexCLIUserAgent
 
 type officialOpenAIHTTPTurnStartEntry struct {
 	startedAt int64

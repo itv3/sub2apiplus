@@ -55,12 +55,12 @@ class CandidateRuleExpectationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             source = Path(directory) / "spec.md"
             source.write_text(
-                "# 第一部分 背景\n旧内容\n# 第二部分 规则\n冻结规则\n# 第三部分 方案\n旧方案\n",
+                "# 第一部分 背景\n旧内容\n# 第二部分 Codex CLI 客户端规则画像\n冻结规则\n# 第三部分 方案\n旧方案\n",
                 encoding="utf-8",
             )
             before = source_spec_section_sha256(source, "第二章")
             source.write_text(
-                "# 第一部分 背景\n新内容\n# 第二部分 规则\n冻结规则\n# 第三部分 方案\n新方案\n# 第四部分 升级\n新增流程\n",
+                "# 第一部分 背景\n新内容\n# 第二部分 Codex CLI 客户端规则画像\n冻结规则\n# 第三部分 方案\n新方案\n# 第四部分 升级\n新增流程\n",
                 encoding="utf-8",
             )
             self.assertEqual(

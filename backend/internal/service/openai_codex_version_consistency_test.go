@@ -9,13 +9,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestCodexVersionConstants_Consistency(t *testing.T) {
-	require.Equal(t, codexCLIVersion, openAICodexProbeVersion,
-		"codexCLIVersion and openAICodexProbeVersion must stay in sync")
+func TestCodexDefaultIdentityMatchesActiveRelease(t *testing.T) {
+	activeProfile, err := resolveOfficialClientProfile(
+		officialClientPurposeOpenAIOAuthResponsesHTTP,
+		officialClientProfileModeActive,
+	)
+	require.NoError(t, err)
+	require.Equal(t, activeProfile.Build.Version, codexCLIVersion)
+	require.Equal(t, activeProfile.Build.UserAgent, codexCLIUserAgent)
 
 	require.True(t, strings.Contains(codexCLIUserAgent, "codex_exec/"+codexCLIVersion),
-		"codexCLIUserAgent must embed codexCLIVersion")
+		"默认 User-Agent 必须包含 Active ReleaseCatalog 的版本")
 
-	require.True(t, strings.Contains(DefaultOpenAICodexUserAgent, codexCLIVersion),
-		"DefaultOpenAICodexUserAgent must embed codexCLIVersion")
+	require.Equal(t, codexCLIUserAgent, DefaultOpenAICodexUserAgent)
 }

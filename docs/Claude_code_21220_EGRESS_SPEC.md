@@ -11,7 +11,7 @@ Darwin 交叉样本：`@anthropic-ai/claude-code-darwin-arm64@2.1.220`，Mach-O 
 另有 4 个编号不计客户端 egress，已编号待补证为 0**<br>
 末次更新：2026-08-01
 
-本文参照 `docs/CODEX_CLI_0145_EGRESS_SPEC.md`，说明在没有未压缩 TS 源码时，如何从官方生产 bundle
+本文参照 `docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md`，说明在没有未压缩 TS 源码时，如何从官方生产 bundle
 和运行证据建立原子规则。原始二进制、提取物、抓包和机器索引是证据本体；本文记录方法、规则、
 Sub2API 实现责任、候选和准入状态。
 

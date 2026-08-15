@@ -335,7 +335,7 @@ func TestOpenAIGatewayService_OAuthMessagesBridgeDoesNotInjectDefaultInstruction
 	require.Empty(t, upstream.lastReq.Header.Get("Conversation_Id"))
 	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
 	require.Equal(t, officialOpenAIHTTPOriginator, upstream.lastReq.Header.Get("originator"))
-	require.Equal(t, activeOpenAICodexUserAgentForTest(), upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, officialOpenAIHTTPUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 }
 
 type openAIPassthroughFailoverRepo struct {
@@ -535,7 +535,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_StreamUsesBuiltInProfileAndKeepsT
 
 	// 2) only auth is replaced; inbound auth/cookie are not forwarded
 	require.Equal(t, "Bearer oauth-token", upstream.lastReq.Header.Get("Authorization"))
-	require.Equal(t, activeOpenAICodexUserAgentForTest(), upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, officialOpenAIHTTPUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Empty(t, upstream.lastReq.Header.Get("Cookie"))
 	require.Empty(t, upstream.lastReq.Header.Get("X-Api-Key"))
 	require.Empty(t, upstream.lastReq.Header.Get("X-Goog-Api-Key"))
@@ -910,7 +910,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_CompactUsesJSONAndKeepsNonStreami
 	// 同上：compact 的 accept 为 */*，此前 Del 会导致出站彻底缺该头。
 	require.Equal(t, "*/*", upstream.lastReq.Header.Get("Accept"))
 	// 官方 OAuth 画像携带当前 Codex version，旧 session_id 改用 session-id。
-	require.Equal(t, activeOpenAICodexVersionForTest(), upstream.lastReq.Header.Get("Version"))
+	require.Equal(t, codexCLIVersion, upstream.lastReq.Header.Get("Version"))
 	require.NotEmpty(t, upstream.lastReq.Header.Get("session-id"))
 	require.Empty(t, upstream.lastReq.Header.Get("x-client-request-id"))
 	require.Equal(t, "chatgpt.com", upstream.lastReq.Host)
@@ -1161,7 +1161,7 @@ func TestOpenAIGatewayService_OAuthLegacy_CompositeCodexUAUsesCodexOriginator(t 
 	require.NoError(t, err)
 	require.NotNil(t, upstream.lastReq)
 	// 浏览器型复合 UA 被替换为官方出站画像 UA（codex_exec 形态），originator 随最终 UA 配套（issue #3901）。
-	require.Equal(t, activeOpenAICodexUserAgentForTest(), upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, officialOpenAIHTTPUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, officialOpenAIHTTPOriginator, upstream.lastReq.Header.Get("originator"))
 	require.NotEqual(t, "opencode", upstream.lastReq.Header.Get("originator"))
 }
@@ -1963,7 +1963,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_NonCodexUAFallbackToCodexUA(t *te
 	require.Equal(t, false, gjson.GetBytes(upstream.lastBody, "store").Bool())
 	require.Equal(t, true, gjson.GetBytes(upstream.lastBody, "stream").Bool())
 	// 非 Codex UA 的第三方入站统一改写为官方出站画像 UA（codex_exec 形态）
-	require.Equal(t, activeOpenAICodexUserAgentForTest(), upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, officialOpenAIHTTPUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 }
 
 // 透传模式的 OAuth 与非透传一致：官方客户端身份同样被强制统一为网关规范身份，
@@ -2014,7 +2014,7 @@ func TestOpenAIGatewayService_OAuthPassthrough_OfficialIdentityUnified(t *testin
 	require.NotNil(t, upstream.lastReq)
 	// 官方出站画像统一改写 UA/originator（codex_exec 形态），出站身份与入站客户端解耦，
 	// 不再逐字保留入站官方 UA；originator/UA 首段配套的约束（issue #3901）依然成立。
-	require.Equal(t, activeOpenAICodexUserAgentForTest(), upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, officialOpenAIHTTPUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, officialOpenAIHTTPOriginator, upstream.lastReq.Header.Get("originator"))
 }
 

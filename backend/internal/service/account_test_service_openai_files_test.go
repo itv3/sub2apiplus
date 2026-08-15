@@ -115,19 +115,20 @@ func TestAccountTestServiceOfficialFilesProbeUsesFixedMemoryPayloadAndHidesSigne
 	}
 	require.Len(t, createPayloads, 2)
 	require.Len(t, blobBodies, 2)
+	expectedPayload := officialFilesProbePayload(activeOpenAICodexVersionForTest())
 	for _, payload := range createPayloads {
 		require.True(t, strings.HasPrefix(
 			payload.FileName,
 			"sub2apiplus-codex-"+activeOpenAICodexVersionForTest()+"-files-probe-",
 		))
 		require.True(t, strings.HasSuffix(payload.FileName, ".txt"))
-		require.Equal(t, uint64(len(officialFilesProbePayload)), payload.FileSize)
+		require.Equal(t, uint64(len(expectedPayload)), payload.FileSize)
 		require.Equal(t, "codex", payload.UseCase)
 		require.NotContains(t, payload.FileName, "/Users/admin")
 	}
 	require.NotEqual(t, createPayloads[0].FileName, createPayloads[1].FileName)
 	for _, body := range blobBodies {
-		require.Equal(t, officialFilesProbePayload, string(body))
+		require.Equal(t, expectedPayload, string(body))
 		require.NotContains(t, string(body), "/Users/admin")
 	}
 

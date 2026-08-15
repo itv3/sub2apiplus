@@ -93,7 +93,7 @@ func TestForwardAlphaSearchOAuthAppliesCodex0145WireContract(t *testing.T) {
 	require.Equal(t, "chatgpt-account", upstream.lastReq.Header.Get("chatgpt-account-id"))
 	// 官方 alpha/search 走 execute，accept 由 reqwest 补默认 */*（SPEC-HDR-006）。
 	require.Equal(t, "*/*", upstream.lastReq.Header.Get("Accept"))
-	require.Equal(t, activeOpenAICodexVersionForTest(), upstream.lastReq.Header.Get("Version"))
+	require.Equal(t, officialCodexVersion0145, upstream.lastReq.Header.Get("Version"))
 	require.Equal(t, "application/json", upstream.lastReq.Header.Get("Content-Type"))
 	require.NotEmpty(t, upstream.lastReq.Header.Get("X-Codex-Turn-Metadata"))
 	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
@@ -225,7 +225,7 @@ func TestForwardAlphaSearchPATUsesResponsesWebSearchFallback(t *testing.T) {
 	require.Equal(t, "application/json", upstream.lastReq.Header.Get("Content-Type"))
 	require.Equal(t, "text/event-stream", upstream.lastReq.Header.Get("Accept"))
 	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
-	require.Equal(t, activeOpenAICodexVersionForTest(), upstream.lastReq.Header.Get("Version"))
+	require.Equal(t, codexCLIVersion, upstream.lastReq.Header.Get("Version"))
 	turnMetadata := upstream.lastReq.Header.Get("X-Codex-Turn-Metadata")
 	require.NotEmpty(t, gjson.Get(turnMetadata, "turn_id").String())
 	require.NotEmpty(t, gjson.Get(turnMetadata, "session_id").String())

@@ -13,8 +13,7 @@ import (
 )
 
 func officialCodex0145RequiredEndpointIDs() []string {
-	mode := openAICodexReleaseModeForVersionForTest(officialCodexVersion0145)
-	release, err := officialegress.DefaultReleaseCatalog().Resolve(mode)
+	release, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseModeActive)
 	if err != nil {
 		panic(err)
 	}
@@ -178,8 +177,7 @@ func TestOfficialCodex0145RequiredRuleAndEndpointUniverse(t *testing.T) {
 	if len(profile.RequiredRules) != 0 {
 		t.Fatalf("证据专用 RequiredRules 不得进入 service 可执行投影：%v", profile.RequiredRules)
 	}
-	mode := openAICodexReleaseModeForVersionForTest(officialCodexVersion0145)
-	formal, err := officialegress.DefaultReleaseCatalog().Resolve(mode)
+	formal, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseModeActive)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -542,7 +540,7 @@ func TestOfficialCodex0145ConnectionLifecycleComesFromEndpointProfile(t *testing
 			Transport:       OfficialEgressTransportHTTP,
 			UpstreamHost:    endpoint.Host,
 			ProfileVersion:  officialCodexVersion0145,
-			ProfileMode:     string(openAICodexReleaseModeForVersionForTest(officialCodexVersion0145)),
+			ProfileMode:     officialClientProfileModeActive,
 			AccountType:     account.Type,
 			CodexEndpointID: endpoint.ID,
 			InvocationID:    invocationID,
@@ -697,8 +695,7 @@ func TestOfficialCodex0145DeepCopyAndDigest(t *testing.T) {
 	if first != pristine {
 		t.Fatal("两次版本解析返回了不同指针，只读单例契约被破坏")
 	}
-	mode := openAICodexReleaseModeForVersionForTest(officialCodexVersion0145)
-	formal, err := officialegress.DefaultReleaseCatalog().Resolve(mode)
+	formal, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseModeActive)
 	if err != nil {
 		t.Fatal(err)
 	}

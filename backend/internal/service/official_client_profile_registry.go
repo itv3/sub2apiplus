@@ -28,10 +28,8 @@ const (
 	officialClientBuildAnthropicCLI21218 = "anthropic_claude_code_2_1_218_linux_x64_node_26_3_0"
 	officialClientBuildAnthropicDesktop  = "anthropic_claude_desktop_2_1_209_macos_arm64_node_26_3_0"
 
-	// 这三个别名表示当前发布画像的传输边界，供连接池与兼容性测试使用。
+	// Anthropic 当前发布画像的传输边界，供连接池与兼容性测试使用。
 	officialEgressTransportProfileAnthropicHTTP = "anthropic-http-claude-code-2.1.220-direct"
-	officialEgressTransportProfileOpenAIHTTP    = "codex-0.147.0-http-ubuntu24-native"
-	officialEgressTransportProfileOpenAIWS      = "codex-0.147.0-ws-rustls"
 )
 
 const (

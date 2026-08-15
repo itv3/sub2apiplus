@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/stretchr/testify/require"
 )
 
@@ -60,9 +61,13 @@ func TestOfficialClientProfileRegistryActiveReleasesMatchCurrentCaptures(t *test
 		officialClientProfileModeActive,
 	)
 	require.NoError(t, err)
-	require.Equal(t, "0.147.0", codexProfile.Build.Version)
+	activeRelease, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseModeActive)
+	require.NoError(t, err)
+	activeHTTPNode, ok := activeRelease.Node(officialegress.RegistryPurposeOpenAIOAuthHTTP)
+	require.True(t, ok)
+	require.Equal(t, activeRelease.Version(), codexProfile.Build.Version)
 	require.Equal(t, "codex_exec", codexProfile.Build.Originator)
-	require.Equal(t, officialEgressTransportProfileOpenAIHTTP, codexProfile.Wire.TransportProfileID)
+	require.Equal(t, activeHTTPNode.Wire.TransportProfileID, codexProfile.Wire.TransportProfileID)
 	require.NotEmpty(t, codexProfile.Wire.Digest)
 }
 

@@ -225,7 +225,7 @@ func (s *OpenAIGatewayService) forwardAlphaSearchViaResponsesWebSearch(
 		// PAT fallback 的 Responses body 是服务端重建产物，不能把原
 		// alpha/search 入站误当成该 body 的完整官方 Responses 身份。
 		Account: account, ProxyURL: proxyURL, Request: req,
-		PolicyID: "changeset1b.alpha_search.pat_fallback.v1", PolicySource: "docs/CODEX_CLI_0145_EGRESS_SPEC.md#policy-changeset-1b",
+		PolicyID: "changeset1b.alpha_search.pat_fallback.v1", PolicySource: "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md#policy-changeset-1b",
 		ConcurrencyLimit: account.EffectiveLoadFactor(), HasBillingSideEffect: true,
 	})
 	SetOpsLatencyMs(c, OpsUpstreamLatencyMsKey, time.Since(upstreamStart).Milliseconds())

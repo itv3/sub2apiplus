@@ -4,9 +4,9 @@
   "codex_version": "0.145.0",
   "profile_id": "codex-cli-0.145.0",
   "source_spec": {
-    "path": "docs/CODEX_CLI_0145_EGRESS_SPEC.md",
+    "path": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
     "fragment": "第二章",
-    "sha256": "07dafb94ee9988fb96b370e3f94607fc3492d3463c55173ef456519e36c9e54b"
+    "sha256": "bd0e7a2c29c615baf2d9b76537810bb4ae3c2b5fba260e839fe892ea8455eb55"
   },
   "rule_manifest": {
     "path": "tools/official_client_capture/codex_upgrade_rules_0_145_0.json",

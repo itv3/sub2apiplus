@@ -226,7 +226,11 @@ def transition_metadata(path: str) -> tuple[str, list[str], list[str]]:
             ["changeset5:evidence_gate_integration"],
             ["make check-egress-spec", "TestChangeset5WorkspaceBaselineIsIndependentlyFrozen"],
         )
-    if path in {"docs/1.md", "docs/CODEX_CLI_0145_EGRESS_SPEC.md"}:
+    if path in {
+        "docs/1.md",
+        "docs/CODEX_CLI_0145_EGRESS_SPEC.md",
+        "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+    }:
         return (
             "同步变更集 5 已实施架构、证据口径与复审边界",
             ["changeset5:specification_update"],

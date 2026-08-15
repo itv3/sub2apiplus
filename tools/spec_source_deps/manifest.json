@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cargo_lock": "local-analysis/sources/codex-cli-0.145/codex-rs/Cargo.lock",
+  "cargo_lock": "local-analysis/sources/codex-cli-0.147/codex-rs/Cargo.lock",
   "dependencies": [
     {
       "name": "hyper",

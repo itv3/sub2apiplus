@@ -12,7 +12,7 @@ import pathlib
 import re
 import sys
 
-SPEC = pathlib.Path(__file__).resolve().parents[1] / "docs" / "CODEX_CLI_0145_EGRESS_SPEC.md"
+SPEC = pathlib.Path(__file__).resolve().parents[1] / "docs" / "CODEX_CLI_CLIENT_EMULATION_GUIDE.md"
 
 HEAD_RE = re.compile(
     r"^### (SPEC-[A-Z0-9]+-\d+)(?:\s*[~/]\s*(\d+))?\s+(.+)$",
@@ -60,10 +60,15 @@ HISTORY_RE = re.compile(
 
 
 def second_part(text: str) -> str:
-    """只返回“第二部分 规则”，并拒绝缺失或重复的章节边界。"""
-    starts = list(re.finditer(r"^# 第二部分 规则\s*$", text, re.M))
+    """只返回“第二部分 Codex CLI 客户端规则画像”，并拒绝缺失或重复的章节边界。"""
+    starts = list(
+        re.finditer(r"^# 第二部分 Codex CLI 客户端规则画像\s*$", text, re.M)
+    )
     if len(starts) != 1:
-        raise ValueError(f"“# 第二部分 规则”应恰好出现 1 次，实际 {len(starts)} 次")
+        raise ValueError(
+            "“# 第二部分 Codex CLI 客户端规则画像”应恰好出现 1 次，"
+            f"实际 {len(starts)} 次"
+        )
     start = starts[0].start()
     end_match = re.search(r"^# 第三部分(?:\s|$)", text[starts[0].end():], re.M)
     if end_match is None:

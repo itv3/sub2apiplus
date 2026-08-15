@@ -37,7 +37,7 @@ func TestOfficialEgressT3_ThreeTransportProvidersAreIndependent(t *testing.T) {
 	)
 	openAIHTTPSelection, err := resolveOfficialEgressTransportSelection(openAIHTTPContext)
 	require.NoError(t, err)
-	require.Equal(t, activeOpenAICodexTransportIDForTest(officialCodexEndpointResponsesHTTP), openAIHTTPSelection.ProfileID)
+	require.Equal(t, officialCodexTransportHTTPDefault, openAIHTTPSelection.ProfileID)
 	require.Len(t, openAIHTTPSelection.TLSProfile.CipherSuites, 30)
 	require.Equal(t, uint16(0x1302), openAIHTTPSelection.TLSProfile.CipherSuites[0])
 	require.Empty(t, openAIHTTPSelection.TLSProfile.ALPNProtocols)
@@ -46,7 +46,7 @@ func TestOfficialEgressT3_ThreeTransportProvidersAreIndependent(t *testing.T) {
 	openAIWSContext := resolveOfficialEgressT3WSContext(t, openAIAccount, "openai-ws-ca")
 	openAIWSSelection, err := resolveOfficialEgressTransportSelection(openAIWSContext)
 	require.NoError(t, err)
-	require.Equal(t, activeOpenAICodexTransportIDForTest(officialCodexEndpointResponsesWS), openAIWSSelection.ProfileID)
+	require.Equal(t, officialCodexTransportWS, openAIWSSelection.ProfileID)
 	require.Len(t, openAIWSSelection.TLSProfile.CipherSuites, 10)
 	require.Equal(t, uint16(0x1302), openAIWSSelection.TLSProfile.CipherSuites[0])
 	require.Empty(t, openAIWSSelection.TLSProfile.ALPNProtocols)
@@ -75,12 +75,11 @@ func TestOfficialEgressT3_WHAMUsesExactLongLivedTransport(t *testing.T) {
 		"/v1/responses",
 	)
 	require.NoError(t, err)
-	wantTransport := activeOpenAICodexTransportIDForTest(officialCodexEndpointWhamUsage)
-	require.Equal(t, wantTransport, egressContext.TransportProfileID())
+	require.Equal(t, officialCodexTransportHTTPLongLived, egressContext.TransportProfileID())
 
 	selection, err := resolveOfficialEgressTransportSelection(egressContext)
 	require.NoError(t, err)
-	require.Equal(t, wantTransport, selection.ProfileID)
+	require.Equal(t, officialCodexTransportHTTPLongLived, selection.ProfileID)
 	require.Len(t, selection.TLSProfile.CipherSuites, 30)
 }
 
@@ -172,7 +171,7 @@ func TestOfficialEgressT3_ConnectionPoolKeyIncludesTransportProfileAndCA(t *test
 		"ca-b",
 	)
 	require.NotEqual(t, first.ConnectionPoolID(), second.ConnectionPoolID())
-	require.Contains(t, first.ConnectionPoolID(), "tls_profile="+activeOpenAICodexTransportIDForTest(officialCodexEndpointResponsesHTTP))
+	require.Contains(t, first.ConnectionPoolID(), "tls_profile="+officialCodexTransportHTTPDefault)
 	require.Contains(t, first.ConnectionPoolID(), "ca=ca-a")
 }
 

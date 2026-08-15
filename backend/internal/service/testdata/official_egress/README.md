@@ -985,7 +985,7 @@ HTTP 为 17-cipher + `http/1.1`，Codex HTTP 为 30-cipher + 空 ALPN，Codex WS
 ### 25.3 本地证据与完整性
 
 本节原始阶段抓包已被当前规则证据替代并清理。Codex CLI 0.145.0 的保留证据及完整性边界
-统一见 `docs/CODEX_CLI_0145_EGRESS_SPEC.md` 和 `docs/EVIDENCE_INDEX.md`。
+统一见 `docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md` 和 `docs/EVIDENCE_INDEX.md`。
 
 ## 26. 0.1.165-3 最终复核修复、生产切换与新证据
 
@@ -1023,4 +1023,4 @@ Codex `thread/compact/start` 的真实 0.145.0 wire 使用带 `compaction_trigge
 证据被单列，未冒充 compact 端点官方基准；compact 端点契约由专项代码测试覆盖。
 
 本节原始阶段抓包已被当前规则证据替代并清理。当前范围、测试、保留证据和未覆盖边界统一
-见 `docs/CODEX_CLI_0145_EGRESS_SPEC.md` 和 `docs/EVIDENCE_INDEX.md`。
+见 `docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md` 和 `docs/EVIDENCE_INDEX.md`。

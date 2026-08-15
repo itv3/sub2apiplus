@@ -3093,7 +3093,7 @@ func TestOpenAIBuildUpstreamRequestAPIKeyCodexMimicOverridesClientHeaders(t *tes
 		APIKeyCodexMimic: resolveOpenAIAPIKeyCodexMimicProfile(account, 0, svc.cfg),
 	})
 	require.NoError(t, err)
-	require.Equal(t, activeOpenAICodexUserAgentForTest(), req.Header.Get("User-Agent"))
+	require.Equal(t, officialOpenAIHTTPUserAgent, req.Header.Get("User-Agent"))
 	require.Equal(t, officialOpenAIHTTPOriginator, req.Header.Get("originator"))
 	require.Empty(t, req.Header.Get("OpenAI-Beta"))
 	require.Empty(t, req.Header.Get("version"))
@@ -3176,7 +3176,7 @@ func TestOpenAIBuildUpstreamRequestForceCodexCLIDoesNotOverrideAPIKeyMimic(t *te
 		APIKeyCodexMimic: resolveOpenAIAPIKeyCodexMimicProfile(account, 0, svc.cfg),
 	})
 	require.NoError(t, err)
-	require.Equal(t, activeOpenAICodexUserAgentForTest(), req.Header.Get("User-Agent"))
+	require.Equal(t, officialOpenAIHTTPUserAgent, req.Header.Get("User-Agent"))
 	require.Equal(t, officialOpenAIHTTPOriginator, req.Header.Get("originator"))
 }
 
@@ -3230,8 +3230,8 @@ func TestOpenAIGatewayService_APIKeyCodexMimicUsesStandardTransport(t *testing.T
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotNil(t, upstream.lastTLSProfile)
-	require.Contains(t, upstream.lastTLSProfile.Name, "Codex CLI "+activeOpenAICodexVersionForTest())
-	require.Equal(t, activeOpenAICodexUserAgentForTest(), upstream.lastReq.Header.Get("User-Agent"))
+	require.Contains(t, upstream.lastTLSProfile.Name, "Codex CLI 0.145.0")
+	require.Equal(t, officialOpenAIHTTPUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, "text/event-stream", upstream.lastReq.Header.Get("Accept"))
 	require.True(t, gjson.GetBytes(upstream.lastBody, "stream").Bool())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "store").Bool())
@@ -3288,7 +3288,7 @@ func TestOpenAIGatewayService_MessagesAPIKeyCodexMimicUsesHeadersBodyAndStandard
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.Equal(t, "http://upstream.example/v1/responses", upstream.lastReq.URL.String())
-	require.Equal(t, activeOpenAICodexUserAgentForTest(), upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, officialOpenAIHTTPUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, officialOpenAIHTTPOriginator, upstream.lastReq.Header.Get("originator"))
 	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
 	require.Empty(t, upstream.lastReq.Header.Get("version"))
@@ -3300,7 +3300,7 @@ func TestOpenAIGatewayService_MessagesAPIKeyCodexMimicUsesHeadersBodyAndStandard
 	require.NotEmpty(t, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
 	require.NotEmpty(t, gjson.GetBytes(upstream.lastBody, "client_metadata.x-codex-turn-metadata").String())
 	require.NotNil(t, upstream.lastTLSProfile)
-	require.Contains(t, upstream.lastTLSProfile.Name, "Codex CLI "+activeOpenAICodexVersionForTest())
+	require.Contains(t, upstream.lastTLSProfile.Name, "Codex CLI 0.145.0")
 }
 
 func TestOpenAIGatewayService_APIKeyCodexMimicPreservesCompactRequestShape(t *testing.T) {
@@ -3350,7 +3350,7 @@ func TestOpenAIGatewayService_APIKeyCodexMimicPreservesCompactRequestShape(t *te
 	require.NotNil(t, result)
 	require.False(t, result.Stream)
 	require.Equal(t, "http://upstream.example/v1/responses/compact", upstream.lastReq.URL.String())
-	require.Equal(t, activeOpenAICodexUserAgentForTest(), upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, officialOpenAIHTTPUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Empty(t, upstream.lastReq.Header.Get("Accept"))
 	require.False(t, gjson.GetBytes(upstream.lastBody, "stream").Exists())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "store").Exists())
@@ -3416,8 +3416,8 @@ func TestOpenAIGatewayService_APIKeyCodexMimicTreatsThirdPartyRequestAsCodexCLI(
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	require.NotNil(t, upstream.lastTLSProfile)
-	require.Contains(t, upstream.lastTLSProfile.Name, "Codex CLI "+activeOpenAICodexVersionForTest())
-	require.Equal(t, activeOpenAICodexUserAgentForTest(), upstream.lastReq.Header.Get("User-Agent"))
+	require.Contains(t, upstream.lastTLSProfile.Name, "Codex CLI 0.145.0")
+	require.Equal(t, officialOpenAIHTTPUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, officialOpenAIHTTPOriginator, upstream.lastReq.Header.Get("originator"))
 	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
 	require.Empty(t, upstream.lastReq.Header.Get("session_id"))

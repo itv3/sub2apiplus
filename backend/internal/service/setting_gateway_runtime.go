@@ -13,7 +13,6 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/antigravity"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/openaiidentity"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -85,7 +84,7 @@ const antigravityUserAgentVersionDBTimeout = 5 * time.Second
 
 // DefaultOpenAICodexUserAgent 是兼容入口的默认候选身份。严格 OAuth 出站仍由
 // active ReleaseBundle 重建最终 User-Agent，自动发现版本不能覆盖该画像身份。
-const DefaultOpenAICodexUserAgent = openaiidentity.CodexUserAgent
+var DefaultOpenAICodexUserAgent = codexCLIUserAgent
 
 // cachedOpenAICodexUserAgent 缓存 OpenAI Codex UA（进程内缓存，60s TTL）
 type cachedOpenAICodexUserAgent struct {

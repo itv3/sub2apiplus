@@ -20,7 +20,7 @@
 | 4 | changeset3 final-wire 生成器当前基线不可复现：首个 capture 即被统一比较器拒绝，六个 digest 与旧 approved delta 不符 | `TestGenerateChangeset3ProductionFinalWire` 实跑失败 |
 | 5 | changeset3 的 alpha-search capture 由测试自建 target 与语义 request 直进 `invocation.Execute`，不经过 `ForwardAlphaSearch`/`buildOpenAIAlphaSearchRequest`，56 面零差异不能证明 service 层构造路径的回归安全 | `backend/internal/service/official_egress_changeset3_production_final_wire_test.go:272-507` |
 | 6 | `officialegress` 包内已有合成异画像 catalog 的测试模式（改 snapshot 重建 catalog），原方案 §4.4「包外无法合成、须新增公共导出」不成立 | `backend/internal/officialegress/changeset2_synthetic_rollback_test.go` |
-| 7 | 删除传参与常量属旧路径删除，须走规格 §4.9 七步退休流程或先立正式豁免，原方案两者皆未安排 | `docs/CODEX_CLI_0145_EGRESS_SPEC.md` §4.9 |
+| 7 | 删除传参与常量属旧路径删除，须走规格 §5.2 七步退休流程或先立正式豁免，原方案两者皆未安排 | `docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md` §5.2 |
 
 综合：「URL 来自全局 catalog、bundle 来自 runtime catalog 且可能分叉」无生产可达失败链；
 换版在现有架构下是往同一内置 catalog 装两个版本、Active/Previous 两个 mode 各查各自槽位，
@@ -60,7 +60,7 @@ header/body/TLS/release 由 bundle 编译，该值当前恰与 Active/Previous �
 
 **判定后处置：**
 
-- 无消费者：按规格 §4.9 完整退休（含机器退休收据），或先在清单为「单处赋值 + 私有常量」
+- 无消费者：按规格 §5.2 完整退休（含机器退休收据），或先在清单为「单处赋值 + 私有常量」
   的简化流程立正式豁免并取得明确批准后执行。`officialCodexVersion0145` 常量保留
   （十余处测试消费者 + 已登记为版本化快照证据常量）。
 - 有消费者：记录完整消费链，另行提交最小方案改为从执行期 bundle 派生，单独确认后实施。
@@ -78,7 +78,7 @@ header/body/TLS/release 由 bundle 编译，该值当前恰与 Active/Previous �
   -run TestGenerateChangeset6PostFinalWire -count=1`。
 - 重新引用旧生成入口前必须先修复；若决定删除旧入口或旧 approved-delta 契约，使用专用
   gate/evidence retirement receipt（先例：`docs/egress/consolidation/pairing-gate-retirement.json`），
-  并证明 changeset6 仍依赖的共享 capture builder 保持完整。规格 §4.9 面向生产兼容层，
+  并证明 changeset6 仍依赖的共享 capture builder 保持完整。规格 §5.2 面向生产兼容层，
   不适用于纯历史测试生成器。在此之前不为让历史工具变绿而修改代码或重建历史证据。
 - 任何后续变更集引用 final-wire 资产做门禁前，必须先验证：生成器在当前基线可复现，且
   捕获链真实经过被改的生产函数。两条有一条不成立，该门禁即无效。
@@ -87,7 +87,7 @@ header/body/TLS/release 由 bundle 编译，该值当前恰与 Active/Previous �
 
 - 撤销日期：2026-08-06
 - 审核：三方 `changes_requested`（P1-1 必要性依据与代码事实不符、P1-2 门禁不可执行且不覆盖
-  修改路径、P1-3 未走 §4.9、P2-1 导出面缺必要性、P2-2 body 同源表述矛盾、P2-3 状态字段错误、
+  修改路径、P1-3 未走 §5.2、P2-1 导出面缺必要性、P2-2 body 同源表述矛盾、P2-3 状态字段错误、
   P2-4 置空测试不足）；复核确认全部属实
 - 遗留判定项（§3）：待启动，不排期
 - 衍生问题（§4）：排查中

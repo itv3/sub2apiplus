@@ -192,7 +192,7 @@ def parse_h2_stream(data: bytes) -> dict:
     """解析 h2 帧序列，保留 SETTINGS 帧内顺序与 HPACK 动态表演进。
 
     这是中继相对 mitmproxy 的核心优势所在：mitmproxy 会用自己的 h2 栈重建连接，
-    客户端原始的 SETTINGS 集合、取值与帧内顺序在转发后已丢失（§2.4）。中继只
+    客户端原始的 SETTINGS 集合、取值与帧内顺序在转发后已丢失（§2.6）。中继只
     复制字节，故这些全都保留。
 
     HPACK 解码需按连接维护**单一** Decoder 实例——动态表是跨帧累积的，
