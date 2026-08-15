@@ -214,5 +214,39 @@ class ResultsDocumentTest(unittest.TestCase):
             )
 
 
+class MachineLayoutTest(unittest.TestCase):
+    def test_campaign_layout_matches_compare_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            campaign = Path(temporary).resolve()
+            results_dir = campaign / "assertions/candidate-x/machine"
+            results_dir.mkdir(parents=True)
+            root, official, candidate = builder.resolve_machine_layout(
+                {
+                    "campaign_dir": str(campaign),
+                    "candidate_id": "candidate-x",
+                },
+                results_dir,
+            )
+            self.assertEqual(root, campaign)
+            self.assertEqual(official, results_dir / "official")
+            self.assertEqual(candidate, results_dir / "candidate")
+            self.assertTrue(official.is_dir())
+            self.assertTrue(candidate.is_dir())
+
+    def test_campaign_layout_rejects_noncanonical_results_dir(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            campaign = Path(temporary).resolve()
+            wrong = campaign / "machine"
+            wrong.mkdir()
+            with self.assertRaises(builder.RuleAssertionError):
+                builder.resolve_machine_layout(
+                    {
+                        "campaign_dir": str(campaign),
+                        "candidate_id": "candidate-x",
+                    },
+                    wrong,
+                )
+
+
 if __name__ == "__main__":
     unittest.main()

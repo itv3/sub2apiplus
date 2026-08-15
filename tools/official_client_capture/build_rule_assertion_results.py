@@ -73,6 +73,38 @@ def _binding(path: Path, root: Path) -> dict[str, str]:
     }
 
 
+def resolve_machine_layout(
+    config: Mapping[str, Any], results_dir: Path
+) -> tuple[Path, Path, Path]:
+    """解析机器结果落位与 Campaign 逻辑路径根。
+
+    未声明 ``campaign_dir`` 时保留旧的平铺布局，供独立离线编排使用。正式
+    Campaign 必须声明该字段，机器结果随即严格落在 compare 已冻结的
+    ``assertions/<candidate-id>/machine/{official,candidate}/``，且收据路径相对
+    Campaign 根绑定，确保 builder 输出可被 accept 逐字重放。
+    """
+
+    campaign_value = config.get("campaign_dir")
+    if campaign_value is None:
+        return results_dir, results_dir, results_dir
+    if not isinstance(campaign_value, str) or not Path(campaign_value).is_absolute():
+        raise RuleAssertionError("campaign_dir 必须是绝对路径")
+    campaign_root = Path(campaign_value).resolve(strict=True)
+    candidate_id = config.get("candidate_id")
+    if not isinstance(candidate_id, str) or not candidate_id:
+        raise RuleAssertionError("正式 Campaign 布局缺少 candidate_id")
+    expected_root = campaign_root / "assertions" / candidate_id / "machine"
+    if results_dir.resolve() != expected_root.resolve():
+        raise RuleAssertionError(
+            "results-dir 必须等于 Campaign 的 assertions/<candidate-id>/machine"
+        )
+    official_dir = results_dir / "official"
+    candidate_dir = results_dir / "candidate"
+    official_dir.mkdir(parents=True, exist_ok=True)
+    candidate_dir.mkdir(parents=True, exist_ok=True)
+    return campaign_root, official_dir, candidate_dir
+
+
 def run_side_assertion(
     *,
     rule_id: str,
@@ -348,6 +380,13 @@ def main() -> int:
 
     results_dir = arguments.results_dir
     results_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        results_root, official_results_dir, candidate_results_dir = (
+            resolve_machine_layout(config, results_dir)
+        )
+    except RuleAssertionError as error:
+        raise SystemExit(f"配置非法：{error}") from error
+    formal_campaign_layout = results_root != results_dir
 
     rule_results: list[dict[str, Any]] = []
     for rule_id in rule_ids:
@@ -360,7 +399,11 @@ def main() -> int:
         official_expected_check_ids = expected_check_ids_for_side(
             contract, rule_id, "official"
         )
-        candidate_output = results_dir / f"{rule_id}.candidate.json"
+        candidate_output = candidate_results_dir / (
+            f"{rule_id}.json"
+            if formal_campaign_layout
+            else f"{rule_id}.candidate.json"
+        )
         candidate = run_side_assertion(
             rule_id=rule_id,
             capture_manifest=candidate_manifest,
@@ -373,7 +416,11 @@ def main() -> int:
             side="candidate",
         )
         if mode == MODE_DUAL_WIRE:
-            official_output = results_dir / f"{rule_id}.official.json"
+            official_output = official_results_dir / (
+                f"{rule_id}.json"
+                if formal_campaign_layout
+                else f"{rule_id}.official.json"
+            )
             official = run_side_assertion(
                 rule_id=rule_id,
                 capture_manifest=official_manifest,
@@ -396,7 +443,7 @@ def main() -> int:
                     candidate_root=candidate_root,
                     official_prefix=official_prefix,
                     candidate_prefix=candidate_prefix,
-                    results_root=results_dir,
+                    results_root=results_root,
                     rationale=(
                         f"{rule_id} 在官方 {target_version} 证据与候选证据上分别由 "
                         "candidate_rule_assertion.py 独立执行并全部通过；"
@@ -414,7 +461,7 @@ def main() -> int:
                     candidate_root=candidate_root,
                     candidate_prefix=candidate_prefix,
                     official_authority=official_authority,
-                    results_root=results_dir,
+                    results_root=results_root,
                     rationale=(
                         f"{rule_id} 描述 Sub2API 内部实现事实，由候选侧机器断言"
                         "通过；官方权威为批准断言画像链，行内逐字绑定其摘要。"

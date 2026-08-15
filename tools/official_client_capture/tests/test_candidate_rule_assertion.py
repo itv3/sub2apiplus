@@ -820,6 +820,8 @@ class CandidateRuleAssertionTest(unittest.TestCase):
                         str(PROFILE_PATH),
                         "--rule-manifest",
                         str(RULE_MANIFEST_PATH),
+                        "--side",
+                        "candidate",
                         "--output",
                         str(output),
                     ]
@@ -843,6 +845,18 @@ class CandidateRuleAssertionTest(unittest.TestCase):
             self.assertEqual(result["schema_version"], "codex-candidate-rule-assertion/v1")
             self.assertEqual(result["status"], "pass")
             self.assertTrue(all(check["passed"] for check in result["checks"]))
+            expected_command = build_assertion_command(
+                rule_id="SPEC-EP-006",
+                capture_manifest=str(manifest),
+                evidence_root=str(evidence_root),
+                profile=str(PROFILE_PATH),
+                rule_manifest=str(RULE_MANIFEST_PATH),
+                side="candidate",
+                output=str(output),
+            )
+            self.assertEqual(
+                result["command_sha256"], command_sha256(expected_command)
+            )
 
 
 if __name__ == "__main__":

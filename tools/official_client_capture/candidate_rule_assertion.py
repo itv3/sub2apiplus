@@ -1610,6 +1610,7 @@ def main(argv: Iterable[str] | None = None) -> int:
         rule_manifest=str(args.rule_manifest),
         expected_codex_version=args.expected_codex_version,
         expected_profile_sha256=args.expected_profile_sha256,
+        side=args.side,
         output=str(args.output),
     )
     result = build_assertion_result(
