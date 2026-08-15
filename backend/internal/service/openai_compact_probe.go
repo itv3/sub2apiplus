@@ -12,7 +12,7 @@ const (
 	AccountTestModeDefault = "default"
 	// AccountTestModeCompact 执行 /responses/compact 能力探针。
 	AccountTestModeCompact = "compact"
-	// AccountTestModeOfficialFilesProbe 执行 Codex 0.145.0 Files 三段式出站探针。
+	// AccountTestModeOfficialFilesProbe 执行 Codex 0.147.0 Files 三段式出站探针。
 	AccountTestModeOfficialFilesProbe = "official_files_probe"
 )
 

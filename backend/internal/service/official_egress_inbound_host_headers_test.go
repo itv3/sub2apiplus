@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/Wei-Shaw/sub2api/internal/pkg/openaiidentity"
 	"github.com/stretchr/testify/require"
 )
 
@@ -56,8 +55,8 @@ func TestOfficialEgressOpenAIHTTPStripsInboundHostHeadersFromThirdParty(t *testi
 	require.NoError(t, err)
 	require.NotNil(t, upstream.lastReq)
 	requireNoInboundHostHeaders(t, upstream.lastReq.Header)
-	require.Equal(t, openaiidentity.CodexUserAgent, upstream.lastReq.Header.Get("User-Agent"))
-	require.Equal(t, openaiidentity.CodexOriginator, upstream.lastReq.Header.Get("originator"))
+	require.Equal(t, activeOpenAICodexUserAgentForTest(), upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, activeOpenAICodexProfileForTest().Build.Originator, upstream.lastReq.Header.Get("originator"))
 }
 
 // 官方客户端入站（strict 路径）同样要剥离：strict 只跳过 Body 顶层归一化，不豁免 Header 定型。
@@ -81,7 +80,7 @@ func TestOfficialEgressOpenAIHTTPStripsInboundHostHeadersFromOfficialClient(t *t
 	require.NoError(t, err)
 	require.NotNil(t, upstream.lastReq)
 	requireNoInboundHostHeaders(t, upstream.lastReq.Header)
-	require.Equal(t, openaiidentity.CodexUserAgent, upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, activeOpenAICodexUserAgentForTest(), upstream.lastReq.Header.Get("User-Agent"))
 }
 
 // 入站未声明压缩时，HTTP Responses 仍使用 active 画像默认压缩。

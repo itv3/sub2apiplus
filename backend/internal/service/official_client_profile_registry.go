@@ -30,8 +30,8 @@ const (
 
 	// 这三个别名表示当前发布画像的传输边界，供连接池与兼容性测试使用。
 	officialEgressTransportProfileAnthropicHTTP = "anthropic-http-claude-code-2.1.220-direct"
-	officialEgressTransportProfileOpenAIHTTP    = "openai-http-codex-0.145.0-direct"
-	officialEgressTransportProfileOpenAIWS      = "openai-ws-codex-0.145.0-direct"
+	officialEgressTransportProfileOpenAIHTTP    = "codex-0.147.0-http-ubuntu24-native"
+	officialEgressTransportProfileOpenAIWS      = "codex-0.147.0-ws-rustls"
 )
 
 const (

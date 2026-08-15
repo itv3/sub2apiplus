@@ -1422,9 +1422,9 @@ func openAICompatSSECompletedResponse(responseID, model string) *http.Response {
 func requireOpenAIMessagesCodexIdentity(t *testing.T, req *http.Request) {
 	t.Helper()
 	require.NotNil(t, req)
-	require.Equal(t, officialOpenAIHTTPUserAgent, req.Header.Get("User-Agent"))
+	require.Equal(t, activeOpenAICodexUserAgentForTest(), req.Header.Get("User-Agent"))
 	require.Equal(t, officialOpenAIHTTPOriginator, req.Header.Get("originator"))
-	require.Equal(t, codexCLIVersion, req.Header.Get("version"))
+	require.Equal(t, activeOpenAICodexVersionForTest(), req.Header.Get("version"))
 	require.Empty(t, req.Header.Get("OpenAI-Beta"))
 }
 

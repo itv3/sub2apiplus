@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
@@ -390,7 +391,54 @@ func officialEgressActiveVersionForTest(account *Account) string {
 	if account != nil && account.Platform == PlatformAnthropic {
 		return "2.1.220"
 	}
-	return "0.145.0"
+	return activeOpenAICodexProfileForTest().Build.Version
+}
+
+func activeOpenAICodexProfileForTest() officialClientResolvedProfile {
+	profile, err := resolveOfficialClientProfile(
+		officialClientPurposeOpenAIAPIKeyResponsesHTTP,
+		officialClientProfileModeActive,
+	)
+	if err != nil {
+		panic(err)
+	}
+	return profile
+}
+
+func activeOpenAICodexVersionForTest() string {
+	return activeOpenAICodexProfileForTest().Build.Version
+}
+
+func activeOpenAICodexUserAgentForTest() string {
+	return activeOpenAICodexProfileForTest().Build.UserAgent
+}
+
+func activeOpenAICodexTransportIDForTest(endpointID string) string {
+	profile, err := resolveCodexVersionProfile(activeOpenAICodexVersionForTest())
+	if err != nil {
+		panic(err)
+	}
+	endpoint, err := profile.ResolveEndpoint(endpointID)
+	if err != nil {
+		panic(err)
+	}
+	return endpoint.TransportID
+}
+
+func openAICodexReleaseModeForVersionForTest(version string) officialegress.ReleaseMode {
+	for _, mode := range []officialegress.ReleaseMode{
+		officialegress.ReleaseModeActive,
+		officialegress.ReleaseModePrevious,
+	} {
+		release, err := officialegress.DefaultReleaseCatalog().Resolve(mode)
+		if err != nil {
+			panic(err)
+		}
+		if release.Version() == version {
+			return mode
+		}
+	}
+	panic("ReleaseCatalog 缺少测试版本：" + version)
 }
 
 func mustOfficialEgressField(

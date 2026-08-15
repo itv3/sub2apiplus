@@ -77,8 +77,9 @@ func TestCodexOutboundVersionHasSingleSource(t *testing.T) {
 	require.Equal(t, codexCLIVersion, openai.CodexUserAgentVersion(codexCLIUserAgent),
 		"codexCLIUserAgent=%q 的版本段必须等于 codexCLIVersion=%q", codexCLIUserAgent, codexCLIVersion)
 	require.Equal(t, codexCLIVersion, openAICodexProbeVersion)
-	require.Equal(t, codexCLIVersion, resolveVerifiedCodexClientVersion())
-	require.GreaterOrEqual(t, CompareVersions(codexCLIVersion, codexUpstreamMinVersion), 0,
-		"codexCLIVersion=%q 不得低于上游最低门槛 %q", codexCLIVersion, codexUpstreamMinVersion,
+	activeVersion := activeOpenAICodexVersionForTest()
+	require.Equal(t, activeVersion, resolveVerifiedCodexClientVersion())
+	require.GreaterOrEqual(t, CompareVersions(activeVersion, codexUpstreamMinVersion), 0,
+		"activeVersion=%q 不得低于上游最低门槛 %q", activeVersion, codexUpstreamMinVersion,
 	)
 }

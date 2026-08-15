@@ -116,7 +116,10 @@ func TestAccountTestServiceOfficialFilesProbeUsesFixedMemoryPayloadAndHidesSigne
 	require.Len(t, createPayloads, 2)
 	require.Len(t, blobBodies, 2)
 	for _, payload := range createPayloads {
-		require.True(t, strings.HasPrefix(payload.FileName, "sub2apiplus-codex-0.145.0-files-probe-"))
+		require.True(t, strings.HasPrefix(
+			payload.FileName,
+			"sub2apiplus-codex-"+activeOpenAICodexVersionForTest()+"-files-probe-",
+		))
 		require.True(t, strings.HasSuffix(payload.FileName, ".txt"))
 		require.Equal(t, uint64(len(officialFilesProbePayload)), payload.FileSize)
 		require.Equal(t, "codex", payload.UseCase)

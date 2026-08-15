@@ -146,7 +146,7 @@ func TestBuildOpenAIResponsesProbeRequest_MimicUsesCodexHeadersAndBody(t *testin
 	// 返回的画像必须与 header/body 同源，供调用方复用做 TLS 决策。
 	require.True(t, mimicProfile.Enabled)
 	require.Equal(t, openAIAPIKeyCodexMimicClientCodexExec0145, mimicProfile.Client.ID)
-	require.Equal(t, officialOpenAIHTTPUserAgent, req.Header.Get("User-Agent"))
+	require.Equal(t, activeOpenAICodexUserAgentForTest(), req.Header.Get("User-Agent"))
 	require.Equal(t, officialOpenAIHTTPOriginator, req.Header.Get("originator"))
 	require.Empty(t, req.Header.Get("OpenAI-Beta"))
 	require.Empty(t, req.Header.Get("version"))

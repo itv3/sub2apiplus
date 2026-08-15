@@ -375,10 +375,9 @@ func TestChangeset5CurrentFinalWireMatchesFrozenWireFields(t *testing.T) {
 	normalized := changeset5ReadFinalWireManifest(
 		t, "../../../docs/egress/consolidation/normalized-pre-refactor-final-wire/manifest.json",
 	)
-	current := changeset5BuildCurrentActiveFinalWireCaptures(t)
-	// 变更集 5 冻结时 Active/Previous 都是 0.145；升级候选阶段 Previous
-	// 已合法指向 0.147。此历史非回归门只比较仍作为生产指针的 Active，
-	// 0.147 Previous 由升级 Campaign 与版本 route 收据验证。
+	current := changeset5BuildCurrent0145FinalWireCaptures(t)
+	// 变更集 5 冻结时 Active/Previous 都是 0.145。生产提升后 0.145 位于
+	// Previous；此历史非回归门按版本定位它，并只归一 selector 身份后比较 wire。
 	filterActive := func(captures []finalwirecapture.Capture) []finalwirecapture.Capture {
 		filtered := make([]finalwirecapture.Capture, 0, len(captures)/2)
 		for _, capture := range captures {
@@ -395,9 +394,10 @@ func TestChangeset5CurrentFinalWireMatchesFrozenWireFields(t *testing.T) {
 	}
 }
 
-func changeset5BuildCurrentActiveFinalWireCaptures(t *testing.T) []finalwirecapture.Capture {
+func changeset5BuildCurrent0145FinalWireCaptures(t *testing.T) []finalwirecapture.Capture {
 	t.Helper()
-	release, err := officialegress.DefaultReleaseCatalog().Resolve(officialegress.ReleaseModeActive)
+	mode := openAICodexReleaseModeForVersionForTest(officialCodexVersion0145)
+	release, err := officialegress.DefaultReleaseCatalog().Resolve(mode)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -434,16 +434,19 @@ func changeset5BuildCurrentActiveFinalWireCaptures(t *testing.T) []finalwirecapt
 			if matches == 0 {
 				continue
 			}
-			captures = append(captures, changeset3CaptureProductionRoute(
-				t, officialegress.ReleaseModeActive, binding, route, anchors[binding.ID()], routeIndex,
-			))
+			capture := changeset3CaptureProductionRoute(
+				t, mode, binding, route, anchors[binding.ID()], routeIndex,
+			)
+			// selector 交换不属于历史 wire 漂移；冻结证据的键仍使用当年的 Active。
+			capture.ReleaseMode = officialegress.ReleaseModeActive
+			captures = append(captures, capture)
 		}
 	}
 	sort.Slice(captures, func(i, j int) bool {
 		return changeset3ProductionCaptureKey(captures[i]) < changeset3ProductionCaptureKey(captures[j])
 	})
 	if len(captures) != 28 {
-		t.Fatalf("变更集 5 当前 Active final-wire 范围错误：captures=%d", len(captures))
+		t.Fatalf("变更集 5 当前 0.145 final-wire 范围错误：captures=%d", len(captures))
 	}
 	return captures
 }
@@ -651,6 +654,7 @@ func changeset5CompareCurrentFinalWireCaptures(
 			continue
 		}
 		normalized[index].BundleDigest = frozen.BundleDigest
+		normalized[index].ReleaseDigest = frozen.ReleaseDigest
 		normalized[index].ConnectionIdentityDigest = frozen.ConnectionIdentityDigest
 		normalized[index].ConnectionPoolDigest = frozen.ConnectionPoolDigest
 	}

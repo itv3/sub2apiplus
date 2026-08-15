@@ -19,9 +19,9 @@
       "e9516d439abb740e": 1
     },
     "backend/internal/pkg/openaiidentity/codex.go": {
-      "27353274124d7650": 1,
-      "bbe36c8241027346": 1,
-      "c58ae39832285798": 1
+      "38b347c0e68bd8a7": 1,
+      "6dc98b598e7cf5e2": 1,
+      "e7179499ac84f86f": 1
     },
     "backend/internal/repository/claude_usage_service.go": {
       "b0e18ac249fdfc67": 1
@@ -30,14 +30,14 @@
       "20bc5ac158e96c31": 1
     },
     "backend/internal/service/account_test_service.go": {
-      "71a1948d1a3c6e44": 1,
+      "4e895afaf8635d1a": 1,
       "8ef948a0e8526c25": 1
     },
     "backend/internal/service/account_test_service_openai_files.go": {
-      "2ffca2e79a30104c": 1,
-      "63d184c99ea21a8e": 1,
-      "943c9f791e9ea312": 1,
-      "f7064bbaca7de9b2": 1
+      "0c092663918304d1": 1,
+      "373ad5fa4762a81f": 1,
+      "c25bd15a83f318fd": 1,
+      "d3356604c52905e5": 1
     },
     "backend/internal/service/admin_compliance.go": {
       "0257ca76d26eaa64": 1
@@ -50,8 +50,8 @@
       "80eadaeef2ec1cbc": 1
     },
     "backend/internal/service/official_client_profile_registry.go": {
-      "1e75ff7e6b9d988f": 1,
-      "c2400352c1a75065": 1
+      "4337f9c027ea8c5a": 1,
+      "b9d8638f3334ea76": 1
     },
     "backend/internal/service/official_egress_codex_engine.go": {
       "296f6c9794043eb5": 1,
@@ -122,7 +122,7 @@
       "f8d7d16e815fb00d": 1
     },
     "backend/internal/service/openai_compact_probe.go": {
-      "19152a0438da036c": 1
+      "72b7ada6928a1a4f": 1
     },
     "backend/internal/service/openai_gateway_forward.go": {
       "db897e4da4905219": 1

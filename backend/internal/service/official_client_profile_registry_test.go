@@ -60,7 +60,7 @@ func TestOfficialClientProfileRegistryActiveReleasesMatchCurrentCaptures(t *test
 		officialClientProfileModeActive,
 	)
 	require.NoError(t, err)
-	require.Equal(t, "0.145.0", codexProfile.Build.Version)
+	require.Equal(t, "0.147.0", codexProfile.Build.Version)
 	require.Equal(t, "codex_exec", codexProfile.Build.Originator)
 	require.Equal(t, officialEgressTransportProfileOpenAIHTTP, codexProfile.Wire.TransportProfileID)
 	require.NotEmpty(t, codexProfile.Wire.Digest)

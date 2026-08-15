@@ -12,9 +12,8 @@ package openaiidentity
 // （terminal-detection/src/lib.rs:204 TerminalName::Unknown => "unknown"），
 // 而本服务端本就没有终端。
 //
-// suffix 段**必须保留**："(codex_exec; 0.145.0)" 正是官方在 responses 端点上
-// 恒定发送的形态——实测 39 个 POST /backend-api/codex/responses 请求
-// **无一例外**都带它（wire-parity-fix-20260727 全量归档统计）。
+// suffix 段**必须保留**：当前发布值来自 0.147.0 已验收画像；其设置机制与
+// 0.145.0 历史画像一致，不能只替换主版本而遗漏 suffix 中的版本。
 //
 // 机制：USER_AGENT_SUFFIX 是 login/src/auth/default_client.rs:41 的全局
 // LazyLock<Mutex<Option<String>>>。codex exec 内部走 app-server 协议，
@@ -40,7 +39,7 @@ package openaiidentity
 // 当时"实测无 suffix"的依据只取了 models 端点的样本，恰好落在设置之前。
 // 详见规格表 SPEC-HDR-005。
 const (
-	CodexVersion    = "0.145.0"
-	CodexUserAgent  = "codex_exec/0.145.0 (Ubuntu 24.4.0; x86_64) unknown (codex_exec; 0.145.0)"
+	CodexVersion    = "0.147.0"
+	CodexUserAgent  = "codex_exec/0.147.0 (Ubuntu 24.4.0; x86_64) unknown (codex_exec; 0.147.0)"
 	CodexOriginator = "codex_exec"
 )

@@ -194,7 +194,7 @@ func TestProxyKeeperOpenAIAccountTLSFollowsOfficialClientProfileMode(t *testing.
 		require.Zero(t, upstream.standardCalls)
 		require.Equal(t, 1, upstream.tlsCalls)
 		require.NotNil(t, upstream.tlsProfile)
-		require.Contains(t, upstream.tlsProfile.Name, "Codex CLI 0.145.0")
+		require.Contains(t, upstream.tlsProfile.Name, "Codex CLI "+activeOpenAICodexVersionForTest())
 		// keeper 不应用 mimic header：客户端原样透传的官方 UA 必须保留。
 		require.Equal(t, "codex_exec/0.145.0", upstream.lastRequest.Header.Get("User-Agent"))
 	})

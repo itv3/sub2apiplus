@@ -225,7 +225,7 @@ func createAnthropicAPIKeyMimicTestPayload(modelID string) map[string]any {
 // All account types use full Claude Code client characteristics, only auth header differs
 // modelID is optional - if empty, defaults to claude.DefaultTestModel
 // mode 可选；compact 执行 /responses/compact 探针，official_files_probe 执行
-// Codex 0.145.0 Files 三段式出站探针。
+// Codex 0.147.0 Files 三段式出站探针。
 func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int64, modelID string, prompt string, mode string, maxOutputTokens ...int) error {
 	ctx := c.Request.Context()
 

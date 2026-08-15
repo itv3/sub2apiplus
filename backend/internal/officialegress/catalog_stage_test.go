@@ -21,7 +21,7 @@ func stagedCatalogTestInput(t *testing.T) CatalogStageInput {
 	if err != nil {
 		t.Fatal(err)
 	}
-	raw = []byte(strings.ReplaceAll(string(raw), "0.145.0", "0.147.0"))
+	raw = []byte(strings.ReplaceAll(string(raw), active.Version(), "0.148.0"))
 	if err := json.Unmarshal(raw, &snapshot); err != nil {
 		t.Fatal(err)
 	}
@@ -34,7 +34,7 @@ func stagedCatalogTestInput(t *testing.T) CatalogStageInput {
 		t.Fatal(err)
 	}
 	return CatalogStageInput{
-		TargetVersion: "0.147.0", ProfileID: "codex-0.147.0-approved",
+		TargetVersion: "0.148.0", ProfileID: "codex-0.148.0-approved",
 		ProfileDigest: snapshot.Digest, ProfilePayload: payload,
 		CampaignID: "codex-0-147-test", ClassificationSHA: strings.Repeat("a", 64),
 	}
@@ -136,7 +136,11 @@ func TestBuildStagedReleaseCatalogRejectsUnapprovedCoordinates(t *testing.T) {
 		t.Fatal("画像自报 digest 与批准坐标不一致时未失败关闭")
 	}
 	input = stagedCatalogTestInput(t)
-	input.TargetVersion = "0.145.0"
+	active, err := DefaultReleaseCatalog().Resolve(ReleaseModeActive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input.TargetVersion = active.Version()
 	if _, err := BuildStagedReleaseCatalog(DefaultReleaseCatalog(), input); err == nil {
 		t.Fatal("Active 版本被作为候选重复导入时未失败关闭")
 	}
