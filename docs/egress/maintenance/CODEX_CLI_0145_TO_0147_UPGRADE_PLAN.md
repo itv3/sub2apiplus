@@ -1,11 +1,11 @@
-# Codex CLI 0.145.0 → 0.147.0 Official Egress 升级计划（执行中）
+# Codex CLI 0.145.0 → 0.147.0 Official Egress 升级计划（待生产启用）
 
-> 状态：**k71 首次走完全链路**——官方采集 → classify → 画像 → 候选采集 → seal →
-> compare → accept，是 k34 之后第一次。accept 实测候选侧 42 条规则、108 项 check，
-> **35 pass / 7 fail**，7 条待解决见 §10.2。**Active 仍为 0.145，0.147 尚未替换。**
+> 状态：**§7 与 §8 已完成**。正式 k80 Campaign 已通过 `accept`：42/42 规则通过、
+> 15 项门禁全绿、`accepted=true`；k71 遗留的 7 条已全部验证解决，详见 §10.2。
+> **Active 仍为 0.145，0.147 尚未替换**；§9 生产启用须在本次人工验收后另行执行。
 >
 > 官方采集固定在 Vircs（Codex CLI 只在那里），候选采集固定在 DMIT（x86_64 测试机）。
-> 进度与下一步见 §10.1，accept 待办清单见 §10.2，历轮死因与由此固化的不变量见 §10.8。
+> 进度与下一步见 §10.1，accept 验收结果见 §10.2，历轮死因与由此固化的不变量见 §10.8。
 > 收据最低字段与候选机环境前置清单跨 Campaign 有效，在
 > [`CAPTURE_OPERATIONS_NOTES.md`](CAPTURE_OPERATIONS_NOTES.md)。
 >
@@ -286,6 +286,10 @@ Campaign 的 `classification/approved/`，并通过 stage-contract、文件摘�
 
 ## 7. 建立 0.147 画像与第二版本门禁
 
+> **完成（2026-08-14，提交 `1ceb0485e`）。** 目标画像、SnapshotCatalog、Release graph、
+> 双版本 binding、version-route 受管收据及同版本合成夹具均已入库；0.145 历史资产保持不变。
+> 正式目标为 `codex-0.147.0-official-k59-v1`／`94071c8e…`，不是上文保留追溯的 k34 旧摘要。
+
 ### 7.1 画像资产
 
 - 新增完整、内容寻址的 0.147 Profile Snapshot；
@@ -434,6 +438,10 @@ hosts 与复核基线不一致。
 
 ## 8. Candidate、比较与 `ready`
 
+> **完成（2026-08-15，正式 k80 Campaign）。** Candidate、Kilo 两入口、seal、compare、
+> 42 条机器断言与 accept 均已完成；`accepted=true`，详细证据与摘要见 §10.1.1。
+> 这里的完成只授权进入 §9 的人工验收点，不代表已经切换生产 Active。
+
 Candidate 必须固定 commit/tree/build ID/deploy version/OCI digest/image ID/profile digest，
 并在同一 Campaign/attempt/run_nonce 下覆盖：
 
@@ -477,13 +485,13 @@ canary 通过后才允许更新正式实例。全程使用独立账号、独立 
 
 ## 10. 当前执行状态与跨轮知识
 
-2026-08-14 · k71 · **Active 仍为 0.145，0.147 尚未替换**。
+2026-08-15 · k80 · **§7、§8 已完成；Active 仍为 0.145，0.147 尚未替换**。
 
 本章装着两类性质不同的内容，按需要读，不必通读：
 
 | 分区 | 小节 | 什么时候读 | 更新频率 |
 |---|---|---|---|
-| **状态** | §10.0 执行环境与机器角色<br>§10.1 进度与下一步<br>§10.2 accept 待解决的 7 条 | 接手时、决定下一步做什么时 | **每轮都变**——只看这三节就知道现在在哪、该干什么 |
+| **状态** | §10.0 执行环境与机器角色<br>§10.1 进度与下一步<br>§10.2 accept 7 条验收结果 | 接手时、决定下一步做什么时 | **每轮都变**——只看这三节就知道现在在哪、该干什么 |
 | **知识** | §10.3 双轨模型策略<br>§10.4 采集操作要点<br>§10.8 逐轮不变量总表 | 开跑前、跑挂了排查时 | 跨轮稳定，只在踩到新坑时追加 |
 
 接手请从 §10.0 读起（机器角色与源码树纪律），再看 §10.1。
@@ -499,19 +507,20 @@ canary 通过后才允许更新正式实例。全程使用独立账号、独立 
 
 ### 10.0 执行环境与机器角色（接手前必读）
 
-三台远程主机，全部经 SSH 连接（主机别名即下表「SSH」列，已配在 `~/.ssh/config`）。
+两台远程 x86_64 主机经 SSH 连接，另有本地 macOS 客户端。
 **角色不可互换，搞反等于在生产机上做实验。**
 
 | 别名 | 架构 | 角色 | 跑什么 | 碰它的后果 |
 |---|---|---|---|---|
 | **Vircs** | x86_64 | **生产服务器** | 对外提供服务的 Sub2API 实例；同时是**唯一**装有官方 Codex CLI 0.147.0 的机器 | 重启／换镜像／改 Active 都会中断真实用户；§9 之前**只允许**在其上做官方 CLI 采集，且必须走独立 Campaign／relay／容器，不碰服务进程、生产配置、生产端口、生产数据与 Active/Previous |
 | **DMIT** | x86_64 | **测试服务器** | 独立的 Sub2API 实例（1 核 / 1.9G / 20G 盘），候选采集全部在此 | 可随意重启、换镜像、改数据库；不影响任何真实用户 |
-| ARM64 | aarch64 | 测试机 | 另一套 Sub2API 测试环境 | **不能做采集，已实测确认失败**：采集必须在 amd64 容器内抓包，而该容器在 ARM64 上只能靠 qemu 用户态模拟运行，qemu 不翻译抓包所需的 `TPACKET_V3`／`SIOCETHTOOL` ioctl，tcpdump 直接起不来。换 tcpdump 版本、加 capability、改 privileged 均无效——缺的是内核接口翻译，不是权限。**别再试第二遍** |
+| 本地 Mac | arm64 | 第三方客户端验证机 | 运行实际安装的 Kilo `7.4.2201`，分别验证 Compatible 与 Responses 两个入口 | ARM64 **只来自 Kilo 客户端自身的安装平台**；不在本机编译 backend、不构建候选镜像、不承担 Campaign 抓包 |
 
-**分工为什么固定成这样**：冻结的官方 Codex CLI 资产是 Linux `x86_64`（官方采集须在
-Ubuntu 24.04 / x86_64 完成）；候选采集虽不引用该二进制，却同样绑定 amd64——脚本必须在
-campaign 冻结的 amd64 capture 容器内抓包。而**官方与候选共用同一个 `runtime_image`，
-一个 campaign 装不下两个架构**，所以只能是官方在 Vircs、候选在 DMIT。
+**分工为什么固定成这样**：冻结的官方 Codex CLI 资产是 Linux `x86_64`，官方采集须在
+Ubuntu 24.04 / x86_64 的 Vircs 完成；候选服务和候选采集也在 x86_64 的 DMIT 运行。
+`campaign.json.configuration.runtime_image` 只冻结官方采集容器；候选服务镜像由
+`capture-candidate run` 的 `--runtime-image`／`--candidate-image-id` 在 attempt identity
+中独立冻结。两者并非同一镜像字段。ARM64 不参与镜像构建或 Campaign 采集。
 
 官方与候选分处两机，但共用一个 Campaign，由此有两条硬性义务：
 
@@ -527,8 +536,9 @@ campaign 冻结的 amd64 capture 容器内抓包。而**官方与候选共用同
 ```
 /root/oauth-capture/                     采集根（campaigns/ runs/ runtime/ state/ scripts/ tools/）
 /root/oauth-capture/campaigns/<campaign> Campaign 目录
-/root/oauth-capture/candidate-source-k70 受管工具树（工具身份由此计算；当前轮次用 k70）
-/root/oauth-capture/candidate-build-<k>  候选构建树（源码 + staged 画像，用于构建候选镜像）
+/root/oauth-capture/tool-source-k80      k80 冻结工具树
+/root/oauth-capture/candidate-source-k77 k80 候选源码树（Vircs／DMIT 同名同摘要）
+/root/oauth-capture/runtime/k80-staged-profile  k80 staged 画像资产
 /root/Docker/sub2apiplus/app             DMIT 的 compose 工作目录（候选部署 override 放这里引用）
 ```
 
@@ -541,269 +551,104 @@ campaign 冻结的 amd64 capture 容器内抓包。而**官方与候选共用同
 |---|---|---|---|---|
 | §5 DOC-PRE 与 P0 | ✅ 完成 | — | — | — |
 | §6 Campaign / 官方取证 / classify | ✅ 完成 | — | — | — |
-| §7 建立 0.147 画像 | ✅ **`stage-profile` 已执行**（k72，2026-08-14），Snapshot/Release 资产已产出 | 资产入源码树后有 6 个契约测试待适配（见下方第 ③ 步） | DMIT＋本地 | 否 |
-| §8 Candidate / compare / accept | 🔄 **k72 轮进行中**：plan／官方 28-28／classify 均已完成，候选采集卡在镜像缺画像 | 解决下方第 ③ 步后重建镜像 → 候选采集 → Kilo 两入口 → seal → compare → accept | 本地＋DMIT | 是（Kilo 发两条请求） |
-| §9 生产启用与回滚 | ❌ 未开始 | 依赖 §8 跑完 accept 才能动 | **Vircs 生产** | 是（每步确认） |
+| §7 建立 0.147 画像 | ✅ **完成**：17 端点画像、Snapshot/Release、版本专属 route binding 与受管收据均已入库；契约测试已适配并通过 | — | Vircs＋本地 | 否 |
+| §8 Candidate / compare / accept | ✅ **完成**：k80 正式 Campaign 已由机器验收，42/42 规则通过、15 项门禁全绿、`accepted=true` | — | Vircs＋DMIT＋本地 Kilo | 是（已完成两入口请求） |
+| §9 生产启用与回滚 | ⏸️ **未开始** | 等待本文档人工验收；获准后按 §9 独立执行生产切换与回滚演练 | **Vircs 生产** | 是（每步确认） |
 
+本轮正式 Campaign：
 
-本轮 Campaign `codex-0145-to-0147-20260814T103757Z-k72`／campaign_id
-`codex-0_147_0-20260814T103807Z`／候选树 `candidate-source-k72`（两台机同名同路径，
-摘要 `c290e53c…`）／候选镜像 `sub2apiplus@sha256:0ca14fa0…`。
+- 目录：`/root/oauth-capture/campaigns/codex-0145-to-0147-20260815T055500Z-k80`
+- Campaign ID：`codex-0_147_0-20260815T055433Z`
+- 工具树：`/root/oauth-capture/tool-source-k80`
+- 候选树：两台机均为 `/root/oauth-capture/candidate-source-k77`，摘要
+  `1b08536fae524d2a1171629bd15d159b368833d2096e0b1fab7811b5451c6729`
+- 候选镜像：`sub2apiplus:candidate-k77`，不可变 ID
+  `sha256:adc3eb2d5f1c2a1820f95d90a6719ab06f7ad6e48c9545f6afbcbe6c4b649763`
+- 目标画像：`codex-0.147.0-official-k59-v1`，摘要
+  `94071c8eb93cfd337ac6eabc291d878084e3dcec8a9e618e04e6f68792d1a7bc`
 
-| 步 | 状态 | 关键数字 |
+| 阶段 | 状态 | 正式结果 |
 |---|---|---|
-| `plan` | ✅ | 37 job（official 28／candidate 9）、42 必需规则；工具身份冻结产出侧 `43720c6d…`／评估侧 `f126aa19…` |
-| 官方采集 → seal | ✅ | **28/28** complete、零失败；seal 扫描 974 文件零命中；`review_sha256=23512457…` |
-| `classify` | ✅ | 2799 条 discovery **全部归类、blocked 残留 0**（`change` 2604 按指纹继承 ＋ `condition_change` 195）；联合摘要 `c6bec3e3…` |
-| **`stage-profile`** | ✅ | **k71 漏做的那步已补**；产出 17 端点画像 `94071c8e…`、`production_selector_changed=false` |
-| 候选采集 | ❌ **卡住** | 一次都没成功启动（`candidates: []`）。DMIT 服务**已切到 `candidate-k72` 并 healthy 运行**，但该镜像没有 0.147 画像，启动时报「声明的 profile digest 与运行时解析结果不一致」——**服务在带错运行，重跑候选采集前必须先换成含画像的镜像** |
+| `plan` → 官方采集 → `seal` | ✅ | 最终 attempt `20260815T061454Z-62405f97e0306a0d`；25 条规则／57 项检查；314 个 artifact、453 条 observation；安全扫描 945 文件、169,161,790 字节、0 finding |
+| `classify` | ✅ | 2604 条源码 discovery＋184 条动态 discovery＝2788 条，全部归类；批准联合摘要 `f0fa5e60632d9ef281f6ce221b9136e98693833a87f3b002e5d9cb715f70e0e5` |
+| `stage-profile`／§7 入库 | ✅ | Active 保持 0.145、候选 Previous=0.147，`production_selector_changed=false`；提交 `1ceb0485e` 同时完成同版本合成夹具与版本新增 route 的 fail-close 构造逻辑 |
+| 候选镜像与采集 | ✅ | backend 与镜像均在 x86_64 原生构建/运行；最终 attempt `20260815T065611Z-7a84ab63219c449e`，7/7 必需任务完成；2 条 MITM 可选任务为已登记非阻断缺口 |
+| 候选结构化测试轨迹 | ✅ | Vircs x86_64 上从同源候选树执行，11/11 通过；artifact SHA-256 `05c8a0631ed3cd0a667372b84528b120db3011ac15432e9d33f0f05d1fcd8fb7` |
+| Kilo 两入口 | ✅ | 本地实际安装的 Kilo `7.4.2201`：Compatible 返回 `K80_COMPAT_OK`（HTTP），Responses 返回 `K80_RESPONSES_OK`（WebSocket） |
+| 候选 `seal` | ✅ | 42 条规则／108 项检查；154 个 artifact、396 条 observation；安全扫描 668 文件、31,546,089 字节、0 finding |
+| `compare` | ✅ | `status=complete`、`offline_only=true`、`profile_binding_matches=true`、规则覆盖 42/42；原始包 `equal=false` 是两侧实现证据不逐字相同，不是 acceptance contract 的失败条件 |
+| `accept` | ✅ | `accepted=true`、42/42 `pass`、0 fail、0 N/A；15 项 gate 全为 true；acceptance result SHA-256 `b6bc412789534e1de3b7df9326b684ad1d8935ce4949b0491fcec98105a40372` |
 
-**为什么镜像里没有画像。** 画像由 `release_catalog.go` 的
-`go:embed catalogdata/runtime/…` **编进二进制**，而仓库 HEAD 的
-`catalogdata/runtime/profiles/` 只有 `0.145.0/` 两份。画像内容本身早就有（k59 批准的
-17 端点 `94071c8e…`，跨轮没变），缺的是「进源码树 → 编进镜像」这一步——它从来没做过。
-以前几轮能跑，是因为 `candidate-build-k57` 那棵构建树里**手工塞过**
-`profiles/0.147.0/`；k71 漏做 `stage-profile`，缺口就一直被手工绕过，按正规流程走才浮出来。
+**下一步只有 §9。** 本次不改 Active/Previous、不重启 Vircs 生产服务；待用户验收本文档后，
+再按 §9 另起生产变更集。
 
-**让镜像拿到 0.147 画像的完整路径**（`stage-profile` 是正规入口，不再手工塞）：
+### 10.1.1 正式证据锚点（接手必读）
 
-| 步 | 做什么 | 状态 |
-|---|---|---|
-| ① | `stage-profile` 产出资产 | ✅ 已完成 |
-| ② | 资产放进源码树 `backend/internal/officialegress/` | ✅ 已放（4 新增 3 改动，0.145 两份逐字保留） |
-| ③ | **过 6 个契约测试** | 🔄 **已修 3 个，剩 3 个**（见下） |
-| ④ | 提交 | — |
-| ⑤ | 重建候选镜像（ARM64 交叉编译，约 7 分钟） | — |
-| ⑥ | 部署到 DMIT → 候选采集 → Kilo 两入口 → seal → compare → accept | — |
-
-**第 ③ 步的 6 个测试**，前提都假设 active/previous 同版本，而夹具现在正确地变成了
-active=0.145／previous=0.147（正是 §7.1 要的候选阶段状态）。逐个查完，**不是原先以为的
-「4 纯适配 ＋ 2 取舍」，而是 3／1／2**：
-
-| 测试 | 性质 | 状态 |
-|---|---|---|
-| `TestChangeset2MixedVersionCatalogRequiresThreeDistinctCoordinates` | 合成 catalog 只改 Active，Previous 却指向真实 0.147，而合成 snapshots 里没有它 | ✅ **已修**：把发布图里所有非 Active 节点引用的真实 snapshot 一并纳入 |
-| `TestTransportReceiptTransitionBindsTransportPerReleaseDigest` | 同上 | ✅ **已修**：同上 |
-| `TestChangeset2SyntheticProfileRollbackMatrixHasNoMixedFacts` | 只替换 previous 的 Snapshot、没动 Build，节点内「快照版本与 Build 版本不一致」 | ✅ **已修**：previous 节点的发布坐标一并降回合成画像版本 |
-| `TestCompilerAcceptsProfileShapedStaticTargetsAcrossModes` | `validated` 端点集合缺 `wham_settings_user` | ❌ **不是纯适配**，见下 |
-| `TestPurposeAndModeRemainExplicitCoordinates`（`compositioncontract`） | 前提「active/previous 应当版本号相同」 | ❌ **待决策** |
-| `TestReleaseGraphKeepsPurposeAndModeIdentity`（`releasecontract`） | 前提「当前夹具应证明同版本、同画像快照可以对应不同发布」 | ❌ **待决策** |
-
-> 合成的异版本目标已从 `0.147.0` 改为 `0.149.0`（提为文件级常量
-> `syntheticHigherVersion`）：真实 previous 已是 0.147，撞车会让「异版本」退化成同版本，
-> 那个测试就白测了。版本泄漏门禁的基线里 23 个文件**没有一个是 `_test.go`**，
-> 测试文件的版本字面量不受该门禁管。
-
-#### ⚠️ 待决策一：`wham_settings_user` 接进 sink（原以为是纯适配，实测不是）
-
-链路：画像有 17 个端点 → `validated` 集合由 **enforced** 的 sink 的 bundle 决定 →
-`codex.quota.wham` 运行时确实是 enforced（由迁移收据提升，`release-bindings.json` 里
-它记的是 `legacy_observe`），但只有 3 条路由（`rate-limit-reset-credits`／`usage`／
-`consume`），缺 `settings/user`。
-
-**给它加路由会 panic**：`MigrationReceipt codex.quota.wham: binding digest 不匹配`
-——每个 binding 被迁移收据用 `binding_digest`（`aa805a4d…`）钉死，改路由必须同步重签
-收据。**这是受管变更，不是适配**（已实测验证，改动当场回退，工作区干净）。
-
-这一步是 §7.2 门禁第 2 条要求的正当工作（「每次真实换版都枚举新旧完整 endpoint，
-并机器断言 validated == 新旧 ReleaseCatalog 并集」），但触及迁移收据层，需要决定
-走哪条正式路径。
-
-#### ⚠️ 待决策二：那 2 个前提失效的测试怎么改
-
-它们要证明「purpose+mode 是显式坐标、不被版本号折叠」，特意用同版本夹具排除
-「靠版本号区分」这条捷径。夹具变混版本后 `BuildID`／`WireID` 本来就不同，
-**这两个测试原本的检出能力随之消失**。
-
-| 方案 | 做法 | 代价 |
-|---|---|---|
-| **A** | 放宽前提断言，允许混版本 | 最快。但混版本下后续断言必然通过，**等于在升级期间关掉这两道门禁**——而这正是最需要它们的时候 |
-| **B** | 为这两个包各造一套合成的同版本夹具，专门验证该性质 | 保住检出能力，工作量明显更大 |
-
-**未决策前不要动这两个测试**：改错方向会让门禁在升级期间静默失效，而失效不会有任何报错。
-
-### 10.1.1 工作区未提交改动（接手必读）
-
-`make check-egress-spec` 目前是**红的**（就是上面那 3 个失败）。工作区未提交的改动里，**`backend/` 下 8 项**是本轮实质产物（另有文档自身与 `workspace-transition` 的manifest／receipt，随文档提交即可）：
-
-| 文件 | 性质 |
+| 证据 | 路径／摘要 |
 |---|---|
-| `catalogdata/runtime/release-catalog.json`（改）<br>`catalogdata/runtime/release-graphs/25751ad8….json`（新）<br>`catalogdata/runtime/snapshot-catalogs/0e66972c….json`（新）<br>`catalogdata/runtime/profiles/0.147.0/94071c8e….json`（新）<br>`profilecontract/testdata/snapshot-catalog.json`（改）<br>`profilecontract/testdata/snapshots/0.147.0/94071c8e….json`（新）<br>`releasecontract/testdata/release-graph.json`（改） | **`stage-profile` 的产出**，原样放入，未做任何人工编辑。0.145 的两份画像逐字保留。产物副本另存于 DMIT `runtime/k72-staged-profile` 与 Vircs 同名路径 |
-| `changeset2_synthetic_rollback_test.go`（改） | 上表 3 个「已修」测试的适配 |
+| 官方结果 | `official/result.json`；inventory digest `6cf29128174e1264cacf049c0206fc0bb47cc73eef93d4b81018203366f80eb1` |
+| 候选结果 | `candidates/k80-dmit/result.json`；inventory digest `c71d13e619b034fa289217a93d7ed72bcd44a946fa21d5c69cc2dead64a92ab2` |
+| 比较结果 | `comparisons/k80-dmit/result.json`；package digest `f9099fdcd96da4b371cc9fed2fb131efa0051d7e63908a45616c6ed1d57eb45c` |
+| 机器断言 | `assertions/k80-dmit/results.json`；SHA-256 `a3428c8eb125ba4db0cacdab5b9c9c0973b502a74ae85a1b11ed582ca30a3cea` |
+| 正式验收 | `acceptance/k80-dmit/result.json`；SHA-256 `b6bc412789534e1de3b7df9326b684ad1d8935ce4949b0491fcec98105a40372` |
+| 证据封印 | `acceptance/k80-dmit/evidence-seal.json`；SHA-256 `653caea9c148e7aaf08f2fc5d8b5343c1401781ff5a45058b927e027d1c24016` |
 
-**要放弃这一轮可 `git stash`**：门禁立刻恢复绿，代价是候选采集停摆、②③ 要重做（① 的产物在两台机上还在，不用重跑 `stage-profile`）。
+以上相对路径均以本轮 Campaign 目录为根。工作区实现与工具修复已经分别提交；文档更新前
+`git status` 为空，§7 所列契约门禁和工具测试均已通过。
 
-> **由此固化顺序**：`stage-profile` → **资产进源码树** → 建候选镜像 → 候选采集。
-> 本轮把建镜像做在了 `stage-profile` 之前，是返工的原因。
+### 10.2 accept 原待解决的 7 条（k80 已全部验收解决）
 
-那 7 条 accept 待解决（§10.2）**一条都还没验证**——修改都做完了，但要跑到 accept
-才见分晓，而 accept 在候选采集之后。
+k71 的 7 条失败共对应 8 个指定 check。k80 使用冻结后的正式候选证据重新执行
+`candidate_rule_assertion.py`，8 个 check 全部通过；其中 `SPEC-TLS-003` 还按双侧规则
+分别对官方与候选执行，因此实际验证为 **9 个 check 实例，9/9 `pass`**。
 
-**k72 这一轮已顺带落地两项采集工具的前置检查**（`8ccb0c61e`，两台机执行位置均已同步）。它们把 §10.4「开跑前必查」那两条从
-「靠记得去查」变成「查不过就拒绝启动」——k61 与 k71 各因其中一条报废过一轮。两处都属
-**产出侧**，会改动工具身份摘要，因此**必须赶在下一轮 `plan` 之前落地**（§6.1.1）：
+| # | 判据／check | k80 机器结果 | 证据数 | 验收结论 |
+|---|---|---|---:|---|
+| 1 | `SPEC-TLS-003`／`extension-order-diversity` | 官方 `pass`；候选 `pass` | 6＋6 | ✅ 四份独立 WS 抓包扩展集合一致，且出现至少两种排列 |
+| 2 | `SPEC-EP-015`／`search-header-order` | 候选 `pass` | 4 | ✅ 两次 alpha-search 使用相同且精确的 Header 线序 |
+| 3 | `SPEC-EP-022`／`image-header-order` | 候选 `pass` | 4 | ✅ generation 与 edit 的 Header 线序一致且精确 |
+| 4 | `SPEC-EP-014`／`legacy-default-headers` | 候选 `pass` | 2 | ✅ 默认 legacy compact Header 线序精确匹配 |
+| 5 | `SPEC-BODY-006`／`lite-top-level-omission`＋`lite-tools-omission` | 候选 `pass`＋`pass` | 4＋4 | ✅ Lite 顶层省略 `instructions` 与 `tools`，且不发送 `tools` |
+| 6 | `SPEC-EP-019`／`wham-get-paths` | 候选 `pass` | 12 | ✅ `wham/settings/user` 已真实出站，规定 GET 路径集合闭合 |
+| 7 | `SPEC-HDR-002`／`residency-positive` | 候选 `pass` | 2 | ✅ 受管理 `residency=us` 时发送精确值 |
 
-| 项 | 现状（已核实） | 落点 |
-|---|---|---|
-| mitm 端口预检**时机太晚** | 检查本身已存在（`capturelib/lifecycle.py:327`，占用则报「MITM 端口已被其他进程占用」），但它在**每个 mitm case 启动时**才触发；mitm case 排在队列中间，撞上时前面的 direct case 已经跑掉了——k61「前轮残留 mitmdump 占 18080」正是中途才暴露 | `capture.py` 的 `_preflight_dependencies()`（"在任何模型请求前校验运行资产"）已有 `if "mitm" in evidence:` 分支，在其中调用现成的 `_port_is_open("127.0.0.1", mitm_port)`，整轮开跑前即拒绝 |
-| admin token **不校验有效期** | `run_candidate_aux_capture.sh:61` 只校验 `^[A-Za-z0-9._~-]+$` 格式，不看 `exp`；过期时 A09／A11 正常而 A12／A13／A14 零流量，极具迷惑性——k71 因此半失败 | 同一处格式校验之后，用脚本已依赖的 `python3` 解 JWT payload 的 `exp`，剩余不足阈值即拒绝并打印过期时刻。阈值建议 **30 分钟**（k71 aux 实跑 12 分钟，留够余量又不至于挡掉刚签的 token） |
+完整断言文件 `assertions/k80-dmit/results.json` 汇总 **42 条规则、42 `pass`、0 fail、
+0 N/A**。正式 `accept` 再次校验官方／候选身份、分类、画像绑定、证据 inventory、
+恢复、安全、第三方绑定和全量规则覆盖，15 项 gate 全绿，最终结果：
 
-两处都复用已有机制、无新增依赖；改完补测试（`tests/test_lifecycle.py` 有 `mitm_port`
-用例可扩）并跑工具测试全量。
+```text
+status=complete
+accepted=true
+failed_gates=[]
+profile_id=codex-0.147.0-official-k59-v1
+profile_digest=94071c8eb93cfd337ac6eabc291d878084e3dcec8a9e618e04e6f68792d1a7bc
+```
 
-> **「全部修复必须收口在 plan 之前」这条旧纪律已被 k71 推翻**——那 6 条挂着，全链路照样
-> 跑到 accept。真正必须卡在 `plan` 之前的只有**会改动受管工具或候选镜像身份**的修改
-> （§6.1.1）；判据类修正走 campaign 内的 classify `change`，行为类留到下一轮验证即可。
+因此，本节不再有挂账项；原来建议的 Y（把 `EP-019` 延后到 0.145 退役）未采用，也没有
+削弱 §7.2 门禁。
 
-k71 是 k34 之后第一次走完全链路，各环节均已实跑验证（非预演），下一轮照做即可：
-官方 28／28 与 seal、classify 继承脚本、候选 7／9 与三份收据、go test 结构化轨迹、
-bundle → trace → seal 的顺序、`compare`、accept 重放。操作要点见 §10.4，坑见 §10.8。
+#### 10.2.1 `EP-019`：版本新增 route 已按 fail-close 方式正式闭环
 
-> 查证据用 Campaign `codex-0145-to-0147-20260814T040000Z-k71`／
-> campaign_id `codex-0_147_0-20260814T042234Z`／候选树 `candidate-source-k70`。
-> 各阶段验证数据（扫描文件数、门禁 checks、恢复检查）以 `result.json` 为准，
-> 本文档不复制——k59 的旧数字曾在此滞留十余轮。
+一次性实测确认了旧构造的矛盾：直接把 `wham_settings_user` route 加进共享 sink 时，
+0.145 画像无法解析该端点；Active/Previous 任一侧构造失败都会阻断启动。最终采用独立受管
+变更解决，而不是把该规则挂账：
 
+1. `NewEndpointBindingCatalog` 允许某条版本新增 route 在单个画像中零匹配；多匹配、
+   override 错误仍立即失败。
+2. `NewBundleResolver` 汇总 Active/Previous 后，强制每条 runtime-bindable route
+   至少在一个 mode 产生 binding；两侧都缺失仍失败关闭。当前 mode 若一个 binding 都没有，
+   同样拒绝构造 bundle。
+3. `NewOfficialRouteCatalog` 与迁移收据解析都改为枚举 Active/Previous 的去重画像，
+   不再写死 Active；只为实际含端点的 Release 生成 transport binding。
+4. 新增单调追加的 version-route receipt、wire／execution／canary 证据，并保留历史
+   MigrationReceipt 对原 binding tuple 的校验；同版本合成夹具继续验证 purpose＋mode
+   不会被版本号折叠。
 
-### 10.2 accept 待解决的 7 条（k71 实测；k72 尚未跑到 accept，故本节结论仍是上一轮的）
-
-k71 是本次升级第一次拿到真实 accept 重放结论：**候选侧 42 条规则，35 `pass` / 7 `fail`**。
-原先那份「13 条根因」是 k56 证据上的预演，逐条核对后 8 条已通过，本节只保留**仍未通过的**。
-
-> 本节是 §10.1 表里 §8 那行「7 条待解决」的详表。**§8 收口 ＝ 本节清空**（`TLS-003` 那条挂账除外）。
-
-> **预演不等于验收。** 原 13 条里，第 1、2 条长期记作「已闭环」——k69 真实重放里却失败，
-> 一度让人以为修复失效，直到 k71 换同源树才转 pass（§10.8.11）；反过来，原记「B 类证据
-> 损坏、未动」的三条（`BODY-001`／`BODY-005`／`EP-022 generation-body-order`）实测直接
-> 通过，所谓「zstd 帧损坏」根本不成立，真实原因是判据选中了不产出 body 的探针面
-> （§10.8.13）。**只有 accept 重放的结论算数**，基于旧证据的预演只能当线索。
-
-**待解决 7 条**（8 个 check），按能否靠改判据解决分为两组：
-
-| # | 判据／check | 实测现象 | 定性与下一步 |
-|---|---|---|---|
-| 1 | `SPEC-TLS-003`／`extension-order-diversity` | `artifact_count=3`，判据要 4 | **挂账**。`minimum_distinct_orders` 已按 §10.8.8 降为 1；`minimum_artifacts=4` 刻意保留——缺的那份 WS pcap 来自已登记的 mitm 缺口（§10.8.10）。**判据不迁就采集缺口**，缺口恢复后自然通过 |
-| 2 | `SPEC-EP-015`／`search-header-order` | 出站无 `cookie`（官方侧每条都带） | **根因已解决**：修复（`legacy_compact_ordinal`）一直在受管树里，但采集执行的是 `/root/oauth-capture/tools/` 下的旧副本（§10.8.14）。执行位置已于 2026-08-14 同步，等重跑验证 |
-| 3 | `SPEC-EP-022`／`image-header-order` | 同上 | 与第 2 条同源，一处修复覆盖两条 |
-| 4 | `SPEC-EP-014`／`legacy-default-headers` | 缺 `x-openai-internal-codex-responses-lite` | **根因同第 2 条**（§10.8.14）：job 定义里的 `gpt-5.6-luna` 只在受管树，执行副本 `gpt-5.6` 零命中。执行位置已同步，等重跑验证 |
-| 5 | `SPEC-BODY-006`／`lite-top-level-omission`＋`lite-tools-omission` | k71 换同源画像后新暴露 | 同第 4 条，根因为执行副本漂移（§10.8.14），已同步，等重跑验证 |
-| 6 | `SPEC-EP-019`／`wham-get-paths` | 只发 `usage`＋`rate-limit`，缺 `settings/user` | **修复已写好但没进镜像**（2026-08-14 查明）：镜像来自 `candidate-build-k57`，其门控是 `mode == previous`，候选采集时不成立故不发请求；工作区与 k70 采集树早已改成按端点存在性判断。B 轮重建镜像即解决。专述见 §10.2.1 |
-| 7 | `SPEC-HDR-002`／`residency-positive` | `x-openai-internal-codex-residency` 为 `<absent>`（选中 1 条观测：`candidate-frozen-core/A04/relay/conn003`） | **不是「条件未造出」，也不是代码缺陷**（2026-08-14 定性）：采集脚本确实造了条件（`set_account_features us` 改账号 extra 的`official_codex_enforce_residency` 并 `restart_service`）；画像 10 个端点都有 `managed_residency_present`／Slot 85 槽位；代码链路自洽——`integration.go:319` 写 `ConditionalHeaders` →`identity_authority.go:388` 的 `conditionalField` 填 `facts.ManagedResidency` → compiler 的条件（`:764`）与取值（`:839`）都读它，`identity.go:168` 还有一致性校验。**断点在运行时数据**：请求时 `account.GetExtraString` 读不到 `us`。首要怀疑是 §10.8 k48 记录的机制——候选流量经服务重新评估授权后**原子写回** `accounts.extra`，把采集脚本设的值覆盖掉。下一轮重跑时先查 DB 与 `runtime_audit` 坐实 |
-
-第 2～7 条都**改判据解决不了**，必须动 `backend/` 并重新构建候选镜像——那是独立变更集。
-其中**第 6 条 `EP-019` 的代码已经写好**（在工作区与 k70 采集树里，见 §10.2.1），
-只差提交与重建镜像；**要新写代码的是余下 5 条**。注意「待解决」仍计 7 条——
-`EP-019` 要等重建镜像后重跑才能转 `pass`。
-
-**已通过的 8 条**（不再逐条展开）：`SPEC-HDR-005` ×2（测试按 `previous` 槽位解析，
-需在同源树上跑 go test 才成立）、`SPEC-EP-014`／`legacy-beta-slot`、
-`SPEC-EP-014`／`legacy-turn-state-slot`（依赖前者，链路自动接上）、
-`SPEC-EP-020`／`legacy-observed-subset`（含 `text` 那处）、
-`SPEC-BODY-001`／`SPEC-BODY-005`／`SPEC-EP-022 generation-body-order`（判据 selector 收紧）。
-其中 5 条靠代码修复、3 条靠判据修正。
-
-**两项收尾工作**（与上表 7 条并列，但性质是"已做完但没落到位"）：
-
-| 事项 | 现状 | 待办 |
-|---|---|---|
-| 判据 4 条 selector 修正 | 只存在于 campaign 的 `classification/approved/assertion-profile.json`，靠逐轮继承传递 | **同步回工具树** `candidate_rule_expectations_0_147_0.json`，否则下一轮从工具树重新迁移时会丢 |
-| 代码修复 | 8 个文件、125 行仍是工作区未提交状态。其中 `openai_quota_service.go` 那 26 行是 `EP-019` 的**已完成修复**（见 §10.2.1），k70 采集树已同步、候选镜像未同步 | 提交并**重建候选镜像**，否则 `EP-019` 下一轮照旧 fail；提交前跑一遍 §10.8.11 的三处摘要一致性检查 |
-
-#### 10.2.1 `EP-019`：候选未触发 `wham/settings/user`（画像与镜像均已具备）
-
-排查此条要用的官方基线（k56 证据，**受控出站面** `record_type=http_request` 的 34 次样本，
-横跨 20 个官方场景——是高频出站面，不是边缘路径；同期 `wham/usage`、
-`rate-limit-reset-credits` 各 1 次）：
-
-| 项 | 观测值 | 一致性 |
-|---|---|---|
-| method / path / protocol | `GET /backend-api/wham/settings/user`，HTTP/1.1 | 34/34 |
-| header 线序 | `user-agent, authorization, chatgpt-account-id, [x-openai-fedramp], cache-control, accept, [cookie], host` | 含 `cookie` 28 次／不含 6 次 |
-| 与其余 wham GET 的差别 | **多一个 `cache-control`**（常量 `no-cache, no-store`），故 `wham-get-headers` 用 `not_equal` 明确排除它 | 34/34 |
-| query / body | 均为空 | 34/34 |
-
-> `x-openai-fedramp` 槽位**未在本轮观测中出现**（采集账号非 FedRAMP），是按同类 wham 端点
-> 一致性推定的，此处显式登记以备复核。
-
-**该端点已于 k59 补进画像**（16 → 17 个，`profile_digest` `0d86e033…` → `94071c8e…`，
-经 `egresscatalogstage -prepare-snapshot` 规范化、`profilecontract` 校验通过），
-镜像二进制也含 `wham_settings_user` 常量与路径（§10.8 有 `strings` 实证）。
-**因此剩下的是候选驱动没造出触发条件**，与画像、编译产物都无关。
-
-**候选镜像里的门控是错的，但修复已经写好了**（2026-08-14 逐树核对）：
-
-| 树 | `openai_quota_service.go` 的门控 | 是否进了 k71 的镜像 |
-|---|---|---|
-| `candidate-build-k57`（镜像来源） | `mode == officialClientProfileModePrevious` | **是**——k71 跑的就是它 |
-| 工作区 ／ `candidate-source-k70`（采集树） | `resolveCodexEndpointForMode(...)` 解析成功即支持，**按端点存在性判断** | 否 |
-
-用发布槽位当版本开关本身就错：生产启用后 Active=0.147、Previous=0.145，该分支反而会去
-0.145 画像里找这个端点；候选采集时 mode 也不是 `previous`，所以请求根本没发出去——
-这就是 `wham-get-paths` 只看到 `usage`＋`rate-limit` 的全部原因。**修复无须再写，
-B 轮把工作区代码提交并重建候选镜像即可**。
-
-> 这条也解释了「镜像二进制含 `wham_settings_user` 常量」为什么不等于「会发这个请求」：
-> k57 树里常量定义与调用点都在，只是调用被一个永不成立的条件挡住。
-> **`strings` 能证明符号存在，不能证明代码路径可达。**
-
-#### 10.2.2 Lite 轨样本：job 已改写死 `gpt-5.6-luna`，但样本仍未产出
-
-对应待解决第 4、5 条。原断点已查明并修复，但 k71 实测头仍缺，**修复未生效或另有断点**。
-
-已查明的机制：候选 aux job 的证据标签中 6 条规则标 `track=lite`，rationale 写着「A09 job
-固定 Lite 模型（MODEL 默认 `gpt-5.6-luna`）」——标签按脚本默认值推出，**符合「labels 必须由采集参数推出、不得由判据反推」这条纪律**；
-但 job 定义用 `"MODEL": "{model}"` 把它覆盖成 Campaign 主线模型（本轮 `gpt-5.5`）。
-变量契约本就写明「Lite 专项 job 直接写死 `gpt-5.6-luna`，不经本变量」，官方侧 3 个 lite
-job 都照做，唯独候选 aux 用了变量。**已改为写死**——下一步要查的是改后为何仍无 Lite 样本。
-
-> **教训**：标签、脚本默认值、job 定义三者都在表达「这个 job 用什么模型」，任意两个不一致
-> 就产生「选得中但选错样本」的失败——比选不中更难查，因为可达性检查会通过。在「labels 不得由判据
-> 反推」之外，这里补一条对称约束：**job 定义不得静默覆盖标签所依据的采集参数**。
-
-#### 10.2.3 cookie 链路：relay 判定已改按序号，但出站仍无 `cookie`
-
-对应待解决第 2、3 条。同上——断点已查明并修复，k71 实测仍缺，需继续排查。
-
-机制两端本就齐备：aux relay 在 compact prime 轮下发 `set-cookie`（`_cfuvid`，在生产
-allowlist 内），生产侧 alpha-search 与 images 都调用了 `bindOpenAICookieJar`。断点在 relay
-的 prime 判定曾写作 `if '"capture_variant":"prime"' in turn_metadata`——`capture_variant`
-是采集脚本塞进**入站** `x-codex-turn-metadata` 的自造字段，而网关按画像**重新生成**该
-header（k56 实测出站是 `{"installation_id":…,"session_id":…}`），该字段在出站字节里根本
-不存在，判定恒为假。**已对齐 core 侧改按到达序号识别**（新增 `legacy_compact_ordinal`）。
-turn-state 仍按 `x-codex-beta-features` 头下发——那是画像条件槽位的真实产物、出站确实存在。
-
-> **旧测试为什么没拦住**：它直接构造带 `capture_variant` 的请求去断言下发 Cookie——喂了
-> 真实链路上不可能出现的输入，于是测试常绿、采集常败。**构造输入时绕过了被测链路的改写
-> 环节，就等于没测**——这与「测试脚手架自带预置模型清单、掩盖了第三方客户端 Lite 画像
-> 失效」是同一种失效模式：测试通过不等于画像生效。
-
-#### 10.2.4 legacy compact 条件头四条：根因各不相同
-
-四条症状相同（compact 出站丢失条件头），根因四条各异。k71 实测已 pass 两条：
-`legacy-beta-slot`（真缺陷——`officialCodexTrustedConditionalHeaders` 未登记
-`x-codex-beta-features`，致 `runtimeState.ConditionalHeaders` 恒空；已修复）与
-`legacy-turn-state-slot`（**不是缺陷、也无需改采集**——闭环机制完整，断点就是前者，
-修好后自动接上）。**仍 fail 的两条根因都是 Lite 轨样本缺失**：
-
-| 判据 | selector 要求 | 根因 |
-|---|---|---|
-| `EP-014`／`legacy-default-headers` | `variant=default` **＋`track=lite`** | 候选 compact 全程跑主线 `gpt-5.5`，selector 要的 `track=lite` 样本根本不存在 |
-| `EP-020`／`legacy-observed-subset` | 同上 | 同上（k71 已 pass，随 selector 收紧解决）。另：`text` 被错列进「compiler 拥有的字段」而 omit、compiler 又不生成它，疑似真缺陷，`body_document.go` 那处改动**保留但记为待证**，判定权交给 Lite 样本采到后的 accept |
-
-> 这两条与 `BODY-006/lite-*`×2 同属 §10.3 列明的「只在 Lite 专项轨验收的 4 条判据」。
-> 实证：k56 含 A09 compact 的 `frozen-aux` **全程只有 `gpt-5.5`**（trigger body 逐字可查），
-> 因此 compact 场景从未产生过任何 Lite 轨样本。
-
-条件的真正取值点是 `official_egress_identity_authority.go` 的 `conditionalField`（读
-`runtimeState.ConditionalHeaders`），**不是** `officialCodexConditionsFromHeaders`
-（后者只服务 models 端点），也不是 `finalizeOfficialOpenAIHTTPHeaders`（只有测试引用）
-——本节两次栽在「函数名与症状对得上就当成证据」。**先 grep 调用方，再读分支**，
-§10.8.1 的排查纪律同样适用于读代码；另一条是**症状相同不等于根因相同**，
-原先「四条全部指向同一处」的判断会把设计行为当 bug 改掉。
-
-**动这几条生产代码会撞版本泄漏门禁**：新增分支的错误消息不能带三段版本字面量，
-**注释也在扫描范围内**；也不可用 `UPDATE_VERSION_LEAK_AST_BASELINE=1` 绕过——
-基线容忍旧的不等于允许新增（SPEC §3.1）。
+主体落地提交为 `1ceb0485e`，候选驱动补齐 `wham/settings/user` 出站的提交为
+`6a44c726b`。k80 A12 实际产生 2 次 `wham_settings_user`、2 次 `wham_usage`、
+2 次 `wham_credit_details` 与 1 次 `wham_safe_consume`；`wham-get-paths` 使用
+12 份冻结证据验证为 `pass`。这同时坐实了调用路径可达与绑定构造可用，不再依赖
+`strings` 或代码静态推断。
 
 ### 10.3 双轨模型策略：主线 `gpt-5.5`，Lite 专项 `gpt-5.6-luna`
 
@@ -844,7 +689,7 @@ turn-state 仍按 `x-codex-beta-features` 头下发——那是画像条件槽�
 > `_verify_plan_identity`、环境恢复写在退出路径上），带上下文的历史记录见 §10.8 总表的
 > k47／k55／k61 行。本节只留两类**当场用得上**的：开跑前要查的，和失败后按症状反查的。
 
-**开跑前必查**（前两项都该脚本化，靠记得去查不可靠）
+**开跑前必查**（端口与 token 两项已由 `8ccb0c61e` 脚本化；人工仍需核对输出）
 
 0. **候选树内跑任何 python 都要带 `PYTHONDONTWRITEBYTECODE=1`**，并在开跑前确认树里
    没有 `__pycache__`。`_directory_tree_digest` 的 `SKIP_DIRECTORIES` 只排除
@@ -879,8 +724,9 @@ turn-state 仍按 `x-codex-beta-features` 头下发——那是画像条件槽�
 **go test 轨迹生成**
 
 轨迹不是采集产物，要单独跑并放进 `runs/<run_id>/candidate-go-test.jsonl`。采集脚本里没有
-go test，DMIT 也编译不动 backend（ent 单包峰值 1.93G > 1.9G 物理内存），须在本地或 ARM64
-上跑。三项要求缺一不可：
+go test，DMIT 也编译不动 backend（ent 单包峰值 1.93G > 1.9G 物理内存）。k80 已在
+**Vircs x86_64 的同源候选树**上生成 11/11 通过的正式轨迹；ARM64 不参与编译。三项要求
+缺一不可：
 
 - **跑在与镜像同源的候选树上**（§10.8.11）；跑之前先核对 mapping 声明的 13 个源码快照与
   3 个测试文件摘要与该树逐字一致；
@@ -1347,4 +1193,3 @@ k71 的实证：
 > 排查中还栽过两次工具坑：`grep -c` 对无换行的二进制永远返回 1（新旧镜像都「命中 1」
 > 是假象，要用 `grep -a -o | wc -l`）；`strings` 默认只提取 ASCII 序列，中文字符串
 > 一律找不到，用它验证带中文的错误消息会得到「新旧都是 0」的假阴性。
-
