@@ -1,15 +1,18 @@
-# Codex CLI 0.145.0 → 0.147.0 Official Egress 升级计划（待生产启用）
+# Codex CLI 0.145.0 → 0.147.0 Official Egress 升级计划（待正式生产切换）
 
-> 状态：**§7 与 §8 已完成**。正式 k80 Campaign 已通过 `accept`：42/42 规则通过、
+> 状态：**§5～§8 已完成**。正式 k80 Campaign 已通过 `accept`：42/42 规则通过、
 > 15 项门禁全绿、`accepted=true`；k71 遗留的 7 条已全部验证解决，详见 §10.2。
-> **Active 仍为 0.145，0.147 尚未替换**；§9 生产启用须在本次人工验收后另行执行。
+> 仓库候选 ReleaseCatalog 仍为 Active=0.145／Previous=0.147，正式 k80 §9 尚未执行；
+> 但 Vircs 生产实例当前被旧部署强制选择 Previous，实际运行已作废的 k34/0.147 画像。
+> 两种状态必须按 §9.0 先行对账，不能再把生产描述为“仍运行 0.145”。
 >
 > 官方采集固定在 Vircs（Codex CLI 只在那里），候选采集固定在 DMIT（x86_64 测试机）。
 > 进度与下一步见 §10.1，accept 验收结果见 §10.2，历轮死因与由此固化的不变量见 §10.8。
 > 收据最低字段与候选机环境前置清单跨 Campaign 有效，在
 > [`CAPTURE_OPERATIONS_NOTES.md`](CAPTURE_OPERATIONS_NOTES.md)。
 >
-> k34～k55 仅保留为历史诊断夹具，不迁移、不复用。
+> k34～k55 的 Campaign 证据仅保留为历史诊断夹具，不迁移、不复用；Vircs 当前残留的
+> k34 生产部署属于待清理运行债务，不因此恢复其证据资格。
 > 创建日期：2026-08-07 · 审阅基线 commit `abf236375f66aa096580092e646c4e33d37bb135`
 > 基线画像 Codex CLI `0.145.0` → 目标画像 `0.147.0`
 
@@ -104,6 +107,11 @@ SPEC 本次保留现有路径并原地演进；如需改名，另立 documentati
 
 ## 5. DOC-PRE 与 P0 预检
 
+> **完成（2026-08-07）。** P0 与 12 项最小修复均已完成，完整报告见
+> [`CODEX_CLI_0145_TO_0147_P0_REPORT.md`](CODEX_CLI_0145_TO_0147_P0_REPORT.md)。报告结论为
+> `p0_complete_formal_campaign_allowed_on_vircs`；该报告与对应修复提交共同作为 k80
+> `planned` 的前置记录。
+
 ### 5.1 DOC-PRE
 
 本文位于 maintenance 受管目录，必须先以独立变更集生成后继 transition。只允许新增
@@ -165,6 +173,11 @@ P0 报告必须包含所有命令和输入摘要、临时资产 inventory/hash�
 失败分类、最小候选修复范围，以及“是否可创建正式 Campaign”的结论。
 
 ## 6. 正式 Campaign、官方取证与分类
+
+> **完成（2026-08-15，正式 k80 Campaign）。** `planned`、`official_sealed` 与
+> `profile_approved` 均已完成；官方证据恢复与安全门禁通过，2788 条 discovery 全部归类，
+> `unclassified_count=0`、`blocked=false`。本章后文的 k34 数字只作历史追溯，当前权威记录
+> 见 §6.5 与 §10.1.1。
 
 ### 6.1 `planned`
 
@@ -283,6 +296,21 @@ Campaign 的 `classification/approved/`，并通过 stage-contract、文件摘�
 > 端点已补齐，`profile_digest` 由 `0d86e033…` 漂移至 **`94071c8e…`**、端点 16→17，
 > 新画像已在 k59 的 `classification/approved/profile.json` 封存（`profile_id=codex-0.147.0-official-k59-v1`）。
 > 本节表格保留 k34 的历史摘要不改，仅作追溯用；证据与处置见 §10.2.1。
+
+### 6.5 k80 正式完成记录
+
+正式 Campaign 为 `codex-0145-to-0147-20260815T055500Z-k80`，Campaign ID 为
+`codex-0_147_0-20260815T055433Z`。本节完成判定只取以下不可变结果，不取上面的 k34 历史值：
+
+| 阶段 | 结果 | 关键证据 |
+|---|---|---|
+| `planned` | ✅ | 目标版本 `0.147.0`、42 条必需规则与冻结工具身份进入同一 Campaign |
+| `official_sealed` | ✅ | 最终 attempt `20260815T061454Z-62405f97e0306a0d`；25 条规则／57 项检查、314 artifacts、453 observations；恢复通过；安全扫描 945 文件、0 finding |
+| `profile_approved` | ✅ | 2788 条 discovery 全部归类；`unclassified_count=0`、`blocked=false`；联合摘要 `f0fa5e60632d9ef281f6ce221b9136e98693833a87f3b002e5d9cb715f70e0e5` |
+
+批准画像为 `codex-0.147.0-official-k59-v1`，摘要
+`94071c8eb93cfd337ac6eabc291d878084e3dcec8a9e618e04e6f68792d1a7bc`，共 17 个 endpoint。
+分类 package digest 为 `6640dc14f5209efb44680e04bac5b2622895354034441c61540d8eb3960ddbf0`。
 
 ## 7. 建立 0.147 画像与第二版本门禁
 
@@ -460,10 +488,34 @@ final-wire 可用，但不能替代 alpha 真实 service 链或 `server_response
 
 ## 9. 生产启用与回滚
 
+### 9.0 生产现状对账（任何切换前必须完成）
+
+2026-08-15 只读复核发现，Vircs 正式实例并非“尚未使用 0.147”：
+
+| 项 | 当前运行事实 |
+|---|---|
+| 容器／健康 | `sub2apiplus`，healthy；启动于 `2026-08-09T15:06:27Z` |
+| 镜像 | `127.0.0.1:5000/sub2api/codex0147-k34:r1`；image ID `sha256:68107a7924d49668f498bf3aa232a1d45503b84c838b6e19b15d88b1dbe1548b` |
+| Compose override | `/root/Docker/sub2apiplus/deployments/codex0147-k34/image.override.yml` |
+| 运行选择 | `GATEWAY_OFFICIAL_CLIENT_PROFILES_MODE=previous` |
+| 激活事实 | `codex_version=0.147.0`、`profile_id=codex-0.147.0-official-k34-v1`、`profile_digest=0d86e033716ab2b7d2161a7015ad000bc0d7cedfaa9e130342eec4ba0637ef9f` |
+
+这说明仓库候选 ReleaseCatalog 的 Active 指针可以仍为 0.145，但生产请求实际上由强制
+`previous` 选择器使用旧 k34/0.147 画像。该画像缺 `wham_settings_user`，且 k34 Campaign
+已因后续工具与画像修复失去验收资格；它不能充当 k80 的 canary、正式版本或安全回滚点。
+
+在任何重启、换镜像或指针切换前，必须先只读冻结当前容器/image/compose/env/activation fact、
+数据库与挂载状态，并人工批准以下两件事：
+
+1. 明确可恢复的 0.145 镜像与 compose 作为真正回滚点，不能把当前 k34 镜像写成“旧 0.145”；
+2. 明确从当前 k34/0.147 运行态进入 k80 的切换顺序；所有 canary 必须绑定 k80 已验收的
+   k77 镜像身份与 k59 画像摘要，不得沿用 k34。
+
 ### 9.1 启用动作
 
-1. 保留 0.145 Snapshot、Previous、旧镜像和 compose 回滚点；
-2. 只按 release registry 指针做 canary，不按入站版本选画像；
+1. 保留 0.145 Snapshot，并按 §9.0 显式固化真正的 0.145 镜像与 compose 回滚点；
+2. canary 使用独立部署并显式绑定待验收 Release；正式实例只按 release registry 指针切换，
+   不按入站版本选画像，且不得继续保留 k34 override 或强制 `previous` 的旧环境变量；
 3. 验证新旧 endpoint 并集、调用 Bundle、fallback、连接池隔离；
 4. 依次记录 canary、切换、回滚演练、恢复后的 final-wire；
 5. 验证 health、日志、`/v1/models`、OAuth/API Key 的 `response.completed`、数据库、Redis、
@@ -478,14 +530,17 @@ canary 通过后才允许更新正式实例。全程使用独立账号、独立 
 ### 9.2 回滚
 
 逐规则断言、digest/inventory/seal、Guard、账号、health、恢复或 secret scan 任一失败，
-或出现旧画像静默兜底、跨 Bundle fallback、连接池混用，立即切回 Previous + 旧镜像。
+或出现旧画像静默兜底、跨 Bundle fallback、连接池混用，立即切回 §9.0 已验证的 0.145
+Release＋镜像＋compose。只有正式切换已证明 Previous=0.145 时，才可把“切回 Previous”作为
+该回滚动作的简写；当前 k34/0.147 Previous 与旧镜像不得用作安全回滚点。
 
 回滚不删除 Campaign、不覆盖 0.147 Snapshot、不重建数据容器。回滚后重新检查服务、
 挂载、账号、keeper、代理/CA、新旧入口和 final-wire，并保留失败证据。
 
 ## 10. 当前执行状态与跨轮知识
 
-2026-08-15 · k80 · **§7、§8 已完成；Active 仍为 0.145，0.147 尚未替换**。
+2026-08-15 · k80 · **§5～§8 已完成；正式 k80 §9 尚未执行，但 Vircs 当前实际运行旧
+k34/0.147 Previous 画像，详见 §9.0。**
 
 本章装着两类性质不同的内容，按需要读，不必通读：
 
@@ -512,7 +567,7 @@ canary 通过后才允许更新正式实例。全程使用独立账号、独立 
 
 | 别名 | 架构 | 角色 | 跑什么 | 碰它的后果 |
 |---|---|---|---|---|
-| **Vircs** | x86_64 | **生产服务器** | 对外提供服务的 Sub2API 实例；同时是**唯一**装有官方 Codex CLI 0.147.0 的机器 | 重启／换镜像／改 Active 都会中断真实用户；§9 之前**只允许**在其上做官方 CLI 采集，且必须走独立 Campaign／relay／容器，不碰服务进程、生产配置、生产端口、生产数据与 Active/Previous |
+| **Vircs** | x86_64 | **生产服务器** | 对外提供服务的 Sub2API 实例；同时是**唯一**装有官方 Codex CLI 0.147.0 的机器；隔离目录可承担官方采集及 x86_64 构建／结构化测试 | 重启／换镜像／改选择器都会中断真实用户；正式 §9 前只允许只读生产核对，以及不接触服务进程、生产配置、生产端口和生产数据的隔离采集／构建／测试 |
 | **DMIT** | x86_64 | **测试服务器** | 独立的 Sub2API 实例（1 核 / 1.9G / 20G 盘），候选采集全部在此 | 可随意重启、换镜像、改数据库；不影响任何真实用户 |
 | 本地 Mac | arm64 | 第三方客户端验证机 | 运行实际安装的 Kilo `7.4.2201`，分别验证 Compatible 与 Responses 两个入口 | ARM64 **只来自 Kilo 客户端自身的安装平台**；不在本机编译 backend、不构建候选镜像、不承担 Campaign 抓包 |
 
@@ -531,7 +586,7 @@ Ubuntu 24.04 / x86_64 的 Vircs 完成；候选服务和候选采集也在 x86_6
    不一致则 `compare` 必失败；树里的画像须与镜像构建时一致，否则 go test 基于错误
    画像产出事实。k67～k70 四轮死于此（§10.8.11、§10.8.12）。
 
-关键路径（两台机一致）：
+关键路径（前三项在两台机同名；最后一项仅属于 DMIT）：
 
 ```
 /root/oauth-capture/                     采集根（campaigns/ runs/ runtime/ state/ scripts/ tools/）
@@ -542,6 +597,11 @@ Ubuntu 24.04 / x86_64 的 Vircs 完成；候选服务和候选采集也在 x86_6
 /root/Docker/sub2apiplus/app             DMIT 的 compose 工作目录（候选部署 override 放这里引用）
 ```
 
+**Vircs 当前生产例外状态**：正式服务由
+`/root/Docker/sub2apiplus/deployments/codex0147-k34/image.override.yml` 覆盖为旧 k34 镜像，
+并通过 `GATEWAY_OFFICIAL_CLIENT_PROFILES_MODE=previous` 实际激活 0.147。这里记录事实，不代表
+k34 获得验收资格；后续动作必须先满足 §9.0。
+
 开跑前还要定的另一件事是**用哪个模型**：主线 `gpt-5.5`、Lite 专项 `gpt-5.6-luna`，
 权威定义在 `capturelib.model`，选定依据与双轨的五条硬约束见 §10.3。
 
@@ -549,11 +609,11 @@ Ubuntu 24.04 / x86_64 的 Vircs 完成；候选服务和候选采集也在 x86_6
 
 | 章 | 现状 | 下一步 | 机器 | 人工 |
 |---|---|---|---|---|
-| §5 DOC-PRE 与 P0 | ✅ 完成 | — | — | — |
-| §6 Campaign / 官方取证 / classify | ✅ 完成 | — | — | — |
+| §5 DOC-PRE 与 P0 | ✅ **完成**：P0 报告结论为 `p0_complete_formal_campaign_allowed_on_vircs`，12 项阻断全部修复 | — | 本地＋Vircs | 否 |
+| §6 Campaign / 官方取证 / classify | ✅ **完成**：k80 官方 seal 与分类均 `complete`，2788 条 discovery 全部归类、`blocked=false` | — | Vircs | 否 |
 | §7 建立 0.147 画像 | ✅ **完成**：17 端点画像、Snapshot/Release、版本专属 route binding 与受管收据均已入库；契约测试已适配并通过 | — | Vircs＋本地 | 否 |
 | §8 Candidate / compare / accept | ✅ **完成**：k80 正式 Campaign 已由机器验收，42/42 规则通过、15 项门禁全绿、`accepted=true` | — | Vircs＋DMIT＋本地 Kilo | 是（已完成两入口请求） |
-| §9 生产启用与回滚 | ⏸️ **未开始** | 等待本文档人工验收；获准后按 §9 独立执行生产切换与回滚演练 | **Vircs 生产** | 是（每步确认） |
+| §9 生产启用与回滚 | ⏸️ **正式 k80 切换未开始；存在旧 k34/0.147 生产运行态** | 先完成 §9.0 当前状态冻结、真正 0.145 回滚点确认与切换顺序审批，再执行 k80 canary／切换／回滚演练 | **Vircs 生产** | 是（每步确认） |
 
 本轮正式 Campaign：
 
@@ -571,7 +631,7 @@ Ubuntu 24.04 / x86_64 的 Vircs 完成；候选服务和候选采集也在 x86_6
 |---|---|---|
 | `plan` → 官方采集 → `seal` | ✅ | 最终 attempt `20260815T061454Z-62405f97e0306a0d`；25 条规则／57 项检查；314 个 artifact、453 条 observation；安全扫描 945 文件、169,161,790 字节、0 finding |
 | `classify` | ✅ | 2604 条源码 discovery＋184 条动态 discovery＝2788 条，全部归类；批准联合摘要 `f0fa5e60632d9ef281f6ce221b9136e98693833a87f3b002e5d9cb715f70e0e5` |
-| `stage-profile`／§7 入库 | ✅ | Active 保持 0.145、候选 Previous=0.147，`production_selector_changed=false`；提交 `1ceb0485e` 同时完成同版本合成夹具与版本新增 route 的 fail-close 构造逻辑 |
+| `stage-profile`／§7 入库 | ✅ | **仓库候选 ReleaseCatalog** 保持 Active=0.145、Previous=0.147，`production_selector_changed=false`；提交 `1ceb0485e` 同时完成同版本合成夹具与版本新增 route 的 fail-close 构造逻辑；这不等于 Vircs 实际流量仍使用 Active |
 | 候选镜像与采集 | ✅ | backend 与镜像均在 x86_64 原生构建/运行；最终 attempt `20260815T065611Z-7a84ab63219c449e`，7/7 必需任务完成；2 条 MITM 可选任务为已登记非阻断缺口 |
 | 候选结构化测试轨迹 | ✅ | Vircs x86_64 上从同源候选树执行，11/11 通过；artifact SHA-256 `05c8a0631ed3cd0a667372b84528b120db3011ac15432e9d33f0f05d1fcd8fb7` |
 | Kilo 两入口 | ✅ | 本地实际安装的 Kilo `7.4.2201`：Compatible 返回 `K80_COMPAT_OK`（HTTP），Responses 返回 `K80_RESPONSES_OK`（WebSocket） |
@@ -579,8 +639,9 @@ Ubuntu 24.04 / x86_64 的 Vircs 完成；候选服务和候选采集也在 x86_6
 | `compare` | ✅ | `status=complete`、`offline_only=true`、`profile_binding_matches=true`、规则覆盖 42/42；原始包 `equal=false` 是两侧实现证据不逐字相同，不是 acceptance contract 的失败条件 |
 | `accept` | ✅ | `accepted=true`、42/42 `pass`、0 fail、0 N/A；15 项 gate 全为 true；acceptance result SHA-256 `b6bc412789534e1de3b7df9326b684ad1d8935ce4949b0491fcec98105a40372` |
 
-**下一步只有 §9。** 本次不改 Active/Previous、不重启 Vircs 生产服务；待用户验收本文档后，
-再按 §9 另起生产变更集。
+**下一步是 §9.0，不是直接切换。** 先以只读方式冻结 Vircs 当前 k34/0.147 运行基线，确认
+真正可恢复的 0.145 镜像／compose，并审批从 k34 进入 k80 的顺序；完成这些前不得重启、
+换镜像或改选择器。正式 k80 canary、切换与回滚演练继续作为独立生产变更集执行。
 
 ### 10.1.1 正式证据锚点（接手必读）
 
