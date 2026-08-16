@@ -180,7 +180,7 @@
       ],
       "sha256_by_path": {
         "local-analysis/sources/claude-code-2.1.220-official/SOURCE_MANIFEST.json": "f16387ab426af769325a6c1bc6ef57fd150c8c66a7bbd3fadab8d22874820917",
-        "local-analysis/sources/claude-code-2.1.220-official/bundle-anchors-linux-x64.json": "ded4c96a715d75fd5c38f499e4065e2c090355ad484cfad4f08dbcf5167e256f"
+        "local-analysis/sources/claude-code-2.1.220-official/bundle-anchors-linux-x64.json": "e05a13e2dfa091d6e213ab2bf6084af5e4a3bbb3a1aa42ff6681e8f8b19b3149"
       },
       "note": "绑定官方包、二进制摘要、Bun 主模块摘要和提取器摘要；只证明产物身份，不证明具体规则。"
     },
@@ -192,7 +192,7 @@
         "local-analysis/sources/claude-code-2.1.220-official/CANDIDATE_EVIDENCE.json"
       ],
       "sha256_by_path": {
-        "local-analysis/sources/claude-code-2.1.220-official/CANDIDATE_EVIDENCE.json": "4e4608fc70dceb14154cb46c0a3deaa907e110f67d7db2dd2ce21e0654c6f646"
+        "local-analysis/sources/claude-code-2.1.220-official/CANDIDATE_EVIDENCE.json": "cfb2916ec870ab32a9b8ccbb6d7f79b1b723c1ae828f36f13448a6944fa2ae17"
       },
       "note": "局部语义窗口与摘要；未完成完整数据流证明时只能支持候选或解释运行观察。"
     },
@@ -204,7 +204,7 @@
         "local-analysis/sources/claude-code-2.1.220-official/reachability-index-linux-x64.json"
       ],
       "sha256_by_path": {
-        "local-analysis/sources/claude-code-2.1.220-official/reachability-index-linux-x64.json": "2d73cdfe0846fdaf7c50fec638579cd8c7767faeef7828be68232cd3d8b8a4e2"
+        "local-analysis/sources/claude-code-2.1.220-official/reachability-index-linux-x64.json": "ee342b65977690e6f3f5c36392b186d1f6024b5b9ba4e02e78ba8692b7908f54"
       },
       "note": "启发式可达性索引；新增结构化探针以命名回溯约束值流，Linux/Darwin 均唯一命中且 α 一致；limitations 仍须随引用保留。"
     },

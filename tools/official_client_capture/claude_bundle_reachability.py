@@ -3,10 +3,11 @@
 
 为什么需要这个工具
 ------------------
-`docs/Claude_code_21220_EGRESS_SPEC.md` 第 1.3 节第 2 步要求「只有可达写入点才能
-进入端点、header、body、状态和 retry 清单」，第 1.5 节准入条件第 2 条要求「确认到
-网络 sink 可达」。在 minify bundle 上，光靠 grep 命中一个 header 写入点不足以满足
-这条：写入点可能位于死代码、其他 provider 分支或非出站路径上。
+`docs/Claude_code_21220_EGRESS_SPEC.md` §4.1.1 执行顺序表第 3 步要求「枚举 sink：
+建立入口到网络 sink 的可达窗口」，据此产出端点／Header／Body／retry 候选清单；
+§2.1.2 准入条件第 2 条要求「确认到网络 sink 可达」。在 minify bundle 上，光靠 grep
+命中一个 header 写入点不足以满足这条：写入点可能位于死代码、其他 provider 分支或
+非出站路径上。
 
 本模块提供三件事：
 

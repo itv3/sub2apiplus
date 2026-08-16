@@ -3127,13 +3127,13 @@ def validate_document(
             )
 
     audit_match = re.search(
-        r"## 2\.6 36 个历史编号迁移审计(.*?)"
-        r"## 2\.7 HitCC 2\.1\.197 线索覆盖结论",
+        r"## 2\.13 36 个历史编号迁移审计(.*?)"
+        r"## 2\.14 HitCC 2\.1\.197 线索覆盖结论",
         document,
         flags=re.DOTALL,
     )
     if not audit_match:
-        errors.append("规格文档缺少 2.6 历史编号迁移审计区")
+        errors.append("规格文档缺少 2.13 历史编号迁移审计区")
         return
     audit_ids = set(re.findall(r"`(SPEC-[A-Z]+-\d{3})`", audit_match.group(1)))
     if audit_ids != HISTORICAL_IDS:
@@ -3147,12 +3147,12 @@ def validate_document(
     )
     audit_row_ids = [rule_id for rule_id, _ in audit_rows]
     if len(audit_row_ids) != len(set(audit_row_ids)):
-        errors.append("规格文档 2.6 状态表含重复历史 ID")
+        errors.append("规格文档 2.13 状态表含重复历史 ID")
     document_statuses: dict[str, str] = {}
     for rule_id, chinese_status in audit_rows:
         disposition = DOCUMENT_DISPOSITIONS.get(chinese_status.strip())
         if disposition is None:
-            errors.append(f"规格文档 2.6 含未知中文状态：{rule_id}={chinese_status}")
+            errors.append(f"规格文档 2.13 含未知中文状态：{rule_id}={chinese_status}")
             continue
         document_statuses[rule_id] = disposition
     ledger_statuses = {
@@ -3166,30 +3166,30 @@ def validate_document(
             ledger_status = ledger_statuses.get(rule_id)
             if document_status != ledger_status:
                 errors.append(
-                    f"规格文档 2.6 与规则台账状态不一致：{rule_id} "
+                    f"规格文档 2.13 与规则台账状态不一致：{rule_id} "
                     f"文档={document_status}，台账={ledger_status}"
                 )
     for active_rule in EXPECTED_REPLACEMENTS | EXPECTED_ADDITIONAL:
-        if f"#### {active_rule} " not in document:
+        if f"### {active_rule} " not in document:
             errors.append(f"规格文档缺少新增规则正文：{active_rule}")
     detail_match = re.search(
-        r"## 2\.4 规则详表(.*?)## 2\.5 候选台账",
+        r"## 2\.4 TLS(.*?)## 2\.12 候选台账",
         document,
         flags=re.DOTALL,
     )
     if not detail_match:
-        errors.append("规格文档缺少 2.4 规则详表区")
+        errors.append("规格文档缺少规则详表区（2.4–2.11）")
     else:
         detailed_statuses: dict[str, str] = {}
         detail_sections = re.finditer(
-            r"^#### (SPEC-[A-Z]+-\d{3}) .*?\n(.*?)(?=^#### |^### |\Z)",
+            r"^### (SPEC-[A-Z]+-\d{3}) .*?\n(.*?)(?=^### |^## |\Z)",
             detail_match.group(1),
             flags=re.MULTILINE | re.DOTALL,
         )
         for detail_section in detail_sections:
             rule_id = detail_section.group(1)
             if rule_id in detailed_statuses:
-                errors.append(f"规格文档 2.4 重复规则详表：{rule_id}")
+                errors.append(f"规格文档规则详表重复规则：{rule_id}")
                 continue
             status_match = re.search(
                 r"^- \*\*状态\*\*：(?:✅ |🟡 )?\*\*"
@@ -3199,7 +3199,7 @@ def validate_document(
                 flags=re.MULTILINE,
             )
             if not status_match:
-                errors.append(f"规格文档 2.4 缺少可解析状态：{rule_id}")
+                errors.append(f"规格文档规则详表缺少可解析状态：{rule_id}")
                 continue
             detailed_statuses[rule_id] = DOCUMENT_DISPOSITIONS[status_match.group(1)]
             if rule_id in EXPECTED_VERIFIED_IDS:
@@ -3214,7 +3214,7 @@ def validate_document(
                 implementation_label = "- **Sub2API 实现要求（暂定）**："
             if implementation_label not in detail_section.group(2):
                 errors.append(
-                    f"规格文档 2.4 缺少责任对应的实现字段："
+                    f"规格文档规则详表缺少责任对应的实现字段："
                     f"{rule_id} -> {implementation_label}"
                 )
         all_ledger_statuses = {
@@ -3231,13 +3231,13 @@ def validate_document(
             extra_details = sorted(set(detailed_statuses) - set(all_ledger_statuses))
             if missing_details or extra_details:
                 errors.append(
-                    "规格文档 2.4 规则集合不一致："
+                    "规格文档规则详表规则集合不一致："
                     f"缺少 {missing_details}，多出 {extra_details}"
                 )
             for rule_id in sorted(set(detailed_statuses) & set(all_ledger_statuses)):
                 if detailed_statuses[rule_id] != all_ledger_statuses[rule_id]:
                     errors.append(
-                        f"规格文档 2.4 与规则台账状态不一致：{rule_id} "
+                        f"规格文档规则详表与规则台账状态不一致：{rule_id} "
                         f"文档={detailed_statuses[rule_id]}，"
                         f"台账={all_ledger_statuses[rule_id]}"
                     )

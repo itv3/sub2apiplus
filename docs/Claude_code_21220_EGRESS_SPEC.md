@@ -1,55 +1,29 @@
 # Claude Code 客户端仿真与版本演进手册
 
+> **适用范围**：Sub2API 使用 Anthropic OAuth（`authMethod=claude.ai`、`apiProvider=firstParty`）
+> 出站时的 Claude Code 客户端仿真
+> **取证基线**：`claude-code 2.1.220`——第一、二部分全部规则与证据的绑定版本；发行物身份、
+> 摘要与运行时线索见 §2.1.1
+> **升级目标**：`stable` 通道 `2.1.224`（2026-08-16 复核 npm：`stable` 2.1.224、`latest` 2.1.233）。
+> 基线保持 2.1.220 不变——其 22 个完整运行与 12 项已验证规则是自洽证据资产，整体重新取证的成本
+> 远高于增量比较；2.1.220 → 2.1.224 的差异须由第四部分流程逐项证明，且受管工具补齐前不得创建
+> 正式升级 Campaign（§4.0.4）
+> **机器台账**：`tools/official_client_capture/claude_21220/` 的规则、HitCC 覆盖与 2.1.88 覆盖
+> 三份 JSON；逐规则状态以台账为准，正文数字由 §2.16 门禁强制对账
 > **文档定位**：本文是 Claude Code 客户端规则、Sub2API 仿真实现与版本演进的人类可读权威入口。
-> 它在**方法与架构**上参照 [`docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md`](CODEX_CLI_CLIENT_EMULATION_GUIDE.md)，
-> 但材料、证据、规则和结论全部独立取自 Claude Code 自身，不继承 Codex 的任何事实结论。
-
-取证基线：`claude-code 2.1.220`（第一、二部分全部规则与证据的绑定版本）<br>
-Linux 主静态产物（已归档）：`@anthropic-ai/claude-code-linux-x64@2.1.220`，ELF x86_64，
-SHA-256 `674f61f20ff306f3100cf9200e4c36c4b70278b5bef2884549819b942a89c863`，与抓包客户端字节级相同<br>
-Darwin 交叉样本：`@anthropic-ai/claude-code-darwin-arm64@2.1.220`，Mach-O arm64，SHA-256
-`8addc857f3fe64d5a0368af9ee50321b50afb4a6918ba3ef018ab84f5dbbe081`<br>
-运行时线索：两平台内嵌 Bun 均为 `1.4.0+f6d0fcd24`；Linux J 上报
-`X-Stainless-Package-Version: 0.94.0`<br>
-文档状态：**当前台账共 57 个编号；1.1 目标内 53 个，其中 12 个已验证、41 个已观察；
-另有 4 个编号不计客户端 egress，已编号待补证为 0**<br>
-末次更新：2026-08-16
-
-**版本时效**（2026-08-16 复核 npm registry）：官方 `@anthropic-ai/claude-code` 的 `stable` 为
-**2.1.224**、`latest` 为 **2.1.233**；本文取证基线 2.1.220 发布于 2026-07-24，已落后 stable 一个
-补丁位。基线**保持 2.1.220 不变**——其 22 个完整运行、12 项已验证规则和全部具名画像是自洽的
-证据资产，整体重新取证的成本远高于增量比较。**升级目标锁定 `stable` 通道的 2.1.224**，不追随
-发布过快的 `latest`。2.1.220 → 2.1.224 的差异必须由第四部分流程逐项**证明**，不得假设补丁版本
-不改变出站形态；在第四部分要求的受管工具补齐前，不得创建正式升级 Campaign（见 §4.0.4）。
-
-本文说明在没有未压缩 TS 源码时，如何从官方生产 bundle 和运行证据建立原子规则。原始二进制、
-提取物、抓包和机器索引是证据本体；本文记录方法、规则、Sub2API 实现责任、候选和准入状态。
-
-全文分五部分：**第一部分**规定规则如何形成，**第二部分**是 2.1.220 的规则全集，**第三部分**说明
-Sub2API 应当如何实现（**设计规范**，其实施状态见 §3.9），**第四部分**规定版本演进流程，
-**第五部分**处理非版本变更维护（当前为占位，待补）。第二部分定义“官方应产生什么行为”，
-第三部分定义“Sub2API 如何实现”，
-第四部分定义“如何换版”；三者的证据、状态与责任不得互相代替。
-
-第二部分按 Sub2API 实现责任展示当前 57 个编号，并把目标归属、证据状态和实现状态分开；历史 36 个
-编号保留在迁移审计中。HitCC 2.1.197 与 2.1.88 源码中的所有已盘点线索均进入机器覆盖矩阵，
-旧版本只提供发现线索，不能单独定义 2.1.220。`backend/` 只是待核对的既有实现，不能反向定义
-官方行为；官方入站与第三方标准 API 入站是否收敛，仍须在实现阶段作成对验收。
+> 本文没有未压缩 TS 源码可用，静态规则均从官方生产 bundle 逆向建立；方法与架构参照
+> [`docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md`](CODEX_CLI_CLIENT_EMULATION_GUIDE.md)，但材料、
+> 证据、规则与结论全部独立取自 Claude Code 自身，不继承 Codex 的任何事实结论
+> **末次更新**：2026-08-16
 
 ---
 
-# 第一部分 规则如何形成
+# 第一部分 总体目标与仿真链路
 
-## 1.1 目标、范围与当前结论
+## 1.1 总体目标与边界
 
-目标是让 Sub2API 使用 Anthropic OAuth 出站时，无论入站来自官方客户端还是第三方标准 API 客户端，
-都产生与官方 Claude Code 2.1.220 一致的可观测形态：
-
-```text
-出站 = Claude220Profile(规范化语义请求, 会话状态, 平台与入口条件, 服务端特性状态)
-```
-
-入站客户端类型不是画像函数的输入；实现阶段须用语义等价的成对入站请求验证二者收敛。
+目标是让 Sub2API 使用 Anthropic OAuth 出站时，无论入站来自官方客户端还是第三方标准 API
+客户端，都产生与官方 Claude Code 2.1.220 一致的可观测形态。画像函数与仿真链路见 §1.2。
 
 本版范围：
 
@@ -81,22 +55,36 @@ grove、releaseNotes、feedback、modelCapabilities、referral 等非必要请�
 `codex-rs/config/src/types.rs` 的 `AnalyticsConfigToml.enabled=false` 与可配 `None` 的
 otel exporter（基于与 active 画像同版本的 `codex-cli-0.145` 源码）。
 
-运行证据仍只覆盖 Linux x86_64、`sdk-cli`、Sonnet 5 及已声明的受控环境／故障场景，不能外推到
-TUI、其他模型与端点全集。完整 Linux bundle 足以可靠建立静态规则命题，该包、提取器和语义锚点均已
-入库并可复算；只用 `strings` 不足以升格。历史基线根目录有 22 个 manifest（18 个 `complete`、
-4 个 `failed`），其中旧 P／J 观察仍受原 M 缺口约束；R 类 `relay-r1/r2` 与 `subagent-r1/r2`
-同样只作补充观察。
+## 1.2 客户端仿真链路
 
-本轮另归档 `claude-code-2.1.220-pending-evidence-20260801/runs/` 下 **22 个运行且全部 `complete`**；
-每个运行都绑定实际客户端 SHA、argv、完整环境、采集器摘要、宿主运行回执、运行内与终态精确秘密扫描及清理结果，
-`m_binding.complete=true`。这些运行只闭环 client-app、remote container、remote session、
-agent parent 以及 `500` 且无 `Retry-After` 的重试曲线，共支持第二章 12 个原子编号升级为「已验证」；
-它们不会自动升级其余旧观察。尚未攻克的采集能力包括 `cli`（TUI）入口、compact、多工具／MCP、
-其他条件 Header、其他错误类别／`Retry-After` 和辅助端点触发。
+```text
+官方生产 bundle、运行证据与旧版本线索
+→ 客户端规则画像
+→ active 版本画像
+→ 统一出站定型
+→ 验收、发布与回滚
+```
 
-## 1.2 材料、证据与结论等级
+出站形态由以下画像函数唯一决定：
 
-### 1.2.1 材料的用途
+```text
+出站 = ClaudeProfile(规范化语义请求, 会话状态, 平台与入口条件, 服务端特性状态)
+```
+
+入站客户端类型**不是**画像函数的输入；实现阶段须用语义等价的成对入站请求验证官方入口与第三方
+入口收敛。第二部分定义「官方应产生什么行为」，第三部分说明「Sub2API 如何实现」，第四部分规定
+版本演进，第五部分处理非版本变更维护。
+
+---
+
+# 第二部分 Claude Code 2.1.220 规则画像
+
+本部分定义规则成立所需的证据标准、观测边界和当前基线的 57 个编号项。它回答「什么行为可以成为
+客户端规则」；目标版本如何执行取证并生成新规则，只由第四部分规定。
+
+## 2.1 规则证据与准入标准
+
+### 2.1.1 证据类型与位置
 
 | 等级 | 材料与位置 | 用途 | 限制 |
 |---|---|---|---|
@@ -113,8 +101,6 @@ agent parent 以及 `500` 且无 `Retry-After` 的重试曲线，共支持第二
 来源清单至少绑定 registry URL、`dist.integrity`、下载时间、包名／版本、tgz 与二进制摘要、平台、
 架构和内嵌构建信息。SHA-256 只能证明文件同一，不能单独证明来源官方。
 
-### 1.2.2 运行证据与状态
-
 | 载体 | 内容与证明边界 |
 |---|---|
 | **P** | 原始 pcap：ClientHello、SNI、TLS 扩展、ALPN、连接和时序 |
@@ -129,21 +115,57 @@ J-raw 不是 wire 字节：不能证明请求行空白、分块、原始 body �
 闭环）、**冲突**（材料不一致）、**不可观测机制**（只能解释内部机制）。可变性另记为固定、随机或
 条件；远程 feature、账号资格等无法冻结时必须写成条件。
 
-## 1.3 取证与验证方法
+本文绑定的两个官方发行物如下。SHA-256 只证明文件同一，不能单独证明来源官方；来源清单还须绑定
+registry URL、`dist.integrity`、下载时间、包名／版本与平台架构：
 
-按以下顺序建立规则：
+| 角色 | npm 包 | 格式 | SHA-256 |
+|---|---|---|---|
+| 主静态产物与 wire 基准 | `@anthropic-ai/claude-code-linux-x64@2.1.220` | ELF x86_64 | `674f61f20ff306f3100cf9200e4c36c4b70278b5bef2884549819b942a89c863` |
+| 跨平台交叉复核样本 | `@anthropic-ai/claude-code-darwin-arm64@2.1.220` | Mach-O arm64 | `8addc857f3fe64d5a0368af9ee50321b50afb4a6918ba3ef018ab84f5dbbe081` |
 
-1. **冻结身份**：锁定官方包、实际二进制、平台、entrypoint、provider、模型、配置和采集器摘要；静态
-   基准优先使用与抓包 SHA 相同的 Linux 产物。
-2. **提取并枚举**：确定性解析 Bun SEA，提取 bundle，构建入口到 `messages.create`／`fetch` 等 sink 的
-   AST／调用图；只有可达写入点才能进入端点、header、body、状态和 retry 清单。
-3. **吸收线索**：用 2.1.88 和 HitCC 定位机制，但所有条件和值都回到 Linux 2.1.220 bundle 复验。
-4. **建立差分矩阵**：覆盖 `cli`／`sdk-cli`、模型、单／多轮、工具、compact、主／子会话、workload、
-   环境开关、账号 cohort、服务端响应以及 429／5xx／断连／retry。
-5. **选择通道并验证**：TLS 用 direct P，原始 HTTP 用 R，解析语义用 J，绑定信息用 M；条件命题须有
-   正例、负例、单变量对照和独立重复。
-6. **原子化与门禁**：把存在性、值、条件、顺序、生命周期和回退拆开，分别绑定锚点、运行号、证据、
-   边界和 Sub2API 可见结果断言。
+Linux 产物与抓包客户端字节级相同，因此它同时是静态基准与 wire 基准；Darwin 只作交叉复核。
+两平台内嵌 Bun 均为 `1.4.0+f6d0fcd24`；Linux J 通道上报 `X-Stainless-Package-Version: 0.94.0`，
+该值只证明上报内容，不能单独锁定 SDK 实现。
+
+Bun SEA 应先由 Mach-O `__BUN/__bun` 或 ELF `.bun` 定位，再校验 trailer magic 恰在该 section 尾部、
+其前 32 字节为 Offsets、模块记录为 52 字节；不能用全文件 magic 搜索代替结构校验。主模块均为完整 JS：
+
+| 产物 | 模块数 | 主模块 | 大小 | section 偏移／长度 |
+|---|---:|---|---:|---|
+| Linux x86_64 | 8 | `/$bunfs/root/src/entrypoints/cli.js` | 21,633,085 B | `.bun` 86315008／188646561 |
+| Darwin arm64 | 14 | 同上 | 21,635,672 B | `__bun` 64831488／191359127 |
+
+因此 A1 不是字面量库。minify 保留控制流、常量和条件，但局部符号会跨平台漂移；正式锚点分两层：
+
+1. **产物锚点**：包来源／integrity、平台、二进制 SHA、模块路径、bundle SHA 和提取器 SHA；section
+   偏移／长度只作该产物的提取记录。落地为 `bundle-anchors-linux-x64.json`。
+2. **语义锚点**：稳定 header／gate／环境变量字面量、网络 sink，以及局部标识符 α-归一化后的
+   子树摘要。落地为 `reachability-index-linux-x64.json` 与 `CANDIDATE_EVIDENCE.json`。
+
+minify 符号名、行号、字节跨度只能辅助定位，不能作为跨平台或跨版本身份。α-归一化把非保留标识符
+按首次出现顺序替换为占位符，保留关键字、成员属性名和全部字面量，因此同一段逻辑在两个平台上得到
+同一摘要——原 8 条候选中 6 条锚点跨平台完全一致，尽管符号名分别为 `S8s`／`Tqs`、`Vtp`／`Ftp`；
+其余 2 条逐词差异仅为构建标识常量 `BUILD_SOURCEMAP_GROUP`（Linux `"default"`／Darwin `"darwin"`）
+落在锚点窗口内，出站逻辑本身一致。本轮新增的 client-app、remote-container、remote-session 与
+parent-agent 四个结构锚点在 Linux／Darwin 各唯一命中，α 摘要均逐项完全一致。
+
+### 2.1.2 规则准入与观测边界
+
+`SPEC-*` 在本文件中只是可追踪命题 ID，**编号本身不代表已验证**；历史候选、已观察命题和已取代
+命题都可保留编号。只有同时满足以下条件的原子命题才能标为 `disposition=verified`，并进入正式
+Sub2API 实现合同：
+
+1. 范围、官方来源、实际二进制、平台、运行环境和采集器均已绑定；
+2. 需要静态解释时，证据来自运行产物或已证明等价的产物，并确认到网络 sink 可达；
+3. 使用能观察命题的 P／R／J／M；J-raw 仅支持声明边界内的解析后 H1 命题，原始 wire 必须有 R；
+4. 条件命题完成正负例、单变量对照和独立重复；未知远程状态已收窄为条件；
+5. 全称结论具有无 host 预过滤发现、静态枚举和声明范围内的场景覆盖；
+6. 锚点、运行号、证据及提取器摘要、秘密扫描和索引均可复算；
+7. 实现要求只规定可见结果，且规则、场景、证据和实现断言之间无未分类项。
+
+每条规则须声明停止条件和适用边界。版本／包摘要、内嵌 Bun／SDK、平台、entrypoint、provider、
+关键配置、远程 feature 或采集器变化时重新发现和分类；minify 文本变化本身既不证明规则变化，
+也不能作为继承旧规则的理由。
 
 不同命题的最低闭环要求：
 
@@ -179,40 +201,12 @@ J-raw 不是 wire 字节：不能证明请求行空白、分块、原始 body �
   它与「行为层不作对比维度」一致——但它使端点类结论只在该模式下成立：`default` 模式会放行
   另外 53 处门控请求，端点集合必然更大。任何端点全集命题都必须声明隐私模式。
 
-## 1.4 机器锚点、当前样本与待补工具
+### 2.1.3 日常复算
 
-Bun SEA 应先由 Mach-O `__BUN/__bun` 或 ELF `.bun` 定位，再校验 trailer magic 恰在该 section 尾部、
-其前 32 字节为 Offsets、模块记录为 52 字节；不能用全文件 magic 搜索代替结构校验。主模块均为完整 JS：
+日常复算分两类：仓库门禁与证据复算。门禁命令与逐项检查内容见 §2.16；它不发送真实请求，但要求被
+`.gitignore` 排除的 `local-analysis/` 证据树完整存在，不是脱离证据归档即可运行的普通 CI 单测。
 
-| 产物 | 模块数 | 主模块 | 大小 | section 偏移／长度 |
-|---|---:|---|---:|---|
-| Linux x86_64 | 8 | `/$bunfs/root/src/entrypoints/cli.js` | 21,633,085 B | `.bun` 86315008／188646561 |
-| Darwin arm64 | 14 | 同上 | 21,635,672 B | `__bun` 64831488／191359127 |
-
-因此 A1 不是字面量库。minify 保留控制流、常量和条件，但局部符号会跨平台漂移；正式锚点分两层：
-
-1. **产物锚点**：包来源／integrity、平台、二进制 SHA、模块路径、bundle SHA 和提取器 SHA；section
-   偏移／长度只作该产物的提取记录。落地为 `bundle-anchors-linux-x64.json`。
-2. **语义锚点**：稳定 header／gate／环境变量字面量、网络 sink，以及局部标识符 α-归一化后的
-   子树摘要。落地为 `reachability-index-linux-x64.json` 与 `CANDIDATE_EVIDENCE.json`。
-
-minify 符号名、行号、字节跨度只能辅助定位，不能作为跨平台或跨版本身份。α-归一化把非保留标识符
-按首次出现顺序替换为占位符，保留关键字、成员属性名和全部字面量，因此同一段逻辑在两个平台上得到
-同一摘要——原 8 条候选中 6 条锚点跨平台完全一致，尽管符号名分别为 `S8s`／`Tqs`、`Vtp`／`Ftp`；
-其余 2 条逐词差异仅为构建标识常量 `BUILD_SOURCEMAP_GROUP`（Linux `"default"`／Darwin `"darwin"`）
-落在锚点窗口内，出站逻辑本身一致。本轮新增的 client-app、remote-container、remote-session 与
-parent-agent 四个结构锚点在 Linux／Darwin 各唯一命中，α 摘要均逐项完全一致。
-
-现有成功 manifest 位于 `local-analysis/captures/official-egress-final-review-fix-20260727-094500/`
-`official-client/oauth-oauth-p0p2-zstd-final-20260726T1420Z/manifest.json`。它绑定 Linux 客户端 SHA、
-`firstParty`／`claude.ai`、Sonnet 5、`s1`／`s2`／`s4` 和 direct／MITM，但未绑定实际 argv、采集脚本
-摘要和完整环境，且 `runtime_image_verified=false`、`secret_scan.performed=false`。
-因此它能把选定证据文件绑定到一次 `complete` 归档，**不能满足 1.5 第 1、6 条所要求的完整 M**；
-第二章凡依赖这些运行的命题只能记为有限样本「已观察」，不得用“文件摘要已绑定”替代完整准入。
-
-与它分开，本轮 `claude-code-2.1.220-pending-evidence-20260801/runs/` 的 22 个 manifest 全部满足
-`m_binding.complete=true`，并带宿主运行回执、实际 argv／环境、采集器摘要、运行内与终态精确秘密扫描和清理结果。
-只有第二章显式引用这些 run 的 12 个原子规则使用该完整 M；不得用新 campaign 替旧 P／R／J 观察补 M。
+现有证据的复算入口如下：
 
 现有 P 类证据可复算：
 
@@ -237,7 +231,7 @@ python3 tools/official_client_capture/extract_claude_bundle.py \
 该入口对 SHA 不匹配、非 Bun SEA 容器和被篡改的 trailer magic 均返回非零退出码，且同一二进制在不同
 输出目录下产出相同锚点。Darwin 交叉样本用 `--check-only` 复核。
 
-### 1.4.1 静态分析工具的能力边界
+### 2.1.4 静态分析工具的能力边界
 
 `extract_claude_bundle.py` 与 `claude_bundle_reachability.py` 只依赖标准库。可达性判定的实际强度
 **弱于「调用图可达」**，使用时必须按下列边界解读：
@@ -264,36 +258,14 @@ python3 tools/official_client_capture/extract_claude_bundle.py \
 
 1. ~~归档 Linux npm 来源清单，实现确定性提取、bundle 锚点和 sink 索引~~ —— 已完成；
    AST／调用图可达性判定仍只达到 1.4.1 所述强度，需要真正的数据流分析才能满足准入条件第 2 条；
-2. ~~以 Linux bundle 重做候选条件，Darwin 仅用于平台差分~~ —— 已完成，见 2.5 候选台账及机器台账；
+2. ~~以 Linux bundle 重做候选条件，Darwin 仅用于平台差分~~ —— 已完成，见 2.12 候选台账及机器台账；
 3. client-app、remote container、remote session、agent 深度 1—3 和 500 count=3／5／9 已由
    本轮完整 M campaign 补齐；其余环境变量条件仍须拆分原子命题并绑定未注入负例，另缺 TUI、
    compact、其他非主会话，以及其他状态码／`Retry-After`／精确终止边界；
 4. 为现有 R 补完整 M 绑定，并补无 host 预过滤发现、全生命周期 flow ID、秘密扫描、证据索引和
    实现断言映射。
 
-## 1.5 正式规则准入与变更
-
-`SPEC-*` 在本文件中只是可追踪命题 ID，**编号本身不代表已验证**；历史候选、已观察命题和已取代
-命题都可保留编号。只有同时满足以下条件的原子命题才能标为 `disposition=verified`，并进入正式
-Sub2API 实现合同：
-
-1. 范围、官方来源、实际二进制、平台、运行环境和采集器均已绑定；
-2. 需要静态解释时，证据来自运行产物或已证明等价的产物，并确认到网络 sink 可达；
-3. 使用能观察命题的 P／R／J／M；J-raw 仅支持声明边界内的解析后 H1 命题，原始 wire 必须有 R；
-4. 条件命题完成正负例、单变量对照和独立重复；未知远程状态已收窄为条件；
-5. 全称结论具有无 host 预过滤发现、静态枚举和声明范围内的场景覆盖；
-6. 锚点、运行号、证据及提取器摘要、秘密扫描和索引均可复算；
-7. 实现要求只规定可见结果，且规则、场景、证据和实现断言之间无未分类项。
-
-每条规则须声明停止条件和适用边界。版本／包摘要、内嵌 Bun／SDK、平台、entrypoint、provider、
-关键配置、远程 feature 或采集器变化时重新发现和分类；minify 文本变化本身既不证明规则变化，
-也不能作为继承旧规则的理由。
-
----
-
-# 第二部分 Claude Code 2.1.220 规则
-
-## 2.1 规则全集与 Sub2API 对齐口径
+## 2.2 当前规则分组与验收范围
 
 本章当前共 **57 个编号项**。“Sub2API 需对齐项”表示该编号属于实现 1.1 目标时必须处理的责任；
 “当前验证状态”表示官方行为证据的充分度，不代表 Sub2API 已经实现。与 Codex 文档相同，本轮拆分
@@ -340,8 +312,6 @@ HitCC、2.1.88 源码和未编号 `CAND-*` 仍有未闭合线索。尤其是 `CA
 ClientHello、原始 HTTP Header 合同、工具／compact／其他非主会话、辅助端点，以及 500 之外的
 错误类别和 `Retry-After` 仍会阻止 1.1 最终封口。
 
-## 2.2 Sub2API 当前对齐清单
-
 机器责任枚举仍为
 `egress_required／egress_conditional／egress_pending_evidence／downstream_response_compat／none_superseded`，
 本轮数量依次为 32／21／0／3／1；前两类合计即 Sub2API 需对齐的 53 项。
@@ -381,7 +351,7 @@ ClientHello、原始 HTTP Header 合同、工具／compact／其他非主会话�
 ### 2.2.3 已编号待补证：0 项
 
 原 5 个候选已拆成 12 个原子编号并由本轮 22 个完整 M 运行闭环；当前没有
-`egress_pending_evidence` 编号。未编号线索仍保留在 2.5 候选台账，不得把“0 项”解释为候选清零。
+`egress_pending_evidence` 编号。未编号线索仍保留在 2.12 候选台账，不得把“0 项”解释为候选清零。
 <!-- CLAUDE_ALIGNMENT_PENDING_END -->
 
 <!-- CLAUDE_ALIGNMENT_EXCLUDED_START -->
@@ -399,6 +369,30 @@ ClientHello、原始 HTTP Header 合同、工具／compact／其他非主会话�
 `not_assessed`。证据已验证只表示官方规则闭环，不表示 Sub2API 已实现或通过成对验收。
 
 ## 2.3 证据状态与具名画像
+
+运行证据仍只覆盖 Linux x86_64、`sdk-cli`、Sonnet 5 及已声明的受控环境／故障场景，不能外推到
+TUI、其他模型与端点全集。完整 Linux bundle 足以可靠建立静态规则命题，该包、提取器和语义锚点均已
+入库并可复算；只用 `strings` 不足以升格。历史基线根目录有 22 个 manifest（18 个 `complete`、
+4 个 `failed`），其中旧 P／J 观察仍受原 M 缺口约束；R 类 `relay-r1/r2` 与 `subagent-r1/r2`
+同样只作补充观察。
+
+本轮另归档 `claude-code-2.1.220-pending-evidence-20260801/runs/` 下 **22 个运行且全部 `complete`**；
+每个运行都绑定实际客户端 SHA、argv、完整环境、采集器摘要、宿主运行回执、运行内与终态精确秘密扫描及清理结果，
+`m_binding.complete=true`。这些运行只闭环 client-app、remote container、remote session、
+agent parent 以及 `500` 且无 `Retry-After` 的重试曲线，共支持第二章 12 个原子编号升级为「已验证」；
+它们不会自动升级其余旧观察。尚未攻克的采集能力包括 `cli`（TUI）入口、compact、多工具／MCP、
+其他条件 Header、其他错误类别／`Retry-After` 和辅助端点触发。
+
+现有成功 manifest 位于 `local-analysis/captures/official-egress-final-review-fix-20260727-094500/`
+`official-client/oauth-oauth-p0p2-zstd-final-20260726T1420Z/manifest.json`。它绑定 Linux 客户端 SHA、
+`firstParty`／`claude.ai`、Sonnet 5、`s1`／`s2`／`s4` 和 direct／MITM，但未绑定实际 argv、采集脚本
+摘要和完整环境，且 `runtime_image_verified=false`、`secret_scan.performed=false`。
+因此它能把选定证据文件绑定到一次 `complete` 归档，**不能满足 §2.1.2 第 1、6 条所要求的完整 M**；
+第二章凡依赖这些运行的命题只能记为有限样本「已观察」，不得用“文件摘要已绑定”替代完整准入。
+
+与它分开，本轮 `claude-code-2.1.220-pending-evidence-20260801/runs/` 的 22 个 manifest 全部满足
+`m_binding.complete=true`，并带宿主运行回执、实际 argv／环境、采集器摘要、运行内与终态精确秘密扫描和清理结果。
+只有第二章显式引用这些 run 的 12 个原子规则使用该完整 M；不得用新 campaign 替旧 P／R／J 观察补 M。
 
 36 个历史编号已经逐条复核，**不再使用「36/36 已验证」**。历史复合 ID 即使样本事实一致，也必须
 先收窄或拆成原子命题，并满足域级最低证据与可复核 M 绑定，才可进入「已验证」。本轮只有
@@ -492,11 +486,10 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - `tools/official_client_capture/claude_21220/hitcc_2_1_197_coverage.json`；
 - `tools/official_client_capture/claude_21220/source_2_1_88_coverage.json`。
 
-## 2.4 规则详表
 
-### 2.4.1 TLS
+## 2.4 TLS
 
-#### SPEC-TLS-001 ClientHello 扩展类型序列固定
+### SPEC-TLS-001 ClientHello 扩展类型序列固定
 
 - **范围**：`674f61f2…` Linux x86_64；`sdk-cli`；`claude.ai`／`firstParty`；direct（非 MITM）。
 - **规则**：ClientHello 的扩展类型按 `0, 23, 65281, 10, 11, 35, 16, 5, 13, 18, 51, 45, 43, 21`
@@ -509,7 +502,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：同平台复刻该扩展序；不得把其他平台或其他 TLS 栈的画像套用于此。
 - **状态**：**已观察**；原 ID 同时合并精确序列与跨场景不变性，未拆成原子命题。
 
-#### SPEC-TLS-002 只 offer `http/1.1` 一种 ALPN
+### SPEC-TLS-002 只 offer `http/1.1` 一种 ALPN
 
 - **范围**：`SCOPE-P8`。
 - **规则**：所选八个 ClientHello 的 ALPN 扩展都只包含 `http/1.1`，均未 offer `h2`。
@@ -522,7 +515,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **状态**：**已观察**；P 已由原始 pcap 复算为 8/8，但 manifest 未归档实际 argv、采集器与
   完整环境，runtime image 未独立验证且未执行秘密扫描，未满足完整 M 准入。
 
-#### SPEC-TLS-003 所选 allhosts 样本的 SNI
+### SPEC-TLS-003 所选 allhosts 样本的 SNI
 
 - **范围**：`SCOPE-ALLHOSTS-P4`。
 - **规则**：全部 4 个 ClientHello 的 SNI 均为 `api.anthropic.com`。
@@ -535,9 +528,9 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **状态**：**已观察**；原始 P 事实可复算，但完整 M 未闭合。本条承接原 `SPEC-EP-001` 混入的
   TLS SNI 子命题。
 
-### 2.4.2 协议与连接
+## 2.5 协议与连接
 
-#### SPEC-PROTO-001 应用层协议为 HTTP/1.1
+### SPEC-PROTO-001 应用层协议为 HTTP/1.1
 
 - **范围**：`SCOPE-J6`；MITM J 解析侧。
 - **规则**：所选六个 J 记录的 `http_version` 均为 `HTTP/1.1`；不从另一组 direct pcap 的
@@ -549,9 +542,9 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：该有限画像使用 HTTP/1.1。
 - **状态**：**已观察**；J 的 6/6 解析事实成立，但完整 M 未闭合，且 J 只支持解析层协议命题。
 
-### 2.4.3 Header
+## 2.6 Header
 
-#### SPEC-HDR-001 基线路径的 22 项 header 名与顺序
+### SPEC-HDR-001 基线路径的 22 项 header 名与顺序
 
 - **范围**：`SCOPE-BASELINE`。
 - **规则**：请求按此顺序发送 22 个 header：`Accept`、`Authorization`、`Content-Type`、
@@ -585,7 +578,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **状态**：**已观察**；原 ID 合并名称、大小写、基础顺序与 R 字节细节，仍未整体闭环；条件槽 B
   的七字段投影已经由独立原子规则 `SPEC-HDR-026` 验证，不再属于本 ID 的候选缺口。
 
-#### SPEC-HDR-002 User-Agent
+### SPEC-HDR-002 User-Agent
 
 - **范围**：`SCOPE-J6`；入口固定为 `sdk-cli`。
 - **规则**：所选六个 J 记录的 `User-Agent` 均恰为
@@ -601,7 +594,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **状态**：**已观察**；J 的 6/6 精确值成立，但 A1 仅证明模板字面与局部 sink 近邻，未形成
   UA 字段级数据流；完整 M 亦未闭合。
 
-#### SPEC-HDR-003 Sonnet 5 基线 `anthropic-beta` 九项序列
+### SPEC-HDR-003 Sonnet 5 基线 `anthropic-beta` 九项序列
 
 - **范围**：`SCOPE-BASELINE`；未设置 `ANTHROPIC_BETAS`。
 - **规则**：Sonnet 5 已采基线发送以下九项顺序。其他模型只记录观察或候选，不属于本条观察范围：
@@ -623,7 +616,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：Sonnet 5 按此九项与顺序输出；不得把 33 条注册表全量发送。
 - **状态**：**已观察**（Sonnet 5 基线序列）；原 ID 是九值复合序列，Opus 为单次观察，Haiku 为**候选**。
 
-#### SPEC-HDR-004 `anthropic-version: 2023-06-01`
+### SPEC-HDR-004 `anthropic-version: 2023-06-01`
 
 - **范围**：`SCOPE-BASELINE`。
 - **规则**：固定为 `2023-06-01`。
@@ -633,7 +626,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：按此值输出。
 - **状态**：**已观察**；旧分母未绑定，且缺 2.1.220 当前 sink 的静态闭环。
 
-#### SPEC-HDR-005 `Accept-Encoding: gzip, deflate, br, zstd`
+### SPEC-HDR-005 `Accept-Encoding: gzip, deflate, br, zstd`
 
 - **范围**：`SCOPE-BASELINE`。
 - **规则**：固定为 `gzip, deflate, br, zstd`，含空格，顺序固定。
@@ -643,7 +636,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：按此字面输出，包括分隔符空格与 `zstd` 的存在。
 - **状态**：**已观察**；J 只支持解析值，缺完整 M 的 R 仅补充观察 wire 字节。
 
-#### SPEC-HDR-006 `X-Stainless-*` 八项取值
+### SPEC-HDR-006 `X-Stainless-*` 八项取值
 
 - **范围**：`SCOPE-BASELINE`；内嵌运行时 v26.3.0。
 - **规则**：已采 Linux 基线请求的值向量为 `Arch=x64`、`Lang=js`、`OS=Linux`、
@@ -659,7 +652,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：按此输出。`Retry-Count` 在应用层重试时保持 `0`，不得为了「看起来像重试」而递增。
 - **状态**：**已观察**；原 ID 合并八个字段，重试分支由 `SPEC-CONN-001` 另行限定。
 
-#### SPEC-HDR-007 `x-app` 与 `anthropic-dangerous-direct-browser-access`
+### SPEC-HDR-007 `x-app` 与 `anthropic-dangerous-direct-browser-access`
 
 - **范围**：`SCOPE-BASELINE`。
 - **规则**：已采前台基线路径同时发送 `anthropic-dangerous-direct-browser-access: true` 与
@@ -675,7 +668,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：前台输出上述两个值；后台画像必须等待 `CAND-BG-SESSION` 闭环。
 - **状态**：**已观察**（限前台）；原 ID 合并两个独立 Header，`cli-bg` 为候选。
 
-#### SPEC-HDR-008 基线不发送 `anthropic-dispatch-id`
+### SPEC-HDR-008 基线不发送 `anthropic-dispatch-id`
 
 - **范围**：`SCOPE-BASELINE`。
 - **规则**：已采 OAuth 基线路径不发送 `anthropic-dispatch-id`。A1 另显示其写入点条件为
@@ -695,7 +688,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：基线不发送该 header；远程 gate 画像取得正例前不得臆造取值。
 - **状态**：**已观察**；远程 gate 正例与绑定的未注入对照仍缺失，环境不可达解释仅作候选机制。
 
-#### SPEC-HDR-009 `CLAUDE_CODE_ADDITIONAL_PROTECTION` 控制的条件 header
+### SPEC-HDR-009 `CLAUDE_CODE_ADDITIONAL_PROTECTION` 控制的条件 header
 
 - **范围**：`SCOPE-BASELINE` 加本条声明的单一环境变量。
 - **规则**：`CLAUDE_CODE_ADDITIONAL_PROTECTION` 解析为真时发送
@@ -710,7 +703,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：仅在该条件成立时输出，并保持第 16 位；条件不成立时不得出现。
 - **状态**：**已观察**（只覆盖变量值 `1` 的正例）；原 ID 合并触发、取值、位置与负例。
 
-#### SPEC-HDR-010 单行 `ANTHROPIC_CUSTOM_HEADERS` 注入
+### SPEC-HDR-010 单行 `ANTHROPIC_CUSTOM_HEADERS` 注入
 
 - **范围**：`SCOPE-BASELINE` 加本条声明的单一环境变量。
 - **规则**：当变量恰为单行 `X-Egress-Probe: probe-alpha` 时，新增同名 header，值为
@@ -725,7 +718,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：该变量未设置时不得出现任何额外 header；产品若不开放此能力，无需实现。
 - **状态**：**已观察**（仅上述单行输入）；原 ID 合并出现、值、位置与解析边界。
 
-#### SPEC-HDR-011 已取代：billing 载体混淆
+### SPEC-HDR-011 已取代：billing 载体混淆
 
 - **原问题**：旧命题只检查 HTTP Header，然后把同名 attribution 文本也错误判为“不出站”。
 - **处置**：本编号不再作为活动规则；HTTP Header 由 `SPEC-HDR-020` 规定，Body 文本由
@@ -733,7 +726,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求**：不实现本编号；编号不得复用，也不得重新合并 Header 缺席与 Body 存在两个命题。
 - **状态**：**已取代**；编号保留且不得复用。
 
-#### SPEC-HDR-020 基线 HTTP Header 不含 `x-anthropic-billing-header`
+### SPEC-HDR-020 基线 HTTP Header 不含 `x-anthropic-billing-header`
 
 - **范围**：`SCOPE-J6`。
 - **规则**：HTTP Header 名集合不含 `x-anthropic-billing-header`。
@@ -746,7 +739,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：该有限画像不新增同名 HTTP Header，并与 `SPEC-BODY-007` 的 Body 载体分开处理。
 - **状态**：**已观察**；J 的 6/6 Header 缺席事实成立，但完整 M 未闭合。
 
-#### SPEC-HDR-012 `x-client-request-id` 样本内无碰撞
+### SPEC-HDR-012 `x-client-request-id` 样本内无碰撞
 
 - **范围**：`SCOPE-BASELINE`。
 - **观察**：已盘点请求各携带 UUID 形态的 `x-client-request-id`，样本内无碰撞，位于基线序列
@@ -758,7 +751,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
   不把“永不复用”写成已验证全称。
 - **状态**：**已观察**。
 
-#### SPEC-HDR-013 同一会话复用 `X-Claude-Code-Session-Id`
+### SPEC-HDR-013 同一会话复用 `X-Claude-Code-Session-Id`
 
 - **范围**：`SCOPE-BASELINE`。
 - **规则**：同一已采会话内的多个请求共用一个 `X-Claude-Code-Session-Id`。
@@ -769,7 +762,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：在会话内保持同值；跨会话生成策略仍须与 `CAND-HDR-SESSION-RANDOM` 一起补证。
 - **状态**：**已观察**；只有两组会话内配对，跨会话生成与互异不作正式结论。
 
-#### SPEC-HDR-016 `x-client-app` 的条件存在性
+### SPEC-HDR-016 `x-client-app` 的条件存在性
 
 - **范围**：`SCOPE-PND-NEG2` 与 `SCOPE-PND-HDR016`；受控变量仅比较“未设置”与
   `CLAUDE_AGENT_SDK_CLIENT_APP=probe-app-21220`。空串、纯空白、非 ASCII 与超长值不在范围内。
@@ -784,7 +777,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
   不得把官方或第三方入站携带的同名 Header 直接透传到 OAuth 上游。
 - **状态**：**已验证** ✅；条件存在性闭环，值、UA 和组合顺序分别见 `HDR-021/022/026`。
 
-#### SPEC-HDR-021 `x-client-app` 等于受控 client-app 值
+### SPEC-HDR-021 `x-client-app` 等于受控 client-app 值
 
 - **范围**：`SCOPE-PND-HDR016`；配置值固定为 `probe-app-21220`。组合运行只作交叉观察，不扩张
   本条正式分母。
@@ -796,7 +789,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
   对未覆盖字符集或长度的输入应由画像校验拒绝，不能把本条外推为任意字节透传规则。
 - **状态**：**已验证** ✅；限已声明 ASCII 值，空白、非 ASCII 与超长值仍在候选边界。
 
-#### SPEC-HDR-022 client-app 与 User-Agent 联动
+### SPEC-HDR-022 client-app 与 User-Agent 联动
 
 - **范围**：`SCOPE-PND-NEG2` 与 `SCOPE-PND-HDR016`；入口为 `sdk-cli`。组合运行只作交叉观察。
 - **规则**：client-app 未设置时 UA 为 `claude-cli/2.1.220 (external, sdk-cli)`；值为
@@ -810,7 +803,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
   不能分别读取两个入站值，避免出现 Header 与 UA 后缀不一致。
 - **状态**：**已验证** ✅；只覆盖 `sdk-cli` 与已声明 client-app 值，其他 entrypoint 另建画像。
 
-#### SPEC-HDR-017 `x-claude-remote-container-id` 的条件存在性
+### SPEC-HDR-017 `x-claude-remote-container-id` 的条件存在性
 
 - **范围**：`SCOPE-PND-NEG2` 与 `SCOPE-PND-HDR017`；受控变量仅比较“未设置”与
   `CLAUDE_CODE_CONTAINER_ID=probe-container-21220`。真实远程容器生命周期不在本条范围内。
@@ -825,7 +818,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
   任一入站同名 Header。
 - **状态**：**已验证** ✅；受控环境映射闭环，不声明真实远程容器如何创建、轮换或回收该值。
 
-#### SPEC-HDR-023 remote-container Header 的精确值
+### SPEC-HDR-023 remote-container Header 的精确值
 
 - **范围**：`SCOPE-PND-HDR017`；配置值固定为 `probe-container-21220`。组合运行只作交叉观察。
 - **规则**：`x-claude-remote-container-id` 的解析值逐字符等于受控 container ID，不添加前后缀。
@@ -835,7 +828,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **实现**：从 `Claude220Profile.remote_container_id` 取值；不得从第三方请求 Header 推断或复制。
 - **状态**：**已验证** ✅；只验证该 ASCII 值，真实远程分配规则与异常输入仍属候选。
 
-#### SPEC-HDR-018 `x-claude-remote-session-id` 的条件存在性
+### SPEC-HDR-018 `x-claude-remote-session-id` 的条件存在性
 
 - **范围**：`SCOPE-PND-NEG2` 与 `SCOPE-PND-HDR018`；受控变量仅比较“未设置”与
   `CLAUDE_CODE_REMOTE_SESSION_ID=probe-remote-session-21220`。真实远程会话生命周期不在范围内。
@@ -850,7 +843,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
   任一入站同名 Header。
 - **状态**：**已验证** ✅；受控环境映射闭环，不声明它与 Claude 主 session-id 的同源关系。
 
-#### SPEC-HDR-024 remote-session Header 的精确值
+### SPEC-HDR-024 remote-session Header 的精确值
 
 - **范围**：`SCOPE-PND-HDR018`；配置值固定为 `probe-remote-session-21220`。组合运行只作交叉观察。
 - **规则**：`x-claude-remote-session-id` 的解析值逐字符等于受控 remote session ID，不添加前后缀。
@@ -860,7 +853,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **实现**：从 `Claude220Profile.remote_session_id` 取值；不得从第三方请求 Header 推断或复制。
 - **状态**：**已验证** ✅；只验证该 ASCII 值，真实远程分配规则与异常输入仍属候选。
 
-#### SPEC-HDR-014 子会话请求携带 `x-claude-code-agent-id`
+### SPEC-HDR-014 子会话请求携带 `x-claude-code-agent-id`
 
 - **范围**：`SCOPE-SUBAGENT-L1`。
 - **规则**：由子 agent 发出的请求在基线 22 项之外多带一个 `x-claude-code-agent-id`；无其他
@@ -877,7 +870,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
   不得接受入站 Header 覆盖。
 - **状态**：**已观察**；原复合命题仍未整体闭环。
 
-#### SPEC-HDR-019 `x-claude-code-parent-agent-id` 的层级存在性
+### SPEC-HDR-019 `x-claude-code-parent-agent-id` 的层级存在性
 
 - **范围**：`SCOPE-PND-AGENT6`；内置 `general-purpose` agent 的嵌套深度 0、1、2、3。
 - **规则**：深度 0 和 1 的请求不发送 `x-claude-code-parent-agent-id`；深度 2 和 3 的请求发送
@@ -892,7 +885,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
   agent 请求省略。不得以入站同名 Header 作为层级来源。
 - **状态**：**已验证** ✅；限深度 0—3 与 `general-purpose`，并发、其他 agent 类型及更深层级未外推。
 
-#### SPEC-HDR-025 parent-agent-id 等于直接父级 agent-id
+### SPEC-HDR-025 parent-agent-id 等于直接父级 agent-id
 
 - **范围**：`SCOPE-PND-AGENT6` 中 a2／a3 四轮的深度 2、3 请求；a1 没有适用请求。
 - **规则**：当前请求的 `x-claude-code-parent-agent-id` 逐字符等于**直接父级请求**的
@@ -905,7 +898,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
   不从客户端入站或整条祖先数组拼接。
 - **状态**：**已验证** ✅；只验证直接父级相等关系，不定义 agent-id 的生成算法。
 
-#### SPEC-HDR-026 条件 Header 的组合顺序
+### SPEC-HDR-026 条件 Header 的组合顺序
 
 - **范围**：`SCOPE-PND-COMBO2` 中两轮深度 2 请求；J-raw 解析后的 HTTP/1.1 Header 列表。
   本条只约束七个相关名称的序列投影，不声称它们在完整 Header 列表中相邻。
@@ -923,7 +916,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
   旧的 container-first 顺序。
 - **状态**：**已验证** ✅；状态只覆盖深度 2 的七字段 J-raw 投影，原始 wire 名值分隔和 CRLF 仍需 R。
 
-#### SPEC-HDR-015 子会话共用主会话的 `X-Claude-Code-Session-Id`
+### SPEC-HDR-015 子会话共用主会话的 `X-Claude-Code-Session-Id`
 
 - **范围**：`SCOPE-SUBAGENT-L1`。
 - **观察**：子 agent 请求的 `X-Claude-Code-Session-Id` 与发起它的主会话相同。metadata
@@ -934,9 +927,9 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：子会话不得另生成 session id。
 - **状态**：**已观察**；R 缺完整 M 绑定。
 
-### 2.4.4 Body
+## 2.7 Body
 
-#### SPEC-BODY-001 请求体顶层键集合
+### SPEC-BODY-001 请求体顶层键集合
 
 - **范围**：`SCOPE-BASELINE`。
 - **规则**：请求体顶层键恰为 `context_management`、`max_tokens`、`messages`、`metadata`、
@@ -950,7 +943,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：基线 Sonnet 场景输出这十个顶层键；条件字段出现时走候选分支，不能仍断言“恰为十项”。
 - **状态**：**已观察**；原 ID 合并顶层键集合与序列化顺序，R 又缺完整 M。
 
-#### SPEC-BODY-002 `metadata.user_id` 是内嵌 JSON 字符串
+### SPEC-BODY-002 `metadata.user_id` 是内嵌 JSON 字符串
 
 - **范围**：`SCOPE-BASELINE`。
 - **规则**：基线路径的 `metadata` 只有 `user_id` 一个键，其值不是普通标识符，而是 JSON 字符串，
@@ -972,7 +965,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **状态**：**已观察**；原 ID 合并编码、键集、生命周期及跨层相等；device/account 生命周期和
   `CLAUDE_CODE_EXTRA_METADATA` 合并为候选。
 
-#### SPEC-BODY-007 `system[0].text` 携带 billing attribution
+### SPEC-BODY-007 `system[0].text` 携带 billing attribution
 
 - **范围**：`SCOPE-J6`。
 - **规则**：`system[0].text` 是字符串，且只断言它以字面 `x-anthropic-billing-header:` 开头。
@@ -989,7 +982,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：该有限画像生成这个 Body 文本前缀，同时遵守 `SPEC-HDR-020` 的载体区分。
 - **状态**：**已观察**；J 的 6/6 前缀事实成立，但字段级 A1 数据流与完整 M 均未闭合。
 
-#### SPEC-BODY-008 基线 `model`
+### SPEC-BODY-008 基线 `model`
 
 - **范围**：`SCOPE-J6`。
 - **规则**：已采基线请求的 `model` 恰为字符串 `claude-sonnet-5`；不声称这是 CLI 无参数默认模型。
@@ -1000,7 +993,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：该基线画像发送该精确字符串；模型选择分支必须另建规则。
 - **状态**：**已观察**；两个 complete run 的可见值一致，但缺当前 sink 静态闭环且 argv 未归档。
 
-#### SPEC-BODY-009 基线 `max_tokens`
+### SPEC-BODY-009 基线 `max_tokens`
 
 - **范围**：`SCOPE-J6`。
 - **规则**：`max_tokens` 恰为 JSON 整数 `64000`。
@@ -1010,7 +1003,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：发送数字 `64000`，不得发送字符串。
 - **状态**：**已观察**；两个 complete run 的可见值一致，但缺当前 sink 静态闭环且 argv 未归档。
 
-#### SPEC-BODY-010 基线 `thinking`
+### SPEC-BODY-010 基线 `thinking`
 
 - **范围**：`SCOPE-J6`。
 - **规则**：`thinking` 恰为 `{"type":"adaptive"}`，无其他键。
@@ -1020,7 +1013,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：保持对象结构和值，不得只保证 `type` 键存在。
 - **状态**：**已观察**；两个 complete run 的可见值一致，但缺当前 sink 静态闭环且 argv 未归档。
 
-#### SPEC-BODY-011 基线 `context_management`
+### SPEC-BODY-011 基线 `context_management`
 
 - **范围**：`SCOPE-J6`。
 - **规则**：`context_management` 恰为
@@ -1031,7 +1024,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：保持单项 `edits` 数组、键名和值。
 - **状态**：**已观察**；两个 complete run 的可见值一致，但缺当前 sink 静态闭环且 argv 未归档。
 
-#### SPEC-BODY-012 基线 `output_config`
+### SPEC-BODY-012 基线 `output_config`
 
 - **范围**：`SCOPE-J6`。
 - **规则**：`output_config` 恰为 `{"effort":"high"}`，无其他键。
@@ -1041,7 +1034,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：保持对象结构与字符串值 `high`。
 - **状态**：**已观察**；两个 complete run 的可见值一致，但缺当前 sink 静态闭环且 argv 未归档。
 
-#### SPEC-BODY-013 基线 `stream`
+### SPEC-BODY-013 基线 `stream`
 
 - **范围**：`SCOPE-J6`。
 - **规则**：`stream` 恰为 JSON 布尔值 `true`。
@@ -1051,7 +1044,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：发送布尔值 `true`，不得发送字符串。
 - **状态**：**已观察**；两个 complete run 的可见值一致，但缺当前 sink 静态闭环且 argv 未归档。
 
-#### SPEC-BODY-014 attribution 的 `cc_version`
+### SPEC-BODY-014 attribution 的 `cc_version`
 
 - **范围**：`SCOPE-J6`。
 - **规则**：按 `;` 分段解析 `system[0].text` attribution 后，`cc_version` 标量匹配
@@ -1063,7 +1056,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：版本前缀与目标二进制一致；后缀不得固定为某次样本。
 - **状态**：**已观察**；字段级 A1 数据流与完整 M 未闭合。
 
-#### SPEC-BODY-015 attribution 的 `cc_entrypoint`
+### SPEC-BODY-015 attribution 的 `cc_entrypoint`
 
 - **范围**：`SCOPE-J6`。
 - **规则**：同一分段解析结果中的 `cc_entrypoint` 标量恰为 `sdk-cli`。
@@ -1074,7 +1067,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：只在该有限 `sdk-cli` 画像发送此值。
 - **状态**：**已观察**；字段级 A1 数据流与完整 M 未闭合。
 
-#### SPEC-BODY-016 attribution 的 `cch`
+### SPEC-BODY-016 attribution 的 `cch`
 
 - **范围**：`SCOPE-J6`。
 - **规则**：同一分段解析结果中的 `cch` 标量匹配 `^[A-Za-z0-9]{5}$`。
@@ -1086,7 +1079,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：输出五字符值，不固定某次样本，也不声称已复刻内部 attestation 算法。
 - **状态**：**已观察**；改写数据流与完整 M 未闭合。
 
-#### SPEC-BODY-003 主会话基线 `system` 四段结构
+### SPEC-BODY-003 主会话基线 `system` 四段结构
 
 - **范围**：`SCOPE-BASELINE`。
 - **规则**：主会话基线路径的 `system` 是长度为 4 的数组，四个元素的 `type` 均为 `text`；
@@ -1098,7 +1091,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **状态**：**已观察**；原 ID 合并段数、类型和两个缓存位置，compact、子 agent 与动态
   cache scope 不在本条。
 
-#### SPEC-BODY-004 多轮会话的 `messages` 角色序列
+### SPEC-BODY-004 多轮会话的 `messages` 角色序列
 
 - **范围**：`SCOPE-BASELINE` 的已采两轮 `s2`／`s4` 场景。
 - **观察**：首轮 `messages` 为 `[user, system]` 两项；同一会话的续轮为
@@ -1112,7 +1105,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：实现需保留角色边界；补足两轮独立配对后再把精确五项序列升格。
 - **状态**：**已观察**（限已采两轮）。
 
-#### SPEC-BODY-005 基线无工具时保留 `tools: []`
+### SPEC-BODY-005 基线无工具时保留 `tools: []`
 
 - **范围**：`SCOPE-BASELINE-NO-TOOLS`；只覆盖已采 s1／s2 的无工具记录，不包含启用 Bash 的 s4。
 - **规则**：已采无工具记录中，`tools` 为显式空数组 `[]`，不是省略字段。
@@ -1126,7 +1119,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
   `eager_input_streaming`、`defer_loading`、MCP、ToolSearch 与 server tool 均按候选处理。
 - **状态**：**已观察**；无工具空数组与简单单工具只覆盖上述已采记录。
 
-#### SPEC-BODY-006 子会话请求的 `system` 与 `messages` 形态
+### SPEC-BODY-006 子会话请求的 `system` 与 `messages` 形态
 
 - **范围**：`SCOPE-SUBAGENT-L1`。
 - **规则**：子 agent 的首个请求 `system` 为 **3 段**（主 agent 为 4 段），
@@ -1140,9 +1133,9 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：子会话请求按 3 段 system、单条 user 消息构造，不得套用主会话的 4 段结构。
 - **状态**：**已观察**；R 缺完整 M 绑定。
 
-### 2.4.5 端点
+## 2.8 端点
 
-#### SPEC-EP-001 推理请求 path
+### SPEC-EP-001 推理请求 path
 
 - **范围**：`SCOPE-J6`。
 - **规则**：`request.path` 标量恰为 `/v1/messages?beta=true`。
@@ -1154,7 +1147,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：该有限画像按此路径与查询串发送。
 - **状态**：**已观察**；这是受部分 path 预筛的 6/6 观察，且完整 M 未闭合。
 
-#### SPEC-EP-003 推理请求方法
+### SPEC-EP-003 推理请求方法
 
 - **范围**：`SCOPE-J6`。
 - **规则**：`request.method` 标量恰为 `POST`。
@@ -1164,7 +1157,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：该有限画像使用 `POST`。
 - **状态**：**已观察**；J 事实成立，但完整 M 未闭合。
 
-#### SPEC-EP-004 推理请求 HTTP host
+### SPEC-EP-004 推理请求 HTTP host
 
 - **范围**：`SCOPE-J6`。
 - **规则**：解析后的 `request.host` 标量恰为 `api.anthropic.com`。
@@ -1178,7 +1171,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **状态**：**已观察**；host 值由预筛选决定，另缺完整 M；无 host 预过滤的网络观察只支持
   `SPEC-TLS-003` 的 TLS SNI，不能替代 HTTP authority 命题。
 
-#### SPEC-EP-002 启动时的 `HEAD /api/hello` 连通性探测
+### SPEC-EP-002 启动时的 `HEAD /api/hello` 连通性探测
 
 - **范围**：`SCOPE-BASELINE`。
 - **规则**：在推理请求之前，客户端先向同一 host 发一次 `HEAD /api/hello HTTP/1.1`，
@@ -1194,9 +1187,9 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **Sub2API 实现要求（暂定）**：补齐 R 的完整 manifest，并分别验证请求字节、先后关系和独立连接后再作为硬规则。
 - **状态**：**已观察**；R 缺完整 M 绑定。
 
-### 2.4.6 连接与重试
+## 2.9 连接与重试
 
-#### SPEC-CONN-001 单次 500 重试不递增 `X-Stainless-Retry-Count`
+### SPEC-CONN-001 单次 500 重试不递增 `X-Stainless-Retry-Count`
 
 - **范围**：`SCOPE-FAULT`。
 - **规则**：两轮受控 `status=500,count=1` 中，客户端各重发一次，两个请求的
@@ -1213,7 +1206,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
 - **状态**：**已观察**；两轮单次 500 受控干预均复现，但原 ID 合并重发与 Header 两个结果，
   且缺 P／R／J 的流级关联；429 与断连也只作观察。
 
-#### SPEC-CONN-002 `500` 且无 `Retry-After` 时的指数退避
+### SPEC-CONN-002 `500` 且无 `Retry-After` 时的指数退避
 
 - **范围**：`SCOPE-PND-RETRY6`；受控响应只覆盖连续 `status=500`、count 为 3／5／9，且不含
   `Retry-After`。不覆盖 401／403／408／409／429／529、连接中断、自然故障或有
@@ -1242,7 +1235,7 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
   回落。不得写成固定 35 秒，也不得把同一曲线未经证据套到其他状态码、断连或 `Retry-After` 分支。
 - **状态**：**已验证** ✅；验证的是公式与区间，不证明随机数独立、均匀分布或自然故障等价性。
 
-#### SPEC-CONN-003 九次 `500` 后仍发送第十个请求
+### SPEC-CONN-003 九次 `500` 后仍发送第十个请求
 
 - **范围**：`SCOPE-PND-RETRY6` 中两轮 count=9；响应均无 `Retry-After`，第十个请求返回 200。
 - **规则**：客户端在连续收到 9 个 `500` 后仍发送第 10 个请求；因此本范围只证明重试能力下界为
@@ -1257,12 +1250,12 @@ UA 联动、直接父级关系和组合顺序；`SPEC-CONN-003` 单独记录九�
   “恰好重试 10 次”或“无限重试”写成实现合同。
 - **状态**：**已验证** ✅；仅验证九次失败后的第十次请求和运行报告值，精确终止边界仍属候选。
 
-### 2.4.7 响应兼容（不计客户端 egress）
+## 2.10 响应兼容（不计客户端 egress）
 
 `SPEC-RESP-001/002/003` 只约束 Sub2API 对上游响应的传递方式；**响应兼容不计入 egress**。
 HEAD 响应、非流式 fallback 响应和错误响应也必须留在本域，不能反向证明客户端如何发请求。
 
-#### SPEC-RESP-001 成功响应的流式传输形态
+### SPEC-RESP-001 成功响应的流式传输形态
 
 - **范围**：`SCOPE-RESPONSE`；`stream:true` 成功响应。
 - **规则**：成功响应为 `Content-Type: text/event-stream; charset=utf-8`、
@@ -1276,7 +1269,7 @@ HEAD 响应、非流式 fallback 响应和错误响应也必须留在本域，�
 - **响应兼容要求**：向下游保持 SSE + 分块 + gzip 的等价形态；不得把流式响应缓冲成整体 JSON 再下发。
 - **状态**：**响应兼容**；不计客户端出站规则。
 
-#### SPEC-RESP-002 响应 header 的稳定性分级
+### SPEC-RESP-002 响应 header 的稳定性分级
 
 - **范围**：`SCOPE-RESPONSE`；`stream:true` 的 200 响应。
 - **观察**：成功响应的 header 可按样本中的变化分三类：**逐请求变化**——`Date`、`request-id`、
@@ -1296,7 +1289,7 @@ HEAD 响应、非流式 fallback 响应和错误响应也必须留在本域，�
   不得钉死响应 header 顺序。
 - **状态**：**响应兼容／已观察**；待机器生成完整 header 明细与计数口径。
 
-#### SPEC-RESP-003 响应体为外层 chunked、内层 gzip
+### SPEC-RESP-003 响应体为外层 chunked、内层 gzip
 
 - **范围**：`SCOPE-RESPONSE`；`stream:true` 的 200 响应。
 - **规则**：响应体的封装顺序是**先 gzip 压缩、再分块传输**——wire 上每个 chunk 以十六进制
@@ -1309,9 +1302,9 @@ HEAD 响应、非流式 fallback 响应和错误响应也必须留在本域，�
 - **响应兼容要求**：保持同样的嵌套次序；先分块再压缩会产生不同的 wire 形态。
 - **状态**：**响应兼容／已观察**；R 缺完整 M 绑定。
 
-### 2.4.8 Beta 机制
+## 2.11 Beta 机制
 
-#### SPEC-BETA-001 `ANTHROPIC_BETAS` 的追加位置
+### SPEC-BETA-001 `ANTHROPIC_BETAS` 的追加位置
 
 - **范围**：`SCOPE-BASELINE` 加本条声明的单一环境变量。
 - **规则**：Sonnet 5 下设置单个合法值 `context-1m-2025-08-07` 时，它出现在结果的零基
@@ -1331,7 +1324,7 @@ HEAD 响应、非流式 fallback 响应和错误响应也必须留在本域，�
 - **状态**：**已观察**（Sonnet、单个合法值正例）；原 ID 合并存在、位置、负例与解析算法，
   多值、重复及非法值仍为候选。
 
-## 2.5 候选台账（未闭环）
+## 2.12 候选台账（未闭环）
 
 锚点列为 `CANDIDATE_EVIDENCE.json` 中该候选 Linux 侧 α-归一化摘要的前 12 位；「跨平台」列记录该
 锚点与 Darwin 交叉样本是否一致。窗口 sink 按 1.4.1 的边界解读，不构成数据流证明。
@@ -1376,7 +1369,7 @@ HEAD 响应、非流式 fallback 响应和错误响应也必须留在本域，�
 正文候选表按可执行抓包族合并，原子级完整清单在两份来源覆盖 JSON 中。锚点相同只说明两平台
 出现同一段逻辑，不说明它在默认 OAuth 路径可达。
 
-### 2.5.1 明确版本漂移、冲突与范围外
+### 2.12.1 明确版本漂移、冲突与范围外
 
 | 项目 | 处置 | 理由 |
 |---|---|---|
@@ -1389,7 +1382,7 @@ HEAD 响应、非流式 fallback 响应和错误响应也必须留在本域，�
 | telemetry、GrowthBook、voice、transcript share、MCP proxy、update/plugin download | **外围出站** | 已按类别登记；具体机制与端点尚未全量原子化，不纳入模型数据面发包画像；隐私模式决定可达性 |
 | CA／proxy 配置 | **机制信息** | 影响连接建立，不能推出 2.1.220 ClientHello wire 指纹 |
 
-### 2.5.2 最小补抓顺序
+### 2.12.2 最小补抓顺序
 
 client-app、container、remote-session、深度 1／2／3 agent、组合 Header 顺序，以及 500 的
 count=3／5／9 已由本轮 22 个完整 M 运行补齐，**不再列为待补证**。剩余最小顺序为：
@@ -1406,7 +1399,7 @@ count=3／5／9 已由本轮 22 个完整 M 运行补齐，**不再列为待补�
    OAuth 与辅助端点。
 7. 在真实 TTY 上采集 TUI 与 `cli-bg`；`-p` 会强制 `sdk-cli`，不能用环境变量伪造入口。
 
-## 2.6 36 个历史编号迁移审计
+## 2.13 36 个历史编号迁移审计
 
 下表只回答旧编号如何处置，不表示 Sub2API 实施优先级；当前对齐责任以 2.1、2.2 和机器台账为准。
 `已验证` 仅指“保留命题”中的收窄命题，不继承旧标题或旧正文中的其他全称断言。
@@ -1450,7 +1443,7 @@ count=3／5／9 已由本轮 22 个完整 M 运行补齐，**不再列为待补�
 | `SPEC-RESP-003` | 响应兼容 | 观察到先 gzip、后 chunked | R 缺完整 M，不计客户端 egress |
 | `SPEC-BETA-001` | 已观察 | Sonnet 下单个合法 beta 位于零基索引 7（第 8 项） | 存在、位置、负例与解析算法未拆号 |
 
-## 2.7 HitCC 2.1.197 线索覆盖结论
+## 2.14 HitCC 2.1.197 线索覆盖结论
 
 HitCC 目录固定为 commit `f4556e5b18a65232023998219e53c2598cc17d82`。仓库内有 112 个 Markdown
 （其中 `docs/` 下 110 个），但没有文档反复引用的 pretty bundle，因此它是 A4 线索地图，不是
@@ -1479,7 +1472,7 @@ remote container、remote session、client-app 和 parent-agent 的当前 A1 锚
 分类正确或抽取穷尽。71／18／53 是当前审阅台账口径，不是由文件数单独推出的客观常量；即使调整
 边界文档的分类，当前仍有 4 条显式 `missing` 和大量未抽取文档，故“否”的结论不依赖争议分类。
 
-## 2.8 Claude Code 2.1.88 源码迁移结论
+## 2.15 Claude Code 2.1.88 源码迁移结论
 
 2.1.88 完整取证根共 4756 个文件：`src/` 1902、`node_modules/` 2850、`vendor/` 4，三部分恰好闭合；
 完整根确定性路径＋内容摘要为
@@ -1524,7 +1517,7 @@ quota、voice、WebSocket、SSE、MCP 登录等 11 个漏分样本。因此这�
 种子候选，源码及依赖源码的所有出站机制尚未完整抽取；当前只有上述 4 条旧命题达到正式准入，
 不能把它们外推为“所有源码规则均已证实”。**
 
-## 2.9 机器门禁
+## 2.16 机器门禁
 
 运行：
 
@@ -1556,7 +1549,7 @@ SPEC 引用单向属于当前 verified 集合；正文不得给出与 2.7／2.8 
 “36/36 已验证”“全部 HitCC 已覆盖”或“全部 2.1.88 源码规则已证实”。门禁同时强制记录
 当前 M、A1 数据流、依赖语义抽取和扫描器复算边界；它不把这些未完成项伪装成机器已证明。
 
-## 2.10 正式规则模板
+## 2.17 正式规则模板
 
 ```text
 ### SPEC-<分组>-<编号> <名称>
@@ -1827,7 +1820,7 @@ client factory 与 facade，并用变异测试发现包装旁路；Catalog 项�
 | 重试 | 按 `RetryPolicy` 执行；`SPEC-CONN-002` 的曲线（500 ms 起步、2 倍指数、32 s 基数封顶、最高 25% 抖动）是画像参数而非代码常量 |
 | 隐私模式 | 画像声明本版本证据所属模式；`essential-traffic` 下不得发送该模式门控的请求 |
 | 缓存 | `cache_control` 的位置与 TTL 由 `BodyShape` 决定；客户端显式值优先的产品策略须单独声明并与画像分离 |
-| 流式 | SSE 响应处理属下游兼容（§2.4.7 的 `RESP` 规则），不计入客户端 egress，也不得反向影响请求定型 |
+| 流式 | SSE 响应处理属下游兼容（§2.10 的 `RESP` 规则），不计入客户端 egress，也不得反向影响请求定型 |
 | 辅助请求 | 端点、触发条件与生命周期由画像登记；不得旁路统一执行器 |
 
 ## 3.9 实施状态与迁移路径
@@ -1940,7 +1933,7 @@ accepted_not_activated → canary_passed → active → rollback_verified → re
 | 不可变性 | 清单、attempt、result、seal、画像与历史收据只追加、不可覆盖；身份变化不得借旧证据跨阶段 |
 | 同源性 | 被测源码、候选源码、构建产物、运行镜像、画像与 finalizer 由摘要形成同一条可复算链 |
 | 失败关闭 | 路径、权限、摘要、恢复、安全、身份或规则覆盖无法证明时停止，不以人工推断补足 |
-| 证据保留 | 遵守 §1.2 与 §1.5；R 类只允许等长脱敏，未脱敏材料不得离开采集机，原始 MITM JSONL 属 `raw_private` |
+| 证据保留 | 遵守 §2.1.1 与 §2.1.2；R 类只允许等长脱敏，未脱敏材料不得离开采集机，原始 MITM JSONL 属 `raw_private` |
 | 状态诚实 | 换版不是升格证据等级的时机；「已观察」不得因换版被静默改写为「已验证」（判据见 §4.2.1） |
 
 ### 4.0.4 工具就绪状态与前置阻断
@@ -1951,7 +1944,7 @@ Claude 侧目前只有取证与门禁工具。**任何「未受管实现」项�
 
 | 能力 | Claude 当前状态 | 边界与缺口 |
 |---|---|---|
-| bundle 提取与可达性 | 已实现 | `extract_claude_bundle.py` 确定性解析 Bun SEA；`claude_bundle_reachability.py` 建立 sink 可达窗口，窗口按 §1.4.1 解读，不构成数据流证明 |
+| bundle 提取与可达性 | 已实现 | `extract_claude_bundle.py` 确定性解析 Bun SEA；`claude_bundle_reachability.py` 建立 sink 可达窗口，窗口按 §2.1.4 解读，不构成数据流证明 |
 | 规则与覆盖门禁 | 已实现 | `claude_21220/check_coverage.py` 对账编号、责任集合、HitCC 与 2.1.88 覆盖及运行 manifest；要求 `local-analysis/` 证据树完整存在 |
 | 运行证据分析 | 已实现 | `analyze_claude_21220_pending_evidence.py` 复算 22-run campaign 绑定、正负例与重试曲线 |
 | R 通道采集 | 已实现 | `run_claude_relay_scenario.sh` 与 `upstream_byte_relay.py` 只在两条 TLS 腿之间复制明文字节 |
@@ -2011,14 +2004,14 @@ SHA-256 只能证明文件同一，不能单独证明来源官方；来源清单
 
 1. 从入口追到认证、Client、TLS、传输、Header、Body、端点与跨请求状态；
 2. 判断范围、触发条件、固定／随机／条件属性及可观测边界；
-3. 把成立的目标行为写入第二部分，保持 §2.10 的六字段完整；
+3. 把成立的目标行为写入第二部分，保持 §2.17 的六字段完整；
 4. 使机器台账与第二部分编号一一对应，所有证据可重新定位和解析。
 
 **minify 符号处置**是 Claude 特有的关键约束。目标版本的标识符与基线不可比，`mRl`／`ca`／`V0e`
 一类名称可能整体改名，因此：
 
 - 锚点必须在目标 bundle 中**重新建立**，不得从 2.1.220 的锚点表继承；
-- 锚点文本变化本身既不证明规则变化，也不构成继承旧规则的理由（§1.5）；
+- 锚点文本变化本身既不证明规则变化，也不构成继承旧规则的理由（§2.1.2）；
 - 判据只能是**归一化后的语义结构**——控制流形状、常量、条件与 sink 的关系——并以 Linux 为主、
   Darwin 交叉复核；两平台 α-归一化摘要一致只说明同一段逻辑存在，不说明它在默认 OAuth 路径可达。
 
@@ -2044,11 +2037,11 @@ SHA-256 只能证明文件同一，不能单独证明来源官方；来源清单
 | `regressed_evidence` | **Claude 特有**：基线为「已验证」，目标版本只重新取得「已观察」级证据 |
 
 **「已观察」规则的继承判据是本步最关键的约束。** 基线 53 项对齐责任中有 41 项为「已观察」，
-它们在基线中就未达到 §1.5 准入，因此：
+它们在基线中就未达到 §2.1.2 准入，因此：
 
 - 「已观察」规则**不得**因为「上一版就是这样」而直接标 `inherit`。目标版本必须重新取得至少同
   等级的运行观察，否则只能是 `blocked`；
-- 「已验证」规则要维持 `inherit`，必须在目标版本重新满足 §1.5 的全部七项，包括正负例、单变量
+- 「已验证」规则要维持 `inherit`，必须在目标版本重新满足 §2.1.2 的全部七项，包括正负例、单变量
   对照与独立重复。只复用基线证据的记为 `regressed_evidence`：对齐责任保留，证据等级下调；
 - 任何分类都不得使某编号在文档与机器台账之间出现状态不一致。
 
@@ -2132,7 +2125,7 @@ SHA-256、架构、构建参数、image ID 与 OCI digest。退出条件：暂�
 | 条件环境 Header | client-app、container、remote-session 的单变量正负例与组合顺序 | 已闭环（`HDR-016..018`、`021..026`） |
 | 子 agent 深度链 | parent-agent 的深度 0／1／2／3 与直接父级关系 | 已闭环（`HDR-019`、`025`） |
 | 受控重试 | `500` 且无 `Retry-After` 的退避曲线与第十次请求 | 已闭环（`CONN-002`、`003`）；其余状态码未采 |
-| 多轮／工具／compact | Body 角色序列、tools schema、压缩入口 | **未采**，属 §2.5.2 最小补抓顺序 |
+| 多轮／工具／compact | Body 角色序列、tools schema、压缩入口 | **未采**，属 §2.12.2 最小补抓顺序 |
 | TUI／`cli-bg` | `cli` 入口的 UA 与 `x-app` | **阻断**：需真实 TTY |
 | 端点发现 | 无 host 预过滤的端点集合 | 仅 `essential-traffic` 模式；须同时采 `default` 模式 |
 
@@ -2290,13 +2283,116 @@ candidate 达到 `restored_active`；至此才能声明该 candidate 的生产�
 **当前阻断**：Claude 侧无晋升命令与激活收据生成器，且 Claude 画像尚未进入生产 Catalog
 （须先完成 §3.5 的阶段 E），本节整体不可执行。
 
----
+### 4.6.7 权威源码、正式发版与远端清理
 
-# 第五部分 非版本变更维护（占位，待补）
+生产激活完成后，必须把最终 production tree 同步回本地权威仓库，再提交并正式发版。同步以逐文件
+manifest 与摘要为准，不得凭记忆挑选文件，也不得用 candidate tree、临时构建目录或运行镜像反向
+覆盖本地后续已批准的变更。至少校验：
 
-本部分尚未编写。它应规定不属于换版的维护变更如何处理：Sub2API 上游合并、Claude 兼容代码退休，
-以及「实现变化但批准规则不变」与「规则或产出侧工具身份变化」分别应走新 candidate 还是同版本
-后继 Campaign。
+1. 画像目录（§3.2 的 `catalogdata/claude/profiles/<version>/<digest>.json`）与发布图的 Campaign、
+   acceptance 同晋升收据完全一致，且 Active／Previous 与各画像摘要均可从仓库复算；
+2. 本地最终树与已激活 production tree 的每项差异都有明确分类；属于后继维护变更的差异按第五部分
+   独立验收，未分类差异禁止进入提交；
+3. Git commit／tag、源码树摘要、构建参数与目标架构发布镜像 digest 相互绑定；正式构建不得携带
+   取证专用标签，也不得复用候选镜像；
+4. 用正式发布镜像重新执行独立 canary、生产切换、固定回滚与目标恢复，并生成新的生产激活收据。
+   **发版成功不等于生产已经更新。**
 
-在补齐前，任何此类变更都必须显式说明它是否改变最终 wire，并按 §4.0.2 的单元边界判断是否需要
-新建 Campaign；不得借换版 Campaign 掩盖自身的行为变化。
+GitHub 只保存可公开源码与发布制品，**不能**替代原始抓包、Campaign、acceptance 与四阶段激活事实。
+Claude 的证据在这一点上比 Codex 更受限，以下材料**一律不得进入任何公开仓库**：
+
+| 材料 | 约束来源 | 处置 |
+|---|---|---|
+| 原始 MITM 记录（J） | §2.1.1：属 `raw_private` | 只进受控私有归档 |
+| 未脱敏的应用层字节（R） | §4.0.3：只允许等长脱敏，未脱敏材料不得离开采集机 | 留在采集机，或脱敏后归档 |
+| 原始 pcap（P） | 含 SNI、连接时序与可能的凭据痕迹 | 只进私有归档 |
+| 官方发行物与提取物（A1 bundle） | Anthropic 发行物，非本仓可再分发内容 | 只保留来源清单与摘要，不重新分发 |
+| 账号、token 与 OAuth 凭据 | 全流程 | 任何形式均不得归档进公开位置 |
+
+私有归档必须具有逐文件路径、大小与 SHA-256 清单，并在**另一存储位置**完成解包、摘要复算，以及
+acceptance、promotion 与 activation receipt 的重放。归档还须标注该批证据的**隐私模式**与
+entrypoint（§4.0.2 的冻结身份维度）——脱离模式的端点类证据无法被后续正确解读。只有最终仓库、
+正式发布镜像与私有证据归档三者均可独立恢复，才允许清理采集服务器。
+
+清理前生成机器可读的保留／删除清单，并完成以下检查：
+
+1. 生产主机正在运行正式发布镜像的固定 digest；正式 compose／override 已迁出升级临时目录，
+   固定回滚镜像与配置仍可用；
+2. 采集容器与候选 Sub2API 容器不再被生产、归档或收据重放使用，停止后生产健康、网络与依赖状态不变；
+3. 删除目标只包含已归档的 Campaign、candidate、run、临时源码、构建缓存与候选镜像；**不得**包含
+   生产数据库、Redis、keeper、正式配置、当前镜像、回滚镜像或任何唯一证据副本；
+4. 删除清单先以只读／dry-run 方式解析真实路径、大小与摘要，经人工批准后再按服务器分别执行。
+
+删除前还须确认该批运行的终态秘密扫描回执为 `passed`（§2.3 要求逐运行绑定扫描器摘要与文件清单）；
+扫描未通过或回执缺失的运行不得删除，它是判断证据能否离开采集机的唯一依据。
+
+远端清理的最终授权条件是：本地权威提交与 production tree 的差异闭合、正式发布镜像已完成生产复验、
+私有证据归档可恢复并可重放、删除清单不含生产依赖或唯一副本。任一条件不满足时，只能停止空闲采集
+容器，不得删除升级文件或证据。
+
+**当前阻断**：本节依赖 §4.6.1–§4.6.6 的产物，而 Claude 尚未具备晋升与激活能力；在此之前，
+采集机上的 Campaign、run 与提取物**一律不得删除**——它们目前是 2.1.220 全部证据的唯一副本。
+
+# 第五部分 非版本变更维护
+
+本部分处理不属于 Claude Code 换版的维护变更。上游更新与兼容代码退休必须使用独立变更集，
+不得借版本 Campaign 掩盖自身的行为变化；反过来，换版 Campaign 也不得夹带上游合并或代码清理。
+
+| 变更类型 | 处理路径 | 最低证明 |
+|---|---|---|
+| 上游更新，且规则、画像、wire 与受管工具身份均不变 | §5.1 独立维护变更集 | overlay 台账可复算，Active／Previous final-wire 无差异，完整门禁通过 |
+| Sub2API 实现变化，但批准规则与工具身份不变 | 按 §4.0.2 在原 Campaign 建立新 candidate；若替换生产则回到 §4.6 | 新 candidate 独立封存、比较与验收；生产替换还须形成新激活收据 |
+| 规则、场景、画像、断言或产出侧工具身份变化 | 按 §4.0.2 建立同版本后继 Campaign | 重新批准并重放受影响的证据与门禁 |
+| 兼容代码退休 | §5.2 独立退休变更集 | 消费者闭集、失败关闭、空 wire 允许列表与机器退休收据 |
+
+判断顺序固定为：先问「最终 wire 是否可能改变」，再问「批准规则或工具身份是否改变」。两者都否才是
+本部分的普通维护变更；只要其一为是，就必须回到第四部分的单元边界。
+
+## 5.1 Sub2API 上游更新
+
+Sub2API 上游更新与 Claude Code 换版必须拆成两个变更集，并按以下顺序执行：
+
+1. 冻结 upstream commit、当前发送面与冲突面，以及 Active／Previous、release 与画像摘要；
+2. 合并后重新生成机器 overlay 与 source-to-sink 台账，复核新增／删除差异、高风险合并缝，以及
+   route、persona、SinkID 与后端归属；新增官方出站不得先放行裸 client；
+3. 按上表与 §4.0.2 判断走普通维护变更、新 candidate 还是同版本后继 Campaign；纯业务变化不得
+   改写画像，删除路径转入 §5.2；
+4. 运行全量测试、静态门禁、版本泄漏检查，并以**空允许列表**比较 Active／Previous 的 final-wire；
+   受影响入口必须复验，范围无法可靠收窄时执行完整候选验收，并从最终同源树构建目标平台制品；
+5. 若制品只用于验证，明确记录 `validation_only`／`accepted_not_activated`；若准备替换生产，
+   声明 `production_replacement` 并完整执行 §4.6，禁止复用旧 candidate 的激活收据。
+
+不得手改机器计数，也不得把入站版本或账号 UA 接入 strict wire。
+
+**当前阻断**：Claude 出站面**完全不在** overlay 台账的保护范围内——
+`docs/egress/maintenance/upstream-v0.1.171-egress-merge-ledger.json` 登记的 86 个文件中，
+Claude／Anthropic 相关条目为 **0**。这意味着上游合并可以静默改动
+`official_egress_anthropic.go`、`official_client_profile_registry.go` 与 `pkg/claude/constants.go`
+而不产生任何台账差异，第 2、4 步的机器复核对 Claude 目前是空转。
+
+在 §3.5 的阶段 A（Claude route 纳入 Guard）与阶段 D（版本面收敛进画像）完成前，上游更新对 Claude
+的保护只能靠人工复核：每次合并必须显式列出 §3.5 表中八项差距所涉文件的实际改动，并声明最终 wire
+是否变化。补齐 overlay 覆盖应作为阶段 A 的一部分，而不是等到换版时才补。
+
+## 5.2 兼容代码退休
+
+每次清理按以下顺序执行：
+
+1. 用类型扫描、调用图与 Catalog 证明全部生产消费者，并识别必须保留的产品语义；
+2. 将真实消费者迁移到当前接口，使旧入口明确 fail-close；
+3. 验证 Active／Previous、fallback、辅助端点与负例，并以空 wire 允许列表比较前后；
+4. 删除旧类型、字段、构造接线与仅验证旧实现的测试；删除 Catalog 项前必须生成 RemovalReceipt，
+   同时收紧源码绝迹门禁，禁止通过别名或 wrapper 恢复；
+5. 写入机器退休收据，完成完整门禁后再进行实机部署。
+
+不得删除仍承担平滑升级、回滚、非 `claude-code` persona 或 API Key 产品语义的兼容层。旧入口在当前
+Catalog 下只能失败时，应替换成清晰错误并删除不可达的执行能力，避免未来重新激活未签名路径。
+
+**§3.5 阶段 D 是 Claude 的第一个退休实例**，必须按本节流程执行而不是直接删除：`internal/pkg/claude`
+当前被 **17 个非测试文件**引用，消费者闭集必须先证明再迁移。尤其注意退役范围只限 `claude-code`
+persona 使用的版本面（`CLICurrentVersion`、`DefaultHeaders`、beta 序列常量）；`constants.go` 同时
+服务 API Key mimic 等非对齐路径，那部分具有产品语义，属于第 1 步中「必须保留」的部分。
+
+**当前阻断**：`docs/egress/maintenance/compatibility-code-retirement-closure.json` 不含任何 Claude
+条目。在建立 Claude 退休闭集之前，不得声称 Claude 侧兼容代码已完成清理审计；阶段 D 完成时必须
+同步把闭集扩展到 Claude，使每个候选只能是「已退休」或「因产品语义必须保留」。
