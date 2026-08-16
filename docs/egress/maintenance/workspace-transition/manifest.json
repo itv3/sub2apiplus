@@ -32397,8 +32397,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0755",
-        "size": 381417,
-        "sha256": "0ef674341838d1b4eb464f933bba494d88d65f3ced1e0b80fee25ee283b4aabf"
+        "size": 381790,
+        "sha256": "11b4d8ef561052155b9282069353a45b1d6fd1030fda30e9dda12c8334e64195"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
@@ -33717,8 +33717,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 128940,
-        "sha256": "89e2c46df1285b444d9e49ab77495c1a1ff838dc6154a4ae0b5fa9ae5131221e"
+        "size": 129339,
+        "sha256": "f5889686d7ce9efe53561be4c0a9adccc49ab42c4ed29691ca615cb7303b8631"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",

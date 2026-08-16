@@ -2839,7 +2839,14 @@ def _verify_execution_tree(capture_root: Path | None) -> None:
         return
     managed_root = Path(__file__).resolve().parent
     execution_root = capture_root / "tools" / "official_client_capture"
-    if not execution_root.is_dir() or execution_root.is_symlink():
+    try:
+        execution_root_is_dir = execution_root.is_dir()
+        execution_root_is_symlink = execution_root.is_symlink()
+    except OSError:
+        # CI 等普通用户可能连 capture_root 的父目录都无权遍历；这与目录不存在
+        # 一样表示当前没有可执行副本可供比较。真实采集仍会在解析脚本时失败。
+        return
+    if not execution_root_is_dir or execution_root_is_symlink:
         return
     if execution_root.resolve() == managed_root.resolve():
         return

@@ -3032,6 +3032,16 @@ class ExecutionTreeVerificationTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             codex_upgrade._verify_execution_tree(Path(tmp))
 
+    def test_inaccessible_execution_root_is_skipped(self) -> None:
+        """普通用户无法遍历父目录时，不应让离线计划和 CI 单元测试崩溃。"""
+
+        with mock.patch.object(
+            Path,
+            "is_dir",
+            side_effect=PermissionError(13, "Permission denied"),
+        ):
+            codex_upgrade._verify_execution_tree(Path("/root/oauth-capture"))
+
     def test_execution_root_equal_to_managed_tree_is_allowed(self) -> None:
         """本地直接在仓库内跑时两者同一目录，不应自我否决。"""
 
