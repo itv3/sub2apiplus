@@ -97,7 +97,34 @@
     "probe_env_manifest_boundary": "oauth-claude-newaccount-baseline 的 runtime 未记录 injected_probe_env；oauth-probe-baseline-r2 明确记录为空对象。前者只能结合 clean_environment_keys 证明未保留其他环境键，不能把字段缺失表述成已记录空值。",
     "argv_manifested": false,
     "current_driver_source": "tools/official_client_capture/capturelib/scenarios.py",
-    "current_driver_source_sha256": "ed27c7528b59fddd1981cd482586e35fa3dd3658f7b1ad0af769ea27afbc74df",
+    "current_driver_source_sha256": "a7c4c39e647afe502d553472d2f6528d52670ca9f16a6f337e7a59a8c69738db",
+    "current_driver_source_semantics": "driver 由 Claude 与 Codex 两侧共用，整文件摘要只是当前工具树声明，不是 Claude 证据绑定。证据绑定见 current_driver_claude_closure_sha256；文件级漂移必须逐跳登记在 current_driver_reviewed_drift。",
+    "current_driver_claude_entry": "run_claude_scenario",
+    "current_driver_claude_closure_sha256": "48b140501a6780c1d10727f5a649cdff837b2b0122a8023938d7709a26ac30b5",
+    "current_driver_claude_closure_symbols": 29,
+    "current_driver_claude_closure_algorithm": "从 run_claude_scenario 出发对 driver 做模块内可达闭包（顶层函数、类与模块级常量），按符号名排序拼接源码后取 SHA-256；由 check_coverage.py 的 driver_entry_closure 实算，可离线复现。",
+    "current_driver_evidence_baseline_sha256": "ed27c7528b59fddd1981cd482586e35fa3dd3658f7b1ad0af769ea27afbc74df",
+    "current_driver_evidence_baseline_note": "49717567f42dc9e50f77c0f406928b7e990af300 的 driver，对应 verified_campaign 中 9 个可复算 run；其余 13 个 run 的 driver 从未提交，见 capture_toolchain_consistency。",
+    "current_driver_reviewed_drift": [
+      {
+        "commit": "b65f50eb294ae5e0f98c9ba3e495785b5ba44f5f",
+        "date": "2026-08-08",
+        "from_sha256": "ed27c7528b59fddd1981cd482586e35fa3dd3658f7b1ad0af769ea27afbc74df",
+        "to_sha256": "9442137e5fdf8ade6091c9ec50001b15c4b6e655600401a2e96df29a47bce6d2",
+        "claude_closure_sha256": "48b140501a6780c1d10727f5a649cdff837b2b0122a8023938d7709a26ac30b5",
+        "claude_closure_unchanged": true,
+        "conclusion": "仅新增 UPSTREAM_CAPACITY_MESSAGE/_RETRY_LIMIT/_RETRY_DELAY_SECONDS 三个常量与 _upstream_capacity_error，并在 run_codex_scenario 内部把 _run_owned_cli_command 调用包进容量错误重试循环。_run_owned_cli_command 等 12 个 Claude/Codex 共享符号函数体未动，Claude 闭包 29 个符号字节不变。"
+      },
+      {
+        "commit": "9ffb836ceec8de4d16cbdfe65715cd03780dd58a",
+        "date": "2026-08-09",
+        "from_sha256": "9442137e5fdf8ade6091c9ec50001b15c4b6e655600401a2e96df29a47bce6d2",
+        "to_sha256": "a7c4c39e647afe502d553472d2f6528d52670ca9f16a6f337e7a59a8c69738db",
+        "claude_closure_sha256": "48b140501a6780c1d10727f5a649cdff837b2b0122a8023938d7709a26ac30b5",
+        "claude_closure_unchanged": true,
+        "conclusion": "新增 CODEX_SCENARIO_RETRY_LIMIT/_DELAY_SECONDS 与 _transient_codex_failure，把 run_codex_scenario 拆成有限重跑外壳与 _run_codex_scenario_once；模块头 typing 导入增加 Mapping。改动全部落在 Codex 独有符号，Claude 闭包 29 个符号字节不变。"
+      }
+    ],
     "current_driver_argv_reconstruction": "旧 SCOPE-J6 基线 manifest 未归档 argv；本轮专项完整 M 则逐 case 归档 invocation.json 及 manifest 内 argv/environment 摘要，verified 规则只引用后者。",
     "current_mitm_addon_source": "tools/official_client_capture/addons/mitm_capture.py",
     "current_mitm_addon_source_sha256": "5622963829b5425ae047c2b8d0028c071313231af6346c695542eb6cab9fd556",
@@ -115,6 +142,85 @@
         "runtime_identity"
       ],
       "boundary": "只覆盖已列举的 header 单变量/组合、a1/a2/a3 嵌套和普通 500（无 Retry-After）3/5/9 连续故障场景。",
+      "capture_toolchain_consistency": {
+        "consistent": false,
+        "source": "各 run 的 manifest.json runtime.capture_tools.execution_sources.files，逐 run 可复算。",
+        "finding": "22 个 run 不是同一份产出侧工具树采的：2026-08-01 13:40–14:25 采集期间 driver 换过 3 个版本、MITM addon 换过 2 个版本。common_scope 登记的 (driver ed27c752, addon 56229638) 组合只精确覆盖 14:10 之后的 8 个 run。这不满足 §4.0.2「被校验的工具树必须就是实际执行的工具树」。",
+        "driver_variants": [
+          {
+            "sha256": "48a463ffbf7a53d33a9190c846871710974ccc98431ce639ea04632c4c69ac0f",
+            "size": 44514,
+            "run_count": 12,
+            "git_commit": null,
+            "source_recoverable": false,
+            "window": "2026-08-01T13:40:04Z–13:49:50Z",
+            "runs": [
+              "oauth-pnd-agent-a1-01-20260801",
+              "oauth-pnd-agent-a1-02-20260801",
+              "oauth-pnd-agent-a2-01-20260801",
+              "oauth-pnd-agent-a2-03-20260801",
+              "oauth-pnd-base-neg-01c-20260801",
+              "oauth-pnd-base-neg-02-20260801",
+              "oauth-pnd-hdr016-pos-01-20260801",
+              "oauth-pnd-hdr016-pos-02-20260801",
+              "oauth-pnd-hdr017-pos-01-20260801",
+              "oauth-pnd-hdr017-pos-02-20260801",
+              "oauth-pnd-hdr018-pos-01-20260801",
+              "oauth-pnd-hdr018-pos-02-20260801"
+            ]
+          },
+          {
+            "sha256": "5485198e5833ccef7aa6595dd372d24d36caf6ecc9844d03a01ad7e281dc077e",
+            "size": 44201,
+            "run_count": 1,
+            "git_commit": null,
+            "source_recoverable": false,
+            "window": "2026-08-01T13:57:22Z",
+            "runs": [
+              "oauth-pnd-agent-a3t-02-20260801"
+            ]
+          },
+          {
+            "sha256": "ed27c7528b59fddd1981cd482586e35fa3dd3658f7b1ad0af769ea27afbc74df",
+            "size": 44792,
+            "run_count": 9,
+            "git_commit": "49717567f42dc9e50f77c0f406928b7e990af300",
+            "source_recoverable": true,
+            "claude_closure_sha256": "48b140501a6780c1d10727f5a649cdff837b2b0122a8023938d7709a26ac30b5",
+            "window": "2026-08-01T14:02:29Z–14:25:30Z",
+            "runs": [
+              "oauth-pnd-agent-a3v-01-20260801",
+              "oauth-pnd-hdr-combo-a2-01-20260801",
+              "oauth-pnd-hdr-combo-a2-02-20260801",
+              "oauth-pnd-retry-c3v-01-20260801",
+              "oauth-pnd-retry-c3v-02-20260801",
+              "oauth-pnd-retry-c5v-01-20260801",
+              "oauth-pnd-retry-c5v-02-20260801",
+              "oauth-pnd-retry-c9v-01-20260801",
+              "oauth-pnd-retry-c9v-02-20260801"
+            ]
+          }
+        ],
+        "addon_variants": [
+          {
+            "sha256": "7c2b90c314c65cead0c27b6b9d7f466cbcab3793414f9443c5ccae9db1999cf1",
+            "size": 12748,
+            "run_count": 14,
+            "git_commit": "38a9929eac35a39c86de2f27de8f7a805d7dae52",
+            "source_recoverable": true
+          },
+          {
+            "sha256": "5622963829b5425ae047c2b8d0028c071313231af6346c695542eb6cab9fd556",
+            "size": 13269,
+            "run_count": 8,
+            "git_commit": "49717567f42dc9e50f77c0f406928b7e990af300",
+            "source_recoverable": true
+          }
+        ],
+        "unreproducible_driver_runs": 13,
+        "unreproducible_note": "48a463ff 与 5485198e 两版 driver 从未提交进 git，源码不可得，采集容器（started_at 2026-07-24）亦已不存在。这 13 个 run 的采集逻辑永久不可复算，其证据只能按当时 manifest 自述接受，不得声称已复算绑定。",
+        "disposition": "如实登记现状，暂不改动证据本身；是否重采或降级由后续决定。在此之前不得把 common_scope 的单一 driver/addon 摘要表述成 22 个 run 的统一绑定。"
+      },
       "analyzer_path": "tools/official_client_capture/analyze_claude_21220_pending_evidence.py",
       "analyzer_sha256": "d721c2d02fd0f8f325f65b5f3dacfb30723c34f0c6e137408370fbb1fb33011c",
       "report_path": "local-analysis/captures/claude-code-2.1.220-pending-evidence-20260801/pending-evidence-analysis.json",

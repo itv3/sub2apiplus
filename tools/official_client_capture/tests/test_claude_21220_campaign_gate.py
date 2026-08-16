@@ -88,6 +88,35 @@ class ClaudePendingCampaignGateTests(unittest.TestCase):
                 secret_tool_path.read_bytes()
             ).hexdigest()
             report_catalog, categories = _synthetic_catalog()
+            # 合成 campaign 的产出侧工具树保持一致：22 个 run 都用同一份 driver 与 addon。
+            synthetic_driver_sha256 = "5" * 64
+            synthetic_addon_sha256 = "6" * 64
+            for run_id in sorted(categories):
+                run_manifest = capture_root / "runs" / run_id / "manifest.json"
+                run_manifest.parent.mkdir(parents=True, exist_ok=True)
+                run_manifest.write_text(
+                    json.dumps(
+                        {
+                            "runtime": {
+                                "capture_tools": {
+                                    "execution_sources": {
+                                        "files": [
+                                            {
+                                                "path": "capturelib/scenarios.py",
+                                                "sha256": synthetic_driver_sha256,
+                                            },
+                                            {
+                                                "path": "addons/mitm_capture.py",
+                                                "sha256": synthetic_addon_sha256,
+                                            },
+                                        ]
+                                    }
+                                }
+                            }
+                        }
+                    ),
+                    encoding="utf-8",
+                )
             run_bindings = [
                 {
                     "run_id": run_id,
@@ -158,6 +187,24 @@ class ClaudePendingCampaignGateTests(unittest.TestCase):
                             "campaign_binding_sha256"
                         ],
                         "matrix_counts": checker.EXPECTED_PENDING_MATRIX_COUNTS,
+                        "capture_toolchain_consistency": {
+                            "consistent": True,
+                            "driver_variants": [
+                                {
+                                    "sha256": synthetic_driver_sha256,
+                                    "run_count": 22,
+                                    "source_recoverable": True,
+                                }
+                            ],
+                            "addon_variants": [
+                                {
+                                    "sha256": synthetic_addon_sha256,
+                                    "run_count": 22,
+                                    "source_recoverable": True,
+                                }
+                            ],
+                            "unreproducible_driver_runs": 0,
+                        },
                     }
                 },
                 "evidence_catalog": projected,
