@@ -99,6 +99,8 @@ type openAIWSIngressTurnError struct {
 	wroteDownstream bool
 }
 
+const openAIWSUpstreamFailureMessage = "Upstream websocket ended before response.completed"
+
 func (e *openAIWSIngressTurnError) Error() string {
 	if e == nil {
 		return ""
@@ -155,6 +157,35 @@ func openAIWSIngressTurnRetryReason(err error) string {
 		return "unknown"
 	}
 	return turnErr.stage
+}
+
+// shouldEmitOpenAIWSUpstreamFailureEvent 在账号 failover 已不再接管时补充协议内
+// 终止错误。即使此前已有元数据或部分输出，也需要用 error 事件结束客户端状态机；
+// 客户端取消和首输出超时仍沿用原重试策略。
+func shouldEmitOpenAIWSUpstreamFailureEvent(stage string, err error) bool {
+	if err == nil {
+		return false
+	}
+	switch strings.TrimSpace(stage) {
+	case "read_upstream", "write_upstream":
+	default:
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	var failoverErr *UpstreamFailoverError
+	if errors.As(err, &failoverErr) {
+		return false
+	}
+	var firstOutputTimeoutErr *openAIWSPassthroughFirstOutputTimeoutError
+	return !errors.As(err, &firstOutputTimeoutErr)
+}
+
+// buildOpenAIWSUpstreamFailureEvent 在关闭连接前发送一个符合 Responses 流式
+// schema 的终止错误，避免只能看到无原因的 1006 断连。
+func buildOpenAIWSUpstreamFailureEvent() []byte {
+	return []byte(`{"type":"error","sequence_number":0,"error":{"type":"upstream_error","code":"upstream_websocket_error","message":"Upstream websocket ended before response.completed","param":null}}`)
 }
 
 func isOpenAIWSIngressPreviousResponseNotFound(err error) bool {

@@ -1831,6 +1831,18 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 			if unwrapped := errors.Unwrap(relayErr); unwrapped != nil {
 				finalErr = unwrapped
 			}
+			if shouldEmitOpenAIWSUpstreamFailureEvent(
+				openAIWSIngressTurnRetryReason(relayErr),
+				relayErr,
+			) {
+				if writeErr := writeClientMessage(buildOpenAIWSUpstreamFailureEvent()); writeErr == nil {
+					finalErr = NewOpenAIWSClientCloseError(
+						coderws.StatusInternalError,
+						openAIWSUpstreamFailureMessage,
+						finalErr,
+					)
+				}
+			}
 			if hooks != nil && hooks.AfterTurn != nil {
 				hooks.AfterTurn(turn, nil, finalErr)
 			}

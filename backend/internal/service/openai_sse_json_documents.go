@@ -82,25 +82,78 @@ func (s *openAISSEJSONDocumentScanner) Scan() bool {
 		return true
 	}
 	documents, repaired := splitOpenAIConcatenatedJSONDocuments([]byte(data))
-	if !repaired {
-		s.current = line
+	if repaired {
+		expanded := make([]string, 0, len(documents)*3)
+		for i, document := range documents {
+			if i > 0 {
+				var envelope struct {
+					Type string `json:"type"`
+				}
+				_ = json.Unmarshal(document, &envelope)
+				expanded = append(expanded, "event: "+strings.TrimSpace(envelope.Type))
+			}
+			expanded = append(expanded, "data: "+string(document), "")
+		}
+		s.current = expanded[0]
+		s.pending = expanded[1:]
 		return true
 	}
-
-	expanded := make([]string, 0, len(documents)*3)
-	for i, document := range documents {
-		if i > 0 {
-			var envelope struct {
-				Type string `json:"type"`
-			}
-			_ = json.Unmarshal(document, &envelope)
-			expanded = append(expanded, "event: "+strings.TrimSpace(envelope.Type))
-		}
-		expanded = append(expanded, "data: "+string(document), "")
+	if compacted, consumed, prettyRepaired := s.repairPrettyPrintedJSONDataLine(data); prettyRepaired {
+		s.current = compacted
+		return true
+	} else if len(consumed) > 0 {
+		s.pending = append(s.pending, consumed...)
 	}
-	s.current = expanded[0]
-	s.pending = expanded[1:]
+	s.current = line
 	return true
+}
+
+// repairPrettyPrintedJSONDataLine 修复上游把 pretty-printed JSON 错误地拆成
+// “首行 data:、后续裸 JSON 行”的事件。合法 SSE 的多条 data: 行也一并支持；
+// 只有在拼接结果成为完整 JSON 文档后才压成单行，无法确认时原样回放。
+func (s *openAISSEJSONDocumentScanner) repairPrettyPrintedJSONDataLine(firstData string) (string, []string, bool) {
+	trimmed := strings.TrimSpace(firstData)
+	if len(trimmed) == 0 || json.Valid([]byte(trimmed)) || (trimmed[0] != '{' && trimmed[0] != '[') {
+		return "", nil, false
+	}
+
+	var payload bytes.Buffer
+	_, _ = payload.WriteString(firstData)
+	consumed := make([]string, 0, 8)
+	for payload.Len() <= maxOpenAIConcatenatedJSONBytes && s.scanner != nil && s.scanner.Scan() {
+		line := s.scanner.Text()
+		consumed = append(consumed, line)
+		if line == "" || openAISSELineStartsNewField(line) {
+			return "", consumed, false
+		}
+		fragment := line
+		if data, ok := extractOpenAISSEDataLine(line); ok {
+			fragment = data
+		}
+		_ = payload.WriteByte('\n')
+		_, _ = payload.WriteString(fragment)
+		if payload.Len() > maxOpenAIConcatenatedJSONBytes {
+			return "", consumed, false
+		}
+		candidate := bytes.TrimSpace(payload.Bytes())
+		if !json.Valid(candidate) {
+			continue
+		}
+		var compacted bytes.Buffer
+		if err := json.Compact(&compacted, candidate); err != nil {
+			return "", consumed, false
+		}
+		return "data: " + compacted.String(), nil, true
+	}
+	return "", consumed, false
+}
+
+func openAISSELineStartsNewField(line string) bool {
+	trimmed := strings.TrimLeft(line, " \t")
+	return strings.HasPrefix(trimmed, "event:") ||
+		strings.HasPrefix(trimmed, "id:") ||
+		strings.HasPrefix(trimmed, "retry:") ||
+		strings.HasPrefix(trimmed, ":")
 }
 
 func (s *openAISSEJSONDocumentScanner) Text() string {

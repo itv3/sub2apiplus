@@ -241,6 +241,57 @@ func TestSplitOpenAIConcatenatedJSONDocumentsRejectsPayloadOverRepairLimit(t *te
 	require.NoError(t, documentScanner.Err())
 }
 
+func TestOpenAISSEJSONDocumentScannerCompactsPrettyPrintedDataEvent(t *testing.T) {
+	input := strings.Join([]string{
+		"event: error",
+		"data: {",
+		`  "type": "error",`,
+		`  "error": {`,
+		`    "type": "invalid_request_error",`,
+		`    "code": "invalid_parameter",`,
+		`    "message": "prompt_cache_breakpoint is not supported on this model"`,
+		"  }",
+		"}",
+		"",
+		"event: response.failed",
+		`data: {"type":"response.failed","response":{"status":"failed"}}`,
+		"",
+	}, "\n")
+
+	scanner := bufio.NewScanner(strings.NewReader(input))
+	documentScanner := newOpenAISSEJSONDocumentScanner(scanner)
+	lines := make([]string, 0)
+	for documentScanner.Scan() {
+		lines = append(lines, documentScanner.Text())
+	}
+	require.NoError(t, documentScanner.Err())
+	require.Equal(t, []string{
+		"event: error",
+		`data: {"type":"error","error":{"type":"invalid_request_error","code":"invalid_parameter","message":"prompt_cache_breakpoint is not supported on this model"}}`,
+		"",
+		"event: response.failed",
+		`data: {"type":"response.failed","response":{"status":"failed"}}`,
+	}, lines)
+}
+
+func TestOpenAISSEJSONDocumentScannerPreservesIncompletePrettyPrintedEvent(t *testing.T) {
+	input := strings.Join([]string{
+		"data: {",
+		`  "type": "error"`,
+		"event: response.failed",
+		`data: {"type":"response.failed"}`,
+	}, "\n")
+
+	scanner := bufio.NewScanner(strings.NewReader(input))
+	documentScanner := newOpenAISSEJSONDocumentScanner(scanner)
+	lines := make([]string, 0)
+	for documentScanner.Scan() {
+		lines = append(lines, documentScanner.Text())
+	}
+	require.NoError(t, documentScanner.Err())
+	require.Equal(t, strings.Split(input, "\n"), lines)
+}
+
 func TestOpenAIWSv2StreamingBreaksConnectionWhenTerminalHasTrailingDocument(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	completed := `{"type":"response.completed","response":{"id":"resp_terminal_tail","usage":{"input_tokens":2,"output_tokens":1}}}`

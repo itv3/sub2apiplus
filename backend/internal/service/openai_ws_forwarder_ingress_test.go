@@ -62,6 +62,33 @@ func TestIsOpenAIWSIngressPreviousResponseNotFound(t *testing.T) {
 	))
 }
 
+func TestBuildOpenAIWSUpstreamFailureEvent(t *testing.T) {
+	t.Parallel()
+
+	event := buildOpenAIWSUpstreamFailureEvent()
+	require.True(t, gjson.ValidBytes(event))
+	require.Equal(t, "error", gjson.GetBytes(event, "type").String())
+	require.Equal(t, int64(0), gjson.GetBytes(event, "sequence_number").Int())
+	require.Equal(t, "upstream_error", gjson.GetBytes(event, "error.type").String())
+	require.Equal(t, "upstream_websocket_error", gjson.GetBytes(event, "error.code").String())
+	require.Equal(t, openAIWSUpstreamFailureMessage, gjson.GetBytes(event, "error.message").String())
+}
+
+func TestShouldEmitOpenAIWSUpstreamFailureEvent(t *testing.T) {
+	t.Parallel()
+
+	upstreamErr := errors.New("upstream connection ended")
+	require.True(t, shouldEmitOpenAIWSUpstreamFailureEvent("read_upstream", upstreamErr))
+	require.True(t, shouldEmitOpenAIWSUpstreamFailureEvent("write_upstream", upstreamErr))
+	require.True(t, shouldEmitOpenAIWSUpstreamFailureEvent("read_upstream", context.DeadlineExceeded))
+	require.False(t, shouldEmitOpenAIWSUpstreamFailureEvent("read_client", upstreamErr))
+	require.False(t, shouldEmitOpenAIWSUpstreamFailureEvent("read_upstream", context.Canceled))
+	require.False(t, shouldEmitOpenAIWSUpstreamFailureEvent(
+		"read_upstream",
+		&UpstreamFailoverError{StatusCode: 503},
+	))
+}
+
 func TestOpenAIWSIngressPreviousResponseRecoveryEnabled(t *testing.T) {
 	t.Parallel()
 

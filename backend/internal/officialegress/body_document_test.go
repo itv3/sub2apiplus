@@ -40,6 +40,48 @@ func TestAttemptBodyDocumentExtractsOwnedFieldsWithoutRebuildingSource(t *testin
 	}
 }
 
+func TestAttemptBodyDocumentStripsUnsupportedPromptCacheBreakpoints(t *testing.T) {
+	tests := []struct {
+		name       string
+		endpointID string
+	}{
+		{name: "HTTP", endpointID: "responses_http"},
+		{name: "WebSocket", endpointID: "responses_ws"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			source := []byte(`{"type":"response.create","model":"gpt-5.6-luna","input":[{"role":"developer","content":[{"type":"input_text","text":"system","prompt_cache_breakpoint":{"mode":"explicit"}}]},{"role":"user","content":[{"type":"input_text","text":"hi","prompt_cache_breakpoint":{"mode":"explicit"}}]}],"tools":[]}`)
+			body, _, err := PrepareOfficialCodexAttemptBody(test.endpointID, source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			semantic, ok := body.ReplayableBytes()
+			if !ok {
+				t.Fatal("未生成可重放的 Responses Body")
+			}
+			if bytes.Contains(semantic, []byte(`"prompt_cache_breakpoint"`)) {
+				t.Fatalf("不支持的缓存断点字段仍存在：%s", semantic)
+			}
+			if !bytes.Contains(semantic, []byte(`{"type":"input_text","text":"system"}`)) ||
+				!bytes.Contains(semantic, []byte(`{"type":"input_text","text":"hi"}`)) {
+				t.Fatalf("删除缓存提示时破坏了消息内容：%s", semantic)
+			}
+		})
+	}
+}
+
+func TestAttemptBodyDocumentKeepsPromptCacheBreakpointText(t *testing.T) {
+	source := []byte(`{"model":"gpt-5.6-luna","input":"请解释 \"prompt_cache_breakpoint\" 字段"}`)
+	body, _, err := PrepareOfficialCodexAttemptBody("responses_http", source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	semantic, ok := body.ReplayableBytes()
+	if !ok || !bytes.Equal(semantic, source) {
+		t.Fatalf("普通文本被错误改写：%q", semantic)
+	}
+}
+
 func TestAttemptBodyDocumentKeepsCompactTextField(t *testing.T) {
 	body, _, err := PrepareOfficialCodexAttemptBody(
 		"responses_compact",

@@ -32,6 +32,8 @@ type orderedJSONOverlay struct {
 	omitted bool
 }
 
+const unsupportedPromptCacheBreakpointField = "prompt_cache_breakpoint"
+
 // ignoredJSONValue 让单个 Decoder 完成值语法扫描，但不复制可能很大的嵌套值。
 // 字段 value 最终直接引用不可变 source 中由 InputOffset 确定的区间。
 type ignoredJSONValue struct{}
@@ -299,6 +301,15 @@ func extractCompilerOwnedBodyFields(
 		}
 	}
 	if endpointID == "responses_http" || endpointID == "responses_compact" || endpointID == "responses_ws" {
+		if inputRaw, present := document.value("input"); present {
+			normalizedInput, changed, err := stripUnsupportedPromptCacheBreakpoints(inputRaw)
+			if err != nil {
+				return fmt.Errorf("清理 Responses prompt_cache_breakpoint：%w", err)
+			}
+			if changed {
+				document.set("input", normalizedInput)
+			}
+		}
 		if _, present := document.value("prompt_cache_key"); present {
 			document.omit("prompt_cache_key")
 		}
@@ -326,4 +337,106 @@ func extractCompilerOwnedBodyFields(
 		document.omit("refresh_token")
 	}
 	return nil
+}
+
+// stripUnsupportedPromptCacheBreakpoints 删除 OpenAI SDK 写入 input 内容块的
+// 显式缓存断点提示。ChatGPT/Codex 官方出站目前不接受该字段，但删除它只会关闭
+// 一次缓存提示，不会改变消息正文、工具调用或会话续链语义。
+func stripUnsupportedPromptCacheBreakpoints(input json.RawMessage) (json.RawMessage, bool, error) {
+	trimmed := bytes.TrimSpace(input)
+	if len(trimmed) == 0 || !bytes.Contains(trimmed, []byte(`"`+unsupportedPromptCacheBreakpointField+`"`)) {
+		return input, false, nil
+	}
+	return stripUnsupportedPromptCacheBreakpointValue(trimmed)
+}
+
+func stripUnsupportedPromptCacheBreakpointValue(raw json.RawMessage) (json.RawMessage, bool, error) {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return raw, false, nil
+	}
+
+	switch trimmed[0] {
+	case '{':
+		document, err := newOrderedJSONDocument(trimmed)
+		if err != nil {
+			return nil, false, err
+		}
+		changed := false
+		for _, field := range document.fields {
+			if field.name == unsupportedPromptCacheBreakpointField {
+				document.omit(field.name)
+				changed = true
+				continue
+			}
+			normalized, childChanged, childErr := stripUnsupportedPromptCacheBreakpointValue(field.value)
+			if childErr != nil {
+				return nil, false, childErr
+			}
+			if childChanged {
+				document.set(field.name, normalized)
+				changed = true
+			}
+		}
+		if !changed {
+			return raw, false, nil
+		}
+		return document.encodeSourceOrder(), true, nil
+	case '[':
+		decoder := json.NewDecoder(bytes.NewReader(trimmed))
+		decoder.UseNumber()
+		opening, err := decoder.Token()
+		if err != nil {
+			return nil, false, err
+		}
+		if delimiter, ok := opening.(json.Delim); !ok || delimiter != '[' {
+			return nil, false, errors.New("Responses input 数组起始符非法")
+		}
+		items := make([]json.RawMessage, 0)
+		changed := false
+		for decoder.More() {
+			var item json.RawMessage
+			if err := decoder.Decode(&item); err != nil {
+				return nil, false, err
+			}
+			normalized, childChanged, childErr := stripUnsupportedPromptCacheBreakpointValue(item)
+			if childErr != nil {
+				return nil, false, childErr
+			}
+			if childChanged {
+				item = normalized
+				changed = true
+			}
+			items = append(items, item)
+		}
+		closing, err := decoder.Token()
+		if err != nil {
+			return nil, false, err
+		}
+		if delimiter, ok := closing.(json.Delim); !ok || delimiter != ']' {
+			return nil, false, errors.New("Responses input 数组未正确闭合")
+		}
+		var trailing ignoredJSONValue
+		if err := decoder.Decode(&trailing); err != io.EOF {
+			if err == nil {
+				return nil, false, errors.New("Responses input 数组后存在额外值")
+			}
+			return nil, false, err
+		}
+		if !changed {
+			return raw, false, nil
+		}
+		var encoded bytes.Buffer
+		_ = encoded.WriteByte('[')
+		for i, item := range items {
+			if i > 0 {
+				_ = encoded.WriteByte(',')
+			}
+			_, _ = encoded.Write(bytes.TrimSpace(item))
+		}
+		_ = encoded.WriteByte(']')
+		return encoded.Bytes(), true, nil
+	default:
+		return raw, false, nil
+	}
 }
