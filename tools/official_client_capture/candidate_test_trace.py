@@ -49,7 +49,7 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 #
 # 映射内含 source_snapshot（13 个生产源码文件的摘要），trace 生成时会逐个复算比对。
 # 本次连带更新 `official_egress_codex_0145_profile.go` 那条（4 处引用）：该文件因补
-# `wham_settings_user` 端点定义（§10.2.1 第 4 条）而变更，映射建于补齐之前。
+# `wham_settings_user` 端点定义而变更，映射建于补齐之前。
 #
 # 2026-08-16（R12）：版本泄漏纠正把共享生产代码中的硬编码版本改为画像驱动，
 # `official_egress_openai_http.go` 与 `openai_alpha_search.go` 的源码摘要随之变化。
@@ -82,8 +82,9 @@ FROZEN_MAPPING_SHA256 = (
 # Cookie 线序仍由 frozen-aux 中经过 prime 的 generation/edit 双样本验收。
 # 同日主文档 active 规则升级为 0.147；本画像同步重绑 source_spec 章节摘要，并修正
 # EP-019 的人类可读描述为三个 GET。机器断言与验收契约载荷不变。
+# 2026-08-16 主手册吸收历史升级文档后再次重绑第二部分摘要；规则与判据载荷不变。
 FROZEN_PROFILE_SHA256 = (
-    "0ccbd50e37569fdf18ca2b4d2faf1b2a10105a33435f05b0e3ea68924945e162"
+    "0849475b208ab37b0ece02f1053e98035f42a0de09c88c5ec635f128b5c8363a"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

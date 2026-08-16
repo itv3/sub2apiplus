@@ -59,7 +59,7 @@ func officialCodexNormalizeDerivedToolPresentation(
 	}
 	tools, ok := rawTools.([]any)
 	if !ok {
-		return false, errors.New("Codex 0.145.0 Responses tools 必须是数组")
+		return false, errors.New("Codex Responses tools 必须是数组")
 	}
 
 	for index, rawTool := range tools {
@@ -69,7 +69,7 @@ func officialCodexNormalizeDerivedToolPresentation(
 		}
 		if !contract.HostedImageGenerationAllowed {
 			return false, fmt.Errorf(
-				"Codex 0.145.0 tools[%d] 不支持 hosted %s；必须由客户端提供完整 %s/%s 工具定义",
+				"Codex tools[%d] 不支持 hosted %s；必须由客户端提供完整 %s/%s 工具定义",
 				index,
 				contract.HostedImageGenerationType,
 				contract.NamespaceName,
@@ -99,7 +99,7 @@ func officialCodexValidateToolPresentation(
 	}
 	payload, err := decodeOfficialJSONObjectUseNumber(body)
 	if err != nil {
-		return fmt.Errorf("解析 Codex 0.145.0 工具呈现 body：%w", err)
+		return fmt.Errorf("解析 Codex 工具呈现 body：%w", err)
 	}
 	if err := officialCodexValidateToolList(contract, payload["tools"], !responsesLite, "tools"); err != nil {
 		return err
@@ -145,7 +145,7 @@ func officialCodexValidateToolList(
 	}
 	tools, ok := rawTools.([]any)
 	if !ok {
-		return fmt.Errorf("Codex 0.145.0 %s 必须是数组", location)
+		return fmt.Errorf("Codex %s 必须是数组", location)
 	}
 	for index, rawTool := range tools {
 		tool, object := rawTool.(map[string]any)
@@ -154,16 +154,16 @@ func officialCodexValidateToolList(
 		}
 		toolType := officialCodexMapString(tool, "type")
 		if toolType == contract.HostedImageGenerationType && !contract.HostedImageGenerationAllowed {
-			return fmt.Errorf("Codex 0.145.0 %s[%d] 禁止 hosted %s 工具", location, index, toolType)
+			return fmt.Errorf("Codex %s[%d] 禁止 hosted %s 工具", location, index, toolType)
 		}
 		if toolType != contract.NamespaceType || officialCodexMapString(tool, "name") != contract.NamespaceName {
 			continue
 		}
 		if !allowImageNamespace {
-			return fmt.Errorf("Codex 0.145.0 %s[%d] 的 image_gen namespace 位于错误载体", location, index)
+			return fmt.Errorf("Codex %s[%d] 的 image_gen namespace 位于错误载体", location, index)
 		}
 		if err := officialCodexValidateImageNamespaceDefinition(contract, tool); err != nil {
-			return fmt.Errorf("Codex 0.145.0 %s[%d] 的 image_gen 定义无效：%w", location, index, err)
+			return fmt.Errorf("Codex %s[%d] 的 image_gen 定义无效：%w", location, index, err)
 		}
 	}
 	return nil
@@ -402,7 +402,7 @@ func officialCodexCompileH1Rules(
 	transport officialCodexTransportProfile,
 ) ([]tlsfingerprint.H1HeaderOrderRule, error) {
 	if versionProfile == nil {
-		return nil, errors.New("Codex 0.145.0 H1 规则缺少版本画像")
+		return nil, errors.New("Codex H1 规则缺少版本画像")
 	}
 	rules := make([]tlsfingerprint.H1HeaderOrderRule, 0, len(versionProfile.Endpoints))
 	for _, endpoint := range versionProfile.Endpoints {
@@ -704,7 +704,7 @@ func officialCodexHostMatches(pattern, host string) bool {
 // 返回画像槽位顺序。常量由画像覆盖写入；动态必需值缺失、画像外字段、多值字段
 // 都会失败。conditions 只表达运行态开关，不能改变槽位或线序。
 //
-// AlternateGroup 同时命中时选择画像顺序中靠后的项。0.145.0 compact 用这一规则
+// AlternateGroup 同时命中时选择画像顺序中靠后的项。compact 画像用这一规则
 // 表达“已有 turn-state 时第三槽使用 turn-state，否则使用 beta features”。
 func officialCodexApplyHeaderContract(
 	version string,

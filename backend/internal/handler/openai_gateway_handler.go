@@ -777,7 +777,7 @@ func isOpenAIRemoteCompactionV2Request(c *gin.Context, body []byte, profileMode 
 	if c == nil || c.Request == nil || !service.HasCompactionTriggerInInput(body) {
 		return false
 	}
-	// 0.145.0 的 remote_compaction_v2 是版本默认值，不以入站 header 是否出现
+	// 当前 Release 的 remote_compaction_v2 是版本默认值，不以入站 header 是否出现
 	// 作为开关。第三方请求已经携带 trigger 时保持普通 /responses；只有调用者
 	// 明确请求 /responses/compact 才进入 legacy 分支。
 	return service.OfficialCodexRemoteCompactionV2Default(profileMode)
@@ -785,7 +785,7 @@ func isOpenAIRemoteCompactionV2Request(c *gin.Context, body []byte, profileMode 
 
 // normalizeOpenAIResponsesCompactRequest keeps Codex remote compaction v2 on
 // its native /responses wire。legacy 不再由“缺少 beta header”猜测，只接受显式
-// /responses/compact；这使第三方转 Codex OAuth 时也继承 0.145.0 的默认 V2 语义。
+// /responses/compact；这使第三方转 Codex OAuth 时也继承当前 Release 的默认 V2 语义。
 // 返回归一化后的 body；ok=false 表示错误响应已写出，调用方应直接 return。
 func (h *OpenAIGatewayHandler) normalizeOpenAIResponsesCompactRequest(
 	c *gin.Context,

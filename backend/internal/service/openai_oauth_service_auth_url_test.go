@@ -16,14 +16,6 @@ func (s *openaiOAuthClientAuthURLStub) ExchangeCode(ctx context.Context, code, c
 	return nil, errors.New("not implemented")
 }
 
-func (s *openaiOAuthClientAuthURLStub) RefreshToken(ctx context.Context, refreshToken, proxyURL string) (*openai.TokenResponse, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (s *openaiOAuthClientAuthURLStub) RefreshTokenWithClientID(ctx context.Context, refreshToken, proxyURL string, clientID string) (*openai.TokenResponse, error) {
-	return nil, errors.New("not implemented")
-}
-
 func TestOpenAIOAuthService_GenerateAuthURL_OpenAIKeepsCodexFlow(t *testing.T) {
 	svc := NewOpenAIOAuthService(nil, &openaiOAuthClientAuthURLStub{})
 	defer svc.Stop()

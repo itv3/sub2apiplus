@@ -2,7 +2,7 @@ package service
 
 import "strings"
 
-// openAIWHAMPlanType 是 Codex CLI 0.145 OpenAPI 暴露的完整计划类型闭集。
+// openAIWHAMPlanType 是当前 Codex CLI OpenAPI 暴露的完整计划类型闭集。
 // 新增官方枚举时必须先扩展本目录和穷举测试，禁止把已知值折叠成泛化 unknown。
 type openAIWHAMPlanType string
 

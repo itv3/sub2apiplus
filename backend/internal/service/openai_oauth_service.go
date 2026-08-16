@@ -305,19 +305,26 @@ func (s *OpenAIOAuthService) refreshTokenWithClientID(
 	clientID string,
 	enrichment openAITokenEnrichmentInput,
 ) (*OpenAITokenInfo, error) {
-	var tokenResp *openai.TokenResponse
-	var err error
-	if decoder, ok := s.oauthClient.(OpenAIOAuthRefreshResponseDecoder); ok &&
-		s.officialEgress != nil && s.officialEgress.CodexExecutor != nil {
-		response, transportErr := s.executeOAuthRefresh(
-			ctx, refreshToken, clientID, proxyURL, enrichment.LocalAccountID,
+	decoder, ok := s.oauthClient.(OpenAIOAuthRefreshResponseDecoder)
+	if !ok {
+		return nil, infraerrors.New(
+			http.StatusBadGateway,
+			"OPENAI_OAUTH_REFRESH_DECODER_MISSING",
+			"OpenAI OAuth refresh 缺少受管响应解码端口",
 		)
-		tokenResp, err = decoder.DecodeRefreshResponse(ctx, response, transportErr, proxyURL)
-	} else {
-		// 单元测试桩仍可实现旧窄接口；生产 repository 必须实现响应解码端口，
-		// 且由进程级 Executor 完成 refresh 发送。
-		tokenResp, err = s.oauthClient.RefreshTokenWithClientID(ctx, refreshToken, proxyURL, clientID)
 	}
+	if s.officialEgress == nil || s.officialEgress.BundleResolver == nil ||
+		s.officialEgress.CodexExecutor == nil {
+		return nil, infraerrors.New(
+			http.StatusBadGateway,
+			"OPENAI_OAUTH_RELEASE_RUNTIME_MISSING",
+			"OpenAI OAuth refresh 缺少正式 Executor runtime",
+		)
+	}
+	response, transportErr := s.executeOAuthRefresh(
+		ctx, refreshToken, clientID, proxyURL, enrichment.LocalAccountID,
+	)
+	tokenResp, err := decoder.DecodeRefreshResponse(ctx, response, transportErr, proxyURL)
 	if err != nil {
 		return nil, err
 	}

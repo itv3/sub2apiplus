@@ -1,6 +1,6 @@
 """ACC-07 编目器必须确定性、不读文件内容、覆盖不全即失败关闭。
 
-capture manifest 此前一直由执行者手写，是 §10.8.3 记录的标签语义错位与覆盖不全的
+capture manifest 此前一直由执行者手写，是标签语义错位与覆盖不全的
 根因。编目器把它变成从冻结声明的确定性推导，因此负例必须覆盖：声明缺 job、glob 落空、
 标签非法、派生契约不闭合、目标冲突。
 """
@@ -356,7 +356,7 @@ class RepositoryDeclarationTest(unittest.TestCase):
         来排除 mitm／ingress 这类由代理重构的观测（protocol 报 HTTP/2.0、host 落在
         ``:authority``）。因此 relay 与 probe 面绝不能标 ``ca_mode``——k56 的候选侧
         曾给所有 relay 规则统一标 ``ca_mode: custom``，结果 35 条 selector 一条都
-        选不中，且不报错（§10.9.3）。这条测试把该语义钉死在两类面上。
+        选不中，且不报错。这条测试把该语义钉死在两类面上。
         """
 
         # 重构面由证据的产出路径决定，不由标签自述——mitm/ 与 ingress/ 下的记录

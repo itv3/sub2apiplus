@@ -187,7 +187,7 @@ func BindOfficialCodexResponsesWebSocketRuntime(
 	modes ...string,
 ) (context.Context, error) {
 	if account == nil || !account.IsOpenAIOAuth() {
-		return nil, fmt.Errorf("Codex 0.145.0 Responses WebSocket 仅允许 OpenAI OAuth 账号")
+		return nil, fmt.Errorf("Codex Responses WebSocket 仅允许 OpenAI OAuth 账号")
 	}
 	mode := ""
 	if len(modes) > 0 {
@@ -442,13 +442,13 @@ func officialCodexValidateSubagentRuntime(
 ) error {
 	if headerValue == "" {
 		if memgenValue != "" || parentThreadID != "" {
-			return fmt.Errorf("Codex 0.145.0 条件头缺少 x-openai-subagent")
+			return fmt.Errorf("Codex 条件头缺少 x-openai-subagent")
 		}
 		return nil
 	}
 	memoryGeneration := memgenValue != ""
 	if memoryGeneration && memgenValue != "true" {
-		return fmt.Errorf("Codex 0.145.0 memory generation 只允许 true")
+		return fmt.Errorf("Codex memory generation 只允许 true")
 	}
 	for _, mapping := range profile.Mappings {
 		if mapping.HeaderValue != headerValue || mapping.MemoryGeneration != memoryGeneration {
@@ -458,7 +458,7 @@ func officialCodexValidateSubagentRuntime(
 			continue
 		}
 		if mapping.ParentThreadRequired && parentThreadID == "" {
-			return fmt.Errorf("Codex 0.145.0 subagent %s 缺少 parent thread", mapping.ID)
+			return fmt.Errorf("Codex subagent %s 缺少 parent thread", mapping.ID)
 		}
 		return nil
 	}
@@ -468,7 +468,7 @@ func officialCodexValidateSubagentRuntime(
 		metadataKind != "" {
 		return nil
 	}
-	return fmt.Errorf("Codex 0.145.0 subagent 条件不在版本画像中：header=%q kind=%q source=%q memgen=%t", headerValue, metadataKind, threadSource, memoryGeneration)
+	return fmt.Errorf("Codex subagent 条件不在当前版本画像中：header=%q kind=%q source=%q memgen=%t", headerValue, metadataKind, threadSource, memoryGeneration)
 }
 
 func validateOfficialCodexRuntimeState(state officialCodexRuntimeState) error {
@@ -488,7 +488,7 @@ func validateOfficialCodexRuntimeState(state officialCodexRuntimeState) error {
 		}
 	}
 	if selectedSurface == nil {
-		return fmt.Errorf("Codex 0.145.0 运行态引用未知入口：%q", state.SurfaceID)
+		return fmt.Errorf("Codex 运行态引用未知入口：%q", state.SurfaceID)
 	}
 	if _, err := profile.RenderUserAgentWithTerminal(
 		state.SurfaceID,
@@ -500,37 +500,37 @@ func validateOfficialCodexRuntimeState(state officialCodexRuntimeState) error {
 	switch state.ProcessPhase {
 	case officialCodexProcessPhaseInitialized:
 		if state.Originator != selectedSurface.Originator {
-			return fmt.Errorf("Codex 0.145.0 initialized 阶段 originator 与入口冲突")
+			return fmt.Errorf("Codex initialized 阶段 originator 与入口冲突")
 		}
 	case officialCodexProcessPhaseInitialModels:
 		if !selectedSurface.InitialModelsMayOmit || state.UserAgentSuffixEnabled ||
 			state.Originator != selectedSurface.InitialModelsOriginator {
-			return fmt.Errorf("Codex 0.145.0 initial models 阶段状态无效")
+			return fmt.Errorf("Codex initial models 阶段状态无效")
 		}
 	default:
-		return fmt.Errorf("Codex 0.145.0 运行态引用未知进程阶段：%q", state.ProcessPhase)
+		return fmt.Errorf("Codex 运行态引用未知进程阶段：%q", state.ProcessPhase)
 	}
 	for rawName, rawValue := range state.ConditionalHeaders {
 		name := strings.ToLower(strings.TrimSpace(rawName))
 		value := strings.TrimSpace(rawValue)
 		if _, ok := officialCodexTrustedConditionalHeaders[name]; !ok {
-			return fmt.Errorf("Codex 0.145.0 运行态包含未知条件头：%s", rawName)
+			return fmt.Errorf("Codex 运行态包含未知条件头：%s", rawName)
 		}
 		if value == "" {
-			return fmt.Errorf("Codex 0.145.0 条件头 %s 为空", name)
+			return fmt.Errorf("Codex 条件头 %s 为空", name)
 		}
 		switch name {
 		case "x-openai-internal-codex-residency":
 			if value != "us" {
-				return fmt.Errorf("Codex 0.145.0 residency 只允许 us")
+				return fmt.Errorf("Codex residency 只允许 us")
 			}
 		case "x-openai-memgen-request", "x-responsesapi-include-timing-metrics":
 			if value != "true" {
-				return fmt.Errorf("Codex 0.145.0 条件头 %s 只允许 true", name)
+				return fmt.Errorf("Codex 条件头 %s 只允许 true", name)
 			}
 		case "x-codex-parent-thread-id":
 			if _, parseErr := uuid.Parse(value); parseErr != nil {
-				return fmt.Errorf("Codex 0.145.0 parent thread 必须是 UUID")
+				return fmt.Errorf("Codex parent thread 必须是 UUID")
 			}
 		case "x-codex-beta-features":
 			// 这条消息刻意不带版本字面量。SPEC §3.1 要求稳定执行引擎不散落按版本
@@ -545,10 +545,10 @@ func validateOfficialCodexRuntimeState(state officialCodexRuntimeState) error {
 	}
 	_, hasSubagent := state.ConditionalHeaders["x-openai-subagent"]
 	if _, hasMemgen := state.ConditionalHeaders["x-openai-memgen-request"]; hasMemgen && !hasSubagent {
-		return fmt.Errorf("Codex 0.145.0 memory generation 必须同时声明 subagent")
+		return fmt.Errorf("Codex memory generation 必须同时声明 subagent")
 	}
 	if _, hasParent := state.ConditionalHeaders["x-codex-parent-thread-id"]; hasParent && !hasSubagent {
-		return fmt.Errorf("Codex 0.145.0 parent thread 必须同时声明 subagent")
+		return fmt.Errorf("Codex parent thread 必须同时声明 subagent")
 	}
 	return nil
 }

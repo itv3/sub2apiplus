@@ -732,11 +732,11 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPNormalizesKiloChatCompletions(t *
 	require.Equal(t, sessionID, upstream.lastReq.Header.Get("thread-id"))
 	require.Equal(t, sessionID, upstream.lastReq.Header.Get("x-client-request-id"))
 	require.Equal(t, sessionID+":0", upstream.lastReq.Header.Get("x-codex-window-id"))
-	require.Equal(t, officialOpenAIHTTPUserAgent, upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, activeOpenAICodexUserAgentForTest(), upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, officialOpenAIHTTPOriginator, upstream.lastReq.Header.Get("originator"))
 	require.Equal(t, officialOpenAIHTTPBetaFeatures, upstream.lastReq.Header.Get("x-codex-beta-features"))
 	require.Equal(t, officialOpenAIHTTPResponsesLite, upstream.lastReq.Header.Get(responsesLiteHeader))
-	require.Equal(t, "0.145.0", upstream.lastReq.Header.Get("version"))
+	require.Equal(t, activeOpenAICodexVersionForTest(), upstream.lastReq.Header.Get("version"))
 	require.Equal(t, "zstd", upstream.lastReq.Header.Get("Content-Encoding"))
 	rawCompressedBody, err := io.ReadAll(upstream.lastReq.Body)
 	require.NoError(t, err)
@@ -787,12 +787,12 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPNormalizesKiloMessages(t *testing
 	require.Equal(t, sessionID, gjson.GetBytes(upstream.lastBody, "prompt_cache_key").String())
 	require.Equal(t, sessionID, upstream.lastReq.Header.Get("session-id"))
 	require.Equal(t, sessionID, upstream.lastReq.Header.Get("thread-id"))
-	require.Equal(t, officialOpenAIHTTPUserAgent, upstream.lastReq.Header.Get("User-Agent"))
+	require.Equal(t, activeOpenAICodexUserAgentForTest(), upstream.lastReq.Header.Get("User-Agent"))
 	require.Equal(t, officialOpenAIHTTPOriginator, upstream.lastReq.Header.Get("originator"))
 	require.Empty(t, upstream.lastReq.Header.Get("session_id"))
 	require.Empty(t, upstream.lastReq.Header.Get("conversation_id"))
 	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"))
-	require.Equal(t, codexCLIVersion, upstream.lastReq.Header.Get("version"))
+	require.Equal(t, activeOpenAICodexVersionForTest(), upstream.lastReq.Header.Get("version"))
 }
 
 func TestOpenAIGatewayForwardOfficialEgressHTTPNormalizesKiloResponsesLiteContract(t *testing.T) {

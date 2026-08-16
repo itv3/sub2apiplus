@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://sub2apiplus.local/schemas/codex-egress-rule-assertions-v2.json",
   "title": "Codex 出站逐规则验收结果 v2",
-  "description": "§10.8.10 验收模型的 results 文档：每条规则显式声明 validation_mode。dual_wire 行要求官方／候选双侧命令、机器结果与证据绑定；candidate_profile 行不携带官方侧三件套，改为逐字绑定批准断言画像 SHA-256、classification package digest 与联合 review_sha256。全量废除人工 positive/negative_assertions——accept 从批准画像复算应有 check ID 并离线重放。旧 v1 results 一律拒绝。",
+  "description": "主手册 §4.5.2 验收模型的 results 文档：每条规则显式声明 validation_mode。dual_wire 行要求官方／候选双侧命令、机器结果与证据绑定；candidate_profile 行不携带官方侧三件套，改为逐字绑定批准断言画像 SHA-256、classification package digest 与联合 review_sha256。全量废除人工 positive/negative_assertions——accept 从批准画像复算应有 check ID 并离线重放。旧 v1 results 一律拒绝。",
   "$ref": "#/$defs/resultDocument",
   "$defs": {
     "nonEmptyText": {

@@ -356,7 +356,11 @@ func (r *OfficialEgressTransitionRuntime) ExecuteCodexHTTP(
 			proxyURL: input.ProxyURL, accountID: input.Account.ID, concurrencyLimit: input.ConcurrencyLimit,
 		},
 	)
-	result, err := r.CodexExecutor.Execute(executorContext, officialegress.ExecutorRequest{
+	invocation, err := r.CodexExecutor.BeginInvocation(executorContext, bundle, invocationID)
+	if err != nil {
+		return nil, err
+	}
+	result, err := invocation.ExecuteAttempt(executorContext, officialegress.ExecutorRequest{
 		Bundle: bundle,
 		Plan: officialegress.CodexEgressPlan{
 			SinkID: input.SinkID, Purpose: binding.Purpose(),
@@ -377,7 +381,9 @@ func (r *OfficialEgressTransitionRuntime) ExecuteCodexHTTP(
 			InvocationID:    invocationID,
 			DeclaredPersona: officialegress.PersonaCodexCLI,
 		},
-		ExecutionScopeKey: fmt.Sprintf("account:%d", input.Account.ID),
+		AttemptReason:          officialegress.AttemptReasonInitial,
+		ExpectedAttemptOrdinal: 1,
+		ExecutionScopeKey:      fmt.Sprintf("account:%d", input.Account.ID),
 	})
 	if err != nil {
 		return nil, err

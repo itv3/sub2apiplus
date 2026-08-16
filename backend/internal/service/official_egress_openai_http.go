@@ -99,7 +99,7 @@ type officialOpenAIIngressIdentityValues struct {
 	promptCacheKey string
 }
 
-// validateOfficialOpenAIIngressIdentityKind 按 Codex 0.145.0 的身份来源画像验证
+// validateOfficialOpenAIIngressIdentityKind 按当前 Codex Release 的身份来源画像验证
 // prompt cache 锚点。根线程使用 session UUID；普通子代理与内部记忆合并仍沿用
 // session UUID；guardian 是唯一源码明确覆写为 guardian:<parent_thread_id> 的分支。
 func validateOfficialOpenAIIngressIdentityKind(
@@ -557,7 +557,7 @@ func finalizeOfficialOpenAIHTTPBody(
 		}
 	}
 
-	// Codex 0.145.0 的 Responses Lite Header 与 reasoning.context 是绑定契约：
+	// 当前 Codex Release 的 Responses Lite Header 与 reasoning.context 是绑定契约：
 	// Header=true 时上游强制要求 context=all_turns。第三方入口通常不会提供该
 	// 字段，因此必须在同一个最终修正器中补齐，避免只伪装 Header 却发送非法 Body。
 	if !isCompact && useResponsesLite {
@@ -619,7 +619,7 @@ func finalizeOfficialOpenAIHTTPBody(
 }
 
 // normalizeDerivedOfficialOpenAIHTTPBody 把第三方 Responses 请求归一化为
-// Codex 0.145.0 的固定外层契约。只有 instructions、tools、reasoning.context
+// 当前 Codex Release 的固定外层契约。只有 instructions、tools、reasoning.context
 // 和 parallel_tool_calls 按模型能力分叉，其余固定字段不区分 Lite。
 // 官方 ResponsesApiRequest / ResponseCreateWsRequest 都是固定 Rust 结构体，顶层不会
 // 出现清单外的键。第三方入站的 truncation / top_logprobs / background / max_tool_calls
@@ -875,7 +875,7 @@ func normalizeDerivedOfficialOpenAIHTTPBody(
 			modified = true
 		}
 	}
-	// Codex 0.145.0 的 Responses Lite 请求结构体把 tool_choice 固定为 auto，
+	// 当前 Codex Release 的 Responses Lite 请求结构体把 tool_choice 固定为 auto，
 	// 不读取第三方入口值。若允许 required/none 透传，会形成官方客户端不会发送的
 	// 外层形态，并可能与 additional_tools 归一化冲突。
 	if current, ok := payload["tool_choice"].(string); !ok || current != "auto" {
@@ -930,7 +930,7 @@ func normalizeDerivedOfficialOpenAIReasoning(
 		if !ok || strings.TrimSpace(effort) == "" {
 			return false, errors.New("OpenAI official egress reasoning.effort must be a non-empty string")
 		}
-		// 0.145.0 的 Ultra 只用于本地配置，对 Responses wire 映射为 Max。
+		// 当前 Release 的 Ultra 只用于本地配置，对 Responses wire 映射为 Max。
 		if strings.EqualFold(strings.TrimSpace(effort), "ultra") && effort != "max" {
 			reasoning["effort"] = "max"
 			modified = true
@@ -1030,7 +1030,7 @@ func normalizeDerivedOfficialOpenAIInput(payload map[string]any) (bool, error) {
 }
 
 // moveOfficialOpenAIHTTPToolsToInput 将第三方标准 Responses 顶层工具无损搬到
-// Codex 0.145.0 使用的 input.additional_tools 载体。工具对象本身不改名、不改
+// 当前 Codex Release 使用的 input.additional_tools 载体。工具对象本身不改名、不改
 // schema；已有 additional_tools 会按类型和名称去重合并。
 func moveOfficialOpenAIHTTPToolsToInput(payload map[string]any) (bool, error) {
 	rawTools, exists := payload["tools"]
@@ -1087,7 +1087,7 @@ func moveOfficialOpenAIAdditionalToolsFirst(payload map[string]any) bool {
 }
 
 // moveOfficialOpenAIHTTPInstructionsToInput 将第三方入口的顶层 instructions
-// 无损搬到 developer message。官方 Codex 0.145.0 不发送顶层 instructions，
+// 无损搬到 developer message。当前官方 Codex Release 不发送顶层 instructions，
 // 但不能因此丢弃 Kilo 等客户端提供的系统指令。
 func moveOfficialOpenAIHTTPInstructionsToInput(payload map[string]any, rawInstructions any) (bool, error) {
 	instructions, ok := rawInstructions.(string)
@@ -1274,7 +1274,7 @@ func resolveExplicitOfficialOpenAIHTTPIdentity(
 	return identity, nil
 }
 
-// deriveOfficialOpenAIHTTPIdentity 为普通第三方客户端生成 Codex 0.145.0
+// deriveOfficialOpenAIHTTPIdentity 为普通第三方客户端生成当前 Codex Release
 // 身份。安装 ID 按客户端稳定，会话 ID 按对话锚点稳定，Turn ID 按最后一条
 // 用户消息稳定，因此工具结果续轮会复用同一个 Turn。
 func deriveOfficialOpenAIHTTPIdentity(
@@ -1499,7 +1499,7 @@ func normalizeOfficialCodexConditionalIdentity(
 }
 
 // resolveDerivedOfficialOpenAICompactionMetadata 把第三方请求能表达的压缩语义收敛为
-// Codex 0.145.0 的四种 reason。已有 trigger 不会再次追加；本函数只生成元数据。
+// 当前 Codex Release 的四种 reason。已有 trigger 不会再次追加；本函数只生成元数据。
 // 三种自动 reason 可由入站 x-codex-turn-metadata 原样携带，非法值不会伪造第五种。
 func resolveDerivedOfficialOpenAICompactionMetadata(
 	c *gin.Context,

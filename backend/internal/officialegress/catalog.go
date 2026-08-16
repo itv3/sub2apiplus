@@ -264,23 +264,8 @@ func (c SinkCatalog) Bindings() []SinkBinding {
 	return out
 }
 
-func (c SinkCatalog) BindContext(ctx context.Context, id SinkID) (context.Context, error) {
-	binding, ok := c.Resolve(id)
-	if !ok {
-		return nil, fmt.Errorf("未登记 SinkID: %s", id)
-	}
-	if !binding.runtimeBindable {
-		return nil, fmt.Errorf("SinkID %s 是非运行时证据，禁止作为 binding key", id)
-	}
-	return WithAttemptMetadata(ctx, AttemptMetadataInput{
-		SinkID:          binding.id,
-		Purpose:         binding.purpose,
-		DeclaredPersona: binding.persona,
-	})
-}
-
 // StartAttemptContext 在明确的业务调用边界开始一个新的出站 attempt。
-// 它可以替换父流程留下的业务 binding，但共享 facade 只能使用 BindContext，仍不得覆盖。
+// 它可以替换父流程留下的业务 binding；共享 facade 不得绑定或覆盖业务身份。
 func (c SinkCatalog) StartAttemptContext(ctx context.Context, id SinkID) (context.Context, error) {
 	binding, ok := c.Resolve(id)
 	if !ok {
@@ -299,9 +284,9 @@ func (c SinkCatalog) StartAttemptContext(ctx context.Context, id SinkID) (contex
 	}), nil
 }
 
-// PreserveAttemptContext 用于连接池等延迟发送边界：已有同一 Sink 的 attempt 必须
-// 原样保留 ExecutorID、InvocationID 与 FinalizationToken；只有完全没有 metadata 时
-// 才为 legacy 调用补上最小 binding。不同 Sink 的父 attempt 不能在共享层被覆盖。
+// PreserveAttemptContext 用于连接池等延迟发送边界：只有携带 FinalizationToken 的
+// 同一 Sink Executor attempt 才能继续使用；共享层不得补造最小 binding，也不得
+// 覆盖不同 Sink 的父 attempt。
 func (c SinkCatalog) PreserveAttemptContext(ctx context.Context, id SinkID) (context.Context, error) {
 	binding, ok := c.Resolve(id)
 	if !ok || !binding.runtimeBindable {
@@ -312,11 +297,14 @@ func (c SinkCatalog) PreserveAttemptContext(ctx context.Context, id SinkID) (con
 	}
 	metadata, exists := attemptMetadataFromContext(ctx)
 	if !exists {
-		return c.StartAttemptContext(ctx, id)
+		return nil, fmt.Errorf("SinkID %s 缺少当前 Executor attempt", id)
 	}
 	if metadata.SinkID != binding.id || metadata.Purpose != binding.purpose ||
 		metadata.DeclaredPersona != binding.persona {
 		return nil, fmt.Errorf("已有 attempt 与 SinkID %s 不一致", id)
+	}
+	if metadata.Token == nil {
+		return nil, fmt.Errorf("SinkID %s 缺少当前 Executor attempt token", id)
 	}
 	return ctx, nil
 }
@@ -349,6 +337,10 @@ func LoadEmbeddedSinkCatalog() (SinkCatalog, error) {
 	}
 	var evidenceBySink map[string]bindingcontract.ReleaseBindingDoc
 	inputs, evidenceBySink, err = applyPreBootstrapSupplements(evidence, inputs)
+	if err != nil {
+		return SinkCatalog{}, err
+	}
+	inputs, evidenceBySink, err = applyCatalogRetirements(evidenceBySink, inputs)
 	if err != nil {
 		return SinkCatalog{}, err
 	}
@@ -463,25 +455,6 @@ func DefaultSinkEnforcementIdentity(id SinkID) (string, error) {
 		return "", fmt.Errorf("SinkID %s 不能用于运行时 enforcement identity", id)
 	}
 	return binding.EnforcementIdentityDigest(), nil
-}
-
-// AllowsTokenlessBackgroundPrewarm 只允许 legacy_observe Sink 使用没有当前
-// invocation Token 的旧式后台预热。canary/enforced 连接必须由显式 Acquire
-// 携带当前凭证完成终端握手验证，不能让后台连接绕过抽样边界进入连接池。
-func (c SinkCatalog) AllowsTokenlessBackgroundPrewarm(id SinkID) (bool, error) {
-	binding, ok := c.Resolve(id)
-	if !ok || !binding.RuntimeBindable() {
-		return false, fmt.Errorf("SinkID %s 不能用于后台预热判定", id)
-	}
-	return binding.EnforcementState() == SinkStateLegacyObserve, nil
-}
-
-func DefaultSinkAllowsTokenlessBackgroundPrewarm(id SinkID) (bool, error) {
-	return defaultSinkCatalog.AllowsTokenlessBackgroundPrewarm(id)
-}
-
-func BindDefaultSink(ctx context.Context, id SinkID) (context.Context, error) {
-	return defaultSinkCatalog.BindContext(ctx, id)
 }
 
 // StartDefaultSinkAttempt 只供已登记业务调用点开启新的发送 attempt。

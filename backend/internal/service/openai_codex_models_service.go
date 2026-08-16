@@ -18,7 +18,6 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -662,22 +661,25 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstream(ctx context.Cont
 	} else {
 		// models 是画像声明的无 Cookie 辅助端点。请求只能使用端点画像生成的固定
 		// HTTP 传输与 header 集合，不能因为配置了代理而切换 ClientHello。
-		if s.httpUpstream != nil {
-			var tlsProfileErr error
-			var tlsProfile *tlsfingerprint.Profile
-			tlsProfile, tlsProfileErr = resolveCodexEndpointTLSProfileForMode(
-				request.releaseMode,
-				request.endpointID,
+		if s.httpUpstream == nil {
+			return nil, infraerrors.New(
+				http.StatusInternalServerError,
+				"OPENAI_CODEX_MODELS_UPSTREAM_NOT_CONFIGURED",
+				"Codex models upstream HTTP client is not configured",
 			)
-			if tlsProfileErr != nil {
-				return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_PROFILE_INVALID", "resolve Codex models TLS profile: %v", tlsProfileErr)
-			}
-			resp, err = doOpenAIAPIKeyHTTPTransport(
-				s.httpUpstream, req, request.proxyURL, request.credentialAccount, tlsProfile,
-			)
-		} else {
-			resp, err = doCodexModelsUnwiredTestTransport(req, request.proxyURL)
 		}
+		var tlsProfileErr error
+		var tlsProfile *tlsfingerprint.Profile
+		tlsProfile, tlsProfileErr = resolveCodexEndpointTLSProfileForMode(
+			request.releaseMode,
+			request.endpointID,
+		)
+		if tlsProfileErr != nil {
+			return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_CODEX_MODELS_PROFILE_INVALID", "resolve Codex models TLS profile: %v", tlsProfileErr)
+		}
+		resp, err = doOpenAIAPIKeyHTTPTransport(
+			s.httpUpstream, req, request.proxyURL, request.credentialAccount, tlsProfile,
+		)
 	}
 	// HTTPUpstream 是接口，实现（含测试替身）可能在未出错时返回空响应；
 	// 直接解引用会 panic，因此在这里归一成上游错误。
@@ -758,25 +760,6 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstream(ctx context.Cont
 		}
 	}
 	return manifest, nil
-}
-
-// doCodexModelsUnwiredTestTransport 只服务未注入 HTTPUpstream 的包内测试桩。
-// 生产 wiring 必有 HTTPUpstream，正式 Codex 路径不得进入这里。
-func doCodexModelsUnwiredTestTransport(req *http.Request, proxyURL string) (*http.Response, error) {
-	client, err := httpclient.GetClient(httpclient.Options{
-		ProxyURL:              proxyURL,
-		Timeout:               codexModelsManifestRequestTimeout,
-		ResponseHeaderTimeout: 10 * time.Second,
-	})
-	if err != nil {
-		return nil, infraerrors.Newf(
-			http.StatusInternalServerError,
-			"OPENAI_CODEX_MODELS_PROXY_INVALID",
-			"invalid proxy configuration: %v",
-			err,
-		)
-	}
-	return client.Do(req)
 }
 
 func codexModelsManifestBodyETag(body []byte) string {

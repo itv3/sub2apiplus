@@ -88,11 +88,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 
 	wsDecision := resolveOpenAIWSProtocolForRequest(s.getOpenAIWSProtocolResolver(), ctx, account)
 	if account != nil && account.IsOpenAIOAuth() {
-		// WS ingress 已经证明调用方选择了官方默认传输。内置 OAuth 的 0.145.0
+		// WS ingress 已经证明调用方选择了官方默认传输。内置 OAuth 的当前 Release
 		// 画像固定支持 Responses WS，不能被历史服务/账号开关降成 HTTP。
 		wsDecision = OpenAIWSProtocolDecision{
 			Transport: OpenAIUpstreamTransportResponsesWebsocketV2,
-			Reason:    "codex_0_145_default_ws",
+			Reason:    "codex_profile_default_ws",
 		}
 	}
 	officialEgressEnabled, _, officialEgressConfigErr := resolveOfficialEgressAccountProfile(account)

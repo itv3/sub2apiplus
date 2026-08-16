@@ -3,9 +3,9 @@
   "bootstrap_commit": "38a9929eac35a39c86de2f27de8f7a805d7dae52",
   "bootstrap_tree": "a8c3dee18a01a6138bfcea60860bb5ad11548c3a",
   "inventory_sha256": "46593243b1bd315eafcb54335502a1f46bc2b8bfc0ecc2d3146da4e7087bfaeb",
-  "scanner_algorithm_sha256": "9a66fca547d9eb542d8c54a1d5c572f1aef680d0e877062ae739473476d9f543",
-  "reconstructed_at": "2026-08-07T22:13:19+08:00",
-  "reviewed_by": "codex-cli-0.147-upgrade-p0",
-  "review_ref": "codex-cli-0.147/p0-a-env01/2026-08-07",
-  "rationale": "保持 bootstrap commit、tree 和 inventory 原文不变；复审扫描算法新增 package load 完整性失败关闭，禁止缓存或 pattern 加载错误形成无源码空壳 package 后假绿。"
+  "scanner_algorithm_sha256": "bf0e474d2a3da8329da8303d0715ab32d969d56805a72aa03a519475731b5e0f",
+  "reconstructed_at": "2026-08-16T09:53:50+08:00",
+  "reviewed_by": "codex-cli-client-emulation-maintenance",
+  "review_ref": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md#52-兼容代码退休",
+  "rationale": "保持 bootstrap commit、tree 和 inventory 原文不变；复审扫描算法删除已经由 Executor 接管且源码绝迹的 OAuth refresh 旧 repository 分类，并修正 bootstrap 回放顺序：仅由完全匹配 candidate ID 的追加式 RemovalReceipt 提供历史冻结分类，源码结构仍重新扫描比较，未收据化的新发送点继续失败关闭。"
 }

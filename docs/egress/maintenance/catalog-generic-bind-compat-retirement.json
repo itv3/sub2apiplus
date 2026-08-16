@@ -1,0 +1,73 @@
+{
+  "schema_version": "official-egress.catalog-generic-bind-compat-retirement/v1",
+  "date": "2026-08-16",
+  "base_commit": "e3e34d1a01c06d7484a1b1a2b7f8e0edc776f0a5",
+  "scope": "退休 SinkCatalog 通用 BindContext／BindDefaultSink 兼容入口，收紧业务 attempt 与共享 facade 的身份所有权。",
+  "consumer_closure_before": {
+    "bind_context_production_consumers": 0,
+    "bind_default_sink_production_consumers": 0,
+    "test_only_call_sites": 6
+  },
+  "consumer_closure_after": {
+    "bind_context_call_sites": 0,
+    "bind_default_sink_call_sites": 0
+  },
+  "migrated_test_consumers": "运行时绑定、facade／scope-exclusion 负例和 enforced 无 Token 负例改用 StartAttemptContext／StartDefaultSinkAttempt。",
+  "catalog_item_removals": [],
+  "removal_receipt_required": false,
+  "retired_symbols": [
+    "func (c SinkCatalog) BindContext(",
+    "func BindDefaultSink("
+  ],
+  "retired_behaviors": [
+    "在业务 attempt 边界之外通过通用 Catalog API 写入最小 binding",
+    "通过全局便捷函数写入不带 invocation、ordinal 和 FinalizationToken 的业务身份",
+    "用通用 binding 入口表达共享 facade 身份"
+  ],
+  "retained_product_semantics": [
+    "StartAttemptContext／StartDefaultSinkAttempt 在真实业务边界开启新的 attempt",
+    "PreserveAttemptContext／PreserveDefaultSinkAttempt 仅保留已签发的同一 attempt 身份",
+    "Executor 继续通过 WithAttemptMetadata 写入并校验完整终态身份",
+    "Active、Previous、HTTP、WebSocket、fallback、API Key、第三方客户端和非 Codex persona"
+  ],
+  "source_transitions": [
+    {
+      "path": "backend/internal/officialegress/catalog.go",
+      "from_sha256": "76546d3289a8cc9fc837b6722cfc7bdc4adee2c5cf653a401075c372f84bac01",
+      "to_sha256": "fa7ff398724c7bf875229a1d4d077187a5c9a21a5a9079eee9ba3a33823b1386",
+      "reason": "删除两个无生产消费者的通用 binding 入口，并明确共享 facade 不得绑定或覆盖业务身份。"
+    },
+    {
+      "path": "backend/internal/officialegress/officialegress_test.go",
+      "from_sha256": "fbaec88f03131e2233ff6042874114932fbacf2bb92e2c92f7a72b5c7a850658",
+      "to_sha256": "707870d88e067f80ed154844b5182a0007db47752bc33377a40676d4ea0c8828",
+      "reason": "将 facade、scope-exclusion 和无 Token 负例迁到明确的 attempt 接口。"
+    },
+    {
+      "path": "backend/internal/officialegress/runtime_controls_test.go",
+      "from_sha256": "63ea675b57557a472d7f1fe1873eea04de8d2516d1f50efb9dba8a69d4cde441",
+      "to_sha256": "3a1eb8c0ee73209773d3330967cb76e335977d29b802209245db99abe2b35501",
+      "reason": "运行时控制测试通过 StartAttemptContext 构造真实业务 attempt。"
+    },
+    {
+      "path": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+      "from_sha256": "d52d40885e65eb9f9b059897216b6fe5fcd7c5402062ceafb6d944397f395910",
+      "to_sha256": "82b45ac16832984bc3a4b82b801c7a2e70590cb33ca3089cad312f791898a28f",
+      "reason": "在兼容代码退休规范中明确业务 attempt 与共享 facade 的 binding 边界。"
+    },
+    {
+      "path": "backend/internal/officialegress/websocket_tokenless_retirement_test.go",
+      "from_sha256": "881a4f2353d59266cacd5de308bc1d72ce06680bacd5217eea9d55d20dda20d3",
+      "to_sha256": "7da08cb7032ee300cdc5a12d05a0c086ff9f2761f047a2a11441eed5e28b69c3",
+      "reason": "旧 WS 退休收据保持不可变，并通过本次已冻结 transition 验证 catalog.go 的连续摘要链。"
+    }
+  ],
+  "allowed_wire_deltas": [],
+  "verification": [
+    "两个通用 binding 生产符号、wrapper 和调用点源码绝迹",
+    "Catalog facade／scope-exclusion 与 enforced 无 Token 负例继续失败关闭",
+    "Start、Preserve 和 Executor 终态身份路径保持可达",
+    "Active／Previous final-wire 允许列表为空",
+    "完整 make check-egress-spec 通过"
+  ]
+}

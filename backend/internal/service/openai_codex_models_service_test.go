@@ -177,6 +177,43 @@ func newCodexModelsLocalTestService() *OpenAIGatewayService {
 	return &OpenAIGatewayService{httpUpstream: upstream}
 }
 
+func TestFetchCodexModelsManifestMissingHTTPUpstreamFailsClosedWithoutNetwork(t *testing.T) {
+	var networkRequests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		networkRequests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"models":[]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	originalURL := chatgptCodexModelsURL
+	chatgptCodexModelsURL = server.URL
+	t.Cleanup(func() { chatgptCodexModelsURL = originalURL })
+
+	runtimeUpstream := &codexModelsHTTPUpstreamStub{do: func(
+		_ *http.Request,
+		_ string,
+		_ int64,
+		_ int,
+	) (*http.Response, error) {
+		t.Fatal("缺少 service HTTPUpstream 时不得退回 Runtime transport")
+		return nil, errors.New("不可达")
+	}}
+	runtimeState, err := newOfficialEgressTestRuntime(runtimeUpstream)
+	require.NoError(t, err)
+
+	service := &OpenAIGatewayService{officialEgress: runtimeState}
+	_, err = service.FetchCodexModelsManifest(
+		context.Background(),
+		newCodexModelsTestAccount(),
+		"0.147.0",
+		"",
+	)
+	require.Error(t, err)
+	require.Equal(t, "OPENAI_CODEX_MODELS_UPSTREAM_NOT_CONFIGURED", infraerrors.Reason(err))
+	require.Zero(t, networkRequests.Load(), "缺少 HTTPUpstream 时不得直接联网")
+}
+
 func TestFetchCodexModelsManifestPassthrough(t *testing.T) {
 	manifestBody := `{"models":[{"slug":"gpt-5.5","display_name":"GPT-5.5","use_responses_lite":true}]}`
 	var gotRequest *http.Request
@@ -195,12 +232,12 @@ func TestFetchCodexModelsManifestPassthrough(t *testing.T) {
 	require.Equal(t, `W/"abc123"`, manifest.ETag)
 	require.NotNil(t, gotRequest)
 	require.Equal(t, http.MethodGet, gotRequest.Method)
-	require.Equal(t, "https://chatgpt.com/backend-api/codex/models?client_version=0.145.0", gotRequest.URL.String())
+	require.Equal(t, "https://chatgpt.com/backend-api/codex/models?client_version="+activeOpenAICodexVersionForTest(), gotRequest.URL.String())
 	require.Equal(t, "chatgpt.com", gotRequest.Host)
 	require.Equal(t, "Bearer test-access-token", gotRequest.Header.Get("Authorization"))
 	require.Equal(t, "acc-123", gotRequest.Header.Get("chatgpt-account-id"))
 	require.Equal(t, officialOpenAIHTTPOriginator, gotRequest.Header.Get("Originator"))
-	require.Equal(t, officialCodexVersion0145, gotRequest.Header.Get("Version"))
+	require.Equal(t, activeOpenAICodexVersionForTest(), gotRequest.Header.Get("Version"))
 	require.Equal(t, "*/*", gotRequest.Header.Get("Accept"))
 	require.Empty(t, gotRequest.Header.Get("Cookie"))
 	require.Empty(t, gotRequest.Header.Get("If-None-Match"))
@@ -484,8 +521,8 @@ func TestFetchCodexModelsManifestDefaultClientVersion(t *testing.T) {
 	if _, err := s.FetchCodexModelsManifest(context.Background(), newCodexModelsTestAccount(), "", ""); err != nil {
 		t.Fatalf("FetchCodexModelsManifest returned error: %v", err)
 	}
-	if gotClientVersion != officialCodexVersion0145 {
-		t.Errorf("default client_version: got %q, want %q", gotClientVersion, officialCodexVersion0145)
+	if gotClientVersion != activeOpenAICodexVersionForTest() {
+		t.Errorf("default client_version: got %q, want %q", gotClientVersion, activeOpenAICodexVersionForTest())
 	}
 }
 

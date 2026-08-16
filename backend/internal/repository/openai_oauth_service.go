@@ -61,7 +61,7 @@ func (s *openaiOAuthService) ExchangeCode(ctx context.Context, code, codeVerifie
 		clientID = openai.ClientID
 	}
 
-	// 官方 0.145.0 exchange 使用 raw auth client。这里显式写入抓包确认的
+	// 官方画像的 exchange 使用 raw auth client。这里显式写入抓包确认的
 	// form 字段顺序，并清空 req/v3 默认 User-Agent，避免伪装成 refresh client。
 	formBody := strings.Join([]string{
 		"grant_type=" + url.QueryEscape("authorization_code"),
@@ -94,30 +94,6 @@ func (s *openaiOAuthService) ExchangeCode(ctx context.Context, code, codeVerifie
 	}
 
 	return &tokenResp, nil
-}
-
-func (s *openaiOAuthService) RefreshToken(ctx context.Context, refreshToken, proxyURL string) (*openai.TokenResponse, error) {
-	return s.RefreshTokenWithClientID(ctx, refreshToken, proxyURL, "")
-}
-
-func (s *openaiOAuthService) RefreshTokenWithClientID(ctx context.Context, refreshToken, proxyURL string, clientID string) (*openai.TokenResponse, error) {
-	// 调用方应始终传入正确的 client_id；为兼容旧数据，未指定时默认使用 OpenAI ClientID
-	clientID = strings.TrimSpace(clientID)
-	if clientID == "" {
-		clientID = openai.ClientID
-	}
-	return s.refreshTokenWithClientID(ctx, refreshToken, proxyURL, clientID)
-}
-
-func (s *openaiOAuthService) refreshTokenWithClientID(ctx context.Context, refreshToken, proxyURL, clientID string) (*openai.TokenResponse, error) {
-	if _, err := officialegress.StartDefaultSinkAttempt(ctx, officialegress.SinkCodexOAuthRefresh); err != nil {
-		return nil, err
-	}
-	return nil, infraerrors.New(
-		http.StatusBadGateway,
-		"OPENAI_OAUTH_COMPILED_REQUEST_REQUIRED",
-		"OAuth refresh 必须由 service/orchestrator 提交 CompiledExecution",
-	)
 }
 
 func (s *openaiOAuthService) DecodeRefreshResponse(

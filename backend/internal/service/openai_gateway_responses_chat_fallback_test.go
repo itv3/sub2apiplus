@@ -210,7 +210,7 @@ func TestForwardResponses_MimicAccountIgnoresForceChatFallback(t *testing.T) {
 	require.Equal(t, "http://upstream.example/v1/responses", upstream.lastReq.URL.String())
 	require.Equal(t, officialOpenAIHTTPUserAgent, upstream.lastReq.Header.Get("User-Agent"))
 	require.NotNil(t, upstream.lastTLSProfile)
-	require.Contains(t, upstream.lastTLSProfile.Name, "Codex CLI 0.145.0")
+	require.Contains(t, upstream.lastTLSProfile.Name, "Codex CLI "+activeOpenAICodexVersionForTest())
 	require.True(t, gjson.GetBytes(upstream.lastBody, "input").Exists())
 	require.False(t, gjson.GetBytes(upstream.lastBody, "messages").Exists())
 }

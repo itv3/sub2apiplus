@@ -1,0 +1,84 @@
+{
+  "schema_version": "official-egress-images-dead-code-retirement/v1",
+  "date": "2026-08-16",
+  "scope": "Sub2API Images 无生产调用根的图片指针下载兼容链退休",
+  "historical_source": {
+    "path": "backend/internal/service/openai_images.go",
+    "sha256_before_removal": "43f6e940277a060a743566cef4fb4f6e19d2e9ef78761a2b47dcfd8b0fe73769",
+    "sha256_after_removal": "c83660b1027531cd3b5d42f16cb99ed5a4acc6589af994d6c406c7381d06b203"
+  },
+  "consumer_closure": {
+    "production_root_count": 0,
+    "test_only_root_count": 2,
+    "retired_sink_ids": [
+      "dead.images.download_blob",
+      "dead.images.fetch_url"
+    ],
+    "removed_symbols": [
+      "openAIChatGPTStartURL",
+      "openAIChatGPTFilesURL",
+      "openAIImageBackendUserAgent",
+      "openAIImageMaxDownloadBytes",
+      "openAIImagePointerInfo",
+      "collectOpenAIImagePointers",
+      "openAIImagePointerMatches",
+      "mergeOpenAIImagePointerInfos",
+      "mergeOpenAIImagePointerInfo",
+      "openAIImagePointerInfo.identityKey",
+      "resolveOpenAIImageBytes",
+      "normalizeOpenAIImageBase64",
+      "collectOpenAIImageInlineAssets",
+      "walkOpenAIImageInlineAssets",
+      "isLikelyOpenAIImageDownloadURL",
+      "fetchOpenAIImageDownloadURL",
+      "downloadOpenAIImageBytes",
+      "isOpenAIImageTransientConversationNotFoundError",
+      "cloneHTTPHeader",
+      "headerToMap"
+    ],
+    "removed_tests": [
+      "TestCollectOpenAIImagePointers_RecognizesDirectAssets",
+      "TestResolveOpenAIImageBytes_PrefersInlineBase64"
+    ],
+    "retained_product_semantics": [
+      "firstNonEmptyString 及其 Responses、工具和图像意图消费者",
+      "openAIImageStatusError 与 newOpenAIImageStatusError",
+      "现行 OpenAI Images 请求解析、OAuth/API Key 转发、流式响应和计费语义"
+    ]
+  },
+  "removal_receipt": {
+    "path": "backend/internal/officialegress/catalogdata/maintenance-removal-receipts.json",
+    "sha256": "466d3d75cf21bdcb6ed74e2f376feb72486e3ff829de0c1d046e1e84e484290b",
+    "kind": "dead_code_removed",
+    "receipt_count": 2
+  },
+  "catalog_transition": {
+    "historical_release_binding_count": 34,
+    "current_runtime_catalog_count": 32,
+    "pending_removal_before": 2,
+    "pending_removal_after": 0,
+    "historical_release_binding_preserved": true,
+    "retirement_overlay_required": true
+  },
+  "wire_verification": {
+    "allowed_deltas": [],
+    "result": "no_runtime_wire_change",
+    "reason": "被删链路没有生产调用根且不属于 Runtime Catalog；Active、Previous、HTTP、WebSocket、fallback 和辅助端点仍由既有终态 final-wire 门禁覆盖。"
+  },
+  "scanner_lock_transition": {
+    "prior_lock_sha256": "5d20616d2dada579386c892143d33d7d055f55201086feb74e4b40b351ca9fe6",
+    "current_lock_path": "docs/egress/maintenance/bootstrap-inventory-lock.json",
+    "current_lock_sha256": "2ea1d70f7fb2885bd048d4d81a7c5d7fed8d9f283044d5f70df344cd66fa1d18",
+    "prior_algorithm_sha256": "9a66fca547d9eb542d8c54a1d5c572f1aef680d0e877062ae739473476d9f543",
+    "current_algorithm_sha256": "744b9ff132015a4c5dc13511371e5f77cf32e9891cdb2acbed74cefea0475480",
+    "reason": "删除两条已退休 dead-code 分类规则；bootstrap 回放改由完整追加式收据冻结历史分类，并继续复算调用结构。inventory 原文、commit、tree 和扫描失败关闭规则不变。"
+  },
+  "required_verification": [
+    "Catalog retirement 清单与冻结 ReleaseBinding 精确匹配",
+    "退休符号和 scanner 当前分类绝迹",
+    "egressscan 把两条历史候选识别为受审删除",
+    "OpenAI Images 现行测试通过",
+    "Active/Previous final-wire 空允许列表门禁通过",
+    "make check-egress-spec 通过"
+  ]
+}

@@ -1,0 +1,90 @@
+{
+  "schema_version": 3,
+  "bootstrap_commit": "38a9929eac35a39c86de2f27de8f7a805d7dae52",
+  "receipts": [
+    {
+      "candidate": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.downloadOpenAIImageBytes@backend/internal/service/openai_images.go#reqv3_get#1",
+        "file": "backend/internal/service/openai_images.go",
+        "func": "downloadOpenAIImageBytes",
+        "package": "github.com/Wei-Shaw/sub2api/internal/service",
+        "callee": "(*github.com/imroc/req/v3.Request).Get",
+        "receiver": "*github.com/imroc/req/v3.Request",
+        "sink_kind": "reqv3_get",
+        "protocol": "http",
+        "sink_type": "terminal",
+        "ast_fingerprint": "4456cda5f782",
+        "target_resolution": "dynamic",
+        "build_contexts": [
+          "darwin/arm64",
+          "linux/amd64"
+        ],
+        "resolved_methods": [
+          "GET"
+        ],
+        "official_host": false,
+        "runtime_sink_id": "dead.images.download_blob",
+        "purpose": "dead_code",
+        "persona": "dead-code",
+        "endpoint_evidence": "not_applicable",
+        "routes": null,
+        "is_facade": false,
+        "backend": "-",
+        "target_backend": "-",
+        "enforcement_state": "pending_removal",
+        "owner": "czs",
+        "migration_changeset": "1B",
+        "expiry_condition": "1B 删除该链路",
+        "rationale": "生产无调用者；唯一测试只走 base64 分支，网络分支无覆盖",
+        "line_hint": 1500
+      },
+      "kind": "dead_code_removed",
+      "source_blob_sha256": "43f6e940277a060a743566cef4fb4f6e19d2e9ef78761a2b47dcfd8b0fe73769",
+      "reviewed_by": "codex-cli-client-emulation-maintenance",
+      "review_ref": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md#52-兼容代码退休",
+      "rationale": "调用图证明该下载函数仅由同一条无生产根的图片指针解析链调用；删除后没有运行时替代路径，也不产生 wire 变化。"
+    },
+    {
+      "candidate": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.fetchOpenAIImageDownloadURL@backend/internal/service/openai_images.go#reqv3_get#1",
+        "file": "backend/internal/service/openai_images.go",
+        "func": "fetchOpenAIImageDownloadURL",
+        "package": "github.com/Wei-Shaw/sub2api/internal/service",
+        "callee": "(*github.com/imroc/req/v3.Request).Get",
+        "receiver": "*github.com/imroc/req/v3.Request",
+        "sink_kind": "reqv3_get",
+        "protocol": "http",
+        "sink_type": "terminal",
+        "ast_fingerprint": "3e1defec5ab7",
+        "target_resolution": "constructed",
+        "build_contexts": [
+          "darwin/arm64",
+          "linux/amd64"
+        ],
+        "resolved_methods": [
+          "GET"
+        ],
+        "official_host": false,
+        "runtime_sink_id": "dead.images.fetch_url",
+        "purpose": "dead_code",
+        "persona": "dead-code",
+        "endpoint_evidence": "not_applicable",
+        "routes": null,
+        "is_facade": false,
+        "backend": "-",
+        "target_backend": "-",
+        "enforcement_state": "pending_removal",
+        "owner": "czs",
+        "migration_changeset": "1B",
+        "expiry_condition": "1B 删除该链路",
+        "rationale": "同上；含 attempt<8 重试循环直打 chatgpt.com",
+        "line_hint": 1447
+      },
+      "kind": "dead_code_removed",
+      "source_blob_sha256": "43f6e940277a060a743566cef4fb4f6e19d2e9ef78761a2b47dcfd8b0fe73769",
+      "reviewed_by": "codex-cli-client-emulation-maintenance",
+      "review_ref": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md#52-兼容代码退休",
+      "rationale": "调用图证明该 URL 换取函数仅由无生产根的图片指针解析链调用；删除后没有运行时替代路径，也不产生 wire 变化。"
+    }
+  ]
+}

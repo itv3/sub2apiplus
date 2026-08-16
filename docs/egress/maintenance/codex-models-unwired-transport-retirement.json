@@ -1,0 +1,79 @@
+{
+  "schema_version": "official-egress.codex-models-unwired-transport-retirement/v1",
+  "date": "2026-08-16",
+  "base_commit": "e3e34d1a01c06d7484a1b1a2b7f8e0edc776f0a5",
+  "scope": "退休 Codex Models 在未注入 HTTPUpstream 时直接创建 httpclient 联网的测试兜底，并将缺失依赖改为失败关闭。",
+  "consumer_closure_before": {
+    "production_wiring_consumers": 0,
+    "production_source_call_sites": 1,
+    "direct_test_call_sites": 0,
+    "full_service_test_coverage": "0.0%"
+  },
+  "consumer_closure_after": {
+    "production_source_call_sites": 0,
+    "direct_test_call_sites": 0
+  },
+  "catalog_item_removals": [],
+  "removal_receipt_required": false,
+  "retired_symbols": [
+    "doCodexModelsUnwiredTestTransport"
+  ],
+  "retired_behaviors": [
+    "未注入 HTTPUpstream 时由 Codex Models 自行创建 httpclient",
+    "误接线的 OAuth Models 辅助端点绕过统一 transport 和 Guard 直接联网"
+  ],
+  "replacement_behavior": "缺少 HTTPUpstream 时返回 OPENAI_CODEX_MODELS_UPSTREAM_NOT_CONFIGURED，且不得发出网络请求。",
+  "retained_product_semantics": [
+    "OpenAI OAuth Codex Models 继续通过 official runtime、Executor 和受管 HTTPUpstream 发送",
+    "API Key 自定义上游继续通过 doOpenAIAPIKeyHTTPTransport 发送并保持原有清单转换与缓存语义",
+    "包内本地 HTTP 测试继续显式注入 HTTPUpstream 替身",
+    "Active、Previous、fallback、WebSocket、第三方客户端和非 Codex persona"
+  ],
+  "source_transitions": [
+    {
+      "path": "backend/internal/service/openai_codex_models_service.go",
+      "from_sha256": "433dd2887a6ba7bb16aa2c4193ad78383769d1bea775e50f615c881c954c8198",
+      "to_sha256": "4ed62e7afacf6341d0942f317372c8f7d2b23e426ab1594bded68189ef4b312d",
+      "reason": "删除 unwired 直连函数和唯一调用分支，缺少 HTTPUpstream 时明确失败关闭。"
+    },
+    {
+      "path": "backend/internal/service/openai_codex_models_service_test.go",
+      "from_sha256": "dcbade0edb891f945d0d1848a4eb2d8c3140a9f111f711639385e9e13599354e",
+      "to_sha256": "6ba9672486cd78d97af89d85d9639b2606fda98ccc980a8f45ce5f260c359a16",
+      "reason": "新增缺失 HTTPUpstream 时错误码稳定且网络请求数为零的负例。"
+    },
+    {
+      "path": "backend/cmd/egressscan/classify.go",
+      "from_sha256": "962c55574a319669db36eb6810068802a0271ec0c4bbe696638563e50347fe78",
+      "to_sha256": "fc7b999cb57fa47dca212c4653524b0acd5b6304c912294971948bcc54abca49",
+      "reason": "删除已退休直连函数的当前 infrastructure 允许项和 out-of-scope 分类规则；历史扫描事实继续由冻结 inventory 保存。"
+    },
+    {
+      "path": "docs/egress/maintenance/bootstrap-inventory-lock.json",
+      "from_sha256": "2ea1d70f7fb2885bd048d4d81a7c5d7fed8d9f283044d5f70df344cd66fa1d18",
+      "to_sha256": "593130bca0612eb2584945c577a7d3a014e7cdc42b4ca544b6f8d6ef4a593532",
+      "reason": "保持 bootstrap commit、tree 和 inventory 原文不变，只复审移除当前分类后的扫描算法摘要。"
+    },
+    {
+      "path": "backend/cmd/egressscan/lifecycle_test.go",
+      "from_sha256": "49e815d5a098989d34b1f6151591178a3954c3db7e4801fbf2de80117ba68501",
+      "to_sha256": "526b0cd3099b78b4587c2496b3233c6096617c89cbecd8da33fbc13b42856255",
+      "reason": "冻结本次受审 bootstrap inventory lock 摘要。"
+    }
+  ],
+  "scanner_lock_transition": {
+    "prior_lock_sha256": "2ea1d70f7fb2885bd048d4d81a7c5d7fed8d9f283044d5f70df344cd66fa1d18",
+    "current_lock_sha256": "593130bca0612eb2584945c577a7d3a014e7cdc42b4ca544b6f8d6ef4a593532",
+    "prior_algorithm_sha256": "744b9ff132015a4c5dc13511371e5f77cf32e9891cdb2acbed74cefea0475480",
+    "current_algorithm_sha256": "ef5c6bdf46f8bd6a67376ae6af0b43c8b4231a1e975d8970dd60c2c7603dc5d6"
+  },
+  "allowed_wire_deltas": [],
+  "verification": [
+    "unwired 直连符号、定义和调用点从生产源码绝迹",
+    "缺少 HTTPUpstream 时返回稳定配置错误且测试服务器请求数为零",
+    "OAuth official runtime 与 API Key HTTPUpstream 路径继续可达",
+    "Codex Models 完整定向测试通过",
+    "Active／Previous final-wire 允许列表为空",
+    "完整 make check-egress-spec 通过"
+  ]
+}

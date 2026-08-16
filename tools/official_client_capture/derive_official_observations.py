@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ACC-02b 官方侧观测派生器：把官方原始记录确定性投影为 wire 观测。
 
-§10.8.9 复核实证：25 条 ``dual_wire`` 规则中 21 条绑定的场景要求
+正式验收模型复核表明：25 条 ``dual_wire`` 规则中 21 条绑定的场景要求
 ``process_trace``／``websocket_trace`` kind，而这两种 kind 只接受
 ``observation_json``／``observation_jsonl``；官方侧没有任何正式产出器。本工具
 把 **bundle 内已收口的官方原件**（relay 明文字节流、mitm HTTP jsonl）投影为

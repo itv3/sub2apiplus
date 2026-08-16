@@ -1,0 +1,81 @@
+{
+  "schema_version": "official-egress.websocket-finalizer-compat-retirement/v1",
+  "date": "2026-08-16",
+  "base_commit": "e3e34d1a01c06d7484a1b1a2b7f8e0edc776f0a5",
+  "scope": "退休无生产消费者的 WebSocket 旧 finalizer 包装函数，当前测试与 benchmark 直接验证现行语义帧转换接口。",
+  "consumer_closure_before": {
+    "production_symbol_definitions": 1,
+    "production_call_sites": 0,
+    "direct_unit_test_call_sites": 14,
+    "live_benchmark_call_sites": 2,
+    "frozen_evidence_call_sites": 4
+  },
+  "consumer_closure_after": {
+    "production_symbol_definitions": 0,
+    "production_call_sites": 0,
+    "current_test_old_call_sites": 0,
+    "current_replacement_call_sites": 16,
+    "frozen_evidence_call_sites": 4
+  },
+  "catalog_item_removals": [],
+  "removal_receipt_required": false,
+  "retired_symbols": [
+    "finalizeOpenAIOfficialEgressWSFrame"
+  ],
+  "replacement_symbol": "prepareOpenAIOfficialEgressSemanticWSFrame",
+  "historical_benchmark_evidence": {
+    "immutable": true,
+    "sha256": "66e0775b72be6456d71c5527b21664c1b06b9c743fdfb83515a808812331a846",
+    "frozen_call_sites_each": 2,
+    "live_adapter_call_sites": 2,
+    "paths": [
+      "docs/egress/validation/baseline/benchmark-drivers/profile-pre_test.go",
+      "docs/egress/validation/post/benchmark-drivers/profile-post_test.go"
+    ],
+    "equivalence_rule": "当前 Profile benchmark driver 只允许两处旧 finalizer 调用名替换为现行语义帧转换接口；反向归一化后必须逐字节等于冻结 driver。"
+  },
+  "retained_product_semantics": [
+    "WebSocket response.create 的语义帧转换、历史裁剪、turn-state 和受控重放规则",
+    "Active 与 Previous ReleaseBundle 的画像选择和最终 wire 定型",
+    "HTTP、WebSocket、预热、fallback、辅助端点及负例覆盖",
+    "第三方客户端进入 Compatible 或 Responses 适配后收敛到同一 Codex persona",
+    "API Key 与非 Codex persona 的独立产品语义",
+    "变更集 6 baseline/post benchmark driver、原始结果和 calculation 原文"
+  ],
+  "source_transitions": [
+    {
+      "path": "backend/internal/service/official_egress_openai_ws.go",
+      "from_sha256": "4b47a3156a8689c1639bc66ed3079f5b7a3c831bc3ac2e42a8a3841e80484269",
+      "to_sha256": "95601bf42caf100e2503ff09689cd4eb086e06bab47aa19e5e2b9b56f5ccd158",
+      "reason": "删除零生产调用的旧 finalizer 包装定义。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_ws_test.go",
+      "from_sha256": "83882364e2c8b27fec18faab832fa6b3637d21bcff89b172d51ddf1210cd0f95",
+      "to_sha256": "dc1be426fb124b2e7c714088bf3e18b88acc4086343ac49a8324e19c4451439b",
+      "reason": "十四处普通测试直接验证现行语义帧转换接口。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_benchmark_test.go",
+      "from_sha256": "66e0775b72be6456d71c5527b21664c1b06b9c743fdfb83515a808812331a846",
+      "to_sha256": "920fb8b0ea849a854bf865d576152268d79554ada9d1e236e237801ef93d4342",
+      "reason": "当前 Profile benchmark 的两处调用迁到现行接口，负载、计时边界和断言保持不变。"
+    },
+    {
+      "path": "tools/changeset6_benchmark_evidence.py",
+      "from_sha256": "a0e063c600f5beca4881628fedb75e74e4352412edba90f4a91edbf4b8e62e81",
+      "to_sha256": "b7145a70b43b398d44fb1bda0243728036af6ebc135622271080255e42691999",
+      "reason": "增加严格两处调用迁移的反向归一化、冻结摘要复算和非法 mutation 拒绝门禁。"
+    }
+  ],
+  "allowed_wire_deltas": [],
+  "verification": [
+    "旧 finalizer 定义和当前调用点从生产源码与现行测试绝迹",
+    "AST 门禁继续禁止 Runtime Sink 调用旧 finalizer",
+    "十四处普通测试和两处当前 benchmark 调用现行语义帧转换接口",
+    "baseline/post 两份冻结 Profile driver 原文及 SHA-256 不变",
+    "benchmark 等价性门禁只接受两处调用名迁移并拒绝其他 mutation",
+    "Active／Previous、HTTP／WebSocket／fallback final-wire 允许列表为空",
+    "完整 make check-egress-spec 通过"
+  ]
+}

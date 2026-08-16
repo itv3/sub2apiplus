@@ -1,101 +1,27 @@
 {
-  "_comment": "各生产文件当前的 Codex 版本符号名／注释命中指纹（规范化行内容哈希 → 次数）。裸版本字面量的归属由 go/ast 判定，见 backend/internal/service/official_egress_version_leak_ast_test.go 及其 testdata 基线。门禁禁止出现基线外的新指纹，也禁止同一指纹次数上升。",
+  "schema_version": "codex-oauth-version-leak-policy/v2",
+  "_comment": "历史版本耦合债务必须保持为空。确属非 OAuth persona 或入站兼容产品语义的版本引用，必须以路径、行指纹、精确次数和中文理由逐项批准；新增、漂移或失效的引用均由门禁失败关闭。裸版本字面量的归属继续由 Go AST 门禁负责。",
   "_exempt": "^backend/internal/service/official_egress_codex_\\d+_profile\\.go$",
-  "files": {
-    "backend/internal/handler/admin/setting_handler_update.go": {
-      "64b6d5c8ae643afb": 1,
-      "7873e0ef4c49fa59": 1
-    },
-    "backend/internal/handler/openai_gateway_handler.go": {
-      "09968c781d9464ac": 1
-    },
-    "backend/internal/pkg/openai/request.go": {
-      "550fac6b73fda6cf": 1,
-      "e71b2a7aa62791de": 1
-    },
-    "backend/internal/server/routes/gateway.go": {
-      "5173c9686b5e89c0": 1
-    },
-    "backend/internal/service/account_test_service.go": {
-      "33e582af7e03f6f3": 1
-    },
-    "backend/internal/service/domain_constants.go": {
-      "8fb62be7f5d0067c": 1,
-      "c7a7a037a8ef7216": 1
-    },
-    "backend/internal/service/official_egress_codex_engine.go": {
-      "08c2b1f7a413eb1e": 1,
-      "18aeb38241a8bad9": 1,
-      "1d0546fb6875bf88": 1,
-      "340a3564d6c58d3f": 1,
-      "4690b8f99eafbded": 1,
-      "57b2dac6f923a78b": 1,
-      "942c675f442323e5": 1,
-      "b599ad0aa0379af1": 1
-    },
-    "backend/internal/service/official_egress_codex_files.go": {
-      "c96c201c70dca9d0": 1
-    },
-    "backend/internal/service/official_egress_codex_integration.go": {
-      "116c2ab0efad1c5a": 1,
-      "21ccf134db692a0f": 1,
-      "27996069088517c7": 1,
-      "43345717130ad8ec": 1,
-      "59b7e76a11e0d850": 1,
-      "5db78489f50d42d2": 1,
-      "70d333e1eb497656": 1,
-      "75cfd77ae3a70d4b": 1,
-      "81def0f3d08e4d75": 1,
-      "98a995d54554aa9b": 1,
-      "a22bffd69c487dc3": 1,
-      "bd9b5bff301b258e": 1,
-      "c89d914c953ffdbb": 1,
-      "c9045d905232d441": 1,
-      "d7628d529023a757": 1,
-      "ee11daec8eb01434": 1
-    },
-    "backend/internal/service/official_egress_openai_http.go": {
-      "0b4c3c3e8a013b8f": 1,
-      "0cc075944998b292": 1,
-      "28f8c4f4c4734bcf": 1,
-      "33e33ad13966892e": 1,
-      "5572ff6e4c309d45": 1,
-      "5a464eab159d6e46": 1,
-      "ad9fbb0b9763db07": 1,
-      "c5cd74842c0b1fa1": 1
-    },
-    "backend/internal/service/official_egress_profile.go": {
-      "42d6cf5a96bfac49": 1
-    },
-    "backend/internal/service/official_egress_transport.go": {
-      "06f667ef4b22f741": 1,
-      "2fa899ef92ed411d": 1,
-      "41ade4d3bb150b7b": 1
-    },
+  "historical_debt_closure": {
+    "date": "2026-08-16",
+    "prior_files": 19,
+    "prior_hits": 58,
+    "current_files": 0,
+    "current_hits": 0
+  },
+  "files": {},
+  "approved_non_leak_references": {
     "backend/internal/service/openai_apikey_mimicry.go": {
-      "607ee9c5a5aae699": 1,
-      "91f5dbb828f3db05": 1
+      "91f5dbb828f3db05": {
+        "count": 1,
+        "reason": "API Key Desktop 是独立的非 OAuth persona，真实抓包 User-Agent 必须保留，且不参与 Codex OAuth ReleaseCatalog。"
+      }
     },
     "backend/internal/service/openai_codex_identity.go": {
-      "fa97e6059ecce56f": 1
-    },
-    "backend/internal/service/openai_codex_transform.go": {
-      "dd55499681f22168": 2
-    },
-    "backend/internal/service/openai_gateway_forward.go": {
-      "147f09906fcb5f11": 1
-    },
-    "backend/internal/service/openai_images_responses.go": {
-      "17d69c6c756177b8": 1,
-      "97326423e54ba871": 1
-    },
-    "backend/internal/service/openai_quota_service.go": {
-      "1fc048bfe461075d": 1
-    },
-    "backend/internal/service/openai_upstream_http.go": {
-      "00f38fc32221307c": 1,
-      "374c5ab4d43e1695": 1,
-      "a8ec3384f08b6ac3": 1
+      "fa97e6059ecce56f": {
+        "count": 1,
+        "reason": "该值是入站客户端版本兼容下限，不定义 OpenAI OAuth 出站画像或最终 wire。"
+      }
     }
   }
 }

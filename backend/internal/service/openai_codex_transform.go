@@ -126,10 +126,10 @@ type codexResponsesNormalizationOptions struct {
 	EnsureStoreFalse                 bool
 	EnsureReasoningEncryptedContent  bool
 	// EnsureReasoningContextAllTurns 补齐 reasoning.context=all_turns（客户端缺省时），
-	// 对齐 codex_exec 0.144.1 抓包默认值。
+	// 对齐已批准的 Codex CLI 抓包默认值。
 	EnsureReasoningContextAllTurns bool
 	// EnsureTextVerbosityLow 补齐 text.verbosity=low（客户端缺省时），
-	// 对齐 codex_exec 0.144.1 抓包默认值。
+	// 对齐已批准的 Codex CLI 抓包默认值。
 	EnsureTextVerbosityLow bool
 	// EnsureParallelToolCallsFalse 对齐 Codex CLI API 模式实抓请求。
 	EnsureParallelToolCallsFalse bool

@@ -6,123 +6,26 @@
     },
     "backend/internal/handler/admin/setting_handler_update.go": {
       "1f906664b346d657": 1,
-      "6a9d9d895464bcd7": 1,
-      "71a22b786c0185bc": 1,
       "7a27558d607b53d6": 1,
       "cdf5be7c1f628f88": 1
-    },
-    "backend/internal/handler/openai_gateway_handler.go": {
-      "53fb854e542b48e0": 1
-    },
-    "backend/internal/pkg/openai/request.go": {
-      "d155773c2c4dc8dc": 1,
-      "e9516d439abb740e": 1
     },
     "backend/internal/repository/claude_usage_service.go": {
       "b0e18ac249fdfc67": 1
     },
-    "backend/internal/server/routes/gateway.go": {
-      "20bc5ac158e96c31": 1
-    },
-    "backend/internal/service/account_test_service.go": {
-      "8ef948a0e8526c25": 1
-    },
     "backend/internal/service/admin_compliance.go": {
       "0257ca76d26eaa64": 1
-    },
-    "backend/internal/service/domain_constants.go": {
-      "2573aa52baeecc49": 1,
-      "28d68a9379119cf3": 1
     },
     "backend/internal/service/metadata_userid.go": {
       "80eadaeef2ec1cbc": 1
     },
-    "backend/internal/service/official_egress_codex_engine.go": {
-      "296f6c9794043eb5": 1,
-      "2ccd22c4cabbc4ab": 1,
-      "6f283d8a0d4edd30": 1,
-      "8dd59e0c07e83204": 1,
-      "9259d02fb1d6638d": 1,
-      "c9dc3ff52d6bf55c": 1,
-      "cbf4b454502ac2b2": 1,
-      "ccfd9174ae8cada4": 1,
-      "fdff306e92be077c": 1
-    },
-    "backend/internal/service/official_egress_codex_files.go": {
-      "ca20294720868e71": 1
-    },
-    "backend/internal/service/official_egress_codex_integration.go": {
-      "09bc033b69e4624a": 1,
-      "1ebf659c7ec9ab0c": 1,
-      "284fec243b4c9bd9": 1,
-      "2c16918f3c32111e": 1,
-      "329fe26c285ad392": 1,
-      "370973bbaa47c09b": 1,
-      "3809257d5bcca430": 1,
-      "70a052cbccd13855": 1,
-      "70bd285418373670": 1,
-      "74cc863d8a71da19": 1,
-      "7794c85cd38bf62a": 1,
-      "873b324de0d61765": 1,
-      "b7f926a2a21be7a1": 1,
-      "eb30bc818c41d2f0": 1,
-      "fb77648cb8bc58af": 1,
-      "fe9c90efa76a3916": 1
-    },
-    "backend/internal/service/official_egress_openai_http.go": {
-      "0829dc91be284917": 1,
-      "3243b776db099034": 1,
-      "457dac318ac6233f": 1,
-      "5dfe094b5147502f": 1,
-      "6c5c19fb2aba4d36": 1,
-      "8b82c42b516a87df": 1,
-      "a4ceab87bc1055d0": 1,
-      "bdbae8ec1edde0d2": 1
-    },
-    "backend/internal/service/official_egress_openai_ws.go": {
-      "901784d40910f36d": 1
-    },
-    "backend/internal/service/official_egress_profile.go": {
-      "88295edd4b8dc379": 1
-    },
-    "backend/internal/service/official_egress_transport.go": {
-      "1dc7bc0b26a9f27f": 1,
-      "50ca029ef774f8d7": 1,
-      "cadcdd1bd50acc26": 1,
-      "f4933aef87cfa89a": 1
-    },
-    "backend/internal/service/openai_alpha_search.go": {
-      "ab7c072c38794f7b": 1
-    },
     "backend/internal/service/openai_apikey_mimicry.go": {
-      "037d487b4dff1105": 1,
       "93852d5b7051aca0": 1
     },
     "backend/internal/service/openai_codex_identity.go": {
       "dd0d8e01f559711d": 1
     },
-    "backend/internal/service/openai_codex_transform.go": {
-      "c3e9c2d94a5ce52c": 1,
-      "f8d7d16e815fb00d": 1
-    },
-    "backend/internal/service/openai_gateway_forward.go": {
-      "db897e4da4905219": 1
-    },
     "backend/internal/service/openai_gateway_response_handling.go": {
       "73433d7af37b4eb4": 1
-    },
-    "backend/internal/service/openai_images_responses.go": {
-      "13df96bec5fb5280": 1,
-      "6afac4a5f162cec7": 1,
-      "87577db9e3d63424": 1
-    },
-    "backend/internal/service/openai_quota_service.go": {
-      "f0bb0e5c51afdee5": 1
-    },
-    "backend/internal/service/openai_upstream_http.go": {
-      "7fd93425ad6c5e78": 1,
-      "8ec0db215cf8a1c0": 1,
-      "f566ddd6b9c89587": 1
     }
   }
 }

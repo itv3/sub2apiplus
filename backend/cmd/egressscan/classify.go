@@ -101,9 +101,7 @@ var reviewedPostBootstrapInfrastructure = map[string]string{
 	"github.com/Wei-Shaw/sub2api/internal/service.*officialEgressWebSocketRoundTripper.RoundTrip@backend/internal/service/official_egress_transport_adapters.go#roundtripper_roundtrip#1":              "变更集 5 将 WebSocket RoundTripper 机械迁入独立 adapter；只展开已由 Executor 签发的物理握手，不承载业务 SinkID",
 	"github.com/Wei-Shaw/sub2api/internal/service.doOpenAIAPIKeyHTTPTransport@backend/internal/service/openai_upstream_http.go#facade_http_upstream_do#1":                                              "变更集 2 将非 Codex persona 的 API-key/custom provider 发送与官方画像链物理分离",
 	"github.com/Wei-Shaw/sub2api/internal/service.doOpenAIAPIKeyHTTPTransport@backend/internal/service/openai_upstream_http.go#facade_http_upstream_do_tls#1":                                          "变更集 2 将非 Codex persona 的 API-key/custom provider TLS 发送与官方画像链物理分离",
-	"github.com/Wei-Shaw/sub2api/internal/service.doCodexModelsUnwiredTestTransport@backend/internal/service/openai_codex_models_service.go#factory_httpclient_pool#1":                                 "变更集 2 保留未注入 HTTPUpstream 的包内 models 测试桩，生产 wiring 不可达",
-	"github.com/Wei-Shaw/sub2api/internal/service.doCodexModelsUnwiredTestTransport@backend/internal/service/openai_codex_models_service.go#net_http_client_do#1":                                      "变更集 2 保留未注入 HTTPUpstream 的包内 models 测试桩，生产 wiring 不可达",
-	"github.com/Wei-Shaw/sub2api/internal/service.dialOpenAIWSV2UnwiredTest@backend/internal/service/openai_ws_v2_passthrough_adapter.go#facade_ws_dialer#1":                                           "变更集 2 保留未注入 runtime 的包内 WSv2 测试桩，生产 wiring 不可达",
+	"github.com/Wei-Shaw/sub2api/internal/service.dialOpenAIWSV2UnwiredTest@backend/internal/service/openai_ws_v2_passthrough_adapter.go#facade_ws_dialer#1":                                           "变更集 2 保留 API Key／自定义上游 WebSocket 产品路径；OAuth Codex persona 不可达",
 	"github.com/Wei-Shaw/sub2api/internal/service.*ContentModerationService.moderationHTTPClient@backend/internal/service/content_moderation.go#factory_httpclient_pool#1":                             "本次上游同步为范围外内容审核增加可配置代理客户端工厂，不承载 Codex persona",
 	"github.com/Wei-Shaw/sub2api/internal/service.*EmailService.connectSMTP@backend/internal/service/email_service.go#raw_tls_dial_dialer#1":                                                           "本次上游同步将范围外 SMTP TLS 拨号收口到共享连接函数，不承载 Codex persona",
 	"github.com/Wei-Shaw/sub2api/internal/service.*EmailService.connectSMTPStartTLS@backend/internal/service/email_service.go#raw_dialer_dial#1":                                                       "本次上游同步将范围外 SMTP STARTTLS 拨号收口到共享连接函数，不承载 Codex persona",
@@ -116,14 +114,9 @@ var classifyRules = []classifyRule{
 		rationale: "仅承载 API-key/custom provider，不消费 Codex ReleaseBundle",
 	},
 	{
-		funcExact: "doCodexModelsUnwiredTestTransport", persona: "out-of-scope",
-		backend: "-", state: "not_applicable", owner: "-", changeset: "-",
-		rationale: "仅承载未接线单元测试，不属于生产 Codex 出站",
-	},
-	{
 		funcExact: "dialOpenAIWSV2UnwiredTest", persona: "out-of-scope",
 		backend: "-", state: "not_applicable", owner: "-", changeset: "-",
-		rationale: "仅承载未接线单元测试，不属于生产 Codex 出站",
+		rationale: "承载 API Key／自定义上游 WebSocket，不属于 OAuth Codex persona",
 	},
 	{
 		funcExact: "openAIOAuthReqProfileTransport.Do", persona: "infrastructure",
@@ -170,24 +163,6 @@ var classifyRules = []classifyRule{
 	// =================================================================
 	// codex-cli：OAuth（auth.openai.com）
 	// =================================================================
-	{
-		funcExact:     "*openaiOAuthService.refreshTokenWithClientID",
-		runtimeSinkID: "codex.oauth.refresh", purpose: "oauth_refresh",
-		persona: "codex-cli", routes: []string{"POST auth.openai.com/oauth/token"},
-		backend: "req_profile", state: "legacy_observe",
-		owner: ownerEgress, changeset: "2",
-		expiry:    "变更集 2 改为消费 ReleaseBundle",
-		rationale: "已画像；硬编码 active 待修；backend 保持 req_profile 不换栈",
-	},
-	{
-		funcExact:     "*openaiOAuthService.RefreshCompiled",
-		runtimeSinkID: "codex.oauth.refresh", purpose: "oauth_refresh",
-		persona: "codex-cli", routes: []string{"POST auth.openai.com/oauth/token"},
-		backend: "req_profile", state: "legacy_observe",
-		owner: ownerEgress, changeset: "2",
-		expiry:    "变更集 3 迁入 Executor",
-		rationale: "service compiler 交付不可拆分请求后，repository 只委托 req-profile 资源端口",
-	},
 	{
 		funcExact:     "*openaiOAuthService.ExchangeCode",
 		runtimeSinkID: "codex.oauth.exchange", purpose: "oauth_code_exchange",
@@ -495,24 +470,6 @@ var classifyRules = []classifyRule{
 	},
 
 	// =================================================================
-	// 死代码
-	// =================================================================
-	{
-		funcExact:     "downloadOpenAIImageBytes",
-		runtimeSinkID: "dead.images.download_blob", purpose: "dead_code",
-		persona: "dead-code", backend: "-", state: "pending_removal",
-		owner: ownerEgress, changeset: "1B", expiry: "1B 删除该链路",
-		rationale: "生产无调用者；唯一测试只走 base64 分支，网络分支无覆盖",
-	},
-	{
-		funcExact:     "fetchOpenAIImageDownloadURL",
-		runtimeSinkID: "dead.images.fetch_url", purpose: "dead_code",
-		persona: "dead-code", backend: "-", state: "pending_removal",
-		owner: ownerEgress, changeset: "1B", expiry: "1B 删除该链路",
-		rationale: "同上；含 attempt<8 重试循环直打 chatgpt.com",
-	},
-
-	// =================================================================
 	// 共享传输基础设施：不承载业务身份
 	// =================================================================
 	{
@@ -634,11 +591,38 @@ func classify(rec SinkRecord) (classifyRule, bool) {
 }
 
 func applyClassification(records []SinkRecord) ([]SinkRecord, []string) {
+	return applyClassificationWithHistory(records, nil)
+}
+
+// applyClassificationWithHistory 仅供 bootstrap 历史源码回放使用。当前分类规则已经
+// 随生产兼容代码退休时，允许由追加式 RemovalReceipt 为完全相同的 candidate ID
+// 提供冻结分类；未被收据覆盖的新发送点仍按未分类硬失败。
+func applyClassificationWithHistory(
+	records []SinkRecord,
+	historical map[string]SinkRecord,
+) ([]SinkRecord, []string) {
 	var unclassified []string
 	out := make([]SinkRecord, 0, len(records))
 	for _, rec := range records {
 		rule, ok := classify(rec)
 		if !ok {
+			if frozen, reviewed := historical[rec.ScanCandidateID]; reviewed {
+				rec.RuntimeSinkID = frozen.RuntimeSinkID
+				rec.Purpose = frozen.Purpose
+				rec.Persona = frozen.Persona
+				rec.EndpointEvidence = frozen.EndpointEvidence
+				rec.Routes = append([]string(nil), frozen.Routes...)
+				rec.IsFacade = frozen.IsFacade
+				rec.Backend = frozen.Backend
+				rec.TargetBackend = frozen.TargetBackend
+				rec.EnforcementState = frozen.EnforcementState
+				rec.Owner = frozen.Owner
+				rec.MigrationChangeset = frozen.MigrationChangeset
+				rec.ExpiryCondition = frozen.ExpiryCondition
+				rec.Rationale = frozen.Rationale
+				out = append(out, rec)
+				continue
+			}
 			unclassified = append(unclassified,
 				fmt.Sprintf("%s  (%s @ %s:%d，函数 %s)",
 					rec.ScanCandidateID, rec.Callee, rec.File, rec.Line, rec.Func))

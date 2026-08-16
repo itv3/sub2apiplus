@@ -1560,8 +1560,8 @@ func (s *OpenAIGatewayService) proxyResponsesWebSocketV2Passthrough(
 	return turnErr
 }
 
-// dialOpenAIWSV2UnwiredTest 只服务未注入 official runtime 的包内测试桩。
-// 生产 wiring 必有 ProcessSinkCatalog 与 Dispatcher，不得进入本函数。
+// dialOpenAIWSV2UnwiredTest 保留历史符号名，但实际承载未启用 Codex persona 的
+// API Key／自定义上游 WebSocket 产品路径；OAuth 官方画像必须经 Executor。
 func dialOpenAIWSV2UnwiredTest(
 	ctx context.Context,
 	dialer openAIWSClientDialer,

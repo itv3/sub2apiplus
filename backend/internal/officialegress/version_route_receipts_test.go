@@ -21,19 +21,38 @@ func TestVersionRouteReceiptBindsOnlyProfilesThatContainEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	active := versionRouteResolveBundle(t, resolver, ReleaseModeActive)
-	if _, err := active.ResolveEndpointPlan(
+	legacy := versionRouteResolveBundleByVersion(t, resolver, "0.145.0")
+	if _, err := legacy.ResolveEndpointPlan(
 		SinkCodexQuotaWHAM, "GET", target, WireProtocolHTTP,
 	); err == nil {
 		t.Fatal("0.145 画像不存在 settings/user，却生成了 EndpointPlan")
 	}
-	previous := versionRouteResolveBundle(t, resolver, ReleaseModePrevious)
-	plan, err := previous.ResolveEndpointPlan(
+	targetBundle := versionRouteResolveBundleByVersion(t, resolver, "0.147.0")
+	plan, err := targetBundle.ResolveEndpointPlan(
 		SinkCodexQuotaWHAM, "GET", target, WireProtocolHTTP,
 	)
 	if err != nil || plan.EndpointID() != "wham_settings_user" {
 		t.Fatalf("0.147 画像未生成 settings/user EndpointPlan：plan=%+v err=%v", plan, err)
 	}
+}
+
+func versionRouteResolveBundleByVersion(
+	t *testing.T,
+	resolver *BundleResolver,
+	version string,
+) ReleaseBundle {
+	t.Helper()
+	for _, mode := range []ReleaseMode{ReleaseModeActive, ReleaseModePrevious} {
+		release, err := DefaultReleaseCatalog().Resolve(mode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if release.Version() == version {
+			return versionRouteResolveBundle(t, resolver, mode)
+		}
+	}
+	t.Fatalf("ReleaseCatalog 缺少版本 %s", version)
+	return ReleaseBundle{}
 }
 
 func TestVersionRouteReceiptFailsClosedOnMutations(t *testing.T) {

@@ -1,0 +1,14 @@
+{
+  "schema_version": "official-egress-executor-one-shot-source-transition/v1",
+  "prior_transition": "docs/egress/maintenance/codex-request-compression-source-transition.json",
+  "prior_transition_sha256": "aae6b2569aa7d80e2fffdc7ff51b2b79a825e2d7ec9f2375b820b7bfdaa026fc",
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/executor.go",
+      "from_sha256": "12f38cb9eb0559192cef98640826a1d173663747ed72116f5f0607bca6b062a1",
+      "to_sha256": "da58f780ef00229599759f2be35307bf4a3305f332fa30834f6675c8e9f5aa6b",
+      "reason": "删除 Executor.Prepare／Executor.Execute 一次性兼容入口，并要求所有 ExecutorInvocation attempt 显式携带与原子序号一致的 ExpectedAttemptOrdinal；Compiler、Guard、Adapter、Profile 与 final wire 规则不变。"
+    }
+  ],
+  "result": "passed"
+}

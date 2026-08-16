@@ -28,7 +28,7 @@ func TestOfficialCodexVersionSnapshotsDriveVersionResolution(t *testing.T) {
 
 	active, err := officialCodexVersionForMode(officialClientProfileModeActive)
 	require.NoError(t, err)
-	require.Equal(t, officialCodexVersion0145, active)
+	require.Equal(t, activeOpenAICodexVersionForTest(), active)
 }
 
 // TestOfficialCodex0145ProjectEndpointJSONBodyDropsFieldsOutsideClosedSet 锁定

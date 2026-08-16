@@ -1,0 +1,145 @@
+{
+  "schema_version": "official-egress.version-leak-debt-closure/v1",
+  "date": "2026-08-16",
+  "base_commit": "e3e34d1a01c06d7484a1b1a2b7f8e0edc776f0a5",
+  "scope": "清零 Codex OAuth 共享生产代码的历史版本耦合债务，并把确属其他产品、入站兼容或冻结历史证据语义的引用改为精确受审例外。",
+  "text_debt": {
+    "prior_files": 19,
+    "prior_hits": 58,
+    "current_files": 0,
+    "current_hits": 0,
+    "approved_non_leak_files": 2,
+    "approved_non_leak_hits": 2
+  },
+  "approved_non_leak_references": [
+    {
+      "path": "backend/internal/service/openai_apikey_mimicry.go",
+      "fingerprint": "91f5dbb828f3db05",
+      "count": 1,
+      "reason": "API Key Desktop 是独立的非 OAuth persona，真实抓包 User-Agent 必须保留，且不参与 Codex OAuth ReleaseCatalog。"
+    },
+    {
+      "path": "backend/internal/service/openai_codex_identity.go",
+      "fingerprint": "fa97e6059ecce56f",
+      "count": 1,
+      "reason": "该值是入站客户端版本兼容下限，不定义 OpenAI OAuth 出站画像或最终 wire。"
+    }
+  ],
+  "retained_historical_evidence": [
+    {
+      "path": "backend/cmd/egressscan/classify.go",
+      "pattern": "0.145 画像只有 refresh body",
+      "count": 1,
+      "reason": "该值属于 bootstrap 历史证据充分性分类，改写会改变冻结回放语义；它不参与运行时 OAuth 画像或最终 wire，且不属于三段版本泄漏判据。"
+    }
+  ],
+  "ast_scan": {
+    "prior_files": 26,
+    "prior_hits": 71,
+    "current_files": 8,
+    "current_hits": 10,
+    "remaining_classifications": [
+      {
+        "path": "backend/cmd/server/main.go",
+        "hits": 1,
+        "reason": "开发构建的零版本默认值，不是 Codex OAuth 画像。"
+      },
+      {
+        "path": "backend/internal/handler/admin/setting_handler_update.go",
+        "hits": 3,
+        "reason": "Claude Code 与 Antigravity 设置项的 semver 校验示例，不属于 Codex OAuth。"
+      },
+      {
+        "path": "backend/internal/repository/claude_usage_service.go",
+        "hits": 1,
+        "reason": "Claude Code 官方 usage User-Agent，属于独立供应商画像。"
+      },
+      {
+        "path": "backend/internal/service/admin_compliance.go",
+        "hits": 1,
+        "reason": "Sub2API 管理合规协议版本，不参与任何上游客户端画像。"
+      },
+      {
+        "path": "backend/internal/service/metadata_userid.go",
+        "hits": 1,
+        "reason": "Sub2API 元数据格式兼容下限，不参与 OpenAI OAuth 出站。"
+      },
+      {
+        "path": "backend/internal/service/openai_apikey_mimicry.go",
+        "hits": 1,
+        "reason": "API Key Desktop 独立 persona 的真实 User-Agent。"
+      },
+      {
+        "path": "backend/internal/service/openai_codex_identity.go",
+        "hits": 1,
+        "reason": "入站 Codex 客户端兼容下限，不是出站 Release 版本。"
+      },
+      {
+        "path": "backend/internal/service/openai_gateway_response_handling.go",
+        "hits": 1,
+        "reason": "Sub2API 上游实现修复版本的历史说明，不定义 Codex OAuth wire。"
+      }
+    ]
+  },
+  "source_transitions": [
+    {
+      "path": "tools/check_version_leak.py",
+      "from_sha256": "b3a4203408455eca17363d6e17cbc82d2fda54dbd5645004dcb1d4f29539ce7b",
+      "to_sha256": "0a4f484ff2f6041923ea552d6fb9ab0d9f307d2a728bb15f5ab2b3ccd3264314",
+      "reason": "门禁改为零历史债务、精确受审例外和失效例外失败关闭。"
+    },
+    {
+      "path": "tools/version_leak_baseline.json",
+      "from_sha256": "7274caa9daf5a8b7bf4edb5b3e70f98e4fed1ecc7798c48c8dd95b73ff80ad48",
+      "to_sha256": "0b54ca935002d9e2dc6278e9ded93354c356418405c520fa6c0090c2712009b7",
+      "reason": "历史 19 文件／58 行债务清零，仅保留两条带理由的精确非泄漏引用。"
+    },
+    {
+      "path": "backend/internal/service/testdata/official_egress_version_leak_ast.json",
+      "from_sha256": "7344d7acbe575b0a5d1a22245fd496911a34b70ca525d0144bda00c32604a8a2",
+      "to_sha256": "4de39af5be296554fbcaff3189cb6727f016280220b8559c18a0f8d0c35610a8",
+      "reason": "共享 Codex 版本事实迁回 Snapshot 后收紧 AST 命中基线。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_ws.go",
+      "from_sha256": "95601bf42caf100e2503ff09689cd4eb086e06bab47aa19e5e2b9b56f5ccd158",
+      "to_sha256": "3ee8d5bea8ec90b23de0f15f704e12996b2ac9b746ef5ecb36cc64e663468490",
+      "reason": "删除共享 WS 执行文件中未使用的旧版本常量。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_files.go",
+      "from_sha256": "f52e89fb7659ac5af8b3321fb98bc2af7dd68d5fcce95f2478ac79a5387e14f0",
+      "to_sha256": "109c39f3e608b8fb1b5a3e86b24be2afae65f3fceef1df639ab12ac32f0048ca",
+      "reason": "文件上传编排注释改为引用当前 Release，而非历史版本。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_transport.go",
+      "from_sha256": "ee6129d687cfbab9736053259ea85c9c16a98ffad2e91cb2e4369bac0e37d73c",
+      "to_sha256": "d42534ae7c0e2ecf4610ae7330cb95ee4bc5ba576e15a654df415f839e2ee5e9",
+      "reason": "共享 transport 说明改为版本中立的 Release 画像语义。"
+    },
+    {
+      "path": "backend/internal/repository/openai_oauth_service.go",
+      "from_sha256": "d11bea5a1c3c9331690319286b41263cc8a5279977cc2fc23ddc9c45f56a1ec6",
+      "to_sha256": "c93c851ffafde56559643565b984fcf226634ca711dcfe707ceec1108f2501fc",
+      "reason": "OAuth exchange 注释改为引用官方画像，不再绑定历史版本。"
+    },
+    {
+      "path": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+      "from_sha256": "f5ad2e49f9f225f94cfc7deda008332a33a8da6e321c4d718da9def5ef7bd3cb",
+      "to_sha256": "b2f1609bd2dc4d9cae66442abc9d7512ab411360d99ce85a131e319ab6c457f3",
+      "reason": "规定文本债务必须为零、非泄漏引用精确审批及 promotion 禁止扩基线。"
+    }
+  ],
+  "runtime_behavior_changed": false,
+  "allowed_wire_deltas": [],
+  "closure_result": "complete",
+  "verification": [
+    "文本门禁自测与零债务检查通过",
+    "Go AST 门禁基线由 26 文件／71 处收紧为 8 文件／10 处",
+    "共享生产代码的历史版本注释和未使用常量已清理",
+    "previous 版本化 Snapshot 与 API Key 独立 persona 保持不变",
+    "Active／Previous final-wire 允许列表为空",
+    "完整 make check-egress-spec 与 Go 全量测试通过"
+  ]
+}

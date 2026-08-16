@@ -1,7 +1,6 @@
 """ACC-06 接线：assertion-bundle 必须能在真实 seal 路径上落位并通过门禁。
 
-ACC-02／02b 产出的证据包若没有接进采集流程，`seal` 会在断言门禁失败——而这
-恰恰是 §10.8 反复强调的"最后一步才发现"。本测试直接驱动
+ACC-02／02b 产出的证据包若没有接进采集流程，`seal` 会在断言门禁失败。本测试直接驱动
 `_capture_assertion_context` 与 `_run_seal_assertion_gate`（seal 真实调用的两个
 入口），确认：
 

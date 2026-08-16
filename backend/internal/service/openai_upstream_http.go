@@ -12,14 +12,14 @@ import (
 )
 
 // codexExec0144TLSProfile 复刻 2026-07-11 在 anyrouter.top 抓到的
-// codex_exec/0.144.1 ClientHello（官方 install.sh latest，Debian 12 / aarch64）。
+// 已批准的历史 Codex CLI ClientHello（官方 install.sh latest，Debian 12 / aarch64）。
 // 样本特征：ALPN=[h2, http/1.1]，10 个 cipher（含 0x00ff SCSV），
 // curves/key_share 含 0x11ec(X25519MLKEM768) 后量子混合组，无 GREASE，
 // 11 个 extension 顺序固定，TLS 1.3/1.2。典型 Rustls 指纹。
 // ClientHello ≈1482-1976 B（MLKEM key_share 占主要字节）。
 func codexExec0144TLSProfile() *tlsfingerprint.Profile {
 	return &tlsfingerprint.Profile{
-		Name:      "Built-in Codex 0.144.1 (captured anyrouter.top 2026-07-11)",
+		Name:      "Built-in Codex captured profile (anyrouter.top 2026-07-11)",
 		Transport: tlsfingerprint.TransportOptions{DisableCompression: true},
 		CipherSuites: []uint16{
 			0x1302, 0x1301, 0x1303,
@@ -92,7 +92,7 @@ func resolveOpenAIAPIKeyCodexTLSProfileForClient(
 	}
 }
 
-// newOpenAIAPIKeyCodexTLSOnlyProfile 仅复用 0.145.0 的 ClientHello。
+// newOpenAIAPIKeyCodexTLSOnlyProfile 仅复用已批准画像的 ClientHello。
 // API-key mimic 的目标 URL 可能是第三方 /v1/responses，不属于 OAuth 版本画像的
 // chatgpt.com 端点矩阵，因此绝不能携带 OAuth 的 strict H1 method/path 契约。
 func newOpenAIAPIKeyCodexTLSOnlyProfile(useProxy bool) *tlsfingerprint.Profile {

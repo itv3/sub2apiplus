@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ACC-03 seal 断言门禁：在封存前把 accept 的证据前提全部失败关闭。
 
-§10.8.6 的根因是 seal 不校验场景 artifact 覆盖，一份只登记 6 个 pcap 的
+此前 seal 不校验场景 artifact 覆盖，一份只登记 6 个 pcap 的
 manifest 也能封存，缺陷拖到 accept 才暴露。本门禁在 seal 时按顺序执行：
 
 1. **bundle provenance 重放**（ACC-02）：只读复制逐项摘要一致，bundle 内无

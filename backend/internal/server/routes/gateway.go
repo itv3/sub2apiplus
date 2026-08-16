@@ -409,7 +409,7 @@ func compositeTargetPlatformMiddleware(resolver *service.CompositeRouteResolver)
 	}
 	return func(c *gin.Context) {
 		// Composite 路由需要先读取并还原 Body 才能按 model 决定目标平台；读取器会
-		// 删除 Content-Encoding。必须在此之前冻结 Codex 0.145.0 的原始进程画像，
+		// 删除 Content-Encoding。必须在此之前冻结当前 Codex Release 的原始进程画像，
 		// 后续具体 Handler 的重复捕获由幂等入口保留首次 wire 事实。
 		if c.Request != nil {
 			c.Request = c.Request.WithContext(

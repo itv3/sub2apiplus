@@ -68,14 +68,14 @@ func TestExecutorExecutionPolicyErrorsUseStableRuntimeCodeAtRealBoundary(t *test
 			Replayable: true, MinimumInterval: time.Hour, ConcurrencyLimit: 1,
 		})
 		request.ExecutionScopeKey = "account:minimum-interval"
-		if _, err := executor.Execute(
-			context.Background(), freshExecutorInvocationRequest(t, request),
+		if _, err := executeSingleExecutorTestAttempt(
+			context.Background(), executor, freshExecutorInvocationRequest(t, request),
 		); err != nil {
 			t.Fatal(err)
 		}
 		request.Bundle = bundle
-		_, err := executor.Execute(
-			context.Background(), freshExecutorInvocationRequest(t, request),
+		_, err := executeSingleExecutorTestAttempt(
+			context.Background(), executor, freshExecutorInvocationRequest(t, request),
 		)
 		assertExecutionPolicyRuntimeError(t, err)
 		if !errors.Is(err, ErrExecutionPolicyMinimumInterval) {
@@ -102,7 +102,7 @@ func TestExecutorExecutionPolicyErrorsUseStableRuntimeCodeAtRealBoundary(t *test
 		defer release()
 		deadlineContext, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 		defer cancel()
-		_, err = executor.Execute(deadlineContext, freshExecutorInvocationRequest(t, request))
+		_, err = executeSingleExecutorTestAttempt(deadlineContext, executor, freshExecutorInvocationRequest(t, request))
 		assertExecutionPolicyRuntimeError(t, err)
 		if !errors.Is(err, context.DeadlineExceeded) {
 			t.Fatalf("RuntimeError 丢失 context deadline：%v", err)
@@ -113,7 +113,7 @@ func TestExecutorExecutionPolicyErrorsUseStableRuntimeCodeAtRealBoundary(t *test
 func TestExecutorBeginInvocationFailuresAreNotExecutionPolicyRejections(t *testing.T) {
 	t.Run("未初始化 Executor", func(t *testing.T) {
 		var executor *Executor
-		_, err := executor.Execute(context.Background(), ExecutorRequest{})
+		_, err := executeSingleExecutorTestAttempt(context.Background(), executor, ExecutorRequest{})
 		if err == nil {
 			t.Fatal("未初始化 Executor 错误地执行成功")
 		}
@@ -129,7 +129,7 @@ func TestExecutorBeginInvocationFailuresAreNotExecutionPolicyRejections(t *testi
 	t.Run("不完整 Bundle", func(t *testing.T) {
 		executor, _, request := newExecutorInvocationTestFixture(t, 1, 1)
 		request.Bundle = ReleaseBundle{}
-		_, err := executor.Execute(context.Background(), request)
+		_, err := executeSingleExecutorTestAttempt(context.Background(), executor, request)
 		if err == nil {
 			t.Fatal("不完整 Bundle 错误地执行成功")
 		}

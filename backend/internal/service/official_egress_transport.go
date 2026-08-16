@@ -268,26 +268,26 @@ func newAnthropicOfficialEgressTLSProfile() *tlsfingerprint.Profile {
 }
 
 // newOpenAIOfficialEgressHTTPTLSProfile 是旧调用点的兼容入口。TLS、H1 端点矩阵
-// 与 strict 策略全部由不可变 0.145.0 画像编译，不再在传输文件复制参数。
+// 与 strict 策略全部由不可变 Release 画像编译，不再在传输文件复制参数。
 func newOpenAIOfficialEgressHTTPTLSProfile() *tlsfingerprint.Profile {
 	return mustResolveOfficialCodexDefaultTLSProfile(officialCodexTransportProtocolHTTP1)
 }
 
 // OpenAIOfficialEgressHTTPTLSProfile 为尚在迁移的辅助端点提供默认 HTTP 画像。
-// 路由是否经过代理不能改变 ClientHello；Codex 0.145.0 只有配置有效自定义 CA
+// 路由是否经过代理不能改变 ClientHello；当前 Codex Release 只有配置有效自定义 CA
 // 才切换到 rustls/h2，而本产品未开放该条件分支。参数仅为旧调用点兼容保留。
 func OpenAIOfficialEgressHTTPTLSProfile(_ bool) *tlsfingerprint.Profile {
 	return newOpenAIOfficialEgressHTTPTLSProfile()
 }
 
-// newOpenAIOfficialEgressHTTPProxyTLSProfile 复现 Codex CLI 0.145.0
+// newOpenAIOfficialEgressHTTPProxyTLSProfile 复现当前 Codex CLI Release
 // 通过 HTTP CONNECT 代理发送 Responses HTTP 时的 rustls ClientHello。
 // 阶段 0 的 client_to_mitm 抓包证明该路径使用 10 个 cipher、
 // ALPN h2/http1.1 和随机扩展顺序，并通过 HTTP/2 发送请求；它不能与
 // 直连时的 30-cipher、空 ALPN 画像共用同一个 Transport。
 func newOpenAIOfficialEgressHTTPProxyTLSProfile() *tlsfingerprint.Profile {
 	return &tlsfingerprint.Profile{
-		Name: "Official Codex CLI 0.145.0 HTTP Proxy (phase0-2026-07-24)",
+		Name: "Official Codex CLI HTTP Proxy (phase0-2026-07-24)",
 		Transport: tlsfingerprint.TransportOptions{
 			DisableCompression: true,
 			LowercaseHeaders:   true,
@@ -314,24 +314,19 @@ func newOpenAIOfficialEgressHTTPProxyTLSProfile() *tlsfingerprint.Profile {
 	}
 }
 
-// newOpenAIOfficialEgressWebSocketTLSProfile 是旧调用点的兼容入口。WS 的 rustls
-// 参数、固定前五项与 swap_remove 规则均从同一版本画像编译。
-func newOpenAIOfficialEgressWebSocketTLSProfile() *tlsfingerprint.Profile {
-	return mustResolveOfficialCodexDefaultTLSProfile(officialCodexTransportProtocolWS)
-}
-
 // 包初始化期预检两个内置传输画像。
 //
 // 它们的输入全是编译期常量（固定版本 + 固定传输 ID），编译失败属于构建错误而
 // 不是运行时状态。此前失败只会在请求路径上 panic，而 gin 的 Recovery 会把它降级
 // 成单请求 500——既达不到下方注释期望的"立即停止"，又让同一个构建错误以最难定位
 // 的形式在 6 个调用点上反复出现。这里在启动时先走一遍同样的构造路径把失败提前；
-// 直接复用两个既有构造器，因此不额外引入版本标识符。
+// HTTP 兼容调用点仍需复用历史构造器；WS 已无兼容消费者，直接调用同一严格解析器，
+// 不再为启动预检保留一个可被业务代码重新调用的旧包装入口。
 var _ = precompileOfficialCodexBuiltinTLSProfiles()
 
 func precompileOfficialCodexBuiltinTLSProfiles() struct{} {
 	newOpenAIOfficialEgressHTTPTLSProfile()
-	newOpenAIOfficialEgressWebSocketTLSProfile()
+	mustResolveOfficialCodexDefaultTLSProfile(officialCodexTransportProtocolWS)
 	return struct{}{}
 }
 

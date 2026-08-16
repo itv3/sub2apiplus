@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """按验收契约编排逐规则断言，汇总为 accept 所需的 v2 验收结果文档。
 
-§10.8.10 验收模型：每条规则的 ``validation_mode`` 由冻结验收契约
+主手册 §4.5.2 验收模型规定：每条规则的 ``validation_mode`` 由冻结验收契约
 （``acceptance_contract.py``）从批准断言画像机器推导，禁止手写——
 
 - ``dual_wire``（25 条 wire 规则）：官方／候选两侧各执行一次单规则断言，
@@ -13,8 +13,8 @@
 v1 的人工 ``positive_assertions``／``negative_assertions`` 已废除：accept 从
 批准画像复算应有 check ID 并离线重放，正负语义由画像判据本身表达。
 
-evidence refs 以 ``<evidence_prefix>/<相对路径>`` 的 inventory 逻辑路径写入
-（§10.8.5 的路径空间统一），accept 端只做精确路径＋摘要匹配。任一侧断言
+evidence refs 以 ``<evidence_prefix>/<相对路径>`` 的 inventory 逻辑路径写入，
+按主手册 §4.4.3 统一路径空间；accept 端只做精确路径＋摘要匹配。任一侧断言
 失败即整体失败：schema 只接受 ``status: "pass"``，把失败规则写进文档等于
 伪造验收结论。
 """

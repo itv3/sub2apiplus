@@ -3,10 +3,12 @@
 EGRESS_BOOTSTRAP_COMMIT := 38a9929eac35a39c86de2f27de8f7a805d7dae52
 EGRESS_BOOTSTRAP_BASELINE := $(CURDIR)/docs/egress/foundation/sink-baseline.json
 EGRESS_BOOTSTRAP_SUPPLEMENTS := $(CURDIR)/docs/egress/lifecycle/pre-bootstrap-supplements.json
-EGRESS_REMOVAL_RECEIPTS := $(CURDIR)/docs/egress/release/removal-receipts.json,$(CURDIR)/docs/egress/migration/removal-receipts.json,$(CURDIR)/docs/egress/consolidation/removal-receipts.json,$(CURDIR)/docs/egress/maintenance/removal-receipts.json
+EGRESS_REMOVAL_RECEIPTS := $(CURDIR)/docs/egress/release/removal-receipts.json,$(CURDIR)/docs/egress/migration/removal-receipts.json,$(CURDIR)/docs/egress/consolidation/removal-receipts.json,$(CURDIR)/docs/egress/maintenance/removal-receipts.json,$(CURDIR)/backend/internal/officialegress/catalogdata/maintenance-removal-receipts.json
 EGRESS_MIGRATION_RECEIPTS := $(CURDIR)/docs/egress/lifecycle/migration-receipts.json,$(CURDIR)/docs/egress/migration/migration-receipts.json
-EGRESS_BOOTSTRAP_REMOVAL_RECEIPTS := $(CURDIR)/docs/egress/release/removal-receipts.json
-EGRESS_BOOTSTRAP_MIGRATION_RECEIPTS := $(CURDIR)/docs/egress/lifecycle/migration-receipts.json
+# bootstrap 回放使用完整追加式收据链：历史源码中的已退休候选仍须证明存在，
+# 但分类结论由对应 RemovalReceipt 冻结，不能要求当前 scanner 永久保留旧规则。
+EGRESS_BOOTSTRAP_REMOVAL_RECEIPTS := $(EGRESS_REMOVAL_RECEIPTS)
+EGRESS_BOOTSTRAP_MIGRATION_RECEIPTS := $(EGRESS_MIGRATION_RECEIPTS)
 EGRESS_CATALOG_AMENDMENTS := $(CURDIR)/docs/egress/lifecycle/catalog-amendments.json
 EGRESS_BOOTSTRAP_INVENTORY_LOCK := $(CURDIR)/docs/egress/maintenance/bootstrap-inventory-lock.json
 EGRESS_SCANNER_SOURCE_ROOT := $(CURDIR)/backend/cmd/egressscan

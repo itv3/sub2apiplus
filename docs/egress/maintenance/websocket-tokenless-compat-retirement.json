@@ -1,0 +1,53 @@
+{
+  "schema_version": "official-egress.websocket-tokenless-compat-retirement/v1",
+  "date": "2026-08-16",
+  "base_commit": "e3e34d1a01c06d7484a1b1a2b7f8e0edc776f0a5",
+  "scope": "退休非空 SinkID 在缺少当前 Executor attempt token 时补造身份或执行后台预热的旧式 WS 兼容能力。",
+  "catalog_item_removals": [],
+  "removal_receipt_required": false,
+  "retired_behaviors": [
+    "非空 SinkID 缺少 attempt metadata 时由共享连接池补造最小 binding",
+    "非空 legacy_observe SinkID 在没有当前 invocation token 时执行后台预热"
+  ],
+  "retired_symbols": [
+    "AllowsTokenlessBackgroundPrewarm",
+    "DefaultSinkAllowsTokenlessBackgroundPrewarm",
+    "allowsTokenlessBackgroundPrewarm",
+    "tokenlessPrewarmAllowed"
+  ],
+  "retained_product_semantics": [
+    "空 SinkID 的 API Key、custom provider 与非 Codex WS 后台预热",
+    "Executor 当前 attempt 的非空 SinkID 连接获取与已验证连接复用",
+    "TokenBoundAcquire 防止后台重放已消费的 FinalizationToken",
+    "Active、Previous、fallback 与连接池隔离语义"
+  ],
+  "source_transitions": [
+    {
+      "path": "backend/internal/officialegress/catalog.go",
+      "from_sha256": "2fd850d01e40185b3f94b332a1b0ec287bb6797dc96da72c778105587a3248c5",
+      "to_sha256": "76546d3289a8cc9fc837b6722cfc7bdc4adee2c5cf653a401075c372f84bac01",
+      "reason": "PreserveAttemptContext 不再补造最小 binding，并拒绝缺少 FinalizationToken 的共享连接池调用；删除按 Catalog 状态放行无 token 预热的接口。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_1a_binding.go",
+      "from_sha256": "ee17db9cc376f9d4e5fb4f89bbb8b325ae921be0521a34186536db3a444e549e",
+      "to_sha256": "fb46acef9881ff09a1b49d5a44f73186341e7eb8970d56435ec5243e7619a894",
+      "reason": "共享连接池绑定说明收紧为只保留已有且携带 Token 的 Executor attempt。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_pool.go",
+      "from_sha256": "6d3f0500ab84b5c03d5d29e290b674323e92047553085a60ee39846615407ffc",
+      "to_sha256": "4974af082bedc10fc7f8415e152233e15894e4415667598933f2b37e5fa07462",
+      "reason": "非空 SinkID 在 Guard 与拨号前验证当前 token；后台预热只允许空 SinkID，并删除测试注入的旧判定能力。"
+    }
+  ],
+  "allowed_wire_deltas": [],
+  "verification": [
+    "缺少当前 attempt token 的非空 SinkID 在 Guard 和拨号前返回结构化 GuardRejected",
+    "不同 Sink 的 attempt 仍以 sink_binding_mismatch 失败关闭",
+    "非空 SinkID 的调度层和 worker 层后台预热均不拨号",
+    "空 SinkID 的 API Key 后台预热继续建立目标空闲连接",
+    "退休符号在生产 Go 源码中绝迹",
+    "完整 make check-egress-spec 通过"
+  ]
+}

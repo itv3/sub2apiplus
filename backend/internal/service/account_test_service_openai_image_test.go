@@ -13,7 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestAccountTestService_OpenAIImageOAuthUsesCodex0145NativeEndpoint(t *testing.T) {
+func TestAccountTestService_OpenAIImageOAuthUsesActiveCodexNativeEndpoint(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -46,7 +46,7 @@ func TestAccountTestService_OpenAIImageOAuthUsesCodex0145NativeEndpoint(t *testi
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.lastReq.Context()))
 	require.Equal(t, "https://chatgpt.com/backend-api/codex/images/generations", upstream.lastReq.URL.String())
 	require.Equal(t, "*/*", upstream.lastReq.Header.Get("Accept"))
-	require.Equal(t, officialCodexVersion0145, upstream.lastReq.Header.Get("Version"))
+	require.Equal(t, activeOpenAICodexVersionForTest(), upstream.lastReq.Header.Get("Version"))
 	require.Equal(t, `{"prompt":"draw a cat","model":"gpt-image-2"}`, string(upstream.lastBody))
 	require.NotNil(t, upstream.lastTLSProfile)
 	require.Contains(t, rec.Body.String(), "Calling Codex /images/generations")

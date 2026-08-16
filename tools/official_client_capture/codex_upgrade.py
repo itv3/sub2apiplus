@@ -1919,7 +1919,7 @@ def run_job(
 # **这个常量是 official 与 candidate 共用的，不要为了给候选侧提速而下调。**
 # k64 实证：改为 1（总共 2 次）后，官方侧 `official-core` 连续两次栽在 codex-ws 的 s4／s2
 # 上（双轮对话与工具调用场景，本就最易受上游抖动影响），28/28 退化为 27/28 —— 而这类失败
-# 恰恰需要第三次机会（§10.8.2 记录的 k56 `official-relay-realtime-webrtc` 就是第 3 次才成功）。
+# 恰恰需要第三次机会；历史正式采集中的 `official-relay-realtime-webrtc` 曾在第 3 次才成功。
 # 候选侧的提速改由场景超时承担（`run_sub2api_*_matrix.sh` 的 --timeout 300→70），
 # 那两处只作用于候选矩阵，不波及官方链路。
 JOB_RETRY_LIMIT = 2
@@ -4789,11 +4789,11 @@ def _capture_assertion_context(
 ) -> dict[str, Any]:
     """定位断言证据包并返回单根断言上下文。
 
-    §10.8.10 第 2／3 条：断言器只读取一个证据根，即 attempt 内的
+    主手册 §4.4.3 规定：断言器只读取一个证据根，即 attempt 内的
     `assertion-bundle/`；它由 ACC-02 从各 job 根只读收口而来，自包含 manifest、
     原件与派生观测。因此这里返回的 `evidence_root` 是 bundle 目录本身，而
     `evidence_prefix` 是 bundle 在封存 inventory 中的逻辑前缀（`<所属根>/
-    assertion-bundle`）——两者不同源正是 §10.8.5 路径空间失配的修复点：
+    assertion-bundle`）——这是此前路径空间失配的修复点：
     机器 check 的相对路径加上该前缀后，必须逐字命中 inventory 条目。
     """
 

@@ -11,8 +11,8 @@ func bindOfficialEgressSink(ctx context.Context, sinkID officialegress.SinkID) (
 	return officialegress.StartDefaultSinkAttempt(ctx, sinkID)
 }
 
-// preserveOfficialEgressSinkAttempt 用于共享连接池：已有 Executor attempt 不得被
-// 二次绑定清除 Token；没有 metadata 的 legacy 调用仍可补齐最小业务身份。
+// preserveOfficialEgressSinkAttempt 用于共享连接池：只保留已有且携带 Token 的
+// Executor attempt；共享层不得补造业务身份或覆盖其它 Sink。
 func preserveOfficialEgressSinkAttempt(ctx context.Context, sinkID officialegress.SinkID) (context.Context, error) {
 	return officialegress.PreserveDefaultSinkAttempt(ctx, sinkID)
 }

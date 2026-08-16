@@ -2019,7 +2019,7 @@ func (s *AccountTestService) testOpenAIImageAPIKey(c *gin.Context, ctx context.C
 	return nil
 }
 
-// testOpenAIImageOAuth 使用 Codex 0.145.0 独立 images/generations 画像测试 OAuth
+// testOpenAIImageOAuth 使用当前 Codex Release 的独立 images/generations 画像测试 OAuth
 // 生图能力。账号探针与真实转发必须共用 URL、header、正文和 TLS 合同，不能退回
 // hosted /responses。
 func (s *AccountTestService) testOpenAIImageOAuth(c *gin.Context, ctx context.Context, account *Account, modelID, prompt string) error {

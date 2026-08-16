@@ -243,7 +243,12 @@ func runBootstrapReplay(
 		fmt.Fprintf(os.Stderr, "读取 Catalog amendment 清单失败：%v\n", err)
 		return 1
 	}
-	replayed, err := scan()
+	removalByID := removals.byID()
+	historicalClassifications := make(map[string]SinkRecord, len(removalByID))
+	for id, receipt := range removalByID {
+		historicalClassifications[id] = receipt.Candidate
+	}
+	replayed, err := scanWithReviewedHistory(nil, historicalClassifications)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "bootstrap 源码回放失败：%v\n", err)
 		return 1
@@ -287,7 +292,15 @@ func runBootstrapReplay(
 			problems = append(problems, fmt.Sprintf("%s 在 bootstrap 回放中消失", id))
 			continue
 		}
-		if item, supplemented := supplementByID[id]; supplemented {
+		if receipt, removed := removalByID[id]; removed {
+			// 当前 scanner 可以随已退休实现删除旧分类规则，但不能失去对历史
+			// 调用表达式的结构识别。分类、路由和责任字段由 RemovalReceipt 冻结；
+			// 文件、函数、callee、AST 指纹和目标解析等结构事实仍从 bootstrap
+			// 源码重新扫描并逐字段比较。
+			if !compareSupplementStructure(receipt.Candidate, got) {
+				problems = append(problems, fmt.Sprintf("%s 的退休候选结构证据发生变化", id))
+			}
+		} else if item, supplemented := supplementByID[id]; supplemented {
 			if !compareSupplementStructure(item.Candidate, got) {
 				problems = append(problems, fmt.Sprintf("%s 的补录结构证据发生变化", id))
 			}

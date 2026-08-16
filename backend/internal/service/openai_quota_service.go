@@ -467,7 +467,7 @@ func (s *OpenAIQuotaService) ResetCredit(ctx context.Context, accountID int64) (
 	return &payload, nil
 }
 
-// doCodexQuotaRequest 只负责把运行态凭据和 body 交给 0.145.0 通用执行器。
+// doCodexQuotaRequest 只负责把运行态凭据和 body 交给当前 Release 的通用执行器。
 // URL、header 闭集、body 闭集、H1 线序、TLS 及 backend-client 生命周期均由
 // 不可变端点画像决定；本函数不得再复制一套 WHAM 契约。
 func (s *OpenAIQuotaService) doCodexQuotaRequest(

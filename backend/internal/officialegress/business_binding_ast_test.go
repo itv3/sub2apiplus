@@ -29,7 +29,7 @@ func TestAllBusinessSinkIDsAreBoundAtCallsitesAndDoNotCreateRawClients(t *testin
 		{"../service/openai_images_responses.go", "forwardOpenAIImagesOAuth", "officialEgressSinkImagesResponses"},
 		{"../service/openai_codex_models_service.go", "fetchCodexModelsManifestUpstream", "officialEgressSinkModelsList"},
 		{"../repository/openai_oauth_service.go", "ExchangeCode", "SinkCodexOAuthExchange"},
-		{"../repository/openai_oauth_service.go", "refreshTokenWithClientID", "SinkCodexOAuthRefresh"},
+		{"../service/openai_oauth_service.go", "executeOAuthRefresh", "SinkCodexOAuthRefresh"},
 		{"../service/openai_quota_service.go", "doCodexQuotaRequest", "officialEgressSinkQuotaWHAM"},
 		{"../service/openai_live.go", "createUpstreamLiveCall", "officialEgressSinkRealtimeCalls"},
 		{"../service/openai_live.go", "dialLiveSideband", "officialEgressSinkRealtimeSideband"},
@@ -138,7 +138,8 @@ func assertBusinessBindingFunction(t *testing.T, expectation businessBindingExpe
 			case *ast.Ident:
 				foundBindingCall = foundBindingCall || function.Name == "bindOfficialEgressSink"
 			case *ast.SelectorExpr:
-				foundBindingCall = foundBindingCall || function.Sel.Name == "StartDefaultSinkAttempt"
+				foundBindingCall = foundBindingCall || function.Sel.Name == "StartDefaultSinkAttempt" ||
+					function.Sel.Name == "BeginInvocation"
 			}
 		case *ast.Ident:
 			if current.Name == expectation.sinkIdentifier {

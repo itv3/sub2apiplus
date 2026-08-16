@@ -164,7 +164,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		// HTTP Executor；否则已定型官方身份会误入通用 HTTP 入口并被 fail-close。
 		(passthroughEnabled || wsDecision.Transport != OpenAIUpstreamTransportResponsesWebsocketV2)
 	if shouldStripOpenAIResponsesInputNamespaces(account, wsDecision.Transport, passthroughEnabled) {
-		// 精确官方 0.145.0 入口的契约没有 input namespace；若出现只能视为
+		// 精确官方入口的契约没有 input namespace；若出现只能视为
 		// 画像闭集外残留并清理。派生入口则按 v0.1.170 的上游修复保留
 		// OAuth 普通 /responses 工具调用 namespace，避免上游报 Missing namespace。
 		keepToolCallNamespaces := !isInboundOpenAIOfficialClient(c) &&
@@ -676,7 +676,7 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 		return nil, err
 	}
 
-	// Codex 0.145.0 内置 provider 默认先走 WS；只有可重试连接错误耗尽本次
+	// 当前 Codex Release 的内置 provider 默认先走 WS；只有可重试连接错误耗尽本次
 	// 调用的预算后，才把同一调用置为 force_http_fallback 并继续 HTTP。
 	var officialForwardPlan *OpenAIForwardInvocationPlan
 	var officialHTTPFallbackTarget officialegress.FallbackNode

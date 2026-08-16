@@ -73,20 +73,6 @@ func TestCreateAccountFromOAuthValidatesExtraBeforeExchange(t *testing.T) {
 	require.Zero(t, exchangeCalls.Load(), "非法账号配置必须在兑换授权码前拒绝")
 }
 
-func (openAIOAuthCreatePrivacyClient) RefreshToken(
-	_ context.Context,
-	_, _ string,
-) (*openai.TokenResponse, error) {
-	return nil, nil
-}
-
-func (openAIOAuthCreatePrivacyClient) RefreshTokenWithClientID(
-	_ context.Context,
-	_, _, _ string,
-) (*openai.TokenResponse, error) {
-	return nil, nil
-}
-
 type openAIOAuthCreatePrivacyTransport struct {
 	settingsStatus int
 	settingsBody   string

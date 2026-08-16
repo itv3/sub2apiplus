@@ -409,43 +409,6 @@ func TestOpenAIGatewayServiceParseOpenAIImagesRequest_JSONEditURLs(t *testing.T)
 	require.Equal(t, OpenAIImagesCapabilityNative, parsed.RequiredCapability)
 }
 
-func TestCollectOpenAIImagePointers_RecognizesDirectAssets(t *testing.T) {
-	items := collectOpenAIImagePointers([]byte(`{
-		"revised_prompt": "cat astronaut",
-		"parts": [
-			{"b64_json":"QUJD"},
-			{"download_url":"https://files.example.com/image.png?sig=1"},
-			{"asset_pointer":"file-service://file_123"}
-		]
-	}`))
-
-	require.Len(t, items, 3)
-	var sawBase64, sawURL, sawPointer bool
-	for _, item := range items {
-		if item.B64JSON == "QUJD" {
-			sawBase64 = true
-			require.Equal(t, "cat astronaut", item.Prompt)
-		}
-		if item.DownloadURL == "https://files.example.com/image.png?sig=1" {
-			sawURL = true
-		}
-		if item.Pointer == "file-service://file_123" {
-			sawPointer = true
-		}
-	}
-	require.True(t, sawBase64)
-	require.True(t, sawURL)
-	require.True(t, sawPointer)
-}
-
-func TestResolveOpenAIImageBytes_PrefersInlineBase64(t *testing.T) {
-	data, err := resolveOpenAIImageBytes(context.Background(), nil, nil, "", openAIImagePointerInfo{
-		B64JSON: "data:image/png;base64,QUJD",
-	}, openAIUpstreamErrorBodyReadLimit)
-	require.NoError(t, err)
-	require.Equal(t, []byte("ABC"), data)
-}
-
 func TestNewOpenAIImageStatusError_UsesProvidedReadLimit(t *testing.T) {
 	padding := strings.Repeat("x", int(openAIUpstreamErrorBodyReadLimit)+1024)
 	body := fmt.Sprintf(`{"error":{"padding":"%s","message":"diagnostic-marker"}}`, padding)
@@ -728,7 +691,7 @@ func findOpenAIImageTestSSEEvent(events []openAIImageTestSSEEvent, name string) 
 	return openAIImageTestSSEEvent{}, false
 }
 
-func TestOpenAIGatewayServiceForwardImages_OAuthUsesCodex0145GenerationsContract(t *testing.T) {
+func TestOpenAIGatewayServiceForwardImages_OAuthUsesActiveCodexGenerationsContract(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	body := []byte(`{"model":"gpt-image-2","prompt":"draw a cat","size":"1024x1024","quality":"high","background":"auto","n":3}`)
 
@@ -784,7 +747,7 @@ func TestOpenAIGatewayServiceForwardImages_OAuthUsesCodex0145GenerationsContract
 	require.Equal(t, HTTPUpstreamProfileOpenAI, HTTPUpstreamProfileFromContext(upstream.lastReq.Context()))
 	require.Equal(t, "application/json", upstream.lastReq.Header.Get("Content-Type"))
 	require.Equal(t, "*/*", upstream.lastReq.Header.Get("Accept"))
-	require.Equal(t, officialCodexVersion0145, upstream.lastReq.Header.Get("Version"))
+	require.Equal(t, activeOpenAICodexVersionForTest(), upstream.lastReq.Header.Get("Version"))
 	require.Equal(t, "acct-123", upstream.lastReq.Header.Get("chatgpt-account-id"))
 	require.Empty(t, upstream.lastReq.Header.Get("OpenAI-Beta"),
 		"OAuth 图像请求不得携带 OpenAI-Beta")

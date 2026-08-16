@@ -20,14 +20,14 @@ CallExpr、同一行上的多个表达式，正则都区分不了，每补一条
 失效：新代码写 Codex0146 完全不命中，而升级恰恰是本门禁最该起作用的时刻。
 `--self-test` 用内联样本把这一点变成机器断言。
 
-基线记录指纹而非计数：只比数量时，同一文件删掉一处旧泄漏、同时新增一处新泄漏即可
-通过，而实际内容已经变了。
+历史债务基线必须保持为空。确属非 OAuth persona 或入站兼容产品语义的版本引用，使用带中文理由的
+精确路径、行指纹和次数单独批准；新增、漂移或已经消失却未删除的例外都失败关闭。
 
 用法：
 
     python3 tools/check_version_leak.py              # 门禁模式，比对基线
     python3 tools/check_version_leak.py --self-test  # 校验判据本身
-    python3 tools/check_version_leak.py --update-baseline
+    python3 tools/check_version_leak.py --update-baseline  # 只确认零债务，不吸收新命中
 """
 
 from __future__ import annotations
@@ -42,6 +42,7 @@ import sys
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BASELINE = ROOT / "tools" / "version_leak_baseline.json"
 SCAN_ROOT = ROOT / "backend"
+POLICY_SCHEMA_VERSION = "codex-oauth-version-leak-policy/v2"
 
 # 把某个 Codex 版本焊进符号名，或与 codex 同行出现的版本字面量。
 # 按标识符形状匹配，不写死版本号。
@@ -108,36 +109,93 @@ def total_hits(hits: dict[str, dict[str, int]]) -> int:
     return sum(sum(counts.values()) for counts in hits.values())
 
 
-def load_baseline() -> dict[str, dict[str, int]] | None:
+def load_policy() -> tuple[
+    dict[str, dict[str, int]],
+    dict[str, dict[str, tuple[int, str]]],
+] | None:
     if not BASELINE.exists():
         return None
     data = json.loads(BASELINE.read_text(encoding="utf-8"))
+    if data.get("schema_version") != POLICY_SCHEMA_VERSION:
+        return None
+    if data.get("_exempt") != EXEMPT_RE.pattern:
+        return None
+    closure = data.get("historical_debt_closure")
+    if closure != {
+        "date": "2026-08-16",
+        "prior_files": 19,
+        "prior_hits": 58,
+        "current_files": 0,
+        "current_hits": 0,
+    }:
+        return None
     files = data.get("files")
-    if not isinstance(files, dict):
+    approved_raw = data.get("approved_non_leak_references")
+    if not isinstance(files, dict) or not isinstance(approved_raw, dict):
         return None
     baseline: dict[str, dict[str, int]] = {}
     for rel, entry in files.items():
         if not isinstance(entry, dict):
-            # 旧格式只有计数，无法定位内容，必须重新生成基线。
             return None
         baseline[str(rel)] = {str(k): int(v) for k, v in entry.items()}
-    return baseline
+    approved: dict[str, dict[str, tuple[int, str]]] = {}
+    for rel, entries in approved_raw.items():
+        if not isinstance(entries, dict):
+            return None
+        approved_entries: dict[str, tuple[int, str]] = {}
+        for fingerprint, entry in entries.items():
+            if not isinstance(entry, dict):
+                return None
+            count = entry.get("count")
+            reason = entry.get("reason")
+            if not isinstance(count, int) or count <= 0:
+                return None
+            if not isinstance(reason, str) or not reason.strip():
+                return None
+            approved_entries[str(fingerprint)] = (count, reason.strip())
+        approved[str(rel)] = approved_entries
+    return baseline, approved
 
 
-def write_baseline(hits: dict[str, dict[str, int]]) -> None:
-    payload = {
-        "_comment": (
-            "各生产文件当前的 Codex 版本符号名／注释命中指纹（规范化行内容哈希 → 次数）。"
-            "裸版本字面量的归属由 go/ast 判定，见 backend/internal/service/"
-            "official_egress_version_leak_ast_test.go 及其 testdata 基线。"
-            "门禁禁止出现基线外的新指纹，也禁止同一指纹次数上升。"
-        ),
-        "_exempt": EXEMPT_RE.pattern,
-        "files": {rel: dict(sorted(fp.items())) for rel, fp in sorted(hits.items())},
-    }
-    BASELINE.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+def validate_policy(
+    hits: dict[str, dict[str, int]],
+    baseline: dict[str, dict[str, int]],
+    approved: dict[str, dict[str, tuple[int, str]]],
+) -> list[str]:
+    errors: list[str] = []
+    if baseline:
+        errors.append(
+            "历史版本泄漏债务基线必须为空；不得继续用 files 吸收已知或新增命中"
+        )
+
+    for rel, fingerprints in sorted(hits.items()):
+        approved_entries = approved.get(rel, {})
+        for key, count in sorted(fingerprints.items()):
+            approved_entry = approved_entries.get(key)
+            if approved_entry is None:
+                errors.append(
+                    f"{rel} 出现未分类版本泄漏（指纹 {key}，当前 {count} 次）"
+                )
+                continue
+            expected, _ = approved_entry
+            if count != expected:
+                errors.append(
+                    f"{rel} 的受审非泄漏引用次数漂移（指纹 {key}，"
+                    f"批准 {expected} 次、当前 {count} 次）"
+                )
+
+    for rel, entries in sorted(approved.items()):
+        current = hits.get(rel, {})
+        for key, (expected, _) in sorted(entries.items()):
+            count = current.get(key, 0)
+            if count == 0:
+                errors.append(
+                    f"{rel} 的受审非泄漏引用已消失（指纹 {key}）；必须同步删除失效例外"
+                )
+            elif count != expected:
+                # 上一轮已经报告次数漂移，避免重复输出。
+                continue
+    return errors
 
 
 # 判据自测样本。每条都写明它守护的是哪种失效：门禁写死版本号时，"新版本"分组
@@ -149,7 +207,7 @@ SELF_TEST_CASES: list[tuple[str, bool, str]] = [
     ('transportID = "codex-0.146.0-http-ubuntu24-native"', True, "新版本传输 ID"),
     ("// 对齐 codex_exec 0.147.2 抓包默认值。", True, "注释中的 codex 版本"),
     ("codex0146EndpointID(endpoint)", True, "新版本端点类型"),
-    # 现役版本同样必须被检出。
+    # 历史版本同样必须被检出，不能因 active 已升级而放过回写。
     ('officialCodexVersion0145 = "0.145.0"', True, "现役版本常量"),
     ("codex0145EndpointID(officialCodexEndpointModels)", True, "现役版本符号名"),
     # 不含 codex 语境的裸版本由 AST 门禁负责归属判定，本脚本不再处理，
@@ -181,6 +239,18 @@ def run_self_test() -> int:
     elif set(before) == set(after):
         failures.append("基线指纹无法区分内容变化，等量替换可以绕过门禁")
 
+    approved = {"a.go": {"known": (1, "独立产品语义")}}
+    if validate_policy({"a.go": {"known": 1}}, {}, approved):
+        failures.append("精确受审非泄漏引用被错误拒绝")
+    if not validate_policy({"a.go": {"unknown": 1}}, {}, approved):
+        failures.append("未分类版本泄漏未被拒绝")
+    if not validate_policy({"a.go": {"known": 2}}, {}, approved):
+        failures.append("受审非泄漏引用次数漂移未被拒绝")
+    if not validate_policy({}, {}, approved):
+        failures.append("已经消失的受审非泄漏引用未被拒绝")
+    if not validate_policy({}, {"legacy.go": {"debt": 1}}, {}):
+        failures.append("非空历史债务基线未被拒绝")
+
     if failures:
         for failure in failures:
             print(f"🔴 判据自测失败：{failure}", file=sys.stderr)
@@ -194,7 +264,7 @@ def main() -> int:
     parser.add_argument(
         "--update-baseline",
         action="store_true",
-        help="以当前扫描结果覆盖基线，用于版本解耦推进后收紧门禁",
+        help="确认历史债务基线为零；不会把当前命中写回基线",
     )
     parser.add_argument(
         "--self-test",
@@ -207,61 +277,33 @@ def main() -> int:
         return run_self_test()
 
     hits = scan()
-    total = total_hits(hits)
-
-    if args.update_baseline:
-        write_baseline(hits)
-        print(f"✅ 已更新版本泄漏基线：{len(hits)} 个文件，合计 {total} 个命中行")
-        return 0
-
-    baseline = load_baseline()
-    if baseline is None:
+    policy = load_policy()
+    if policy is None:
         print(
-            f"🔴 缺少版本泄漏基线 {BASELINE.relative_to(ROOT)}（或仍是旧的计数格式），"
-            "请先执行 --update-baseline",
+            f"🔴 缺少有效版本泄漏策略 {BASELINE.relative_to(ROOT)}；"
+            "必须包含空历史债务基线和带理由的精确非泄漏引用",
             file=sys.stderr,
         )
         return 1
+    baseline, approved = policy
 
-    # 按指纹比对：基线外的新指纹与次数上升都算违规。只比总数会放过“删一处旧泄漏、
-    # 同时加一处新泄漏”这种总量不变的替换。
-    errors: list[str] = []
-    for rel, fingerprints in sorted(hits.items()):
-        allowed = baseline.get(rel, {})
-        if not allowed:
-            errors.append(
-                f"{rel} 是基线外的新增版本泄漏（{sum(fingerprints.values())} 行）；"
-                "共享业务层与通用执行层不得引入版本标识符"
-            )
-            continue
-        for key, count in sorted(fingerprints.items()):
-            permitted = allowed.get(key, 0)
-            if count > permitted:
-                errors.append(
-                    f"{rel} 出现基线外的版本泄漏内容（指纹 {key}，"
-                    f"基线 {permitted} 次、当前 {count} 次）"
-                )
+    errors = validate_policy(hits, baseline, approved)
 
     if errors:
         for error in errors:
             print(f"🔴 {error}", file=sys.stderr)
         return 1
 
-    improved: dict[str, tuple[int, int]] = {}
-    for rel, allowed in baseline.items():
-        was = sum(allowed.values())
-        now = sum(hits.get(rel, {}).values())
-        if now < was:
-            improved[rel] = (was, now)
-    if improved:
-        for rel, (was, now) in sorted(improved.items()):
-            print(f"⬇️  {rel}：{was} → {now}")
-        print(
-            "提示：命中已下降，可执行 --update-baseline 收紧门禁，"
-            "防止后续回升到旧水位"
-        )
-
-    print(f"✅ 版本泄漏未超基线：{len(hits)} 个文件，合计 {total} 个命中行")
+    approved_count = sum(
+        expected
+        for entries in approved.values()
+        for expected, _ in entries.values()
+    )
+    action = "零债务状态已确认" if args.update_baseline else "门禁通过"
+    print(
+        f"✅ 版本泄漏{action}：历史债务 0，未分类 0，"
+        f"受审非泄漏引用 {len(approved)} 个文件／{approved_count} 行"
+    )
     return 0
 
 

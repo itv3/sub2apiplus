@@ -464,8 +464,25 @@ func TestOpenAIWSConnPool_SameSinkReuseRequiresCurrentInvocationToken(t *testing
 	_, err = pool.Acquire(context.Background(), request)
 	require.Error(t, err)
 	require.ErrorIs(t, err, officialegress.ErrGuardRejected)
-	require.Equal(t, int64(2), admission.calls.Load(), "每次 Acquire 都必须执行 admission")
+	var rejection *officialegress.GuardRejectionError
+	require.ErrorAs(t, err, &rejection)
+	require.Equal(t, officialegress.ReasonMissingFinalizationToken, rejection.Reason)
+	errorCode, ok := officialegress.RuntimeErrorCodeOf(err)
+	require.True(t, ok)
+	require.Equal(t, officialegress.RuntimeErrorCodeGuardRejected, errorCode)
+	require.Equal(t, int64(1), admission.calls.Load(), "缺 Token 请求必须在进入 Guard 前 fail-close")
 	require.Equal(t, 1, dialer.DialCount(), "缺 Token 的同 Sink 请求不得复用或新拨号")
+
+	mismatchedRequest := request
+	mismatchedRequest.SinkID = officialegress.SinkCodexResponsesWSV2Passthrough
+	_, err = pool.Acquire(tokenContext, mismatchedRequest)
+	require.Error(t, err)
+	require.ErrorIs(t, err, officialegress.ErrGuardRejected)
+	rejection = nil
+	require.ErrorAs(t, err, &rejection)
+	require.Equal(t, officialegress.ReasonSinkBindingMismatch, rejection.Reason)
+	require.Equal(t, int64(1), admission.calls.Load(), "Sink 身份不符必须在进入 Guard 前 fail-close")
+	require.Equal(t, 1, dialer.DialCount(), "Sink 身份不符不得复用或新拨号")
 
 	second, err := pool.Acquire(tokenContext, request)
 	require.NoError(t, err)
@@ -474,7 +491,7 @@ func TestOpenAIWSConnPool_SameSinkReuseRequiresCurrentInvocationToken(t *testing
 	second.Release()
 }
 
-func TestOpenAIWSConnPool_CanarySinkDisablesTokenlessBackgroundPrewarm(t *testing.T) {
+func TestOpenAIWSConnPool_NonemptySinkDisablesBackgroundPrewarm(t *testing.T) {
 	cfg := &config.Config{}
 	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 2
 	cfg.Gateway.OpenAIWS.MinIdlePerAccount = 2
@@ -484,10 +501,6 @@ func TestOpenAIWSConnPool_CanarySinkDisablesTokenlessBackgroundPrewarm(t *testin
 	dialer := &openAIWSCountingDialer{}
 	pool.setClientDialerForTest(dialer)
 	pool.guard = &requireCurrentTokenAdmissionGuard{}
-	pool.tokenlessPrewarmAllowed = func(sinkID officialegress.SinkID) (bool, error) {
-		require.Equal(t, officialegress.SinkCodexResponsesWS, sinkID)
-		return false, nil
-	}
 
 	request := openAIWSAcquireRequest{
 		Account: &Account{ID: 131, Platform: PlatformOpenAI, Type: AccountTypeOAuth},
@@ -501,8 +514,8 @@ func TestOpenAIWSConnPool_CanarySinkDisablesTokenlessBackgroundPrewarm(t *testin
 	verifiedConnID := first.ConnID()
 	first.Release()
 
-	// 生产默认 min-idle 会尝试补齐连接；canary/enforced 必须在
-	// 调度层就禁止这种没有 invocation Token 的后台拨号。
+	// 生产默认 min-idle 会尝试补齐连接；非空 SinkID 必须在调度层就禁止
+	// 没有当前 invocation Token 的后台拨号。
 	pool.ensureTargetIdleAsync(request.Account.ID)
 	require.Never(t, func() bool {
 		return dialer.DialCount() > 1
@@ -514,7 +527,7 @@ func TestOpenAIWSConnPool_CanarySinkDisablesTokenlessBackgroundPrewarm(t *testin
 	require.Zero(t, ap.creating)
 	require.False(t, ap.prewarmActive)
 	ap.mu.Unlock()
-	require.Equal(t, 1, dialer.DialCount(), "tokenless prewarm 不得拨号或进入池")
+	require.Equal(t, 1, dialer.DialCount(), "非空 SinkID 后台预热不得拨号或进入池")
 
 	// 绕过调度层直接进入 worker 也必须 fail-close，并释放预留计数。
 	ap.mu.Lock()
@@ -532,7 +545,7 @@ func TestOpenAIWSConnPool_CanarySinkDisablesTokenlessBackgroundPrewarm(t *testin
 	second, err := pool.Acquire(tokenContext, request)
 	require.NoError(t, err)
 	require.True(t, second.Reused())
-	require.Equal(t, verifiedConnID, second.ConnID(), "canary invocation 只能复用终端验证连接")
+	require.Equal(t, verifiedConnID, second.ConnID(), "Codex invocation 只能复用终端验证连接")
 	second.Release()
 }
 
@@ -2080,7 +2093,7 @@ func newWSExecutorAttemptContextForSink(
 		officialCodexIdentityAccountProjection{ID: 1, ChatGPTAccountID: "ws-pool-account"},
 	)
 	require.NoError(t, err)
-	prepared, err := executor.Prepare(context.Background(), officialegress.ExecutorRequest{
+	executorRequest := officialegress.ExecutorRequest{
 		Bundle: bundle,
 		Plan: officialegress.CodexEgressPlan{
 			SinkID:  sinkID,
@@ -2101,7 +2114,14 @@ func newWSExecutorAttemptContextForSink(
 			Body:           officialegress.NewReplayableRequestBody(nil),
 			InvocationID:   "ws-pool-current-invocation", DeclaredPersona: officialegress.PersonaCodexCLI,
 		},
-	})
+		AttemptReason:          officialegress.AttemptReasonInitial,
+		ExpectedAttemptOrdinal: 1,
+	}
+	invocation, err := executor.BeginInvocation(
+		context.Background(), bundle, executorRequest.Plan.InvocationID,
+	)
+	require.NoError(t, err)
+	prepared, err := invocation.PrepareAttempt(context.Background(), executorRequest)
 	require.NoError(t, err)
 	request, err := prepared.TakeHTTPRequest()
 	require.NoError(t, err)

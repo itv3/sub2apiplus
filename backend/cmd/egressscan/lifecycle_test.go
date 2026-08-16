@@ -108,6 +108,42 @@ func TestLifecycleReceiptsFreezeCompleteCandidates(t *testing.T) {
 	}
 }
 
+func TestHistoricalRetirementClassificationRequiresExactReceipt(t *testing.T) {
+	reviewedID := "reviewed-retired-candidate"
+	records := []SinkRecord{
+		{ScanCandidateID: reviewedID, Func: "retiredFunction", File: "retired.go", Line: 10},
+		{ScanCandidateID: "unreviewed-candidate", Func: "newFunction", File: "new.go", Line: 20},
+	}
+	frozen := SinkRecord{
+		ScanCandidateID:    reviewedID,
+		RuntimeSinkID:      "codex.oauth.refresh",
+		Purpose:            "oauth_refresh",
+		Persona:            "codex-cli",
+		EndpointEvidence:   "codex_profile",
+		Routes:             []string{"POST auth.openai.com/oauth/token"},
+		Backend:            "req_profile",
+		TargetBackend:      "req_profile",
+		EnforcementState:   "legacy_observe",
+		Owner:              "reviewer",
+		MigrationChangeset: "2",
+		ExpiryCondition:    "已由 RemovalReceipt 证明退休",
+		Rationale:          "历史分类由追加式收据冻结",
+	}
+
+	classified, unclassified := applyClassificationWithHistory(
+		records,
+		map[string]SinkRecord{reviewedID: frozen},
+	)
+	if len(unclassified) != 1 || !strings.Contains(unclassified[0], "unreviewed-candidate") {
+		t.Fatalf("未受审候选没有保持硬失败：%v", unclassified)
+	}
+	if classified[0].RuntimeSinkID != frozen.RuntimeSinkID ||
+		classified[0].Persona != frozen.Persona ||
+		classified[0].File != records[0].File || classified[0].Line != records[0].Line {
+		t.Fatalf("历史收据分类没有只覆盖分类字段：%+v", classified[0])
+	}
+}
+
 func TestBootstrapInventoryLockMatchesCurrentReviewedScanner(t *testing.T) {
 	historicalLockRaw, err := os.ReadFile("../../../docs/egress/consolidation/bootstrap-inventory-lock.json")
 	if err != nil {
@@ -122,7 +158,7 @@ func TestBootstrapInventoryLockMatchesCurrentReviewedScanner(t *testing.T) {
 		t.Fatal(err)
 	}
 	currentLockSum := sha256.Sum256(currentLockRaw)
-	if hex.EncodeToString(currentLockSum[:]) != "5d20616d2dada579386c892143d33d7d055f55201086feb74e4b40b351ca9fe6" {
+	if hex.EncodeToString(currentLockSum[:]) != "a354f834db1b5cecaa2f70989fe1cf72ebcdbb1987a79029ef3409755b0229ac" {
 		t.Fatal("当前 bootstrap inventory lock 摘要漂移")
 	}
 	baseline, err := os.ReadFile("../../../docs/egress/foundation/sink-baseline.json")

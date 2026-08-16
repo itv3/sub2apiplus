@@ -435,7 +435,7 @@ func changeset3CaptureRouteWithCatalogs(
 			SyntheticReturnedURL: dynamic.ReturnedURL.String(), ValidationResult: "accepted_by_bundle_dynamic_target_policy",
 		}
 	}
-	result, err := executor.Execute(context.Background(), ExecutorRequest{
+	result, err := executeSingleExecutorTestAttempt(context.Background(), executor, ExecutorRequest{
 		Bundle: bundle,
 		Plan: CodexEgressPlan{
 			SinkID: binding.ID(), Purpose: binding.Purpose(), EndpointID: endpointID,

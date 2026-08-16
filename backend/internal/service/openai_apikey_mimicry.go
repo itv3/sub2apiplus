@@ -3,7 +3,7 @@ package service
 import "net/http"
 
 const (
-	// previous 回退画像：Codex Desktop 0.144.0-alpha.4，2026-07。
+	// previous 回退画像：历史 Codex Desktop 抓包，2026-07。
 	codexDesktopOriginator   = "Codex Desktop"
 	codexDesktopUserAgent    = "Codex Desktop/0.144.0-alpha.4 (Mac OS 26.5.2; arm64) unknown (Codex Desktop; 26.707.51957)"
 	codexDesktopBetaFeatures = "remote_compaction_v2"

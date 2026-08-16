@@ -289,7 +289,7 @@ func openAIImageUploadToDataURL(upload OpenAIImagesUpload) (string, error) {
 	return "data:" + contentType + ";base64," + base64.StdEncoding.EncodeToString(upload.Data), nil
 }
 
-// resolveOpenAICodexImagesEndpoint 根据入站操作选择 0.145.0 独立 images 画像。
+// resolveOpenAICodexImagesEndpoint 根据入站操作选择当前 Release 的独立 images 画像。
 // 调用方不得自行拼接 ChatGPT 路径，以免 generations/edits 再次退回 hosted
 // Responses 形态。
 func resolveOpenAICodexImagesEndpoint(
@@ -306,7 +306,7 @@ func resolveOpenAICodexImagesEndpoint(
 	)
 }
 
-// buildOpenAICodexImagesRequestBody 构造 Codex 0.145.0 独立 images 端点正文，
+// buildOpenAICodexImagesRequestBody 构造当前 Codex Release 的独立 images 端点正文，
 // 不经过 hosted /responses 工具请求。
 // generations 顶层最多五个字段；edits 只在首位增加 images，且 n、mask、style、
 // output_format 等不属于官方结构体的字段一律不会出站。
@@ -338,7 +338,7 @@ func buildOpenAICodexImagesRequestBody(
 			continue
 		}
 		// 官方 image edit 工具先把本地文件读入并转为 data URL。远程 URL 不能
-		// 原样泄漏到该端点，否则 wire 形态与 0.145.0 实抓不一致。
+		// 原样泄漏到该端点，否则 wire 形态与已批准实抓不一致。
 		if !strings.HasPrefix(strings.ToLower(trimmed), "data:") {
 			return nil, fmt.Errorf("Codex image edit only accepts data URL inputs")
 		}
@@ -388,7 +388,7 @@ func buildOpenAICodexImagesRequestBody(
 }
 
 // buildOpenAICodexImagesRequest 直接执行端点画像：URL、方法、Host、header 闭包和
-// Cookie 生命周期都由 0.145.0 画像决定，不复用会注入 Responses 会话头与正文修正的
+// Cookie 生命周期都由当前 Release 画像决定，不复用会注入 Responses 会话头与正文修正的
 // buildUpstreamRequest。
 func (s *OpenAIGatewayService) buildOpenAICodexImagesRequest(
 	ctx context.Context,

@@ -39,7 +39,7 @@
             "ca_mode": "system",
             "surface": "codex-ws"
           },
-          "rationale": "direct 面未配置自定义 CA，subject 为 codex-ws。注意该 pcap 同时含启动期 models 的 HTTP 握手，判据缺陷见 SPEC_TLS_003_JUDGMENT_DEFECT.md。"
+          "rationale": "direct 面未配置自定义 CA，subject 为 codex-ws；该 pcap 同时含启动期 models 的 HTTP 握手，因此判据必须以 SNI 与场景标签排除非目标握手。"
         },
         {
           "glob": "mitm/codex-http/*/codex-http.jsonl",

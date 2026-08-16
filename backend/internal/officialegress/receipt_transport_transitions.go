@@ -150,7 +150,7 @@ func applyTransportReceiptTransitionEntry(
 	}
 	// CurrentTransportID 属于摘要冻结的变更集 4 历史锚点；当前 Active/Previous 的
 	// transport 由各自完整画像决定，并按 ReleaseDigest 精确绑定，避免未来换版仍被
-	// 0.145.0 的 transport ID 锁死，也禁止两套 Bundle 跨版本混用 transport。
+	// Previous 的 transport ID 锁死，也禁止两套 Bundle 跨版本混用 transport。
 	receipt.routeClaims[claimIndex].transportID = entry.CurrentTransportID
 	return nil
 }

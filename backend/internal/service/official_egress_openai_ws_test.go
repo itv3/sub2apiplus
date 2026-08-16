@@ -284,7 +284,7 @@ func TestOpenAIOfficialEgressWSDerivesKiloIdentityAndCanonicalFrame(t *testing.T
 		mustOfficialEgressField(t, egressContext, OfficialEgressFieldSessionID).Source,
 	)
 
-	firstFinal, firstResult, err := finalizeOpenAIOfficialEgressWSFrame(
+	firstFinal, firstResult, err := prepareOpenAIOfficialEgressSemanticWSFrame(
 		ctx,
 		firstPayload,
 		firstPayload,
@@ -415,7 +415,7 @@ func TestOpenAIOfficialEgressWSDerivesKiloIdentityAndCanonicalFrame(t *testing.T
 		"previous_response_id":"resp_kilo_ws_1",
 		"input":[{"type":"function_call_output","call_id":"call_kilo_ws_1","output":"ok"}]
 	}`)
-	secondFinal, _, err := finalizeOpenAIOfficialEgressWSFrame(
+	secondFinal, _, err := prepareOpenAIOfficialEgressSemanticWSFrame(
 		ctx,
 		continuation,
 		continuation,
@@ -448,7 +448,7 @@ func TestOpenAIOfficialEgressWSDerivesKiloIdentityAndCanonicalFrame(t *testing.T
 			{"type":"message","role":"user","content":[{"type":"input_text","text":"读取文件\n<environment_details>time=1</environment_details>"}]}
 		]
 	}`)
-	toolRequestFinal, _, err := finalizeOpenAIOfficialEgressWSFrame(
+	toolRequestFinal, _, err := prepareOpenAIOfficialEgressSemanticWSFrame(
 		ctx,
 		fullHistoryToolRequest,
 		fullHistoryToolRequest,
@@ -474,7 +474,7 @@ func TestOpenAIOfficialEgressWSDerivesKiloIdentityAndCanonicalFrame(t *testing.T
 			{"type":"function_call_output","call_id":"call_kilo_ws_2","output":"ok"}
 		]
 	}`)
-	fullHistoryFinal, _, err := finalizeOpenAIOfficialEgressWSFrame(
+	fullHistoryFinal, _, err := prepareOpenAIOfficialEgressSemanticWSFrame(
 		ctx,
 		fullHistoryToolContinuation,
 		fullHistoryToolContinuation,
@@ -558,7 +558,7 @@ func TestOpenAIOfficialEgressWSDerivedNonLiteUsesOfficialContract(t *testing.T) 
 		payload,
 	)
 	require.NoError(t, err)
-	finalized, _, err := finalizeOpenAIOfficialEgressWSFrame(ctx, payload, payload, "", false)
+	finalized, _, err := prepareOpenAIOfficialEgressSemanticWSFrame(ctx, payload, payload, "", false)
 	require.NoError(t, err)
 	require.Equal(t, "keep-top-level", gjson.GetBytes(finalized, "instructions").String())
 	require.Equal(t, "lookup", gjson.GetBytes(finalized, "tools.0.name").String())
@@ -622,7 +622,7 @@ func TestOpenAIOfficialEgressWSFramePreservesValidContinuation(t *testing.T) {
 		]
 	}`))
 
-	finalized, result, err := finalizeOpenAIOfficialEgressWSFrame(
+	finalized, result, err := prepareOpenAIOfficialEgressSemanticWSFrame(
 		ctx,
 		original,
 		original,
@@ -672,7 +672,7 @@ func TestOpenAIOfficialEgressWSFrameRejectsHistoryExpansionAndIdentityChanges(t 
 		"prompt_cache_key":"019f9577-d69f-7892-809e-8a3a4198c671",
 		"input":[{"type":"custom_tool_call_output","call_id":"call_t6","output":"ok"}]
 	}`))
-	_, _, err := finalizeOpenAIOfficialEgressWSFrame(
+	_, _, err := prepareOpenAIOfficialEgressSemanticWSFrame(
 		ctx,
 		original,
 		withoutPrevious,
@@ -690,7 +690,7 @@ func TestOpenAIOfficialEgressWSFrameRejectsHistoryExpansionAndIdentityChanges(t 
 			{"type":"custom_tool_call_output","call_id":"call_t6","output":"ok"}
 		]
 	}`))
-	_, _, err = finalizeOpenAIOfficialEgressWSFrame(
+	_, _, err = prepareOpenAIOfficialEgressSemanticWSFrame(
 		ctx,
 		original,
 		expandedInput,
@@ -700,7 +700,7 @@ func TestOpenAIOfficialEgressWSFrameRejectsHistoryExpansionAndIdentityChanges(t 
 	require.ErrorContains(t, err, "input")
 
 	// 上游已经明确返回 previous_response_not_found 后，现有受控回放仍可工作。
-	finalized, _, err := finalizeOpenAIOfficialEgressWSFrame(
+	finalized, _, err := prepareOpenAIOfficialEgressSemanticWSFrame(
 		ctx,
 		original,
 		expandedInput,
@@ -734,7 +734,7 @@ func TestOpenAIOfficialEgressWSFrameAddsHistoricalAndCurrentTurnMetadata(t *test
 		]
 	}`))
 
-	finalized, result, err := finalizeOpenAIOfficialEgressWSFrame(
+	finalized, result, err := prepareOpenAIOfficialEgressSemanticWSFrame(
 		ctx,
 		original,
 		original,
@@ -787,7 +787,7 @@ func TestOpenAIOfficialEgressWSFrameRejectsConflictingItemTurnMetadata(t *testin
 		}]
 	}`))
 
-	_, _, err := finalizeOpenAIOfficialEgressWSFrame(
+	_, _, err := prepareOpenAIOfficialEgressSemanticWSFrame(
 		ctx,
 		original,
 		original,
@@ -802,7 +802,7 @@ func TestOpenAIOfficialEgressWSFrameWithoutProfilePreservesPayload(t *testing.T)
 		"type":"response.create",
 		"input":[{"type":"message","role":"user","content":"你好"}]
 	}`)
-	finalized, result, err := finalizeOpenAIOfficialEgressWSFrame(
+	finalized, result, err := prepareOpenAIOfficialEgressSemanticWSFrame(
 		context.Background(),
 		original,
 		original,
@@ -818,7 +818,7 @@ func TestOpenAIOfficialEgressWSUnknownFrameIsNeverModified(t *testing.T) {
 	ctx, _, _, _ := newOfficialOpenAIWSContextForTest(t)
 	original := []byte(`{"type":"session.update","session":{"model":"gpt-5.6-luna"}}`)
 
-	finalized, _, err := finalizeOpenAIOfficialEgressWSFrame(
+	finalized, _, err := prepareOpenAIOfficialEgressSemanticWSFrame(
 		ctx,
 		original,
 		original,
@@ -828,7 +828,7 @@ func TestOpenAIOfficialEgressWSUnknownFrameIsNeverModified(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, original, finalized)
 
-	_, _, err = finalizeOpenAIOfficialEgressWSFrame(
+	_, _, err = prepareOpenAIOfficialEgressSemanticWSFrame(
 		ctx,
 		original,
 		[]byte(`{"type":"session.update","session":{"model":"changed"}}`),

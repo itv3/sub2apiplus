@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"sync"
 	"testing"
 )
 
@@ -42,13 +41,14 @@ func TestExecutorInvocationEnforcesBehaviorAndTransportBudgets(t *testing.T) {
 		assertInvocationAttemptIdentity(t, first, bundle, 1, AttemptReasonInitial)
 
 		request.AttemptReason = AttemptReasonReconnect
-		second, err := invocation.PrepareAttempt(context.Background(), freshExecutorInvocationRequest(t, request))
+		second, err := invocation.PrepareAttempt(context.Background(), freshExecutorInvocationRequest(t, request, 2))
 		if err != nil {
 			t.Fatal(err)
 		}
 		assertInvocationAttemptIdentity(t, second, bundle, 2, AttemptReasonReconnect)
 
 		request.AttemptReason = AttemptReasonRetry
+		request.ExpectedAttemptOrdinal = 3
 		if _, err := invocation.PrepareAttempt(context.Background(), request); !errors.Is(err, ErrBehaviorAttemptBudgetExceeded) {
 			t.Fatalf("第三次 attempt 未被行为预算拒绝：%v", err)
 		}
@@ -64,6 +64,7 @@ func TestExecutorInvocationEnforcesBehaviorAndTransportBudgets(t *testing.T) {
 			t.Fatal(err)
 		}
 		request.AttemptReason = AttemptReasonRetry
+		request.ExpectedAttemptOrdinal = 2
 		if _, err := invocation.PrepareAttempt(context.Background(), request); !errors.Is(err, ErrTransportAttemptBudgetExceeded) {
 			t.Fatalf("第二次 attempt 未被传输预算拒绝：%v", err)
 		}
@@ -98,6 +99,7 @@ func TestExecutorInvocationRequiresFallbackTransitionCapability(t *testing.T) {
 	assertInvocationAttemptIdentity(t, first, bundle, 1, AttemptReasonInitial)
 
 	fallback := executorRequestForFallback(t, bundle, primary, fallbackTarget)
+	fallback.ExpectedAttemptOrdinal = 2
 	if _, err := invocation.PrepareAttempt(context.Background(), fallback); !errors.Is(err, ErrFallbackTransitionRequired) {
 		t.Fatalf("没有 transition capability 的 fallback 未被拒绝：%v", err)
 	}
@@ -109,67 +111,50 @@ func TestExecutorInvocationRequiresFallbackTransitionCapability(t *testing.T) {
 	if err := invocation.TransitionFallback(fallbackTarget); err != nil {
 		t.Fatal(err)
 	}
-	second, err := invocation.PrepareAttempt(context.Background(), freshExecutorInvocationRequest(t, fallback))
+	second, err := invocation.PrepareAttempt(context.Background(), freshExecutorInvocationRequest(t, fallback, 2))
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertInvocationAttemptIdentity(t, second, bundle, 2, AttemptReasonFallback)
 
 	fallback.AttemptReason = AttemptReasonRetry
-	third, err := invocation.PrepareAttempt(context.Background(), freshExecutorInvocationRequest(t, fallback))
+	third, err := invocation.PrepareAttempt(context.Background(), freshExecutorInvocationRequest(t, fallback, 3))
 	if err != nil {
 		t.Fatal(err)
 	}
 	assertInvocationAttemptIdentity(t, third, bundle, 3, AttemptReasonRetry)
 }
 
-func TestExecutorInvocationAssignsConcurrentOrdinalsOnce(t *testing.T) {
+func TestExecutorInvocationRequiresExplicitMonotonicOrdinals(t *testing.T) {
 	executor, bundle, request := newExecutorInvocationTestFixture(t, 3, 3)
 	invocation, err := executor.BeginInvocation(context.Background(), bundle, request.Plan.InvocationID)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	var wg sync.WaitGroup
-	var mu sync.Mutex
-	ordinals := map[uint32]bool{}
-	successes := 0
-	for range 12 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			prepared, prepareErr := invocation.PrepareAttempt(
-				context.Background(), freshExecutorInvocationRequest(t, request),
-			)
-			if prepareErr != nil {
-				if !errors.Is(prepareErr, ErrBehaviorAttemptBudgetExceeded) &&
-					!errors.Is(prepareErr, ErrTransportAttemptBudgetExceeded) {
-					t.Errorf("并发 Prepare 返回意外错误：%v", prepareErr)
-				}
-				return
-			}
-			httpRequest, takeErr := prepared.TakeHTTPRequest()
-			if takeErr != nil {
-				t.Errorf("取得并发 PreparedRequest：%v", takeErr)
-				return
-			}
-			identity, ok := AttemptIdentityFromContext(httpRequest.Context())
-			if !ok {
-				t.Error("并发 attempt 缺少身份")
-				return
-			}
-			mu.Lock()
-			successes++
-			if ordinals[identity.AttemptOrdinal] {
-				t.Errorf("AttemptOrdinal 被重复签发：%d", identity.AttemptOrdinal)
-			}
-			ordinals[identity.AttemptOrdinal] = true
-			mu.Unlock()
-		}()
+	missingOrdinal := freshExecutorInvocationRequest(t, request)
+	missingOrdinal.ExpectedAttemptOrdinal = 0
+	if _, err := invocation.PrepareAttempt(context.Background(), missingOrdinal); err == nil ||
+		!strings.Contains(err.Error(), "必须显式设置") {
+		t.Fatalf("缺失 ordinal 未被拒绝：%v", err)
 	}
-	wg.Wait()
-	if successes != 3 || len(ordinals) != 3 || !ordinals[1] || !ordinals[2] || !ordinals[3] {
-		t.Fatalf("并发 attempt 预算或序号非法：successes=%d ordinals=%v", successes, ordinals)
+	if _, err := invocation.PrepareAttempt(
+		context.Background(), freshExecutorInvocationRequest(t, request, 2),
+	); err == nil || !strings.Contains(err.Error(), "原子序号不一致") {
+		t.Fatalf("乱序 ordinal 未被拒绝：%v", err)
+	}
+	for ordinal := uint32(1); ordinal <= 3; ordinal++ {
+		prepared, prepareErr := invocation.PrepareAttempt(
+			context.Background(), freshExecutorInvocationRequest(t, request, ordinal),
+		)
+		if prepareErr != nil {
+			t.Fatalf("ordinal=%d 被拒绝：%v", ordinal, prepareErr)
+		}
+		assertInvocationAttemptIdentity(t, prepared, bundle, ordinal, func() AttemptReason {
+			if ordinal == 1 {
+				return AttemptReasonInitial
+			}
+			return AttemptReasonRetry
+		}())
 	}
 }
 
@@ -184,6 +169,7 @@ func TestExecutorInvocationBindsIdentityPoliciesAndConsumesAttemptAuthentication
 	request.Plan.Headers.Del("Authorization")
 	request.Plan.Authentication = authentication
 	request.Plan.BodyPolicy = BodyPolicy{ID: "identity-test-body", Source: "test"}
+	request.ExpectedAttemptOrdinal = 1
 	invocation, err := executor.BeginInvocation(context.Background(), bundle, request.Plan.InvocationID)
 	if err != nil {
 		t.Fatal(err)
@@ -201,6 +187,7 @@ func TestExecutorInvocationBindsIdentityPoliciesAndConsumesAttemptAuthentication
 		t.Fatalf("FinalizationToken 未绑定身份/策略/attempt 投影：%+v", payload)
 	}
 	request.AttemptReason = AttemptReasonRetry
+	request.ExpectedAttemptOrdinal = 2
 	if _, err := invocation.PrepareAttempt(context.Background(), request); err == nil ||
 		!strings.Contains(err.Error(), "AttemptAuthentication 已消费") {
 		t.Fatalf("跨 attempt 复用认证材料未被拒绝：%v", err)
@@ -254,7 +241,7 @@ func TestCodexOAuthStrictRejectsCallerOwnedProtectedHeaders(t *testing.T) {
 			request = freshExecutorInvocationRequest(t, request)
 			request.Plan.Headers = make(http.Header)
 			request.Plan.Headers.Set(name, value)
-			if _, err := executor.Prepare(context.Background(), request); err == nil ||
+			if _, err := prepareSingleExecutorTestAttempt(context.Background(), executor, request); err == nil ||
 				!strings.Contains(err.Error(), "普通 Headers 禁止保护头") {
 				t.Fatalf("generic 保护头 %s 取得了 FinalizationToken：%v", name, err)
 			}
@@ -263,7 +250,7 @@ func TestCodexOAuthStrictRejectsCallerOwnedProtectedHeaders(t *testing.T) {
 			executor, _, request := newExecutorInvocationTestFixture(t, 1, 1)
 			request = freshExecutorInvocationRequest(t, request)
 			request.Plan.ResolvedHeaderOverrides = http.Header{name: []string{value}}
-			if _, err := executor.Prepare(context.Background(), request); err == nil ||
+			if _, err := prepareSingleExecutorTestAttempt(context.Background(), executor, request); err == nil ||
 				!strings.Contains(err.Error(), "Header Override 禁止保护头") {
 				t.Fatalf("override 保护头 %s 取得了 FinalizationToken：%v", name, err)
 			}
@@ -294,7 +281,7 @@ func TestCodexOAuthStrictRejectsWrongStructuredProcessIdentity(t *testing.T) {
 			executor, _, request := newExecutorInvocationTestFixture(t, 1, 1)
 			request = freshExecutorInvocationRequest(t, request)
 			mutate(&request.Plan.IdentityFacts)
-			if _, err := executor.Prepare(context.Background(), request); err == nil {
+			if _, err := prepareSingleExecutorTestAttempt(context.Background(), executor, request); err == nil {
 				t.Fatal("错误结构化身份取得了 FinalizationToken")
 			}
 		})
@@ -305,7 +292,7 @@ func TestExecutorRejectsActivePreviousBundlePlanMix(t *testing.T) {
 	executor, _, request := newExecutorInvocationTestFixture(t, 1, 1)
 	request = freshExecutorInvocationRequest(t, request)
 	request.Plan.Mode = ReleaseModePrevious
-	if _, err := executor.Prepare(context.Background(), request); err == nil ||
+	if _, err := prepareSingleExecutorTestAttempt(context.Background(), executor, request); err == nil ||
 		!strings.Contains(err.Error(), "一致的 ReleaseBundle") {
 		t.Fatalf("active Bundle 与 previous Plan 混搭未被拒绝：%v", err)
 	}
@@ -486,7 +473,7 @@ func executorRequestForFallback(
 	return request
 }
 
-func freshExecutorInvocationRequest(t *testing.T, request ExecutorRequest) ExecutorRequest {
+func freshExecutorInvocationRequest(t *testing.T, request ExecutorRequest, ordinals ...uint32) ExecutorRequest {
 	t.Helper()
 	authentication, err := NewAttemptAuthentication(AttemptAuthenticationInput{
 		BearerToken: "synthetic-invocation-attempt-token",
@@ -496,6 +483,10 @@ func freshExecutorInvocationRequest(t *testing.T, request ExecutorRequest) Execu
 	}
 	request.Plan = request.Plan.clone()
 	request.Plan.Authentication = authentication
+	request.ExpectedAttemptOrdinal = 1
+	if len(ordinals) > 0 {
+		request.ExpectedAttemptOrdinal = ordinals[0]
+	}
 	return request
 }
 

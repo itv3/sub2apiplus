@@ -36,6 +36,10 @@ CATALOG_DRIVER_SHA256 = "f7731b9f5a2999e94ab869f245ba74e20654c22b018af74ab7a6f43
 PROFILE_DRIVER_SHA256 = "66e0775b72be6456d71c5527b21664c1b06b9c743fdfb83515a808812331a846"
 FIXTURE_SHA256 = "7698cddeadace650567e46e7be9b66286212e26e983edb29e78da423ac713e08"
 
+FROZEN_PROFILE_CALLEE = b"finalizeOpenAIOfficialEgressWSFrame("
+LIVE_PROFILE_CALLEE = b"prepareOpenAIOfficialEgressSemanticWSFrame("
+PROFILE_LIVE_CALLEE_DELTA_COUNT = 2
+
 PRE_BODY_ADAPTER = b"\t\t\t\tBody:            officialegress.NewReplayableRequestBody(semantic.Body),"
 POST_BODY_ADAPTER = b"\t\t\t\tBody:            semantic.Body,"
 
@@ -144,6 +148,34 @@ def validate_body_driver_equivalence(pre_body: bytes, post_body: bytes) -> None:
             raise RuntimeError(f"benchmark driver 计时或负载契约缺失／重复：{contract!r}")
 
 
+def recovered_frozen_profile_driver(live_profile: bytes) -> bytes:
+    if (
+        live_profile.count(LIVE_PROFILE_CALLEE) != PROFILE_LIVE_CALLEE_DELTA_COUNT
+        or FROZEN_PROFILE_CALLEE in live_profile
+    ):
+        raise RuntimeError("当前 Profile driver 的 WS finalizer 退休适配点不是严格两处")
+    recovered = live_profile.replace(LIVE_PROFILE_CALLEE, FROZEN_PROFILE_CALLEE)
+    if sha256(recovered) != PROFILE_DRIVER_SHA256:
+        raise RuntimeError("恢复的冻结 Profile driver 摘要不等于审核值 66e0…")
+    return recovered
+
+
+def validate_profile_driver_equivalence(
+    profile_pre: bytes,
+    profile_post: bytes,
+    live_profile: bytes,
+) -> None:
+    if (
+        profile_pre != profile_post
+        or sha256(profile_pre) != PROFILE_DRIVER_SHA256
+        or profile_pre.count(FROZEN_PROFILE_CALLEE) != PROFILE_LIVE_CALLEE_DELTA_COUNT
+        or LIVE_PROFILE_CALLEE in profile_pre
+    ):
+        raise RuntimeError("Profile pre/post driver 不是逐字节相同的冻结程序")
+    if recovered_frozen_profile_driver(live_profile) != profile_post:
+        raise RuntimeError("当前 Profile driver 存在两处 finalizer 调用迁移之外的差异")
+
+
 def validate_driver_artifacts() -> None:
     pre_body = PRE_BODY_DRIVER.read_bytes()
     post_body = POST_BODY_DRIVER.read_bytes()
@@ -162,12 +194,11 @@ def validate_driver_artifacts() -> None:
 
     profile_pre = PRE_PROFILE_DRIVER.read_bytes()
     profile_post = POST_PROFILE_DRIVER.read_bytes()
-    if (
-        profile_pre != profile_post
-        or profile_post != LIVE_PROFILE_DRIVER.read_bytes()
-        or sha256(profile_pre) != PROFILE_DRIVER_SHA256
-    ):
-        raise RuntimeError("Profile pre/post driver 不是逐字节相同的冻结程序")
+    validate_profile_driver_equivalence(
+        profile_pre,
+        profile_post,
+        LIVE_PROFILE_DRIVER.read_bytes(),
+    )
 
 
 def parse_benchmark(path: pathlib.Path, expected_cases: tuple[str, ...]) -> dict[str, list[tuple[Decimal, Decimal, Decimal]]]:
@@ -415,9 +446,9 @@ def write_evidence() -> None:
         raise RuntimeError("当前 post Body driver 摘要不是已复审的 bce3…")
     pre_body = recovered_pre_body(post_body)
     catalog = LIVE_CATALOG_DRIVER.read_bytes()
-    profile = LIVE_PROFILE_DRIVER.read_bytes()
-    if sha256(catalog) != CATALOG_DRIVER_SHA256 or sha256(profile) != PROFILE_DRIVER_SHA256:
-        raise RuntimeError("Catalog/Profile benchmark driver 已漂移")
+    profile = recovered_frozen_profile_driver(LIVE_PROFILE_DRIVER.read_bytes())
+    if sha256(catalog) != CATALOG_DRIVER_SHA256:
+        raise RuntimeError("Catalog benchmark driver 已漂移")
     for path, raw in (
         (PRE_BODY_DRIVER, pre_body),
         (POST_BODY_DRIVER, post_body),
@@ -439,7 +470,8 @@ def validate() -> None:
     if actual.get("result") != "passed":
         raise RuntimeError("benchmark 原始结果阈值复算未通过")
     print(
-        "变更集 6 benchmark 证据链有效：driver 仅 1 处声明适配，"
+        "变更集 6 benchmark 证据链有效：Body driver 仅 1 处声明适配，"
+        "当前 Profile driver 仅 2 处 WS finalizer 退休适配，"
         f"7 个 case 原始结果复算通过，calculation SHA-256={sha256(actual_raw)}"
     )
 
@@ -464,6 +496,21 @@ def self_test() -> None:
         except RuntimeError:
             continue
         raise RuntimeError("benchmark driver 非法 mutation 未被等价门禁拒绝")
+
+    live_profile = LIVE_PROFILE_DRIVER.read_bytes()
+    frozen_profile = recovered_frozen_profile_driver(live_profile)
+    validate_profile_driver_equivalence(frozen_profile, frozen_profile, live_profile)
+    profile_mutations = (
+        live_profile.replace(LIVE_PROFILE_CALLEE, FROZEN_PROFILE_CALLEE, 1),
+        live_profile.replace(b"payload := []byte", b"sample := []byte", 1),
+        live_profile + b"\n" + LIVE_PROFILE_CALLEE,
+    )
+    for mutation in profile_mutations:
+        try:
+            validate_profile_driver_equivalence(frozen_profile, frozen_profile, mutation)
+        except RuntimeError:
+            continue
+        raise RuntimeError("Profile benchmark driver 非法 mutation 未被退休等价门禁拒绝")
 
     good = [(Decimal(100), Decimal(100), Decimal(100))] * 10
     insufficient = [(Decimal(96), Decimal(71), Decimal(71))] * 10

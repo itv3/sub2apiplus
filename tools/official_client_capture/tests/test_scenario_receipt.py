@@ -1214,7 +1214,7 @@ class ScenarioManifestContractTest(unittest.TestCase):
                 )
 
     def test_R8_主线模型变量冻结为非_Lite_模型(self) -> None:
-        """§10.11.1：主线固定 gpt-5.4，变量默认值不得再回落到 Lite 模型。
+        """主线固定 gpt-5.4，变量默认值不得再回落到 Lite 模型。
 
         变量默认值是没有显式传参时的权威坐标；留着 gpt-5.6-luna 会让主线在
         default 路径上悄悄变成 Lite 轨道，而标签仍按 non_lite 声明。
@@ -1265,7 +1265,7 @@ class ScenarioManifestContractTest(unittest.TestCase):
                     )
 
     def test_R8_两条轨道的证据根与运行标识不相交(self) -> None:
-        """§11.1：混用 evidence root 会让主线未触发 Lite 被当成 Lite 失败。"""
+        """混用 evidence root 会让主线未触发 Lite 被当成 Lite 失败。"""
 
         roots: dict[str, str] = {}
         run_ids: dict[str, str] = {}
@@ -1283,7 +1283,7 @@ class ScenarioManifestContractTest(unittest.TestCase):
                 run_ids[run_id] = job["id"]
 
     def test_R8_非_Lite_body_判据只选_Responses_的_POST(self) -> None:
-        """§10.11.2：A04＋mode=non_lite 会把启动 models GET 一并选中。
+        """A04＋mode=non_lite 会把启动 models GET 一并选中。
 
         residency-us 与 runtime-metrics 用整目录 glob 绑 A04，其 relay 字节里必然
         含启动期的 GET /models；不约束 method 与 path，body 断言必然失败，R8 补出
@@ -1337,7 +1337,7 @@ class OfficialCaptureScriptTest(unittest.TestCase):
         self.assertIn('--realtime-version "${REALTIME_VERSION:-v3}"', self.source)
 
     def test_R8_中继脚本默认模型是主线非_Lite(self) -> None:
-        """§10.11.1：默认值是没传 MODEL 时的权威坐标，不能落回 Lite 模型。"""
+        """默认值是没传 MODEL 时的权威坐标，不能落回 Lite 模型。"""
 
         self.assertIn("model=${MODEL:-gpt-5.4}", self.source)
 

@@ -15,8 +15,6 @@ import (
 // OpenAIOAuthClient interface for OpenAI OAuth operations
 type OpenAIOAuthClient interface {
 	ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI, proxyURL, clientID string) (*openai.TokenResponse, error)
-	RefreshToken(ctx context.Context, refreshToken, proxyURL string) (*openai.TokenResponse, error)
-	RefreshTokenWithClientID(ctx context.Context, refreshToken, proxyURL string, clientID string) (*openai.TokenResponse, error)
 }
 
 // OpenAIOAuthRefreshResponseDecoder 只负责解释 Executor 已发送完成的 refresh 响应。

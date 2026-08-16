@@ -1426,11 +1426,11 @@ func (h *SettingHandler) UpdateSettings(c *gin.Context) {
 
 	// codex_cli_only 加固：最低/最高 Codex 版本（空=禁用，或合法 semver；max>=min）
 	if req.MinCodexVersion != "" && !semverPattern.MatchString(req.MinCodexVersion) {
-		response.Error(c, http.StatusBadRequest, "min_codex_version must be empty or a valid semver (e.g. 0.141.0)")
+		response.Error(c, http.StatusBadRequest, "min_codex_version must be empty or a valid semver")
 		return
 	}
 	if req.MaxCodexVersion != "" && !semverPattern.MatchString(req.MaxCodexVersion) {
-		response.Error(c, http.StatusBadRequest, "max_codex_version must be empty or a valid semver (e.g. 0.200.0)")
+		response.Error(c, http.StatusBadRequest, "max_codex_version must be empty or a valid semver")
 		return
 	}
 	if req.MinCodexVersion != "" && req.MaxCodexVersion != "" && service.CompareVersions(req.MaxCodexVersion, req.MinCodexVersion) < 0 {

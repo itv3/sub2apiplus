@@ -579,7 +579,7 @@ var openAIAlphaSearchUnsupportedBodyFields = map[string]struct{}{
 	"prompt_cache_retention": {},
 }
 
-// sanitizeOpenAIAlphaSearchBody 按 0.145.0 alpha-search 画像执行严格闭包。
+// sanitizeOpenAIAlphaSearchBody 按当前 Release 的 alpha-search 画像执行严格闭包。
 // 未知字段和 Responses 公共字段全部删除，六个必需字段缺一即失败，最终顺序固定为
 // id, model, input, commands, settings, max_output_tokens。
 func sanitizeOpenAIAlphaSearchBody(mode string, body []byte) ([]byte, error) {

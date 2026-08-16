@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -24,14 +23,6 @@ func (s *openaiOAuthClientStateStub) ExchangeCode(ctx context.Context, code, cod
 		RefreshToken: "rt",
 		ExpiresIn:    3600,
 	}, nil
-}
-
-func (s *openaiOAuthClientStateStub) RefreshToken(ctx context.Context, refreshToken, proxyURL string) (*openai.TokenResponse, error) {
-	return nil, errors.New("not implemented")
-}
-
-func (s *openaiOAuthClientStateStub) RefreshTokenWithClientID(ctx context.Context, refreshToken, proxyURL string, clientID string) (*openai.TokenResponse, error) {
-	return s.RefreshToken(ctx, refreshToken, proxyURL)
 }
 
 func TestOpenAIOAuthService_ExchangeCode_StateRequired(t *testing.T) {

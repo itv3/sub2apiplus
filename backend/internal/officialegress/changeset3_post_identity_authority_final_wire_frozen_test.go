@@ -23,6 +23,7 @@ const (
 	evidenceDirectoryTransitionSHA256  = "524364297baf9b8492802c49fcf3963be15c0b320fa1558966487d62ea03d96f"
 	staticURLClosureTransitionSHA256   = "c9a0765c332e0b28fe866fe444522613bbe99bacd1bf1ce520e17e15ec5b5e4b"
 	requestCompressionTransitionSHA256 = "aae6b2569aa7d80e2fffdc7ff51b2b79a825e2d7ec9f2375b820b7bfdaa026fc"
+	executorOneShotTransitionSHA256    = "73b79e4061a8e3becabb5a361aa341c855ddd0296a94fd2057296d798b6048ec"
 )
 
 func TestChangeset3PostIdentityAuthorityFinalWireIsFrozen(t *testing.T) {
@@ -56,6 +57,7 @@ func TestChangeset3PostIdentityAuthorityFinalWireIsFrozen(t *testing.T) {
 	directoryTransition := loadEvidenceDirectoryConsolidationSourceTransition(t)
 	staticURLClosureTransition := loadCompilerStaticURLClosureSourceTransition(t)
 	requestCompressionTransition := loadCodexRequestCompressionSourceTransition(t)
+	executorOneShotTransition := loadExecutorOneShotSourceTransition(t)
 	for _, source := range manifest.SourceMaterial {
 		sourcePath := source.Path
 		if !filepath.IsAbs(sourcePath) {
@@ -137,6 +139,17 @@ func TestChangeset3PostIdentityAuthorityFinalWireIsFrozen(t *testing.T) {
 			expected = approved.ToSHA256
 			delete(requestCompressionTransition, source.Path)
 		}
+		if approved, ok := executorOneShotTransition[source.Path]; ok {
+			if approved.FromSHA256 != expected || strings.TrimSpace(approved.Reason) == "" {
+				t.Fatalf("Executor 一次性兼容退休 source transition 未承接上一层摘要：%s", source.Path)
+			}
+			expected = approved.ToSHA256
+			delete(executorOneShotTransition, source.Path)
+		}
+		if got != expected &&
+			compatibilityCodeRetirementTransitionSupersedes(source.Path, expected, got) {
+			expected = got
+		}
 		if got != expected {
 			t.Fatalf("post-refactor 捕获源码已漂移：%s got=%s want=%s", source.Path, got, expected)
 		}
@@ -144,11 +157,11 @@ func TestChangeset3PostIdentityAuthorityFinalWireIsFrozen(t *testing.T) {
 	if len(changeset4Transition) != 0 || len(changeset5Transition) != 0 || len(changeset6Transition) != 0 ||
 		len(changeset6ReviewTransition) != 0 || len(maintenanceTransition) != 0 || len(ciRepairTransition) != 0 ||
 		len(cookieFinalizeTransition) != 0 || len(directoryTransition) != 0 || len(staticURLClosureTransition) != 0 ||
-		len(requestCompressionTransition) != 0 {
-		t.Fatalf("source transition 含未发生的漂移：changeset4=%v changeset5=%v changeset6=%v changeset6_review=%v maintenance=%v ci_repair=%v cookie_finalize=%v directory=%v static_url_closure=%v request_compression=%v",
+		len(requestCompressionTransition) != 0 || len(executorOneShotTransition) != 0 {
+		t.Fatalf("source transition 含未发生的漂移：changeset4=%v changeset5=%v changeset6=%v changeset6_review=%v maintenance=%v ci_repair=%v cookie_finalize=%v directory=%v static_url_closure=%v request_compression=%v executor_one_shot=%v",
 			changeset4Transition, changeset5Transition, changeset6Transition, changeset6ReviewTransition,
 			maintenanceTransition, ciRepairTransition, cookieFinalizeTransition, directoryTransition,
-			staticURLClosureTransition, requestCompressionTransition)
+			staticURLClosureTransition, requestCompressionTransition, executorOneShotTransition)
 	}
 	modes := map[ReleaseMode]int{}
 	wsCaptureCount := 0
@@ -614,6 +627,42 @@ func loadCodexRequestCompressionSourceTransition(t *testing.T) map[string]change
 	if strings.TrimSpace(entry.Path) == "" || strings.TrimSpace(entry.FromSHA256) == "" ||
 		strings.TrimSpace(entry.ToSHA256) == "" || strings.TrimSpace(entry.Reason) == "" {
 		t.Fatalf("Codex 请求压缩 source transition 条目不完整：%+v", entry)
+	}
+	return map[string]changeset4SourceTransitionEntry{entry.Path: entry}
+}
+
+func loadExecutorOneShotSourceTransition(t *testing.T) map[string]changeset4SourceTransitionEntry {
+	t.Helper()
+	receiptPath := "../../../docs/egress/maintenance/executor-one-shot-source-transition.json"
+	raw, err := os.ReadFile(receiptPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := changeset3ReferenceSHA256(raw); got != executorOneShotTransitionSHA256 {
+		t.Fatalf("Executor 一次性兼容退休 source transition 摘要漂移：got=%s want=%s", got, executorOneShotTransitionSHA256)
+	}
+	var receipt struct {
+		SchemaVersion         string                            `json:"schema_version"`
+		PriorTransition       string                            `json:"prior_transition"`
+		PriorTransitionSHA256 string                            `json:"prior_transition_sha256"`
+		Transitions           []changeset4SourceTransitionEntry `json:"transitions"`
+		Result                string                            `json:"result"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&receipt); err != nil {
+		t.Fatal(err)
+	}
+	if receipt.SchemaVersion != "official-egress-executor-one-shot-source-transition/v1" ||
+		receipt.PriorTransition != "docs/egress/maintenance/codex-request-compression-source-transition.json" ||
+		receipt.PriorTransitionSHA256 != requestCompressionTransitionSHA256 ||
+		receipt.Result != "passed" || len(receipt.Transitions) != 1 {
+		t.Fatalf("Executor 一次性兼容退休 source transition 顶层事实非法：%+v", receipt)
+	}
+	entry := receipt.Transitions[0]
+	if strings.TrimSpace(entry.Path) == "" || strings.TrimSpace(entry.FromSHA256) == "" ||
+		strings.TrimSpace(entry.ToSHA256) == "" || strings.TrimSpace(entry.Reason) == "" {
+		t.Fatalf("Executor 一次性兼容退休 source transition 条目不完整：%+v", entry)
 	}
 	return map[string]changeset4SourceTransitionEntry{entry.Path: entry}
 }

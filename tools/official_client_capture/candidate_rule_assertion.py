@@ -52,7 +52,7 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
     "tools/official_client_capture/candidate_rule_expectations_0_145_0.json"
 )
 # 2026-08-11（R8）：合并 17 项 selector 修正、双轨 track selector、A04 压缩
-# 分流与 Wham 原始字节 selector；逐项依据见升级计划 §10.11／§11。
+# 分流与 Wham 原始字节 selector；逐项依据由主手册第二部分规则和批准画像承载。
 # 同日补一项：BODY-006/nonlite-* 两条补 method=POST 与 responses 路径约束。原先
 # 只按 A04＋mode=non_lite 选，会把 residency-us／runtime-metrics 里的启动 models
 # GET 一并选中，断言 body 字段必然失败；R8 补出非 Lite 的 HTTP POST 样本后，这两条
@@ -60,8 +60,9 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 与 expected_check_ids 全部不变），故 acceptance_contract 的冻结摘要不随之漂移。
 # 2026-08-15 主文档 active 规则升级为 0.147；本文件继续保留 0.145 历史断言载荷，
 # 仅重绑 source_spec 章节摘要供基线复算使用。
+# 2026-08-16 主手册吸收历史升级文档后再次重绑第二部分摘要；规则与判据载荷不变。
 FROZEN_PROFILE_SHA256 = (
-    "4aefd2b7c585d78aecb53e57037c0ef4e0002ccb6a6f001423604103263cd6f5"
+    "6a429c3ded59833bda6c09568a4585a55d5e260ea64f48416909745a3dec5ee9"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RULE_ID_RE = re.compile(r"^SPEC-[A-Z0-9]+-[0-9]{3}$")

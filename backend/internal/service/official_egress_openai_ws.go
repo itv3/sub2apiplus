@@ -18,7 +18,6 @@ import (
 )
 
 const (
-	officialOpenAIWSClientVersion      = "0.145.0"
 	officialOpenAIWSCompressionOffer   = "permessage-deflate; client_max_window_bits"
 	officialOpenAIWSResponseCreateType = "response.create"
 	officialOpenAIAdditionalToolsType  = "additional_tools"
@@ -710,20 +709,6 @@ func canonicalOfficialOpenAIWSBusinessHistory(payload map[string]any) ([]byte, e
 		return nil, fmt.Errorf("encode OpenAI official egress WebSocket business history: %w", err)
 	}
 	return encoded, nil
-}
-
-// finalizeOpenAIOfficialEgressWSFrame 只服务既有冻结测试与非 Runtime 兼容验证；
-// 21 个 Runtime Sink 不得调用此符号。
-func finalizeOpenAIOfficialEgressWSFrame(
-	ctx context.Context,
-	original []byte,
-	candidate []byte,
-	expectedPreviousResponseID string,
-	allowControlledReplay bool,
-) ([]byte, OfficialEgressFinalizationResult, error) {
-	return prepareOpenAIOfficialEgressSemanticWSFrame(
-		ctx, original, candidate, expectedPreviousResponseID, allowControlledReplay,
-	)
 }
 
 // injectOfficialOpenAIWSTurnState 把上游握手返回的连接级 turn-state 写入

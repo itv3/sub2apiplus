@@ -1,0 +1,151 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api.local/schemas/codex-production-activation-receipt-v1.json",
+  "title": "Codex 客户端仿真生产激活收据",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign",
+    "target",
+    "rollback",
+    "stages",
+    "final_state",
+    "completed_at_utc",
+    "producer"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "codex-production-activation-receipt/v1"
+    },
+    "campaign": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "candidate_id", "acceptance"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1},
+        "candidate_id": {"type": "string", "minLength": 1},
+        "acceptance": {"$ref": "#/$defs/fileBinding"}
+      }
+    },
+    "target": {"$ref": "#/$defs/identity"},
+    "rollback": {"$ref": "#/$defs/identity"},
+    "stages": {
+      "type": "array",
+      "minItems": 4,
+      "maxItems": 4,
+      "prefixItems": [
+        {"$ref": "#/$defs/stage"},
+        {"$ref": "#/$defs/stage"},
+        {"$ref": "#/$defs/stage"},
+        {"$ref": "#/$defs/stage"}
+      ]
+    },
+    "final_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "candidate_id",
+        "image_id",
+        "active_version",
+        "profile_id",
+        "profile_digest",
+        "container_status",
+        "health"
+      ],
+      "properties": {
+        "candidate_id": {"type": "string", "minLength": 1},
+        "image_id": {"$ref": "#/$defs/imageId"},
+        "active_version": {"$ref": "#/$defs/version"},
+        "profile_id": {"type": "string", "minLength": 1},
+        "profile_digest": {"$ref": "#/$defs/sha256"},
+        "container_status": {"const": "running"},
+        "health": {"const": "pass"}
+      }
+    },
+    "completed_at_utc": {"type": "string", "format": "date-time"},
+    "producer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "tool", "tool_sha256", "facts"],
+      "properties": {
+        "schema_version": {"const": "codex-production-activation-producer/v1"},
+        "tool": {"type": "string", "minLength": 1},
+        "tool_sha256": {"$ref": "#/$defs/sha256"},
+        "facts": {"$ref": "#/$defs/fileBinding"}
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "imageId": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+    "fileBinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "bytes"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "bytes": {"type": "integer", "minimum": 1}
+      }
+    },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "profile_id",
+        "profile_digest",
+        "source_tree_sha256",
+        "build_id",
+        "deployed_version",
+        "image_id",
+        "image_reference"
+      ],
+      "properties": {
+        "version": {"$ref": "#/$defs/version"},
+        "profile_id": {"type": "string", "minLength": 1},
+        "profile_digest": {"$ref": "#/$defs/sha256"},
+        "source_tree_sha256": {"$ref": "#/$defs/sha256"},
+        "build_id": {"type": "string", "minLength": 1},
+        "deployed_version": {"type": "string", "minLength": 1},
+        "image_id": {"$ref": "#/$defs/imageId"},
+        "image_reference": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9][A-Za-z0-9._/:+-]*@sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "stage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "started_at_utc",
+        "completed_at_utc",
+        "host",
+        "architecture",
+        "status",
+        "image_id",
+        "checks",
+        "evidence"
+      ],
+      "properties": {
+        "name": {"enum": ["canary", "production_switch", "rollback", "target_restore"]},
+        "started_at_utc": {"type": "string", "format": "date-time"},
+        "completed_at_utc": {"type": "string", "format": "date-time"},
+        "host": {"type": "string", "minLength": 1},
+        "architecture": {"type": "string", "minLength": 1},
+        "status": {"const": "pass"},
+        "image_id": {"$ref": "#/$defs/imageId"},
+        "checks": {"type": "object"},
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/fileBinding"}
+        }
+      }
+    }
+  }
+}

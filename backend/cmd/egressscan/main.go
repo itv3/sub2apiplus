@@ -355,6 +355,15 @@ func scan() (*Baseline, error) {
 // network candidate 的业务 route 由 MigrationReceipt 提供覆盖证明。新增物理发送点
 // 仍必须经过 classify；收据不能替代 terminal/facade 的新增候选检查。
 func scanWithCodexRouteEvidence(reviewedRoutes []string) (*Baseline, error) {
+	return scanWithReviewedHistory(reviewedRoutes, nil)
+}
+
+// scanWithReviewedHistory 在 bootstrap 历史源码回放时接收 RemovalReceipt 冻结的
+// 分类。它不会用于当前生产树扫描，因此不能把收据当成新增发送点的分类豁免。
+func scanWithReviewedHistory(
+	reviewedRoutes []string,
+	historicalClassifications map[string]SinkRecord,
+) (*Baseline, error) {
 	merged := make(map[string]SinkRecord)
 	var fallback []string
 	loaded := 0
@@ -390,7 +399,7 @@ func scanWithCodexRouteEvidence(reviewedRoutes []string) (*Baseline, error) {
 	sort.Slice(records, func(i, j int) bool { return records[i].ScanCandidateID < records[j].ScanCandidateID })
 
 	// 分类必须在基线落盘前完成：未分类的 sink 不允许静默进入 SinkCatalog。
-	records, unclassified := applyClassification(records)
+	records, unclassified := applyClassificationWithHistory(records, historicalClassifications)
 	problems := validateClassification(records, reviewedRoutes)
 	if len(unclassified) > 0 || len(problems) > 0 {
 		return nil, &unclassifiedError{sinks: unclassified, problems: problems}

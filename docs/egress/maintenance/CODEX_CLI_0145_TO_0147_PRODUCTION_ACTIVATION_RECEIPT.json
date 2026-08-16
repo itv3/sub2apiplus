@@ -1,0 +1,109 @@
+{
+  "schema_version": "official-egress-production-activation/v1",
+  "completed_at_utc": "2026-08-15T09:16:35Z",
+  "host": {
+    "name": "Vircs",
+    "architecture": "linux/amd64"
+  },
+  "campaign": {
+    "id": "codex-0_147_0-20260815T055433Z",
+    "acceptance_sha256": "b6bc412789534e1de3b7df9326b684ad1d8935ce4949b0491fcec98105a40372",
+    "accepted_rules": 42,
+    "acceptance_gates": 15
+  },
+  "catalog_promotion": {
+    "receipt_sha256": "6f7b51b11510c4e9c9532afad9423d630827b162fd36e367603636fd382ddae4",
+    "runtime_manifest_sha256": "a18952db1def723cd119d108fe9eca5a6d53c2a1d978db306e07009d497d8bb0",
+    "active_version": "0.147.0",
+    "active_release_digest": "caa1948405136feaf159cbfdf3c164c056c1ea38cac6f87a007cfe69ead38707",
+    "previous_version": "0.145.0",
+    "previous_release_digest": "5f1c7656b88fbf5c0d7bc0fe4232219829bb779ceaaa46d7a68fec5e7879ff7c"
+  },
+  "production_build": {
+    "source_path": "/root/oauth-capture/production-source-k80",
+    "source_tree_sha256": "70586f764866a33be5cef33c02374449527a9c4baadb857f442c4d7c39c92471",
+    "version": "0.1.171-14",
+    "build_id": "codex-0.147.0-official-k80-70586f76",
+    "image_reference": "127.0.0.1:5000/sub2api/codex0147-k80@sha256:fc8d235c570d3611ee05ba7ed312ad85ef2bf27170c065d7d5b9213e65f8f469",
+    "image_id": "sha256:fc8d235c570d3611ee05ba7ed312ad85ef2bf27170c065d7d5b9213e65f8f469"
+  },
+  "verification": {
+    "local_full_backend": "pass",
+    "vircs_linux_amd64": {
+      "go_version": "go1.26.6 linux/amd64",
+      "packages": [
+        "./internal/officialegress/...",
+        "./cmd/egresscatalogpromote",
+        "./internal/service"
+      ],
+      "result": "pass"
+    },
+    "campaign_protocol_evidence": "k80 accept 42/42，Kilo Compatible HTTP 与 Responses WebSocket 均已完成 response.completed"
+  },
+  "canary": {
+    "status": "pass",
+    "deployment_path": "/root/oauth-capture/runtime/k80-production-canary",
+    "isolated_postgres": true,
+    "isolated_redis": true,
+    "production_credentials_used": false,
+    "activation_event_id": "3bb0671026112d2a52ad60d4ef3347e5d1505d1a846eb5c16b536a58d3b7eb9b",
+    "checks": {
+      "health": "pass",
+      "root_http_status": 200,
+      "unauthorized_models_http_status": 401,
+      "profile_mode": "active",
+      "codex_version": "0.147.0",
+      "profile_digest": "94071c8eb93cfd337ac6eabc291d878084e3dcec8a9e618e04e6f68792d1a7bc",
+      "forced_mode_environment_count": 0,
+      "fatal_log_count": 0
+    },
+    "preflight_incidents": [
+      "首次临时配置使用非十六进制 TOTP key，应用按预期失败关闭；修正为 64 位十六进制后通过。",
+      "首次隔离网络阻断宿主端口和外部定价下载；改为独立但可出站的 canary 网络后通过。"
+    ],
+    "cleanup": "通过后已删除全部临时容器、tmpfs 数据和网络；证据目录保留。"
+  },
+  "rollback_drill": {
+    "status": "pass",
+    "completed_at_utc": "2026-08-15T09:15:57Z",
+    "image_reference": "ghcr.io/itv3/sub2apiplus@sha256:768a95d722503026b9fbd240ba789930039f6934c0859dfaf84e68b8b65df5b5",
+    "compose_override": "/root/Docker/sub2apiplus/deployments/codex0145-k80-rollback/image.override.yml",
+    "health": "pass",
+    "unauthorized_models_http_status": 401,
+    "fatal_log_count": 0,
+    "database_counts": {
+      "public_tables": 85,
+      "accounts": 100,
+      "users": 6,
+      "api_keys": 15
+    },
+    "redis": "PONG",
+    "keeper": "running"
+  },
+  "final_state": {
+    "status": "active",
+    "observed_at_utc": "2026-08-15T09:16:35Z",
+    "compose_override": "/root/Docker/sub2apiplus/deployments/codex0147-k80/image.override.yml",
+    "container_id": "a66bd866b54c8428a8c77edea0dcad6d75fa645583b903d08e51dd389a7b0b74",
+    "health": "pass",
+    "root_http_status": 200,
+    "unauthorized_models_http_status": 401,
+    "activation_event_id": "38158905aa85a76a3d950f724f977a34885c0c3c654676f25432d351512ee44f",
+    "profile_mode": "active",
+    "codex_version": "0.147.0",
+    "profile_id": "codex-0.147.0-official-k59-v1",
+    "profile_digest": "94071c8eb93cfd337ac6eabc291d878084e3dcec8a9e618e04e6f68792d1a7bc",
+    "release_digest": "caa1948405136feaf159cbfdf3c164c056c1ea38cac6f87a007cfe69ead38707",
+    "forced_mode_environment_count": 0,
+    "fatal_log_count": 0,
+    "egress_guard_failure_count": 0,
+    "database_counts": {
+      "public_tables": 85,
+      "accounts": 100,
+      "users": 6,
+      "api_keys": 15
+    },
+    "redis": "PONG",
+    "keeper": "running"
+  }
+}

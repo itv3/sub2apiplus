@@ -17,7 +17,7 @@ func BenchmarkOfficialEgressWSFrameFinalizer(b *testing.B) {
 	b.Run("无画像上下文", func(b *testing.B) {
 		b.ReportAllocs()
 		for range b.N {
-			_, _, err := finalizeOpenAIOfficialEgressWSFrame(
+			_, _, err := prepareOpenAIOfficialEgressSemanticWSFrame(
 				context.Background(),
 				payload,
 				payload,
@@ -32,7 +32,7 @@ func BenchmarkOfficialEgressWSFrameFinalizer(b *testing.B) {
 	b.Run("内置画像且帧未变化", func(b *testing.B) {
 		b.ReportAllocs()
 		for range b.N {
-			_, _, err := finalizeOpenAIOfficialEgressWSFrame(
+			_, _, err := prepareOpenAIOfficialEgressSemanticWSFrame(
 				enabledContext,
 				payload,
 				payload,

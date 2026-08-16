@@ -17,7 +17,7 @@ import (
 )
 
 // ============================================================================
-// CHG-01 Compiler 静态 URL 封闭测试。
+// Compiler 静态 URL 封闭测试。
 //
 // 静态 helper 直接单测负责证明新增规则本身；Compiler/Executor 测试负责证明整体
 // 控制流与签发边界；摘要与 Guard 测试负责证明 ForceQuery 终态绑定。
@@ -784,7 +784,7 @@ func TestExecutorRejectsNonProfileStaticTargetsAtRealBoundary(t *testing.T) {
 			egressPlan := staticClosureEgressPlan(
 				t, bundle, plan, tc.target, "chg01-executor-negative",
 			)
-			result, err := executor.Execute(context.Background(), ExecutorRequest{
+			result, err := executeSingleExecutorTestAttempt(context.Background(), executor, ExecutorRequest{
 				Bundle: bundle, Plan: egressPlan, DynamicInputs: tc.dynamic,
 			})
 			if err == nil {
@@ -864,7 +864,7 @@ func TestGuardAcceptsTrustedSchemeAliasAndRejectsForceQueryMutation(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	prepared, err := executor.Prepare(context.Background(), request)
+	prepared, err := prepareSingleExecutorTestAttempt(context.Background(), executor, request)
 	if err != nil {
 		t.Fatal(err)
 	}

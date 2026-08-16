@@ -135,7 +135,7 @@ func defaultOfficialCodexRuntimeState() officialCodexRuntimeState {
 		Originator:             "codex_exec",
 		TerminalToken:          "unknown",
 		UserAgentSuffixEnabled: true,
-		// 真正的默认来源仍由不可变 0.145.0 画像校验；这里是零输入运行态的等价值。
+		// 真正的默认来源仍由不可变 Release 画像校验；这里是零输入运行态的等价值。
 		RequestCompressionEnabled: true,
 		ConditionalHeaders:        make(map[string]string),
 	}
@@ -178,7 +178,7 @@ type OfficialEgressContextInput struct {
 	DefaultReasoningSummary           string
 	SupportsReasoningSummaryParameter bool
 	ReasoningDefaultsKnown            bool
-	// CodexEndpointID 仅用于已经由 0.145.0 版本画像解析的辅助端点。
+	// CodexEndpointID 仅用于已经由当前 Release 画像解析的辅助端点。
 	// 主 Responses 入口留空，由公共 Resolver 根据传输与入口映射。
 	CodexEndpointID string
 	// InvocationID 标识一次上层 API 调用。同一次调用的 retry/rebuild 必须复用，

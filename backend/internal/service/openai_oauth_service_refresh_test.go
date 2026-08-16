@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/openai"
 	"github.com/stretchr/testify/require"
 )
@@ -23,19 +24,35 @@ func (s *openaiOAuthClientRefreshStub) ExchangeCode(ctx context.Context, code, c
 	return nil, errors.New("not implemented")
 }
 
-func (s *openaiOAuthClientRefreshStub) RefreshToken(ctx context.Context, refreshToken, proxyURL string) (*openai.TokenResponse, error) {
+func (s *openaiOAuthClientRefreshStub) DecodeRefreshResponse(
+	_ context.Context,
+	response *http.Response,
+	transportErr error,
+	_ string,
+) (*openai.TokenResponse, error) {
 	atomic.AddInt32(&s.refreshCalls, 1)
+	if response != nil && response.Body != nil {
+		_ = response.Body.Close()
+	}
+	if transportErr != nil {
+		return nil, transportErr
+	}
 	if s.refreshResponse != nil || s.refreshErr != nil {
 		return s.refreshResponse, s.refreshErr
 	}
 	return nil, errors.New("not implemented")
 }
 
-func (s *openaiOAuthClientRefreshStub) RefreshTokenWithClientID(ctx context.Context, refreshToken, proxyURL string, clientID string) (*openai.TokenResponse, error) {
-	atomic.AddInt32(&s.refreshCalls, 1)
-	if s.refreshResponse != nil || s.refreshErr != nil {
-		return s.refreshResponse, s.refreshErr
-	}
+type openAIOAuthClientWithoutRefreshDecoder struct{}
+
+func (openAIOAuthClientWithoutRefreshDecoder) ExchangeCode(
+	context.Context,
+	string,
+	string,
+	string,
+	string,
+	string,
+) (*openai.TokenResponse, error) {
 	return nil, errors.New("not implemented")
 }
 
@@ -45,6 +62,13 @@ func TestOpenAIOAuthService_RefreshAccountTokenDoesNotBypassPrivacyCooldown(t *t
 	}}
 	svc := NewOpenAIOAuthService(nil, client)
 	defer svc.Stop()
+	resource := &oauthRefreshCaptureResource{}
+	runtimeState, err := newOfficialEgressTransitionRuntimeWithExecutor(
+		officialegress.DefaultGuard(), nil, officialegress.ExecutorID(t.Name()),
+		officialegress.ReleaseModeActive, resource,
+	)
+	require.NoError(t, err)
+	svc.SetOfficialEgressRuntime(runtimeState)
 	capture := &privacyProductionCapture{}
 	var proxyURLs []string
 	var rolloutKeys []string
@@ -70,6 +94,8 @@ func TestOpenAIOAuthService_RefreshAccountTokenDoesNotBypassPrivacyCooldown(t *t
 	info, err := svc.RefreshAccountToken(context.Background(), account)
 	require.NoError(t, err)
 	require.Equal(t, "rotated-access-token", info.AccessToken)
+	require.Equal(t, int32(1), atomic.LoadInt32(&client.refreshCalls))
+	require.NotNil(t, resource.request)
 	for _, request := range capture.snapshot() {
 		require.NotEqual(t, "/backend-api/settings/account_user_setting", request.URL.Path,
 			"账号刷新不得在读取冷却状态前调用 settings")
@@ -84,6 +110,28 @@ func TestOpenAIOAuthService_RefreshAccountTokenDoesNotBypassPrivacyCooldown(t *t
 	)
 	require.Empty(t, result.Mode, "冷却期内统一入口必须直接跳过")
 	require.Len(t, capture.snapshot(), requestCount, "冷却检查不得产生 settings 请求")
+}
+
+func TestOpenAIOAuthService_RefreshMissingDecoderFailsClosed(t *testing.T) {
+	svc := NewOpenAIOAuthService(nil, openAIOAuthClientWithoutRefreshDecoder{})
+	defer svc.Stop()
+
+	_, err := svc.RefreshTokenWithClientID(
+		context.Background(), "refresh-token", "", "client-id",
+	)
+	require.ErrorContains(t, err, "缺少受管响应解码端口")
+}
+
+func TestOpenAIOAuthService_RefreshMissingRuntimeFailsClosed(t *testing.T) {
+	client := &openaiOAuthClientRefreshStub{}
+	svc := NewOpenAIOAuthService(nil, client)
+	defer svc.Stop()
+
+	_, err := svc.RefreshTokenWithClientID(
+		context.Background(), "refresh-token", "", "client-id",
+	)
+	require.ErrorContains(t, err, "缺少正式 Executor runtime")
+	require.Zero(t, atomic.LoadInt32(&client.refreshCalls), "缺少 runtime 时不得进入响应解码端口")
 }
 
 func TestOpenAIOAuthService_RefreshAccountToken_NoRefreshTokenUsesExistingAccessToken(t *testing.T) {

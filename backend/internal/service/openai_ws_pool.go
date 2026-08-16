@@ -673,9 +673,6 @@ type openAIWSConnPool struct {
 	clientDialer openAIWSClientDialer
 	// nil 表示每次读取进程默认 Guard；测试可注入隔离的 enforced Catalog。
 	guard openAIWSAdmissionGuard
-	// nil 表示使用生产 SinkCatalog 判定。测试可注入 canary/enforced
-	// 状态，验证无 Token 后台预热被 fail-close。
-	tokenlessPrewarmAllowed func(officialegress.SinkID) (bool, error)
 
 	accounts sync.Map // key: int64(accountID), value: *openAIWSAccountPool
 	seq      atomic.Uint64
@@ -729,18 +726,6 @@ func (p *openAIWSConnPool) setClientDialerForTest(dialer openAIWSClientDialer) {
 		return
 	}
 	p.clientDialer = dialer
-}
-
-func (p *openAIWSConnPool) allowsTokenlessBackgroundPrewarm(sinkID officialegress.SinkID) bool {
-	if sinkID == "" {
-		return true
-	}
-	check := officialegress.DefaultSinkAllowsTokenlessBackgroundPrewarm
-	if p != nil && p.tokenlessPrewarmAllowed != nil {
-		check = p.tokenlessPrewarmAllowed
-	}
-	allowed, err := check(sinkID)
-	return err == nil && allowed
 }
 
 // Close 停止后台 worker 并关闭所有空闲连接，应在优雅关闭时调用。
@@ -928,9 +913,26 @@ func (p *openAIWSConnPool) Acquire(ctx context.Context, req openAIWSAcquireReque
 			return nil, err
 		}
 		clonedRequest.TransportKey += "|sink_enforcement=" + enforcementIdentity
+		attemptIdentity, hasAttempt := officialegress.AttemptIdentityFromContext(ctx)
+		if !hasAttempt || !attemptIdentity.HasFinalizationToken {
+			return nil, officialegress.WrapRuntimeError(
+				officialegress.RuntimeErrorCodeGuardRejected,
+				"websocket.pool_attempt_identity",
+				&officialegress.GuardRejectionError{
+					Reason: officialegress.ReasonMissingFinalizationToken, SinkID: clonedRequest.SinkID,
+				},
+			)
+		}
 		admissionContext, err := preserveOfficialEgressSinkAttempt(ctx, clonedRequest.SinkID)
 		if err != nil {
-			return nil, fmt.Errorf("绑定 WebSocket Acquire SinkID：%w", err)
+			return nil, officialegress.WrapRuntimeError(
+				officialegress.RuntimeErrorCodeGuardRejected,
+				"websocket.pool_attempt_identity",
+				&officialegress.GuardRejectionError{
+					Reason: officialegress.ReasonSinkBindingMismatch, SinkID: clonedRequest.SinkID,
+					Diagnostic: err.Error(),
+				},
+			)
 		}
 		admissionRequest, err := http.NewRequestWithContext(
 			admissionContext,
@@ -963,8 +965,8 @@ func (p *openAIWSConnPool) Acquire(ctx context.Context, req openAIWSAcquireReque
 				},
 			)
 		}
-		// 后续新拨号必须沿用 admission 已验证的同一 invocation；不能退回原始
-		// context 后重新生成只有 SinkID 的 legacy metadata。
+		// 后续新拨号必须沿用 admission 已验证的同一 invocation，不能退回原始
+		// context 或补造只有 SinkID 的 metadata。
 		ctx = admissionContext
 	}
 	return p.acquire(ctx, clonedRequest, 0)
@@ -1592,7 +1594,7 @@ func (p *openAIWSConnPool) ensureTargetIdleAsync(accountID int64) {
 	if req.TokenBoundAcquire {
 		return
 	}
-	if !p.allowsTokenlessBackgroundPrewarm(req.SinkID) {
+	if req.SinkID != "" {
 		return
 	}
 	generation = ap.generation
@@ -1671,7 +1673,7 @@ func (p *openAIWSConnPool) prewarmConns(accountID int64, req openAIWSAcquireRequ
 		}
 		// 调度后状态可能在 goroutine 真正运行前变化，因此拨号前
 		// 再次 fail-close，不能只依赖 ensureTargetIdleAsync 的首层判定。
-		if !p.allowsTokenlessBackgroundPrewarm(req.SinkID) {
+		if req.SinkID != "" {
 			return
 		}
 		ctx, cancel := context.WithTimeout(context.Background(), p.dialTimeout()+openAIWSConnPrewarmExtraDelay)

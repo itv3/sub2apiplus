@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ACC-07 证据编目器：按冻结声明把多 job 根编目成断言证据包的三份计划。
 
-§10.8.3 记录的操作失误（manifest 覆盖不全、标签语义与画像 selector 错位）根因是
+manifest 覆盖不全、标签语义与画像 selector 错位的根因是
 capture manifest 一直由执行者临时手写。本工具把编目变成确定性推导：
 
 输入

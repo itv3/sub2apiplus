@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ACC-01 验收契约：从批准断言画像机器推导逐规则验收模型。
 
-本模块是 §10.8.10 验收模型的单一权威实现，产出三样东西，全部由画像内容推导，
+本模块是主手册 §4.5.2 验收模型的单一权威实现，产出三样东西，全部由画像内容推导，
 禁止手写：
 
 1. **validation_mode 分组**：一条规则的全部 check 只选 wire record
@@ -52,7 +52,7 @@ SIDES = ("official", "candidate")
 
 # 侧别限定 check：判据依赖的**实验条件**在某一侧结构性不可能成立时，强制双侧执行
 # 会把"这一侧造不出该条件"误判成"证据缺失"，逼着执行者去凑一个语义不符的样本——
-# 那正是 §10.9.3 警告的「选中错误样本让判据虚假通过」。
+# 这会造成「选中错误样本让判据虚假通过」。
 #
 # 登记一条的门槛：必须能指出该侧**没有任何产出路径**的机器可核依据，而不是"本轮没采到"。
 # 采集遗漏必须重采，只有结构性不可达才登记在此。每条都要写清依据，并由离线测试锁定。
@@ -113,8 +113,8 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 由 `python3 acceptance_contract.py --print-digest` 生成；画像规则集变化时本摘要
 # 必然漂移，必须连同 25／17 分组与覆盖矩阵一起重新审核后才能更新。
 #
-# 2026-08-10 更新（SCN-REALITY-01 §3.1）：两份场景清单的 required_artifact_kinds
-# 曾在 9023af97c 分叉，A01 与 A15 的 §10.9.3 定案只落到 codex_upgrade_scenarios，
+# 2026-08-10 更新：场景真实性门禁复核发现两份场景清单的 required_artifact_kinds
+# 曾在 9023af97c 分叉，A01 与 A15 的判定只落到 codex_upgrade_scenarios，
 # 没同步到本画像。对齐后逐项复核：25／17 分组不变，validation_modes 与
 # expected_check_ids 无任何变化，side_coverage 只有 A01（pcap+relay_binary →
 # pcap+process_trace）与 A15（relay_binary+process_trace → process_trace）两项按

@@ -355,8 +355,8 @@ func TestCodexDiscoveredVersionDoesNotActivateStrictWire(t *testing.T) {
 	enforceCodexIdentityHeaders(h)
 
 	require.Equal(t, officialOpenAIHTTPOriginator, h.Get("originator"))
-	require.Equal(t, officialOpenAIHTTPUserAgent, h.Get("user-agent"))
-	require.Equal(t, officialCodexVersion0145, h.Get("version"))
+	require.Equal(t, activeOpenAICodexUserAgentForTest(), h.Get("user-agent"))
+	require.Equal(t, activeOpenAICodexVersionForTest(), h.Get("version"))
 	require.NotContains(t, h.Get("user-agent"), "0.200.1")
 }
 

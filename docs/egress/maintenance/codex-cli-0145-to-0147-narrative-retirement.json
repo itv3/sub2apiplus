@@ -1,0 +1,127 @@
+{
+  "schema_version": "codex-cli-emulation-narrative-retirement/v1",
+  "date": "2026-08-16",
+  "scope": {
+    "from_version": "0.145.0",
+    "to_version": "0.147.0"
+  },
+  "authority": {
+    "path": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+    "title": "Codex CLI 客户端仿真与版本演进手册",
+    "role": "客户端仿真规则、实现边界、版本演进流程与非版本维护的唯一人类可读权威文档"
+  },
+  "removed_narrative_files": [
+    {
+      "path": "docs/egress/maintenance/ACCEPT_PIPELINE_DEFECTS.md",
+      "sha256_before_removal": "1ca6f85e3248081fda5fee4ba858bef693ef333f9b6377a835222226db5880f1",
+      "replacement_anchors": [
+        "第四部分 Codex CLI 版本演进流程",
+        "4.5.2 逐规则机器断言",
+        "4.5.3 accept 前置与正式验收"
+      ]
+    },
+    {
+      "path": "docs/egress/maintenance/CAPTURE_OPERATIONS_NOTES.md",
+      "sha256_before_removal": "09ecbd65f1a090c57b9377f828ac9b7ba140e786cbb1dfb9d386c1538d4b3068",
+      "replacement_anchors": [
+        "4.4 候选验证与封存",
+        "4.4.4 运行纪律与退出条件"
+      ]
+    },
+    {
+      "path": "docs/egress/maintenance/CHG-01_COMPILER_STATIC_URL_CLOSURE.md",
+      "sha256_before_removal": "187b2fc7c82a1bec7c38947bc0527023447bd78a50ce21a76624a4474d15832c",
+      "replacement_anchors": [
+        "3.3.2 URL、header 与 body",
+        "3.5.2 高风险人工复核缝"
+      ]
+    },
+    {
+      "path": "docs/egress/maintenance/CHG-03_ALPHA_SEARCH_VERSION_AUTHORITY.md",
+      "sha256_before_removal": "44a1f3203e89dcad7dac9c9f353b3fce6edb133359f1c81edcc929211a33b5a3",
+      "replacement_anchors": [
+        "3.5.2 高风险人工复核缝",
+        "3.8 行为策略与稳定策略来源"
+      ]
+    },
+    {
+      "path": "docs/egress/maintenance/CODEX_CLI_0145_TO_0147_P0_REPORT.md",
+      "sha256_before_removal": "7ff70c3be27832a744e696f4fd2fbd0eb048b568f18d825f7a83c773952204fc",
+      "replacement_anchors": [
+        "4.0.1 DOC-PRE 与 P0"
+      ]
+    },
+    {
+      "path": "docs/egress/maintenance/CODEX_CLI_0145_TO_0147_UPGRADE_PLAN.md",
+      "sha256_before_removal": "3b00f0539b5fbd29912570c1415d20642549b9615e889de50efdae52a76c0f16",
+      "replacement_anchors": [
+        "第四部分 Codex CLI 版本演进流程"
+      ]
+    },
+    {
+      "path": "docs/egress/maintenance/OFFICIAL_EGRESS_CONVERGENCE_CHANGESETS.md",
+      "sha256_before_removal": "78e2632764718a60ef6df17dae88e13a3980683d29d40617284e24944f952c75",
+      "replacement_anchors": [
+        "第三部分 Sub2API 客户端仿真实现",
+        "第五部分 非版本变更维护"
+      ]
+    },
+    {
+      "path": "docs/egress/maintenance/SCN_REALITY_01_SCENARIO_REALITY_GATE.md",
+      "sha256_before_removal": "1939161af64cbe53a0416d9730c65f13e7199fdcf49c4db20d0dfc54d3ee649d",
+      "replacement_anchors": [
+        "4.4.2 场景与第三方入口",
+        "4.4.3 四阶段封存",
+        "4.4.4 运行纪律与退出条件"
+      ]
+    },
+    {
+      "path": "docs/egress/maintenance/SPEC_EP_002_EVIDENCE_BLOCKER.md",
+      "sha256_before_removal": "b567efba9bfd0a73cdfcbdadc5b4830dfffeed62d616292da7d17782d0bd243f",
+      "replacement_anchors": [
+        "2.1 规则证据与准入标准",
+        "SPEC-EP-002 OAuth 域名分布"
+      ]
+    },
+    {
+      "path": "docs/egress/maintenance/SPEC_TLS_003_JUDGMENT_DEFECT.md",
+      "sha256_before_removal": "bca1b6502d169c6d8b9ec4440ff3de83a8d48c783217a8f9025962c372d62ce7",
+      "replacement_anchors": [
+        "2.1 规则证据与准入标准",
+        "SPEC-TLS-003 WS ClientHello 扩展顺序不固定"
+      ]
+    },
+    {
+      "path": "docs/egress/maintenance/画像升级评审.md",
+      "sha256_before_removal": "9e2900d2a413ff8bbb7c8fdb76bfb17450464f2d4152e894038be649f6f88198",
+      "replacement_anchors": [
+        "4.2 规则比较、画像准备与批准",
+        "4.5 比较与验收",
+        "4.6 生产启用与回滚"
+      ]
+    }
+  ],
+  "removed_non_source_files": [
+    {
+      "path": "docs/egress/maintenance/.DS_Store",
+      "sha256_before_removal": "403e549f847831e4e273bbd817968c05198e66f81dcec7c3821364f842c58b6b"
+    }
+  ],
+  "retained_machine_proofs": [
+    {
+      "path": "docs/egress/maintenance/CODEX_CLI_0145_TO_0147_CATALOG_PROMOTION_RECEIPT.json",
+      "sha256": "6f7b51b11510c4e9c9532afad9423d630827b162fd36e367603636fd382ddae4"
+    },
+    {
+      "path": "docs/egress/maintenance/CODEX_CLI_0145_TO_0147_PRODUCTION_ACTIVATION_RECEIPT.json",
+      "sha256": "d717941c0dd37c1422145cbc7522e2b5e25dc75961d3d549d5b35ca99cef41a3"
+    }
+  ],
+  "retained_generated_assets": [
+    "docs/EVIDENCE_INDEX.md",
+    "docs/egress/maintenance/workspace-transition/manifest.json",
+    "docs/egress/maintenance/workspace-transition/receipt.json"
+  ],
+  "runtime_behavior_changed": false,
+  "result": "passed"
+}

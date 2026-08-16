@@ -102,7 +102,7 @@ func newOfficialCodexBlobUploadSemanticRequest(
 	return request, nil
 }
 
-// UploadOfficialCodexFile 按 Codex CLI 0.145.0 版本画像执行 create、区域 blob
+// UploadOfficialCodexFile 按当前 Codex CLI Release 画像执行 create、区域 blob
 // PUT、uploaded 三步。它是独立的生产 service API，不自行暴露公网路由。
 func (s *OpenAIGatewayService) UploadOfficialCodexFile(
 	ctx context.Context,

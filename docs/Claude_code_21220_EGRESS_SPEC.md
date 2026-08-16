@@ -1,6 +1,10 @@
-# Claude Code 2.1.220 出站规格、实现与演进手册
+# Claude Code 客户端仿真与版本演进手册
 
-版本绑定：`claude-code 2.1.220`<br>
+> **文档定位**：本文是 Claude Code 客户端规则、Sub2API 仿真实现与版本演进的人类可读权威入口。
+> 它在**方法与架构**上参照 [`docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md`](CODEX_CLI_CLIENT_EMULATION_GUIDE.md)，
+> 但材料、证据、规则和结论全部独立取自 Claude Code 自身，不继承 Codex 的任何事实结论。
+
+取证基线：`claude-code 2.1.220`（第一、二部分全部规则与证据的绑定版本）<br>
 Linux 主静态产物（已归档）：`@anthropic-ai/claude-code-linux-x64@2.1.220`，ELF x86_64，
 SHA-256 `674f61f20ff306f3100cf9200e4c36c4b70278b5bef2884549819b942a89c863`，与抓包客户端字节级相同<br>
 Darwin 交叉样本：`@anthropic-ai/claude-code-darwin-arm64@2.1.220`，Mach-O arm64，SHA-256
@@ -9,11 +13,23 @@ Darwin 交叉样本：`@anthropic-ai/claude-code-darwin-arm64@2.1.220`，Mach-O 
 `X-Stainless-Package-Version: 0.94.0`<br>
 文档状态：**当前台账共 57 个编号；1.1 目标内 53 个，其中 12 个已验证、41 个已观察；
 另有 4 个编号不计客户端 egress，已编号待补证为 0**<br>
-末次更新：2026-08-01
+末次更新：2026-08-16
 
-本文参照 `docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md`，说明在没有未压缩 TS 源码时，如何从官方生产 bundle
-和运行证据建立原子规则。原始二进制、提取物、抓包和机器索引是证据本体；本文记录方法、规则、
-Sub2API 实现责任、候选和准入状态。
+**版本时效**（2026-08-16 复核 npm registry）：官方 `@anthropic-ai/claude-code` 的 `stable` 为
+**2.1.224**、`latest` 为 **2.1.233**；本文取证基线 2.1.220 发布于 2026-07-24，已落后 stable 一个
+补丁位。基线**保持 2.1.220 不变**——其 22 个完整运行、12 项已验证规则和全部具名画像是自洽的
+证据资产，整体重新取证的成本远高于增量比较。**升级目标锁定 `stable` 通道的 2.1.224**，不追随
+发布过快的 `latest`。2.1.220 → 2.1.224 的差异必须由第四部分流程逐项**证明**，不得假设补丁版本
+不改变出站形态；在第四部分要求的受管工具补齐前，不得创建正式升级 Campaign（见 §4.0.4）。
+
+本文说明在没有未压缩 TS 源码时，如何从官方生产 bundle 和运行证据建立原子规则。原始二进制、
+提取物、抓包和机器索引是证据本体；本文记录方法、规则、Sub2API 实现责任、候选和准入状态。
+
+全文分五部分：**第一部分**规定规则如何形成，**第二部分**是 2.1.220 的规则全集，**第三部分**说明
+Sub2API 应当如何实现（**设计规范**，其实施状态见 §3.9），**第四部分**规定版本演进流程，
+**第五部分**处理非版本变更维护（当前为占位，待补）。第二部分定义“官方应产生什么行为”，
+第三部分定义“Sub2API 如何实现”，
+第四部分定义“如何换版”；三者的证据、状态与责任不得互相代替。
 
 第二部分按 Sub2API 实现责任展示当前 57 个编号，并把目标归属、证据状态和实现状态分开；历史 36 个
 编号保留在迁移审计中。HitCC 2.1.197 与 2.1.88 源码中的所有已盘点线索均进入机器覆盖矩阵，
@@ -1554,3 +1570,733 @@ SPEC 引用单向属于当前 verified 集合；正文不得给出与 2.7／2.8 
 
 新建或升格规则固定使用以上六字段和顺序；历史复合「已观察」条目可暂留边界补充。实现责任、成对
 验收 ID、实现位置与断言状态放在机器台账，避免把证据状态与 Sub2API 实现状态混写。
+
+---
+
+# 第三部分 Sub2API 客户端仿真实现
+
+**本部分是设计规范，不是现状记录。** 它规定 Sub2API 实现第二部分规则时**应当**具备的架构；
+现状与之的差距集中登记在 §3.5，迁移路径见 §3.9。当代码与本部分冲突时，以本部分为准并改代码，
+不得反过来把既有实现写成规范。
+
+设计的第一驱动力是**换版频率**。Claude Code 的发布节奏远高于 Codex CLI：2026-07-24 至 08-14
+的三周内发布了 2.1.220 至 2.1.233 共 13 个补丁版本。任何"换版需要修改执行代码"的架构都无法
+持续跟随，因此本部分的硬性目标是：
+
+> **换版只追加版本画像数据与证据，不修改执行代码。**
+> 2.1.220 → 2.1.224 的升级，应当只需新增一个画像快照并通过第四部分验收。
+
+由此派生四条不可让步的设计约束：版本身份必须收敛为数据；active／previous 必须并存且可回滚；
+条件规则必须由画像声明而非代码分支；版本常量必须在业务代码中绝迹并由门禁强制。
+
+## 3.1 总体架构与 persona 边界
+
+账号选定后，生产请求绑定 active ReleaseBundle，再由 Compiler、Executor、受信传输适配器与
+Runtime Guard 完成最终出站定型。previous 只用于受控回滚、测试或显式灰度；调用方不得直接选择
+版本或传输 ID。
+
+```text
+官方 Claude Code 入站 ─┐
+                        ├─→ 归一化语义请求 ─→ ClaudeIdentityFacts + ClaudeEgressPlan
+第三方标准 API 入站 ───┘                              ↓
+        ReleaseCatalog（生产默认 active）→ ReleaseBundle → Compiler → CompiledExecution
+                              ↓
+        Executor 签发 PreparedRequest + FinalizationToken + TransportSpec
+                              ↓
+        受信 HTTP adapter → Runtime Guard → Anthropic
+```
+
+入站客户端类型**不是**画像函数的输入（§1.1）。兼容层只提交协议、模型、工具、请求语义和可验证
+条件；Key、Group、账号路由与计费仍由原有业务系统管理，兼容层不拥有版本身份、传输画像或最终 wire。
+
+| 平面 | 拥有 | 不得影响 |
+|---|---|---|
+| 入口归一化 | 协议与语义适配、条件类型识别、观测标注 | active ReleaseCatalog、画像摘要、最终 version 与 wire 契约 |
+| 生产 strict wire | ReleaseCatalog、ReleaseBundle、Compiler、Executor 与受信 adapter 定型的 URL、Header、Body、顺序、压缩、传输、状态与连接 | 被入站身份、账号 UA 或管理端候选值覆盖 |
+
+persona 由账号认证类型与 route registry 确定，ReleaseCatalog 再按受控 mode 解析 ReleaseBundle：
+
+| persona | 端点范围 | 约束 |
+|---|---|---|
+| `claude-code` | ReleaseBundle 登记的 Claude 端点闭集 | URL、Header、Body、传输、状态与生命周期由同一 Bundle 驱动 |
+| API Key mimic | Anthropic API Key 产品路径 | 不属于 §1.1 对齐目标，**禁止套用 `claude-code` 画像**，独立治理 |
+| `transport_only` | OAuth authorization-code 交换 | 只复用有证据的传输事实，不冒充业务请求的 Body 契约 |
+| `unclassified` | 尚未举证的遗留路径 | 完成官方行为举证前不得凭官方 host 自动归入 `claude-code` |
+| 未登记 | Catalog 未知 route 或 SinkBinding | enforce 状态下 fail-close |
+
+入站事实的处置固定如下：
+
+| 入站事实 | 处理 |
+|---|---|
+| UA、客户端版本、`x-app`、会话 UUID、metadata | 不拥有 wire 身份；按画像与 active 命名空间重建 |
+| Header、Body 或 metadata 的身份冲突 | 丢弃冲突原值，派生同一生命周期的新身份 |
+| 条件事实缺失或冲突 | 按条件不成立处理，**不伪造 Header**，不发送空值占位 |
+| 顶层字段超出画像闭集 | 删除并按「入口类型 + 字段集合」去重告警 |
+| 未被画像消费的第三方 Header | 不透传到官方上游 |
+
+账号配置非法、route／Sink 未登记或终态被篡改时 fail-close；其余身份不匹配只投影并告警。生产路径
+不执行入站身份逐字段一致性校验，该校验只用于离线夹具、画像诊断与证据复算。
+
+## 3.2 版本画像的数据化契约
+
+**这是支撑频繁换版的核心。** 版本画像必须是内容寻址的不可变数据文件，而不是 Go 常量、结构体
+字面量或构造函数。参照 Codex 的既有实现（`backend/internal/officialegress/catalogdata/runtime/`
+下按版本分目录、以画像摘要命名的 JSON），Claude 画像存放于：
+
+```text
+backend/internal/officialegress/catalogdata/claude/profiles/<version>/<digest>.json
+```
+
+`version + digest` 是不可变坐标。摘要变化即完整画像变化，必须同步检查第二部分规则、版本清单、
+测试与抓包。启动期解码、结构校验或摘要核对失败即阻止启动；运行时为只读不可变快照，需改写的
+数据按次深拷贝。
+
+### 3.2.1 画像必须承载的内容
+
+画像要覆盖第二部分全部 53 项对齐责任，因此至少包含以下段。它比 Codex 现有画像多出**条件 Header
+规则**与**重试曲线参数**两段，因为 Claude 的条件规则占比高（21／53）：
+
+| 段 | 承载内容 | 对应规则 |
+|---|---|---|
+| `Version` | 版本号与 UA 版本串的唯一来源 | `SPEC-HDR-002` |
+| `RequiredRules` | 本版本必须对齐的 SPEC 编号集合与状态等级 | §2.2 全部 |
+| `Transports` | TLS 扩展序列、cipher、groups、签名算法、ALPN、SNI 策略 | `SPEC-TLS-001/002/003`、`SPEC-PROTO-001` |
+| `Endpoints` | 端点闭集：method、host、path、query、accept、content-type、压缩、连接生命周期、Header 顺序模式 | `SPEC-EP-001..004` |
+| `HeaderSlots` | 逐槽位的名称、线上大小写、值来源、**触发条件**、互斥组与顺序 | `SPEC-HDR-001..026` |
+| `BetaPolicy` | beta 序列、插入位置与条件项 | `SPEC-HDR-003`、`SPEC-BETA-001` |
+| `BodyShape` | 顶层键闭集与顺序、system 段结构、cache_control 位置、metadata 编码 | `SPEC-BODY-001..016` |
+| `RetryPolicy` | 起步延迟、指数底、封顶基数、抖动上限、终止边界 | `SPEC-CONN-001/002/003` |
+| `PrivacyMode` | 本画像证据所属的隐私模式，以及各端点在该模式下是否放行 | §1.1 三级模型 |
+| `Digest` | 画像自身的内容摘要 | 版本坐标 |
+
+### 3.2.2 Header 槽位机制
+
+条件 Header 是 Claude 与 Codex 差异最大的面，必须由画像声明，**不得写成代码里的 if 分支**。
+每个槽位至少声明：
+
+```text
+Slot        槽位号，决定相对顺序；组合顺序由槽位号唯一确定
+Name        内部名
+WireName    线上实际大小写（H1 header 名的字面形态属于规则）
+Value       常量值；非常量时留空
+Source      constant | authentication | account | session | agent | environment | turn
+Condition   always | 条件表达式（引用画像声明的条件类型）
+AlternateGroup  互斥组：同组至多出现一个
+```
+
+条件求值只接受**画像声明的条件类型**，其输入来自归一化语义请求与运行上下文，不接受入站
+Header 的原值。第三方入站只有在规范化语义明确表达同一条件时才能触发该槽位；携带同名 Header
+不构成触发理由（§2.2.2）。条件不成立时必须整条省略，不得发送空值。
+
+### 3.2.3 active／previous 与发布图
+
+ReleaseCatalog 启动时加载 release graph 与画像目录；active／previous 指向完整 release ID，
+未登记坐标不得回退。新增版本只能**追加**快照与发布图节点，不原位覆盖旧画像，也不在共享执行
+路径上散布版本分支——这一约束由文本与 Go AST 版本泄漏门禁强制执行（§3.7）。
+
+版本泄漏 baseline 只记录尚未消除的既有债务，不是新版本硬编码的批准清单。换版或晋升不得把新
+指纹写入 baseline 以换取门禁通过。
+
+## 3.3 最终出站定型
+
+### 3.3.1 运行上下文
+
+入口只保存协议与语义事实、传输状态、业务历史和可验证条件类型。账号选定后，Identity Authority
+将其投影为 `ClaudeIdentityFacts`，与 ReleaseBundle、端点、模型能力、会话状态与条件 Header 绑定。
+UA、版本、`x-app`、entrypoint 与 Stainless 向量的默认值来自受信 ReleaseCatalog Build，**不来自
+入站客户端**。上下文只属于当前 invocation 或 attempt。
+
+### 3.3.2 URL、Header 与 Body
+
+画像拥有 host、固定 path／query、Header 槽位与 Body 闭集，只允许画像声明的动态字段。
+HTTP/1.1 在写出前定型 header 名的大小写、顺序、host 与长度。Compiler 对静态端点执行封闭校验：
+
+| URL 成分 | Compiler 契约 |
+|---|---|
+| 形态与 authority | 拒绝 opaque、userinfo、fragment 与显式端口；只接受精确小写 `https`；Host 与画像逐字相等 |
+| path | 段数与画像模板相等；字面段逐字相等，`{param}` 段非空 |
+| query | 只允许画像声明的键；`beta=true` 一类常量值必须逐字相等，不得被入站改写 |
+
+Body 按画像的顶层键闭集与稳定顺序输出，并保持 JSON 数值保真。system 段结构、`cache_control`
+位置与 metadata 的内嵌编码均由 `BodyShape` 定义。已知值不合契约时按画像规范化，不拒绝请求。
+
+### 3.3.3 状态、连接与重试
+
+会话状态按 invocation 身份隔离，只从画像规定的位置更新。跨请求复用要求入站显式携带可信锚点；
+没有可信锚点时仍可确定性派生当前身份，但不跨请求复用上游状态，避免把一段对话的状态句柄带入
+另一段。
+
+HTTP Client、连接生命周期与重试曲线均由端点画像声明。重试必须按 `RetryPolicy` 执行，不得在
+业务代码中另写退避逻辑；辅助端点与 OAuth 刷新不得旁路统一执行器。
+
+## 3.4 对齐责任的落点与成对验收
+
+§2.2 的 53 项责任必须在画像或执行点上各有唯一落点。按分组的落点归属如下：
+
+| 规则分组 | 项数 | 画像落点 | 执行点 |
+|---|---:|---|---|
+| TLS | 3 | `Transports` | 受信 transport adapter |
+| HTTP 协议 | 1 | `Transports.Protocol` | adapter 协商 |
+| Header | 25 | `HeaderSlots` + `BetaPolicy` | Compiler 定型顺序与大小写 |
+| Body | 16 | `BodyShape` | Compiler 序列化 |
+| 端点 | 4 | `Endpoints` | Compiler URL 封闭校验 |
+| 连接与重试 | 3 | `RetryPolicy` + `Endpoints.ClientLifecycle` | Executor 与连接池 |
+| Beta 机制 | 1 | `BetaPolicy` | Compiler |
+
+每项必须同时具备画像或执行点、官方与候选证据、机器断言三者。`PAIR-<SPEC-ID>` 要求官方入口与
+第三方入口在同一候选制品与画像下分别执行断言：对相同规范化语义与画像条件，两侧必须命中相同的
+可见结果；动态字段按规则声明的格式、相等关系与生命周期比较，不比较某次抓包的字面值。
+
+多账号调度、计费与服务级请求节奏不在对齐责任内，画像不改写它们。
+
+## 3.5 现状差距与改造台账
+
+本节是本部分唯一记录现状的地方。当前实现**不满足** §3.2 的数据化契约，主要差距如下：
+
+| # | 差距 | 证据 | 后果 |
+|---:|---|---|---|
+| 1 | 版本身份是 Go 常量 | `backend/internal/pkg/claude/constants.go`：`CLICurrentVersion = "2.1.220"`、`DefaultHeaders`（UA 与 Stainless 八项）、`DefaultBetaHeader`、`FullClaudeCodeMimicryBetas()` | 换版必须改代码、重编译、重部署 |
+| 2 | 版本身份散布 | 17 个非测试文件引用 `internal/pkg/claude`；`identity_service.go`、`gateway_upstream_request.go`、`gateway_claude_oauth_body.go`、`upstream_models.go`、`account_test_service.go` 各自读取版本常量 | 换版要改 N 处，易漏 |
+| 3 | 画像由代码构造 | `official_client_profile_registry.go` 的 `buildAnthropicClientProfileCatalog()` 从 `officialClientBuildDefinitions()` 等函数装配 | 画像不是数据，无法内容寻址、无法追加式换版 |
+| 4 | 无版本化 Snapshot 与发布图 | `catalogdata/` 下只有 Codex 的 `0.145.0`／`0.147.0`，无 Claude 目录 | active／previous 无法并存，**无法回滚** |
+| 5 | 无条件 Header 机制 | 画像结构 `officialClientWireProfile` 只有 `StaticHeaders` 与 `BetaHeader` | §2.2.2 的 21 项条件规则无处表达 |
+| 6 | 出站逻辑耦合在 service | `official_egress_anthropic.go` 的 3 个 `GatewayService` 方法（`finalizeAnthropicOfficialEgressRequest`、`finalizeOfficialAnthropicHeaders`、`resolveOfficialAnthropicBetaHeader`）与 23 个包级函数全部位于 `service` 包 | 违反 §3.6 依赖方向，无 FinalizationToken 与终态校验 |
+| 7 | 无 Claude Compiler／Guard 落点 | `officialegress` 的 `Persona` 仅有 `codex-cli`／`chatgpt-web`／`unclassified`／`dead-code` | Claude 请求不受 Guard 防旁路保护 |
+| 8 | 版本口径已漂移 | `constants.go` 注释称「截至 2026-04」，而常量为 2.1.220 | 注释与事实脱节，无门禁发现 |
+
+有利条件是骨架可复用：`officialegress` 的 `catalog.go` 与 `guard.go` 中不含任何 Codex 特化
+（两文件 codex 命中数均为 0），`Persona` 机制、ReleaseCatalog、FinalizationToken 与 Guard 均已存在；
+`official_client_profile_registry.go` 也已有 `officialClientReleasePointer{Active, Previous}` 的
+概念雏形。改造是把 Claude 接入既有骨架并将画像数据化，不是重造一套。
+
+改造按以下顺序分阶段执行，每阶段是独立变更集，不与换版 Campaign 混合（§5 待补部分同此原则）：
+
+| 阶段 | 内容 | 完成判据 |
+|---:|---|---|
+| A | 新增 `PersonaClaudeCode`，登记 Claude route 与 SinkBinding，Guard 置于 `legacy_observe` | Claude 请求在 Guard 中可见且不改变 wire |
+| B | 定义 §3.2 画像 schema，把 2.1.220 现有行为**原样**导出为首个画像快照 | 画像摘要可复算；final-wire 与改造前逐字节相等 |
+| C | 实现 Claude Compiler 与 Executor 接入，改为从画像读取身份 | 空 wire 允许列表比较通过 |
+| D | 业务代码停止读取版本常量，`constants.go` 的版本面退役 | 版本泄漏门禁覆盖 Claude 且 baseline 不新增 |
+| E | 接入 active／previous 与回滚，Guard 升至 `canary_enforce` 直至 `enforced` | 可在不改代码的前提下切换与回滚画像 |
+
+阶段 B 的**原样导出**是关键纪律：首个画像必须复制当前已验证行为，不得在数据化的同时修正规则。
+任何规则修正都要走第四部分流程，与数据化改造分开验收，否则无法判断 wire 变化来自改造还是修正。
+
+阶段 D 需注意 `constants.go` 同时服务 API Key mimic 等非对齐路径（§3.1 persona 表），退役范围
+只限 `claude-code` persona 使用的版本面，不得连带删除仍有产品语义的常量。
+
+## 3.6 包边界与依赖方向
+
+`officialegress` 持有画像、Catalog、Compiler、Executor 与 Guard；`service` 提交业务事实与 Plan；
+`repository` 提供连接池、代理与底层资源。
+
+```text
+service ───────────────────→ officialegress core
+repository ────────────────→ officialegress core 的窄 port
+officialegress/adapter/* ───→ core + 受信物理资源
+wiring ────────────────────→ 注入闭集 adapter
+```
+
+`officialegress` **不得** import `service` 或 `repository`；公共边界只暴露中立的 Plan、Release 与
+窄 port。稳定引擎不承担版本常量、模型特判或业务归属；版本画像也不承担账号、计费或协议桥接。
+
+Claude 与 Codex 共用 Catalog、Guard、Release 与 Token 机制，但**各自拥有 Compiler**：两者的 URL
+形态、Body 结构与传输能力不同（Claude 无 WebSocket 与 HTTP/2，基线只 offer `http/1.1`），
+强行共用会把协议差异挤进条件分支。共用部分若需修改，必须专项复验两个 persona。
+
+## 3.7 Guard、逐 Sink 灰度与静态门禁
+
+Runtime Guard 先按 method、host、path、protocol 匹配 route，再验证 persona、SinkID、binding 与
+状态；canary 与 enforced 还必须验证 FinalizationToken、Release／Profile digest、adapter 与最终
+请求摘要。未知 route、无效 binding 或终态篡改按策略 fail-close。
+
+状态只按 `legacy_observe → canary_enforce → enforced` 单调前进（enforced 可回滚至 canary）。
+新 Sink 必须从 canary 进入；`legacy_observe` 只容纳封存基线。静态门禁覆盖 net/http、上游封装、
+client factory 与 facade，并用变异测试发现包装旁路；Catalog 项只凭迁移或移除收据单调变更。
+
+版本泄漏门禁必须扩展到 Claude：任何 `2\.1\.\d+` 形态的版本串、UA 模板与 Stainless 向量都不得
+出现在业务代码与共享执行层，只能存在于画像数据与其加载器中。
+
+## 3.8 行为策略与稳定来源
+
+非用户直接触发的请求必须定义触发条件、频率、并发、副作用与删除期限。以下策略面须由画像或
+显式策略声明，不得散落在调用点：
+
+| 策略面 | 要求 |
+|---|---|
+| 重试 | 按 `RetryPolicy` 执行；`SPEC-CONN-002` 的曲线（500 ms 起步、2 倍指数、32 s 基数封顶、最高 25% 抖动）是画像参数而非代码常量 |
+| 隐私模式 | 画像声明本版本证据所属模式；`essential-traffic` 下不得发送该模式门控的请求 |
+| 缓存 | `cache_control` 的位置与 TTL 由 `BodyShape` 决定；客户端显式值优先的产品策略须单独声明并与画像分离 |
+| 流式 | SSE 响应处理属下游兼容（§2.4.7 的 `RESP` 规则），不计入客户端 egress，也不得反向影响请求定型 |
+| 辅助请求 | 端点、触发条件与生命周期由画像登记；不得旁路统一执行器 |
+
+## 3.9 实施状态与迁移路径
+
+**当前实施状态：未开始。** §3.5 的八项差距全部存在，Claude 尚无版本化画像、无 Guard 覆盖、
+无 Compiler 落点。本部分描述的架构目前**没有任何一部分已在生产运行**，不得据本部分宣称
+Claude 出站已画像化。
+
+对第四部分的影响：§4.3「候选画像入库」在阶段 B 完成前没有落点；§4.6「画像晋升」在阶段 E 完成前
+不可执行。二者已在 §4.0.4 登记为前置阻断。
+
+阶段 A 至 C 完成后，第四部分可执行到 `candidate_sealed`；阶段 E 完成后方可执行完整的 §4.6。
+在此之前，2.1.220 → 2.1.224 只能停留在 §4.1 取证与 §4.2.1 人工规则比较。
+
+---
+
+# 第四部分 Claude Code 版本演进流程
+
+本部分规定 Claude Code 客户端画像的可复用换版流程：从目标版本官方取证开始，经规则比较批准、
+候选画像与制品、候选验证封存、逐规则验收，最后完成生产启用与回滚闭环。
+
+流程**框架**与 `CODEX_CLI_CLIENT_EMULATION_GUIDE.md` 第四部分同构，因为两者面对同一个 Sub2API
+发布系统和同一类审计要求；但取证手段、规则继承判据、场景矩阵与工具现状全部是 Claude 特有的。
+不得把 Codex 的证据、清单、收据或结论跨客户端复用。后继版本可以复用工具和流程，但不得复用
+目标版本应独立取得的 bundle、wire 与运行证据。
+
+| 步骤 | 核心问题与主要产出 | 状态／完成事实 |
+|---|---|---|
+| 1. 官方目标版本取证 | 目标版本客户端实际发出什么；形成目标规则与 bundle／wire 证据 | 新建 Campaign → `official_sealed` |
+| 2. 规则比较与批准 | 哪些规则继承、改变、新增、删除或证据降级；批准清单 | `official_sealed → profile_approved` |
+| 3. 候选画像与制品 | Sub2API 如何表达目标规则；生成候选画像与制品 | 保持 `profile_approved` |
+| 4. 候选验证与封存 | candidate 是否从官方与第三方入口产生目标 wire | `profile_approved → candidate_sealed` |
+| 5. 比较与验收 | 官方与候选是否逐规则一致 | `candidate_sealed → compared → ready` |
+| 6. 生产启用与回滚 | 生产是否运行选定 candidate 且能完整退回 | Campaign 保持 `ready`；每个 candidate 独立封存激活事实 |
+
+**本部分当前不可整体执行。** Claude 侧受管工具链只覆盖取证与门禁，尚不存在编排器、Campaign
+状态机、批准清单机制、候选封存与晋升收据。§4.0.4 逐项登记这些缺口，它们是创建正式 Campaign 的
+前置阻断。先把规范固定下来，是为了让补齐工具时有明确契约，也让「尚未做到」与「已经做到」在
+文档中始终可区分。
+
+## 4.0 全流程控制约定
+
+### 4.0.1 DOC-PRE 与 P0 预检
+
+正式 Campaign 前先完成可丢弃的 DOC-PRE／P0。DOC-PRE 只登记并审核本次换版的文档与台账变更；
+合并后必须从干净 HEAD 执行 P0。P0 只发现阻断，不形成目标版本证据。
+
+| 类别 | P0 通过条件 | 当前可执行性 |
+|---|---|---|
+| 身份与角色 | 冻结目标 npm 包、tgz 与二进制 SHA-256、平台、内嵌 Bun 构建串、entrypoint、隐私模式与网络条件 | 部分：`extract_claude_bundle.py` 可复算包与 bundle 摘要 |
+| 采集能力 | P（pcap）、R（等长脱敏字节）、J（MITM）、M（manifest）四通道在目标镜像中可用，且 addon 摘要可入 manifest | 部分：relay 与 MITM addon 已有；addon 摘要进 manifest 仍是已知 M 缺口 |
+| 账号与场景 | firstParty OAuth 账号、模型额度、受控故障注入与子 agent 深度链可达；TUI 类场景需真实 TTY | 部分：`--fault-spec` 与 subagent 链可用；TTY 仍阻断 |
+| 环境恢复 | 端口、容器、hosts、代理、CA、`.claude.json` 与账号登录态可按 before／after 恢复 | 未受管：无环境探针收据 Schema。注意 logout 会把 `hasCompletedOnboarding` 重置为 false |
+| 基线门禁 | 干净 HEAD 执行覆盖门禁并记录命令、源码摘要、退出码与跳过分类 | 可执行 |
+| 生产隔离 | 只读记录生产镜像、compose、selector 与依赖服务；P0 与正式 Campaign 隔离 | 未受管：Claude 画像尚未进入生产 Catalog |
+
+P0 产物标为 `preflight-only`，不得发送计入正式证据的真实请求，不得修改运行环境或历史证据。
+无法证明通过的项目登记为阻断；阻断修复应独立提交后重跑 P0。
+
+### 4.0.2 Campaign、candidate 与 attempt
+
+Campaign 是一次目标版本升级的不可变证据容器；candidate 是其中一个固定的 Sub2API 源码与镜像
+实现；attempt 是身份不变时的一次只写采集记录。
+
+| 单元 | 必须新建的变化 |
+|---|---|
+| 版本 Campaign | 目标版本、npm 包或二进制摘要、内嵌 Bun 构建、平台、默认隐私模式，或批准规则、场景、画像与断言变化 |
+| 同版本后继 Campaign | 受管工具影响证据含义、环境无法证明恢复，或已冻结的机器角色与执行副本身份错误 |
+| 同 Campaign 新 candidate | Sub2API 源码树、测试树、构建 ID、部署版本、OCI digest、image ID 或画像 ID／摘要变化 |
+| 同 candidate 新 attempt | 冻结身份不变，仅因网络、配额或临时运行失败重试；新 attempt 不覆盖旧记录 |
+
+以下 Claude 特有的身份维度必须一并冻结，缺任一项不得开始采集：
+
+- **隐私模式**：`essential-traffic`／`no-telemetry`／`default` 直接决定端点集合大小（§1.1 的三级
+  模型中 `ca()` 门控 53 处、`V0e()` 门控 7 处）。同一 Campaign 内不得混用模式，跨模式结论必须
+  分别封存。
+- **entrypoint**：`sdk-cli`（`-p` 驱动）与 `cli`（真实 TTY 驱动 TUI）是两个身份；`-p` 会强制
+  `sdk-cli`，不能用环境变量伪造入口。
+- **平台角色**：Linux x86_64 是静态与 wire 主基准，Darwin arm64 只作交叉复核；minify 符号不得
+  跨平台引用。
+
+产出侧工具（采集、relay、脱敏、bundle 提取、收据生成、环境快照、编排）变化会改变证据字节，
+必须新建 Campaign；评估侧工具只有在显式白名单内才允许漂移。被校验的工具树必须就是实际执行的
+工具树。
+
+每个 candidate 建立时声明用途且不可事后追认：`validation_only` 止于 `accepted_not_activated`；
+`production_replacement` 在验收后必须继续执行 §4.6，并形成该 candidate 独立的激活收据。
+
+### 4.0.3 状态、证据与全局不变量
+
+Campaign 状态只按以下顺序前进：
+
+~~~text
+planned → official_sealed → profile_approved → candidate_sealed → compared → ready
+~~~
+
+candidate 的生产状态与 Campaign 状态相互独立，按 candidate 单调记录：
+
+~~~text
+accepted_not_activated → canary_passed → active → rollback_verified → restored_active
+~~~
+
+不得以 candidate 编号最大、验收通过或 Campaign 已 `ready` 推断生产状态。当前生产 candidate 由
+最新有效激活收据、运行容器 digest 与 activation fact 共同确定；三者不一致时状态为
+`production_unverified`，禁止宣称升级完成。
+
+| 不变量 | 要求 |
+|---|---|
+| 权威来源 | 批准清单是规则与画像的唯一事实源；文档正文不得与机器台账冲突 |
+| 不可变性 | 清单、attempt、result、seal、画像与历史收据只追加、不可覆盖；身份变化不得借旧证据跨阶段 |
+| 同源性 | 被测源码、候选源码、构建产物、运行镜像、画像与 finalizer 由摘要形成同一条可复算链 |
+| 失败关闭 | 路径、权限、摘要、恢复、安全、身份或规则覆盖无法证明时停止，不以人工推断补足 |
+| 证据保留 | 遵守 §1.2 与 §1.5；R 类只允许等长脱敏，未脱敏材料不得离开采集机，原始 MITM JSONL 属 `raw_private` |
+| 状态诚实 | 换版不是升格证据等级的时机；「已观察」不得因换版被静默改写为「已验证」（判据见 §4.2.1） |
+
+### 4.0.4 工具就绪状态与前置阻断
+
+本节区分「当前已强制执行」与「规范要求但尚未受管实现」，是 Claude 与 Codex 差距最大的一节。
+Codex 侧有约九千行的 `codex_upgrade.py` 编排器、成套 Schema、晋升命令与激活收据生成器；
+Claude 侧目前只有取证与门禁工具。**任何「未受管实现」项都是创建正式 Campaign 的前置阻断。**
+
+| 能力 | Claude 当前状态 | 边界与缺口 |
+|---|---|---|
+| bundle 提取与可达性 | 已实现 | `extract_claude_bundle.py` 确定性解析 Bun SEA；`claude_bundle_reachability.py` 建立 sink 可达窗口，窗口按 §1.4.1 解读，不构成数据流证明 |
+| 规则与覆盖门禁 | 已实现 | `claude_21220/check_coverage.py` 对账编号、责任集合、HitCC 与 2.1.88 覆盖及运行 manifest；要求 `local-analysis/` 证据树完整存在 |
+| 运行证据分析 | 已实现 | `analyze_claude_21220_pending_evidence.py` 复算 22-run campaign 绑定、正负例与重试曲线 |
+| R 通道采集 | 已实现 | `run_claude_relay_scenario.sh` 与 `upstream_byte_relay.py` 只在两条 TLS 腿之间复制明文字节 |
+| 条件 Header 探针 | 已实现 | `capturelib/environment.py` 为条件候选取正负例 |
+| TUI／`cli` 入口驱动 | 未攻克 | `drive_claude_tui.py` 已存在，但 `pty` 在无 TTY 的 `docker exec` 下父进程卡死；`CAND-UA-CLI`／`CAND-BG-SESSION` 至今无正例 |
+| 升级编排器与 Campaign 状态机 | **未受管实现** | 无 `claude_upgrade.py`；`plan`／`status`／`resume`／`compare`／`accept` 均不存在。现有 `tests/test_claude_21220_campaign_gate.py` 只校验既有取证 campaign，不是换版状态机 |
+| 批准清单机制 | **未受管实现** | 无 `classification/approved/` 等价物，无联合摘要两段式批准 |
+| 画像暂存与入库 | **未受管实现** | 无 `prepare-profile`／`stage-profile`；且 Claude 版本化 Snapshot／ReleaseCatalog 尚不存在（架构见 §3.2，需先完成 §3.5 阶段 B） |
+| 候选采集与四阶段封存 | **未受管实现** | 无 candidate 身份冻结、seal 预览与批准流程 |
+| 逐规则机器断言 | **未受管实现** | 无 Claude 版 expectations 与断言执行器，`PAIR-<SPEC-ID>` 无法机器执行 |
+| 画像晋升与激活收据 | **未受管实现** | 无 Claude 晋升命令；`docs/egress/maintenance/` 下 Claude 收据数为 **0** |
+| 第三方入口绑定 | **未定义** | Codex 固定 Kilo 双入口；Claude 的第三方标准 API 入口集合尚未在工具与 Schema 中确定（见 §4.4.2） |
+
+因此，对 2.1.220 → 2.1.224 的当前可执行范围是：**可以执行 §4.1 的取证与 §4.2.1 的人工规则比较**
+（bundle 提取、可达性枚举与覆盖门禁均已具备），**不能**进入 §4.2.2 之后的批准、画像、候选封存、
+验收与晋升。人工「已经跑过」的结论、终端记录或未绑定原始事实的静态 JSON 不能替代受管收据。
+
+补齐顺序应与依赖一致：编排器与 Campaign 状态机 → 批准清单 → 版本化画像（依赖第三部分）→
+候选封存与逐规则断言 → 晋升与激活收据。Campaign 建立后再修改这些工具会触发 §4.0.2 的工具漂移
+边界，因此必须先补齐再开 Campaign。
+
+## 4.1 官方目标版本取证
+
+本步从目标版本官方发行物和真实抓包整理第二部分完整编号规则；开始前必须通过 §4.0 的 DOC-PRE／P0。
+
+### 4.1.1 输入与执行
+
+Claude 与 Codex 在这一步的根本差异是**没有官方源码**：Codex 直读 Rust stable 源码并做 diff，
+Claude 只能从 minify 生产 bundle 逆向建立命题。因此输入以发行物为准：
+
+| 输入 | 内容 |
+|---|---|
+| 基线 | 当前第二部分编号全集、三份机器台账与 `local-analysis/captures/` 既有运行 |
+| 目标 | npm `stable` 版本号、tgz 与 `dist.integrity`、Linux x64 与 Darwin arm64 二进制 SHA-256、内嵌 Bun 构建串、上报的 SDK 版本 |
+| 条件 | 平台、运行镜像、隐私模式、entrypoint、模型、账号、代理与 TLS 条件 |
+| 坐标 | 持久 Campaign 目录、采集机、证据目录与环境恢复坐标 |
+
+目标版本必须取自 `stable` dist-tag，并同时记录取包时刻的 `latest`，以便日后解释版本选择。
+Campaign 目录必须是持久、绝对、尚不存在且不经符号链接的路径，不得位于临时目录。
+
+执行顺序如下；在编排器补齐前，各步骤只能人工按序执行并自行留痕，其产物不构成受管收据：
+
+| 顺序 | 动作 | 应产出 |
+|---:|---|---|
+| 1 | 冻结目标发行物：下载 tgz，记录 registry URL、`dist.integrity`、下载时间，复算 tgz 与二进制摘要 | `SOURCE_MANIFEST.json` 等价物 |
+| 2 | 提取 bundle：确定性解析 Bun SEA | 提取物与提取器摘要 |
+| 3 | 枚举 sink：建立入口到网络 sink 的可达窗口 | 端点／Header／Body／retry 候选清单 |
+| 4 | 按场景采集：P／R／J／M 四通道覆盖批准场景矩阵 | 逐运行 manifest 与脱敏证据 |
+| 5 | 封存：校验恢复、权限、秘密扫描、inventory 与 finalizer | 进入 `official_sealed` |
+| 6 | 生成差异草案：目标与基线的规则级差异 | 分类草案（当前无受管生成器） |
+
+SHA-256 只能证明文件同一，不能单独证明来源官方；来源清单必须绑定 registry 事实。
+
+### 4.1.2 规则整理
+
+人工逐项复核 bundle 控制流、wire 差异与原始抓包：
+
+1. 从入口追到认证、Client、TLS、传输、Header、Body、端点与跨请求状态；
+2. 判断范围、触发条件、固定／随机／条件属性及可观测边界；
+3. 把成立的目标行为写入第二部分，保持 §2.10 的六字段完整；
+4. 使机器台账与第二部分编号一一对应，所有证据可重新定位和解析。
+
+**minify 符号处置**是 Claude 特有的关键约束。目标版本的标识符与基线不可比，`mRl`／`ca`／`V0e`
+一类名称可能整体改名，因此：
+
+- 锚点必须在目标 bundle 中**重新建立**，不得从 2.1.220 的锚点表继承；
+- 锚点文本变化本身既不证明规则变化，也不构成继承旧规则的理由（§1.5）；
+- 判据只能是**归一化后的语义结构**——控制流形状、常量、条件与 sink 的关系——并以 Linux 为主、
+  Darwin 交叉复核；两平台 α-归一化摘要一致只说明同一段逻辑存在，不说明它在默认 OAuth 路径可达。
+
+工具只负责提取、枚举、解析与差分，不自动编写规则正文，也不批准清单。
+
+### 4.1.3 退出条件
+
+目标规则、逐规则 bundle 与 P／R／J／M 证据、差异草案齐备；所有发现均已进入规则或标为 `blocked`；
+场景、恢复、安全、inventory 与封存全部通过，Campaign 达到 `official_sealed`。
+
+## 4.2 规则比较、画像准备与批准
+
+### 4.2.1 规则分类
+
+| 分类 | 含义 |
+|---|---|
+| `inherit` | 编号与官方可见行为均不变，且目标版本已重新取得同等级证据 |
+| `change` | 规则仍存在，但可见行为变化 |
+| `add` | 目标版本新增规则或出站面 |
+| `delete` | 基线规则在目标版本已不可达 |
+| `condition_change` | 行为仍存在，但触发条件变化 |
+| `blocked` | 证据不足，暂时不能得出结论 |
+| `regressed_evidence` | **Claude 特有**：基线为「已验证」，目标版本只重新取得「已观察」级证据 |
+
+**「已观察」规则的继承判据是本步最关键的约束。** 基线 53 项对齐责任中有 41 项为「已观察」，
+它们在基线中就未达到 §1.5 准入，因此：
+
+- 「已观察」规则**不得**因为「上一版就是这样」而直接标 `inherit`。目标版本必须重新取得至少同
+  等级的运行观察，否则只能是 `blocked`；
+- 「已验证」规则要维持 `inherit`，必须在目标版本重新满足 §1.5 的全部七项，包括正负例、单变量
+  对照与独立重复。只复用基线证据的记为 `regressed_evidence`：对齐责任保留，证据等级下调；
+- 任何分类都不得使某编号在文档与机器台账之间出现状态不一致。
+
+`delete` 必须同时具备目标 bundle 不可达结论、覆盖触发条件的正反场景、旧规则引用清单与移除
+收据，否则保持 `blocked`。已知结构性不可达的候选——TTY 类 `CAND-UA-CLI`／`CAND-BG-SESSION`、
+远程 gate 类 `CAND-HDR-USAGE-LIMIT`、进程内 `CAND-WORKLOAD`——在目标版本仍标 `blocked`：
+它们不阻断换版，但不得计入覆盖，也不得因长期无正例而被降格为「不存在」。
+
+### 4.2.2 画像与清单
+
+在 `official_sealed` 状态下把目标规则规范化为 Campaign 外的待审核画像，并形成以下清单。
+Codex 使用五份清单；Claude 因为存在成对验收责任，需在断言清单中额外承载 `PAIR-<SPEC-ID>`：
+
+| 清单 | 审核内容 |
+|---|---|
+| 目标规则全集 | 与第二部分逐条一致，含状态等级与适用画像 |
+| 规则迁移 | 新旧编号迁移、§4.2.1 分类与证据引用；含 `regressed_evidence` 明细 |
+| 场景 | 官方与候选场景、规则覆盖、隐私模式与 entrypoint 绑定 |
+| 画像 | 完整目标 Snapshot 与画像 ID／摘要 |
+| 断言 | 逐规则断言、场景选择、第二部分摘要绑定，以及每个 `target_1_1=true` 编号的 `PAIR` 双入口断言 |
+
+规则、场景、画像、断言与端点集合必须跨清单一致；**端点类清单必须声明隐私模式**，
+`essential-traffic` 下得出的端点集合不得表述为该版本的端点全集。
+
+### 4.2.3 批准与退出条件
+
+批准采用两段式：先由工具校验清单并返回联合摘要；人工复核后，以完全相同的清单加该联合摘要
+再次提交，只写一次地保存为批准事实。摘要不得手写或替换。
+
+退出条件：规则与发现无未分类项，`blocked` 已逐项记录理由与补抓计划，联合摘要获批准，
+Campaign 进入 `profile_approved`。
+
+**当前阻断**：批准清单机制在 Claude 侧未受管实现（§4.0.4），本节不可执行。
+
+## 4.3 候选画像入库与制品构建
+
+### 4.3.1 画像暂存
+
+把批准画像编译为**不切换 Active** 的候选画像，输出到 Campaign 之外、尚不存在的绝对路径，
+不修改仓库或生产 selector。暂存收据必须证明画像摘要与批准事实一致、Active 未变、候选以
+`previous` 模式登记，且 inventory 精确覆盖输出目录并逐文件可复算。
+
+### 4.3.2 入库与实现边界
+
+将暂存画像纳入 candidate 源码树，并满足：
+
+1. 目标画像是**新增节点**，旧节点的路径、内容与摘要不变；
+2. 批准的端点、Header、Body、TLS、连接与状态规则均可由画像表达，不靠代码分支特判；
+3. 新端点具备 binding、resolver、route 登记与发布证明；
+4. 生产 Active 不变，目标画像仅作为候选供第四步显式选择；
+5. 在途请求保持原画像，新请求才解析新 selector，连接池与 fallback 不得跨画像混用。
+
+只有现有画像结构无法表达新机制时，才最小修改共享执行层，并专项复验两个版本。
+
+**当前阻断**：Claude 版本化 Snapshot／ReleaseCatalog 尚不存在，本节没有落点。画像结构见 §3.2，
+须先完成 §3.5 的阶段 B（把现有行为原样导出为首个画像快照）。
+
+### 4.3.3 构建与退出条件
+
+从完成入库与测试的同一最终源码树构建目标平台制品，记录 Git／tree／build／部署版本、二进制
+SHA-256、架构、构建参数、image ID 与 OCI digest。退出条件：暂存收据可复算，画像与制品同源，
+旧画像仍可执行，实现侧测试通过，生产 Active 未改变。
+
+## 4.4 候选验证与封存
+
+### 4.4.1 Candidate 身份冻结
+
+真实请求前复算源码、运行镜像与画像，原子创建 attempt，冻结源码、构建、部署、镜像与画像身份，
+并生成 attempt 标识与运行 nonce。attempt、activation fact、镜像构建证明与实测源码摘要必须指向
+同一源码树。候选必须**显式选择**目标画像，不得借当前 Active 或客户端自报版本选择画像。
+
+### 4.4.2 场景与第三方入口
+
+场景清单是任务、规则覆盖与必需客户端的事实源，每条规则必须有真实触发场景。Claude 的场景矩阵
+与 Codex 完全不同：**没有 WebSocket 业务帧、Lite 模式、realtime、WHAM 与独立 images 端点**，
+基线只 offer `http/1.1`。必须覆盖的场景族至少包括：
+
+| 场景族 | 覆盖目标 | 当前状态 |
+|---|---|---|
+| 基线推理 | 主画像的 Header／Body／端点／TLS | 已有 22 个完整运行 |
+| 条件环境 Header | client-app、container、remote-session 的单变量正负例与组合顺序 | 已闭环（`HDR-016..018`、`021..026`） |
+| 子 agent 深度链 | parent-agent 的深度 0／1／2／3 与直接父级关系 | 已闭环（`HDR-019`、`025`） |
+| 受控重试 | `500` 且无 `Retry-After` 的退避曲线与第十次请求 | 已闭环（`CONN-002`、`003`）；其余状态码未采 |
+| 多轮／工具／compact | Body 角色序列、tools schema、压缩入口 | **未采**，属 §2.5.2 最小补抓顺序 |
+| TUI／`cli-bg` | `cli` 入口的 UA 与 `x-app` | **阻断**：需真实 TTY |
+| 端点发现 | 无 host 预过滤的端点集合 | 仅 `essential-traffic` 模式；须同时采 `default` 模式 |
+
+第三方入口方面，Codex 固定绑定 Kilo 双入口；**Claude 尚未确定第三方标准 API 客户端集合**。
+在工具与 Schema 中确定该集合前，`PAIR-<SPEC-ID>` 成对验收无法机器执行。成对验收的判据是：
+对相同规范化语义与画像条件，官方入口与第三方入口必须命中相同的可见结果；动态字段按规则声明的
+格式、相等关系与生命周期比较，不比较某次抓包中的字面值。
+
+场景真实性必须区分「任务退出成功」与「目标分支真实成立」。重试曲线、子 agent 深度、条件 Header
+组合等场景，只有当原始 J／R 或生命周期记录能证明触发、关键中间事实与最终状态时才生成成功收据，
+编排器不得根据退出码补写。收据还必须绑定隐私模式、entrypoint、模型、证据根、Campaign、attempt
+与运行 nonce。
+
+### 4.4.3 四阶段封存
+
+1. **建立检查点**：客户端验证请求完成后首次执行封存，采集 after 探针并返回检查点。
+2. **生成收据**：在 candidate 源码树之外运行受管生成器，形成采集 manifest、测试 trace、观察画像
+   收据与第三方入口收据。构建期中间产物只是 finalizer 的输入，不能直接提交封存；activation fact
+   必须由运行服务产生，测试 trace 必须来自同源树的冻结日志，生成器不得合成二者。
+3. **生成预览**：工具重验身份、任务、时间窗、恢复、安全、inventory 与机器断言，返回预览摘要。
+4. **批准封存**：人工复核预览后，以相同参数追加该摘要提交，Campaign 进入 `candidate_sealed`。
+
+证据标签只能从采集参数与场景前置条件推出，不得根据待通过的断言结果反推；侧别豁免只允许结构上
+没有产出路径的检查，采集遗漏必须重采。
+
+### 4.4.4 运行纪律与退出条件
+
+- 开跑前机器预检必须覆盖不可变镜像 RepoDigest、挂载与 PID namespace、实际执行的工具副本、冻结的
+  目标客户端、模型与账号能力、隐私模式注入、管理凭据、账号熔断与配额、采集端口及 run-root 的
+  属主与权限；任一缺失在真实请求前失败关闭。
+- 固定镜像 digest，只替换应用容器并保留回滚点；运行期间不执行 `pull`、`compose down` 或 `prune`，
+  不重建数据与依赖服务。
+- run 与 seal 之间不得修改 candidate 源码树；身份变化必须新建 candidate，只有身份未变的临时失败
+  才允许新 attempt。
+- 证据目录权限至多 `0700`、文件至多 `0600`；R 类必须等长脱敏后才可离开采集机。
+- 确认必败时执行受管停止与环境恢复，不得强杀并丢失 after 探针。
+
+退出条件：必需场景与已确定的第三方入口全部通过，运行画像、测试、恢复、秘密扫描、inventory、
+机器断言与封存完整，预览摘要已批准，Campaign 达到 `candidate_sealed`。
+
+## 4.5 比较与验收
+
+### 4.5.1 离线比较
+
+比较机必须能从封存的绝对路径复算两侧证据；跨机器时先把完整证据根同步到原绝对路径。工具只读
+重验身份、inventory、恢复、任务、规则覆盖与画像绑定，生成比较结果，Campaign 进入 `compared`。
+
+两侧 surface 集合「相等」不是验收结论——采集计划不同即可导致不等；行为一致性由逐规则断言决定。
+
+### 4.5.2 逐规则机器断言
+
+断言配置必须绑定批准清单、目标版本与画像摘要，以及官方、候选与比较三方的证据根、采集 manifest
+与逻辑路径前缀。判定沿用两类模式：在两侧封存证据上执行同一规则的侧别检查；或在候选证据上验证
+Sub2API 内部实现并绑定批准的官方权威摘要。
+
+结果必须唯一覆盖目标规则全集，每条均为通过且证据完整，不允许失败、不适用、手写通过或未绑定
+inventory 的证据路径。**Claude 补充要求**：`regressed_evidence` 规则必须在结果中显式标注，不得
+与 `inherit` 混同；`PAIR-<SPEC-ID>` 必须官方与第三方两侧入口都实际执行。
+
+### 4.5.3 accept 前置与正式验收
+
+在同一 candidate 源码树完成并保留覆盖门禁与完整回归结果：
+
+~~~bash
+python3 tools/official_client_capture/claude_21220/check_coverage.py
+~~~
+
+该门禁要求 `local-analysis/` 证据树完整存在，不是脱离证据归档即可运行的普通 CI 单测。验收命令
+本身不运行这些门禁，也不接收外部门禁收据（自动化边界见 §4.0.4）；命令失败、非预期跳过或源码
+摘要变化时不得继续。
+
+验收重算逐规则断言并检查四组门禁：套件与身份、比较与规则覆盖、恢复与安全、第三方入口收据。
+全部通过后只写一次地保存断言与验收事实，Campaign 进入 `ready`；失败 attempt 不可覆盖，
+Campaign 保持 `compared`。
+
+### 4.5.4 ready 边界
+
+`ready` 只表示固定 candidate 通过了目标规则与 Campaign 证据验收，**不表示**已晋升画像、构建正式
+镜像、切换生产或完成回滚演练。`validation_only` candidate 到此结束并标记 `accepted_not_activated`；
+`production_replacement` 必须继续执行 §4.6，且候选验证镜像以候选模式运行，不能直接作为默认
+Active 的生产镜像。
+
+同样重要的是：`ready` 不改变任何规则的证据等级。若本轮存在 `regressed_evidence` 或 `blocked`，
+验收通过只说明「候选实现与已批准的目标规则一致」，不说明目标版本画像已被完整证明。
+
+## 4.6 生产启用与回滚
+
+Campaign `ready` 后，以选定 candidate 的晋升、终态门禁、正式镜像与激活证据，证明目标画像成为
+Active、上一已接受画像可完整回滚、并在演练后恢复目标版本。本节所有输入输出必须绑定同一个
+candidate 与验收摘要。候选验证镜像与晋升后的生产镜像是两组不同身份，必须由晋升收据、差异清单
+与终态门禁连接，禁止把候选镜像摘要冒充生产镜像摘要。
+
+### 4.6.1 生产对账与回滚点
+
+写操作前只读记录容器 digest、compose、selector、activation fact、Active／Previous、数据与依赖
+服务、网络、挂载及代理／CA。名义配置与实际流量不一致时立即停止。
+
+冻结上一已接受版本的画像、镜像 digest 与必要配置，并在只读数据克隆或等价隔离环境中证明旧镜像
+可启动、可读数据并通过健康与鉴权检查。依赖可变标签、临时环境变量或未经验证的 Previous 不能作为
+回滚点。
+
+### 4.6.2 画像晋升与正式制品
+
+在已验收的 candidate 副本上，离线交换已验收画像的 Active／Previous 角色，生成生产画像目录与
+晋升收据，绑定验收摘要、目标与回滚版本、两个画像摘要、selector 变化与完整 inventory。输出路径
+必须绝对、尚不存在且不经符号链接。
+
+生产树只允许三类变化：晋升 inventory 声明的画像与契约；candidate 冻结基线中已存在且摘要一致的
+通用晋升实现；为角色互换而作的确定性测试期望调整。不得修改业务运行时代码、依赖、门禁脚本或
+验收输入。必须生成 candidate → 生产的逐文件差异清单，清单外变化或运行时代码变化必须退回
+candidate／Campaign 重新验收，不能夹带进晋升。
+
+最终生产树必须**重新执行**门禁，不得复用 candidate 结果，并完成完整回归与目标架构测试。正式
+镜像需绑定两侧 tree 摘要、验收、晋升收据、inventory、门禁结果、构建输入、image ID 与 registry
+manifest digest，且不得携带取证专用构建标签。任一摘要不一致时禁止构建或部署。
+
+### 4.6.3 独立 Active canary
+
+使用正式镜像 digest 建立与生产隔离的 canary，独立使用账号、配置、数据库、网络与证据目录。
+canary 必须按晋升后的**默认 Active** 运行，禁止以强制模式命中目标画像，也禁止复用 activation
+fact 显示候选模式的验证镜像。核对镜像架构、启动、健康、HTTP／TLS、错误率、Guard 与 activation
+fact，强制模式计数必须为 0，真实业务须出现验收规定的完成事件。失败不得进入生产。
+
+### 4.6.4 正式切换
+
+部署前复核编排配置：应用服务必须绑定精确的 `repository@sha256:<manifest-digest>`，数据库、
+缓存、挂载与网络保持不变。仅替换应用容器；远端尚未缓存固定 digest 时才执行定向拉取，
+禁止 `compose down` 与无范围 `prune`。
+
+部署后复核容器 digest、编排配置、健康、日志、依赖、挂载与 activation fact，确认 Active 版本与
+画像摘要同晋升收据一致且没有强制 override。发现身份、安全、数据、恢复、旧画像兜底或连接池混用
+时立即完整回滚，不在故障实例上补画像或改 selector。
+
+### 4.6.5 回滚演练与目标恢复
+
+正式切换后仅替换应用容器，切回 §4.6.1 冻结的旧镜像与配置，复核健康、鉴权、数据、依赖、挂载、
+代理／CA、入口与最终 wire；不得重建数据容器。随后恢复目标镜像，重复检查镜像、Active 画像、
+activation fact、业务事件、完整性计数与 Guard。
+
+只有旧画像、旧镜像与配置已完整绑定时，「切回 Previous」才是完整回滚的简写；只改模式不能替代
+演练。回滚不得删除 Campaign、覆盖画像或销毁证据。
+
+### 4.6.6 激活证据与退出条件
+
+激活证据必须绑定 Campaign 与验收、晋升与 inventory、生产树、终态门禁、正式镜像，以及 canary、
+正式切换、旧版回滚与目标恢复四阶段的时间、配置、各类摘要、activation fact、完整性计数、业务
+事件与日志结论。四阶段事实必须写入权限受限的独立证据根，再由受管工具生成并可重放不可覆盖收据。
+
+退出条件：运行容器与生产镜像一致；candidate 与验收摘要经晋升收据、差异清单与终态门禁连接到
+生产树；Active／Previous、画像与 activation fact 三者一致；四阶段全部通过，晋升、终态门禁、
+构建与激活证据形成同一条可复算链，且激活收据可从原始事实重放。Campaign 保持 `ready`，
+candidate 达到 `restored_active`；至此才能声明该 candidate 的生产升级完成。后继 candidate 若
+仅达到 `accepted_not_activated`，不得沿用本结论。
+
+**当前阻断**：Claude 侧无晋升命令与激活收据生成器，且 Claude 画像尚未进入生产 Catalog
+（须先完成 §3.5 的阶段 E），本节整体不可执行。
+
+---
+
+# 第五部分 非版本变更维护（占位，待补）
+
+本部分尚未编写。它应规定不属于换版的维护变更如何处理：Sub2API 上游合并、Claude 兼容代码退休，
+以及「实现变化但批准规则不变」与「规则或产出侧工具身份变化」分别应走新 candidate 还是同版本
+后继 Campaign。
+
+在补齐前，任何此类变更都必须显式说明它是否改变最终 wire，并按 §4.0.2 的单元边界判断是否需要
+新建 Campaign；不得借换版 Campaign 掩盖自身的行为变化。

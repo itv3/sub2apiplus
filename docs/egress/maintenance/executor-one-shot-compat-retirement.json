@@ -1,0 +1,55 @@
+{
+  "schema_version": "official-egress.executor-one-shot-compat-retirement/v1",
+  "date": "2026-08-16",
+  "base_commit": "e3e34d1a01c06d7484a1b1a2b7f8e0edc776f0a5",
+  "scope": "退休 Executor 一次性 Prepare／Execute 兼容 API，并收紧 attempt ordinal 所有权。",
+  "consumer_closure_before": {
+    "executor_prepare_production_consumers": 0,
+    "executor_execute_production_consumers": 1,
+    "executor_execute_consumer": "backend/internal/service/official_egress_1b_executor.go:OfficialEgressTransitionRuntime.ExecuteCodexHTTP"
+  },
+  "migrated_consumer": "ExecuteCodexHTTP 已迁到 BeginInvocation → ExecuteAttempt，并显式提交 initial／ordinal 1。",
+  "catalog_item_removals": [],
+  "removal_receipt_required": false,
+  "retired_symbols": [
+    "func (e *Executor) Prepare(",
+    "func (e *Executor) Execute("
+  ],
+  "retired_behaviors": [
+    "为单次 Prepare 自动创建隐式 ExecutorInvocation",
+    "为单次 Execute 自动创建隐式 ExecutorInvocation",
+    "ExpectedAttemptOrdinal 等于 0 时由 Executor 自动分配序号"
+  ],
+  "retained_product_semantics": [
+    "ExecuteCodexHTTP 的四类真实生产消费者",
+    "Active、Previous、HTTP、WebSocket 与 fallback",
+    "API Key、custom provider、第三方客户端和非 Codex persona",
+    "ExecutorInvocation 的 attempt budget、执行策略、Compiler、Guard 与 FinalizationToken"
+  ],
+  "source_transition_receipt": {
+    "path": "docs/egress/maintenance/executor-one-shot-source-transition.json",
+    "sha256": "73b79e4061a8e3becabb5a361aa341c855ddd0296a94fd2057296d798b6048ec"
+  },
+  "source_transitions": [
+    {
+      "path": "backend/internal/officialegress/executor.go",
+      "from_sha256": "12f38cb9eb0559192cef98640826a1d173663747ed72116f5f0607bca6b062a1",
+      "to_sha256": "da58f780ef00229599759f2be35307bf4a3305f332fa30834f6675c8e9f5aa6b",
+      "reason": "删除一次性 Executor API，ordinal 0 改为明确失败关闭。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_1b_executor.go",
+      "from_sha256": "0eb8d682ab43549c5b9daa122ef40ba75a10e7e2653ef41c5ed830223bc3c4f9",
+      "to_sha256": "e93e8a3005fbf140879b9c6009fc218d20a877bf058466d3c53b3cb36a6cd567",
+      "reason": "唯一真实消费者改为显式 BeginInvocation／ExecuteAttempt，并冻结 initial／ordinal 1。"
+    }
+  ],
+  "allowed_wire_deltas": [],
+  "verification": [
+    "Executor 一次性生产符号与调用点绝迹",
+    "缺失或乱序 ExpectedAttemptOrdinal 在 Compiler 和 Adapter 前失败关闭",
+    "ExecuteCodexHTTP 的 Active／Previous final-wire 允许列表为空",
+    "HTTP、WebSocket、fallback、OAuth refresh 与 API Key 负例通过",
+    "完整 make check-egress-spec 通过"
+  ]
+}

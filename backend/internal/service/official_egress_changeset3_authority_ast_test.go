@@ -72,7 +72,7 @@ func TestChangeset3RuntimeSinksEnterExecutorWithoutLegacyFinalizers(t *testing.T
 		function string
 		required []string
 	}{
-		{"official_egress_1b_executor.go", "ExecuteCodexHTTP", []string{"prepareOfficialCodexSemanticAttempt", "Execute"}},
+		{"official_egress_1b_executor.go", "ExecuteCodexHTTP", []string{"prepareOfficialCodexSemanticAttempt", "BeginInvocation", "ExecuteAttempt"}},
 		{"official_egress_http_invocation.go", "Execute", []string{"prepareOfficialCodexSemanticAttempt", "ExecuteAttempt"}},
 		{"official_egress_websocket_invocation.go", "executeAcquire", []string{"prepareOfficialCodexSemanticAttempt", "ExecuteAttempt"}},
 		{"openai_forward_plan.go", "ExecuteAttempt", []string{"prepareOfficialCodexSemanticAttempt", "ExecuteAttempt"}},

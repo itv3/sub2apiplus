@@ -266,8 +266,8 @@ type ExecutorRequest struct {
 	Plan          CodexEgressPlan
 	DynamicInputs EndpointDynamicInputs
 	AttemptReason AttemptReason
-	// ExpectedAttemptOrdinal 由上层不可变 Attempt 模型携带；0 表示兼容调用。
-	// 非 0 时必须与 ExecutorInvocation 原子签发的下一序号完全一致。
+	// ExpectedAttemptOrdinal 由上层不可变 Attempt 模型携带，必须与
+	// ExecutorInvocation 原子签发的下一序号完全一致，禁止省略。
 	ExpectedAttemptOrdinal uint32
 	// ExecutionScopeKey 是运行期限流分区，不参与 Release/Profile digest。
 	// 调用方应传账号级稳定键；Executor 会再组合 SinkID 与 PolicyID。
@@ -567,16 +567,6 @@ func (e *Executor) BeginInvocation(
 	}, nil
 }
 
-// Prepare 为不需要 retry/fallback 的兼容调用创建一次性 invocation。需要多次
-// attempt 的调用必须显式使用 BeginInvocation 与 PrepareAttempt/ExecuteAttempt。
-func (e *Executor) Prepare(ctx context.Context, input ExecutorRequest) (PreparedRequest, error) {
-	invocation, err := e.BeginInvocation(ctx, input.Bundle, input.Plan.InvocationID)
-	if err != nil {
-		return PreparedRequest{}, err
-	}
-	return invocation.PrepareAttempt(ctx, input)
-}
-
 func (i *ExecutorInvocation) PrepareAttempt(
 	ctx context.Context,
 	input ExecutorRequest,
@@ -683,14 +673,6 @@ func (i *ExecutorInvocation) PrepareAttempt(
 	}, nil
 }
 
-func (e *Executor) Execute(ctx context.Context, input ExecutorRequest) (TransportResult, error) {
-	invocation, err := e.BeginInvocation(ctx, input.Bundle, input.Plan.InvocationID)
-	if err != nil {
-		return TransportResult{}, err
-	}
-	return invocation.ExecuteAttempt(ctx, input)
-}
-
 func (i *ExecutorInvocation) ExecuteAttempt(
 	ctx context.Context,
 	input ExecutorRequest,
@@ -769,7 +751,10 @@ func (i *ExecutorInvocation) reserveAttempt(
 		)
 	}
 	nextOrdinal := i.attempts + 1
-	if expectedOrdinal != 0 && expectedOrdinal != nextOrdinal {
+	if expectedOrdinal == 0 {
+		return "", 0, nil, errors.New("ExpectedAttemptOrdinal 必须显式设置")
+	}
+	if expectedOrdinal != nextOrdinal {
 		return "", 0, nil, errors.New("ExpectedAttemptOrdinal 与 Executor 原子序号不一致")
 	}
 

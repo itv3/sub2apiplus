@@ -27,8 +27,8 @@ func TestEmbeddedSinkCatalogCurrentStateIsMachineProvable(t *testing.T) {
 		t.Fatalf("加载 Catalog 失败: %v", err)
 	}
 	bindings := catalog.Bindings()
-	if len(bindings) != 34 {
-		t.Fatalf("SinkID 数量=%d，期望 34", len(bindings))
+	if len(bindings) != 32 {
+		t.Fatalf("当前 SinkID 数量=%d，期望 32；冻结 ReleaseBinding 中的 2 条 dead-code 已由 RemovalReceipt 退休", len(bindings))
 	}
 
 	var runtimeBindable, legacyReachable, canaryReachable, enforcedReachable, facades, pending, scopeExcluded int
@@ -73,7 +73,7 @@ func TestEmbeddedSinkCatalogCurrentStateIsMachineProvable(t *testing.T) {
 		}
 	}
 	if runtimeBindable != 27 || legacyReachable != 11 || canaryReachable != 0 || enforcedReachable != 21 ||
-		facades != 3 || pending != 2 || scopeExcluded != 2 {
+		facades != 3 || pending != 0 || scopeExcluded != 2 {
 		t.Fatalf(
 			"分类数量异常：runtime=%d legacy=%d canary=%d enforced=%d facade=%d pending=%d scope_excluded=%d",
 			runtimeBindable, legacyReachable, canaryReachable, enforcedReachable, facades, pending, scopeExcluded,
@@ -94,15 +94,15 @@ func TestSinkCatalogRejectsUnsafeEnforcementAndFacadeBinding(t *testing.T) {
 		t.Fatal("unclassified persona 的 canary Sink 未被拒绝")
 	}
 
-	if _, err := DefaultSinkCatalog().BindContext(context.Background(), "codex.facade.upstream"); err == nil {
+	if _, err := DefaultSinkCatalog().StartAttemptContext(context.Background(), "codex.facade.upstream"); err == nil {
 		t.Fatal("facade SinkID 被当作运行时 binding key")
 	}
 	for _, id := range []SinkID{"codex.admin_test.chat_completions", "codex.admin_test.keeper"} {
-		if _, err := DefaultSinkCatalog().BindContext(context.Background(), id); err == nil {
+		if _, err := DefaultSinkCatalog().StartAttemptContext(context.Background(), id); err == nil {
 			t.Fatalf("受审 scope-exclusion SinkID %s 被当作运行时 binding key", id)
 		}
 	}
-	business, err := BindDefaultSink(context.Background(), "codex.responses.forward")
+	business, err := StartDefaultSinkAttempt(context.Background(), "codex.responses.forward")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -147,8 +147,9 @@ func TestCodexRoutesMapToTwoReleaseFamiliesWithoutInventingPurposes(t *testing.T
 	if _, ok := purposes[RegistryPurposeOpenAIOAuthWS]; !ok {
 		t.Fatal("缺少 WS registry purpose")
 	}
-	if len(endpoints) != 16 {
-		t.Fatalf("画像 endpoint 映射不唯一：%d", len(endpoints))
+	expectedEndpoints := len(release.ExecutableProfile().Endpoints())
+	if len(endpoints) != expectedEndpoints {
+		t.Fatalf("画像 endpoint 映射不唯一：got=%d want=%d", len(endpoints), expectedEndpoints)
 	}
 }
 
@@ -316,6 +317,16 @@ func TestConnectionAdmissionValidatesCurrentInvocationAndReceiptIdentity(t *test
 	if !ok || !identity.HasFinalizationToken || identity.InvocationID != "invocation-4" {
 		t.Fatalf("连接池保留 attempt 时清除了 Token：%+v", identity)
 	}
+	if _, err := sinks.PreserveAttemptContext(context.Background(), input.ID); err == nil {
+		t.Fatal("缺少 Executor attempt 的共享连接池调用未 fail-close")
+	}
+	unsigned, err := sinks.StartAttemptContext(context.Background(), input.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sinks.PreserveAttemptContext(unsigned, input.ID); err == nil {
+		t.Fatal("缺少 FinalizationToken 的共享连接池调用未 fail-close")
+	}
 }
 
 func TestResponsesCatalogOnlyContainsReviewedExactSubpaths(t *testing.T) {
@@ -471,7 +482,7 @@ func TestObservePoliciesAndEnforcedSinkRuntimeRejection(t *testing.T) {
 	assertGuardReasons(t, guard.Evaluate(unregistered, BackendHTTPUpstream, WireProtocolHTTP),
 		ReasonUnregisteredSink, ReasonUnregisteredSinkObserved)
 
-	boundContext, err := BindDefaultSink(context.Background(), "codex.responses.forward")
+	boundContext, err := StartDefaultSinkAttempt(context.Background(), "codex.responses.forward")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -550,7 +561,7 @@ func TestChangeset1CPoliciesRemainEnforcedAfterChangeset3Promotion(t *testing.T)
 		})
 	}
 
-	enforcedContext, err := BindDefaultSink(context.Background(), SinkCodexResponsesForward)
+	enforcedContext, err := StartDefaultSinkAttempt(context.Background(), SinkCodexResponsesForward)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -734,7 +745,7 @@ func TestExecutorSignsFinalRequestAndGuardDetectsMutation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prepared, err := executor.Prepare(preboundContext, input)
+	prepared, err := prepareSingleExecutorTestAttempt(preboundContext, executor, input)
 	if err != nil {
 		t.Fatalf("Executor Prepare 失败: %v", err)
 	}
@@ -847,7 +858,7 @@ func TestExecutorSingleUseBodyIsNotPreReadAndCannotReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	prepared, err := executor.Prepare(ctx, input)
+	prepared, err := prepareSingleExecutorTestAttempt(ctx, executor, input)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -931,7 +942,7 @@ func TestExecutorRejectsReplayPolicyForSingleUseBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = executor.Prepare(ctx, ExecutorRequest{
+	_, err = prepareSingleExecutorTestAttempt(ctx, executor, ExecutorRequest{
 		Bundle: bundle,
 		Plan: CodexEgressPlan{
 			SinkID: SinkCodexResponsesForward, Purpose: "user_request.responses",
@@ -990,7 +1001,7 @@ func TestExecutorRejectsUnknownPurposeBackendAndProtocolMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 	target, _ := url.Parse("https://chatgpt.com/backend-api/codex/responses")
-	_, err = executor.Prepare(context.Background(), ExecutorRequest{
+	_, err = prepareSingleExecutorTestAttempt(context.Background(), executor, ExecutorRequest{
 		Bundle: bundle,
 		Plan: CodexEgressPlan{
 			SinkID: "codex.responses.forward", Purpose: "unknown.purpose",
@@ -1122,36 +1133,6 @@ func assertGuardReasons(t *testing.T, decision GuardDecision, expected ...GuardR
 
 func testSinkBindingInput(state SinkEnforcementState) SinkBindingInput {
 	return testSinkBindingInputForAuthority(state, "body-test-executor", "body-test-http")
-}
-
-func TestSinkCatalogTokenlessBackgroundPrewarmOnlyAllowsLegacy(t *testing.T) {
-	tests := []struct {
-		name    string
-		state   SinkEnforcementState
-		allowed bool
-	}{
-		{name: "legacy", state: SinkStateLegacyObserve, allowed: true},
-		{name: "canary", state: SinkStateCanaryEnforce, allowed: false},
-		{name: "enforced", state: SinkStateEnforced, allowed: false},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			catalog, err := NewSinkCatalog([]SinkBindingInput{testSinkBindingInput(test.state)})
-			if err != nil {
-				t.Fatal(err)
-			}
-			allowed, err := catalog.AllowsTokenlessBackgroundPrewarm("codex.responses.forward")
-			if err != nil {
-				t.Fatal(err)
-			}
-			if allowed != test.allowed {
-				t.Fatalf("state=%s allowed=%v want=%v", test.state, allowed, test.allowed)
-			}
-		})
-	}
-	if _, err := DefaultSinkCatalog().AllowsTokenlessBackgroundPrewarm("missing.sink"); err == nil {
-		t.Fatal("未登记 Sink 的后台预热判定未 fail-close")
-	}
 }
 
 func testSinkBindingInputForAuthority(

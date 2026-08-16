@@ -1,0 +1,368 @@
+{
+  "schema_version": "official-egress.compatibility-code-retirement-closure/v1",
+  "date": "2026-08-16",
+  "base_commit": "e3e34d1a01c06d7484a1b1a2b7f8e0edc776f0a5",
+  "scope": "关闭 Codex CLI 客户端仿真范围内 5.2 兼容代码退休清单：剩余候选全部归类为本次退休或必须保留，禁止继续出现未分类兼容入口。",
+  "prior_retirement_receipts": [
+    {
+      "path": "docs/egress/maintenance/catalog-generic-bind-compat-retirement.json",
+      "sha256": "2d9cb043dfba2ef27403cfec86d10ab8cc7cb26f6592e21c99e751d947e82bef"
+    },
+    {
+      "path": "docs/egress/maintenance/executor-one-shot-compat-retirement.json",
+      "sha256": "ecfb18939dd513156349ab03b3004b875d9879c8a04b92469961b60211e9efb6"
+    },
+    {
+      "path": "docs/egress/maintenance/websocket-tokenless-compat-retirement.json",
+      "sha256": "d05b87932cfe15798e8f1b39a50f8f8efe6aaaef5a0b5037168d0084a87714e2"
+    },
+    {
+      "path": "docs/egress/maintenance/openai-images-dead-code-retirement.json",
+      "sha256": "14ad4d91e6168c74b618bfd01324f6cf2f953f5a392d6321c5e0cdd258e44c94"
+    },
+    {
+      "path": "docs/egress/maintenance/codex-models-unwired-transport-retirement.json",
+      "sha256": "44961fa04fbc4e3d24d94e9f75a202f5624fd62050068c4dd43819be00ed21c0"
+    },
+    {
+      "path": "docs/egress/maintenance/websocket-finalizer-compat-retirement.json",
+      "sha256": "6d04e3a5a2d56aab8ecbb181defcd5ce68611fb6d033f6ef1d0045ae220975a7"
+    }
+  ],
+  "retired_candidates": [
+    {
+      "id": "websocket_tls_legacy_constructor",
+      "retired_symbols": [
+        "newOpenAIOfficialEgressWebSocketTLSProfile"
+      ],
+      "replacement": "启动预检和测试直接调用 resolveOfficialCodexDefaultTLSProfile／mustResolveOfficialCodexDefaultTLSProfile，动态版本继续来自 ReleaseCatalog active。",
+      "production_consumers_before": 1,
+      "test_consumers_before": 1,
+      "production_consumers_after": 0,
+      "test_consumers_after": 0
+    },
+    {
+      "id": "oauth_refresh_legacy_narrow_port",
+      "retired_symbols": [
+        "OpenAIOAuthClient.RefreshToken",
+        "OpenAIOAuthClient.RefreshTokenWithClientID",
+        "openaiOAuthService.RefreshToken",
+        "openaiOAuthService.RefreshTokenWithClientID",
+        "openaiOAuthService.refreshTokenWithClientID",
+        "OpenAIOAuthService 对旧窄 refresh client 的 fallback"
+      ],
+      "replacement": "OpenAIOAuthService 只允许正式 Executor 发送，并由 OpenAIOAuthRefreshResponseDecoder 解释响应；缺少 decoder 或 runtime 时明确失败关闭。",
+      "production_consumers_before": 1,
+      "test_consumers_before": 8,
+      "production_consumers_after": 0,
+      "test_consumers_after": 0
+    }
+  ],
+  "retained_candidates": [
+    {
+      "id": "http_tls_auxiliary_and_apikey",
+      "reason": "仍承载 API Key TLS-only mimic、alpha search 非 OAuth 入口、OAuth input_tokens 辅助端点和启动期 HTTP 画像预检。",
+      "required_occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_transport.go",
+          "pattern": "func newOpenAIOfficialEgressHTTPTLSProfile()",
+          "count": 1
+        },
+        {
+          "path": "backend/internal/service/official_egress_transport.go",
+          "pattern": "func OpenAIOfficialEgressHTTPTLSProfile(_ bool)",
+          "count": 1
+        },
+        {
+          "path": "backend/internal/service/openai_upstream_http.go",
+          "pattern": "newOpenAIOfficialEgressHTTPTLSProfile()",
+          "count": 1
+        },
+        {
+          "path": "backend/internal/service/openai_alpha_search.go",
+          "pattern": "OpenAIOfficialEgressHTTPTLSProfile(false)",
+          "count": 1
+        },
+        {
+          "path": "backend/internal/service/openai_gateway_count_tokens.go",
+          "pattern": "OpenAIOfficialEgressHTTPTLSProfile(strings.TrimSpace(proxyURL) != \"\")",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "id": "apikey_custom_websocket_dial",
+      "reason": "实际承载 API Key／自定义上游 WebSocket 产品路径；OAuth Codex persona 才必须进入 Executor。历史函数名不能据此误判为测试死代码。",
+      "required_occurrences": [
+        {
+          "path": "backend/internal/service/openai_ws_v2_passthrough_adapter.go",
+          "pattern": "func dialOpenAIWSV2UnwiredTest(",
+          "count": 1
+        },
+        {
+          "path": "backend/internal/service/openai_ws_v2_passthrough_adapter.go",
+          "pattern": "err = dialOpenAIWSV2UnwiredTest(",
+          "count": 1
+        },
+        {
+          "path": "backend/cmd/egressscan/classify.go",
+          "pattern": "承载 API Key／自定义上游 WebSocket，不属于 OAuth Codex persona",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "id": "executable_profile_service_projection",
+      "reason": "正式 ExecutableProfile 与现有 service 读取模型之间仍需要一次只读投影，删除前必须先迁完全部 service 消费者。",
+      "required_occurrences": [
+        {
+          "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+          "pattern": "projectExecutableCodexProfile(",
+          "count": 2
+        }
+      ]
+    },
+    {
+      "id": "settings_default_codex_user_agent",
+      "reason": "设置读取、更新和 API Key 候选身份仍需要稳定默认值；严格 OAuth 最终 wire 继续由 ReleaseBundle 覆盖。",
+      "required_occurrences": [
+        {
+          "path": "backend/internal/service/setting_gateway_runtime.go",
+          "pattern": "var DefaultOpenAICodexUserAgent = codexCLIUserAgent",
+          "count": 1
+        },
+        {
+          "path": "backend/internal/service/setting_gateway_runtime.go",
+          "pattern": "fallback := DefaultOpenAICodexUserAgent",
+          "count": 1
+        },
+        {
+          "path": "backend/internal/service/setting_update.go",
+          "pattern": "codexUA = DefaultOpenAICodexUserAgent",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "id": "stored_websocket_mode_values",
+      "reason": "shared／dedicated 是已落库配置值，读取时必须继续归一到当前 ctx_pool 语义以保证平滑升级。",
+      "required_occurrences": [
+        {
+          "path": "backend/internal/service/account.go",
+          "pattern": "OpenAIWSIngressModeShared      = \"shared\"",
+          "count": 1
+        },
+        {
+          "path": "backend/internal/service/account.go",
+          "pattern": "OpenAIWSIngressModeDedicated   = \"dedicated\"",
+          "count": 1
+        },
+        {
+          "path": "backend/internal/service/openai_ws_protocol_resolver.go",
+          "pattern": "case OpenAIWSIngressModeShared, OpenAIWSIngressModeDedicated:",
+          "count": 1
+        }
+      ]
+    },
+    {
+      "id": "apikey_desktop_persona",
+      "reason": "API Key Desktop 是独立的非 Codex persona 产品画像，不属于 OAuth ReleaseCatalog，不能随 Codex 兼容代码删除。",
+      "required_occurrences": [
+        {
+          "path": "backend/internal/service/openai_apikey_mimic_profile.go",
+          "pattern": "openAIAPIKeyCodexMimicClientDesktop0144   = \"desktop_0_144\"",
+          "count": 1
+        },
+        {
+          "path": "backend/internal/service/openai_apikey_mimic_profile.go",
+          "pattern": "ID:               openAIAPIKeyCodexMimicClientDesktop0144",
+          "count": 1
+        }
+      ]
+    }
+  ],
+  "forbidden_current_occurrences": [
+    {
+      "path": "backend/internal/service/official_egress_transport.go",
+      "pattern": "newOpenAIOfficialEgressWebSocketTLSProfile"
+    },
+    {
+      "path": "backend/internal/service/oauth_service.go",
+      "pattern": "RefreshTokenWithClientID(ctx context.Context, refreshToken, proxyURL string, clientID string) (*openai.TokenResponse, error)"
+    },
+    {
+      "path": "backend/internal/repository/openai_oauth_service.go",
+      "pattern": "func (s *openaiOAuthService) RefreshToken"
+    },
+    {
+      "path": "backend/internal/repository/openai_oauth_service.go",
+      "pattern": "func (s *openaiOAuthService) refreshTokenWithClientID"
+    },
+    {
+      "path": "backend/internal/service/openai_oauth_service.go",
+      "pattern": "s.oauthClient.RefreshTokenWithClientID"
+    },
+    {
+      "path": "backend/cmd/egressscan/classify.go",
+      "pattern": "*openaiOAuthService.refreshTokenWithClientID"
+    },
+    {
+      "path": "backend/cmd/egressscan/classify.go",
+      "pattern": "*openaiOAuthService.RefreshCompiled"
+    }
+  ],
+  "discovery_markers": [
+    "旧调用点的兼容入口",
+    "尚在迁移",
+    "兼容投影",
+    "兼容入口的默认候选身份",
+    "历史值兼容",
+    "历史兼容画像"
+  ],
+  "allowed_marker_occurrences": [
+    {
+      "path": "backend/internal/service/official_egress_transport.go",
+      "marker": "旧调用点的兼容入口"
+    },
+    {
+      "path": "backend/internal/service/official_egress_transport.go",
+      "marker": "尚在迁移"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+      "marker": "兼容投影"
+    },
+    {
+      "path": "backend/internal/service/setting_gateway_runtime.go",
+      "marker": "兼容入口的默认候选身份"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_protocol_resolver.go",
+      "marker": "历史值兼容"
+    },
+    {
+      "path": "backend/internal/service/openai_apikey_mimic_profile.go",
+      "marker": "历史兼容画像"
+    }
+  ],
+  "source_transitions": [
+    {
+      "path": "backend/internal/service/official_egress_transport.go",
+      "from_sha256": "c0295b807d27232854bf7e0f045b4c26a082307f222cd3f51169092d3cd7e11d",
+      "to_sha256": "ee6129d687cfbab9736053259ea85c9c16a98ffad2e91cb2e4369bac0e37d73c"
+    },
+    {
+      "path": "backend/internal/service/official_egress_transport_test.go",
+      "from_sha256": "199bbee2dcc686e17eddf94ec6d530587f48507f60c5ea4b8714d986b427ac3d",
+      "to_sha256": "5ea482d5347610452a676b67eaedc5a04c83c5e598004583e6b28dbdf37d2114"
+    },
+    {
+      "path": "backend/internal/service/oauth_service.go",
+      "from_sha256": "4c91bcfef3f6e916734ce1884374194f7eabead1cd0fdf0c520848276c030633",
+      "to_sha256": "b2bbb90377e66014d73406a8d95fb4bd823e052b4ee6cf05cc98fcacd323080e"
+    },
+    {
+      "path": "backend/internal/service/openai_oauth_service.go",
+      "from_sha256": "7804a34437a93841f6fe27a358eb96c0b893a34b8599e5f15904c59086c73ab3",
+      "to_sha256": "d5a337d64f170a54b5b9e6c4d166ca09e041d61d667a0d7ff10ccfdde8e8957a"
+    },
+    {
+      "path": "backend/internal/repository/openai_oauth_service.go",
+      "from_sha256": "33c7c215bf7b548be0ca47eab4065d92a0f0a4090e4c1e95a24608d28c68c059",
+      "to_sha256": "d11bea5a1c3c9331690319286b41263cc8a5279977cc2fc23ddc9c45f56a1ec6"
+    },
+    {
+      "path": "backend/internal/service/openai_oauth_service_refresh_test.go",
+      "from_sha256": "f397d24af75e8e35b372a0d424134f42fea371f01e36527de53ff4eb08e4c91c",
+      "to_sha256": "53f457760bfc58011deca50d9d5dce3c198669bc66ce565cd303ae01cb2e4592"
+    },
+    {
+      "path": "backend/internal/service/openai_oauth_service_state_test.go",
+      "from_sha256": "8979a2c7ecec9670c923f3ee5e917e6e22c4166276c1a8edf5e94c85bd420f86",
+      "to_sha256": "364a17bc2ebef8443c76946dd9ba15f244fa67fbf4e3de6b4b15bad05f314e56"
+    },
+    {
+      "path": "backend/internal/service/openai_oauth_service_auth_url_test.go",
+      "from_sha256": "f1f6133019db86094562b4494c97559ae9219dc2dc2cfd2af7b49c54b8c8174e",
+      "to_sha256": "14c28b72278abf9c44c593b6f789b5d7fdb2690cc1cd53e35bb88bab827fa610"
+    },
+    {
+      "path": "backend/internal/handler/admin/openai_oauth_handler_privacy_test.go",
+      "from_sha256": "9cafa1707679ccae578929c9c102dd2a01a2085e55289fec2dc84901b580e75c",
+      "to_sha256": "a89b23ad36041c8cb30df41bcca4e3e6ccf4f4366e15a78b28a48530b562ed6e"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_v2_passthrough_adapter.go",
+      "from_sha256": "39b21ef04cc8e095885399027c119da1892100e1fc227ef1b985618ae21fcd3c",
+      "to_sha256": "e3cf01b231076fa057efb2fb13c0810f10dd92a939a091f3ade0a54dec83af9b"
+    },
+    {
+      "path": "backend/cmd/egressscan/classify.go",
+      "from_sha256": "fc7b999cb57fa47dca212c4653524b0acd5b6304c912294971948bcc54abca49",
+      "to_sha256": "c1da6c5a9db7be862cbb5f58c8dcde33c8b67d29407073f5e1da7d2d71709a7f"
+    },
+    {
+      "path": "backend/cmd/egressscan/main.go",
+      "from_sha256": "df5a1d80e4ba8c2f97d783ca8c4c089dc37bba8b77efb95209d69bed22801007",
+      "to_sha256": "007c84013c4f8f64ea06892419d5913c33c5fa56e3cb05ce5551adc6d9785f5d"
+    },
+    {
+      "path": "backend/cmd/egressscan/supplements.go",
+      "from_sha256": "3f18b1f38869071e65218110120015928a0c02d8430e9db298ad84c617f3c6dc",
+      "to_sha256": "3cafb110fbcc059d78acd390d50142f86ae8875028071b5c6d42e7c492bf54bb"
+    },
+    {
+      "path": "docs/egress/maintenance/bootstrap-inventory-lock.json",
+      "from_sha256": "593130bca0612eb2584945c577a7d3a014e7cdc42b4ca544b6f8d6ef4a593532",
+      "to_sha256": "a354f834db1b5cecaa2f70989fe1cf72ebcdbb1987a79029ef3409755b0229ac"
+    },
+    {
+      "path": "backend/cmd/egressscan/lifecycle_test.go",
+      "from_sha256": "526b0cd3099b78b4587c2496b3233c6096617c89cbecd8da33fbc13b42856255",
+      "to_sha256": "352ab440f07c20f53df5745950eca64bafbd71ca62087c275f43674eef068cd6"
+    },
+    {
+      "path": "backend/internal/service/codex_models_unwired_transport_retirement_test.go",
+      "from_sha256": "ae16a5ccf4b67d91b22be26093829cc55bebd7db967b6a51481069a47dccf459",
+      "to_sha256": "055659531062220a2783ceec5b5da0b0c43b714842745de54b535b6bf0fa680e"
+    },
+    {
+      "path": "backend/internal/officialegress/business_binding_ast_test.go",
+      "from_sha256": "36ae53307172f39e46ffb4df1579accc85d123c112783ee63a715ace73ffdc72",
+      "to_sha256": "d2c96e8adeb9a2e3310a5c05d029b711a963632249dcac8ec04ab2c824f21f4d"
+    },
+    {
+      "path": "backend/internal/officialegress/catalog_generic_bind_retirement_test.go",
+      "from_sha256": "5c17bbabe3d214ae2d64e00def97e7f69b1033052cf4a8b2f1a76788311a5c46",
+      "to_sha256": "50942dcc21efef1cb808b7ab3ae13d5768b04f07c71282732f8fb0ac1e688d0e"
+    },
+    {
+      "path": "backend/internal/officialegress/catalog_retirements_test.go",
+      "from_sha256": "214a2a7d63c241a9380fa60ea5f6e252e5e8d0f7820459534185251c073a9a4e",
+      "to_sha256": "4c87fe2d74d780911b570b5a18127e9ed9c82b356c3f7a55a4e981c554f93913"
+    },
+    {
+      "path": "backend/internal/officialegress/changeset3_post_identity_authority_final_wire_frozen_test.go",
+      "from_sha256": "6128c91dd54036c607ed2c01dc4c79ed3dd3fea4fe8aa876349dc0e06f1b70af",
+      "to_sha256": "a6cdaee6b58bd40a18091c794b43576fad3fbcf4ad3d823cc01916d6eae75c42"
+    },
+    {
+      "path": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+      "from_sha256": "82b45ac16832984bc3a4b82b801c7a2e70590cb33ca3089cad312f791898a28f",
+      "to_sha256": "f5ad2e49f9f225f94cfc7deda008332a33a8da6e321c4d718da9def5ef7bd3cb"
+    }
+  ],
+  "catalog_item_removals": [],
+  "removal_receipt_required": false,
+  "allowed_wire_deltas": [],
+  "closure_result": "complete",
+  "verification": [
+    "六份既有退休收据摘要可复算",
+    "两个本次退休候选的旧定义、调用、测试桩和当前 scanner 分类绝迹",
+    "OAuth refresh 缺少 decoder 或正式 Executor runtime 时失败关闭",
+    "六组必须保留产品语义的定义与消费者闭集不漂移",
+    "六类兼容发现标记只能出现在批准位置，新增未分类标记失败关闭",
+    "Active／Previous、HTTP／WebSocket／fallback final-wire 允许列表为空",
+    "完整 make check-egress-spec 与全量 service 测试通过"
+  ]
+}

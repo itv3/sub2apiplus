@@ -6,7 +6,7 @@ import (
 )
 
 // CodexCLIUserAgentPrefixes matches Codex CLI User-Agent patterns
-// Examples: "codex_vscode/1.0.0", "codex_cli_rs/0.1.2"
+// Examples: "vscode_client/<semver>", "terminal_client/<semver>"
 var CodexCLIUserAgentPrefixes = []string{
 	"codex_vscode/",
 	"codex_cli_rs/",
@@ -194,7 +194,7 @@ func matchCodexClientHeaderStrictPrefixes(value string, prefixes []string) bool 
 // 推导优先级：
 //  1. UA 首段是官方 originator（精确集合或 `Codex ` 家族前缀）→ 直接配对，UA 原样保留；
 //  2. UA 尾部括号组 `(name; version)` 的 name 是官方 originator——CODEX_INTERNAL_ORIGINATOR_OVERRIDE
-//     只改 UA 前缀不改尾部（如 cccc/0.142.0 ... (codex-tui; 0.142.0)）→ 用尾部 name 重写
+//     只改 UA 前缀不改尾部时，使用尾部客户端名称重写
 //     UA 首段后配对，保留真实版本/OS/终端指纹；
 //  3. 均不命中 → ok=false，调用方应整体回退为默认官方身份。
 func PairCodexClientIdentity(userAgent string) (originator string, pairedUA string, ok bool) {

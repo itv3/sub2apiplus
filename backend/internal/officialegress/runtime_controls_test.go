@@ -135,7 +135,7 @@ func mustTestRouteCatalog(t *testing.T, catalog SinkCatalog) OfficialRouteCatalo
 
 func runtimeControlTestRequest(t *testing.T, catalog SinkCatalog) *http.Request {
 	t.Helper()
-	requestContext, err := catalog.BindContext(context.Background(), SinkCodexResponsesForward)
+	requestContext, err := catalog.StartAttemptContext(context.Background(), SinkCodexResponsesForward)
 	if err != nil {
 		t.Fatal(err)
 	}
