@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import ast
 import hashlib
 import importlib.util
 import json
@@ -484,6 +485,53 @@ def canonical_json_sha256(value: Any) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+def driver_entry_closure(source: str, entry: str) -> tuple[set[str], str]:
+    """算出抓包 driver 中某个入口函数的模块内可达闭包及其源码摘要。
+
+    driver（`capturelib/scenarios.py`）由 Claude 与 Codex 两侧共用，任何一侧改动都会
+    改变整文件摘要。证据绑定真正要回答的是「产出 Claude 证据的那段采集逻辑有没有变」，
+    因此从入口函数出发做模块内可达闭包（顶层函数、类与模块级常量），只对闭包源码取摘要：
+    Codex 独有代码的改动不再打断 Claude 绑定，而两侧共享的符号一旦被改仍然会命中。
+
+    闭包按符号名排序后拼接，因此与定义在文件中的先后顺序无关，可离线复算。
+
+    返回 (可达符号名集合, 闭包源码 SHA-256)；入口不存在时返回空集合。
+    """
+
+    lines = source.splitlines(keepends=True)
+    definitions: dict[str, Any] = {}
+    for node in ast.parse(source).body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            definitions[node.name] = node
+        elif isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name):
+                    definitions[target.id] = node
+
+    reachable: set[str] = set()
+    pending = [entry]
+    while pending:
+        name = pending.pop()
+        if name in reachable or name not in definitions:
+            continue
+        reachable.add(name)
+        for child in ast.walk(definitions[name]):
+            # 直接引用的符号，以及 `模块常量.方法()` 形式的属性访问都要跟进。
+            if isinstance(child, ast.Name):
+                pending.append(child.id)
+            elif isinstance(child, ast.Attribute) and isinstance(child.value, ast.Name):
+                pending.append(child.value.id)
+
+    def segment(node: Any) -> str:
+        start = node.lineno - 1
+        for decorator in getattr(node, "decorator_list", []) or []:
+            start = min(start, decorator.lineno - 1)
+        return "".join(lines[start : node.end_lineno])
+
+    body = "".join(segment(definitions[name]) for name in sorted(reachable))
+    return reachable, hashlib.sha256(body.encode("utf-8")).hexdigest()
+
+
 def _pending_catalog_entries(
     report_catalog_id: str,
     value: Any,
@@ -631,6 +679,109 @@ def project_pending_report_catalogs(
     return projected, run_categories
 
 
+def validate_capture_toolchain_consistency(
+    verified_campaign: dict[str, Any], errors: list[str]
+) -> None:
+    """复算 campaign 内各 run 实际执行的产出侧工具树，并与台账登记比对。
+
+    每个 run 的 manifest 都记录了当次采集实际使用的 driver 与 MITM addon 摘要
+    （`runtime.capture_tools.execution_sources.files`）。common_scope 顶层那对
+    `current_driver_source_sha256`／`current_mitm_addon_source_sha256` 是当前工具树
+    声明，并不等于这批证据的统一绑定——本 campaign 就是在采集过程中换过工具的。
+
+    这里把实际分组算出来，逐项核对台账登记：登记与实际不符、或实际变了而登记没跟上，
+    都会失败，登记因此不能被手工改成好看的样子。
+    """
+
+    registered = verified_campaign.get("capture_toolchain_consistency")
+    if not isinstance(registered, dict):
+        errors.append("verified_campaign 缺少 capture_toolchain_consistency 登记")
+        return
+
+    runs_root = PENDING_CAPTURE_ROOT / "runs"
+    if not runs_root.is_dir():
+        errors.append(f"pending 归档缺少 runs 目录：{PENDING_CAPTURE_RELATIVE}/runs")
+        return
+
+    actual: dict[str, dict[str, list[str]]] = {
+        "capturelib/scenarios.py": {},
+        "addons/mitm_capture.py": {},
+    }
+    for run_dir in sorted(runs_root.iterdir()):
+        manifest_path = run_dir / "manifest.json"
+        if not manifest_path.is_file():
+            continue
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            errors.append(f"无法读取 run manifest：{run_dir.name}：{exc}")
+            return
+        sources = (
+            manifest.get("runtime", {})
+            .get("capture_tools", {})
+            .get("execution_sources", {})
+            .get("files")
+        )
+        if not isinstance(sources, list):
+            errors.append(f"run {run_dir.name} 未记录 capture_tools 执行源")
+            return
+        by_path = {entry.get("path"): entry for entry in sources if isinstance(entry, dict)}
+        for tool_path in actual:
+            entry = by_path.get(tool_path)
+            if not isinstance(entry, dict) or not entry.get("sha256"):
+                errors.append(f"run {run_dir.name} 未记录 {tool_path} 摘要")
+                return
+            actual[tool_path].setdefault(str(entry["sha256"]), []).append(run_dir.name)
+
+    variant_fields = {
+        "capturelib/scenarios.py": "driver_variants",
+        "addons/mitm_capture.py": "addon_variants",
+    }
+    for tool_path, field in variant_fields.items():
+        registered_variants = registered.get(field)
+        if not isinstance(registered_variants, list):
+            errors.append(f"capture_toolchain_consistency 缺少 {field}")
+            continue
+        registered_counts = {
+            str(item.get("sha256")): item.get("run_count")
+            for item in registered_variants
+            if isinstance(item, dict)
+        }
+        actual_counts = {sha: len(runs) for sha, runs in actual[tool_path].items()}
+        if registered_counts != actual_counts:
+            errors.append(
+                f"capture_toolchain_consistency.{field} 与各 run manifest 不一致："
+                f"实际 {dict(sorted(actual_counts.items()))}"
+            )
+            continue
+        # 登记了 runs 明细的变体，明细也必须与实际逐个对上。
+        for item in registered_variants:
+            listed = item.get("runs")
+            if listed is None:
+                continue
+            if sorted(map(str, listed)) != sorted(actual[tool_path][str(item["sha256"])]):
+                errors.append(
+                    f"capture_toolchain_consistency.{field} 中 "
+                    f"{str(item['sha256'])[:12]} 的 runs 明细与实际不符"
+                )
+
+    consistent = all(len(groups) == 1 for groups in actual.values())
+    if registered.get("consistent") is not consistent:
+        errors.append(
+            f"capture_toolchain_consistency.consistent 应为 {consistent}"
+        )
+    unreproducible = sum(
+        len(item.get("runs") or [])
+        for item in registered.get("driver_variants") or []
+        if isinstance(item, dict) and item.get("source_recoverable") is False
+    )
+    if registered.get("unreproducible_driver_runs") != unreproducible:
+        errors.append(
+            "capture_toolchain_consistency.unreproducible_driver_runs 应为 "
+            f"{unreproducible}"
+        )
+
+
 def validate_pending_evidence_campaign(
     rules: dict[str, Any], errors: list[str]
 ) -> None:
@@ -675,6 +826,8 @@ def validate_pending_evidence_campaign(
     if not POST_RUN_SECRET_TOOL_PATH.is_file():
         errors.append(f"终态秘密扫描器不存在：{POST_RUN_SECRET_TOOL_RELATIVE}")
         return
+
+    validate_capture_toolchain_consistency(verified_campaign, errors)
 
     analyzer_sha256 = hashlib.sha256(PENDING_ANALYZER_PATH.read_bytes()).hexdigest()
     post_run_secret_tool_sha256 = hashlib.sha256(
@@ -1600,6 +1753,94 @@ def validate_tls003_p_denominator(data: dict[str, Any], errors: list[str]) -> in
     return len(raw_client_hellos)
 
 
+def validate_driver_binding(
+    common_scope: dict[str, Any],
+    driver_path: Path,
+    errors: list[str],
+) -> None:
+    """校验抓包 driver 与 Claude 采集路径的绑定。
+
+    绑定分两层，职责不同：
+
+    1. **硬绑定**：Claude 入口的可达闭包摘要，每次实算，不可由台账声明代替。它是
+       「产出 Claude 证据的采集逻辑」的精确身份，被改动即失败。
+    2. **审阅台账**：driver 整文件摘要。文件由 Claude 与 Codex 共用，Codex 侧改动
+       会让它漂移而不影响 Claude 闭包；这类漂移必须逐跳登记提交号与审阅结论，
+       链条从证据基线连续接到当前文件，缺环或未登记一律失败。
+
+    只更新整文件摘要而不登记审阅结论，会被链条连续性检查挡下——这正是要防的
+    「为让门禁通过而改数字」。
+    """
+
+    driver_sha256 = hashlib.sha256(driver_path.read_bytes()).hexdigest()
+    driver_entry = str(common_scope.get("current_driver_claude_entry") or "")
+    if not driver_entry:
+        errors.append("规则台账未声明 driver 的 Claude 采集入口")
+    else:
+        try:
+            reachable, closure_sha256 = driver_entry_closure(
+                driver_path.read_text(encoding="utf-8"), driver_entry
+            )
+        except SyntaxError as exc:
+            errors.append(f"当前抓包 driver 无法解析：{exc}")
+        else:
+            if not reachable:
+                errors.append(f"当前抓包 driver 缺少 Claude 采集入口：{driver_entry}")
+            elif closure_sha256 != common_scope.get(
+                "current_driver_claude_closure_sha256"
+            ):
+                errors.append(
+                    f"Claude 采集路径闭包摘要变化：实际 {closure_sha256}"
+                    f"（入口 {driver_entry}，{len(reachable)} 个可达符号）"
+                )
+
+    baseline_sha256 = common_scope.get("current_driver_evidence_baseline_sha256")
+    if not baseline_sha256:
+        errors.append("规则台账未记录 driver 的证据基线摘要")
+        return
+    drift = common_scope.get("current_driver_reviewed_drift")
+    if not isinstance(drift, list):
+        errors.append("规则台账未记录 driver 的已审阅漂移链")
+        return
+
+    expected_from = str(baseline_sha256)
+    for index, entry in enumerate(drift, start=1):
+        if not isinstance(entry, dict):
+            errors.append(f"driver 已审阅漂移链第 {index} 项不是对象")
+            return
+        for field in ("commit", "from_sha256", "to_sha256", "conclusion"):
+            if not entry.get(field):
+                errors.append(f"driver 已审阅漂移链第 {index} 项缺少 {field}")
+                return
+        if str(entry.get("from_sha256")) != expected_from:
+            errors.append(
+                f"driver 已审阅漂移链第 {index} 项不接续："
+                f"应从 {expected_from} 起，实际 {entry.get('from_sha256')}"
+            )
+            return
+        # 逐跳都必须给出该版本的 Claude 闭包摘要；声明「Claude 路径未变」的跳，
+        # 其闭包摘要必须与当前硬绑定值一致，否则结论与数据自相矛盾。
+        if entry.get("claude_closure_unchanged") is True and entry.get(
+            "claude_closure_sha256"
+        ) != common_scope.get("current_driver_claude_closure_sha256"):
+            errors.append(
+                f"driver 已审阅漂移链第 {index} 项声明 Claude 路径未变，"
+                f"但闭包摘要与当前绑定不一致"
+            )
+            return
+        expected_from = str(entry.get("to_sha256"))
+
+    if expected_from != driver_sha256:
+        errors.append(
+            f"当前抓包 driver 摘要变化且未登记审阅结论：实际 {driver_sha256}，"
+            f"已审阅漂移链止于 {expected_from}"
+        )
+    if driver_sha256 != common_scope.get("current_driver_source_sha256"):
+        errors.append(
+            f"规则台账登记的 driver 摘要与当前文件不一致：实际 {driver_sha256}"
+        )
+
+
 def validate_rule_ledger(data: dict[str, Any], errors: list[str]) -> dict[str, int]:
     if data.get("schema_version") != "claude-egress-rule-ledger/v2":
         errors.append("规则台账 schema_version 不匹配")
@@ -1823,9 +2064,7 @@ def validate_rule_ledger(data: dict[str, Any], errors: list[str]) -> dict[str, i
     if not driver_path.is_file():
         errors.append(f"当前抓包 driver 不存在：{driver_relative}")
     else:
-        driver_sha256 = hashlib.sha256(driver_path.read_bytes()).hexdigest()
-        if driver_sha256 != common_scope.get("current_driver_source_sha256"):
-            errors.append(f"当前抓包 driver 摘要变化：实际 {driver_sha256}")
+        validate_driver_binding(common_scope, driver_path, errors)
     addon_relative = common_scope.get("current_mitm_addon_source")
     addon_path = ROOT / str(addon_relative)
     if not addon_path.is_file():
