@@ -102,7 +102,7 @@ type codexOutboundIdentity struct {
 }
 
 // resolveCodexOutboundIdentity 由候选 User-Agent 推导自洽的出站身份。
-// candidateUA 为空时使用规范 User-Agent；推导不出官方身份时整体回退为规范 CLI 身份。
+// candidateUA 为空时使用规范 User-Agent；推导不出官方身份时整体回退为规范 TUI 身份。
 //
 // 候选 UA（面板 / 账号级配置）只贡献客户端名与 OS / 架构 / 终端指纹；其版本段
 // 一律按已验收 active ReleaseBundle 重建。GitHub 发现的新版本必须先完成证据采集、

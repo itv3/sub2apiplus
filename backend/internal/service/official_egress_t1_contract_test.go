@@ -221,6 +221,8 @@ func TestOfficialEgressT1_OpenAIWSCharacterizesHandshakeAndContinuationRewrite(t
 		"",
 		"",
 		"aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+		"",
+		"",
 	)
 	require.NoError(t, err)
 

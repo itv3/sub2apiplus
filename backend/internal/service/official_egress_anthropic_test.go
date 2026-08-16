@@ -36,6 +36,22 @@ func (c *officialEgressT4Cache) DeleteSessionAccountID(context.Context, int64, s
 	return nil
 }
 
+func (c *officialEgressT4Cache) SetGrokVideoPendingBilling(context.Context, string, []byte, time.Duration) error {
+	return nil
+}
+
+func (c *officialEgressT4Cache) GetGrokVideoPendingBilling(context.Context, string) ([]byte, error) {
+	return nil, nil
+}
+
+func (c *officialEgressT4Cache) ClaimGrokVideoBilled(context.Context, string, time.Duration) (bool, error) {
+	return true, nil
+}
+
+func (c *officialEgressT4Cache) ReleaseGrokVideoBilled(context.Context, string) error {
+	return nil
+}
+
 type officialEgressT4IdentityCache struct {
 	getCalls int
 }

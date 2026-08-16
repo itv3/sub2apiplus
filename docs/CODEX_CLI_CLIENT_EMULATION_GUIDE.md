@@ -985,8 +985,8 @@ alpha-search、realtime、WHAM、OAuth refresh 和文件上传不得旁路统一
 
 | 台账项 | 当前值 |
 |---|---|
-| upstream 基线 | `v0.1.171` peeled commit `f0e7a9c7a23a7d02fb159b62fa809621eb0475a6` |
-| 完整 overlay | `docs/egress/maintenance/upstream-v0.1.171-egress-merge-ledger.json` |
+| upstream 基线 | `v0.1.177` peeled commit `073e92d17178a1ccdb0a27017f572f10c9c7ab62` |
+| 完整 overlay | `docs/egress/maintenance/upstream-v0.1.177-egress-merge-ledger.json` |
 | 机器范围 | `strict_surface ∪ required_review_touchpoint ∪ identity_boundary` |
 | 人工范围 | §3.5.2 的 12 个高风险接缝 |
 
@@ -996,7 +996,7 @@ overlay JSON 是文件路径、`upstream`／`fork` 来源、范围标签、计�
 
 ~~~bash
 python3 tools/check_ledger_completeness.py --write-upstream-merge-ledger
-git diff -- docs/egress/maintenance/upstream-v0.1.171-egress-merge-ledger.json
+git diff -- docs/egress/maintenance/upstream-v0.1.177-egress-merge-ledger.json
 make check-egress-spec
 ~~~
 
@@ -1105,7 +1105,7 @@ models、images、files、alpha-search、WHAM 和 OAuth refresh 都进入统一 
 只经受信通道提交。
 
 官方与第三方 OpenAI 入口共用 HTTP／WS 归一化和身份派生；身份冲突不返回 502，逐字段校验只用于离线证据与诊断。
-机器清单冻结 strict surface 和相对 `v0.1.171` 的完整 overlay，Markdown 只保留 12 个高风险接缝；active／previous final-wire
+机器清单冻结 strict surface 和相对 `v0.1.177` 的完整 overlay，Markdown 只保留 12 个高风险接缝；active／previous final-wire
 使用空允许列表，实机以已接受 Campaign 和部署报告为准。
 
 当前兼容边界如下：

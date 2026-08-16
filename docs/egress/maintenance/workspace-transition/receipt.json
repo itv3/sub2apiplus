@@ -1,18 +1,18 @@
 {
   "schema_version": "official-egress-maintenance-workspace-transition-receipt/v1",
   "manifest_path": "docs/egress/maintenance/workspace-transition/manifest.json",
-  "manifest_sha256": "144d2e7cfed9a07d55f7ea552eead4c1a0a4925bfbe49ef2e35542953039eb31",
+  "manifest_sha256": "d4d287dc465be50b549a7a150917c9d90cb1739875fa908ffa5704e94a4e6975",
   "base_commit": "ba485663c3bc0af6802cf6dfc4e19139ef00e371",
   "retirement_receipt_sha256": "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36",
-  "transition_entry_count": 987,
-  "added_entry_count": 409,
-  "deleted_entry_count": 25,
+  "transition_entry_count": 1424,
+  "added_entry_count": 587,
+  "deleted_entry_count": 28,
   "scope_counts": {
-    "documentation_and_receipts": 30,
-    "officialegress_core": 81,
-    "repository_support": 514,
-    "service_boundary": 237,
-    "source_gate": 125
+    "documentation_and_receipts": 31,
+    "officialegress_core": 82,
+    "repository_support": 751,
+    "service_boundary": 429,
+    "source_gate": 131
   },
   "result": "passed"
 }

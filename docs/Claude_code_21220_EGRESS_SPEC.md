@@ -2365,7 +2365,7 @@ Sub2API 上游更新与 Claude Code 换版必须拆成两个变更集，并按�
 不得手改机器计数，也不得把入站版本或账号 UA 接入 strict wire。
 
 **当前阻断**：Claude 出站面**完全不在** overlay 台账的保护范围内——
-`docs/egress/maintenance/upstream-v0.1.171-egress-merge-ledger.json` 登记的 86 个文件中，
+`docs/egress/maintenance/upstream-v0.1.177-egress-merge-ledger.json` 登记的 86 个文件中，
 Claude／Anthropic 相关条目为 **0**。这意味着上游合并可以静默改动
 `official_egress_anthropic.go`、`official_client_profile_registry.go` 与 `pkg/claude/constants.go`
 而不产生任何台账差异，第 2、4 步的机器复核对 Claude 目前是空转。

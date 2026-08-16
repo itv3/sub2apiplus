@@ -182,6 +182,16 @@ func openAIResponsesRequiredCapability(imageIntent bool, platform string) servic
 	return service.OpenAIEndpointCapabilityChatCompletions
 }
 
+// openAIResponsesRequiredCapabilityForRequest returns the endpoint capability
+// required by an image or Responses request. needsResponses includes both the
+// legacy /responses/compact endpoint and native remote compaction v2.
+func openAIResponsesRequiredCapabilityForRequest(imageIntent bool, needsResponses bool, platform string) service.OpenAIEndpointCapability {
+	if needsResponses && platform == service.PlatformOpenAI {
+		return service.OpenAIEndpointCapabilityResponses
+	}
+	return openAIResponsesRequiredCapability(imageIntent, platform)
+}
+
 func allowOpenAICompatibleMessagesDispatch(apiKey *service.APIKey) bool {
 	if apiKey == nil || apiKey.Group == nil {
 		return true
@@ -310,6 +320,13 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	if !ok {
 		return
 	}
+	legacyCompact := service.IsOpenAIResponsesCompactPath(c)
+	nativeV2 := isBareOpenAIResponsesPath(c) && isOpenAIRemoteCompactionV2Request(c, body, compactionProfileMode)
+	if nativeV2 {
+		// 原生 v2 压缩出站前补注 x-codex-beta-features: remote_compaction_v2，
+		// 与真实 Codex 线型一致（网关链剥头后本级负责恢复，#5586）。
+		service.MarkOpenAINativeCompactionV2(c)
+	}
 	// body-signal compact：上游 unary 等待期间向下游发 SSE 注释行心跳，防止
 	// 反向代理空闲超时掐断长压缩连接（#3887）。首拍延迟一个心跳间隔，快速
 	// 失败仍走 JSON+状态码链路；未标记客户端流式或间隔为 0 时是 no-op。
@@ -399,6 +416,15 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	channelMapping, _ := h.gatewayService.ResolveChannelMappingAndRestrict(c.Request.Context(), apiKey.GroupID, reqModel)
 	forwardBody := openAIModelMappedBody(body, channelMapping.Mapped, channelMapping.MappedModel, h.gatewayService.ReplaceModelInBody)
 	seedOpenAIForwardImageIntentHint(c, channelMapping.Mapped, imageIntent)
+	forwardModel := reqModel
+	if channelMapping.Mapped {
+		forwardModel = channelMapping.MappedModel
+	}
+	c.Request = c.Request.WithContext(service.WithOpenAIForwardModel(
+		c.Request.Context(),
+		forwardModel,
+		legacyCompact,
+	))
 
 	// 提前校验 function_call_output 是否具备可关联上下文，避免上游 400。
 	if !h.validateFunctionCallOutputRequest(c, body, reqLog) {
@@ -442,7 +468,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	if h.rejectIfCyberSessionBlocked(c, apiKey, sessionHashBody, reqModel, cyberBlockFormatResponses) {
 		return
 	}
-	requireCompact := isOpenAIRemoteCompactPath(c)
+	requireCompact := legacyCompact
 
 	maxAccountSwitches := h.maxAccountSwitches
 	switchCount := 0
@@ -459,7 +485,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	// 仅对 OpenAI 平台生效：Grok 生图走独立的 forwardGrokResponses 路径，不应被过滤。
 	// 复用前置权限与并发阶段在未修改 body 上确认的显式生图意图，避免大 tools 请求重复扫描。
 	// 该判断已排除 Codex 被动 image_gen namespace，避免 CC-only 账号被误过滤（#4476）。
-	requiredCapability := openAIResponsesRequiredCapability(imageIntent, requestPlatform)
+	needsResponses := nativeV2 || legacyCompact
+	requiredCapability := openAIResponsesRequiredCapabilityForRequest(imageIntent, needsResponses, requestPlatform)
 
 	// 分组利润控制：请求级装配定价上下文——pricingAt 固定本请求的
 	// D 与计费高峰因子，选号、槽位终检与全部 failover 重入共用同一门与阈值。
@@ -501,7 +528,7 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 				zap.Int("excluded_account_count", len(failedAccountIDs)),
 			)
 			if len(failedAccountIDs) == 0 {
-				if errors.Is(err, service.ErrNoAvailableCompactAccounts) {
+				if legacyCompact && errors.Is(err, service.ErrNoAvailableCompactAccounts) {
 					markOpsRoutingCapacityLimitedIfNoAvailable(c, err)
 					h.handleStreamingAwareError(c, http.StatusServiceUnavailable, "compact_not_supported", "No available accounts support /responses/compact", streamStarted)
 					return
@@ -632,16 +659,18 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 						retryLimit := account.GetPoolModeRetryCount()
 						if sameAccountRetryCount[account.ID] < retryLimit {
 							sameAccountRetryCount[account.ID]++
+							retryDelay := sameAccountRetryDelayFor(failoverErr, sameAccountRetryCount[account.ID])
 							reqLog.Warn("openai.pool_mode_same_account_retry",
 								zap.Int64("account_id", account.ID),
 								zap.Int("upstream_status", failoverErr.StatusCode),
 								zap.Int("retry_limit", retryLimit),
 								zap.Int("retry_count", sameAccountRetryCount[account.ID]),
+								zap.Duration("retry_delay", retryDelay),
 							)
 							select {
 							case <-c.Request.Context().Done():
 								return
-							case <-time.After(sameAccountRetryDelay):
+							case <-time.After(retryDelay):
 							}
 							continue
 						}
@@ -755,12 +784,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	}
 }
 
-func isOpenAIRemoteCompactPath(c *gin.Context) bool {
-	if c == nil || c.Request == nil || c.Request.URL == nil {
-		return false
-	}
-	normalizedPath := strings.TrimRight(strings.TrimSpace(c.Request.URL.Path), "/")
-	return strings.HasSuffix(normalizedPath, "/responses/compact")
+func isOpenAILegacyCompactPath(c *gin.Context) bool {
+	return service.IsOpenAIResponsesCompactPath(c)
 }
 
 // isBareOpenAIResponsesPath 仅匹配裸 /responses 端点（无 /compact 等子路径），
@@ -770,7 +795,12 @@ func isBareOpenAIResponsesPath(c *gin.Context) bool {
 		return false
 	}
 	normalizedPath := strings.TrimRight(strings.TrimSpace(c.Request.URL.Path), "/")
-	return strings.HasSuffix(normalizedPath, "/responses")
+	switch normalizedPath {
+	case EndpointResponses, "/openai/v1/responses", "/responses", "/backend-api/codex/responses":
+		return true
+	default:
+		return false
+	}
 }
 
 func isOpenAIRemoteCompactionV2Request(c *gin.Context, body []byte, profileMode string) bool {
@@ -793,7 +823,7 @@ func (h *OpenAIGatewayHandler) normalizeOpenAIResponsesCompactRequest(
 	body []byte,
 	profileMode string,
 ) ([]byte, bool) {
-	isCompactRequest := service.IsOpenAIResponsesCompactPathForTest(c)
+	isCompactRequest := service.IsOpenAIResponsesCompactPath(c)
 	if !isCompactRequest && isBareOpenAIResponsesPath(c) && service.HasCompactionTriggerInInput(body) {
 		if isOpenAIRemoteCompactionV2Request(c, body, profileMode) {
 			return body, true
@@ -824,7 +854,7 @@ func (h *OpenAIGatewayHandler) normalizeOpenAIResponsesCompactRequest(
 }
 
 func (h *OpenAIGatewayHandler) logOpenAIRemoteCompactOutcome(c *gin.Context, startedAt time.Time) {
-	if !isOpenAIRemoteCompactPath(c) {
+	if !isOpenAILegacyCompactPath(c) {
 		return
 	}
 
@@ -1180,16 +1210,18 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 						retryLimit := account.GetPoolModeRetryCount()
 						if sameAccountRetryCount[account.ID] < retryLimit {
 							sameAccountRetryCount[account.ID]++
+							retryDelay := sameAccountRetryDelayFor(failoverErr, sameAccountRetryCount[account.ID])
 							reqLog.Warn("openai_messages.pool_mode_same_account_retry",
 								zap.Int64("account_id", account.ID),
 								zap.Int("upstream_status", failoverErr.StatusCode),
 								zap.Int("retry_limit", retryLimit),
 								zap.Int("retry_count", sameAccountRetryCount[account.ID]),
+								zap.Duration("retry_delay", retryDelay),
 							)
 							select {
 							case <-c.Request.Context().Done():
 								return
-							case <-time.After(sameAccountRetryDelay):
+							case <-time.After(retryDelay):
 							}
 							continue
 						}
@@ -2059,6 +2091,7 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			MaxReasoningEffort:      maxReasoningEffort,
 			ReasoningEffortMappings: reasoningEffortMappings,
 			BeforeRequest: func(turn int, payload []byte, originalModel string) error {
+				c.Set(securityAuditWSTurnContextKey, turn)
 				if turn == 1 {
 					return nil
 				}
@@ -2451,7 +2484,9 @@ func (h *OpenAIGatewayHandler) submitUsageRecordTask(parent context.Context, tas
 }
 
 func (h *OpenAIGatewayHandler) submitOpenAIUsageRecordTask(parent context.Context, result *service.OpenAIForwardResult, task service.UsageRecordTask) {
-	if result != nil && result.ImageCount > 0 {
+	// Money-critical bills never drop on pool overflow: media, search surcharge, voice.
+	if result != nil && (result.ImageCount > 0 || result.VideoCount > 0 ||
+		result.SearchCount > 0 || result.WebSearchCalls > 0 || result.AudioUsage != nil) {
 		h.submitMandatoryUsageRecordTask(parent, task)
 		return
 	}
@@ -2732,7 +2767,11 @@ func (h *OpenAIGatewayHandler) ensureForwardErrorResponse(c *gin.Context, stream
 		imageKeepalivePaddingOnly = adjustedSize < 0
 		imageKeepaliveResponseWritten = adjustedSize >= 0
 	}
-	if service.IsResponseCommitted(c) || (!compactKeepaliveCommitted && imageKeepaliveResponseWritten) {
+	compactKeepaliveHasMeaningfulOutput := compactKeepaliveCommitted && service.OpenAICompactKeepaliveAdjustedWrittenSize(c) > 0
+	// Compact keepalive may have committed 200 headers without writing a
+	// semantic SSE event. In that case the Responses stream still needs its
+	// protocol-correct terminal response.failed event.
+	if (service.IsResponseCommitted(c) && (!compactKeepaliveCommitted || compactKeepaliveHasMeaningfulOutput)) || (!compactKeepaliveCommitted && imageKeepaliveResponseWritten) {
 		return false
 	}
 	if c.Writer.Written() && !imageKeepalivePaddingOnly {

@@ -1,0 +1,99 @@
+{
+  "schema_version": "official-egress-upstream-source-transition/v1",
+  "date": "2026-08-16",
+  "base_commit": "234fdf8d53734f16ae84e45470bc91583d473684",
+  "upstream_tag": "v0.1.177",
+  "upstream_commit": "073e92d17178a1ccdb0a27017f572f10c9c7ab62",
+  "classification": "validation_only",
+  "activation_status": "accepted_not_activated",
+  "frozen_release_state": {
+    "active_version": "0.147.0",
+    "active_profile_sha256": "94071c8eb93cfd337ac6eabc291d878084e3dcec8a9e618e04e6f68792d1a7bc",
+    "previous_version": "0.145.0",
+    "previous_profile_sha256": "e0b59772622f14717f1fdf5c15bfae5758226a04fe8f030110d8a616e20fdf6b",
+    "release_graph_sha256": "d8a7634c9af52159c912b539df74b9fa3b92664c0b90cc0defd6789cd07c846d"
+  },
+  "source_transitions": [
+    {
+      "path": "backend/cmd/egressscan/classify.go",
+      "from_sha256": "c1da6c5a9db7be862cbb5f58c8dcde33c8b67d29407073f5e1da7d2d71709a7f",
+      "to_sha256": "c39ba21bc773991c5eb5929b3fdb8e646fac85b612d68e88be738d160e26f9b4",
+      "reason": "登记 v0.1.177 新增 Grok／xAI 范围外发送点并保留严格 compact 专用 sink；已退休 Codex Models 裸 transport 分类仍保持绝迹。"
+    },
+    {
+      "path": "backend/cmd/egressscan/lifecycle_test.go",
+      "from_sha256": "352ab440f07c20f53df5745950eca64bafbd71ca62087c275f43674eef068cd6",
+      "to_sha256": "7e8b8392916180921093e8db9c2423cf76fec817f5573c1329eadb78027bcae4",
+      "reason": "将当前 bootstrap inventory lock 的固定摘要更新到本次复审结果；历史 bootstrap lock 与回放事实保持不变。"
+    },
+    {
+      "path": "backend/internal/officialegress/catalog_retirements_test.go",
+      "from_sha256": "4c87fe2d74d780911b570b5a18127e9ed9c82b356c3f7a55a4e981c554f93913",
+      "to_sha256": "de6b85f943953917d9c61804da10ddc1105dc3b9c9dffecfebf2d217b43c9ba8",
+      "reason": "让 Images 历史退休门禁通过本次固定 transition 连续承接生产源码与 scanner lock；旧退休收据和退休闭集保持不变。"
+    },
+    {
+      "path": "backend/internal/officialegress/websocket_tokenless_retirement_test.go",
+      "from_sha256": "7da08cb7032ee300cdc5a12d05a0c086ff9f2761f047a2a11441eed5e28b69c3",
+      "to_sha256": "434a15a5919409aea4885ca8ceb827a443c614c33676ea14542ff7e253a9bb5f",
+      "reason": "让既有 WS 无 token 退休门禁通过新的上游 transition 连续承接生产源码摘要；退休符号绝迹、token 失败关闭与旧收据原文均保持不变。"
+    },
+    {
+      "path": "backend/internal/service/codex_models_unwired_transport_retirement_test.go",
+      "from_sha256": "055659531062220a2783ceec5b5da0b0c43b714842745de54b535b6bf0fa680e",
+      "to_sha256": "81d6e11f3b2950d84f21e6f9e32eda33f743e607359be3aa3150523ea1bd7440",
+      "reason": "让 Codex Models 裸 transport 退休门禁只接受本次固定 transition 的逐路径摘要链；退休符号和失败关闭语义不变。"
+    },
+    {
+      "path": "backend/internal/service/oauth_service.go",
+      "from_sha256": "b2bbb90377e66014d73406a8d95fb4bd823e052b4ee6cf05cc98fcacd323080e",
+      "to_sha256": "b190ce834a488da3a63f3be2325d9dd76358b9cb85e9aebc31dae4b467785bb7",
+      "reason": "合并 Grok 密码登录与 SSO 转换接口；OpenAI OAuth refresh 的失败关闭接口、受管执行权威和 wire 均不变。"
+    },
+    {
+      "path": "backend/internal/service/openai_images.go",
+      "from_sha256": "c83660b1027531cd3b5d42f16cb99ed5a4acc6589af994d6c406c7381d06b203",
+      "to_sha256": "753e640e3b5199abaa081e951ad90a3edea2790b3a3e8f2329cdc69a08538cb1",
+      "reason": "合并上游生图请求与客户端断开脱钩的计费一致性修复；已退休的下载／取 URL 死代码仍保持绝迹，Codex Images Compiler、Executor、Header、Body 与端点 wire 不变。"
+    },
+    {
+      "path": "backend/internal/service/openai_oauth_service.go",
+      "from_sha256": "d5a337d64f170a54b5b9e6c4d166ca09e041d61d667a0d7ff10ccfdde8e8957a",
+      "to_sha256": "0ba0dea9feb6498698d115dc5e26b4635853f2d3c005d23005f6043d24eff872",
+      "reason": "合并上游个人订阅到期时间归属修复；OAuth refresh 的受管端点、身份、请求结构与 final wire 不变。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_pool.go",
+      "from_sha256": "4974af082bedc10fc7f8415e152233e15894e4415667598933f2b37e5fa07462",
+      "to_sha256": "bc4b83a16d3b1d9b2dfa7f7827efbda8b4724a9eae1fe0d84cffc425e796d4cc",
+      "reason": "合并上游握手兼容键、路由亲和、取消竞争和过期预热修复，同时保留 Plus 的 TransportKey 隔离；非空 SinkID 缺少当前 attempt token 仍在拨号前失败关闭，严格握手 wire 不变。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_v2_passthrough_adapter.go",
+      "from_sha256": "e3cf01b231076fa057efb2fb13c0810f10dd92a939a091f3ade0a54dec83af9b",
+      "to_sha256": "f7226d7f58b2c912c735d8a157c62a90f775e740bf7ecc9e768786388bc6a791",
+      "reason": "合并上游 WS v2 路由提示输入与响应模型对账字段；官方 Invocation 仍拥有最终握手头，Active／Previous final-wire 空允许列表保持通过。"
+    },
+    {
+      "path": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+      "from_sha256": "b2f1609bd2dc4d9cae66442abc9d7512ab411360d99ce85a131e319ab6c457f3",
+      "to_sha256": "e07a9565900677aa4bd4e5899a80ee554f96c20127cacd3361a6d215c856b61f",
+      "reason": "将 §3.5 上游基线、机器 overlay 路径及当前说明更新到 v0.1.177，不改变 §5.1／§5.2 的治理规则。"
+    },
+    {
+      "path": "docs/egress/maintenance/bootstrap-inventory-lock.json",
+      "from_sha256": "a354f834db1b5cecaa2f70989fe1cf72ebcdbb1987a79029ef3409755b0229ac",
+      "to_sha256": "917fbcc0c6cf8f0a28b553837e167c07efc38aec566a98ab52c59d68ceec1b65",
+      "reason": "复审并锁定 v0.1.177 新增的 Grok／xAI 范围外发送点；bootstrap commit、tree、inventory 原文及严格 compact sink 均保持不变。"
+    }
+  ],
+  "allowed_wire_deltas": [],
+  "required_verification": [
+    "tools/check_ledger_completeness.py",
+    "tools/check_version_leak.py",
+    "Active／Previous final-wire 空允许列表比较",
+    "make check-egress-spec",
+    "完整后端、前端与捕获工具回归"
+  ],
+  "result": "passed"
+}

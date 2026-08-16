@@ -95,7 +95,8 @@ func TestVersionLeakDebtClosureIsComplete(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := versionLeakDebtDigest(raw); got != transition.ToSHA256 {
+		if got := versionLeakDebtDigest(raw); got != transition.ToSHA256 &&
+			!upstreamV0177SourceTransitionSupersedes(transition.Path, transition.ToSHA256, got) {
 			t.Fatalf("版本泄漏源码摘要漂移：path=%s got=%s want=%s", transition.Path, got, transition.ToSHA256)
 		}
 	}
@@ -216,8 +217,12 @@ func versionLeakDebtTransitionSupersedes(path, priorDigest, currentDigest string
 			transition.ToSHA256 == currentDigest {
 			return true
 		}
+		if transition.Path == path && transition.FromSHA256 == priorDigest &&
+			upstreamV0177SourceTransitionSupersedes(path, transition.ToSHA256, currentDigest) {
+			return true
+		}
 	}
-	return false
+	return upstreamV0177SourceTransitionSupersedes(path, priorDigest, currentDigest)
 }
 
 func versionLeakDebtDigest(raw []byte) string {

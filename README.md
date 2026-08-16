@@ -11,7 +11,7 @@ Sub2API Plus 是基于 [Wei-Shaw/sub2api](https://github.com/Wei-Shaw/sub2api) �
 | 版本与差异 | 源码版本以 `backend/cmd/server/VERSION` 为准，已发布版本以 GitHub Releases 为准。自定义差异看最近一次合并的上游 tag 至 `HEAD`，合并点可用 `git log --oneline --grep='sync upstream'` 查到。 |
 | Docker 镜像 | `ghcr.io/itv3/sub2apiplus` |
 | 命名约定 | 对外使用 `sub2apiplus` / `Sub2API Plus`；主服务 Go module 和 import 保留 `github.com/Wei-Shaw/sub2api`，降低上游合并成本；keeper 为独立 module `github.com/itv3/sub2apiplus/keeper`，无上游对应物。 |
-| Go / 客户端版本 | 主服务 `go 1.26.5`（`backend/go.mod`）；keeper `go 1.24`（`keeper/go.mod`）；keeper 固定 Claude CLI `2.1.210`，Codex 的 `CODEX_RELEASE` 当前仍为 `latest`，无缓存重建时记录实际安装版本。 |
+| Go / 客户端版本 | 主服务 `go 1.26.6`（`backend/go.mod`）；keeper `go 1.24`（`keeper/go.mod`）；keeper 固定 Claude CLI `2.1.210`，Codex 的 `CODEX_RELEASE` 当前仍为 `latest`，无缓存重建时记录实际安装版本。 |
 | Docker 命名 | Compose service 保留 `sub2api`；默认容器名为 `sub2apiplus`、`sub2apiplus-postgres`、`sub2apiplus-redis`。 |
 
 维护原则：

@@ -276,7 +276,9 @@ func isOpenAIEncryptedReasoningInputItem(item any) bool {
 	return has
 }
 
-func IsOpenAIResponsesCompactPathForTest(c *gin.Context) bool {
+// IsOpenAIResponsesCompactPath reports whether the request targets the legacy
+// /responses/compact endpoint, including its forwardable subpaths.
+func IsOpenAIResponsesCompactPath(c *gin.Context) bool {
 	return isOpenAIResponsesCompactPath(c)
 }
 
@@ -308,6 +310,7 @@ func normalizeOpenAICompactRequestBody(body []byte) ([]byte, bool, error) {
 		"tools",
 		"parallel_tool_calls",
 		"reasoning",
+		"service_tier",
 		"text",
 		"service_tier",
 		"previous_response_id",

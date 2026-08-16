@@ -158,9 +158,12 @@ func TestImagesDeadCodeRetirementReceiptIsComplete(t *testing.T) {
 	}
 }
 
-// imagesRetirementReferenceWasSuperseded 只允许后续已冻结退休收据连续承接维护 lock。
+// imagesRetirementReferenceWasSuperseded 只允许后续已冻结 transition 连续承接历史摘要。
 // Images 历史收据保持不可变，其他引用仍必须与其当时摘要逐字一致。
 func imagesRetirementReferenceWasSuperseded(path, priorDigest, currentDigest string) bool {
+	if upstreamV0177SourceTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if path != "docs/egress/maintenance/bootstrap-inventory-lock.json" {
 		return false
 	}
@@ -190,6 +193,9 @@ func imagesRetirementReferenceWasSuperseded(path, priorDigest, currentDigest str
 // 精确的 path/from/to 链可以解释后续合法维护；两份闭集收据自身另由 service 门禁
 // 固定原文摘要。
 func compatibilityCodeRetirementTransitionSupersedes(path, priorDigest, currentDigest string) bool {
+	if upstreamV0177SourceTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	raw, err := os.ReadFile("../../../docs/egress/maintenance/compatibility-code-retirement-closure.json")
 	if err != nil {
 		return false
@@ -212,11 +218,13 @@ func compatibilityCodeRetirementTransitionSupersedes(path, priorDigest, currentD
 			return true
 		}
 		if transition.Path == path && transition.FromSHA256 == priorDigest &&
-			versionLeakDebtTransitionSupersedesOfficialEgress(path, transition.ToSHA256, currentDigest) {
+			(versionLeakDebtTransitionSupersedesOfficialEgress(path, transition.ToSHA256, currentDigest) ||
+				upstreamV0177SourceTransitionSupersedes(path, transition.ToSHA256, currentDigest)) {
 			return true
 		}
 	}
-	return versionLeakDebtTransitionSupersedesOfficialEgress(path, priorDigest, currentDigest)
+	return versionLeakDebtTransitionSupersedesOfficialEgress(path, priorDigest, currentDigest) ||
+		upstreamV0177SourceTransitionSupersedes(path, priorDigest, currentDigest)
 }
 
 func versionLeakDebtTransitionSupersedesOfficialEgress(path, priorDigest, currentDigest string) bool {
@@ -241,8 +249,12 @@ func versionLeakDebtTransitionSupersedesOfficialEgress(path, priorDigest, curren
 			transition.ToSHA256 == currentDigest {
 			return true
 		}
+		if transition.Path == path && transition.FromSHA256 == priorDigest &&
+			upstreamV0177SourceTransitionSupersedes(path, transition.ToSHA256, currentDigest) {
+			return true
+		}
 	}
-	return false
+	return upstreamV0177SourceTransitionSupersedes(path, priorDigest, currentDigest)
 }
 
 func TestCatalogRetirementValidationRejectsLiveTarget(t *testing.T) {

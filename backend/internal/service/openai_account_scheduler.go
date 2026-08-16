@@ -82,8 +82,10 @@ type OpenAIAccountScheduleRequest struct {
 	RequiredTransport       OpenAIUpstreamTransport
 	RequiredCapability      OpenAIEndpointCapability
 	RequiredImageCapability OpenAIImagesCapability
-	RequireCompact          bool
-	ExcludedIDs             map[int64]struct{}
+	// RequireCompact is only for legacy /responses/compact capability filtering
+	// and compact_model_mapping; native remote compaction v2 leaves it false.
+	RequireCompact bool
+	ExcludedIDs    map[int64]struct{}
 }
 
 type OpenAIAccountScheduleDecision struct {
@@ -284,9 +286,10 @@ func (s *openAIAccountRuntimeStats) size() int {
 }
 
 type defaultOpenAIAccountScheduler struct {
-	service *OpenAIGatewayService
-	metrics openAIAccountSchedulerMetrics
-	stats   *openAIAccountRuntimeStats
+	service                *OpenAIGatewayService
+	metrics                openAIAccountSchedulerMetrics
+	stats                  *openAIAccountRuntimeStats
+	grokFreeQuotaGateCache sync.Map // key: int64(accountID), value: grokFreeQuotaGateCacheEntry
 }
 
 type openAISelectionProbeBudget struct {
@@ -496,6 +499,23 @@ func (s *defaultOpenAIAccountScheduler) selectBySessionHash(
 	}
 	account = s.service.recheckSelectedOpenAIAccountFromDB(ctx, account, req.GroupID, req.Platform, req.RequestedModel, req.RequireCompact, req.RequiredCapability)
 	if account == nil || !s.service.openAIAccountMatchesSchedulingGroup(account, req.GroupID) || !s.isAccountTransportCompatible(ctx, account, req.RequiredTransport) {
+		_ = s.service.deleteStickySessionAccountID(ctx, req.GroupID, sessionHash)
+		return nil, false, nil
+	}
+	// Free-tier soft gate: sticky session must not pin an over-quota free OAuth account.
+	// Admin QueryQuota / import probes do not use this path.
+	if account != nil && len(s.filterGrokFreeQuotaAccounts(ctx, []Account{*account})) == 0 {
+		_ = s.service.deleteStickySessionAccountID(ctx, req.GroupID, sessionHash)
+		return nil, false, nil
+	}
+	// Team+model cool: sticky must not pin a sibling under the same team 429 window.
+	now := time.Now()
+	upstreamModel := canonicalOpenAIAccountSchedulingModel(account, req.RequestedModel)
+	if account != nil && isGrokTeamModelRateLimited(account, upstreamModel, now) {
+		_ = s.service.deleteStickySessionAccountID(ctx, req.GroupID, sessionHash)
+		return nil, false, nil
+	}
+	if account != nil && isGrokModelQuotaBlocked(account.ID, upstreamModel, now) {
 		_ = s.service.deleteStickySessionAccountID(ctx, req.GroupID, sessionHash)
 		return nil, false, nil
 	}
@@ -1241,6 +1261,18 @@ func (s *defaultOpenAIAccountScheduler) tryFallbackToWeightedSticky(
 		if req.RequireCompact && openAICompactSupportTier(account) == 0 {
 			continue
 		}
+		// Keep weighted sticky fallback subject to the same free-tier gate as the
+		// normal and sticky selection paths. Otherwise an over-quota free account
+		// could be reintroduced after the primary candidate pass.
+		if len(s.filterGrokFreeQuotaAccounts(ctx, []Account{*account})) == 0 {
+			continue
+		}
+		upstreamModel := canonicalOpenAIAccountSchedulingModel(account, req.RequestedModel)
+		now := time.Now()
+		if isGrokTeamModelRateLimited(account, upstreamModel, now) ||
+			isGrokModelQuotaBlocked(account.ID, upstreamModel, now) {
+			continue
+		}
 		result, acquireErr := s.service.tryAcquireAccountSlot(ctx, account.ID, account.Concurrency)
 		if acquireErr != nil {
 			return nil, acquireErr
@@ -1329,6 +1361,28 @@ func (s *defaultOpenAIAccountScheduler) selectByLoadBalance(
 	}
 	if len(accounts) == 0 {
 		return nil, 0, 0, 0, noAvailableOpenAISelectionError(req.RequestedModel, false, openAISelectionFilterStats{}.summary(""))
+	}
+	// Local free-tier soft gate on the Grok scheduling path only (not admin probe).
+	accounts = s.filterGrokFreeQuotaAccounts(ctx, accounts)
+	if len(accounts) == 0 {
+		return nil, 0, 0, 0, noAvailableOpenAISelectionError(req.RequestedModel, false, openAISelectionFilterStats{}.summary("grok_free_quota_soft_gate"))
+	}
+	// Team+model rate-limit cool: siblings of a 429'd team skip the hot model.
+	if req.Platform == PlatformGrok {
+		now := time.Now()
+		filtered := filterGrokTeamModelRateLimitedAccounts(accounts, req.RequestedModel, now)
+		if len(filtered) == 0 && len(accounts) > 0 {
+			return nil, 0, 0, 0, noAvailableOpenAISelectionError(req.RequestedModel, false, openAISelectionFilterStats{}.summary("grok_team_model_rate_limit"))
+		}
+		if filtered != nil {
+			accounts = filtered
+		}
+		// Per-account model free-usage soft-block (other models stay eligible).
+		modelFiltered := filterGrokModelQuotaBlockedAccounts(accounts, req.RequestedModel, now)
+		if len(modelFiltered) == 0 && len(accounts) > 0 {
+			return nil, 0, 0, 0, noAvailableOpenAISelectionError(req.RequestedModel, false, openAISelectionFilterStats{}.summary("grok_model_quota_block"))
+		}
+		accounts = modelFiltered
 	}
 
 	// require_privacy_set: 获取分组信息
@@ -2102,11 +2156,9 @@ func (s *OpenAIGatewayService) selectAccountWithSchedulerOnce(
 	// 入口已在请求开始经 WithOpenAIRequestPricingContext 装门并固定 pricingAt，
 	// 此处对同分组门直接复用（failover 重入阈值稳定），仅为不经 handler 装配的
 	// 内部调用兜底。图片/视频调度不在利润门范围：requiredImageCapability 非空的
-	// Images 调度不装门；requiredCapability == OpenAIEndpointCapabilityResponses
-	// 当前仅显式生图意图的 /v1/responses 设置（HTTP openAIResponsesRequiredCapability
-	// 与 WS 桥同款判定），同样不装门——若未来把该 capability 用于非生图流量，
-	// 需要同步收窄本条件（有测试钉死该映射）。
-	if requiredImageCapability == "" && requiredCapability != OpenAIEndpointCapabilityResponses {
+	// Images 调度不装门；其他使用 Responses 能力的文本请求（包括原生远程压缩）
+	// 仍须装门。其余媒体路径通过 WithOpenAIProfitControlSuppressed 显式跳过。
+	if requiredImageCapability == "" {
 		ctx = s.withOpenAIProfitControlGate(ctx, groupID)
 	}
 	platform = normalizeOpenAICompatiblePlatform(platform)

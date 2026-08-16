@@ -3,9 +3,9 @@
   "bootstrap_commit": "38a9929eac35a39c86de2f27de8f7a805d7dae52",
   "bootstrap_tree": "a8c3dee18a01a6138bfcea60860bb5ad11548c3a",
   "inventory_sha256": "46593243b1bd315eafcb54335502a1f46bc2b8bfc0ecc2d3146da4e7087bfaeb",
-  "scanner_algorithm_sha256": "bf0e474d2a3da8329da8303d0715ab32d969d56805a72aa03a519475731b5e0f",
-  "reconstructed_at": "2026-08-16T09:53:50+08:00",
+  "scanner_algorithm_sha256": "0c41baddab92d95cab284c07679649e1b108b188370f943a053597dedb0c937f",
+  "reconstructed_at": "2026-08-16T19:56:56+08:00",
   "reviewed_by": "codex-cli-client-emulation-maintenance",
-  "review_ref": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md#52-兼容代码退休",
-  "rationale": "保持 bootstrap commit、tree 和 inventory 原文不变；复审扫描算法删除已经由 Executor 接管且源码绝迹的 OAuth refresh 旧 repository 分类，并修正 bootstrap 回放顺序：仅由完全匹配 candidate ID 的追加式 RemovalReceipt 提供历史冻结分类，源码结构仍重新扫描比较，未收据化的新发送点继续失败关闭。"
+  "review_ref": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md#51-sub2api-上游更新",
+  "rationale": "保持 bootstrap commit、tree 和 inventory 原文不变；复审上游 v0.1.177 新增的 Grok/xAI 范围外发送点。严格管理面 compact 探针继续使用已批准的 /responses/compact 与专用 sink，原生 remote compaction v2 留待独立候选变更；新增未登记发送点仍继续失败关闭。"
 }

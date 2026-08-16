@@ -1437,6 +1437,40 @@
         </div>
       </div>
 
+
+      <div
+        v-if="supportsAccountSchedulingThresholdOverride"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+        data-testid="account-scheduling-threshold-section"
+      >
+        <div class="mb-3 flex items-center justify-between">
+          <div>
+            <label class="input-label mb-0">{{ t('admin.accounts.accountSchedulingThresholdOverride') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.accountSchedulingThresholdOverrideHint') }}
+            </p>
+          </div>
+          <input
+            v-model="accountSchedulingThresholdOverrideEnabled"
+            data-testid="account-scheduling-threshold-override-enabled"
+            type="checkbox"
+            class="h-4 w-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+          />
+        </div>
+        <div v-if="accountSchedulingThresholdOverrideEnabled">
+          <label class="input-label">{{ t('admin.accounts.accountSchedulingThresholdOverrideValue') }}</label>
+          <input
+            v-model.number="accountSchedulingThresholdOverrideValue"
+            data-testid="account-scheduling-threshold-override-value"
+            type="number"
+            min="1"
+            max="100"
+            class="input"
+          />
+          <p class="input-hint">{{ t('admin.accounts.accountSchedulingThresholdOverrideDisabledHint') }}</p>
+        </div>
+      </div>
+
       <!-- Intercept Warmup Requests (Anthropic/Antigravity) -->
       <div
         v-if="account?.platform === 'anthropic' || account?.platform === 'antigravity'"
@@ -2032,6 +2066,24 @@
               ]"
             />
           </button>
+        </div>
+      </div>
+
+      <!-- Codex 指纹收敛模式（仅 OpenAI OAuth） -->
+      <div
+        v-if="account?.platform === 'openai' && account?.type === 'oauth'"
+        class="border-t border-gray-200 pt-4 dark:border-dark-600"
+      >
+        <div class="flex items-center justify-between gap-4">
+          <div class="min-w-0">
+            <label class="input-label mb-0">{{ t('admin.accounts.openai.codexFingerprintMode') }}</label>
+            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {{ t('admin.accounts.openai.codexFingerprintModeDesc') }}
+            </p>
+          </div>
+          <div class="w-52 flex-shrink-0">
+            <Select v-model="codexFingerprintMode" data-testid="edit-codex-fingerprint-mode-select" :options="codexFingerprintModeOptions" />
+          </div>
         </div>
       </div>
 
@@ -2839,6 +2891,12 @@ const antigravityWhitelistModels = ref<string[]>([])
 const antigravityModelMappings = ref<ModelMapping[]>([])
 const isSyncingAntigravityUpstream = ref(false)
 const tempUnschedEnabled = ref(false)
+const accountSchedulingThresholdOverrideEnabled = ref(false)
+const accountSchedulingThresholdOverrideValue = ref(100)
+const ACCOUNT_SCHEDULING_THRESHOLD_CREDENTIAL_KEY = 'account_scheduling_threshold'
+const supportsAccountSchedulingThresholdOverride = computed(() =>
+  supportsAccountSchedulingThresholdOverridePlatform(props.account?.platform)
+)
 const tempUnschedRules = ref<TempUnschedRuleForm[]>([])
 const getModelMappingKey = createStableObjectKeyResolver<ModelMapping>('edit-model-mapping')
 const getOpenAICompactModelMappingKey = createStableObjectKeyResolver<ModelMapping>('edit-openai-compact-model-mapping')
@@ -2893,6 +2951,8 @@ const openaiOAuthResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF
 const openaiAPIKeyResponsesWebSocketV2Mode = ref<OpenAIWSMode>(OPENAI_WS_MODE_OFF)
 const codexCLIOnlyEnabled = ref(false)
 const codexCLIOnlyAppServerEnabled = ref(false)
+type CodexFingerprintMode = 'off' | 'device' | 'session' | 'full'
+const codexFingerprintMode = ref<CodexFingerprintMode>('off')
 type CodexImageToolMode = 'inherit' | 'enabled' | 'disabled' | 'block'
 const codexImageToolMode = ref<CodexImageToolMode>('inherit')
 type AnthropicAPIKeyAuthScheme = 'x_api_key' | 'authorization_bearer'
@@ -2924,6 +2984,13 @@ const editWeeklyResetMode = ref<'rolling' | 'fixed' | null>(null)
 const editWeeklyResetDay = ref<number | null>(null)
 const editWeeklyResetHour = ref<number | null>(null)
 const editResetTimezone = ref<string | null>(null)
+const codexFingerprintModeOptions = computed(() => [
+  { value: 'off' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintOff') },
+  { value: 'device' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintDevice') },
+  { value: 'session' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintSession') },
+  { value: 'full' as CodexFingerprintMode, label: t('admin.accounts.openai.codexFingerprintFull') },
+])
+
 const openAIWSModeOptions = computed(() => [
   { value: OPENAI_WS_MODE_OFF, label: t('admin.accounts.openai.wsModeOff') },
   { value: OPENAI_WS_MODE_CTX_POOL, label: t('admin.accounts.openai.wsModeCtxPool') },
@@ -3345,6 +3412,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   openaiAPIKeyResponsesWebSocketV2Mode.value = OPENAI_WS_MODE_OFF
   codexCLIOnlyEnabled.value = false
   codexCLIOnlyAppServerEnabled.value = false
+  codexFingerprintMode.value = 'off'
   codexImageToolMode.value = 'inherit'
   anthropicPassthroughEnabled.value = false
   anthropicAPIKeyAuthScheme.value = 'x_api_key'
@@ -3395,6 +3463,13 @@ const syncFormFromAccount = (newAccount: Account | null) => {
       codexCLIOnlyEnabled.value = extra?.codex_cli_only === true
       codexCLIOnlyAppServerEnabled.value =
         extra?.codex_cli_only_allow_app_server === true
+    }
+    if (newAccount.type === 'oauth') {
+      const fpMode = extra?.codex_fingerprint_mode as string | undefined
+      // 缺省/非法值按 off 呈现，与后端 GetCodexFingerprintMode 的 opt-in 语义一致（#5610）
+      codexFingerprintMode.value = (['off', 'device', 'session', 'full'].includes(fpMode || '')
+        ? fpMode as CodexFingerprintMode
+        : 'off')
     }
     const credentials = newAccount.credentials as Record<string, unknown> | undefined
     const compactMappings = credentials?.compact_model_mapping as Record<string, string> | undefined
@@ -3490,6 +3565,7 @@ const syncFormFromAccount = (newAccount: Account | null) => {
   }
 
   loadTempUnschedRules(credentials)
+  loadAccountSchedulingThresholdOverride(newAccount.platform, credentials)
 
   // Load header override state (anthropic/openai apikey + grok apikey/oauth)
   headerOverrideEnabled.value = false
@@ -3842,6 +3918,69 @@ const applyTempUnschedConfig = (credentials: Record<string, unknown>) => {
   return true
 }
 
+
+function supportsAccountSchedulingThresholdOverridePlatform(platform: Account['platform'] | undefined) {
+  return platform === 'openai' || platform === 'anthropic' || platform === 'grok'
+}
+
+function normalizeAccountSchedulingThresholdOverride(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') {
+    return null
+  }
+  const numeric = Number(value)
+  if (!Number.isFinite(numeric)) {
+    return null
+  }
+  const integer = Math.trunc(numeric)
+  if (integer < 1 || integer > 100) {
+    return null
+  }
+  return integer
+}
+
+function clampAccountSchedulingThresholdOverride(value: unknown): number {
+  return Math.min(100, Math.max(1, Math.trunc(Number(value) || 100)))
+}
+
+function loadAccountSchedulingThresholdOverride(
+  platform: Account['platform'] | undefined,
+  credentials: Record<string, unknown> | undefined
+) {
+  if (!supportsAccountSchedulingThresholdOverridePlatform(platform)) {
+    accountSchedulingThresholdOverrideEnabled.value = false
+    accountSchedulingThresholdOverrideValue.value = 100
+    return
+  }
+  const value = normalizeAccountSchedulingThresholdOverride(
+    credentials?.[ACCOUNT_SCHEDULING_THRESHOLD_CREDENTIAL_KEY]
+  )
+  accountSchedulingThresholdOverrideEnabled.value = value !== null
+  accountSchedulingThresholdOverrideValue.value = value ?? 100
+}
+
+const applyAccountSchedulingThresholdOverridePatch = (
+  credentials: Record<string, unknown>,
+  currentCredentials: Record<string, unknown>,
+  platform: Account['platform'] | undefined = props.account?.platform
+) => {
+  if (!supportsAccountSchedulingThresholdOverridePlatform(platform)) {
+    return
+  }
+  const current = normalizeAccountSchedulingThresholdOverride(
+    currentCredentials[ACCOUNT_SCHEDULING_THRESHOLD_CREDENTIAL_KEY]
+  )
+  if (!accountSchedulingThresholdOverrideEnabled.value) {
+    if (current !== null) {
+      credentials[ACCOUNT_SCHEDULING_THRESHOLD_CREDENTIAL_KEY] = null
+    }
+    return
+  }
+  const next = clampAccountSchedulingThresholdOverride(accountSchedulingThresholdOverrideValue.value)
+  if (current !== next) {
+    credentials[ACCOUNT_SCHEDULING_THRESHOLD_CREDENTIAL_KEY] = next
+  }
+}
+
 function loadTempUnschedRules(credentials?: Record<string, unknown>) {
   tempUnschedEnabled.value = credentials?.temp_unschedulable_enabled === true
   const rawRules = credentials?.temp_unschedulable_rules
@@ -4179,6 +4318,7 @@ const handleSubmit = async () => {
 
       // Add intercept warmup requests setting
       applyInterceptWarmup(newCredentials, interceptWarmupRequests.value, 'edit')
+      applyAccountSchedulingThresholdOverridePatch(newCredentials, currentCredentials)
       if (!applyTempUnschedConfig(newCredentials)) {
         return
       }
@@ -4197,6 +4337,7 @@ const handleSubmit = async () => {
       // Add intercept warmup requests setting
       applyInterceptWarmup(newCredentials, interceptWarmupRequests.value, 'edit')
 
+      applyAccountSchedulingThresholdOverridePatch(newCredentials, currentCredentials)
       if (!applyTempUnschedConfig(newCredentials)) {
         return
       }
@@ -4245,6 +4386,7 @@ const handleSubmit = async () => {
       }
 
       applyInterceptWarmup(newCredentials, interceptWarmupRequests.value, 'edit')
+      applyAccountSchedulingThresholdOverridePatch(newCredentials, currentCredentials)
       if (!applyTempUnschedConfig(newCredentials)) {
         return
       }
@@ -4302,6 +4444,7 @@ const handleSubmit = async () => {
       }
 
       applyInterceptWarmup(newCredentials, interceptWarmupRequests.value, 'edit')
+      applyAccountSchedulingThresholdOverridePatch(newCredentials, currentCredentials)
       if (!applyTempUnschedConfig(newCredentials)) {
         return
       }
@@ -4313,6 +4456,7 @@ const handleSubmit = async () => {
       const newCredentials: Record<string, unknown> = { ...currentCredentials }
 
       applyInterceptWarmup(newCredentials, interceptWarmupRequests.value, 'edit')
+      applyAccountSchedulingThresholdOverridePatch(newCredentials, currentCredentials)
       if (!applyTempUnschedConfig(newCredentials)) {
         return
       }
@@ -4632,6 +4776,16 @@ const handleSubmit = async () => {
           newExtra.codex_cli_only_allow_app_server = true
         } else {
           delete newExtra.codex_cli_only_allow_app_server
+        }
+      }
+
+      // 指纹收敛模式：默认 off（不写入）；device/session/full 是显式 opt-in，
+      // 必须落键，否则管理员的选择会被后端当作"未设置"而回落到 off（#5610）。
+      if (props.account.type === 'oauth') {
+        if (codexFingerprintMode.value !== 'off') {
+          newExtra.codex_fingerprint_mode = codexFingerprintMode.value
+        } else {
+          delete newExtra.codex_fingerprint_mode
         }
       }
 

@@ -108,3 +108,10 @@ func TestCheckedInBootstrapCommitIsPinned(t *testing.T) {
 			baseline.BootstrapCommit, legacyBootstrapCommit)
 	}
 }
+
+func TestApplyClassificationEmptyInput(t *testing.T) {
+	classified, unclassified := applyClassification(nil)
+	if len(classified) != 0 || len(unclassified) != 0 {
+		t.Fatalf("空发送面分类结果非法：classified=%v unclassified=%v", classified, unclassified)
+	}
+}

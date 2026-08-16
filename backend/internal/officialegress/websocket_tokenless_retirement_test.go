@@ -94,6 +94,9 @@ func TestWebSocketTokenlessCompatibilityRetirementReceiptAndSourceExtinction(t *
 // 旧收据保持不可变；后续变更必须从旧 to 摘要出发，并精确落到当前源码摘要。
 func websocketRetirementTransitionSuperseded(t *testing.T, path, priorDigest, currentDigest string) bool {
 	t.Helper()
+	if upstreamV0177SourceTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	raw, err := os.ReadFile("../../../docs/egress/maintenance/catalog-generic-bind-compat-retirement.json")
 	if err != nil || catalogGenericBindRetirementDigest(raw) != catalogGenericBindRetirementSHA256 {
 		return false

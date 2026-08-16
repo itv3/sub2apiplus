@@ -57,7 +57,8 @@ func TestPromoteCatalogWritesImmutableProductionDirectory(t *testing.T) {
 	if err := json.Unmarshal(manifestRaw, &manifest); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(manifest["source"].(string), "/acceptance:") {
+	source, ok := manifest["source"].(string)
+	if !ok || !strings.Contains(source, "/acceptance:") {
 		t.Fatalf("生产目录未绑定 acceptance：%v", manifest)
 	}
 	if _, err := promoteCatalog(officialegress.CatalogPromotionInput{}, output); err == nil {

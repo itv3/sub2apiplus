@@ -41,10 +41,10 @@ describe('admin system rollback API', () => {
 
     const result = await rollback('0.1.146')
 
-    expect(post).toHaveBeenCalledWith(
-      '/admin/system/rollback',
-      { version: '0.1.146' },
-      { timeout: 900000 }
+	  expect(post).toHaveBeenCalledWith(
+	    '/admin/system/rollback',
+	    { version: '0.1.146' },
+	    { timeout: 15 * 60 * 1000 }
     )
     expect(result.need_restart).toBe(true)
   })
@@ -52,8 +52,12 @@ describe('admin system rollback API', () => {
   it('rollback without a version posts no body (legacy backup rollback)', async () => {
     post.mockResolvedValue({ data: { message: 'ok', need_restart: true } })
 
-    await rollback()
+	  await rollback()
 
-    expect(post).toHaveBeenCalledWith('/admin/system/rollback', undefined, { timeout: 900000 })
+	  expect(post).toHaveBeenCalledWith(
+	    '/admin/system/rollback',
+	    undefined,
+	    { timeout: 15 * 60 * 1000 }
+	  )
   })
 })

@@ -1109,48 +1109,44 @@ func TestAntigravityGatewayService_ForwardGemini_BillsWithMappedModel(t *testing
 	require.Equal(t, mappedModel, result.UpstreamModel)
 }
 
-func TestAntigravityGatewayService_ForwardGemini_FallbackSuccessBillsWithFallbackModel(t *testing.T) {
+func TestAntigravityGatewayService_ForwardGemini_FallbackReportsActualUpstreamModel(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	writer := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(writer)
 
-	body, err := json.Marshal(map[string]any{
-		"contents": []map[string]any{
-			{"role": "user", "parts": []map[string]any{{"text": "hello"}}},
-		},
-	})
-	require.NoError(t, err)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-legacy:generateContent", bytes.NewReader(body))
+	body := []byte(`{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}`)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1beta/models/gemini-primary:generateContent", bytes.NewReader(body))
 
-	notFoundBody := []byte(`{"error":{"message":"model not found"}}`)
-	successBody := []byte("data: {\"response\":{\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"ok\"}]},\"finishReason\":\"STOP\"}],\"usageMetadata\":{\"promptTokenCount\":8,\"candidatesTokenCount\":3}}}\n\n")
-	upstream := &queuedHTTPUpstreamStub{
-		responses: []*http.Response{
-			{
-				StatusCode: http.StatusNotFound,
-				Header:     http.Header{"Content-Type": []string{"application/json"}},
-				Body:       io.NopCloser(bytes.NewReader(notFoundBody)),
-			},
-			{
-				StatusCode: http.StatusOK,
-				Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
-				Body:       io.NopCloser(bytes.NewReader(successBody)),
-			},
+	const (
+		originalModel = "gemini-primary"
+		mappedModel   = "gemini-primary-upstream"
+		fallbackModel = "gemini-fallback-upstream"
+	)
+	upstream := &queuedHTTPUpstreamStub{responses: []*http.Response{
+		{
+			StatusCode: http.StatusNotFound,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"error":{"code":404,"message":"model not found"}}`)),
 		},
-	}
-
-	const mappedModel = "gemini-old-upstream"
-	const fallbackModel = "gemini-3.5-flash-low"
+		{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body: io.NopCloser(strings.NewReader(
+				`data: {"response":{"modelVersion":"gemini-fallback-upstream","candidates":[{"content":{"parts":[{"text":"ok"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":8,"candidatesTokenCount":3}}}` + "\n\n",
+			)),
+		},
+	}}
+	settings := &antigravitySettingRepoStub{values: map[string]string{
+		SettingKeyEnableModelFallback:      "true",
+		SettingKeyFallbackModelAntigravity: fallbackModel,
+	}}
 	svc := &AntigravityGatewayService{
-		settingService: NewSettingService(&antigravitySettingRepoStub{values: map[string]string{
-			SettingKeyEnableModelFallback:      "true",
-			SettingKeyFallbackModelAntigravity: fallbackModel,
-		}}, &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}),
-		tokenProvider: &AntigravityTokenProvider{},
-		httpUpstream:  upstream,
+		settingService: NewSettingService(settings, &config.Config{Gateway: config.GatewayConfig{MaxLineSize: defaultMaxLineSize}}),
+		tokenProvider:  &AntigravityTokenProvider{},
+		httpUpstream:   upstream,
 	}
 	account := &Account{
-		ID:          67,
+		ID:          9,
 		Name:        "acc-gemini-fallback",
 		Platform:    PlatformAntigravity,
 		Type:        AccountTypeOAuth,
@@ -1160,22 +1156,26 @@ func TestAntigravityGatewayService_ForwardGemini_FallbackSuccessBillsWithFallbac
 			"access_token": "token",
 			"project_id":   "proj",
 			"model_mapping": map[string]any{
-				"gemini-legacy": mappedModel,
-				mappedModel:     mappedModel,
-				fallbackModel:   fallbackModel,
+				originalModel: mappedModel,
+				mappedModel:   mappedModel,
+				fallbackModel: fallbackModel,
 			},
 		},
 	}
 
-	result, err := svc.ForwardGemini(context.Background(), c, account, "gemini-legacy", "generateContent", false, body, false)
-
+	result, err := svc.ForwardGemini(context.Background(), c, account, originalModel, "generateContent", true, body, false)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	require.Equal(t, "gemini-legacy", result.Model)
+	require.Equal(t, originalModel, result.Model)
 	require.Equal(t, fallbackModel, result.UpstreamModel)
+	require.Equal(t, fallbackModel, result.UpstreamResponseModel)
+	require.False(t, result.UpstreamResponseModelConflict)
+	mismatch := upstreamModelMismatch(result.UpstreamModel, result.UpstreamResponseModel)
+	require.NotNil(t, mismatch)
+	require.False(t, *mismatch)
 	require.Len(t, upstream.requestBodies, 2)
-	require.Contains(t, string(upstream.requestBodies[0]), mappedModel)
-	require.Contains(t, string(upstream.requestBodies[1]), fallbackModel)
+	require.Contains(t, string(upstream.requestBodies[0]), `"model":"`+mappedModel+`"`)
+	require.Contains(t, string(upstream.requestBodies[1]), `"model":"`+fallbackModel+`"`)
 }
 
 func TestAntigravityGatewayService_ForwardGemini_RetriesCorruptedThoughtSignature(t *testing.T) {

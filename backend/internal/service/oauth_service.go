@@ -32,6 +32,9 @@ type OpenAIOAuthRefreshResponseDecoder interface {
 type GrokOAuthClient interface {
 	ExchangeCode(ctx context.Context, code, codeVerifier, redirectURI, proxyURL, clientID string) (*xai.TokenResponse, error)
 	RefreshToken(ctx context.Context, refreshToken, proxyURL, clientID string) (*xai.TokenResponse, error)
+	// LoginWithPassword 使用邮箱和密码换取短期 Web SSO cookie。
+	// 调用方必须通过 ConvertSSOToBuild 转换，且不得持久化密码或原始 SSO。
+	LoginWithPassword(ctx context.Context, email, password, proxyURL string) (*GrokPasswordLoginResult, error)
 	ConvertSSOToBuild(ctx context.Context, ssoToken, proxyURL string) (*xai.TokenResponse, error)
 }
 

@@ -248,6 +248,10 @@ type OpenAIForwardResult struct {
 	// UpstreamModel is the actual model sent to the upstream provider after mapping.
 	// Empty when no mapping was applied (requested model was used as-is).
 	UpstreamModel string
+	// UpstreamResponseModel is captured from the raw successful upstream
+	// response before any client-facing rewrite or protocol conversion.
+	UpstreamResponseModel         string
+	UpstreamResponseModelConflict bool
 	// UpstreamEndpoint is the actual upstream API path used for this request.
 	// It avoids guessing when one downstream protocol can use multiple upstream endpoints.
 	UpstreamEndpoint string
@@ -280,6 +284,10 @@ type OpenAIForwardResult struct {
 	// WebSearchCalls 是 Codex alpha/search 网页搜索调用次数（每次成功请求为 1）。
 	// 上游不返回 usage 字段，>0 时走按次计费（分组单价 × 次数 × 倍率）。
 	WebSearchCalls int
+	// SearchCount is Grok-native web_search / tool search call count (per 1k pricing).
+	SearchCount int
+	// AudioUsage carries Voice billing units when present.
+	AudioUsage *AudioUsage
 
 	wsReplayInput       []json.RawMessage
 	wsReplayInputExists bool
@@ -395,8 +403,8 @@ func (t *accountWriteThrottle) Allow(id int64, now time.Time) bool {
 
 var defaultOpenAICodexSnapshotPersistThrottle = newAccountWriteThrottle(openAICodexSnapshotPersistMinInterval)
 
-// ErrNoAvailableCompactAccounts indicates the request needs /responses/compact
-// support but no compatible account is available.
+// ErrNoAvailableCompactAccounts indicates a legacy /responses/compact request
+// needs compact support but no compatible account is available.
 var ErrNoAvailableCompactAccounts = errors.New("no available accounts support /responses/compact")
 
 // OpenAIGatewayService handles OpenAI API gateway operations
@@ -463,6 +471,11 @@ type OpenAIGatewayService struct {
 	openaiCookieJars                    sync.Map // key: "accountID:proxyID", value: http.CookieJar
 	openaiCompatSessionResponses        sync.Map
 	openaiCompatAnthropicDigestSessions sync.Map
+	// openaiCodexTurnStateOrigins: 下游会话 seed → openAICodexTurnStateOrigin，
+	// 记录最近一次向该会话下发 x-codex-turn-state 的铸造账号，供出站守卫
+	// 剥离跨账号回带（openai_codex_turn_state.go）。
+	openaiCodexTurnStateOrigins sync.Map
+	openaiCodexTurnStateWrites  atomic.Uint64
 }
 
 // NewOpenAIGatewayService creates a new OpenAIGatewayService
@@ -600,6 +613,10 @@ func (s *OpenAIGatewayService) checkChannelPricingRestriction(ctx context.Contex
 func (s *OpenAIGatewayService) isUpstreamModelRestrictedByChannel(ctx context.Context, groupID int64, account *Account, requestedModel string, requireCompact bool) bool {
 	if s.channelService == nil {
 		return false
+	}
+	if compactForwardModel, ok := openAIForwardModelFromContext(ctx); ok {
+		requestedModel = compactForwardModel.model
+		requireCompact = compactForwardModel.useCompactModelMapping
 	}
 	upstreamModel := resolveOpenAIAccountUpstreamModelForRequest(account, requestedModel, requireCompact)
 	if upstreamModel == "" {

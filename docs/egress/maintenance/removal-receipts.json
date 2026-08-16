@@ -4,6 +4,48 @@
   "receipts": [
     {
       "candidate": {
+        "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.*AccountTestService.testGrokAccountConnection@backend/internal/service/account_test_service.go#facade_http_upstream_do#1",
+        "file": "backend/internal/service/account_test_service.go",
+        "func": "*AccountTestService.testGrokAccountConnection",
+        "package": "github.com/Wei-Shaw/sub2api/internal/service",
+        "callee": "(github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream).Do",
+        "receiver": "github.com/Wei-Shaw/sub2api/internal/service.HTTPUpstream",
+        "sink_kind": "facade_http_upstream_do",
+        "protocol": "http",
+        "sink_type": "facade",
+        "ast_fingerprint": "48569920b96c",
+        "target_resolution": "dynamic",
+        "build_contexts": [
+          "darwin/arm64",
+          "linux/amd64"
+        ],
+        "resolved_methods": [
+          "POST"
+        ],
+        "official_host": false,
+        "runtime_sink_id": "",
+        "purpose": "",
+        "persona": "out-of-scope",
+        "endpoint_evidence": "not_applicable",
+        "routes": null,
+        "is_facade": false,
+        "backend": "-",
+        "target_backend": "-",
+        "enforcement_state": "not_applicable",
+        "owner": "-",
+        "migration_changeset": "-",
+        "expiry_condition": "",
+        "rationale": "Grok 平台",
+        "line_hint": 874
+      },
+      "kind": "out_of_scope_refactored",
+      "source_blob_sha256": "b932b28fdb708bd8b89d6f4cb7c865e90ffe8930e509d3f1912d6e32898f055e",
+      "reviewed_by": "upstream-v0.1.177-merge-audit",
+      "review_ref": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md#51-sub2api-上游更新",
+      "rationale": "上游将单一 Grok 账号测试拆分为 Responses、图片、视频、搜索、语音与实时测试；全部目标仍为 xAI/Grok，不属于 Codex persona。"
+    },
+    {
+      "candidate": {
         "scan_candidate_id": "github.com/Wei-Shaw/sub2api/internal/service.doOpenAIHTTPUpstreamWithProfile@backend/internal/service/openai_upstream_http.go#facade_http_upstream_do#1",
         "file": "backend/internal/service/openai_upstream_http.go",
         "func": "doOpenAIHTTPUpstreamWithProfile",

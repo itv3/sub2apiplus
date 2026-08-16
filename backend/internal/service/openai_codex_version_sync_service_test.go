@@ -389,6 +389,18 @@ func TestGetOpenAICodexCanonicalUserAgentRebuildsPanelUAVersion(t *testing.T) {
 		)
 	})
 
+	t.Run("TUI UA 的首尾两个版本号同时更新", func(t *testing.T) {
+		svc := NewSettingService(&codexVersionSettingRepoStub{values: map[string]string{
+			SettingKeyOpenAICodexUserAgent:           "codex-tui/0.146.1 (Ubuntu 22.4.0; x86_64) WindowsTerminal (codex-tui; 0.146.1)",
+			SettingKeyOpenAICodexClientVersionSynced: "0.200.1",
+		}}, nil)
+
+		require.Equal(t,
+			"codex-tui/0.200.1 (Ubuntu 22.4.0; x86_64) WindowsTerminal (codex-tui; 0.200.1)",
+			svc.GetOpenAICodexCanonicalUserAgent(context.Background()),
+		)
+	})
+
 	// 面板版本号覆写优先级仍然高于同步值：管理员固定版本的诉求不被重建绕开。
 	t.Run("面板版本号覆写优先", func(t *testing.T) {
 		svc := NewSettingService(&codexVersionSettingRepoStub{values: map[string]string{

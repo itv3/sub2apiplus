@@ -60,9 +60,10 @@ DEFAULT_PROFILE_RELATIVE_PATH = (
 # 与 expected_check_ids 全部不变），故 acceptance_contract 的冻结摘要不随之漂移。
 # 2026-08-15 主文档 active 规则升级为 0.147；本文件继续保留 0.145 历史断言载荷，
 # 仅重绑 source_spec 章节摘要供基线复算使用。
-# 2026-08-16 主手册吸收历史升级文档后再次重绑第二部分摘要；规则与判据载荷不变。
+# 2026-08-16 主手册更新 §3.5 的 v0.1.177 台账路径后再次重绑第二部分摘要；
+# 规则与判据载荷不变。
 FROZEN_PROFILE_SHA256 = (
-    "6a429c3ded59833bda6c09568a4585a55d5e260ea64f48416909745a3dec5ee9"
+    "9e6220c90607b71ff3468ed3f8b904916cfc1a229a4cf2b7976d4dfac68ba685"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 RULE_ID_RE = re.compile(r"^SPEC-[A-Z0-9]+-[0-9]{3}$")

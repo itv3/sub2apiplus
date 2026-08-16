@@ -82,9 +82,10 @@ FROZEN_MAPPING_SHA256 = (
 # Cookie 线序仍由 frozen-aux 中经过 prime 的 generation/edit 双样本验收。
 # 同日主文档 active 规则升级为 0.147；本画像同步重绑 source_spec 章节摘要，并修正
 # EP-019 的人类可读描述为三个 GET。机器断言与验收契约载荷不变。
-# 2026-08-16 主手册吸收历史升级文档后再次重绑第二部分摘要；规则与判据载荷不变。
+# 2026-08-16 主手册更新 §3.5 的 v0.1.177 台账路径后再次重绑第二部分摘要；
+# 规则与判据载荷不变。
 FROZEN_PROFILE_SHA256 = (
-    "0849475b208ab37b0ece02f1053e98035f42a0de09c88c5ec635f128b5c8363a"
+    "0b4549d5c4a506a0f0a238fd761a1fcecffdc556b03d9bf052ff9ffc190fe4eb"
 )
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 VERSION_RE = re.compile(r"^[0-9]+\.[0-9]+\.[0-9]+$")

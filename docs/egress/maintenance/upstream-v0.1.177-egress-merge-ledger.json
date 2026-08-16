@@ -1,7 +1,7 @@
 {
   "schema_version": "upstream-egress-merge-ledger/v1",
-  "upstream_tag": "v0.1.171",
-  "upstream_commit": "f0e7a9c7a23a7d02fb159b62fa809621eb0475a6",
+  "upstream_tag": "v0.1.177",
+  "upstream_commit": "073e92d17178a1ccdb0a27017f572f10c9c7ab62",
   "generation_rule": "strict_surface ∪ required_review_touchpoint ∪ identity_boundary 中相对 upstream 有差异的普通文件",
   "overlay_count": 86,
   "overlay_sha256": "4a17f1e2b38acfe073cbe48928c7f34d62403a02aa863e77af591c6c8080dda0",

@@ -20,12 +20,17 @@ EGRESS_SEAL_BASE_REF ?=
 FRONTEND_CRITICAL_VITEST := \
 	src/api/__tests__/client.spec.ts \
 	src/api/__tests__/tokenRefresh.spec.ts \
+	src/api/__tests__/channelMonitorV2.spec.ts \
 	src/views/auth/__tests__/LinuxDoCallbackView.spec.ts \
 	src/views/auth/__tests__/WechatCallbackView.spec.ts \
 	src/views/user/__tests__/PaymentView.spec.ts \
 	src/views/user/__tests__/PaymentResultView.spec.ts \
+	src/views/user/__tests__/ChannelStatusView.mode.spec.ts \
 	src/components/user/profile/__tests__/ProfileInfoCard.spec.ts \
-	src/views/admin/__tests__/SettingsView.spec.ts
+	src/views/admin/__tests__/SettingsView.spec.ts \
+	src/features/channel-monitor-v2/__tests__/designSystem.structure.spec.ts \
+	src/features/channel-monitor-v2/__tests__/monitorFormat.spec.ts \
+	src/features/channel-monitor-v2/__tests__/monitorZoom.spec.ts
 
 # 一键编译前后端
 build: build-backend build-frontend
@@ -120,7 +125,7 @@ check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal
 	@python3 tools/maintenance_conflict_transition.py --self-test
 	@python3 tools/maintenance_conflict_transition.py
 	@# 36 文件冲突 inventory 是旧基线下的历史收缩证据，由上述 transition 固定原文与摘要。
-	@# 当前源码闭集改由 §3.5 的 v0.1.170 路径复算覆盖，禁止再用旧基线重建并改写历史快照。
+	@# 当前源码闭集改由 §3.5 的 v0.1.177 路径复算覆盖，禁止再用旧基线重建并改写历史快照。
 	@cd backend && go run -mod=mod github.com/google/wire/cmd/wire diff ./cmd/server
 	@# 四类终端发送栈必须证明 Guard 接入前后发送事实与结果不变。
 	@cd backend && go test ./internal/repository \

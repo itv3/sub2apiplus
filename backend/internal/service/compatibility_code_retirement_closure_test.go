@@ -180,7 +180,8 @@ func assertCompatibilityClosureFileDigest(t *testing.T, repoRoot, path, want str
 	t.Helper()
 	source := readCompatibilityClosureSource(t, repoRoot, path)
 	if got := compatibilityClosureDigest(source); got != want &&
-		!versionLeakDebtTransitionSupersedes(path, want, got) {
+		!versionLeakDebtTransitionSupersedes(path, want, got) &&
+		!upstreamV0177SourceTransitionSupersedes(path, want, got) {
 		t.Fatalf("兼容代码闭集文件摘要漂移：path=%s got=%s want=%s", path, got, want)
 	}
 }

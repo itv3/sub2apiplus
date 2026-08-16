@@ -30,10 +30,10 @@ SCAN_ROOT = ROOT / "backend"
 INVENTORY = ROOT / "docs" / "egress" / "consolidation" / "egress-surface-inventory.json"
 CHANGESET6_TRANSITION = ROOT / "docs" / "egress" / "validation" / "egress-surface-transition.json"
 MAINTENANCE_RETIREMENT = ROOT / "docs" / "egress" / "maintenance" / "official-egress-consolidation-retirement.json"
-UPSTREAM_MERGE_LEDGER = ROOT / "docs" / "egress" / "maintenance" / "upstream-v0.1.171-egress-merge-ledger.json"
+UPSTREAM_MERGE_LEDGER = ROOT / "docs" / "egress" / "maintenance" / "upstream-v0.1.177-egress-merge-ledger.json"
 MAINTENANCE_RETIREMENT_SHA256 = "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36"
-CURRENT_UPSTREAM_TAG = "v0.1.171"
-CURRENT_UPSTREAM_BASE = "f0e7a9c7a23a7d02fb159b62fa809621eb0475a6"
+CURRENT_UPSTREAM_TAG = "v0.1.177"
+CURRENT_UPSTREAM_BASE = "073e92d17178a1ccdb0a27017f572f10c9c7ab62"
 
 # 这些文件直接改变 Codex body、namespace、能力、身份、连接或 Guard，但不一定
 # 命中 SURFACE_RE。单独冻结必要集合，防止人工表格在保持总数不变时用无关路径替换。
@@ -60,7 +60,7 @@ REQUIRED_REVIEW_TOUCHPOINTS = {
     "backend/internal/service/official_egress_upstream_identity_bridge.go",
 }
 
-# 上游 v0.1.171 新增的身份发现/归一化基础设施不一定直接命中 strict surface 扫描，
+# 上游 v0.1.177 继承的身份发现/归一化基础设施不一定直接命中 strict surface 扫描，
 # 但它们决定“发现值是否能越权成为 active wire 身份”，必须进入机器合并台账。
 IDENTITY_BOUNDARY_TOUCHPOINTS = {
     "backend/internal/handler/admin/setting_handler.go",
@@ -242,13 +242,13 @@ def validate_upstream_merge_ledger(expected: dict[str, object]) -> None:
         actual = json.loads(UPSTREAM_MERGE_LEDGER.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise RuntimeError(
-            "无法读取 v0.1.171 机器合并台账；请先运行 "
+            "无法读取 v0.1.177 机器合并台账；请先运行 "
             "python3 tools/check_ledger_completeness.py --write-upstream-merge-ledger："
             f"{exc}"
         ) from exc
     if actual != expected:
         raise RuntimeError(
-            "v0.1.171 机器合并台账与当前源码 overlay 不一致；请重生成后审阅 JSON 差异"
+            "v0.1.177 机器合并台账与当前源码 overlay 不一致；请重生成后审阅 JSON 差异"
         )
 
 
@@ -323,7 +323,7 @@ def main() -> int:
     writes.add_argument(
         "--write-upstream-merge-ledger",
         action="store_true",
-        help="按当前源码写入相对 v0.1.171 的结构化 Codex 出站 overlay 台账",
+        help="按当前源码写入相对 v0.1.177 的结构化 Codex 出站 overlay 台账",
     )
     args = parser.parse_args()
 
@@ -345,7 +345,7 @@ def main() -> int:
             encoding="utf-8",
         )
         print(
-            f"✅ 已写入 {len(upstream_entries)} 个 v0.1.171 出站 overlay："
+            f"✅ 已写入 {len(upstream_entries)} 个 v0.1.177 出站 overlay："
             f"{UPSTREAM_MERGE_LEDGER}"
         )
         return 0
@@ -456,7 +456,7 @@ def main() -> int:
     print(
         f"✅ §3.5 台账完整：变更集 5 冻结 52 面 + 变更集 6 增量 {len(additions)} 面"
         f" - 维护退休 {len(removal_paths)} 面 = {covered} 个出站定型文件全部登记"
-        f"；v0.1.171 机器 overlay {len(upstream_entries)} 个文件逐项一致"
+        f"；v0.1.177 机器 overlay {len(upstream_entries)} 个文件逐项一致"
         f"；人工只保留 {len(HUMAN_REVIEW_SEAMS)} 个高风险合并缝"
         + (f"，另有 {len(SCOPE_EXCLUSIONS)} 个工具自引用排除" if SCOPE_EXCLUSIONS else "")
     )
