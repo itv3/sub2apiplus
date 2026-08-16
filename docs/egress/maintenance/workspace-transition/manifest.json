@@ -8998,7 +8998,7 @@
         "file_type": "regular",
         "mode": "0644",
         "size": 108116,
-        "sha256": "d702042ef1f012028475939bb03d1c0fccee652ab439d89f00033a7d0222356b"
+        "sha256": "e2e5a0b99865d3552dd532051234c667939d8d69663387e98c3bc73012a35636"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
@@ -15069,8 +15069,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 745,
-        "sha256": "f6255e1ae785cfd9579107b994bfb4f4a9d3e02dfc3d9855af7d2ad098570707"
+        "size": 694,
+        "sha256": "0bbb574f60279a6d6119312a9cdfe86d74c425fd6a30a1acdfae5f30ef580eb1"
       },
       "deletion_allowed": false,
       "reason": "官方出站单文档合并与已失效执行兼容层退休",
