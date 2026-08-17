@@ -17,7 +17,7 @@ from typing import Any
 
 ROOT = Path(__file__).resolve().parents[3]
 LEDGER_DIR = Path(__file__).resolve().parent
-SPEC_PATH = ROOT / "docs/Claude_code_21220_EGRESS_SPEC.md"
+SPEC_PATH = ROOT / "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md"
 RULES_PATH = LEDGER_DIR / "rules_2_1_220.json"
 HITCC_PATH = LEDGER_DIR / "hitcc_2_1_197_coverage.json"
 SOURCE_PATH = LEDGER_DIR / "source_2_1_88_coverage.json"
@@ -3366,13 +3366,13 @@ def validate_document(
             )
 
     audit_match = re.search(
-        r"## 2\.13 36 个历史编号迁移审计(.*?)"
-        r"## 2\.14 HitCC 2\.1\.197 线索覆盖结论",
+        r"<!-- CLAUDE_HISTORICAL_AUDIT_START -->(.*?)"
+        r"<!-- CLAUDE_HISTORICAL_AUDIT_END -->",
         document,
         flags=re.DOTALL,
     )
     if not audit_match:
-        errors.append("规格文档缺少 2.13 历史编号迁移审计区")
+        errors.append("规格文档缺少历史编号迁移审计机器标记")
         return
     audit_ids = set(re.findall(r"`(SPEC-[A-Z]+-\d{3})`", audit_match.group(1)))
     if audit_ids != HISTORICAL_IDS:
@@ -3412,12 +3412,13 @@ def validate_document(
         if f"### {active_rule} " not in document:
             errors.append(f"规格文档缺少新增规则正文：{active_rule}")
     detail_match = re.search(
-        r"## 2\.4 TLS(.*?)## 2\.12 候选台账",
+        r"<!-- CLAUDE_RULE_CARDS_START -->(.*?)"
+        r"<!-- CLAUDE_RULE_CARDS_END -->",
         document,
         flags=re.DOTALL,
     )
     if not detail_match:
-        errors.append("规格文档缺少规则详表区（2.4–2.11）")
+        errors.append("规格文档缺少规则卡机器标记")
     else:
         detailed_statuses: dict[str, str] = {}
         detail_sections = re.finditer(
@@ -3528,7 +3529,7 @@ def validate_document(
     for required in (
         "共 57 个编号",
         "Sub2API 当前需要对齐 **53 项**",
-        "12 项已经达到第一章准入",
+        "12 项已经达到 §2.1 准入",
         "41 项只有有限运行观察",
         "已编号待补证为 0",
         "每个 `target_1_1=true` 的编号预留成对验收编号 `PAIR-<SPEC-ID>`",

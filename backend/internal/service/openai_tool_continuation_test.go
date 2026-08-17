@@ -290,3 +290,20 @@ func TestAnalyzeToolCallOutputContextCoverageBytes(t *testing.T) {
 		})
 	}
 }
+
+func TestAnalyzeToolCallOutputContextCoverageBytesDistinguishesConcreteContext(t *testing.T) {
+	concrete := []byte(`{"input":[{"type":"function_call","call_id":"call_a"},{"type":"function_call_output","call_id":"call_a"}]}`)
+	concreteCoverage := AnalyzeToolCallOutputContextCoverageBytes(concrete)
+	require.True(t, concreteCoverage.ContextCoversAllCallIDs)
+	require.True(t, concreteCoverage.ConcreteContextCoversAllCallIDs)
+
+	referenceOnly := []byte(`{"input":[{"type":"item_reference","id":"call_a"},{"type":"function_call_output","call_id":"call_a"}]}`)
+	referenceCoverage := AnalyzeToolCallOutputContextCoverageBytes(referenceOnly)
+	require.True(t, referenceCoverage.ContextCoversAllCallIDs)
+	require.False(t, referenceCoverage.ConcreteContextCoversAllCallIDs)
+
+	partial := []byte(`{"input":[{"type":"function_call","call_id":"call_a"},{"type":"function_call_output","call_id":"call_a"},{"type":"function_call_output","call_id":"call_b"}]}`)
+	partialCoverage := AnalyzeToolCallOutputContextCoverageBytes(partial)
+	require.False(t, partialCoverage.ContextCoversAllCallIDs)
+	require.False(t, partialCoverage.ConcreteContextCoversAllCallIDs)
+}

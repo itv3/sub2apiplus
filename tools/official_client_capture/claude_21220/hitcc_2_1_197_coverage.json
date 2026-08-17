@@ -17,7 +17,7 @@
     "source_version": "2.1.197",
     "target_version": "2.1.220",
     "source_root": "local-analysis/sources/hitcc-2.1.197",
-    "target_spec": "docs/Claude_code_21220_EGRESS_SPEC.md",
+    "target_spec": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
     "unit": "同一触发条件、同一发送载体和同一可观测结果组成一条原子命题或合理线索族。",
     "boundary": "HitCC 只作为旧版本线索地图，不作为 2.1.220 权威证据；所有肯定命题仍需用 2.1.220 官方 bundle 与 P/R/J/M 运行证据闭环。",
     "source_limitations": [

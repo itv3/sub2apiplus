@@ -138,10 +138,20 @@ func (m *ConfigManager) Reload(ctx context.Context) error {
 	m.configUntrusted.Store(false)
 	m.clearLoadError()
 	m.logInvalidTokenEndpoints(previous, active)
-	LogInfo(EventConfigLoaded, map[string]any{
-		"config_version": storage.ConfigVersion, "status": "loaded",
-	})
+	// 5 秒兜底刷新仍会更新运行态快照，但只有首次加载、配置版本变化或全局
+	// 风控开关变化时才记录事件，避免稳定配置持续刷屏。
+	if shouldLogConfigLoaded(previous, storage, active) {
+		LogInfo(EventConfigLoaded, map[string]any{
+			"config_version": storage.ConfigVersion, "status": "loaded",
+		})
+	}
 	return nil
+}
+
+func shouldLogConfigLoaded(previous *activeConfigSnapshot, storage storageConfig, active ActiveConfig) bool {
+	return previous == nil ||
+		previous.storage.ConfigVersion != storage.ConfigVersion ||
+		previous.active.RiskControlEnabled != active.RiskControlEnabled
 }
 
 // logInvalidTokenEndpoints warns once per change (not on every 5s refresh)

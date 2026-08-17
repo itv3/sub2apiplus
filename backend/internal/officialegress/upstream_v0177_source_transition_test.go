@@ -11,7 +11,10 @@ import (
 	"testing"
 )
 
-const upstreamV0177SourceTransitionSHA256 = "ecb95c725ac58b3fa270eeb413e5887f83a13692c153fe0da50e820d34046ec2"
+const (
+	upstreamV0177SourceTransitionSHA256      = "ecb95c725ac58b3fa270eeb413e5887f83a13692c153fe0da50e820d34046ec2"
+	runtimeReliabilityRepairTransitionSHA256 = "8f8a2d5d0d763bf72834eac0441d4baeb76442fec9fb415b7f338da90bcc13f2"
+)
 
 type upstreamV0177SourceTransitionReceipt struct {
 	SchemaVersion    string `json:"schema_version"`
@@ -75,7 +78,8 @@ func TestUpstreamV0177SourceTransitionIsFrozen(t *testing.T) {
 		if readErr != nil {
 			t.Fatal(readErr)
 		}
-		if got := sha256Hex(source); got != transition.ToSHA256 {
+		if got := sha256Hex(source); got != transition.ToSHA256 &&
+			!runtimeReliabilityRepairTransitionSupersedes(transition.Path, transition.ToSHA256, got) {
 			t.Fatalf("v0.1.177 上游源码摘要漂移：path=%s got=%s want=%s", transition.Path, got, transition.ToSHA256)
 		}
 	}
@@ -96,17 +100,102 @@ func TestChangeset3ReferenceCompatibilityHelpersRemainReachable(t *testing.T) {
 }
 
 func upstreamV0177SourceTransitionSupersedes(path, priorDigest, currentDigest string) bool {
+	if runtimeReliabilityRepairTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	receipt, raw, err := loadUpstreamV0177SourceTransition()
 	if err != nil || sha256Hex(raw) != upstreamV0177SourceTransitionSHA256 {
 		return false
 	}
 	for _, transition := range receipt.SourceTransitions {
+		if transition.Path == path && transition.FromSHA256 == priorDigest {
+			if transition.ToSHA256 == currentDigest ||
+				runtimeReliabilityRepairTransitionSupersedes(path, transition.ToSHA256, currentDigest) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// runtimeReliabilityRepairTransitionSupersedes 只接受本次可靠性修复收据中精确的
+// path/from/to 承接关系，使既有冻结证据保持不可变。
+func runtimeReliabilityRepairTransitionSupersedes(path, priorDigest, currentDigest string) bool {
+	receipt, raw, err := loadRuntimeReliabilityRepairTransition()
+	if err != nil || sha256Hex(raw) != runtimeReliabilityRepairTransitionSHA256 {
+		return false
+	}
+	for _, transition := range receipt.Transitions {
 		if transition.Path == path && transition.FromSHA256 == priorDigest &&
 			transition.ToSHA256 == currentDigest {
 			return true
 		}
 	}
 	return false
+}
+
+type runtimeReliabilityRepairTransitionReceipt struct {
+	SchemaVersion         string                            `json:"schema_version"`
+	Date                  string                            `json:"date"`
+	ReleaseTag            string                            `json:"release_tag"`
+	BaseCommit            string                            `json:"base_commit"`
+	PriorTransition       string                            `json:"prior_transition"`
+	PriorTransitionSHA256 string                            `json:"prior_transition_sha256"`
+	Transitions           []changeset4SourceTransitionEntry `json:"transitions"`
+	Result                string                            `json:"result"`
+}
+
+func TestRuntimeReliabilityRepairSourceTransitionIsFrozen(t *testing.T) {
+	receipt, raw, err := loadRuntimeReliabilityRepairTransition()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sha256Hex(raw); got != runtimeReliabilityRepairTransitionSHA256 {
+		t.Fatalf("运行时可靠性修复 source transition 摘要漂移：got=%s want=%s", got, runtimeReliabilityRepairTransitionSHA256)
+	}
+	if receipt.SchemaVersion != "official-egress-runtime-reliability-repair-source-transition/v1" ||
+		receipt.Date != "2026-08-17" || receipt.ReleaseTag != "v0.1.177-2" ||
+		strings.TrimSpace(receipt.BaseCommit) == "" ||
+		receipt.PriorTransition != "docs/egress/maintenance/upstream-v0.1.177-source-transition.json" ||
+		receipt.PriorTransitionSHA256 != upstreamV0177SourceTransitionSHA256 ||
+		receipt.Result != "passed" || len(receipt.Transitions) != 5 {
+		t.Fatalf("运行时可靠性修复 source transition 顶层事实非法：%+v", receipt)
+	}
+	paths := make([]string, 0, len(receipt.Transitions))
+	for _, transition := range receipt.Transitions {
+		if strings.TrimSpace(transition.Path) == "" || strings.TrimSpace(transition.FromSHA256) == "" ||
+			strings.TrimSpace(transition.ToSHA256) == "" || strings.TrimSpace(transition.Reason) == "" {
+			t.Fatalf("运行时可靠性修复 source transition 条目不完整：%+v", transition)
+		}
+		paths = append(paths, transition.Path)
+		source, readErr := os.ReadFile(filepath.Join("../../..", filepath.FromSlash(transition.Path)))
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if got := sha256Hex(source); got != transition.ToSHA256 {
+			t.Fatalf("运行时可靠性修复源码摘要漂移：path=%s got=%s want=%s", transition.Path, got, transition.ToSHA256)
+		}
+	}
+	if !slices.IsSorted(paths) || len(paths) != len(slices.Compact(append([]string(nil), paths...))) {
+		t.Fatalf("运行时可靠性修复 source transition 路径未严格排序或存在重复：%v", paths)
+	}
+}
+
+func loadRuntimeReliabilityRepairTransition() (runtimeReliabilityRepairTransitionReceipt, []byte, error) {
+	var receipt runtimeReliabilityRepairTransitionReceipt
+	raw, err := os.ReadFile("../../../docs/egress/maintenance/runtime-reliability-repair-source-transition.json")
+	if err != nil {
+		return receipt, nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&receipt); err != nil {
+		return receipt, nil, err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		return receipt, nil, err
+	}
+	return receipt, raw, nil
 }
 
 func loadUpstreamV0177SourceTransition() (upstreamV0177SourceTransitionReceipt, []byte, error) {

@@ -790,11 +790,17 @@ func prepareOfficialCodexExecutorWebSocketFrame(
 		{&facts.WindowID, "x-codex-window-id", officialegress.IdentitySourceInvocation, officialegress.IdentityLifecycleSession},
 		{&facts.TurnID, "turn_id", officialegress.IdentitySourceTurn, officialegress.IdentityLifecycleTurn},
 		{&facts.TurnMetadata, "x-codex-turn-metadata", officialegress.IdentitySourceTurn, officialegress.IdentityLifecycleTurn},
-		{&facts.TurnState, "x-codex-turn-state", officialegress.IdentitySourceTurn, officialegress.IdentityLifecycleTurn},
 		{&facts.ParentThreadID, "x-codex-parent-thread-id", officialegress.IdentitySourceInvocation, officialegress.IdentityLifecycleSession},
 		{&facts.Subagent, "x-openai-subagent", officialegress.IdentitySourceTurn, officialegress.IdentityLifecycleTurn},
 	} {
 		if err := setFact(field.target, field.name, field.source, field.lifecycle); err != nil {
+			return officialegress.RequestBody{}, "", officialegress.CodexIdentityFacts{}, officialegress.BodyRuntimeConditions{}, err
+		}
+	}
+	turnState := strings.TrimSpace(ownedFields.Metadata["x-codex-turn-state"])
+	if turnState != "" {
+		facts.TurnState, err = officialegress.NewCodexTurnStateValue(turnState)
+		if err != nil {
 			return officialegress.RequestBody{}, "", officialegress.CodexIdentityFacts{}, officialegress.BodyRuntimeConditions{}, err
 		}
 	}

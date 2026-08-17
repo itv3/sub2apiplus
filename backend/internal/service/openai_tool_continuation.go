@@ -224,6 +224,10 @@ type ToolCallOutputContextCoverage struct {
 	// 任一输出无法由 input 自身重建时为 false，此时剥离 previous_response_id 会导致
 	// 上游以 "No tool call found for function call output" 拒绝请求。
 	ContextCoversAllCallIDs bool
+	// ConcreteContextCoversAllCallIDs 要求每个工具输出都能在 input 内找到同
+	// call_id 的实际工具调用项。item_reference 只能依赖既有响应链解析，不能用于
+	// store=false 断线后在新连接上重建完整上下文。
+	ConcreteContextCoversAllCallIDs bool
 }
 
 // AnalyzeToolCallOutputContextCoverageBytes 全量扫描 input，按 call_id 精确匹配工具输出
@@ -242,6 +246,7 @@ func AnalyzeToolCallOutputContextCoverageBytes(body []byte) ToolCallOutputContex
 	missingCallID := false
 	var outputCallIDs map[string]struct{}
 	var contextIDs map[string]struct{}
+	var concreteContextIDs map[string]struct{}
 	input.ForEach(func(_, item gjson.Result) bool {
 		if !item.IsObject() {
 			return true
@@ -268,6 +273,10 @@ func AnalyzeToolCallOutputContextCoverageBytes(body []byte) ToolCallOutputContex
 				contextIDs = make(map[string]struct{})
 			}
 			contextIDs[callID] = struct{}{}
+			if concreteContextIDs == nil {
+				concreteContextIDs = make(map[string]struct{})
+			}
+			concreteContextIDs[callID] = struct{}{}
 		case itemType == "item_reference":
 			idValue := strings.TrimSpace(item.Get("id").String())
 			if idValue == "" {
@@ -284,12 +293,17 @@ func AnalyzeToolCallOutputContextCoverageBytes(body []byte) ToolCallOutputContex
 	if !coverage.HasFunctionCallOutput || missingCallID {
 		return coverage
 	}
+	concreteCoverage := true
 	for callID := range outputCallIDs {
 		if _, ok := contextIDs[callID]; !ok {
 			return coverage
 		}
+		if _, ok := concreteContextIDs[callID]; !ok {
+			concreteCoverage = false
+		}
 	}
 	coverage.ContextCoversAllCallIDs = true
+	coverage.ConcreteContextCoversAllCallIDs = concreteCoverage
 	return coverage
 }
 

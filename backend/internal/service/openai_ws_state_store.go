@@ -110,7 +110,9 @@ func (s *defaultOpenAIWSStateStore) BindResponseAccount(ctx context.Context, gro
 		return nil
 	}
 	cacheKey := openAIWSResponseAccountCacheKey(id)
-	cacheCtx, cancel := withOpenAIWSStateStoreRedisTimeout(ctx)
+	// 响应已成功产生后，账号亲和绑定属于必须完成的短时持久化收尾，不能因
+	// 下游请求刚好取消而立即失败；独立 3 秒超时仍限制 Redis 阻塞时间。
+	cacheCtx, cancel := withOpenAIWSStateStoreDetachedRedisTimeout(ctx)
 	defer cancel()
 	return s.cache.SetSessionAccountID(cacheCtx, groupID, cacheKey, accountID, ttl)
 }
@@ -442,6 +444,15 @@ func openAIWSSessionTurnStateKey(groupID int64, sessionHash string) string {
 func withOpenAIWSStateStoreRedisTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	return context.WithTimeout(ctx, openAIWSStateStoreRedisTimeout)
+}
+
+func withOpenAIWSStateStoreDetachedRedisTimeout(ctx context.Context) (context.Context, context.CancelFunc) {
+	if ctx == nil {
+		ctx = context.Background()
+	} else {
+		ctx = context.WithoutCancel(ctx)
 	}
 	return context.WithTimeout(ctx, openAIWSStateStoreRedisTimeout)
 }

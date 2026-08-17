@@ -1,0 +1,41 @@
+{
+  "schema_version": "official-egress-runtime-reliability-repair-source-transition/v1",
+  "date": "2026-08-17",
+  "release_tag": "v0.1.177-2",
+  "base_commit": "ed31bcbf2a12966410b1d372b7d2ae89aa59525e",
+  "prior_transition": "docs/egress/maintenance/upstream-v0.1.177-source-transition.json",
+  "prior_transition_sha256": "ecb95c725ac58b3fa270eeb413e5887f83a13692c153fe0da50e820d34046ec2",
+  "transitions": [
+    {
+      "path": "backend/internal/service/official_egress_identity_authority.go",
+      "from_sha256": "6fa05184e2ece9d087c4c094f4bea4839307242f424b522080334f9aaf307843",
+      "to_sha256": "7be776232f74e5f62f861ab92a2892d73ab3f8a5b58184204a184a586a8a0aef",
+      "reason": "turn-state 是由上游签发并在调用内登记的 opaque 路由状态，不是认证材料；仅该字段改用专用构造器，避免随机内容命中 sk-、refresh_token 等普通身份字段凭据特征扫描，其他身份字段的失败关闭规则保持不变。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_ws.go",
+      "from_sha256": "3ee8d5bea8ec90b23de0f15f704e12996b2ac9b746ef5ecb36cc64e663468490",
+      "to_sha256": "96045283a4861f38168c9673499ecc1bde50750c480f667e490380742ccecbb1",
+      "reason": "WebSocket 工具续链在可信 previous_response_id 缺失时，仅允许由 input 中实际 function_call 完整覆盖全部 function_call_output 的完整上下文开启新链；item_reference 或部分覆盖继续失败关闭，避免 store=false 断线后误依赖不可解析的旧链。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_ws_test.go",
+      "from_sha256": "dc1be426fb124b2e7c714088bf3e18b88acc4086343ac49a8324e19c4451439b",
+      "to_sha256": "069c00267e3976bc3f2b068ad08ddc07f4f60fe87627f2dd3073d6478f327b86",
+      "reason": "补充 WebSocket 断线续链回归测试：完整实际工具调用上下文可在无可信锚点时开启新链，部分上下文继续失败关闭；既有最小增量续链断言保持不变。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_transport_adapters.go",
+      "from_sha256": "1da65dc52f8811613f6dde337b06a15b70ac6410eab2a7d9ccfc8c08bd1a0c44",
+      "to_sha256": "ed6f9f74c59c741f54b810f29d26126e12596724249ec87c5a1b7471b6674143",
+      "reason": "Executor WebSocket 身份构造与 HTTP 路径保持一致：仅 x-codex-turn-state 使用 opaque turn-state 专用构造器，来源、生命周期、条件投影及其他身份字段校验不变。"
+    },
+    {
+      "path": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+      "from_sha256": "e07a9565900677aa4bd4e5899a80ee554f96c20127cacd3361a6d215c856b61f",
+      "to_sha256": "43af2571424da85583debe82fac969fd252f6f9f635ced42e7fd9cda2aa987ba",
+      "reason": "登记 v0.1.177-2 文档入口迁移说明：跨客户端共享治理逐步收敛到官方客户端仿真框架，Codex 客户端事实与既有机器证据继续由本指南承接。"
+    }
+  ],
+  "result": "passed"
+}

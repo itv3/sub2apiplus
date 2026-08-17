@@ -160,6 +160,7 @@ type openAIWSStateStoreTimeoutProbeCache struct {
 	setHasDeadline    bool
 	getHasDeadline    bool
 	deleteHasDeadline bool
+	setContextErr     error
 	setDeadlineDelta  time.Duration
 	getDeadlineDelta  time.Duration
 	delDeadlineDelta  time.Duration
@@ -174,6 +175,7 @@ func (c *openAIWSStateStoreTimeoutProbeCache) GetSessionAccountID(ctx context.Co
 }
 
 func (c *openAIWSStateStoreTimeoutProbeCache) SetSessionAccountID(ctx context.Context, _ int64, _ string, _ int64, _ time.Duration) error {
+	c.setContextErr = ctx.Err()
 	if deadline, ok := ctx.Deadline(); ok {
 		c.setHasDeadline = true
 		c.setDeadlineDelta = time.Until(deadline)
@@ -246,4 +248,18 @@ func TestWithOpenAIWSStateStoreRedisTimeout_WithParentContext(t *testing.T) {
 	require.NotNil(t, ctx)
 	_, ok := ctx.Deadline()
 	require.True(t, ok, "应附加短超时")
+}
+
+func TestOpenAIWSStateStoreBindDetachesCanceledRequestContext(t *testing.T) {
+	probe := &openAIWSStateStoreTimeoutProbeCache{}
+	store := NewOpenAIWSStateStore(probe)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := store.BindResponseAccount(ctx, 7, "resp_canceled_request", 19, time.Minute)
+	require.ErrorContains(t, err, "set failed")
+	require.NoError(t, probe.setContextErr, "绑定写入不应继承已取消的请求信号")
+	require.True(t, probe.setHasDeadline, "脱离取消后仍必须携带独立短超时")
+	require.Greater(t, probe.setDeadlineDelta, 2*time.Second)
+	require.LessOrEqual(t, probe.setDeadlineDelta, 3*time.Second)
 }

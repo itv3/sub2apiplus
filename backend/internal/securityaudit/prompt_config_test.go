@@ -1,9 +1,11 @@
 package securityaudit
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 
@@ -143,6 +145,35 @@ func TestConfigManagerPublicRequiresSuccessfullyLoadedSnapshot(t *testing.T) {
 		require.Equal(t, int64(4), public.ConfigVersion)
 		require.Equal(t, "trusted snapshot", public.ChangeSummary)
 	})
+}
+
+func TestConfigManagerReloadLogsOnlyEffectiveConfigChanges(t *testing.T) {
+	var output bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
+	t.Cleanup(func() { slog.SetDefault(previousLogger) })
+
+	repository := staticSettingRepository{values: map[string]string{
+		SettingKeyPromptAuditConfig: "",
+		SettingKeyRiskControl:       "false",
+	}}
+	manager := NewConfigManager(nil, repository, nil, prefixEncryptor{}, testTotpKeyConfig())
+
+	require.NoError(t, manager.Reload(context.Background()))
+	require.NoError(t, manager.Reload(context.Background()))
+	require.Equal(t, 1, strings.Count(output.String(), EventConfigLoaded), "相同配置的定时刷新不应重复记录")
+
+	repository.values[SettingKeyRiskControl] = "true"
+	require.NoError(t, manager.Reload(context.Background()))
+	require.Equal(t, 2, strings.Count(output.String(), EventConfigLoaded), "全局风控开关变化应记录加载事件")
+
+	storage := DefaultStorageConfig()
+	storage.ConfigVersion = 2
+	raw, err := json.Marshal(storage)
+	require.NoError(t, err)
+	repository.values[SettingKeyPromptAuditConfig] = string(raw)
+	require.NoError(t, manager.Reload(context.Background()))
+	require.Equal(t, 3, strings.Count(output.String(), EventConfigLoaded), "配置版本变化应记录加载事件")
 }
 
 // Regression coverage for issue #4887: a persisted config whose endpoint token

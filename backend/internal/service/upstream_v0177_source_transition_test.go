@@ -7,11 +7,17 @@ import (
 	"os"
 )
 
-const upstreamV0177SourceTransitionSHA256 = "ecb95c725ac58b3fa270eeb413e5887f83a13692c153fe0da50e820d34046ec2"
+const (
+	upstreamV0177SourceTransitionSHA256      = "ecb95c725ac58b3fa270eeb413e5887f83a13692c153fe0da50e820d34046ec2"
+	runtimeReliabilityRepairTransitionSHA256 = "8f8a2d5d0d763bf72834eac0441d4baeb76442fec9fb415b7f338da90bcc13f2"
+)
 
 // upstreamV0177SourceTransitionSupersedes 验证历史摘要是否由本次上游合并的
 // 固定 transition 精确承接。旧退休收据保持不可变，路径和摘要均不得模糊匹配。
 func upstreamV0177SourceTransitionSupersedes(path, priorDigest, currentDigest string) bool {
+	if runtimeReliabilityRepairTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	raw, err := os.ReadFile("../../../docs/egress/maintenance/upstream-v0.1.177-source-transition.json")
 	if err != nil {
 		return false
@@ -33,6 +39,40 @@ func upstreamV0177SourceTransitionSupersedes(path, priorDigest, currentDigest st
 		return false
 	}
 	for _, transition := range receipt.SourceTransitions {
+		if transition.Path == path && transition.FromSHA256 == priorDigest {
+			if transition.ToSHA256 == currentDigest ||
+				runtimeReliabilityRepairTransitionSupersedes(path, transition.ToSHA256, currentDigest) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// runtimeReliabilityRepairTransitionSupersedes 验证本次可靠性修复收据中的精确
+// path/from/to 承接关系，旧收据原文保持不变。
+func runtimeReliabilityRepairTransitionSupersedes(path, priorDigest, currentDigest string) bool {
+	raw, err := os.ReadFile("../../../docs/egress/maintenance/runtime-reliability-repair-source-transition.json")
+	if err != nil {
+		return false
+	}
+	sum := sha256.Sum256(raw)
+	if hex.EncodeToString(sum[:]) != runtimeReliabilityRepairTransitionSHA256 {
+		return false
+	}
+	var receipt struct {
+		SchemaVersion string `json:"schema_version"`
+		Transitions   []struct {
+			Path       string `json:"path"`
+			FromSHA256 string `json:"from_sha256"`
+			ToSHA256   string `json:"to_sha256"`
+		} `json:"transitions"`
+	}
+	if err := json.Unmarshal(raw, &receipt); err != nil ||
+		receipt.SchemaVersion != "official-egress-runtime-reliability-repair-source-transition/v1" {
+		return false
+	}
+	for _, transition := range receipt.Transitions {
 		if transition.Path == path && transition.FromSHA256 == priorDigest &&
 			transition.ToSHA256 == currentDigest {
 			return true

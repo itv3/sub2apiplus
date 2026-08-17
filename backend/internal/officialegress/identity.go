@@ -75,7 +75,40 @@ func NewCodexIdentityValue(
 	return fact, nil
 }
 
+// NewCodexTurnStateValue 构造上游签发的 opaque turn-state。turn-state 不是认证
+// 材料，但其不透明内容可能偶然包含 sk- 等凭据特征，因此只能在专用字段中跳过
+// 内容特征扫描；来源、生命周期和空值规则仍按身份事实校验。
+func NewCodexTurnStateValue(value string) (CodexIdentityValue, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return CodexIdentityValue{}, nil
+	}
+	fact := CodexIdentityValue{
+		Value: value, Source: IdentitySourceTurn, Lifecycle: IdentityLifecycleTurn,
+	}
+	if err := fact.validateTurnState(); err != nil {
+		return CodexIdentityValue{}, err
+	}
+	return fact, nil
+}
+
 func (v CodexIdentityValue) validate() error {
+	if err := v.validateShape(); err != nil {
+		return err
+	}
+	if !v.present() {
+		return nil
+	}
+	lower := strings.ToLower(strings.TrimSpace(v.Value))
+	for _, forbidden := range []string{"bearer ", "sk-", "refresh_token", "api_key="} {
+		if strings.Contains(lower, forbidden) {
+			return errors.New("身份事实疑似包含认证材料")
+		}
+	}
+	return nil
+}
+
+func (v CodexIdentityValue) validateShape() error {
 	if strings.TrimSpace(v.Value) == "" {
 		if v.Source == "" && v.Lifecycle == "" {
 			return nil
@@ -85,11 +118,18 @@ func (v CodexIdentityValue) validate() error {
 	if !v.Source.Valid() || !v.Lifecycle.Valid() {
 		return errors.New("身份事实来源或生命周期非法")
 	}
-	lower := strings.ToLower(strings.TrimSpace(v.Value))
-	for _, forbidden := range []string{"bearer ", "sk-", "refresh_token", "api_key="} {
-		if strings.Contains(lower, forbidden) {
-			return errors.New("身份事实疑似包含认证材料")
-		}
+	return nil
+}
+
+func (v CodexIdentityValue) validateTurnState() error {
+	if err := v.validateShape(); err != nil {
+		return err
+	}
+	if !v.present() {
+		return nil
+	}
+	if v.Source != IdentitySourceTurn || v.Lifecycle != IdentityLifecycleTurn {
+		return errors.New("turn-state 身份事实来源或生命周期非法")
 	}
 	return nil
 }
@@ -144,13 +184,16 @@ func (f CodexIdentityFacts) Validate() error {
 		f.AccountIdentityProjection, f.ChatGPTAccountID, f.WorkspaceID,
 		f.ProcessSurface, f.ProcessPhase, f.TerminalToken, f.InstallationID, f.SessionID,
 		f.ConversationID, f.ThreadID, f.WindowID, f.ClientRequestID,
-		f.TurnID, f.TurnMetadata, f.TurnState, f.ParentThreadID, f.Subagent,
+		f.TurnID, f.TurnMetadata, f.ParentThreadID, f.Subagent,
 		f.ManagedResidency,
 	}
 	for _, value := range values {
 		if err := value.validate(); err != nil {
 			return err
 		}
+	}
+	if err := f.TurnState.validateTurnState(); err != nil {
+		return err
 	}
 	managedDigest := strings.TrimSpace(f.ManagedConfigurationDigest)
 	if managedDigest != "" {

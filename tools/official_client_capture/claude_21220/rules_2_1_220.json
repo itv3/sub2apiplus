@@ -2,7 +2,7 @@
   "schema_version": "claude-egress-rule-ledger/v2",
   "target_version": "2.1.220",
   "ledger_revision": 6,
-  "source_document": "docs/Claude_code_21220_EGRESS_SPEC.md",
+  "source_document": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
   "purpose": "同时维护 Claude Code 2.1.220 规则的取证状态、Sub2API 1.1 对齐责任与实现验收门槛；三个维度相互独立，observed 不等于 verified 或 implemented。",
   "denominator_field_semantics": "verification_denominators 只用于待证字段未参与上游捕获或路由选择的有限证据分母，不代表规则 disposition 已达到 verified。EP-001 与 EP-004 因 path/host 预筛选而不声明该字段。",
   "allowed_dispositions": [

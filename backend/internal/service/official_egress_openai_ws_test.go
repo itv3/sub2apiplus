@@ -524,6 +524,43 @@ func TestOpenAIOfficialEgressWSDerivesKiloIdentityAndCanonicalFrame(t *testing.T
 			"input.0."+officialOpenAIWSItemTurnMetadata+".turn_id",
 		).String(),
 	)
+
+	newChain, changed, err :=
+		buildDerivedOpenAIOfficialEgressWSToolContinuationFrame(
+			ctx,
+			fullHistoryFinal,
+			"",
+		)
+	require.NoError(t, err)
+	require.False(t, changed)
+	require.False(t, gjson.GetBytes(newChain, "previous_response_id").Exists())
+	require.Equal(t, 6, len(gjson.GetBytes(newChain, "input").Array()))
+	require.Equal(
+		t,
+		"function_call",
+		gjson.GetBytes(newChain, "input.4.type").String(),
+	)
+	require.Equal(
+		t,
+		"function_call_output",
+		gjson.GetBytes(newChain, "input.5.type").String(),
+	)
+
+	partialContext := []byte(`{
+		"type":"response.create",
+		"model":"gpt-5.6-luna",
+		"input":[
+			{"type":"function_call","call_id":"call_covered","name":"read","arguments":"{}"},
+			{"type":"function_call_output","call_id":"call_covered","output":"ok"},
+			{"type":"function_call_output","call_id":"call_missing","output":"missing"}
+		]
+	}`)
+	_, _, err = buildDerivedOpenAIOfficialEgressWSToolContinuationFrame(
+		ctx,
+		partialContext,
+		"",
+	)
+	require.ErrorContains(t, err, "requires prior response ID or complete tool call context")
 }
 
 func TestOpenAIOfficialEgressWSDerivedNonLiteUsesOfficialContract(t *testing.T) {

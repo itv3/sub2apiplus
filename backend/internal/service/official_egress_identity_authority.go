@@ -352,6 +352,12 @@ func buildOfficialCodexIdentityFacts(
 	if err != nil {
 		return officialegress.CodexIdentityFacts{}, err
 	}
+	// turn-state 只能来自本次调用内已登记的上游状态。它是 opaque 路由令牌，
+	// 因此使用专用构造器，避免随机内容命中普通身份字段的凭据特征扫描。
+	facts.TurnState, err = officialegress.NewCodexTurnStateValue(turnState)
+	if err != nil {
+		return officialegress.CodexIdentityFacts{}, err
+	}
 	parentThreadID, err := resolveStructured(
 		"parent_thread_id", structuredIdentity.ParentThreadID,
 		conditionalField("x-codex-parent-thread-id"), metadata["x-codex-parent-thread-id"],
@@ -380,9 +386,6 @@ func buildOfficialCodexIdentityFacts(
 		{&facts.ClientRequestID, clientRequestID, officialegress.IdentitySourceInvocation, officialegress.IdentityLifecycleInvocation},
 		{&facts.TurnID, turnID, officialegress.IdentitySourceTurn, officialegress.IdentityLifecycleTurn},
 		{&facts.TurnMetadata, turnMetadata, officialegress.IdentitySourceTurn, officialegress.IdentityLifecycleTurn},
-		// turn-state 只能来自本次调用内已登记的上游重试状态。客户端即使提供
-		// 同名保护头也不能取得该身份槽位的所有权。
-		{&facts.TurnState, turnState, officialegress.IdentitySourceTurn, officialegress.IdentityLifecycleTurn},
 		{&facts.ParentThreadID, parentThreadID, officialegress.IdentitySourceInvocation, officialegress.IdentityLifecycleSession},
 		{&facts.Subagent, subagent, officialegress.IdentitySourceTurn, officialegress.IdentityLifecycleTurn},
 		{&facts.ManagedResidency, conditionalField("x-openai-internal-codex-residency"), officialegress.IdentitySourceManagedConfig, officialegress.IdentityLifecycleProcess},

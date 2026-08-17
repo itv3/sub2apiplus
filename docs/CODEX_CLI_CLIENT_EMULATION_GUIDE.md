@@ -6,6 +6,12 @@
 > **文档定位**：本文是 Codex CLI 客户端规则、Sub2API 仿真实现和版本演进的人类可读权威入口；
 > 逐规则机器证据见 [`docs/EVIDENCE_INDEX.md`](EVIDENCE_INDEX.md)。
 
+> **未来文档演进说明（本轮不调整正文）**：官方 OAuth 客户端共用的目标、运行架构、证据生命周期、
+> 发布与回滚规则将逐步收敛到
+> [`OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md`](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md)；本文最终只保留
+> Codex CLI 的官方事实、版本画像、Sub2API 实现和客户端特有流程。在完成该迁移前，本文现有正文与
+> 机器证据继续有效；共享规则冲突时以 Framework 为准，Codex 客户端事实冲突时以本文为准。
+
 ---
 
 # 第一部分 总体目标与仿真链路

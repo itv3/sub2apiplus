@@ -944,7 +944,9 @@ func chainDerivedOpenAIOfficialEgressWSBusinessFrame(
 // 携带完整历史的工具结果帧收敛为 Codex CLI 的最小续链形态。
 //
 // 上一轮工具调用已经存在于上游响应中，因此这里只发送新增的工具输出，并通过
-// previous_response_id 关联上一轮。call_id 原样保留，不能重新生成或改写。
+// previous_response_id 关联上一轮。断线后若可信锚点不可用，则仅在 input 内的实际
+// 工具调用完整覆盖所有输出时保留完整上下文并开启新链。call_id 原样保留，不能
+// 重新生成或改写。
 func buildDerivedOpenAIOfficialEgressWSToolContinuationFrame(
 	ctx context.Context,
 	candidate []byte,
@@ -956,8 +958,22 @@ func buildDerivedOpenAIOfficialEgressWSToolContinuationFrame(
 	}
 	previousResponseID = strings.TrimSpace(previousResponseID)
 	if previousResponseID == "" {
+		coverage := AnalyzeToolCallOutputContextCoverageBytes(candidate)
+		if coverage.ConcreteContextCoversAllCallIDs {
+			withoutPrevious, removed, err := dropPreviousResponseIDFromRawPayload(candidate)
+			if err != nil {
+				return nil, false, fmt.Errorf(
+					"remove untrusted previous response ID from complete OpenAI official egress WebSocket context: %w",
+					err,
+				)
+			}
+			if removed {
+				return withoutPrevious, true, nil
+			}
+			return candidate, false, nil
+		}
 		return nil, false, errors.New(
-			"OpenAI official egress WebSocket tool continuation requires prior response ID",
+			"OpenAI official egress WebSocket tool continuation requires prior response ID or complete tool call context",
 		)
 	}
 

@@ -1,12 +1,12 @@
 # 官方出站机器证据
 
-本目录保存 `docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md` 当前实现使用的机器基线、收据和可复算
-证据。它只在本地门禁、CI、版本升级、上游合并、回归和审计时使用，不是服务运行时配置，也
-不复制进生产镜像。
+本目录保存官方客户端出站仿真使用的机器基线、收据和可复算证据。它只在本地门禁、
+CI、版本升级、上游合并、回归和审计时使用，不是服务运行时配置，也不复制进生产镜像。
 
-`docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md` 是客户端仿真与版本演进唯一的人类可读规范；
+共享框架见 `docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md`；Codex 和 Claude 的长期方法分别见
+`docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md` 与 `docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md`。
 `maintenance/` 不再保存单次升级计划、缺陷报告、评审稿或操作笔记。证据目录内保留的其他
-Markdown 仅承担目录导航、当前 route 分类或机器证据来源说明，不得形成第二套规范。
+Markdown 只承担目录导航、route 分类或机器证据来源说明，不得形成第二套规则规范。
 
 | 目录 | 当前责任 |
 |---|---|
