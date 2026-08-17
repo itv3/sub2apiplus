@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api.local/schemas/official-client-inventory-v1.json",
+  "title": "官方客户端入口与出站闭集",
+  "description": "当前处置只记录现实状态；目标处置只存在于 ProfileApprovalFact，不能覆盖当前事实。",
+  "oneOf": [
+    {"$ref": "#/$defs/ingressInventory"},
+    {"$ref": "#/$defs/egressInventory"}
+  ],
+  "$defs": {
+    "objectRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["object_kind", "sha256"],
+      "properties": {
+        "object_kind": {"type": "string"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
+      }
+    },
+    "ingressInventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "persona", "observation_ref", "entries"],
+      "properties": {
+        "schema_version": {"const": "official-client-production-ingress-inventory/v1"},
+        "persona": {"type": "object"},
+        "observation_ref": {"$ref": "#/$defs/objectRef"},
+        "entries": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["logical_ingress_id", "physical_alias_ids", "caller_ids", "adapter_id", "route_id", "ingress_kind", "protocol_class", "current_disposition", "evidence_refs"],
+            "properties": {
+              "logical_ingress_id": {"type": "string"},
+              "physical_alias_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+              "caller_ids": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": "string"}},
+              "adapter_id": {"type": "string"},
+              "route_id": {"type": "string"},
+              "ingress_kind": {"enum": ["official", "third_party"]},
+              "protocol_class": {"type": "string"},
+              "current_disposition": {"enum": ["migrated_strict", "retained_legacy", "explicitly_retired", "rerouted"]},
+              "evidence_refs": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/objectRef"}}
+            }
+          }
+        }
+      }
+    },
+    "egressInventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "persona", "observation_ref", "entries"],
+      "properties": {
+        "schema_version": {"const": "official-client-egress-disposition-inventory/v1"},
+        "persona": {"type": "object"},
+        "observation_ref": {"$ref": "#/$defs/objectRef"},
+        "entries": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["egress_id", "current_disposition", "spec_ids", "managed_policy", "runtime_assertion_refs"],
+            "properties": {
+              "egress_id": {"type": "string"},
+              "current_disposition": {"enum": ["persona_strict", "non_persona_managed", "denied"]},
+              "spec_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+              "managed_policy": {"oneOf": [{"type": "null"}, {"type": "object"}]},
+              "runtime_assertion_refs": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/objectRef"}}
+            },
+            "additionalProperties": false
+          }
+        }
+      }
+    }
+  }
+}

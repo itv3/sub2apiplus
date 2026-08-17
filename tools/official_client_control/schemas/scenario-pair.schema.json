@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api.local/schemas/official-client-scenario-pair-v1.json",
+  "title": "四阶段场景与 PAIR 结果",
+  "description": "每个场景按 prepare、capture、seal、approve 追加；PAIR 只接受 lossless TranslationReport。",
+  "oneOf": [
+    {
+      "type": "object",
+      "required": ["candidate_id", "scenario_id", "attempt_id", "stage", "previous_stage_ref", "artifact_refs", "result"],
+      "properties": {
+        "candidate_id": {"type": "string"},
+        "scenario_id": {"type": "string"},
+        "attempt_id": {"type": "string"},
+        "stage": {"enum": ["prepare", "capture", "seal", "approve"]},
+        "previous_stage_ref": {"oneOf": [{"type": "null"}, {"type": "object"}]},
+        "artifact_refs": {"type": "array"},
+        "result": {"enum": ["prepared", "pass", "failed"]},
+        "reviewer": {"type": "string"},
+        "review_ref": {"type": "string"}
+      }
+    },
+    {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["pair_id", "spec_id", "candidate_id", "release_artifact_ref", "condition_sha256", "scenario_approval_refs", "official_result", "third_party_results", "dynamic_field_checks"],
+      "properties": {
+        "pair_id": {"type": "string", "pattern": "^PAIR-SPEC-[A-Z0-9][A-Z0-9._-]{0,95}$"},
+        "spec_id": {"type": "string", "pattern": "^SPEC-[A-Z0-9][A-Z0-9._-]{0,95}$"},
+        "candidate_id": {"type": "string"},
+        "release_artifact_ref": {"type": "object"},
+        "condition_sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+        "scenario_approval_refs": {"type": "array", "minItems": 1},
+        "official_result": {"type": "object"},
+        "third_party_results": {"type": "array"},
+        "dynamic_field_checks": {"type": "array", "minItems": 1}
+      }
+    }
+  ]
+}

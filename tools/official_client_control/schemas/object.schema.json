@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api.local/schemas/official-client-control-object-v1.json",
+  "title": "FW-D 内容寻址对象",
+  "description": "对象只保存不可变制品；active、rollback 和 candidate 等部署角色由独立事实承载。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "object_kind", "payload"],
+  "properties": {
+    "schema_version": {"const": "official-client-control-object/v1"},
+    "object_kind": {
+      "enum": [
+        "bootstrap",
+        "persona_descriptor",
+        "evidence_package",
+        "profile_schema",
+        "snapshot",
+        "release_bundle",
+        "release_artifact",
+        "ingress_observation",
+        "egress_observation",
+        "production_ingress_inventory",
+        "egress_disposition_inventory",
+        "support_envelope",
+        "active_support_envelope",
+        "rollback_operational_envelope",
+        "deployment_traffic_envelope",
+        "persona_derivation",
+        "compatibility_boundary",
+        "scenario_plan",
+        "deployment_plan",
+        "runtime_catalog_snapshot",
+        "operational_evidence",
+        "promotion_diff",
+        "acceptance_package"
+      ]
+    },
+    "payload": {"type": "object"}
+  }
+}

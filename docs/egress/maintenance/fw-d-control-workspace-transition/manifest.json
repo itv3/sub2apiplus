@@ -1,0 +1,745 @@
+{
+  "schema_version": "official-client-fw-d-workspace-transition/v1",
+  "prior_manifest_path": "docs/egress/maintenance/multi-persona-control-workspace-transition-v2/manifest.json",
+  "prior_manifest_sha256": "1d37b7ef22da8e0284a8175cc4d159ee781cab7ed0cd37422e21af45259698be",
+  "base_commit": "73db9b1f02798cf96027356c84f118404ca984d6",
+  "candidate_path_count": 28,
+  "transition_entry_count": 28,
+  "transition_path_set_sha256": "63732a06443580dc02c17b6a64dbfff3b0c9f2c96876695a6b89602935fa44c9",
+  "entries": [
+    {
+      "path": "Makefile",
+      "scope": "ci_gate",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 11673,
+        "sha256": "3c80f1449bcfef2438cf7f54c0aebe1d15c720ae43f303a5f84908dc0105e812"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 12218,
+        "sha256": "4cdaeb43602fb474700996ed5e827bea0b9fa46191efbd1d746bac1001bf6e42"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/fw_d_control_workspace_transition.py",
+      "scope": "transition_gate",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 19267,
+        "sha256": "e8a66ddbe3f1ec1536d5b99d174b0dfa412b7994fe6b90a044a0fdccdca7040f"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/multi_persona_control_workspace_transition.py",
+      "scope": "prior_transition_freeze",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 22143,
+        "sha256": "d63547a47894a9ced81178627e42e4d84426d0ec98f328cac770a42968312312"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 24129,
+        "sha256": "7b25fad68b6e3a8586b603815a5f59b641afe96c45958505244c955953787207"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/__init__.py",
+      "scope": "control_tool",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 181,
+        "sha256": "17a3bbef259523a58e52f14a62c7777cca5ba88144d365b344d6d738175568ed"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/__main__.py",
+      "scope": "control_tool",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 124,
+        "sha256": "cd9bf14a0f174de8b96de4a2c08a91c74db7a2136b50c32c8c4b4841bfc6074a"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/canonical.py",
+      "scope": "control_tool",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 8575,
+        "sha256": "a35b6de464afc932f60b0740822a8b60b8c51a694f647be1c7eedaa2c137f1fc"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/cli.py",
+      "scope": "control_tool",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 7852,
+        "sha256": "ea5ef610df61a9cf2e524ab71e9308bbae7cb0ec0a890f9d1e06193d0046c406"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/contracts.py",
+      "scope": "control_tool",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 78367,
+        "sha256": "3ce23dbc6e824563078a383a1cb543702bdf7d2c4492fb0f4e755be0f157ad38"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/errors.py",
+      "scope": "control_tool",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 144,
+        "sha256": "e4fb7b5e2eb82f6c4e79240f1c1e4ea4cdb5a2e91fed896fee87c4f16afe167c"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/gates.py",
+      "scope": "control_tool",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 41932,
+        "sha256": "059db2b74d3abccf1c42247f52844d5f1a2002373c9489ea797db840dc974a93"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/receipts.py",
+      "scope": "control_tool",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 10115,
+        "sha256": "4e27034bbb72542eedc132c5ca757c390d0505c23c7bf4843b6597d67426f3d9"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/schemas/bootstrap.schema.json",
+      "scope": "schema",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 1538,
+        "sha256": "86c658ee5e85a9bfc08b16009d7b02ace9593627bb826b4df56df571d0ff13b8"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/schemas/campaign.schema.json",
+      "scope": "schema",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 2354,
+        "sha256": "5dd6afa665e51e2c20cabbf987302cbbcded49d987624a31cd7347e3b731b151"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/schemas/envelope.schema.json",
+      "scope": "schema",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 1545,
+        "sha256": "4c05a786c260c96c61909dd5e5ef5a7e44bc454600466085d1053cceb730c4e6"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/schemas/fact.schema.json",
+      "scope": "schema",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 1724,
+        "sha256": "9b310094b5747e0d4d1343924d59eb5417ba1febe75d2d08c701b285a065e001"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/schemas/inventory.schema.json",
+      "scope": "schema",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 3415,
+        "sha256": "fb608aa79ba3811cf7dae415fc164ad08bf107978115297975bdef1249c42c77"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/schemas/object.schema.json",
+      "scope": "schema",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 1302,
+        "sha256": "b2d2f313e855fe61ae7e3e07647026edb8f39779f8ac92be0977d47e6a8c04a8"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/schemas/receipt.schema.json",
+      "scope": "schema",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 3102,
+        "sha256": "a2d4ca285c0c4235df20ab0ccd4abab64ac073e00c69a435c178a7c178f764b3"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/schemas/scenario-pair.schema.json",
+      "scope": "schema",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 1864,
+        "sha256": "6ee6d2e1ec41c182ee0460682c47367748d1cf8721fbec87d5ece38258583c5b"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/schemas/validation-candidate.schema.json",
+      "scope": "schema",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 2113,
+        "sha256": "7216e5159049cd2f4e0c72d9892ca9e56a33cf534c58a9c13f5463fd64d30ddb"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/store.py",
+      "scope": "control_tool",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 18575,
+        "sha256": "e683fc15473bdef04e86b045226a3144a3d459a824a3a723912086e9cd7e2c62"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/tests/__init__.py",
+      "scope": "test",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 42,
+        "sha256": "7a582c3a78088cd75c2b543648ab54436af40f8b89d54907b7aea19cc62be1d3"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/tests/fixtures.py",
+      "scope": "test",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 34684,
+        "sha256": "3a1b488909c0b2367a96233f98f1af2cd23299bf760cafc18d2c7dea9ca07fb3"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/tests/test_cli.py",
+      "scope": "test",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 1391,
+        "sha256": "c0705e154779b4d8e3b3cdc77d33bd2c8f2f8b606c54025e144ae01883952875"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/tests/test_codex_bootstrap.py",
+      "scope": "test",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 5210,
+        "sha256": "3aacfa125d1bdfb48b30dcbed6acc327fc7981973bd736f09e988f4566727b82"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/tests/test_end_to_end.py",
+      "scope": "test",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 3309,
+        "sha256": "4bb157eb6b8361efc64cfe1c51f58bff34a3d7225d824cdc137b0f599279fcb2"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/tests/test_negative_gates.py",
+      "scope": "test",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 7758,
+        "sha256": "2e9f40cbdc3cb90d3fcc23e49827791325e52e42e10c9ebbc8f5bce9e7c1058d"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/tests/test_schemas.py",
+      "scope": "test",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 1899,
+        "sha256": "c35f346554a3daefa328f061ab3bb5f7e6e8ebfd2438cfa314b4cb19781b137a"
+      },
+      "deletion_allowed": false,
+      "reason": "建设 Persona 无关 FW-D 受管控制面，不改变 FW-B/FW-C 共享运行时",
+      "machine_proofs": [
+        "fw-d-control-tests",
+        "fw-b-c-history",
+        "shared-runtime-unchanged",
+        "codex-final-wire-and-contract"
+      ]
+    }
+  ],
+  "rules": [
+    "只允许 Makefile、FW-D 工具、Schema、测试及追加式 transition 门禁进入变更集",
+    "backend/internal/officialegress 与生产 selector、画像和路由必须保持 FW-C 原样",
+    "不允许删除、符号链接、凭据、真实新 Persona 画像或生产注册",
+    "outputs/ 是用户无关未跟踪产物，不进入 manifest 或提交"
+  ]
+}

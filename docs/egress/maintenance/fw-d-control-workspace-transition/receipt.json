@@ -1,0 +1,90 @@
+{
+  "schema_version": "official-client-fw-d-workspace-transition-receipt/v1",
+  "manifest_path": "docs/egress/maintenance/fw-d-control-workspace-transition/manifest.json",
+  "manifest_sha256": "0993579139bdbd15180af83509cee0343177c7ecc958b5199bf9376a27fbd7e4",
+  "prior_receipt_path": "docs/egress/maintenance/multi-persona-control-workspace-transition-v2/receipt.json",
+  "prior_receipt_sha256": "b6f3afc94b7b0eb1c2518f356620cb8b2d6917201214fdecf8452be010818ace",
+  "base_commit": "73db9b1f02798cf96027356c84f118404ca984d6",
+  "transition_entry_count": 28,
+  "added_entry_count": 26,
+  "deleted_entry_count": 0,
+  "scope_counts": {
+    "ci_gate": 1,
+    "control_tool": 9,
+    "prior_transition_freeze": 1,
+    "schema": 9,
+    "test": 7,
+    "transition_gate": 1
+  },
+  "shared_runtime_path_count": 0,
+  "new_persona_artifact_path_count": 0,
+  "proofs": [
+    {
+      "id": "fw-d-control-tests",
+      "category": "fw_d",
+      "cwd": ".",
+      "argv": [
+        "make",
+        "test-official-client-control"
+      ],
+      "exit_code": 0,
+      "stdout_bytes": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_bytes": 119,
+      "stderr_sha256": "299cbc4312eac9ac0e1b6600fc1f69db6ad541f965348741af1c1842d6d62c98"
+    },
+    {
+      "id": "fw-b-c-history",
+      "category": "history",
+      "cwd": ".",
+      "argv": [
+        "python3",
+        "tools/multi_persona_control_workspace_transition.py",
+        "--frozen-only"
+      ],
+      "exit_code": 0,
+      "stdout_bytes": 70,
+      "stdout_sha256": "c94c7d368938214ee78a7d07ad4d9a2fef86e677965f230315a8d2cea8ff3310",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "id": "shared-runtime-unchanged",
+      "category": "runtime_scope",
+      "cwd": ".",
+      "argv": [
+        "git",
+        "diff",
+        "--exit-code",
+        "73db9b1f02798cf96027356c84f118404ca984d6",
+        "--",
+        "backend/internal/officialegress"
+      ],
+      "exit_code": 0,
+      "stdout_bytes": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "id": "codex-final-wire-and-contract",
+      "category": "codex_zero_diff",
+      "cwd": "backend",
+      "argv": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/officialegress",
+        "-run",
+        "^(TestChangeset3PostIdentityAuthorityFinalWireIsFrozen|TestProvisionalSharedContractsExcludePersonaPolicyFields|TestPersonaReleaseCatalogMatchesCodexAndKeepsRollbackPair)$"
+      ],
+      "exit_code": 0,
+      "stdout_bytes": 64,
+      "stdout_sha256": "e7cc7e32c43181c7c807bb840b03a50f686ebb3c4cd7e14e5d3237d0054cca85",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "proof_failure_count": 0,
+  "result": "passed"
+}

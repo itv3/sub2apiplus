@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api.local/schemas/official-client-validation-candidate-v1.json",
+  "title": "独立 ValidationCandidate",
+  "description": "Candidate 只能引用不可变 ReleaseArtifact，不能借用 production active、rollback 或 previous selector。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "candidate_id",
+    "profile_approval_ref",
+    "release_artifact_ref",
+    "support_envelope_ref",
+    "source_tree_sha256",
+    "test_tree_sha256",
+    "dependency_lock_sha256",
+    "target_architecture",
+    "build_id",
+    "image_digest",
+    "candidate_purpose",
+    "identity_sha256"
+  ],
+  "properties": {
+    "candidate_id": {"type": "string", "minLength": 1},
+    "profile_approval_ref": {"$ref": "#/$defs/factRef"},
+    "release_artifact_ref": {"$ref": "#/$defs/objectRef"},
+    "support_envelope_ref": {"$ref": "#/$defs/objectRef"},
+    "source_tree_sha256": {"$ref": "#/$defs/sha256"},
+    "test_tree_sha256": {"$ref": "#/$defs/sha256"},
+    "dependency_lock_sha256": {"$ref": "#/$defs/sha256"},
+    "target_architecture": {"type": "string", "minLength": 1},
+    "build_id": {"type": "string", "minLength": 1},
+    "image_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+    "candidate_purpose": {"enum": ["validation_only", "production_replacement"]},
+    "identity_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "objectRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["object_kind", "sha256"],
+      "properties": {"object_kind": {"type": "string"}, "sha256": {"$ref": "#/$defs/sha256"}}
+    },
+    "factRef": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["campaign_id", "dimension", "sequence", "sha256"],
+      "properties": {
+        "campaign_id": {"type": "string"},
+        "dimension": {"type": "string"},
+        "sequence": {"type": "integer", "minimum": 1},
+        "sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

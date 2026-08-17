@@ -1,4 +1,4 @@
-.PHONY: build build-backend build-frontend test test-backend test-frontend test-frontend-critical test-capture-tools check-egress-spec check-egress-spec-ci check-egress-spec-local-source check-egress-bootstrap-replay check-egress-seal
+.PHONY: build build-backend build-frontend test test-backend test-frontend test-frontend-critical test-capture-tools test-official-client-control check-egress-spec check-egress-spec-ci check-egress-spec-local-source check-egress-bootstrap-replay check-egress-seal
 
 EGRESS_BOOTSTRAP_COMMIT := 38a9929eac35a39c86de2f27de8f7a805d7dae52
 EGRESS_BOOTSTRAP_BASELINE := $(CURDIR)/docs/egress/foundation/sink-baseline.json
@@ -44,7 +44,7 @@ build-frontend:
 	@pnpm --dir frontend run build
 
 # 运行测试（后端 + 前端）
-test: test-backend test-frontend test-capture-tools check-egress-spec
+test: test-backend test-frontend test-capture-tools test-official-client-control check-egress-spec
 
 # Codex 客户端仿真门禁，见 docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md §3.5 与 §5.1。
 # 这些检查此前只能手工执行，因而无法阻止回归；--self-test 先校验判据本身是否
@@ -64,7 +64,7 @@ check-egress-spec: check-egress-spec-local-source check-egress-spec-ci
 check-egress-spec-local-source:
 	@python3 tools/check_spec_refs.py
 
-check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal
+check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal test-official-client-control
 	@python3 tools/check_version_leak.py --self-test
 	@python3 tools/check_version_leak.py
 	@python3 tools/check_changeset5_0145_symbols.py --self-test
@@ -74,7 +74,9 @@ check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal
 	@python3 tools/maintenance_workspace_transition.py --self-test
 	@python3 tools/maintenance_workspace_transition.py --frozen-only
 	@python3 tools/multi_persona_control_workspace_transition.py --self-test
-	@python3 tools/multi_persona_control_workspace_transition.py
+	@python3 tools/multi_persona_control_workspace_transition.py --frozen-only
+	@python3 tools/fw_d_control_workspace_transition.py --self-test
+	@python3 tools/fw_d_control_workspace_transition.py
 	@python3 tools/changeset6_benchmark_evidence.py --self-test
 	@python3 tools/changeset6_benchmark_evidence.py
 	@python3 tools/check_ledger_completeness.py
@@ -196,3 +198,9 @@ test-frontend-critical:
 test-capture-tools:
 	@PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
 		-s tools/official_client_capture/tests -p 'test_*.py'
+
+# FW-D 通用受管工具链只使用当前 Codex 不可变制品和合成 Persona 数据，
+# 不联网、不读取凭据、不查询或生成任何新 Persona 的官方画像。
+test-official-client-control:
+	@PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+		-s tools/official_client_control/tests -p 'test_*.py'

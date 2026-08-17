@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api.local/schemas/official-client-control-fact-v1.json",
+  "title": "FW-D 正交追加事实",
+  "description": "Discovery、Evidence、Approval、Validation、Runtime Selector 和 Deployment 各自成链，检查点由事实推导。",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "campaign_id",
+    "dimension",
+    "fact_kind",
+    "sequence",
+    "previous_fact_sha256",
+    "issued_at_utc",
+    "payload"
+  ],
+  "properties": {
+    "schema_version": {"const": "official-client-control-fact/v1"},
+    "campaign_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$"},
+    "dimension": {"enum": ["discovery", "evidence", "approval", "validation", "runtime_selector", "deployment"]},
+    "fact_kind": {
+      "enum": [
+        "discovery_recorded",
+        "evidence_recorded",
+        "evidence_approved",
+        "profile_approved",
+        "candidate_frozen",
+        "scenario_prepared",
+        "scenario_captured",
+        "scenario_sealed",
+        "scenario_approved",
+        "pair_recorded",
+        "acceptance_recorded",
+        "selector_observed",
+        "selector_activated",
+        "release_promoted",
+        "accepted_not_activated",
+        "canary_passed",
+        "active",
+        "rollback_verified",
+        "restored_active",
+        "inventory_current_appended"
+      ]
+    },
+    "sequence": {"type": "integer", "minimum": 1},
+    "previous_fact_sha256": {"oneOf": [{"type": "null"}, {"type": "string", "pattern": "^[0-9a-f]{64}$"}]},
+    "issued_at_utc": {"type": "string", "format": "date-time"},
+    "payload": {"type": "object"}
+  }
+}

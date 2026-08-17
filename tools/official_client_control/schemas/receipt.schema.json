@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api.local/schemas/official-client-control-receipt-v1.json",
+  "title": "不可覆盖晋升与激活收据",
+  "description": "收据绑定不可变事实引用、对象摘要、工具身份及确定性复算输入。",
+  "oneOf": [
+    {"$ref": "#/$defs/promotion"},
+    {"$ref": "#/$defs/activation"}
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "promotion": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "campaign_id", "candidate_ref", "acceptance_ref", "promotion_fact_ref", "release_artifact_ref", "promotion_diff_ref", "profile_approval_ref", "input_facts_sha256", "completed_at_utc", "producer_tool_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-client-control-promotion-receipt/v1"},
+        "campaign_id": {"type": "string"},
+        "candidate_ref": {"type": "object"},
+        "acceptance_ref": {"type": "object"},
+        "promotion_fact_ref": {"type": "object"},
+        "release_artifact_ref": {"type": "object"},
+        "promotion_diff_ref": {"type": "object"},
+        "profile_approval_ref": {"type": "object"},
+        "input_facts_sha256": {"$ref": "#/$defs/sha256"},
+        "completed_at_utc": {"type": "string", "format": "date-time"},
+        "producer_tool_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "activation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "campaign_id", "candidate_ref", "acceptance_ref", "promotion_receipt_ref", "deployment_fact_refs", "selector_before_ref", "selector_after_ref", "active_support_envelope_ref", "rollback_operational_envelope_ref", "deployment_traffic_envelope_ref", "final_ingress_inventory_ref", "final_egress_inventory_ref", "formal_image_digest", "final_state", "input_facts_sha256", "completed_at_utc", "producer_tool_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-client-control-activation-receipt/v1"},
+        "campaign_id": {"type": "string"},
+        "candidate_ref": {"type": "object"},
+        "acceptance_ref": {"type": "object"},
+        "promotion_receipt_ref": {"type": "object"},
+        "deployment_fact_refs": {"type": "array", "minItems": 5, "maxItems": 5},
+        "selector_before_ref": {"type": "object"},
+        "selector_after_ref": {"type": "object"},
+        "active_support_envelope_ref": {"type": "object"},
+        "rollback_operational_envelope_ref": {"type": "object"},
+        "deployment_traffic_envelope_ref": {"type": "object"},
+        "final_ingress_inventory_ref": {"type": "object"},
+        "final_egress_inventory_ref": {"type": "object"},
+        "formal_image_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "final_state": {"const": "restored_active"},
+        "input_facts_sha256": {"$ref": "#/$defs/sha256"},
+        "completed_at_utc": {"type": "string", "format": "date-time"},
+        "producer_tool_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

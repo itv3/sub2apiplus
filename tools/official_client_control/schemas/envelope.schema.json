@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2api.local/schemas/official-client-envelope-v1.json",
+  "title": "官方客户端仿真范围 Envelope",
+  "description": "四类 Envelope 使用相同的显式能力坐标；DeploymentTraffic 必须属于 Active 与 Rollback 的交集。",
+  "type": "object",
+  "required": ["schema_version", "persona", "capabilities"],
+  "properties": {
+    "schema_version": {
+      "enum": [
+        "official-client-support-envelope/v1",
+        "official-client-active-support-envelope/v1",
+        "official-client-rollback-operational-envelope/v1",
+        "official-client-deployment-traffic-envelope/v1"
+      ]
+    },
+    "persona": {"type": "object"},
+    "capabilities": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"$ref": "#/$defs/capability"}
+    }
+  },
+  "$defs": {
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "logical_ingress_id", "protocol_class", "privacy_mode", "model", "feature", "endpoint"],
+      "properties": {
+        "platform": {"type": "string", "minLength": 1},
+        "logical_ingress_id": {"type": "string", "minLength": 1},
+        "protocol_class": {"type": "string", "minLength": 1},
+        "privacy_mode": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
+        "feature": {"type": "string", "minLength": 1},
+        "endpoint": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

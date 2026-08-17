@@ -45,6 +45,8 @@ TRANSITION_DIR = (
 )
 MANIFEST_PATH = TRANSITION_DIR / "manifest.json"
 RECEIPT_PATH = TRANSITION_DIR / "receipt.json"
+V2_FROZEN_MANIFEST_SHA256 = "1d37b7ef22da8e0284a8175cc4d159ee781cab7ed0cd37422e21af45259698be"
+V2_FROZEN_RECEIPT_SHA256 = "b6f3afc94b7b0eb1c2518f356620cb8b2d6917201214fdecf8452be010818ace"
 VERSION_PATH = ROOT / "backend" / "cmd" / "server" / "VERSION"
 EXCLUDED_PATHS = {
     V1_MANIFEST_PATH.relative_to(ROOT).as_posix(),
@@ -509,6 +511,35 @@ def validate_transition() -> None:
     )
 
 
+def validate_frozen_transition() -> None:
+    """只复核已接受 v1/v2 原文，不把 FW-D 后继变更吸收到旧收据。"""
+
+    validate_frozen_v1()
+    manifest_raw = MANIFEST_PATH.read_bytes()
+    receipt_raw = RECEIPT_PATH.read_bytes()
+    if sha256(manifest_raw) != V2_FROZEN_MANIFEST_SHA256:
+        raise RuntimeError("多 Persona v2 workspace transition 历史原文漂移")
+    if sha256(receipt_raw) != V2_FROZEN_RECEIPT_SHA256:
+        raise RuntimeError("多 Persona v2 workspace transition receipt 历史原文漂移")
+    manifest = json.loads(manifest_raw)
+    receipt = json.loads(receipt_raw)
+    if (
+        manifest.get("schema_version")
+        != "official-egress-multi-persona-control-workspace-transition/v2"
+        or manifest.get("prior_transition_sha256")
+        != V1_FROZEN_SHA256[V1_MANIFEST_PATH]
+        or receipt.get("schema_version")
+        != "official-egress-multi-persona-control-workspace-transition-receipt/v2"
+        or receipt.get("manifest_sha256") != V2_FROZEN_MANIFEST_SHA256
+        or receipt.get("prior_receipt_sha256")
+        != V1_FROZEN_SHA256[V1_RECEIPT_PATH]
+        or receipt.get("transition_entry_count") != len(manifest.get("entries", []))
+        or receipt.get("result") != "passed"
+    ):
+        raise RuntimeError("多 Persona v2 transition 历史摘要链非法")
+    print("多 Persona 控制层 v1/v2 transition 历史原文与摘要链有效")
+
+
 def self_test() -> None:
     present = {
         "existence": "present",
@@ -537,11 +568,21 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write-transition", action="store_true", help="确定性生成 transition")
     parser.add_argument("--self-test", action="store_true", help="运行判据 mutation 自测")
+    parser.add_argument(
+        "--frozen-only",
+        action="store_true",
+        help="只验证已接受 v1/v2 历史 transition，不吸收 FW-D 后继变更",
+    )
     args = parser.parse_args()
     if args.write_transition:
+        if args.frozen_only:
+            raise RuntimeError("--write-transition 不能与 --frozen-only 同时使用")
         write_transition()
     if args.self_test:
         self_test()
+        return 0
+    if args.frozen_only:
+        validate_frozen_transition()
         return 0
     validate_transition()
     return 0
