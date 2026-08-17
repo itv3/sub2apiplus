@@ -80,14 +80,16 @@ func newExecutorWebSocketSession(
 	connection WebSocketConnection,
 	request PreparedRequest,
 ) (*ExecutorWebSocketSession, error) {
+	state, codexState := request.dialect.(codexPreparedState)
 	if connection == nil || request.endpoint.EndpointID() == "" ||
 		request.token.payload.Protocol != WireProtocolWebSocket ||
-		request.token.payload.InvocationID == "" {
+		request.token.payload.InvocationID == "" ||
+		request.token.payload.Persona != PersonaCodexCLI || !codexState {
 		return nil, errors.New("Executor WebSocket session 输入不完整")
 	}
 	return &ExecutorWebSocketSession{
-		connection: connection, bundle: request.bundle, endpoint: request.endpoint,
-		identity: request.identity, token: request.token,
+		connection: connection, bundle: state.bundle, endpoint: request.endpoint,
+		identity: state.identity, token: request.token,
 	}, nil
 }
 

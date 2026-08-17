@@ -265,7 +265,9 @@ func TestConnectionAdmissionValidatesCurrentInvocationAndReceiptIdentity(t *test
 		}
 		if withToken {
 			token := issuer.sign(tokenPayload{
-				AuthorityID: "ws-executor", ReleaseDigest: "ws-profile", SinkID: input.ID, Route: input.Routes[0].Key,
+				AuthorityID: "ws-executor", ReleaseDigest: "ws-release",
+				ProfileDigest: "ws-profile", BundleDigest: "ws-bundle",
+				SinkID: input.ID, Route: input.Routes[0].Key,
 				Persona: input.Persona, EndpointID: "responses_ws", TransportID: transportID,
 				AdapterID: AdapterWebSocket, Backend: BackendWebSocket,
 				Protocol: WireProtocolWebSocket, ConnectionPoolDigest: "ws-pool",

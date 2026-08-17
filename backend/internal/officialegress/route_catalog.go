@@ -67,10 +67,23 @@ func NewOfficialRouteCatalog(sinks SinkCatalog) (OfficialRouteCatalog, error) {
 	}
 	endpointBindings := make([]EndpointBindingCatalog, 0, 2)
 	seenProfiles := make(map[string]bool)
-	for _, mode := range []ReleaseMode{ReleaseModeActive, ReleaseModePrevious} {
+	for _, role := range []ProductionReleaseRole{ProductionReleaseActive, ProductionReleaseRollback} {
+		coordinate, coordinateErr := DefaultPersonaReleaseCatalog().Resolve(
+			PersonaCodexCLI, role,
+		)
+		if coordinateErr != nil {
+			return OfficialRouteCatalog{}, coordinateErr
+		}
+		mode, modeErr := codexModeForProductionRole(role)
+		if modeErr != nil {
+			return OfficialRouteCatalog{}, modeErr
+		}
 		release, resolveErr := DefaultReleaseCatalog().Resolve(mode)
 		if resolveErr != nil {
 			return OfficialRouteCatalog{}, resolveErr
+		}
+		if coordinateErr := validateCodexPersonaReleaseCoordinate(coordinate, release); coordinateErr != nil {
+			return OfficialRouteCatalog{}, coordinateErr
 		}
 		if seenProfiles[release.ProfileDigest()] {
 			continue

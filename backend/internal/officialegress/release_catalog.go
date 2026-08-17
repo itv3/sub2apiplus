@@ -269,6 +269,7 @@ type ResolvedCodexRelease struct {
 }
 
 func (r ResolvedCodexRelease) Mode() ReleaseMode                    { return r.mode }
+func (r ResolvedCodexRelease) Persona() Persona                     { return PersonaCodexCLI }
 func (r ResolvedCodexRelease) ReleaseDigest() string                { return r.releaseDigest }
 func (r ResolvedCodexRelease) ProfileDigest() string                { return r.profileDigest }
 func (r ResolvedCodexRelease) Version() string                      { return r.profile.Version() }

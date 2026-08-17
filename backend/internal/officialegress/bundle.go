@@ -112,6 +112,7 @@ type ReleaseBundle struct {
 }
 
 func (b ReleaseBundle) Mode() ReleaseMode          { return b.release.Mode() }
+func (b ReleaseBundle) Persona() Persona           { return b.release.Persona() }
 func (b ReleaseBundle) Version() string            { return b.release.Version() }
 func (b ReleaseBundle) ProfileDigest() string      { return b.release.ProfileDigest() }
 func (b ReleaseBundle) ReleaseDigest() string      { return b.release.ReleaseDigest() }
@@ -123,6 +124,27 @@ func (b ReleaseBundle) Deployment() DeploymentSupportPolicy {
 }
 func (b ReleaseBundle) Behavior() BehaviorPolicy      { return cloneBehaviorPolicy(b.behavior) }
 func (b ReleaseBundle) Release() ResolvedCodexRelease { return b.release }
+
+// executorControl 在 Codex Bundle 边界内完成共享执行事实投影。共享 Executor
+// 只能看到这些厂商无关标量，不能反向取得 Codex Policy 或 fallback 闭集。
+func (b ReleaseBundle) executorControl() executorBundleControl {
+	return executorBundleControl{
+		persona:       b.Persona(),
+		mode:          b.Mode(),
+		profileDigest: b.ProfileDigest(),
+		releaseDigest: b.ReleaseDigest(),
+		bundleDigest:  b.BundleDigest(),
+		primarySinkID: b.PrimarySinkID(),
+		attempt: executorAttemptControl{
+			policyID:               b.execution.ID,
+			invocationAttemptLimit: b.behavior.AttemptBudget,
+			transportAttemptLimit:  b.execution.MaxAttempts,
+			replayable:             b.execution.Replayable,
+			minimumInterval:        b.execution.MinimumInterval,
+			concurrencyLimit:       b.execution.ConcurrencyLimit,
+		},
+	}
+}
 
 func (b ReleaseBundle) EndpointPlans() []ResolvedEndpointPlan {
 	keys := make([]string, 0, len(b.plans))
@@ -179,7 +201,7 @@ func TransitionFallbackAttempt(
 	}
 	metadata := attemptMetadata{
 		SinkID: target.SinkID, Purpose: target.Purpose,
-		DeclaredPersona: PersonaCodexCLI, EndpointID: target.EndpointID,
+		DeclaredPersona: bundle.Persona(), EndpointID: target.EndpointID,
 		InvocationID: current.InvocationID,
 		ReleaseMode:  bundle.Mode(), ReleaseDigest: bundle.ReleaseDigest(),
 		BundleDigest: bundle.BundleDigest(), ProfileDigest: bundle.ProfileDigest(),
@@ -321,6 +343,8 @@ func ReleaseModeFromContext(ctx context.Context) (ReleaseMode, bool) {
 // retry、WS 重拨与 fallback 必须继续持有已解析 Bundle，而不是再次调用本对象。
 type BundleResolver struct {
 	releases          ReleaseCatalog
+	personas          PersonaRegistry
+	personaReleases   PersonaReleaseCatalog
 	sinks             SinkCatalog
 	physical          PhysicalRouteCatalog
 	bindingsByProfile map[string]EndpointBindingCatalog
@@ -328,18 +352,37 @@ type BundleResolver struct {
 }
 
 func NewBundleResolver(releases ReleaseCatalog, sinks SinkCatalog) (*BundleResolver, error) {
+	personas, err := NewCodexPersonaRegistry(sinks)
+	if err != nil {
+		return nil, err
+	}
+	personaReleases, err := NewPersonaReleaseCatalog(
+		personas,
+		[]PersonaReleaseSource{NewCodexPersonaReleaseSource(releases)},
+	)
+	if err != nil {
+		return nil, err
+	}
 	physical, err := NewPhysicalRouteCatalog(sinks)
 	if err != nil {
 		return nil, err
 	}
 	resolver := &BundleResolver{
-		releases: releases, sinks: sinks, physical: physical,
+		releases: releases, personas: personas, personaReleases: personaReleases,
+		sinks: sinks, physical: physical,
 		bindingsByProfile: make(map[string]EndpointBindingCatalog),
 	}
 	coveredRoutes := make(map[string]bool)
 	for _, mode := range []ReleaseMode{ReleaseModeActive, ReleaseModePrevious} {
+		coordinate, err := personaReleases.ResolveCodexMode(PersonaCodexCLI, mode)
+		if err != nil {
+			return nil, err
+		}
 		release, err := releases.Resolve(mode)
 		if err != nil {
+			return nil, err
+		}
+		if err := validateCodexPersonaReleaseCoordinate(coordinate, release); err != nil {
 			return nil, err
 		}
 		if _, exists := resolver.bindingsByProfile[release.ProfileDigest()]; exists {
@@ -402,8 +445,15 @@ func (r *BundleResolver) Resolve(request BundleResolveRequest) (ReleaseBundle, e
 	if err := request.Behavior.Validate(); err != nil {
 		return ReleaseBundle{}, err
 	}
+	coordinate, err := r.personaReleases.ResolveCodexMode(PersonaCodexCLI, request.Mode)
+	if err != nil {
+		return ReleaseBundle{}, err
+	}
 	release, err := r.releases.Resolve(request.Mode)
 	if err != nil {
+		return ReleaseBundle{}, err
+	}
+	if err := validateCodexPersonaReleaseCoordinate(coordinate, release); err != nil {
 		return ReleaseBundle{}, err
 	}
 	endpointBindings := r.bindingsByProfile[release.ProfileDigest()]
@@ -432,6 +482,13 @@ func (r *BundleResolver) Resolve(request BundleResolveRequest) (ReleaseBundle, e
 		}
 		sinkPlanCount := 0
 		for _, route := range sink.Routes() {
+			if !r.personas.AuthorizeRoute(
+				PersonaCodexCLI, sink.ID(), sink.Purpose(), route.Key, route.Protocol,
+			) {
+				return ReleaseBundle{}, fmt.Errorf(
+					"Sink %s 的 route 未获 Persona Registry 授权", sinkID,
+				)
+			}
 			binding, ok := endpointBindings.ResolveBindingRoute(sink, route, r.physical)
 			if !ok {
 				// route 可能只属于另一版本画像；当前 mode 不生成 plan。构造器已经
@@ -493,6 +550,23 @@ func (r *BundleResolver) Resolve(request BundleResolveRequest) (ReleaseBundle, e
 		behavior:   cloneBehaviorPolicy(request.Behavior), fallback: fallbackNodes,
 		bundleDigest: bundleDigest,
 	}, nil
+}
+
+func validateCodexPersonaReleaseCoordinate(
+	coordinate ResolvedPersonaRelease,
+	release ResolvedCodexRelease,
+) error {
+	wantRole, roleErr := productionRoleForCodexMode(release.Mode())
+	if roleErr != nil {
+		return roleErr
+	}
+	if coordinate.Persona() != release.Persona() || coordinate.Role() != wantRole ||
+		coordinate.Version() != release.Version() ||
+		coordinate.ReleaseDigest() != release.ReleaseDigest() ||
+		coordinate.ProfileDigest() != release.ProfileDigest() {
+		return errors.New("Persona ReleaseCatalog 与 Codex 发布源坐标不一致")
+	}
+	return nil
 }
 
 func resolveBundleProfileFacts(

@@ -179,18 +179,47 @@ func TestExecutorInvocationBindsIdentityPoliciesAndConsumesAttemptAuthentication
 		t.Fatal(err)
 	}
 	payload := prepared.Token().payload
-	if payload.IdentityMode != IdentityCodexOAuthStrict ||
-		payload.IdentityFactsDigest != request.Plan.IdentityFacts.Digest() ||
-		payload.HeaderPolicyDigest != request.Plan.HeaderPolicy.Digest() ||
-		payload.BodyPolicyDigest != request.Plan.BodyPolicy.Digest() ||
+	wantIdentityAttestation := codexAttestationDigest(
+		"identity", string(request.Plan.IdentityMode), request.Plan.IdentityFacts.Digest(),
+	)
+	wantDialectAttestation := codexAttestationDigest(
+		"dialect", request.Plan.HeaderPolicy.Digest(), request.Plan.BodyPolicy.Digest(),
+		request.Plan.BehaviorPolicy.ID,
+	)
+	if payload.IdentityAttestationDigest != wantIdentityAttestation ||
+		payload.DialectAttestationDigest != wantDialectAttestation ||
+		payload.ReleaseDigest != bundle.ReleaseDigest() ||
+		payload.ProfileDigest != bundle.ProfileDigest() ||
+		payload.BundleDigest != bundle.BundleDigest() ||
 		payload.AttemptOrdinal != 1 || payload.AttemptReason != string(AttemptReasonInitial) {
-		t.Fatalf("FinalizationToken 未绑定身份/策略/attempt 投影：%+v", payload)
+		t.Fatalf("FinalizationToken 未绑定制品坐标、不透明 attestation/attempt 投影：%+v", payload)
 	}
 	request.AttemptReason = AttemptReasonRetry
 	request.ExpectedAttemptOrdinal = 2
 	if _, err := invocation.PrepareAttempt(context.Background(), request); err == nil ||
 		!strings.Contains(err.Error(), "AttemptAuthentication 已消费") {
 		t.Fatalf("跨 attempt 复用认证材料未被拒绝：%v", err)
+	}
+}
+
+func TestExecutorInvocationRejectsOpaquePersonaAttestationDrift(t *testing.T) {
+	executor, bundle, request := newExecutorInvocationTestFixture(t, 2, 2)
+	invocation, err := executor.BeginInvocation(context.Background(), bundle, request.Plan.InvocationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := invocation.PrepareAttempt(
+		context.Background(), freshExecutorInvocationRequest(t, request),
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	drifted := freshExecutorInvocationRequest(t, request, 2)
+	drifted.AttemptReason = AttemptReasonRetry
+	drifted.Plan.HeaderPolicy = HeaderPolicy{ID: "drifted-header-policy", Source: "test"}
+	if _, err := invocation.PrepareAttempt(context.Background(), drifted); err == nil ||
+		!strings.Contains(err.Error(), "Persona attestation") {
+		t.Fatalf("跨 attempt 的方言策略漂移未被不透明 attestation 拒绝：%v", err)
 	}
 }
 

@@ -1,0 +1,77 @@
+{
+  "schema_version": "official-egress-multi-persona-control-workspace-transition-receipt/v2",
+  "manifest_path": "docs/egress/maintenance/multi-persona-control-workspace-transition-v2/manifest.json",
+  "manifest_sha256": "1d37b7ef22da8e0284a8175cc4d159ee781cab7ed0cd37422e21af45259698be",
+  "prior_receipt_path": "docs/egress/maintenance/multi-persona-control-workspace-transition/receipt.json",
+  "prior_receipt_sha256": "19becb4b094be770e06cd4365c5c1ce679be60dc652fc2e3a285419f7223aa18",
+  "base_commit": "a698aebe1f0dfb279e7a4f137fff9394be8534e3",
+  "transition_entry_count": 31,
+  "added_entry_count": 9,
+  "deleted_entry_count": 0,
+  "scope_counts": {
+    "documentation": 3,
+    "officialegress_control": 18,
+    "receipts": 4,
+    "service_boundary": 3,
+    "source_gate": 3
+  },
+  "proofs": [
+    {
+      "id": "full-official-egress-and-service",
+      "category": "regression",
+      "cwd": "backend",
+      "argv": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/officialegress/...",
+        "./internal/service/..."
+      ],
+      "exit_code": 0,
+      "stdout_bytes": 855,
+      "stdout_sha256": "72cd57a3805bd73771d46327bc521bfdb9dffa493282b57f52caa5fcbb289abd",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "id": "codex-final-wire",
+      "category": "codex_zero_diff",
+      "cwd": "backend",
+      "argv": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/officialegress",
+        "-run",
+        "^TestChangeset3PostIdentityAuthorityFinalWireIsFrozen$"
+      ],
+      "exit_code": 0,
+      "stdout_bytes": 64,
+      "stdout_sha256": "64c99dc50a5cb4e7f99100e902e721e90d93099dc7e42dc560c067df78d8e2a4",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "id": "shared-contract-boundary",
+      "category": "contract",
+      "cwd": "backend",
+      "argv": [
+        "go",
+        "test",
+        "-count=1",
+        "./internal/officialegress",
+        "-run",
+        "^(TestProvisionalSharedContractsExcludePersonaPolicyFields|TestSharedExecutorControlRejectsCrossLayerFactMismatch|TestPersonaReleaseCatalogMatchesCodexAndKeepsRollbackPair)$"
+      ],
+      "exit_code": 0,
+      "stdout_bytes": 64,
+      "stdout_sha256": "34f789a5749a32d47ed8e972599e114930397e56d9421d8750b90e1c43029ac1",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "proof_failure_count": 0,
+  "codex_zero_diff_assertion_failure_count": 0,
+  "claude_runtime_path_count": 0,
+  "result": "passed"
+}

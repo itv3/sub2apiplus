@@ -16,7 +16,11 @@ import (
 	"testing"
 )
 
-const compatibilityCodeRetirementClosureSHA256 = "82144fed8f781291c8b8c48aeba33da7dcc2237f892faa424fadec102b8122b0"
+const (
+	compatibilityCodeRetirementClosureSHA256 = "82144fed8f781291c8b8c48aeba33da7dcc2237f892faa424fadec102b8122b0"
+	multiPersonaControlTestTransitionSHA256  = "bb9b3e749dcc705b11d7b22bf2d6bb6f7d04bba8a1ccf5d9ae54d04475f21814"
+	multiPersonaControlTestV2SHA256          = "28945ae3f0adf1a7746b8015e8d700ca9b664ab4357b594e7098c33e0aa1595a"
+)
 
 type compatibilityClosureArtifact struct {
 	Path   string `json:"path"`
@@ -59,6 +63,7 @@ type compatibilityClosureSourceTransition struct {
 	Path       string `json:"path"`
 	FromSHA256 string `json:"from_sha256"`
 	ToSHA256   string `json:"to_sha256"`
+	Reason     string `json:"reason,omitempty"`
 }
 
 type compatibilityCodeRetirementClosure struct {
@@ -113,6 +118,10 @@ func TestCompatibilityCodeRetirementClosureIsComplete(t *testing.T) {
 		closure.ClosureResult != "complete" || len(closure.Verification) != 7 {
 		t.Fatalf("兼容代码退休闭集事实不完整：%+v", closure)
 	}
+	multiPersonaTransitions := []map[string]compatibilityClosureSourceTransition{
+		loadMultiPersonaControlTestTransition(t, repoRoot),
+		loadMultiPersonaControlTestTransitionV2(t, repoRoot),
+	}
 
 	for _, retired := range closure.RetiredCandidates {
 		if retired.ID == "" || len(retired.RetiredSymbols) == 0 || retired.Replacement == "" ||
@@ -123,13 +132,17 @@ func TestCompatibilityCodeRetirementClosureIsComplete(t *testing.T) {
 	}
 
 	for _, artifact := range closure.PriorRetirementReceipts {
-		assertCompatibilityClosureFileDigest(t, repoRoot, artifact.Path, artifact.SHA256)
+		assertCompatibilityClosureFileDigest(
+			t, repoRoot, artifact.Path, artifact.SHA256, multiPersonaTransitions...,
+		)
 	}
 	for _, transition := range closure.SourceTransitions {
 		if transition.Path == "" || transition.FromSHA256 == "" || transition.ToSHA256 == "" {
 			t.Fatalf("兼容代码源码 transition 不完整：%+v", transition)
 		}
-		assertCompatibilityClosureFileDigest(t, repoRoot, transition.Path, transition.ToSHA256)
+		assertCompatibilityClosureFileDigest(
+			t, repoRoot, transition.Path, transition.ToSHA256, multiPersonaTransitions...,
+		)
 	}
 
 	for _, forbidden := range closure.ForbiddenOccurrences {
@@ -176,14 +189,156 @@ func TestCompatibilityCodeRetirementClosureIsComplete(t *testing.T) {
 	}
 }
 
-func assertCompatibilityClosureFileDigest(t *testing.T, repoRoot, path, want string) {
+func assertCompatibilityClosureFileDigest(
+	t *testing.T,
+	repoRoot string,
+	path string,
+	want string,
+	multiPersonaTransitions ...map[string]compatibilityClosureSourceTransition,
+) {
 	t.Helper()
 	source := readCompatibilityClosureSource(t, repoRoot, path)
-	if got := compatibilityClosureDigest(source); got != want &&
+	got := compatibilityClosureDigest(source)
+	expected := want
+	for _, transitions := range multiPersonaTransitions {
+		if transition, ok := transitions[path]; ok {
+			if transition.FromSHA256 != expected || strings.TrimSpace(transition.Reason) == "" {
+				t.Fatalf("多 Persona 测试 transition 未连续承接摘要：path=%s got=%s want=%s",
+					path, transition.FromSHA256, expected)
+			}
+			expected = transition.ToSHA256
+		}
+	}
+	if got != expected &&
 		!versionLeakDebtTransitionSupersedes(path, want, got) &&
 		!upstreamV0177SourceTransitionSupersedes(path, want, got) {
-		t.Fatalf("兼容代码闭集文件摘要漂移：path=%s got=%s want=%s", path, got, want)
+		t.Fatalf("兼容代码闭集文件摘要漂移：path=%s got=%s want=%s", path, got, expected)
 	}
+}
+
+func loadMultiPersonaControlTestTransition(
+	t *testing.T,
+	repoRoot string,
+) map[string]compatibilityClosureSourceTransition {
+	t.Helper()
+	path := filepath.Join(
+		repoRoot,
+		"docs/egress/maintenance/multi-persona-control-test-transition.json",
+	)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := compatibilityClosureDigest(raw); got != multiPersonaControlTestTransitionSHA256 {
+		t.Fatalf("多 Persona 控制层测试 transition 漂移：got=%s want=%s",
+			got, multiPersonaControlTestTransitionSHA256)
+	}
+	var receipt struct {
+		SchemaVersion         string                                 `json:"schema_version"`
+		PriorTransition       string                                 `json:"prior_transition"`
+		PriorTransitionSHA256 string                                 `json:"prior_transition_sha256"`
+		Transitions           []compatibilityClosureSourceTransition `json:"transitions"`
+		Result                string                                 `json:"result"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&receipt); err != nil {
+		t.Fatal(err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		t.Fatal("多 Persona 控制层测试 transition 尾部存在额外 JSON")
+	}
+	if receipt.SchemaVersion != "official-egress-multi-persona-control-test-transition/v1" ||
+		receipt.PriorTransition != "docs/egress/maintenance/multi-persona-control-source-transition.json" ||
+		receipt.PriorTransitionSHA256 != multiPersonaControlSourceTransitionSHA256 ||
+		receipt.Result != "passed" || len(receipt.Transitions) != 2 {
+		t.Fatalf("多 Persona 控制层测试 transition 顶层事实非法：%+v", receipt)
+	}
+	result := make(map[string]compatibilityClosureSourceTransition, len(receipt.Transitions))
+	paths := make([]string, 0, len(receipt.Transitions))
+	for _, transition := range receipt.Transitions {
+		if transition.Path == "" || transition.FromSHA256 == "" ||
+			transition.ToSHA256 == "" || strings.TrimSpace(transition.Reason) == "" {
+			t.Fatalf("多 Persona 控制层测试 transition 条目不完整：%+v", transition)
+		}
+		if _, duplicate := result[transition.Path]; duplicate {
+			t.Fatalf("多 Persona 控制层测试 transition 路径重复：%s", transition.Path)
+		}
+		paths = append(paths, transition.Path)
+		result[transition.Path] = transition
+	}
+	if !sort.StringsAreSorted(paths) {
+		t.Fatalf("多 Persona 控制层测试 transition 路径未排序：%v", paths)
+	}
+	return result
+}
+
+func loadMultiPersonaControlTestTransitionV2(
+	t *testing.T,
+	repoRoot string,
+) map[string]compatibilityClosureSourceTransition {
+	t.Helper()
+	path := filepath.Join(
+		repoRoot,
+		"docs/egress/maintenance/multi-persona-control-test-transition-v2.json",
+	)
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := compatibilityClosureDigest(raw); got != multiPersonaControlTestV2SHA256 {
+		t.Fatalf("多 Persona 控制层 v2 测试 transition 漂移：got=%s want=%s",
+			got, multiPersonaControlTestV2SHA256)
+	}
+	var receipt struct {
+		SchemaVersion          string                                 `json:"schema_version"`
+		PriorTransition        string                                 `json:"prior_transition"`
+		PriorTransitionSHA256  string                                 `json:"prior_transition_sha256"`
+		SourceTransition       string                                 `json:"source_transition"`
+		SourceTransitionSHA256 string                                 `json:"source_transition_sha256"`
+		Transitions            []compatibilityClosureSourceTransition `json:"transitions"`
+		Result                 string                                 `json:"result"`
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&receipt); err != nil {
+		t.Fatal(err)
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		t.Fatal("多 Persona 控制层 v2 测试 transition 尾部存在额外 JSON")
+	}
+	if receipt.SchemaVersion != "official-egress-multi-persona-control-test-transition/v2" ||
+		receipt.PriorTransition !=
+			"docs/egress/maintenance/multi-persona-control-test-transition.json" ||
+		receipt.PriorTransitionSHA256 != multiPersonaControlTestTransitionSHA256 ||
+		receipt.SourceTransition !=
+			"docs/egress/maintenance/multi-persona-control-source-transition-v2.json" ||
+		receipt.SourceTransitionSHA256 != multiPersonaControlSourceV2SHA256 ||
+		receipt.Result != "passed" || len(receipt.Transitions) != 3 {
+		t.Fatalf("多 Persona 控制层 v2 测试 transition 顶层事实非法：%+v", receipt)
+	}
+	result := make(map[string]compatibilityClosureSourceTransition, len(receipt.Transitions))
+	paths := make([]string, 0, len(receipt.Transitions))
+	for _, transition := range receipt.Transitions {
+		if transition.Path == "" || transition.FromSHA256 == "" ||
+			transition.ToSHA256 == "" || strings.TrimSpace(transition.Reason) == "" {
+			t.Fatalf("多 Persona 控制层 v2 测试 transition 条目不完整：%+v", transition)
+		}
+		if _, duplicate := result[transition.Path]; duplicate {
+			t.Fatalf("多 Persona 控制层 v2 测试 transition 路径重复：%s", transition.Path)
+		}
+		current := readCompatibilityClosureSource(t, repoRoot, transition.Path)
+		if got := compatibilityClosureDigest(current); got != transition.ToSHA256 {
+			t.Fatalf("多 Persona 控制层 v2 测试源码漂移：path=%s got=%s want=%s",
+				transition.Path, got, transition.ToSHA256)
+		}
+		paths = append(paths, transition.Path)
+		result[transition.Path] = transition
+	}
+	if !sort.StringsAreSorted(paths) {
+		t.Fatalf("多 Persona 控制层 v2 测试 transition 路径未排序：%v", paths)
+	}
+	return result
 }
 
 func readCompatibilityClosureSource(t *testing.T, repoRoot, path string) []byte {

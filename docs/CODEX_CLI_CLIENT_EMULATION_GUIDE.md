@@ -1104,6 +1104,13 @@ FinalizationToken、Release／Profile／Pool digest、adapter 和最终请求摘
 
 ## 3.9 当前实施状态与兼容边界
 
+> **多 Persona 迁移兼容说明**：本文保留的 `active／previous` 和
+> `candidate_release_mode=previous` 是现有 Codex RuntimeCatalog、工具及历史收据的机器合同。生产
+> Catalog 中 `active／previous` 分别对应新框架的 `production_active／production_rollback`；§4.3～§4.4
+> 在隔离候选 Catalog 中借 `previous` 槽位承载目标 Release，只是 Codex 工具兼容实现，不会修改生产
+> selector，也不属于新 Persona 的通用合同。新 Persona 必须使用独立 ValidationCandidate Release 引用。
+> 迁移边界与现有代码处置见共享框架第六部分。
+
 当前 21 个 `codex_profile` Runtime Sink、29 条 route 全部 `enforced`，无 Codex `legacy_observe`；29 条由
 变更集 3 的 28 条历史 route 加 0.147.0 的 `wham_settings_user` 版本 route 构成。HTTP、WS、fallback、
 models、images、files、alpha-search、WHAM 和 OAuth refresh 都进入统一 Executor。ReleaseCatalog 预编译

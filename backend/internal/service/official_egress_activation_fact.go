@@ -73,7 +73,8 @@ func resolveOfficialEgressActivationFact(
 	lookupEnv func(string) string,
 ) (OfficialEgressActivationFact, error) {
 	mode := officialClientProfileModeFromConfig(cfg)
-	release, err := officialegress.DefaultReleaseCatalog().Resolve(
+	release, err := officialegress.DefaultPersonaReleaseCatalog().ResolveCodexMode(
+		officialegress.PersonaCodexCLI,
 		officialegress.ReleaseMode(mode),
 	)
 	if err != nil {

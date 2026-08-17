@@ -1,0 +1,20 @@
+{
+  "schema_version": "official-egress-multi-persona-control-source-transition/v1",
+  "prior_transition": "docs/egress/maintenance/executor-one-shot-source-transition.json",
+  "prior_transition_sha256": "73b79e4061a8e3becabb5a361aa341c855ddd0296a94fd2057296d798b6048ec",
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/compiler.go",
+      "from_sha256": "2a8140afc8899259665daf77676cf8c52c9b94f488b18da0e2b1d99d1dc34391",
+      "to_sha256": "8811a148de994c59640255ccb764e29e4026799aa38e4758f317c86ecf46d2b3",
+      "reason": "CompiledExecution 只新增共享控制外壳使用的 Persona 终态元数据和方言私有状态槽；Codex Compiler 的 ProfileSchema、Header、Body、URL、transport 与摘要算法均未改变。"
+    },
+    {
+      "path": "backend/internal/officialegress/executor.go",
+      "from_sha256": "da58f780ef00229599759f2be35307bf4a3305f332fa30834f6675c8e9f5aa6b",
+      "to_sha256": "b72f0e5af60b689ec7817ea1381d464d980de7162ce1721e88ba7995f2e7fbe3",
+      "reason": "把 Persona Registry、DialectCompiler 闭集、通用 attempt 控制元数据和 Persona authority 接入 Executor；保留 Codex ExecutorRequest 兼容外壳，Codex 编译器输入、adapter、执行策略、FinalizationToken wire 摘要和 final wire 规则不变。"
+    }
+  ],
+  "result": "passed"
+}

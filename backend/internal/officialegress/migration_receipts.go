@@ -301,8 +301,9 @@ func newMigrationReceipt(
 func validateMigrationAuthority(input SinkBindingInput, authority receiptcontract.AuthorityKind) error {
 	switch input.Persona {
 	case PersonaCodexCLI:
+		descriptor := codexPersonaDescriptorInput()
 		if input.EndpointEvidence != EndpointEvidenceCodexProfile ||
-			authority != receiptcontract.AuthorityCodexExecutor {
+			authority != descriptor.AuthorityKind {
 			return errors.New("codex-cli 升级必须使用 codex_profile + Codex Executor 收据")
 		}
 	case PersonaChatGPTWeb:

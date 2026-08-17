@@ -1,0 +1,32 @@
+{
+  "schema_version": "official-egress-multi-persona-control-source-transition/v2",
+  "prior_transition": "docs/egress/maintenance/multi-persona-control-source-transition.json",
+  "prior_transition_sha256": "139f4844085942b709a68b61d2b51f863189ada780d361ace91cad8a6ae86bb2",
+  "additional_prior_transitions": [
+    {
+      "path": "docs/egress/maintenance/runtime-reliability-repair-source-transition.json",
+      "sha256": "8f8a2d5d0d763bf72834eac0441d4baeb76442fec9fb415b7f338da90bcc13f2"
+    }
+  ],
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/compiler.go",
+      "from_sha256": "8811a148de994c59640255ccb764e29e4026799aa38e4758f317c86ecf46d2b3",
+      "to_sha256": "2001cec3e3602c909f1aaae1f104dc09a4e38c8272980e1ecba54b03147ef3bf",
+      "reason": "在 Codex 方言边界生成 Identity、Dialect 与 invocation attestation，并把 Profile 坐标投影进厂商无关 CompiledExecution；既有 Codex Header、Body、URL、transport 与最终 wire 不变。"
+    },
+    {
+      "path": "backend/internal/officialegress/executor.go",
+      "from_sha256": "b72f0e5af60b689ec7817ea1381d464d980de7162ce1721e88ba7995f2e7fbe3",
+      "to_sha256": "4678f9442d123d5ddcdd3d0382a33683d484ec44e781f9f0b1fccc437e539c6d",
+      "reason": "共享 Executor 只消费厂商无关控制标量和不透明 attestation，并校验 Release、Profile、Bundle、route、protocol 与 adapter 闭集；Codex Policy 与 fallback 判定保留在 Codex facade。"
+    },
+    {
+      "path": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+      "from_sha256": "43af2571424da85583debe82fac969fd252f6f9f635ced42e7fd9cda2aa987ba",
+      "to_sha256": "54f012645b71530fa737855bec0b10d10f8213a7605c674f7a76c1c83aa476ff",
+      "reason": "登记 Codex 专属手册与共享官方客户端仿真框架的职责边界；不改变 Codex 官方事实、画像、规则计数或 final-wire 证据。"
+    }
+  ],
+  "result": "passed"
+}

@@ -274,6 +274,17 @@ type ExecutorRequest struct {
 	ExecutionScopeKey string
 }
 
+// personaExecutorRequest 是共享 Executor 控制外壳的内部输入。
+// 对外的 Codex ExecutorRequest 会先被封装为 codexDialectPlan；未来 Persona
+// 只能新增自己的窄封装，不能扩张该结构为联合 Plan。
+type personaExecutorRequest struct {
+	bundle                 personaReleaseBundle
+	plan                   typedEgressPlan
+	attemptReason          AttemptReason
+	expectedAttemptOrdinal uint32
+	executionScopeKey      string
+}
+
 // AttemptReason 是 Executor 签发 attempt 时冻结的生命周期原因。
 type AttemptReason string
 
@@ -309,17 +320,6 @@ type invocationAttemptTarget struct {
 	protocol   WireProtocol
 }
 
-func invocationTargetFromPlan(plan CodexEgressPlan) invocationAttemptTarget {
-	protocol := plan.Protocol
-	if !protocol.Valid() {
-		protocol = WireProtocolHTTP
-	}
-	return invocationAttemptTarget{
-		sinkID: plan.SinkID, purpose: plan.Purpose,
-		endpointID: strings.TrimSpace(plan.EndpointID), protocol: protocol,
-	}
-}
-
 func invocationTargetFromFallback(target FallbackNode) invocationAttemptTarget {
 	return invocationAttemptTarget{
 		sinkID: target.SinkID, purpose: target.Purpose,
@@ -330,19 +330,17 @@ func invocationTargetFromFallback(target FallbackNode) invocationAttemptTarget {
 // ExecutorInvocation 是由 Executor 创建的不可伪造调用能力。全部 retry、重拨和
 // fallback 都必须复用同一个实例，才能共享 Bundle 与原子 attempt 预算。
 type ExecutorInvocation struct {
-	executor     *Executor
-	bundle       ReleaseBundle
-	invocationID string
+	executor      *Executor
+	bundle        personaReleaseBundle
+	bundleControl executorBundleControl
+	invocationID  string
 
-	mu              sync.Mutex
-	attempts        uint32
-	currentSink     SinkID
-	pendingFallback *FallbackNode
-	identityBound   bool
-	identityMode    IdentityMode
-	identityDigest  string
-	headerDigest    string
-	bodyDigest      string
+	mu                          sync.Mutex
+	attempts                    uint32
+	currentSink                 SinkID
+	pendingTransition           *invocationAttemptTarget
+	invocationAttestationBound  bool
+	invocationAttestationDigest string
 }
 
 func (i *ExecutorInvocation) InvocationID() string {
@@ -356,17 +354,22 @@ func (i *ExecutorInvocation) Bundle() ReleaseBundle {
 	if i == nil {
 		return ReleaseBundle{}
 	}
-	return i.bundle
+	bundle, _ := i.bundle.(ReleaseBundle)
+	return bundle
 }
 
-// TransitionFallback 只接受 Bundle 中冻结的完整 fallback 节点。迁移后的下一次
-// attempt 必须精确匹配该节点，旧 Token 和连接池身份不会被带入新 endpoint。
+// TransitionFallback 是 Codex facade 的兼容入口。fallback 合法性只在 Codex Bundle
+// 内判断；共享 Executor 仅接收已批准的通用 attempt target，不解释 fallback 闭集。
 func (i *ExecutorInvocation) TransitionFallback(target FallbackNode) error {
 	if i == nil || i.executor == nil {
 		return errors.New("ExecutorInvocation 未初始化")
 	}
+	codexBundle, ok := i.bundle.(ReleaseBundle)
+	if !ok {
+		return errors.New("非 Codex invocation 不能使用 Codex fallback facade")
+	}
 	matched := false
-	for _, candidate := range i.bundle.FallbackNodes() {
+	for _, candidate := range codexBundle.FallbackNodes() {
 		if candidate == target {
 			matched = true
 			break
@@ -380,11 +383,11 @@ func (i *ExecutorInvocation) TransitionFallback(target FallbackNode) error {
 	if i.attempts == 0 {
 		return errors.New("首次 attempt 前禁止切换 fallback")
 	}
-	if i.pendingFallback != nil {
+	if i.pendingTransition != nil {
 		return errors.New("已有尚未消费的 fallback transition")
 	}
-	cloned := target
-	i.pendingFallback = &cloned
+	transition := invocationTargetFromFallback(target)
+	i.pendingTransition = &transition
 	return nil
 }
 
@@ -428,7 +431,31 @@ func (c *executionPolicyController) acquire(
 	sinkID SinkID,
 	policy ExecutionPolicy,
 ) (func(), error) {
-	if policy.ConcurrencyLimit <= 0 && policy.MinimumInterval <= 0 {
+	if err := policy.Validate(); err != nil {
+		return nil, err
+	}
+	return c.acquireControl(ctx, scopeKey, sinkID, executorAttemptControl{
+		policyID:               policy.ID,
+		invocationAttemptLimit: policy.MaxAttempts,
+		transportAttemptLimit:  policy.MaxAttempts,
+		replayable:             policy.Replayable,
+		minimumInterval:        policy.MinimumInterval,
+		concurrencyLimit:       policy.ConcurrencyLimit,
+	})
+}
+
+// acquireControl 是共享 Executor 使用的入口，只解释 Persona 方言已经投影出的
+// lease 标量；上面的 acquire 仅为现有 Codex 单元测试保留兼容 facade。
+func (c *executionPolicyController) acquireControl(
+	ctx context.Context,
+	scopeKey string,
+	sinkID SinkID,
+	control executorAttemptControl,
+) (func(), error) {
+	if err := control.validate(); err != nil {
+		return nil, err
+	}
+	if control.concurrencyLimit <= 0 && control.minimumInterval <= 0 {
 		return func() {}, nil
 	}
 	if ctx == nil {
@@ -438,7 +465,7 @@ func (c *executionPolicyController) acquire(
 	if scopeKey == "" {
 		scopeKey = "global"
 	}
-	key := strings.Join([]string{scopeKey, string(sinkID), policy.ID}, "\x00")
+	key := strings.Join([]string{scopeKey, string(sinkID), control.policyID}, "\x00")
 	c.mu.Lock()
 	state := c.states[key]
 	if state == nil {
@@ -450,18 +477,18 @@ func (c *executionPolicyController) acquire(
 	state.mu.Lock()
 	for {
 		now := time.Now()
-		if policy.MinimumInterval > 0 && now.Before(state.nextAllowed) {
+		if control.minimumInterval > 0 && now.Before(state.nextAllowed) {
 			retryAfter := state.nextAllowed
 			state.mu.Unlock()
 			return nil, &ExecutionPolicyMinimumIntervalError{
-				PolicyID: policy.ID, RetryAfter: retryAfter,
+				PolicyID: control.policyID, RetryAfter: retryAfter,
 			}
 		}
-		if policy.ConcurrencyLimit <= 0 || state.active < policy.ConcurrencyLimit {
+		if control.concurrencyLimit <= 0 || state.active < control.concurrencyLimit {
 			state.active++
-			if policy.MinimumInterval > 0 {
+			if control.minimumInterval > 0 {
 				// 在发送前预占下一时段；失败尝试同样进入冷却，避免计费端点被快速重打。
-				state.nextAllowed = now.Add(policy.MinimumInterval)
+				state.nextAllowed = now.Add(control.minimumInterval)
 			}
 			state.mu.Unlock()
 			var once sync.Once
@@ -489,7 +516,9 @@ func (c *executionPolicyController) acquire(
 // Executor 是 FinalizationToken 的唯一签发边界。
 type Executor struct {
 	id                ExecutorID
-	compiler          RequestCompiler
+	persona           Persona
+	personas          PersonaRegistry
+	dialects          DialectCompilerRegistry
 	registry          AdapterRegistry
 	issuer            *tokenIssuer
 	executionPolicies *executionPolicyController
@@ -504,18 +533,60 @@ func NewExecutor(
 	if compiler == nil || len(registry.byBackend) == 0 {
 		return nil, errors.New("Executor 缺少 compiler/adapter registry")
 	}
-	issuer, err := newTokenIssuer(id)
+	if guard == nil {
+		guard = DefaultGuard()
+	}
+	personas, err := NewCodexPersonaRegistry(guard.ProcessSinkCatalog())
 	if err != nil {
 		return nil, err
 	}
-	if guard == nil {
-		guard = DefaultGuard()
+	descriptor, ok := personas.ResolveIdentity(codexPersonaDescriptorInput().Identity)
+	if !ok || descriptor.Persona() != PersonaCodexCLI {
+		return nil, errors.New("Codex Persona 未登记")
+	}
+	dialects, err := newCodexDialectCompilerRegistry(personas, compiler)
+	if err != nil {
+		return nil, err
+	}
+	return newPersonaExecutor(
+		id, descriptor.Persona(), personas, dialects, registry, guard,
+	)
+}
+
+func newPersonaExecutor(
+	id ExecutorID,
+	persona Persona,
+	personas PersonaRegistry,
+	dialects DialectCompilerRegistry,
+	registry AdapterRegistry,
+	guard *Guard,
+) (*Executor, error) {
+	descriptor, ok := personas.Resolve(persona)
+	if !ok || descriptor.Persona() != persona {
+		return nil, errors.New("Executor Persona 未登记")
+	}
+	if dialects.personas.Digest() == "" || dialects.personas.Digest() != personas.Digest() {
+		return nil, errors.New("Executor 与 DialectCompilerRegistry 的 PersonaRegistry 不一致")
+	}
+	compiler, err := dialects.resolve(persona)
+	if err != nil || compiler.Persona() != persona {
+		return nil, errors.New("Executor Persona 缺少匹配的 DialectCompiler")
+	}
+	if len(registry.byBackend) == 0 || guard == nil {
+		return nil, errors.New("Executor 缺少 adapter registry/Guard")
+	}
+	issuer, err := newTokenIssuerForPersona(
+		descriptor.AuthorityKind(), descriptor.Persona(), id,
+	)
+	if err != nil {
+		return nil, err
 	}
 	if err := guard.registerIssuer(issuer); err != nil {
 		return nil, err
 	}
 	return &Executor{
-		id: id, compiler: compiler, registry: registry, issuer: issuer,
+		id: id, persona: persona, personas: personas, dialects: dialects,
+		registry: registry, issuer: issuer,
 		executionPolicies: newExecutionPolicyController(),
 	}, nil
 }
@@ -533,21 +604,26 @@ func (e *Executor) BeginInvocation(
 	bundle ReleaseBundle,
 	invocationID string,
 ) (*ExecutorInvocation, error) {
-	if e == nil || e.compiler == nil || e.issuer == nil {
+	return e.beginInvocation(ctx, bundle, invocationID)
+}
+
+func (e *Executor) beginInvocation(
+	ctx context.Context,
+	bundle personaReleaseBundle,
+	invocationID string,
+) (*ExecutorInvocation, error) {
+	if e == nil || e.issuer == nil || e.persona == "" || len(e.dialects.compilers) == 0 {
 		return nil, errors.New("Executor 未初始化")
 	}
-	if bundle.PrimarySinkID() == "" || bundle.BundleDigest() == "" ||
-		bundle.ReleaseDigest() == "" || bundle.ProfileDigest() == "" {
-		return nil, errors.New("ExecutorInvocation 缺少完整 ReleaseBundle")
+	if bundle == nil {
+		return nil, errors.New("ExecutorInvocation 缺少 ReleaseBundle")
 	}
-	if err := bundle.Execution().Validate(); err != nil {
+	control := bundle.executorControl()
+	if err := control.validate(); err != nil {
 		return nil, err
 	}
-	if err := bundle.Deployment().Validate(); err != nil {
-		return nil, err
-	}
-	if err := bundle.Behavior().Validate(); err != nil {
-		return nil, err
+	if control.persona != e.persona {
+		return nil, errors.New("ExecutorInvocation 的 Bundle Persona 与 Executor 不一致")
 	}
 	invocationID = strings.TrimSpace(invocationID)
 	if invocationID == "" {
@@ -562,8 +638,8 @@ func (e *Executor) BeginInvocation(
 		}
 	}
 	return &ExecutorInvocation{
-		executor: e, bundle: bundle, invocationID: invocationID,
-		currentSink: bundle.PrimarySinkID(),
+		executor: e, bundle: bundle, bundleControl: control, invocationID: invocationID,
+		currentSink: control.primarySinkID,
 	}, nil
 }
 
@@ -571,39 +647,78 @@ func (i *ExecutorInvocation) PrepareAttempt(
 	ctx context.Context,
 	input ExecutorRequest,
 ) (PreparedRequest, error) {
-	if i == nil || i.executor == nil {
-		return PreparedRequest{}, errors.New("ExecutorInvocation 未初始化")
+	typed, err := i.codexExecutorRequest(input)
+	if err != nil {
+		return PreparedRequest{}, err
 	}
-	e := i.executor
+	return i.prepareTypedAttempt(ctx, typed)
+}
+
+func (i *ExecutorInvocation) codexExecutorRequest(
+	input ExecutorRequest,
+) (personaExecutorRequest, error) {
+	if i == nil || i.executor == nil {
+		return personaExecutorRequest{}, errors.New("ExecutorInvocation 未初始化")
+	}
 	plan := input.Plan.clone()
-	if input.Bundle.BundleDigest() != i.bundle.BundleDigest() ||
-		input.Bundle.ReleaseDigest() != i.bundle.ReleaseDigest() {
-		return PreparedRequest{}, errors.New("attempt 不能更换 Invocation 冻结的 Bundle")
+	inputControl := input.Bundle.executorControl()
+	if inputControl.bundleDigest != i.bundleControl.bundleDigest ||
+		inputControl.releaseDigest != i.bundleControl.releaseDigest {
+		return personaExecutorRequest{}, errors.New("attempt 不能更换 Invocation 冻结的 Bundle")
 	}
 	if plan.InvocationID != "" && strings.TrimSpace(plan.InvocationID) != i.invocationID {
-		return PreparedRequest{}, errors.New("attempt InvocationID 与 invocation capability 不一致")
+		return personaExecutorRequest{}, errors.New("attempt InvocationID 与 invocation capability 不一致")
 	}
 	plan.InvocationID = i.invocationID
-	input.Bundle = i.bundle
-	if err := validateExecutorInput(plan, input.Bundle); err != nil {
+	return personaExecutorRequest{
+		bundle: input.Bundle, plan: newCodexDialectPlan(plan, input.DynamicInputs),
+		attemptReason:          input.AttemptReason,
+		expectedAttemptOrdinal: input.ExpectedAttemptOrdinal,
+		executionScopeKey:      input.ExecutionScopeKey,
+	}, nil
+}
+
+func (i *ExecutorInvocation) prepareTypedAttempt(
+	ctx context.Context,
+	input personaExecutorRequest,
+) (PreparedRequest, error) {
+	if i == nil || i.executor == nil || input.plan == nil || input.bundle == nil {
+		return PreparedRequest{}, errors.New("ExecutorInvocation 或 Persona attempt 未初始化")
+	}
+	e := i.executor
+	inputBundleControl := input.bundle.executorControl()
+	if inputBundleControl.bundleDigest != i.bundleControl.bundleDigest ||
+		inputBundleControl.releaseDigest != i.bundleControl.releaseDigest ||
+		inputBundleControl.persona != i.bundleControl.persona {
+		return PreparedRequest{}, errors.New("attempt 不能更换 Invocation 冻结的 Bundle")
+	}
+	input.bundle = i.bundle
+	control := input.plan.control()
+	if control.invocationID != i.invocationID {
+		return PreparedRequest{}, errors.New("TypedEgressPlan InvocationID 与 invocation capability 不一致")
+	}
+	if err := validateExecutorInput(control, i.bundleControl); err != nil {
 		return PreparedRequest{}, err
 	}
 	reason, ordinal, transitioned, err := i.reserveAttempt(
-		plan, input.AttemptReason, input.ExpectedAttemptOrdinal,
+		control, input.attemptReason, input.expectedAttemptOrdinal,
 	)
 	if err != nil {
 		return PreparedRequest{}, err
 	}
 	attemptContext := contextWithExecutorAttempt(
-		ctx, plan, input.Bundle, i.invocationID, ordinal, reason,
+		ctx, control, i.bundleControl, i.invocationID, ordinal, reason,
 	)
 	if transitioned != nil {
-		target := invocationTargetFromFallback(*transitioned)
-		if invocationTargetFromPlan(plan) != target {
+		if control.targetIdentity() != *transitioned {
 			return PreparedRequest{}, errors.New("fallback attempt 未匹配已签发 transition target")
 		}
 	}
-	compiled, err := e.compiler.Compile(attemptContext, input.Bundle, plan, input.DynamicInputs)
+	dialect, err := e.dialects.resolve(control.persona)
+	if err != nil {
+		return PreparedRequest{}, err
+	}
+	compiled, err := dialect.compile(attemptContext, input.bundle, input.plan)
 	if err != nil {
 		return PreparedRequest{}, WrapRuntimeError(
 			RuntimeErrorCodeCompilerRejected,
@@ -611,8 +726,14 @@ func (i *ExecutorInvocation) PrepareAttempt(
 			fmt.Errorf("编译 official egress request: %w", err),
 		)
 	}
-	if err := validateCompiledExecutionForPlan(compiled, input.Bundle, plan); err != nil {
+	if err := validateCompiledExecutionForPlan(compiled, i.bundleControl, control); err != nil {
 		return PreparedRequest{}, err
+	}
+	if !e.personas.AuthorizeRoute(
+		compiled.control.persona, compiled.control.sinkID, compiled.control.purpose,
+		compiled.control.route, compiled.control.protocol,
+	) {
+		return PreparedRequest{}, errors.New("CompiledExecution 未获 Persona Registry route 授权")
 	}
 	entry, err := e.registry.resolve(compiled.transport)
 	if err != nil {
@@ -620,18 +741,18 @@ func (i *ExecutorInvocation) PrepareAttempt(
 	}
 	_ = entry // Prepare 只验证闭集；Execute 再取得同一不可变 entry。
 	requestContext, err := WithAttemptMetadata(attemptContext, AttemptMetadataInput{
-		SinkID:               plan.SinkID,
-		Purpose:              plan.Purpose,
-		DeclaredPersona:      plan.DeclaredPersona,
-		EndpointID:           compiled.EndpointID(),
-		InvocationID:         plan.InvocationID,
+		SinkID:               control.sinkID,
+		Purpose:              control.purpose,
+		DeclaredPersona:      control.persona,
+		EndpointID:           compiled.control.endpointID,
+		InvocationID:         control.invocationID,
 		AttemptOrdinal:       ordinal,
 		AttemptReason:        string(reason),
 		ExecutorID:           e.id,
-		ReleaseMode:          input.Bundle.Mode(),
-		ReleaseDigest:        input.Bundle.ReleaseDigest(),
-		BundleDigest:         input.Bundle.BundleDigest(),
-		ProfileDigest:        input.Bundle.ProfileDigest(),
+		ReleaseMode:          i.bundleControl.mode,
+		ReleaseDigest:        i.bundleControl.releaseDigest,
+		BundleDigest:         i.bundleControl.bundleDigest,
+		ProfileDigest:        i.bundleControl.profileDigest,
 		ConnectionPoolDigest: compiled.poolDigest,
 	})
 	if err != nil {
@@ -644,51 +765,74 @@ func (i *ExecutorInvocation) PrepareAttempt(
 	digest, err := requestDigest(
 		request,
 		compiled.transport.Normalization,
-		compiled.endpointPlan.Protocol(),
+		compiled.control.protocol,
 	)
 	if err != nil {
 		return PreparedRequest{}, fmt.Errorf("计算定型请求摘要: %w", err)
 	}
 	token := e.issuer.sign(tokenPayload{
-		AuthorityID: e.id, ReleaseDigest: input.Bundle.ReleaseDigest(),
-		SinkID: plan.SinkID, Route: compiled.endpointPlan.template.route.Key,
-		Persona: PersonaCodexCLI, EndpointID: compiled.endpointPlan.EndpointID(),
+		AuthorityID: e.id, ReleaseDigest: i.bundleControl.releaseDigest,
+		ProfileDigest: i.bundleControl.profileDigest, BundleDigest: i.bundleControl.bundleDigest,
+		SinkID: control.sinkID, Route: compiled.control.route,
+		Persona: compiled.control.persona, EndpointID: compiled.control.endpointID,
 		TransportID: compiled.transport.ID, AdapterID: compiled.transport.Adapter,
 		Backend: compiled.transport.Backend, Protocol: compiled.transport.Protocol,
 		ResourceLifecycleDigest: resourceLifecycleDigest(compiled.transport.ResourceLifecycle),
 		ConnectionPoolDigest:    compiled.transport.ConnectionPoolDigest,
-		InvocationID:            plan.InvocationID, RequestDigest: digest,
+		InvocationID:            control.invocationID, RequestDigest: digest,
 		AttemptOrdinal: ordinal, AttemptReason: string(reason),
-		IdentityMode: plan.IdentityMode, IdentityFactsDigest: plan.IdentityFacts.Digest(),
-		HeaderPolicyDigest: plan.HeaderPolicy.Digest(), BodyPolicyDigest: plan.BodyPolicy.Digest(),
-		Normalization: compiled.transport.Normalization,
+		IdentityAttestationDigest: compiled.control.identityAttestationDigest,
+		DialectAttestationDigest:  compiled.control.dialectAttestationDigest,
+		Normalization:             compiled.transport.Normalization,
 	})
 	request = request.WithContext(withFinalizationToken(request.Context(), token))
+	if compiled.dialectState == nil || compiled.dialectState.persona() != control.persona {
+		return PreparedRequest{}, errors.New("DialectCompiler 缺少匹配的 PreparedRequest 状态")
+	}
 	consumed := false
-	return PreparedRequest{
+	prepared := PreparedRequest{
 		request: request, requestMu: &sync.Mutex{}, consumed: &consumed,
-		singleUse: plan.Body.Mode() == RequestBodySingleUse,
-		token:     token, transport: compiled.transport, bundle: input.Bundle,
-		endpoint: compiled.endpointPlan, identity: plan.IdentityFacts,
-	}, nil
+		singleUse: !compiled.control.bodyReplayable,
+		token:     token, transport: compiled.transport, dialect: compiled.dialectState,
+	}
+	if codexState, ok := compiled.dialectState.(codexPreparedState); ok {
+		prepared.bundle = codexState.bundle
+		prepared.endpoint = compiled.endpointPlan
+		prepared.identity = codexState.identity
+	}
+	return prepared, nil
 }
 
 func (i *ExecutorInvocation) ExecuteAttempt(
 	ctx context.Context,
 	input ExecutorRequest,
 ) (TransportResult, error) {
+	typed, err := i.codexExecutorRequest(input)
+	if err != nil {
+		return TransportResult{}, err
+	}
+	return i.executeTypedAttempt(ctx, typed)
+}
+
+func (i *ExecutorInvocation) executeTypedAttempt(
+	ctx context.Context,
+	input personaExecutorRequest,
+) (TransportResult, error) {
 	if i == nil || i.executor == nil || i.executor.executionPolicies == nil {
 		return TransportResult{}, errors.New("ExecutorInvocation 执行策略控制器未初始化")
 	}
-	execution := i.bundle.Execution()
-	if err := execution.Validate(); err != nil {
+	if input.plan == nil {
+		return TransportResult{}, errors.New("Persona attempt 缺少 TypedEgressPlan")
+	}
+	attemptControl := i.bundleControl.attempt
+	if err := attemptControl.validate(); err != nil {
 		return TransportResult{}, err
 	}
-	releasePolicy, err := i.executor.executionPolicies.acquire(
+	releasePolicy, err := i.executor.executionPolicies.acquireControl(
 		ctx,
-		input.ExecutionScopeKey,
-		input.Plan.SinkID,
-		execution,
+		input.executionScopeKey,
+		input.plan.control().sinkID,
+		attemptControl,
 	)
 	if err != nil {
 		return TransportResult{}, WrapRuntimeError(
@@ -697,7 +841,7 @@ func (i *ExecutorInvocation) ExecuteAttempt(
 	}
 	defer releasePolicy()
 
-	prepared, err := i.PrepareAttempt(ctx, input)
+	prepared, err := i.prepareTypedAttempt(ctx, input)
 	if err != nil {
 		return TransportResult{}, err
 	}
@@ -715,35 +859,30 @@ func (i *ExecutorInvocation) ExecuteAttempt(
 }
 
 func (i *ExecutorInvocation) reserveAttempt(
-	plan CodexEgressPlan,
+	control executorPlanControl,
 	requested AttemptReason,
 	expectedOrdinal uint32,
-) (AttemptReason, uint32, *FallbackNode, error) {
+) (AttemptReason, uint32, *invocationAttemptTarget, error) {
 	i.mu.Lock()
 	defer i.mu.Unlock()
-	identityDigest := plan.IdentityFacts.invocationDigest()
-	headerDigest := plan.HeaderPolicy.Digest()
-	bodyDigest := plan.BodyPolicy.Digest()
-	if !i.identityBound {
-		i.identityBound = true
-		i.identityMode = plan.IdentityMode
-		i.identityDigest = identityDigest
-		i.headerDigest = headerDigest
-		i.bodyDigest = bodyDigest
-	} else if i.identityMode != plan.IdentityMode || i.identityDigest != identityDigest ||
-		i.headerDigest != headerDigest || i.bodyDigest != bodyDigest {
-		return "", 0, nil, errors.New("attempt 不能更换 invocation 冻结的身份或 Header/Body 策略")
+	if !receiptSHA256(control.invocationAttestationDigest) {
+		return "", 0, nil, errors.New("attempt 缺少 invocation attestation")
 	}
-	execution := i.bundle.Execution()
-	behavior := i.bundle.Behavior()
-	if int(i.attempts) >= behavior.AttemptBudget {
+	if !i.invocationAttestationBound {
+		i.invocationAttestationBound = true
+		i.invocationAttestationDigest = control.invocationAttestationDigest
+	} else if i.invocationAttestationDigest != control.invocationAttestationDigest {
+		return "", 0, nil, errors.New("attempt 不能更换 invocation 冻结的 Persona attestation")
+	}
+	attemptControl := i.bundleControl.attempt
+	if int(i.attempts) >= attemptControl.invocationAttemptLimit {
 		return "", 0, nil, WrapRuntimeError(
 			RuntimeErrorCodeBehaviorAttemptBudgetExceeded,
 			"executor.reserve_attempt",
 			ErrBehaviorAttemptBudgetExceeded,
 		)
 	}
-	if int(i.attempts) >= execution.MaxAttempts {
+	if int(i.attempts) >= attemptControl.transportAttemptLimit {
 		return "", 0, nil, WrapRuntimeError(
 			RuntimeErrorCodeTransportAttemptBudgetExceeded,
 			"executor.reserve_attempt",
@@ -766,21 +905,21 @@ func (i *ExecutorInvocation) reserveAttempt(
 			reason = AttemptReasonRetry
 		}
 	}
-	var transitioned *FallbackNode
+	var transitioned *invocationAttemptTarget
 	if i.attempts == 0 {
-		if plan.SinkID != i.bundle.PrimarySinkID() || reason != AttemptReasonInitial {
+		if control.sinkID != i.bundleControl.primarySinkID || reason != AttemptReasonInitial {
 			return "", 0, nil, errors.New("首次 attempt 必须使用 primary sink 和 initial reason")
 		}
-	} else if i.pendingFallback != nil {
+	} else if i.pendingTransition != nil {
 		if reason != AttemptReasonFallback ||
-			invocationTargetFromPlan(plan) != invocationTargetFromFallback(*i.pendingFallback) {
+			control.targetIdentity() != *i.pendingTransition {
 			return "", 0, nil, ErrFallbackTransitionRequired
 		}
-		cloned := *i.pendingFallback
+		cloned := *i.pendingTransition
 		transitioned = &cloned
-		i.currentSink = cloned.SinkID
-		i.pendingFallback = nil
-	} else if plan.SinkID != i.currentSink {
+		i.currentSink = cloned.sinkID
+		i.pendingTransition = nil
+	} else if control.sinkID != i.currentSink {
 		return "", 0, nil, ErrFallbackTransitionRequired
 	} else if reason == AttemptReasonInitial || reason == AttemptReasonFallback {
 		return "", 0, nil, errors.New("非首次 attempt 的 reason 与生命周期不一致")
@@ -791,8 +930,8 @@ func (i *ExecutorInvocation) reserveAttempt(
 
 func contextWithExecutorAttempt(
 	ctx context.Context,
-	plan CodexEgressPlan,
-	bundle ReleaseBundle,
+	control executorPlanControl,
+	bundle executorBundleControl,
 	invocationID string,
 	ordinal uint32,
 	reason AttemptReason,
@@ -801,51 +940,67 @@ func contextWithExecutorAttempt(
 		ctx = context.Background()
 	}
 	metadata := attemptMetadata{
-		SinkID: plan.SinkID, Purpose: plan.Purpose, DeclaredPersona: plan.DeclaredPersona,
-		EndpointID: strings.TrimSpace(plan.EndpointID), InvocationID: invocationID,
-		AttemptOrdinal: ordinal, AttemptReason: string(reason), ReleaseMode: bundle.Mode(),
-		ReleaseDigest: bundle.ReleaseDigest(), BundleDigest: bundle.BundleDigest(),
-		ProfileDigest: bundle.ProfileDigest(),
+		SinkID: control.sinkID, Purpose: control.purpose, DeclaredPersona: control.persona,
+		EndpointID: strings.TrimSpace(control.endpointID), InvocationID: invocationID,
+		AttemptOrdinal: ordinal, AttemptReason: string(reason), ReleaseMode: bundle.mode,
+		ReleaseDigest: bundle.releaseDigest, BundleDigest: bundle.bundleDigest,
+		ProfileDigest: bundle.profileDigest,
 	}
 	return context.WithValue(ctx, attemptMetadataContextKey{}, metadata)
 }
 
 func validateExecutorInput(
-	plan CodexEgressPlan,
-	bundle ReleaseBundle,
+	control executorPlanControl,
+	bundle executorBundleControl,
 ) error {
-	if strings.TrimSpace(string(plan.SinkID)) == "" || strings.TrimSpace(string(plan.Purpose)) == "" ||
-		!plan.Mode.Valid() ||
-		strings.TrimSpace(plan.Method) == "" || plan.URL == nil || !plan.DeclaredPersona.Valid() {
-		return errors.New("CodexEgressPlan 字段不完整")
+	if strings.TrimSpace(string(control.sinkID)) == "" ||
+		strings.TrimSpace(string(control.purpose)) == "" || !control.mode.Valid() ||
+		strings.TrimSpace(control.endpointID) == "" || !control.protocol.Valid() ||
+		strings.TrimSpace(control.method) == "" || control.target == nil ||
+		!control.persona.Valid() || control.persona != bundle.persona ||
+		!receiptSHA256(control.identityAttestationDigest) ||
+		!receiptSHA256(control.dialectAttestationDigest) ||
+		!receiptSHA256(control.invocationAttestationDigest) {
+		return errors.New("TypedEgressPlan 字段不完整或 Persona 不一致")
 	}
-	if bundle.BundleDigest() == "" || bundle.Mode() != plan.Mode {
+	if err := bundle.validate(); err != nil {
+		return err
+	}
+	if bundle.mode != control.mode {
 		return errors.New("ExecutorRequest 缺少与 Plan 一致的 ReleaseBundle")
 	}
-	execution := bundle.Execution()
-	if err := execution.Validate(); err != nil {
-		return err
-	}
-	if plan.Body.Mode() == RequestBodySingleUse &&
-		(execution.Replayable || execution.MaxAttempts != 1) {
+	if !control.bodyReplayable &&
+		(bundle.attempt.replayable || bundle.attempt.transportAttemptLimit != 1) {
 		return errors.New("single-use stream 必须使用 MaxAttempts=1 且 Replayable=false")
-	}
-	if err := bundle.Deployment().Validate(); err != nil {
-		return err
 	}
 	return nil
 }
 
 func validateCompiledExecutionForPlan(
 	compiled CompiledExecution,
-	bundle ReleaseBundle,
-	plan CodexEgressPlan,
+	bundle executorBundleControl,
+	control executorPlanControl,
 ) error {
-	if compiled.bundleDigest != bundle.BundleDigest() ||
-		compiled.releaseDigest != bundle.ReleaseDigest() || compiled.SinkID() != plan.SinkID ||
-		compiled.Purpose() != plan.Purpose ||
-		compiled.request.Method() != strings.ToUpper(strings.TrimSpace(plan.Method)) {
+	if compiled.bundleDigest != bundle.bundleDigest ||
+		compiled.releaseDigest != bundle.releaseDigest ||
+		compiled.profileDigest != bundle.profileDigest ||
+		compiled.control.persona != control.persona ||
+		compiled.control.sinkID != control.sinkID || compiled.control.purpose != control.purpose ||
+		compiled.control.endpointID != strings.TrimSpace(control.endpointID) ||
+		compiled.control.protocol != control.protocol ||
+		compiled.control.protocol != compiled.transport.Protocol ||
+		compiled.control.bodyReplayable != control.bodyReplayable ||
+		compiled.control.identityAttestationDigest != control.identityAttestationDigest ||
+		compiled.control.dialectAttestationDigest != control.dialectAttestationDigest ||
+		compiled.control.invocationAttestationDigest != control.invocationAttestationDigest ||
+		compiled.request.Method() != strings.ToUpper(strings.TrimSpace(control.method)) {
 		return errors.New("CompiledExecution 与 Bundle/Plan 不一致")
+	}
+	target := compiled.request.URL()
+	if target == nil || compiled.control.route.Method != compiled.request.Method() ||
+		!matchRouteHost(compiled.control.route.Host, target.Hostname()) ||
+		!matchRoutePath(compiled.control.route.Path, target.EscapedPath()) {
+		return errors.New("CompiledExecution 的 route 与 final request 不一致")
 	}
 	return compiled.transport.Validate()
 }

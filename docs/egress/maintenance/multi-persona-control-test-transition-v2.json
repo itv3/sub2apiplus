@@ -1,0 +1,28 @@
+{
+  "schema_version": "official-egress-multi-persona-control-test-transition/v2",
+  "prior_transition": "docs/egress/maintenance/multi-persona-control-test-transition.json",
+  "prior_transition_sha256": "bb9b3e749dcc705b11d7b22bf2d6bb6f7d04bba8a1ccf5d9ae54d04475f21814",
+  "source_transition": "docs/egress/maintenance/multi-persona-control-source-transition-v2.json",
+  "source_transition_sha256": "354d32c903a14cd287c1a9fc9269f20af1e307b589947bbc29a8d883b0963872",
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/changeset3_post_identity_authority_final_wire_frozen_test.go",
+      "from_sha256": "9a8de9628ea90e00376628a1e37319d839ec35ff55388eedf3ac52cedd12cf5c",
+      "to_sha256": "a330fcd6bba7206c5d50a6e008a445528084ed24d79fbb4a8a2498527ead7a23",
+      "reason": "历史 final-wire 封印测试追加复核 v2 source transition 的连续摘要链，并继续要求 compiler、executor 当前字节与批准目标完全一致；未增加任何 wire 允许差异。"
+    },
+    {
+      "path": "backend/internal/officialegress/executor_one_shot_retirement_test.go",
+      "from_sha256": "4fcdaa8fca4efd325185785ee3c76d9c5261b230634a4292ffce9af856db89de",
+      "to_sha256": "84dfe4a0d9ea5fd77386cc529ded3dac8f4bac1b4567654eb5595e951720a247",
+      "reason": "历史 Executor 一次性兼容退休测试追加复核 v2 source transition 的连续摘要链，退休符号、调用方闭集和显式 attempt ordinal 门禁保持不变。"
+    },
+    {
+      "path": "backend/internal/officialegress/officialegress_test.go",
+      "from_sha256": "707870d88e067f80ed154844b5182a0007db47752bc33377a40676d4ea0c8828",
+      "to_sha256": "a95e37891da572d87f1891025cd9e220411b561f777811c034379afcbb2e5fc6",
+      "reason": "连接 admission 正例补齐 Release、Profile、Bundle 三项 Token 签名坐标，既有错误 invocation、错误 transport 和无 Token 负例保持不变。"
+    }
+  ],
+  "result": "passed"
+}

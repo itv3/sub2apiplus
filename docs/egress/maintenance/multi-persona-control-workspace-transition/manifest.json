@@ -1,0 +1,588 @@
+{
+  "schema_version": "official-egress-multi-persona-control-workspace-transition/v1",
+  "base_commit": "a698aebe1f0dfb279e7a4f137fff9394be8534e3",
+  "candidate_path_count": 22,
+  "transition_entry_count": 22,
+  "transition_path_set_sha256": "d8400097992b404e7b9342c97626a4d5f7e6250e48c6989b76a35d69cb0dee82",
+  "entries": [
+    {
+      "path": "Makefile",
+      "scope": "source_gate",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 11523,
+        "sha256": "418eb43cf422e78105c9f726b88463d0d7a6407136670084c7b24ada8dc9d733"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 11673,
+        "sha256": "3c80f1449bcfef2438cf7f54c0aebe1d15c720ae43f303a5f84908dc0105e812"
+      },
+      "deletion_allowed": false,
+      "reason": "从成熟 Codex 执行链抽取最小多 Persona 共享控制层并证明 Codex wire 零差异",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./internal/officialegress/... ./internal/service/...",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/multi-persona-control-test-transition.json"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/bundle.go",
+      "scope": "officialegress_control",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 20321,
+        "sha256": "13f8fdfe7cb9249a8118d4ed881aecd02b740de7702d203f9d2ae41190c5213b"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 21958,
+        "sha256": "f259a1e665592b298bbe78875ccc964b2a1f84b022472accc4802abb0ee2628a"
+      },
+      "deletion_allowed": false,
+      "reason": "从成熟 Codex 执行链抽取最小多 Persona 共享控制层并证明 Codex wire 零差异",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./internal/officialegress/... ./internal/service/...",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/multi-persona-control-test-transition.json"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/changeset3_post_identity_authority_final_wire_frozen_test.go",
+      "scope": "officialegress_control",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 35529,
+        "sha256": "a6cdaee6b58bd40a18091c794b43576fad3fbcf4ad3d823cc01916d6eae75c42"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 38263,
+        "sha256": "9a8de9628ea90e00376628a1e37319d839ec35ff55388eedf3ac52cedd12cf5c"
+      },
+      "deletion_allowed": false,
+      "reason": "从成熟 Codex 执行链抽取最小多 Persona 共享控制层并证明 Codex wire 零差异",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./internal/officialegress/... ./internal/service/...",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/multi-persona-control-test-transition.json"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/compiler.go",
+      "scope": "officialegress_control",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 52941,
+        "sha256": "2a8140afc8899259665daf77676cf8c52c9b94f488b18da0e2b1d99d1dc34391"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 53019,
+        "sha256": "8811a148de994c59640255ccb764e29e4026799aa38e4758f317c86ecf46d2b3"
+      },
+      "deletion_allowed": false,
+      "reason": "从成熟 Codex 执行链抽取最小多 Persona 共享控制层并证明 Codex wire 零差异",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./internal/officialegress/... ./internal/service/...",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/multi-persona-control-test-transition.json"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/dialect_registry.go",
+      "scope": "officialegress_control",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 7379,
+        "sha256": "5b14b4afdca9d0585c139588ceb969a328485a383d7f623efff67114bab6708d"
+      },
+      "deletion_allowed": false,
+      "reason": "从成熟 Codex 执行链抽取最小多 Persona 共享控制层并证明 Codex wire 零差异",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./internal/officialegress/... ./internal/service/...",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/multi-persona-control-test-transition.json"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/executor.go",
+      "scope": "officialegress_control",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 28479,
+        "sha256": "da58f780ef00229599759f2be35307bf4a3305f332fa30834f6675c8e9f5aa6b"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 33952,
+        "sha256": "b72f0e5af60b689ec7817ea1381d464d980de7162ce1721e88ba7995f2e7fbe3"
+      },
+      "deletion_allowed": false,
+      "reason": "从成熟 Codex 执行链抽取最小多 Persona 共享控制层并证明 Codex wire 零差异",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./internal/officialegress/... ./internal/service/...",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/multi-persona-control-test-transition.json"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/executor_one_shot_retirement_test.go",
+      "scope": "officialegress_control",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 5111,
+        "sha256": "e33ced5ce2af781f820351aed082873b907acf5d5ccc7429d023bd078eda611c"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 5485,
+        "sha256": "4fcdaa8fca4efd325185785ee3c76d9c5261b230634a4292ffce9af856db89de"
+      },
+      "deletion_allowed": false,
+      "reason": "从成熟 Codex 执行链抽取最小多 Persona 共享控制层并证明 Codex wire 零差异",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./internal/officialegress/... ./internal/service/...",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/multi-persona-control-test-transition.json"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/guard.go",
+      "scope": "officialegress_control",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 24565,
+        "sha256": "c11519b628938c26183fe8395de89b436c9a01105892068f969ec2011a324b72"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 24707,
+        "sha256": "59576d4891f285baf518fbe355c916e92f51a473e93d3fa77f03f9a490f4e1b1"
+      },
+      "deletion_allowed": false,
+      "reason": "从成熟 Codex 执行链抽取最小多 Persona 共享控制层并证明 Codex wire 零差异",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./internal/officialegress/... ./internal/service/...",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/multi-persona-control-test-transition.json"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/migration_receipts.go",
+      "scope": "officialegress_control",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 16348,
+        "sha256": "496c8a4fceb9ff249e6ee4c067159be59b08e971ea4a915f9839aa2aef1bf9fb"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 16380,
+        "sha256": "48315d92c0c1958f25bd30fb28978729163b0624d47a191ba2e14c89db994d83"
+      },
+      "deletion_allowed": false,
+      "reason": "从成熟 Codex 执行链抽取最小多 Persona 共享控制层并证明 Codex wire 零差异",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./internal/officialegress/... ./internal/service/...",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/multi-persona-control-test-transition.json"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/persona_control_test.go",
+      "scope": "officialegress_control",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 9701,
+        "sha256": "a9c7e77d6c608902343438781b0a46ae0c7fcd11398827652b886678bbb9c4e7"
+      },
+      "deletion_allowed": false,
+      "reason": "从成熟 Codex 执行链抽取最小多 Persona 共享控制层并证明 Codex wire 零差异",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./internal/officialegress/... ./internal/service/...",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/multi-persona-control-test-transition.json"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/persona_registry.go",
+      "scope": "officialegress_control",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 14125,
+        "sha256": "26588c1082027471ceb43f00b4e3410f47ae7d6a9373cd7e10f8d0edd803ead3"
+      },
+      "deletion_allowed": false,
+      "reason": "从成熟 Codex 执行链抽取最小多 Persona 共享控制层并证明 Codex wire 零差异",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./internal/officialegress/... ./internal/service/...",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/multi-persona-control-test-transition.json"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/persona_release_catalog.go",
+      "scope": "officialegress_control",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 7932,
+        "sha256": "c43bc535f6e2e49620716b02e8ec07e09de12a93df82fa745ea8da1da08847dd"
+      },
+      "deletion_allowed": false,
+      "reason": "从成熟 Codex 执行链抽取最小多 Persona 共享控制层并证明 Codex wire 零差异",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./internal/officialegress/... ./internal/service/...",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/multi-persona-control-test-transition.json"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/release_catalog.go",
+      "scope": "officialegress_control",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 12922,
+        "sha256": "931abeee98b5178d3f530179b36262cdf38431307c083e267f3fc93bfc237d97"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 13017,
+        "sha256": "2002156c0af40145ef88c3b514066aed293af780c3e4bb1c9b1054af2b723a4d"
+      },
+      "deletion_allowed": false,
+      "reason": "从成熟 Codex 执行链抽取最小多 Persona 共享控制层并证明 Codex wire 零差异",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./internal/officialegress/... ./internal/service/...",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/multi-persona-control-test-transition.json"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/route_catalog.go",
+      "scope": "officialegress_control",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 16608,
+        "sha256": "dfb80944ed654d7811a95d04dd36ef9b8595df09222f8ccc5d0f92a8d99b10c2"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 16946,
+        "sha256": "c38ecb954ffdb3dfcefbd8d0ea3a46521b8a05b7af6515a6aaa0610a8765872b"
+      },
+      "deletion_allowed": false,
+      "reason": "从成熟 Codex 执行链抽取最小多 Persona 共享控制层并证明 Codex wire 零差异",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./internal/officialegress/... ./internal/service/...",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/multi-persona-control-test-transition.json"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/types.go",
+      "scope": "officialegress_control",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 44339,
+        "sha256": "68f90d9f5a9a86fd5f3e8fe6724a9288856813900ae0b1e1185d9a343a2b2fda"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 44739,
+        "sha256": "96018e1c10432f78e809286ea229e6a4a4575e7230e486611ad6d8dc0ea78f5b"
+      },
+      "deletion_allowed": false,
+      "reason": "从成熟 Codex 执行链抽取最小多 Persona 共享控制层并证明 Codex wire 零差异",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./internal/officialegress/... ./internal/service/...",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/multi-persona-control-test-transition.json"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/websocket_session.go",
+      "scope": "officialegress_control",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 13442,
+        "sha256": "cd12939cae167c3e063bc41000570b79b93f1d63a63a7f008f9236d49302b932"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 13566,
+        "sha256": "a8f7c3d317a22159c74f6b1a0acde0f68d86da297c6ec8dd450fbdcdfdc0a792"
+      },
+      "deletion_allowed": false,
+      "reason": "从成熟 Codex 执行链抽取最小多 Persona 共享控制层并证明 Codex wire 零差异",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./internal/officialegress/... ./internal/service/...",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/multi-persona-control-test-transition.json"
+      ]
+    },
+    {
+      "path": "backend/internal/service/compatibility_code_retirement_closure_test.go",
+      "scope": "service_boundary",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 10543,
+        "sha256": "a4da4a187e54792445e3d0024302558608fd2d75d1dbba90148e41b09e5a9e20"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 14067,
+        "sha256": "92814c499d4581baff0852a752d1fbd8a805e5ccd1d181dd81868a5b07642873"
+      },
+      "deletion_allowed": false,
+      "reason": "从成熟 Codex 执行链抽取最小多 Persona 共享控制层并证明 Codex wire 零差异",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./internal/officialegress/... ./internal/service/...",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/multi-persona-control-test-transition.json"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_activation_fact.go",
+      "scope": "service_boundary",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 6185,
+        "sha256": "84507a6f3c03fd76731f2ed5576a69151030807ae3f64015cb53ea47e80e4172"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 6226,
+        "sha256": "aa742376e8ef20fd9193207c83b05e86e81e3063c81300746f785f31b09f60bd"
+      },
+      "deletion_allowed": false,
+      "reason": "从成熟 Codex 执行链抽取最小多 Persona 共享控制层并证明 Codex wire 零差异",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./internal/officialegress/... ./internal/service/...",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/multi-persona-control-test-transition.json"
+      ]
+    },
+    {
+      "path": "docs/egress/maintenance/multi-persona-control-source-transition.json",
+      "scope": "receipts",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 1327,
+        "sha256": "139f4844085942b709a68b61d2b51f863189ada780d361ace91cad8a6ae86bb2"
+      },
+      "deletion_allowed": false,
+      "reason": "从成熟 Codex 执行链抽取最小多 Persona 共享控制层并证明 Codex wire 零差异",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./internal/officialegress/... ./internal/service/...",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/multi-persona-control-test-transition.json"
+      ]
+    },
+    {
+      "path": "docs/egress/maintenance/multi-persona-control-test-transition.json",
+      "scope": "receipts",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 1255,
+        "sha256": "bb9b3e749dcc705b11d7b22bf2d6bb6f7d04bba8a1ccf5d9ae54d04475f21814"
+      },
+      "deletion_allowed": false,
+      "reason": "从成熟 Codex 执行链抽取最小多 Persona 共享控制层并证明 Codex wire 零差异",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./internal/officialegress/... ./internal/service/...",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/multi-persona-control-test-transition.json"
+      ]
+    },
+    {
+      "path": "tools/maintenance_workspace_transition.py",
+      "scope": "source_gate",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 12367,
+        "sha256": "9310d189f801805f84d66615cb1b2af794c5aa58f3f29a96e69e6a589700553f"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 14587,
+        "sha256": "f811bd76a2ed80c97c0cbca69df7ac3dd1d0328b32b2b9a635fe721bf9bebeb0"
+      },
+      "deletion_allowed": false,
+      "reason": "从成熟 Codex 执行链抽取最小多 Persona 共享控制层并证明 Codex wire 零差异",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./internal/officialegress/... ./internal/service/...",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/multi-persona-control-test-transition.json"
+      ]
+    },
+    {
+      "path": "tools/multi_persona_control_workspace_transition.py",
+      "scope": "source_gate",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 13881,
+        "sha256": "ff2b867b488601e8ea6a2e4c9868b85205361239b99ae74bc2e24e5ee97adf2a"
+      },
+      "deletion_allowed": false,
+      "reason": "从成熟 Codex 执行链抽取最小多 Persona 共享控制层并证明 Codex wire 零差异",
+      "machine_proofs": [
+        "make check-egress-spec",
+        "go test ./internal/officialegress/... ./internal/service/...",
+        "docs/egress/maintenance/multi-persona-control-source-transition.json",
+        "docs/egress/maintenance/multi-persona-control-test-transition.json"
+      ]
+    }
+  ],
+  "rules": [
+    "基准提交后的已提交路径与当前完整 git status 路径取并集",
+    "本轮路径必须与 Codex-only 多 Persona 控制层批准闭集完全相等",
+    "before 固定来自基准提交，after 来自当前普通文件或明确缺失",
+    "不允许删除、符号链接、Claude 遗留实现或画像事实进入本变更集",
+    "manifest 与 receipt 因自引用循环排除，VERSION 因发版流水线自动回写排除"
+  ]
+}

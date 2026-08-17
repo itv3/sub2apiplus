@@ -165,7 +165,9 @@ func (g *Guard) RecorderFailureCount() uint64 {
 }
 
 func (g *Guard) registerIssuer(issuer *tokenIssuer) error {
-	if g == nil || issuer == nil || issuer.id == "" {
+	if g == nil || issuer == nil || issuer.id == "" || !issuer.authorityKind.Valid() ||
+		!issuer.persona.Valid() || issuer.persona == PersonaUnclassified ||
+		issuer.persona == PersonaDeadCode {
 		return errors.New("Guard 无法登记空 Executor issuer")
 	}
 	g.issuerMu.Lock()
@@ -479,7 +481,9 @@ func (g *Guard) finalizationIdentityReasons(
 	if token.Backend != backend {
 		reasons = append(reasons, ReasonWrongBackend)
 	}
-	if metadata.ReleaseDigest == "" || token.ReleaseDigest != metadata.ReleaseDigest {
+	if metadata.ReleaseDigest == "" || token.ReleaseDigest != metadata.ReleaseDigest ||
+		metadata.ProfileDigest == "" || token.ProfileDigest != metadata.ProfileDigest ||
+		metadata.BundleDigest == "" || token.BundleDigest != metadata.BundleDigest {
 		reasons = append(reasons, ReasonReleaseDigestMismatch)
 	}
 	if metadata.ConnectionPoolDigest == "" ||

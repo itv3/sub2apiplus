@@ -11,6 +11,8 @@
 > 人类可读权威入口；机器证据和 JSON 台账不得形成第二套规范
 > **证据边界**：本文没有未压缩 TS 源码可用，静态规则均从官方生产 bundle 逆向建立；材料、证据、
 > 规则与结论全部独立取自 Claude Code 自身，不继承 Codex 的任何事实结论
+> **运行时状态**：本文已经建档 Claude Persona 目标，但当前 strict 多 Persona 运行时尚未登记或激活
+> Claude；现有 service finalizer 仍属于遗留局部仿真
 > **末次更新**：2026-08-17
 
 ---
@@ -46,15 +48,20 @@ bundle 中 essential gate 有 53 个调用点、非 default gate 有 7 个调用
 
 ```text
 官方 Claude Code／第三方标准 API
-→ 规范化语义与受信条件
-→ Claude Code active ReleaseBundle
-→ Claude DialectCompiler + 共享 Executor／Guard
+→ IngressProtocolAdapter
+→ CanonicalRequest + TranslationReport
+→ Claude PersonaPlanner + ClaudeIdentityFacts
+→ Claude Code active ReleaseArtifact／ReleaseBundle
+→ Claude DialectCompiler → CompiledEnvelope
+→ Claude Executor authority 实例 + 共享 Executor 实现／Guard
 → Anthropic OAuth 上游
 ```
 
-出站画像函数为 `ClaudeProfile(规范化语义请求, 会话状态, 平台与入口条件, 服务端特性状态)`；
-入站客户端类型不是函数输入。第二部分记录官方规则，第三部分记录 Claude 实现与迁移，第四部分只
-补充 Claude 特有的换版流程，第五部分处理维护，第六部分固定环境职责。
+`IngressProtocolAdapter` 按 Anthropic Messages、OpenAI Responses 等入站协议实现，并输出统一的
+语义和无损／降级／拒绝报告；Claude PersonaPlanner 只消费该合同，不复制各协议解析器。出站画像函数
+为 `ClaudeProfile(规范化语义请求, 会话状态, 平台与入口条件, 服务端特性状态)`；入站客户端名称、UA
+和自报版本不是函数输入。第二部分记录官方规则，第三部分记录 Claude 实现与迁移，第四部分只补充
+Claude 特有的换版流程，第五部分处理维护，第六部分固定环境职责。
 
 ---
 
@@ -246,7 +253,11 @@ ClientHello、原始 HTTP Header 合同、工具／compact／其他非主会话�
 <!-- CLAUDE_ALIGNMENT_EXCLUDED_END -->
 
 其中 `SPEC-HDR-011` 已由 `SPEC-HDR-020` 与 `SPEC-BODY-007` 取代；三条 `RESP` 规则属于下游响应
-兼容责任。
+兼容责任。这里的正式排除项只有上述 4 个编号；“辅助端点”没有被 §2.2.4 排除。当前
+`CAND-EP-COUNTTOKENS`、`CAND-EP-AUXILIARY` 和 `CAND-EP-FULLSET` 仍是未编号候选，必须在 FW-E
+完成发现并按 Framework 的 `persona_strict／non_persona_managed／denied` 三态定性。只有晋升为
+`persona_strict` 的候选才新增原子 SPEC、`PAIR-<SPEC-ID>` 并进入对应 SupportEnvelope；
+`non_persona_managed` 虽不计入 53 项 wire 对齐责任，仍必须进入受管 route／Sink 和运行时门禁。
 
 每个 `target_1_1=true` 的编号预留成对验收编号 `PAIR-<SPEC-ID>`。实现阶段必须让官方入口和第三方
 入口分别执行该断言；对于相同规范化语义与画像条件，两侧必须命中相同的可见结果。动态字段按规则声明的格式、
@@ -940,21 +951,38 @@ SPEC 引用单向属于当前 verified 集合；正文不得给出与 §2.14／�
 
 本部分只记录 Claude 方言和当前代码差距；共享控制契约见 Framework。硬性目标是：画像能表达的
 换版只追加画像、证据和发布图，不修改执行代码；只有新协议、新状态机制或 Schema 缺口才能修改
-共享引擎，并回归受影响 persona 的 active、previous 与 candidate。
+共享引擎，并回归受影响 Persona 的 production active／rollback 与 validation candidate。
 
 ## 3.1 Persona 与执行链
 
 ```text
 官方 Claude Code／第三方标准 API
-→ 规范化语义 + ClaudeIdentityFacts + ClaudeEgressPlan
-→ Claude active ReleaseBundle
-→ Claude DialectCompiler
-→ 共享 Executor + FinalizationToken + 受信 adapter
+→ IngressProtocolAdapter → CanonicalRequest + TranslationReport
+→ Claude PersonaPlanner + ClaudeIdentityFacts + ClaudeEgressPlan
+→ Claude active ReleaseArtifact／ReleaseBundle
+→ Claude DialectCompiler → CompiledEnvelope
+→ Claude Executor authority 实例 + FinalizationToken + 受信 adapter
 → Runtime Guard → Anthropic
 ```
 
 入站只提交协议、模型、工具、语义和受信条件；Key、Group、账号路由与计费仍由业务系统管理。
-调用方不能选择生产版本、transport ID 或最终 wire。
+调用方不能选择 Persona、生产版本、transport ID 或最终 wire。只有 `TranslationReport=lossless` 且
+请求位于本 Release 的 `SupportEnvelope` 内，才能进入 strict Compiler；范围外请求必须 fail-close。
+
+FW-E 的 `ProductionIngressInventory` 至少从以下当前已知逻辑入口开始，不能把本表当作已经完成的物理
+路由闭集：
+
+| 逻辑入口 | 盘点要求 |
+|---|---|
+| `/v1/messages` | 记录 Anthropic Messages 语义适配器、全部前缀／路由别名和 Claude OAuth 调用点 |
+| `/v1/chat/completions` | 记录 Chat Completions 到 CanonicalRequest 的映射、拒绝条件和全部物理别名 |
+| `/v1/responses` | 记录 Responses 的 HTTP／其他实际可达形态、子路径和全部物理别名 |
+| `/v1/messages/count_tokens` | 作为独立生命周期入口和出站目的盘点，不从 `/v1/messages` 的结论自动继承 |
+
+只有最终路由到 `claude-code` firstParty OAuth 的调用才属于本闭集；同名 API Key、Antigravity 或其他
+Persona 路径必须标记为 `rerouted` 并指向其真实产品边界。代码中的前缀别名、WebSocket／compact
+分支、内部调用和 handler 转发均须展开到物理入口，不能只登记上述四个字符串。每项同时记录当前处置
+和目标处置；strict 链实际接管前保持 `retained_legacy`。
 
 | persona | 边界 |
 |---|---|
@@ -965,10 +993,19 @@ SPEC 引用单向属于当前 verified 集合；正文不得给出与 §2.14／�
 
 | 入站事实 | 处理 |
 |---|---|
-| UA、版本、`x-app`、会话 UUID、metadata | 不拥有 wire 身份，由 active 画像重建 |
+| 用户消息、system、工具、模型和 stream 语义 | 无损进入 `CanonicalRequest`；角色、顺序和内容变化必须反映在 TranslationReport |
+| Persona 固有 system blocks | 只能由 active 画像和官方规则派生；不得覆盖或冒充用户 system 语义 |
+| metadata、device、session、agent | 只能由 Identity Authority 从受信锚点派生，并记录 source、reason、scope、lifecycle 和冲突处置 |
+| UA、版本、`x-app`、Stainless | 入站值不拥有 wire 身份；由 active ReleaseBundle 提供或按其规则派生 |
 | 身份冲突 | 丢弃冲突值，从同一受信生命周期派生 |
 | 条件缺失／冲突 | 按条件不成立处理，不伪造 Header 或空值 |
 | 画像闭集外字段、未消费 Header | 删除并去重告警，不透传上游 |
+| `system → user message` 等角色改写 | 不是无损映射；strict 拒绝，只能在单独批准的 compatibility 模式记录并隔离 |
+
+当前 `gateway_claude_oauth_body.go` 注入 Persona system、重排用户 system，以及
+`official_egress_anthropic.go` 派生 device／session 的实现属于待迁移遗留语义层。Persona 固有内容和
+身份派生可以保留其有证据的意图，但必须迁入上述权威来源与派生记录；角色重排不能以 `lossless` 进入
+strict。现有输出只用于 FW-A 基线记录、FW-E 盘点和影子诊断，不是目标 stable 的正确性证据。
 
 ## 3.2 内容寻址画像
 
@@ -978,12 +1015,14 @@ Claude 画像目标路径为：
 backend/internal/officialegress/catalogdata/claude/profiles/<version>/<digest>.json
 ```
 
-`version + digest` 是不可变坐标；加载、Schema 或摘要校验失败必须阻止启动。运行时只读，按请求
-修改的数据必须深拷贝。
+`version + digest` 是不可变 ReleaseArtifact 坐标；加载、Schema 或摘要校验失败时，该 Claude Persona
+不得获得可执行 route。运行时只读，按请求修改的数据必须深拷贝。Discovery、Evidence、Approval、
+Validation candidate、production active／rollback 和实际 Deployment 是正交事实，不能合并成一个
+遗留 `active／previous` 状态枚举。
 
 | 画像段 | 责任 |
 |---|---|
-| `Version`／`RequiredRules` | 版本身份、UA 来源、目标 SPEC 集合与状态等级 |
+| `Version`／`RequiredRules`／`SupportEnvelope` | 版本身份、UA 来源、目标 SPEC 集合、平台／入口／功能范围和范围外拒绝条件 |
 | `Transports` | 有证据的 TLS、ALPN、SNI、HTTP 和连接行为；未证明字段保持缺失 |
 | `Endpoints` | method、host、path、query、内容类型、压缩和 client 生命周期闭集 |
 | `HeaderSlots` | WireName、值来源、条件、互斥组和相对顺序 |
@@ -996,19 +1035,64 @@ backend/internal/officialegress/catalogdata/claude/profiles/<version>/<digest>.j
 `Value`、`Source`、`Condition`、`AlternateGroup`；条件只读取规范化语义和受信上下文，不能读取
 第三方同名 Header。条件不成立时整条省略。
 
-ReleaseCatalog 的 active／previous 指向完整 release ID；新增版本只追加快照与发布图节点。
-版本泄漏 baseline 只登记既有债务，不能通过新增版本常量换取门禁通过。
+ReleaseArtifact Store 保存全部不可变 Release；Runtime Selector 只保存 Claude production active／rollback
+引用，Validation candidate 使用独立的 immutable release reference，不借用 rollback。Claude 首次激活前
+必须提供可验证的真实回退目标，可以是上一正式 Release 或冻结的遗留实现；不得复制 active 摘要伪造
+回滚对。新增版本只追加快照与发布图节点。版本泄漏 baseline 只登记既有债务，不能通过新增版本常量
+换取门禁通过。
+
+Claude 每次生产切换还必须分别冻结以下范围，不能只在 candidate 上写一个 SupportEnvelope：
+
+| 范围 | Claude 口径 |
+|---|---|
+| `ActiveSupportEnvelope` | 将成为或已经成为 production active 的 Release 经批准并通过 strict 断言的范围 |
+| `RollbackOperationalEnvelope` | rollback 镜像、selector、配置、依赖和入口已真实演练可运行的范围 |
+| `DeploymentTrafficEnvelope` | 本次实际从遗留链切入 Claude strict active 的生产流量范围 |
+
+必须满足：
+
+```text
+DeploymentTrafficEnvelope
+⊆ ActiveSupportEnvelope
+∩ RollbackOperationalEnvelope
+```
+
+2.1.220 当前权威证据只覆盖 `sdk-cli`、Linux x86_64、`essential-traffic`、Sonnet 5，且 53 项中只有
+12 项 verified；因此不能默认把它声明为目标 stable 全范围的 strict rollback。若其独立批准与回退演练
+只覆盖窄范围，就必须同步收窄 DeploymentTrafficEnvelope；也可使用 FW-A 冻结的遗留部署承载更宽的
+operational rollback，但遗留 wire 始终是 diagnostic-only，不能扩大 2.1.220 的官方证据或批准范围。
 
 ## 3.3 Claude 方言终态合同
 
 `ClaudeIdentityFacts` 绑定账号、会话、agent、平台和入口事实；版本、UA、`x-app`、entrypoint 与
-Stainless 向量来自 ReleaseBundle。`DialectCompiler` 只允许画像声明的 URL、Header 与 Body：
+Stainless 向量来自 ReleaseBundle。`DialectCompiler` 只允许画像声明的 URL、Header 与 Body，并把
+结果封装为最小 `CompiledEnvelope`：
 
 - URL 拒绝 opaque、userinfo、fragment、显式端口和非精确 `https`，host／path／query 必须命中闭集；
 - HTTP/1.1 写出前定型 Header 大小写、顺序、host 和长度；
 - Body 保持键闭集、稳定顺序、JSON 数值、system、cache_control 与 metadata 契约；
 - 会话状态按 invocation 隔离，无可信锚点时不得跨请求复用上游状态；
-- 连接、重试和辅助端点只从画像执行，不得在业务代码或裸 client 中旁路。
+- `persona_strict` 的连接、重试和端点只从画像执行；`non_persona_managed` 只从已登记管理策略执行，
+  两者均不得在业务代码或裸 client 中旁路。
+
+当前已知 Claude OAuth 出站按以下初始口径进入 FW-E／FW-F 清单；后续官方证据可以通过新的
+ApprovalFact 收窄或晋升，但不能静默换类：
+
+| 出站族 | 初始处置 | 要求 |
+|---|---|---|
+| `/v1/messages` 推理及已编号的 `HEAD /api/hello` 生命周期探测 | `persona_strict` | 纳入画像、SPEC／PAIR、SupportEnvelope 和 Guard |
+| `/v1/messages/count_tokens` | `non_persona_managed` | 证据闭环前使用独立受管策略；闭环后可新增 SPEC／PAIR 并晋升 `persona_strict` |
+| usage／额度查询、OAuth refresh、account test、upstream models | `non_persona_managed` | 登记 route／Sink、认证、endpoint、client、超时、重试、秘密与审计，不主张官方 wire 等价 |
+| 未登记 Claude OAuth 路径 | `denied` | enforce 时 fail-close |
+
+`non_persona_managed` 是受管第三态，不是 `out_of_scope_passthrough`。它不计入当前 53 项及
+SupportEnvelope 的逐规则分母，但必须有独立的 source-to-sink 闭集、运行断言和失败策略；未来若要求
+仿真官方客户端在该端点的 wire，必须先取得证据、原子化规则并正式晋升为 `persona_strict`。
+
+Envelope 只向共享 Executor 暴露 Persona／Release 摘要、Route／Sink、method／protocol、attempt、Body
+可重放性、TransportCapability、Identity／Dialect attestation digest 和受保护请求能力。共享层不得
+解释 Claude beta、Header 槽位、BodyShape、agent 层级、Stainless 或重试语义，也不得要求 Claude 填充
+Codex IdentityMode、HeaderPolicy、BodyPolicy、BehaviorPolicy 或 fallback 字段。
 
 | 规则组 | 数量 | 画像／执行落点 |
 |---|---:|---|
@@ -1016,12 +1100,12 @@ Stainless 向量来自 ReleaseBundle。`DialectCompiler` 只允许画像声明�
 | Header／Beta | 26 | `HeaderSlots`、`BetaPolicy` + Claude Compiler |
 | Body | 16 | `BodyShape` + Claude Compiler |
 | 端点 | 4 | `Endpoints` + URL 闭集 |
-| 连接／重试 | 3 | `RetryPolicy`、client lifecycle + Executor |
+| 连接／重试 | 3 | Claude `RetryPolicy`、client lifecycle；只把最终 attempt 预算与可重放性投影给 Executor |
 
 53 项均须同时具有画像／执行落点、官方与候选证据及 `PAIR-<SPEC-ID>`；调度、计费和服务级节奏不由
 画像改写。
 
-## 3.4 当前差距与 A～E 迁移
+## 3.4 当前差距与 FW-A～FW-H 迁移
 
 当前只有遗留局部仿真，strict 画像化迁移尚未开始：
 
@@ -1029,22 +1113,34 @@ Stainless 向量来自 ReleaseBundle。`DialectCompiler` 只允许画像声明�
 |---|---|
 | 版本身份硬编码且散布 | `internal/pkg/claude/constants.go` 及多个业务文件读取 2.1.220、UA、Stainless、beta 常量 |
 | 画像由 Go 构造 | `buildAnthropicClientProfileCatalog()` 不能内容寻址或追加换版 |
-| 无 Claude Snapshot／发布图 | `catalogdata/` 只有 Codex；Claude active／previous 只是代码构造指针 |
+| 无 Claude Snapshot／发布图 | `catalogdata/` 只有 Codex；遗留 Claude `active／previous` 只是代码构造指针 |
 | 无条件 Header Schema | 遗留画像只有 `StaticHeaders` 与 `BetaHeader`，无法表达 21 项条件责任 |
 | finalizer 位于 service | `official_egress_anthropic.go` 未进入共享 Executor／Token／Guard 终态链 |
 | 无 Claude Persona／Compiler／Guard | 当前 `officialegress` persona 和 authority 仍是 Codex 专用 |
+| 入口与出站闭集未封存 | 三类推理入口、物理别名、count_tokens 和管理辅助请求尚无统一 Inventory 与三态处置 |
+| 三方语义补全未受管 | Persona system／identity 派生与有损 system 角色改写混在遗留 body 重写器中 |
 | 版本门禁不完整 | 版本注释已漂移，业务代码尚可继续泄漏版本指纹 |
 
 | 阶段 | 变更 | 完成判据 |
-|---:|---|---|
-| A | 登记 `PersonaClaudeCode`、route、SinkBinding，Guard=`legacy_observe` | Guard 可见且 final wire 不变 |
-| B | 定义 Schema，把现有 2.1.220 行为原样导出为首个快照 | 摘要可复算，改造前后逐字节一致 |
-| C | 接入 Claude Plan／Facts／DialectCompiler、共享 Executor 和必要窄 adapter | 空 wire 允许列表通过；不扩张 `CodexEgressPlan` |
-| D | 业务路径停止读取 Claude 版本常量 | 版本泄漏门禁覆盖 Claude，baseline 不新增 |
-| E | 接入 active／previous、canary、回滚和 enforced Guard | 不改代码即可切换并完成回滚证明 |
+|---|---|---|
+| `FW-A` | 只读冻结 Codex、Claude 2.1.220 证据、生产运行态和遗留发送面基线；不新增 Claude 代码或绑定 | 两类基线可复算；遗留输出只标 diagnostic-only；没有生产写入 |
+| `FW-B` | 按 Framework 抽取 Codex 已证明的暂定共享合同并保留 Codex facade | 共享内核无 Codex 专用策略字段；Codex active／rollback final wire 零差异；不宣称多 Persona 已冻结 |
+| `FW-C` | 验证并发布 Codex-only 正式制品，完成回滚、恢复和稳定观察 | 本轮没有新增 Claude Persona／画像／strict 注册；Codex 发布与激活收据闭环 |
+| `FW-D` | 建设 Campaign、正交事实、两段式批准、Snapshot／Release Store、candidate／PAIR、晋升与激活工具链 | 只用 Codex／合成数据自测；越权、摘要变化、范围缺口和收据不匹配均由机器阻断 |
+| `FW-E` | 第一步冻结最新 stable；完成相对 2.1.220 的规则差分、P／R／J／M 和 Evidence 批准，再建立两个 Inventory 与 observation-only Sink | 目标版本和 EvidencePackage 冻结；入口／出站闭集可复算；尚不定义目标 Schema／Snapshot |
+| `FW-F` | 先由最新 stable 证据生成 Schema、目标 Snapshot、Persona 和不可部署样例，再用同一 Schema／Compiler 表达 2.1.220 rollback fixture；批准 Profile、范围和多 Persona 合同 | target-first 样例与跨 Persona 负例通过；ApprovalFact 完整；Codex 生产收据对应最终合同；selector 未改变 |
+| `FW-G` | 直接完整实现最新 stable 画像，完成受管语义层、辅助出站三态、全部 strict 入口 PAIR、DMIT candidate 和 rollback 验收 | candidate 达到 production-replacement ready；范围内断言和范围外拒绝通过 |
+| `FW-H` | 灰度、回滚、激活；逐入口迁移并在闭集完成后退休遗留链 | DeploymentFact 与运行态一致；无 `retained_legacy` 才能签发迁移完成的 RemovalReceipt |
 
-阶段 B 只做等价数据化，不能同时修正规则；规则变化必须另走第四部分。`constants.go` 若仍服务
-API Key 产品语义，只退休 `claude-code` persona 的版本面。
+最新 stable 是目标 Schema、Snapshot 和实现的唯一设计权威。FW-E 只冻结目标规则证据，不预先用
+2.1.220 建画像；FW-F 必须先生成目标 stable 画像和样例，随后才把 2.1.220 表达为差分基线、
+conformance fixture 或受范围约束的 rollback。遗留 final wire 只用于盘点和诊断，不能决定任何画像
+字段或提升证据等级。FW-F 两套 fixture 永久保留，但不得注册到 Codex-only 运行时镜像。
+
+若 FW-G 的目标 stable 机制暴露真正的共享控制合同缺口，当前 candidate 作废，返回 FW-B 建立后继
+合同，并重新执行 Codex 零差异、FW-C Codex-only 发布闭环及 FW-F 的 target-first／2.1.220 fixture；
+不得在 Claude 方言中绕过或原位扩张接口。`constants.go` 若仍服务 API Key 产品语义，只退休
+`claude-code` OAuth Persona 的版本面。
 
 ## 3.5 包边界、Guard 与策略
 
@@ -1053,22 +1149,27 @@ service → officialegress core ← repository 窄 port
 wiring → 闭集 adapter 注册
 ```
 
-`officialegress` 不得 import `service` 或 `repository`。Claude 与 Codex 只共享 Catalog、Release、
-编译注册、Executor、Token、Guard 和 adapter 注册；Plan、IdentityFacts、ProfileSchema、
-DialectCompiler 及 transport 参数独立。共享 Executor 只消费闭集编译结果和终态元数据。
+`officialegress` core 不得 import `service` 或 `repository`。Claude 与 Codex 只共享 Artifact Store、
+Runtime Selector、编译注册、Executor 实现、Token、Guard 和 adapter 注册；Plan、IdentityFacts、
+ProfileSchema、DialectCompiler 及 transport 参数独立。Codex 和 Claude 各自拥有 Executor authority、
+Token issuer 和 invocation 状态；共享 Executor 实现只消费闭集 `CompiledEnvelope`。
 
 Guard 按 route、persona、Sink、binding、Release、Profile digest、adapter、FinalizationToken 和
 最终摘要校验，状态按 `legacy_observe → canary_enforce → enforced` 推进。未知 route、无效 binding
-或终态篡改必须 fail-close。版本、UA 和 Stainless 指纹只能存在于画像及加载器。
+或终态篡改在 canary／enforced 必须 fail-close；`legacy_observe` 只允许在 FW-E 对已冻结遗留路径报告
+事实，不能作为长期 `out_of_scope_passthrough` 或 strict 验收通过。版本、UA 和 Stainless 指纹只能
+存在于画像及加载器。
 
 重试、隐私模式、缓存、辅助请求和 client 生命周期均由画像或显式策略声明；响应 SSE 属下游兼容，
 不能反向影响请求定型。
 
 ## 3.6 当前可执行边界
 
-源码存在不能证明生产 active。当前 Claude 尚无内容寻址 Snapshot、DialectCompiler、共享 Executor
-落点、Guard 覆盖和激活收据：阶段 B 前不能入库候选画像，阶段 E 前不能晋升生产。当前后继版本
-只能完成官方取证和人工规则比较；受管 Campaign 必须等第四部分列出的工具阻断解除后再启动。
+源码存在不能证明 production active。当前 Claude 尚无内容寻址 Snapshot、DialectCompiler、独立
+Executor authority 落点、Guard 覆盖和激活收据：FW-C 完成前不得启动任何 Claude 迁移实现；FW-D
+完成前不能启动受管 stable Campaign；FW-E 完成前不能生成目标画像；FW-F 完成前不能最终冻结多
+Persona 接口或建立 production candidate；FW-H 前不能晋升生产或退休遗留链。当前只能完成 FW-A
+只读基线和人工规则比较；Framework FW-D 工具阻断解除后，才能从 FW-E 查询并冻结目标 stable。
 
 ---
 
@@ -1077,16 +1178,16 @@ Guard 按 route、persona、Sink、binding、Release、Profile digest、adapter�
 Framework 定义通用 Campaign、candidate、验收、激活和回滚；本部分只补充 Claude 没有官方源码、
 依赖生产 bundle 逆向以及当前工具尚未齐备的差异。
 
-| 阶段 | Claude 产物 | 退出条件 |
+| 流程检查点 | Claude 产物 | 退出事实 |
 |---|---|---|
 | 1. 预检 | 目标版本、官方发行物、环境和生产隔离清单 | 身份完整且 Vircs 生产不受影响 |
-| 2. 官方取证 | A1、P／R／J／M、规则差分 | `official_sealed` |
-| 3. 批准 | 分类、目标规则、画像、场景与断言清单 | `profile_approved` |
-| 4. Candidate | 内容寻址画像、源码、测试、镜像与 inventory | `candidate_sealed` |
-| 5. 比较验收 | 官方／第三方入口的逐规则结果 | `ready` 或 validation-only |
-| 6. 生产闭环 | 晋升、正式镜像、canary、切换、回滚、恢复和收据 | `restored_active` |
+| 2. 官方取证 | A1、P／R／J／M、规则差分 | EvidencePackage 已封存 |
+| 3. 批准 | SupportEnvelope、两个 Inventory、Persona 派生、迁移决策、目标规则、画像、场景、断言与计划范围 | ApprovalFact 已签发 |
+| 4. Candidate | 独立 Release 引用、源码、测试、镜像与 inventory | ValidationCandidate 已封存 |
+| 5. 比较验收 | strict 入口的逐规则结果、非迁移入口隔离和 managed 出站断言 | AcceptanceFact 或 validation-only 结论 |
+| 6. 生产闭环 | 三个 Envelope、晋升、正式镜像、canary、切换、回滚、恢复和收据 | DeploymentFact 达到 `restored_active` |
 
-## 4.1 身份、状态与当前工具阻断
+## 4.1 身份、正交事实与当前工具阻断
 
 Campaign、candidate、attempt 的通用边界见 Framework §3.2。Claude 还必须冻结：
 
@@ -1099,9 +1200,21 @@ Campaign、candidate、attempt 的通用边界见 Framework §3.2。Claude 还�
 | 工具身份 | 采集、relay、脱敏、提取、编排、收据和环境快照的摘要 |
 | 账号与条件 | OAuth 组织、模型、feature、scope、故障注入和场景矩阵 |
 
-Campaign 状态按 `planned → official_sealed → profile_approved → candidate_sealed → compared → ready`
-追加；生产状态独立按 `accepted_not_activated → canary_passed → active → rollback_verified →
-restored_active` 追加。`ready`、最大 candidate 编号或测试通过都不等于生产 active。
+Campaign 只是绑定目标版本、官方产物和环境身份的不可变容器，不使用单一状态枚举同时表达证据、批准、
+验证和部署。以下事实分别追加并通过摘要引用，不得互相替代：
+
+| 维度 | Claude Campaign 必须记录的事实 |
+|---|---|
+| Discovery | 发现版本、发现时间和来源；不得改变任何 Runtime Selector |
+| Evidence | 每条规则独立的 `verified／observed／blocked／regressed_evidence` 与 EvidencePackage |
+| Approval | 固定的 SupportEnvelope、两个 Inventory、Persona 派生、三个 Envelope 计划、目标规则全集、迁移决策、画像和验收清单 |
+| Validation | 独立 candidate ID、不可变 Release 引用、源码／测试／镜像摘要和 AcceptanceFact |
+| Runtime Selector | Claude `production_active` 与 `production_rollback`；不保存 validation candidate |
+| Deployment | `accepted_not_activated → canary_passed → active → rollback_verified → restored_active`、实际入口处置、三个 Envelope 与收据 |
+
+`official_sealed`、`profile_approved`、`candidate_sealed`、`compared` 和 `ready` 只可作为上述事实齐备后
+计算出的流程检查点，不能作为规则证据等级或生产角色。`ready`、最大 candidate 编号或测试通过都不
+等于 production active。
 
 | 能力 | 当前状态 |
 |---|---|
@@ -1109,14 +1222,18 @@ restored_active` 追加。`ready`、最大 candidate 编号或测试通过都不
 | 规则／覆盖门禁和 22-run 分析 | 已实现 |
 | R 通道与条件 Header 探针 | 已实现 |
 | TUI／`cli` 驱动 | 未攻克；无 TTY 的 `docker exec` 会卡住 |
-| Campaign 编排、状态机和两段式批准 | **未受管实现** |
-| Claude Snapshot、画像暂存和发布图 | **未受管实现**；依赖第三部分阶段 B |
-| candidate 冻结、四阶段封存和逐规则断言 | **未受管实现** |
-| 第三方入口集合 | **未定义** |
-| 晋升、正式镜像和激活／回滚收据 | **未受管实现**；依赖第三部分阶段 E |
+| Campaign 编排、正交事实账本和两段式批准 | **未受管实现**；由 FW-D 建设 |
+| Claude Snapshot、ReleaseArtifact Store 和画像暂存 | 受管 Store 工具由 FW-D 建设；最新 stable 目标 Snapshot 与 2.1.220 rollback fixture 尚未在 FW-F 生成 |
+| candidate 冻结、四阶段封存和逐规则断言 | **未受管实现**；由 FW-D 建设 |
+| 第三方入口集合 | 已知逻辑入口已列于 §3.1；物理别名、消费者、当前／目标处置尚未在 FW-E 封存，FW-F 尚未批准 |
+| Persona 派生与 compatibility 语义账本 | **未受管实现**；FW-D 建工具，FW-F 批准边界，FW-G 迁移实现 |
+| 辅助出站三态与运行断言 | 初始定性见 §3.3；完整 source-to-sink 尚未由 FW-E 封存，FW-F 尚未批准 |
+| 晋升、正式镜像和 production active／rollback 收据 | **未受管实现**；FW-D 建设能力，FW-H 执行 |
 
 因此当前只能完成官方取证和人工规则比较；不能把终端记录或手写 JSON 当作批准、验收或激活事实。
-补齐顺序为：编排与状态机 → 批准清单 → 版本化画像 → candidate 封存／逐规则断言 → 晋升／激活收据。
+补齐顺序以 Framework 为准：FW-A 只读基线 → FW-B 暂定共享合同 → FW-C Codex-only 发布 →
+FW-D 受管工具链 → FW-E 最新 stable 规则取证／闭集 → FW-F target-first 画像／2.1.220 rollback fixture →
+FW-G 完整实现／逐规则断言 → FW-H 晋升／激活收据。
 
 ## 4.2 官方取证、分类与批准
 
@@ -1124,6 +1241,9 @@ restored_active` 追加。`ready`、最大 candidate 编号或测试通过都不
 
 开始前只读确认：目标版本未混入当前基线、官方包来源可复算、Vircs 生产容器健康且不会被采集改动、
 证据目录和端口隔离、DMIT 可承载 candidate、ARM64 构建职责已核实。身份或恢复条件不完整时停止。
+
+FW-E 的第一项动作必须是查询官方 `stable` 并冻结版本、发行物和环境身份；在此之前不得定义 Claude
+目标 ProfileSchema、Snapshot 或 candidate。2.1.220 只用于随后差分，不是目标版本选择权威。
 
 Claude 没有可用的目标版本官方源码，必须以官方生产 bundle 为主：
 
@@ -1135,49 +1255,68 @@ Claude 没有可用的目标版本官方源码，必须以官方生产 bundle �
 
 ### 4.2.2 分类与批准清单
 
-| 分类 | 准入 |
-|---|---|
-| `inherit` | 工具证明目标语义、依赖和 sink 未变，且最小运行哨兵仍成立 |
-| `change`／`condition_change` | 目标版本重新取得对应静态与运行证据 |
-| `add` | 新建原子 SPEC、场景、画像落点和 PAIR 断言 |
-| `delete` | 证明旧路径不可达且运行负例成立，保留历史编号 |
-| `blocked` | 目标证据不足，不能进入 strict production replacement |
-| `regressed_evidence` | 旧 verified 在目标版本仅取得较低证据，只能 validation-only |
+| 维度 | 值 | 准入 |
+|---|---|---|
+| 迁移决策 | `inherit` | 工具证明目标语义、依赖和 sink 未变，且最小运行哨兵仍成立 |
+| 迁移决策 | `change`／`condition_change` | 目标版本重新取得对应静态与运行证据 |
+| 迁移决策 | `add` | 新建原子 SPEC、场景、画像落点和 PAIR 断言 |
+| 迁移决策 | `delete` | 证明旧路径不可达且运行负例成立，保留历史编号 |
+| 证据等级 | `verified` | 规则、条件、官方静态／运行证据和复算链闭环 |
+| 证据等级 | `observed` | 仅证明有限样本；补证前不能承担 strict 对齐责任 |
+| 证据等级 | `blocked` | 目标证据不足，不能进入 strict production replacement |
+| 证据等级 | `regressed_evidence` | 旧 verified 在目标版本仅取得较低证据，只能 validation-only |
 
-字符串相同、minify 符号相同或相邻版本都不能独立支持 `inherit`。批准清单必须冻结目标规则全集、
-状态／分类、EvidencePackage、Profile digest、场景、端点、断言、隐私模式和用途；批准后任一身份
-变化都要新建 Campaign 或 candidate，不得原位改写。
+字符串相同、minify 符号相同或相邻版本都不能独立支持 `inherit`。迁移决策、证据等级、规则生命周期
+和兼容类别必须分别记录。批准清单必须冻结 SupportEnvelope 内的目标规则全集、这些正交维度、
+EvidencePackage、Profile digest、场景、端点、断言、隐私模式和用途；批准后官方产物或环境身份变化
+必须新建 Campaign；SupportEnvelope、目标规则、迁移决策、画像、场景、断言或批准用途变化必须签发
+新 ApprovalFact 并建立 candidate；源码、测试、构建或镜像变化只需建立新 candidate。任何旧事实均
+不得原位改写。
+
+Claude 的 ApprovalFact 还必须绑定同一摘要的 `ProductionIngressInventory`、
+`EgressDispositionInventory`、Persona 派生清单、compatibility 模式边界、预期
+DeploymentTrafficEnvelope 和 rollback 目标的 RollbackOperationalEnvelope。缩小 SupportEnvelope
+不能替代现有生产入口的处置：每个入口仍须明确选择 `migrated_strict／retained_legacy／
+explicitly_retired／rerouted`；每个已知 OAuth 出站仍须选择 §3.3 三态。
 
 ## 4.3 画像、Candidate 与制品
 
-在不改变 production active 的前提下，把批准画像生成到全新绝对路径，并形成摘要、inventory 和
-active 未变证明。入库只允许：
+在不改变 production active／rollback 的前提下，把批准画像生成到全新绝对路径，并形成摘要、
+inventory 和 selector 未变证明。入库只允许：
 
-1. 新增内容寻址画像与发布图 candidate 节点，旧画像内容和摘要不变；
-2. 使用第三部分定义的 Claude Schema、DialectCompiler 和窄 adapter；
+1. 先由 FW-E 冻结的最新 stable 证据生成目标 Schema、Snapshot 和 ReleaseArtifact；
+2. 再使用同一 Schema／DialectCompiler 表达 2.1.220 baseline／rollback fixture，不得反向用旧版限制目标设计；
 3. 版本、Header、Body、重试及 transport 事实来自画像，不新增业务代码版本分支；
-4. candidate 必须显式选择目标画像，连接池与 fallback 不跨画像混用；
-5. 构建记录 source tree、测试树、Go／Node 依赖、目标架构、image ID 与 OCI digest。
+4. ValidationCandidate 保存独立 immutable Release 引用，不借用 production rollback 槽位；
+5. candidate 必须显式选择目标画像，连接池与 fallback 不跨画像混用；
+6. candidate 必须冻结 SupportEnvelope，范围外条件由 Planner／Compiler fail-close；
+7. 构建记录 source tree、测试树、Go／Node 依赖、目标架构、image ID 与 OCI digest。
 
-当前阻断：第三部分阶段 B 未完成，Claude 尚无 Snapshot／ReleaseCatalog 落点，本节不可执行。
+当前阻断：FW-D 尚未形成受管 Store 和独立 candidate 引用落点，FW-E 尚未冻结最新 stable 规则证据，
+FW-F 尚未生成 target-first Snapshot／样例并完成多 Persona 合同冻结；三者完成前，本节不能形成受管
+candidate。
 
 ## 4.4 候选验证与正式验收
 
 Candidate 只能在 DMIT 或等价隔离环境运行，不能在 Vircs 换镜像试验。真实请求前原子冻结源码、
 测试、镜像、画像、配置、代理／CA／DNS、工具和 attempt nonce；恢复或秘密扫描失败不得继续。
 
-最低场景矩阵：
+最低场景矩阵以已批准 SupportEnvelope 的 strict 场景为核心，并必须包含关联的边界、遗留与 managed
+处置验证：
 
 - baseline TLS／Header／Body／端点；
 - client-app、remote-container、remote-session 的正负例与组合顺序；
 - agent 深度、session／parent 状态和跨请求关系；
 - 500 重试曲线及目标版本新增的错误分支；
-- 辅助端点、隐私模式和目标 entrypoint；
-- 每类批准的第三方标准 API 入口。
+- `persona_strict` 端点、隐私模式和目标 entrypoint，以及 `non_persona_managed` 出站的独立策略断言；
+- 每个目标处置为 `migrated_strict` 的官方／第三方标准 API 入口，以及所有范围外入口／功能的 fail-close；
+- `retained_legacy／explicitly_retired／rerouted` 的隔离、退休或目标路由断言；
+- Persona system／identity 派生记录，以及 compatibility 模式不会混入 strict 的负例。
 
 每个场景按 `prepare → capture → seal → approve` 封存；结果必须绑定原始证据 inventory，失败 attempt
-不得覆盖。官方入口与第三方入口对同一规范化语义执行同一 `PAIR-<SPEC-ID>`，动态值比较来源、格式、
-关系和生命周期。
+不得覆盖。只有 TranslationReport 为 lossless 的官方入口与第三方入口，才对同一规范化语义执行同一
+`PAIR-<SPEC-ID>`；动态值比较来源、格式、关系和生命周期。Persona 固有 system／identity 事实按已
+批准派生记录比较；有损 compatibility 请求不得混入 strict PAIR 分母。
 
 验收前至少运行：
 
@@ -1185,26 +1324,39 @@ Candidate 只能在 DMIT 或等价隔离环境运行，不能在 Vircs 换镜像
 python3 tools/official_client_capture/claude_21220/check_coverage.py
 ```
 
-逐规则结果必须唯一覆盖目标全集。`blocked` 或 `regressed_evidence` 只能形成 validation-only；
-`ready` 只证明固定 candidate 通过已批准规则，不表示画像已晋升、正式镜像已构建或生产已切换。
-当前 41 项仍为 observed，因此不能在没有目标版本补证和明确批准等级的情况下宣称 strict 完整画像。
+逐规则结果必须唯一覆盖 SupportEnvelope 内的目标全集。`blocked` 或 `regressed_evidence` 只能形成
+validation-only；`ready` 只证明固定 candidate 通过已批准规则，不表示画像已晋升、正式镜像已构建或
+生产已切换。当前 41 项 `observed` 必须逐项选择并留痕：补足目标版本证据达到批准等级；缩小
+SupportEnvelope，使该规则确实不再承担范围内的出站对齐责任并为范围外请求建立 fail-close；或保持
+validation-only。不得把 `observed` 改名、用遗留 wire 佐证，或在仍可到达该规则时仅从清单删除。
 
 当前阻断：Claude 尚无 candidate 编排、四阶段封存、PAIR 断言和 accept 工具，本节不能形成受管 ready。
 
 ## 4.5 生产、回滚与证据归档
 
-只有 production-replacement candidate 达到受管 `ready` 且第三部分阶段 E 完成，才能依次执行：
+只有 production-replacement candidate 达到受管 `ready`、FW-G 退出条件满足并进入 FW-H，才能依次执行：
 
-1. 只读记录生产镜像、compose、active／previous、画像摘要、activation fact、依赖和回滚点；
+首次生产激活前必须冻结并验证真实 rollback 目标：可以是已独立验收的旧 Release，也可以是当前生产
+遗留实现及其固定镜像／配置。遗留实现作为操作回退点时，其 wire 仍是 diagnostic-only，不会因此成为
+官方证据或 approved Profile；不得复制 active 摘要伪造 rollback Release。
+
+2.1.220 只能在其独立批准的窄 SupportEnvelope 内作为 strict rollback；当前 12 verified／41 observed
+状态不支持把目标 stable 的完整范围自动交给它回退。激活前必须冻结并验证
+ActiveSupportEnvelope、RollbackOperationalEnvelope 和 DeploymentTrafficEnvelope，且满足 §3.2
+不变量；不满足时收窄本次流量，不能把“可能 fail-close”当成有效回滚。
+
+1. 只读记录生产镜像、compose、production active／rollback、画像摘要、两个 Inventory、三个 Envelope、activation fact、依赖和回滚点；
 2. 离线晋升已验收画像，生成 promotion receipt 和 candidate→production 差异 inventory；
 3. 在最终 production tree 重跑门禁，构建并固定正式镜像 manifest digest；
-4. 用隔离账号、数据库、网络和配置执行默认 active canary，禁止强制 candidate override；
+4. 用隔离账号、数据库、网络和配置执行 production active canary，禁止强制 candidate override；
 5. 只替换应用容器，保持数据库、缓存、挂载和网络；禁止 `compose down` 或无范围 prune；
-6. 正式切换后切回冻结旧镜像验证，再恢复目标镜像并复核业务、Guard 和 activation fact；
-7. 生成绑定验收、晋升、镜像、canary、切换、回滚和恢复的不可覆盖激活收据。
+6. 正式切换后，对完整 DeploymentTrafficEnvelope 切回冻结 rollback 镜像及其匹配的 selector／配置验证，再恢复目标镜像和 selector，并复核业务、Guard 和 activation fact；
+7. 原子追加实际入口处置和 DeploymentFact，生成绑定验收、晋升、镜像、canary、切换、回滚、恢复及范围摘要的不可覆盖激活收据。
 
-运行容器 digest、active／previous、画像摘要与 activation fact 不一致时状态为
-`production_unverified`。回滚不得删除 Campaign、覆盖画像或重建生产数据服务。
+运行容器 digest、production active／rollback、画像摘要、三个 Envelope 与 activation fact 不一致时
+状态为 `production_unverified`。回滚不得删除 Campaign、覆盖画像或重建生产数据服务。只要 Inventory
+仍有 `retained_legacy`、未知物理别名或未处置出站，就不得删除旧 finalizer／旁路或生成表示迁移完成的
+RemovalReceipt。
 
 | 私有材料 | 处理 |
 |---|---|
@@ -1226,32 +1378,35 @@ python3 tools/official_client_capture/claude_21220/check_coverage.py
 
 | 变化 | 路径 | 最低证明 |
 |---|---|---|
-| 规则、画像、wire、场景和工具身份均不变 | 独立维护变更集 | overlay 可复算，active／previous 空 wire 差异，完整门禁 |
+| 规则、画像、wire、场景和工具身份均不变 | 独立维护变更集 | overlay 可复算，production active／rollback 空 wire 差异，完整门禁 |
 | 实现变化但批准规则不变 | 第四部分的新 candidate | 独立封存、验收；替换生产还需新激活收据 |
 | 规则、画像、断言、场景或产出工具变化 | 同版本后继 Campaign | 重新批准和重放受影响证据 |
 | 兼容代码退休 | 独立退休变更集 | 消费者闭集、fail-close、空 wire 差异和 RemovalReceipt |
 
 ## 5.1 Sub2API 上游更新
 
-1. 冻结 upstream commit、发送面、active／previous、release 与画像摘要；
+1. 冻结 upstream commit、发送面、production active／rollback、release 与画像摘要；
 2. 合并后复算 source-to-sink／overlay，审计 route、persona、Sink 和新增裸 client；
 3. 按上表选择普通维护、新 candidate 或后继 Campaign；
-4. 运行完整测试、静态／版本泄漏门禁和 active／previous 空 wire 比较；
+4. 运行完整测试、静态／版本泄漏门禁和 production active／rollback 空 wire 比较；
 5. production replacement 必须重新执行第四部分生产闭环，不复用旧激活收据。
 
 当前 overlay 台账的 86 个文件中 Claude／Anthropic 条目为 0，无法阻止上游静默改动
 `official_egress_anthropic.go`、`official_client_profile_registry.go` 或 `pkg/claude/constants.go`。
-在 §3.4 阶段 A、D 完成前，每次上游合并必须人工列出这些发送面变化；Claude overlay 覆盖应纳入阶段 A。
+在 §3.4 的 FW-E 发送面闭集和 FW-G 入口迁移完成前，每次上游合并必须人工列出这些发送面变化；
+Claude overlay 覆盖应纳入 FW-E。
 
 ## 5.2 兼容代码退休
 
 退休顺序为：证明全部消费者和必须保留的产品语义 → 迁移真实消费者 → 让旧入口 fail-close →
-验证 active／previous、fallback、辅助端点和负例 → 删除旧能力并生成 RemovalReceipt。不得删除仍
+验证 production active／rollback、fallback、辅助端点和负例 → 删除旧能力并生成 RemovalReceipt。不得删除仍
 服务回滚、非 `claude-code` persona 或 API Key 产品语义的代码。
 
-§3.4 阶段 D 是首个 Claude 退休实例：`internal/pkg/claude` 当前有 17 个非测试文件消费者，必须先
-建立闭集，只退休 Claude Code 的版本、UA、Header 和 beta 面。现有兼容退休台账没有 Claude 条目；
-在每个消费者被标记为“已退休”或“因产品语义保留”前，不得宣称清理完成。
+§3.4 的 FW-G 只建立替代实现和迁移候选，FW-H 才是首个允许 Claude 遗留退休的阶段。
+`internal/pkg/claude` 当前有 17 个非测试文件消费者，必须先建立闭集，只退休 Claude Code 的版本、
+UA、Header 和 beta 面。现有兼容退休台账没有 Claude 条目；在每个消费者被标记为“已退休”或“因
+产品语义保留”，且 `ProductionIngressInventory` 不再含 `retained_legacy` 前，不得宣称清理完成或
+签发迁移完成的 RemovalReceipt。
 
 ---
 

@@ -782,29 +782,29 @@ func (r CompiledRequest) Headers() http.Header { return r.headers.Clone() }
 func (r CompiledRequest) Body() RequestBody    { return r.body.clone() }
 
 type tokenPayload struct {
-	IssuerID                ExecutorID
-	AuthorityKind           receiptcontract.AuthorityKind
-	AuthorityID             ExecutorID
-	ReleaseDigest           string
-	SinkID                  SinkID
-	Route                   RouteKey
-	Persona                 Persona
-	EndpointID              string
-	TransportID             string
-	AdapterID               AdapterID
-	Backend                 BackendKind
-	Protocol                WireProtocol
-	ResourceLifecycleDigest string
-	ConnectionPoolDigest    string
-	InvocationID            string
-	AttemptOrdinal          uint32
-	AttemptReason           string
-	IdentityMode            IdentityMode
-	IdentityFactsDigest     string
-	HeaderPolicyDigest      string
-	BodyPolicyDigest        string
-	RequestDigest           string
-	Normalization           WireNormalizationPlan
+	IssuerID                  ExecutorID
+	AuthorityKind             receiptcontract.AuthorityKind
+	AuthorityID               ExecutorID
+	ReleaseDigest             string
+	ProfileDigest             string
+	BundleDigest              string
+	SinkID                    SinkID
+	Route                     RouteKey
+	Persona                   Persona
+	EndpointID                string
+	TransportID               string
+	AdapterID                 AdapterID
+	Backend                   BackendKind
+	Protocol                  WireProtocol
+	ResourceLifecycleDigest   string
+	ConnectionPoolDigest      string
+	InvocationID              string
+	AttemptOrdinal            uint32
+	AttemptReason             string
+	IdentityAttestationDigest string
+	DialectAttestationDigest  string
+	RequestDigest             string
+	Normalization             WireNormalizationPlan
 }
 
 // FinalizationToken 的全部字段私有，只有本包内的 tokenIssuer 能签发。
@@ -816,24 +816,29 @@ type FinalizationToken struct {
 type tokenIssuer struct {
 	id            ExecutorID
 	authorityKind receiptcontract.AuthorityKind
+	persona       Persona
 	secret        [sha256.Size]byte
 }
 
 func newTokenIssuer(id ExecutorID) (*tokenIssuer, error) {
-	return newTokenIssuerForAuthority(receiptcontract.AuthorityCodexExecutor, id)
+	return newTokenIssuerForPersona(
+		receiptcontract.AuthorityCodexExecutor, PersonaCodexCLI, id,
+	)
 }
 
-func newTokenIssuerForAuthority(
+func newTokenIssuerForPersona(
 	authorityKind receiptcontract.AuthorityKind,
+	persona Persona,
 	id ExecutorID,
 ) (*tokenIssuer, error) {
 	if strings.TrimSpace(string(id)) == "" {
 		return nil, errors.New("ExecutorID 为空")
 	}
-	if !authorityKind.Valid() {
-		return nil, errors.New("执行 authority kind 非法")
+	if !authorityKind.Valid() || !persona.Valid() || persona == PersonaUnclassified ||
+		persona == PersonaDeadCode {
+		return nil, errors.New("执行 authority kind/persona 非法")
 	}
-	issuer := &tokenIssuer{id: id, authorityKind: authorityKind}
+	issuer := &tokenIssuer{id: id, authorityKind: authorityKind, persona: persona}
 	if _, err := rand.Read(issuer.secret[:]); err != nil {
 		return nil, fmt.Errorf("生成 FinalizationToken 密钥: %w", err)
 	}
@@ -843,6 +848,7 @@ func newTokenIssuerForAuthority(
 func (i *tokenIssuer) sign(payload tokenPayload) FinalizationToken {
 	payload.IssuerID = i.id
 	payload.AuthorityKind = i.authorityKind
+	payload.Persona = i.persona
 	mac := hmac.New(sha256.New, i.secret[:])
 	_, _ = io.WriteString(mac, canonicalTokenPayload(payload))
 	var signature [sha256.Size]byte
@@ -851,7 +857,8 @@ func (i *tokenIssuer) sign(payload tokenPayload) FinalizationToken {
 }
 
 func (i *tokenIssuer) verify(token FinalizationToken) bool {
-	if i == nil || token.payload.IssuerID != i.id {
+	if i == nil || token.payload.IssuerID != i.id || token.payload.Persona != i.persona ||
+		token.payload.AuthorityKind != i.authorityKind {
 		return false
 	}
 	mac := hmac.New(sha256.New, i.secret[:])
@@ -862,13 +869,13 @@ func (i *tokenIssuer) verify(token FinalizationToken) bool {
 func canonicalTokenPayload(payload tokenPayload) string {
 	parts := []string{
 		string(payload.IssuerID), string(payload.AuthorityKind), string(payload.AuthorityID),
-		payload.ReleaseDigest, string(payload.SinkID),
+		payload.ReleaseDigest, payload.ProfileDigest, payload.BundleDigest, string(payload.SinkID),
 		payload.Route.String(), string(payload.Persona), payload.EndpointID,
 		payload.TransportID, string(payload.AdapterID), string(payload.Backend), string(payload.Protocol),
 		payload.ResourceLifecycleDigest, payload.ConnectionPoolDigest,
 		payload.InvocationID, strconv.FormatUint(uint64(payload.AttemptOrdinal), 10),
-		payload.AttemptReason, string(payload.IdentityMode), payload.IdentityFactsDigest,
-		payload.HeaderPolicyDigest, payload.BodyPolicyDigest,
+		payload.AttemptReason, payload.IdentityAttestationDigest,
+		payload.DialectAttestationDigest,
 		payload.RequestDigest, payload.Normalization.Digest(),
 	}
 	return strings.Join(parts, "\x00")
@@ -886,6 +893,7 @@ type PreparedRequest struct {
 	bundle    ReleaseBundle
 	endpoint  ResolvedEndpointPlan
 	identity  CodexIdentityFacts
+	dialect   preparedDialectState
 }
 
 func (p PreparedRequest) TakeHTTPRequest() (*http.Request, error) {
@@ -922,7 +930,12 @@ func (p PreparedRequest) TakeHTTPRequest() (*http.Request, error) {
 
 func (p PreparedRequest) Token() FinalizationToken { return p.token }
 func (p PreparedRequest) Transport() TransportSpec { return p.transport.Clone() }
-func (p PreparedRequest) Bundle() ReleaseBundle    { return p.bundle }
+func (p PreparedRequest) Bundle() ReleaseBundle {
+	if state, ok := p.dialect.(codexPreparedState); ok {
+		return state.bundle
+	}
+	return p.bundle
+}
 
 type attemptMetadata struct {
 	SinkID               SinkID
@@ -1035,6 +1048,8 @@ func withFinalizationToken(ctx context.Context, token FinalizationToken) context
 	metadata.ExecutorID = token.payload.AuthorityID
 	metadata.EndpointID = token.payload.EndpointID
 	metadata.ReleaseDigest = token.payload.ReleaseDigest
+	metadata.ProfileDigest = token.payload.ProfileDigest
+	metadata.BundleDigest = token.payload.BundleDigest
 	metadata.ConnectionPoolDigest = token.payload.ConnectionPoolDigest
 	metadata.InvocationID = token.payload.InvocationID
 	metadata.AttemptOrdinal = token.payload.AttemptOrdinal

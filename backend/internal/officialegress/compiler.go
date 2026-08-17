@@ -59,7 +59,8 @@ type BodyPolicy struct {
 
 // BodyRuntimeConditions 只承载 ProfileSpec 无法从 Body 字面值独立判断的、
 // 已由生产语义链验证的运行条件。它不包含凭据、账号对象或可自由选择的 feature。
-// 该值属于 attempt，并通过 BodyPolicyDigest 进入 FinalizationToken 签名投影。
+// 该值属于 attempt，并在 Codex 方言内折叠进 DialectAttestationDigest；共享
+// FinalizationToken 不解释具体 Body Policy 字段。
 type BodyRuntimeConditions struct {
 	CreditIDPresent            bool
 	PreviousResponseIDReusable bool
@@ -127,7 +128,10 @@ type CompiledExecution struct {
 	request        CompiledRequest
 	endpointPlan   ResolvedEndpointPlan
 	transport      TransportSpec
+	control        compiledExecutionControl
+	dialectState   preparedDialectState
 	releaseDigest  string
+	profileDigest  string
 	bundleDigest   string
 	poolDigest     string
 	compiledDigest string
@@ -139,6 +143,7 @@ func (e CompiledExecution) SinkID() SinkID             { return e.endpointPlan.S
 func (e CompiledExecution) Purpose() Purpose           { return e.endpointPlan.Purpose() }
 func (e CompiledExecution) EndpointID() string         { return e.endpointPlan.EndpointID() }
 func (e CompiledExecution) ReleaseDigest() string      { return e.releaseDigest }
+func (e CompiledExecution) ProfileDigest() string      { return e.profileDigest }
 func (e CompiledExecution) BundleDigest() string       { return e.bundleDigest }
 func (e CompiledExecution) PoolDigest() string         { return e.poolDigest }
 func (e CompiledExecution) CompiledDigest() string     { return e.compiledDigest }
@@ -273,8 +278,9 @@ func (c *Compiler) Compile(
 	}
 	return CompiledExecution{
 		request: request, endpointPlan: endpointPlan, transport: transport,
-		releaseDigest: bundle.ReleaseDigest(), bundleDigest: bundle.BundleDigest(),
-		poolDigest: poolDigest, compiledDigest: compiledDigest, connection: connection,
+		releaseDigest: bundle.ReleaseDigest(), profileDigest: bundle.ProfileDigest(),
+		bundleDigest: bundle.BundleDigest(),
+		poolDigest:   poolDigest, compiledDigest: compiledDigest, connection: connection,
 		dynamicTarget: validatedDynamic,
 	}, nil
 }

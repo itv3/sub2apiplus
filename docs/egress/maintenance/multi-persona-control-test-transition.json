@@ -1,0 +1,20 @@
+{
+  "schema_version": "official-egress-multi-persona-control-test-transition/v1",
+  "prior_transition": "docs/egress/maintenance/multi-persona-control-source-transition.json",
+  "prior_transition_sha256": "139f4844085942b709a68b61d2b51f863189ada780d361ace91cad8a6ae86bb2",
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/changeset3_post_identity_authority_final_wire_frozen_test.go",
+      "from_sha256": "a6cdaee6b58bd40a18091c794b43576fad3fbcf4ad3d823cc01916d6eae75c42",
+      "to_sha256": "9a8de9628ea90e00376628a1e37319d839ec35ff55388eedf3ac52cedd12cf5c",
+      "reason": "历史 final-wire 封印测试只新增多 Persona source transition 的连续摘要承接；既有 fixture、比较规则和允许差异均未改变。"
+    },
+    {
+      "path": "backend/internal/officialegress/executor_one_shot_retirement_test.go",
+      "from_sha256": "e33ced5ce2af781f820351aed082873b907acf5d5ccc7429d023bd078eda611c",
+      "to_sha256": "4fcdaa8fca4efd325185785ee3c76d9c5261b230634a4292ffce9af856db89de",
+      "reason": "历史 Executor 一次性兼容退休测试只新增多 Persona source transition 的连续摘要承接，不放宽退休符号、消费者闭集或 wire 零差异要求。"
+    }
+  ],
+  "result": "passed"
+}

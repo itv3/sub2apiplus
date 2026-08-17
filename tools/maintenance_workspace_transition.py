@@ -19,6 +19,9 @@ RETIREMENT_RECEIPT_PATH = (
 TRANSITION_DIR = ROOT / "docs" / "egress" / "maintenance" / "workspace-transition"
 MANIFEST_PATH = TRANSITION_DIR / "manifest.json"
 RECEIPT_PATH = TRANSITION_DIR / "receipt.json"
+FROZEN_MANIFEST_SHA256 = "24aef4dfd748c49f831c38c3910064902517bfeca9e8c8e1b862b22a571449c4"
+FROZEN_RECEIPT_SHA256 = "718325f294187b1d6d156ca095c5922493c5847e1d51ded154ed86cfb5a472bb"
+FROZEN_RETIREMENT_SHA256 = "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36"
 # 发版流水线 release.yml 的 sync-version-file 作业在每次发 tag 后自动改写该文件并推回
 # 默认分支，其内容不由人工提交产生；若纳入登记，冻结的哈希会在下一次发版立即过期并使
 # 门禁失败。该路径 scope 为 repository_support，与官方出站画像和规格封闭无关，故与自
@@ -275,6 +278,35 @@ def validate_transition() -> None:
     )
 
 
+def validate_frozen_transition() -> None:
+    """只复核已接受历史原文与摘要链，不把后继变更吸收到旧收据。"""
+
+    retirement_raw = RETIREMENT_RECEIPT_PATH.read_bytes()
+    manifest_raw = MANIFEST_PATH.read_bytes()
+    receipt_raw = RECEIPT_PATH.read_bytes()
+    if sha256(retirement_raw) != FROZEN_RETIREMENT_SHA256:
+        raise RuntimeError("官方出站维护退休收据历史原文漂移")
+    if sha256(manifest_raw) != FROZEN_MANIFEST_SHA256:
+        raise RuntimeError("官方出站维护工作区 transition 历史原文漂移")
+    if sha256(receipt_raw) != FROZEN_RECEIPT_SHA256:
+        raise RuntimeError("官方出站维护工作区 transition receipt 历史原文漂移")
+    manifest = json.loads(manifest_raw)
+    receipt = json.loads(receipt_raw)
+    if (
+        manifest.get("schema_version")
+        != "official-egress-maintenance-workspace-transition/v1"
+        or receipt.get("schema_version")
+        != "official-egress-maintenance-workspace-transition-receipt/v1"
+        or receipt.get("manifest_sha256") != FROZEN_MANIFEST_SHA256
+        or receipt.get("retirement_receipt_sha256") != FROZEN_RETIREMENT_SHA256
+        or manifest.get("retirement_receipt_sha256") != FROZEN_RETIREMENT_SHA256
+        or receipt.get("transition_entry_count") != len(manifest.get("entries", []))
+        or receipt.get("result") != "passed"
+    ):
+        raise RuntimeError("官方出站维护工作区 transition 历史摘要链非法")
+    print("官方出站维护工作区 transition 历史原文与摘要链有效")
+
+
 def self_test() -> None:
     present = {
         "existence": "present",
@@ -303,11 +335,21 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--write-transition", action="store_true", help="确定性生成维护 transition")
     parser.add_argument("--self-test", action="store_true", help="运行 transition 判据 mutation 自测")
+    parser.add_argument(
+        "--frozen-only",
+        action="store_true",
+        help="只用当前 HEAD 复核既有历史 transition，不吸收后继工作区变更",
+    )
     args = parser.parse_args()
     if args.write_transition:
+        if args.frozen_only:
+            raise RuntimeError("--write-transition 不能与 --frozen-only 同时使用")
         write_transition()
     if args.self_test:
         self_test()
+        return 0
+    if args.frozen_only:
+        validate_frozen_transition()
         return 0
     validate_transition()
     return 0

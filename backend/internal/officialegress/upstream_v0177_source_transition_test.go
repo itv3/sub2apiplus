@@ -14,6 +14,8 @@ import (
 const (
 	upstreamV0177SourceTransitionSHA256      = "ecb95c725ac58b3fa270eeb413e5887f83a13692c153fe0da50e820d34046ec2"
 	runtimeReliabilityRepairTransitionSHA256 = "8f8a2d5d0d763bf72834eac0441d4baeb76442fec9fb415b7f338da90bcc13f2"
+	multiPersonaControlTestTransitionSHA256  = "bb9b3e749dcc705b11d7b22bf2d6bb6f7d04bba8a1ccf5d9ae54d04475f21814"
+	multiPersonaControlTestV2SHA256          = "28945ae3f0adf1a7746b8015e8d700ca9b664ab4357b594e7098c33e0aa1595a"
 )
 
 type upstreamV0177SourceTransitionReceipt struct {
@@ -100,6 +102,12 @@ func TestChangeset3ReferenceCompatibilityHelpersRemainReachable(t *testing.T) {
 }
 
 func upstreamV0177SourceTransitionSupersedes(path, priorDigest, currentDigest string) bool {
+	if multiPersonaControlTestTransitionV2Supersedes(path, priorDigest, currentDigest) {
+		return true
+	}
+	if multiPersonaControlSourceTransitionV2Supersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if runtimeReliabilityRepairTransitionSupersedes(path, priorDigest, currentDigest) {
 		return true
 	}
@@ -121,13 +129,61 @@ func upstreamV0177SourceTransitionSupersedes(path, priorDigest, currentDigest st
 // runtimeReliabilityRepairTransitionSupersedes 只接受本次可靠性修复收据中精确的
 // path/from/to 承接关系，使既有冻结证据保持不可变。
 func runtimeReliabilityRepairTransitionSupersedes(path, priorDigest, currentDigest string) bool {
+	if multiPersonaControlTestTransitionV2Supersedes(path, priorDigest, currentDigest) {
+		return true
+	}
+	if multiPersonaControlSourceTransitionV2Supersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	receipt, raw, err := loadRuntimeReliabilityRepairTransition()
 	if err != nil || sha256Hex(raw) != runtimeReliabilityRepairTransitionSHA256 {
 		return false
 	}
 	for _, transition := range receipt.Transitions {
+		if transition.Path == path && transition.FromSHA256 == priorDigest {
+			return transition.ToSHA256 == currentDigest ||
+				multiPersonaControlSourceTransitionV2Supersedes(
+					path, transition.ToSHA256, currentDigest,
+				)
+		}
+	}
+	return false
+}
+
+func multiPersonaControlTestTransitionV2Supersedes(
+	path string,
+	priorDigest string,
+	currentDigest string,
+) bool {
+	raw, err := os.ReadFile(
+		"../../../docs/egress/maintenance/multi-persona-control-test-transition-v2.json",
+	)
+	if err != nil || sha256Hex(raw) != multiPersonaControlTestV2SHA256 {
+		return false
+	}
+	var receipt struct {
+		SchemaVersion          string                            `json:"schema_version"`
+		PriorTransition        string                            `json:"prior_transition"`
+		PriorTransitionSHA256  string                            `json:"prior_transition_sha256"`
+		SourceTransition       string                            `json:"source_transition"`
+		SourceTransitionSHA256 string                            `json:"source_transition_sha256"`
+		Transitions            []changeset4SourceTransitionEntry `json:"transitions"`
+		Result                 string                            `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &receipt); err != nil ||
+		receipt.SchemaVersion != "official-egress-multi-persona-control-test-transition/v2" ||
+		receipt.PriorTransition !=
+			"docs/egress/maintenance/multi-persona-control-test-transition.json" ||
+		receipt.PriorTransitionSHA256 != multiPersonaControlTestTransitionSHA256 ||
+		receipt.SourceTransition !=
+			"docs/egress/maintenance/multi-persona-control-source-transition-v2.json" ||
+		receipt.SourceTransitionSHA256 != multiPersonaControlV2SHA256 ||
+		receipt.Result != "passed" || len(receipt.Transitions) != 3 {
+		return false
+	}
+	for _, transition := range receipt.Transitions {
 		if transition.Path == path && transition.FromSHA256 == priorDigest &&
-			transition.ToSHA256 == currentDigest {
+			transition.ToSHA256 == currentDigest && strings.TrimSpace(transition.Reason) != "" {
 			return true
 		}
 	}
@@ -172,7 +228,10 @@ func TestRuntimeReliabilityRepairSourceTransitionIsFrozen(t *testing.T) {
 		if readErr != nil {
 			t.Fatal(readErr)
 		}
-		if got := sha256Hex(source); got != transition.ToSHA256 {
+		if got := sha256Hex(source); got != transition.ToSHA256 &&
+			!multiPersonaControlSourceTransitionV2Supersedes(
+				transition.Path, transition.ToSHA256, got,
+			) {
 			t.Fatalf("运行时可靠性修复源码摘要漂移：path=%s got=%s want=%s", transition.Path, got, transition.ToSHA256)
 		}
 	}

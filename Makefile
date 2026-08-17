@@ -72,7 +72,9 @@ check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal
 	@python3 tools/changeset6_workspace_transition.py --self-test
 	@python3 tools/changeset6_workspace_transition.py --frozen-only
 	@python3 tools/maintenance_workspace_transition.py --self-test
-	@python3 tools/maintenance_workspace_transition.py
+	@python3 tools/maintenance_workspace_transition.py --frozen-only
+	@python3 tools/multi_persona_control_workspace_transition.py --self-test
+	@python3 tools/multi_persona_control_workspace_transition.py
 	@python3 tools/changeset6_benchmark_evidence.py --self-test
 	@python3 tools/changeset6_benchmark_evidence.py
 	@python3 tools/check_ledger_completeness.py

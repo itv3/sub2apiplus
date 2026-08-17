@@ -78,6 +78,8 @@ func TestExecutorOneShotCompatibilityRetirementReceiptAndSourceExtinction(t *tes
 	}
 
 	repoRoot := filepath.Clean("../../..")
+	multiPersonaTransition := loadMultiPersonaControlSourceTransition(t)
+	multiPersonaV2Transition := loadMultiPersonaControlSourceTransitionV2(t)
 	for _, transition := range receipt.SourceTransitions {
 		if transition.Path == "" || transition.FromSHA256 == "" ||
 			transition.ToSHA256 == "" || transition.Reason == "" {
@@ -87,8 +89,21 @@ func TestExecutorOneShotCompatibilityRetirementReceiptAndSourceExtinction(t *tes
 		if readErr != nil {
 			t.Fatal(readErr)
 		}
-		if got := executorRetirementSHA256(source); got != transition.ToSHA256 {
-			t.Fatalf("Executor 一次性兼容源码摘要漂移：path=%s got=%s want=%s", transition.Path, got, transition.ToSHA256)
+		expected := transition.ToSHA256
+		if approved, ok := multiPersonaTransition[transition.Path]; ok {
+			if approved.FromSHA256 != expected || strings.TrimSpace(approved.Reason) == "" {
+				t.Fatalf("多 Persona 控制层未承接 Executor 一次性兼容摘要：%s", transition.Path)
+			}
+			expected = approved.ToSHA256
+		}
+		if approved, ok := multiPersonaV2Transition[transition.Path]; ok {
+			if approved.FromSHA256 != expected || strings.TrimSpace(approved.Reason) == "" {
+				t.Fatalf("多 Persona 控制层 v2 未承接上一层摘要：%s", transition.Path)
+			}
+			expected = approved.ToSHA256
+		}
+		if got := executorRetirementSHA256(source); got != expected {
+			t.Fatalf("Executor 一次性兼容源码摘要漂移：path=%s got=%s want=%s", transition.Path, got, expected)
 		}
 	}
 
