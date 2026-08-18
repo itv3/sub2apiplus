@@ -1,0 +1,91 @@
+{
+  "schema_version": "official-client-fw-e-completeness-supplement-receipt/v1",
+  "manifest_path": "docs/egress/maintenance/fw-e-completeness-supplement/manifest.json",
+  "manifest_sha256": "9cbab59c4260265c78c3c62393f007e0290aad4401805f67a298f4d6c192b7dc",
+  "prior_receipt_path": "docs/egress/maintenance/fw-e-workspace-transition/receipt.json",
+  "prior_receipt_sha256": "b0f31e42797dc079ea7127d80f63b6eaf59e81eed1c4c6cb54131f41b6e0e9da",
+  "base_commit": "f5e6d8c4ed899297b11b23a80d5384f43aed84ad",
+  "sealed_commit": "83d02f1ac07c983cd6c39f13384034849eae7d4e",
+  "target_version": "2.1.226",
+  "changed_path_count": 24,
+  "change_state_sha256": "03f72d882f8cc3888351c103ccba3e817622d1ea3cdb3395db5ee3210ec3ad7c",
+  "local_evidence_bindings": {
+    "baseline_sink_inventory": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/baseline-sink-inventory.json",
+      "sha256": "bb8c4a8fd7e5465e8a21f2b4611e6d4e99f6e473b01c161e7e4b788850bdc741"
+    },
+    "closure": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/crosswalk-v2-unreviewed/closure.json",
+      "sha256": "813502bfeb3e67bd38f9faf5b3d14cf164ce6d7cc2aa18870041bfe57b35a209"
+    },
+    "hitcc_2_1_197": {
+      "path": "tools/official_client_capture/claude_21220/hitcc_2_1_197_coverage.json",
+      "sha256": "c942f2f52c9254c31cfa80e764bb0d8269b9cca7aeab446afcdee027e6617b5c"
+    },
+    "matrix": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/crosswalk-v2-unreviewed/matrix.json",
+      "sha256": "1388770e35428e7f93d6d5a4120dca887734be361f6dabee1cddd9abc145b50a"
+    },
+    "rules_2_1_220": {
+      "path": "tools/official_client_capture/claude_21220/rules_2_1_220.json",
+      "sha256": "a1d2d4d8fd492416da711b56854966103d370b4899f1166b4f666f704025879d"
+    },
+    "source_2_1_88": {
+      "path": "tools/official_client_capture/claude_21220/source_2_1_88_coverage.json",
+      "sha256": "be04643165027f798cfc48051577bcfcfb1c89cd0a00daf6b09616665737f6f8"
+    },
+    "target_inventory_darwin_arm64": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/static-target-native-v2/darwin-arm64/target-sink-inventory.json",
+      "sha256": "ee10e883846dd6b0ee8beeb434fbdcbbb179e67a7946a0f8b2f2c14bff207b45"
+    },
+    "target_inventory_linux_amd64": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/static-target-native-v2/linux-amd64/target-sink-inventory.json",
+      "sha256": "cae96a648f206d04103626e8f3da650c9aca7eebdd177310a1d6d99b671bbcb0"
+    }
+  },
+  "closure": {
+    "result": "blocked",
+    "unresolved_total": 411,
+    "source_candidate_count": 34,
+    "hitcc_clue_count": 69,
+    "target_sink_count": 307,
+    "runtime_capture_scope_count": 1
+  },
+  "privacy_mode": {
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "DISABLE_TELEMETRY": "1",
+    "traffic_presence_comparison": "disabled"
+  },
+  "implementation_proofs": [
+    {
+      "id": "capture-tools",
+      "result": "passed",
+      "passed_test_count": 746,
+      "skipped_test_count": 3
+    },
+    {
+      "id": "official-client-control",
+      "result": "passed",
+      "passed_test_count": 30,
+      "skipped_test_count": 0
+    },
+    {
+      "id": "old-fw-e-transition-replay",
+      "result": "passed"
+    },
+    {
+      "id": "local-four-source-evidence-replay",
+      "result": "blocked-as-expected"
+    }
+  ],
+  "implementation_result": "passed",
+  "evidence_closure_result": "blocked",
+  "production_runtime_path_count": 0,
+  "deployment_performed": false,
+  "blocking_reasons": [
+    "307 个目标 sink 尚未逐项签发唯一 disposition",
+    "34 个 2.1.88 真源码候选与 69 个 HitCC 线索尚未闭合",
+    "缺少关闭 host 预筛、绑定两项隐私变量实际值的新全 host/path Campaign"
+  ],
+  "result": "blocked"
+}
