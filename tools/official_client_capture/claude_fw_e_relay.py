@@ -40,6 +40,13 @@ from tools.official_client_capture.capturelib.environment import (  # noqa: E402
     clean_environment,
     parse_injected_env,
     prepare_claude_oauth_state,
+    temporary_claude_tui_state,
+)
+from tools.official_client_capture.capturelib.claude_fw_f_v3 import (  # noqa: E402
+    PROBE_IDS as FW_F_V3_PROBE_IDS,
+    ClaudeFWFProbeError,
+    get_probe as get_fw_f_probe,
+    run_claude_fw_f_probe,
 )
 from tools.official_client_capture.capturelib.identity import (  # noqa: E402
     capture_source_bundle_identity,
@@ -88,6 +95,7 @@ DEFAULT_RUNTIME_IMAGE = (
     "oauth-egress-capture-capture-cli@"
     "sha256:3438c4e0909d7401ff8e076a985258608a8f031629e65262db16c1979ab1771c"
 )
+FW_F_V3_VERSION = "2.1.226"
 
 
 class RelayEvidenceError(RuntimeError):
@@ -425,6 +433,14 @@ def _scrub_relay(
     secure_write_text(log_path, completed.stdout + completed.stderr)
     if completed.returncode != 0:
         raise RelayEvidenceError("R 原始字节等长脱敏或复扫失败。")
+    intervention_source = raw_root / "intervention.jsonl"
+    if intervention_source.exists():
+        if intervention_source.is_symlink() or not intervention_source.is_file():
+            raise RelayEvidenceError("intervention.jsonl 不是可信普通文件。")
+        _write_bytes(
+            output_root / "intervention.jsonl",
+            intervention_source.read_bytes(),
+        )
     shutil.rmtree(raw_root)
     return {
         "method": "equal_length_replacement",
@@ -434,12 +450,240 @@ def _scrub_relay(
     }
 
 
-def _validate_relay_integrity(relay_root: Path) -> dict[str, Any]:
+def _read_interventions(relay_root: Path) -> list[dict[str, Any]]:
+    """读取中继逐次落盘的受控干预日志，并拒绝残缺或非对象记录。"""
+
+    path = relay_root / "intervention.jsonl"
+    if path.is_symlink() or not path.is_file():
+        raise RelayEvidenceError("合成 R 证据缺少 intervention.jsonl。")
+    rows: list[dict[str, Any]] = []
+    try:
+        for line_number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1
+        ):
+            if not line.strip():
+                continue
+            value = json.loads(line)
+            if not isinstance(value, dict):
+                raise RelayEvidenceError(
+                    f"intervention 第 {line_number} 行必须是对象。"
+                )
+            rows.append(value)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RelayEvidenceError("intervention.jsonl 不是完整 UTF-8 JSONL。") from error
+    if not rows:
+        raise RelayEvidenceError("合成 R 证据没有任何受控干预记录。")
+    return rows
+
+
+def _message_attempt_from_wire(
+    request: bytes, connection_id: int
+) -> dict[str, Any]:
+    """从单连接 H1 原始请求中提取不会泄露凭据的消息尝试事实。"""
+
+    head, separator, body = request.partition(b"\r\n\r\n")
+    if not separator:
+        raise RelayEvidenceError("Claude 合成请求缺少完整 H1 首部。")
+    request_line = head.split(b"\r\n", 1)[0].decode("latin-1", "replace")
+    if request_line == "HEAD /api/hello HTTP/1.1":
+        return {
+            "connection_id": connection_id,
+            "request_line": request_line,
+            "kind": "hello",
+        }
+    auxiliary = {
+        "GET /api/claude_code/policy_limits HTTP/1.1": "policy_limits",
+        "GET /api/claude_code/settings HTTP/1.1": "remote_settings",
+    }
+    if request_line in auxiliary:
+        return {
+            "connection_id": connection_id,
+            "request_line": request_line,
+            "kind": "auxiliary",
+            "auxiliary_kind": auxiliary[request_line],
+        }
+    if request_line != "POST /v1/messages?beta=true HTTP/1.1":
+        raise RelayEvidenceError(f"Claude 合成 R 出现未知端点：{request_line}")
+    encoding = ""
+    content_length: int | None = None
+    for line in head.split(b"\r\n")[1:]:
+        name, colon, value = line.partition(b":")
+        if not colon:
+            continue
+        lowered = name.strip().lower()
+        if lowered == b"content-encoding":
+            encoding = value.strip().decode("ascii", "replace").lower()
+        elif lowered == b"content-length":
+            try:
+                content_length = int(value.strip())
+            except ValueError as error:
+                raise RelayEvidenceError("Claude 合成请求 Content-Length 非法。") from error
+    if content_length is None or content_length != len(body):
+        raise RelayEvidenceError("Claude 合成请求 body 与 Content-Length 不一致。")
+    if encoding:
+        raise RelayEvidenceError("Claude 合成故障探针不允许压缩请求体。")
+    try:
+        payload = json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RelayEvidenceError("Claude 合成请求 body 不是合法 JSON。") from error
+    if not isinstance(payload, dict):
+        raise RelayEvidenceError("Claude 合成请求 body 顶层必须是对象。")
+    return {
+        "connection_id": connection_id,
+        "request_line": request_line,
+        "kind": "messages",
+        "model": payload.get("model"),
+        "stream_present": "stream" in payload,
+        "stream": payload.get("stream"),
+        "body_sha256": _sha256_bytes(body),
+    }
+
+
+def _validate_synthetic_plan(
+    *,
+    plan: str,
+    attempts: list[dict[str, Any]],
+    interventions: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """闭合 Claude 合成故障计划的请求序号、响应动作和生产隔离。"""
+
+    message_attempts = [item for item in attempts if item.get("kind") == "messages"]
+    if not message_attempts:
+        raise RelayEvidenceError("Claude 合成 R 没有 messages 请求。")
+    response_rows = [
+        item
+        for item in interventions
+        if item.get("type") == "synthetic_claude_response"
+    ]
+    if len(response_rows) != len(attempts):
+        raise RelayEvidenceError("Claude 合成请求与受控响应记录数量不一致。")
+    for item in interventions:
+        if item.get("production_forwarded") is not False:
+            raise RelayEvidenceError("Claude 合成干预没有证明 production_forwarded=false。")
+        if item.get("type") != "synthetic_claude_response":
+            raise RelayEvidenceError("Claude 合成 R 含非受管干预类型。")
+        if item.get("profile") != "claude-fw-f-v3" or item.get("plan") != plan:
+            raise RelayEvidenceError("Claude 合成干预身份与冻结计划不一致。")
+    by_connection = {
+        item.get("connection_id"): item for item in response_rows
+    }
+    if len(by_connection) != len(response_rows):
+        raise RelayEvidenceError("Claude 合成干预 connection_id 缺失或重复。")
+    auxiliary_actions = {
+        "policy_limits": "policy_limits_absent",
+        "remote_settings": "remote_settings_absent",
+    }
+    for attempt in attempts:
+        response = by_connection.get(attempt.get("connection_id"))
+        if response is None:
+            raise RelayEvidenceError("Claude 合成请求缺少逐连接响应归属。")
+        if attempt.get("kind") == "auxiliary" and response.get("action") != (
+            auxiliary_actions.get(str(attempt.get("auxiliary_kind")))
+        ):
+            raise RelayEvidenceError("Claude 合成辅助端点响应动作漂移。")
+        if attempt.get("kind") == "hello" and response.get("action") != "hello_success":
+            raise RelayEvidenceError("Claude 合成 hello 响应动作漂移。")
+    message_rows = [
+        item for item in response_rows if item.get("message_ordinal") not in {0, None}
+    ]
+    ordinals = [item.get("message_ordinal") for item in message_rows]
+    if ordinals != list(range(1, len(message_attempts) + 1)):
+        raise RelayEvidenceError("Claude 合成 messages ordinal 不连续。")
+
+    actions = [str(item.get("action")) for item in message_rows]
+    retry_once = {
+        "retry-401",
+        "retry-408",
+        "retry-409",
+        "retry-429",
+        "retry-429-after-date",
+        "retry-429-after-seconds",
+        "retry-500",
+        "retry-502",
+        "retry-503",
+        "retry-529",
+    }
+    if plan in retry_once:
+        if actions != [f"{plan}_fault", f"{plan}_success"]:
+            raise RelayEvidenceError("Claude 单故障重试计划没有精确闭合为两次尝试。")
+    elif plan in {"nonretry-400", "nonretry-403", "stall"}:
+        expected_action = {
+            "nonretry-400": "nonretry_400",
+            "nonretry-403": "nonretry_403",
+            "stall": "stall_without_response",
+        }[plan]
+        if len(message_attempts) != 1 or actions != [expected_action]:
+            raise RelayEvidenceError("Claude 非重试计划出现了额外 messages 尝试。")
+    elif plan == "disconnect-retry":
+        if len(message_attempts) != 2 or actions[-1] != "disconnect_retry_success":
+            raise RelayEvidenceError("Claude 断连重试计划没有闭合。")
+    elif plan == "always-529":
+        if not actions or any(action != "always_529" for action in actions):
+            raise RelayEvidenceError("Claude 最大重试计划响应动作漂移。")
+    elif plan == "fallback-model":
+        models = [str(item.get("model") or "") for item in message_attempts]
+        if len(set(models)) < 2 or "fallback_model_success" not in actions:
+            raise RelayEvidenceError("Claude fallback model 计划没有观测到模型切换。")
+    elif plan in {"stream-404-fallback", "stream-interrupt-fallback"}:
+        streaming = any(
+            item.get("stream_present") is True and item.get("stream") is True
+            for item in message_attempts
+        )
+        nonstreaming = any(
+            item.get("stream_present") is False for item in message_attempts
+        )
+        expected_actions = {
+            "stream-404-fallback": ["stream_404", "nonstream_fallback_success"],
+            "stream-interrupt-fallback": [
+                "stream_interrupted",
+                "interrupt_nonstream_success",
+            ],
+        }[plan]
+        if not streaming or not nonstreaming or actions != expected_actions:
+            raise RelayEvidenceError("Claude stream fallback 计划没有观测到流式到非流式切换。")
+    elif plan == "stream-interrupt-no-fallback":
+        if (
+            len(message_attempts) != 1
+            or message_attempts[0].get("stream_present") is not True
+            or message_attempts[0].get("stream") is not True
+            or actions != ["stream_interrupted"]
+        ):
+            raise RelayEvidenceError("Claude 禁用 nonstream fallback 的中断计划没有闭合。")
+    else:
+        raise RelayEvidenceError(f"未知 Claude 合成故障计划：{plan}")
+    return {
+        "plan": plan,
+        "message_attempt_count": len(message_attempts),
+        "actions": actions,
+        "attempts": message_attempts,
+        "production_forwarding_enabled": False,
+    }
+
+
+def _validate_relay_integrity(
+    relay_root: Path,
+    *,
+    synthetic_plan: str | None = None,
+    message_request_expectation: str = "at-least-one",
+) -> dict[str, Any]:
+    if message_request_expectation not in {"at-least-one", "zero"}:
+        raise RelayEvidenceError("R messages 请求期望值非法。")
     manifest = _load_json(relay_root / "relay.json", "relay manifest")
     if manifest.get("schema_version") != "byte-relay/v1":
         raise RelayEvidenceError("relay manifest schema 不匹配。")
     if manifest.get("mode") != "direct" or manifest.get("upstream_host") != UPSTREAM_HOST:
-        raise RelayEvidenceError("relay 没有绑定官方直连上游。")
+        raise RelayEvidenceError("relay 没有绑定 Claude 官方域名。")
+    if synthetic_plan:
+        if (
+            manifest.get("synthetic_profile") != "claude-fw-f-v3"
+            or manifest.get("claude_fault_plan") != synthetic_plan
+            or manifest.get("production_forwarding_enabled") is not False
+        ):
+            raise RelayEvidenceError("relay 没有绑定冻结的 Claude 合成计划。")
+    elif manifest.get("synthetic_profile") or (
+        manifest.get("production_forwarding_enabled") is False
+    ):
+        raise RelayEvidenceError("真实上游 R 证据混入了合成画像。")
     scrubbing = manifest.get("credential_scrubbing")
     if not isinstance(scrubbing, dict) or scrubbing.get("byte_offsets_preserved") is not True:
         raise RelayEvidenceError("relay manifest 缺少等长脱敏证明。")
@@ -447,6 +691,7 @@ def _validate_relay_integrity(relay_root: Path) -> dict[str, Any]:
     if not isinstance(connections, list) or not connections:
         raise RelayEvidenceError("relay 未记录任何连接。")
     request_stream = b""
+    request_attempts: list[dict[str, Any]] = []
     rows: list[dict[str, Any]] = []
     excluded: list[dict[str, Any]] = []
     connection_ids: set[int] = set()
@@ -521,8 +766,23 @@ def _validate_relay_integrity(relay_root: Path) -> dict[str, Any]:
                 }
             )
             continue
-        if item.get("client_alpn") != "http/1.1" or item.get("upstream_alpn") != "http/1.1":
-            raise RelayEvidenceError("relay 两条 TLS 腿没有保持 HTTP/1.1 一致。")
+        client_alpn = item.get("client_alpn")
+        upstream_alpn = item.get("upstream_alpn")
+        if synthetic_plan:
+            alpn_valid = client_alpn in {None, "http/1.1"} and (
+                upstream_alpn == "http/1.1"
+            )
+        elif manifest.get("mirror_selected_alpn") is True:
+            expected_offer = [client_alpn] if client_alpn else None
+            alpn_valid = (
+                client_alpn in {None, "http/1.1"}
+                and upstream_alpn == client_alpn
+                and item.get("upstream_alpn_offer") == expected_offer
+            )
+        else:
+            alpn_valid = client_alpn == "http/1.1" and upstream_alpn == "http/1.1"
+        if not alpn_valid:
+            raise RelayEvidenceError("relay 两条 TLS 腿没有保持受管 ALPN 镜像。")
         verified: dict[str, Any] = {"connection_id": connection_id}
         for direction in ("client_to_upstream", "upstream_to_client"):
             path = relay_root / f"conn{connection_id:03d}.{direction}.bin"
@@ -534,23 +794,38 @@ def _validate_relay_integrity(relay_root: Path) -> dict[str, Any]:
                 raise RelayEvidenceError(f"relay 连接字节与 manifest 不一致：{path.name}")
             verified[f"{direction}_sha256"] = expected_sha
             if direction == "client_to_upstream":
-                request_stream += path.read_bytes()
+                request_bytes = path.read_bytes()
+                request_stream += request_bytes
+                if synthetic_plan:
+                    request_attempts.append(
+                        _message_attempt_from_wire(request_bytes, connection_id)
+                    )
         rows.append(verified)
     messages = request_stream.count(b"POST /v1/messages?beta=true HTTP/1.1\r\n")
     hello = request_stream.count(b"HEAD /api/hello HTTP/1.1\r\n")
-    if messages < 1:
+    if message_request_expectation == "at-least-one" and messages < 1:
         raise RelayEvidenceError("R 证据中没有官方 messages 请求。")
-    return {
+    if message_request_expectation == "zero" and messages != 0:
+        raise RelayEvidenceError("本地拒绝场景仍发出了 messages 请求。")
+    result = {
         "result": "passed",
         "connection_count": len(rows),
         "total_connection_count": len(connections),
         "excluded_handshake_connection_count": len(excluded),
         "excluded_connections": excluded,
         "messages_request_count": messages,
+        "message_request_expectation": message_request_expectation,
         "hello_request_count": hello,
         "connections": rows,
         "manifest_sha256": file_sha256(relay_root / "relay.json"),
     }
+    if synthetic_plan:
+        result["synthetic_plan"] = _validate_synthetic_plan(
+            plan=synthetic_plan,
+            attempts=request_attempts,
+            interventions=_read_interventions(relay_root),
+        )
+    return result
 
 
 def _manifest_binding(path: Path, root: Path) -> dict[str, Any]:
@@ -559,6 +834,54 @@ def _manifest_binding(path: Path, root: Path) -> dict[str, Any]:
         "sha256": file_sha256(path),
         "bytes": path.stat().st_size,
     }
+
+
+def _invocation_binding_complete(
+    summary: dict[str, Any] | None,
+    result_root: Path,
+    *,
+    fw_f_probe: str | None,
+    response_plan: str | None,
+) -> bool:
+    """核验旧场景或 FW-F v3 的 argv 与环境事实已绑定到结果。"""
+
+    if not summary:
+        return False
+    if fw_f_probe is None:
+        invocation = summary.get("invocation", {})
+        return bool(
+            isinstance(invocation, dict)
+            and invocation.get("argv_sha256")
+            and isinstance(invocation.get("environment"), dict)
+            and invocation["environment"].get("sha256")
+        )
+    binding = summary.get("invocation")
+    if not isinstance(binding, dict):
+        return False
+    path = result_root / str(binding.get("path", ""))
+    if (
+        not path.is_file()
+        or path.is_symlink()
+        or file_sha256(path) != binding.get("sha256")
+        or path.stat().st_size != binding.get("bytes")
+    ):
+        return False
+    value = _load_json(path, "FW-F v3 invocation")
+    invocations = value.get("invocations")
+    return bool(
+        value.get("schema_version") == "claude-code-fw-f-v3-invocations/v1"
+        and value.get("probe_id") == fw_f_probe
+        and value.get("response_plan") == response_plan
+        and isinstance(invocations, list)
+        and invocations
+        and all(
+            isinstance(item, dict)
+            and item.get("argv_sha256")
+            and isinstance(item.get("environment"), dict)
+            and item["environment"].get("sha256")
+            for item in invocations
+        )
+    )
 
 
 def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
@@ -574,14 +897,47 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
         raise ConfigurationError("--host-runtime-receipt-sha256 格式非法。")
     if not SHA256_RE.fullmatch(arguments.run_nonce):
         raise ConfigurationError("--run-nonce 格式非法。")
-    if arguments.scenario not in SCENARIOS:
-        raise ConfigurationError("--scenario 非法。")
+    fw_f_probe_id = getattr(arguments, "fw_f_probe", None)
+    scenario = getattr(arguments, "scenario", None)
+    if fw_f_probe_id and scenario:
+        raise ConfigurationError("--fw-f-probe 与 --scenario 互斥。")
+    if fw_f_probe_id:
+        if fw_f_probe_id not in FW_F_V3_PROBE_IDS:
+            raise ConfigurationError("--fw-f-probe 非法。")
+        if arguments.probe_id != fw_f_probe_id:
+            raise ConfigurationError("FW-F v3 的 --probe-id 必须等于 --fw-f-probe。")
+        if arguments.expected_version != FW_F_V3_VERSION:
+            raise ConfigurationError(
+                f"FW-F v3 场景只绑定 Claude Code {FW_F_V3_VERSION}。"
+            )
+        fw_f_probe = get_fw_f_probe(fw_f_probe_id)
+        if arguments.inject_env:
+            raise ConfigurationError("FW-F v3 场景禁止额外 --inject-env。")
+        injected = fw_f_probe.env_dict()
+        response_plan = fw_f_probe.response_plan
+        message_request_expectation = fw_f_probe.message_request_expectation
+    else:
+        scenario = scenario or "s1"
+        if scenario not in SCENARIOS:
+            raise ConfigurationError("--scenario 非法。")
+        injected = parse_injected_env(arguments.inject_env)
+        response_plan = None
+        message_request_expectation = "at-least-one"
     if arguments.timeout <= 0:
         raise ConfigurationError("--timeout 必须大于 0。")
     if arguments.port != 443:
         raise ConfigurationError("Claude 官方域名 R 取证只允许隔离容器内端口 443。")
-    injected = parse_injected_env(arguments.inject_env)
-    upstream_ip = _validate_upstream_ip(arguments.upstream_ip)
+    upstream_value = getattr(arguments, "upstream_ip", None)
+    if response_plan:
+        if upstream_value:
+            raise ConfigurationError("Claude 合成故障场景禁止配置 --upstream-ip。")
+        upstream_ip = None
+        live_requests = False
+    else:
+        if not upstream_value:
+            raise ConfigurationError("真实上游 R 场景必须提供 --upstream-ip。")
+        upstream_ip = _validate_upstream_ip(upstream_value)
+        live_requests = True
     _validate_output_root(arguments.output_root, create=arguments.execute)
     if arguments.dry_run:
         return {
@@ -589,16 +945,29 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
             "run_id": arguments.run_id,
             "probe_id": arguments.probe_id,
             "version": arguments.expected_version,
-            "scenario": arguments.scenario,
+            "capture_mode": "fw-f-v3" if fw_f_probe_id else "legacy-scenario",
+            "scenario": scenario,
+            "fw_f_probe": fw_f_probe_id,
+            "response_plan": response_plan,
+            "message_request_expectation": message_request_expectation,
             "model": arguments.model,
             "upstream_host": UPSTREAM_HOST,
             "upstream_ip": upstream_ip,
             "injected_probe_env": injected,
-            "live_requests": True,
+            "live_requests": live_requests,
+            "production_forwarding_enabled": live_requests,
             "production_changes": False,
         }
-    if not arguments.acknowledge_live_requests:
-        raise ConfigurationError("--execute 必须显式确认 --acknowledge-live-requests。")
+    acknowledge_synthetic = getattr(arguments, "acknowledge_synthetic_responses", False)
+    if live_requests:
+        if not arguments.acknowledge_live_requests or acknowledge_synthetic:
+            raise ConfigurationError(
+                "真实上游 --execute 必须只确认 --acknowledge-live-requests。"
+            )
+    elif not acknowledge_synthetic or arguments.acknowledge_live_requests:
+        raise ConfigurationError(
+            "合成故障 --execute 必须只确认 --acknowledge-synthetic-responses。"
+        )
 
     run_root = arguments.output_root
     manifest_path = run_root / "relay-manifest.json"
@@ -607,6 +976,15 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
     relay_root = run_root / "relay"
     result_root = ensure_private_directory(run_root / "results", run_root)
     claude_oauth_home = prepare_claude_oauth_state(run_root)
+    tui_state_receipt: dict[str, Any] = {
+        "required": bool(fw_f_probe_id and fw_f_probe.driver == "tui"),
+        "storage_scope": "memory-backed-temporary-home",
+        "credentials_copied": False,
+        "global_state_copied": False,
+        "privacy_settings_written": False,
+        "archived_in_evidence": False,
+        "removed": not bool(fw_f_probe_id and fw_f_probe.driver == "tui"),
+    }
     tool_root = Path(__file__).resolve().parent
     tool_identity = _tool_identity(tool_root)
     client = _client_identity(
@@ -637,7 +1015,11 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
         "started_at_utc": _utc_now(),
         "ended_at_utc": None,
         "client": client,
-        "scenario": arguments.scenario,
+        "capture_mode": "fw-f-v3" if fw_f_probe_id else "legacy-scenario",
+        "scenario": scenario,
+        "fw_f_probe": fw_f_probe_id,
+        "response_plan": response_plan,
+        "message_request_expectation": message_request_expectation,
         "model": arguments.model,
         "injected_probe_env": injected,
         "runtime": {
@@ -651,12 +1033,15 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
             "port": 443,
             "relay_listen_port": arguments.port,
             "assumed_alpn": ["http/1.1"],
+            "live_requests": live_requests,
+            "production_forwarding_enabled": live_requests,
         },
         "cleanup": {
             "relay_stopped": False,
             "hosts_restored": False,
         },
         "secret_scan": {"performed": False, "passed": False, "matches": []},
+        "tui_temporary_state": tui_state_receipt,
         "m_binding": {"complete": False, "requirements": {}},
         "artifacts": [],
     }
@@ -698,15 +1083,28 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
                     str(arguments.port),
                     "--upstream-host",
                     UPSTREAM_HOST,
-                    "--upstream-ip",
-                    upstream_ip,
                     "--assume-alpn",
                     "http/1.1",
+                    "--mirror-selected-alpn",
                     "--output",
                     str(raw_root),
                     "--timeout",
                     str(arguments.timeout + 60),
                 ]
+                if response_plan:
+                    relay_command.extend(
+                        (
+                            "--synthetic-profile",
+                            "claude-fw-f-v3",
+                            "--allow-synthetic-responses",
+                            "--claude-version",
+                            arguments.expected_version,
+                            "--claude-fault-plan",
+                            response_plan,
+                        )
+                    )
+                else:
+                    relay_command.extend(("--upstream-ip", str(upstream_ip)))
                 secure_write_json(
                     run_root / "relay-invocation.json",
                     argv_manifest_view(relay_command),
@@ -732,16 +1130,50 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
                         environment["NODE_EXTRA_CA_CERTS"] = str(arguments.ca_cert)
                         environment["CLAUDE_CONFIG_DIR"] = str(claude_oauth_home)
                         environment["HOME"] = str(claude_oauth_home)
-                        scenario_summary = run_claude_scenario(
-                            claude_bin=str(arguments.claude_bin),
-                            model=arguments.model,
-                            scenario=arguments.scenario,
-                            environment=environment,
-                            output_dir=result_root,
-                            timeout=arguments.timeout,
-                            runtime_secret=access_token,
-                            known_secrets=secrets,
-                        )
+                        if fw_f_probe_id:
+                            if fw_f_probe.driver == "tui":
+                                with temporary_claude_tui_state(
+                                    arguments.claude_credentials_file,
+                                    arguments.claude_global_state_file,
+                                ) as (tui_home, _tui_config, state_receipt):
+                                    tui_state_receipt = state_receipt
+                                    environment.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+                                    # TUI 必须按官方默认 HOME 布局读取
+                                    # ~/.claude/.credentials.json 与 ~/.claude.json。
+                                    # 保留 CLAUDE_CONFIG_DIR 会把两者都重定向到同一目录，
+                                    # 导致客户端误判为首次登录。
+                                    environment.pop("CLAUDE_CONFIG_DIR", None)
+                                    environment["HOME"] = str(tui_home)
+                                    scenario_summary = run_claude_fw_f_probe(
+                                        claude_bin=str(arguments.claude_bin),
+                                        model=arguments.model,
+                                        probe_id=fw_f_probe_id,
+                                        environment=environment,
+                                        output_dir=result_root,
+                                        timeout=arguments.timeout,
+                                        known_secrets=secrets,
+                                    )
+                            else:
+                                scenario_summary = run_claude_fw_f_probe(
+                                    claude_bin=str(arguments.claude_bin),
+                                    model=arguments.model,
+                                    probe_id=fw_f_probe_id,
+                                    environment=environment,
+                                    output_dir=result_root,
+                                    timeout=arguments.timeout,
+                                    known_secrets=secrets,
+                                )
+                        else:
+                            scenario_summary = run_claude_scenario(
+                                claude_bin=str(arguments.claude_bin),
+                                model=arguments.model,
+                                scenario=str(scenario),
+                                environment=environment,
+                                output_dir=result_root,
+                                timeout=arguments.timeout,
+                                runtime_secret=access_token,
+                                known_secrets=secrets,
+                            )
                         if scenario_summary.get("valid") is not True:
                             raise RelayEvidenceError("Claude R 场景校验失败。")
                 finally:
@@ -753,7 +1185,11 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
                 scrubbing = _scrub_relay(
                     tool_root, raw_root, relay_root, run_root / "scrub.log"
                 )
-                relay_integrity = _validate_relay_integrity(relay_root)
+                relay_integrity = _validate_relay_integrity(
+                    relay_root,
+                    synthetic_plan=response_plan,
+                    message_request_expectation=message_request_expectation,
+                )
         except BaseException as error:  # 失败也必须写恢复和秘密扫描事实
             failure = error
             relay_stopped = _stop_process(relay_process)
@@ -773,16 +1209,35 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
         "capture_execution_sources": bool(
             tool_identity["execution_sources"].get("sha256")
         ),
-        "scenario_invocation_and_environment": bool(
-            scenario_summary
-            and scenario_summary.get("invocation", {}).get("argv_sha256")
-            and scenario_summary.get("invocation", {})
-            .get("environment", {})
-            .get("sha256")
+        "scenario_invocation_and_environment": _invocation_binding_complete(
+            scenario_summary,
+            result_root,
+            fw_f_probe=fw_f_probe_id,
+            response_plan=response_plan,
+        ),
+        "production_forwarding_boundary": live_requests
+        or bool(
+            relay_integrity
+            and relay_integrity.get("synthetic_plan", {}).get(
+                "production_forwarding_enabled"
+            )
+            is False
         ),
         "relay_integrity": bool(relay_integrity and relay_integrity.get("result") == "passed"),
         "equal_length_scrubbing": bool(scrubbing and scrubbing.get("verified")),
         "exact_secret_scan": scan.get("passed") is True,
+        "tui_temporary_state_cleanup": bool(
+            tui_state_receipt.get("removed") is True
+            and tui_state_receipt.get("archived_in_evidence") is False
+            and (
+                tui_state_receipt.get("required") is not True
+                or (
+                    tui_state_receipt.get("credentials_copied") is True
+                    and tui_state_receipt.get("global_state_copied") is True
+                    and tui_state_receipt.get("privacy_settings_written") is True
+                )
+            )
+        ),
         "relay_stopped": relay_stopped,
         "hosts_restored": hosts.record.get("restored") is True,
         "campaign_status": failure is None,
@@ -800,6 +1255,7 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
                 "hosts_restored": hosts.record.get("restored") is True,
             },
             "secret_scan": scan,
+            "tui_temporary_state": tui_state_receipt,
             "m_binding": {
                 "complete": all(requirements.values()),
                 "requirements": requirements,
@@ -965,6 +1421,7 @@ def _build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--dry-run", action="store_true")
     mode.add_argument("--execute", action="store_true")
     capture.add_argument("--acknowledge-live-requests", action="store_true")
+    capture.add_argument("--acknowledge-synthetic-responses", action="store_true")
     capture.add_argument("--run-id", required=True)
     capture.add_argument("--probe-id", required=True)
     capture.add_argument("--output-root", type=Path, required=True)
@@ -972,10 +1429,21 @@ def _build_parser() -> argparse.ArgumentParser:
     capture.add_argument("--expected-version", required=True)
     capture.add_argument("--expected-sha256", required=True)
     capture.add_argument("--claude-credentials-file", type=Path, required=True)
-    capture.add_argument("--scenario", choices=SCENARIOS, default="s1")
+    capture.add_argument(
+        "--claude-global-state-file",
+        type=Path,
+        default=Path("/root/.claude.json"),
+        help="仅 TUI 探针使用的官方全局状态文件；只短暂复制到 /dev/shm",
+    )
+    probe_mode = capture.add_mutually_exclusive_group()
+    probe_mode.add_argument("--scenario", choices=SCENARIOS)
+    probe_mode.add_argument("--fw-f-probe", choices=FW_F_V3_PROBE_IDS)
     capture.add_argument("--model", default="claude-sonnet-5")
     capture.add_argument("--inject-env", action="append", metavar="KEY=VALUE")
-    capture.add_argument("--upstream-ip", required=True)
+    capture.add_argument(
+        "--upstream-ip",
+        help="真实上游场景必填；FW-F v3 合成故障场景禁止提供",
+    )
     capture.add_argument("--ca-signing-pem", type=Path, required=True)
     capture.add_argument("--ca-cert", type=Path, required=True)
     capture.add_argument("--host-runtime-receipt", type=Path, required=True)
@@ -1015,6 +1483,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         result = execute(_build_parser().parse_args(argv))
     except (
         ConfigurationError,
+        ClaudeFWFProbeError,
         RelayEvidenceError,
         OSError,
         subprocess.SubprocessError,

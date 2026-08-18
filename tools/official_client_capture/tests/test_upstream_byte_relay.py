@@ -19,6 +19,7 @@ from tools.official_client_capture.scrub_raw_bytes import (
     scrub,
 )
 from tools.official_client_capture.upstream_byte_relay import (
+    _SYNTHETIC_CLAUDE_PLANS,
     _synthetic_aux_response,
     _SYNTHETIC_AUX_CFUV_COOKIE,
     _SYNTHETIC_AUX_TURN_STATE,
@@ -32,8 +33,10 @@ from tools.official_client_capture.upstream_byte_relay import (
     _decode_client_text_frame,
     _encode_server_text_frame,
     _redact_oauth_refresh_body,
+    _synthetic_claude_response,
     _synthetic_aux_response,
     _synthetic_core_response,
+    _upstream_alpn_offer,
 )
 
 
@@ -91,6 +94,21 @@ def _fragmented_compressed_text_frames(
 
 
 class UpstreamByteRelayWebSocketTest(unittest.TestCase):
+    def test_selected_alpn_mirroring_preserves_h1_and_no_alpn_connections(self) -> None:
+        assumed = ["http/1.1"]
+        self.assertEqual(
+            _upstream_alpn_offer(
+                assumed, "http/1.1", mirror_selected=True
+            ),
+            ["http/1.1"],
+        )
+        self.assertIsNone(
+            _upstream_alpn_offer(assumed, None, mirror_selected=True)
+        )
+        self.assertEqual(
+            _upstream_alpn_offer(assumed, None, mirror_selected=False), assumed
+        )
+
     def test_server_injection_frame_is_unmasked_and_uncompressed(self) -> None:
         text = json.dumps({
             "type": "response.metadata",
@@ -442,6 +460,161 @@ class UpstreamByteRelaySyntheticAuxTest(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 2)
         self.assertIn("禁止配置任何生产上游", result.stderr)
+
+
+class UpstreamByteRelaySyntheticClaudeTest(unittest.TestCase):
+    BODY = json.dumps(
+        {"model": "claude-sonnet-5", "stream": True, "messages": []},
+        separators=(",", ":"),
+    ).encode("utf-8")
+    LINE = "POST /v1/messages?beta=true HTTP/1.1"
+
+    def response(self, plan: str, ordinal: int, body: bytes | None = None):
+        return _synthetic_claude_response(
+            plan,
+            "api.anthropic.com",
+            self.LINE,
+            self.BODY if body is None else body,
+            ordinal,
+        )
+
+    def test_every_retry_once_plan_faults_then_returns_valid_sse(self) -> None:
+        plans = _SYNTHETIC_CLAUDE_PLANS - {
+            "always-529",
+            "disconnect-retry",
+            "fallback-model",
+            "nonretry-400",
+            "nonretry-403",
+            "stall",
+            "stream-404-fallback",
+            "stream-interrupt-fallback",
+            "stream-interrupt-no-fallback",
+        }
+        for plan in sorted(plans):
+            with self.subTest(plan=plan):
+                first = self.response(plan, 1)
+                second = self.response(plan, 2)
+                self.assertIsNotNone(first)
+                self.assertIsNotNone(second)
+                self.assertFalse(first.wire.startswith(b"HTTP/1.1 200"))
+                self.assertIn(b'"type":"error"', first.wire)
+                self.assertTrue(second.wire.startswith(b"HTTP/1.1 200 OK"))
+                self.assertIn(b"event: message_stop", second.wire)
+
+    def test_retry_after_variants_emit_the_frozen_header(self) -> None:
+        seconds = self.response("retry-429-after-seconds", 1)
+        dated = self.response("retry-429-after-date", 1)
+        self.assertIn(b"retry-after: 1\r\n", seconds.wire.lower())
+        self.assertRegex(
+            dated.wire.lower(), rb"retry-after: [a-z]{3}, \d{2} [a-z]{3} \d{4}"
+        )
+
+    def test_nonretry_disconnect_stall_and_retry_limit_are_distinct(self) -> None:
+        self.assertTrue(
+            self.response("nonretry-400", 1).wire.startswith(b"HTTP/1.1 400")
+        )
+        self.assertTrue(
+            self.response("nonretry-403", 1).wire.startswith(b"HTTP/1.1 403")
+        )
+        self.assertTrue(
+            self.response("always-529", 4).wire.startswith(b"HTTP/1.1 529")
+        )
+        disconnected = self.response("disconnect-retry", 1)
+        stalled = self.response("stall", 1)
+        self.assertEqual(disconnected.wire, b"")
+        self.assertEqual(disconnected.delay_seconds, 0)
+        self.assertEqual(stalled.wire, b"")
+        self.assertEqual(stalled.delay_seconds, 3.0)
+
+    def test_fallback_model_and_nonstream_fallback_use_request_body(self) -> None:
+        primary = self.response("fallback-model", 1)
+        fallback_body = json.dumps(
+            {"model": "claude-haiku-4-5", "stream": True},
+            separators=(",", ":"),
+        ).encode("utf-8")
+        fallback = self.response("fallback-model", 2, fallback_body)
+        self.assertTrue(primary.wire.startswith(b"HTTP/1.1 529"))
+        self.assertIn(b"claude-haiku-4-5", fallback.wire)
+
+        nonstream_body = json.dumps(
+            {"model": "claude-sonnet-5", "stream": False},
+            separators=(",", ":"),
+        ).encode("utf-8")
+        stream_fault = self.response("stream-404-fallback", 1)
+        nonstream = self.response("stream-404-fallback", 2, nonstream_body)
+        self.assertTrue(stream_fault.wire.startswith(b"HTTP/1.1 404"))
+        self.assertIn(b'"type":"message"', nonstream.wire)
+        self.assertNotIn(b"event: message_start", nonstream.wire)
+
+    def test_unknown_host_path_and_invalid_body_fail_closed(self) -> None:
+        self.assertIsNone(
+            _synthetic_claude_response(
+                "retry-500", "example.com", self.LINE, self.BODY, 1
+            )
+        )
+        self.assertIsNone(
+            _synthetic_claude_response(
+                "retry-500",
+                "api.anthropic.com",
+                "POST /v1/unknown HTTP/1.1",
+                self.BODY,
+                1,
+            )
+        )
+        self.assertIsNone(self.response("retry-500", 1, b"not-json"))
+
+    def test_control_plane_auxiliary_endpoints_are_locally_closed_as_absent(self) -> None:
+        for request_line, action in (
+            (
+                "GET /api/claude_code/policy_limits HTTP/1.1",
+                "policy_limits_absent",
+            ),
+            (
+                "GET /api/claude_code/settings HTTP/1.1",
+                "remote_settings_absent",
+            ),
+        ):
+            with self.subTest(request_line=request_line):
+                result = _synthetic_claude_response(
+                    "retry-500",
+                    "api.anthropic.com",
+                    request_line,
+                    b"",
+                    0,
+                )
+                self.assertIsNotNone(result)
+                self.assertEqual(result.action, action)
+                self.assertTrue(result.wire.startswith(b"HTTP/1.1 404"))
+
+    def test_claude_profile_rejects_codex_or_production_parameters(self) -> None:
+        script = Path(__file__).parents[1] / "upstream_byte_relay.py"
+        base = [
+            sys.executable,
+            str(script),
+            "--cert",
+            "missing.crt",
+            "--key",
+            "missing.key",
+            "--output",
+            "missing-output",
+            "--synthetic-profile",
+            "claude-fw-f-v3",
+            "--allow-synthetic-responses",
+            "--claude-version",
+            "2.1.226",
+            "--claude-fault-plan",
+            "retry-500",
+        ]
+        for extra, expected in (
+            (["--codex-version", "0.147.0"], "禁止提供 --codex-version"),
+            (["--upstream-ip", "203.0.113.10"], "禁止配置任何生产上游"),
+        ):
+            with self.subTest(extra=extra):
+                result = subprocess.run(
+                    [*base, *extra], text=True, capture_output=True, check=False
+                )
+                self.assertEqual(result.returncode, 2)
+                self.assertIn(expected, result.stderr)
 
 
 class UpstreamByteRelaySyntheticCoreTest(unittest.TestCase):

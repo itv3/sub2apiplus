@@ -1,0 +1,468 @@
+{
+  "schema_version": "claude-code-fw-f-profile-policy/v3",
+  "campaign_id": "claude-code-2_1_226-fw-f-measured-profile-v3-20260819",
+  "target_version": "2.1.226",
+  "target_binary_sha256": "4e9bec1177ce9690e8bd988b710ac24105e70da428dd094c5adcbbe786a55555",
+  "baseline_version": "2.1.220",
+  "approval_purpose": "validation_only",
+  "persona": {
+    "provider": "anthropic",
+    "official_product": "claude-code",
+    "auth_family": "oauth",
+    "upstream_route_family": "anthropic-api"
+  },
+  "profile_schema_id": "claude-code-oauth-profile-v3",
+  "profile_schema_document": {
+    "schema_family": "claude-code-oauth-profile/v3",
+    "version_parameterized": true,
+    "required_sections": [
+      "identity",
+      "endpoint",
+      "headers",
+      "body",
+      "transport",
+      "state",
+      "lifecycle",
+      "privacy",
+      "strict_endpoints",
+      "feature_matrix",
+      "rules"
+    ],
+    "field_contracts": {
+      "identity": "Persona、版本、入口和 OAuth 身份事实",
+      "endpoint": "scheme、host、port、method、path、query 和 HTTP 版本",
+      "headers": "基础顺序、静态值、派生值、动态值与条件插槽",
+      "body": "顶层字段顺序、类型、必选／可选集合和 Persona 派生边界",
+      "transport": "仅表达实测 SNI、HTTP/1.1、连接复用与压缩 Header；ClientHello 指纹和 ALPN offer 保持未声明",
+      "state": "请求级、会话级、父子代理和重试状态",
+      "lifecycle": "HEAD /api/hello 的端点、Header、无 Body、连接与先后关系",
+      "privacy": "遥测及非必要流量的官方关闭条件",
+      "strict_endpoints": "每个已批准 strict egress 的 route、Sink、endpoint、Header、Body 与 SPEC 映射",
+      "feature_matrix": "真实上游与隔离故障探针、规则域、入口和条件覆盖的闭集",
+      "rules": "正交证据等级、生命周期、兼容类别和迁移决策"
+    },
+    "compiler_output": "CompiledEnvelope",
+    "unknown_field_policy": "persona_fail_close"
+  },
+  "compiler_contract": {
+    "compiler_id": "claude-code-dialect-compiler-v1",
+    "planner_id": "claude-code-persona-planner-v1",
+    "plan_id": "claude-code-egress-plan-v1",
+    "identity_facts_id": "claude-code-identity-facts-v1",
+    "output_contract": "CompiledEnvelope",
+    "compiled_envelope_fields": [
+      "attempt_ordinal",
+      "attempt_reason",
+      "binding_id",
+      "body_replayability",
+      "bundle_digest",
+      "dialect_attestation_sha256",
+      "endpoint",
+      "endpoint_id",
+      "identity_attestation_sha256",
+      "invocation_id",
+      "method",
+      "persona_sha256",
+      "prepared_request_capability_sha256",
+      "profile_digest",
+      "protocol",
+      "release_artifact_ref",
+      "route_id",
+      "schema_version",
+      "sink_id",
+      "transport_capability_sha256"
+    ],
+    "persona_owned_fields": [
+      "body",
+      "headers",
+      "identity_derivation",
+      "retry",
+      "state",
+      "transport",
+      "version"
+    ],
+    "unknown_rule_policy": "deny"
+  },
+  "persona_contracts": {
+    "ingress_adapter": {
+      "official_anthropic_messages": "reuse_lossless",
+      "third_party_lossy": "retained_legacy",
+      "count_tokens": "non_persona_managed",
+      "output": "CanonicalRequest+TranslationReport",
+      "persona_selection": "forbidden"
+    },
+    "planner": {
+      "id": "claude-code-persona-planner-v1",
+      "inputs": [
+        "CanonicalRequest",
+        "TranslationReport",
+        "trusted-account-facts",
+        "trusted-session-facts",
+        "trusted-agent-facts",
+        "trusted-platform-facts",
+        "trusted-entrypoint-facts"
+      ],
+      "output": "ClaudeEgressPlan+ClaudeIdentityFacts",
+      "release_selection": "runtime-selector-only",
+      "unknown_scope": "fail_close"
+    },
+    "typed_egress_plan": {
+      "id": "claude-code-egress-plan-v1",
+      "allowed_semantics": [
+        "messages",
+        "model-intent",
+        "streaming",
+        "system",
+        "tools",
+        "trusted-conditions"
+      ],
+      "persona_owned": true,
+      "forbidden_inputs": [
+        "production-release-selection",
+        "raw-ingress-client-identity",
+        "unapproved-client-state"
+      ]
+    },
+    "identity_facts": {
+      "id": "claude-code-identity-facts-v1",
+      "trusted_sources": [
+        "oauth-account",
+        "release-artifact",
+        "planner-session",
+        "planner-agent-lineage",
+        "deployment-platform",
+        "ingress-binding"
+      ],
+      "conflict_policy": "trusted-source-wins-or-reject",
+      "state_scope": "invocation-and-session",
+      "silent_fabrication": "denied"
+    },
+    "transport_capability": {
+      "id": "claude-code-http1-strict-v1",
+      "adapter_id": "officialegress.http_upstream",
+      "protocol": "http",
+      "application_protocol": "HTTP/1.1",
+      "owner": "claude-dialect",
+      "strict_wire": true
+    },
+    "executor_instance": {
+      "authority_id": "claude-persona-executor",
+      "token_issuer_id": "claude-finalization-token",
+      "authority_scope": "per-persona",
+      "invocation_state_scope": "per-persona",
+      "shared_implementation": true
+    }
+  },
+  "routes": [
+    "claude-count-tokens-managed",
+    "claude-lifecycle-hello",
+    "claude-messages-inference",
+    "claude-oauth-lifecycle-managed",
+    "claude-oauth-profile",
+    "claude-policy-limits",
+    "claude-remote-settings"
+  ],
+  "sinks": [
+    "api.anthropic.com",
+    "claude.ai",
+    "platform.claude.com"
+  ],
+  "explicit_exclusions": [
+    "api-key-authentication",
+    "background-and-remote",
+    "client-alpn-offer",
+    "clienthello-fingerprint",
+    "default-telemetry",
+    "nonessential-traffic",
+    "server-and-deferred-tools",
+    "third-party-lossy-compatibility"
+  ],
+  "support_capabilities": [
+    {
+      "platform": "linux/amd64",
+      "logical_ingress_id": "messages-oauth",
+      "protocol_class": "anthropic-messages",
+      "privacy_mode": "essential-traffic-no-telemetry",
+      "model": "claude-sonnet-5",
+      "feature": "sdk-cli-conditions-system-cache-metadata-session-and-tools",
+      "endpoint": "GET /api/claude_code/policy_limits + GET /api/claude_code/settings + HEAD /api/hello + POST /v1/messages?beta=true"
+    },
+    {
+      "platform": "linux/amd64",
+      "logical_ingress_id": "messages-oauth",
+      "protocol_class": "anthropic-messages",
+      "privacy_mode": "essential-traffic-no-telemetry",
+      "model": "claude-sonnet-5 + claude-haiku-4-5-20251001",
+      "feature": "real-tui-profile-title-and-main-inference",
+      "endpoint": "GET /api/oauth/profile + HEAD /api/hello + POST /v1/messages?beta=true"
+    },
+    {
+      "platform": "linux/amd64",
+      "logical_ingress_id": "messages-oauth",
+      "protocol_class": "anthropic-messages",
+      "privacy_mode": "essential-traffic-no-telemetry",
+      "model": "claude-sonnet-5 + claude-haiku-4-5",
+      "feature": "isolated-retry-timeout-stream-and-model-fallback",
+      "endpoint": "HEAD /api/hello + POST /v1/messages?beta=true"
+    }
+  ],
+  "ingress_target_dispositions": {
+    "chat-completions-oauth": "retained_legacy",
+    "codex-direct-rerouted": "rerouted",
+    "count-tokens-oauth": "retained_legacy",
+    "messages-oauth": "migrated_strict",
+    "responses-oauth": "retained_legacy"
+  },
+  "persona_strict_egress_ids": [
+    "egress-claude-lifecycle-hello",
+    "egress-claude-messages-inference",
+    "egress-claude-oauth-profile",
+    "egress-claude-policy-limits",
+    "egress-claude-settings"
+  ],
+  "strict_egress_contracts": [
+    {
+      "egress_id": "egress-claude-lifecycle-hello",
+      "endpoint_kind": "lifecycle-hello",
+      "route_id": "claude-lifecycle-hello",
+      "sink_id": "api.anthropic.com",
+      "binding_id": "validation-only:messages-oauth:lifecycle",
+      "endpoint_id": "claude-lifecycle-hello-v1",
+      "endpoint": {
+        "scheme": "https",
+        "host": "api.anthropic.com",
+        "port": 443,
+        "method": "HEAD",
+        "request_target": "/api/hello",
+        "http_version": "HTTP/1.1"
+      },
+      "profile_view": "lifecycle",
+      "body_policy": "empty"
+    },
+    {
+      "egress_id": "egress-claude-messages-inference",
+      "endpoint_kind": "messages-inference",
+      "route_id": "claude-messages-inference",
+      "sink_id": "api.anthropic.com",
+      "binding_id": "validation-only:messages-oauth",
+      "endpoint_id": "claude-messages-inference-v1",
+      "endpoint": {
+        "scheme": "https",
+        "host": "api.anthropic.com",
+        "port": 443,
+        "method": "POST",
+        "request_target": "/v1/messages?beta=true",
+        "http_version": "HTTP/1.1"
+      },
+      "profile_view": "messages",
+      "body_policy": "json-or-gzip-json"
+    },
+    {
+      "egress_id": "egress-claude-oauth-profile",
+      "endpoint_kind": "oauth-profile",
+      "route_id": "claude-oauth-profile",
+      "sink_id": "api.anthropic.com",
+      "binding_id": "validation-only:messages-oauth:oauth-profile",
+      "endpoint_id": "claude-oauth-profile-v1",
+      "endpoint": {
+        "scheme": "https",
+        "host": "api.anthropic.com",
+        "port": 443,
+        "method": "GET",
+        "request_target": "/api/oauth/profile",
+        "http_version": "HTTP/1.1"
+      },
+      "headers": [
+        {"name": "Accept", "classification": "static", "value": "application/json, text/plain, */*"},
+        {"name": "Content-Type", "classification": "static", "value": "application/json"},
+        {"name": "Authorization", "classification": "dynamic_secret", "value_policy": "Bearer <oauth-access-token>"},
+        {"name": "Cache-Control", "classification": "static", "value": "no-cache"},
+        {"name": "User-Agent", "classification": "static", "value": "axios/1.15.2"},
+        {"name": "Accept-Encoding", "classification": "static", "value": "gzip, compress, deflate, br"},
+        {"name": "Host", "classification": "static", "value": "api.anthropic.com"},
+        {"name": "Connection", "classification": "static", "value": "keep-alive"}
+      ],
+      "profile_view": "evidence-derived-empty-body",
+      "body_policy": "empty"
+    },
+    {
+      "egress_id": "egress-claude-policy-limits",
+      "endpoint_kind": "policy-limits",
+      "route_id": "claude-policy-limits",
+      "sink_id": "api.anthropic.com",
+      "binding_id": "validation-only:messages-oauth:policy-limits",
+      "endpoint_id": "claude-policy-limits-v1",
+      "endpoint": {
+        "scheme": "https",
+        "host": "api.anthropic.com",
+        "port": 443,
+        "method": "GET",
+        "request_target": "/api/claude_code/policy_limits",
+        "http_version": "HTTP/1.1"
+      },
+      "headers": [
+        {"name": "Accept", "classification": "static", "value": "application/json, text/plain, */*"},
+        {"name": "Authorization", "classification": "dynamic_secret", "value_policy": "Bearer <oauth-access-token>"},
+        {"name": "anthropic-beta", "classification": "static", "value": "oauth-2025-04-20"},
+        {"name": "User-Agent", "classification": "static", "value": "claude-code/2.1.226"},
+        {"name": "Accept-Encoding", "classification": "static", "value": "gzip, compress, deflate, br"},
+        {"name": "Host", "classification": "static", "value": "api.anthropic.com"},
+        {"name": "Connection", "classification": "static", "value": "keep-alive"}
+      ],
+      "profile_view": "evidence-derived-empty-body",
+      "body_policy": "empty"
+    },
+    {
+      "egress_id": "egress-claude-settings",
+      "endpoint_kind": "remote-settings",
+      "route_id": "claude-remote-settings",
+      "sink_id": "api.anthropic.com",
+      "binding_id": "validation-only:messages-oauth:remote-settings",
+      "endpoint_id": "claude-remote-settings-v1",
+      "endpoint": {
+        "scheme": "https",
+        "host": "api.anthropic.com",
+        "port": 443,
+        "method": "GET",
+        "request_target": "/api/claude_code/settings",
+        "http_version": "HTTP/1.1"
+      },
+      "headers": [
+        {"name": "Accept", "classification": "static", "value": "application/json, text/plain, */*"},
+        {"name": "Authorization", "classification": "dynamic_secret", "value_policy": "Bearer <oauth-access-token>"},
+        {"name": "anthropic-beta", "classification": "static", "value": "oauth-2025-04-20"},
+        {"name": "User-Agent", "classification": "static", "value": "claude-code/2.1.226"},
+        {"name": "Cache-Control", "classification": "static", "value": "no-cache"},
+        {"name": "Pragma", "classification": "static", "value": "no-cache"},
+        {"name": "Accept-Encoding", "classification": "static", "value": "gzip, compress, deflate, br"},
+        {"name": "Host", "classification": "static", "value": "api.anthropic.com"},
+        {"name": "Connection", "classification": "static", "value": "keep-alive"}
+      ],
+      "profile_view": "evidence-derived-empty-body",
+      "body_policy": "empty"
+    }
+  ],
+  "managed_egress_ids": [
+    "egress-claude-account-test",
+    "egress-claude-cookie-authorize",
+    "egress-claude-cookie-organizations",
+    "egress-claude-oauth-exchange",
+    "egress-claude-oauth-refresh",
+    "egress-claude-token-count",
+    "egress-claude-upstream-models",
+    "egress-claude-usage"
+  ],
+  "denied_egress_ids": [],
+  "sample_runs": {
+    "target": {
+      "a1": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/campaign/runs/target/r-target-a1-v1",
+      "s1": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/campaign/runs/target/r-target-s1-v1",
+      "s2": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/campaign/runs/target/r-target-s2-v1",
+      "s4": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/campaign/runs/target/r-target-s4-v1"
+    },
+    "baseline": {
+      "a1": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/campaign/runs/control/r-control-a1-v1",
+      "s1": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/campaign/runs/control/r-control-s1-v1",
+      "s2": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/campaign/runs/control/r-control-s2-v1",
+      "s4": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/campaign/runs/control/r-control-s4-v1"
+    }
+  },
+  "v3_evidence": {
+    "root": "local-analysis/fw-f/claude-code-2.1.226/profile-v3-c91eb9acc776",
+    "capture_source_bundle_sha256": "c91eb9acc776765ea047fb61efe8cf21cd6c7d978207c721e4d53762e1ebb09b",
+    "target_binary_sha256": "4e9bec1177ce9690e8bd988b710ac24105e70da428dd094c5adcbbe786a55555",
+    "real_probe_ids": [
+      "v3-adaptive-thinking-disabled",
+      "v3-additional-protection",
+      "v3-agent-sdk",
+      "v3-append-system",
+      "v3-attribution-disabled",
+      "v3-baseline",
+      "v3-beta-deduplicate",
+      "v3-cache-disabled",
+      "v3-cache-one-hour",
+      "v3-cache-sonnet-disabled",
+      "v3-client-app",
+      "v3-custom-agent",
+      "v3-custom-agent-safe-mode",
+      "v3-custom-header-grammar",
+      "v3-custom-header-invalid-name",
+      "v3-custom-system",
+      "v3-effort-low",
+      "v3-effort-max",
+      "v3-effort-medium",
+      "v3-effort-xhigh",
+      "v3-exclude-dynamic-system",
+      "v3-extra-body",
+      "v3-extra-metadata",
+      "v3-gzip-request",
+      "v3-header-combination",
+      "v3-json-schema",
+      "v3-max-output-tokens",
+      "v3-remote-container",
+      "v3-remote-session",
+      "v3-session-fork",
+      "v3-session-resume",
+      "v3-thinking-disabled",
+      "v3-tui",
+      "v3-workload"
+    ],
+    "synthetic_probe_ids": [
+      "v3-disconnect-retry",
+      "v3-fallback-model",
+      "v3-nonretry-400",
+      "v3-nonretry-403",
+      "v3-retry-401",
+      "v3-retry-408",
+      "v3-retry-409",
+      "v3-retry-429",
+      "v3-retry-500",
+      "v3-retry-502",
+      "v3-retry-503",
+      "v3-retry-529",
+      "v3-retry-after-date",
+      "v3-retry-after-seconds",
+      "v3-retry-limit",
+      "v3-stream-404-disable-flag",
+      "v3-stream-404-fallback",
+      "v3-stream-interrupt",
+      "v3-stream-interrupt-no-fallback",
+      "v3-timeout"
+    ]
+  },
+  "baseline_artifacts": [
+    "local-analysis/sources/claude-code-2.1.220-official/SOURCE_MANIFEST.json",
+    "local-analysis/sources/claude-code-2.1.220-official/official-linux-x64-2.1.220.tgz"
+  ],
+  "contract_sources": [
+    "backend/internal/officialegress/bundle.go",
+    "backend/internal/officialegress/compositioncontract/composition.go",
+    "backend/internal/officialegress/executor.go",
+    "backend/internal/officialegress/types.go",
+    "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+    "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+    "tools/official_client_capture/claude_fw_f_discovery_clearance.py",
+    "tools/official_client_capture/claude_fw_f_discovery_policy_2_1_226.json",
+    "tools/official_client_capture/claude_fw_f_measured_rules.py",
+    "tools/official_client_capture/claude_fw_f_profile.py",
+    "tools/official_client_capture/claude_fw_f_profile_policy_2_1_226.json",
+    "tools/official_client_capture/tests/test_claude_fw_f_discovery_clearance.py",
+    "tools/official_client_capture/tests/test_claude_fw_f_measured_rules.py",
+    "tools/official_client_capture/tests/test_claude_fw_f_profile.py"
+  ],
+  "fw_c_receipts": [
+    "docs/egress/maintenance/CODEX_CLI_0145_TO_0147_K83_PRODUCTION_ACTIVATION_RECEIPT.json",
+    "docs/egress/maintenance/CODEX_CLI_0145_TO_0147_PRODUCTION_ACTIVATION_RECEIPT.json"
+  ],
+  "runtime_catalog": [
+    "backend/internal/officialegress/catalogdata/runtime/profiles/0.145.0/343991bad0f89614cd092778186f51eb23d5afbf4c98a198981639758bdf5431.json",
+    "backend/internal/officialegress/catalogdata/runtime/profiles/0.145.0/e0b59772622f14717f1fdf5c15bfae5758226a04fe8f030110d8a616e20fdf6b.json",
+    "backend/internal/officialegress/catalogdata/runtime/profiles/0.147.0/94071c8eb93cfd337ac6eabc291d878084e3dcec8a9e618e04e6f68792d1a7bc.json",
+    "backend/internal/officialegress/catalogdata/runtime/release-catalog.json",
+    "backend/internal/officialegress/catalogdata/runtime/release-graphs/d8a7634c9af52159c912b539df74b9fa3b92664c0b90cc0defd6789cd07c846d.json",
+    "backend/internal/officialegress/catalogdata/runtime/snapshot-catalogs/0e66972cc5f27fe1a1fe710f2ba1565e220ec7ca0cf4e6e6d6acf29ac63fcc88.json"
+  ],
+  "production_compare": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/finalization/production-compare.json",
+  "reviewer": "project-owner-confirmed",
+  "review_ref": "codex-task-fw-f-measured-v3-owner-confirmation-20260819"
+}

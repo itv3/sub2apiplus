@@ -1,0 +1,187 @@
+{
+  "schema_version": "official-client-fw-f-discovery-clearance-receipt/v3",
+  "closed_at_utc": "2026-08-19T00:00:00Z",
+  "target_version": "2.1.226",
+  "target_binary_sha256": "4e9bec1177ce9690e8bd988b710ac24105e70da428dd094c5adcbbe786a55555",
+  "capture_source_bundle_sha256": "c91eb9acc776765ea047fb61efe8cf21cd6c7d978207c721e4d53762e1ebb09b",
+  "evidence_host_role": "vircs-official-client-capture",
+  "source_campaign_id": "claude-code-2_1_226-fw-e-semantic-20260818-e577e144a",
+  "base_commit": "7ea0c1b8fceddc280604687b271965d1ca98d4ae",
+  "completed_work_item": "fw_f_v3_measured_rule_and_discovery_clearance",
+  "fw_f_phase_status": "in_progress",
+  "implementation_bindings": {
+    "measured_rule_tool": {
+      "path": "tools/official_client_capture/claude_fw_f_measured_rules.py",
+      "sha256": "353bf485670b3d13e091d8111228627176d56400946df5176f124ba097047fba"
+    },
+    "clearance_tool": {
+      "path": "tools/official_client_capture/claude_fw_f_discovery_clearance.py",
+      "sha256": "c0712d61268b061631891ba3261145bc80212d21a241c212ebc05b7ef4c07299"
+    },
+    "discovery_policy": {
+      "path": "tools/official_client_capture/claude_fw_f_discovery_policy_2_1_226.json",
+      "sha256": "889e32497ef4e2185ae8a022c5d7bd1e25b7facb229fb84012790aa95c888d8f"
+    },
+    "profile_policy": {
+      "path": "tools/official_client_capture/claude_fw_f_profile_policy_2_1_226.json",
+      "sha256": "cb6bde890502c3c596270abfa73f0b4c9e648b01098e397e640acd95bddc7ae5"
+    },
+    "v3_capture_catalog": {
+      "path": "tools/official_client_capture/capturelib/claude_fw_f_v3.py",
+      "sha256": "9d40e86521c31a6389e07482b9898a45fed154a09ecfaff3d22b7f7a471d0b38"
+    },
+    "measured_rule_tests": {
+      "path": "tools/official_client_capture/tests/test_claude_fw_f_measured_rules.py",
+      "sha256": "439ab8323f0056a3a8746022ab256b07d0ba48e0b3df802e2aa5f9e94d038edf"
+    },
+    "clearance_tests": {
+      "path": "tools/official_client_capture/tests/test_claude_fw_f_discovery_clearance.py",
+      "sha256": "7ef95a03bc62f3ff9c0bcbca61b05d021980a59774068a6ad36db5ef20bb3cee"
+    },
+    "v3_tests": {
+      "path": "tools/official_client_capture/tests/test_claude_fw_f_v3.py",
+      "sha256": "da75f81a66b43450bcfd3977e4a11219feccb603078126e13e4e24866eba1d07"
+    }
+  },
+  "input_bindings": {
+    "discovery_inventory": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/semantic-closure-v1-e577e144a/discovery-inventory.json",
+      "sha256": "4b31d9e79201761f132e00c127d5e9df91015f2eec302b082b0aa1769306a41a"
+    },
+    "semantic_candidates": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/semantic-closure-v1-e577e144a/semantic-candidates.json",
+      "sha256": "79ef709f659a6781bb7dc1d2ae7aca2c3da5a7a1e02474d19a2bc3c604770287"
+    },
+    "rule_assessments": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/rule-assessments-v5-e577e144a/rule-assessments.json",
+      "sha256": "c8cc1bc24f17a4d8e89388c6bae2023b230a6fa204fa8924eb75c5a2997d6e51"
+    },
+    "document_atoms": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/semantic-closure-v1-e577e144a/document-atoms.json",
+      "sha256": "222371af33b17e3863415a2c168242385dd4d8a1ffdc2d886cb637da07bb2fb4"
+    },
+    "egress_disposition_inventory": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/control-store-v3-e577e144a/objects/egress_disposition_inventory/47b1c1a62dbc4964cf3b4fca6101113b94e8cc9b26bffead9ec051ce6bb1848e.json",
+      "sha256": "47b1c1a62dbc4964cf3b4fca6101113b94e8cc9b26bffead9ec051ce6bb1848e"
+    },
+    "campaign_identity": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/campaign/identity.json",
+      "sha256": "e1fe7f769d1142546281184a2492979a7cfbbcf82daea966df2b9b6b51df19c6"
+    },
+    "relay_index": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/campaign/indexes/relay-index.json",
+      "sha256": "cc0c92e346ba6c61ff20e2e61b2301ce6ec8d7fbe99131d5f35d444f65512c12"
+    },
+    "invalid_v1_rule_additions": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v1/rule-ledger-additions.json",
+      "sha256": "59c9366bad59c3c8042ce1be71ff1e746ebb9ed3e2ffd01fc8bae90ac5d34728"
+    }
+  },
+  "output_bindings": {
+    "measured_rule_ledger": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v3/measured-rule-ledger.json",
+      "sha256": "b5308626b9d8c6fa4776593fd52a5c7e3c806db14994f27577c804dd832a0ebf"
+    },
+    "discovery_disposition_ledger": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v3/discovery-disposition-ledger.json",
+      "sha256": "56c2fef06d4e27bdc6e6367c2cccbb8db6e2b193a018405393a1cca674b520c4"
+    },
+    "candidate_resolution_ledger": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v3/candidate-resolution-ledger.json",
+      "sha256": "8ed8a9a3782254ce165c9fe5d7d294f67a9ff1d245d9f46e5076890124193b62"
+    },
+    "withdrawn_rule_proposals": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v3/withdrawn-rule-proposals.json",
+      "sha256": "1f09eeae87628c043f02a3ebaee71cfe20fec6ddf091d679a43198bed3c4afec"
+    },
+    "semantic_context_facts": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v3/semantic-context-facts.json",
+      "sha256": "f2c0664ac1a0ee383040a6ddc82f289dd3e180a08475252b3cb5bc27193d9b26"
+    },
+    "managed_egress_facts": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v3/managed-egress-facts.json",
+      "sha256": "50b7c471600d36957e1b470fa18b6cefbe9c3695e8c58cf290b90a55622ef477"
+    },
+    "closure": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v3/closure.json",
+      "sha256": "d6e39410535be06e283f751104fd2dbe5f75759f5cdee8f6c3d8b63f54352357"
+    }
+  },
+  "clearance": {
+    "source_discovery_count": 7368,
+    "resolved_record_count": 7368,
+    "catalogued_context_source_count": 4523,
+    "catalogued_context_resolved_count": 4523,
+    "candidate_count": 32,
+    "resolved_candidate_count": 32,
+    "measured_rule_count": 88,
+    "measured_rule_evidence_levels": {
+      "observed": 88,
+      "verified": 0
+    },
+    "strict_egress_rule_counts": {
+      "egress-claude-messages-inference": 84,
+      "egress-claude-lifecycle-hello": 4,
+      "egress-claude-oauth-profile": 2,
+      "egress-claude-policy-limits": 2,
+      "egress-claude-settings": 2
+    },
+    "withdrawn_v1_proposal_count": 97,
+    "active_v1_proposal_count": 0,
+    "context_terminal_counts": {
+      "markdown_navigation_non_egress": 128,
+      "semantic_supporting_fact": 4395
+    },
+    "forbidden_active_rule_count": 0,
+    "all_rule_assertions_passed": true,
+    "all_rules_bind_target_r_and_m": true,
+    "all_clearance_gate_counts_zero": true
+  },
+  "verification": [
+    {
+      "id": "fw-f-v3-targeted-tests",
+      "result": "passed",
+      "test_count": 35,
+      "passed_test_count": 35,
+      "skipped_test_count": 0
+    },
+    {
+      "id": "official-client-capture-tests",
+      "result": "passed",
+      "test_count": 819,
+      "passed_test_count": 816,
+      "skipped_test_count": 3
+    },
+    {
+      "id": "official-client-control-tests",
+      "result": "passed",
+      "test_count": 33,
+      "passed_test_count": 33,
+      "skipped_test_count": 0
+    },
+    {
+      "id": "real-rm-measured-rule-replay",
+      "result": "passed",
+      "rule_count": 88,
+      "vircs_real_upstream_run_count": 34,
+      "isolated_fault_run_count": 20
+    },
+    {
+      "id": "full-discovery-clearance-replay",
+      "result": "passed",
+      "resolved_discovery_count": 7368,
+      "unresolved_discovery_count": 0
+    }
+  ],
+  "phase_boundary": {
+    "profile_schema_generated": false,
+    "snapshot_generated": false,
+    "profile_approval_issued": false,
+    "validation_candidate_generated": false,
+    "runtime_selector_changed": false,
+    "dmit_deployment_performed": false,
+    "vircs_deployment_performed": false,
+    "production_changed": false
+  },
+  "result": "passed"
+}

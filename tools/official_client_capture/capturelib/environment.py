@@ -4,8 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import tempfile
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Iterator, Mapping
 
 from .model import CaptureCase, ConfigurationError
 from .security import (
@@ -96,8 +99,19 @@ BASE_ENVIRONMENT_KEYS = {
 INJECTABLE_PROBE_KEYS = {
     "ANTHROPIC_BETAS",
     "ANTHROPIC_CUSTOM_HEADERS",
+    "API_TIMEOUT_MS",
+    "CLAUDE_AGENT_SDK_VERSION",
     "CLAUDE_CODE_ADDITIONAL_PROTECTION",
+    "CLAUDE_CODE_ATTRIBUTION_HEADER",
+    "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING",
+    "CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK",
+    "CLAUDE_CODE_DISABLE_THINKING",
     "CLAUDE_CODE_DISPATCH_V2S",
+    "CLAUDE_CODE_EXTRA_BODY",
+    "CLAUDE_CODE_EXTRA_METADATA",
+    "CLAUDE_CODE_GZIP_REQUEST_BODIES",
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS",
+    "CLAUDE_CODE_MAX_RETRIES",
     # 以下三个由同一个 header 构造对象读取，各自条件展开一个 header：
     #   s = process.env.CLAUDE_CODE_CONTAINER_ID        -> x-claude-remote-container-id
     #   a = process.env.CLAUDE_CODE_REMOTE_SESSION_ID   -> x-claude-remote-session-id
@@ -107,6 +121,9 @@ INJECTABLE_PROBE_KEYS = {
     "CLAUDE_CODE_CONTAINER_ID",
     "CLAUDE_CODE_MAX_SUBAGENT_SPAWN_DEPTH",
     "CLAUDE_CODE_REMOTE_SESSION_ID",
+    "DISABLE_PROMPT_CACHING",
+    "DISABLE_PROMPT_CACHING_SONNET",
+    "ENABLE_PROMPT_CACHING_1H",
 }
 
 
@@ -264,6 +281,106 @@ def prepare_claude_oauth_state(run_dir: Path) -> Path:
         json.dumps(settings, ensure_ascii=False, indent=2) + "\n",
     )
     return claude_home
+
+
+def _read_private_state_file(path: Path, label: str) -> bytes:
+    """读取 TUI 所需状态，但不把内容或内容摘要写入证据。"""
+
+    if not path.is_absolute() or path.is_symlink() or not path.is_file():
+        raise ConfigurationError(f"{label} 必须是可信绝对普通文件。")
+    metadata = path.stat()
+    if metadata.st_uid != os.geteuid() or metadata.st_mode & 0o022:
+        raise ConfigurationError(f"{label} 所有者或写权限不安全。")
+    value = path.read_bytes()
+    if not value:
+        raise ConfigurationError(f"{label} 不能为空。")
+    return value
+
+
+def _write_private_state_file(path: Path, value: bytes) -> None:
+    """在新建私有目录内以排他方式写入短期状态。"""
+
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            descriptor = -1
+            stream.write(value)
+            stream.flush()
+            os.fsync(stream.fileno())
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+
+
+@contextmanager
+def temporary_claude_tui_state(
+    credentials_file: Path,
+    global_state_file: Path,
+    *,
+    memory_root: Path = Path("/dev/shm"),
+) -> Iterator[tuple[Path, Path, dict[str, Any]]]:
+    """在内存文件系统中建立一次性官方 TUI 登录态并保证终态删除。
+
+    Claude TUI 不把 ``CLAUDE_CODE_OAUTH_TOKEN`` 当作已有交互登录态。取证时必须
+    同时提供官方 ``.credentials.json`` 与 ``.claude.json``，但二者都含私有状态，
+    因而只能短暂复制到 ``/dev/shm``，不得进入证据目录。返回的收据只记录布尔事实，
+    不记录路径、字节数或任何凭据派生摘要。
+    """
+
+    if (
+        not memory_root.is_absolute()
+        or memory_root.is_symlink()
+        or not memory_root.is_dir()
+    ):
+        raise ConfigurationError("TUI 短期状态根必须是可信绝对目录。")
+    credentials = _read_private_state_file(
+        credentials_file, "Claude TUI credentials"
+    )
+    global_state = _read_private_state_file(
+        global_state_file, "Claude TUI 全局状态"
+    )
+    temporary_home = Path(
+        tempfile.mkdtemp(prefix="claude-fw-f-tui-", dir=memory_root)
+    )
+    temporary_home.chmod(0o700)
+    resolved_memory_root = memory_root.resolve()
+    if temporary_home.is_symlink() or temporary_home.resolve().parent != resolved_memory_root:
+        shutil.rmtree(temporary_home, ignore_errors=True)
+        raise ConfigurationError("TUI 短期 HOME 没有落在冻结内存目录内。")
+
+    receipt: dict[str, Any] = {
+        "required": True,
+        "storage_scope": "memory-backed-temporary-home",
+        "credentials_copied": False,
+        "global_state_copied": False,
+        "privacy_settings_written": False,
+        "archived_in_evidence": False,
+        "removed": False,
+    }
+    try:
+        config_dir = temporary_home / ".claude"
+        config_dir.mkdir(mode=0o700)
+        _write_private_state_file(config_dir / ".credentials.json", credentials)
+        receipt["credentials_copied"] = True
+        _write_private_state_file(temporary_home / ".claude.json", global_state)
+        receipt["global_state_copied"] = True
+        settings = {
+            "skipWebFetchPreflight": True,
+            "env": PRIVACY_ENV,
+        }
+        secure_write_text(
+            config_dir / "settings.json",
+            json.dumps(settings, ensure_ascii=False, indent=2) + "\n",
+        )
+        receipt["privacy_settings_written"] = True
+        yield temporary_home, config_dir, receipt
+    finally:
+        shutil.rmtree(temporary_home)
+        receipt["removed"] = not temporary_home.exists()
+        if not receipt["removed"]:
+            raise ConfigurationError("Claude TUI 短期登录态未能彻底删除。")
 
 
 def build_case_environment(

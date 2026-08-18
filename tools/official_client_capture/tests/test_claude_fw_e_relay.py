@@ -16,6 +16,8 @@ from tools.official_client_capture.claude_fw_e_relay import (
     HostsOverride,
     RelayEvidenceError,
     _build_index,
+    _build_parser,
+    _capture,
     _scrub_relay,
     _validate_relay_integrity,
 )
@@ -88,6 +90,86 @@ def relay_shutdown_handshake_connection(connection_id: int = 3) -> dict:
     for key in ("upstream_alpn", "error", "valid"):
         value.pop(key)
     return value
+
+
+def synthetic_messages_request(model: str, *, stream: bool | None = True) -> bytes:
+    payload = {"model": model, "messages": []}
+    if stream is not None:
+        payload["stream"] = stream
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    return (
+        b"POST /v1/messages?beta=true HTTP/1.1\r\n"
+        b"Host: api.anthropic.com\r\n"
+        + f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
+        + body
+    )
+
+
+def write_synthetic_relay(
+    root: Path,
+    *,
+    plan: str,
+    requests: list[bytes],
+    actions: list[str],
+    responses: list[bytes] | None = None,
+) -> None:
+    responses = responses or [b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n"] * len(
+        requests
+    )
+    connections = []
+    interventions = []
+    for index, (request, response, action) in enumerate(
+        zip(requests, responses, actions, strict=True), start=1
+    ):
+        (root / f"conn{index:03d}.client_to_upstream.bin").write_bytes(request)
+        (root / f"conn{index:03d}.upstream_to_client.bin").write_bytes(response)
+        connections.append(
+            {
+                "connection_id": index,
+                "request_line": "POST /v1/messages?beta=true HTTP/1.1",
+                "client_alpn": "http/1.1",
+                "upstream_alpn": "http/1.1",
+                "valid": True,
+                "production_forwarded": False,
+                "bytes": {
+                    "client_to_upstream": len(request),
+                    "upstream_to_client": len(response),
+                },
+                "sha256": {
+                    "client_to_upstream": hashlib.sha256(request).hexdigest(),
+                    "upstream_to_client": hashlib.sha256(response).hexdigest(),
+                },
+            }
+        )
+        interventions.append(
+            {
+                "type": "synthetic_claude_response",
+                "profile": "claude-fw-f-v3",
+                "plan": plan,
+                "action": action,
+                "connection_id": index,
+                "request_line": "POST /v1/messages?beta=true HTTP/1.1",
+                "message_ordinal": index,
+                "production_forwarded": False,
+            }
+        )
+    write_json(
+        root / "relay.json",
+        {
+            "schema_version": "byte-relay/v1",
+            "mode": "direct",
+            "upstream_host": "api.anthropic.com",
+            "synthetic_profile": "claude-fw-f-v3",
+            "claude_fault_plan": plan,
+            "production_forwarding_enabled": False,
+            "credential_scrubbing": {"byte_offsets_preserved": True},
+            "connections": connections,
+        },
+    )
+    (root / "intervention.jsonl").write_text(
+        "".join(json.dumps(item, separators=(",", ":")) + "\n" for item in interventions),
+        encoding="utf-8",
+    )
 
 
 class ClaudeFWERelayTests(unittest.TestCase):
@@ -228,6 +310,116 @@ class ClaudeFWERelayTests(unittest.TestCase):
                 ],
             )
 
+    def test_real_integrity_accepts_exact_selected_alpn_mirroring(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            wires = (
+                (
+                    b"GET /api/claude_code/policy_limits HTTP/1.1\r\nHost: api.anthropic.com\r\n\r\n",
+                    b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n",
+                    None,
+                ),
+                (
+                    b"POST /v1/messages?beta=true HTTP/1.1\r\nContent-Length: 0\r\n\r\n",
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
+                    "http/1.1",
+                ),
+            )
+            connections = []
+            for index, (request, response, alpn) in enumerate(wires, start=1):
+                (root / f"conn{index:03d}.client_to_upstream.bin").write_bytes(
+                    request
+                )
+                (root / f"conn{index:03d}.upstream_to_client.bin").write_bytes(
+                    response
+                )
+                connections.append(
+                    {
+                        "connection_id": index,
+                        "client_alpn": alpn,
+                        "upstream_alpn": alpn,
+                        "upstream_alpn_offer": [alpn] if alpn else None,
+                        "valid": True,
+                        "bytes": {
+                            "client_to_upstream": len(request),
+                            "upstream_to_client": len(response),
+                        },
+                        "sha256": {
+                            "client_to_upstream": hashlib.sha256(request).hexdigest(),
+                            "upstream_to_client": hashlib.sha256(response).hexdigest(),
+                        },
+                    }
+                )
+            write_json(
+                root / "relay.json",
+                {
+                    "schema_version": "byte-relay/v1",
+                    "mode": "direct",
+                    "upstream_host": "api.anthropic.com",
+                    "mirror_selected_alpn": True,
+                    "production_forwarding_enabled": True,
+                    "credential_scrubbing": {"byte_offsets_preserved": True},
+                    "connections": connections,
+                },
+            )
+
+            result = _validate_relay_integrity(root)
+
+            self.assertEqual(result["connection_count"], 2)
+            self.assertEqual(result["messages_request_count"], 1)
+
+    def test_local_rejection_requires_exactly_zero_messages(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            request = (
+                b"GET /api/claude_code/settings HTTP/1.1\r\n"
+                b"Host: api.anthropic.com\r\n\r\n"
+            )
+            response = b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"
+            (root / "conn001.client_to_upstream.bin").write_bytes(request)
+            (root / "conn001.upstream_to_client.bin").write_bytes(response)
+            write_json(
+                root / "relay.json",
+                {
+                    "schema_version": "byte-relay/v1",
+                    "mode": "direct",
+                    "upstream_host": "api.anthropic.com",
+                    "mirror_selected_alpn": True,
+                    "production_forwarding_enabled": True,
+                    "credential_scrubbing": {"byte_offsets_preserved": True},
+                    "connections": [
+                        {
+                            "connection_id": 1,
+                            "client_alpn": None,
+                            "upstream_alpn": None,
+                            "upstream_alpn_offer": None,
+                            "valid": True,
+                            "bytes": {
+                                "client_to_upstream": len(request),
+                                "upstream_to_client": len(response),
+                            },
+                            "sha256": {
+                                "client_to_upstream": hashlib.sha256(
+                                    request
+                                ).hexdigest(),
+                                "upstream_to_client": hashlib.sha256(
+                                    response
+                                ).hexdigest(),
+                            },
+                        }
+                    ],
+                },
+            )
+
+            result = _validate_relay_integrity(
+                root, message_request_expectation="zero"
+            )
+
+            self.assertEqual(result["messages_request_count"], 0)
+            self.assertEqual(result["message_request_expectation"], "zero")
+            with self.assertRaisesRegex(RelayEvidenceError, "没有官方 messages"):
+                _validate_relay_integrity(root)
+
     def test_integrity_rejects_near_miss_invalid_connections(self) -> None:
         mutations = {
             "非空字节声明": ("bytes", {"client_to_upstream": 1}),
@@ -292,6 +484,173 @@ class ClaudeFWERelayTests(unittest.TestCase):
             (root / "conn002.client_to_upstream.bin").write_bytes(b"x")
             with self.assertRaisesRegex(RelayEvidenceError, "非受管"):
                 _validate_relay_integrity(root)
+
+    def test_synthetic_integrity_closes_retry_plan_without_production_forwarding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_synthetic_relay(
+                root,
+                plan="retry-500",
+                requests=[
+                    synthetic_messages_request("claude-sonnet-5"),
+                    synthetic_messages_request("claude-sonnet-5"),
+                ],
+                actions=["retry-500_fault", "retry-500_success"],
+            )
+
+            result = _validate_relay_integrity(
+                root, synthetic_plan="retry-500"
+            )
+
+            self.assertEqual(result["messages_request_count"], 2)
+            self.assertEqual(
+                result["synthetic_plan"]["message_attempt_count"], 2
+            )
+            self.assertFalse(
+                result["synthetic_plan"]["production_forwarding_enabled"]
+            )
+
+    def test_synthetic_integrity_accepts_zero_byte_controlled_disconnect(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_synthetic_relay(
+                root,
+                plan="disconnect-retry",
+                requests=[
+                    synthetic_messages_request("claude-sonnet-5"),
+                    synthetic_messages_request("claude-sonnet-5"),
+                ],
+                responses=[
+                    b"",
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
+                ],
+                actions=["disconnect_without_response", "disconnect_retry_success"],
+            )
+
+            result = _validate_relay_integrity(
+                root, synthetic_plan="disconnect-retry"
+            )
+
+            self.assertEqual(result["connection_count"], 2)
+
+    def test_synthetic_integrity_records_nonstream_fallback_as_omitted_stream(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_synthetic_relay(
+                root,
+                plan="stream-404-fallback",
+                requests=[
+                    synthetic_messages_request("claude-sonnet-5", stream=True),
+                    synthetic_messages_request("claude-sonnet-5", stream=None),
+                ],
+                actions=["stream_404", "nonstream_fallback_success"],
+            )
+
+            result = _validate_relay_integrity(
+                root, synthetic_plan="stream-404-fallback"
+            )
+
+            attempts = result["synthetic_plan"]["attempts"]
+            self.assertTrue(attempts[0]["stream_present"])
+            self.assertFalse(attempts[1]["stream_present"])
+
+    def test_synthetic_integrity_closes_disabled_fallback_and_timeout(self) -> None:
+        cases = (
+            (
+                "stream-interrupt-no-fallback",
+                "stream_interrupted",
+                b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\r\n",
+            ),
+            ("stall", "stall_without_response", b""),
+        )
+        for plan, action, response in cases:
+            with self.subTest(plan=plan), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                write_synthetic_relay(
+                    root,
+                    plan=plan,
+                    requests=[synthetic_messages_request("claude-sonnet-5")],
+                    responses=[response],
+                    actions=[action],
+                )
+
+                result = _validate_relay_integrity(root, synthetic_plan=plan)
+
+                self.assertEqual(
+                    result["synthetic_plan"]["message_attempt_count"], 1
+                )
+
+    def test_synthetic_integrity_rejects_forwarding_or_unknown_intervention(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_synthetic_relay(
+                root,
+                plan="nonretry-400",
+                requests=[synthetic_messages_request("claude-sonnet-5")],
+                actions=["nonretry_400"],
+            )
+            manifest = json.loads((root / "relay.json").read_text())
+            manifest["production_forwarding_enabled"] = True
+            write_json(root / "relay.json", manifest)
+            with self.assertRaisesRegex(RelayEvidenceError, "合成计划"):
+                _validate_relay_integrity(root, synthetic_plan="nonretry-400")
+
+            manifest["production_forwarding_enabled"] = False
+            write_json(root / "relay.json", manifest)
+            intervention = json.loads(
+                (root / "intervention.jsonl").read_text().strip()
+            )
+            intervention["type"] = "unmanaged"
+            (root / "intervention.jsonl").write_text(
+                json.dumps(intervention) + "\n", encoding="utf-8"
+            )
+            with self.assertRaisesRegex(RelayEvidenceError, "数量不一致|非受管"):
+                _validate_relay_integrity(root, synthetic_plan="nonretry-400")
+
+    def test_fw_f_v3_dry_run_has_no_live_or_production_forwarding(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "new-run"
+            arguments = _build_parser().parse_args(
+                [
+                    "capture",
+                    "--dry-run",
+                    "--run-id",
+                    "v3-retry-500",
+                    "--probe-id",
+                    "v3-retry-500",
+                    "--fw-f-probe",
+                    "v3-retry-500",
+                    "--output-root",
+                    str(output),
+                    "--claude-bin",
+                    "/opt/claude",
+                    "--expected-version",
+                    "2.1.226",
+                    "--expected-sha256",
+                    "a" * 64,
+                    "--claude-credentials-file",
+                    "/run/credentials.json",
+                    "--ca-signing-pem",
+                    "/run/ca.pem",
+                    "--ca-cert",
+                    "/run/ca.crt",
+                    "--host-runtime-receipt",
+                    "/run/receipt.json",
+                    "--host-runtime-receipt-sha256",
+                    "b" * 64,
+                    "--run-nonce",
+                    "c" * 64,
+                ]
+            )
+
+            result = _capture(arguments)
+
+            self.assertEqual(result["capture_mode"], "fw-f-v3")
+            self.assertEqual(result["response_plan"], "retry-500")
+            self.assertFalse(result["live_requests"])
+            self.assertFalse(result["production_forwarding_enabled"])
+            self.assertIsNone(result["upstream_ip"])
+            self.assertEqual(result["message_request_expectation"], "at-least-one")
 
     def test_index_requires_symmetric_probe_set_and_one_source(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -12,6 +12,7 @@ from tools.official_client_capture.capturelib.environment import (
     parse_injected_env,
     prepare_api_state,
     prepare_claude_oauth_state,
+    temporary_claude_tui_state,
 )
 from tools.official_client_capture.capturelib.model import (
     ConfigurationError,
@@ -192,6 +193,35 @@ class EnvironmentTest(unittest.TestCase):
                 ca_bundle=Path("/opt/mitm/ca.pem"),
                 oauth_claude_secret="fresh-oauth-token",
             )
+
+    def test_tui_state_only_exists_in_temporary_memory_home(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            memory_root = root / "memory"
+            memory_root.mkdir(mode=0o700)
+            credentials = root / "credentials.json"
+            credentials.write_text('{"oauthAccessToken":"secret"}\n')
+            credentials.chmod(0o600)
+            global_state = root / ".claude.json"
+            global_state.write_text('{"hasCompletedOnboarding":true}\n')
+            global_state.chmod(0o600)
+
+            with temporary_claude_tui_state(
+                credentials,
+                global_state,
+                memory_root=memory_root,
+            ) as (home, config, receipt):
+                self.assertEqual(home.parent, memory_root)
+                self.assertEqual(config, home / ".claude")
+                self.assertTrue((config / ".credentials.json").is_file())
+                self.assertTrue((home / ".claude.json").is_file())
+                self.assertTrue((config / "settings.json").is_file())
+                self.assertFalse(receipt["archived_in_evidence"])
+                temporary_home = home
+
+            self.assertFalse(temporary_home.exists())
+            self.assertTrue(receipt["removed"])
+            self.assertNotIn("secret", str(receipt))
 
     def test_environment_manifest_view_covers_all_keys_without_secret_hash(self) -> None:
         view = environment_manifest_view(

@@ -13,7 +13,8 @@ ANSI = re.compile(rb"\x1b\[[0-9;?]*[a-zA-Z]|\x1b[>=78]|\x1b\][^\x07]*\x07")
 # 引导类页面：一律回车接受高亮项／继续
 MENU_MARKERS = (
     "Choose the text style", "Select login method", "Press Enter to continue",
-    "Security notes", "trust the files", "Do you trust", "recommended",
+    "Security notes", "trust the files", "Do you trust", "I trust this folder",
+    "recommended",
 )
 INPUT_READY = ("│ >", "│  >")
 
@@ -32,11 +33,20 @@ def flatten(text: str) -> str:
     return "".join(text.split())
 
 
-def drive(claude: str, model: str, prompt: str, env: dict,
-          total_timeout: int = 75, quiet_after_prompt: int = 20) -> dict:
+def drive(
+    claude: str,
+    model: str,
+    prompt: str,
+    env: dict,
+    total_timeout: int = 75,
+    quiet_after_prompt: int = 20,
+    extra_args: tuple[str, ...] = (),
+) -> dict:
+    """运行真实交互入口，并只接受调用方给出的固定参数元组。"""
+
     pid, fd = pty.fork()
     if pid == 0:
-        os.execve(claude, [claude, "--model", model], env)
+        os.execve(claude, [claude, "--model", model, *extra_args], env)
     os.set_blocking(fd, False)
 
     transcript = bytearray()
@@ -46,6 +56,7 @@ def drive(claude: str, model: str, prompt: str, env: dict,
     sent_prompt = False
     prompt_at = None
     last_menu = 0.0
+    scan_from = 0
 
     def push(tag):
         steps.append((round(time.time() - start, 1), tag))
@@ -60,7 +71,8 @@ def drive(claude: str, model: str, prompt: str, env: dict,
             if not chunk:
                 break
             transcript += chunk
-        view = flatten(clean(bytes(transcript[-8000:])))
+        scan_start = max(scan_from, len(transcript) - 8000)
+        view = flatten(clean(bytes(transcript[scan_start:])))
 
         if sent_prompt:
             if prompt_at and time.time() - prompt_at > quiet_after_prompt:
@@ -68,8 +80,21 @@ def drive(claude: str, model: str, prompt: str, env: dict,
                 break
             continue
 
-        # 输入框就绪优先判定，且必须已运行一段时间避免抓到渲染中间态
-        if any(flatten(m) in view for m in INPUT_READY) and time.time() - start > 3:
+        # 引导菜单：回车接受默认高亮项，限速避免连续误发
+        if any(flatten(m) in view for m in MENU_MARKERS) and time.time() - last_menu > 2.0:
+            os.write(fd, b"\r")
+            last_menu = time.time()
+            # 后续只扫描本次操作之后的新渲染，避免旧菜单仍留在 transcript
+            # 时每两秒重复发送回车。
+            scan_from = len(transcript)
+            push("enter-menu")
+            time.sleep(1.5)
+            continue
+
+        # 2.1.226 主输入框使用 `❯`；早期边框形态仍兼容 `│ >`。
+        # 已知菜单在上方先消费，因此这里的裸指针才可视为主输入入口。
+        input_ready = any(flatten(m) in view for m in INPUT_READY) or "❯" in view
+        if input_ready and time.time() - start > 3:
             os.write(fd, prompt.encode())
             time.sleep(0.4)
             os.write(fd, b"\r")
@@ -77,13 +102,6 @@ def drive(claude: str, model: str, prompt: str, env: dict,
             prompt_at = time.time()
             push("sent-prompt")
             continue
-
-        # 引导菜单：回车接受默认高亮项，限速避免连续误发
-        if any(flatten(m) in view for m in MENU_MARKERS) and time.time() - last_menu > 2.0:
-            os.write(fd, b"\r")
-            last_menu = time.time()
-            push("enter-menu")
-            time.sleep(1.5)
 
     os.write(fd, b"\x03")
     time.sleep(0.5)

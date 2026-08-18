@@ -36,6 +36,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import base64
+import email.utils
 import hashlib
 import json
 import os
@@ -76,6 +77,29 @@ _SYNTHETIC_CORE_WS_SCENARIOS = frozenset({"A05", "A06", "A07"})
 _SYNTHETIC_CORE_HTTP_SCENARIOS = frozenset(
     {"A03", "A04", "A07", "A08", "A10", "A15"}
 )
+_SYNTHETIC_CLAUDE_PLANS = frozenset(
+    {
+        "always-529",
+        "disconnect-retry",
+        "fallback-model",
+        "nonretry-400",
+        "nonretry-403",
+        "retry-401",
+        "retry-408",
+        "retry-409",
+        "retry-429",
+        "retry-429-after-date",
+        "retry-429-after-seconds",
+        "retry-500",
+        "retry-502",
+        "retry-503",
+        "retry-529",
+        "stall",
+        "stream-404-fallback",
+        "stream-interrupt-fallback",
+        "stream-interrupt-no-fallback",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -101,6 +125,15 @@ class SyntheticCoreResponse:
     set_cookie_names: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True)
+class SyntheticClaudeResponse:
+    """Claude 官方二进制故障探针的一次纯本地响应。"""
+
+    action: str
+    wire: bytes
+    delay_seconds: float = 0.0
+
+
 def _h1_response(
     status: int,
     reason: str,
@@ -122,6 +155,267 @@ def _h1_response(
         body,
     ))
     return b"".join(lines)
+
+
+def _claude_error_response(
+    status: int,
+    error_type: str,
+    message: str,
+    *,
+    headers: tuple[tuple[str, str], ...] = (),
+) -> bytes:
+    """构造 Anthropic SDK 能识别的冻结错误响应。"""
+
+    body = json.dumps(
+        {
+            "type": "error",
+            "error": {"type": error_type, "message": message},
+            "request_id": f"req_fw_f_v3_{status}",
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    reasons = {
+        400: "Bad Request",
+        401: "Unauthorized",
+        403: "Forbidden",
+        404: "Not Found",
+        408: "Request Timeout",
+        409: "Conflict",
+        429: "Too Many Requests",
+        500: "Internal Server Error",
+        502: "Bad Gateway",
+        503: "Service Unavailable",
+        529: "Overloaded",
+    }
+    return _h1_response(
+        status,
+        reasons[status],
+        body,
+        headers=(("request-id", f"req_fw_f_v3_{status}"), *headers),
+    )
+
+
+def _claude_stream_success(model: str, text: str = "FW_F_V3_OK") -> bytes:
+    """返回最小合法 Anthropic Messages SSE，供状态机完成一次真实 SDK 调用。"""
+
+    message_id = "msg_fw_f_v3_synthetic"
+    events = (
+        (
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": message_id,
+                    "type": "message",
+                    "role": "assistant",
+                    "model": model,
+                    "content": [],
+                    "stop_reason": None,
+                    "stop_sequence": None,
+                    "usage": {"input_tokens": 1, "output_tokens": 0},
+                },
+            },
+        ),
+        (
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "text", "text": ""},
+            },
+        ),
+        (
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": text},
+            },
+        ),
+        (
+            "content_block_stop",
+            {"type": "content_block_stop", "index": 0},
+        ),
+        (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn", "stop_sequence": None},
+                "usage": {"output_tokens": 1},
+            },
+        ),
+        ("message_stop", {"type": "message_stop"}),
+    )
+    body = b"".join(
+        f"event: {event}\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n".encode(
+            "utf-8"
+        )
+        for event, payload in events
+    )
+    return _h1_response(
+        200,
+        "OK",
+        body,
+        content_type="text/event-stream",
+        headers=(("request-id", "req_fw_f_v3_success"),),
+    )
+
+
+def _claude_nonstream_success(model: str, text: str = "FW_F_V3_OK") -> bytes:
+    """返回流式降级后的最小非流式 Messages 响应。"""
+
+    body = json.dumps(
+        {
+            "id": "msg_fw_f_v3_nonstream",
+            "type": "message",
+            "role": "assistant",
+            "model": model,
+            "content": [{"type": "text", "text": text}],
+            "stop_reason": "end_turn",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 1, "output_tokens": 1},
+        },
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return _h1_response(
+        200,
+        "OK",
+        body,
+        headers=(("request-id", "req_fw_f_v3_nonstream"),),
+    )
+
+
+def _synthetic_claude_response(
+    plan: str,
+    host: str,
+    request_line: str,
+    body: bytes,
+    ordinal: int,
+) -> SyntheticClaudeResponse | None:
+    """按冻结计划响应 Claude `/v1/messages`，未知端点和计划一律拒绝。"""
+
+    if plan not in _SYNTHETIC_CLAUDE_PLANS:
+        return None
+    if host.lower().rstrip(".") != "api.anthropic.com":
+        return None
+    if request_line == "HEAD /api/hello HTTP/1.1":
+        return SyntheticClaudeResponse(
+            "hello_success",
+            _h1_response(200, "OK", b"", content_type=""),
+        )
+    auxiliary_absent = {
+        "GET /api/claude_code/policy_limits HTTP/1.1": "policy_limits_absent",
+        "GET /api/claude_code/settings HTTP/1.1": "remote_settings_absent",
+    }
+    if request_line in auxiliary_absent:
+        # 2.1.88 源码明确把 404 定义为“没有组织 policy／远程托管设置”，
+        # 客户端会按空对象继续启动。这里只为让合成故障探针到达 messages；请求
+        # 本身仍完整落入 R，响应不含任何账号事实，也不会连接生产控制面。
+        return SyntheticClaudeResponse(
+            auxiliary_absent[request_line],
+            _claude_error_response(
+                404,
+                "not_found_error",
+                "fw-f v3 controlled auxiliary absence",
+            ),
+        )
+    if request_line != "POST /v1/messages?beta=true HTTP/1.1":
+        return None
+    try:
+        payload = json.loads(body)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    model = str(payload.get("model", "claude-sonnet-5"))
+    streaming = payload.get("stream") is True
+
+    retry_status = {
+        "retry-401": (401, "authentication_error"),
+        "retry-408": (408, "timeout_error"),
+        "retry-409": (409, "api_error"),
+        "retry-429": (429, "rate_limit_error"),
+        "retry-429-after-date": (429, "rate_limit_error"),
+        "retry-429-after-seconds": (429, "rate_limit_error"),
+        "retry-500": (500, "api_error"),
+        "retry-502": (502, "api_error"),
+        "retry-503": (503, "api_error"),
+        "retry-529": (529, "overloaded_error"),
+    }
+    if plan in retry_status and ordinal == 1:
+        status, error_type = retry_status[plan]
+        headers: tuple[tuple[str, str], ...] = ()
+        if plan == "retry-429-after-seconds":
+            headers = (("retry-after", "1"),)
+        elif plan == "retry-429-after-date":
+            headers = (("retry-after", email.utils.formatdate(time.time() + 2, usegmt=True)),)
+        return SyntheticClaudeResponse(
+            f"{plan}_fault",
+            _claude_error_response(status, error_type, f"fw-f v3 {plan}", headers=headers),
+        )
+    if plan in retry_status:
+        return SyntheticClaudeResponse(f"{plan}_success", _claude_stream_success(model))
+
+    if plan == "nonretry-400":
+        return SyntheticClaudeResponse(
+            "nonretry_400",
+            _claude_error_response(400, "invalid_request_error", "fw-f v3 400"),
+        )
+    if plan == "nonretry-403":
+        return SyntheticClaudeResponse(
+            "nonretry_403",
+            _claude_error_response(403, "permission_error", "fw-f v3 403"),
+        )
+    if plan == "always-529":
+        return SyntheticClaudeResponse(
+            "always_529",
+            _claude_error_response(529, "overloaded_error", "fw-f v3 retry limit"),
+        )
+    if plan == "fallback-model":
+        if "haiku" in model.lower():
+            return SyntheticClaudeResponse(
+                "fallback_model_success", _claude_stream_success(model)
+            )
+        return SyntheticClaudeResponse(
+            "fallback_primary_529",
+            _claude_error_response(529, "overloaded_error", "fw-f v3 fallback"),
+        )
+    if plan == "stream-404-fallback":
+        if streaming:
+            return SyntheticClaudeResponse(
+                "stream_404",
+                _claude_error_response(404, "not_found_error", "fw-f v3 stream 404"),
+            )
+        return SyntheticClaudeResponse(
+            "nonstream_fallback_success", _claude_nonstream_success(model)
+        )
+    if plan in {"stream-interrupt-fallback", "stream-interrupt-no-fallback"}:
+        if ordinal == 1:
+            partial = (
+                b"HTTP/1.1 200 OK\r\n"
+                b"content-type: text/event-stream\r\n"
+                b"connection: close\r\n\r\n"
+                b"event: message_start\n"
+                b'data: {"type":"message_start","message":'
+            )
+            return SyntheticClaudeResponse("stream_interrupted", partial)
+        if streaming:
+            return SyntheticClaudeResponse(
+                "stream_retry_404",
+                _claude_error_response(404, "not_found_error", "fw-f v3 force fallback"),
+            )
+        return SyntheticClaudeResponse(
+            "interrupt_nonstream_success", _claude_nonstream_success(model)
+        )
+    if plan == "disconnect-retry":
+        if ordinal == 1:
+            return SyntheticClaudeResponse("disconnect_without_response", b"")
+        return SyntheticClaudeResponse(
+            "disconnect_retry_success", _claude_stream_success(model)
+        )
+    if plan == "stall":
+        return SyntheticClaudeResponse("stall_without_response", b"", delay_seconds=3.0)
+    return None
 
 
 def _request_header_value(head: bytes, name: str) -> str:
@@ -711,6 +1005,19 @@ def parse_client_hello_alpn(data: bytes) -> list[str] | None:
     return None
 
 
+def _upstream_alpn_offer(
+    assumed_offer: list[str] | None,
+    selected_protocol: str | None,
+    *,
+    mirror_selected: bool,
+) -> list[str] | None:
+    """决定上游腿 ALPN；Claude 混合连接可显式按实际协商结果镜像。"""
+
+    if not mirror_selected:
+        return assumed_offer
+    return [selected_protocol] if selected_protocol else None
+
+
 class ByteRecorder:
     """按方向分别落盘原始字节，并记录分片边界与哈希。
 
@@ -811,6 +1118,7 @@ class Relay:
         self._core_http_responses = 0
         self._core_ws_handshakes = 0
         self._core_ws_response_creates = 0
+        self._core_claude_messages = 0
         # aux 侧 legacy compact 的到达序号。prime 轮必须靠它识别：网关按画像重新
         # 生成 x-codex-turn-metadata，客户端放进去的 capture_variant 不会出现在
         # 出站字节里，任何基于该字段的判定都恒为假。
@@ -1348,8 +1656,8 @@ class Relay:
                 or self.args.synthetic_profile
             )
             if intervention_enabled:
-                if cli_alpn is not None:
-                    meta["error"] = "受控 H1 干预要求客户端未协商 ALPN"
+                if cli_alpn not in {None, "http/1.1"}:
+                    meta["error"] = "受控 H1 干预只允许未协商 ALPN 或 HTTP/1.1"
                     meta["valid"] = False
                     return
                 initial_head = await reader.readuntil(b"\r\n\r\n")
@@ -1403,7 +1711,7 @@ class Relay:
                             self.args.codex_version,
                             legacy_compact_ordinal,
                         )
-                    else:
+                    elif self.args.synthetic_profile == "candidate-core-v1":
                         is_core_ws = (
                             request_line == "GET /backend-api/codex/responses HTTP/1.1"
                             and b"\r\nupgrade: websocket\r\n" in initial_head.lower()
@@ -1452,6 +1760,19 @@ class Relay:
                                 != self.args.candidate_core_ws_failures
                             ):
                                 synthetic = None
+                    else:
+                        claude_ordinal = 0
+                        if request_line == "POST /v1/messages?beta=true HTTP/1.1":
+                            claude_ordinal = await self._claim_core_counter(
+                                "claude_messages"
+                            )
+                        synthetic = _synthetic_claude_response(
+                            self.args.claude_fault_plan,
+                            target_host,
+                            request_line,
+                            initial_body,
+                            claude_ordinal,
+                        )
                     if synthetic is None:
                         response = _h1_response(
                             421,
@@ -1475,6 +1796,35 @@ class Relay:
                         })
                         return
 
+                    delay_seconds = getattr(synthetic, "delay_seconds", 0.0)
+                    if delay_seconds and not synthetic.wire:
+                        # stall 的客户端超时早于中继计划结束。必须在等待前建立 0 字节
+                        # 响应文件、闭合干预日志并标记连接有效；否则 wrapper 停中继时
+                        # 协程被取消，只会留下“未知无效连接”，丢掉这次受控超时事实。
+                        rec.write("upstream_to_client", b"")
+                        meta["valid"] = True
+                        meta["upstream_alpn"] = "http/1.1"
+                        meta["synthetic_profile"] = self.args.synthetic_profile
+                        meta["codex_version"] = self.args.codex_version
+                        meta["intervention"] = synthetic.action
+                        meta["production_forwarded"] = False
+                        self._log_intervention({
+                            "type": "synthetic_claude_response",
+                            "profile": self.args.synthetic_profile,
+                            "plan": self.args.claude_fault_plan,
+                            "action": synthetic.action,
+                            "connection_id": conn_id,
+                            "request_line": request_line,
+                            "message_ordinal": claude_ordinal,
+                            "delay_seconds": delay_seconds,
+                            "production_forwarded": False,
+                        })
+                        await asyncio.sleep(delay_seconds)
+                        return
+                    if delay_seconds:
+                        await asyncio.sleep(delay_seconds)
+                    # 空响应代表受控断连／超时。仍显式建立 0 字节方向文件，
+                    # 让 R 完整性门禁能区分“按计划没有响应”和“记录器漏写”。
                     rec.write("upstream_to_client", synthetic.wire)
                     writer.write(synthetic.wire)
                     terminal_ws_frame = getattr(synthetic, "terminal_ws_frame", b"")
@@ -1486,6 +1836,7 @@ class Relay:
                         # 给候选 observer 足够时间读取完整终止帧，再关闭受控连接。
                         await asyncio.sleep(0.2)
                     meta["valid"] = True
+                    meta["upstream_alpn"] = "http/1.1"
                     meta["synthetic_profile"] = self.args.synthetic_profile
                     meta["codex_version"] = self.args.codex_version
                     meta["intervention"] = synthetic.action
@@ -1512,7 +1863,7 @@ class Relay:
                                 request_line,
                                 meta,
                             )
-                    else:
+                    elif self.args.synthetic_profile == "candidate-aux-v1":
                         self._log_intervention({
                             "type": "synthetic_aux_response",
                             "profile": self.args.synthetic_profile,
@@ -1520,6 +1871,18 @@ class Relay:
                             "connection_id": conn_id,
                             "host": target_host,
                             "request_line": request_line,
+                            "production_forwarded": False,
+                        })
+                    else:
+                        self._log_intervention({
+                            "type": "synthetic_claude_response",
+                            "profile": self.args.synthetic_profile,
+                            "plan": self.args.claude_fault_plan,
+                            "action": synthetic.action,
+                            "connection_id": conn_id,
+                            "request_line": request_line,
+                            "message_ordinal": claude_ordinal,
+                            "delay_seconds": delay_seconds,
                             "production_forwarded": False,
                         })
                     return
@@ -1669,8 +2032,14 @@ class Relay:
 
             # ── 上游腿：用**客户端同一份** ALPN 列表握手 ──
             up_ctx = ssl.create_default_context()
-            if offered:
-                up_ctx.set_alpn_protocols(offered)
+            upstream_offer = _upstream_alpn_offer(
+                offered,
+                cli_alpn,
+                mirror_selected=self.args.mirror_selected_alpn,
+            )
+            meta["upstream_alpn_offer"] = upstream_offer
+            if upstream_offer:
+                up_ctx.set_alpn_protocols(upstream_offer)
             up_r, up_w = await asyncio.open_connection(
                 host=target_ip, port=target_port,
                 ssl=up_ctx, server_hostname=target_host)
@@ -1784,7 +2153,9 @@ class Relay:
                        "mode": self.args.mode,
                        "upstream_host": self.args.upstream_host,
                        "codex_version": self.args.codex_version or None,
+                       "claude_version": self.args.claude_version or None,
                        "synthetic_profile": self.args.synthetic_profile or None,
+                       "claude_fault_plan": self.args.claude_fault_plan or None,
                        "candidate_core_scenario": self.args.candidate_core_scenario or None,
                        "candidate_core_ws_failures": (
                            self.args.candidate_core_ws_failures
@@ -1792,6 +2163,7 @@ class Relay:
                            else None
                        ),
                        "production_forwarding_enabled": not bool(self.args.synthetic_profile),
+                       "mirror_selected_alpn": self.args.mirror_selected_alpn,
                        "connections": self.records},
                       f, ensure_ascii=False, indent=2)
         print(json.dumps({"connections": len(self.records),
@@ -1819,6 +2191,12 @@ def main() -> None:
                     help="客户端 ALPN offer（逗号分隔）。asyncio 无法窥探 ClientHello，"
                          "故由调用方按被测客户端的已知画像显式给出；留空表示不 offer。"
                          "给错会把客户端逼上它本不走的协议——须与 pcap 实测一致。")
+    ap.add_argument(
+        "--mirror-selected-alpn",
+        action="store_true",
+        help=("上游腿按客户端腿实际协商结果 offer；客户端未协商时上游也不发 ALPN。"
+              "仅由明确观测到混合 ALPN 的 wrapper 启用"),
+    )
     ap.add_argument("--force-ws-fallback-426", action="store_true",
                     help="仅一次：对内置 responses WS 握手返回 426，触发官方 HTTP 回退")
     ap.add_argument("--inject-turn-state", default="",
@@ -1829,7 +2207,7 @@ def main() -> None:
                     help="仅一次：合成 realtime/calls 200，用于触发 sideband 派生请求")
     ap.add_argument(
         "--synthetic-profile",
-        choices=("candidate-aux-v1", "candidate-core-v1"),
+        choices=("candidate-aux-v1", "candidate-core-v1", "claude-fw-f-v3"),
         default="",
         help=("冻结的候选响应画像；开启后所有请求只允许本地白名单响应，"
               "未知路径返回 421，绝不连接真实上游"),
@@ -1850,6 +2228,17 @@ def main() -> None:
         type=int,
         default=6,
         help="A07 在允许 HTTP fallback 前返回的可重试 WS 握手失败次数",
+    )
+    ap.add_argument(
+        "--claude-version",
+        default="",
+        help="Claude FW-F v3 合成故障画像绑定的官方客户端版本",
+    )
+    ap.add_argument(
+        "--claude-fault-plan",
+        choices=tuple(sorted(_SYNTHETIC_CLAUDE_PLANS)),
+        default="",
+        help="claude-fw-f-v3 必填的冻结响应计划",
     )
     ap.add_argument(
         "--retry-probe",
@@ -1881,7 +2270,12 @@ def main() -> None:
         args.codex_version,
     ):
         ap.error("--codex-version 必须是完整的 x.y.z 版本")
-    if args.synthetic_profile and not args.codex_version:
+    if args.claude_version and not re.fullmatch(
+        r"[0-9]+\.[0-9]+\.[0-9]+",
+        args.claude_version,
+    ):
+        ap.error("--claude-version 必须是完整的 x.y.z 版本")
+    if args.synthetic_profile in {"candidate-aux-v1", "candidate-core-v1"} and not args.codex_version:
         ap.error("候选合成画像必须提供 --codex-version")
     if args.synthetic_profile and (args.upstream_ip or args.upstream_map):
         ap.error("候选合成模式禁止配置任何生产上游 IP/map")
@@ -1900,6 +2294,15 @@ def main() -> None:
             ap.error("--candidate-core-ws-failures 必须在 1..20")
     elif args.candidate_core_scenario:
         ap.error("--candidate-core-scenario 只能与 candidate-core-v1 同时使用")
+    if args.synthetic_profile == "claude-fw-f-v3":
+        if not args.claude_version:
+            ap.error("claude-fw-f-v3 必须提供 --claude-version")
+        if not args.claude_fault_plan:
+            ap.error("claude-fw-f-v3 必须提供 --claude-fault-plan")
+        if args.codex_version:
+            ap.error("claude-fw-f-v3 禁止提供 --codex-version")
+    elif args.claude_version or args.claude_fault_plan:
+        ap.error("Claude 合成参数只能与 claude-fw-f-v3 同时使用")
     relay = Relay(args)
 
     # docker exec 后台运行由 wrapper 通过 PID 发 SIGTERM。信号只设置 asyncio
