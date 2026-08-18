@@ -1,0 +1,213 @@
+{
+  "schema_version": "official-client-fw-e-r-disposition-supplement-receipt/v1",
+  "manifest_path": "docs/egress/maintenance/fw-e-r-disposition-supplement/manifest.json",
+  "manifest_sha256": "5596205b56939972d1088ebe5c1e314db4dcc596fc1c49400697565bcb3d8a02",
+  "prior_receipt_path": "docs/egress/maintenance/fw-e-runtime-evidence-supplement/receipt.json",
+  "prior_receipt_sha256": "de556ee14f1cddb62b401f76f2994f475e5c665450e28298a4fba1ca74d291a7",
+  "base_commit": "205d7f58fa3bc6554d86f47f4b0a53e5d93ceb30",
+  "sealed_commit": "558bd265f7078aa5ffc18c3b3963fdf1e0be4f06",
+  "target_version": "2.1.226",
+  "changed_path_count": 10,
+  "change_state_sha256": "144fba75e70477a09bc4b9bbf27ae031391765d6250896e2d543f1b858cf11c7",
+  "local_evidence_bindings": {
+    "capture_index_with_r": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/campaign/indexes/capture-index-full-with-r.json",
+      "sha256": "4b16a52f9804e96d6454543881333af1305b42d6572682966a0caf6430b52d4a"
+    },
+    "campaign_identity": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/campaign/identity.json",
+      "sha256": "e1fe7f769d1142546281184a2492979a7cfbbcf82daea966df2b9b6b51df19c6"
+    },
+    "production_after": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/finalization/after.json",
+      "sha256": "df2129de20962e4367d29a5315d8cca3a418103c6bcff69feb58f685ab667787"
+    },
+    "campaign_secret_inventory": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/finalization/campaign-secret-inventory.json",
+      "sha256": "c241ce9c0152cefa518451638db4c5ad1220a2ff8ee19c68bdcdf1d403c84aa9"
+    },
+    "production_compare": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/finalization/production-compare.json",
+      "sha256": "20f2d7fa592fa1c98a97a89b5345fbfbe3c0e1dd8797ac99bde90f6146cbba18"
+    },
+    "target_sink_inventory": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/disposition-analysis-v3/target-sink-inventory.json",
+      "sha256": "beac55c469ccc634ad81b09d6a142f049f732cd179cfb0e5af2885744e29688b"
+    },
+    "sink_containment": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/disposition-analysis-v3/sink-containment.json",
+      "sha256": "444cf28b1da6040b5031e3e6f7f7275ffa131156fcde5e478d14e66faad59276"
+    },
+    "dispositions": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/disposition-v1-explicit/dispositions.json",
+      "sha256": "6838915af8472a944c8acb1ae4a801912bbdc46b2036eb5d99dc17ce95542d41"
+    },
+    "explicit_review": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/disposition-v1-explicit/explicit-review.json",
+      "sha256": "eabf6c84fd25224e5e4db5a4302b71fa62524a19263676ccfa1b914ff262f9e3"
+    },
+    "blockers": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/disposition-v1-explicit/blockers.json",
+      "sha256": "a46a4aa6e3b3a6ad094ca67097737c52e53429e04eb048a8a250502456ad89fe"
+    },
+    "explicit_matrix": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/crosswalk-v5-explicit/matrix.json",
+      "sha256": "e3dd45e99c97a5171fa1f7f24a59a16ebd7c86530ffd0070d6e8a53eb1fded0c"
+    },
+    "explicit_closure": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/crosswalk-v5-explicit/closure.json",
+      "sha256": "f62c14e6055a8ebfc328e525ad8cb0fbc54bf319860b2a0fb22cac1b896a0544"
+    },
+    "require_closed_closure": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/crosswalk-v5-require-closed/closure.json",
+      "sha256": "2a809734e13a8289a226429f6f76ff0e692b02c801ed14a6aaaab2c0cdc7680e"
+    }
+  },
+  "campaign": {
+    "host": "Vircs",
+    "path": "/root/oauth-capture/fw-e/claude-code-stable-20260818-r-disposition-v1-205d7f58f",
+    "capture_index_sha256": "4b16a52f9804e96d6454543881333af1305b42d6572682966a0caf6430b52d4a",
+    "production_changes": false,
+    "privacy_mode": {
+      "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+      "DISABLE_TELEMETRY": "1"
+    }
+  },
+  "r_channel": {
+    "result": "passed",
+    "baseline_version": "2.1.220",
+    "target_version": "2.1.226",
+    "channels": [
+      "A1",
+      "J",
+      "L",
+      "M",
+      "P",
+      "R"
+    ],
+    "scenarios": [
+      "a1",
+      "s1",
+      "s2",
+      "s4"
+    ],
+    "probe_ids": [
+      "r-a1",
+      "r-s1",
+      "r-s2",
+      "r-s4"
+    ],
+    "control_probe_count": 4,
+    "target_probe_count": 4,
+    "target_network_observation_count": 4,
+    "privacy_controls": {
+      "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+      "DISABLE_TELEMETRY": "1"
+    }
+  },
+  "disposition_review": {
+    "result": "passed",
+    "denominator_counts": {
+      "historical_source_candidates": 102,
+      "hitcc_clues": 88,
+      "hitcc_documents": 71,
+      "runtime_observations": 4,
+      "target_sinks": 505
+    },
+    "denominator_total": 770,
+    "explicit_disposition_total": 770,
+    "unclassified_counts": {
+      "historical_source_candidates": 29,
+      "hitcc_clues": 71,
+      "hitcc_documents": 69,
+      "runtime_observations": 0,
+      "target_sinks": 332
+    },
+    "unclassified_total": 501
+  },
+  "closure": {
+    "result": "blocked",
+    "unresolved_total": 501,
+    "target_sink_total": 505,
+    "target_sink_disposition_counts": {
+      "mapped_managed": 17,
+      "mapped_strict": 3,
+      "out_of_scope_proven": 147,
+      "record_only_disabled": 6,
+      "unclassified": 332
+    },
+    "historical_source_disposition_counts": {
+      "mapped_historical": 48,
+      "mapped_managed": 7,
+      "out_of_scope_proven": 18,
+      "unclassified": 29
+    },
+    "hitcc_clue_disposition_counts": {
+      "mapped_historical": 6,
+      "mapped_managed": 1,
+      "out_of_scope_proven": 10,
+      "unclassified": 71
+    },
+    "hitcc_document_disposition_counts": {
+      "out_of_scope_proven": 2,
+      "unclassified": 69
+    },
+    "runtime_observation_disposition_counts": {
+      "mapped_sink": 4
+    },
+    "target_add_rule_count": 0
+  },
+  "finalization": {
+    "campaign_secret_scan_result": "passed",
+    "campaign_file_count": 233,
+    "campaign_byte_count": 2074366,
+    "campaign_inventory_sha256": "23ff696df20a59c3b1298e77c19e0c318f0aa8f335d3e9afba4423a57267aa21",
+    "production_compare_result": "passed",
+    "production_difference_count": 0,
+    "production_image_id": "sha256:9399e13dea365354311476b919b39d2c9d28d538d125fa7fc397745a7101c096",
+    "production_version": "0.1.177-4",
+    "production_revision": "f5e6d8c4ed899297b11b23a80d5384f43aed84ad",
+    "production_restart_count": 0
+  },
+  "implementation_proofs": [
+    {
+      "id": "capture-tools",
+      "result": "passed",
+      "passed_test_count": 757,
+      "skipped_test_count": 3
+    },
+    {
+      "id": "official-client-control",
+      "result": "passed",
+      "passed_test_count": 30,
+      "skipped_test_count": 0
+    },
+    {
+      "id": "real-disposition-replay",
+      "result": "passed"
+    },
+    {
+      "id": "require-closed",
+      "result": "blocked-as-expected"
+    },
+    {
+      "id": "prior-runtime-transition-replay",
+      "result": "passed"
+    }
+  ],
+  "implementation_result": "passed",
+  "explicit_disposition_result": "passed",
+  "evidence_closure_result": "blocked",
+  "evidence_approval_issued": false,
+  "snapshot_or_profile_generated": false,
+  "production_runtime_path_count": 0,
+  "deployment_performed": false,
+  "dmit_deployment_performed": false,
+  "fw_f_entered": false,
+  "blocking_reasons": [
+    "332 个目标 AST sink 尚缺唯一 source-to-sink、SPEC 或运行场景处置",
+    "29 个 2.1.88 候选、71 个 HitCC 原子线索和 69 篇直接线索文档尚未证据闭合",
+    "显式处置覆盖已通过，但 require-closed 按预期返回失败；不得进入 FW-F"
+  ],
+  "result": "blocked"
+}
