@@ -44,6 +44,9 @@ from tools.official_client_capture.claude_fw_e_crosswalk import (  # noqa: E402
     SCHEMA_CLOSURE,
     SCHEMA_MATRIX,
 )
+from tools.official_client_capture.capturelib.security import (  # noqa: E402
+    canonical_json_sha256 as capture_canonical_json_sha256,
+)
 from tools.official_client_control.canonical import (  # noqa: E402
     canonical_sha256,
     canonical_json_bytes,
@@ -875,7 +878,9 @@ def _validate_case_privacy_environment(
         raise FWEEvidenceError(f"{label} 环境 values 非法：{manifest_path}")
     if environment.get("keys") != sorted(values):
         raise FWEEvidenceError(f"{label} 环境 keys 与 values 不一致：{manifest_path}")
-    environment_sha256 = canonical_sha256(values)
+    # invocation 环境由 capturelib.security.environment_manifest_view 生成，
+    # 它的摘要规范不带末尾换行；不能误用控制 Store 带换行的 canonical_sha256。
+    environment_sha256 = capture_canonical_json_sha256(values)
     if environment.get("sha256") != environment_sha256:
         raise FWEEvidenceError(f"{label} 环境摘要复算失败：{manifest_path}")
     for key, expected in REQUIRED_PRIVACY_ENV.items():

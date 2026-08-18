@@ -15,6 +15,7 @@ from tools.official_client_capture.claude_fw_e import (
     _verify_integrity,
     build_rule_assessments,
 )
+from tools.official_client_capture.capturelib.security import canonical_json_sha256
 from tools.official_client_control.canonical import (
     canonical_json_bytes,
     canonical_sha256,
@@ -67,7 +68,7 @@ def manifest(version: str, binary_sha256: str, source_sha256: str) -> dict:
                             "values": environment_values,
                             "keys": sorted(environment_values),
                             "redacted_keys": [],
-                            "sha256": canonical_sha256(environment_values),
+                            "sha256": canonical_json_sha256(environment_values),
                         }
                     }
                 },
@@ -179,7 +180,7 @@ class ClaudeFWETests(unittest.TestCase):
                 "invocation"
             ]["environment"]
             environment["values"]["DISABLE_TELEMETRY"] = "0"
-            environment["sha256"] = canonical_sha256(environment["values"])
+            environment["sha256"] = canonical_json_sha256(environment["values"])
             write_manifest(root, payload)
             with self.assertRaisesRegex(FWEEvidenceError, "隐私开关实际值非法"):
                 _scan_capture_group(root, "target", "2.1.226", "a" * 64)
