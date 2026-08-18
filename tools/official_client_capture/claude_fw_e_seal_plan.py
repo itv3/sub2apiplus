@@ -22,8 +22,8 @@ from tools.official_client_control.canonical import (  # noqa: E402
 from tools.official_client_control.errors import ControlError  # noqa: E402
 
 
-PLAN_SCHEMA = "official-client-fw-e-seal-plan/v2"
-ASSESSMENTS_SCHEMA = "claude-code-fw-e-rule-assessments/v1"
+PLAN_SCHEMA = "official-client-fw-e-seal-plan/v3"
+ASSESSMENTS_SCHEMA = "claude-code-fw-e-rule-assessments/v2"
 FREEZE_SCHEMA = "claude-code-fw-e-official-freeze/v1"
 
 

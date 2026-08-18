@@ -192,10 +192,8 @@ class ClaudeFWETests(unittest.TestCase):
             closure_path = workspace / "closure.json"
             static = workspace / "static.json"
             capture = workspace / "capture.json"
-            candidate_evidence = workspace / "candidate.json"
-            write_json(candidate_evidence, {"result": "historical_candidate"})
             matrix = {
-                "schema_version": "claude-code-fw-e-cross-source-matrix/v1",
+                "schema_version": "claude-code-fw-e-cross-source-matrix/v2",
                 "target_version": "2.1.226",
                 "target_rules": [
                     {
@@ -216,25 +214,26 @@ class ClaudeFWETests(unittest.TestCase):
                         "origin": "target_native_add",
                         "baseline_disposition": None,
                     },
+                ],
+                "semantic_candidates": [
                     {
-                        "id": "SPEC-VAL-001",
-                        "domain": "historical_source_candidate",
+                        "id": "CAND-HISTORICAL-001",
+                        "candidate_kind": "wire_semantic",
+                        "domain": "header",
                         "retained_claim": "只用于后续验证的历史候选",
                         "scope": "historical-source",
-                        "required_channels": [],
-                        "validation_evidence_level": "blocked",
+                        "required_channels": ["J"],
+                        "evidence_level": "blocked",
                         "evidence_paths": ["candidate.json"],
                         "source_ids": ["SRC-001"],
-                        "origin": "validation_candidate_add",
-                        "baseline_disposition": None,
-                    },
+                    }
                 ],
             }
             write_json(matrix_path, matrix)
             write_json(
                 closure_path,
                 {
-                    "schema_version": "claude-code-fw-e-completeness/v1",
+                    "schema_version": "claude-code-fw-e-completeness/v2",
                     "target_version": "2.1.226",
                     "matrix_sha256": canonical_sha256(matrix),
                     "unresolved_total": 0,
@@ -266,29 +265,86 @@ class ClaudeFWETests(unittest.TestCase):
                 workspace / "rules",
                 None,
             )
-            self.assertEqual(result["rule_count"], 3)
+            self.assertEqual(result["rule_count"], 2)
             self.assertEqual(result["inherit_count"], 0)
             self.assertEqual(result["regressed_evidence_count"], 1)
-            self.assertEqual(result["blocked_count"], 1)
+            self.assertEqual(result["blocked_count"], 0)
             self.assertEqual(
                 sum(row["migration_decision"] == "add" for row in result["rules"]),
-                2,
+                1,
             )
-            validation_rule = next(
-                row for row in result["rules"] if row["spec_id"] == "SPEC-VAL-001"
+            self.assertNotIn(
+                "CAND-HISTORICAL-001",
+                {row["spec_id"] for row in result["rules"]},
             )
-            self.assertIn("approval_scope=validation_only", validation_rule["applicability"])
-            self.assertIn("production_eligibility=denied", validation_rule["applicability"])
             written = load_json_file(
                 workspace / "rules/rule-assessments.json", "rule assessments"
             )
-            self.assertEqual(written["rule_count"], 3)
+            self.assertEqual(written["rule_count"], 2)
+
+    def test_rule_assessments_reject_semantic_candidate_in_target_rules(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            matrix = {
+                "schema_version": "claude-code-fw-e-cross-source-matrix/v2",
+                "target_version": "2.1.226",
+                "target_rules": [
+                    {
+                        "id": "CAND-NOT-A-RULE",
+                        "required_channels": [],
+                        "origin": "historical_rule",
+                    }
+                ],
+            }
+            paths = {
+                "matrix": workspace / "matrix.json",
+                "closure": workspace / "closure.json",
+                "static": workspace / "static.json",
+                "capture": workspace / "capture.json",
+            }
+            write_json(paths["matrix"], matrix)
+            write_json(
+                paths["closure"],
+                {
+                    "schema_version": "claude-code-fw-e-completeness/v2",
+                    "target_version": "2.1.226",
+                    "matrix_sha256": canonical_sha256(matrix),
+                    "unresolved_total": 0,
+                    "result": "passed",
+                },
+            )
+            write_json(
+                paths["static"],
+                {
+                    "schema_version": "claude-code-fw-e-static-diff/v1",
+                    "target_version": "2.1.226",
+                },
+            )
+            write_json(
+                paths["capture"],
+                {
+                    "schema_version": "claude-code-fw-e-capture-index/v1",
+                    "target_version": "2.1.226",
+                    "result": "passed",
+                    "channels": ["J"],
+                },
+            )
+            with self.assertRaisesRegex(FWEEvidenceError, "只能包含 SPEC"):
+                build_rule_assessments(
+                    workspace,
+                    paths["matrix"],
+                    paths["closure"],
+                    paths["static"],
+                    paths["capture"],
+                    workspace / "rules",
+                    None,
+                )
 
     def test_rule_assessments_reject_baseline_only_blocked_closure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
             matrix = {
-                "schema_version": "claude-code-fw-e-cross-source-matrix/v1",
+                "schema_version": "claude-code-fw-e-cross-source-matrix/v2",
                 "target_version": "2.1.226",
                 "target_rules": [],
             }
@@ -297,7 +353,7 @@ class ClaudeFWETests(unittest.TestCase):
                 (
                     "closure.json",
                     {
-                        "schema_version": "claude-code-fw-e-completeness/v1",
+                        "schema_version": "claude-code-fw-e-completeness/v2",
                         "target_version": "2.1.226",
                         "matrix_sha256": canonical_sha256(matrix),
                         "unresolved_total": 1,

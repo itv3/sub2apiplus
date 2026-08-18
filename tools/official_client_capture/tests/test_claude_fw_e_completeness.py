@@ -496,11 +496,13 @@ class CrosswalkTests(unittest.TestCase):
             "capture": capture,
         }
 
-    def _use_validation_candidate(self, paths: dict[str, Path]) -> None:
+    def _use_semantic_candidate(self, paths: dict[str, Path]) -> None:
         dispositions = json.loads(paths["dispositions"].read_text())
         dispositions["schema_version"] = (
-            "claude-code-fw-e-cross-source-dispositions/v2"
+            "claude-code-fw-e-cross-source-dispositions/v3"
         )
+        for row in dispositions["target_sinks"]:
+            row["candidate_ids"] = []
         target = next(
             row
             for row in dispositions["target_sinks"]
@@ -512,21 +514,53 @@ class CrosswalkTests(unittest.TestCase):
                 "traffic_class": "unknown",
                 "disposition": "mapped_validation",
                 "scenario_ids": [],
-                "spec_ids": ["SPEC-VAL-TARGET-001"],
+                "spec_ids": [],
+                "candidate_ids": ["CAND-TARGET-001"],
+                "migration_decision": "change",
             }
         )
-        dispositions["candidate_rules"] = [
+        dispositions["semantic_candidates"] = [
             {
-                "id": "SPEC-VAL-TARGET-001",
-                "domain": "transport_candidate",
+                "id": "CAND-TARGET-001",
+                "candidate_kind": "inventory_obligation",
+                "domain": "transport",
                 "retained_claim": "目标 bundle 中存在尚待运行取证的 WebSocket 调用。",
                 "scope": "target-static",
                 "required_channels": [],
-                "validation_evidence_level": "observed",
+                "evidence_level": "observed",
                 "evidence_paths": ["evidence/target-static.json"],
                 "source_ids": ["TN-SINK-NEW"],
             }
         ]
+        discovery = paths["dispositions"].with_name("discovery.json")
+        write_json(
+            discovery,
+            {
+                "schema_version": "claude-code-fw-e-discovery-inventory/v1",
+                "target_version": "2.1.226",
+                "item_count": 1,
+                "counts_by_source_kind": {"target_ast_call": 1},
+                "counts_by_disposition": {"mapped_semantic_candidate": 1},
+                "items": [
+                    {
+                        "discovery_id": "TN-SINK-NEW",
+                        "source_kind": "target_ast_call",
+                        "proposition": "目标 bundle 中存在 WebSocket 调用。",
+                        "disposition": "mapped_semantic_candidate",
+                        "semantic_candidate_ids": ["CAND-TARGET-001"],
+                        "spec_ids": [],
+                        "evidence_paths": ["evidence/target-static.json"],
+                        "rationale": "只登记发现，不生成规则。",
+                    }
+                ],
+                "rule_generation": "forbidden",
+            },
+        )
+        dispositions["discovery_inventory"] = {
+            "path": discovery.name,
+            "sha256": hashlib.sha256(discovery.read_bytes()).hexdigest(),
+            "item_count": 1,
+        }
         write_json(paths["dispositions"], dispositions)
 
     def test_closed_crosswalk_can_add_target_native_rule(self) -> None:
@@ -549,10 +583,10 @@ class CrosswalkTests(unittest.TestCase):
                 "SPEC-NEW-001", {row["id"] for row in matrix["target_rules"]}
             )
 
-    def test_closed_crosswalk_can_seal_validation_only_candidate(self) -> None:
+    def test_closed_crosswalk_keeps_semantic_candidate_out_of_rule_ledger(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             paths = self._fixture(Path(directory))
-            self._use_validation_candidate(paths)
+            self._use_semantic_candidate(paths)
             matrix, closure = build_matrix(
                 paths["source"],
                 paths["hitcc"],
@@ -563,24 +597,27 @@ class CrosswalkTests(unittest.TestCase):
                 paths["dispositions"],
                 paths["capture"],
             )
-            candidate = next(
-                row
-                for row in matrix["target_rules"]
-                if row["id"] == "SPEC-VAL-TARGET-001"
+            self.assertEqual(
+                [row["id"] for row in matrix["semantic_candidates"]],
+                ["CAND-TARGET-001"],
             )
-            self.assertEqual(candidate["origin"], "validation_candidate_add")
-            self.assertEqual(candidate["validation_evidence_level"], "observed")
+            self.assertNotIn(
+                "CAND-TARGET-001", {row["id"] for row in matrix["target_rules"]}
+            )
+            self.assertEqual(closure["target_rule_count"], 1)
+            self.assertEqual(closure["semantic_candidate_count"], 1)
+            self.assertEqual(closure["discovery_item_count"], 1)
             self.assertEqual(closure["unresolved_total"], 0)
             self.assertEqual(closure["result"], "passed")
 
-    def test_validation_candidate_must_be_declared_and_referenced(self) -> None:
+    def test_semantic_candidate_must_be_declared_and_bidirectionally_referenced(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             paths = self._fixture(Path(directory))
-            self._use_validation_candidate(paths)
+            self._use_semantic_candidate(paths)
             dispositions = json.loads(paths["dispositions"].read_text())
-            dispositions["candidate_rules"] = []
+            dispositions["semantic_candidates"] = []
             write_json(paths["dispositions"], dispositions)
-            with self.assertRaisesRegex(CrosswalkError, "引用未知 candidate rule"):
+            with self.assertRaisesRegex(CrosswalkError, "引用未知 semantic candidate"):
                 build_matrix(
                     paths["source"],
                     paths["hitcc"],
@@ -592,11 +629,11 @@ class CrosswalkTests(unittest.TestCase):
                     paths["capture"],
                 )
 
-            self._use_validation_candidate(paths)
+            self._use_semantic_candidate(paths)
             dispositions = json.loads(paths["dispositions"].read_text())
-            extra = dict(dispositions["candidate_rules"][0])
-            extra["id"] = "SPEC-VAL-UNREFERENCED-001"
-            dispositions["candidate_rules"].append(extra)
+            extra = dict(dispositions["semantic_candidates"][0])
+            extra["id"] = "CAND-UNREFERENCED-001"
+            dispositions["semantic_candidates"].append(extra)
             write_json(paths["dispositions"], dispositions)
             with self.assertRaisesRegex(CrosswalkError, "没有 disposition 反向引用"):
                 build_matrix(
@@ -610,11 +647,32 @@ class CrosswalkTests(unittest.TestCase):
                     paths["capture"],
                 )
 
-            self._use_validation_candidate(paths)
+            self._use_semantic_candidate(paths)
             dispositions = json.loads(paths["dispositions"].read_text())
-            dispositions["candidate_rules"][0]["source_ids"] = ["TN-SINK-OTHER"]
+            dispositions["semantic_candidates"][0]["source_ids"] = ["TN-SINK-OTHER"]
             write_json(paths["dispositions"], dispositions)
             with self.assertRaisesRegex(CrosswalkError, "未双向绑定"):
+                build_matrix(
+                    paths["source"],
+                    paths["hitcc"],
+                    paths["ledger"],
+                    paths["baseline_inventory"],
+                    paths["target_inventory"],
+                    "2.1.226",
+                    paths["dispositions"],
+                    paths["capture"],
+                )
+
+    def test_rejects_legacy_v2_one_discovery_one_rule_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            paths = self._fixture(Path(directory))
+            dispositions = json.loads(paths["dispositions"].read_text())
+            dispositions["schema_version"] = (
+                "claude-code-fw-e-cross-source-dispositions/v2"
+            )
+            dispositions["candidate_rules"] = []
+            write_json(paths["dispositions"], dispositions)
+            with self.assertRaisesRegex(CrosswalkError, "发现项不得一对一生成规则"):
                 build_matrix(
                     paths["source"],
                     paths["hitcc"],

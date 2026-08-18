@@ -112,7 +112,7 @@ class SealPlanTests(unittest.TestCase):
         write_json(
             assessments,
             {
-                "schema_version": "claude-code-fw-e-rule-assessments/v1",
+                "schema_version": "claude-code-fw-e-rule-assessments/v2",
                 "target_version": "2.1.226",
                 "rule_count": 1,
                 "rules": [
@@ -182,7 +182,7 @@ class SealPlanTests(unittest.TestCase):
             root = Path(directory)
             paths = self._fixture(root)
             plan = self._build(root, paths)
-            self.assertEqual(plan["schema_version"], "official-client-fw-e-seal-plan/v2")
+            self.assertEqual(plan["schema_version"], "official-client-fw-e-seal-plan/v3")
             self.assertEqual(len(plan["ingress_aliases"]), 1)
             self.assertEqual(len(plan["egress_entries"]), 1)
             self.assertEqual(

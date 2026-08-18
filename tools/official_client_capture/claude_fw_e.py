@@ -55,6 +55,7 @@ from tools.official_client_control.canonical import (  # noqa: E402
     sha256_file,
 )
 from tools.official_client_control.errors import ControlError  # noqa: E402
+from tools.official_client_control.contracts import SPEC_ID_RE  # noqa: E402
 from tools.official_client_control.fw_e import seal_fw_e_plan  # noqa: E402
 from tools.official_client_control.store import ControlStore  # noqa: E402
 
@@ -62,7 +63,7 @@ from tools.official_client_control.store import ControlStore  # noqa: E402
 SCHEMA_FREEZE = "claude-code-fw-e-official-freeze/v1"
 SCHEMA_STATIC = "claude-code-fw-e-static-diff/v1"
 SCHEMA_CAPTURE_INDEX = "claude-code-fw-e-capture-index/v1"
-SCHEMA_RULE_ASSESSMENTS = "claude-code-fw-e-rule-assessments/v1"
+SCHEMA_RULE_ASSESSMENTS = "claude-code-fw-e-rule-assessments/v2"
 BASELINE_VERSION = "2.1.220"
 MAIN_PACKAGE = "@anthropic-ai/claude-code"
 PLATFORM_PACKAGES = {
@@ -1077,7 +1078,7 @@ def build_capture_index(
 
 
 def _matrix_target_rules(matrix: dict[str, Any]) -> list[dict[str, Any]]:
-    """读取四方矩阵派生的目标规则，不把旧版本条数当作目标上限。"""
+    """只读取已原子化的 SPEC 规则，拒绝把发现项或语义候选当成规则。"""
 
     rows = matrix.get("target_rules")
     if not isinstance(rows, list) or not rows:
@@ -1086,30 +1087,17 @@ def _matrix_target_rules(matrix: dict[str, Any]) -> list[dict[str, Any]]:
     if len(identities) != len(rows) or len(set(identities)) != len(identities):
         raise FWEEvidenceError("四方矩阵 target rule 身份缺失或重复")
     for row in rows:
+        if not SPEC_ID_RE.fullmatch(str(row.get("id", ""))):
+            raise FWEEvidenceError(
+                f"target_rules 只能包含 SPEC，禁止发现项或语义候选：{row.get('id')}"
+            )
         if row.get("origin") not in {
             "historical_rule",
             "target_native_add",
-            "validation_candidate_add",
         }:
             raise FWEEvidenceError(f"目标规则来源非法：{row.get('id')}")
         if not isinstance(row.get("required_channels"), list):
             raise FWEEvidenceError(f"目标规则 required_channels 非法：{row.get('id')}")
-        if row.get("origin") == "validation_candidate_add":
-            if row.get("validation_evidence_level") not in {"observed", "blocked"}:
-                raise FWEEvidenceError(
-                    f"validation candidate 缺少证据等级：{row.get('id')}"
-                )
-            evidence_paths = row.get("evidence_paths")
-            source_ids = row.get("source_ids")
-            if (
-                not isinstance(evidence_paths, list)
-                or not evidence_paths
-                or not isinstance(source_ids, list)
-                or not source_ids
-            ):
-                raise FWEEvidenceError(
-                    f"validation candidate 缺少证据或来源：{row.get('id')}"
-                )
     return sorted(rows, key=lambda item: str(item["id"]))
 
 
@@ -1122,10 +1110,7 @@ def _required_channels(rule: dict[str, Any]) -> set[str]:
 
 def _baseline_disposition(rule: dict[str, Any]) -> str | None:
     value = rule.get("baseline_disposition")
-    if rule.get("origin") in {
-        "target_native_add",
-        "validation_candidate_add",
-    } and value is None:
+    if rule.get("origin") == "target_native_add" and value is None:
         return None
     if not isinstance(value, str):
         raise FWEEvidenceError(f"规则缺少 disposition：{rule.get('id')}")
@@ -1226,15 +1211,7 @@ def build_rule_assessments(
         baseline_disposition = _baseline_disposition(rule)
         required = _required_channels(rule)
         channels_complete = required.issubset(channels)
-        validation_only = rule["origin"] == "validation_candidate_add"
-        if validation_only:
-            decision = "add"
-            basis = "new_target_rule"
-            lifecycle = "candidate"
-            evidence_level = str(rule["validation_evidence_level"])
-            if evidence_level == "observed" and not channels_complete:
-                evidence_level = "blocked"
-        elif rule["origin"] == "target_native_add":
+        if rule["origin"] == "target_native_add":
             decision = "add"
             basis = "new_target_rule"
             lifecycle = "candidate"
@@ -1347,14 +1324,6 @@ def build_rule_assessments(
             "privacy=essential-traffic",
             "provider=firstParty",
         ]
-        if validation_only:
-            applicability.extend(
-                [
-                    "approval_scope=validation_only",
-                    "production_eligibility=denied",
-                    f"validation_scope={rule.get('scope')}",
-                ]
-            )
         assessment_rows.append(
             {
                 "spec_id": spec_id,

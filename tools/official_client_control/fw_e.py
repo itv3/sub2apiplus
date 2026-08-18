@@ -42,11 +42,12 @@ from .receipts import control_tool_bundle_sha256
 from .store import ControlStore
 
 
-PLAN_SCHEMA = "official-client-fw-e-seal-plan/v2"
+PLAN_SCHEMA = "official-client-fw-e-seal-plan/v3"
 TARGET_INVENTORY_SCHEMA = "claude-code-target-sink-inventory/v1"
-CROSS_SOURCE_MATRIX_SCHEMA = "claude-code-fw-e-cross-source-matrix/v1"
-COMPLETENESS_SCHEMA = "claude-code-fw-e-completeness/v1"
+CROSS_SOURCE_MATRIX_SCHEMA = "claude-code-fw-e-cross-source-matrix/v2"
+COMPLETENESS_SCHEMA = "claude-code-fw-e-completeness/v2"
 CAPTURE_INDEX_SCHEMA = "claude-code-fw-e-capture-index/v1"
+DISCOVERY_INVENTORY_SCHEMA = "claude-code-fw-e-discovery-inventory/v1"
 REQUIRED_PRIVACY_ENV = {
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     "DISABLE_TELEMETRY": "1",
@@ -252,14 +253,131 @@ def _validate_completeness_artifacts(
     if not isinstance(target_rules, list) or not target_rules:
         raise ControlError("cross-source matrix 缺少 target rules")
     expected_rule_ids = sorted(str(row.get("id")) for row in target_rules)
-    if len(set(expected_rule_ids)) != len(expected_rule_ids):
-        raise ControlError("cross-source matrix target rule ID 重复")
+    if (
+        len(set(expected_rule_ids)) != len(expected_rule_ids)
+        or any(not SPEC_ID_RE.fullmatch(identity) for identity in expected_rule_ids)
+    ):
+        raise ControlError(
+            "cross-source matrix target_rules 只能包含身份唯一的 SPEC"
+        )
+    if closure.get("target_rule_count") != len(expected_rule_ids):
+        raise ControlError("completeness closure 的规则数量与矩阵不一致")
+
+    semantic_candidates = matrix.get("semantic_candidates")
+    if not isinstance(semantic_candidates, list):
+        raise ControlError("cross-source matrix 缺少 semantic_candidates")
+    candidate_ids: list[str] = []
+    candidate_sources: dict[str, set[str]] = {}
+    required_candidate_keys = {
+        "id",
+        "candidate_kind",
+        "domain",
+        "retained_claim",
+        "scope",
+        "required_channels",
+        "evidence_level",
+        "evidence_paths",
+        "source_ids",
+    }
+    for index, candidate in enumerate(semantic_candidates):
+        if not isinstance(candidate, dict) or set(candidate) != required_candidate_keys:
+            raise ControlError(f"semantic_candidates[{index}] 字段不闭合")
+        candidate_id = expect_string(candidate.get("id"), f"semantic_candidates[{index}].id")
+        if not candidate_id.startswith("CAND-") or SPEC_ID_RE.fullmatch(candidate_id):
+            raise ControlError(f"语义候选身份非法：{candidate_id}")
+        if candidate.get("evidence_level") not in {"observed", "blocked"}:
+            raise ControlError(f"语义候选证据等级非法：{candidate_id}")
+        source_ids = expect_string_list(
+            candidate.get("source_ids"), f"{candidate_id}.source_ids"
+        )
+        evidence_paths = expect_string_list(
+            candidate.get("evidence_paths"), f"{candidate_id}.evidence_paths"
+        )
+        if not source_ids or not evidence_paths:
+            raise ControlError(f"语义候选缺少来源或证据：{candidate_id}")
+        candidate_ids.append(candidate_id)
+        candidate_sources[candidate_id] = set(source_ids)
+    if candidate_ids != sorted(set(candidate_ids)):
+        raise ControlError("semantic_candidates 必须按 CAND 身份排序且不得重复")
+    if set(candidate_ids) & set(expected_rule_ids):
+        raise ControlError("CAND 语义候选不得进入 RuleLedger")
+    if closure.get("semantic_candidate_count") != len(candidate_ids):
+        raise ControlError("completeness closure 的语义候选数量与矩阵不一致")
+
+    discovery_summary = matrix.get("discovery_inventory")
+    if not isinstance(discovery_summary, dict) or set(discovery_summary) != {
+        "path",
+        "sha256",
+        "item_count",
+        "counts_by_source_kind",
+        "counts_by_disposition",
+    }:
+        raise ControlError("cross-source matrix 缺少闭合的 discovery_inventory")
+    discovery, discovery_binding = _load_external_json(
+        external_root,
+        discovery_summary.get("path"),
+        "discovery_inventory.path",
+    )
+    if (
+        discovery_binding["sha256"] != discovery_summary.get("sha256")
+        or discovery.get("schema_version") != DISCOVERY_INVENTORY_SCHEMA
+        or discovery.get("target_version") != target_version
+        or discovery.get("rule_generation") != "forbidden"
+    ):
+        raise ControlError("discovery inventory 摘要、Schema、版本或规则边界非法")
+    discovery_items = discovery.get("items")
+    if (
+        not isinstance(discovery_items, list)
+        or discovery.get("item_count") != len(discovery_items)
+        or discovery_summary.get("item_count") != len(discovery_items)
+        or closure.get("discovery_item_count") != len(discovery_items)
+    ):
+        raise ControlError("discovery inventory 数量与矩阵／closure 不一致")
+    discovery_ids: list[str] = []
+    discovery_candidate_refs: dict[str, set[str]] = {}
+    for item in discovery_items:
+        if not isinstance(item, dict):
+            raise ControlError("discovery inventory 条目非法")
+        discovery_id = expect_string(item.get("discovery_id"), "discovery_id")
+        references = set(
+            expect_string_list(
+                item.get("semantic_candidate_ids"),
+                f"{discovery_id}.semantic_candidate_ids",
+                non_empty=False,
+            )
+        )
+        unknown = sorted(references - set(candidate_ids))
+        if unknown:
+            raise ControlError(
+                f"discovery item 引用未知语义候选：{discovery_id}={unknown}"
+            )
+        discovery_ids.append(discovery_id)
+        discovery_candidate_refs[discovery_id] = references
+    if discovery_ids != sorted(set(discovery_ids)):
+        raise ControlError("discovery inventory 必须按身份排序且不得重复")
+    for candidate_id, source_ids in candidate_sources.items():
+        for source_id in source_ids:
+            if candidate_id not in discovery_candidate_refs.get(source_id, set()):
+                raise ControlError(
+                    "semantic candidate 与 discovery source_ids 未双向绑定："
+                    f"{candidate_id}={source_id}"
+                )
+    for discovery_id, references in discovery_candidate_refs.items():
+        for candidate_id in references:
+            if discovery_id not in candidate_sources[candidate_id]:
+                raise ControlError(
+                    "discovery 与 semantic candidate source_ids 未双向绑定："
+                    f"{discovery_id}={candidate_id}"
+                )
     return {
         "inventory_bindings": inventory_bindings,
         "matrix_binding": matrix_binding,
         "closure_binding": closure_binding,
         "capture_binding": capture_binding,
+        "discovery_binding": discovery_binding,
         "expected_rule_ids": expected_rule_ids,
+        "semantic_candidate_count": len(candidate_ids),
+        "discovery_item_count": len(discovery_items),
         "target_sink_count": len(matrix_sink_ids),
         "runtime_observation_count": len(matrix_observation_ids),
     }
@@ -904,6 +1022,7 @@ def seal_fw_e_plan(
             completeness["matrix_binding"],
             completeness["closure_binding"],
             completeness["capture_binding"],
+            completeness["discovery_binding"],
         ],
         "FW-E 目标 sink、历史资料、全 host/path 运行观测和规则闭集",
     )
@@ -1021,6 +1140,8 @@ def seal_fw_e_plan(
         "target_disposition_proposal_ref": proposal_ref,
         "tool_bundle_sha256": tool_sha256,
         "rule_count": len(rules),
+        "semantic_candidate_count": completeness["semantic_candidate_count"],
+        "discovery_item_count": completeness["discovery_item_count"],
         "target_sink_count": completeness["target_sink_count"],
         "runtime_observation_count": completeness["runtime_observation_count"],
         "checkpoint": status["checkpoint"],

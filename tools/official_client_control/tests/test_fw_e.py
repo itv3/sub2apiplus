@@ -54,18 +54,45 @@ class FWESealTests(unittest.TestCase):
         (self.external / "target-inventory.json").write_bytes(
             canonical_json_bytes(target_inventory)
         )
+        discovery = {
+            "schema_version": "claude-code-fw-e-discovery-inventory/v1",
+            "target_version": "2.1.226",
+            "item_count": 1,
+            "counts_by_source_kind": {"hitcc_document_atom_2_1_197": 1},
+            "counts_by_disposition": {"catalogued_context": 1},
+            "items": [
+                {
+                    "discovery_id": "HDOC-CONTEXT-001",
+                    "semantic_candidate_ids": [],
+                }
+            ],
+            "rule_generation": "forbidden",
+        }
+        (self.external / "discovery.json").write_bytes(
+            canonical_json_bytes(discovery)
+        )
         matrix = {
-            "schema_version": "claude-code-fw-e-cross-source-matrix/v1",
+            "schema_version": "claude-code-fw-e-cross-source-matrix/v2",
             "target_version": "2.1.226",
             "target_sinks": [{"sink_id": "TN-SINK-001"}],
             "runtime_observations": [
                 {"observation_id": "RUN-NET-001", "disposition": "mapped_sink"}
             ],
+            "semantic_candidates": [],
+            "discovery_inventory": {
+                "path": "discovery.json",
+                "sha256": sha256_file(self.external / "discovery.json"),
+                "item_count": 1,
+                "counts_by_source_kind": {
+                    "hitcc_document_atom_2_1_197": 1
+                },
+                "counts_by_disposition": {"catalogued_context": 1},
+            },
             "target_rules": [{"id": "SPEC-001"}],
         }
         (self.external / "matrix.json").write_bytes(canonical_json_bytes(matrix))
         closure = {
-            "schema_version": "claude-code-fw-e-completeness/v1",
+            "schema_version": "claude-code-fw-e-completeness/v2",
             "target_version": "2.1.226",
             "matrix_sha256": canonical_sha256(matrix),
             "target_inventory_sha256": sha256_file(
@@ -74,6 +101,9 @@ class FWESealTests(unittest.TestCase):
             "target_sink_total": 1,
             "target_sink_disposition_counts": {"mapped_strict": 1},
             "runtime_observation_disposition_counts": {"mapped_sink": 1},
+            "target_rule_count": 1,
+            "semantic_candidate_count": 0,
+            "discovery_item_count": 1,
             "unresolved": {
                 "source_candidate_ids": [],
                 "hitcc_clue_ids": [],
@@ -146,7 +176,7 @@ class FWESealTests(unittest.TestCase):
             "upstream_route_family": "anthropic-api",
         }
         return {
-            "schema_version": "official-client-fw-e-seal-plan/v2",
+            "schema_version": "official-client-fw-e-seal-plan/v3",
             "campaign_id": "claude-fw-e-test",
             "persona": persona,
             "target_version": "2.1.226",
@@ -239,6 +269,8 @@ class FWESealTests(unittest.TestCase):
         self.assertEqual(result["checkpoint"], "evidence_recorded")
         self.assertEqual(result["approval_state"], "awaiting_explicit_evidence_approval")
         self.assertEqual(result["rule_count"], 1)
+        self.assertEqual(result["semantic_candidate_count"], 0)
+        self.assertEqual(result["discovery_item_count"], 1)
         self.assertEqual(result["target_sink_count"], 1)
         self.assertEqual(result["runtime_observation_count"], 1)
         self.assertEqual(
@@ -301,6 +333,19 @@ class FWESealTests(unittest.TestCase):
         plan = self.plan()
         plan["rules"][0]["evidence_level"] = "blocked"
         with self.assertRaisesRegex(ControlError, "只有在 validation-only"):
+            seal_fw_e_plan(self.store, self.external, plan)
+
+    def test_blocks_semantic_candidate_mixed_into_rule_ledger(self) -> None:
+        plan = self.plan()
+        matrix_path = self.external / "matrix.json"
+        matrix = json.loads(matrix_path.read_text())
+        matrix["target_rules"] = [{"id": "CAND-NOT-A-RULE"}]
+        matrix_path.write_bytes(canonical_json_bytes(matrix))
+        closure_path = self.external / "closure.json"
+        closure = json.loads(closure_path.read_text())
+        closure["matrix_sha256"] = canonical_sha256(matrix)
+        closure_path.write_bytes(canonical_json_bytes(closure))
+        with self.assertRaisesRegex(ControlError, "只能包含身份唯一的 SPEC"):
             seal_fw_e_plan(self.store, self.external, plan)
 
     def test_seals_bounded_validation_only_blocked_rule(self) -> None:

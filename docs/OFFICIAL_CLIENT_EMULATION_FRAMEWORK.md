@@ -248,13 +248,18 @@ Schema 能表达时只追加数据；出现新协议、新状态机制或 Schema
 只有 `evidence_level=verified` 表示规则、条件、运行证据与复算链闭环；其他维度不能提升证据等级。
 旧 JSON 台账在迁移期可以保留单字段兼容投影，但新的 Persona Schema 和 Campaign 必须保存上述正交事实。
 
-`mapped_validation` 是发现项的处置关系，不是新的证据等级，也不表示目标 wire 已验证。它只允许把已经
-唯一编号、绑定原始证据和来源身份，但尚不能取得目标语义证明的项登记为 `candidate + add`；对应规则
-必须保留真实的 `observed` 或 `blocked`，并同时声明 `approval_scope=validation_only`、
-`production_eligibility=denied` 和明确 `validation_scope`。`mapped_validation` 可以消除发现分类账中的
-`unclassified`，使 EvidencePackage 在 `evidence_recorded` 封存当前事实，但不得进入 production
-SupportEnvelope、不得签发 production-replacement ApprovalFact，也不得生成生产画像。disposition 与
-candidate 的 `source_ids` 必须双向引用；缺少任一边界仍按未闭合处理。
+`mapped_validation` 是发现项到 `SemanticRuleCandidate` 的处置关系，不是规则、迁移决策或新的证据
+等级，也不表示目标 wire 已验证。FW-E 必须分开保存三层数据：`DiscoveryInventory` 无截断保留每个
+原始发现，`SemanticRuleCandidate` 用 `source_ids` 把同一语义的多个发现归并为待验证工作项，
+`RuleLedger` 只保存已经原子化、可执行并可逐项断言的 `SPEC-*`。一个发现跨越多个语义时可以引用多个
+候选，但每个引用必须双向闭合。
+
+语义候选保留真实的 `observed／blocked`，并固定 `rule_ledger_membership=denied` 与
+`production_eligibility=denied`；不得用发现 ID 或 `CAND-*` 自动生成 `SPEC-*`。只有后续语义审查把
+候选收敛成可执行规则时，才能显式新建或修改 SPEC，再独立登记迁移决策、场景和断言。
+`mapped_validation` 可以消除发现分类账中的 `unclassified`，使 EvidencePackage 在
+`evidence_recorded` 封存当前事实，但不得进入 production SupportEnvelope、不得签发
+production-replacement ApprovalFact，也不得生成生产画像。
 
 | 单元 | 身份变化边界 |
 |---|---|
@@ -464,27 +469,31 @@ FW-A 基线 → FW-B 暂定合同 → FW-C Codex-only 发布 → FW-D 通用工�
   出站的 source-to-sink 盘点，只在冻结遗留路径启用 `legacy_observe`。
 - **闭集发现要求**：目标规则全集不得由旧规则台账枚举后迁移得到，也不得截断 sink、只扫描已知
   host／path 或只运行固定字面量探针。每个目标 sink 必须有稳定身份、可复算来源、可达性边界和唯一
-  disposition；目标独有机制必须能形成 `add`。仍不知道下一步如何处置的项保持 `unclassified` 并阻止
-  闭集；已经取得稳定身份、原子命题和证据绑定，但尚缺目标语义或运行证明的项，必须显式使用
-  `mapped_validation`，保留真实 `observed／blocked` 并禁止生产。静态分析只能把精确调用存在性记为
-  `observed`，不能据此证明触发条件、流量类别或 wire；strict 命题仍须由目标版本运行证据闭环。
+  disposition。原始发现先进入无截断 `DiscoveryInventory`，再按语义归并为候选；只有形成可执行语义、
+  适用条件和断言的项才进入 `RuleLedger`。目标独有机制经语义审查后必须能显式形成 `add`，不得按
+  “一个发现一条规则”自动生成。仍不知道下一步如何处置的项保持 `unclassified` 并阻止闭集；已经取得
+  稳定身份和证据绑定、但尚缺目标语义或运行证明的项使用 `mapped_validation` 进入语义候选，保留真实
+  `observed／blocked` 并禁止加入规则台账和生产。静态分析只能把精确调用存在性记为 `observed`，不能
+  据此证明触发条件、流量类别或 wire；strict 命题仍须由目标版本运行证据闭环。
 - **行为层边界**：是否产生某类流量不作为独立的一致性对比维度。`essential traffic` 只界定后续
   strict wire／PAIR 的场景范围；场景被调用时仍须按 §1.2 核对实际请求的 wire、transport、动态事实、
   条件分支和跨请求状态。官方可配置关闭的 telemetry 与 nonessential traffic 只记录配置、可达性和
   观测事实，其缺失属于合法状态，不得计为一致性差异或“不像官方客户端”的依据。Claude 的
   `DISABLE_TELEMETRY` 与 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 是该判据的官方实现依据。
-- **输出制品**：目标 Campaign 身份、不可变 EvidencePackage、目标 sink inventory、跨来源候选矩阵、
-  规则迁移台账、validation-only 候选及其双向 source-to-sink／历史来源绑定，以及两个 Inventory 的
-  当前事实；拟议 `target_disposition`／出站处置只作为未批准提案，不覆盖当前事实。
-- **退出门禁**：官方产物和目标版本可复算；每条范围候选规则都有迁移决策、证据等级和适用边界；
+- **输出制品**：目标 Campaign 身份、不可变 EvidencePackage、目标 sink inventory、
+  `DiscoveryInventory`、`SemanticRuleCandidate`、只含 SPEC 的规则迁移台账、跨来源矩阵及三层间的双向
+  来源绑定，以及两个 Inventory 的当前事实；拟议 `target_disposition`／出站处置只作为未批准提案，
+  不覆盖当前事实。
+- **退出门禁**：官方产物和目标版本可复算；每条现有或新增 SPEC 都有迁移决策、证据等级和适用边界；
   历史候选和目标原生发现均有唯一处置，目标 sink inventory 无截断、重复或未分类项，运行观测没有
-  出现 inventory 外 host／path／sink；保留的 `blocked` 均满足 validation-only、禁止生产、明确边界和
-  双向来源绑定；两个 Inventory 覆盖全部已知别名／调用方／出站并能报告未知项；Store 只追加
+  出现 inventory 外 host／path／sink；所有发现均在 DiscoveryInventory，所有语义候选均禁止加入
+  RuleLedger／生产且与发现双向绑定，RuleLedger 不含 `CAND-*` 或发现 ID；两个 Inventory 覆盖全部已知
+  别名／调用方／出站并能报告未知项；Store 只追加
   `discovery_recorded／evidence_recorded`，没有 Evidence／Profile 批准；观察过程未改变生产流量。
 - **禁止／回退**：本阶段不得定义目标 ProfileSchema、Snapshot、Persona 实现或 production strict
   binding；只允许为已冻结遗留调用点追加 `unclassified + legacy_observe` 的 observation-only Sink，且不得
   主张 Persona 或 wire 等价。不得用 2.1.220 或遗留输出补足目标 stable 证据；证据不足时缩小候选范围
-  或标为 validation-only。
+  或归入禁止生产的语义候选；不得为了闭合发现清单自动生成规则。
 
 ### 6.3.6 FW-F：target-first 画像、样例与最终合同
 
@@ -558,7 +567,7 @@ rollback；否则使用 FW-A 冻结的遗留部署承担 operational rollback，
 |---|---|
 | Codex final wire 非零差异，或共享运行时代码变化 | 返回 FW-B，建立后继合同并重新完成 FW-C |
 | FW-D 不能机器阻断越权、范围缺口或收据不匹配 | 停在 FW-D，不得启动 stable Campaign |
-| FW-E 存在未分类／被截断的目标 sink、未处置历史候选，或证据不足项未按 validation-only 严格隔离 | 停在 FW-E，补目标原生发现和运行证据，或为已原子化项登记禁止生产的 `mapped_validation`；不得以遗留输出补证。`blocked` 可随 EvidencePackage 封存，但不能据此进入 production replacement |
+| FW-E 存在未分类／被截断的目标 sink、未处置历史发现，或语义候选与发现未双向闭合 | 停在 FW-E，补目标原生发现和运行证据，或把证据不足项登记为禁止进入 RuleLedger／生产的 `mapped_validation` 语义候选；不得按发现数量生成 SPEC，也不得以遗留输出补证。候选可随 EvidencePackage 封存，但不能据此进入 production replacement |
 | FW-F／FW-G 发现共享合同缺口 | 作废相关 ApprovalFact／candidate，返回 FW-B；重走 FW-C，并重验两个 fixture |
 | 官方产物、批准内容、源码、测试、画像或镜像变化 | 按 §3.2 建立新 Campaign、ApprovalFact 或 candidate；旧验收和收据不得复用 |
 | §4.2 不变量或生产一致性失败 | 禁止激活／扩流，标记 `production_unverified`，恢复冻结目标 |

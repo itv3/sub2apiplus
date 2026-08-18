@@ -1,4 +1,4 @@
-"""Claude FW-E validation-only 闭合集生成测试。"""
+"""Claude FW-E 发现清单与多对一语义候选闭合集测试。"""
 
 from __future__ import annotations
 
@@ -116,7 +116,7 @@ class ValidationClosureTests(unittest.TestCase):
                 "source_version": "2.1.88",
                 "rules": [
                     {
-                        "source_rule_id": "SRC2188-REQ-999",
+                        "source_rule_id": "SRC2188-REQ-004",
                         "category": "请求",
                         "proposition": "历史请求通过 send 发出。",
                         "source_paths": ["src/client.ts:1"],
@@ -175,7 +175,7 @@ class ValidationClosureTests(unittest.TestCase):
                 ],
                 "historical_source_candidates": [
                     {
-                        "source_rule_id": "SRC2188-REQ-999",
+                        "source_rule_id": "SRC2188-REQ-004",
                         "disposition": "unclassified",
                         "spec_ids": [],
                         "rationale": "待闭合。",
@@ -247,25 +247,29 @@ class ValidationClosureTests(unittest.TestCase):
             producer_path=paths["producer"],
         )
 
-    def test_builds_closed_validation_only_ledger_without_truncation(self) -> None:
+    def test_builds_discovery_and_semantic_candidates_without_generating_rules(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             paths = self._fixture(root)
             review = self._build(root, paths)
             self.assertEqual(review["prior_unclassified_total"], 6)
             self.assertEqual(review["final_unclassified_total"], 0)
-            self.assertEqual(review["candidate_rule_count"], 5)
+            self.assertEqual(review["discovery_item_count"], 5)
+            self.assertEqual(review["semantic_candidate_count"], 2)
+            self.assertEqual(review["generated_rule_count"], 0)
             self.assertEqual(
-                review["candidate_counts_by_evidence_level"],
-                {"blocked": 4, "observed": 1},
+                review["semantic_candidate_counts_by_evidence_level"],
+                {"blocked": 1, "observed": 1},
             )
             dispositions = json.loads(
                 (paths["output"] / "dispositions.json").read_text()
             )
             self.assertEqual(
                 dispositions["schema_version"],
-                "claude-code-fw-e-cross-source-dispositions/v2",
+                "claude-code-fw-e-cross-source-dispositions/v3",
             )
+            self.assertEqual(len(dispositions["semantic_candidates"]), 2)
+            self.assertNotIn("candidate_rules", dispositions)
             false_positive = next(
                 row
                 for row in dispositions["target_sinks"]
@@ -282,6 +286,18 @@ class ValidationClosureTests(unittest.TestCase):
             ]
             self.assertIn("第一条请求命题。 这是同一条的续行。", texts)
             self.assertNotIn("代码围栏内不是文档命题。", texts)
+            context_atom = next(
+                atom
+                for document in atoms["documents"]
+                for atom in document["atoms"]
+                if atom["text"] == "第二条 payload 命题。"
+            )
+            self.assertEqual(context_atom["disposition"], "catalogued_context")
+            discovery = json.loads(
+                (paths["output"] / "discovery-inventory.json").read_text()
+            )
+            self.assertEqual(discovery["item_count"], 5)
+            self.assertEqual(discovery["rule_generation"], "forbidden")
 
     def test_rejects_drift_in_proven_non_traffic_call(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -23,9 +23,9 @@ Claude 的 FW-E 受管入口为：
 python3 tools/official_client_capture/claude_fw_e.py --help
 ```
 
-该入口只负责 stable 冻结、bundle 差分、控制组／目标组证据复核、由目标闭集派生的动态规则台账和
-EvidenceFact 封存；不得生成画像、Snapshot、Persona 注册或生产绑定，也不得自行签发
-EvidenceApprovalFact。目标规则数量不得固定为 2.1.220 的 57 条。
+该入口只负责 stable 冻结、bundle 差分、控制组／目标组证据复核，以及发现清单、语义候选、SPEC 规则
+台账和 EvidenceFact 封存；不得生成画像、Snapshot、Persona 注册或生产绑定，也不得自行签发
+EvidenceApprovalFact。规则数量由已原子化且可断言的 SPEC 决定，不得按发现项数量生成。
 
 FW-E 补强链为：
 
@@ -46,8 +46,10 @@ python3 tools/official_client_capture/claude_fw_e.py seal --help
 词法候选。先用 containment 证据证明词法命中的真实 AST 位置，再由人工策略通过
 `claude_fw_e_dispositions.py` 对目标 sink、2.1.88 候选、HitCC 原子线索／直接线索文档和全 host／path
 运行坐标逐项签发。尚不清楚处置方式的项必须保留 `unclassified`；已原子化且绑定来源、但缺少目标语义
-证明的项，只能由 `claude_fw_e_validation_closure.py` 登记为禁止生产的 `mapped_validation`，并保留真实
-`observed／blocked`。capture index 必须同时闭合 P／R／J／M，且关闭遥测与非必要流量。
+证明的项，只能由 `claude_fw_e_validation_closure.py` 登记为禁止进入 RuleLedger／生产的
+`mapped_validation` 语义候选，并保留真实 `observed／blocked`。该工具无截断保存每个发现项，以
+`source_ids` 多对一归并候选，不生成 SPEC。capture index 必须同时闭合 P／R／J／M，且关闭遥测与
+非必要流量。
 
 先运行 `claude_fw_e_crosswalk.py --require-explicit`，确认整个分母均已逐项审阅；再运行同一命令的
 `--require-closed`，确认不存在 `unclassified` 后，才可继续 rule assessments 与 seal。显式覆盖通过但

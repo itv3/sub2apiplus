@@ -1135,7 +1135,7 @@ Codex IdentityMode、HeaderPolicy、BodyPolicy、BehaviorPolicy 或 fallback 字
 | `FW-B` | 按 Framework 抽取 Codex 已证明的暂定共享合同并保留 Codex facade | 共享内核无 Codex 专用策略字段；Codex active／rollback final wire 零差异；不宣称多 Persona 已冻结 |
 | `FW-C` | 验证并发布 Codex-only 正式制品，完成回滚、恢复和稳定观察 | 本轮没有新增 Claude Persona／画像／strict 注册；Codex 发布与激活收据闭环 |
 | `FW-D` | 建设 Campaign、正交事实、两段式批准、Snapshot／Release Store、candidate／PAIR、晋升与激活工具链 | 只用 Codex／合成数据自测；越权、摘要变化、范围缺口和收据不匹配均由机器阻断 |
-| `FW-E` | 第一步冻结最新 stable；从目标 bundle 原生发现规则，取 2.1.88、HitCC、2.1.220／前一批准 stable 与目标发现的候选并集，完成差分、P／R／J／M 和 Evidence 封存，再建立两个 Inventory 与 observation-only Sink | 目标版本、完整 sink inventory、跨来源候选矩阵和 EvidencePackage 可复算；没有截断或未分类项；停在 `evidence_recorded`，尚不定义目标 Schema／Snapshot 或签发 Evidence 批准 |
+| `FW-E` | 第一步冻结最新 stable；从目标 bundle 原生发现发送点，取 2.1.88、HitCC、2.1.220／前一批准 stable 与目标发现的并集，分开建立 DiscoveryInventory、SemanticRuleCandidate 和 RuleLedger，完成差分、P／R／J／M 和 Evidence 封存，再建立两个 Inventory 与 observation-only Sink | 目标版本、完整 sink／discovery inventory、语义候选、只含 SPEC 的规则台账和 EvidencePackage 可复算；没有截断或未分类项；停在 `evidence_recorded`，尚不定义目标 Schema／Snapshot 或签发 Evidence 批准 |
 | `FW-F` | 先由最新 stable 证据生成 Schema、目标 Snapshot、Persona 和不可部署样例，再用同一 Schema／Compiler 表达 2.1.220 rollback fixture；批准 Profile、范围和多 Persona 合同 | target-first 样例与跨 Persona 负例通过；ApprovalFact 完整；Codex 生产收据对应最终合同；selector 未改变 |
 | `FW-G` | 直接完整实现最新 stable 画像，完成受管语义层、辅助出站三态、全部 strict 入口 PAIR、DMIT candidate 和 rollback 验收 | candidate 达到 production-replacement ready；范围内断言和范围外拒绝通过 |
 | `FW-H` | 灰度、回滚、激活；逐入口迁移并在闭集完成后退休遗留链 | DeploymentFact 与运行态一致；无 `retained_legacy` 才能签发迁移完成的 RemovalReceipt |
@@ -1227,7 +1227,7 @@ Campaign 只是绑定目标版本、官方产物和环境身份的不可变容�
 | 能力 | 当前状态 |
 |---|---|
 | bundle 提取、锚点和 sink 窗口 | 已实现；窗口不是数据流证明 |
-| 目标 AST／词法 sink 并集与四方矩阵 | 已实现；目标新增项可生成 `add`，任何未分类项阻断封存 |
+| 目标 AST／词法 sink 并集与四方矩阵 | 已实现；发现、语义候选和 SPEC 三层隔离；语义审查后的目标新增机制可显式生成 `add`，任何未分类项阻断封存 |
 | 全 host／path 运行 inventory | 2.1.226 Campaign 已关闭 host 预筛并闭合 4 个目标运行坐标；换版必须新建 Campaign |
 | 规则／覆盖门禁和 22-run 分析 | 已实现 |
 | R 通道与条件 Header 探针 | 已实现 |
@@ -1284,17 +1284,22 @@ HistoricalSourceCandidates
 ∪ TargetNativeDiscoveries
 ```
 
-跨来源矩阵的每一行必须是原子命题，并记录历史源码位置、HitCC clue、历史／前一 stable 静态锚点、
-目标 AST／source-to-sink、privacy gate、适用条件、目标运行场景、迁移决策和 evidence level。某来源
-没有对应项时明确记 `absent`，不得省略整行。目标原生发现没有历史对应项时创建稳定的新 SPEC ID 并
-分类为 `add`；历史项在目标不可达时仍保留编号并以静态不可达和运行负例共同支持 `delete`。
+跨来源闭集分三层保存，禁止混算数量：
 
-证据不足不等于允许永久保留 `unclassified`。已经能形成原子命题、稳定身份、原始证据路径和
-`source_ids`，但尚不能证明目标 wire 的项使用 `mapped_validation`：迁移决策固定为 `add`，生命周期为
-`candidate`，证据等级保留真实 `observed／blocked`，并声明 `approval_scope=validation_only`、
-`production_eligibility=denied` 和明确 `validation_scope`。目标 AST 的 `observed` 只表示精确调用在目标
-bundle 中存在；2.1.88／HitCC 的 `blocked` 只表示历史命题已登记。两者都不能进入 production
-SupportEnvelope。disposition 与 candidate 必须通过各自身份双向引用，不能用一个笼统候选吞并未知项。
+1. `DiscoveryInventory` 无截断保存目标 AST 调用、2.1.88 原子命题、HitCC clue 和 Markdown 原子；
+2. `SemanticRuleCandidate` 用 `source_ids` 把同一语义的多个发现归并为稳定的 `CAND-*` 工作项；
+3. `RuleLedger` 只保存已经原子化、可执行并可逐项断言的 `SPEC-*`。
+
+一个发现跨越多个语义时可以引用多个候选，但发现与候选必须双向闭合。目标原生发现没有历史对应项，
+也不能直接按发现 ID 创建 SPEC；只有语义审查明确 retained claim、适用条件、所需通道、场景和断言后，
+才能显式新建 SPEC 并分类为 `add`。历史规则在目标不可达时仍保留编号，并以静态不可达和运行负例共同
+支持 `delete`。
+
+证据不足不等于允许永久保留 `unclassified`。已取得稳定身份和原始证据、但尚不能证明目标语义或 wire
+的发现使用 `mapped_validation` 归入语义候选；候选保留真实 `observed／blocked`，固定
+`rule_ledger_membership=denied` 和 `production_eligibility=denied`，没有规则迁移决策，也不得自动生成
+SPEC。目标 AST 的 `observed` 只表示精确调用在目标 bundle 中存在；2.1.88／HitCC 的 `blocked` 只表示
+历史命题已登记。两者都不能进入 production SupportEnvelope。
 
 `SinkInventory` 至少覆盖 `fetch`、Anthropic SDK resource 调用、Node／Bun HTTP、TLS、socket、
 WebSocket／EventSource、动态 wrapper 和可能启动外部网络客户端的子进程。每个 sink 均须保存完整列表，
@@ -1303,7 +1308,7 @@ disposition。下列任一条件均阻止 FW-E 退出：
 
 1. 目标 sink 未分类、被截断、重复身份冲突或没有可复算来源；
 2. 2.1.88 候选、HitCC 直接线索或历史官方规则没有唯一处置；
-3. 目标新增项无法生成 `add`，或规则生成器只接受旧版本 ID；
+3. 已完成语义审查的目标新增机制无法显式生成 `add`，或工具把发现／`CAND-*` 自动混入 RuleLedger；
 4. strict 候选缺少目标版本运行场景，或运行观测出现 inventory 外 host／path／sink；
 5. `DISABLE_TELEMETRY`、`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 的实际值、读取点和 gate 未绑定
    本次目标产物。关闭后的 telemetry／nonessential 分支仍登记可达性和 `record_only` 处置，其不发流量
@@ -1312,9 +1317,11 @@ disposition。下列任一条件均阻止 FW-E 退出：
 现有三份历史机器台账只证明其自身路径、ID 和当前映射一致，不自动证明语义穷尽。2.1.88 必须覆盖
 `src／node_modules／vendor` 的网络相关反向切片；HitCC 每篇 `clue_source` 文档必须映射到一条或多条
 原子命题，或以可复算理由标为范围外。尚未抽成 clue 的文档必须无截断枚举非代码区 Markdown 列表项，
-保存原文路径、行号、最近 heading、内容摘要和稳定 ID，再逐项登记为 validation-only；已映射文档则
-反向绑定其未闭合 clue candidate。扫描器无法作出语义判断时先保留 `unclassified`，不得按词法未命中
-自动排除；只有上述原子化和禁止生产边界同时成立后，才能把它改为 `mapped_validation`。
+保存原文路径、行号、最近 heading、内容摘要和稳定发现 ID，再逐项归入现有语义候选、既有 SPEC 或
+可追溯的 `catalogued_context`；后者只表示当前固定词表没有给出规则映射，不是范围外证明，已映射文档
+反向绑定其 clue。扫描器无法作出语义判断时先保留
+`unclassified`，不得按词法未命中自动排除；只有发现身份、证据、处置及候选双向引用同时闭合后，才能
+把它改为 `mapped_validation`，且不得因此新增规则。
 
 机器执行顺序固定如下，`analyze-bundles` 会对每个平台自动运行锁定 TypeScript 解析器，并把 AST
 调用点与无截断词法候选合并为 `target-sink-inventory.json`：
@@ -1329,10 +1336,10 @@ claude_fw_e.py analyze-bundles
 
 第二步的 dispositions 必须分别覆盖目标 sink、2.1.88 候选、HitCC 线索／文档和全 host／path 运行
 观测。`traffic_class=nonessential／telemetry` 只能使用 `record_only_disabled` 或保持
-`unclassified`；不得用 `delete`、范围外或零流量事实静默移除。`seal` 使用 v2 计划并直接绑定目标
+`unclassified`；不得用 `delete`、范围外或零流量事实静默移除。`seal` 使用 v3 计划并直接绑定目标
 inventory、矩阵、closure 和 capture index；closure 非 `passed`、运行样本仍使用 host 预筛、四者摘要
-不一致，或 `blocked` 未同时满足 validation-only／禁止生产／明确边界／candidate+add 时，Store 不得写入
-`evidence_recorded`。满足这些限制的 `blocked` 只封存发现事实，不签发 EvidenceApprovalFact 或
+不一致，或 DiscoveryInventory／SemanticRuleCandidate／RuleLedger 三层数量和双向引用不闭合时，Store
+不得写入 `evidence_recorded`。语义候选只封存发现与待验证语义，不签发 EvidenceApprovalFact 或
 ProfileApprovalFact，也不允许 FW-F／FW-G 把它当成已批准规则。
 
 补强工具或产出侧身份发生变化后，旧 Campaign 及旧 FW-E 收据只保留为历史事实，不能原位续写或补签。
@@ -1411,13 +1418,20 @@ Candidate 只能在 DMIT 或等价隔离环境运行，不能在 Vircs 换镜像
 python3 tools/official_client_capture/claude_21220/check_coverage.py
 ```
 
-逐规则结果必须唯一覆盖 SupportEnvelope 内的目标全集。`blocked` 或 `regressed_evidence` 只能形成
-validation-only；`ready` 只证明固定 candidate 通过已批准规则，不表示画像已晋升、正式镜像已构建或
-生产已切换。当前目标台账共 7,425 条：376 条 `observed`、12 条 `regressed_evidence`、7,037 条
-`blocked`，没有 `verified`。其中 7,368 条是明确禁止生产的 validation-only 候选。拟纳入
-SupportEnvelope 的规则必须补足目标版本证据达到 `verified`；其余规则只能在范围外 fail-close 已证明时
-排除，或继续保持 validation-only。不得把 `observed／blocked` 改名、用遗留 wire 佐证，或在仍可到达
-该规则时仅从清单删除。
+逐规则结果必须唯一覆盖 SupportEnvelope 内的目标全集。`ready` 只证明固定 release candidate 通过已
+批准规则，不表示画像已晋升、正式镜像已构建或生产已切换。当前 FW-E 三层数据为：
+
+- `DiscoveryInventory`：7,368 个发现项，其中目标 AST 331、2.1.88 命题 29、HitCC clue 71、Markdown
+  原子 6,937；2,830 项归入语义候选，15 项映射既有规则，4,523 项登记为可重分类的
+  `catalogued_context`；
+- `SemanticRuleCandidate`：32 个语义候选，其中 10 个 `observed`、22 个 `blocked`，全部禁止加入
+  RuleLedger 和生产；
+- `RuleLedger`：57 条 SPEC，其中 45 条 `observed`、12 条 `regressed_evidence`、0 条 `verified`，没有
+  因 7,368 个发现项自动新增规则。
+
+拟纳入 SupportEnvelope 的规则必须补足目标版本证据达到 `verified`。语义候选必须先在 FW-F 经人工／
+受管语义审查收敛为既有 SPEC 的补证或明确的新 SPEC，不能直接承担断言；`catalogued_context` 仍保留原始
+来源用于换版反查。不得把 `observed／blocked` 改名、用遗留 wire 佐证，或为了缩小数字从发现清单删除。
 
 通用 candidate、四阶段封存、PAIR 和 accept 能力已经具备；当前缺少的是 FW-F 的 Claude
 ProfileApprovalFact、ReleaseArtifact 和已批准 SupportEnvelope，因此尚不能形成 Claude candidate 或
