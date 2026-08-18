@@ -1,0 +1,23 @@
+{
+  "schema_version": "official-client-fw-e-runtime-evidence-supplement-transition/v1",
+  "base_commit": "db9a30747b6c729a692e056026d5611a92cebc0b",
+  "target_version": "2.1.226",
+  "prior_receipt_path": "docs/egress/maintenance/fw-e-completeness-supplement/receipt.json",
+  "prior_receipt_sha256": "2b19d07cf143f3a7593426d8efb02b9630c5095020ce296874034f230930db53",
+  "expected_changed_paths": [
+    "Makefile",
+    "docs/egress/maintenance/fw-e-runtime-evidence-supplement/manifest.json",
+    "tools/fw_e_runtime_evidence_transition.py",
+    "tools/official_client_capture/claude_fw_e.py",
+    "tools/official_client_capture/tests/test_claude_fw_e.py"
+  ],
+  "rules": [
+    "既有 FW-E 完整性补强收据是历史事实，不得原位改写",
+    "环境摘要修正只对齐抓包清单的既有规范，不改变隐私开关语义或证据内容",
+    "控制版 2.1.220 与目标版 2.1.226 必须各完成 S1、S2、S4、A1 的 direct 与 MITM 全 host/path 观测",
+    "DISABLE_TELEMETRY 与 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC 的实际值必须逐 case 固定为 1，零遥测不作为一致性差异",
+    "失败 attempt 必须保留；Campaign 全树精确秘密扫描、隔离容器清理和生产前后比较均须通过",
+    "缺少 R 通道或任一历史候选、目标 sink、运行坐标未唯一处置时，FW-E 必须保持 blocked",
+    "本补强不得部署 DMIT、修改生产 route 或 Sink、替换 Vircs 生产镜像，也不得进入 FW-F"
+  ]
+}

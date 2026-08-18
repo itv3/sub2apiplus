@@ -80,6 +80,8 @@ check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal test-offic
 	@python3 tools/fw_e_workspace_transition.py
 	@python3 tools/fw_e_completeness_transition.py --self-test
 	@python3 tools/fw_e_completeness_transition.py
+	@python3 tools/fw_e_runtime_evidence_transition.py --self-test
+	@python3 tools/fw_e_runtime_evidence_transition.py
 	@python3 tools/changeset6_benchmark_evidence.py --self-test
 	@python3 tools/changeset6_benchmark_evidence.py
 	@python3 tools/check_ledger_completeness.py
