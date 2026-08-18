@@ -248,6 +248,14 @@ Schema 能表达时只追加数据；出现新协议、新状态机制或 Schema
 只有 `evidence_level=verified` 表示规则、条件、运行证据与复算链闭环；其他维度不能提升证据等级。
 旧 JSON 台账在迁移期可以保留单字段兼容投影，但新的 Persona Schema 和 Campaign 必须保存上述正交事实。
 
+`mapped_validation` 是发现项的处置关系，不是新的证据等级，也不表示目标 wire 已验证。它只允许把已经
+唯一编号、绑定原始证据和来源身份，但尚不能取得目标语义证明的项登记为 `candidate + add`；对应规则
+必须保留真实的 `observed` 或 `blocked`，并同时声明 `approval_scope=validation_only`、
+`production_eligibility=denied` 和明确 `validation_scope`。`mapped_validation` 可以消除发现分类账中的
+`unclassified`，使 EvidencePackage 在 `evidence_recorded` 封存当前事实，但不得进入 production
+SupportEnvelope、不得签发 production-replacement ApprovalFact，也不得生成生产画像。disposition 与
+candidate 的 `source_ids` 必须双向引用；缺少任一边界仍按未闭合处理。
+
 | 单元 | 身份变化边界 |
 |---|---|
 | Campaign | 官方目标版本、产物、平台、入口、默认条件或产出 EvidencePackage 的工具身份变化 |
@@ -456,21 +464,23 @@ FW-A 基线 → FW-B 暂定合同 → FW-C Codex-only 发布 → FW-D 通用工�
   出站的 source-to-sink 盘点，只在冻结遗留路径启用 `legacy_observe`。
 - **闭集发现要求**：目标规则全集不得由旧规则台账枚举后迁移得到，也不得截断 sink、只扫描已知
   host／path 或只运行固定字面量探针。每个目标 sink 必须有稳定身份、可复算来源、可达性边界和唯一
-  disposition；目标独有机制必须能形成 `add`，无法分类、无法证明不可达或没有运行场景的项保持
-  `unclassified／blocked` 并阻止闭集。静态分析只能证明候选和可达性边界，仍须由目标版本运行证据
-  闭环 strict 命题。
+  disposition；目标独有机制必须能形成 `add`。仍不知道下一步如何处置的项保持 `unclassified` 并阻止
+  闭集；已经取得稳定身份、原子命题和证据绑定，但尚缺目标语义或运行证明的项，必须显式使用
+  `mapped_validation`，保留真实 `observed／blocked` 并禁止生产。静态分析只能把精确调用存在性记为
+  `observed`，不能据此证明触发条件、流量类别或 wire；strict 命题仍须由目标版本运行证据闭环。
 - **行为层边界**：是否产生某类流量不作为独立的一致性对比维度。`essential traffic` 只界定后续
   strict wire／PAIR 的场景范围；场景被调用时仍须按 §1.2 核对实际请求的 wire、transport、动态事实、
   条件分支和跨请求状态。官方可配置关闭的 telemetry 与 nonessential traffic 只记录配置、可达性和
   观测事实，其缺失属于合法状态，不得计为一致性差异或“不像官方客户端”的依据。Claude 的
   `DISABLE_TELEMETRY` 与 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 是该判据的官方实现依据。
 - **输出制品**：目标 Campaign 身份、不可变 EvidencePackage、目标 sink inventory、跨来源候选矩阵、
-  规则迁移台账，以及两个 Inventory 的当前事实；拟议 `target_disposition`／出站处置只作为未批准
-  提案，不覆盖当前事实。
+  规则迁移台账、validation-only 候选及其双向 source-to-sink／历史来源绑定，以及两个 Inventory 的
+  当前事实；拟议 `target_disposition`／出站处置只作为未批准提案，不覆盖当前事实。
 - **退出门禁**：官方产物和目标版本可复算；每条范围候选规则都有迁移决策、证据等级和适用边界；
   历史候选和目标原生发现均有唯一处置，目标 sink inventory 无截断、重复或未分类项，运行观测没有
-  出现 inventory 外 host／path／sink；两个 Inventory 覆盖全部已知别名／调用方／出站并能报告未知项；
-  观察过程未改变生产流量。
+  出现 inventory 外 host／path／sink；保留的 `blocked` 均满足 validation-only、禁止生产、明确边界和
+  双向来源绑定；两个 Inventory 覆盖全部已知别名／调用方／出站并能报告未知项；Store 只追加
+  `discovery_recorded／evidence_recorded`，没有 Evidence／Profile 批准；观察过程未改变生产流量。
 - **禁止／回退**：本阶段不得定义目标 ProfileSchema、Snapshot、Persona 实现或 production strict
   binding；只允许为已冻结遗留调用点追加 `unclassified + legacy_observe` 的 observation-only Sink，且不得
   主张 Persona 或 wire 等价。不得用 2.1.220 或遗留输出补足目标 stable 证据；证据不足时缩小候选范围
@@ -548,7 +558,7 @@ rollback；否则使用 FW-A 冻结的遗留部署承担 operational rollback，
 |---|---|
 | Codex final wire 非零差异，或共享运行时代码变化 | 返回 FW-B，建立后继合同并重新完成 FW-C |
 | FW-D 不能机器阻断越权、范围缺口或收据不匹配 | 停在 FW-D，不得启动 stable Campaign |
-| FW-E 目标证据不足，或存在未分类／被截断的目标 sink、未处置历史候选 | 停在 FW-E，补目标原生发现和运行证据；只能收窄已证明可隔离且范围外 fail-close 的 SupportEnvelope，不得以遗留输出补证 |
+| FW-E 存在未分类／被截断的目标 sink、未处置历史候选，或证据不足项未按 validation-only 严格隔离 | 停在 FW-E，补目标原生发现和运行证据，或为已原子化项登记禁止生产的 `mapped_validation`；不得以遗留输出补证。`blocked` 可随 EvidencePackage 封存，但不能据此进入 production replacement |
 | FW-F／FW-G 发现共享合同缺口 | 作废相关 ApprovalFact／candidate，返回 FW-B；重走 FW-C，并重验两个 fixture |
 | 官方产物、批准内容、源码、测试、画像或镜像变化 | 按 §3.2 建立新 Campaign、ApprovalFact 或 candidate；旧验收和收据不得复用 |
 | §4.2 不变量或生产一致性失败 | 禁止激活／扩流，标记 `production_unverified`，恢复冻结目标 |

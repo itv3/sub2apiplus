@@ -29,12 +29,14 @@ from tools.official_client_control.canonical import (  # noqa: E402
 
 SCHEMA_INVENTORY = "claude-code-target-sink-inventory/v1"
 SCHEMA_DISPOSITIONS = "claude-code-fw-e-cross-source-dispositions/v1"
+SCHEMA_DISPOSITIONS_V2 = "claude-code-fw-e-cross-source-dispositions/v2"
 SCHEMA_MATRIX = "claude-code-fw-e-cross-source-matrix/v1"
 SCHEMA_CLOSURE = "claude-code-fw-e-completeness/v1"
 ALLOWED_SINK_DISPOSITIONS = {
     "mapped_strict",
     "mapped_managed",
     "record_only_disabled",
+    "mapped_validation",
     "out_of_scope_proven",
     "unclassified",
 }
@@ -49,6 +51,7 @@ ALLOWED_HISTORICAL_DISPOSITIONS = {
     "mapped_historical",
     "mapped_managed",
     "record_only_disabled",
+    "mapped_validation",
     "out_of_scope_proven",
     "unclassified",
 }
@@ -154,7 +157,11 @@ def load_dispositions(
             "runtime_observations": {},
         }
     value = load_json_file(path, "cross-source dispositions")
-    require_schema(value, SCHEMA_DISPOSITIONS, "cross-source dispositions")
+    schema_version = value.get("schema_version")
+    if schema_version not in {SCHEMA_DISPOSITIONS, SCHEMA_DISPOSITIONS_V2}:
+        raise CrosswalkError(
+            f"cross-source dispositions schema 不匹配：{schema_version}"
+        )
     if value.get("target_version") != target_version:
         raise CrosswalkError("cross-source dispositions 目标版本不匹配")
     expected_keys = {
@@ -166,6 +173,8 @@ def load_dispositions(
         "hitcc_documents",
         "runtime_observations",
     }
+    if schema_version == SCHEMA_DISPOSITIONS_V2:
+        expected_keys.add("candidate_rules")
     if set(value) != expected_keys:
         raise CrosswalkError("cross-source dispositions 顶层字段不闭合")
     entries = value.get("target_sinks")
@@ -204,8 +213,13 @@ def load_dispositions(
         traffic_class = entry.get("traffic_class")
         if traffic_class not in ALLOWED_TRAFFIC_CLASSES:
             raise CrosswalkError(f"target-native traffic_class 非法：{sink_id}")
-        if traffic_class == "unknown" and disposition != "unclassified":
-            raise CrosswalkError(f"未知流量类别只能保持 unclassified：{sink_id}")
+        if traffic_class == "unknown" and disposition not in {
+            "unclassified",
+            "mapped_validation",
+        }:
+            raise CrosswalkError(
+                f"未知流量类别只能保持 unclassified 或 validation-only：{sink_id}"
+            )
         if traffic_class == "not_traffic" and disposition != "out_of_scope_proven":
             raise CrosswalkError(f"not_traffic 只能用于已证明的非发送候选：{sink_id}")
         if traffic_class in {"nonessential", "telemetry"} and disposition not in {
@@ -220,8 +234,8 @@ def load_dispositions(
             raise CrosswalkError(f"record_only sink 的流量类别非法：{sink_id}")
         if disposition != "unclassified" and not evidence_paths:
             raise CrosswalkError(f"已处置 sink 必须绑定证据：{sink_id}")
-        if disposition == "mapped_strict" and not spec_ids:
-            raise CrosswalkError(f"strict sink 必须绑定规则：{sink_id}")
+        if disposition in {"mapped_strict", "mapped_validation"} and not spec_ids:
+            raise CrosswalkError(f"strict／validation sink 必须绑定规则：{sink_id}")
         if disposition == "mapped_strict" and not scenario_ids:
             raise CrosswalkError(f"strict sink 必须绑定运行场景：{sink_id}")
         if disposition in {"out_of_scope_proven", "unclassified"} and (
@@ -239,7 +253,7 @@ def load_dispositions(
             raise CrosswalkError(f"sink migration_decision 非法：{sink_id}")
         if migration_decision == "delete":
             raise CrosswalkError(f"目标仍存在的 sink 不得声明 delete：{sink_id}")
-        if migration_decision == "add":
+        if migration_decision == "add" and schema_version == SCHEMA_DISPOSITIONS:
             expected_entry_keys = {
                 "sink_id",
                 "traffic_class",
@@ -302,8 +316,8 @@ def load_dispositions(
                 raise CrosswalkError(f"{key} evidence_paths 非法：{identity}")
             if not isinstance(rationale, str) or not rationale.strip():
                 raise CrosswalkError(f"{key} rationale 缺失：{identity}")
-            if disposition == "mapped_historical" and not refs:
-                raise CrosswalkError(f"映射历史项必须绑定规则：{identity}")
+            if disposition in {"mapped_historical", "mapped_validation"} and not refs:
+                raise CrosswalkError(f"映射历史／validation 项必须绑定规则：{identity}")
             if disposition in {
                 "mapped_managed",
                 "record_only_disabled",
@@ -361,14 +375,98 @@ def load_dispositions(
             raise CrosswalkError(f"已处置 runtime observation 必须绑定证据：{observation_id}")
         runtime[observation_id] = raw
 
+    historical_source = historical_entries(
+        "historical_source_candidates", "source_rule_id"
+    )
+    hitcc_clues = historical_entries("hitcc_clues", "clue_id")
+    hitcc_documents = historical_entries("hitcc_documents", "path")
+
+    candidate_rules: dict[str, dict[str, Any]] = {}
+    if schema_version == SCHEMA_DISPOSITIONS_V2:
+        raw_candidate_rules = value.get("candidate_rules")
+        if not isinstance(raw_candidate_rules, list):
+            raise CrosswalkError("cross-source dispositions.candidate_rules 必须是数组")
+        required_rule_keys = {
+            "id",
+            "domain",
+            "retained_claim",
+            "scope",
+            "required_channels",
+            "validation_evidence_level",
+            "evidence_paths",
+            "source_ids",
+        }
+        for raw in raw_candidate_rules:
+            if not isinstance(raw, dict) or set(raw) != required_rule_keys:
+                raise CrosswalkError("candidate rule 字段不闭合")
+            rule_id = raw.get("id")
+            if not isinstance(rule_id, str) or not rule_id or rule_id in candidate_rules:
+                raise CrosswalkError(f"candidate rule 身份缺失或重复：{rule_id}")
+            if raw.get("validation_evidence_level") not in {"observed", "blocked"}:
+                raise CrosswalkError(f"candidate rule 证据等级非法：{rule_id}")
+            for key in ("required_channels", "evidence_paths", "source_ids"):
+                items = raw.get(key)
+                if not isinstance(items, list) or not all(
+                    isinstance(item, str) and item for item in items
+                ):
+                    raise CrosswalkError(f"candidate rule {key} 非法：{rule_id}")
+            if not raw["evidence_paths"] or not raw["source_ids"]:
+                raise CrosswalkError(f"candidate rule 缺少证据或来源：{rule_id}")
+            for key in ("domain", "retained_claim", "scope"):
+                if not isinstance(raw.get(key), str) or not raw[key].strip():
+                    raise CrosswalkError(f"candidate rule {key} 非法：{rule_id}")
+            candidate_rules[rule_id] = raw
+
+        referenced_validation_specs = {
+            spec_id
+            for group in (
+                result,
+                historical_source,
+                hitcc_clues,
+                hitcc_documents,
+            )
+            for row in group.values()
+            if row.get("disposition") == "mapped_validation"
+            for spec_id in row.get("spec_ids", [])
+        }
+        unknown_validation_specs = sorted(
+            referenced_validation_specs - set(candidate_rules)
+        )
+        if unknown_validation_specs:
+            raise CrosswalkError(
+                f"mapped_validation 引用未知 candidate rule：{unknown_validation_specs}"
+            )
+        unreferenced_candidate_rules = sorted(
+            set(candidate_rules) - referenced_validation_specs
+        )
+        if unreferenced_candidate_rules:
+            raise CrosswalkError(
+                f"candidate rule 没有 disposition 反向引用：{unreferenced_candidate_rules}"
+            )
+        disposition_groups = (
+            (result, "sink_id"),
+            (historical_source, "source_rule_id"),
+            (hitcc_clues, "clue_id"),
+            (hitcc_documents, "path"),
+        )
+        for group, identity_key in disposition_groups:
+            for identity, row in group.items():
+                if row.get("disposition") != "mapped_validation":
+                    continue
+                for spec_id in row.get("spec_ids", []):
+                    if identity not in candidate_rules[spec_id]["source_ids"]:
+                        raise CrosswalkError(
+                            "mapped_validation 与 candidate source_ids 未双向绑定："
+                            f"{identity_key}={identity} spec_id={spec_id}"
+                        )
+
     return {
         "target_sinks": result,
-        "historical_source_candidates": historical_entries(
-            "historical_source_candidates", "source_rule_id"
-        ),
-        "hitcc_clues": historical_entries("hitcc_clues", "clue_id"),
-        "hitcc_documents": historical_entries("hitcc_documents", "path"),
+        "historical_source_candidates": historical_source,
+        "hitcc_clues": hitcc_clues,
+        "hitcc_documents": hitcc_documents,
         "runtime_observations": runtime,
+        "candidate_rules": candidate_rules,
     }
 
 
@@ -697,7 +795,7 @@ def target_sink_rows(
             scenario_ids = sorted(set(disposition.get("scenario_ids", [])))
             evidence_paths = sorted(set(disposition.get("evidence_paths", [])))
             migration_decision = str(disposition.get("migration_decision", "change"))
-            if migration_decision == "add":
+            if migration_decision == "add" and "new_rule" in disposition:
                 additions.append(dict(disposition["new_rule"]))
         if disposition_value == "unclassified":
             unresolved.append(sink_id)
@@ -877,9 +975,24 @@ def build_matrix(
     )
     explicit_expected_total = sum(row["expected"] for row in explicit_counts.values())
     explicit_actual_total = sum(row["explicit"] for row in explicit_counts.values())
-    sink_rows, unresolved_sinks, additions = target_sink_rows(
+    sink_rows, unresolved_sinks, legacy_additions = target_sink_rows(
         baseline_sinks, target_sinks, dispositions["target_sinks"]
     )
+    additions = [
+        dict(
+            row,
+            origin="validation_candidate_add",
+            baseline_disposition=None,
+        )
+        for row in dispositions.get("candidate_rules", {}).values()
+    ] + [
+        dict(
+            row,
+            origin="target_native_add",
+            baseline_disposition=None,
+        )
+        for row in legacy_additions
+    ]
     additions_by_id: dict[str, dict[str, Any]] = {}
     for row in additions:
         addition_id = str(row.get("id"))
@@ -927,10 +1040,7 @@ def build_matrix(
             ),
         }
         for row in baseline_rules
-    ] + [
-        dict(row, origin="target_native_add", baseline_disposition=None)
-        for row in additions
-    ]
+    ] + additions
     bindings = {
         "source_2_1_88": {
             "path": str(source_path),

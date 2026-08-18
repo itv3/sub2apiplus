@@ -192,6 +192,8 @@ class ClaudeFWETests(unittest.TestCase):
             closure_path = workspace / "closure.json"
             static = workspace / "static.json"
             capture = workspace / "capture.json"
+            candidate_evidence = workspace / "candidate.json"
+            write_json(candidate_evidence, {"result": "historical_candidate"})
             matrix = {
                 "schema_version": "claude-code-fw-e-cross-source-matrix/v1",
                 "target_version": "2.1.226",
@@ -212,6 +214,18 @@ class ClaudeFWETests(unittest.TestCase):
                         "scope": "test",
                         "required_channels": ["J"],
                         "origin": "target_native_add",
+                        "baseline_disposition": None,
+                    },
+                    {
+                        "id": "SPEC-VAL-001",
+                        "domain": "historical_source_candidate",
+                        "retained_claim": "只用于后续验证的历史候选",
+                        "scope": "historical-source",
+                        "required_channels": [],
+                        "validation_evidence_level": "blocked",
+                        "evidence_paths": ["candidate.json"],
+                        "source_ids": ["SRC-001"],
+                        "origin": "validation_candidate_add",
                         "baseline_disposition": None,
                     },
                 ],
@@ -252,18 +266,23 @@ class ClaudeFWETests(unittest.TestCase):
                 workspace / "rules",
                 None,
             )
-            self.assertEqual(result["rule_count"], 2)
+            self.assertEqual(result["rule_count"], 3)
             self.assertEqual(result["inherit_count"], 0)
             self.assertEqual(result["regressed_evidence_count"], 1)
-            self.assertEqual(result["blocked_count"], 0)
+            self.assertEqual(result["blocked_count"], 1)
             self.assertEqual(
                 sum(row["migration_decision"] == "add" for row in result["rules"]),
-                1,
+                2,
             )
+            validation_rule = next(
+                row for row in result["rules"] if row["spec_id"] == "SPEC-VAL-001"
+            )
+            self.assertIn("approval_scope=validation_only", validation_rule["applicability"])
+            self.assertIn("production_eligibility=denied", validation_rule["applicability"])
             written = load_json_file(
                 workspace / "rules/rule-assessments.json", "rule assessments"
             )
-            self.assertEqual(written["rule_count"], 2)
+            self.assertEqual(written["rule_count"], 3)
 
     def test_rule_assessments_reject_baseline_only_blocked_closure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

@@ -307,8 +307,6 @@ def _validate_rules(
         evidence_level = _expect_enum(
             raw["evidence_level"], EVIDENCE_LEVELS, f"{label}.evidence_level"
         )
-        if evidence_level == "blocked":
-            raise ControlError(f"{spec_id} 证据仍为 blocked，禁止封存 FW-E")
         lifecycle = _expect_enum(
             raw["rule_lifecycle"], RULE_LIFECYCLES, f"{label}.rule_lifecycle"
         )
@@ -353,6 +351,22 @@ def _validate_rules(
         applicability = expect_string_list(
             raw["applicability"], f"{label}.applicability"
         )
+        if evidence_level == "blocked":
+            required_validation_markers = {
+                "approval_scope=validation_only",
+                "production_eligibility=denied",
+            }
+            if (
+                lifecycle != "candidate"
+                or decision != "add"
+                or not required_validation_markers.issubset(set(applicability))
+                or not any(
+                    item.startswith("validation_scope=") for item in applicability
+                )
+            ):
+                raise ControlError(
+                    f"{spec_id} blocked 规则只有在 validation-only、禁止生产且边界明确时才能封存 FW-E"
+                )
         normalized.append(
             {
                 "spec_id": spec_id,

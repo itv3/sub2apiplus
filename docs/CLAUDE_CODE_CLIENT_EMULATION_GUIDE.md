@@ -1291,6 +1291,13 @@ HistoricalSourceCandidates
 没有对应项时明确记 `absent`，不得省略整行。目标原生发现没有历史对应项时创建稳定的新 SPEC ID 并
 分类为 `add`；历史项在目标不可达时仍保留编号并以静态不可达和运行负例共同支持 `delete`。
 
+证据不足不等于允许永久保留 `unclassified`。已经能形成原子命题、稳定身份、原始证据路径和
+`source_ids`，但尚不能证明目标 wire 的项使用 `mapped_validation`：迁移决策固定为 `add`，生命周期为
+`candidate`，证据等级保留真实 `observed／blocked`，并声明 `approval_scope=validation_only`、
+`production_eligibility=denied` 和明确 `validation_scope`。目标 AST 的 `observed` 只表示精确调用在目标
+bundle 中存在；2.1.88／HitCC 的 `blocked` 只表示历史命题已登记。两者都不能进入 production
+SupportEnvelope。disposition 与 candidate 必须通过各自身份双向引用，不能用一个笼统候选吞并未知项。
+
 `SinkInventory` 至少覆盖 `fetch`、Anthropic SDK resource 调用、Node／Bun HTTP、TLS、socket、
 WebSocket／EventSource、动态 wrapper 和可能启动外部网络客户端的子进程。每个 sink 均须保存完整列表，
 禁止数量上限或抽样；同一低层 sink 的多个调用点可归并为一条规则，但每个调用点都必须反向引用唯一
@@ -1306,14 +1313,17 @@ disposition。下列任一条件均阻止 FW-E 退出：
 
 现有三份历史机器台账只证明其自身路径、ID 和当前映射一致，不自动证明语义穷尽。2.1.88 必须覆盖
 `src／node_modules／vendor` 的网络相关反向切片；HitCC 每篇 `clue_source` 文档必须映射到一条或多条
-原子命题，或以可复算理由标为范围外。扫描器无法作出语义判断时保留 `unclassified`，不得按词法未命中
-自动排除。
+原子命题，或以可复算理由标为范围外。尚未抽成 clue 的文档必须无截断枚举非代码区 Markdown 列表项，
+保存原文路径、行号、最近 heading、内容摘要和稳定 ID，再逐项登记为 validation-only；已映射文档则
+反向绑定其未闭合 clue candidate。扫描器无法作出语义判断时先保留 `unclassified`，不得按词法未命中
+自动排除；只有上述原子化和禁止生产边界同时成立后，才能把它改为 `mapped_validation`。
 
 机器执行顺序固定如下，`analyze-bundles` 会对每个平台自动运行锁定 TypeScript 解析器，并把 AST
 调用点与无截断词法候选合并为 `target-sink-inventory.json`：
 
 ```text
 claude_fw_e.py analyze-bundles
+→ claude_fw_e_validation_closure.py
 → claude_fw_e_crosswalk.py --capture-index ... --require-closed
 → claude_fw_e.py rule-assessments --cross-source-matrix ... --completeness-closure ...
 → claude_fw_e.py seal
@@ -1322,8 +1332,10 @@ claude_fw_e.py analyze-bundles
 第二步的 dispositions 必须分别覆盖目标 sink、2.1.88 候选、HitCC 线索／文档和全 host／path 运行
 观测。`traffic_class=nonessential／telemetry` 只能使用 `record_only_disabled` 或保持
 `unclassified`；不得用 `delete`、范围外或零流量事实静默移除。`seal` 使用 v2 计划并直接绑定目标
-inventory、矩阵、closure 和 capture index；closure 非 `passed`、规则证据含 `blocked`、运行样本仍
-使用 host 预筛或四者摘要不一致时，Store 不得写入 `evidence_recorded`。
+inventory、矩阵、closure 和 capture index；closure 非 `passed`、运行样本仍使用 host 预筛、四者摘要
+不一致，或 `blocked` 未同时满足 validation-only／禁止生产／明确边界／candidate+add 时，Store 不得写入
+`evidence_recorded`。满足这些限制的 `blocked` 只封存发现事实，不签发 EvidenceApprovalFact 或
+ProfileApprovalFact，也不允许 FW-F／FW-G 把它当成已批准规则。
 
 补强工具或产出侧身份发生变化后，旧 Campaign 及旧 FW-E 收据只保留为历史事实，不能原位续写或补签。
 必须在隔离目录新建 Campaign，并同时设置 `DISABLE_TELEMETRY=1`、

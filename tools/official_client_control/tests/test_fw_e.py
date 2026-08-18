@@ -297,10 +297,48 @@ class FWESealTests(unittest.TestCase):
         with self.assertRaisesRegex(ControlError, "unclassified target sink"):
             seal_fw_e_plan(self.store, self.external, plan)
 
-    def test_blocks_rule_with_blocked_evidence(self) -> None:
+    def test_blocks_unbounded_rule_with_blocked_evidence(self) -> None:
         plan = self.plan()
         plan["rules"][0]["evidence_level"] = "blocked"
-        with self.assertRaisesRegex(ControlError, "证据仍为 blocked"):
+        with self.assertRaisesRegex(ControlError, "只有在 validation-only"):
+            seal_fw_e_plan(self.store, self.external, plan)
+
+    def test_seals_bounded_validation_only_blocked_rule(self) -> None:
+        plan = self.plan()
+        rule = plan["rules"][0]
+        rule.update(
+            {
+                "evidence_level": "blocked",
+                "migration_decision": "add",
+                "decision_basis": "new_target_rule",
+                "applicability": [
+                    "approval_scope=validation_only",
+                    "platform=linux/amd64",
+                    "production_eligibility=denied",
+                    "validation_scope=historical-source",
+                ],
+            }
+        )
+        result = seal_fw_e_plan(self.store, self.external, plan)
+        self.assertEqual(result["checkpoint"], "evidence_recorded")
+        self.assertEqual(result["approval_state"], "awaiting_explicit_evidence_approval")
+
+    def test_blocks_validation_only_rule_without_scope(self) -> None:
+        plan = self.plan()
+        rule = plan["rules"][0]
+        rule.update(
+            {
+                "evidence_level": "blocked",
+                "migration_decision": "add",
+                "decision_basis": "new_target_rule",
+                "applicability": [
+                    "approval_scope=validation_only",
+                    "platform=linux/amd64",
+                    "production_eligibility=denied",
+                ],
+            }
+        )
+        with self.assertRaisesRegex(ControlError, "边界明确"):
             seal_fw_e_plan(self.store, self.external, plan)
 
     def test_blocks_capture_without_privacy_control_proof(self) -> None:

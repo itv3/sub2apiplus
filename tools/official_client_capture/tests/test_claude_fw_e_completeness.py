@@ -496,6 +496,39 @@ class CrosswalkTests(unittest.TestCase):
             "capture": capture,
         }
 
+    def _use_validation_candidate(self, paths: dict[str, Path]) -> None:
+        dispositions = json.loads(paths["dispositions"].read_text())
+        dispositions["schema_version"] = (
+            "claude-code-fw-e-cross-source-dispositions/v2"
+        )
+        target = next(
+            row
+            for row in dispositions["target_sinks"]
+            if row["sink_id"] == "TN-SINK-NEW"
+        )
+        target.pop("new_rule", None)
+        target.update(
+            {
+                "traffic_class": "unknown",
+                "disposition": "mapped_validation",
+                "scenario_ids": [],
+                "spec_ids": ["SPEC-VAL-TARGET-001"],
+            }
+        )
+        dispositions["candidate_rules"] = [
+            {
+                "id": "SPEC-VAL-TARGET-001",
+                "domain": "transport_candidate",
+                "retained_claim": "目标 bundle 中存在尚待运行取证的 WebSocket 调用。",
+                "scope": "target-static",
+                "required_channels": [],
+                "validation_evidence_level": "observed",
+                "evidence_paths": ["evidence/target-static.json"],
+                "source_ids": ["TN-SINK-NEW"],
+            }
+        ]
+        write_json(paths["dispositions"], dispositions)
+
     def test_closed_crosswalk_can_add_target_native_rule(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             paths = self._fixture(Path(directory))
@@ -515,6 +548,83 @@ class CrosswalkTests(unittest.TestCase):
             self.assertIn(
                 "SPEC-NEW-001", {row["id"] for row in matrix["target_rules"]}
             )
+
+    def test_closed_crosswalk_can_seal_validation_only_candidate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            paths = self._fixture(Path(directory))
+            self._use_validation_candidate(paths)
+            matrix, closure = build_matrix(
+                paths["source"],
+                paths["hitcc"],
+                paths["ledger"],
+                paths["baseline_inventory"],
+                paths["target_inventory"],
+                "2.1.226",
+                paths["dispositions"],
+                paths["capture"],
+            )
+            candidate = next(
+                row
+                for row in matrix["target_rules"]
+                if row["id"] == "SPEC-VAL-TARGET-001"
+            )
+            self.assertEqual(candidate["origin"], "validation_candidate_add")
+            self.assertEqual(candidate["validation_evidence_level"], "observed")
+            self.assertEqual(closure["unresolved_total"], 0)
+            self.assertEqual(closure["result"], "passed")
+
+    def test_validation_candidate_must_be_declared_and_referenced(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            paths = self._fixture(Path(directory))
+            self._use_validation_candidate(paths)
+            dispositions = json.loads(paths["dispositions"].read_text())
+            dispositions["candidate_rules"] = []
+            write_json(paths["dispositions"], dispositions)
+            with self.assertRaisesRegex(CrosswalkError, "引用未知 candidate rule"):
+                build_matrix(
+                    paths["source"],
+                    paths["hitcc"],
+                    paths["ledger"],
+                    paths["baseline_inventory"],
+                    paths["target_inventory"],
+                    "2.1.226",
+                    paths["dispositions"],
+                    paths["capture"],
+                )
+
+            self._use_validation_candidate(paths)
+            dispositions = json.loads(paths["dispositions"].read_text())
+            extra = dict(dispositions["candidate_rules"][0])
+            extra["id"] = "SPEC-VAL-UNREFERENCED-001"
+            dispositions["candidate_rules"].append(extra)
+            write_json(paths["dispositions"], dispositions)
+            with self.assertRaisesRegex(CrosswalkError, "没有 disposition 反向引用"):
+                build_matrix(
+                    paths["source"],
+                    paths["hitcc"],
+                    paths["ledger"],
+                    paths["baseline_inventory"],
+                    paths["target_inventory"],
+                    "2.1.226",
+                    paths["dispositions"],
+                    paths["capture"],
+                )
+
+            self._use_validation_candidate(paths)
+            dispositions = json.loads(paths["dispositions"].read_text())
+            dispositions["candidate_rules"][0]["source_ids"] = ["TN-SINK-OTHER"]
+            write_json(paths["dispositions"], dispositions)
+            with self.assertRaisesRegex(CrosswalkError, "未双向绑定"):
+                build_matrix(
+                    paths["source"],
+                    paths["hitcc"],
+                    paths["ledger"],
+                    paths["baseline_inventory"],
+                    paths["target_inventory"],
+                    "2.1.226",
+                    paths["dispositions"],
+                    paths["capture"],
+                )
 
     def test_privacy_disabled_sink_cannot_be_silently_strict(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

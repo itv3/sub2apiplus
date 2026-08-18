@@ -1,0 +1,241 @@
+{
+  "schema_version": 1,
+  "campaign_stage": "FW-E",
+  "source_bindings": [
+    {
+      "path": "backend/internal/server/routes/gateway.go",
+      "required_markers": [
+        "gateway.POST(\"/messages\"",
+        "gateway.POST(\"/messages/count_tokens\"",
+        "gateway.POST(\"/responses\"",
+        "gateway.POST(\"/responses/*subpath\"",
+        "gateway.GET(\"/responses\"",
+        "gateway.POST(\"/chat/completions\"",
+        "r.POST(\"/responses\"",
+        "r.POST(\"/responses/*subpath\"",
+        "r.GET(\"/responses\"",
+        "r.POST(\"/messages/count_tokens\"",
+        "r.POST(\"/chat/completions\"",
+        "codexDirect.POST(\"/responses\"",
+        "codexDirect.POST(\"/responses/*subpath\"",
+        "codexDirect.GET(\"/responses\""
+      ]
+    }
+  ],
+  "aliases": [
+    {
+      "alias_id": "alias-chat-bare",
+      "logical_ingress_id": "chat-completions-oauth",
+      "physical_route": "POST /chat/completions",
+      "caller_ids": [
+        "handler.Gateway.ChatCompletions",
+        "server.routes.RegisterGatewayRoutes"
+      ]
+    },
+    {
+      "alias_id": "alias-chat-v1",
+      "logical_ingress_id": "chat-completions-oauth",
+      "physical_route": "POST /v1/chat/completions",
+      "caller_ids": [
+        "handler.Gateway.ChatCompletions",
+        "server.routes.RegisterGatewayRoutes"
+      ]
+    },
+    {
+      "alias_id": "alias-codex-direct-responses-http",
+      "logical_ingress_id": "codex-direct-rerouted",
+      "physical_route": "POST /backend-api/codex/responses",
+      "caller_ids": [
+        "handler.OpenAIGateway.Responses",
+        "server.routes.RegisterGatewayRoutes"
+      ]
+    },
+    {
+      "alias_id": "alias-codex-direct-responses-subpath",
+      "logical_ingress_id": "codex-direct-rerouted",
+      "physical_route": "POST /backend-api/codex/responses/*subpath",
+      "caller_ids": [
+        "handler.OpenAIGateway.Responses",
+        "server.routes.RegisterGatewayRoutes"
+      ]
+    },
+    {
+      "alias_id": "alias-codex-direct-responses-ws",
+      "logical_ingress_id": "codex-direct-rerouted",
+      "physical_route": "GET /backend-api/codex/responses",
+      "caller_ids": [
+        "handler.OpenAIGateway.ResponsesWebSocket",
+        "server.routes.RegisterGatewayRoutes"
+      ]
+    },
+    {
+      "alias_id": "alias-count-bare",
+      "logical_ingress_id": "count-tokens-oauth",
+      "physical_route": "POST /messages/count_tokens",
+      "caller_ids": [
+        "handler.Gateway.CountTokens",
+        "server.routes.RegisterGatewayRoutes"
+      ]
+    },
+    {
+      "alias_id": "alias-count-v1",
+      "logical_ingress_id": "count-tokens-oauth",
+      "physical_route": "POST /v1/messages/count_tokens",
+      "caller_ids": [
+        "handler.Gateway.CountTokens",
+        "server.routes.RegisterGatewayRoutes"
+      ]
+    },
+    {
+      "alias_id": "alias-messages-v1",
+      "logical_ingress_id": "messages-oauth",
+      "physical_route": "POST /v1/messages",
+      "caller_ids": [
+        "handler.Gateway.Messages",
+        "server.routes.RegisterGatewayRoutes"
+      ]
+    },
+    {
+      "alias_id": "alias-responses-bare-http",
+      "logical_ingress_id": "responses-oauth",
+      "physical_route": "POST /responses",
+      "caller_ids": [
+        "handler.Gateway.Responses",
+        "server.routes.RegisterGatewayRoutes"
+      ]
+    },
+    {
+      "alias_id": "alias-responses-bare-subpath",
+      "logical_ingress_id": "responses-oauth",
+      "physical_route": "POST /responses/*subpath",
+      "caller_ids": [
+        "handler.Gateway.Responses",
+        "server.routes.RegisterGatewayRoutes"
+      ]
+    },
+    {
+      "alias_id": "alias-responses-bare-ws",
+      "logical_ingress_id": "responses-oauth",
+      "physical_route": "GET /responses",
+      "caller_ids": [
+        "handler.OpenAIGateway.ResponsesWebSocket",
+        "server.routes.RegisterGatewayRoutes"
+      ]
+    },
+    {
+      "alias_id": "alias-responses-v1-http",
+      "logical_ingress_id": "responses-oauth",
+      "physical_route": "POST /v1/responses",
+      "caller_ids": [
+        "handler.Gateway.Responses",
+        "server.routes.RegisterGatewayRoutes"
+      ]
+    },
+    {
+      "alias_id": "alias-responses-v1-subpath",
+      "logical_ingress_id": "responses-oauth",
+      "physical_route": "POST /v1/responses/*subpath",
+      "caller_ids": [
+        "handler.Gateway.Responses",
+        "server.routes.RegisterGatewayRoutes"
+      ]
+    },
+    {
+      "alias_id": "alias-responses-v1-ws",
+      "logical_ingress_id": "responses-oauth",
+      "physical_route": "GET /v1/responses",
+      "caller_ids": [
+        "handler.OpenAIGateway.ResponsesWebSocket",
+        "server.routes.RegisterGatewayRoutes"
+      ]
+    }
+  ],
+  "entries": [
+    {
+      "logical_ingress_id": "chat-completions-oauth",
+      "physical_alias_ids": [
+        "alias-chat-bare",
+        "alias-chat-v1"
+      ],
+      "caller_ids": [
+        "handler.Gateway.ChatCompletions",
+        "server.routes.RegisterGatewayRoutes"
+      ],
+      "adapter_id": "openai-chat-legacy",
+      "route_id": "claude-oauth-legacy",
+      "ingress_kind": "third_party",
+      "protocol_class": "openai-chat-completions",
+      "current_disposition": "retained_legacy"
+    },
+    {
+      "logical_ingress_id": "codex-direct-rerouted",
+      "physical_alias_ids": [
+        "alias-codex-direct-responses-http",
+        "alias-codex-direct-responses-subpath",
+        "alias-codex-direct-responses-ws"
+      ],
+      "caller_ids": [
+        "handler.OpenAIGateway.Responses",
+        "handler.OpenAIGateway.ResponsesWebSocket",
+        "server.routes.RegisterGatewayRoutes"
+      ],
+      "adapter_id": "codex-direct-legacy",
+      "route_id": "codex-product-route",
+      "ingress_kind": "third_party",
+      "protocol_class": "codex-responses",
+      "current_disposition": "rerouted"
+    },
+    {
+      "logical_ingress_id": "count-tokens-oauth",
+      "physical_alias_ids": [
+        "alias-count-bare",
+        "alias-count-v1"
+      ],
+      "caller_ids": [
+        "handler.Gateway.CountTokens",
+        "server.routes.RegisterGatewayRoutes"
+      ],
+      "adapter_id": "anthropic-count-tokens-legacy",
+      "route_id": "claude-oauth-legacy",
+      "ingress_kind": "official",
+      "protocol_class": "anthropic-count-tokens",
+      "current_disposition": "retained_legacy"
+    },
+    {
+      "logical_ingress_id": "messages-oauth",
+      "physical_alias_ids": [
+        "alias-messages-v1"
+      ],
+      "caller_ids": [
+        "handler.Gateway.Messages",
+        "server.routes.RegisterGatewayRoutes"
+      ],
+      "adapter_id": "anthropic-messages-legacy",
+      "route_id": "claude-oauth-legacy",
+      "ingress_kind": "official",
+      "protocol_class": "anthropic-messages",
+      "current_disposition": "retained_legacy"
+    },
+    {
+      "logical_ingress_id": "responses-oauth",
+      "physical_alias_ids": [
+        "alias-responses-bare-http",
+        "alias-responses-bare-subpath",
+        "alias-responses-bare-ws",
+        "alias-responses-v1-http",
+        "alias-responses-v1-subpath",
+        "alias-responses-v1-ws"
+      ],
+      "caller_ids": [
+        "handler.Gateway.Responses",
+        "handler.OpenAIGateway.ResponsesWebSocket",
+        "server.routes.RegisterGatewayRoutes"
+      ],
+      "adapter_id": "openai-responses-legacy",
+      "route_id": "claude-oauth-legacy",
+      "ingress_kind": "third_party",
+      "protocol_class": "openai-responses",
+      "current_disposition": "retained_legacy"
+    }
+  ]
+}

@@ -1086,10 +1086,30 @@ def _matrix_target_rules(matrix: dict[str, Any]) -> list[dict[str, Any]]:
     if len(identities) != len(rows) or len(set(identities)) != len(identities):
         raise FWEEvidenceError("四方矩阵 target rule 身份缺失或重复")
     for row in rows:
-        if row.get("origin") not in {"historical_rule", "target_native_add"}:
+        if row.get("origin") not in {
+            "historical_rule",
+            "target_native_add",
+            "validation_candidate_add",
+        }:
             raise FWEEvidenceError(f"目标规则来源非法：{row.get('id')}")
         if not isinstance(row.get("required_channels"), list):
             raise FWEEvidenceError(f"目标规则 required_channels 非法：{row.get('id')}")
+        if row.get("origin") == "validation_candidate_add":
+            if row.get("validation_evidence_level") not in {"observed", "blocked"}:
+                raise FWEEvidenceError(
+                    f"validation candidate 缺少证据等级：{row.get('id')}"
+                )
+            evidence_paths = row.get("evidence_paths")
+            source_ids = row.get("source_ids")
+            if (
+                not isinstance(evidence_paths, list)
+                or not evidence_paths
+                or not isinstance(source_ids, list)
+                or not source_ids
+            ):
+                raise FWEEvidenceError(
+                    f"validation candidate 缺少证据或来源：{row.get('id')}"
+                )
     return sorted(rows, key=lambda item: str(item["id"]))
 
 
@@ -1102,7 +1122,10 @@ def _required_channels(rule: dict[str, Any]) -> set[str]:
 
 def _baseline_disposition(rule: dict[str, Any]) -> str | None:
     value = rule.get("baseline_disposition")
-    if rule.get("origin") == "target_native_add" and value is None:
+    if rule.get("origin") in {
+        "target_native_add",
+        "validation_candidate_add",
+    } and value is None:
         return None
     if not isinstance(value, str):
         raise FWEEvidenceError(f"规则缺少 disposition：{rule.get('id')}")
@@ -1197,12 +1220,21 @@ def build_rule_assessments(
         },
     ]
     assessment_rows: list[dict[str, Any]] = []
+    rule_evidence_sha256: dict[Path, str] = {}
     for rule in target_rows:
         spec_id = str(rule["id"])
         baseline_disposition = _baseline_disposition(rule)
         required = _required_channels(rule)
         channels_complete = required.issubset(channels)
-        if rule["origin"] == "target_native_add":
+        validation_only = rule["origin"] == "validation_candidate_add"
+        if validation_only:
+            decision = "add"
+            basis = "new_target_rule"
+            lifecycle = "candidate"
+            evidence_level = str(rule["validation_evidence_level"])
+            if evidence_level == "observed" and not channels_complete:
+                evidence_level = "blocked"
+        elif rule["origin"] == "target_native_add":
             decision = "add"
             basis = "new_target_rule"
             lifecycle = "candidate"
@@ -1259,6 +1291,31 @@ def build_rule_assessments(
             raise FWEEvidenceError(f"{spec_id} 未证明语义等价，禁止 override 为 inherit")
         if rule["origin"] == "target_native_add" and decision != "add":
             raise FWEEvidenceError(f"{spec_id} 是目标原生新增规则，迁移决策必须为 add")
+        rule_bindings: list[dict[str, Any]] = []
+        for raw_path in rule.get("evidence_paths", []):
+            path = workspace_root / str(raw_path)
+            try:
+                relative = path.resolve().relative_to(workspace_root.resolve())
+            except ValueError as error:
+                raise FWEEvidenceError(
+                    f"规则证据路径越界：{spec_id}={raw_path}"
+                ) from error
+            if path.is_symlink() or not path.is_file():
+                raise FWEEvidenceError(
+                    f"规则证据不是可信普通文件：{spec_id}={raw_path}"
+                )
+            resolved_path = path.resolve()
+            digest = rule_evidence_sha256.get(resolved_path)
+            if digest is None:
+                digest = sha256_file(path)
+                rule_evidence_sha256[resolved_path] = digest
+            rule_bindings.append(
+                {
+                    "role": "rule_specific_evidence",
+                    "path": relative.as_posix(),
+                    "sha256": digest,
+                }
+            )
         evidence_document = {
             "schema_version": "claude-code-fw-e-rule-evidence/v1",
             "spec_id": spec_id,
@@ -1274,13 +1331,30 @@ def build_rule_assessments(
             "semantic_equivalence_proven": equivalence,
             "evidence_level": evidence_level,
             "rationale": rationale,
-            "source_bindings": common_bindings,
+            "source_bindings": common_bindings + rule_bindings,
+            "source_ids": rule.get("source_ids", []),
             "retained_claim": rule.get("retained_claim"),
             "scope": rule.get("scope"),
         }
         evidence_path = output_root / "rules" / f"{spec_id}.json"
         _write_private_json(evidence_path, evidence_document)
         evidence_relative = evidence_path.relative_to(workspace_root).as_posix()
+        applicability = [
+            "authentication=claude.ai-oauth",
+            "entrypoint=sdk-cli",
+            "model=claude-sonnet-5",
+            "platform=linux/amd64",
+            "privacy=essential-traffic",
+            "provider=firstParty",
+        ]
+        if validation_only:
+            applicability.extend(
+                [
+                    "approval_scope=validation_only",
+                    "production_eligibility=denied",
+                    f"validation_scope={rule.get('scope')}",
+                ]
+            )
         assessment_rows.append(
             {
                 "spec_id": spec_id,
@@ -1291,14 +1365,7 @@ def build_rule_assessments(
                 "decision_basis": basis,
                 "semantic_equivalence_proven": equivalence,
                 "evidence_paths": [evidence_relative],
-                "applicability": [
-                    "authentication=claude.ai-oauth",
-                    "entrypoint=sdk-cli",
-                    "model=claude-sonnet-5",
-                    "platform=linux/amd64",
-                    "privacy=essential-traffic",
-                    "provider=firstParty",
-                ],
+                "applicability": sorted(applicability),
             }
         )
     result = {
