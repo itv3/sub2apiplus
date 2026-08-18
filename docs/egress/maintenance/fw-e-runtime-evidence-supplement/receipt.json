@@ -1,0 +1,154 @@
+{
+  "schema_version": "official-client-fw-e-runtime-evidence-supplement-receipt/v1",
+  "manifest_path": "docs/egress/maintenance/fw-e-runtime-evidence-supplement/manifest.json",
+  "manifest_sha256": "1314f50c975c8bb6993c711e54962746cf6797498ddeb0e16bb8e46382d60d0d",
+  "prior_receipt_path": "docs/egress/maintenance/fw-e-completeness-supplement/receipt.json",
+  "prior_receipt_sha256": "2b19d07cf143f3a7593426d8efb02b9630c5095020ce296874034f230930db53",
+  "base_commit": "db9a30747b6c729a692e056026d5611a92cebc0b",
+  "environment_fix_commit": "8b1cef38c1b99b59b62aaac286b41978f0f467c5",
+  "sealed_commit": "7c7236bb2365eabc90e212511163808ebfd989ad",
+  "target_version": "2.1.226",
+  "changed_path_count": 5,
+  "change_state_sha256": "c56aa1b666b7148ef38a058cd85935ddb7abcadc52f0469fad3a45524dbbeff2",
+  "local_evidence_bindings": {
+    "capture_index": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-capture-db9a30747/capture-index-full.json",
+      "sha256": "9382492469491dbe1a5482569bf8fd4fb00764904d55aece3a87af8c3a4b0714"
+    },
+    "matrix": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/crosswalk-v3-runtime-unreviewed/matrix.json",
+      "sha256": "20e08183bf1a04ce550d4408a6161f7fde81cc5e928bc96d6f8acd8ef02e89ae"
+    },
+    "closure": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/crosswalk-v3-runtime-unreviewed/closure.json",
+      "sha256": "ff8fc5e1cefddebe9eacf552798bfc2403dd37ecfeb02af3df2cb11e13f400ef"
+    },
+    "campaign_secret_inventory": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-capture-db9a30747/finalization/campaign-secret-inventory.json",
+      "sha256": "fb17ed48dfb12077d8d7aa9fcca727ee6af9808f4d0558098e3889753f7175c2"
+    },
+    "after_final": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-capture-db9a30747/finalization/after-final.json",
+      "sha256": "ed2f400171b93967ec30fd972417f0df499cc2b3d3e7b5c8fd05c0d746e96119"
+    },
+    "production_compare_final": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-capture-db9a30747/finalization/production-compare-final.json",
+      "sha256": "5c37efa237eba2d9ba36dbd9e90261681d7b8762e9e446dde4b91f233e9a6569"
+    },
+    "production_safety_final": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-capture-db9a30747/finalization/production-safety-final.json",
+      "sha256": "93f55b6279c99154d8cb1c7801f448f86df10d49c77f957977bd0828512e2043"
+    }
+  },
+  "campaign": {
+    "host": "Vircs",
+    "path": "/root/oauth-capture/fw-e/claude-code-stable-20260818-completeness-v2-db9a30747",
+    "capture_index_sha256": "9382492469491dbe1a5482569bf8fd4fb00764904d55aece3a87af8c3a4b0714",
+    "capture_source_sha256": "5201476b2e6437dbc277f777b0870afd8d6a44621903f11312f112add60c2e65",
+    "runtime_image_id": "sha256:3438c4e0909d7401ff8e076a985258608a8f031629e65262db16c1979ab1771c",
+    "production_network_joined": false,
+    "production_container_modified": false,
+    "failed_attempt_count": 3,
+    "failed_attempts_preserved": true
+  },
+  "capture": {
+    "result": "passed",
+    "baseline_version": "2.1.220",
+    "target_version": "2.1.226",
+    "control_case_count": 8,
+    "target_case_count": 8,
+    "scenarios": [
+      "a1",
+      "s1",
+      "s2",
+      "s4"
+    ],
+    "evidence_modes": [
+      "direct",
+      "mitm"
+    ],
+    "capture_host_scopes": [
+      "all"
+    ],
+    "channels": [
+      "A1",
+      "J",
+      "L",
+      "M",
+      "P"
+    ],
+    "relay_r_present": false,
+    "network_observation_count": 4,
+    "host_prefilter_disabled": true
+  },
+  "network_coordinates": [
+    "GET api.anthropic.com/api/claude_code/policy_limits",
+    "GET api.anthropic.com/api/claude_code/settings",
+    "POST api.anthropic.com/v1/messages?beta=<query-value>",
+    "CONNECT api.anthropic.com:443"
+  ],
+  "privacy_mode": {
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "DISABLE_TELEMETRY": "1",
+    "traffic_presence_comparison": "disabled"
+  },
+  "closure": {
+    "result": "blocked",
+    "unresolved_total": 414,
+    "source_candidate_count": 34,
+    "hitcc_clue_count": 69,
+    "target_sink_count": 307,
+    "runtime_observation_count": 4
+  },
+  "finalization": {
+    "campaign_secret_scan_result": "passed",
+    "campaign_file_count": 325,
+    "campaign_byte_count": 3649150,
+    "campaign_inventory_sha256": "e2960d23b1faf3fb51bab1ef2339b0ec94716be02e8edff55a35cc599b81a0c9",
+    "production_compare_result": "passed",
+    "production_difference_count": 0,
+    "production_image_id": "sha256:9399e13dea365354311476b919b39d2c9d28d538d125fa7fc397745a7101c096",
+    "production_restart_count": 0,
+    "production_health_http_status": 200,
+    "fatal_log_count": 0,
+    "egress_guard_failure_log_count": 0,
+    "isolated_container_absent": true
+  },
+  "implementation_proofs": [
+    {
+      "id": "capture-tools",
+      "result": "passed",
+      "passed_test_count": 746,
+      "skipped_test_count": 3
+    },
+    {
+      "id": "official-client-control",
+      "result": "passed",
+      "passed_test_count": 30,
+      "skipped_test_count": 0
+    },
+    {
+      "id": "prior-fw-e-completeness-transition-replay",
+      "result": "passed"
+    },
+    {
+      "id": "private-runtime-evidence-replay",
+      "result": "blocked-as-expected"
+    }
+  ],
+  "implementation_result": "passed",
+  "evidence_closure_result": "blocked",
+  "evidence_approval_issued": false,
+  "snapshot_or_profile_generated": false,
+  "production_runtime_path_count": 0,
+  "deployment_performed": false,
+  "dmit_deployment_performed": false,
+  "fw_f_entered": false,
+  "blocking_reasons": [
+    "307 个目标 sink 尚未逐项签发唯一 disposition",
+    "34 个 2.1.88 真源码候选与 69 个 HitCC 线索尚未闭合",
+    "4 个全 host/path 运行网络坐标尚未逐项映射",
+    "本次 Campaign 未生成 relay R 通道"
+  ],
+  "result": "blocked"
+}
