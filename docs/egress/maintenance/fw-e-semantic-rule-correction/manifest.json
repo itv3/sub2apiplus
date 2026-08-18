@@ -1,0 +1,22 @@
+{
+  "schema_version": "official-client-fw-e-semantic-rule-correction-transition/v1",
+  "base_commit": "e577e144ac323359559d39228d771d95f4562be4",
+  "target_version": "2.1.226",
+  "campaign_id": "claude-code-2_1_226-fw-e-semantic-20260818-e577e144a",
+  "superseded_receipt_path": "docs/egress/maintenance/fw-e-evidence-closure/receipt.json",
+  "superseded_receipt_sha256": "dd47c8fd03aa6ae12f748adf2757d208222ea493c54107b089c640da7bb45e2b",
+  "private_evidence_root": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement",
+  "expected_changed_paths": [
+    "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+    "docs/egress/maintenance/fw-e-semantic-rule-correction/manifest.json",
+    "docs/egress/maintenance/fw-e-semantic-rule-correction/receipt.json"
+  ],
+  "correction_rules": [
+    "DiscoveryInventory、SemanticRuleCandidate 和 RuleLedger 必须分别计数",
+    "7368 个发现项不得按一项一条规则生成 SPEC",
+    "语义候选必须使用 CAND 身份并通过 source_ids 与发现项双向绑定",
+    "RuleLedger 只能包含可执行、可验证且身份为 SPEC 的规则",
+    "旧 FW-E 收据保留原文但不得继续作为 FW-F 输入",
+    "纠正过程不得签发批准、生成 release candidate、修改 Runtime Selector 或部署 DMIT／Vircs"
+  ]
+}

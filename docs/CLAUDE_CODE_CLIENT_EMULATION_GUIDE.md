@@ -1173,11 +1173,13 @@ Guard 按 route、persona、Sink、binding、Release、Profile digest、adapter�
 
 ## 3.6 当前可执行边界
 
-源码存在不能证明 production active。FW-A～FW-E 已完成：目标 stable 2.1.226 的最终 Campaign 为
-`claude-code-2_1_226-fw-e-final-20260818-93f2edbc9`，受管 Store 停在 `evidence_recorded`，没有
-Evidence／Profile 批准、Claude Snapshot、candidate、Runtime Selector 或 DeploymentFact。当前可以
-进入 FW-F 构造 target-first 画像、样例和最终合同；FW-F 完成前不得建立 production candidate，FW-H
-前不得晋升生产或退休遗留链。
+源码存在不能证明 production active。FW-A～FW-E 已完成：目标 stable 2.1.226 的当前 Campaign 为
+`claude-code-2_1_226-fw-e-semantic-20260818-e577e144a`，受管 Store 停在 `evidence_recorded`。旧 Campaign
+`claude-code-2_1_226-fw-e-final-20260818-93f2edbc9` 及其“7,425 条规则”收据只保留为历史错误事实，由
+[语义规则纠正收据](egress/maintenance/fw-e-semantic-rule-correction/receipt.json)替代，禁止继续作为
+FW-F 输入。当前没有 Evidence／Profile 批准、Claude Snapshot、
+release candidate、Runtime Selector 或 DeploymentFact。可以进入 FW-F 构造 target-first 画像、样例和
+最终合同；FW-F 完成前不得建立 production candidate，FW-H 前不得晋升生产或退休遗留链。
 
 ---
 

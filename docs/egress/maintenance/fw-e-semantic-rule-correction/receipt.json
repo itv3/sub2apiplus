@@ -1,0 +1,219 @@
+{
+  "schema_version": "official-client-fw-e-semantic-rule-correction-receipt/v1",
+  "manifest_path": "docs/egress/maintenance/fw-e-semantic-rule-correction/manifest.json",
+  "manifest_sha256": "9f3d3618533e07dff2f75726dfc1e3c41dcae0aa3bb792d344524413cf3e232f",
+  "implementation_commit": "e577e144ac323359559d39228d771d95f4562be4",
+  "closed_at_utc": "2026-08-18T12:45:05Z",
+  "target_version": "2.1.226",
+  "campaign_id": "claude-code-2_1_226-fw-e-semantic-20260818-e577e144a",
+  "supersedes": {
+    "path": "docs/egress/maintenance/fw-e-evidence-closure/receipt.json",
+    "sha256": "dd47c8fd03aa6ae12f748adf2757d208222ea493c54107b089c640da7bb45e2b",
+    "preservation": "historical_only",
+    "invalidated_claims": [
+      "7425_rule_count",
+      "7368_validation_rules",
+      "one_discovery_one_rule"
+    ],
+    "replacement_model": "7368_discoveries_to_32_semantic_candidates_to_57_spec_rules"
+  },
+  "local_evidence_bindings": {
+    "official_freeze": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/freeze/freeze.json",
+      "sha256": "947ea92b56bc85b0fc87cc2ef196b627a846c35b925b47fa9730c01ae3381283"
+    },
+    "capture_index_with_r": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/campaign/indexes/capture-index-full-with-r.json",
+      "sha256": "4b16a52f9804e96d6454543881333af1305b42d6572682966a0caf6430b52d4a"
+    },
+    "semantic_closure_review": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/semantic-closure-v1-e577e144a/closure-review.json",
+      "sha256": "70128abf5be1e409609749ac05df2857130b289dc53db6ce51628606fa96004c"
+    },
+    "discovery_inventory": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/semantic-closure-v1-e577e144a/discovery-inventory.json",
+      "sha256": "4b31d9e79201761f132e00c127d5e9df91015f2eec302b082b0aa1769306a41a"
+    },
+    "semantic_candidates": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/semantic-closure-v1-e577e144a/semantic-candidates.json",
+      "sha256": "79ef709f659a6781bb7dc1d2ae7aca2c3da5a7a1e02474d19a2bc3c604770287"
+    },
+    "semantic_dispositions": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/semantic-closure-v1-e577e144a/dispositions.json",
+      "sha256": "07b5c1a4285b27501a7ce0240adc68f7e4e7e5b96d33ce813fc7265f4cb5ea42"
+    },
+    "hitcc_document_atoms": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/semantic-closure-v1-e577e144a/document-atoms.json",
+      "sha256": "222371af33b17e3863415a2c168242385dd4d8a1ffdc2d886cb637da07bb2fb4"
+    },
+    "source_to_sink": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/semantic-closure-v1-e577e144a/source-to-sink.json",
+      "sha256": "d982b86f2e269491bcccab41bdad7f819f823648a30b2bac373fde8161d7e4fc"
+    },
+    "cross_source_matrix": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/crosswalk-v8-semantic-closed-e577e144a/matrix.json",
+      "sha256": "e8392a01f99fc2846d87edc05ad46da46728358f7b88d4b91a991e5907ba6858"
+    },
+    "completeness_closure": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/crosswalk-v8-semantic-closed-e577e144a/closure.json",
+      "sha256": "a28ef46a9d5608279567b7d061996387db2e9098804b8f1842958f6ee9bc608b"
+    },
+    "rule_assessments": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/rule-assessments-v5-e577e144a/rule-assessments.json",
+      "sha256": "c8cc1bc24f17a4d8e89388c6bae2023b230a6fa204fa8924eb75c5a2997d6e51"
+    },
+    "seal_plan": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/seal-plan-v3-e577e144a/plan.json",
+      "sha256": "483505277717a35e9dfd6b711af788a1a015cd20f0afcc8ede97a39d74e91af7"
+    },
+    "store_metadata": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/control-store-v3-e577e144a/store.json",
+      "sha256": "fcb35904d17eca90b0c565c18fec0d51ef9ce9405d488ff0d40abb85f7dbaaac"
+    },
+    "campaign": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/control-store-v3-e577e144a/campaigns/claude-code-2_1_226-fw-e-semantic-20260818-e577e144a.json",
+      "sha256": "e583b1eb271cf79ea0f15e2a2bbe7d6a6467ffab23d91f7ab367a609014951f9"
+    },
+    "evidence_package": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/control-store-v3-e577e144a/objects/evidence_package/2f6ce8caa5b41ae14dc575e689f8b3ccbd9a7bce41732cd9d2fe2d4ddc34a2c2.json",
+      "sha256": "2f6ce8caa5b41ae14dc575e689f8b3ccbd9a7bce41732cd9d2fe2d4ddc34a2c2"
+    },
+    "production_ingress_inventory": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/control-store-v3-e577e144a/objects/production_ingress_inventory/d289794c11562f087238d54ab3ea95dacce991b56938ab553eaf4dbd71c4b3a3.json",
+      "sha256": "d289794c11562f087238d54ab3ea95dacce991b56938ab553eaf4dbd71c4b3a3"
+    },
+    "egress_disposition_inventory": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/control-store-v3-e577e144a/objects/egress_disposition_inventory/47b1c1a62dbc4964cf3b4fca6101113b94e8cc9b26bffead9ec051ce6bb1848e.json",
+      "sha256": "47b1c1a62dbc4964cf3b4fca6101113b94e8cc9b26bffead9ec051ce6bb1848e"
+    },
+    "discovery_fact": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/control-store-v3-e577e144a/facts/claude-code-2_1_226-fw-e-semantic-20260818-e577e144a/discovery/00000001-201eddbc69ca0b332d981d771371cff346842a67219e444f3b276c8122b5d0c4.json",
+      "sha256": "201eddbc69ca0b332d981d771371cff346842a67219e444f3b276c8122b5d0c4"
+    },
+    "evidence_fact": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/control-store-v3-e577e144a/facts/claude-code-2_1_226-fw-e-semantic-20260818-e577e144a/evidence/00000001-87e5b6bfef80819f41b5d508a8670d6f2c7ad284250319eff4ca2fe60a76a062.json",
+      "sha256": "87e5b6bfef80819f41b5d508a8670d6f2c7ad284250319eff4ca2fe60a76a062"
+    }
+  },
+  "discovery_inventory": {
+    "item_count": 7368,
+    "source_kind_counts": {
+      "target_ast_call": 331,
+      "historical_source_2_1_88": 29,
+      "hitcc_clue_2_1_197": 71,
+      "hitcc_document_atom_2_1_197": 6937
+    },
+    "disposition_counts": {
+      "mapped_semantic_candidate": 2830,
+      "mapped_existing_rule": 15,
+      "catalogued_context": 4523
+    },
+    "generated_rule_count": 0,
+    "unclassified_count": 0
+  },
+  "semantic_candidate_ledger": {
+    "candidate_count": 32,
+    "evidence_level_counts": {
+      "observed": 10,
+      "blocked": 22
+    },
+    "kind_counts": {
+      "wire_semantic": 27,
+      "managed_semantic": 2,
+      "inventory_obligation": 3
+    },
+    "rule_ledger_membership": "denied",
+    "production_eligibility": "denied",
+    "bidirectional_source_binding": "passed"
+  },
+  "rule_ledger": {
+    "rule_count": 57,
+    "observed_count": 45,
+    "regressed_evidence_count": 12,
+    "blocked_count": 0,
+    "verified_count": 0,
+    "change_count": 56,
+    "delete_count": 1,
+    "target_add_rule_count": 0,
+    "candidate_id_count": 0
+  },
+  "cross_source_closure": {
+    "result": "passed",
+    "denominator_counts": {
+      "target_sinks": 505,
+      "historical_source_candidates": 102,
+      "hitcc_clues": 88,
+      "hitcc_documents": 71,
+      "runtime_observations": 4
+    },
+    "denominator_total": 770,
+    "explicit_disposition_total": 770,
+    "unresolved_total": 0
+  },
+  "store": {
+    "root": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/control-store-v3-e577e144a",
+    "campaign_identity_sha256": "3985aa7244227cd19c9596beb1e5209189b394d22ba734e367a8159b8962daea",
+    "checkpoint": "evidence_recorded",
+    "fact_counts": {
+      "discovery": 1,
+      "evidence": 1,
+      "approval": 0,
+      "validation": 0,
+      "runtime_selector": 0,
+      "deployment": 0
+    },
+    "object_count": 10,
+    "fact_count": 2,
+    "receipt_count": 0,
+    "external_binding_count": 103,
+    "external_bindings_verified": true,
+    "replay_result": "passed"
+  },
+  "production_safety": {
+    "production_compare_path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/finalization/production-compare.json",
+    "production_compare_sha256": "20f2d7fa592fa1c98a97a89b5345fbfbe3c0e1dd8797ac99bde90f6146cbba18",
+    "production_compare_result": "passed",
+    "production_difference_count": 0,
+    "production_after_path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/finalization/after.json",
+    "production_after_sha256": "df2129de20962e4367d29a5315d8cca3a418103c6bcff69feb58f685ab667787",
+    "production_code_path_changed": false,
+    "runtime_selector_changed": false,
+    "dmit_deployment_performed": false,
+    "vircs_deployment_performed": false
+  },
+  "implementation_proofs": [
+    {
+      "id": "capture-tools",
+      "result": "passed",
+      "test_count": 767,
+      "passed_test_count": 764,
+      "skipped_test_count": 3
+    },
+    {
+      "id": "official-client-control",
+      "result": "passed",
+      "test_count": 33,
+      "passed_test_count": 33,
+      "skipped_test_count": 0
+    },
+    {
+      "id": "semantic-closure-real-replay",
+      "result": "passed"
+    },
+    {
+      "id": "final-store-external-replay",
+      "result": "passed"
+    },
+    {
+      "id": "officialegress-and-routes-go-regression",
+      "result": "passed"
+    }
+  ],
+  "evidence_approval_issued": false,
+  "profile_or_snapshot_generated": false,
+  "release_candidate_generated": false,
+  "fw_f_entered": false,
+  "deployment_performed": false,
+  "fw_e_result": "closed",
+  "result": "passed"
+}
