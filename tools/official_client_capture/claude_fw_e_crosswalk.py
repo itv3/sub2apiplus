@@ -38,9 +38,17 @@ ALLOWED_SINK_DISPOSITIONS = {
     "out_of_scope_proven",
     "unclassified",
 }
-ALLOWED_TRAFFIC_CLASSES = {"essential", "nonessential", "telemetry", "unknown"}
+ALLOWED_TRAFFIC_CLASSES = {
+    "essential",
+    "nonessential",
+    "telemetry",
+    "not_traffic",
+    "unknown",
+}
 ALLOWED_HISTORICAL_DISPOSITIONS = {
     "mapped_historical",
+    "mapped_managed",
+    "record_only_disabled",
     "out_of_scope_proven",
     "unclassified",
 }
@@ -198,6 +206,8 @@ def load_dispositions(
             raise CrosswalkError(f"target-native traffic_class 非法：{sink_id}")
         if traffic_class == "unknown" and disposition != "unclassified":
             raise CrosswalkError(f"未知流量类别只能保持 unclassified：{sink_id}")
+        if traffic_class == "not_traffic" and disposition != "out_of_scope_proven":
+            raise CrosswalkError(f"not_traffic 只能用于已证明的非发送候选：{sink_id}")
         if traffic_class in {"nonessential", "telemetry"} and disposition not in {
             "record_only_disabled",
             "unclassified",
@@ -210,8 +220,8 @@ def load_dispositions(
             raise CrosswalkError(f"record_only sink 的流量类别非法：{sink_id}")
         if disposition != "unclassified" and not evidence_paths:
             raise CrosswalkError(f"已处置 sink 必须绑定证据：{sink_id}")
-        if disposition in {"mapped_strict", "mapped_managed"} and not spec_ids:
-            raise CrosswalkError(f"受管 sink 必须绑定规则：{sink_id}")
+        if disposition == "mapped_strict" and not spec_ids:
+            raise CrosswalkError(f"strict sink 必须绑定规则：{sink_id}")
         if disposition == "mapped_strict" and not scenario_ids:
             raise CrosswalkError(f"strict sink 必须绑定运行场景：{sink_id}")
         if disposition in {"out_of_scope_proven", "unclassified"} and (
@@ -294,8 +304,13 @@ def load_dispositions(
                 raise CrosswalkError(f"{key} rationale 缺失：{identity}")
             if disposition == "mapped_historical" and not refs:
                 raise CrosswalkError(f"映射历史项必须绑定规则：{identity}")
-            if disposition == "out_of_scope_proven" and refs:
-                raise CrosswalkError(f"范围外历史项不得绑定目标规则：{identity}")
+            if disposition in {
+                "mapped_managed",
+                "record_only_disabled",
+                "out_of_scope_proven",
+                "unclassified",
+            } and refs:
+                raise CrosswalkError(f"非 strict 历史项不得绑定目标规则：{identity}")
             if disposition != "unclassified" and not evidence:
                 raise CrosswalkError(f"已处置历史项必须绑定证据：{identity}")
             output[identity] = raw
@@ -426,7 +441,7 @@ def hitcc_rows(
     known_specs: set[str],
     clue_overrides: dict[str, dict[str, Any]],
     document_overrides: dict[str, dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str], list[str]]:
     """把 HitCC 原子线索和直接线索文档转换为闭集行。"""
 
     clues = hitcc.get("clues")
@@ -490,19 +505,164 @@ def hitcc_rows(
     unknown_documents = sorted(set(document_overrides) - document_paths)
     if unknown_documents:
         raise CrosswalkError(f"HitCC disposition 引用未知文档：{unknown_documents}")
+    clue_rows_by_id = {str(row["clue_id"]): row for row in rows}
+    document_rows: list[dict[str, Any]] = []
     unresolved_documents: list[str] = []
     for row in documents:
         path = str(row.get("path"))
-        if row.get("document_disposition") != "clue_source":
+        if row.get("disposition") != "clue_source":
             continue
         override = document_overrides.get(path)
         if override is not None:
-            if override["disposition"] == "unclassified":
-                unresolved_documents.append(path)
-            continue
-        if row.get("mapping_status") != "mapped":
+            disposition = str(override["disposition"])
+            refs = sorted(set(override["spec_ids"]))
+            rationale = str(override["rationale"])
+            evidence_paths = sorted(set(override["evidence_paths"]))
+        else:
+            clue_ids = [str(item) for item in row.get("clue_ids", [])]
+            refs = sorted(
+                {
+                    spec_id
+                    for clue_id in clue_ids
+                    for spec_id in clue_rows_by_id.get(clue_id, {}).get("spec_ids", [])
+                }
+            )
+            if row.get("mapping_status") == "mapped" and refs:
+                disposition = "mapped_historical"
+                rationale = "文档已通过 clue_id 反向映射到现有原子规则。"
+            else:
+                disposition = "unclassified"
+                rationale = "直接线索文档尚未获得唯一原子命题处置。"
+            evidence_paths = []
+        if disposition == "unclassified":
             unresolved_documents.append(path)
-    return rows, sorted(unresolved_clues), unresolved_documents
+        document_rows.append(
+            {
+                "path": path,
+                "mapping_status": row.get("mapping_status"),
+                "clue_ids": sorted(str(item) for item in row.get("clue_ids", [])),
+                "disposition": disposition,
+                "spec_ids": refs,
+                "rationale": rationale,
+                "evidence_paths": evidence_paths,
+            }
+        )
+    return rows, document_rows, sorted(unresolved_clues), sorted(unresolved_documents)
+
+
+def require_explicit_dispositions(
+    source: dict[str, Any],
+    hitcc: dict[str, Any],
+    target_sinks: list[dict[str, Any]],
+    capture_index: dict[str, Any] | None,
+    dispositions: dict[str, dict[str, dict[str, Any]]],
+) -> None:
+    """在闭集模式下要求每个分母项都由本次人工处置显式签发。"""
+
+    expected = {
+        "target_sinks": {str(row.get("sink_id")) for row in target_sinks},
+        "historical_source_candidates": {
+            str(row.get("source_rule_id")) for row in source.get("rules", [])
+        },
+        "hitcc_clues": {
+            str(row.get("clue_id")) for row in hitcc.get("clues", [])
+        },
+        "hitcc_documents": {
+            str(row.get("path"))
+            for row in hitcc.get("document_inventory", [])
+            if row.get("disposition") == "clue_source"
+        },
+        "runtime_observations": {
+            str(row.get("observation_id"))
+            for row in (
+                capture_index.get("target", {}).get("network_observations", [])
+                if isinstance(capture_index, dict)
+                else []
+            )
+        },
+    }
+    for key, expected_ids in expected.items():
+        actual_ids = set(dispositions[key])
+        missing = sorted(expected_ids - actual_ids)
+        extra = sorted(actual_ids - expected_ids)
+        if missing or extra:
+            raise CrosswalkError(
+                f"{key} 未逐项显式处置：missing={missing} extra={extra}"
+            )
+
+
+def explicit_disposition_counts(
+    source: dict[str, Any],
+    hitcc: dict[str, Any],
+    target_sinks: list[dict[str, Any]],
+    capture_index: dict[str, Any] | None,
+    dispositions: dict[str, dict[str, dict[str, Any]]],
+) -> dict[str, dict[str, int]]:
+    """分别统计每个闭集分母的预期项和显式签发项。"""
+
+    expected = {
+        "target_sinks": {str(row.get("sink_id")) for row in target_sinks},
+        "historical_source_candidates": {
+            str(row.get("source_rule_id")) for row in source.get("rules", [])
+        },
+        "hitcc_clues": {
+            str(row.get("clue_id")) for row in hitcc.get("clues", [])
+        },
+        "hitcc_documents": {
+            str(row.get("path"))
+            for row in hitcc.get("document_inventory", [])
+            if row.get("disposition") == "clue_source"
+        },
+        "runtime_observations": {
+            str(row.get("observation_id"))
+            for row in (
+                capture_index.get("target", {}).get("network_observations", [])
+                if isinstance(capture_index, dict)
+                else []
+            )
+        },
+    }
+    return {
+        key: {
+            "expected": len(expected_ids),
+            "explicit": len(set(dispositions[key]) & expected_ids),
+        }
+        for key, expected_ids in expected.items()
+    }
+
+
+def validate_strict_scenarios(
+    capture_index: dict[str, Any] | None,
+    dispositions: dict[str, dict[str, dict[str, Any]]],
+) -> None:
+    """确保 strict sink 只引用本次目标 Campaign 实际存在的场景。"""
+
+    strict_entries = [
+        row
+        for row in dispositions["target_sinks"].values()
+        if row.get("disposition") == "mapped_strict"
+    ]
+    if not strict_entries:
+        return
+    if not isinstance(capture_index, dict):
+        raise CrosswalkError("strict sink 缺少目标 Campaign capture index")
+    target = capture_index.get("target")
+    relay = capture_index.get("relay")
+    available = {
+        str(item)
+        for item in (
+            target.get("scenarios", []) if isinstance(target, dict) else []
+        )
+    }
+    relay_target = relay.get("target") if isinstance(relay, dict) else None
+    if isinstance(relay_target, dict):
+        available.update(str(item) for item in relay_target.get("probe_ids", []))
+    for row in strict_entries:
+        unknown = sorted(set(row.get("scenario_ids", [])) - available)
+        if unknown:
+            raise CrosswalkError(
+                f"strict sink 引用本次 Campaign 外场景：{row['sink_id']}={unknown}"
+            )
 
 
 def target_sink_rows(
@@ -603,6 +763,25 @@ def runtime_observation_rows(
     scope_failures: list[str] = []
     if scopes != ["all"]:
         scope_failures.append("target_capture_not_all_hosts")
+    channels = capture_index.get("channels")
+    required_channels = {"P", "R", "J", "M"}
+    if not isinstance(channels, list) or not required_channels.issubset(
+        {str(item) for item in channels}
+    ):
+        scope_failures.append("target_required_channels_missing")
+    relay = capture_index.get("relay")
+    relay_target = relay.get("target") if isinstance(relay, dict) else None
+    expected_probe_ids = {
+        f"r-{scenario}" for scenario in target.get("scenarios", [])
+    }
+    if (
+        not isinstance(relay, dict)
+        or relay.get("result") != "passed"
+        or not isinstance(relay_target, dict)
+        or relay_target.get("version") != target.get("version")
+        or set(relay_target.get("probe_ids", [])) != expected_probe_ids
+    ):
+        scope_failures.append("target_relay_r_incomplete")
     observations = target.get("network_observations")
     if not isinstance(observations, list):
         scope_failures.append("target_network_inventory_missing")
@@ -663,6 +842,7 @@ def build_matrix(
     target_version: str,
     dispositions_path: Path | None,
     capture_index_path: Path | None,
+    require_explicit: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """构建完整矩阵和闭集报告。"""
 
@@ -687,6 +867,16 @@ def build_matrix(
     dispositions = load_dispositions(
         dispositions_path, target_version, {str(row["sink_id"]) for row in target_sinks}
     )
+    validate_strict_scenarios(capture_index, dispositions)
+    if require_explicit:
+        require_explicit_dispositions(
+            source, hitcc, target_sinks, capture_index, dispositions
+        )
+    explicit_counts = explicit_disposition_counts(
+        source, hitcc, target_sinks, capture_index, dispositions
+    )
+    explicit_expected_total = sum(row["expected"] for row in explicit_counts.values())
+    explicit_actual_total = sum(row["explicit"] for row in explicit_counts.values())
     sink_rows, unresolved_sinks, additions = target_sink_rows(
         baseline_sinks, target_sinks, dispositions["target_sinks"]
     )
@@ -711,7 +901,7 @@ def build_matrix(
     source_rows, unresolved_source = historical_source_rows(
         source, known_specs, dispositions["historical_source_candidates"]
     )
-    clue_rows, unresolved_clues, unresolved_documents = hitcc_rows(
+    clue_rows, document_rows, unresolved_clues, unresolved_documents = hitcc_rows(
         hitcc,
         known_specs,
         dispositions["hitcc_clues"],
@@ -791,15 +981,19 @@ def build_matrix(
             "historical_rule_count": len(baseline_rules),
             "source_candidate_count": len(source_rows),
             "hitcc_clue_count": len(clue_rows),
+            "hitcc_document_count": len(document_rows),
             "historical_sink_count": len(baseline_sinks),
             "target_sink_count": len(sink_rows),
             "target_add_rule_count": len(additions),
             "target_rule_count": len(target_rules),
             "runtime_observation_count": len(runtime_rows),
+            "explicit_disposition_expected_count": explicit_expected_total,
+            "explicit_disposition_count": explicit_actual_total,
             "unresolved_total": unresolved_total,
         },
         "historical_source_candidates": source_rows,
         "hitcc_clues": clue_rows,
+        "hitcc_documents": document_rows,
         "target_sinks": sink_rows,
         "runtime_observations": runtime_rows,
         "target_rules": target_rules,
@@ -815,11 +1009,30 @@ def build_matrix(
         "target_sink_disposition_counts": dict(
             sorted(Counter(row["disposition"] for row in sink_rows).items())
         ),
+        "historical_source_disposition_counts": dict(
+            sorted(Counter(row["disposition"] for row in source_rows).items())
+        ),
+        "hitcc_clue_disposition_counts": dict(
+            sorted(Counter(row["disposition"] for row in clue_rows).items())
+        ),
+        "hitcc_document_disposition_counts": dict(
+            sorted(Counter(row["disposition"] for row in document_rows).items())
+        ),
         "target_add_rule_count": len(additions),
         "runtime_observation_total": len(runtime_rows),
         "runtime_observation_disposition_counts": dict(
             sorted(Counter(row["disposition"] for row in runtime_rows).items())
         ),
+        "explicit_dispositions": {
+            "groups": explicit_counts,
+            "expected_total": explicit_expected_total,
+            "explicit_total": explicit_actual_total,
+            "result": (
+                "passed"
+                if explicit_actual_total == explicit_expected_total
+                else "blocked"
+            ),
+        },
         "target_sink_traffic_class_counts": dict(
             sorted(Counter(row["traffic_class"] for row in sink_rows).items())
         ),
@@ -858,6 +1071,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--dispositions", type=Path)
     parser.add_argument("--capture-index", type=Path)
     parser.add_argument("--output-root", required=True, type=Path)
+    parser.add_argument("--require-explicit", action="store_true")
     parser.add_argument("--require-closed", action="store_true")
     return parser
 
@@ -879,6 +1093,7 @@ def main() -> int:
             arguments.target_version,
             arguments.dispositions,
             arguments.capture_index,
+            arguments.require_explicit or arguments.require_closed,
         )
         arguments.output_root.mkdir(parents=True, mode=0o700)
         write_private_json(arguments.output_root / "matrix.json", matrix)

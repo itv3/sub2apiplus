@@ -1,0 +1,29 @@
+{
+  "schema_version": "official-client-fw-e-r-disposition-supplement-transition/v1",
+  "base_commit": "205d7f58fa3bc6554d86f47f4b0a53e5d93ceb30",
+  "target_version": "2.1.226",
+  "prior_receipt_path": "docs/egress/maintenance/fw-e-runtime-evidence-supplement/receipt.json",
+  "prior_receipt_sha256": "de556ee14f1cddb62b401f76f2994f475e5c665450e28298a4fba1ca74d291a7",
+  "expected_changed_paths": [
+    "Makefile",
+    "docs/egress/maintenance/fw-e-r-disposition-supplement/manifest.json",
+    "tools/fw_e_r_disposition_transition.py",
+    "tools/official_client_capture/README.md",
+    "tools/official_client_capture/claude_bundle_ast.mjs",
+    "tools/official_client_capture/claude_fw_e_crosswalk.py",
+    "tools/official_client_capture/claude_fw_e_disposition_policy_2_1_226.json",
+    "tools/official_client_capture/claude_fw_e_dispositions.py",
+    "tools/official_client_capture/claude_sink_containment.mjs",
+    "tools/official_client_capture/tests/test_claude_fw_e_completeness.py"
+  ],
+  "rules": [
+    "既有 FW-E 收据只作为历史事实引用，不得原位改写或补签",
+    "控制版 2.1.220 与目标版 2.1.226 必须各完成 S1、S2、S4、A1 的 relay R，且 P、R、J、M 均存在",
+    "DISABLE_TELEMETRY 与 CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC 必须实际为 1；零遥测不计入行为差异",
+    "四方矩阵分母必须包含目标 sink、2.1.88 候选、HitCC 原子线索与直接线索文档、运行坐标，并逐项显式处置",
+    "词法命中只有经 AST containment 证明不是独立发送调用时，才能处置为 not_traffic",
+    "缺少目标 source-to-sink、SPEC 或运行场景的项必须保持 unclassified，不得用默认范围外规则清零",
+    "显式覆盖通过与证据闭集通过是两个独立门禁；存在 unclassified 时 require-closed 必须失败",
+    "本补强不得生成 Snapshot、画像或 EvidenceApprovalFact，不得进入 FW-F，不得部署 DMIT 或修改 Vircs 生产"
+  ]
+}

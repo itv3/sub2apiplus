@@ -31,13 +31,23 @@ FW-E 补强链为：
 
 ```bash
 python3 tools/official_client_capture/claude_fw_e.py analyze-bundles --help
+node tools/official_client_capture/claude_sink_containment.mjs \
+  --bundle <cli.js> --inventory <target-sink-inventory.json> \
+  --ast-inventory <target-native-ast.json> --output <sink-containment.json>
+python3 tools/official_client_capture/claude_fw_e_dispositions.py --help
 python3 tools/official_client_capture/claude_fw_e_crosswalk.py --help
 python3 tools/official_client_capture/claude_fw_e.py rule-assessments --help
 python3 tools/official_client_capture/claude_fw_e.py seal --help
 ```
 
 `analyze-bundles` 自动调用 `claude_bundle_ast.mjs`，再由 `claude_target_inventory.py` 合并 AST 与无截断
-词法候选。`claude_fw_e_crosswalk.py --require-closed` 必须绑定关闭 host 预筛的新 capture index；
-任何目标 sink、历史候选、HitCC 线索或运行 host／path 未处置都会失败。`capture.py`、`capturelib/`、
-场景驱动器、解析器和 finalizer 是其底层依赖，不是另一套升级流程。旧的一次性脚本只有仍被版本场景
-清单引用时才属于正式工具链。
+词法候选。先用 containment 证据证明词法命中的真实 AST 位置，再由人工策略通过
+`claude_fw_e_dispositions.py` 对目标 sink、2.1.88 候选、HitCC 原子线索／直接线索文档和全 host／path
+运行坐标逐项签发；证据不足项必须显式保留为 `unclassified`。capture index 必须同时闭合 P／R／J／M，
+且关闭遥测与非必要流量。
+
+先运行 `claude_fw_e_crosswalk.py --require-explicit`，确认整个分母均已逐项审阅；再运行同一命令的
+`--require-closed`，确认不存在 `unclassified` 后，才可继续 rule assessments 与 seal。显式覆盖通过但
+证据闭集失败是合法阻断状态，不得因此进入 FW-F。`capture.py`、`capturelib/`、场景驱动器、解析器和
+finalizer 是其底层依赖，不是另一套升级流程。旧的一次性脚本只有仍被版本场景清单引用时才属于正式
+工具链。

@@ -36,6 +36,30 @@ const NETWORK_METHODS = new Set([
   "resolve",
   "stream",
 ]);
+const HTTP_CLIENT_METHODS = new Set([
+  "delete",
+  "get",
+  "head",
+  "options",
+  "patch",
+  "post",
+  "put",
+  "request",
+]);
+const HTTP_OPTION_KEYS = new Set([
+  "auth",
+  "baseurl",
+  "headers",
+  "httpsagent",
+  "maxbodylength",
+  "maxcontentlength",
+  "proxy",
+  "refreshoauth",
+  "responseType".toLowerCase(),
+  "signal",
+  "timeout",
+  "validatestatus",
+]);
 const PROCESS_METHODS = new Set(["exec", "execFile", "spawn", "spawnSync"]);
 const ANTHROPIC_RESOURCES = new Set([
   "batches",
@@ -266,6 +290,25 @@ function hasUrlArgument(ts, node) {
   });
 }
 
+function objectLiteralKeys(ts, node) {
+  if (!ts.isObjectLiteralExpression(node)) {
+    return [];
+  }
+  return node.properties.flatMap((property) => {
+    if (!property.name) {
+      return [];
+    }
+    const value = property.name.text ?? property.name.getText();
+    return [String(value).toLowerCase()];
+  });
+}
+
+function hasHttpOptions(ts, node) {
+  return node.arguments.slice(1).some((argument) =>
+    objectLiteralKeys(ts, argument).some((key) => HTTP_OPTION_KEYS.has(key)),
+  );
+}
+
 function classifyCall(ts, node, aliases) {
   const segments = propertySegments(ts, node.expression);
   const lower = segments.map((item) => item.toLowerCase());
@@ -315,6 +358,11 @@ function classifyCall(ts, node, aliases) {
   }
   if (NETWORK_METHODS.has(last) && hasUrlArgument(ts, node)) {
     return "url_bearing_call";
+  }
+  // Minify bundle 常先由同一函数计算 URL，再把局部变量交给 axios/gaxios 一类 wrapper。
+  // 仅凭 `.get(variable)` 会把 Map 等普通调用误判；同时出现 HTTP 方法和强网络选项时才保守收录。
+  if (HTTP_CLIENT_METHODS.has(last) && node.arguments.length > 0 && hasHttpOptions(ts, node)) {
+    return "http_client_method_candidate";
   }
   return null;
 }

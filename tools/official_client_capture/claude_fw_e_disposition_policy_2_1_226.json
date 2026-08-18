@@ -1,0 +1,306 @@
+{
+  "schema_version": "claude-code-fw-e-disposition-review-policy/v1",
+  "policy_id": "claude-code-2.1.226-fw-e-disposition-v1",
+  "target_version": "2.1.226",
+  "input_sha256": {
+    "source_2_1_88": "be04643165027f798cfc48051577bcfcfb1c89cd0a00daf6b09616665737f6f8",
+    "hitcc_2_1_197": "c942f2f52c9254c31cfa80e764bb0d8269b9cca7aeab446afcdee027e6617b5c",
+    "historical_rules": "a1d2d4d8fd492416da711b56854966103d370b4899f1166b4f666f704025879d",
+    "historical_sink_inventory": "bb8c4a8fd7e5465e8a21f2b4611e6d4e99f6e473b01c161e7e4b788850bdc741",
+    "target_sink_inventory": "beac55c469ccc634ad81b09d6a142f049f732cd179cfb0e5af2885744e29688b",
+    "sink_containment": "444cf28b1da6040b5031e3e6f7f7275ffa131156fcde5e478d14e66faad59276",
+    "runtime_capture_index": "4b16a52f9804e96d6454543881333af1305b42d6572682966a0caf6430b52d4a"
+  },
+  "spec_sets": {
+    "message_egress": [
+      "SPEC-BETA-001",
+      "SPEC-BODY-001",
+      "SPEC-BODY-002",
+      "SPEC-BODY-003",
+      "SPEC-BODY-004",
+      "SPEC-BODY-005",
+      "SPEC-BODY-006",
+      "SPEC-BODY-007",
+      "SPEC-BODY-008",
+      "SPEC-BODY-009",
+      "SPEC-BODY-010",
+      "SPEC-BODY-011",
+      "SPEC-BODY-012",
+      "SPEC-BODY-013",
+      "SPEC-BODY-014",
+      "SPEC-BODY-015",
+      "SPEC-BODY-016",
+      "SPEC-CONN-001",
+      "SPEC-CONN-002",
+      "SPEC-CONN-003",
+      "SPEC-EP-001",
+      "SPEC-EP-003",
+      "SPEC-EP-004",
+      "SPEC-HDR-001",
+      "SPEC-HDR-002",
+      "SPEC-HDR-003",
+      "SPEC-HDR-004",
+      "SPEC-HDR-005",
+      "SPEC-HDR-006",
+      "SPEC-HDR-007",
+      "SPEC-HDR-008",
+      "SPEC-HDR-009",
+      "SPEC-HDR-010",
+      "SPEC-HDR-011",
+      "SPEC-HDR-012",
+      "SPEC-HDR-013",
+      "SPEC-HDR-014",
+      "SPEC-HDR-015",
+      "SPEC-HDR-016",
+      "SPEC-HDR-017",
+      "SPEC-HDR-018",
+      "SPEC-HDR-019",
+      "SPEC-HDR-020",
+      "SPEC-HDR-021",
+      "SPEC-HDR-022",
+      "SPEC-HDR-023",
+      "SPEC-HDR-024",
+      "SPEC-HDR-025",
+      "SPEC-HDR-026",
+      "SPEC-PROTO-001",
+      "SPEC-TLS-001",
+      "SPEC-TLS-002",
+      "SPEC-TLS-003"
+    ],
+    "head_api_hello": [
+      "SPEC-EP-002"
+    ]
+  },
+  "target_sinks": {
+    "mapped_strict": [
+      {
+        "sink_id": "TN-SINK-2e2526281a8c0afa-1",
+        "spec_set": "message_egress",
+        "scenario_ids": [
+          "r-a1",
+          "r-s1",
+          "r-s2",
+          "r-s4"
+        ],
+        "migration_decision": "condition_change",
+        "rationale": "目标 SDK 的 /v1/messages?beta=true 低层发送点承接本次四个目标场景；规则只建立候选归属，证据等级仍由后续逐规则评估决定。"
+      },
+      {
+        "sink_id": "TN-SINK-694726066550daf6-1",
+        "spec_set": "message_egress",
+        "scenario_ids": [
+          "r-a1",
+          "r-s1",
+          "r-s2",
+          "r-s4"
+        ],
+        "migration_decision": "condition_change",
+        "rationale": "目标主会话 streaming messages.create 调用点已由 S1、S2、S4、A1 的目标运行证据闭环到实际 /v1/messages 出站。"
+      },
+      {
+        "sink_id": "TN-SINK-d41e7d904daff5d7-1",
+        "spec_set": "head_api_hello",
+        "scenario_ids": [
+          "r-a1",
+          "r-s1",
+          "r-s2",
+          "r-s4"
+        ],
+        "migration_decision": "change",
+        "rationale": "目标 bundle 的 HEAD /api/hello 生命周期探测与四个 R 场景中的原始请求行相互闭环。"
+      }
+    ],
+    "mapped_managed": [
+      {
+        "sink_id": "TN-SINK-00cb6dc7d145f78a-1",
+        "migration_decision": "change",
+        "rationale": "OAuth account settings 属于账号控制面，由非 Persona 受管执行链处理。"
+      },
+      {
+        "sink_id": "TN-SINK-0800323f0ab00f85-1",
+        "migration_decision": "change",
+        "rationale": "OAuth access token 换取 API key 属于账号凭据控制面，不进入 Persona strict wire。"
+      },
+      {
+        "sink_id": "TN-SINK-1178c3fc04786c28-2",
+        "migration_decision": "change",
+        "rationale": "目标运行观测中的 policy_limits 已唯一映射到该动态 HTTP 调用点，按辅助控制面受管。"
+      },
+      {
+        "sink_id": "TN-SINK-18f399f0e5aced5e-1",
+        "migration_decision": "change",
+        "rationale": "messages/count_tokens 是已定性的 non_persona_managed 辅助出站。"
+      },
+      {
+        "sink_id": "TN-SINK-2cc5da3eda59a700-1",
+        "migration_decision": "change",
+        "rationale": "SDK messages.countTokens 调用属于已定性的 non_persona_managed 辅助出站。"
+      },
+      {
+        "sink_id": "TN-SINK-3ce04366ded3f742-1",
+        "migration_decision": "change",
+        "rationale": "OAuth refresh token 撤销属于账号生命周期控制面。"
+      },
+      {
+        "sink_id": "TN-SINK-3d6eec41a3fb34dd-1",
+        "migration_decision": "change",
+        "rationale": "自定义 gateway 的 OAuth refresh_token 交换属于非 Persona 受管凭据路径。"
+      },
+      {
+        "sink_id": "TN-SINK-3df587656c7f2c3e-1",
+        "migration_decision": "change",
+        "rationale": "第一方 OAuth refresh_token 交换属于非 Persona 受管凭据路径。"
+      },
+      {
+        "sink_id": "TN-SINK-5433ce40abd0521b-5",
+        "migration_decision": "change",
+        "rationale": "OAuth profile 查询属于账号控制面，不进入 Persona strict wire。"
+      },
+      {
+        "sink_id": "TN-SINK-6613f2ee3da52e66-1",
+        "migration_decision": "change",
+        "rationale": "带模型、工具和 thinking 的 messages.countTokens 调用属于已定性的辅助出站。"
+      },
+      {
+        "sink_id": "TN-SINK-67ac93b308c704cf-1",
+        "migration_decision": "change",
+        "rationale": "messages.countTokens SDK 调用属于已定性的辅助出站。"
+      },
+      {
+        "sink_id": "TN-SINK-9135e3343ded207b-1",
+        "migration_decision": "change",
+        "rationale": "OAuth authorization_code 交换属于账号授权控制面。"
+      },
+      {
+        "sink_id": "TN-SINK-ca5fd47eeac92fc3-1",
+        "migration_decision": "change",
+        "rationale": "OAuth usage／额度查询属于已定性的 non_persona_managed 辅助出站。"
+      },
+      {
+        "sink_id": "TN-SINK-cce7c897e2d2f6d7-1",
+        "migration_decision": "change",
+        "rationale": "gateway device authorization 属于账号授权控制面。"
+      },
+      {
+        "sink_id": "TN-SINK-d632322e09d489c8-1",
+        "migration_decision": "change",
+        "rationale": "OAuth token validate 属于账号校验控制面。"
+      },
+      {
+        "sink_id": "TN-SINK-eb4c3eabe0a50796-1",
+        "migration_decision": "change",
+        "rationale": "目标运行观测中的 managed settings 已唯一映射到该动态 HTTP 调用点，按辅助控制面受管。"
+      },
+      {
+        "sink_id": "TN-SINK-f6403a40b69799a5-1",
+        "migration_decision": "change",
+        "rationale": "beta messages/count_tokens 低层发送点属于已定性的辅助出站。"
+      }
+    ],
+    "record_only_disabled": [
+      {
+        "sink_id": "TN-SINK-177a4a14d6af1386-1",
+        "traffic_class": "nonessential",
+        "required_gate_symbols": [
+          "va()"
+        ],
+        "migration_decision": "condition_change",
+        "rationale": "GitHub repository visibility 请求受 essential-traffic gate 直接保护；本次隐私模式关闭该流量，只保留可达性记录。"
+      },
+      {
+        "sink_id": "TN-SINK-2a28d26bb602c483-1",
+        "traffic_class": "nonessential",
+        "required_gate_symbols": [
+          "va()"
+        ],
+        "migration_decision": "condition_change",
+        "rationale": "model capabilities 列举受 essential-traffic gate 直接保护，只作 record_only。"
+      },
+      {
+        "sink_id": "TN-SINK-480a5f7027f3bf50-1",
+        "traffic_class": "nonessential",
+        "required_gate_symbols": [
+          "va()"
+        ],
+        "migration_decision": "condition_change",
+        "rationale": "trusted-device enrollment 受 essential-traffic gate 直接保护，只作 record_only。"
+      },
+      {
+        "sink_id": "TN-SINK-52e0007bd0683dc2-1",
+        "traffic_class": "telemetry",
+        "required_gate_symbols": [
+          "CDe()",
+          "va()"
+        ],
+        "migration_decision": "condition_change",
+        "rationale": "GET /api/hello 诊断请求同时受 telemetry 与 essential-traffic gate 直接保护，只作 record_only；它不同于 strict 的 HEAD 生命周期探测。"
+      },
+      {
+        "sink_id": "TN-SINK-58d758405febc0b7-1",
+        "traffic_class": "nonessential",
+        "required_gate_symbols": [
+          "va()"
+        ],
+        "migration_decision": "condition_change",
+        "rationale": "gateway model discovery 受 essential-traffic gate 直接保护，只作 record_only。"
+      },
+      {
+        "sink_id": "TN-SINK-c5a65a8daf112fed-1",
+        "traffic_class": "nonessential",
+        "required_gate_symbols": [
+          "va()"
+        ],
+        "migration_decision": "condition_change",
+        "rationale": "Homebrew update check 受 essential-traffic gate 直接保护，只作 record_only。"
+      }
+    ]
+  },
+  "historical_source_candidates": {
+    "mapped_managed": [
+      "SRC2188-AUTH-001",
+      "SRC2188-COUNT-001",
+      "SRC2188-COUNT-002",
+      "SRC2188-COUNT-003",
+      "SRC2188-COUNT-004",
+      "SRC2188-COUNT-005",
+      "SRC2188-COUNT-006"
+    ]
+  },
+  "hitcc_clues": {
+    "mapped_managed": [
+      "HITCC-EP-002"
+    ]
+  },
+  "runtime_observations": [
+    {
+      "observation_id": "RUN-NET-8edcb651fed033ee781a",
+      "sink_ids": [
+        "TN-SINK-1178c3fc04786c28-2"
+      ],
+      "rationale": "GET /api/claude_code/policy_limits 与目标 wt_ 中的 policy limits 动态 URL 调用点闭环。"
+    },
+    {
+      "observation_id": "RUN-NET-9d258322234d2f03fe42",
+      "sink_ids": [
+        "TN-SINK-2e2526281a8c0afa-1",
+        "TN-SINK-694726066550daf6-1"
+      ],
+      "rationale": "api.anthropic.com:443 的 direct TLS 连接承载同一目标 messages 发送链。"
+    },
+    {
+      "observation_id": "RUN-NET-9db991d4555ea8d42a18",
+      "sink_ids": [
+        "TN-SINK-eb4c3eabe0a50796-1"
+      ],
+      "rationale": "GET /api/claude_code/settings 与目标 Mmp 中的 managed settings 动态 URL 调用点闭环。"
+    },
+    {
+      "observation_id": "RUN-NET-d0f1a7036d6e038eba12",
+      "sink_ids": [
+        "TN-SINK-2e2526281a8c0afa-1",
+        "TN-SINK-694726066550daf6-1"
+      ],
+      "rationale": "POST /v1/messages 与目标主会话调用点及 SDK 低层发送点闭环。"
+    }
+  ]
+}
