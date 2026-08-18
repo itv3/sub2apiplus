@@ -1125,7 +1125,7 @@ Codex IdentityMode、HeaderPolicy、BodyPolicy、BehaviorPolicy 或 fallback 字
 | 无条件 Header Schema | 遗留画像只有 `StaticHeaders` 与 `BetaHeader`，无法表达 21 项条件责任 |
 | finalizer 位于 service | `official_egress_anthropic.go` 未进入共享 Executor／Token／Guard 终态链 |
 | 无 Claude Persona／Compiler／Guard | 当前 `officialegress` persona 和 authority 仍是 Codex 专用 |
-| 入口与出站闭集未封存 | 三类推理入口、物理别名、count_tokens 和管理辅助请求尚无统一 Inventory 与三态处置 |
+| 入口与出站目标尚未批准 | FW-E 已封存 5 个逻辑入口、14 个物理别名和 9 条 OAuth 出站的当前事实；FW-F 尚未批准目标处置 |
 | 三方语义补全未受管 | Persona system／identity 派生与有损 system 角色改写混在遗留 body 重写器中 |
 | 版本门禁不完整 | 版本注释已漂移，业务代码尚可继续泄漏版本指纹 |
 
@@ -1173,18 +1173,18 @@ Guard 按 route、persona、Sink、binding、Release、Profile digest、adapter�
 
 ## 3.6 当前可执行边界
 
-源码存在不能证明 production active。当前 Claude 尚无内容寻址 Snapshot、DialectCompiler、独立
-Executor authority 落点、Guard 覆盖和激活收据：FW-C 完成前不得启动任何 Claude 迁移实现；FW-D
-完成前不能启动受管 stable Campaign；FW-E 完成前不能生成目标画像；FW-F 完成前不能最终冻结多
-Persona 接口或建立 production candidate；FW-H 前不能晋升生产或退休遗留链。当前只能完成 FW-A
-只读基线和人工规则比较；Framework FW-D 工具阻断解除后，才能从 FW-E 查询并冻结目标 stable。
+源码存在不能证明 production active。FW-A～FW-E 已完成：目标 stable 2.1.226 的最终 Campaign 为
+`claude-code-2_1_226-fw-e-final-20260818-93f2edbc9`，受管 Store 停在 `evidence_recorded`，没有
+Evidence／Profile 批准、Claude Snapshot、candidate、Runtime Selector 或 DeploymentFact。当前可以
+进入 FW-F 构造 target-first 画像、样例和最终合同；FW-F 完成前不得建立 production candidate，FW-H
+前不得晋升生产或退休遗留链。
 
 ---
 
 # 第四部分 Claude Code 换版 Campaign
 
 Framework 定义通用 Campaign、candidate、验收、激活和回滚；本部分只补充 Claude 没有官方源码、
-依赖生产 bundle 逆向以及当前工具尚未齐备的差异。
+依赖生产 bundle 逆向的取证边界。
 
 | 流程检查点 | Claude 产物 | 退出事实 |
 |---|---|---|
@@ -1195,7 +1195,7 @@ Framework 定义通用 Campaign、candidate、验收、激活和回滚；本部�
 | 5. 比较验收 | strict 入口的逐规则结果、非迁移入口隔离和 managed 出站断言 | AcceptanceFact 或 validation-only 结论 |
 | 6. 生产闭环 | 三个 Envelope、晋升、正式镜像、canary、切换、回滚、恢复和收据 | DeploymentFact 达到 `restored_active` |
 
-## 4.1 身份、正交事实与当前工具阻断
+## 4.1 身份、正交事实与当前状态
 
 Campaign、candidate、attempt 的通用边界见 Framework §3.2。Claude 还必须冻结：
 
@@ -1228,22 +1228,20 @@ Campaign 只是绑定目标版本、官方产物和环境身份的不可变容�
 |---|---|
 | bundle 提取、锚点和 sink 窗口 | 已实现；窗口不是数据流证明 |
 | 目标 AST／词法 sink 并集与四方矩阵 | 已实现；目标新增项可生成 `add`，任何未分类项阻断封存 |
-| 全 host／path 运行 inventory | 工具已支持；旧 Campaign 使用目标 host 预筛，必须新建 Campaign 重采后才能通过补强门禁 |
+| 全 host／path 运行 inventory | 2.1.226 Campaign 已关闭 host 预筛并闭合 4 个目标运行坐标；换版必须新建 Campaign |
 | 规则／覆盖门禁和 22-run 分析 | 已实现 |
 | R 通道与条件 Header 探针 | 已实现 |
-| TUI／`cli` 驱动 | 未攻克；无 TTY 的 `docker exec` 会卡住 |
-| Campaign 编排、正交事实账本和两段式批准 | **未受管实现**；由 FW-D 建设 |
-| Claude Snapshot、ReleaseArtifact Store 和画像暂存 | 受管 Store 工具由 FW-D 建设；最新 stable 目标 Snapshot 与 2.1.220 rollback fixture 尚未在 FW-F 生成 |
-| candidate 冻结、四阶段封存和逐规则断言 | **未受管实现**；由 FW-D 建设 |
-| 第三方入口集合 | 已知逻辑入口已列于 §3.1；物理别名、消费者、当前／目标处置尚未在 FW-E 封存，FW-F 尚未批准 |
-| Persona 派生与 compatibility 语义账本 | **未受管实现**；FW-D 建工具，FW-F 批准边界，FW-G 迁移实现 |
-| 辅助出站三态与运行断言 | 初始定性见 §3.3；完整 source-to-sink 尚未由 FW-E 封存，FW-F 尚未批准 |
-| 晋升、正式镜像和 production active／rollback 收据 | **未受管实现**；FW-D 建设能力，FW-H 执行 |
+| TUI／`cli` 驱动 | 未纳入本次 `sdk-cli` Campaign；未来纳入时必须以真实 TTY 新建独立 Campaign |
+| Campaign 编排、正交事实账本和两段式批准 | FW-D 已实现；FW-E 只追加 discovery／evidence，批准事实仍为 0 |
+| Claude Snapshot、ReleaseArtifact Store 和画像暂存 | Store 能力已实现；目标 Snapshot 与 2.1.220 fixture 按阶段留给 FW-F |
+| candidate 冻结、四阶段封存和逐规则断言 | 通用能力已实现；尚无 Claude ApprovalFact 或 candidate |
+| 第三方入口集合 | 5 个逻辑入口和 14 个物理别名的当前事实已封存；目标处置只是未批准提案 |
+| Persona 派生与 compatibility 语义账本 | 通用合同已实现；Claude 派生和边界留给 FW-F 批准、FW-G 实现 |
+| 辅助出站三态与运行断言 | 9 条已知 OAuth 出站已封存为 `legacy_observe` 当前事实；目标三态尚未批准 |
+| 晋升、正式镜像和 production active／rollback 收据 | 通用能力已实现；Claude 尚无晋升、激活或部署事实 |
 
-因此当前只能完成官方取证和人工规则比较；不能把终端记录或手写 JSON 当作批准、验收或激活事实。
-补齐顺序以 Framework 为准：FW-A 只读基线 → FW-B 暂定共享合同 → FW-C Codex-only 发布 →
-FW-D 受管工具链 → FW-E 最新 stable 规则取证／闭集 → FW-F target-first 画像／2.1.220 rollback fixture →
-FW-G 完整实现／逐规则断言 → FW-H 晋升／激活收据。
+FW-E 已闭合，但 `evidence_recorded` 只表示当前证据可复算，不等于 EvidenceApprovalFact、画像批准或
+生产就绪。下一步固定为 FW-F target-first 画像／2.1.220 fixture；不得越过 FW-F 直接建立 candidate。
 
 ## 4.2 官方取证、分类与批准
 
@@ -1381,9 +1379,9 @@ inventory 和 selector 未变证明。入库只允许：
 6. candidate 必须冻结 SupportEnvelope，范围外条件由 Planner／Compiler fail-close；
 7. 构建记录 source tree、测试树、Go／Node 依赖、目标架构、image ID 与 OCI digest。
 
-当前阻断：FW-D 尚未形成受管 Store 和独立 candidate 引用落点，FW-E 尚未冻结最新 stable 规则证据，
-FW-F 尚未生成 target-first Snapshot／样例并完成多 Persona 合同冻结；三者完成前，本节不能形成受管
-candidate。
+当前入口条件：FW-D Store 和独立 candidate 引用能力已具备，FW-E EvidencePackage 与两个 Inventory
+已封存。FW-F 尚未生成 target-first Snapshot／样例、2.1.220 fixture 和最终合同，因此当前仍不得形成
+Claude candidate。
 
 ## 4.4 候选验证与正式验收
 
@@ -1415,11 +1413,15 @@ python3 tools/official_client_capture/claude_21220/check_coverage.py
 
 逐规则结果必须唯一覆盖 SupportEnvelope 内的目标全集。`blocked` 或 `regressed_evidence` 只能形成
 validation-only；`ready` 只证明固定 candidate 通过已批准规则，不表示画像已晋升、正式镜像已构建或
-生产已切换。当前 41 项 `observed` 必须逐项选择并留痕：补足目标版本证据达到批准等级；缩小
-SupportEnvelope，使该规则确实不再承担范围内的出站对齐责任并为范围外请求建立 fail-close；或保持
-validation-only。不得把 `observed` 改名、用遗留 wire 佐证，或在仍可到达该规则时仅从清单删除。
+生产已切换。当前目标台账共 7,425 条：376 条 `observed`、12 条 `regressed_evidence`、7,037 条
+`blocked`，没有 `verified`。其中 7,368 条是明确禁止生产的 validation-only 候选。拟纳入
+SupportEnvelope 的规则必须补足目标版本证据达到 `verified`；其余规则只能在范围外 fail-close 已证明时
+排除，或继续保持 validation-only。不得把 `observed／blocked` 改名、用遗留 wire 佐证，或在仍可到达
+该规则时仅从清单删除。
 
-当前阻断：Claude 尚无 candidate 编排、四阶段封存、PAIR 断言和 accept 工具，本节不能形成受管 ready。
+通用 candidate、四阶段封存、PAIR 和 accept 能力已经具备；当前缺少的是 FW-F 的 Claude
+ProfileApprovalFact、ReleaseArtifact 和已批准 SupportEnvelope，因此尚不能形成 Claude candidate 或
+受管 `ready`。
 
 ## 4.5 生产、回滚与证据归档
 
@@ -1457,7 +1459,8 @@ RemovalReceipt。
 权威源码、正式发布镜像、production tree 与私有证据归档全部闭合，才能按 dry-run 清单清理远端；
 生产数据库、Redis、配置、当前／回滚镜像和唯一证据副本永远不在清理范围。
 
-当前阻断：Claude 尚无晋升和激活收据，2.1.220 Campaign／run／提取物仍是唯一证据时不得删除。
+当前边界：Claude 尚无 ProfileApprovalFact、candidate、晋升或激活收据；FW-E 只有 2.1.226
+`evidence_recorded`。2.1.220 Campaign／run／提取物仍需用于 FW-F fixture，在对应替代事实闭合前不得删除。
 
 ---
 

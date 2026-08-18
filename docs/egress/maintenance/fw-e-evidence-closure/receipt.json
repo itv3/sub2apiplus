@@ -1,0 +1,193 @@
+{
+  "schema_version": "official-client-fw-e-evidence-closure-receipt/v1",
+  "manifest_path": "docs/egress/maintenance/fw-e-evidence-closure/manifest.json",
+  "manifest_sha256": "769909744242f554e454f1358006ca28edf0a0e1a3d454d51bc572ead5d10e73",
+  "prior_receipt_path": "docs/egress/maintenance/fw-e-r-disposition-supplement/receipt.json",
+  "prior_receipt_sha256": "95ccca01aa64cba0e82eab9e0f4ed5a5cd5d1039353fdd4344df64382d22d9ac",
+  "implementation_commit": "93f2edbc96287926b5f6fcf1543b923638cf75d1",
+  "closed_at_utc": "2026-08-18T11:31:34Z",
+  "target_version": "2.1.226",
+  "campaign_id": "claude-code-2_1_226-fw-e-final-20260818-93f2edbc9",
+  "local_evidence_bindings": {
+    "official_freeze": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/freeze/freeze.json",
+      "sha256": "947ea92b56bc85b0fc87cc2ef196b627a846c35b925b47fa9730c01ae3381283"
+    },
+    "capture_index_with_r": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/campaign/indexes/capture-index-full-with-r.json",
+      "sha256": "4b16a52f9804e96d6454543881333af1305b42d6572682966a0caf6430b52d4a"
+    },
+    "validation_closure_review": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/validation-closure-v3-93f2edbc9/closure-review.json",
+      "sha256": "446fde20dee21089120145da5b01b5a953d4714c10a179b69c3eb047d66c4fcf"
+    },
+    "validation_candidate_rules": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/validation-closure-v3-93f2edbc9/candidate-rules.json",
+      "sha256": "bda3acbb6ce7138b7f9a4f4c3dfec57406e952a1c11a5fb06795beb838a17ff4"
+    },
+    "validation_dispositions": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/validation-closure-v3-93f2edbc9/dispositions.json",
+      "sha256": "8eadf5d42c0189137445f53a75b041478be3c81c8bb196516ce91b2b8c07dc79"
+    },
+    "hitcc_document_atoms": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/validation-closure-v3-93f2edbc9/document-atoms.json",
+      "sha256": "c003e0e602c0e469fcd904f63ba497755fbd19bf68dea5e2667ff2ec17b344fa"
+    },
+    "validation_source_to_sink": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/validation-closure-v3-93f2edbc9/source-to-sink.json",
+      "sha256": "9cdcf517ca9b9f8599fbc13ffa10c5ac4106d15d5a88ff9883349ec5890e5864"
+    },
+    "cross_source_matrix": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/crosswalk-v7-validation-closed-93f2edbc9/matrix.json",
+      "sha256": "37c7b71a7b2af955507264d54f49db8fb022fdb69fd61291c925fb322e23baa4"
+    },
+    "completeness_closure": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/crosswalk-v7-validation-closed-93f2edbc9/closure.json",
+      "sha256": "a81eb4ae404b7fca8055a2a0be6b1915a7440d421733b9ba1d06e9da787f411d"
+    },
+    "rule_assessments": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/rule-assessments-v4-93f2edbc9/rule-assessments.json",
+      "sha256": "3d9c178caada5ecadf4a991f76cc6b3c5a62f0c7d6fe2b4671a3b8c7bbf643d3"
+    },
+    "seal_plan": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/seal-plan-v2-93f2edbc9/plan.json",
+      "sha256": "e14d47cda70c2f1524e98720e9cd936a5ceddf6176ebea6cba66453e21c8d6de"
+    },
+    "store_metadata": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/control-store-v2-93f2edbc9/store.json",
+      "sha256": "e0db189b74fd70a4b5f987a8dc6dab59d5d7d6bf276bf6133e1c87f5dd06e796"
+    },
+    "campaign": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/control-store-v2-93f2edbc9/campaigns/claude-code-2_1_226-fw-e-final-20260818-93f2edbc9.json",
+      "sha256": "5438bdb60963b923119695957e35728682d0faad9c83d9afd94d60a17113a891"
+    },
+    "evidence_package": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/control-store-v2-93f2edbc9/objects/evidence_package/3c0ba5169888d82b4aef777b8e3aa33480f24fb0b9624c1f2cf6e1e62df78324.json",
+      "sha256": "3c0ba5169888d82b4aef777b8e3aa33480f24fb0b9624c1f2cf6e1e62df78324"
+    },
+    "production_ingress_inventory": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/control-store-v2-93f2edbc9/objects/production_ingress_inventory/79a7dd92df94081f25bf711258f555bc19e44d77b7bcce2a4c36e6a16bbe59d4.json",
+      "sha256": "79a7dd92df94081f25bf711258f555bc19e44d77b7bcce2a4c36e6a16bbe59d4"
+    },
+    "egress_disposition_inventory": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/control-store-v2-93f2edbc9/objects/egress_disposition_inventory/88a8bf50b32aa5f17ebdc9aab0b715b8867b1cfa8342494faaa52ac2a7f87adb.json",
+      "sha256": "88a8bf50b32aa5f17ebdc9aab0b715b8867b1cfa8342494faaa52ac2a7f87adb"
+    },
+    "discovery_fact": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/control-store-v2-93f2edbc9/facts/claude-code-2_1_226-fw-e-final-20260818-93f2edbc9/discovery/00000001-ee2577704e0db0b94c1843d54342c73c24cd87beb3cfa4fb27503ceef17ad3e7.json",
+      "sha256": "ee2577704e0db0b94c1843d54342c73c24cd87beb3cfa4fb27503ceef17ad3e7"
+    },
+    "evidence_fact": {
+      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/control-store-v2-93f2edbc9/facts/claude-code-2_1_226-fw-e-final-20260818-93f2edbc9/evidence/00000001-e245bf98ea66e14b27cf08e38148e25a5862f34ec80387a6dcd3de0c987fa6a8.json",
+      "sha256": "e245bf98ea66e14b27cf08e38148e25a5862f34ec80387a6dcd3de0c987fa6a8"
+    }
+  },
+  "discovery_closure": {
+    "result": "passed",
+    "denominator_counts": {
+      "target_sinks": 505,
+      "historical_source_candidates": 102,
+      "hitcc_clues": 88,
+      "hitcc_documents": 71,
+      "runtime_observations": 4
+    },
+    "denominator_total": 770,
+    "explicit_disposition_total": 770,
+    "unclassified_total": 0,
+    "validation_candidate_count": 7368,
+    "validation_candidate_scopes": {
+      "target_static": 331,
+      "historical_source_2_1_88": 29,
+      "hitcc_clue_2_1_197": 71,
+      "hitcc_document_2_1_197": 6937
+    },
+    "production_eligibility": "denied"
+  },
+  "rule_ledger": {
+    "rule_count": 7425,
+    "verified_count": 0,
+    "observed_count": 376,
+    "regressed_evidence_count": 12,
+    "blocked_count": 7037,
+    "inherit_count": 0
+  },
+  "store": {
+    "root": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/control-store-v2-93f2edbc9",
+    "campaign_identity_sha256": "71e89ac7f3e141aea6c6677fa2db1e8d4c61d8e291ae772a55158dab4039bc3a",
+    "bootstrap_ref": {
+      "object_kind": "bootstrap",
+      "sha256": "d56e540879f5c4c67427c4236cfe1b1d29dc2daef58b2fd8f8693e958dca16df"
+    },
+    "evidence_package_ref": {
+      "object_kind": "evidence_package",
+      "sha256": "3c0ba5169888d82b4aef777b8e3aa33480f24fb0b9624c1f2cf6e1e62df78324"
+    },
+    "production_ingress_inventory_ref": {
+      "object_kind": "production_ingress_inventory",
+      "sha256": "79a7dd92df94081f25bf711258f555bc19e44d77b7bcce2a4c36e6a16bbe59d4"
+    },
+    "egress_disposition_inventory_ref": {
+      "object_kind": "egress_disposition_inventory",
+      "sha256": "88a8bf50b32aa5f17ebdc9aab0b715b8867b1cfa8342494faaa52ac2a7f87adb"
+    },
+    "checkpoint": "evidence_recorded",
+    "fact_counts": {
+      "discovery": 1,
+      "evidence": 1,
+      "approval": 0,
+      "validation": 0,
+      "runtime_selector": 0,
+      "deployment": 0
+    },
+    "object_count": 10,
+    "fact_count": 2,
+    "receipt_count": 0,
+    "external_binding_count": 7464,
+    "external_bindings_verified": true,
+    "replay_result": "passed"
+  },
+  "production_safety": {
+    "production_compare_path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/finalization/production-compare.json",
+    "production_compare_sha256": "20f2d7fa592fa1c98a97a89b5345fbfbe3c0e1dd8797ac99bde90f6146cbba18",
+    "production_compare_result": "passed",
+    "production_difference_count": 0,
+    "production_after_path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/finalization/after.json",
+    "production_after_sha256": "df2129de20962e4367d29a5315d8cca3a418103c6bcff69feb58f685ab667787",
+    "production_image_id": "sha256:9399e13dea365354311476b919b39d2c9d28d538d125fa7fc397745a7101c096",
+    "production_version": "0.1.177-4",
+    "production_revision": "f5e6d8c4ed899297b11b23a80d5384f43aed84ad",
+    "production_restart_count": 0,
+    "runtime_selector_changed": false,
+    "dmit_deployment_performed": false,
+    "vircs_deployment_performed": false
+  },
+  "implementation_proofs": [
+    {
+      "id": "capture-tools",
+      "result": "passed",
+      "passed_test_count": 765,
+      "skipped_test_count": 3
+    },
+    {
+      "id": "official-client-control",
+      "result": "passed",
+      "passed_test_count": 32,
+      "skipped_test_count": 0
+    },
+    {
+      "id": "officialegress-and-routes-go-regression",
+      "result": "passed"
+    },
+    {
+      "id": "final-store-external-replay",
+      "result": "passed"
+    }
+  ],
+  "evidence_approval_issued": false,
+  "profile_or_snapshot_generated": false,
+  "candidate_generated": false,
+  "fw_f_entered": false,
+  "deployment_performed": false,
+  "fw_e_result": "closed",
+  "result": "passed"
+}

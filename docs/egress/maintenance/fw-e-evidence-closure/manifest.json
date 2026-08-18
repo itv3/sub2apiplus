@@ -1,0 +1,22 @@
+{
+  "schema_version": "official-client-fw-e-evidence-closure-transition/v1",
+  "base_commit": "93f2edbc96287926b5f6fcf1543b923638cf75d1",
+  "target_version": "2.1.226",
+  "campaign_id": "claude-code-2_1_226-fw-e-final-20260818-93f2edbc9",
+  "prior_receipt_path": "docs/egress/maintenance/fw-e-r-disposition-supplement/receipt.json",
+  "prior_receipt_sha256": "95ccca01aa64cba0e82eab9e0f4ed5a5cd5d1039353fdd4344df64382d22d9ac",
+  "private_evidence_root": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement",
+  "expected_changed_paths": [
+    "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+    "docs/egress/maintenance/fw-e-evidence-closure/manifest.json",
+    "docs/egress/maintenance/fw-e-evidence-closure/receipt.json"
+  ],
+  "closure_rules": [
+    "四方矩阵的 770 项分母必须全部显式处置，且 unclassified 必须为 0",
+    "证据不足项只能登记为 candidate + add + validation-only，并明确禁止生产",
+    "disposition 与 validation candidate 必须通过 source_ids 双向绑定",
+    "目标 AST observed 只证明调用存在；历史源码与 HitCC blocked 只证明候选已登记",
+    "FW-E Store 只能追加 discovery_recorded 与 evidence_recorded，不得签发任何批准、candidate、selector 或部署事实",
+    "FW-E 闭合不得部署 DMIT、替换 Vircs 镜像、修改 production selector 或进入 FW-F"
+  ]
+}
