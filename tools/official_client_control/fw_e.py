@@ -441,40 +441,48 @@ def _validate_target_proposals(value: Any) -> list[dict[str, Any]]:
     return result
 
 
-def _validate_behavior_comparison_policy(value: Any) -> dict[str, Any]:
-    """冻结 FW-E 行为比较边界，避免把可关闭外围流量误判为协议差异。"""
+def _validate_traffic_observation_policy(value: Any) -> dict[str, Any]:
+    """冻结 FW-E 流量观测边界，禁止把流量是否出现当作一致性维度。"""
 
     if not isinstance(value, dict):
-        raise ControlError("behavior_comparison_policy 必须是对象")
+        raise ControlError("traffic_observation_policy 必须是对象")
     expect_exact_keys(
         value,
         {
-            "comparable_traffic_classes",
+            "traffic_presence_comparison",
+            "strict_wire_traffic_classes",
             "record_only_traffic_classes",
             "absence_of_record_only_traffic",
         },
-        "behavior_comparison_policy",
+        "traffic_observation_policy",
     )
-    comparable = expect_string_list(
-        value["comparable_traffic_classes"],
-        "behavior_comparison_policy.comparable_traffic_classes",
+    presence_comparison = expect_string(
+        value["traffic_presence_comparison"],
+        "traffic_observation_policy.traffic_presence_comparison",
+    )
+    strict_wire = expect_string_list(
+        value["strict_wire_traffic_classes"],
+        "traffic_observation_policy.strict_wire_traffic_classes",
     )
     record_only = expect_string_list(
         value["record_only_traffic_classes"],
-        "behavior_comparison_policy.record_only_traffic_classes",
+        "traffic_observation_policy.record_only_traffic_classes",
     )
     absence = expect_string(
         value["absence_of_record_only_traffic"],
-        "behavior_comparison_policy.absence_of_record_only_traffic",
+        "traffic_observation_policy.absence_of_record_only_traffic",
     )
-    if comparable != ["essential"]:
-        raise ControlError("FW-E 行为一致性只能比较 essential 流量")
+    if presence_comparison != "disabled":
+        raise ControlError("FW-E 禁止把流量类别是否出现作为一致性对比维度")
+    if strict_wire != ["essential"]:
+        raise ControlError("FW-E strict wire／PAIR 范围只能使用 essential 流量")
     if record_only != ["nonessential", "telemetry"]:
         raise ControlError("FW-E 必须把 nonessential 与 telemetry 固定为 record-only")
     if absence != "conformant_not_a_difference":
         raise ControlError("FW-E 零遥测／零非必要流量必须判为允许且不构成差异")
     return {
-        "comparable_traffic_classes": comparable,
+        "traffic_presence_comparison": presence_comparison,
+        "strict_wire_traffic_classes": strict_wire,
         "record_only_traffic_classes": record_only,
         "absence_of_record_only_traffic": absence,
     }
@@ -499,7 +507,7 @@ def seal_fw_e_plan(
             "platforms",
             "entrypoints",
             "default_conditions",
-            "behavior_comparison_policy",
+            "traffic_observation_policy",
             "created_at_utc",
             "discovered_at_utc",
             "discovery_source",
@@ -528,8 +536,8 @@ def seal_fw_e_plan(
     platforms = expect_string_list(plan["platforms"], "platforms")
     entrypoints = expect_string_list(plan["entrypoints"], "entrypoints")
     conditions = expect_string_list(plan["default_conditions"], "default_conditions")
-    comparison_policy = _validate_behavior_comparison_policy(
-        plan["behavior_comparison_policy"]
+    traffic_policy = _validate_traffic_observation_policy(
+        plan["traffic_observation_policy"]
     )
     if "privacy=essential-traffic" not in conditions:
         raise ControlError("FW-E Claude 证据必须冻结 privacy=essential-traffic")
@@ -614,18 +622,21 @@ def seal_fw_e_plan(
         inventory_bindings,
         "FW-E 当前生产入口与 OAuth 出站只读盘点",
     )
-    comparison_policy_ref = store.seal_object(
+    traffic_policy_ref = store.seal_object(
         "operational_evidence",
         {
             "schema_version": "official-client-operational-evidence/v1",
             "persona": persona,
-            "manifest_id": "fw-e-behavior-comparison-policy",
+            "manifest_id": "fw-e-traffic-observation-policy",
             "entries": [
                 {
                     "id": "essential",
                     "facts": {
-                        "disposition": "consistency_dimension",
-                        "absence_policy": "must_follow_rule_evidence",
+                        "disposition": "strict_wire_pair_scope",
+                        "traffic_presence_comparison": traffic_policy[
+                            "traffic_presence_comparison"
+                        ],
+                        "pair_requirement": "required_for_invoked_strict_scenario",
                     },
                 },
                 {
@@ -634,7 +645,10 @@ def seal_fw_e_plan(
                         "disposition": "record_only",
                         "official_control": "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC",
                         "implementation_gate": "isEssentialTrafficOnly()",
-                        "absence_policy": comparison_policy[
+                        "traffic_presence_comparison": traffic_policy[
+                            "traffic_presence_comparison"
+                        ],
+                        "absence_policy": traffic_policy[
                             "absence_of_record_only_traffic"
                         ],
                     },
@@ -645,7 +659,10 @@ def seal_fw_e_plan(
                         "disposition": "record_only",
                         "official_control": "DISABLE_TELEMETRY",
                         "implementation_gate": "isAnalyticsDisabled()",
-                        "absence_policy": comparison_policy[
+                        "traffic_presence_comparison": traffic_policy[
+                            "traffic_presence_comparison"
+                        ],
+                        "absence_policy": traffic_policy[
                             "absence_of_record_only_traffic"
                         ],
                     },
@@ -727,7 +744,7 @@ def seal_fw_e_plan(
             "platforms": platforms,
             "entrypoints": entrypoints,
             "default_conditions": conditions,
-            "comparison_policy_ref": comparison_policy_ref,
+            "comparison_policy_ref": traffic_policy_ref,
             "producer_tool_sha256": tool_sha256,
             "rules": rules,
         },
@@ -758,7 +775,7 @@ def seal_fw_e_plan(
         "bootstrap_ref": bootstrap_ref,
         "discovery_fact_ref": discovery_ref,
         "evidence_package_ref": evidence_package_ref,
-        "behavior_comparison_policy_ref": comparison_policy_ref,
+        "traffic_observation_policy_ref": traffic_policy_ref,
         "evidence_fact_ref": evidence_fact_ref,
         "production_ingress_inventory_ref": ingress_inventory_ref,
         "egress_disposition_inventory_ref": egress_inventory_ref,

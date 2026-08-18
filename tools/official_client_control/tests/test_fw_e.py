@@ -63,8 +63,9 @@ class FWESealTests(unittest.TestCase):
             "platforms": ["linux/amd64"],
             "entrypoints": ["sdk-cli"],
             "default_conditions": ["privacy=essential-traffic"],
-            "behavior_comparison_policy": {
-                "comparable_traffic_classes": ["essential"],
+            "traffic_observation_policy": {
+                "traffic_presence_comparison": "disabled",
+                "strict_wire_traffic_classes": ["essential"],
                 "record_only_traffic_classes": ["nonessential", "telemetry"],
                 "absence_of_record_only_traffic": "conformant_not_a_difference",
             },
@@ -146,7 +147,7 @@ class FWESealTests(unittest.TestCase):
         self.assertEqual(result["approval_state"], "awaiting_explicit_evidence_approval")
         self.assertEqual(result["rule_count"], 1)
         self.assertEqual(
-            result["behavior_comparison_policy_ref"]["object_kind"],
+            result["traffic_observation_policy_ref"]["object_kind"],
             "operational_evidence",
         )
         facts = self.store.list_facts("claude-fw-e-test")
@@ -186,14 +187,10 @@ class FWESealTests(unittest.TestCase):
         with self.assertRaisesRegex(ControlError, "source_absent 只能对应 denied"):
             seal_fw_e_plan(self.store, self.external, plan)
 
-    def test_blocks_telemetry_as_consistency_dimension(self) -> None:
+    def test_blocks_traffic_presence_as_consistency_dimension(self) -> None:
         plan = self.plan()
-        plan["behavior_comparison_policy"] = {
-            "comparable_traffic_classes": ["essential", "telemetry"],
-            "record_only_traffic_classes": ["nonessential"],
-            "absence_of_record_only_traffic": "difference",
-        }
-        with self.assertRaisesRegex(ControlError, "只能比较 essential"):
+        plan["traffic_observation_policy"]["traffic_presence_comparison"] = "enabled"
+        with self.assertRaisesRegex(ControlError, "禁止把流量类别是否出现"):
             seal_fw_e_plan(self.store, self.external, plan)
 
 

@@ -1,7 +1,7 @@
 {
   "schema_version": "official-client-fw-e-workspace-transition-receipt/v1",
   "manifest_path": "docs/egress/maintenance/fw-e-workspace-transition/manifest.json",
-  "manifest_sha256": "4a3adeec5baf7d34b6be0a932528e8ff45df47feb4a6b9237c0ed8ab192b9930",
+  "manifest_sha256": "1ffd02ac81062a7ae09a0cc72cdca7a6bfe0d4616f83b448ea7bb7242c66e1f9",
   "prior_receipt_path": "docs/egress/maintenance/fw-d-control-workspace-transition/receipt.json",
   "prior_receipt_sha256": "d32b7a4ab68afb8e92a757edc3e02d63f7b11e198ecd50a2ac7288df2107ded2",
   "source_transition_path": "docs/egress/maintenance/fw-e-observation-source-transition.json",
@@ -24,8 +24,9 @@
   "production_selector_path_count": 0,
   "claude_persona_artifact_path_count": 0,
   "profile_snapshot_release_path_count": 0,
-  "behavior_comparison_policy": {
-    "comparable_traffic_classes": [
+  "traffic_observation_policy": {
+    "traffic_presence_comparison": "disabled",
+    "strict_wire_traffic_classes": [
       "essential"
     ],
     "record_only_traffic_classes": [
@@ -48,7 +49,7 @@
       "stdout_bytes": 0,
       "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "stderr_bytes": 848,
-      "stderr_sha256": "c4f224441843258cc9dc1b066f06b951bee0770a5a2c3d5a68630c6da89c5086"
+      "stderr_sha256": "4028c8c668227067d6fcb0b78789fc5dc43a1e8a756e9ac4c087e388d5608034"
     },
     {
       "id": "official-client-control",
@@ -62,7 +63,7 @@
       "stdout_bytes": 0,
       "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
       "stderr_bytes": 126,
-      "stderr_sha256": "5d54941adb70d65a3cdc1f342b7ff645a23d235c477aac083a6980780183200f"
+      "stderr_sha256": "d5e19e290dedbd77e1435c9c21200deae1e1f024105992af57b4c90a49888d6a"
     },
     {
       "id": "backend-regression",
@@ -76,7 +77,7 @@
       ],
       "exit_code": 0,
       "stdout_bytes": 8297,
-      "stdout_sha256": "ad0ca622949ddb8ec83736def26ff96a77773178d4f5a6602ff2db9c6f149569",
+      "stdout_sha256": "cf3c202e877756c1e9f614138a990e71cd3c9ca9f9ac398c454b0fbe9a19ecdd",
       "stderr_bytes": 0,
       "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     },

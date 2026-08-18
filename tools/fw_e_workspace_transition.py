@@ -466,7 +466,7 @@ def build_transition(
             "只允许 FW-E 取证、控制面、文档、observation-only 调用点和追加式 transition 进入变更集",
             "不得登记 Claude Persona、ProfileSchema、Snapshot、ReleaseArtifact 或 production strict binding",
             "Codex runtime selector、release catalog、画像和 final wire 必须保持 FW-C 原样",
-            "行为一致性只比较 essential；telemetry 与 nonessential 仅记录且零流量不构成差异",
+            "流量类别是否出现不作一致性维度；essential 只界定 strict wire／PAIR 范围，telemetry 与 nonessential 仅记录且零流量不构成差异",
             "outputs/ 是用户无关未跟踪产物，不进入 manifest 或提交",
         ],
     }
@@ -499,8 +499,9 @@ def build_transition(
         "production_selector_path_count": 0,
         "claude_persona_artifact_path_count": 0,
         "profile_snapshot_release_path_count": 0,
-        "behavior_comparison_policy": {
-            "comparable_traffic_classes": ["essential"],
+        "traffic_observation_policy": {
+            "traffic_presence_comparison": "disabled",
+            "strict_wire_traffic_classes": ["essential"],
             "record_only_traffic_classes": ["nonessential", "telemetry"],
             "absence_of_record_only_traffic": "conformant_not_a_difference",
         },

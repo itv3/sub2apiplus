@@ -45,8 +45,9 @@
 Datadog 与第一方 `event_logging`（`src/services/analytics/`）；
 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 经 `isEssentialTrafficOnly()` 门控 mcp-registry、
 policy_limits、grove、releaseNotes、feedback、modelCapabilities、referral 等非必要请求，
-`privacyLevel.ts` 的定义即“关闭全部非必要网络流量”。因此行为层只比较 essential traffic；外围流量
-只记录，零遥测／零非必要流量不得计为一致性差异。
+`privacyLevel.ts` 的定义即“关闭全部非必要网络流量”。因此，流量类别是否出现这一行为层不作一致性
+对比维度；`essential-traffic` 只界定当前 strict wire／PAIR 的取证范围，不是行为维度。场景被调用时
+仍须逐规则核对实际 essential 请求；外围流量只记录，零遥测／零非必要流量不得计为一致性差异。
 
 bundle 中 essential gate 有 53 个调用点、非 default gate 有 7 个调用点；这些数字只证明静态门控面，
 不能代替运行端点全集。每条规则仍须绑定二进制摘要、平台、入口、模型、账号／feature 条件与观测通道。

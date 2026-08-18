@@ -451,9 +451,11 @@ FW-A 基线 → FW-B 暂定合同 → FW-C Codex-only 发布 → FW-D 通用工�
   entrypoint、隐私模式、默认条件和工具身份；随后相对 2.1.220 执行语义差分、P／R／J／M 哨兵和
   `inherit／change／add／delete／condition_change` 分类，并独立记录 evidence level；最后完成逻辑入口、
   物理别名、消费者和全部 OAuth 出站的 source-to-sink 盘点，只在冻结遗留路径启用 `legacy_observe`。
-- **比较边界**：行为一致性只比较 essential traffic；官方可配置关闭的 telemetry 与 nonessential traffic
-  仅记录配置和可达性，其缺失属于合法状态，不得计为一致性差异或“不像官方客户端”的依据。Claude
-  的 `DISABLE_TELEMETRY` 与 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 是该判据的官方实现依据。
+- **行为层边界**：是否产生某类流量不作为独立的一致性对比维度。`essential traffic` 只界定后续
+  strict wire／PAIR 的场景范围；场景被调用时仍须按 §1.2 核对实际请求的 wire、transport、动态事实、
+  条件分支和跨请求状态。官方可配置关闭的 telemetry 与 nonessential traffic 只记录配置、可达性和
+  观测事实，其缺失属于合法状态，不得计为一致性差异或“不像官方客户端”的依据。Claude 的
+  `DISABLE_TELEMETRY` 与 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 是该判据的官方实现依据。
 - **输出制品**：目标 Campaign 身份、不可变 EvidencePackage、规则迁移台账，以及两个 Inventory 的
   当前事实；拟议 `target_disposition`／出站处置只作为未批准提案，不覆盖当前事实。
 - **退出门禁**：官方产物和目标版本可复算；每条范围候选规则都有迁移决策、证据等级和适用边界；

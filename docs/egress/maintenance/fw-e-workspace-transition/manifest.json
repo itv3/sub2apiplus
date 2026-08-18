@@ -696,8 +696,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 131261,
-        "sha256": "7de7758da1f3eceea495076878fb3d000bef44277dd3037f5af94d6e1c86935e"
+        "size": 131454,
+        "sha256": "6aa3e9ddd76ecad3a80b36963674626ec2cf85303b9ab0a91b893e95a6582eb7"
       },
       "deletion_allowed": false,
       "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
@@ -723,8 +723,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 40121,
-        "sha256": "3cb6e2b10bee0be5d02adb489ba968b2166bfb5806c8f50fff3be254c9e568a3"
+        "size": 40362,
+        "sha256": "8c3989ed256d6204dacdb1f7891d671b4073957fa486f844a5a5b1fc8c8dc279"
       },
       "deletion_allowed": false,
       "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
@@ -777,8 +777,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 24684,
-        "sha256": "2f396901aa924d9f0aaaf5e48e3ec941a78afcf39c48b8d00c689f8858590347"
+        "size": 24799,
+        "sha256": "c3bf46d0129e2131750627676f18e72f3d17d5cf0c25f7e4ebd1d9b61b13f4c4"
       },
       "deletion_allowed": false,
       "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
@@ -1317,8 +1317,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 29752,
-        "sha256": "1e11a5738108d7aa8f4e92479c8b5be47c7d189d49089a5e21a6d29499e31a17"
+        "size": 30630,
+        "sha256": "7b5d9f341878772b40c247468766a6d508fe803441c19d4e5398d6876fd31015"
       },
       "deletion_allowed": false,
       "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
@@ -1425,8 +1425,8 @@
         "existence": "present",
         "file_type": "regular",
         "mode": "0644",
-        "size": 8591,
-        "sha256": "80a8094731381149cbd54ce3bba2b71c9a2fd0bcb576e8fb4c4d3fe62cd339f2"
+        "size": 8507,
+        "sha256": "62fd32c3a57b935a1174201bcd8a96ffd648e3e9ef47235ad3a19ba8a76ab207"
       },
       "deletion_allowed": false,
       "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
@@ -1470,7 +1470,7 @@
     "只允许 FW-E 取证、控制面、文档、observation-only 调用点和追加式 transition 进入变更集",
     "不得登记 Claude Persona、ProfileSchema、Snapshot、ReleaseArtifact 或 production strict binding",
     "Codex runtime selector、release catalog、画像和 final wire 必须保持 FW-C 原样",
-    "行为一致性只比较 essential；telemetry 与 nonessential 仅记录且零流量不构成差异",
+    "流量类别是否出现不作一致性维度；essential 只界定 strict wire／PAIR 范围，telemetry 与 nonessential 仅记录且零流量不构成差异",
     "outputs/ 是用户无关未跟踪产物，不进入 manifest 或提交"
   ]
 }
