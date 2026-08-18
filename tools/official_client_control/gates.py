@@ -700,6 +700,19 @@ class WorkflowGates:
         }
         if egress_current != egress_target:
             raise ControlError("Deployment 后出站 current_disposition 未精确实现批准目标")
+        stale_enforcement = sorted(
+            item["egress_id"]
+            for item in egress["entries"]
+            if item["current_guard_state"] != "enforced"
+            and not (
+                item["current_disposition"] == "denied"
+                and item["current_guard_state"] == "source_absent"
+            )
+        )
+        if stale_enforcement:
+            raise ControlError(
+                "Deployment 后出站仍未进入 enforced：" + ", ".join(stale_enforcement)
+            )
         if facts_by_kind["inventory_current_appended"]:
             raise ControlError("同一 Campaign 的实际 current Inventory 不得覆盖")
 
@@ -782,6 +795,8 @@ class WorkflowGates:
             checkpoint = "profile_approved"
         elif "evidence_approved" in kinds:
             checkpoint = "official_sealed"
+        elif "evidence_recorded" in kinds:
+            checkpoint = "evidence_recorded"
         elif "discovery_recorded" in kinds:
             checkpoint = "discovered"
         else:

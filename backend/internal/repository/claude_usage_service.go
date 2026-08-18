@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	infraerrors "github.com/Wei-Shaw/sub2api/internal/pkg/errors"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/httpclient"
 	"github.com/Wei-Shaw/sub2api/internal/service"
@@ -52,6 +53,17 @@ func (s *claudeUsageService) FetchUsageWithOptions(ctx context.Context, opts *se
 	if err != nil {
 		return nil, fmt.Errorf("create request failed: %w", err)
 	}
+	boundContext, bindErr := bindClaudeLegacyObservationContext(
+		req.Context(),
+		s.usageURL,
+		"api.anthropic.com",
+		"/api/oauth/usage",
+		officialegress.SinkClaudeLegacyUsage,
+	)
+	if bindErr != nil {
+		return nil, fmt.Errorf("bind Claude usage observation sink: %w", bindErr)
+	}
+	req = req.WithContext(boundContext)
 
 	// 设置请求头（与抓包一致，但不设置 Accept-Encoding，让 Go 自动处理压缩）
 	req.Header.Set("Accept", "application/json, text/plain, */*")

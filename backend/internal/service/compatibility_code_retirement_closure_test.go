@@ -328,7 +328,10 @@ func loadMultiPersonaControlTestTransitionV2(
 			t.Fatalf("多 Persona 控制层 v2 测试 transition 路径重复：%s", transition.Path)
 		}
 		current := readCompatibilityClosureSource(t, repoRoot, transition.Path)
-		if got := compatibilityClosureDigest(current); got != transition.ToSHA256 {
+		if got := compatibilityClosureDigest(current); got != transition.ToSHA256 &&
+			!fwEObservationSourceTransitionSupersedes(
+				transition.Path, transition.ToSHA256, got,
+			) {
 			t.Fatalf("多 Persona 控制层 v2 测试源码漂移：path=%s got=%s want=%s",
 				transition.Path, got, transition.ToSHA256)
 		}

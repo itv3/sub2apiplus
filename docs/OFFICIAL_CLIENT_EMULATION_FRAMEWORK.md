@@ -183,6 +183,11 @@ Inventory 必须把 `current_disposition` 与 ApprovalFact 中的 `target_dispos
 | `non_persona_managed` | 不主张官方客户端 wire 等价，但必须登记 route／Sink、认证、endpoint、client、超时、重试、秘密和审计策略 |
 | `denied` | 未批准或不应发出的路径；运行时 fail-close |
 
+Inventory 还必须独立记录 `current_guard_state`：无发送源为 `source_absent`，未纳管历史事实为
+`out_of_scope_passthrough`，已纳管路径按 `legacy_observe → canary_enforce → enforced` 记录。该字段只陈述
+当前事实，不能由目标计划覆盖；FW-E 封存时，有发送源的已知 Persona OAuth 出站不得仍是
+`out_of_scope_passthrough`，只能绑定 observation-only Sink 后记为 `legacy_observe`。
+
 明确排除项不是 `out_of_scope_passthrough` 的同义词。Persona 相关 OAuth 出站即使不属于 strict wire
 责任，也必须进入 `non_persona_managed` 或 `denied`；未知项默认 `denied`。只有与该 Persona 及其
 OAuth 生命周期确实无关的其他产品流量，才可由更外层、另有闭集的产品策略处置。
@@ -446,12 +451,17 @@ FW-A 基线 → FW-B 暂定合同 → FW-C Codex-only 发布 → FW-D 通用工�
   entrypoint、隐私模式、默认条件和工具身份；随后相对 2.1.220 执行语义差分、P／R／J／M 哨兵和
   `inherit／change／add／delete／condition_change` 分类，并独立记录 evidence level；最后完成逻辑入口、
   物理别名、消费者和全部 OAuth 出站的 source-to-sink 盘点，只在冻结遗留路径启用 `legacy_observe`。
+- **比较边界**：行为一致性只比较 essential traffic；官方可配置关闭的 telemetry 与 nonessential traffic
+  仅记录配置和可达性，其缺失属于合法状态，不得计为一致性差异或“不像官方客户端”的依据。Claude
+  的 `DISABLE_TELEMETRY` 与 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 是该判据的官方实现依据。
 - **输出制品**：目标 Campaign 身份、不可变 EvidencePackage、规则迁移台账，以及两个 Inventory 的
   当前事实；拟议 `target_disposition`／出站处置只作为未批准提案，不覆盖当前事实。
 - **退出门禁**：官方产物和目标版本可复算；每条范围候选规则都有迁移决策、证据等级和适用边界；
   两个 Inventory 覆盖全部已知别名／调用方／出站并能报告未知项；观察过程未改变生产流量。
-- **禁止／回退**：本阶段不得定义目标 ProfileSchema、Snapshot、Persona 实现或 production binding；
-  不得用 2.1.220 或遗留输出补足目标 stable 证据。证据不足时缩小候选范围或标为 validation-only。
+- **禁止／回退**：本阶段不得定义目标 ProfileSchema、Snapshot、Persona 实现或 production strict
+  binding；只允许为已冻结遗留调用点追加 `unclassified + legacy_observe` 的 observation-only Sink，且不得
+  主张 Persona 或 wire 等价。不得用 2.1.220 或遗留输出补足目标 stable 证据；证据不足时缩小候选范围
+  或标为 validation-only。
 
 ### 6.3.6 FW-F：target-first 画像、样例与最终合同
 

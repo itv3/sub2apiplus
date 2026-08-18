@@ -1,0 +1,122 @@
+{
+  "schema_version": "official-client-fw-e-workspace-transition-receipt/v1",
+  "manifest_path": "docs/egress/maintenance/fw-e-workspace-transition/manifest.json",
+  "manifest_sha256": "4a3adeec5baf7d34b6be0a932528e8ff45df47feb4a6b9237c0ed8ab192b9930",
+  "prior_receipt_path": "docs/egress/maintenance/fw-d-control-workspace-transition/receipt.json",
+  "prior_receipt_sha256": "d32b7a4ab68afb8e92a757edc3e02d63f7b11e198ecd50a2ac7288df2107ded2",
+  "source_transition_path": "docs/egress/maintenance/fw-e-observation-source-transition.json",
+  "source_transition_sha256": "dce3acb964556fdf6b6c1338463598d9256784831fa2e2667b143224da7dd36b",
+  "base_commit": "7cbbb76e37118479a4618702357b62a95e9c88ec",
+  "transition_entry_count": 54,
+  "added_entry_count": 20,
+  "deleted_entry_count": 0,
+  "scope_counts": {
+    "ci_gate": 1,
+    "control_tool": 7,
+    "documentation": 3,
+    "evidence_test": 7,
+    "evidence_tool": 10,
+    "observation_runtime": 13,
+    "observation_test": 11,
+    "transition": 2
+  },
+  "observation_runtime_path_count": 13,
+  "production_selector_path_count": 0,
+  "claude_persona_artifact_path_count": 0,
+  "profile_snapshot_release_path_count": 0,
+  "behavior_comparison_policy": {
+    "comparable_traffic_classes": [
+      "essential"
+    ],
+    "record_only_traffic_classes": [
+      "nonessential",
+      "telemetry"
+    ],
+    "absence_of_record_only_traffic": "conformant_not_a_difference"
+  },
+  "frozen_orchestrator_sha256": "3e1f383ab8e480d055957158d8171f7a9eaa257b00411c7f9c695f8d24412dcb",
+  "proofs": [
+    {
+      "id": "capture-tools",
+      "category": "evidence_tool",
+      "cwd": ".",
+      "argv": [
+        "make",
+        "test-capture-tools"
+      ],
+      "exit_code": 0,
+      "stdout_bytes": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_bytes": 848,
+      "stderr_sha256": "c4f224441843258cc9dc1b066f06b951bee0770a5a2c3d5a68630c6da89c5086"
+    },
+    {
+      "id": "official-client-control",
+      "category": "control_tool",
+      "cwd": ".",
+      "argv": [
+        "make",
+        "test-official-client-control"
+      ],
+      "exit_code": 0,
+      "stdout_bytes": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_bytes": 126,
+      "stderr_sha256": "5d54941adb70d65a3cdc1f342b7ff645a23d235c477aac083a6980780183200f"
+    },
+    {
+      "id": "backend-regression",
+      "category": "runtime",
+      "cwd": "backend",
+      "argv": [
+        "go",
+        "test",
+        "./...",
+        "-count=1"
+      ],
+      "exit_code": 0,
+      "stdout_bytes": 8297,
+      "stdout_sha256": "ad0ca622949ddb8ec83736def26ff96a77773178d4f5a6602ff2db9c6f149569",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "id": "prior-history",
+      "category": "history",
+      "cwd": ".",
+      "argv": [
+        "python3",
+        "tools/multi_persona_control_workspace_transition.py",
+        "--frozen-only"
+      ],
+      "exit_code": 0,
+      "stdout_bytes": 70,
+      "stdout_sha256": "c94c7d368938214ee78a7d07ad4d9a2fef86e677965f230315a8d2cea8ff3310",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "id": "runtime-selector-unchanged",
+      "category": "runtime_scope",
+      "cwd": ".",
+      "argv": [
+        "git",
+        "diff",
+        "--exit-code",
+        "7cbbb76e37118479a4618702357b62a95e9c88ec",
+        "--",
+        "backend/internal/officialegress/catalogdata/runtime",
+        "backend/internal/officialegress/persona_registry.go",
+        "backend/internal/officialegress/persona_release_catalog.go",
+        "backend/internal/officialegress/release_catalog.go"
+      ],
+      "exit_code": 0,
+      "stdout_bytes": 0,
+      "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stderr_bytes": 0,
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "proof_failure_count": 0,
+  "result": "passed"
+}

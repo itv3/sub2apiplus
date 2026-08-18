@@ -30,7 +30,7 @@
 |---|---|
 | Claude Code firstParty OAuth | 本文对齐目标 |
 | API Key、Bedrock、Vertex、Foundry | 范围外；只可作为差分对照 |
-| 遥测与非必要流量 | 官方允许关闭，不作为“是否像官方客户端”的判据 |
+| 遥测与非必要流量 | 仅记录配置与可达性，不进入行为一致性维度；官方允许关闭，零流量不得计为差异 |
 | 机器环境 | 是证据身份；具体职责与限制见第六部分 |
 
 当前全部运行证据使用 `essential-traffic` 模式。2.1.220 bundle 的隐私状态为：
@@ -40,6 +40,13 @@
 | `essential-traffic` | `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` | 关闭非必要流量；当前端点结论只覆盖此模式 |
 | `no-telemetry` | `DISABLE_TELEMETRY=1` 或 `DO_NOT_TRACK` | 关闭遥测，但不等同于 essential-only |
 | `default` | 上述条件均不成立 | 会放行额外请求，必须另建证据范围 |
+
+这些都是官方原生配置，不是候选规避取证：`DISABLE_TELEMETRY` 经 `isAnalyticsDisabled()` 关闭
+Datadog 与第一方 `event_logging`（`src/services/analytics/`）；
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 经 `isEssentialTrafficOnly()` 门控 mcp-registry、
+policy_limits、grove、releaseNotes、feedback、modelCapabilities、referral 等非必要请求，
+`privacyLevel.ts` 的定义即“关闭全部非必要网络流量”。因此行为层只比较 essential traffic；外围流量
+只记录，零遥测／零非必要流量不得计为一致性差异。
 
 bundle 中 essential gate 有 53 个调用点、非 default gate 有 7 个调用点；这些数字只证明静态门控面，
 不能代替运行端点全集。每条规则仍须绑定二进制摘要、平台、入口、模型、账号／feature 条件与观测通道。
@@ -1127,7 +1134,7 @@ Codex IdentityMode、HeaderPolicy、BodyPolicy、BehaviorPolicy 或 fallback 字
 | `FW-B` | 按 Framework 抽取 Codex 已证明的暂定共享合同并保留 Codex facade | 共享内核无 Codex 专用策略字段；Codex active／rollback final wire 零差异；不宣称多 Persona 已冻结 |
 | `FW-C` | 验证并发布 Codex-only 正式制品，完成回滚、恢复和稳定观察 | 本轮没有新增 Claude Persona／画像／strict 注册；Codex 发布与激活收据闭环 |
 | `FW-D` | 建设 Campaign、正交事实、两段式批准、Snapshot／Release Store、candidate／PAIR、晋升与激活工具链 | 只用 Codex／合成数据自测；越权、摘要变化、范围缺口和收据不匹配均由机器阻断 |
-| `FW-E` | 第一步冻结最新 stable；完成相对 2.1.220 的规则差分、P／R／J／M 和 Evidence 批准，再建立两个 Inventory 与 observation-only Sink | 目标版本和 EvidencePackage 冻结；入口／出站闭集可复算；尚不定义目标 Schema／Snapshot |
+| `FW-E` | 第一步冻结最新 stable；完成相对 2.1.220 的规则差分、P／R／J／M 和 Evidence 记录／封存，再建立两个 Inventory 与 observation-only Sink | 目标版本和 EvidencePackage 冻结；入口／出站闭集可复算；停在 `evidence_recorded`，尚不定义目标 Schema／Snapshot 或签发 Evidence 批准 |
 | `FW-F` | 先由最新 stable 证据生成 Schema、目标 Snapshot、Persona 和不可部署样例，再用同一 Schema／Compiler 表达 2.1.220 rollback fixture；批准 Profile、范围和多 Persona 合同 | target-first 样例与跨 Persona 负例通过；ApprovalFact 完整；Codex 生产收据对应最终合同；selector 未改变 |
 | `FW-G` | 直接完整实现最新 stable 画像，完成受管语义层、辅助出站三态、全部 strict 入口 PAIR、DMIT candidate 和 rollback 验收 | candidate 达到 production-replacement ready；范围内断言和范围外拒绝通过 |
 | `FW-H` | 灰度、回滚、激活；逐入口迁移并在闭集完成后退休遗留链 | DeploymentFact 与运行态一致；无 `retained_legacy` 才能签发迁移完成的 RemovalReceipt |

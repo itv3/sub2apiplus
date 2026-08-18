@@ -133,6 +133,18 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	if err != nil {
 		return nil, nil, err
 	}
+	if tokenType == "oauth" {
+		req, err = bindClaudeFWELegacyObservationRequest(
+			req,
+			officialEgressSinkClaudeLegacyMessages,
+			http.MethodPost,
+			"api.anthropic.com",
+			"/v1/messages",
+		)
+		if err != nil {
+			return nil, nil, fmt.Errorf("绑定 Claude FW-E 推理观察 Sink：%w", err)
+		}
+	}
 
 	// 设置认证头（保持原始大小写）
 	if tokenType == "oauth" {

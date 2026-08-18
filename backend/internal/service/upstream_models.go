@@ -288,6 +288,18 @@ func (s *AccountTestService) buildAnthropicUpstreamModelsRequest(ctx context.Con
 	if err != nil {
 		return nil, newUpstreamModelSyncConfigError("Invalid Anthropic model list URL", err)
 	}
+	if account.IsOAuth() {
+		req, err = bindClaudeFWELegacyObservationRequest(
+			req,
+			officialEgressSinkClaudeLegacyModels,
+			http.MethodGet,
+			"api.anthropic.com",
+			"/v1/models",
+		)
+		if err != nil {
+			return nil, newUpstreamModelSyncConfigError("Failed to bind Claude observation sink", err)
+		}
+	}
 	for key, value := range claude.DefaultHeaders {
 		req.Header.Set(key, value)
 	}

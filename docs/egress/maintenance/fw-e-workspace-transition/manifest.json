@@ -1,0 +1,1476 @@
+{
+  "schema_version": "official-client-fw-e-workspace-transition/v1",
+  "prior_manifest_path": "docs/egress/maintenance/fw-d-control-workspace-transition/manifest.json",
+  "prior_manifest_sha256": "0993579139bdbd15180af83509cee0343177c7ecc958b5199bf9376a27fbd7e4",
+  "base_commit": "7cbbb76e37118479a4618702357b62a95e9c88ec",
+  "candidate_path_count": 54,
+  "transition_entry_count": 54,
+  "transition_path_set_sha256": "e54357ef451de3deda05026415a8ce2bdb119a91b37382013bd400416486080d",
+  "entries": [
+    {
+      "path": "Makefile",
+      "scope": "ci_gate",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 12218,
+        "sha256": "4cdaeb43602fb474700996ed5e827bea0b9fa46191efbd1d746bac1001bf6e42"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 12267,
+        "sha256": "f500b0e80e2ccb086a49c89b032eb2ddea3def2bbd3034de48f67d40499f2ee1"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/catalog.go",
+      "scope": "observation_runtime",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 16580,
+        "sha256": "fa7ff398724c7bf875229a1d4d077187a5c9a21a5a9079eee9ba3a33823b1386"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 16679,
+        "sha256": "71073b0d0f526e812effdab2f5804395df5ad7e7cc0c476428d5e4bed3b2f6e9"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/fw-e-legacy-observation-sinks.json",
+      "scope": "observation_runtime",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 6355,
+        "sha256": "b8ac26dc38ac17db50f11d2bd4cdcf3b3d0467c2d898bd00081eef2958107ef2"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/fw_e_observation_source_transition_test.go",
+      "scope": "observation_test",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 4519,
+        "sha256": "1220cb3e80454304720c8bb4763fe4454926261a75304a05c2bd25e2857e7bd5"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/legacy_baseline_test.go",
+      "scope": "observation_test",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 7630,
+        "sha256": "975cfdfc067d7de91119a3245be196c85142bed979f5e2ad85bcd0701ac65ff0"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 8259,
+        "sha256": "61410d1c8b977e84897ea1ab82c7c10783f97ac42b353d49021acd1d134503a5"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/legacy_observation_catalog.go",
+      "scope": "observation_runtime",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 5079,
+        "sha256": "3eb6057b791c48b96b1a65fb227393a071f8ef7ce1647296a942d76e2f986c9a"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/legacy_observation_catalog_test.go",
+      "scope": "observation_test",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 4391,
+        "sha256": "004aa45793d80179f1bdbb9f28215551fb3c0fda408c3a0fad149db564fd44a5"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/officialegress_test.go",
+      "scope": "observation_test",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 50329,
+        "sha256": "a95e37891da572d87f1891025cd9e220411b561f777811c034379afcbb2e5fc6"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 50305,
+        "sha256": "3865e9bd04be5586fac2df84dc6bbedaffd6a218f22a9256cdef4b701d52116a"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/route_catalog.go",
+      "scope": "observation_runtime",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 17088,
+        "sha256": "84dd70ad8fedfd2341a1cfa358385d8e5e8b0dad963053d5157295809f7dc617"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 17772,
+        "sha256": "193401de9ac21311b02422196b7bd9b9ac10cc59c9a3736a71c21d117bb244a8"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/sink_ids.go",
+      "scope": "observation_runtime",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 2132,
+        "sha256": "3d489e655661f0c4005c95d9dd4938c88ca3944171647921dcf43f98587288cb"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 3060,
+        "sha256": "be9e52e414230651e5afd4a0ba558503ca3d06e001689efe37a22a96d7125a3b"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_v0177_source_transition_test.go",
+      "scope": "observation_test",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 12187,
+        "sha256": "922190f5b186f4fdf32adeaad031ad64ee65a092e54e13ee4452625819463056"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 12722,
+        "sha256": "2503c45f88ba2e9d4cf5b9890fd7484e0123bf9ec32f021b066ac16ebbca576d"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/websocket_tokenless_retirement_test.go",
+      "scope": "observation_test",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 4942,
+        "sha256": "434a15a5919409aea4885ca8ceb827a443c614c33676ea14542ff7e253a9bb5f"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 5046,
+        "sha256": "93e9c73d203dd8c1dd2d073c2d5ee199c581c0b03a8fc31e23280ad70a2d5359"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "backend/internal/repository/claude_legacy_observation.go",
+      "scope": "observation_runtime",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 820,
+        "sha256": "19234d4062f4fb2ee9cf9b8408db41c81c1a926a2ba3f85f13877ab15798dde2"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "backend/internal/repository/claude_legacy_observation_test.go",
+      "scope": "observation_test",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 1075,
+        "sha256": "2f87fcdda08cb20b9f073a191707bdbee7b8d6614d9aa9253cd63d2f9b656501"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "backend/internal/repository/claude_oauth_service.go",
+      "scope": "observation_runtime",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 9699,
+        "sha256": "b45aa0e4658bc1f247080041fb625076f63b6011eba367c0c1ed390a7126fcc0"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 10831,
+        "sha256": "e6871d18ade70395bd49fd268ef748b70dc5317c99899d386f2766c7a74baca0"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "backend/internal/repository/claude_usage_service.go",
+      "scope": "observation_runtime",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 3647,
+        "sha256": "95a0ea81d84e832c5f814ae2baeb3d6c23b21b0fa03435fa23524fef7c31ef4c"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 4020,
+        "sha256": "36b6dac7eb45295c7e67ff6b1f46eff70e2d0252812a8bb1dfd4c63afab93640"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "backend/internal/service/account_test_service.go",
+      "scope": "observation_runtime",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 120198,
+        "sha256": "60d88fe090b4223eeee8b5e3219c928447c62c095c6deef2433276270a2dfa9a"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 120556,
+        "sha256": "be884895e4a230e9e101ce1149dfe4a4f1973af48bb097628dff3e2ff40ea08d"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "backend/internal/service/claude_fw_e_observation_binding_test.go",
+      "scope": "observation_test",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 4377,
+        "sha256": "23987c534e0114448881c97ca56a8bdf95b5723ec3d9218629484b703b91f602"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "backend/internal/service/compatibility_code_retirement_closure_test.go",
+      "scope": "observation_test",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 17274,
+        "sha256": "82f2ed1dc63c5da7002f1041ea4d48dc1c2f1749a8221e09e54db046c2054842"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 17375,
+        "sha256": "6836d0f491155c396be34228437ce0bab3cee835a9343a9b6f2b8921574c1309"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "backend/internal/service/fw_e_observation_source_transition_test.go",
+      "scope": "observation_test",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 2259,
+        "sha256": "9ca338653e809a3dbe55e925c8680c0b902b4100d1653cbe22a1ada143ee9cd5"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "backend/internal/service/gateway_count_tokens.go",
+      "scope": "observation_runtime",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 22704,
+        "sha256": "6fb12c3133aad52f01668a41cf9bb57408c31aa8e2b1a6851ce40814fd10ffce"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 23029,
+        "sha256": "c8b77b9d5e86fea750f4da4a7476d28baa1440130b7a4975466c7abd98fd439f"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "backend/internal/service/gateway_upstream_request.go",
+      "scope": "observation_runtime",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 33780,
+        "sha256": "6b40d364c27c25c42eb917c29fd4ec20f0fda993bdcdfd730c91633a6d8f9b1a"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 34083,
+        "sha256": "0ccb96b3b8315db857458be289d32d8da22f16a568979e6c0a8b41426152f442"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_1a_binding.go",
+      "scope": "observation_runtime",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 2949,
+        "sha256": "fb46acef9881ff09a1b49d5a44f73186341e7eb8970d56435ec5243e7619a894"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 4279,
+        "sha256": "e8d4ba520182cf7c1c07ff533d77a67ffe9900b5cdfae57066e32a10698559fd"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "backend/internal/service/upstream_models.go",
+      "scope": "observation_runtime",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 21890,
+        "sha256": "0679db46bcfc901c54f8b9b746726281845ccd54824106594b8f1f5d1fe77f0c"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 22198,
+        "sha256": "3899766a1c7b9a3bb1d3caee90eb1085e5ce9e01c3ac6f102d5ce49ecfde0e0d"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "backend/internal/service/upstream_v0177_source_transition_test.go",
+      "scope": "observation_test",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 5204,
+        "sha256": "e5896d7b6b681be1aa28c5fb5c377e15947068d68fd4e2ab5abc986625ed2c63"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 5739,
+        "sha256": "9d5dedcb0bfba62bf9a267868ceae010ad8eca5f31324c1dad390ba05921ffa6"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "scope": "documentation",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 130567,
+        "sha256": "ba20eff5b9c78131147daf4868469f1024836ed6b2a3fd41969efc050ed023a4"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 131261,
+        "sha256": "7de7758da1f3eceea495076878fb3d000bef44277dd3037f5af94d6e1c86935e"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+      "scope": "documentation",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 39138,
+        "sha256": "cff41c372f60e5ef56da0db2f11b930fa0269c38234d9a60b84b41c7221bc9db"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 40121,
+        "sha256": "3cb6e2b10bee0be5d02adb489ba968b2166bfb5806c8f50fff3be254c9e568a3"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "docs/egress/maintenance/fw-e-observation-source-transition.json",
+      "scope": "transition",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 6136,
+        "sha256": "dce3acb964556fdf6b6c1338463598d9256784831fa2e2667b143224da7dd36b"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/fw_e_workspace_transition.py",
+      "scope": "transition",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 24684,
+        "sha256": "2f396901aa924d9f0aaaf5e48e3ec941a78afcf39c48b8d00c689f8858590347"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/README.md",
+      "scope": "documentation",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 1220,
+        "sha256": "48b61dad4751914fa49acab6e2fc3c9fa5f8e40ec05fd9faf39a44cadc9988f9"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 1454,
+        "sha256": "0933eabb8a6b04f3644dcdf553ecdabdee2ec6aa193e81cd892cf966a9625f78"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/capture.py",
+      "scope": "evidence_tool",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 52974,
+        "sha256": "413ba5ed34944ee58e8d1cfafaa2bbfe2521dfc9e4317c94e8d17ab728fe7a5d"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 54570,
+        "sha256": "6b16319c2b6a47a8a697d3613bf4b8c192785614b08a8e5a689ceda1c401275a"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/capturelib/environment.py",
+      "scope": "evidence_tool",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 10262,
+        "sha256": "db5ccda5e8f271b777a7652dcfe5a01c25ed858cdc1d7bf66a03718e88a24166"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 11124,
+        "sha256": "b4a825aa1bac8b85815bbb42666a053b55b4bbcbba63c3be08dd24f6d9f2ed0a"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/capturelib/identity.py",
+      "scope": "evidence_tool",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 1872,
+        "sha256": "1574c01cf77ec69698a5b0a5e5c6ec2fa86cd38d1897bde8a5d6f67446efc59a"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 2026,
+        "sha256": "f309270efe791ed4e53c65b58adb2e4fdfcbe734c1550ed5a683785c49ff08e6"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/capturelib/security.py",
+      "scope": "evidence_tool",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 11501,
+        "sha256": "d339708cb78a9ada9b59f97d61c941adf55c4f84acb69ff44bfc0b17f3d8499b"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 12505,
+        "sha256": "9ba325fea09e3aaf14e915d2588bf0d6aba768962ae8be99207b51906de9ebf3"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/claude_fw_e.py",
+      "scope": "evidence_tool",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 45470,
+        "sha256": "3e1f383ab8e480d055957158d8171f7a9eaa257b00411c7f9c695f8d24412dcb"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/claude_fw_e_relay.py",
+      "scope": "evidence_tool",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 41845,
+        "sha256": "ac0ea5ea7373f326d3ed1df1e3fa2115e9f7d683d47845521254776189d97ac7"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/claude_fw_e_runtime_snapshot.py",
+      "scope": "evidence_tool",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 14785,
+        "sha256": "f1459e57690703d735af8abd28da840414a8043c043e7b8c6e8907d85c2be1d0"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/claude_oauth_refresh.py",
+      "scope": "evidence_tool",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 22140,
+        "sha256": "ebea74bb0f16b47e96a71ce475a65100b8f3bb2a93bf7c7ee0cf953c0e742e8b"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/runtime_host_receipt.py",
+      "scope": "evidence_tool",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 6899,
+        "sha256": "7723376d7e8ef1f832ad1e3032b53ecb06ed8526946412f42135f18b10014a8a"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 8503,
+        "sha256": "5af6c6cd26b6815e67f72daaa229539451d29f13d4dd61e523c4192bbf65790a"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/scrub_raw_bytes.py",
+      "scope": "evidence_tool",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 12102,
+        "sha256": "951bb1b277f931ce7f8b5c46ce78f115e66d1cdfd4ca2ad66b3f30da99ccbbd4"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 12107,
+        "sha256": "7462d0c66d57a0ff9159e33248e457922d2a4293f4545e237572273a12907597"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_capture_validation.py",
+      "scope": "evidence_test",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 11345,
+        "sha256": "22b9032667cca75d2bb3066f16f227b05943b75504117cb947616c1aa4689ee0"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 12467,
+        "sha256": "528d2b0fe729e6cf3005066b33133d772f479d6528a2d83d83d0c0ba95280dbb"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_claude_fw_e.py",
+      "scope": "evidence_test",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 6345,
+        "sha256": "d14b2fec945f0db66d8efcd7b324709de9b2b9735d6bbf6e237c196df3774c8a"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_claude_fw_e_relay.py",
+      "scope": "evidence_test",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 13752,
+        "sha256": "1927501f42fa7e9b69fa1470205a909b87e684b082d7bccf77152134edc5e442"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_claude_fw_e_runtime_snapshot.py",
+      "scope": "evidence_test",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 4506,
+        "sha256": "e2abd658087ae84330678f7e3453773e902e2e5bfa5802197755d7704b93e185"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_claude_oauth_refresh.py",
+      "scope": "evidence_test",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 4292,
+        "sha256": "4781e6d073243795cf05926c9af86de4dbf78f26fbcaa609f4643996e7437144"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_environment.py",
+      "scope": "evidence_test",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 7969,
+        "sha256": "9f9a7a38027f677f34f7bac1a4ccb2387d5be987cd0e6a807c4e4ba3e71d79f4"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 9157,
+        "sha256": "ce66d793eede1c0b71e33fe1d71ef40eaf78a51c5ade798d728045c91435df82"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_security.py",
+      "scope": "evidence_test",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 12255,
+        "sha256": "d901d7dd21ebe2bd35300ad076d3ba3f882558889d9d3b6f30bc9bd7cb21daaf"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 12882,
+        "sha256": "7210cb1f4d03909651df1b255fa5f579c317842789ebfb57baf0e78af161e42c"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/contracts.py",
+      "scope": "control_tool",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 78367,
+        "sha256": "3ce23dbc6e824563078a383a1cb543702bdf7d2c4492fb0f4e755be0f157ad38"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 79408,
+        "sha256": "fc903421ec72ff3057ebcbfbbb81b75fee925945205f06677f33d2181faa00f4"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/fw_e.py",
+      "scope": "control_tool",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 29752,
+        "sha256": "1e11a5738108d7aa8f4e92479c8b5be47c7d189d49089a5e21a6d29499e31a17"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/gates.py",
+      "scope": "control_tool",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 41932,
+        "sha256": "059db2b74d3abccf1c42247f52844d5f1a2002373c9489ea797db840dc974a93"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 42524,
+        "sha256": "d5756f17fb8f1c0cc238973de6e3753e943d7d890267afc5cebb7a3f4c28bbb2"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/schemas/inventory.schema.json",
+      "scope": "control_tool",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 3415,
+        "sha256": "fb608aa79ba3811cf7dae415fc164ad08bf107978115297975bdef1249c42c77"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 3580,
+        "sha256": "cbc1370ebbcc33837d9320ee703a9f4bb3252c1881091c1ccc5dfa6292c27954"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/tests/fixtures.py",
+      "scope": "control_tool",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 34684,
+        "sha256": "3a1b488909c0b2367a96233f98f1af2cd23299bf760cafc18d2c7dea9ca07fb3"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 35150,
+        "sha256": "f5b921511237e202ca4b3fa05cf1069173ce7e988037ceb805176599e4567ca9"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/tests/test_fw_e.py",
+      "scope": "control_tool",
+      "before": {
+        "existence": "absent",
+        "file_type": "absent",
+        "mode": "",
+        "size": 0,
+        "sha256": ""
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 8591,
+        "sha256": "80a8094731381149cbd54ce3bba2b71c9a2fd0bcb576e8fb4c4d3fe62cd339f2"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    },
+    {
+      "path": "tools/official_client_control/tests/test_negative_gates.py",
+      "scope": "control_tool",
+      "before": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 7758,
+        "sha256": "2e9f40cbdc3cb90d3fcc23e49827791325e52e42e10c9ebbc8f5bce9e7c1058d"
+      },
+      "after": {
+        "existence": "present",
+        "file_type": "regular",
+        "mode": "0644",
+        "size": 8160,
+        "sha256": "d0633f165e6d629c364fb3ec35af773f67e42ef2f875b89f563408f838ea63b2"
+      },
+      "deletion_allowed": false,
+      "reason": "完成 FW-E 最新 stable 取证、当前 Inventory 与 observation-only 发送面封存，不提前实现 Claude Persona",
+      "machine_proofs": [
+        "capture-tools",
+        "official-client-control",
+        "backend-regression",
+        "prior-history",
+        "runtime-selector-unchanged"
+      ]
+    }
+  ],
+  "rules": [
+    "只允许 FW-E 取证、控制面、文档、observation-only 调用点和追加式 transition 进入变更集",
+    "不得登记 Claude Persona、ProfileSchema、Snapshot、ReleaseArtifact 或 production strict binding",
+    "Codex runtime selector、release catalog、画像和 final wire 必须保持 FW-C 原样",
+    "行为一致性只比较 essential；telemetry 与 nonessential 仅记录且零流量不构成差异",
+    "outputs/ 是用户无关未跟踪产物，不进入 manifest 或提交"
+  ]
+}

@@ -17,6 +17,16 @@ const (
 // upstreamV0177SourceTransitionSupersedes 验证历史摘要是否由本次上游合并的
 // 固定 transition 精确承接。旧退休收据保持不可变，路径和摘要均不得模糊匹配。
 func upstreamV0177SourceTransitionSupersedes(path, priorDigest, currentDigest string) bool {
+	if fwEObservationSourceTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
+	if fwEPrior, ok := fwEObservationSourceTransitionPrior(path, currentDigest); ok {
+		return upstreamV0177SourceTransitionBeforeFWE(path, priorDigest, fwEPrior)
+	}
+	return upstreamV0177SourceTransitionBeforeFWE(path, priorDigest, currentDigest)
+}
+
+func upstreamV0177SourceTransitionBeforeFWE(path, priorDigest, currentDigest string) bool {
 	if multiPersonaControlSourceTransitionV2Supersedes(path, priorDigest, currentDigest) {
 		return true
 	}
@@ -57,6 +67,9 @@ func upstreamV0177SourceTransitionSupersedes(path, priorDigest, currentDigest st
 // runtimeReliabilityRepairTransitionSupersedes 验证本次可靠性修复收据中的精确
 // path/from/to 承接关系，旧收据原文保持不变。
 func runtimeReliabilityRepairTransitionSupersedes(path, priorDigest, currentDigest string) bool {
+	if fwEObservationSourceTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if multiPersonaControlSourceTransitionV2Supersedes(path, priorDigest, currentDigest) {
 		return true
 	}

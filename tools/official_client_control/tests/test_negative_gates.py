@@ -97,6 +97,13 @@ class NegativeGateTests(unittest.TestCase):
         with self.assertRaisesRegex(ControlError, "未闭合"):
             self.fixture.store.seal_object("egress_disposition_inventory", invalid)
 
+    def test_blocks_unknown_egress_guard_state(self) -> None:
+        self._through_profile_objects()
+        invalid = self.fixture.egress_inventory_payload(final=False)
+        invalid["entries"][0]["current_guard_state"] = "unknown"
+        with self.assertRaisesRegex(ControlError, "current_guard_state 非法"):
+            self.fixture.store.seal_object("egress_disposition_inventory", invalid)
+
     def test_blocks_envelope_scope_gap(self) -> None:
         self._through_profile_objects()
         self.fixture.profile_approve()

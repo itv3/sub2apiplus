@@ -260,20 +260,40 @@ def scan_for_secrets(
     file_count = 0
     byte_count = 0
     scan_errors: list[str] = []
+    maximum_needle = max((len(value) for value in needles.values()), default=0)
     for path in sorted(root.rglob("*")):
         if path.is_symlink() or not path.is_file():
             continue
         relative = str(path.relative_to(root))
         file_count += 1
         try:
-            content = path.read_bytes()
+            pending = set(needles)
+            overlap = b""
+            observed_bytes = 0
+            with path.open("rb") as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                    observed_bytes += len(chunk)
+                    window = overlap + chunk
+                    for source in tuple(pending):
+                        if needles[source] in window:
+                            pending.remove(source)
+                    if not pending:
+                        # 找齐当前文件中的全部秘密后仍读到 EOF，使扫描字节数可复算。
+                        for remainder in iter(
+                            lambda: stream.read(1024 * 1024), b""
+                        ):
+                            observed_bytes += len(remainder)
+                        break
+                    overlap = (
+                        window[-(maximum_needle - 1) :]
+                        if maximum_needle > 1
+                        else b""
+                    )
         except OSError:
             scan_errors.append(relative)
             continue
-        byte_count += len(content)
-        sources = sorted(
-            source for source, needle in needles.items() if needle in content
-        )
+        byte_count += observed_bytes
+        sources = sorted(set(needles) - pending)
         if sources:
             matches.append({"path": relative, "secret_sources": sources})
     performed = bool(needles)

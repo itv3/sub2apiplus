@@ -2,6 +2,9 @@ package service
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 )
@@ -15,6 +18,33 @@ func bindOfficialEgressSink(ctx context.Context, sinkID officialegress.SinkID) (
 // Executor attempt；共享层不得补造业务身份或覆盖其它 Sink。
 func preserveOfficialEgressSinkAttempt(ctx context.Context, sinkID officialegress.SinkID) (context.Context, error) {
 	return officialegress.PreserveDefaultSinkAttempt(ctx, sinkID)
+}
+
+// bindClaudeFWELegacyObservationRequest 只在请求精确指向官方 Claude OAuth
+// 物理端点时绑定 observation-only Sink。自定义 base URL、API Key 与其他产品路径
+// 不得因复用同一 HTTP 客户端而被错误归入 Claude OAuth 管理域。
+func bindClaudeFWELegacyObservationRequest(
+	req *http.Request,
+	sinkID officialegress.SinkID,
+	method string,
+	host string,
+	path string,
+) (*http.Request, error) {
+	if req == nil || req.URL == nil {
+		return nil, errors.New("Claude FW-E 遗留观察请求为空")
+	}
+	port := req.URL.Port()
+	if !strings.EqualFold(req.Method, method) ||
+		!strings.EqualFold(req.URL.Scheme, "https") ||
+		!strings.EqualFold(req.URL.Hostname(), host) ||
+		(port != "" && port != "443") || req.URL.EscapedPath() != path {
+		return req, nil
+	}
+	bound, err := bindOfficialEgressSink(req.Context(), sinkID)
+	if err != nil {
+		return nil, err
+	}
+	return req.WithContext(bound), nil
 }
 
 const (
@@ -43,4 +73,8 @@ const (
 	officialEgressSinkPrivacyAccountInfo       = officialegress.SinkWebPrivacyAccountInfo
 	officialEgressSinkPrivacyDisableTraining   = officialegress.SinkWebPrivacyDisableTraining
 	officialEgressSinkPrivacySubscription      = officialegress.SinkWebPrivacySubscription
+	officialEgressSinkClaudeLegacyAccountTest  = officialegress.SinkClaudeLegacyAccountTest
+	officialEgressSinkClaudeLegacyMessages     = officialegress.SinkClaudeLegacyMessagesInference
+	officialEgressSinkClaudeLegacyTokenCount   = officialegress.SinkClaudeLegacyTokenCount
+	officialEgressSinkClaudeLegacyModels       = officialegress.SinkClaudeLegacyUpstreamModels
 )

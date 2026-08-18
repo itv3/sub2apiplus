@@ -348,6 +348,10 @@ func LoadEmbeddedSinkCatalog() (SinkCatalog, error) {
 	if err != nil {
 		return SinkCatalog{}, err
 	}
+	inputs, err = applyLegacyObservationSinks(inputs)
+	if err != nil {
+		return SinkCatalog{}, err
+	}
 	return NewSinkCatalog(inputs)
 }
 

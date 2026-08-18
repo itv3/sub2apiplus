@@ -15,6 +15,11 @@ from .security import file_sha256
 # 测试、缓存和其他专项驱动不进入摘要，避免无关变更使既有证据失效。
 CAPTURE_SOURCE_RELATIVE_PATHS = (
     "capture.py",
+    "claude_oauth_refresh.py",
+    "claude_fw_e_relay.py",
+    "claude_fw_e_runtime_snapshot.py",
+    "upstream_byte_relay.py",
+    "scrub_raw_bytes.py",
     "capturelib/__init__.py",
     "capturelib/analysis.py",
     "capturelib/environment.py",

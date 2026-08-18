@@ -27,8 +27,8 @@ func TestEmbeddedSinkCatalogCurrentStateIsMachineProvable(t *testing.T) {
 		t.Fatalf("加载 Catalog 失败: %v", err)
 	}
 	bindings := catalog.Bindings()
-	if len(bindings) != 32 {
-		t.Fatalf("当前 SinkID 数量=%d，期望 32；冻结 ReleaseBinding 中的 2 条 dead-code 已由 RemovalReceipt 退休", len(bindings))
+	if len(bindings) != 41 {
+		t.Fatalf("当前 SinkID 数量=%d，期望 41；其中 9 条是 FW-E Claude observation-only Sink", len(bindings))
 	}
 
 	var runtimeBindable, legacyReachable, canaryReachable, enforcedReachable, facades, pending, scopeExcluded int
@@ -72,7 +72,7 @@ func TestEmbeddedSinkCatalogCurrentStateIsMachineProvable(t *testing.T) {
 			t.Fatalf("可达 Sink %s 的状态=%s 不符合 1C 收据闭环", binding.ID(), binding.EnforcementState())
 		}
 	}
-	if runtimeBindable != 27 || legacyReachable != 11 || canaryReachable != 0 || enforcedReachable != 21 ||
+	if runtimeBindable != 36 || legacyReachable != 20 || canaryReachable != 0 || enforcedReachable != 21 ||
 		facades != 3 || pending != 0 || scopeExcluded != 2 {
 		t.Fatalf(
 			"分类数量异常：runtime=%d legacy=%d canary=%d enforced=%d facade=%d pending=%d scope_excluded=%d",

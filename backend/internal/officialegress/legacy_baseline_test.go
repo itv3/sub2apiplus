@@ -146,6 +146,18 @@ func TestProvisionalLegacyBaselineMatchesUnfinalizedReachableCatalog(t *testing.
 		if !binding.RuntimeBindable() || binding.EnforcementState() == SinkStatePendingRemoval {
 			continue
 		}
+		// FW-E observation-only Sink 是在 bootstrap 之后追加的 Claude 发送面事实，
+		// 由独立的 FW-E 嵌入清单与 Inventory 约束，不得倒灌并改写历史 legacy
+		// baseline／ceiling。其运行态仍必须保持 unclassified + legacy_observe。
+		if binding.MigrationChangeset() == "FW-E" &&
+			binding.Persona() == PersonaUnclassified &&
+			binding.EndpointEvidence() == EndpointEvidenceExternalPersona {
+			if binding.EnforcementState() != SinkStateLegacyObserve ||
+				binding.MigrationReceiptDigest() != "" {
+				t.Fatalf("FW-E observation-only Sink 越权：%s", binding.ID())
+			}
+			continue
+		}
 		if binding.MigrationReceiptDigest() == "" && binding.EnforcementState() != SinkStateLegacyObserve {
 			t.Fatalf("无 MigrationReceipt 的可达 Sink %s 必须是 legacy_observe", binding.ID())
 		}

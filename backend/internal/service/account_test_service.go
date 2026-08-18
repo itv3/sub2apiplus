@@ -476,6 +476,20 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 		applyAccountTestHeaderOverrides(account, req.Header)
 	}
 
+	if account.IsOAuth() {
+		var bindErr error
+		req, bindErr = bindClaudeFWELegacyObservationRequest(
+			req,
+			officialEgressSinkClaudeLegacyAccountTest,
+			http.MethodPost,
+			"api.anthropic.com",
+			"/v1/messages",
+		)
+		if bindErr != nil {
+			return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to bind Claude observation sink: %s", bindErr.Error()))
+		}
+	}
+
 	// Get proxy URL
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {

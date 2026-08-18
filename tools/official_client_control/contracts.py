@@ -98,6 +98,13 @@ INGRESS_DISPOSITIONS = {
     "rerouted",
 }
 EGRESS_DISPOSITIONS = {"persona_strict", "non_persona_managed", "denied"}
+EGRESS_GUARD_STATES = {
+    "source_absent",
+    "out_of_scope_passthrough",
+    "legacy_observe",
+    "canary_enforce",
+    "enforced",
+}
 
 OBJECT_KINDS = {
     "bootstrap",
@@ -441,6 +448,7 @@ def _validate_evidence_package(value: Any) -> dict[str, Any]:
             "platforms",
             "entrypoints",
             "default_conditions",
+            "comparison_policy_ref",
             "producer_tool_sha256",
             "rules",
         },
@@ -458,6 +466,11 @@ def _validate_evidence_package(value: Any) -> dict[str, Any]:
     expect_string_list(payload["platforms"], "evidence_package.platforms")
     expect_string_list(payload["entrypoints"], "evidence_package.entrypoints")
     expect_string_list(payload["default_conditions"], "evidence_package.default_conditions")
+    comparison_policy_ref = validate_object_ref(
+        payload["comparison_policy_ref"], "evidence_package.comparison_policy_ref"
+    )
+    if comparison_policy_ref["object_kind"] != "operational_evidence":
+        raise ControlError("evidence_package.comparison_policy_ref 必须引用 operational_evidence")
     expect_sha256(payload["producer_tool_sha256"], "evidence_package.producer_tool_sha256")
     rules = payload["rules"]
     if not isinstance(rules, list) or not rules:
@@ -780,6 +793,7 @@ def _validate_egress_disposition_inventory(value: Any) -> dict[str, Any]:
             {
                 "egress_id",
                 "current_disposition",
+                "current_guard_state",
                 "spec_ids",
                 "managed_policy",
                 "runtime_assertion_refs",
@@ -792,6 +806,11 @@ def _validate_egress_disposition_inventory(value: Any) -> dict[str, Any]:
             EGRESS_DISPOSITIONS,
             f"{label}.current_disposition",
         )
+        guard_state = _expect_enum(
+            item["current_guard_state"],
+            EGRESS_GUARD_STATES,
+            f"{label}.current_guard_state",
+        )
         spec_ids = expect_string_list(
             item["spec_ids"], f"{label}.spec_ids", non_empty=False
         )
@@ -802,6 +821,10 @@ def _validate_egress_disposition_inventory(value: Any) -> dict[str, Any]:
             raise ControlError(f"{label} persona_strict 必须绑定 SPEC")
         if disposition != "persona_strict" and spec_ids:
             raise ControlError(f"{label} 非 strict 出站不得伪装成 SPEC 责任")
+        if guard_state == "source_absent" and disposition != "denied":
+            raise ControlError(f"{label} source_absent 只能对应 denied")
+        if guard_state in {"out_of_scope_passthrough", "legacy_observe"} and disposition == "persona_strict":
+            raise ControlError(f"{label} 未 enforce 的路径不得冒充 persona_strict")
         policy = item["managed_policy"]
         if disposition == "non_persona_managed":
             _validate_managed_policy(policy, f"{label}.managed_policy")

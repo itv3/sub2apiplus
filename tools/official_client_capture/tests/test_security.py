@@ -68,6 +68,17 @@ class SecurityTest(unittest.TestCase):
             self.assertNotIn("FIRST-SECRET", str(report))
             self.assertNotIn("SECOND-SECRET", str(report))
 
+    def test_secret_scan_detects_value_across_stream_chunk_boundary(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            secret = b"BOUNDARY-SECRET-VALUE"
+            prefix = b"x" * (1024 * 1024 - 7)
+            (root / "large.bin").write_bytes(prefix + secret + b"tail")
+            report = scan_for_secrets(root, {"oauth_access": secret.decode("ascii")})
+            self.assertFalse(report["passed"])
+            self.assertEqual(report["matches"][0]["path"], "large.bin")
+            self.assertEqual(report["byte_count"], len(prefix) + len(secret) + 4)
+
     def test_argv_manifest_redacts_inline_and_known_secret_values(self) -> None:
         view = argv_manifest_view(
             [

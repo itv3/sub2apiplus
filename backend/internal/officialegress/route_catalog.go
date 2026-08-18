@@ -24,6 +24,7 @@ type officialRouteEntry struct {
 	physicalID  PhysicalRouteID
 	persona     Persona
 	evidence    EndpointEvidence
+	claimsScope bool
 	endpointID  string
 	familyID    string
 	registryKey string
@@ -38,6 +39,10 @@ type PhysicalRouteMatch struct {
 	Method       string
 	HostTemplate string
 	PathTemplate string
+	// ClaimsScope=false 表示该 route 只在调用点携带明确 SinkID 时进入 Guard。
+	// 这避免 FW-E observation-only route 把同端点的 API Key 等其他产品流量
+	// 意外纳入 Claude OAuth 管理域。
+	ClaimsScope bool
 }
 
 // ResolvedOfficialRoute 是一次请求解析出的安全 route 视图。Path 只会返回模板。
@@ -57,6 +62,7 @@ type ResolvedOfficialRoute struct {
 type OfficialRouteCatalog struct {
 	entries         []officialRouteEntry
 	managedPurposes map[Purpose]struct{}
+	scopeClaims     map[PhysicalRouteID]bool
 	physical        PhysicalRouteCatalog
 }
 
@@ -97,6 +103,7 @@ func NewOfficialRouteCatalog(sinks SinkCatalog) (OfficialRouteCatalog, error) {
 	}
 	entries := make([]officialRouteEntry, 0)
 	managedPurposes := make(map[Purpose]struct{})
+	scopeClaims := make(map[PhysicalRouteID]bool)
 	seen := make(map[string]struct{})
 	for _, sink := range sinks.Bindings() {
 		if !sink.RuntimeBindable() {
@@ -111,6 +118,12 @@ func NewOfficialRouteCatalog(sinks SinkCatalog) (OfficialRouteCatalog, error) {
 			entry := officialRouteEntry{
 				sinkID: sink.ID(), route: route, physicalID: physicalID,
 				persona: sink.Persona(), evidence: sink.EndpointEvidence(),
+				claimsScope: !(sink.Persona() == PersonaUnclassified &&
+					sink.EndpointEvidence() == EndpointEvidenceExternalPersona &&
+					sink.EnforcementState() == SinkStateLegacyObserve),
+			}
+			if entry.claimsScope {
+				scopeClaims[physicalID] = true
 			}
 			// 物理路由存在不等于具备 Codex Body/endpoint 画像。只有
 			// codex_profile 证据才能连接 EndpointID 与 ReleaseSelection；
@@ -163,7 +176,8 @@ func NewOfficialRouteCatalog(sinks SinkCatalog) (OfficialRouteCatalog, error) {
 		return catalogRouteIdentity(entries[i].route) < catalogRouteIdentity(entries[j].route)
 	})
 	return OfficialRouteCatalog{
-		entries: entries, managedPurposes: managedPurposes, physical: physical,
+		entries: entries, managedPurposes: managedPurposes,
+		scopeClaims: scopeClaims, physical: physical,
 	}, nil
 }
 
@@ -181,6 +195,7 @@ func (c OfficialRouteCatalog) MatchPhysical(
 	return PhysicalRouteMatch{
 		ID: id, Protocol: key.Protocol, Method: key.Method,
 		HostTemplate: key.Host, PathTemplate: key.Path,
+		ClaimsScope: c.scopeClaims[id],
 	}, true
 }
 
@@ -406,7 +421,7 @@ func (c EgressScopeCatalog) Classify(
 		return ScopeDecision{Scope: EgressScopeManaged, Reason: ScopeReasonTrustedToken,
 			PathTemplate: normalizedScopePath(target), PathSHA256: exactRoutePathSHA256(target)}
 	}
-	if physical, ok := c.routes.MatchPhysical(method, target, protocol); ok {
+	if physical, ok := c.routes.MatchPhysical(method, target, protocol); ok && physical.ClaimsScope {
 		return ScopeDecision{Scope: EgressScopeManaged, Reason: ScopeReasonRegisteredRoute,
 			PathTemplate: physical.PathTemplate, PathSHA256: exactRoutePathSHA256(target)}
 	}

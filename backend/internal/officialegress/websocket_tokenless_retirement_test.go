@@ -109,7 +109,10 @@ func websocketRetirementTransitionSuperseded(t *testing.T, path, priorDigest, cu
 	}
 	for _, transition := range receipt.SourceTransitions {
 		if transition.Path == path && transition.FromSHA256 == priorDigest &&
-			transition.ToSHA256 == currentDigest {
+			(transition.ToSHA256 == currentDigest ||
+				fwEObservationSourceTransitionSupersedes(
+					path, transition.ToSHA256, currentDigest,
+				)) {
 			return true
 		}
 	}

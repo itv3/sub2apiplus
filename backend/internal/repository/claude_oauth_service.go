@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/oauth"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/proxyurl"
@@ -65,6 +66,16 @@ func (s *claudeOAuthService) GetOrganizationUUID(ctx context.Context, sessionKey
 	}
 
 	targetURL := s.baseURL + "/api/organizations"
+	ctx, err = bindClaudeLegacyObservationContext(
+		ctx,
+		targetURL,
+		"claude.ai",
+		"/api/organizations",
+		officialegress.SinkClaudeLegacyCookieOrganizations,
+	)
+	if err != nil {
+		return "", fmt.Errorf("bind Claude organization observation sink: %w", err)
+	}
 	logger.LegacyPrintf("repository.claude_oauth", "[OAuth] Step 1: Getting organization UUID from %s", targetURL)
 
 	resp, err := client.R().
@@ -118,6 +129,16 @@ func (s *claudeOAuthService) GetAuthorizationCode(ctx context.Context, sessionKe
 	}
 
 	authURL := fmt.Sprintf("%s/v1/oauth/%s/authorize", s.baseURL, orgUUID)
+	ctx, err = bindClaudeLegacyObservationContext(
+		ctx,
+		authURL,
+		"claude.ai",
+		fmt.Sprintf("/v1/oauth/%s/authorize", orgUUID),
+		officialegress.SinkClaudeLegacyCookieAuthorize,
+	)
+	if err != nil {
+		return "", fmt.Errorf("bind Claude authorization observation sink: %w", err)
+	}
 
 	reqBody := map[string]any{
 		"response_type":         "code",
@@ -226,6 +247,16 @@ func (s *claudeOAuthService) ExchangeCodeForToken(ctx context.Context, code, cod
 	logger.LegacyPrintf("repository.claude_oauth", "[OAuth] Step 3 Request Body: %s", string(reqBodyJSON))
 
 	var tokenResp oauth.TokenResponse
+	ctx, err = bindClaudeLegacyObservationContext(
+		ctx,
+		s.tokenURL,
+		"platform.claude.com",
+		"/v1/oauth/token",
+		officialegress.SinkClaudeLegacyOAuthExchange,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("bind Claude token exchange observation sink: %w", err)
+	}
 
 	resp, err := client.R().
 		SetContext(ctx).
@@ -265,6 +296,16 @@ func (s *claudeOAuthService) RefreshToken(ctx context.Context, refreshToken, pro
 	}
 
 	var tokenResp oauth.TokenResponse
+	ctx, err = bindClaudeLegacyObservationContext(
+		ctx,
+		s.tokenURL,
+		"platform.claude.com",
+		"/v1/oauth/token",
+		officialegress.SinkClaudeLegacyOAuthRefresh,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("bind Claude token refresh observation sink: %w", err)
+	}
 
 	resp, err := client.R().
 		SetContext(ctx).

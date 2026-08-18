@@ -32,6 +32,7 @@ from tools.official_client_capture.capturelib.environment import (  # noqa: E402
     clean_environment,
     parse_injected_env,
     prepare_api_state,
+    prepare_claude_oauth_state,
 )
 from tools.official_client_capture.capturelib.identity import (  # noqa: E402
     CAPTURE_SOURCE_RELATIVE_PATHS,
@@ -75,6 +76,9 @@ from tools.official_client_capture.capturelib.security import (  # noqa: E402
     scan_for_secrets,
     scrub_known_secret,
     secure_write_text,
+)
+from tools.official_client_capture.claude_oauth_refresh import (  # noqa: E402
+    load_claude_credentials as _load_claude_credentials,
 )
 
 
@@ -658,6 +662,7 @@ def _run_case_scenario(
     api_secret: str | None,
     oauth_claude_secret: str | None,
     claude_api_home: Path | None,
+    claude_oauth_home: Path | None,
     codex_api_home: Path | None,
     scenario: str,
     journal: RecoveryJournal,
@@ -679,6 +684,7 @@ def _run_case_scenario(
         ca_bundle=arguments.ca_bundle,
         oauth_claude_secret=oauth_claude_secret,
         injected_env=getattr(arguments, "injected_env", None),
+        claude_oauth_home=claude_oauth_home,
     )
     capture_environment = clean_environment(os.environ)
     capture_environment.pop(arguments.api_key_env, None)
@@ -851,9 +857,12 @@ def _run_campaign(
     manifest.set_runtime(runtime)
     journal = RecoveryJournal(run_dir)
     claude_api_home: Path | None = None
+    claude_oauth_home: Path | None = None
     codex_api_home: Path | None = None
     if plan.task == "api":
         claude_api_home, codex_api_home = prepare_api_state(run_dir)
+    elif oauth_claude_secret:
+        claude_oauth_home = prepare_claude_oauth_state(run_dir)
 
     def scan_report() -> dict[str, Any]:
         return scan_for_secrets(run_dir, known_secrets)
@@ -879,6 +888,7 @@ def _run_campaign(
                     api_secret=api_secret,
                     oauth_claude_secret=oauth_claude_secret,
                     claude_api_home=claude_api_home,
+                    claude_oauth_home=claude_oauth_home,
                     codex_api_home=codex_api_home,
                     scenario=scenario,
                     journal=journal,
@@ -969,6 +979,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--claude-oauth-token-env",
         default="",
         help="可选的 Claude OAuth token 环境变量名；值只进入 Claude OAuth 子进程",
+    )
+    parser.add_argument(
+        "--claude-credentials-file",
+        type=Path,
+        help=(
+            "从隔离的 Claude credentials 文件安全读取 access/refresh token；"
+            "令牌值只进入当前进程内存和终态精确秘密扫描"
+        ),
     )
     parser.add_argument("--claude-model", default="claude-sonnet-5")
     parser.add_argument("--codex-model", default="gpt-5.6-luna")
@@ -1069,6 +1087,8 @@ def _validate_arguments(
     arguments: argparse.Namespace,
 ) -> tuple[tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
     validate_safe_name(arguments.batch_id, "batch_id")
+    if arguments.claude_credentials_file and not arguments.claude_oauth_token_env:
+        arguments.claude_oauth_token_env = "CLAUDE_CAPTURE_ACCESS_TOKEN"
     if not ENV_NAME_RE.fullmatch(arguments.api_key_env):
         raise ConfigurationError("--api-key-env 必须是合法的大写环境变量名。")
     scenarios = validate_choice_list(
@@ -1151,6 +1171,8 @@ def _validate_arguments(
             raise ConfigurationError(
                 "OAuth 完整 M 必须通过 --claude-oauth-token-env 提供本轮实际访问令牌。"
             )
+    if arguments.claude_credentials_file and arguments.task not in {"oauth", "all"}:
+        raise ConfigurationError("--claude-credentials-file 只允许 OAuth 抓包使用。")
     # 解析后就地固化，后续所有环境构造与 manifest 记录都用这一份，避免两处解析漂移。
     arguments.injected_env = parse_injected_env(arguments.inject_env)
     return scenarios, evidence, subjects
@@ -1193,12 +1215,20 @@ def main() -> int:
             if any(plan.task == "api" for plan in plans)
             else None
         )
-        oauth_claude_secret = (
-            os.environ.get(arguments.claude_oauth_token_env)
-            if arguments.claude_oauth_token_env
-            and any(plan.task == "oauth" for plan in plans)
-            else None
-        )
+        credentials_refresh_secret: str | None = None
+        if arguments.claude_credentials_file and any(
+            plan.task == "oauth" for plan in plans
+        ):
+            oauth_claude_secret, credentials_refresh_secret = _load_claude_credentials(
+                arguments.claude_credentials_file
+            )
+        else:
+            oauth_claude_secret = (
+                os.environ.get(arguments.claude_oauth_token_env)
+                if arguments.claude_oauth_token_env
+                and any(plan.task == "oauth" for plan in plans)
+                else None
+            )
         if any(plan.task == "api" for plan in plans) and not api_secret:
             raise ConfigurationError(
                 f"API 任务缺少环境变量 {arguments.api_key_env}。"
@@ -1208,6 +1238,10 @@ def main() -> int:
                 f"Claude OAuth 任务缺少环境变量 {arguments.claude_oauth_token_env}。"
             )
         additional_secrets: dict[str, str] = {}
+        if credentials_refresh_secret:
+            additional_secrets[
+                "claude_oauth_credentials_refresh_token_value"
+            ] = credentials_refresh_secret
         for name in dict.fromkeys(arguments.secret_scan_env or ()):
             value = os.environ.get(name)
             if not value:

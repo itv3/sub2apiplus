@@ -1,0 +1,107 @@
+{
+  "schema_version": "official-client-fw-e-observation-source-transition/v1",
+  "date": "2026-08-18",
+  "stage": "FW-E",
+  "base_commit": "7cbbb76e37118479a4618702357b62a95e9c88ec",
+  "scope": "为已冻结 Claude OAuth 遗留发送源追加 observation-only Sink，并由精确调用点绑定；不登记 Claude Persona、画像、Snapshot、Release 或 strict production binding。",
+  "source_transitions": [
+    {
+      "path": "backend/internal/officialegress/catalog.go",
+      "from_sha256": "fa7ff398724c7bf875229a1d4d077187a5c9a21a5a9079eee9ba3a33823b1386",
+      "to_sha256": "71073b0d0f526e812effdab2f5804395df5ad7e7cc0c476428d5e4bed3b2f6e9",
+      "reason": "在不可变基础 Catalog 之后追加 FW-E observation-only 清单。"
+    },
+    {
+      "path": "backend/internal/officialegress/legacy_baseline_test.go",
+      "from_sha256": "975cfdfc067d7de91119a3245be196c85142bed979f5e2ad85bcd0701ac65ff0",
+      "to_sha256": "61410d1c8b977e84897ea1ab82c7c10783f97ac42b353d49021acd1d134503a5",
+      "reason": "明确 FW-E 后增观察 Sink 不得倒灌改写 bootstrap 历史基线。"
+    },
+    {
+      "path": "backend/internal/officialegress/officialegress_test.go",
+      "from_sha256": "a95e37891da572d87f1891025cd9e220411b561f777811c034379afcbb2e5fc6",
+      "to_sha256": "3865e9bd04be5586fac2df84dc6bbedaffd6a218f22a9256cdef4b701d52116a",
+      "reason": "把 9 条 FW-E observation-only Sink 纳入当前 Catalog 分类计数。"
+    },
+    {
+      "path": "backend/internal/officialegress/route_catalog.go",
+      "from_sha256": "84dd70ad8fedfd2341a1cfa358385d8e5e8b0dad963053d5157295809f7dc617",
+      "to_sha256": "193401de9ac21311b02422196b7bd9b9ac10cc59c9a3736a71c21d117bb244a8",
+      "reason": "使 observation-only route 仅在调用点携带明确 SinkID 时主张 Guard scope。"
+    },
+    {
+      "path": "backend/internal/officialegress/sink_ids.go",
+      "from_sha256": "3d489e655661f0c4005c95d9dd4938c88ca3944171647921dcf43f98587288cb",
+      "to_sha256": "be9e52e414230651e5afd4a0ba558503ca3d06e001689efe37a22a96d7125a3b",
+      "reason": "集中导出 9 个 unclassified Claude observation-only SinkID。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_v0177_source_transition_test.go",
+      "from_sha256": "922190f5b186f4fdf32adeaad031ad64ee65a092e54e13ee4452625819463056",
+      "to_sha256": "2503c45f88ba2e9d4cf5b9890fd7484e0123bf9ec32f021b066ac16ebbca576d",
+      "reason": "让历史收据只通过本收据的精确 path/from/to 后继关系承接。"
+    },
+    {
+      "path": "backend/internal/officialegress/websocket_tokenless_retirement_test.go",
+      "from_sha256": "434a15a5919409aea4885ca8ceb827a443c614c33676ea14542ff7e253a9bb5f",
+      "to_sha256": "93e9c73d203dd8c1dd2d073c2d5ee199c581c0b03a8fc31e23280ad70a2d5359",
+      "reason": "保持历史退休收据不变，并允许连续承接 FW-E 精确后继摘要。"
+    },
+    {
+      "path": "backend/internal/repository/claude_oauth_service.go",
+      "from_sha256": "b45aa0e4658bc1f247080041fb625076f63b6011eba367c0c1ed390a7126fcc0",
+      "to_sha256": "e6871d18ade70395bd49fd268ef748b70dc5317c99899d386f2766c7a74baca0",
+      "reason": "在四条精确 Claude OAuth 辅助调用点绑定 observation-only Sink。"
+    },
+    {
+      "path": "backend/internal/repository/claude_usage_service.go",
+      "from_sha256": "95a0ea81d84e832c5f814ae2baeb3d6c23b21b0fa03435fa23524fef7c31ef4c",
+      "to_sha256": "36b6dac7eb45295c7e67ff6b1f46eff70e2d0252812a8bb1dfd4c63afab93640",
+      "reason": "在精确 Claude OAuth usage 调用点绑定 observation-only Sink。"
+    },
+    {
+      "path": "backend/internal/service/account_test_service.go",
+      "from_sha256": "60d88fe090b4223eeee8b5e3219c928447c62c095c6deef2433276270a2dfa9a",
+      "to_sha256": "be884895e4a230e9e101ce1149dfe4a4f1973af48bb097628dff3e2ff40ea08d",
+      "reason": "仅为官方端点上的 Claude OAuth account test 绑定观察身份。"
+    },
+    {
+      "path": "backend/internal/service/compatibility_code_retirement_closure_test.go",
+      "from_sha256": "82f2ed1dc63c5da7002f1041ea4d48dc1c2f1749a8221e09e54db046c2054842",
+      "to_sha256": "6836d0f491155c396be34228437ce0bab3cee835a9343a9b6f2b8921574c1309",
+      "reason": "保持历史测试 transition 不变，并由 FW-E 后继收据解释当前摘要。"
+    },
+    {
+      "path": "backend/internal/service/gateway_count_tokens.go",
+      "from_sha256": "6fb12c3133aad52f01668a41cf9bb57408c31aa8e2b1a6851ce40814fd10ffce",
+      "to_sha256": "c8b77b9d5e86fea750f4da4a7476d28baa1440130b7a4975466c7abd98fd439f",
+      "reason": "仅为官方端点上的 Claude OAuth count_tokens 绑定观察身份。"
+    },
+    {
+      "path": "backend/internal/service/gateway_upstream_request.go",
+      "from_sha256": "6b40d364c27c25c42eb917c29fd4ec20f0fda993bdcdfd730c91633a6d8f9b1a",
+      "to_sha256": "0ccb96b3b8315db857458be289d32d8da22f16a568979e6c0a8b41426152f442",
+      "reason": "仅为官方端点上的 Claude OAuth messages 推理绑定观察身份。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_1a_binding.go",
+      "from_sha256": "fb46acef9881ff09a1b49d5a44f73186341e7eb8970d56435ec5243e7619a894",
+      "to_sha256": "e8d4ba520182cf7c1c07ff533d77a67ffe9900b5cdfae57066e32a10698559fd",
+      "reason": "新增精确 scheme/host/port/path 匹配的 FW-E 调用点绑定器。"
+    },
+    {
+      "path": "backend/internal/service/upstream_models.go",
+      "from_sha256": "0679db46bcfc901c54f8b9b746726281845ccd54824106594b8f1f5d1fe77f0c",
+      "to_sha256": "3899766a1c7b9a3bb1d3caee90eb1085e5ce9e01c3ac6f102d5ce49ecfde0e0d",
+      "reason": "仅为官方端点上的 Claude OAuth upstream models 绑定观察身份。"
+    },
+    {
+      "path": "backend/internal/service/upstream_v0177_source_transition_test.go",
+      "from_sha256": "e5896d7b6b681be1aa28c5fb5c377e15947068d68fd4e2ab5abc986625ed2c63",
+      "to_sha256": "9d5dedcb0bfba62bf9a267868ceae010ad8eca5f31324c1dad390ba05921ffa6",
+      "reason": "让 service 历史收据只通过 FW-E 精确后继关系承接。"
+    }
+  ],
+  "allowed_wire_deltas": [],
+  "result": "passed"
+}

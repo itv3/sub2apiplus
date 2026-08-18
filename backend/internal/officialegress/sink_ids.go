@@ -1,7 +1,7 @@
 package officialegress
 
-// 变更集 1A 允许作为运行时 binding key 的 27 个业务 SinkID。
-// facade、pending_removal 与受审 scope-exclusion ID 有意不导出，防止共享层误用。
+// 这里集中导出允许作为运行时 binding key 的业务 SinkID。facade、pending_removal
+// 与受审 scope-exclusion ID 有意不导出，防止共享层误用。
 const (
 	SinkCodexAdminTestCompact         SinkID = "codex.admin_test.compact"
 	SinkCodexAdminTestResponses       SinkID = "codex.admin_test.responses"
@@ -30,4 +30,16 @@ const (
 	SinkWebPrivacyAccountInfo         SinkID = "web.privacy.account_info"
 	SinkWebPrivacyDisableTraining     SinkID = "web.privacy.disable_training"
 	SinkWebPrivacySubscription        SinkID = "web.privacy.subscription"
+
+	// 以下 Sink 只为 FW-E 冻结遗留 Claude OAuth 调用点提供 observation-only
+	// 身份；它们仍是 unclassified，不代表 Claude Persona、画像或 strict 已登记。
+	SinkClaudeLegacyAccountTest         SinkID = "unclassified.claude.account_test"
+	SinkClaudeLegacyCookieAuthorize     SinkID = "unclassified.claude.cookie_authorize"
+	SinkClaudeLegacyCookieOrganizations SinkID = "unclassified.claude.cookie_organizations"
+	SinkClaudeLegacyMessagesInference   SinkID = "unclassified.claude.messages_inference"
+	SinkClaudeLegacyOAuthExchange       SinkID = "unclassified.claude.oauth_exchange"
+	SinkClaudeLegacyOAuthRefresh        SinkID = "unclassified.claude.oauth_refresh"
+	SinkClaudeLegacyTokenCount          SinkID = "unclassified.claude.token_count"
+	SinkClaudeLegacyUpstreamModels      SinkID = "unclassified.claude.upstream_models"
+	SinkClaudeLegacyUsage               SinkID = "unclassified.claude.usage"
 )

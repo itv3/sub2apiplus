@@ -249,17 +249,6 @@ class CaptureShapeValidationTest(unittest.TestCase):
         runtime_image = "capture.example/tool@sha256:" + "a" * 64
         container_id = "b" * 64
         hostname = "capture-cli"
-        container_payload = [
-            {
-                "Id": container_id,
-                "Image": "sha256:" + "c" * 64,
-                "State": {
-                    "Running": True,
-                    "StartedAt": "2026-08-01T00:00:00Z",
-                },
-                "Config": {"Hostname": hostname},
-            }
-        ]
         image_payload = [
             {
                 "RepoDigests": [runtime_image],
@@ -267,18 +256,51 @@ class CaptureShapeValidationTest(unittest.TestCase):
         ]
         docker_server = {"Version": "29.6.1", "Os": "linux", "Arch": "amd64"}
         tool_root = Path(__file__).resolve().parents[1]
-        with patch(
-            "tools.official_client_capture.runtime_host_receipt._docker_json",
-            side_effect=[container_payload, image_payload, docker_server],
-        ):
-            receipt = build_receipt(
-                container="capture-cli",
-                runtime_image=runtime_image,
-                tool_root=tool_root,
-                run_nonce="d" * 64,
-            )
+        with tempfile.TemporaryDirectory() as directory:
+            hosts = Path(directory) / "hosts"
+            resolv = Path(directory) / "resolv.conf"
+            hosts.write_text("127.0.0.1 localhost\n", encoding="utf-8")
+            resolv.write_text("nameserver 127.0.0.11\n", encoding="utf-8")
+            container_payload = [
+                {
+                    "Id": container_id,
+                    "Image": "sha256:" + "c" * 64,
+                    "State": {
+                        "Running": True,
+                        "StartedAt": "2026-08-01T00:00:00Z",
+                    },
+                    "Config": {"Hostname": hostname},
+                    "HostConfig": {"NetworkMode": "capture-network"},
+                    "NetworkSettings": {
+                        "Networks": {
+                            "capture-network": {
+                                "NetworkID": "e" * 64,
+                                "EndpointID": "f" * 64,
+                                "Gateway": "172.20.0.1",
+                                "IPAddress": "172.20.0.2",
+                            }
+                        }
+                    },
+                    "HostsPath": str(hosts),
+                    "ResolvConfPath": str(resolv),
+                }
+            ]
+            with patch(
+                "tools.official_client_capture.runtime_host_receipt._docker_json",
+                side_effect=[container_payload, image_payload, docker_server],
+            ):
+                receipt = build_receipt(
+                    container="capture-cli",
+                    runtime_image=runtime_image,
+                    tool_root=tool_root,
+                    run_nonce="d" * 64,
+                )
         self.assertTrue(receipt["repo_digest_verified"])
         self.assertEqual(receipt["container"]["hostname"], hostname)
+        self.assertEqual(
+            receipt["container"]["network"]["bindings"][0]["name"],
+            "capture-network",
+        )
         self.assertEqual(len(receipt["capture_source_bundle"]["sha256"]), 64)
 
 

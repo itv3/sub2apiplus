@@ -519,6 +519,18 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	if err != nil {
 		return nil, nil, err
 	}
+	if tokenType == "oauth" {
+		req, err = bindClaudeFWELegacyObservationRequest(
+			req,
+			officialEgressSinkClaudeLegacyTokenCount,
+			http.MethodPost,
+			"api.anthropic.com",
+			"/v1/messages/count_tokens",
+		)
+		if err != nil {
+			return nil, nil, fmt.Errorf("绑定 Claude FW-E count_tokens 观察 Sink：%w", err)
+		}
+	}
 
 	// 设置认证头（保持原始大小写）
 	if tokenType == "oauth" {

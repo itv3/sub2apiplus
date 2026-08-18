@@ -11,8 +11,12 @@ from tools.official_client_capture.capturelib.environment import (
     environment_manifest_view,
     parse_injected_env,
     prepare_api_state,
+    prepare_claude_oauth_state,
 )
-from tools.official_client_capture.capturelib.model import build_campaign_plan
+from tools.official_client_capture.capturelib.model import (
+    ConfigurationError,
+    build_campaign_plan,
+)
 
 
 class EnvironmentTest(unittest.TestCase):
@@ -139,33 +143,55 @@ class EnvironmentTest(unittest.TestCase):
             self.assertFalse((codex_home / "auth.json").exists())
 
     def test_explicit_oauth_token_only_enters_claude_oauth_process(self) -> None:
-        claude_environment = build_case_environment(
-            case=self._case("oauth", "claude"),
-            source=self.source,
-            api_secret=None,
-            api_key_env="CUSTOM_CAPTURE_KEY",
-            claude_api_home=None,
-            codex_api_home=None,
-            proxy_url="http://127.0.0.1:18080",
-            ca_bundle=Path("/opt/mitm/ca.pem"),
-            oauth_claude_secret="fresh-oauth-token",
-        )
-        codex_environment = build_case_environment(
-            case=self._case("oauth", "codex"),
-            source=self.source,
-            api_secret=None,
-            api_key_env="CUSTOM_CAPTURE_KEY",
-            claude_api_home=None,
-            codex_api_home=None,
-            proxy_url="http://127.0.0.1:18080",
-            ca_bundle=Path("/opt/mitm/ca.pem"),
-            oauth_claude_secret="fresh-oauth-token",
-        )
-        self.assertEqual(
-            claude_environment["CLAUDE_CODE_OAUTH_TOKEN"],
-            "fresh-oauth-token",
-        )
-        self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", codex_environment)
+        with tempfile.TemporaryDirectory() as directory:
+            oauth_home = prepare_claude_oauth_state(Path(directory))
+            claude_environment = build_case_environment(
+                case=self._case("oauth", "claude"),
+                source=self.source,
+                api_secret=None,
+                api_key_env="CUSTOM_CAPTURE_KEY",
+                claude_api_home=None,
+                codex_api_home=None,
+                proxy_url="http://127.0.0.1:18080",
+                ca_bundle=Path("/opt/mitm/ca.pem"),
+                oauth_claude_secret="fresh-oauth-token",
+                claude_oauth_home=oauth_home,
+            )
+            codex_environment = build_case_environment(
+                case=self._case("oauth", "codex"),
+                source=self.source,
+                api_secret=None,
+                api_key_env="CUSTOM_CAPTURE_KEY",
+                claude_api_home=None,
+                codex_api_home=None,
+                proxy_url="http://127.0.0.1:18080",
+                ca_bundle=Path("/opt/mitm/ca.pem"),
+                oauth_claude_secret="fresh-oauth-token",
+                claude_oauth_home=oauth_home,
+            )
+            self.assertEqual(
+                claude_environment["CLAUDE_CODE_OAUTH_TOKEN"],
+                "fresh-oauth-token",
+            )
+            self.assertEqual(claude_environment["HOME"], str(oauth_home))
+            self.assertEqual(
+                claude_environment["CLAUDE_CONFIG_DIR"], str(oauth_home)
+            )
+            self.assertNotIn("CLAUDE_CODE_OAUTH_TOKEN", codex_environment)
+
+    def test_runtime_oauth_token_requires_private_home(self) -> None:
+        with self.assertRaisesRegex(ConfigurationError, "逐轮私有 HOME"):
+            build_case_environment(
+                case=self._case("oauth", "claude"),
+                source=self.source,
+                api_secret=None,
+                api_key_env="CUSTOM_CAPTURE_KEY",
+                claude_api_home=None,
+                codex_api_home=None,
+                proxy_url="http://127.0.0.1:18080",
+                ca_bundle=Path("/opt/mitm/ca.pem"),
+                oauth_claude_secret="fresh-oauth-token",
+            )
 
     def test_environment_manifest_view_covers_all_keys_without_secret_hash(self) -> None:
         view = environment_manifest_view(

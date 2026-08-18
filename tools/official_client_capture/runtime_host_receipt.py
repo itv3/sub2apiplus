@@ -89,6 +89,19 @@ def build_receipt(
     image_id = str(item.get("Image", ""))
     state = item.get("State") if isinstance(item.get("State"), dict) else {}
     config = item.get("Config") if isinstance(item.get("Config"), dict) else {}
+    host_config = (
+        item.get("HostConfig") if isinstance(item.get("HostConfig"), dict) else {}
+    )
+    network_settings = (
+        item.get("NetworkSettings")
+        if isinstance(item.get("NetworkSettings"), dict)
+        else {}
+    )
+    networks_raw = (
+        network_settings.get("Networks")
+        if isinstance(network_settings.get("Networks"), dict)
+        else {}
+    )
     hostname = str(config.get("Hostname", ""))
     if not CONTAINER_ID_RE.fullmatch(container_id):
         raise ConfigurationError("Docker 容器 ID 格式非法。")
@@ -101,6 +114,30 @@ def build_receipt(
     # 再通过 mountinfo 的 Docker 容器 ID 与当前 hostname 双重交叉验证。
     if not hostname:
         raise ConfigurationError("容器 hostname 为空。")
+
+    network_bindings = [
+        {
+            "name": name,
+            "network_id": str(network.get("NetworkID", "")),
+            "endpoint_id": str(network.get("EndpointID", "")),
+            "gateway": str(network.get("Gateway", "")),
+            "ip_address": str(network.get("IPAddress", "")),
+            "global_ipv6_address": str(network.get("GlobalIPv6Address", "")),
+        }
+        for name, network in sorted(networks_raw.items())
+        if isinstance(network, dict)
+    ]
+    hosts_path = Path(str(item.get("HostsPath", "")))
+    resolv_path = Path(str(item.get("ResolvConfPath", "")))
+    if (
+        not hosts_path.is_absolute()
+        or hosts_path.is_symlink()
+        or not hosts_path.is_file()
+        or not resolv_path.is_absolute()
+        or resolv_path.is_symlink()
+        or not resolv_path.is_file()
+    ):
+        raise ConfigurationError("Docker 管理的 hosts/resolv.conf 路径不可复核。")
 
     images = _docker_json(["image", "inspect", image_id])
     if not isinstance(images, list) or len(images) != 1 or not isinstance(images[0], dict):
@@ -125,6 +162,12 @@ def build_receipt(
             "id": container_id,
             "hostname": hostname,
             "started_at_utc": str(state.get("StartedAt", "")),
+            "network": {
+                "mode": str(host_config.get("NetworkMode", "")),
+                "bindings": network_bindings,
+                "hosts_sha256": file_sha256(hosts_path),
+                "resolv_conf_sha256": file_sha256(resolv_path),
+            },
         },
         "runtime_image_reference": runtime_image,
         "runtime_image_id": image_id,

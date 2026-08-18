@@ -250,6 +250,22 @@ def prepare_api_state(run_dir: Path) -> tuple[Path, Path]:
     return claude_home, codex_home
 
 
+def prepare_claude_oauth_state(run_dir: Path) -> Path:
+    """为运行时 OAuth token 建立不含长期凭据的逐轮 Claude 私有 HOME。"""
+
+    state_root = ensure_private_directory(run_dir / "state", run_dir)
+    claude_home = ensure_private_directory(state_root / "claude-oauth", run_dir)
+    settings = {
+        "skipWebFetchPreflight": True,
+        "env": PRIVACY_ENV,
+    }
+    secure_write_text(
+        claude_home / "settings.json",
+        json.dumps(settings, ensure_ascii=False, indent=2) + "\n",
+    )
+    return claude_home
+
+
 def build_case_environment(
     *,
     case: CaptureCase,
@@ -262,6 +278,7 @@ def build_case_environment(
     ca_bundle: Path,
     oauth_claude_secret: str | None = None,
     injected_env: Mapping[str, str] | None = None,
+    claude_oauth_home: Path | None = None,
 ) -> dict[str, str]:
     """构造单一 case 的子进程环境，不修改当前进程环境。"""
 
@@ -293,6 +310,10 @@ def build_case_environment(
         if case.product == "claude" and oauth_claude_secret:
             # 显式覆盖只进入当前 Claude 子进程；编排器会对完整产物执行精确值扫描。
             environment["CLAUDE_CODE_OAUTH_TOKEN"] = oauth_claude_secret
+            if not claude_oauth_home:
+                raise ConfigurationError("运行时 Claude OAuth token 必须使用逐轮私有 HOME。")
+            environment["CLAUDE_CONFIG_DIR"] = str(claude_oauth_home)
+            environment["HOME"] = str(claude_oauth_home)
 
     if case.evidence == "mitm":
         for key in ("HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"):

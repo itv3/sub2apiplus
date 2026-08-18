@@ -146,6 +146,9 @@ class SyntheticCampaign:
             },
             self._time(),
         )
+        self.references["comparison-policy"] = self.seal_manifest(
+            "operational_evidence", "comparison-policy"
+        )
         evidence = {
             "schema_version": "official-client-evidence-package/v1",
             "persona": self.persona,
@@ -154,6 +157,7 @@ class SyntheticCampaign:
             "platforms": ["linux/amd64"],
             "entrypoints": ["synthetic-cli"],
             "default_conditions": ["privacy=default"],
+            "comparison_policy_ref": self.references["comparison-policy"],
             "producer_tool_sha256": self.tool_sha256,
             "rules": [
                 {
@@ -442,6 +446,7 @@ class SyntheticCampaign:
                 {
                     "egress_id": "aux-refresh",
                     "current_disposition": "non_persona_managed",
+                    "current_guard_state": "enforced" if final else "legacy_observe",
                     "spec_ids": [],
                     "managed_policy": self.managed_policy(),
                     "runtime_assertion_refs": evidence,
@@ -449,6 +454,7 @@ class SyntheticCampaign:
                 {
                     "egress_id": "infer-main",
                     "current_disposition": "persona_strict" if final else "denied",
+                    "current_guard_state": "enforced" if final else "legacy_observe",
                     "spec_ids": ["SPEC-001"] if final else [],
                     "managed_policy": None,
                     "runtime_assertion_refs": evidence,
@@ -456,6 +462,7 @@ class SyntheticCampaign:
                 {
                     "egress_id": "unknown-aux",
                     "current_disposition": "denied",
+                    "current_guard_state": "enforced" if final else "legacy_observe",
                     "spec_ids": [],
                     "managed_policy": None,
                     "runtime_assertion_refs": evidence,

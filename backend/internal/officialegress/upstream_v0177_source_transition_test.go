@@ -102,6 +102,16 @@ func TestChangeset3ReferenceCompatibilityHelpersRemainReachable(t *testing.T) {
 }
 
 func upstreamV0177SourceTransitionSupersedes(path, priorDigest, currentDigest string) bool {
+	if fwEObservationSourceTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
+	if fwEPrior, ok := fwEObservationSourceTransitionPrior(path, currentDigest); ok {
+		return upstreamV0177SourceTransitionBeforeFWE(path, priorDigest, fwEPrior)
+	}
+	return upstreamV0177SourceTransitionBeforeFWE(path, priorDigest, currentDigest)
+}
+
+func upstreamV0177SourceTransitionBeforeFWE(path, priorDigest, currentDigest string) bool {
 	if multiPersonaControlTestTransitionV2Supersedes(path, priorDigest, currentDigest) {
 		return true
 	}
@@ -129,6 +139,9 @@ func upstreamV0177SourceTransitionSupersedes(path, priorDigest, currentDigest st
 // runtimeReliabilityRepairTransitionSupersedes 只接受本次可靠性修复收据中精确的
 // path/from/to 承接关系，使既有冻结证据保持不可变。
 func runtimeReliabilityRepairTransitionSupersedes(path, priorDigest, currentDigest string) bool {
+	if fwEObservationSourceTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if multiPersonaControlTestTransitionV2Supersedes(path, priorDigest, currentDigest) {
 		return true
 	}

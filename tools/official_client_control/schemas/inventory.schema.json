@@ -60,10 +60,11 @@
           "minItems": 1,
           "items": {
             "type": "object",
-            "required": ["egress_id", "current_disposition", "spec_ids", "managed_policy", "runtime_assertion_refs"],
+            "required": ["egress_id", "current_disposition", "current_guard_state", "spec_ids", "managed_policy", "runtime_assertion_refs"],
             "properties": {
               "egress_id": {"type": "string"},
               "current_disposition": {"enum": ["persona_strict", "non_persona_managed", "denied"]},
+              "current_guard_state": {"enum": ["source_absent", "out_of_scope_passthrough", "legacy_observe", "canary_enforce", "enforced"]},
               "spec_ids": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
               "managed_policy": {"oneOf": [{"type": "null"}, {"type": "object"}]},
               "runtime_assertion_refs": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/objectRef"}}

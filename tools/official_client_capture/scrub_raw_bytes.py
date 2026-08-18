@@ -62,7 +62,7 @@ RULES: list[tuple[re.Pattern[bytes], int]] = [
     # 顺序、分隔符与字节偏移保持不变。终止字符包含双引号，以免 JSON URL 后面的
     # 语法被误吞。
     (re.compile(
-        rb"([?&](?!(?:scope|limit|client_version|platform|include_metadata|"
+        rb"([?&](?!(?:scope|limit|beta|client_version|platform|include_metadata|"
         rb"includeMetadata|intent|architecture)=)[A-Za-z0-9_.~-]+=)"
         rb"([^&\s\r\n\"]+)"
     ), 2),

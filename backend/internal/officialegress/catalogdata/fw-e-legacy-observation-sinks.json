@@ -1,0 +1,187 @@
+{
+  "schema_version": 1,
+  "campaign_stage": "FW-E",
+  "entries": [
+    {
+      "sink_id": "unclassified.claude.account_test",
+      "purpose": "claude_legacy.account_test",
+      "source_ref": "backend/internal/service/account_test_service.go:*AccountTestService.testClaudeAccountConnection",
+      "endpoint_evidence": "external_persona",
+      "routes": [
+        {
+          "method": "POST",
+          "host": "api.anthropic.com",
+          "path": "/v1/messages",
+          "protocol": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "legacy_backends": [
+        "http_upstream"
+      ],
+      "owner": "official-client-fw-e",
+      "expiry_condition": "FW-G 将该路径迁入 Claude 受管策略或签发明确退休收据"
+    },
+    {
+      "sink_id": "unclassified.claude.cookie_authorize",
+      "purpose": "claude_legacy.cookie_authorize",
+      "source_ref": "backend/internal/repository/claude_oauth_service.go:*claudeOAuthService.GetAuthorizationCode",
+      "endpoint_evidence": "external_persona",
+      "routes": [
+        {
+          "method": "POST",
+          "host": "claude.ai",
+          "path": "/v1/oauth/{organization_uuid}/authorize",
+          "protocol": "http"
+        }
+      ],
+      "target_backend": "req_profile",
+      "legacy_backends": [
+        "req_profile"
+      ],
+      "owner": "official-client-fw-e",
+      "expiry_condition": "FW-G 将该路径迁入 Claude 受管策略或签发明确退休收据"
+    },
+    {
+      "sink_id": "unclassified.claude.cookie_organizations",
+      "purpose": "claude_legacy.cookie_organizations",
+      "source_ref": "backend/internal/repository/claude_oauth_service.go:*claudeOAuthService.GetOrganizationUUID",
+      "endpoint_evidence": "external_persona",
+      "routes": [
+        {
+          "method": "GET",
+          "host": "claude.ai",
+          "path": "/api/organizations",
+          "protocol": "http"
+        }
+      ],
+      "target_backend": "req_profile",
+      "legacy_backends": [
+        "req_profile"
+      ],
+      "owner": "official-client-fw-e",
+      "expiry_condition": "FW-G 将该路径迁入 Claude 受管策略或签发明确退休收据"
+    },
+    {
+      "sink_id": "unclassified.claude.messages_inference",
+      "purpose": "claude_legacy.messages_inference",
+      "source_ref": "backend/internal/service/gateway_forward.go:*GatewayService.Forward",
+      "endpoint_evidence": "external_persona",
+      "routes": [
+        {
+          "method": "POST",
+          "host": "api.anthropic.com",
+          "path": "/v1/messages",
+          "protocol": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "legacy_backends": [
+        "http_upstream"
+      ],
+      "owner": "official-client-fw-e",
+      "expiry_condition": "FW-G 将该路径迁入 Claude strict Executor 或签发明确退休收据"
+    },
+    {
+      "sink_id": "unclassified.claude.oauth_exchange",
+      "purpose": "claude_legacy.oauth_exchange",
+      "source_ref": "backend/internal/repository/claude_oauth_service.go:*claudeOAuthService.ExchangeCodeForToken",
+      "endpoint_evidence": "external_persona",
+      "routes": [
+        {
+          "method": "POST",
+          "host": "platform.claude.com",
+          "path": "/v1/oauth/token",
+          "protocol": "http"
+        }
+      ],
+      "target_backend": "req_profile",
+      "legacy_backends": [
+        "req_profile"
+      ],
+      "owner": "official-client-fw-e",
+      "expiry_condition": "FW-G 将该路径迁入 Claude 受管策略或签发明确退休收据"
+    },
+    {
+      "sink_id": "unclassified.claude.oauth_refresh",
+      "purpose": "claude_legacy.oauth_refresh",
+      "source_ref": "backend/internal/repository/claude_oauth_service.go:*claudeOAuthService.RefreshToken",
+      "endpoint_evidence": "external_persona",
+      "routes": [
+        {
+          "method": "POST",
+          "host": "platform.claude.com",
+          "path": "/v1/oauth/token",
+          "protocol": "http"
+        }
+      ],
+      "target_backend": "req_profile",
+      "legacy_backends": [
+        "req_profile"
+      ],
+      "owner": "official-client-fw-e",
+      "expiry_condition": "FW-G 将该路径迁入 Claude 受管策略或签发明确退休收据"
+    },
+    {
+      "sink_id": "unclassified.claude.token_count",
+      "purpose": "claude_legacy.token_count",
+      "source_ref": "backend/internal/service/gateway_count_tokens.go:*GatewayService.ForwardCountTokens",
+      "endpoint_evidence": "external_persona",
+      "routes": [
+        {
+          "method": "POST",
+          "host": "api.anthropic.com",
+          "path": "/v1/messages/count_tokens",
+          "protocol": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "legacy_backends": [
+        "http_upstream"
+      ],
+      "owner": "official-client-fw-e",
+      "expiry_condition": "FW-G 将该路径迁入 Claude 受管策略或签发明确退休收据"
+    },
+    {
+      "sink_id": "unclassified.claude.upstream_models",
+      "purpose": "claude_legacy.upstream_models",
+      "source_ref": "backend/internal/service/upstream_models.go:*AccountTestService.buildAnthropicUpstreamModelsRequest",
+      "endpoint_evidence": "external_persona",
+      "routes": [
+        {
+          "method": "GET",
+          "host": "api.anthropic.com",
+          "path": "/v1/models",
+          "protocol": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "legacy_backends": [
+        "http_upstream"
+      ],
+      "owner": "official-client-fw-e",
+      "expiry_condition": "FW-G 将该路径迁入 Claude 受管策略或签发明确退休收据"
+    },
+    {
+      "sink_id": "unclassified.claude.usage",
+      "purpose": "claude_legacy.usage",
+      "source_ref": "backend/internal/repository/claude_usage_service.go:*claudeUsageService.FetchUsageWithOptions",
+      "endpoint_evidence": "external_persona",
+      "routes": [
+        {
+          "method": "GET",
+          "host": "api.anthropic.com",
+          "path": "/api/oauth/usage",
+          "protocol": "http"
+        }
+      ],
+      "target_backend": "http_upstream",
+      "legacy_backends": [
+        "http_upstream",
+        "plain_net_http"
+      ],
+      "owner": "official-client-fw-e",
+      "expiry_condition": "FW-G 将该路径迁入 Claude 受管策略或签发明确退休收据"
+    }
+  ]
+}
