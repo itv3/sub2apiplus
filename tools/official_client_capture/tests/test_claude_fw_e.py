@@ -15,12 +15,10 @@ from tools.official_client_capture.claude_fw_e import (
     _verify_integrity,
     build_rule_assessments,
 )
-from tools.official_client_control.canonical import canonical_json_bytes, load_json_file
-
-
-ROOT = Path(__file__).resolve().parents[3]
-BASELINE_LEDGER = (
-    ROOT / "tools/official_client_capture/claude_21220/rules_2_1_220.json"
+from tools.official_client_control.canonical import (
+    canonical_json_bytes,
+    canonical_sha256,
+    load_json_file,
 )
 
 
@@ -30,6 +28,10 @@ def write_json(path: Path, value: object) -> None:
 
 
 def manifest(version: str, binary_sha256: str, source_sha256: str) -> dict:
+    environment_values = {
+        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+        "DISABLE_TELEMETRY": "1",
+    }
     return {
         "schema_version": "official-client-capture/v1",
         "status": "complete",
@@ -56,9 +58,44 @@ def manifest(version: str, binary_sha256: str, source_sha256: str) -> dict:
                 "status": "complete",
                 "evidence": "mitm",
                 "scenario": "s1",
+                "capture": {"host_scope": "all"},
+                "analysis_path": "analysis/mitm/claude-http/s1.json",
+                "scenario_result": {
+                    "invocation": {
+                        "environment": {
+                            "schema_version": "official-client-environment/v1",
+                            "values": environment_values,
+                            "keys": sorted(environment_values),
+                            "redacted_keys": [],
+                            "sha256": canonical_sha256(environment_values),
+                        }
+                    }
+                },
             }
         ],
     }
+
+
+def write_manifest(root: Path, payload: dict) -> None:
+    write_json(root / "manifest.json", payload)
+    write_json(
+        root / "analysis/mitm/claude-http/s1.json",
+        {
+            "schema_version": "official-client-capture-normalized/v1",
+            "records": [],
+            "network_lifecycle": [
+                {
+                    "event": "request",
+                    "capture_host_scope": "all",
+                    "method": "POST",
+                    "scheme": "https",
+                    "host": "api.anthropic.com",
+                    "port": 443,
+                    "path": "/v1/messages",
+                }
+            ],
+        },
+    )
 
 
 class ClaudeFWETests(unittest.TestCase):
@@ -115,18 +152,80 @@ class ClaudeFWETests(unittest.TestCase):
     def test_capture_group_binds_one_execution_source(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            write_json(root / "a/manifest.json", manifest("2.1.226", "a" * 64, "b" * 64))
-            write_json(root / "b/manifest.json", manifest("2.1.226", "a" * 64, "c" * 64))
+            write_manifest(root / "a", manifest("2.1.226", "a" * 64, "b" * 64))
+            write_manifest(root / "b", manifest("2.1.226", "a" * 64, "c" * 64))
             with self.assertRaisesRegex(FWEEvidenceError, "多份抓包执行源"):
                 _scan_capture_group(root, "target", "2.1.226", "a" * 64)
 
-    def test_builds_closed_conservative_57_rule_ledger(self) -> None:
+    def test_capture_group_builds_all_host_path_inventory(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_manifest(root, manifest("2.1.226", "a" * 64, "b" * 64))
+            result = _scan_capture_group(
+                root, "target", "2.1.226", "a" * 64
+            )
+            self.assertEqual(result["capture_host_scopes"], ["all"])
+            self.assertEqual(len(result["network_observations"]), 1)
+            observation = result["network_observations"][0]
+            self.assertEqual(observation["host"], "api.anthropic.com")
+            self.assertEqual(observation["path"], "/v1/messages")
+            self.assertEqual(result["privacy_controls"]["result"], "passed")
+
+    def test_capture_group_rejects_wrong_privacy_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            payload = manifest("2.1.226", "a" * 64, "b" * 64)
+            environment = payload["case_results"][0]["scenario_result"][
+                "invocation"
+            ]["environment"]
+            environment["values"]["DISABLE_TELEMETRY"] = "0"
+            environment["sha256"] = canonical_sha256(environment["values"])
+            write_manifest(root, payload)
+            with self.assertRaisesRegex(FWEEvidenceError, "隐私开关实际值非法"):
+                _scan_capture_group(root, "target", "2.1.226", "a" * 64)
+
+    def test_rule_assessments_use_closed_matrix_and_keep_target_add(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             workspace = Path(directory)
-            ledger = workspace / "baseline.json"
-            ledger.write_bytes(BASELINE_LEDGER.read_bytes())
+            matrix_path = workspace / "matrix.json"
+            closure_path = workspace / "closure.json"
             static = workspace / "static.json"
             capture = workspace / "capture.json"
+            matrix = {
+                "schema_version": "claude-code-fw-e-cross-source-matrix/v1",
+                "target_version": "2.1.226",
+                "target_rules": [
+                    {
+                        "id": "SPEC-BASE-001",
+                        "domain": "header",
+                        "retained_claim": "历史规则",
+                        "scope": "test",
+                        "required_channels": ["J"],
+                        "origin": "historical_rule",
+                        "baseline_disposition": "verified",
+                    },
+                    {
+                        "id": "SPEC-NEW-001",
+                        "domain": "endpoint",
+                        "retained_claim": "目标原生新增规则",
+                        "scope": "test",
+                        "required_channels": ["J"],
+                        "origin": "target_native_add",
+                        "baseline_disposition": None,
+                    },
+                ],
+            }
+            write_json(matrix_path, matrix)
+            write_json(
+                closure_path,
+                {
+                    "schema_version": "claude-code-fw-e-completeness/v1",
+                    "target_version": "2.1.226",
+                    "matrix_sha256": canonical_sha256(matrix),
+                    "unresolved_total": 0,
+                    "result": "passed",
+                },
+            )
             write_json(
                 static,
                 {
@@ -139,29 +238,80 @@ class ClaudeFWETests(unittest.TestCase):
                 {
                     "schema_version": "claude-code-fw-e-capture-index/v1",
                     "result": "passed",
-                    "channels": ["A1", "J", "L", "M", "P", "R"],
+                    "target_version": "2.1.226",
+                    "channels": ["J"],
                 },
             )
             result = build_rule_assessments(
                 workspace,
-                ledger,
+                matrix_path,
+                closure_path,
                 static,
                 capture,
                 workspace / "rules",
                 None,
             )
-            self.assertEqual(result["rule_count"], 57)
+            self.assertEqual(result["rule_count"], 2)
             self.assertEqual(result["inherit_count"], 0)
-            self.assertEqual(result["regressed_evidence_count"], 12)
+            self.assertEqual(result["regressed_evidence_count"], 1)
             self.assertEqual(result["blocked_count"], 0)
             self.assertEqual(
-                sum(row["migration_decision"] == "delete" for row in result["rules"]),
+                sum(row["migration_decision"] == "add" for row in result["rules"]),
                 1,
             )
             written = load_json_file(
                 workspace / "rules/rule-assessments.json", "rule assessments"
             )
-            self.assertEqual(written["rule_count"], 57)
+            self.assertEqual(written["rule_count"], 2)
+
+    def test_rule_assessments_reject_baseline_only_blocked_closure(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory)
+            matrix = {
+                "schema_version": "claude-code-fw-e-cross-source-matrix/v1",
+                "target_version": "2.1.226",
+                "target_rules": [],
+            }
+            for name, value in (
+                ("matrix.json", matrix),
+                (
+                    "closure.json",
+                    {
+                        "schema_version": "claude-code-fw-e-completeness/v1",
+                        "target_version": "2.1.226",
+                        "matrix_sha256": canonical_sha256(matrix),
+                        "unresolved_total": 1,
+                        "result": "blocked",
+                    },
+                ),
+                (
+                    "static.json",
+                    {
+                        "schema_version": "claude-code-fw-e-static-diff/v1",
+                        "target_version": "2.1.226",
+                    },
+                ),
+                (
+                    "capture.json",
+                    {
+                        "schema_version": "claude-code-fw-e-capture-index/v1",
+                        "target_version": "2.1.226",
+                        "result": "passed",
+                        "channels": ["J"],
+                    },
+                ),
+            ):
+                write_json(workspace / name, value)
+            with self.assertRaisesRegex(FWEEvidenceError, "四方闭集未通过"):
+                build_rule_assessments(
+                    workspace,
+                    workspace / "matrix.json",
+                    workspace / "closure.json",
+                    workspace / "static.json",
+                    workspace / "capture.json",
+                    workspace / "rules",
+                    None,
+                )
 
 
 if __name__ == "__main__":

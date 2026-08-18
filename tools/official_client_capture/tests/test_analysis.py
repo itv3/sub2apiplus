@@ -42,6 +42,24 @@ class AnalysisTest(unittest.TestCase):
         self.assertEqual(http["response"]["headers"][0][0], "set-cookie")
         self.assertNotIn("session=secret", str(http["response"]["headers"]))
 
+    def test_all_host_inventory_preserves_observed_host_and_transport(self) -> None:
+        record = normalize_mitm_record(
+            {
+                "_capture_host_scope": "all",
+                "request": {
+                    "method": "POST",
+                    "scheme": "https",
+                    "host": "API.Anthropic.COM",
+                    "port": 443,
+                    "path": "/v1/messages",
+                },
+            }
+        )
+        self.assertEqual(record["capture_host_scope"], "all")
+        self.assertEqual(record["request"]["host"], "api.anthropic.com")
+        self.assertEqual(record["request"]["scheme"], "https")
+        self.assertEqual(record["request"]["port"], 443)
+
     def test_tshark_uses_tab_separator_matching_parser(self) -> None:
         output = (
             "1\t203.0.113.10\t\t443\tapi.anthropic.com\t4865,4866"

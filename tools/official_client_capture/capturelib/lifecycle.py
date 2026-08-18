@@ -143,7 +143,9 @@ def resolve_target_addresses(
     )
 
 
-def _direct_bpf(target_addresses: tuple[str, ...], target_port: int) -> str:
+def _direct_bpf(
+    target_addresses: tuple[str, ...], target_port: int, *, all_hosts: bool = False
+) -> str:
     """构造 tcpdump 过滤器。
 
     ⚠ **按 host 过滤会让"只访问某域名"这类命题变成循环论证。**
@@ -156,7 +158,7 @@ def _direct_bpf(target_addresses: tuple[str, ...], target_port: int) -> str:
     用它证明"只访问 chatgpt.com"永远为真。
     """
 
-    if os.environ.get("CAPTURE_BPF_ALL_HOSTS") == "1":
+    if all_hosts or os.environ.get("CAPTURE_BPF_ALL_HOSTS") == "1":
         if not 1 <= target_port <= 65535:
             raise ConfigurationError("direct 目标端口超出合法范围。")
         return f"tcp port {target_port}"
@@ -249,6 +251,7 @@ def process_command(
     interface: str,
     target_addresses: tuple[str, ...] = (),
     target_port: int = 443,
+    capture_all_hosts: bool = False,
 ) -> list[str]:
     """生成不含凭据的抓包命令，供运行与单元测试共用。"""
 
@@ -262,7 +265,7 @@ def process_command(
             "0",
             "-w",
             str(output_dir / "traffic.pcap"),
-            _direct_bpf(target_addresses, target_port),
+            _direct_bpf(target_addresses, target_port, all_hosts=capture_all_hosts),
         ]
     return [
         mitmdump_bin,
@@ -450,6 +453,7 @@ def build_capture_process(
     interface: str,
     scenario: str | None = None,
     address_resolver: Any = socket.getaddrinfo,
+    capture_all_hosts: bool = False,
 ) -> CaptureProcess:
     """创建带动态目标 allowlist 的 direct 或 forward-MITM 进程。"""
 
@@ -465,6 +469,7 @@ def build_capture_process(
                 "CAPTURE_SUBJECT": case.subject,
                 "CAPTURE_SCENARIO": scenario or "unspecified",
                 "CAPTURE_TARGET_HOSTS": ",".join(case.target_hosts),
+                "CAPTURE_HOST_SCOPE": "all" if capture_all_hosts else "targets",
                 "CAPTURE_OUTPUT_DIR": str(output_dir),
             }
         )
@@ -492,12 +497,14 @@ def build_capture_process(
         interface=interface,
         target_addresses=target_addresses,
         target_port=target_port,
+        capture_all_hosts=capture_all_hosts,
     )
     metadata = {
         "interface": interface,
         "target_hosts": list(case.target_hosts),
         "target_port": target_port,
         "target_addresses": list(target_addresses),
+        "host_scope": "all" if capture_all_hosts else "targets",
         "bpf": command[-1] if case.evidence == "direct" else None,
         "mitm_port": mitm_port if case.evidence == "mitm" else None,
         "invocation": argv_manifest_view(command),

@@ -14,6 +14,7 @@ from typing import Any
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 BASE_COMMIT = "7cbbb76e37118479a4618702357b62a95e9c88ec"
+SEALED_COMMIT = "f5e6d8c4ed899297b11b23a80d5384f43aed84ad"
 PRIOR_DIR = (
     ROOT / "docs" / "egress" / "maintenance" / "fw-d-control-workspace-transition"
 )
@@ -266,8 +267,8 @@ def task_status_paths() -> set[str]:
     }
 
 
-def committed_paths() -> set[str]:
-    raw = run_git("diff", "--name-only", "-z", f"{BASE_COMMIT}..HEAD")
+def committed_paths(target_commit: str = "HEAD") -> set[str]:
+    raw = run_git("diff", "--name-only", "-z", f"{BASE_COMMIT}..{target_commit}")
     return {
         value.decode("utf-8", errors="strict")
         for value in raw.split(b"\0")
@@ -329,13 +330,15 @@ def validate_prior_transition() -> None:
 
 
 def validate_frozen_sources() -> None:
-    if sha256(SOURCE_TRANSITION_PATH.read_bytes()) != SOURCE_TRANSITION_SHA256:
+    source_relative = SOURCE_TRANSITION_PATH.relative_to(ROOT).as_posix()
+    orchestrator_relative = FROZEN_ORCHESTRATOR_PATH.relative_to(ROOT).as_posix()
+    if sha256(run_git("show", f"{SEALED_COMMIT}:{source_relative}")) != SOURCE_TRANSITION_SHA256:
         raise RuntimeError("FW-E observation source transition 漂移")
-    if sha256(FROZEN_ORCHESTRATOR_PATH.read_bytes()) != FROZEN_ORCHESTRATOR_SHA256:
+    if sha256(run_git("show", f"{SEALED_COMMIT}:{orchestrator_relative}")) != FROZEN_ORCHESTRATOR_SHA256:
         raise RuntimeError("FW-E 冻结编排器漂移")
 
 
-def validate_no_strict_persona_additions() -> None:
+def validate_no_strict_persona_additions(target_commit: str = "HEAD") -> None:
     forbidden = (
         b"PersonaClaude",
         b'Persona("claude-code")',
@@ -350,7 +353,15 @@ def validate_no_strict_persona_additions() -> None:
             added = (ROOT / relative).read_bytes()
         else:
             completed = subprocess.run(
-                ["git", "diff", "--unified=0", BASE_COMMIT, "--", relative],
+                [
+                    "git",
+                    "diff",
+                    "--unified=0",
+                    BASE_COMMIT,
+                    target_commit,
+                    "--",
+                    relative,
+                ],
                 cwd=ROOT,
                 check=False,
                 stdout=subprocess.PIPE,
@@ -422,22 +433,32 @@ def validate_proofs(proofs: Any) -> None:
 
 def build_transition(
     proofs: list[dict[str, Any]] | None = None,
+    *,
+    target_commit: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    end = target_commit or "HEAD"
     ancestor = subprocess.run(
-        ["git", "merge-base", "--is-ancestor", BASE_COMMIT, "HEAD"],
+        ["git", "merge-base", "--is-ancestor", BASE_COMMIT, end],
         cwd=ROOT,
         check=False,
     )
     if ancestor.returncode != 0:
         raise RuntimeError("FW-E 基准提交不是当前 HEAD 的祖先")
-    candidates = (committed_paths() | task_status_paths()) - EXCLUDED_PATHS
+    candidates = committed_paths(end)
+    if target_commit is None:
+        candidates |= task_status_paths()
+    candidates -= EXCLUDED_PATHS
     unexpected = sorted(candidates - ALLOWED_PATHS)
     if unexpected:
         raise RuntimeError(f"FW-E 变更集夹带未批准路径：{unexpected}")
     entries: list[dict[str, Any]] = []
     for relative in sorted(candidates):
         before = commit_state(BASE_COMMIT, relative)
-        after = current_state(relative)
+        after = (
+            commit_state(target_commit, relative)
+            if target_commit is not None
+            else current_state(relative)
+        )
         if before == after:
             continue
         entries.append(
@@ -537,29 +558,20 @@ def validate_path_closure(manifest: dict[str, Any]) -> None:
 
 
 def write_transition() -> None:
-    validate_prior_transition()
-    validate_frozen_sources()
-    validate_no_strict_persona_additions()
-    proofs = run_proofs()
-    validate_proofs(proofs)
-    manifest, receipt = build_transition(proofs)
-    validate_path_closure(manifest)
-    if receipt["proof_failure_count"] != 0:
-        raise RuntimeError("FW-E 机器证明失败，禁止写入 passed transition")
-    TRANSITION_DIR.mkdir(parents=True, exist_ok=True)
-    MANIFEST_PATH.write_bytes(canonical_json(manifest))
-    RECEIPT_PATH.write_bytes(canonical_json(receipt))
+    raise RuntimeError("FW-E 历史 transition 已封存，后继变更必须追加新 transition")
 
 
 def validate_transition() -> None:
     validate_prior_transition()
     validate_frozen_sources()
-    validate_no_strict_persona_additions()
+    validate_no_strict_persona_additions(SEALED_COMMIT)
     manifest_raw = MANIFEST_PATH.read_bytes()
     manifest = json.loads(manifest_raw)
     receipt = json.loads(RECEIPT_PATH.read_bytes())
     validate_proofs(receipt.get("proofs"))
-    expected_manifest, expected_receipt = build_transition(receipt["proofs"])
+    expected_manifest, expected_receipt = build_transition(
+        receipt["proofs"], target_commit=SEALED_COMMIT
+    )
     validate_path_closure(manifest)
     if manifest != expected_manifest or receipt != expected_receipt:
         raise RuntimeError("FW-E transition 与基准提交及当前状态复算结果不一致")

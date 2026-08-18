@@ -486,7 +486,10 @@ def build_reachability_index(bundle_path: pathlib.Path) -> dict:
         "declaration_segments": len(index.statements),
         "top_level_symbols": len(index.by_name),
         "sink_total": len(sinks),
-        "sinks": sinks[:200],
+        # sink inventory 是 FW-E 闭集分母，禁止以展示便利为由截断。旧实现只保存前
+        # 200 条，目标 bundle 命中超过该数量时会让新增调用点永久失去 disposition。
+        "sinks": sinks,
+        "sink_inventory_truncated": False,
         "probes": probes,
         "limitations": [
             "声明分段是作用域近似，nearest_symbol 表示写入点之前最近的顶层符号，"

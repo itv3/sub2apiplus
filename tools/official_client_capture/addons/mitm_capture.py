@@ -47,6 +47,15 @@ TARGET_HOSTS = {
     for value in os.environ["CAPTURE_TARGET_HOSTS"].split(",")
     if value.strip()
 }
+HOST_SCOPE = os.environ.get("CAPTURE_HOST_SCOPE", "targets")
+if HOST_SCOPE not in {"all", "targets"}:
+    raise RuntimeError("CAPTURE_HOST_SCOPE 只能是 all 或 targets")
+
+
+def _should_record_host(host: str) -> bool:
+    """FW-E 可记录官方进程的全部 host；普通抓包保持既有目标范围。"""
+
+    return HOST_SCOPE == "all" or host.strip().lower() in TARGET_HOSTS
 
 
 def _ensure_output_directory() -> None:
@@ -160,6 +169,7 @@ def _common_payload() -> dict[str, Any]:
         "_run_id": RUN_ID,
         "_subject": SUBJECT,
         "_scenario": SCENARIO,
+        "_capture_host_scope": HOST_SCOPE,
     }
 
 
@@ -179,7 +189,7 @@ def _record_lifecycle(event: str, flow: Any, extra: dict[str, Any] | None = None
 
     request = getattr(flow, "request", None)
     host = getattr(request, "host", "") or ""
-    if host.lower() not in TARGET_HOSTS:
+    if not _should_record_host(host):
         return
     category = _classify(getattr(request, "path", "") or "")
     payload = {
@@ -188,6 +198,9 @@ def _record_lifecycle(event: str, flow: Any, extra: dict[str, Any] | None = None
         "_event": event,
         "_flow_id": getattr(flow, "id", None),
         "method": getattr(request, "method", None),
+        "scheme": getattr(request, "scheme", None),
+        "host": host,
+        "port": getattr(request, "port", None),
         "path": _safe_path(getattr(request, "path", "") or ""),
         "http_version": getattr(request, "http_version", None),
     }
@@ -239,7 +252,7 @@ def _is_fault_target(flow: http.HTTPFlow) -> bool:
 
 
 class OfficialClientCapture:
-    """仅记录当前任务 allowlist 中的目标主机。"""
+    """按显式 host scope 记录目标主机或官方进程全部代理出站。"""
 
     def __init__(self) -> None:
         self._faults_left = _FAULT_BUDGET
@@ -304,7 +317,7 @@ class OfficialClientCapture:
         _record_connection("server_disconnected", data)
 
     def response(self, flow: http.HTTPFlow) -> None:
-        if flow.request.host.lower() not in TARGET_HOSTS:
+        if not _should_record_host(flow.request.host):
             return
         category = _classify(flow.request.path)
         payload = {
@@ -342,7 +355,7 @@ class OfficialClientCapture:
         _append_json_line(OUTPUT_DIR / f"{category}-http.jsonl", payload)
 
     def websocket_message(self, flow: http.HTTPFlow) -> None:
-        if flow.request.host.lower() not in TARGET_HOSTS or not flow.websocket:
+        if not _should_record_host(flow.request.host) or not flow.websocket:
             return
         message = flow.websocket.messages[-1]
         raw = getattr(message, "content", b"") or b""
@@ -354,7 +367,9 @@ class OfficialClientCapture:
             "_category": _classify(flow.request.path),
             "_websocket": True,
             "from_client": bool(getattr(message, "from_client", False)),
+            "scheme": flow.request.scheme,
             "host": flow.request.host,
+            "port": flow.request.port,
             "path": _safe_path(flow.request.path),
             "length": len(raw),
             "sha256": hashlib.sha256(raw).hexdigest(),

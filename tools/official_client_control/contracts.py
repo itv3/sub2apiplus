@@ -438,23 +438,30 @@ def _validate_persona_descriptor(value: Any) -> dict[str, Any]:
 
 def _validate_evidence_package(value: Any) -> dict[str, Any]:
     payload = expect_object(value, "evidence_package")
+    schema_version = payload.get("schema_version")
+    expected_keys = {
+        "schema_version",
+        "persona",
+        "version",
+        "official_artifacts",
+        "platforms",
+        "entrypoints",
+        "default_conditions",
+        "comparison_policy_ref",
+        "producer_tool_sha256",
+        "rules",
+    }
+    if schema_version == "official-client-evidence-package/v2":
+        expected_keys.add("completeness_ref")
     expect_exact_keys(
         payload,
-        {
-            "schema_version",
-            "persona",
-            "version",
-            "official_artifacts",
-            "platforms",
-            "entrypoints",
-            "default_conditions",
-            "comparison_policy_ref",
-            "producer_tool_sha256",
-            "rules",
-        },
+        expected_keys,
         "evidence_package",
     )
-    if payload["schema_version"] != "official-client-evidence-package/v1":
+    if schema_version not in {
+        "official-client-evidence-package/v1",
+        "official-client-evidence-package/v2",
+    }:
         raise ControlError("evidence_package.schema_version 不匹配")
     validate_persona(payload["persona"])
     expect_string(payload["version"], "evidence_package.version")
@@ -471,6 +478,12 @@ def _validate_evidence_package(value: Any) -> dict[str, Any]:
     )
     if comparison_policy_ref["object_kind"] != "operational_evidence":
         raise ControlError("evidence_package.comparison_policy_ref 必须引用 operational_evidence")
+    if schema_version == "official-client-evidence-package/v2":
+        completeness_ref = validate_object_ref(
+            payload["completeness_ref"], "evidence_package.completeness_ref"
+        )
+        if completeness_ref["object_kind"] != "operational_evidence":
+            raise ControlError("evidence_package.completeness_ref 必须引用 operational_evidence")
     expect_sha256(payload["producer_tool_sha256"], "evidence_package.producer_tool_sha256")
     rules = payload["rules"]
     if not isinstance(rules, list) or not rules:

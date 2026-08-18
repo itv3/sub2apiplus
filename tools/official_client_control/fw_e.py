@@ -19,6 +19,7 @@ from .canonical import (
     expect_sha256,
     expect_string,
     expect_string_list,
+    load_json_file,
     resolve_relative,
     sha256_file,
     validate_external_binding,
@@ -41,7 +42,15 @@ from .receipts import control_tool_bundle_sha256
 from .store import ControlStore
 
 
-PLAN_SCHEMA = "official-client-fw-e-seal-plan/v1"
+PLAN_SCHEMA = "official-client-fw-e-seal-plan/v2"
+TARGET_INVENTORY_SCHEMA = "claude-code-target-sink-inventory/v1"
+CROSS_SOURCE_MATRIX_SCHEMA = "claude-code-fw-e-cross-source-matrix/v1"
+COMPLETENESS_SCHEMA = "claude-code-fw-e-completeness/v1"
+CAPTURE_INDEX_SCHEMA = "claude-code-fw-e-capture-index/v1"
+REQUIRED_PRIVACY_ENV = {
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "DISABLE_TELEMETRY": "1",
+}
 
 
 def external_binding(external_root: Path, relative_path: str) -> dict[str, Any]:
@@ -67,6 +76,193 @@ def external_bindings(
 
     paths = expect_string_list(relative_paths, label)
     return [external_binding(external_root, path) for path in paths]
+
+
+def _load_external_json(
+    external_root: Path, relative_path: Any, label: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """读取一个已完成路径与摘要约束的外部 JSON。"""
+
+    relative = expect_string(relative_path, label)
+    binding = external_binding(external_root, relative)
+    value = load_json_file(resolve_relative(external_root, relative), label)
+    return value, binding
+
+
+def _validate_completeness_artifacts(
+    external_root: Path,
+    *,
+    target_version: str,
+    inventory_paths: Any,
+    matrix_path: Any,
+    closure_path: Any,
+    capture_index_path: Any,
+) -> dict[str, Any]:
+    """绑定目标 sink、四方矩阵、闭集结论与全量运行发现。"""
+
+    inventory_relatives = expect_string_list(
+        inventory_paths, "target_sink_inventory_paths"
+    )
+    inventories: list[dict[str, Any]] = []
+    inventory_bindings: list[dict[str, Any]] = []
+    inventory_sha256s: set[str] = set()
+    platforms: set[str] = set()
+    for relative in inventory_relatives:
+        value, binding = _load_external_json(
+            external_root, relative, "target sink inventory"
+        )
+        if (
+            value.get("schema_version") != TARGET_INVENTORY_SCHEMA
+            or value.get("target_version") != target_version
+        ):
+            raise ControlError("target sink inventory Schema 或目标版本不匹配")
+        completeness = value.get("completeness")
+        if (
+            not isinstance(completeness, dict)
+            or completeness.get("truncated") is not False
+            or completeness.get("ast_parse_diagnostic_count") != 0
+            or completeness.get("ambiguous_lexical_match_count") != 0
+            or completeness.get("duplicate_sink_id_count") != 0
+        ):
+            raise ControlError("target sink inventory 不完整")
+        sinks = value.get("sinks")
+        if not isinstance(sinks, list) or value.get("sink_total") != len(sinks):
+            raise ControlError("target sink inventory 数量不一致")
+        sink_ids = [row.get("sink_id") for row in sinks if isinstance(row, dict)]
+        if len(sink_ids) != len(sinks) or len(set(sink_ids)) != len(sink_ids):
+            raise ControlError("target sink inventory 身份缺失或重复")
+        platform = expect_string(value.get("platform"), "target inventory platform")
+        if platform in platforms:
+            raise ControlError(f"target sink inventory 平台重复：{platform}")
+        platforms.add(platform)
+        inventories.append(value)
+        inventory_bindings.append(binding)
+        inventory_sha256s.add(binding["sha256"])
+
+    matrix, matrix_binding = _load_external_json(
+        external_root, matrix_path, "cross_source_matrix_path"
+    )
+    closure, closure_binding = _load_external_json(
+        external_root, closure_path, "completeness_closure_path"
+    )
+    capture, capture_binding = _load_external_json(
+        external_root, capture_index_path, "capture_index_path"
+    )
+    if (
+        matrix.get("schema_version") != CROSS_SOURCE_MATRIX_SCHEMA
+        or matrix.get("target_version") != target_version
+    ):
+        raise ControlError("cross-source matrix Schema 或目标版本不匹配")
+    if (
+        closure.get("schema_version") != COMPLETENESS_SCHEMA
+        or closure.get("target_version") != target_version
+        or closure.get("result") != "passed"
+        or closure.get("unresolved_total") != 0
+        or closure.get("matrix_sha256") != canonical_sha256(matrix)
+    ):
+        raise ControlError("FW-E completeness closure 未通过或没有绑定当前矩阵")
+    unresolved = closure.get("unresolved")
+    if not isinstance(unresolved, dict) or any(unresolved.values()):
+        raise ControlError("FW-E completeness closure 仍含未处置项")
+    if closure.get("target_inventory_sha256") not in inventory_sha256s:
+        raise ControlError("completeness closure 未绑定计划内 target inventory")
+    if closure.get("target_sink_disposition_counts", {}).get("unclassified", 0):
+        raise ControlError("completeness closure 仍含 unclassified target sink")
+    if closure.get("runtime_observation_disposition_counts", {}).get(
+        "unclassified", 0
+    ):
+        raise ControlError("completeness closure 仍含 inventory 外运行观测")
+
+    target_sinks = matrix.get("target_sinks")
+    if not isinstance(target_sinks, list):
+        raise ControlError("cross-source matrix 缺少 target_sinks")
+    matrix_sink_ids = [
+        row.get("sink_id") for row in target_sinks if isinstance(row, dict)
+    ]
+    if (
+        len(matrix_sink_ids) != len(target_sinks)
+        or len(set(matrix_sink_ids)) != len(matrix_sink_ids)
+        or closure.get("target_sink_total") != len(matrix_sink_ids)
+    ):
+        raise ControlError("cross-source matrix target sink 闭集不一致")
+    matching_inventories = [
+        value
+        for value, binding in zip(inventories, inventory_bindings, strict=True)
+        if binding["sha256"] == closure["target_inventory_sha256"]
+    ]
+    if len(matching_inventories) != 1:
+        raise ControlError("completeness closure 必须唯一绑定一个 target inventory")
+    bound_sink_ids = sorted(
+        str(row["sink_id"]) for row in matching_inventories[0]["sinks"]
+    )
+    if sorted(str(item) for item in matrix_sink_ids) != bound_sink_ids:
+        raise ControlError("cross-source matrix 与 target inventory sink 分母不一致")
+
+    if (
+        capture.get("schema_version") != CAPTURE_INDEX_SCHEMA
+        or capture.get("target_version") != target_version
+        or capture.get("result") != "passed"
+        or capture.get("network_inventory", {}).get("result") != "passed"
+        or capture.get("network_inventory", {}).get("host_prefilter_disabled") is not True
+    ):
+        raise ControlError("FW-E capture index 没有通过全 host/path inventory 门禁")
+    target_capture = capture.get("target")
+    if (
+        not isinstance(target_capture, dict)
+        or target_capture.get("capture_host_scopes") != ["all"]
+        or not isinstance(target_capture.get("network_observations"), list)
+    ):
+        raise ControlError("FW-E target capture 仍使用 host 预筛或缺少网络 inventory")
+    for group_name in ("control", "target"):
+        group = capture.get(group_name)
+        privacy = group.get("privacy_controls") if isinstance(group, dict) else None
+        if (
+            not isinstance(privacy, dict)
+            or privacy.get("result") != "passed"
+            or privacy.get("required_values") != REQUIRED_PRIVACY_ENV
+            or not isinstance(privacy.get("case_count"), int)
+            or privacy["case_count"] <= 0
+            or not isinstance(privacy.get("environment_manifest_sha256s"), list)
+            or not privacy["environment_manifest_sha256s"]
+        ):
+            raise ControlError(
+                f"FW-E {group_name} capture 未证明两项隐私开关的实际值"
+            )
+    capture_observation_ids = sorted(
+        str(row.get("observation_id"))
+        for row in target_capture["network_observations"]
+        if isinstance(row, dict)
+    )
+    matrix_runtime = matrix.get("runtime_observations")
+    if not isinstance(matrix_runtime, list):
+        raise ControlError("cross-source matrix 缺少 runtime observations")
+    matrix_observation_ids = sorted(
+        str(row.get("observation_id"))
+        for row in matrix_runtime
+        if isinstance(row, dict)
+    )
+    if (
+        len(capture_observation_ids) != len(target_capture["network_observations"])
+        or len(set(capture_observation_ids)) != len(capture_observation_ids)
+        or capture_observation_ids != matrix_observation_ids
+    ):
+        raise ControlError("运行 host/path inventory 与四方矩阵处置不一致")
+
+    target_rules = matrix.get("target_rules")
+    if not isinstance(target_rules, list) or not target_rules:
+        raise ControlError("cross-source matrix 缺少 target rules")
+    expected_rule_ids = sorted(str(row.get("id")) for row in target_rules)
+    if len(set(expected_rule_ids)) != len(expected_rule_ids):
+        raise ControlError("cross-source matrix target rule ID 重复")
+    return {
+        "inventory_bindings": inventory_bindings,
+        "matrix_binding": matrix_binding,
+        "closure_binding": closure_binding,
+        "capture_binding": capture_binding,
+        "expected_rule_ids": expected_rule_ids,
+        "target_sink_count": len(matrix_sink_ids),
+        "runtime_observation_count": len(matrix_observation_ids),
+    }
 
 
 def _expect_enum(value: Any, allowed: set[str], label: str) -> str:
@@ -111,6 +307,8 @@ def _validate_rules(
         evidence_level = _expect_enum(
             raw["evidence_level"], EVIDENCE_LEVELS, f"{label}.evidence_level"
         )
+        if evidence_level == "blocked":
+            raise ControlError(f"{spec_id} 证据仍为 blocked，禁止封存 FW-E")
         lifecycle = _expect_enum(
             raw["rule_lifecycle"], RULE_LIFECYCLES, f"{label}.rule_lifecycle"
         )
@@ -516,7 +714,10 @@ def seal_fw_e_plan(
             "fw_c_receipt_paths",
             "runtime_catalog_paths",
             "official_artifact_paths",
-            "expected_rule_ids",
+            "target_sink_inventory_paths",
+            "cross_source_matrix_path",
+            "completeness_closure_path",
+            "capture_index_path",
             "rules",
             "inventory_observed_at_utc",
             "inventory_evidence_paths",
@@ -562,10 +763,20 @@ def seal_fw_e_plan(
     official_artifacts = external_bindings(
         external_root, plan["official_artifact_paths"], "official_artifact_paths"
     )
+    completeness = _validate_completeness_artifacts(
+        external_root,
+        target_version=target_version,
+        inventory_paths=plan["target_sink_inventory_paths"],
+        matrix_path=plan["cross_source_matrix_path"],
+        closure_path=plan["completeness_closure_path"],
+        capture_index_path=plan["capture_index_path"],
+    )
     inventory_bindings = external_bindings(
         external_root, plan["inventory_evidence_paths"], "inventory_evidence_paths"
     )
-    rules = _validate_rules(plan["rules"], plan["expected_rule_ids"], external_root)
+    rules = _validate_rules(
+        plan["rules"], completeness["expected_rule_ids"], external_root
+    )
     aliases = _validate_aliases(plan["ingress_aliases"])
     ingress_entries = _validate_ingress_entries(plan["ingress_entries"])
     observed_egresses = _validate_observed_egresses(plan["egress_observed"])
@@ -670,6 +881,18 @@ def seal_fw_e_plan(
             ],
         },
     )
+    completeness_ref = _seal_evidence_manifest(
+        store,
+        persona,
+        "fw-e-target-sink-cross-source-closure",
+        [
+            *completeness["inventory_bindings"],
+            completeness["matrix_binding"],
+            completeness["closure_binding"],
+            completeness["capture_binding"],
+        ],
+        "FW-E 目标 sink、历史资料、全 host/path 运行观测和规则闭集",
+    )
     proposal_ref = store.seal_object(
         "operational_evidence",
         {
@@ -737,7 +960,7 @@ def seal_fw_e_plan(
     evidence_package_ref = store.seal_object(
         "evidence_package",
         {
-            "schema_version": "official-client-evidence-package/v1",
+            "schema_version": "official-client-evidence-package/v2",
             "persona": persona,
             "version": target_version,
             "official_artifacts": official_artifacts,
@@ -745,6 +968,7 @@ def seal_fw_e_plan(
             "entrypoints": entrypoints,
             "default_conditions": conditions,
             "comparison_policy_ref": traffic_policy_ref,
+            "completeness_ref": completeness_ref,
             "producer_tool_sha256": tool_sha256,
             "rules": rules,
         },
@@ -776,12 +1000,15 @@ def seal_fw_e_plan(
         "discovery_fact_ref": discovery_ref,
         "evidence_package_ref": evidence_package_ref,
         "traffic_observation_policy_ref": traffic_policy_ref,
+        "completeness_ref": completeness_ref,
         "evidence_fact_ref": evidence_fact_ref,
         "production_ingress_inventory_ref": ingress_inventory_ref,
         "egress_disposition_inventory_ref": egress_inventory_ref,
         "target_disposition_proposal_ref": proposal_ref,
         "tool_bundle_sha256": tool_sha256,
         "rule_count": len(rules),
+        "target_sink_count": completeness["target_sink_count"],
+        "runtime_observation_count": completeness["runtime_observation_count"],
         "checkpoint": status["checkpoint"],
         "approval_state": "awaiting_explicit_evidence_approval",
     }

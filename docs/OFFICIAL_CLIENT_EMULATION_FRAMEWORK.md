@@ -448,18 +448,29 @@ FW-A 基线 → FW-B 暂定合同 → FW-C Codex-only 发布 → FW-D 通用工�
 
 - **前置输入**：FW-D 工具链、FW-A 的 2.1.220 evidence baseline／遗留观察面，以及 FW-C 的生产收据。
 - **必做动作**：第一步查询官方 `stable`，立即冻结准确版本、发行物来源／integrity／摘要、平台、
-  entrypoint、隐私模式、默认条件和工具身份；随后相对 2.1.220 执行语义差分、P／R／J／M 哨兵和
-  `inherit／change／add／delete／condition_change` 分类，并独立记录 evidence level；最后完成逻辑入口、
-  物理别名、消费者和全部 OAuth 出站的 source-to-sink 盘点，只在冻结遗留路径启用 `legacy_observe`。
+  entrypoint、隐私模式、默认条件和工具身份；先从目标官方产物独立枚举全部网络 sink、请求构造、
+  条件 gate 和跨请求状态，再取目标原生发现、历史规则、旧源码／线索账本及前一批准 stable 的候选
+  并集，逐项执行语义差分、P／R／J／M 哨兵和 `inherit／change／add／delete／condition_change` 分类，
+  并独立记录 evidence level。首次 Claude Campaign 以 2.1.220 为历史比较基线；后继换版以最近批准
+  stable 为增量基线，但不得因此丢弃永久历史候选。最后完成逻辑入口、物理别名、消费者和全部 OAuth
+  出站的 source-to-sink 盘点，只在冻结遗留路径启用 `legacy_observe`。
+- **闭集发现要求**：目标规则全集不得由旧规则台账枚举后迁移得到，也不得截断 sink、只扫描已知
+  host／path 或只运行固定字面量探针。每个目标 sink 必须有稳定身份、可复算来源、可达性边界和唯一
+  disposition；目标独有机制必须能形成 `add`，无法分类、无法证明不可达或没有运行场景的项保持
+  `unclassified／blocked` 并阻止闭集。静态分析只能证明候选和可达性边界，仍须由目标版本运行证据
+  闭环 strict 命题。
 - **行为层边界**：是否产生某类流量不作为独立的一致性对比维度。`essential traffic` 只界定后续
   strict wire／PAIR 的场景范围；场景被调用时仍须按 §1.2 核对实际请求的 wire、transport、动态事实、
   条件分支和跨请求状态。官方可配置关闭的 telemetry 与 nonessential traffic 只记录配置、可达性和
   观测事实，其缺失属于合法状态，不得计为一致性差异或“不像官方客户端”的依据。Claude 的
   `DISABLE_TELEMETRY` 与 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 是该判据的官方实现依据。
-- **输出制品**：目标 Campaign 身份、不可变 EvidencePackage、规则迁移台账，以及两个 Inventory 的
-  当前事实；拟议 `target_disposition`／出站处置只作为未批准提案，不覆盖当前事实。
+- **输出制品**：目标 Campaign 身份、不可变 EvidencePackage、目标 sink inventory、跨来源候选矩阵、
+  规则迁移台账，以及两个 Inventory 的当前事实；拟议 `target_disposition`／出站处置只作为未批准
+  提案，不覆盖当前事实。
 - **退出门禁**：官方产物和目标版本可复算；每条范围候选规则都有迁移决策、证据等级和适用边界；
-  两个 Inventory 覆盖全部已知别名／调用方／出站并能报告未知项；观察过程未改变生产流量。
+  历史候选和目标原生发现均有唯一处置，目标 sink inventory 无截断、重复或未分类项，运行观测没有
+  出现 inventory 外 host／path／sink；两个 Inventory 覆盖全部已知别名／调用方／出站并能报告未知项；
+  观察过程未改变生产流量。
 - **禁止／回退**：本阶段不得定义目标 ProfileSchema、Snapshot、Persona 实现或 production strict
   binding；只允许为已冻结遗留调用点追加 `unclassified + legacy_observe` 的 observation-only Sink，且不得
   主张 Persona 或 wire 等价。不得用 2.1.220 或遗留输出补足目标 stable 证据；证据不足时缩小候选范围
@@ -537,7 +548,7 @@ rollback；否则使用 FW-A 冻结的遗留部署承担 operational rollback，
 |---|---|
 | Codex final wire 非零差异，或共享运行时代码变化 | 返回 FW-B，建立后继合同并重新完成 FW-C |
 | FW-D 不能机器阻断越权、范围缺口或收据不匹配 | 停在 FW-D，不得启动 stable Campaign |
-| FW-E 目标证据不足 | 收窄范围或保持 validation-only；不得以遗留输出补证 |
+| FW-E 目标证据不足，或存在未分类／被截断的目标 sink、未处置历史候选 | 停在 FW-E，补目标原生发现和运行证据；只能收窄已证明可隔离且范围外 fail-close 的 SupportEnvelope，不得以遗留输出补证 |
 | FW-F／FW-G 发现共享合同缺口 | 作废相关 ApprovalFact／candidate，返回 FW-B；重走 FW-C，并重验两个 fixture |
 | 官方产物、批准内容、源码、测试、画像或镜像变化 | 按 §3.2 建立新 Campaign、ApprovalFact 或 candidate；旧验收和收据不得复用 |
 | §4.2 不变量或生产一致性失败 | 禁止激活／扩流，标记 `production_unverified`，恢复冻结目标 |

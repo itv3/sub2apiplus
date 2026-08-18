@@ -73,6 +73,17 @@ def _normalize_request_path(value: Any) -> Any:
     return urllib.parse.urlunsplit(("", "", parsed.path, normalized_query, ""))
 
 
+def _normalized_observed_host(record: dict[str, Any], value: Any) -> str:
+    """全量发现保留域名；普通已知目标抓包继续使用稳定占位符。"""
+
+    if record.get("_capture_host_scope") != "all":
+        return "<target-host>"
+    host = str(value or "").strip().lower()
+    if not host or any(character.isspace() for character in host):
+        raise ValueError("全量网络 inventory 含非法 host。")
+    return host
+
+
 def normalize_mitm_record(record: dict[str, Any]) -> dict[str, Any]:
     """将原始 HTTP/WS 记录转换为可入库的结构证据。"""
 
@@ -84,7 +95,10 @@ def normalize_mitm_record(record: dict[str, Any]) -> dict[str, Any]:
             "subject": record.get("_subject"),
             "scenario": record.get("_scenario"),
             "from_client": bool(record.get("from_client")),
-            "host": "<target-host>",
+            "capture_host_scope": record.get("_capture_host_scope", "targets"),
+            "scheme": record.get("scheme"),
+            "host": _normalized_observed_host(record, record.get("host")),
+            "port": record.get("port"),
             "path": _normalize_request_path(record.get("path")),
             "length": record.get("length"),
             "json_shape": normalize_json_shape(record.get("json")),
@@ -99,9 +113,12 @@ def normalize_mitm_record(record: dict[str, Any]) -> dict[str, Any]:
         "boundary": record.get("_boundary"),
         "subject": record.get("_subject"),
         "scenario": record.get("_scenario"),
+        "capture_host_scope": record.get("_capture_host_scope", "targets"),
         "request": {
             "method": request.get("method"),
-            "host": "<target-host>",
+            "scheme": request.get("scheme"),
+            "host": _normalized_observed_host(record, request.get("host")),
+            "port": request.get("port"),
             "path": _normalize_request_path(request.get("path")),
             "http_version": request.get("http_version"),
             "headers": _normalize_headers(request.get("headers")),
@@ -202,11 +219,40 @@ def normalize_mitm_directory(input_dir: Path, output_path: Path) -> dict[str, An
                 if isinstance(value, dict):
                     raw_records.append(value)
                     records.append(normalize_mitm_record(value))
+    lifecycle_source_files: list[str] = []
+    network_lifecycle: list[dict[str, Any]] = []
+    for path in sorted(input_dir.glob("lifecycle-*.ndjson")):
+        lifecycle_source_files.append(path.name)
+        with path.open("r", encoding="utf-8") as stream:
+            for line_number, line in enumerate(stream, start=1):
+                try:
+                    value = json.loads(line)
+                except ValueError as error:
+                    raise ValueError(f"{path}:{line_number} 不是合法 NDJSON。") from error
+                if not isinstance(value, dict) or value.get("_event") != "request":
+                    continue
+                network_lifecycle.append(
+                    {
+                        "event": "request",
+                        "flow_id": value.get("_flow_id"),
+                        "scenario": value.get("_scenario"),
+                        "capture_host_scope": value.get(
+                            "_capture_host_scope", "targets"
+                        ),
+                        "method": value.get("method"),
+                        "scheme": value.get("scheme"),
+                        "host": _normalized_observed_host(value, value.get("host")),
+                        "port": value.get("port"),
+                        "path": _normalize_request_path(value.get("path")),
+                    }
+                )
     payload = {
         "schema_version": "official-client-capture-normalized/v1",
         "source_files": source_files,
+        "lifecycle_source_files": lifecycle_source_files,
         "record_count": len(records),
         "records": records,
+        "network_lifecycle": network_lifecycle,
         "turn_state_lifecycle": _summarize_turn_state_lifecycle(raw_records),
     }
     secure_write_json(output_path, payload)
@@ -256,9 +302,13 @@ def _summarize_turn_state_lifecycle(
 
 
 def extract_client_hellos(
-    *, pcap_path: Path, target_hosts: tuple[str, ...], tshark_bin: str
+    *,
+    pcap_path: Path,
+    target_hosts: tuple[str, ...],
+    tshark_bin: str,
+    capture_all_hosts: bool = False,
 ) -> list[dict[str, Any]]:
-    """只提取目标 SNI 的 ClientHello 稳定字段。"""
+    """提取目标 SNI；FW-E 全量模式保留进程发出的全部 ClientHello。"""
 
     command = [
         tshark_bin,
@@ -303,7 +353,7 @@ def extract_client_hellos(
             key_share_groups,
             psk_modes,
         ) = columns[:14]
-        if sni.lower() not in allowed:
+        if not sni or (not capture_all_hosts and sni.lower() not in allowed):
             continue
         records.append(
             {
@@ -363,13 +413,17 @@ def normalize_direct_pcap(
     output_path: Path,
     target_hosts: tuple[str, ...],
     tshark_bin: str,
+    capture_all_hosts: bool = False,
 ) -> dict[str, Any]:
     """校验 direct pcap 确实包含目标边界，而不是旧的错误网络命名空间。"""
 
     if not pcap_path.is_file() or pcap_path.stat().st_size <= 24:
         raise RuntimeError("direct pcap 缺失或为空。")
     client_hellos = extract_client_hellos(
-        pcap_path=pcap_path, target_hosts=target_hosts, tshark_bin=tshark_bin
+        pcap_path=pcap_path,
+        target_hosts=target_hosts,
+        tshark_bin=tshark_bin,
+        capture_all_hosts=capture_all_hosts,
     )
     if not client_hellos:
         raise RuntimeError(
@@ -378,6 +432,7 @@ def normalize_direct_pcap(
     payload = {
         "schema_version": "official-client-capture-tls/v1",
         "target_hosts": list(target_hosts),
+        "capture_host_scope": "all" if capture_all_hosts else "targets",
         "client_hello_count": len(client_hellos),
         "client_hellos": client_hellos,
     }

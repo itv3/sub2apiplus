@@ -127,6 +127,29 @@ class LifecycleTest(unittest.TestCase):
         )
         self.assertEqual(len(process.metadata["invocation"]["argv_sha256"]), 64)
 
+    def test_all_host_capture_removes_direct_host_prefilter(self) -> None:
+        def resolver(_host, _port, *, family, type):
+            return [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("203.0.113.20", 443)),
+            ]
+
+        with tempfile.TemporaryDirectory() as directory:
+            process = build_capture_process(
+                case=self._direct_case(),
+                output_dir=Path(directory) / "direct",
+                base_environment={},
+                tcpdump_bin="/usr/bin/tcpdump",
+                mitmdump_bin="/usr/bin/mitmdump",
+                mitm_addon=Path("/capture/addon.py"),
+                mitm_confdir=Path("/opt/mitm"),
+                mitm_port=18080,
+                interface="any",
+                address_resolver=resolver,
+                capture_all_hosts=True,
+            )
+        self.assertEqual(process.command[-1], "tcp port 443")
+        self.assertEqual(process.metadata["host_scope"], "all")
+
     def test_custom_https_port_is_used_for_dns_and_bpf(self) -> None:
         plan = build_campaign_plan(
             task="api",

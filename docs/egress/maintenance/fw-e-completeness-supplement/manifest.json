@@ -1,0 +1,43 @@
+{
+  "schema_version": "official-client-fw-e-completeness-supplement-transition/v1",
+  "base_commit": "f5e6d8c4ed899297b11b23a80d5384f43aed84ad",
+  "target_version": "2.1.226",
+  "prior_manifest_path": "docs/egress/maintenance/fw-e-workspace-transition/manifest.json",
+  "prior_manifest_sha256": "1ffd02ac81062a7ae09a0cc72cdca7a6bfe0d4616f83b448ea7bb7242c66e1f9",
+  "prior_receipt_path": "docs/egress/maintenance/fw-e-workspace-transition/receipt.json",
+  "prior_receipt_sha256": "b0f31e42797dc079ea7127d80f63b6eaf59e81eed1c4c6cb54131f41b6e0e9da",
+  "expected_changed_paths": [
+    ".github/workflows/backend-ci.yml",
+    "Makefile",
+    "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+    "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+    "docs/egress/maintenance/fw-e-completeness-supplement/manifest.json",
+    "tools/fw_e_completeness_transition.py",
+    "tools/fw_e_workspace_transition.py",
+    "tools/official_client_capture/README.md",
+    "tools/official_client_capture/addons/mitm_capture.py",
+    "tools/official_client_capture/capture.py",
+    "tools/official_client_capture/capturelib/analysis.py",
+    "tools/official_client_capture/capturelib/lifecycle.py",
+    "tools/official_client_capture/claude_bundle_ast.mjs",
+    "tools/official_client_capture/claude_fw_e.py",
+    "tools/official_client_capture/claude_fw_e_crosswalk.py",
+    "tools/official_client_capture/claude_target_inventory.py",
+    "tools/official_client_capture/extract_claude_bundle.py",
+    "tools/official_client_capture/tests/test_analysis.py",
+    "tools/official_client_capture/tests/test_claude_fw_e.py",
+    "tools/official_client_capture/tests/test_claude_fw_e_completeness.py",
+    "tools/official_client_capture/tests/test_lifecycle.py",
+    "tools/official_client_control/contracts.py",
+    "tools/official_client_control/fw_e.py",
+    "tools/official_client_control/tests/test_fw_e.py"
+  ],
+  "rules": [
+    "旧 FW-E 收据只作为历史事实，不得原位改写或补签",
+    "目标规则分母由目标 AST 与无截断词法候选并集决定，不得以旧 57 条规则为上限",
+    "2.1.88 真源码、HitCC 2.1.197、2.1.220 官方证据和目标 stable 必须逐项交叉处置",
+    "遥测与非必要流量关闭是官方合法状态，零流量不作为一致性差异",
+    "新全 host/path Campaign 与逐项处置完成前，FW-E 证据闭集必须保持 blocked",
+    "本补强不得修改生产后端、部署 DMIT 或操作 Vircs 生产 sub2apiplus"
+  ]
+}

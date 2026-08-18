@@ -78,6 +78,8 @@ check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal test-offic
 	@python3 tools/fw_d_control_workspace_transition.py --self-test
 	@python3 tools/fw_e_workspace_transition.py --self-test
 	@python3 tools/fw_e_workspace_transition.py
+	@python3 tools/fw_e_completeness_transition.py --self-test
+	@python3 tools/fw_e_completeness_transition.py
 	@python3 tools/changeset6_benchmark_evidence.py --self-test
 	@python3 tools/changeset6_benchmark_evidence.py
 	@python3 tools/check_ledger_completeness.py
@@ -195,8 +197,12 @@ test-frontend:
 test-frontend-critical:
 	@pnpm --dir frontend exec vitest run $(FRONTEND_CRITICAL_VITEST)
 
-# 抓包工具测试只使用标准库和合成数据，不联网、不读取真实凭据、不启动抓包进程。
+# 抓包工具测试只使用合成数据，不联网、不读取真实凭据、不启动抓包进程；Claude
+# bundle AST 用 frontend lockfile 中的 TypeScript 解析器，禁止临时下载或浮动版本。
 test-capture-tools:
+	@test -f frontend/node_modules/typescript/lib/typescript.js || \
+		{ echo "🔴 缺少锁定的 TypeScript AST 解析器，请先执行 pnpm --dir frontend install --frozen-lockfile"; exit 1; }
+	@node --version >/dev/null
 	@PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
 		-s tools/official_client_capture/tests -p 'test_*.py'
 

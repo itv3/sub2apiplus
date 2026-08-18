@@ -1135,7 +1135,7 @@ Codex IdentityMode、HeaderPolicy、BodyPolicy、BehaviorPolicy 或 fallback 字
 | `FW-B` | 按 Framework 抽取 Codex 已证明的暂定共享合同并保留 Codex facade | 共享内核无 Codex 专用策略字段；Codex active／rollback final wire 零差异；不宣称多 Persona 已冻结 |
 | `FW-C` | 验证并发布 Codex-only 正式制品，完成回滚、恢复和稳定观察 | 本轮没有新增 Claude Persona／画像／strict 注册；Codex 发布与激活收据闭环 |
 | `FW-D` | 建设 Campaign、正交事实、两段式批准、Snapshot／Release Store、candidate／PAIR、晋升与激活工具链 | 只用 Codex／合成数据自测；越权、摘要变化、范围缺口和收据不匹配均由机器阻断 |
-| `FW-E` | 第一步冻结最新 stable；完成相对 2.1.220 的规则差分、P／R／J／M 和 Evidence 记录／封存，再建立两个 Inventory 与 observation-only Sink | 目标版本和 EvidencePackage 冻结；入口／出站闭集可复算；停在 `evidence_recorded`，尚不定义目标 Schema／Snapshot 或签发 Evidence 批准 |
+| `FW-E` | 第一步冻结最新 stable；从目标 bundle 原生发现规则，取 2.1.88、HitCC、2.1.220／前一批准 stable 与目标发现的候选并集，完成差分、P／R／J／M 和 Evidence 封存，再建立两个 Inventory 与 observation-only Sink | 目标版本、完整 sink inventory、跨来源候选矩阵和 EvidencePackage 可复算；没有截断或未分类项；停在 `evidence_recorded`，尚不定义目标 Schema／Snapshot 或签发 Evidence 批准 |
 | `FW-F` | 先由最新 stable 证据生成 Schema、目标 Snapshot、Persona 和不可部署样例，再用同一 Schema／Compiler 表达 2.1.220 rollback fixture；批准 Profile、范围和多 Persona 合同 | target-first 样例与跨 Persona 负例通过；ApprovalFact 完整；Codex 生产收据对应最终合同；selector 未改变 |
 | `FW-G` | 直接完整实现最新 stable 画像，完成受管语义层、辅助出站三态、全部 strict 入口 PAIR、DMIT candidate 和 rollback 验收 | candidate 达到 production-replacement ready；范围内断言和范围外拒绝通过 |
 | `FW-H` | 灰度、回滚、激活；逐入口迁移并在闭集完成后退休遗留链 | DeploymentFact 与运行态一致；无 `retained_legacy` 才能签发迁移完成的 RemovalReceipt |
@@ -1227,6 +1227,8 @@ Campaign 只是绑定目标版本、官方产物和环境身份的不可变容�
 | 能力 | 当前状态 |
 |---|---|
 | bundle 提取、锚点和 sink 窗口 | 已实现；窗口不是数据流证明 |
+| 目标 AST／词法 sink 并集与四方矩阵 | 已实现；目标新增项可生成 `add`，任何未分类项阻断封存 |
+| 全 host／path 运行 inventory | 工具已支持；旧 Campaign 使用目标 host 预筛，必须新建 Campaign 重采后才能通过补强门禁 |
 | 规则／覆盖门禁和 22-run 分析 | 已实现 |
 | R 通道与条件 Header 探针 | 已实现 |
 | TUI／`cli` 驱动 | 未攻克；无 TTY 的 `docker exec` 会卡住 |
@@ -1256,12 +1258,79 @@ FW-E 的第一项动作必须是查询官方 `stable` 并冻结版本、发行�
 Claude 没有可用的目标版本官方源码，必须以官方生产 bundle 为主：
 
 1. 验证来源、integrity、二进制与 bundle 摘要，确定性提取 Bun SEA；
-2. 对每条既有规则比较语义锚点、sink 邻近关系、条件和运行依赖；
-3. 运行最小 baseline、条件 Header、agent、retry、端点和 entrypoint 哨兵；
-4. 每个 run 同时封存 P／R／J／M、实际 argv／环境、工具摘要、宿主回执、秘密扫描和恢复事实；
-5. 产物、平台、隐私模式或产出侧工具变化时新建 Campaign，临时网络失败才新建 attempt。
+2. 解析目标 bundle 的全部文本模块，从入口独立枚举网络 sink、请求构造、Header／Body 写入、环境与
+   feature gate、端点、重试和跨请求状态；不得只围绕旧规则或固定字面量探针搜索；
+3. 取 2.1.88 真源码候选、HitCC 线索、2.1.220／前一批准 stable 规则和目标原生发现的并集，逐项比较
+   语义锚点、source-to-sink、条件和运行依赖；
+4. 由静态条件反向生成 baseline、条件 Header、agent、retry、OAuth、端点、异常和 entrypoint 哨兵；
+5. 全 host／path 观测官方进程出站，不得用待证 endpoint 预筛；每个 run 同时封存 P／R／J／M、实际
+   argv／环境、工具摘要、宿主回执、秘密扫描和恢复事实；
+6. 产物、平台、隐私模式或产出侧工具变化时新建 Campaign，临时网络失败才新建 attempt。
 
-### 4.2.2 分类与批准清单
+官方 Bun SEA 主模块是无 sourcemap 的 minify JavaScript，但语法完整且承载实际生产控制流；它不是
+原始 TypeScript，却是目标客户端行为的直接静态权威。词法窗口、附近 sink 和 minify 符号只能用于
+定位，不能代替完整语法树、调用关系、反向数据流和运行闭环。Bun／原生模块、动态调用或宿主 transport
+无法由 JavaScript 独立证明时，必须登记为显式边界并由进程级、网络级运行证据补足。
+
+### 4.2.2 目标原生闭集与跨来源矩阵
+
+每次换版都先生成目标 `SinkInventory`，再生成规则迁移台账。首次受管 Campaign 的永久历史语料是
+2.1.88 真源码、HitCC 2.1.197 和 2.1.220 官方 bundle；后继 Campaign 另加入最近批准 stable，但目标
+规则全集始终由下列并集决定，不由任一旧台账决定：
+
+```text
+HistoricalSourceCandidates
+∪ HitCCClues
+∪ HistoricalOfficialRules
+∪ PreviousApprovedStableRules
+∪ TargetNativeDiscoveries
+```
+
+跨来源矩阵的每一行必须是原子命题，并记录历史源码位置、HitCC clue、历史／前一 stable 静态锚点、
+目标 AST／source-to-sink、privacy gate、适用条件、目标运行场景、迁移决策和 evidence level。某来源
+没有对应项时明确记 `absent`，不得省略整行。目标原生发现没有历史对应项时创建稳定的新 SPEC ID 并
+分类为 `add`；历史项在目标不可达时仍保留编号并以静态不可达和运行负例共同支持 `delete`。
+
+`SinkInventory` 至少覆盖 `fetch`、Anthropic SDK resource 调用、Node／Bun HTTP、TLS、socket、
+WebSocket／EventSource、动态 wrapper 和可能启动外部网络客户端的子进程。每个 sink 均须保存完整列表，
+禁止数量上限或抽样；同一低层 sink 的多个调用点可归并为一条规则，但每个调用点都必须反向引用唯一
+disposition。下列任一条件均阻止 FW-E 退出：
+
+1. 目标 sink 未分类、被截断、重复身份冲突或没有可复算来源；
+2. 2.1.88 候选、HitCC 直接线索或历史官方规则没有唯一处置；
+3. 目标新增项无法生成 `add`，或规则生成器只接受旧版本 ID；
+4. strict 候选缺少目标版本运行场景，或运行观测出现 inventory 外 host／path／sink；
+5. `DISABLE_TELEMETRY`、`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 的实际值、读取点和 gate 未绑定
+   本次目标产物。关闭后的 telemetry／nonessential 分支仍登记可达性和 `record_only` 处置，其不发流量
+   不计一致性差异，但不得因此删除可能影响 essential 请求构造的共享状态。
+
+现有三份历史机器台账只证明其自身路径、ID 和当前映射一致，不自动证明语义穷尽。2.1.88 必须覆盖
+`src／node_modules／vendor` 的网络相关反向切片；HitCC 每篇 `clue_source` 文档必须映射到一条或多条
+原子命题，或以可复算理由标为范围外。扫描器无法作出语义判断时保留 `unclassified`，不得按词法未命中
+自动排除。
+
+机器执行顺序固定如下，`analyze-bundles` 会对每个平台自动运行锁定 TypeScript 解析器，并把 AST
+调用点与无截断词法候选合并为 `target-sink-inventory.json`：
+
+```text
+claude_fw_e.py analyze-bundles
+→ claude_fw_e_crosswalk.py --capture-index ... --require-closed
+→ claude_fw_e.py rule-assessments --cross-source-matrix ... --completeness-closure ...
+→ claude_fw_e.py seal
+```
+
+第二步的 dispositions 必须分别覆盖目标 sink、2.1.88 候选、HitCC 线索／文档和全 host／path 运行
+观测。`traffic_class=nonessential／telemetry` 只能使用 `record_only_disabled` 或保持
+`unclassified`；不得用 `delete`、范围外或零流量事实静默移除。`seal` 使用 v2 计划并直接绑定目标
+inventory、矩阵、closure 和 capture index；closure 非 `passed`、规则证据含 `blocked`、运行样本仍
+使用 host 预筛或四者摘要不一致时，Store 不得写入 `evidence_recorded`。
+
+补强工具或产出侧身份发生变化后，旧 Campaign 及旧 FW-E 收据只保留为历史事实，不能原位续写或补签。
+必须在隔离目录新建 Campaign，并同时设置 `DISABLE_TELEMETRY=1`、
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` 和全 host 捕获开关；不得用旧的目标-host 预筛样本
+冒充闭集证据。
+
+### 4.2.3 分类与批准清单
 
 | 维度 | 值 | 准入 |
 |---|---|---|

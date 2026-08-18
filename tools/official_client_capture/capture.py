@@ -700,6 +700,7 @@ def _run_case_scenario(
         mitm_port=arguments.mitm_port,
         interface=arguments.interface,
         scenario=scenario,
+        capture_all_hosts=arguments.capture_all_hosts,
     )
 
     result_dir = _case_result_dir(run_dir, case, scenario)
@@ -787,6 +788,7 @@ def _run_case_scenario(
             output_path=analysis_path,
             target_hosts=case.target_hosts,
             tshark_bin=str(arguments.tshark_bin),
+            capture_all_hosts=arguments.capture_all_hosts,
         )
     else:
         analysis = normalize_mitm_directory(output_dir, analysis_path)
@@ -1053,6 +1055,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--interface", default="any")
     parser.add_argument("--mitm-port", type=int, default=18080)
+    parser.add_argument(
+        "--capture-all-hosts",
+        action="store_true",
+        help="关闭 host 预筛并保留完整 host/path inventory；FW-E stable Campaign 必须启用",
+    )
     parser.add_argument("--timeout", type=int, default=300)
     parser.add_argument(
         "--fault-spec",

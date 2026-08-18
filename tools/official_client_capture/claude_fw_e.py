@@ -36,7 +36,16 @@ from tools.official_client_capture.extract_claude_bundle import (  # noqa: E402
     extract,
     write_modules,
 )
+from tools.official_client_capture.claude_target_inventory import (  # noqa: E402
+    TargetInventoryError,
+    build_target_inventory,
+)
+from tools.official_client_capture.claude_fw_e_crosswalk import (  # noqa: E402
+    SCHEMA_CLOSURE,
+    SCHEMA_MATRIX,
+)
 from tools.official_client_control.canonical import (  # noqa: E402
+    canonical_sha256,
     canonical_json_bytes,
     load_json_file,
     sha256_bytes,
@@ -62,6 +71,11 @@ REGISTRY_BASE = "https://registry.npmjs.org"
 REGISTRY_KEYS_URL = f"{REGISTRY_BASE}/-/npm/v1/keys"
 VERSION_RE = re.compile(r"^\d+\.\d+\.\d+$")
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+AST_TOOL_PATH = Path(__file__).with_name("claude_bundle_ast.mjs")
+REQUIRED_PRIVACY_ENV = {
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "DISABLE_TELEMETRY": "1",
+}
 
 
 class FWEEvidenceError(RuntimeError):
@@ -537,6 +551,8 @@ def analyze_bundles(
     output_root: Path,
     baseline_anchors_path: Path,
     baseline_reachability_path: Path,
+    node_binary: str = "node",
+    typescript_module_path: Path | None = None,
 ) -> dict[str, Any]:
     if output_root.exists():
         raise FWEEvidenceError("static output_root 必须不存在，禁止覆盖")
@@ -563,12 +579,61 @@ def analyze_bundles(
         reachability = build_reachability_index(modules_dir / "cli.js")
         reachability_path = platform_dir / "reachability-index.json"
         _write_private_json(reachability_path, reachability)
+        ast_path = platform_dir / "target-native-ast.json"
+        command = [
+            node_binary,
+            str(AST_TOOL_PATH),
+            "--bundle",
+            str(modules_dir / "cli.js"),
+            "--output",
+            str(ast_path),
+            "--expected-sha256",
+            str(reachability["bundle_sha256"]),
+        ]
+        if typescript_module_path is not None:
+            command.extend(["--typescript-module", str(typescript_module_path)])
+        completed = subprocess.run(
+            command,
+            cwd=Path(__file__).resolve().parents[2],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=600,
+        )
+        if completed.returncode != 0:
+            raise FWEEvidenceError(
+                f"目标 AST inventory 失败：{platform}：{completed.stderr.strip()}"
+            )
+        ast_inventory = load_json_file(ast_path, f"{platform} AST inventory")
+        sink_inventory = build_target_inventory(
+            ast_inventory,
+            reachability,
+            target_version=str(freeze["target_version"]),
+            platform=platform,
+            ast_binding={
+                "path": ast_path.relative_to(output_root).as_posix(),
+                "sha256": sha256_file(ast_path),
+            },
+            lexical_binding={
+                "path": reachability_path.relative_to(output_root).as_posix(),
+                "sha256": sha256_file(reachability_path),
+            },
+        )
+        sink_inventory_path = platform_dir / "target-sink-inventory.json"
+        _write_private_json(sink_inventory_path, sink_inventory)
         platform_results[platform] = {
             "binary_sha256": binary_row["sha256"],
             "anchors_path": anchors_path.relative_to(output_root).as_posix(),
             "anchors_sha256": sha256_file(anchors_path),
             "reachability_path": reachability_path.relative_to(output_root).as_posix(),
             "reachability_sha256": sha256_file(reachability_path),
+            "target_native_ast_path": ast_path.relative_to(output_root).as_posix(),
+            "target_native_ast_sha256": sha256_file(ast_path),
+            "target_sink_inventory_path": sink_inventory_path.relative_to(
+                output_root
+            ).as_posix(),
+            "target_sink_inventory_sha256": sha256_file(sink_inventory_path),
+            "target_sink_count": sink_inventory["sink_total"],
             "bundle_sha256": reachability["bundle_sha256"],
         }
     baseline_anchors = load_json_file(baseline_anchors_path, "2.1.220 anchors")
@@ -625,6 +690,14 @@ def analyze_bundles(
             "只有对应规则的结构锚点、依赖和 sink 关系均被工具明确证明等价时，"
             "才能使用 inherit；字符串相同或单个 alpha 摘要相同不足以证明。"
         ),
+        "target_discovery_policy": (
+            "目标规则分母是 AST 调用点与无截断词法候选的并集；lexical_only 必须显式"
+            "处置，不能因 AST 未识别而删除。"
+        ),
+        "ast_tool": {
+            "path": AST_TOOL_PATH.relative_to(Path(__file__).resolve().parents[2]).as_posix(),
+            "sha256": sha256_file(AST_TOOL_PATH),
+        },
         "producer": {
             "path": "tools/official_client_capture/claude_fw_e.py",
             "sha256": sha256_file(Path(__file__)),
@@ -643,6 +716,177 @@ def _manifest_binding(path: Path, group_root: Path) -> dict[str, Any]:
     }
 
 
+def _case_analysis(
+    manifest_path: Path, case: dict[str, Any], label: str
+) -> dict[str, Any]:
+    relative = case.get("analysis_path")
+    if not isinstance(relative, str):
+        raise FWEEvidenceError(f"{label} case 缺少 analysis_path：{manifest_path}")
+    pure = PurePosixPath(relative)
+    if pure.is_absolute() or ".." in pure.parts or pure.as_posix() != relative:
+        raise FWEEvidenceError(f"{label} analysis_path 非法：{relative}")
+    run_root = manifest_path.parent.resolve()
+    path = (manifest_path.parent / pure).resolve()
+    try:
+        path.relative_to(run_root)
+    except ValueError as error:
+        raise FWEEvidenceError(f"{label} analysis_path 越界：{relative}") from error
+    if path.is_symlink() or not path.is_file():
+        raise FWEEvidenceError(f"{label} analysis 不是普通文件：{relative}")
+    return load_json_file(path, f"{label} analysis")
+
+
+def _network_key(raw: dict[str, Any]) -> dict[str, Any]:
+    """规范化一个不含秘密的运行网络坐标。"""
+
+    return {
+        "transport": str(raw.get("transport", "")),
+        "method": str(raw.get("method", "")),
+        "scheme": str(raw.get("scheme", "")),
+        "host": str(raw.get("host", "")).lower(),
+        "port": str(raw.get("port", "")),
+        "path": str(raw.get("path", "")),
+    }
+
+
+def _network_observation_rows(
+    manifest_path: Path,
+    case: dict[str, Any],
+    label: str,
+) -> tuple[str, list[dict[str, Any]]]:
+    """从单个 case 的规范化证据提取全 host／path 坐标。"""
+
+    capture = case.get("capture")
+    scope = capture.get("host_scope") if isinstance(capture, dict) else None
+    if scope not in {"all", "targets"}:
+        raise FWEEvidenceError(f"{label} case 缺少受管 host_scope：{manifest_path}")
+    analysis = _case_analysis(manifest_path, case, label)
+    evidence = str(case.get("evidence"))
+    rows: list[dict[str, Any]] = []
+    if evidence == "mitm":
+        if analysis.get("schema_version") != "official-client-capture-normalized/v1":
+            raise FWEEvidenceError(f"{label} MITM analysis schema 非法")
+        lifecycle = analysis.get("network_lifecycle")
+        if not isinstance(lifecycle, list):
+            raise FWEEvidenceError(f"{label} MITM analysis 缺少请求生命周期 inventory")
+        for raw in lifecycle:
+            if not isinstance(raw, dict) or raw.get("event") != "request":
+                continue
+            if raw.get("capture_host_scope") != scope:
+                raise FWEEvidenceError(f"{label} MITM host_scope 与 manifest 不一致")
+            rows.append(_network_key({**raw, "transport": "http"}))
+        records = analysis.get("records")
+        if not isinstance(records, list):
+            raise FWEEvidenceError(f"{label} MITM analysis 缺少 records")
+        for raw in records:
+            if not isinstance(raw, dict) or raw.get("kind") != "websocket_frame":
+                continue
+            rows.append(
+                _network_key(
+                    {
+                        **raw,
+                        "transport": "websocket",
+                        "method": "GET",
+                    }
+                )
+            )
+    elif evidence == "direct":
+        if analysis.get("schema_version") != "official-client-capture-tls/v1":
+            raise FWEEvidenceError(f"{label} direct analysis schema 非法")
+        if analysis.get("capture_host_scope") != scope:
+            raise FWEEvidenceError(f"{label} direct host_scope 与 manifest 不一致")
+        hellos = analysis.get("client_hellos")
+        if not isinstance(hellos, list):
+            raise FWEEvidenceError(f"{label} direct analysis 缺少 ClientHello")
+        for hello in hellos:
+            if not isinstance(hello, dict):
+                continue
+            rows.append(
+                _network_key(
+                    {
+                        "transport": "tls",
+                        "method": "CONNECT",
+                        "scheme": "tls",
+                        "host": hello.get("sni"),
+                        "port": hello.get("port"),
+                        "path": "",
+                    }
+                )
+            )
+    else:
+        raise FWEEvidenceError(f"{label} 未知 evidence：{evidence}")
+    for row in rows:
+        if not row["host"] or (scope == "all" and row["host"] == "<target-host>"):
+            raise FWEEvidenceError(f"{label} 全量网络坐标缺少实际 host")
+    return scope, rows
+
+
+def _merge_network_observation(
+    inventory: dict[str, dict[str, Any]],
+    row: dict[str, Any],
+    *,
+    scenario: str,
+    evidence: str,
+) -> None:
+    digest = canonical_sha256(row)
+    observation_id = f"RUN-NET-{digest[:20]}"
+    current = inventory.setdefault(
+        observation_id,
+        {
+            "observation_id": observation_id,
+            **row,
+            "occurrence_count": 0,
+            "scenarios": set(),
+            "evidence_modes": set(),
+        },
+    )
+    if any(current.get(key) != value for key, value in row.items()):
+        raise FWEEvidenceError(f"运行网络 observation ID 冲突：{observation_id}")
+    current["occurrence_count"] += 1
+    current["scenarios"].add(scenario)
+    current["evidence_modes"].add(evidence)
+
+
+def _validate_case_privacy_environment(
+    manifest_path: Path,
+    case: dict[str, Any],
+    label: str,
+) -> str:
+    """核验实际 Claude 子进程确实关闭遥测与非必要流量。"""
+
+    scenario_result = case.get("scenario_result")
+    invocation = (
+        scenario_result.get("invocation")
+        if isinstance(scenario_result, dict)
+        else None
+    )
+    environment = (
+        invocation.get("environment") if isinstance(invocation, dict) else None
+    )
+    if (
+        not isinstance(environment, dict)
+        or environment.get("schema_version") != "official-client-environment/v1"
+    ):
+        raise FWEEvidenceError(
+            f"{label} case 缺少受管环境清单：{manifest_path}"
+        )
+    values = environment.get("values")
+    if not isinstance(values, dict):
+        raise FWEEvidenceError(f"{label} 环境 values 非法：{manifest_path}")
+    if environment.get("keys") != sorted(values):
+        raise FWEEvidenceError(f"{label} 环境 keys 与 values 不一致：{manifest_path}")
+    environment_sha256 = canonical_sha256(values)
+    if environment.get("sha256") != environment_sha256:
+        raise FWEEvidenceError(f"{label} 环境摘要复算失败：{manifest_path}")
+    for key, expected in REQUIRED_PRIVACY_ENV.items():
+        if values.get(key) != expected:
+            raise FWEEvidenceError(
+                f"{label} 隐私开关实际值非法：{key}={values.get(key)!r}，"
+                f"要求 {expected!r}：{manifest_path}"
+            )
+    return environment_sha256
+
+
 def _scan_capture_group(
     group_root: Path,
     label: str,
@@ -656,6 +900,10 @@ def _scan_capture_group(
     source_digests: set[str] = set()
     evidence_modes: set[str] = set()
     scenarios: set[str] = set()
+    capture_host_scopes: set[str] = set()
+    network_inventory: dict[str, dict[str, Any]] = {}
+    environment_sha256s: set[str] = set()
+    case_count = 0
     for path in manifests:
         manifest = load_json_file(path, f"{label} manifest")
         if manifest.get("schema_version") != "official-client-capture/v1":
@@ -702,8 +950,21 @@ def _scan_capture_group(
         for case in case_results:
             if not isinstance(case, dict) or case.get("status") != "complete":
                 raise FWEEvidenceError(f"{label} case 未完成：{path}")
+            environment_sha256s.add(
+                _validate_case_privacy_environment(path, case, label)
+            )
+            case_count += 1
             evidence_modes.add(str(case.get("evidence")))
             scenarios.add(str(case.get("scenario")))
+            scope, observations = _network_observation_rows(path, case, label)
+            capture_host_scopes.add(scope)
+            for observation in observations:
+                _merge_network_observation(
+                    network_inventory,
+                    observation,
+                    scenario=str(case.get("scenario")),
+                    evidence=str(case.get("evidence")),
+                )
         rows.append(
             {
                 "batch_id": manifest.get("batch_id"),
@@ -719,6 +980,16 @@ def _scan_capture_group(
         )
     if len(source_digests) != 1:
         raise FWEEvidenceError(f"{label} 内部使用了多份抓包执行源：{sorted(source_digests)}")
+    normalized_network_inventory = []
+    for observation_id in sorted(network_inventory):
+        row = network_inventory[observation_id]
+        normalized_network_inventory.append(
+            {
+                **row,
+                "scenarios": sorted(row["scenarios"]),
+                "evidence_modes": sorted(row["evidence_modes"]),
+            }
+        )
     return {
         "label": label,
         "version": expected_version,
@@ -727,6 +998,14 @@ def _scan_capture_group(
         "manifest_count": len(rows),
         "evidence_modes": sorted(evidence_modes),
         "scenarios": sorted(scenarios),
+        "capture_host_scopes": sorted(capture_host_scopes),
+        "network_observations": normalized_network_inventory,
+        "privacy_controls": {
+            "required_values": dict(sorted(REQUIRED_PRIVACY_ENV.items())),
+            "case_count": case_count,
+            "environment_manifest_sha256s": sorted(environment_sha256s),
+            "result": "passed",
+        },
         "runs": rows,
     }
 
@@ -746,6 +1025,13 @@ def build_capture_index(
     target = _scan_capture_group(
         target_root, "target", target_version, target_binary_sha256
     )
+    for group in (control, target):
+        if group["capture_host_scopes"] != ["all"]:
+            raise FWEEvidenceError(
+                f"{group['label']} 没有关闭 host 预筛：{group['capture_host_scopes']}"
+            )
+        if not group["network_observations"]:
+            raise FWEEvidenceError(f"{group['label']} 全 host/path inventory 为空")
     if control["capture_source_sha256"] != target["capture_source_sha256"]:
         raise FWEEvidenceError("控制组与目标组没有使用同一冻结抓包执行源")
     relay: dict[str, Any] | None = None
@@ -768,6 +1054,12 @@ def build_capture_index(
         "control": control,
         "target": target,
         "relay": relay,
+        "network_inventory": {
+            "host_prefilter_disabled": True,
+            "control_observation_count": len(control["network_observations"]),
+            "target_observation_count": len(target["network_observations"]),
+            "result": "passed",
+        },
         "result": "passed",
         "producer": {
             "path": "tools/official_client_capture/claude_fw_e.py",
@@ -779,16 +1071,20 @@ def build_capture_index(
     return result
 
 
-def _flatten_baseline_rules(ledger: dict[str, Any]) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
-    for key in ("rules", "replacement_rules", "additional_rules"):
-        value = ledger.get(key)
-        if not isinstance(value, list):
-            raise FWEEvidenceError(f"2.1.220 规则台账缺少 {key}")
-        rows.extend(value)
+def _matrix_target_rules(matrix: dict[str, Any]) -> list[dict[str, Any]]:
+    """读取四方矩阵派生的目标规则，不把旧版本条数当作目标上限。"""
+
+    rows = matrix.get("target_rules")
+    if not isinstance(rows, list) or not rows:
+        raise FWEEvidenceError("四方矩阵缺少 target_rules")
     identities = [str(row.get("id")) for row in rows if isinstance(row, dict)]
-    if len(rows) != 57 or len(set(identities)) != 57:
-        raise FWEEvidenceError("2.1.220 规则台账不是唯一闭合的 57 条")
+    if len(identities) != len(rows) or len(set(identities)) != len(identities):
+        raise FWEEvidenceError("四方矩阵 target rule 身份缺失或重复")
+    for row in rows:
+        if row.get("origin") not in {"historical_rule", "target_native_add"}:
+            raise FWEEvidenceError(f"目标规则来源非法：{row.get('id')}")
+        if not isinstance(row.get("required_channels"), list):
+            raise FWEEvidenceError(f"目标规则 required_channels 非法：{row.get('id')}")
     return sorted(rows, key=lambda item: str(item["id"]))
 
 
@@ -799,9 +1095,10 @@ def _required_channels(rule: dict[str, Any]) -> set[str]:
     return {str(item) for item in channels}
 
 
-def _baseline_disposition(rule: dict[str, Any]) -> str:
-    status = rule.get("status")
-    value = status.get("disposition") if isinstance(status, dict) else None
+def _baseline_disposition(rule: dict[str, Any]) -> str | None:
+    value = rule.get("baseline_disposition")
+    if rule.get("origin") == "target_native_add" and value is None:
+        return None
     if not isinstance(value, str):
         raise FWEEvidenceError(f"规则缺少 disposition：{rule.get('id')}")
     return value
@@ -828,7 +1125,8 @@ def _load_overrides(path: Path | None) -> dict[str, dict[str, Any]]:
 
 def build_rule_assessments(
     workspace_root: Path,
-    baseline_ledger_path: Path,
+    cross_source_matrix_path: Path,
+    completeness_closure_path: Path,
     static_diff_path: Path,
     capture_index_path: Path,
     output_root: Path,
@@ -838,25 +1136,49 @@ def build_rule_assessments(
         raise FWEEvidenceError("rule assessment output_root 必须不存在")
     output_root.mkdir(parents=True, mode=0o700)
     output_root.chmod(0o700)
-    ledger = load_json_file(baseline_ledger_path, "2.1.220 rule ledger")
+    matrix = load_json_file(cross_source_matrix_path, "FW-E cross-source matrix")
+    closure = load_json_file(completeness_closure_path, "FW-E completeness closure")
     static_diff = load_json_file(static_diff_path, "FW-E static diff")
     capture_index = load_json_file(capture_index_path, "FW-E capture index")
+    if matrix.get("schema_version") != SCHEMA_MATRIX:
+        raise FWEEvidenceError("cross-source matrix schema 不匹配")
+    if closure.get("schema_version") != SCHEMA_CLOSURE:
+        raise FWEEvidenceError("completeness closure schema 不匹配")
+    if (
+        closure.get("result") != "passed"
+        or closure.get("unresolved_total") != 0
+        or closure.get("matrix_sha256") != canonical_sha256(matrix)
+    ):
+        raise FWEEvidenceError("目标 sink／历史候选四方闭集未通过")
     if static_diff.get("schema_version") != SCHEMA_STATIC:
         raise FWEEvidenceError("static diff schema 不匹配")
     if capture_index.get("schema_version") != SCHEMA_CAPTURE_INDEX or capture_index.get("result") != "passed":
         raise FWEEvidenceError("capture index 未通过")
     channels = {str(item) for item in capture_index.get("channels", [])}
     overrides = _load_overrides(overrides_path)
-    baseline_rows = _flatten_baseline_rules(ledger)
-    known_ids = {str(row["id"]) for row in baseline_rows}
+    target_rows = _matrix_target_rules(matrix)
+    versions = {
+        str(matrix.get("target_version")),
+        str(closure.get("target_version")),
+        str(static_diff.get("target_version")),
+        str(capture_index.get("target_version")),
+    }
+    if len(versions) != 1:
+        raise FWEEvidenceError(f"FW-E 目标版本绑定不一致：{sorted(versions)}")
+    known_ids = {str(row["id"]) for row in target_rows}
     unknown_overrides = sorted(set(overrides) - known_ids)
     if unknown_overrides:
         raise FWEEvidenceError(f"rule overrides 含未知规则：{unknown_overrides}")
     common_bindings = [
         {
-            "role": "baseline_rule",
-            "path": baseline_ledger_path.relative_to(workspace_root).as_posix(),
-            "sha256": sha256_file(baseline_ledger_path),
+            "role": "cross_source_matrix",
+            "path": cross_source_matrix_path.relative_to(workspace_root).as_posix(),
+            "sha256": sha256_file(cross_source_matrix_path),
+        },
+        {
+            "role": "completeness_closure",
+            "path": completeness_closure_path.relative_to(workspace_root).as_posix(),
+            "sha256": sha256_file(completeness_closure_path),
         },
         {
             "role": "target_static",
@@ -870,12 +1192,17 @@ def build_rule_assessments(
         },
     ]
     assessment_rows: list[dict[str, Any]] = []
-    for rule in baseline_rows:
+    for rule in target_rows:
         spec_id = str(rule["id"])
         baseline_disposition = _baseline_disposition(rule)
         required = _required_channels(rule)
         channels_complete = required.issubset(channels)
-        if baseline_disposition == "superseded":
+        if rule["origin"] == "target_native_add":
+            decision = "add"
+            basis = "new_target_rule"
+            lifecycle = "candidate"
+            evidence_level = "observed" if channels_complete else "blocked"
+        elif baseline_disposition == "superseded":
             decision = "delete"
             basis = "removed_target_rule"
             lifecycle = "superseded"
@@ -914,20 +1241,26 @@ def build_rule_assessments(
             rationale = str(override["rationale"])
         else:
             equivalence = False
-            rationale = (
-                "目标 stable 已完成有限 P/R/J/M 与静态差分，但尚未形成足以安全继承"
-                "该规则全部语义、条件和 sink 依赖的证明，因此按 change 重新派生。"
-                if decision == "change"
-                else "2.1.220 中该规则已被后继原子规则取代，目标台账保持删除结论。"
-            )
+            if decision == "change":
+                rationale = (
+                    "目标 stable 已完成 P/R/J/M 与静态差分，但尚未形成足以安全继承"
+                    "该规则全部语义、条件和 sink 依赖的证明，因此按 change 重新派生。"
+                )
+            elif decision == "add":
+                rationale = "目标原生 sink 没有历史规则承接，按四方矩阵新增原子规则。"
+            else:
+                rationale = "历史规则已被后继原子规则取代，目标台账保持删除结论。"
         if decision == "inherit" and not equivalence:
             raise FWEEvidenceError(f"{spec_id} 未证明语义等价，禁止 override 为 inherit")
+        if rule["origin"] == "target_native_add" and decision != "add":
+            raise FWEEvidenceError(f"{spec_id} 是目标原生新增规则，迁移决策必须为 add")
         evidence_document = {
             "schema_version": "claude-code-fw-e-rule-evidence/v1",
             "spec_id": spec_id,
             "baseline_version": BASELINE_VERSION,
             "target_version": static_diff["target_version"],
             "baseline_disposition": baseline_disposition,
+            "rule_origin": rule["origin"],
             "required_channels": sorted(required),
             "available_channels": sorted(channels),
             "required_channels_present": channels_complete,
@@ -966,7 +1299,7 @@ def build_rule_assessments(
     result = {
         "schema_version": SCHEMA_RULE_ASSESSMENTS,
         "baseline_version": BASELINE_VERSION,
-        "target_version": static_diff["target_version"],
+        "target_version": matrix["target_version"],
         "rule_count": len(assessment_rows),
         "inherit_count": sum(
             row["migration_decision"] == "inherit" for row in assessment_rows
@@ -1000,6 +1333,8 @@ def _build_parser() -> argparse.ArgumentParser:
     static.add_argument("--output-root", type=Path, required=True)
     static.add_argument("--baseline-anchors", type=Path, required=True)
     static.add_argument("--baseline-reachability", type=Path, required=True)
+    static.add_argument("--node-binary", default="node")
+    static.add_argument("--typescript-module", type=Path)
 
     capture = commands.add_parser("capture-index", help="复核控制组和目标组完整 M")
     capture.add_argument("--control-root", type=Path, required=True)
@@ -1010,9 +1345,10 @@ def _build_parser() -> argparse.ArgumentParser:
     capture.add_argument("--target-binary-sha256", required=True)
     capture.add_argument("--relay-index", type=Path)
 
-    rules = commands.add_parser("rule-assessments", help="生成 57 条保守迁移台账")
+    rules = commands.add_parser("rule-assessments", help="由闭合四方矩阵生成目标规则台账")
     rules.add_argument("--workspace-root", type=Path, required=True)
-    rules.add_argument("--baseline-ledger", type=Path, required=True)
+    rules.add_argument("--cross-source-matrix", type=Path, required=True)
+    rules.add_argument("--completeness-closure", type=Path, required=True)
     rules.add_argument("--static-diff", type=Path, required=True)
     rules.add_argument("--capture-index", type=Path, required=True)
     rules.add_argument("--output-root", type=Path, required=True)
@@ -1034,6 +1370,8 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
             arguments.output_root,
             arguments.baseline_anchors,
             arguments.baseline_reachability,
+            arguments.node_binary,
+            arguments.typescript_module,
         )
     if arguments.command == "capture-index":
         return build_capture_index(
@@ -1048,7 +1386,8 @@ def execute(arguments: argparse.Namespace) -> dict[str, Any]:
     if arguments.command == "rule-assessments":
         return build_rule_assessments(
             arguments.workspace_root,
-            arguments.baseline_ledger,
+            arguments.cross_source_matrix,
+            arguments.completeness_closure,
             arguments.static_diff,
             arguments.capture_index,
             arguments.output_root,
@@ -1063,7 +1402,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     os.umask(0o077)
     try:
         result = execute(_build_parser().parse_args(argv))
-    except (FWEEvidenceError, ControlError, OSError, ValueError) as error:
+    except (
+        FWEEvidenceError,
+        TargetInventoryError,
+        ControlError,
+        OSError,
+        ValueError,
+    ) as error:
         print(f"Claude FW-E 拒绝：{error}", file=sys.stderr)
         return 2
     sys.stdout.buffer.write(canonical_json_bytes(result))

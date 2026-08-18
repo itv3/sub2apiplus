@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from tools.official_client_control.canonical import canonical_json_bytes
+from tools.official_client_control.canonical import (
+    canonical_json_bytes,
+    canonical_sha256,
+    sha256_file,
+)
 from tools.official_client_control.errors import ControlError
 from tools.official_client_control.fw_e import seal_fw_e_plan
 from tools.official_client_control.store import ControlStore
@@ -32,6 +37,91 @@ class FWESealTests(unittest.TestCase):
             path = self.external / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(canonical_json_bytes(value))
+        target_inventory = {
+            "schema_version": "claude-code-target-sink-inventory/v1",
+            "target_version": "2.1.226",
+            "platform": "linux/amd64",
+            "bundle_sha256": "a" * 64,
+            "completeness": {
+                "truncated": False,
+                "ast_parse_diagnostic_count": 0,
+                "ambiguous_lexical_match_count": 0,
+                "duplicate_sink_id_count": 0,
+            },
+            "sink_total": 1,
+            "sinks": [{"sink_id": "TN-SINK-001"}],
+        }
+        (self.external / "target-inventory.json").write_bytes(
+            canonical_json_bytes(target_inventory)
+        )
+        matrix = {
+            "schema_version": "claude-code-fw-e-cross-source-matrix/v1",
+            "target_version": "2.1.226",
+            "target_sinks": [{"sink_id": "TN-SINK-001"}],
+            "runtime_observations": [
+                {"observation_id": "RUN-NET-001", "disposition": "mapped_sink"}
+            ],
+            "target_rules": [{"id": "SPEC-001"}],
+        }
+        (self.external / "matrix.json").write_bytes(canonical_json_bytes(matrix))
+        closure = {
+            "schema_version": "claude-code-fw-e-completeness/v1",
+            "target_version": "2.1.226",
+            "matrix_sha256": canonical_sha256(matrix),
+            "target_inventory_sha256": sha256_file(
+                self.external / "target-inventory.json"
+            ),
+            "target_sink_total": 1,
+            "target_sink_disposition_counts": {"mapped_strict": 1},
+            "runtime_observation_disposition_counts": {"mapped_sink": 1},
+            "unresolved": {
+                "source_candidate_ids": [],
+                "hitcc_clue_ids": [],
+                "hitcc_document_paths": [],
+                "target_sink_ids": [],
+                "runtime_observation_ids": [],
+                "runtime_capture_scope": [],
+            },
+            "unresolved_total": 0,
+            "result": "passed",
+        }
+        (self.external / "closure.json").write_bytes(canonical_json_bytes(closure))
+        capture = {
+            "schema_version": "claude-code-fw-e-capture-index/v1",
+            "target_version": "2.1.226",
+            "result": "passed",
+            "network_inventory": {
+                "result": "passed",
+                "host_prefilter_disabled": True,
+            },
+            "control": {
+                "privacy_controls": {
+                    "required_values": {
+                        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+                        "DISABLE_TELEMETRY": "1",
+                    },
+                    "case_count": 1,
+                    "environment_manifest_sha256s": ["c" * 64],
+                    "result": "passed",
+                }
+            },
+            "target": {
+                "capture_host_scopes": ["all"],
+                "privacy_controls": {
+                    "required_values": {
+                        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+                        "DISABLE_TELEMETRY": "1",
+                    },
+                    "case_count": 1,
+                    "environment_manifest_sha256s": ["d" * 64],
+                    "result": "passed",
+                },
+                "network_observations": [
+                    {"observation_id": "RUN-NET-001"}
+                ],
+            },
+        }
+        (self.external / "capture.json").write_bytes(canonical_json_bytes(capture))
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -56,7 +146,7 @@ class FWESealTests(unittest.TestCase):
             "upstream_route_family": "anthropic-api",
         }
         return {
-            "schema_version": "official-client-fw-e-seal-plan/v1",
+            "schema_version": "official-client-fw-e-seal-plan/v2",
             "campaign_id": "claude-fw-e-test",
             "persona": persona,
             "target_version": "2.1.226",
@@ -77,7 +167,10 @@ class FWESealTests(unittest.TestCase):
             "fw_c_receipt_paths": ["fw-c.json"],
             "runtime_catalog_paths": ["runtime.json"],
             "official_artifact_paths": ["official.tgz"],
-            "expected_rule_ids": ["SPEC-001"],
+            "target_sink_inventory_paths": ["target-inventory.json"],
+            "cross_source_matrix_path": "matrix.json",
+            "completeness_closure_path": "closure.json",
+            "capture_index_path": "capture.json",
             "rules": [
                 {
                     "spec_id": "SPEC-001",
@@ -146,6 +239,8 @@ class FWESealTests(unittest.TestCase):
         self.assertEqual(result["checkpoint"], "evidence_recorded")
         self.assertEqual(result["approval_state"], "awaiting_explicit_evidence_approval")
         self.assertEqual(result["rule_count"], 1)
+        self.assertEqual(result["target_sink_count"], 1)
+        self.assertEqual(result["runtime_observation_count"], 1)
         self.assertEqual(
             result["traffic_observation_policy_ref"]["object_kind"],
             "operational_evidence",
@@ -191,6 +286,32 @@ class FWESealTests(unittest.TestCase):
         plan = self.plan()
         plan["traffic_observation_policy"]["traffic_presence_comparison"] = "enabled"
         with self.assertRaisesRegex(ControlError, "禁止把流量类别是否出现"):
+            seal_fw_e_plan(self.store, self.external, plan)
+
+    def test_blocks_unclassified_target_sink_closure(self) -> None:
+        plan = self.plan()
+        closure_path = self.external / "closure.json"
+        closure = json.loads(closure_path.read_text())
+        closure["target_sink_disposition_counts"] = {"unclassified": 1}
+        closure_path.write_bytes(canonical_json_bytes(closure))
+        with self.assertRaisesRegex(ControlError, "unclassified target sink"):
+            seal_fw_e_plan(self.store, self.external, plan)
+
+    def test_blocks_rule_with_blocked_evidence(self) -> None:
+        plan = self.plan()
+        plan["rules"][0]["evidence_level"] = "blocked"
+        with self.assertRaisesRegex(ControlError, "证据仍为 blocked"):
+            seal_fw_e_plan(self.store, self.external, plan)
+
+    def test_blocks_capture_without_privacy_control_proof(self) -> None:
+        plan = self.plan()
+        capture_path = self.external / "capture.json"
+        capture = json.loads(capture_path.read_text())
+        capture["target"]["privacy_controls"]["required_values"][
+            "DISABLE_TELEMETRY"
+        ] = "0"
+        capture_path.write_bytes(canonical_json_bytes(capture))
+        with self.assertRaisesRegex(ControlError, "隐私开关的实际值"):
             seal_fw_e_plan(self.store, self.external, plan)
 
 
