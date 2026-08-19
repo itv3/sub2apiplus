@@ -1,0 +1,700 @@
+{
+  "schema_version": "claude-code-required-rule-manifest/v1",
+  "target_version": "2.1.226",
+  "rule_standard": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md#第二部分-codex-cli-客户端规则画像",
+  "atomic_assertion_ledger": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v5-final/measured-rule-ledger.json",
+  "atomic_assertion_count": 110,
+  "profile_atomic_assertion_count": 106,
+  "scenario_only_assertion_count": 4,
+  "required_rule_count": 40,
+  "required_rules": [
+    {
+      "spec_id": "SPEC-BODY-001",
+      "title": "推理 Body 顶层序列化合同",
+      "domain": "body",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-BODY-001"
+      ],
+      "scope": "messages-inference；Claude Code 2.1.226 的 sdk-cli／cli 推理请求。",
+      "rule": "Body 顶层字段按已实测顺序序列化；字段存在性和类型由同一 Release 画像约束。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "1 条 R/M 原子断言通过；基础四组官方推理样本逐字节确认顶层键顺序。",
+      "implementation": "由 Claude BodyShape 和 DialectCompiler 定型，Ingress 不得直接生成最终 wire。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-BODY-002",
+      "title": "metadata 身份与扩展合并",
+      "domain": "body",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-BODY-002",
+        "SPEC-META-001",
+        "SPEC-META-002"
+      ],
+      "scope": "messages-inference；基础身份及获准 EXTRA_METADATA 条件。",
+      "rule": "metadata.user_id 内嵌 device、account、session 身份；额外 metadata 只按实测浅合并规则加入，session 必须与 Header 同源。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "3 条 R/M 原子断言通过；基础与 extra-metadata 正交场景覆盖默认值、浅合并和嵌套对象。",
+      "implementation": "由 ClaudeIdentityFacts 提供可信身份，Planner 和 Compiler 组合；禁止从第三方入站静默补造客户端状态。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-BODY-003",
+      "title": "system 结构与自定义提示分支",
+      "domain": "body",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-BODY-003",
+        "SPEC-BODY-044",
+        "SPEC-BODY-045",
+        "SPEC-BODY-046",
+        "SPEC-BODY-047"
+      ],
+      "scope": "messages-inference；主请求、子代理、自定义 system、追加／排除动态 system 和获准自定义 agent。",
+      "rule": "按入口和受信条件选择已实测的 system block 数量、顺序、文本角色和 cache_control 形态。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "5 条 R/M 原子断言通过；基础、custom-system、append、exclude-dynamic 和 custom-agent 场景均有独立 wire。",
+      "implementation": "Persona 画像保存结构和派生规则；用户文本只作为规范化语义输入，不写入静态画像。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-BODY-004",
+      "title": "消息历史与会话续接状态",
+      "domain": "body",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-BODY-004",
+        "SPEC-BODY-018",
+        "SPEC-STATE-006",
+        "SPEC-STATE-007"
+      ],
+      "scope": "messages-inference；首轮、续轮、resume、fork、子代理和真实 TUI。",
+      "rule": "messages 角色序列、Session-Id、metadata.session_id 与 cc_prev_req 按实测会话转换共同演进；fork 必须生成新会话身份。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "4 条 R/M 原子断言通过；基础多轮、resume、fork 与 TUI 场景覆盖正反状态转换。",
+      "implementation": "由 invocation 隔离的 Persona 状态机生成；没有可信会话锚点时 fail-close，不复用入站伪身份。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-BODY-005",
+      "title": "基础 tools 字段与工具 Schema",
+      "domain": "body",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-BODY-005"
+      ],
+      "scope": "messages-inference；无工具、Agent 与 Bash 基础场景。",
+      "rule": "tools 字段始终存在；无工具为数组空值，内置工具按实测名称、说明和 JSON Schema 输出。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "1 条 R/M 原子断言通过；基础四组官方样本覆盖空工具、Agent 与 Bash。",
+      "implementation": "由 Claude ToolPolicy 编译规范化工具；不接受入站伪造官方工具身份。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-BODY-007",
+      "title": "billing attribution 身份块",
+      "domain": "body",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-BODY-007",
+        "SPEC-BODY-014",
+        "SPEC-BODY-016",
+        "SPEC-BODY-017"
+      ],
+      "scope": "messages-inference；默认 attribution 与官方关闭条件。",
+      "rule": "首个 system block 承载版本和动态 cch attribution；关闭条件成立时整块移除，其余 system 保持相对顺序。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "4 条 R/M 原子断言通过；基础请求和 attribution-disabled 条件场景确认格式、动态值与省略行为。",
+      "implementation": "版本来自 Release，动态值来自 Persona 身份派生；不得从入站原样透传 attribution。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-BODY-008",
+      "title": "模型与生成参数组合",
+      "domain": "body",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-BODY-008",
+        "SPEC-BODY-009",
+        "SPEC-BODY-010",
+        "SPEC-BODY-011",
+        "SPEC-BODY-012",
+        "SPEC-BODY-013",
+        "SPEC-BODY-040",
+        "SPEC-BODY-041",
+        "SPEC-BODY-042"
+      ],
+      "scope": "messages-inference；Sonnet 5 基线及 max_tokens、effort、thinking、adaptive-thinking 条件。",
+      "rule": "model、max_tokens、thinking、context_management、effort 和 stream 必须作为一个条件化 Body 合同生成，覆盖值和省略行为均按实测映射。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "9 条 R/M 原子断言通过；基线、五档 effort、输出上限及 thinking 开关场景均已对拍。",
+      "implementation": "由 ModelIntent 和 BodyShape 联合编译；只接受 SupportEnvelope 内的模型及受信配置。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-BODY-043",
+      "title": "请求 gzip wire",
+      "domain": "body",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-BODY-043"
+      ],
+      "scope": "messages-inference；官方请求 gzip 条件成立时。",
+      "rule": "插入 Content-Encoding:gzip，Content-Length 计算压缩后的 wire 字节；解压后必须是完整目标 JSON。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "1 条 R/M 原子断言通过；gzip 正交场景保存压缩原始请求并验证可逆解析。",
+      "implementation": "DialectCompiler 先定型 JSON 再压缩并计算长度，Executor 不得二次改写。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-BODY-048",
+      "title": "真实 TUI 标题与主推理请求",
+      "domain": "body",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-BODY-048",
+        "SPEC-BODY-049"
+      ],
+      "scope": "messages-inference；真实 cli 交互入口。",
+      "rule": "TUI 先生成 Haiku 标题请求，再生成 Sonnet 主请求；两者的模型、beta、system、tools、thinking 和 output_config 分别按已实测形态输出。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "2 条 R/M 原子断言通过；真实 TUI 运行取得标题请求与主推理请求的完整 wire。",
+      "implementation": "仅在可信 cli entrypoint 条件下由 Persona 状态机生成；第三方入站不得自报 TUI 身份。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-CACHE-005",
+      "title": "system prompt cache_control",
+      "domain": "cache",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-CACHE-005",
+        "SPEC-CACHE-006"
+      ],
+      "scope": "messages-inference；Sonnet 基线、一小时缓存和禁用缓存条件。",
+      "rule": "默认使用实测的两个一小时 system 缓存点；禁用条件移除全部 cache_control 而不改变 block 内容。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "2 条 R/M 原子断言通过；基线、1h 开关和两类禁用条件均有完整 Body 对比。",
+      "implementation": "由 CachePolicy 在 system 结构定型后应用，不能由兼容层任意插入缓存标记。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-CONN-010",
+      "title": "重试分类、退避、预算与超时",
+      "domain": "connection",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-CONN-002",
+        "SPEC-CONN-010",
+        "SPEC-CONN-016",
+        "SPEC-CONN-020",
+        "SPEC-CONN-022",
+        "SPEC-CONN-024"
+      ],
+      "scope": "messages-inference；HTTP 状态、Retry-After、断连、最大重试数和 API_TIMEOUT_MS 条件。",
+      "rule": "按已实测状态集合决定是否重试，执行分级退避、Retry-After、断连重试、每模型预算和超时 Header；预算为零时不重试。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "6 条 R/M 原子断言通过；十状态故障矩阵、两种 Retry-After、断连、retry-limit 和 timeout 场景闭合。",
+      "implementation": "Claude RetryPolicy 生成 attempt；共享 Executor 只执行已编译 attempt，不解释厂商状态语义。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-CONN-018",
+      "title": "streaming 失败与 non-stream fallback",
+      "domain": "connection",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-BODY-032",
+        "SPEC-CONN-018"
+      ],
+      "scope": "messages-inference；建流 404、已建流中断及 disable fallback 条件。",
+      "rule": "按实测条件切换 non-stream；fallback 请求省略 stream、调整超时并刷新 request-id／cch，同时保持会话和其余 Body 语义。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "2 条 R/M 原子断言通过；四个隔离 streaming 故障场景覆盖建流和中断分支。",
+      "implementation": "由 Claude 流状态机和 Body 编译器共同产生新的 attempt，禁止业务层旁路修改。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-CONN-019",
+      "title": "HTTP/1.1 连接复用",
+      "domain": "connection",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-CONN-019"
+      ],
+      "scope": "messages-inference；同一官方多请求运行。",
+      "rule": "同一运行的连续推理请求复用有效 HTTP/1.1 连接；跨画像、跨 Persona 和失效连接不得复用。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "1 条 R/M 原子断言通过；a1、s2、s4 三个多请求运行确认连接身份关系。",
+      "implementation": "连接池按 Persona、Release、route 和 transport capability 隔离。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-CONN-021",
+      "title": "重试中的请求状态再生成",
+      "domain": "connection",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-CONN-021"
+      ],
+      "scope": "messages-inference；应用层状态重试、Retry-After、断连和 retry-limit。",
+      "rule": "重试保持 Body、Session-Id 和主体 attribution，重新生成 x-client-request-id；Stainless retry count 保持实测值。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "1 条 R/M 原子断言通过；15 个 retry transition 对动态与稳定字段逐项比较。",
+      "implementation": "Attempt 状态由 Persona RetryPolicy 派生，Body 可重放性由 CompiledEnvelope 保护。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-CONN-023",
+      "title": "模型 fallback 转换",
+      "domain": "connection",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-BODY-050",
+        "SPEC-CONN-023"
+      ],
+      "scope": "messages-inference；配置 fallback model 且主 Sonnet 连续达到失败预算。",
+      "rule": "预算耗尽后切换到 Haiku fallback，并同时切换 max_tokens、thinking、beta、message 和 output_config 形态，保持会话身份。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "2 条 R/M 原子断言通过；隔离 fallback 场景取得三次 Sonnet 与第四次 Haiku 完整转换。",
+      "implementation": "FallbackPolicy 选择目标 BodyShape；不得只替换 model 字符串。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-EP-001",
+      "title": "messages 推理端点坐标",
+      "domain": "endpoint",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-EP-001",
+        "SPEC-EP-003",
+        "SPEC-EP-004"
+      ],
+      "scope": "messages-inference；first-party OAuth。",
+      "rule": "使用 api.anthropic.com 的 POST /v1/messages?beta=true，method、host、path 和 query 均为闭集。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "3 条 R/M 原子断言通过；基础八条推理请求逐项确认端点坐标。",
+      "implementation": "EndpointProfile 与 route／Sink 共同定型；未知 host、path、query 或端口 fail-close。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-EP-002",
+      "title": "hello 生命周期探测",
+      "domain": "endpoint",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-EP-002"
+      ],
+      "scope": "lifecycle-hello；每次 sdk-cli／cli 运行。",
+      "rule": "在独立连接发送无 Body 的 HEAD /api/hello，并使用已实测五项 Header。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "1 条 R/M 原子断言通过；四个基础运行均取得一条 hello 请求。",
+      "implementation": "作为独立 strict egress、route、Sink 和画像视图执行，不在 messages 代码中旁路。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-EP-005",
+      "title": "policy limits 辅助端点",
+      "domain": "endpoint",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-EP-005"
+      ],
+      "scope": "policy-limits；sdk-cli 启动阶段。",
+      "rule": "发送 GET /api/claude_code/policy_limits，使用 first-party OAuth、oauth beta、Release UA 和七项有序 Header。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "1 条 R/M 原子断言通过；55 个非 TUI 官方运行确认端点与 Header 合同。",
+      "implementation": "作为独立 persona_strict egress 编译；其出现仍受官方隐私与入口条件控制。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-EP-006",
+      "title": "settings 辅助端点",
+      "domain": "endpoint",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-EP-006"
+      ],
+      "scope": "settings；sdk-cli 启动阶段。",
+      "rule": "发送 GET /api/claude_code/settings，在 policy-limits 身份向量上增加 no-cache Header。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "1 条 R/M 原子断言通过；55 个非 TUI 官方运行确认端点与九项 Header。",
+      "implementation": "作为独立 persona_strict egress 编译；不得复用裸 client 绕过 Persona。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-EP-007",
+      "title": "OAuth profile 辅助端点",
+      "domain": "endpoint",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-EP-007"
+      ],
+      "scope": "oauth-profile；真实 TUI cli 启动。",
+      "rule": "发送 GET /api/oauth/profile，使用 axios UA、JSON Content-Type、OAuth Authorization 与八项有序 Header。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "1 条 R/M 原子断言通过；真实 TUI 运行取得完整请求。",
+      "implementation": "仅在可信 cli entrypoint 下作为独立 strict egress 生成。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-EP-008",
+      "title": "essential 请求生命周期顺序",
+      "domain": "endpoint",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-EP-008"
+      ],
+      "scope": "hello、policy-limits、settings、oauth-profile 与 messages；sdk-cli／cli。",
+      "rule": "sdk-cli 和 TUI 分别遵循已实测的 essential 请求偏序；policy-limits 与 settings 不伪造固定先后。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "1 条 R/M 原子断言通过；54 个正式运行对生命周期请求序列复算。",
+      "implementation": "Persona 生命周期状态机调度独立 egress；关闭流量本身不作为一致性比较维度。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-EP-009",
+      "title": "count_tokens 完整 wire",
+      "domain": "endpoint",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-BODY-051",
+        "SPEC-EP-009",
+        "SPEC-HDR-045"
+      ],
+      "scope": "count-tokens；真实 TUI token 计数条件。",
+      "rule": "POST /v1/messages/count_tokens?beta=true，使用 Claude SDK 身份 Header，并按 model、messages、tools 顺序发送 Body。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "3 条 R/M 原子断言通过；36 个正例与 sdk-cli 基线条件对照覆盖 endpoint、Header 和 Body。",
+      "implementation": "作为独立 persona_strict egress 编译，不与遗留 token-count 别名混同。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-EP-010",
+      "title": "OAuth token refresh 完整 wire",
+      "domain": "endpoint",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-BODY-052",
+        "SPEC-EP-010",
+        "SPEC-HDR-046"
+      ],
+      "scope": "oauth-token-refresh；过期 OAuth 凭据条件。",
+      "rule": "POST platform.claude.com/v1/oauth/token，使用 axios 七项 Header 且不发送 Authorization；Body 字段顺序和 grant_type 固定，凭据只在运行时注入。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "3 条 R/M 原子断言通过；隔离 refresh 正例与普通推理基线条件对照闭合。",
+      "implementation": "作为独立 persona_strict credential-lifecycle egress；秘密不得进入画像、日志或收据。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-EP-011",
+      "title": "MCP server 目录完整 wire",
+      "domain": "endpoint",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-EP-011",
+        "SPEC-HDR-047"
+      ],
+      "scope": "mcp-servers；真实 TUI 的 MCP 目录条件。",
+      "rule": "GET /v1/mcp_servers?limit=1000，使用 OAuth、anthropic beta/version、MCP capabilities 与 protocol version 的有序 Header。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "2 条 R/M 原子断言通过；四个 TUI 正例与 sdk-cli 基线条件对照确认 endpoint 和 Header。",
+      "implementation": "作为独立 persona_strict egress；只有已批准 TUI／MCP 条件可触发。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-HDR-001",
+      "title": "messages 基础 Header 与 OAuth 身份",
+      "domain": "header",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-AUTH-002",
+        "SPEC-HDR-001",
+        "SPEC-HDR-004",
+        "SPEC-HDR-005",
+        "SPEC-HDR-006",
+        "SPEC-HDR-007",
+        "SPEC-HDR-044"
+      ],
+      "scope": "messages-inference；Linux/amd64、first-party OAuth 基线。",
+      "rule": "按实测大小写和顺序输出基础 Header，包括 Bearer OAuth、anthropic-version、压缩能力、Stainless 平台向量、x-app 与准确 Content-Length。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "7 条 R/M 原子断言通过；基础八条推理请求覆盖 Header 序列、值和 Body 长度关系。",
+      "implementation": "HeaderSlots 由 Release、可信账号和 Body wire 派生；入站 Header 不得覆盖官方身份槽。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-HDR-002",
+      "title": "User-Agent 与入口 attribution",
+      "domain": "header",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-BODY-015",
+        "SPEC-HDR-002"
+      ],
+      "scope": "messages-inference；sdk-cli、真实 cli 及获准 UA 条件段。",
+      "rule": "UA 版本来自 Release，入口段与 billing cc_entrypoint 同源；agent-sdk、client-app、workload 只按受信条件追加。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "2 条 R/M 原子断言通过；sdk-cli、TUI 与条件 UA 场景覆盖两处入口身份关系。",
+      "implementation": "Release 和 TrustedEntrypointFacts 共同派生；禁止消费入站 UA 或自报版本。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-HDR-003",
+      "title": "anthropic-beta 有序组合",
+      "domain": "header",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-BETA-008",
+        "SPEC-HDR-003"
+      ],
+      "scope": "messages-inference；主请求、子代理和 ANTHROPIC_BETAS 条件。",
+      "rule": "基础 beta 按实测顺序输出；子代理按规则省略末项；额外 beta 修剪空项后插入指定位置且不去重。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "2 条 R/M 原子断言通过；基础主／子代理和 beta-deduplicate 条件场景确认顺序与重复保留。",
+      "implementation": "BetaPolicy 由 Persona Compiler 执行；未知 beta 或范围外条件 fail-close。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-HDR-009",
+      "title": "条件身份 Header 与 attribution 联动",
+      "domain": "header",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-BODY-039",
+        "SPEC-HDR-009",
+        "SPEC-HDR-016",
+        "SPEC-HDR-017",
+        "SPEC-HDR-018",
+        "SPEC-HDR-021",
+        "SPEC-HDR-022",
+        "SPEC-HDR-023",
+        "SPEC-HDR-024",
+        "SPEC-HDR-026",
+        "SPEC-HDR-042",
+        "SPEC-HDR-043"
+      ],
+      "scope": "messages-inference；additional-protection、client-app、remote container/session、agent-sdk 与 workload 条件。",
+      "rule": "条件 Header、UA 段与 workload attribution 必须从同一受信事实按实测值和槽位共同生成；条件不成立时省略。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "12 条 R/M 原子断言通过；单条件和组合条件矩阵覆盖出现、省略、值传递、顺序与跨字段一致性。",
+      "implementation": "ClaudeIdentityFacts 和 HeaderSlots 联合派生；不允许第三方请求直接声明官方条件身份。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-HDR-012",
+      "title": "请求与会话标识生命周期",
+      "domain": "header",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-HDR-012",
+        "SPEC-HDR-013"
+      ],
+      "scope": "messages-inference；单请求与同一多请求会话。",
+      "rule": "每个请求生成不复用的 UUID request-id；同一会话的多请求复用 Session-Id。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "2 条 R/M 原子断言通过；八条推理请求与三个多请求运行确认唯一性和复用边界。",
+      "implementation": "request-id 为 attempt 级，Session-Id 为 Persona 会话级；跨 Persona／Release 禁止复用。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-HDR-014",
+      "title": "子代理身份与父子谱系",
+      "domain": "header",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-BODY-019",
+        "SPEC-HDR-014",
+        "SPEC-HDR-015",
+        "SPEC-HDR-048",
+        "SPEC-STATE-008"
+      ],
+      "scope": "messages-inference；一级至三级 Agent 请求。",
+      "rule": "子代理使用 17 位 agent-id、复用会话并标记 subagent attribution；二级及更深追加直接父 agent-id，层级唯一性与链路关系必须一致。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "5 条 R/M 原子断言通过；depth1／2／3 与前台基线覆盖 Header、Body、会话和谱系关系。",
+      "implementation": "由可信 AgentLineageFacts 派生；无父链事实时不得补造 agent 身份。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-HDR-029",
+      "title": "自定义 Header 语法与保护槽",
+      "domain": "header",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-HDR-029",
+        "SPEC-HDR-030",
+        "SPEC-HDR-031",
+        "SPEC-HDR-032"
+      ],
+      "scope": "messages-inference；获准 ANTHROPIC_CUSTOM_HEADERS 条件。",
+      "rule": "按行和首冒号解析并保持输入顺序；空名称 fail-close；自定义项不得覆盖官方 request-id，插入位置固定。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "4 条 R/M 原子断言通过；合法语法、无效名称和受保护槽位场景均已实测。",
+      "implementation": "由 Compiler 的受控扩展槽处理；Header 名和值先验证再进入最终 wire。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-PROTO-001",
+      "title": "HTTP/1.1 与端点 ALPN",
+      "domain": "protocol",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-PROTO-001",
+        "SPEC-TLS-002"
+      ],
+      "scope": "hello、messages、policy-limits 与 settings；Linux/amd64 原生 TLS。",
+      "rule": "应用层使用 HTTP/1.1；hello/messages ClientHello offer http/1.1，policy-limits/settings 的实测分支省略 ALPN。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 P/R/M 断言。",
+      "measured": "1 条 R/M 与 1 条 P/M 原子断言通过；12 条应用层请求及同一原生 TLS attempt 的四端点对照闭合。",
+      "implementation": "TransportProfile 按 egress 选择 ALPN 行为并只建立 HTTP/1.1 执行能力。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-STATE-009",
+      "title": "background 请求身份与形态",
+      "domain": "request_state",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-STATE-009"
+      ],
+      "scope": "messages-inference；官方 background 会话。",
+      "rule": "background 使用 x-app=cli-bg、cc_entrypoint=cli，并按已实测 Haiku／Sonnet 后台请求形态输出；前台保持 cli。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "1 条 R/M 原子断言通过；background 正例与 sdk-cli 前台条件对照确认身份及 Body 形态。",
+      "implementation": "只接受可信 background 状态事实；第三方入站不得通过 x-app 触发。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-TLS-001",
+      "title": "原生 ClientHello CipherSuite 顺序",
+      "domain": "tls",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-TLS-001"
+      ],
+      "scope": "hello、messages、policy-limits 与 settings；Linux/amd64 原生 TLS。",
+      "rule": "四类目标连接使用同一实测 CipherSuite 有序序列；不得以 relay 或服务端重建冒充 ClientHello。",
+      "source": "未取得可审计原源码；TLS 行为以官方 2.1.226 原生二进制的 P/M 为唯一权威。",
+      "measured": "1 条 P/M 原子断言通过；v4-native-tls-baseline 中四个 ClientHello 正例及四个条件对照均已解析。",
+      "implementation": "TransportCapability 必须在目标平台产生等价原生 TLS wire；平台变化需重建画像。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-TLS-003",
+      "title": "TLS SNI",
+      "domain": "tls",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-TLS-003"
+      ],
+      "scope": "hello 与 messages；目标 TLS 连接。",
+      "rule": "握手使用 api.anthropic.com SNI，并与已批准 Sink 一致。",
+      "source": "未取得可审计原源码；规则权威来自官方 2.1.226 原生连接的 P/M。",
+      "measured": "1 条 P/M 原子断言通过；8 个承载选定请求的真实 TLS 连接确认 SNI。",
+      "implementation": "SNI 由 EndpointProfile 的可信 Sink 派生，禁止从任意入站 Host 透传。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-TOOL-018",
+      "title": "StructuredOutput 工具",
+      "domain": "tool",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-TOOL-018"
+      ],
+      "scope": "messages-inference；json-schema 条件。",
+      "rule": "把输入 schema 包装为唯一 StructuredOutput 工具，使用固定说明和 input_schema，同时保持实测 effort。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "1 条 R/M 原子断言通过；json-schema 正交场景取得完整工具描述。",
+      "implementation": "ToolPolicy 只消费规范化 schema，官方工具名称和说明来自 Release。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-TOOL-019",
+      "title": "内置 Agent 与 Bash 工具往返",
+      "domain": "tool",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-TOOL-019",
+        "SPEC-TOOL-020"
+      ],
+      "scope": "messages-inference；Agent 和 Bash 工具调用。",
+      "rule": "tool_use 与同 ID tool_result 成对进入续轮；Agent 还派生带可信 agent-id 的子代理请求。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "2 条 R/M 原子断言通过；Agent depth1、Bash 与无工具基线条件对照闭合。",
+      "implementation": "工具往返由规范化消息和 Persona 状态共同编译，tool ID 关系必须保真。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-TOOL-021",
+      "title": "MCP 工具与 deferred 全目录",
+      "domain": "tool",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-TOOL-021",
+        "SPEC-TOOL-022"
+      ],
+      "scope": "messages-inference；stdio MCP 与 deferred MCP 条件。",
+      "rule": "MCP 工具按实测前缀、名称和 input_schema 输出并完成同 ID 往返；deferred 场景必须保留全量目录，不得截断。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "2 条 R/M 原子断言通过；普通 MCP、33 项 deferred 工具与无工具基线条件对照闭合。",
+      "implementation": "ToolPolicy 对全量已批准目录确定性编译；未知 MCP 能力不得自动进入 SupportEnvelope。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-TOOL-023",
+      "title": "advisor 工具条件分支",
+      "domain": "tool",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-TOOL-023"
+      ],
+      "scope": "messages-inference；显式启用 advisor 条件。",
+      "rule": "仅在条件成立时加入已实测 advisor type 和 model；默认分支省略。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "1 条 R/M 原子断言通过；显式正例与默认官方条件对照各一组。",
+      "implementation": "由受信 feature 条件选择 ToolPolicy；入站工具声明不能冒充官方 advisor。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    },
+    {
+      "spec_id": "SPEC-TOOL-024",
+      "title": "server web_search 派生请求",
+      "domain": "tool",
+      "responsibility": "persona_strict",
+      "atomic_assertion_ids": [
+        "SPEC-TOOL-024"
+      ],
+      "scope": "messages-inference；WebSearch 外层工具调用。",
+      "rule": "外层调用派生独立的 server web_search 请求，携带已实测 tool descriptor 与 tool_choice。",
+      "source": "未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。",
+      "measured": "1 条 R/M 原子断言通过；三条 web_search 请求与无工具基线条件对照闭合。",
+      "implementation": "由 Persona ToolPolicy 生成派生请求；跨请求关系和会话身份必须保持。",
+      "status": "observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。"
+    }
+  ],
+  "scenario_only_groups": [
+    {
+      "group_id": "SCENARIO-LOCAL-CONTEXT",
+      "title": "官方客户端本地上下文装配",
+      "responsibility": "client_local_scenario",
+      "atomic_assertion_ids": [
+        "SPEC-BODY-053",
+        "SPEC-BODY-054",
+        "SPEC-STATE-010"
+      ],
+      "disposition": "保留为官方端到端场景证据；Sub2API 只接收装配后的规范化语义，不模拟本地文件读取或 Hook 执行。"
+    },
+    {
+      "group_id": "SCENARIO-LOCAL-REJECTION",
+      "title": "官方客户端本地安全拒绝",
+      "responsibility": "client_local_scenario",
+      "atomic_assertion_ids": [
+        "SPEC-STATE-005"
+      ],
+      "disposition": "保留为客户端本地 fail-close 证据；请求未出站，不进入 Persona RequiredRules 或 SupportEnvelope。"
+    }
+  ]
+}

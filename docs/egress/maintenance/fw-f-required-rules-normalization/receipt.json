@@ -1,0 +1,164 @@
+{
+  "schema_version": "official-client-fw-f-required-rules-normalization-receipt/v1",
+  "closed_at_utc": "2026-08-19T08:00:00Z",
+  "target_version": "2.1.226",
+  "target_binary_sha256": "4e9bec1177ce9690e8bd988b710ac24105e70da428dd094c5adcbbe786a55555",
+  "capture_source_bundle_sha256": "78fae770cbb54af5e9192ae6557516d9fd78187914fbb6399a359e1a75573c06",
+  "source_campaign_id": "complete-v21-78fae770cbb5",
+  "campaign_id": "claude-code-2_1_226-fw-f-required-rules-v5-20260819",
+  "base_commit": "3e8a99cbfdc27334b54d5981b01d358c076a4fc1",
+  "completed_work_item": "fw_f_codex_rule_standard_normalization",
+  "approval_purpose": "validation_only",
+  "rule_standard": {
+    "authority": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+    "human_rule_fields": [
+      "范围",
+      "规则／机制",
+      "源码",
+      "实测",
+      "实现",
+      "状态"
+    ],
+    "required_rule_count": 40,
+    "atomic_assertion_count": 110,
+    "profile_atomic_assertion_count": 106,
+    "scenario_only_assertion_count": 4
+  },
+  "authority_document_bindings": {
+    "framework": {
+      "path": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+      "sha256": "11c29285aab45c625818b32d5748dd2a70489f0cd94671864c3cf1f3e61ef2b3"
+    },
+    "claude_guide": {
+      "path": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "sha256": "6682bc38c52f01f84324fde155fc19a628c62a14c1734477a4fb4598ee328044"
+    }
+  },
+  "implementation_bindings": {
+    "profile_tool": {
+      "path": "tools/official_client_capture/claude_fw_f_profile.py",
+      "sha256": "f5e6b8c8cf03d15b0604022def2f9c6f03231c8dcd4392cd936220e569a2d62b"
+    },
+    "profile_policy": {
+      "path": "tools/official_client_capture/claude_fw_f_profile_policy_2_1_226.json",
+      "sha256": "964c0b6c69bdbcedd6edf990fea5eb0eb08c41a13ebd58a3b0de65fa2f3287e7"
+    },
+    "required_rule_manifest": {
+      "path": "tools/official_client_capture/claude_required_rules_2_1_226.json",
+      "sha256": "50261962778b8a7cf85f2dd01a8057f8004e92c0978456e88d9457d4ef8030b3"
+    },
+    "atomic_rule_tool": {
+      "path": "tools/official_client_capture/claude_fw_f_measured_rules.py",
+      "sha256": "709286e864d74a2bb3afcb1bfb3f1a0325194db43209db1ce35a1c9cd061611d"
+    },
+    "profile_tests": {
+      "path": "tools/official_client_capture/tests/test_claude_fw_f_profile.py",
+      "sha256": "f66b7d0e8cfaf38fcb78fb40edf47e2f1e3e65e565ca852c6e10506f56b44edf"
+    },
+    "atomic_rule_tests": {
+      "path": "tools/official_client_capture/tests/test_claude_fw_f_measured_rules.py",
+      "sha256": "e0959e86ee1ca54921770713f6214577d447714599c337dd813aba18fb36cd35"
+    }
+  },
+  "input_bindings": {
+    "prior_profile_approval_receipt": {
+      "path": "docs/egress/maintenance/fw-f-profile-approval/receipt.json",
+      "sha256": "ed527f928d32d8e4800a3260e3baa3c3c370a2509a5e2fafd52e4991d44d34a9"
+    },
+    "discovery_clearance_receipt": {
+      "path": "docs/egress/maintenance/fw-f-discovery-clearance/receipt.json",
+      "sha256": "97dbab848f818f001a25adf8c8c51e4cb3d64618a198a0e3eefece190a4a89f1"
+    },
+    "atomic_assertion_ledger": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v5-final/measured-rule-ledger.json",
+      "sha256": "20e3c02365893db0af7164acd8300b658f653b29c2340acedfe0abf6973a4200"
+    }
+  },
+  "output_bindings": {
+    "summary": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/profile-approval-v5/summary.json",
+      "sha256": "3d7773ab4bdbe3a3f32dfd70ad5ea0296111d47b87419b09fa00fba7a77d5341"
+    },
+    "closure": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/profile-approval-v5/closure.json",
+      "sha256": "6cc1ed6690dde2354fa0574f3ef132dc402a9ba5e7f3428e7fc43d8565b7b157"
+    },
+    "references": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/profile-approval-v5/references.json",
+      "sha256": "f7b31a6fbc1d7be5b25d986f5b2d40913159e932f95cff48c26df7d857ab41ef"
+    },
+    "store_identity": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/profile-approval-v5/control-store/store.json",
+      "sha256": "09ec81e8e1c9b433b5b92cd1b1aa7cc282148118779d42b4515082514dc60f48"
+    },
+    "campaign": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/profile-approval-v5/control-store/campaigns/claude-code-2_1_226-fw-f-required-rules-v5-20260819.json",
+      "sha256": "7c69acec033bb1ba4093ed1d5bf8adaf064ad1e34449392653c1286cbf421658"
+    }
+  },
+  "approval_refs": {
+    "evidence_approval": {
+      "campaign_id": "claude-code-2_1_226-fw-f-required-rules-v5-20260819",
+      "dimension": "approval",
+      "sequence": 1,
+      "sha256": "f6d578fc9935d89d95982893fde4a74c322b2ee8f65d63649ef99c2a77a28c37"
+    },
+    "profile_approval": {
+      "campaign_id": "claude-code-2_1_226-fw-f-required-rules-v5-20260819",
+      "dimension": "approval",
+      "sequence": 2,
+      "sha256": "f99e2f4a25bd091f4035749adcf3f39683fb2f8ef49fc46bc7d4247d555ca0ea"
+    },
+    "support_envelope": {
+      "object_kind": "support_envelope",
+      "sha256": "f4954a6889f06c782f9d2de6837a82678cbc068ec55002a1fb4c2e3e30324f17"
+    },
+    "evidence_package": {
+      "object_kind": "evidence_package",
+      "sha256": "4979fd6608e285a5735c416775f5ba48a576e00e26e55ebfbc8641f404606971"
+    },
+    "target_snapshot": {
+      "object_kind": "snapshot",
+      "sha256": "935975161e6b325f2a6459924f9d4bfa59dc9430fcd29e32475694ad0279e79e"
+    },
+    "final_shared_contract": {
+      "object_kind": "operational_evidence",
+      "sha256": "fc1e4f75d9b3252e13c846522dc338a1a0b190e6f9f699c913a01183acfa9702"
+    }
+  },
+  "rule_reconciliation": {
+    "guide_required_rule_count": 40,
+    "manifest_required_rule_count": 40,
+    "snapshot_required_rule_count": 40,
+    "evidence_package_required_rule_count": 40,
+    "support_envelope_required_rule_count": 40,
+    "required_rule_id_sets_equal": true,
+    "atomic_assertion_ledger_count": 110,
+    "profile_atomic_assertion_count": 106,
+    "scenario_only_assertion_count": 4,
+    "atomic_assertion_mapping_complete": true,
+    "atomic_assertion_mapping_unique": true,
+    "tls_atomic_assertion_count": 3,
+    "non_tls_atomic_assertion_count": 107,
+    "all_tls_atomic_assertions_bind_p_and_m": true,
+    "all_non_tls_atomic_assertions_bind_r_and_m": true,
+    "all_atomic_assertions_have_official_positive_and_countercheck": true,
+    "official_condition_contrast_assertion_count": 22,
+    "zero_violation_denominator_assertion_count": 88,
+    "independent_official_negative_required_for_unconditional_rule": false
+  },
+  "phase_boundary": {
+    "profile_schema_generated": true,
+    "target_snapshot_generated": true,
+    "baseline_fixture_generated": true,
+    "evidence_approval_issued": true,
+    "profile_approval_issued": true,
+    "validation_candidate_generated": false,
+    "runtime_selector_changed": false,
+    "dmit_deployment_performed": false,
+    "vircs_deployment_performed": false,
+    "production_changed": false
+  },
+  "fw_f_phase_status": "complete_validation_only",
+  "result": "passed"
+}

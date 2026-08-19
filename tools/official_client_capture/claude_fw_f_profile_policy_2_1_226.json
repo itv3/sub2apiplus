@@ -1,6 +1,6 @@
 {
-  "schema_version": "claude-code-fw-f-profile-policy/v4",
-  "campaign_id": "claude-code-2_1_226-fw-f-measured-profile-v4-20260819",
+  "schema_version": "claude-code-fw-f-profile-policy/v5",
+  "campaign_id": "claude-code-2_1_226-fw-f-required-rules-v5-20260819",
   "target_version": "2.1.226",
   "target_binary_sha256": "4e9bec1177ce9690e8bd988b710ac24105e70da428dd094c5adcbbe786a55555",
   "baseline_version": "2.1.220",
@@ -11,9 +11,9 @@
     "auth_family": "oauth",
     "upstream_route_family": "anthropic-api"
   },
-  "profile_schema_id": "claude-code-oauth-profile-v4",
+  "profile_schema_id": "claude-code-oauth-profile-v5",
   "profile_schema_document": {
-    "schema_family": "claude-code-oauth-profile/v4",
+    "schema_family": "claude-code-oauth-profile/v5",
     "version_parameterized": true,
     "required_sections": [
       "identity",
@@ -39,7 +39,7 @@
       "privacy": "遥测及非必要流量的官方关闭条件",
       "strict_endpoints": "每个已批准 strict egress 的 route、Sink、endpoint、Header、Body 与 SPEC 映射",
       "feature_matrix": "真实上游与隔离故障探针、规则域、入口和条件覆盖的闭集",
-      "rules": "正交证据等级、生命周期、兼容类别和迁移决策"
+      "rules": "Codex 粒度 RequiredRules、原子断言映射、证据等级、生命周期、兼容类别和迁移决策"
     },
     "compiler_output": "CompiledEnvelope",
     "unknown_field_policy": "persona_fail_close"
@@ -594,6 +594,7 @@
     "tools/official_client_capture/claude_fw_f_measured_rules.py",
     "tools/official_client_capture/claude_fw_f_profile.py",
     "tools/official_client_capture/claude_fw_f_profile_policy_2_1_226.json",
+    "tools/official_client_capture/claude_required_rules_2_1_226.json",
     "tools/official_client_capture/tests/test_claude_fw_f_discovery_clearance.py",
     "tools/official_client_capture/tests/test_claude_fw_f_measured_rules.py",
     "tools/official_client_capture/tests/test_claude_fw_f_profile.py"
@@ -612,5 +613,5 @@
   ],
   "production_compare": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/finalization/production-compare.json",
   "reviewer": "project-owner-confirmed",
-  "review_ref": "codex-task-fw-f-v21-complete-owner-confirmation-20260819"
+  "review_ref": "codex-task-fw-f-codex-rule-standard-owner-confirmation-20260819"
 }

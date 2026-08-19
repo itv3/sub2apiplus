@@ -16,7 +16,10 @@ from tools.official_client_capture.claude_fw_f_measured_rules import (
     MeasuredRuleError,
     build_ledger,
 )
-from tools.official_client_capture.claude_fw_f_profile import guide_rule_ids
+from tools.official_client_capture.claude_fw_f_profile import (
+    guide_rule_ids,
+    validate_required_rule_manifest,
+)
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -29,6 +32,9 @@ CAMPAIGN_ROOT = (
 IDENTITY_PATH = CAMPAIGN_ROOT / "identity.json"
 RELAY_INDEX_PATH = CAMPAIGN_ROOT / "indexes/relay-index.json"
 GUIDE_PATH = ROOT / "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md"
+RULE_MANIFEST_PATH = (
+    ROOT / "tools/official_client_capture/claude_required_rules_2_1_226.json"
+)
 FINAL_LEDGER_PATH = (
     ROOT
     / "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v5-final/measured-rule-ledger.json"
@@ -130,11 +136,33 @@ class MeasuredRuleLedgerTests(unittest.TestCase):
                         RELAY_INDEX_PATH,
                     )
 
-    def test_guide_activity_table_matches_final_measured_rule_set(self) -> None:
+    def test_guide_required_rules_and_atomic_ledger_are_reconciled(self) -> None:
         ledger = load(FINAL_LEDGER_PATH)
+        manifest = load(RULE_MANIFEST_PATH)
+        validate_required_rule_manifest(manifest, ledger)
         spec_ids = guide_rule_ids(GUIDE_PATH)
-        self.assertEqual(spec_ids, sorted(value["spec_id"] for value in ledger["entries"]))
-        self.assertEqual(len(spec_ids), 110)
+        self.assertEqual(
+            spec_ids,
+            sorted(value["spec_id"] for value in manifest["required_rules"]),
+        )
+        self.assertEqual(len(spec_ids), 40)
+        mapped_atomic_ids = sorted(
+            [
+                assertion_id
+                for value in manifest["required_rules"]
+                for assertion_id in value["atomic_assertion_ids"]
+            ]
+            + [
+                assertion_id
+                for value in manifest["scenario_only_groups"]
+                for assertion_id in value["atomic_assertion_ids"]
+            ]
+        )
+        self.assertEqual(
+            mapped_atomic_ids,
+            sorted(value["spec_id"] for value in ledger["entries"]),
+        )
+        self.assertEqual(len(mapped_atomic_ids), 110)
         self.assertEqual(
             sum(value["domain"] == "tls" for value in ledger["entries"]),
             3,

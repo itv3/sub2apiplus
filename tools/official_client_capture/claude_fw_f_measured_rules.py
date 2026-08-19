@@ -41,6 +41,7 @@ POLICY_SCHEMAS = {
 PROFILE_POLICY_SCHEMAS = {
     "claude-code-fw-f-profile-policy/v3",
     "claude-code-fw-f-profile-policy/v4",
+    "claude-code-fw-f-profile-policy/v5",
 }
 LEDGER_SCHEMA = "claude-code-fw-f-measured-rule-ledger/v2"
 UUID_RE = re.compile(

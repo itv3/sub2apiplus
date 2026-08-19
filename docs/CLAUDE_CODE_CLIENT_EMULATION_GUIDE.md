@@ -3,7 +3,7 @@
 > **适用范围**：Sub2API 使用 Anthropic OAuth（`authMethod=claude.ai`、`apiProvider=firstParty`）
 > 出站时的 Claude Code 客户端仿真
 > **共享框架**：[`OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md`](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md)
-> **当前取证目标**：`claude-code 2.1.226`——第二部分 110 条活动规则与 Vircs 官方客户端 P／R／M
+> **当前取证目标**：`claude-code 2.1.226`——第二部分 40 条 RequiredRules 与 110 条 Vircs 官方客户端 P／R／M 原子断言
 > 证据的绑定版本；`2.1.220` 只保留为同一 Schema／Compiler 下的历史 baseline fixture
 > **机器台账**：`tools/official_client_capture/claude_fw_f_v21_finalize.py`、两份 FW-F v4／v3 策略及
 > `local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v5-final/`；逐规则状态以不可变台账为准，
@@ -76,10 +76,11 @@ Claude 特有的换版流程，第五部分处理维护，第六部分固定环�
 
 # 第二部分 Claude Code 2.1.226 实测规则画像
 
-本部分是当前 Claude Persona 的唯一活动规则画像。活动集合由原子化实测结果确定为 **110 条
-request-egress 规则**；每条规则都由 Claude Code 2.1.226 的官方客户端真实运行断言通过。普通规则
-绑定 R（等长脱敏的原始请求／必要响应字节）与 M（版本、二进制、运行、连接、干预和隐私条件），
-TLS 规则绑定原生 P 与 M。2.1.220、2.1.88 与 HitCC 只用于
+本部分是当前 Claude Persona 的唯一活动规则画像。按照 Codex CLI 第二部分的规则粒度，活动集合为
+**40 条 RequiredRules**；证据层保留 **110 条原子断言**，其中 106 条完整且唯一地映射到这 40 条
+画像规则，4 条只描述官方客户端本地上下文装配／本地拒绝场景，不属于 Sub2API 出站实现责任。
+普通原子断言绑定 R（等长脱敏的原始请求／必要响应字节）与 M（版本、二进制、运行、连接、干预和
+隐私条件），TLS 原子断言绑定原生 P 与 M。2.1.220、2.1.88 与 HitCC 只用于
 历史差分、线索审计和探针设计；FW-F v1 的 154 条集合只保留为失效审计历史，不能替代 2.1.226 实测证据。
 
 ## 2.1 目标身份、范围与结论
@@ -97,8 +98,9 @@ TLS 规则绑定原生 P 与 M。2.1.220、2.1.88 与 HitCC 只用于
 | 上游 | `api.anthropic.com:443` |
 | 完整场景矩阵 | 77／77 场景、395 条官方请求、49／49 维度；含 TUI／sdk-cli／Agent、TLS、工具往返和故障重试 |
 | strict egress | messages、hello、policy limits、settings、OAuth profile、count_tokens、OAuth refresh、MCP servers，共 8 类 |
-| 活动规则 | 110 条，全部独立 `PAIR-*` 正负断言通过；107 条 R/M、3 条 TLS P/M |
-| 当前等级 | 110 条 `observed`、0 条 `verified` |
+| RequiredRules | 40 条；按 Codex 的“范围、规则／机制、源码、实测、实现、状态”六字段维护 |
+| 原子断言 | 110 条全部通过；107 条 R/M、3 条 TLS P/M；106 条画像证据、4 条客户端本地场景 |
+| 当前等级 | 40 条 RequiredRules 均为 `observed`、0 条 `verified` |
 | 批准用途 | `validation_only`；不是 production replacement |
 
 `observed` 不等于“没有实测”。它表示规则已在冻结的 2.1.226 官方客户端运行中命中并通过断言，但尚未
@@ -107,10 +109,10 @@ TLS 规则绑定原生 P 与 M。2.1.220、2.1.88 与 HitCC 只用于
 当前 SupportEnvelope 覆盖策略文件列出的五组能力：`sdk-cli`／`cli` 的条件 system、cache、metadata、
 session、Agent／background／hook／remote、工具往返与附件；真实 TUI 的 OAuth profile、标题、
 count_tokens 与 MCP 目录；隔离故障矩阵的 retry、timeout、stream／model fallback；过期凭据的隔离 OAuth
-refresh；以及原生 TLS／ALPN。八类 strict egress 的规则分布分别为 messages 98 条、hello 6 条、
-policy limits 4 条、settings 4 条、OAuth profile 2 条、count_tokens 3 条、OAuth refresh 3 条、MCP
-servers 2 条。跨端点规则会同时计入多个 egress，全局唯一规则仍为 110 条。范围外能力必须 fail-close
-或留在明确的 `non_persona_managed／retained_legacy` 边界，不能从这 110 条规则外推。
+refresh；以及原生 TLS／ALPN。八类 strict egress 的 RequiredRules 分布分别为 messages 33 条、hello
+5 条、policy limits 4 条、settings 4 条、OAuth profile 2 条、count_tokens 1 条、OAuth refresh 1 条、
+MCP servers 1 条。跨端点规则会同时计入多个 egress，全局唯一规则仍为 40 条。范围外能力必须
+fail-close 或留在明确的 `non_persona_managed／retained_legacy` 边界，不能从这 40 条规则外推。
 
 ## 2.2 证据通道与内容寻址
 
@@ -123,9 +125,9 @@ servers 2 条。跨端点规则会同时计入多个 egress，全局唯一规则
 | `R-a1/s1/s2/s4` | FW-E 四个目标 run 的等长脱敏 `client_to_upstream.bin` |
 | `M-a1/s1/s2/s4` | 四个基础 run 的 `relay-manifest.json` 与 `relay/relay.json` |
 | `R-v4-*` | v21 每个 attempt 的 `connNNN.client_to_upstream.bin`；故障规则还绑定必要的 `upstream_to_client.bin` |
-| `P-v4-*` | 原生 TLS attempt 的 `tls-clienthello.pcap`，用于 CipherSuite 与 ALPN 正负例 |
+| `P-v4-*` | 原生 TLS attempt 的 `tls-clienthello.pcap`，用于 CipherSuite 与 ALPN 条件对照 |
 | `M-v4-*` | v21 的 manifest、relay、intervention、invocation、summary、场景目录、秘密扫描与 cleanup |
-| `PAIR-*` | v21 最终化器生成的逐规则独立正例与负例断言 |
+| `PAIR-*` | v21 最终化器生成的 110 条原子正例及条件对照／零违规分母断言 |
 
 基础四个 run 位于：
 
@@ -136,18 +138,22 @@ servers 2 条。跨端点规则会同时计入多个 egress，全局唯一规则
 `local-analysis/fw-f/claude-code-2.1.226/complete-v21-78fae770cbb5/`
 
 其中 77／77 场景、395 条请求、49／49 维度和原生 TLS P 通道均由最终化器逐项复算；目录集合、执行源
-摘要、目标二进制、采集模式、等长脱敏、秘密扫描和 cleanup 也必须通过。机器权威账本为：
+摘要、目标二进制、采集模式、等长脱敏、秘密扫描和 cleanup 也必须通过。原子证据账本与
+RequiredRules 映射清单分别为：
 
 `local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v5-final/measured-rule-ledger.json`
 
-账本为每条规则保存 `egress_ids`、适用条件、完整分母、证据文件 `path/sha256/bytes/channel`、命中
-run、连接号、流偏移和原始请求摘要。下表的每个 `R-<run> + M`／`P-<run> + M` 都能在该规则的 `evidence_refs` 中
-逐文件反向解析；Authorization 已等长脱敏，不保存 OAuth secret。
+`tools/official_client_capture/claude_required_rules_2_1_226.json`
+
+前者沿用历史文件名，但语义是 `AtomicAssertionLedger`：为 110 条原子断言保存 `egress_ids`、
+适用条件、完整分母、证据文件 `path/sha256/bytes/channel`、命中 run、连接号、流偏移和原始请求摘要。
+后者保存 40→106 与 2 个本地场景组→4 的唯一映射，并作为指南、Snapshot、EvidencePackage 和
+SupportEnvelope 对账权威。Authorization 已等长脱敏，不保存 OAuth secret。
 
 ### 2.2.2 证据边界与零流量事实
 
-当前 Campaign 已在原生 TLS attempt 中取得 ClientHello pcap，`SPEC-TLS-001/002/003` 使用 P/M；普通
-HTTP、Header、Body、状态与工具规则仍使用 R/M，不允许以 relay 元数据冒充原生 TLS 证据。
+当前 Campaign 已在原生 TLS attempt 中取得 ClientHello pcap，3 条 TLS 原子断言使用 P/M；普通
+HTTP、Header、Body、状态与工具原子断言仍使用 R/M，不允许以 relay 元数据冒充原生 TLS 证据。
 
 行为层不作对比维度。官方配置已合法关闭遥测与非必要流量，候选“零遥测”不是“不像官方客户端”的
 判据，也不生成 `traceparent`／span 规则。响应解析属于 downstream compatibility，不进入客户端请求
@@ -155,20 +161,24 @@ HTTP、Header、Body、状态与工具规则仍使用 R/M，不允许以 relay �
 
 ## 2.3 规则准入合同
 
-命题只有同时满足以下条件才能进入本部分：
+RequiredRule 只有同时满足以下条件才能进入本部分：
 
 1. 目标版本、二进制、平台、入口、认证、模型／模型转换和隐私条件必须与 M 一致；
 2. 普通规则必须有可复算的目标 R 原始字节；TLS 规则必须有原生 P；不接受仅有旧源码、bundle 字符串
    或历史 wire；
-3. 必须有独立 `PAIR-<SPEC-ID>` 断言，对完整具名分母执行后为 `passed`；
-4. 必须声明适用范围、正负例、物理 `egress_ids` 和证据等级；
-5. 必须是 request-egress 命题；响应兼容、遥测关闭事实和未触发功能只能进入支撑／边界事实；
-6. 合法零流量的 telemetry、nonessential、usage、models、dispatch-id、usage-limit 只记录支撑事实；
-   只有场景被真实触发且具备完整正负例的命题才能成为规则。
+3. 必须由一条或多条已通过的独立原子 `PAIR-*` 断言完整支撑，并在机器映射中恰好归属一次；
+4. 必须按 Codex 标准声明范围、规则／机制、源码、实测、实现和状态，并绑定物理 `egress_ids`；
+5. 条件规则必须有官方条件成立／不成立样本；无条件规则不伪造“官方负例”，而以多个适用官方样本、
+   零违规分母断言和 FW-G candidate mutation／不匹配负断言闭环；
+6. 必须是 Sub2API 负责复现的 request-egress 命题；响应兼容、客户端本地文件／Hook／本地拒绝、
+   遥测关闭事实和未触发功能只能进入场景或支撑／边界事实；
+7. 合法零流量的 telemetry、nonessential、usage、models、dispatch-id、usage-limit 只记录支撑事实；
+   只有场景被真实触发且具备完整实测分母的命题才能成为规则。
 
-FW-F v1 把 32 个候选机械拆成 97 条规则提案的做法无效，现已逐条撤回。v21 对旧 88 条候选作实质
-重测，并由新增场景原子化产生 22 条新规则，最终形成 110 条；规则数由实测断言决定，不由发现项、
-探针或旧版行数预设。
+FW-F v1 把 32 个候选机械拆成 97 条规则提案的做法无效，现已逐条撤回。v21 对旧 88 条原子断言作
+实质重测，并由新增场景产生 22 条新原子断言，得到 110 条证据断言；随后按 Codex 复合规则粒度归并为
+40 条 RequiredRules。原子断言数由实测决定，RequiredRules 数由实现责任与复合机制边界决定，两者
+不得混为一个数字。
 
 ## 2.4 实测 wire 与端点向量
 
@@ -203,147 +213,382 @@ FW-F v1 把 32 个候选机械拆成 97 条规则提案的做法无效，现已�
 `sdk-cli` essential 顺序为 hello → policy limits／settings（两者不规定先后）→ 零或多个 messages；
 真实 TUI 为 hello → OAuth profile → Haiku 标题 → Sonnet 主推理。每个端点有独立 route、Sink、
 真实 TUI 还会在对应场景调用 count_tokens 与 MCP 目录；OAuth refresh 只在过期凭据条件下触发。每个
-端点有独立 route、Sink、binding、画像视图和纵向 CompiledEnvelope，不得把全部 110 条伪挂到
+端点有独立 route、Sink、binding、画像视图和纵向 CompiledEnvelope，不得把全部 40 条伪挂到
 messages egress。
 
-## 2.5 110 条活动规则
+## 2.5 40 条 RequiredRules
 
-以下每一行均为 `assertion_result=passed`、`evidence_level=observed`、
-`compatibility_class=request_egress`。证据列列出实际命中的 R run；`+ M` 表示同一行还绑定
-`M-ID/M-INDEX` 与对应 run 的 manifest／relay／intervention／invocation／summary。精确文件摘要和流
-偏移以 v21 MeasuredRuleLedger 为准。
+以下 40 条采用 Codex CLI 规则画像的同一六字段格式。每条“实测”均反向绑定机器清单中的原子断言；
+精确 P／R／M 文件摘要、条件、分母和流偏移以 AtomicAssertionLedger 为准。
 
 <!-- FW-F-ACTIVE-RULES-BEGIN -->
 
-### 2.5.1 TLS、协议、端点与连接：25 条
+### SPEC-BODY-001 推理 Body 顶层序列化合同
 
-| 规则 | 实测命题 | 完整分母／适用范围 | strict egress | 精确 P/R/M run |
-|---|---|---|---|---|
-| `SPEC-CONN-002` | 无 Retry-After 的应用层重试，首轮实测等待落在 500–700ms，第二轮落在 1000–1250ms。 | 4/4 retry-interval；v3-retry-limit 与 v3-fallback-model | `messages-inference` | `R-v3-fallback-model, v3-retry-limit + M` |
-| `SPEC-CONN-010` | 隔离状态矩阵中 401、408、409、429、500、502、503、529 各重试一次；400、403 不重试。 | 10/10 fault-scenario；10 个单状态隔离故障运行 | `messages-inference` | `R-v3-nonretry-400, v3-nonretry-403, v3-retry-401, v3-retry-408, v3-retry-409, v3-retry-429, v3-retry-500, v3-retry-502, v3-retry-503, v3-retry-529 + M` |
-| `SPEC-CONN-016` | Retry-After:1 使重试间隔约 1030ms；未来 HTTP-date 在当前实现中未按日期等待，约 564ms 后走默认退避。 | 2/2 retry-after-scenario；两个 Retry-After 隔离故障运行 | `messages-inference` | `R-v3-retry-after-date, v3-retry-after-seconds + M` |
-| `SPEC-CONN-018` | 创建流收到 404 时总会转 non-stream；已建立流中断默认转 non-stream，disable flag 只阻止中断后的转换，不阻止创建 404 转换。 | 4/4 fault-scenario；四个 streaming fallback 隔离故障运行 | `messages-inference` | `R-v3-stream-404-disable-flag, v3-stream-404-fallback, v3-stream-interrupt, v3-stream-interrupt-no-fallback + M` |
-| `SPEC-CONN-019` | a1、s2、s4 的多轮推理请求复用同一条有效 HTTP/1.1 连接。 | 3/3 multi-request-run；3 个多请求运行 | `messages-inference` | `R-a1, s2, s4 + M` |
-| `SPEC-CONN-020` | 首个 messages 连接无响应断开后官方客户端重试；重发请求省略 Connection Header。 | 1/1 retry-transition；v3-disconnect-retry | `messages-inference` | `R-v3-disconnect-retry + M` |
-| `SPEC-CONN-021` | 应用层重试保持 Body、Session-Id 与主体 attribution，重新生成 x-client-request-id，X-Stainless-Retry-Count 始终为 0。 | 15/15 retry-transition；状态重试、Retry-After、断连与 retry-limit 运行 | `messages-inference` | `R-v3-disconnect-retry, v3-fallback-model, v3-retry-401, v3-retry-408, v3-retry-409, v3-retry-429, v3-retry-500, v3-retry-502, v3-retry-503, v3-retry-529, v3-retry-after-date, v3-retry-after-seconds, v3-retry-limit + M` |
-| `SPEC-CONN-022` | CLAUDE_CODE_MAX_RETRIES=2 时每个模型最多发送三次，配置 fallback model 时可再发一次 Haiku；值为 0 时不重试。 | 3/3 configured-run；v3-retry-limit、v3-fallback-model 与 v3-timeout | `messages-inference` | `R-v3-fallback-model, v3-retry-limit, v3-timeout + M` |
-| `SPEC-CONN-023` | 配置 fallback model 且主 Sonnet 连续三次 529 后，第四次请求切换到 Haiku。 | 1/1 fallback-transition；v3-fallback-model | `messages-inference` | `R-v3-fallback-model + M` |
-| `SPEC-CONN-024` | API_TIMEOUT_MS=1000 映射为 X-Stainless-Timeout:1；配合 max retries 0 时 stalled 请求只发送一次。 | 1/1 configured-run；v3-timeout | `messages-inference` | `R-v3-timeout + M` |
-| `SPEC-EP-001` | 推理请求的 request-target 恰为 /v1/messages?beta=true。 | 8/8 request；8 条推理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-EP-002` | 每次运行先通过独立连接发送无 Body 的 HEAD /api/hello，并使用固定五项 Header。 | 4/4 request；4 次运行的生命周期请求 | `lifecycle-hello` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-EP-003` | 推理请求的方法恰为 POST。 | 8/8 request；8 条推理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-EP-004` | 推理请求的 Host 恰为 api.anthropic.com。 | 8/8 request；8 条推理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-EP-005` | sdk-cli 启动阶段发送 GET /api/claude_code/policy_limits；请求使用 first-party OAuth、oauth beta、claude-code/2.1.226 UA 和实测七项基础 Header。 | 55/55 request；除真实 TUI 外的 2.1.226 v3 官方运行 | `policy-limits` | `R-v3-adaptive-thinking-disabled, v3-additional-protection, v3-agent-sdk, v3-append-system, v3-attribution-disabled, v3-baseline, v3-beta-deduplicate, v3-cache-disabled, v3-cache-one-hour, v3-cache-sonnet-disabled, v3-client-app, v3-custom-agent, v3-custom-agent-safe-mode, v3-custom-header-grammar, v3-custom-header-invalid-name, v3-custom-system, v3-disconnect-retry, v3-effort-low, v3-effort-max, v3-effort-medium, v3-effort-xhigh, v3-exclude-dynamic-system, v3-extra-body, v3-extra-metadata, v3-fallback-model, v3-gzip-request, v3-header-combination, v3-json-schema, v3-max-output-tokens, v3-nonretry-400, v3-nonretry-403, v3-remote-container, v3-remote-session, v3-retry-401, v3-retry-408, v3-retry-409, v3-retry-429, v3-retry-500, v3-retry-502, v3-retry-503, v3-retry-529, v3-retry-after-date, v3-retry-after-seconds, v3-retry-limit, v3-session-fork, v3-session-resume, v3-stream-404-disable-flag, v3-stream-404-fallback, v3-stream-interrupt, v3-stream-interrupt-no-fallback, v3-thinking-disabled, v3-timeout, v3-workload + M` |
-| `SPEC-EP-006` | sdk-cli 启动阶段发送 GET /api/claude_code/settings；请求在 policy_limits 基础上增加 Cache-Control:no-cache 与 Pragma:no-cache。 | 55/55 request；除真实 TUI 外的 2.1.226 v3 官方运行 | `settings` | `R-v3-adaptive-thinking-disabled, v3-additional-protection, v3-agent-sdk, v3-append-system, v3-attribution-disabled, v3-baseline, v3-beta-deduplicate, v3-cache-disabled, v3-cache-one-hour, v3-cache-sonnet-disabled, v3-client-app, v3-custom-agent, v3-custom-agent-safe-mode, v3-custom-header-grammar, v3-custom-header-invalid-name, v3-custom-system, v3-disconnect-retry, v3-effort-low, v3-effort-max, v3-effort-medium, v3-effort-xhigh, v3-exclude-dynamic-system, v3-extra-body, v3-extra-metadata, v3-fallback-model, v3-gzip-request, v3-header-combination, v3-json-schema, v3-max-output-tokens, v3-nonretry-400, v3-nonretry-403, v3-remote-container, v3-remote-session, v3-retry-401, v3-retry-408, v3-retry-409, v3-retry-429, v3-retry-500, v3-retry-502, v3-retry-503, v3-retry-529, v3-retry-after-date, v3-retry-after-seconds, v3-retry-limit, v3-session-fork, v3-session-resume, v3-stream-404-disable-flag, v3-stream-404-fallback, v3-stream-interrupt, v3-stream-interrupt-no-fallback, v3-thinking-disabled, v3-timeout, v3-workload + M` |
-| `SPEC-EP-007` | 真实 TUI 启动阶段发送 GET /api/oauth/profile，使用 axios/1.15.2 UA、JSON Content-Type、OAuth Authorization 与实测八项 Header。 | 1/1 request；v3-tui 的 cli 入口 | `oauth-profile` | `R-v3-tui + M` |
-| `SPEC-EP-008` | sdk-cli 每次调用的 essential 请求序列为 hello→policy/settings→零或多个 messages；真实 TUI 为 hello→oauth/profile→Haiku 标题→Sonnet 主推理，policy 与 settings 不规定彼此先后。 | 54/54 run；34 个真实上游探针与 20 个隔离故障探针 | `lifecycle-hello, messages-inference, oauth-profile, policy-limits, settings` | `R-v3-adaptive-thinking-disabled, v3-additional-protection, v3-agent-sdk, v3-append-system, v3-attribution-disabled, v3-baseline, v3-beta-deduplicate, v3-cache-disabled, v3-cache-one-hour, v3-cache-sonnet-disabled, v3-client-app, v3-custom-agent, v3-custom-agent-safe-mode, v3-custom-header-grammar, v3-custom-header-invalid-name, v3-custom-system, v3-disconnect-retry, v3-effort-low, v3-effort-max, v3-effort-medium, v3-effort-xhigh, v3-exclude-dynamic-system, v3-extra-body, v3-extra-metadata, v3-fallback-model, v3-gzip-request, v3-header-combination, v3-json-schema, v3-max-output-tokens, v3-nonretry-400, v3-nonretry-403, v3-remote-container, v3-remote-session, v3-retry-401, v3-retry-408, v3-retry-409, v3-retry-429, v3-retry-500, v3-retry-502, v3-retry-503, v3-retry-529, v3-retry-after-date, v3-retry-after-seconds, v3-retry-limit, v3-session-fork, v3-session-resume, v3-stream-404-disable-flag, v3-stream-404-fallback, v3-stream-interrupt, v3-stream-interrupt-no-fallback, v3-thinking-disabled, v3-timeout, v3-tui, v3-workload + M` |
-| `SPEC-PROTO-001` | 推理与生命周期请求的应用层请求线均为 HTTP/1.1。 | 12/12 request；8 条推理请求与 4 条生命周期请求 | `lifecycle-hello, messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-EP-009` | 真实 TUI 的 token 计数请求为 POST /v1/messages/count_tokens?beta=true，Host 为 api.anthropic.com。 | 37/37 official-example；36 个 count_tokens 正例与 sdk-cli 基线负例 | `count-tokens` | `R-v4-tui-count-tokens, v4-replay-baseline + M` |
-| `SPEC-EP-010` | 过期 OAuth 凭据触发 POST https://platform.claude.com/v1/oauth/token。 | 2/2 official-example；隔离 OAuth refresh 正例与普通推理负例 | `oauth-token-refresh` | `R-v4-oauth-refresh, v4-replay-baseline + M` |
-| `SPEC-EP-011` | 真实 TUI 的 MCP 目录请求为 GET /v1/mcp_servers?limit=1000，Host 为 api.anthropic.com。 | 5/5 official-example；4 个 TUI MCP 目录正例与 sdk-cli 基线负例 | `mcp-servers` | `R-v4-tui-attachment, v4-tui-compact, v4-tui-count-tokens, v4-tui-usage, v4-replay-baseline + M` |
-| `SPEC-TLS-001` | 四个目标原生 ClientHello 使用同一实测 CipherSuite 有序序列。 | 8/8 official-example；4 个 ClientHello 正例与 4 个负例 | `lifecycle-hello, messages-inference, policy-limits, settings` | `P-v4-native-tls-baseline + M` |
-| `SPEC-TLS-002` | hello 与 messages ClientHello 提供 ALPN http/1.1；policy_limits 与 settings 的官方负例省略 ALPN 扩展。 | 4/4 official-example；同一原生 TLS attempt 的 2 个正例和 2 个负例 | `lifecycle-hello, messages-inference, policy-limits, settings` | `P-v4-native-tls-baseline + M` |
-| `SPEC-TLS-003` | 目标连接在 relay 握手元数据中使用 SNI api.anthropic.com。 | 8/8 connection；8 个承载已选请求的真实 TLS 连接 | `lifecycle-hello, messages-inference` | `P-v4-native-tls-baseline + M` |
+- **范围**：messages-inference；Claude Code 2.1.226 的 sdk-cli／cli 推理请求。
+- **规则／机制**：Body 顶层字段按已实测顺序序列化；字段存在性和类型由同一 Release 画像约束。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：1 条 R/M 原子断言通过；基础四组官方推理样本逐字节确认顶层键顺序。
+- **实现**：由 Claude BodyShape 和 DialectCompiler 定型，Ingress 不得直接生成最终 wire。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
 
-### 2.5.2 Header、认证与 beta：33 条
+### SPEC-BODY-002 metadata 身份与扩展合并
 
-| 规则 | 实测命题 | 完整分母／适用范围 | strict egress | 精确 R/M run |
-|---|---|---|---|---|
-| `SPEC-AUTH-002` | firstParty OAuth 推理请求发送 Bearer Authorization；证据中的 token 已等长脱敏。 | 8/8 request；8 条推理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-BETA-008` | ANTHROPIC_BETAS 按逗号拆分、修剪并丢弃空项后插入官方 effort/extended-cache 之前；与官方项及自身重复的值均原样保留，不去重。 | 2/2 request；v3-beta-deduplicate 与基线 | `messages-inference` | `R-v3-baseline, v3-beta-deduplicate + M` |
-| `SPEC-HDR-001` | 推理请求按实测大小写和相对顺序发送 22 项基础 Header；子代理只在 x-app 与 x-client-request-id 之间插入 agent-id。 | 8/8 request；8 条推理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-HDR-002` | User-Agent 基础为 claude-cli/2.1.226；sdk-cli 与真实 TUI 分别使用 external,sdk-cli 和 external,cli，并按已批准条件追加 agent-sdk、client-app、workload 段。 | 82/82 request；旧 8 条推理样本与 v3 全部 messages 请求 | `messages-inference` | `R-a1, s1, s2, s4, v3-adaptive-thinking-disabled, v3-additional-protection, v3-agent-sdk, v3-append-system, v3-attribution-disabled, v3-baseline, v3-beta-deduplicate, v3-cache-disabled, v3-cache-one-hour, v3-cache-sonnet-disabled, v3-client-app, v3-custom-agent, v3-custom-header-grammar, v3-custom-system, v3-disconnect-retry, v3-effort-low, v3-effort-max, v3-effort-medium, v3-effort-xhigh, v3-exclude-dynamic-system, v3-extra-body, v3-extra-metadata, v3-fallback-model, v3-gzip-request, v3-header-combination, v3-json-schema, v3-max-output-tokens, v3-nonretry-400, v3-nonretry-403, v3-remote-container, v3-remote-session, v3-retry-401, v3-retry-408, v3-retry-409, v3-retry-429, v3-retry-500, v3-retry-502, v3-retry-503, v3-retry-529, v3-retry-after-date, v3-retry-after-seconds, v3-retry-limit, v3-session-fork, v3-session-resume, v3-stream-404-disable-flag, v3-stream-404-fallback, v3-stream-interrupt, v3-stream-interrupt-no-fallback, v3-thinking-disabled, v3-timeout, v3-tui, v3-workload + M` |
-| `SPEC-HDR-003` | 主请求发送实测的 9 项 anthropic-beta 有序序列；一级子代理省略末尾 extended-cache-ttl。 | 8/8 request；7 条主请求与 1 条子代理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-HDR-004` | 推理请求发送 anthropic-version: 2023-06-01。 | 8/8 request；8 条推理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-HDR-005` | 推理请求发送 Accept-Encoding: gzip, deflate, br, zstd。 | 8/8 request；8 条推理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-HDR-006` | Linux/amd64 样本发送实测的 Stainless 架构、语言、系统、SDK、重试、运行时和超时向量。 | 8/8 request；8 条推理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-HDR-007` | sdk-cli 前台推理请求发送 dangerous-direct-browser-access=true 与 x-app=cli。 | 8/8 request；8 条推理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-HDR-009` | additional-protection 条件成立时插入 x-anthropic-additional-protection:true，位置在 anthropic-version 与 x-app 之间；条件不成立时省略。 | 3/3 request；v3-additional-protection、v3-header-combination 与基线负例 | `messages-inference` | `R-v3-additional-protection, v3-baseline, v3-header-combination + M` |
-| `SPEC-HDR-012` | 每条推理请求的 x-client-request-id 是 UUID，且 8 条样本内不复用。 | 8/8 request；8 条推理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-HDR-013` | 同一多请求运行复用同一个 X-Claude-Code-Session-Id。 | 3/3 multi-request-run；a1、s2、s4 三个多请求运行 | `messages-inference` | `R-a1, s2, s4 + M` |
-| `SPEC-HDR-014` | 仅一级子代理请求携带 17 位小写十六进制 x-claude-code-agent-id，位置在 x-app 之后。 | 8/8 request；1 条子代理正例与 7 条非子代理负例 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-HDR-015` | 一级子代理请求复用对应主请求的 X-Claude-Code-Session-Id。 | 2/2 request；a1 的子代理正例与对应主请求负例 | `messages-inference` | `R-a1 + M` |
-| `SPEC-HDR-016` | client-app 条件成立时发送 x-client-app；未设置时省略。 | 3/3 request；v3-client-app、v3-header-combination 与基线负例 | `messages-inference` | `R-v3-baseline, v3-client-app, v3-header-combination + M` |
-| `SPEC-HDR-017` | remote-container 条件成立时发送 x-claude-remote-container-id；未设置时省略。 | 3/3 request；v3-remote-container、v3-header-combination 与基线负例 | `messages-inference` | `R-v3-baseline, v3-header-combination, v3-remote-container + M` |
-| `SPEC-HDR-018` | remote-session 条件成立时发送 x-claude-remote-session-id；未设置时省略。 | 3/3 request；v3-remote-session、v3-header-combination 与基线负例 | `messages-inference` | `R-v3-baseline, v3-header-combination, v3-remote-session + M` |
-| `SPEC-HDR-021` | x-client-app 的值逐字节等于受控 client-app 输入。 | 2/2 request；v3-client-app 与 v3-header-combination | `messages-inference` | `R-v3-client-app, v3-header-combination + M` |
-| `SPEC-HDR-022` | client-app 同时生成 x-client-app 与 User-Agent 的 client-app/<值> 后缀，两处来自同一受控值。 | 3/3 request；v3-client-app、v3-header-combination 与基线负例 | `messages-inference` | `R-v3-baseline, v3-client-app, v3-header-combination + M` |
-| `SPEC-HDR-023` | x-claude-remote-container-id 的值逐字节等于受控 container ID。 | 2/2 request；v3-remote-container 与 v3-header-combination | `messages-inference` | `R-v3-header-combination, v3-remote-container + M` |
-| `SPEC-HDR-024` | x-claude-remote-session-id 的值逐字节等于受控 remote session ID。 | 2/2 request；v3-remote-session 与 v3-header-combination | `messages-inference` | `R-v3-header-combination, v3-remote-session + M` |
-| `SPEC-HDR-026` | 多条件同时成立时，additional-protection、x-app、remote-container、remote-session、client-app、request-id 按实测顺序合并。 | 1/1 request；v3-header-combination | `messages-inference` | `R-v3-header-combination + M` |
-| `SPEC-HDR-029` | ANTHROPIC_CUSTOM_HEADERS 按行解析，在首个冒号处分割并修剪名称和值；空行和无冒号行忽略，值内后续冒号保留。 | 1/1 request；v3-custom-header-grammar | `messages-inference` | `R-v3-custom-header-grammar + M` |
-| `SPEC-HDR-030` | 空自定义 Header 名在发送 messages 前本地 fail-close，完整 relay 中 messages 数为零。 | 1/1 run；v3-custom-header-invalid-name | `messages-inference` | `R-v3-custom-header-invalid-name + M` |
-| `SPEC-HDR-031` | 自定义 x-client-request-id 不能覆盖官方生成的 UUID。 | 1/1 request；v3-custom-header-grammar | `messages-inference` | `R-v3-custom-header-grammar + M` |
-| `SPEC-HDR-032` | 获准自定义 Header 保持输入顺序，插入 X-Claude-Code-Session-Id 与 X-Stainless-Arch 之间。 | 1/1 request；v3-custom-header-grammar | `messages-inference` | `R-v3-custom-header-grammar + M` |
-| `SPEC-HDR-042` | agent-sdk 条件成立时 User-Agent 追加 agent-sdk/<受控版本> 段；基线不追加。 | 3/3 request；v3-agent-sdk、v3-header-combination 与基线负例 | `messages-inference` | `R-v3-agent-sdk, v3-baseline, v3-header-combination + M` |
-| `SPEC-HDR-043` | workload 条件成立时 User-Agent 追加 workload/<受控值> 段；基线不追加。 | 3/3 request；v3-workload、v3-header-combination 与基线负例 | `messages-inference` | `R-v3-baseline, v3-header-combination, v3-workload + M` |
-| `SPEC-HDR-044` | Content-Length 等于实际序列化 JSON Body 的字节数。 | 8/8 request；8 条推理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-HDR-045` | count_tokens 使用实测有序 Header 向量、Bearer OAuth、会话/request-id 与 Claude SDK 身份字段。 | 37/37 official-example；36 个 count_tokens 正例与基线负例 | `count-tokens` | `R-v4-tui-count-tokens, v4-replay-baseline + M` |
-| `SPEC-HDR-046` | OAuth refresh 使用 axios/1.15.2 七项有序 Header，Body 长度明确且不发送 Authorization。 | 2/2 official-example；OAuth refresh 正例与基线负例 | `oauth-token-refresh` | `R-v4-oauth-refresh, v4-replay-baseline + M` |
-| `SPEC-HDR-047` | MCP 目录请求使用实测有序 Header，并携带 OAuth、anthropic beta/version、MCP client capabilities 与 MCP-Protocol-Version。 | 5/5 official-example；4 个 TUI MCP 目录正例与基线负例 | `mcp-servers` | `R-v4-tui-attachment, v4-tui-compact, v4-tui-count-tokens, v4-tui-usage, v4-replay-baseline + M` |
-| `SPEC-HDR-048` | 二级及更深子代理在 agent-id 后发送 x-claude-code-parent-agent-id，值等于同一运行中直接父代理的 17 位 ID；一级子代理省略。 | 7/7 official-example；depth2/depth3 正例与 depth1 负例 | `messages-inference` | `R-v4-agent-depth1, v4-agent-depth2, v4-agent-depth3 + M` |
+- **范围**：messages-inference；基础身份及获准 EXTRA_METADATA 条件。
+- **规则／机制**：metadata.user_id 内嵌 device、account、session 身份；额外 metadata 只按实测浅合并规则加入，session 必须与 Header 同源。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：3 条 R/M 原子断言通过；基础与 extra-metadata 正交场景覆盖默认值、浅合并和嵌套对象。
+- **实现**：由 ClaudeIdentityFacts 提供可信身份，Planner 和 Compiler 组合；禁止从第三方入站静默补造客户端状态。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
 
-### 2.5.3 Body、缓存、metadata、状态与工具：52 条
+### SPEC-BODY-003 system 结构与自定义提示分支
 
-| 规则 | 实测命题 | 完整分母／适用范围 | strict egress | 精确 R/M run |
-|---|---|---|---|---|
-| `SPEC-BODY-001` | 推理 Body 顶层键按 model、messages、system、tools、metadata、max_tokens、thinking、context_management、output_config、stream 排列。 | 8/8 request；8 条推理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-BODY-002` | metadata 仅含 user_id；其内嵌 JSON 恰含 device_id、account_uuid、session_id，且 session_id 等于会话 Header。 | 8/8 request；8 条推理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-BODY-003` | 主请求和子代理分别使用实测的四段/三段 system 结构、产品身份块与 cache_control 形态。 | 8/8 request；7 条主请求与 1 条子代理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-BODY-004` | 首轮、续轮、resume、fork、子代理与真实 TUI 分别使用实测 messages 角色序列。 | 14/14 request；旧 8 条推理样本、v3-session-* 与 v3-tui | `messages-inference` | `R-a1, s1, s2, s4, v3-session-fork, v3-session-resume, v3-tui + M` |
-| `SPEC-BODY-005` | tools 字段始终存在；无工具场景为 []，Agent/Bash 场景发送对应实测 JSON Schema。 | 8/8 request；8 条推理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-BODY-007` | system[0].text 以 x-anthropic-billing-header: 开头并承载 attribution。 | 8/8 request；8 条推理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-BODY-008` | 当前具名样本的 model 恰为 claude-sonnet-5。 | 8/8 request；8 条推理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-BODY-009` | 当前具名样本的 max_tokens 恰为整数 64000。 | 8/8 request；8 条推理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-BODY-010` | 当前具名样本的 thinking 恰为 {"type":"adaptive"}。 | 8/8 request；8 条推理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-BODY-011` | 当前具名样本发送实测 clear_thinking_20251015 context_management。 | 8/8 request；8 条推理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-BODY-012` | output_config.effort 精确映射 low、medium、high、xhigh、max；基线为 high。 | 13/13 request；五种 effort 值的 v3 正例 | `messages-inference` | `R-a1, s1, s2, s4, v3-baseline, v3-effort-low, v3-effort-max, v3-effort-medium, v3-effort-xhigh + M` |
-| `SPEC-BODY-013` | 当前具名样本的 stream 恰为 JSON 布尔值 true。 | 8/8 request；8 条推理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-BODY-014` | attribution 中 cc_version 匹配 2.1.226.<3 位小写十六进制>。 | 8/8 request；8 条推理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-BODY-015` | billing attribution 的 cc_entrypoint 与实际入口一致：print 为 sdk-cli，真实 TUI 为 cli。 | 81/81 request；sdk-cli 与 v3-tui messages | `messages-inference` | `R-a1, s1, s2, s4, v3-adaptive-thinking-disabled, v3-additional-protection, v3-agent-sdk, v3-append-system, v3-baseline, v3-beta-deduplicate, v3-cache-disabled, v3-cache-one-hour, v3-cache-sonnet-disabled, v3-client-app, v3-custom-agent, v3-custom-header-grammar, v3-custom-system, v3-disconnect-retry, v3-effort-low, v3-effort-max, v3-effort-medium, v3-effort-xhigh, v3-exclude-dynamic-system, v3-extra-body, v3-extra-metadata, v3-fallback-model, v3-gzip-request, v3-header-combination, v3-json-schema, v3-max-output-tokens, v3-nonretry-400, v3-nonretry-403, v3-remote-container, v3-remote-session, v3-retry-401, v3-retry-408, v3-retry-409, v3-retry-429, v3-retry-500, v3-retry-502, v3-retry-503, v3-retry-529, v3-retry-after-date, v3-retry-after-seconds, v3-retry-limit, v3-session-fork, v3-session-resume, v3-stream-404-disable-flag, v3-stream-404-fallback, v3-stream-interrupt, v3-stream-interrupt-no-fallback, v3-thinking-disabled, v3-timeout, v3-tui, v3-workload + M` |
-| `SPEC-BODY-016` | attribution 中 cch 匹配 5 位小写十六进制。 | 8/8 request；8 条推理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-BODY-017` | CLAUDE_CODE_ATTRIBUTION_HEADER=false 时移除首个 billing attribution system block，其余 system block 前移且内容保持。 | 2/2 request；v3-attribution-disabled 与基线 | `messages-inference` | `R-v3-attribution-disabled, v3-baseline + M` |
-| `SPEC-BODY-018` | 存在前序请求关系的续轮、resume 与 fork 请求携带 cc_prev_req=req_<标识>；首轮省略。 | 12/12 request；旧续轮样本与 v3-session-* 正负例 | `messages-inference` | `R-a1, s1, s2, s4, v3-session-fork, v3-session-resume + M` |
-| `SPEC-BODY-019` | 仅子代理请求在 attribution 中携带 cc_is_subagent=true。 | 8/8 request；1 条子代理正例与 7 条非子代理负例 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-BODY-032` | non-stream fallback 省略 stream 顶层键、把 X-Stainless-Timeout 从 600 改为 300，重新生成 request-id 与 attribution cch；其余 Body 语义与会话身份保持。 | 3/3 fallback-transition；三个产生 non-stream fallback 的隔离故障运行 | `messages-inference` | `R-v3-stream-404-disable-flag, v3-stream-404-fallback, v3-stream-interrupt + M` |
-| `SPEC-BODY-039` | workload 条件成立时 billing attribution 在 cch 后追加 cc_workload=<受控值>;，未设置时省略。 | 3/3 request；v3-workload、v3-header-combination 与基线负例 | `messages-inference` | `R-v3-baseline, v3-header-combination, v3-workload + M` |
-| `SPEC-BODY-040` | CLAUDE_CODE_EXTRA_BODY.max_tokens 与 CLAUDE_CODE_MAX_OUTPUT_TOKENS 均把 max_tokens 从 64000 覆盖为整数 2048，其他基础字段保持。 | 3/3 request；v3-extra-body、v3-max-output-tokens 与基线 | `messages-inference` | `R-v3-baseline, v3-extra-body, v3-max-output-tokens + M` |
-| `SPEC-BODY-041` | CLAUDE_CODE_DISABLE_THINKING=1 同时省略 thinking 与 context_management，顶层其余字段保持顺序。 | 2/2 request；v3-thinking-disabled 与基线 | `messages-inference` | `R-v3-baseline, v3-thinking-disabled + M` |
-| `SPEC-BODY-042` | 在当前 Sonnet 5 范围，CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1 不改变 thinking、context_management 及其余非动态 Body 语义。 | 2/2 request；v3-adaptive-thinking-disabled 与基线 | `messages-inference` | `R-v3-adaptive-thinking-disabled, v3-baseline + M` |
-| `SPEC-BODY-043` | 启用请求 gzip 时在 request-id 后插入 Content-Encoding:gzip；Content-Length 等于 gzip wire 字节数，且解压后是完整可解析的目标 JSON 结构。 | 1/1 request；v3-gzip-request | `messages-inference` | `R-v3-gzip-request + M` |
-| `SPEC-BODY-044` | --system-prompt 使用 attribution、产品身份和自定义文本三个 system block，后两块使用 1h ephemeral cache_control。 | 1/1 request；v3-custom-system | `messages-inference` | `R-v3-custom-system + M` |
-| `SPEC-BODY-045` | --append-system-prompt 生成四段 system：attribution、CLI-within-SDK 产品身份、核心提示和动态提示；追加文本放入最后一个 1h ephemeral block。 | 2/2 request；v3-append-system | `messages-inference` | `R-v3-append-system, v3-baseline + M` |
-| `SPEC-BODY-046` | --exclude-dynamic-system-prompt-sections 只改变最后一个动态 system block，保留前述 block、顺序与 cache_control。 | 2/2 request；v3-exclude-dynamic-system 与基线 | `messages-inference` | `R-v3-baseline, v3-exclude-dynamic-system + M` |
-| `SPEC-BODY-047` | 获准自定义顶层 agent 使用 attribution、产品身份、自定义 agent prompt 三段 system，后两段使用 1h ephemeral cache_control。 | 1/1 request；v3-custom-agent | `messages-inference` | `R-v3-custom-agent + M` |
-| `SPEC-BODY-048` | 真实 TUI 会先发 Haiku 标题请求：固定标题模型、32000 max_tokens、thinking disabled、temperature 1、JSON Schema output_config、空 tools 与单 user message。 | 1/1 request；v3-tui 的标题请求 | `messages-inference` | `R-v3-tui + M` |
-| `SPEC-BODY-049` | 真实 TUI 的 Sonnet 主请求使用 cli attribution、TUI beta 序列、单 user message和 TUI 四段 system 形态。 | 2/2 request；v3-tui 的主推理请求 | `messages-inference` | `R-v3-tui + M` |
-| `SPEC-BODY-050` | fallback model 请求切换为 claude-haiku-4-5、max_tokens 32000、enabled thinking budget 31999、Haiku beta 与单 user message，省略 output_config，并保持会话身份。 | 4/4 request；v3-fallback-model 的第四次 messages | `messages-inference` | `R-v3-fallback-model + M` |
-| `SPEC-CACHE-005` | DISABLE_PROMPT_CACHING=1 或 Sonnet 专用禁用条件均移除全部 system cache_control；其他 block 内容保持。 | 3/3 request；v3-cache-disabled、v3-cache-sonnet-disabled 与基线 | `messages-inference` | `R-v3-baseline, v3-cache-disabled, v3-cache-sonnet-disabled + M` |
-| `SPEC-CACHE-006` | 当前 Sonnet 基线默认即使用两个 1h system 缓存点；ENABLE_PROMPT_CACHING_1H=1 与基线的 system 文本及 cache_control 形态相同。 | 2/2 request；v3-cache-one-hour 与基线 | `messages-inference` | `R-v3-baseline, v3-cache-one-hour + M` |
-| `SPEC-META-001` | CLAUDE_CODE_EXTRA_METADATA 为合法对象时参与 metadata.user_id 内嵌 JSON 构造。 | 2/2 request；v3-extra-metadata | `messages-inference` | `R-v3-baseline, v3-extra-metadata + M` |
-| `SPEC-META-002` | 额外 metadata 以浅合并方式置于 device_id、account_uuid、session_id 之前，嵌套对象原样保留。 | 1/1 request；v3-extra-metadata | `messages-inference` | `R-v3-extra-metadata + M` |
-| `SPEC-STATE-005` | safe-mode 下未获准的自定义 agent 在本地拒绝，完整 relay 中 messages 数为零。 | 1/1 run；v3-custom-agent-safe-mode | `messages-inference` | `R-v3-custom-agent-safe-mode + M` |
-| `SPEC-STATE-006` | --resume 复用原 Session-Id，metadata.session_id 与 Header 同值，并携带历史角色序列和 cc_prev_req。 | 1/1 session-transition；v3-session-resume | `messages-inference` | `R-v3-session-resume + M` |
-| `SPEC-STATE-007` | --fork-session 为第二次调用生成新 Session-Id，同时携带原会话历史角色序列和 cc_prev_req。 | 1/1 session-transition；v3-session-fork | `messages-inference` | `R-v3-session-fork + M` |
-| `SPEC-TOOL-018` | --json-schema 把输入 schema 包装为唯一 StructuredOutput 工具，使用固定说明和 input_schema，output_config.effort 仍为 high。 | 1/1 request；v3-json-schema | `messages-inference` | `R-v3-json-schema + M` |
-| `SPEC-BODY-051` | count_tokens Body 顶层严格按 model、messages、tools 排列，messages 与 tools 均为数组。 | 37/37 official-example；36 个 count_tokens 正例与基线负例 | `count-tokens` | `R-v4-tui-count-tokens, v4-replay-baseline + M` |
-| `SPEC-BODY-052` | OAuth refresh Body 按 grant_type、refresh_token、client_id、scope 排列，grant_type 固定为 refresh_token；凭据只保留等长脱敏 R。 | 2/2 official-example；隔离 OAuth refresh 正例与普通推理负例 | `oauth-token-refresh` | `R-v4-oauth-refresh, v4-replay-baseline + M` |
-| `SPEC-BODY-053` | 项目 CLAUDE.md 的受控指令文本进入 messages 上下文；无该 fixture 的基线不含该文本。 | 2/2 official-example；context fixture 正例与基线负例 | `messages-inference` | `R-v4-context-claude-md, v4-replay-baseline + M` |
-| `SPEC-BODY-054` | 真实 TUI @file 附件把文件名和受控文件正文写入 user content；非附件基线无此内容。 | 3/3 official-example；TUI 附件正例与 sdk-cli 基线负例 | `messages-inference` | `R-v4-tui-attachment, v4-replay-baseline + M` |
-| `SPEC-STATE-008` | Agent 深度 1、2、3 分别产生 1、2、3 个唯一 agent-id；所有子代理 attribution 携带 cc_is_subagent=true，前台基线无 agent-id。 | 7/7 official-example；三层 Agent 正例与前台负例 | `messages-inference` | `R-v4-agent-depth1, v4-agent-depth2, v4-agent-depth3, v4-replay-baseline + M` |
-| `SPEC-STATE-009` | 官方 background 会话使用 x-app=cli-bg、cc_entrypoint=cli，并按 Haiku/Sonnet 后台请求形态发送；前台 sdk-cli 使用 x-app=cli。 | 5/5 official-example；background 正例与 sdk-cli 前台负例 | `messages-inference` | `R-v4-background, v4-replay-baseline + M` |
-| `SPEC-STATE-010` | PreToolUse hook 返回的 additionalContext 进入后续 messages；普通 Bash 负例不含该上下文。 | 4/4 official-example；hook 正例与 Bash 负例 | `messages-inference` | `R-v4-hook, v4-bash + M` |
-| `SPEC-TOOL-019` | Agent tool_use 与同 ID tool_result 成对，并派生带 agent-id 的子代理请求；无工具基线不含 Agent。 | 2/2 official-example；Agent depth1 正例与基线负例 | `messages-inference` | `R-v4-agent-depth1, v4-replay-baseline + M` |
-| `SPEC-TOOL-020` | Bash tool_use 与同 ID tool_result 进入续轮；无工具基线不含 Bash。 | 2/2 official-example；Bash 正例与基线负例 | `messages-inference` | `R-v4-bash, v4-replay-baseline + M` |
-| `SPEC-TOOL-021` | stdio MCP tools 以 mcp__claude-fw-f-v4__ 前缀及 input_schema 进入 messages，并完成同 ID tool_use/tool_result 往返。 | 2/2 official-example；MCP tool 正例与无工具基线负例 | `messages-inference` | `R-v4-mcp-tool, v4-replay-baseline + M` |
-| `SPEC-TOOL-022` | deferred MCP 场景完整暴露 32 个 deferred_probe 工具和 probe_echo，目录不得按首尾样本截断。 | 34/34 official-example；33 个 MCP 工具正例与无工具基线负例 | `messages-inference` | `R-v4-mcp-deferred, v4-replay-baseline + M` |
-| `SPEC-TOOL-023` | advisor 仅在显式启用时以 type=advisor_20260301、model=claude-fable-5 进入 tools；默认官方负例省略。 | 2/2 official-example；advisor 显式正例与默认负例 | `messages-inference` | `R-v4-advisor-enabled-positive, v4-advisor-default-negative + M` |
-| `SPEC-TOOL-024` | WebSearch 外层工具调用派生单独的 server web_search 请求；该请求携带 web_search tool descriptor 与 tool_choice。 | 4/4 official-example；web_search 三请求正例与无工具基线负例 | `messages-inference` | `R-v4-web-search, v4-replay-baseline + M` |
+- **范围**：messages-inference；主请求、子代理、自定义 system、追加／排除动态 system 和获准自定义 agent。
+- **规则／机制**：按入口和受信条件选择已实测的 system block 数量、顺序、文本角色和 cache_control 形态。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：5 条 R/M 原子断言通过；基础、custom-system、append、exclude-dynamic 和 custom-agent 场景均有独立 wire。
+- **实现**：Persona 画像保存结构和派生规则；用户文本只作为规范化语义输入，不写入静态画像。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-BODY-004 消息历史与会话续接状态
+
+- **范围**：messages-inference；首轮、续轮、resume、fork、子代理和真实 TUI。
+- **规则／机制**：messages 角色序列、Session-Id、metadata.session_id 与 cc_prev_req 按实测会话转换共同演进；fork 必须生成新会话身份。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：4 条 R/M 原子断言通过；基础多轮、resume、fork 与 TUI 场景覆盖正反状态转换。
+- **实现**：由 invocation 隔离的 Persona 状态机生成；没有可信会话锚点时 fail-close，不复用入站伪身份。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-BODY-005 基础 tools 字段与工具 Schema
+
+- **范围**：messages-inference；无工具、Agent 与 Bash 基础场景。
+- **规则／机制**：tools 字段始终存在；无工具为数组空值，内置工具按实测名称、说明和 JSON Schema 输出。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：1 条 R/M 原子断言通过；基础四组官方样本覆盖空工具、Agent 与 Bash。
+- **实现**：由 Claude ToolPolicy 编译规范化工具；不接受入站伪造官方工具身份。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-BODY-007 billing attribution 身份块
+
+- **范围**：messages-inference；默认 attribution 与官方关闭条件。
+- **规则／机制**：首个 system block 承载版本和动态 cch attribution；关闭条件成立时整块移除，其余 system 保持相对顺序。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：4 条 R/M 原子断言通过；基础请求和 attribution-disabled 条件场景确认格式、动态值与省略行为。
+- **实现**：版本来自 Release，动态值来自 Persona 身份派生；不得从入站原样透传 attribution。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-BODY-008 模型与生成参数组合
+
+- **范围**：messages-inference；Sonnet 5 基线及 max_tokens、effort、thinking、adaptive-thinking 条件。
+- **规则／机制**：model、max_tokens、thinking、context_management、effort 和 stream 必须作为一个条件化 Body 合同生成，覆盖值和省略行为均按实测映射。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：9 条 R/M 原子断言通过；基线、五档 effort、输出上限及 thinking 开关场景均已对拍。
+- **实现**：由 ModelIntent 和 BodyShape 联合编译；只接受 SupportEnvelope 内的模型及受信配置。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-BODY-043 请求 gzip wire
+
+- **范围**：messages-inference；官方请求 gzip 条件成立时。
+- **规则／机制**：插入 Content-Encoding:gzip，Content-Length 计算压缩后的 wire 字节；解压后必须是完整目标 JSON。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：1 条 R/M 原子断言通过；gzip 正交场景保存压缩原始请求并验证可逆解析。
+- **实现**：DialectCompiler 先定型 JSON 再压缩并计算长度，Executor 不得二次改写。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-BODY-048 真实 TUI 标题与主推理请求
+
+- **范围**：messages-inference；真实 cli 交互入口。
+- **规则／机制**：TUI 先生成 Haiku 标题请求，再生成 Sonnet 主请求；两者的模型、beta、system、tools、thinking 和 output_config 分别按已实测形态输出。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：2 条 R/M 原子断言通过；真实 TUI 运行取得标题请求与主推理请求的完整 wire。
+- **实现**：仅在可信 cli entrypoint 条件下由 Persona 状态机生成；第三方入站不得自报 TUI 身份。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-CACHE-005 system prompt cache_control
+
+- **范围**：messages-inference；Sonnet 基线、一小时缓存和禁用缓存条件。
+- **规则／机制**：默认使用实测的两个一小时 system 缓存点；禁用条件移除全部 cache_control 而不改变 block 内容。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：2 条 R/M 原子断言通过；基线、1h 开关和两类禁用条件均有完整 Body 对比。
+- **实现**：由 CachePolicy 在 system 结构定型后应用，不能由兼容层任意插入缓存标记。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-CONN-010 重试分类、退避、预算与超时
+
+- **范围**：messages-inference；HTTP 状态、Retry-After、断连、最大重试数和 API_TIMEOUT_MS 条件。
+- **规则／机制**：按已实测状态集合决定是否重试，执行分级退避、Retry-After、断连重试、每模型预算和超时 Header；预算为零时不重试。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：6 条 R/M 原子断言通过；十状态故障矩阵、两种 Retry-After、断连、retry-limit 和 timeout 场景闭合。
+- **实现**：Claude RetryPolicy 生成 attempt；共享 Executor 只执行已编译 attempt，不解释厂商状态语义。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-CONN-018 streaming 失败与 non-stream fallback
+
+- **范围**：messages-inference；建流 404、已建流中断及 disable fallback 条件。
+- **规则／机制**：按实测条件切换 non-stream；fallback 请求省略 stream、调整超时并刷新 request-id／cch，同时保持会话和其余 Body 语义。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：2 条 R/M 原子断言通过；四个隔离 streaming 故障场景覆盖建流和中断分支。
+- **实现**：由 Claude 流状态机和 Body 编译器共同产生新的 attempt，禁止业务层旁路修改。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-CONN-019 HTTP/1.1 连接复用
+
+- **范围**：messages-inference；同一官方多请求运行。
+- **规则／机制**：同一运行的连续推理请求复用有效 HTTP/1.1 连接；跨画像、跨 Persona 和失效连接不得复用。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：1 条 R/M 原子断言通过；a1、s2、s4 三个多请求运行确认连接身份关系。
+- **实现**：连接池按 Persona、Release、route 和 transport capability 隔离。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-CONN-021 重试中的请求状态再生成
+
+- **范围**：messages-inference；应用层状态重试、Retry-After、断连和 retry-limit。
+- **规则／机制**：重试保持 Body、Session-Id 和主体 attribution，重新生成 x-client-request-id；Stainless retry count 保持实测值。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：1 条 R/M 原子断言通过；15 个 retry transition 对动态与稳定字段逐项比较。
+- **实现**：Attempt 状态由 Persona RetryPolicy 派生，Body 可重放性由 CompiledEnvelope 保护。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-CONN-023 模型 fallback 转换
+
+- **范围**：messages-inference；配置 fallback model 且主 Sonnet 连续达到失败预算。
+- **规则／机制**：预算耗尽后切换到 Haiku fallback，并同时切换 max_tokens、thinking、beta、message 和 output_config 形态，保持会话身份。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：2 条 R/M 原子断言通过；隔离 fallback 场景取得三次 Sonnet 与第四次 Haiku 完整转换。
+- **实现**：FallbackPolicy 选择目标 BodyShape；不得只替换 model 字符串。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-EP-001 messages 推理端点坐标
+
+- **范围**：messages-inference；first-party OAuth。
+- **规则／机制**：使用 api.anthropic.com 的 POST /v1/messages?beta=true，method、host、path 和 query 均为闭集。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：3 条 R/M 原子断言通过；基础八条推理请求逐项确认端点坐标。
+- **实现**：EndpointProfile 与 route／Sink 共同定型；未知 host、path、query 或端口 fail-close。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-EP-002 hello 生命周期探测
+
+- **范围**：lifecycle-hello；每次 sdk-cli／cli 运行。
+- **规则／机制**：在独立连接发送无 Body 的 HEAD /api/hello，并使用已实测五项 Header。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：1 条 R/M 原子断言通过；四个基础运行均取得一条 hello 请求。
+- **实现**：作为独立 strict egress、route、Sink 和画像视图执行，不在 messages 代码中旁路。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-EP-005 policy limits 辅助端点
+
+- **范围**：policy-limits；sdk-cli 启动阶段。
+- **规则／机制**：发送 GET /api/claude_code/policy_limits，使用 first-party OAuth、oauth beta、Release UA 和七项有序 Header。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：1 条 R/M 原子断言通过；55 个非 TUI 官方运行确认端点与 Header 合同。
+- **实现**：作为独立 persona_strict egress 编译；其出现仍受官方隐私与入口条件控制。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-EP-006 settings 辅助端点
+
+- **范围**：settings；sdk-cli 启动阶段。
+- **规则／机制**：发送 GET /api/claude_code/settings，在 policy-limits 身份向量上增加 no-cache Header。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：1 条 R/M 原子断言通过；55 个非 TUI 官方运行确认端点与九项 Header。
+- **实现**：作为独立 persona_strict egress 编译；不得复用裸 client 绕过 Persona。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-EP-007 OAuth profile 辅助端点
+
+- **范围**：oauth-profile；真实 TUI cli 启动。
+- **规则／机制**：发送 GET /api/oauth/profile，使用 axios UA、JSON Content-Type、OAuth Authorization 与八项有序 Header。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：1 条 R/M 原子断言通过；真实 TUI 运行取得完整请求。
+- **实现**：仅在可信 cli entrypoint 下作为独立 strict egress 生成。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-EP-008 essential 请求生命周期顺序
+
+- **范围**：hello、policy-limits、settings、oauth-profile 与 messages；sdk-cli／cli。
+- **规则／机制**：sdk-cli 和 TUI 分别遵循已实测的 essential 请求偏序；policy-limits 与 settings 不伪造固定先后。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：1 条 R/M 原子断言通过；54 个正式运行对生命周期请求序列复算。
+- **实现**：Persona 生命周期状态机调度独立 egress；关闭流量本身不作为一致性比较维度。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-EP-009 count_tokens 完整 wire
+
+- **范围**：count-tokens；真实 TUI token 计数条件。
+- **规则／机制**：POST /v1/messages/count_tokens?beta=true，使用 Claude SDK 身份 Header，并按 model、messages、tools 顺序发送 Body。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：3 条 R/M 原子断言通过；36 个正例与 sdk-cli 基线条件对照覆盖 endpoint、Header 和 Body。
+- **实现**：作为独立 persona_strict egress 编译，不与遗留 token-count 别名混同。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-EP-010 OAuth token refresh 完整 wire
+
+- **范围**：oauth-token-refresh；过期 OAuth 凭据条件。
+- **规则／机制**：POST platform.claude.com/v1/oauth/token，使用 axios 七项 Header 且不发送 Authorization；Body 字段顺序和 grant_type 固定，凭据只在运行时注入。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：3 条 R/M 原子断言通过；隔离 refresh 正例与普通推理基线条件对照闭合。
+- **实现**：作为独立 persona_strict credential-lifecycle egress；秘密不得进入画像、日志或收据。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-EP-011 MCP server 目录完整 wire
+
+- **范围**：mcp-servers；真实 TUI 的 MCP 目录条件。
+- **规则／机制**：GET /v1/mcp_servers?limit=1000，使用 OAuth、anthropic beta/version、MCP capabilities 与 protocol version 的有序 Header。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：2 条 R/M 原子断言通过；四个 TUI 正例与 sdk-cli 基线条件对照确认 endpoint 和 Header。
+- **实现**：作为独立 persona_strict egress；只有已批准 TUI／MCP 条件可触发。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-HDR-001 messages 基础 Header 与 OAuth 身份
+
+- **范围**：messages-inference；Linux/amd64、first-party OAuth 基线。
+- **规则／机制**：按实测大小写和顺序输出基础 Header，包括 Bearer OAuth、anthropic-version、压缩能力、Stainless 平台向量、x-app 与准确 Content-Length。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：7 条 R/M 原子断言通过；基础八条推理请求覆盖 Header 序列、值和 Body 长度关系。
+- **实现**：HeaderSlots 由 Release、可信账号和 Body wire 派生；入站 Header 不得覆盖官方身份槽。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-HDR-002 User-Agent 与入口 attribution
+
+- **范围**：messages-inference；sdk-cli、真实 cli 及获准 UA 条件段。
+- **规则／机制**：UA 版本来自 Release，入口段与 billing cc_entrypoint 同源；agent-sdk、client-app、workload 只按受信条件追加。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：2 条 R/M 原子断言通过；sdk-cli、TUI 与条件 UA 场景覆盖两处入口身份关系。
+- **实现**：Release 和 TrustedEntrypointFacts 共同派生；禁止消费入站 UA 或自报版本。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-HDR-003 anthropic-beta 有序组合
+
+- **范围**：messages-inference；主请求、子代理和 ANTHROPIC_BETAS 条件。
+- **规则／机制**：基础 beta 按实测顺序输出；子代理按规则省略末项；额外 beta 修剪空项后插入指定位置且不去重。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：2 条 R/M 原子断言通过；基础主／子代理和 beta-deduplicate 条件场景确认顺序与重复保留。
+- **实现**：BetaPolicy 由 Persona Compiler 执行；未知 beta 或范围外条件 fail-close。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-HDR-009 条件身份 Header 与 attribution 联动
+
+- **范围**：messages-inference；additional-protection、client-app、remote container/session、agent-sdk 与 workload 条件。
+- **规则／机制**：条件 Header、UA 段与 workload attribution 必须从同一受信事实按实测值和槽位共同生成；条件不成立时省略。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：12 条 R/M 原子断言通过；单条件和组合条件矩阵覆盖出现、省略、值传递、顺序与跨字段一致性。
+- **实现**：ClaudeIdentityFacts 和 HeaderSlots 联合派生；不允许第三方请求直接声明官方条件身份。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-HDR-012 请求与会话标识生命周期
+
+- **范围**：messages-inference；单请求与同一多请求会话。
+- **规则／机制**：每个请求生成不复用的 UUID request-id；同一会话的多请求复用 Session-Id。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：2 条 R/M 原子断言通过；八条推理请求与三个多请求运行确认唯一性和复用边界。
+- **实现**：request-id 为 attempt 级，Session-Id 为 Persona 会话级；跨 Persona／Release 禁止复用。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-HDR-014 子代理身份与父子谱系
+
+- **范围**：messages-inference；一级至三级 Agent 请求。
+- **规则／机制**：子代理使用 17 位 agent-id、复用会话并标记 subagent attribution；二级及更深追加直接父 agent-id，层级唯一性与链路关系必须一致。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：5 条 R/M 原子断言通过；depth1／2／3 与前台基线覆盖 Header、Body、会话和谱系关系。
+- **实现**：由可信 AgentLineageFacts 派生；无父链事实时不得补造 agent 身份。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-HDR-029 自定义 Header 语法与保护槽
+
+- **范围**：messages-inference；获准 ANTHROPIC_CUSTOM_HEADERS 条件。
+- **规则／机制**：按行和首冒号解析并保持输入顺序；空名称 fail-close；自定义项不得覆盖官方 request-id，插入位置固定。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：4 条 R/M 原子断言通过；合法语法、无效名称和受保护槽位场景均已实测。
+- **实现**：由 Compiler 的受控扩展槽处理；Header 名和值先验证再进入最终 wire。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-PROTO-001 HTTP/1.1 与端点 ALPN
+
+- **范围**：hello、messages、policy-limits 与 settings；Linux/amd64 原生 TLS。
+- **规则／机制**：应用层使用 HTTP/1.1；hello/messages ClientHello offer http/1.1，policy-limits/settings 的实测分支省略 ALPN。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 P/R/M 断言。
+- **实测**：1 条 R/M 与 1 条 P/M 原子断言通过；12 条应用层请求及同一原生 TLS attempt 的四端点对照闭合。
+- **实现**：TransportProfile 按 egress 选择 ALPN 行为并只建立 HTTP/1.1 执行能力。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-STATE-009 background 请求身份与形态
+
+- **范围**：messages-inference；官方 background 会话。
+- **规则／机制**：background 使用 x-app=cli-bg、cc_entrypoint=cli，并按已实测 Haiku／Sonnet 后台请求形态输出；前台保持 cli。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：1 条 R/M 原子断言通过；background 正例与 sdk-cli 前台条件对照确认身份及 Body 形态。
+- **实现**：只接受可信 background 状态事实；第三方入站不得通过 x-app 触发。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-TLS-001 原生 ClientHello CipherSuite 顺序
+
+- **范围**：hello、messages、policy-limits 与 settings；Linux/amd64 原生 TLS。
+- **规则／机制**：四类目标连接使用同一实测 CipherSuite 有序序列；不得以 relay 或服务端重建冒充 ClientHello。
+- **源码**：未取得可审计原源码；TLS 行为以官方 2.1.226 原生二进制的 P/M 为唯一权威。
+- **实测**：1 条 P/M 原子断言通过；v4-native-tls-baseline 中四个 ClientHello 正例及四个条件对照均已解析。
+- **实现**：TransportCapability 必须在目标平台产生等价原生 TLS wire；平台变化需重建画像。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-TLS-003 TLS SNI
+
+- **范围**：hello 与 messages；目标 TLS 连接。
+- **规则／机制**：握手使用 api.anthropic.com SNI，并与已批准 Sink 一致。
+- **源码**：未取得可审计原源码；规则权威来自官方 2.1.226 原生连接的 P/M。
+- **实测**：1 条 P/M 原子断言通过；8 个承载选定请求的真实 TLS 连接确认 SNI。
+- **实现**：SNI 由 EndpointProfile 的可信 Sink 派生，禁止从任意入站 Host 透传。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-TOOL-018 StructuredOutput 工具
+
+- **范围**：messages-inference；json-schema 条件。
+- **规则／机制**：把输入 schema 包装为唯一 StructuredOutput 工具，使用固定说明和 input_schema，同时保持实测 effort。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：1 条 R/M 原子断言通过；json-schema 正交场景取得完整工具描述。
+- **实现**：ToolPolicy 只消费规范化 schema，官方工具名称和说明来自 Release。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-TOOL-019 内置 Agent 与 Bash 工具往返
+
+- **范围**：messages-inference；Agent 和 Bash 工具调用。
+- **规则／机制**：tool_use 与同 ID tool_result 成对进入续轮；Agent 还派生带可信 agent-id 的子代理请求。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：2 条 R/M 原子断言通过；Agent depth1、Bash 与无工具基线条件对照闭合。
+- **实现**：工具往返由规范化消息和 Persona 状态共同编译，tool ID 关系必须保真。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-TOOL-021 MCP 工具与 deferred 全目录
+
+- **范围**：messages-inference；stdio MCP 与 deferred MCP 条件。
+- **规则／机制**：MCP 工具按实测前缀、名称和 input_schema 输出并完成同 ID 往返；deferred 场景必须保留全量目录，不得截断。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：2 条 R/M 原子断言通过；普通 MCP、33 项 deferred 工具与无工具基线条件对照闭合。
+- **实现**：ToolPolicy 对全量已批准目录确定性编译；未知 MCP 能力不得自动进入 SupportEnvelope。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-TOOL-023 advisor 工具条件分支
+
+- **范围**：messages-inference；显式启用 advisor 条件。
+- **规则／机制**：仅在条件成立时加入已实测 advisor type 和 model；默认分支省略。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：1 条 R/M 原子断言通过；显式正例与默认官方条件对照各一组。
+- **实现**：由受信 feature 条件选择 ToolPolicy；入站工具声明不能冒充官方 advisor。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+
+### SPEC-TOOL-024 server web_search 派生请求
+
+- **范围**：messages-inference；WebSearch 外层工具调用。
+- **规则／机制**：外层调用派生独立的 server web_search 请求，携带已实测 tool descriptor 与 tool_choice。
+- **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
+- **实测**：1 条 R/M 原子断言通过；三条 web_search 请求与无工具基线条件对照闭合。
+- **实现**：由 Persona ToolPolicy 生成派生请求；跨请求关系和会话身份必须保持。
+- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
 
 <!-- FW-F-ACTIVE-RULES-END -->
 
-分组计数为 25 + 33 + 52 = **110**。任何新增、删除、改写或 egress 迁移都必须取得新的目标 P／R／M、
-更新独立正负断言并签发新的 ApprovalFact，不能直接编辑列表。
+分组计数为 transport／协议／端点／连接 17 条、Header／身份 7 条、Body／缓存／状态／工具 16 条，
+合计 **40 条 RequiredRules**。底层 110 条原子断言仍全部保留：106 条支撑画像，3 条本地上下文装配
+和 1 条本地拒绝组成 2 个 scenario-only 组。任何新增、删除、改写或 egress 迁移都必须取得新的目标
+P／R／M、更新原子断言和映射并签发新的 ApprovalFact，不能直接编辑列表。
 
 ## 2.6 发现项、候选与历史材料的终态
 
@@ -355,7 +600,8 @@ FW-E 的 7,368 个发现项没有删除。FW-F v21／v5 追加终态账本并达
 - 4,523 个历史上下文原子全部归属：128 个 Markdown 导航由结构证据证明为非出站，4,395 个绑定到
   精确文档、标题和语义事实；
 - FW-F v1 的 97 条机械规则提案全部撤回，活动数为 0；
-- 发现项清零不等于把 7,368 项变成规则；只有本部分 110 条通过目标 P／R／M 正负断言的命题进入画像。
+- 发现项清零不等于把 7,368 项变成规则；110 条实测原子断言经责任边界归并后，只有 40 条
+  RequiredRules 进入画像，4 条客户端本地断言只保留为场景证据。
 
 | 材料 | 当前职责 | 能否单独支撑 2.1.226 活动规则 |
 |---|---|---|
@@ -368,8 +614,8 @@ FW-E 的 7,368 个发现项没有删除。FW-F v21／v5 追加终态账本并达
 
 ## 2.7 机器复算与强制门禁
 
-先对 v21 Campaign 复算 77 个场景、395 条请求、49 个维度和 593 个候选，动态生成原子规则，再执行
-7,368 项发现清账。旧目录只读保留，每次复算必须写新目录：
+先对 v21 Campaign 复算 77 个场景、395 条请求、49 个维度和 593 个候选，动态生成原子断言，再执行
+7,368 项发现清账和 110→40 规范化。旧目录只读保留，每次复算必须写新目录：
 
 ```bash
 python3 tools/official_client_capture/claude_fw_f_v21_finalize.py \
@@ -395,14 +641,17 @@ python3 tools/official_client_capture/claude_fw_f_discovery_clearance.py \
 
 - `source_discovery_count = resolved_record_count = 7368`；
 - `candidate_resolution_count = orthogonal_candidate_count = 593`，且 32 个语义候选族全部闭合；
-- 本版本由原子化实测动态得到 `measured_rule_count = 110`，不得在策略中预设规则数；
+- 历史字段 `measured_rule_count = 110` 表示 AtomicAssertionLedger 的原子断言数，不再表示画像规则数；
 - `withdrawn_v1_proposal_count = 97`；
 - 全部 `gate_counts = 0`；
-- 3 条 TLS 规则均严格绑定 P/M，107 条普通规则均严格绑定 R/M；
-- 每条活动规则均有非空且已批准的 `egress_ids`、独立 `PAIR-*`、官方正例和非零官方负例；
+- 3 条 TLS 原子断言均严格绑定 P/M，107 条普通原子断言均严格绑定 R/M；
+- 110 条原子断言均有非空 `egress_ids`、独立 `PAIR-*` 和官方正例；条件命题需要条件对照，
+  无条件命题使用零违规分母，不得伪称独立官方负例；
+- 110 条原子断言必须恰好一次归属：106 条映射到 40 条 RequiredRules，4 条映射到 2 个
+  scenario-only 客户端本地组；
 - 八类 strict egress 均至少有规则，且 Approval 中分别绑定自身 SPEC 集合；
-- 不存在 `unmeasured_feature_boundary`；指南、RuleLedger、Snapshot、EvidencePackage 与
-  SupportEnvelope 的 110 个规则 ID 必须完全一致；
+- 不存在 `unmeasured_feature_boundary`；指南、RequiredRules manifest、Snapshot、
+  EvidencePackage 与 SupportEnvelope 的 40 个规则 ID 必须完全一致；
 - telemetry、nonessential、usage、models、dispatch-id、usage-limit 的合法零流量不得生成规则。
 
 回归测试入口：
@@ -425,10 +674,11 @@ Claude Code 换版时必须新建 Campaign，并重复以下顺序：
 2. 以目标 bundle 原生发现为主，使用 2.1.220、2.1.88、HitCC 和前一批准版本只补线索，不继承结论；
 3. 对每个拟活动命题构造可达正负场景；真实上游 run 在 Vircs 采集，故障语义在隔离 relay 注入；
 4. 采集目标 R/M；涉及 ClientHello／ALPN 时另采原生 P；
-5. 运行逐规则断言，只把通过断言的 request-egress 命题写入新的 MeasuredRuleLedger；
-6. 对全部发现、候选和旧规则逐项 disposition，未决数必须为 0；
-7. target-first 生成新 Snapshot／Release，再用同一 Schema／Compiler 表达历史 fixture；
-8. 证据不足的能力留在明确边界，不得补造规则、缩小数字或用旧版本 wire 提升等级。
+5. 运行原子断言，把通过断言的 request-egress 命题写入新的 AtomicAssertionLedger；
+6. 按 Codex 六字段和 Sub2API 实现责任归并 RequiredRules，客户端本地行为进入 scenario-only；
+7. 对全部发现、候选和旧规则逐项 disposition，未决数必须为 0；
+8. target-first 生成新 Snapshot／Release，再用同一 Schema／Compiler 表达历史 fixture；
+9. 证据不足的能力留在明确边界，不得补造规则、缩小数字或用旧版本 wire 提升等级。
 # 第三部分 Sub2API 实现与迁移
 
 本部分只记录 Claude 方言和当前代码差距；共享控制契约见 Framework。硬性目标是：画像能表达的
@@ -564,11 +814,11 @@ ApprovalFact 收窄或晋升，但不能静默换类：
 |---|---|---|
 | `POST /v1/messages?beta=true` 推理及 `HEAD /api/hello` 生命周期探测 | `persona_strict` | 纳入画像、SPEC／PAIR、SupportEnvelope 和 Guard |
 | `GET /api/claude_code/policy_limits`、`GET /api/claude_code/settings`、`GET /api/oauth/profile` | `persona_strict` | 作为三个独立 egress 纳入画像、SPEC／PAIR、SupportEnvelope 和 Guard |
-| `/v1/messages/count_tokens`、`POST platform.claude.com/v1/oauth/token`、`GET /v1/mcp_servers?limit=1000` | `persona_strict` | v21 已取得正负例并纳入独立 egress、SPEC／PAIR、SupportEnvelope 和 Guard；当前只批准 validation-only |
+| `/v1/messages/count_tokens`、`POST platform.claude.com/v1/oauth/token`、`GET /v1/mcp_servers?limit=1000` | `persona_strict` | v21 已取得条件成立／不成立样本并纳入独立 egress、SPEC／PAIR、SupportEnvelope 和 Guard；当前只批准 validation-only |
 | usage、OAuth exchange、cookie authorize／organizations、account test、upstream models，以及遗留 token-count／OAuth-refresh 别名 | `non_persona_managed` | 登记 route／Sink、认证、endpoint、client、超时、重试、秘密与审计，不把遗留别名冒充新的 official-client strict 身份 |
 | 未登记 Claude OAuth 路径 | `denied` | enforce 时 fail-close |
 
-`non_persona_managed` 是受管第三态，不是 `out_of_scope_passthrough`。它不计入当前 110 条活动规则及
+`non_persona_managed` 是受管第三态，不是 `out_of_scope_passthrough`。它不计入当前 40 条 RequiredRules 及
 SupportEnvelope 的逐规则分母，但必须有独立的 source-to-sink 闭集、运行断言和失败策略；未来若要求
 仿真官方客户端在该端点的 wire，必须先取得证据、原子化规则并正式晋升为 `persona_strict`。
 
@@ -579,11 +829,12 @@ Codex IdentityMode、HeaderPolicy、BodyPolicy、BehaviorPolicy 或 fallback 字
 
 | 规则组 | 数量 | 画像／执行落点 |
 |---|---:|---|
-| TLS／协议／端点／连接 | 25 | `Transports`、`Endpoints`、client lifecycle + adapter |
-| Header／认证／Beta | 33 | `HeaderSlots`、`BetaPolicy` + Claude Compiler |
-| Body／缓存／metadata／状态／工具 | 52 | `BodyShape`、IdentityFacts + Claude Compiler |
+| TLS／协议／端点／连接 | 17 | `Transports`、`Endpoints`、client lifecycle + adapter |
+| Header／认证／Beta | 7 | `HeaderSlots`、`BetaPolicy` + Claude Compiler |
+| Body／缓存／metadata／状态／工具 | 16 | `BodyShape`、IdentityFacts + Claude Compiler |
 
-110 条均具有画像／执行落点、2.1.226 目标 P／R／M 和独立 `PAIR-<SPEC-ID>` 正负例。原生 TLS／ALPN、
+40 条 RequiredRules 均具有画像／执行落点，并由 106 条目标 P／R／M 原子断言支撑；另外 4 条
+客户端本地断言只进入场景层。原生 TLS／ALPN、
 故障重试、真实 TUI、Agent／background／hook、custom Header／beta／metadata、remote、附件、MCP、
 advisor、web_search、count_tokens 与隔离 OAuth refresh 已纳入；合法零流量仍只作支撑事实。调度、计费
 和服务级节奏不由画像改写。
@@ -610,9 +861,9 @@ advisor、web_search、count_tokens 与隔离 OAuth refresh 已纳入；合法�
 | `FW-B` | 按 Framework 抽取 Codex 已证明的暂定共享合同并保留 Codex facade | 共享内核无 Codex 专用策略字段；Codex active／rollback final wire 零差异；不宣称多 Persona 已冻结 |
 | `FW-C` | 验证并发布 Codex-only 正式制品，完成回滚、恢复和稳定观察 | 本轮没有新增 Claude Persona／画像／strict 注册；Codex 发布与激活收据闭环 |
 | `FW-D` | 建设 Campaign、正交事实、两段式批准、Snapshot／Release Store、candidate／PAIR、晋升与激活工具链 | 只用 Codex／合成数据自测；越权、摘要变化、范围缺口和收据不匹配均由机器阻断 |
-| `FW-E` | 第一步冻结最新 stable；从目标 bundle 原生发现发送点，取 2.1.88、HitCC、2.1.220／前一批准 stable 与目标发现的并集，分开建立 DiscoveryInventory、SemanticRuleCandidate 和 RuleLedger，完成差分、P／R／J／M 和 Evidence 封存，再建立两个 Inventory 与 observation-only Sink | 目标版本、完整 sink／discovery inventory、语义候选、只含 SPEC 的规则台账和 EvidencePackage 可复算；没有截断或未分类项；停在 `evidence_recorded`，尚不定义目标 Schema／Snapshot 或签发 Evidence 批准 |
+| `FW-E` | 第一步冻结最新 stable；从目标 bundle 原生发现发送点，取 2.1.88、HitCC、2.1.220／前一批准 stable 与目标发现的并集，分开建立 DiscoveryInventory、SemanticRuleCandidate 和 AtomicAssertionLedger，完成差分、P／R／J／M 和 Evidence 封存，再建立两个 Inventory 与 observation-only Sink | 目标版本、完整 sink／discovery inventory、语义候选、只含 SPEC 的原子断言台账和 EvidencePackage 可复算；没有截断或未分类项；停在 `evidence_recorded`，尚不定义目标 Schema／Snapshot 或签发 Evidence 批准 |
 | `FW-F` | 先把 FW-E 全部发现和语义候选逐项收敛到可审计终态并清零未决项，再由最新 stable 证据生成 Schema、目标 Snapshot、Persona 和不可部署样例；随后用同一 Schema／Compiler 表达 2.1.220 rollback fixture，批准 Profile、范围和多 Persona 合同 | 全量 DiscoveryDispositionLedger 无缺失、重复或未决项；target-first 样例与跨 Persona 负例通过；ApprovalFact 完整；Codex 生产收据对应最终合同；selector 未改变 |
-| `FW-G` | 实现本次已批准的 110 条最新 stable 实测规则，完成受管语义层、辅助出站三态、全部 strict 入口 PAIR、独立复测、DMIT candidate 和 rollback 验收 | 110 条规则达到后继 production-replacement ApprovalFact 要求；范围内断言、范围外拒绝和回退通过 |
+| `FW-G` | 实现本次已批准的 40 条最新 stable RequiredRules，完成受管语义层、辅助出站三态、全部 strict 入口原子断言、独立复测、DMIT candidate 和 rollback 验收 | 40 条规则及其 106 条画像原子断言达到后继 production-replacement ApprovalFact 要求；范围内断言、范围外拒绝和回退通过 |
 | `FW-H` | 灰度、回滚、激活；逐入口迁移并在闭集完成后退休遗留链 | DeploymentFact 与运行态一致；无 `retained_legacy` 才能签发迁移完成的 RemovalReceipt |
 
 最新 stable 是目标 Schema、Snapshot 和实现的唯一设计权威。FW-E 只冻结目标规则证据，不预先用
@@ -652,14 +903,15 @@ Guard 按 route、persona、Sink、binding、Release、Profile digest、adapter�
 `claude-code-2_1_226-fw-e-semantic-20260818-e577e144a`，其 Store 停在 `evidence_recorded`。旧 Campaign
 `claude-code-2_1_226-fw-e-final-20260818-93f2edbc9` 及其“7,425 条规则”收据只保留为历史错误事实，由
 [语义规则纠正收据](egress/maintenance/fw-e-semantic-rule-correction/receipt.json)替代，禁止继续作为
-FW-F 输入。FW-F 后继 Campaign 为 `claude-code-2_1_226-fw-f-measured-profile-v4-20260819`，Store 已到
+FW-F 输入。FW-F 后继 Campaign 为 `claude-code-2_1_226-fw-f-required-rules-v5-20260819`，Store 已到
 `profile_approved`：7,368 个发现、593 个正交候选和 32 个语义候选族未决数均为 0，2.1.226 目标画像／
 Release 与 2.1.220 fixture 已按 target-first 顺序生成，EvidenceApprovalFact 和 `validation_only`
-ProfileApprovalFact 已签发。110 条活动规则都有 Vircs 上 2.1.226 官方客户端的真实 P／R／M、非零正负例
-且断言通过，但当前仍为 `observed`，所以没有
+ProfileApprovalFact 已签发。40 条 RequiredRules 由 Vircs 上 2.1.226 官方客户端的 106 条画像
+P／R／M 原子断言支撑，另有 4 条客户端本地场景断言；110 条均通过，但 40 条规则当前仍为
+`observed`，所以没有
 production-replacement ApprovalFact、candidate、Runtime Selector、DeploymentFact 或环境变更。事实见
 [清零收据](egress/maintenance/fw-f-discovery-clearance/receipt.json)和
-[FW-F 画像批准收据](egress/maintenance/fw-f-profile-approval/receipt.json)；下一步固定为 FW-G。
+[FW-F RequiredRules 规范化收据](egress/maintenance/fw-f-required-rules-normalization/receipt.json)；下一步固定为 FW-G。
 
 ---
 
@@ -724,8 +976,9 @@ Campaign 只是绑定目标版本、官方产物和环境身份的不可变容�
 | 辅助出站三态与运行断言 | 16 项已知 OAuth 出站身份的目标三态已批准：8 strict、8 managed；当前运行态仍保持 `legacy_observe`，FW-G 才实现与验收 |
 | 晋升、正式镜像和 production active／rollback 收据 | 通用能力已实现；Claude 尚无晋升、激活或部署事实 |
 
-FW-F 已按 `validation_only` 闭合，不等于生产就绪。下一步固定为 FW-G：实现 110 条目标画像规则，用
-独立官方运行与候选对拍把所需规则升级到 `verified`，签发后继 `production_replacement` ApprovalFact，
+FW-F 已按 `validation_only` 闭合，不等于生产就绪。下一步固定为 FW-G：实现 40 条目标 RequiredRules，
+并以 106 条画像原子断言做独立官方运行与候选对拍，把所需规则升级到 `verified`，签发后继
+`production_replacement` ApprovalFact，
 再建立并在 DMIT 验收 candidate。范围外能力继续 fail-close 或保持受管／遗留处置。
 
 ## 4.2 官方取证、分类与批准
@@ -773,7 +1026,8 @@ HistoricalSourceCandidates
 
 1. `DiscoveryInventory` 无截断保存目标 AST 调用、2.1.88 原子命题、HitCC clue 和 Markdown 原子；
 2. `SemanticRuleCandidate` 用 `source_ids` 把同一语义的多个发现归并为稳定的 `CAND-*` 工作项；
-3. `RuleLedger` 只保存已经原子化、可执行并可逐项断言的 `SPEC-*`。
+3. `AtomicAssertionLedger` 只保存已经原子化、可执行并可逐项断言的 `SPEC-*`；历史
+   `RuleLedger／MeasuredRuleLedger` 文件名按此语义解释。
 
 一个发现跨越多个语义时可以引用多个候选，但发现与候选必须双向闭合。目标原生发现没有历史对应项，
 也不能直接按发现 ID 创建 SPEC；只有语义审查明确 retained claim、适用条件、所需通道、场景和断言后，
@@ -793,7 +1047,7 @@ disposition。下列任一条件均阻止 FW-E 退出：
 
 1. 目标 sink 未分类、被截断、重复身份冲突或没有可复算来源；
 2. 2.1.88 候选、HitCC 直接线索或历史官方规则没有唯一处置；
-3. 已完成语义审查的目标新增机制无法显式生成 `add`，或工具把发现／`CAND-*` 自动混入 RuleLedger；
+3. 已完成语义审查的目标新增机制无法显式生成 `add`，或工具把发现／`CAND-*` 自动混入 AtomicAssertionLedger；
 4. strict 候选缺少目标版本运行场景，或运行观测出现 inventory 外 host／path／sink；
 5. `DISABLE_TELEMETRY`、`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 的实际值、读取点和 gate 未绑定
    本次目标产物。关闭后的 telemetry／nonessential 分支仍登记可达性和 `record_only` 处置，其不发流量
@@ -827,7 +1081,7 @@ claude_fw_e.py analyze-bundles
 观测。`traffic_class=nonessential／telemetry` 只能使用 `record_only_disabled` 或保持
 `unclassified`；不得用 `delete`、范围外或零流量事实静默移除。`seal` 使用 v3 计划并直接绑定目标
 inventory、矩阵、closure 和 capture index；closure 非 `passed`、运行样本仍使用 host 预筛、四者摘要
-不一致，或 DiscoveryInventory／SemanticRuleCandidate／RuleLedger 三层数量和双向引用不闭合时，Store
+不一致，或 DiscoveryInventory／SemanticRuleCandidate／AtomicAssertionLedger 三层数量和双向引用不闭合时，Store
 不得写入 `evidence_recorded`。语义候选只封存发现与待验证语义，不签发 EvidenceApprovalFact 或
 ProfileApprovalFact，也不允许 FW-F／FW-G 把它当成已批准规则。
 
@@ -896,8 +1150,8 @@ inventory 和 selector 未变证明。入库只允许：
 7. 构建记录 source tree、测试树、Go／Node 依赖、目标架构、image ID 与 OCI digest。
 
 当前 FW-F 已生成 target-first Snapshot／样例、2.1.220 fixture 和最终合同，但批准用途仅为
-`validation_only`。110 条活动规则全部绑定 Vircs 上 2.1.226 官方客户端的真实 P／R／M、独立正负例
-逐项断言通过，7,368 个发现与 593 个候选未决数为 0；证据等级
+`validation_only`。40 条 RequiredRules 全部绑定 Vircs 上 2.1.226 官方客户端的 106 条画像 P／R／M
+原子断言；另有 4 条客户端本地场景断言，110 条均逐项通过，7,368 个发现与 593 个候选未决数为 0；证据等级
 仍是 `observed`，取得后继 `production_replacement` ApprovalFact 前不得形成生产替换 candidate。
 
 ## 4.4 候选验证与正式验收
@@ -931,7 +1185,7 @@ FW-G 验收前至少重放本次 FW-F Store：
 
 ```bash
 python3 -m tools.official_client_control replay \
-  --store "$PWD/local-analysis/fw-f/claude-code-2.1.226/profile-approval-v4/control-store" \
+  --store "$PWD/local-analysis/fw-f/claude-code-2.1.226/profile-approval-v5/control-store" \
   --external-root "$PWD" \
   --require-external
 ```
@@ -940,15 +1194,16 @@ python3 -m tools.official_client_control replay \
 运行，或先追加工具变更审阅链；不得拿当前已经改为全 host 捕获的 MITM／提取器源码与旧摘要直接比较，
 再把预期的工具演进误报成目标画像规则失败。2.1.220 fixture 的当前准入以本次内容寻址 Store 重放为准。
 
-逐规则结果必须唯一覆盖 SupportEnvelope 内的 110 条目标全集。`ready` 只证明固定 release candidate 通过
+逐规则结果必须唯一覆盖 SupportEnvelope 内的 40 条 RequiredRules 及其 106 条画像原子断言。`ready`
+只证明固定 release candidate 通过
 已批准规则，不表示画像已晋升、正式镜像已构建或生产已切换。当前 FW-E 三层历史输入为：
 
 - `DiscoveryInventory`：7,368 个发现项，其中目标 AST 331、2.1.88 命题 29、HitCC clue 71、Markdown
   原子 6,937；2,830 项归入语义候选，15 项映射既有规则，4,523 项登记为可重分类的
   `catalogued_context`；
 - `SemanticRuleCandidate`：32 个语义候选，其中 10 个 `observed`、22 个 `blocked`，全部禁止加入
-  RuleLedger 和生产；
-- `RuleLedger`：57 条 SPEC，其中 45 条 `observed`、12 条 `regressed_evidence`、0 条 `verified`，没有
+  AtomicAssertionLedger 和生产；
+- 历史 `RuleLedger`：57 条 SPEC，其中 45 条 `observed`、12 条 `regressed_evidence`、0 条 `verified`，没有
   因 7,368 个发现项自动新增规则。
 
 FW-F 清零制品在不改写上述 FW-E 事实的前提下追加：
@@ -958,16 +1213,17 @@ FW-F 清零制品在不改写上述 FW-E 事实的前提下追加：
 - 4,523／4,523 个 `catalogued_context` 均有终态，其中 128 个 Markdown 导航链接由结构证据证明为
   非出站，4,395 个绑定到精确文档、标题和语义支撑事实；原始记录仍永久保留；
 - 593／593 个正交候选和 32／32 个语义候选族已收敛；FW-F v1 机械生成的 97 条规则提案全部撤回并保留逐项审计；
-- `MeasuredRuleLedger` 只保留 110 条经 Vircs 上 2.1.226 官方客户端真实 P／R／M 正负断言通过的
-  request-egress 规则；0 条响应兼容、
+- 历史名为 `MeasuredRuleLedger` 的 AtomicAssertionLedger 保留 110 条经 Vircs 上 2.1.226 官方客户端
+  真实 P／R／M 通过的原子断言；106 条支撑 40 条 RequiredRules，4 条归入客户端本地场景；0 条响应兼容、
   遥测／traceparent 或无当前运行证据的规则进入 SupportEnvelope。
 
-语义清零只表示每个发现已经确定“是什么、归到哪里”，不表示可以进生产。110 条活动规则虽已有目标
-P／R／M 和通过断言，仍须在 FW-G 通过独立复测、实现后对拍与隔离验收达到后继批准要求。不得把
+语义清零只表示每个发现已经确定“是什么、归到哪里”，不表示可以进生产。40 条 RequiredRules 虽已有
+110 条底层断言的完整归属和目标 P／R／M，仍须在 FW-G 通过独立复测、实现后对拍与隔离验收达到后继
+批准要求。不得把
 `observed` 改名、用遗留 wire 佐证，或为了缩小数字从发现清单删除。
 
 FW-F 已封存 Claude `validation_only` ProfileApprovalFact、ReleaseArtifact、SupportEnvelope、两个
-Inventory 的目标处置和 110 条 request-egress 断言计划；八类 strict egress 分别绑定自身规则集合，
+Inventory 的目标处置、40 条 RequiredRules 和 110 条原子断言计划；八类 strict egress 分别绑定自身规则集合，
 响应兼容只作为支撑事实留在兼容边界。当前
 缺少的是 FW-G 的完整实现、独立补证、后继 `production_replacement` ApprovalFact 和 DMIT 验收，因此
 尚不能形成生产替换 candidate 或受管 `ready`。

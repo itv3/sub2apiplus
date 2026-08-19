@@ -20,16 +20,25 @@ from tools.official_client_capture.claude_fw_f_profile import (
     compare_profiles,
     compile_vertical_sample,
     guide_rule_ids,
+    measured_profile_rules,
     parse_http_stream,
     rule_spec_ids_by_egress,
     validate_clearance_inputs,
     validate_compiled_envelope,
     validate_policy,
+    validate_required_rule_manifest,
 )
 
 
 ROOT = Path(__file__).resolve().parents[3]
 POLICY_PATH = ROOT / "tools/official_client_capture/claude_fw_f_profile_policy_2_1_226.json"
+RULE_MANIFEST_PATH = (
+    ROOT / "tools/official_client_capture/claude_required_rules_2_1_226.json"
+)
+FINAL_ATOMIC_LEDGER_PATH = (
+    ROOT
+    / "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v5-final/measured-rule-ledger.json"
+)
 MEASURED_SPEC_IDS = sorted(
     ["SPEC-ACTIVE-001"] + [f"SPEC-TEST-{index:03d}" for index in range(1, 88)]
 )
@@ -181,13 +190,16 @@ def clearance_fixture() -> tuple[dict[str, object], dict[str, object], dict[str,
                 ],
                 "official_positive": {
                     "assertion_id": f"PAIR-{spec_id}-POSITIVE",
+                    "kind": "applicable_official_wire_matches_claim",
                     "result": "passed",
                     "sample_count": 1,
                 },
                 "official_negative": {
                     "assertion_id": f"PAIR-{spec_id}-NEGATIVE",
+                    "kind": "official_negative_or_zero_violation_denominator",
                     "result": "passed",
                     "sample_count": 1,
+                    "violation_count": 0,
                 },
                 "applicability": ["version=2.1.226"],
                 "applicability_scope": "1 条请求",
@@ -388,8 +400,8 @@ class ClaudeFWFProfileTests(unittest.TestCase):
             guide = Path(temporary_directory) / "guide.md"
             guide.write_text(
                 "<!-- FW-F-ACTIVE-RULES-BEGIN -->\n"
-                "| `SPEC-B-001` | B |\n"
-                "| `SPEC-A-001` | A |\n"
+                "### SPEC-B-001 B\n"
+                "### SPEC-A-001 A\n"
                 "<!-- FW-F-ACTIVE-RULES-END -->\n",
                 encoding="utf-8",
             )
@@ -397,8 +409,8 @@ class ClaudeFWFProfileTests(unittest.TestCase):
 
             guide.write_text(
                 "<!-- FW-F-ACTIVE-RULES-BEGIN -->\n"
-                "| `SPEC-A-001` | A |\n"
-                "| `SPEC-A-001` | A |\n"
+                "### SPEC-A-001 A\n"
+                "### SPEC-A-001 A\n"
                 "<!-- FW-F-ACTIVE-RULES-END -->\n",
                 encoding="utf-8",
             )
@@ -428,6 +440,53 @@ class ClaudeFWFProfileTests(unittest.TestCase):
             result["egress-claude-messages-inference"],
             ["SPEC-EP-001", "SPEC-EP-008"],
         )
+
+    def test_required_rule_manifest_losslessly_maps_110_atomic_assertions(self) -> None:
+        manifest = json.loads(RULE_MANIFEST_PATH.read_text(encoding="utf-8"))
+        ledger = json.loads(FINAL_ATOMIC_LEDGER_PATH.read_text(encoding="utf-8"))
+        validate_required_rule_manifest(manifest, ledger)
+        evidence_rules, profile_rules = measured_profile_rules(ledger, manifest)
+
+        self.assertEqual(len(evidence_rules), 40)
+        self.assertEqual(len(profile_rules), 40)
+        self.assertEqual(
+            [value["spec_id"] for value in profile_rules],
+            [value["spec_id"] for value in manifest["required_rules"]],
+        )
+        self.assertEqual(
+            sum(len(value["atomic_assertion_ids"]) for value in profile_rules),
+            106,
+        )
+        scenario_ids = {
+            assertion_id
+            for group in manifest["scenario_only_groups"]
+            for assertion_id in group["atomic_assertion_ids"]
+        }
+        self.assertEqual(
+            scenario_ids,
+            {
+                "SPEC-BODY-053",
+                "SPEC-BODY-054",
+                "SPEC-STATE-005",
+                "SPEC-STATE-010",
+            },
+        )
+        protocol = next(
+            value for value in profile_rules
+            if value["spec_id"] == "SPEC-PROTO-001"
+        )
+        self.assertEqual(set(protocol["evidence_channels"]), {"M", "P", "R"})
+
+    def test_required_rule_manifest_rejects_duplicate_atomic_mapping(self) -> None:
+        manifest = json.loads(RULE_MANIFEST_PATH.read_text(encoding="utf-8"))
+        ledger = json.loads(FINAL_ATOMIC_LEDGER_PATH.read_text(encoding="utf-8"))
+        duplicate = copy.deepcopy(manifest)
+        duplicate["required_rules"][1]["atomic_assertion_ids"].append(
+            "SPEC-BODY-001"
+        )
+        duplicate["required_rules"][1]["atomic_assertion_ids"].sort()
+        with self.assertRaisesRegex(ProfileBuildError, "重复消费"):
+            validate_required_rule_manifest(duplicate, ledger)
 
     def test_nonzero_discovery_clearance_gate_is_rejected(self) -> None:
         clearance, measured_rules, withdrawn = clearance_fixture()
@@ -470,13 +529,16 @@ class ClaudeFWFProfileTests(unittest.TestCase):
             "assertion_id": "PAIR-SPEC-TLS-001",
             "official_positive": {
                 "assertion_id": "PAIR-SPEC-TLS-001-POSITIVE",
+                "kind": "official_feature_present",
                 "result": "passed",
                 "sample_count": 1,
             },
             "official_negative": {
                 "assertion_id": "PAIR-SPEC-TLS-001-NEGATIVE",
+                "kind": "official_condition_absent_or_zero_violation",
                 "result": "passed",
                 "sample_count": 1,
+                "violation_count": 0,
             },
             "evidence_channels": ["M", "P"],
             "evidence_refs": [

@@ -151,7 +151,7 @@ OfficialClientPersona =
 | `ProfileSchema` | 版本、端点、Header、Body、状态、transport 和条件的可表达范围 |
 | `DialectCompiler` | 从该 Persona 的 TypedEgressPlan、IdentityFacts 与画像生成 `CompiledEnvelope` 的规则 |
 | `TransportCapability` | 可复用 adapter 与确需新增的窄 adapter；不得把客户端差异塞进全局分支 |
-| `EvidencePackage` | 官方产物、源码／bundle、P／R／J／M、摘要、适用范围和规则台账 |
+| `EvidencePackage` | 官方产物、源码／bundle、P／R／J／M、摘要、适用范围、AtomicAssertionLedger 和 RequiredRules 映射 |
 | `AcceptancePackage` | 聚合引用 AcceptanceFact、DeploymentFact，以及官方入口／每类第三方入口的成对断言、candidate 验收、发布和回滚收据 |
 
 只有出现新的入站协议时才登记新的 `IngressProtocolAdapter`。新增 Persona 默认复用已有协议适配器；
@@ -232,9 +232,10 @@ Schema 能表达时只追加数据；出现新协议、新状态机制或 Schema
 
 ## 3.2 证据与变更身份
 
-客户端规则至少声明版本、产物摘要、平台、入口、认证、模型、配置、网络条件、观测通道、正负例和
-适用边界。只能从证据实际可见的层次得出结论，pcap、原始应用层字节、MITM 解析、源码或 bundle
-控制流不能互相替代。
+客户端规则至少声明版本、产物摘要、平台、入口、认证、模型、配置、网络条件、观测通道、实测分母、
+条件对照和适用边界。条件规则必须采集官方条件成立／不成立样本；无条件规则不得伪造“官方负例”，
+而应以多个适用官方样本、零违规分母和 candidate mutation／不匹配负断言闭环。只能从证据实际可见的
+层次得出结论，pcap、原始应用层字节、MITM 解析、源码或 bundle 控制流不能互相替代。
 
 规则同样不得用一个枚举混合不同维度：
 
@@ -251,8 +252,14 @@ Schema 能表达时只追加数据；出现新协议、新状态机制或 Schema
 `mapped_validation` 是发现项到 `SemanticRuleCandidate` 的处置关系，不是规则、迁移决策或新的证据
 等级，也不表示目标 wire 已验证。FW-E 必须分开保存三层数据：`DiscoveryInventory` 无截断保留每个
 原始发现，`SemanticRuleCandidate` 用 `source_ids` 把同一语义的多个发现归并为待验证工作项，
-`RuleLedger` 只保存已经原子化、可执行并可逐项断言的 `SPEC-*`。一个发现跨越多个语义时可以引用多个
-候选，但每个引用必须双向闭合。
+`AtomicAssertionLedger` 保存已经原子化、可执行并可逐项断言的证据命题。历史制品中的
+`RuleLedger／MeasuredRuleLedger` 文件名可以继续保留，但必须显式声明其原子断言语义。
+
+FW-F 再从原子断言生成 `RequiredRules`：按 Codex 的“范围、规则／机制、源码、实测、实现、状态”
+六字段归并属于 Persona 出站实现责任的复合机制。每条原子断言必须恰好归属一个 RequiredRule 或一个
+明确的 scenario-only／supporting-fact 组；客户端本地文件读取、Hook、TUI 本地装配和本地拒绝不得因
+其结果最终出现在请求中就自动成为网关 RequiredRule。一个发现跨越多个语义时可以引用多个候选，但
+每个引用必须双向闭合。
 
 语义候选保留真实的 `observed／blocked`，并固定 `rule_ledger_membership=denied` 与
 `production_eligibility=denied`；不得用发现 ID 或 `CAND-*` 自动生成 `SPEC-*`。只有后续语义审查把
@@ -285,11 +292,12 @@ FW-E 封存的 `DiscoveryInventory` 不得改写或删减。FW-F 必须基于其
 3. 独立记录 `inherit／change／add／delete／condition_change` 迁移决策，以及
    `verified／observed／blocked／regressed_evidence` 证据等级；
 4. 始终重跑最小 P／R／J／M 哨兵场景；
-5. 对受影响规则、动态条件、远程 gate、TLS／运行时变化和负例重新采集；
+5. 对受影响规则、动态条件、远程 gate、TLS／运行时变化和条件对照重新采集原子断言；
 6. 逐项收敛 DiscoveryInventory 和语义候选，封存未决数为 0 的 DiscoveryDispositionLedger；
-7. 签发绑定该账本、SupportEnvelope、目标规则、画像、场景和断言的不可变 ApprovalFact；
-8. 生成 candidate ReleaseArtifact 后，用不可变引用在隔离验证目录选择，不改写 production selector；
-9. 在 `SupportEnvelope` 内的所有规定入口执行同一组逐规则断言。
+7. 按实现责任把 AtomicAssertionLedger 归并为 RequiredRules，并证明全部原子断言唯一、有归属；
+8. 签发绑定该账本、映射、SupportEnvelope、目标规则、画像、场景和断言的不可变 ApprovalFact；
+9. 生成 candidate ReleaseArtifact 后，用不可变引用在隔离验证目录选择，不改写 production selector；
+10. 在 `SupportEnvelope` 内的所有规定入口执行同一组 RequiredRules 及其原子断言。
 
 字符串相同、窗口邻近或 minify 标识符相同都不足以证明规则未变。只有工具能证明语义片段、依赖和
 sink 关系时，静态锚点才可支持继承；能力不足时使用目标版本重新观察的保守路径。
@@ -300,9 +308,10 @@ sink 关系时，静态锚点才可支持继承；能力不足时使用目标版
 
 ## 4.1 成对验收与 strict 门槛
 
-每个目标规则建立 `PAIR-<SPEC-ID>`。官方入口和每类第三方标准 API 入口提交语义等价请求，并在同一
+每条原子断言建立独立 `PAIR-*`；一个 RequiredRule 的验收结果由其映射的全部原子断言合取而成，
+不得为减少数量丢弃底层断言。官方入口和每类第三方标准 API 入口提交语义等价请求，并在同一
 candidate、画像和条件下验证最终 wire 收敛。动态字段比较来源、格式、关系和生命周期，不比较一次
-抓包的随机字面值。
+抓包的随机字面值。客户端本地 scenario-only 断言只验证输入边界，不要求网关重演本地文件或 Hook。
 
 每个 candidate 必须先冻结 `SupportEnvelope`。目标规则全集是该范围内所有 request-egress 规则，
 而不是把尚未支持的平台、入口、隐私模式或功能静默算作成功。范围外条件必须在 PersonaPlanner 或
@@ -390,16 +399,17 @@ Claude 的实现权威是 FW-E 冻结的最新 stable。ProfileSchema、目标 S
 
 FW-F 已按 `validation_only` 完成：7,368 个发现、593 个正交候选和 32 个语义候选族未决数均为 0；
 FW-F v1 机械生成的 97 条提案已全部撤回。593 个候选覆盖 331 个目标发送点、102 个旧源码机制、71 个
-HitCC 线索、57 条历史规则和 32 个候选族。活动 RuleLedger 只保留 110 条经 Vircs 上 2.1.226 官方客户端
-真实正负断言通过的 request-egress 规则，其中 107 条普通规则使用 R/M，3 条 TLS 规则使用原生 P/M。
+HitCC 线索、57 条历史规则和 32 个候选族。AtomicAssertionLedger 保留 110 条经 Vircs 上 2.1.226
+官方客户端实测通过的断言，其中 107 条普通断言使用 R/M，3 条 TLS 断言使用原生 P/M；106 条归并为
+40 条 RequiredRules，4 条归入客户端本地 scenario-only。
 遥测关闭、非必要流量及 usage／models 等合法零流量只作支撑事实，不进入规则集。八类 strict egress
 分别是 messages、hello、OAuth profile、policy limits、settings、count_tokens、OAuth refresh 和 MCP
 servers；已 target-first 生成 2.1.226 的 ProfileSchema、Snapshot、ReleaseArtifact 与八个纵向样例，再以
 同一 Schema 文档／Compiler attestation 生成 2.1.220 的两个 baseline fixture，并签发 Evidence／Profile
-ApprovalFact。110 条规则当前均为 `observed`，因此没有 production-replacement ApprovalFact、candidate、
+ApprovalFact。40 条 RequiredRules 当前均为 `observed`，因此没有 production-replacement ApprovalFact、candidate、
 selector 变更或部署。事实分别见
 [发现项清零收据](egress/maintenance/fw-f-discovery-clearance/receipt.json)和
-[FW-F 画像批准收据](egress/maintenance/fw-f-profile-approval/receipt.json)。
+[FW-F RequiredRules 规范化收据](egress/maintenance/fw-f-required-rules-normalization/receipt.json)。
 
 生产事实以镜像 digest、selector、activation fact 和不可覆盖收据为准；缺失或不一致时统一标记
 `production_unverified`。
@@ -469,9 +479,9 @@ FW-A 基线 → FW-B 暂定合同 → FW-C Codex-only 发布 → FW-D 通用工�
 - **前置输入**：FW-C 已稳定的 Codex 生产收据和暂定共享合同；测试只使用 Codex 与合成数据。
 - **必做动作**：围绕 FW-B 的只读运行时合同实现 Campaign 编排、正交事实账本、Evidence／Profile
   两段式批准、Snapshot／ReleaseArtifact 的写入／封存／复算、独立 ValidationCandidate 引用、
-  `PAIR-<SPEC-ID>`、两个 Inventory、SupportEnvelope、ActiveSupportEnvelope、
+  原子 `PAIR-*`、RequiredRules 映射、两个 Inventory、SupportEnvelope、ActiveSupportEnvelope、
   RollbackOperationalEnvelope、DeploymentTrafficEnvelope，以及晋升、激活和不可覆盖收据的生成与复算。
-- **输出制品**：可执行工具、Schema／Store、状态转换门禁、正负例测试和收据重放能力；此阶段不产生
+- **输出制品**：可执行工具、Schema／Store、状态转换门禁、条件对照／mutation 测试和收据重放能力；此阶段不产生
   Claude Profile、Snapshot 或 Runtime 注册。
 - **退出门禁**：工具能机器阻断越权转换、原位覆盖、摘要漂移、candidate 借用 production selector、
   入口别名遗漏、未处置出站、Envelope 范围缺口和收据不匹配；追加事实可独立重放。
@@ -488,13 +498,13 @@ FW-A 基线 → FW-B 暂定合同 → FW-C Codex-only 发布 → FW-D 通用工�
   并独立记录 evidence level。首次 Claude Campaign 以 2.1.220 为历史比较基线；后继换版以最近批准
   stable 为增量基线，但不得因此丢弃永久历史候选。最后完成逻辑入口、物理别名、消费者和全部 OAuth
   出站的 source-to-sink 盘点，只在冻结遗留路径启用 `legacy_observe`。
-- **闭集发现要求**：目标规则全集不得由旧规则台账枚举后迁移得到，也不得截断 sink、只扫描已知
+- **闭集发现要求**：目标原子断言全集不得由旧规则台账枚举后迁移得到，也不得截断 sink、只扫描已知
   host／path 或只运行固定字面量探针。每个目标 sink 必须有稳定身份、可复算来源、可达性边界和唯一
   disposition。原始发现先进入无截断 `DiscoveryInventory`，再按语义归并为候选；只有形成可执行语义、
-  适用条件和断言的项才进入 `RuleLedger`。目标独有机制经语义审查后必须能显式形成 `add`，不得按
+  适用条件和断言的项才进入 `AtomicAssertionLedger`。目标独有机制经语义审查后必须能显式形成 `add`，不得按
   “一个发现一条规则”自动生成。仍不知道下一步如何处置的项保持 `unclassified` 并阻止闭集；已经取得
   稳定身份和证据绑定、但尚缺目标语义或运行证明的项使用 `mapped_validation` 进入语义候选，保留真实
-  `observed／blocked` 并禁止加入规则台账和生产。静态分析只能把精确调用存在性记为 `observed`，不能
+  `observed／blocked` 并禁止加入原子断言台账和生产。静态分析只能把精确调用存在性记为 `observed`，不能
   据此证明触发条件、流量类别或 wire；strict 命题仍须由目标版本运行证据闭环。
 - **行为层边界**：是否产生某类流量不作为独立的一致性对比维度。`essential traffic` 只界定后续
   strict wire／PAIR 的场景范围；场景被调用时仍须按 §1.2 核对实际请求的 wire、transport、动态事实、
@@ -502,13 +512,13 @@ FW-A 基线 → FW-B 暂定合同 → FW-C Codex-only 发布 → FW-D 通用工�
   观测事实，其缺失属于合法状态，不得计为一致性差异或“不像官方客户端”的依据。Claude 的
   `DISABLE_TELEMETRY` 与 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 是该判据的官方实现依据。
 - **输出制品**：目标 Campaign 身份、不可变 EvidencePackage、目标 sink inventory、
-  `DiscoveryInventory`、`SemanticRuleCandidate`、只含 SPEC 的规则迁移台账、跨来源矩阵及三层间的双向
+  `DiscoveryInventory`、`SemanticRuleCandidate`、只含 SPEC 的原子断言迁移台账、跨来源矩阵及三层间的双向
   来源绑定，以及两个 Inventory 的当前事实；拟议 `target_disposition`／出站处置只作为未批准提案，
   不覆盖当前事实。
 - **退出门禁**：官方产物和目标版本可复算；每条现有或新增 SPEC 都有迁移决策、证据等级和适用边界；
   历史候选和目标原生发现均有唯一处置，目标 sink inventory 无截断、重复或未分类项，运行观测没有
   出现 inventory 外 host／path／sink；所有发现均在 DiscoveryInventory，所有语义候选均禁止加入
-  RuleLedger／生产且与发现双向绑定，RuleLedger 不含 `CAND-*` 或发现 ID；两个 Inventory 覆盖全部已知
+  AtomicAssertionLedger／生产且与发现双向绑定，AtomicAssertionLedger 不含 `CAND-*` 或发现 ID；两个 Inventory 覆盖全部已知
   别名／调用方／出站并能报告未知项；Store 只追加
   `discovery_recorded／evidence_recorded`，没有 Evidence／Profile 批准；观察过程未改变生产流量。
 - **禁止／回退**：本阶段不得定义目标 ProfileSchema、Snapshot、Persona 实现或 production strict
@@ -522,16 +532,18 @@ FW-A 基线 → FW-B 暂定合同 → FW-C Codex-only 发布 → FW-D 通用工�
   Codex 生产收据。
 - **必做动作**：先对 FW-E 全部发现和语义候选执行受管语义审查，生成逐项
   `DiscoveryDispositionLedger`，把每个发现收敛到规则、支撑事实、受管出站、非出站、目标版本缺失或
-  规范重复项；只有目标版本 R/M（必要时 P）和逐规则断言闭合的 request-egress 命题才能显式进入活动
-  SPEC。未决数清零后，才由最新 stable 证据定义 Claude
+  规范重复项；只有目标版本 R/M（必要时 P）和逐项断言闭合的 request-egress 命题才能进入
+  AtomicAssertionLedger。随后按 Codex 六字段和 Persona 实现责任归并 RequiredRules，客户端本地行为
+  进入 scenario-only，并证明全部原子断言恰好一次归属。未决数清零后，才由最新 stable 证据定义 Claude
   PersonaDescriptor、PersonaPlanner、ClaudeEgressPlan、IdentityFacts、ProfileSchema 和
   DialectCompiler，登记 IngressProtocolAdapter 的复用／新增结论及 TransportCapability，生成目标
   Snapshot／ReleaseArtifact 与不可部署纵向样例。随后用同一 Schema／Compiler 生成 2.1.220
   baseline／rollback fixture；通过样例后才冻结最终共享合同，并在 ApprovalFact 中批准 Persona 派生、
   compatibility 边界、SupportEnvelope、两个 Inventory 的 `target_disposition` 及三个 Envelope 计划。
 - **输出制品**：目标 stable 和 2.1.220 两个不可变 ReleaseArtifact／fixture、target-first 样例、最终
-  多 Persona 合同、覆盖全部发现的不可变 `DiscoveryDispositionLedger`，以及绑定其摘要、规则、画像、
-  场景、断言、Inventory 和范围的目标 stable ApprovalFact。
+  多 Persona 合同、覆盖全部发现的不可变 `DiscoveryDispositionLedger`、AtomicAssertionLedger、
+  RequiredRules manifest，以及绑定其摘要、规则、映射、画像、场景、断言、Inventory 和范围的目标
+  stable ApprovalFact。
   规则证据未全部达到 `verified` 时，ApprovalFact 只能是 `validation_only`；它可以封存 FW-F 合同，
   但不能生成 production-replacement candidate。
   只有计划把 2.1.220 用作 strict rollback 时，才为其自身规则和窄 SupportEnvelope 另签独立 ApprovalFact；
@@ -539,10 +551,13 @@ FW-A 基线 → FW-B 暂定合同 → FW-C Codex-only 发布 → FW-D 通用工�
 - **退出门禁**：`DiscoveryDispositionLedger` 与 FW-E inventory 摘要一致，每个发现恰好一个已解决记录、
   至少一个终态绑定且可双向追溯；跨语义发现可以有多个绑定。发现缺失／重复记录／未决、仅
   `catalogued_context`、未收敛语义候选和无主支撑事实均为 0；
-  全部正交候选均有唯一终态；每条活动规则都有独立 `PAIR-*`、官方正例、非零官方负例、明确分母／条件／
-  适用范围，普通规则严格绑定 R/M，TLS 规则严格绑定 P/M；不得存在未测能力占位。规则数由原子化实测
-  决定，不得预设；客户端指南、RuleLedger、Snapshot、EvidencePackage 和 SupportEnvelope 的规则 ID
-  集合必须完全一致。目标样例、跨 Persona／跨 Release 负例和 Codex 零差异通过；Schema 能表达两个版本且不以 2.1.220
+  全部正交候选均有唯一终态；每条原子断言都有独立 `PAIR-*`、官方正例、明确分母／条件／适用范围，
+  条件命题有官方条件对照，无条件命题有零违规分母且不伪称独立官方负例；普通原子断言严格绑定 R/M，
+  TLS 原子断言严格绑定 P/M。每条 RequiredRule 按 Codex 六字段记录并映射一条或多条原子断言，全部
+  原子断言必须唯一归入 RequiredRule 或明确的 scenario-only／supporting-fact；不得存在未测能力占位。
+  客户端指南、RequiredRules manifest、Snapshot、EvidencePackage 和 SupportEnvelope 的 RequiredRule
+  ID 集合必须完全一致。目标样例、candidate mutation、跨 Persona／跨 Release 负例和 Codex 零差异通过；
+  Schema 能表达两个版本且不以 2.1.220
   限制目标设计；Codex 生产收据对应最终合同；所有 production selector 保持不变。
 - **禁止／回退**：不得先构造 2.1.220 画像，不得把样例注册到 production Runtime Catalog。Persona
   自有缺口留在 Claude 方言；不得按发现数量自动生成 SPEC，也不得以聚类、关键词未命中或缩小范围
@@ -605,7 +620,7 @@ rollback；否则使用 FW-A 冻结的遗留部署承担 operational rollback，
 |---|---|
 | Codex final wire 非零差异，或共享运行时代码变化 | 返回 FW-B，建立后继合同并重新完成 FW-C |
 | FW-D 不能机器阻断越权、范围缺口或收据不匹配 | 停在 FW-D，不得启动 stable Campaign |
-| FW-E 存在未分类／被截断的目标 sink、未处置历史发现，或语义候选与发现未双向闭合 | 停在 FW-E，补目标原生发现和运行证据，或把证据不足项登记为禁止进入 RuleLedger／生产的 `mapped_validation` 语义候选；不得按发现数量生成 SPEC，也不得以遗留输出补证。候选可随 EvidencePackage 封存，但不能据此进入 production replacement |
+| FW-E 存在未分类／被截断的目标 sink、未处置历史发现，或语义候选与发现未双向闭合 | 停在 FW-E，补目标原生发现和运行证据，或把证据不足项登记为禁止进入 AtomicAssertionLedger／生产的 `mapped_validation` 语义候选；不得按发现数量生成 SPEC，也不得以遗留输出补证。候选可随 EvidencePackage 封存，但不能据此进入 production replacement |
 | FW-F 仍有仅归档／待判断发现、未收敛语义候选，或逐项终态不能反向解析到 FW-E inventory | 停在 FW-F，补语义审查、目标证据和终态绑定；未决数清零前不得签发 ProfileApprovalFact、生成 candidate 或缩小范围绕过 |
 | FW-F／FW-G 发现共享合同缺口 | 作废相关 ApprovalFact／candidate，返回 FW-B；重走 FW-C，并重验两个 fixture |
 | 官方产物、批准内容、源码、测试、画像或镜像变化 | 按 §3.2 建立新 Campaign、ApprovalFact 或 candidate；旧验收和收据不得复用 |

@@ -44,18 +44,19 @@ from tools.official_client_control.receipts import (  # noqa: E402
 from tools.official_client_control.store import ControlStore  # noqa: E402
 
 
-POLICY_SCHEMA = "claude-code-fw-f-profile-policy/v4"
+POLICY_SCHEMA = "claude-code-fw-f-profile-policy/v5"
 CLEARANCE_CLOSURE_SCHEMA = "claude-code-fw-f-discovery-clearance-closure/v4"
 MEASURED_RULES_SCHEMA = "claude-code-fw-f-measured-rule-ledger/v3"
 WITHDRAWN_PROPOSALS_SCHEMA = "claude-code-fw-f-withdrawn-rule-proposals/v2"
-TARGET_PROFILE_SCHEMA = "claude-code-fw-f-target-profile/v4"
-SUMMARY_SCHEMA = "claude-code-fw-f-profile-summary/v4"
-CLOSURE_SCHEMA = "claude-code-fw-f-profile-closure/v4"
+REQUIRED_RULE_MANIFEST_SCHEMA = "claude-code-required-rule-manifest/v1"
+TARGET_PROFILE_SCHEMA = "claude-code-fw-f-target-profile/v5"
+SUMMARY_SCHEMA = "claude-code-fw-f-profile-summary/v5"
+CLOSURE_SCHEMA = "claude-code-fw-f-profile-closure/v5"
 HTTP_SPLIT = b"\r\n\r\n"
 REQUEST_LINE_RE = re.compile(r"^([A-Z]+) ([^ ]+) (HTTP/\d\.\d)$")
 GUIDE_RULES_BEGIN = "<!-- FW-F-ACTIVE-RULES-BEGIN -->"
 GUIDE_RULES_END = "<!-- FW-F-ACTIVE-RULES-END -->"
-GUIDE_SPEC_ID_RE = re.compile(r"`(SPEC-[A-Z0-9_-]+)`")
+GUIDE_SPEC_ID_RE = re.compile(r"^### (SPEC-[A-Z0-9_-]+) .+$", re.MULTILINE)
 UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-"
     r"[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
@@ -279,7 +280,7 @@ def validate_clearance_inputs(
     measured_rules: dict[str, Any],
     withdrawn_proposals: dict[str, Any],
 ) -> None:
-    """拒绝把未清零发现项、非实测规则或未撤回提案带入画像批准。"""
+    """拒绝把未清零发现项、未通过原子断言或未撤回提案带入画像批准。"""
 
     require(clearance.get("schema_version") == CLEARANCE_CLOSURE_SCHEMA, "clearance closure schema 不匹配")
     require(clearance.get("result") == "passed", "发现项清零未通过")
@@ -344,7 +345,16 @@ def validate_clearance_inputs(
             negative.get("assertion_id") == f"PAIR-{spec_id}-NEGATIVE"
             and negative.get("result") == "passed"
             and negative.get("sample_count", 0) > 0,
-            f"{spec_id} 缺少独立官方负例",
+            f"{spec_id} 缺少官方条件对照或零违规分母断言",
+        )
+        require(
+            negative.get("kind")
+            in {
+                "official_condition_absent_or_zero_violation",
+                "official_negative_or_zero_violation_denominator",
+            }
+            and negative.get("violation_count") == 0,
+            f"{spec_id} 的反向断言类型或零违规结果非法",
         )
         require(
             isinstance(rule.get("applicability"), list)
@@ -379,6 +389,152 @@ def validate_clearance_inputs(
         == 97
         and withdrawn_proposals.get("active_rule_count") == 0,
         "v1 的 97 条提案没有全部撤回",
+    )
+
+
+def validate_required_rule_manifest(
+    manifest: dict[str, Any],
+    measured_rules: dict[str, Any],
+) -> None:
+    """校验 110 条原子断言到 40 条画像规则的无损、唯一映射。"""
+
+    require(
+        manifest.get("schema_version") == REQUIRED_RULE_MANIFEST_SCHEMA,
+        "RequiredRules manifest schema 不匹配",
+    )
+    required_rules = manifest.get("required_rules")
+    scenario_groups = manifest.get("scenario_only_groups")
+    require(isinstance(required_rules, list) and required_rules, "required_rules 为空")
+    require(isinstance(scenario_groups, list) and scenario_groups, "scenario_only_groups 为空")
+
+    required_ids = [
+        value.get("spec_id") for value in required_rules if isinstance(value, dict)
+    ]
+    require(
+        len(required_ids) == len(required_rules)
+        and required_ids == sorted(set(required_ids))
+        and len(required_ids) == manifest.get("required_rule_count") == 40,
+        "RequiredRules 必须是严格有序的 40 条唯一规则",
+    )
+    group_ids = [
+        value.get("group_id") for value in scenario_groups if isinstance(value, dict)
+    ]
+    require(
+        len(group_ids) == len(scenario_groups)
+        and group_ids == sorted(set(group_ids)),
+        "scenario-only 分组 ID 重复或无序",
+    )
+
+    atomic_entries = measured_rules.get("entries")
+    require(isinstance(atomic_entries, list), "MeasuredRuleLedger entries 缺失")
+    atomic_by_id = {value["spec_id"]: value for value in atomic_entries}
+    require(len(atomic_by_id) == len(atomic_entries), "MeasuredRuleLedger 原子 ID 重复")
+    mapped_ids: list[str] = []
+    profile_atomic_ids: list[str] = []
+    required_fields = {
+        "domain",
+        "implementation",
+        "measured",
+        "rule",
+        "scope",
+        "source",
+        "status",
+        "title",
+    }
+    for rule in required_rules:
+        spec_id = rule["spec_id"]
+        require(
+            rule.get("responsibility") == "persona_strict",
+            f"{spec_id} 不是 persona_strict RequiredRule",
+        )
+        for field in sorted(required_fields):
+            require(
+                isinstance(rule.get(field), str) and rule[field],
+                f"{spec_id} 缺少 Codex 六字段所需的 {field}",
+            )
+        atomic_ids = rule.get("atomic_assertion_ids")
+        require(
+            isinstance(atomic_ids, list)
+            and atomic_ids == sorted(set(atomic_ids))
+            and atomic_ids
+            and spec_id in atomic_ids,
+            f"{spec_id} 原子断言映射为空、重复、无序或不含主 ID",
+        )
+        require(
+            all(value in atomic_by_id for value in atomic_ids),
+            f"{spec_id} 映射了未知原子断言",
+        )
+        require(
+            all(
+                atomic_by_id[value].get("compatibility_class") == "request_egress"
+                for value in atomic_ids
+            ),
+            f"{spec_id} 映射了非 request-egress 原子断言",
+        )
+        mapped_ids.extend(atomic_ids)
+        profile_atomic_ids.extend(atomic_ids)
+
+    scenario_ids: list[str] = []
+    for group in scenario_groups:
+        group_id = group["group_id"]
+        require(
+            group.get("responsibility") == "client_local_scenario",
+            f"{group_id} 不是客户端本地场景",
+        )
+        require(
+            isinstance(group.get("title"), str)
+            and group["title"]
+            and isinstance(group.get("disposition"), str)
+            and group["disposition"],
+            f"{group_id} 缺少标题或处置",
+        )
+        atomic_ids = group.get("atomic_assertion_ids")
+        require(
+            isinstance(atomic_ids, list)
+            and atomic_ids == sorted(set(atomic_ids))
+            and atomic_ids,
+            f"{group_id} 原子断言映射为空、重复或无序",
+        )
+        require(
+            all(value in atomic_by_id for value in atomic_ids),
+            f"{group_id} 映射了未知原子断言",
+        )
+        mapped_ids.extend(atomic_ids)
+        scenario_ids.extend(atomic_ids)
+
+    require(
+        len(mapped_ids) == len(set(mapped_ids)),
+        "原子断言被多个 RequiredRule／scenario-only 分组重复消费",
+    )
+    require(
+        sorted(mapped_ids) == sorted(atomic_by_id),
+        "110 条原子断言没有被 RequiredRules 与 scenario-only 完整且唯一覆盖",
+    )
+    require(
+        len(profile_atomic_ids)
+        == manifest.get("profile_atomic_assertion_count")
+        == 106,
+        "画像原子断言必须是 106 条",
+    )
+    require(
+        len(scenario_ids)
+        == manifest.get("scenario_only_assertion_count")
+        == 4,
+        "客户端本地场景断言必须是 4 条",
+    )
+    require(
+        len(mapped_ids) == manifest.get("atomic_assertion_count") == 110,
+        "原子断言总数必须是 110 条",
+    )
+    require(
+        sorted(scenario_ids)
+        == [
+            "SPEC-BODY-053",
+            "SPEC-BODY-054",
+            "SPEC-STATE-005",
+            "SPEC-STATE-010",
+        ],
+        "scenario-only 边界与已批准的客户端本地行为不一致",
     )
 
 
@@ -816,7 +972,8 @@ def attach_strict_feature_matrix(
         tls_spec_ids = sorted(
             rule["spec_id"]
             for rule in rules
-            if rule["domain"] == "tls" and contract["egress_id"] in rule["egress_ids"]
+            if "P" in rule.get("evidence_channels", [])
+            and contract["egress_id"] in rule["egress_ids"]
         )
         endpoint_entries.append({
             "egress_id": contract["egress_id"],
@@ -1236,48 +1393,145 @@ def seal_manifest(
 
 def measured_profile_rules(
     measured_rules: dict[str, Any],
+    rule_manifest: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """把普通 R/M、TLS P/M 规则及正负例投影到 EvidencePackage 和画像。"""
+    """把 110 条原子证据无损归并为 40 条 Codex 粒度 RequiredRules。"""
 
+    atomic_by_id = {
+        value["spec_id"]: value for value in measured_rules["entries"]
+    }
     evidence_rules: list[dict[str, Any]] = []
     profile_rules: list[dict[str, Any]] = []
-    for source in measured_rules["entries"]:
-        refs_by_path = {
-            value["path"]: {
-                "path": value["path"],
-                "sha256": value["sha256"],
-                "bytes": value["bytes"],
-            }
-            for value in source["evidence_refs"]
+    for definition in rule_manifest["required_rules"]:
+        atomic_rules = [
+            atomic_by_id[value] for value in definition["atomic_assertion_ids"]
+        ]
+        refs_by_path: dict[str, dict[str, Any]] = {}
+        for source in atomic_rules:
+            for value in source["evidence_refs"]:
+                projected = {
+                    "path": value["path"],
+                    "sha256": value["sha256"],
+                    "bytes": value["bytes"],
+                }
+                previous = refs_by_path.setdefault(value["path"], projected)
+                require(
+                    previous == projected,
+                    f"{definition['spec_id']} 的原子证据路径绑定不一致：{value['path']}",
+                )
+
+        applicability_sets = [
+            set(value["applicability"]) for value in atomic_rules
+        ]
+        common_applicability = sorted(set.intersection(*applicability_sets))
+        evidence_levels = {value["evidence_level"] for value in atomic_rules}
+        production_eligibility = {
+            value["production_eligibility"] for value in atomic_rules
         }
-        positive = source["official_positive"]
-        negative = source["official_negative"]
+        rule_lifecycles = {value["rule_lifecycle"] for value in atomic_rules}
+        require(
+            evidence_levels <= {"observed", "verified"} and evidence_levels,
+            f"{definition['spec_id']} 原子证据等级非法",
+        )
+        require(
+            len(production_eligibility) == 1 and len(rule_lifecycles) == 1,
+            f"{definition['spec_id']} 原子生命周期或批准用途不一致",
+        )
+        atomic_assertion_ids = [
+            value["assertion_id"] for value in atomic_rules
+        ]
+        contrast_ids = [
+            value["official_negative"]["assertion_id"]
+            for value in atomic_rules
+            if value["official_negative"]["kind"]
+            == "official_condition_absent_or_zero_violation"
+        ]
+        denominator_ids = [
+            value["official_negative"]["assertion_id"]
+            for value in atomic_rules
+            if value["official_negative"]["kind"]
+            == "official_negative_or_zero_violation_denominator"
+        ]
         evidence_rule = {
-            "spec_id": source["spec_id"],
-            "evidence_level": source["evidence_level"],
-            "rule_lifecycle": source["rule_lifecycle"],
-            "compatibility_class": source["compatibility_class"],
-            "migration_decision": source["migration_decision"],
-            "evidence_refs": [refs_by_path[path] for path in sorted(refs_by_path)],
-            "applicability": source["applicability"],
+            "spec_id": definition["spec_id"],
+            "evidence_level": (
+                "verified" if evidence_levels == {"verified"} else "observed"
+            ),
+            "rule_lifecycle": next(iter(rule_lifecycles)),
+            "compatibility_class": "request_egress",
+            "migration_decision": (
+                "add"
+                if all(value["migration_decision"] == "add" for value in atomic_rules)
+                else "change"
+            ),
+            "evidence_refs": [
+                refs_by_path[path] for path in sorted(refs_by_path)
+            ],
+            "applicability": common_applicability,
         }
         evidence_rules.append(evidence_rule)
         profile_rules.append({
             **evidence_rule,
-            "egress_ids": source["egress_ids"],
-            "domain": source["domain"],
-            "retained_claim": source["retained_claim"],
-            "evidence_channels": source["evidence_channels"],
-            "assertion_id": source["assertion_id"],
-            "assertion_result": source["assertion_result"],
-            "official_positive": {key: value for key, value in positive.items() if key != "evidence_refs"},
-            "official_negative": {key: value for key, value in negative.items() if key != "evidence_refs"},
-            "sample_scope": source["sample_scope"],
-            "applicability_scope": source["applicability_scope"],
-            "production_eligibility": source["production_eligibility"],
+            "title": definition["title"],
+            "atomic_assertion_ids": definition["atomic_assertion_ids"],
+            "atomic_pair_assertion_ids": atomic_assertion_ids,
+            "evidence_assurance": {
+                "official_positive_assertion_ids": [
+                    value["official_positive"]["assertion_id"]
+                    for value in atomic_rules
+                ],
+                "official_condition_contrast_assertion_ids": contrast_ids,
+                "zero_violation_denominator_assertion_ids": denominator_ids,
+                "all_atomic_assertions_passed": all(
+                    value["assertion_result"] == "passed"
+                    for value in atomic_rules
+                ),
+            },
+            "egress_ids": sorted({
+                egress_id
+                for value in atomic_rules
+                for egress_id in value["egress_ids"]
+            }),
+            "domain": definition["domain"],
+            "atomic_domains": sorted({
+                value["domain"] for value in atomic_rules
+            }),
+            "retained_claim": definition["rule"],
+            "scope": definition["scope"],
+            "source": definition["source"],
+            "measured": definition["measured"],
+            "implementation": definition["implementation"],
+            "status": definition["status"],
+            "evidence_channels": sorted({
+                channel
+                for value in atomic_rules
+                for channel in value["evidence_channels"]
+            }),
+            "assertion_id": f"COMPOSITE-{definition['spec_id']}",
+            "assertion_result": (
+                "passed"
+                if all(
+                    value["assertion_result"] == "passed"
+                    for value in atomic_rules
+                )
+                else "failed"
+            ),
+            "sample_scope": {
+                "atomic_assertion_count": len(atomic_rules),
+                "atomic_scopes": {
+                    value["spec_id"]: value["sample_scope"]
+                    for value in atomic_rules
+                },
+            },
+            "applicability_scope": definition["scope"],
+            "production_eligibility": next(iter(production_eligibility)),
         })
     ids = [value["spec_id"] for value in evidence_rules]
-    require(ids == sorted(set(ids)) and ids, "实测画像规则不是严格有序的非空闭集")
+    require(
+        ids == sorted(set(ids))
+        and len(ids) == rule_manifest["required_rule_count"],
+        "画像 RequiredRules 不是严格有序的 40 条闭集",
+    )
     return evidence_rules, profile_rules
 
 
@@ -1507,12 +1761,13 @@ def scenario_plan(
 ) -> dict[str, Any]:
     """按规则域生成精确覆盖 SupportEnvelope 分母的场景计划。"""
 
-    groups: dict[str, list[str]] = defaultdict(list)
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for rule in request_rules:
-        groups[rule["domain"]].append(rule["spec_id"])
+        groups[rule["domain"]].append(rule)
     scenarios = []
     for domain in sorted(groups):
-        spec_ids = sorted(groups[domain])
+        rules = sorted(groups[domain], key=lambda value: value["spec_id"])
+        spec_ids = [value["spec_id"] for value in rules]
         scenarios.append({
             "id": f"domain-{domain}",
             "spec_ids": spec_ids,
@@ -1522,7 +1777,11 @@ def scenario_plan(
                 "entrypoint=cli|sdk-cli",
                 "privacy=essential-traffic-no-telemetry",
             ],
-            "assertion_ids": [f"PAIR-{spec_id}" for spec_id in spec_ids],
+            "assertion_ids": sorted({
+                assertion_id
+                for rule in rules
+                for assertion_id in rule["atomic_pair_assertion_ids"]
+            }),
         })
     return store.seal_object("scenario_plan", {
         "schema_version": "official-client-scenario-plan/v1",
@@ -1591,6 +1850,12 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     measured_rules = load_json(clearance_paths["measured_rules"], "measured rules")
     withdrawn_proposals = load_json(clearance_paths["withdrawn_proposals"], "withdrawn proposals")
     validate_clearance_inputs(clearance, measured_rules, withdrawn_proposals)
+    rule_manifest = load_json(args.rule_manifest, "RequiredRules manifest")
+    validate_required_rule_manifest(rule_manifest, measured_rules)
+    require(
+        rule_manifest.get("target_version") == policy["target_version"],
+        "RequiredRules manifest 目标版本与策略不一致",
+    )
 
     old_store = ControlStore(args.fw_e_store.resolve())
     old_campaign = old_store.load_campaign(args.fw_e_campaign)
@@ -1604,7 +1869,10 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     old_bootstrap = old_store.load_object(old_campaign["bootstrap_ref"])["payload"]
 
     baseline_ledger = load_json(args.baseline_rules, "2.1.220 rules")
-    evidence_rules, target_rules = measured_profile_rules(measured_rules)
+    evidence_rules, target_rules = measured_profile_rules(
+        measured_rules,
+        rule_manifest,
+    )
     baseline_rules = baseline_profile_rules(baseline_ledger)
 
     output = args.output_dir.resolve()
@@ -1618,6 +1886,10 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     contract_paths = [repository_path(value, "contract_sources") for value in policy["contract_sources"]]
     guide_paths = [path for path in contract_paths if path.name == "CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md"]
     require(len(guide_paths) == 1, "contract_sources 必须且只能包含一份 Claude 指南")
+    require(
+        args.rule_manifest.resolve() in contract_paths,
+        "RequiredRules manifest 必须进入 contract_sources 内容绑定",
+    )
     guide_spec_ids = guide_rule_ids(guide_paths[0])
     contract_sources = external_bindings(contract_paths)
     old_contract_by_path = {
@@ -1670,7 +1942,8 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         {"id": "candidate-resolution", "facts": {"binding": external_binding(clearance_paths["candidate_resolutions"]), "resolved": clearance["candidate_resolution_count"], "unresolved": 0}},
         {"id": "clearance-closure", "facts": {"binding": external_binding(clearance_paths["closure"]), "result": "passed"}},
         {"id": "discovery-ledger", "facts": {"binding": external_binding(clearance_paths["ledger"]), "resolved": 7368, "source": 7368}},
-        {"id": "measured-rules", "facts": {"binding": external_binding(clearance_paths["measured_rules"]), "active_rules": len(target_rules), "all_assertions_passed": True}},
+        {"id": "measured-atomic-assertions", "facts": {"binding": external_binding(clearance_paths["measured_rules"]), "atomic_assertions": len(measured_rules["entries"]), "all_assertions_passed": True}},
+        {"id": "required-rule-manifest", "facts": {"binding": external_binding(args.rule_manifest), "required_rules": len(target_rules), "profile_atomic_assertions": rule_manifest["profile_atomic_assertion_count"], "scenario_only_assertions": rule_manifest["scenario_only_assertion_count"]}},
         {"id": "withdrawn-v1-proposals", "facts": {"binding": external_binding(clearance_paths["withdrawn_proposals"]), "withdrawn": 97, "active": 0}},
     ])
     comparison_ref = seal_manifest(store, "operational_evidence", policy["persona"], "fw-f-comparison-policy", [
@@ -1895,24 +2168,49 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     )
     request_rules = target_request_rules
     request_spec_ids = sorted(rule["spec_id"] for rule in request_rules)
-    measured_spec_ids = sorted(rule["spec_id"] for rule in measured_rules["entries"])
+    manifest_spec_ids = sorted(
+        rule["spec_id"] for rule in rule_manifest["required_rules"]
+    )
+    atomic_spec_ids = sorted(
+        rule["spec_id"] for rule in measured_rules["entries"]
+    )
+    profile_atomic_ids = sorted(
+        spec_id
+        for rule in rule_manifest["required_rules"]
+        for spec_id in rule["atomic_assertion_ids"]
+    )
+    scenario_only_atomic_ids = sorted(
+        spec_id
+        for group in rule_manifest["scenario_only_groups"]
+        for spec_id in group["atomic_assertion_ids"]
+    )
     evidence_spec_ids = sorted(rule["spec_id"] for rule in evidence_rules)
     snapshot_spec_ids = sorted(rule["spec_id"] for rule in target_profile["rules"])
     support_spec_ids = list(request_spec_ids)
     tls_rules = [rule for rule in measured_rules["entries"] if rule["domain"] == "tls"]
     non_tls_rules = [rule for rule in measured_rules["entries"] if rule["domain"] != "tls"]
-    all_rule_id_sets_equal = (
+    required_rule_id_sets_equal = (
         guide_spec_ids
-        == measured_spec_ids
+        == manifest_spec_ids
         == snapshot_spec_ids
         == evidence_spec_ids
         == support_spec_ids
     )
+    atomic_assertion_mapping_complete = (
+        sorted(profile_atomic_ids + scenario_only_atomic_ids)
+        == atomic_spec_ids
+        and len(profile_atomic_ids + scenario_only_atomic_ids)
+        == len(set(profile_atomic_ids + scenario_only_atomic_ids))
+    )
     require(
-        all_rule_id_sets_equal
+        required_rule_id_sets_equal
+        and atomic_assertion_mapping_complete
         and request_spec_ids == target_request_spec_ids
-        and len(request_spec_ids) == len(target_rules) == measured_rules["rule_count"],
-        "指南、RuleLedger、Snapshot、EvidencePackage 与 SupportEnvelope 规则闭集不一致",
+        and len(request_spec_ids) == len(target_rules) == 40
+        and len(profile_atomic_ids) == 106
+        and len(scenario_only_atomic_ids) == 4
+        and len(atomic_spec_ids) == measured_rules["rule_count"] == 110,
+        "指南、RequiredRules、110 条原子断言、Snapshot、EvidencePackage 与 SupportEnvelope 对账失败",
     )
     all_tls_rules_bind_p_and_m = bool(tls_rules) and all(
         set(rule["evidence_channels"]) == {"P", "M"} for rule in tls_rules
@@ -1920,26 +2218,52 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     all_non_tls_rules_bind_r_and_m = bool(non_tls_rules) and all(
         set(rule["evidence_channels"]) == {"R", "M"} for rule in non_tls_rules
     )
-    all_rules_have_official_positive_and_negative = all(
+    all_atomic_assertions_have_positive_and_countercheck = all(
         rule["official_positive"]["result"] == "passed"
         and rule["official_negative"]["result"] == "passed"
         for rule in measured_rules["entries"]
     )
     require(all_tls_rules_bind_p_and_m, "TLS 规则没有全部严格绑定 P/M")
     require(all_non_tls_rules_bind_r_and_m, "普通规则没有全部严格绑定 R/M")
-    require(all_rules_have_official_positive_and_negative, "存在缺少官方正负例的规则")
+    require(
+        all_atomic_assertions_have_positive_and_countercheck,
+        "存在缺少官方正例或条件对照／零违规分母的原子断言",
+    )
+    official_condition_contrast_count = sum(
+        rule["official_negative"]["kind"]
+        == "official_condition_absent_or_zero_violation"
+        for rule in measured_rules["entries"]
+    )
+    zero_violation_denominator_count = sum(
+        rule["official_negative"]["kind"]
+        == "official_negative_or_zero_violation_denominator"
+        for rule in measured_rules["entries"]
+    )
     rule_reconciliation = {
-        "guide_rule_count": len(guide_spec_ids),
-        "measured_rule_ledger_count": len(measured_spec_ids),
-        "snapshot_rule_count": len(snapshot_spec_ids),
-        "evidence_package_rule_count": len(evidence_spec_ids),
-        "support_envelope_rule_count": len(support_spec_ids),
-        "all_rule_id_sets_equal": all_rule_id_sets_equal,
-        "tls_rule_count": len(tls_rules),
-        "all_tls_rules_bind_p_and_m": all_tls_rules_bind_p_and_m,
-        "non_tls_rule_count": len(non_tls_rules),
-        "all_non_tls_rules_bind_r_and_m": all_non_tls_rules_bind_r_and_m,
-        "all_rules_have_official_positive_and_negative": all_rules_have_official_positive_and_negative,
+        "guide_required_rule_count": len(guide_spec_ids),
+        "manifest_required_rule_count": len(manifest_spec_ids),
+        "snapshot_required_rule_count": len(snapshot_spec_ids),
+        "evidence_package_required_rule_count": len(evidence_spec_ids),
+        "support_envelope_required_rule_count": len(support_spec_ids),
+        "required_rule_id_sets_equal": required_rule_id_sets_equal,
+        "atomic_assertion_ledger_count": len(atomic_spec_ids),
+        "profile_atomic_assertion_count": len(profile_atomic_ids),
+        "scenario_only_assertion_count": len(scenario_only_atomic_ids),
+        "atomic_assertion_mapping_complete": atomic_assertion_mapping_complete,
+        "atomic_assertion_mapping_unique": (
+            len(profile_atomic_ids + scenario_only_atomic_ids)
+            == len(set(profile_atomic_ids + scenario_only_atomic_ids))
+        ),
+        "tls_atomic_assertion_count": len(tls_rules),
+        "all_tls_atomic_assertions_bind_p_and_m": all_tls_rules_bind_p_and_m,
+        "non_tls_atomic_assertion_count": len(non_tls_rules),
+        "all_non_tls_atomic_assertions_bind_r_and_m": all_non_tls_rules_bind_r_and_m,
+        "all_atomic_assertions_have_official_positive_and_countercheck": (
+            all_atomic_assertions_have_positive_and_countercheck
+        ),
+        "official_condition_contrast_assertion_count": official_condition_contrast_count,
+        "zero_violation_denominator_assertion_count": zero_violation_denominator_count,
+        "independent_official_negative_required_for_unconditional_rule": False,
     }
     support_ref = store.seal_object("support_envelope", {
         "schema_version": "official-client-support-envelope/v1",
@@ -2158,12 +2482,15 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             "resolved_discoveries": clearance["resolved_record_count"],
             "unresolved_discoveries": clearance["gate_counts"]["unresolved_record_count"],
             "resolved_candidates": clearance["candidate_resolution_count"],
-            "measured_rules": clearance["measured_rule_count"],
+            "measured_atomic_assertions": clearance["measured_rule_count"],
             "withdrawn_v1_proposals": clearance["withdrawn_v1_proposal_count"],
         },
         "rule_counts": {
-            "total": len(target_rules),
-            "request_egress": len(request_rules),
+            "required_rules": len(target_rules),
+            "request_egress_required_rules": len(request_rules),
+            "atomic_assertions": len(atomic_spec_ids),
+            "profile_atomic_assertions": len(profile_atomic_ids),
+            "scenario_only_assertions": len(scenario_only_atomic_ids),
             "response_compat": 0,
             "verified": sum(rule["evidence_level"] == "verified" for rule in target_rules),
             "not_verified": sum(rule["evidence_level"] != "verified" for rule in target_rules),
@@ -2222,6 +2549,9 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         "baseline_profile_digest": store.load_object(baseline_release["snapshot"])["payload"]["profile_digest"],
         "target_rule_count": len(target_rules),
         "support_rule_count": len(request_rules),
+        "atomic_assertion_count": len(atomic_spec_ids),
+        "profile_atomic_assertion_count": len(profile_atomic_ids),
+        "scenario_only_assertion_count": len(scenario_only_atomic_ids),
         "discovery_count": clearance["source_discovery_count"],
         "unresolved_discovery_count": 0,
         "rule_reconciliation": rule_reconciliation,
@@ -2243,6 +2573,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--clearance-dir", required=True, type=Path)
     parser.add_argument("--clearance-receipt", required=True, type=Path)
     parser.add_argument("--baseline-rules", required=True, type=Path)
+    parser.add_argument("--rule-manifest", required=True, type=Path)
     parser.add_argument("--policy", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
     parser.add_argument("--source-commit", required=True)
@@ -2256,7 +2587,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args = build_parser().parse_args(argv)
         require(re.fullmatch(r"[0-9a-f]{40}", args.source_commit) is not None, "source_commit 必须是 40 位小写 Git SHA")
-        for label in ("fw_e_store", "clearance_dir", "clearance_receipt", "baseline_rules", "policy"):
+        for label in (
+            "fw_e_store",
+            "clearance_dir",
+            "clearance_receipt",
+            "baseline_rules",
+            "rule_manifest",
+            "policy",
+        ):
             value = getattr(args, label)
             require(value.is_absolute(), f"--{label.replace('_', '-')} 必须是绝对路径")
         result = build(args)
