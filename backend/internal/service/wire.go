@@ -135,8 +135,20 @@ func ProvideTokenRefreshService(
 	proxyRepo ProxyRepository,
 	refreshAPI *OAuthRefreshAPI,
 	runtimeBlocker AccountRuntimeBlocker,
-) *TokenRefreshService {
+	officialEgress *OfficialEgressTransitionRuntime,
+) (*TokenRefreshService, error) {
 	svc := NewTokenRefreshService(accountRepo, oauthService, openaiOAuthService, geminiOAuthService, antigravityOAuthService, cacheInvalidator, schedulerCache, cfg, tempUnschedCache, grokOAuthService)
+	if officialEgress != nil && officialEgress.ClaudeCandidate != nil {
+		executor, err := newClaudeFWGTokenRefresher(
+			NewClaudeTokenRefresher(oauthService), officialEgress.ClaudeCandidate, proxyRepo,
+		)
+		if err != nil {
+			return nil, err
+		}
+		if err := svc.SetClaudeRefreshExecutor(executor); err != nil {
+			return nil, err
+		}
+	}
 	// 注入 OpenAI privacy opt-out 依赖
 	svc.SetPrivacyDeps(privacyClientFactory, proxyRepo)
 	// 注入统一 OAuth 刷新 API（消除 TokenRefreshService 与 TokenProvider 之间的竞争条件）
@@ -145,7 +157,7 @@ func ProvideTokenRefreshService(
 	svc.SetRefreshPolicy(DefaultBackgroundRefreshPolicy())
 	svc.SetAccountRuntimeBlocker(runtimeBlocker)
 	svc.Start()
-	return svc
+	return svc, nil
 }
 
 // ProvideClaudeTokenProvider creates ClaudeTokenProvider with OAuthRefreshAPI injection
@@ -154,12 +166,23 @@ func ProvideClaudeTokenProvider(
 	tokenCache GeminiTokenCache,
 	oauthService *OAuthService,
 	refreshAPI *OAuthRefreshAPI,
-) *ClaudeTokenProvider {
+	proxyRepo ProxyRepository,
+	officialEgress *OfficialEgressTransitionRuntime,
+) (*ClaudeTokenProvider, error) {
 	p := NewClaudeTokenProvider(accountRepo, tokenCache, oauthService)
-	executor := NewClaudeTokenRefresher(oauthService)
+	var executor OAuthRefreshExecutor = NewClaudeTokenRefresher(oauthService)
+	if officialEgress != nil && officialEgress.ClaudeCandidate != nil {
+		strictExecutor, err := newClaudeFWGTokenRefresher(
+			NewClaudeTokenRefresher(oauthService), officialEgress.ClaudeCandidate, proxyRepo,
+		)
+		if err != nil {
+			return nil, err
+		}
+		executor = strictExecutor
+	}
 	p.SetRefreshAPI(refreshAPI, executor)
 	p.SetRefreshPolicy(ClaudeProviderRefreshPolicy())
-	return p
+	return p, nil
 }
 
 // ProvideOpenAITokenProvider creates OpenAITokenProvider with OAuthRefreshAPI injection
@@ -835,7 +858,7 @@ var ProviderSet = wire.NewSet(
 	ProvideBillingCacheService,
 	NewAnnouncementService,
 	NewAdminService,
-	NewGatewayService,
+	ProvideGatewayService,
 	ProvideOpenAIGatewayService,
 	ProvideImageStorageSettingService,
 	ProvideImageTaskService,

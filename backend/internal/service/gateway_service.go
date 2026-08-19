@@ -763,6 +763,7 @@ type GatewayService struct {
 	tlsFPProfileService   *TLSFingerprintProfileService
 	balanceNotifyService  *BalanceNotifyService
 	userPlatformQuotaRepo UserPlatformQuotaRepository
+	officialEgress        *OfficialEgressTransitionRuntime
 }
 
 // NewGatewayService creates a new GatewayService
@@ -845,6 +846,53 @@ func NewGatewayService(
 	if path := strings.TrimSpace(os.Getenv(debugGatewayBodyEnv)); path != "" {
 		svc.initDebugGatewayBodyFile(path)
 	}
+	return svc
+}
+
+// ProvideGatewayService 在生产 wiring 中把进程启动时冻结的 Official Egress
+// Runtime 注入网关。NewGatewayService 保持兼容测试与非 Wire 调用方；它不会自行
+// 查找进程全局 candidate，避免测试或普通构造意外进入 Claude FW-G。
+func ProvideGatewayService(
+	accountRepo AccountRepository,
+	groupRepo GroupRepository,
+	usageLogRepo UsageLogRepository,
+	usageBillingRepo UsageBillingRepository,
+	userRepo UserRepository,
+	userSubRepo UserSubscriptionRepository,
+	userGroupRateRepo UserGroupRateRepository,
+	cache GatewayCache,
+	cfg *config.Config,
+	schedulerSnapshot *SchedulerSnapshotService,
+	concurrencyService *ConcurrencyService,
+	billingService *BillingService,
+	rateLimitService *RateLimitService,
+	billingCacheService *BillingCacheService,
+	identityService *IdentityService,
+	httpUpstream HTTPUpstream,
+	deferredService *DeferredService,
+	claudeTokenProvider *ClaudeTokenProvider,
+	sessionLimitCache SessionLimitCache,
+	rpmCache RPMCache,
+	digestStore *DigestSessionStore,
+	settingService *SettingService,
+	tlsFPProfileService *TLSFingerprintProfileService,
+	channelService *ChannelService,
+	resolver *ModelPricingResolver,
+	compositeResolver *CompositeRouteResolver,
+	balanceNotifyService *BalanceNotifyService,
+	userPlatformQuotaRepo UserPlatformQuotaRepository,
+	officialEgress *OfficialEgressTransitionRuntime,
+) *GatewayService {
+	svc := NewGatewayService(
+		accountRepo, groupRepo, usageLogRepo, usageBillingRepo, userRepo,
+		userSubRepo, userGroupRateRepo, cache, cfg, schedulerSnapshot,
+		concurrencyService, billingService, rateLimitService, billingCacheService,
+		identityService, httpUpstream, deferredService, claudeTokenProvider,
+		sessionLimitCache, rpmCache, digestStore, settingService,
+		tlsFPProfileService, channelService, resolver, compositeResolver,
+		balanceNotifyService, userPlatformQuotaRepo,
+	)
+	svc.officialEgress = officialEgress
 	return svc
 }
 

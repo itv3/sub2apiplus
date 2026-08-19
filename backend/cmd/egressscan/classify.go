@@ -96,6 +96,7 @@ func oosFunc(funcExact, rationale string) classifyRule {
 var reviewedPostBootstrapInfrastructure = map[string]string{
 	"github.com/Wei-Shaw/sub2api/internal/officialegress.*guardedRoundTripper.RoundTrip@backend/internal/officialegress/guard.go#roundtripper_roundtrip#1":                                             "变更集 1A Guard 的 terminal delegation；业务 SinkID 必须来自调用上下文",
 	"github.com/Wei-Shaw/sub2api/internal/service.*officialCodexHTTPUpstreamPort.SendHTTPUpstream@backend/internal/service/official_egress_1b_executor.go#facade_http_upstream_do_tls#1":               "变更集 1B Executor 的 HTTPUpstream terminal delegation；业务 SinkID 与定型凭证必须来自 Executor Plan",
+	"github.com/Wei-Shaw/sub2api/internal/service.*claudeCandidateHTTPUpstreamPort.SendHTTPUpstream@backend/internal/service/official_egress_1b_executor.go#facade_http_upstream_do_tls#1":             "FW-G Claude candidate Executor 的隔离 HTTPUpstream terminal delegation；业务 SinkID、画像、TLS 与定型凭证必须来自 Claude Executor Plan",
 	"github.com/Wei-Shaw/sub2api/internal/repository.openAIOAuthReqProfileTransport.Do@backend/internal/repository/official_egress_guard.go#net_http_client_do#1":                                      "变更集 5 将 OAuth req-profile 物理资源机械迁入独立官方出站 adapter 文件；只发送 Executor 编译结果",
 	"github.com/Wei-Shaw/sub2api/internal/service.officialCodexWebSocketAcquireRouter.AcquireOfficialCodexWebSocket@backend/internal/service/official_egress_transport_adapters.go#facade_ws_dialer#1": "变更集 3 WebSocket adapter 的中心 Acquire delegation；业务 SinkID、FinalizationToken 与连接池身份必须来自 Executor",
 	"github.com/Wei-Shaw/sub2api/internal/service.*officialEgressWebSocketRoundTripper.RoundTrip@backend/internal/service/official_egress_transport_adapters.go#roundtripper_roundtrip#1":              "变更集 5 将 WebSocket RoundTripper 机械迁入独立 adapter；只展开已由 Executor 签发的物理握手，不承载业务 SinkID",
@@ -538,6 +539,12 @@ var classifyRules = []classifyRule{
 		persona:   "infrastructure", backend: "http_upstream", state: "not_applicable",
 		owner: ownerEgress, changeset: "1B",
 		rationale: "Executor adapter 的 terminal delegation；业务 SinkID 与 FinalizationToken 均由上游 Executor 冻结",
+	},
+	{
+		funcExact: "*claudeCandidateHTTPUpstreamPort.SendHTTPUpstream",
+		persona:   "infrastructure", backend: "http_upstream", state: "not_applicable",
+		owner: ownerEgress, changeset: "FW-G",
+		rationale: "Claude candidate Executor adapter 的隔离 terminal delegation；业务 SinkID、画像、TLS 与 FinalizationToken 均由上游 Executor 冻结",
 	},
 	{
 		candidateExact: "github.com/Wei-Shaw/sub2api/internal/service.*officialEgressWebSocketRoundTripper.RoundTrip@backend/internal/service/official_egress_transport_adapters.go#roundtripper_roundtrip#1",

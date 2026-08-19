@@ -57,7 +57,14 @@ func ProvideOfficialEgressGuard(cfg *config.Config) (*officialegress.Guard, erro
 			}
 		}
 	}
-	sinkCatalog, err := officialegress.DefaultSinkCatalog().WithRuntimeControls(controls)
+	sinkCatalog := officialegress.DefaultSinkCatalog()
+	if cfg != nil && cfg.Gateway.ClaudeFWGCandidateEnabled {
+		sinkCatalog, err = officialegress.ClaudeFWGCandidateSinkCatalog(sinkCatalog)
+		if err != nil {
+			return nil, fmt.Errorf("安装 Claude FW-G candidate SinkCatalog：%w", err)
+		}
+	}
+	sinkCatalog, err = sinkCatalog.WithRuntimeControls(controls)
 	if err != nil {
 		return nil, err
 	}

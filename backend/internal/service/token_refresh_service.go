@@ -180,6 +180,25 @@ func (s *TokenRefreshService) SetRefreshPolicy(policy BackgroundRefreshPolicy) {
 	s.refreshPolicy = policy
 }
 
+func (s *TokenRefreshService) SetClaudeRefreshExecutor(executor OAuthRefreshExecutor) error {
+	if s == nil || executor == nil {
+		return errors.New("Claude refresh executor 未配置")
+	}
+	replaced := 0
+	for index := range s.registrations {
+		if s.registrations[index].platform != PlatformAnthropic {
+			continue
+		}
+		s.registrations[index].refresher = executor
+		s.registrations[index].executor = executor
+		replaced++
+	}
+	if replaced != 1 {
+		return fmt.Errorf("Claude refresh registration 数量非法：%d", replaced)
+	}
+	return nil
+}
+
 func (s *TokenRefreshService) SetAccountRuntimeBlocker(blocker AccountRuntimeBlocker) {
 	s.runtimeBlocker = blocker
 }

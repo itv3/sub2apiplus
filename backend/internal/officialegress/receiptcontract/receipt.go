@@ -22,11 +22,13 @@ type AuthorityKind string
 
 const (
 	AuthorityCodexExecutor    AuthorityKind = "codex_executor"
+	AuthorityClaudeExecutor   AuthorityKind = "claude_persona_executor"
 	AuthorityChatGPTWebClient AuthorityKind = "chatgpt_web_client"
 )
 
 func (k AuthorityKind) Valid() bool {
-	return k == AuthorityCodexExecutor || k == AuthorityChatGPTWebClient
+	return k == AuthorityCodexExecutor || k == AuthorityClaudeExecutor ||
+		k == AuthorityChatGPTWebClient
 }
 
 type Manifest struct {

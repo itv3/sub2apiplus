@@ -127,7 +127,9 @@ func TestFWEObservationSourceTransitionIsFrozen(t *testing.T) {
 		if readErr != nil {
 			t.Fatal(readErr)
 		}
-		if got := sha256Hex(source); got != transition.ToSHA256 {
+		if got := sha256Hex(source); got != transition.ToSHA256 &&
+			!claudeFWGSourceTransitionSupersedes(transition.Path, transition.ToSHA256, got) &&
+			!claudeFWGTestTransitionSupersedes(transition.Path, transition.ToSHA256, got) {
 			t.Fatalf(
 				"FW-E observation source transition 漂移：path=%s got=%s want=%s",
 				transition.Path,

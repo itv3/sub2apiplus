@@ -306,6 +306,11 @@ func validateMigrationAuthority(input SinkBindingInput, authority receiptcontrac
 			authority != descriptor.AuthorityKind {
 			return errors.New("codex-cli 升级必须使用 codex_profile + Codex Executor 收据")
 		}
+	case PersonaClaudeCode:
+		if input.EndpointEvidence != EndpointEvidenceClaudeProfile ||
+			authority != receiptcontract.AuthorityClaudeExecutor {
+			return errors.New("claude-code candidate 必须使用 claude_profile + Claude Executor 收据")
+		}
 	case PersonaChatGPTWeb:
 		if input.EndpointEvidence != EndpointEvidenceExternalPersona ||
 			authority != receiptcontract.AuthorityChatGPTWebClient {
@@ -331,6 +336,10 @@ func validateMigrationRouteEvidence(
 	case PersonaChatGPTWeb:
 		if proof.EvidenceKind != "browser_profile" || strings.TrimSpace(proof.EvidenceID) == "" {
 			return fmt.Errorf("chatgpt-web route 缺少 BrowserProfile 证据: %s", route.Key)
+		}
+	case PersonaClaudeCode:
+		if proof.EvidenceKind != "claude_endpoint" || strings.TrimSpace(proof.EvidenceID) == "" {
+			return fmt.Errorf("Claude route 缺少画像 endpoint 证据: %s", route.Key)
 		}
 	}
 	return nil

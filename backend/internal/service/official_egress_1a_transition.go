@@ -12,6 +12,7 @@ type OfficialEgressTransitionRuntime struct {
 	BundleResolver   *officialegress.BundleResolver
 	Guard            *officialegress.Guard
 	CodexExecutor    *officialegress.Executor
+	ClaudeCandidate  *officialegress.ClaudeCandidateRuntime
 	webSocketPort    *officialCodexWebSocketPort
 	CodexReleaseMode officialegress.ReleaseMode
 	ProcessSinks     officialegress.SinkCatalog

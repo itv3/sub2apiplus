@@ -302,13 +302,20 @@ func (g *Guard) evaluate(
 		g.record(req, backend, protocol, metadata, resolvedRoute, binding.EnforcementState(),
 			ReasonUnclassifiedPersona, "")
 	}
-	tokenReasons := g.finalizationIdentityReasons(
-		binding, resolvedRoute, metadata, backend, protocol, trustedToken,
-	)
-	if terminal && len(tokenReasons) == 0 {
-		wireReasons, wireDiagnostic := g.finalizationWireReasons(req, metadata, protocol)
-		tokenReasons = append(tokenReasons, wireReasons...)
-		decision.Diagnostic = wireDiagnostic
+	tokenReasons := make([]GuardReason, 0)
+	if policy, managed := binding.ManagedPolicy(); managed {
+		if metadata.ManagedPolicyDigest != policy.Digest() || metadata.Token != nil {
+			tokenReasons = append(tokenReasons, ReasonManagedPolicyMismatch)
+		}
+	} else {
+		tokenReasons = g.finalizationIdentityReasons(
+			binding, resolvedRoute, metadata, backend, protocol, trustedToken,
+		)
+		if terminal && len(tokenReasons) == 0 {
+			wireReasons, wireDiagnostic := g.finalizationWireReasons(req, metadata, protocol)
+			tokenReasons = append(tokenReasons, wireReasons...)
+			decision.Diagnostic = wireDiagnostic
+		}
 	}
 	decision.Reasons = append(decision.Reasons, tokenReasons...)
 	for _, reason := range tokenReasons {
@@ -754,7 +761,11 @@ func ConfigureDefaultGuardWithSinkCatalog(
 	sinks SinkCatalog,
 	recorder GuardRecorder,
 ) (*Guard, error) {
-	guard, err := NewGuard(config, sinks, defaultRouteCatalog, recorder)
+	routes, err := NewOfficialRouteCatalog(sinks)
+	if err != nil {
+		return nil, err
+	}
+	guard, err := NewGuard(config, sinks, routes, recorder)
 	if err != nil {
 		return nil, err
 	}

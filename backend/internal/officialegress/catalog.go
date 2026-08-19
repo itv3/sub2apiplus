@@ -49,6 +49,7 @@ type SinkBindingInput struct {
 	ExpiryCondition    string
 	RuntimeBindable    bool
 	Override           *SinkGuardOverride
+	ManagedPolicy      *ManagedEgressPolicy
 	migrationReceipt   *MigrationReceipt
 }
 
@@ -68,6 +69,7 @@ type SinkBinding struct {
 	runtimeBindable    bool
 	migrationReceipt   *MigrationReceipt
 	override           *SinkGuardOverride
+	managedPolicy      *ManagedEgressPolicy
 }
 
 func newSinkBinding(input SinkBindingInput) (SinkBinding, error) {
@@ -96,11 +98,26 @@ func newSinkBinding(input SinkBindingInput) (SinkBinding, error) {
 	if input.EnforcementState == SinkStatePendingRemoval && input.Persona != PersonaDeadCode {
 		return SinkBinding{}, fmt.Errorf("非 dead-code Sink %s 不得进入 pending_removal", input.ID)
 	}
-	if !isDead && input.migrationReceipt == nil && input.EnforcementState != SinkStateLegacyObserve {
+	managedPolicy := input.ManagedPolicy != nil
+	if managedPolicy {
+		if err := input.ManagedPolicy.validate(); err != nil {
+			return SinkBinding{}, fmt.Errorf("Sink %s: %w", input.ID, err)
+		}
+		if input.Persona != PersonaUnclassified ||
+			input.EndpointEvidence != EndpointEvidenceExternalPersona ||
+			!input.RuntimeBindable || input.migrationReceipt != nil ||
+			(input.EnforcementState != SinkStateCanaryEnforce &&
+				input.EnforcementState != SinkStateEnforced) {
+			return SinkBinding{}, fmt.Errorf("Sink %s 的受管第三态组合非法", input.ID)
+		}
+	}
+	if !isDead && input.migrationReceipt == nil && !managedPolicy &&
+		input.EnforcementState != SinkStateLegacyObserve {
 		return SinkBinding{}, fmt.Errorf("无 MigrationReceipt 的 Sink %s 必须为 legacy_observe", input.ID)
 	}
 	if input.EnforcementState == SinkStateCanaryEnforce || input.EnforcementState == SinkStateEnforced {
-		if input.migrationReceipt == nil || !input.migrationReceipt.validFor(input) || !input.RuntimeBindable {
+		migrationValid := input.migrationReceipt != nil && input.migrationReceipt.validFor(input)
+		if (!migrationValid && !managedPolicy) || !input.RuntimeBindable {
 			return SinkBinding{}, fmt.Errorf("Sink %s 未满足 canary/enforced 定型前置条件", input.ID)
 		}
 	}
@@ -159,6 +176,10 @@ func newSinkBinding(input SinkBindingInput) (SinkBinding, error) {
 		override := *input.Override
 		binding.override = &override
 	}
+	if input.ManagedPolicy != nil {
+		policy := *input.ManagedPolicy
+		binding.managedPolicy = &policy
+	}
 	return binding, nil
 }
 
@@ -179,6 +200,13 @@ func (b SinkBinding) MigrationReceiptDigest() string {
 	return b.migrationReceipt.Digest()
 }
 
+func (b SinkBinding) ManagedPolicy() (ManagedEgressPolicy, bool) {
+	if b.managedPolicy == nil {
+		return ManagedEgressPolicy{}, false
+	}
+	return *b.managedPolicy, true
+}
+
 // EnforcementIdentityDigest 用于长连接复用隔离。状态、binding 或迁移收据任一变化
 // 都会产生新 key，旧连接不能跨越 enforcement 边界继续复用。
 func (b SinkBinding) EnforcementIdentityDigest() string {
@@ -189,6 +217,9 @@ func (b SinkBinding) EnforcementIdentityDigest() string {
 	parts := []string{
 		string(b.id), string(b.purpose), string(b.persona), string(b.targetBackend),
 		string(b.enforcementState), b.MigrationReceiptDigest(),
+	}
+	if policy, ok := b.ManagedPolicy(); ok {
+		parts = append(parts, policy.Digest())
 	}
 	if override, ok := b.Override(); ok {
 		parts = append(parts, override.ObserveUntil.UTC().Format(time.RFC3339Nano), override.Owner, override.ReasonCode)
@@ -281,6 +312,12 @@ func (c SinkCatalog) StartAttemptContext(ctx context.Context, id SinkID) (contex
 		SinkID:          binding.id,
 		Purpose:         binding.purpose,
 		DeclaredPersona: binding.persona,
+		ManagedPolicyDigest: func() string {
+			if policy, ok := binding.ManagedPolicy(); ok {
+				return policy.Digest()
+			}
+			return ""
+		}(),
 	}), nil
 }
 
@@ -463,10 +500,18 @@ func DefaultSinkEnforcementIdentity(id SinkID) (string, error) {
 
 // StartDefaultSinkAttempt 只供已登记业务调用点开启新的发送 attempt。
 func StartDefaultSinkAttempt(ctx context.Context, id SinkID) (context.Context, error) {
-	return defaultSinkCatalog.StartAttemptContext(ctx, id)
+	catalog := defaultSinkCatalog
+	if guard := DefaultGuard(); guard != nil {
+		catalog = guard.ProcessSinkCatalog()
+	}
+	return catalog.StartAttemptContext(ctx, id)
 }
 
 // PreserveDefaultSinkAttempt 供连接池/后台延迟发送保留当前 invocation 身份。
 func PreserveDefaultSinkAttempt(ctx context.Context, id SinkID) (context.Context, error) {
-	return defaultSinkCatalog.PreserveAttemptContext(ctx, id)
+	catalog := defaultSinkCatalog
+	if guard := DefaultGuard(); guard != nil {
+		catalog = guard.ProcessSinkCatalog()
+	}
+	return catalog.PreserveAttemptContext(ctx, id)
 }

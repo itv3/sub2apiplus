@@ -31,6 +31,7 @@ const (
 	ReasonCanaryObservePassthrough         GuardReason = "canary_observe_passthrough"
 	ReasonSinkOverrideObserved             GuardReason = "sink_override_observed"
 	ReasonUnclassifiedPersona              GuardReason = "unclassified_persona"
+	ReasonManagedPolicyMismatch            GuardReason = "managed_policy_mismatch"
 )
 
 // GuardEvent 是唯一允许进入日志和指标的结构。它有意不包含 URL、query、Header、Body、

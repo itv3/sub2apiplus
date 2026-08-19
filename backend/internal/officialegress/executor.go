@@ -561,6 +561,22 @@ func newPersonaExecutor(
 	registry AdapterRegistry,
 	guard *Guard,
 ) (*Executor, error) {
+	return newPersonaExecutorWithIssuer(
+		id, id, persona, personas, dialects, registry, guard,
+	)
+}
+
+// newPersonaExecutorWithIssuer 允许 Persona authority 与一次性 token issuer 使用
+// 不同稳定身份。Codex 现有构造仍把两者设为同一值，保持既有 final wire 与收据语义。
+func newPersonaExecutorWithIssuer(
+	authorityID ExecutorID,
+	issuerID ExecutorID,
+	persona Persona,
+	personas PersonaRegistry,
+	dialects DialectCompilerRegistry,
+	registry AdapterRegistry,
+	guard *Guard,
+) (*Executor, error) {
 	descriptor, ok := personas.Resolve(persona)
 	if !ok || descriptor.Persona() != persona {
 		return nil, errors.New("Executor Persona 未登记")
@@ -576,7 +592,7 @@ func newPersonaExecutor(
 		return nil, errors.New("Executor 缺少 adapter registry/Guard")
 	}
 	issuer, err := newTokenIssuerForPersona(
-		descriptor.AuthorityKind(), descriptor.Persona(), id,
+		descriptor.AuthorityKind(), descriptor.Persona(), issuerID,
 	)
 	if err != nil {
 		return nil, err
@@ -585,7 +601,7 @@ func newPersonaExecutor(
 		return nil, err
 	}
 	return &Executor{
-		id: id, persona: persona, personas: personas, dialects: dialects,
+		id: authorityID, persona: persona, personas: personas, dialects: dialects,
 		registry: registry, issuer: issuer,
 		executionPolicies: newExecutionPolicyController(),
 	}, nil

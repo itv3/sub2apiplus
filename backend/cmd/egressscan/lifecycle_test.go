@@ -158,7 +158,7 @@ func TestBootstrapInventoryLockMatchesCurrentReviewedScanner(t *testing.T) {
 		t.Fatal(err)
 	}
 	currentLockSum := sha256.Sum256(currentLockRaw)
-	if hex.EncodeToString(currentLockSum[:]) != "917fbcc0c6cf8f0a28b553837e167c07efc38aec566a98ab52c59d68ceec1b65" {
+	if hex.EncodeToString(currentLockSum[:]) != "edf349af67eb9821014c8639df4f2a76e61f6cb1a024d09a2019bb37816200b1" {
 		t.Fatal("当前 bootstrap inventory lock 摘要漂移")
 	}
 	baseline, err := os.ReadFile("../../../docs/egress/foundation/sink-baseline.json")

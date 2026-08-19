@@ -72,6 +72,13 @@ func NewOfficialRouteCatalog(sinks SinkCatalog) (OfficialRouteCatalog, error) {
 		return OfficialRouteCatalog{}, err
 	}
 	endpointBindings := make([]EndpointBindingCatalog, 0, 2)
+	var claudeProfile claudeFWGProfile
+	if sinkCatalogHasClaudeProfile(sinks) {
+		claudeProfile, err = loadClaudeFWGProfile()
+		if err != nil {
+			return OfficialRouteCatalog{}, err
+		}
+	}
 	seenProfiles := make(map[string]bool)
 	for _, role := range []ProductionReleaseRole{ProductionReleaseActive, ProductionReleaseRollback} {
 		coordinate, coordinateErr := DefaultPersonaReleaseCatalog().Resolve(
@@ -160,6 +167,18 @@ func NewOfficialRouteCatalog(sinks SinkCatalog) (OfficialRouteCatalog, error) {
 				if route.Protocol == WireProtocolWebSocket {
 					entry.familyID = ReleaseFamilyOpenAIOAuthWS
 				}
+			} else if sink.Persona() == PersonaClaudeCode &&
+				sink.EndpointEvidence() == EndpointEvidenceClaudeProfile {
+				endpoint, found := claudeCandidateEndpointForRoute(claudeProfile, sink, route)
+				if !found {
+					return OfficialRouteCatalog{}, fmt.Errorf(
+						"Claude Sink %s 的 route 没有 FW-G endpoint 绑定：%s",
+						sink.ID(), route.Key,
+					)
+				}
+				entry.endpointID = endpoint.id
+				entry.registryKey = endpoint.routeID
+				entry.familyID = "anthropic-oauth-http"
 			}
 			key := string(sink.ID()) + "\x00" + catalogRouteIdentity(route)
 			if _, duplicate := seen[key]; duplicate {
@@ -179,6 +198,19 @@ func NewOfficialRouteCatalog(sinks SinkCatalog) (OfficialRouteCatalog, error) {
 		entries: entries, managedPurposes: managedPurposes,
 		scopeClaims: scopeClaims, physical: physical,
 	}, nil
+}
+
+// sinkCatalogHasClaudeProfile 只从当前进程实际安装的 SinkCatalog 决定是否加载
+// Claude candidate 制品。candidate 关闭时默认 Catalog 不含 Claude strict Sink，
+// 因而 Codex-only 进程既不解析也不依赖 Claude 画像。
+func sinkCatalogHasClaudeProfile(sinks SinkCatalog) bool {
+	for _, binding := range sinks.Bindings() {
+		if binding.Persona() == PersonaClaudeCode &&
+			binding.EndpointEvidence() == EndpointEvidenceClaudeProfile {
+			return true
+		}
+	}
+	return false
 }
 
 // MatchPhysical 是 Guard 的第一阶段解析。它完全忽略 purpose/persona/SinkID，

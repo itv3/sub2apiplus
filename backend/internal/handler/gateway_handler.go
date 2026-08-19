@@ -120,6 +120,11 @@ func NewGatewayHandler(
 // Messages handles Claude API compatible messages endpoint
 // POST /v1/messages
 func (h *GatewayHandler) Messages(c *gin.Context) {
+	if c.Request != nil {
+		c.Request = c.Request.WithContext(
+			service.WithOfficialClaudeIngressRuntime(c.Request.Context(), c),
+		)
+	}
 	// 从context获取apiKey和user（ApiKeyAuth中间件已设置）
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {

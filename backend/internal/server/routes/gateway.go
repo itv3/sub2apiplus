@@ -532,9 +532,9 @@ func compositeTargetPlatformMiddleware(resolver *service.CompositeRouteResolver)
 		// 删除 Content-Encoding。必须在此之前冻结当前 Codex Release 的原始进程画像，
 		// 后续具体 Handler 的重复捕获由幂等入口保留首次 wire 事实。
 		if c.Request != nil {
-			c.Request = c.Request.WithContext(
-				service.WithOfficialCodexIngressRuntime(c.Request.Context(), c),
-			)
+			ctx := service.WithOfficialCodexIngressRuntime(c.Request.Context(), c)
+			ctx = service.WithOfficialClaudeIngressRuntime(ctx, c)
+			c.Request = c.Request.WithContext(ctx)
 		}
 		apiKey, ok := middleware.GetAPIKeyFromContext(c)
 		if !ok || apiKey == nil || apiKey.Group == nil || apiKey.Group.Platform != service.PlatformComposite {

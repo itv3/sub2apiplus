@@ -98,6 +98,28 @@ func TestLoadOfficialEgressGuardDefaultsToFailClose(t *testing.T) {
 	require.Equal(t, "enforce", cfg.Gateway.OfficialEgressGuard.UnknownRoutePolicy)
 	require.Equal(t, "enforce", cfg.Gateway.OfficialEgressGuard.UnregisteredSinkPolicy)
 	require.Equal(t, 100, cfg.Gateway.OfficialEgressGuard.CanaryPercent)
+	require.False(t, cfg.Gateway.ClaudeFWGCandidateEnabled)
+}
+
+func TestLoadClaudeFWGCandidateRequiresDMITInstance(t *testing.T) {
+	t.Run("DMIT 可显式开启", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		t.Setenv("GATEWAY_CLAUDE_FW_G_CANDIDATE_ENABLED", "true")
+		t.Setenv("GATEWAY_OFFICIAL_EGRESS_GUARD_INSTANCE_ID", "DMIT")
+
+		cfg, err := Load()
+		require.NoError(t, err)
+		require.True(t, cfg.Gateway.ClaudeFWGCandidateEnabled)
+	})
+
+	t.Run("非 DMIT 拒绝启动", func(t *testing.T) {
+		resetViperWithJWTSecret(t)
+		t.Setenv("GATEWAY_CLAUDE_FW_G_CANDIDATE_ENABLED", "true")
+		t.Setenv("GATEWAY_OFFICIAL_EGRESS_GUARD_INSTANCE_ID", "Vircs")
+
+		_, err := Load()
+		require.ErrorContains(t, err, "只允许在 instance_id=DMIT")
+	})
 }
 
 func TestLoadOfficialEgressGuardRejectsPermanentGlobalObserve(t *testing.T) {

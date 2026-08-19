@@ -63,8 +63,19 @@ func TestChangeset3PostIdentityAuthorityFinalWireIsFrozen(t *testing.T) {
 	executorOneShotTransition := loadExecutorOneShotSourceTransition(t)
 	multiPersonaControlTransition := loadMultiPersonaControlSourceTransition(t)
 	multiPersonaControlV2Transition := loadMultiPersonaControlSourceTransitionV2(t)
+	claudeFWGTransition := loadClaudeFWGSourceTransition(t)
 	// Codex 手册由上游 source-transition 门禁消费，不属于 final-wire 源码清单。
 	delete(multiPersonaControlV2Transition, "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md")
+	// Claude FW-G 的 Catalog、route Catalog 与 service facade 分别由其来源门禁消费，
+	// 不属于这份只覆盖共享 Executor 的历史 final-wire 源码清单。
+	delete(claudeFWGTransition, "backend/internal/officialegress/catalog.go")
+	delete(claudeFWGTransition, "backend/internal/officialegress/route_catalog.go")
+	delete(claudeFWGTransition, "backend/internal/officialegress/sink_ids.go")
+	delete(claudeFWGTransition, "backend/internal/service/official_egress_1b_executor.go")
+	// scanner 分类与 bootstrap inventory lock 由 egressscan 生命周期门禁消费，
+	// 不属于历史 Codex final-wire 的生产源码清单。
+	delete(claudeFWGTransition, "backend/cmd/egressscan/classify.go")
+	delete(claudeFWGTransition, "docs/egress/maintenance/bootstrap-inventory-lock.json")
 	for _, source := range manifest.SourceMaterial {
 		sourcePath := source.Path
 		if !filepath.IsAbs(sourcePath) {
@@ -167,6 +178,13 @@ func TestChangeset3PostIdentityAuthorityFinalWireIsFrozen(t *testing.T) {
 			expected = approved.ToSHA256
 			delete(multiPersonaControlV2Transition, source.Path)
 		}
+		if approved, ok := claudeFWGTransition[source.Path]; ok {
+			if approved.FromSHA256 != expected || strings.TrimSpace(approved.Reason) == "" {
+				t.Fatalf("Claude FW-G source transition 未承接上一层摘要：%s", source.Path)
+			}
+			expected = approved.ToSHA256
+			delete(claudeFWGTransition, source.Path)
+		}
 		if got != expected &&
 			compatibilityCodeRetirementTransitionSupersedes(source.Path, expected, got) {
 			expected = got
@@ -179,12 +197,13 @@ func TestChangeset3PostIdentityAuthorityFinalWireIsFrozen(t *testing.T) {
 		len(changeset6ReviewTransition) != 0 || len(maintenanceTransition) != 0 || len(ciRepairTransition) != 0 ||
 		len(cookieFinalizeTransition) != 0 || len(directoryTransition) != 0 || len(staticURLClosureTransition) != 0 ||
 		len(requestCompressionTransition) != 0 || len(executorOneShotTransition) != 0 ||
-		len(multiPersonaControlTransition) != 0 || len(multiPersonaControlV2Transition) != 0 {
-		t.Fatalf("source transition 含未发生的漂移：changeset4=%v changeset5=%v changeset6=%v changeset6_review=%v maintenance=%v ci_repair=%v cookie_finalize=%v directory=%v static_url_closure=%v request_compression=%v executor_one_shot=%v multi_persona=%v multi_persona_v2=%v",
+		len(multiPersonaControlTransition) != 0 || len(multiPersonaControlV2Transition) != 0 ||
+		len(claudeFWGTransition) != 0 {
+		t.Fatalf("source transition 含未发生的漂移：changeset4=%v changeset5=%v changeset6=%v changeset6_review=%v maintenance=%v ci_repair=%v cookie_finalize=%v directory=%v static_url_closure=%v request_compression=%v executor_one_shot=%v multi_persona=%v multi_persona_v2=%v claude_fw_g=%v",
 			changeset4Transition, changeset5Transition, changeset6Transition, changeset6ReviewTransition,
 			maintenanceTransition, ciRepairTransition, cookieFinalizeTransition, directoryTransition,
 			staticURLClosureTransition, requestCompressionTransition, executorOneShotTransition,
-			multiPersonaControlTransition, multiPersonaControlV2Transition)
+			multiPersonaControlTransition, multiPersonaControlV2Transition, claudeFWGTransition)
 	}
 	modes := map[ReleaseMode]int{}
 	wsCaptureCount := 0

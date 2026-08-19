@@ -81,7 +81,8 @@ func TestUpstreamV0177SourceTransitionIsFrozen(t *testing.T) {
 			t.Fatal(readErr)
 		}
 		if got := sha256Hex(source); got != transition.ToSHA256 &&
-			!runtimeReliabilityRepairTransitionSupersedes(transition.Path, transition.ToSHA256, got) {
+			!runtimeReliabilityRepairTransitionSupersedes(transition.Path, transition.ToSHA256, got) &&
+			!claudeFWGSourceTransitionSupersedes(transition.Path, transition.ToSHA256, got) {
 			t.Fatalf("v0.1.177 上游源码摘要漂移：path=%s got=%s want=%s", transition.Path, got, transition.ToSHA256)
 		}
 	}
@@ -102,6 +103,9 @@ func TestChangeset3ReferenceCompatibilityHelpersRemainReachable(t *testing.T) {
 }
 
 func upstreamV0177SourceTransitionSupersedes(path, priorDigest, currentDigest string) bool {
+	if claudeFWGSourceTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if fwEObservationSourceTransitionSupersedes(path, priorDigest, currentDigest) {
 		return true
 	}
@@ -139,6 +143,12 @@ func upstreamV0177SourceTransitionBeforeFWE(path, priorDigest, currentDigest str
 // runtimeReliabilityRepairTransitionSupersedes 只接受本次可靠性修复收据中精确的
 // path/from/to 承接关系，使既有冻结证据保持不可变。
 func runtimeReliabilityRepairTransitionSupersedes(path, priorDigest, currentDigest string) bool {
+	if claudeFWGSourceTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
+	if claudeFWGTestTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if fwEObservationSourceTransitionSupersedes(path, priorDigest, currentDigest) {
 		return true
 	}

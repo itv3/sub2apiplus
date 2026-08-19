@@ -940,6 +940,9 @@ type GatewayConfig struct {
 	// OfficialEgressGuard: 官方出站 Guard 的两个未知项策略和 canary 参数。
 	// 变更集 1C 默认均为 enforce；临时 observe 只能通过绑定实例、route 和期限的策略覆盖启用。
 	OfficialEgressGuard GatewayOfficialEgressGuardConfig `mapstructure:"official_egress_guard"`
+	// ClaudeFWGCandidateEnabled 仅在 DMIT 隔离实例安装 Claude Code 2.1.226
+	// FW-G strict candidate。默认关闭，Vircs production 不得开启。
+	ClaudeFWGCandidateEnabled bool `mapstructure:"claude_fw_g_candidate_enabled"`
 	// OpenAIPrivacyBrowser: privacy 端点 Chrome 133/XHR 画像的独立灰度、回滚和失败冷却策略。
 	OpenAIPrivacyBrowser GatewayOpenAIPrivacyBrowserConfig `mapstructure:"openai_privacy_browser"`
 	// OpenAIWS: OpenAI Responses WebSocket 配置（默认开启，可按需回滚到 HTTP）
@@ -2333,6 +2336,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.official_egress_guard.instance_id", "")
 	viper.SetDefault("gateway.official_egress_guard.sink_controls_json", "")
 	viper.SetDefault("gateway.official_egress_guard.policy_overrides_json", "")
+	viper.SetDefault("gateway.claude_fw_g_candidate_enabled", false)
 	viper.SetDefault("gateway.openai_privacy_browser.enabled", false)
 	viper.SetDefault("gateway.openai_privacy_browser.canary_percent", 0)
 	viper.SetDefault("gateway.openai_privacy_browser.platform", "auto")
@@ -3258,6 +3262,10 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.OfficialEgressGuard.MaxUniqueLogSamples <= 0 {
 		return fmt.Errorf("gateway.official_egress_guard.max_unique_log_samples must be positive")
+	}
+	if c.Gateway.ClaudeFWGCandidateEnabled &&
+		!strings.EqualFold(strings.TrimSpace(c.Gateway.OfficialEgressGuard.InstanceID), "DMIT") {
+		return fmt.Errorf("gateway.claude_fw_g_candidate_enabled 只允许在 instance_id=DMIT 的隔离实例开启")
 	}
 	if c.Gateway.OpenAIPrivacyBrowser.CanaryPercent < 0 ||
 		c.Gateway.OpenAIPrivacyBrowser.CanaryPercent > 100 {

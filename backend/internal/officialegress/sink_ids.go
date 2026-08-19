@@ -31,6 +31,17 @@ const (
 	SinkWebPrivacyDisableTraining     SinkID = "web.privacy.disable_training"
 	SinkWebPrivacySubscription        SinkID = "web.privacy.subscription"
 
+	// Claude Code 2.1.226 FW-G candidate 的 persona_strict 闭集。它们只会进入
+	// 显式构造的 Claude candidate Catalog，不会自动并入生产默认 Catalog。
+	SinkClaudeMessagesInference SinkID = "claude.messages.inference"
+	SinkClaudeLifecycleHello    SinkID = "claude.lifecycle.hello"
+	SinkClaudePolicyLimits      SinkID = "claude.policy_limits"
+	SinkClaudeRemoteSettings    SinkID = "claude.remote_settings"
+	SinkClaudeOAuthProfile      SinkID = "claude.oauth.profile"
+	SinkClaudeCountTokens       SinkID = "claude.messages.count_tokens"
+	SinkClaudeOAuthTokenRefresh SinkID = "claude.oauth.token_refresh"
+	SinkClaudeMCPServers        SinkID = "claude.mcp_servers"
+
 	// 以下 Sink 只为 FW-E 冻结遗留 Claude OAuth 调用点提供 observation-only
 	// 身份；它们仍是 unclassified，不代表 Claude Persona、画像或 strict 已登记。
 	SinkClaudeLegacyAccountTest         SinkID = "unclassified.claude.account_test"

@@ -31,6 +31,7 @@ type Persona string
 
 const (
 	PersonaCodexCLI     Persona = "codex-cli"
+	PersonaClaudeCode   Persona = "claude-code"
 	PersonaChatGPTWeb   Persona = "chatgpt-web"
 	PersonaUnclassified Persona = "unclassified"
 	PersonaDeadCode     Persona = "dead-code"
@@ -38,7 +39,7 @@ const (
 
 func (p Persona) Valid() bool {
 	switch p {
-	case PersonaCodexCLI, PersonaChatGPTWeb, PersonaUnclassified, PersonaDeadCode:
+	case PersonaCodexCLI, PersonaClaudeCode, PersonaChatGPTWeb, PersonaUnclassified, PersonaDeadCode:
 		return true
 	default:
 		return false
@@ -129,6 +130,7 @@ type EndpointEvidence string
 
 const (
 	EndpointEvidenceCodexProfile    EndpointEvidence = "codex_profile"
+	EndpointEvidenceClaudeProfile   EndpointEvidence = "claude_profile"
 	EndpointEvidenceTransportOnly   EndpointEvidence = "transport_only"
 	EndpointEvidenceExternalPersona EndpointEvidence = "external_persona"
 	EndpointEvidenceMissing         EndpointEvidence = "missing"
@@ -137,7 +139,7 @@ const (
 
 func (e EndpointEvidence) Valid() bool {
 	switch e {
-	case EndpointEvidenceCodexProfile, EndpointEvidenceTransportOnly,
+	case EndpointEvidenceCodexProfile, EndpointEvidenceClaudeProfile, EndpointEvidenceTransportOnly,
 		EndpointEvidenceExternalPersona, EndpointEvidenceMissing,
 		EndpointEvidenceNotApplicable:
 		return true
@@ -951,6 +953,7 @@ type attemptMetadata struct {
 	BundleDigest         string
 	ProfileDigest        string
 	ConnectionPoolDigest string
+	ManagedPolicyDigest  string
 	Token                *FinalizationToken
 }
 
@@ -970,6 +973,7 @@ type AttemptMetadataInput struct {
 	BundleDigest         string
 	ProfileDigest        string
 	ConnectionPoolDigest string
+	ManagedPolicyDigest  string
 }
 
 func WithAttemptMetadata(ctx context.Context, input AttemptMetadataInput) (context.Context, error) {
@@ -986,6 +990,7 @@ func WithAttemptMetadata(ctx context.Context, input AttemptMetadataInput) (conte
 		BundleDigest:         strings.TrimSpace(input.BundleDigest),
 		ProfileDigest:        strings.TrimSpace(input.ProfileDigest),
 		ConnectionPoolDigest: strings.TrimSpace(input.ConnectionPoolDigest),
+		ManagedPolicyDigest:  strings.TrimSpace(input.ManagedPolicyDigest),
 	}
 	if existing, ok := attemptMetadataFromContext(ctx); ok {
 		if existing.SinkID != metadata.SinkID || existing.Purpose != metadata.Purpose ||
@@ -1011,6 +1016,10 @@ func WithAttemptMetadata(ctx context.Context, input AttemptMetadataInput) (conte
 			existing.BundleDigest != metadata.BundleDigest {
 			return nil, errors.New("禁止覆盖既有 BundleDigest")
 		}
+		if existing.ManagedPolicyDigest != "" && metadata.ManagedPolicyDigest != "" &&
+			existing.ManagedPolicyDigest != metadata.ManagedPolicyDigest {
+			return nil, errors.New("禁止覆盖既有 ManagedEgressPolicy")
+		}
 		if metadata.InvocationID != "" {
 			existing.InvocationID = metadata.InvocationID
 		}
@@ -1035,6 +1044,9 @@ func WithAttemptMetadata(ctx context.Context, input AttemptMetadataInput) (conte
 		}
 		if metadata.ConnectionPoolDigest != "" {
 			existing.ConnectionPoolDigest = metadata.ConnectionPoolDigest
+		}
+		if metadata.ManagedPolicyDigest != "" {
+			existing.ManagedPolicyDigest = metadata.ManagedPolicyDigest
 		}
 		return context.WithValue(ctx, attemptMetadataContextKey{}, existing), nil
 	}
@@ -1073,6 +1085,7 @@ type AttemptIdentity struct {
 	BundleDigest         string
 	ProfileDigest        string
 	ConnectionPoolDigest string
+	ManagedPolicyDigest  string
 	HasFinalizationToken bool
 }
 
@@ -1095,6 +1108,7 @@ func AttemptIdentityFromContext(ctx context.Context) (AttemptIdentity, bool) {
 		BundleDigest:         metadata.BundleDigest,
 		ProfileDigest:        metadata.ProfileDigest,
 		ConnectionPoolDigest: metadata.ConnectionPoolDigest,
+		ManagedPolicyDigest:  metadata.ManagedPolicyDigest,
 		HasFinalizationToken: metadata.Token != nil,
 	}, true
 }

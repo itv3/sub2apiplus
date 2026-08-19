@@ -53,6 +53,71 @@ type officialCodexHTTPUpstreamPort struct {
 	httpUpstream HTTPUpstream
 }
 
+type claudeCandidateHTTPTransportInput struct {
+	proxyURL         string
+	accountID        int64
+	concurrencyLimit int
+}
+
+type claudeCandidateHTTPTransportContextKey struct{}
+
+// withClaudeCandidateHTTPTransport 只把物理账号资源绑定给 Claude transport port。
+// Persona、Release、端点和 TLS 画像仍只能来自已定型的 PreparedRequest。
+func withClaudeCandidateHTTPTransport(
+	ctx context.Context,
+	proxyURL string,
+	accountID int64,
+	concurrencyLimit int,
+) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, claudeCandidateHTTPTransportContextKey{},
+		claudeCandidateHTTPTransportInput{
+			proxyURL: strings.TrimSpace(proxyURL), accountID: accountID,
+			concurrencyLimit: concurrencyLimit,
+		})
+}
+
+type claudeCandidateHTTPUpstreamPort struct {
+	httpUpstream HTTPUpstream
+}
+
+func (p *claudeCandidateHTTPUpstreamPort) SendHTTPUpstream(
+	ctx context.Context,
+	prepared officialegress.PreparedRequest,
+) (*http.Response, error) {
+	if p == nil || p.httpUpstream == nil {
+		return nil, errors.New("Claude Executor HTTPUpstream port 未配置")
+	}
+	input, ok := ctx.Value(claudeCandidateHTTPTransportContextKey{}).(claudeCandidateHTTPTransportInput)
+	if !ok || input.accountID <= 0 {
+		return nil, errors.New("Claude Executor 缺少账号传输上下文")
+	}
+	if input.concurrencyLimit <= 0 {
+		input.concurrencyLimit = 1
+	}
+	request, err := prepared.TakeHTTPRequest()
+	if err != nil {
+		return nil, err
+	}
+	request = request.WithContext(WithHTTPUpstreamRedirectsDisabled(request.Context()))
+	tlsProfile, err := tlsFingerprintProfileFromTransportSpec(prepared.Transport())
+	if err != nil {
+		return nil, fmt.Errorf("解析 Claude Executor TLS 画像：%w", err)
+	}
+	if tlsProfile == nil {
+		return nil, errors.New("Claude Executor 请求缺少已定型 TLS 画像")
+	}
+	return p.httpUpstream.DoWithTLS(
+		request,
+		input.proxyURL,
+		input.accountID,
+		input.concurrencyLimit,
+		tlsProfile,
+	)
+}
+
 func (p *officialCodexHTTPUpstreamPort) SendHTTPUpstream(
 	ctx context.Context,
 	prepared officialegress.PreparedRequest,
@@ -113,13 +178,30 @@ func BuildOfficialEgressTransitionRuntime(
 	cfg *config.Config,
 	reqProfileResource OfficialCodexReqProfileTransportResource,
 ) (*OfficialEgressTransitionRuntime, error) {
-	return newOfficialEgressTransitionRuntimeWithExecutor(
+	runtimeState, err := newOfficialEgressTransitionRuntimeWithExecutor(
 		guard,
 		httpUpstream,
 		officialCodexExecutorID,
 		officialEgressReleaseModeFromConfig(cfg),
 		reqProfileResource,
 	)
+	if err != nil {
+		return nil, err
+	}
+	if cfg == nil || !cfg.Gateway.ClaudeFWGCandidateEnabled {
+		return runtimeState, nil
+	}
+	claudePort := &claudeCandidateHTTPUpstreamPort{httpUpstream: httpUpstream}
+	claudeRuntime, err := officialegress.NewClaudeCandidateRuntime(
+		runtimeState.ProcessSinks,
+		guard,
+		claudePort,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("构造 Claude FW-G candidate runtime：%w", err)
+	}
+	runtimeState.ClaudeCandidate = claudeRuntime
+	return runtimeState, nil
 }
 
 func officialEgressReleaseModeFromConfig(cfg *config.Config) officialegress.ReleaseMode {

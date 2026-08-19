@@ -1,0 +1,73 @@
+{
+  "schema_version": "official-egress-claude-fw-g-test-transition/v1",
+  "date": "2026-08-20",
+  "phase": "FW-G",
+  "base_commit": "12d21af2d7ca",
+  "source_transition": {
+    "path": "docs/egress/maintenance/claude-fw-g-source-transition.json",
+    "sha256": "b84fa150c93856a7e3717c7053cd1e2d90f9a6adce259d68252d5aaf11fb6008"
+  },
+  "transitions": [
+    {
+      "path": "backend/cmd/egressscan/lifecycle_test.go",
+      "from_sha256": "7e8b8392916180921093e8db9c2423cf76fec817f5573c1329eadb78027bcae4",
+      "to_sha256": "0169dcfffe9e1203d2017bde9a67b0467aec08fb38bba90218aba036608f1a16",
+      "reason": "冻结 Claude FW-G 对 scanner algorithm 的复审后 bootstrap inventory lock 摘要；历史 bootstrap commit、tree 与 inventory 原文保持不变。"
+    },
+    {
+      "path": "backend/internal/officialegress/catalog_retirements_test.go",
+      "from_sha256": "de6b85f943953917d9c61804da10ddc1105dc3b9c9dffecfebf2d217b43c9ba8",
+      "to_sha256": "ebb7e1a9314f1ce50983631d201ba7777cfd525d346bce8fe6c9e495313b61f0",
+      "reason": "历史退休门禁只新增 Claude FW-G Source/Test Transition 的精确连续承接；旧退休收据、源码闭集与 wire 零差异要求保持不变。"
+    },
+    {
+      "path": "backend/internal/officialegress/changeset3_post_identity_authority_final_wire_frozen_test.go",
+      "from_sha256": "a330fcd6bba7206c5d50a6e008a445528084ed24d79fbb4a8a2498527ead7a23",
+      "to_sha256": "220257702059379d9f7a767719ed397d8f0ea669b88835ef3c994bd654f3e63b",
+      "reason": "历史 final-wire 门禁追加 Claude FW-G Executor Source Transition，并明确剔除不属于该源码清单的 Catalog、route Catalog、scanner 生命周期与 service facade；Codex 捕获及允许差异保持不变。"
+    },
+    {
+      "path": "backend/internal/officialegress/executor_one_shot_retirement_test.go",
+      "from_sha256": "84dfe4a0d9ea5fd77386cc529ded3dac8f4bac1b4567654eb5595e951720a247",
+      "to_sha256": "2dec8cd717b38d06b3659538c9863858dd6da9d4a4da602d1ed5d92c7553a566",
+      "reason": "历史 Executor 一次性兼容退休门禁追加 Claude FW-G 对共享 Executor 与唯一 service 消费者的精确摘要链；一次性入口绝迹和 attempt 语义保持不变。"
+    },
+    {
+      "path": "backend/internal/officialegress/fw_e_observation_source_transition_test.go",
+      "from_sha256": "1220cb3e80454304720c8bb4763fe4454926261a75304a05c2bd25e2857e7bd5",
+      "to_sha256": "8009c8dae09ef8863bf1d65917b5690d77cf5d85f8b4bf25d6bee6e89f22b15f",
+      "reason": "FW-E observation-only 门禁接受 FW-G 生产源码和历史测试的追加式 transition；FW-E 原始收据与 observation-only 基线保持不可变。"
+    },
+    {
+      "path": "backend/internal/officialegress/legacy_observation_catalog_test.go",
+      "from_sha256": "004aa45793d80179f1bdbb9f28215551fb3c0fda408c3a0fad149db564fd44a5",
+      "to_sha256": "87e0a5d704231978a29acb84f0d8ad58dfcfe4bce3ee625cbdddcbb0f14f36c1",
+      "reason": "FW-E 历史断言改为验证默认 PersonaRegistry 未登记 Claude，而不是把合法 Persona 标识误判为无效；默认生产注册状态仍保持未激活。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_v0177_source_transition_test.go",
+      "from_sha256": "2503c45f88ba2e9d4cf5b9890fd7484e0123bf9ec32f021b066ac16ebbca576d",
+      "to_sha256": "19aca87c1d1b164695e81d54b94f99a78c0b20250797018e238997af60bb1a26",
+      "reason": "上游 v0.1.177 历史门禁追加 Claude FW-G Source/Test Transition 的精确连续承接；上游冻结源码和 Codex wire 要求保持不变。"
+    },
+    {
+      "path": "backend/internal/officialegress/websocket_tokenless_retirement_test.go",
+      "from_sha256": "93e9c73d203dd8c1dd2d073c2d5ee199c581c0b03a8fc31e23280ad70a2d5359",
+      "to_sha256": "077774926c40aadd1b1bc0fcdd9809e4ffb5031eafdfb10540db0a9e39550ad6",
+      "reason": "WS 无 token 历史退休门禁追加 Claude FW-G Catalog Source Transition 的连续承接；token 缺失失败关闭和退休符号绝迹保持不变。"
+    },
+    {
+      "path": "backend/internal/service/compatibility_code_retirement_closure_test.go",
+      "from_sha256": "6836d0f491155c396be34228437ce0bab3cee835a9343a9b6f2b8921574c1309",
+      "to_sha256": "2fbdceac5e91d51bb20b192f8c26f964e19648faaadad94b4b39f9dc6e1d6923",
+      "reason": "service 历史兼容退休闭集门禁追加 Claude FW-G Test Transition 的精确摘要承接；退休候选、禁止符号和零 wire 差异要求保持不变。"
+    },
+    {
+      "path": "backend/internal/service/upstream_v0177_source_transition_test.go",
+      "from_sha256": "9d5dedcb0bfba62bf9a267868ceae010ad8eca5f31324c1dad390ba05921ffa6",
+      "to_sha256": "be6f0f8da0bd8afeec42c580467dfb7768a436a31d9a174fbea445e0f4829618",
+      "reason": "service 历史 transition 解析器追加 Claude FW-G Source/Test Transition 的精确连续承接；旧上游、可靠性和 FW-E 收据保持不可变。"
+    }
+  ],
+  "result": "passed"
+}

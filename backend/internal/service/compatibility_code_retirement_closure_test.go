@@ -210,6 +210,8 @@ func assertCompatibilityClosureFileDigest(
 		}
 	}
 	if got != expected &&
+		!claudeFWGTestTransitionSupersedesService(path, expected, got) &&
+		!claudeFWGSourceTransitionSupersedesService(path, expected, got) &&
 		!versionLeakDebtTransitionSupersedes(path, want, got) &&
 		!upstreamV0177SourceTransitionSupersedes(path, want, got) {
 		t.Fatalf("兼容代码闭集文件摘要漂移：path=%s got=%s want=%s", path, got, expected)
@@ -329,6 +331,9 @@ func loadMultiPersonaControlTestTransitionV2(
 		}
 		current := readCompatibilityClosureSource(t, repoRoot, transition.Path)
 		if got := compatibilityClosureDigest(current); got != transition.ToSHA256 &&
+			!claudeFWGTestTransitionSupersedesService(
+				transition.Path, transition.ToSHA256, got,
+			) &&
 			!fwEObservationSourceTransitionSupersedes(
 				transition.Path, transition.ToSHA256, got,
 			) {

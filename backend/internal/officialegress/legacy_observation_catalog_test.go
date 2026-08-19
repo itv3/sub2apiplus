@@ -67,8 +67,8 @@ func TestFWELegacyObservationSinksAreBoundWithoutRegisteringClaudePersona(t *tes
 		})
 	}
 
-	if Persona("claude-code").Valid() {
-		t.Fatal("FW-E 禁止提前登记 Claude Persona")
+	if _, registered := DefaultPersonaRegistry().Resolve(PersonaClaudeCode); registered {
+		t.Fatal("FW-E 默认运行时禁止提前登记 Claude Persona")
 	}
 	if _, ok := DefaultSinkCatalog().Resolve("unclassified.claude.head_hello"); ok {
 		t.Fatal("当前没有发送源的 HEAD /api/hello 不得伪造 observation-only Sink")
