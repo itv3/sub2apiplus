@@ -388,13 +388,16 @@ Claude 的实现权威是 FW-E 冻结的最新 stable。ProfileSchema、目标 S
 驱动；2.1.220 只能随后由同一 Schema／Compiler 表达为基线 fixture 或受范围约束的 rollback，不得反向
 决定目标设计。candidate 冻结后，即使官方 stable 再变化也不得中途换版。
 
-FW-F 已按 `validation_only` 完成：7,368 个发现和 32 个语义候选未决数均为 0；FW-F v1 机械生成的
-97 条提案已全部撤回。活动 RuleLedger 只保留 88 条经 Vircs 上 2.1.226 官方客户端真实 R/M 断言通过的
-request-egress 规则；遥测关闭事实、非必要流量和未实测能力均不进入 SupportEnvelope。五类 strict
-egress 分别是 messages、hello、OAuth profile、policy limits 和 settings；已 target-first 生成
-2.1.226 的 ProfileSchema、Snapshot、ReleaseArtifact 与五个纵向样例，再以同一 Schema 文档／Compiler
-attestation 生成 2.1.220 的两个 baseline fixture，并签发 Evidence／Profile ApprovalFact。88 条规则
-当前均为 `observed`，因此没有 production-replacement ApprovalFact、candidate、selector 变更或部署。事实分别见
+FW-F 已按 `validation_only` 完成：7,368 个发现、593 个正交候选和 32 个语义候选族未决数均为 0；
+FW-F v1 机械生成的 97 条提案已全部撤回。593 个候选覆盖 331 个目标发送点、102 个旧源码机制、71 个
+HitCC 线索、57 条历史规则和 32 个候选族。活动 RuleLedger 只保留 110 条经 Vircs 上 2.1.226 官方客户端
+真实正负断言通过的 request-egress 规则，其中 107 条普通规则使用 R/M，3 条 TLS 规则使用原生 P/M。
+遥测关闭、非必要流量及 usage／models 等合法零流量只作支撑事实，不进入规则集。八类 strict egress
+分别是 messages、hello、OAuth profile、policy limits、settings、count_tokens、OAuth refresh 和 MCP
+servers；已 target-first 生成 2.1.226 的 ProfileSchema、Snapshot、ReleaseArtifact 与八个纵向样例，再以
+同一 Schema 文档／Compiler attestation 生成 2.1.220 的两个 baseline fixture，并签发 Evidence／Profile
+ApprovalFact。110 条规则当前均为 `observed`，因此没有 production-replacement ApprovalFact、candidate、
+selector 变更或部署。事实分别见
 [发现项清零收据](egress/maintenance/fw-f-discovery-clearance/receipt.json)和
 [FW-F 画像批准收据](egress/maintenance/fw-f-profile-approval/receipt.json)。
 
@@ -536,8 +539,10 @@ FW-A 基线 → FW-B 暂定合同 → FW-C Codex-only 发布 → FW-D 通用工�
 - **退出门禁**：`DiscoveryDispositionLedger` 与 FW-E inventory 摘要一致，每个发现恰好一个已解决记录、
   至少一个终态绑定且可双向追溯；跨语义发现可以有多个绑定。发现缺失／重复记录／未决、仅
   `catalogued_context`、未收敛语义候选和无主支撑事实均为 0；
-  活动规则全部绑定目标版本实测通道并通过 `PAIR-*`；目标样例、跨 Persona／跨 Release 负例和 Codex
-  零差异通过；Schema 能表达两个版本且不以 2.1.220
+  全部正交候选均有唯一终态；每条活动规则都有独立 `PAIR-*`、官方正例、非零官方负例、明确分母／条件／
+  适用范围，普通规则严格绑定 R/M，TLS 规则严格绑定 P/M；不得存在未测能力占位。规则数由原子化实测
+  决定，不得预设；客户端指南、RuleLedger、Snapshot、EvidencePackage 和 SupportEnvelope 的规则 ID
+  集合必须完全一致。目标样例、跨 Persona／跨 Release 负例和 Codex 零差异通过；Schema 能表达两个版本且不以 2.1.220
   限制目标设计；Codex 生产收据对应最终合同；所有 production selector 保持不变。
 - **禁止／回退**：不得先构造 2.1.220 画像，不得把样例注册到 production Runtime Catalog。Persona
   自有缺口留在 Claude 方言；不得按发现数量自动生成 SPEC，也不得以聚类、关键词未命中或缩小范围

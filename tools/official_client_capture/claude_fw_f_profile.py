@@ -44,15 +44,18 @@ from tools.official_client_control.receipts import (  # noqa: E402
 from tools.official_client_control.store import ControlStore  # noqa: E402
 
 
-POLICY_SCHEMA = "claude-code-fw-f-profile-policy/v3"
-CLEARANCE_CLOSURE_SCHEMA = "claude-code-fw-f-discovery-clearance-closure/v3"
-MEASURED_RULES_SCHEMA = "claude-code-fw-f-measured-rule-ledger/v2"
-WITHDRAWN_PROPOSALS_SCHEMA = "claude-code-fw-f-withdrawn-rule-proposals/v1"
-TARGET_PROFILE_SCHEMA = "claude-code-fw-f-target-profile/v3"
-SUMMARY_SCHEMA = "claude-code-fw-f-profile-summary/v3"
-CLOSURE_SCHEMA = "claude-code-fw-f-profile-closure/v3"
+POLICY_SCHEMA = "claude-code-fw-f-profile-policy/v4"
+CLEARANCE_CLOSURE_SCHEMA = "claude-code-fw-f-discovery-clearance-closure/v4"
+MEASURED_RULES_SCHEMA = "claude-code-fw-f-measured-rule-ledger/v3"
+WITHDRAWN_PROPOSALS_SCHEMA = "claude-code-fw-f-withdrawn-rule-proposals/v2"
+TARGET_PROFILE_SCHEMA = "claude-code-fw-f-target-profile/v4"
+SUMMARY_SCHEMA = "claude-code-fw-f-profile-summary/v4"
+CLOSURE_SCHEMA = "claude-code-fw-f-profile-closure/v4"
 HTTP_SPLIT = b"\r\n\r\n"
 REQUEST_LINE_RE = re.compile(r"^([A-Z]+) ([^ ]+) (HTTP/\d\.\d)$")
+GUIDE_RULES_BEGIN = "<!-- FW-F-ACTIVE-RULES-BEGIN -->"
+GUIDE_RULES_END = "<!-- FW-F-ACTIVE-RULES-END -->"
+GUIDE_SPEC_ID_RE = re.compile(r"`(SPEC-[A-Z0-9_-]+)`")
 UUID_RE = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-5][0-9a-fA-F]{3}-"
     r"[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
@@ -129,6 +132,21 @@ def external_binding(path: Path) -> dict[str, Any]:
     }
 
 
+def guide_rule_ids(path: Path) -> list[str]:
+    """提取指南活动规则区，作为五方规则闭集中的文档侧权威集合。"""
+
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise ProfileBuildError(f"无法读取 Claude 指南：{path}: {exc}") from exc
+    require(text.count(GUIDE_RULES_BEGIN) == 1, "Claude 指南缺少唯一活动规则起始标记")
+    require(text.count(GUIDE_RULES_END) == 1, "Claude 指南缺少唯一活动规则结束标记")
+    section = text.split(GUIDE_RULES_BEGIN, 1)[1].split(GUIDE_RULES_END, 1)[0]
+    spec_ids = GUIDE_SPEC_ID_RE.findall(section)
+    require(spec_ids and len(spec_ids) == len(set(spec_ids)), "Claude 指南活动规则 ID 为空或重复")
+    return sorted(spec_ids)
+
+
 def external_bindings(paths: Iterable[Path]) -> list[dict[str, Any]]:
     """生成按路径严格排序且去重的外部绑定。"""
 
@@ -161,6 +179,10 @@ def validate_policy(policy: dict[str, Any]) -> None:
 
     require(policy.get("schema_version") == POLICY_SCHEMA, "FW-F profile policy schema 不匹配")
     require(policy.get("approval_purpose") == "validation_only", "当前证据只能签发 validation_only 批准")
+    require(
+        "unmeasured_feature_boundary" not in json.dumps(policy, ensure_ascii=False).lower(),
+        "画像策略仍包含禁止的 unmeasured_feature_boundary",
+    )
     require(policy.get("target_version") != policy.get("baseline_version"), "目标与基线版本不得相同")
     require(isinstance(policy.get("persona"), dict), "policy.persona 缺失")
     require(isinstance(policy.get("profile_schema_document"), dict), "policy.profile_schema_document 缺失")
@@ -213,6 +235,17 @@ def validate_policy(policy: dict[str, Any]) -> None:
         "persona_strict_egress_ids 必须严格排序且非空",
     )
     require(not (set(strict_ids) & (set(managed) | set(denied))), "strict、managed 与 denied 出站集合重叠")
+    require(len(strict_ids) == 8, "目标画像必须覆盖 v21 实测的 8 类 strict egress")
+    v21_evidence = policy.get("v21_evidence")
+    require(isinstance(v21_evidence, dict), "policy.v21_evidence 缺失")
+    require(
+        v21_evidence.get("scenario_count") == 77
+        and v21_evidence.get("matrix_dimension_count") == 49
+        and v21_evidence.get("candidate_count") == 593
+        and v21_evidence.get("request_occurrence_count") == 395,
+        "v21 证据分母不完整",
+    )
+    require(v21_evidence.get("entrypoints") == ["cli", "sdk-cli"], "v21 entrypoint 闭集不一致")
     contracts = policy.get("strict_egress_contracts")
     require(isinstance(contracts, list) and contracts, "strict_egress_contracts 不得为空")
     contract_ids = [value.get("egress_id") for value in contracts if isinstance(value, dict)]
@@ -259,7 +292,13 @@ def validate_clearance_inputs(
     gate_counts = clearance.get("gate_counts")
     require(isinstance(gate_counts, dict) and gate_counts, "发现项清零门禁缺失")
     require(all(value == 0 for value in gate_counts.values()), "发现项清零仍有非零门禁")
-    require(clearance.get("candidate_resolution_count") == 32, "语义候选没有 32/32 收敛")
+    require(clearance.get("legacy_semantic_candidate_count") == 32, "FW-E 语义候选没有 32/32 收敛")
+    require(
+        clearance.get("candidate_resolution_count")
+        == clearance.get("orthogonal_candidate_count")
+        == 593,
+        "正交候选没有 593/593 收敛",
+    )
     require(measured_rules.get("schema_version") == MEASURED_RULES_SCHEMA, "measured rules schema 不匹配")
     require(measured_rules.get("result") == "passed", "实测规则台账未通过")
     entries = measured_rules.get("entries")
@@ -272,8 +311,6 @@ def validate_clearance_inputs(
     spec_ids = [value.get("spec_id") for value in entries if isinstance(value, dict)]
     require(len(spec_ids) == len(entries) and spec_ids == sorted(set(spec_ids)), "实测规则 ID 不唯一或无序")
     forbidden = {
-        "SPEC-TLS-001",
-        "SPEC-TLS-002",
         "SPEC-HDR-011",
         "SPEC-HDR-034",
         "SPEC-HDR-035",
@@ -283,6 +320,7 @@ def validate_clearance_inputs(
     for rule in entries:
         spec_id = rule["spec_id"]
         require(spec_id not in forbidden and not spec_id.startswith("SPEC-RESP-"), f"非活动规则进入画像：{spec_id}")
+        require(rule.get("assertion_id") == f"PAIR-{spec_id}", f"{spec_id} 缺少独立 PAIR 断言")
         require(rule.get("assertion_result") == "passed", f"{spec_id} 实测断言未通过")
         require(rule.get("compatibility_class") == "request_egress", f"{spec_id} 不是 request-egress")
         egress_ids = rule.get("egress_ids")
@@ -292,10 +330,48 @@ def validate_clearance_inputs(
             and egress_ids,
             f"{spec_id} 缺少严格有序的 egress_ids",
         )
-        require({"R", "M"} <= set(rule.get("evidence_channels", [])), f"{spec_id} 缺少 R/M")
+        primary_channel = "P" if rule.get("domain") == "tls" else "R"
+        require({primary_channel, "M"} <= set(rule.get("evidence_channels", [])), f"{spec_id} 缺少 {primary_channel}/M")
+        positive = rule.get("official_positive", {})
+        negative = rule.get("official_negative", {})
+        require(
+            positive.get("assertion_id") == f"PAIR-{spec_id}-POSITIVE"
+            and positive.get("result") == "passed"
+            and positive.get("sample_count", 0) > 0,
+            f"{spec_id} 缺少独立官方正例",
+        )
+        require(
+            negative.get("assertion_id") == f"PAIR-{spec_id}-NEGATIVE"
+            and negative.get("result") == "passed"
+            and negative.get("sample_count", 0) > 0,
+            f"{spec_id} 缺少独立官方负例",
+        )
+        require(
+            isinstance(rule.get("applicability"), list)
+            and rule["applicability"]
+            and isinstance(rule.get("applicability_scope"), str)
+            and rule["applicability_scope"],
+            f"{spec_id} 缺少条件或适用范围",
+        )
+        sample_scope = rule.get("sample_scope")
+        require(
+            isinstance(sample_scope, dict)
+            and sample_scope.get("eligible_count", 0) > 0
+            and sample_scope.get("matched_count", 0) > 0
+            and isinstance(sample_scope.get("unit"), str)
+            and sample_scope["unit"],
+            f"{spec_id} 缺少完整实测分母",
+        )
         refs = rule.get("evidence_refs")
         require(isinstance(refs, list) and refs, f"{spec_id} 缺少 evidence_refs")
-        require(any(value.get("channel") == "R" and value.get("path", "").endswith(".bin") for value in refs), f"{spec_id} 没有绑定原始 R 请求")
+        require(
+            any(
+                value.get("channel") == primary_channel
+                and (primary_channel == "P" or value.get("path", "").endswith(".bin"))
+                for value in refs
+            ),
+            f"{spec_id} 没有绑定原始 {primary_channel} 证据",
+        )
     require(withdrawn_proposals.get("schema_version") == WITHDRAWN_PROPOSALS_SCHEMA, "withdrawn proposals schema 不匹配")
     require(
         withdrawn_proposals.get("proposal_count")
@@ -724,9 +800,7 @@ def attach_strict_feature_matrix(
     result = dict(profile)
     result["identity"] = dict(profile["identity"])
     result["identity"]["entrypoints"] = (
-        ["cli", "sdk-cli"]
-        if evidence is not None and "v3-tui" in evidence.get("real_probe_ids", [])
-        else [profile["identity"]["entrypoint"]]
+        evidence["entrypoints"] if evidence is not None else [profile["identity"]["entrypoint"]]
     )
     result["state"] = dict(profile["state"])
     result["state"].update({
@@ -739,6 +813,11 @@ def attach_strict_feature_matrix(
     for contract in contracts:
         endpoint_kind = contract["endpoint_kind"]
         spec_ids = sorted(rule_ids_by_egress[contract["egress_id"]])
+        tls_spec_ids = sorted(
+            rule["spec_id"]
+            for rule in rules
+            if rule["domain"] == "tls" and contract["egress_id"] in rule["egress_ids"]
+        )
         endpoint_entries.append({
             "egress_id": contract["egress_id"],
             "endpoint_kind": endpoint_kind,
@@ -749,12 +828,23 @@ def attach_strict_feature_matrix(
             "endpoint": contract["endpoint"],
             "body_policy": contract["body_policy"],
             "spec_ids": spec_ids,
-            "source": "target-rm-rule-ledger" if evidence is not None else "baseline-fixture",
+            "source": "target-primary-measurement-rule-ledger" if evidence is not None else "baseline-fixture",
         })
         if endpoint_kind in {"messages-inference", "lifecycle-hello"}:
             view = profile if endpoint_kind == "messages-inference" else profile.get("lifecycle")
             require(isinstance(view, dict), f"{endpoint_kind} 画像视图缺失")
             require(view.get("endpoint") == contract["endpoint"], f"{endpoint_kind} 画像与合同端点不一致")
+            transport = dict(view["transport"])
+            transport.update({
+                "client_alpn_offer_evidence": "measured-p-channel" if evidence is not None and tls_spec_ids else "not-measured-for-this-egress",
+                "clienthello_fingerprint_evidence": "measured-p-channel" if evidence is not None and tls_spec_ids else "not-measured-for-this-egress",
+                "tls_spec_ids": tls_spec_ids,
+            })
+            if endpoint_kind == "messages-inference":
+                result["transport"] = transport
+            else:
+                result["lifecycle"] = dict(result["lifecycle"])
+                result["lifecycle"]["transport"] = transport
             continue
         headers = contract.get("headers")
         require(isinstance(headers, list) and headers, f"{endpoint_kind} 缺少 evidence-derived Header")
@@ -770,15 +860,21 @@ def attach_strict_feature_matrix(
             },
             "body": {
                 "body_policy": contract["body_policy"],
-                "required_fields": [],
-                "optional_fields": [],
-                "content_policy": "不保存 OAuth 凭据；Authorization 只保存动态来源策略",
+                "top_level_order": contract.get("top_level_order", []),
+                "required_fields": contract.get("required_fields", []),
+                "optional_fields": contract.get("optional_fields", []),
+                "secret_fields": contract.get("secret_fields", []),
+                "content_policy": contract.get(
+                    "content_policy",
+                    "不保存 OAuth 凭据；Authorization 只保存动态来源策略",
+                ),
             },
             "transport": {
                 "tls_sni": contract["sink_id"],
                 "application_protocol": contract["endpoint"]["http_version"],
-                "client_alpn_offer_evidence": "unobserved",
-                "clienthello_fingerprint_evidence": "unobserved",
+                "client_alpn_offer_evidence": "measured-p-channel" if evidence is not None and tls_spec_ids else "not-measured-for-this-egress",
+                "clienthello_fingerprint_evidence": "measured-p-channel" if evidence is not None and tls_spec_ids else "not-measured-for-this-egress",
+                "tls_spec_ids": tls_spec_ids,
                 "connection_reuse": "measured-rule-only",
                 "compression": "response-accept-encoding-only",
             },
@@ -799,8 +895,11 @@ def attach_strict_feature_matrix(
         "rule_ids_by_egress": {
             key: sorted(values) for key, values in sorted(rule_ids_by_egress.items())
         },
-        "real_probe_ids": [] if evidence is None else evidence["real_probe_ids"],
-        "synthetic_probe_ids": [] if evidence is None else evidence["synthetic_probe_ids"],
+        "campaign_id": None if evidence is None else evidence["campaign_id"],
+        "scenario_count": None if evidence is None else evidence["scenario_count"],
+        "matrix_dimension_count": None if evidence is None else evidence["matrix_dimension_count"],
+        "candidate_count": None if evidence is None else evidence["candidate_count"],
+        "request_occurrence_count": None if evidence is None else evidence["request_occurrence_count"],
         "capture_source_bundle_sha256": (
             None if evidence is None else evidence["capture_source_bundle_sha256"]
         ),
@@ -852,7 +951,9 @@ def endpoint_control(profile: dict[str, Any], endpoint_kind: str) -> dict[str, s
             "binding_id": value["binding_id"],
             "endpoint_id": value["endpoint_id"],
             "body_replayability": (
-                "replayable_bytes" if value["body_policy"] == "json-or-gzip-json" else "empty"
+                "replayable_bytes"
+                if value["body_policy"] in {"json", "json-or-gzip-json", "json-secret-fields"}
+                else "empty"
             ),
         }
     controls = {
@@ -1136,7 +1237,7 @@ def seal_manifest(
 def measured_profile_rules(
     measured_rules: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """把已通过真实 R/M 断言的规则投影到 EvidencePackage 和画像。"""
+    """把普通 R/M、TLS P/M 规则及正负例投影到 EvidencePackage 和画像。"""
 
     evidence_rules: list[dict[str, Any]] = []
     profile_rules: list[dict[str, Any]] = []
@@ -1149,6 +1250,8 @@ def measured_profile_rules(
             }
             for value in source["evidence_refs"]
         }
+        positive = source["official_positive"]
+        negative = source["official_negative"]
         evidence_rule = {
             "spec_id": source["spec_id"],
             "evidence_level": source["evidence_level"],
@@ -1162,11 +1265,14 @@ def measured_profile_rules(
         profile_rules.append({
             **evidence_rule,
             "egress_ids": source["egress_ids"],
-            "assertion_id": source["assertion_id"],
-            "assertion_result": source["assertion_result"],
-            "sample_scope": source["sample_scope"],
             "domain": source["domain"],
             "retained_claim": source["retained_claim"],
+            "evidence_channels": source["evidence_channels"],
+            "assertion_id": source["assertion_id"],
+            "assertion_result": source["assertion_result"],
+            "official_positive": {key: value for key, value in positive.items() if key != "evidence_refs"},
+            "official_negative": {key: value for key, value in negative.items() if key != "evidence_refs"},
+            "sample_scope": source["sample_scope"],
             "applicability_scope": source["applicability_scope"],
             "production_eligibility": source["production_eligibility"],
         })
@@ -1256,9 +1362,12 @@ def rebuild_inventories(
         item["egress_id"]: item for item in egress_observation["egresses"]
     }
     endpoint_kind_to_observation_kind = {
+        "count-tokens": "auxiliary",
         "messages-inference": "inference",
         "lifecycle-hello": "lifecycle",
+        "mcp-servers": "auxiliary",
         "oauth-profile": "auxiliary",
+        "oauth-token-refresh": "auxiliary",
         "policy-limits": "auxiliary",
         "remote-settings": "auxiliary",
     }
@@ -1410,7 +1519,7 @@ def scenario_plan(
             "ingress_protocol_classes": ["anthropic-messages"],
             "conditions": [
                 "approval=validation-only",
-                "entrypoint=sdk-cli",
+                "entrypoint=cli|sdk-cli",
                 "privacy=essential-traffic-no-telemetry",
             ],
             "assertion_ids": [f"PAIR-{spec_id}" for spec_id in spec_ids],
@@ -1507,6 +1616,9 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     tool_digest = control_tool_bundle_sha256()
 
     contract_paths = [repository_path(value, "contract_sources") for value in policy["contract_sources"]]
+    guide_paths = [path for path in contract_paths if path.name == "CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md"]
+    require(len(guide_paths) == 1, "contract_sources 必须且只能包含一份 Claude 指南")
+    guide_spec_ids = guide_rule_ids(guide_paths[0])
     contract_sources = external_bindings(contract_paths)
     old_contract_by_path = {
         value["path"]: value
@@ -1555,7 +1667,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     }, clock.next())
 
     discovery_binding_ref = seal_manifest(store, "operational_evidence", policy["persona"], "fw-f-discovery-clearance-binding", [
-        {"id": "candidate-resolution", "facts": {"binding": external_binding(clearance_paths["candidate_resolutions"]), "resolved": 32, "unresolved": 0}},
+        {"id": "candidate-resolution", "facts": {"binding": external_binding(clearance_paths["candidate_resolutions"]), "resolved": clearance["candidate_resolution_count"], "unresolved": 0}},
         {"id": "clearance-closure", "facts": {"binding": external_binding(clearance_paths["closure"]), "result": "passed"}},
         {"id": "discovery-ledger", "facts": {"binding": external_binding(clearance_paths["ledger"]), "resolved": 7368, "source": 7368}},
         {"id": "measured-rules", "facts": {"binding": external_binding(clearance_paths["measured_rules"]), "active_rules": len(target_rules), "all_assertions_passed": True}},
@@ -1611,7 +1723,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         ),
         policy["strict_egress_contracts"],
         target_rules,
-        policy["v3_evidence"],
+        policy["v21_evidence"],
     )
     schema_document = policy["profile_schema_document"]
     schema_document_sha256 = canonical_sha256(schema_document)
@@ -1783,11 +1895,52 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
     )
     request_rules = target_request_rules
     request_spec_ids = sorted(rule["spec_id"] for rule in request_rules)
-    require(
-        request_spec_ids == target_request_spec_ids
-        and len(request_spec_ids) == len(target_rules) == measured_rules["rule_count"],
-        "目标 SupportEnvelope 没有精确覆盖实测 request-egress 规则闭集",
+    measured_spec_ids = sorted(rule["spec_id"] for rule in measured_rules["entries"])
+    evidence_spec_ids = sorted(rule["spec_id"] for rule in evidence_rules)
+    snapshot_spec_ids = sorted(rule["spec_id"] for rule in target_profile["rules"])
+    support_spec_ids = list(request_spec_ids)
+    tls_rules = [rule for rule in measured_rules["entries"] if rule["domain"] == "tls"]
+    non_tls_rules = [rule for rule in measured_rules["entries"] if rule["domain"] != "tls"]
+    all_rule_id_sets_equal = (
+        guide_spec_ids
+        == measured_spec_ids
+        == snapshot_spec_ids
+        == evidence_spec_ids
+        == support_spec_ids
     )
+    require(
+        all_rule_id_sets_equal
+        and request_spec_ids == target_request_spec_ids
+        and len(request_spec_ids) == len(target_rules) == measured_rules["rule_count"],
+        "指南、RuleLedger、Snapshot、EvidencePackage 与 SupportEnvelope 规则闭集不一致",
+    )
+    all_tls_rules_bind_p_and_m = bool(tls_rules) and all(
+        set(rule["evidence_channels"]) == {"P", "M"} for rule in tls_rules
+    )
+    all_non_tls_rules_bind_r_and_m = bool(non_tls_rules) and all(
+        set(rule["evidence_channels"]) == {"R", "M"} for rule in non_tls_rules
+    )
+    all_rules_have_official_positive_and_negative = all(
+        rule["official_positive"]["result"] == "passed"
+        and rule["official_negative"]["result"] == "passed"
+        for rule in measured_rules["entries"]
+    )
+    require(all_tls_rules_bind_p_and_m, "TLS 规则没有全部严格绑定 P/M")
+    require(all_non_tls_rules_bind_r_and_m, "普通规则没有全部严格绑定 R/M")
+    require(all_rules_have_official_positive_and_negative, "存在缺少官方正负例的规则")
+    rule_reconciliation = {
+        "guide_rule_count": len(guide_spec_ids),
+        "measured_rule_ledger_count": len(measured_spec_ids),
+        "snapshot_rule_count": len(snapshot_spec_ids),
+        "evidence_package_rule_count": len(evidence_spec_ids),
+        "support_envelope_rule_count": len(support_spec_ids),
+        "all_rule_id_sets_equal": all_rule_id_sets_equal,
+        "tls_rule_count": len(tls_rules),
+        "all_tls_rules_bind_p_and_m": all_tls_rules_bind_p_and_m,
+        "non_tls_rule_count": len(non_tls_rules),
+        "all_non_tls_rules_bind_r_and_m": all_non_tls_rules_bind_r_and_m,
+        "all_rules_have_official_positive_and_negative": all_rules_have_official_positive_and_negative,
+    }
     support_ref = store.seal_object("support_envelope", {
         "schema_version": "official-client-support-envelope/v1",
         "persona": policy["persona"],
@@ -1796,7 +1949,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             "evidence-level-not-verified",
             "production-replacement",
         ]),
-        "target_spec_ids": request_spec_ids,
+        "target_spec_ids": support_spec_ids,
         "production_ingress_inventory_ref": ingress_ref,
         "boundary_assertion_refs": sorted([
             baseline_sample_ref,
@@ -1819,7 +1972,8 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         {"id": "transport", "facts": {"contract": policy["persona_contracts"]["transport_capability"], "profile": target_profile["transport"]}},
     ])
     compatibility_ref = seal_manifest(store, "compatibility_boundary", policy["persona"], "claude-compatibility-boundary", [
-        {"id": "count-tokens", "facts": {"ingress": "count-tokens-oauth", "ingress_disposition": "retained_legacy", "egress": "egress-claude-token-count", "egress_disposition": "non_persona_managed"}},
+        {"id": "count-tokens", "facts": {"ingress": "count-tokens-oauth", "ingress_disposition": "retained_legacy", "legacy_egress_alias": "egress-claude-token-count", "legacy_egress_disposition": "non_persona_managed", "official_client_egress": "egress-claude-count-tokens", "official_client_egress_disposition": "strict_validation_only"}},
+        {"id": "oauth-refresh", "facts": {"legacy_egress_alias": "egress-claude-oauth-refresh", "legacy_egress_disposition": "non_persona_managed", "official_client_egress": "egress-claude-oauth-token-refresh", "official_client_egress_disposition": "strict_validation_only"}},
         {"id": "lossy-third-party", "facts": {"ingresses": ["chat-completions-oauth", "responses-oauth"], "strict_pair_membership": "denied", "target_disposition": "retained_legacy"}},
         {"id": "official-messages", "facts": {"ingress": "messages-oauth", "translation": "lossless-required", "target_disposition": "migrated_strict"}},
         {"id": "response-boundary", "facts": {"supporting_fact": "FACT-2_1_226-RESPONSE-COMPATIBILITY", "strict_request_denominator": "excluded"}},
@@ -2038,6 +2192,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
             "fw_c_receipt_count": len(fw_c_receipts),
             "result": "passed",
         },
+        "rule_reconciliation": rule_reconciliation,
         "store": {
             "status": status,
             "replay": replay,
@@ -2069,6 +2224,7 @@ def build(args: argparse.Namespace) -> dict[str, Any]:
         "support_rule_count": len(request_rules),
         "discovery_count": clearance["source_discovery_count"],
         "unresolved_discovery_count": 0,
+        "rule_reconciliation": rule_reconciliation,
         "references": references,
         "result": "passed",
     }

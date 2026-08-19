@@ -5,8 +5,8 @@
 SemanticRuleCandidate、RuleLedger 与受审策略组合成追加式 FW-F 制品：
 
 * DiscoveryDispositionLedger：每个 discovery_id 恰好一个已解决记录；
-* CandidateResolutionLedger：每个 CAND-* 恰好一个终态解析；
-* MeasuredRuleLedger：只包含通过 2.1.226 真实 R/M 断言的活动 SPEC；
+* CandidateResolutionLedger：593 个正交候选各自恰好一个终态解析；
+* MeasuredRuleLedger：普通规则只接受 R/M，TLS 规则只接受 P/M；
 * WithdrawnRuleProposals：逐条撤回 v1 机械拆分产生的 97 条提案；
 * SemanticContextFacts：历史文档原子归属的稳定语义事实；
 * Closure：缺失、重复、未决、循环引用等门禁计数。
@@ -37,20 +37,21 @@ from tools.official_client_control.canonical import (  # noqa: E402
 )
 
 
-SCHEMA_POLICY = "claude-code-fw-f-discovery-clearance-policy/v2"
+SCHEMA_POLICY = "claude-code-fw-f-discovery-clearance-policy/v3"
 SCHEMA_DISCOVERY = "claude-code-fw-e-discovery-inventory/v1"
 SCHEMA_CANDIDATES = "claude-code-fw-e-semantic-candidates/v1"
 SCHEMA_RULE_ASSESSMENTS = "claude-code-fw-e-rule-assessments/v2"
 SCHEMA_DOCUMENT_ATOMS = "claude-code-fw-e-hitcc-document-atoms/v2"
 SCHEMA_EGRESS_INVENTORY = "official-client-egress-disposition-inventory/v1"
-SCHEMA_LEDGER = "claude-code-fw-f-discovery-disposition-ledger/v2"
-SCHEMA_CANDIDATE_RESOLUTIONS = "claude-code-fw-f-candidate-resolution-ledger/v2"
-SCHEMA_MEASURED_RULES = "claude-code-fw-f-measured-rule-ledger/v2"
+SCHEMA_LEDGER = "claude-code-fw-f-discovery-disposition-ledger/v3"
+SCHEMA_CANDIDATE_DISPOSITIONS = "claude-code-fw-f-candidate-disposition-ledger/v1"
+SCHEMA_CANDIDATE_RESOLUTIONS = "claude-code-fw-f-candidate-resolution-ledger/v3"
+SCHEMA_MEASURED_RULES = "claude-code-fw-f-measured-rule-ledger/v3"
 SCHEMA_PRIOR_RULE_ADDITIONS = "claude-code-fw-f-rule-ledger-additions/v1"
-SCHEMA_WITHDRAWN_PROPOSALS = "claude-code-fw-f-withdrawn-rule-proposals/v1"
-SCHEMA_CONTEXT_FACTS = "claude-code-fw-f-semantic-context-facts/v2"
-SCHEMA_MANAGED_FACTS = "claude-code-fw-f-managed-egress-facts/v2"
-SCHEMA_CLOSURE = "claude-code-fw-f-discovery-clearance-closure/v3"
+SCHEMA_WITHDRAWN_PROPOSALS = "claude-code-fw-f-withdrawn-rule-proposals/v2"
+SCHEMA_CONTEXT_FACTS = "claude-code-fw-f-semantic-context-facts/v3"
+SCHEMA_MANAGED_FACTS = "claude-code-fw-f-managed-egress-facts/v3"
+SCHEMA_CLOSURE = "claude-code-fw-f-discovery-clearance-closure/v4"
 
 MARKDOWN_LINK_RE = re.compile(r"^\s*\[[^\]]+\]\([^\)]+\)\s*$")
 
@@ -121,37 +122,33 @@ def historical_rule_fact_id(spec_id: str) -> str:
     return f"FACT-FW-E-HISTORICAL-{spec_id}-NOT-MEASURED"
 
 
+def withdrawn_proposal_fact_id(spec_id: str) -> str:
+    """为未形成活动规则的 v1 机械提案生成具名终态事实。"""
+
+    return f"FACT-WITHDRAWN-V1-{spec_id}"
+
+
 def validate_policy(
     policy: dict[str, Any],
-    candidate_ids: set[str],
     context_paths: set[str],
-    measured_spec_ids: set[str],
     current_egress_ids: set[str],
 ) -> tuple[
-    dict[str, dict[str, Any]],
     dict[str, dict[str, Any]],
     dict[str, dict[str, Any]],
     set[str],
     list[dict[str, Any]],
 ]:
-    """校验策略是否完整覆盖候选、文档、实测规则和受管出站引用。"""
+    """校验动态策略、文档归属、旧提案和受管出站引用。"""
 
     require_schema(policy, SCHEMA_POLICY, "clearance policy")
-
-    resolutions = policy.get("candidate_resolutions")
-    require(isinstance(resolutions, list), "policy.candidate_resolutions 必须是数组")
-    resolution_ids = [value.get("candidate_id") for value in resolutions if isinstance(value, dict)]
-    require(len(resolution_ids) == len(resolutions), "candidate resolution 必须是对象并声明 candidate_id")
-    require_unique(resolution_ids, "candidate resolution")
-    require(set(resolution_ids) == candidate_ids, "candidate resolution 与 SemanticRuleCandidate ID 集合不一致")
-
-    declared_measured = policy.get("measured_rule_ids")
+    require("measured_rule_ids" not in policy, "v3 策略不得预设 measured_rule_ids 或规则数")
+    require("candidate_resolutions" not in policy, "v3 策略不得复制动态候选终态")
+    require(policy.get("measured_rule_source") == "measured-rule-ledger.json", "动态规则来源声明不匹配")
+    require(policy.get("candidate_resolution_source") == "candidate-disposition-ledger.json", "动态候选来源声明不匹配")
     require(
-        isinstance(declared_measured, list)
-        and declared_measured == sorted(set(declared_measured)),
-        "policy.measured_rule_ids 必须严格排序且无重复",
+        "unmeasured_feature_boundary" not in json.dumps(policy, ensure_ascii=False).lower(),
+        "策略仍包含禁止的 unmeasured_feature_boundary",
     )
-    require(set(declared_measured) == measured_spec_ids, "策略与 MeasuredRuleLedger 的规则集合不一致")
 
     proposals = policy.get("invalid_v1_rule_proposals")
     require(isinstance(proposals, list), "policy.invalid_v1_rule_proposals 必须是数组")
@@ -164,6 +161,8 @@ def validate_policy(
         spec_id = proposal["spec_id"]
         require(spec_id.startswith("SPEC-"), f"非法 v1 提案 ID：{spec_id}")
         require(isinstance(proposal.get("retained_claim"), str) and proposal["retained_claim"], f"{spec_id} 缺少提案命题")
+        require(proposal.get("assertion_id") == f"PAIR-{spec_id}", f"{spec_id} 缺少规范 PAIR 身份")
+        require(isinstance(proposal.get("scope"), str) and proposal["scope"], f"{spec_id} 缺少适用范围")
         proposal_by_id[spec_id] = proposal
 
     managed_values = policy.get("managed_egress_facts")
@@ -204,38 +203,7 @@ def validate_policy(
         document_by_path[value["path"]] = {**value, "managed_egress_ids": managed_refs}
     require_unique(document_fact_ids, "document fact")
 
-    resolution_by_id: dict[str, dict[str, Any]] = {}
-    allowed_binding_types = {"rule_bound", "supporting_fact_bound", "managed_egress_bound"}
-    for value in resolutions:
-        candidate_id = value["candidate_id"]
-        bindings = value.get("bindings")
-        require(isinstance(bindings, list) and bindings, f"{candidate_id} 没有终态绑定")
-        normalized_bindings: list[dict[str, Any]] = []
-        for binding in bindings:
-            require(isinstance(binding, dict), f"{candidate_id} binding 必须是对象")
-            binding_type = binding.get("binding_type")
-            require(binding_type in allowed_binding_types, f"{candidate_id} binding_type 非法：{binding_type}")
-            normalized = {"binding_type": binding_type}
-            if binding_type == "rule_bound":
-                spec_ids = sorted_strings(binding.get("spec_ids", []), f"{candidate_id}.spec_ids")
-                require(spec_ids, f"{candidate_id} rule_bound 没有 spec_ids")
-                require(set(spec_ids) <= measured_spec_ids, f"{candidate_id} 引用了非实测 SPEC")
-                normalized["spec_ids"] = spec_ids
-            elif binding_type == "supporting_fact_bound":
-                fact_ids = sorted_strings(binding.get("fact_ids", []), f"{candidate_id}.fact_ids")
-                require(fact_ids, f"{candidate_id} supporting_fact_bound 没有 fact_ids")
-                require(set(fact_ids) <= set(supporting_fact_ids), f"{candidate_id} 引用了未知 supporting fact")
-                normalized["fact_ids"] = fact_ids
-            else:
-                egress_ids = sorted_strings(binding.get("managed_egress_ids", []), f"{candidate_id}.managed_egress_ids")
-                require(egress_ids, f"{candidate_id} managed_egress_bound 没有 managed_egress_ids")
-                require(set(egress_ids) <= managed_id_set, f"{candidate_id} 引用了未知受管出站身份")
-                normalized["managed_egress_ids"] = egress_ids
-            normalized_bindings.append(normalized)
-        require(isinstance(value.get("rationale"), str) and value["rationale"], f"{candidate_id} 缺少 rationale")
-        resolution_by_id[candidate_id] = {**value, "bindings": normalized_bindings}
-
-    return resolution_by_id, document_by_path, proposal_by_id, managed_id_set, supporting_values
+    return document_by_path, proposal_by_id, managed_id_set, supporting_values
 
 
 def build_document_atom_index(document_atoms: dict[str, Any]) -> dict[str, dict[str, Any]]:
@@ -256,35 +224,110 @@ def build_document_atom_index(document_atoms: dict[str, Any]) -> dict[str, dict[
 
 def build_candidate_resolution_ledger(
     target_version: str,
-    candidates: dict[str, Any],
-    resolution_by_id: dict[str, dict[str, Any]],
+    semantic_candidates: dict[str, Any],
+    candidate_dispositions: dict[str, Any],
+    measured_spec_ids: set[str],
+    managed_id_set: set[str],
 ) -> dict[str, Any]:
-    """把全部语义候选追加解析成终态规则、事实或受管出站。"""
+    """把 593 个正交候选规范化为规则、事实或受管出站终态。"""
 
+    require_schema(candidate_dispositions, SCHEMA_CANDIDATE_DISPOSITIONS, "candidate dispositions")
+    require(candidate_dispositions.get("target_version") == target_version, "候选终态目标版本不一致")
+    require(candidate_dispositions.get("result") == "passed", "候选终态账本未通过")
+    source_entries = candidate_dispositions.get("entries")
+    require(isinstance(source_entries, list), "候选终态账本缺少 entries")
+    source_ids = [value.get("candidate_id") for value in source_entries if isinstance(value, dict)]
+    require(len(source_ids) == len(source_entries), "候选终态必须是对象并声明 candidate_id")
+    require_unique(source_ids, "正交候选终态")
+    require(
+        len(source_entries)
+        == candidate_dispositions.get("candidate_count")
+        == candidate_dispositions.get("resolved_count"),
+        "候选终态计数不一致",
+    )
+    require(candidate_dispositions.get("unresolved_count") == 0, "候选终态仍有未决项")
+
+    legacy_values = semantic_candidates.get("candidates")
+    require(isinstance(legacy_values, list), "SemanticRuleCandidate 缺少 candidates")
+    legacy_by_id = {value["id"]: value for value in legacy_values}
+    require(len(legacy_by_id) == len(legacy_values), "SemanticRuleCandidate ID 重复")
+    semantic_entries = {
+        value["candidate_id"]: value
+        for value in source_entries
+        if value.get("candidate_group") == "semantic_candidate_families"
+    }
+    require(set(semantic_entries) == set(legacy_by_id), "593 候选中的语义候选闭集与 FW-E 不一致")
+
+    allowed_dispositions = {
+        "rule_bound",
+        "supporting_fact_bound",
+        "managed_egress_bound",
+        "non_egress_proven",
+        "target_absent_proven",
+        "duplicate_bound",
+    }
     entries: list[dict[str, Any]] = []
-    for candidate in sorted(candidates.get("candidates", []), key=lambda value: value["id"]):
-        candidate_id = candidate["id"]
-        policy = resolution_by_id[candidate_id]
+    for candidate in sorted(source_entries, key=lambda value: value["candidate_id"]):
+        candidate_id = candidate["candidate_id"]
+        require(candidate.get("status") == "resolved", f"候选仍未解决：{candidate_id}")
+        disposition = candidate.get("disposition")
+        require(disposition in allowed_dispositions, f"候选终态非法：{candidate_id}={disposition}")
+        binding_ids = sorted_strings(candidate.get("binding_ids", []), f"{candidate_id}.binding_ids")
+        require(binding_ids, f"候选没有终态绑定：{candidate_id}")
+        if disposition == "rule_bound":
+            require(set(binding_ids) <= measured_spec_ids, f"候选引用非实测规则：{candidate_id}")
+            bindings = [{"binding_type": "rule_bound", "spec_ids": binding_ids}]
+        elif disposition == "managed_egress_bound":
+            require(set(binding_ids) <= managed_id_set, f"候选引用未知受管出站：{candidate_id}")
+            bindings = [{"binding_type": "managed_egress_bound", "managed_egress_ids": binding_ids}]
+        elif disposition == "non_egress_proven":
+            require(all(value.startswith("FACT-") for value in binding_ids), f"非出站候选必须绑定事实：{candidate_id}")
+            bindings = [{"binding_type": "non_egress_proven", "fact_ids": binding_ids}]
+        else:
+            require(all(value.startswith("FACT-") for value in binding_ids), f"候选事实绑定身份非法：{candidate_id}")
+            bindings = [{"binding_type": "supporting_fact_bound", "fact_ids": binding_ids}]
+
+        source_discovery_ids = sorted_strings(candidate.get("source_ids", []), f"{candidate_id}.source_ids")
+        if candidate_id in legacy_by_id:
+            require(
+                source_discovery_ids == sorted(set(legacy_by_id[candidate_id]["source_ids"])),
+                f"语义候选与 FW-E 发现项反向链接不一致：{candidate_id}",
+            )
+        require(isinstance(candidate.get("rationale"), str) and candidate["rationale"], f"候选缺少结论说明：{candidate_id}")
         entries.append(
             {
                 "candidate_id": candidate_id,
                 "fact_id": candidate_fact_id(candidate_id),
                 "status": "resolved",
-                "candidate_kind": candidate["candidate_kind"],
-                "domain": candidate["domain"],
-                "retained_claim": candidate["retained_claim"],
-                "source_ids": sorted(candidate["source_ids"]),
-                "source_count": len(candidate["source_ids"]),
-                "prior_evidence_level": candidate["evidence_level"],
-                "required_channels": candidate["required_channels"],
+                "candidate_group": candidate["candidate_group"],
+                "disposition": disposition,
+                "proposition": candidate.get("proposition", ""),
+                "source_ids": source_discovery_ids,
+                "source_count": len(source_discovery_ids),
+                "semantic_candidate_ids": sorted_strings(
+                    candidate.get("semantic_candidate_ids", []),
+                    f"{candidate_id}.semantic_candidate_ids",
+                ),
+                "historical_spec_ids": sorted_strings(
+                    candidate.get("historical_spec_ids", []),
+                    f"{candidate_id}.historical_spec_ids",
+                ),
+                "source_evidence_paths": sorted_strings(
+                    candidate.get("source_evidence_paths", []),
+                    f"{candidate_id}.source_evidence_paths",
+                ),
                 "production_eligibility": "denied_until_profile_approval",
-                "bindings": policy["bindings"],
-                "rationale": policy["rationale"],
+                "bindings": bindings,
+                "rationale": candidate["rationale"],
             }
         )
     return {
         "schema_version": SCHEMA_CANDIDATE_RESOLUTIONS,
         "target_version": target_version,
+        "source_candidate_disposition_sha256": canonical_sha256(candidate_dispositions),
+        "orthogonal_group_counts": dict(sorted(Counter(value["candidate_group"] for value in entries).items())),
+        "disposition_counts": dict(sorted(Counter(value["disposition"] for value in entries).items())),
+        "legacy_semantic_candidate_count": len(legacy_values),
         "candidate_count": len(entries),
         "resolved_count": len(entries),
         "unresolved_count": 0,
@@ -330,12 +373,12 @@ def build_withdrawn_rule_proposals(
             }
             rationale = "响应兼容不是客户端请求出站规则。"
         else:
-            disposition = "withdrawn_to_unmeasured_boundary"
+            disposition = "withdrawn_to_explicit_target_disposition"
             terminal_binding = {
                 "binding_type": "supporting_fact_bound",
-                "fact_ids": ["FACT-2_1_226-UNMEASURED-FEATURE-BOUNDARY"],
+                "fact_ids": [withdrawn_proposal_fact_id(spec_id)],
             }
-            rationale = "当前 2.1.226 具名 R 场景未触发该命题，静态线索和旧版本证据不足以生成规则。"
+            rationale = "目标 v21 全量候选与实测断言已经审查；该 v1 机械提案未形成独立原子规则，现以具名终态事实封存。"
         entries.append(
             {
                 "spec_id": spec_id,
@@ -358,6 +401,50 @@ def build_withdrawn_rule_proposals(
         "counts_by_disposition": dict(sorted(Counter(value["disposition"] for value in entries).items())),
         "entries": entries,
     }
+
+
+def build_terminal_fact_declarations(
+    candidate_ledger: dict[str, Any],
+    withdrawn_proposals: dict[str, Any],
+    already_declared: set[str],
+) -> list[dict[str, Any]]:
+    """为候选与旧提案引用的每个新增事实建立可反查声明。"""
+
+    declarations: dict[str, dict[str, Any]] = {}
+    for entry in candidate_ledger["entries"]:
+        for binding in entry["bindings"]:
+            for fact_id in binding.get("fact_ids", []):
+                if fact_id in already_declared:
+                    continue
+                value = declarations.setdefault(
+                    fact_id,
+                    {
+                        "fact_id": fact_id,
+                        "domain": "candidate_disposition",
+                        "disposition": entry["disposition"],
+                        "candidate_ids": [],
+                        "rationale": "该事实是 593 个正交候选逐项审查后的具名终态，不是活动画像规则。",
+                    },
+                )
+                value["candidate_ids"].append(entry["candidate_id"])
+
+    for entry in withdrawn_proposals["entries"]:
+        binding = entry["terminal_binding"]
+        for fact_id in binding.get("fact_ids", []):
+            if fact_id in already_declared or fact_id in declarations:
+                continue
+            declarations[fact_id] = {
+                "fact_id": fact_id,
+                "domain": "withdrawn_v1_proposal",
+                "disposition": entry["disposition"],
+                "proposal_spec_id": entry["spec_id"],
+                "rationale": entry["rationale"],
+            }
+
+    for value in declarations.values():
+        if "candidate_ids" in value:
+            value["candidate_ids"] = sorted(set(value["candidate_ids"]))
+    return [declarations[key] for key in sorted(declarations)]
 
 
 def build_context_facts(
@@ -440,6 +527,10 @@ def build_discovery_ledger(
     """为每个原始发现生成一个已解决记录和至少一个终态绑定。"""
 
     candidate_resolution_ids = {value["candidate_id"] for value in candidate_ledger["entries"]}
+    candidate_ids_by_source: dict[str, list[str]] = defaultdict(list)
+    for candidate in candidate_ledger["entries"]:
+        for source_id in candidate["source_ids"]:
+            candidate_ids_by_source[source_id].append(candidate["candidate_id"])
     entries: list[dict[str, Any]] = []
     for item in sorted(discovery.get("items", []), key=lambda value: value["discovery_id"]):
         discovery_id = item["discovery_id"]
@@ -472,13 +563,18 @@ def build_discovery_ledger(
             item.get("semantic_candidate_ids", []),
             f"{discovery_id}.semantic_candidate_ids",
         )
-        if semantic_candidate_ids:
-            require(set(semantic_candidate_ids) <= candidate_resolution_ids, f"发现项引用未解析候选：{discovery_id}")
+        linked_candidate_ids = sorted(set(candidate_ids_by_source.get(discovery_id, [])))
+        require(
+            semantic_candidate_ids == linked_candidate_ids,
+            f"发现项与 593 候选的双向链接不一致：{discovery_id}",
+        )
+        if linked_candidate_ids:
+            require(set(linked_candidate_ids) <= candidate_resolution_ids, f"发现项引用未解析候选：{discovery_id}")
             bindings.append(
                 {
                     "binding_type": "supporting_fact_bound",
-                    "fact_ids": [candidate_fact_id(value) for value in semantic_candidate_ids],
-                    "candidate_resolution_ids": semantic_candidate_ids,
+                    "fact_ids": [candidate_fact_id(value) for value in linked_candidate_ids],
+                    "candidate_resolution_ids": linked_candidate_ids,
                     "evidence_role": "candidate_decomposition_evidence",
                 }
             )
@@ -588,6 +684,19 @@ def build_closure(
         if prior == "catalogued_context" and not terminal_types:
             catalogued_context_only += 1
 
+    for entry in candidate_ledger["entries"]:
+        for binding in entry["bindings"]:
+            referenced_spec_ids.update(binding.get("spec_ids", []))
+            referenced_fact_ids.update(binding.get("fact_ids", []))
+            referenced_managed_ids.update(binding.get("managed_egress_ids", []))
+    for entry in withdrawn_proposals.get("entries", []):
+        binding = entry.get("terminal_binding", {})
+        referenced_spec_ids.update(binding.get("spec_ids", []))
+        referenced_fact_ids.update(binding.get("fact_ids", []))
+        referenced_managed_ids.update(binding.get("managed_egress_ids", []))
+    for entry in context_facts.get("document_facts", []) + context_facts.get("entries", []):
+        referenced_managed_ids.update(entry.get("managed_egress_ids", []))
+
     candidate_source_links = {
         (source_id, entry["candidate_id"])
         for entry in candidate_ledger["entries"]
@@ -628,20 +737,27 @@ def build_closure(
         for value in measured_entries
         if value.get("assertion_result") != "passed"
     )
-    rules_without_r = sorted(
+    rules_without_primary_evidence = sorted(
         value.get("spec_id", "<missing>")
         for value in measured_entries
-        if "R" not in value.get("evidence_channels", [])
+        if ("P" if value.get("domain") == "tls" else "R")
+        not in value.get("evidence_channels", [])
     )
     rules_without_m = sorted(
         value.get("spec_id", "<missing>")
         for value in measured_entries
         if "M" not in value.get("evidence_channels", [])
     )
+    rules_without_positive_negative = sorted(
+        value.get("spec_id", "<missing>")
+        for value in measured_entries
+        if value.get("official_positive", {}).get("result") != "passed"
+        or value.get("official_negative", {}).get("result") != "passed"
+    )
     forbidden_active_rules = sorted(
         spec_id
         for spec_id in measured_spec_ids
-        if spec_id in {"SPEC-TLS-001", "SPEC-TLS-002", "SPEC-HDR-011"}
+        if spec_id == "SPEC-HDR-011"
         or spec_id.startswith("SPEC-RESP-")
         or spec_id in {"SPEC-HDR-034", "SPEC-HDR-035", "SPEC-HDR-036", "SPEC-STATE-002"}
     )
@@ -654,14 +770,24 @@ def build_closure(
 
     expected = policy.get("expected_counts", {})
     require(expected.get("discovery_count") == len(discovery_ids), "策略期望的 discovery_count 与输入不一致")
-    require(expected.get("candidate_count") == candidate_ledger["candidate_count"], "策略期望的 candidate_count 与输入不一致")
+    require(
+        expected.get("candidate_count") == candidate_ledger["legacy_semantic_candidate_count"],
+        "策略期望的 FW-E 语义候选数与输入不一致",
+    )
+    require(
+        expected.get("orthogonal_candidate_count") == candidate_ledger["candidate_count"],
+        "策略期望的正交候选分母与输入不一致",
+    )
     require(
         expected.get("catalogued_context_count")
         == sum(1 for value in discovery["items"] if value["disposition"] == "catalogued_context"),
         "策略期望的 catalogued_context_count 与输入不一致",
     )
 
-    expected_measured_count = len(policy["measured_rule_ids"])
+    forbidden_placeholder_count = sum(
+        "unmeasured_feature_boundary" in json.dumps(value, ensure_ascii=False).lower()
+        for value in (candidate_ledger, ledger, context_facts, withdrawn_proposals)
+    )
     gate_counts = {
         "missing_record_count": len(missing_ids),
         "extra_record_count": len(extra_ids),
@@ -676,17 +802,13 @@ def build_closure(
         "orphan_rule_reference_count": len(orphan_spec_ids),
         "orphan_supporting_fact_count": len(orphan_fact_ids),
         "orphan_managed_egress_reference_count": len(orphan_managed_ids),
-        "measured_rule_count_error": (
-            0
-            if measured_rules.get("rule_count")
-            == len(measured_spec_ids)
-            == expected_measured_count
-            else 1
-        ),
+        "measured_rule_count_error": 0 if measured_rules.get("rule_count") == len(measured_spec_ids) else 1,
         "measured_rule_assertion_error_count": len(failed_rule_assertions),
-        "measured_rule_r_evidence_error_count": len(rules_without_r),
+        "measured_rule_primary_evidence_error_count": len(rules_without_primary_evidence),
         "measured_rule_m_evidence_error_count": len(rules_without_m),
+        "measured_rule_positive_negative_error_count": len(rules_without_positive_negative),
         "forbidden_active_rule_count": len(forbidden_active_rules),
+        "forbidden_unmeasured_boundary_count": forbidden_placeholder_count,
         "withdrawn_proposal_count_error": 0 if withdrawn_proposals.get("proposal_count") == withdrawn_proposals.get("withdrawn_count") == 97 else 1,
         "invalid_withdrawal_count": len(invalid_withdrawals),
         "duplicate_cycle_count": 0,
@@ -698,6 +820,8 @@ def build_closure(
         "result": result,
         "source_discovery_count": len(discovery_ids),
         "resolved_record_count": len(ledger_ids),
+        "legacy_semantic_candidate_count": candidate_ledger["legacy_semantic_candidate_count"],
+        "orthogonal_candidate_count": candidate_ledger["candidate_count"],
         "candidate_resolution_count": candidate_ledger["resolved_count"],
         "measured_rule_count": measured_rules["rule_count"],
         "withdrawn_v1_proposal_count": withdrawn_proposals["withdrawn_count"],
@@ -720,8 +844,9 @@ def build_closure(
             "orphan_fact_ids": orphan_fact_ids,
             "orphan_managed_ids": orphan_managed_ids,
             "failed_rule_assertions": failed_rule_assertions,
-            "rules_without_r": rules_without_r,
+            "rules_without_primary_evidence": rules_without_primary_evidence,
             "rules_without_m": rules_without_m,
+            "rules_without_positive_negative": rules_without_positive_negative,
             "forbidden_active_rules": forbidden_active_rules,
             "invalid_withdrawals": invalid_withdrawals,
         },
@@ -738,6 +863,7 @@ def build_clearance(
     document_atoms_path: Path,
     egress_inventory_path: Path,
     measured_rules_path: Path,
+    candidate_dispositions_path: Path,
     prior_rule_additions_path: Path,
     policy_path: Path,
 ) -> dict[str, dict[str, Any]]:
@@ -749,6 +875,7 @@ def build_clearance(
     document_atoms = load_json(document_atoms_path)
     egress_outer = load_json(egress_inventory_path)
     measured_rules = load_json(measured_rules_path)
+    candidate_dispositions = load_json(candidate_dispositions_path)
     prior_rule_additions = load_json(prior_rule_additions_path)
     policy = load_json(policy_path)
 
@@ -767,6 +894,7 @@ def build_clearance(
         candidates.get("target_version"),
         rule_assessments.get("target_version"),
         measured_rules.get("target_version"),
+        candidate_dispositions.get("target_version"),
         policy.get("target_version"),
     }
     require(len(target_versions) == 1 and None not in target_versions, f"目标版本不一致：{target_versions}")
@@ -788,16 +916,14 @@ def build_clearance(
     measured_entries = measured_rules.get("entries")
     require(isinstance(measured_entries, list), "MeasuredRuleLedger 缺少 entries")
     measured_spec_ids = {value.get("spec_id") for value in measured_entries if isinstance(value, dict)}
-    declared_measured_ids = policy.get("measured_rule_ids")
     require(
-        isinstance(declared_measured_ids, list)
-        and declared_measured_ids == sorted(set(declared_measured_ids)),
-        "策略 measured_rule_ids 必须严格排序且无重复",
+        len(measured_spec_ids) == len(measured_entries) == measured_rules.get("rule_count"),
+        "实测规则集合存在重复或计数不一致",
     )
+    require(policy.get("measured_rule_source") == measured_rules_path.name, "策略没有绑定传入的动态规则账本")
     require(
-        measured_spec_ids == set(declared_measured_ids)
-        and len(measured_spec_ids) == len(measured_entries) == measured_rules.get("rule_count"),
-        "实测规则集合与策略闭集不一致或存在重复",
+        policy.get("candidate_resolution_source") == candidate_dispositions_path.name,
+        "策略没有绑定传入的动态候选终态账本",
     )
     strict_egress_ids = policy.get("strict_egress_ids")
     require(
@@ -826,21 +952,28 @@ def build_clearance(
         )
         require(set(egress_ids) <= set(strict_egress_ids), f"{spec_id} 引用了未批准 strict egress")
         measured_egress_ids.update(egress_ids)
-        require({"R", "M"} <= set(rule.get("evidence_channels", [])), f"{spec_id} 缺少 R/M 实测证据")
+        primary_channel = "P" if rule.get("domain") == "tls" else "R"
+        require({primary_channel, "M"} <= set(rule.get("evidence_channels", [])), f"{spec_id} 缺少 {primary_channel}/M 实测证据")
+        require(rule.get("official_positive", {}).get("result") == "passed", f"{spec_id} 缺少官方正例")
+        require(rule.get("official_negative", {}).get("result") == "passed", f"{spec_id} 缺少官方负例")
     require(measured_egress_ids == set(strict_egress_ids), "实测规则没有覆盖 strict egress 闭集")
     current_egress_ids = {value["egress_id"] for value in egress_inventory.get("entries", [])}
     context_items = [value for value in discovery_items if value["disposition"] == "catalogued_context"]
     context_paths = {value["evidence_paths"][-1] for value in context_items}
 
-    resolution_by_id, document_by_path, proposal_by_id, managed_id_set, supporting_facts = validate_policy(
+    document_by_path, proposal_by_id, managed_id_set, supporting_facts = validate_policy(
         policy,
-        candidate_ids,
         context_paths,
-        measured_spec_ids,
         current_egress_ids,
     )
     atom_index = build_document_atom_index(document_atoms)
-    candidate_ledger = build_candidate_resolution_ledger(target_version, candidates, resolution_by_id)
+    candidate_ledger = build_candidate_resolution_ledger(
+        target_version,
+        candidates,
+        candidate_dispositions,
+        measured_spec_ids,
+        managed_id_set,
+    )
     withdrawn_proposals = build_withdrawn_rule_proposals(
         target_version,
         proposal_by_id,
@@ -854,22 +987,31 @@ def build_clearance(
         elif spec_id.startswith("SPEC-RESP-"):
             disposition = "response_compatibility_only"
         else:
-            disposition = "historical_rule_not_measured_in_target_runtime"
+            disposition = "reconciled_without_independent_target_rule"
         historical_rule_facts.append(
             {
                 "fact_id": historical_rule_fact_id(spec_id),
-                "domain": "historical_rule_boundary",
+                "domain": "historical_rule_disposition",
                 "disposition": disposition,
                 "historical_spec_id": spec_id,
-                "rationale": "FW-E 原始发现永久保留，但该历史 SPEC 没有进入 2.1.226 的实测规则闭集。",
+                "rationale": "FW-E 原始发现永久保留；该历史命题与 v21 正式规则逐项对账后未作为独立目标规则保留。",
             }
         )
+    declared_policy_fact_ids = {value["fact_id"] for value in supporting_facts}
+    declared_base_fact_ids = declared_policy_fact_ids | {value["fact_id"] for value in historical_rule_facts}
+    terminal_facts = build_terminal_fact_declarations(
+        candidate_ledger,
+        withdrawn_proposals,
+        declared_base_fact_ids,
+    )
+    all_supporting_facts = supporting_facts + historical_rule_facts + terminal_facts
+    require_unique([value["fact_id"] for value in all_supporting_facts], "supporting fact declarations")
     context_facts, cluster_by_discovery = build_context_facts(
         target_version,
         context_items,
         atom_index,
         document_by_path,
-        supporting_facts + historical_rule_facts,
+        all_supporting_facts,
     )
     ledger = build_discovery_ledger(
         target_version,
@@ -900,6 +1042,7 @@ def build_clearance(
         "document_atoms": {"path": document_atoms_path.as_posix(), "sha256": sha256_file(document_atoms_path)},
         "egress_inventory": {"path": egress_inventory_path.as_posix(), "sha256": sha256_file(egress_inventory_path)},
         "measured_rules": {"path": measured_rules_path.as_posix(), "sha256": sha256_file(measured_rules_path)},
+        "candidate_dispositions": {"path": candidate_dispositions_path.as_posix(), "sha256": sha256_file(candidate_dispositions_path)},
         "prior_rule_additions": {"path": prior_rule_additions_path.as_posix(), "sha256": sha256_file(prior_rule_additions_path)},
         "policy": {"path": policy_path.as_posix(), "sha256": sha256_file(policy_path)},
     }
@@ -907,6 +1050,7 @@ def build_clearance(
         value["input_bindings"] = input_bindings
 
     return {
+        "measured-rule-ledger.json": measured_rules,
         "discovery-disposition-ledger.json": ledger,
         "candidate-resolution-ledger.json": candidate_ledger,
         "withdrawn-rule-proposals.json": withdrawn_proposals,
@@ -917,11 +1061,14 @@ def build_clearance(
 
 
 def write_outputs(output_dir: Path, outputs: dict[str, dict[str, Any]]) -> None:
-    """以规范 JSON 写入全新或显式允许覆盖的隔离输出目录。"""
+    """以规范 JSON 写入全新隔离目录，禁止覆盖历史证据。"""
 
-    output_dir.mkdir(parents=True, exist_ok=True)
+    require(not output_dir.exists(), f"输出目录已存在，禁止覆盖：{output_dir}")
+    output_dir.mkdir(parents=True, mode=0o700)
     for name, value in outputs.items():
-        (output_dir / name).write_bytes(canonical_json_bytes(value))
+        path = output_dir / name
+        path.write_bytes(canonical_json_bytes(value))
+        path.chmod(0o600)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -934,6 +1081,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--document-atoms", required=True, type=Path)
     parser.add_argument("--egress-inventory", required=True, type=Path)
     parser.add_argument("--measured-rules", required=True, type=Path)
+    parser.add_argument("--candidate-dispositions", required=True, type=Path)
     parser.add_argument("--prior-rule-additions", required=True, type=Path)
     parser.add_argument("--policy", required=True, type=Path)
     parser.add_argument("--output-dir", required=True, type=Path)
@@ -952,6 +1100,7 @@ def main(argv: list[str] | None = None) -> int:
             document_atoms_path=args.document_atoms,
             egress_inventory_path=args.egress_inventory,
             measured_rules_path=args.measured_rules,
+            candidate_dispositions_path=args.candidate_dispositions,
             prior_rule_additions_path=args.prior_rule_additions,
             policy_path=args.policy,
         )

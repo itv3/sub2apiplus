@@ -1,108 +1,22 @@
 {
-  "schema_version": "claude-code-fw-f-discovery-clearance-policy/v2",
+  "schema_version": "claude-code-fw-f-discovery-clearance-policy/v3",
   "target_version": "2.1.226",
   "target_binary_sha256": "4e9bec1177ce9690e8bd988b710ac24105e70da428dd094c5adcbbe786a55555",
-  "measured_rule_ids": [
-    "SPEC-AUTH-002",
-    "SPEC-BETA-008",
-    "SPEC-BODY-001",
-    "SPEC-BODY-002",
-    "SPEC-BODY-003",
-    "SPEC-BODY-004",
-    "SPEC-BODY-005",
-    "SPEC-BODY-007",
-    "SPEC-BODY-008",
-    "SPEC-BODY-009",
-    "SPEC-BODY-010",
-    "SPEC-BODY-011",
-    "SPEC-BODY-012",
-    "SPEC-BODY-013",
-    "SPEC-BODY-014",
-    "SPEC-BODY-015",
-    "SPEC-BODY-016",
-    "SPEC-BODY-017",
-    "SPEC-BODY-018",
-    "SPEC-BODY-019",
-    "SPEC-BODY-032",
-    "SPEC-BODY-039",
-    "SPEC-BODY-040",
-    "SPEC-BODY-041",
-    "SPEC-BODY-042",
-    "SPEC-BODY-043",
-    "SPEC-BODY-044",
-    "SPEC-BODY-045",
-    "SPEC-BODY-046",
-    "SPEC-BODY-047",
-    "SPEC-BODY-048",
-    "SPEC-BODY-049",
-    "SPEC-BODY-050",
-    "SPEC-CACHE-005",
-    "SPEC-CACHE-006",
-    "SPEC-CONN-002",
-    "SPEC-CONN-010",
-    "SPEC-CONN-016",
-    "SPEC-CONN-018",
-    "SPEC-CONN-019",
-    "SPEC-CONN-020",
-    "SPEC-CONN-021",
-    "SPEC-CONN-022",
-    "SPEC-CONN-023",
-    "SPEC-CONN-024",
-    "SPEC-EP-001",
-    "SPEC-EP-002",
-    "SPEC-EP-003",
-    "SPEC-EP-004",
-    "SPEC-EP-005",
-    "SPEC-EP-006",
-    "SPEC-EP-007",
-    "SPEC-EP-008",
-    "SPEC-HDR-001",
-    "SPEC-HDR-002",
-    "SPEC-HDR-003",
-    "SPEC-HDR-004",
-    "SPEC-HDR-005",
-    "SPEC-HDR-006",
-    "SPEC-HDR-007",
-    "SPEC-HDR-009",
-    "SPEC-HDR-012",
-    "SPEC-HDR-013",
-    "SPEC-HDR-014",
-    "SPEC-HDR-015",
-    "SPEC-HDR-016",
-    "SPEC-HDR-017",
-    "SPEC-HDR-018",
-    "SPEC-HDR-021",
-    "SPEC-HDR-022",
-    "SPEC-HDR-023",
-    "SPEC-HDR-024",
-    "SPEC-HDR-026",
-    "SPEC-HDR-029",
-    "SPEC-HDR-030",
-    "SPEC-HDR-031",
-    "SPEC-HDR-032",
-    "SPEC-HDR-042",
-    "SPEC-HDR-043",
-    "SPEC-HDR-044",
-    "SPEC-META-001",
-    "SPEC-META-002",
-    "SPEC-PROTO-001",
-    "SPEC-STATE-005",
-    "SPEC-STATE-006",
-    "SPEC-STATE-007",
-    "SPEC-TLS-003",
-    "SPEC-TOOL-018"
-  ],
   "strict_egress_ids": [
+    "egress-claude-count-tokens",
     "egress-claude-lifecycle-hello",
+    "egress-claude-mcp-servers",
     "egress-claude-messages-inference",
     "egress-claude-oauth-profile",
+    "egress-claude-oauth-token-refresh",
     "egress-claude-policy-limits",
     "egress-claude-settings"
   ],
   "expected_counts": {
     "discovery_count": 7368,
     "candidate_count": 32,
-    "catalogued_context_count": 4523
+    "catalogued_context_count": 4523,
+    "orthogonal_candidate_count": 593
   },
   "supporting_facts": [
     {
@@ -116,12 +30,6 @@
       "domain": "response_compatibility",
       "disposition": "supporting_fact_only",
       "rationale": "响应解析与兼容行为不属于客户端请求出站画像；当前 R 样本只用于请求规则，不把响应命题加入 SupportEnvelope。"
-    },
-    {
-      "fact_id": "FACT-2_1_226-UNMEASURED-FEATURE-BOUNDARY",
-      "domain": "evidence_boundary",
-      "disposition": "supporting_fact_only",
-      "rationale": "background、dispatch-id、usage-limit、server/deferred tool、cache diagnosis、MCP 降级、parent／后台派生及未触发附件机制仍缺少 2.1.226 具名 R/M；这些线索不得外推为画像规则。"
     },
     {
       "fact_id": "FACT-TARGET-AUXILIARY-SURFACE",
@@ -181,347 +89,1051 @@
       "disposition": "non_persona_managed_candidate",
       "scope": "语音输入、录音状态及其外部服务请求",
       "production_eligibility": "denied_until_profile_approval"
-    }
-  ],
-  "candidate_resolutions": [
-    {
-      "candidate_id": "CAND-AUTH-BEARER",
-      "bindings": [
-        {"binding_type": "rule_bound", "spec_ids": ["SPEC-AUTH-002"]},
-        {"binding_type": "supporting_fact_bound", "fact_ids": ["FACT-2_1_226-UNMEASURED-FEATURE-BOUNDARY"]}
-      ],
-      "rationale": "R 只实测最终 Bearer wire；凭据选择内部机制保留为未实测边界。"
     },
     {
-      "candidate_id": "CAND-BETA-CUSTOM",
-      "bindings": [{"binding_type": "rule_bound", "spec_ids": ["SPEC-BETA-008", "SPEC-HDR-003"]}],
-      "rationale": "固定 beta 序列与 ANTHROPIC_BETAS 的拆分、修剪、插入和不去重行为均由 2.1.226 单变量 R/M 实测覆盖。"
-    },
-    {
-      "candidate_id": "CAND-BG-SESSION",
-      "bindings": [{"binding_type": "supporting_fact_bound", "fact_ids": ["FACT-2_1_226-UNMEASURED-FEATURE-BOUNDARY"]}],
-      "rationale": "本 Campaign 没有 background 正例，不能把静态线索变成规则。"
-    },
-    {
-      "candidate_id": "CAND-BODY-BILLING-CONDITIONS",
-      "bindings": [{"binding_type": "rule_bound", "spec_ids": ["SPEC-BODY-007", "SPEC-BODY-014", "SPEC-BODY-015", "SPEC-BODY-016", "SPEC-BODY-017", "SPEC-BODY-018", "SPEC-BODY-019", "SPEC-BODY-039"]}],
-      "rationale": "attribution 固定字段、入口、关闭开关、workload、续轮和子代理条件均由 2.1.226 R/M 正负例直接覆盖。"
-    },
-    {
-      "candidate_id": "CAND-BODY-CCH-REWRITE",
-      "bindings": [
-        {"binding_type": "rule_bound", "spec_ids": ["SPEC-BODY-016", "SPEC-BODY-032"]},
-        {"binding_type": "supporting_fact_bound", "fact_ids": ["FACT-2_1_226-UNMEASURED-FEATURE-BOUNDARY"]}
-      ],
-      "rationale": "已实测 cch 最终格式及 non-stream fallback 重新派生关系；内部哈希算法仍只作为未实测实现边界。"
-    },
-    {
-      "candidate_id": "CAND-BODY-CONDITIONAL-FIELDS",
-      "bindings": [{"binding_type": "rule_bound", "spec_ids": ["SPEC-BODY-010", "SPEC-BODY-011", "SPEC-BODY-012", "SPEC-BODY-032", "SPEC-BODY-040", "SPEC-BODY-041", "SPEC-BODY-042", "SPEC-BODY-043"]}],
-      "rationale": "thinking、context_management、effort、max_tokens、gzip 与 non-stream 条件均有 2.1.226 单变量或隔离故障 R/M。"
-    },
-    {
-      "candidate_id": "CAND-CACHE-DIAGNOSIS",
-      "bindings": [{"binding_type": "supporting_fact_bound", "fact_ids": ["FACT-2_1_226-UNMEASURED-FEATURE-BOUNDARY"]}],
-      "rationale": "没有 cache diagnosis 正例和故障对照，不能生成规则。"
-    },
-    {
-      "candidate_id": "CAND-CACHE-MESSAGE",
-      "bindings": [
-        {"binding_type": "rule_bound", "spec_ids": ["SPEC-BODY-004", "SPEC-STATE-006", "SPEC-STATE-007"]},
-        {"binding_type": "supporting_fact_bound", "fact_ids": ["FACT-2_1_226-UNMEASURED-FEATURE-BOUNDARY"]}
-      ],
-      "rationale": "消息角色序列、resume 与 fork 的会话和历史关系已实测；更深层消息缓存选择、左移和数量边界仍保留为未实测边界。"
-    },
-    {
-      "candidate_id": "CAND-CACHE-SYSTEM-SCOPE",
-      "bindings": [
-        {"binding_type": "rule_bound", "spec_ids": ["SPEC-BODY-003", "SPEC-CACHE-005", "SPEC-CACHE-006"]},
-        {"binding_type": "supporting_fact_bound", "fact_ids": ["FACT-2_1_226-UNMEASURED-FEATURE-BOUNDARY"]}
-      ],
-      "rationale": "system cache_control 基线、全局／Sonnet 禁用和 1h 条件均已实测；MCP 降级仍保留为未实测边界。"
-    },
-    {
-      "candidate_id": "CAND-EP-AUXILIARY",
-      "bindings": [
-        {"binding_type": "rule_bound", "spec_ids": ["SPEC-EP-005", "SPEC-EP-006", "SPEC-EP-007", "SPEC-EP-008"]},
-        {"binding_type": "supporting_fact_bound", "fact_ids": ["FACT-TARGET-AUXILIARY-SURFACE"]},
-        {"binding_type": "managed_egress_bound", "managed_egress_ids": ["managed-target-auxiliary-surface", "managed-target-bridge-surface", "managed-target-mcp-surface", "managed-target-plugin-marketplace-surface", "managed-target-remote-settings-surface", "managed-target-sdk-resource-surface", "managed-target-voice-surface"]}
-      ],
-      "rationale": "已取得 R/M 的 policy_limits、settings、oauth/profile 与 essential 顺序正式进入独立 strict egress；其余辅助网络面继续绑定受管出站事实。"
-    },
-    {
-      "candidate_id": "CAND-EP-COUNTTOKENS",
-      "bindings": [{"binding_type": "managed_egress_bound", "managed_egress_ids": ["egress-claude-token-count"]}],
-      "rationale": "count_tokens 已有稳定受管出站身份，继续保持非 Persona strict。"
-    },
-    {
-      "candidate_id": "CAND-EP-FULLSET",
-      "bindings": [{"binding_type": "supporting_fact_bound", "fact_ids": ["FACT-TARGET-NETWORK-SURFACE"]}],
-      "rationale": "全网络面是 inventory 支撑事实，不是可执行单条 wire 规则。"
-    },
-    {
-      "candidate_id": "CAND-EP-SDK-SURFACE",
-      "bindings": [
-        {"binding_type": "supporting_fact_bound", "fact_ids": ["FACT-TARGET-SDK-RESOURCE-SURFACE"]},
-        {"binding_type": "managed_egress_bound", "managed_egress_ids": ["managed-target-sdk-resource-surface"]}
-      ],
-      "rationale": "SDK 资源面按受管网络能力登记，不混入推理 Persona 规则。"
-    },
-    {
-      "candidate_id": "CAND-FALLBACK-PROTOCOL",
-      "bindings": [{"binding_type": "rule_bound", "spec_ids": ["SPEC-BODY-032", "SPEC-BODY-050", "SPEC-CONN-018", "SPEC-CONN-023"]}],
-      "rationale": "stream→non-stream 与 Sonnet→Haiku fallback 均由官方 2.1.226 二进制在隔离故障计划中触发并绑定 R/M。"
-    },
-    {
-      "candidate_id": "CAND-HDR-CUSTOM-MATRIX",
-      "bindings": [{"binding_type": "rule_bound", "spec_ids": ["SPEC-HDR-029", "SPEC-HDR-030", "SPEC-HDR-031", "SPEC-HDR-032"]}],
-      "rationale": "custom header 的解析、非法名称 fail-close、受保护 request-id 和插入顺序均有 2.1.226 单变量正负例。"
-    },
-    {
-      "candidate_id": "CAND-HDR-DISPATCH-RETRY",
-      "bindings": [{"binding_type": "supporting_fact_bound", "fact_ids": ["FACT-2_1_226-UNMEASURED-FEATURE-BOUNDARY"]}],
-      "rationale": "没有 dispatch-id 正例或移除重试，不能生成规则。"
-    },
-    {
-      "candidate_id": "CAND-HDR-REMOTE-MATRIX",
-      "bindings": [
-        {"binding_type": "rule_bound", "spec_ids": ["SPEC-HDR-014", "SPEC-HDR-015", "SPEC-HDR-016", "SPEC-HDR-017", "SPEC-HDR-018", "SPEC-HDR-021", "SPEC-HDR-022", "SPEC-HDR-023", "SPEC-HDR-024", "SPEC-HDR-026"]},
-        {"binding_type": "supporting_fact_bound", "fact_ids": ["FACT-2_1_226-UNMEASURED-FEATURE-BOUNDARY"]}
-      ],
-      "rationale": "一级子代理、remote container/session、client-app 及组合顺序已由 2.1.226 R/M 实测；未覆盖的 parent／后台派生仍保留边界。"
-    },
-    {
-      "candidate_id": "CAND-HDR-TRACEPARENT",
-      "bindings": [{"binding_type": "supporting_fact_bound", "fact_ids": ["FACT-2_1_226-PRIVACY-DISABLED-RECORD"]}],
-      "rationale": "关闭遥测是官方允许状态；零 traceparent 只作隐私配置记录，不构成画像规则。"
-    },
-    {
-      "candidate_id": "CAND-HDR-USAGE-LIMIT",
-      "bindings": [{"binding_type": "supporting_fact_bound", "fact_ids": ["FACT-2_1_226-UNMEASURED-FEATURE-BOUNDARY"]}],
-      "rationale": "没有 usage-limit 正例和条件对照，不能生成规则。"
-    },
-    {
-      "candidate_id": "CAND-METADATA-EXTRA",
-      "bindings": [{"binding_type": "rule_bound", "spec_ids": ["SPEC-BODY-002", "SPEC-META-001", "SPEC-META-002"]}],
-      "rationale": "官方 metadata 基线、session 关系与 extra metadata 的浅合并顺序均有 2.1.226 R/M；未获准身份冲突仍由 Planner fail-close。"
-    },
-    {
-      "candidate_id": "CAND-NONMAIN-THREADS",
-      "bindings": [
-        {"binding_type": "rule_bound", "spec_ids": ["SPEC-BODY-003", "SPEC-BODY-004", "SPEC-BODY-019", "SPEC-HDR-014", "SPEC-HDR-015"]},
-        {"binding_type": "supporting_fact_bound", "fact_ids": ["FACT-2_1_226-UNMEASURED-FEATURE-BOUNDARY"]}
-      ],
-      "rationale": "一级 Agent 子代理由 R 实测；其他非主线程、后台和 remote 仍留作边界事实。"
-    },
-    {
-      "candidate_id": "CAND-QUOTA-PROBE",
-      "bindings": [{"binding_type": "managed_egress_bound", "managed_egress_ids": ["egress-claude-account-test"]}],
-      "rationale": "额度探测已有账号测试受管出站身份，不进入 Persona strict 规则。"
-    },
-    {
-      "candidate_id": "CAND-RETRY-529-FALLBACK",
-      "bindings": [{"binding_type": "rule_bound", "spec_ids": ["SPEC-BODY-050", "SPEC-CONN-010", "SPEC-CONN-022", "SPEC-CONN-023"]}],
-      "rationale": "529 重试上限和 fallback model 已由隔离故障 R/M 覆盖；context overflow 未触发且不从 529 外推。"
-    },
-    {
-      "candidate_id": "CAND-RETRY-MATRIX",
-      "bindings": [{"binding_type": "rule_bound", "spec_ids": ["SPEC-CONN-002", "SPEC-CONN-010", "SPEC-CONN-016", "SPEC-CONN-020", "SPEC-CONN-021", "SPEC-CONN-022", "SPEC-CONN-024"]}],
-      "rationale": "状态码、Retry-After、断连、次数上限、请求重派生和 timeout 均由同一 2.1.226 官方二进制的隔离故障矩阵覆盖。"
-    },
-    {
-      "candidate_id": "CAND-SERVER-ADVISOR",
-      "bindings": [{"binding_type": "supporting_fact_bound", "fact_ids": ["FACT-2_1_226-UNMEASURED-FEATURE-BOUNDARY"]}],
-      "rationale": "没有 advisor server tool 正例，不能生成规则。"
-    },
-    {
-      "candidate_id": "CAND-SERVER-WEBSEARCH",
-      "bindings": [{"binding_type": "supporting_fact_bound", "fact_ids": ["FACT-2_1_226-UNMEASURED-FEATURE-BOUNDARY"]}],
-      "rationale": "没有 web_search server tool 正例，不能生成规则。"
-    },
-    {
-      "candidate_id": "CAND-STREAM-NONSTREAM",
-      "bindings": [
-        {"binding_type": "rule_bound", "spec_ids": ["SPEC-BODY-013", "SPEC-BODY-032", "SPEC-CONN-018"]},
-        {"binding_type": "supporting_fact_bound", "fact_ids": ["FACT-2_1_226-RESPONSE-COMPATIBILITY"]}
-      ],
-      "rationale": "stream=true 基线、创建 404／已建流中断后的 non-stream 请求变化及禁用开关均已实测；响应适配仍只作支撑事实。"
-    },
-    {
-      "candidate_id": "CAND-SYSTEM-SEMANTICS",
-      "bindings": [
-        {"binding_type": "rule_bound", "spec_ids": ["SPEC-BODY-003", "SPEC-BODY-004", "SPEC-BODY-017", "SPEC-BODY-044", "SPEC-BODY-045", "SPEC-BODY-046", "SPEC-BODY-047", "SPEC-BODY-048", "SPEC-BODY-049"]},
-        {"binding_type": "supporting_fact_bound", "fact_ids": ["FACT-2_1_226-UNMEASURED-FEATURE-BOUNDARY"]}
-      ],
-      "rationale": "主请求、续轮、子代理、custom／append／exclude system、自定义 agent 与真实 TUI 形态均有 R/M；附件等未触发动态 section 保留边界。"
-    },
-    {
-      "candidate_id": "CAND-TOOLS-DEFERRED",
-      "bindings": [
-        {"binding_type": "rule_bound", "spec_ids": ["SPEC-BODY-005", "SPEC-TOOL-018"]},
-        {"binding_type": "supporting_fact_bound", "fact_ids": ["FACT-2_1_226-UNMEASURED-FEATURE-BOUNDARY"]}
-      ],
-      "rationale": "基础 tools 与 StructuredOutput 包装已实测；deferred tool 仍没有目标正例并保留边界。"
-    },
-    {
-      "candidate_id": "CAND-TOOLS-EXTENDED",
-      "bindings": [
-        {"binding_type": "rule_bound", "spec_ids": ["SPEC-BODY-005", "SPEC-TOOL-018"]},
-        {"binding_type": "supporting_fact_bound", "fact_ids": ["FACT-2_1_226-UNMEASURED-FEATURE-BOUNDARY"]}
-      ],
-      "rationale": "Agent/Bash 基础 schema 与 StructuredOutput 扩展已实测；其他工具扩展字段和裁剪仍保留边界。"
-    },
-    {
-      "candidate_id": "CAND-UA-CLI",
-      "bindings": [{"binding_type": "rule_bound", "spec_ids": ["SPEC-BODY-015", "SPEC-HDR-002", "SPEC-HDR-042", "SPEC-HDR-043"]}],
-      "rationale": "sdk-cli、真实 TUI、agent-sdk、client-app 与 workload 的 UA／attribution 条件均有 2.1.226 R/M。"
-    },
-    {
-      "candidate_id": "CAND-WORKLOAD",
-      "bindings": [{"binding_type": "rule_bound", "spec_ids": ["SPEC-BODY-039", "SPEC-HDR-043"]}],
-      "rationale": "workload 的 User-Agent 段和 billing attribution 条件由单变量及组合 R/M 实测覆盖。"
+      "managed_egress_id": "managed-target-network-surface",
+      "disposition": "non_persona_managed_candidate",
+      "scope": "未晋升为八类 strict egress 的目标网络发送点",
+      "production_eligibility": "denied_until_profile_approval"
     }
   ],
   "invalid_v1_rule_proposals": [
-    {"spec_id":"SPEC-AUTH-001","domain":"authentication","retained_claim":"第一方 OAuth 推理请求从当前 Persona 身份事实选择 OAuth access token 作为 SDK 凭据。","scope":"first-party OAuth inference authentication","assertion_id":"PAIR-SPEC-AUTH-001"},
-    {"spec_id":"SPEC-AUTH-002","domain":"authentication","retained_claim":"第一方 OAuth 推理请求最终发送 Authorization: Bearer <selected access token>。","scope":"first-party OAuth inference authentication","assertion_id":"PAIR-SPEC-AUTH-002"},
-    {"spec_id":"SPEC-BETA-002","domain":"beta","retained_claim":"自定义 beta 输入只从已批准环境或调用方字段解析为候选值序列。","scope":"custom beta composition","assertion_id":"PAIR-SPEC-BETA-002"},
-    {"spec_id":"SPEC-BETA-003","domain":"beta","retained_claim":"空值、格式非法或策略禁止的自定义 beta 值不进入最终 beta 序列。","scope":"custom beta composition","assertion_id":"PAIR-SPEC-BETA-003"},
-    {"spec_id":"SPEC-BETA-004","domain":"beta","retained_claim":"重复 beta 值在最终序列中只保留一次。","scope":"custom beta composition","assertion_id":"PAIR-SPEC-BETA-004"},
-    {"spec_id":"SPEC-BETA-005","domain":"beta","retained_claim":"官方 beta 与获准自定义 beta 按目标版本定义的相对顺序组成最终序列。","scope":"custom beta composition","assertion_id":"PAIR-SPEC-BETA-005"},
-    {"spec_id":"SPEC-BETA-006","domain":"beta","retained_claim":"只有缓存诊断场景成立时才加入目标版本的 cache diagnosis beta。","scope":"cache diagnosis request and retry","assertion_id":"PAIR-SPEC-BETA-006"},
-    {"spec_id":"SPEC-BETA-007","domain":"beta","retained_claim":"只有 server fallback 场景成立时才加入目标版本的 fallback beta。","scope":"server fallback protocol","assertion_id":"PAIR-SPEC-BETA-007"},
-    {"spec_id":"SPEC-HDR-027","domain":"header","retained_claim":"前台与后台会话按目标条件分别决定 x-app 的存在和值。","scope":"foreground and background sessions","assertion_id":"PAIR-SPEC-HDR-027"},
-    {"spec_id":"SPEC-HDR-028","domain":"header","retained_claim":"后台会话只在其目标身份事实成立时发送对应会话身份 Header。","scope":"foreground and background sessions","assertion_id":"PAIR-SPEC-HDR-028"},
-    {"spec_id":"SPEC-HDR-029","domain":"header","retained_claim":"ANTHROPIC_CUSTOM_HEADERS 按目标语法解析为有序 Header 候选。","scope":"custom header matrix","assertion_id":"PAIR-SPEC-HDR-029"},
-    {"spec_id":"SPEC-HDR-030","domain":"header","retained_claim":"格式非法、空名称或策略保护的自定义 Header 在发送前被拒绝或过滤。","scope":"custom header matrix","assertion_id":"PAIR-SPEC-HDR-030"},
-    {"spec_id":"SPEC-HDR-031","domain":"header","retained_claim":"自定义 Header 与官方 Header 按目标版本覆盖规则合并，受保护身份字段不能被静默替换。","scope":"custom header matrix","assertion_id":"PAIR-SPEC-HDR-031"},
-    {"spec_id":"SPEC-HDR-032","domain":"header","retained_claim":"获准自定义 Header 在最终 HTTP Header 序列中的位置由目标版本规则决定。","scope":"custom header matrix","assertion_id":"PAIR-SPEC-HDR-032"},
-    {"spec_id":"SPEC-HDR-033","domain":"header","retained_claim":"anthropic-dispatch-id 只在目标 dispatch 条件成立时发送，并使用对应 dispatch 身份值。","scope":"dispatch header retry","assertion_id":"PAIR-SPEC-HDR-033"},
-    {"spec_id":"SPEC-HDR-034","domain":"header","retained_claim":"traceparent 使用目标版本规定的 trace/span 标识格式。","scope":"trace context propagation","assertion_id":"PAIR-SPEC-HDR-034"},
-    {"spec_id":"SPEC-HDR-035","domain":"header","retained_claim":"traceparent 只在获准 provider、host 与环境门控同时成立时传播。","scope":"trace context propagation","assertion_id":"PAIR-SPEC-HDR-035"},
-    {"spec_id":"SPEC-HDR-036","domain":"header","retained_claim":"traceparent 中的 span 身份来自当前请求生命周期，不跨无关请求复用。","scope":"trace context propagation","assertion_id":"PAIR-SPEC-HDR-036"},
-    {"spec_id":"SPEC-HDR-037","domain":"header","retained_claim":"anthropic-usage-limit 只在 first-party 与对应功能门控成立时发送。","scope":"usage-limit header conditions","assertion_id":"PAIR-SPEC-HDR-037"},
-    {"spec_id":"SPEC-HDR-038","domain":"header","retained_claim":"anthropic-usage-limit 的存在由目标 depth 与 source 条件决定。","scope":"usage-limit header conditions","assertion_id":"PAIR-SPEC-HDR-038"},
-    {"spec_id":"SPEC-HDR-039","domain":"header","retained_claim":"anthropic-usage-limit 的最终值按目标 source 与限制身份格式生成。","scope":"usage-limit header conditions","assertion_id":"PAIR-SPEC-HDR-039"},
-    {"spec_id":"SPEC-HDR-040","domain":"header","retained_claim":"Claude CLI User-Agent 的版本分段来自目标 Release 身份，不从业务代码常量补造。","scope":"CLI User-Agent composition","assertion_id":"PAIR-SPEC-HDR-040"},
-    {"spec_id":"SPEC-HDR-041","domain":"header","retained_claim":"Claude CLI User-Agent 的 entrypoint 分段来自当前入口身份事实。","scope":"CLI User-Agent composition","assertion_id":"PAIR-SPEC-HDR-041"},
-    {"spec_id":"SPEC-HDR-042","domain":"header","retained_claim":"agent-sdk 模式成立时 User-Agent 按目标版本加入对应 agent-sdk 分段。","scope":"CLI User-Agent composition","assertion_id":"PAIR-SPEC-HDR-042"},
-    {"spec_id":"SPEC-HDR-043","domain":"header","retained_claim":"workload 身份存在时 User-Agent 按目标版本加入对应 workload 分段。","scope":"CLI User-Agent composition and workload identity","assertion_id":"PAIR-SPEC-HDR-043"},
-    {"spec_id":"SPEC-STATE-001","domain":"request_state","retained_claim":"前台与后台会话状态在 Planner 中保持独立，并只驱动各自获准的请求条件。","scope":"foreground and background sessions","assertion_id":"PAIR-SPEC-STATE-001"},
-    {"spec_id":"SPEC-STATE-002","domain":"request_state","retained_claim":"trace span 状态按请求生命周期创建、传播和结束。","scope":"trace context propagation","assertion_id":"PAIR-SPEC-STATE-002"},
-    {"spec_id":"SPEC-STATE-003","domain":"request_state","retained_claim":"subagent、sidechain、fork、hook 与 compact 请求保留各自的父子或派生 lineage。","scope":"non-main inference paths","assertion_id":"PAIR-SPEC-STATE-003"},
-    {"spec_id":"SPEC-STATE-004","domain":"request_state","retained_claim":"workload 身份仅在相应入口和生命周期内参与请求条件，不跨不相关会话泄漏。","scope":"workload identity","assertion_id":"PAIR-SPEC-STATE-004"},
-    {"spec_id":"SPEC-BODY-017","domain":"body","retained_claim":"计费归因 system block 只在目标版本规定的 first-party OAuth 与入口条件成立时注入。","scope":"billing attribution system block","assertion_id":"PAIR-SPEC-BODY-017"},
-    {"spec_id":"SPEC-BODY-018","domain":"body","retained_claim":"只有存在目标定义的前序请求关系时，计费归因才包含 cc_prev_req 及对应值。","scope":"billing attribution system block","assertion_id":"PAIR-SPEC-BODY-018"},
-    {"spec_id":"SPEC-BODY-019","domain":"body","retained_claim":"只有当前请求属于目标定义的子代理路径时，计费归因才包含 cc_is_subagent。","scope":"billing attribution system block","assertion_id":"PAIR-SPEC-BODY-019"},
-    {"spec_id":"SPEC-BODY-020","domain":"body","retained_claim":"发行物封装阶段把 cch 占位值改写为目标 Release 的最终客户端指纹，运行时不得补造。","scope":"packaged cch attribution value","assertion_id":"PAIR-SPEC-BODY-020"},
-    {"spec_id":"SPEC-BODY-021","domain":"body","retained_claim":"temperature 只在目标模型与推理配置允许时出现，并使用目标值。","scope":"conditional inference body fields","assertion_id":"PAIR-SPEC-BODY-021"},
-    {"spec_id":"SPEC-BODY-022","domain":"body","retained_claim":"speed 只在目标功能门控成立时出现，并使用目标值。","scope":"conditional inference body fields","assertion_id":"PAIR-SPEC-BODY-022"},
-    {"spec_id":"SPEC-BODY-023","domain":"body","retained_claim":"tool_choice 只在当前工具与调用场景要求时出现，并使用目标结构。","scope":"conditional inference body fields","assertion_id":"PAIR-SPEC-BODY-023"},
-    {"spec_id":"SPEC-BODY-024","domain":"body","retained_claim":"fallback 请求字段只在目标 fallback 状态成立时出现。","scope":"conditional inference body fields","assertion_id":"PAIR-SPEC-BODY-024"},
-    {"spec_id":"SPEC-BODY-025","domain":"body","retained_claim":"diagnostics 只在目标诊断状态成立时出现，并使用目标字段结构。","scope":"conditional inference body fields","assertion_id":"PAIR-SPEC-BODY-025"},
-    {"spec_id":"SPEC-BODY-026","domain":"body","retained_claim":"缓存诊断重试只在已有前序消息身份时发送 diagnostics.previous_message_id。","scope":"cache diagnosis request and retry","assertion_id":"PAIR-SPEC-BODY-026"},
-    {"spec_id":"SPEC-BODY-027","domain":"body","retained_claim":"fallback_credit_token 只在 server fallback 协议要求时出现，并来自对应响应状态。","scope":"server fallback protocol","assertion_id":"PAIR-SPEC-BODY-027"},
-    {"spec_id":"SPEC-BODY-028","domain":"body","retained_claim":"非主线程请求按其路径裁剪主线程上下文，只保留目标允许的消息与状态。","scope":"non-main inference paths","assertion_id":"PAIR-SPEC-BODY-028"},
-    {"spec_id":"SPEC-BODY-029","domain":"body","retained_claim":"各非主线程路径按目标类型生成对应 system block 形态。","scope":"non-main inference paths","assertion_id":"PAIR-SPEC-BODY-029"},
-    {"spec_id":"SPEC-BODY-030","domain":"body","retained_claim":"各非主线程路径按目标类型生成对应 messages 角色、顺序与内容形态。","scope":"non-main inference paths","assertion_id":"PAIR-SPEC-BODY-030"},
-    {"spec_id":"SPEC-BODY-031","domain":"body","retained_claim":"context overflow 恢复只在目标恢复状态成立时应用 max_tokens override。","scope":"529 and context fallback retry","assertion_id":"PAIR-SPEC-BODY-031"},
-    {"spec_id":"SPEC-BODY-032","domain":"body","retained_claim":"streaming 切换到 non-streaming 时只改写目标规定的 stream 相关请求字段。","scope":"stream to non-stream fallback","assertion_id":"PAIR-SPEC-BODY-032"},
-    {"spec_id":"SPEC-BODY-033","domain":"body","retained_claim":"目标 system identity 按 Persona 与入口事实注入，不由第三方请求静默补造。","scope":"system and context semantics","assertion_id":"PAIR-SPEC-BODY-033"},
-    {"spec_id":"SPEC-BODY-034","domain":"body","retained_claim":"userContext 只在目标来源与场景成立时注入，并保持目标内容边界。","scope":"system and context semantics","assertion_id":"PAIR-SPEC-BODY-034"},
-    {"spec_id":"SPEC-BODY-035","domain":"body","retained_claim":"systemContext 只在目标来源与场景成立时注入，并保持目标内容边界。","scope":"system and context semantics","assertion_id":"PAIR-SPEC-BODY-035"},
-    {"spec_id":"SPEC-BODY-036","domain":"body","retained_claim":"附件只按目标 materialization 规则进入 system 或 messages，不重复注入。","scope":"system and context semantics","assertion_id":"PAIR-SPEC-BODY-036"},
-    {"spec_id":"SPEC-BODY-037","domain":"body","retained_claim":"动态 system section 只在其目标 gate 成立时生成。","scope":"system and context semantics","assertion_id":"PAIR-SPEC-BODY-037"},
-    {"spec_id":"SPEC-BODY-038","domain":"body","retained_claim":"system identity、context、附件与动态 section 按目标顺序组成最终 system。","scope":"system and context semantics","assertion_id":"PAIR-SPEC-BODY-038"},
-    {"spec_id":"SPEC-BODY-039","domain":"body","retained_claim":"workload 身份只在目标条件成立时进入计费归因或其他获准请求字段。","scope":"workload identity","assertion_id":"PAIR-SPEC-BODY-039"},
-    {"spec_id":"SPEC-CONN-004","domain":"connection_retry","retained_claim":"缓存诊断不兼容响应成立时，客户端移除目标诊断字段并执行一次定向重试。","scope":"cache diagnosis request and retry","assertion_id":"PAIR-SPEC-CONN-004"},
-    {"spec_id":"SPEC-CONN-005","domain":"connection_retry","retained_claim":"server fallback 只在目标响应条件成立时启动，并把响应状态关联到后续 fallback 请求。","scope":"server fallback protocol","assertion_id":"PAIR-SPEC-CONN-005"},
-    {"spec_id":"SPEC-CONN-006","domain":"connection_retry","retained_claim":"携带 anthropic-dispatch-id 的请求在首事件前发生目标失败时，移除该 Header 后重试。","scope":"dispatch header retry","assertion_id":"PAIR-SPEC-CONN-006"},
-    {"spec_id":"SPEC-CONN-007","domain":"connection_retry","retained_claim":"连续 529 只有达到目标阈值和状态条件时才进入专用恢复分支。","scope":"529 and context fallback retry","assertion_id":"PAIR-SPEC-CONN-007"},
-    {"spec_id":"SPEC-CONN-008","domain":"connection_retry","retained_claim":"529 恢复分支只在目标条件成立时切换到目标 fallback model。","scope":"529 and context fallback retry","assertion_id":"PAIR-SPEC-CONN-008"},
-    {"spec_id":"SPEC-CONN-009","domain":"connection_retry","retained_claim":"context overflow 只按目标错误判定进入上下文恢复分支。","scope":"529 and context fallback retry","assertion_id":"PAIR-SPEC-CONN-009"},
-    {"spec_id":"SPEC-CONN-010","domain":"connection_retry","retained_claim":"可重试网络错误按目标 retry policy 进入应用层重试，其他网络错误终止。","scope":"application retry matrix","assertion_id":"PAIR-SPEC-CONN-010"},
-    {"spec_id":"SPEC-CONN-011","domain":"connection_retry","retained_claim":"401 只按目标认证恢复边界刷新、重试或终止。","scope":"application retry matrix","assertion_id":"PAIR-SPEC-CONN-011"},
-    {"spec_id":"SPEC-CONN-012","domain":"connection_retry","retained_claim":"408 按目标 retry policy 决定是否重试。","scope":"application retry matrix","assertion_id":"PAIR-SPEC-CONN-012"},
-    {"spec_id":"SPEC-CONN-013","domain":"connection_retry","retained_claim":"409 按目标冲突恢复状态决定重放、同步或终止。","scope":"application retry matrix","assertion_id":"PAIR-SPEC-CONN-013"},
-    {"spec_id":"SPEC-CONN-014","domain":"connection_retry","retained_claim":"429 按目标限流恢复策略与尝试边界重试。","scope":"application retry matrix","assertion_id":"PAIR-SPEC-CONN-014"},
-    {"spec_id":"SPEC-CONN-015","domain":"connection_retry","retained_claim":"目标可重试 5xx 状态进入应用层重试，非目标状态终止。","scope":"application retry matrix","assertion_id":"PAIR-SPEC-CONN-015"},
-    {"spec_id":"SPEC-CONN-016","domain":"connection_retry","retained_claim":"有效 Retry-After 存在时按目标解析和上限规则决定等待时间。","scope":"application retry matrix","assertion_id":"PAIR-SPEC-CONN-016"},
-    {"spec_id":"SPEC-CONN-017","domain":"connection_retry","retained_claim":"后台与持久模式只按各自目标策略改变重试资格、次数或等待，不共享未声明状态。","scope":"application retry matrix","assertion_id":"PAIR-SPEC-CONN-017"},
-    {"spec_id":"SPEC-CONN-018","domain":"connection_retry","retained_claim":"streaming 主路径只有在目标失败条件成立时切换到 non-streaming messages.create。","scope":"stream to non-stream fallback","assertion_id":"PAIR-SPEC-CONN-018"},
-    {"spec_id":"SPEC-CACHE-001","domain":"cache","retained_claim":"消息级 cache breakpoint 按目标候选选择规则落在消息边界。","scope":"message cache breakpoints","assertion_id":"PAIR-SPEC-CACHE-001"},
-    {"spec_id":"SPEC-CACHE-002","domain":"cache","retained_claim":"目标边界冲突时消息级 cache breakpoint 只按目标规则向左移动。","scope":"message cache breakpoints","assertion_id":"PAIR-SPEC-CACHE-002"},
-    {"spec_id":"SPEC-CACHE-003","domain":"cache","retained_claim":"fork 路径只钉住目标定义的历史 cache breakpoint。","scope":"message cache breakpoints","assertion_id":"PAIR-SPEC-CACHE-003"},
-    {"spec_id":"SPEC-CACHE-004","domain":"cache","retained_claim":"消息级 cache breakpoint 数量不超过目标版本边界。","scope":"message cache breakpoints","assertion_id":"PAIR-SPEC-CACHE-004"},
-    {"spec_id":"SPEC-CACHE-005","domain":"cache","retained_claim":"system prompt 的 cache_control 只加在目标允许的 block。","scope":"system prompt cache scopes","assertion_id":"PAIR-SPEC-CACHE-005"},
-    {"spec_id":"SPEC-CACHE-006","domain":"cache","retained_claim":"system prompt cache TTL 只在目标 gate 成立时出现，并使用目标值。","scope":"system prompt cache scopes","assertion_id":"PAIR-SPEC-CACHE-006"},
-    {"spec_id":"SPEC-CACHE-007","domain":"cache","retained_claim":"system prompt cache scope 由目标上下文和请求类型决定。","scope":"system prompt cache scopes","assertion_id":"PAIR-SPEC-CACHE-007"},
-    {"spec_id":"SPEC-CACHE-008","domain":"cache","retained_claim":"动态 system section 改变时按目标边界重新计算 cache 标记。","scope":"system prompt cache scopes","assertion_id":"PAIR-SPEC-CACHE-008"},
-    {"spec_id":"SPEC-CACHE-009","domain":"cache","retained_claim":"MCP 相关 system 内容在目标不兼容条件下按目标规则降级 cache 标记。","scope":"system prompt cache scopes","assertion_id":"PAIR-SPEC-CACHE-009"},
-    {"spec_id":"SPEC-META-001","domain":"metadata","retained_claim":"CLAUDE_CODE_EXTRA_METADATA 只有解析为对象时才参与 metadata 构造。","scope":"extra metadata composition","assertion_id":"PAIR-SPEC-META-001"},
-    {"spec_id":"SPEC-META-002","domain":"metadata","retained_claim":"合法额外 metadata 按目标规则与基础 metadata 浅合并。","scope":"extra metadata composition","assertion_id":"PAIR-SPEC-META-002"},
-    {"spec_id":"SPEC-META-003","domain":"metadata","retained_claim":"额外 metadata 不能静默覆盖目标保护的身份键；非法覆盖按目标错误边界处理。","scope":"extra metadata composition","assertion_id":"PAIR-SPEC-META-003"},
-    {"spec_id":"SPEC-TOOL-001","domain":"tool","retained_claim":"advisor server tool 只在目标模型、功能与会话条件成立时注入。","scope":"advisor server tool","assertion_id":"PAIR-SPEC-TOOL-001"},
-    {"spec_id":"SPEC-TOOL-002","domain":"tool","retained_claim":"advisor server tool 使用目标版本定义的 name、description 与 input schema。","scope":"advisor server tool","assertion_id":"PAIR-SPEC-TOOL-002"},
-    {"spec_id":"SPEC-TOOL-003","domain":"tool","retained_claim":"advisor server tool 的模型相关字段只来自目标模型事实。","scope":"advisor server tool","assertion_id":"PAIR-SPEC-TOOL-003"},
-    {"spec_id":"SPEC-TOOL-004","domain":"tool","retained_claim":"web_search server tool 只在目标功能、模型和策略条件成立时注入。","scope":"web search server tool","assertion_id":"PAIR-SPEC-TOOL-004"},
-    {"spec_id":"SPEC-TOOL-005","domain":"tool","retained_claim":"web_search server tool 使用目标版本定义的基础 schema。","scope":"web search server tool","assertion_id":"PAIR-SPEC-TOOL-005"},
-    {"spec_id":"SPEC-TOOL-006","domain":"tool","retained_claim":"web_search 的域名限制只按目标 allow/block 规则进入 schema。","scope":"web search server tool","assertion_id":"PAIR-SPEC-TOOL-006"},
-    {"spec_id":"SPEC-TOOL-007","domain":"tool","retained_claim":"web_search 的最大调用次数只在目标配置存在时进入 schema。","scope":"web search server tool","assertion_id":"PAIR-SPEC-TOOL-007"},
-    {"spec_id":"SPEC-TOOL-008","domain":"tool","retained_claim":"web_search 相关 tool_choice 只在目标调用场景成立时生成。","scope":"web search server tool","assertion_id":"PAIR-SPEC-TOOL-008"},
-    {"spec_id":"SPEC-TOOL-009","domain":"tool","retained_claim":"web_search 专用提示只在该 server tool 生效时注入。","scope":"web search server tool","assertion_id":"PAIR-SPEC-TOOL-009"},
-    {"spec_id":"SPEC-TOOL-010","domain":"tool","retained_claim":"目标允许延迟加载的工具才发送 defer_loading。","scope":"deferred tool loading","assertion_id":"PAIR-SPEC-TOOL-010"},
-    {"spec_id":"SPEC-TOOL-011","domain":"tool","retained_claim":"ToolSearch 只在存在延迟工具检索需求时进入最终 tools。","scope":"deferred tool loading","assertion_id":"PAIR-SPEC-TOOL-011"},
-    {"spec_id":"SPEC-TOOL-012","domain":"tool","retained_claim":"tool_reference 只引用当前已批准且可恢复的目标工具身份。","scope":"deferred tool loading","assertion_id":"PAIR-SPEC-TOOL-012"},
-    {"spec_id":"SPEC-TOOL-013","domain":"tool","retained_claim":"延迟工具被选中后，下一轮按目标规则恢复其完整 schema。","scope":"deferred tool loading","assertion_id":"PAIR-SPEC-TOOL-013"},
-    {"spec_id":"SPEC-TOOL-014","domain":"tool","retained_claim":"工具 strict 字段只在目标工具声明支持时发送。","scope":"extended tool schema fields","assertion_id":"PAIR-SPEC-TOOL-014"},
-    {"spec_id":"SPEC-TOOL-015","domain":"tool","retained_claim":"eager_input_streaming 只在目标工具和模型能力支持时发送。","scope":"extended tool schema fields","assertion_id":"PAIR-SPEC-TOOL-015"},
-    {"spec_id":"SPEC-TOOL-016","domain":"tool","retained_claim":"工具 cache_control 只在目标 cache 条件成立时发送。","scope":"extended tool schema fields","assertion_id":"PAIR-SPEC-TOOL-016"},
-    {"spec_id":"SPEC-TOOL-017","domain":"tool","retained_claim":"目标 API 不支持的扩展工具字段在最终请求前被显式裁剪。","scope":"extended tool schema fields","assertion_id":"PAIR-SPEC-TOOL-017"},
-    {"spec_id":"SPEC-RESP-004","domain":"response_compatibility","retained_claim":"non-stream fallback 响应只在兼容层转换为主循环可消费的目标响应形态。","scope":"stream to non-stream fallback","compatibility_class":"response_compat","assertion_id":"PAIR-SPEC-RESP-004"}
+    {
+      "spec_id": "SPEC-AUTH-001",
+      "domain": "authentication",
+      "retained_claim": "第一方 OAuth 推理请求从当前 Persona 身份事实选择 OAuth access token 作为 SDK 凭据。",
+      "scope": "first-party OAuth inference authentication",
+      "assertion_id": "PAIR-SPEC-AUTH-001"
+    },
+    {
+      "spec_id": "SPEC-AUTH-002",
+      "domain": "authentication",
+      "retained_claim": "第一方 OAuth 推理请求最终发送 Authorization: Bearer <selected access token>。",
+      "scope": "first-party OAuth inference authentication",
+      "assertion_id": "PAIR-SPEC-AUTH-002"
+    },
+    {
+      "spec_id": "SPEC-BETA-002",
+      "domain": "beta",
+      "retained_claim": "自定义 beta 输入只从已批准环境或调用方字段解析为候选值序列。",
+      "scope": "custom beta composition",
+      "assertion_id": "PAIR-SPEC-BETA-002"
+    },
+    {
+      "spec_id": "SPEC-BETA-003",
+      "domain": "beta",
+      "retained_claim": "空值、格式非法或策略禁止的自定义 beta 值不进入最终 beta 序列。",
+      "scope": "custom beta composition",
+      "assertion_id": "PAIR-SPEC-BETA-003"
+    },
+    {
+      "spec_id": "SPEC-BETA-004",
+      "domain": "beta",
+      "retained_claim": "重复 beta 值在最终序列中只保留一次。",
+      "scope": "custom beta composition",
+      "assertion_id": "PAIR-SPEC-BETA-004"
+    },
+    {
+      "spec_id": "SPEC-BETA-005",
+      "domain": "beta",
+      "retained_claim": "官方 beta 与获准自定义 beta 按目标版本定义的相对顺序组成最终序列。",
+      "scope": "custom beta composition",
+      "assertion_id": "PAIR-SPEC-BETA-005"
+    },
+    {
+      "spec_id": "SPEC-BETA-006",
+      "domain": "beta",
+      "retained_claim": "只有缓存诊断场景成立时才加入目标版本的 cache diagnosis beta。",
+      "scope": "cache diagnosis request and retry",
+      "assertion_id": "PAIR-SPEC-BETA-006"
+    },
+    {
+      "spec_id": "SPEC-BETA-007",
+      "domain": "beta",
+      "retained_claim": "只有 server fallback 场景成立时才加入目标版本的 fallback beta。",
+      "scope": "server fallback protocol",
+      "assertion_id": "PAIR-SPEC-BETA-007"
+    },
+    {
+      "spec_id": "SPEC-HDR-027",
+      "domain": "header",
+      "retained_claim": "前台与后台会话按目标条件分别决定 x-app 的存在和值。",
+      "scope": "foreground and background sessions",
+      "assertion_id": "PAIR-SPEC-HDR-027"
+    },
+    {
+      "spec_id": "SPEC-HDR-028",
+      "domain": "header",
+      "retained_claim": "后台会话只在其目标身份事实成立时发送对应会话身份 Header。",
+      "scope": "foreground and background sessions",
+      "assertion_id": "PAIR-SPEC-HDR-028"
+    },
+    {
+      "spec_id": "SPEC-HDR-029",
+      "domain": "header",
+      "retained_claim": "ANTHROPIC_CUSTOM_HEADERS 按目标语法解析为有序 Header 候选。",
+      "scope": "custom header matrix",
+      "assertion_id": "PAIR-SPEC-HDR-029"
+    },
+    {
+      "spec_id": "SPEC-HDR-030",
+      "domain": "header",
+      "retained_claim": "格式非法、空名称或策略保护的自定义 Header 在发送前被拒绝或过滤。",
+      "scope": "custom header matrix",
+      "assertion_id": "PAIR-SPEC-HDR-030"
+    },
+    {
+      "spec_id": "SPEC-HDR-031",
+      "domain": "header",
+      "retained_claim": "自定义 Header 与官方 Header 按目标版本覆盖规则合并，受保护身份字段不能被静默替换。",
+      "scope": "custom header matrix",
+      "assertion_id": "PAIR-SPEC-HDR-031"
+    },
+    {
+      "spec_id": "SPEC-HDR-032",
+      "domain": "header",
+      "retained_claim": "获准自定义 Header 在最终 HTTP Header 序列中的位置由目标版本规则决定。",
+      "scope": "custom header matrix",
+      "assertion_id": "PAIR-SPEC-HDR-032"
+    },
+    {
+      "spec_id": "SPEC-HDR-033",
+      "domain": "header",
+      "retained_claim": "anthropic-dispatch-id 只在目标 dispatch 条件成立时发送，并使用对应 dispatch 身份值。",
+      "scope": "dispatch header retry",
+      "assertion_id": "PAIR-SPEC-HDR-033"
+    },
+    {
+      "spec_id": "SPEC-HDR-034",
+      "domain": "header",
+      "retained_claim": "traceparent 使用目标版本规定的 trace/span 标识格式。",
+      "scope": "trace context propagation",
+      "assertion_id": "PAIR-SPEC-HDR-034"
+    },
+    {
+      "spec_id": "SPEC-HDR-035",
+      "domain": "header",
+      "retained_claim": "traceparent 只在获准 provider、host 与环境门控同时成立时传播。",
+      "scope": "trace context propagation",
+      "assertion_id": "PAIR-SPEC-HDR-035"
+    },
+    {
+      "spec_id": "SPEC-HDR-036",
+      "domain": "header",
+      "retained_claim": "traceparent 中的 span 身份来自当前请求生命周期，不跨无关请求复用。",
+      "scope": "trace context propagation",
+      "assertion_id": "PAIR-SPEC-HDR-036"
+    },
+    {
+      "spec_id": "SPEC-HDR-037",
+      "domain": "header",
+      "retained_claim": "anthropic-usage-limit 只在 first-party 与对应功能门控成立时发送。",
+      "scope": "usage-limit header conditions",
+      "assertion_id": "PAIR-SPEC-HDR-037"
+    },
+    {
+      "spec_id": "SPEC-HDR-038",
+      "domain": "header",
+      "retained_claim": "anthropic-usage-limit 的存在由目标 depth 与 source 条件决定。",
+      "scope": "usage-limit header conditions",
+      "assertion_id": "PAIR-SPEC-HDR-038"
+    },
+    {
+      "spec_id": "SPEC-HDR-039",
+      "domain": "header",
+      "retained_claim": "anthropic-usage-limit 的最终值按目标 source 与限制身份格式生成。",
+      "scope": "usage-limit header conditions",
+      "assertion_id": "PAIR-SPEC-HDR-039"
+    },
+    {
+      "spec_id": "SPEC-HDR-040",
+      "domain": "header",
+      "retained_claim": "Claude CLI User-Agent 的版本分段来自目标 Release 身份，不从业务代码常量补造。",
+      "scope": "CLI User-Agent composition",
+      "assertion_id": "PAIR-SPEC-HDR-040"
+    },
+    {
+      "spec_id": "SPEC-HDR-041",
+      "domain": "header",
+      "retained_claim": "Claude CLI User-Agent 的 entrypoint 分段来自当前入口身份事实。",
+      "scope": "CLI User-Agent composition",
+      "assertion_id": "PAIR-SPEC-HDR-041"
+    },
+    {
+      "spec_id": "SPEC-HDR-042",
+      "domain": "header",
+      "retained_claim": "agent-sdk 模式成立时 User-Agent 按目标版本加入对应 agent-sdk 分段。",
+      "scope": "CLI User-Agent composition",
+      "assertion_id": "PAIR-SPEC-HDR-042"
+    },
+    {
+      "spec_id": "SPEC-HDR-043",
+      "domain": "header",
+      "retained_claim": "workload 身份存在时 User-Agent 按目标版本加入对应 workload 分段。",
+      "scope": "CLI User-Agent composition and workload identity",
+      "assertion_id": "PAIR-SPEC-HDR-043"
+    },
+    {
+      "spec_id": "SPEC-STATE-001",
+      "domain": "request_state",
+      "retained_claim": "前台与后台会话状态在 Planner 中保持独立，并只驱动各自获准的请求条件。",
+      "scope": "foreground and background sessions",
+      "assertion_id": "PAIR-SPEC-STATE-001"
+    },
+    {
+      "spec_id": "SPEC-STATE-002",
+      "domain": "request_state",
+      "retained_claim": "trace span 状态按请求生命周期创建、传播和结束。",
+      "scope": "trace context propagation",
+      "assertion_id": "PAIR-SPEC-STATE-002"
+    },
+    {
+      "spec_id": "SPEC-STATE-003",
+      "domain": "request_state",
+      "retained_claim": "subagent、sidechain、fork、hook 与 compact 请求保留各自的父子或派生 lineage。",
+      "scope": "non-main inference paths",
+      "assertion_id": "PAIR-SPEC-STATE-003"
+    },
+    {
+      "spec_id": "SPEC-STATE-004",
+      "domain": "request_state",
+      "retained_claim": "workload 身份仅在相应入口和生命周期内参与请求条件，不跨不相关会话泄漏。",
+      "scope": "workload identity",
+      "assertion_id": "PAIR-SPEC-STATE-004"
+    },
+    {
+      "spec_id": "SPEC-BODY-017",
+      "domain": "body",
+      "retained_claim": "计费归因 system block 只在目标版本规定的 first-party OAuth 与入口条件成立时注入。",
+      "scope": "billing attribution system block",
+      "assertion_id": "PAIR-SPEC-BODY-017"
+    },
+    {
+      "spec_id": "SPEC-BODY-018",
+      "domain": "body",
+      "retained_claim": "只有存在目标定义的前序请求关系时，计费归因才包含 cc_prev_req 及对应值。",
+      "scope": "billing attribution system block",
+      "assertion_id": "PAIR-SPEC-BODY-018"
+    },
+    {
+      "spec_id": "SPEC-BODY-019",
+      "domain": "body",
+      "retained_claim": "只有当前请求属于目标定义的子代理路径时，计费归因才包含 cc_is_subagent。",
+      "scope": "billing attribution system block",
+      "assertion_id": "PAIR-SPEC-BODY-019"
+    },
+    {
+      "spec_id": "SPEC-BODY-020",
+      "domain": "body",
+      "retained_claim": "发行物封装阶段把 cch 占位值改写为目标 Release 的最终客户端指纹，运行时不得补造。",
+      "scope": "packaged cch attribution value",
+      "assertion_id": "PAIR-SPEC-BODY-020"
+    },
+    {
+      "spec_id": "SPEC-BODY-021",
+      "domain": "body",
+      "retained_claim": "temperature 只在目标模型与推理配置允许时出现，并使用目标值。",
+      "scope": "conditional inference body fields",
+      "assertion_id": "PAIR-SPEC-BODY-021"
+    },
+    {
+      "spec_id": "SPEC-BODY-022",
+      "domain": "body",
+      "retained_claim": "speed 只在目标功能门控成立时出现，并使用目标值。",
+      "scope": "conditional inference body fields",
+      "assertion_id": "PAIR-SPEC-BODY-022"
+    },
+    {
+      "spec_id": "SPEC-BODY-023",
+      "domain": "body",
+      "retained_claim": "tool_choice 只在当前工具与调用场景要求时出现，并使用目标结构。",
+      "scope": "conditional inference body fields",
+      "assertion_id": "PAIR-SPEC-BODY-023"
+    },
+    {
+      "spec_id": "SPEC-BODY-024",
+      "domain": "body",
+      "retained_claim": "fallback 请求字段只在目标 fallback 状态成立时出现。",
+      "scope": "conditional inference body fields",
+      "assertion_id": "PAIR-SPEC-BODY-024"
+    },
+    {
+      "spec_id": "SPEC-BODY-025",
+      "domain": "body",
+      "retained_claim": "diagnostics 只在目标诊断状态成立时出现，并使用目标字段结构。",
+      "scope": "conditional inference body fields",
+      "assertion_id": "PAIR-SPEC-BODY-025"
+    },
+    {
+      "spec_id": "SPEC-BODY-026",
+      "domain": "body",
+      "retained_claim": "缓存诊断重试只在已有前序消息身份时发送 diagnostics.previous_message_id。",
+      "scope": "cache diagnosis request and retry",
+      "assertion_id": "PAIR-SPEC-BODY-026"
+    },
+    {
+      "spec_id": "SPEC-BODY-027",
+      "domain": "body",
+      "retained_claim": "fallback_credit_token 只在 server fallback 协议要求时出现，并来自对应响应状态。",
+      "scope": "server fallback protocol",
+      "assertion_id": "PAIR-SPEC-BODY-027"
+    },
+    {
+      "spec_id": "SPEC-BODY-028",
+      "domain": "body",
+      "retained_claim": "非主线程请求按其路径裁剪主线程上下文，只保留目标允许的消息与状态。",
+      "scope": "non-main inference paths",
+      "assertion_id": "PAIR-SPEC-BODY-028"
+    },
+    {
+      "spec_id": "SPEC-BODY-029",
+      "domain": "body",
+      "retained_claim": "各非主线程路径按目标类型生成对应 system block 形态。",
+      "scope": "non-main inference paths",
+      "assertion_id": "PAIR-SPEC-BODY-029"
+    },
+    {
+      "spec_id": "SPEC-BODY-030",
+      "domain": "body",
+      "retained_claim": "各非主线程路径按目标类型生成对应 messages 角色、顺序与内容形态。",
+      "scope": "non-main inference paths",
+      "assertion_id": "PAIR-SPEC-BODY-030"
+    },
+    {
+      "spec_id": "SPEC-BODY-031",
+      "domain": "body",
+      "retained_claim": "context overflow 恢复只在目标恢复状态成立时应用 max_tokens override。",
+      "scope": "529 and context fallback retry",
+      "assertion_id": "PAIR-SPEC-BODY-031"
+    },
+    {
+      "spec_id": "SPEC-BODY-032",
+      "domain": "body",
+      "retained_claim": "streaming 切换到 non-streaming 时只改写目标规定的 stream 相关请求字段。",
+      "scope": "stream to non-stream fallback",
+      "assertion_id": "PAIR-SPEC-BODY-032"
+    },
+    {
+      "spec_id": "SPEC-BODY-033",
+      "domain": "body",
+      "retained_claim": "目标 system identity 按 Persona 与入口事实注入，不由第三方请求静默补造。",
+      "scope": "system and context semantics",
+      "assertion_id": "PAIR-SPEC-BODY-033"
+    },
+    {
+      "spec_id": "SPEC-BODY-034",
+      "domain": "body",
+      "retained_claim": "userContext 只在目标来源与场景成立时注入，并保持目标内容边界。",
+      "scope": "system and context semantics",
+      "assertion_id": "PAIR-SPEC-BODY-034"
+    },
+    {
+      "spec_id": "SPEC-BODY-035",
+      "domain": "body",
+      "retained_claim": "systemContext 只在目标来源与场景成立时注入，并保持目标内容边界。",
+      "scope": "system and context semantics",
+      "assertion_id": "PAIR-SPEC-BODY-035"
+    },
+    {
+      "spec_id": "SPEC-BODY-036",
+      "domain": "body",
+      "retained_claim": "附件只按目标 materialization 规则进入 system 或 messages，不重复注入。",
+      "scope": "system and context semantics",
+      "assertion_id": "PAIR-SPEC-BODY-036"
+    },
+    {
+      "spec_id": "SPEC-BODY-037",
+      "domain": "body",
+      "retained_claim": "动态 system section 只在其目标 gate 成立时生成。",
+      "scope": "system and context semantics",
+      "assertion_id": "PAIR-SPEC-BODY-037"
+    },
+    {
+      "spec_id": "SPEC-BODY-038",
+      "domain": "body",
+      "retained_claim": "system identity、context、附件与动态 section 按目标顺序组成最终 system。",
+      "scope": "system and context semantics",
+      "assertion_id": "PAIR-SPEC-BODY-038"
+    },
+    {
+      "spec_id": "SPEC-BODY-039",
+      "domain": "body",
+      "retained_claim": "workload 身份只在目标条件成立时进入计费归因或其他获准请求字段。",
+      "scope": "workload identity",
+      "assertion_id": "PAIR-SPEC-BODY-039"
+    },
+    {
+      "spec_id": "SPEC-CONN-004",
+      "domain": "connection_retry",
+      "retained_claim": "缓存诊断不兼容响应成立时，客户端移除目标诊断字段并执行一次定向重试。",
+      "scope": "cache diagnosis request and retry",
+      "assertion_id": "PAIR-SPEC-CONN-004"
+    },
+    {
+      "spec_id": "SPEC-CONN-005",
+      "domain": "connection_retry",
+      "retained_claim": "server fallback 只在目标响应条件成立时启动，并把响应状态关联到后续 fallback 请求。",
+      "scope": "server fallback protocol",
+      "assertion_id": "PAIR-SPEC-CONN-005"
+    },
+    {
+      "spec_id": "SPEC-CONN-006",
+      "domain": "connection_retry",
+      "retained_claim": "携带 anthropic-dispatch-id 的请求在首事件前发生目标失败时，移除该 Header 后重试。",
+      "scope": "dispatch header retry",
+      "assertion_id": "PAIR-SPEC-CONN-006"
+    },
+    {
+      "spec_id": "SPEC-CONN-007",
+      "domain": "connection_retry",
+      "retained_claim": "连续 529 只有达到目标阈值和状态条件时才进入专用恢复分支。",
+      "scope": "529 and context fallback retry",
+      "assertion_id": "PAIR-SPEC-CONN-007"
+    },
+    {
+      "spec_id": "SPEC-CONN-008",
+      "domain": "connection_retry",
+      "retained_claim": "529 恢复分支只在目标条件成立时切换到目标 fallback model。",
+      "scope": "529 and context fallback retry",
+      "assertion_id": "PAIR-SPEC-CONN-008"
+    },
+    {
+      "spec_id": "SPEC-CONN-009",
+      "domain": "connection_retry",
+      "retained_claim": "context overflow 只按目标错误判定进入上下文恢复分支。",
+      "scope": "529 and context fallback retry",
+      "assertion_id": "PAIR-SPEC-CONN-009"
+    },
+    {
+      "spec_id": "SPEC-CONN-010",
+      "domain": "connection_retry",
+      "retained_claim": "可重试网络错误按目标 retry policy 进入应用层重试，其他网络错误终止。",
+      "scope": "application retry matrix",
+      "assertion_id": "PAIR-SPEC-CONN-010"
+    },
+    {
+      "spec_id": "SPEC-CONN-011",
+      "domain": "connection_retry",
+      "retained_claim": "401 只按目标认证恢复边界刷新、重试或终止。",
+      "scope": "application retry matrix",
+      "assertion_id": "PAIR-SPEC-CONN-011"
+    },
+    {
+      "spec_id": "SPEC-CONN-012",
+      "domain": "connection_retry",
+      "retained_claim": "408 按目标 retry policy 决定是否重试。",
+      "scope": "application retry matrix",
+      "assertion_id": "PAIR-SPEC-CONN-012"
+    },
+    {
+      "spec_id": "SPEC-CONN-013",
+      "domain": "connection_retry",
+      "retained_claim": "409 按目标冲突恢复状态决定重放、同步或终止。",
+      "scope": "application retry matrix",
+      "assertion_id": "PAIR-SPEC-CONN-013"
+    },
+    {
+      "spec_id": "SPEC-CONN-014",
+      "domain": "connection_retry",
+      "retained_claim": "429 按目标限流恢复策略与尝试边界重试。",
+      "scope": "application retry matrix",
+      "assertion_id": "PAIR-SPEC-CONN-014"
+    },
+    {
+      "spec_id": "SPEC-CONN-015",
+      "domain": "connection_retry",
+      "retained_claim": "目标可重试 5xx 状态进入应用层重试，非目标状态终止。",
+      "scope": "application retry matrix",
+      "assertion_id": "PAIR-SPEC-CONN-015"
+    },
+    {
+      "spec_id": "SPEC-CONN-016",
+      "domain": "connection_retry",
+      "retained_claim": "有效 Retry-After 存在时按目标解析和上限规则决定等待时间。",
+      "scope": "application retry matrix",
+      "assertion_id": "PAIR-SPEC-CONN-016"
+    },
+    {
+      "spec_id": "SPEC-CONN-017",
+      "domain": "connection_retry",
+      "retained_claim": "后台与持久模式只按各自目标策略改变重试资格、次数或等待，不共享未声明状态。",
+      "scope": "application retry matrix",
+      "assertion_id": "PAIR-SPEC-CONN-017"
+    },
+    {
+      "spec_id": "SPEC-CONN-018",
+      "domain": "connection_retry",
+      "retained_claim": "streaming 主路径只有在目标失败条件成立时切换到 non-streaming messages.create。",
+      "scope": "stream to non-stream fallback",
+      "assertion_id": "PAIR-SPEC-CONN-018"
+    },
+    {
+      "spec_id": "SPEC-CACHE-001",
+      "domain": "cache",
+      "retained_claim": "消息级 cache breakpoint 按目标候选选择规则落在消息边界。",
+      "scope": "message cache breakpoints",
+      "assertion_id": "PAIR-SPEC-CACHE-001"
+    },
+    {
+      "spec_id": "SPEC-CACHE-002",
+      "domain": "cache",
+      "retained_claim": "目标边界冲突时消息级 cache breakpoint 只按目标规则向左移动。",
+      "scope": "message cache breakpoints",
+      "assertion_id": "PAIR-SPEC-CACHE-002"
+    },
+    {
+      "spec_id": "SPEC-CACHE-003",
+      "domain": "cache",
+      "retained_claim": "fork 路径只钉住目标定义的历史 cache breakpoint。",
+      "scope": "message cache breakpoints",
+      "assertion_id": "PAIR-SPEC-CACHE-003"
+    },
+    {
+      "spec_id": "SPEC-CACHE-004",
+      "domain": "cache",
+      "retained_claim": "消息级 cache breakpoint 数量不超过目标版本边界。",
+      "scope": "message cache breakpoints",
+      "assertion_id": "PAIR-SPEC-CACHE-004"
+    },
+    {
+      "spec_id": "SPEC-CACHE-005",
+      "domain": "cache",
+      "retained_claim": "system prompt 的 cache_control 只加在目标允许的 block。",
+      "scope": "system prompt cache scopes",
+      "assertion_id": "PAIR-SPEC-CACHE-005"
+    },
+    {
+      "spec_id": "SPEC-CACHE-006",
+      "domain": "cache",
+      "retained_claim": "system prompt cache TTL 只在目标 gate 成立时出现，并使用目标值。",
+      "scope": "system prompt cache scopes",
+      "assertion_id": "PAIR-SPEC-CACHE-006"
+    },
+    {
+      "spec_id": "SPEC-CACHE-007",
+      "domain": "cache",
+      "retained_claim": "system prompt cache scope 由目标上下文和请求类型决定。",
+      "scope": "system prompt cache scopes",
+      "assertion_id": "PAIR-SPEC-CACHE-007"
+    },
+    {
+      "spec_id": "SPEC-CACHE-008",
+      "domain": "cache",
+      "retained_claim": "动态 system section 改变时按目标边界重新计算 cache 标记。",
+      "scope": "system prompt cache scopes",
+      "assertion_id": "PAIR-SPEC-CACHE-008"
+    },
+    {
+      "spec_id": "SPEC-CACHE-009",
+      "domain": "cache",
+      "retained_claim": "MCP 相关 system 内容在目标不兼容条件下按目标规则降级 cache 标记。",
+      "scope": "system prompt cache scopes",
+      "assertion_id": "PAIR-SPEC-CACHE-009"
+    },
+    {
+      "spec_id": "SPEC-META-001",
+      "domain": "metadata",
+      "retained_claim": "CLAUDE_CODE_EXTRA_METADATA 只有解析为对象时才参与 metadata 构造。",
+      "scope": "extra metadata composition",
+      "assertion_id": "PAIR-SPEC-META-001"
+    },
+    {
+      "spec_id": "SPEC-META-002",
+      "domain": "metadata",
+      "retained_claim": "合法额外 metadata 按目标规则与基础 metadata 浅合并。",
+      "scope": "extra metadata composition",
+      "assertion_id": "PAIR-SPEC-META-002"
+    },
+    {
+      "spec_id": "SPEC-META-003",
+      "domain": "metadata",
+      "retained_claim": "额外 metadata 不能静默覆盖目标保护的身份键；非法覆盖按目标错误边界处理。",
+      "scope": "extra metadata composition",
+      "assertion_id": "PAIR-SPEC-META-003"
+    },
+    {
+      "spec_id": "SPEC-TOOL-001",
+      "domain": "tool",
+      "retained_claim": "advisor server tool 只在目标模型、功能与会话条件成立时注入。",
+      "scope": "advisor server tool",
+      "assertion_id": "PAIR-SPEC-TOOL-001"
+    },
+    {
+      "spec_id": "SPEC-TOOL-002",
+      "domain": "tool",
+      "retained_claim": "advisor server tool 使用目标版本定义的 name、description 与 input schema。",
+      "scope": "advisor server tool",
+      "assertion_id": "PAIR-SPEC-TOOL-002"
+    },
+    {
+      "spec_id": "SPEC-TOOL-003",
+      "domain": "tool",
+      "retained_claim": "advisor server tool 的模型相关字段只来自目标模型事实。",
+      "scope": "advisor server tool",
+      "assertion_id": "PAIR-SPEC-TOOL-003"
+    },
+    {
+      "spec_id": "SPEC-TOOL-004",
+      "domain": "tool",
+      "retained_claim": "web_search server tool 只在目标功能、模型和策略条件成立时注入。",
+      "scope": "web search server tool",
+      "assertion_id": "PAIR-SPEC-TOOL-004"
+    },
+    {
+      "spec_id": "SPEC-TOOL-005",
+      "domain": "tool",
+      "retained_claim": "web_search server tool 使用目标版本定义的基础 schema。",
+      "scope": "web search server tool",
+      "assertion_id": "PAIR-SPEC-TOOL-005"
+    },
+    {
+      "spec_id": "SPEC-TOOL-006",
+      "domain": "tool",
+      "retained_claim": "web_search 的域名限制只按目标 allow/block 规则进入 schema。",
+      "scope": "web search server tool",
+      "assertion_id": "PAIR-SPEC-TOOL-006"
+    },
+    {
+      "spec_id": "SPEC-TOOL-007",
+      "domain": "tool",
+      "retained_claim": "web_search 的最大调用次数只在目标配置存在时进入 schema。",
+      "scope": "web search server tool",
+      "assertion_id": "PAIR-SPEC-TOOL-007"
+    },
+    {
+      "spec_id": "SPEC-TOOL-008",
+      "domain": "tool",
+      "retained_claim": "web_search 相关 tool_choice 只在目标调用场景成立时生成。",
+      "scope": "web search server tool",
+      "assertion_id": "PAIR-SPEC-TOOL-008"
+    },
+    {
+      "spec_id": "SPEC-TOOL-009",
+      "domain": "tool",
+      "retained_claim": "web_search 专用提示只在该 server tool 生效时注入。",
+      "scope": "web search server tool",
+      "assertion_id": "PAIR-SPEC-TOOL-009"
+    },
+    {
+      "spec_id": "SPEC-TOOL-010",
+      "domain": "tool",
+      "retained_claim": "目标允许延迟加载的工具才发送 defer_loading。",
+      "scope": "deferred tool loading",
+      "assertion_id": "PAIR-SPEC-TOOL-010"
+    },
+    {
+      "spec_id": "SPEC-TOOL-011",
+      "domain": "tool",
+      "retained_claim": "ToolSearch 只在存在延迟工具检索需求时进入最终 tools。",
+      "scope": "deferred tool loading",
+      "assertion_id": "PAIR-SPEC-TOOL-011"
+    },
+    {
+      "spec_id": "SPEC-TOOL-012",
+      "domain": "tool",
+      "retained_claim": "tool_reference 只引用当前已批准且可恢复的目标工具身份。",
+      "scope": "deferred tool loading",
+      "assertion_id": "PAIR-SPEC-TOOL-012"
+    },
+    {
+      "spec_id": "SPEC-TOOL-013",
+      "domain": "tool",
+      "retained_claim": "延迟工具被选中后，下一轮按目标规则恢复其完整 schema。",
+      "scope": "deferred tool loading",
+      "assertion_id": "PAIR-SPEC-TOOL-013"
+    },
+    {
+      "spec_id": "SPEC-TOOL-014",
+      "domain": "tool",
+      "retained_claim": "工具 strict 字段只在目标工具声明支持时发送。",
+      "scope": "extended tool schema fields",
+      "assertion_id": "PAIR-SPEC-TOOL-014"
+    },
+    {
+      "spec_id": "SPEC-TOOL-015",
+      "domain": "tool",
+      "retained_claim": "eager_input_streaming 只在目标工具和模型能力支持时发送。",
+      "scope": "extended tool schema fields",
+      "assertion_id": "PAIR-SPEC-TOOL-015"
+    },
+    {
+      "spec_id": "SPEC-TOOL-016",
+      "domain": "tool",
+      "retained_claim": "工具 cache_control 只在目标 cache 条件成立时发送。",
+      "scope": "extended tool schema fields",
+      "assertion_id": "PAIR-SPEC-TOOL-016"
+    },
+    {
+      "spec_id": "SPEC-TOOL-017",
+      "domain": "tool",
+      "retained_claim": "目标 API 不支持的扩展工具字段在最终请求前被显式裁剪。",
+      "scope": "extended tool schema fields",
+      "assertion_id": "PAIR-SPEC-TOOL-017"
+    },
+    {
+      "spec_id": "SPEC-RESP-004",
+      "domain": "response_compatibility",
+      "retained_claim": "non-stream fallback 响应只在兼容层转换为主循环可消费的目标响应形态。",
+      "scope": "stream to non-stream fallback",
+      "compatibility_class": "response_compat",
+      "assertion_id": "PAIR-SPEC-RESP-004"
+    }
   ],
   "document_policies": [
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/01-runtime/03-input-compilation/01-au8-ihz-preprocessing-and-main-branches.md","fact_id":"FACT-PROMPT-INPUT-COMPILATION","domain":"prompt_input","egress_role":"profile_support","managed_egress_ids":[],"rationale":"输入预处理、远程 gate 与附件加载决定后续 prompt/body 输入，但文档原子本身不是独立 wire 规则。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/01-runtime/03-input-compilation/02-block-family-bu4-and-slash-command-results.md","fact_id":"FACT-MESSAGE-BLOCK-COMPILATION","domain":"message_body","egress_role":"profile_support","managed_egress_ids":[],"rationale":"block family 与 slash 结果属于最终 messages 的上游语义事实。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/01-runtime/03-input-compilation/03-userpromptsubmit-hooks-and-final-boundaries.md","fact_id":"FACT-HOOK-PROMPT-BOUNDARY","domain":"hook_context","egress_role":"profile_support","managed_egress_ids":[],"rationale":"UserPromptSubmit hook 的合并与时序支撑最终 prompt 构造。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/01-runtime/04-agent-loop-and-compaction/01-main-loop-state-caches-and-yield-surface.md","fact_id":"FACT-AGENT-LOOP-STATE","domain":"request_state","egress_role":"profile_support","managed_egress_ids":[],"rationale":"主循环、跨 turn 状态和 cache 是请求条件与生命周期的支撑事实。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/01-runtime/04-agent-loop-and-compaction/04-tool-round-next-turn-and-terminal-reasons.md","fact_id":"FACT-TOOL-ROUND-STATE","domain":"tool_state","egress_role":"profile_support","managed_egress_ids":[],"rationale":"工具轮、终止原因与下一 turn 状态支撑后续 messages 请求。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/01-runtime/10-control-plane-api-and-auxiliary-services/04-bridge-credentials-and-worker-lifecycle.md","fact_id":"FACT-BRIDGE-CREDENTIAL-LIFECYCLE","domain":"managed_bridge","egress_role":"managed_egress_support","managed_egress_ids":["managed-target-bridge-surface"],"rationale":"Bridge 凭据、worker、heartbeat 与刷新属于受管辅助出站，不进入推理 Persona wire。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/01-runtime/12-settings-and-configuration-system/02-loading-policy-and-merge.md","fact_id":"FACT-REMOTE-SETTINGS-LIFECYCLE","domain":"managed_settings","egress_role":"managed_egress_support","managed_egress_ids":["managed-target-remote-settings-surface"],"rationale":"远端设置、policy limits、缓存与刷新属于受管辅助出站及其状态事实。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/01-runtime/12-settings-and-configuration-system/05-key-consumers-and-rewrite-boundaries.md","fact_id":"FACT-SETTINGS-CONSUMER-BOUNDARY","domain":"profile_settings","egress_role":"profile_support","managed_egress_ids":["managed-target-remote-settings-surface"],"rationale":"设置键消费和重写边界决定画像输入，网络部分关联远端设置受管面。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/01-tools-hooks-and-permissions/02-hook-system/01-schema-instructionsloaded-and-event-inputs.md","fact_id":"FACT-HOOK-SCHEMA-INPUT","domain":"hook_context","egress_role":"profile_support","managed_egress_ids":[],"rationale":"Hook schema 与事件输入支撑 system/messages 构造，不独立承担 wire 断言。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/01-tools-hooks-and-permissions/02-hook-system/02-special-output-and-event-consumer-semantics.md","fact_id":"FACT-HOOK-OUTPUT-CONSUMER","domain":"hook_context","egress_role":"profile_support","managed_egress_ids":[],"rationale":"特殊 hook 输出及消费者决定上下文注入与本地副作用。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/01-tools-hooks-and-permissions/02-hook-system/03-runtime-order-and-cross-stage-timing.md","fact_id":"FACT-HOOK-RUNTIME-ORDER","domain":"hook_context","egress_role":"profile_support","managed_egress_ids":[],"rationale":"Hook 跨阶段时序支撑最终请求上下文顺序。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/01-tools-hooks-and-permissions/02-hook-system/04-instructionsloaded-non-main-thread-coverage-and-dispatch-boundaries.md","fact_id":"FACT-HOOK-NONMAIN-COVERAGE","domain":"nonmain_context","egress_role":"profile_support","managed_egress_ids":[],"rationale":"非主线程 InstructionsLoaded 覆盖决定派生请求上下文。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/01-tools-hooks-and-permissions/03-permission-mode-and-classifier.md","fact_id":"FACT-PERMISSION-MODE-STATE","domain":"tool_policy","egress_role":"profile_support","managed_egress_ids":[],"rationale":"权限状态与 classifier 决定可用工具和后续 tool schema。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/01-tools-hooks-and-permissions/04-policy-sandbox-and-approval-backends.md","fact_id":"FACT-POLICY-APPROVAL-BACKEND","domain":"tool_policy","egress_role":"profile_support","managed_egress_ids":["managed-target-bridge-surface","managed-target-mcp-surface"],"rationale":"审批 backend 与 sandbox 主要支撑工具可用性；remote/MCP 部分关联受管出站。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/02-instruction-discovery-and-rules/01-sources-qv-scan-and-compat-boundaries.md","fact_id":"FACT-INSTRUCTION-DISCOVERY","domain":"system_context","egress_role":"profile_support","managed_egress_ids":[],"rationale":"指令发现与兼容边界决定 system context 来源。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/02-instruction-discovery-and-rules/03-instructionsloaded-load-reason-and-hook-timing.md","fact_id":"FACT-INSTRUCTION-LOAD-TIMING","domain":"system_context","egress_role":"profile_support","managed_egress_ids":[],"rationale":"load reason 与 hook 时序决定 system context 生命周期。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/03-prompt-assembly-and-context-layering/02-attachment-order-skill-plan-meta-and-message-merge.md","fact_id":"FACT-PROMPT-LAYER-ORDER","domain":"system_context","egress_role":"profile_support","managed_egress_ids":[],"rationale":"附件、skill、plan、meta 与 messages 合并顺序支撑最终 body。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/04-non-main-thread-prompt-paths/04-compat-agent-definitions-and-instruction-entry.md","fact_id":"FACT-NONMAIN-INSTRUCTION-ENTRY","domain":"nonmain_context","egress_role":"profile_support","managed_egress_ids":[],"rationale":"兼容 agent 定义和指令入口支撑非主线程 system/messages。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/05-attachments-and-context-modifiers/01-attachment-lifecycle-and-producers.md","fact_id":"FACT-ATTACHMENT-LIFECYCLE","domain":"attachment_context","egress_role":"profile_support","managed_egress_ids":[],"rationale":"附件 producer 与生命周期支撑 body materialization。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/05-attachments-and-context-modifiers/02-high-value-attachment-payloads-and-materialization.md","fact_id":"FACT-ATTACHMENT-MATERIALIZATION","domain":"attachment_context","egress_role":"profile_support","managed_egress_ids":[],"rationale":"高价值附件 payload 与 materialization 支撑最终 system/messages。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/05-attachments-and-context-modifiers/03-context-modifier-and-executor-consumers.md","fact_id":"FACT-CONTEXT-MODIFIER-CONSUMER","domain":"attachment_context","egress_role":"profile_support","managed_egress_ids":[],"rationale":"context modifier 消费方决定上下文进入请求的边界。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/06-context-runtime-and-tool-use-context.md","fact_id":"FACT-TOOL-USE-CONTEXT","domain":"tool_context","egress_role":"profile_support","managed_egress_ids":[],"rationale":"tool-use context 与 runtime 状态支撑下一轮 messages 和 cache。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/01-resume-fork-sidechain-and-subagents/02-agent-team-and-task-model.md","fact_id":"FACT-AGENT-TEAM-MODEL","domain":"nonmain_context","egress_role":"profile_support","managed_egress_ids":[],"rationale":"Agent Team 与 task 模型支撑非主线程 lineage 和请求条件。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/01-resume-fork-sidechain-and-subagents/03-agent-team-mailbox-and-approval.md","fact_id":"FACT-AGENT-MAILBOX-APPROVAL","domain":"nonmain_context","egress_role":"profile_support","managed_egress_ids":["managed-target-bridge-surface"],"rationale":"mailbox 与审批状态支撑 agent 请求；远程协作部分关联 Bridge 受管面。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/01-resume-fork-sidechain-and-subagents/04-teammate-runtime-and-backends/01-task-shapes-backend-selection-and-spawn.md","fact_id":"FACT-TEAMMATE-BACKEND-SELECTION","domain":"nonmain_context","egress_role":"profile_support","managed_egress_ids":[],"rationale":"backend 选择与 spawn 决定非主线程入口和 workload。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/01-resume-fork-sidechain-and-subagents/04-teammate-runtime-and-backends/02-in-process-loop-idle-wait-and-claim.md","fact_id":"FACT-TEAMMATE-INPROCESS-LOOP","domain":"nonmain_context","egress_role":"profile_support","managed_egress_ids":[],"rationale":"in-process loop 与 task claim 支撑派生请求状态。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/01-resume-fork-sidechain-and-subagents/04-teammate-runtime-and-backends/03-pane-cli-repl-shutdown-and-hide-show.md","fact_id":"FACT-TEAMMATE-PANE-LIFECYCLE","domain":"nonmain_context","egress_role":"profile_support","managed_egress_ids":[],"rationale":"pane/CLI/REPL 生命周期支撑 entrypoint 与 agent 状态。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/02-remote-persistence-and-bridge.md","fact_id":"FACT-REMOTE-PERSISTENCE-BRIDGE","domain":"managed_bridge","egress_role":"managed_egress_support","managed_egress_ids":["managed-target-bridge-surface"],"rationale":"远程持久化、冲突恢复、Bridge transport 与分层凭据属于受管辅助出站。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/03-plan-system/01-runtime-objects-and-plan-file-lifecycle.md","fact_id":"FACT-PLAN-RUNTIME-LIFECYCLE","domain":"plan_context","egress_role":"profile_support","managed_egress_ids":[],"rationale":"plan 对象与文件生命周期支撑 system/messages 上下文。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/03-plan-system/02-enter-exit-and-plan-command.md","fact_id":"FACT-PLAN-COMMAND-STATE","domain":"plan_context","egress_role":"profile_support","managed_egress_ids":[],"rationale":"enter/exit 与 plan command 状态决定 prompt 上下文。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/03-plan-system/03-exit-approval-ui-planwasedited-and-ultraplan-bridge.md","fact_id":"FACT-PLAN-APPROVAL-BRIDGE","domain":"plan_context","egress_role":"profile_support","managed_egress_ids":["managed-target-bridge-surface"],"rationale":"plan 审批与 UI 状态支撑 prompt；Bridge 交互部分关联受管出站。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/03-plan-system/04-attachments-persistence-and-team-approval.md","fact_id":"FACT-PLAN-ATTACHMENT-APPROVAL","domain":"plan_context","egress_role":"profile_support","managed_egress_ids":[],"rationale":"plan 附件、持久化与 team approval 支撑上下文状态。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/04-mcp-system.md","fact_id":"FACT-MCP-TOOL-AND-TRANSPORT","domain":"managed_mcp","egress_role":"managed_egress_support","managed_egress_ids":["managed-target-mcp-surface"],"rationale":"MCP tool schema 支撑推理 tools；HTTP/SSE/WebSocket transport 属于独立受管出站面。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/05-skill-system.md","fact_id":"FACT-SKILL-CONTEXT","domain":"skill_context","egress_role":"profile_support","managed_egress_ids":[],"rationale":"skill 发现与注入支撑 system/tools，不独立承担 wire 断言。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/06-plugin-system/01-command-state-and-source-resolution.md","fact_id":"FACT-PLUGIN-SOURCE-RESOLUTION","domain":"plugin_context","egress_role":"profile_support","managed_egress_ids":[],"rationale":"插件命令状态与来源解析支撑 system/tools 画像。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/06-plugin-system/02-marketplace-manifest-install-cache-and-dependencies.md","fact_id":"FACT-PLUGIN-MARKETPLACE-LIFECYCLE","domain":"managed_plugin","egress_role":"managed_egress_support","managed_egress_ids":["managed-target-plugin-marketplace-surface"],"rationale":"Marketplace、安装、缓存与依赖下载属于受管辅助出站及本地状态。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/06-plugin-system/03-runtime-injection-settings-and-channels.md","fact_id":"FACT-PLUGIN-RUNTIME-INJECTION","domain":"plugin_context","egress_role":"profile_support","managed_egress_ids":[],"rationale":"插件运行时注入、设置与 channel 支撑 system/tools 构造。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/06-plugin-system/04-validation-ui-and-safety-boundaries.md","fact_id":"FACT-PLUGIN-VALIDATION-BOUNDARY","domain":"plugin_context","egress_role":"profile_support","managed_egress_ids":["managed-target-plugin-marketplace-surface"],"rationale":"插件验证和安全边界支撑可用性；外部验证部分关联受管 Marketplace 面。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/07-tui-system/02-transcript-and-rewind.md","fact_id":"FACT-TUI-TRANSCRIPT-STATE","domain":"entrypoint_state","egress_role":"profile_support","managed_egress_ids":[],"rationale":"transcript 与 rewind 状态支撑 messages 历史和 session 生命周期。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/07-tui-system/03-input-footer-and-voice.md","fact_id":"FACT-TUI-VOICE-STATE","domain":"entrypoint_state","egress_role":"managed_egress_support","managed_egress_ids":["managed-target-voice-surface"],"rationale":"输入 footer 是入口状态；voice 外部服务请求属于独立受管面。"},
-    {"path":"local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/07-tui-system/05-help-settings-model-theme-and-diff.md","fact_id":"FACT-TUI-SETTINGS-MODEL","domain":"entrypoint_state","egress_role":"profile_support","managed_egress_ids":["managed-target-auxiliary-surface"],"rationale":"帮助、设置、模型选择、主题和 diff 支撑 entrypoint/model 事实；远端模型或帮助请求关联辅助面。"}
-  ]
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/01-runtime/03-input-compilation/01-au8-ihz-preprocessing-and-main-branches.md",
+      "fact_id": "FACT-PROMPT-INPUT-COMPILATION",
+      "domain": "prompt_input",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "输入预处理、远程 gate 与附件加载决定后续 prompt/body 输入，但文档原子本身不是独立 wire 规则。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/01-runtime/03-input-compilation/02-block-family-bu4-and-slash-command-results.md",
+      "fact_id": "FACT-MESSAGE-BLOCK-COMPILATION",
+      "domain": "message_body",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "block family 与 slash 结果属于最终 messages 的上游语义事实。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/01-runtime/03-input-compilation/03-userpromptsubmit-hooks-and-final-boundaries.md",
+      "fact_id": "FACT-HOOK-PROMPT-BOUNDARY",
+      "domain": "hook_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "UserPromptSubmit hook 的合并与时序支撑最终 prompt 构造。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/01-runtime/04-agent-loop-and-compaction/01-main-loop-state-caches-and-yield-surface.md",
+      "fact_id": "FACT-AGENT-LOOP-STATE",
+      "domain": "request_state",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "主循环、跨 turn 状态和 cache 是请求条件与生命周期的支撑事实。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/01-runtime/04-agent-loop-and-compaction/04-tool-round-next-turn-and-terminal-reasons.md",
+      "fact_id": "FACT-TOOL-ROUND-STATE",
+      "domain": "tool_state",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "工具轮、终止原因与下一 turn 状态支撑后续 messages 请求。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/01-runtime/10-control-plane-api-and-auxiliary-services/04-bridge-credentials-and-worker-lifecycle.md",
+      "fact_id": "FACT-BRIDGE-CREDENTIAL-LIFECYCLE",
+      "domain": "managed_bridge",
+      "egress_role": "managed_egress_support",
+      "managed_egress_ids": [
+        "managed-target-bridge-surface"
+      ],
+      "rationale": "Bridge 凭据、worker、heartbeat 与刷新属于受管辅助出站，不进入推理 Persona wire。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/01-runtime/12-settings-and-configuration-system/02-loading-policy-and-merge.md",
+      "fact_id": "FACT-REMOTE-SETTINGS-LIFECYCLE",
+      "domain": "managed_settings",
+      "egress_role": "managed_egress_support",
+      "managed_egress_ids": [
+        "managed-target-remote-settings-surface"
+      ],
+      "rationale": "远端设置、policy limits、缓存与刷新属于受管辅助出站及其状态事实。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/01-runtime/12-settings-and-configuration-system/05-key-consumers-and-rewrite-boundaries.md",
+      "fact_id": "FACT-SETTINGS-CONSUMER-BOUNDARY",
+      "domain": "profile_settings",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [
+        "managed-target-remote-settings-surface"
+      ],
+      "rationale": "设置键消费和重写边界决定画像输入，网络部分关联远端设置受管面。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/01-tools-hooks-and-permissions/02-hook-system/01-schema-instructionsloaded-and-event-inputs.md",
+      "fact_id": "FACT-HOOK-SCHEMA-INPUT",
+      "domain": "hook_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "Hook schema 与事件输入支撑 system/messages 构造，不独立承担 wire 断言。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/01-tools-hooks-and-permissions/02-hook-system/02-special-output-and-event-consumer-semantics.md",
+      "fact_id": "FACT-HOOK-OUTPUT-CONSUMER",
+      "domain": "hook_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "特殊 hook 输出及消费者决定上下文注入与本地副作用。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/01-tools-hooks-and-permissions/02-hook-system/03-runtime-order-and-cross-stage-timing.md",
+      "fact_id": "FACT-HOOK-RUNTIME-ORDER",
+      "domain": "hook_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "Hook 跨阶段时序支撑最终请求上下文顺序。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/01-tools-hooks-and-permissions/02-hook-system/04-instructionsloaded-non-main-thread-coverage-and-dispatch-boundaries.md",
+      "fact_id": "FACT-HOOK-NONMAIN-COVERAGE",
+      "domain": "nonmain_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "非主线程 InstructionsLoaded 覆盖决定派生请求上下文。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/01-tools-hooks-and-permissions/03-permission-mode-and-classifier.md",
+      "fact_id": "FACT-PERMISSION-MODE-STATE",
+      "domain": "tool_policy",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "权限状态与 classifier 决定可用工具和后续 tool schema。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/01-tools-hooks-and-permissions/04-policy-sandbox-and-approval-backends.md",
+      "fact_id": "FACT-POLICY-APPROVAL-BACKEND",
+      "domain": "tool_policy",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [
+        "managed-target-bridge-surface",
+        "managed-target-mcp-surface"
+      ],
+      "rationale": "审批 backend 与 sandbox 主要支撑工具可用性；remote/MCP 部分关联受管出站。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/02-instruction-discovery-and-rules/01-sources-qv-scan-and-compat-boundaries.md",
+      "fact_id": "FACT-INSTRUCTION-DISCOVERY",
+      "domain": "system_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "指令发现与兼容边界决定 system context 来源。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/02-instruction-discovery-and-rules/03-instructionsloaded-load-reason-and-hook-timing.md",
+      "fact_id": "FACT-INSTRUCTION-LOAD-TIMING",
+      "domain": "system_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "load reason 与 hook 时序决定 system context 生命周期。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/03-prompt-assembly-and-context-layering/02-attachment-order-skill-plan-meta-and-message-merge.md",
+      "fact_id": "FACT-PROMPT-LAYER-ORDER",
+      "domain": "system_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "附件、skill、plan、meta 与 messages 合并顺序支撑最终 body。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/04-non-main-thread-prompt-paths/04-compat-agent-definitions-and-instruction-entry.md",
+      "fact_id": "FACT-NONMAIN-INSTRUCTION-ENTRY",
+      "domain": "nonmain_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "兼容 agent 定义和指令入口支撑非主线程 system/messages。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/05-attachments-and-context-modifiers/01-attachment-lifecycle-and-producers.md",
+      "fact_id": "FACT-ATTACHMENT-LIFECYCLE",
+      "domain": "attachment_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "附件 producer 与生命周期支撑 body materialization。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/05-attachments-and-context-modifiers/02-high-value-attachment-payloads-and-materialization.md",
+      "fact_id": "FACT-ATTACHMENT-MATERIALIZATION",
+      "domain": "attachment_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "高价值附件 payload 与 materialization 支撑最终 system/messages。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/05-attachments-and-context-modifiers/03-context-modifier-and-executor-consumers.md",
+      "fact_id": "FACT-CONTEXT-MODIFIER-CONSUMER",
+      "domain": "attachment_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "context modifier 消费方决定上下文进入请求的边界。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/02-execution/06-context-runtime-and-tool-use-context.md",
+      "fact_id": "FACT-TOOL-USE-CONTEXT",
+      "domain": "tool_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "tool-use context 与 runtime 状态支撑下一轮 messages 和 cache。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/01-resume-fork-sidechain-and-subagents/02-agent-team-and-task-model.md",
+      "fact_id": "FACT-AGENT-TEAM-MODEL",
+      "domain": "nonmain_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "Agent Team 与 task 模型支撑非主线程 lineage 和请求条件。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/01-resume-fork-sidechain-and-subagents/03-agent-team-mailbox-and-approval.md",
+      "fact_id": "FACT-AGENT-MAILBOX-APPROVAL",
+      "domain": "nonmain_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [
+        "managed-target-bridge-surface"
+      ],
+      "rationale": "mailbox 与审批状态支撑 agent 请求；远程协作部分关联 Bridge 受管面。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/01-resume-fork-sidechain-and-subagents/04-teammate-runtime-and-backends/01-task-shapes-backend-selection-and-spawn.md",
+      "fact_id": "FACT-TEAMMATE-BACKEND-SELECTION",
+      "domain": "nonmain_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "backend 选择与 spawn 决定非主线程入口和 workload。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/01-resume-fork-sidechain-and-subagents/04-teammate-runtime-and-backends/02-in-process-loop-idle-wait-and-claim.md",
+      "fact_id": "FACT-TEAMMATE-INPROCESS-LOOP",
+      "domain": "nonmain_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "in-process loop 与 task claim 支撑派生请求状态。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/01-resume-fork-sidechain-and-subagents/04-teammate-runtime-and-backends/03-pane-cli-repl-shutdown-and-hide-show.md",
+      "fact_id": "FACT-TEAMMATE-PANE-LIFECYCLE",
+      "domain": "nonmain_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "pane/CLI/REPL 生命周期支撑 entrypoint 与 agent 状态。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/02-remote-persistence-and-bridge.md",
+      "fact_id": "FACT-REMOTE-PERSISTENCE-BRIDGE",
+      "domain": "managed_bridge",
+      "egress_role": "managed_egress_support",
+      "managed_egress_ids": [
+        "managed-target-bridge-surface"
+      ],
+      "rationale": "远程持久化、冲突恢复、Bridge transport 与分层凭据属于受管辅助出站。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/03-plan-system/01-runtime-objects-and-plan-file-lifecycle.md",
+      "fact_id": "FACT-PLAN-RUNTIME-LIFECYCLE",
+      "domain": "plan_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "plan 对象与文件生命周期支撑 system/messages 上下文。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/03-plan-system/02-enter-exit-and-plan-command.md",
+      "fact_id": "FACT-PLAN-COMMAND-STATE",
+      "domain": "plan_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "enter/exit 与 plan command 状态决定 prompt 上下文。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/03-plan-system/03-exit-approval-ui-planwasedited-and-ultraplan-bridge.md",
+      "fact_id": "FACT-PLAN-APPROVAL-BRIDGE",
+      "domain": "plan_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [
+        "managed-target-bridge-surface"
+      ],
+      "rationale": "plan 审批与 UI 状态支撑 prompt；Bridge 交互部分关联受管出站。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/03-plan-system/04-attachments-persistence-and-team-approval.md",
+      "fact_id": "FACT-PLAN-ATTACHMENT-APPROVAL",
+      "domain": "plan_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "plan 附件、持久化与 team approval 支撑上下文状态。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/04-mcp-system.md",
+      "fact_id": "FACT-MCP-TOOL-AND-TRANSPORT",
+      "domain": "managed_mcp",
+      "egress_role": "managed_egress_support",
+      "managed_egress_ids": [
+        "managed-target-mcp-surface"
+      ],
+      "rationale": "MCP tool schema 支撑推理 tools；HTTP/SSE/WebSocket transport 属于独立受管出站面。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/05-skill-system.md",
+      "fact_id": "FACT-SKILL-CONTEXT",
+      "domain": "skill_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "skill 发现与注入支撑 system/tools，不独立承担 wire 断言。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/06-plugin-system/01-command-state-and-source-resolution.md",
+      "fact_id": "FACT-PLUGIN-SOURCE-RESOLUTION",
+      "domain": "plugin_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "插件命令状态与来源解析支撑 system/tools 画像。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/06-plugin-system/02-marketplace-manifest-install-cache-and-dependencies.md",
+      "fact_id": "FACT-PLUGIN-MARKETPLACE-LIFECYCLE",
+      "domain": "managed_plugin",
+      "egress_role": "managed_egress_support",
+      "managed_egress_ids": [
+        "managed-target-plugin-marketplace-surface"
+      ],
+      "rationale": "Marketplace、安装、缓存与依赖下载属于受管辅助出站及本地状态。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/06-plugin-system/03-runtime-injection-settings-and-channels.md",
+      "fact_id": "FACT-PLUGIN-RUNTIME-INJECTION",
+      "domain": "plugin_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "插件运行时注入、设置与 channel 支撑 system/tools 构造。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/06-plugin-system/04-validation-ui-and-safety-boundaries.md",
+      "fact_id": "FACT-PLUGIN-VALIDATION-BOUNDARY",
+      "domain": "plugin_context",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [
+        "managed-target-plugin-marketplace-surface"
+      ],
+      "rationale": "插件验证和安全边界支撑可用性；外部验证部分关联受管 Marketplace 面。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/07-tui-system/02-transcript-and-rewind.md",
+      "fact_id": "FACT-TUI-TRANSCRIPT-STATE",
+      "domain": "entrypoint_state",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [],
+      "rationale": "transcript 与 rewind 状态支撑 messages 历史和 session 生命周期。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/07-tui-system/03-input-footer-and-voice.md",
+      "fact_id": "FACT-TUI-VOICE-STATE",
+      "domain": "entrypoint_state",
+      "egress_role": "managed_egress_support",
+      "managed_egress_ids": [
+        "managed-target-voice-surface"
+      ],
+      "rationale": "输入 footer 是入口状态；voice 外部服务请求属于独立受管面。"
+    },
+    {
+      "path": "local-analysis/sources/hitcc-2.1.197/docs/docs/03-ecosystem/07-tui-system/05-help-settings-model-theme-and-diff.md",
+      "fact_id": "FACT-TUI-SETTINGS-MODEL",
+      "domain": "entrypoint_state",
+      "egress_role": "profile_support",
+      "managed_egress_ids": [
+        "managed-target-auxiliary-surface"
+      ],
+      "rationale": "帮助、设置、模型选择、主题和 diff 支撑 entrypoint/model 事实；远端模型或帮助请求关联辅助面。"
+    }
+  ],
+  "measured_rule_source": "measured-rule-ledger.json",
+  "candidate_resolution_source": "candidate-disposition-ledger.json"
 }

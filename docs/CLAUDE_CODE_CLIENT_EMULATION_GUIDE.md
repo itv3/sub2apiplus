@@ -3,10 +3,10 @@
 > **适用范围**：Sub2API 使用 Anthropic OAuth（`authMethod=claude.ai`、`apiProvider=firstParty`）
 > 出站时的 Claude Code 客户端仿真
 > **共享框架**：[`OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md`](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md)
-> **当前取证目标**：`claude-code 2.1.226`——第二部分 88 条活动规则与 Vircs 官方客户端 R／M
+> **当前取证目标**：`claude-code 2.1.226`——第二部分 110 条活动规则与 Vircs 官方客户端 P／R／M
 > 证据的绑定版本；`2.1.220` 只保留为同一 Schema／Compiler 下的历史 baseline fixture
-> **机器台账**：`tools/official_client_capture/claude_fw_f_measured_rules.py`、两份 FW-F v3 策略及
-> `local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v3/`；逐规则状态以不可变台账为准，
+> **机器台账**：`tools/official_client_capture/claude_fw_f_v21_finalize.py`、两份 FW-F v4／v3 策略及
+> `local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v5-final/`；逐规则状态以不可变台账为准，
 > 正文规则集合由门禁强制对账
 > **文档定位**：本文是 Claude Code 官方事实、版本画像、Sub2API 实现、环境职责和版本演进的唯一
 > 人类可读权威入口；机器证据和 JSON 台账不得形成第二套规范
@@ -76,9 +76,10 @@ Claude 特有的换版流程，第五部分处理维护，第六部分固定环�
 
 # 第二部分 Claude Code 2.1.226 实测规则画像
 
-本部分是当前 Claude Persona 的唯一活动规则画像。活动集合固定为 **88 条 request-egress 规则**；每条
-规则都由 Claude Code 2.1.226 的官方客户端真实运行断言通过，并同时绑定 R（等长脱敏的原始请求／必要
-响应字节）与 M（版本、二进制、运行、连接、干预和隐私条件）证据。2.1.220、2.1.88 与 HitCC 只用于
+本部分是当前 Claude Persona 的唯一活动规则画像。活动集合由原子化实测结果确定为 **110 条
+request-egress 规则**；每条规则都由 Claude Code 2.1.226 的官方客户端真实运行断言通过。普通规则
+绑定 R（等长脱敏的原始请求／必要响应字节）与 M（版本、二进制、运行、连接、干预和隐私条件），
+TLS 规则绑定原生 P 与 M。2.1.220、2.1.88 与 HitCC 只用于
 历史差分、线索审计和探针设计；FW-F v1 的 154 条集合只保留为失效审计历史，不能替代 2.1.226 实测证据。
 
 ## 2.1 目标身份、范围与结论
@@ -87,29 +88,29 @@ Claude 特有的换版流程，第五部分处理维护，第六部分固定环�
 |---|---|
 | 官方版本 | Claude Code `2.1.226` |
 | 目标二进制 SHA-256 | `4e9bec1177ce9690e8bd988b710ac24105e70da428dd094c5adcbbe786a55555` |
-| 取证执行源 SHA-256 | `c91eb9acc776765ea047fb61efe8cf21cd6c7d978207c721e4d53762e1ebb09b` |
+| 取证执行源 SHA-256 | `78fae770cbb54af5e9192ae6557516d9fd78187914fbb6399a359e1a75573c06` |
 | 平台 | Linux／amd64 |
 | 入口 | `sdk-cli`；真实交互入口 `cli` |
 | 认证 | Claude.ai OAuth，first-party provider |
 | 模型 | `claude-sonnet-5`；TUI 标题 `claude-haiku-4-5-20251001`；fallback `claude-haiku-4-5` |
 | 隐私模式 | `DISABLE_TELEMETRY=1`；`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` |
 | 上游 | `api.anthropic.com:443` |
-| 基础样本 | `a1`、`s1`、`s2`、`s4`：8 条推理、4 条 lifecycle、8 条承载连接 |
-| v3 样本 | 34 个真实上游 run + 20 个隔离故障 run，54／54 `complete` |
-| strict egress | messages、hello、policy limits、settings、OAuth profile，共 5 类 |
-| 活动规则 | 88 条，全部 `PAIR-*` 断言通过，全部绑定 R+M |
-| 当前等级 | 88 条 `observed`、0 条 `verified` |
+| 完整场景矩阵 | 77／77 场景、395 条官方请求、49／49 维度；含 TUI／sdk-cli／Agent、TLS、工具往返和故障重试 |
+| strict egress | messages、hello、policy limits、settings、OAuth profile、count_tokens、OAuth refresh、MCP servers，共 8 类 |
+| 活动规则 | 110 条，全部独立 `PAIR-*` 正负断言通过；107 条 R/M、3 条 TLS P/M |
+| 当前等级 | 110 条 `observed`、0 条 `verified` |
 | 批准用途 | `validation_only`；不是 production replacement |
 
 `observed` 不等于“没有实测”。它表示规则已在冻结的 2.1.226 官方客户端运行中命中并通过断言，但尚未
 通过 FW-G 的独立复测、实现后逐字节对拍与生产替换门禁，因此不能改名为 `verified`。
 
-当前 SupportEnvelope 只覆盖策略文件列出的三组能力：`sdk-cli` 的条件 system／cache／metadata／
-session／tools；真实 `cli` TUI 的 OAuth profile、Haiku 标题和 Sonnet 主请求；隔离故障矩阵的 retry、
-timeout、stream fallback 和 model fallback。五类 strict egress 的规则分布分别为 messages 84 条、
-hello 4 条、policy limits 2 条、settings 2 条、OAuth profile 2 条；跨端点规则会同时计入多个 egress，
-全局唯一规则仍为 88 条。范围外能力必须 fail-close 或留在明确的 `non_persona_managed／retained_legacy`
-边界，不能从这 88 条规则外推。
+当前 SupportEnvelope 覆盖策略文件列出的五组能力：`sdk-cli`／`cli` 的条件 system、cache、metadata、
+session、Agent／background／hook／remote、工具往返与附件；真实 TUI 的 OAuth profile、标题、
+count_tokens 与 MCP 目录；隔离故障矩阵的 retry、timeout、stream／model fallback；过期凭据的隔离 OAuth
+refresh；以及原生 TLS／ALPN。八类 strict egress 的规则分布分别为 messages 98 条、hello 6 条、
+policy limits 4 条、settings 4 条、OAuth profile 2 条、count_tokens 3 条、OAuth refresh 3 条、MCP
+servers 2 条。跨端点规则会同时计入多个 egress，全局唯一规则仍为 110 条。范围外能力必须 fail-close
+或留在明确的 `non_persona_managed／retained_legacy` 边界，不能从这 110 条规则外推。
 
 ## 2.2 证据通道与内容寻址
 
@@ -121,33 +122,32 @@ hello 4 条、policy limits 2 条、settings 2 条、OAuth profile 2 条；跨�
 | `M-INDEX` | FW-E `campaign/indexes/relay-index.json`：基础目标／基线 run 与二进制身份 |
 | `R-a1/s1/s2/s4` | FW-E 四个目标 run 的等长脱敏 `client_to_upstream.bin` |
 | `M-a1/s1/s2/s4` | 四个基础 run 的 `relay-manifest.json` 与 `relay/relay.json` |
-| `R-v3-*` | v3 每个 run 的 `connNNN.client_to_upstream.bin`；故障规则还绑定必要的 `upstream_to_client.bin` |
-| `M-v3-*` | v3 的 manifest、relay、intervention、invocation、summary、Vircs 容器回执、秘密扫描与 cleanup |
-| `PAIR-*` | `claude_fw_f_measured_rules.py` 中逐规则执行的正负断言 |
+| `R-v4-*` | v21 每个 attempt 的 `connNNN.client_to_upstream.bin`；故障规则还绑定必要的 `upstream_to_client.bin` |
+| `P-v4-*` | 原生 TLS attempt 的 `tls-clienthello.pcap`，用于 CipherSuite 与 ALPN 正负例 |
+| `M-v4-*` | v21 的 manifest、relay、intervention、invocation、summary、场景目录、秘密扫描与 cleanup |
+| `PAIR-*` | v21 最终化器生成的逐规则独立正例与负例断言 |
 
 基础四个 run 位于：
 
 `local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/campaign/`
 
-v3 的 54 个正式 run 位于：
+覆盖 77 个真实场景的 v21 正式 Campaign 位于：
 
-`local-analysis/fw-f/claude-code-2.1.226/profile-v3-c91eb9acc776/`
+`local-analysis/fw-f/claude-code-2.1.226/complete-v21-78fae770cbb5/`
 
-其中 `real-runs/` 严格对应策略中的 34 个 `real_probe_ids`，`runs/` 严格对应 20 个
-`synthetic_probe_ids`；目录集合、执行源摘要、目标二进制、采集模式、等长脱敏、秘密扫描和 cleanup
-均由生成器逐项校验。机器权威账本为：
+其中 77／77 场景、395 条请求、49／49 维度和原生 TLS P 通道均由最终化器逐项复算；目录集合、执行源
+摘要、目标二进制、采集模式、等长脱敏、秘密扫描和 cleanup 也必须通过。机器权威账本为：
 
-`local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v3/measured-rule-ledger.json`
+`local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v5-final/measured-rule-ledger.json`
 
 账本为每条规则保存 `egress_ids`、适用条件、完整分母、证据文件 `path/sha256/bytes/channel`、命中
-run、连接号、流偏移和原始请求摘要。下表的每个 `R-<run> + M` 都能在该规则的 `evidence_refs` 中
+run、连接号、流偏移和原始请求摘要。下表的每个 `R-<run> + M`／`P-<run> + M` 都能在该规则的 `evidence_refs` 中
 逐文件反向解析；Authorization 已等长脱敏，不保存 OAuth secret。
 
-### 2.2.2 当前没有的证据
+### 2.2.2 证据边界与零流量事实
 
-当前 Campaign 没有客户端原生 pcap，因此不能观察 ClientHello 原始字节、TLS 扩展序列或客户端 ALPN
-offer。relay M 只能证明目标连接的 SNI 和已承载 HTTP/1.1 请求，不能生成 ClientHello 指纹或 ALPN
-offer 规则；`SPEC-TLS-001` 与 `SPEC-TLS-002` 由机器负门禁拒绝。
+当前 Campaign 已在原生 TLS attempt 中取得 ClientHello pcap，`SPEC-TLS-001/002/003` 使用 P/M；普通
+HTTP、Header、Body、状态与工具规则仍使用 R/M，不允许以 relay 元数据冒充原生 TLS 证据。
 
 行为层不作对比维度。官方配置已合法关闭遥测与非必要流量，候选“零遥测”不是“不像官方客户端”的
 判据，也不生成 `traceparent`／span 规则。响应解析属于 downstream compatibility，不进入客户端请求
@@ -158,15 +158,17 @@ offer 规则；`SPEC-TLS-001` 与 `SPEC-TLS-002` 由机器负门禁拒绝。
 命题只有同时满足以下条件才能进入本部分：
 
 1. 目标版本、二进制、平台、入口、认证、模型／模型转换和隐私条件必须与 M 一致；
-2. 必须有可复算的目标 R 原始字节；不接受仅有旧源码、bundle 字符串或历史 wire；
+2. 普通规则必须有可复算的目标 R 原始字节；TLS 规则必须有原生 P；不接受仅有旧源码、bundle 字符串
+   或历史 wire；
 3. 必须有独立 `PAIR-<SPEC-ID>` 断言，对完整具名分母执行后为 `passed`；
 4. 必须声明适用范围、正负例、物理 `egress_ids` 和证据等级；
 5. 必须是 request-egress 命题；响应兼容、遥测关闭事实和未触发功能只能进入支撑／边界事实；
-6. background、dispatch-id、usage-limit、server／deferred tool、cache diagnosis、MCP 降级、
-   parent／后台派生及未触发附件机制仍缺 2.1.226 具名 R/M，不得补造成活动规则。
+6. 合法零流量的 telemetry、nonessential、usage、models、dispatch-id、usage-limit 只记录支撑事实；
+   只有场景被真实触发且具备完整正负例的命题才能成为规则。
 
-FW-F v1 把 32 个候选机械拆成 97 条规则提案的做法无效。v3 延续逐条撤回结果，并用新 R/M 断言显式
-形成 88 条语义规则；规则数不由发现项、探针或旧版行数相加得到。
+FW-F v1 把 32 个候选机械拆成 97 条规则提案的做法无效，现已逐条撤回。v21 对旧 88 条候选作实质
+重测，并由新增场景原子化产生 22 条新规则，最终形成 110 条；规则数由实测断言决定，不由发现项、
+探针或旧版行数预设。
 
 ## 2.4 实测 wire 与端点向量
 
@@ -185,7 +187,7 @@ FW-F v1 把 32 个候选机械拆成 97 条规则提案的做法无效。v3 延�
 - request-id、Session-Id、agent lineage、resume／fork、retry、non-stream 与模型 fallback 均按实测
   生命周期生成，不能用入站自报客户端身份补造。
 
-### 2.4.2 五类 strict 端点
+### 2.4.2 八类 strict 端点
 
 | egress | method／target | 已冻结 wire 重点 |
 |---|---|---|
@@ -194,21 +196,28 @@ FW-F v1 把 32 个候选机械拆成 97 条规则提案的做法无效。v3 延�
 | `egress-claude-policy-limits` | `GET /api/claude_code/policy_limits` | OAuth、`oauth-2025-04-20`、`claude-code/2.1.226` UA，共七项 Header |
 | `egress-claude-settings` | `GET /api/claude_code/settings` | 在 policy limits 基础上增加 `Cache-Control:no-cache`、`Pragma:no-cache`，共九项 Header |
 | `egress-claude-oauth-profile` | `GET /api/oauth/profile` | TUI；`axios/1.15.2` UA、JSON Content-Type、OAuth，共八项 Header |
+| `egress-claude-count-tokens` | `POST /v1/messages/count_tokens?beta=true` | TUI token 计数；有序 Claude SDK Header 与 `model/messages/tools` Body |
+| `egress-claude-oauth-token-refresh` | `POST https://platform.claude.com/v1/oauth/token` | 隔离过期凭据场景；axios Header 与等长脱敏 refresh Body |
+| `egress-claude-mcp-servers` | `GET /v1/mcp_servers?limit=1000` | TUI MCP 目录；OAuth、MCP capabilities 与 protocol version |
 
 `sdk-cli` essential 顺序为 hello → policy limits／settings（两者不规定先后）→ 零或多个 messages；
 真实 TUI 为 hello → OAuth profile → Haiku 标题 → Sonnet 主推理。每个端点有独立 route、Sink、
-binding、画像视图和纵向 CompiledEnvelope，不得把全部 88 条伪挂到 messages egress。
+真实 TUI 还会在对应场景调用 count_tokens 与 MCP 目录；OAuth refresh 只在过期凭据条件下触发。每个
+端点有独立 route、Sink、binding、画像视图和纵向 CompiledEnvelope，不得把全部 110 条伪挂到
+messages egress。
 
-## 2.5 88 条活动规则
+## 2.5 110 条活动规则
 
 以下每一行均为 `assertion_result=passed`、`evidence_level=observed`、
 `compatibility_class=request_egress`。证据列列出实际命中的 R run；`+ M` 表示同一行还绑定
 `M-ID/M-INDEX` 与对应 run 的 manifest／relay／intervention／invocation／summary。精确文件摘要和流
-偏移以 v3 MeasuredRuleLedger 为准。
+偏移以 v21 MeasuredRuleLedger 为准。
 
-### 2.5.1 TLS、协议、端点与连接：20 条
+<!-- FW-F-ACTIVE-RULES-BEGIN -->
 
-| 规则 | 实测命题 | 完整分母／适用范围 | strict egress | 精确 R/M run |
+### 2.5.1 TLS、协议、端点与连接：25 条
+
+| 规则 | 实测命题 | 完整分母／适用范围 | strict egress | 精确 P/R/M run |
 |---|---|---|---|---|
 | `SPEC-CONN-002` | 无 Retry-After 的应用层重试，首轮实测等待落在 500–700ms，第二轮落在 1000–1250ms。 | 4/4 retry-interval；v3-retry-limit 与 v3-fallback-model | `messages-inference` | `R-v3-fallback-model, v3-retry-limit + M` |
 | `SPEC-CONN-010` | 隔离状态矩阵中 401、408、409、429、500、502、503、529 各重试一次；400、403 不重试。 | 10/10 fault-scenario；10 个单状态隔离故障运行 | `messages-inference` | `R-v3-nonretry-400, v3-nonretry-403, v3-retry-401, v3-retry-408, v3-retry-409, v3-retry-429, v3-retry-500, v3-retry-502, v3-retry-503, v3-retry-529 + M` |
@@ -229,9 +238,14 @@ binding、画像视图和纵向 CompiledEnvelope，不得把全部 88 条伪挂�
 | `SPEC-EP-007` | 真实 TUI 启动阶段发送 GET /api/oauth/profile，使用 axios/1.15.2 UA、JSON Content-Type、OAuth Authorization 与实测八项 Header。 | 1/1 request；v3-tui 的 cli 入口 | `oauth-profile` | `R-v3-tui + M` |
 | `SPEC-EP-008` | sdk-cli 每次调用的 essential 请求序列为 hello→policy/settings→零或多个 messages；真实 TUI 为 hello→oauth/profile→Haiku 标题→Sonnet 主推理，policy 与 settings 不规定彼此先后。 | 54/54 run；34 个真实上游探针与 20 个隔离故障探针 | `lifecycle-hello, messages-inference, oauth-profile, policy-limits, settings` | `R-v3-adaptive-thinking-disabled, v3-additional-protection, v3-agent-sdk, v3-append-system, v3-attribution-disabled, v3-baseline, v3-beta-deduplicate, v3-cache-disabled, v3-cache-one-hour, v3-cache-sonnet-disabled, v3-client-app, v3-custom-agent, v3-custom-agent-safe-mode, v3-custom-header-grammar, v3-custom-header-invalid-name, v3-custom-system, v3-disconnect-retry, v3-effort-low, v3-effort-max, v3-effort-medium, v3-effort-xhigh, v3-exclude-dynamic-system, v3-extra-body, v3-extra-metadata, v3-fallback-model, v3-gzip-request, v3-header-combination, v3-json-schema, v3-max-output-tokens, v3-nonretry-400, v3-nonretry-403, v3-remote-container, v3-remote-session, v3-retry-401, v3-retry-408, v3-retry-409, v3-retry-429, v3-retry-500, v3-retry-502, v3-retry-503, v3-retry-529, v3-retry-after-date, v3-retry-after-seconds, v3-retry-limit, v3-session-fork, v3-session-resume, v3-stream-404-disable-flag, v3-stream-404-fallback, v3-stream-interrupt, v3-stream-interrupt-no-fallback, v3-thinking-disabled, v3-timeout, v3-tui, v3-workload + M` |
 | `SPEC-PROTO-001` | 推理与生命周期请求的应用层请求线均为 HTTP/1.1。 | 12/12 request；8 条推理请求与 4 条生命周期请求 | `lifecycle-hello, messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-TLS-003` | 目标连接在 relay 握手元数据中使用 SNI api.anthropic.com。 | 8/8 connection；8 个承载已选请求的真实 TLS 连接 | `lifecycle-hello, messages-inference` | `R-a1, s1, s2, s4 + M` |
+| `SPEC-EP-009` | 真实 TUI 的 token 计数请求为 POST /v1/messages/count_tokens?beta=true，Host 为 api.anthropic.com。 | 37/37 official-example；36 个 count_tokens 正例与 sdk-cli 基线负例 | `count-tokens` | `R-v4-tui-count-tokens, v4-replay-baseline + M` |
+| `SPEC-EP-010` | 过期 OAuth 凭据触发 POST https://platform.claude.com/v1/oauth/token。 | 2/2 official-example；隔离 OAuth refresh 正例与普通推理负例 | `oauth-token-refresh` | `R-v4-oauth-refresh, v4-replay-baseline + M` |
+| `SPEC-EP-011` | 真实 TUI 的 MCP 目录请求为 GET /v1/mcp_servers?limit=1000，Host 为 api.anthropic.com。 | 5/5 official-example；4 个 TUI MCP 目录正例与 sdk-cli 基线负例 | `mcp-servers` | `R-v4-tui-attachment, v4-tui-compact, v4-tui-count-tokens, v4-tui-usage, v4-replay-baseline + M` |
+| `SPEC-TLS-001` | 四个目标原生 ClientHello 使用同一实测 CipherSuite 有序序列。 | 8/8 official-example；4 个 ClientHello 正例与 4 个负例 | `lifecycle-hello, messages-inference, policy-limits, settings` | `P-v4-native-tls-baseline + M` |
+| `SPEC-TLS-002` | hello 与 messages ClientHello 提供 ALPN http/1.1；policy_limits 与 settings 的官方负例省略 ALPN 扩展。 | 4/4 official-example；同一原生 TLS attempt 的 2 个正例和 2 个负例 | `lifecycle-hello, messages-inference, policy-limits, settings` | `P-v4-native-tls-baseline + M` |
+| `SPEC-TLS-003` | 目标连接在 relay 握手元数据中使用 SNI api.anthropic.com。 | 8/8 connection；8 个承载已选请求的真实 TLS 连接 | `lifecycle-hello, messages-inference` | `P-v4-native-tls-baseline + M` |
 
-### 2.5.2 Header、认证与 beta：29 条
+### 2.5.2 Header、认证与 beta：33 条
 
 | 规则 | 实测命题 | 完整分母／适用范围 | strict egress | 精确 R/M run |
 |---|---|---|---|---|
@@ -248,7 +262,7 @@ binding、画像视图和纵向 CompiledEnvelope，不得把全部 88 条伪挂�
 | `SPEC-HDR-012` | 每条推理请求的 x-client-request-id 是 UUID，且 8 条样本内不复用。 | 8/8 request；8 条推理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
 | `SPEC-HDR-013` | 同一多请求运行复用同一个 X-Claude-Code-Session-Id。 | 3/3 multi-request-run；a1、s2、s4 三个多请求运行 | `messages-inference` | `R-a1, s2, s4 + M` |
 | `SPEC-HDR-014` | 仅一级子代理请求携带 17 位小写十六进制 x-claude-code-agent-id，位置在 x-app 之后。 | 8/8 request；1 条子代理正例与 7 条非子代理负例 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
-| `SPEC-HDR-015` | 一级子代理请求复用对应主请求的 X-Claude-Code-Session-Id。 | 1/1 request；a1 的 1 条子代理正例 | `messages-inference` | `R-a1 + M` |
+| `SPEC-HDR-015` | 一级子代理请求复用对应主请求的 X-Claude-Code-Session-Id。 | 2/2 request；a1 的子代理正例与对应主请求负例 | `messages-inference` | `R-a1 + M` |
 | `SPEC-HDR-016` | client-app 条件成立时发送 x-client-app；未设置时省略。 | 3/3 request；v3-client-app、v3-header-combination 与基线负例 | `messages-inference` | `R-v3-baseline, v3-client-app, v3-header-combination + M` |
 | `SPEC-HDR-017` | remote-container 条件成立时发送 x-claude-remote-container-id；未设置时省略。 | 3/3 request；v3-remote-container、v3-header-combination 与基线负例 | `messages-inference` | `R-v3-baseline, v3-header-combination, v3-remote-container + M` |
 | `SPEC-HDR-018` | remote-session 条件成立时发送 x-claude-remote-session-id；未设置时省略。 | 3/3 request；v3-remote-session、v3-header-combination 与基线负例 | `messages-inference` | `R-v3-baseline, v3-header-combination, v3-remote-session + M` |
@@ -264,8 +278,12 @@ binding、画像视图和纵向 CompiledEnvelope，不得把全部 88 条伪挂�
 | `SPEC-HDR-042` | agent-sdk 条件成立时 User-Agent 追加 agent-sdk/<受控版本> 段；基线不追加。 | 3/3 request；v3-agent-sdk、v3-header-combination 与基线负例 | `messages-inference` | `R-v3-agent-sdk, v3-baseline, v3-header-combination + M` |
 | `SPEC-HDR-043` | workload 条件成立时 User-Agent 追加 workload/<受控值> 段；基线不追加。 | 3/3 request；v3-workload、v3-header-combination 与基线负例 | `messages-inference` | `R-v3-baseline, v3-header-combination, v3-workload + M` |
 | `SPEC-HDR-044` | Content-Length 等于实际序列化 JSON Body 的字节数。 | 8/8 request；8 条推理请求 | `messages-inference` | `R-a1, s1, s2, s4 + M` |
+| `SPEC-HDR-045` | count_tokens 使用实测有序 Header 向量、Bearer OAuth、会话/request-id 与 Claude SDK 身份字段。 | 37/37 official-example；36 个 count_tokens 正例与基线负例 | `count-tokens` | `R-v4-tui-count-tokens, v4-replay-baseline + M` |
+| `SPEC-HDR-046` | OAuth refresh 使用 axios/1.15.2 七项有序 Header，Body 长度明确且不发送 Authorization。 | 2/2 official-example；OAuth refresh 正例与基线负例 | `oauth-token-refresh` | `R-v4-oauth-refresh, v4-replay-baseline + M` |
+| `SPEC-HDR-047` | MCP 目录请求使用实测有序 Header，并携带 OAuth、anthropic beta/version、MCP client capabilities 与 MCP-Protocol-Version。 | 5/5 official-example；4 个 TUI MCP 目录正例与基线负例 | `mcp-servers` | `R-v4-tui-attachment, v4-tui-compact, v4-tui-count-tokens, v4-tui-usage, v4-replay-baseline + M` |
+| `SPEC-HDR-048` | 二级及更深子代理在 agent-id 后发送 x-claude-code-parent-agent-id，值等于同一运行中直接父代理的 17 位 ID；一级子代理省略。 | 7/7 official-example；depth2/depth3 正例与 depth1 负例 | `messages-inference` | `R-v4-agent-depth1, v4-agent-depth2, v4-agent-depth3 + M` |
 
-### 2.5.3 Body、缓存、metadata、状态与工具：39 条
+### 2.5.3 Body、缓存、metadata、状态与工具：52 条
 
 | 规则 | 实测命题 | 完整分母／适用范围 | strict egress | 精确 R/M run |
 |---|---|---|---|---|
@@ -308,20 +326,36 @@ binding、画像视图和纵向 CompiledEnvelope，不得把全部 88 条伪挂�
 | `SPEC-STATE-006` | --resume 复用原 Session-Id，metadata.session_id 与 Header 同值，并携带历史角色序列和 cc_prev_req。 | 1/1 session-transition；v3-session-resume | `messages-inference` | `R-v3-session-resume + M` |
 | `SPEC-STATE-007` | --fork-session 为第二次调用生成新 Session-Id，同时携带原会话历史角色序列和 cc_prev_req。 | 1/1 session-transition；v3-session-fork | `messages-inference` | `R-v3-session-fork + M` |
 | `SPEC-TOOL-018` | --json-schema 把输入 schema 包装为唯一 StructuredOutput 工具，使用固定说明和 input_schema，output_config.effort 仍为 high。 | 1/1 request；v3-json-schema | `messages-inference` | `R-v3-json-schema + M` |
+| `SPEC-BODY-051` | count_tokens Body 顶层严格按 model、messages、tools 排列，messages 与 tools 均为数组。 | 37/37 official-example；36 个 count_tokens 正例与基线负例 | `count-tokens` | `R-v4-tui-count-tokens, v4-replay-baseline + M` |
+| `SPEC-BODY-052` | OAuth refresh Body 按 grant_type、refresh_token、client_id、scope 排列，grant_type 固定为 refresh_token；凭据只保留等长脱敏 R。 | 2/2 official-example；隔离 OAuth refresh 正例与普通推理负例 | `oauth-token-refresh` | `R-v4-oauth-refresh, v4-replay-baseline + M` |
+| `SPEC-BODY-053` | 项目 CLAUDE.md 的受控指令文本进入 messages 上下文；无该 fixture 的基线不含该文本。 | 2/2 official-example；context fixture 正例与基线负例 | `messages-inference` | `R-v4-context-claude-md, v4-replay-baseline + M` |
+| `SPEC-BODY-054` | 真实 TUI @file 附件把文件名和受控文件正文写入 user content；非附件基线无此内容。 | 3/3 official-example；TUI 附件正例与 sdk-cli 基线负例 | `messages-inference` | `R-v4-tui-attachment, v4-replay-baseline + M` |
+| `SPEC-STATE-008` | Agent 深度 1、2、3 分别产生 1、2、3 个唯一 agent-id；所有子代理 attribution 携带 cc_is_subagent=true，前台基线无 agent-id。 | 7/7 official-example；三层 Agent 正例与前台负例 | `messages-inference` | `R-v4-agent-depth1, v4-agent-depth2, v4-agent-depth3, v4-replay-baseline + M` |
+| `SPEC-STATE-009` | 官方 background 会话使用 x-app=cli-bg、cc_entrypoint=cli，并按 Haiku/Sonnet 后台请求形态发送；前台 sdk-cli 使用 x-app=cli。 | 5/5 official-example；background 正例与 sdk-cli 前台负例 | `messages-inference` | `R-v4-background, v4-replay-baseline + M` |
+| `SPEC-STATE-010` | PreToolUse hook 返回的 additionalContext 进入后续 messages；普通 Bash 负例不含该上下文。 | 4/4 official-example；hook 正例与 Bash 负例 | `messages-inference` | `R-v4-hook, v4-bash + M` |
+| `SPEC-TOOL-019` | Agent tool_use 与同 ID tool_result 成对，并派生带 agent-id 的子代理请求；无工具基线不含 Agent。 | 2/2 official-example；Agent depth1 正例与基线负例 | `messages-inference` | `R-v4-agent-depth1, v4-replay-baseline + M` |
+| `SPEC-TOOL-020` | Bash tool_use 与同 ID tool_result 进入续轮；无工具基线不含 Bash。 | 2/2 official-example；Bash 正例与基线负例 | `messages-inference` | `R-v4-bash, v4-replay-baseline + M` |
+| `SPEC-TOOL-021` | stdio MCP tools 以 mcp__claude-fw-f-v4__ 前缀及 input_schema 进入 messages，并完成同 ID tool_use/tool_result 往返。 | 2/2 official-example；MCP tool 正例与无工具基线负例 | `messages-inference` | `R-v4-mcp-tool, v4-replay-baseline + M` |
+| `SPEC-TOOL-022` | deferred MCP 场景完整暴露 32 个 deferred_probe 工具和 probe_echo，目录不得按首尾样本截断。 | 34/34 official-example；33 个 MCP 工具正例与无工具基线负例 | `messages-inference` | `R-v4-mcp-deferred, v4-replay-baseline + M` |
+| `SPEC-TOOL-023` | advisor 仅在显式启用时以 type=advisor_20260301、model=claude-fable-5 进入 tools；默认官方负例省略。 | 2/2 official-example；advisor 显式正例与默认负例 | `messages-inference` | `R-v4-advisor-enabled-positive, v4-advisor-default-negative + M` |
+| `SPEC-TOOL-024` | WebSearch 外层工具调用派生单独的 server web_search 请求；该请求携带 web_search tool descriptor 与 tool_choice。 | 4/4 official-example；web_search 三请求正例与无工具基线负例 | `messages-inference` | `R-v4-web-search, v4-replay-baseline + M` |
 
-分组计数为 20 + 29 + 39 = **88**。任何新增、删除、改写或 egress 迁移都必须取得新的目标 R/M、更新
-独立断言并签发新的 ApprovalFact，不能直接编辑列表。
+<!-- FW-F-ACTIVE-RULES-END -->
+
+分组计数为 25 + 33 + 52 = **110**。任何新增、删除、改写或 egress 迁移都必须取得新的目标 P／R／M、
+更新独立正负断言并签发新的 ApprovalFact，不能直接编辑列表。
 
 ## 2.6 发现项、候选与历史材料的终态
 
-FW-E 的 7,368 个发现项没有删除。FW-F v3 追加终态账本并达到：
+FW-E 的 7,368 个发现项没有删除。FW-F v21／v5 追加终态账本并达到：
 
 - 7,368／7,368 个 discovery 均有已解决记录，缺失、额外、重复、空绑定和孤儿引用均为 0；
-- 32／32 个语义候选已落到实测规则、支撑事实或受管出站边界；
+- 331 个目标发送点、102 个 2.1.88 源码机制、71 个 HitCC 线索、57 条历史规则与 32 个语义候选族
+  组成 593 个正交候选，593／593 均有唯一终态；32／32 个语义候选族也全部闭合；
 - 4,523 个历史上下文原子全部归属：128 个 Markdown 导航由结构证据证明为非出站，4,395 个绑定到
   精确文档、标题和语义事实；
 - FW-F v1 的 97 条机械规则提案全部撤回，活动数为 0；
-- 发现项清零不等于把 7,368 项变成规则；只有本部分 88 条通过目标 R/M 断言的命题进入画像。
+- 发现项清零不等于把 7,368 项变成规则；只有本部分 110 条通过目标 P／R／M 正负断言的命题进入画像。
 
 | 材料 | 当前职责 | 能否单独支撑 2.1.226 活动规则 |
 |---|---|---|
@@ -329,32 +363,47 @@ FW-E 的 7,368 个发现项没有删除。FW-F v3 追加终态账本并达到：
 | `claude-code-2.1.88/` | 老源码机制线索和版本漂移核对 | 否 |
 | `hitcc-2.1.197/` | 发送面与条件分支的线索地图 | 否 |
 
-历史 v1／v2 制品继续作为不可变审计历史；`discovery-clearance-v3/withdrawn-rule-proposals.json` 保存
+历史 v1～v4 制品继续作为不可变审计历史；`discovery-clearance-v5-final/withdrawn-rule-proposals.json` 保存
 97 条提案的逐项终态，不能被删除或重新作为活动规则消费。
 
 ## 2.7 机器复算与强制门禁
 
-先生成 88 条实测规则，再执行发现项清零：
+先对 v21 Campaign 复算 77 个场景、395 条请求、49 个维度和 593 个候选，动态生成原子规则，再执行
+7,368 项发现清账。旧目录只读保留，每次复算必须写新目录：
 
 ```bash
-python3 tools/official_client_capture/claude_fw_f_measured_rules.py \
-  --discovery-policy tools/official_client_capture/claude_fw_f_discovery_policy_2_1_226.json \
-  --profile-policy tools/official_client_capture/claude_fw_f_profile_policy_2_1_226.json \
-  --campaign-identity local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/campaign/identity.json \
-  --relay-index local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/campaign/indexes/relay-index.json \
-  --output local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v3/measured-rule-ledger.json
+python3 tools/official_client_capture/claude_fw_f_v21_finalize.py \
+  --campaign-root local-analysis/fw-f/claude-code-2.1.226/complete-v21-78fae770cbb5 \
+  --prior-measured-rules local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v3/measured-rule-ledger.json \
+  --prior-candidate-resolutions local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v3/candidate-resolution-ledger.json \
+  --output-dir local-analysis/fw-f/claude-code-2.1.226/final-v21-110-rules-pair-complete
+
+python3 tools/official_client_capture/claude_fw_f_discovery_clearance.py \
+  --discovery-inventory local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/semantic-closure-v1-e577e144a/discovery-inventory.json \
+  --semantic-candidates local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/semantic-closure-v1-e577e144a/semantic-candidates.json \
+  --rule-assessments local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/rule-assessments-v5-e577e144a/rule-assessments.json \
+  --document-atoms local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/semantic-closure-v1-e577e144a/document-atoms.json \
+  --egress-inventory local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/control-store-v3-e577e144a/objects/egress_disposition_inventory/47b1c1a62dbc4964cf3b4fca6101113b94e8cc9b26bffead9ec051ce6bb1848e.json \
+  --measured-rules local-analysis/fw-f/claude-code-2.1.226/final-v21-110-rules-pair-complete/measured-rule-ledger.json \
+  --candidate-dispositions local-analysis/fw-f/claude-code-2.1.226/final-v21-110-rules-pair-complete/candidate-disposition-ledger.json \
+  --prior-rule-additions local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v1/rule-ledger-additions.json \
+  --policy tools/official_client_capture/claude_fw_f_discovery_policy_2_1_226.json \
+  --output-dir local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v5-final
 ```
 
 退出条件固定为：
 
 - `source_discovery_count = resolved_record_count = 7368`；
-- `candidate_resolution_count = 32`；
-- `measured_rule_count = 88`；
+- `candidate_resolution_count = orthogonal_candidate_count = 593`，且 32 个语义候选族全部闭合；
+- 本版本由原子化实测动态得到 `measured_rule_count = 110`，不得在策略中预设规则数；
 - `withdrawn_v1_proposal_count = 97`；
 - 全部 `gate_counts = 0`；
-- 每条活动规则均有非空且已批准的 `egress_ids`、R、M、`PAIR-*` 和 `passed`；
-- 五类 strict egress 均至少有规则，且 Approval 中分别绑定自身 SPEC 集合；
-- `SPEC-HDR-011`、`SPEC-RESP-*`、遥测／traceparent、`SPEC-TLS-001/002` 不得进入活动集合。
+- 3 条 TLS 规则均严格绑定 P/M，107 条普通规则均严格绑定 R/M；
+- 每条活动规则均有非空且已批准的 `egress_ids`、独立 `PAIR-*`、官方正例和非零官方负例；
+- 八类 strict egress 均至少有规则，且 Approval 中分别绑定自身 SPEC 集合；
+- 不存在 `unmeasured_feature_boundary`；指南、RuleLedger、Snapshot、EvidencePackage 与
+  SupportEnvelope 的 110 个规则 ID 必须完全一致；
+- telemetry、nonessential、usage、models、dispatch-id、usage-limit 的合法零流量不得生成规则。
 
 回归测试入口：
 
@@ -363,7 +412,9 @@ python3 -m unittest \
   tools.official_client_capture.tests.test_claude_fw_f_measured_rules \
   tools.official_client_capture.tests.test_claude_fw_f_discovery_clearance \
   tools.official_client_capture.tests.test_claude_fw_f_profile \
-  tools.official_client_capture.tests.test_claude_fw_f_v3
+  tools.official_client_capture.tests.test_claude_fw_f_v3 \
+  tools.official_client_capture.tests.test_claude_fw_f_v4 \
+  tools.official_client_capture.tests.test_claude_fw_f_complete_runner
 ```
 
 ## 2.8 后续版本的更新方法
@@ -513,11 +564,11 @@ ApprovalFact 收窄或晋升，但不能静默换类：
 |---|---|---|
 | `POST /v1/messages?beta=true` 推理及 `HEAD /api/hello` 生命周期探测 | `persona_strict` | 纳入画像、SPEC／PAIR、SupportEnvelope 和 Guard |
 | `GET /api/claude_code/policy_limits`、`GET /api/claude_code/settings`、`GET /api/oauth/profile` | `persona_strict` | 作为三个独立 egress 纳入画像、SPEC／PAIR、SupportEnvelope 和 Guard |
-| `/v1/messages/count_tokens` | `non_persona_managed` | 证据闭环前使用独立受管策略；闭环后可新增 SPEC／PAIR 并晋升 `persona_strict` |
-| usage、OAuth refresh／exchange、cookie authorize／organizations、account test、upstream models | `non_persona_managed` | 登记 route／Sink、认证、endpoint、client、超时、重试、秘密与审计，不主张官方 wire 等价 |
+| `/v1/messages/count_tokens`、`POST platform.claude.com/v1/oauth/token`、`GET /v1/mcp_servers?limit=1000` | `persona_strict` | v21 已取得正负例并纳入独立 egress、SPEC／PAIR、SupportEnvelope 和 Guard；当前只批准 validation-only |
+| usage、OAuth exchange、cookie authorize／organizations、account test、upstream models，以及遗留 token-count／OAuth-refresh 别名 | `non_persona_managed` | 登记 route／Sink、认证、endpoint、client、超时、重试、秘密与审计，不把遗留别名冒充新的 official-client strict 身份 |
 | 未登记 Claude OAuth 路径 | `denied` | enforce 时 fail-close |
 
-`non_persona_managed` 是受管第三态，不是 `out_of_scope_passthrough`。它不计入当前 88 条活动规则及
+`non_persona_managed` 是受管第三态，不是 `out_of_scope_passthrough`。它不计入当前 110 条活动规则及
 SupportEnvelope 的逐规则分母，但必须有独立的 source-to-sink 闭集、运行断言和失败策略；未来若要求
 仿真官方客户端在该端点的 wire，必须先取得证据、原子化规则并正式晋升为 `persona_strict`。
 
@@ -528,13 +579,14 @@ Codex IdentityMode、HeaderPolicy、BodyPolicy、BehaviorPolicy 或 fallback 字
 
 | 规则组 | 数量 | 画像／执行落点 |
 |---|---:|---|
-| TLS／协议／端点／连接 | 20 | `Transports`、`Endpoints`、client lifecycle + adapter |
-| Header／认证／Beta | 29 | `HeaderSlots`、`BetaPolicy` + Claude Compiler |
-| Body／缓存／metadata／状态／工具 | 39 | `BodyShape`、IdentityFacts + Claude Compiler |
+| TLS／协议／端点／连接 | 25 | `Transports`、`Endpoints`、client lifecycle + adapter |
+| Header／认证／Beta | 33 | `HeaderSlots`、`BetaPolicy` + Claude Compiler |
+| Body／缓存／metadata／状态／工具 | 52 | `BodyShape`、IdentityFacts + Claude Compiler |
 
-88 条均具有画像／执行落点、2.1.226 目标 R/M 和 `PAIR-<SPEC-ID>`。故障重试、真实 TUI、custom
-Header／beta／metadata 和 remote 条件已经纳入；ClientHello／ALPN offer 及 §4.4 列出的未触发机制仍
-保持显式排除，不能由实现自行补造。调度、计费和服务级节奏不由画像改写。
+110 条均具有画像／执行落点、2.1.226 目标 P／R／M 和独立 `PAIR-<SPEC-ID>` 正负例。原生 TLS／ALPN、
+故障重试、真实 TUI、Agent／background／hook、custom Header／beta／metadata、remote、附件、MCP、
+advisor、web_search、count_tokens 与隔离 OAuth refresh 已纳入；合法零流量仍只作支撑事实。调度、计费
+和服务级节奏不由画像改写。
 
 ## 3.4 当前差距与 FW-A～FW-H 迁移
 
@@ -548,7 +600,7 @@ Header／beta／metadata 和 remote 条件已经纳入；ClientHello／ALPN offe
 | 无条件 Header Schema | 遗留画像只有 `StaticHeaders` 与 `BetaHeader`，无法表达当前实测的条件 Header 责任 |
 | finalizer 位于 service | `official_egress_anthropic.go` 未进入共享 Executor／Token／Guard 终态链 |
 | 无 Claude Persona／Compiler／Guard | 当前 `officialegress` persona 和 authority 仍是 Codex 专用 |
-| 入口与出站目标尚未实现 | FW-F 已按 `validation_only` 批准 5 个逻辑入口和 13 项 OAuth 出站的目标处置（5 strict、8 managed）；当前运行态仍保持 FW-E 冻结事实 |
+| 入口与出站目标尚未实现 | FW-F 已按 `validation_only` 批准 5 个逻辑入口和 16 项 OAuth 出站身份的目标处置（8 strict、8 managed）；当前运行态仍保持 FW-E 冻结事实 |
 | 三方语义补全未受管 | Persona system／identity 派生与有损 system 角色改写混在遗留 body 重写器中 |
 | 版本门禁不完整 | 版本注释已漂移，业务代码尚可继续泄漏版本指纹 |
 
@@ -560,7 +612,7 @@ Header／beta／metadata 和 remote 条件已经纳入；ClientHello／ALPN offe
 | `FW-D` | 建设 Campaign、正交事实、两段式批准、Snapshot／Release Store、candidate／PAIR、晋升与激活工具链 | 只用 Codex／合成数据自测；越权、摘要变化、范围缺口和收据不匹配均由机器阻断 |
 | `FW-E` | 第一步冻结最新 stable；从目标 bundle 原生发现发送点，取 2.1.88、HitCC、2.1.220／前一批准 stable 与目标发现的并集，分开建立 DiscoveryInventory、SemanticRuleCandidate 和 RuleLedger，完成差分、P／R／J／M 和 Evidence 封存，再建立两个 Inventory 与 observation-only Sink | 目标版本、完整 sink／discovery inventory、语义候选、只含 SPEC 的规则台账和 EvidencePackage 可复算；没有截断或未分类项；停在 `evidence_recorded`，尚不定义目标 Schema／Snapshot 或签发 Evidence 批准 |
 | `FW-F` | 先把 FW-E 全部发现和语义候选逐项收敛到可审计终态并清零未决项，再由最新 stable 证据生成 Schema、目标 Snapshot、Persona 和不可部署样例；随后用同一 Schema／Compiler 表达 2.1.220 rollback fixture，批准 Profile、范围和多 Persona 合同 | 全量 DiscoveryDispositionLedger 无缺失、重复或未决项；target-first 样例与跨 Persona 负例通过；ApprovalFact 完整；Codex 生产收据对应最终合同；selector 未改变 |
-| `FW-G` | 实现本次已批准的 88 条最新 stable 实测规则，完成受管语义层、辅助出站三态、全部 strict 入口 PAIR、独立复测、DMIT candidate 和 rollback 验收 | 88 条规则达到后继 production-replacement ApprovalFact 要求；范围内断言、范围外拒绝和回退通过 |
+| `FW-G` | 实现本次已批准的 110 条最新 stable 实测规则，完成受管语义层、辅助出站三态、全部 strict 入口 PAIR、独立复测、DMIT candidate 和 rollback 验收 | 110 条规则达到后继 production-replacement ApprovalFact 要求；范围内断言、范围外拒绝和回退通过 |
 | `FW-H` | 灰度、回滚、激活；逐入口迁移并在闭集完成后退休遗留链 | DeploymentFact 与运行态一致；无 `retained_legacy` 才能签发迁移完成的 RemovalReceipt |
 
 最新 stable 是目标 Schema、Snapshot 和实现的唯一设计权威。FW-E 只冻结目标规则证据，不预先用
@@ -600,10 +652,11 @@ Guard 按 route、persona、Sink、binding、Release、Profile digest、adapter�
 `claude-code-2_1_226-fw-e-semantic-20260818-e577e144a`，其 Store 停在 `evidence_recorded`。旧 Campaign
 `claude-code-2_1_226-fw-e-final-20260818-93f2edbc9` 及其“7,425 条规则”收据只保留为历史错误事实，由
 [语义规则纠正收据](egress/maintenance/fw-e-semantic-rule-correction/receipt.json)替代，禁止继续作为
-FW-F 输入。FW-F 后继 Campaign 为 `claude-code-2_1_226-fw-f-measured-profile-v3-20260819`，Store 已到
-`profile_approved`：7,368 个发现和 32 个语义候选未决数为 0，2.1.226 目标画像／Release 与 2.1.220
-fixture 已按 target-first 顺序生成，EvidenceApprovalFact 和 `validation_only` ProfileApprovalFact 已签发。
-88 条活动规则都有 Vircs 上 2.1.226 官方客户端的真实 R/M 且断言通过，但当前仍为 `observed`，所以没有
+FW-F 输入。FW-F 后继 Campaign 为 `claude-code-2_1_226-fw-f-measured-profile-v4-20260819`，Store 已到
+`profile_approved`：7,368 个发现、593 个正交候选和 32 个语义候选族未决数均为 0，2.1.226 目标画像／
+Release 与 2.1.220 fixture 已按 target-first 顺序生成，EvidenceApprovalFact 和 `validation_only`
+ProfileApprovalFact 已签发。110 条活动规则都有 Vircs 上 2.1.226 官方客户端的真实 P／R／M、非零正负例
+且断言通过，但当前仍为 `observed`，所以没有
 production-replacement ApprovalFact、candidate、Runtime Selector、DeploymentFact 或环境变更。事实见
 [清零收据](egress/maintenance/fw-f-discovery-clearance/receipt.json)和
 [FW-F 画像批准收据](egress/maintenance/fw-f-profile-approval/receipt.json)；下一步固定为 FW-G。
@@ -658,20 +711,20 @@ Campaign 只是绑定目标版本、官方产物和环境身份的不可变容�
 |---|---|
 | bundle 提取、锚点和 sink 窗口 | 已实现；窗口不是数据流证明 |
 | 目标 AST／词法 sink 并集与四方矩阵 | 已实现；发现、语义候选和 SPEC 三层隔离；语义审查后的目标新增机制可显式生成 `add`，任何未分类项阻断封存 |
-| 全 host／path 运行 inventory | 2.1.226 Campaign 已关闭 host 预筛；FW-F v3 又以 Vircs 官方运行闭合 5 类 strict egress；换版必须新建 Campaign |
-| 规则／覆盖门禁和 54-run 分析 | 已实现；34 个真实上游 run 与 20 个隔离故障 run 均完整 |
-| R 通道与条件 Header 探针 | 已实现 |
-| TUI／`cli` 驱动 | 已以 Vircs 真实 TTY 纳入 v3；与 `sdk-cli` 分开绑定 entrypoint、模型和证据 |
+| 全 host／path 运行 inventory | 2.1.226 Campaign 已关闭 host 预筛；v21 以 Vircs 官方运行闭合 8 类 strict egress；换版必须新建 Campaign |
+| 规则／覆盖门禁和完整场景矩阵 | 已实现；77／77 场景、395 条请求、49／49 维度均完整 |
+| P／R 通道与条件 Header 探针 | 已实现；TLS 使用原生 P，普通规则使用 R |
+| TUI／`cli` 驱动 | 已以 Vircs 真实 TTY 纳入 v21；与 `sdk-cli` 分开绑定 entrypoint、模型和证据 |
 | Campaign 编排、正交事实账本和两段式批准 | FW-D 已实现；FW-F 已签发 EvidenceApprovalFact 和 `validation_only` ProfileApprovalFact |
-| 发现项与语义候选终态清零 | 7,368 个发现和 32 个候选均已逐项收敛，全部清零门禁为 0 |
+| 发现项与语义候选终态清零 | 7,368 个发现、593 个正交候选和 32 个语义候选族均已逐项收敛，全部清零门禁为 0 |
 | Claude Snapshot、ReleaseArtifact Store 和画像暂存 | 2.1.226 目标 Snapshot／Release 与 2.1.220 fixture 已按同一 Schema／Compiler 封存 |
 | candidate 冻结、四阶段封存和逐规则断言 | 通用能力已实现；当前批准仅为 `validation_only`，Claude candidate 为 0 |
 | 第三方入口集合 | 5 个逻辑入口和 14 个物理别名的当前事实已封存；各入口目标处置已在 validation-only 批准中冻结 |
 | Persona 派生与 compatibility 语义账本 | Planner、Plan、Identity、Compiler、transport 及有损入口边界已批准，具体代码留给 FW-G |
-| 辅助出站三态与运行断言 | 13 项已知 OAuth 出站的目标三态已批准：5 strict、8 managed；当前运行态仍保持 `legacy_observe`，FW-G 才实现与验收 |
+| 辅助出站三态与运行断言 | 16 项已知 OAuth 出站身份的目标三态已批准：8 strict、8 managed；当前运行态仍保持 `legacy_observe`，FW-G 才实现与验收 |
 | 晋升、正式镜像和 production active／rollback 收据 | 通用能力已实现；Claude 尚无晋升、激活或部署事实 |
 
-FW-F 已按 `validation_only` 闭合，不等于生产就绪。下一步固定为 FW-G：实现 88 条目标画像规则，用
+FW-F 已按 `validation_only` 闭合，不等于生产就绪。下一步固定为 FW-G：实现 110 条目标画像规则，用
 独立官方运行与候选对拍把所需规则升级到 `verified`，签发后继 `production_replacement` ApprovalFact，
 再建立并在 DMIT 验收 candidate。范围外能力继续 fail-close 或保持受管／遗留处置。
 
@@ -843,8 +896,8 @@ inventory 和 selector 未变证明。入库只允许：
 7. 构建记录 source tree、测试树、Go／Node 依赖、目标架构、image ID 与 OCI digest。
 
 当前 FW-F 已生成 target-first Snapshot／样例、2.1.220 fixture 和最终合同，但批准用途仅为
-`validation_only`。88 条活动规则全部绑定 Vircs 上 2.1.226 官方客户端的真实 R/M、逐项断言通过，
-发现项未决数为 0；证据等级
+`validation_only`。110 条活动规则全部绑定 Vircs 上 2.1.226 官方客户端的真实 P／R／M、独立正负例
+逐项断言通过，7,368 个发现与 593 个候选未决数为 0；证据等级
 仍是 `observed`，取得后继 `production_replacement` ApprovalFact 前不得形成生产替换 candidate。
 
 ## 4.4 候选验证与正式验收
@@ -864,10 +917,10 @@ Candidate 只能在 DMIT 或等价隔离环境运行，不能在 Vircs 换镜像
 - Persona system／identity 派生记录、跨 Persona／跨 Release 拒绝，以及 compatibility 模式不会混入 strict
   的负例。
 
-故障重试、真实 TUI、remote 条件、custom Header／beta／metadata 已有本次 R/M 并进入 SupportEnvelope。
-当前仍排除 ClientHello／ALPN offer、background、dispatch-id、usage-limit、server／deferred tools、
-cache diagnosis、MCP 降级、parent／后台派生及未触发的附件机制；若 FW-G 要实现其中任一能力，必须返回
-目标取证步骤，取得新 R/M（必要时 P）、新规则和后继 ApprovalFact，不能把它们悄悄塞入本次 candidate。
+原生 TLS／ALPN、故障重试、真实 TUI、remote、custom Header／beta／metadata、Agent 层级、background、
+hook、server／deferred tools、附件、count_tokens、OAuth refresh 与 MCP servers 已有本次 P／R／M 并进入
+SupportEnvelope。telemetry、nonessential、usage、models、dispatch-id 与 usage-limit 的合法零流量只作
+支撑事实；FW-G 不得为这些零流量生成规则，也不得把未获新证据的能力塞入 candidate。
 
 每个场景按 `prepare → capture → seal → approve` 封存；结果必须绑定原始证据 inventory，失败 attempt
 不得覆盖。只有 TranslationReport 为 lossless 的官方入口与第三方入口，才对同一规范化语义执行同一
@@ -878,7 +931,7 @@ FW-G 验收前至少重放本次 FW-F Store：
 
 ```bash
 python3 -m tools.official_client_control replay \
-  --store "$PWD/local-analysis/fw-f/claude-code-2.1.226/profile-approval-v3/control-store" \
+  --store "$PWD/local-analysis/fw-f/claude-code-2.1.226/profile-approval-v4/control-store" \
   --external-root "$PWD" \
   --require-external
 ```
@@ -887,7 +940,7 @@ python3 -m tools.official_client_control replay \
 运行，或先追加工具变更审阅链；不得拿当前已经改为全 host 捕获的 MITM／提取器源码与旧摘要直接比较，
 再把预期的工具演进误报成目标画像规则失败。2.1.220 fixture 的当前准入以本次内容寻址 Store 重放为准。
 
-逐规则结果必须唯一覆盖 SupportEnvelope 内的 88 条目标全集。`ready` 只证明固定 release candidate 通过
+逐规则结果必须唯一覆盖 SupportEnvelope 内的 110 条目标全集。`ready` 只证明固定 release candidate 通过
 已批准规则，不表示画像已晋升、正式镜像已构建或生产已切换。当前 FW-E 三层历史输入为：
 
 - `DiscoveryInventory`：7,368 个发现项，其中目标 AST 331、2.1.88 命题 29、HitCC clue 71、Markdown
@@ -904,17 +957,17 @@ FW-F 清零制品在不改写上述 FW-E 事实的前提下追加：
   空绑定、孤儿引用和循环引用均为 0；
 - 4,523／4,523 个 `catalogued_context` 均有终态，其中 128 个 Markdown 导航链接由结构证据证明为
   非出站，4,395 个绑定到精确文档、标题和语义支撑事实；原始记录仍永久保留；
-- 32／32 个语义候选已收敛；FW-F v1 机械生成的 97 条规则提案全部撤回并保留逐项审计；
-- `MeasuredRuleLedger` 只保留 88 条经 Vircs 上 2.1.226 官方客户端真实 R/M 断言通过的
+- 593／593 个正交候选和 32／32 个语义候选族已收敛；FW-F v1 机械生成的 97 条规则提案全部撤回并保留逐项审计；
+- `MeasuredRuleLedger` 只保留 110 条经 Vircs 上 2.1.226 官方客户端真实 P／R／M 正负断言通过的
   request-egress 规则；0 条响应兼容、
   遥测／traceparent 或无当前运行证据的规则进入 SupportEnvelope。
 
-语义清零只表示每个发现已经确定“是什么、归到哪里”，不表示可以进生产。88 条活动规则虽已有目标
-R/M 和通过断言，仍须在 FW-G 通过独立复测、实现后对拍与隔离验收达到后继批准要求。不得把
+语义清零只表示每个发现已经确定“是什么、归到哪里”，不表示可以进生产。110 条活动规则虽已有目标
+P／R／M 和通过断言，仍须在 FW-G 通过独立复测、实现后对拍与隔离验收达到后继批准要求。不得把
 `observed` 改名、用遗留 wire 佐证，或为了缩小数字从发现清单删除。
 
 FW-F 已封存 Claude `validation_only` ProfileApprovalFact、ReleaseArtifact、SupportEnvelope、两个
-Inventory 的目标处置和 88 条 request-egress 断言计划；五类 strict egress 分别绑定自身规则集合，
+Inventory 的目标处置和 110 条 request-egress 断言计划；八类 strict egress 分别绑定自身规则集合，
 响应兼容只作为支撑事实留在兼容边界。当前
 缺少的是 FW-G 的完整实现、独立补证、后继 `production_replacement` ApprovalFact 和 DMIT 验收，因此
 尚不能形成生产替换 candidate 或受管 `ready`。

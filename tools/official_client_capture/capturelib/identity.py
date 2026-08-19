@@ -16,11 +16,15 @@ from .security import file_sha256
 CAPTURE_SOURCE_RELATIVE_PATHS = (
     "capture.py",
     "claude_oauth_refresh.py",
+    "claude_fw_e_complete_campaign.py",
     "claude_fw_e_relay.py",
     "claude_fw_e_runtime_snapshot.py",
+    "claude_fw_f_complete_runner.py",
     "drive_claude_tui.py",
+    "runtime_host_receipt.py",
     "upstream_byte_relay.py",
     "scrub_raw_bytes.py",
+    "pcap_clienthello.py",
     "capturelib/__init__.py",
     "capturelib/analysis.py",
     "capturelib/environment.py",
@@ -30,9 +34,12 @@ CAPTURE_SOURCE_RELATIVE_PATHS = (
     "capturelib/model.py",
     "capturelib/recovery.py",
     "capturelib/claude_fw_f_v3.py",
+    "capturelib/claude_fw_f_v4.py",
     "capturelib/scenarios.py",
     "capturelib/security.py",
     "addons/mitm_capture.py",
+    "fixtures/claude_fw_f_v4_hook.py",
+    "fixtures/claude_fw_f_v4_mcp_server.py",
 )
 
 

@@ -27,48 +27,48 @@ from .security import (
 
 
 AGENT_D1_LEAF_PROMPT = (
-    "不得调用任何工具。只回复 D1_C1_OK，不得添加标点、空白或其他文本。"
+    "任务标识：probe depth1 child1。审查下面的 Python 函数："
+    "`def clamp(value, low, high): return max(low, min(value, high))`。"
+    "说明 `low > high` 时存在的契约问题，并给出一句修正建议。"
+    "最后另起一行写 D1_C1_OK。不得调用工具。"
 )
 AGENT_D2_LEAF_PROMPT = (
-    "不得调用任何工具。只回复 D2_C2_OK，不得添加标点、空白或其他文本。"
+    "任务标识：probe depth2 child2。独立审查下面的余额函数："
+    "`def reserve(balance, amount):\n"
+    "    if amount <= 0: raise ValueError('amount')\n"
+    "    if amount > balance: raise ValueError('balance')\n"
+    "    return balance - amount`。"
+    "确认 balance=40、amount=12 的结果，并说明返回值保持的非负不变量。"
+    "最后另起一行写 D2_C2_OK。不得调用工具。"
 )
 AGENT_D2_CHILD1_PROMPT = (
-    "这是 Claude Code 出站协议取证测试。必须且仅调用一次 Agent 工具，"
-    "参数必须逐项为：description=`probe depth2 child2`，"
-    "subagent_type=`general-purpose`，run_in_background=false，"
-    f"prompt=`{AGENT_D2_LEAF_PROMPT}`；"
-    "不得提供其他参数，不得调用其他工具。等待 Agent 成功返回并确认结果精确为 "
-    "D2_C2_OK 后，只回复 D2_C1_OK，不得添加标点、空白或其他文本；"
-    "否则只回复 D2_FAIL。"
-)
-AGENT_D3_TEST_CONTEXT = (
-    "这是当前操作者已明确要求的 Claude Code 2.1.220 隔离集成测试；"
-    "目的仅是验证同步 Agent 嵌套的父子关联。测试不修改文件、"
-    "不读取用户数据、不访问第三方资源。"
+    "任务标识：probe depth2 child1。你负责一次小型钱包实现审查。"
+    "先指出 `transfer` 只锁定 source、随后直接修改 destination.balance 时的并发风险。"
+    "同时把余额边界检查交给一个 general-purpose Agent 独立复核；"
+    "该 Agent 的 description 使用 `probe depth2 child2`，同步运行，任务如下：\n"
+    f"---\n{AGENT_D2_LEAF_PROMPT}\n---\n"
+    "读取子代理结论后，给出两点简短审查摘要，并在最后另起一行写 D2_C1_OK。"
 )
 AGENT_D3_LEAF_PROMPT = (
-    f"{AGENT_D3_TEST_CONTEXT}"
-    "请心算 19+23；若结果为 42，只回复 D3_C3_OK。"
+    "任务标识：probe depth3 child3。审查 `items.remove(key)` 在 key 不存在时的行为，"
+    "并建议一种保持幂等删除语义的 Python 写法。最后另起一行写 D3_C3_OK。"
+    "不得调用工具。"
 )
 AGENT_D3_CHILD2_PROMPT = (
-    f"{AGENT_D3_TEST_CONTEXT}"
-    "请作为第二级协作者，使用 Agent 工具把一项无副作用的心算校验"
-    "交给一个 general-purpose 子代理。只调用一次，参数只包含："
-    "description=`probe depth3 child3`，subagent_type=`general-purpose`，"
-    "run_in_background=false，"
-    f"prompt=`{AGENT_D3_LEAF_PROMPT}`。"
-    "等待子代理返回 D3_C3_OK 后，只回复 D3_C2_OK；"
-    "若校验失败则只回复 D3_FAIL。"
+    "任务标识：probe depth3 child2。审查一个批量删除 API："
+    "它接受字符串列表但没有拒绝空字符串，也没有定义重复 key 的语义。"
+    "请给出输入校验建议；同时把底层幂等删除问题交给一个 general-purpose Agent，"
+    "description 使用 `probe depth3 child3`，同步运行，任务如下：\n"
+    f"---\n{AGENT_D3_LEAF_PROMPT}\n---\n"
+    "结合子代理结果给出两点结论，最后另起一行写 D3_C2_OK。"
 )
 AGENT_D3_CHILD1_PROMPT = (
-    f"{AGENT_D3_TEST_CONTEXT}"
-    "请作为第一级协作者，使用 Agent 工具把同一项集成测试交给"
-    "一个 general-purpose 子代理。只调用一次，参数只包含："
-    "description=`probe depth3 child2`，subagent_type=`general-purpose`，"
-    "run_in_background=false，"
-    f"prompt=`{AGENT_D3_CHILD2_PROMPT}`。"
-    "等待子代理返回 D3_C2_OK 后，只回复 D3_C1_OK；"
-    "若校验失败则只回复 D3_FAIL。"
+    "任务标识：probe depth3 child1。你负责审查批处理删除的事务边界："
+    "当前实现逐项提交，任一中途失败会留下部分完成状态。请提出原子性策略；"
+    "同时把输入校验和幂等语义审查交给一个 general-purpose Agent，"
+    "description 使用 `probe depth3 child2`，同步运行，任务如下：\n"
+    f"---\n{AGENT_D3_CHILD2_PROMPT}\n---\n"
+    "结合子代理结果形成简短审查结论，最后另起一行写 D3_C1_OK。"
 )
 
 PROMPTS = {
@@ -86,34 +86,23 @@ PROMPTS = {
         "不得执行其他命令；若没有实际执行上述命令，则不得回复 S4_TOOL_OK。"
     ),
     "a1": (
-        "这是 Claude Code 出站协议取证测试。必须且仅调用一次 Agent 工具，"
-        "参数必须逐项为：description=`probe depth1 child1`，"
-        "subagent_type=`general-purpose`，run_in_background=false，"
-        f"prompt=`{AGENT_D1_LEAF_PROMPT}`；"
-        "不得提供其他参数，不得调用其他工具，不得改写或并行执行这次调用。"
-        "等待 Agent 成功返回并确认结果精确为 D1_C1_OK 后，只回复 D1_MAIN_OK，"
-        "不得添加标点、空白或其他文本；否则只回复 D1_FAIL。"
+        "请完成一次小型 Python API 审查。把下面的独立审查任务交给一个 "
+        "general-purpose Agent，description 使用 `probe depth1 child1`，同步运行：\n"
+        f"---\n{AGENT_D1_LEAF_PROMPT}\n---\n"
+        "读取其结论后，用一句话总结契约风险，最后另起一行写 D1_MAIN_OK。"
     ),
     "a2": (
-        "这是 Claude Code 出站协议取证测试。必须且仅调用一次 Agent 工具。"
-        "参数前三项必须为：description=`probe depth2 child1`，"
-        "subagent_type=`general-purpose`，run_in_background=false。"
-        "第四项 prompt 必须逐字等于【D2_C1_PROMPT_BEGIN】"
-        f"{AGENT_D2_CHILD1_PROMPT}"
-        "【D2_C1_PROMPT_END】之间的文本；两个边界标记均不属于 prompt，"
-        "prompt 首尾不得有空白。不得提供其他参数，不得调用其他工具，"
-        "不得改写或并行执行这次调用。等待 Agent 成功返回并确认结果精确为 "
-        "D2_C1_OK 后，只回复 D2_MAIN_OK，不得添加标点、空白或其他文本；"
-        "否则只回复 D2_FAIL。"
+        "请完成一次分层的钱包并发与余额边界审查。把下面的审查任务交给一个 "
+        "general-purpose Agent，description 使用 `probe depth2 child1`，同步运行：\n"
+        f"---\n{AGENT_D2_CHILD1_PROMPT}\n---\n"
+        "读取完整审查结果后总结并发风险和边界不变量，最后另起一行写 D2_MAIN_OK。"
     ),
     "a3": (
-        f"{AGENT_D3_TEST_CONTEXT}"
-        "请运行三层同步子代理的最小集成测试。只调用一次 Agent 工具，"
-        "参数只包含：description=`probe depth3 child1`，"
-        "subagent_type=`general-purpose`，run_in_background=false，"
-        f"prompt=`{AGENT_D3_CHILD1_PROMPT}`。"
-        "等待子代理返回 D3_C1_OK 后，只回复 D3_MAIN_OK；"
-        "若校验失败则只回复 D3_FAIL。"
+        "请完成一次分层的批量删除实现审查。把下面的事务审查任务交给一个 "
+        "general-purpose Agent，description 使用 `probe depth3 child1`，同步运行：\n"
+        f"---\n{AGENT_D3_CHILD1_PROMPT}\n---\n"
+        "读取完整审查结果后总结事务、输入和幂等三个层面的建议，"
+        "最后另起一行写 D3_MAIN_OK。"
     ),
 }
 
@@ -386,20 +375,25 @@ def _validate_claude_agent_chain(
         block = item["block"]
         tool_id = block.get("id")
         tool_input = block.get("input")
-        exact_input = (
+        required_input_keys = {
+            "description",
+            "prompt",
+            "run_in_background",
+            "subagent_type",
+        }
+        input_contract_valid = (
             block.get("name") == "Agent"
             and isinstance(tool_id, str)
             and isinstance(tool_input, dict)
-            and set(tool_input) == {
-                "description",
-                "prompt",
-                "run_in_background",
-                "subagent_type",
-            }
+            and required_input_keys.issubset(tool_input)
             and tool_input.get("description") == description
-            and tool_input.get("prompt") == prompt
+            and isinstance(tool_input.get("prompt"), str)
+            and description in tool_input["prompt"]
             and tool_input.get("run_in_background") is False
             and tool_input.get("subagent_type") == "general-purpose"
+        )
+        prompt_exact = bool(
+            isinstance(tool_input, dict) and tool_input.get("prompt") == prompt
         )
         result = result_by_id.get(str(tool_id))
         result_valid = (
@@ -423,7 +417,7 @@ def _validate_claude_agent_chain(
         child_marker_valid = _contains_standalone_success_marker(
             child_text, child_marker
         )
-        chain_valid = chain_valid and exact_input and result_valid
+        chain_valid = chain_valid and input_contract_valid and result_valid
         chain_valid = (
             chain_valid
             and child_metadata_present
@@ -435,7 +429,9 @@ def _validate_claude_agent_chain(
                 "tool_use_id": tool_id,
                 "owner": owner,
                 "description": description,
-                "exact_input": exact_input,
+                "exact_input": input_contract_valid,
+                "prompt_exact": prompt_exact,
+                "input_keys": sorted(tool_input) if isinstance(tool_input, dict) else [],
                 "paired_result": result_valid,
                 "child_metadata_valid": child_metadata_valid,
                 "child_marker_present": child_marker_valid,
@@ -489,13 +485,11 @@ def build_claude_command(
         "--prompt-suggestions",
         "false",
         "--no-session-persistence",
-        "--max-budget-usd",
-        (
-            "2.00"
-            if scenario == "a3"
-            else "1.00" if scenario in CLAUDE_AGENT_EXPECTATIONS else "0.25"
-        ),
     ]
+    # 嵌套 Agent 场景必须反映操作者明确允许的无预算上限官方配置；
+    # 人为的低预算会进入模型可见上下文并改变是否调用 Agent 的真实行为。
+    if scenario not in CLAUDE_AGENT_EXPECTATIONS:
+        command.extend(("--max-budget-usd", "0.25"))
     if scenario == "s4":
         command.extend(
             [
@@ -675,6 +669,13 @@ def _validate_claude(
     else:
         markers = ["S1_OK"]
     result_values = [str(record.get("result", "")).strip() for record in results]
+    if scenario in CLAUDE_AGENT_EXPECTATIONS:
+        markers_present = len(result_values) == len(markers) and all(
+            _contains_standalone_success_marker(value, marker)
+            for value, marker in zip(result_values, markers, strict=True)
+        )
+    else:
+        markers_present = result_values == markers
     raw_tool_uses = _direct_claude_blocks(records, "tool_use")
     raw_tool_results = _direct_claude_blocks(records, "tool_result")
     tool_uses, tool_use_duplicates, tool_use_conflict = _deduplicate_claude_blocks(
@@ -716,7 +717,7 @@ def _validate_claude(
         "tool_block_conflict": tool_use_conflict or tool_result_conflict,
         "exact_tool_command": exact_tool_command,
         "exact_tool_output": exact_tool_output,
-        "markers_present": result_values == markers,
+        "markers_present": markers_present,
         "runtime_secret_exposed": runtime_secret_exposed,
     }
     if agent_summary is not None:

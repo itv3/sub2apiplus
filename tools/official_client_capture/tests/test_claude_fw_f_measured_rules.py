@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import copy
 import json
-import re
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -17,6 +16,7 @@ from tools.official_client_capture.claude_fw_f_measured_rules import (
     MeasuredRuleError,
     build_ledger,
 )
+from tools.official_client_capture.claude_fw_f_profile import guide_rule_ids
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -29,6 +29,10 @@ CAMPAIGN_ROOT = (
 IDENTITY_PATH = CAMPAIGN_ROOT / "identity.json"
 RELAY_INDEX_PATH = CAMPAIGN_ROOT / "indexes/relay-index.json"
 GUIDE_PATH = ROOT / "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md"
+FINAL_LEDGER_PATH = (
+    ROOT
+    / "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v5-final/measured-rule-ledger.json"
+)
 
 
 def load(path: Path) -> dict[str, object]:
@@ -113,11 +117,12 @@ class MeasuredRuleLedgerTests(unittest.TestCase):
         for forbidden_id in ("SPEC-TLS-001", "SPEC-TLS-002"):
             with self.subTest(spec_id=forbidden_id):
                 discovery_policy = copy.deepcopy(self.discovery_policy)
+                discovery_policy["measured_rule_ids"] = sorted(RULE_DEFINITIONS)
                 discovery_policy["measured_rule_ids"][-1] = forbidden_id
                 discovery_policy["measured_rule_ids"] = sorted(
                     set(discovery_policy["measured_rule_ids"])
                 )
-                with self.assertRaisesRegex(MeasuredRuleError, "规则闭集不一致|禁用规则"):
+                with self.assertRaisesRegex(MeasuredRuleError, "不得重新预设|规则闭集不一致|禁用规则"):
                     build_ledger(
                         discovery_policy,
                         copy.deepcopy(self.profile_policy),
@@ -125,16 +130,15 @@ class MeasuredRuleLedgerTests(unittest.TestCase):
                         RELAY_INDEX_PATH,
                     )
 
-    def test_guide_activity_table_matches_measured_rule_set(self) -> None:
-        guide = GUIDE_PATH.read_text(encoding="utf-8")
-        activity = guide.split("## 2.5 88 条活动规则", 1)[1].split(
-            "## 2.6 发现项、候选与历史材料的终态", 1
-        )[0]
-        rows = [line for line in activity.splitlines() if re.match(r"^\| `SPEC-[A-Z0-9-]+` \|", line)]
-        spec_ids = [re.match(r"^\| `(SPEC-[A-Z0-9-]+)` \|", line).group(1) for line in rows]
-        self.assertEqual(sorted(spec_ids), sorted(RULE_DEFINITIONS))
-        self.assertEqual(len(spec_ids), len(RULE_DEFINITIONS))
-        self.assertTrue(all("R-" in line and "+ M`" in line for line in rows))
+    def test_guide_activity_table_matches_final_measured_rule_set(self) -> None:
+        ledger = load(FINAL_LEDGER_PATH)
+        spec_ids = guide_rule_ids(GUIDE_PATH)
+        self.assertEqual(spec_ids, sorted(value["spec_id"] for value in ledger["entries"]))
+        self.assertEqual(len(spec_ids), 110)
+        self.assertEqual(
+            sum(value["domain"] == "tls" for value in ledger["entries"]),
+            3,
+        )
 
 
 if __name__ == "__main__":

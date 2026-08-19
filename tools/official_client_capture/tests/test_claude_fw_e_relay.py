@@ -8,6 +8,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from tools.official_client_capture.capturelib.identity import (
     CAPTURE_SOURCE_RELATIVE_PATHS,
@@ -18,7 +19,9 @@ from tools.official_client_capture.claude_fw_e_relay import (
     _build_index,
     _build_parser,
     _capture,
+    _parse_pcap,
     _scrub_relay,
+    _start_pcap,
     _validate_relay_integrity,
 )
 from tools.official_client_capture.capturelib.security import scan_for_secrets
@@ -90,6 +93,23 @@ def relay_shutdown_handshake_connection(connection_id: int = 3) -> dict:
     for key in ("upstream_alpn", "error", "valid"):
         value.pop(key)
     return value
+
+
+def client_reset_handshake_connection(connection_id: int = 4) -> dict:
+    """构造官方并发连接在 TLS 前主动 reset 的精确零字节终态。"""
+
+    return {
+        "connection_id": connection_id,
+        "client_alpn_offer": ["http/1.1"],
+        "alpn_source": "assumed",
+        "error": "ConnectionResetError: [Errno 104] Connection reset by peer",
+        "valid": False,
+        "bytes": {},
+        "sha256": {},
+        "segments": [],
+        "opened_at_unix_ms": 1000,
+        "closed_at_unix_ms": 1100,
+    }
 
 
 def synthetic_messages_request(model: str, *, stream: bool | None = True) -> bytes:
@@ -174,9 +194,176 @@ def write_synthetic_relay(
 
 class ClaudeFWERelayTests(unittest.TestCase):
     def test_execution_source_binds_relay_and_scrubber(self) -> None:
+        self.assertIn("claude_fw_e_complete_campaign.py", CAPTURE_SOURCE_RELATIVE_PATHS)
+        self.assertIn("claude_fw_f_complete_runner.py", CAPTURE_SOURCE_RELATIVE_PATHS)
+        self.assertIn("runtime_host_receipt.py", CAPTURE_SOURCE_RELATIVE_PATHS)
         self.assertIn("claude_fw_e_relay.py", CAPTURE_SOURCE_RELATIVE_PATHS)
         self.assertIn("upstream_byte_relay.py", CAPTURE_SOURCE_RELATIVE_PATHS)
         self.assertIn("scrub_raw_bytes.py", CAPTURE_SOURCE_RELATIVE_PATHS)
+
+    def test_tls_p_channel_parses_target_clienthello(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            pcap = Path(directory) / "tls-clienthello.pcap"
+            pcap.write_bytes(b"pcap-header-and-one-packet-00")
+            with (
+                mock.patch(
+                    "tools.official_client_capture.pcap_clienthello.iter_packets",
+                    return_value=[(1, b"packet")],
+                ),
+                mock.patch(
+                    "tools.official_client_capture.pcap_clienthello.tcp_payload",
+                    return_value=("127.0.0.1", 443, b"clienthello"),
+                ),
+                mock.patch(
+                    "tools.official_client_capture.pcap_clienthello.parse_client_hello",
+                    return_value=(
+                        "api.anthropic.com",
+                        [0, 11, 10, 35, 16],
+                        [4865, 4866],
+                        ["http/1.1"],
+                    ),
+                ),
+            ):
+                result = _parse_pcap(pcap, "api.anthropic.com")
+
+            self.assertTrue(result["parsed"])
+            self.assertEqual(result["target_client_hello_count"], 1)
+            self.assertEqual(
+                result["observations"][0]["alpn_offer"], ["http/1.1"]
+            )
+
+    def test_tls_pcap_keeps_root_for_private_campaign_directory(self) -> None:
+        process = mock.Mock()
+        process.poll.return_value = None
+        process.pid = 123
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            tcpdump = root / "tcpdump"
+            tcpdump.write_bytes(b"binary")
+            tcpdump.chmod(0o700)
+            with (
+                mock.patch(
+                    "tools.official_client_capture.claude_fw_e_relay.shutil.which",
+                    return_value=str(tcpdump),
+                ),
+                mock.patch(
+                    "tools.official_client_capture.claude_fw_e_relay.subprocess.Popen",
+                    return_value=process,
+                ) as popen,
+                mock.patch(
+                    "tools.official_client_capture.claude_fw_e_relay.time.sleep"
+                ),
+            ):
+                returned, receipt = _start_pcap(
+                    root / "clienthello.pcap",
+                    root / "tcpdump.log",
+                )
+
+            command = popen.call_args.args[0]
+            self.assertEqual(returned, process)
+            self.assertEqual(command[command.index("-Z") + 1], "root")
+            self.assertEqual(receipt["privilege_user"], "root")
+
+    def test_tls_p_channel_rejects_wrong_sni(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            pcap = Path(directory) / "tls-clienthello.pcap"
+            pcap.write_bytes(b"pcap-header-and-one-packet-00")
+            with (
+                mock.patch(
+                    "tools.official_client_capture.pcap_clienthello.iter_packets",
+                    return_value=[(1, b"packet")],
+                ),
+                mock.patch(
+                    "tools.official_client_capture.pcap_clienthello.tcp_payload",
+                    return_value=("127.0.0.1", 443, b"clienthello"),
+                ),
+                mock.patch(
+                    "tools.official_client_capture.pcap_clienthello.parse_client_hello",
+                    return_value=("wrong.example", [0], [4865], []),
+                ),
+            ):
+                with self.assertRaisesRegex(RelayEvidenceError, "目标 host"):
+                    _parse_pcap(pcap, "api.anthropic.com")
+
+    def test_oauth_refresh_integrity_is_one_synthetic_request_and_zero_messages(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            body = b"grant_type=refresh_token&refresh_token=<secret>XXXX"
+            request = (
+                b"POST /v1/oauth/token HTTP/1.1\r\n"
+                b"Host: platform.claude.com\r\n"
+                + f"Content-Length: {len(body)}\r\n\r\n".encode("ascii")
+                + body
+            )
+            response = (
+                b"HTTP/1.1 400 Bad Request\r\nContent-Length: 25\r\n\r\n"
+                b'{"error":"invalid_grant"}'
+            )
+            (root / "conn001.client_to_upstream.bin").write_bytes(request)
+            (root / "conn001.upstream_to_client.bin").write_bytes(response)
+            write_json(
+                root / "relay.json",
+                {
+                    "schema_version": "byte-relay/v1",
+                    "mode": "direct",
+                    "upstream_host": "platform.claude.com",
+                    "synthetic_profile": "claude-fw-f-v4",
+                    "claude_fault_plan": "oauth-refresh-reject",
+                    "production_forwarding_enabled": False,
+                    "credential_scrubbing": {"byte_offsets_preserved": True},
+                    "connections": [
+                        {
+                            "connection_id": 1,
+                            "client_alpn": "http/1.1",
+                            "upstream_alpn": "http/1.1",
+                            "valid": True,
+                            "production_forwarded": False,
+                            "bytes": {
+                                "client_to_upstream": len(request),
+                                "upstream_to_client": len(response),
+                            },
+                            "sha256": {
+                                "client_to_upstream": hashlib.sha256(request).hexdigest(),
+                                "upstream_to_client": hashlib.sha256(response).hexdigest(),
+                            },
+                        }
+                    ],
+                },
+            )
+            (root / "intervention.jsonl").write_text(
+                json.dumps(
+                    {
+                        "type": "synthetic_claude_response",
+                        "profile": "claude-fw-f-v4",
+                        "plan": "oauth-refresh-reject",
+                        "action": "oauth_refresh_rejected",
+                        "connection_id": 1,
+                        "request_line": "POST /v1/oauth/token HTTP/1.1",
+                        "message_ordinal": 0,
+                        "production_forwarded": False,
+                    },
+                    separators=(",", ":"),
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            result = _validate_relay_integrity(
+                root,
+                synthetic_plan="oauth-refresh-reject",
+                synthetic_profile="claude-fw-f-v4",
+                message_request_expectation="zero",
+                target_host="platform.claude.com",
+            )
+
+            self.assertEqual(result["messages_request_count"], 0)
+            self.assertEqual(
+                result["synthetic_plan"]["attempts"][0]["kind"],
+                "oauth_refresh",
+            )
+            self.assertFalse(
+                result["synthetic_plan"]["production_forwarding_enabled"]
+            )
 
     def test_hosts_override_restores_exact_bytes_after_failure(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -274,6 +461,8 @@ class ClaudeFWERelayTests(unittest.TestCase):
                     "upstream_to_client": hashlib.sha256(response).hexdigest(),
                 },
             }
+            reset_without_errno = client_reset_handshake_connection(5)
+            reset_without_errno["error"] = "ConnectionResetError: "
             write_json(
                 root / "relay.json",
                 {
@@ -284,6 +473,8 @@ class ClaudeFWERelayTests(unittest.TestCase):
                     "connections": [
                         empty_handshake_connection(),
                         relay_shutdown_handshake_connection(),
+                        client_reset_handshake_connection(),
+                        reset_without_errno,
                         valid,
                     ],
                 },
@@ -292,8 +483,8 @@ class ClaudeFWERelayTests(unittest.TestCase):
             result = _validate_relay_integrity(root)
 
             self.assertEqual(result["connection_count"], 1)
-            self.assertEqual(result["total_connection_count"], 3)
-            self.assertEqual(result["excluded_handshake_connection_count"], 2)
+            self.assertEqual(result["total_connection_count"], 5)
+            self.assertEqual(result["excluded_handshake_connection_count"], 4)
             self.assertEqual(
                 result["excluded_connections"],
                 [
@@ -307,8 +498,37 @@ class ClaudeFWERelayTests(unittest.TestCase):
                         "reason": "relay_shutdown_terminated_handshake_before_application_data",
                         "manifest_error": None,
                     },
+                    {
+                        "connection_id": 4,
+                        "reason": "client_reset_transport_before_tls_handshake",
+                        "manifest_error": "ConnectionResetError: [Errno 104] Connection reset by peer",
+                    },
+                    {
+                        "connection_id": 5,
+                        "reason": "client_reset_transport_before_tls_handshake",
+                        "manifest_error": "ConnectionResetError: ",
+                    },
                 ],
             )
+
+    def test_integrity_rejects_non_exact_client_reset(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            connection = client_reset_handshake_connection()
+            connection["error"] = "ConnectionResetError: unexpected"
+            write_json(
+                root / "relay.json",
+                {
+                    "schema_version": "byte-relay/v1",
+                    "mode": "direct",
+                    "upstream_host": "api.anthropic.com",
+                    "credential_scrubbing": {"byte_offsets_preserved": True},
+                    "connections": [connection],
+                },
+            )
+
+            with self.assertRaisesRegex(RelayEvidenceError, "非受管的无效连接"):
+                _validate_relay_integrity(root)
 
     def test_real_integrity_accepts_exact_selected_alpn_mirroring(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -367,6 +587,117 @@ class ClaudeFWERelayTests(unittest.TestCase):
 
             self.assertEqual(result["connection_count"], 2)
             self.assertEqual(result["messages_request_count"], 1)
+
+    def test_real_integrity_accepts_exact_complete_one_sided_shutdown(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            request = (
+                b"GET /api/claude_code/policy_limits HTTP/1.1\r\n"
+                b"Host: api.anthropic.com\r\n"
+                b"Connection: keep-alive\r\n\r\n"
+            )
+            (root / "conn001.client_to_upstream.bin").write_bytes(request)
+            write_json(
+                root / "relay.json",
+                {
+                    "schema_version": "byte-relay/v1",
+                    "mode": "direct",
+                    "upstream_host": "api.anthropic.com",
+                    "mirror_selected_alpn": True,
+                    "production_forwarding_enabled": True,
+                    "credential_scrubbing": {"byte_offsets_preserved": True},
+                    "connections": [
+                        {
+                            "connection_id": 1,
+                            "client_alpn": None,
+                            "upstream_alpn": None,
+                            "upstream_alpn_offer": None,
+                            "valid": True,
+                            "termination_reason": (
+                                "relay_shutdown_after_complete_client_request_"
+                                "before_upstream_response"
+                            ),
+                            "relay_stop_requested": True,
+                            "bytes": {"client_to_upstream": len(request)},
+                            "sha256": {
+                                "client_to_upstream": hashlib.sha256(
+                                    request
+                                ).hexdigest()
+                            },
+                            "segments": [
+                                {
+                                    "direction": "client_to_upstream",
+                                    "offset": 0,
+                                    "length": len(request),
+                                }
+                            ],
+                        }
+                    ],
+                },
+            )
+
+            result = _validate_relay_integrity(
+                root,
+                message_request_expectation="zero",
+            )
+
+            self.assertEqual(result["connection_count"], 1)
+            self.assertEqual(result["one_sided_shutdown_connection_count"], 1)
+            self.assertEqual(result["messages_request_count"], 0)
+            self.assertEqual(
+                result["connections"][0]["request_lines"],
+                ["GET /api/claude_code/policy_limits HTTP/1.1"],
+            )
+
+    def test_real_integrity_rejects_incomplete_one_sided_shutdown(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            request = (
+                b"POST /v1/messages?beta=true HTTP/1.1\r\n"
+                b"Content-Length: 4\r\n\r\n{}"
+            )
+            (root / "conn001.client_to_upstream.bin").write_bytes(request)
+            write_json(
+                root / "relay.json",
+                {
+                    "schema_version": "byte-relay/v1",
+                    "mode": "direct",
+                    "upstream_host": "api.anthropic.com",
+                    "mirror_selected_alpn": True,
+                    "production_forwarding_enabled": True,
+                    "credential_scrubbing": {"byte_offsets_preserved": True},
+                    "connections": [
+                        {
+                            "connection_id": 1,
+                            "client_alpn": None,
+                            "upstream_alpn": None,
+                            "upstream_alpn_offer": None,
+                            "valid": True,
+                            "termination_reason": (
+                                "relay_shutdown_after_complete_client_request_"
+                                "before_upstream_response"
+                            ),
+                            "relay_stop_requested": True,
+                            "bytes": {"client_to_upstream": len(request)},
+                            "sha256": {
+                                "client_to_upstream": hashlib.sha256(
+                                    request
+                                ).hexdigest()
+                            },
+                            "segments": [
+                                {
+                                    "direction": "client_to_upstream",
+                                    "offset": 0,
+                                    "length": len(request),
+                                }
+                            ],
+                        }
+                    ],
+                },
+            )
+
+            with self.assertRaisesRegex(RelayEvidenceError, "body 不完整"):
+                _validate_relay_integrity(root)
 
     def test_local_rejection_requires_exactly_zero_messages(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -647,10 +978,98 @@ class ClaudeFWERelayTests(unittest.TestCase):
 
             self.assertEqual(result["capture_mode"], "fw-f-v3")
             self.assertEqual(result["response_plan"], "retry-500")
+            self.assertEqual(result["synthetic_success_marker"], "FW_F_V3_OK")
             self.assertFalse(result["live_requests"])
             self.assertFalse(result["production_forwarding_enabled"])
             self.assertIsNone(result["upstream_ip"])
             self.assertEqual(result["message_request_expectation"], "at-least-one")
+
+    def test_fw_f_v4_oauth_refresh_is_synthetic_and_host_is_frozen(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "new-run"
+            arguments = _build_parser().parse_args(
+                [
+                    "capture",
+                    "--dry-run",
+                    "--run-id",
+                    "v4-oauth-refresh",
+                    "--probe-id",
+                    "v4-oauth-refresh",
+                    "--fw-f-v4-probe",
+                    "v4-oauth-refresh",
+                    "--output-root",
+                    str(output),
+                    "--claude-bin",
+                    "/opt/claude",
+                    "--expected-version",
+                    "2.1.226",
+                    "--expected-sha256",
+                    "a" * 64,
+                    "--claude-credentials-file",
+                    "/run/credentials.json",
+                    "--ca-signing-pem",
+                    "/run/ca.pem",
+                    "--ca-cert",
+                    "/run/ca.crt",
+                    "--host-runtime-receipt",
+                    "/run/receipt.json",
+                    "--host-runtime-receipt-sha256",
+                    "b" * 64,
+                    "--run-nonce",
+                    "c" * 64,
+                ]
+            )
+
+            result = _capture(arguments)
+
+            self.assertEqual(result["capture_mode"], "fw-f-v4")
+            self.assertEqual(result["upstream_host"], "platform.claude.com")
+            self.assertEqual(result["response_plan"], "oauth-refresh-reject")
+            self.assertEqual(result["synthetic_success_marker"], "FW_F_V4_OK")
+            self.assertEqual(result["message_request_expectation"], "zero")
+            self.assertFalse(result["live_requests"])
+            self.assertFalse(result["production_forwarding_enabled"])
+
+    def test_fw_f_v4_replay_keeps_v3_success_marker(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            arguments = _build_parser().parse_args(
+                [
+                    "capture",
+                    "--dry-run",
+                    "--run-id",
+                    "v4-replay-disconnect-retry",
+                    "--probe-id",
+                    "v4-replay-disconnect-retry",
+                    "--fw-f-v4-probe",
+                    "v4-replay-disconnect-retry",
+                    "--output-root",
+                    str(Path(directory) / "new-run"),
+                    "--claude-bin",
+                    "/opt/claude",
+                    "--expected-version",
+                    "2.1.226",
+                    "--expected-sha256",
+                    "a" * 64,
+                    "--claude-credentials-file",
+                    "/run/credentials.json",
+                    "--ca-signing-pem",
+                    "/run/ca.pem",
+                    "--ca-cert",
+                    "/run/ca.crt",
+                    "--host-runtime-receipt",
+                    "/run/receipt.json",
+                    "--host-runtime-receipt-sha256",
+                    "b" * 64,
+                    "--run-nonce",
+                    "c" * 64,
+                ]
+            )
+
+            result = _capture(arguments)
+
+            self.assertEqual(result["response_plan"], "disconnect-retry")
+            self.assertEqual(result["synthetic_success_marker"], "FW_F_V3_OK")
+            self.assertFalse(result["production_forwarding_enabled"])
 
     def test_index_requires_symmetric_probe_set_and_one_source(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

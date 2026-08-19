@@ -1,49 +1,87 @@
 {
-  "schema_version": "official-client-fw-f-discovery-clearance-receipt/v3",
+  "schema_version": "official-client-fw-f-discovery-clearance-receipt/v4",
   "closed_at_utc": "2026-08-19T00:00:00Z",
   "target_version": "2.1.226",
   "target_binary_sha256": "4e9bec1177ce9690e8bd988b710ac24105e70da428dd094c5adcbbe786a55555",
-  "capture_source_bundle_sha256": "c91eb9acc776765ea047fb61efe8cf21cd6c7d978207c721e4d53762e1ebb09b",
+  "capture_source_bundle_sha256": "78fae770cbb54af5e9192ae6557516d9fd78187914fbb6399a359e1a75573c06",
   "evidence_host_role": "vircs-official-client-capture",
-  "source_campaign_id": "claude-code-2_1_226-fw-e-semantic-20260818-e577e144a",
-  "base_commit": "7ea0c1b8fceddc280604687b271965d1ca98d4ae",
-  "completed_work_item": "fw_f_v3_measured_rule_and_discovery_clearance",
-  "fw_f_phase_status": "in_progress",
+  "source_campaign_id": "complete-v21-78fae770cbb5",
+  "base_commit": "365e235e36361c37f68b9fdb9bb839917d12dd16",
+  "completed_work_item": "fw_f_v21_pair_complete_discovery_clearance",
+  "fw_f_phase_status": "clearance_complete_profile_pending",
+  "authority_document_bindings": {
+    "framework": {
+      "path": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+      "sha256": "d11f439e4b2984539a5fcacbca00b29655a1302e9774c02736cdd9931ccc6f47"
+    },
+    "claude_guide": {
+      "path": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "sha256": "12d0c3042063bfabff6a3b0f666ced7ee5c94ad249695b4fb7849063dca6b58d"
+    }
+  },
   "implementation_bindings": {
-    "measured_rule_tool": {
+    "v21_finalize_tool": {
+      "path": "tools/official_client_capture/claude_fw_f_v21_finalize.py",
+      "sha256": "d6c419bce0215b6cf14bdddd0ff7be7e4d481bc722df5d80534e613cce446284"
+    },
+    "prior_atomic_rule_tool": {
       "path": "tools/official_client_capture/claude_fw_f_measured_rules.py",
-      "sha256": "353bf485670b3d13e091d8111228627176d56400946df5176f124ba097047fba"
+      "sha256": "3a340319ee630aef941a33e694b71a53e1ab3b5988923175d8ebd8dc351fa9de"
     },
     "clearance_tool": {
       "path": "tools/official_client_capture/claude_fw_f_discovery_clearance.py",
-      "sha256": "c0712d61268b061631891ba3261145bc80212d21a241c212ebc05b7ef4c07299"
+      "sha256": "f4963be7bb6e6c923a6a583ce844d0fc3982c6dc1bf0d607254c967e9a967213"
     },
     "discovery_policy": {
       "path": "tools/official_client_capture/claude_fw_f_discovery_policy_2_1_226.json",
-      "sha256": "889e32497ef4e2185ae8a022c5d7bd1e25b7facb229fb84012790aa95c888d8f"
+      "sha256": "8dfd59a2962b9f326cf1e50e2588cefc558475a3a63969d67faca8bfae9c9a64"
     },
     "profile_policy": {
       "path": "tools/official_client_capture/claude_fw_f_profile_policy_2_1_226.json",
-      "sha256": "cb6bde890502c3c596270abfa73f0b4c9e648b01098e397e640acd95bddc7ae5"
+      "sha256": "308abd967edb3148b6eac24b63febd8b924b0ff2a1767bfe279fdef25da66875"
     },
-    "v3_capture_catalog": {
-      "path": "tools/official_client_capture/capturelib/claude_fw_f_v3.py",
-      "sha256": "9d40e86521c31a6389e07482b9898a45fed154a09ecfaff3d22b7f7a471d0b38"
+    "profile_tool": {
+      "path": "tools/official_client_capture/claude_fw_f_profile.py",
+      "sha256": "acc99691c3df6727306c9be58b4dfe84e4a158709f120c2cc8df5bd82d224ff5"
     },
-    "measured_rule_tests": {
-      "path": "tools/official_client_capture/tests/test_claude_fw_f_measured_rules.py",
-      "sha256": "439ab8323f0056a3a8746022ab256b07d0ba48e0b3df802e2aa5f9e94d038edf"
+    "v4_capture_catalog": {
+      "path": "tools/official_client_capture/capturelib/claude_fw_f_v4.py",
+      "sha256": "3aafc3f982275b644cfa3b92100ba6b955021b25921d0d87d039fd1c9096ba90"
+    },
+    "complete_runner": {
+      "path": "tools/official_client_capture/claude_fw_f_complete_runner.py",
+      "sha256": "89b6eab7d4484c9936f8ab50254c1abc40c80b494aced597412459faa8b2441c"
     },
     "clearance_tests": {
       "path": "tools/official_client_capture/tests/test_claude_fw_f_discovery_clearance.py",
-      "sha256": "7ef95a03bc62f3ff9c0bcbca61b05d021980a59774068a6ad36db5ef20bb3cee"
+      "sha256": "465ddd28be5ee594c25be6cfa8736a2568168165bd031110942697594b6666ba"
     },
-    "v3_tests": {
-      "path": "tools/official_client_capture/tests/test_claude_fw_f_v3.py",
-      "sha256": "da75f81a66b43450bcfd3977e4a11219feccb603078126e13e4e24866eba1d07"
+    "measured_rule_tests": {
+      "path": "tools/official_client_capture/tests/test_claude_fw_f_measured_rules.py",
+      "sha256": "ad857cf7240c84eae3edc600ab3cea0942265893254983fce7fe1f6b6a36d001"
+    },
+    "profile_tests": {
+      "path": "tools/official_client_capture/tests/test_claude_fw_f_profile.py",
+      "sha256": "c848e8164f60e6269e22363e8ecd5150b1f47d2d55233b615a9f3aa2f2b4ff67"
+    },
+    "v4_tests": {
+      "path": "tools/official_client_capture/tests/test_claude_fw_f_v4.py",
+      "sha256": "eb030778fd55f8265a799933be0f7f74c548c8c185eb6a6fcf8edaf962918a54"
     }
   },
   "input_bindings": {
+    "campaign": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/complete-v21-78fae770cbb5/campaign.json",
+      "sha256": "5de10541efd0c06816ac7c0f594c6a63f7512e7fd646d45e3455b7a7d1e96ad1"
+    },
+    "scenario_catalog": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/complete-v21-78fae770cbb5/scenario-catalog.json",
+      "sha256": "350edd60d5b3dc0c2f65beb60154def83e7515e4649c5c289b0a749c2c6b8970"
+    },
+    "execution_summary": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/complete-v21-78fae770cbb5/execution-summary.json",
+      "sha256": "35c95337ef7ad9914606e0751780a33b394bf6e7375ac7aac6ea604bb301f9da"
+    },
     "discovery_inventory": {
       "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/semantic-closure-v1-e577e144a/discovery-inventory.json",
       "sha256": "4b31d9e79201761f132e00c127d5e9df91015f2eec302b082b0aa1769306a41a"
@@ -64,92 +102,165 @@
       "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/control-store-v3-e577e144a/objects/egress_disposition_inventory/47b1c1a62dbc4964cf3b4fca6101113b94e8cc9b26bffead9ec051ce6bb1848e.json",
       "sha256": "47b1c1a62dbc4964cf3b4fca6101113b94e8cc9b26bffead9ec051ce6bb1848e"
     },
-    "campaign_identity": {
-      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/campaign/identity.json",
-      "sha256": "e1fe7f769d1142546281184a2492979a7cfbbcf82daea966df2b9b6b51df19c6"
+    "prior_measured_rule_ledger": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v3/measured-rule-ledger.json",
+      "sha256": "b5308626b9d8c6fa4776593fd52a5c7e3c806db14994f27577c804dd832a0ebf"
     },
-    "relay_index": {
-      "path": "local-analysis/fw-e/claude-code-stable-20260818/completeness-supplement/runtime-relay-205d7f58f/campaign/indexes/relay-index.json",
-      "sha256": "cc0c92e346ba6c61ff20e2e61b2301ce6ec8d7fbe99131d5f35d444f65512c12"
+    "prior_candidate_resolution_ledger": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v3/candidate-resolution-ledger.json",
+      "sha256": "8ed8a9a3782254ce165c9fe5d7d294f67a9ff1d245d9f46e5076890124193b62"
     },
     "invalid_v1_rule_additions": {
       "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v1/rule-ledger-additions.json",
       "sha256": "59c9366bad59c3c8042ce1be71ff1e746ebb9ed3e2ffd01fc8bae90ac5d34728"
     }
   },
-  "output_bindings": {
+  "finalization_output_bindings": {
+    "candidate_disposition_ledger": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/final-v21-110-rules-pair-complete/candidate-disposition-ledger.json",
+      "sha256": "9cb86970ad955fc07794437d802af954dd7b09d0e73424c650f9f89656ec6a2b"
+    },
+    "matrix_dimension_ledger": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/final-v21-110-rules-pair-complete/matrix-dimension-ledger.json",
+      "sha256": "bd7712501ed3c20946dad4b5d732fbd3f0e02eb7097d0c8b059eb1159d71ad83"
+    },
     "measured_rule_ledger": {
-      "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v3/measured-rule-ledger.json",
-      "sha256": "b5308626b9d8c6fa4776593fd52a5c7e3c806db14994f27577c804dd832a0ebf"
+      "path": "local-analysis/fw-f/claude-code-2.1.226/final-v21-110-rules-pair-complete/measured-rule-ledger.json",
+      "sha256": "20e3c02365893db0af7164acd8300b658f653b29c2340acedfe0abf6973a4200"
     },
-    "discovery_disposition_ledger": {
-      "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v3/discovery-disposition-ledger.json",
-      "sha256": "56c2fef06d4e27bdc6e6367c2cccbb8db6e2b193a018405393a1cca674b520c4"
+    "prior_atomic_revalidation_ledger": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/final-v21-110-rules-pair-complete/prior-atomic-revalidation-ledger.json",
+      "sha256": "6bd4dcc28167be82e4d796a61b445bdc4ae3f3e0be5c2fe40af3cd90c8da3d23"
     },
+    "wire_inventory": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/final-v21-110-rules-pair-complete/wire-inventory.json",
+      "sha256": "ba7628e99e46dad5abace145b64e63b08d421a9b9070b8c9c1dfe0f22e2c2856"
+    }
+  },
+  "clearance_output_bindings": {
     "candidate_resolution_ledger": {
-      "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v3/candidate-resolution-ledger.json",
-      "sha256": "8ed8a9a3782254ce165c9fe5d7d294f67a9ff1d245d9f46e5076890124193b62"
-    },
-    "withdrawn_rule_proposals": {
-      "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v3/withdrawn-rule-proposals.json",
-      "sha256": "1f09eeae87628c043f02a3ebaee71cfe20fec6ddf091d679a43198bed3c4afec"
-    },
-    "semantic_context_facts": {
-      "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v3/semantic-context-facts.json",
-      "sha256": "f2c0664ac1a0ee383040a6ddc82f289dd3e180a08475252b3cb5bc27193d9b26"
-    },
-    "managed_egress_facts": {
-      "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v3/managed-egress-facts.json",
-      "sha256": "50b7c471600d36957e1b470fa18b6cefbe9c3695e8c58cf290b90a55622ef477"
+      "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v5-final/candidate-resolution-ledger.json",
+      "sha256": "1d960de8ace2e069e8ded49ddfcded3efab97a8b45328aa9dffc7ee6abe4885f"
     },
     "closure": {
-      "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v3/closure.json",
-      "sha256": "d6e39410535be06e283f751104fd2dbe5f75759f5cdee8f6c3d8b63f54352357"
+      "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v5-final/closure.json",
+      "sha256": "7e1b67b29e3ee7f20aef0546f97bcdb7a3011d575259412bc8164fc2e07ed9ea"
+    },
+    "discovery_disposition_ledger": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v5-final/discovery-disposition-ledger.json",
+      "sha256": "650f1c4648c99556490f0f56d9ac8f1003472e8aa76a1b1ad2300ee38ad958fb"
+    },
+    "managed_egress_facts": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v5-final/managed-egress-facts.json",
+      "sha256": "677f09c36cb09addaf5566f839cfff7d0e02a4dc6bd57f69cb2d4e23b5be2442"
+    },
+    "measured_rule_ledger": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v5-final/measured-rule-ledger.json",
+      "sha256": "20e3c02365893db0af7164acd8300b658f653b29c2340acedfe0abf6973a4200"
+    },
+    "semantic_context_facts": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v5-final/semantic-context-facts.json",
+      "sha256": "4fd52a64aae0f0615e0b560ff229289636d9260a865f95d29da1ba5163814a85"
+    },
+    "withdrawn_rule_proposals": {
+      "path": "local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v5-final/withdrawn-rule-proposals.json",
+      "sha256": "1d54cac0a37e411eadf8af2f866fe6ab8b18af1fdc8bd0f0a95b07bc375a5101"
     }
   },
   "clearance": {
+    "scenario_count": 77,
+    "request_occurrence_count": 395,
+    "matrix_dimension_count": 49,
     "source_discovery_count": 7368,
     "resolved_record_count": 7368,
+    "unresolved_record_count": 0,
     "catalogued_context_source_count": 4523,
     "catalogued_context_resolved_count": 4523,
-    "candidate_count": 32,
-    "resolved_candidate_count": 32,
-    "measured_rule_count": 88,
+    "legacy_semantic_candidate_count": 32,
+    "orthogonal_candidate_count": 593,
+    "resolved_candidate_count": 593,
+    "candidate_source_counts": {
+      "target_send_sites": 331,
+      "source_2_1_88_mechanisms": 102,
+      "hitcc_clues": 71,
+      "historical_rules": 57,
+      "semantic_candidate_families": 32
+    },
+    "candidate_disposition_counts": {
+      "duplicate_bound": 13,
+      "managed_egress_bound": 75,
+      "rule_bound": 194,
+      "supporting_fact_bound": 309,
+      "target_absent_proven": 2
+    },
+    "measured_rule_count": 110,
+    "prior_rule_revalidated_count": 88,
+    "new_atomic_rule_count": 22,
+    "tls_rule_count": 3,
+    "non_tls_rule_count": 107,
     "measured_rule_evidence_levels": {
-      "observed": 88,
+      "observed": 110,
       "verified": 0
     },
     "strict_egress_rule_counts": {
-      "egress-claude-messages-inference": 84,
-      "egress-claude-lifecycle-hello": 4,
+      "egress-claude-count-tokens": 3,
+      "egress-claude-lifecycle-hello": 6,
+      "egress-claude-mcp-servers": 2,
+      "egress-claude-messages-inference": 98,
       "egress-claude-oauth-profile": 2,
-      "egress-claude-policy-limits": 2,
-      "egress-claude-settings": 2
+      "egress-claude-oauth-token-refresh": 3,
+      "egress-claude-policy-limits": 4,
+      "egress-claude-settings": 4
     },
     "withdrawn_v1_proposal_count": 97,
     "active_v1_proposal_count": 0,
-    "context_terminal_counts": {
-      "markdown_navigation_non_egress": 128,
-      "semantic_supporting_fact": 4395
-    },
-    "forbidden_active_rule_count": 0,
-    "all_rule_assertions_passed": true,
-    "all_rules_bind_target_r_and_m": true,
-    "all_clearance_gate_counts_zero": true
+    "forbidden_unmeasured_boundary_count": 0,
+    "all_rules_have_independent_pair": true,
+    "all_rules_have_nonzero_official_positive": true,
+    "all_rules_have_nonzero_official_negative": true,
+    "all_tls_rules_bind_p_and_m": true,
+    "all_non_tls_rules_bind_r_and_m": true,
+    "all_clearance_gate_counts_zero": true,
+    "telemetry_or_nonessential_absence_generates_rule": false,
+    "usage_models_dispatch_or_usage_limit_zero_traffic_generates_rule": false
   },
   "verification": [
     {
-      "id": "fw-f-v3-targeted-tests",
+      "id": "v21-finalization-replay",
       "result": "passed",
-      "test_count": 35,
-      "passed_test_count": 35,
-      "skipped_test_count": 0
+      "scenario_count": 77,
+      "request_occurrence_count": 395,
+      "matrix_dimension_count": 49,
+      "candidate_count": 593,
+      "rule_count": 110
+    },
+    {
+      "id": "pair-positive-negative-replay",
+      "result": "passed",
+      "rule_count": 110,
+      "zero_positive_count": 0,
+      "zero_negative_count": 0
+    },
+    {
+      "id": "full-discovery-clearance-replay",
+      "result": "passed",
+      "resolved_discovery_count": 7368,
+      "unresolved_discovery_count": 0,
+      "resolved_candidate_count": 593,
+      "unresolved_candidate_count": 0
+    },
+    {
+      "id": "guide-and-rule-ledger-reconciliation",
+      "result": "passed",
+      "guide_rule_count": 110,
+      "rule_ledger_count": 110,
+      "all_rule_id_sets_equal": true
     },
     {
       "id": "official-client-capture-tests",
       "result": "passed",
-      "test_count": 819,
-      "passed_test_count": 816,
+      "test_count": 868,
+      "passed_test_count": 865,
       "skipped_test_count": 3
     },
     {
@@ -160,23 +271,16 @@
       "skipped_test_count": 0
     },
     {
-      "id": "real-rm-measured-rule-replay",
+      "id": "codex-zero-difference-go-regression",
       "result": "passed",
-      "rule_count": 88,
-      "vircs_real_upstream_run_count": 34,
-      "isolated_fault_run_count": 20
-    },
-    {
-      "id": "full-discovery-clearance-replay",
-      "result": "passed",
-      "resolved_discovery_count": 7368,
-      "unresolved_discovery_count": 0
+      "command": "cd backend && go test ./internal/officialegress/... ./internal/service/..."
     }
   ],
   "phase_boundary": {
     "profile_schema_generated": false,
     "snapshot_generated": false,
     "profile_approval_issued": false,
+    "production_replacement_approval_issued": false,
     "validation_candidate_generated": false,
     "runtime_selector_changed": false,
     "dmit_deployment_performed": false,

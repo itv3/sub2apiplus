@@ -40,6 +40,7 @@ from tools.official_client_capture.capturelib.environment import (  # noqa: E402
     clean_environment,
     parse_injected_env,
     prepare_claude_oauth_state,
+    temporary_claude_refresh_state,
     temporary_claude_tui_state,
 )
 from tools.official_client_capture.capturelib.claude_fw_f_v3 import (  # noqa: E402
@@ -47,6 +48,13 @@ from tools.official_client_capture.capturelib.claude_fw_f_v3 import (  # noqa: E
     ClaudeFWFProbeError,
     get_probe as get_fw_f_probe,
     run_claude_fw_f_probe,
+)
+from tools.official_client_capture.capturelib.claude_fw_f_v4 import (  # noqa: E402
+    PROBE_IDS as FW_F_V4_PROBE_IDS,
+    ClaudeFWFCompleteProbeError,
+    get_probe as get_fw_f_v4_probe,
+    run_claude_fw_f_complete_probe,
+    validate_complete_probe_evidence,
 )
 from tools.official_client_capture.capturelib.identity import (  # noqa: E402
     capture_source_bundle_identity,
@@ -90,6 +98,12 @@ EMPTY_HANDSHAKE_TERMINATION_REASON = (
 )
 RELAY_SHUTDOWN_HANDSHAKE_TERMINATION_REASON = (
     "relay_shutdown_terminated_handshake_before_application_data"
+)
+CLIENT_RESET_HANDSHAKE_TERMINATION_REASON = (
+    "client_reset_transport_before_tls_handshake"
+)
+ONE_SIDED_SHUTDOWN_TERMINATION_REASON = (
+    "relay_shutdown_after_complete_client_request_before_upstream_response"
 )
 DEFAULT_RUNTIME_IMAGE = (
     "oauth-egress-capture-capture-cli@"
@@ -317,7 +331,11 @@ class HostsOverride:
 
 
 def _generate_leaf_certificate(
-    work_root: Path, ca_signing_pem: Path, ca_cert: Path, openssl: Path
+    work_root: Path,
+    ca_signing_pem: Path,
+    ca_cert: Path,
+    openssl: Path,
+    target_host: str,
 ) -> tuple[Path, Path]:
     key_path = work_root / "leaf.key"
     csr_path = work_root / "leaf.csr"
@@ -326,7 +344,7 @@ def _generate_leaf_certificate(
     extension_path = work_root / "leaf.cnf"
     secure_write_text(
         extension_path,
-        f"subjectAltName=DNS:{UPSTREAM_HOST}\nextendedKeyUsage=serverAuth\n",
+        f"subjectAltName=DNS:{target_host}\nextendedKeyUsage=serverAuth\n",
     )
     commands = (
         [
@@ -339,7 +357,7 @@ def _generate_leaf_certificate(
             "-keyout",
             str(key_path),
             "-subj",
-            f"/CN={UPSTREAM_HOST}",
+            f"/CN={target_host}",
             "-out",
             str(csr_path),
         ],
@@ -408,6 +426,112 @@ def _stop_process(process: subprocess.Popen[bytes] | None) -> bool:
                 pass
             process.wait(timeout=5)
     return process.poll() is not None
+
+
+def _start_pcap(path: Path, log_path: Path) -> tuple[subprocess.Popen[bytes], dict[str, Any]]:
+    """在当前隔离容器 loopback 被动采集客户端到本地中继的 ClientHello。"""
+
+    tcpdump = Path(shutil.which("tcpdump") or "")
+    _validate_static_file(tcpdump, "tcpdump", executable=True)
+    command = [
+        str(tcpdump),
+        "-i",
+        "lo",
+        "-s",
+        "0",
+        "-U",
+        "-Z",
+        "root",
+        "-w",
+        str(path),
+        "tcp dst port 443",
+    ]
+    log_stream = log_path.open("wb")
+    try:
+        process = subprocess.Popen(
+            command,
+            env=clean_environment(),
+            stdin=subprocess.DEVNULL,
+            stdout=log_stream,
+            stderr=log_stream,
+            **_popen_safety_options(),
+        )
+    finally:
+        log_stream.close()
+    time.sleep(1)
+    if process.poll() is not None:
+        raise RelayEvidenceError("TLS P 通道 tcpdump 启动失败。")
+    return process, {
+        "required": True,
+        "interface": "lo",
+        "filter": "tcp dst port 443",
+        "privilege_user": "root",
+        "tool": {"path": str(tcpdump), "sha256": file_sha256(tcpdump)},
+        "invocation": argv_manifest_view(command),
+        "stopped": False,
+        "parsed": False,
+    }
+
+
+def _stop_pcap(process: subprocess.Popen[bytes] | None) -> bool:
+    if process is None:
+        return True
+    if process.poll() is None:
+        try:
+            os.killpg(process.pid, signal.SIGINT)
+        except ProcessLookupError:
+            pass
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            return _stop_process(process)
+    return process.poll() is not None
+
+
+def _parse_pcap(path: Path, target_host: str) -> dict[str, Any]:
+    """解析 v4 TLS P 通道并要求至少一个匹配目标 SNI 的 ClientHello。"""
+
+    if path.is_symlink() or not path.is_file() or path.stat().st_size <= 24:
+        raise RelayEvidenceError("TLS P 通道没有生成可信 pcap。")
+    from tools.official_client_capture.pcap_clienthello import (  # noqa: PLC0415
+        iter_packets,
+        parse_client_hello,
+        tcp_payload,
+    )
+
+    rows: list[dict[str, Any]] = []
+    for link, data in iter_packets(path):
+        parsed = tcp_payload(link, data)
+        if not parsed:
+            continue
+        _destination, destination_port, payload = parsed
+        if destination_port != 443:
+            continue
+        hello = parse_client_hello(payload)
+        if not hello:
+            continue
+        sni, extensions, ciphers, alpn = hello
+        rows.append(
+            {
+                "sni": sni,
+                "extension_types": extensions,
+                "cipher_suites": ciphers,
+                "alpn_offer": alpn,
+            }
+        )
+    matched = [item for item in rows if item.get("sni") == target_host]
+    if not matched:
+        raise RelayEvidenceError("TLS P 通道没有匹配目标 host 的 ClientHello。")
+    return {
+        "required": True,
+        "pcap_sha256": file_sha256(path),
+        "pcap_bytes": path.stat().st_size,
+        "client_hello_count": len(rows),
+        "target_client_hello_count": len(matched),
+        "target_host": target_host,
+        "observations": matched,
+        "parsed": True,
+    }
 
 
 def _scrub_relay(
@@ -502,6 +626,25 @@ def _message_attempt_from_wire(
             "kind": "auxiliary",
             "auxiliary_kind": auxiliary[request_line],
         }
+    if request_line == "POST /v1/oauth/token HTTP/1.1":
+        content_length: int | None = None
+        for line in head.split(b"\r\n")[1:]:
+            name, colon, value = line.partition(b":")
+            if colon and name.strip().lower() == b"content-length":
+                try:
+                    content_length = int(value.strip())
+                except ValueError as error:
+                    raise RelayEvidenceError(
+                        "Claude OAuth refresh Content-Length 非法。"
+                    ) from error
+        if content_length is None or content_length != len(body):
+            raise RelayEvidenceError("Claude OAuth refresh body 长度不一致。")
+        return {
+            "connection_id": connection_id,
+            "request_line": request_line,
+            "kind": "oauth_refresh",
+            "body_sha256": _sha256_bytes(body),
+        }
     if request_line != "POST /v1/messages?beta=true HTTP/1.1":
         raise RelayEvidenceError(f"Claude 合成 R 出现未知端点：{request_line}")
     encoding = ""
@@ -544,11 +687,12 @@ def _validate_synthetic_plan(
     plan: str,
     attempts: list[dict[str, Any]],
     interventions: list[dict[str, Any]],
+    synthetic_profile: str,
 ) -> dict[str, Any]:
     """闭合 Claude 合成故障计划的请求序号、响应动作和生产隔离。"""
 
     message_attempts = [item for item in attempts if item.get("kind") == "messages"]
-    if not message_attempts:
+    if plan != "oauth-refresh-reject" and not message_attempts:
         raise RelayEvidenceError("Claude 合成 R 没有 messages 请求。")
     response_rows = [
         item
@@ -562,7 +706,7 @@ def _validate_synthetic_plan(
             raise RelayEvidenceError("Claude 合成干预没有证明 production_forwarded=false。")
         if item.get("type") != "synthetic_claude_response":
             raise RelayEvidenceError("Claude 合成 R 含非受管干预类型。")
-        if item.get("profile") != "claude-fw-f-v3" or item.get("plan") != plan:
+        if item.get("profile") != synthetic_profile or item.get("plan") != plan:
             raise RelayEvidenceError("Claude 合成干预身份与冻结计划不一致。")
     by_connection = {
         item.get("connection_id"): item for item in response_rows
@@ -583,6 +727,11 @@ def _validate_synthetic_plan(
             raise RelayEvidenceError("Claude 合成辅助端点响应动作漂移。")
         if attempt.get("kind") == "hello" and response.get("action") != "hello_success":
             raise RelayEvidenceError("Claude 合成 hello 响应动作漂移。")
+        if (
+            attempt.get("kind") == "oauth_refresh"
+            and response.get("action") != "oauth_refresh_rejected"
+        ):
+            raise RelayEvidenceError("Claude OAuth refresh 合成响应动作漂移。")
     message_rows = [
         item for item in response_rows if item.get("message_ordinal") not in {0, None}
     ]
@@ -603,7 +752,11 @@ def _validate_synthetic_plan(
         "retry-503",
         "retry-529",
     }
-    if plan in retry_once:
+    if plan == "oauth-refresh-reject":
+        oauth_attempts = [item for item in attempts if item.get("kind") == "oauth_refresh"]
+        if len(oauth_attempts) != 1 or message_attempts or actions:
+            raise RelayEvidenceError("Claude OAuth refresh 合成计划没有精确闭合。")
+    elif plan in retry_once:
         if actions != [f"{plan}_fault", f"{plan}_success"]:
             raise RelayEvidenceError("Claude 单故障重试计划没有精确闭合为两次尝试。")
     elif plan in {"nonretry-400", "nonretry-403", "stall"}:
@@ -655,27 +808,158 @@ def _validate_synthetic_plan(
         "plan": plan,
         "message_attempt_count": len(message_attempts),
         "actions": actions,
-        "attempts": message_attempts,
+        "attempts": attempts,
         "production_forwarding_enabled": False,
     }
+
+
+def _complete_h1_request_lines(request_stream: bytes) -> list[str]:
+    """严格解析完整 H1 请求流，并拒绝无法证明边界的编码。"""
+
+    if not request_stream:
+        raise RelayEvidenceError("单向停机连接没有客户端请求字节。")
+    cursor = 0
+    request_lines: list[str] = []
+    while cursor < len(request_stream):
+        head_end = request_stream.find(b"\r\n\r\n", cursor)
+        if head_end < 0:
+            raise RelayEvidenceError("单向停机连接的 H1 首部不完整。")
+        head = request_stream[cursor:head_end]
+        lines = head.split(b"\r\n")
+        if not lines or re.fullmatch(
+            rb"[A-Z]+ [^\x00-\x20]+ HTTP/1\.1", lines[0]
+        ) is None:
+            raise RelayEvidenceError("单向停机连接的 H1 请求行非法。")
+        content_lengths: list[int] = []
+        for line in lines[1:]:
+            if line[:1] in {b" ", b"\t"}:
+                raise RelayEvidenceError("单向停机连接含折叠 H1 header。")
+            name, separator, value = line.partition(b":")
+            if (
+                not separator
+                or re.fullmatch(rb"[!#$%&'*+\-.^_`|~0-9A-Za-z]+", name)
+                is None
+            ):
+                raise RelayEvidenceError("单向停机连接含非法 H1 header。")
+            lowered = name.lower()
+            if lowered == b"transfer-encoding":
+                raise RelayEvidenceError("单向停机连接不接受无法静态定界的传输编码。")
+            if lowered == b"content-length":
+                raw_length = value.strip()
+                if re.fullmatch(rb"[0-9]+", raw_length) is None:
+                    raise RelayEvidenceError("单向停机连接 Content-Length 非法。")
+                content_lengths.append(int(raw_length))
+        if len(set(content_lengths)) > 1:
+            raise RelayEvidenceError("单向停机连接含冲突 Content-Length。")
+        content_length = content_lengths[0] if content_lengths else 0
+        body_start = head_end + 4
+        body_end = body_start + content_length
+        if body_end > len(request_stream):
+            raise RelayEvidenceError("单向停机连接的 H1 body 不完整。")
+        request_lines.append(lines[0].decode("latin-1"))
+        cursor = body_end
+    return request_lines
+
+
+def _validate_one_sided_shutdown_connection(
+    relay_root: Path,
+    item: dict[str, Any],
+    *,
+    synthetic_plan: str | None,
+) -> tuple[dict[str, Any], bytes] | None:
+    """只接受中继主动停机窗口内、可完整复核的单向真实请求。"""
+
+    marker_present = (
+        "termination_reason" in item or "relay_stop_requested" in item
+    )
+    if not marker_present:
+        return None
+    if (
+        synthetic_plan is not None
+        or item.get("valid") is not True
+        or "error" in item
+        or item.get("termination_reason")
+        != ONE_SIDED_SHUTDOWN_TERMINATION_REASON
+        or item.get("relay_stop_requested") is not True
+    ):
+        raise RelayEvidenceError("relay 单向停机终态不是受管的真实请求形态。")
+
+    connection_id = item["connection_id"]
+    byte_counts = item.get("bytes")
+    digests = item.get("sha256")
+    if (
+        not isinstance(byte_counts, dict)
+        or set(byte_counts) != {"client_to_upstream"}
+        or not isinstance(byte_counts.get("client_to_upstream"), int)
+        or byte_counts["client_to_upstream"] <= 0
+        or not isinstance(digests, dict)
+        or set(digests) != {"client_to_upstream"}
+        or SHA256_RE.fullmatch(str(digests["client_to_upstream"])) is None
+    ):
+        raise RelayEvidenceError("relay 单向停机终态的方向声明非法。")
+
+    request_path = relay_root / f"conn{connection_id:03d}.client_to_upstream.bin"
+    response_path = relay_root / f"conn{connection_id:03d}.upstream_to_client.bin"
+    if request_path.is_symlink() or not request_path.is_file():
+        raise RelayEvidenceError("relay 单向停机终态缺少可信客户端字节。")
+    if response_path.exists() or response_path.is_symlink():
+        raise RelayEvidenceError("relay 单向停机终态意外存在上游响应文件。")
+    if (
+        request_path.stat().st_size != byte_counts["client_to_upstream"]
+        or file_sha256(request_path) != digests["client_to_upstream"]
+    ):
+        raise RelayEvidenceError("relay 单向停机客户端字节与 manifest 不一致。")
+
+    segments = item.get("segments")
+    if not isinstance(segments, list) or not segments:
+        raise RelayEvidenceError("relay 单向停机终态缺少客户端分段记录。")
+    expected_offset = 0
+    for segment in segments:
+        if (
+            not isinstance(segment, dict)
+            or segment.get("direction") != "client_to_upstream"
+            or segment.get("offset") != expected_offset
+            or not isinstance(segment.get("length"), int)
+            or segment["length"] <= 0
+        ):
+            raise RelayEvidenceError("relay 单向停机客户端分段不连续。")
+        expected_offset += segment["length"]
+    if expected_offset != byte_counts["client_to_upstream"]:
+        raise RelayEvidenceError("relay 单向停机客户端分段总长不一致。")
+
+    request_bytes = request_path.read_bytes()
+    request_lines = _complete_h1_request_lines(request_bytes)
+    return (
+        {
+            "connection_id": connection_id,
+            "client_to_upstream_sha256": digests["client_to_upstream"],
+            "termination_reason": ONE_SIDED_SHUTDOWN_TERMINATION_REASON,
+            "request_lines": request_lines,
+        },
+        request_bytes,
+    )
 
 
 def _validate_relay_integrity(
     relay_root: Path,
     *,
     synthetic_plan: str | None = None,
+    synthetic_profile: str | None = None,
     message_request_expectation: str = "at-least-one",
+    target_host: str = UPSTREAM_HOST,
 ) -> dict[str, Any]:
     if message_request_expectation not in {"at-least-one", "zero"}:
         raise RelayEvidenceError("R messages 请求期望值非法。")
+    if synthetic_plan and synthetic_profile is None:
+        synthetic_profile = "claude-fw-f-v3"
     manifest = _load_json(relay_root / "relay.json", "relay manifest")
     if manifest.get("schema_version") != "byte-relay/v1":
         raise RelayEvidenceError("relay manifest schema 不匹配。")
-    if manifest.get("mode") != "direct" or manifest.get("upstream_host") != UPSTREAM_HOST:
+    if manifest.get("mode") != "direct" or manifest.get("upstream_host") != target_host:
         raise RelayEvidenceError("relay 没有绑定 Claude 官方域名。")
     if synthetic_plan:
         if (
-            manifest.get("synthetic_profile") != "claude-fw-f-v3"
+            manifest.get("synthetic_profile") != synthetic_profile
             or manifest.get("claude_fault_plan") != synthetic_plan
             or manifest.get("production_forwarding_enabled") is not False
         ):
@@ -694,6 +978,7 @@ def _validate_relay_integrity(
     request_attempts: list[dict[str, Any]] = []
     rows: list[dict[str, Any]] = []
     excluded: list[dict[str, Any]] = []
+    one_sided_shutdown_count = 0
     connection_ids: set[int] = set()
     for item in connections:
         if not isinstance(item, dict):
@@ -730,7 +1015,7 @@ def _validate_relay_integrity(
                 and isinstance(opened_at, int)
                 and isinstance(closed_at, int)
                 and opened_at <= closed_at
-                and ("sni" not in item or item.get("sni") == UPSTREAM_HOST)
+                and ("sni" not in item or item.get("sni") == target_host)
             )
             mismatch_keys = common_keys | {"upstream_alpn", "error", "valid"}
             exact_alpn_mismatch = (
@@ -747,17 +1032,53 @@ def _validate_relay_integrity(
                 and common_keys.issubset(actual_keys)
                 and actual_keys.issubset(common_keys | optional_keys)
             )
+            reset_keys = {
+                "connection_id",
+                "client_alpn_offer",
+                "alpn_source",
+                "bytes",
+                "sha256",
+                "segments",
+                "opened_at_unix_ms",
+                "closed_at_unix_ms",
+                "error",
+                "valid",
+            }
+            exact_client_reset = (
+                item.get("client_alpn_offer") == ["http/1.1"]
+                and item.get("alpn_source") == "assumed"
+                and item.get("bytes") == {}
+                and item.get("sha256") == {}
+                and item.get("segments") == []
+                and isinstance(opened_at, int)
+                and isinstance(closed_at, int)
+                and opened_at <= closed_at
+                and item.get("valid") is False
+                and item.get("error")
+                in {
+                    "ConnectionResetError: ",
+                    "ConnectionResetError: [Errno 104] Connection reset by peer",
+                }
+                and reset_keys.issubset(actual_keys)
+                and actual_keys.issubset(reset_keys | optional_keys)
+                and ("sni" not in item or item.get("sni") == target_host)
+            )
             unexpected_bytes = any(
                 (relay_root / f"conn{connection_id:03d}.{direction}.bin").exists()
                 for direction in ("client_to_upstream", "upstream_to_client")
             )
-            if (not exact_alpn_mismatch and not exact_relay_shutdown) or unexpected_bytes:
+            if (
+                not exact_alpn_mismatch
+                and not exact_relay_shutdown
+                and not exact_client_reset
+            ) or unexpected_bytes:
                 raise RelayEvidenceError("relay 含非受管的无效连接。")
-            reason = (
-                EMPTY_HANDSHAKE_TERMINATION_REASON
-                if exact_alpn_mismatch
-                else RELAY_SHUTDOWN_HANDSHAKE_TERMINATION_REASON
-            )
+            if exact_alpn_mismatch:
+                reason = EMPTY_HANDSHAKE_TERMINATION_REASON
+            elif exact_client_reset:
+                reason = CLIENT_RESET_HANDSHAKE_TERMINATION_REASON
+            else:
+                reason = RELAY_SHUTDOWN_HANDSHAKE_TERMINATION_REASON
             excluded.append(
                 {
                     "connection_id": connection_id,
@@ -783,6 +1104,17 @@ def _validate_relay_integrity(
             alpn_valid = client_alpn == "http/1.1" and upstream_alpn == "http/1.1"
         if not alpn_valid:
             raise RelayEvidenceError("relay 两条 TLS 腿没有保持受管 ALPN 镜像。")
+        one_sided = _validate_one_sided_shutdown_connection(
+            relay_root,
+            item,
+            synthetic_plan=synthetic_plan,
+        )
+        if one_sided is not None:
+            verified, request_bytes = one_sided
+            request_stream += request_bytes
+            rows.append(verified)
+            one_sided_shutdown_count += 1
+            continue
         verified: dict[str, Any] = {"connection_id": connection_id}
         for direction in ("client_to_upstream", "upstream_to_client"):
             path = relay_root / f"conn{connection_id:03d}.{direction}.bin"
@@ -812,6 +1144,7 @@ def _validate_relay_integrity(
         "connection_count": len(rows),
         "total_connection_count": len(connections),
         "excluded_handshake_connection_count": len(excluded),
+        "one_sided_shutdown_connection_count": one_sided_shutdown_count,
         "excluded_connections": excluded,
         "messages_request_count": messages,
         "message_request_expectation": message_request_expectation,
@@ -824,6 +1157,7 @@ def _validate_relay_integrity(
             plan=synthetic_plan,
             attempts=request_attempts,
             interventions=_read_interventions(relay_root),
+            synthetic_profile=str(synthetic_profile),
         )
     return result
 
@@ -841,12 +1175,63 @@ def _invocation_binding_complete(
     result_root: Path,
     *,
     fw_f_probe: str | None,
+    fw_f_v4_probe: str | None = None,
     response_plan: str | None,
 ) -> bool:
-    """核验旧场景或 FW-F v3 的 argv 与环境事实已绑定到结果。"""
+    """核验旧场景或 FW-F v3/v4 的 argv 与环境事实已绑定到结果。"""
 
     if not summary:
         return False
+    if fw_f_v4_probe is not None:
+        path = result_root / "v4-summary.json"
+        if not path.is_file() or path.is_symlink():
+            return False
+        value = _load_json(path, "FW-F v4 result")
+        if (
+            value.get("schema_version") != "claude-code-fw-f-v4-probe-result/v1"
+            or value.get("probe_id") != fw_f_v4_probe
+            or value.get("response_plan") != response_plan
+            or value.get("valid") is not True
+        ):
+            return False
+        inner = value.get("inner_result")
+        if not isinstance(inner, dict):
+            return False
+        if value.get("driver") == "v3":
+            binding = inner.get("invocation")
+            if not isinstance(binding, dict):
+                return False
+            invocation_path = result_root / str(binding.get("path", ""))
+            if (
+                not invocation_path.is_file()
+                or invocation_path.is_symlink()
+                or file_sha256(invocation_path) != binding.get("sha256")
+                or invocation_path.stat().st_size != binding.get("bytes")
+            ):
+                return False
+            invocation_value = _load_json(invocation_path, "FW-F v4/v3 invocation")
+            invocations = invocation_value.get("invocations")
+            return bool(
+                invocation_value.get("schema_version")
+                == "claude-code-fw-f-v3-invocations/v1"
+                and invocation_value.get("probe_id") == value.get("source_v3_probe")
+                and isinstance(invocations, list)
+                and invocations
+                and all(
+                    isinstance(item, dict)
+                    and item.get("argv_sha256")
+                    and isinstance(item.get("environment"), dict)
+                    and item["environment"].get("sha256")
+                    for item in invocations
+                )
+            )
+        invocation = inner.get("invocation")
+        return bool(
+            isinstance(invocation, dict)
+            and invocation.get("argv_sha256")
+            and isinstance(invocation.get("environment"), dict)
+            and invocation["environment"].get("sha256")
+        )
     if fw_f_probe is None:
         invocation = summary.get("invocation", {})
         return bool(
@@ -898,9 +1283,11 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
     if not SHA256_RE.fullmatch(arguments.run_nonce):
         raise ConfigurationError("--run-nonce 格式非法。")
     fw_f_probe_id = getattr(arguments, "fw_f_probe", None)
+    fw_f_v4_probe_id = getattr(arguments, "fw_f_v4_probe", None)
     scenario = getattr(arguments, "scenario", None)
-    if fw_f_probe_id and scenario:
-        raise ConfigurationError("--fw-f-probe 与 --scenario 互斥。")
+    if sum(bool(value) for value in (fw_f_probe_id, fw_f_v4_probe_id, scenario)) > 1:
+        raise ConfigurationError("--scenario、--fw-f-probe 与 --fw-f-v4-probe 互斥。")
+    fw_f_v4_probe = None
     if fw_f_probe_id:
         if fw_f_probe_id not in FW_F_V3_PROBE_IDS:
             raise ConfigurationError("--fw-f-probe 非法。")
@@ -916,6 +1303,33 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
         injected = fw_f_probe.env_dict()
         response_plan = fw_f_probe.response_plan
         message_request_expectation = fw_f_probe.message_request_expectation
+        target_host = UPSTREAM_HOST
+        capture_mode = "fw-f-v3"
+        synthetic_profile = "claude-fw-f-v3" if response_plan else None
+        synthetic_success_marker = "FW_F_V3_OK" if response_plan else None
+    elif fw_f_v4_probe_id:
+        if fw_f_v4_probe_id not in FW_F_V4_PROBE_IDS:
+            raise ConfigurationError("--fw-f-v4-probe 非法。")
+        if arguments.probe_id != fw_f_v4_probe_id:
+            raise ConfigurationError("FW-F v4 的 --probe-id 必须等于 --fw-f-v4-probe。")
+        if arguments.expected_version != FW_F_V3_VERSION:
+            raise ConfigurationError(
+                f"FW-F v4 场景只绑定 Claude Code {FW_F_V3_VERSION}。"
+            )
+        if arguments.inject_env:
+            raise ConfigurationError("FW-F v4 场景禁止额外 --inject-env。")
+        fw_f_v4_probe = get_fw_f_v4_probe(fw_f_v4_probe_id)
+        injected = fw_f_v4_probe.env_dict()
+        response_plan = fw_f_v4_probe.response_plan
+        message_request_expectation = fw_f_v4_probe.message_request_expectation
+        target_host = fw_f_v4_probe.target_host
+        capture_mode = "fw-f-v4"
+        synthetic_profile = "claude-fw-f-v4" if response_plan else None
+        synthetic_success_marker = (
+            "FW_F_V3_OK"
+            if response_plan and fw_f_v4_probe.source_v3_probe
+            else "FW_F_V4_OK" if response_plan else None
+        )
     else:
         scenario = scenario or "s1"
         if scenario not in SCENARIOS:
@@ -923,10 +1337,33 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
         injected = parse_injected_env(arguments.inject_env)
         response_plan = None
         message_request_expectation = "at-least-one"
+        target_host = UPSTREAM_HOST
+        capture_mode = "legacy-scenario"
+        synthetic_profile = None
+        synthetic_success_marker = None
     if arguments.timeout <= 0:
         raise ConfigurationError("--timeout 必须大于 0。")
     if arguments.port != 443:
         raise ConfigurationError("Claude 官方域名 R 取证只允许隔离容器内端口 443。")
+    v4_source_v3_probe = (
+        get_fw_f_probe(str(fw_f_v4_probe.source_v3_probe))
+        if fw_f_v4_probe is not None and fw_f_v4_probe.source_v3_probe
+        else None
+    )
+    requires_tui_state = bool(
+        (fw_f_probe_id and fw_f_probe.driver == "tui")
+        or (
+            fw_f_v4_probe is not None
+            and (
+                fw_f_v4_probe.driver == "tui"
+                or fw_f_v4_probe.requires_account_state
+                or (v4_source_v3_probe and v4_source_v3_probe.driver == "tui")
+            )
+        )
+    )
+    requires_refresh_state = bool(
+        fw_f_v4_probe is not None and fw_f_v4_probe.driver == "oauth-refresh"
+    )
     upstream_value = getattr(arguments, "upstream_ip", None)
     if response_plan:
         if upstream_value:
@@ -945,13 +1382,15 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
             "run_id": arguments.run_id,
             "probe_id": arguments.probe_id,
             "version": arguments.expected_version,
-            "capture_mode": "fw-f-v3" if fw_f_probe_id else "legacy-scenario",
+            "capture_mode": capture_mode,
             "scenario": scenario,
             "fw_f_probe": fw_f_probe_id,
+            "fw_f_v4_probe": fw_f_v4_probe_id,
             "response_plan": response_plan,
+            "synthetic_success_marker": synthetic_success_marker,
             "message_request_expectation": message_request_expectation,
             "model": arguments.model,
-            "upstream_host": UPSTREAM_HOST,
+            "upstream_host": target_host,
             "upstream_ip": upstream_ip,
             "injected_probe_env": injected,
             "live_requests": live_requests,
@@ -977,13 +1416,33 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
     result_root = ensure_private_directory(run_root / "results", run_root)
     claude_oauth_home = prepare_claude_oauth_state(run_root)
     tui_state_receipt: dict[str, Any] = {
-        "required": bool(fw_f_probe_id and fw_f_probe.driver == "tui"),
+        "required": requires_tui_state,
         "storage_scope": "memory-backed-temporary-home",
         "credentials_copied": False,
         "global_state_copied": False,
         "privacy_settings_written": False,
+        "onboarding_state_normalized": False,
+        "onboarding_normalized_fields": [],
+        "source_global_state_modified": False,
         "archived_in_evidence": False,
-        "removed": not bool(fw_f_probe_id and fw_f_probe.driver == "tui"),
+        "removed": not requires_tui_state,
+    }
+    refresh_state_receipt: dict[str, Any] = {
+        "required": requires_refresh_state,
+        "storage_scope": "memory-backed-expired-credential-copy",
+        "credentials_copied": False,
+        "global_state_copied": False,
+        "privacy_settings_written": False,
+        "expiry_forced_on_copy": False,
+        "production_oauth_forwarding_enabled": False,
+        "archived_in_evidence": False,
+        "removed": not requires_refresh_state,
+    }
+    pcap_required = bool(fw_f_v4_probe is not None and fw_f_v4_probe.require_pcap)
+    pcap_receipt: dict[str, Any] = {
+        "required": pcap_required,
+        "stopped": not pcap_required,
+        "parsed": not pcap_required,
     }
     tool_root = Path(__file__).resolve().parent
     tool_identity = _tool_identity(tool_root)
@@ -1015,10 +1474,12 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
         "started_at_utc": _utc_now(),
         "ended_at_utc": None,
         "client": client,
-        "capture_mode": "fw-f-v3" if fw_f_probe_id else "legacy-scenario",
+        "capture_mode": capture_mode,
         "scenario": scenario,
         "fw_f_probe": fw_f_probe_id,
+        "fw_f_v4_probe": fw_f_v4_probe_id,
         "response_plan": response_plan,
+        "synthetic_success_marker": synthetic_success_marker,
         "message_request_expectation": message_request_expectation,
         "model": arguments.model,
         "injected_probe_env": injected,
@@ -1028,7 +1489,7 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
             "capture_tools": tool_identity,
         },
         "upstream": {
-            "host": UPSTREAM_HOST,
+            "host": target_host,
             "ip": upstream_ip,
             "port": 443,
             "relay_listen_port": arguments.port,
@@ -1042,21 +1503,25 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
         },
         "secret_scan": {"performed": False, "passed": False, "matches": []},
         "tui_temporary_state": tui_state_receipt,
+        "oauth_refresh_temporary_state": refresh_state_receipt,
+        "tls_p_channel": pcap_receipt,
         "m_binding": {"complete": False, "requirements": {}},
         "artifacts": [],
     }
     secure_write_json(manifest_path, manifest)
 
     relay_process: subprocess.Popen[bytes] | None = None
+    pcap_process: subprocess.Popen[bytes] | None = None
     relay_stopped = False
     hosts = HostsOverride(
         arguments.hosts_file,
-        UPSTREAM_HOST,
+        target_host,
         recovery_root / "hosts.before",
         arguments.run_id,
     )
     scenario_summary: dict[str, Any] | None = None
     relay_integrity: dict[str, Any] | None = None
+    dimension_evidence: dict[str, Any] | None = None
     scrubbing: dict[str, Any] | None = None
     failure: BaseException | None = None
     with CampaignLock(arguments.lock_file):
@@ -1068,6 +1533,7 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
                     arguments.ca_signing_pem,
                     arguments.ca_cert,
                     Path(tool_identity["openssl"]["path"]),
+                    target_host,
                 )
                 ensure_private_directory(raw_root, run_root)
                 relay_command = [
@@ -1082,7 +1548,7 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
                     "--port",
                     str(arguments.port),
                     "--upstream-host",
-                    UPSTREAM_HOST,
+                    target_host,
                     "--assume-alpn",
                     "http/1.1",
                     "--mirror-selected-alpn",
@@ -1095,12 +1561,14 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
                     relay_command.extend(
                         (
                             "--synthetic-profile",
-                            "claude-fw-f-v3",
+                            str(synthetic_profile),
                             "--allow-synthetic-responses",
                             "--claude-version",
                             arguments.expected_version,
                             "--claude-fault-plan",
                             response_plan,
+                            "--claude-success-marker",
+                            str(synthetic_success_marker),
                         )
                     )
                 else:
@@ -1123,6 +1591,11 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
                     time.sleep(1)
                     if relay_process.poll() is not None:
                         raise RelayEvidenceError("R 字节中继启动失败。")
+                    if pcap_required:
+                        pcap_process, pcap_receipt = _start_pcap(
+                            run_root / "tls-clienthello.pcap",
+                            run_root / "tcpdump.log",
+                        )
                     with hosts:
                         environment = clean_environment(os.environ, injected)
                         environment.update(PRIVACY_ENV)
@@ -1130,69 +1603,112 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
                         environment["NODE_EXTRA_CA_CERTS"] = str(arguments.ca_cert)
                         environment["CLAUDE_CONFIG_DIR"] = str(claude_oauth_home)
                         environment["HOME"] = str(claude_oauth_home)
-                        if fw_f_probe_id:
-                            if fw_f_probe.driver == "tui":
-                                with temporary_claude_tui_state(
-                                    arguments.claude_credentials_file,
-                                    arguments.claude_global_state_file,
-                                ) as (tui_home, _tui_config, state_receipt):
-                                    tui_state_receipt = state_receipt
-                                    environment.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
-                                    # TUI 必须按官方默认 HOME 布局读取
-                                    # ~/.claude/.credentials.json 与 ~/.claude.json。
-                                    # 保留 CLAUDE_CONFIG_DIR 会把两者都重定向到同一目录，
-                                    # 导致客户端误判为首次登录。
-                                    environment.pop("CLAUDE_CONFIG_DIR", None)
-                                    environment["HOME"] = str(tui_home)
-                                    scenario_summary = run_claude_fw_f_probe(
-                                        claude_bin=str(arguments.claude_bin),
-                                        model=arguments.model,
-                                        probe_id=fw_f_probe_id,
-                                        environment=environment,
-                                        output_dir=result_root,
-                                        timeout=arguments.timeout,
-                                        known_secrets=secrets,
-                                    )
-                            else:
-                                scenario_summary = run_claude_fw_f_probe(
+                        def execute_selected_probe(
+                            selected_environment: dict[str, str],
+                        ) -> dict[str, Any]:
+                            if fw_f_v4_probe_id:
+                                return run_claude_fw_f_complete_probe(
                                     claude_bin=str(arguments.claude_bin),
                                     model=arguments.model,
-                                    probe_id=fw_f_probe_id,
-                                    environment=environment,
+                                    probe_id=fw_f_v4_probe_id,
+                                    environment=selected_environment,
                                     output_dir=result_root,
                                     timeout=arguments.timeout,
                                     known_secrets=secrets,
                                 )
-                        else:
-                            scenario_summary = run_claude_scenario(
+                            if fw_f_probe_id:
+                                return run_claude_fw_f_probe(
+                                    claude_bin=str(arguments.claude_bin),
+                                    model=arguments.model,
+                                    probe_id=fw_f_probe_id,
+                                    environment=selected_environment,
+                                    output_dir=result_root,
+                                    timeout=arguments.timeout,
+                                    known_secrets=secrets,
+                                )
+                            return run_claude_scenario(
                                 claude_bin=str(arguments.claude_bin),
                                 model=arguments.model,
                                 scenario=str(scenario),
-                                environment=environment,
+                                environment=selected_environment,
                                 output_dir=result_root,
                                 timeout=arguments.timeout,
                                 runtime_secret=access_token,
                                 known_secrets=secrets,
                             )
+
+                        if requires_tui_state:
+                            with temporary_claude_tui_state(
+                                arguments.claude_credentials_file,
+                                arguments.claude_global_state_file,
+                                expected_version=arguments.expected_version,
+                            ) as (tui_home, _tui_config, state_receipt):
+                                tui_state_receipt = state_receipt
+                                environment.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+                                # TUI 必须按默认 HOME 布局读取两份官方状态。
+                                environment.pop("CLAUDE_CONFIG_DIR", None)
+                                environment["HOME"] = str(tui_home)
+                                scenario_summary = execute_selected_probe(environment)
+                        elif requires_refresh_state:
+                            with temporary_claude_refresh_state(
+                                arguments.claude_credentials_file,
+                                arguments.claude_global_state_file,
+                            ) as (refresh_home, refresh_config, state_receipt):
+                                refresh_state_receipt = state_receipt
+                                environment.pop("CLAUDE_CODE_OAUTH_TOKEN", None)
+                                environment["HOME"] = str(refresh_home)
+                                environment["CLAUDE_CONFIG_DIR"] = str(refresh_config)
+                                scenario_summary = execute_selected_probe(environment)
+                        else:
+                            scenario_summary = execute_selected_probe(environment)
                         if scenario_summary.get("valid") is not True:
                             raise RelayEvidenceError("Claude R 场景校验失败。")
                 finally:
                     relay_stopped = _stop_process(relay_process)
+                    pcap_stopped = _stop_pcap(pcap_process)
+                    pcap_receipt["stopped"] = pcap_stopped
                     relay_stdout.close()
                     relay_stderr.close()
                 if not relay_stopped:
                     raise RelayEvidenceError("R 字节中继未能停止。")
+                if not pcap_receipt.get("stopped"):
+                    raise RelayEvidenceError("TLS P 通道 tcpdump 未能停止。")
+                if pcap_required:
+                    parsed_pcap = _parse_pcap(
+                        run_root / "tls-clienthello.pcap", target_host
+                    )
+                    pcap_receipt.update(parsed_pcap)
                 scrubbing = _scrub_relay(
                     tool_root, raw_root, relay_root, run_root / "scrub.log"
                 )
                 relay_integrity = _validate_relay_integrity(
                     relay_root,
                     synthetic_plan=response_plan,
+                    synthetic_profile=synthetic_profile,
                     message_request_expectation=message_request_expectation,
+                    target_host=target_host,
                 )
+                if fw_f_v4_probe_id:
+                    if scenario_summary is None:
+                        raise RelayEvidenceError("FW-F v4 缺少场景结果。")
+                    dimension_evidence = validate_complete_probe_evidence(
+                        probe_id=fw_f_v4_probe_id,
+                        relay_root=relay_root,
+                        scenario_summary=scenario_summary,
+                        relay_integrity=relay_integrity,
+                        pcap_receipt=pcap_receipt,
+                    )
+                    secure_write_json(
+                        run_root / "dimension-evidence.json", dimension_evidence
+                    )
+                    if dimension_evidence.get("result") != "passed":
+                        raise RelayEvidenceError(
+                            "Claude v4 实际 wire／工具／状态维度断言失败。"
+                        )
         except BaseException as error:  # 失败也必须写恢复和秘密扫描事实
             failure = error
             relay_stopped = _stop_process(relay_process)
+            pcap_receipt["stopped"] = _stop_pcap(pcap_process)
             if raw_root.is_dir() and (raw_root / "relay.json").is_file() and not relay_root.exists():
                 try:
                     scrubbing = _scrub_relay(
@@ -1213,6 +1729,7 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
             scenario_summary,
             result_root,
             fw_f_probe=fw_f_probe_id,
+            fw_f_v4_probe=fw_f_v4_probe_id,
             response_plan=response_plan,
         ),
         "production_forwarding_boundary": live_requests
@@ -1224,6 +1741,13 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
             is False
         ),
         "relay_integrity": bool(relay_integrity and relay_integrity.get("result") == "passed"),
+        "actual_dimension_evidence": bool(
+            fw_f_v4_probe_id is None
+            or (
+                dimension_evidence
+                and dimension_evidence.get("result") == "passed"
+            )
+        ),
         "equal_length_scrubbing": bool(scrubbing and scrubbing.get("verified")),
         "exact_secret_scan": scan.get("passed") is True,
         "tui_temporary_state_cleanup": bool(
@@ -1235,8 +1759,33 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
                     tui_state_receipt.get("credentials_copied") is True
                     and tui_state_receipt.get("global_state_copied") is True
                     and tui_state_receipt.get("privacy_settings_written") is True
+                    and tui_state_receipt.get("onboarding_state_normalized")
+                    is True
+                    and tui_state_receipt.get("source_global_state_modified")
+                    is False
                 )
             )
+        ),
+        "oauth_refresh_temporary_state_cleanup": bool(
+            refresh_state_receipt.get("removed") is True
+            and refresh_state_receipt.get("archived_in_evidence") is False
+            and (
+                refresh_state_receipt.get("required") is not True
+                or (
+                    refresh_state_receipt.get("credentials_copied") is True
+                    and refresh_state_receipt.get("global_state_copied") is True
+                    and refresh_state_receipt.get("privacy_settings_written") is True
+                    and refresh_state_receipt.get("expiry_forced_on_copy") is True
+                    and refresh_state_receipt.get(
+                        "production_oauth_forwarding_enabled"
+                    )
+                    is False
+                )
+            )
+        ),
+        "tls_p_channel": bool(
+            pcap_receipt.get("stopped") is True
+            and pcap_receipt.get("parsed") is True
         ),
         "relay_stopped": relay_stopped,
         "hosts_restored": hosts.record.get("restored") is True,
@@ -1248,6 +1797,7 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
             "ended_at_utc": _utc_now(),
             "scenario_result": scenario_summary,
             "relay_integrity": relay_integrity,
+            "dimension_evidence": dimension_evidence,
             "credential_scrubbing": scrubbing,
             "hosts_recovery": hosts.record,
             "cleanup": {
@@ -1256,6 +1806,8 @@ def _capture(arguments: argparse.Namespace) -> dict[str, Any]:
             },
             "secret_scan": scan,
             "tui_temporary_state": tui_state_receipt,
+            "oauth_refresh_temporary_state": refresh_state_receipt,
+            "tls_p_channel": pcap_receipt,
             "m_binding": {
                 "complete": all(requirements.values()),
                 "requirements": requirements,
@@ -1438,6 +1990,7 @@ def _build_parser() -> argparse.ArgumentParser:
     probe_mode = capture.add_mutually_exclusive_group()
     probe_mode.add_argument("--scenario", choices=SCENARIOS)
     probe_mode.add_argument("--fw-f-probe", choices=FW_F_V3_PROBE_IDS)
+    probe_mode.add_argument("--fw-f-v4-probe", choices=FW_F_V4_PROBE_IDS)
     capture.add_argument("--model", default="claude-sonnet-5")
     capture.add_argument("--inject-env", action="append", metavar="KEY=VALUE")
     capture.add_argument(
@@ -1484,6 +2037,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except (
         ConfigurationError,
         ClaudeFWFProbeError,
+        ClaudeFWFCompleteProbeError,
         RelayEvidenceError,
         OSError,
         subprocess.SubprocessError,

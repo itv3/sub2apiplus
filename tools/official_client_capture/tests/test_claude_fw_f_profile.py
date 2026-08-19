@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -18,6 +19,7 @@ from tools.official_client_capture.claude_fw_f_profile import (
     classify_header,
     compare_profiles,
     compile_vertical_sample,
+    guide_rule_ids,
     parse_http_stream,
     rule_spec_ids_by_egress,
     validate_clearance_inputs,
@@ -148,14 +150,16 @@ def fake_release(marker: str) -> dict[str, dict[str, str]]:
 
 
 def clearance_fixture() -> tuple[dict[str, object], dict[str, object], dict[str, object]]:
-    """构造已清零发现项、88 条 R/M 规则和 97 条撤回提案。"""
+    """构造已清零发现项、动态 R/M 规则和 97 条撤回提案。"""
 
     clearance = {
         "schema_version": CLEARANCE_CLOSURE_SCHEMA,
         "result": "passed",
         "source_discovery_count": 7368,
         "resolved_record_count": 7368,
-        "candidate_resolution_count": 32,
+        "legacy_semantic_candidate_count": 32,
+        "orthogonal_candidate_count": 593,
+        "candidate_resolution_count": 593,
         "gate_counts": {"unresolved_record_count": 0, "orphan_reference_count": 0},
     }
     measured_rules = {
@@ -165,6 +169,8 @@ def clearance_fixture() -> tuple[dict[str, object], dict[str, object], dict[str,
         "entries": [
             {
                 "spec_id": spec_id,
+                "domain": "header",
+                "assertion_id": f"PAIR-{spec_id}",
                 "assertion_result": "passed",
                 "compatibility_class": "request_egress",
                 "egress_ids": ["egress-claude-messages-inference"],
@@ -173,6 +179,23 @@ def clearance_fixture() -> tuple[dict[str, object], dict[str, object], dict[str,
                     {"path": "evidence/identity.json", "channel": "M"},
                     {"path": f"evidence/{spec_id}.bin", "channel": "R"},
                 ],
+                "official_positive": {
+                    "assertion_id": f"PAIR-{spec_id}-POSITIVE",
+                    "result": "passed",
+                    "sample_count": 1,
+                },
+                "official_negative": {
+                    "assertion_id": f"PAIR-{spec_id}-NEGATIVE",
+                    "result": "passed",
+                    "sample_count": 1,
+                },
+                "applicability": ["version=2.1.226"],
+                "applicability_scope": "1 条请求",
+                "sample_scope": {
+                    "eligible_count": 1,
+                    "matched_count": 1,
+                    "unit": "request",
+                },
             }
             for spec_id in MEASURED_SPEC_IDS
         ],
@@ -360,6 +383,28 @@ class ClaudeFWFProfileTests(unittest.TestCase):
         with self.assertRaisesRegex(ProfileBuildError, "validation_only"):
             validate_policy(invalid)
 
+    def test_guide_rule_ids_require_one_bounded_unique_set(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            guide = Path(temporary_directory) / "guide.md"
+            guide.write_text(
+                "<!-- FW-F-ACTIVE-RULES-BEGIN -->\n"
+                "| `SPEC-B-001` | B |\n"
+                "| `SPEC-A-001` | A |\n"
+                "<!-- FW-F-ACTIVE-RULES-END -->\n",
+                encoding="utf-8",
+            )
+            self.assertEqual(guide_rule_ids(guide), ["SPEC-A-001", "SPEC-B-001"])
+
+            guide.write_text(
+                "<!-- FW-F-ACTIVE-RULES-BEGIN -->\n"
+                "| `SPEC-A-001` | A |\n"
+                "| `SPEC-A-001` | A |\n"
+                "<!-- FW-F-ACTIVE-RULES-END -->\n",
+                encoding="utf-8",
+            )
+            with self.assertRaisesRegex(ProfileBuildError, "为空或重复"):
+                guide_rule_ids(guide)
+
     def test_rules_are_grouped_by_declared_strict_egress(self) -> None:
         rules = [
             {
@@ -396,7 +441,7 @@ class ClaudeFWFProfileTests(unittest.TestCase):
         measured_rules["entries"][0]["evidence_refs"] = [
             {"path": "evidence/identity.json", "channel": "M"}
         ]
-        with self.assertRaisesRegex(ProfileBuildError, "原始 R 请求"):
+        with self.assertRaisesRegex(ProfileBuildError, "原始 R 证据"):
             validate_clearance_inputs(clearance, measured_rules, withdrawn)
 
     def test_blocked_rule_classes_are_rejected(self) -> None:
@@ -405,8 +450,6 @@ class ClaudeFWFProfileTests(unittest.TestCase):
             "SPEC-HDR-034",
             "SPEC-RESP-001",
             "SPEC-STATE-002",
-            "SPEC-TLS-001",
-            "SPEC-TLS-002",
         ]
         for forbidden_id in forbidden_ids:
             with self.subTest(spec_id=forbidden_id):
@@ -417,6 +460,36 @@ class ClaudeFWFProfileTests(unittest.TestCase):
                 )
                 with self.assertRaisesRegex(ProfileBuildError, "非活动规则"):
                     validate_clearance_inputs(clearance, measured_rules, withdrawn)
+
+    def test_tls_rule_uses_native_p_and_m(self) -> None:
+        clearance, measured_rules, withdrawn = clearance_fixture()
+        tls = measured_rules["entries"][-1]
+        tls.update({
+            "spec_id": "SPEC-TLS-001",
+            "domain": "tls",
+            "assertion_id": "PAIR-SPEC-TLS-001",
+            "official_positive": {
+                "assertion_id": "PAIR-SPEC-TLS-001-POSITIVE",
+                "result": "passed",
+                "sample_count": 1,
+            },
+            "official_negative": {
+                "assertion_id": "PAIR-SPEC-TLS-001-NEGATIVE",
+                "result": "passed",
+                "sample_count": 1,
+            },
+            "evidence_channels": ["M", "P"],
+            "evidence_refs": [
+                {"path": "evidence/identity.json", "channel": "M"},
+                {"path": "evidence/clienthello.json", "channel": "P"},
+            ],
+        })
+        measured_rules["entries"] = sorted(measured_rules["entries"], key=lambda value: value["spec_id"])
+        validate_clearance_inputs(clearance, measured_rules, withdrawn)
+
+        tls["evidence_channels"] = ["M", "R"]
+        with self.assertRaisesRegex(ProfileBuildError, "缺少 P/M"):
+            validate_clearance_inputs(clearance, measured_rules, withdrawn)
 
     def test_all_v1_proposals_must_be_withdrawn(self) -> None:
         clearance, measured_rules, withdrawn = clearance_fixture()

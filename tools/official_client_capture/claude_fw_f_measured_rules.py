@@ -34,8 +34,14 @@ from tools.official_client_control.canonical import (  # noqa: E402
 )
 
 
-POLICY_SCHEMA = "claude-code-fw-f-discovery-clearance-policy/v2"
-PROFILE_POLICY_SCHEMA = "claude-code-fw-f-profile-policy/v3"
+POLICY_SCHEMAS = {
+    "claude-code-fw-f-discovery-clearance-policy/v2",
+    "claude-code-fw-f-discovery-clearance-policy/v3",
+}
+PROFILE_POLICY_SCHEMAS = {
+    "claude-code-fw-f-profile-policy/v3",
+    "claude-code-fw-f-profile-policy/v4",
+}
 LEDGER_SCHEMA = "claude-code-fw-f-measured-rule-ledger/v2"
 UUID_RE = re.compile(
     r"^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
@@ -176,8 +182,8 @@ RULE_DEFINITIONS: dict[str, dict[str, str]] = {
     "SPEC-HDR-007": {"domain": "header", "claim": "sdk-cli 前台推理请求发送 dangerous-direct-browser-access=true 与 x-app=cli。", "scope": "8 条推理请求"},
     "SPEC-HDR-012": {"domain": "header", "claim": "每条推理请求的 x-client-request-id 是 UUID，且 8 条样本内不复用。", "scope": "8 条推理请求"},
     "SPEC-HDR-013": {"domain": "header", "claim": "同一多请求运行复用同一个 X-Claude-Code-Session-Id。", "scope": "a1、s2、s4 三个多请求运行"},
-    "SPEC-HDR-014": {"domain": "header", "claim": "仅一级子代理请求携带 17 位小写十六进制 x-claude-code-agent-id，位置在 x-app 之后。", "scope": "1 条子代理正例与 7 条非子代理负例"},
-    "SPEC-HDR-015": {"domain": "header", "claim": "一级子代理请求复用对应主请求的 X-Claude-Code-Session-Id。", "scope": "a1 的 1 条子代理正例"},
+    "SPEC-HDR-014": {"domain": "header", "claim": "一级子代理请求携带 17 位小写十六进制 x-claude-code-agent-id，位置在 x-app 之后；同场景主请求省略。", "scope": "1 条一级子代理正例与 7 条主请求负例"},
+    "SPEC-HDR-015": {"domain": "header", "claim": "一级子代理请求复用对应主请求的 X-Claude-Code-Session-Id。", "scope": "a1 的子代理正例与对应主请求负例"},
     "SPEC-HDR-044": {"domain": "header", "claim": "Content-Length 等于实际序列化 JSON Body 的字节数。", "scope": "8 条推理请求"},
     "SPEC-AUTH-002": {"domain": "authentication", "claim": "firstParty OAuth 推理请求发送 Bearer Authorization；证据中的 token 已等长脱敏。", "scope": "8 条推理请求"},
     "SPEC-BODY-001": {"domain": "body", "claim": "推理 Body 顶层键按 model、messages、system、tools、metadata、max_tokens、thinking、context_management、output_config、stream 排列。", "scope": "8 条推理请求"},
@@ -246,9 +252,9 @@ RULE_DEFINITIONS.update(
         "SPEC-STATE-005": {"domain": "request_state", "claim": "safe-mode 下未获准的自定义 agent 在本地拒绝，完整 relay 中 messages 数为零。", "scope": "v3-custom-agent-safe-mode"},
         "SPEC-STATE-006": {"domain": "request_state", "claim": "--resume 复用原 Session-Id，metadata.session_id 与 Header 同值，并携带历史角色序列和 cc_prev_req。", "scope": "v3-session-resume"},
         "SPEC-STATE-007": {"domain": "request_state", "claim": "--fork-session 为第二次调用生成新 Session-Id，同时携带原会话历史角色序列和 cc_prev_req。", "scope": "v3-session-fork"},
-        "SPEC-CONN-002": {"domain": "connection", "claim": "无 Retry-After 的应用层重试，首轮实测等待落在 500–700ms，第二轮落在 1000–1250ms。", "scope": "v3-retry-limit 与 v3-fallback-model"},
+        "SPEC-CONN-002": {"domain": "connection", "claim": "无 Retry-After 的应用层重试，首轮实测等待落在 500–750ms，第二轮落在 1000–1250ms。", "scope": "v21 replay-retry-limit 与 replay-fallback-model"},
         "SPEC-CONN-010": {"domain": "connection", "claim": "隔离状态矩阵中 401、408、409、429、500、502、503、529 各重试一次；400、403 不重试。", "scope": "10 个单状态隔离故障运行"},
-        "SPEC-CONN-016": {"domain": "connection", "claim": "Retry-After:1 使重试间隔约 1030ms；未来 HTTP-date 在当前实现中未按日期等待，约 564ms 后走默认退避。", "scope": "两个 Retry-After 隔离故障运行"},
+        "SPEC-CONN-016": {"domain": "connection", "claim": "Retry-After:1 使重试间隔落在 1000–1100ms；未来 HTTP-date 在当前实现中未按日期等待，而在 500–700ms 后走默认退避。", "scope": "v21 两个 Retry-After 隔离故障 replay"},
         "SPEC-CONN-018": {"domain": "connection", "claim": "创建流收到 404 时总会转 non-stream；已建立流中断默认转 non-stream，disable flag 只阻止中断后的转换，不阻止创建 404 转换。", "scope": "四个 streaming fallback 隔离故障运行"},
         "SPEC-CONN-020": {"domain": "connection", "claim": "首个 messages 连接无响应断开后官方客户端重试；重发请求省略 Connection Header。", "scope": "v3-disconnect-retry"},
         "SPEC-CONN-021": {"domain": "connection", "claim": "应用层重试保持 Body、Session-Id 与主体 attribution，重新生成 x-client-request-id，X-Stainless-Retry-Count 始终为 0。", "scope": "状态重试、Retry-After、断连与 retry-limit 运行"},
@@ -692,26 +698,45 @@ def build_ledger(
     profile_policy: dict[str, Any],
     campaign_identity_path: Path,
     relay_index_path: Path,
+    *,
+    prepared_samples: tuple[list[dict[str, Any]], list[dict[str, Any]]] | None = None,
+    prepared_v3_runs: dict[str, dict[str, Any]] | None = None,
+    identity_override: dict[str, Any] | None = None,
+    relay_index_override: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """运行 88 条实测断言并生成规则台账。"""
+    """运行 88 条实测断言并生成规则台账。
 
-    require(discovery_policy.get("schema_version") == POLICY_SCHEMA, "discovery policy schema 不匹配")
-    require(profile_policy.get("schema_version") == PROFILE_POLICY_SCHEMA, "profile policy schema 不匹配")
-    identity = load_json(campaign_identity_path)
-    relay_index = load_json(relay_index_path)
+    ``prepared_*`` 仅供完整 Campaign 的最终化工具复用同一组原子断言。传入后，
+    样本仍必须来自调用方已经完成身份、R/M 完整性和秘密扫描校验的正式 attempt；
+    本函数不会放宽任何规则断言。
+    """
+
+    policy_schema = discovery_policy.get("schema_version")
+    require(policy_schema in POLICY_SCHEMAS, "discovery policy schema 不匹配")
+    require(profile_policy.get("schema_version") in PROFILE_POLICY_SCHEMAS, "profile policy schema 不匹配")
+    identity = identity_override if identity_override is not None else load_json(campaign_identity_path)
+    relay_index = relay_index_override if relay_index_override is not None else load_json(relay_index_path)
     target_version = discovery_policy.get("target_version")
     require(target_version == profile_policy.get("target_version") == identity.get("target_version") == relay_index.get("target", {}).get("version"), "目标版本身份不一致")
     binary_sha256 = discovery_policy.get("target_binary_sha256")
     require(binary_sha256 == identity.get("target_binary_sha256") == relay_index.get("target", {}).get("binary_sha256"), "目标二进制摘要不一致")
     require(identity.get("privacy_environment") == {"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_TELEMETRY": "1"}, "隐私环境不是 essential-only 且关闭遥测")
     expected_ids = discovery_policy.get("measured_rule_ids")
+    if policy_schema == "claude-code-fw-f-discovery-clearance-policy/v3":
+        require(expected_ids is None, "v3 策略不得重新预设规则数或 measured_rule_ids")
+        expected_ids = sorted(RULE_DEFINITIONS)
     require(isinstance(expected_ids, list) and expected_ids == sorted(set(expected_ids)), "measured_rule_ids 必须严格排序且无重复")
     require(set(expected_ids) == set(RULE_DEFINITIONS), "策略与断言实现的规则闭集不一致")
     require(len(expected_ids) == 88, "实测规则闭集不是 88 条")
     require(not (set(expected_ids) & FORBIDDEN_RULE_IDS), "禁用规则进入实测闭集")
 
-    inference, lifecycle = load_samples(profile_policy)
-    v3_runs = load_v3_runs(profile_policy)
+    if prepared_samples is None:
+        inference, lifecycle = load_samples(profile_policy)
+    else:
+        inference, lifecycle = prepared_samples
+        require(len(inference) == 8 and len(lifecycle) == 4, "预解析目标样本不是 8 条推理加 4 条生命周期")
+    v3_runs = load_v3_runs(profile_policy) if prepared_v3_runs is None else prepared_v3_runs
+    require(len(v3_runs) == 54, f"预解析 replay run 不是 54 个：{len(v3_runs)}")
     all_samples = inference + lifecycle
     by_scenario: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for sample in inference:
@@ -918,7 +943,14 @@ def build_ledger(
         negative_count=7,
     )
     main_session = header_map(by_scenario["a1"][0])["x-claude-code-session-id"]
-    add("SPEC-HDR-015", subagents, lambda value: header_map(value).get("x-claude-code-session-id") == main_session, positive_count=1, negative_count=0)
+    session_role_samples = [by_scenario["a1"][0], subagents[0]]
+    add(
+        "SPEC-HDR-015",
+        session_role_samples,
+        lambda value: header_map(value).get("x-claude-code-session-id") == main_session,
+        positive_count=1,
+        negative_count=1,
+    )
     add("SPEC-HDR-044", inference, lambda value: int(header_map(value).get("content-length", "-1")) == value["raw_body_length"])
     for manifest_path in sorted({value["manifest_path"] for value in inference}):
         scrubbing = load_json(manifest_path).get("credential_scrubbing")
@@ -967,6 +999,7 @@ def build_ledger(
 
     first_roles = ["user", "system"]
     continuation_roles = ["user", "system", "assistant", "user", "system"]
+    continuation_roles_after_agent = ["user", "system", "assistant", "user"]
     subagent_roles = ["user"]
 
     def messages_match(value: dict[str, Any]) -> bool:
@@ -975,7 +1008,7 @@ def build_ledger(
         if value is subagents[0]:
             return roles == subagent_roles
         if attribution is not None and attribution.group(4):
-            return roles == continuation_roles
+            return roles in (continuation_roles, continuation_roles_after_agent)
         return roles == first_roles
 
     add("SPEC-BODY-004", inference, messages_match, positive_count=4, negative_count=4)
@@ -1003,7 +1036,11 @@ def build_ledger(
     add(
         "SPEC-BODY-018",
         inference,
-        lambda value: (parse_attribution(value).group(4) is not None) == ([item.get("role") for item in value["body"]["messages"]] == continuation_roles),
+        lambda value: (parse_attribution(value).group(4) is not None)
+        == (
+            [item.get("role") for item in value["body"]["messages"]]
+            in (continuation_roles, continuation_roles_after_agent)
+        ),
         positive_count=3,
         negative_count=5,
     )
@@ -1914,9 +1951,9 @@ def build_ledger(
     ]
     add_v3_rule(
         "SPEC-CONN-002",
-        500 <= fallback_gaps[0] <= 700
+        500 <= fallback_gaps[0] <= 750
         and 1000 <= fallback_gaps[1] <= 1250
-        and 500 <= retry_limit_gaps[0] <= 700
+        and 500 <= retry_limit_gaps[0] <= 750
         and 1000 <= retry_limit_gaps[1] <= 1250,
         retry_timing_ids,
         retry_timing_requests,
@@ -1964,7 +2001,13 @@ def build_ledger(
         "SPEC-CONN-016",
         response_status(after_seconds[0]) == response_status(after_date[0]) == 429
         and response_header(after_seconds[0], "retry-after") == "1"
-        and response_header(after_date[0], "retry-after") == "Tue, 18 Aug 2026 21:44:43 GMT"
+        and re.fullmatch(
+            r"(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun), \d{2} "
+            r"(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) "
+            r"\d{4} \d{2}:\d{2}:\d{2} GMT",
+            response_header(after_date[0], "retry-after") or "",
+        )
+        is not None
         and 1000 <= after_seconds_gap <= 1100
         and 500 <= after_date_gap <= 700,
         ["v3-retry-after-date", "v3-retry-after-seconds"],

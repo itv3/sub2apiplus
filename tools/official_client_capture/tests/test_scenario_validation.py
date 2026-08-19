@@ -82,7 +82,7 @@ def _codex_command_event(
 
 
 def _claude_agent_records(scenario: str) -> list[dict[str, object]]:
-    """构造与 2.1.220 扁平转发格式一致的同步 Agent 链。"""
+    """构造与 2.1.226 扁平转发格式一致的同步 Agent 链。"""
 
     expectations = CLAUDE_AGENT_EXPECTATIONS[scenario]
     records: list[dict[str, object]] = []
@@ -293,6 +293,12 @@ for index in range(2):
                 self.assertTrue(summary["valid"], summary)
                 self.assertEqual(summary["tool_use_count"], expected_depth)
                 self.assertTrue(summary["agent_chain_valid"])
+
+    def test_nested_agent_main_result_allows_explanation_and_standalone_marker(self) -> None:
+        records = _claude_agent_records("a2")
+        records[-1]["result"] = "并发和余额边界审查完成。\n\nD2_MAIN_OK"
+        summary = _validate_claude("a2", 0, _jsonl(records))
+        self.assertTrue(summary["valid"], summary)
 
     def test_nested_agent_wrong_parent_is_rejected(self) -> None:
         records = _claude_agent_records("a2")

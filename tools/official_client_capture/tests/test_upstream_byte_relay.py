@@ -30,6 +30,7 @@ from tools.official_client_capture.upstream_byte_relay import (
     _SYNTHETIC_CORE_TURN_STATE,
     _SYNTHETIC_REALTIME_CALL_ID,
     _SyntheticCoreWebSocketDecoder,
+    _annotate_relay_stop_after_client_request,
     _decode_client_text_frame,
     _encode_server_text_frame,
     _redact_oauth_refresh_body,
@@ -94,6 +95,72 @@ def _fragmented_compressed_text_frames(
 
 
 class UpstreamByteRelayWebSocketTest(unittest.TestCase):
+    def test_relay_stop_marks_only_exact_client_only_valid_connection(self) -> None:
+        metadata = {
+            "valid": True,
+            "bytes": {"client_to_upstream": 384},
+            "sha256": {"client_to_upstream": "a" * 64},
+        }
+
+        marked = _annotate_relay_stop_after_client_request(
+            metadata,
+            stop_requested=True,
+        )
+
+        self.assertTrue(marked)
+        self.assertTrue(metadata["relay_stop_requested"])
+        self.assertEqual(
+            metadata["termination_reason"],
+            "relay_shutdown_after_complete_client_request_before_upstream_response",
+        )
+
+    def test_relay_stop_does_not_mark_ambiguous_one_sided_connections(self) -> None:
+        cases = (
+            (
+                "未请求停机",
+                False,
+                {
+                    "valid": True,
+                    "bytes": {"client_to_upstream": 1},
+                    "sha256": {"client_to_upstream": "a" * 64},
+                },
+            ),
+            (
+                "连接含错误",
+                True,
+                {
+                    "valid": True,
+                    "error": "reset",
+                    "bytes": {"client_to_upstream": 1},
+                    "sha256": {"client_to_upstream": "a" * 64},
+                },
+            ),
+            (
+                "已有响应方向",
+                True,
+                {
+                    "valid": True,
+                    "bytes": {
+                        "client_to_upstream": 1,
+                        "upstream_to_client": 0,
+                    },
+                    "sha256": {
+                        "client_to_upstream": "a" * 64,
+                        "upstream_to_client": "b" * 64,
+                    },
+                },
+            ),
+        )
+        for label, stop_requested, metadata in cases:
+            with self.subTest(label=label):
+                self.assertFalse(
+                    _annotate_relay_stop_after_client_request(
+                        metadata,
+                        stop_requested=stop_requested,
+                    )
+                )
+                self.assertNotIn("termination_reason", metadata)
+
     def test_selected_alpn_mirroring_preserves_h1_and_no_alpn_connections(self) -> None:
         assumed = ["http/1.1"]
         self.assertEqual(
@@ -469,14 +536,31 @@ class UpstreamByteRelaySyntheticClaudeTest(unittest.TestCase):
     ).encode("utf-8")
     LINE = "POST /v1/messages?beta=true HTTP/1.1"
 
-    def response(self, plan: str, ordinal: int, body: bytes | None = None):
+    def response(
+        self,
+        plan: str,
+        ordinal: int,
+        body: bytes | None = None,
+        success_marker: str = "FW_F_V3_OK",
+    ):
         return _synthetic_claude_response(
             plan,
             "api.anthropic.com",
             self.LINE,
             self.BODY if body is None else body,
             ordinal,
+            success_marker,
         )
+
+    def test_success_marker_is_bound_to_synthetic_profile(self) -> None:
+        v3 = self.response("disconnect-retry", 2)
+        v4 = self.response(
+            "disconnect-retry", 2, success_marker="FW_F_V4_OK"
+        )
+        self.assertIn(b"FW_F_V3_OK", v3.wire)
+        self.assertNotIn(b"FW_F_V4_OK", v3.wire)
+        self.assertIn(b"FW_F_V4_OK", v4.wire)
+        self.assertNotIn(b"FW_F_V3_OK", v4.wire)
 
     def test_every_retry_once_plan_faults_then_returns_valid_sse(self) -> None:
         plans = _SYNTHETIC_CLAUDE_PLANS - {
@@ -586,6 +670,38 @@ class UpstreamByteRelaySyntheticClaudeTest(unittest.TestCase):
                 self.assertEqual(result.action, action)
                 self.assertTrue(result.wire.startswith(b"HTTP/1.1 404"))
 
+    def test_oauth_refresh_is_allowlisted_only_on_platform_host(self) -> None:
+        body = b"grant_type=refresh_token&refresh_token=dummy"
+        result = _synthetic_claude_response(
+            "oauth-refresh-reject",
+            "platform.claude.com",
+            "POST /v1/oauth/token HTTP/1.1",
+            body,
+            0,
+        )
+        self.assertIsNotNone(result)
+        self.assertEqual(result.action, "oauth_refresh_rejected")
+        self.assertTrue(result.wire.startswith(b"HTTP/1.1 400 Bad Request"))
+        self.assertIn(b'"error":"invalid_grant"', result.wire)
+        self.assertIsNone(
+            _synthetic_claude_response(
+                "oauth-refresh-reject",
+                "api.anthropic.com",
+                "POST /v1/oauth/token HTTP/1.1",
+                body,
+                0,
+            )
+        )
+        self.assertIsNone(
+            _synthetic_claude_response(
+                "oauth-refresh-reject",
+                "platform.claude.com",
+                "POST /v1/messages?beta=true HTTP/1.1",
+                body,
+                0,
+            )
+        )
+
     def test_claude_profile_rejects_codex_or_production_parameters(self) -> None:
         script = Path(__file__).parents[1] / "upstream_byte_relay.py"
         base = [
@@ -604,6 +720,8 @@ class UpstreamByteRelaySyntheticClaudeTest(unittest.TestCase):
             "2.1.226",
             "--claude-fault-plan",
             "retry-500",
+            "--claude-success-marker",
+            "FW_F_V3_OK",
         ]
         for extra, expected in (
             (["--codex-version", "0.147.0"], "禁止提供 --codex-version"),
@@ -615,6 +733,33 @@ class UpstreamByteRelaySyntheticClaudeTest(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 2)
                 self.assertIn(expected, result.stderr)
+
+    def test_claude_profile_requires_probe_bound_success_marker(self) -> None:
+        script = Path(__file__).parents[1] / "upstream_byte_relay.py"
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--cert",
+                "missing.crt",
+                "--key",
+                "missing.key",
+                "--output",
+                "missing-output",
+                "--synthetic-profile",
+                "claude-fw-f-v4",
+                "--allow-synthetic-responses",
+                "--claude-version",
+                "2.1.226",
+                "--claude-fault-plan",
+                "disconnect-retry",
+            ],
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 2)
+        self.assertIn("必须提供 --claude-success-marker", result.stderr)
 
 
 class UpstreamByteRelaySyntheticCoreTest(unittest.TestCase):

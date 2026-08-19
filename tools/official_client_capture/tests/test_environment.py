@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,6 +13,7 @@ from tools.official_client_capture.capturelib.environment import (
     parse_injected_env,
     prepare_api_state,
     prepare_claude_oauth_state,
+    temporary_claude_refresh_state,
     temporary_claude_tui_state,
 )
 from tools.official_client_capture.capturelib.model import (
@@ -200,15 +202,24 @@ class EnvironmentTest(unittest.TestCase):
             memory_root = root / "memory"
             memory_root.mkdir(mode=0o700)
             credentials = root / "credentials.json"
-            credentials.write_text('{"oauthAccessToken":"secret"}\n')
+            credentials.write_text(
+                '{"claudeAiOauth":{"accessToken":"secret",'
+                '"refreshToken":"refresh-secret"}}\n',
+                encoding="utf-8",
+            )
             credentials.chmod(0o600)
             global_state = root / ".claude.json"
-            global_state.write_text('{"hasCompletedOnboarding":true}\n')
+            original_global_state = (
+                '{"oauthAccount":{"accountUuid":"account-secret",'
+                '"emailAddress":"private@example.test"}}\n'
+            )
+            global_state.write_text(original_global_state, encoding="utf-8")
             global_state.chmod(0o600)
 
             with temporary_claude_tui_state(
                 credentials,
                 global_state,
+                expected_version="2.1.226",
                 memory_root=memory_root,
             ) as (home, config, receipt):
                 self.assertEqual(home.parent, memory_root)
@@ -216,12 +227,97 @@ class EnvironmentTest(unittest.TestCase):
                 self.assertTrue((config / ".credentials.json").is_file())
                 self.assertTrue((home / ".claude.json").is_file())
                 self.assertTrue((config / "settings.json").is_file())
+                copied_state = json.loads(
+                    (home / ".claude.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(copied_state["theme"], "dark")
+                self.assertTrue(copied_state["hasCompletedOnboarding"])
+                self.assertEqual(
+                    copied_state["lastOnboardingVersion"], "2.1.226"
+                )
+                self.assertEqual(
+                    receipt["onboarding_normalized_fields"],
+                    [
+                        "theme",
+                        "hasCompletedOnboarding",
+                        "lastOnboardingVersion",
+                    ],
+                )
+                self.assertTrue(receipt["onboarding_state_normalized"])
                 self.assertFalse(receipt["archived_in_evidence"])
                 temporary_home = home
 
             self.assertFalse(temporary_home.exists())
             self.assertTrue(receipt["removed"])
+            self.assertFalse(receipt["source_global_state_modified"])
+            self.assertEqual(
+                global_state.read_text(encoding="utf-8"), original_global_state
+            )
             self.assertNotIn("secret", str(receipt))
+
+    def test_tui_state_rejects_global_state_without_official_oauth_account(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            memory_root = root / "memory"
+            memory_root.mkdir(mode=0o700)
+            credentials = root / "credentials.json"
+            credentials.write_text(
+                '{"claudeAiOauth":{"accessToken":"secret"}}\n',
+                encoding="utf-8",
+            )
+            credentials.chmod(0o600)
+            global_state = root / ".claude.json"
+            global_state.write_text("{}\n", encoding="utf-8")
+            global_state.chmod(0o600)
+
+            with self.assertRaisesRegex(ConfigurationError, "oauthAccount"):
+                with temporary_claude_tui_state(
+                    credentials,
+                    global_state,
+                    expected_version="2.1.226",
+                    memory_root=memory_root,
+                ):
+                    self.fail("缺少官方 OAuth 账号的 TUI 状态不应进入场景。")
+
+    def test_refresh_state_expires_only_tmpfs_copy_and_removes_it(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            memory_root = root / "memory"
+            memory_root.mkdir(mode=0o700)
+            credentials = root / "credentials.json"
+            original_credentials = (
+                '{"claudeAiOauth":{"accessToken":"access-secret",'
+                '"refreshToken":"refresh-secret","expiresAt":9999999999999}}\n'
+            )
+            credentials.write_text(original_credentials, encoding="utf-8")
+            credentials.chmod(0o600)
+            global_state = root / ".claude.json"
+            global_state.write_text(
+                '{"hasCompletedOnboarding":true}\n', encoding="utf-8"
+            )
+            global_state.chmod(0o600)
+
+            with temporary_claude_refresh_state(
+                credentials,
+                global_state,
+                memory_root=memory_root,
+            ) as (home, config, receipt):
+                copied = json.loads(
+                    (config / ".credentials.json").read_text(encoding="utf-8")
+                )
+                self.assertEqual(copied["claudeAiOauth"]["expiresAt"], 1)
+                self.assertEqual(
+                    copied["claudeAiOauth"]["refreshToken"], "refresh-secret"
+                )
+                self.assertEqual(credentials.read_text(encoding="utf-8"), original_credentials)
+                self.assertFalse(receipt["production_oauth_forwarding_enabled"])
+                self.assertFalse(receipt["archived_in_evidence"])
+                temporary_home = home
+
+            self.assertFalse(temporary_home.exists())
+            self.assertTrue(receipt["removed"])
+            self.assertNotIn("access-secret", str(receipt))
+            self.assertNotIn("refresh-secret", str(receipt))
 
     def test_environment_manifest_view_covers_all_keys_without_secret_hash(self) -> None:
         view = environment_manifest_view(

@@ -35,10 +35,13 @@ def write_json(path: Path, value: object) -> None:
 
 
 def measured_entry(spec_id: str) -> dict[str, object]:
-    """构造一条同时具备 R/M 证据的实测规则。"""
+    """构造普通 R/M 或 TLS P/M 的实测规则。"""
 
+    is_tls = spec_id.startswith("SPEC-TLS-")
+    primary_channel = "P" if is_tls else "R"
     return {
         "spec_id": spec_id,
+        "domain": "tls" if is_tls else "header",
         "assertion_id": f"PAIR-{spec_id}",
         "assertion_result": "passed",
         "evidence_level": "observed",
@@ -48,11 +51,13 @@ def measured_entry(spec_id: str) -> dict[str, object]:
             if spec_id == "SPEC-NEW-001"
             else ["egress-claude-messages-inference"]
         ),
-        "evidence_channels": ["M", "R"],
+        "evidence_channels": ["M", primary_channel],
         "evidence_refs": [
             {"path": "evidence/identity.json", "channel": "M"},
-            {"path": f"evidence/{spec_id}.bin", "channel": "R"},
+            {"path": f"evidence/{spec_id}.bin", "channel": primary_channel},
         ],
+        "official_positive": {"result": "passed"},
+        "official_negative": {"result": "passed"},
     }
 
 
@@ -69,7 +74,8 @@ class DiscoveryClearanceTests(unittest.TestCase):
             "rules": root / "rules.json",
             "atoms": root / "atoms.json",
             "egress": root / "egress.json",
-            "measured": root / "measured.json",
+            "measured": root / "measured-rule-ledger.json",
+            "candidate_dispositions": root / "candidate-disposition-ledger.json",
             "prior": root / "prior-rule-additions.json",
             "policy": root / "policy.json",
         }
@@ -206,12 +212,51 @@ class DiscoveryClearanceTests(unittest.TestCase):
         write_json(
             paths["measured"],
             {
-                "schema_version": "claude-code-fw-f-measured-rule-ledger/v2",
+                "schema_version": "claude-code-fw-f-measured-rule-ledger/v3",
                 "target_version": target_version,
                 "target_binary_sha256": target_binary_sha256,
                 "rule_count": len(MEASURED_SPEC_IDS),
                 "entries": [measured_entry(spec_id) for spec_id in MEASURED_SPEC_IDS],
                 "result": "passed",
+            },
+        )
+        write_json(
+            paths["candidate_dispositions"],
+            {
+                "schema_version": "claude-code-fw-f-candidate-disposition-ledger/v1",
+                "target_version": target_version,
+                "candidate_count": 2,
+                "resolved_count": 2,
+                "unresolved_count": 0,
+                "result": "passed",
+                "entries": [
+                    {
+                        "candidate_id": "CAND-RULE",
+                        "candidate_group": "semantic_candidate_families",
+                        "status": "resolved",
+                        "disposition": "rule_bound",
+                        "binding_ids": ["SPEC-NEW-001"],
+                        "proposition": "候选形成实测规则。",
+                        "source_ids": ["D-CAND"],
+                        "semantic_candidate_ids": ["CAND-RULE"],
+                        "historical_spec_ids": [],
+                        "source_evidence_paths": ["target.json"],
+                        "rationale": "目标证据支持正式规则。",
+                    },
+                    {
+                        "candidate_id": "CAND-MANAGED",
+                        "candidate_group": "semantic_candidate_families",
+                        "status": "resolved",
+                        "disposition": "managed_egress_bound",
+                        "binding_ids": ["egress-current"],
+                        "proposition": "候选进入受管出站。",
+                        "source_ids": ["D-MANAGED"],
+                        "semantic_candidate_ids": ["CAND-MANAGED"],
+                        "historical_spec_ids": [],
+                        "source_evidence_paths": ["target.json"],
+                        "rationale": "目标发送点进入受管面。",
+                    },
+                ],
             },
         )
         write_json(
@@ -234,48 +279,27 @@ class DiscoveryClearanceTests(unittest.TestCase):
         write_json(
             paths["policy"],
             {
-                "schema_version": "claude-code-fw-f-discovery-clearance-policy/v2",
+                "schema_version": "claude-code-fw-f-discovery-clearance-policy/v3",
                 "target_version": target_version,
                 "target_binary_sha256": target_binary_sha256,
+                "measured_rule_source": "measured-rule-ledger.json",
+                "candidate_resolution_source": "candidate-disposition-ledger.json",
                 "strict_egress_ids": STRICT_EGRESS_IDS,
-                "measured_rule_ids": MEASURED_SPEC_IDS,
                 "expected_counts": {
                     "discovery_count": 5,
                     "candidate_count": 2,
                     "catalogued_context_count": 2,
+                    "orthogonal_candidate_count": 2,
                 },
-                "supporting_facts": [
-                    {
-                        "fact_id": "FACT-2_1_226-UNMEASURED-FEATURE-BOUNDARY",
-                        "domain": "evidence_boundary",
-                        "rationale": "未被当前运行触发的命题只保留为边界事实。",
-                    }
-                ],
+                "supporting_facts": [],
                 "managed_egress_facts": [],
-                "candidate_resolutions": [
-                    {
-                        "candidate_id": "CAND-RULE",
-                        "bindings": [
-                            {
-                                "binding_type": "rule_bound",
-                                "spec_ids": ["SPEC-NEW-001"],
-                            }
-                        ],
-                        "rationale": "候选已绑定真实 R/M 规则。",
-                    },
-                    {
-                        "candidate_id": "CAND-MANAGED",
-                        "bindings": [
-                            {
-                                "binding_type": "managed_egress_bound",
-                                "managed_egress_ids": ["egress-current"],
-                            }
-                        ],
-                        "rationale": "候选已经绑定受管出站。",
-                    },
-                ],
                 "invalid_v1_rule_proposals": [
-                    {"spec_id": spec_id, "retained_claim": "v1 机械拆分提案。"}
+                    {
+                        "spec_id": spec_id,
+                        "retained_claim": "v1 机械拆分提案。",
+                        "scope": "测试范围",
+                        "assertion_id": f"PAIR-{spec_id}",
+                    }
                     for spec_id in PRIOR_PROPOSAL_IDS
                 ],
                 "document_policies": [
@@ -300,6 +324,7 @@ class DiscoveryClearanceTests(unittest.TestCase):
             document_atoms_path=paths["atoms"],
             egress_inventory_path=paths["egress"],
             measured_rules_path=paths["measured"],
+            candidate_dispositions_path=paths["candidate_dispositions"],
             prior_rule_additions_path=paths["prior"],
             policy_path=paths["policy"],
         )
@@ -313,12 +338,6 @@ class DiscoveryClearanceTests(unittest.TestCase):
         entry.update(measured_entry(replacement))
         measured["entries"] = sorted(measured["entries"], key=lambda value: value["spec_id"])
         write_json(paths["measured"], measured)
-
-        policy = json.loads(paths["policy"].read_text(encoding="utf-8"))
-        policy["measured_rule_ids"] = sorted(
-            replacement if value == old else value for value in policy["measured_rule_ids"]
-        )
-        write_json(paths["policy"], policy)
 
     def test_all_discoveries_candidates_and_v1_proposals_are_resolved(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -350,15 +369,13 @@ class DiscoveryClearanceTests(unittest.TestCase):
             with self.assertRaisesRegex(DiscoveryClearanceError, "document policy"):
                 self._build(paths)
 
-    def test_unknown_supporting_fact_is_rejected(self) -> None:
+    def test_unknown_rule_binding_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             paths = self._fixture(Path(temporary))
-            policy = json.loads(paths["policy"].read_text(encoding="utf-8"))
-            policy["candidate_resolutions"][0]["bindings"] = [
-                {"binding_type": "supporting_fact_bound", "fact_ids": ["FACT-UNKNOWN"]}
-            ]
-            write_json(paths["policy"], policy)
-            with self.assertRaisesRegex(DiscoveryClearanceError, "unknown supporting fact|未知 supporting fact"):
+            candidates = json.loads(paths["candidate_dispositions"].read_text(encoding="utf-8"))
+            candidates["entries"][0]["binding_ids"] = ["SPEC-UNKNOWN"]
+            write_json(paths["candidate_dispositions"], candidates)
+            with self.assertRaisesRegex(DiscoveryClearanceError, "非实测规则"):
                 self._build(paths)
 
     def test_candidate_reverse_link_gap_is_rejected(self) -> None:
@@ -389,14 +406,12 @@ class DiscoveryClearanceTests(unittest.TestCase):
             with self.assertRaisesRegex(DiscoveryClearanceError, "缺少 R/M"):
                 self._build(paths)
 
-    def test_non_request_or_unmeasured_wire_rules_are_rejected(self) -> None:
+    def test_non_request_or_privacy_wire_rules_are_rejected(self) -> None:
         forbidden_ids = [
             "SPEC-HDR-011",
             "SPEC-HDR-034",
             "SPEC-RESP-001",
             "SPEC-STATE-002",
-            "SPEC-TLS-001",
-            "SPEC-TLS-002",
         ]
         for forbidden_id in forbidden_ids:
             with self.subTest(spec_id=forbidden_id), tempfile.TemporaryDirectory() as temporary:
@@ -404,6 +419,20 @@ class DiscoveryClearanceTests(unittest.TestCase):
                 self._replace_measured_id(paths, forbidden_id)
                 with self.assertRaisesRegex(DiscoveryClearanceError, "禁用|门禁失败"):
                     self._build(paths)
+
+    def test_tls_rule_requires_p_and_m_instead_of_r_and_m(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            paths = self._fixture(Path(temporary))
+            self._replace_measured_id(paths, "SPEC-TLS-001")
+            outputs = self._build(paths)
+            self.assertEqual(outputs["closure.json"]["result"], "passed")
+
+            measured = json.loads(paths["measured"].read_text(encoding="utf-8"))
+            tls_rule = next(value for value in measured["entries"] if value["spec_id"] == "SPEC-TLS-001")
+            tls_rule["evidence_channels"] = ["M", "R"]
+            write_json(paths["measured"], measured)
+            with self.assertRaisesRegex(DiscoveryClearanceError, "缺少 P/M"):
+                self._build(paths)
 
     def test_v1_proposal_set_must_be_fully_withdrawn(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

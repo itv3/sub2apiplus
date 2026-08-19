@@ -49,13 +49,13 @@ class CommandTest(unittest.TestCase):
         self.assertEqual(command.count("Bash"), 1)
         self.assertNotIn("CANARY-SECRET", text)
 
-    def test_claude_nested_agent_command_uses_cli_alias_and_fixed_budget(self) -> None:
+    def test_claude_nested_agent_command_uses_cli_alias_without_budget_cap(self) -> None:
         command = build_claude_command(
             claude_bin="/bin/claude", model="claude-test", scenario="a3"
         )
         self.assertEqual(command[command.index("--tools") + 1], "Task")
         self.assertEqual(command[command.index("--allowedTools") + 1], "Task")
-        self.assertEqual(command[command.index("--max-budget-usd") + 1], "2.00")
+        self.assertNotIn("--max-budget-usd", command)
         self.assertIn("dontAsk", command)
 
     def test_codex_api_http_and_ws_are_separate(self) -> None:

@@ -104,6 +104,7 @@ INJECTABLE_PROBE_KEYS = {
     "CLAUDE_CODE_ADDITIONAL_PROTECTION",
     "CLAUDE_CODE_ATTRIBUTION_HEADER",
     "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING",
+    "CLAUDE_CODE_ENABLE_EXPERIMENTAL_ADVISOR_TOOL",
     "CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK",
     "CLAUDE_CODE_DISABLE_THINKING",
     "CLAUDE_CODE_DISPATCH_V2S",
@@ -314,11 +315,50 @@ def _write_private_state_file(path: Path, value: bytes) -> None:
             os.close(descriptor)
 
 
+def _normalized_tui_global_state(
+    value: bytes,
+    expected_version: str,
+) -> tuple[bytes, list[str]]:
+    """只在短期副本中补齐官方已完成引导状态。
+
+    TUI 取证复用的是已经由官方 OAuth 流程建立的登录态，而不是重新执行登录。
+    因此全局状态必须同时证明存在官方 ``oauthAccount``，并固定为目标版本已经完成
+    onboarding。这里不读取、复制或派生账号字段，只返回可公开的字段名清单。
+    """
+
+    if not isinstance(expected_version, str) or not expected_version.strip():
+        raise ConfigurationError("Claude TUI 目标版本不能为空。")
+    try:
+        state = json.loads(value)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ConfigurationError("Claude TUI 全局状态必须是合法 JSON。") from error
+    if not isinstance(state, dict):
+        raise ConfigurationError("Claude TUI 全局状态顶层必须是对象。")
+    if not isinstance(state.get("oauthAccount"), dict) or not state["oauthAccount"]:
+        raise ConfigurationError("Claude TUI 全局状态缺少官方 oauthAccount。")
+
+    expected = {
+        "theme": "dark",
+        "hasCompletedOnboarding": True,
+        "lastOnboardingVersion": expected_version,
+    }
+    normalized_fields: list[str] = []
+    for field, field_value in expected.items():
+        if state.get(field) != field_value:
+            state[field] = field_value
+            normalized_fields.append(field)
+    normalized = (
+        json.dumps(state, ensure_ascii=False, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
+    return normalized, normalized_fields
+
+
 @contextmanager
 def temporary_claude_tui_state(
     credentials_file: Path,
     global_state_file: Path,
     *,
+    expected_version: str,
     memory_root: Path = Path("/dev/shm"),
 ) -> Iterator[tuple[Path, Path, dict[str, Any]]]:
     """在内存文件系统中建立一次性官方 TUI 登录态并保证终态删除。
@@ -341,6 +381,10 @@ def temporary_claude_tui_state(
     global_state = _read_private_state_file(
         global_state_file, "Claude TUI 全局状态"
     )
+    normalized_global_state, normalized_fields = _normalized_tui_global_state(
+        global_state,
+        expected_version,
+    )
     temporary_home = Path(
         tempfile.mkdtemp(prefix="claude-fw-f-tui-", dir=memory_root)
     )
@@ -356,6 +400,9 @@ def temporary_claude_tui_state(
         "credentials_copied": False,
         "global_state_copied": False,
         "privacy_settings_written": False,
+        "onboarding_state_normalized": False,
+        "onboarding_normalized_fields": [],
+        "source_global_state_modified": False,
         "archived_in_evidence": False,
         "removed": False,
     }
@@ -364,6 +411,95 @@ def temporary_claude_tui_state(
         config_dir.mkdir(mode=0o700)
         _write_private_state_file(config_dir / ".credentials.json", credentials)
         receipt["credentials_copied"] = True
+        _write_private_state_file(
+            temporary_home / ".claude.json", normalized_global_state
+        )
+        receipt["global_state_copied"] = True
+        receipt["onboarding_state_normalized"] = True
+        receipt["onboarding_normalized_fields"] = normalized_fields
+        settings = {
+            "skipWebFetchPreflight": True,
+            "env": PRIVACY_ENV,
+        }
+        secure_write_text(
+            config_dir / "settings.json",
+            json.dumps(settings, ensure_ascii=False, indent=2) + "\n",
+        )
+        receipt["privacy_settings_written"] = True
+        yield temporary_home, config_dir, receipt
+    finally:
+        shutil.rmtree(temporary_home)
+        receipt["removed"] = not temporary_home.exists()
+        if not receipt["removed"]:
+            raise ConfigurationError("Claude TUI 短期登录态未能彻底删除。")
+        current_global_state = _read_private_state_file(
+            global_state_file, "Claude TUI 全局状态"
+        )
+        receipt["source_global_state_modified"] = current_global_state != global_state
+        if receipt["source_global_state_modified"]:
+            raise ConfigurationError("Claude TUI 长期全局状态在取证期间被修改。")
+
+
+@contextmanager
+def temporary_claude_refresh_state(
+    credentials_file: Path,
+    global_state_file: Path,
+    *,
+    memory_root: Path = Path("/dev/shm"),
+) -> Iterator[tuple[Path, Path, dict[str, Any]]]:
+    """在 tmpfs 复制凭据并仅把副本标成过期，以触发官方 refresh 请求。
+
+    该状态只用于隔离合成中继：refresh 请求不会转发到真实 OAuth 端点，长期
+    credentials 也不会被客户端写入。收据不记录令牌、字节数或秘密派生摘要。
+    """
+
+    if (
+        not memory_root.is_absolute()
+        or memory_root.is_symlink()
+        or not memory_root.is_dir()
+    ):
+        raise ConfigurationError("OAuth refresh 短期状态根必须是可信绝对目录。")
+    credentials_bytes = _read_private_state_file(
+        credentials_file, "Claude OAuth refresh credentials"
+    )
+    global_state = _read_private_state_file(
+        global_state_file, "Claude OAuth refresh 全局状态"
+    )
+    try:
+        document = json.loads(credentials_bytes.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ConfigurationError("Claude OAuth refresh credentials 不是合法 JSON。") from error
+    oauth = document.get("claudeAiOauth") if isinstance(document, dict) else None
+    if not isinstance(oauth, dict) or not oauth.get("refreshToken"):
+        raise ConfigurationError("Claude OAuth refresh credentials 缺少 refreshToken。")
+    oauth["expiresAt"] = 1
+    expired_credentials = (
+        json.dumps(document, ensure_ascii=False, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
+    temporary_home = Path(
+        tempfile.mkdtemp(prefix="claude-fw-f-refresh-", dir=memory_root)
+    )
+    temporary_home.chmod(0o700)
+    if temporary_home.is_symlink() or temporary_home.resolve().parent != memory_root.resolve():
+        shutil.rmtree(temporary_home, ignore_errors=True)
+        raise ConfigurationError("OAuth refresh 短期 HOME 没有落在冻结内存目录内。")
+    receipt: dict[str, Any] = {
+        "required": True,
+        "storage_scope": "memory-backed-expired-credential-copy",
+        "credentials_copied": False,
+        "global_state_copied": False,
+        "privacy_settings_written": False,
+        "expiry_forced_on_copy": False,
+        "production_oauth_forwarding_enabled": False,
+        "archived_in_evidence": False,
+        "removed": False,
+    }
+    try:
+        config_dir = temporary_home / ".claude"
+        config_dir.mkdir(mode=0o700)
+        _write_private_state_file(config_dir / ".credentials.json", expired_credentials)
+        receipt["credentials_copied"] = True
+        receipt["expiry_forced_on_copy"] = True
         _write_private_state_file(temporary_home / ".claude.json", global_state)
         receipt["global_state_copied"] = True
         settings = {
@@ -380,7 +516,7 @@ def temporary_claude_tui_state(
         shutil.rmtree(temporary_home)
         receipt["removed"] = not temporary_home.exists()
         if not receipt["removed"]:
-            raise ConfigurationError("Claude TUI 短期登录态未能彻底删除。")
+            raise ConfigurationError("OAuth refresh 短期登录态未能彻底删除。")
 
 
 def build_case_environment(

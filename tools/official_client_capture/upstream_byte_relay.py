@@ -100,6 +100,11 @@ _SYNTHETIC_CLAUDE_PLANS = frozenset(
         "stream-interrupt-no-fallback",
     }
 )
+_SYNTHETIC_CLAUDE_V4_AUX_PLANS = frozenset({"oauth-refresh-reject"})
+_ALL_SYNTHETIC_CLAUDE_PLANS = (
+    _SYNTHETIC_CLAUDE_PLANS | _SYNTHETIC_CLAUDE_V4_AUX_PLANS
+)
+_SYNTHETIC_CLAUDE_SUCCESS_MARKERS = frozenset({"FW_F_V3_OK", "FW_F_V4_OK"})
 
 
 @dataclass(frozen=True)
@@ -291,12 +296,33 @@ def _synthetic_claude_response(
     request_line: str,
     body: bytes,
     ordinal: int,
+    success_marker: str = "FW_F_V3_OK",
 ) -> SyntheticClaudeResponse | None:
     """按冻结计划响应 Claude `/v1/messages`，未知端点和计划一律拒绝。"""
 
-    if plan not in _SYNTHETIC_CLAUDE_PLANS:
+    if plan not in _ALL_SYNTHETIC_CLAUDE_PLANS:
         return None
-    if host.lower().rstrip(".") != "api.anthropic.com":
+    if success_marker not in _SYNTHETIC_CLAUDE_SUCCESS_MARKERS:
+        return None
+    normalized_host = host.lower().rstrip(".")
+    if plan == "oauth-refresh-reject":
+        if (
+            normalized_host != "platform.claude.com"
+            or request_line != "POST /v1/oauth/token HTTP/1.1"
+        ):
+            return None
+        body = json.dumps(
+            {
+                "error": "invalid_grant",
+                "error_description": "fw-f v4 controlled refresh rejection",
+            },
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return SyntheticClaudeResponse(
+            "oauth_refresh_rejected",
+            _h1_response(400, "Bad Request", body),
+        )
+    if normalized_host != "api.anthropic.com":
         return None
     if request_line == "HEAD /api/hello HTTP/1.1":
         return SyntheticClaudeResponse(
@@ -354,7 +380,9 @@ def _synthetic_claude_response(
             _claude_error_response(status, error_type, f"fw-f v3 {plan}", headers=headers),
         )
     if plan in retry_status:
-        return SyntheticClaudeResponse(f"{plan}_success", _claude_stream_success(model))
+        return SyntheticClaudeResponse(
+            f"{plan}_success", _claude_stream_success(model, success_marker)
+        )
 
     if plan == "nonretry-400":
         return SyntheticClaudeResponse(
@@ -374,7 +402,7 @@ def _synthetic_claude_response(
     if plan == "fallback-model":
         if "haiku" in model.lower():
             return SyntheticClaudeResponse(
-                "fallback_model_success", _claude_stream_success(model)
+                "fallback_model_success", _claude_stream_success(model, success_marker)
             )
         return SyntheticClaudeResponse(
             "fallback_primary_529",
@@ -387,7 +415,8 @@ def _synthetic_claude_response(
                 _claude_error_response(404, "not_found_error", "fw-f v3 stream 404"),
             )
         return SyntheticClaudeResponse(
-            "nonstream_fallback_success", _claude_nonstream_success(model)
+            "nonstream_fallback_success",
+            _claude_nonstream_success(model, success_marker),
         )
     if plan in {"stream-interrupt-fallback", "stream-interrupt-no-fallback"}:
         if ordinal == 1:
@@ -405,13 +434,14 @@ def _synthetic_claude_response(
                 _claude_error_response(404, "not_found_error", "fw-f v3 force fallback"),
             )
         return SyntheticClaudeResponse(
-            "interrupt_nonstream_success", _claude_nonstream_success(model)
+            "interrupt_nonstream_success",
+            _claude_nonstream_success(model, success_marker),
         )
     if plan == "disconnect-retry":
         if ordinal == 1:
             return SyntheticClaudeResponse("disconnect_without_response", b"")
         return SyntheticClaudeResponse(
-            "disconnect_retry_success", _claude_stream_success(model)
+            "disconnect_retry_success", _claude_stream_success(model, success_marker)
         )
     if plan == "stall":
         return SyntheticClaudeResponse("stall_without_response", b"", delay_seconds=3.0)
@@ -1078,6 +1108,39 @@ class ByteRecorder:
         }
 
 
+def _annotate_relay_stop_after_client_request(
+    metadata: dict,
+    *,
+    stop_requested: bool,
+) -> bool:
+    """标记中继停机恰好落在单向请求完成窗口的候选终态。
+
+    这里仅记录可验证事实，不判断请求是否完整。完整 H1 语法、文件哈希和方向缺失
+    必须由取证 wrapper 在脱敏后重新核验；任何不满足精确形态的连接都保持原状并
+    由门禁失败关闭。
+    """
+
+    byte_counts = metadata.get("bytes")
+    digests = metadata.get("sha256")
+    if (
+        not stop_requested
+        or metadata.get("valid") is not True
+        or "error" in metadata
+        or not isinstance(byte_counts, dict)
+        or set(byte_counts) != {"client_to_upstream"}
+        or not isinstance(byte_counts.get("client_to_upstream"), int)
+        or byte_counts["client_to_upstream"] <= 0
+        or not isinstance(digests, dict)
+        or set(digests) != {"client_to_upstream"}
+    ):
+        return False
+    metadata["termination_reason"] = (
+        "relay_shutdown_after_complete_client_request_before_upstream_response"
+    )
+    metadata["relay_stop_requested"] = True
+    return True
+
+
 async def pump(src: asyncio.StreamReader, dst: asyncio.StreamWriter,
                rec: ByteRecorder, direction: str) -> None:
     """单向复制。逐块转发并落盘，不做任何解析或缓冲重组。
@@ -1692,6 +1755,26 @@ class Relay:
                             return
                         meta["oauth_refresh_token_persisted"] = False
                         meta["oauth_refresh_token_scrubbing"] = "equal_length_before_write"
+                    if (
+                        self.args.synthetic_profile == "claude-fw-f-v4"
+                        and self.args.claude_fault_plan == "oauth-refresh-reject"
+                        and target_host.lower().rstrip(".") == "platform.claude.com"
+                    ):
+                        recorded_body, oauth_redacted = _redact_oauth_refresh_body(initial_body)
+                        if not oauth_redacted:
+                            meta["error"] = "Claude OAuth 合成请求缺少可等长遮蔽的 refresh_token"
+                            meta["valid"] = False
+                            response = _h1_response(
+                                400,
+                                "Bad Request",
+                                b'{"error":"invalid_request"}',
+                            )
+                            rec.write("upstream_to_client", response)
+                            writer.write(response)
+                            await writer.drain()
+                            return
+                        meta["oauth_refresh_token_persisted"] = False
+                        meta["oauth_refresh_token_scrubbing"] = "equal_length_before_write"
                     if recorded_body:
                         rec.write("client_to_upstream", recorded_body)
 
@@ -1772,6 +1855,7 @@ class Relay:
                             request_line,
                             initial_body,
                             claude_ordinal,
+                            self.args.claude_success_marker,
                         )
                     if synthetic is None:
                         response = _h1_response(
@@ -2094,6 +2178,10 @@ class Relay:
             meta.setdefault("valid", False)
         finally:
             meta.update(rec.close())
+            _annotate_relay_stop_after_client_request(
+                meta,
+                stop_requested=self._stop_requested,
+            )
             self.records.append(meta)
             for w in (writer, up_w):
                 try:
@@ -2156,6 +2244,7 @@ class Relay:
                        "claude_version": self.args.claude_version or None,
                        "synthetic_profile": self.args.synthetic_profile or None,
                        "claude_fault_plan": self.args.claude_fault_plan or None,
+                       "claude_success_marker": self.args.claude_success_marker or None,
                        "candidate_core_scenario": self.args.candidate_core_scenario or None,
                        "candidate_core_ws_failures": (
                            self.args.candidate_core_ws_failures
@@ -2207,7 +2296,12 @@ def main() -> None:
                     help="仅一次：合成 realtime/calls 200，用于触发 sideband 派生请求")
     ap.add_argument(
         "--synthetic-profile",
-        choices=("candidate-aux-v1", "candidate-core-v1", "claude-fw-f-v3"),
+        choices=(
+            "candidate-aux-v1",
+            "candidate-core-v1",
+            "claude-fw-f-v3",
+            "claude-fw-f-v4",
+        ),
         default="",
         help=("冻结的候选响应画像；开启后所有请求只允许本地白名单响应，"
               "未知路径返回 421，绝不连接真实上游"),
@@ -2232,13 +2326,19 @@ def main() -> None:
     ap.add_argument(
         "--claude-version",
         default="",
-        help="Claude FW-F v3 合成故障画像绑定的官方客户端版本",
+        help="Claude FW-F v3/v4 合成故障画像绑定的官方客户端版本",
     )
     ap.add_argument(
         "--claude-fault-plan",
-        choices=tuple(sorted(_SYNTHETIC_CLAUDE_PLANS)),
+        choices=tuple(sorted(_ALL_SYNTHETIC_CLAUDE_PLANS)),
         default="",
-        help="claude-fw-f-v3 必填的冻结响应计划",
+        help="claude-fw-f-v3/v4 必填的冻结响应计划",
+    )
+    ap.add_argument(
+        "--claude-success-marker",
+        choices=tuple(sorted(_SYNTHETIC_CLAUDE_SUCCESS_MARKERS)),
+        default="",
+        help="Claude 合成响应按 probe 冻结的成功 marker",
     )
     ap.add_argument(
         "--retry-probe",
@@ -2294,15 +2394,17 @@ def main() -> None:
             ap.error("--candidate-core-ws-failures 必须在 1..20")
     elif args.candidate_core_scenario:
         ap.error("--candidate-core-scenario 只能与 candidate-core-v1 同时使用")
-    if args.synthetic_profile == "claude-fw-f-v3":
+    if args.synthetic_profile in {"claude-fw-f-v3", "claude-fw-f-v4"}:
         if not args.claude_version:
-            ap.error("claude-fw-f-v3 必须提供 --claude-version")
+            ap.error("Claude 合成画像必须提供 --claude-version")
         if not args.claude_fault_plan:
-            ap.error("claude-fw-f-v3 必须提供 --claude-fault-plan")
+            ap.error("Claude 合成画像必须提供 --claude-fault-plan")
+        if not args.claude_success_marker:
+            ap.error("Claude 合成画像必须提供 --claude-success-marker")
         if args.codex_version:
-            ap.error("claude-fw-f-v3 禁止提供 --codex-version")
-    elif args.claude_version or args.claude_fault_plan:
-        ap.error("Claude 合成参数只能与 claude-fw-f-v3 同时使用")
+            ap.error("Claude 合成画像禁止提供 --codex-version")
+    elif args.claude_version or args.claude_fault_plan or args.claude_success_marker:
+        ap.error("Claude 合成参数只能与 Claude 合成画像同时使用")
     relay = Relay(args)
 
     # docker exec 后台运行由 wrapper 通过 PID 发 SIGTERM。信号只设置 asyncio
