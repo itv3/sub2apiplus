@@ -671,7 +671,8 @@ python3 -m unittest \
 Claude Code 换版时必须新建 Campaign，并重复以下顺序：
 
 1. 冻结最新 stable 的官方产物、二进制、平台、入口、账号类型、模型和隐私配置；
-2. 以目标 bundle 原生发现为主，使用 2.1.220、2.1.88、HitCC 和前一批准版本只补线索，不继承结论；
+2. 以目标 bundle 原生发现为主，加载 2.1.220／前一批准版本以及已冻结的 2.1.88、HitCC 历史候选
+   台账补充线索，不继承其目标版本结论；
 3. 对每个拟活动命题构造可达正负场景；真实上游 run 在 Vircs 采集，故障语义在隔离 relay 注入；
 4. 采集目标 R/M；涉及 ClientHello／ALPN 时另采原生 P；
 5. 运行原子断言，把通过断言的 request-egress 命题写入新的 AtomicAssertionLedger；
@@ -679,6 +680,15 @@ Claude Code 换版时必须新建 Campaign，并重复以下顺序：
 7. 对全部发现、候选和旧规则逐项 disposition，未决数必须为 0；
 8. target-first 生成新 Snapshot／Release，再用同一 Schema／Compiler 表达历史 fixture；
 9. 证据不足的能力留在明确边界，不得补造规则、缩小数字或用旧版本 wire 提升等级。
+
+2.1.88 真源码和 HitCC 2.1.197 必须在首次纳管时完成全量提取，并冻结原始目录摘要、提取工具摘要、
+覆盖范围、稳定候选 ID、原文位置和提取收据。原始目录与提取合同未变化时，后继 Campaign 只重放该
+不可变候选基线，不重复扫描 2.1.88 的 `src／node_modules／vendor` 或逐篇重新提取 HitCC；但每个候选
+仍须结合本次目标原生发现、前一批准版本和运行证据重新取得唯一 disposition，历史 disposition 不得
+直接复制为新版结论。出现目标证据冲突、无法解释的新 host／sink／wrapper／feature、候选缺失或孤儿、
+覆盖漏洞，或者影响提取语义、覆盖面或稳定 ID 的工具变化时，才回查原始资料并全量重审；重审必须建立
+新的内容寻址候选基线和追加式收据，旧基线只读保留。
+
 # 第三部分 Sub2API 实现与迁移
 
 本部分只记录 Claude 方言和当前代码差距；共享控制契约见 Framework。硬性目标是：画像能表达的
@@ -861,7 +871,7 @@ advisor、web_search、count_tokens 与隔离 OAuth refresh 已纳入；合法�
 | `FW-B` | 按 Framework 抽取 Codex 已证明的暂定共享合同并保留 Codex facade | 共享内核无 Codex 专用策略字段；Codex active／rollback final wire 零差异；不宣称多 Persona 已冻结 |
 | `FW-C` | 验证并发布 Codex-only 正式制品，完成回滚、恢复和稳定观察 | 本轮没有新增 Claude Persona／画像／strict 注册；Codex 发布与激活收据闭环 |
 | `FW-D` | 建设 Campaign、正交事实、两段式批准、Snapshot／Release Store、candidate／PAIR、晋升与激活工具链 | 只用 Codex／合成数据自测；越权、摘要变化、范围缺口和收据不匹配均由机器阻断 |
-| `FW-E` | 第一步冻结最新 stable；从目标 bundle 原生发现发送点，取 2.1.88、HitCC、2.1.220／前一批准 stable 与目标发现的并集，分开建立 DiscoveryInventory、SemanticRuleCandidate 和 AtomicAssertionLedger，完成差分、P／R／J／M 和 Evidence 封存，再建立两个 Inventory 与 observation-only Sink | 目标版本、完整 sink／discovery inventory、语义候选、只含 SPEC 的原子断言台账和 EvidencePackage 可复算；没有截断或未分类项；停在 `evidence_recorded`，尚不定义目标 Schema／Snapshot 或签发 Evidence 批准 |
+| `FW-E` | 第一步冻结最新 stable；从目标 bundle 原生发现发送点，加载已冻结的 2.1.88／HitCC 候选台账和 2.1.220／前一批准 stable，与目标发现组成并集，分开建立 DiscoveryInventory、SemanticRuleCandidate 和 AtomicAssertionLedger，完成差分、P／R／J／M 和 Evidence 封存，再建立两个 Inventory 与 observation-only Sink | 目标版本、完整 sink／discovery inventory、语义候选、只含 SPEC 的原子断言台账和 EvidencePackage 可复算；没有截断或未分类项；停在 `evidence_recorded`，尚不定义目标 Schema／Snapshot 或签发 Evidence 批准 |
 | `FW-F` | 先把 FW-E 全部发现和语义候选逐项收敛到可审计终态并清零未决项，再由最新 stable 证据生成 Schema、目标 Snapshot、Persona 和不可部署样例；随后用同一 Schema／Compiler 表达 2.1.220 rollback fixture，批准 Profile、范围和多 Persona 合同 | 全量 DiscoveryDispositionLedger 无缺失、重复或未决项；target-first 样例与跨 Persona 负例通过；ApprovalFact 完整；Codex 生产收据对应最终合同；selector 未改变 |
 | `FW-G` | 实现本次已批准的 40 条最新 stable RequiredRules，完成受管语义层、辅助出站三态、全部 strict 入口原子断言、独立复测、DMIT candidate 和 rollback 验收 | 40 条规则及其 106 条画像原子断言达到后继 production-replacement ApprovalFact 要求；范围内断言、范围外拒绝和回退通过 |
 | `FW-H` | 灰度、回滚、激活；逐入口迁移并在闭集完成后退休遗留链 | DeploymentFact 与运行态一致；无 `retained_legacy` 才能签发迁移完成的 RemovalReceipt |
@@ -996,8 +1006,8 @@ Claude 没有可用的目标版本官方源码，必须以官方生产 bundle �
 1. 验证来源、integrity、二进制与 bundle 摘要，确定性提取 Bun SEA；
 2. 解析目标 bundle 的全部文本模块，从入口独立枚举网络 sink、请求构造、Header／Body 写入、环境与
    feature gate、端点、重试和跨请求状态；不得只围绕旧规则或固定字面量探针搜索；
-3. 取 2.1.88 真源码候选、HitCC 线索、2.1.220／前一批准 stable 规则和目标原生发现的并集，逐项比较
-   语义锚点、source-to-sink、条件和运行依赖；
+3. 取已冻结的 2.1.88 真源码候选、HitCC 线索台账、2.1.220／前一批准 stable 规则和目标原生发现的
+   并集，逐项比较语义锚点、source-to-sink、条件和运行依赖；
 4. 由静态条件反向生成 baseline、条件 Header、agent、retry、OAuth、端点、异常和 entrypoint 哨兵；
 5. 全 host／path 观测官方进程出站，不得用待证 endpoint 预筛；每个 run 同时封存 P／R／J／M、实际
    argv／环境、工具摘要、宿主回执、秘密扫描和恢复事实；
@@ -1010,9 +1020,9 @@ Claude 没有可用的目标版本官方源码，必须以官方生产 bundle �
 
 ### 4.2.2 目标原生闭集与跨来源矩阵
 
-每次换版都先生成目标 `SinkInventory`，再生成规则迁移台账。首次受管 Campaign 的永久历史语料是
-2.1.88 真源码、HitCC 2.1.197 和 2.1.220 官方 bundle；后继 Campaign 另加入最近批准 stable，但目标
-规则全集始终由下列并集决定，不由任一旧台账决定：
+每次换版都先生成目标 `SinkInventory`，再生成规则迁移台账。首次受管 Campaign 的永久历史语料和
+候选基线来自 2.1.88 真源码、HitCC 2.1.197 和 2.1.220 官方 bundle；后继 Campaign 另加入最近批准
+stable，但目标规则全集始终由下列并集决定，不由任一旧台账决定：
 
 ```text
 HistoricalSourceCandidates
@@ -1021,6 +1031,25 @@ HistoricalSourceCandidates
 ∪ PreviousApprovedStableRules
 ∪ TargetNativeDiscoveries
 ```
+
+`HistoricalSourceCandidates` 与 `HitCCClues` 是首次全量审计后封存的内容寻址候选基线，不表示每个
+后继 Campaign 都重新扫描内容未变的 2.1.88 和 HitCC 原始目录。首次基线必须绑定原始目录摘要、提取
+工具摘要、覆盖合同、稳定候选 ID、原文位置和收据；当前分别冻结 102 个 2.1.88 源码机制候选和 71 个
+HitCC 线索。后继 Campaign 必须重放全部稳定候选 ID，并以目标 bundle 原生发现、前一批准 stable 规则
+和目标运行证据重新计算每项 disposition；可以复用提取结果，不能复用目标结论。旧资料不能单独支持
+目标版本的 `inherit／change／condition_change／add／delete` 或任何活动规则。
+
+只有下列情况才重新打开原始目录并执行全量提取，而不是继续重放旧基线：
+
+1. 原始目录摘要发生变化，或历史基线的路径、摘要、稳定 ID、原文位置无法复算；
+2. 提取器、解析器、调用图／反向数据流能力或覆盖合同发生会影响候选语义、范围或身份的变化；
+3. 目标版本出现无法由既有候选解释的新 host、endpoint、sink、动态 wrapper、feature 或状态机制；
+4. 目标静态／运行证据与历史候选冲突，或出现缺失、孤儿、未决、错误合并和覆盖漏洞；
+5. 候选语义粒度不足以形成唯一 disposition，必须重新切分、合并或补充原文证据。
+
+重审必须生成新的内容寻址候选基线和追加式收据，记录触发原因、旧／新摘要、候选 ID 迁移和覆盖差异；
+不得覆盖旧基线，也不得因未触发重审就跳过逐版本 disposition。这样既避免每次无意义地重复审计内容
+未变化的原始资料，又保留旧机制重新出现或目标发现器漏检时的防遗漏能力。
 
 跨来源闭集分三层保存，禁止混算数量：
 
@@ -1053,13 +1082,14 @@ disposition。下列任一条件均阻止 FW-E 退出：
    本次目标产物。关闭后的 telemetry／nonessential 分支仍登记可达性和 `record_only` 处置，其不发流量
    不计一致性差异，但不得因此删除可能影响 essential 请求构造的共享状态。
 
-现有三份历史机器台账只证明其自身路径、ID 和当前映射一致，不自动证明语义穷尽。2.1.88 必须覆盖
-`src／node_modules／vendor` 的网络相关反向切片；HitCC 每篇 `clue_source` 文档必须映射到一条或多条
-原子命题，或以可复算理由标为范围外。尚未抽成 clue 的文档必须无截断枚举非代码区 Markdown 列表项，
-保存原文路径、行号、最近 heading、内容摘要和稳定发现 ID，再逐项归入现有语义候选、既有 SPEC 或
-可追溯的 `catalogued_context`；后者只表示当前固定词表没有给出规则映射，不是范围外证明，已映射文档
-反向绑定其 clue。扫描器无法作出语义判断时先保留
-`unclassified`，不得按词法未命中自动排除；只有发现身份、证据、处置及候选双向引用同时闭合后，才能
+首次建立历史候选基线时，既有旧台账只证明其自身路径、ID 和当时映射一致，不自动证明语义穷尽，也
+不能直接充当可逐版重放的基线。2.1.88 的首次全量提取必须覆盖 `src／node_modules／vendor` 的网络相关
+反向切片；HitCC 每篇 `clue_source` 文档必须映射到一条或多条原子命题，或以可复算理由标为范围外。
+尚未抽成 clue 的文档必须无截断枚举非代码区 Markdown 列表项，保存原文路径、行号、最近 heading、
+内容摘要和稳定发现 ID，再逐项归入现有语义候选、既有 SPEC 或可追溯的 `catalogued_context`；后者只
+表示当前固定词表没有给出规则映射，不是范围外证明，已映射文档反向绑定其 clue。扫描器无法作出语义
+判断时先保留 `unclassified`，不得按词法未命中自动排除；只有发现身份、证据、处置及候选双向引用
+同时闭合后，才能
 把它改为 `mapped_validation`，且不得因此新增规则。
 
 `catalogued_context` 只允许作为 FW-E 的不可变取证结果，不是 FW-F 的终态。FW-F 必须在不改写该结果的
