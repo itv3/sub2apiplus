@@ -478,6 +478,16 @@ def _result_matches_marker(record: dict[str, Any], marker: str) -> bool:
     return False
 
 
+def _result_is_success(record: dict[str, Any]) -> bool:
+    """只校验官方客户端的成功终态，不把模型回答文本当作 wire 规则。"""
+
+    return (
+        record.get("subtype") == "success"
+        and record.get("is_error") is False
+        and isinstance(record.get("result"), str)
+    )
+
+
 def _result_matches_expected_failure(
     record: dict[str, Any], probe: ClaudeFWFProbe
 ) -> bool:
@@ -587,11 +597,7 @@ def run_claude_fw_f_probe(
         )
         runtime_secret_exposed = exposed
         secure_write_text(output_dir / "tui-transcript.log", safe_transcript)
-        valid = (
-            result.get("sent_prompt") is True
-            and probe.marker in safe_transcript
-            and not exposed
-        )
+        valid = result.get("sent_prompt") is True and not exposed
         summary: dict[str, Any] = {
             "driver": probe.driver,
             "valid": valid,
@@ -632,6 +638,7 @@ def run_claude_fw_f_probe(
             commands.append((command, probe.marker))
 
         marker_results: list[bool] = []
+        success_results: list[bool] = []
         error_results: list[bool] = []
         local_error_results: list[bool] = []
         return_codes: list[int] = []
@@ -649,6 +656,9 @@ def run_claude_fw_f_probe(
             marker_results.append(
                 len(records) == 1 and _result_matches_marker(records[0], marker)
             )
+            success_results.append(
+                len(records) == 1 and _result_is_success(records[0])
+            )
             error_results.append(
                 len(records) == 1
                 and _result_matches_expected_failure(records[0], probe)
@@ -664,7 +674,7 @@ def run_claude_fw_f_probe(
         if probe.expected_outcome == "success":
             valid = (
                 all(code == 0 for code in return_codes)
-                and all(marker_results)
+                and all(success_results)
                 and not runtime_secret_exposed
             )
         else:
@@ -685,6 +695,7 @@ def run_claude_fw_f_probe(
             "expected_outcome": probe.expected_outcome,
             "return_codes": return_codes,
             "marker_results": marker_results,
+            "success_results": success_results,
             "error_results": error_results,
             "local_error_results": local_error_results,
             "runtime_secret_exposed": runtime_secret_exposed,

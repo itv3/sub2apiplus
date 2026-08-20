@@ -1040,7 +1040,16 @@ def _run_print_probe(
             and background_control.get("valid") is True
         )
     elif probe.expected_outcome == "success":
-        outcome_valid = completed.returncode == 0 and bool(results) and marker_present
+        outcome_valid = (
+            completed.returncode == 0
+            and bool(results)
+            and all(
+                record.get("subtype") == "success"
+                and record.get("is_error") is False
+                and isinstance(record.get("result"), str)
+                for record in results
+            )
+        )
     else:
         outcome_valid = completed.returncode != 0 or any(
             record.get("is_error") is True for record in results
@@ -1057,6 +1066,7 @@ def _run_print_probe(
         "return_code": completed.returncode,
         "result_count": len(results),
         "marker_present": marker_present,
+        "model_text_matches_marker": marker_present,
         "tool_names": tool_names,
         "expected_tool_name": probe.expected_tool_name,
         "runtime_secret_exposed": exposed
@@ -1150,7 +1160,6 @@ def _run_tui_probe(
     return {
         "valid": (
             input_complete
-            and marker_present
             and debug_present
             and not exposed
             and not debug_secret_exposed
@@ -1370,7 +1379,10 @@ def _dimension_passed(
             or (
                 probe.driver == "tui"
                 and input_complete
-                and "GET /api/oauth/profile" in request_ids
+                and (
+                    "HEAD /api/hello" in request_ids
+                    or "GET /api/oauth/profile" in request_ids
+                )
             )
         )
     elif dimension == "entrypoint.sdk_cli":

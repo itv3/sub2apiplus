@@ -152,6 +152,33 @@ class ClaudeFWFV3RunnerTests(unittest.TestCase):
                 invocation["invocations"][0]["environment"]["sha256"]
             )
 
+    def test_success_probe_does_not_compare_model_answer_text(self) -> None:
+        """模型回答内容属于行为层，不能成为官方出站一致性判据。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "result"
+            completed = self._completed(
+                marker="与冻结标记不同的正常回答",
+                returncode=0,
+                subtype="success",
+            )
+            with mock.patch(
+                "tools.official_client_capture.capturelib.claude_fw_f_v3._run",
+                return_value=completed,
+            ):
+                result = run_claude_fw_f_probe(
+                    claude_bin="/opt/claude",
+                    model="claude-sonnet-5",
+                    probe_id="v3-baseline",
+                    environment={"PATH": "/usr/bin"},
+                    output_dir=output,
+                    timeout=30,
+                    known_secrets={},
+                )
+            self.assertTrue(result["valid"])
+            self.assertEqual(result["marker_results"], [False])
+            self.assertEqual(result["success_results"], [True])
+
     def test_expected_failure_is_valid_only_for_nonzero_error_result(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             output = Path(directory) / "result"

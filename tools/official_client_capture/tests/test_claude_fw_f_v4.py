@@ -151,6 +151,36 @@ class ClaudeFWFV4RunnerTests(unittest.TestCase):
             self.assertEqual(unexpected["result"], "failed")
             self.assertIn("aux.usage", unexpected["failed_dimensions"])
 
+    def test_tui_lifecycle_does_not_require_profile_cache_miss(self) -> None:
+        """TUI 身份由官方生命周期请求证明，不依赖账号缓存是否触发 profile。"""
+
+        with tempfile.TemporaryDirectory() as directory:
+            relay = Path(directory)
+            self._write_request(
+                relay / "conn001.client_to_upstream.bin",
+                "HEAD /api/hello HTTP/1.1",
+            )
+            summary = {
+                "inner_result": {
+                    "input_complete": True,
+                    "invocation": {
+                        "environment": {
+                            "values": {
+                                "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+                            }
+                        }
+                    },
+                }
+            }
+            result = validate_complete_probe_evidence(
+                probe_id="v4-tui-usage",
+                relay_root=relay,
+                scenario_summary=summary,
+                relay_integrity={},
+                pcap_receipt={},
+            )
+            self.assertEqual(result["result"], "passed")
+
     def test_advisor_positive_requires_real_wire_descriptor(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             relay = Path(directory)
