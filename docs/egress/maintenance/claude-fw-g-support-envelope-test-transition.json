@@ -1,0 +1,43 @@
+{
+  "schema_version": "official-egress-claude-fw-g-support-envelope-test-transition/v1",
+  "date": "2026-08-20",
+  "phase": "FW-G",
+  "base_commit": "5ad45153ade7c61e0fe38e3f9f951d24d32eef5c",
+  "source_transition": {
+    "path": "docs/egress/maintenance/claude-fw-g-support-envelope-source-transition.json",
+    "sha256": "70ff3e96565a9c758e9708523d5e07a2b45038b36942fb02b6556d67dfe3e170"
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_alias_route_transition_test.go",
+      "from_sha256": "c6131b2219f90734d76d7d15d721dc03806bfe1bbadb7c16678358f8da62c454",
+      "to_sha256": "368e08ed053cd26e0e8aecdf35e25aecf19527298dad2efffdf55c6794eb0136",
+      "reason": "裸路径别名 transition 只接受本次 SupportEnvelope 错误语义的精确追加承接。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_count_tokens_transition_test.go",
+      "from_sha256": "54f6edd4e75ed4a328f6c6287b7083dd2277a70132db62b4e4f34561f05ade73",
+      "to_sha256": "9e06356d182463d32b4a4174fa9735c0bafbae13d3a313c03fa1d0edb38037c0",
+      "reason": "历史 count_tokens transition 只接受本次范围拒绝 transition 的精确追加承接。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_query_fail_close_transition_test.go",
+      "from_sha256": "ce4157ca50bc939e4e690f0b51c9c1d2e9cdaa6f3490112a7e5a4905b35805c9",
+      "to_sha256": "d261488f8aee7b9833adf7723d110bfcba7e76cee66ce7abf700b3680ae9b428",
+      "reason": "历史 query fail-close transition 只接受本次范围拒绝 transition 的精确追加承接。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_runtime_test.go",
+      "from_sha256": "f695cba17c1f3d2de882b1b6e43e47367e8cc9ed35e1b80e4789f677050a05c4",
+      "to_sha256": "0b6937795cceea8a2ad8d157e376a717d2230710890d991385a8ab5f6ef268b7",
+      "reason": "证明畸形官方声明与有损第三方请求均携带稳定范围拒绝类型。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_candidate_test.go",
+      "from_sha256": "717069e45ffbd97fd33ae6c30389868c4b3ba39651a16476a5d67ca94d30aa98",
+      "to_sha256": "da34b47877ba8e5c1a4aedf731f5ebd18dd279dd0b261630468ef6c69d226ef7",
+      "reason": "入口级断言证明非流式、范围外模型和未知字段均本地返回 400，且没有任何上游请求。"
+    }
+  ],
+  "result": "passed"
+}

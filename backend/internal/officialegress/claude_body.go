@@ -180,7 +180,7 @@ func parseClaudeCanonicalMessages(
 		return ClaudeCanonicalRequest{}, TranslationReport{}, errors.New("Claude candidate model 必须是非空字符串")
 	}
 	model = strings.TrimSpace(model)
-	if !claudeApprovedMessagesModel(model, artifact) {
+	if !claudeApprovedMessagesModel(model, artifact, officialIngress) {
 		return ClaudeCanonicalRequest{}, TranslationReport{}, errors.New(
 			"Claude candidate model 不在 messages SupportEnvelope",
 		)
@@ -567,7 +567,16 @@ func claudeSystemBlocksEqual(left, right []claudeWireSystemBlock) bool {
 	return true
 }
 
-func claudeApprovedMessagesModel(model string, artifact claudeWireArtifact) bool {
+func claudeApprovedMessagesModel(
+	model string,
+	artifact claudeWireArtifact,
+	officialIngress bool,
+) bool {
+	// Haiku 只在官方客户端已实测的 fallback 状态机中出现；第三方入口直接
+	// 声明 Haiku 会被 Compiler 改写成 Sonnet，属于有损翻译，必须 fail-close。
+	if !officialIngress {
+		return model == artifact.ImplementationPolicy.Scenarios.SDKCLI.Model
+	}
 	scenarios := []claudeWireScenario{
 		artifact.ImplementationPolicy.Scenarios.SDKCLI,
 		artifact.ImplementationPolicy.Scenarios.Agent,

@@ -8,37 +8,37 @@ import (
 )
 
 const (
-	claudeFWGAliasRouteSourceSHA256 = "5d69b0c2ddb733686c2502bc352b2331229a1dcbad3ac6fa88e14dcdb24ded0d"
-	claudeFWGAliasRouteTestSHA256   = "3e2f6f4fd591b6e3ca602f88ac440bc15d75a65832ad603736c0a69178e9295d"
+	claudeFWGSupportEnvelopeSourceSHA256 = "70ff3e96565a9c758e9708523d5e07a2b45038b36942fb02b6556d67dfe3e170"
+	claudeFWGSupportEnvelopeTestSHA256   = "ae56ba2028807b88bb0d2d9a02bad25de5bc6c2a760289eddaf3df2cce531629"
 )
 
-func loadClaudeFWGAliasRouteSourceReceipt() (
+func loadClaudeFWGSupportEnvelopeSourceReceipt() (
 	claudeFWGQueryFailCloseSourceReceipt,
 	error,
 ) {
 	var receipt claudeFWGQueryFailCloseSourceReceipt
 	raw, err := readClaudeFWGCountTokensReceipt(
-		"docs/egress/maintenance/claude-fw-g-alias-route-source-transition.json",
+		"docs/egress/maintenance/claude-fw-g-support-envelope-source-transition.json",
 		&receipt,
 	)
 	if err != nil {
 		return receipt, err
 	}
-	if claudeFWGCountTokensDigest(raw) != claudeFWGAliasRouteSourceSHA256 ||
+	if claudeFWGCountTokensDigest(raw) != claudeFWGSupportEnvelopeSourceSHA256 ||
 		receipt.SchemaVersion !=
-			"official-egress-claude-fw-g-alias-route-source-transition/v1" ||
+			"official-egress-claude-fw-g-support-envelope-source-transition/v1" ||
 		receipt.Date != "2026-08-20" || receipt.Phase != "FW-G" ||
-		receipt.BaseCommit != "516db697cf889b39f7b966e04b08ba53191e1634" ||
-		len(receipt.Prior) != 2 || len(receipt.Transitions) != 4 ||
+		receipt.BaseCommit != "5ad45153ade7c61e0fe38e3f9f951d24d32eef5c" ||
+		len(receipt.Prior) != 2 || len(receipt.Transitions) != 3 ||
 		receipt.ProductionSelectorChanged || receipt.VircsServiceChanged ||
 		!receipt.DMITCandidateRebuild ||
 		receipt.CodexFinalWire != "zero_difference_required" || receipt.Result != "passed" {
-		return receipt, errors.New("Claude FW-G 裸路径别名 source transition 顶层事实非法")
+		return receipt, errors.New("Claude FW-G SupportEnvelope source transition 顶层事实非法")
 	}
 	for _, prior := range receipt.Prior {
 		priorRaw, err := os.ReadFile(filepath.Join("../../..", filepath.FromSlash(prior.Path)))
 		if err != nil || claudeFWGCountTokensDigest(priorRaw) != prior.SHA256 {
-			return receipt, errors.New("Claude FW-G 裸路径别名 prior transition 摘要不一致")
+			return receipt, errors.New("Claude FW-G SupportEnvelope prior transition 摘要不一致")
 		}
 	}
 	if err := validateClaudeFWGCountTokensTransitions(receipt.Transitions); err != nil {
@@ -47,27 +47,27 @@ func loadClaudeFWGAliasRouteSourceReceipt() (
 	return receipt, nil
 }
 
-func loadClaudeFWGAliasRouteTestReceipt(
+func loadClaudeFWGSupportEnvelopeTestReceipt(
 	source claudeFWGQueryFailCloseSourceReceipt,
 ) (claudeFWGQueryFailCloseTestReceipt, error) {
 	var receipt claudeFWGQueryFailCloseTestReceipt
 	raw, err := readClaudeFWGCountTokensReceipt(
-		"docs/egress/maintenance/claude-fw-g-alias-route-test-transition.json",
+		"docs/egress/maintenance/claude-fw-g-support-envelope-test-transition.json",
 		&receipt,
 	)
 	if err != nil {
 		return receipt, err
 	}
-	if claudeFWGCountTokensDigest(raw) != claudeFWGAliasRouteTestSHA256 ||
+	if claudeFWGCountTokensDigest(raw) != claudeFWGSupportEnvelopeTestSHA256 ||
 		receipt.SchemaVersion !=
-			"official-egress-claude-fw-g-alias-route-test-transition/v1" ||
+			"official-egress-claude-fw-g-support-envelope-test-transition/v1" ||
 		receipt.Date != "2026-08-20" || receipt.Phase != "FW-G" ||
 		receipt.BaseCommit != source.BaseCommit || receipt.Result != "passed" ||
 		receipt.Source.Path !=
-			"docs/egress/maintenance/claude-fw-g-alias-route-source-transition.json" ||
-		receipt.Source.SHA256 != claudeFWGAliasRouteSourceSHA256 ||
+			"docs/egress/maintenance/claude-fw-g-support-envelope-source-transition.json" ||
+		receipt.Source.SHA256 != claudeFWGSupportEnvelopeSourceSHA256 ||
 		len(receipt.Transitions) != 5 {
-		return receipt, errors.New("Claude FW-G 裸路径别名 test transition 顶层事实非法")
+		return receipt, errors.New("Claude FW-G SupportEnvelope test transition 顶层事实非法")
 	}
 	if err := validateClaudeFWGCountTokensTransitions(receipt.Transitions); err != nil {
 		return receipt, err
@@ -75,16 +75,16 @@ func loadClaudeFWGAliasRouteTestReceipt(
 	return receipt, nil
 }
 
-func claudeFWGAliasRouteTransitionSupersedes(
+func claudeFWGSupportEnvelopeTransitionSupersedes(
 	path string,
 	priorDigest string,
 	currentDigest string,
 ) bool {
-	source, err := loadClaudeFWGAliasRouteSourceReceipt()
+	source, err := loadClaudeFWGSupportEnvelopeSourceReceipt()
 	if err != nil {
 		return false
 	}
-	testReceipt, err := loadClaudeFWGAliasRouteTestReceipt(source)
+	testReceipt, err := loadClaudeFWGSupportEnvelopeTestReceipt(source)
 	if err != nil {
 		return false
 	}
@@ -93,11 +93,19 @@ func claudeFWGAliasRouteTransitionSupersedes(
 		testReceipt.Transitions,
 	} {
 		for _, transition := range transitions {
-			if transition.Path == path && transition.ToSHA256 == currentDigest &&
-				(transition.FromSHA256 == priorDigest ||
-					claudeFWGQueryFailCloseTransitionSupersedes(
-						path, priorDigest, transition.FromSHA256,
-					)) {
+			if transition.Path != path || transition.ToSHA256 != currentDigest {
+				continue
+			}
+			if transition.FromSHA256 == priorDigest ||
+				claudeFWGAliasRouteTransitionSupersedes(
+					path, priorDigest, transition.FromSHA256,
+				) ||
+				claudeFWGQueryFailCloseTransitionSupersedes(
+					path, priorDigest, transition.FromSHA256,
+				) ||
+				claudeFWGCountTokensSourceTransitionSupersedes(
+					path, priorDigest, transition.FromSHA256,
+				) {
 				return true
 			}
 		}
@@ -105,12 +113,12 @@ func claudeFWGAliasRouteTransitionSupersedes(
 	return false
 }
 
-func TestClaudeFWGAliasRouteTransitionsAreFrozen(t *testing.T) {
-	source, err := loadClaudeFWGAliasRouteSourceReceipt()
+func TestClaudeFWGSupportEnvelopeTransitionsAreFrozen(t *testing.T) {
+	source, err := loadClaudeFWGSupportEnvelopeSourceReceipt()
 	if err != nil {
 		t.Fatal(err)
 	}
-	testReceipt, err := loadClaudeFWGAliasRouteTestReceipt(source)
+	testReceipt, err := loadClaudeFWGSupportEnvelopeTestReceipt(source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -125,12 +133,9 @@ func TestClaudeFWGAliasRouteTransitionsAreFrozen(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := claudeFWGCountTokensDigest(raw); got != transition.ToSHA256 &&
-				!claudeFWGSupportEnvelopeTransitionSupersedes(
-					transition.Path, transition.ToSHA256, got,
-				) {
+			if got := claudeFWGCountTokensDigest(raw); got != transition.ToSHA256 {
 				t.Fatalf(
-					"Claude FW-G 裸路径别名 transition 漂移：path=%s got=%s want=%s",
+					"Claude FW-G SupportEnvelope transition 漂移：path=%s got=%s want=%s",
 					transition.Path, got, transition.ToSHA256,
 				)
 			}

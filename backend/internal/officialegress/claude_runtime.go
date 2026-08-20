@@ -172,6 +172,39 @@ type ClaudeMessagesExecution struct {
 	InvocationID string
 }
 
+// claudeSupportEnvelopeRejection 标记在任何上游发送前即可确定的入口拒绝。
+// service 只能依据这个稳定类型返回 400，禁止解析中文错误文本或把传输故障误报为客户端错误。
+type claudeSupportEnvelopeRejection struct {
+	err error
+}
+
+func (e *claudeSupportEnvelopeRejection) Error() string {
+	if e == nil || e.err == nil {
+		return "Claude 请求不在 SupportEnvelope"
+	}
+	return e.err.Error()
+}
+
+func (e *claudeSupportEnvelopeRejection) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.err
+}
+
+func newClaudeSupportEnvelopeRejection(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &claudeSupportEnvelopeRejection{err: err}
+}
+
+// IsClaudeSupportEnvelopeRejection 判断错误是否属于本地 strict 范围拒绝。
+func IsClaudeSupportEnvelopeRejection(err error) bool {
+	var rejection *claudeSupportEnvelopeRejection
+	return errors.As(err, &rejection)
+}
+
 // ClaudeEndpointExecution 供 lifecycle／auxiliary 调用点接入同一 strict 链。
 type ClaudeEndpointExecution struct {
 	EndpointKind string
@@ -406,25 +439,25 @@ func (r *ClaudeCandidateRuntime) ExecuteMessages(
 		input.Body, input.Ingress, input.TrustedFacts, r.profile, r.wire,
 	)
 	if err != nil {
-		return ClaudeCandidateResult{}, err
+		return ClaudeCandidateResult{}, newClaudeSupportEnvelopeRejection(err)
 	}
 	canonical, translation, err := parseClaudeCanonicalMessages(
 		input.Body, trusted, r.wire, officialIngress,
 	)
 	if err != nil {
-		return ClaudeCandidateResult{}, err
+		return ClaudeCandidateResult{}, newClaudeSupportEnvelopeRejection(err)
 	}
 	if officialIngress {
 		classifyClaudeOfficialFallback(&canonical, r.wire)
 		if err := completeClaudeOfficialIngressFeatures(
 			&trusted, canonical, ingressState, r.wire, input.Ingress.Headers,
 		); err != nil {
-			return ClaudeCandidateResult{}, err
+			return ClaudeCandidateResult{}, newClaudeSupportEnvelopeRejection(err)
 		}
 	}
 	relations, err := validateClaudeMessageRelations(canonical)
 	if err != nil {
-		return ClaudeCandidateResult{}, err
+		return ClaudeCandidateResult{}, newClaudeSupportEnvelopeRejection(err)
 	}
 	identity, err := deriveClaudeIdentityFacts(trusted)
 	if err != nil {

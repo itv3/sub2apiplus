@@ -277,6 +277,46 @@ func TestClaudeFWGServiceIngressSnapshotAndRouteAreClosed(t *testing.T) {
 	require.Contains(t, queryRecorder.Body.String(), "invalid_request_error")
 	require.Empty(t, upstream.captures)
 
+	for _, test := range []struct {
+		name string
+		body []byte
+	}{
+		{
+			name: "non-stream",
+			body: []byte(`{"model":"claude-sonnet-5","messages":[{"role":"user","content":"boundary"}],"tools":[],"stream":false}`),
+		},
+		{
+			name: "outside-model",
+			body: []byte(`{"model":"claude-haiku-4-5","messages":[{"role":"user","content":"boundary"}],"tools":[],"stream":true}`),
+		},
+		{
+			name: "unknown-field",
+			body: []byte(`{"model":"claude-sonnet-5","messages":[{"role":"user","content":"boundary"}],"tools":[],"stream":true,"unknown":true}`),
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			boundaryRecorder := httptest.NewRecorder()
+			boundaryContext, _ := gin.CreateTestContext(boundaryRecorder)
+			boundaryContext.Request = httptest.NewRequest(
+				http.MethodPost, "/v1/messages", bytes.NewReader(test.body),
+			)
+			boundaryContext.Set("api_key", &APIKey{ID: 23})
+			boundaryParsed, err := ParseGatewayRequest(
+				NewRequestBodyRef(test.body), PlatformAnthropic,
+			)
+			require.NoError(t, err)
+			result, err := strictService.Forward(
+				context.Background(), boundaryContext,
+				claudeFWGServiceAccount(), boundaryParsed,
+			)
+			require.Nil(t, result)
+			require.Error(t, err)
+			require.Equal(t, http.StatusBadRequest, boundaryRecorder.Code)
+			require.Contains(t, boundaryRecorder.Body.String(), "invalid_request_error")
+			require.Empty(t, upstream.captures)
+		})
+	}
+
 	account = claudeFWGServiceAccount()
 	c.Set("api_key", &APIKey{ID: 23})
 	body := []byte(`{"model":"claude-sonnet-5","messages":[{"role":"user","content":"hello"}],"tools":[],"stream":true}`)

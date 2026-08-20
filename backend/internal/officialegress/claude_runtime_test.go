@@ -1343,6 +1343,9 @@ func TestClaudeFWGRejectsMalformedOfficialClaimAndLossyThirdParty(t *testing.T) 
 	if err == nil {
 		t.Fatal("伪造或畸形 Claude 官方声明未 fail-close")
 	}
+	if !IsClaudeSupportEnvelopeRejection(err) {
+		t.Fatalf("畸形官方声明没有稳定范围拒绝类型：%T %v", err, err)
+	}
 
 	lossy := []byte(`{"model":"claude-sonnet-5","messages":[{"role":"user","content":"x"}],"stream":true,"unsupported":true}`)
 	_, err = runtime.ExecuteMessages(context.Background(), ClaudeMessagesExecution{
@@ -1350,6 +1353,9 @@ func TestClaudeFWGRejectsMalformedOfficialClaimAndLossyThirdParty(t *testing.T) 
 	})
 	if err == nil || !strings.Contains(err.Error(), "lossless SupportEnvelope") {
 		t.Fatalf("有损第三方请求未隔离：%v", err)
+	}
+	if !IsClaudeSupportEnvelopeRejection(err) {
+		t.Fatalf("有损第三方请求没有稳定范围拒绝类型：%T %v", err, err)
 	}
 }
 

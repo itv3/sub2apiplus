@@ -239,6 +239,14 @@ func (s *GatewayService) forwardClaudeFWGCandidate(
 		},
 	)
 	if err != nil {
+		if officialegress.IsClaudeSupportEnvelopeRejection(err) && !c.Writer.Written() {
+			writeAnthropicError(
+				c,
+				http.StatusBadRequest,
+				"invalid_request_error",
+				"Request is outside the Claude Code SupportEnvelope",
+			)
+		}
 		return nil, fmt.Errorf("Claude FW-G candidate 执行失败：%w", err)
 	}
 	return s.finishClaudeFWGCandidateResponse(ctx, c, account, parsed, result, startTime)

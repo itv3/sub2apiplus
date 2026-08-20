@@ -151,7 +151,9 @@ func TestClaudeFWGQueryFailCloseTransitionsAreFrozen(t *testing.T) {
 			if got := claudeFWGCountTokensDigest(raw); got != transition.ToSHA256 &&
 				!claudeFWGAliasRouteTransitionSupersedes(
 					transition.Path, transition.ToSHA256, got,
-				) {
+				) && !claudeFWGSupportEnvelopeTransitionSupersedes(
+				transition.Path, transition.ToSHA256, got,
+			) {
 				t.Fatalf(
 					"Claude FW-G query fail-close transition 漂移：path=%s got=%s want=%s",
 					transition.Path, got, transition.ToSHA256,

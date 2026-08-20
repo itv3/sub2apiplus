@@ -1,0 +1,42 @@
+{
+  "schema_version": "official-egress-claude-fw-g-support-envelope-source-transition/v1",
+  "date": "2026-08-20",
+  "phase": "FW-G",
+  "base_commit": "5ad45153ade7c61e0fe38e3f9f951d24d32eef5c",
+  "trigger": "DMIT 发现 messages 范围外请求虽被 strict Compiler 拒绝，但 handler 将本地拒绝误映射为 502",
+  "prior_transitions": [
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-alias-route-source-transition.json",
+      "sha256": "5d69b0c2ddb733686c2502bc352b2331229a1dcbad3ac6fa88e14dcdb24ded0d"
+    },
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-alias-route-test-transition.json",
+      "sha256": "3e2f6f4fd591b6e3ca602f88ac440bc15d75a65832ad603736c0a69178e9295d"
+    }
+  ],
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/claude_body.go",
+      "from_sha256": "c01884b217daf3cb3a8d19a63cbb7b41fb8505f80e5cdd316f4e548a161e085e",
+      "to_sha256": "a4559ce277a1bf1c8c554ab42fd70695d141a8ab64f16b28afde1de8b1329c50",
+      "reason": "第三方 lossless 入口只接受主 Sonnet 模型；官方 Haiku fallback 仍由已实测状态机独占，禁止有损改写。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_runtime.go",
+      "from_sha256": "5942bfd60b41f55ddaf923c97464ea6746d7579b52fb5bdc6ea5dbf42e66fc00",
+      "to_sha256": "607fea56eb0e5791d5df6e61e4cb2d903c4384e9f0520b988b8f21f0f6ea9719",
+      "reason": "用稳定错误类型标记发送前即可确定的 SupportEnvelope 拒绝，禁止 handler 解析中文文本或混同传输故障。"
+    },
+    {
+      "path": "backend/internal/service/gateway_claude_fw_g.go",
+      "from_sha256": "ccdfb6001a3380043e82e26fa083d33a4d4d4a5528ed7310ea53a9c17c51c07f",
+      "to_sha256": "2c0cebeb86d90296d83d3e9b75b26d7aeeab7f42f17bd7d27db1471a13c54267",
+      "reason": "仅把稳定的本地范围拒绝映射为 Anthropic 400；网络、Guard 与上游故障继续保持既有错误语义。"
+    }
+  ],
+  "production_selector_changed": false,
+  "vircs_service_changed": false,
+  "dmit_candidate_rebuild_required": true,
+  "codex_final_wire": "zero_difference_required",
+  "result": "passed"
+}
