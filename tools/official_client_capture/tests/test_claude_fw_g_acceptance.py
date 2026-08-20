@@ -20,6 +20,19 @@ class ClaudeFWGAcceptanceTest(unittest.TestCase):
         }
         self.evidence_ref = {"object_kind": "operational_evidence", "sha256": "a" * 64}
 
+    def test_candidate_git_source_test_and_dependency_trees_are_frozen(self) -> None:
+        self.assertEqual(
+            acceptance.candidate_git_material_digests(
+                acceptance.REPOSITORY_ROOT,
+                acceptance.CANDIDATE_COMMIT,
+            ),
+            {
+                "source": acceptance.CANDIDATE_SOURCE_TREE,
+                "test": acceptance.CANDIDATE_TEST_TREE,
+                "dependency": acceptance.CANDIDATE_DEPENDENCY_LOCK,
+            },
+        )
+
     def test_ingress_inventory_splits_official_and_third_party_strict_branches(self) -> None:
         observation = acceptance.build_ingress_observation(self.persona, self.evidence_ref)
         validate_object_document(

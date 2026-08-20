@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import sys
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable, Iterator, Sequence
 
 
@@ -49,21 +49,33 @@ EXPECTED_OFFICIAL_REQUESTS = 394
 EXPECTED_OFFICIAL_CANDIDATES = 593
 EXPECTED_OFFICIAL_DIMENSIONS = 49
 
-CANDIDATE_COMMIT = "9c9da47649ac662d9713b6e08f879382f6c1d492"
-CANDIDATE_TREE = "de277af80b5de6ed968bccbae4ca76294ac593f2"
-CANDIDATE_IMAGE = "sha256:646ed02312def74fcbbb9d6610b27260f30e64ec5a951d1e152324fc9e98ca7b"
+CANDIDATE_COMMIT = "651ccd518d97c53bb3089860a0fdf80009c1be9e"
+CANDIDATE_TREE = "71eccef8c9498de12bafaa7006108c10996cd10d"
+CANDIDATE_IMAGE = "sha256:9b923fd1a60835fa8474712764befba34a02f06e8642c5ac3af1aa9967464566"
 CANDIDATE_PROFILE = "4da60bc238694a06a0dc80d68117abddd2de98c7c924c4db4c5dd929ea411e17"
 CANDIDATE_WIRE = "c1c3c8c83710c9afc7005f71fa45d0837484a6bd042f75c08e5cde5451822a3e"
 CANDIDATE_RELEASE = "c1053492eabc0b10d9d5f92f807a1df0d507c777b64a528e938426350c0d5350"
 CANDIDATE_RELEASE_BUNDLE = "4213ea92a7d76c4ef3aa318f4d93628cbcf675dc86566b107dddb70a70e6eb41"
-CANDIDATE_SOURCE_TREE = "8ddb4ef77cd9ccbdf34701f33d1c662fd445cb719e0dac837d744902dfedc37c"
-CANDIDATE_TEST_TREE = "4fe72e94d434264130cb7f91180cf5fba542465fa78d5b3e0dbcda8bb7093443"
-CANDIDATE_DEPENDENCY_LOCK = "9f13d98f164189f269e29efba45703f4dcb3a43e66bae5ba73f63881a296c773"
+CANDIDATE_SOURCE_TREE = "2792b9d29e57b66a12bc80f576e02dd06306eac467b8dda73e2dbd7a69b19d5b"
+CANDIDATE_TEST_TREE = "6ef5c064a3e489579e4f471d3ad954de132e1e8260058bb1438c74d81905f3e3"
+CANDIDATE_DEPENDENCY_LOCK = "bad9c6d5cd2e48d916e8c1f217f43951984be6d8cd0892ef9e22d8e43e071339"
 
-CAMPAIGN_ID = "claude-code-2_1_226-fw-g-production-replacement-v1-20260820"
-CANDIDATE_ID = "claude-code-2_1_226-fw-g-9c9da4764"
+CAMPAIGN_ID = "claude-code-2_1_226-fw-g-production-replacement-v2-20260821"
+CANDIDATE_ID = "claude-code-2_1_226-fw-g-651ccd518"
 REVIEWER = "project-owner-confirmed"
-REVIEW_REF = "codex-task-fw-g-owner-confirmation-20260820"
+REVIEW_REF = "codex-task-fw-g-desktop-fix-owner-confirmation-20260821"
+
+CANDIDATE_TREE_SCHEMA = "claude-fw-g-candidate-git-tree/v1"
+CANDIDATE_DEPENDENCY_NAMES = {
+    "Cargo.lock",
+    "Cargo.toml",
+    "go.mod",
+    "go.sum",
+    "package-lock.json",
+    "package.json",
+    "pnpm-lock.yaml",
+    "yarn.lock",
+}
 
 SECRET_PATTERNS = {
     "bearer": re.compile(rb"(?i)\bBearer\s+(?!<)[A-Za-z0-9._~+/-]{20,}"),
@@ -92,6 +104,75 @@ def load_json(path: Path) -> dict[str, Any]:
         raise AcceptanceError(f"无法读取 JSON：{path}: {exc}") from exc
     require(isinstance(value, dict), f"JSON 顶层不是对象：{path}")
     return value
+
+
+def candidate_git_material_digests(
+    repository_root: Path,
+    commit: str,
+) -> dict[str, str]:
+    """从固定 Git 提交复算源码、测试与依赖三类候选树摘要。"""
+
+    completed = subprocess.run(
+        ["git", "ls-tree", "-r", "-l", "-z", "--full-tree", commit],
+        cwd=repository_root,
+        check=False,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    require(completed.returncode == 0 and not completed.stderr, "无法复算候选 Git 树")
+    entries: list[dict[str, Any]] = []
+    for raw in completed.stdout.split(b"\0"):
+        if not raw:
+            continue
+        try:
+            metadata, raw_path = raw.split(b"\t", 1)
+            mode, kind, object_id, size = metadata.decode("ascii").split()
+            path = raw_path.decode("utf-8")
+        except (UnicodeDecodeError, ValueError) as exc:
+            raise AcceptanceError("候选 Git 树条目无法解析") from exc
+        require(kind == "blob" and size.isdigit(), f"候选 Git 树含非普通 blob：{path}")
+        entries.append(
+            {
+                "mode": mode,
+                "path": path,
+                "git_blob": object_id,
+                "bytes": int(size),
+            }
+        )
+    require(entries and entries == sorted(entries, key=lambda item: item["path"]), "候选 Git 树为空或未排序")
+
+    def is_test_path(value: str) -> bool:
+        candidate = PurePosixPath(value)
+        name = candidate.name
+        return (
+            "tests" in candidate.parts
+            or name.endswith("_test.go")
+            or name.startswith("test_")
+            or ".test." in name
+            or ".spec." in name
+        )
+
+    classified = {
+        "source": entries,
+        "test": [item for item in entries if is_test_path(item["path"])],
+        "dependency": [
+            item
+            for item in entries
+            if PurePosixPath(item["path"]).name in CANDIDATE_DEPENDENCY_NAMES
+        ],
+    }
+    require(classified["test"] and classified["dependency"], "候选测试树或依赖树为空")
+    return {
+        name: canonical_sha256(
+            {
+                "schema_version": CANDIDATE_TREE_SCHEMA,
+                "classification": name,
+                "commit": commit,
+                "entries": values,
+            }
+        )
+        for name, values in classified.items()
+    }
 
 
 def external_binding(path: Path, repository_root: Path = REPOSITORY_ROOT) -> dict[str, Any]:
@@ -234,10 +315,13 @@ def validate_inputs(
     )
     ingress = dmit.get("ingress_assertions", {})
     required_ingress = {
+        "claude_desktop_count_tokens_beta",
+        "claude_desktop_messages_beta",
         "official_messages",
         "third_party_anthropic_messages",
         "official_count_tokens",
         "third_party_standard_count_tokens",
+        "unapproved_official_release_fail_close",
         "outside_support_envelope_fail_close",
     }
     require(
@@ -253,6 +337,45 @@ def validate_inputs(
         and rollback.get("candidate_restored") is True
         and rollback.get("restored_image_digest") == CANDIDATE_IMAGE,
         "DMIT rollback/恢复未闭合",
+    )
+    scripts = dmit.get("script_results")
+    require(
+        isinstance(scripts, list)
+        and len(scripts) == 6
+        and all(isinstance(item, dict) for item in scripts)
+        and {item.get("id") for item in scripts}
+        == {
+            "count-tokens-boundary",
+            "desktop-beta-ingress",
+            "live-messages-stream",
+            "official-count-tokens",
+            "official-messages",
+            "strict-ingress-boundary",
+        }
+        and all(item.get("result") == "passed" for item in scripts),
+        "DMIT 脚本结果没有唯一覆盖五组基线与 Desktop 专项验收",
+    )
+    runtime = dmit.get("final_runtime", {})
+    require(
+        runtime.get("application") == "running_healthy"
+        and runtime.get("health_http_status") == 200
+        and runtime.get("restart_count") == 0
+        and runtime.get("dependency_container_ids_unchanged") is True
+        and runtime.get("fatal_or_panic_count") == 0
+        and runtime.get("error_level_count") == 0
+        and runtime.get("persona_or_oauth_failure_count") == 0
+        and runtime.get("guard_or_finalization_failure_count") == 0
+        and runtime.get("oauth_secret_pattern_count") == 0,
+        "DMIT 恢复后的运行态或纯正例日志观察未闭合",
+    )
+    oauth = dmit.get("oauth_precondition", {})
+    require(
+        oauth.get("provider") == "anthropic"
+        and oauth.get("auth_family") == "oauth"
+        and oauth.get("state") == "active"
+        and oauth.get("credential_material_persisted") is False
+        and oauth.get("approved_model_mapping_complete") is True,
+        "DMIT OAuth 前置条件或批准模型映射不完整",
     )
     environment = dmit.get("environment", {})
     require(
@@ -376,7 +499,7 @@ def build_ingress_observation(persona: dict[str, Any], source_ref: dict[str, Any
     return {
         "schema_version": "official-client-ingress-observation/v1",
         "persona": persona,
-        "observed_at_utc": "2026-08-20T08:00:00Z",
+        "observed_at_utc": "2026-08-20T17:41:00Z",
         "source_refs": [source_ref],
         "aliases": aliases,
     }
@@ -704,6 +827,16 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
     output = arguments.output.resolve()
     public_receipt = arguments.public_receipt.resolve()
     require(repository_root == REPOSITORY_ROOT.resolve(), "必须在当前仓库执行 FW-G finalizer")
+    git_material = candidate_git_material_digests(repository_root, CANDIDATE_COMMIT)
+    require(
+        git_material
+        == {
+            "source": CANDIDATE_SOURCE_TREE,
+            "test": CANDIDATE_TEST_TREE,
+            "dependency": CANDIDATE_DEPENDENCY_LOCK,
+        },
+        "Candidate 源码、测试或依赖树摘要漂移",
+    )
     require(base_store_root.is_dir() and not base_store_root.is_symlink(), "FW-F Store 不可信")
     require(not output.exists(), f"输出目录已存在，禁止覆盖：{output}")
     require(not public_receipt.exists(), f"公开收据已存在，禁止覆盖：{public_receipt}")
@@ -1046,12 +1179,12 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
             "default_conditions": copy.deepcopy(old_campaign["default_conditions"]),
             "tool_bundle_sha256": tool_sha256,
             "bootstrap_ref": copy.deepcopy(old_campaign["bootstrap_ref"]),
-            "created_at_utc": "2026-08-20T08:00:01Z",
+            "created_at_utc": "2026-08-20T17:41:01Z",
             "identity_sha256": "",
         }
         campaign["identity_sha256"] = campaign_identity_sha256(campaign)
         store.create_campaign(campaign)
-        clock = FactClock(datetime(2026, 8, 20, 8, 0, 1, tzinfo=timezone.utc))
+        clock = FactClock(datetime(2026, 8, 20, 17, 41, 1, tzinfo=timezone.utc))
         discovery_bindings = sorted(
             [official_binding, candidate_binding, candidate_verification_binding, dmit_binding, tls_binding, codex_binding],
             key=lambda item: item["path"],
@@ -1149,7 +1282,7 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
             "test_tree_sha256": CANDIDATE_TEST_TREE,
             "dependency_lock_sha256": CANDIDATE_DEPENDENCY_LOCK,
             "target_architecture": "linux/amd64",
-            "build_id": "fw-g-9c9da4764-linux-amd64",
+            "build_id": "fw-g-651ccd518-linux-amd64",
             "image_digest": CANDIDATE_IMAGE,
             "candidate_purpose": "production_replacement",
             "identity_sha256": "",
@@ -1172,7 +1305,7 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
                 payload: dict[str, Any] = {
                     "candidate_id": CANDIDATE_ID,
                     "scenario_id": scenario["id"],
-                    "attempt_id": "dmit-9c9da4764",
+                    "attempt_id": "dmit-651ccd518",
                     "stage": stage_name,
                     "previous_stage_ref": previous,
                     "artifact_refs": [] if stage_name == "prepare" else scenario_artifacts,
@@ -1375,17 +1508,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--candidate-dir",
         type=Path,
-        default=REPOSITORY_ROOT / "local-analysis/fw-g/claude-code-2.1.226/candidate-pair-9c9da4764",
+        default=REPOSITORY_ROOT / "local-analysis/fw-g/claude-code-2.1.226/candidate-pair-651ccd518",
     )
     parser.add_argument(
         "--dmit-receipt",
         type=Path,
-        default=REPOSITORY_ROOT / "local-analysis/fw-g/claude-code-2.1.226/dmit-acceptance-9c9da4764/dmit-acceptance.json",
+        default=REPOSITORY_ROOT / "local-analysis/fw-g/claude-code-2.1.226/dmit-acceptance-651ccd518/dmit-acceptance.json",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=REPOSITORY_ROOT / "local-analysis/fw-g/claude-code-2.1.226/acceptance-v1-9c9da4764",
+        default=REPOSITORY_ROOT / "local-analysis/fw-g/claude-code-2.1.226/acceptance-v2-651ccd518",
     )
     parser.add_argument(
         "--public-receipt",

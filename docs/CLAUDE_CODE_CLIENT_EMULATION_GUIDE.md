@@ -928,11 +928,12 @@ P／R／M 原子断言支撑，另有 4 条客户端本地场景断言；110 条
 [清零收据](egress/maintenance/fw-f-discovery-clearance/receipt.json)和
 [FW-F RequiredRules 规范化收据](egress/maintenance/fw-f-required-rules-normalization/receipt.json)。
 
-FW-G 后继 Campaign `claude-code-2_1_226-fw-g-production-replacement-v1-20260820` 已把 40 条规则升级为
-`verified`，签发 `production_replacement` ApprovalFact，冻结提交 `9c9da47649ac662d9713b6e08f879382f6c1d492`
-及镜像 `sha256:646ed02312def74fcbbb9d6610b27260f30e64ec5a951d1e152324fc9e98ca7b` 的
+FW-G 后继 Campaign `claude-code-2_1_226-fw-g-production-replacement-v2-20260821` 已把 40 条规则升级为
+`verified`，签发 `production_replacement` ApprovalFact，冻结提交 `651ccd518d97c53bb3089860a0fdf80009c1be9e`
+及镜像 `sha256:9b923fd1a60835fa8474712764befba34a02f06e8642c5ac3af1aa9967464566` 的
 ValidationCandidate。九个场景、40 个唯一 `PAIR-<SPEC-ID>`、TLS／HTTP/1.1 捕获、范围外 fail-close、
-DMIT rollback／恢复和 Codex final-wire 零差异均通过，AcceptanceFact 结果为 `accepted`；Store 为
+Claude Desktop 的 `beta=true` Messages／count_tokens 第三方入口、DMIT rollback／恢复和 Codex
+final-wire 零差异均通过，AcceptanceFact 结果为 `accepted`；Store 为
 `ready／not_activated`。production Runtime Selector、DeploymentFact、ActivationReceipt 和 Vircs 服务均未
 改变。完整摘要见 [FW-G 隔离验收收据](egress/maintenance/claude-fw-g-acceptance.json)；下一步固定为 FW-H。
 
@@ -1133,11 +1134,13 @@ inventory 和 selector 未变证明。入库只允许：
 
 FW-F 已生成 target-first Snapshot／样例、2.1.220 fixture 和最终合同，其历史批准用途保持
 `validation_only`。FW-G 在不覆盖旧事实的前提下追加后继 `production_replacement` ApprovalFact，并冻结
-ValidationCandidate：提交 `9c9da47649ac662d9713b6e08f879382f6c1d492`、Git tree
-`de277af80b5de6ed968bccbae4ca76294ac593f2`、source tree
-`8ddb4ef77cd9ccbdf34701f33d1c662fd445cb719e0dac837d744902dfedc37c`、test tree
-`4fe72e94d434264130cb7f91180cf5fba542465fa78d5b3e0dbcda8bb7093443`、dependency lock
-`9f13d98f164189f269e29efba45703f4dcb3a43e66bae5ba73f63881a296c773`，以及固定 `linux/amd64` OCI digest。
+ValidationCandidate：提交 `651ccd518d97c53bb3089860a0fdf80009c1be9e`、Git tree
+`71eccef8c9498de12bafaa7006108c10996cd10d`、source tree
+`2792b9d29e57b66a12bc80f576e02dd06306eac467b8dda73e2dbd7a69b19d5b`、test tree
+`6ef5c064a3e489579e4f471d3ad954de132e1e8260058bb1438c74d81905f3e3`、dependency lock
+`bad9c6d5cd2e48d916e8c1f217f43951984be6d8cd0892ef9e22d8e43e071339`，以及固定 `linux/amd64` OCI digest
+`sha256:9b923fd1a60835fa8474712764befba34a02f06e8642c5ac3af1aa9967464566`。三类树摘要分别由固定提交的
+全量 tracked blob、测试路径子集和依赖清单／锁文件子集复算，不能从当前工作区临时拼接。
 
 Candidate 冻结后的 TLS／HTTP/1.1 捕获测试与 Acceptance finalizer 测试属于追加的验收证据工具，不进入
 该 Candidate 的源码树或测试树，也不改变已构建镜像。FW-H 必须消费上述固定 Candidate；若改用包含这些
@@ -1184,8 +1187,8 @@ python3 -m tools.official_client_control replay \
 
 ```bash
 python3 -m tools.official_client_control replay \
-  --store "$PWD/local-analysis/fw-g/claude-code-2.1.226/acceptance-v1-9c9da4764/control-store" \
-  --external-root "$PWD/local-analysis/fw-g/claude-code-2.1.226/acceptance-v1-9c9da4764/external-replay-view" \
+  --store "$PWD/local-analysis/fw-g/claude-code-2.1.226/acceptance-v2-651ccd518/control-store" \
+  --external-root "$PWD/local-analysis/fw-g/claude-code-2.1.226/acceptance-v2-651ccd518/external-replay-view" \
   --require-external
 ```
 
