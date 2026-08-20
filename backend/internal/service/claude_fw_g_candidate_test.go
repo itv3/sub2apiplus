@@ -357,24 +357,29 @@ func TestClaudeFWGServiceCountTokensUsesStrictCandidateRoute(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rejectedRecorder.Code)
 	require.Len(t, upstream.captures, 1)
 
-	queryRecorder := httptest.NewRecorder()
-	queryContext, _ := gin.CreateTestContext(queryRecorder)
-	queryContext.Request = httptest.NewRequest(
-		http.MethodPost,
+	for _, target := range []string{
 		"/v1/messages/count_tokens?unknown=true",
-		bytes.NewReader(body),
-	)
-	queryContext.Set("api_key", &APIKey{ID: 23})
-	queryParsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
-	require.NoError(t, err)
-	require.True(t, svc.shouldRouteClaudeFWGCountTokens(queryContext, account))
-	err = svc.ForwardCountTokens(
-		context.Background(), queryContext, account, queryParsed,
-	)
-	require.ErrorContains(t, err, "count_tokens query 不在 SupportEnvelope")
-	require.Equal(t, http.StatusBadRequest, queryRecorder.Code)
-	require.Contains(t, queryRecorder.Body.String(), "invalid_request_error")
-	require.Len(t, upstream.captures, 1)
+		"/messages/count_tokens?unknown=true",
+	} {
+		queryRecorder := httptest.NewRecorder()
+		queryContext, _ := gin.CreateTestContext(queryRecorder)
+		queryContext.Request = httptest.NewRequest(
+			http.MethodPost,
+			target,
+			bytes.NewReader(body),
+		)
+		queryContext.Set("api_key", &APIKey{ID: 23})
+		queryParsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+		require.NoError(t, err)
+		require.True(t, svc.shouldRouteClaudeFWGCountTokens(queryContext, account))
+		err = svc.ForwardCountTokens(
+			context.Background(), queryContext, account, queryParsed,
+		)
+		require.ErrorContains(t, err, "count_tokens query 不在 SupportEnvelope")
+		require.Equal(t, http.StatusBadRequest, queryRecorder.Code)
+		require.Contains(t, queryRecorder.Body.String(), "invalid_request_error")
+		require.Len(t, upstream.captures, 1)
+	}
 
 	account.Type = AccountTypeAPIKey
 	require.False(t, svc.shouldRouteClaudeFWGCountTokens(c, account))

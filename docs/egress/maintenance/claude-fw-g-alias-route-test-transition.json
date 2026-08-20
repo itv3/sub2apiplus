@@ -1,0 +1,43 @@
+{
+  "schema_version": "official-egress-claude-fw-g-alias-route-test-transition/v1",
+  "date": "2026-08-20",
+  "phase": "FW-G",
+  "base_commit": "516db697cf889b39f7b966e04b08ba53191e1634",
+  "source_transition": {
+    "path": "docs/egress/maintenance/claude-fw-g-alias-route-source-transition.json",
+    "sha256": "5d69b0c2ddb733686c2502bc352b2331229a1dcbad3ac6fa88e14dcdb24ded0d"
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_count_tokens_transition_test.go",
+      "from_sha256": "4b80b0cab9049cf049f3b89ac4c1b73fd825a4a9dbcd09cbf7fb1eb79a76f78b",
+      "to_sha256": "54f6edd4e75ed4a328f6c6287b7083dd2277a70132db62b4e4f34561f05ade73",
+      "reason": "历史 count_tokens transition 只接受本次裸路径别名 transition 的精确追加承接。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_query_fail_close_transition_test.go",
+      "from_sha256": "1f554a5eeaf13c044ea11dc29768fedf42ba28c5a705d635c98df768010bfa32",
+      "to_sha256": "ce4157ca50bc939e4e690f0b51c9c1d2e9cdaa6f3490112a7e5a4905b35805c9",
+      "reason": "历史 query fail-close transition 只接受本次物理入口修复的精确追加承接。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_implementation_coverage_test.go",
+      "from_sha256": "9d576d5bf33f200dc733ba0db124a1faabc11d91ed5501cd65e526f098148979",
+      "to_sha256": "07852cf3bbf1cd939ce592edbc56c7709acf1e176b2cada2aee1dd2c93e9ae56",
+      "reason": "冻结加入正式 embed 物理入口门禁锚点后的实现覆盖摘要。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_candidate_test.go",
+      "from_sha256": "76ece1896fcacd385f35168c1655e35338c0d8fb6e402585ca95ce10b17808a3",
+      "to_sha256": "717069e45ffbd97fd33ae6c30389868c4b3ba39651a16476a5d67ca94d30aa98",
+      "reason": "同一入口级断言覆盖规范路径与裸路径别名的未知 query fail-close，且上游计数不增加。"
+    },
+    {
+      "path": "backend/internal/web/frontend_route_bypass_test.go",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "182c6cfdf2d0264362968392022b7bf4d1245f43300380d611e21e9da0306715",
+      "reason": "证明仅批准的 count_tokens 裸别名绕过 SPA，其他未批准裸路径保持关闭。"
+    }
+  ],
+  "result": "passed"
+}

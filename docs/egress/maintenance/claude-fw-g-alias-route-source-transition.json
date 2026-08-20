@@ -1,0 +1,48 @@
+{
+  "schema_version": "official-egress-claude-fw-g-alias-route-source-transition/v1",
+  "date": "2026-08-20",
+  "phase": "FW-G",
+  "base_commit": "516db697cf889b39f7b966e04b08ba53191e1634",
+  "trigger": "DMIT 发现 count_tokens 裸路径别名被正式 embed 前端中间件吞掉并返回 SPA HTML",
+  "prior_transitions": [
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-query-fail-close-source-transition.json",
+      "sha256": "e1a6731634ba567489b74ad22cc0acd33f6ed1bbfa348a46a1273ba3c8c2e5ce"
+    },
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-query-fail-close-test-transition.json",
+      "sha256": "decebbfe12ddc559e2b382cc3dc298c3367c1bc73ece22f5ed638968a9bab8e7"
+    }
+  ],
+  "transitions": [
+    {
+      "path": "backend/internal/web/embed_on.go",
+      "from_sha256": "460f80327ef9aa960613a753661107cd610c3627d839996e01137766c06da612",
+      "to_sha256": "63a74bb385715486eeff8c5b12adf4030ead556f55cf407babe87646d2127571",
+      "reason": "把后端入口判定移到不受 embed 构建标签影响的独立文件，避免正式镜像与测试构建使用不同门禁。"
+    },
+    {
+      "path": "backend/internal/web/frontend_route_bypass.go",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "bcf72161da6fbe078cfd53062c8853fa3117cc6c2e6a904486d815db7ba54336",
+      "reason": "只允许已注册的 /messages/count_tokens 裸路径别名绕过 SPA，并保持其他未批准 /messages 路径关闭。"
+    },
+    {
+      "path": "tools/official_client_capture/claude_fw_g_candidate_pair.py",
+      "from_sha256": "38a4499ad70a8a25f335939c06444f34c924636cbc6a9764cbd3f83c2948b048",
+      "to_sha256": "ed7e93e604c7c314d2bcc1e34d4fff3587f03635083a63c5a11494a8654947a9",
+      "reason": "候选 PAIR 门禁加入 web package，并绑定含物理入口门禁锚点的新实现覆盖摘要。"
+    },
+    {
+      "path": "tools/official_client_capture/claude_fw_g_implementation_coverage_2_1_226.json",
+      "from_sha256": "378a880d7293b7e9f3916031ee3b0e45884456371784ba6cd48ff15432cda6cb",
+      "to_sha256": "79c208e3775b3dfdc3f62ea95548550801bf2aea96e67d5010b390f894ec008c",
+      "reason": "SPEC-EP-009 增加正式 embed 前端入口门禁的实现和测试锚点，防止裸别名绕过 strict 链。"
+    }
+  ],
+  "production_selector_changed": false,
+  "vircs_service_changed": false,
+  "dmit_candidate_rebuild_required": true,
+  "codex_final_wire": "zero_difference_required",
+  "result": "passed"
+}

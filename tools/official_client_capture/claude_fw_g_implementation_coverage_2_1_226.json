@@ -236,12 +236,14 @@
         {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "parseClaudeCountTokens"},
         {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "ExecuteCountTokens"},
         {"path": "backend/internal/service/gateway_claude_fw_g.go", "symbol": "forwardClaudeFWGCountTokens"},
-        {"path": "backend/internal/service/gateway_count_tokens.go", "symbol": "ForwardCountTokens"}
+        {"path": "backend/internal/service/gateway_count_tokens.go", "symbol": "ForwardCountTokens"},
+        {"path": "backend/internal/web/frontend_route_bypass.go", "symbol": "shouldBypassEmbeddedFrontend"}
       ],
       "test_anchors": [
         {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGStrictAuxiliaryEndpointsUseExecutor"},
         {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGCountTokensOfficialIngressIsClosed"},
-        {"path": "backend/internal/service/claude_fw_g_candidate_test.go", "symbol": "TestClaudeFWGServiceCountTokensUsesStrictCandidateRoute"}
+        {"path": "backend/internal/service/claude_fw_g_candidate_test.go", "symbol": "TestClaudeFWGServiceCountTokensUsesStrictCandidateRoute"},
+        {"path": "backend/internal/web/frontend_route_bypass_test.go", "symbol": "TestClaudeFWGBareCountTokensAliasBypassesEmbeddedFrontend"}
       ]
     },
     {
