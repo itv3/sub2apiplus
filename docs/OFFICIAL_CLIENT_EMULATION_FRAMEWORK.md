@@ -406,10 +406,17 @@ HitCC 线索、57 条历史规则和 32 个候选族。AtomicAssertionLedger 保
 分别是 messages、hello、OAuth profile、policy limits、settings、count_tokens、OAuth refresh 和 MCP
 servers；已 target-first 生成 2.1.226 的 ProfileSchema、Snapshot、ReleaseArtifact 与八个纵向样例，再以
 同一 Schema 文档／Compiler attestation 生成 2.1.220 的两个 baseline fixture，并签发 Evidence／Profile
-ApprovalFact。40 条 RequiredRules 当前均为 `observed`，因此没有 production-replacement ApprovalFact、candidate、
-selector 变更或部署。事实分别见
+ApprovalFact。FW-F 的 40 条 RequiredRules 保持 `observed`，且该阶段没有 production-replacement
+ApprovalFact、candidate、selector 变更或部署。事实分别见
 [发现项清零收据](egress/maintenance/fw-f-discovery-clearance/receipt.json)和
 [FW-F RequiredRules 规范化收据](egress/maintenance/fw-f-required-rules-normalization/receipt.json)。
+
+FW-G 已以追加事实完成：独立官方复测、Candidate 对拍和 DMIT 隔离验收把 40 条 RequiredRules 升级为
+`verified`；后继 `production_replacement` ApprovalFact、固定 ValidationCandidate、40 个唯一
+`PAIR-<SPEC-ID>`、九个场景批准链和 AcceptanceFact 已封存。Candidate 达到
+`ready／not_activated`，Codex final wire 零差异；production selector、DeploymentFact、ActivationReceipt
+和 Vircs 服务均未改变。事实见
+[Claude FW-G 隔离验收收据](egress/maintenance/claude-fw-g-acceptance.json)。下一步是 FW-H。
 
 生产事实以镜像 digest、selector、activation fact 和不可覆盖收据为准；缺失或不一致时统一标记
 `production_unverified`。

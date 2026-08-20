@@ -5,16 +5,16 @@
 > **共享框架**：[`OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md`](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md)
 > **当前取证目标**：`claude-code 2.1.226`——第二部分 40 条 RequiredRules 与 110 条 Vircs 官方客户端 P／R／M 原子断言
 > 证据的绑定版本；`2.1.220` 只保留为同一 Schema／Compiler 下的历史 baseline fixture
-> **机器台账**：`tools/official_client_capture/claude_fw_f_v21_finalize.py`、两份 FW-F v4／v3 策略及
-> `local-analysis/fw-f/claude-code-2.1.226/discovery-clearance-v5-final/`；逐规则状态以不可变台账为准，
-> 正文规则集合由门禁强制对账
+> **机器台账**：FW-F 的 `claude_fw_f_v21_finalize.py`、两份 v4／v3 策略和清零目录保留历史
+> `observed／validation_only` 事实；当前 `verified／production_replacement` 状态由
+> `claude_fw_g_acceptance.py` 及 FW-G 追加式 Control Store 承担，正文规则 ID 集合由门禁强制对账
 > **文档定位**：本文是 Claude Code 官方事实、版本画像、Sub2API 实现、环境职责和版本演进的唯一
 > 人类可读权威入口；机器证据和 JSON 台账不得形成第二套规范
 > **证据边界**：本文没有未压缩 TS 源码可用，静态规则均从官方生产 bundle 逆向建立；材料、证据、
 > 规则与结论全部独立取自 Claude Code 自身，不继承 Codex 的任何事实结论
-> **运行时状态**：本文已经建档 Claude Persona 目标，但当前 strict 多 Persona 运行时尚未登记或激活
-> Claude；现有 service finalizer 仍属于遗留局部仿真
-> **末次更新**：2026-08-19
+> **运行时状态**：Claude strict 多 Persona 实现与 DMIT 隔离 Candidate 已完成 FW-G 验收并达到
+> `ready／not_activated`；production selector、DeploymentFact 和 Vircs 生产服务均未改变，遗留链仍保留
+> **末次更新**：2026-08-20
 
 ---
 
@@ -96,15 +96,17 @@ Claude 特有的换版流程，第五部分处理维护，第六部分固定环�
 | 模型 | `claude-sonnet-5`；TUI 标题 `claude-haiku-4-5-20251001`；fallback `claude-haiku-4-5` |
 | 隐私模式 | `DISABLE_TELEMETRY=1`；`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` |
 | 上游 | `api.anthropic.com:443` |
-| 完整场景矩阵 | 77／77 场景、395 条官方请求、49／49 维度；含 TUI／sdk-cli／Agent、TLS、工具往返和故障重试 |
+| 完整场景矩阵 | 77／77 场景、394 条官方请求、49／49 维度；含 TUI／sdk-cli／Agent、TLS、工具往返和故障重试 |
 | strict egress | messages、hello、policy limits、settings、OAuth profile、count_tokens、OAuth refresh、MCP servers，共 8 类 |
 | RequiredRules | 40 条；按 Codex 的“范围、规则／机制、源码、实测、实现、状态”六字段维护 |
 | 原子断言 | 110 条全部通过；107 条 R/M、3 条 TLS P/M；106 条画像证据、4 条客户端本地场景 |
-| 当前等级 | 40 条 RequiredRules 均为 `observed`、0 条 `verified` |
-| 批准用途 | `validation_only`；不是 production replacement |
+| 当前等级 | 40 条 RequiredRules 均为 `verified` |
+| 批准用途 | `production_replacement`；Candidate 已 `ready`，但尚未激活 |
 
-`observed` 不等于“没有实测”。它表示规则已在冻结的 2.1.226 官方客户端运行中命中并通过断言，但尚未
-通过 FW-G 的独立复测、实现后逐字节对拍与生产替换门禁，因此不能改名为 `verified`。
+`verified` 表示规则同时通过冻结的 2.1.226 官方证据、FW-G 独立官方复测、实现后 Candidate 对拍、
+TLS／HTTP/1.1 真实捕获及 DMIT 隔离验收。后继 `production_replacement` ApprovalFact、固定
+ValidationCandidate 和 AcceptanceFact 已签发；这只证明 Candidate 可进入 FW-H，不表示已晋升或生产切换。
+公开摘要见 [FW-G 隔离验收收据](egress/maintenance/claude-fw-g-acceptance.json)。
 
 当前 SupportEnvelope 覆盖策略文件列出的五组能力：`sdk-cli`／`cli` 的条件 system、cache、metadata、
 session、Agent／background／hook／remote、工具往返与附件；真实 TUI 的 OAuth profile、标题、
@@ -128,6 +130,9 @@ fail-close 或留在明确的 `non_persona_managed／retained_legacy` 边界，�
 | `P-v4-*` | 原生 TLS attempt 的 `tls-clienthello.pcap`，用于 CipherSuite 与 ALPN 条件对照 |
 | `M-v4-*` | v21 的 manifest、relay、intervention、invocation、summary、场景目录、秘密扫描与 cleanup |
 | `PAIR-*` | v21 最终化器生成的 110 条原子正例及条件对照／零违规分母断言 |
+| `G-P/R/M` | FW-G 独立官方复测的原生 TLS、请求字节与身份／运行元数据，用于把 40 条规则升级为 `verified` |
+| `G-PAIR-*` | 固定 Candidate 对 40 条 RequiredRules 唯一生成的 `PAIR-<SPEC-ID>` 结果及九个场景批准链 |
+| `G-ACCEPT` | `production_replacement` ApprovalFact、ValidationCandidate 与 AcceptanceFact；公开摘要见 FW-G 收据 |
 
 基础四个 run 位于：
 
@@ -137,7 +142,7 @@ fail-close 或留在明确的 `non_persona_managed／retained_legacy` 边界，�
 
 `local-analysis/fw-f/claude-code-2.1.226/complete-v21-78fae770cbb5/`
 
-其中 77／77 场景、395 条请求、49／49 维度和原生 TLS P 通道均由最终化器逐项复算；目录集合、执行源
+其中 77／77 场景、394 条请求、49／49 维度和原生 TLS P 通道均由最终化器逐项复算；目录集合、执行源
 摘要、目标二进制、采集模式、等长脱敏、秘密扫描和 cleanup 也必须通过。原子证据账本与
 RequiredRules 映射清单分别为：
 
@@ -230,7 +235,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：1 条 R/M 原子断言通过；基础四组官方推理样本逐字节确认顶层键顺序。
 - **实现**：由 Claude BodyShape 和 DialectCompiler 定型，Ingress 不得直接生成最终 wire。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-BODY-002 metadata 身份与扩展合并
 
@@ -239,7 +244,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：3 条 R/M 原子断言通过；基础与 extra-metadata 正交场景覆盖默认值、浅合并和嵌套对象。
 - **实现**：由 ClaudeIdentityFacts 提供可信身份，Planner 和 Compiler 组合；禁止从第三方入站静默补造客户端状态。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-BODY-003 system 结构与自定义提示分支
 
@@ -248,7 +253,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：5 条 R/M 原子断言通过；基础、custom-system、append、exclude-dynamic 和 custom-agent 场景均有独立 wire。
 - **实现**：Persona 画像保存结构和派生规则；用户文本只作为规范化语义输入，不写入静态画像。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-BODY-004 消息历史与会话续接状态
 
@@ -257,7 +262,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：4 条 R/M 原子断言通过；基础多轮、resume、fork 与 TUI 场景覆盖正反状态转换。
 - **实现**：由 invocation 隔离的 Persona 状态机生成；没有可信会话锚点时 fail-close，不复用入站伪身份。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-BODY-005 基础 tools 字段与工具 Schema
 
@@ -266,7 +271,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：1 条 R/M 原子断言通过；基础四组官方样本覆盖空工具、Agent 与 Bash。
 - **实现**：由 Claude ToolPolicy 编译规范化工具；不接受入站伪造官方工具身份。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-BODY-007 billing attribution 身份块
 
@@ -275,7 +280,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：4 条 R/M 原子断言通过；基础请求和 attribution-disabled 条件场景确认格式、动态值与省略行为。
 - **实现**：版本来自 Release，动态值来自 Persona 身份派生；不得从入站原样透传 attribution。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-BODY-008 模型与生成参数组合
 
@@ -284,7 +289,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：9 条 R/M 原子断言通过；基线、五档 effort、输出上限及 thinking 开关场景均已对拍。
 - **实现**：由 ModelIntent 和 BodyShape 联合编译；只接受 SupportEnvelope 内的模型及受信配置。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-BODY-043 请求 gzip wire
 
@@ -293,7 +298,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：1 条 R/M 原子断言通过；gzip 正交场景保存压缩原始请求并验证可逆解析。
 - **实现**：DialectCompiler 先定型 JSON 再压缩并计算长度，Executor 不得二次改写。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-BODY-048 真实 TUI 标题与主推理请求
 
@@ -302,7 +307,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：2 条 R/M 原子断言通过；真实 TUI 运行取得标题请求与主推理请求的完整 wire。
 - **实现**：仅在可信 cli entrypoint 条件下由 Persona 状态机生成；第三方入站不得自报 TUI 身份。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-CACHE-005 system prompt cache_control
 
@@ -311,7 +316,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：2 条 R/M 原子断言通过；基线、1h 开关和两类禁用条件均有完整 Body 对比。
 - **实现**：由 CachePolicy 在 system 结构定型后应用，不能由兼容层任意插入缓存标记。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-CONN-010 重试分类、退避、预算与超时
 
@@ -320,7 +325,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：6 条 R/M 原子断言通过；十状态故障矩阵、两种 Retry-After、断连、retry-limit 和 timeout 场景闭合。
 - **实现**：Claude RetryPolicy 生成 attempt；共享 Executor 只执行已编译 attempt，不解释厂商状态语义。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-CONN-018 streaming 失败与 non-stream fallback
 
@@ -329,7 +334,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：2 条 R/M 原子断言通过；四个隔离 streaming 故障场景覆盖建流和中断分支。
 - **实现**：由 Claude 流状态机和 Body 编译器共同产生新的 attempt，禁止业务层旁路修改。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-CONN-019 HTTP/1.1 连接复用
 
@@ -338,7 +343,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：1 条 R/M 原子断言通过；a1、s2、s4 三个多请求运行确认连接身份关系。
 - **实现**：连接池按 Persona、Release、route 和 transport capability 隔离。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-CONN-021 重试中的请求状态再生成
 
@@ -347,7 +352,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：1 条 R/M 原子断言通过；15 个 retry transition 对动态与稳定字段逐项比较。
 - **实现**：Attempt 状态由 Persona RetryPolicy 派生，Body 可重放性由 CompiledEnvelope 保护。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-CONN-023 模型 fallback 转换
 
@@ -356,7 +361,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：2 条 R/M 原子断言通过；隔离 fallback 场景取得三次 Sonnet 与第四次 Haiku 完整转换。
 - **实现**：FallbackPolicy 选择目标 BodyShape；不得只替换 model 字符串。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-EP-001 messages 推理端点坐标
 
@@ -365,7 +370,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：3 条 R/M 原子断言通过；基础八条推理请求逐项确认端点坐标。
 - **实现**：EndpointProfile 与 route／Sink 共同定型；未知 host、path、query 或端口 fail-close。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-EP-002 hello 生命周期探测
 
@@ -374,7 +379,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：1 条 R/M 原子断言通过；四个基础运行均取得一条 hello 请求。
 - **实现**：作为独立 strict egress、route、Sink 和画像视图执行，不在 messages 代码中旁路。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-EP-005 policy limits 辅助端点
 
@@ -383,7 +388,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：1 条 R/M 原子断言通过；55 个非 TUI 官方运行确认端点与 Header 合同。
 - **实现**：作为独立 persona_strict egress 编译；其出现仍受官方隐私与入口条件控制。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-EP-006 settings 辅助端点
 
@@ -392,7 +397,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：1 条 R/M 原子断言通过；55 个非 TUI 官方运行确认端点与九项 Header。
 - **实现**：作为独立 persona_strict egress 编译；不得复用裸 client 绕过 Persona。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-EP-007 OAuth profile 辅助端点
 
@@ -401,7 +406,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：1 条 R/M 原子断言通过；真实 TUI 运行取得完整请求。
 - **实现**：仅在可信 cli entrypoint 下作为独立 strict egress 生成。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-EP-008 essential 请求生命周期顺序
 
@@ -410,7 +415,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：1 条 R/M 原子断言通过；54 个正式运行对生命周期请求序列复算。
 - **实现**：Persona 生命周期状态机调度独立 egress；关闭流量本身不作为一致性比较维度。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-EP-009 count_tokens 完整 wire
 
@@ -419,7 +424,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：3 条 R/M 原子断言通过；36 个正例与 sdk-cli 基线条件对照覆盖 endpoint、Header 和 Body。
 - **实现**：作为独立 persona_strict egress 编译，不与遗留 token-count 别名混同。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-EP-010 OAuth token refresh 完整 wire
 
@@ -428,7 +433,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：3 条 R/M 原子断言通过；隔离 refresh 正例与普通推理基线条件对照闭合。
 - **实现**：作为独立 persona_strict credential-lifecycle egress；秘密不得进入画像、日志或收据。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-EP-011 MCP server 目录完整 wire
 
@@ -437,7 +442,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：2 条 R/M 原子断言通过；四个 TUI 正例与 sdk-cli 基线条件对照确认 endpoint 和 Header。
 - **实现**：作为独立 persona_strict egress；只有已批准 TUI／MCP 条件可触发。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-HDR-001 messages 基础 Header 与 OAuth 身份
 
@@ -446,7 +451,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：7 条 R/M 原子断言通过；基础八条推理请求覆盖 Header 序列、值和 Body 长度关系。
 - **实现**：HeaderSlots 由 Release、可信账号和 Body wire 派生；入站 Header 不得覆盖官方身份槽。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-HDR-002 User-Agent 与入口 attribution
 
@@ -455,7 +460,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：2 条 R/M 原子断言通过；sdk-cli、TUI 与条件 UA 场景覆盖两处入口身份关系。
 - **实现**：Release 和 TrustedEntrypointFacts 共同派生；禁止消费入站 UA 或自报版本。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-HDR-003 anthropic-beta 有序组合
 
@@ -464,7 +469,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：2 条 R/M 原子断言通过；基础主／子代理和 beta-deduplicate 条件场景确认顺序与重复保留。
 - **实现**：BetaPolicy 由 Persona Compiler 执行；未知 beta 或范围外条件 fail-close。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-HDR-009 条件身份 Header 与 attribution 联动
 
@@ -473,7 +478,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：12 条 R/M 原子断言通过；单条件和组合条件矩阵覆盖出现、省略、值传递、顺序与跨字段一致性。
 - **实现**：ClaudeIdentityFacts 和 HeaderSlots 联合派生；不允许第三方请求直接声明官方条件身份。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-HDR-012 请求与会话标识生命周期
 
@@ -482,7 +487,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：2 条 R/M 原子断言通过；八条推理请求与三个多请求运行确认唯一性和复用边界。
 - **实现**：request-id 为 attempt 级，Session-Id 为 Persona 会话级；跨 Persona／Release 禁止复用。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-HDR-014 子代理身份与父子谱系
 
@@ -491,7 +496,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：5 条 R/M 原子断言通过；depth1／2／3 与前台基线覆盖 Header、Body、会话和谱系关系。
 - **实现**：由可信 AgentLineageFacts 派生；无父链事实时不得补造 agent 身份。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-HDR-029 自定义 Header 语法与保护槽
 
@@ -500,7 +505,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：4 条 R/M 原子断言通过；合法语法、无效名称和受保护槽位场景均已实测。
 - **实现**：由 Compiler 的受控扩展槽处理；Header 名和值先验证再进入最终 wire。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-PROTO-001 HTTP/1.1 与端点 ALPN
 
@@ -509,7 +514,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 P/R/M 断言。
 - **实测**：1 条 R/M 与 1 条 P/M 原子断言通过；12 条应用层请求及同一原生 TLS attempt 的四端点对照闭合。
 - **实现**：TransportProfile 按 egress 选择 ALPN 行为并只建立 HTTP/1.1 执行能力。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-STATE-009 background 请求身份与形态
 
@@ -518,7 +523,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：1 条 R/M 原子断言通过；background 正例与 sdk-cli 前台条件对照确认身份及 Body 形态。
 - **实现**：只接受可信 background 状态事实；第三方入站不得通过 x-app 触发。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-TLS-001 原生 ClientHello CipherSuite 顺序
 
@@ -527,7 +532,7 @@ messages egress。
 - **源码**：未取得可审计原源码；TLS 行为以官方 2.1.226 原生二进制的 P/M 为唯一权威。
 - **实测**：1 条 P/M 原子断言通过；v4-native-tls-baseline 中四个 ClientHello 正例及四个条件对照均已解析。
 - **实现**：TransportCapability 必须在目标平台产生等价原生 TLS wire；平台变化需重建画像。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-TLS-003 TLS SNI
 
@@ -536,7 +541,7 @@ messages egress。
 - **源码**：未取得可审计原源码；规则权威来自官方 2.1.226 原生连接的 P/M。
 - **实测**：1 条 P/M 原子断言通过；8 个承载选定请求的真实 TLS 连接确认 SNI。
 - **实现**：SNI 由 EndpointProfile 的可信 Sink 派生，禁止从任意入站 Host 透传。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-TOOL-018 StructuredOutput 工具
 
@@ -545,7 +550,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：1 条 R/M 原子断言通过；json-schema 正交场景取得完整工具描述。
 - **实现**：ToolPolicy 只消费规范化 schema，官方工具名称和说明来自 Release。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-TOOL-019 内置 Agent 与 Bash 工具往返
 
@@ -554,7 +559,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：2 条 R/M 原子断言通过；Agent depth1、Bash 与无工具基线条件对照闭合。
 - **实现**：工具往返由规范化消息和 Persona 状态共同编译，tool ID 关系必须保真。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-TOOL-021 MCP 工具与 deferred 全目录
 
@@ -563,7 +568,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：2 条 R/M 原子断言通过；普通 MCP、33 项 deferred 工具与无工具基线条件对照闭合。
 - **实现**：ToolPolicy 对全量已批准目录确定性编译；未知 MCP 能力不得自动进入 SupportEnvelope。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-TOOL-023 advisor 工具条件分支
 
@@ -572,7 +577,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：1 条 R/M 原子断言通过；显式正例与默认官方条件对照各一组。
 - **实现**：由受信 feature 条件选择 ToolPolicy；入站工具声明不能冒充官方 advisor。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-TOOL-024 server web_search 派生请求
 
@@ -581,7 +586,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：1 条 R/M 原子断言通过；三条 web_search 请求与无工具基线条件对照闭合。
 - **实现**：由 Persona ToolPolicy 生成派生请求；跨请求关系和会话身份必须保持。
-- **状态**：observed；仅批准 validation_only，等待 FW-G 实现后对拍晋升。
+- **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 <!-- FW-F-ACTIVE-RULES-END -->
 
@@ -614,7 +619,7 @@ FW-E 的 7,368 个发现项没有删除。FW-F v21／v5 追加终态账本并达
 
 ## 2.7 机器复算与强制门禁
 
-先对 v21 Campaign 复算 77 个场景、395 条请求、49 个维度和 593 个候选，动态生成原子断言，再执行
+先对 v21 Campaign 复算 77 个场景、394 条请求、49 个维度和 593 个候选，动态生成原子断言，再执行
 7,368 项发现清账和 110→40 规范化。旧目录只读保留，每次复算必须写新目录：
 
 ```bash
@@ -849,21 +854,20 @@ Codex IdentityMode、HeaderPolicy、BodyPolicy、BehaviorPolicy 或 fallback 字
 advisor、web_search、count_tokens 与隔离 OAuth refresh 已纳入；合法零流量仍只作支撑事实。调度、计费
 和服务级节奏不由画像改写。
 
-## 3.4 当前差距与 FW-A～FW-H 迁移
+## 3.4 当前实现与 FW-A～FW-H 迁移
 
-当前只有遗留局部仿真，strict 画像化迁移尚未开始：
+FW-G 已完成 strict Candidate 实现与隔离验收；生产仍保持 FW-A 冻结的遗留运行态，须到 FW-H 才允许
+迁移 selector 或退休遗留链：
 
-| 差距 | 当前事实 |
+| 层 | 当前事实 |
 |---|---|
-| 版本身份硬编码且散布 | `internal/pkg/claude/constants.go` 及多个业务文件读取 2.1.220、UA、Stainless、beta 常量 |
-| 画像由 Go 构造 | `buildAnthropicClientProfileCatalog()` 不能内容寻址或追加换版 |
-| 无 Claude Snapshot／发布图 | `catalogdata/` 只有 Codex；遗留 Claude `active／previous` 只是代码构造指针 |
-| 无条件 Header Schema | 遗留画像只有 `StaticHeaders` 与 `BetaHeader`，无法表达当前实测的条件 Header 责任 |
-| finalizer 位于 service | `official_egress_anthropic.go` 未进入共享 Executor／Token／Guard 终态链 |
-| 无 Claude Persona／Compiler／Guard | 当前 `officialegress` persona 和 authority 仍是 Codex 专用 |
-| 入口与出站目标尚未实现 | FW-F 已按 `validation_only` 批准 5 个逻辑入口和 16 项 OAuth 出站身份的目标处置（8 strict、8 managed）；当前运行态仍保持 FW-E 冻结事实 |
-| 三方语义补全未受管 | Persona system／identity 派生与有损 system 角色改写混在遗留 body 重写器中 |
-| 版本门禁不完整 | 版本注释已漂移，业务代码尚可继续泄漏版本指纹 |
+| 画像与发布图 | 2.1.226 Profile、Wire、Snapshot、ReleaseArtifact／Bundle 均已内容寻址；2.1.220 只保留同一 Schema／Compiler 下的 baseline fixture |
+| 统一执行链 | Claude 已有独立 PersonaPlanner、IdentityFacts、Compiler、Executor authority、Token issuer 与 invocation 状态；Codex facade 和 final wire 保持零差异 |
+| strict 入口 | 官方 Messages、第三方 Anthropic Messages、官方 count_tokens、第三方标准 count_tokens 四个逻辑入口分开登记，统一使用 `anthropic-messages` 协议类 |
+| strict／managed 出站 | 八类 `persona_strict` 进入 Compiler／Executor／Guard；`non_persona_managed` 进入独立策略，未知 OAuth 出站保持 `denied` |
+| 语义与兼容 | Persona system／identity 由批准事实派生；lossless 请求进入 strict PAIR，有损 compatibility 与 strict 分母隔离 |
+| 候选验收 | 固定提交、源码树、测试树、依赖、`linux/amd64` 镜像和 Release 的 ValidationCandidate 已在 DMIT 完成范围内、范围外、回滚／恢复验收，状态为 `ready／not_activated` |
+| 生产边界 | ProductionIngressInventory 仍记录当前遗留处置；production selector、DeploymentFact、ActivationReceipt 和 Vircs 服务均未改变，旧 finalizer／旁路不得删除 |
 
 | 阶段 | 变更 | 完成判据 |
 |---|---|---|
@@ -875,6 +879,9 @@ advisor、web_search、count_tokens 与隔离 OAuth refresh 已纳入；合法�
 | `FW-F` | 先把 FW-E 全部发现和语义候选逐项收敛到可审计终态并清零未决项，再由最新 stable 证据生成 Schema、目标 Snapshot、Persona 和不可部署样例；随后用同一 Schema／Compiler 表达 2.1.220 rollback fixture，批准 Profile、范围和多 Persona 合同 | 全量 DiscoveryDispositionLedger 无缺失、重复或未决项；target-first 样例与跨 Persona 负例通过；ApprovalFact 完整；Codex 生产收据对应最终合同；selector 未改变 |
 | `FW-G` | 实现本次已批准的 40 条最新 stable RequiredRules，完成受管语义层、辅助出站三态、全部 strict 入口原子断言、独立复测、DMIT candidate 和 rollback 验收 | 40 条规则及其 106 条画像原子断言达到后继 production-replacement ApprovalFact 要求；范围内断言、范围外拒绝和回退通过 |
 | `FW-H` | 灰度、回滚、激活；逐入口迁移并在闭集完成后退休遗留链 | DeploymentFact 与运行态一致；无 `retained_legacy` 才能签发迁移完成的 RemovalReceipt |
+
+FW-G 的完成事实以 [FW-G 隔离验收收据](egress/maintenance/claude-fw-g-acceptance.json)为准；下一步是
+FW-H 的生产迁移，不得把 Candidate `ready` 解释为已部署或已激活。
 
 最新 stable 是目标 Schema、Snapshot 和实现的唯一设计权威。FW-E 只冻结目标规则证据，不预先用
 2.1.220 建画像；FW-F 完成发现项语义清零后，必须先生成目标 stable 画像和样例，随后才把 2.1.220 表达为差分基线、
@@ -909,7 +916,7 @@ Guard 按 route、persona、Sink、binding、Release、Profile digest、adapter�
 
 ## 3.6 当前可执行边界
 
-源码存在不能证明 production active。FW-A～FW-F 已完成：目标 stable 2.1.226 的 FW-E Campaign 为
+源码存在不能证明 production active。FW-A～FW-G 已完成：目标 stable 2.1.226 的 FW-E Campaign 为
 `claude-code-2_1_226-fw-e-semantic-20260818-e577e144a`，其 Store 停在 `evidence_recorded`。旧 Campaign
 `claude-code-2_1_226-fw-e-final-20260818-93f2edbc9` 及其“7,425 条规则”收据只保留为历史错误事实，由
 [语义规则纠正收据](egress/maintenance/fw-e-semantic-rule-correction/receipt.json)替代，禁止继续作为
@@ -917,11 +924,17 @@ FW-F 输入。FW-F 后继 Campaign 为 `claude-code-2_1_226-fw-f-required-rules-
 `profile_approved`：7,368 个发现、593 个正交候选和 32 个语义候选族未决数均为 0，2.1.226 目标画像／
 Release 与 2.1.220 fixture 已按 target-first 顺序生成，EvidenceApprovalFact 和 `validation_only`
 ProfileApprovalFact 已签发。40 条 RequiredRules 由 Vircs 上 2.1.226 官方客户端的 106 条画像
-P／R／M 原子断言支撑，另有 4 条客户端本地场景断言；110 条均通过，但 40 条规则当前仍为
-`observed`，所以没有
-production-replacement ApprovalFact、candidate、Runtime Selector、DeploymentFact 或环境变更。事实见
+P／R／M 原子断言支撑，另有 4 条客户端本地场景断言；110 条均通过。事实见
 [清零收据](egress/maintenance/fw-f-discovery-clearance/receipt.json)和
-[FW-F RequiredRules 规范化收据](egress/maintenance/fw-f-required-rules-normalization/receipt.json)；下一步固定为 FW-G。
+[FW-F RequiredRules 规范化收据](egress/maintenance/fw-f-required-rules-normalization/receipt.json)。
+
+FW-G 后继 Campaign `claude-code-2_1_226-fw-g-production-replacement-v1-20260820` 已把 40 条规则升级为
+`verified`，签发 `production_replacement` ApprovalFact，冻结提交 `9c9da47649ac662d9713b6e08f879382f6c1d492`
+及镜像 `sha256:646ed02312def74fcbbb9d6610b27260f30e64ec5a951d1e152324fc9e98ca7b` 的
+ValidationCandidate。九个场景、40 个唯一 `PAIR-<SPEC-ID>`、TLS／HTTP/1.1 捕获、范围外 fail-close、
+DMIT rollback／恢复和 Codex final-wire 零差异均通过，AcceptanceFact 结果为 `accepted`；Store 为
+`ready／not_activated`。production Runtime Selector、DeploymentFact、ActivationReceipt 和 Vircs 服务均未
+改变。完整摘要见 [FW-G 隔离验收收据](egress/maintenance/claude-fw-g-acceptance.json)；下一步固定为 FW-H。
 
 ---
 
@@ -967,10 +980,11 @@ Campaign 只绑定不可变身份。下列事实分别追加并以摘要引用�
 `official_sealed`、`profile_approved`、`candidate_sealed`、`compared` 和 `ready` 只是流程检查点；它们
 不是规则证据等级或生产角色，测试通过也不等于 production active。
 
-当前权威状态见 §2.1、§3.6 及其收据：2.1.226 的发现与候选已清零，40 条 RequiredRules 已取得 110 条
-原子断言并获 `validation_only` 批准；Claude candidate、生产 selector、激活和部署事实均不存在。下一步
-FW-G 须完成实现、独立官方复测和候选对拍，将所需规则升级为 `verified`，签发
-`production_replacement` ApprovalFact 后再在 DMIT 验收；范围外能力保持 fail-close、受管或遗留处置。
+当前权威状态见 §2.1、§3.6 及其收据：2.1.226 的发现与候选已清零；FW-G 已通过独立官方复测、
+Candidate 对拍和 DMIT 隔离验收，将 40 条 RequiredRules 升级为 `verified`，并签发
+`production_replacement` ApprovalFact、ValidationCandidate 与 AcceptanceFact。Candidate 为
+`ready／not_activated`；production selector、DeploymentFact 和 ActivationReceipt 均不存在，范围外能力继续
+fail-close、受管或保持遗留隔离。下一步只能进入 FW-H。
 
 ## 4.2 官方取证、分类与批准
 
@@ -1117,10 +1131,18 @@ inventory 和 selector 未变证明。入库只允许：
 6. candidate 必须冻结 SupportEnvelope，范围外条件由 Planner／Compiler fail-close；
 7. 构建记录 source tree、测试树、Go／Node 依赖、目标架构、image ID 与 OCI digest。
 
-当前 FW-F 已生成 target-first Snapshot／样例、2.1.220 fixture 和最终合同，但批准用途仅为
-`validation_only`。40 条 RequiredRules 全部绑定 Vircs 上 2.1.226 官方客户端的 106 条画像 P／R／M
-原子断言；另有 4 条客户端本地场景断言，110 条均逐项通过，7,368 个发现与 593 个候选未决数为 0；证据等级
-仍是 `observed`，取得后继 `production_replacement` ApprovalFact 前不得形成生产替换 candidate。
+FW-F 已生成 target-first Snapshot／样例、2.1.220 fixture 和最终合同，其历史批准用途保持
+`validation_only`。FW-G 在不覆盖旧事实的前提下追加后继 `production_replacement` ApprovalFact，并冻结
+ValidationCandidate：提交 `9c9da47649ac662d9713b6e08f879382f6c1d492`、Git tree
+`de277af80b5de6ed968bccbae4ca76294ac593f2`、source tree
+`8ddb4ef77cd9ccbdf34701f33d1c662fd445cb719e0dac837d744902dfedc37c`、test tree
+`4fe72e94d434264130cb7f91180cf5fba542465fa78d5b3e0dbcda8bb7093443`、dependency lock
+`9f13d98f164189f269e29efba45703f4dcb3a43e66bae5ba73f63881a296c773`，以及固定 `linux/amd64` OCI digest。
+
+Candidate 冻结后的 TLS／HTTP/1.1 捕获测试与 Acceptance finalizer 测试属于追加的验收证据工具，不进入
+该 Candidate 的源码树或测试树，也不改变已构建镜像。FW-H 必须消费上述固定 Candidate；若改用包含这些
+后续文件的新 HEAD 构建，或修改生产源码、Candidate 测试、依赖、画像或镜像，必须建立新的
+ValidationCandidate 并重新签发 AcceptanceFact，不能复用当前事实。
 
 ## 4.4 候选验证与正式验收
 
@@ -1149,7 +1171,7 @@ SupportEnvelope。telemetry、nonessential、usage、models、dispatch-id 与 us
 `PAIR-<SPEC-ID>`；动态值比较来源、格式、关系和生命周期。Persona 固有 system／identity 事实按已
 批准派生记录比较；有损 compatibility 请求不得混入 strict PAIR 分母。
 
-FW-G 验收前至少重放本次 FW-F Store：
+FW-G 已在验收前重放本次 FW-F Store；后续复核仍须先执行：
 
 ```bash
 python3 -m tools.official_client_control replay \
@@ -1158,13 +1180,22 @@ python3 -m tools.official_client_control replay \
   --require-external
 ```
 
+已封存的 FW-G Store 必须使用同目录的历史外部视图重放；后续文档或工具更新不得冒充 Candidate 漂移：
+
+```bash
+python3 -m tools.official_client_control replay \
+  --store "$PWD/local-analysis/fw-g/claude-code-2.1.226/acceptance-v1-9c9da4764/control-store" \
+  --external-root "$PWD/local-analysis/fw-g/claude-code-2.1.226/acceptance-v1-9c9da4764/external-replay-view" \
+  --require-external
+```
+
 `claude_21220/check_coverage.py` 是 2.1.220 历史工具树完整性检查，只能在其冻结工具身份对应的 worktree
 运行，或先追加工具变更审阅链；不得拿当前已经改为全 host 捕获的 MITM／提取器源码与旧摘要直接比较，
 再把预期的工具演进误报成目标画像规则失败。2.1.220 fixture 的当前准入以本次内容寻址 Store 重放为准。
 
 逐规则结果必须唯一覆盖 SupportEnvelope 内的 40 条 RequiredRules 及其 106 条画像原子断言。`ready`
-只证明固定 release candidate 通过
-已批准规则，不表示画像已晋升、正式镜像已构建或生产已切换。当前 FW-E 三层历史输入为：
+只证明固定 Release Candidate 通过已批准规则，不表示画像已晋升、生产镜像已构建或生产已切换。
+当前 FW-E 三层历史输入为：
 
 - `DiscoveryInventory`：7,368 个发现项，其中目标 AST 331、2.1.88 命题 29、HitCC clue 71、Markdown
   原子 6,937；2,830 项归入语义候选，15 项映射既有规则，4,523 项登记为可重分类的
@@ -1185,16 +1216,15 @@ FW-F 清零制品在不改写上述 FW-E 事实的前提下追加：
   真实 P／R／M 通过的原子断言；106 条支撑 40 条 RequiredRules，4 条归入客户端本地场景；0 条响应兼容、
   遥测／traceparent 或无当前运行证据的规则进入 SupportEnvelope。
 
-语义清零只表示每个发现已经确定“是什么、归到哪里”，不表示可以进生产。40 条 RequiredRules 虽已有
-110 条底层断言的完整归属和目标 P／R／M，仍须在 FW-G 通过独立复测、实现后对拍与隔离验收达到后继
-批准要求。不得把
-`observed` 改名、用遗留 wire 佐证，或为了缩小数字从发现清单删除。
+语义清零只表示每个发现已经确定“是什么、归到哪里”，不表示可以进生产。FW-F 时的 40 条规则仍为
+`observed`；FW-G 通过新的官方复测证据、Candidate 对拍和隔离验收追加后继事实，才将其升级为
+`verified`。不得原位改写 FW-F 台账、用遗留 wire 佐证，或为了缩小数字从发现清单删除。
 
-FW-F 已封存 Claude `validation_only` ProfileApprovalFact、ReleaseArtifact、SupportEnvelope、两个
-Inventory 的目标处置、40 条 RequiredRules 和 110 条原子断言计划；八类 strict egress 分别绑定自身规则集合，
-响应兼容只作为支撑事实留在兼容边界。当前
-缺少的是 FW-G 的完整实现、独立补证、后继 `production_replacement` ApprovalFact 和 DMIT 验收，因此
-尚不能形成生产替换 candidate 或受管 `ready`。
+FW-G 已封存后继 `production_replacement` ProfileApprovalFact、固定 ValidationCandidate、九个场景的
+`prepare → capture → seal → approve` 链、40 个唯一 `PAIR-<SPEC-ID>` 和 AcceptanceFact。范围内 strict
+入口、范围外 fail-close、managed／遗留隔离、TLS／HTTP/1.1、DMIT rollback／恢复及 Codex final wire
+零差异均通过；完整 Store 重放为 2 个 Campaign、42 个对象、86 个事实和 9,360 个外部绑定，状态为
+`ready／not_activated`。公开摘要见 [FW-G 隔离验收收据](egress/maintenance/claude-fw-g-acceptance.json)。
 
 ## 4.5 生产、回滚与证据归档
 
@@ -1232,8 +1262,9 @@ RemovalReceipt。
 权威源码、正式发布镜像、production tree 与私有证据归档全部闭合，才能按 dry-run 清单清理远端；
 生产数据库、Redis、配置、当前／回滚镜像和唯一证据副本永远不在清理范围。
 
-当前边界：Claude 已有 `validation_only` ProfileApprovalFact，但尚无 production-replacement candidate、
-晋升或激活收据。2.1.220 Campaign／run／提取物已被 FW-F fixture 内容寻址引用，引用有效期间不得删除。
+当前边界：Claude 已有 `production_replacement` ApprovalFact、ValidationCandidate 和 AcceptanceFact，
+但尚无 promotion receipt、DeploymentFact 或 ActivationReceipt；FW-H 未开始，Vircs 生产未连接或修改。
+2.1.220 Campaign／run／提取物已被 FW-F fixture 内容寻址引用，引用有效期间不得删除。
 
 ---
 
@@ -1258,8 +1289,8 @@ RemovalReceipt。
 
 当前 overlay 台账的 86 个文件中 Claude／Anthropic 条目为 0，无法阻止上游静默改动
 `official_egress_anthropic.go`、`official_client_profile_registry.go` 或 `pkg/claude/constants.go`。
-在 §3.4 的 FW-E 发送面闭集和 FW-G 入口迁移完成前，每次上游合并必须人工列出这些发送面变化；
-Claude overlay 覆盖应纳入 FW-E。
+在 §3.4 的发送面闭集进入正式 overlay、且 FW-H 完成生产入口迁移前，每次上游合并必须人工列出这些
+发送面变化；Claude overlay 覆盖应作为 FW-H 前置门禁补齐。
 
 ## 5.2 兼容代码退休
 
