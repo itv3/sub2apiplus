@@ -178,7 +178,10 @@ func assertClaudeFWGCountTokensTransitionTarget(
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := claudeFWGCountTokensDigest(raw); got != transition.ToSHA256 {
+	if got := claudeFWGCountTokensDigest(raw); got != transition.ToSHA256 &&
+		!claudeFWGQueryFailCloseTransitionSupersedes(
+			transition.Path, transition.ToSHA256, got,
+		) {
 		t.Fatalf(
 			"Claude FW-G count_tokens transition 漂移：path=%s got=%s want=%s",
 			transition.Path, got, transition.ToSHA256,

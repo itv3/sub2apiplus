@@ -244,10 +244,38 @@ func TestClaudeFWGServiceIngressSnapshotAndRouteAreClosed(t *testing.T) {
 	account := claudeFWGServiceAccount()
 	require.True(t, svc.shouldRouteClaudeFWGCandidate(c, account))
 	c.Request.URL.RawQuery = "beta=true"
-	require.False(t, svc.shouldRouteClaudeFWGCandidate(c, account))
+	// strict 入口即使带未知 query 也必须由 candidate 接管后 fail-close，
+	// 不能因为 selector 不匹配而回落到遗留链。
+	require.True(t, svc.shouldRouteClaudeFWGCandidate(c, account))
 	c.Request.URL.RawQuery = ""
 	account.Type = AccountTypeAPIKey
 	require.False(t, svc.shouldRouteClaudeFWGCandidate(c, account))
+
+	upstream := &claudeFWGServiceUpstream{}
+	runtimeState, strictConfig := newClaudeFWGServiceRuntime(t, upstream)
+	strictService := &GatewayService{
+		cfg: strictConfig, rateLimitService: &RateLimitService{},
+		responseHeaderFilter: compileResponseHeaderFilter(strictConfig),
+		claudeTokenProvider:  NewClaudeTokenProvider(nil, nil, nil),
+		officialEgress:       runtimeState,
+	}
+	queryBody := []byte(`{"model":"claude-sonnet-5","messages":[{"role":"user","content":"query"}],"tools":[],"stream":true}`)
+	queryRecorder := httptest.NewRecorder()
+	queryContext, _ := gin.CreateTestContext(queryRecorder)
+	queryContext.Request = httptest.NewRequest(
+		http.MethodPost, "/v1/messages?unknown=true", bytes.NewReader(queryBody),
+	)
+	queryContext.Set("api_key", &APIKey{ID: 23})
+	queryParsed, err := ParseGatewayRequest(NewRequestBodyRef(queryBody), PlatformAnthropic)
+	require.NoError(t, err)
+	result, err := strictService.Forward(
+		context.Background(), queryContext, claudeFWGServiceAccount(), queryParsed,
+	)
+	require.Nil(t, result)
+	require.ErrorContains(t, err, "messages query 不在 SupportEnvelope")
+	require.Equal(t, http.StatusBadRequest, queryRecorder.Code)
+	require.Contains(t, queryRecorder.Body.String(), "invalid_request_error")
+	require.Empty(t, upstream.captures)
 
 	account = claudeFWGServiceAccount()
 	c.Set("api_key", &APIKey{ID: 23})
@@ -329,9 +357,25 @@ func TestClaudeFWGServiceCountTokensUsesStrictCandidateRoute(t *testing.T) {
 	require.Equal(t, http.StatusBadRequest, rejectedRecorder.Code)
 	require.Len(t, upstream.captures, 1)
 
-	c.Request.URL.RawQuery = "beta=true"
-	require.False(t, svc.shouldRouteClaudeFWGCountTokens(c, account))
-	c.Request.URL.RawQuery = ""
+	queryRecorder := httptest.NewRecorder()
+	queryContext, _ := gin.CreateTestContext(queryRecorder)
+	queryContext.Request = httptest.NewRequest(
+		http.MethodPost,
+		"/v1/messages/count_tokens?unknown=true",
+		bytes.NewReader(body),
+	)
+	queryContext.Set("api_key", &APIKey{ID: 23})
+	queryParsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+	require.NoError(t, err)
+	require.True(t, svc.shouldRouteClaudeFWGCountTokens(queryContext, account))
+	err = svc.ForwardCountTokens(
+		context.Background(), queryContext, account, queryParsed,
+	)
+	require.ErrorContains(t, err, "count_tokens query 不在 SupportEnvelope")
+	require.Equal(t, http.StatusBadRequest, queryRecorder.Code)
+	require.Contains(t, queryRecorder.Body.String(), "invalid_request_error")
+	require.Len(t, upstream.captures, 1)
+
 	account.Type = AccountTypeAPIKey
 	require.False(t, svc.shouldRouteClaudeFWGCountTokens(c, account))
 }

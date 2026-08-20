@@ -1,0 +1,42 @@
+{
+  "schema_version": "official-egress-claude-fw-g-query-fail-close-source-transition/v1",
+  "date": "2026-08-20",
+  "phase": "FW-G",
+  "base_commit": "b7d04bcfd3a17bcb47a8de80863b8bc625f678d8",
+  "trigger": "DMIT count_tokens 未知 query 负例发现 strict 入口回落遗留链",
+  "prior_transitions": [
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-count-tokens-source-transition.json",
+      "sha256": "5d6c62d6dae7fb56a8871cb04db4253df73d92e2fa54b5ca6573df8e0816e56b"
+    },
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-count-tokens-test-transition.json",
+      "sha256": "f7b8f114ccda279ae5d3cebedce0846b495274fe9d6d8853733845e891ebea2b"
+    }
+  ],
+  "transitions": [
+    {
+      "path": "backend/internal/service/gateway_claude_fw_g.go",
+      "from_sha256": "a2645eb7fafe510ad565591a749e14cd0a6417beb1dbcf40357ed8eaab153dc3",
+      "to_sha256": "ccdfb6001a3380043e82e26fa083d33a4d4d4a5528ed7310ea53a9c17c51c07f",
+      "reason": "Claude OAuth strict 路径即使带未知 query 也由 candidate 接管，并在进入任何遗留链或上游前返回 400 fail-close。"
+    },
+    {
+      "path": "tools/official_client_capture/claude_fw_g_candidate_pair.py",
+      "from_sha256": "386548bb2fe0bb24a2a418b8606145115293c851f26adadc1f629cc9e2da6bfa",
+      "to_sha256": "38a4499ad70a8a25f335939c06444f34c924636cbc6a9764cbd3f83c2948b048",
+      "reason": "PAIR 门禁改绑补齐公开入口 query fail-close 锚点后的实现覆盖摘要。"
+    },
+    {
+      "path": "tools/official_client_capture/claude_fw_g_implementation_coverage_2_1_226.json",
+      "from_sha256": "482324ef0ff68062a5323098097da6a719a3c086f426c67fc2bb6ec27b88c783",
+      "to_sha256": "378a880d7293b7e9f3916031ee3b0e45884456371784ba6cd48ff15432cda6cb",
+      "reason": "把 messages-inference 的公开入口、service facade 与 selector fail-close 测试纳入 SPEC-EP-001 实现覆盖。"
+    }
+  ],
+  "production_selector_changed": false,
+  "vircs_service_changed": false,
+  "dmit_candidate_rebuild_required": true,
+  "codex_final_wire": "zero_difference_required",
+  "result": "passed"
+}

@@ -95,6 +95,11 @@ func validateClaudeFWGServiceSourceTransition(
 }
 
 func claudeFWGSourceTransitionSupersedesService(path, priorDigest, currentDigest string) bool {
+	if claudeFWGQueryFailCloseSourceTransitionSupersedesService(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	if claudeFWGCountTokensSourceTransitionSupersedesService(path, priorDigest, currentDigest) {
 		return true
 	}
@@ -109,6 +114,34 @@ func claudeFWGSourceTransitionSupersedesService(path, priorDigest, currentDigest
 		if transition.FromSHA256 == priorDigest ||
 			fwEObservationSourceTransitionSupersedes(path, priorDigest, transition.FromSHA256) ||
 			upstreamV0177SourceTransitionSupersedes(path, priorDigest, transition.FromSHA256) {
+			return true
+		}
+	}
+	return false
+}
+
+func claudeFWGQueryFailCloseSourceTransitionSupersedesService(
+	path string,
+	priorDigest string,
+	currentDigest string,
+) bool {
+	var receipt struct {
+		SchemaVersion string                                 `json:"schema_version"`
+		Transitions   []compatibilityClosureSourceTransition `json:"transitions"`
+	}
+	raw, err := os.ReadFile(
+		"../../../docs/egress/maintenance/claude-fw-g-query-fail-close-source-transition.json",
+	)
+	if err != nil || compatibilityClosureDigest(raw) !=
+		"e1a6731634ba567489b74ad22cc0acd33f6ed1bbfa348a46a1273ba3c8c2e5ce" ||
+		json.Unmarshal(raw, &receipt) != nil ||
+		receipt.SchemaVersion !=
+			"official-egress-claude-fw-g-query-fail-close-source-transition/v1" {
+		return false
+	}
+	for _, transition := range receipt.Transitions {
+		if transition.Path == path && transition.FromSHA256 == priorDigest &&
+			transition.ToSHA256 == currentDigest {
 			return true
 		}
 	}

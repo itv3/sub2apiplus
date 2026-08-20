@@ -59,8 +59,7 @@ func (s *GatewayService) shouldRouteClaudeFWGCandidate(c *gin.Context, account *
 		return false
 	}
 	return account.Platform == PlatformAnthropic && account.Type == AccountTypeOAuth &&
-		c.Request.Method == http.MethodPost && c.Request.URL.Path == "/v1/messages" &&
-		c.Request.URL.RawQuery == ""
+		c.Request.Method == http.MethodPost && c.Request.URL.Path == "/v1/messages"
 }
 
 func (s *GatewayService) shouldRouteClaudeFWGCountTokens(c *gin.Context, account *Account) bool {
@@ -71,8 +70,7 @@ func (s *GatewayService) shouldRouteClaudeFWGCountTokens(c *gin.Context, account
 	path := c.Request.URL.Path
 	return account.Platform == PlatformAnthropic && account.Type == AccountTypeOAuth &&
 		c.Request.Method == http.MethodPost &&
-		(path == "/v1/messages/count_tokens" || path == "/messages/count_tokens") &&
-		c.Request.URL.RawQuery == ""
+		(path == "/v1/messages/count_tokens" || path == "/messages/count_tokens")
 }
 
 func (s *GatewayService) forwardClaudeFWGCountTokens(
@@ -81,6 +79,18 @@ func (s *GatewayService) forwardClaudeFWGCountTokens(
 	account *Account,
 	parsed *ParsedRequest,
 ) error {
+	if c == nil || c.Request == nil || c.Request.URL == nil {
+		return errors.New("Claude FW-G count_tokens 缺少有效入口")
+	}
+	if c.Request.URL.RawQuery != "" {
+		s.countTokensError(
+			c,
+			http.StatusBadRequest,
+			"invalid_request_error",
+			"Request query is outside the Claude Code SupportEnvelope",
+		)
+		return errors.New("Claude FW-G count_tokens query 不在 SupportEnvelope")
+	}
 	if s.officialEgress == nil || s.officialEgress.ClaudeCandidate == nil {
 		return errors.New("Claude FW-G count_tokens route 已开启但 runtime 未注入")
 	}
@@ -175,6 +185,18 @@ func (s *GatewayService) forwardClaudeFWGCandidate(
 	parsed *ParsedRequest,
 	startTime time.Time,
 ) (*ForwardResult, error) {
+	if c == nil || c.Request == nil || c.Request.URL == nil {
+		return nil, errors.New("Claude FW-G candidate 缺少有效入口")
+	}
+	if c.Request.URL.RawQuery != "" {
+		writeAnthropicError(
+			c,
+			http.StatusBadRequest,
+			"invalid_request_error",
+			"Request query is outside the Claude Code SupportEnvelope",
+		)
+		return nil, errors.New("Claude FW-G messages query 不在 SupportEnvelope")
+	}
 	if s.officialEgress == nil || s.officialEgress.ClaudeCandidate == nil {
 		return nil, errors.New("Claude FW-G candidate route 已开启但 runtime 未注入")
 	}

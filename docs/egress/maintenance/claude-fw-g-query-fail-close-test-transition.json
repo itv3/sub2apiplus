@@ -1,0 +1,37 @@
+{
+  "schema_version": "official-egress-claude-fw-g-query-fail-close-test-transition/v1",
+  "date": "2026-08-20",
+  "phase": "FW-G",
+  "base_commit": "b7d04bcfd3a17bcb47a8de80863b8bc625f678d8",
+  "source_transition": {
+    "path": "docs/egress/maintenance/claude-fw-g-query-fail-close-source-transition.json",
+    "sha256": "e1a6731634ba567489b74ad22cc0acd33f6ed1bbfa348a46a1273ba3c8c2e5ce"
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_count_tokens_transition_test.go",
+      "from_sha256": "f41daefd336de111ce763fbbb8e39588a0b021d754748ebaa0fe9ddd3d4156d0",
+      "to_sha256": "4b80b0cab9049cf049f3b89ac4c1b73fd825a4a9dbcd09cbf7fb1eb79a76f78b",
+      "reason": "历史 count_tokens transition 只接受本次追加 query fail-close transition 承接的精确摘要，不改写历史收据。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_implementation_coverage_test.go",
+      "from_sha256": "e14e1ee23f5357888af66805c869b6abfbdde5662c905104597a8d9620b0bf37",
+      "to_sha256": "9d576d5bf33f200dc733ba0db124a1faabc11d91ed5501cd65e526f098148979",
+      "reason": "冻结加入公开 messages strict 入口与 query fail-close 锚点后的覆盖矩阵摘要。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_candidate_test.go",
+      "from_sha256": "aa4f97f1fb19c007529857a0401092bcfc121cae126b9481922015e322fa89e2",
+      "to_sha256": "76ece1896fcacd385f35168c1655e35338c0d8fb6e402585ca95ce10b17808a3",
+      "reason": "增加 messages 与 count_tokens 未知 query 均返回 400、且上游请求计数不增加的入口级回归。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_source_transition_test.go",
+      "from_sha256": "bba44a4afd16836b158710d0ca7d66642863647d867ea396c299a825c78018f5",
+      "to_sha256": "9ef2cc4a97c023f6ad4921e2664d823ffcfc2435442b18a9673529d136e93893",
+      "reason": "让维护漂移门禁只承认本次不可变 query fail-close source transition 的精确承接关系。"
+    }
+  ],
+  "result": "passed"
+}
