@@ -884,6 +884,14 @@ func (r *ClaudeCandidateRuntime) executeClaudeStartupEndpoint(
 	status := response.StatusCode
 	drainClaudeRetryResponse(response)
 	if status < 200 || status >= 300 {
+		// Claude Code 把组织 policy／远程托管设置的 404 解释为“当前账号没有
+		// 对应配置”，随后按空对象继续启动。FW-F 的受控 R 通道也以 404
+		// 复现并确认了这条分支，因此 candidate 不能把合法的配置缺席升级为
+		// 主推理故障。其他辅助端点和其他状态仍保持 fail-close。
+		if status == http.StatusNotFound &&
+			(kind == "policy-limits" || kind == "remote-settings") {
+			return nil
+		}
 		return fmt.Errorf("Claude startup %s 返回状态 %d", kind, status)
 	}
 	return nil

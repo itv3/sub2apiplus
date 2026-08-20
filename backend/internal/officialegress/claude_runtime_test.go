@@ -440,6 +440,41 @@ func TestClaudeFWGStartupBranchesMatchEntrypointAndBackground(t *testing.T) {
 	})
 }
 
+func TestClaudeFWGStartupAcceptsOnlyApprovedAbsentManagedState(t *testing.T) {
+	port := &claudeCapturePort{
+		respond: func(request claudeCapturedRequest, _ int) (*http.Response, error) {
+			if strings.HasSuffix(request.URL, "/api/claude_code/policy_limits") ||
+				strings.HasSuffix(request.URL, "/api/claude_code/settings") ||
+				strings.HasSuffix(request.URL, "/api/oauth/profile") {
+				return claudeTestResponse(http.StatusNotFound, `{}`), nil
+			}
+			return claudeTestResponse(http.StatusOK, `{}`), nil
+		},
+	}
+	runtime, _, _ := newClaudeTestRuntime(t, port)
+	trusted := claudeTestTrustedFacts()
+	trusted.Entrypoint.IngressProtocol = "managed-internal"
+
+	for _, kind := range []string{"policy-limits", "remote-settings"} {
+		err := runtime.executeClaudeStartupEndpoint(
+			context.Background(), "token", trusted, kind,
+		)
+		if err != nil {
+			t.Fatalf("%s 的合法 404 不应阻断启动：%v", kind, err)
+		}
+	}
+
+	// 只有 policy/settings 的 404 是已批准“空配置”语义；其他辅助端点
+	// 不得借此放宽。这里直接复用 startup 的状态判定验证 oauth-profile
+	// 仍然 fail-close。
+	err := runtime.executeClaudeStartupEndpoint(
+		context.Background(), "token", trusted, "oauth-profile",
+	)
+	if err == nil || !strings.Contains(err.Error(), "返回状态 404") {
+		t.Fatalf("oauth-profile 404 被错误放行：%v", err)
+	}
+}
+
 func claudeCanonicalForWireScenario(
 	t *testing.T,
 	scenario claudeWireScenario,
