@@ -1979,6 +1979,11 @@ func (h *GatewayHandler) errorResponse(c *gin.Context, status int, errType, mess
 // POST /v1/messages/count_tokens
 // 特点：校验订阅/余额，但不计算并发、不记录使用量
 func (h *GatewayHandler) CountTokens(c *gin.Context) {
+	if c.Request != nil {
+		c.Request = c.Request.WithContext(
+			service.WithOfficialClaudeIngressRuntime(c.Request.Context(), c),
+		)
+	}
 	// 从context获取apiKey和user（ApiKeyAuth中间件已设置）
 	apiKey, ok := middleware2.GetAPIKeyFromContext(c)
 	if !ok {

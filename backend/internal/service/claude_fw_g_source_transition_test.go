@@ -95,6 +95,9 @@ func validateClaudeFWGServiceSourceTransition(
 }
 
 func claudeFWGSourceTransitionSupersedesService(path, priorDigest, currentDigest string) bool {
+	if claudeFWGCountTokensSourceTransitionSupersedesService(path, priorDigest, currentDigest) {
+		return true
+	}
 	receipt, raw, err := readClaudeFWGServiceSourceTransition()
 	if err != nil || validateClaudeFWGServiceSourceTransition(receipt, raw) != nil {
 		return false
@@ -106,6 +109,33 @@ func claudeFWGSourceTransitionSupersedesService(path, priorDigest, currentDigest
 		if transition.FromSHA256 == priorDigest ||
 			fwEObservationSourceTransitionSupersedes(path, priorDigest, transition.FromSHA256) ||
 			upstreamV0177SourceTransitionSupersedes(path, priorDigest, transition.FromSHA256) {
+			return true
+		}
+	}
+	return false
+}
+
+func claudeFWGCountTokensSourceTransitionSupersedesService(
+	path string,
+	priorDigest string,
+	currentDigest string,
+) bool {
+	var receipt struct {
+		SchemaVersion string                                 `json:"schema_version"`
+		Transitions   []compatibilityClosureSourceTransition `json:"transitions"`
+	}
+	raw, err := os.ReadFile(
+		"../../../docs/egress/maintenance/claude-fw-g-count-tokens-source-transition.json",
+	)
+	if err != nil || compatibilityClosureDigest(raw) !=
+		"5d6c62d6dae7fb56a8871cb04db4253df73d92e2fa54b5ca6573df8e0816e56b" ||
+		json.Unmarshal(raw, &receipt) != nil ||
+		receipt.SchemaVersion != "official-egress-claude-fw-g-count-tokens-source-transition/v1" {
+		return false
+	}
+	for _, transition := range receipt.Transitions {
+		if transition.Path == path && transition.FromSHA256 == priorDigest &&
+			transition.ToSHA256 == currentDigest {
 			return true
 		}
 	}

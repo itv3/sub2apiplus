@@ -181,7 +181,15 @@ type ClaudeEndpointExecution struct {
 	ClientID     string
 	RefreshScope string
 	TrustedFacts ClaudeTrustedFacts
+	Ingress      ClaudeIngressSnapshot
 	InvocationID string
+}
+
+// ClaudeEndpointResult 保留辅助端点的实际响应与最终 wire body。当前只有
+// count_tokens 需要把最终 body 交还网关；其他受管辅助端点继续返回空 body。
+type ClaudeEndpointResult struct {
+	Response *http.Response
+	WireBody []byte
 }
 
 // ClaudeCandidateResult 保留上游响应和本次实际语义 wire，供网关响应链与计费复用。
@@ -1126,35 +1134,64 @@ func (r *ClaudeCandidateRuntime) ExecuteEndpoint(
 	ctx context.Context,
 	input ClaudeEndpointExecution,
 ) (*http.Response, error) {
+	result, err := r.executeEndpoint(ctx, input)
+	if err != nil {
+		return nil, err
+	}
+	return result.Response, nil
+}
+
+// ExecuteCountTokens 把公开 count_tokens 入口接入与其他 Claude strict 端点
+// 相同的 Planner／Compiler／Executor／Guard 链，并把最终 wire body 交还网关。
+func (r *ClaudeCandidateRuntime) ExecuteCountTokens(
+	ctx context.Context,
+	input ClaudeEndpointExecution,
+) (ClaudeEndpointResult, error) {
+	input.EndpointKind = "count-tokens"
+	return r.executeEndpoint(ctx, input)
+}
+
+func (r *ClaudeCandidateRuntime) executeEndpoint(
+	ctx context.Context,
+	input ClaudeEndpointExecution,
+) (ClaudeEndpointResult, error) {
 	if r == nil || r.executor == nil {
-		return nil, errors.New("Claude FW-G runtime 未初始化")
+		return ClaudeEndpointResult{}, errors.New("Claude FW-G runtime 未初始化")
 	}
 	endpoint, err := r.profile.endpoint(strings.TrimSpace(input.EndpointKind))
 	if err != nil {
-		return nil, err
+		return ClaudeEndpointResult{}, err
 	}
 	if endpoint.kind == "messages-inference" {
-		return nil, errors.New("messages-inference 必须使用 ExecuteMessages 状态机")
+		return ClaudeEndpointResult{}, errors.New("messages-inference 必须使用 ExecuteMessages 状态机")
+	}
+	if endpoint.kind == "count-tokens" {
+		input.TrustedFacts, err = resolveClaudeOfficialCountTokensIngress(
+			input.Ingress, input.TrustedFacts, r.profile,
+		)
+		if err != nil {
+			return ClaudeEndpointResult{}, err
+		}
 	}
 	identity, err := deriveClaudeIdentityFacts(input.TrustedFacts)
 	if err != nil {
-		return nil, err
+		return ClaudeEndpointResult{}, err
 	}
 	if identity.ingressProtocol != "managed-internal" {
-		return nil, errors.New("Claude strict endpoint 缺少 managed-internal binding")
+		return ClaudeEndpointResult{}, errors.New("Claude strict endpoint 缺少 managed-internal binding")
 	}
 	canonical := ClaudeCanonicalRequest{}
 	if endpoint.kind == "count-tokens" {
-		canonical, err = parseClaudeCountTokens(input.Body)
+		canonical, err = parseClaudeCountTokens(input.Body, r.wire)
 		if err != nil {
-			return nil, err
+			return ClaudeEndpointResult{}, err
 		}
 	}
 	authInput := AttemptAuthenticationInput{}
 	if claudeEndpointNeedsBearer(endpoint.kind) {
 		authInput.BearerToken = strings.TrimSpace(input.AccessToken)
 		if authInput.BearerToken == "" {
-			return nil, errors.New("Claude strict endpoint 缺少 OAuth access token")
+			return ClaudeEndpointResult{}, errors.New("Claude strict endpoint 缺少 OAuth access token")
 		}
 	}
 	if endpoint.kind == "oauth-token-refresh" {
@@ -1162,19 +1199,19 @@ func (r *ClaudeCandidateRuntime) ExecuteEndpoint(
 		authInput.Attestation = strings.TrimSpace(input.ClientID)
 		if authInput.RefreshToken == "" || authInput.Attestation == "" ||
 			strings.TrimSpace(input.RefreshScope) == "" {
-			return nil, errors.New("Claude OAuth refresh 缺少受管凭据")
+			return ClaudeEndpointResult{}, errors.New("Claude OAuth refresh 缺少受管凭据")
 		}
 	}
 	authentication, err := NewAttemptAuthentication(authInput)
 	if err != nil {
-		return nil, err
+		return ClaudeEndpointResult{}, err
 	}
 	invocationID := strings.TrimSpace(input.InvocationID)
 	if invocationID == "" {
 		invocationID = uuid.NewString()
 	}
 	if _, err := uuid.Parse(invocationID); err != nil {
-		return nil, errors.New("Claude strict endpoint InvocationID 非法")
+		return ClaudeEndpointResult{}, errors.New("Claude strict endpoint InvocationID 非法")
 	}
 	plan := ClaudeEgressPlan{
 		endpointKind: endpoint.kind, canonical: canonical,
@@ -1184,23 +1221,32 @@ func (r *ClaudeCandidateRuntime) ExecuteEndpoint(
 		refreshScope:   strings.TrimSpace(input.RefreshScope),
 		invocationID:   invocationID, accountScope: identity.accountScope,
 	}
+	wireBody := []byte(nil)
+	if endpoint.kind == "count-tokens" {
+		wireBody, _, _, _, err = compileClaudeEndpointBody(
+			plan, r.wire, AttemptAuthenticationInput{},
+		)
+		if err != nil {
+			return ClaudeEndpointResult{}, err
+		}
+	}
 	typed := newClaudeDialectPlan(plan, endpoint)
 	bundle := newClaudeReleaseBundle(endpoint, 1)
 	invocation, err := r.executor.beginInvocation(ctx, bundle, invocationID)
 	if err != nil {
-		return nil, err
+		return ClaudeEndpointResult{}, err
 	}
 	result, err := invocation.executeTypedAttempt(ctx, personaExecutorRequest{
 		bundle: bundle, plan: typed, attemptReason: AttemptReasonInitial,
 		expectedAttemptOrdinal: 1, executionScopeKey: identity.accountScope,
 	})
 	if err != nil {
-		return nil, err
+		return ClaudeEndpointResult{}, err
 	}
 	if result.HTTPResponse() == nil {
-		return nil, errors.New("Claude strict endpoint 返回空响应")
+		return ClaudeEndpointResult{}, errors.New("Claude strict endpoint 返回空响应")
 	}
-	return result.HTTPResponse(), nil
+	return ClaudeEndpointResult{Response: result.HTTPResponse(), WireBody: wireBody}, nil
 }
 
 func newClaudeReleaseBundle(endpoint claudeEndpointProfile, attempts int) claudeReleaseBundle {
@@ -1607,7 +1653,10 @@ func compileClaudeUserAgent(base string, features ClaudeTrustedFeatureFacts) (st
 	return base[:closing] + ", " + strings.Join(segments, ", ") + ")", nil
 }
 
-func parseClaudeCountTokens(body []byte) (ClaudeCanonicalRequest, error) {
+func parseClaudeCountTokens(
+	body []byte,
+	wire claudeWireArtifact,
+) (ClaudeCanonicalRequest, error) {
 	document, err := decodeClaudeUniqueObject(body)
 	if err != nil || !rawJSONArray(document["messages"]) {
 		return ClaudeCanonicalRequest{}, errors.New("Claude count_tokens messages 必须是数组")
@@ -1617,12 +1666,17 @@ func parseClaudeCountTokens(body []byte) (ClaudeCanonicalRequest, error) {
 			return ClaudeCanonicalRequest{}, fmt.Errorf("Claude count_tokens 含未批准字段：%s", name)
 		}
 	}
-	tools := document["tools"]
-	if len(tools) == 0 {
-		tools = json.RawMessage("[]")
+	tools, toolsPresent := document["tools"]
+	if !toolsPresent {
+		return ClaudeCanonicalRequest{}, errors.New("Claude count_tokens tools 必须显式提供")
 	}
 	if !rawJSONArray(tools) {
 		return ClaudeCanonicalRequest{}, errors.New("Claude count_tokens tools 必须是数组")
+	}
+	var model string
+	if json.Unmarshal(document["model"], &model) != nil ||
+		strings.TrimSpace(model) != wire.ImplementationPolicy.Scenarios.TUIMain.Model {
+		return ClaudeCanonicalRequest{}, errors.New("Claude count_tokens model 不在 SupportEnvelope")
 	}
 	return ClaudeCanonicalRequest{
 		messages: append(json.RawMessage(nil), document["messages"]...),

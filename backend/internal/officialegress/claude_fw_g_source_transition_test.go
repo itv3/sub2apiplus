@@ -126,6 +126,9 @@ func loadClaudeFWGSourceTransition(t *testing.T) map[string]changeset4SourceTran
 }
 
 func claudeFWGSourceTransitionSupersedes(path, priorDigest, currentDigest string) bool {
+	if claudeFWGCountTokensSourceTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	receipt, raw, err := readClaudeFWGSourceTransition()
 	if err != nil || validateClaudeFWGSourceTransition(receipt, raw) != nil {
 		return false

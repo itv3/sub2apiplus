@@ -22,6 +22,18 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 		s.countTokensError(c, http.StatusBadRequest, "invalid_request_error", "Request body is empty")
 		return fmt.Errorf("parse request: empty request")
 	}
+	if s.shouldRouteClaudeFWGCountTokens(c, account) {
+		err := s.forwardClaudeFWGCountTokens(ctx, c, account, parsed)
+		if err != nil && !c.Writer.Written() {
+			s.countTokensError(
+				c,
+				http.StatusBadRequest,
+				"invalid_request_error",
+				"Request is outside the Claude Code SupportEnvelope",
+			)
+		}
+		return err
+	}
 
 	bodyForPassthroughDecision := parsed.Body.Bytes()
 	apiKeyMimicClaudeCode := shouldMimicAnthropicAPIKeyClaudeCode(account, "apikey", c, bodyForPassthroughDecision)

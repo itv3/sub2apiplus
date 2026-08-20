@@ -1,0 +1,64 @@
+{
+  "schema_version": "official-egress-claude-fw-g-count-tokens-source-transition/v1",
+  "date": "2026-08-20",
+  "phase": "FW-G",
+  "base_commit": "76562bc4cacafc79363a83d154d5cc0fa5f68c72",
+  "prior_transitions": [
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-source-transition.json",
+      "sha256": "b84fa150c93856a7e3717c7053cd1e2d90f9a6adce259d68252d5aaf11fb6008"
+    },
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-test-transition.json",
+      "sha256": "e620702b24675126959f07963c99ea5a07ccf92c502b38d7cf95e295a390c8df"
+    }
+  ],
+  "transitions": [
+    {
+      "path": "backend/internal/handler/gateway_handler.go",
+      "from_sha256": "0875e6a08e1819172f487c93f52932e9d53a0e232e7e1203302f0724394377a2",
+      "to_sha256": "672c3fe54d16645053ca9553724c7a35af0255dff75bc003fb20a08b21ac0092",
+      "reason": "在 count_tokens 读取或解压 Body 前冻结 Claude 官方入站 Header，只向候选 Planner 提供只读事实。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_ingress.go",
+      "from_sha256": "555ccc6fa3ea80d17ce5a2a2f50bf12a7534373d461610abdffbdfb207e1d4ad",
+      "to_sha256": "eec9e4c32e1d53f2e470cd5d3e86405e78d15370227597757ea1ed18521143fd",
+      "reason": "验证官方 2.1.226 count_tokens 固定 Header 与会话身份；第三方请求继续使用 Planner 派生身份，畸形官方声明失败关闭。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_runtime.go",
+      "from_sha256": "800439f1551d295528a2c137b8c00df6c23b69eaa260c7a20017c12d399e19ae",
+      "to_sha256": "5942bfd60b41f55ddaf923c97464ea6746d7579b52fb5bdc6ea5dbf42e66fc00",
+      "reason": "为 count_tokens 暴露受管 strict 执行结果并返回最终 wire body；模型、入口身份和未知条件均按批准 SupportEnvelope 失败关闭。"
+    },
+    {
+      "path": "backend/internal/service/gateway_claude_fw_g.go",
+      "from_sha256": "06d9660b4f3a99236ac9e83e23047a20d77cefd64f38f5d4ca6671faac82f721",
+      "to_sha256": "a2645eb7fafe510ad565591a749e14cd0a6417beb1dbcf40357ed8eaab153dc3",
+      "reason": "把 DMIT candidate 的 count_tokens 入口绑定到 Claude 独立 Planner、Compiler、Executor、Token issuer 与 Guard，并复用既有响应和限流语义。"
+    },
+    {
+      "path": "backend/internal/service/gateway_count_tokens.go",
+      "from_sha256": "c8b77b9d5e86fea750f4da4a7476d28baa1440130b7a4975466c7abd98fd439f",
+      "to_sha256": "703072dd64f23ab39ccc4579f21c503aca9c3d991121b97dc2558ce453a876dd",
+      "reason": "候选开关、Anthropic OAuth 账号和精确 count_tokens 路径同时满足时进入 strict 链；生产默认开关关闭时旧路径不变。"
+    },
+    {
+      "path": "tools/official_client_capture/claude_fw_g_candidate_pair.py",
+      "from_sha256": "90a84e8de5eb0b24e84afac1b03d07df0e555af3a544f3ef45a48739c5c953ad",
+      "to_sha256": "386548bb2fe0bb24a2a418b8606145115293c851f26adadc1f629cc9e2da6bfa",
+      "reason": "候选 PAIR 门禁绑定补强后的覆盖摘要，并把 count_tokens 官方身份与公开入口负例纳入固定测试分母。"
+    },
+    {
+      "path": "tools/official_client_capture/claude_fw_g_implementation_coverage_2_1_226.json",
+      "from_sha256": "0d513db16ab5ec1ed5a4ff11afc230aab9f48175e95f611acf35a7469e50330c",
+      "to_sha256": "482324ef0ff68062a5323098097da6a719a3c086f426c67fc2bb6ec27b88c783",
+      "reason": "把 SPEC-EP-009 从仅有 Runtime 实现锚点补强为公开入口、service facade、strict Runtime 和入口级测试的完整调用链。"
+    }
+  ],
+  "production_selector_changed": false,
+  "vircs_service_changed": false,
+  "codex_final_wire": "zero_difference_required",
+  "result": "passed"
+}

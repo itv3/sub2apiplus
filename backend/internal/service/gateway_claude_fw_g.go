@@ -63,6 +63,111 @@ func (s *GatewayService) shouldRouteClaudeFWGCandidate(c *gin.Context, account *
 		c.Request.URL.RawQuery == ""
 }
 
+func (s *GatewayService) shouldRouteClaudeFWGCountTokens(c *gin.Context, account *Account) bool {
+	if s == nil || s.cfg == nil || !s.cfg.Gateway.ClaudeFWGCandidateEnabled ||
+		c == nil || c.Request == nil || c.Request.URL == nil || account == nil {
+		return false
+	}
+	path := c.Request.URL.Path
+	return account.Platform == PlatformAnthropic && account.Type == AccountTypeOAuth &&
+		c.Request.Method == http.MethodPost &&
+		(path == "/v1/messages/count_tokens" || path == "/messages/count_tokens") &&
+		c.Request.URL.RawQuery == ""
+}
+
+func (s *GatewayService) forwardClaudeFWGCountTokens(
+	ctx context.Context,
+	c *gin.Context,
+	account *Account,
+	parsed *ParsedRequest,
+) error {
+	if s.officialEgress == nil || s.officialEgress.ClaudeCandidate == nil {
+		return errors.New("Claude FW-G count_tokens route 已开启但 runtime 未注入")
+	}
+	if account == nil || parsed == nil || parsed.Body == nil {
+		return errors.New("Claude FW-G count_tokens 缺少入口、账号或请求体")
+	}
+	if account.IsCustomBaseURLEnabled() && strings.TrimSpace(account.GetCustomBaseURL()) != "" {
+		return errors.New("Claude FW-G count_tokens 不允许自定义上游地址")
+	}
+	trusted, err := buildClaudeFWGTrustedFacts(c, account, parsed)
+	if err != nil {
+		return err
+	}
+	trusted.Entrypoint.IngressProtocol = "managed-internal"
+	accessToken, tokenType, err := s.GetAccessToken(ctx, account)
+	if err != nil {
+		return err
+	}
+	if tokenType != "oauth" || strings.TrimSpace(accessToken) == "" {
+		return errors.New("Claude FW-G count_tokens 只接受 OAuth access token")
+	}
+	proxyURL := ""
+	if account.ProxyID != nil {
+		if account.Proxy == nil {
+			return errors.New("Claude FW-G count_tokens 账号代理未解析，禁止静默直连")
+		}
+		proxyURL = account.Proxy.URL()
+	}
+	executionContext := withClaudeCandidateHTTPTransport(
+		ctx, proxyURL, account.ID, claudeFWGConcurrencyLimit(account),
+	)
+	ingress, _ := claudeFWGIngressSnapshotFromContext(c.Request.Context())
+	result, err := s.officialEgress.ClaudeCandidate.ExecuteCountTokens(
+		executionContext,
+		officialegress.ClaudeEndpointExecution{
+			Body: parsed.Body.Bytes(), AccessToken: accessToken,
+			TrustedFacts: trusted, Ingress: ingress, InvocationID: uuid.NewString(),
+		},
+	)
+	if err != nil {
+		return fmt.Errorf("Claude FW-G count_tokens 执行失败：%w", err)
+	}
+	if result.Response == nil || result.Response.Body == nil {
+		return errors.New("Claude FW-G count_tokens 返回空响应")
+	}
+	defer func() { _ = result.Response.Body.Close() }()
+	if err := parsed.ReplaceBody(result.WireBody); err != nil {
+		return fmt.Errorf("记录 Claude FW-G count_tokens final wire：%w", err)
+	}
+	responseBody, err := ReadUpstreamResponseBody(
+		result.Response.Body,
+		s.cfg,
+		c,
+		func(c *gin.Context) {
+			s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Upstream response too large")
+		},
+	)
+	if err != nil {
+		if !errors.Is(err, ErrUpstreamResponseBodyTooLarge) {
+			s.countTokensError(c, http.StatusBadGateway, "upstream_error", "Failed to read response")
+		}
+		return err
+	}
+	if result.Response.StatusCode >= http.StatusBadRequest {
+		if s.rateLimitService != nil {
+			s.rateLimitService.HandleUpstreamError(
+				ctx, account, result.Response.StatusCode, result.Response.Header, responseBody,
+			)
+		}
+		message := sanitizeUpstreamErrorMessage(extractUpstreamErrorMessage(responseBody))
+		setOpsUpstreamError(c, result.Response.StatusCode, message, "")
+		s.countTokensError(
+			c, result.Response.StatusCode, "upstream_error", "Upstream request failed",
+		)
+		return fmt.Errorf("Claude FW-G count_tokens 上游状态 %d", result.Response.StatusCode)
+	}
+	writeAnthropicPassthroughResponseHeaders(
+		c.Writer.Header(), result.Response.Header, s.responseHeaderFilter,
+	)
+	contentType := strings.TrimSpace(result.Response.Header.Get("Content-Type"))
+	if contentType == "" {
+		contentType = "application/json"
+	}
+	c.Data(result.Response.StatusCode, contentType, responseBody)
+	return nil
+}
+
 func (s *GatewayService) forwardClaudeFWGCandidate(
 	ctx context.Context,
 	c *gin.Context,

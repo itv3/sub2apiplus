@@ -1,0 +1,31 @@
+{
+  "schema_version": "official-egress-claude-fw-g-count-tokens-test-transition/v1",
+  "date": "2026-08-20",
+  "phase": "FW-G",
+  "base_commit": "76562bc4cacafc79363a83d154d5cc0fa5f68c72",
+  "source_transition": {
+    "path": "docs/egress/maintenance/claude-fw-g-count-tokens-source-transition.json",
+    "sha256": "5d6c62d6dae7fb56a8871cb04db4253df73d92e2fa54b5ca6573df8e0816e56b"
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/claude_implementation_coverage_test.go",
+      "from_sha256": "8795b7d152ac2a3f810369ce58200e38adc3163f3cd631ab6a2c36afe8e8387b",
+      "to_sha256": "e14e1ee23f5357888af66805c869b6abfbdde5662c905104597a8d9620b0bf37",
+      "reason": "冻结补强后的 SPEC-EP-009 公开入口实现覆盖矩阵摘要。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_runtime_test.go",
+      "from_sha256": "095e904de351a7fb202b4c656bec90e77215c4f9c1e1fddfaaff2cc0f1973e56",
+      "to_sha256": "f695cba17c1f3d2de882b1b6e43e47367e8cc9ed35e1b80e4789f677050a05c4",
+      "reason": "增加官方 count_tokens 会话一致、final wire、范围外模型和畸形身份失败关闭断言。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_candidate_test.go",
+      "from_sha256": "32b2dd05e778e7c1cc7f2f824664f3dad28b49c5eae91ab402594e6b336bddad",
+      "to_sha256": "aa4f97f1fb19c007529857a0401092bcfc121cae126b9481922015e322fa89e2",
+      "reason": "增加公开 count_tokens 路由经独立 Claude strict Executor、目标 TLS、OAuth 认证和 final wire 的入口级断言。"
+    }
+  ],
+  "result": "passed"
+}

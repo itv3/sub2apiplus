@@ -164,6 +164,64 @@ func resolveClaudeOfficialIngressBase(
 	}, true, nil
 }
 
+// resolveClaudeOfficialCountTokensIngress 只在入站明确声明官方 2.1.226
+// 身份时采用客户端会话；普通第三方请求仍使用 Planner 派生会话。认证 Header
+// 始终由已认证的 Sub2API OAuth 账号重新签发，不能信任入站值。
+func resolveClaudeOfficialCountTokensIngress(
+	snapshot ClaudeIngressSnapshot,
+	trusted ClaudeTrustedFacts,
+	profile claudeFWGProfile,
+) (ClaudeTrustedFacts, error) {
+	if !snapshot.Captured {
+		return trusted, nil
+	}
+	headers := snapshot.Headers.Clone()
+	userAgent := strings.TrimSpace(headers.Get("User-Agent"))
+	if !strings.HasPrefix(strings.ToLower(userAgent), "claude-cli/") {
+		return trusted, nil
+	}
+	entrypoint, features, err := parseClaudeOfficialUserAgent(userAgent)
+	if err != nil {
+		return ClaudeTrustedFacts{}, err
+	}
+	if entrypoint != ClaudeEntrypointCLI || len(features) != 0 {
+		return ClaudeTrustedFacts{}, errors.New("Claude 官方 count_tokens entrypoint 非法")
+	}
+	endpoint, err := profile.endpoint("count-tokens")
+	if err != nil {
+		return ClaudeTrustedFacts{}, err
+	}
+	facts := claudeHeaderFacts(endpoint.headers)
+	for _, name := range []string{
+		"accept", "accept-encoding", "anthropic-beta",
+		"anthropic-dangerous-direct-browser-access", "anthropic-version", "content-type",
+		"x-app", "x-stainless-arch", "x-stainless-lang", "x-stainless-os",
+		"x-stainless-package-version", "x-stainless-retry-count", "x-stainless-runtime",
+		"x-stainless-runtime-version",
+	} {
+		if strings.TrimSpace(headers.Get(name)) != facts[name].Value {
+			return ClaudeTrustedFacts{}, fmt.Errorf(
+				"Claude 官方 count_tokens 固定 Header 不一致：%s", name,
+			)
+		}
+	}
+	sessionID := strings.TrimSpace(headers.Get("X-Claude-Code-Session-Id"))
+	if _, err := uuid.Parse(sessionID); err != nil {
+		return ClaudeTrustedFacts{}, errors.New("Claude 官方 count_tokens session_id 非法")
+	}
+	requestID := strings.TrimSpace(headers.Get("x-client-request-id"))
+	if _, err := uuid.Parse(requestID); err != nil {
+		return ClaudeTrustedFacts{}, errors.New("Claude 官方 count_tokens request_id 非法")
+	}
+	trusted.Session = ClaudeTrustedSessionFacts{
+		SessionID: sessionID,
+		Source:    ClaudeSessionSourceOfficialConsistent,
+	}
+	trusted.Entrypoint.Entrypoint = ClaudeEntrypointCLI
+	trusted.Features.RequestGzip = snapshot.RequestGzip
+	return trusted, nil
+}
+
 func extractClaudeOfficialCustomHeaders(
 	headers http.Header,
 	profile claudeFWGProfile,

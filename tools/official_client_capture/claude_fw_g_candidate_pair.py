@@ -34,7 +34,7 @@ EXPECTED_PROFILE_ASSERTIONS = 106
 EXPECTED_SCENARIO_ASSERTIONS = 4
 EXPECTED_ATOMIC_ASSERTIONS = 110
 EXPECTED_COVERAGE_SHA256 = (
-    "0d513db16ab5ec1ed5a4ff11afc230aab9f48175e95f611acf35a7469e50330c"
+    "482324ef0ff68062a5323098097da6a719a3c086f426c67fc2bb6ec27b88c783"
 )
 EXPECTED_REQUIRED_RULES_SHA256 = (
     "50261962778b8a7cf85f2dd01a8057f8004e92c0978456e88d9457d4ef8030b3"
@@ -54,6 +54,7 @@ NEGATIVE_GATES = {
     "egress_disposition_and_unknown_route": [
         ("internal/officialegress", "TestClaudeFWGCandidateCatalogSeparatesStrictManagedAndDenied"),
         ("internal/officialegress", "TestClaudeFWGStrictAuxiliaryEndpointsUseExecutor"),
+        ("internal/officialegress", "TestClaudeFWGCountTokensOfficialIngressIsClosed"),
     ],
     "tool_and_feature_fail_close": [
         ("internal/officialegress", "TestClaudeFWGToolPolicyIsClosed"),
@@ -72,6 +73,7 @@ NEGATIVE_GATES = {
     ],
     "service_route_transport_and_refresh_boundary": [
         ("internal/service", "TestClaudeFWGServiceCandidateUsesStrictTransportContext"),
+        ("internal/service", "TestClaudeFWGServiceCountTokensUsesStrictCandidateRoute"),
         ("internal/service", "TestClaudeFWGServiceIngressSnapshotAndRouteAreClosed"),
         ("internal/service", "TestClaudeFWGServiceRefreshUsesStrictEndpoint"),
     ],

@@ -1087,7 +1087,7 @@ func TestClaudeFWGStrictAuxiliaryEndpointsUseExecutor(t *testing.T) {
 		{EndpointKind: "oauth-profile", AccessToken: "token"},
 		{EndpointKind: "mcp-servers", AccessToken: "token"},
 		{EndpointKind: "count-tokens", AccessToken: "token", Body: []byte(
-			`{"model":"ignored","messages":[{"role":"user","content":"count"}],"tools":[]}`,
+			`{"model":"claude-sonnet-5","messages":[{"role":"user","content":"count"}],"tools":[]}`,
 		)},
 		{EndpointKind: "oauth-token-refresh", RefreshToken: "<secret-refresh-token>", ClientID: "client-id", RefreshScope: "user:inference"},
 	}
@@ -1166,6 +1166,60 @@ func TestClaudeFWGStrictAuxiliaryEndpointsUseExecutor(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("未知 Claude strict endpoint 未 fail-close")
+	}
+}
+
+func TestClaudeFWGCountTokensOfficialIngressIsClosed(t *testing.T) {
+	port := &claudeCapturePort{}
+	runtime, _, _ := newClaudeTestRuntime(t, port)
+	trusted := claudeTestTrustedFacts()
+	trusted.Entrypoint.IngressProtocol = "managed-internal"
+	endpoint, err := runtime.profile.endpoint("count-tokens")
+	if err != nil {
+		t.Fatal(err)
+	}
+	headers := make(http.Header)
+	for _, fact := range endpoint.headers.Facts {
+		if fact.Value != "" {
+			headers.Set(fact.Name, fact.Value)
+		}
+	}
+	sessionID := "77777777-7777-4777-8777-777777777777"
+	headers.Set("X-Claude-Code-Session-Id", sessionID)
+	headers.Set("x-client-request-id", "88888888-8888-4888-8888-888888888888")
+	body := []byte(
+		`{"model":"claude-sonnet-5","messages":[{"role":"user","content":"count"}],"tools":[]}`,
+	)
+	result, err := runtime.ExecuteCountTokens(context.Background(), ClaudeEndpointExecution{
+		Body: body, AccessToken: "token", TrustedFacts: trusted,
+		Ingress:      ClaudeIngressSnapshot{Captured: true, Headers: headers},
+		InvocationID: "99999999-9999-4999-8999-999999999999",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = result.Response.Body.Close()
+	requests := port.snapshot()
+	if len(requests) != 1 ||
+		claudeTestHeaderValue(requests[0].Header, "X-Claude-Code-Session-Id") != sessionID ||
+		!bytes.Equal(result.WireBody, requests[0].Body) {
+		t.Fatalf("Claude 官方 count_tokens 未保持一致会话或 final wire：%+v", requests)
+	}
+
+	_, err = runtime.ExecuteCountTokens(context.Background(), ClaudeEndpointExecution{
+		Body:        []byte(`{"model":"claude-haiku-4-5","messages":[],"tools":[]}`),
+		AccessToken: "token", TrustedFacts: trusted,
+	})
+	if err == nil || !strings.Contains(err.Error(), "model 不在 SupportEnvelope") {
+		t.Fatalf("Claude count_tokens 范围外模型未 fail-close：%v", err)
+	}
+	headers.Set("x-app", "cli-bg")
+	_, err = runtime.ExecuteCountTokens(context.Background(), ClaudeEndpointExecution{
+		Body: body, AccessToken: "token", TrustedFacts: trusted,
+		Ingress: ClaudeIngressSnapshot{Captured: true, Headers: headers},
+	})
+	if err == nil || !strings.Contains(err.Error(), "固定 Header 不一致") {
+		t.Fatalf("Claude 官方 count_tokens 畸形声明未 fail-close：%v", err)
 	}
 }
 

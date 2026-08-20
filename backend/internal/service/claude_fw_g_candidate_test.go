@@ -71,6 +71,8 @@ func (u *claudeFWGServiceUpstream) DoWithTLS(
 		} else {
 			responseBody = `{"id":"msg_fwg","type":"message","role":"assistant","model":"claude-sonnet-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":3,"output_tokens":2}}`
 		}
+	case "/v1/messages/count_tokens":
+		responseBody = `{"input_tokens":42}`
 	case "/v1/oauth/token":
 		responseBody = `{"access_token":"<secret-fresh-access-token>","token_type":"bearer","expires_in":3600,"refresh_token":"<secret-rotated-refresh-token>","scope":"user:inference"}`
 	}
@@ -270,6 +272,68 @@ func TestClaudeFWGServiceIngressSnapshotAndRouteAreClosed(t *testing.T) {
 	different, err := buildClaudeFWGTrustedFacts(c, account, differentParsed)
 	require.NoError(t, err)
 	require.NotEqual(t, trusted.Session.SessionID, different.Session.SessionID)
+}
+
+func TestClaudeFWGServiceCountTokensUsesStrictCandidateRoute(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	upstream := &claudeFWGServiceUpstream{}
+	runtimeState, cfg := newClaudeFWGServiceRuntime(t, upstream)
+	svc := &GatewayService{
+		cfg: cfg, rateLimitService: &RateLimitService{},
+		responseHeaderFilter: compileResponseHeaderFilter(cfg),
+		claudeTokenProvider:  NewClaudeTokenProvider(nil, nil, nil),
+		officialEgress:       runtimeState,
+	}
+	body := []byte(`{"model":"claude-sonnet-5","messages":[{"role":"user","content":"count this"}],"tools":[]}`)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", bytes.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("api_key", &APIKey{ID: 23})
+	c.Request = c.Request.WithContext(
+		WithOfficialClaudeIngressRuntime(c.Request.Context(), c),
+	)
+	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+	require.NoError(t, err)
+	parsed.SessionContext = &SessionContext{
+		ClientIP: "192.0.2.1", UserAgent: "test-client/1.0", APIKeyID: 23,
+	}
+	account := claudeFWGServiceAccount()
+	require.True(t, svc.shouldRouteClaudeFWGCountTokens(c, account))
+	require.NoError(t, svc.ForwardCountTokens(context.Background(), c, account, parsed))
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.JSONEq(t, `{"input_tokens":42}`, recorder.Body.String())
+	require.Len(t, upstream.captures, 1)
+	capture := upstream.captures[0]
+	require.Contains(t, capture.url, "/v1/messages/count_tokens?beta=true")
+	require.Equal(t, "Bearer <secret-candidate-access-token>", capture.header.Get("Authorization"))
+	require.Equal(t, "claude-cli/2.1.226 (external, cli)", capture.header.Get("User-Agent"))
+	require.Equal(t, string(body), string(capture.body))
+	require.Equal(t, string(capture.body), string(parsed.Body.Bytes()))
+	require.NotNil(t, capture.tlsProfile)
+	require.Equal(t, []string{"http/1.1"}, capture.tlsProfile.ALPNProtocols)
+
+	rejectedRecorder := httptest.NewRecorder()
+	rejectedContext, _ := gin.CreateTestContext(rejectedRecorder)
+	rejectedBody := []byte(`{"model":"claude-haiku-4-5","messages":[{"role":"user","content":"count"}],"tools":[]}`)
+	rejectedContext.Request = httptest.NewRequest(
+		http.MethodPost, "/v1/messages/count_tokens", bytes.NewReader(rejectedBody),
+	)
+	rejectedContext.Set("api_key", &APIKey{ID: 23})
+	rejectedParsed, err := ParseGatewayRequest(
+		NewRequestBodyRef(rejectedBody), PlatformAnthropic,
+	)
+	require.NoError(t, err)
+	err = svc.ForwardCountTokens(context.Background(), rejectedContext, account, rejectedParsed)
+	require.ErrorContains(t, err, "model 不在 SupportEnvelope")
+	require.Equal(t, http.StatusBadRequest, rejectedRecorder.Code)
+	require.Len(t, upstream.captures, 1)
+
+	c.Request.URL.RawQuery = "beta=true"
+	require.False(t, svc.shouldRouteClaudeFWGCountTokens(c, account))
+	c.Request.URL.RawQuery = ""
+	account.Type = AccountTypeAPIKey
+	require.False(t, svc.shouldRouteClaudeFWGCountTokens(c, account))
 }
 
 func TestClaudeFWGServicePlannerSessionCarriesPreviousResponse(t *testing.T) {
