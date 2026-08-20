@@ -300,6 +300,41 @@ for index in range(2):
         summary = _validate_claude("a2", 0, _jsonl(records))
         self.assertTrue(summary["valid"], summary)
 
+    def test_nested_agent_model_text_and_default_false_are_not_wire_gates(self) -> None:
+        """模型改写提示词或省略默认 false 时，客户端嵌套链仍应成立。"""
+
+        records = _claude_agent_records("a2")
+        first_use = records[0]["message"]["content"][0]
+        del first_use["input"]["run_in_background"]
+        first_use["input"]["prompt"] += "；请自行选择简洁措辞。"
+        records.insert(
+            -1,
+            {
+                "type": "result",
+                "subtype": "success",
+                "result": "子代理本地成功终态。",
+            },
+        )
+        records[-1]["result"] = "两层子代理均已完成。"
+
+        summary = _validate_claude("a2", 0, _jsonl(records))
+
+        self.assertTrue(summary["valid"], summary)
+        self.assertFalse(summary["markers_present"])
+        self.assertEqual(summary["result_count"], 2)
+        self.assertTrue(summary["agent_chain_valid"])
+        self.assertFalse(summary["agent_chain"][0]["prompt_exact"])
+
+    def test_nested_agent_background_true_changes_chain_and_is_rejected(self) -> None:
+        records = _claude_agent_records("a2")
+        first_use = records[0]["message"]["content"][0]
+        first_use["input"]["run_in_background"] = True
+
+        summary = _validate_claude("a2", 0, _jsonl(records))
+
+        self.assertFalse(summary["valid"])
+        self.assertFalse(summary["agent_chain_valid"])
+
     def test_nested_agent_wrong_parent_is_rejected(self) -> None:
         records = _claude_agent_records("a2")
         second_use = next(

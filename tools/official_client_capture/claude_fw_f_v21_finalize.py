@@ -276,8 +276,17 @@ def _m_paths(run_dir: Path) -> list[Path]:
     return values
 
 
-def load_campaign(campaign_root: Path) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
-    """校验 77 个正式 attempt，并解析全部官方请求。"""
+def load_campaign(
+    campaign_root: Path,
+    *,
+    expected_source_sha256: str = EXPECTED_SOURCE_SHA256,
+    production_comparison_relative: str = "environment/production-diff.json",
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """校验 77 个正式 attempt，并解析全部官方请求。
+
+    默认参数永久保持 complete-v21 的历史身份。FW-G 独立复测只能显式传入
+    自身冻结的执行源摘要和生产对比收据路径，禁止修改常量后伪装成 v21。
+    """
 
     campaign = load_json(campaign_root / "campaign.json")
     catalog = load_json(campaign_root / "scenario-catalog.json")
@@ -288,7 +297,10 @@ def load_campaign(campaign_root: Path) -> tuple[dict[str, Any], dict[str, dict[s
     require(summary.get("schema_version") == SUMMARY_SCHEMA, "执行摘要 schema 不匹配")
     require(campaign.get("target_version") == catalog.get("target_version") == summary.get("target_version") == TARGET_VERSION, "目标版本不一致")
     require(summary.get("target_binary_sha256") == TARGET_BINARY_SHA256, "目标二进制摘要不一致")
-    require(summary.get("capture_source_bundle_sha256") == EXPECTED_SOURCE_SHA256, "取证执行源摘要不一致")
+    require(
+        summary.get("capture_source_bundle_sha256") == expected_source_sha256,
+        "取证执行源摘要不一致",
+    )
     require(summary.get("result") == "passed", "v21 Campaign 未通过")
     require(summary.get("probe_count") == summary.get("passed_count") == 77, "v21 不是 77/77")
     require(summary.get("failed_count") == 0, "v21 仍有失败场景")
@@ -301,7 +313,12 @@ def load_campaign(campaign_root: Path) -> tuple[dict[str, Any], dict[str, dict[s
     }, "隐私配置边界不一致")
     require(denominator.get("counts") == EXPECTED_DENOMINATOR_COUNTS, "593 候选分母分组不一致")
     require(denominator.get("total_orthogonal_candidates") == 593, "候选总分母不是 593")
-    production_diff = load_json(campaign_root / "environment" / "production-diff.json")
+    production_comparison_path = campaign_root / production_comparison_relative
+    require(
+        production_comparison_path.resolve().is_relative_to(campaign_root.resolve()),
+        "生产对比收据路径越出 Campaign",
+    )
+    production_diff = load_json(production_comparison_path)
     require(
         production_diff.get("result") == "passed"
         and production_diff.get("differences") == [],
@@ -326,7 +343,14 @@ def load_campaign(campaign_root: Path) -> tuple[dict[str, Any], dict[str, dict[s
         require(manifest.get("m_binding", {}).get("complete") is True, f"{probe_id} M 未闭合")
         require(manifest.get("m_binding", {}).get("limitations") == [], f"{probe_id} M 仍有限制")
         require(manifest.get("client", {}).get("sha256") == TARGET_BINARY_SHA256, f"{probe_id} 二进制摘要漂移")
-        require(manifest.get("runtime", {}).get("capture_tools", {}).get("execution_sources", {}).get("sha256") == EXPECTED_SOURCE_SHA256, f"{probe_id} 执行源漂移")
+        require(
+            manifest.get("runtime", {})
+            .get("capture_tools", {})
+            .get("execution_sources", {})
+            .get("sha256")
+            == expected_source_sha256,
+            f"{probe_id} 执行源漂移",
+        )
         require(manifest.get("credential_scrubbing", {}).get("verified") is True, f"{probe_id} 等长脱敏未通过")
         require(manifest.get("secret_scan", {}).get("passed") is True, f"{probe_id} secret scan 未通过")
         require(manifest.get("cleanup") == {"hosts_restored": True, "relay_stopped": True}, f"{probe_id} cleanup 未闭合")
@@ -516,8 +540,27 @@ def build_wire_inventory(
     campaign_root: Path,
     inputs: dict[str, Any],
     runs: dict[str, dict[str, Any]],
+    *,
+    expected_request_occurrence_count: int = 395,
+    expected_endpoint_counts: dict[str, int] | None = None,
 ) -> dict[str, Any]:
-    """生成内容对象与出现位置分离的全量 WireInventory。"""
+    """生成内容对象与出现位置分离的全量 WireInventory。
+
+    默认分母永久保持 complete-v21 的历史身份。后继独立 Campaign 必须显式
+    传入自身冻结的实际分母；该计数只校验证据完整性，不把“是否产生某类
+    流量”提升为客户端仿真规则。
+    """
+
+    endpoint_counts_contract = (
+        EXPECTED_ENDPOINT_COUNTS
+        if expected_endpoint_counts is None
+        else expected_endpoint_counts
+    )
+    require(expected_request_occurrence_count > 0, "请求分母必须大于零")
+    require(
+        sum(endpoint_counts_contract.values()) == expected_request_occurrence_count,
+        "端点分母与请求总分母不一致",
+    )
 
     contents: dict[str, dict[str, Any]] = {}
     occurrences: list[dict[str, Any]] = []
@@ -561,8 +604,15 @@ def build_wire_inventory(
                 }
             )
             endpoint_counts[request["egress_id"]] += 1
-    require(len(occurrences) == 395, f"全请求分母不是 395：{len(occurrences)}")
-    require(dict(sorted(endpoint_counts.items())) == EXPECTED_ENDPOINT_COUNTS, f"端点分母不一致：{dict(endpoint_counts)}")
+    require(
+        len(occurrences) == expected_request_occurrence_count,
+        f"全请求分母不是 {expected_request_occurrence_count}：{len(occurrences)}",
+    )
+    require(
+        dict(sorted(endpoint_counts.items()))
+        == dict(sorted(endpoint_counts_contract.items())),
+        f"端点分母不一致：{dict(endpoint_counts)}",
+    )
     return {
         "schema_version": WIRE_INVENTORY_SCHEMA,
         "target_version": TARGET_VERSION,

@@ -1,0 +1,433 @@
+{
+  "schema_version": "claude-code-fw-g-implementation-coverage/v1",
+  "target_version": "2.1.226",
+  "required_rules_manifest_sha256": "50261962778b8a7cf85f2dd01a8057f8004e92c0978456e88d9457d4ef8030b3",
+  "implementation_base_commit": "19a2e8ba719b35803992eb7b01bd73bee6bc1a24",
+  "required_rule_count": 40,
+  "entries": [
+    {
+      "spec_id": "SPEC-BODY-001",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_body.go", "symbol": "compileClaudeMessagesBody"},
+        {"path": "backend/internal/officialegress/claude_body.go", "symbol": "marshalClaudeOrderedObject"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGApprovedScenarioMatrixCompilesFrozenWire"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-BODY-002",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_identity.go", "symbol": "buildClaudeMetadataUserID"},
+        {"path": "backend/internal/officialegress/claude_body.go", "symbol": "compileClaudeMessagesBody"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGConditionalHeadersMetadataCacheEffortAndTransport"},
+        {"path": "backend/internal/service/claude_fw_g_candidate_test.go", "symbol": "TestClaudeFWGServiceIngressSnapshotAndRouteAreClosed"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-BODY-003",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_body.go", "symbol": "parseClaudeInboundSystem"},
+        {"path": "backend/internal/officialegress/claude_body.go", "symbol": "buildClaudeScenarioSystem"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGApprovedScenarioMatrixCompilesFrozenWire"},
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGThirdPartyCustomSystemUsesApprovedManagedBranch"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-BODY-004",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "prepareClaudeSessionRequest"},
+        {"path": "backend/internal/officialegress/claude_body.go", "symbol": "compileClaudeMessagesBody"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGSessionLineagesAndConcurrencyAreIndependent"},
+        {"path": "backend/internal/service/claude_fw_g_candidate_test.go", "symbol": "TestClaudeFWGServicePlannerSessionCarriesPreviousResponse"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-BODY-005",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_tools.go", "symbol": "compileClaudeApprovedTools"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGToolPolicyIsClosed"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-BODY-007",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_body.go", "symbol": "compileClaudeMessagesBody"},
+        {"path": "backend/internal/officialegress/claude_identity.go", "symbol": "deriveClaudeIdentityFacts"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGApprovedScenarioMatrixCompilesFrozenWire"},
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGOfficialIngressRoundTripsPersonaWire"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-BODY-008",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_body.go", "symbol": "selectClaudeWireScenario"},
+        {"path": "backend/internal/officialegress/claude_body.go", "symbol": "compileClaudeMessagesBody"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGApprovedScenarioMatrixCompilesFrozenWire"},
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGModelAndStreamFallbackKeepHaikuShape"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-BODY-043",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "compileClaudeEndpointBody"},
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "compileClaudeEndpointHeaders"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGThirdPartyMessagesUsesUnifiedStrictChain"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-BODY-048",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_body.go", "symbol": "selectClaudeWireScenario"},
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "prepareClaudeSessionRequest"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGApprovedScenarioMatrixCompilesFrozenWire"},
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGTUITitleMustPrecedeMainRequest"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-CACHE-005",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_body.go", "symbol": "normalizeClaudeCacheControl"},
+        {"path": "backend/internal/officialegress/claude_body.go", "symbol": "buildClaudeScenarioSystem"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGConditionalHeadersMetadataCacheEffortAndTransport"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-CONN-010",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "claudeRetryableStatus"},
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "claudeRetryDelay"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGRetryStatusBudgetAndRetryAfterPolicyAreClosed"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-CONN-018",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "newClaudeStreamFallback"},
+        {"path": "backend/internal/officialegress/claude_body.go", "symbol": "claudeNonStreamModelShape"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWG404FallbackIgnoresStreamInterruptDisableFlag"},
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGStreamFallbackCommitsFallbackResponseID"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-CONN-019",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_wire.go", "symbol": "claudeResourceLifecycle"},
+        {"path": "backend/internal/officialegress/claude_wire.go", "symbol": "claudeTLSProfileSpec"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGConditionalHeadersMetadataCacheEffortAndTransport"},
+        {"path": "backend/internal/service/claude_fw_g_candidate_test.go", "symbol": "TestClaudeFWGServiceCandidateUsesStrictTransportContext"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-CONN-021",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "executeClaudeMessagesAttempts"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGTransportErrorIsRetryableWithoutStateReuse"},
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGRetryStatusBudgetAndRetryAfterPolicyAreClosed"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-CONN-023",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_body.go", "symbol": "claudeFallbackModelShape"},
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "executeClaudeMessagesAttempts"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGModelAndStreamFallbackKeepHaikuShape"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-EP-001",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_profile.go", "symbol": "buildClaudeEndpointProfile"},
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "ExecuteMessages"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGThirdPartyMessagesUsesUnifiedStrictChain"},
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGOfficialIngressRoundTripsPersonaWire"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-EP-002",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "executeClaudeStartup"},
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "ExecuteEndpoint"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGStartupBranchesMatchEntrypointAndBackground"},
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGStrictAuxiliaryEndpointsUseExecutor"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-EP-005",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "executeClaudeStartupEndpoint"},
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "ExecuteEndpoint"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGStartupAcceptsOnlyApprovedAbsentManagedState"},
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGStrictAuxiliaryEndpointsUseExecutor"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-EP-006",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "executeClaudeStartupEndpoint"},
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "ExecuteEndpoint"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGStartupAcceptsOnlyApprovedAbsentManagedState"},
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGStrictAuxiliaryEndpointsUseExecutor"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-EP-007",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "executeClaudeStartup"},
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "ExecuteEndpoint"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGStartupBranchesMatchEntrypointAndBackground"},
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGStrictAuxiliaryEndpointsUseExecutor"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-EP-008",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "executeClaudeStartup"},
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "executeClaudeStartupOnce"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGStartupBranchesMatchEntrypointAndBackground"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-EP-009",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "parseClaudeCountTokens"},
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "ExecuteEndpoint"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGStrictAuxiliaryEndpointsUseExecutor"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-EP-010",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "compileClaudeEndpointBody"},
+        {"path": "backend/internal/service/claude_fw_g_token_refresher.go", "symbol": "newClaudeFWGTokenRefresher"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGStrictAuxiliaryEndpointsUseExecutor"},
+        {"path": "backend/internal/service/claude_fw_g_candidate_test.go", "symbol": "TestClaudeFWGServiceRefreshUsesStrictEndpoint"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-EP-011",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "executeClaudeStartup"},
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "ExecuteEndpoint"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGStartupBranchesMatchEntrypointAndBackground"},
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGStrictAuxiliaryEndpointsUseExecutor"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-HDR-001",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "compileClaudeEndpointHeaders"},
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "compileClaudeMessagesHeaderOrder"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGThirdPartyMessagesUsesUnifiedStrictChain"},
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGOfficialIngressRoundTripsPersonaWire"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-HDR-002",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "compileClaudeUserAgent"},
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "compileClaudeEndpointHeaders"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGApprovedScenarioMatrixCompilesFrozenWire"},
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGConditionalHeadersMetadataCacheEffortAndTransport"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-HDR-003",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_body.go", "symbol": "compileClaudeBeta"},
+        {"path": "backend/internal/officialegress/claude_tools.go", "symbol": "claudeToolBeta"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGApprovedScenarioMatrixCompilesFrozenWire"},
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGToolPolicyIsClosed"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-HDR-009",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_identity.go", "symbol": "deriveClaudeIdentityFacts"},
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "compileClaudeEndpointHeaders"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGConditionalHeadersMetadataCacheEffortAndTransport"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-HDR-012",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_identity.go", "symbol": "deriveClaudeIdentityFacts"},
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "prepareClaudeSessionRequest"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGSessionLineagesAndConcurrencyAreIndependent"},
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGForkRequiresNewSessionAndTracksRequestOwnership"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-HDR-014",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_identity.go", "symbol": "validateClaudeAgentLineage"},
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "prepareClaudeSessionRequest"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGAgentLineageRequiresAcceptedParentAndMaxThreeLevels"},
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGToolUseResultRelationsAreClosed"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-HDR-029",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "parseClaudeCustomHeaders"},
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "compileClaudeMessagesHeaderOrder"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGThirdPartyMessagesUsesUnifiedStrictChain"},
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGConditionalHeadersMetadataCacheEffortAndTransport"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-PROTO-001",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_wire.go", "symbol": "claudeTLSProfileSpec"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGConditionalHeadersMetadataCacheEffortAndTransport"},
+        {"path": "backend/internal/service/claude_fw_g_candidate_test.go", "symbol": "TestClaudeFWGServiceCandidateUsesStrictTransportContext"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-STATE-009",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_identity.go", "symbol": "deriveClaudeIdentityFacts"},
+        {"path": "backend/internal/officialegress/claude_body.go", "symbol": "selectClaudeBackgroundScenario"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGStartupBranchesMatchEntrypointAndBackground"},
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGApprovedScenarioMatrixCompilesFrozenWire"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-TLS-001",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_wire.go", "symbol": "validateClaudeTLSVector"},
+        {"path": "backend/internal/officialegress/claude_wire.go", "symbol": "claudeTLSProfileSpec"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGConditionalHeadersMetadataCacheEffortAndTransport"},
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGStrictAuxiliaryEndpointsUseExecutor"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-TLS-003",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_profile.go", "symbol": "buildClaudeEndpointProfile"},
+        {"path": "backend/internal/officialegress/claude_wire.go", "symbol": "claudeTLSProfileSpec"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGConditionalHeadersMetadataCacheEffortAndTransport"},
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGStrictAuxiliaryEndpointsUseExecutor"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-TOOL-018",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_tools.go", "symbol": "compileClaudeStructuredOutputTool"},
+        {"path": "backend/internal/officialegress/claude_tools.go", "symbol": "compileClaudeApprovedTools"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGToolPolicyIsClosed"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-TOOL-019",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_tools.go", "symbol": "compileClaudeApprovedTools"},
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "validateClaudeMessageRelations"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGToolPolicyIsClosed"},
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGToolUseResultRelationsAreClosed"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-TOOL-021",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_tools.go", "symbol": "compileClaudeApprovedTools"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGToolPolicyIsClosed"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-TOOL-023",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_tools.go", "symbol": "compileClaudeApprovedTools"},
+        {"path": "backend/internal/officialegress/claude_tools.go", "symbol": "claudeToolBeta"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGToolPolicyIsClosed"}
+      ]
+    },
+    {
+      "spec_id": "SPEC-TOOL-024",
+      "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_tools.go", "symbol": "compileClaudeApprovedTools"},
+        {"path": "backend/internal/officialegress/claude_runtime.go", "symbol": "prepareClaudeSessionRequest"}
+      ],
+      "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGWebSearchRequiresOuterServerContinuationOrder"},
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGToolUseResultRelationsAreClosed"}
+      ]
+    }
+  ]
+}
