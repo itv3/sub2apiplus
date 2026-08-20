@@ -112,6 +112,26 @@ def client_reset_handshake_connection(connection_id: int = 4) -> dict:
     }
 
 
+def live_empty_handshake_connection(connection_id: int = 6) -> dict:
+    """构造 live 客户端并发预连接在应用字节前自行关闭的精确终态。"""
+
+    return {
+        "connection_id": connection_id,
+        "client_alpn_offer": ["http/1.1"],
+        "alpn_source": "assumed",
+        "client_alpn": None,
+        "sni": "api.anthropic.com",
+        "upstream_alpn_offer": None,
+        "upstream_alpn": None,
+        "valid": True,
+        "bytes": {},
+        "sha256": {},
+        "segments": [],
+        "opened_at_unix_ms": 1000,
+        "closed_at_unix_ms": 1100,
+    }
+
+
 def synthetic_messages_request(model: str, *, stream: bool | None = True) -> bytes:
     payload = {"model": model, "messages": []}
     if stream is not None:
@@ -475,6 +495,7 @@ class ClaudeFWERelayTests(unittest.TestCase):
                         relay_shutdown_handshake_connection(),
                         client_reset_handshake_connection(),
                         reset_without_errno,
+                        live_empty_handshake_connection(),
                         valid,
                     ],
                 },
@@ -483,8 +504,8 @@ class ClaudeFWERelayTests(unittest.TestCase):
             result = _validate_relay_integrity(root)
 
             self.assertEqual(result["connection_count"], 1)
-            self.assertEqual(result["total_connection_count"], 5)
-            self.assertEqual(result["excluded_handshake_connection_count"], 4)
+            self.assertEqual(result["total_connection_count"], 6)
+            self.assertEqual(result["excluded_handshake_connection_count"], 5)
             self.assertEqual(
                 result["excluded_connections"],
                 [
@@ -508,8 +529,30 @@ class ClaudeFWERelayTests(unittest.TestCase):
                         "reason": "client_reset_transport_before_tls_handshake",
                         "manifest_error": "ConnectionResetError: ",
                     },
+                    {
+                        "connection_id": 6,
+                        "reason": "live_client_closed_tls_handshake_before_application_data",
+                        "manifest_error": None,
+                    },
                 ],
             )
+
+    def test_integrity_rejects_hidden_bytes_for_live_empty_handshake(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            write_json(
+                root / "relay.json",
+                {
+                    "schema_version": "byte-relay/v1",
+                    "mode": "direct",
+                    "upstream_host": "api.anthropic.com",
+                    "credential_scrubbing": {"byte_offsets_preserved": True},
+                    "connections": [live_empty_handshake_connection()],
+                },
+            )
+            (root / "conn006.client_to_upstream.bin").write_bytes(b"x")
+            with self.assertRaisesRegex(RelayEvidenceError, "隐藏了未声明字节"):
+                _validate_relay_integrity(root)
 
     def test_integrity_rejects_non_exact_client_reset(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

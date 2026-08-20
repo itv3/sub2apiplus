@@ -102,6 +102,9 @@ RELAY_SHUTDOWN_HANDSHAKE_TERMINATION_REASON = (
 CLIENT_RESET_HANDSHAKE_TERMINATION_REASON = (
     "client_reset_transport_before_tls_handshake"
 )
+LIVE_EMPTY_HANDSHAKE_TERMINATION_REASON = (
+    "live_client_closed_tls_handshake_before_application_data"
+)
 ONE_SIDED_SHUTDOWN_TERMINATION_REASON = (
     "relay_shutdown_after_complete_client_request_before_upstream_response"
 )
@@ -989,6 +992,55 @@ def _validate_relay_integrity(
         if connection_id in connection_ids:
             raise RelayEvidenceError("relay connection_id 重复。")
         connection_ids.add(connection_id)
+        live_empty_keys = {
+            "connection_id",
+            "client_alpn_offer",
+            "alpn_source",
+            "client_alpn",
+            "sni",
+            "upstream_alpn_offer",
+            "upstream_alpn",
+            "valid",
+            "bytes",
+            "sha256",
+            "segments",
+            "opened_at_unix_ms",
+            "closed_at_unix_ms",
+        }
+        opened_at = item.get("opened_at_unix_ms")
+        closed_at = item.get("closed_at_unix_ms")
+        exact_live_empty_handshake = (
+            synthetic_plan is None
+            and set(item) == live_empty_keys
+            and item.get("client_alpn_offer") == ["http/1.1"]
+            and item.get("alpn_source") == "assumed"
+            and item.get("client_alpn") is None
+            and item.get("sni") == target_host
+            and item.get("upstream_alpn_offer") is None
+            and item.get("upstream_alpn") is None
+            and item.get("valid") is True
+            and item.get("bytes") == {}
+            and item.get("sha256") == {}
+            and item.get("segments") == []
+            and isinstance(opened_at, int)
+            and isinstance(closed_at, int)
+            and opened_at <= closed_at
+        )
+        if exact_live_empty_handshake:
+            unexpected_bytes = any(
+                (relay_root / f"conn{connection_id:03d}.{direction}.bin").exists()
+                for direction in ("client_to_upstream", "upstream_to_client")
+            )
+            if unexpected_bytes:
+                raise RelayEvidenceError("relay 空 live TLS 连接隐藏了未声明字节。")
+            excluded.append(
+                {
+                    "connection_id": connection_id,
+                    "reason": LIVE_EMPTY_HANDSHAKE_TERMINATION_REASON,
+                    "manifest_error": None,
+                }
+            )
+            continue
         if item.get("valid") is not True:
             common_keys = {
                 "connection_id",
@@ -1003,8 +1055,6 @@ def _validate_relay_integrity(
             }
             optional_keys = {"sni"}
             actual_keys = set(item)
-            opened_at = item.get("opened_at_unix_ms")
-            closed_at = item.get("closed_at_unix_ms")
             common_empty_handshake = (
                 item.get("client_alpn_offer") == ["http/1.1"]
                 and item.get("alpn_source") == "assumed"
