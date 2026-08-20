@@ -31,6 +31,9 @@ var (
 	claudeOfficialUAPattern = regexp.MustCompile(
 		`^claude-cli/2\.1\.226 \(external, (sdk-cli|cli)((?:, (?:agent-sdk|client-app|workload)/[A-Za-z0-9._:/-]+)*)\)$`,
 	)
+	claudeDesktopThirdPartyUAPattern = regexp.MustCompile(
+		`^claude-cli/[0-9]+\.[0-9]+\.[0-9]+ \(external, claude-desktop-3p, agent-sdk/[0-9]+\.[0-9]+\.[0-9]+\)$`,
+	)
 	claudeCCHPattern = regexp.MustCompile(`^[0-9a-f]{5}$`)
 )
 
@@ -46,6 +49,11 @@ func resolveClaudeOfficialIngressBase(
 	}
 	headers := snapshot.Headers.Clone()
 	userAgent := strings.TrimSpace(headers.Get("User-Agent"))
+	// claude-desktop-3p 明确表示第三方网关入口，不能把它的客户端版本
+	// 或 Header 当作目标 Release 的可信官方身份。
+	if claudeDesktopThirdPartyUAPattern.MatchString(userAgent) {
+		return trusted, claudeOfficialIngressState{}, false, nil
+	}
 	claimed := strings.HasPrefix(strings.ToLower(userAgent), "claude-cli/")
 	if !claimed {
 		return trusted, claudeOfficialIngressState{}, false, nil
@@ -177,6 +185,9 @@ func resolveClaudeOfficialCountTokensIngress(
 	}
 	headers := snapshot.Headers.Clone()
 	userAgent := strings.TrimSpace(headers.Get("User-Agent"))
+	if claudeDesktopThirdPartyUAPattern.MatchString(userAgent) {
+		return trusted, nil
+	}
 	if !strings.HasPrefix(strings.ToLower(userAgent), "claude-cli/") {
 		return trusted, nil
 	}

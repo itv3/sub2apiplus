@@ -1,0 +1,36 @@
+{
+  "schema_version": "official-egress-claude-fw-g-desktop-ingress-source-transition/v1",
+  "date": "2026-08-20",
+  "phase": "FW-G",
+  "base_commit": "4ada0887f95045e980c629f144150a59f7936862",
+  "trigger": "DMIT 真实 Claude Desktop 第三方网关请求携带 beta=true query 与 claude-desktop-3p User-Agent，既有 Candidate 将合法入口误判为目标 Release 官方身份并 fail-close",
+  "prior_transitions": [
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-support-envelope-source-transition.json",
+      "sha256": "70ff3e96565a9c758e9708523d5e07a2b45038b36942fb02b6556d67dfe3e170"
+    },
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-support-envelope-test-transition.json",
+      "sha256": "ae56ba2028807b88bb0d2d9a02bad25de5bc6c2a760289eddaf3df2cce531629"
+    }
+  ],
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/claude_ingress.go",
+      "from_sha256": "eec9e4c32e1d53f2e470cd5d3e86405e78d15370227597757ea1ed18521143fd",
+      "to_sha256": "aac2e5e9326cb97a14f0b0bcf81505418a54bc233bef85f14099d68d5ae6f57e",
+      "reason": "把 claude-desktop-3p 明确归入不继承目标 Release 身份的第三方标准 API 入口；其他未批准 claude-cli 官方身份声明继续 fail-close。"
+    },
+    {
+      "path": "backend/internal/service/gateway_claude_fw_g.go",
+      "from_sha256": "2c0cebeb86d90296d83d3e9b75b26d7aeeab7f42f17bd7d27db1471a13c54267",
+      "to_sha256": "1a43809d795bf4cd03b721a1faef2758f7100b1b3ff2f85bc51f9131347bde2e",
+      "reason": "messages 与 count_tokens 入站允许无 query 或官方桌面客户端使用的精确 beta=true；裸问号、未知、重复和附加参数仍在进入上游前 fail-close。"
+    }
+  ],
+  "production_selector_changed": false,
+  "vircs_service_changed": false,
+  "dmit_candidate_rebuild_required": true,
+  "codex_final_wire": "zero_difference_required",
+  "result": "passed"
+}

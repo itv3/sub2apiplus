@@ -73,6 +73,10 @@ func (s *GatewayService) shouldRouteClaudeFWGCountTokens(c *gin.Context, account
 		(path == "/v1/messages/count_tokens" || path == "/messages/count_tokens")
 }
 
+func claudeFWGIngressQueryAllowed(rawQuery string, forceQuery bool) bool {
+	return !forceQuery && (rawQuery == "" || rawQuery == "beta=true")
+}
+
 func (s *GatewayService) forwardClaudeFWGCountTokens(
 	ctx context.Context,
 	c *gin.Context,
@@ -82,7 +86,7 @@ func (s *GatewayService) forwardClaudeFWGCountTokens(
 	if c == nil || c.Request == nil || c.Request.URL == nil {
 		return errors.New("Claude FW-G count_tokens 缺少有效入口")
 	}
-	if c.Request.URL.RawQuery != "" {
+	if !claudeFWGIngressQueryAllowed(c.Request.URL.RawQuery, c.Request.URL.ForceQuery) {
 		s.countTokensError(
 			c,
 			http.StatusBadRequest,
@@ -188,7 +192,7 @@ func (s *GatewayService) forwardClaudeFWGCandidate(
 	if c == nil || c.Request == nil || c.Request.URL == nil {
 		return nil, errors.New("Claude FW-G candidate 缺少有效入口")
 	}
-	if c.Request.URL.RawQuery != "" {
+	if !claudeFWGIngressQueryAllowed(c.Request.URL.RawQuery, c.Request.URL.ForceQuery) {
 		writeAnthropicError(
 			c,
 			http.StatusBadRequest,

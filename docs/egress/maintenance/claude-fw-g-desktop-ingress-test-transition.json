@@ -1,0 +1,49 @@
+{
+  "schema_version": "official-egress-claude-fw-g-desktop-ingress-test-transition/v1",
+  "date": "2026-08-20",
+  "phase": "FW-G",
+  "base_commit": "4ada0887f95045e980c629f144150a59f7936862",
+  "source_transition": {
+    "path": "docs/egress/maintenance/claude-fw-g-desktop-ingress-source-transition.json",
+    "sha256": "be30a4f8f65fd95adab521093cc3c7da9f45796ebf6fdc7e461e92044a40a71d"
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/claude_desktop_third_party_ingress_test.go",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "6d29f1e04f30eaa7201a108c622419ff46f16f8104634cdaed7b94d4255cb66a",
+      "reason": "证明 Claude Desktop 第三方网关入口不继承目标 Release 身份，而未批准版本的官方 cli 身份声明继续 fail-close。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_alias_route_transition_test.go",
+      "from_sha256": "368e08ed053cd26e0e8aecdf35e25aecf19527298dad2efffdf55c6794eb0136",
+      "to_sha256": "7357b32caa9c130f814a096da9c7c9b3b0f2186ae7a13efaa1498d3e77cddd96",
+      "reason": "历史裸路径别名 transition 只接受本次 Desktop 入站修复的精确追加承接。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_count_tokens_transition_test.go",
+      "from_sha256": "9e06356d182463d32b4a4174fa9735c0bafbae13d3a313c03fa1d0edb38037c0",
+      "to_sha256": "1fb21b1fc703d2c9556b3294db34c890cc0f44e8b9d11f46ba00f99ad8fa09bb",
+      "reason": "历史 count_tokens transition 只接受本次 Desktop 入站修复的精确追加承接。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_query_fail_close_transition_test.go",
+      "from_sha256": "d261488f8aee7b9833adf7723d110bfcba7e76cee66ce7abf700b3680ae9b428",
+      "to_sha256": "b0d550d26245a3725b15a8d1c1c5799303ec9db37a66ab6e99c1b1f967abf673",
+      "reason": "历史未知 query fail-close transition 只接受 beta=true 正例闭集的精确追加承接。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_support_envelope_transition_test.go",
+      "from_sha256": "b878caf77318a4fb12177d2a7f6001f0432e768235ec5c439ae72eb3d77a2bfb",
+      "to_sha256": "b13c848eeb8e7a7ded6a056650ad5e7ba8389765ed52686a59a2a17592c7edb0",
+      "reason": "既有 SupportEnvelope transition 只接受本次第三方 Desktop 入口适配的精确追加承接。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_desktop_query_test.go",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "663f8ed3a170bbcba4e7a825b02ae39fdb6d311f636e1030c662518152bac5dc",
+      "reason": "覆盖官方桌面客户端 beta=true 的 messages 与 count_tokens 正例、query 闭集负例及固定 2.1.226 出站身份。"
+    }
+  ],
+  "result": "passed"
+}

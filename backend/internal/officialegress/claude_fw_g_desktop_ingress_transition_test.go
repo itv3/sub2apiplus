@@ -8,37 +8,37 @@ import (
 )
 
 const (
-	claudeFWGSupportEnvelopeSourceSHA256 = "70ff3e96565a9c758e9708523d5e07a2b45038b36942fb02b6556d67dfe3e170"
-	claudeFWGSupportEnvelopeTestSHA256   = "ae56ba2028807b88bb0d2d9a02bad25de5bc6c2a760289eddaf3df2cce531629"
+	claudeFWGDesktopIngressSourceSHA256 = "be30a4f8f65fd95adab521093cc3c7da9f45796ebf6fdc7e461e92044a40a71d"
+	claudeFWGDesktopIngressTestSHA256   = "edc54d5f2034dbf3bfefc8013fc874dfe4a95d94b1d78e554c85065b2a45f476"
 )
 
-func loadClaudeFWGSupportEnvelopeSourceReceipt() (
+func loadClaudeFWGDesktopIngressSourceReceipt() (
 	claudeFWGQueryFailCloseSourceReceipt,
 	error,
 ) {
 	var receipt claudeFWGQueryFailCloseSourceReceipt
 	raw, err := readClaudeFWGCountTokensReceipt(
-		"docs/egress/maintenance/claude-fw-g-support-envelope-source-transition.json",
+		"docs/egress/maintenance/claude-fw-g-desktop-ingress-source-transition.json",
 		&receipt,
 	)
 	if err != nil {
 		return receipt, err
 	}
-	if claudeFWGCountTokensDigest(raw) != claudeFWGSupportEnvelopeSourceSHA256 ||
+	if claudeFWGCountTokensDigest(raw) != claudeFWGDesktopIngressSourceSHA256 ||
 		receipt.SchemaVersion !=
-			"official-egress-claude-fw-g-support-envelope-source-transition/v1" ||
+			"official-egress-claude-fw-g-desktop-ingress-source-transition/v1" ||
 		receipt.Date != "2026-08-20" || receipt.Phase != "FW-G" ||
-		receipt.BaseCommit != "5ad45153ade7c61e0fe38e3f9f951d24d32eef5c" ||
-		len(receipt.Prior) != 2 || len(receipt.Transitions) != 3 ||
+		receipt.BaseCommit != "4ada0887f95045e980c629f144150a59f7936862" ||
+		len(receipt.Prior) != 2 || len(receipt.Transitions) != 2 ||
 		receipt.ProductionSelectorChanged || receipt.VircsServiceChanged ||
 		!receipt.DMITCandidateRebuild ||
 		receipt.CodexFinalWire != "zero_difference_required" || receipt.Result != "passed" {
-		return receipt, errors.New("Claude FW-G SupportEnvelope source transition 顶层事实非法")
+		return receipt, errors.New("Claude FW-G Desktop 入站 source transition 顶层事实非法")
 	}
 	for _, prior := range receipt.Prior {
 		priorRaw, err := os.ReadFile(filepath.Join("../../..", filepath.FromSlash(prior.Path)))
 		if err != nil || claudeFWGCountTokensDigest(priorRaw) != prior.SHA256 {
-			return receipt, errors.New("Claude FW-G SupportEnvelope prior transition 摘要不一致")
+			return receipt, errors.New("Claude FW-G Desktop 入站 prior transition 摘要不一致")
 		}
 	}
 	if err := validateClaudeFWGCountTokensTransitions(receipt.Transitions); err != nil {
@@ -47,27 +47,27 @@ func loadClaudeFWGSupportEnvelopeSourceReceipt() (
 	return receipt, nil
 }
 
-func loadClaudeFWGSupportEnvelopeTestReceipt(
+func loadClaudeFWGDesktopIngressTestReceipt(
 	source claudeFWGQueryFailCloseSourceReceipt,
 ) (claudeFWGQueryFailCloseTestReceipt, error) {
 	var receipt claudeFWGQueryFailCloseTestReceipt
 	raw, err := readClaudeFWGCountTokensReceipt(
-		"docs/egress/maintenance/claude-fw-g-support-envelope-test-transition.json",
+		"docs/egress/maintenance/claude-fw-g-desktop-ingress-test-transition.json",
 		&receipt,
 	)
 	if err != nil {
 		return receipt, err
 	}
-	if claudeFWGCountTokensDigest(raw) != claudeFWGSupportEnvelopeTestSHA256 ||
+	if claudeFWGCountTokensDigest(raw) != claudeFWGDesktopIngressTestSHA256 ||
 		receipt.SchemaVersion !=
-			"official-egress-claude-fw-g-support-envelope-test-transition/v1" ||
+			"official-egress-claude-fw-g-desktop-ingress-test-transition/v1" ||
 		receipt.Date != "2026-08-20" || receipt.Phase != "FW-G" ||
 		receipt.BaseCommit != source.BaseCommit || receipt.Result != "passed" ||
 		receipt.Source.Path !=
-			"docs/egress/maintenance/claude-fw-g-support-envelope-source-transition.json" ||
-		receipt.Source.SHA256 != claudeFWGSupportEnvelopeSourceSHA256 ||
-		len(receipt.Transitions) != 5 {
-		return receipt, errors.New("Claude FW-G SupportEnvelope test transition 顶层事实非法")
+			"docs/egress/maintenance/claude-fw-g-desktop-ingress-source-transition.json" ||
+		receipt.Source.SHA256 != claudeFWGDesktopIngressSourceSHA256 ||
+		len(receipt.Transitions) != 6 {
+		return receipt, errors.New("Claude FW-G Desktop 入站 test transition 顶层事实非法")
 	}
 	if err := validateClaudeFWGCountTokensTransitions(receipt.Transitions); err != nil {
 		return receipt, err
@@ -75,16 +75,16 @@ func loadClaudeFWGSupportEnvelopeTestReceipt(
 	return receipt, nil
 }
 
-func claudeFWGSupportEnvelopeTransitionSupersedes(
+func claudeFWGDesktopIngressTransitionSupersedes(
 	path string,
 	priorDigest string,
 	currentDigest string,
 ) bool {
-	source, err := loadClaudeFWGSupportEnvelopeSourceReceipt()
+	source, err := loadClaudeFWGDesktopIngressSourceReceipt()
 	if err != nil {
 		return false
 	}
-	testReceipt, err := loadClaudeFWGSupportEnvelopeTestReceipt(source)
+	testReceipt, err := loadClaudeFWGDesktopIngressTestReceipt(source)
 	if err != nil {
 		return false
 	}
@@ -97,6 +97,9 @@ func claudeFWGSupportEnvelopeTransitionSupersedes(
 				continue
 			}
 			if transition.FromSHA256 == priorDigest ||
+				claudeFWGSupportEnvelopeTransitionSupersedes(
+					path, priorDigest, transition.FromSHA256,
+				) ||
 				claudeFWGAliasRouteTransitionSupersedes(
 					path, priorDigest, transition.FromSHA256,
 				) ||
@@ -113,12 +116,12 @@ func claudeFWGSupportEnvelopeTransitionSupersedes(
 	return false
 }
 
-func TestClaudeFWGSupportEnvelopeTransitionsAreFrozen(t *testing.T) {
-	source, err := loadClaudeFWGSupportEnvelopeSourceReceipt()
+func TestClaudeFWGDesktopIngressTransitionsAreFrozen(t *testing.T) {
+	source, err := loadClaudeFWGDesktopIngressSourceReceipt()
 	if err != nil {
 		t.Fatal(err)
 	}
-	testReceipt, err := loadClaudeFWGSupportEnvelopeTestReceipt(source)
+	testReceipt, err := loadClaudeFWGDesktopIngressTestReceipt(source)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,12 +136,9 @@ func TestClaudeFWGSupportEnvelopeTransitionsAreFrozen(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := claudeFWGCountTokensDigest(raw); got != transition.ToSHA256 &&
-				!claudeFWGDesktopIngressTransitionSupersedes(
-					transition.Path, transition.ToSHA256, got,
-				) {
+			if got := claudeFWGCountTokensDigest(raw); got != transition.ToSHA256 {
 				t.Fatalf(
-					"Claude FW-G SupportEnvelope transition 漂移：path=%s got=%s want=%s",
+					"Claude FW-G Desktop 入站 transition 漂移：path=%s got=%s want=%s",
 					transition.Path, got, transition.ToSHA256,
 				)
 			}

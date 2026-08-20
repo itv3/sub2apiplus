@@ -128,7 +128,9 @@ func TestClaudeFWGAliasRouteTransitionsAreFrozen(t *testing.T) {
 			if got := claudeFWGCountTokensDigest(raw); got != transition.ToSHA256 &&
 				!claudeFWGSupportEnvelopeTransitionSupersedes(
 					transition.Path, transition.ToSHA256, got,
-				) {
+				) && !claudeFWGDesktopIngressTransitionSupersedes(
+				transition.Path, transition.ToSHA256, got,
+			) {
 				t.Fatalf(
 					"Claude FW-G 裸路径别名 transition 漂移：path=%s got=%s want=%s",
 					transition.Path, got, transition.ToSHA256,
