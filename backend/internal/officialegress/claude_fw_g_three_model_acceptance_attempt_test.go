@@ -231,7 +231,11 @@ func validateClaudeFWGThreeModelAcceptanceTransition(
 		return errors.New("Claude 三模型验收尝试文档 transition 非法")
 	}
 	raw, err := os.ReadFile(filepath.Join("../../..", filepath.FromSlash(transition.Path)))
-	if err != nil || claudeFWGCountTokensDigest(raw) != transition.ToSHA256 {
+	currentDigest := claudeFWGCountTokensDigest(raw)
+	if err != nil || currentDigest != transition.ToSHA256 &&
+		!claudeFWGThreeModelAcceptanceSupersedes(
+			transition.Path, transition.ToSHA256, currentDigest,
+		) {
 		return errors.New("Claude 三模型验收尝试文档 transition 当前摘要不一致")
 	}
 	return nil
@@ -248,7 +252,10 @@ func claudeFWGThreeModelAcceptanceAttemptSupersedes(
 	}
 	for _, transition := range receipt.Transitions {
 		if transition.Path == path && transition.FromSHA256 == priorDigest &&
-			transition.ToSHA256 == currentDigest {
+			(transition.ToSHA256 == currentDigest ||
+				claudeFWGThreeModelAcceptanceSupersedes(
+					path, transition.ToSHA256, currentDigest,
+				)) {
 			return true
 		}
 	}

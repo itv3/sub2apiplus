@@ -1,0 +1,204 @@
+{
+  "schema_version": "claude-code-fw-g-three-model-acceptance/v1",
+  "phase": "FW-G",
+  "issued_at_utc": "2026-08-21T13:10:49Z",
+  "target": {
+    "product": "claude-code",
+    "version": "2.1.226",
+    "platform": "linux/amd64",
+    "authentication": "claude.ai-oauth",
+    "privacy": "essential-traffic-no-telemetry",
+    "models": [
+      "claude-sonnet-5",
+      "claude-opus-5",
+      "claude-fable-5"
+    ],
+    "profile_sha256": "e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5",
+    "wire_sha256": "a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d",
+    "release_artifact_sha256": "48586f47e0abcde9ea357c08c1465253eaa296862153a89c20e4cf0f1e6f52f8",
+    "release_bundle_sha256": "ceb1e30740ab4223684f478f717dd2902d8fdad0c6efad5a69b761d95b4aefae",
+    "model_capability_catalog_sha256": "d34ca049ec851b220f06a4701c951a8be270d4a498b8012229c7f62cb8183df1"
+  },
+  "candidate": {
+    "candidate_id": "claude-code-2_1_226-fw-g-three-model-2f224831f",
+    "commit": "2f224831fcbad72e03782d109f9f94458457e2ff",
+    "tree": "3cd964dc0f4133bb615fa15a9f2f18a5825ac057",
+    "architecture": "linux/amd64",
+    "version": "0.1.177-4-fw-g-2f224831f",
+    "binary_sha256": "4d42c7e6e819b1d27aa5cbfd85303946275ab93a384ed24fbede76515a3c86e8",
+    "image": "sub2apiplus:fw-g-2f224831f",
+    "image_id": "sha256:ea2814364a06df65d6c8037fdb455311e6f87754f18c2850f00d3bced9ed1172",
+    "deployed_host": "DMIT",
+    "container_id": "56fdf7a243a8fa1a6a4a5807cbb85c57dcb512deffd6ec8b249d5bf1b2acbb68",
+    "container_health": "healthy"
+  },
+  "build": {
+    "compile_host": "local-mac",
+    "go_version": "1.26.6",
+    "goos": "linux",
+    "goarch": "amd64",
+    "cgo_enabled": false,
+    "build_tags": [
+      "embed"
+    ],
+    "trimpath": true,
+    "packaging_host": "ARM64",
+    "packaging_host_compiled_source": false
+  },
+  "prior_receipts": [
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-fable-desktop-title-source-transition.json",
+      "sha256": "d03add436e6e970bbaca3947d7fdf9a50a43879f78a3f89e49bcf1534d28bc56"
+    },
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-fable-desktop-title-test-transition.json",
+      "sha256": "089b0f1c13f1e2a34aa982f8e2220c4a8c4149df1746d932ac14daa40babdb61"
+    },
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-three-model-acceptance-attempt.json",
+      "sha256": "7f6599b3ac521cf669bcccef8170984702b9d62feb5812d5bb2cb80c25c08319"
+    }
+  ],
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_fable_desktop_title_transition_test.go",
+      "from_sha256": "f3be18f80ae5062c54d3240aa04ac1401a4ad61a0beef6188bb8528485b05b34",
+      "to_sha256": "b285b2a9b2c595fb1b8f25bd070f0691f8c5bad83fb08de46150c3cd7a3fb64f",
+      "reason": "让既有 Fable Desktop 标题迁移通过本次最终 AcceptanceFact 承接后继摘要。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_model_capability_transition_test.go",
+      "from_sha256": "9173c5b7ed29798ceb5728679a7a795b0b5edeb2b65ce3186e1fc0d5aa05f969",
+      "to_sha256": "21cf6f30608d2347dff283a115ab13d18b0d97a919b1eaf8d5c454fd73afd639",
+      "reason": "把最终三模型验收接入既有模型能力内容寻址历史链。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_three_model_acceptance_attempt_test.go",
+      "from_sha256": "01214b1308aef7fc3f815a9d6900f9c393f3ccb022446eda838ef3e8576e8baa",
+      "to_sha256": "a472c11cb291aea970574ff7d999b46ff999d3f51fec0c76416223eaa4e84ed0",
+      "reason": "保留首次验收阻断收据，并允许最终 AcceptanceFact 追加替代当前状态。"
+    },
+    {
+      "path": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "from_sha256": "f764d050426d02b0ca8404747c698c21a42b545f224b93332a8a5dbad4a99bfe",
+      "to_sha256": "25b8688b5ef288826bf225ae3046250680f331906c1e0c09484320677f54e39d",
+      "reason": "把三模型 FW-G 状态从账号权益阻断更新为验收通过且尚未激活。"
+    }
+  ],
+  "coverage": {
+    "required_rules": 40,
+    "profile_atomic_assertions": 106,
+    "scenario_only_assertions": 4,
+    "atomic_assertions": 110,
+    "required_rules_duplicated_per_model": false,
+    "telemetry_and_behavior_traffic": "excluded"
+  },
+  "validation": {
+    "source_and_local_gates": "passed",
+    "api_messages": {
+      "claude-sonnet-5": {
+        "http_status": 200,
+        "expected_marker_matched": true,
+        "result": "passed"
+      },
+      "claude-opus-5": {
+        "http_status": 200,
+        "expected_marker_matched": true,
+        "result": "passed"
+      },
+      "claude-fable-5": {
+        "http_status": 200,
+        "expected_marker_matched": true,
+        "fallback_disposition": "approved_server_fallback",
+        "fallback_target": "claude-opus-4-8",
+        "result": "passed"
+      }
+    },
+    "api_count_tokens": {
+      "claude-sonnet-5": {
+        "http_status": 200,
+        "input_tokens": 12,
+        "result": "passed"
+      },
+      "claude-opus-5": {
+        "http_status": 200,
+        "input_tokens": 12,
+        "result": "passed"
+      },
+      "claude-fable-5": {
+        "http_status": 200,
+        "input_tokens": 12,
+        "result": "passed"
+      }
+    },
+    "claude_desktop_fable": {
+      "client": "claude-desktop",
+      "source_model": "claude-fable-5",
+      "effort": "high",
+      "expected_response": "DESKTOP_FABLE_2F224831F_OK",
+      "actual_response": "DESKTOP_FABLE_2F224831F_OK",
+      "generated_title": "DESKTOP_FABLE_2F224831F_OK reply",
+      "title_request": {
+        "request_id": "73f7c98c-16d8-4821-9f33-004374f6f6d3",
+        "body_bytes": 4081,
+        "stream": true,
+        "dmit_account_id": 101,
+        "http_status": 200
+      },
+      "main_request": {
+        "request_id": "262aad4c-dcff-4c44-90b8-41585d0f29e1",
+        "body_bytes": 137743,
+        "stream": true,
+        "dmit_account_id": 101,
+        "http_status": 200
+      },
+      "followup_count_tokens": "passed",
+      "result": "passed"
+    },
+    "negative_boundaries": {
+      "unknown_model": "fail-close-passed",
+      "unregistered_alias": "fail-close-passed",
+      "third_party_fallbacks": "fail-close-passed",
+      "unapproved_dynamic_tool_catalog": "fail-close-passed"
+    },
+    "rollback_and_restoration": {
+      "rollback_image": "sub2apiplus:fw-g-290516f55",
+      "rollback_image_id": "sha256:336b9142b95e6f3f64f4ff16a15bb4650a65e6716a7ebb65bfd164c9b8cb6095",
+      "rollback_health": "passed",
+      "restored_image": "sub2apiplus:fw-g-2f224831f",
+      "restored_image_id": "sha256:ea2814364a06df65d6c8037fdb455311e6f87754f18c2850f00d3bced9ed1172",
+      "restoration_health": "passed",
+      "three_x_ui_container_id_before_and_after": "3a5bef805f0be14fd4b6667aac6ce45c4f243f1df6f083d6040df32df84048f9",
+      "postgres_container_id_before_and_after": "b9b6915c5336f1857d279e953e9c3f179c1082af99addffdaacd3ace0d6caf0f",
+      "redis_container_id_before_and_after": "b1135fe353ccd78302b1ddc7b306e9fa66038856909bcd315b61ee920a9039bd",
+      "unrelated_containers_recreated": false,
+      "result": "passed"
+    }
+  },
+  "prior_blocker_disposition": {
+    "pending_receipt_preserved": true,
+    "blocker": "fable-messages-usage-credits",
+    "resolution": "resolved_by_separate_dmit_oauth_account_with_fable_entitlement",
+    "dmit_account_id": 101,
+    "result": "resolved"
+  },
+  "safety": {
+    "production_selector_modified": false,
+    "deployment_fact_issued": false,
+    "activation_receipt_issued": false,
+    "fw_h_started": false,
+    "vircs_connected_for_mutation": false,
+    "vircs_service_changed": false,
+    "legacy_chain_retained": true,
+    "validation_host": "DMIT"
+  },
+  "secret_scan": {
+    "matched_patterns": 0,
+    "result": "passed"
+  },
+  "acceptance_fact_issued": true,
+  "candidate_state": "ready",
+  "production_state": "not_activated",
+  "status": "ready/not_activated",
+  "result": "accepted"
+}
