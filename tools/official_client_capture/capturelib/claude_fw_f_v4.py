@@ -505,6 +505,16 @@ PROBES.update(
             message_request_expectation="zero",
             safe_mode=False,
         ),
+        "v4-thinking-display-omitted": _probe(
+            "v4-thinking-display-omitted",
+            dimensions=(),
+            cli_args=("--thinking-display", "omitted"),
+        ),
+        "v4-thinking-display-summarized": _probe(
+            "v4-thinking-display-summarized",
+            dimensions=(),
+            cli_args=("--thinking-display", "summarized"),
+        ),
     }
 )
 

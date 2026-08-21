@@ -7,14 +7,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
 )
 
-const claudeFWGWireDigest = "c1c3c8c83710c9afc7005f71fa45d0837484a6bd042f75c08e5cde5451822a3e"
+const claudeFWGWireDigest = "07dbb15e8a621c4ef4922a9dec09e08d032fd649414f7d2f572c95c87b5679a7"
 
-//go:embed catalogdata/claude/wire/2.1.226/c1c3c8c83710c9afc7005f71fa45d0837484a6bd042f75c08e5cde5451822a3e.json
+//go:embed catalogdata/claude/wire/2.1.226/07dbb15e8a621c4ef4922a9dec09e08d032fd649414f7d2f572c95c87b5679a7.json
 var embeddedClaudeFWGWire []byte
 
 type claudeWireTLSVector struct {
@@ -98,6 +99,20 @@ type claudeWireToolPolicy struct {
 	WebSearchServer   claudeWireToolCatalog `json:"web_search_server"`
 }
 
+type claudeWireThinkingEvidence struct {
+	Path      string `json:"path"`
+	RawSHA256 string `json:"raw_sha256,omitempty"`
+	SHA256    string `json:"sha256,omitempty"`
+}
+
+type claudeWireThinkingPolicy struct {
+	SchemaVersion string                                `json:"schema_version"`
+	Type          string                                `json:"type"`
+	FieldOrder    []string                              `json:"field_order"`
+	DisplayValues []string                              `json:"display_values"`
+	Evidence      map[string]claudeWireThinkingEvidence `json:"evidence"`
+}
+
 type claudeWireImplementationPolicy struct {
 	SchemaVersion  string `json:"schema_version"`
 	EvidenceLedger struct {
@@ -140,7 +155,8 @@ type claudeWireImplementationPolicy struct {
 		StreamTimeoutSeconds         int    `json:"stream_timeout_seconds"`
 		NonStreamTimeoutSeconds      int    `json:"non_stream_timeout_seconds"`
 	} `json:"retry"`
-	ToolPolicy claudeWireToolPolicy `json:"tool_policy"`
+	Thinking   claudeWireThinkingPolicy `json:"thinking"`
+	ToolPolicy claudeWireToolPolicy     `json:"tool_policy"`
 }
 
 type claudeWireArtifact struct {
@@ -260,6 +276,32 @@ func validateClaudeImplementationPolicy(policy claudeWireImplementationPolicy) e
 	}
 	if err := validateClaudeToolPolicy(policy.ToolPolicy); err != nil {
 		return err
+	}
+	if err := validateClaudeThinkingPolicy(policy.Thinking); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateClaudeThinkingPolicy(policy claudeWireThinkingPolicy) error {
+	if policy.SchemaVersion != "claude-code-thinking-display-policy/v1" ||
+		policy.Type != "adaptive" ||
+		!slices.Equal(policy.FieldOrder, []string{"type", "display"}) ||
+		!slices.Equal(policy.DisplayValues, []string{"summarized", "omitted"}) ||
+		len(policy.Evidence) != 4 {
+		return errors.New("Claude thinking.display 画像策略不完整")
+	}
+	for _, name := range []string{
+		"default", "summarized", "omitted", "production_change_receipt",
+	} {
+		evidence, ok := policy.Evidence[name]
+		digest := evidence.RawSHA256
+		if name == "production_change_receipt" {
+			digest = evidence.SHA256
+		}
+		if !ok || strings.TrimSpace(evidence.Path) == "" || len(digest) != sha256.Size*2 {
+			return fmt.Errorf("Claude thinking.display 证据不完整：%s", name)
+		}
 	}
 	return nil
 }

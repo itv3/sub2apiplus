@@ -75,7 +75,7 @@ class ClaudeFWCompleteCampaignTests(unittest.TestCase):
             )
 
             self.assertEqual(manifest["candidate_denominator"]["total"], 593)
-            self.assertEqual(manifest["scenario_catalog"]["probe_count"], 77)
+            self.assertEqual(manifest["scenario_catalog"]["probe_count"], 79)
             expected_complete = [
                 path
                 for path in (

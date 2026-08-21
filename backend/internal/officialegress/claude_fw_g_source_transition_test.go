@@ -15,7 +15,10 @@ import (
 	"testing"
 )
 
-const claudeFWGSourceTransitionSHA256 = "b84fa150c93856a7e3717c7053cd1e2d90f9a6adce259d68252d5aaf11fb6008"
+const (
+	claudeFWGSourceTransitionSHA256 = "b84fa150c93856a7e3717c7053cd1e2d90f9a6adce259d68252d5aaf11fb6008"
+	claudeFWGInitialWireDigest      = "c1c3c8c83710c9afc7005f71fa45d0837484a6bd042f75c08e5cde5451822a3e"
+)
 
 type claudeFWGSourceTransitionReceipt struct {
 	SchemaVersion string `json:"schema_version"`
@@ -70,13 +73,13 @@ func validateClaudeFWGSourceTransition(
 	if receipt.ArtifactIdentity.ProfileSHA256 != ClaudeFWGProfileDigest ||
 		receipt.ArtifactIdentity.ReleaseSHA256 != ClaudeFWGReleaseDigest ||
 		receipt.ArtifactIdentity.BundleSHA256 != ClaudeFWGBundleDigest ||
-		receipt.ArtifactIdentity.WireSHA256 != claudeFWGWireDigest {
+		receipt.ArtifactIdentity.WireSHA256 != claudeFWGInitialWireDigest {
 		return fmt.Errorf(
 			"Claude FW-G source transition 制品身份不一致：profile=%s/%s release=%s/%s bundle=%s/%s wire=%s/%s",
 			receipt.ArtifactIdentity.ProfileSHA256, ClaudeFWGProfileDigest,
 			receipt.ArtifactIdentity.ReleaseSHA256, ClaudeFWGReleaseDigest,
 			receipt.ArtifactIdentity.BundleSHA256, ClaudeFWGBundleDigest,
-			receipt.ArtifactIdentity.WireSHA256, claudeFWGWireDigest,
+			receipt.ArtifactIdentity.WireSHA256, claudeFWGInitialWireDigest,
 		)
 	}
 	priorPaths := make([]string, 0, len(receipt.Prior))

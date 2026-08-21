@@ -14,7 +14,7 @@ import (
 	"testing"
 )
 
-const claudeFWGImplementationCoverageSHA256 = "79c208e3775b3dfdc3f62ea95548550801bf2aea96e67d5010b390f894ec008c"
+const claudeFWGImplementationCoverageSHA256 = "cc783db04973554d83ee9f4bf8581d48f7caf0f1bdf4beafcc34199d53aeedfb"
 
 type claudeFWGSourceAnchor struct {
 	Path   string `json:"path"`

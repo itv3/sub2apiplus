@@ -1,0 +1,164 @@
+{
+  "schema_version": "official-egress-claude-fw-g-thinking-display-source-transition/v1",
+  "date": "2026-08-21",
+  "phase": "FW-G",
+  "base_commit": "86b67672e6abdd49801f54cc9062a8403759372f",
+  "trigger": "zlfcode／KiloCode 通过第三方 Anthropic Messages 入口提交 Claude 官方允许的 thinking.display=summarized 时，既有 Candidate 把 display 错判为 adaptive thinking 未批准字段。",
+  "prior_transitions": [
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-ingress-authority-source-transition.json",
+      "sha256": "ee434c67912f0841421ec2370f75e35207ff47014015fb557ce680b6c5d69954"
+    },
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-ingress-authority-test-transition.json",
+      "sha256": "027fc30210229e84212551080f62bbffaf767f47f1c55526677e8600df2af208"
+    }
+  ],
+  "official_evidence": {
+    "target_version": "2.1.226",
+    "platform": "linux/amd64",
+    "authentication": "claude.ai-oauth",
+    "privacy": "essential-traffic-no-telemetry",
+    "capture_host": "Vircs",
+    "capture_root": "local-analysis/fw-f/claude-code-2.1.226/thinking-display-supplement-v1-94f7d00d704f",
+    "field_order": [
+      "type",
+      "display"
+    ],
+    "display_values": [
+      "summarized",
+      "omitted"
+    ],
+    "evidence": [
+      {
+        "state": "default",
+        "path": "local-analysis/fw-f/claude-code-2.1.226/complete-v21-78fae770cbb5/attempts/v4-replay-baseline/attempt-001/relay/conn004.client_to_upstream.bin",
+        "sha256": "ca039dfcc431f7980bade1d06302da3703c87c350eac504b7b89161a87e34097"
+      },
+      {
+        "state": "summarized",
+        "path": "local-analysis/fw-f/claude-code-2.1.226/thinking-display-supplement-v1-94f7d00d704f/attempts/v4-thinking-display-summarized/attempt-002/relay/conn004.client_to_upstream.bin",
+        "sha256": "454962fdfd52d81ab8200e78b6d158dbc3595c94810737a3c6dd58ad2db096f9"
+      },
+      {
+        "state": "omitted",
+        "path": "local-analysis/fw-f/claude-code-2.1.226/thinking-display-supplement-v1-94f7d00d704f/attempts/v4-thinking-display-omitted/attempt-001/relay/conn004.client_to_upstream.bin",
+        "sha256": "b958407da791047ac69fe05ac5c5fb93e87c839942d4a321d5140650ae49efee"
+      },
+      {
+        "state": "production_change_receipt",
+        "path": "local-analysis/fw-f/claude-code-2.1.226/thinking-display-supplement-v1-94f7d00d704f/environment/production-change-receipt.json",
+        "sha256": "e583e7506bf9aae250a9c20e1ba537d08a366ff6fc5d36a4be5cf74baf190426"
+      }
+    ],
+    "production_differences": []
+  },
+  "artifact_transition": {
+    "profile_sha256": "4da60bc238694a06a0dc80d68117abddd2de98c7c924c4db4c5dd929ea411e17",
+    "release_sha256": "c1053492eabc0b10d9d5f92f807a1df0d507c777b64a528e938426350c0d5350",
+    "release_bundle_sha256": "4213ea92a7d76c4ef3aa318f4d93628cbcf675dc86566b107dddb70a70e6eb41",
+    "wire_before_sha256": "c1c3c8c83710c9afc7005f71fa45d0837484a6bd042f75c08e5cde5451822a3e",
+    "wire_after_sha256": "07dbb15e8a621c4ef4922a9dec09e08d032fd649414f7d2f572c95c87b5679a7",
+    "required_rules_before_sha256": "50261962778b8a7cf85f2dd01a8057f8004e92c0978456e88d9457d4ef8030b3",
+    "required_rules_after_sha256": "c09fdc9158d4d3aee7e5d28cc4a794e259a3c56899e00d558afab4c537389045",
+    "implementation_coverage_before_sha256": "79c208e3775b3dfdc3f62ea95548550801bf2aea96e67d5010b390f894ec008c",
+    "implementation_coverage_after_sha256": "cc783db04973554d83ee9f4bf8581d48f7caf0f1bdf4beafcc34199d53aeedfb",
+    "required_rule_count_before": 40,
+    "required_rule_count_after": 40,
+    "atomic_assertion_count_before": 110,
+    "atomic_assertion_count_after": 110
+  },
+  "dispositions": [
+    {
+      "finding": "thinking.display=summarized 或 omitted",
+      "result": "并入既有 SPEC-BODY-008 下的 SPEC-BODY-010 条件矩阵，不增加 RequiredRule 或 AtomicAssertion 定义。"
+    },
+    {
+      "finding": "第三方入站可能使用与官方不同的 thinking 对象字段顺序",
+      "result": "CanonicalRequest 只保存批准的 display 语义；Claude Compiler 按 wire artifact 固定的 type、display 顺序重建，禁止原样透传。"
+    },
+    {
+      "finding": "未知 display、重复键或额外 thinking 字段",
+      "result": "继续 fail-close；入站客户端名称、版本、User-Agent 和自报身份不拥有画像选择权。"
+    }
+  ],
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/catalogdata/claude/wire/2.1.226/07dbb15e8a621c4ef4922a9dec09e08d032fd649414f7d2f572c95c87b5679a7.json",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "07dbb15e8a621c4ef4922a9dec09e08d032fd649414f7d2f572c95c87b5679a7",
+      "reason": "新增内容寻址 wire artifact，冻结 default／summarized／omitted 三态、type／display 字段顺序及对应官方证据。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_body.go",
+      "from_sha256": "6877123a881ba1ade19f51120d39d77f12f878b99ba5d4cb7c5603a8711b7823",
+      "to_sha256": "0dad456982d4135eb9a4e71cf20c8f13e117dcd6f92f9e6e96f80e253378406c",
+      "reason": "CanonicalRequest 显式保存 thinking.display；解析只接受批准闭集，Compiler 按画像重建有序 thinking 对象。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_ingress.go",
+      "from_sha256": "d999c542e0bcb582beab24a3d3c46dd0759ffe6608716f05b708bdee86a33d98",
+      "to_sha256": "0920335717e3d646bc4d54bda997ea8c81a23bd3fd056d6258b442824abd0204",
+      "reason": "官方入口用三态语义比较 thinking，允许与目标 2.1.226 官方 wire 一致的 display 往返。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_wire.go",
+      "from_sha256": "6ad92f4c74b7368270d63a39c693a1329f5db1f9472dc061d64bd7fca4c3839d",
+      "to_sha256": "9558669b8f9c546116d1942424405d18e9a665b1fd6967e77c35ba4cb6fa14d8",
+      "reason": "切换到新内容寻址 wire artifact，并在启动时校验 display 闭集、字段顺序和四类证据摘要。"
+    },
+    {
+      "path": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "from_sha256": "48e222b72d889d29fb71796af5f12eda5d9fc11fc543ed593946451b3ea4256f",
+      "to_sha256": "e2f91f2e16edd5618446df27c5a31c2868e1197a762cc40b647c27c0d3a2529a",
+      "reason": "把 thinking.display 三态、字段顺序、实测范围和 Compiler 重建职责写回 SPEC-BODY-008。"
+    },
+    {
+      "path": "tools/generate_claude_fw_g_profile.py",
+      "from_sha256": "ead47ac1ce4dd456ee4c4d37ad2a09b23e4eb034698ff62af57fa443ea542483",
+      "to_sha256": "871e74ac3e0466d26977e9bb44256ec2e4d913b7e87895c7a307c4c5926420e4",
+      "reason": "生成 wire artifact 前逐项验证三态 R/M、CLI 参数、顶层顺序和 Vircs 生产零差异收据。"
+    },
+    {
+      "path": "tools/official_client_capture/capturelib/claude_fw_f_v4.py",
+      "from_sha256": "2eda3f870240e348f74bfcc4f2364105a56b74d2c792124e6d7544f045a92ba2",
+      "to_sha256": "3f019b4305f76321ad0a2a713b0359b115f4b5923bcedcf20720d739b8f8dea9",
+      "reason": "把官方 CLI 的 summarized 和 omitted 参数加入后续同版本或换版取证场景目录。"
+    },
+    {
+      "path": "tools/official_client_capture/claude_fw_f_complete_runner.py",
+      "from_sha256": "89b6eab7d4484c9936f8ab50254c1abc40c80b494aced597412459faa8b2441c",
+      "to_sha256": "c1de6b8074cf497b8180e3bcbac6292c90814ac611fb7924767fd89ea289c4bd",
+      "reason": "完整 Campaign 场景闭集从 77 项同步到包含两项 display 正交场景的 79 项。"
+    },
+    {
+      "path": "tools/official_client_capture/claude_fw_f_measured_rules.py",
+      "from_sha256": "709286e864d74a2bb3afcb1bfb3f1a0325194db43209db1ce35a1c9cd061611d",
+      "to_sha256": "c8750033fc8f69cb9f754a96bcd9942b81699bb4bfdcdd2a111536af0ce313e2",
+      "reason": "把 SPEC-BODY-010 的判据从单一 default 对象扩展为有序的 default／summarized／omitted 三态。"
+    },
+    {
+      "path": "tools/official_client_capture/claude_fw_g_candidate_pair.py",
+      "from_sha256": "ed7e93e604c7c314d2bcc1e34d4fff3587f03635083a63c5a11494a8654947a9",
+      "to_sha256": "b723b27ea765889e4d74d10d2f10f09983dfe1990cebc645975aae99aeb9c132",
+      "reason": "Candidate 对拍绑定新的 RequiredRules、实现覆盖和 wire artifact 摘要。"
+    },
+    {
+      "path": "tools/official_client_capture/claude_fw_g_implementation_coverage_2_1_226.json",
+      "from_sha256": "79c208e3775b3dfdc3f62ea95548550801bf2aea96e67d5010b390f894ec008c",
+      "to_sha256": "cc783db04973554d83ee9f4bf8581d48f7caf0f1bdf4beafcc34199d53aeedfb",
+      "reason": "SPEC-BODY-008 增加 display 解析、画像重建以及正负门禁测试锚点。"
+    },
+    {
+      "path": "tools/official_client_capture/claude_required_rules_2_1_226.json",
+      "from_sha256": "50261962778b8a7cf85f2dd01a8057f8004e92c0978456e88d9457d4ef8030b3",
+      "to_sha256": "c09fdc9158d4d3aee7e5d28cc4a794e259a3c56899e00d558afab4c537389045",
+      "reason": "在不改变 40／110 集合的前提下，把 SPEC-BODY-010 三态实测判据并入复合规则 SPEC-BODY-008。"
+    }
+  ],
+  "production_selector_changed": false,
+  "vircs_service_changed": false,
+  "dmit_candidate_rebuild_required": true,
+  "codex_final_wire": "zero_difference_required",
+  "result": "passed"
+}

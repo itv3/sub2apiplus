@@ -1,7 +1,7 @@
 {
   "schema_version": "claude-code-fw-g-implementation-coverage/v1",
   "target_version": "2.1.226",
-  "required_rules_manifest_sha256": "50261962778b8a7cf85f2dd01a8057f8004e92c0978456e88d9457d4ef8030b3",
+  "required_rules_manifest_sha256": "c09fdc9158d4d3aee7e5d28cc4a794e259a3c56899e00d558afab4c537389045",
   "implementation_base_commit": "b7d04bcfd3a17bcb47a8de80863b8bc625f678d8",
   "required_rule_count": 40,
   "entries": [
@@ -71,10 +71,14 @@
     {
       "spec_id": "SPEC-BODY-008",
       "implementation_anchors": [
+        {"path": "backend/internal/officialegress/claude_body.go", "symbol": "parseClaudeRequestedThinking"},
+        {"path": "backend/internal/officialegress/claude_body.go", "symbol": "compileClaudeAdaptiveThinking"},
         {"path": "backend/internal/officialegress/claude_body.go", "symbol": "selectClaudeWireScenario"},
         {"path": "backend/internal/officialegress/claude_body.go", "symbol": "compileClaudeMessagesBody"}
       ],
       "test_anchors": [
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGThirdPartyThinkingDisplayCompilesOfficialWire"},
+        {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGThinkingDisplayRejectsUnapprovedShapes"},
         {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGApprovedScenarioMatrixCompilesFrozenWire"},
         {"path": "backend/internal/officialegress/claude_runtime_test.go", "symbol": "TestClaudeFWGModelAndStreamFallbackKeepHaikuShape"}
       ]

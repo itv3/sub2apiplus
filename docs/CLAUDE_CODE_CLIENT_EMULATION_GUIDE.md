@@ -284,11 +284,11 @@ messages egress。
 
 ### SPEC-BODY-008 模型与生成参数组合
 
-- **范围**：messages-inference；Sonnet 5 基线及 max_tokens、effort、thinking、adaptive-thinking 条件。
-- **规则／机制**：model、max_tokens、thinking、context_management、effort 和 stream 必须作为一个条件化 Body 合同生成，覆盖值和省略行为均按实测映射。
+- **范围**：messages-inference；Sonnet 5 基线及 max_tokens、effort、thinking、thinking.display、adaptive-thinking 条件。
+- **规则／机制**：model、max_tokens、thinking、context_management、effort 和 stream 必须作为一个条件化 Body 合同生成；adaptive thinking 覆盖缺省 display、summarized 和 omitted 三态，display 存在时对象字段顺序固定为 type、display，覆盖值和省略行为均按实测映射。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
-- **实测**：9 条 R/M 原子断言通过；基线、五档 effort、输出上限及 thinking 开关场景均已对拍。
-- **实现**：由 ModelIntent 和 BodyShape 联合编译；只接受 SupportEnvelope 内的模型及受信配置。
+- **实测**：9 条 R/M 原子断言定义通过；基线、五档 effort、输出上限、thinking 开关及 SPEC-BODY-010 的 default／summarized／omitted 三态均已由官方 2.1.226 对拍。
+- **实现**：由 ModelIntent 和 BodyShape 联合编译；CanonicalRequest 显式保存 display 语义，Compiler 按 ReleaseBundle 重建 thinking，只接受 SupportEnvelope 内的模型、受信配置和已批准 display 闭集。
 - **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-BODY-043 请求 gzip wire

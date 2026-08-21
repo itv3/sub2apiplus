@@ -195,7 +195,7 @@ RULE_DEFINITIONS: dict[str, dict[str, str]] = {
     "SPEC-BODY-007": {"domain": "body", "claim": "system[0].text 以 x-anthropic-billing-header: 开头并承载 attribution。", "scope": "8 条推理请求"},
     "SPEC-BODY-008": {"domain": "body", "claim": "当前具名样本的 model 恰为 claude-sonnet-5。", "scope": "8 条推理请求"},
     "SPEC-BODY-009": {"domain": "body", "claim": "当前具名样本的 max_tokens 恰为整数 64000。", "scope": "8 条推理请求"},
-    "SPEC-BODY-010": {"domain": "body", "claim": "当前具名样本的 thinking 恰为 {\"type\":\"adaptive\"}。", "scope": "8 条推理请求"},
+    "SPEC-BODY-010": {"domain": "body", "claim": "adaptive thinking 为缺省 display、summarized 或 omitted 三态；display 存在时字段顺序恰为 type、display。", "scope": "8 条基线推理请求及 2 条 thinking.display 条件请求"},
     "SPEC-BODY-011": {"domain": "body", "claim": "当前具名样本发送实测 clear_thinking_20251015 context_management。", "scope": "8 条推理请求"},
     "SPEC-BODY-012": {"domain": "body", "claim": "当前具名样本的 output_config 恰为 {\"effort\":\"high\"}。", "scope": "8 条推理请求"},
     "SPEC-BODY-013": {"domain": "body", "claim": "当前具名样本的 stream 恰为 JSON 布尔值 true。", "scope": "8 条推理请求"},
@@ -1024,7 +1024,18 @@ def build_ledger(
     add("SPEC-BODY-007", inference, lambda value: parse_attribution(value) is not None)
     add("SPEC-BODY-008", inference, lambda value: value["body"].get("model") == "claude-sonnet-5")
     add("SPEC-BODY-009", inference, lambda value: value["body"].get("max_tokens") == 64000 and not isinstance(value["body"].get("max_tokens"), bool))
-    add("SPEC-BODY-010", inference, lambda value: value["body"].get("thinking") == {"type": "adaptive"})
+    def adaptive_thinking_matches(value: dict[str, Any]) -> bool:
+        thinking = value["body"].get("thinking")
+        if not isinstance(thinking, dict) or thinking.get("type") != "adaptive":
+            return False
+        if list(thinking) == ["type"]:
+            return True
+        return list(thinking) == ["type", "display"] and thinking.get("display") in {
+            "summarized",
+            "omitted",
+        }
+
+    add("SPEC-BODY-010", inference, adaptive_thinking_matches)
     add("SPEC-BODY-011", inference, lambda value: value["body"].get("context_management") == {"edits": [{"keep": "all", "type": "clear_thinking_20251015"}]})
     add("SPEC-BODY-012", inference, lambda value: value["body"].get("output_config") == {"effort": "high"})
     add("SPEC-BODY-013", inference, lambda value: value["body"].get("stream") is True)

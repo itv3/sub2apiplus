@@ -145,8 +145,8 @@ def _validate_campaign(root: Path) -> tuple[dict[str, Any], list[dict[str, Any]]
     if denominator.get("counts") != expected_counts:
         raise CompleteCampaignRunnerError("候选分母五组计数漂移。")
     probes = catalog.get("probes")
-    if not isinstance(probes, list) or len(probes) != 77:
-        raise CompleteCampaignRunnerError("正式场景必须恰好为 77 个。")
+    if not isinstance(probes, list) or len(probes) != 79:
+        raise CompleteCampaignRunnerError("正式场景必须恰好为 79 个。")
     probe_ids: list[str] = []
     for probe in probes:
         if not isinstance(probe, dict):

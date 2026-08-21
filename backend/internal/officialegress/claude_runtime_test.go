@@ -331,6 +331,72 @@ func TestClaudeFWGThirdPartyMessagesUsesUnifiedStrictChain(t *testing.T) {
 	}
 }
 
+func TestClaudeFWGThirdPartyThinkingDisplayCompilesOfficialWire(t *testing.T) {
+	for _, display := range []string{"summarized", "omitted"} {
+		t.Run(display, func(t *testing.T) {
+			port := &claudeCapturePort{}
+			runtime, _, _ := newClaudeTestRuntime(t, port)
+			body := []byte(fmt.Sprintf(
+				`{"model":"claude-sonnet-5","messages":[{"role":"user","content":"zlfcode probe"}],"max_tokens":32000,"thinking":{"display":%q,"type":"adaptive"},"output_config":{"effort":"low"}}`,
+				display,
+			))
+			result, err := runtime.ExecuteMessages(context.Background(), ClaudeMessagesExecution{
+				Body: body, AccessToken: "test-access-token",
+				TrustedFacts: claudeTestTrustedFacts(), InvocationID: uuid.NewString(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = result.Response.Body.Close() }()
+			message := findClaudeCapturedRequest(
+				t, port.snapshot(), http.MethodPost, "/v1/messages?beta=true",
+			)
+			compiled := decodeClaudeTestBody(t, message)
+			wantThinking := fmt.Sprintf(
+				`"thinking":{"type":"adaptive","display":%q}`, display,
+			)
+			if !bytes.Contains(compiled, []byte(wantThinking)) ||
+				!bytes.Contains(compiled, []byte(`"max_tokens":32000`)) ||
+				!bytes.Contains(compiled, []byte(`"output_config":{"effort":"low"}`)) {
+				t.Fatalf("Claude thinking.display 未按官方画像重建：%s", compiled)
+			}
+			if bytes.Contains(compiled, []byte(`"thinking":{"display"`)) {
+				t.Fatalf("Claude thinking 对象错误透传了入站顺序：%s", compiled)
+			}
+			finalizeClaudeTestResult(t, &result)
+		})
+	}
+}
+
+func TestClaudeFWGThinkingDisplayRejectsUnapprovedShapes(t *testing.T) {
+	wire, err := loadClaudeFWGWire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name     string
+		thinking string
+	}{
+		{name: "unknown-value", thinking: `{"type":"adaptive","display":"full"}`},
+		{name: "non-string", thinking: `{"type":"adaptive","display":true}`},
+		{name: "extra-field", thinking: `{"type":"adaptive","display":"summarized","extra":true}`},
+		{name: "duplicate-display", thinking: `{"type":"adaptive","display":"summarized","display":"omitted"}`},
+		{name: "duplicate-type", thinking: `{"type":"adaptive","type":"adaptive"}`},
+		{name: "disabled-display", thinking: `{"type":"disabled","display":"omitted"}`},
+		{name: "enabled-display", thinking: `{"type":"enabled","display":"summarized"}`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			body := []byte(`{"model":"claude-sonnet-5","messages":[{"role":"user","content":"x"}],"thinking":` + test.thinking + `}`)
+			if _, _, err := parseClaudeCanonicalMessages(
+				body, claudeTestTrustedFacts(), wire, false,
+			); err == nil {
+				t.Fatalf("未批准 thinking 形态没有 fail-close：%s", test.thinking)
+			}
+		})
+	}
+}
+
 func TestClaudeFWGStartupBranchesMatchEntrypointAndBackground(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -537,17 +603,20 @@ func TestClaudeFWGApprovedScenarioMatrixCompilesFrozenWire(t *testing.T) {
 		t.Fatal(err)
 	}
 	tests := []struct {
-		name       string
-		hint       string
-		scenario   claudeWireScenario
-		entrypoint string
-		agent      bool
-		background bool
-		modelShape claudeModelShape
-		toolMode   claudeToolMode
-		features   ClaudeTrustedFeatureFacts
+		name            string
+		hint            string
+		scenario        claudeWireScenario
+		entrypoint      string
+		agent           bool
+		background      bool
+		modelShape      claudeModelShape
+		toolMode        claudeToolMode
+		features        ClaudeTrustedFeatureFacts
+		thinkingDisplay string
 	}{
 		{name: "sdk-cli", hint: "sdk-cli", scenario: wire.ImplementationPolicy.Scenarios.SDKCLI, entrypoint: ClaudeEntrypointSDKCLI, modelShape: claudeModelShapeSonnet},
+		{name: "sdk-cli-thinking-summarized", hint: "sdk-cli", scenario: wire.ImplementationPolicy.Scenarios.SDKCLI, entrypoint: ClaudeEntrypointSDKCLI, modelShape: claudeModelShapeSonnet, thinkingDisplay: "summarized"},
+		{name: "sdk-cli-thinking-omitted", hint: "sdk-cli", scenario: wire.ImplementationPolicy.Scenarios.SDKCLI, entrypoint: ClaudeEntrypointSDKCLI, modelShape: claudeModelShapeSonnet, thinkingDisplay: "omitted"},
 		{name: "agent", hint: "agent", scenario: wire.ImplementationPolicy.Scenarios.Agent, entrypoint: ClaudeEntrypointSDKCLI, agent: true, modelShape: claudeModelShapeSonnet},
 		{name: "tui-main", hint: "tui-main", scenario: wire.ImplementationPolicy.Scenarios.TUIMain, entrypoint: ClaudeEntrypointCLI, modelShape: claudeModelShapeSonnet},
 		{name: "tui-title", hint: "tui-title", scenario: wire.ImplementationPolicy.Scenarios.TUITitle, entrypoint: ClaudeEntrypointCLI, modelShape: claudeModelShapeSonnet, features: ClaudeTrustedFeatureFacts{TUITitleRequest: true}},
@@ -564,15 +633,16 @@ func TestClaudeFWGApprovedScenarioMatrixCompilesFrozenWire(t *testing.T) {
 			shape = claudeModelShapeNonStream
 		}
 		tests = append(tests, struct {
-			name       string
-			hint       string
-			scenario   claudeWireScenario
-			entrypoint string
-			agent      bool
-			background bool
-			modelShape claudeModelShape
-			toolMode   claudeToolMode
-			features   ClaudeTrustedFeatureFacts
+			name            string
+			hint            string
+			scenario        claudeWireScenario
+			entrypoint      string
+			agent           bool
+			background      bool
+			modelShape      claudeModelShape
+			toolMode        claudeToolMode
+			features        ClaudeTrustedFeatureFacts
+			thinkingDisplay string
 		}{
 			name:       "background-" + strconv.Itoa(index),
 			hint:       "background-" + strconv.Itoa(index),
@@ -596,6 +666,15 @@ func TestClaudeFWGApprovedScenarioMatrixCompilesFrozenWire(t *testing.T) {
 			canonical := claudeCanonicalForWireScenario(
 				t, test.scenario, test.hint, test.toolMode,
 			)
+			if test.thinkingDisplay != "" {
+				canonical.thinkingDisplay = test.thinkingDisplay
+				canonical.thinking, err = compileClaudeAdaptiveThinking(
+					wire.ImplementationPolicy.Thinking, test.thinkingDisplay,
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 			if test.toolMode == claudeToolModeWebSearchServer {
 				canonical.toolChoice = append(
 					json.RawMessage(nil),
@@ -661,6 +740,15 @@ func TestClaudeFWGApprovedScenarioMatrixCompilesFrozenWire(t *testing.T) {
 			if !slices.Equal(order, wantOrder) {
 				t.Fatalf("场景顶层字段顺序不一致：got=%v want=%v", order, wantOrder)
 			}
+			expectedThinking := test.scenario.Thinking
+			if test.thinkingDisplay != "" {
+				expectedThinking, err = compileClaudeAdaptiveThinking(
+					wire.ImplementationPolicy.Thinking, test.thinkingDisplay,
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
 			for _, expected := range []struct {
 				name    string
 				present bool
@@ -668,7 +756,7 @@ func TestClaudeFWGApprovedScenarioMatrixCompilesFrozenWire(t *testing.T) {
 			}{
 				{name: "max_tokens", present: true, raw: test.scenario.MaxTokens},
 				{name: "tools", present: test.scenario.ToolsPresent, raw: test.scenario.Tools},
-				{name: "thinking", present: test.scenario.ThinkingPresent, raw: test.scenario.Thinking},
+				{name: "thinking", present: test.scenario.ThinkingPresent, raw: expectedThinking},
 				{name: "context_management", present: test.scenario.ContextManagementPresent, raw: test.scenario.ContextManagement},
 				{name: "output_config", present: test.scenario.OutputConfigPresent, raw: test.scenario.OutputConfig},
 				{name: "temperature", present: test.scenario.TemperaturePresent, raw: test.scenario.Temperature},

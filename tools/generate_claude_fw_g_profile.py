@@ -20,7 +20,7 @@ EXPECTED_PROFILE_DIGEST = (
     "4da60bc238694a06a0dc80d68117abddd2de98c7c924c4db4c5dd929ea411e17"
 )
 EXPECTED_REQUIRED_RULES_MANIFEST_DIGEST = (
-    "50261962778b8a7cf85f2dd01a8057f8004e92c0978456e88d9457d4ef8030b3"
+    "c09fdc9158d4d3aee7e5d28cc4a794e259a3c56899e00d558afab4c537389045"
 )
 EXPECTED_ATOMIC_LEDGER_DIGEST = (
     "20e3c02365893db0af7164acd8300b658f653b29c2340acedfe0abf6973a4200"
@@ -44,6 +44,10 @@ EXPECTED_MESSAGES_EVIDENCE_DIGEST = (
 EXPECTED_MESSAGES_BODY_DIGEST = (
     "0b82aa1ffd4ddd65a7c79101efb340a3c95de3977a4a41ace68b980ec8785063"
 )
+EXPECTED_THINKING_DISPLAY_REQUEST_DIGESTS = {
+    "summarized": "454962fdfd52d81ab8200e78b6d158dbc3595c94810737a3c6dd58ad2db096f9",
+    "omitted": "b958407da791047ac69fe05ac5c5fb93e87c839942d4a321d5140650ae49efee",
+}
 EXPECTED_TLS_PCAP_DIGEST = (
     "f5cd8ea0d20b2db2049822462bb9b8b2322eb4e5954e5c91e15aebb83646fab3"
 )
@@ -434,6 +438,84 @@ def load_scenario_messages(
     return requests
 
 
+def build_thinking_display_policy(
+    supplement_root: Path,
+    baseline: dict[str, Any],
+) -> dict[str, Any]:
+    expected_body_keys = list(baseline.get("body", {}))
+    if baseline.get("body", {}).get("thinking") != {"type": "adaptive"}:
+        raise SystemExit("thinking.display 缺省证据不是 adaptive 单键对象")
+    evidence: dict[str, dict[str, Any]] = {
+        "default": {
+            "path": baseline["evidence_path"],
+            "raw_sha256": baseline["raw_sha256"],
+        }
+    }
+    attempts = {"summarized": "002", "omitted": "001"}
+    for display, attempt in attempts.items():
+        probe = f"v4-thinking-display-{display}"
+        attempt_root = supplement_root / "attempts" / probe / f"attempt-{attempt}"
+        manifest_path = attempt_root / "relay-manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        dimension = manifest.get("dimension_evidence") or {}
+        if (
+            manifest.get("status") != "complete"
+            or manifest.get("m_binding", {}).get("complete") is not True
+            or manifest.get("secret_scan", {}).get("passed") is not True
+            or dimension.get("result") != "passed"
+        ):
+            raise SystemExit(f"{probe} R/M 没有完整通过")
+        summary = json.loads(
+            (attempt_root / "results" / "v4-summary.json").read_text(encoding="utf-8")
+        )
+        argv = summary.get("inner_result", {}).get("invocation", {}).get("argv_redacted", [])
+        expected_pair = ["--thinking-display", display]
+        if summary.get("valid") is not True or not any(
+            argv[index : index + 2] == expected_pair for index in range(len(argv) - 1)
+        ):
+            raise SystemExit(f"{probe} 未绑定冻结 CLI 参数")
+        requests: list[dict[str, Any]] = []
+        for path in sorted((attempt_root / "relay").glob("conn*.client_to_upstream.bin")):
+            for request in parse_http_stream(path.read_bytes(), probe):
+                if request.get("request_target") != "/v1/messages?beta=true":
+                    continue
+                request = dict(request)
+                request["evidence_path"] = path.as_posix()
+                requests.append(request)
+        if len(requests) != 1:
+            raise SystemExit(f"{probe} messages R 通道数量不是 1")
+        request = requests[0]
+        if request.get("raw_sha256") != EXPECTED_THINKING_DISPLAY_REQUEST_DIGESTS[display]:
+            raise SystemExit(f"{probe} R 通道摘要漂移")
+        thinking = request.get("body", {}).get("thinking")
+        if (
+            not isinstance(thinking, dict)
+            or list(thinking) != ["type", "display"]
+            or thinking != {"type": "adaptive", "display": display}
+            or list(request.get("body", {})) != expected_body_keys
+        ):
+            raise SystemExit(f"{probe} thinking wire 或顶层顺序不一致")
+        evidence[display] = {
+            "path": request["evidence_path"],
+            "raw_sha256": request["raw_sha256"],
+        }
+    production_receipt = supplement_root / "environment" / "production-change-receipt.json"
+    production = json.loads(production_receipt.read_text(encoding="utf-8"))
+    if production.get("result") != "passed" or production.get("differences") != []:
+        raise SystemExit("thinking.display 补充 Campaign 影响了生产环境")
+    evidence["production_change_receipt"] = {
+        "path": production_receipt.as_posix(),
+        "sha256": sha256_hex(production_receipt.read_bytes()),
+    }
+    return {
+        "schema_version": "claude-code-thinking-display-policy/v1",
+        "type": "adaptive",
+        "field_order": ["type", "display"],
+        "display_values": ["summarized", "omitted"],
+        "evidence": evidence,
+    }
+
+
 def header_value(request: dict[str, Any], name: str) -> str:
     target = name.lower()
     for header in request.get("headers", []):
@@ -612,6 +694,7 @@ def build_tool_policy(
 def build_implementation_policy(
     campaign_root: Path,
     ledger_path: Path,
+    thinking_display_campaign_root: Path,
 ) -> dict[str, Any]:
     allowed_raw_sha256s = collect_measured_raw_sha256s(ledger_path)
     baseline = load_scenario_messages(
@@ -734,6 +817,10 @@ def build_implementation_policy(
                 "x-client-request-id",
             ],
         },
+        "thinking": build_thinking_display_policy(
+            thinking_display_campaign_root,
+            baseline,
+        ),
         "retry": {
             "retryable_statuses": [401, 408, 409, 429, 500, 502, 503, 529],
             "non_retryable_statuses": [400, 403],
@@ -755,6 +842,7 @@ def build_wire_artifact(
     tls_path: Path,
     campaign_root: Path,
     measured_ledger: Path,
+    thinking_display_campaign_root: Path,
 ) -> dict[str, Any]:
     raw_request = messages_path.read_bytes()
     if sha256_hex(raw_request) != EXPECTED_MESSAGES_EVIDENCE_DIGEST:
@@ -836,7 +924,7 @@ def build_wire_artifact(
             "system_text_sha256": EXPECTED_SYSTEM_TEXT_DIGESTS,
         },
         "implementation_policy": build_implementation_policy(
-            campaign_root, measured_ledger
+            campaign_root, measured_ledger, thinking_display_campaign_root
         ),
         "transports": {
             "http1_with_alpn": with_alpn[0],
@@ -857,6 +945,7 @@ def main() -> int:
     parser.add_argument("--tls-pcap", type=Path)
     parser.add_argument("--wire-output", type=Path)
     parser.add_argument("--campaign-root", type=Path)
+    parser.add_argument("--thinking-display-campaign-root", type=Path)
     args = parser.parse_args()
 
     snapshot = load_frozen_json(args.snapshot, EXPECTED_SNAPSHOT_DIGEST, "Snapshot")
@@ -903,15 +992,17 @@ def main() -> int:
         args.tls_pcap,
         args.wire_output,
         args.campaign_root,
+        args.thinking_display_campaign_root,
     )
     if any(wire_args) and not all(wire_args):
-        raise SystemExit("生成 wire artifact 时必须同时提供四个 wire 参数")
+        raise SystemExit("生成 wire artifact 时必须同时提供五个 wire 参数")
     if all(wire_args):
         wire_document = build_wire_artifact(
             args.messages_evidence,
             args.tls_pcap,
             args.campaign_root,
             args.measured_ledger,
+            args.thinking_display_campaign_root,
         )
         wire_raw = canonical_bytes(wire_document)
         args.wire_output.parent.mkdir(parents=True, exist_ok=True)

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf8"
@@ -43,6 +44,7 @@ type ClaudeCanonicalRequest struct {
 	temperature              json.RawMessage
 	thinking                 json.RawMessage
 	thinkingPresent          bool
+	thinkingDisplay          string
 	contextManagement        json.RawMessage
 	contextManagementPresent bool
 	streamPresent            bool
@@ -210,7 +212,7 @@ func parseClaudeCanonicalMessages(
 		return ClaudeCanonicalRequest{}, TranslationReport{}, err
 	}
 	thinkingRaw, thinkingPresent := document["thinking"]
-	disableThinking, err := parseClaudeRequestedThinking(
+	thinkingDisplay, disableThinking, err := parseClaudeRequestedThinking(
 		thinkingRaw, artifact, officialIngress,
 	)
 	if err != nil {
@@ -247,6 +249,7 @@ func parseClaudeCanonicalMessages(
 		temperature:              temperature,
 		thinking:                 append(json.RawMessage(nil), bytes.TrimSpace(thinkingRaw)...),
 		thinkingPresent:          thinkingPresent,
+		thinkingDisplay:          thinkingDisplay,
 		contextManagement:        append(json.RawMessage(nil), bytes.TrimSpace(contextRaw)...),
 		contextManagementPresent: contextPresent,
 		streamPresent:            streamPresent, stream: stream,
@@ -407,41 +410,95 @@ func parseClaudeRequestedThinking(
 	raw json.RawMessage,
 	artifact claudeWireArtifact,
 	officialIngress bool,
-) (bool, error) {
+) (string, bool, error) {
 	if len(raw) == 0 {
-		return false, nil
+		return "", false, nil
 	}
 	fields, err := decodeClaudeUniqueObject(raw)
 	if err != nil {
-		return false, errors.New("Claude thinking 必须是对象")
+		return "", false, errors.New("Claude thinking 必须是对象")
 	}
 	var kind string
 	if json.Unmarshal(fields["type"], &kind) != nil {
-		return false, errors.New("Claude thinking.type 非法")
+		return "", false, errors.New("Claude thinking.type 非法")
 	}
 	switch kind {
 	case "adaptive":
-		if len(fields) != 1 {
-			return false, errors.New("Claude adaptive thinking 含未批准字段")
+		if len(fields) == 1 {
+			return "", false, nil
 		}
-		return false, nil
+		if len(fields) != 2 || len(fields["display"]) == 0 {
+			return "", false, errors.New("Claude adaptive thinking 含未批准字段")
+		}
+		var display string
+		if json.Unmarshal(fields["display"], &display) != nil ||
+			!slices.Contains(artifact.ImplementationPolicy.Thinking.DisplayValues, display) {
+			return "", false, errors.New("Claude thinking.display 不在批准闭集")
+		}
+		return display, false, nil
 	case "disabled":
 		if len(fields) != 1 {
-			return false, errors.New("Claude disabled thinking 含未批准字段")
+			return "", false, errors.New("Claude disabled thinking 含未批准字段")
 		}
 		// 官方 TUI/background 的固定场景会显式发送 disabled；第三方入站的
 		// 同一形态表达受管关闭开关，Compiler 应省略 thinking 与 context。
-		return !officialIngress, nil
+		return "", !officialIngress, nil
 	case "enabled":
 		if officialIngress && claudeJSONEqual(
 			raw, artifact.ImplementationPolicy.Scenarios.Fallback.Thinking,
 		) {
-			return false, nil
+			return "", false, nil
 		}
-		return false, errors.New("Claude enabled thinking 不在批准官方场景")
+		return "", false, errors.New("Claude enabled thinking 不在批准官方场景")
 	default:
-		return false, errors.New("Claude third-party thinking 形态不在 lossless SupportEnvelope")
+		return "", false, errors.New("Claude third-party thinking 形态不在 lossless SupportEnvelope")
 	}
+}
+
+func compileClaudeAdaptiveThinking(
+	policy claudeWireThinkingPolicy,
+	display string,
+) (json.RawMessage, error) {
+	if display != "" && !slices.Contains(policy.DisplayValues, display) {
+		return nil, errors.New("Claude thinking.display 不在批准闭集")
+	}
+	fields := make([]claudeJSONField, 0, len(policy.FieldOrder))
+	for _, name := range policy.FieldOrder {
+		switch name {
+		case "type":
+			fields = append(fields, claudeJSONField{
+				name: name, raw: mustMarshalClaudeString(policy.Type),
+			})
+		case "display":
+			if display != "" {
+				fields = append(fields, claudeJSONField{
+					name: name, raw: mustMarshalClaudeString(display),
+				})
+			}
+		default:
+			return nil, errors.New("Claude thinking 画像字段顺序非法")
+		}
+	}
+	return marshalClaudeOrderedObject(fields)
+}
+
+func claudeCanonicalThinkingMatchesScenario(
+	canonical ClaudeCanonicalRequest,
+	scenario claudeWireScenario,
+	policy claudeWireThinkingPolicy,
+) bool {
+	if !canonical.thinkingPresent || !scenario.ThinkingPresent {
+		return false
+	}
+	if canonical.thinkingDisplay == "" {
+		return claudeJSONEqual(canonical.thinking, scenario.Thinking)
+	}
+	base, err := compileClaudeAdaptiveThinking(policy, "")
+	if err != nil || !claudeJSONEqual(scenario.Thinking, base) {
+		return false
+	}
+	expected, err := compileClaudeAdaptiveThinking(policy, canonical.thinkingDisplay)
+	return err == nil && claudeJSONEqual(canonical.thinking, expected)
 }
 
 func parseClaudeInboundSystem(
@@ -873,6 +930,22 @@ func compileClaudeMessagesBody(
 	thinking := json.RawMessage(nil)
 	if scenario.ThinkingPresent {
 		thinking = append(json.RawMessage(nil), scenario.Thinking...)
+	}
+	if plan.canonical.thinkingDisplay != "" {
+		base, err := compileClaudeAdaptiveThinking(
+			artifact.ImplementationPolicy.Thinking, "",
+		)
+		if err != nil || !claudeJSONEqual(thinking, base) {
+			return nil, "", "", false, errors.New(
+				"Claude thinking.display 与画像场景冲突",
+			)
+		}
+		thinking, err = compileClaudeAdaptiveThinking(
+			artifact.ImplementationPolicy.Thinking, plan.canonical.thinkingDisplay,
+		)
+		if err != nil {
+			return nil, "", "", false, err
+		}
 	}
 	contextManagement := json.RawMessage(nil)
 	if scenario.ContextManagementPresent {

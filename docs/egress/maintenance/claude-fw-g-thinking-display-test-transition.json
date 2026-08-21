@@ -1,0 +1,61 @@
+{
+  "schema_version": "official-egress-claude-fw-g-thinking-display-test-transition/v1",
+  "date": "2026-08-21",
+  "phase": "FW-G",
+  "base_commit": "86b67672e6abdd49801f54cc9062a8403759372f",
+  "source_transition": {
+    "path": "docs/egress/maintenance/claude-fw-g-thinking-display-source-transition.json",
+    "sha256": "015b430cfd61cbf8434fe790a61b85e64a6425b8de6e5aeae366ea0649712d2a"
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_ingress_authority_transition_test.go",
+      "from_sha256": "b019f3c8c0cabd94a38b72780ec874e696e123736c3d039420b337e78ead3166",
+      "to_sha256": "63b4c343f64f5d27a7c6ce31b7cc40e7a1dc27717b84bf344e22c35a9db7969d",
+      "reason": "既有 ingress authority transition 只接受本次 thinking.display 后继变更的精确摘要承接，不改写历史收据。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_source_transition_test.go",
+      "from_sha256": "0a1d42ad025bc8bbc1e49351c295b5c887a02e0af7d5c4f57af3ac2ca2b921d2",
+      "to_sha256": "e943503961ebaf1e890410fcd61a8745f205b09668b9b807d5d7ec5404961fae",
+      "reason": "历史 FW-G source receipt 固定其原始 wire 摘要，新 wire 由独立后继 transition 承接。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_implementation_coverage_test.go",
+      "from_sha256": "07852cf3bbf1cd939ce592edbc56c7709acf1e176b2cada2aee1dd2c93e9ae56",
+      "to_sha256": "43a1adb9d5d9e6643d733cde1f913878b831e1886eed47fbdd9554d4d9f7ca32",
+      "reason": "冻结增加 thinking.display 实现及测试锚点后的覆盖矩阵摘要。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_profile_contract_test.go",
+      "from_sha256": "39aeb0c31042e8e1aab4eadc308b6d47acba76d345c768cdae4619ecb0672236",
+      "to_sha256": "5ea5f2c923a659b3122f3188a72878788012bc0d11cd9a8a76c07f521b1dfc6d",
+      "reason": "RequiredRules 合同绑定补强后的 manifest 摘要，并继续证明 40／106 映射未变。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_runtime_test.go",
+      "from_sha256": "2427ef52e7bd52a6667c0ec1c67549a5f92a77fd8a827b5e3f0a2e98dda5b750",
+      "to_sha256": "eb8945aec040a5c7107b86138bac48aac467d19fdf453a6105770e46132d8e48",
+      "reason": "覆盖 zlfcode 顺序差异、summarized／omitted 官方 wire、官方入口往返，以及未知值、额外字段和重复字段负例。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_claude_fw_e_complete_campaign.py",
+      "from_sha256": "98b796ae15589da188ae8f2601ed7439ee3e90d33c2a89ec875bbe9d188a02da",
+      "to_sha256": "a9f6e0008d50a794b94b68e0dcae497784e65af316b8076532bbd167e53ebeb7",
+      "reason": "完整 Campaign 测试冻结补强后的 79 项场景闭集。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_claude_fw_f_v4.py",
+      "from_sha256": "c5cca3aaafa03e2a29018cafb3183c34476640b125d6a63103a328d2126b874e",
+      "to_sha256": "3342aad46829f54ae92f97871d20d400c11a81bef8fa798b1edfbf4bcf5be1a5",
+      "reason": "冻结官方 CLI summarized／omitted 两个正交探针的参数和值。"
+    }
+  ],
+  "required_rule_count": 40,
+  "atomic_assertion_count": 110,
+  "wire_sha256": "07dbb15e8a621c4ef4922a9dec09e08d032fd649414f7d2f572c95c87b5679a7",
+  "production_selector_changed": false,
+  "vircs_service_changed": false,
+  "codex_final_wire": "zero_difference_required",
+  "result": "passed"
+}

@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-const claudeFWGRequiredRulesManifestSHA256 = "50261962778b8a7cf85f2dd01a8057f8004e92c0978456e88d9457d4ef8030b3"
+const claudeFWGRequiredRulesManifestSHA256 = "c09fdc9158d4d3aee7e5d28cc4a794e259a3c56899e00d558afab4c537389045"
 
 // TestClaudeFWGProfileMatchesRequiredRulesManifest 固定 FW-F 批准的 40 条
 // RequiredRules 与 106 条画像原子断言，防止只维持数量却替换集合成员。

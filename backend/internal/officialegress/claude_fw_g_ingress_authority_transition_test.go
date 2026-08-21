@@ -145,6 +145,9 @@ func claudeFWGIngressAuthorityTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if claudeFWGThinkingDisplayTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	source, err := loadClaudeFWGIngressAuthoritySourceReceipt()
 	if err != nil {
 		return false
@@ -232,7 +235,10 @@ func TestClaudeFWGIngressAuthorityTransitionsAreFrozen(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := claudeFWGCountTokensDigest(raw); got != transition.ToSHA256 {
+			if got := claudeFWGCountTokensDigest(raw); got != transition.ToSHA256 &&
+				!claudeFWGThinkingDisplayTransitionSupersedes(
+					transition.Path, transition.ToSHA256, got,
+				) {
 				t.Fatalf(
 					"Claude FW-G ingress authority transition 漂移：path=%s got=%s want=%s",
 					transition.Path, got, transition.ToSHA256,

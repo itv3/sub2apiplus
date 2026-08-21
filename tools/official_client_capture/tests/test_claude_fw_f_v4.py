@@ -29,7 +29,7 @@ class ClaudeFWFV4CatalogTests(unittest.TestCase):
         validate_probe_catalog()
         catalog = catalog_document()
         self.assertEqual(PROBE_IDS, tuple(sorted(PROBES)))
-        self.assertEqual(catalog["probe_count"], 77)
+        self.assertEqual(catalog["probe_count"], 79)
         self.assertEqual(
             catalog["required_matrix_dimension_count"],
             len(REQUIRED_MATRIX_DIMENSIONS),
@@ -60,6 +60,20 @@ class ClaudeFWFV4CatalogTests(unittest.TestCase):
         self.assertEqual(refresh.target_host, "platform.claude.com")
         self.assertEqual(refresh.response_plan, "oauth-refresh-reject")
         self.assertEqual(refresh.message_request_expectation, "zero")
+
+    def test_thinking_display_probes_freeze_supported_cli_values(self) -> None:
+        summarized = get_probe("v4-thinking-display-summarized")
+        omitted = get_probe("v4-thinking-display-omitted")
+        self.assertEqual(
+            summarized.cli_args,
+            ("--thinking-display", "summarized"),
+        )
+        self.assertEqual(
+            omitted.cli_args,
+            ("--thinking-display", "omitted"),
+        )
+        self.assertEqual(summarized.dimensions, ())
+        self.assertEqual(omitted.dimensions, ())
 
     def test_usage_advisor_and_models_are_not_name_only_scenarios(self) -> None:
         usage = get_probe("v4-tui-usage")

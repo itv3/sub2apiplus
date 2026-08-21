@@ -499,7 +499,9 @@ func completeClaudeOfficialIngressFeatures(
 	}
 	if canonical.thinkingPresent {
 		if canonical.disableThinking || !scenario.ThinkingPresent ||
-			!claudeJSONEqual(canonical.thinking, scenario.Thinking) {
+			!claudeCanonicalThinkingMatchesScenario(
+				canonical, scenario, artifact.ImplementationPolicy.Thinking,
+			) {
 			return errors.New("Claude 官方 thinking 不在批准场景")
 		}
 	} else if scenario.ThinkingPresent {
