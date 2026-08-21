@@ -1,0 +1,43 @@
+{
+  "schema_version": "official-egress-claude-fw-g-desktop-compat-test-transition/v1",
+  "date": "2026-08-21",
+  "phase": "FW-G",
+  "base_commit": "d5604befd8f6700bb875703b5f2d012b122bf764",
+  "source_transition": {
+    "path": "docs/egress/maintenance/claude-fw-g-desktop-compat-source-transition.json",
+    "sha256": "7a01e9722ca6df4bc20c6822cc445c34d8541a2d9939560e3caff11f991596d7"
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/claude_desktop_third_party_ingress_test.go",
+      "from_sha256": "6d29f1e04f30eaa7201a108c622419ff46f16f8104634cdaed7b94d4255cb66a",
+      "to_sha256": "2722eccfe15338cd08574fa5224716e14de49834b904245d795e5c0254db4b07",
+      "reason": "固定两种 2.1.234 Desktop CLI UA 的第三方入口身份，并保持未批准官方 cli 版本负例。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_desktop_ingress_transition_test.go",
+      "from_sha256": "c4e0ad688fd4e528751b39e8c7689db2941bf60ffb391e5d1bdd1c42a2d98574",
+      "to_sha256": "5fcd0654f0adeb2a5ae2bd5c3b19fb04590a5c4e6564830e8132293d49640f58",
+      "reason": "既有 Desktop transition 只接受本次 compatibility 修复的精确追加承接，不改写历史收据。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_runtime_test.go",
+      "from_sha256": "0b6937795cceea8a2ad8d157e376a717d2230710890d991385a8ab5f6ef268b7",
+      "to_sha256": "b2d983d68c5c06f025831407d2d36ec5fb96b80a9030bfa1f93e44d146495352",
+      "reason": "覆盖标准动态工具正例，以及重复名、名称越界、目录超限、未批准 deferred 和特殊 server tool 负例。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_candidate_test.go",
+      "from_sha256": "da34b47877ba8e5c1a4aedf731f5ebd18dd279dd0b261630468ef6c69d226ef7",
+      "to_sha256": "23129b4738e4ef010e6c4fe42629e55a8d4d1df364c8bb26e876c6a74264f998",
+      "reason": "入口级复现 Electron 与无 agent-sdk 后缀 Desktop UA、stream=false 和 20 项工具目录，并断言上游仍为 2.1.226 stream=true。"
+    },
+    {
+      "path": "backend/internal/service/gateway_claude_fw_g_buffer_test.go",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "a4a5fd6ad9c8eb7f661a506f48ea9c4605d2a7b72024f331322cc77035bdaf48",
+      "reason": "逐事件验证 text、thinking、signature、citation 和工具输入聚合，并证明不完整、未知、错误及终止后事件均失败关闭。"
+    }
+  ],
+  "result": "passed"
+}

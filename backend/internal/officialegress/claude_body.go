@@ -166,11 +166,6 @@ func parseClaudeCanonicalMessages(
 			)
 		}
 	}
-	if !officialIngress && (!streamPresent || !stream) {
-		return ClaudeCanonicalRequest{}, TranslationReport{}, errors.New(
-			"Claude 第三方 lossless SupportEnvelope 只批准显式 stream=true",
-		)
-	}
 	modelRaw, ok := document["model"]
 	if !ok {
 		return ClaudeCanonicalRequest{}, TranslationReport{}, errors.New("Claude candidate 缺少 model")

@@ -32,7 +32,7 @@ var (
 		`^claude-cli/2\.1\.226 \(external, (sdk-cli|cli)((?:, (?:agent-sdk|client-app|workload)/[A-Za-z0-9._:/-]+)*)\)$`,
 	)
 	claudeDesktopThirdPartyUAPattern = regexp.MustCompile(
-		`^claude-cli/[0-9]+\.[0-9]+\.[0-9]+ \(external, claude-desktop-3p, agent-sdk/[0-9]+\.[0-9]+\.[0-9]+\)$`,
+		`^claude-cli/[0-9]+\.[0-9]+\.[0-9]+ \(external, claude-desktop-3p(?:, agent-sdk/[0-9]+\.[0-9]+\.[0-9]+)?\)$`,
 	)
 	claudeCCHPattern = regexp.MustCompile(`^[0-9a-f]{5}$`)
 )

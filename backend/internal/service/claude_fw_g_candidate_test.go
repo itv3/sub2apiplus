@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -34,6 +35,7 @@ type claudeFWGServiceUpstream struct {
 	captures          []claudeFWGServiceCapture
 	rejectFirstStream bool
 	streamRejected    bool
+	streamAsSSE       bool
 }
 
 func (u *claudeFWGServiceUpstream) Do(
@@ -63,11 +65,26 @@ func (u *claudeFWGServiceUpstream) DoWithTLS(
 	})
 	status := http.StatusOK
 	responseBody := `{}`
+	contentType := "application/json"
 	switch request.URL.Path {
 	case "/v1/messages":
 		if u.rejectFirstStream && !u.streamRejected && bytes.Contains(body, []byte(`"stream":true`)) {
 			u.streamRejected = true
 			status = http.StatusNotFound
+		} else if u.streamAsSSE && bytes.Contains(body, []byte(`"stream":true`)) {
+			contentType = "text/event-stream"
+			responseBody = "event: message_start\n" +
+				`data: {"type":"message_start","message":{"id":"msg_fwg","type":"message","role":"assistant","model":"claude-sonnet-5","content":[],"stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":3,"output_tokens":0}}}` + "\n\n" +
+				"event: content_block_start\n" +
+				`data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}` + "\n\n" +
+				"event: content_block_delta\n" +
+				`data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"ok"}}` + "\n\n" +
+				"event: content_block_stop\n" +
+				`data: {"type":"content_block_stop","index":0}` + "\n\n" +
+				"event: message_delta\n" +
+				`data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":2}}` + "\n\n" +
+				"event: message_stop\n" +
+				`data: {"type":"message_stop"}` + "\n\n"
 		} else {
 			responseBody = `{"id":"msg_fwg","type":"message","role":"assistant","model":"claude-sonnet-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":3,"output_tokens":2}}`
 		}
@@ -79,12 +96,89 @@ func (u *claudeFWGServiceUpstream) DoWithTLS(
 	return &http.Response{
 		StatusCode: status,
 		Header: http.Header{
-			"Content-Type": []string{"application/json"},
+			"Content-Type": []string{contentType},
 			"Request-Id":   []string{"req_servicetest"},
 		},
 		Body:    io.NopCloser(strings.NewReader(responseBody)),
 		Request: request,
 	}, nil
+}
+
+func TestGatewayClaudeFWGDesktopNonStreamBuffersOfficialStream(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tools := make([]map[string]any, 0, 20)
+	for _, name := range []string{
+		"Agent", "Bash", "CronCreate", "CronDelete", "CronList", "Edit",
+		"EnterWorktree", "ExitWorktree", "NotebookEdit", "Read", "ReportFindings",
+		"ScheduleWakeup", "SendMessage", "Skill", "TaskOutput", "TaskStop",
+		"WebFetch", "WebSearch", "Workflow", "Write",
+	} {
+		tools = append(tools, map[string]any{
+			"name": name, "description": "Claude Desktop dynamic tool " + name,
+			"input_schema": map[string]any{
+				"type": "object", "properties": map[string]any{},
+			},
+		})
+	}
+	body, err := json.Marshal(map[string]any{
+		"model": "claude-sonnet-5", "messages": []map[string]any{{
+			"role": "user", "content": "desktop non-stream",
+		}},
+		"tools": tools, "stream": false,
+	})
+	require.NoError(t, err)
+
+	for _, userAgent := range []string{
+		"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Claude/1.32885.1 Electron/42.9.2",
+		"claude-cli/2.1.234 (external, claude-desktop-3p)",
+	} {
+		t.Run(userAgent, func(t *testing.T) {
+			upstream := &claudeFWGServiceUpstream{streamAsSSE: true}
+			runtimeState, cfg := newClaudeFWGServiceRuntime(t, upstream)
+			svc := &GatewayService{
+				cfg: cfg, rateLimitService: &RateLimitService{},
+				responseHeaderFilter: compileResponseHeaderFilter(cfg),
+				claudeTokenProvider:  NewClaudeTokenProvider(nil, nil, nil),
+				officialEgress:       runtimeState,
+			}
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+			c.Request.Header.Set("User-Agent", userAgent)
+			c.Set("api_key", &APIKey{ID: 23})
+			c.Request = c.Request.WithContext(WithOfficialClaudeIngressRuntime(c.Request.Context(), c))
+			parsed, parseErr := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+			require.NoError(t, parseErr)
+			result, forwardErr := svc.Forward(context.Background(), c, claudeFWGServiceAccount(), parsed)
+			require.NoError(t, forwardErr)
+			require.False(t, result.Stream)
+			require.Equal(t, 3, result.Usage.InputTokens)
+			require.Equal(t, 2, result.Usage.OutputTokens)
+			require.Equal(t, "application/json", recorder.Header().Get("Content-Type"))
+			require.JSONEq(t,
+				`{"id":"msg_fwg","type":"message","role":"assistant","model":"claude-sonnet-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":3,"output_tokens":2}}`,
+				recorder.Body.String(),
+			)
+			messageCaptures := make([]claudeFWGServiceCapture, 0, 1)
+			for _, capture := range upstream.captures {
+				if strings.Contains(capture.url, "/v1/messages?beta=true") {
+					messageCaptures = append(messageCaptures, capture)
+				}
+			}
+			require.Len(t, messageCaptures, 1)
+			require.Contains(t, string(messageCaptures[0].body), `"stream":true`)
+			require.Equal(t,
+				"claude-cli/2.1.226 (external, sdk-cli)",
+				messageCaptures[0].header.Get("User-Agent"),
+			)
+			var upstreamBody struct {
+				Tools []map[string]any `json:"tools"`
+			}
+			require.NoError(t, json.Unmarshal(messageCaptures[0].body, &upstreamBody))
+			require.Len(t, upstreamBody.Tools, 20)
+		})
+	}
 }
 
 type claudeFWGProxyRepoStub struct {
@@ -281,10 +375,6 @@ func TestClaudeFWGServiceIngressSnapshotAndRouteAreClosed(t *testing.T) {
 		name string
 		body []byte
 	}{
-		{
-			name: "non-stream",
-			body: []byte(`{"model":"claude-sonnet-5","messages":[{"role":"user","content":"boundary"}],"tools":[],"stream":false}`),
-		},
 		{
 			name: "outside-model",
 			body: []byte(`{"model":"claude-haiku-4-5","messages":[{"role":"user","content":"boundary"}],"tools":[],"stream":true}`),

@@ -1,0 +1,89 @@
+{
+  "schema_version": "official-egress-claude-fw-g-desktop-compat-source-transition/v1",
+  "date": "2026-08-21",
+  "phase": "FW-G",
+  "base_commit": "d5604befd8f6700bb875703b5f2d012b122bf764",
+  "trigger": "DMIT 真实 Claude Desktop 2.1.234 非流式请求与 20 项合法动态工具目录被既有 Candidate 错误判为 SupportEnvelope 外请求",
+  "prior_transitions": [
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-desktop-ingress-source-transition.json",
+      "sha256": "be30a4f8f65fd95adab521093cc3c7da9f45796ebf6fdc7e461e92044a40a71d"
+    },
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-desktop-ingress-test-transition.json",
+      "sha256": "edc54d5f2034dbf3bfefc8013fc874dfe4a95d94b1d78e554c85065b2a45f476"
+    }
+  ],
+  "invalidated_acceptance": {
+    "candidate_id": "claude-code-2_1_226-fw-g-651ccd518",
+    "public_receipt_commit": "d5604befd8f6700bb875703b5f2d012b122bf764",
+    "reason": "旧验收没有覆盖 Desktop stream=false、无 agent-sdk 后缀和合法动态工具目录，真实入口失败推翻 accepted 结论；不得复用旧 ValidationCandidate 或 AcceptanceFact。"
+  },
+  "official_evidence": {
+    "target_version": "2.1.226",
+    "desktop_version": "2.1.234",
+    "desktop_binary_sha256": "08d8700313697cbe730a25420c908a299ce52d56f0eb2cf4fac94cab5109bc57",
+    "capture_method": "official-binary-loopback-fake-token",
+    "local_claude_login_used": false,
+    "local_client_connected_to_dmit": false,
+    "user_agents": [
+      "claude-cli/2.1.234 (external, claude-desktop-3p)",
+      "claude-cli/2.1.234 (external, claude-desktop-3p, agent-sdk/0.3.234)"
+    ],
+    "desktop_tool_count": 20,
+    "desktop_tool_catalog_sha256": "e2d1c9b02742888e96bfbc4315f3b8211429ab7336d1c14fadf1d828c3bce0f6",
+    "target_messages_requests": 123,
+    "target_tool_catalog_variants": 11,
+    "target_maximum_tool_catalog_size": 33,
+    "standard_descriptor_fields": [
+      "name",
+      "description",
+      "input_schema"
+    ]
+  },
+  "dispositions": [
+    {
+      "finding": "Desktop stream=false 或省略 stream",
+      "result": "第三方入口保持非流式响应语义；2.1.226 Persona 出站仍强制 stream=true，SSE 在下游 compatibility 层严格聚合为 Messages JSON，不新增 request-egress 规则。"
+    },
+    {
+      "finding": "Desktop 两种 claude-desktop-3p User-Agent",
+      "result": "均只证明第三方入口类别，不得继承或声明 2.1.226 官方 Release 身份；其他未批准 claude-cli 身份继续 fail-close。"
+    },
+    {
+      "finding": "20 项 name、description、input_schema 标准动态工具目录",
+      "result": "归入 SPEC-TOOL-021 已实测的标准动态描述符语义类；最多 33 项、名称符合官方模式、schema.type=object 且名称唯一时无损进入，未知字段、tool_choice、deferred 变体和特殊 server tool 继续 fail-close。"
+    }
+  ],
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/claude_body.go",
+      "from_sha256": "a4559ce277a1bf1c8c554ab42fd70695d141a8ab64f16b28afde1de8b1329c50",
+      "to_sha256": "6877123a881ba1ade19f51120d39d77f12f878b99ba5d4cb7c5603a8711b7823",
+      "reason": "第三方 Anthropic Messages 接受合法的 stream=false 或省略状态；官方入站和 2.1.226 Persona 出站流式规则保持不变。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_ingress.go",
+      "from_sha256": "aac2e5e9326cb97a14f0b0bcf81505418a54bc233bef85f14099d68d5ae6f57e",
+      "to_sha256": "27abd1e5c54bb4a980eaf00e744c6507bacb4da0bbf4eaead7e4329b2ebef6e8",
+      "reason": "把 2.1.234 实测的两种 claude-desktop-3p UA 都识别为第三方入口，禁止错误继承目标 Release 身份。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_tools.go",
+      "from_sha256": "7de86c22025f1752ab24dc4937cd40f4ff198583bd80b36091ef4e5bed29cc6f",
+      "to_sha256": "b700b2e054bb010f95940bcd94d6c4e1ca5c0a59b5ecf3dfb3fd8fc876f1abdd",
+      "reason": "实现 2.1.226 画像已有的标准动态工具描述符语义类；Persona 特殊工具目录仍逐字节闭集，未知能力不自动放行。"
+    },
+    {
+      "path": "backend/internal/service/gateway_claude_fw_g.go",
+      "from_sha256": "1a43809d795bf4cd03b721a1faef2758f7100b1b3ff2f85bc51f9131347bde2e",
+      "to_sha256": "750ecc54194ba13a01bdf42a0a962fc6b76195cca3c00179cf369017407d0e6d",
+      "reason": "在不改变官方流式出站的前提下，把完整 Anthropic SSE 严格聚合为第三方非流式 Messages JSON，并对畸形或未终止事件失败关闭。"
+    }
+  ],
+  "production_selector_changed": false,
+  "vircs_service_changed": false,
+  "dmit_candidate_rebuild_required": true,
+  "codex_final_wire": "zero_difference_required",
+  "result": "passed"
+}

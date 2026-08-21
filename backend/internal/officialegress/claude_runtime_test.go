@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -1251,7 +1252,58 @@ func TestClaudeFWGToolPolicyIsClosed(t *testing.T) {
 		json.RawMessage(`[{"name":"UnknownTool","input_schema":{"type":"object"}}]`), nil, wire,
 	)
 	if err == nil {
-		t.Fatal("未知 Claude 工具未 fail-close")
+		t.Fatal("缺少描述的未知 Claude 工具未 fail-close")
+	}
+	dynamic := json.RawMessage(`[{"name":"CronCreate","description":"Create a cron job","input_schema":{"type":"object","properties":{"schedule":{"type":"string"}},"required":["schedule"]}},{"name":"mcp__desktop__custom_tool","description":"Desktop MCP tool","input_schema":{"type":"object","properties":{}}}]`)
+	compiledDynamic, dynamicChoice, dynamicMode, err := compileClaudeApprovedTools(dynamic, nil, wire)
+	if err != nil || dynamicMode != claudeToolModeDynamic || len(dynamicChoice) != 0 ||
+		!bytes.Equal(compiledDynamic, dynamic) {
+		t.Fatalf("标准动态工具目录没有无损进入受管语义层：mode=%s err=%v", dynamicMode, err)
+	}
+	_, _, _, err = compileClaudeApprovedTools(
+		json.RawMessage(`[{"name":"CronCreate","description":"one","input_schema":{"type":"object"}},{"name":"CronCreate","description":"two","input_schema":{"type":"object"}}]`),
+		nil,
+		wire,
+	)
+	if err == nil {
+		t.Fatal("重复名称的动态工具目录未 fail-close")
+	}
+	_, _, _, err = compileClaudeApprovedTools(
+		json.RawMessage(`[{"name":"future.tool","description":"future","input_schema":{"type":"object"}}]`),
+		nil,
+		wire,
+	)
+	if err == nil {
+		t.Fatal("超出官方名称模式的动态工具未 fail-close")
+	}
+	_, _, _, err = compileClaudeApprovedTools(
+		json.RawMessage(`[{"name":"Deferred","description":"deferred","input_schema":{"type":"object"},"defer_loading":true}]`),
+		nil,
+		wire,
+	)
+	if err == nil {
+		t.Fatal("未命中批准目录的 deferred 工具未 fail-close")
+	}
+	oversized := make([]map[string]any, 0, claudeDynamicToolCatalogLimit+1)
+	for index := 0; index <= claudeDynamicToolCatalogLimit; index++ {
+		oversized = append(oversized, map[string]any{
+			"name": fmt.Sprintf("Dynamic%d", index), "description": "dynamic",
+			"input_schema": map[string]any{"type": "object"},
+		})
+	}
+	oversizedRaw, marshalErr := json.Marshal(oversized)
+	if marshalErr != nil {
+		t.Fatal(marshalErr)
+	}
+	_, _, _, err = compileClaudeApprovedTools(oversizedRaw, nil, wire)
+	if err == nil {
+		t.Fatal("超过已实测上限的动态工具目录未 fail-close")
+	}
+	_, _, _, err = compileClaudeApprovedTools(
+		json.RawMessage(`[{"type":"future_server_tool","name":"future"}]`), nil, wire,
+	)
+	if err == nil {
+		t.Fatal("未批准的特殊 server tool 未 fail-close")
 	}
 
 	advisorBody, err := marshalClaudeOrderedObject([]claudeJSONField{

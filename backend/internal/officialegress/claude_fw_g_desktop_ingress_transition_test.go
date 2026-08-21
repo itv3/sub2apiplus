@@ -80,6 +80,21 @@ func claudeFWGDesktopIngressTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if claudeFWGDesktopCompatibilityTransitionSupersedes(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
+	return claudeFWGDesktopIngressPriorTransitionSupersedes(
+		path, priorDigest, currentDigest,
+	)
+}
+
+func claudeFWGDesktopIngressPriorTransitionSupersedes(
+	path string,
+	priorDigest string,
+	currentDigest string,
+) bool {
 	source, err := loadClaudeFWGDesktopIngressSourceReceipt()
 	if err != nil {
 		return false
@@ -136,7 +151,10 @@ func TestClaudeFWGDesktopIngressTransitionsAreFrozen(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := claudeFWGCountTokensDigest(raw); got != transition.ToSHA256 {
+			if got := claudeFWGCountTokensDigest(raw); got != transition.ToSHA256 &&
+				!claudeFWGDesktopCompatibilityTransitionSupersedes(
+					transition.Path, transition.ToSHA256, got,
+				) {
 				t.Fatalf(
 					"Claude FW-G Desktop 入站 transition 漂移：path=%s got=%s want=%s",
 					transition.Path, got, transition.ToSHA256,

@@ -1,6 +1,7 @@
 package service
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -409,7 +410,23 @@ func (s *GatewayService) finishClaudeFWGCandidateResponse(
 	var firstTokenMS *int
 	var clientDisconnect bool
 	var err error
-	if result.Stream {
+	if result.Stream && !clientStream {
+		responseBody, bufferErr := s.bufferClaudeFWGSSEToJSON(resp)
+		if bufferErr != nil {
+			return nil, bufferErr
+		}
+		_ = resp.Body.Close()
+		resp.Body = io.NopCloser(bytes.NewReader(responseBody))
+		resp.ContentLength = int64(len(responseBody))
+		resp.Header.Set("Content-Type", "application/json")
+		resp.Header.Del("Content-Length")
+		usage, err = s.handleNonStreamingResponse(
+			ctx, resp, c, account, originalModel, result.Model,
+		)
+		if err != nil {
+			return nil, err
+		}
+	} else if result.Stream {
 		streamResult, streamErr := s.handleStreamingResponse(
 			ctx, resp, c, account, startTime, originalModel, result.Model, false,
 		)
@@ -489,6 +506,291 @@ func (s *GatewayService) finishClaudeFWGCandidateResponse(
 		FirstTokenMs:                  firstTokenMS,
 		ClientDisconnect:              clientDisconnect,
 	}, nil
+}
+
+func (s *GatewayService) bufferClaudeFWGSSEToJSON(resp *http.Response) ([]byte, error) {
+	if resp == nil || resp.Body == nil {
+		return nil, errors.New("Claude FW-G buffered stream 缺少响应体")
+	}
+	scanner := bufio.NewScanner(resp.Body)
+	maxLineSize := defaultMaxLineSize
+	if s != nil && s.cfg != nil && s.cfg.Gateway.MaxLineSize > 0 {
+		maxLineSize = s.cfg.Gateway.MaxLineSize
+	}
+	scanner.Buffer(make([]byte, 0, 64*1024), maxLineSize)
+
+	var message map[string]any
+	content := make([]any, 0)
+	usage := make(map[string]any)
+	partialInputs := make(map[int]string)
+	openBlocks := make(map[int]struct{})
+	terminal := false
+	pending := make([]string, 0, 4)
+
+	finalizeInput := func(index int) error {
+		partial, ok := partialInputs[index]
+		if !ok {
+			return nil
+		}
+		if index < 0 || index >= len(content) {
+			return errors.New("Claude buffered stream 的工具输入索引越界")
+		}
+		block, ok := content[index].(map[string]any)
+		if !ok {
+			return errors.New("Claude buffered stream 的工具块不是对象")
+		}
+		var input map[string]any
+		if err := decodeClaudeFWGJSONValue(partial, &input); err != nil {
+			return errors.New("Claude buffered stream 的工具输入不是完整 JSON 对象")
+		}
+		if input == nil {
+			return errors.New("Claude buffered stream 的工具输入不是 JSON 对象")
+		}
+		block["input"] = input
+		delete(partialInputs, index)
+		return nil
+	}
+
+	process := func(lines []string) error {
+		if len(lines) == 0 {
+			return nil
+		}
+		eventName := ""
+		dataLines := make([]string, 0, 1)
+		for _, line := range lines {
+			if value, ok := parseAnthropicSSEField(line, "event"); ok {
+				eventName = value
+				continue
+			}
+			if value, ok := parseAnthropicSSEField(line, "data"); ok {
+				dataLines = append(dataLines, value)
+			}
+		}
+		data := strings.Join(dataLines, "\n")
+		if eventName == "error" {
+			return &sseStreamErrorEventError{RawData: data}
+		}
+		if data == "" {
+			return nil
+		}
+		var event map[string]any
+		if err := decodeClaudeFWGJSONValue(data, &event); err != nil {
+			return errors.New("Claude buffered stream 事件不是 JSON 对象")
+		}
+		eventType, _ := event["type"].(string)
+		if eventType == "error" {
+			return &sseStreamErrorEventError{RawData: data}
+		}
+		if eventName != "" && eventName != eventType {
+			return errors.New("Claude buffered stream 的 event 与 type 冲突")
+		}
+		if terminal {
+			return errors.New("Claude buffered stream 在 message_stop 后仍有事件")
+		}
+		switch eventType {
+		case "ping":
+			return nil
+		case "message_start":
+			if message != nil {
+				return errors.New("Claude buffered stream 重复 message_start")
+			}
+			started, ok := event["message"].(map[string]any)
+			if !ok {
+				return errors.New("Claude buffered stream 缺少 message_start.message")
+			}
+			initialContent, ok := started["content"].([]any)
+			if !ok || len(initialContent) != 0 {
+				return errors.New("Claude buffered stream 的初始 content 非空或非法")
+			}
+			initialUsage, ok := started["usage"].(map[string]any)
+			if !ok {
+				return errors.New("Claude buffered stream 缺少初始 usage")
+			}
+			for key, value := range initialUsage {
+				usage[key] = value
+			}
+			message = started
+			message["content"] = content
+		case "content_block_start":
+			if message == nil {
+				return errors.New("Claude buffered stream 在 message_start 前开始 content")
+			}
+			index, ok := claudeFWGEventIndex(event["index"])
+			if !ok || index != len(content) {
+				return errors.New("Claude buffered stream 的 content_block_start 索引非法")
+			}
+			block, ok := event["content_block"].(map[string]any)
+			if !ok {
+				return errors.New("Claude buffered stream 的 content_block 不是对象")
+			}
+			blockType, _ := block["type"].(string)
+			if strings.TrimSpace(blockType) == "" {
+				return errors.New("Claude buffered stream 的 content_block.type 非法")
+			}
+			content = append(content, block)
+			openBlocks[index] = struct{}{}
+			message["content"] = content
+		case "content_block_delta":
+			index, ok := claudeFWGEventIndex(event["index"])
+			if !ok || index < 0 || index >= len(content) {
+				return errors.New("Claude buffered stream 的 content_block_delta 索引非法")
+			}
+			if _, open := openBlocks[index]; !open {
+				return errors.New("Claude buffered stream 向已结束的 content block 写入 delta")
+			}
+			block, ok := content[index].(map[string]any)
+			if !ok {
+				return errors.New("Claude buffered stream 的 content block 不是对象")
+			}
+			delta, ok := event["delta"].(map[string]any)
+			if !ok {
+				return errors.New("Claude buffered stream 的 delta 不是对象")
+			}
+			deltaType, _ := delta["type"].(string)
+			switch deltaType {
+			case "text_delta":
+				if err := appendClaudeFWGStringDelta(block, "text", delta["text"]); err != nil {
+					return err
+				}
+			case "thinking_delta":
+				if err := appendClaudeFWGStringDelta(block, "thinking", delta["thinking"]); err != nil {
+					return err
+				}
+			case "signature_delta":
+				if err := appendClaudeFWGStringDelta(block, "signature", delta["signature"]); err != nil {
+					return err
+				}
+			case "input_json_delta":
+				fragment, ok := delta["partial_json"].(string)
+				if !ok {
+					return errors.New("Claude buffered stream 的 partial_json 非法")
+				}
+				partialInputs[index] += fragment
+			case "citations_delta":
+				citation, ok := delta["citation"].(map[string]any)
+				if !ok {
+					return errors.New("Claude buffered stream 的 citation 非法")
+				}
+				citations, _ := block["citations"].([]any)
+				block["citations"] = append(citations, citation)
+			default:
+				return fmt.Errorf("Claude buffered stream 不支持 delta：%s", deltaType)
+			}
+		case "content_block_stop":
+			index, ok := claudeFWGEventIndex(event["index"])
+			if !ok || index < 0 || index >= len(content) {
+				return errors.New("Claude buffered stream 的 content_block_stop 索引非法")
+			}
+			if _, open := openBlocks[index]; !open {
+				return errors.New("Claude buffered stream 重复结束 content block")
+			}
+			if err := finalizeInput(index); err != nil {
+				return err
+			}
+			delete(openBlocks, index)
+		case "message_delta":
+			if message == nil {
+				return errors.New("Claude buffered stream 在 message_start 前结束 message")
+			}
+			delta, ok := event["delta"].(map[string]any)
+			if !ok {
+				return errors.New("Claude buffered stream 缺少 message_delta.delta")
+			}
+			for key, value := range delta {
+				if key != "type" {
+					message[key] = value
+				}
+			}
+			if finalUsage, ok := event["usage"].(map[string]any); ok {
+				for key, value := range finalUsage {
+					usage[key] = value
+				}
+			}
+		case "message_stop":
+			if message == nil {
+				return errors.New("Claude buffered stream 在 message_start 前结束 message")
+			}
+			if len(openBlocks) != 0 || len(partialInputs) != 0 {
+				return errors.New("Claude buffered stream 在 content block 完成前结束 message")
+			}
+			terminal = true
+		default:
+			return fmt.Errorf("Claude buffered stream 不支持事件：%s", eventType)
+		}
+		return nil
+	}
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.TrimSpace(line) != "" {
+			pending = append(pending, line)
+			continue
+		}
+		if err := process(pending); err != nil {
+			return nil, err
+		}
+		pending = pending[:0]
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("读取 Claude buffered stream：%w", err)
+	}
+	if err := process(pending); err != nil {
+		return nil, err
+	}
+	if message == nil || !terminal {
+		return nil, errors.New("Claude buffered stream 缺少完整终止事件")
+	}
+	for _, field := range []string{"id", "type", "role", "model"} {
+		value, ok := message[field].(string)
+		if !ok || strings.TrimSpace(value) == "" {
+			return nil, fmt.Errorf("Claude buffered stream 缺少 message.%s", field)
+		}
+	}
+	message["content"] = content
+	message["usage"] = usage
+	return json.Marshal(message)
+}
+
+func decodeClaudeFWGJSONValue(raw string, target any) error {
+	decoder := json.NewDecoder(strings.NewReader(raw))
+	decoder.UseNumber()
+	if err := decoder.Decode(target); err != nil {
+		return err
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return errors.New("JSON 尾部存在额外值")
+		}
+		return err
+	}
+	return nil
+}
+
+func claudeFWGEventIndex(value any) (int, bool) {
+	number, ok := value.(json.Number)
+	if !ok {
+		return 0, false
+	}
+	parsed, err := strconv.Atoi(number.String())
+	return parsed, err == nil && parsed >= 0
+}
+
+func appendClaudeFWGStringDelta(block map[string]any, field string, value any) error {
+	delta, ok := value.(string)
+	if !ok {
+		return fmt.Errorf("Claude buffered stream 的 %s delta 非法", field)
+	}
+	current, exists := block[field]
+	if !exists {
+		block[field] = delta
+		return nil
+	}
+	text, ok := current.(string)
+	if !ok {
+		return fmt.Errorf("Claude buffered stream 的 %s 字段非法", field)
+	}
+	block[field] = text + delta
+	return nil
 }
 
 func (s *GatewayService) bridgeClaudeFWGJSONToSSE(
