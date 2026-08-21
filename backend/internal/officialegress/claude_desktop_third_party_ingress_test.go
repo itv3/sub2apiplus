@@ -10,6 +10,11 @@ func TestClaudeFWGDesktopThirdPartyDoesNotClaimTargetReleaseIdentity(t *testing.
 	for _, userAgent := range []string{
 		"claude-cli/2.1.234 (external, claude-desktop-3p)",
 		"claude-cli/2.1.234 (external, claude-desktop-3p, agent-sdk/0.3.234)",
+		"claude-cli/2.1.235 (external, claude-desktop-3p, agent-sdk/0.3.235)",
+		"claude-cli/2.1.235 (external, local-agent, agent-sdk/0.3.235)",
+		"claude-cli/2.1.234 (external, cli)",
+		"claude-cli/2.1.226 (external, sdk-cli)",
+		"Kilo-Code/4.95.0",
 	} {
 		desktop := ClaudeIngressSnapshot{Captured: true, Headers: http.Header{
 			"User-Agent": []string{userAgent},
@@ -29,12 +34,4 @@ func TestClaudeFWGDesktopThirdPartyDoesNotClaimTargetReleaseIdentity(t *testing.
 		}
 	}
 
-	unsupportedOfficial := ClaudeIngressSnapshot{Captured: true, Headers: http.Header{
-		"User-Agent": []string{"claude-cli/2.1.234 (external, cli)"},
-	}}
-	if _, _, _, err := resolveClaudeOfficialIngressBase(
-		nil, unsupportedOfficial, trusted, claudeFWGProfile{}, claudeWireArtifact{},
-	); err == nil {
-		t.Fatal("未批准版本的官方身份声明没有 fail-close")
-	}
 }

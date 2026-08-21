@@ -31,13 +31,29 @@ var (
 	claudeOfficialUAPattern = regexp.MustCompile(
 		`^claude-cli/2\.1\.226 \(external, (sdk-cli|cli)((?:, (?:agent-sdk|client-app|workload)/[A-Za-z0-9._:/-]+)*)\)$`,
 	)
-	claudeDesktopThirdPartyUAPattern = regexp.MustCompile(
-		`^claude-cli/[0-9]+\.[0-9]+\.[0-9]+ \(external, claude-desktop-3p(?:, agent-sdk/[0-9]+\.[0-9]+\.[0-9]+)?\)$`,
-	)
 	claudeCCHPattern = regexp.MustCompile(`^[0-9a-f]{5}$`)
 )
 
 func resolveClaudeOfficialIngressBase(
+	body []byte,
+	snapshot ClaudeIngressSnapshot,
+	trusted ClaudeTrustedFacts,
+	profile claudeFWGProfile,
+	artifact claudeWireArtifact,
+) (ClaudeTrustedFacts, claudeOfficialIngressState, bool, error) {
+	resolved, state, official, err := validateClaudeOfficialIngressBase(
+		body, snapshot, trusted, profile, artifact,
+	)
+	if err != nil {
+		// 入站 UA 和同名 Header 都是不可信提示，不能拥有 Persona 准入或
+		// 拒绝权。完整官方一致性校验失败时回到标准协议语义链；后续仍会
+		// 对 CanonicalRequest 的字段闭集和无损性独立 fail-close。
+		return trusted, claudeOfficialIngressState{}, false, nil
+	}
+	return resolved, state, official, nil
+}
+
+func validateClaudeOfficialIngressBase(
 	body []byte,
 	snapshot ClaudeIngressSnapshot,
 	trusted ClaudeTrustedFacts,
@@ -49,13 +65,11 @@ func resolveClaudeOfficialIngressBase(
 	}
 	headers := snapshot.Headers.Clone()
 	userAgent := strings.TrimSpace(headers.Get("User-Agent"))
-	// claude-desktop-3p 明确表示第三方网关入口，不能把它的客户端版本
-	// 或 Header 当作目标 Release 的可信官方身份。
-	if claudeDesktopThirdPartyUAPattern.MatchString(userAgent) {
-		return trusted, claudeOfficialIngressState{}, false, nil
-	}
-	claimed := strings.HasPrefix(strings.ToLower(userAgent), "claude-cli/")
-	if !claimed {
+	// 入站客户端名称、版本和 User-Agent 不拥有 Persona 或生产画像选择权。
+	// 只有与当前 Release 完整一致的形态才进入后续一致性验证；Desktop、
+	// 新旧版本 Claude Code、KiloCode 及其他标准客户端一律按第三方语义
+	// 入站处理，不能因为自报了 claude-cli 身份而被拒绝或继承官方身份。
+	if !claudeOfficialUAPattern.MatchString(userAgent) {
 		return trusted, claudeOfficialIngressState{}, false, nil
 	}
 	entrypoint, uaFeatures, err := parseClaudeOfficialUserAgent(userAgent)
@@ -180,15 +194,26 @@ func resolveClaudeOfficialCountTokensIngress(
 	trusted ClaudeTrustedFacts,
 	profile claudeFWGProfile,
 ) (ClaudeTrustedFacts, error) {
+	resolved, err := validateClaudeOfficialCountTokensIngress(snapshot, trusted, profile)
+	if err != nil {
+		// count_tokens 与 messages 使用同一身份权威边界：自报 UA 或 Header
+		// 冲突只会失去“完整官方一致”资格，不能否决规范化语义请求。
+		return trusted, nil
+	}
+	return resolved, nil
+}
+
+func validateClaudeOfficialCountTokensIngress(
+	snapshot ClaudeIngressSnapshot,
+	trusted ClaudeTrustedFacts,
+	profile claudeFWGProfile,
+) (ClaudeTrustedFacts, error) {
 	if !snapshot.Captured {
 		return trusted, nil
 	}
 	headers := snapshot.Headers.Clone()
 	userAgent := strings.TrimSpace(headers.Get("User-Agent"))
-	if claudeDesktopThirdPartyUAPattern.MatchString(userAgent) {
-		return trusted, nil
-	}
-	if !strings.HasPrefix(strings.ToLower(userAgent), "claude-cli/") {
+	if !claudeOfficialUAPattern.MatchString(userAgent) {
 		return trusted, nil
 	}
 	entrypoint, features, err := parseClaudeOfficialUserAgent(userAgent)

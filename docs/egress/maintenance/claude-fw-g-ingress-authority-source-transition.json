@@ -1,0 +1,72 @@
+{
+  "schema_version": "official-egress-claude-fw-g-ingress-authority-source-transition/v1",
+  "date": "2026-08-21",
+  "phase": "FW-G",
+  "base_commit": "28e03d88c59685cdee4a7b2bd006eadfa8cddac0",
+  "trigger": "DMIT 上官方 Claude Desktop 1.34493.0 携带 Claude Code 2.1.235，以 claude-desktop-3p 和 local-agent 两类入站发起真实请求；候选分别因动态工具目录超过 33 项以及 UA 不属于目标 2.1.226 而错误拒绝。框架 §1.1 明确规定入站客户端名称、版本、User-Agent 和自报身份不拥有生产画像选择权。",
+  "prior_transitions": [
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-desktop-compat-source-transition.json",
+      "sha256": "7a01e9722ca6df4bc20c6822cc445c34d8541a2d9939560e3caff11f991596d7"
+    },
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-desktop-compat-test-transition.json",
+      "sha256": "bace2ffed0f1410d3f024879b1687e6a6fcff6253392db33f6a5c13b646fe1f5"
+    }
+  ],
+  "runtime_evidence": {
+    "target_version": "2.1.226",
+    "desktop_app_version": "1.34493.0",
+    "embedded_claude_code_version": "2.1.235",
+    "capture_method": "dmit-nginx-access-log-and-loopback-pcap-controlled-prompt",
+    "local_client_connected_to_dmit": true,
+    "dmit_account_id": 100,
+    "user_agents": [
+      "claude-cli/2.1.235 (external, claude-desktop-3p, agent-sdk/0.3.235)",
+      "claude-cli/2.1.235 (external, local-agent, agent-sdk/0.3.235)"
+    ],
+    "observed_rejections": [
+      "Claude 动态工具目录超过已实测的 33 项",
+      "Claude 官方 User-Agent 不属于 2.1.226 批准形态"
+    ],
+    "controlled_local_agent_tool_count": 31,
+    "controlled_local_agent_body_bytes": 135190,
+    "request_content_archived": false,
+    "authorization_archived": false
+  },
+  "dispositions": [
+    {
+      "finding": "不同版本 Claude Code、Claude Desktop local-agent、KiloCode 或其他客户端自报 UA",
+      "result": "UA 只能触发完整官方一致性尝试；不匹配目标 Release 或 Header、Body、账号和会话交叉校验失败时统一按第三方协议语义入站，不拒绝、不继承官方身份，也不能选择 Persona、Release 或最终 User-Agent。"
+    },
+    {
+      "finding": "第三方标准动态工具目录数量超过 2.1.226 官方样本最大值 33",
+      "result": "33 只保留为官方样本证据，不再作为规范化语义目录的运行时上限；继续逐项校验字段闭集、名称、唯一性、description 和 input_schema.type。"
+    },
+    {
+      "finding": "未知 deferred、特殊 server tool、重复名称或非法 Schema",
+      "result": "继续 fail-close；本次没有放宽 Persona 特殊工具能力，也没有新增或修改 40 条 RequiredRules。"
+    }
+  ],
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/claude_ingress.go",
+      "from_sha256": "27abd1e5c54bb4a980eaf00e744c6507bacb4da0bbf4eaead7e4329b2ebef6e8",
+      "to_sha256": "d999c542e0bcb582beab24a3d3c46dd0759ffe6608716f05b708bdee86a33d98",
+      "reason": "把所有不匹配 active 2.1.226 的 UA 及虽自报目标 UA 但完整一致性校验失败的请求统一降为不可信第三方入站，不再因 claude-cli 前缀、版本或畸形同名 Header 拒绝或继承官方身份。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_tools.go",
+      "from_sha256": "b700b2e054bb010f95940bcd94d6c4e1ca5c0a59b5ecf3dfb3fd8fc876f1abdd",
+      "to_sha256": "e49b12302ff469ec5d446f9d184466a25c65c8b7b3e1db8cf793b1bfc63d7b79",
+      "reason": "移除把官方固定目录样本最大值套用到第三方动态工具语义的数量门禁，保留全部结构和特殊能力拒绝条件。"
+    }
+  ],
+  "production_selector_changed": false,
+  "vircs_service_changed": false,
+  "dmit_candidate_rebuild_required": true,
+  "codex_final_wire": "zero_difference_required",
+  "required_rule_count_before": 40,
+  "required_rule_count_after": 40,
+  "result": "passed"
+}

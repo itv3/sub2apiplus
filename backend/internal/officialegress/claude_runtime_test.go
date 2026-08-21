@@ -1215,12 +1215,20 @@ func TestClaudeFWGCountTokensOfficialIngressIsClosed(t *testing.T) {
 		t.Fatalf("Claude count_tokens 范围外模型未 fail-close：%v", err)
 	}
 	headers.Set("x-app", "cli-bg")
-	_, err = runtime.ExecuteCountTokens(context.Background(), ClaudeEndpointExecution{
+	fallbackResult, err := runtime.ExecuteCountTokens(context.Background(), ClaudeEndpointExecution{
 		Body: body, AccessToken: "token", TrustedFacts: trusted,
 		Ingress: ClaudeIngressSnapshot{Captured: true, Headers: headers},
 	})
-	if err == nil || !strings.Contains(err.Error(), "固定 Header 不一致") {
-		t.Fatalf("Claude 官方 count_tokens 畸形声明未 fail-close：%v", err)
+	if err != nil {
+		t.Fatalf("Claude count_tokens 自报身份错误拥有了准入权：%v", err)
+	}
+	_ = fallbackResult.Response.Body.Close()
+	requests = port.snapshot()
+	fallbackRequest := requests[len(requests)-1]
+	if got := claudeTestHeaderValue(
+		fallbackRequest.Header, "X-Claude-Code-Session-Id",
+	); got != trusted.Session.SessionID || got == sessionID {
+		t.Fatalf("Claude count_tokens 身份冲突未回到 Planner 会话：got=%s", got)
 	}
 }
 
@@ -1284,20 +1292,23 @@ func TestClaudeFWGToolPolicyIsClosed(t *testing.T) {
 	if err == nil {
 		t.Fatal("未命中批准目录的 deferred 工具未 fail-close")
 	}
-	oversized := make([]map[string]any, 0, claudeDynamicToolCatalogLimit+1)
-	for index := 0; index <= claudeDynamicToolCatalogLimit; index++ {
-		oversized = append(oversized, map[string]any{
+	largeCatalog := make([]map[string]any, 0, 128)
+	for index := 0; index < 128; index++ {
+		largeCatalog = append(largeCatalog, map[string]any{
 			"name": fmt.Sprintf("Dynamic%d", index), "description": "dynamic",
 			"input_schema": map[string]any{"type": "object"},
 		})
 	}
-	oversizedRaw, marshalErr := json.Marshal(oversized)
+	largeCatalogRaw, marshalErr := json.Marshal(largeCatalog)
 	if marshalErr != nil {
 		t.Fatal(marshalErr)
 	}
-	_, _, _, err = compileClaudeApprovedTools(oversizedRaw, nil, wire)
-	if err == nil {
-		t.Fatal("超过已实测上限的动态工具目录未 fail-close")
+	compiledLargeCatalog, _, largeCatalogMode, err := compileClaudeApprovedTools(
+		largeCatalogRaw, nil, wire,
+	)
+	if err != nil || largeCatalogMode != claudeToolModeDynamic ||
+		!bytes.Equal(compiledLargeCatalog, largeCatalogRaw) {
+		t.Fatalf("标准动态工具目录被错误套用官方固定目录上限：mode=%s err=%v", largeCatalogMode, err)
 	}
 	_, _, _, err = compileClaudeApprovedTools(
 		json.RawMessage(`[{"type":"future_server_tool","name":"future"}]`), nil, wire,
@@ -1382,25 +1393,29 @@ func TestClaudeFWGToolPolicyIsClosed(t *testing.T) {
 	}
 }
 
-func TestClaudeFWGRejectsMalformedOfficialClaimAndLossyThirdParty(t *testing.T) {
-	port := &claudeCapturePort{}
-	runtime, _, _ := newClaudeTestRuntime(t, port)
+func TestClaudeFWGIgnoresUntrustedIngressIdentityAndRejectsLossyThirdParty(t *testing.T) {
 	trusted := claudeTestTrustedFacts()
-	_, err := runtime.ExecuteMessages(context.Background(), ClaudeMessagesExecution{
-		Body: claudeTestMessagesBody(), AccessToken: "token", TrustedFacts: trusted,
-		Ingress: ClaudeIngressSnapshot{Captured: true, Headers: http.Header{
-			"User-Agent": []string{"claude-cli/not-approved"},
-		}},
-	})
-	if err == nil {
-		t.Fatal("伪造或畸形 Claude 官方声明未 fail-close")
-	}
-	if !IsClaudeSupportEnvelopeRejection(err) {
-		t.Fatalf("畸形官方声明没有稳定范围拒绝类型：%T %v", err, err)
+	for _, userAgent := range []string{
+		"claude-cli/not-approved",
+		"claude-cli/2.1.226 (external, sdk-cli)",
+	} {
+		port := &claudeCapturePort{}
+		runtime, _, _ := newClaudeTestRuntime(t, port)
+		result, err := runtime.ExecuteMessages(context.Background(), ClaudeMessagesExecution{
+			Body: claudeTestMessagesBody(), AccessToken: "token", TrustedFacts: trusted,
+			Ingress: ClaudeIngressSnapshot{Captured: true, Headers: http.Header{
+				"User-Agent": []string{userAgent},
+			}},
+		})
+		if err != nil {
+			t.Fatalf("不可信入站 UA 错误拥有了 Persona 准入权：ua=%s err=%v", userAgent, err)
+		}
+		_ = result.Response.Body.Close()
 	}
 
 	lossy := []byte(`{"model":"claude-sonnet-5","messages":[{"role":"user","content":"x"}],"stream":true,"unsupported":true}`)
-	_, err = runtime.ExecuteMessages(context.Background(), ClaudeMessagesExecution{
+	runtime, _, _ := newClaudeTestRuntime(t, &claudeCapturePort{})
+	_, err := runtime.ExecuteMessages(context.Background(), ClaudeMessagesExecution{
 		Body: lossy, AccessToken: "token", TrustedFacts: trusted,
 	})
 	if err == nil || !strings.Contains(err.Error(), "lossless SupportEnvelope") {

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -177,6 +178,77 @@ func TestGatewayClaudeFWGDesktopNonStreamBuffersOfficialStream(t *testing.T) {
 			}
 			require.NoError(t, json.Unmarshal(messageCaptures[0].body, &upstreamBody))
 			require.Len(t, upstreamBody.Tools, 20)
+		})
+	}
+}
+
+func TestGatewayClaudeFWGUntrustedClientIdentityAndLargeCatalogUsePersonaRelease(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	tools := make([]map[string]any, 0, 64)
+	for index := 0; index < 64; index++ {
+		tools = append(tools, map[string]any{
+			"name":        fmt.Sprintf("ClientTool%d", index),
+			"description": "第三方客户端动态工具",
+			"input_schema": map[string]any{
+				"type": "object", "properties": map[string]any{},
+			},
+		})
+	}
+	body, err := json.Marshal(map[string]any{
+		"model": "claude-sonnet-5", "messages": []map[string]any{{
+			"role": "user", "content": "cross-client ingress",
+		}},
+		"tools": tools, "stream": true,
+	})
+	require.NoError(t, err)
+
+	for _, userAgent := range []string{
+		"claude-cli/2.1.235 (external, local-agent, agent-sdk/0.3.235)",
+		"claude-cli/2.1.240 (external, cli)",
+		"Kilo-Code/4.95.0",
+		"claude-cli/not-approved",
+		"claude-cli/2.1.226 (external, sdk-cli)",
+	} {
+		t.Run(userAgent, func(t *testing.T) {
+			upstream := &claudeFWGServiceUpstream{streamAsSSE: true}
+			runtimeState, cfg := newClaudeFWGServiceRuntime(t, upstream)
+			svc := &GatewayService{
+				cfg: cfg, rateLimitService: &RateLimitService{},
+				responseHeaderFilter: compileResponseHeaderFilter(cfg),
+				claudeTokenProvider:  NewClaudeTokenProvider(nil, nil, nil),
+				officialEgress:       runtimeState,
+			}
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", bytes.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+			c.Request.Header.Set("User-Agent", userAgent)
+			c.Set("api_key", &APIKey{ID: 23})
+			c.Request = c.Request.WithContext(WithOfficialClaudeIngressRuntime(c.Request.Context(), c))
+			parsed, parseErr := ParseGatewayRequest(NewRequestBodyRef(body), PlatformAnthropic)
+			require.NoError(t, parseErr)
+			result, forwardErr := svc.Forward(
+				context.Background(), c, claudeFWGServiceAccount(), parsed,
+			)
+			require.NoError(t, forwardErr)
+			require.True(t, result.Stream)
+
+			var messageCapture *claudeFWGServiceCapture
+			for index := range upstream.captures {
+				if strings.Contains(upstream.captures[index].url, "/v1/messages?beta=true") {
+					messageCapture = &upstream.captures[index]
+				}
+			}
+			require.NotNil(t, messageCapture)
+			require.Equal(t,
+				"claude-cli/2.1.226 (external, sdk-cli)",
+				messageCapture.header.Get("User-Agent"),
+			)
+			var upstreamBody struct {
+				Tools []map[string]any `json:"tools"`
+			}
+			require.NoError(t, json.Unmarshal(messageCapture.body, &upstreamBody))
+			require.Len(t, upstreamBody.Tools, 64)
 		})
 	}
 }

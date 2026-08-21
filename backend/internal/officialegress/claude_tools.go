@@ -26,6 +26,8 @@ const (
 
 var claudeDynamicToolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
+// claudeDynamicToolCatalogLimit 只冻结 2.1.226 官方样本中观测到的最大目录，
+// 供证据收据校验使用；它不是第三方规范化语义请求的运行时准入上限。
 const claudeDynamicToolCatalogLimit = 33
 
 // compileClaudeApprovedTools 把规范化工具意图收敛到 FW-F 已实测目录，或验证为
@@ -101,11 +103,6 @@ func compileClaudeDynamicTools(
 	var tools []json.RawMessage
 	if json.Unmarshal(toolsRaw, &tools) != nil || len(tools) == 0 {
 		return nil, false, nil
-	}
-	if len(tools) > claudeDynamicToolCatalogLimit {
-		return nil, false, fmt.Errorf(
-			"Claude 动态工具目录超过已实测的 %d 项", claudeDynamicToolCatalogLimit,
-		)
 	}
 	if len(toolChoiceRaw) != 0 {
 		return nil, false, errors.New("Claude 动态工具目录不接受未实测 tool_choice")

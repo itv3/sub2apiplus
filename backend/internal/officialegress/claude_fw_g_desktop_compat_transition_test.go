@@ -141,6 +141,9 @@ func claudeFWGDesktopCompatibilityTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if claudeFWGIngressAuthorityTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	source, err := loadClaudeFWGDesktopCompatibilitySourceReceipt()
 	if err != nil {
 		return false
@@ -269,7 +272,10 @@ func TestClaudeFWGDesktopCompatibilityTransitionsAreFrozen(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got := claudeFWGCountTokensDigest(raw); got != transition.ToSHA256 {
+			if got := claudeFWGCountTokensDigest(raw); got != transition.ToSHA256 &&
+				!claudeFWGIngressAuthorityTransitionSupersedes(
+					transition.Path, transition.ToSHA256, got,
+				) {
 				t.Fatalf(
 					"Claude FW-G Desktop compatibility transition 漂移：path=%s got=%s want=%s",
 					transition.Path, got, transition.ToSHA256,

@@ -1,0 +1,39 @@
+{
+  "schema_version": "official-egress-claude-fw-g-ingress-authority-test-transition/v1",
+  "date": "2026-08-21",
+  "phase": "FW-G",
+  "base_commit": "28e03d88c59685cdee4a7b2bd006eadfa8cddac0",
+  "source_transition": {
+    "path": "docs/egress/maintenance/claude-fw-g-ingress-authority-source-transition.json",
+    "sha256": "ee434c67912f0841421ec2370f75e35207ff47014015fb557ce680b6c5d69954"
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/claude_desktop_third_party_ingress_test.go",
+      "from_sha256": "2722eccfe15338cd08574fa5224716e14de49834b904245d795e5c0254db4b07",
+      "to_sha256": "a52518c9c6f86519616e600bf1bbd50034352c442bbdd436c6f83b0993fc15e6",
+      "reason": "固定 Desktop 2.1.235 的 claude-desktop-3p 与 local-agent、不同版本 cli、KiloCode，以及只有目标 UA 而缺少完整一致性事实的请求均不继承 2.1.226 官方身份。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_desktop_compat_transition_test.go",
+      "from_sha256": "fd372d711d0139ad5c3571a245bc200a6d064e1e5030f823153f1a76ae2bbbdc",
+      "to_sha256": "1a307102cd7481d2563406d503506795142786201d7ad2955e53060f0c3b6a87",
+      "reason": "既有 Desktop compatibility transition 只接受本次 ingress authority 追加事实承接，不覆盖历史收据。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_runtime_test.go",
+      "from_sha256": "b2d983d68c5c06f025831407d2d36ec5fb96b80a9030bfa1f93e44d146495352",
+      "to_sha256": "2427ef52e7bd52a6667c0ec1c67549a5f92a77fd8a827b5e3f0a2e98dda5b750",
+      "reason": "证明任意 UA 及畸形目标 UA／Header 不拥有 Persona 准入权或会话权，并验证 128 项标准动态工具仍由同一结构闭集无损处理。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_candidate_test.go",
+      "from_sha256": "23129b4738e4ef010e6c4fe42629e55a8d4d1df364c8bb26e876c6a74264f998",
+      "to_sha256": "a5aefdce3b5e37644d71c5824bacf76c77bfcacd8336fb99ab32649316b9373e",
+      "reason": "入口级验证 local-agent、不同版本 cli、KiloCode、畸形自报 UA 和缺少一致性事实的目标 UA 携带 64 项合法工具时，最终上游仍固定为 2.1.226 Persona wire。"
+    }
+  ],
+  "required_rule_count": 40,
+  "codex_final_wire": "zero_difference_required",
+  "result": "passed"
+}
