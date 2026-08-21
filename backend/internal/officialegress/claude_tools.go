@@ -96,6 +96,81 @@ func compileClaudeApprovedTools(
 	return nil, nil, "", errors.New("Claude tools 不在 FW-F 已批准 ToolPolicy 闭集")
 }
 
+// compileClaudeOfficialScenarioTools 只承接模型目录中已取证官方场景的精确工具形态。
+// 第三方入口不会调用此路径，不能借模型专属工具目录扩大动态工具准入范围。
+func compileClaudeOfficialScenarioTools(
+	toolsRaw json.RawMessage,
+	toolChoiceRaw json.RawMessage,
+	primaryModel string,
+	scenarioHint string,
+	artifact claudeWireArtifact,
+) (json.RawMessage, json.RawMessage, claudeToolMode, bool) {
+	hintedModel, hintedScenario, qualified := parseClaudeCatalogScenarioHint(scenarioHint)
+	if qualified {
+		if primaryModel != "" && primaryModel != hintedModel {
+			return nil, nil, "", false
+		}
+		primaryModel = hintedModel
+		scenarioHint = hintedScenario
+	}
+	capability, ok := claudeModelCapabilityForAlias(artifact, primaryModel)
+	if !ok || scenarioHint == "" {
+		return nil, nil, "", false
+	}
+	for _, candidate := range claudeNamedModelScenarios(capability) {
+		if candidate.name != scenarioHint || !candidate.scenario.ToolsPresent ||
+			!claudeJSONEqual(toolsRaw, candidate.scenario.Tools) {
+			continue
+		}
+		wantChoice, choiceKnown := claudeOfficialScenarioToolChoice(
+			candidate.name, candidate.scenario, artifact.ImplementationPolicy.ToolPolicy,
+		)
+		if !choiceKnown || !claudeOptionalJSONEqual(toolChoiceRaw, wantChoice) {
+			return nil, nil, "", false
+		}
+		mode, modeKnown := claudeOfficialScenarioToolMode(candidate.name)
+		if !modeKnown {
+			return nil, nil, "", false
+		}
+		return append(json.RawMessage(nil), candidate.scenario.Tools...),
+			append(json.RawMessage(nil), wantChoice...), mode, true
+	}
+	return nil, nil, "", false
+}
+
+func claudeOfficialScenarioToolChoice(
+	name string,
+	scenario claudeWireScenario,
+	policy claudeWireToolPolicy,
+) (json.RawMessage, bool) {
+	for _, field := range scenario.BodyOrder {
+		if field != "tool_choice" {
+			continue
+		}
+		if name != "web-search-server" {
+			return nil, false
+		}
+		return normalizeClaudeOptionalRaw(policy.WebSearchServer.ToolChoice), true
+	}
+	return nil, true
+}
+
+func claudeOfficialScenarioToolMode(name string) (claudeToolMode, bool) {
+	switch {
+	case name == "agent", name == "agent-background",
+		name == "sdk-cli-background-agent", name == "server-fallback":
+		return claudeToolModeAgent, true
+	case strings.HasPrefix(name, "background-"):
+		return claudeToolModeBackground, true
+	case name == "web-search-outer":
+		return claudeToolModeWebSearchOuter, true
+	case name == "web-search-server":
+		return claudeToolModeWebSearchServer, true
+	default:
+		return "", false
+	}
+}
+
 func compileClaudeDynamicTools(
 	toolsRaw json.RawMessage,
 	toolChoiceRaw json.RawMessage,

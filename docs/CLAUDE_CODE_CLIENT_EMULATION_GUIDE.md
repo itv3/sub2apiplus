@@ -3,8 +3,9 @@
 > **适用范围**：Sub2API 使用 Anthropic OAuth（`authMethod=claude.ai`、`apiProvider=firstParty`）
 > 出站时的 Claude Code 客户端仿真
 > **共享框架**：[`OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md`](OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md)
-> **当前取证目标**：`claude-code 2.1.226`——第二部分 40 条 RequiredRules 与 110 条 Vircs 官方客户端 P／R／M 原子断言
-> 证据的绑定版本；`2.1.220` 只保留为同一 Schema／Compiler 下的历史 baseline fixture
+> **当前取证目标**：`claude-code 2.1.226`——第二部分 40 条跨模型 RequiredRules、110 条基础
+> P／R／M 原子断言，以及独立的 Sonnet／Opus／Fable 模型能力目录；`2.1.220` 只保留为同一
+> Schema／Compiler 下的历史 baseline fixture
 > **机器台账**：FW-F 的 `claude_fw_f_v21_finalize.py`、两份 v4／v3 策略和清零目录保留历史
 > `observed／validation_only` 事实；当前 `verified／production_replacement` 状态由
 > `claude_fw_g_acceptance.py` 及 FW-G 追加式 Control Store 承担，正文规则 ID 集合由门禁强制对账
@@ -12,9 +13,10 @@
 > 人类可读权威入口；机器证据和 JSON 台账不得形成第二套规范
 > **证据边界**：本文没有未压缩 TS 源码可用，静态规则均从官方生产 bundle 逆向建立；材料、证据、
 > 规则与结论全部独立取自 Claude Code 自身，不继承 Codex 的任何事实结论
-> **运行时状态**：Claude strict 多 Persona 实现与 DMIT 隔离 Candidate 已完成 FW-G 验收并达到
-> `ready／not_activated`；production selector、DeploymentFact 和 Vircs 生产服务均未改变，遗留链仍保留
-> **末次更新**：2026-08-20
+> **运行时状态**：历史 Sonnet-only Candidate `651ccd518` 已完成 DMIT 验收并达到
+> `ready／not_activated`；当前三模型后继 Candidate 已通过源码、证据和本地门禁，尚待重新构建并完成
+> DMIT 隔离验收。production selector、DeploymentFact 和 Vircs 生产服务均未改变，遗留链仍保留
+> **末次更新**：2026-08-21
 
 ---
 
@@ -93,20 +95,21 @@ Claude 特有的换版流程，第五部分处理维护，第六部分固定环�
 | 平台 | Linux／amd64 |
 | 入口 | `sdk-cli`；真实交互入口 `cli` |
 | 认证 | Claude.ai OAuth，first-party provider |
-| 模型 | `claude-sonnet-5`；TUI 标题 `claude-haiku-4-5-20251001`；fallback `claude-haiku-4-5` |
+| 主模型能力目录 | `claude-sonnet-5`、`claude-opus-5`、`claude-fable-5`；只接受目录中显式登记的精确别名 |
+| 辅助模型形态 | TUI 标题 `claude-haiku-4-5-20251001`；Sonnet retry fallback `claude-haiku-4-5`；Fable server fallback `claude-opus-4-8` |
 | 隐私模式 | `DISABLE_TELEMETRY=1`；`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` |
 | 上游 | `api.anthropic.com:443` |
-| 完整场景矩阵 | 77／77 场景、394 条官方请求、49／49 维度；含 TUI／sdk-cli／Agent、TLS、工具往返和故障重试 |
+| 完整场景矩阵 | Sonnet 基础 Campaign 77／77 场景、394 条官方请求、49／49 维度；Opus／Fable 模型能力补充 Campaign 42 个成功 attempt，3 个历史失败 attempt 只读保留 |
 | strict egress | messages、hello、policy limits、settings、OAuth profile、count_tokens、OAuth refresh、MCP servers，共 8 类 |
 | RequiredRules | 40 条；按 Codex 的“范围、规则／机制、源码、实测、实现、状态”六字段维护 |
 | 原子断言 | 110 条全部通过；107 条 R/M、3 条 TLS P/M；106 条画像证据、4 条客户端本地场景 |
-| 当前等级 | 40 条 RequiredRules 均为 `verified` |
-| 批准用途 | `production_replacement`；Candidate 已 `ready`，但尚未激活 |
+| 当前等级 | 40 条公共 RequiredRules 在历史 Sonnet SupportEnvelope 内为 `verified`；三模型后继为 `acceptance_pending` |
+| 批准用途 | 历史 Sonnet Candidate 为 `production_replacement／ready`；三模型后继尚未签发 AcceptanceFact |
 
-`verified` 表示规则同时通过冻结的 2.1.226 官方证据、FW-G 独立官方复测、实现后 Candidate 对拍、
-TLS／HTTP/1.1 真实捕获及 DMIT 隔离验收。后继 `production_replacement` ApprovalFact、固定
-ValidationCandidate 和 AcceptanceFact 已签发；这只证明 Candidate 可进入 FW-H，不表示已晋升或生产切换。
-公开摘要见 [FW-G 隔离验收收据](egress/maintenance/claude-fw-g-acceptance.json)。
+历史 `verified` 结论由冻结的 2.1.226 Sonnet 官方证据、Candidate 对拍、TLS／HTTP/1.1 捕获及 DMIT
+隔离验收共同支撑，公开摘要见 [FW-G 隔离验收收据](egress/maintenance/claude-fw-g-acceptance.json)。
+该 AcceptanceFact 不覆盖后来加入的 Opus／Fable 能力目录；Profile、Wire、Release、源码或镜像任一变化，
+都必须冻结新的 ValidationCandidate 并重新验收，不能复用历史 `ready` 结论。
 
 当前 SupportEnvelope 覆盖策略文件列出的五组能力：`sdk-cli`／`cli` 的条件 system、cache、metadata、
 session、Agent／background／hook／remote、工具往返与附件；真实 TUI 的 OAuth profile、标题、
@@ -115,6 +118,12 @@ refresh；以及原生 TLS／ALPN。八类 strict egress 的 RequiredRules 分�
 5 条、policy limits 4 条、settings 4 条、OAuth profile 2 条、count_tokens 1 条、OAuth refresh 1 条、
 MCP servers 1 条。跨端点规则会同时计入多个 egress，全局唯一规则仍为 40 条。范围外能力必须
 fail-close 或留在明确的 `non_persona_managed／retained_legacy` 边界，不能从这 40 条规则外推。
+
+40 条 RequiredRules 描述三个主模型共同遵守的出站责任，不按模型复制。模型名、显式别名、可用 effort、
+场景 Body／Header 顺序、`fallbacks`、辅助模型和锁存状态保存在独立的内容寻址
+`ModelCapabilityCatalog`。新增模型只有在官方 P／R／M 证明其可复用公共规则、并补齐全部模型差异后，
+才能向目录追加；未知模型、未登记别名或缺少差异证据一律 fail-close。当前目录摘要为
+`d34ca049ec851b220f06a4701c951a8be270d4a498b8012229c7f62cb8183df1`。
 
 ## 2.2 证据通道与内容寻址
 
@@ -133,6 +142,7 @@ fail-close 或留在明确的 `non_persona_managed／retained_legacy` 边界，�
 | `G-P/R/M` | FW-G 独立官方复测的原生 TLS、请求字节与身份／运行元数据，用于把 40 条规则升级为 `verified` |
 | `G-PAIR-*` | 固定 Candidate 对 40 条 RequiredRules 唯一生成的 `PAIR-<SPEC-ID>` 结果及九个场景批准链 |
 | `G-ACCEPT` | `production_replacement` ApprovalFact、ValidationCandidate 与 AcceptanceFact；公开摘要见 FW-G 收据 |
+| `R/M-MODEL` | Opus／Fable 的 42 个成功 attempt、逐场景原始请求、运行回执、生产零差异证明和 3 个只读历史失败，用于生成独立模型能力目录 |
 
 基础四个 run 位于：
 
@@ -141,6 +151,10 @@ fail-close 或留在明确的 `non_persona_managed／retained_legacy` 边界，�
 覆盖 77 个真实场景的 v21 正式 Campaign 位于：
 
 `local-analysis/fw-f/claude-code-2.1.226/complete-v21-78fae770cbb5/`
+
+Opus／Fable 模型能力补充 Campaign 位于：
+
+`local-analysis/fw-f/claude-code-2.1.226/model-capability-v1-20260821/`
 
 其中 77／77 场景、394 条请求、49／49 维度和原生 TLS P 通道均由最终化器逐项复算；目录集合、执行源
 摘要、目标二进制、采集模式、等长脱敏、秘密扫描和 cleanup 也必须通过。原子证据账本与
@@ -185,6 +199,10 @@ FW-F v1 把 32 个候选机械拆成 97 条规则提案的做法无效，现已�
 40 条 RequiredRules。原子断言数由实测决定，RequiredRules 数由实现责任与复合机制边界决定，两者
 不得混为一个数字。
 
+模型能力变化也不得机械生成新 RequiredRule。只有它引入新的 Sub2API 出站责任或改变既有公共机制，
+才按上述准入合同新增或修改规则；仅模型值、显式别名、模型特有 `fallbacks`、辅助模型、字段顺序或
+状态分支变化时，更新 `ModelCapabilityCatalog` 并绑定逐场景官方证据，公共规则数保持不变。
+
 ## 2.4 实测 wire 与端点向量
 
 ### 2.4.1 messages 推理核心
@@ -197,8 +215,9 @@ FW-F v1 把 32 个候选机械拆成 97 条规则提案的做法无效，现已�
 - 基础 UA 为 `claude-cli/2.1.226 (external, sdk-cli)`；真实 TUI 使用 `external, cli`，获准条件段按
   agent-sdk、client-app、workload 的实测顺序追加；
 - Stainless 基础向量为 `x64/js/Linux/0.94.0/retry 0/node/v26.3.0/timeout 600`；
-- 基础 Body 顶层顺序为 `model/messages/system/tools/metadata/max_tokens/thinking/`
-  `context_management/output_config/stream`；条件变体以逐条规则为准；
+- Sonnet 基础 Body 顶层顺序为 `model/messages/system/tools/metadata/max_tokens/thinking/`
+  `context_management/output_config/stream`；Opus／Fable 仅在实测场景插入 `fallbacks`，Fable server
+  fallback 还按实测条件插入成对锁存 Header；所有模型的具体顺序均从能力目录场景生成；
 - request-id、Session-Id、agent lineage、resume／fork、retry、non-stream 与模型 fallback 均按实测
   生命周期生成，不能用入站自报客户端身份补造。
 
@@ -284,11 +303,11 @@ messages egress。
 
 ### SPEC-BODY-008 模型与生成参数组合
 
-- **范围**：messages-inference；Sonnet 5 基线及 max_tokens、effort、thinking、thinking.display、adaptive-thinking 条件。
-- **规则／机制**：model、max_tokens、thinking、context_management、effort 和 stream 必须作为一个条件化 Body 合同生成；adaptive thinking 覆盖缺省 display、summarized 和 omitted 三态，display 存在时对象字段顺序固定为 type、display，覆盖值和省略行为均按实测映射。
+- **范围**：messages-inference；已登记 Sonnet 5／Opus 5／Fable 5 及 max_tokens、effort、thinking、thinking.display、adaptive-thinking、fallbacks 条件。
+- **规则／机制**：model、max_tokens、thinking、context_management、effort、fallbacks 和 stream 必须作为一个条件化 Body 合同生成；adaptive thinking 覆盖缺省 display、summarized 和 omitted 三态，display 存在时对象字段顺序固定为 type、display；公共机制由本规则约束，模型值、别名和模型特有字段由同 Release 的 ModelCapabilityCatalog 决定。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
-- **实测**：9 条 R/M 原子断言定义通过；基线、五档 effort、输出上限、thinking 开关及 SPEC-BODY-010 的 default／summarized／omitted 三态均已由官方 2.1.226 对拍。
-- **实现**：由 ModelIntent 和 BodyShape 联合编译；CanonicalRequest 显式保存 display 语义，Compiler 按 ReleaseBundle 重建 thinking，只接受 SupportEnvelope 内的模型、受信配置和已批准 display 闭集。
+- **实测**：基础账本 9 条 R/M 原子断言通过；Sonnet 的基线、五档 effort、输出上限、thinking 开关及 SPEC-BODY-010 三态均已对拍；Opus／Fable 的五档 effort、thinking 关闭和逐场景 fallbacks／字段顺序由模型能力补充 Campaign 实测。
+- **实现**：由 ModelIntent、BodyShape 与内容寻址 ModelCapabilityCatalog 联合编译；CanonicalRequest 显式保存 display 语义，Compiler 按 ReleaseBundle 重建 thinking／fallbacks，只接受已登记模型、精确别名、受信配置和批准闭集。
 - **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-BODY-043 请求 gzip wire
@@ -302,8 +321,8 @@ messages egress。
 
 ### SPEC-BODY-048 真实 TUI 标题与主推理请求
 
-- **范围**：messages-inference；真实 cli 交互入口。
-- **规则／机制**：TUI 先生成 Haiku 标题请求，再生成 Sonnet 主请求；两者的模型、beta、system、tools、thinking 和 output_config 分别按已实测形态输出。
+- **范围**：messages-inference；真实 cli 交互入口及已登记主模型。
+- **规则／机制**：TUI 先生成 Haiku 标题请求，再生成所选主模型请求；两者的模型、beta、system、tools、thinking、fallbacks 和 output_config 分别按能力目录中的已实测形态输出。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：2 条 R/M 原子断言通过；真实 TUI 运行取得标题请求与主推理请求的完整 wire。
 - **实现**：仅在可信 cli entrypoint 条件下由 Persona 状态机生成；第三方入站不得自报 TUI 身份。
@@ -356,11 +375,11 @@ messages egress。
 
 ### SPEC-CONN-023 模型 fallback 转换
 
-- **范围**：messages-inference；配置 fallback model 且主 Sonnet 连续达到失败预算。
-- **规则／机制**：预算耗尽后切换到 Haiku fallback，并同时切换 max_tokens、thinking、beta、message 和 output_config 形态，保持会话身份。
+- **范围**：messages-inference；Sonnet 客户端 retry fallback，或 Fable 上游拒绝后触发的 server fallback。
+- **规则／机制**：Sonnet 仅在配置启用且失败预算耗尽后切换到 Haiku，并整体切换 max_tokens、thinking、beta、message 和 output_config；Fable 返回已批准的 Opus 4.8 fallback 模型后，以响应 request-id 锁存会话，后续请求省略 fallbacks 并生成 `x-cc-fallback-latched-by` 与 `x-is-refusal-fallback:true`。Opus／Fable 不得复用 Sonnet 的 Haiku retry fallback。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
-- **实测**：2 条 R/M 原子断言通过；隔离 fallback 场景取得三次 Sonnet 与第四次 Haiku 完整转换。
-- **实现**：FallbackPolicy 选择目标 BodyShape；不得只替换 model 字符串。
+- **实测**：基础账本 2 条 R/M 原子断言通过；隔离场景取得三次 Sonnet 与第四次 Haiku 完整转换；Fable 官方请求另取得 Opus 4.8 响应后的成对锁存 Header 和后续 Body 形态。
+- **实现**：FallbackPolicy 与 ModelCapabilityCatalog 共同选择目标 BodyShape；Fable 锁存由会话状态机按实际响应模型提交，第三方入站无权直接声明 fallback Header 或 fallbacks；不得只替换 model 字符串。
 - **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-EP-001 messages 推理端点坐标
@@ -420,7 +439,7 @@ messages egress。
 ### SPEC-EP-009 count_tokens 完整 wire
 
 - **范围**：count-tokens；真实 TUI token 计数条件。
-- **规则／机制**：POST /v1/messages/count_tokens?beta=true，使用 Claude SDK 身份 Header，并按 model、messages、tools 顺序发送 Body。
+- **规则／机制**：POST /v1/messages/count_tokens?beta=true，使用 Claude SDK 身份 Header，并按 model、messages、tools 顺序发送 Body；model 必须来自同一 Release 的显式能力目录。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：3 条 R/M 原子断言通过；36 个正例与 sdk-cli 基线条件对照覆盖 endpoint、Header 和 Body。
 - **实现**：作为独立 persona_strict egress 编译，不与遗留 token-count 别名混同。
@@ -683,8 +702,17 @@ Claude Code 换版时必须新建 Campaign，并重复以下顺序：
 5. 运行原子断言，把通过断言的 request-egress 命题写入新的 AtomicAssertionLedger；
 6. 按 Codex 六字段和 Sub2API 实现责任归并 RequiredRules，客户端本地行为进入 scenario-only；
 7. 对全部发现、候选和旧规则逐项 disposition，未决数必须为 0；
-8. target-first 生成新 Snapshot／Release，再用同一 Schema／Compiler 表达历史 fixture；
-9. 证据不足的能力留在明确边界，不得补造规则、缩小数字或用旧版本 wire 提升等级。
+8. 先冻结跨模型 RequiredRules，再为每个拟登记主模型采集基线、effort、thinking、TUI、Agent、
+   background、WebSearch、count_tokens、fallback 与状态续接差异，生成独立 ModelCapabilityCatalog；
+9. target-first 生成新 Snapshot／Release，再用同一 Schema／Compiler 表达历史 fixture；
+10. 证据不足的模型或能力留在明确边界，不得复制公共规则、补造别名、缩小数字或用旧版本 wire
+    提升等级。
+
+同一版本新增模型时，先比较其全部公共规则适用条件；公共机制未变时不得把 40 条规则复制一份。
+只向能力目录追加有逐场景官方证据的模型差异，并重新生成 Profile／Wire／Release／Bundle 内容摘要。
+目录的模型和别名均为显式闭集；官方或第三方入站请求未知值时必须 fail-close。若发现新的共享出站
+责任、字段语义或状态机机制，则返回规则准入流程新增／修改 RequiredRule，不能把机制缺口伪装成
+“模型配置”。
 
 2.1.88 真源码和 HitCC 2.1.197 必须在首次纳管时完成全量提取，并冻结原始目录摘要、提取工具摘要、
 覆盖范围、稳定候选 ID、原文位置和提取收据。原始目录与提取合同未变化时，后继 Campaign 只重放该
@@ -795,6 +823,7 @@ Validation candidate、production active／rollback 和实际 Deployment 是正�
 | `HeaderSlots` | WireName、值来源、条件、互斥组和相对顺序 |
 | `BetaPolicy` | beta 序列、插入位置和条件项 |
 | `BodyShape` | 顶层键、system、cache_control 与 metadata 编码 |
+| `ModelCapabilityCatalog` | 已登记主模型、精确别名、effort、逐场景 Body／Header 顺序、fallbacks、辅助模型和锁存状态；不得复制跨模型 RequiredRules |
 | `RetryPolicy` | 起步、指数、封顶、抖动与终止边界 |
 | `PrivacyMode`／`Digest` | 证据隐私模式与画像摘要 |
 
@@ -876,8 +905,8 @@ advisor、web_search、count_tokens 与隔离 OAuth refresh 已纳入；合法�
 
 ## 3.4 当前实现与 FW-A～FW-H 迁移
 
-FW-G 已完成 strict Candidate 实现与隔离验收；生产仍保持 FW-A 冻结的遗留运行态，须到 FW-H 才允许
-迁移 selector 或退休遗留链：
+FW-G 的历史 Sonnet Candidate 已完成隔离验收；当前三模型后继正在重做 FW-G Candidate 验收。生产仍
+保持 FW-A 冻结的遗留运行态，须到 FW-H 才允许迁移 selector 或退休遗留链：
 
 | 层 | 当前事实 |
 |---|---|
@@ -886,7 +915,7 @@ FW-G 已完成 strict Candidate 实现与隔离验收；生产仍保持 FW-A 冻
 | strict 入口 | 官方 Messages、第三方 Anthropic Messages、官方 count_tokens、第三方标准 count_tokens 四个逻辑入口分开登记，统一使用 `anthropic-messages` 协议类 |
 | strict／managed 出站 | 八类 `persona_strict` 进入 Compiler／Executor／Guard；`non_persona_managed` 进入独立策略，未知 OAuth 出站保持 `denied` |
 | 语义与兼容 | Persona system／identity 由批准事实派生；lossless 请求进入 strict PAIR，有损 compatibility 与 strict 分母隔离 |
-| 候选验收 | 固定提交、源码树、测试树、依赖、`linux/amd64` 镜像和 Release 的 ValidationCandidate 已在 DMIT 完成范围内、范围外、回滚／恢复验收，状态为 `ready／not_activated` |
+| 候选验收 | 历史 Sonnet ValidationCandidate 已在 DMIT 达到 `ready／not_activated`；三模型后继因 Profile／Wire／Release 与源码变化必须重新冻结镜像并验收，当前不得沿用旧 AcceptanceFact |
 | 生产边界 | ProductionIngressInventory 仍记录当前遗留处置；production selector、DeploymentFact、ActivationReceipt 和 Vircs 服务均未改变，旧 finalizer／旁路不得删除 |
 
 | 阶段 | 变更 | 完成判据 |
@@ -900,8 +929,9 @@ FW-G 已完成 strict Candidate 实现与隔离验收；生产仍保持 FW-A 冻
 | `FW-G` | 实现本次已批准的 40 条最新 stable RequiredRules，完成受管语义层、辅助出站三态、全部 strict 入口原子断言、独立复测、DMIT candidate 和 rollback 验收 | 40 条规则及其 106 条画像原子断言达到后继 production-replacement ApprovalFact 要求；范围内断言、范围外拒绝和回退通过 |
 | `FW-H` | 灰度、回滚、激活；逐入口迁移并在闭集完成后退休遗留链 | DeploymentFact 与运行态一致；无 `retained_legacy` 才能签发迁移完成的 RemovalReceipt |
 
-FW-G 的完成事实以 [FW-G 隔离验收收据](egress/maintenance/claude-fw-g-acceptance.json)为准；下一步是
-FW-H 的生产迁移，不得把 Candidate `ready` 解释为已部署或已激活。
+历史 Sonnet FW-G 完成事实以 [FW-G 隔离验收收据](egress/maintenance/claude-fw-g-acceptance.json)为准；
+当前下一步是完成三模型后继的 DMIT 隔离验收。新 AcceptanceFact 签发前不得进入 FW-H，也不得把历史
+Candidate 的 `ready` 解释为三模型后继已获批准。
 
 最新 stable 是目标 Schema、Snapshot 和实现的唯一设计权威。FW-E 只冻结目标规则证据，不预先用
 2.1.220 建画像；FW-F 完成发现项语义清零后，必须先生成目标 stable 画像和样例，随后才把 2.1.220 表达为差分基线、
@@ -948,14 +978,16 @@ P／R／M 原子断言支撑，另有 4 条客户端本地场景断言；110 条
 [清零收据](egress/maintenance/fw-f-discovery-clearance/receipt.json)和
 [FW-F RequiredRules 规范化收据](egress/maintenance/fw-f-required-rules-normalization/receipt.json)。
 
-FW-G 后继 Campaign `claude-code-2_1_226-fw-g-production-replacement-v2-20260821` 已把 40 条规则升级为
+历史 FW-G Campaign `claude-code-2_1_226-fw-g-production-replacement-v2-20260821` 已在 Sonnet 范围把 40 条规则升级为
 `verified`，签发 `production_replacement` ApprovalFact，冻结提交 `651ccd518d97c53bb3089860a0fdf80009c1be9e`
 及镜像 `sha256:9b923fd1a60835fa8474712764befba34a02f06e8642c5ac3af1aa9967464566` 的
 ValidationCandidate。九个场景、40 个唯一 `PAIR-<SPEC-ID>`、TLS／HTTP/1.1 捕获、范围外 fail-close、
 Claude Desktop 的 `beta=true` Messages／count_tokens 第三方入口、DMIT rollback／恢复和 Codex
 final-wire 零差异均通过，AcceptanceFact 结果为 `accepted`；Store 为
 `ready／not_activated`。production Runtime Selector、DeploymentFact、ActivationReceipt 和 Vircs 服务均未
-改变。完整摘要见 [FW-G 隔离验收收据](egress/maintenance/claude-fw-g-acceptance.json)；下一步固定为 FW-H。
+改变。完整摘要见 [FW-G 隔离验收收据](egress/maintenance/claude-fw-g-acceptance.json)。当前三模型后继
+使用独立内容寻址模型目录及新的 Profile／Wire／Release，必须重新构建、DMIT 对拍和签发 AcceptanceFact；
+在此之前下一步仍是 FW-G 验收，不是 FW-H。
 
 ---
 
@@ -985,7 +1017,7 @@ Campaign、candidate、attempt 的通用边界见 Framework §3.2。Claude Campa
 | entrypoint | `sdk-cli` 与真实 TTY 的 `cli` 分开取证；`-p` 不能伪造 TUI |
 | 平台角色 | Linux x86_64 是当前主基准，Darwin arm64 只作交叉复核 |
 | 工具身份 | 采集、relay、脱敏、提取、编排、收据和环境快照的摘要 |
-| 账号与条件 | OAuth 组织、模型、feature、scope、故障注入和场景矩阵 |
+| 账号与条件 | OAuth 组织、模型能力目录、精确别名、feature、scope、故障注入和场景矩阵 |
 
 Campaign 只绑定不可变身份。下列事实分别追加并以摘要引用，不得由单一状态枚举互相替代：
 
@@ -1027,6 +1059,11 @@ Claude 没有可用的目标版本官方源码，必须以官方生产 bundle �
 5. 全 host／path 观测官方进程出站，不得用待证 endpoint 预筛；每个 run 同时封存 P／R／J／M、实际
    argv／环境、工具摘要、宿主回执、秘密扫描和恢复事实；
 6. 产物、平台、隐私模式或产出侧工具变化时新建 Campaign，临时网络失败才新建 attempt。
+
+若目标版本拟登记多个主模型，基础 Campaign 先证明公共规则；随后对每个模型建立正交能力轨道，至少
+覆盖基线、五档 effort、thinking 关闭、TUI、Agent、background／background subagent、WebSearch、
+count_tokens、官方 fallback 与续轮状态。每个场景保存原始请求、必要响应、manifest、runtime receipt
+和生产零差异证明。只观察到模型字符串相同不足以继承；缺失场景的模型不得加入 active 能力目录。
 
 无 sourcemap 的 minify Bun SEA 是目标静态权威；词法窗口、附近 sink 和 minify 符号只用于定位，不能
 代替完整语法树、调用关系、反向数据流和运行闭环。JavaScript 无法证明的 Bun／原生模块、动态调用或
@@ -1148,13 +1185,13 @@ inventory 和 selector 未变证明。入库只允许：
 2. 再使用同一 Schema／DialectCompiler 表达 2.1.220 baseline／rollback fixture，不得反向用旧版限制目标设计；
 3. 版本、Header、Body、重试及 transport 事实来自画像，不新增业务代码版本分支；
 4. ValidationCandidate 保存独立 immutable Release 引用，不借用 production rollback 槽位；
-5. candidate 必须显式选择目标画像，连接池与 fallback 不跨画像混用；
+5. candidate 必须显式选择目标画像和内容寻址模型能力目录，连接池与 fallback 不跨画像或模型状态混用；
 6. candidate 必须冻结 SupportEnvelope，范围外条件由 Planner／Compiler fail-close；
 7. 构建记录 source tree、测试树、Go／Node 依赖、目标架构、image ID 与 OCI digest。
 
 FW-F 已生成 target-first Snapshot／样例、2.1.220 fixture 和最终合同，其历史批准用途保持
-`validation_only`。FW-G 在不覆盖旧事实的前提下追加后继 `production_replacement` ApprovalFact，并冻结
-ValidationCandidate：提交 `651ccd518d97c53bb3089860a0fdf80009c1be9e`、Git tree
+`validation_only`。历史 FW-G 在不覆盖旧事实的前提下追加 `production_replacement` ApprovalFact，并冻结
+Sonnet-only ValidationCandidate：提交 `651ccd518d97c53bb3089860a0fdf80009c1be9e`、Git tree
 `71eccef8c9498de12bafaa7006108c10996cd10d`、source tree
 `2792b9d29e57b66a12bc80f576e02dd06306eac467b8dda73e2dbd7a69b19d5b`、test tree
 `6ef5c064a3e489579e4f471d3ad954de132e1e8260058bb1438c74d81905f3e3`、dependency lock
@@ -1163,9 +1200,9 @@ ValidationCandidate：提交 `651ccd518d97c53bb3089860a0fdf80009c1be9e`、Git tr
 全量 tracked blob、测试路径子集和依赖清单／锁文件子集复算，不能从当前工作区临时拼接。
 
 Candidate 冻结后的 TLS／HTTP/1.1 捕获测试与 Acceptance finalizer 测试属于追加的验收证据工具，不进入
-该 Candidate 的源码树或测试树，也不改变已构建镜像。FW-H 必须消费上述固定 Candidate；若改用包含这些
-后续文件的新 HEAD 构建，或修改生产源码、Candidate 测试、依赖、画像或镜像，必须建立新的
-ValidationCandidate 并重新签发 AcceptanceFact，不能复用当前事实。
+该 Candidate 的源码树或测试树，也不改变已构建镜像。当前三模型实现已经改变源码、画像、Wire、Release
+和镜像，因此必须建立新的 ValidationCandidate 并重新签发 AcceptanceFact；历史 Candidate 只保留为
+Sonnet 范围的不可变验收事实。
 
 ## 4.4 候选验证与正式验收
 
@@ -1177,6 +1214,8 @@ Candidate 只能在 DMIT 或等价隔离环境运行，不能在 Vircs 换镜像
 
 - `s1/s2/s4/a1` 的推理与 `HEAD /api/hello` 生命周期 wire；
 - 主请求、续轮和一级子代理的 Header、Body、session、agent、attribution 与连接关系；
+- 每个已登记主模型的基础、effort、thinking、TUI、Agent、background、WebSearch、count_tokens、
+  fallback／锁存正例，以及未知模型、未登记别名、错误 fallbacks 和跨模型状态复用负例；
 - 空工具、Agent 与 Bash 的实测工具形态；
 - `persona_strict` 端点、隐私模式和目标 entrypoint，以及 `non_persona_managed` 出站的独立策略断言；
 - 每个目标处置为 `migrated_strict` 的官方／第三方标准 API 入口，以及所有范围外入口／功能的 fail-close；
@@ -1243,11 +1282,12 @@ FW-F 清零制品在不改写上述 FW-E 事实的前提下追加：
 `observed`；FW-G 通过新的官方复测证据、Candidate 对拍和隔离验收追加后继事实，才将其升级为
 `verified`。不得原位改写 FW-F 台账、用遗留 wire 佐证，或为了缩小数字从发现清单删除。
 
-FW-G 已封存后继 `production_replacement` ProfileApprovalFact、固定 ValidationCandidate、九个场景的
+历史 FW-G 已封存 `production_replacement` ProfileApprovalFact、固定 Sonnet-only ValidationCandidate、九个场景的
 `prepare → capture → seal → approve` 链、40 个唯一 `PAIR-<SPEC-ID>` 和 AcceptanceFact。范围内 strict
 入口、范围外 fail-close、managed／遗留隔离、TLS／HTTP/1.1、DMIT rollback／恢复及 Codex final wire
 零差异均通过；完整 Store 重放为 2 个 Campaign、42 个对象、86 个事实和 9,360 个外部绑定，状态为
 `ready／not_activated`。公开摘要见 [FW-G 隔离验收收据](egress/maintenance/claude-fw-g-acceptance.json)。
+该状态不覆盖当前三模型后继；后继必须另行完成本节全部正负矩阵后才能达到 `ready`。
 
 ## 4.5 生产、回滚与证据归档
 
@@ -1285,8 +1325,9 @@ RemovalReceipt。
 权威源码、正式发布镜像、production tree 与私有证据归档全部闭合，才能按 dry-run 清单清理远端；
 生产数据库、Redis、配置、当前／回滚镜像和唯一证据副本永远不在清理范围。
 
-当前边界：Claude 已有 `production_replacement` ApprovalFact、ValidationCandidate 和 AcceptanceFact，
-但尚无 promotion receipt、DeploymentFact 或 ActivationReceipt；FW-H 未开始，Vircs 生产未连接或修改。
+当前边界：Claude 历史 Sonnet Candidate 已有 `production_replacement` ApprovalFact、ValidationCandidate
+和 AcceptanceFact；三模型后继尚待新的 DMIT AcceptanceFact。两者均无 promotion receipt、DeploymentFact
+或 ActivationReceipt；FW-H 未开始，Vircs 生产未连接或修改。
 2.1.220 Campaign／run／提取物已被 FW-F fixture 内容寻址引用，引用有效期间不得删除。
 
 ---

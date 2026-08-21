@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import re
@@ -12,12 +13,22 @@ import sys
 from pathlib import Path
 from typing import Any
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT))
 from tools.official_client_capture.claude_fw_f_profile import parse_http_stream
 
 
 EXPECTED_PROFILE_DIGEST = (
     "4da60bc238694a06a0dc80d68117abddd2de98c7c924c4db4c5dd929ea411e17"
+)
+PREVIOUS_WIRE_DIGEST = (
+    "07dbb15e8a621c4ef4922a9dec09e08d032fd649414f7d2f572c95c87b5679a7"
+)
+PREVIOUS_RELEASE_DIGEST = (
+    "c1053492eabc0b10d9d5f92f807a1df0d507c777b64a528e938426350c0d5350"
+)
+PREVIOUS_BUNDLE_DIGEST = (
+    "4213ea92a7d76c4ef3aa318f4d93628cbcf675dc86566b107dddb70a70e6eb41"
 )
 EXPECTED_REQUIRED_RULES_MANIFEST_DIGEST = (
     "c09fdc9158d4d3aee7e5d28cc4a794e259a3c56899e00d558afab4c537389045"
@@ -83,6 +94,98 @@ EXPECTED_KEY_SHARE_GROUPS = [29]
 EXPECTED_PSK_MODES = [1]
 EXPECTED_WITH_ALPN_EXTENSIONS = [0, 23, 65281, 10, 11, 35, 16, 5, 13, 18, 51, 45, 43, 21]
 EXPECTED_WITHOUT_ALPN_EXTENSIONS = [0, 23, 65281, 10, 11, 35, 13, 51, 45, 43]
+MODEL_CAPABILITY_MODELS = ("claude-sonnet-5", "claude-opus-5", "claude-fable-5")
+MODEL_CAPABILITY_EFFORTS = ("low", "medium", "high", "xhigh", "max")
+MODEL_CAPABILITY_SUCCESSFUL_ATTEMPTS = 42
+MODEL_CAPABILITY_FAILED_ATTEMPTS = {
+    "claude-opus-5-v4-replay-baseline/attempt-001",
+    "claude-opus-5-v4-replay-tui/attempt-001",
+    "claude-opus-5-v4-replay-tui/attempt-002",
+}
+MODEL_CAPABILITY_BASE_COMMIT = "c662b59a3e558f7aa352cf3a424a603aa0c254eb"
+EMPTY_FILE_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+MODEL_CAPABILITY_PRIOR_TRANSITIONS = (
+    (
+        "docs/egress/maintenance/claude-fw-g-desktop-title-source-transition.json",
+        "3d176f9b24549388936fd918e3eb2a160263eac372160611b42ab3dd62da6884",
+    ),
+    (
+        "docs/egress/maintenance/claude-fw-g-desktop-title-test-transition.json",
+        "eecadfe40a4bf5f6e1e55ac2493d74557cccb0568e61d33ef0291c30ab5056d3",
+    ),
+)
+MODEL_CAPABILITY_SOURCE_TRANSITIONS = (
+    (
+        "backend/internal/officialegress/claude_body.go",
+        "ba45723ed345a30cbd358ea9d0c23fe065df410a921fc3c69aa3eb6d5dd846b7",
+        "按模型能力目录选择场景并重建 fallbacks、Body 顺序和 Fable server fallback。",
+    ),
+    (
+        "backend/internal/officialegress/claude_ingress.go",
+        "0920335717e3d646bc4d54bda997ea8c81a23bd3fd056d6258b442824abd0204",
+        "验证官方模型场景、fallbacks 与 Fable 成对锁存 Header。",
+    ),
+    (
+        "backend/internal/officialegress/claude_profile.go",
+        "6c347093c3b722b6b9339fc9f497b279f5d9839d6dc99212313933fe0b5756b1",
+        "切换到包含三模型能力目录摘要的新内容寻址 Profile。",
+    ),
+    (
+        "backend/internal/officialegress/claude_runtime.go",
+        "5b24eec2cedd2cdd44e9045933261b62dfac2f5d9cc64d6c057ff0024af9167c",
+        "加载模型能力目录，执行精确模型门禁、count_tokens 和 Fable 会话锁存状态机。",
+    ),
+    (
+        "backend/internal/officialegress/claude_runtime_test.go",
+        "eb8945aec040a5c7107b86138bac48aac467d19fdf453a6105770e46132d8e48",
+        "增加三模型逐场景、未知模型、错误 fallback、count_tokens 与锁存正负测试。",
+    ),
+    (
+        "backend/internal/officialegress/claude_tools.go",
+        "e49b12302ff469ec5d446f9d184466a25c65c8b7b3e1db8cf793b1bfc63d7b79",
+        "仅允许官方入口精确承接模型目录中已取证场景的工具形态，不放宽第三方动态工具准入。",
+    ),
+    (
+        "backend/internal/officialegress/claude_wire.go",
+        "9558669b8f9c546116d1942424405d18e9a665b1fd6967e77c35ba4cb6fa14d8",
+        "切换到新 Wire 并在启动时校验模型目录、证据、场景及 Header／Body 顺序。",
+    ),
+    (
+        "backend/internal/officialegress/claude_fw_g_desktop_title_transition_test.go",
+        "4916d31469ac694b3b6c957551b474adb2206da2db361a3b74bb6dc91931afdb",
+        "让既有 Desktop 标题迁移只绑定其历史 Wire，并由本轮追加迁移承接当前源码。",
+    ),
+    (
+        "backend/internal/officialegress/claude_fw_g_source_transition_test.go",
+        "e943503961ebaf1e890410fcd61a8745f205b09668b9b807d5d7ec5404961fae",
+        "让 FW-G 初始收据继续绑定历史制品身份，并允许本轮追加迁移承接当前源码。",
+    ),
+    (
+        "backend/internal/officialegress/claude_fw_g_thinking_display_transition_test.go",
+        "e3abae6d0a1ff445adb531618653b8f0c84e53de7c07705531ee8cfaf5719bd6",
+        "让 thinking.display 收据只绑定其历史 Profile／Wire，并由本轮追加迁移承接当前源码。",
+    ),
+    (
+        "backend/internal/service/gateway_claude_fw_g.go",
+        "750ecc54194ba13a01bdf42a0a962fc6b76195cca3c00179cf369017407d0e6d",
+        "把实际上游响应模型交给 Persona 会话 finalizer，禁止客户端预造 Fable 锁存。",
+    ),
+    (
+        "backend/internal/service/claude_fw_g_source_transition_test.go",
+        "9ef2cc4a97c023f6ad4921e2664d823ffcfc2435442b18a9673529d136e93893",
+        "让 service 层既有 FW-G 收据继续绑定历史制品，并由本轮追加迁移承接当前源码。",
+    ),
+    (
+        "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+        "4cc9b2acbbc50203cab78eeeedaf0d4f46aaa4500d082e27fdf5a8e9b937b31b",
+        "按 Codex 粒度明确公共 RequiredRules 与独立模型能力目录的证据和换版合同。",
+    ),
+    (
+        "tools/generate_claude_fw_g_profile.py",
+        "871e74ac3e0466d26977e9bb44256ec2e4d913b7e87895c7a307c4c5926420e4",
+        "从三模型官方 Campaign 确定性生成 Profile、Wire、能力目录和追加式迁移收据。",
+    ),
+)
 
 
 def canonical_bytes(document: object) -> bytes:
@@ -99,6 +202,55 @@ def canonical_bytes(document: object) -> bytes:
 
 def sha256_hex(raw: bytes) -> str:
     return hashlib.sha256(raw).hexdigest()
+
+
+def repository_relative(path: Path) -> str:
+    absolute = path.resolve() if path.is_absolute() else (Path.cwd() / path).resolve()
+    try:
+        return absolute.relative_to(ROOT).as_posix()
+    except ValueError as exc:
+        raise SystemExit(f"模型能力制品不在仓库内：{absolute}") from exc
+
+
+def build_model_capability_source_transitions(
+    profile_path: Path,
+    wire_path: Path,
+) -> list[dict[str, str]]:
+    specs = list(MODEL_CAPABILITY_SOURCE_TRANSITIONS)
+    specs.extend(
+        [
+            (
+                repository_relative(profile_path),
+                EMPTY_FILE_SHA256,
+                "新增内容寻址 Profile，冻结三模型显式闭集和能力目录摘要。",
+            ),
+            (
+                repository_relative(wire_path),
+                EMPTY_FILE_SHA256,
+                "新增内容寻址 Wire，冻结三模型逐场景官方请求与状态差异。",
+            ),
+        ]
+    )
+    paths = [path for path, _, _ in specs]
+    if len(paths) != len(set(paths)):
+        raise SystemExit("模型能力源码 transition 路径重复")
+    transitions: list[dict[str, str]] = []
+    for path, before_digest, reason in sorted(specs):
+        source_path = ROOT / path
+        if not source_path.is_file():
+            raise SystemExit(f"模型能力源码 transition 缺少文件：{path}")
+        after_digest = sha256_hex(source_path.read_bytes())
+        if before_digest == after_digest:
+            raise SystemExit(f"模型能力源码 transition 未发生变化：{path}")
+        transitions.append(
+            {
+                "path": path,
+                "from_sha256": before_digest,
+                "to_sha256": after_digest,
+                "reason": reason,
+            }
+        )
+    return transitions
 
 
 def load_frozen_json(path: Path, expected_digest: str, label: str) -> dict[str, Any]:
@@ -533,6 +685,7 @@ def public_system_blocks(request: dict[str, Any]) -> list[dict[str, Any]]:
 
 def scenario_projection(request: dict[str, Any]) -> dict[str, Any]:
     body = request.get("body", {})
+    header_order = [str(header.get("name", "")) for header in request.get("headers", [])]
     return {
         "evidence": {
             "path": request["evidence_path"],
@@ -545,10 +698,12 @@ def scenario_projection(request: dict[str, Any]) -> dict[str, Any]:
         "max_tokens_json": wire_json(body.get("max_tokens")),
         "thinking_json": wire_json(body.get("thinking")),
         "context_management_json": wire_json(body.get("context_management")),
+        "fallbacks_json": wire_json(body.get("fallbacks")),
         "output_config_json": wire_json(body.get("output_config")),
         "temperature_json": wire_json(body.get("temperature")),
         "thinking_present": "thinking" in body,
         "context_management_present": "context_management" in body,
+        "fallbacks_present": "fallbacks" in body,
         "output_config_present": "output_config" in body,
         "temperature_present": "temperature" in body,
         "stream_present": "stream" in body,
@@ -558,6 +713,12 @@ def scenario_projection(request: dict[str, Any]) -> dict[str, Any]:
         "system_present": "system" in body,
         "system_blocks_json": wire_json(public_system_blocks(request)),
         "metadata_present": "metadata" in body,
+        "body_order": list(body),
+        "header_order": header_order,
+        "fallback_latched_by_present": bool(
+            header_value(request, "x-cc-fallback-latched-by")
+        ),
+        "refusal_fallback_value": header_value(request, "x-is-refusal-fallback"),
         "user_agent": header_value(request, "User-Agent"),
         "anthropic_beta": header_value(request, "anthropic-beta"),
         "x_app": header_value(request, "x-app"),
@@ -757,6 +918,15 @@ def build_implementation_policy(
         lambda request: "tool_choice" in request.get("body", {}),
         "server web_search",
     )
+    web_search_outer = select_messages_request(
+        campaign_root,
+        "v4-web-search",
+        allowed_raw_sha256s,
+        lambda request: request.get("body", {}).get("tools", [{}])[0].get("name")
+        == "WebSearch"
+        and "tool_choice" not in request.get("body", {}),
+        "outer WebSearch",
+    )
     background = [scenario_projection(request) for request in background_requests]
 
     baseline_projection = scenario_projection(baseline)
@@ -784,6 +954,7 @@ def build_implementation_policy(
             "append_system": scenario_projection(append_system),
             "exclude_dynamic": scenario_projection(exclude_dynamic),
             "custom_agent": scenario_projection(custom_agent),
+            "web_search_outer": scenario_projection(web_search_outer),
             "web_search_server": scenario_projection(web_search_server),
         },
         "identity": {
@@ -804,7 +975,9 @@ def build_implementation_policy(
                 "host",
                 "user-agent",
                 "x-claude-code-session-id",
+                "x-cc-fallback-latched-by",
                 "x-client-request-id",
+                "x-is-refusal-fallback",
             ],
             "conditional_order": [
                 "x-anthropic-additional-protection",
@@ -814,7 +987,9 @@ def build_implementation_policy(
                 "x-client-app",
                 "x-claude-code-agent-id",
                 "x-claude-code-parent-agent-id",
+                "x-cc-fallback-latched-by",
                 "x-client-request-id",
+                "x-is-refusal-fallback",
             ],
         },
         "thinking": build_thinking_display_policy(
@@ -837,12 +1012,432 @@ def build_implementation_policy(
     }
 
 
+def successful_model_attempts(campaign_root: Path) -> tuple[dict[str, Path], dict[str, Any]]:
+    attempts_root = campaign_root / "attempts"
+    successful: dict[str, Path] = {}
+    failed: set[str] = set()
+    attempt_receipts: list[dict[str, Any]] = []
+    telemetry_markers = ("telemetry", "event_logging", "datadog", "statsig", "analytics")
+    for scenario_root in sorted(attempts_root.iterdir()):
+        if not scenario_root.is_dir():
+            continue
+        for attempt_root in sorted(scenario_root.glob("attempt-*")):
+            manifest_path = attempt_root / "relay-manifest.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            attempt_id = f"{scenario_root.name}/{attempt_root.name}"
+            complete = (
+                manifest.get("status") == "complete"
+                and manifest.get("m_binding", {}).get("complete") is True
+                and manifest.get("secret_scan", {}).get("passed") is True
+                and manifest.get("dimension_evidence", {}).get("result") == "passed"
+                and manifest.get("m_binding", {})
+                .get("requirements", {})
+                .get("hosts_restored")
+                is True
+            )
+            if not complete:
+                failed.add(attempt_id)
+                attempt_receipts.append(
+                    {
+                        "attempt_id": attempt_id,
+                        "status": "historical_failed",
+                        "manifest_sha256": sha256_hex(manifest_path.read_bytes()),
+                    }
+                )
+                continue
+            for item in manifest.get("dimension_evidence", {}).get(
+                "actual_wire_inventory", []
+            ):
+                identity = " ".join(
+                    str(item.get(name, ""))
+                    for name in ("request_target", "host", "evidence_file")
+                ).lower()
+                if any(marker in identity for marker in telemetry_markers):
+                    raise SystemExit(f"模型能力 Campaign 混入遥测／行为请求：{attempt_id}")
+            runtime_path = (
+                campaign_root
+                / "runtime-receipts"
+                / f"{scenario_root.name}-{attempt_root.name}.json"
+            )
+            if not runtime_path.is_file():
+                raise SystemExit(f"模型能力 attempt 缺少 runtime receipt：{attempt_id}")
+            successful[scenario_root.name] = attempt_root
+            attempt_receipts.append(
+                {
+                    "attempt_id": attempt_id,
+                    "status": "complete",
+                    "manifest_sha256": sha256_hex(manifest_path.read_bytes()),
+                    "runtime_receipt_sha256": sha256_hex(runtime_path.read_bytes()),
+                }
+            )
+    complete_count = sum(item["status"] == "complete" for item in attempt_receipts)
+    if complete_count != MODEL_CAPABILITY_SUCCESSFUL_ATTEMPTS:
+        raise SystemExit(f"模型能力成功 attempt 数量不是 42：{complete_count}")
+    if failed != MODEL_CAPABILITY_FAILED_ATTEMPTS:
+        raise SystemExit(f"模型能力历史失败集合漂移：{sorted(failed)}")
+
+    production_path = campaign_root / "environment" / "production-diff.json"
+    production = json.loads(production_path.read_text(encoding="utf-8"))
+    if production.get("identical") is not True or production.get("changed_fields") != []:
+        raise SystemExit("模型能力 Campaign 改变了 Vircs 生产服务")
+    evidence = {
+        "campaign_root": campaign_root.as_posix(),
+        "successful_attempts": complete_count,
+        "historical_failed_attempts": len(failed),
+        "attempts": attempt_receipts,
+        "production_diff": {
+            "path": production_path.as_posix(),
+            "sha256": sha256_hex(production_path.read_bytes()),
+            "identical": True,
+        },
+        "behavior_traffic_disposition": "excluded-from-rules-and-difference-judgement",
+    }
+    evidence["campaign_sha256"] = sha256_hex(canonical_bytes(evidence))
+    return successful, evidence
+
+
+def load_attempt_requests(attempt_root: Path, scenario: str) -> list[dict[str, Any]]:
+    requests: list[dict[str, Any]] = []
+    for path in sorted((attempt_root / "relay").glob("conn*.client_to_upstream.bin")):
+        for request in parse_http_stream(path.read_bytes(), scenario):
+            request = dict(request)
+            request["evidence_path"] = path.as_posix()
+            requests.append(request)
+    return requests
+
+
+def select_base_campaign_request(
+    campaign_root: Path,
+    scenario: str,
+    allowed_raw_sha256s: set[str],
+    predicate: Any,
+    description: str,
+) -> dict[str, Any]:
+    attempt_roots = sorted((campaign_root / "attempts" / scenario).glob("attempt-*"))
+    selected_attempt = None
+    for attempt_root in attempt_roots:
+        manifest_path = attempt_root / "relay-manifest.json"
+        if not manifest_path.is_file():
+            continue
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if (
+            manifest.get("status") == "complete"
+            and manifest.get("m_binding", {}).get("complete") is True
+            and manifest.get("secret_scan", {}).get("passed") is True
+        ):
+            selected_attempt = attempt_root
+    if selected_attempt is None:
+        raise SystemExit(f"基础 Campaign 缺少成功场景：{scenario}")
+    for request in load_attempt_requests(selected_attempt, scenario):
+        if not predicate(request):
+            continue
+        if request.get("raw_sha256") not in allowed_raw_sha256s:
+            raise SystemExit(f"{scenario} 请求未绑定 MeasuredRuleLedger")
+        return request
+    raise SystemExit(f"{scenario} 没有 {description}")
+
+
+def select_attempt_request(
+    attempts: dict[str, Path],
+    scenario: str,
+    predicate: Any,
+    description: str,
+) -> dict[str, Any]:
+    attempt = attempts.get(scenario)
+    if attempt is None:
+        raise SystemExit(f"模型能力 Campaign 缺少成功场景：{scenario}")
+    selected = next(
+        (request for request in load_attempt_requests(attempt, scenario) if predicate(request)),
+        None,
+    )
+    if selected is None:
+        raise SystemExit(f"{scenario} 没有 {description}")
+    return selected
+
+
+def build_model_scenarios(
+    model: str,
+    attempts: dict[str, Path],
+    base_scenarios: dict[str, Any],
+) -> dict[str, Any]:
+    prefix = f"{model}-"
+
+    def primary(suffix: str) -> dict[str, Any]:
+        return select_attempt_request(
+            attempts,
+            prefix + suffix,
+            lambda request: request.get("request_target") == "/v1/messages?beta=true"
+            and request.get("body", {}).get("model") == model,
+            model + " messages",
+        )
+
+    agent = select_attempt_request(
+        attempts,
+        prefix + "v4-agent-depth1",
+        lambda request: request.get("body", {}).get("model") == model
+        and bool(header_value(request, "x-claude-code-agent-id")),
+        "agent 子请求",
+    )
+    tui_main = select_attempt_request(
+        attempts,
+        prefix + "v4-replay-tui",
+        lambda request: request.get("body", {}).get("model") == model,
+        "TUI 主请求",
+    )
+    background_attempt = attempts.get(prefix + "v4-background")
+    if background_attempt is None:
+        raise SystemExit(f"{model} 缺少 background 成功场景")
+    background_requests = [
+        request
+        for request in load_attempt_requests(background_attempt, prefix + "v4-background")
+        if request.get("request_target") == "/v1/messages?beta=true"
+    ]
+    if len(background_requests) != 4:
+        raise SystemExit(f"{model} background 请求数量不是 4")
+    background_agent_attempt = attempts.get(prefix + "v4-background-subagent")
+    if background_agent_attempt is None:
+        raise SystemExit(f"{model} 缺少 background subagent 成功场景")
+    background_agent_requests = [
+        request
+        for request in load_attempt_requests(
+            background_agent_attempt, prefix + "v4-background-subagent"
+        )
+        if request.get("request_target") == "/v1/messages?beta=true"
+        and request.get("body", {}).get("model") == model
+    ]
+    sdk_cli_background_agent = next(
+        (
+            request
+            for request in background_agent_requests
+            if not header_value(request, "x-claude-code-agent-id")
+        ),
+        None,
+    )
+    agent_background = next(
+        (
+            request
+            for request in background_agent_requests
+            if header_value(request, "x-claude-code-agent-id")
+        ),
+        None,
+    )
+    if sdk_cli_background_agent is None or agent_background is None:
+        raise SystemExit(f"{model} background subagent 形态不完整")
+    web_search_attempt = attempts.get(prefix + "v4-web-search")
+    if web_search_attempt is None:
+        raise SystemExit(f"{model} 缺少 WebSearch 成功场景")
+    web_search_requests = load_attempt_requests(
+        web_search_attempt, prefix + "v4-web-search"
+    )
+    web_search_outer = next(
+        (
+            request
+            for request in web_search_requests
+            if request.get("body", {}).get("model") == model
+            and request.get("body", {}).get("tools", [{}])[0].get("name") == "WebSearch"
+            and "tool_choice" not in request.get("body", {})
+        ),
+        None,
+    )
+    web_search_server = next(
+        (
+            request
+            for request in web_search_requests
+            if request.get("body", {}).get("model") == model
+            and request.get("body", {}).get("tools", [{}])[0].get("name") == "web_search"
+            and "tool_choice" in request.get("body", {})
+        ),
+        None,
+    )
+    if web_search_outer is None or web_search_server is None:
+        raise SystemExit(f"{model} WebSearch 外层／server 形态不完整")
+
+    scenarios = copy.deepcopy(base_scenarios)
+    scenarios.update(
+        {
+            "sdk_cli": scenario_projection(primary("v4-replay-baseline")),
+            "agent": scenario_projection(agent),
+            "tui_main": scenario_projection(tui_main),
+            "background": [scenario_projection(request) for request in background_requests],
+            "custom_system": scenario_projection(primary("v4-replay-custom-system")),
+            "append_system": scenario_projection(primary("v4-replay-append-system")),
+            "exclude_dynamic": scenario_projection(
+                primary("v4-replay-exclude-dynamic-system")
+            ),
+            "custom_agent": scenario_projection(primary("v4-replay-custom-agent")),
+            "sdk_cli_background_agent": scenario_projection(sdk_cli_background_agent),
+            "agent_background": scenario_projection(agent_background),
+            "web_search_outer": scenario_projection(web_search_outer),
+            "web_search_server": scenario_projection(web_search_server),
+            "server_fallback": None,
+        }
+    )
+    if model == "claude-fable-5":
+        fallback = select_attempt_request(
+            attempts,
+            prefix + "v4-bash",
+            lambda request: request.get("body", {}).get("model") == "claude-opus-4-8"
+            and header_value(request, "x-is-refusal-fallback") == "true"
+            and bool(header_value(request, "x-cc-fallback-latched-by")),
+            "server fallback 锁存请求",
+        )
+        scenarios["server_fallback"] = scenario_projection(fallback)
+    return scenarios
+
+
+def build_model_capability_catalog(
+    campaign_root: Path,
+    base_campaign_root: Path,
+    measured_ledger: Path,
+    base_scenarios: dict[str, Any],
+) -> dict[str, Any]:
+    attempts, evidence = successful_model_attempts(campaign_root)
+    allowed_raw_sha256s = collect_measured_raw_sha256s(measured_ledger)
+    sonnet_scenarios = copy.deepcopy(base_scenarios)
+    sonnet_scenarios["server_fallback"] = None
+
+    models: list[dict[str, Any]] = []
+    for model in MODEL_CAPABILITY_MODELS:
+        if model == "claude-sonnet-5":
+            scenarios = sonnet_scenarios
+            count_tokens = select_base_campaign_request(
+                base_campaign_root,
+                "v4-tui-count-tokens",
+                allowed_raw_sha256s,
+                lambda request: request.get("request_target", "").startswith(
+                    "/v1/messages/count_tokens"
+                )
+                and request.get("body", {}).get("model") == model,
+                "Sonnet count_tokens",
+            )
+            effort_evidence = {
+                effort: scenario_projection(
+                    select_messages_request(
+                        base_campaign_root,
+                        (
+                            "v4-replay-baseline"
+                            if effort == "high"
+                            else f"v4-replay-effort-{effort}"
+                        ),
+                        allowed_raw_sha256s,
+                        lambda request, expected=effort: request.get("body", {})
+                        .get("output_config", {})
+                        .get("effort")
+                        == expected,
+                        f"Sonnet effort={effort}",
+                    )
+                )["evidence"]
+                for effort in MODEL_CAPABILITY_EFFORTS
+            }
+            thinking_disabled = select_messages_request(
+                base_campaign_root,
+                "v4-replay-thinking-disabled",
+                allowed_raw_sha256s,
+                lambda request: "thinking" not in request.get("body", {}),
+                "Sonnet thinking disabled",
+            )
+        else:
+            scenarios = build_model_scenarios(model, attempts, base_scenarios)
+            prefix = f"{model}-"
+            count_tokens = select_attempt_request(
+                attempts,
+                prefix + "v4-tui-count-tokens",
+                lambda request: request.get("request_target", "").startswith(
+                    "/v1/messages/count_tokens"
+                )
+                and request.get("body", {}).get("model") == model,
+                model + " count_tokens",
+            )
+            effort_evidence = {}
+            for effort in MODEL_CAPABILITY_EFFORTS:
+                effort_scenario = (
+                    "v4-replay-baseline"
+                    if effort == "high"
+                    else f"v4-replay-effort-{effort}"
+                )
+                request = select_attempt_request(
+                    attempts,
+                    prefix + effort_scenario,
+                    lambda request, expected=effort: request.get("body", {})
+                    .get("output_config", {})
+                    .get("effort")
+                    == expected,
+                    f"{model} effort={effort}",
+                )
+                effort_evidence[effort] = {
+                    "path": request["evidence_path"],
+                    "raw_sha256": request["raw_sha256"],
+                }
+            thinking_disabled = select_attempt_request(
+                attempts,
+                prefix + "v4-replay-thinking-disabled",
+                lambda request: request.get("body", {}).get("model") == model
+                and "thinking" not in request.get("body", {}),
+                model + " thinking disabled",
+            )
+        models.append(
+            {
+                "canonical_model": model,
+                "aliases": [model],
+                "effort_values": list(MODEL_CAPABILITY_EFFORTS),
+                "effort_evidence": effort_evidence,
+                "thinking_disable_evidence": {
+                    "path": thinking_disabled["evidence_path"],
+                    "raw_sha256": thinking_disabled["raw_sha256"],
+                },
+                "count_tokens_evidence": {
+                    "path": count_tokens["evidence_path"],
+                    "raw_sha256": count_tokens["raw_sha256"],
+                },
+                "legacy_retry_fallback_supported": model == "claude-sonnet-5",
+                "scenarios": scenarios,
+            }
+        )
+    return {
+        "schema_version": "claude-code-model-capability-catalog/v1",
+        "required_rule_count": EXPECTED_RULE_COUNT,
+        "unknown_model_policy": "deny",
+        "alias_policy": "explicit-only",
+        "evidence": evidence,
+        "models": models,
+    }
+
+
+def extend_profile_for_model_capabilities(
+    base_document: dict[str, Any],
+    model_catalog: dict[str, Any],
+) -> dict[str, Any]:
+    document = copy.deepcopy(base_document)
+    document["schema_version"] = "claude-code-fw-f-target-profile/v6"
+    identity = document.setdefault("identity", {})
+    identity["supported_models"] = [
+        model["canonical_model"] for model in model_catalog["models"]
+    ]
+    identity["model_alias_policy"] = model_catalog["alias_policy"]
+    identity["unknown_model_policy"] = model_catalog["unknown_model_policy"]
+    identity["model_capability_catalog_sha256"] = sha256_hex(
+        canonical_bytes(model_catalog)
+    )
+    body = document.setdefault("body", {})
+    field_types = body.setdefault("field_types", {})
+    field_types["fallbacks"] = ["array"]
+    optional = body.setdefault("optional_fields", [])
+    if "fallbacks" not in optional:
+        optional.append("fallbacks")
+    optional.sort()
+    if len(document.get("rules", [])) != EXPECTED_RULE_COUNT:
+        raise SystemExit("模型能力扩展改变了 40 条 RequiredRules")
+    return document
+
+
 def build_wire_artifact(
     messages_path: Path,
     tls_path: Path,
     campaign_root: Path,
     measured_ledger: Path,
     thinking_display_campaign_root: Path,
+    profile_digest: str,
+    model_catalog: dict[str, Any],
 ) -> dict[str, Any]:
     raw_request = messages_path.read_bytes()
     if sha256_hex(raw_request) != EXPECTED_MESSAGES_EVIDENCE_DIGEST:
@@ -884,11 +1479,14 @@ def build_wire_artifact(
         validate_tls_vector(vector, False)
 
     return {
-        "schema_version": "claude-code-fw-g-wire-artifact/v2",
+        "schema_version": "claude-code-fw-g-wire-artifact/v3",
         "identity": {
             "version": EXPECTED_VERSION,
             "platform": "linux/amd64",
-            "profile_digest": EXPECTED_PROFILE_DIGEST,
+            "profile_digest": profile_digest,
+            "model_capability_catalog_digest": sha256_hex(
+                canonical_bytes(model_catalog)
+            ),
         },
         "evidence": {
             "messages_request": {
@@ -923,13 +1521,107 @@ def build_wire_artifact(
             "system_blocks_json": wire_json(static_blocks),
             "system_text_sha256": EXPECTED_SYSTEM_TEXT_DIGESTS,
         },
-        "implementation_policy": build_implementation_policy(
-            campaign_root, measured_ledger, thinking_display_campaign_root
-        ),
+        "implementation_policy": {
+            **build_implementation_policy(
+                campaign_root, measured_ledger, thinking_display_campaign_root
+            ),
+            "schema_version": "claude-code-fw-g-implementation-policy/v3",
+            "model_catalog": model_catalog,
+        },
         "transports": {
             "http1_with_alpn": with_alpn[0],
             "http1_without_alpn": without_alpn[0],
         },
+    }
+
+
+def build_model_capability_release_identity(
+    profile_digest: str,
+    wire_digest: str,
+    model_catalog_digest: str,
+) -> tuple[str, str]:
+    release = {
+        "schema_version": "claude-code-fw-g-model-capability-release/v1",
+        "version": EXPECTED_VERSION,
+        "platform": "linux/amd64",
+        "profile_sha256": profile_digest,
+        "wire_sha256": wire_digest,
+        "model_capability_catalog_sha256": model_catalog_digest,
+        "required_rules_manifest_sha256": EXPECTED_REQUIRED_RULES_MANIFEST_DIGEST,
+        "required_rule_count": EXPECTED_RULE_COUNT,
+    }
+    release_digest = sha256_hex(canonical_bytes(release))
+    bundle = {
+        "schema_version": "claude-code-fw-g-model-capability-bundle/v1",
+        "persona": "claude-code-oauth",
+        "release_sha256": release_digest,
+        "profile_sha256": profile_digest,
+        "wire_sha256": wire_digest,
+    }
+    return release_digest, sha256_hex(canonical_bytes(bundle))
+
+
+def build_model_capability_receipt(
+    model_catalog: dict[str, Any],
+    profile_path: Path,
+    profile_digest: str,
+    wire_path: Path,
+    wire_digest: str,
+    release_digest: str,
+    bundle_digest: str,
+) -> dict[str, Any]:
+    model_catalog_digest = sha256_hex(canonical_bytes(model_catalog))
+    return {
+        "schema_version": "official-egress-claude-model-capability-source-transition/v1",
+        "date": "2026-08-21",
+        "phase": "FW-G",
+        "base_commit": MODEL_CAPABILITY_BASE_COMMIT,
+        "prior_transitions": [
+            {"path": path, "sha256": digest}
+            for path, digest in MODEL_CAPABILITY_PRIOR_TRANSITIONS
+        ],
+        "target": {
+            "product": "claude-code",
+            "version": EXPECTED_VERSION,
+            "platform": "linux/amd64",
+            "models": list(MODEL_CAPABILITY_MODELS),
+        },
+        "invariants": {
+            "required_rule_count_before": EXPECTED_RULE_COUNT,
+            "required_rule_count_after": EXPECTED_RULE_COUNT,
+            "required_rules_duplicated_per_model": False,
+            "unknown_model_policy": "deny",
+            "alias_policy": "explicit-only",
+            "telemetry_and_behavior_traffic": "excluded",
+        },
+        "evidence": model_catalog["evidence"],
+        "model_capability_catalog_sha256": model_catalog_digest,
+        "artifacts": {
+            "before": {
+                "profile_sha256": EXPECTED_PROFILE_DIGEST,
+                "wire_sha256": PREVIOUS_WIRE_DIGEST,
+                "release_sha256": PREVIOUS_RELEASE_DIGEST,
+                "bundle_sha256": PREVIOUS_BUNDLE_DIGEST,
+            },
+            "after": {
+                "profile": profile_path.as_posix(),
+                "profile_sha256": profile_digest,
+                "wire": wire_path.as_posix(),
+                "wire_sha256": wire_digest,
+                "release_sha256": release_digest,
+                "bundle_sha256": bundle_digest,
+            },
+        },
+        "transitions": build_model_capability_source_transitions(
+            profile_path,
+            wire_path,
+        ),
+        "safety": {
+            "vircs_production_changed": False,
+            "production_selector_changed": False,
+            "dmit_deployed": False,
+        },
+        "result": "passed",
     }
 
 
@@ -946,6 +1638,8 @@ def main() -> int:
     parser.add_argument("--wire-output", type=Path)
     parser.add_argument("--campaign-root", type=Path)
     parser.add_argument("--thinking-display-campaign-root", type=Path)
+    parser.add_argument("--model-capability-campaign-root", type=Path)
+    parser.add_argument("--model-capability-receipt-output", type=Path)
     args = parser.parse_args()
 
     snapshot = load_frozen_json(args.snapshot, EXPECTED_SNAPSHOT_DIGEST, "Snapshot")
@@ -979,9 +1673,26 @@ def main() -> int:
     if document.get("identity", {}).get("version") != EXPECTED_VERSION:
         raise SystemExit("Snapshot 目标版本不是 2.1.226")
 
+    model_catalog = None
+    if args.model_capability_campaign_root is not None:
+        if args.campaign_root is None or args.thinking_display_campaign_root is None:
+            raise SystemExit("模型能力目录需要基础 Campaign 与 thinking.display Campaign")
+        base_policy = build_implementation_policy(
+            args.campaign_root,
+            args.measured_ledger,
+            args.thinking_display_campaign_root,
+        )
+        model_catalog = build_model_capability_catalog(
+            args.model_capability_campaign_root,
+            args.campaign_root,
+            args.measured_ledger,
+            base_policy["scenarios"],
+        )
+        document = extend_profile_for_model_capabilities(document, model_catalog)
+
     raw = canonical_bytes(document)
     digest = hashlib.sha256(raw).hexdigest()
-    if digest != EXPECTED_PROFILE_DIGEST:
+    if model_catalog is None and digest != EXPECTED_PROFILE_DIGEST:
         raise SystemExit(f"画像摘要不一致：{digest}")
 
     args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -993,24 +1704,52 @@ def main() -> int:
         args.wire_output,
         args.campaign_root,
         args.thinking_display_campaign_root,
+        args.model_capability_campaign_root,
+        args.model_capability_receipt_output,
     )
     if any(wire_args) and not all(wire_args):
         raise SystemExit("生成 wire artifact 时必须同时提供五个 wire 参数")
     if all(wire_args):
+        if model_catalog is None:
+            raise SystemExit("生成新版 wire artifact 时缺少模型能力目录")
         wire_document = build_wire_artifact(
             args.messages_evidence,
             args.tls_pcap,
             args.campaign_root,
             args.measured_ledger,
             args.thinking_display_campaign_root,
+            digest,
+            model_catalog,
         )
         wire_raw = canonical_bytes(wire_document)
+        wire_digest = sha256_hex(wire_raw)
         args.wire_output.parent.mkdir(parents=True, exist_ok=True)
         args.wire_output.write_bytes(wire_raw)
         print(
-            f"generated {args.wire_output} sha256={sha256_hex(wire_raw)} "
+            f"generated {args.wire_output} sha256={wire_digest} "
             f"bytes={len(wire_raw)}"
         )
+        model_catalog_digest = sha256_hex(canonical_bytes(model_catalog))
+        release_digest, bundle_digest = build_model_capability_release_identity(
+            digest, wire_digest, model_catalog_digest
+        )
+        receipt = build_model_capability_receipt(
+            model_catalog,
+            args.output,
+            digest,
+            args.wire_output,
+            wire_digest,
+            release_digest,
+            bundle_digest,
+        )
+        receipt_raw = canonical_bytes(receipt)
+        args.model_capability_receipt_output.parent.mkdir(parents=True, exist_ok=True)
+        args.model_capability_receipt_output.write_bytes(receipt_raw)
+        print(
+            f"generated {args.model_capability_receipt_output} "
+            f"sha256={sha256_hex(receipt_raw)} bytes={len(receipt_raw)}"
+        )
+        print(f"release_sha256={release_digest} bundle_sha256={bundle_digest}")
     return 0
 
 

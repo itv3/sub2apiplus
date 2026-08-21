@@ -12,6 +12,7 @@ import (
 	"math/big"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -240,10 +241,20 @@ type ClaudeCandidateResult struct {
 
 // FinalizeSession 在最终响应确定后提交或撤销本次会话状态。
 func (r *ClaudeCandidateResult) FinalizeSession(accepted bool) error {
+	return r.FinalizeSessionWithResponseModel(accepted, "")
+}
+
+// FinalizeSessionWithResponseModel 在提交会话状态时同时纳入已解析的上游响应模型。
+func (r *ClaudeCandidateResult) FinalizeSessionWithResponseModel(
+	accepted bool,
+	responseModel string,
+) error {
 	if r == nil || r.sessionFinalizer == nil {
 		return nil
 	}
-	return r.sessionFinalizer.finalize(accepted, r.sessionStatus, r.sessionRequestID)
+	return r.sessionFinalizer.finalize(
+		accepted, r.sessionStatus, r.sessionRequestID, responseModel,
+	)
 }
 
 func newClaudeCandidateResult(
@@ -310,8 +321,11 @@ const (
 )
 
 type claudeSessionLineState struct {
-	previousRequestID string
-	inFlight          bool
+	previousRequestID    string
+	fallbackPrimaryModel string
+	fallbackModel        string
+	fallbackLatchedBy    string
+	inFlight             bool
 }
 
 type claudeAgentLineageState struct {
@@ -332,14 +346,16 @@ type claudeSessionState struct {
 }
 
 type claudeSessionLease struct {
-	runtime       *ClaudeCandidateRuntime
-	sessionKey    string
-	lineKey       string
-	kind          claudeSessionRequestKind
-	newAgent      bool
-	agentID       string
-	parentAgentID string
-	agentDepth    int
+	runtime        *ClaudeCandidateRuntime
+	sessionKey     string
+	lineKey        string
+	kind           claudeSessionRequestKind
+	newAgent       bool
+	agentID        string
+	parentAgentID  string
+	agentDepth     int
+	primaryModel   string
+	effectiveModel string
 }
 
 type claudeSessionFinalizer struct {
@@ -363,6 +379,15 @@ func NewClaudeCandidateRuntime(
 	wire, err := loadClaudeFWGWire()
 	if err != nil {
 		return nil, err
+	}
+	modelNames := make([]string, 0, len(wire.ImplementationPolicy.ModelCatalog.Models))
+	for _, capability := range wire.ImplementationPolicy.ModelCatalog.Models {
+		modelNames = append(modelNames, capability.CanonicalModel)
+	}
+	if profile.document.Identity.ModelCapabilityCatalogSHA256 !=
+		wire.Identity.ModelCapabilityCatalogDigest ||
+		!slices.Equal(profile.document.Identity.SupportedModels, modelNames) {
+		return nil, errors.New("Claude Profile 与 Wire 模型能力目录不一致")
 	}
 	for _, kind := range claudeStrictEndpointKinds() {
 		endpoint, endpointErr := profile.endpoint(kind)
@@ -448,6 +473,13 @@ func (r *ClaudeCandidateRuntime) ExecuteMessages(
 		return ClaudeCandidateResult{}, newClaudeSupportEnvelopeRejection(err)
 	}
 	if officialIngress {
+		canonical.fallbackLatchedBy = ingressState.FallbackLatchedBy
+		canonical.refusalFallback = ingressState.RefusalFallback
+		if canonical.serverFallback != ingressState.ServerFallbackHeadersSeen {
+			return ClaudeCandidateResult{}, newClaudeSupportEnvelopeRejection(errors.New(
+				"Claude server fallback Body 与 Header 状态不一致",
+			))
+		}
 		classifyClaudeOfficialFallback(&canonical, r.wire)
 		if err := completeClaudeOfficialIngressFeatures(
 			&trusted, canonical, ingressState, r.wire, input.Ingress.Headers,
@@ -472,7 +504,7 @@ func (r *ClaudeCandidateRuntime) ExecuteMessages(
 	if err := r.executeClaudeStartup(ctx, input, identity); err != nil {
 		return ClaudeCandidateResult{}, err
 	}
-	lease, err := r.prepareClaudeSessionRequest(&identity, canonical, relations)
+	lease, err := r.prepareClaudeSessionRequestMutable(&identity, &canonical, relations)
 	if err != nil {
 		return ClaudeCandidateResult{}, err
 	}
@@ -481,7 +513,7 @@ func (r *ClaudeCandidateRuntime) ExecuteMessages(
 		ctx, input, canonical, translation, identity, finalizer,
 	)
 	if err != nil {
-		_ = finalizer.finalize(false, 0, "")
+		_ = finalizer.finalize(false, 0, "", "")
 		return ClaudeCandidateResult{}, err
 	}
 	return result, nil
@@ -595,7 +627,18 @@ func (r *ClaudeCandidateRuntime) prepareClaudeSessionRequest(
 	canonical ClaudeCanonicalRequest,
 	relations claudeMessageRelations,
 ) (claudeSessionLease, error) {
-	if r == nil || identity == nil {
+	return r.prepareClaudeSessionRequestMutable(identity, &canonical, relations)
+}
+
+// prepareClaudeSessionRequestMutable 只供生产执行链和需要验证状态派生的测试使用。
+// 第三方请求命中 Fable server fallback 锁存后，Persona 必须在同一个
+// CanonicalRequest 上写入最终模型和官方 Header 状态，再交给 Compiler。
+func (r *ClaudeCandidateRuntime) prepareClaudeSessionRequestMutable(
+	identity *ClaudeIdentityFacts,
+	canonical *ClaudeCanonicalRequest,
+	relations claudeMessageRelations,
+) (claudeSessionLease, error) {
+	if r == nil || identity == nil || canonical == nil {
 		return claudeSessionLease{}, errors.New("Claude 会话状态机未初始化")
 	}
 	sessionKey := claudeAttestationDigest(
@@ -687,6 +730,14 @@ func (r *ClaudeCandidateRuntime) prepareClaudeSessionRequest(
 			newAgent = true
 		}
 	}
+	if kind == claudeSessionRequestTUITitle || kind == claudeSessionRequestWebSearchServer {
+		if canonical.serverFallback || canonical.fallbackLatchedBy != "" ||
+			canonical.refusalFallback {
+			return claudeSessionLease{}, errors.New(
+				"Claude server fallback 不能进入标题或 server web_search 支线",
+			)
+		}
+	}
 
 	switch kind {
 	case claudeSessionRequestTUITitle:
@@ -713,6 +764,29 @@ func (r *ClaudeCandidateRuntime) prepareClaudeSessionRequest(
 		if line.inFlight {
 			return claudeSessionLease{}, errors.New("Claude 同一会话谱系存在并发推理请求")
 		}
+		if line.fallbackLatchedBy != "" {
+			if canonical.primaryModel != line.fallbackPrimaryModel {
+				return claudeSessionLease{}, errors.New("Claude 已锁存会话不能切换主模型")
+			}
+			if identity.sessionSource == ClaudeSessionSourcePlannerDerived {
+				canonical.model = line.fallbackModel
+				canonical.serverFallback = true
+				canonical.fallbackLatchedBy = line.fallbackLatchedBy
+				canonical.refusalFallback = true
+				canonical.fallbacks = nil
+				canonical.fallbacksPresent = false
+			} else if !canonical.serverFallback ||
+				canonical.model != line.fallbackModel ||
+				canonical.fallbackLatchedBy != line.fallbackLatchedBy ||
+				!canonical.refusalFallback {
+				return claudeSessionLease{}, errors.New(
+					"Claude 官方 server fallback Header 与会话锁存冲突",
+				)
+			}
+		} else if canonical.serverFallback || canonical.fallbackLatchedBy != "" ||
+			canonical.refusalFallback {
+			return claudeSessionLease{}, errors.New("Claude server fallback 缺少先行拒绝锁存")
+		}
 		if identity.sessionSource == ClaudeSessionSourcePlannerDerived {
 			if identity.previousRequestID != "" {
 				return claudeSessionLease{}, errors.New("Claude Planner 会话不得预造 previous request")
@@ -733,6 +807,7 @@ func (r *ClaudeCandidateRuntime) prepareClaudeSessionRequest(
 		runtime: r, sessionKey: sessionKey, lineKey: lineKey, kind: kind,
 		newAgent: newAgent, agentID: identity.agentID,
 		parentAgentID: identity.parentAgentID, agentDepth: identity.agentDepth,
+		primaryModel: canonical.primaryModel, effectiveModel: canonical.model,
 	}, nil
 }
 
@@ -765,6 +840,7 @@ func (f *claudeSessionFinalizer) finalize(
 	accepted bool,
 	status int,
 	requestID string,
+	responseModel string,
 ) error {
 	if f == nil {
 		return nil
@@ -774,8 +850,8 @@ func (f *claudeSessionFinalizer) finalize(
 			f.err = errors.New("Claude 会话 finalizer 缺少 runtime")
 			return
 		}
-		f.err = f.lease.runtime.finalizeClaudeSessionRequest(
-			f.lease, accepted, status, requestID,
+		f.err = f.lease.runtime.finalizeClaudeSessionRequestWithResponseModel(
+			f.lease, accepted, status, requestID, responseModel,
 		)
 	})
 	return f.err
@@ -786,6 +862,18 @@ func (r *ClaudeCandidateRuntime) finalizeClaudeSessionRequest(
 	accepted bool,
 	status int,
 	requestID string,
+) error {
+	return r.finalizeClaudeSessionRequestWithResponseModel(
+		lease, accepted, status, requestID, "",
+	)
+}
+
+func (r *ClaudeCandidateRuntime) finalizeClaudeSessionRequestWithResponseModel(
+	lease claudeSessionLease,
+	accepted bool,
+	status int,
+	requestID string,
+	responseModel string,
 ) error {
 	r.sessionMu.Lock()
 	defer r.sessionMu.Unlock()
@@ -828,6 +916,29 @@ func (r *ClaudeCandidateRuntime) finalizeClaudeSessionRequest(
 	}
 	if _, exists := state.requestIDs[requestID]; !exists && len(state.requestIDs) >= 4096 {
 		return errors.New("Claude 单会话 request-id 容量已满")
+	}
+	responseModel = strings.TrimSpace(responseModel)
+	if line != nil && lease.primaryModel == "claude-fable-5" {
+		switch lease.effectiveModel {
+		case "claude-fable-5":
+			if responseModel == "" {
+				return errors.New("Claude Fable 响应缺少可验证模型")
+			}
+			if responseModel != "claude-fable-5" && responseModel != "claude-opus-4-8" {
+				return errors.New("Claude Fable 响应模型不在批准闭集")
+			}
+			if responseModel == "claude-opus-4-8" {
+				line.fallbackPrimaryModel = lease.primaryModel
+				line.fallbackModel = responseModel
+				line.fallbackLatchedBy = requestID
+			}
+		case "claude-opus-4-8":
+			if responseModel != "claude-opus-4-8" {
+				return errors.New("Claude Fable 锁存响应模型发生漂移")
+			}
+		default:
+			return errors.New("Claude Fable 会话有效模型非法")
+		}
 	}
 	switch lease.kind {
 	case claudeSessionRequestTUITitle:
@@ -984,6 +1095,18 @@ func (r *ClaudeCandidateRuntime) executeClaudeMessagesAttempts(
 	}
 	if maxRetries < 0 || maxRetries > 2 {
 		return ClaudeCandidateResult{}, errors.New("Claude candidate retry budget 超出已批准上限")
+	}
+	capability, capabilityErr := claudeModelCapabilityForPlan(ClaudeEgressPlan{
+		canonical: canonical,
+	}, r.wire)
+	if capabilityErr != nil {
+		return ClaudeCandidateResult{}, capabilityErr
+	}
+	if input.TrustedFacts.Features.FallbackModelEnabled &&
+		!capability.LegacyRetryFallbackSupported {
+		return ClaudeCandidateResult{}, errors.New(
+			"Claude Opus/Fable 不得复用 Sonnet Haiku retry fallback",
+		)
 	}
 	endpoint, _ := r.profile.endpoint("messages-inference")
 	shape := claudeInitialModelShape(canonical)
@@ -1352,8 +1475,11 @@ func compileClaudeEndpointBody(
 	case "messages-inference":
 		return compileClaudeMessagesBody(plan, wire)
 	case "count-tokens":
-		model := wire.ImplementationPolicy.Scenarios.TUIMain.Model
+		model := plan.canonical.primaryModel
 		if model == "" {
+			model = plan.canonical.model
+		}
+		if _, ok := claudeModelCapabilityForAlias(wire, model); !ok {
 			return nil, "", "", false, errors.New("Claude count_tokens 缺少 Wire 模型事实")
 		}
 		modelRaw, _ := marshalClaudeJSON(model)
@@ -1441,6 +1567,16 @@ func compileClaudeEndpointHeaders(
 			headers[wireName] = []string{plan.identity.sessionID}
 		case "x-client-request-id":
 			headers[wireName] = []string{requestID}
+		case "x-cc-fallback-latched-by":
+			if plan.canonical.fallbackLatchedBy == "" {
+				return nil, nil, errors.New("Claude server fallback 缺少锁存 request-id")
+			}
+			headers[wireName] = []string{plan.canonical.fallbackLatchedBy}
+		case "x-is-refusal-fallback":
+			if !plan.canonical.refusalFallback {
+				return nil, nil, errors.New("Claude server fallback 缺少拒绝标记")
+			}
+			headers[wireName] = []string{"true"}
 		case "x-claude-code-agent-id":
 			if plan.identity.agentID != "" {
 				headers[wireName] = []string{plan.identity.agentID}
@@ -1564,6 +1700,14 @@ func compileClaudeMessagesHeaderOrder(
 			}
 		case "x-app", "x-client-request-id":
 			selected = append(selected, name)
+		case "x-cc-fallback-latched-by":
+			if plan.canonical.serverFallback && plan.canonical.fallbackLatchedBy != "" {
+				selected = append(selected, name)
+			}
+		case "x-is-refusal-fallback":
+			if plan.canonical.serverFallback && plan.canonical.refusalFallback {
+				selected = append(selected, name)
+			}
 		case "x-claude-remote-container-id":
 			if plan.features.RemoteContainerID != "" {
 				selected = append(selected, name)
@@ -1728,11 +1872,15 @@ func parseClaudeCountTokens(
 		return ClaudeCanonicalRequest{}, errors.New("Claude count_tokens tools 必须是数组")
 	}
 	var model string
-	if json.Unmarshal(document["model"], &model) != nil ||
-		strings.TrimSpace(model) != wire.ImplementationPolicy.Scenarios.TUIMain.Model {
+	if json.Unmarshal(document["model"], &model) != nil {
+		return ClaudeCanonicalRequest{}, errors.New("Claude count_tokens model 不在 SupportEnvelope")
+	}
+	capability, ok := claudeModelCapabilityForAlias(wire, strings.TrimSpace(model))
+	if !ok {
 		return ClaudeCanonicalRequest{}, errors.New("Claude count_tokens model 不在 SupportEnvelope")
 	}
 	return ClaudeCanonicalRequest{
+		model: strings.TrimSpace(model), primaryModel: capability.CanonicalModel,
 		messages: append(json.RawMessage(nil), document["messages"]...),
 		tools:    append(json.RawMessage(nil), tools...),
 	}, nil

@@ -9,21 +9,22 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strings"
 )
 
 const (
 	ClaudeFWGVersion       = "2.1.226"
-	ClaudeFWGProfileDigest = "4da60bc238694a06a0dc80d68117abddd2de98c7c924c4db4c5dd929ea411e17"
-	ClaudeFWGReleaseDigest = "c1053492eabc0b10d9d5f92f807a1df0d507c777b64a528e938426350c0d5350"
-	ClaudeFWGBundleDigest  = "4213ea92a7d76c4ef3aa318f4d93628cbcf675dc86566b107dddb70a70e6eb41"
+	ClaudeFWGProfileDigest = "e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5"
+	ClaudeFWGReleaseDigest = "48586f47e0abcde9ea357c08c1465253eaa296862153a89c20e4cf0f1e6f52f8"
+	ClaudeFWGBundleDigest  = "ceb1e30740ab4223684f478f717dd2902d8fdad0c6efad5a69b761d95b4aefae"
 
 	ClaudeExecutorAuthorityID ExecutorID = "claude-persona-executor"
 	ClaudeTokenIssuerID       ExecutorID = "claude-finalization-token"
 )
 
-//go:embed catalogdata/claude/profiles/2.1.226/4da60bc238694a06a0dc80d68117abddd2de98c7c924c4db4c5dd929ea411e17.json
+//go:embed catalogdata/claude/profiles/2.1.226/e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5.json
 var embeddedClaudeFWGProfile []byte
 
 type claudeProfileEndpointDocument struct {
@@ -91,9 +92,13 @@ type claudeRuleDocument struct {
 type claudeProfileDocument struct {
 	SchemaVersion string `json:"schema_version"`
 	Identity      struct {
-		Version     string   `json:"version"`
-		Platform    string   `json:"platform"`
-		Entrypoints []string `json:"entrypoints"`
+		Version                      string   `json:"version"`
+		Platform                     string   `json:"platform"`
+		Entrypoints                  []string `json:"entrypoints"`
+		SupportedModels              []string `json:"supported_models"`
+		ModelAliasPolicy             string   `json:"model_alias_policy"`
+		UnknownModelPolicy           string   `json:"unknown_model_policy"`
+		ModelCapabilityCatalogSHA256 string   `json:"model_capability_catalog_sha256"`
 	} `json:"identity"`
 	Endpoint        claudeProfileEndpointDocument    `json:"endpoint"`
 	Headers         claudeHeadersDocument            `json:"headers"`
@@ -136,9 +141,18 @@ func loadClaudeFWGProfile() (claudeFWGProfile, error) {
 	if err := json.Unmarshal(embeddedClaudeFWGProfile, &document); err != nil {
 		return claudeFWGProfile{}, fmt.Errorf("解析 Claude FW-G 画像：%w", err)
 	}
-	if document.SchemaVersion != "claude-code-fw-f-target-profile/v5" ||
+	if document.SchemaVersion != "claude-code-fw-f-target-profile/v6" ||
 		document.Identity.Version != ClaudeFWGVersion || document.Identity.Platform != "linux/amd64" {
 		return claudeFWGProfile{}, errors.New("Claude FW-G 画像身份不一致")
+	}
+	if !slices.Equal(document.Identity.SupportedModels, []string{
+		"claude-sonnet-5", "claude-opus-5", "claude-fable-5",
+	}) || document.Identity.ModelAliasPolicy != "explicit-only" ||
+		document.Identity.UnknownModelPolicy != "deny" ||
+		len(document.Identity.ModelCapabilityCatalogSHA256) != sha256.Size*2 ||
+		!slices.Equal(document.Body.FieldTypes["fallbacks"], []string{"array"}) ||
+		!slices.Contains(document.Body.Optional, "fallbacks") {
+		return claudeFWGProfile{}, errors.New("Claude FW-G 模型能力画像声明不完整")
 	}
 	if len(document.Rules) != 40 || len(document.StrictEndpoints) != 8 {
 		return claudeFWGProfile{}, errors.New("Claude FW-G 画像未冻结 40 条规则或 8 个 strict endpoint")

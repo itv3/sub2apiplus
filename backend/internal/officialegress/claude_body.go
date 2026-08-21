@@ -29,6 +29,7 @@ const (
 // Persona 身份、版本、模型、缓存和 transport 均不从任意入站字段继承。
 type ClaudeCanonicalRequest struct {
 	model                    string
+	primaryModel             string
 	messages                 json.RawMessage
 	tools                    json.RawMessage
 	toolChoice               json.RawMessage
@@ -47,10 +48,15 @@ type ClaudeCanonicalRequest struct {
 	thinkingDisplay          string
 	contextManagement        json.RawMessage
 	contextManagementPresent bool
+	fallbacks                json.RawMessage
+	fallbacksPresent         bool
 	streamPresent            bool
 	stream                   bool
 	disableThinking          bool
 	officialIngress          bool
+	serverFallback           bool
+	fallbackLatchedBy        string
+	refusalFallback          bool
 }
 
 // TranslationReport 明确记录当前 candidate 是否进行了有损协议翻译。
@@ -136,7 +142,7 @@ func parseClaudeCanonicalMessages(
 	allowed := map[string]struct{}{
 		"model": {}, "messages": {}, "system": {}, "tools": {}, "metadata": {},
 		"max_tokens": {}, "thinking": {}, "context_management": {}, "output_config": {},
-		"stream": {}, "temperature": {}, "tool_choice": {},
+		"fallbacks": {}, "stream": {}, "temperature": {}, "tool_choice": {},
 	}
 	for name := range document {
 		if _, ok := allowed[name]; !ok {
@@ -177,10 +183,26 @@ func parseClaudeCanonicalMessages(
 		return ClaudeCanonicalRequest{}, TranslationReport{}, errors.New("Claude candidate model 必须是非空字符串")
 	}
 	model = strings.TrimSpace(model)
-	if !claudeApprovedMessagesModel(model, artifact, officialIngress) {
+	primaryModel, serverFallback, modelErr := resolveClaudeMessagesModel(
+		model, artifact, officialIngress,
+	)
+	if modelErr != nil {
 		return ClaudeCanonicalRequest{}, TranslationReport{}, errors.New(
 			"Claude candidate model 不在 messages SupportEnvelope",
 		)
+	}
+	fallbacksRaw, fallbacksPresent := document["fallbacks"]
+	if fallbacksPresent {
+		if !officialIngress {
+			return ClaudeCanonicalRequest{}, TranslationReport{}, errors.New(
+				"Claude third-party 不得控制官方 fallbacks",
+			)
+		}
+		if !rawJSONArray(fallbacksRaw) {
+			return ClaudeCanonicalRequest{}, TranslationReport{}, errors.New(
+				"Claude candidate fallbacks 必须是数组",
+			)
+		}
 	}
 	if metadataRaw := document["metadata"]; len(metadataRaw) != 0 {
 		if _, err := decodeClaudeUniqueObject(metadataRaw); err != nil {
@@ -229,6 +251,16 @@ func parseClaudeCanonicalMessages(
 	approvedTools, approvedChoice, toolMode, err := compileClaudeApprovedTools(
 		tools, document["tool_choice"], artifact,
 	)
+	if err != nil && officialIngress {
+		var matched bool
+		approvedTools, approvedChoice, toolMode, matched =
+			compileClaudeOfficialScenarioTools(
+				tools, document["tool_choice"], primaryModel, scenarioHint, artifact,
+			)
+		if matched {
+			err = nil
+		}
+	}
 	if err != nil {
 		return ClaudeCanonicalRequest{}, TranslationReport{}, err
 	}
@@ -239,7 +271,7 @@ func parseClaudeCanonicalMessages(
 		)
 	}
 	canonical := ClaudeCanonicalRequest{
-		model:    model,
+		model: model, primaryModel: primaryModel,
 		messages: append(json.RawMessage(nil), bytes.TrimSpace(messages)...),
 		tools:    approvedTools, toolChoice: approvedChoice, toolMode: toolMode,
 		toolsPresent: toolsPresent,
@@ -252,8 +284,11 @@ func parseClaudeCanonicalMessages(
 		thinkingDisplay:          thinkingDisplay,
 		contextManagement:        append(json.RawMessage(nil), bytes.TrimSpace(contextRaw)...),
 		contextManagementPresent: contextPresent,
+		fallbacks:                append(json.RawMessage(nil), bytes.TrimSpace(fallbacksRaw)...),
+		fallbacksPresent:         fallbacksPresent,
 		streamPresent:            streamPresent, stream: stream,
 		disableThinking: disableThinking, officialIngress: officialIngress,
+		serverFallback: serverFallback,
 	}
 	titleNormalized, err := normalizeClaudeThirdPartyTitleRequest(
 		&canonical, artifact, thirdPartyTitle,
@@ -261,9 +296,20 @@ func parseClaudeCanonicalMessages(
 	if err != nil {
 		return ClaudeCanonicalRequest{}, TranslationReport{}, err
 	}
+	if officialIngress {
+		if err := refineClaudeOfficialModelScenario(&canonical, artifact); err != nil {
+			return ClaudeCanonicalRequest{}, TranslationReport{}, err
+		}
+	}
 	if officialIngress && trusted.Agent.Background {
+		capability, ok := claudeModelCapabilityForAlias(artifact, canonical.primaryModel)
+		if !ok {
+			return ClaudeCanonicalRequest{}, TranslationReport{}, errors.New(
+				"Claude 官方 background 模型能力未登记",
+			)
+		}
 		matched := -1
-		for index, scenario := range artifact.ImplementationPolicy.Scenarios.Background {
+		for index, scenario := range capability.Scenarios.Background {
 			if !claudeCanonicalMatchesFixedScenario(canonical, scenario) {
 				continue
 			}
@@ -427,8 +473,12 @@ func normalizeClaudeThirdPartyTitleRequest(
 	if canonical == nil || canonical.officialIngress {
 		return false, errors.New("Claude Desktop 标题语义来源非法")
 	}
-	title := artifact.ImplementationPolicy.Scenarios.TUITitle
-	main := artifact.ImplementationPolicy.Scenarios.SDKCLI
+	capability, ok := claudeModelCapabilityForAlias(artifact, canonical.primaryModel)
+	if !ok {
+		return false, errors.New("Claude Desktop 标题模型不在能力目录")
+	}
+	title := capability.Scenarios.TUITitle
+	main := capability.Scenarios.SDKCLI
 	if canonical.model != main.Model || canonical.maxTokens != 64000 ||
 		canonical.effort != "high" || !canonical.streamPresent || !canonical.stream ||
 		!canonical.toolsPresent || canonical.toolMode != claudeToolModeNone ||
@@ -475,6 +525,8 @@ func normalizeClaudeThirdPartyTitleRequest(
 	canonical.thinkingDisplay = ""
 	canonical.contextManagement = nil
 	canonical.contextManagementPresent = false
+	canonical.fallbacks = nil
+	canonical.fallbacksPresent = false
 	canonical.streamPresent = title.StreamPresent
 	canonical.stream = stream
 	canonical.disableThinking = false
@@ -672,6 +724,17 @@ func classifyClaudeOfficialSystem(
 			scenario claudeWireScenario
 		}{name: fmt.Sprintf("background-%d", index), scenario: scenario})
 	}
+	for _, capability := range artifact.ImplementationPolicy.ModelCatalog.Models {
+		for _, candidate := range claudeNamedModelScenarios(capability) {
+			scenarios = append(scenarios, struct {
+				name     string
+				scenario claudeWireScenario
+			}{
+				name:     claudeCatalogScenarioHint(capability.CanonicalModel, candidate.name),
+				scenario: candidate.scenario,
+			})
+		}
+	}
 	for _, candidate := range scenarios {
 		scenario := candidate.scenario
 		if len(scenario.SystemBlocks) == 0 || blocks[0].Text != scenario.SystemBlocks[0].Text {
@@ -683,6 +746,64 @@ func classifyClaudeOfficialSystem(
 		}
 	}
 	return false, ""
+}
+
+type claudeNamedScenario struct {
+	name     string
+	scenario claudeWireScenario
+}
+
+func claudeNamedModelScenarios(capability claudeWireModelCapability) []claudeNamedScenario {
+	set := capability.Scenarios
+	out := []claudeNamedScenario{
+		{name: "sdk-cli-background-agent", scenario: set.SDKCLIBackgroundAgent},
+		{name: "agent-background", scenario: set.AgentBackground},
+		{name: "web-search-server", scenario: set.WebSearchServer},
+		{name: "web-search-outer", scenario: set.WebSearchOuter},
+		{name: "tui-title", scenario: set.TUITitle},
+	}
+	for index, scenario := range set.Background {
+		out = append(out, claudeNamedScenario{
+			name: fmt.Sprintf("background-%d", index), scenario: scenario,
+		})
+	}
+	if capability.LegacyRetryFallbackSupported {
+		out = append(out, claudeNamedScenario{name: "fallback", scenario: set.Fallback})
+	}
+	out = append(out,
+		claudeNamedScenario{name: "agent", scenario: set.Agent},
+		claudeNamedScenario{name: "custom-system", scenario: set.CustomSystem},
+		claudeNamedScenario{name: "append-system", scenario: set.AppendSystem},
+		claudeNamedScenario{name: "exclude-dynamic", scenario: set.ExcludeDynamic},
+		claudeNamedScenario{name: "custom-agent", scenario: set.CustomAgent},
+		claudeNamedScenario{name: "tui-main", scenario: set.TUIMain},
+		claudeNamedScenario{name: "sdk-cli", scenario: set.SDKCLI},
+	)
+	if set.ServerFallback != nil {
+		out = append([]claudeNamedScenario{{
+			name: "server-fallback", scenario: *set.ServerFallback,
+		}}, out...)
+	}
+	return slices.DeleteFunc(out, func(candidate claudeNamedScenario) bool {
+		return !validClaudeWireScenario(candidate.scenario)
+	})
+}
+
+const claudeCatalogHintPrefix = "model-capability:"
+
+func claudeCatalogScenarioHint(model, scenario string) string {
+	return claudeCatalogHintPrefix + model + ":" + scenario
+}
+
+func parseClaudeCatalogScenarioHint(value string) (string, string, bool) {
+	if !strings.HasPrefix(value, claudeCatalogHintPrefix) {
+		return "", value, false
+	}
+	parts := strings.SplitN(strings.TrimPrefix(value, claudeCatalogHintPrefix), ":", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		return "", "", false
+	}
+	return parts[0], parts[1], true
 }
 
 func claudeSystemBlocksEqualIgnoringCache(left, right []claudeWireSystemBlock) bool {
@@ -711,30 +832,69 @@ func claudeSystemBlocksEqual(left, right []claudeWireSystemBlock) bool {
 	return true
 }
 
-func claudeApprovedMessagesModel(
+func resolveClaudeMessagesModel(
 	model string,
 	artifact claudeWireArtifact,
 	officialIngress bool,
-) bool {
-	// Haiku 只在官方客户端已实测的 fallback 状态机中出现；第三方入口直接
-	// 声明 Haiku 会被 Compiler 改写成 Sonnet，属于有损翻译，必须 fail-close。
+) (string, bool, error) {
+	if capability, ok := claudeModelCapabilityForAlias(artifact, model); ok {
+		return capability.CanonicalModel, false, nil
+	}
 	if !officialIngress {
-		return model == artifact.ImplementationPolicy.Scenarios.SDKCLI.Model
+		return "", false, errors.New("第三方模型别名未登记")
 	}
-	scenarios := []claudeWireScenario{
-		artifact.ImplementationPolicy.Scenarios.SDKCLI,
-		artifact.ImplementationPolicy.Scenarios.Agent,
-		artifact.ImplementationPolicy.Scenarios.TUIMain,
-		artifact.ImplementationPolicy.Scenarios.TUITitle,
-		artifact.ImplementationPolicy.Scenarios.Fallback,
+	if capability, ok := claudeModelCapabilityForServerFallback(artifact, model); ok {
+		return capability.CanonicalModel, true, nil
 	}
-	scenarios = append(scenarios, artifact.ImplementationPolicy.Scenarios.Background...)
-	for _, scenario := range scenarios {
-		if model == scenario.Model {
-			return true
+	for _, capability := range artifact.ImplementationPolicy.ModelCatalog.Models {
+		for _, candidate := range claudeNamedModelScenarios(capability) {
+			if candidate.name != "server-fallback" && candidate.scenario.Model == model {
+				return capability.CanonicalModel, false, nil
+			}
 		}
 	}
-	return false
+	return "", false, errors.New("官方辅助模型形态未登记")
+}
+
+func refineClaudeOfficialModelScenario(
+	canonical *ClaudeCanonicalRequest,
+	artifact claudeWireArtifact,
+) error {
+	if canonical == nil || !canonical.officialIngress {
+		return errors.New("Claude 官方模型场景缺少 canonical request")
+	}
+	if hintedModel, hintedScenario, ok := parseClaudeCatalogScenarioHint(canonical.scenarioHint); ok {
+		if canonical.primaryModel != "" && canonical.primaryModel != hintedModel &&
+			canonical.model != artifact.ImplementationPolicy.Scenarios.TUITitle.Model {
+			return errors.New("Claude 官方模型与 system 画像冲突")
+		}
+		canonical.primaryModel = hintedModel
+		canonical.scenarioHint = hintedScenario
+	}
+	modelIsPrimary := false
+	if capability, ok := claudeModelCapabilityForAlias(artifact, canonical.model); ok {
+		canonical.primaryModel = capability.CanonicalModel
+		modelIsPrimary = true
+	}
+	for _, capability := range artifact.ImplementationPolicy.ModelCatalog.Models {
+		if modelIsPrimary && capability.CanonicalModel != canonical.primaryModel {
+			continue
+		}
+		for _, candidate := range claudeNamedModelScenarios(capability) {
+			if candidate.scenario.Model != canonical.model ||
+				!claudeCanonicalMatchesFixedScenario(*canonical, candidate.scenario) {
+				continue
+			}
+			canonical.primaryModel = capability.CanonicalModel
+			canonical.scenarioHint = candidate.name
+			canonical.serverFallback = candidate.name == "server-fallback"
+			return nil
+		}
+	}
+	if modelIsPrimary {
+		return nil
+	}
+	return errors.New("Claude 官方辅助模型请求不在实测场景闭集")
 }
 
 func normalizeClaudeCacheControl(raw json.RawMessage) (json.RawMessage, error) {
@@ -828,12 +988,31 @@ func claudeVersionFingerprint(artifact claudeWireArtifact, text string) (string,
 }
 
 func selectClaudeWireScenario(plan ClaudeEgressPlan, artifact claudeWireArtifact) (claudeWireScenario, error) {
-	policy := artifact.ImplementationPolicy.Scenarios
+	capability, err := claudeModelCapabilityForPlan(plan, artifact)
+	if err != nil {
+		return claudeWireScenario{}, err
+	}
+	policy := capability.Scenarios
+	if plan.canonical.serverFallback {
+		if policy.ServerFallback == nil ||
+			plan.canonical.model != policy.ServerFallback.Model {
+			return claudeWireScenario{}, errors.New("Claude server fallback 不在模型能力目录")
+		}
+		return *policy.ServerFallback, nil
+	}
 	if claudeModelShapeIsHaiku(plan.modelShape) {
+		if !capability.LegacyRetryFallbackSupported {
+			return claudeWireScenario{}, errors.New(
+				"Claude 当前模型不支持 Sonnet 历史 Haiku fallback",
+			)
+		}
 		return policy.Fallback, nil
 	}
 	if plan.canonical.toolMode == claudeToolModeWebSearchServer {
 		return policy.WebSearchServer, nil
+	}
+	if plan.canonical.toolMode == claudeToolModeWebSearchOuter {
+		return policy.WebSearchOuter, nil
 	}
 	if plan.features.TUITitleRequest || plan.canonical.scenarioHint == "tui-title" {
 		if !claudeCanonicalMatchesFixedScenario(plan.canonical, policy.TUITitle) {
@@ -847,6 +1026,8 @@ func selectClaudeWireScenario(plan ClaudeEgressPlan, artifact claudeWireArtifact
 	switch plan.canonical.scenarioHint {
 	case "agent":
 		return policy.Agent, nil
+	case "web-search-outer":
+		return policy.WebSearchOuter, nil
 	case "custom-system":
 		return policy.CustomSystem, nil
 	case "append-system":
@@ -855,6 +1036,16 @@ func selectClaudeWireScenario(plan ClaudeEgressPlan, artifact claudeWireArtifact
 		return policy.ExcludeDynamic, nil
 	case "custom-agent":
 		return policy.CustomAgent, nil
+	case "sdk-cli-background-agent":
+		if !validClaudeWireScenario(policy.SDKCLIBackgroundAgent) {
+			return claudeWireScenario{}, errors.New("Claude SDK CLI background agent 场景未取证")
+		}
+		return policy.SDKCLIBackgroundAgent, nil
+	case "agent-background":
+		if !validClaudeWireScenario(policy.AgentBackground) {
+			return claudeWireScenario{}, errors.New("Claude agent background 场景未取证")
+		}
+		return policy.AgentBackground, nil
 	case "tui-main":
 		return policy.TUIMain, nil
 	case "sdk-cli", "":
@@ -881,6 +1072,34 @@ func selectClaudeWireScenario(plan ClaudeEgressPlan, artifact claudeWireArtifact
 		return policy.TUIMain, nil
 	}
 	return policy.SDKCLI, nil
+}
+
+func claudeModelCapabilityForPlan(
+	plan ClaudeEgressPlan,
+	artifact claudeWireArtifact,
+) (claudeWireModelCapability, error) {
+	if capability, ok := claudeModelCapabilityForAlias(artifact, plan.canonical.primaryModel); ok {
+		return capability, nil
+	}
+	if capability, ok := claudeModelCapabilityForAlias(artifact, plan.canonical.model); ok {
+		return capability, nil
+	}
+	if plan.canonical.serverFallback {
+		if capability, ok := claudeModelCapabilityForServerFallback(
+			artifact, plan.canonical.model,
+		); ok {
+			return capability, nil
+		}
+	}
+	for _, capability := range artifact.ImplementationPolicy.ModelCatalog.Models {
+		for _, candidate := range claudeNamedModelScenarios(capability) {
+			if candidate.name == plan.canonical.scenarioHint &&
+				candidate.scenario.Model == plan.canonical.model {
+				return capability, nil
+			}
+		}
+	}
+	return claudeWireModelCapability{}, errors.New("Claude 请求缺少已登记模型能力")
 }
 
 func selectClaudeBackgroundScenario(
@@ -919,7 +1138,10 @@ func claudeCanonicalMatchesFixedScenario(
 	scenario claudeWireScenario,
 ) bool {
 	if canonical.model != scenario.Model || canonical.streamPresent != scenario.StreamPresent ||
-		canonical.toolsPresent != scenario.ToolsPresent {
+		canonical.toolsPresent != scenario.ToolsPresent ||
+		canonical.thinkingPresent != scenario.ThinkingPresent ||
+		canonical.contextManagementPresent != scenario.ContextManagementPresent ||
+		canonical.fallbacksPresent != scenario.FallbacksPresent {
 		return false
 	}
 	if scenario.StreamPresent {
@@ -944,6 +1166,24 @@ func claudeCanonicalMatchesFixedScenario(
 	if !claudeOptionalJSONEqual(canonical.outputConfig, func() json.RawMessage {
 		if scenario.OutputConfigPresent {
 			return scenario.OutputConfig
+		}
+		return nil
+	}()) {
+		return false
+	}
+	if !claudeOptionalJSONEqual(canonical.thinking, func() json.RawMessage {
+		if scenario.ThinkingPresent {
+			return scenario.Thinking
+		}
+		return nil
+	}()) || !claudeOptionalJSONEqual(canonical.contextManagement, func() json.RawMessage {
+		if scenario.ContextManagementPresent {
+			return scenario.ContextManagement
+		}
+		return nil
+	}()) || !claudeOptionalJSONEqual(canonical.fallbacks, func() json.RawMessage {
+		if scenario.FallbacksPresent {
+			return scenario.Fallbacks
 		}
 		return nil
 	}()) {
@@ -1106,41 +1346,46 @@ func compileClaudeMessagesBody(
 			return nil, "", "", false, err
 		}
 	}
-	fields := []claudeJSONField{
-		{name: "model", raw: mustMarshalClaudeString(scenario.Model)},
-		{name: "messages", raw: messages},
+	fieldValues := map[string]json.RawMessage{
+		"model":      mustMarshalClaudeString(scenario.Model),
+		"messages":   messages,
+		"max_tokens": maxTokens,
 	}
 	if scenario.SystemPresent || len(system) != 0 {
-		fields = append(fields, claudeJSONField{name: "system", raw: systemRaw})
+		fieldValues["system"] = systemRaw
 	}
 	if scenario.ToolsPresent || plan.canonical.toolsPresent ||
 		!bytes.Equal(bytes.TrimSpace(tools), []byte("[]")) {
-		fields = append(fields, claudeJSONField{name: "tools", raw: tools})
+		fieldValues["tools"] = tools
 	}
 	if len(plan.canonical.toolChoice) != 0 {
-		fields = append(fields, claudeJSONField{name: "tool_choice", raw: plan.canonical.toolChoice})
+		fieldValues["tool_choice"] = plan.canonical.toolChoice
 	}
 	if scenario.MetadataPresent {
-		fields = append(fields, claudeJSONField{name: "metadata", raw: metadata})
+		fieldValues["metadata"] = metadata
 	}
-	fields = append(fields,
-		claudeJSONField{name: "max_tokens", raw: maxTokens},
-	)
 	if len(thinking) != 0 {
-		fields = append(fields, claudeJSONField{name: "thinking", raw: thinking})
+		fieldValues["thinking"] = thinking
 	}
 	if len(contextManagement) != 0 {
-		fields = append(fields, claudeJSONField{name: "context_management", raw: contextManagement})
+		fieldValues["context_management"] = contextManagement
+	}
+	if scenario.FallbacksPresent {
+		fieldValues["fallbacks"] = scenario.Fallbacks
 	}
 	if len(outputConfig) != 0 {
-		fields = append(fields, claudeJSONField{name: "output_config", raw: outputConfig})
+		fieldValues["output_config"] = outputConfig
 	}
 	if scenario.TemperaturePresent {
-		fields = append(fields, claudeJSONField{name: "temperature", raw: scenario.Temperature})
+		fieldValues["temperature"] = scenario.Temperature
 	}
 	stream := claudeModelShapeIsStream(plan.modelShape) && scenario.StreamPresent
 	if stream {
-		fields = append(fields, claudeJSONField{name: "stream", raw: json.RawMessage("true")})
+		fieldValues["stream"] = json.RawMessage("true")
+	}
+	fields, err := orderClaudeScenarioBodyFields(scenario.BodyOrder, fieldValues)
+	if err != nil {
+		return nil, "", "", false, err
 	}
 	body, err := marshalClaudeOrderedObject(fields)
 	if err != nil {
@@ -1158,6 +1403,50 @@ func compileClaudeMessagesBody(
 	)
 	beta := compileClaudeBeta(betaBase, plan.features.CustomBetas)
 	return body, scenario.Model, beta, stream, nil
+}
+
+func orderClaudeScenarioBodyFields(
+	order []string,
+	values map[string]json.RawMessage,
+) ([]claudeJSONField, error) {
+	if len(order) == 0 {
+		return nil, errors.New("Claude 场景缺少实测 Body 字段顺序")
+	}
+	fields := make([]claudeJSONField, 0, len(values))
+	seen := make(map[string]struct{}, len(order))
+	for _, name := range order {
+		if _, duplicate := seen[name]; duplicate {
+			return nil, fmt.Errorf("Claude 场景 Body 顺序字段重复：%s", name)
+		}
+		seen[name] = struct{}{}
+		if raw, present := values[name]; present {
+			fields = append(fields, claudeJSONField{name: name, raw: raw})
+		}
+	}
+	if raw, present := values["tool_choice"]; present {
+		if _, ordered := seen["tool_choice"]; !ordered {
+			insertAt := -1
+			for index := range fields {
+				if fields[index].name == "tools" {
+					insertAt = index + 1
+					break
+				}
+			}
+			if insertAt < 0 {
+				return nil, errors.New("Claude 动态 tool_choice 缺少 tools 顺序锚点")
+			}
+			fields = append(fields, claudeJSONField{})
+			copy(fields[insertAt+1:], fields[insertAt:])
+			fields[insertAt] = claudeJSONField{name: "tool_choice", raw: raw}
+			seen["tool_choice"] = struct{}{}
+		}
+	}
+	for name := range values {
+		if _, ordered := seen[name]; !ordered {
+			return nil, fmt.Errorf("Claude 场景 Body 顺序缺少活动字段：%s", name)
+		}
+	}
+	return fields, nil
 }
 
 func compileClaudeFallbackMessages(messages json.RawMessage) (json.RawMessage, error) {

@@ -584,6 +584,10 @@ func claudeCanonicalForWireScenario(
 		)
 		canonical.contextManagementPresent = true
 	}
+	if scenario.FallbacksPresent {
+		canonical.fallbacks = append(json.RawMessage(nil), scenario.Fallbacks...)
+		canonical.fallbacksPresent = true
+	}
 	if scenario.OutputConfigPresent {
 		canonical.outputConfig = append(json.RawMessage(nil), scenario.OutputConfig...)
 	}
@@ -712,29 +716,19 @@ func TestClaudeFWGApprovedScenarioMatrixCompilesFrozenWire(t *testing.T) {
 				actual[field.name] = field.raw
 				order = append(order, field.name)
 			}
-			wantOrder := []string{"model", "messages", "system"}
-			if test.scenario.ToolsPresent {
-				wantOrder = append(wantOrder, "tools")
+			wantOrder := make([]string, 0, len(actual))
+			for _, name := range test.scenario.BodyOrder {
+				if _, present := actual[name]; present {
+					wantOrder = append(wantOrder, name)
+				}
 			}
-			if len(canonical.toolChoice) != 0 {
-				wantOrder = append(wantOrder, "tool_choice")
-			}
-			if test.scenario.MetadataPresent {
-				wantOrder = append(wantOrder, "metadata")
-			}
-			wantOrder = append(wantOrder, "max_tokens")
-			for _, optional := range []struct {
-				name    string
-				present bool
-			}{
-				{name: "thinking", present: test.scenario.ThinkingPresent},
-				{name: "context_management", present: test.scenario.ContextManagementPresent},
-				{name: "output_config", present: test.scenario.OutputConfigPresent},
-				{name: "temperature", present: test.scenario.TemperaturePresent},
-				{name: "stream", present: stream},
-			} {
-				if optional.present {
-					wantOrder = append(wantOrder, optional.name)
+			if _, present := actual["tool_choice"]; present &&
+				!slices.Contains(wantOrder, "tool_choice") {
+				for index, name := range wantOrder {
+					if name == "tools" {
+						wantOrder = slices.Insert(wantOrder, index+1, "tool_choice")
+						break
+					}
 				}
 			}
 			if !slices.Equal(order, wantOrder) {
@@ -2039,6 +2033,308 @@ func TestClaudeFWGStreamFallbackCommitsFallbackResponseID(t *testing.T) {
 		decodeClaudeTestBody(t, messages[2]), []byte("cc_prev_req=req_Stream;"),
 	) {
 		t.Fatalf("stream fallback 未提交最终响应 ID：%s", decodeClaudeTestBody(t, messages[2]))
+	}
+}
+
+func TestClaudeFWGModelCapabilityScenariosCompileEvidenceWire(t *testing.T) {
+	wire, err := loadClaudeFWGWire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile, err := loadClaudeFWGProfile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, err := profile.endpoint("messages-inference")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, capability := range wire.ImplementationPolicy.ModelCatalog.Models {
+		tests := []claudeNamedScenario{
+			{name: "sdk-cli", scenario: capability.Scenarios.SDKCLI},
+			{name: "tui-main", scenario: capability.Scenarios.TUIMain},
+			{name: "tui-title", scenario: capability.Scenarios.TUITitle},
+			{name: "agent", scenario: capability.Scenarios.Agent},
+			{name: "web-search-outer", scenario: capability.Scenarios.WebSearchOuter},
+			{name: "web-search-server", scenario: capability.Scenarios.WebSearchServer},
+		}
+		for index, scenario := range capability.Scenarios.Background {
+			tests = append(tests, claudeNamedScenario{
+				name: "background-" + strconv.Itoa(index), scenario: scenario,
+			})
+		}
+		for _, candidate := range []claudeNamedScenario{
+			{name: "sdk-cli-background-agent", scenario: capability.Scenarios.SDKCLIBackgroundAgent},
+			{name: "agent-background", scenario: capability.Scenarios.AgentBackground},
+		} {
+			if validClaudeWireScenario(candidate.scenario) {
+				tests = append(tests, candidate)
+			}
+		}
+		if capability.Scenarios.ServerFallback != nil {
+			tests = append(tests, claudeNamedScenario{
+				name: "server-fallback", scenario: *capability.Scenarios.ServerFallback,
+			})
+		}
+		for _, test := range tests {
+			t.Run(capability.CanonicalModel+"/"+test.name, func(t *testing.T) {
+				scenario := test.scenario
+				canonical := claudeCanonicalForWireScenario(t, scenario, test.name, claudeToolModeNone)
+				canonical.primaryModel = capability.CanonicalModel
+				facts := claudeTestTrustedFacts()
+				if strings.Contains(scenario.UserAgent, "(external, cli)") {
+					facts.Entrypoint.Entrypoint = ClaudeEntrypointCLI
+				}
+				facts.Agent.Background = scenario.XApp == "cli-bg"
+				if slices.ContainsFunc(scenario.HeaderOrder, func(name string) bool {
+					return strings.EqualFold(name, "x-claude-code-agent-id")
+				}) {
+					facts.Agent.AgentID = "aaaaaaaaaaaaaaaaa"
+					facts.Agent.Depth = 1
+				}
+				features := ClaudeTrustedFeatureFacts{SystemMode: ClaudeSystemDefault}
+				switch test.name {
+				case "web-search-outer":
+					canonical.toolMode = claudeToolModeWebSearchOuter
+				case "web-search-server":
+					canonical.toolMode = claudeToolModeWebSearchServer
+					canonical.toolChoice = append(json.RawMessage(nil),
+						wire.ImplementationPolicy.ToolPolicy.WebSearchServer.ToolChoice...)
+					features.WebSearchServerEnabled = true
+				case "server-fallback":
+					canonical.serverFallback = true
+					canonical.fallbackLatchedBy = "req_ModelFallback"
+					canonical.refusalFallback = true
+				}
+				shape := claudeModelShapeSonnet
+				if !scenario.StreamPresent {
+					shape = claudeModelShapeNonStream
+				}
+				plan := ClaudeEgressPlan{
+					endpointKind: "messages-inference", canonical: canonical,
+					identity: mustClaudeTestIdentity(t, facts), features: features,
+					modelShape: shape, cch: "abcde",
+				}
+				body, model, beta, _, err := compileClaudeMessagesBody(plan, wire)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if model != scenario.Model || beta != claudeToolBeta(
+					canonical.toolMode, scenario.AnthropicBeta,
+					wire.ImplementationPolicy.ToolPolicy,
+				) {
+					t.Fatalf("模型能力场景模型或 beta 漂移：model=%s beta=%s", model, beta)
+				}
+				roundTripCanonical, _, err := parseClaudeCanonicalMessages(
+					body, facts, wire, true,
+				)
+				if err != nil {
+					t.Fatalf("模型能力官方 Body 无法重新规范化：%v", err)
+				}
+				if test.name == "server-fallback" {
+					roundTripCanonical.fallbackLatchedBy = canonical.fallbackLatchedBy
+					roundTripCanonical.refusalFallback = canonical.refusalFallback
+				}
+				roundTripPlan := plan
+				roundTripPlan.canonical = roundTripCanonical
+				roundTripBody, roundTripModel, roundTripBeta, _, err :=
+					compileClaudeMessagesBody(roundTripPlan, wire)
+				if err != nil {
+					t.Fatalf("模型能力官方 Body 无法重新编译：%v", err)
+				}
+				if !bytes.Equal(roundTripBody, body) || roundTripModel != model ||
+					roundTripBeta != beta {
+					t.Fatalf(
+						"模型能力官方 Body 往返漂移：model=%s scenario=%s",
+						capability.CanonicalModel, test.name,
+					)
+				}
+				fields, err := decodeClaudeOrderedObject(body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				bodyOrder := make([]string, 0, len(fields))
+				bodyValues := make(map[string]json.RawMessage, len(fields))
+				for _, field := range fields {
+					bodyOrder = append(bodyOrder, field.name)
+					bodyValues[field.name] = field.raw
+				}
+				if !slices.Equal(bodyOrder, scenario.BodyOrder) {
+					t.Fatalf("模型能力 Body 顺序漂移：got=%v want=%v", bodyOrder, scenario.BodyOrder)
+				}
+				if scenario.FallbacksPresent != (len(bodyValues["fallbacks"]) != 0) ||
+					(scenario.FallbacksPresent && !claudeJSONEqual(
+						bodyValues["fallbacks"], scenario.Fallbacks,
+					)) {
+					t.Fatal("模型能力 fallbacks 编译结果与官方证据不一致")
+				}
+				headers, headerOrder, err := compileClaudeEndpointHeaders(
+					plan, endpoint, wire, AttemptAuthenticationInput{BearerToken: "token"},
+					body, model, beta, claudeTestRequestID,
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !slices.Equal(headerOrder, scenario.HeaderOrder) {
+					t.Fatalf("模型能力 Header 顺序漂移：got=%v want=%v", headerOrder, scenario.HeaderOrder)
+				}
+				if test.name == "server-fallback" &&
+					(claudeTestHeaderValue(headers, "x-cc-fallback-latched-by") != "req_ModelFallback" ||
+						claudeTestHeaderValue(headers, "x-is-refusal-fallback") != "true") {
+					t.Fatal("Fable server fallback 锁存 Header 未按证据编译")
+				}
+			})
+		}
+	}
+}
+
+func TestClaudeFWGModelCapabilityFailCloseBoundaries(t *testing.T) {
+	wire, err := loadClaudeFWGWire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, model := range []string{"claude-unknown-5", "sonnet", "claude-opus-5-latest"} {
+		body := []byte(fmt.Sprintf(
+			`{"model":%q,"messages":[{"role":"user","content":"unknown model"}],"tools":[],"stream":true}`,
+			model,
+		))
+		if _, _, err := parseClaudeCanonicalMessages(
+			body, claudeTestTrustedFacts(), wire, false,
+		); err == nil {
+			t.Fatalf("未知模型或未登记别名未 fail-close：%s", model)
+		}
+	}
+	if _, _, err := parseClaudeCanonicalMessages(
+		[]byte(`{"model":"claude-opus-5","messages":[{"role":"user","content":"fallback control"}],"tools":[],"fallbacks":[{"model":"claude-opus-4-8"}],"stream":true}`),
+		claudeTestTrustedFacts(), wire, false,
+	); err == nil || !strings.Contains(err.Error(), "不得控制官方 fallbacks") {
+		t.Fatalf("第三方 fallbacks 未 fail-close：%v", err)
+	}
+
+	for _, model := range []string{"claude-opus-5", "claude-fable-5"} {
+		capability, ok := claudeModelCapabilityForAlias(wire, model)
+		if !ok {
+			t.Fatal("测试模型能力缺失")
+		}
+		canonical := claudeCanonicalForWireScenario(
+			t, capability.Scenarios.SDKCLI, "sdk-cli", claudeToolModeNone,
+		)
+		canonical.primaryModel = model
+		canonical.fallbacks = json.RawMessage(`[{"model":"claude-haiku-4-5-20251001"}]`)
+		if claudeCanonicalMatchesFixedScenario(canonical, capability.Scenarios.SDKCLI) {
+			t.Fatalf("错误 fallbacks 被判为官方一致：%s", model)
+		}
+		if _, err := selectClaudeWireScenario(ClaudeEgressPlan{
+			canonical: canonical, modelShape: claudeModelShapeHaiku,
+		}, wire); err == nil || !strings.Contains(err.Error(), "不支持") {
+			t.Fatalf("Opus/Fable 错误复用 Sonnet Haiku fallback：model=%s err=%v", model, err)
+		}
+	}
+}
+
+func TestClaudeFWGFableServerFallbackSessionLatch(t *testing.T) {
+	runtime := &ClaudeCandidateRuntime{
+		sessions:      make(map[string]*claudeSessionState),
+		requestOwners: make(map[string]string),
+	}
+	initialIdentity := mustClaudeTestIdentity(t, claudeTestTrustedFacts())
+	initial := ClaudeCanonicalRequest{
+		model: "claude-fable-5", primaryModel: "claude-fable-5",
+	}
+	lease, err := runtime.prepareClaudeSessionRequestMutable(
+		&initialIdentity, &initial, claudeMessageRelations{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.finalizeClaudeSessionRequestWithResponseModel(
+		lease, true, http.StatusOK, "req_FableRefusal", "claude-opus-4-8",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	plannerIdentity := mustClaudeTestIdentity(t, claudeTestTrustedFacts())
+	planner := ClaudeCanonicalRequest{
+		model: "claude-fable-5", primaryModel: "claude-fable-5",
+	}
+	plannerLease, err := runtime.prepareClaudeSessionRequestMutable(
+		&plannerIdentity, &planner, claudeMessageRelations{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if planner.model != "claude-opus-4-8" || !planner.serverFallback ||
+		planner.fallbackLatchedBy != "req_FableRefusal" || !planner.refusalFallback {
+		t.Fatalf("第三方后续请求未由 Persona 生成锁存状态：%+v", planner)
+	}
+	if err := runtime.finalizeClaudeSessionRequest(plannerLease, false, 0, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	officialFacts := claudeTestTrustedFacts()
+	officialFacts.Session.Source = ClaudeSessionSourceOfficialConsistent
+	officialFacts.Session.PreviousRequestID = "req_FableRefusal"
+	for _, test := range []struct {
+		name      string
+		latchedBy string
+		refusal   bool
+		wantOK    bool
+	}{
+		{name: "missing headers"},
+		{name: "wrong latch", latchedBy: "req_Wrong", refusal: true},
+		{name: "complete headers", latchedBy: "req_FableRefusal", refusal: true, wantOK: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			identity := mustClaudeTestIdentity(t, officialFacts)
+			canonical := ClaudeCanonicalRequest{
+				model: "claude-opus-4-8", primaryModel: "claude-fable-5",
+				serverFallback: true, fallbackLatchedBy: test.latchedBy,
+				refusalFallback: test.refusal, officialIngress: true,
+			}
+			lease, err := runtime.prepareClaudeSessionRequestMutable(
+				&identity, &canonical, claudeMessageRelations{},
+			)
+			if !test.wantOK {
+				if err == nil {
+					_ = runtime.finalizeClaudeSessionRequest(lease, false, 0, "")
+					t.Fatal("错误或缺失锁存 Header 未 fail-close")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := runtime.finalizeClaudeSessionRequest(lease, false, 0, ""); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestClaudeFWGCountTokensUsesRegisteredModelCapability(t *testing.T) {
+	wire, err := loadClaudeFWGWire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, model := range []string{"claude-sonnet-5", "claude-opus-5", "claude-fable-5"} {
+		canonical, err := parseClaudeCountTokens([]byte(fmt.Sprintf(
+			`{"model":%q,"messages":[{"role":"user","content":"count"}],"tools":[]}`,
+			model,
+		)), wire)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, compiledModel, _, _, err := compileClaudeEndpointBody(
+			ClaudeEgressPlan{endpointKind: "count-tokens", canonical: canonical},
+			wire, AttemptAuthenticationInput{},
+		)
+		if err != nil || compiledModel != model {
+			t.Fatalf("count_tokens 模型能力未生效：model=%s compiled=%s err=%v", model, compiledModel, err)
+		}
+		fields, err := decodeClaudeUniqueObject(body)
+		if err != nil || !claudeJSONEqual(fields["model"], mustMarshalClaudeString(model)) {
+			t.Fatalf("count_tokens wire 模型不一致：%s", body)
+		}
 	}
 }
 

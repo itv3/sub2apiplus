@@ -13,9 +13,9 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
 )
 
-const claudeFWGWireDigest = "07dbb15e8a621c4ef4922a9dec09e08d032fd649414f7d2f572c95c87b5679a7"
+const claudeFWGWireDigest = "a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d"
 
-//go:embed catalogdata/claude/wire/2.1.226/07dbb15e8a621c4ef4922a9dec09e08d032fd649414f7d2f572c95c87b5679a7.json
+//go:embed catalogdata/claude/wire/2.1.226/a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d.json
 var embeddedClaudeFWGWire []byte
 
 type claudeWireTLSVector struct {
@@ -42,35 +42,96 @@ type claudeWireScenario struct {
 		Path      string `json:"path"`
 		RawSHA256 string `json:"raw_sha256"`
 	} `json:"evidence"`
-	Model                    string `json:"model"`
-	MaxTokensJSON            string `json:"max_tokens_json"`
-	ThinkingJSON             string `json:"thinking_json"`
-	ContextManagementJSON    string `json:"context_management_json"`
-	OutputConfigJSON         string `json:"output_config_json"`
-	TemperatureJSON          string `json:"temperature_json"`
-	StreamJSON               string `json:"stream_json"`
-	ToolsJSON                string `json:"tools_json"`
-	SystemBlocksJSON         string `json:"system_blocks_json"`
-	ThinkingPresent          bool   `json:"thinking_present"`
-	ContextManagementPresent bool   `json:"context_management_present"`
-	OutputConfigPresent      bool   `json:"output_config_present"`
-	TemperaturePresent       bool   `json:"temperature_present"`
-	StreamPresent            bool   `json:"stream_present"`
-	ToolsPresent             bool   `json:"tools_present"`
-	SystemPresent            bool   `json:"system_present"`
-	MetadataPresent          bool   `json:"metadata_present"`
-	UserAgent                string `json:"user_agent"`
-	AnthropicBeta            string `json:"anthropic_beta"`
-	XApp                     string `json:"x_app"`
+	Model                    string   `json:"model"`
+	MaxTokensJSON            string   `json:"max_tokens_json"`
+	ThinkingJSON             string   `json:"thinking_json"`
+	ContextManagementJSON    string   `json:"context_management_json"`
+	FallbacksJSON            string   `json:"fallbacks_json"`
+	OutputConfigJSON         string   `json:"output_config_json"`
+	TemperatureJSON          string   `json:"temperature_json"`
+	StreamJSON               string   `json:"stream_json"`
+	ToolsJSON                string   `json:"tools_json"`
+	SystemBlocksJSON         string   `json:"system_blocks_json"`
+	ThinkingPresent          bool     `json:"thinking_present"`
+	ContextManagementPresent bool     `json:"context_management_present"`
+	FallbacksPresent         bool     `json:"fallbacks_present"`
+	OutputConfigPresent      bool     `json:"output_config_present"`
+	TemperaturePresent       bool     `json:"temperature_present"`
+	StreamPresent            bool     `json:"stream_present"`
+	ToolsPresent             bool     `json:"tools_present"`
+	SystemPresent            bool     `json:"system_present"`
+	MetadataPresent          bool     `json:"metadata_present"`
+	UserAgent                string   `json:"user_agent"`
+	AnthropicBeta            string   `json:"anthropic_beta"`
+	XApp                     string   `json:"x_app"`
+	BodyOrder                []string `json:"body_order"`
+	HeaderOrder              []string `json:"header_order"`
+	FallbackLatchedByPresent bool     `json:"fallback_latched_by_present"`
+	RefusalFallbackValue     string   `json:"refusal_fallback_value"`
 
 	MaxTokens         json.RawMessage         `json:"-"`
 	Thinking          json.RawMessage         `json:"-"`
 	ContextManagement json.RawMessage         `json:"-"`
+	Fallbacks         json.RawMessage         `json:"-"`
 	OutputConfig      json.RawMessage         `json:"-"`
 	Temperature       json.RawMessage         `json:"-"`
 	Stream            json.RawMessage         `json:"-"`
 	Tools             json.RawMessage         `json:"-"`
 	SystemBlocks      []claudeWireSystemBlock `json:"-"`
+}
+
+type claudeWireScenarioSet struct {
+	SDKCLI                claudeWireScenario   `json:"sdk_cli"`
+	Agent                 claudeWireScenario   `json:"agent"`
+	TUIMain               claudeWireScenario   `json:"tui_main"`
+	TUITitle              claudeWireScenario   `json:"tui_title"`
+	Fallback              claudeWireScenario   `json:"fallback"`
+	Background            []claudeWireScenario `json:"background"`
+	CustomSystem          claudeWireScenario   `json:"custom_system"`
+	AppendSystem          claudeWireScenario   `json:"append_system"`
+	ExcludeDynamic        claudeWireScenario   `json:"exclude_dynamic"`
+	CustomAgent           claudeWireScenario   `json:"custom_agent"`
+	SDKCLIBackgroundAgent claudeWireScenario   `json:"sdk_cli_background_agent"`
+	AgentBackground       claudeWireScenario   `json:"agent_background"`
+	WebSearchOuter        claudeWireScenario   `json:"web_search_outer"`
+	WebSearchServer       claudeWireScenario   `json:"web_search_server"`
+	ServerFallback        *claudeWireScenario  `json:"server_fallback"`
+}
+
+type claudeWireModelEvidence struct {
+	Path      string `json:"path"`
+	RawSHA256 string `json:"raw_sha256"`
+}
+
+type claudeWireModelCapability struct {
+	CanonicalModel               string                             `json:"canonical_model"`
+	Aliases                      []string                           `json:"aliases"`
+	EffortValues                 []string                           `json:"effort_values"`
+	EffortEvidence               map[string]claudeWireModelEvidence `json:"effort_evidence"`
+	ThinkingDisableEvidence      claudeWireModelEvidence            `json:"thinking_disable_evidence"`
+	CountTokensEvidence          claudeWireModelEvidence            `json:"count_tokens_evidence"`
+	LegacyRetryFallbackSupported bool                               `json:"legacy_retry_fallback_supported"`
+	Scenarios                    claudeWireScenarioSet              `json:"scenarios"`
+}
+
+type claudeWireModelCatalog struct {
+	SchemaVersion      string `json:"schema_version"`
+	RequiredRuleCount  int    `json:"required_rule_count"`
+	UnknownModelPolicy string `json:"unknown_model_policy"`
+	AliasPolicy        string `json:"alias_policy"`
+	Evidence           struct {
+		CampaignRoot               string `json:"campaign_root"`
+		SuccessfulAttempts         int    `json:"successful_attempts"`
+		HistoricalFailedAttempts   int    `json:"historical_failed_attempts"`
+		CampaignSHA256             string `json:"campaign_sha256"`
+		BehaviorTrafficDisposition string `json:"behavior_traffic_disposition"`
+		ProductionDiff             struct {
+			Path      string `json:"path"`
+			SHA256    string `json:"sha256"`
+			Identical bool   `json:"identical"`
+		} `json:"production_diff"`
+	} `json:"evidence"`
+	Models []claudeWireModelCapability `json:"models"`
 }
 
 type claudeWireToolCatalog struct {
@@ -119,20 +180,9 @@ type claudeWireImplementationPolicy struct {
 		Path   string `json:"path"`
 		SHA256 string `json:"sha256"`
 	} `json:"evidence_ledger"`
-	Scenarios struct {
-		SDKCLI          claudeWireScenario   `json:"sdk_cli"`
-		Agent           claudeWireScenario   `json:"agent"`
-		TUIMain         claudeWireScenario   `json:"tui_main"`
-		TUITitle        claudeWireScenario   `json:"tui_title"`
-		Fallback        claudeWireScenario   `json:"fallback"`
-		Background      []claudeWireScenario `json:"background"`
-		CustomSystem    claudeWireScenario   `json:"custom_system"`
-		AppendSystem    claudeWireScenario   `json:"append_system"`
-		ExcludeDynamic  claudeWireScenario   `json:"exclude_dynamic"`
-		CustomAgent     claudeWireScenario   `json:"custom_agent"`
-		WebSearchServer claudeWireScenario   `json:"web_search_server"`
-	} `json:"scenarios"`
-	Identity struct {
+	Scenarios    claudeWireScenarioSet  `json:"scenarios"`
+	ModelCatalog claudeWireModelCatalog `json:"model_catalog"`
+	Identity     struct {
 		DeviceIDAlgorithm string   `json:"device_id_algorithm"`
 		SessionSources    []string `json:"session_sources"`
 		AgentIDPattern    string   `json:"agent_id_pattern"`
@@ -162,9 +212,10 @@ type claudeWireImplementationPolicy struct {
 type claudeWireArtifact struct {
 	SchemaVersion string `json:"schema_version"`
 	Identity      struct {
-		Version       string `json:"version"`
-		Platform      string `json:"platform"`
-		ProfileDigest string `json:"profile_digest"`
+		Version                      string `json:"version"`
+		Platform                     string `json:"platform"`
+		ProfileDigest                string `json:"profile_digest"`
+		ModelCapabilityCatalogDigest string `json:"model_capability_catalog_digest"`
 	} `json:"identity"`
 	Attestation struct {
 		VersionFingerprint struct {
@@ -201,10 +252,22 @@ func loadClaudeFWGWire() (claudeWireArtifact, error) {
 	if err := json.Unmarshal(embeddedClaudeFWGWire, &artifact); err != nil {
 		return claudeWireArtifact{}, fmt.Errorf("解析 Claude FW-G wire 制品：%w", err)
 	}
-	if artifact.SchemaVersion != "claude-code-fw-g-wire-artifact/v2" ||
+	var rawCatalog struct {
+		ImplementationPolicy struct {
+			ModelCatalog json.RawMessage `json:"model_catalog"`
+		} `json:"implementation_policy"`
+	}
+	if err := json.Unmarshal(embeddedClaudeFWGWire, &rawCatalog); err != nil ||
+		!json.Valid(rawCatalog.ImplementationPolicy.ModelCatalog) {
+		return claudeWireArtifact{}, errors.New("Claude 模型能力目录原文缺失")
+	}
+	catalogRaw := append(append([]byte(nil), rawCatalog.ImplementationPolicy.ModelCatalog...), '\n')
+	catalogSum := sha256.Sum256(catalogRaw)
+	if artifact.SchemaVersion != "claude-code-fw-g-wire-artifact/v3" ||
 		artifact.Identity.Version != ClaudeFWGVersion ||
 		artifact.Identity.Platform != "linux/amd64" ||
-		artifact.Identity.ProfileDigest != ClaudeFWGProfileDigest {
+		artifact.Identity.ProfileDigest != ClaudeFWGProfileDigest ||
+		hex.EncodeToString(catalogSum[:]) != artifact.Identity.ModelCapabilityCatalogDigest {
 		return claudeWireArtifact{}, errors.New("Claude FW-G wire 制品身份不一致")
 	}
 	if err := hydrateClaudeWireArtifact(&artifact); err != nil {
@@ -244,7 +307,7 @@ func loadClaudeFWGWire() (claudeWireArtifact, error) {
 }
 
 func validateClaudeImplementationPolicy(policy claudeWireImplementationPolicy) error {
-	if policy.SchemaVersion != "claude-code-fw-g-implementation-policy/v2" ||
+	if policy.SchemaVersion != "claude-code-fw-g-implementation-policy/v3" ||
 		len(policy.EvidenceLedger.SHA256) != sha256.Size*2 ||
 		policy.Identity.DeviceIDAlgorithm != "sha256-account-scope-ingress-binding-v1" ||
 		policy.Identity.AgentIDPattern != "^[0-9a-f]{17}$" {
@@ -257,6 +320,7 @@ func validateClaudeImplementationPolicy(policy claudeWireImplementationPolicy) e
 		"append-system":     policy.Scenarios.AppendSystem,
 		"exclude-dynamic":   policy.Scenarios.ExcludeDynamic,
 		"custom-agent":      policy.Scenarios.CustomAgent,
+		"web-search-outer":  policy.Scenarios.WebSearchOuter,
 		"web-search-server": policy.Scenarios.WebSearchServer,
 	} {
 		if scenario.Model == "" || scenario.UserAgent == "" || scenario.AnthropicBeta == "" ||
@@ -280,7 +344,165 @@ func validateClaudeImplementationPolicy(policy claudeWireImplementationPolicy) e
 	if err := validateClaudeThinkingPolicy(policy.Thinking); err != nil {
 		return err
 	}
+	if err := validateClaudeModelCatalog(policy.ModelCatalog, policy.Scenarios); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateClaudeModelCatalog(
+	catalog claudeWireModelCatalog,
+	base claudeWireScenarioSet,
+) error {
+	if catalog.SchemaVersion != "claude-code-model-capability-catalog/v1" ||
+		catalog.RequiredRuleCount != 40 || catalog.UnknownModelPolicy != "deny" ||
+		catalog.AliasPolicy != "explicit-only" || len(catalog.Models) != 3 ||
+		catalog.Evidence.SuccessfulAttempts != 42 ||
+		catalog.Evidence.HistoricalFailedAttempts != 3 ||
+		len(catalog.Evidence.CampaignSHA256) != sha256.Size*2 ||
+		catalog.Evidence.BehaviorTrafficDisposition !=
+			"excluded-from-rules-and-difference-judgement" ||
+		!catalog.Evidence.ProductionDiff.Identical ||
+		len(catalog.Evidence.ProductionDiff.SHA256) != sha256.Size*2 {
+		return errors.New("Claude 模型能力目录身份或证据摘要不完整")
+	}
+	wantModels := []string{"claude-sonnet-5", "claude-opus-5", "claude-fable-5"}
+	aliases := make(map[string]string, len(wantModels))
+	for index := range catalog.Models {
+		capability := catalog.Models[index]
+		if capability.CanonicalModel != wantModels[index] ||
+			!slices.Equal(capability.Aliases, []string{capability.CanonicalModel}) ||
+			!slices.Equal(capability.EffortValues, []string{"low", "medium", "high", "xhigh", "max"}) ||
+			len(capability.EffortEvidence) != 5 ||
+			!validClaudeModelEvidence(capability.ThinkingDisableEvidence) ||
+			!validClaudeModelEvidence(capability.CountTokensEvidence) {
+			return fmt.Errorf("Claude 模型能力不完整：%s", capability.CanonicalModel)
+		}
+		for _, effort := range capability.EffortValues {
+			if !validClaudeModelEvidence(capability.EffortEvidence[effort]) {
+				return fmt.Errorf("Claude 模型 effort 证据不完整：%s/%s", capability.CanonicalModel, effort)
+			}
+		}
+		for _, alias := range capability.Aliases {
+			if owner := aliases[alias]; owner != "" {
+				return fmt.Errorf("Claude 模型别名重复：%s（%s/%s）", alias, owner, capability.CanonicalModel)
+			}
+			aliases[alias] = capability.CanonicalModel
+		}
+		if err := validateClaudeModelScenarioSet(capability); err != nil {
+			return err
+		}
+		if (capability.CanonicalModel == "claude-sonnet-5") !=
+			capability.LegacyRetryFallbackSupported {
+			return fmt.Errorf("Claude 历史 Haiku fallback 能力归属非法：%s", capability.CanonicalModel)
+		}
+	}
+	if catalog.Models[0].Scenarios.SDKCLI.Model != base.SDKCLI.Model ||
+		catalog.Models[0].Scenarios.SDKCLI.Evidence.RawSHA256 != base.SDKCLI.Evidence.RawSHA256 {
+		return errors.New("Claude Sonnet 模型能力未复用公共基线场景")
+	}
+	return nil
+}
+
+func validClaudeModelEvidence(evidence claudeWireModelEvidence) bool {
+	return strings.TrimSpace(evidence.Path) != "" && len(evidence.RawSHA256) == sha256.Size*2
+}
+
+func validateClaudeModelScenarioSet(capability claudeWireModelCapability) error {
+	scenarios := capability.Scenarios
+	for name, scenario := range map[string]claudeWireScenario{
+		"sdk-cli":           scenarios.SDKCLI,
+		"agent":             scenarios.Agent,
+		"tui-main":          scenarios.TUIMain,
+		"custom-system":     scenarios.CustomSystem,
+		"append-system":     scenarios.AppendSystem,
+		"exclude-dynamic":   scenarios.ExcludeDynamic,
+		"custom-agent":      scenarios.CustomAgent,
+		"web-search-outer":  scenarios.WebSearchOuter,
+		"web-search-server": scenarios.WebSearchServer,
+	} {
+		if scenario.Model != capability.CanonicalModel || !validClaudeWireScenario(scenario) {
+			return fmt.Errorf("Claude 模型场景不完整：%s/%s", capability.CanonicalModel, name)
+		}
+	}
+	if len(scenarios.Background) != 4 {
+		return fmt.Errorf("Claude 模型 background 未冻结为四类：%s", capability.CanonicalModel)
+	}
+	primaryBackground := 0
+	for _, scenario := range scenarios.Background {
+		if !validClaudeWireScenario(scenario) {
+			return fmt.Errorf("Claude 模型 background 场景不完整：%s", capability.CanonicalModel)
+		}
+		if scenario.Model == capability.CanonicalModel {
+			primaryBackground++
+		}
+	}
+	if primaryBackground != 1 {
+		return fmt.Errorf("Claude 模型 background 主模型场景数量非法：%s", capability.CanonicalModel)
+	}
+	if capability.CanonicalModel == "claude-sonnet-5" {
+		if capability.Scenarios.ServerFallback != nil {
+			return errors.New("Claude Sonnet 不得声明 server fallback 锁存场景")
+		}
+		return nil
+	}
+	for name, scenario := range map[string]claudeWireScenario{
+		"sdk-cli-background-agent": scenarios.SDKCLIBackgroundAgent,
+		"agent-background":         scenarios.AgentBackground,
+	} {
+		if scenario.Model != capability.CanonicalModel || !validClaudeWireScenario(scenario) {
+			return fmt.Errorf("Claude 模型场景不完整：%s/%s", capability.CanonicalModel, name)
+		}
+	}
+	if capability.CanonicalModel == "claude-opus-5" {
+		if scenarios.ServerFallback != nil {
+			return errors.New("Claude Opus 不得声明 Fable server fallback 锁存场景")
+		}
+		return nil
+	}
+	if scenarios.ServerFallback == nil || scenarios.ServerFallback.Model != "claude-opus-4-8" ||
+		!validClaudeWireScenario(*scenarios.ServerFallback) || scenarios.ServerFallback.FallbacksPresent ||
+		!scenarios.ServerFallback.FallbackLatchedByPresent ||
+		scenarios.ServerFallback.RefusalFallbackValue != "true" {
+		return errors.New("Claude Fable server fallback 锁存场景不完整")
+	}
+	return nil
+}
+
+func validClaudeWireScenario(scenario claudeWireScenario) bool {
+	return strings.TrimSpace(scenario.Model) != "" && strings.TrimSpace(scenario.UserAgent) != "" &&
+		strings.TrimSpace(scenario.AnthropicBeta) != "" &&
+		len(scenario.Evidence.RawSHA256) == sha256.Size*2 &&
+		strings.TrimSpace(scenario.Evidence.Path) != "" &&
+		len(scenario.BodyOrder) != 0 && len(scenario.HeaderOrder) != 0 &&
+		slices.Contains(scenario.BodyOrder, "fallbacks") == scenario.FallbacksPresent
+}
+
+func claudeModelCapabilityForAlias(
+	artifact claudeWireArtifact,
+	model string,
+) (claudeWireModelCapability, bool) {
+	model = strings.TrimSpace(model)
+	for _, capability := range artifact.ImplementationPolicy.ModelCatalog.Models {
+		if slices.Contains(capability.Aliases, model) {
+			return capability, true
+		}
+	}
+	return claudeWireModelCapability{}, false
+}
+
+func claudeModelCapabilityForServerFallback(
+	artifact claudeWireArtifact,
+	model string,
+) (claudeWireModelCapability, bool) {
+	model = strings.TrimSpace(model)
+	for _, capability := range artifact.ImplementationPolicy.ModelCatalog.Models {
+		if capability.Scenarios.ServerFallback != nil &&
+			capability.Scenarios.ServerFallback.Model == model {
+			return capability, true
+		}
+	}
+	return claudeWireModelCapability{}, false
 }
 
 func validateClaudeThinkingPolicy(policy claudeWireThinkingPolicy) error {
@@ -325,12 +547,31 @@ func hydrateClaudeWireArtifact(artifact *claudeWireArtifact) error {
 		&artifact.ImplementationPolicy.Scenarios.AppendSystem,
 		&artifact.ImplementationPolicy.Scenarios.ExcludeDynamic,
 		&artifact.ImplementationPolicy.Scenarios.CustomAgent,
+		&artifact.ImplementationPolicy.Scenarios.WebSearchOuter,
 		&artifact.ImplementationPolicy.Scenarios.WebSearchServer,
 	}
 	for index := range artifact.ImplementationPolicy.Scenarios.Background {
 		scenarios = append(scenarios, &artifact.ImplementationPolicy.Scenarios.Background[index])
 	}
+	for modelIndex := range artifact.ImplementationPolicy.ModelCatalog.Models {
+		set := &artifact.ImplementationPolicy.ModelCatalog.Models[modelIndex].Scenarios
+		scenarios = append(scenarios,
+			&set.SDKCLI, &set.Agent, &set.TUIMain, &set.TUITitle, &set.Fallback,
+			&set.CustomSystem, &set.AppendSystem, &set.ExcludeDynamic, &set.CustomAgent,
+			&set.SDKCLIBackgroundAgent, &set.AgentBackground,
+			&set.WebSearchOuter, &set.WebSearchServer,
+		)
+		for index := range set.Background {
+			scenarios = append(scenarios, &set.Background[index])
+		}
+		if set.ServerFallback != nil {
+			scenarios = append(scenarios, set.ServerFallback)
+		}
+	}
 	for _, scenario := range scenarios {
+		if !validClaudeWireScenario(*scenario) {
+			continue
+		}
 		if err := hydrateClaudeWireScenario(scenario); err != nil {
 			return err
 		}
@@ -362,6 +603,7 @@ func hydrateClaudeWireScenario(scenario *claudeWireScenario) error {
 		{"max_tokens", scenario.MaxTokensJSON, &scenario.MaxTokens},
 		{"thinking", scenario.ThinkingJSON, &scenario.Thinking},
 		{"context_management", scenario.ContextManagementJSON, &scenario.ContextManagement},
+		{"fallbacks", scenario.FallbacksJSON, &scenario.Fallbacks},
 		{"output_config", scenario.OutputConfigJSON, &scenario.OutputConfig},
 		{"temperature", scenario.TemperatureJSON, &scenario.Temperature},
 		{"stream", scenario.StreamJSON, &scenario.Stream},

@@ -490,7 +490,9 @@ func (s *GatewayService) finishClaudeFWGCandidateResponse(
 			return nil, err
 		}
 	}
-	if err := sessionResult.FinalizeSession(true); err != nil {
+	if err := sessionResult.FinalizeSessionWithResponseModel(
+		true, observedUpstreamResponseModel(c),
+	); err != nil {
 		return nil, fmt.Errorf("提交 Claude FW-G 会话状态：%w", err)
 	}
 	sessionFinalized = true

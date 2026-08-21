@@ -161,7 +161,7 @@ func loadClaudeFWGDesktopTitleSourceReceipt() (
 		mapping.TargetTemperature != 1 || mapping.TargetToolCount != 0 ||
 		mapping.TargetOutputConfigSHA256 !=
 			"bcd793e2583a3d26907643c170d741880269a90fee52ce40f3c5b64dcdfcf08c" ||
-		mapping.WireSHA256 != claudeFWGWireDigest {
+		mapping.WireSHA256 != claudeFWGThinkingDisplayWireSHA256 {
 		return receipt, errors.New("Claude FW-G Desktop title Persona 映射非法")
 	}
 	if err := validateClaudeFWGCountTokensTransitions(receipt.Transitions); err != nil {
@@ -196,7 +196,8 @@ func loadClaudeFWGDesktopTitleTestReceipt(
 		receipt.Source.SHA256 != claudeFWGDesktopTitleSourceSHA256 ||
 		len(receipt.Transitions) != 5 || !slices.Equal(receipt.TargetedTests, wantTests) ||
 		receipt.RequiredRules != 40 || receipt.AtomicRules != 110 ||
-		receipt.WireSHA256 != claudeFWGWireDigest || receipt.ProductionSelectorChanged ||
+		receipt.WireSHA256 != claudeFWGThinkingDisplayWireSHA256 ||
+		receipt.ProductionSelectorChanged ||
 		receipt.VircsServiceChanged || receipt.CodexFinalWire != "zero_difference_required" ||
 		receipt.Result != "passed" {
 		return receipt, errors.New("Claude FW-G Desktop title test transition 顶层事实非法")
@@ -212,6 +213,9 @@ func claudeFWGDesktopTitleTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if claudeFWGModelCapabilityTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	source, err := loadClaudeFWGDesktopTitleSourceReceipt()
 	if err != nil {
 		return false
@@ -292,7 +296,10 @@ func TestClaudeFWGDesktopTitleTransitionsAreFrozen(t *testing.T) {
 			if readErr != nil {
 				t.Fatal(readErr)
 			}
-			if got := claudeFWGCountTokensDigest(raw); got != transition.ToSHA256 {
+			if got := claudeFWGCountTokensDigest(raw); got != transition.ToSHA256 &&
+				!claudeFWGModelCapabilityTransitionSupersedes(
+					transition.Path, transition.ToSHA256, got,
+				) {
 				t.Fatalf(
 					"Claude FW-G Desktop title transition 漂移：path=%s got=%s want=%s",
 					transition.Path, got, transition.ToSHA256,

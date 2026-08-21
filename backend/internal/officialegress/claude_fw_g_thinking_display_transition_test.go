@@ -13,6 +13,7 @@ import (
 const (
 	claudeFWGThinkingDisplaySourceSHA256 = "015b430cfd61cbf8434fe790a61b85e64a6425b8de6e5aeae366ea0649712d2a"
 	claudeFWGThinkingDisplayTestSHA256   = "b23717fe96bfb4af9bb1c5b81c797911ef0c0aa59db375c078d83a87e3effa6f"
+	claudeFWGThinkingDisplayWireSHA256   = "07dbb15e8a621c4ef4922a9dec09e08d032fd649414f7d2f572c95c87b5679a7"
 )
 
 type claudeFWGThinkingDisplayEvidenceRef struct {
@@ -139,11 +140,11 @@ func loadClaudeFWGThinkingDisplaySourceReceipt() (
 		return receipt, errors.New("Claude FW-G thinking.display 证据状态缺失")
 	}
 	artifact := receipt.ArtifactTransition
-	if artifact.ProfileSHA256 != ClaudeFWGProfileDigest ||
-		artifact.ReleaseSHA256 != ClaudeFWGReleaseDigest ||
-		artifact.ReleaseBundleSHA256 != ClaudeFWGBundleDigest ||
+	if artifact.ProfileSHA256 != claudeFWGInitialProfileDigest ||
+		artifact.ReleaseSHA256 != claudeFWGInitialReleaseDigest ||
+		artifact.ReleaseBundleSHA256 != claudeFWGInitialBundleDigest ||
 		artifact.WireBeforeSHA256 != claudeFWGInitialWireDigest ||
-		artifact.WireAfterSHA256 != claudeFWGWireDigest ||
+		artifact.WireAfterSHA256 != claudeFWGThinkingDisplayWireSHA256 ||
 		artifact.RequiredRulesBeforeSHA256 !=
 			"50261962778b8a7cf85f2dd01a8057f8004e92c0978456e88d9457d4ef8030b3" ||
 		artifact.RequiredRulesAfterSHA256 != claudeFWGRequiredRulesManifestSHA256 ||
@@ -180,7 +181,8 @@ func loadClaudeFWGThinkingDisplayTestReceipt(
 			"docs/egress/maintenance/claude-fw-g-thinking-display-source-transition.json" ||
 		receipt.Source.SHA256 != claudeFWGThinkingDisplaySourceSHA256 ||
 		len(receipt.Transitions) != 7 || receipt.RequiredRules != 40 ||
-		receipt.AtomicRules != 110 || receipt.WireSHA256 != claudeFWGWireDigest ||
+		receipt.AtomicRules != 110 ||
+		receipt.WireSHA256 != claudeFWGThinkingDisplayWireSHA256 ||
 		receipt.ProductionSelectorChanged || receipt.VircsServiceChanged ||
 		receipt.CodexFinalWire != "zero_difference_required" || receipt.Result != "passed" {
 		return receipt, errors.New("Claude FW-G thinking.display test transition 顶层事实非法")

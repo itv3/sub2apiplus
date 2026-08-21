@@ -17,6 +17,9 @@ import (
 
 const (
 	claudeFWGSourceTransitionSHA256 = "b84fa150c93856a7e3717c7053cd1e2d90f9a6adce259d68252d5aaf11fb6008"
+	claudeFWGInitialProfileDigest   = "4da60bc238694a06a0dc80d68117abddd2de98c7c924c4db4c5dd929ea411e17"
+	claudeFWGInitialReleaseDigest   = "c1053492eabc0b10d9d5f92f807a1df0d507c777b64a528e938426350c0d5350"
+	claudeFWGInitialBundleDigest    = "4213ea92a7d76c4ef3aa318f4d93628cbcf675dc86566b107dddb70a70e6eb41"
 	claudeFWGInitialWireDigest      = "c1c3c8c83710c9afc7005f71fa45d0837484a6bd042f75c08e5cde5451822a3e"
 )
 
@@ -70,15 +73,15 @@ func validateClaudeFWGSourceTransition(
 		receipt.Result != "passed" || len(receipt.Transitions) != 7 {
 		return errors.New("Claude FW-G source transition 顶层事实非法")
 	}
-	if receipt.ArtifactIdentity.ProfileSHA256 != ClaudeFWGProfileDigest ||
-		receipt.ArtifactIdentity.ReleaseSHA256 != ClaudeFWGReleaseDigest ||
-		receipt.ArtifactIdentity.BundleSHA256 != ClaudeFWGBundleDigest ||
+	if receipt.ArtifactIdentity.ProfileSHA256 != claudeFWGInitialProfileDigest ||
+		receipt.ArtifactIdentity.ReleaseSHA256 != claudeFWGInitialReleaseDigest ||
+		receipt.ArtifactIdentity.BundleSHA256 != claudeFWGInitialBundleDigest ||
 		receipt.ArtifactIdentity.WireSHA256 != claudeFWGInitialWireDigest {
 		return fmt.Errorf(
 			"Claude FW-G source transition 制品身份不一致：profile=%s/%s release=%s/%s bundle=%s/%s wire=%s/%s",
-			receipt.ArtifactIdentity.ProfileSHA256, ClaudeFWGProfileDigest,
-			receipt.ArtifactIdentity.ReleaseSHA256, ClaudeFWGReleaseDigest,
-			receipt.ArtifactIdentity.BundleSHA256, ClaudeFWGBundleDigest,
+			receipt.ArtifactIdentity.ProfileSHA256, claudeFWGInitialProfileDigest,
+			receipt.ArtifactIdentity.ReleaseSHA256, claudeFWGInitialReleaseDigest,
+			receipt.ArtifactIdentity.BundleSHA256, claudeFWGInitialBundleDigest,
 			receipt.ArtifactIdentity.WireSHA256, claudeFWGInitialWireDigest,
 		)
 	}
@@ -182,7 +185,10 @@ func TestClaudeFWGSourceTransitionIsFrozen(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := claudeFWGSourceDigest(source); got != transition.ToSHA256 {
+		if got := claudeFWGSourceDigest(source); got != transition.ToSHA256 &&
+			!claudeFWGModelCapabilityTransitionSupersedes(
+				transition.Path, transition.ToSHA256, got,
+			) {
 			t.Fatalf("Claude FW-G source transition 漂移：path=%s got=%s want=%s",
 				transition.Path, got, transition.ToSHA256)
 		}

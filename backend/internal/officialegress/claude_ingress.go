@@ -23,8 +23,11 @@ type ClaudeIngressSnapshot struct {
 }
 
 type claudeOfficialIngressState struct {
-	Beta               string
-	AttributionPresent bool
+	Beta                      string
+	AttributionPresent        bool
+	FallbackLatchedBy         string
+	RefusalFallback           bool
+	ServerFallbackHeadersSeen bool
 }
 
 var (
@@ -103,6 +106,27 @@ func validateClaudeOfficialIngressBase(
 		return ClaudeTrustedFacts{}, claudeOfficialIngressState{}, false, errors.New(
 			"Claude background 与 UA entrypoint 冲突",
 		)
+	}
+	fallbackLatchedValues := headers.Values("x-cc-fallback-latched-by")
+	refusalFallbackValues := headers.Values("x-is-refusal-fallback")
+	if len(fallbackLatchedValues) > 1 || len(refusalFallbackValues) > 1 ||
+		(len(fallbackLatchedValues) == 0) != (len(refusalFallbackValues) == 0) {
+		return ClaudeTrustedFacts{}, claudeOfficialIngressState{}, false, errors.New(
+			"Claude server fallback Header 缺失、重复或不成对",
+		)
+	}
+	fallbackLatchedBy := ""
+	refusalFallback := false
+	serverFallbackHeadersSeen := len(fallbackLatchedValues) == 1
+	if serverFallbackHeadersSeen {
+		fallbackLatchedBy = strings.TrimSpace(fallbackLatchedValues[0])
+		if !claudeRequestIDPattern.MatchString(fallbackLatchedBy) ||
+			strings.TrimSpace(refusalFallbackValues[0]) != "true" {
+			return ClaudeTrustedFacts{}, claudeOfficialIngressState{}, false, errors.New(
+				"Claude server fallback Header 值非法",
+			)
+		}
+		refusalFallback = true
 	}
 
 	agentID := strings.ToLower(strings.TrimSpace(headers.Get("x-claude-code-agent-id")))
@@ -183,6 +207,8 @@ func validateClaudeOfficialIngressBase(
 	}
 	return trusted, claudeOfficialIngressState{
 		Beta: strings.TrimSpace(headers.Get("anthropic-beta")), AttributionPresent: present,
+		FallbackLatchedBy: fallbackLatchedBy, RefusalFallback: refusalFallback,
+		ServerFallbackHeadersSeen: serverFallbackHeadersSeen,
 	}, true, nil
 }
 
@@ -273,6 +299,7 @@ func extractClaudeOfficialCustomHeaders(
 	for _, name := range []string{
 		"authorization", "content-encoding", "x-claude-code-agent-id",
 		"x-claude-code-parent-agent-id", "x-anthropic-additional-protection",
+		"x-cc-fallback-latched-by", "x-is-refusal-fallback",
 		"x-claude-remote-container-id", "x-claude-remote-session-id", "x-client-app",
 		"x-api-key", "forwarded", "x-forwarded-for", "x-forwarded-host",
 		"x-forwarded-port", "x-forwarded-proto", "x-real-ip", "x-request-id",
@@ -515,6 +542,10 @@ func completeClaudeOfficialIngressFeatures(
 	} else if scenario.ContextManagementPresent && !trusted.Features.DisableThinking {
 		return errors.New("Claude 官方 context_management 缺失但 thinking 未关闭")
 	}
+	if canonical.fallbacksPresent != scenario.FallbacksPresent ||
+		(canonical.fallbacksPresent && !claudeJSONEqual(canonical.fallbacks, scenario.Fallbacks)) {
+		return errors.New("Claude 官方 fallbacks 与模型场景冲突")
+	}
 	if len(canonical.temperature) != 0 &&
 		(!scenario.TemperaturePresent || !claudeJSONEqual(canonical.temperature, scenario.Temperature)) {
 		return errors.New("Claude 官方 temperature 不在批准场景")
@@ -592,10 +623,17 @@ func classifyClaudeOfficialFallback(
 	canonical *ClaudeCanonicalRequest,
 	artifact claudeWireArtifact,
 ) {
-	if canonical == nil || canonical.model != artifact.ImplementationPolicy.Scenarios.Fallback.Model {
+	if canonical == nil || canonical.serverFallback {
 		return
 	}
-	approved := artifact.ImplementationPolicy.Scenarios.Fallback
+	capability, err := claudeModelCapabilityForPlan(ClaudeEgressPlan{
+		canonical: *canonical,
+	}, artifact)
+	if err != nil || !capability.LegacyRetryFallbackSupported ||
+		canonical.model != capability.Scenarios.Fallback.Model {
+		return
+	}
+	approved := capability.Scenarios.Fallback
 	candidate := *canonical
 	if !candidate.streamPresent {
 		candidate.streamPresent = approved.StreamPresent
