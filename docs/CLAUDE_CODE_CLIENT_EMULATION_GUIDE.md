@@ -716,6 +716,26 @@ Claude Code 换版时必须新建 Campaign，并重复以下顺序：
 调用方不能选择 Persona、生产版本、transport ID 或最终 wire。只有 `TranslationReport=lossless` 且
 请求位于本 Release 的 `SupportEnvelope` 内，才能进入 strict Compiler；范围外请求必须 fail-close。
 
+**第三方 Agent 工具目录。** KiloCode／zlfcode 等 Agent 自带的工具名称、说明、Schema 和顺序不因
+Anthropic API 接受自定义工具而自动成为 Claude Code 画像。与目标版本官方内置工具无损等价的项，
+可在单独批准后使用 Framework §2.3 的 `official_builtin_lossless` 双向映射；`kilo_local_recall`、
+`todowrite`、`background_process` 等没有已批准内置等价项的能力，只能作为未来可选的
+`official_mcp_bridge` 处理：
+
+1. 在独立 Campaign 中固定 Kilo 产品／版本和完整工具目录摘要；
+2. 让真正的目标版本 Claude Code 加载冻结的 `kilo_bridge` MCP 配置，实测
+   `mcp__kilo_bridge__<tool>`、说明／截断、Schema、顺序、deferred／ToolSearch 和多轮工具往返；
+3. 将官方目录与双向名称、参数、结果、ID、并行、流式和错误映射冻结进专属 ReleaseArtifact，并对
+   官方入口与该第三方入口执行 RequiredRules／PAIR 和最终 wire 对拍；
+4. 只有目录摘要和全部断言命中时进入 strict；未知版本、新增／变更工具、无法无损转换或证据不足均
+   fail-close。
+
+该扩展若获批准，只能主张“Claude Code + 冻结 `kilo_bridge` MCP 配置”的等价性，不能主张默认无 MCP
+客户端等价。当前 KiloCode／zlfcode 工具桥尚未取证、实现或批准，不属于当前 40 条 RequiredRules 和
+SupportEnvelope；当前运行语义必须保持 fail-close。直接使用与画像版本、入口和配置一致的官方 Claude
+Code，可消除第三方工具目录、系统提示和工具往返翻译问题，是当前优先入口；Claude Desktop 属于不同
+客户端，不能据此自动继承 Claude Code Persona。
+
 FW-E 的 `ProductionIngressInventory` 至少从以下当前已知逻辑入口开始，不能把本表当作已经完成的物理
 路由闭集：
 

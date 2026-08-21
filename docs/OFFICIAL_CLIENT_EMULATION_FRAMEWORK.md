@@ -158,6 +158,24 @@ OfficialClientPersona =
 其官方专属入口若含标准协议无法表达的语义，应新增窄入口适配器并输出同一个 CanonicalRequest 合同，
 不能把解析逻辑藏进 Persona Compiler。
 
+**第三方 Agent 工具接入。** 第三方 IDE／Agent 自带的工具目录不得因为上游 API 接受自定义工具，或
+官方客户端支持 MCP，就原样进入官方 Persona wire。接入时必须冻结第三方产品、版本、入口、工具目录
+摘要，以及名称、说明、Schema、顺序、条件和多轮 `tool_use／tool_result` 关系，并对每项工具选择以下
+且仅以下一种处置：
+
+| 工具处置 | 运行语义 |
+|---|---|
+| `official_builtin_lossless` | 与目标版本官方内置工具的请求、结果和错误语义无损等价；由受管双向映射转换，最终目录仍由 ReleaseBundle 生成 |
+| `official_mcp_bridge` | 没有内置等价项；先用目标官方客户端和冻结的 MCP 配置取得证据，再由画像生成官方实测的 `mcp__<server>__<tool>` 名称、说明／截断、Schema、顺序、deferred／ToolSearch 条件及工具往返 |
+| `denied` | 无法无损转换、缺少官方证据，或第三方目录摘要未知；Planner／Compiler fail-close |
+
+`official_mcp_bridge` 仍是双向协议映射，不是第三方工具透传：官方 `tool_use` 必须转换为第三方客户端能
+执行的调用，第三方结果必须再转换为官方实测的 `tool_result`，ID、并行关系、流式参数、错误和历史均须
+闭合。每个第三方目录必须单独进入 SupportEnvelope、RequiredRules／PAIR 和最终 wire 对拍；名称、说明、
+Schema、顺序或条件发生变化即视为新目录，未重新批准前 fail-close。该路径只能主张“目标官方客户端 +
+冻结 MCP 配置”的等价性，不能冒充默认无 MCP 的官方客户端。若直接使用目标官方客户端能够满足产品
+需求，应优先使用官方入口；第三方 Agent 工具桥是可选扩展，不是 Persona 上线的前置条件。
+
 `ProductionIngressInventory` 中每个入口必须取以下且仅以下一种处置，不得用缩小
 `SupportEnvelope` 隐藏现存生产入口：
 

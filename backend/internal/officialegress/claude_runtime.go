@@ -454,6 +454,8 @@ func (r *ClaudeCandidateRuntime) ExecuteMessages(
 		); err != nil {
 			return ClaudeCandidateResult{}, newClaudeSupportEnvelopeRejection(err)
 		}
+	} else if err := completeClaudeThirdPartyTitleFacts(&trusted, canonical); err != nil {
+		return ClaudeCandidateResult{}, newClaudeSupportEnvelopeRejection(err)
 	}
 	relations, err := validateClaudeMessageRelations(canonical)
 	if err != nil {
@@ -483,6 +485,24 @@ func (r *ClaudeCandidateRuntime) ExecuteMessages(
 		return ClaudeCandidateResult{}, err
 	}
 	return result, nil
+}
+
+func completeClaudeThirdPartyTitleFacts(
+	trusted *ClaudeTrustedFacts,
+	canonical ClaudeCanonicalRequest,
+) error {
+	if canonical.scenarioHint != "tui-title" {
+		return nil
+	}
+	if trusted == nil || canonical.officialIngress {
+		return errors.New("Claude Desktop 标题 Planner facts 非法")
+	}
+	// 第三方 Desktop 只能贡献已验证的“生成标题”语义；最终入口、
+	// system、模型和 wire 仍由 active Claude Code Persona 决定。
+	trusted.Entrypoint.Entrypoint = ClaudeEntrypointCLI
+	trusted.Features.SystemMode = ClaudeSystemDefault
+	trusted.Features.TUITitleRequest = true
+	return nil
 }
 
 func validateClaudeMessageRelations(
@@ -670,7 +690,8 @@ func (r *ClaudeCandidateRuntime) prepareClaudeSessionRequest(
 
 	switch kind {
 	case claudeSessionRequestTUITitle:
-		if identity.sessionSource != ClaudeSessionSourceOfficialConsistent ||
+		if (identity.sessionSource != ClaudeSessionSourceOfficialConsistent &&
+			identity.sessionSource != ClaudeSessionSourcePlannerDerived) ||
 			identity.previousRequestID != "" || state.tuiTitleCompleted || state.tuiTitleInFlight {
 			return claudeSessionLease{}, errors.New("Claude TUI 标题阶段状态非法")
 		}

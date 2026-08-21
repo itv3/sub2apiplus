@@ -201,7 +201,7 @@ func parseClaudeCanonicalMessages(
 	if err != nil {
 		return ClaudeCanonicalRequest{}, TranslationReport{}, err
 	}
-	effort, outputConfig, err := parseClaudeRequestedOutputConfig(
+	effort, outputConfig, thirdPartyTitle, err := parseClaudeRequestedOutputConfig(
 		document["output_config"], artifact, officialIngress,
 	)
 	if err != nil {
@@ -255,6 +255,12 @@ func parseClaudeCanonicalMessages(
 		streamPresent:            streamPresent, stream: stream,
 		disableThinking: disableThinking, officialIngress: officialIngress,
 	}
+	titleNormalized, err := normalizeClaudeThirdPartyTitleRequest(
+		&canonical, artifact, thirdPartyTitle,
+	)
+	if err != nil {
+		return ClaudeCanonicalRequest{}, TranslationReport{}, err
+	}
 	if officialIngress && trusted.Agent.Background {
 		matched := -1
 		for index, scenario := range artifact.ImplementationPolicy.Scenarios.Background {
@@ -280,6 +286,9 @@ func parseClaudeCanonicalMessages(
 		IngressProtocol: trusted.Entrypoint.IngressProtocol,
 		Lossless:        true,
 		Compatibility:   "reuse_lossless",
+	}
+	if titleNormalized {
+		report.Compatibility = "desktop_title_to_tui_title"
 	}
 	return canonical, report, nil
 }
@@ -361,20 +370,20 @@ func parseClaudeRequestedOutputConfig(
 	raw json.RawMessage,
 	artifact claudeWireArtifact,
 	officialIngress bool,
-) (string, json.RawMessage, error) {
+) (string, json.RawMessage, bool, error) {
 	if len(raw) == 0 {
-		return "", nil, nil
+		return "", nil, false, nil
 	}
 	fields, err := decodeClaudeUniqueObject(raw)
 	if err != nil {
-		return "", nil, errors.New("Claude output_config 必须是对象")
+		return "", nil, false, errors.New("Claude output_config 必须是对象")
 	}
 	if len(fields) == 1 && len(fields["effort"]) != 0 {
 		var effort string
 		if json.Unmarshal(fields["effort"], &effort) != nil || !validClaudeEffort(effort) {
-			return "", nil, errors.New("Claude output_config.effort 不在批准闭集")
+			return "", nil, false, errors.New("Claude output_config.effort 不在批准闭集")
 		}
-		return effort, append(json.RawMessage(nil), bytes.TrimSpace(raw)...), nil
+		return effort, append(json.RawMessage(nil), bytes.TrimSpace(raw)...), false, nil
 	}
 	if officialIngress && len(fields) == 1 && len(fields["format"]) != 0 {
 		for _, scenario := range append(
@@ -382,11 +391,94 @@ func parseClaudeRequestedOutputConfig(
 			artifact.ImplementationPolicy.Scenarios.Background...,
 		) {
 			if scenario.OutputConfigPresent && claudeJSONEqual(raw, scenario.OutputConfig) {
-				return "", append(json.RawMessage(nil), bytes.TrimSpace(raw)...), nil
+				return "", append(json.RawMessage(nil), bytes.TrimSpace(raw)...), false, nil
 			}
 		}
 	}
-	return "", nil, errors.New("Claude output_config 不在批准闭集")
+	if !officialIngress && len(fields) == 2 && len(fields["effort"]) != 0 &&
+		len(fields["format"]) != 0 && claudeTitleFormatEqual(fields["format"], artifact) {
+		var effort string
+		if json.Unmarshal(fields["effort"], &effort) != nil || !validClaudeEffort(effort) {
+			return "", nil, false, errors.New("Claude output_config.effort 不在批准闭集")
+		}
+		return effort, append(json.RawMessage(nil), bytes.TrimSpace(raw)...), true, nil
+	}
+	return "", nil, false, errors.New("Claude output_config 不在批准闭集")
+}
+
+func claudeTitleFormatEqual(raw json.RawMessage, artifact claudeWireArtifact) bool {
+	titleFields, err := decodeClaudeUniqueObject(
+		artifact.ImplementationPolicy.Scenarios.TUITitle.OutputConfig,
+	)
+	return err == nil && len(titleFields) == 1 &&
+		claudeJSONEqual(raw, titleFields["format"])
+}
+
+const claudeDesktopTitlePromptSHA256 = "765b5ba2fa0a315a3c749c7e54bf5cef450084a745eb01e66371b8b6359d4752"
+
+func normalizeClaudeThirdPartyTitleRequest(
+	canonical *ClaudeCanonicalRequest,
+	artifact claudeWireArtifact,
+	candidate bool,
+) (bool, error) {
+	if !candidate {
+		return false, nil
+	}
+	if canonical == nil || canonical.officialIngress {
+		return false, errors.New("Claude Desktop 标题语义来源非法")
+	}
+	title := artifact.ImplementationPolicy.Scenarios.TUITitle
+	main := artifact.ImplementationPolicy.Scenarios.SDKCLI
+	if canonical.model != main.Model || canonical.maxTokens != 64000 ||
+		canonical.effort != "high" || !canonical.streamPresent || !canonical.stream ||
+		!canonical.toolsPresent || canonical.toolMode != claudeToolModeNone ||
+		len(canonical.toolChoice) != 0 || !claudeJSONEqual(canonical.tools, json.RawMessage("[]")) ||
+		!canonical.thinkingPresent || !canonical.disableThinking ||
+		!claudeJSONEqual(canonical.thinking, title.Thinking) ||
+		canonical.contextManagementPresent || len(canonical.temperature) != 0 {
+		return false, errors.New("Claude Desktop 标题请求不在批准语义闭集")
+	}
+	if canonical.systemKind != claudeCanonicalSystemCustom ||
+		canonical.scenarioHint != "custom-system" || len(canonical.system) != 2 ||
+		len(artifact.Messages.SystemBlocks) == 0 ||
+		canonical.system[0].Type != "text" ||
+		canonical.system[0].Text != artifact.Messages.SystemBlocks[0].Text ||
+		len(bytes.TrimSpace(canonical.system[0].CacheControl)) != 0 ||
+		canonical.system[1].Type != "text" ||
+		len(bytes.TrimSpace(canonical.system[1].CacheControl)) != 0 {
+		return false, errors.New("Claude Desktop 标题 system 不在批准语义闭集")
+	}
+	promptDigest := sha256.Sum256([]byte(canonical.system[1].Text))
+	if hex.EncodeToString(promptDigest[:]) != claudeDesktopTitlePromptSHA256 {
+		return false, errors.New("Claude Desktop 标题提示词摘要不在批准闭集")
+	}
+	var maxTokens int
+	var stream bool
+	if json.Unmarshal(title.MaxTokens, &maxTokens) != nil ||
+		json.Unmarshal(title.Stream, &stream) != nil || !stream {
+		return false, errors.New("Claude TUI title 画像不完整")
+	}
+	canonical.model = title.Model
+	canonical.tools = append(json.RawMessage(nil), title.Tools...)
+	canonical.toolChoice = nil
+	canonical.toolMode = claudeToolModeNone
+	canonical.toolsPresent = title.ToolsPresent
+	canonical.system = cloneClaudeSystemBlocks(title.SystemBlocks)
+	canonical.systemKind = claudeCanonicalSystemOfficial
+	canonical.scenarioHint = "tui-title"
+	canonical.maxTokens = maxTokens
+	canonical.effort = ""
+	canonical.outputConfig = append(json.RawMessage(nil), title.OutputConfig...)
+	canonical.temperature = append(json.RawMessage(nil), title.Temperature...)
+	canonical.thinking = append(json.RawMessage(nil), title.Thinking...)
+	canonical.thinkingPresent = title.ThinkingPresent
+	canonical.thinkingDisplay = ""
+	canonical.contextManagement = nil
+	canonical.contextManagementPresent = false
+	canonical.streamPresent = title.StreamPresent
+	canonical.stream = stream
+	canonical.disableThinking = false
+	return true, nil
 }
 
 func parseClaudeRequestedTemperature(

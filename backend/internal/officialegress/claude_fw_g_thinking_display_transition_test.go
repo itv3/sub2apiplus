@@ -196,6 +196,9 @@ func claudeFWGThinkingDisplayTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if claudeFWGDesktopTitleTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	source, err := loadClaudeFWGThinkingDisplaySourceReceipt()
 	if err != nil {
 		return false
@@ -282,7 +285,10 @@ func TestClaudeFWGThinkingDisplayTransitionsAreFrozen(t *testing.T) {
 			if readErr != nil {
 				t.Fatal(readErr)
 			}
-			if got := claudeFWGCountTokensDigest(raw); got != transition.ToSHA256 {
+			if got := claudeFWGCountTokensDigest(raw); got != transition.ToSHA256 &&
+				!claudeFWGDesktopTitleTransitionSupersedes(
+					transition.Path, transition.ToSHA256, got,
+				) {
 				t.Fatalf(
 					"Claude FW-G thinking.display transition 漂移：path=%s got=%s want=%s",
 					transition.Path, got, transition.ToSHA256,

@@ -1,0 +1,54 @@
+{
+  "schema_version": "official-egress-claude-fw-g-desktop-title-test-transition/v1",
+  "date": "2026-08-21",
+  "phase": "FW-G",
+  "base_commit": "29fbcd3dd6b021c09e91f6b812f4a31b1c233d5f",
+  "source_transition": {
+    "path": "docs/egress/maintenance/claude-fw-g-desktop-title-source-transition.json",
+    "sha256": "3d176f9b24549388936fd918e3eb2a160263eac372160611b42ab3dd62da6884"
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/claude_desktop_title_test.go",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "e41217b2e018b5be9587bb2fd0359a2c2ab0ed289de99771069b2739d5a5c772",
+      "reason": "用真实 2.1.237 标题提示词冻结解析、Planner facts、strict 执行链、2.1.226 最终 wire，以及 format、提示词、effort、工具和额外字段负例。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_count_tokens_transition_test.go",
+      "from_sha256": "1fb21b1fc703d2c9556b3294db34c890cc0f44e8b9d11f46ba00f99ad8fa09bb",
+      "to_sha256": "727edb976973cfa22dfb50a9e5600d20dc9632d204d8999677f84467311f3835",
+      "reason": "历史 count_tokens transition 只接受本次 Desktop title 后继 transition 的精确承接。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_desktop_compat_transition_test.go",
+      "from_sha256": "1a307102cd7481d2563406d503506795142786201d7ad2955e53060f0c3b6a87",
+      "to_sha256": "ddbd623140801d4eb7b5c7fc7dc61a36d85948b213d192d34b286df1bd5a63fb",
+      "reason": "历史 Desktop compatibility transition 只接受本次 Desktop title 后继 transition 的精确承接。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_support_envelope_transition_test.go",
+      "from_sha256": "b13c848eeb8e7a7ded6a056650ad5e7ba8389765ed52686a59a2a17592c7edb0",
+      "to_sha256": "6a6c139c60d546fbc0c36c16114dfeccd2b6bdfb2b8d2c9423f79d82b0c98f20",
+      "reason": "历史 SupportEnvelope transition 只接受本次 Desktop title 后继 transition 的精确承接。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_thinking_display_transition_test.go",
+      "from_sha256": "323824fc35067cc4ba139433e7c2702ac92ce01efa2b5dafe3615826e62f715e",
+      "to_sha256": "e3abae6d0a1ff445adb531618653b8f0c84e53de7c07705531ee8cfaf5719bd6",
+      "reason": "历史 thinking.display transition 只接受本次 Desktop title 后继 transition，并精确承接已批准但漏记的指南摘要。"
+    }
+  ],
+  "targeted_tests": [
+    "TestClaudeFWGDesktopTitleNormalizesToFrozenTUITitleWire",
+    "TestClaudeFWGDesktopTitleExecutesThroughStrictCandidate",
+    "TestClaudeFWGDesktopTitleUnknownShapesRemainFailClosed"
+  ],
+  "required_rule_count": 40,
+  "atomic_assertion_count": 110,
+  "wire_sha256": "07dbb15e8a621c4ef4922a9dec09e08d032fd649414f7d2f572c95c87b5679a7",
+  "production_selector_changed": false,
+  "vircs_service_changed": false,
+  "codex_final_wire": "zero_difference_required",
+  "result": "passed"
+}

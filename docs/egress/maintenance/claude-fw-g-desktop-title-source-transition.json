@@ -1,0 +1,103 @@
+{
+  "schema_version": "official-egress-claude-fw-g-desktop-title-source-transition/v1",
+  "date": "2026-08-21",
+  "phase": "FW-G",
+  "base_commit": "29fbcd3dd6b021c09e91f6b812f4a31b1c233d5f",
+  "trigger": "本机 Claude Desktop 2.1.237 通过 DMIT 第三方 Anthropic Messages 入口生成会话标题时，实测的 output_config 同时包含 effort 与 format，既有 Candidate 因 format 不在第三方批准闭集而 fail-close。",
+  "prior_transitions": [
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-thinking-display-source-transition.json",
+      "sha256": "015b430cfd61cbf8434fe790a61b85e64a6425b8de6e5aeae366ea0649712d2a"
+    },
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-thinking-display-test-transition.json",
+      "sha256": "b23717fe96bfb4af9bb1c5b81c797911ef0c0aa59db375c078d83a87e3effa6f"
+    }
+  ],
+  "official_evidence": {
+    "desktop_version": "2.1.237",
+    "client_platform": "darwin/arm64",
+    "authentication": "claude.ai-oauth",
+    "privacy": "essential-traffic-no-telemetry",
+    "client_host": "local-mac",
+    "capture_host": "DMIT",
+    "capture_method": "真实官方 Desktop 经 DMIT 的只读 pcap 与请求体结构核对",
+    "user_agent": "claude-cli/2.1.237 (external, claude-desktop-3p, agent-sdk/0.3.237)",
+    "request_method": "POST",
+    "request_target": "/v1/messages?beta=true",
+    "request_body_bytes": 4146,
+    "request_body_sha256": "c2a1a36b97373229f9f101cfaebc2d7d7c3c36647ca8ebcee9479eb4ae5a5f4d",
+    "pcap_sha256": "6d44f6094e3eef5a9a211044efb6b8e70f61e985a1e49a1885cad15fe8720255",
+    "source_model": "claude-sonnet-5",
+    "source_max_tokens": 64000,
+    "source_thinking": "disabled",
+    "source_effort": "high",
+    "source_stream": true,
+    "source_tool_count": 0,
+    "agent_sdk_system_sha256": "0d7062851dd7bd7e66d4be4f12ac4951e3d2f587ec408295333a49963bd3f6b7",
+    "title_prompt_sha256": "765b5ba2fa0a315a3c749c7e54bf5cef450084a745eb01e66371b8b6359d4752",
+    "title_format_sha256": "6a3dca9cf59b8442c703d56464855f8777da4c2e6f5d31c7a82dd5f16494c4f9",
+    "raw_capture_retained": false
+  },
+  "persona_mapping": {
+    "target_version": "2.1.226",
+    "target_entrypoint": "cli",
+    "target_scenario": "tui-title",
+    "target_model": "claude-haiku-4-5-20251001",
+    "target_max_tokens": 32000,
+    "target_thinking": "disabled",
+    "target_temperature": 1,
+    "target_tool_count": 0,
+    "target_output_config_sha256": "bcd793e2583a3d26907643c170d741880269a90fee52ce40f3c5b64dcdfcf08c",
+    "wire_sha256": "07dbb15e8a621c4ef4922a9dec09e08d032fd649414f7d2f572c95c87b5679a7"
+  },
+  "dispositions": [
+    {
+      "finding": "Desktop 2.1.237 使用 sdk-cli system、Sonnet 5、effort=high 与官方标题 format 表达生成标题语义",
+      "result": "只把完整实测闭集规范化为 generate-title 语义；Desktop 的 UA、版本、system、模型和 effort 不拥有 Persona 画像选择权，也不向上游透传。"
+    },
+    {
+      "finding": "format 与 Claude Code 2.1.226 tui-title 的 json_schema 完全一致",
+      "result": "Planner 选择 active Persona 的 cli／tui-title 场景，Compiler 固定重建 2.1.226 的 Haiku、system、thinking、temperature、tools、output_config 和字段顺序。"
+    },
+    {
+      "finding": "Desktop 2.1.237 标题提示词与 2.1.226 TUI 标题提示词文字不同",
+      "result": "仅批准两者共同的生成单字段 title JSON 语义；最终官方可见提示词必须来自 2.1.226 ReleaseBundle，不补造或透传 Desktop 客户端身份。"
+    },
+    {
+      "finding": "未知 format、提示词、模型、thinking、工具、额外字段或未实测组合",
+      "result": "继续 fail-close；不得用宽松字段删除或客户端名称绕过 SupportEnvelope。"
+    }
+  ],
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/claude_body.go",
+      "from_sha256": "0dad456982d4135eb9a4e71cf20c8f13e117dcd6f92f9e6e96f80e253378406c",
+      "to_sha256": "ba45723ed345a30cbd358ea9d0c23fe065df410a921fc3c69aa3eb6d5dd846b7",
+      "reason": "严格识别 Desktop 2.1.237 标题请求闭集，并将规范化标题语义重建为冻结的 2.1.226 tui-title CanonicalRequest。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_runtime.go",
+      "from_sha256": "607fea56eb0e5791d5df6e61e4cb2d903c4384e9f0520b988b8f21f0f6ea9719",
+      "to_sha256": "5b24eec2cedd2cdd44e9045933261b62dfac2f5d9cc64d6c057ff0024af9167c",
+      "reason": "由 Planner 为已验证的第三方标题语义选择可信 cli／tui-title 场景，并允许其进入既有标题状态机。"
+    },
+    {
+      "path": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "from_sha256": "e2f91f2e16edd5618446df27c5a31c2868e1197a762cc40b647c27c0d3a2529a",
+      "to_sha256": "4cc9b2acbbc50203cab78eeeedaf0d4f46aaa4500d082e27fdf5a8e9b937b31b",
+      "reason": "承接此前已批准的第三方 Agent 工具目录处置说明，补齐旧 thinking.display 收据遗漏的文档摘要迁移。"
+    },
+    {
+      "path": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+      "from_sha256": "22cda15d0f33544255d386525872fc4ffe9a48c03cd6874dc61983761e8ce65d",
+      "to_sha256": "5f9271412f2adde4c1fed3b67fafbbd25cf7ddf62df75354c78ed9d141c459f5",
+      "reason": "承接此前已批准的第三方 Agent 工具双向映射、MCP bridge 与 denied 三态框架说明。"
+    }
+  ],
+  "production_selector_changed": false,
+  "vircs_service_changed": false,
+  "dmit_candidate_rebuild_required": true,
+  "codex_final_wire": "zero_difference_required",
+  "result": "passed"
+}
