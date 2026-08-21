@@ -54,8 +54,27 @@ func claudeFWGIngressSnapshotFromContext(
 	return snapshot, true
 }
 
-func (s *GatewayService) shouldRouteClaudeFWGCandidate(c *gin.Context, account *Account) bool {
-	if s == nil || s.cfg == nil || !s.cfg.Gateway.ClaudeFWGCandidateEnabled ||
+func (s *GatewayService) claudeStrictRoutingEnabled() bool {
+	if s == nil || s.cfg == nil {
+		return false
+	}
+	return s.cfg.Gateway.ClaudeFWGCandidateEnabled || strings.EqualFold(
+		strings.TrimSpace(s.cfg.Gateway.ClaudeOfficialClientProfiles.Mode), "active",
+	)
+}
+
+func (s *GatewayService) claudeStrictRuntime() *officialegress.ClaudeRuntime {
+	if s == nil || s.officialEgress == nil {
+		return nil
+	}
+	if s.officialEgress.Claude != nil {
+		return s.officialEgress.Claude
+	}
+	return s.officialEgress.ClaudeCandidate
+}
+
+func (s *GatewayService) shouldRouteClaudeStrictMessages(c *gin.Context, account *Account) bool {
+	if !s.claudeStrictRoutingEnabled() ||
 		c == nil || c.Request == nil || c.Request.URL == nil || account == nil {
 		return false
 	}
@@ -63,8 +82,13 @@ func (s *GatewayService) shouldRouteClaudeFWGCandidate(c *gin.Context, account *
 		c.Request.Method == http.MethodPost && c.Request.URL.Path == "/v1/messages"
 }
 
-func (s *GatewayService) shouldRouteClaudeFWGCountTokens(c *gin.Context, account *Account) bool {
-	if s == nil || s.cfg == nil || !s.cfg.Gateway.ClaudeFWGCandidateEnabled ||
+// shouldRouteClaudeFWGCandidate 保留给 FW-G 历史测试；生产调用使用中立名称。
+func (s *GatewayService) shouldRouteClaudeFWGCandidate(c *gin.Context, account *Account) bool {
+	return s.shouldRouteClaudeStrictMessages(c, account)
+}
+
+func (s *GatewayService) shouldRouteClaudeStrictCountTokens(c *gin.Context, account *Account) bool {
+	if !s.claudeStrictRoutingEnabled() ||
 		c == nil || c.Request == nil || c.Request.URL == nil || account == nil {
 		return false
 	}
@@ -72,6 +96,11 @@ func (s *GatewayService) shouldRouteClaudeFWGCountTokens(c *gin.Context, account
 	return account.Platform == PlatformAnthropic && account.Type == AccountTypeOAuth &&
 		c.Request.Method == http.MethodPost &&
 		(path == "/v1/messages/count_tokens" || path == "/messages/count_tokens")
+}
+
+// shouldRouteClaudeFWGCountTokens 保留给 FW-G 历史测试；生产调用使用中立名称。
+func (s *GatewayService) shouldRouteClaudeFWGCountTokens(c *gin.Context, account *Account) bool {
+	return s.shouldRouteClaudeStrictCountTokens(c, account)
 }
 
 func claudeFWGIngressQueryAllowed(rawQuery string, forceQuery bool) bool {
@@ -96,8 +125,9 @@ func (s *GatewayService) forwardClaudeFWGCountTokens(
 		)
 		return errors.New("Claude FW-G count_tokens query 不在 SupportEnvelope")
 	}
-	if s.officialEgress == nil || s.officialEgress.ClaudeCandidate == nil {
-		return errors.New("Claude FW-G count_tokens route 已开启但 runtime 未注入")
+	runtime := s.claudeStrictRuntime()
+	if runtime == nil {
+		return errors.New("Claude strict count_tokens route 已开启但 runtime 未注入")
 	}
 	if account == nil || parsed == nil || parsed.Body == nil {
 		return errors.New("Claude FW-G count_tokens 缺少入口、账号或请求体")
@@ -124,11 +154,11 @@ func (s *GatewayService) forwardClaudeFWGCountTokens(
 		}
 		proxyURL = account.Proxy.URL()
 	}
-	executionContext := withClaudeCandidateHTTPTransport(
+	executionContext := withClaudeHTTPTransport(
 		ctx, proxyURL, account.ID, claudeFWGConcurrencyLimit(account),
 	)
 	ingress, _ := claudeFWGIngressSnapshotFromContext(c.Request.Context())
-	result, err := s.officialEgress.ClaudeCandidate.ExecuteCountTokens(
+	result, err := runtime.ExecuteCountTokens(
 		executionContext,
 		officialegress.ClaudeEndpointExecution{
 			Body: parsed.Body.Bytes(), AccessToken: accessToken,
@@ -202,8 +232,9 @@ func (s *GatewayService) forwardClaudeFWGCandidate(
 		)
 		return nil, errors.New("Claude FW-G messages query 不在 SupportEnvelope")
 	}
-	if s.officialEgress == nil || s.officialEgress.ClaudeCandidate == nil {
-		return nil, errors.New("Claude FW-G candidate route 已开启但 runtime 未注入")
+	runtime := s.claudeStrictRuntime()
+	if runtime == nil {
+		return nil, errors.New("Claude strict messages route 已开启但 runtime 未注入")
 	}
 	if account.IsCustomBaseURLEnabled() && strings.TrimSpace(account.GetCustomBaseURL()) != "" {
 		return nil, errors.New("Claude FW-G candidate 不允许自定义上游地址")
@@ -226,14 +257,14 @@ func (s *GatewayService) forwardClaudeFWGCandidate(
 		}
 		proxyURL = account.Proxy.URL()
 	}
-	executionContext := withClaudeCandidateHTTPTransport(
+	executionContext := withClaudeHTTPTransport(
 		ctx,
 		proxyURL,
 		account.ID,
 		claudeFWGConcurrencyLimit(account),
 	)
 	ingress, _ := claudeFWGIngressSnapshotFromContext(c.Request.Context())
-	result, err := s.officialEgress.ClaudeCandidate.ExecuteMessages(
+	result, err := runtime.ExecuteMessages(
 		executionContext,
 		officialegress.ClaudeMessagesExecution{
 			Body:         parsed.Body.Bytes(),

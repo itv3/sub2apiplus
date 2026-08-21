@@ -138,9 +138,9 @@ func ProvideTokenRefreshService(
 	officialEgress *OfficialEgressTransitionRuntime,
 ) (*TokenRefreshService, error) {
 	svc := NewTokenRefreshService(accountRepo, oauthService, openaiOAuthService, geminiOAuthService, antigravityOAuthService, cacheInvalidator, schedulerCache, cfg, tempUnschedCache, grokOAuthService)
-	if officialEgress != nil && officialEgress.ClaudeCandidate != nil {
+	if officialEgress != nil && officialEgress.Claude != nil {
 		executor, err := newClaudeFWGTokenRefresher(
-			NewClaudeTokenRefresher(oauthService), officialEgress.ClaudeCandidate, proxyRepo,
+			NewClaudeTokenRefresher(oauthService), officialEgress.Claude, proxyRepo,
 		)
 		if err != nil {
 			return nil, err
@@ -171,9 +171,9 @@ func ProvideClaudeTokenProvider(
 ) (*ClaudeTokenProvider, error) {
 	p := NewClaudeTokenProvider(accountRepo, tokenCache, oauthService)
 	var executor OAuthRefreshExecutor = NewClaudeTokenRefresher(oauthService)
-	if officialEgress != nil && officialEgress.ClaudeCandidate != nil {
+	if officialEgress != nil && officialEgress.Claude != nil {
 		strictExecutor, err := newClaudeFWGTokenRefresher(
-			NewClaudeTokenRefresher(oauthService), officialEgress.ClaudeCandidate, proxyRepo,
+			NewClaudeTokenRefresher(oauthService), officialEgress.Claude, proxyRepo,
 		)
 		if err != nil {
 			return nil, err

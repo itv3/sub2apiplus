@@ -63,6 +63,13 @@ func ProvideOfficialEgressGuard(cfg *config.Config) (*officialegress.Guard, erro
 		if err != nil {
 			return nil, fmt.Errorf("安装 Claude FW-G candidate SinkCatalog：%w", err)
 		}
+	} else if cfg != nil && strings.EqualFold(
+		strings.TrimSpace(cfg.Gateway.ClaudeOfficialClientProfiles.Mode), "active",
+	) {
+		sinkCatalog, err = officialegress.ClaudeProductionSinkCatalog(sinkCatalog)
+		if err != nil {
+			return nil, fmt.Errorf("安装 Claude FW-H production SinkCatalog：%w", err)
+		}
 	}
 	sinkCatalog, err = sinkCatalog.WithRuntimeControls(controls)
 	if err != nil {

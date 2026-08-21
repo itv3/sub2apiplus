@@ -156,6 +156,7 @@ func runMainServer() {
 	defer app.Cleanup()
 	// 记录当前发布指针实际解析到的官方出站画像；候选验收据此取得运行时画像事实。
 	service.EmitOfficialEgressActivationFact(cfg)
+	service.EmitClaudeOfficialEgressActivationFact(cfg)
 	if app.PromptAudit != nil {
 		if err := app.PromptAudit.Start(context.Background()); err != nil {
 			// Startup continues so unrelated APIs stay up. Fail-closed (unavailable)

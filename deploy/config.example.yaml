@@ -320,6 +320,9 @@ gateway:
   # 官方客户端画像发布指针：active 使用当前实抓画像，previous 整体回退上一画像。
   official_client_profiles:
     mode: active
+  # Claude Code Persona 使用独立发布指针；legacy 保持遗留链，active 启用已批准正式 Release。
+  claude_official_client_profiles:
+    mode: legacy
   # 官方出站 Guard。变更集 1C 默认 fail-close；未知 route 与无效 binding 禁止永久全局 observe。
   official_egress_guard:
     unknown_route_policy: enforce

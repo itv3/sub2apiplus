@@ -9,9 +9,11 @@ import (
 // OfficialEgressTransitionRuntime 保存进程级不可变 Catalog、Bundle 解析器与执行器。
 // 名称暂为兼容既有 service 字段；1A 的临时 provider/compiler 适配器已删除。
 type OfficialEgressTransitionRuntime struct {
-	BundleResolver   *officialegress.BundleResolver
-	Guard            *officialegress.Guard
-	CodexExecutor    *officialegress.Executor
+	BundleResolver *officialegress.BundleResolver
+	Guard          *officialegress.Guard
+	CodexExecutor  *officialegress.Executor
+	Claude         *officialegress.ClaudeRuntime
+	// ClaudeCandidate 只在 FW-G 隔离模式指向 Claude；production active 保持为空。
 	ClaudeCandidate  *officialegress.ClaudeCandidateRuntime
 	webSocketPort    *officialCodexWebSocketPort
 	CodexReleaseMode officialegress.ReleaseMode

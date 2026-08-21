@@ -99,6 +99,7 @@ func TestLoadOfficialEgressGuardDefaultsToFailClose(t *testing.T) {
 	require.Equal(t, "enforce", cfg.Gateway.OfficialEgressGuard.UnregisteredSinkPolicy)
 	require.Equal(t, 100, cfg.Gateway.OfficialEgressGuard.CanaryPercent)
 	require.False(t, cfg.Gateway.ClaudeFWGCandidateEnabled)
+	require.Equal(t, "legacy", cfg.Gateway.ClaudeOfficialClientProfiles.Mode)
 }
 
 func TestLoadClaudeFWGCandidateRequiresDMITInstance(t *testing.T) {
@@ -494,6 +495,23 @@ func TestOfficialClientProfilesDefaultAndValidation(t *testing.T) {
 	require.NoError(t, cfg.Validate())
 	cfg.Gateway.OfficialClientProfiles.Mode = "invalid"
 	require.ErrorContains(t, cfg.Validate(), "gateway.official_client_profiles.mode")
+}
+
+func TestClaudeOfficialClientProfilesValidationAndCandidateIsolation(t *testing.T) {
+	resetViperWithJWTSecret(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "legacy", cfg.Gateway.ClaudeOfficialClientProfiles.Mode)
+
+	cfg.Gateway.ClaudeOfficialClientProfiles.Mode = "active"
+	require.NoError(t, cfg.Validate())
+	cfg.Gateway.ClaudeFWGCandidateEnabled = true
+	cfg.Gateway.OfficialEgressGuard.InstanceID = "DMIT"
+	require.ErrorContains(t, cfg.Validate(), "不能同时启用")
+
+	cfg.Gateway.ClaudeFWGCandidateEnabled = false
+	cfg.Gateway.ClaudeOfficialClientProfiles.Mode = "invalid"
+	require.ErrorContains(t, cfg.Validate(), "gateway.claude_official_client_profiles.mode")
 }
 
 func TestOpenAIPrivacyBrowserDefaultsAndValidation(t *testing.T) {

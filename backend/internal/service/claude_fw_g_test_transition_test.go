@@ -89,12 +89,19 @@ func validateClaudeFWGServiceTestTransition(
 }
 
 func claudeFWGTestTransitionSupersedesService(path, priorDigest, currentDigest string) bool {
+	if claudeFWHSourceTransitionSupersedesService(path, priorDigest, currentDigest) {
+		return true
+	}
 	receipt, raw, err := readClaudeFWGServiceTestTransition()
 	if err != nil || validateClaudeFWGServiceTestTransition(receipt, raw) != nil {
 		return false
 	}
 	for _, transition := range receipt.Transitions {
-		if transition.Path != path || transition.ToSHA256 != currentDigest {
+		if transition.Path != path ||
+			(transition.ToSHA256 != currentDigest &&
+				!claudeFWHSourceTransitionSupersedesService(
+					path, transition.ToSHA256, currentDigest,
+				)) {
 			continue
 		}
 		if transition.FromSHA256 == priorDigest ||
@@ -119,7 +126,10 @@ func TestClaudeFWGServiceTestTransitionIsFrozen(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := compatibilityClosureDigest(source); got != transition.ToSHA256 {
+		if got := compatibilityClosureDigest(source); got != transition.ToSHA256 &&
+			!claudeFWHSourceTransitionSupersedesService(
+				transition.Path, transition.ToSHA256, got,
+			) {
 			t.Fatalf(
 				"Claude FW-G test transition 漂移：path=%s got=%s want=%s",
 				transition.Path,

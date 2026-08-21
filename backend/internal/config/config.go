@@ -943,6 +943,9 @@ type GatewayConfig struct {
 	// ClaudeFWGCandidateEnabled 仅在 DMIT 隔离实例安装 Claude Code 2.1.226
 	// FW-G strict candidate。默认关闭，Vircs production 不得开启。
 	ClaudeFWGCandidateEnabled bool `mapstructure:"claude_fw_g_candidate_enabled"`
+	// ClaudeOfficialClientProfiles 是 Claude Code Persona 独立的生产发布指针。
+	// legacy 保持冻结遗留链；active 只解析已晋升且通过终态门禁的正式 Release。
+	ClaudeOfficialClientProfiles GatewayClaudeOfficialClientProfilesConfig `mapstructure:"claude_official_client_profiles"`
 	// OpenAIPrivacyBrowser: privacy 端点 Chrome 133/XHR 画像的独立灰度、回滚和失败冷却策略。
 	OpenAIPrivacyBrowser GatewayOpenAIPrivacyBrowserConfig `mapstructure:"openai_privacy_browser"`
 	// OpenAIWS: OpenAI Responses WebSocket 配置（默认开启，可按需回滚到 HTTP）
@@ -1070,6 +1073,12 @@ type GatewayGrokConfig struct {
 
 // GatewayOfficialClientProfilesConfig 控制官方客户端画像的服务级发布指针。
 type GatewayOfficialClientProfilesConfig struct {
+	Mode string `mapstructure:"mode"`
+}
+
+// GatewayClaudeOfficialClientProfilesConfig 控制 Claude Code Persona 的生产发布指针。
+// 首次激活的 operational rollback 由冻结遗留部署承担，不伪造 strict rollback Release。
+type GatewayClaudeOfficialClientProfilesConfig struct {
 	Mode string `mapstructure:"mode"`
 }
 
@@ -2337,6 +2346,7 @@ func setDefaults() {
 	viper.SetDefault("gateway.official_egress_guard.sink_controls_json", "")
 	viper.SetDefault("gateway.official_egress_guard.policy_overrides_json", "")
 	viper.SetDefault("gateway.claude_fw_g_candidate_enabled", false)
+	viper.SetDefault("gateway.claude_official_client_profiles.mode", "legacy")
 	viper.SetDefault("gateway.openai_privacy_browser.enabled", false)
 	viper.SetDefault("gateway.openai_privacy_browser.canary_percent", 0)
 	viper.SetDefault("gateway.openai_privacy_browser.platform", "auto")
@@ -3266,6 +3276,17 @@ func (c *Config) Validate() error {
 	if c.Gateway.ClaudeFWGCandidateEnabled &&
 		!strings.EqualFold(strings.TrimSpace(c.Gateway.OfficialEgressGuard.InstanceID), "DMIT") {
 		return fmt.Errorf("gateway.claude_fw_g_candidate_enabled 只允许在 instance_id=DMIT 的隔离实例开启")
+	}
+	claudeProductionMode := strings.ToLower(strings.TrimSpace(
+		c.Gateway.ClaudeOfficialClientProfiles.Mode,
+	))
+	switch claudeProductionMode {
+	case "legacy", "active":
+	default:
+		return fmt.Errorf("gateway.claude_official_client_profiles.mode must be one of: legacy/active")
+	}
+	if c.Gateway.ClaudeFWGCandidateEnabled && claudeProductionMode == "active" {
+		return fmt.Errorf("Claude FW-G candidate 与 production active 不能同时启用")
 	}
 	if c.Gateway.OpenAIPrivacyBrowser.CanaryPercent < 0 ||
 		c.Gateway.OpenAIPrivacyBrowser.CanaryPercent > 100 {

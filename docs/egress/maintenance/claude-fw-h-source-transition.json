@@ -1,0 +1,214 @@
+{
+  "schema_version": "official-egress-claude-fw-h-source-transition/v1",
+  "date": "2026-08-21",
+  "phase": "FW-H",
+  "base_commit": "619a63818f49ecc0b99bf4a16b7d776f939a452e",
+  "approval_fact": {
+    "path": "backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-fw-h-approval.json",
+    "sha256": "73e690d20fdb36688d70247d4c857f6aa31ebfc6dcd755fbbcc8276e37d74f1a"
+  },
+  "prior_receipts": [
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-fable-desktop-title-source-transition.json",
+      "sha256": "d03add436e6e970bbaca3947d7fdf9a50a43879f78a3f89e49bcf1534d28bc56"
+    },
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-fable-desktop-title-test-transition.json",
+      "sha256": "089b0f1c13f1e2a34aa982f8e2220c4a8c4149df1746d932ac14daa40babdb61"
+    },
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-three-model-acceptance.json",
+      "sha256": "16dc60bc46eede747cb0535e53367c134a28466f12399f06a485693e142b15a9"
+    }
+  ],
+  "release": {
+    "version": "2.1.226",
+    "models": [
+      "claude-sonnet-5",
+      "claude-opus-5",
+      "claude-fable-5"
+    ],
+    "profile_sha256": "e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5",
+    "wire_sha256": "a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d",
+    "release_sha256": "48586f47e0abcde9ea357c08c1465253eaa296862153a89c20e4cf0f1e6f52f8",
+    "bundle_sha256": "ceb1e30740ab4223684f478f717dd2902d8fdad0c6efad5a69b761d95b4aefae"
+  },
+  "transitions": [
+    {
+      "path": "backend/cmd/egressscan/classify.go",
+      "from_sha256": "5d20596c2e4da6f5e64cb454f7dd045ba92664cc5673f9b869a889dfe5436b2d",
+      "to_sha256": "dc3449aed5f180862f3e294d6f518130b05ae4df325fd79badb7a6538e7aee33",
+      "reason": "把 Claude 共用 Candidate／Production HTTPUpstream 终点按精确函数名登记为受管基础设施 delegation。"
+    },
+    {
+      "path": "backend/cmd/egressscan/lifecycle_test.go",
+      "from_sha256": "0169dcfffe9e1203d2017bde9a67b0467aec08fb38bba90218aba036608f1a16",
+      "to_sha256": "9b225bcd4b1ffbe20a9f03fccd6efd84f8d8422b3a08df301d8a519a3f9d1f32",
+      "reason": "冻结 FW-H 复审后的 bootstrap inventory lock 摘要。"
+    },
+    {
+      "path": "backend/cmd/server/main.go",
+      "from_sha256": "40542e66119ceeff811071250121a90cc350c56b2b0a0a2d036601f5ca6b5c5d",
+      "to_sha256": "ed6112349e20ff9609f5556da1a63887d453db04697441d58a651542c9da9009",
+      "reason": "在共享运行时构造完成后追加 Claude 独立 activation fact，不改变 Codex 激活事实。"
+    },
+    {
+      "path": "backend/internal/config/config.go",
+      "from_sha256": "0f1e43060ec0e09220006a4063e647d36aaa6d4be7d8bdecf4572ff6e1b3a151",
+      "to_sha256": "f76b526f55f00db9c7509d8f3ee517223086f3a852a544d4dbeeddab71a9008c",
+      "reason": "增加 Claude 独立 legacy/active production selector，并阻断与 FW-G candidate 同时启用。"
+    },
+    {
+      "path": "backend/internal/config/config_test.go",
+      "from_sha256": "5bbdccc36ad039b73c702bf80199aefbcf20c1e7e4a40267e6a0118575e3d412",
+      "to_sha256": "d31256a91b019f3cb9ecfdd33d52b7a2e6fa833eea02be6a4e6d4289c1d6aeba",
+      "reason": "冻结 Claude selector 默认值、合法值与 candidate 互斥门禁。"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-fw-h-approval.json",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "73e690d20fdb36688d70247d4c857f6aa31ebfc6dcd755fbbcc8276e37d74f1a",
+      "reason": "新增 production_replacement ApprovalFact，绑定 FW-G 验收、三模型 Release 和三个运行 Envelope。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_candidate_catalog.go",
+      "from_sha256": "4266bcce5a0f93013a52dc56e0d3e58a708ab9a84473374d4c71bf15b7a98c46",
+      "to_sha256": "c37324eeb697fa1ff7a33d273eeb7d50dd5c50f8c96d54868944500e232dd4b1",
+      "reason": "把 Candidate 与 Production Sink Catalog 分离为不同 changeset、owner 和 MigrationReceipt。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_source_transition_test.go",
+      "from_sha256": "fbef8a45a7e4c1d9940926d24e6caba1785591399e61f4c0a3255c88d3cdf118",
+      "to_sha256": "68d3fc2c9544b690b5590bac7632c0a23913cf265cefc3e2ebbc9b9ca0cde5e3",
+      "reason": "保留 FW-G 初始收据并只接受本次 FW-H 精确后继摘要。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_test_transition_test.go",
+      "from_sha256": "f89db4513f2d7646fc3ddc7acd6a75eae943024869ceddc14c9359e39162badf",
+      "to_sha256": "4d1188d3e5c3f77673fef6986fb362a37662e8cac980458cb94c20a7e2f4ae50",
+      "reason": "让 FW-G 历史测试收据通过本次 FW-H 后继关系继续保持不可变。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_three_model_acceptance_test.go",
+      "from_sha256": "1fbdfdfd8b8a6490ea0e0ad225991dadc2ba846edcb987379b24bac3f731aaa9",
+      "to_sha256": "b13ce331c4786276cea558f6952ca59da8a8f017c5e7dcb50e0637ab716985b7",
+      "reason": "允许已验收 FW-G 源码通过精确 FW-H 生产迁移承接到当前摘要。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_production_test.go",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "b1bdedffc56a9b01918c75b88f148a6cbf35f7f37aaaee0b636f97005adad6ef",
+      "reason": "新增正式 Approval、Release、Catalog 隔离和启动期 fail-close 测试。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_production_release.go",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "989e86699caf844fd62baebc40641978fdb975443f4857a695fdc428070f07f8",
+      "reason": "从嵌入式 ApprovalFact 复算并解析 Claude production active Release 坐标。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_runtime.go",
+      "from_sha256": "22c631761c28a142c70f064debe2c386517471b2e7b585acdf3bdb9063af9a54",
+      "to_sha256": "6b018039f988c30b1d1e5e6b3d468d005cee285c05ff4a07aa07e2e246825c71",
+      "reason": "把成熟 Candidate 执行内核抽成共用 ClaudeRuntime，并按角色强制匹配 Catalog 与生产批准。"
+    },
+    {
+      "path": "backend/internal/officialegress/executor_one_shot_retirement_test.go",
+      "from_sha256": "2dec8cd717b38d06b3659538c9863858dd6da9d4a4da602d1ed5d92c7553a566",
+      "to_sha256": "fbb8979a634e6674867147538c12ea2bb81cdb6fc9a8964ebe685395bc03f281",
+      "reason": "把 FW-H 追加式源码迁移纳入 Executor 历史摘要链。"
+    },
+    {
+      "path": "backend/internal/officialegress/route_catalog.go",
+      "from_sha256": "ac31d1778ec08133124455f0b0c2343c326633a67cbecd35f3d9ea8692ae1dd8",
+      "to_sha256": "fe5a14a77cf48441390a465c82dc3933cd711a3da62b514738406edce2ec6d79",
+      "reason": "让同一 Claude Profile 为 Candidate 与 Production Catalog 解析 route，不再把角色写死为 candidate。"
+    },
+    {
+      "path": "backend/internal/repository/official_egress_claude_fw_h_test.go",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "20dbf61b4110ac5e89dcfc31596a167bbfd354e13b3018e8fd68f773bc39b947",
+      "reason": "验证 repository Guard 在 production Catalog 下得到正式 Claude binding。"
+    },
+    {
+      "path": "backend/internal/repository/official_egress_guard.go",
+      "from_sha256": "5bdd021b905c360770f06fe510a95104236ce39d48a3fe0b9e4d565cf5b9c179",
+      "to_sha256": "599d96a8b8c49003f7e342820acb0eeb6c8bb0a26ec43d32a5dc2a473448cd62",
+      "reason": "按 Claude 独立 selector 构造 Candidate、Production 或 legacy 进程 Catalog。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_source_transition_test.go",
+      "from_sha256": "2802379d33652a36b5d1c0d19c2723ffea7e2c220df14f1b28be99fedd16c55d",
+      "to_sha256": "f7ac7a794bde6e297d560c0ab84efe6fc6a8db08360f8a2ff17c3fa1a9c8d4b4",
+      "reason": "让 service 层 FW-G 源码历史链只通过本次精确 FW-H 后继摘要到达当前实现。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_test_transition_test.go",
+      "from_sha256": "de32b4c8f5447382049f2386083aaf1d2fad155a48ae5673d60d729a6a5993e3",
+      "to_sha256": "8babbac8d5049542c2f0f6cc31c1577a5dcc1afe4b9107aad74e1915fbb575cf",
+      "reason": "让 service 层 FW-G 测试历史链识别本次追加式 FW-H 迁移。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_h_production_test.go",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "b222e0d2a7fc27a558c02a0f5268bccd5e5bee6331c251e24d0118ee4c185e01",
+      "reason": "新增 selector、正式路由、入口隔离和 Claude 独立 activation fact 测试。"
+    },
+    {
+      "path": "backend/internal/service/claude_official_egress_activation_fact.go",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "9c639692e8d724d891a3ce96c829dd266c571d5405ba6f5dac0fbe4f93d29b81",
+      "reason": "新增 Claude 独立 activation fact，绑定运行时解析的 Release、Approval 与镜像身份。"
+    },
+    {
+      "path": "backend/internal/service/gateway_claude_fw_g.go",
+      "from_sha256": "f242a7b38d2e7a48bac1dbde3e428f6876dc1c393db1bfea9cb55afa54680988",
+      "to_sha256": "8978cf81424e8d141eec31b016f84292b743384c92ccf90aba507d9f98a36b2c",
+      "reason": "把 Messages 与 count_tokens 的 strict 选择从 Candidate 扩展到 production active，仍由账号 OAuth persona 决定。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_1a_transition.go",
+      "from_sha256": "b65c1173437ddda735aa6d6085e73ead7b6360b909cf890de95004cd0ca68519",
+      "to_sha256": "3d398835ab0499077ce25bdea9889e46f9f49c7561bad9236da381c2e034cdc5",
+      "reason": "在进程运行态中分离 Claude production Runtime 与 FW-G Candidate 别名。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_1b_executor.go",
+      "from_sha256": "270f4439f1d39f1a75a42f171b119b507ad4998ed9ee4ae7e19bf7d94f30e334",
+      "to_sha256": "6771cb9904274a9664292d13094594b6969460f440ee1527fe36e4f2fdb1573d",
+      "reason": "按互斥 selector 构造 Candidate 或 Production ClaudeRuntime，并共用同一受管传输端口。"
+    },
+    {
+      "path": "backend/internal/service/wire.go",
+      "from_sha256": "cd67a78b1e20c4a5ab7c4b73d3fa99fcc645eb46f120b26eeae42699b899702c",
+      "to_sha256": "9101d38edf45b13ae3bfdd218cadbcdd7b0a667f6a2b10ec9ad7650266d534b4",
+      "reason": "让 Claude OAuth token refresh 在 production active 下进入同一 strict Runtime。"
+    },
+    {
+      "path": "deploy/config.example.yaml",
+      "from_sha256": "6a56063c83b37a6761d5cafb2dce0d4269722b5dbd99f6b80095a71b830053de",
+      "to_sha256": "58a1bff6653169a20f96a563be567b1ff4c9dfc2714d51d30f34472665cf8183",
+      "reason": "记录 Claude 独立 selector 的默认 legacy 配置。"
+    },
+    {
+      "path": "docs/egress/maintenance/bootstrap-inventory-lock.json",
+      "from_sha256": "edf349af67eb9821014c8639df4f2a76e61f6cb1a024d09a2019bb37816200b1",
+      "to_sha256": "88d027eefa197d564d1bc3a902581be412768239a06902facf448d51e5f7d24c",
+      "reason": "保持 bootstrap inventory 原文不变，只复审 FW-H 共用 Claude Executor 的精确 terminal delegation。"
+    }
+  ],
+  "safety": {
+    "claude_selector_scope": "independent",
+    "candidate_catalog": "claude-code-2.1.226-fw-g-candidate",
+    "production_catalog": "claude-code-2.1.226-fw-h-production",
+    "codex_final_wire": "zero_difference_required",
+    "retained_legacy": [
+      "chat-completions-oauth",
+      "responses-oauth"
+    ],
+    "removal_receipt_allowed": false,
+    "deployment_performed": false,
+    "vircs_production_changed": false
+  },
+  "result": "passed"
+}

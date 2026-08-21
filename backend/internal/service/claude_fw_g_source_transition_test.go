@@ -101,6 +101,9 @@ func validateClaudeFWGServiceSourceTransition(
 }
 
 func claudeFWGSourceTransitionSupersedesService(path, priorDigest, currentDigest string) bool {
+	if claudeFWHSourceTransitionSupersedesService(path, priorDigest, currentDigest) {
+		return true
+	}
 	if claudeFWGModelCapabilitySourceTransitionSupersedesService(
 		path, priorDigest, currentDigest,
 	) {
@@ -119,7 +122,11 @@ func claudeFWGSourceTransitionSupersedesService(path, priorDigest, currentDigest
 		return false
 	}
 	for _, transition := range receipt.Transitions {
-		if transition.Path != path || transition.ToSHA256 != currentDigest {
+		if transition.Path != path ||
+			(transition.ToSHA256 != currentDigest &&
+				!claudeFWHSourceTransitionSupersedesService(
+					path, transition.ToSHA256, currentDigest,
+				)) {
 			continue
 		}
 		if transition.FromSHA256 == priorDigest ||
@@ -153,6 +160,9 @@ func claudeFWGModelCapabilitySourceTransitionSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if claudeFWHSourceTransitionSupersedesService(path, priorDigest, currentDigest) {
+		return true
+	}
 	raw, err := os.ReadFile(
 		"../../../docs/egress/maintenance/claude-fw-g-model-capability-source-transition.json",
 	)
@@ -173,7 +183,11 @@ func claudeFWGModelCapabilitySourceTransitionSupersedesService(
 		return false
 	}
 	for _, transition := range receipt.Transitions {
-		if transition.Path == path && transition.ToSHA256 == currentDigest &&
+		currentReached := transition.ToSHA256 == currentDigest ||
+			claudeFWHSourceTransitionSupersedesService(
+				path, transition.ToSHA256, currentDigest,
+			)
+		if transition.Path == path && currentReached &&
 			(transition.FromSHA256 == priorDigest ||
 				claudeFWGServiceHistoricalSourceReaches(
 					path, priorDigest, transition.FromSHA256,
@@ -315,6 +329,9 @@ func TestClaudeFWGServiceSourceTransitionIsFrozen(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got := compatibilityClosureDigest(source); got != transition.ToSHA256 &&
+			!claudeFWHSourceTransitionSupersedesService(
+				transition.Path, transition.ToSHA256, got,
+			) &&
 			!claudeFWGModelCapabilitySourceTransitionSupersedesService(
 				transition.Path, transition.ToSHA256, got,
 			) {

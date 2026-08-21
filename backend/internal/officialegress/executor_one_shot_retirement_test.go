@@ -81,6 +81,7 @@ func TestExecutorOneShotCompatibilityRetirementReceiptAndSourceExtinction(t *tes
 	multiPersonaTransition := loadMultiPersonaControlSourceTransition(t)
 	multiPersonaV2Transition := loadMultiPersonaControlSourceTransitionV2(t)
 	claudeFWGTransition := loadClaudeFWGSourceTransition(t)
+	claudeFWHTransition := loadClaudeFWHSourceTransition(t)
 	for _, transition := range receipt.SourceTransitions {
 		if transition.Path == "" || transition.FromSHA256 == "" ||
 			transition.ToSHA256 == "" || transition.Reason == "" {
@@ -106,6 +107,12 @@ func TestExecutorOneShotCompatibilityRetirementReceiptAndSourceExtinction(t *tes
 		if approved, ok := claudeFWGTransition[transition.Path]; ok {
 			if approved.FromSHA256 != expected || strings.TrimSpace(approved.Reason) == "" {
 				t.Fatalf("Claude FW-G source transition 未承接上一层摘要：%s", transition.Path)
+			}
+			expected = approved.ToSHA256
+		}
+		if approved, ok := claudeFWHTransition[transition.Path]; ok {
+			if approved.FromSHA256 != expected || strings.TrimSpace(approved.Reason) == "" {
+				t.Fatalf("Claude FW-H source transition 未承接上一层摘要：%s", transition.Path)
 			}
 			expected = approved.ToSHA256
 		}

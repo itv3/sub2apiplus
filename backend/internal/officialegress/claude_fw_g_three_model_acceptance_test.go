@@ -397,6 +397,9 @@ func claudeFWGThreeModelAcceptanceSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if claudeFWHSourceTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	receipt, err := loadClaudeFWGThreeModelAcceptance()
 	if err != nil {
 		return false

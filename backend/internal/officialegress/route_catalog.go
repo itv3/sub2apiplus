@@ -169,7 +169,7 @@ func NewOfficialRouteCatalog(sinks SinkCatalog) (OfficialRouteCatalog, error) {
 				}
 			} else if sink.Persona() == PersonaClaudeCode &&
 				sink.EndpointEvidence() == EndpointEvidenceClaudeProfile {
-				endpoint, found := claudeCandidateEndpointForRoute(claudeProfile, sink, route)
+				endpoint, found := claudeEndpointForRoute(claudeProfile, sink, route)
 				if !found {
 					return OfficialRouteCatalog{}, fmt.Errorf(
 						"Claude Sink %s 的 route 没有 FW-G endpoint 绑定：%s",

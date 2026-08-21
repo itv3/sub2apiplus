@@ -284,22 +284,36 @@ func claudeResponseRequestID(headers http.Header) string {
 	return requestID
 }
 
-// ClaudeCandidateRuntime 是 FW-G 隔离 candidate 的独立 Planner／Compiler／Executor。
-type ClaudeCandidateRuntime struct {
-	profile       claudeFWGProfile
-	wire          claudeWireArtifact
-	sinks         SinkCatalog
-	executor      *Executor
-	newRequestID  func() string
-	newCCH        func() (string, error)
-	retryJitter   func(int) (int, error)
-	sleep         func(context.Context, time.Duration) error
-	startupMu     sync.Mutex
-	startupRuns   map[string]*claudeStartupRun
-	sessionMu     sync.Mutex
-	sessions      map[string]*claudeSessionState
-	requestOwners map[string]string
+type claudeRuntimeRole string
+
+const (
+	claudeRuntimeRoleCandidate  claudeRuntimeRole = "validation_candidate"
+	claudeRuntimeRoleProduction claudeRuntimeRole = "production_active"
+)
+
+// ClaudeRuntime 是 Candidate 与 production active 共用的 Claude Persona 执行内核。
+// 角色只决定可接受的 Catalog 与批准事实，不改变已经冻结的 Profile／Wire。
+type ClaudeRuntime struct {
+	role              claudeRuntimeRole
+	approvalDigest    string
+	productionRelease ResolvedClaudeProductionRelease
+	profile           claudeFWGProfile
+	wire              claudeWireArtifact
+	sinks             SinkCatalog
+	executor          *Executor
+	newRequestID      func() string
+	newCCH            func() (string, error)
+	retryJitter       func(int) (int, error)
+	sleep             func(context.Context, time.Duration) error
+	startupMu         sync.Mutex
+	startupRuns       map[string]*claudeStartupRun
+	sessionMu         sync.Mutex
+	sessions          map[string]*claudeSessionState
+	requestOwners     map[string]string
 }
+
+// ClaudeCandidateRuntime 是旧调用点的源码兼容名，不是第二套执行实现。
+type ClaudeCandidateRuntime = ClaudeRuntime
 
 type claudeStartupRun struct {
 	done chan struct{}
@@ -346,7 +360,7 @@ type claudeSessionState struct {
 }
 
 type claudeSessionLease struct {
-	runtime        *ClaudeCandidateRuntime
+	runtime        *ClaudeRuntime
 	sessionKey     string
 	lineKey        string
 	kind           claudeSessionRequestKind
@@ -368,9 +382,47 @@ func NewClaudeCandidateRuntime(
 	sinks SinkCatalog,
 	guard *Guard,
 	port HTTPUpstreamTransportPort,
-) (*ClaudeCandidateRuntime, error) {
+) (*ClaudeRuntime, error) {
+	return newClaudeRuntime(claudeRuntimeRoleCandidate, sinks, guard, port)
+}
+
+// NewClaudeProductionRuntime 只接受正式 Catalog，并在构造 Executor 前复算 FW-H
+// ApprovalFact 与当前三模型 Release。任一摘要漂移都会让 Claude Persona 启动失败。
+func NewClaudeProductionRuntime(
+	sinks SinkCatalog,
+	guard *Guard,
+	port HTTPUpstreamTransportPort,
+) (*ClaudeRuntime, error) {
+	release, err := ResolveClaudeProductionRelease()
+	if err != nil {
+		return nil, err
+	}
+	return newClaudeRuntime(claudeRuntimeRoleProduction, sinks, guard, port, release)
+}
+
+func newClaudeRuntime(
+	role claudeRuntimeRole,
+	sinks SinkCatalog,
+	guard *Guard,
+	port HTTPUpstreamTransportPort,
+	productionReleases ...ResolvedClaudeProductionRelease,
+) (*ClaudeRuntime, error) {
 	if guard == nil || port == nil {
-		return nil, errors.New("Claude FW-G runtime 缺少 Guard 或 HTTPUpstream port")
+		return nil, errors.New("Claude runtime 缺少 Guard 或 HTTPUpstream port")
+	}
+	wantChangeset := claudeFWGCandidateChangeset
+	approvalDigest := ""
+	switch role {
+	case claudeRuntimeRoleCandidate:
+	case claudeRuntimeRoleProduction:
+		wantChangeset = claudeFWHProductionChangeset
+		approvalDigest = ClaudeFWHProductionApprovalDigest
+		if len(productionReleases) != 1 ||
+			productionReleases[0].ApprovalDigest() != approvalDigest {
+			return nil, errors.New("Claude production runtime 缺少已解析的正式 Release")
+		}
+	default:
+		return nil, errors.New("Claude runtime role 非法")
 	}
 	profile, err := loadClaudeFWGProfile()
 	if err != nil {
@@ -389,6 +441,17 @@ func NewClaudeCandidateRuntime(
 		!slices.Equal(profile.document.Identity.SupportedModels, modelNames) {
 		return nil, errors.New("Claude Profile 与 Wire 模型能力目录不一致")
 	}
+	productionRelease := ResolvedClaudeProductionRelease{}
+	if role == claudeRuntimeRoleProduction {
+		productionRelease = productionReleases[0]
+		if productionRelease.Version() != ClaudeFWGVersion ||
+			productionRelease.ProfileDigest() != ClaudeFWGProfileDigest ||
+			productionRelease.WireDigest() != claudeFWGWireDigest ||
+			productionRelease.ReleaseDigest() != ClaudeFWGReleaseDigest ||
+			productionRelease.BundleDigest() != ClaudeFWGBundleDigest {
+			return nil, errors.New("Claude production Release 与加载的 Profile/Wire 不一致")
+		}
+	}
 	for _, kind := range claudeStrictEndpointKinds() {
 		endpoint, endpointErr := profile.endpoint(kind)
 		if endpointErr != nil {
@@ -396,11 +459,12 @@ func NewClaudeCandidateRuntime(
 		}
 		binding, ok := sinks.Resolve(endpoint.sinkID)
 		if !ok || binding.Persona() != PersonaClaudeCode ||
-			binding.EndpointEvidence() != EndpointEvidenceClaudeProfile || !binding.RuntimeBindable() {
-			return nil, fmt.Errorf("Claude FW-G runtime 缺少 strict Sink：%s", endpoint.sinkID)
+			binding.EndpointEvidence() != EndpointEvidenceClaudeProfile || !binding.RuntimeBindable() ||
+			binding.MigrationChangeset() != wantChangeset {
+			return nil, fmt.Errorf("Claude runtime 缺少角色匹配的 strict Sink：%s", endpoint.sinkID)
 		}
 	}
-	personas, err := newClaudeCandidatePersonaRegistry(sinks)
+	personas, err := newClaudePersonaRegistry(sinks)
 	if err != nil {
 		return nil, err
 	}
@@ -432,7 +496,8 @@ func NewClaudeCandidateRuntime(
 	if err != nil {
 		return nil, err
 	}
-	return &ClaudeCandidateRuntime{
+	return &ClaudeRuntime{
+		role: role, approvalDigest: approvalDigest, productionRelease: productionRelease,
 		profile: profile, wire: wire, sinks: sinks, executor: executor,
 		newRequestID: requestIDGenerator, newCCH: newClaudeCCH,
 		retryJitter: newClaudeRetryJitter, sleep: sleepClaudeRetry,
@@ -442,14 +507,27 @@ func NewClaudeCandidateRuntime(
 	}, nil
 }
 
-func (r *ClaudeCandidateRuntime) RuleIDs() []string {
+// ProductionApprovalDigest 返回 production active 在启动期实际复算的批准摘要。
+// Candidate 返回空值，避免把隔离验收误报为生产授权。
+func (r *ClaudeRuntime) ProductionApprovalDigest() string {
+	if r == nil || r.role != claudeRuntimeRoleProduction {
+		return ""
+	}
+	return r.approvalDigest
+}
+
+func (r *ClaudeRuntime) IsProductionActive() bool {
+	return r != nil && r.role == claudeRuntimeRoleProduction
+}
+
+func (r *ClaudeRuntime) RuleIDs() []string {
 	if r == nil {
 		return nil
 	}
 	return r.profile.ruleIDs()
 }
 
-func (r *ClaudeCandidateRuntime) ExecuteMessages(
+func (r *ClaudeRuntime) ExecuteMessages(
 	ctx context.Context,
 	input ClaudeMessagesExecution,
 ) (ClaudeCandidateResult, error) {
@@ -622,7 +700,7 @@ func validateClaudeMessageRelations(
 	return relations, nil
 }
 
-func (r *ClaudeCandidateRuntime) prepareClaudeSessionRequest(
+func (r *ClaudeRuntime) prepareClaudeSessionRequest(
 	identity *ClaudeIdentityFacts,
 	canonical ClaudeCanonicalRequest,
 	relations claudeMessageRelations,
@@ -633,7 +711,7 @@ func (r *ClaudeCandidateRuntime) prepareClaudeSessionRequest(
 // prepareClaudeSessionRequestMutable 只供生产执行链和需要验证状态派生的测试使用。
 // 第三方请求命中 Fable server fallback 锁存后，Persona 必须在同一个
 // CanonicalRequest 上写入最终模型和官方 Header 状态，再交给 Compiler。
-func (r *ClaudeCandidateRuntime) prepareClaudeSessionRequestMutable(
+func (r *ClaudeRuntime) prepareClaudeSessionRequestMutable(
 	identity *ClaudeIdentityFacts,
 	canonical *ClaudeCanonicalRequest,
 	relations claudeMessageRelations,
@@ -811,7 +889,7 @@ func (r *ClaudeCandidateRuntime) prepareClaudeSessionRequestMutable(
 	}, nil
 }
 
-func (r *ClaudeCandidateRuntime) pruneClaudeSessionsLocked(now time.Time) {
+func (r *ClaudeRuntime) pruneClaudeSessionsLocked(now time.Time) {
 	if len(r.sessions) < 4096 {
 		return
 	}
@@ -857,7 +935,7 @@ func (f *claudeSessionFinalizer) finalize(
 	return f.err
 }
 
-func (r *ClaudeCandidateRuntime) finalizeClaudeSessionRequest(
+func (r *ClaudeRuntime) finalizeClaudeSessionRequest(
 	lease claudeSessionLease,
 	accepted bool,
 	status int,
@@ -868,7 +946,7 @@ func (r *ClaudeCandidateRuntime) finalizeClaudeSessionRequest(
 	)
 }
 
-func (r *ClaudeCandidateRuntime) finalizeClaudeSessionRequestWithResponseModel(
+func (r *ClaudeRuntime) finalizeClaudeSessionRequestWithResponseModel(
 	lease claudeSessionLease,
 	accepted bool,
 	status int,
@@ -971,7 +1049,7 @@ func (r *ClaudeCandidateRuntime) finalizeClaudeSessionRequestWithResponseModel(
 	return nil
 }
 
-func (r *ClaudeCandidateRuntime) executeClaudeStartup(
+func (r *ClaudeRuntime) executeClaudeStartup(
 	ctx context.Context,
 	input ClaudeMessagesExecution,
 	identity ClaudeIdentityFacts,
@@ -1005,7 +1083,7 @@ func (r *ClaudeCandidateRuntime) executeClaudeStartup(
 	return err
 }
 
-func (r *ClaudeCandidateRuntime) executeClaudeStartupOnce(
+func (r *ClaudeRuntime) executeClaudeStartupOnce(
 	ctx context.Context,
 	input ClaudeMessagesExecution,
 	identity ClaudeIdentityFacts,
@@ -1038,7 +1116,7 @@ func (r *ClaudeCandidateRuntime) executeClaudeStartupOnce(
 	return joined
 }
 
-func (r *ClaudeCandidateRuntime) executeClaudeStartupEndpoint(
+func (r *ClaudeRuntime) executeClaudeStartupEndpoint(
 	ctx context.Context,
 	accessToken string,
 	trusted ClaudeTrustedFacts,
@@ -1070,7 +1148,7 @@ func (r *ClaudeCandidateRuntime) executeClaudeStartupEndpoint(
 	return nil
 }
 
-func (r *ClaudeCandidateRuntime) executeClaudeMessagesAttempts(
+func (r *ClaudeRuntime) executeClaudeMessagesAttempts(
 	ctx context.Context,
 	input ClaudeMessagesExecution,
 	canonical ClaudeCanonicalRequest,
@@ -1241,7 +1319,7 @@ func (r *ClaudeCandidateRuntime) executeClaudeMessagesAttempts(
 	return ClaudeCandidateResult{}, errors.New("Claude candidate attempt 状态机异常退出")
 }
 
-func (r *ClaudeCandidateRuntime) newClaudeStreamFallback(
+func (r *ClaudeRuntime) newClaudeStreamFallback(
 	invocation *ExecutorInvocation,
 	input ClaudeMessagesExecution,
 	canonical ClaudeCanonicalRequest,
@@ -1307,7 +1385,7 @@ func (r *ClaudeCandidateRuntime) newClaudeStreamFallback(
 	}
 }
 
-func (r *ClaudeCandidateRuntime) ExecuteEndpoint(
+func (r *ClaudeRuntime) ExecuteEndpoint(
 	ctx context.Context,
 	input ClaudeEndpointExecution,
 ) (*http.Response, error) {
@@ -1320,7 +1398,7 @@ func (r *ClaudeCandidateRuntime) ExecuteEndpoint(
 
 // ExecuteCountTokens 把公开 count_tokens 入口接入与其他 Claude strict 端点
 // 相同的 Planner／Compiler／Executor／Guard 链，并把最终 wire body 交还网关。
-func (r *ClaudeCandidateRuntime) ExecuteCountTokens(
+func (r *ClaudeRuntime) ExecuteCountTokens(
 	ctx context.Context,
 	input ClaudeEndpointExecution,
 ) (ClaudeEndpointResult, error) {
@@ -1328,7 +1406,7 @@ func (r *ClaudeCandidateRuntime) ExecuteCountTokens(
 	return r.executeEndpoint(ctx, input)
 }
 
-func (r *ClaudeCandidateRuntime) executeEndpoint(
+func (r *ClaudeRuntime) executeEndpoint(
 	ctx context.Context,
 	input ClaudeEndpointExecution,
 ) (ClaudeEndpointResult, error) {
@@ -1940,7 +2018,7 @@ func newClaudeRetryJitter(maxInclusive int) (int, error) {
 	return int(value.Int64()), nil
 }
 
-func (r *ClaudeCandidateRuntime) claudeRetryableStatus(status int) bool {
+func (r *ClaudeRuntime) claudeRetryableStatus(status int) bool {
 	for _, candidate := range r.wire.ImplementationPolicy.Retry.RetryableStatuses {
 		if candidate == status {
 			return true
@@ -1949,7 +2027,7 @@ func (r *ClaudeCandidateRuntime) claudeRetryableStatus(status int) bool {
 	return false
 }
 
-func (r *ClaudeCandidateRuntime) claudeRetryDelay(
+func (r *ClaudeRuntime) claudeRetryDelay(
 	response *http.Response,
 	ordinal int,
 ) (time.Duration, error) {

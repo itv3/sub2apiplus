@@ -1,0 +1,88 @@
+{
+  "schema_version": "claude-fw-h-production-approval/v1",
+  "approval_id": "claude-code-2.1.226-fw-h-production-v1",
+  "issued_at_utc": "2026-08-21T13:54:03Z",
+  "approval_purpose": "production_replacement",
+  "status": "approved",
+  "target": {
+    "product": "claude-code",
+    "version": "2.1.226",
+    "platform": "linux/amd64",
+    "authentication": "claude.ai-oauth",
+    "privacy": "essential-traffic-no-telemetry",
+    "models": [
+      "claude-sonnet-5",
+      "claude-opus-5",
+      "claude-fable-5"
+    ],
+    "required_rules": 40,
+    "profile_sha256": "e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5",
+    "wire_sha256": "a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d",
+    "release_artifact_sha256": "48586f47e0abcde9ea357c08c1465253eaa296862153a89c20e4cf0f1e6f52f8",
+    "release_bundle_sha256": "ceb1e30740ab4223684f478f717dd2902d8fdad0c6efad5a69b761d95b4aefae"
+  },
+  "predecessors": [
+    {
+      "kind": "acceptance_fact",
+      "path": "docs/egress/maintenance/claude-fw-g-three-model-acceptance.json",
+      "sha256": "16dc60bc46eede747cb0535e53367c134a28466f12399f06a485693e142b15a9"
+    },
+    {
+      "kind": "release_transition",
+      "path": "docs/egress/maintenance/claude-fw-g-model-capability-source-transition.json",
+      "sha256": "f65639b6805a9bc43344bfaa7c912d6a7522df8db15510e6f35ef4aa786afb8f"
+    },
+    {
+      "kind": "source_transition",
+      "path": "docs/egress/maintenance/claude-fw-g-fable-desktop-title-source-transition.json",
+      "sha256": "d03add436e6e970bbaca3947d7fdf9a50a43879f78a3f89e49bcf1534d28bc56"
+    },
+    {
+      "kind": "test_transition",
+      "path": "docs/egress/maintenance/claude-fw-g-fable-desktop-title-test-transition.json",
+      "sha256": "089b0f1c13f1e2a34aa982f8e2220c4a8c4149df1746d932ac14daa40babdb61"
+    }
+  ],
+  "active_support_envelope": {
+    "logical_ingress_ids": [
+      "official-count-tokens-oauth",
+      "official-messages-oauth",
+      "third-party-count-tokens-oauth",
+      "third-party-messages-oauth"
+    ],
+    "strict_egress_ids": [
+      "egress-claude-count-tokens",
+      "egress-claude-lifecycle-hello",
+      "egress-claude-mcp-servers",
+      "egress-claude-messages-inference",
+      "egress-claude-oauth-profile",
+      "egress-claude-oauth-token-refresh",
+      "egress-claude-policy-limits",
+      "egress-claude-settings"
+    ]
+  },
+  "rollback_operational_envelope": {
+    "kind": "frozen-legacy-deployment",
+    "wire_evidence": "diagnostic-only",
+    "logical_ingress_ids": [
+      "official-count-tokens-oauth",
+      "official-messages-oauth",
+      "third-party-count-tokens-oauth",
+      "third-party-messages-oauth"
+    ]
+  },
+  "deployment_traffic_envelope": {
+    "logical_ingress_ids": [
+      "official-count-tokens-oauth",
+      "official-messages-oauth",
+      "third-party-count-tokens-oauth",
+      "third-party-messages-oauth"
+    ]
+  },
+  "retained_legacy": [
+    "chat-completions-oauth",
+    "responses-oauth"
+  ],
+  "unknown_oauth_egress": "denied",
+  "removal_receipt_allowed": false
+}

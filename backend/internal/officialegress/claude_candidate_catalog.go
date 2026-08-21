@@ -11,7 +11,10 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/officialegress/receiptcontract"
 )
 
-const claudeFWGCandidateChangeset = "claude-code-2.1.226-fw-g-candidate"
+const (
+	claudeFWGCandidateChangeset  = "claude-code-2.1.226-fw-g-candidate"
+	claudeFWHProductionChangeset = "claude-code-2.1.226-fw-h-production"
+)
 
 const claudeFWGEgressDispositionInventoryDigest = "2a13ef7d301cd845d501fb21152bbeab3baedaa4c46dbf7ec1343b9bbe867373"
 
@@ -54,6 +57,28 @@ var claudeFWGManagedPolicies = map[SinkID]ManagedEgressPolicy{
 	},
 }
 
+type claudeCatalogRole struct {
+	changeset     string
+	owner         string
+	expiry        string
+	receiptSchema string
+}
+
+var (
+	claudeCandidateCatalogRole = claudeCatalogRole{
+		changeset:     claudeFWGCandidateChangeset,
+		owner:         "official-client-fw-g",
+		expiry:        "FW-G candidate 被作废、晋升或进入 FW-H 后由后继事实替代",
+		receiptSchema: "claude-fw-g-candidate-migration/v1",
+	}
+	claudeProductionCatalogRole = claudeCatalogRole{
+		changeset:     claudeFWHProductionChangeset,
+		owner:         "official-client-fw-h",
+		expiry:        "正式 Release 被后继生产部署替代或回滚到冻结遗留部署",
+		receiptSchema: "claude-fw-h-production-migration/v1",
+	}
+)
+
 func completeClaudeFWGManagedPolicy(policy ManagedEgressPolicy) ManagedEgressPolicy {
 	policy.Source = "egress-disposition-inventory:" + claudeFWGEgressDispositionInventoryDigest
 	policy.TimeoutPolicy = "legacy-code-defined"
@@ -66,8 +91,22 @@ func completeClaudeFWGManagedPolicy(policy ManagedEgressPolicy) ManagedEgressPol
 // ClaudeFWGCandidateSinkCatalog 在既有进程 Catalog 上追加隔离候选闭集。
 // 调用方只有在显式 candidate 开关开启时才能使用该快照。
 func ClaudeFWGCandidateSinkCatalog(base SinkCatalog) (SinkCatalog, error) {
+	return buildClaudeSinkCatalog(base, claudeCandidateCatalogRole)
+}
+
+// ClaudeProductionSinkCatalog 只为已显式选择 active 的 Claude production Runtime
+// 安装正式闭集。它与 ValidationCandidate 使用不同 changeset 和迁移收据。
+func ClaudeProductionSinkCatalog(base SinkCatalog) (SinkCatalog, error) {
+	return buildClaudeSinkCatalog(base, claudeProductionCatalogRole)
+}
+
+func buildClaudeSinkCatalog(base SinkCatalog, role claudeCatalogRole) (SinkCatalog, error) {
 	if len(base.bindings) == 0 {
-		return SinkCatalog{}, fmt.Errorf("Claude FW-G candidate 缺少基础 SinkCatalog")
+		return SinkCatalog{}, fmt.Errorf("Claude Catalog 缺少基础 SinkCatalog")
+	}
+	if strings.TrimSpace(role.changeset) == "" || strings.TrimSpace(role.owner) == "" ||
+		strings.TrimSpace(role.expiry) == "" || strings.TrimSpace(role.receiptSchema) == "" {
+		return SinkCatalog{}, fmt.Errorf("Claude Catalog role 不完整")
 	}
 	profile, err := loadClaudeFWGProfile()
 	if err != nil {
@@ -88,9 +127,9 @@ func ClaudeFWGCandidateSinkCatalog(base SinkCatalog) (SinkCatalog, error) {
 			ID: legacy.ID(), Purpose: legacy.Purpose(), Persona: legacy.Persona(),
 			EndpointEvidence: legacy.EndpointEvidence(), Routes: legacy.Routes(),
 			TargetBackend: legacy.TargetBackend(), LegacyBackends: legacy.LegacyBackends(),
-			EnforcementState: SinkStateEnforced, Owner: "official-client-fw-g",
-			MigrationChangeset: claudeFWGCandidateChangeset,
-			ExpiryCondition:    "FW-G candidate 被作废、晋升或进入 FW-H 后由后继事实替代",
+			EnforcementState: SinkStateEnforced, Owner: role.owner,
+			MigrationChangeset: role.changeset,
+			ExpiryCondition:    role.expiry,
 			RuntimeBindable:    true, ManagedPolicy: &policy,
 		}
 		binding, err := newSinkBinding(input)
@@ -114,12 +153,12 @@ func ClaudeFWGCandidateSinkCatalog(base SinkCatalog) (SinkCatalog, error) {
 			TargetBackend:      BackendHTTPUpstream,
 			LegacyBackends:     []BackendKind{BackendHTTPUpstream},
 			EnforcementState:   SinkStateEnforced,
-			Owner:              "officialegress/claude-code",
-			MigrationChangeset: claudeFWGCandidateChangeset,
-			ExpiryCondition:    "FW-G candidate 被作废、晋升或进入 FW-H 后由后继事实替代",
+			Owner:              role.owner + "/claude-code",
+			MigrationChangeset: role.changeset,
+			ExpiryCondition:    role.expiry,
 			RuntimeBindable:    true,
 		}
-		receipt, err := buildClaudeCandidateMigrationReceipt(input, endpoint)
+		receipt, err := buildClaudeMigrationReceipt(input, endpoint, role.receiptSchema)
 		if err != nil {
 			return SinkCatalog{}, err
 		}
@@ -133,10 +172,14 @@ func ClaudeFWGCandidateSinkCatalog(base SinkCatalog) (SinkCatalog, error) {
 	return out, nil
 }
 
-func buildClaudeCandidateMigrationReceipt(
+func buildClaudeMigrationReceipt(
 	input SinkBindingInput,
 	endpoint claudeEndpointProfile,
+	schemaVersion string,
 ) (MigrationReceipt, error) {
+	if strings.TrimSpace(schemaVersion) == "" {
+		return MigrationReceipt{}, fmt.Errorf("Claude MigrationReceipt schema 为空")
+	}
 	bindingDigest, err := sinkBindingIdentityDigest(input)
 	if err != nil {
 		return MigrationReceipt{}, err
@@ -160,7 +203,7 @@ func buildClaudeCandidateMigrationReceipt(
 		EndpointID    string                        `json:"endpoint_id"`
 		TransportID   string                        `json:"transport_id"`
 	}{
-		SchemaVersion: "claude-fw-g-candidate-migration/v1",
+		SchemaVersion: schemaVersion,
 		SinkID:        input.ID, State: input.EnforcementState, Binding: bindingDigest,
 		Authority:   receiptcontract.AuthorityClaudeExecutor,
 		AuthorityID: ClaudeExecutorAuthorityID, IssuerID: ClaudeTokenIssuerID,
@@ -206,11 +249,11 @@ func claudePersonaDescriptorInput() PersonaDescriptorInput {
 	}
 }
 
-func newClaudeCandidatePersonaRegistry(sinks SinkCatalog) (PersonaRegistry, error) {
+func newClaudePersonaRegistry(sinks SinkCatalog) (PersonaRegistry, error) {
 	return NewPersonaRegistry([]PersonaDescriptorInput{claudePersonaDescriptorInput()}, sinks)
 }
 
-func claudeCandidateEndpointForRoute(
+func claudeEndpointForRoute(
 	profile claudeFWGProfile,
 	sink SinkBinding,
 	route CatalogRoute,
@@ -226,7 +269,7 @@ func claudeCandidateEndpointForRoute(
 	return claudeEndpointProfile{}, false
 }
 
-func claudeCandidateCatalogDigest(catalog SinkCatalog) string {
+func claudeCatalogDigest(catalog SinkCatalog) string {
 	parts := make([]string, 0, len(catalog.bindings))
 	for _, binding := range catalog.Bindings() {
 		parts = append(parts, strings.Join([]string{

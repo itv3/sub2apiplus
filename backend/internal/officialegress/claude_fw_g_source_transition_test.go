@@ -132,6 +132,9 @@ func loadClaudeFWGSourceTransition(t *testing.T) map[string]changeset4SourceTran
 }
 
 func claudeFWGSourceTransitionSupersedes(path, priorDigest, currentDigest string) bool {
+	if claudeFWHSourceTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if claudeFWGCountTokensSourceTransitionSupersedes(path, priorDigest, currentDigest) {
 		return true
 	}
@@ -140,7 +143,11 @@ func claudeFWGSourceTransitionSupersedes(path, priorDigest, currentDigest string
 		return false
 	}
 	for _, transition := range receipt.Transitions {
-		if transition.Path != path || transition.ToSHA256 != currentDigest {
+		if transition.Path != path ||
+			(transition.ToSHA256 != currentDigest &&
+				!claudeFWHSourceTransitionSupersedes(
+					path, transition.ToSHA256, currentDigest,
+				)) {
 			continue
 		}
 		if transition.FromSHA256 == priorDigest ||
@@ -186,6 +193,9 @@ func TestClaudeFWGSourceTransitionIsFrozen(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got := claudeFWGSourceDigest(source); got != transition.ToSHA256 &&
+			!claudeFWHSourceTransitionSupersedes(
+				transition.Path, transition.ToSHA256, got,
+			) &&
 			!claudeFWGModelCapabilityTransitionSupersedes(
 				transition.Path, transition.ToSHA256, got,
 			) {
