@@ -1,0 +1,150 @@
+{
+  "schema_version": "claude-code-fw-g-three-model-acceptance-attempt/v1",
+  "phase": "FW-G",
+  "recorded_at_utc": "2026-08-21T11:02:23Z",
+  "target": {
+    "product": "claude-code",
+    "version": "2.1.226",
+    "platform": "linux/amd64",
+    "models": [
+      "claude-sonnet-5",
+      "claude-opus-5",
+      "claude-fable-5"
+    ],
+    "profile_sha256": "e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5",
+    "wire_sha256": "a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d",
+    "release_artifact_sha256": "48586f47e0abcde9ea357c08c1465253eaa296862153a89c20e4cf0f1e6f52f8",
+    "release_bundle_sha256": "ceb1e30740ab4223684f478f717dd2902d8fdad0c6efad5a69b761d95b4aefae",
+    "model_capability_catalog_sha256": "d34ca049ec851b220f06a4701c951a8be270d4a498b8012229c7f62cb8183df1"
+  },
+  "candidate": {
+    "candidate_id": "claude-code-2_1_226-fw-g-three-model-290516f55",
+    "commit": "290516f55c0aaa615ff0eb7ea53dd8fa13078ba9",
+    "tree": "a742c21e279945d4e1f2a40424ad27baf546568d",
+    "architecture": "linux/amd64",
+    "image": "sub2apiplus:fw-g-290516f55",
+    "image_digest": "sha256:336b9142b95e6f3f64f4ff16a15bb4650a65e6716a7ebb65bfd164c9b8cb6095",
+    "deployed_host": "DMIT",
+    "version": "0.1.177-4-fw-g-290516f55"
+  },
+  "prior_transitions": [
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-model-capability-source-transition.json",
+      "sha256": "f65639b6805a9bc43344bfaa7c912d6a7522df8db15510e6f35ef4aa786afb8f"
+    }
+  ],
+  "transitions": [
+    {
+      "from_sha256": "1a882aec8fcff55693126d5d2d8cadb6e8460cf59762c27de76e24a39a0e4a81",
+      "path": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "reason": "记录三模型 DMIT 隔离验收的实际通过项、Fable Usage Credits 阻断及未签发 AcceptanceFact 的状态。",
+      "to_sha256": "f764d050426d02b0ca8404747c698c21a42b545f224b93332a8a5dbad4a99bfe"
+    }
+  ],
+  "coverage": {
+    "required_rules": 40,
+    "profile_atomic_assertions": 106,
+    "scenario_only_assertions": 4,
+    "atomic_assertions": 110,
+    "required_rules_duplicated_per_model": false,
+    "telemetry_and_behavior_traffic": "excluded"
+  },
+  "validation": {
+    "source_and_local_gates": "passed",
+    "api_messages": {
+      "claude-sonnet-5": {
+        "result": "passed",
+        "response": "OK"
+      },
+      "claude-opus-5": {
+        "result": "passed",
+        "response": "OK"
+      },
+      "claude-fable-5": {
+        "result": "blocked_by_upstream_entitlement",
+        "http_status": 429,
+        "upstream_message": "Usage credits are required for this model.",
+        "local_model_gate_passed": true,
+        "oauth_refresh_required": false
+      }
+    },
+    "api_count_tokens": {
+      "claude-sonnet-5": {
+        "result": "passed",
+        "input_tokens": 12
+      },
+      "claude-opus-5": {
+        "result": "passed",
+        "input_tokens": 12
+      },
+      "claude-fable-5": {
+        "result": "passed",
+        "input_tokens": 12
+      }
+    },
+    "negative_boundaries": {
+      "unknown_model": "fail-close-passed",
+      "unregistered_alias": "fail-close-passed",
+      "third_party_fallbacks": "fail-close-passed",
+      "third_party_fable_latch_headers": {
+        "result": "passed",
+        "policy": "protected-and-persona-generated-only",
+        "protected_names": [
+          "x-cc-fallback-latched-by",
+          "x-is-refusal-fallback"
+        ]
+      }
+    },
+    "claude_desktop": {
+      "claude-sonnet-5": "DESKTOP_SONNET_OK",
+      "claude-opus-5": "DESKTOP_OPUS_OK",
+      "claude-fable-5": "blocked_by_upstream_entitlement",
+      "bash_tool_request": "CLAUDE_TOOL_OK",
+      "bash_tool_response": "DESKTOP_TOOL_OK",
+      "post_restore_response": "DESKTOP_RESTORE_OK",
+      "result": "partial"
+    },
+    "zlfcode": {
+      "client_version": "7.4.2203",
+      "thinking_display_summarized": "accepted_before_tool_policy",
+      "tool_catalog": "not_approved_for_official_builtin_or_mcp_bridge",
+      "observed_error": "Claude 动态工具目录不接受未实测 tool_choice",
+      "upstream_request_sent": false,
+      "expected_disposition": "denied",
+      "result": "fail-close-passed",
+      "blocking_for_claude_code_persona": false
+    },
+    "rollback_and_restoration": {
+      "rollback_image": "sub2apiplus:fw-g-c662b59a3",
+      "rollback_image_digest": "sha256:bb94d3ef7b9bd76f5cf96bcf55ec4d4c1dc73fb940d1710a883a02672fd49adc",
+      "rollback_health": "passed",
+      "restored_image": "sub2apiplus:fw-g-290516f55",
+      "restored_image_digest": "sha256:336b9142b95e6f3f64f4ff16a15bb4650a65e6716a7ebb65bfd164c9b8cb6095",
+      "restoration_health": "passed",
+      "three_x_ui_container_id_before_and_after": "3a5bef805f0be14fd4b6667aac6ce45c4f243f1df6f083d6040df32df84048f9",
+      "three_x_ui_recreated": false,
+      "result": "passed"
+    }
+  },
+  "safety": {
+    "production_selector_modified": false,
+    "fw_h_started": false,
+    "vircs_connected_for_mutation": false,
+    "vircs_service_changed": false,
+    "vircs_container_id": "9ee8fe106cb0c449bd801436aa79e017e217d3d23d7a3962942815b5f61a5ea3",
+    "vircs_image_digest": "sha256:9399e13dea365354311476b919b39d2c9d28d538d125fa7fc397745a7101c096",
+    "vircs_started_at": "2026-08-20T08:08:32.565374847Z",
+    "vircs_health": "healthy"
+  },
+  "blocking_conditions": [
+    {
+      "id": "fable-messages-usage-credits",
+      "scope": "claude-fable-5 POST /v1/messages",
+      "reason": "DMIT 隔离 OAuth 账号可完成三模型 count_tokens，且 Fable 请求已通过本地模型门禁到达上游；上游因账号缺少该模型 Usage Credits 返回 429。",
+      "required_action": "为隔离账号启用可用的 Fable Usage Credits，或换用具备该权益的隔离 OAuth 账号，然后重跑 Fable Messages 与 Claude Desktop Fable 正例。"
+    }
+  ],
+  "acceptance_fact_issued": false,
+  "production_state": "not_activated",
+  "result": "acceptance_pending"
+}

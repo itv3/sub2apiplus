@@ -289,7 +289,11 @@ func validateClaudeFWGModelCapabilityTransitions(
 		raw, err := os.ReadFile(
 			filepath.Join("../../..", filepath.FromSlash(transition.Path)),
 		)
-		if err != nil || claudeFWGCountTokensDigest(raw) != transition.ToSHA256 {
+		currentDigest := claudeFWGCountTokensDigest(raw)
+		if err != nil || currentDigest != transition.ToSHA256 &&
+			!claudeFWGThreeModelAcceptanceAttemptSupersedes(
+				transition.Path, transition.ToSHA256, currentDigest,
+			) {
 			return errors.New("Claude 模型能力源码 transition 当前摘要不一致")
 		}
 		paths = append(paths, transition.Path)
@@ -314,7 +318,11 @@ func claudeFWGModelCapabilityTransitionSupersedes(
 		return false
 	}
 	for _, transition := range receipt.Transitions {
-		if transition.Path == path && transition.ToSHA256 == currentDigest &&
+		currentReached := transition.ToSHA256 == currentDigest ||
+			claudeFWGThreeModelAcceptanceAttemptSupersedes(
+				path, transition.ToSHA256, currentDigest,
+			)
+		if transition.Path == path && currentReached &&
 			(transition.FromSHA256 == priorDigest ||
 				claudeFWGDesktopTitleTransitionSupersedes(
 					path, priorDigest, transition.FromSHA256,

@@ -14,8 +14,10 @@
 > **证据边界**：本文没有未压缩 TS 源码可用，静态规则均从官方生产 bundle 逆向建立；材料、证据、
 > 规则与结论全部独立取自 Claude Code 自身，不继承 Codex 的任何事实结论
 > **运行时状态**：历史 Sonnet-only Candidate `651ccd518` 已完成 DMIT 验收并达到
-> `ready／not_activated`；当前三模型后继 Candidate 已通过源码、证据和本地门禁，尚待重新构建并完成
-> DMIT 隔离验收。production selector、DeploymentFact 和 Vircs 生产服务均未改变，遗留链仍保留
+> `ready／not_activated`；三模型后继 `290516f55` 已部署到 DMIT，源码、本地门禁、Sonnet／Opus 推理、
+> 三模型 count_tokens、Claude Desktop 工具往返及真实回滚／恢复均通过。Fable 推理已到达上游，但隔离
+> 账号因缺少该模型 Usage Credits 收到 429，因此后继仍为 `acceptance_pending／not_activated`，尚未签发
+> AcceptanceFact。production selector、DeploymentFact 和 Vircs 生产服务均未改变，遗留链仍保留
 > **末次更新**：2026-08-21
 
 ---
@@ -915,7 +917,7 @@ FW-G 的历史 Sonnet Candidate 已完成隔离验收；当前三模型后继正
 | strict 入口 | 官方 Messages、第三方 Anthropic Messages、官方 count_tokens、第三方标准 count_tokens 四个逻辑入口分开登记，统一使用 `anthropic-messages` 协议类 |
 | strict／managed 出站 | 八类 `persona_strict` 进入 Compiler／Executor／Guard；`non_persona_managed` 进入独立策略，未知 OAuth 出站保持 `denied` |
 | 语义与兼容 | Persona system／identity 由批准事实派生；lossless 请求进入 strict PAIR，有损 compatibility 与 strict 分母隔离 |
-| 候选验收 | 历史 Sonnet ValidationCandidate 已在 DMIT 达到 `ready／not_activated`；三模型后继因 Profile／Wire／Release 与源码变化必须重新冻结镜像并验收，当前不得沿用旧 AcceptanceFact |
+| 候选验收 | 历史 Sonnet ValidationCandidate 已在 DMIT 达到 `ready／not_activated`；三模型后继 `290516f55` 已完成镜像冻结、客户端测试和回滚／恢复，因 Fable 账号权益阻断仍为 `acceptance_pending`，不得沿用旧 AcceptanceFact |
 | 生产边界 | ProductionIngressInventory 仍记录当前遗留处置；production selector、DeploymentFact、ActivationReceipt 和 Vircs 服务均未改变，旧 finalizer／旁路不得删除 |
 
 | 阶段 | 变更 | 完成判据 |
@@ -930,8 +932,9 @@ FW-G 的历史 Sonnet Candidate 已完成隔离验收；当前三模型后继正
 | `FW-H` | 灰度、回滚、激活；逐入口迁移并在闭集完成后退休遗留链 | DeploymentFact 与运行态一致；无 `retained_legacy` 才能签发迁移完成的 RemovalReceipt |
 
 历史 Sonnet FW-G 完成事实以 [FW-G 隔离验收收据](egress/maintenance/claude-fw-g-acceptance.json)为准；
-当前下一步是完成三模型后继的 DMIT 隔离验收。新 AcceptanceFact 签发前不得进入 FW-H，也不得把历史
-Candidate 的 `ready` 解释为三模型后继已获批准。
+三模型后继的实际结果见 [三模型验收尝试收据](egress/maintenance/claude-fw-g-three-model-acceptance-attempt.json)。
+补足具备 Fable Usage Credits 的隔离账号并重跑 Fable Messages／Desktop 正例后，才能签发新的
+AcceptanceFact；在此之前不得进入 FW-H，也不得把历史 Candidate 的 `ready` 解释为后继已获批准。
 
 最新 stable 是目标 Schema、Snapshot 和实现的唯一设计权威。FW-E 只冻结目标规则证据，不预先用
 2.1.220 建画像；FW-F 完成发现项语义清零后，必须先生成目标 stable 画像和样例，随后才把 2.1.220 表达为差分基线、
@@ -985,9 +988,11 @@ ValidationCandidate。九个场景、40 个唯一 `PAIR-<SPEC-ID>`、TLS／HTTP/
 Claude Desktop 的 `beta=true` Messages／count_tokens 第三方入口、DMIT rollback／恢复和 Codex
 final-wire 零差异均通过，AcceptanceFact 结果为 `accepted`；Store 为
 `ready／not_activated`。production Runtime Selector、DeploymentFact、ActivationReceipt 和 Vircs 服务均未
-改变。完整摘要见 [FW-G 隔离验收收据](egress/maintenance/claude-fw-g-acceptance.json)。当前三模型后继
-使用独立内容寻址模型目录及新的 Profile／Wire／Release，必须重新构建、DMIT 对拍和签发 AcceptanceFact；
-在此之前下一步仍是 FW-G 验收，不是 FW-H。
+改变。完整摘要见 [FW-G 隔离验收收据](egress/maintenance/claude-fw-g-acceptance.json)。三模型后继
+`290516f55` 已在 DMIT 完成除 Fable 推理成功响应外的隔离矩阵和回滚／恢复；Fable 的本地门禁与
+count_tokens 已通过，上游明确返回“Usage credits are required for this model”。该结果只形成
+[验收尝试收据](egress/maintenance/claude-fw-g-three-model-acceptance-attempt.json)，不形成 AcceptanceFact；
+下一步仍是补齐账号权益后完成 FW-G，不是 FW-H。
 
 ---
 
@@ -1326,8 +1331,9 @@ RemovalReceipt。
 生产数据库、Redis、配置、当前／回滚镜像和唯一证据副本永远不在清理范围。
 
 当前边界：Claude 历史 Sonnet Candidate 已有 `production_replacement` ApprovalFact、ValidationCandidate
-和 AcceptanceFact；三模型后继尚待新的 DMIT AcceptanceFact。两者均无 promotion receipt、DeploymentFact
-或 ActivationReceipt；FW-H 未开始，Vircs 生产未连接或修改。
+和 AcceptanceFact；三模型后继已有 DMIT 验收尝试，但因 Fable Usage Credits 阻断尚无新的
+AcceptanceFact。两者均无 promotion receipt、DeploymentFact 或 ActivationReceipt；FW-H 未开始，
+Vircs 生产未连接或修改。
 2.1.220 Campaign／run／提取物已被 FW-F fixture 内容寻址引用，引用有效期间不得删除。
 
 ---
