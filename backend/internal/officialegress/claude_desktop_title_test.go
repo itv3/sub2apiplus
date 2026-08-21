@@ -71,22 +71,47 @@ func claudeDesktopTitleRequestBody(
 	return body
 }
 
-func TestClaudeFWGDesktopTitleNormalizesToFrozenTUITitleWire(t *testing.T) {
-	wire, err := loadClaudeFWGWire()
-	if err != nil {
-		t.Fatal(err)
+func claudeDesktopFableTitleRequestBody(
+	t *testing.T,
+	wire claudeWireArtifact,
+	mutate func(map[string]any),
+) []byte {
+	t.Helper()
+	return claudeDesktopTitleRequestBody(t, wire, func(document map[string]any) {
+		document["model"] = "claude-fable-5"
+		delete(document, "thinking")
+		system := document["system"].([]any)
+		system[0].(map[string]any)["text"] =
+			"x-anthropic-billing-header: cc_version=2.1.237.3c9; cc_entrypoint=claude-desktop"
+		if mutate != nil {
+			mutate(document)
+		}
+	})
+}
+
+func assertClaudeDesktopTitleNormalizesToFrozenWire(
+	t *testing.T,
+	wire claudeWireArtifact,
+	requestBody []byte,
+	primaryModel string,
+) {
+	t.Helper()
+	capability, ok := claudeModelCapabilityForAlias(wire, primaryModel)
+	if !ok {
+		t.Fatalf("Claude Desktop 标题测试模型不在能力目录：%s", primaryModel)
 	}
 	trusted := claudeTestTrustedFacts()
 	canonical, report, err := parseClaudeCanonicalMessages(
-		claudeDesktopTitleRequestBody(t, wire, nil), trusted, wire, false,
+		requestBody, trusted, wire, false,
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	title := wire.ImplementationPolicy.Scenarios.TUITitle
+	title := capability.Scenarios.TUITitle
 	if report.Compatibility != "desktop_title_to_tui_title" || !report.Lossless ||
 		canonical.officialIngress || canonical.scenarioHint != "tui-title" ||
-		canonical.model != title.Model || canonical.effort != "" ||
+		canonical.primaryModel != primaryModel || canonical.model != title.Model ||
+		canonical.effort != "" ||
 		!claudeJSONEqual(canonical.outputConfig, title.OutputConfig) ||
 		!claudeJSONEqual(canonical.thinking, title.Thinking) || canonical.disableThinking ||
 		!claudeJSONEqual(canonical.temperature, title.Temperature) ||
@@ -143,45 +168,89 @@ func TestClaudeFWGDesktopTitleNormalizesToFrozenTUITitleWire(t *testing.T) {
 	}
 }
 
+func TestClaudeFWGDesktopTitleNormalizesToFrozenTUITitleWire(t *testing.T) {
+	wire, err := loadClaudeFWGWire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertClaudeDesktopTitleNormalizesToFrozenWire(
+		t, wire, claudeDesktopTitleRequestBody(t, wire, nil), "claude-sonnet-5",
+	)
+}
+
+func TestClaudeFWGDesktopFableTitleOmittedThinkingNormalizesToFrozenTUITitleWire(t *testing.T) {
+	wire, err := loadClaudeFWGWire()
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertClaudeDesktopTitleNormalizesToFrozenWire(
+		t, wire, claudeDesktopFableTitleRequestBody(t, wire, nil), "claude-fable-5",
+	)
+}
+
 func TestClaudeFWGDesktopTitleExecutesThroughStrictCandidate(t *testing.T) {
 	wire, err := loadClaudeFWGWire()
 	if err != nil {
 		t.Fatal(err)
 	}
-	port := &claudeCapturePort{}
-	runtime, _, _ := newClaudeTestRuntime(t, port)
-	result, err := runtime.ExecuteMessages(context.Background(), ClaudeMessagesExecution{
-		Body:         claudeDesktopTitleRequestBody(t, wire, nil),
-		AccessToken:  "test-access-token",
-		TrustedFacts: claudeTestTrustedFacts(),
-		InvocationID: uuid.NewString(),
-	})
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name         string
+		primaryModel string
+		body         []byte
+	}{
+		{
+			name:         "Sonnet 显式关闭 thinking",
+			primaryModel: "claude-sonnet-5",
+			body:         claudeDesktopTitleRequestBody(t, wire, nil),
+		},
+		{
+			name:         "Fable 缺省 thinking",
+			primaryModel: "claude-fable-5",
+			body:         claudeDesktopFableTitleRequestBody(t, wire, nil),
+		},
 	}
-	defer func() { _ = result.Response.Body.Close() }()
-	title := wire.ImplementationPolicy.Scenarios.TUITitle
-	if result.Model != title.Model || !result.Stream || result.Attempts != 1 {
-		t.Fatalf("Claude Desktop 标题未走批准的 strict 场景：%+v", result)
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			capability, ok := claudeModelCapabilityForAlias(wire, test.primaryModel)
+			if !ok {
+				t.Fatalf("Claude Desktop 标题测试模型不在能力目录：%s", test.primaryModel)
+			}
+			port := &claudeCapturePort{}
+			runtime, _, _ := newClaudeTestRuntime(t, port)
+			result, err := runtime.ExecuteMessages(context.Background(), ClaudeMessagesExecution{
+				Body:         test.body,
+				AccessToken:  "test-access-token",
+				TrustedFacts: claudeTestTrustedFacts(),
+				InvocationID: uuid.NewString(),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = result.Response.Body.Close() }()
+			title := capability.Scenarios.TUITitle
+			if result.Model != title.Model || !result.Stream || result.Attempts != 1 {
+				t.Fatalf("Claude Desktop 标题未走批准的 strict 场景：%+v", result)
+			}
+			message := findClaudeCapturedRequest(
+				t, port.snapshot(), http.MethodPost, "/v1/messages?beta=true",
+			)
+			if claudeTestHeaderValue(message.Header, "User-Agent") !=
+				"claude-cli/2.1.226 (external, cli)" {
+				t.Fatalf("Claude Desktop 标题最终 UA 未由 Persona 生成：%v", message.Header)
+			}
+			document, err := decodeClaudeUniqueObject(decodeClaudeTestBody(t, message))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !claudeJSONEqual(document["output_config"], title.OutputConfig) ||
+				!claudeJSONEqual(document["thinking"], title.Thinking) ||
+				!claudeJSONEqual(document["temperature"], title.Temperature) ||
+				!claudeJSONEqual(document["tools"], title.Tools) {
+				t.Fatalf("Claude Desktop 标题 strict wire 漂移：%s", message.Body)
+			}
+			finalizeClaudeTestResult(t, &result)
+		})
 	}
-	message := findClaudeCapturedRequest(
-		t, port.snapshot(), http.MethodPost, "/v1/messages?beta=true",
-	)
-	if claudeTestHeaderValue(message.Header, "User-Agent") !=
-		"claude-cli/2.1.226 (external, cli)" {
-		t.Fatalf("Claude Desktop 标题最终 UA 未由 Persona 生成：%v", message.Header)
-	}
-	document, err := decodeClaudeUniqueObject(decodeClaudeTestBody(t, message))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !claudeJSONEqual(document["output_config"], title.OutputConfig) ||
-		!claudeJSONEqual(document["thinking"], title.Thinking) ||
-		!claudeJSONEqual(document["temperature"], title.Temperature) ||
-		!claudeJSONEqual(document["tools"], title.Tools) {
-		t.Fatalf("Claude Desktop 标题 strict wire 漂移：%s", message.Body)
-	}
-	finalizeClaudeTestResult(t, &result)
 }
 
 func TestClaudeFWGDesktopTitleUnknownShapesRemainFailClosed(t *testing.T) {
@@ -244,6 +313,69 @@ func TestClaudeFWGDesktopTitleUnknownShapesRemainFailClosed(t *testing.T) {
 			)
 			if err == nil {
 				t.Fatal("未批准的 Claude Desktop 标题形态没有 fail-close")
+			}
+		})
+	}
+	modelSpecificTests := []struct {
+		name   string
+		body   func(func(map[string]any)) []byte
+		mutate func(map[string]any)
+	}{
+		{
+			name: "Sonnet 不得缺省 thinking",
+			body: func(mutate func(map[string]any)) []byte {
+				return claudeDesktopTitleRequestBody(t, wire, mutate)
+			},
+			mutate: func(document map[string]any) { delete(document, "thinking") },
+		},
+		{
+			name: "Opus 不得缺省 thinking",
+			body: func(mutate func(map[string]any)) []byte {
+				return claudeDesktopTitleRequestBody(t, wire, mutate)
+			},
+			mutate: func(document map[string]any) {
+				document["model"] = "claude-opus-5"
+				delete(document, "thinking")
+			},
+		},
+		{
+			name: "Fable 不得使用 adaptive thinking",
+			body: func(mutate func(map[string]any)) []byte {
+				return claudeDesktopFableTitleRequestBody(t, wire, mutate)
+			},
+			mutate: func(document map[string]any) {
+				document["thinking"] = map[string]any{"type": "adaptive"}
+			},
+		},
+		{
+			name: "Fable 缺省 thinking 时仍不得篡改标题提示词",
+			body: func(mutate func(map[string]any)) []byte {
+				return claudeDesktopFableTitleRequestBody(t, wire, mutate)
+			},
+			mutate: func(document map[string]any) {
+				system := document["system"].([]any)
+				system[2].(map[string]any)["text"] = "Generate an arbitrary JSON title."
+			},
+		},
+		{
+			name: "Fable 缺省 thinking 时仍不得篡改 format",
+			body: func(mutate func(map[string]any)) []byte {
+				return claudeDesktopFableTitleRequestBody(t, wire, mutate)
+			},
+			mutate: func(document map[string]any) {
+				format := document["output_config"].(map[string]any)["format"].(map[string]any)
+				schema := format["schema"].(map[string]any)
+				schema["properties"].(map[string]any)["title"] = map[string]any{"type": "number"}
+			},
+		},
+	}
+	for _, test := range modelSpecificTests {
+		t.Run(test.name, func(t *testing.T) {
+			_, _, err := parseClaudeCanonicalMessages(
+				test.body(test.mutate), claudeTestTrustedFacts(), wire, false,
+			)
+			if err == nil {
+				t.Fatal("未批准的 Claude Desktop 模型标题形态没有 fail-close")
 			}
 		})
 	}

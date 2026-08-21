@@ -1,0 +1,48 @@
+{
+  "schema_version": "official-egress-claude-fw-g-fable-desktop-title-test-transition/v1",
+  "date": "2026-08-21",
+  "phase": "FW-G",
+  "base_commit": "986cb374eefc8122399dbdd26d21950f38183daf",
+  "source_transition": {
+    "path": "docs/egress/maintenance/claude-fw-g-fable-desktop-title-source-transition.json",
+    "sha256": "d03add436e6e970bbaca3947d7fdf9a50a43879f78a3f89e49bcf1534d28bc56"
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/claude_desktop_title_test.go",
+      "from_sha256": "e41217b2e018b5be9587bb2fd0359a2c2ab0ed289de99771069b2739d5a5c772",
+      "to_sha256": "b3868aca8e19c51655107fa3fed9bff41b9cf4e22d94b556d0711242cb46fe3b",
+      "reason": "增加 Fable thinking 缺省正例、冻结 wire 对拍，以及 Sonnet／Opus 缺省和 Fable 篡改形态负例。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_model_capability_transition_test.go",
+      "from_sha256": "f9eda892c3f9baac614137e0eda865a810946db0137a9b1818d55f4b5034d158",
+      "to_sha256": "9173c5b7ed29798ceb5728679a7a795b0b5edeb2b65ce3186e1fc0d5aa05f969",
+      "reason": "把本轮追加式 Fable Desktop 标题迁移接入既有模型能力内容寻址历史链。"
+    }
+  ],
+  "targeted_tests": [
+    "TestClaudeFWGDesktopTitleNormalizesToFrozenTUITitleWire",
+    "TestClaudeFWGDesktopFableTitleOmittedThinkingNormalizesToFrozenTUITitleWire",
+    "TestClaudeFWGDesktopTitleExecutesThroughStrictCandidate",
+    "TestClaudeFWGDesktopTitleUnknownShapesRemainFailClosed"
+  ],
+  "negative_cases": [
+    "sonnet-thinking-omitted",
+    "opus-thinking-omitted",
+    "fable-thinking-adaptive",
+    "fable-title-prompt-mutated",
+    "fable-title-format-mutated"
+  ],
+  "required_rule_count": 40,
+  "atomic_assertion_count": 110,
+  "wire_sha256": "a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d",
+  "profile_changed": false,
+  "wire_changed": false,
+  "release_bundle_changed": false,
+  "production_selector_changed": false,
+  "vircs_service_changed": false,
+  "dmit_candidate_rebuild_required": true,
+  "codex_final_wire": "zero_difference_required",
+  "result": "passed"
+}

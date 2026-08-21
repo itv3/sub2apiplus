@@ -479,12 +479,20 @@ func normalizeClaudeThirdPartyTitleRequest(
 	}
 	title := capability.Scenarios.TUITitle
 	main := capability.Scenarios.SDKCLI
+	sourceThinkingAllowed := canonical.thinkingPresent && canonical.disableThinking &&
+		claudeJSONEqual(canonical.thinking, title.Thinking)
+	// Desktop 2.1.237.3c9 的 Fable 标题请求实测省略 thinking。这里只把
+	// “Fable + 完整标题语义闭集 + thinking 缺省”视为显式关闭的等价表达；
+	// Sonnet、Opus 以及任何携带其他 thinking 形态的请求仍然 fail-close。
+	if capability.CanonicalModel == "claude-fable-5" && !canonical.thinkingPresent &&
+		len(bytes.TrimSpace(canonical.thinking)) == 0 && !canonical.disableThinking {
+		sourceThinkingAllowed = true
+	}
 	if canonical.model != main.Model || canonical.maxTokens != 64000 ||
 		canonical.effort != "high" || !canonical.streamPresent || !canonical.stream ||
 		!canonical.toolsPresent || canonical.toolMode != claudeToolModeNone ||
 		len(canonical.toolChoice) != 0 || !claudeJSONEqual(canonical.tools, json.RawMessage("[]")) ||
-		!canonical.thinkingPresent || !canonical.disableThinking ||
-		!claudeJSONEqual(canonical.thinking, title.Thinking) ||
+		!sourceThinkingAllowed ||
 		canonical.contextManagementPresent || len(canonical.temperature) != 0 {
 		return false, errors.New("Claude Desktop 标题请求不在批准语义闭集")
 	}

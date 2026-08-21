@@ -1,0 +1,106 @@
+{
+  "schema_version": "official-egress-claude-fw-g-fable-desktop-title-source-transition/v1",
+  "date": "2026-08-21",
+  "phase": "FW-G",
+  "base_commit": "986cb374eefc8122399dbdd26d21950f38183daf",
+  "trigger": "DMIT 新账号 #101 取得 Fable 权益后，本机 Claude Desktop 2.1.237 的 Fable High／Max 主请求均成功，但自动标题请求因合法省略 thinking 被既有 Sonnet 标题闭集拒绝。",
+  "prior_transitions": [
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-model-capability-source-transition.json",
+      "sha256": "f65639b6805a9bc43344bfaa7c912d6a7522df8db15510e6f35ef4aa786afb8f"
+    },
+    {
+      "path": "docs/egress/maintenance/claude-fw-g-three-model-acceptance-attempt.json",
+      "sha256": "7f6599b3ac521cf669bcccef8170984702b9d62feb5812d5bb2cb80c25c08319"
+    }
+  ],
+  "official_evidence": {
+    "captured_at_utc": "2026-08-21T12:25:06.096471Z",
+    "desktop_version": "2.1.237",
+    "client_platform": "darwin/arm64",
+    "authentication": "claude.ai-oauth",
+    "privacy": "essential-traffic-no-telemetry",
+    "client_host": "local-mac",
+    "capture_host": "DMIT",
+    "capture_method": "真实 Claude Desktop 经 DMIT 的短时只读 pcap；仅保留脱敏结构、字节数和摘要",
+    "dmit_account_id": 101,
+    "user_agent": "claude-cli/2.1.237 (external, claude-desktop-3p, agent-sdk/0.3.237)",
+    "request_method": "POST",
+    "request_target": "/v1/messages?beta=true",
+    "request_body_bytes": 4086,
+    "request_body_sha256": "d08ba67ede8b45a31f8679a28fe49c89714698488a763641868216c39797eddd",
+    "pcap_bytes": 328002,
+    "pcap_sha256": "59eec107c521f472fffdab9535f6117921a5ce6dee2a002e5d373a3818218011",
+    "top_level_order": [
+      "model",
+      "messages",
+      "system",
+      "tools",
+      "metadata",
+      "max_tokens",
+      "output_config",
+      "stream"
+    ],
+    "source_model": "claude-fable-5",
+    "source_max_tokens": 64000,
+    "source_thinking_present": false,
+    "source_effort": "high",
+    "source_stream": true,
+    "source_tool_count": 0,
+    "source_system_block_count": 3,
+    "billing_header_sha256": "983e994d34502cd7b3c9ca01c3bba8cc10d84e7d64ed54a6eb9a207be11a6e6e",
+    "agent_sdk_system_sha256": "0d7062851dd7bd7e66d4be4f12ac4951e3d2f587ec408295333a49963bd3f6b7",
+    "title_prompt_sha256": "765b5ba2fa0a315a3c749c7e54bf5cef450084a745eb01e66371b8b6359d4752",
+    "title_format_sha256": "6a3dca9cf59b8442c703d56464855f8777da4c2e6f5d31c7a82dd5f16494c4f9",
+    "raw_capture_retained": false
+  },
+  "persona_mapping": {
+    "source_semantics": "generate-title",
+    "source_thinking_disposition": "fable-only-omitted-equivalent-to-disabled",
+    "target_version": "2.1.226",
+    "target_entrypoint": "cli",
+    "target_scenario": "tui-title",
+    "target_model": "claude-haiku-4-5-20251001",
+    "target_max_tokens": 32000,
+    "target_thinking": "disabled",
+    "target_temperature": 1,
+    "target_tool_count": 0,
+    "wire_sha256": "a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d"
+  },
+  "dispositions": [
+    {
+      "finding": "billing-header 是不可信入站自报身份，且现有规范化层已在语义分类前剥离。",
+      "result": "不把 Desktop 版本、entrypoint 或 billing-header 用作 Persona 画像选择依据，也不向官方上游透传。"
+    },
+    {
+      "finding": "Fable 标题请求除省略 thinking 外，与既有标题闭集的 max_tokens、effort、stream、tools、SDK system、标题提示词和 format 完全一致。",
+      "result": "只批准 claude-fable-5 在完整标题闭集内省略 thinking；规范化后由 Compiler 重建冻结的 2.1.226 tui-title。"
+    },
+    {
+      "finding": "Sonnet／Opus 缺省 thinking、Fable adaptive／enabled thinking 以及篡改 system、format、工具或其他字段均没有对应实测证据。",
+      "result": "继续 fail-close，不把模型无关的宽松字段删除当作兼容策略。"
+    },
+    {
+      "finding": "本轮只补第三方入站到既有 generate-title 语义的精确映射，40 条 RequiredRules 与三模型官方 ReleaseBundle 均未变化。",
+      "result": "Profile、Wire、ReleaseArtifact 和 ReleaseBundle 内容寻址摘要保持不变。"
+    }
+  ],
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/claude_body.go",
+      "from_sha256": "0bbd57f2f656f1fb6a7ebb02031466d99f87a2775c44eb3aaee9af1a9b41cff9",
+      "to_sha256": "f5630f1a1907d54eb8b5f5dfff111e55a7a6c07fcb18779856f17844e0939f3a",
+      "reason": "在既有完整标题语义闭集内增加 Fable 专属的 thinking 缺省等价表达，其他模型和未知 thinking 继续 fail-close。"
+    }
+  ],
+  "required_rule_count": 40,
+  "atomic_assertion_count": 110,
+  "profile_changed": false,
+  "wire_changed": false,
+  "release_bundle_changed": false,
+  "production_selector_changed": false,
+  "vircs_service_changed": false,
+  "dmit_candidate_rebuild_required": true,
+  "codex_final_wire": "zero_difference_required",
+  "result": "passed"
+}
