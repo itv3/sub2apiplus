@@ -191,7 +191,10 @@ func TestClaudeFWHSourceTransitionIsFrozen(t *testing.T) {
 		if readErr != nil {
 			t.Fatal(readErr)
 		}
-		if got := claudeFWHSourceDigest(source); got != transition.ToSHA256 {
+		if got := claudeFWHSourceDigest(source); got != transition.ToSHA256 &&
+			!claudeFWHProductionAcceptanceSupersedes(
+				transition.Path, transition.ToSHA256, got,
+			) {
 			t.Fatalf(
 				"Claude FW-H source transition 漂移：path=%s got=%s want=%s",
 				transition.Path, got, transition.ToSHA256,

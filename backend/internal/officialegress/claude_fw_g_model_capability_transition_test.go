@@ -317,6 +317,13 @@ func claudeFWGModelCapabilityTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if claudeFWHProductionAcceptanceSupersedes(
+		path, priorDigest, currentDigest,
+	) || claudeFWHSourceTransitionSupersedes(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	if claudeFWGFableDesktopTitleTransitionSupersedes(
 		path, priorDigest, currentDigest,
 	) {

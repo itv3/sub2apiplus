@@ -431,10 +431,10 @@ ApprovalFact、candidate、selector 变更或部署。事实分别见
 
 FW-G 已以追加事实完成：独立官方复测、Candidate 对拍和 DMIT 隔离验收把 40 条 RequiredRules 升级为
 `verified`；后继 `production_replacement` ApprovalFact、固定 ValidationCandidate、40 个唯一
-`PAIR-<SPEC-ID>`、九个场景批准链和 AcceptanceFact 已封存。Candidate 达到
-`ready／not_activated`，Codex final wire 零差异；production selector、DeploymentFact、ActivationReceipt
-和 Vircs 服务均未改变。事实见
-[Claude FW-G 隔离验收收据](egress/maintenance/claude-fw-g-acceptance.json)。下一步是 FW-H。
+`PAIR-<SPEC-ID>`、九个场景批准链和 AcceptanceFact 已封存。FW-H 已完成固定正式镜像的 Vircs 切换、
+真实旧镜像回滚、active 恢复与稳定观察，DeploymentFact 为 `restored_active`，Codex final wire 摘要
+保持不变。两条入口继续 `retained_legacy`，因此没有 RemovalReceipt。事实见
+[Claude FW-H 生产验收包](egress/maintenance/claude-fw-h-production-acceptance-package.json)。
 
 生产事实以镜像 digest、selector、activation fact 和不可覆盖收据为准；缺失或不一致时统一标记
 `production_unverified`。
@@ -613,7 +613,7 @@ FW-A 基线 → FW-B 暂定合同 → FW-C Codex-only 发布 → FW-D 通用工�
   缺口按 FW-F 回退，任何批准内容或构建变化均建立新的 ApprovalFact 或 ValidationCandidate，不复用
   AcceptanceFact。
 
-### 6.3.8 FW-H：生产迁移与遗留退休
+### 6.3.8 FW-H：生产切换
 
 - **前置输入**：FW-G 的 production-replacement AcceptanceFact、不可变 candidate／Release、FW-F 的
   两个 Inventory／三个 Envelope 计划，以及 FW-A 的生产恢复点和已演练 rollback 目标。
@@ -621,16 +621,16 @@ FW-A 基线 → FW-B 暂定合同 → FW-C Codex-only 发布 → FW-D 通用工�
   ApprovalFact、AcceptanceFact 和真实 rollback 演练冻结实际 `ActiveSupportEnvelope`、
   `RollbackOperationalEnvelope`、`DeploymentTrafficEnvelope` 并验证 §4.2 不变量；再执行隔离 canary，
   仅让 `DeploymentTrafficEnvelope` 内流量切入 active，完成正式切换、真实 rollback、目标恢复和稳定
-  观察。签发 DeploymentFact 后，才依据该事实追加实际 `current_disposition`；只有闭集完成后，才以
-  独立退休变更删除旧 finalizer、版本常量、画像构造器和旁路。
+  观察。签发 DeploymentFact 后，才依据该事实追加实际 `current_disposition`。遗留退休不是生产切换
+  的同义词；只有闭集完成后，才以独立退休变更删除旧 finalizer、版本常量、画像构造器和旁路。
 - **输出制品**：晋升／镜像／canary／切换／回滚／恢复收据，达到 `restored_active` 的 DeploymentFact、
   更新后的两个 Inventory、activation fact，以及聚合 AcceptanceFact、DeploymentFact 和全部验收／发布／
   回滚收据的 AcceptancePackage；满足退休门禁时另行签发 RemovalReceipt。
-- **退出门禁**：运行镜像、production active／rollback、画像摘要、三个 Envelope、Inventory 和收据一致；
+- **生产切换门禁**：运行镜像、production active／rollback、画像摘要、三个 Envelope、Inventory 和收据一致；
   Runtime Catalog 按 Persona 原子生效，Claude active 无法验证时其 route fail-close，不影响 Codex，也不
   发生跨 Persona fallback；完整
-  `DeploymentTrafficEnvelope` 回滚与恢复成功并通过稳定观察；无 `retained_legacy`、未知入口或未处置
-  出站后，遗留退休验证通过。
+  `DeploymentTrafficEnvelope` 回滚与恢复成功并通过稳定观察。只有另行退休遗留链时，才额外要求无
+  `retained_legacy`、未知入口或未处置出站并签发 RemovalReceipt。
 - **禁止／回退**：不得重建数据库／缓存／依赖服务，不得提前删除遗留能力或覆盖历史事实。范围不变量
   或生产一致性失败时禁止激活／扩流，标记 `production_unverified` 并恢复冻结目标。
 
