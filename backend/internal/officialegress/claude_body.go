@@ -125,6 +125,19 @@ func parseClaudeCanonicalMessages(
 	artifact claudeWireArtifact,
 	officialIngress bool,
 ) (ClaudeCanonicalRequest, TranslationReport, error) {
+	return parseClaudeCanonicalMessagesWithCatalog(
+		body, trusted, artifact, officialIngress, claudeOfficialIngressMatch{}, false,
+	)
+}
+
+func parseClaudeCanonicalMessagesWithCatalog(
+	body []byte,
+	trusted ClaudeTrustedFacts,
+	artifact claudeWireArtifact,
+	officialIngress bool,
+	match claudeOfficialIngressMatch,
+	catalogValidated bool,
+) (ClaudeCanonicalRequest, TranslationReport, error) {
 	if len(bytes.TrimSpace(body)) == 0 {
 		return ClaudeCanonicalRequest{}, TranslationReport{}, errors.New("Claude candidate 缺少请求体")
 	}
@@ -216,8 +229,8 @@ func parseClaudeCanonicalMessages(
 	if err != nil {
 		return ClaudeCanonicalRequest{}, TranslationReport{}, err
 	}
-	effort, outputConfig, thirdPartyTitle, err := parseClaudeRequestedOutputConfig(
-		document["output_config"], artifact, officialIngress,
+	effort, outputConfig, officialTitle, err := parseClaudeRequestedOutputConfig(
+		document["output_config"], artifact, officialIngress, catalogValidated,
 	)
 	if err != nil {
 		return ClaudeCanonicalRequest{}, TranslationReport{}, err
@@ -244,6 +257,13 @@ func parseClaudeCanonicalMessages(
 	approvedTools, approvedChoice, toolMode, err := compileClaudeApprovedTools(
 		tools, document["tool_choice"], artifact,
 	)
+	if err != nil && catalogValidated &&
+		digestClaudeRaw(tools) == match.toolCatalogDigest {
+		approvedTools = append(json.RawMessage(nil), bytes.TrimSpace(tools)...)
+		approvedChoice = normalizeClaudeOptionalRaw(document["tool_choice"])
+		toolMode = claudeToolModeOfficialCatalog
+		err = nil
+	}
 	if err != nil && officialIngress {
 		var matched bool
 		approvedTools, approvedChoice, toolMode, matched =
@@ -283,11 +303,19 @@ func parseClaudeCanonicalMessages(
 		disableThinking: disableThinking, officialIngress: officialIngress,
 		serverFallback: serverFallback,
 	}
-	titleNormalized, err := normalizeClaudeThirdPartyTitleRequest(
-		&canonical, artifact, thirdPartyTitle,
+	titleNormalized, err := normalizeClaudeOfficialTitleRequest(
+		&canonical, artifact, officialTitle,
 	)
 	if err != nil {
 		return ClaudeCanonicalRequest{}, TranslationReport{}, err
+	}
+	if catalogValidated && !titleNormalized && !match.nativeTargetScenario {
+		canonical.system = cloneClaudeSystemBlocks(
+			artifact.ImplementationPolicy.Scenarios.SDKCLI.SystemBlocks,
+		)
+		canonical.systemKind = claudeCanonicalSystemOfficial
+		canonical.scenarioHint = "sdk-cli"
+		canonical.officialIngress = true
 	}
 	if officialIngress {
 		if err := refineClaudeOfficialModelScenario(&canonical, artifact); err != nil {
@@ -324,12 +352,42 @@ func parseClaudeCanonicalMessages(
 	report := TranslationReport{
 		IngressProtocol: trusted.Entrypoint.IngressProtocol,
 		Lossless:        true,
-		Compatibility:   "reuse_lossless",
+		Compatibility:   "persona_strict_official_catalog",
+		Fields:          claudeMessagesTranslationFields(document),
 	}
 	if titleNormalized {
-		report.Compatibility = "desktop_title_to_tui_title"
+		report.Compatibility = "official_desktop_title_to_tui_title"
 	}
 	return canonical, report, nil
+}
+
+func claudeMessagesTranslationFields(
+	document map[string]json.RawMessage,
+) []TranslationFieldDisposition {
+	fields := make([]TranslationFieldDisposition, 0, len(document))
+	for _, name := range claudeOfficialIngressBodyOrder {
+		if _, present := document[name]; !present {
+			continue
+		}
+		disposition := TranslationDispositionPreserved
+		reason := "官方语义字段保持不变"
+		switch name {
+		case "system", "metadata":
+			disposition = TranslationDispositionNormalized
+			reason = "由目标 OAuth Persona 按 active Release 重建"
+		case "model", "max_tokens", "thinking", "context_management", "output_config":
+			disposition = TranslationDispositionNormalized
+			reason = "按 active Release 的已批准语义场景归一化"
+		case "fallbacks":
+			disposition = TranslationDispositionLocal
+			reason = "仅用于 Persona 内部重试状态机"
+		}
+		fields = append(fields, TranslationFieldDisposition{
+			SourcePath: "$." + name, CanonicalPath: name,
+			Disposition: disposition, Reason: reason,
+		})
+	}
+	return fields
 }
 
 func decodeClaudeUniqueObject(raw []byte) (map[string]json.RawMessage, error) {
@@ -409,6 +467,7 @@ func parseClaudeRequestedOutputConfig(
 	raw json.RawMessage,
 	artifact claudeWireArtifact,
 	officialIngress bool,
+	officialTitleAllowed bool,
 ) (string, json.RawMessage, bool, error) {
 	if len(raw) == 0 {
 		return "", nil, false, nil
@@ -424,6 +483,10 @@ func parseClaudeRequestedOutputConfig(
 		}
 		return effort, append(json.RawMessage(nil), bytes.TrimSpace(raw)...), false, nil
 	}
+	if officialTitleAllowed && len(fields) == 1 && len(fields["format"]) != 0 &&
+		claudeTitleFormatEqual(fields["format"], artifact) {
+		return "", nil, false, errors.New("Claude Desktop 标题 output_config 形态未登记")
+	}
 	if officialIngress && len(fields) == 1 && len(fields["format"]) != 0 {
 		for _, scenario := range append(
 			[]claudeWireScenario{artifact.ImplementationPolicy.Scenarios.TUITitle},
@@ -434,7 +497,7 @@ func parseClaudeRequestedOutputConfig(
 			}
 		}
 	}
-	if !officialIngress && len(fields) == 2 && len(fields["effort"]) != 0 &&
+	if officialTitleAllowed && len(fields) == 2 && len(fields["effort"]) != 0 &&
 		len(fields["format"]) != 0 && claudeTitleFormatEqual(fields["format"], artifact) {
 		var effort string
 		if json.Unmarshal(fields["effort"], &effort) != nil || !validClaudeEffort(effort) {
@@ -455,7 +518,7 @@ func claudeTitleFormatEqual(raw json.RawMessage, artifact claudeWireArtifact) bo
 
 const claudeDesktopTitlePromptSHA256 = "765b5ba2fa0a315a3c749c7e54bf5cef450084a745eb01e66371b8b6359d4752"
 
-func normalizeClaudeThirdPartyTitleRequest(
+func normalizeClaudeOfficialTitleRequest(
 	canonical *ClaudeCanonicalRequest,
 	artifact claudeWireArtifact,
 	candidate bool,
@@ -463,7 +526,7 @@ func normalizeClaudeThirdPartyTitleRequest(
 	if !candidate {
 		return false, nil
 	}
-	if canonical == nil || canonical.officialIngress {
+	if canonical == nil || !canonical.officialIngress {
 		return false, errors.New("Claude Desktop 标题语义来源非法")
 	}
 	capability, ok := claudeModelCapabilityForAlias(artifact, canonical.primaryModel)
@@ -472,7 +535,7 @@ func normalizeClaudeThirdPartyTitleRequest(
 	}
 	title := capability.Scenarios.TUITitle
 	main := capability.Scenarios.SDKCLI
-	sourceThinkingAllowed := canonical.thinkingPresent && canonical.disableThinking &&
+	sourceThinkingAllowed := canonical.thinkingPresent &&
 		claudeJSONEqual(canonical.thinking, title.Thinking)
 	// Desktop 2.1.237.3c9 的 Fable 标题请求实测省略 thinking。这里只把
 	// “Fable + 完整标题语义闭集 + thinking 缺省”视为显式关闭的等价表达；
@@ -879,6 +942,10 @@ func refineClaudeOfficialModelScenario(
 	}
 	for _, capability := range artifact.ImplementationPolicy.ModelCatalog.Models {
 		if modelIsPrimary && capability.CanonicalModel != canonical.primaryModel {
+			continue
+		}
+		if !modelIsPrimary && canonical.scenarioHint == "tui-title" &&
+			canonical.primaryModel != "" && capability.CanonicalModel != canonical.primaryModel {
 			continue
 		}
 		for _, candidate := range claudeNamedModelScenarios(capability) {

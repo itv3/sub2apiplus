@@ -15,6 +15,7 @@ import (
 )
 
 const claudeFWHSourceTransitionSHA256 = "b4638d412cfcd34e144dfbcce9b2326d2f6ed4df1987b55cac2c3209d3a5aa5f"
+const claudeFWHInitialProductionChangeset = "claude-code-2.1.226-fw-h-production"
 
 type claudeFWHSourceTransitionReceipt struct {
 	SchemaVersion string `json:"schema_version"`
@@ -119,7 +120,7 @@ func validateClaudeFWHSourceTransition(
 	safety := receipt.Safety
 	if safety.ClaudeSelectorScope != "independent" ||
 		safety.CandidateCatalog != claudeFWGCandidateChangeset ||
-		safety.ProductionCatalog != claudeFWHProductionChangeset ||
+		safety.ProductionCatalog != claudeFWHInitialProductionChangeset ||
 		safety.CodexFinalWire != "zero_difference_required" ||
 		!slices.Equal(safety.RetainedLegacy, []string{
 			"chat-completions-oauth", "responses-oauth",

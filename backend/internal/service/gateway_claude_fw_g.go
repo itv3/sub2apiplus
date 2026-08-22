@@ -129,6 +129,16 @@ func (s *GatewayService) forwardClaudeFWGCountTokens(
 		return err
 	}
 	trusted.Entrypoint.IngressProtocol = "managed-internal"
+	ingress, _ := claudeFWGIngressSnapshotFromContext(c.Request.Context())
+	if err := runtime.ValidateOfficialCountTokensIngress(
+		parsed.Body.Bytes(), ingress, trusted,
+	); err != nil {
+		s.countTokensError(
+			c, http.StatusBadRequest, "invalid_request_error",
+			"Request is outside the Claude official-client SupportEnvelope",
+		)
+		return fmt.Errorf("Claude count_tokens 官方入口校验失败：%w", err)
+	}
 	accessToken, tokenType, err := s.GetAccessToken(ctx, account)
 	if err != nil {
 		return err
@@ -146,7 +156,6 @@ func (s *GatewayService) forwardClaudeFWGCountTokens(
 	executionContext := withClaudeHTTPTransport(
 		ctx, proxyURL, account.ID, claudeFWGConcurrencyLimit(account),
 	)
-	ingress, _ := claudeFWGIngressSnapshotFromContext(c.Request.Context())
 	result, err := runtime.ExecuteCountTokens(
 		executionContext,
 		officialegress.ClaudeEndpointExecution{
@@ -233,6 +242,20 @@ func (s *GatewayService) forwardClaudeFWGCandidate(
 	if err != nil {
 		return nil, err
 	}
+	ingress, _ := claudeFWGIngressSnapshotFromContext(c.Request.Context())
+	if err := runtime.ValidateOfficialMessagesIngress(
+		parsed.Body.Bytes(), ingress, trusted,
+	); err != nil {
+		if !c.Writer.Written() {
+			writeAnthropicError(
+				c,
+				http.StatusBadRequest,
+				"invalid_request_error",
+				"Request is outside the Claude official-client SupportEnvelope",
+			)
+		}
+		return nil, fmt.Errorf("Claude 官方入口校验失败：%w", err)
+	}
 	accessToken, tokenType, err := s.GetAccessToken(ctx, account)
 	if err != nil {
 		return nil, err
@@ -253,7 +276,6 @@ func (s *GatewayService) forwardClaudeFWGCandidate(
 		account.ID,
 		claudeFWGConcurrencyLimit(account),
 	)
-	ingress, _ := claudeFWGIngressSnapshotFromContext(c.Request.Context())
 	result, err := runtime.ExecuteMessages(
 		executionContext,
 		officialegress.ClaudeMessagesExecution{

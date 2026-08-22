@@ -1,7 +1,7 @@
 {
   "schema_version": "official-egress-claude-release-catalog/v1",
   "persona": "claude-code",
-  "source": "campaign:claude-code-2_1_226-fw-g-production-replacement-v2-20260821/approval:claude-code-2.1.226-fw-h-legacy-retirement-v2",
+  "source": "approval:claude-code-2.1.226-official-client-only-v1",
   "releases": [
     {
       "version": "2.1.226",
@@ -41,10 +41,10 @@
     "production_active": {
       "kind": "release",
       "release_sha256": "48586f47e0abcde9ea357c08c1465253eaa296862153a89c20e4cf0f1e6f52f8",
-      "changeset": "claude-code-2.1.226-fw-h-production",
+      "changeset": "claude-code-2.1.226-official-client-only",
       "approval": {
-        "path": "catalogdata/claude/production/claude-code-2.1.226-fw-h-legacy-retirement-approval.json",
-        "sha256": "1d002a2708b198256098999932908d47f0eb90a2c819f11d8393570f33996c2c"
+        "path": "catalogdata/claude/production/claude-code-2.1.226-official-client-only-approval.json",
+        "sha256": "736cf9599c6dcda8aa5f13fd5fa9bf4fe8273e6cd21952892e0fd35eae96f230"
       }
     },
     "production_rollback": {

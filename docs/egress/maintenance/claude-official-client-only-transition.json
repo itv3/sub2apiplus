@@ -1,0 +1,299 @@
+{
+  "schema_version": "official-egress-claude-official-client-only-transition/v1",
+  "issued_at_utc": "2026-08-22T14:00:00Z",
+  "base_commit": "3d5967919",
+  "scope": "claude-official-client-only-dmit-candidate",
+  "predecessors": [
+    {
+      "kind": "legacy_production_approval",
+      "path": "backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-fw-h-legacy-retirement-approval.json",
+      "sha256": "1d002a2708b198256098999932908d47f0eb90a2c819f11d8393570f33996c2c"
+    },
+    {
+      "kind": "persona_release_catalog_acceptance",
+      "path": "docs/egress/maintenance/claude-persona-release-catalog-production-acceptance.json",
+      "sha256": "ff81b254423202c5f1795c7c1f7978a46671fe9720fc454728e73c27f86fd965"
+    },
+    {
+      "kind": "persona_release_catalog_transition",
+      "path": "docs/egress/maintenance/claude-persona-release-catalog-transition.json",
+      "sha256": "16be5939a3c14dd9bc5a7e717583173939ac4d1df4b217e2d15f229d54b21288"
+    }
+  ],
+  "target": {
+    "ingress_policy": "official-client-only",
+    "release_sha256": "48586f47e0abcde9ea357c08c1465253eaa296862153a89c20e4cf0f1e6f52f8",
+    "official_ingress_catalog_sha256": "3641036e6272c7e3be6a952269b4e58aebd88028f760a939fcc22e4a2fd73dd4",
+    "approval_sha256": "736cf9599c6dcda8aa5f13fd5fa9bf4fe8273e6cd21952892e0fd35eae96f230",
+    "official_client_ids": [
+      "claude-code-2.1.226-darwin-arm64",
+      "claude-code-vscode-2.1.239-darwin-arm64",
+      "claude-desktop-2.1.237-darwin-arm64"
+    ]
+  },
+  "ingress_inventory": [
+    {
+      "logical_ingress_id": "chat-completions-oauth",
+      "physical_routes": [
+        "POST /chat/completions",
+        "POST /v1/chat/completions"
+      ],
+      "target_disposition": "explicitly_retired",
+      "runtime_action": "denied_before_oauth",
+      "required_rule_pairs": false
+    },
+    {
+      "logical_ingress_id": "official-count-tokens-oauth",
+      "physical_routes": [
+        "POST /messages/count_tokens",
+        "POST /v1/messages/count_tokens"
+      ],
+      "target_disposition": "migrated_strict",
+      "runtime_action": "catalog_required",
+      "required_rule_pairs": true
+    },
+    {
+      "logical_ingress_id": "official-messages-oauth",
+      "physical_routes": [
+        "POST /v1/messages"
+      ],
+      "target_disposition": "migrated_strict",
+      "runtime_action": "catalog_required",
+      "required_rule_pairs": true
+    },
+    {
+      "logical_ingress_id": "responses-oauth",
+      "physical_routes": [
+        "GET /responses",
+        "GET /v1/responses",
+        "POST /responses",
+        "POST /responses/*subpath",
+        "POST /v1/responses",
+        "POST /v1/responses/*subpath"
+      ],
+      "target_disposition": "explicitly_retired",
+      "runtime_action": "denied_before_oauth",
+      "required_rule_pairs": false
+    },
+    {
+      "logical_ingress_id": "third-party-count-tokens-oauth",
+      "physical_routes": [
+        "POST /messages/count_tokens",
+        "POST /v1/messages/count_tokens"
+      ],
+      "target_disposition": "explicitly_retired",
+      "runtime_action": "denied_before_oauth",
+      "required_rule_pairs": false
+    },
+    {
+      "logical_ingress_id": "third-party-messages-oauth",
+      "physical_routes": [
+        "POST /v1/messages"
+      ],
+      "target_disposition": "explicitly_retired",
+      "runtime_action": "denied_before_oauth",
+      "required_rule_pairs": false
+    }
+  ],
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/catalog_retirements_test.go",
+      "from_sha256": "598fcad7db865ea09b74c0690078053bc84f89d2d210b85a26382fb149414afd",
+      "to_sha256": "2f597cac545897f1f33bd99db52dd877d2b790e9c72602f7d3976284a994aa35",
+      "reason": "让历史兼容退休门禁只通过本轮精确后继账本承接当前摘要。"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/claude/release-catalog.json",
+      "from_sha256": "3f47ee0d89a13478bcce121b956c8e3554685cbffeb47530080684654a1e0fa7",
+      "to_sha256": "40ae64a9b08cfea0d4a1c2b25993c31f0322a2edd0b4583bce3a4bbaeb6b4bb9",
+      "reason": "production_active 改为引用 official-client-only Approval，Release 内容保持不变。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_body.go",
+      "from_sha256": "cb97480760bb7f9eb7a664ce7a4eb1b1f0717f412e6b6ba5e9b676eb588f9a9d",
+      "to_sha256": "a3e4264c9f8a5bccec8de19e259dc2d20950be1616da3d0f818bd00b6aa6f09e",
+      "reason": "只允许已由官方入口 Catalog 证明的新版 System、标题和工具形态进入规范化边界。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_desktop_third_party_ingress_test.go",
+      "from_sha256": "a52518c9c6f86519616e600bf1bbd50034352c442bbdd436c6f83b0993fc15e6",
+      "to_sha256": "b0cdb15ab246d43b87254936cd209186aa74411bce59d12dc7ff7c857533b6ac",
+      "reason": "把 Desktop 从第三方兼容入口改为 Catalog 登记的官方来源，并冻结未登记形态拒绝。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_desktop_title_test.go",
+      "from_sha256": "b3868aca8e19c51655107fa3fed9bff41b9cf4e22d94b556d0711242cb46fe3b",
+      "to_sha256": "4ce5ff6d1efb55c37cf1337c81a877a31144bab599d674a4d723e28255b52424",
+      "reason": "标题请求测试绑定 Desktop 官方 Catalog 身份与 Persona 调度边界。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_fable_declared_fallback_transition_test.go",
+      "from_sha256": "cc85b844d43b371027b9c20a0e2b7b5766e7e0ba4fb075c5ddb88f18f7da1415",
+      "to_sha256": "5df62a666d47ab93b86bb6bc0d90fd526ec669b3fc57ef8a1222e45ff74e6920",
+      "reason": "分离历史退休 Approval 摘要，并让固定旧账本通过统一后继 transition 解析。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_legacy_retirement_transition_test.go",
+      "from_sha256": "02953064979285ed9cfb302c076f018b295ece14547f189ce9f436e0d4549e8a",
+      "to_sha256": "fabaf5cf55fdb973b07015a9b4baf2ecc1b3258d9e108a83fd124eea36aa815f",
+      "reason": "历史退休收据固定使用签发时 Approval，不再读取当前 selector 摘要。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_production_test.go",
+      "from_sha256": "f727f409093630317644f37d0d5850f3166440ad9b69bd55dca8592d5de91d12",
+      "to_sha256": "f5b918c2f24106188c9db41d040083b610250b0375c9ca4a0463a9db0660e57d",
+      "reason": "当前运行时批准测试改为 official-client-only 两类正向入口。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_response_request_id_acceptance_test.go",
+      "from_sha256": "ede7dba75c3eede800c0bf6c4726c3b8bb692f26b11b71379344bb36818e3b72",
+      "to_sha256": "10118799f26772d77195dbbbd661c6780e02a772b9b3a27b29fdb6db54025770",
+      "reason": "request-id 历史验收固定引用签发时退休 Approval 摘要。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_source_transition_test.go",
+      "from_sha256": "87cb831e452973be7d42f99144ea97efbc03fd06fd2fe1ba3841f0c2662b78c4",
+      "to_sha256": "f0fb7bc7b99f8500d43785f85d4cb9033aa1be6674caa315e11a9f4c95dfa79c",
+      "reason": "历史首次 FW-H source transition 固定使用签发时 changeset，不读取当前 selector。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_ingress.go",
+      "from_sha256": "d7f2b39481e4da26f175a516e638887bdda07af6fa7b49f9000046413e5d0f92",
+      "to_sha256": "13e1c1947ac4b46d44764ee1f409655dcb42e147f71b053144747f2a32736aaf",
+      "reason": "入站改为完整 Catalog fail-close，并阻断来源账号与设备身份越过 Persona 调度边界。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_persona_release_catalog_deployment_test.go",
+      "from_sha256": "5ea261bf182d8e8c842662004259c65d05ee910beaf75855c1a3f12003bd0ba6",
+      "to_sha256": "1041e563ffa71973e6d3fa3c5796bceefcf6e5332105a274699fa954bbf3c6ab",
+      "reason": "历史 DeploymentFact 固定旧 Approval，并允许文档摘要由本轮后继收据承接。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_persona_release_catalog_transition_test.go",
+      "from_sha256": "225ce22881c654e193ad095d424446c0c23bda3dfdf4c765a4726f0c9c9b2e4d",
+      "to_sha256": "6446c7890abe5fb3063696bcac131961dc226a1ffffb44997fe7bb9d54cc6b5d",
+      "reason": "历史 Release Catalog transition 固定旧 Approval，并连接 official-client-only 后继。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_production_release.go",
+      "from_sha256": "694c0b039add9d47793c8ac777d7529f6eb9014e436e0ad30f268e23061619cf",
+      "to_sha256": "62354107b3ab97eb9174e7f9a427966a3f0bfaab47626467a79e9603b8effdf0",
+      "reason": "分离当前 selector Approval 与历史不可变退休 Approval，并收窄正向入口集合。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_runtime.go",
+      "from_sha256": "3aa827f35ae49bd43af4f11f8c968790eb2e482b6b25662bdd8b1bbecb320310",
+      "to_sha256": "c8c764873aaf615a2256a0bac2b2875db1db00e8d6c7d9a7deb52bd478801f5b",
+      "reason": "新增 OAuth 凭据读取前的官方 Messages／count_tokens 准入验证。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_runtime_test.go",
+      "from_sha256": "04f00c443f15f779334d35426c6e807c73f87501b4a5625dfc0b29e773d0e06b",
+      "to_sha256": "213517afb5236008d1c75b189584833120b15785bce7e9e5afbd8b28052abf49",
+      "reason": "运行时矩阵改为官方来源正例与第三方／未知工具目录负例。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_tools.go",
+      "from_sha256": "b31599b9552aed54e9f4380951ae0403a25da0af376e13027f39d4f3fd76806e",
+      "to_sha256": "696dfd1406fc5584d50d7159a02ce58b3edc9f97378a26c97dddb87964df8526",
+      "reason": "删除第三方动态工具通用放行，只接受 Release 或官方入口 Catalog 登记目录。"
+    },
+    {
+      "path": "backend/internal/officialegress/officialegress_test.go",
+      "from_sha256": "707870d88e067f80ed154844b5182a0007db47752bc33377a40676d4ea0c8828",
+      "to_sha256": "10b5015bbb0a0fcf4568c238937663f5b3e14e81d500697ab72eeca242afa877",
+      "reason": "补记历史通用 binding 收据到当前测试门禁源码的连续摘要边。"
+    },
+    {
+      "path": "backend/internal/repository/official_egress_claude_fw_h_test.go",
+      "from_sha256": "20dbf61b4110ac5e89dcfc31596a167bbfd354e13b3018e8fd68f773bc39b947",
+      "to_sha256": "0c0cc55e87bd5c7d6f6f8694f1ce158299bf0bff263c0b84c12b2d7b0fec25c8",
+      "reason": "repository 装配测试精确冻结 official-client-only selector，替代已退休的 fw-h-production 名称断言。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_candidate_test.go",
+      "from_sha256": "ae41668681af96e05d7ac37b1546cec2447cddaad62cb169eef8281532a097d7",
+      "to_sha256": "684f42f98c96e5fc0bdc8a097d9e1e692aa430d67b4cbb5003de27624e5370db",
+      "reason": "服务层新增三类官方来源和凭据前拒绝回归矩阵。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_desktop_query_test.go",
+      "from_sha256": "663f8ed3a170bbcba4e7a825b02ae39fdb6d311f636e1030c662518152bac5dc",
+      "to_sha256": "86a48bf9b98fdaeaad1c98aa4428160f2f943f0af625123f093acf3c91d5631b",
+      "reason": "Desktop query 测试改为绑定官方 Catalog wire。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_h_source_transition_test.go",
+      "from_sha256": "dba53b2c016460d109b4f68e3ad29b63d3781de84bb56e10b796ecc7b6455180",
+      "to_sha256": "52071ccab574e1761f0d3771dd525ffe8a22667953031a0679a3078f307f93d1",
+      "reason": "service 历史门禁新增 official-client-only 后继收据解析，只接受已冻结 FW-H 链到本轮精确摘要。"
+    },
+    {
+      "path": "backend/internal/service/gateway_claude_fw_g.go",
+      "from_sha256": "b39f1f82400d96d61588a2671566db5f36e16852ada992095d238cf326507314",
+      "to_sha256": "5ea6d4fcf27fc9c6ef95c93907b8aaa912a9078b6122219a83967a8b7753f9f9",
+      "reason": "Messages 与 count_tokens 在读取 OAuth 凭据前执行 official-client-only 校验。"
+    },
+    {
+      "path": "backend/internal/service/gateway_claude_strict_openai.go",
+      "from_sha256": "a1a39f1011dbc02f2f9ff711e38e0acfc5656123ef6d1aba85b8bce2d3f475a9",
+      "to_sha256": "08337d0d8d07329a82a6e0dc42980bd343d01aeff7c68abaa6be45188eed2452",
+      "reason": "Claude OAuth Persona 的 Chat Completions 与 Responses 改为凭据前直接拒绝。"
+    },
+    {
+      "path": "backend/internal/service/gateway_claude_strict_openai_test.go",
+      "from_sha256": "f76a12197c0072f349c4108a7a727b7ed1ec134a026bac017b6dccc051c691fb",
+      "to_sha256": "f8fb3718a0caf040c25a824ce1f22f7374075f195e0954dcc215d120a7302b65",
+      "reason": "OpenAI 协议正向对拍改为全部物理别名的凭据前拒绝测试。"
+    },
+    {
+      "path": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "from_sha256": "300c6bbe506f6b195b4683f55fac1edf8ac79dad1ca4fb02693ad9add0cf3f1a",
+      "to_sha256": "b21c647e9c7027d846ffb47a5bb654fa1b19dd4369fbc29ee65326b0cb2db3e8",
+      "reason": "Claude 手册收窄为官方客户端专用，并把 DMIT／Vircs 角色改为候选验收／用户管理生产。"
+    },
+    {
+      "path": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+      "from_sha256": "3036aff1ecaabadd45b1cc1bde2ab28f58c9367f645eb7ffe3735334112c9f04",
+      "to_sha256": "fe969b696bee84456948673fcf051ab24b17cc72c97fa23dca58ee1d8e69c5ce",
+      "reason": "共享框架新增 IngressPolicy／OfficialIngressCatalog，并把本轮 FW-H 终点改为 DMIT 候选交付。"
+    }
+  ],
+  "additions": [
+    {
+      "path": "backend/internal/officialegress/catalogdata/claude/official-ingress-catalog.json",
+      "sha256": "3641036e6272c7e3be6a952269b4e58aebd88028f760a939fcc22e4a2fd73dd4",
+      "reason": "新增三类官方来源客户端的内容寻址准入目录。"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-official-client-only-approval.json",
+      "sha256": "736cf9599c6dcda8aa5f13fd5fa9bf4fe8273e6cd21952892e0fd35eae96f230",
+      "reason": "新增只含两类官方逻辑入口的 production-replacement Approval。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_official_ingress_catalog.go",
+      "sha256": "649311b060a843b0b451a4c46a6f7f6a48531b9ea842b781c898ae16ed12c864",
+      "reason": "新增官方来源 Catalog 的严格加载、匹配和身份边界实现。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_official_ingress_catalog_test.go",
+      "sha256": "5df5cf4f6440f5ff2e26c577309f0833014462cdcaf6f62e55d789921895d9e6",
+      "reason": "冻结三类官方来源、未知版本、动态工具和目标原生场景门禁。"
+    }
+  ],
+  "verification": [
+    "catalog_and_approval_identity_tests_passed",
+    "service_credential_read_precedes_no_ingress_gate",
+    "third_party_protocols_and_tools_denied",
+    "historical_receipts_are_not_overwritten",
+    "vircs_not_accessed"
+  ],
+  "safety": {
+    "dmit_deployed": false,
+    "dmit_state": "not_yet_validated",
+    "vircs_accessed": false,
+    "vircs_changed": false,
+    "vircs_state": "operator_managed/unverified/not_touched"
+  },
+  "result": "sealed_for_dmit_validation"
+}

@@ -122,7 +122,7 @@ func validateClaudePersonaReleaseCatalogTransition(
 	}
 	wantPredecessors := map[string]string{
 		"production_acceptance\x00docs/egress/maintenance/claude-fw-h-response-request-id-acceptance.json":                                              "722df263723bbf64ebc74f9470d4c9725b9e92710feda4a3b55bfa8eb4ad8668",
-		"production_approval\x00backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-fw-h-legacy-retirement-approval.json": ClaudeFWHProductionApprovalDigest,
+		"production_approval\x00backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-fw-h-legacy-retirement-approval.json": ClaudeFWHLegacyRetirementApprovalDigest,
 	}
 	for _, predecessor := range receipt.Predecessors {
 		key := predecessor.Kind + "\x00" + predecessor.Path
@@ -176,6 +176,7 @@ func claudePersonaTransitionTargetMatches(path string, want string) bool {
 	sum := sha256.Sum256(raw)
 	current := hex.EncodeToString(sum[:])
 	return current == want ||
+		claudeOfficialClientOnlyTransitionSupersedes(path, want, current) ||
 		claudePersonaReleaseCatalogProductionAcceptanceSupersedes(path, want, current)
 }
 
@@ -188,6 +189,9 @@ func claudePersonaReleaseCatalogTransitionSupersedes(
 ) bool {
 	if !receiptSHA256(priorDigest) || !receiptSHA256(currentDigest) {
 		return false
+	}
+	if claudeOfficialClientOnlyTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
 	}
 	if claudePersonaCatalogCloseoutTransitionSupersedes(path, priorDigest, currentDigest) {
 		return true

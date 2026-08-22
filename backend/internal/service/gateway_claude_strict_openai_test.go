@@ -3,7 +3,6 @@ package service
 import (
 	"bytes"
 	"context"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -12,104 +11,44 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/officialegress"
-	"github.com/Wei-Shaw/sub2api/internal/pkg/tlsfingerprint"
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
 )
 
-func TestGatewayClaudeStrictOpenAIEntrypointsUsePersonaRuntime(t *testing.T) {
+func TestGatewayClaudeStrictOpenAIEntrypointsFailClosed(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	tests := []struct {
-		name       string
-		protocol   string
-		path       string
-		parseKind  string
-		body       string
-		stream     bool
-		wantOutput string
+	for _, test := range []struct {
+		protocol  string
+		path      string
+		parseKind string
+		body      string
 	}{
-		{
-			name: "chat-buffered", protocol: officialegress.IngressProtocolOpenAIChatCompletions,
-			path: "/v1/chat/completions", parseKind: "chat_completions",
-			body:       `{"model":"claude-sonnet-5","messages":[{"role":"system","content":"custom rules"},{"role":"user","content":"hello"}],"max_completion_tokens":32000,"reasoning_effort":"low","stream":false,"tools":[]}`,
-			wantOutput: `"object":"chat.completion"`,
-		},
-		{
-			name: "chat-stream", protocol: officialegress.IngressProtocolOpenAIChatCompletions,
-			path: "/chat/completions", parseKind: "chat_completions",
-			body:   `{"model":"claude-sonnet-5","messages":[{"role":"user","content":"hello"}],"stream":true,"stream_options":{"include_usage":true}}`,
-			stream: true, wantOutput: "data: [DONE]",
-		},
-		{
-			name: "responses-buffered", protocol: officialegress.IngressProtocolOpenAIResponses,
-			path: "/v1/responses", parseKind: "responses",
-			body:       `{"model":"claude-sonnet-5","instructions":"custom rules","input":"hello","max_output_tokens":32000,"reasoning":{"effort":"low"},"stream":false,"store":false}`,
-			wantOutput: `"object":"response"`,
-		},
-		{
-			name: "responses-stream", protocol: officialegress.IngressProtocolOpenAIResponses,
-			path: "/responses", parseKind: "responses",
-			body:   `{"model":"claude-sonnet-5","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hello"}]}],"stream":true,"tools":[]}`,
-			stream: true, wantOutput: "response.completed",
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			upstream := &claudeFWGServiceUpstream{streamAsSSE: true}
-			runtimeState, cfg := newClaudeFWGServiceRuntime(t, upstream)
-			svc := newClaudeStrictOpenAIService(cfg, runtimeState)
-			body := []byte(test.body)
-			recorder := httptest.NewRecorder()
-			c, _ := gin.CreateTestContext(recorder)
-			c.Request = httptest.NewRequest(http.MethodPost, test.path, bytes.NewReader(body))
-			c.Request.Header.Set("Content-Type", "application/json")
-			c.Set("api_key", &APIKey{ID: 23})
-			parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), test.parseKind)
-			require.NoError(t, err)
-			parsed.SessionContext = &SessionContext{APIKeyID: 23, ClientIP: "127.0.0.1"}
-
-			var result *ForwardResult
-			if test.protocol == officialegress.IngressProtocolOpenAIChatCompletions {
-				result, err = svc.ForwardAsChatCompletions(
-					context.Background(), c, claudeFWGServiceAccount(), body, parsed,
-				)
-			} else {
-				result, err = svc.ForwardAsResponses(
-					context.Background(), c, claudeFWGServiceAccount(), body, parsed,
-				)
-			}
-			require.NoError(t, err)
-			require.NotNil(t, result)
-			require.Equal(t, test.stream, result.Stream)
-			require.Equal(t, http.StatusOK, recorder.Code)
-			require.Contains(t, recorder.Body.String(), test.wantOutput)
-			require.Equal(t, "claude-sonnet-5", result.UpstreamResponseModel)
-			require.False(t, result.UpstreamResponseModelConflict)
-
-			messages := claudeStrictMessageCaptures(upstream.captures)
-			require.Len(t, messages, 1)
-			capture := messages[0]
-			require.Equal(t, "claude-cli/2.1.226 (external, sdk-cli)", capture.header.Get("User-Agent"))
-			require.Equal(t, "Bearer <secret-candidate-access-token>", capture.header.Get("Authorization"))
-			require.Contains(t, string(capture.body), `"metadata":{"user_id"`)
-			require.Contains(t, string(capture.body), `"messages":[{"role":"user","content":[{"type":"text","text":"hello"}]}]`)
-			require.NotContains(t, string(capture.body), `"reasoning_effort"`)
-			require.NotContains(t, string(capture.body), `"max_completion_tokens"`)
-			require.NotContains(t, string(capture.body), `"input":`)
-			require.Equal(t, capture.body, parsed.Body.Bytes())
-			if !test.stream && test.protocol == officialegress.IngressProtocolOpenAIChatCompletions {
-				require.Contains(t, recorder.Body.String(), `"finish_reason":"stop"`)
-				require.Contains(t, recorder.Body.String(), `"prompt_tokens":3`)
-				require.Contains(t, recorder.Body.String(), `"completion_tokens":2`)
-				require.Contains(t, recorder.Body.String(), `"total_tokens":5`)
-			}
-			if !test.stream && test.protocol == officialegress.IngressProtocolOpenAIResponses {
-				require.Contains(t, recorder.Body.String(), `"status":"completed"`)
-				require.Contains(t, recorder.Body.String(), `"input_tokens":3`)
-				require.Contains(t, recorder.Body.String(), `"output_tokens":2`)
-				require.Contains(t, recorder.Body.String(), `"total_tokens":5`)
-			}
-		})
+		{officialegress.IngressProtocolOpenAIChatCompletions, "/v1/chat/completions", "chat_completions", `{"model":"claude-sonnet-5","messages":[{"role":"user","content":"hello"}]}`},
+		{officialegress.IngressProtocolOpenAIResponses, "/v1/responses", "responses", `{"model":"claude-sonnet-5","input":"hello"}`},
+	} {
+		upstream := &claudeFWGServiceUpstream{}
+		runtimeState, cfg := newClaudeFWGServiceRuntime(t, upstream)
+		svc := newClaudeStrictOpenAIService(cfg, runtimeState)
+		body := []byte(test.body)
+		recorder := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(recorder)
+		c.Request = httptest.NewRequest(http.MethodPost, test.path, bytes.NewReader(body))
+		parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), test.parseKind)
+		require.NoError(t, err)
+		var result *ForwardResult
+		if test.protocol == officialegress.IngressProtocolOpenAIChatCompletions {
+			result, err = svc.ForwardAsChatCompletions(
+				context.Background(), c, claudeFWGServiceAccount(), body, parsed,
+			)
+		} else {
+			result, err = svc.ForwardAsResponses(
+				context.Background(), c, claudeFWGServiceAccount(), body, parsed,
+			)
+		}
+		require.Error(t, err)
+		require.Nil(t, result)
+		require.Equal(t, http.StatusBadRequest, recorder.Code)
+		require.Empty(t, upstream.captures, "第三方入口必须在凭据和上游调用前拒绝")
 	}
 }
 
@@ -230,123 +169,6 @@ func TestGatewayClaudeStrictOpenAIRejectsBeforeAnyUpstreamCall(t *testing.T) {
 			require.Empty(t, upstream.captures, "本地 fail-close 前不得调用 startup、refresh 或 inference")
 		})
 	}
-}
-
-func TestGatewayClaudeStrictOpenAIHandlesHTTPStreamFallback(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	for _, protocol := range []string{
-		officialegress.IngressProtocolOpenAIChatCompletions,
-		officialegress.IngressProtocolOpenAIResponses,
-	} {
-		t.Run(protocol, func(t *testing.T) {
-			upstream := &claudeFWGServiceUpstream{rejectFirstStream: true}
-			runtimeState, cfg := newClaudeFWGServiceRuntime(t, upstream)
-			svc := newClaudeStrictOpenAIService(cfg, runtimeState)
-			path := "/v1/responses"
-			body := []byte(`{"model":"claude-sonnet-5","input":"hello","stream":true}`)
-			parseKind := "responses"
-			if protocol == officialegress.IngressProtocolOpenAIChatCompletions {
-				path = "/v1/chat/completions"
-				body = []byte(`{"model":"claude-sonnet-5","messages":[{"role":"user","content":"hello"}],"stream":true}`)
-				parseKind = "chat_completions"
-			}
-			recorder := httptest.NewRecorder()
-			c, _ := gin.CreateTestContext(recorder)
-			c.Request = httptest.NewRequest(http.MethodPost, path, bytes.NewReader(body))
-			c.Set("api_key", &APIKey{ID: 23})
-			parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), parseKind)
-			require.NoError(t, err)
-			parsed.SessionContext = &SessionContext{APIKeyID: 23, ClientIP: "127.0.0.1"}
-			var result *ForwardResult
-			if protocol == officialegress.IngressProtocolOpenAIChatCompletions {
-				result, err = svc.ForwardAsChatCompletions(
-					context.Background(), c, claudeFWGServiceAccount(), body, parsed,
-				)
-			} else {
-				result, err = svc.ForwardAsResponses(
-					context.Background(), c, claudeFWGServiceAccount(), body, parsed,
-				)
-			}
-			require.NoError(t, err)
-			require.True(t, result.Stream)
-			require.Equal(t, http.StatusOK, recorder.Code)
-			require.Len(t, claudeStrictMessageCaptures(upstream.captures), 2)
-		})
-	}
-}
-
-type claudeStrictSSEErrorUpstream struct {
-	captures []claudeFWGServiceCapture
-	messages int
-}
-
-func (u *claudeStrictSSEErrorUpstream) Do(
-	request *http.Request,
-	proxyURL string,
-	accountID int64,
-	concurrency int,
-) (*http.Response, error) {
-	return u.DoWithTLS(request, proxyURL, accountID, concurrency, nil)
-}
-
-func (u *claudeStrictSSEErrorUpstream) DoWithTLS(
-	request *http.Request,
-	proxyURL string,
-	accountID int64,
-	concurrency int,
-	profile *tlsfingerprint.Profile,
-) (*http.Response, error) {
-	body, err := io.ReadAll(request.Body)
-	if err != nil {
-		return nil, err
-	}
-	u.captures = append(u.captures, claudeFWGServiceCapture{
-		method: request.Method, url: request.URL.String(), header: request.Header.Clone(),
-		body: body, proxyURL: proxyURL, accountID: accountID,
-		concurrency: concurrency, tlsProfile: profile,
-	})
-	contentType := "application/json"
-	responseBody := `{}`
-	if request.URL.Path == "/v1/messages" {
-		u.messages++
-		if u.messages == 1 {
-			contentType = "text/event-stream"
-			responseBody = "event: ping\n" + `data: {"type":"ping"}` + "\n\n" +
-				"event: error\n" + `data: {"type":"error","error":{"type":"overloaded_error","message":"retry"}}` + "\n\n"
-		} else {
-			responseBody = `{"id":"msg_fallback","type":"message","role":"assistant","model":"claude-sonnet-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":3,"output_tokens":2}}`
-		}
-	}
-	return &http.Response{
-		StatusCode: http.StatusOK,
-		Header: http.Header{
-			"Content-Type": []string{contentType}, "Request-Id": []string{"req_servicetest"},
-		},
-		Body: io.NopCloser(strings.NewReader(responseBody)), Request: request,
-	}, nil
-}
-
-func TestGatewayClaudeStrictOpenAISSEErrorUsesRuntimeFallbackBeforeWriting(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	upstream := &claudeStrictSSEErrorUpstream{}
-	runtimeState, cfg := newClaudeFWGServiceRuntime(t, upstream)
-	svc := newClaudeStrictOpenAIService(cfg, runtimeState)
-	body := []byte(`{"model":"claude-sonnet-5","input":"hello","stream":true}`)
-	recorder := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(recorder)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", bytes.NewReader(body))
-	c.Set("api_key", &APIKey{ID: 23})
-	parsed, err := ParseGatewayRequest(NewRequestBodyRef(body), "responses")
-	require.NoError(t, err)
-	parsed.SessionContext = &SessionContext{APIKeyID: 23, ClientIP: "127.0.0.1"}
-	result, err := svc.ForwardAsResponses(
-		context.Background(), c, claudeFWGServiceAccount(), body, parsed,
-	)
-	require.NoError(t, err)
-	require.True(t, result.Stream)
-	require.Equal(t, 2, upstream.messages)
-	require.NotContains(t, recorder.Body.String(), "overloaded_error")
-	require.Contains(t, recorder.Body.String(), "response.completed")
 }
 
 func TestClaudeStrictOpenAIBranchesBeforeLegacyConverters(t *testing.T) {

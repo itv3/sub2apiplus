@@ -49,65 +49,10 @@ func (s *GatewayService) forwardClaudeStrictOpenAI(
 	protocol string,
 	startTime time.Time,
 ) (*ForwardResult, error) {
-	if err := validateClaudeStrictOpenAIPath(c, protocol); err != nil {
-		writeClaudeStrictOpenAIRejection(c, protocol)
-		return nil, err
-	}
-	canonical, report, err := officialegress.AdaptIngressProtocol(protocol, body)
-	if err != nil {
-		writeClaudeStrictOpenAIRejection(c, protocol)
-		return nil, fmt.Errorf("Claude strict 入站翻译失败：%w", err)
-	}
-	runtime := s.claudeStrictRuntime()
-	if runtime == nil {
-		return nil, errors.New("Claude strict OpenAI route 已开启但 runtime 未注入")
-	}
-	if err := runtime.ValidateCanonical(canonical, report); err != nil {
-		writeClaudeStrictOpenAIRejection(c, protocol)
-		return nil, fmt.Errorf("Claude strict 入站不在 SupportEnvelope：%w", err)
-	}
-	if account.IsCustomBaseURLEnabled() && strings.TrimSpace(account.GetCustomBaseURL()) != "" {
-		return nil, errors.New("Claude strict OpenAI route 不允许自定义上游地址")
-	}
-	if account.ProxyID != nil && account.Proxy == nil {
-		return nil, errors.New("Claude strict OpenAI route 账号代理未解析，禁止静默直连")
-	}
-	trusted, err := buildClaudeStrictCanonicalTrustedFacts(
-		c, account, parsed, protocol, canonical.FirstUserText,
-	)
-	if err != nil {
-		return nil, err
-	}
-	accessToken, tokenType, err := s.GetAccessToken(ctx, account)
-	if err != nil {
-		return nil, err
-	}
-	if tokenType != "oauth" || strings.TrimSpace(accessToken) == "" {
-		return nil, errors.New("Claude strict OpenAI route 只接受 OAuth access token")
-	}
-	proxyURL := ""
-	if account.ProxyID != nil {
-		proxyURL = account.Proxy.URL()
-	}
-	executionContext := withClaudeHTTPTransport(
-		ctx, proxyURL, account.ID, claudeFWGConcurrencyLimit(account),
-	)
-	result, err := runtime.ExecuteCanonical(
-		executionContext,
-		officialegress.ClaudeCanonicalExecution{
-			Canonical: canonical, Translation: report, AccessToken: accessToken,
-			TrustedFacts: trusted, InvocationID: uuid.NewString(),
-		},
-	)
-	if err != nil {
-		if officialegress.IsClaudeSupportEnvelopeRejection(err) && !c.Writer.Written() {
-			writeClaudeStrictOpenAIRejection(c, protocol)
-		}
-		return nil, fmt.Errorf("Claude strict OpenAI 执行失败：%w", err)
-	}
-	return s.finishClaudeStrictOpenAIResponse(
-		executionContext, c, account, parsed, canonical, result, startTime,
-	)
+	// Claude OAuth Persona 只接受已登记的 Anthropic 官方客户端。Chat
+	// Completions 与 Responses 即使可无损翻译，也必须在读取 OAuth 凭据前拒绝。
+	writeClaudeStrictOpenAIRejection(c, protocol)
+	return nil, errors.New("Claude OAuth Persona 不接受第三方 OpenAI 协议入口")
 }
 
 func validateClaudeStrictOpenAIPath(c *gin.Context, protocol string) error {

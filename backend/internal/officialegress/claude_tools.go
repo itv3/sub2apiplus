@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 )
 
@@ -21,18 +20,16 @@ const (
 	claudeToolModeBackground       claudeToolMode = "background"
 	claudeToolModeWebSearchOuter   claudeToolMode = "web-search-outer"
 	claudeToolModeWebSearchServer  claudeToolMode = "web-search-server"
-	claudeToolModeDynamic          claudeToolMode = "dynamic-client"
+	claudeToolModeOfficialCatalog  claudeToolMode = "official-catalog"
 )
-
-var claudeDynamicToolNamePattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,64}$`)
 
 // claudeDynamicToolCatalogLimit 只冻结 2.1.226 官方样本中观测到的最大目录，
 // 供证据收据校验使用；它不是第三方规范化语义请求的运行时准入上限。
 const claudeDynamicToolCatalogLimit = 33
 
-// compileClaudeApprovedTools 把规范化工具意图收敛到 FW-F 已实测目录，或验证为
-// 2.1.226 已实测的标准动态工具描述符。未知特殊工具、截断的 deferred 目录和
-// 伪造的 server tool 一律 fail-close。
+// compileClaudeApprovedTools 只接受 active Release 已冻结的工具场景。
+// 新版官方客户端的完整目录必须先由 OfficialIngressCatalog 精确命中，再由
+// parseClaudeCanonicalMessagesWithCatalog 进入 official-catalog 模式。
 func compileClaudeApprovedTools(
 	toolsRaw json.RawMessage,
 	toolChoiceRaw json.RawMessage,
@@ -85,13 +82,6 @@ func compileClaudeApprovedTools(
 			return nil, nil, "", errors.New("Claude StructuredOutput 不接受 tool_choice")
 		}
 		return structured, nil, claudeToolModeStructuredOutput, nil
-	}
-	dynamic, ok, err := compileClaudeDynamicTools(toolsRaw, toolChoiceRaw)
-	if err != nil {
-		return nil, nil, "", err
-	}
-	if ok {
-		return dynamic, nil, claudeToolModeDynamic, nil
 	}
 	return nil, nil, "", errors.New("Claude tools 不在 FW-F 已批准 ToolPolicy 闭集")
 }
@@ -169,56 +159,6 @@ func claudeOfficialScenarioToolMode(name string) (claudeToolMode, bool) {
 	default:
 		return "", false
 	}
-}
-
-func compileClaudeDynamicTools(
-	toolsRaw json.RawMessage,
-	toolChoiceRaw json.RawMessage,
-) (json.RawMessage, bool, error) {
-	var tools []json.RawMessage
-	if json.Unmarshal(toolsRaw, &tools) != nil || len(tools) == 0 {
-		return nil, false, nil
-	}
-	if len(toolChoiceRaw) != 0 {
-		return nil, false, errors.New("Claude 动态工具目录不接受未实测 tool_choice")
-	}
-	seen := make(map[string]struct{}, len(tools))
-	for _, raw := range tools {
-		fields, err := decodeClaudeUniqueObject(raw)
-		if err != nil {
-			return nil, false, errors.New("Claude 动态工具必须是对象")
-		}
-		for field := range fields {
-			switch field {
-			case "name", "description", "input_schema":
-			default:
-				return nil, false, nil
-			}
-		}
-		var name string
-		if json.Unmarshal(fields["name"], &name) != nil ||
-			!claudeDynamicToolNamePattern.MatchString(name) {
-			return nil, false, errors.New("Claude 动态工具 name 非法")
-		}
-		if _, duplicate := seen[name]; duplicate {
-			return nil, false, errors.New("Claude 动态工具 name 重复")
-		}
-		seen[name] = struct{}{}
-		var description string
-		if json.Unmarshal(fields["description"], &description) != nil ||
-			strings.TrimSpace(description) == "" {
-			return nil, false, errors.New("Claude 动态工具 description 非法")
-		}
-		schema, err := decodeClaudeUniqueObject(fields["input_schema"])
-		if err != nil {
-			return nil, false, errors.New("Claude 动态工具 input_schema 必须是对象")
-		}
-		var schemaType string
-		if json.Unmarshal(schema["type"], &schemaType) != nil || schemaType != "object" {
-			return nil, false, errors.New("Claude 动态工具 input_schema.type 必须是 object")
-		}
-	}
-	return append(json.RawMessage(nil), toolsRaw...), true, nil
 }
 
 func compileClaudeStructuredOutputTool(

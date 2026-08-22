@@ -2,9 +2,9 @@
 
 > **适用范围**：Sub2APIPlus 对官方 OAuth 客户端出站形态进行画像化实现时的共同控制框架
 > **当前规范已建档客户端**：Codex CLI、Claude Code
-> **当前运行时状态**：Codex CLI 与 Claude Code 均已登记 production active strict 链；Claude Code
-> 当前最终生产主机为 DMIT，正式 Compose 已固定 Persona Release Catalog active 镜像，六类 OAuth
-> 入口已迁移 strict，旧 OAuth 链已退休
+> **当前运行时状态**：Codex CLI 保持既有 production active strict 链；Claude Persona 已收窄为
+> `official-client-only` 候选，只接受其 `OfficialIngressCatalog` 登记的官方客户端。DMIT 只承担候选
+> 验收，Vircs 是用户管理的生产机，本任务不连接、不部署、不验证 Vircs
 > **扩展模型**：一份共享框架加若干客户端专属手册；Grok、Gemini 等只能在独立取证和审核后登记
 > **架构原则**：共享内核只解释厂商无关的终态控制事实；协议、身份、状态和 wire 事实由 Persona
 > 自有方言负责。候选共享接口必须经 Codex 零差异和至少一个不可部署的第二 Persona 纵向样例证明后才能冻结
@@ -16,10 +16,14 @@
 
 ## 1.1 唯一目标
 
-无论入站来自官方客户端还是第三方标准 API 客户端，只要最终使用某个已登记的官方 OAuth persona
-出站，Sub2APIPlus 都必须先把入站转换为规范化语义请求，再由该 persona 的生产 active
-ReleaseBundle 生成最终 wire。最终出站形态应与对应版本的官方客户端在相同平台、入口、配置、账号、
-模型和触发条件下直接使用同类 OAuth 时一致。
+只要最终使用某个已登记的官方 OAuth persona 出站，Sub2APIPlus 就必须先执行该 Persona 的入站准入，
+再把已准入请求转换为规范化语义请求，并由其 active ReleaseBundle 生成最终 wire。最终出站形态应与
+对应版本的官方客户端在相同平台、入口、配置、账号、模型和触发条件下直接使用同类 OAuth 时一致。
+
+每个 Persona 必须明确选择 `canonical-semantic` 或 `official-client-only` 入站策略。前者可以批准官方
+客户端和可证明无损的第三方标准 API；后者只接受内容寻址 `OfficialIngressCatalog` 中登记的官方产品、
+版本、平台、UA、固定 Header、System 和工具目录，其他客户端、版本、协议或目录必须在读取 OAuth
+凭据前 fail-close。第三方入口是否被其他产品支持，不等于有权进入该官方 OAuth Persona。
 
 入站客户端名称、版本、User-Agent、Header 顺序和自报身份均不拥有生产画像选择权，也不得直接透传
 为官方身份。账号、Group、计费和调度仍由原业务系统管理；画像只拥有官方上游可见的最终出站形态。
@@ -42,7 +46,8 @@ ReleaseBundle 生成最终 wire。最终出站形态应与对应版本的官方�
 ## 1.3 统一链路
 
 ```text
-官方客户端入口／第三方标准 API 入口
+入站请求
+→ Persona IngressPolicy／OfficialIngressCatalog 准入
 → IngressProtocolAdapter
 → CanonicalRequest + TranslationReport
 → 受信账号路由 + Persona Registry
@@ -61,9 +66,11 @@ ReleaseBundle 生成最终 wire。最终出站形态应与对应版本的官方�
 `TypedEgressPlan`。这两层分离后，增加一种入站协议和增加一个 Persona 不会形成协议数乘 Persona 数
 的适配器矩阵。
 
-官方入口也必须经过对应的入站适配器和同一终态链。只有 `TranslationReport=lossless`、语义等价且
-受信条件相同的两类入站，才要求命中同一 ReleaseArtifact 并通过同一组 wire 断言。无法无损表达的
-官方语义必须拒绝，或在批准的非 strict 用途中显式记录降级；不得静默补造客户端状态。
+官方入口也必须经过对应的入站适配器和同一终态链。只有被 IngressPolicy 批准、
+`TranslationReport=lossless`、语义等价且受信条件相同的入口，才要求命中同一 ReleaseArtifact 并通过
+同一组 wire 断言。`official-client-only` Persona 不建立第三方正向转换责任；第三方入口只作为准入
+负例。无法无损表达的官方语义必须拒绝，或在批准的非 strict 用途中显式记录降级；不得静默补造
+客户端状态。
 
 `TranslationReport=lossless` 只证明用户提交的消息角色、顺序、system、工具、模型意图和流式语义
 无损进入 `CanonicalRequest`，不表示最终请求只能包含入站字段。官方客户端固有且已有证据的 system
@@ -149,6 +156,8 @@ OfficialClientPersona =
 | 扩展点 | 必须提供的内容 |
 |---|---|
 | `PersonaDescriptor` | provider、官方产品、OAuth family、route／Sink 闭集和明确排除项 |
+| `IngressPolicy` | `canonical-semantic` 或 `official-client-only`；声明正向入口类别、凭据前拒绝边界和物理别名闭集 |
+| `OfficialIngressCatalog` | official-client-only 时必需；冻结官方产品、版本、平台、二进制摘要、UA、固定 Header、System／工具目录摘要及目标 Release |
 | `SupportEnvelope` | 平台、入口、隐私模式、模型、功能、端点及明确不支持条件；范围外请求必须 fail-close |
 | `ProductionIngressInventory` | 当前生产的逻辑入口、全部物理别名、调用方和处置状态，以及入口到 adapter／route 的绑定 |
 | `EgressDispositionInventory` | Persona 相关的推理、生命周期和辅助出站闭集，以及每项的运行时处置类别 |
@@ -159,13 +168,15 @@ OfficialClientPersona =
 | `DialectCompiler` | 从该 Persona 的 TypedEgressPlan、IdentityFacts 与画像生成 `CompiledEnvelope` 的规则 |
 | `TransportCapability` | 可复用 adapter 与确需新增的窄 adapter；不得把客户端差异塞进全局分支 |
 | `EvidencePackage` | 官方产物、源码／bundle、P／R／J／M、摘要、适用范围、AtomicAssertionLedger 和 RequiredRules 映射 |
-| `AcceptancePackage` | 聚合引用 AcceptanceFact、DeploymentFact，以及官方入口／每类第三方入口的成对断言、candidate 验收、发布和回滚收据 |
+| `AcceptancePackage` | 聚合引用 AcceptanceFact、适用的 DeploymentFact、全部批准正向入口的成对断言、全部拒绝入口负例、candidate 验收、发布和回滚收据 |
 
 只有出现新的入站协议时才登记新的 `IngressProtocolAdapter`。新增 Persona 默认复用已有协议适配器；
 其官方专属入口若含标准协议无法表达的语义，应新增窄入口适配器并输出同一个 CanonicalRequest 合同，
 不能把解析逻辑藏进 Persona Compiler。
 
-**第三方 Agent 工具接入。** 第三方 IDE／Agent 自带的工具目录不得因为上游 API 接受自定义工具，或
+**第三方 Agent 工具接入。** 本段只适用于 `canonical-semantic` 且已把相应第三方入口列入正向
+SupportEnvelope 的 Persona。`official-client-only` Persona 直接选择 `denied`，不建设工具映射，也不把
+该映射当作上线前置条件。第三方 IDE／Agent 自带的工具目录不得因为上游 API 接受自定义工具，或
 官方客户端支持 MCP，就原样进入官方 Persona wire。接入时必须冻结第三方产品、版本、入口、工具目录
 摘要，以及名称、说明、Schema、顺序、条件和多轮 `tool_use／tool_result` 关系，并对每项工具选择以下
 且仅以下一种处置：
@@ -198,7 +209,8 @@ Inventory 必须把 `current_disposition` 与 ApprovalFact 中的 `target_dispos
 
 逻辑入口必须展开到所有物理路由、别名和内部调用点；未知别名、无处置入口或新增裸调用都使闭集门禁
 失败。只有 `migrated_strict` 才计入 Persona 的 strict SupportEnvelope；其余三态不能伪装成 strict
-验收成功。
+验收成功。`official-client-only` Persona 对第三方逻辑入口使用 `explicitly_retired`，并另记运行时
+`denied_before_oauth`；这表示入口仍返回明确协议错误，而不是继续走遗留或第三方转换链。
 
 `EgressDispositionInventory` 中每个已知出站必须取以下运行时处置之一：
 
@@ -340,16 +352,17 @@ sink 关系时，静态锚点才可支持继承；能力不足时使用目标版
 ## 4.1 成对验收与 strict 门槛
 
 每条原子断言建立独立 `PAIR-*`；一个 RequiredRule 的验收结果由其映射的全部原子断言合取而成，
-不得为减少数量丢弃底层断言。官方入口和每类第三方标准 API 入口提交语义等价请求，并在同一
-candidate、画像和条件下验证最终 wire 收敛。动态字段比较来源、格式、关系和生命周期，不比较一次
-抓包的随机字面值。客户端本地 scenario-only 断言只验证输入边界，不要求网关重演本地文件或 Hook。
+不得为减少数量丢弃底层断言。所有被 IngressPolicy 批准的正向入口提交语义等价请求，并在同一
+candidate、画像和条件下验证最终 wire 收敛；未批准入口只进入凭据前 fail-close 的负例分母，不得
+伪造正向 `PAIR-*`。动态字段比较来源、格式、关系和生命周期，不比较一次抓包的随机字面值。客户端
+本地 scenario-only 断言只验证输入边界，不要求网关重演本地文件或 Hook。
 
 每个 candidate 必须先冻结 `SupportEnvelope`。目标规则全集是该范围内所有 request-egress 规则，
 而不是把尚未支持的平台、入口、隐私模式或功能静默算作成功。范围外条件必须在 PersonaPlanner 或
 Compiler fail-close；只有 validation-only 才能显式记录非无损降级。
 
 `SupportEnvelope` 的批准还必须绑定同一时点的 `ProductionIngressInventory`。每个
-`migrated_strict` 入口都必须位于该 Envelope 内，并按官方入口或对应第三方协议类别完成逐规则断言；
+`migrated_strict` 入口都必须位于该 Envelope 内，并按其批准的入口类别完成逐规则断言；
 每个 `retained_legacy`、`explicitly_retired` 或 `rerouted` 入口都必须分别证明遗留隔离、退休或目标
 路由事实。只要仍有 `retained_legacy`，candidate 可以在较小范围灰度，但不得据此删除旧 finalizer、
 旁路或画像构造器，也不得生成表示迁移完成的 RemovalReceipt。
@@ -359,7 +372,8 @@ Compiler fail-close；只有 validation-only 才能显式记录非无损降级�
 | `validation_only` | 可保留已记录的 `blocked`／`regressed_evidence`，止于诊断或 provisional |
 | `production_replacement` | SupportEnvelope 内全部目标规则达到批准等级，不存在阻断 strict wire 的未决项；范围外请求已证明 fail-close |
 
-第三方入口按协议类别登记；无法无损映射官方语义时必须拒绝或明确记录降级。任何对齐责任规则仍为
+第三方入口按协议类别登记；`official-client-only` 一律拒绝，`canonical-semantic` 中无法无损映射官方
+语义的入口也必须拒绝或明确记录降级。任何对齐责任规则仍为
 `blocked`，或已验证规则降为 `regressed_evidence` 时，candidate 不得成为 strict active；验收通过
 也不会自动提升官方规则的证据等级。
 
@@ -421,10 +435,10 @@ DeploymentTrafficEnvelope
 # 第六部分 首轮迁移实施方案
 
 本部分把现有 Codex 专用 strict 执行链收窄为多 Persona 共享控制内核，并在不把 Claude 遗留输出
-当作规格的前提下重建 Claude Code firstParty OAuth 仿真。机器角色必须随 Campaign 和 DeploymentFact
-冻结，不能由主机名隐含决定：历史 FW-C／首次 FW-H 收据保留当时的 Vircs 生产事实；最终 FW-H 经明确
-角色变更后以 DMIT 为当前生产和最终镜像主机，Vircs 只保留官方 Claude Code 取证角色，本次最终退休
-未连接、未修改 Vircs。
+当作规格的前提下重建 Claude Code firstParty OAuth 仿真。机器角色必须随 Campaign 和验收事实冻结，
+不能由主机名隐含决定：历史 FW-C／FW-H 收据只陈述签发时的事实；当前 DMIT 是候选验收机，Vircs 是
+用户管理的生产机。本任务以 DMIT 达到 `ready_for_operator_release` 为终点，不连接、不修改 Vircs，
+也不签发声称 Vircs 已部署的 DeploymentFact。
 
 ## 6.1 当前状态与本轮目标
 
@@ -449,22 +463,12 @@ ApprovalFact、candidate、selector 变更或部署。事实分别见
 [发现项清零收据](egress/maintenance/fw-f-discovery-clearance/receipt.json)和
 [FW-F RequiredRules 规范化收据](egress/maintenance/fw-f-required-rules-normalization/receipt.json)。
 
-FW-G 已以追加事实完成：独立官方复测、Candidate 对拍和 DMIT 隔离验收把 40 条 RequiredRules 升级为
-`verified`；后继 `production_replacement` ApprovalFact、固定 ValidationCandidate、40 个唯一
-`PAIR-<SPEC-ID>`、九个场景批准链和 AcceptanceFact 已封存。FW-H 当前状态为：DMIT 运行提交
-`4ea8f73e5`／镜像 `sha256:5c48094d…`，并由正式 Compose 选择 Claude Persona Release Catalog；六类
-Claude OAuth 入口均为 `migrated_strict`，`retained_legacy` 为空，旧 OAuth 链保持退休并已有
-RemovalReceipt。当前可调度账号范围的 Sonnet／Opus、第三方入口、范围外拒绝和 Codex 隔离矩阵为
-37／37；Fable 账号按既有运维状态禁用，本轮只引用同一 ReleaseBundle 的既有实测，不冒充新实测。
-`e2c80213a`／镜像 `sha256:356384ce…` 仍是已完成 46／46 且保留在 DMIT 的操作回退点。当前
-Catalog 维护 DeploymentFact 为 `active`，上一 FW-H 的 `restored_active` 不被覆盖；Codex 路由保持
-`rerouted`。Vircs 本次未连接、未修改。历史生产事实继续由原
-[FW-H 生产验收包](egress/maintenance/claude-fw-h-production-acceptance-package.json)冻结，request-id 后继事实见
-[FW-H request-id 验收包](egress/maintenance/claude-fw-h-response-request-id-acceptance.json)，当前运行事实见
-[Catalog 生产验收收据](egress/maintenance/claude-persona-release-catalog-production-acceptance.json)。
-
-生产事实以镜像 digest、selector、activation fact 和不可覆盖收据为准；缺失或不一致时统一标记
-`production_unverified`。
+FW-G 的历史 40 条 RequiredRules、`PAIR-<SPEC-ID>`、ValidationCandidate 和 AcceptanceFact 继续作为
+不可变证据。当前后继变更把 Claude IngressPolicy 收窄为 `official-client-only`：正向范围只有已登记
+Claude Code、Claude Desktop、Claude Code for VS Code 经由 Messages／count_tokens 的两类逻辑入口；
+KiloCode、zlfcode、curl、Chat Completions、Responses、未登记版本、Header、metadata、System 或工具
+目录均在读取 OAuth 凭据前拒绝。历史六入口 strict 和 DMIT-as-production 收据保持不可变，但不再代表
+当前目标。当前只允许在 DMIT 构建候选验收事实；Vircs 保持 `operator_managed／unverified／not_touched`。
 
 ## 6.2 现有代码处置
 
@@ -483,7 +487,7 @@ Catalog 维护 DeploymentFact 为 `active`，上一 FW-H 的 `restored_active` �
 ```text
 FW-A 基线 → FW-B 暂定合同 → FW-C Codex-only 发布 → FW-D 通用工具链
 → FW-E 最新 stable 取证 → FW-F target-first 画像与最终合同
-→ FW-G 完整实现与验收 → FW-H 生产迁移与遗留退休
+→ FW-G 完整实现与隔离验收 → FW-H DMIT 发布候选验收与交付
 ```
 
 每阶段是独立变更集。输入必须引用前序不可变制品；输出只写追加；退出门禁未满足时不得开始下一阶段。
@@ -588,7 +592,7 @@ FW-A 基线 → FW-B 暂定合同 → FW-C Codex-only 发布 → FW-D 通用工�
   规范重复项；只有目标版本 R/M（必要时 P）和逐项断言闭合的 request-egress 命题才能进入
   AtomicAssertionLedger。随后按 Codex 六字段和 Persona 实现责任归并 RequiredRules，客户端本地行为
   进入 scenario-only，并证明全部原子断言恰好一次归属。未决数清零后，才由最新 stable 证据定义 Claude
-  PersonaDescriptor、PersonaPlanner、ClaudeEgressPlan、IdentityFacts、ProfileSchema 和
+  PersonaDescriptor、IngressPolicy、必要的 OfficialIngressCatalog、PersonaPlanner、ClaudeEgressPlan、IdentityFacts、ProfileSchema 和
   DialectCompiler，登记 IngressProtocolAdapter 的复用／新增结论及 TransportCapability，生成目标
   Snapshot／ReleaseArtifact 与不可部署纵向样例。随后用同一 Schema／Compiler 生成 2.1.220
   baseline／rollback fixture；通过样例后才冻结最终共享合同，并在 ApprovalFact 中批准 Persona 派生、
@@ -631,8 +635,8 @@ FW-A 基线 → FW-B 暂定合同 → FW-C Codex-only 发布 → FW-D 通用工�
   rollback／恢复验收。
 - **输出制品**：固定源码／测试／镜像／Release 引用的 ValidationCandidate、逐规则 PAIR 结果、
   AcceptanceFact，以及 rollback 演练和 Codex 回归结果。
-- **退出门禁**：SupportEnvelope 内目标规则唯一全覆盖，官方入口和每类 lossless 第三方入口均通过；
-  范围外 fail-close、三种出站处置、统一链路、Persona 派生、独立 authority／issuer／状态、跨 Persona
+- **退出门禁**：SupportEnvelope 内目标规则唯一全覆盖，所有批准正向入口均通过；所有未批准客户端、
+  版本、协议和工具目录在凭据前 fail-close，三种出站处置、统一链路、Persona 派生、独立 authority／issuer／状态、跨 Persona
   隔离、compatibility 隔离和 rollback 均通过；candidate 达到 `production-replacement ready`，且 Codex
   final wire 零差异。
 - **禁止／回退**：不得修改 production selector 或删除遗留链；`observed／blocked／regressed_evidence`
@@ -641,29 +645,26 @@ FW-A 基线 → FW-B 暂定合同 → FW-C Codex-only 发布 → FW-D 通用工�
   缺口按 FW-F 回退，任何批准内容或构建变化均建立新的 ApprovalFact 或 ValidationCandidate，不复用
   AcceptanceFact。
 
-### 6.3.8 FW-H：生产切换
+### 6.3.8 FW-H：DMIT 发布候选验收与交付
 
 - **前置输入**：FW-G 的 production-replacement AcceptanceFact、不可变 candidate／Release、FW-F 的
-  两个 Inventory／三个 Envelope 计划，以及 FW-A 的生产恢复点和已演练 rollback 目标。
-- **必做动作**：只读冻结生产后离线晋升 Release，重跑终态门禁并构建固定正式镜像；canary 前根据
-  ApprovalFact、AcceptanceFact 和真实 rollback 演练冻结实际 `ActiveSupportEnvelope`、
-  `RollbackOperationalEnvelope`、`DeploymentTrafficEnvelope` 并验证 §4.2 不变量；再执行隔离 canary，
-  仅让 `DeploymentTrafficEnvelope` 内流量切入 active，完成正式切换、真实 rollback、目标恢复和稳定
-  观察。签发 DeploymentFact 后，才依据该事实追加实际 `current_disposition`。遗留退休不是生产切换
-  的同义词；只有闭集完成后，才以独立退休变更删除旧 finalizer、版本常量、画像构造器和旁路。
-- **输出制品**：晋升／镜像／canary／切换／回滚／恢复收据，达到 `restored_active` 的 DeploymentFact、
-  更新后的两个 Inventory、activation fact，以及聚合 AcceptanceFact、DeploymentFact 和全部验收／发布／
-  回滚收据的 AcceptancePackage；满足退休门禁时另行签发 RemovalReceipt。
-- **生产切换门禁**：运行镜像、production active／rollback、画像摘要、三个 Envelope、Inventory 和收据一致；
-  Runtime Catalog 按 Persona 原子生效，Claude active 无法验证时其 route fail-close，不影响 Codex，也不
-  发生跨 Persona fallback；完整
-  `DeploymentTrafficEnvelope` 回滚与恢复成功并通过稳定观察。只有另行退休遗留链时，才额外要求无
-  `retained_legacy`、未知入口或未处置出站并签发 RemovalReceipt。
-- **禁止／回退**：不得重建数据库／缓存／依赖服务，不得提前删除遗留能力或覆盖历史事实。范围不变量
-  或生产一致性失败时禁止激活／扩流，标记 `production_unverified` 并恢复冻结目标。
+  两个 Inventory，以及已冻结的 DMIT 现状和可运行回退镜像。
+- **必做动作**：在 Mac／ARM64 按冻结构建链生成固定 `linux/amd64` 镜像，只替换 DMIT 应用容器；在
+  DMIT 执行三类已登记官方客户端的 Messages／count_tokens 正例，以及 KiloCode、zlfcode、curl、Chat
+  Completions、Responses、未登记版本／Header／metadata／System／工具目录和跨 Persona 负例；完成
+  DMIT 镜像回退、候选恢复、稳定观察和依赖不变核对。
+- **输出制品**：固定源码、二进制与镜像摘要，DMIT 候选验收／回退／恢复／稳定观察收据，最终
+  ProductionIngressInventory，以及状态为 `ready_for_operator_release` 的 AcceptancePackage。
+- **交付门禁**：DMIT 运行镜像、Release、Profile、OfficialIngressCatalog、Approval、Inventory 和收据
+  一致；两类官方逻辑入口正例全通过，全部拒绝入口在读取 OAuth 凭据前失败；Codex final wire 零差异，
+  应用回退与候选恢复成功，依赖服务未改变。
+- **禁止／回退**：不得连接、修改或部署 Vircs，不得签发 Vircs DeploymentFact，也不得把 DMIT 验收
+  写成生产已激活。不得重建数据库／缓存／依赖服务或覆盖历史事实；任一门禁失败时恢复 DMIT 冻结
+  镜像并保持 `not_ready_for_operator_release`。
 
-2.1.220 只有在其独立 ApprovalFact 和真实演练共同覆盖 `DeploymentTrafficEnvelope` 时，才能作为 strict
-rollback；否则使用 FW-A 冻结的遗留部署承担 operational rollback，其 wire 仍为 diagnostic-only。
+用户后续自行替换 Vircs 时，必须另行冻结真实生产范围、回退目标并签发 DeploymentFact；DMIT 的
+`ready_for_operator_release` 收据不能代替生产激活事实。2.1.220 只有在其独立 ApprovalFact 和真实演练
+覆盖实际生产范围时，才能作为 strict rollback；否则只能使用已冻结的操作回退镜像。
 
 ## 6.4 失败与回退规则
 
@@ -677,5 +678,5 @@ rollback；否则使用 FW-A 冻结的遗留部署承担 operational rollback，
 | FW-F 仍有仅归档／待判断发现、未收敛语义候选，或逐项终态不能反向解析到 FW-E inventory | 停在 FW-F，补语义审查、目标证据和终态绑定；未决数清零前不得签发 ProfileApprovalFact、生成 candidate 或缩小范围绕过 |
 | FW-F／FW-G 发现共享合同缺口 | 作废相关 ApprovalFact／candidate，返回 FW-B；重走 FW-C，并重验两个 fixture |
 | 官方产物、批准内容、源码、测试、画像或镜像变化 | 按 §3.2 建立新 Campaign、ApprovalFact 或 candidate；旧验收和收据不得复用 |
-| §4.2 不变量或生产一致性失败 | 禁止激活／扩流，标记 `production_unverified`，恢复冻结目标 |
+| FW-H DMIT 镜像、Catalog、批准、Inventory、正负矩阵或回退恢复不一致 | 恢复 DMIT 冻结镜像，保持 `not_ready_for_operator_release`；不得触碰 Vircs |
 | 仍有 `retained_legacy`、未知入口或未处置出站 | 不得退休遗留链；未知 OAuth 出站保持 `denied` |

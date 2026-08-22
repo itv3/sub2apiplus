@@ -39,9 +39,9 @@ func TestClaudeFWGIngressQueryIsClosed(t *testing.T) {
 	}
 }
 
-func TestClaudeFWGOfficialDesktopBetaQueryUsesStrictPersona(t *testing.T) {
+func TestClaudeFWGUnregisteredDesktopBetaQueryFailsClosed(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	upstream := &claudeFWGServiceUpstream{rejectFirstStream: true}
+	upstream := &claudeFWGServiceUpstream{}
 	runtimeState, cfg := newClaudeFWGServiceRuntime(t, upstream)
 	svc := &GatewayService{
 		cfg: cfg, rateLimitService: &RateLimitService{},
@@ -68,18 +68,10 @@ func TestClaudeFWGOfficialDesktopBetaQueryUsesStrictPersona(t *testing.T) {
 	messagesResult, err := svc.Forward(
 		context.Background(), messagesContext, account, messagesParsed,
 	)
-	require.NoError(t, err)
-	require.NotNil(t, messagesResult)
-	require.Equal(t, http.StatusOK, messagesRecorder.Code)
-
-	messageCaptureCount := 0
-	for _, capture := range upstream.captures {
-		if capture.url == "https://api.anthropic.com/v1/messages?beta=true" {
-			messageCaptureCount++
-			require.Equal(t, "claude-cli/2.1.226 (external, sdk-cli)", capture.header.Get("User-Agent"))
-		}
-	}
-	require.GreaterOrEqual(t, messageCaptureCount, 1)
+	require.Error(t, err)
+	require.Nil(t, messagesResult)
+	require.Equal(t, http.StatusBadRequest, messagesRecorder.Code)
+	require.Empty(t, upstream.captures)
 
 	countBody := []byte(`{"model":"claude-sonnet-5","messages":[{"role":"user","content":"desktop count"}],"tools":[]}`)
 	countRecorder := httptest.NewRecorder()
@@ -95,13 +87,7 @@ func TestClaudeFWGOfficialDesktopBetaQueryUsesStrictPersona(t *testing.T) {
 	)
 	countParsed, err := ParseGatewayRequest(NewRequestBodyRef(countBody), PlatformAnthropic)
 	require.NoError(t, err)
-	require.NoError(
-		t, svc.ForwardCountTokens(context.Background(), countContext, account, countParsed),
-	)
-	require.Equal(t, http.StatusOK, countRecorder.Code)
-	require.JSONEq(t, `{"input_tokens":42}`, countRecorder.Body.String())
-
-	countCapture := upstream.captures[len(upstream.captures)-1]
-	require.Equal(t, "https://api.anthropic.com/v1/messages/count_tokens?beta=true", countCapture.url)
-	require.Equal(t, "claude-cli/2.1.226 (external, cli)", countCapture.header.Get("User-Agent"))
+	require.Error(t, svc.ForwardCountTokens(context.Background(), countContext, account, countParsed))
+	require.Equal(t, http.StatusBadRequest, countRecorder.Code)
+	require.Empty(t, upstream.captures)
 }

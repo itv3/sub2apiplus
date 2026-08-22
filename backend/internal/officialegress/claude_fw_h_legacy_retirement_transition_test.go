@@ -89,7 +89,7 @@ func validateClaudeFWHLegacyRetirementTransition(
 		receipt.BaseCommit != "c51fb5d2cf052f47db9f27926d8340c2c218e2af" ||
 		receipt.Scope != "legacy_retirement" || receipt.Result != "passed" ||
 		receipt.ApprovalFact.Path != "backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-fw-h-legacy-retirement-approval.json" ||
-		receipt.ApprovalFact.SHA256 != ClaudeFWHProductionApprovalDigest {
+		receipt.ApprovalFact.SHA256 != ClaudeFWHLegacyRetirementApprovalDigest {
 		return errors.New("Claude FW-H 遗留退休 transition 顶层事实非法")
 	}
 	approvalRaw, err := os.ReadFile(filepath.Join("../../..", filepath.FromSlash(receipt.ApprovalFact.Path)))

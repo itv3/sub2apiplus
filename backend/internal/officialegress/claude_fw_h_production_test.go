@@ -150,7 +150,7 @@ func TestClaudeFWHApprovalRejectsEnvelopeOrReleaseDrift(t *testing.T) {
 		t.Fatal(err)
 	}
 	approval.DeploymentTrafficEnvelope.LogicalIngressIDs =
-		approval.DeploymentTrafficEnvelope.LogicalIngressIDs[:5]
+		approval.DeploymentTrafficEnvelope.LogicalIngressIDs[:1]
 	if err := validateClaudeFWHProductionApproval(approval); err == nil {
 		t.Fatal("Claude FW-H ApprovalFact 未拒绝 DeploymentTrafficEnvelope 扩大")
 	}

@@ -14,10 +14,13 @@ const (
 	// ClaudeFWHInitialProductionApprovalDigest 固定首次生产迁移批准，历史验收与
 	// 收据只能继续引用它，后继退休批准不得覆盖该事实。
 	ClaudeFWHInitialProductionApprovalDigest = "73e690d20fdb36688d70247d4c857f6aa31ebfc6dcd755fbbcc8276e37d74f1a"
+	// ClaudeFWHLegacyRetirementApprovalDigest 固定历史六入口退休批准。
+	// 后继 active Approval 改变时，历史收据仍只能引用该不可变摘要。
+	ClaudeFWHLegacyRetirementApprovalDigest = "1d002a2708b198256098999932908d47f0eb90a2c819f11d8393570f33996c2c"
 )
 
-// ClaudeFWHProductionApprovalDigest 是历史调用点的兼容变量；生产运行时从
-// production_active selector 直接取得批准摘要。
+// ClaudeFWHProductionApprovalDigest 始终表示当前 production_active selector
+// 实际选择的批准摘要；历史收据必须使用各自的固定常量。
 var ClaudeFWHProductionApprovalDigest = DefaultClaudeReleaseCatalog().ProductionActive().ApprovalDigest()
 
 func ClaudeFWGWireDigest() string {
@@ -215,10 +218,6 @@ func validateClaudeFWHProductionApprovalForRelease(
 	wantIngress := []string{
 		"official-count-tokens-oauth",
 		"official-messages-oauth",
-		"third-party-count-tokens-oauth",
-		"third-party-messages-oauth",
-		"chat-completions-oauth",
-		"responses-oauth",
 	}
 	if !slices.Equal(activeIngress, wantIngress) ||
 		!validClaudeCatalogStringSet(strictEgress) ||

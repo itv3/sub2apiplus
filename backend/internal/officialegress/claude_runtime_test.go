@@ -839,7 +839,10 @@ func TestClaudeFWGApprovedScenarioMatrixCompilesFrozenWire(t *testing.T) {
 				wire,
 			)
 			if err != nil || !officialIngress {
-				t.Fatalf("官方场景入口识别失败：official=%t err=%v", officialIngress, err)
+				t.Fatalf(
+					"官方场景入口识别失败：official=%t err=%v body=%s",
+					officialIngress, err, body,
+				)
 			}
 			roundCanonical, _, err := parseClaudeCanonicalMessages(
 				body, resolved, wire, true,
@@ -1304,18 +1307,11 @@ func TestClaudeFWGCountTokensOfficialIngressIsClosed(t *testing.T) {
 	runtime, _, _ := newClaudeTestRuntime(t, port)
 	trusted := claudeTestTrustedFacts()
 	trusted.Entrypoint.IngressProtocol = "managed-internal"
-	endpoint, err := runtime.profile.endpoint("count-tokens")
-	if err != nil {
-		t.Fatal(err)
-	}
-	headers := make(http.Header)
-	for _, fact := range endpoint.headers.Facts {
-		if fact.Value != "" {
-			headers.Set(fact.Name, fact.Value)
-		}
-	}
 	sessionID := "77777777-7777-4777-8777-777777777777"
-	headers.Set("X-Claude-Code-Session-Id", sessionID)
+	headers := claudeOfficialCatalogHeaders(
+		t, "claude-code-2.1.226-darwin-arm64",
+		runtime.wire.Messages.DefaultBeta, sessionID,
+	)
 	headers.Set("x-client-request-id", "88888888-8888-4888-8888-888888888888")
 	body := []byte(
 		`{"model":"claude-sonnet-5","messages":[{"role":"user","content":"count"}],"tools":[]}`,
@@ -1344,20 +1340,12 @@ func TestClaudeFWGCountTokensOfficialIngressIsClosed(t *testing.T) {
 		t.Fatalf("Claude count_tokens 范围外模型未 fail-close：%v", err)
 	}
 	headers.Set("x-app", "cli-bg")
-	fallbackResult, err := runtime.ExecuteCountTokens(context.Background(), ClaudeEndpointExecution{
+	_, err = runtime.ExecuteCountTokens(context.Background(), ClaudeEndpointExecution{
 		Body: body, AccessToken: "token", TrustedFacts: trusted,
 		Ingress: ClaudeIngressSnapshot{Captured: true, Headers: headers},
 	})
-	if err != nil {
-		t.Fatalf("Claude count_tokens 自报身份错误拥有了准入权：%v", err)
-	}
-	_ = fallbackResult.Response.Body.Close()
-	requests = port.snapshot()
-	fallbackRequest := requests[len(requests)-1]
-	if got := claudeTestHeaderValue(
-		fallbackRequest.Header, "X-Claude-Code-Session-Id",
-	); got != trusted.Session.SessionID || got == sessionID {
-		t.Fatalf("Claude count_tokens 身份冲突未回到 Planner 会话：got=%s", got)
+	if err == nil {
+		t.Fatal("Claude count_tokens 未登记的 cli-bg Header 没有 fail-close")
 	}
 }
 
@@ -1392,10 +1380,8 @@ func TestClaudeFWGToolPolicyIsClosed(t *testing.T) {
 		t.Fatal("缺少描述的未知 Claude 工具未 fail-close")
 	}
 	dynamic := json.RawMessage(`[{"name":"CronCreate","description":"Create a cron job","input_schema":{"type":"object","properties":{"schedule":{"type":"string"}},"required":["schedule"]}},{"name":"mcp__desktop__custom_tool","description":"Desktop MCP tool","input_schema":{"type":"object","properties":{}}}]`)
-	compiledDynamic, dynamicChoice, dynamicMode, err := compileClaudeApprovedTools(dynamic, nil, wire)
-	if err != nil || dynamicMode != claudeToolModeDynamic || len(dynamicChoice) != 0 ||
-		!bytes.Equal(compiledDynamic, dynamic) {
-		t.Fatalf("标准动态工具目录没有无损进入受管语义层：mode=%s err=%v", dynamicMode, err)
+	if _, _, _, err := compileClaudeApprovedTools(dynamic, nil, wire); err == nil {
+		t.Fatal("未登记的第三方动态工具目录未 fail-close")
 	}
 	_, _, _, err = compileClaudeApprovedTools(
 		json.RawMessage(`[{"name":"CronCreate","description":"one","input_schema":{"type":"object"}},{"name":"CronCreate","description":"two","input_schema":{"type":"object"}}]`),
@@ -1432,12 +1418,8 @@ func TestClaudeFWGToolPolicyIsClosed(t *testing.T) {
 	if marshalErr != nil {
 		t.Fatal(marshalErr)
 	}
-	compiledLargeCatalog, _, largeCatalogMode, err := compileClaudeApprovedTools(
-		largeCatalogRaw, nil, wire,
-	)
-	if err != nil || largeCatalogMode != claudeToolModeDynamic ||
-		!bytes.Equal(compiledLargeCatalog, largeCatalogRaw) {
-		t.Fatalf("标准动态工具目录被错误套用官方固定目录上限：mode=%s err=%v", largeCatalogMode, err)
+	if _, _, _, err := compileClaudeApprovedTools(largeCatalogRaw, nil, wire); err == nil {
+		t.Fatal("未登记的大型动态工具目录未 fail-close")
 	}
 	_, _, _, err = compileClaudeApprovedTools(
 		json.RawMessage(`[{"type":"future_server_tool","name":"future"}]`), nil, wire,
@@ -1522,7 +1504,7 @@ func TestClaudeFWGToolPolicyIsClosed(t *testing.T) {
 	}
 }
 
-func TestClaudeFWGIgnoresUntrustedIngressIdentityAndRejectsLossyThirdParty(t *testing.T) {
+func TestClaudeFWGRejectsUnregisteredIngressAndLossyInternalRequests(t *testing.T) {
 	trusted := claudeTestTrustedFacts()
 	for _, userAgent := range []string{
 		"claude-cli/not-approved",
@@ -1530,16 +1512,18 @@ func TestClaudeFWGIgnoresUntrustedIngressIdentityAndRejectsLossyThirdParty(t *te
 	} {
 		port := &claudeCapturePort{}
 		runtime, _, _ := newClaudeTestRuntime(t, port)
-		result, err := runtime.ExecuteMessages(context.Background(), ClaudeMessagesExecution{
+		_, err := runtime.ExecuteMessages(context.Background(), ClaudeMessagesExecution{
 			Body: claudeTestMessagesBody(), AccessToken: "token", TrustedFacts: trusted,
 			Ingress: ClaudeIngressSnapshot{Captured: true, Headers: http.Header{
 				"User-Agent": []string{userAgent},
 			}},
 		})
-		if err != nil {
-			t.Fatalf("不可信入站 UA 错误拥有了 Persona 准入权：ua=%s err=%v", userAgent, err)
+		if err == nil || !IsClaudeSupportEnvelopeRejection(err) {
+			t.Fatalf("未登记入站 UA 没有 fail-close：ua=%s err=%v", userAgent, err)
 		}
-		_ = result.Response.Body.Close()
+		if len(port.snapshot()) != 0 {
+			t.Fatalf("未登记入站 UA 在拒绝前调用了上游：ua=%s", userAgent)
+		}
 	}
 
 	lossy := []byte(`{"model":"claude-sonnet-5","messages":[{"role":"user","content":"x"}],"stream":true,"unsupported":true}`)
@@ -1774,6 +1758,10 @@ func TestClaudeFWGToolUseResultRelationsAreClosed(t *testing.T) {
 func TestClaudeFWGLargeHistoricalWebSearchDoesNotBecomeCurrentContinuation(t *testing.T) {
 	port := &claudeCapturePort{}
 	runtime, _, _ := newClaudeTestRuntime(t, port)
+	wire, err := loadClaudeFWGWire()
+	if err != nil {
+		t.Fatal(err)
+	}
 	body, err := json.Marshal(map[string]any{
 		"model": "claude-sonnet-5",
 		"messages": []any{
@@ -1789,10 +1777,7 @@ func TestClaudeFWGLargeHistoricalWebSearchDoesNotBecomeCurrentContinuation(t *te
 			map[string]any{"role": "assistant", "content": "old answer"},
 			map[string]any{"role": "user", "content": "current ordinary turn"},
 		},
-		"tools": []any{map[string]any{
-			"name": "WebSearch", "description": "Search the web",
-			"input_schema": map[string]any{"type": "object"},
-		}},
+		"tools":  json.RawMessage(wire.ImplementationPolicy.ToolPolicy.WebSearchOuter.Tools),
 		"stream": true,
 	})
 	if err != nil {

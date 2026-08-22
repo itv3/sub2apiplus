@@ -657,23 +657,23 @@ func (r *ClaudeRuntime) ExecuteMessages(
 	if r == nil || r.executor == nil {
 		return ClaudeCandidateResult{}, errors.New("Claude FW-G runtime 未初始化")
 	}
-	input.AccessToken = strings.TrimSpace(input.AccessToken)
-	if input.AccessToken == "" {
-		return ClaudeCandidateResult{}, errors.New("Claude candidate 缺少 OAuth access token")
-	}
 	trusted, ingressState, officialIngress, err := resolveClaudeOfficialIngressBase(
 		input.Body, input.Ingress, input.TrustedFacts, r.profile, r.wire,
 	)
 	if err != nil {
 		return ClaudeCandidateResult{}, newClaudeSupportEnvelopeRejection(err)
 	}
-	canonical, translation, err := parseClaudeCanonicalMessages(
+	canonical, translation, err := parseClaudeCanonicalMessagesWithCatalog(
 		input.Body, trusted, r.wire, officialIngress,
+		ingressState.CatalogMatch, officialIngress && input.Ingress.Captured,
 	)
 	if err != nil {
 		return ClaudeCandidateResult{}, newClaudeSupportEnvelopeRejection(err)
 	}
 	if officialIngress {
+		if canonical.scenarioHint == "tui-title" {
+			trusted.Entrypoint.Entrypoint = ClaudeEntrypointCLI
+		}
 		canonical.fallbackLatchedBy = ingressState.FallbackLatchedBy
 		canonical.refusalFallback = ingressState.RefusalFallback
 		if canonical.serverFallback != ingressState.ServerFallbackHeadersSeen {
@@ -690,10 +690,67 @@ func (r *ClaudeRuntime) ExecuteMessages(
 	} else if err := completeClaudeThirdPartyTitleFacts(&trusted, canonical); err != nil {
 		return ClaudeCandidateResult{}, newClaudeSupportEnvelopeRejection(err)
 	}
+	input.AccessToken = strings.TrimSpace(input.AccessToken)
+	if input.AccessToken == "" {
+		return ClaudeCandidateResult{}, errors.New("Claude candidate 缺少 OAuth access token")
+	}
 	input.TrustedFacts = trusted
 	return r.executePreparedClaudeMessages(
 		ctx, input, canonical, translation, "anthropic-messages",
 	)
+}
+
+// ValidateOfficialMessagesIngress 在读取、刷新或传入 OAuth 凭据前完成官方客户端
+// Catalog、metadata、规范化语义和 SupportEnvelope 校验。
+func (r *ClaudeRuntime) ValidateOfficialMessagesIngress(
+	body []byte,
+	ingress ClaudeIngressSnapshot,
+	trusted ClaudeTrustedFacts,
+) error {
+	if r == nil || r.executor == nil {
+		return errors.New("Claude FW-G runtime 未初始化")
+	}
+	if !ingress.Captured {
+		return newClaudeSupportEnvelopeRejection(errors.New("Claude 官方入口 wire 未冻结"))
+	}
+	resolved, state, official, err := resolveClaudeOfficialIngressBase(
+		body, ingress, trusted, r.profile, r.wire,
+	)
+	if err != nil || !official {
+		if err == nil {
+			err = errors.New("Claude 入站客户端未登记")
+		}
+		return newClaudeSupportEnvelopeRejection(err)
+	}
+	canonical, _, err := parseClaudeCanonicalMessagesWithCatalog(
+		body, resolved, r.wire, true, state.CatalogMatch, true,
+	)
+	if err != nil {
+		return newClaudeSupportEnvelopeRejection(err)
+	}
+	canonical.fallbackLatchedBy = state.FallbackLatchedBy
+	canonical.refusalFallback = state.RefusalFallback
+	if canonical.scenarioHint == "tui-title" {
+		resolved.Entrypoint.Entrypoint = ClaudeEntrypointCLI
+	}
+	if canonical.serverFallback != state.ServerFallbackHeadersSeen {
+		return newClaudeSupportEnvelopeRejection(errors.New(
+			"Claude server fallback Body 与 Header 状态不一致",
+		))
+	}
+	classifyClaudeOfficialFallback(&canonical, r.wire)
+	if err := completeClaudeOfficialIngressFeatures(
+		&resolved, canonical, state, r.wire, ingress.Headers,
+	); err != nil {
+		return newClaudeSupportEnvelopeRejection(err)
+	}
+	if _, err := validateClaudeMessageRelations(canonical); err != nil {
+		return newClaudeSupportEnvelopeRejection(err)
+	}
+	if _, err := claudeModelCapabilityForPlan(ClaudeEgressPlan{canonical: canonical}, r.wire); err != nil {
+		return newClaudeSupportEnvelopeRejection(err)
+	}
+	return nil
 }
 
 // ValidateCanonical 在任何凭据刷新或上游调用前验证共享规范化语义。
@@ -1979,6 +2036,33 @@ func (r *ClaudeRuntime) ExecuteCountTokens(
 	return r.executeEndpoint(ctx, input)
 }
 
+// ValidateOfficialCountTokensIngress 在凭据读取前验证 count_tokens 的官方入口与语义。
+func (r *ClaudeRuntime) ValidateOfficialCountTokensIngress(
+	body []byte,
+	ingress ClaudeIngressSnapshot,
+	trusted ClaudeTrustedFacts,
+) error {
+	if r == nil || r.executor == nil {
+		return errors.New("Claude FW-G runtime 未初始化")
+	}
+	if !ingress.Captured {
+		return newClaudeSupportEnvelopeRejection(errors.New("Claude 官方 count_tokens wire 未冻结"))
+	}
+	resolved, err := resolveClaudeOfficialCountTokensIngress(
+		ingress, trusted, r.profile, r.wire,
+	)
+	if err != nil {
+		return newClaudeSupportEnvelopeRejection(err)
+	}
+	if _, err := deriveClaudeIdentityFacts(resolved); err != nil {
+		return newClaudeSupportEnvelopeRejection(err)
+	}
+	if _, err := parseClaudeCountTokens(body, r.wire); err != nil {
+		return newClaudeSupportEnvelopeRejection(err)
+	}
+	return nil
+}
+
 func (r *ClaudeRuntime) executeEndpoint(
 	ctx context.Context,
 	input ClaudeEndpointExecution,
@@ -1995,7 +2079,7 @@ func (r *ClaudeRuntime) executeEndpoint(
 	}
 	if endpoint.kind == "count-tokens" {
 		input.TrustedFacts, err = resolveClaudeOfficialCountTokensIngress(
-			input.Ingress, input.TrustedFacts, r.profile,
+			input.Ingress, input.TrustedFacts, r.profile, r.wire,
 		)
 		if err != nil {
 			return ClaudeEndpointResult{}, err

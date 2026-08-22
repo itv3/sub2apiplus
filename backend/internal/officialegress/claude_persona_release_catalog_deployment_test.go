@@ -243,7 +243,7 @@ func validateClaudePersonaCatalogDeploymentFact(fact claudePersonaCatalogDeploym
 		fact.Release.WireSHA256 != claudeFWGWireDigest ||
 		fact.Release.ReleaseSHA256 != ClaudeFWGReleaseDigest ||
 		fact.Release.BundleSHA256 != ClaudeFWGBundleDigest ||
-		fact.Release.ApprovalSHA256 != ClaudeFWHProductionApprovalDigest {
+		fact.Release.ApprovalSHA256 != ClaudeFWHLegacyRetirementApprovalDigest {
 		return errors.New("Claude Persona Catalog DeploymentFact Release 非法")
 	}
 	if fact.Build.Commit != "4ea8f73e5b36ce294d71751d795669c3778327cd" ||
@@ -315,7 +315,7 @@ func validateClaudePersonaCatalogProductionAcceptance(
 		"persona_release_catalog_transition\x00docs/egress/maintenance/claude-persona-release-catalog-transition.json":                                  "16be5939a3c14dd9bc5a7e717583173939ac4d1df4b217e2d15f229d54b21288",
 		"fw_h_response_request_id_acceptance\x00docs/egress/maintenance/claude-fw-h-response-request-id-acceptance.json":                                "722df263723bbf64ebc74f9470d4c9725b9e92710feda4a3b55bfa8eb4ad8668",
 		"three_model_acceptance\x00docs/egress/maintenance/claude-fw-g-three-model-acceptance.json":                                                     "16dc60bc46eede747cb0535e53367c134a28466f12399f06a485693e142b15a9",
-		"production_approval\x00backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-fw-h-legacy-retirement-approval.json": ClaudeFWHProductionApprovalDigest,
+		"production_approval\x00backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-fw-h-legacy-retirement-approval.json": ClaudeFWHLegacyRetirementApprovalDigest,
 	}
 	for _, predecessor := range receipt.Predecessors {
 		key := predecessor.Kind + "\x00" + predecessor.Path
@@ -417,7 +417,9 @@ func claudePersonaCatalogDocumentMatches(path string, wantSHA string) bool {
 		return false
 	}
 	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:]) == wantSHA
+	current := hex.EncodeToString(sum[:])
+	return current == wantSHA ||
+		claudeOfficialClientOnlyTransitionSupersedes(path, wantSHA, current)
 }
 
 func claudePersonaReleaseCatalogProductionAcceptanceSupersedes(
@@ -427,6 +429,9 @@ func claudePersonaReleaseCatalogProductionAcceptanceSupersedes(
 ) bool {
 	if !receiptSHA256(priorDigest) || !receiptSHA256(currentDigest) {
 		return false
+	}
+	if claudeOfficialClientOnlyTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
 	}
 	receipt, err := loadClaudePersonaCatalogProductionAcceptance()
 	if err != nil {
@@ -449,7 +454,9 @@ func claudePersonaCatalogCloseoutTransitionSupersedes(
 	if !receiptSHA256(priorDigest) || !receiptSHA256(currentDigest) {
 		return false
 	}
-	if claudeFWHImmutableTransitionLedgerSupersedes(path, priorDigest, currentDigest) {
+	if claudeFWHImmutableTransitionLedgerSupersedesBeforeOfficialClientOnly(
+		path, priorDigest, currentDigest,
+	) {
 		return true
 	}
 	graph := make(map[string][]string)
@@ -481,12 +488,16 @@ func claudePersonaCatalogCloseoutTransitionSupersedes(
 		from := queue[0]
 		queue = queue[1:]
 		if from == currentDigest ||
-			claudeFWHImmutableTransitionLedgerSupersedes(path, from, currentDigest) {
+			claudeFWHImmutableTransitionLedgerSupersedesBeforeOfficialClientOnly(
+				path, from, currentDigest,
+			) {
 			return true
 		}
 		for edgeFrom, targets := range graph {
 			if from != edgeFrom &&
-				!claudeFWHImmutableTransitionLedgerSupersedes(path, from, edgeFrom) {
+				!claudeFWHImmutableTransitionLedgerSupersedesBeforeOfficialClientOnly(
+					path, from, edgeFrom,
+				) {
 				continue
 			}
 			for _, target := range targets {

@@ -71,6 +71,21 @@ func claudeFWHImmutableTransitionLedgerSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if claudeOfficialClientOnlyTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
+	return claudeFWHImmutableTransitionLedgerSupersedesBeforeOfficialClientOnly(
+		path, priorDigest, currentDigest,
+	)
+}
+
+// claudeFWHImmutableTransitionLedgerSupersedesBeforeOfficialClientOnly 只遍历
+// official-client-only 之前的固定账本，供后继收据验证前序可达性，避免递归。
+func claudeFWHImmutableTransitionLedgerSupersedesBeforeOfficialClientOnly(
+	path string,
+	priorDigest string,
+	currentDigest string,
+) bool {
 	claudeFWHImmutableTransitionLedgerOnce.Do(func() {
 		claudeFWHImmutableTransitionLedgerGraph = make(map[string]map[string][]string)
 		for receiptPath, wantDigest := range claudeFWHImmutableTransitionLedgerFiles {
@@ -640,7 +655,7 @@ func validateClaudeFWHFinalTargetAndPredecessors(
 		target.WireSHA256 != claudeFWGWireDigest ||
 		target.ReleaseSHA256 != ClaudeFWGReleaseDigest ||
 		target.BundleSHA256 != ClaudeFWGBundleDigest ||
-		target.ActiveApprovalSHA256 != ClaudeFWHProductionApprovalDigest ||
+		target.ActiveApprovalSHA256 != ClaudeFWHLegacyRetirementApprovalDigest ||
 		target.RollbackApprovalSHA256 != ClaudeFWHInitialProductionApprovalDigest {
 		t.Fatal("Claude FW-H 最终目标身份非法")
 	}
@@ -650,7 +665,7 @@ func validateClaudeFWHFinalTargetAndPredecessors(
 		"docs/egress/maintenance/claude-fw-h-legacy-retirement-test-transition.json":                                             claudeFWHLegacyRetirementTestSHA256,
 		"docs/egress/maintenance/claude-fw-h-fable-declared-fallback-source-transition.json":                                     claudeFWHFableDeclaredFallbackSourceSHA256,
 		"docs/egress/maintenance/claude-fw-h-fable-declared-fallback-test-transition.json":                                       claudeFWHFableDeclaredFallbackTestSHA256,
-		"backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-fw-h-legacy-retirement-approval.json": ClaudeFWHProductionApprovalDigest,
+		"backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-fw-h-legacy-retirement-approval.json": ClaudeFWHLegacyRetirementApprovalDigest,
 	}
 	if len(receipt.Predecessors) != len(want) {
 		t.Fatal("Claude FW-H 最终前序数量非法")
@@ -792,7 +807,7 @@ func validateClaudeFWHFinalIngressAndRemoval(
 		!slices.Equal(removal.PreservedProductSemantics, []string{
 			"setup-token-non-persona-managed", "key-based-auth-retained",
 			"service-account-retained", "codex-direct-rerouted",
-		}) || removal.ApprovalSHA256 != ClaudeFWHProductionApprovalDigest ||
+		}) || removal.ApprovalSHA256 != ClaudeFWHLegacyRetirementApprovalDigest ||
 		removal.Result != "passed" {
 		t.Fatal("Claude FW-H RemovalReceipt 非法")
 	}

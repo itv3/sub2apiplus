@@ -5,8 +5,12 @@ import (
 	"testing"
 )
 
-func TestClaudeFWGDesktopThirdPartyDoesNotClaimTargetReleaseIdentity(t *testing.T) {
+func TestClaudeUnregisteredIngressFailsClosed(t *testing.T) {
 	trusted := claudeTestTrustedFacts()
+	wire, err := loadClaudeFWGWire()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, userAgent := range []string{
 		"claude-cli/2.1.234 (external, claude-desktop-3p)",
 		"claude-cli/2.1.234 (external, claude-desktop-3p, agent-sdk/0.3.234)",
@@ -20,17 +24,17 @@ func TestClaudeFWGDesktopThirdPartyDoesNotClaimTargetReleaseIdentity(t *testing.
 			"User-Agent": []string{userAgent},
 		}}
 		resolved, state, official, err := resolveClaudeOfficialIngressBase(
-			nil, desktop, trusted, claudeFWGProfile{}, claudeWireArtifact{},
+			nil, desktop, trusted, claudeFWGProfile{}, wire,
 		)
-		if err != nil || official || state != (claudeOfficialIngressState{}) ||
-			resolved.Session.SessionID != trusted.Session.SessionID {
-			t.Fatalf("Claude Desktop 第三方入口错误继承目标 Release 身份：ua=%s official=%t err=%v", userAgent, official, err)
+		if err == nil || official || state.CatalogMatch.entry.clientID != "" ||
+			resolved.Account.AccountScope != "" {
+			t.Fatalf("Claude 未登记入口没有 fail-close：ua=%s official=%t err=%v", userAgent, official, err)
 		}
 		countResolved, err := resolveClaudeOfficialCountTokensIngress(
-			desktop, trusted, claudeFWGProfile{},
+			desktop, trusted, claudeFWGProfile{}, wire,
 		)
-		if err != nil || countResolved.Session.SessionID != trusted.Session.SessionID {
-			t.Fatalf("Claude Desktop count_tokens 第三方入口错误继承官方会话：ua=%s err=%v", userAgent, err)
+		if err == nil || countResolved.Account.AccountScope != "" {
+			t.Fatalf("Claude 未登记 count_tokens 入口没有 fail-close：ua=%s err=%v", userAgent, err)
 		}
 	}
 

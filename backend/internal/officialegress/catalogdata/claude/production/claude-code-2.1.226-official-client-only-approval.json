@@ -1,0 +1,69 @@
+{
+  "schema_version": "claude-fw-h-production-approval/v2",
+  "approval_id": "claude-code-2.1.226-official-client-only-v1",
+  "issued_at_utc": "2026-08-22T13:15:03Z",
+  "approval_purpose": "production_replacement_official_client_only",
+  "status": "approved",
+  "target": {
+    "product": "claude-code",
+    "version": "2.1.226",
+    "platform": "linux/amd64",
+    "authentication": "claude.ai-oauth",
+    "privacy": "essential-traffic-no-telemetry",
+    "models": [
+      "claude-sonnet-5",
+      "claude-opus-5",
+      "claude-fable-5"
+    ],
+    "required_rules": 40,
+    "profile_sha256": "e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5",
+    "wire_sha256": "a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d",
+    "release_artifact_sha256": "48586f47e0abcde9ea357c08c1465253eaa296862153a89c20e4cf0f1e6f52f8",
+    "release_bundle_sha256": "ceb1e30740ab4223684f478f717dd2902d8fdad0c6efad5a69b761d95b4aefae"
+  },
+  "predecessors": [
+    {
+      "kind": "prior_production_approval",
+      "path": "backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-fw-h-legacy-retirement-approval.json",
+      "sha256": "1d002a2708b198256098999932908d47f0eb90a2c819f11d8393570f33996c2c"
+    },
+    {
+      "kind": "official_ingress_catalog",
+      "path": "backend/internal/officialegress/catalogdata/claude/official-ingress-catalog.json",
+      "sha256": "3641036e6272c7e3be6a952269b4e58aebd88028f760a939fcc22e4a2fd73dd4"
+    }
+  ],
+  "active_support_envelope": {
+    "logical_ingress_ids": [
+      "official-count-tokens-oauth",
+      "official-messages-oauth"
+    ],
+    "strict_egress_ids": [
+      "egress-claude-count-tokens",
+      "egress-claude-lifecycle-hello",
+      "egress-claude-mcp-servers",
+      "egress-claude-messages-inference",
+      "egress-claude-oauth-profile",
+      "egress-claude-oauth-token-refresh",
+      "egress-claude-policy-limits",
+      "egress-claude-settings"
+    ]
+  },
+  "rollback_operational_envelope": {
+    "kind": "frozen-legacy-deployment",
+    "wire_evidence": "diagnostic-only",
+    "logical_ingress_ids": [
+      "official-count-tokens-oauth",
+      "official-messages-oauth"
+    ]
+  },
+  "deployment_traffic_envelope": {
+    "logical_ingress_ids": [
+      "official-count-tokens-oauth",
+      "official-messages-oauth"
+    ]
+  },
+  "retained_legacy": [],
+  "unknown_oauth_egress": "denied",
+  "removal_receipt_allowed": true
+}

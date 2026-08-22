@@ -28,11 +28,12 @@ type claudeOfficialIngressState struct {
 	FallbackLatchedBy         string
 	RefusalFallback           bool
 	ServerFallbackHeadersSeen bool
+	CatalogMatch              claudeOfficialIngressMatch
 }
 
 var (
 	claudeOfficialUAPattern = regexp.MustCompile(
-		`^claude-cli/([0-9]+\.[0-9]+\.[0-9]+) \(external, (sdk-cli|cli)((?:, (?:agent-sdk|client-app|workload)/[A-Za-z0-9._:/-]+)*)\)$`,
+		`^claude-cli/([0-9]+\.[0-9]+\.[0-9]+) \(external, (sdk-cli|cli|claude-desktop-3p|claude-vscode)((?:, (?:agent-sdk|client-app|workload)/[A-Za-z0-9._:/-]+)*)\)$`,
 	)
 	claudeCCHPattern = regexp.MustCompile(`^[0-9a-f]{5}$`)
 )
@@ -48,10 +49,9 @@ func resolveClaudeOfficialIngressBase(
 		body, snapshot, trusted, profile, artifact,
 	)
 	if err != nil {
-		// 入站 UA 和同名 Header 都是不可信提示，不能拥有 Persona 准入或
-		// 拒绝权。完整官方一致性校验失败时回到标准协议语义链；后续仍会
-		// 对 CanonicalRequest 的字段闭集和无损性独立 fail-close。
-		return trusted, claudeOfficialIngressState{}, false, nil
+		// Claude OAuth Persona 已收窄为官方客户端专用。只要网关冻结了真实
+		// 入站 wire，Catalog 未命中就必须 fail-close，禁止再降级到第三方链。
+		return ClaudeTrustedFacts{}, claudeOfficialIngressState{}, false, err
 	}
 	return resolved, state, official, nil
 }
@@ -67,44 +67,23 @@ func validateClaudeOfficialIngressBase(
 		return trusted, claudeOfficialIngressState{}, false, nil
 	}
 	headers := snapshot.Headers.Clone()
-	userAgent := strings.TrimSpace(headers.Get("User-Agent"))
-	// 入站客户端名称、版本和 User-Agent 不拥有 Persona 或生产画像选择权。
-	// 只有与当前 Release 完整一致的形态才进入后续一致性验证；Desktop、
-	// 新旧版本 Claude Code、KiloCode 及其他标准客户端一律按第三方语义
-	// 入站处理，不能因为自报了 claude-cli 身份而被拒绝或继承官方身份。
-	if !claudeOfficialUAPattern.MatchString(userAgent) {
-		return trusted, claudeOfficialIngressState{}, false, nil
-	}
-	entrypoint, uaFeatures, err := parseClaudeOfficialUserAgent(
-		userAgent, artifact.Identity.Version,
+	match, err := defaultClaudeOfficialIngressCatalog().matchMessages(
+		body, headers, profile, artifact,
 	)
 	if err != nil {
 		return ClaudeTrustedFacts{}, claudeOfficialIngressState{}, false, err
 	}
-	if err := validateClaudeOfficialIngressHeaders(headers, profile); err != nil {
-		return ClaudeTrustedFacts{}, claudeOfficialIngressState{}, false, err
-	}
-	metadata, err := extractClaudeOfficialMetadata(body, trusted.Account.AccountUUID)
+	metadata, err := validateClaudeOfficialMetadataSession(body, headers)
 	if err != nil {
 		return ClaudeTrustedFacts{}, claudeOfficialIngressState{}, false, err
 	}
-	sessionID := strings.TrimSpace(headers.Get("X-Claude-Code-Session-Id"))
-	if _, err := uuid.Parse(sessionID); err != nil || metadata.sessionID != sessionID {
-		return ClaudeTrustedFacts{}, claudeOfficialIngressState{}, false, errors.New(
-			"Claude 官方 Session Header 与 metadata 缺失或冲突",
-		)
-	}
-	requestID := strings.TrimSpace(headers.Get("x-client-request-id"))
-	if _, err := uuid.Parse(requestID); err != nil {
-		return ClaudeTrustedFacts{}, claudeOfficialIngressState{}, false, errors.New(
-			"Claude 官方 x-client-request-id 非法",
-		)
-	}
+	sessionID := metadata.sessionID
 	xApp := strings.TrimSpace(headers.Get("x-app"))
 	if xApp != "cli" && xApp != "cli-bg" {
 		return ClaudeTrustedFacts{}, claudeOfficialIngressState{}, false, errors.New("Claude 官方 x-app 非法")
 	}
-	if xApp == "cli-bg" && entrypoint != ClaudeEntrypointCLI {
+	if xApp == "cli-bg" &&
+		(!match.nativeTargetScenario || match.sourceEntrypoint != ClaudeEntrypointCLI) {
 		return ClaudeTrustedFacts{}, claudeOfficialIngressState{}, false, errors.New(
 			"Claude background 与 UA entrypoint 冲突",
 		)
@@ -133,6 +112,11 @@ func validateClaudeOfficialIngressBase(
 
 	agentID := strings.ToLower(strings.TrimSpace(headers.Get("x-claude-code-agent-id")))
 	parentAgentID := strings.ToLower(strings.TrimSpace(headers.Get("x-claude-code-parent-agent-id")))
+	if !match.nativeTargetScenario && (agentID != "" || parentAgentID != "" || xApp == "cli-bg") {
+		return ClaudeTrustedFacts{}, claudeOfficialIngressState{}, false, errors.New(
+			"Claude 新版官方入口的 agent 条件尚未登记",
+		)
+	}
 	agent := ClaudeTrustedAgentLineageFacts{Background: xApp == "cli-bg"}
 	if agentID != "" {
 		agent.AgentID = agentID
@@ -146,44 +130,41 @@ func validateClaudeOfficialIngressBase(
 		return ClaudeTrustedFacts{}, claudeOfficialIngressState{}, false, err
 	}
 
-	trusted.Account.DeviceID = metadata.deviceID
+	// 入站 metadata 只证明官方 wire 形状。账号 UUID 和 device_id 不能跨越
+	// 调度边界；最终值继续由被选中的 OAuth 账号与 Persona 重新构造。
 	trusted.Session = ClaudeTrustedSessionFacts{
 		SessionID: sessionID,
 		Source:    ClaudeSessionSourceOfficialConsistent,
 	}
-	trusted.Entrypoint.Entrypoint = entrypoint
+	trusted.Entrypoint.Entrypoint = match.entry.targetEntrypoint
+	if match.nativeTargetScenario {
+		trusted.Entrypoint.Entrypoint = match.sourceEntrypoint
+	}
 	trusted.Agent = agent
 	trusted.Features.RequestGzip = snapshot.RequestGzip
-	trusted.Features.AdditionalProtection = strings.EqualFold(
-		strings.TrimSpace(headers.Get("x-anthropic-additional-protection")), "true",
-	)
-	trusted.Features.RemoteContainerID = strings.TrimSpace(headers.Get("x-claude-remote-container-id"))
-	trusted.Features.RemoteSessionID = strings.TrimSpace(headers.Get("x-claude-remote-session-id"))
-	trusted.Features.ClientApp = strings.TrimSpace(headers.Get("x-client-app"))
-	trusted.Features.AgentSDKVersion = uaFeatures["agent-sdk"]
-	trusted.Features.Workload = uaFeatures["workload"]
-	if uaClientApp := uaFeatures["client-app"]; uaClientApp != "" {
-		if trusted.Features.ClientApp != "" && trusted.Features.ClientApp != uaClientApp {
-			return ClaudeTrustedFacts{}, claudeOfficialIngressState{}, false, errors.New(
-				"Claude 官方 UA client-app 与 Header 冲突",
-			)
-		}
-		trusted.Features.ClientApp = uaClientApp
+	trusted.Features.ExtraMetadata = nil
+	trusted.Features.CustomHeaderLines = nil
+	if match.nativeTargetScenario {
+		_, uaFeatures, _ := parseClaudeOfficialUserAgent(
+			strings.TrimSpace(headers.Get("User-Agent")), match.entry.version,
+		)
+		trusted.Features.AdditionalProtection = strings.EqualFold(
+			strings.TrimSpace(headers.Get("x-anthropic-additional-protection")), "true",
+		)
+		trusted.Features.RemoteContainerID = strings.TrimSpace(headers.Get("x-claude-remote-container-id"))
+		trusted.Features.RemoteSessionID = strings.TrimSpace(headers.Get("x-claude-remote-session-id"))
+		trusted.Features.ClientApp = strings.TrimSpace(headers.Get("x-client-app"))
+		trusted.Features.AgentSDKVersion = uaFeatures["agent-sdk"]
+		trusted.Features.Workload = uaFeatures["workload"]
 	}
-	trusted.Features.ExtraMetadata = metadata.extra
-	customHeaders, err := extractClaudeOfficialCustomHeaders(headers, profile)
-	if err != nil {
-		return ClaudeTrustedFacts{}, claudeOfficialIngressState{}, false, err
-	}
-	trusted.Features.CustomHeaderLines = customHeaders
 
-	attribution, present, err := parseClaudeOfficialAttribution(body, artifact)
+	attribution, present, err := parseClaudeOfficialAttribution(body, artifact, match)
 	if err != nil {
 		return ClaudeTrustedFacts{}, claudeOfficialIngressState{}, false, err
 	}
 	trusted.Features.DisableAttribution = !present
 	if present {
-		if attribution["cc_entrypoint"] != entrypoint {
+		if match.nativeTargetScenario && attribution["cc_entrypoint"] != match.sourceEntrypoint {
 			return ClaudeTrustedFacts{}, claudeOfficialIngressState{}, false, errors.New(
 				"Claude attribution entrypoint 与 UA 冲突",
 			)
@@ -201,7 +182,8 @@ func validateClaudeOfficialIngressBase(
 			}
 			trusted.Session.PreviousRequestID = previous
 		}
-		if workload := attribution["cc_workload"]; workload != trusted.Features.Workload {
+		if workload := attribution["cc_workload"]; match.nativeTargetScenario &&
+			workload != trusted.Features.Workload {
 			return ClaudeTrustedFacts{}, claudeOfficialIngressState{}, false, errors.New(
 				"Claude attribution workload 与 UA 冲突",
 			)
@@ -211,6 +193,7 @@ func validateClaudeOfficialIngressBase(
 		Beta: strings.TrimSpace(headers.Get("anthropic-beta")), AttributionPresent: present,
 		FallbackLatchedBy: fallbackLatchedBy, RefusalFallback: refusalFallback,
 		ServerFallbackHeadersSeen: serverFallbackHeadersSeen,
+		CatalogMatch:              match,
 	}, true, nil
 }
 
@@ -221,12 +204,13 @@ func resolveClaudeOfficialCountTokensIngress(
 	snapshot ClaudeIngressSnapshot,
 	trusted ClaudeTrustedFacts,
 	profile claudeFWGProfile,
+	artifact claudeWireArtifact,
 ) (ClaudeTrustedFacts, error) {
-	resolved, err := validateClaudeOfficialCountTokensIngress(snapshot, trusted, profile)
+	resolved, err := validateClaudeOfficialCountTokensIngress(
+		snapshot, trusted, profile, artifact,
+	)
 	if err != nil {
-		// count_tokens 与 messages 使用同一身份权威边界：自报 UA 或 Header
-		// 冲突只会失去“完整官方一致”资格，不能否决规范化语义请求。
-		return trusted, nil
+		return ClaudeTrustedFacts{}, err
 	}
 	return resolved, nil
 }
@@ -235,55 +219,33 @@ func validateClaudeOfficialCountTokensIngress(
 	snapshot ClaudeIngressSnapshot,
 	trusted ClaudeTrustedFacts,
 	profile claudeFWGProfile,
+	artifact claudeWireArtifact,
 ) (ClaudeTrustedFacts, error) {
 	if !snapshot.Captured {
 		return trusted, nil
 	}
 	headers := snapshot.Headers.Clone()
-	userAgent := strings.TrimSpace(headers.Get("User-Agent"))
-	if !claudeOfficialUAPattern.MatchString(userAgent) {
-		return trusted, nil
-	}
-	entrypoint, features, err := parseClaudeOfficialUserAgent(
-		userAgent, profile.document.Identity.Version,
+	entry, _, _, err := defaultClaudeOfficialIngressCatalog().matchHeaders(
+		headers, profile, artifact,
 	)
 	if err != nil {
 		return ClaudeTrustedFacts{}, err
 	}
-	if entrypoint != ClaudeEntrypointCLI || len(features) != 0 {
-		return ClaudeTrustedFacts{}, errors.New("Claude 官方 count_tokens entrypoint 非法")
-	}
-	endpoint, err := profile.endpoint("count-tokens")
-	if err != nil {
-		return ClaudeTrustedFacts{}, err
-	}
-	facts := claudeHeaderFacts(endpoint.headers)
-	for _, name := range []string{
-		"accept", "accept-encoding", "anthropic-beta",
-		"anthropic-dangerous-direct-browser-access", "anthropic-version", "content-type",
-		"x-app", "x-stainless-arch", "x-stainless-lang", "x-stainless-os",
-		"x-stainless-package-version", "x-stainless-retry-count", "x-stainless-runtime",
-		"x-stainless-runtime-version",
-	} {
-		if strings.TrimSpace(headers.Get(name)) != facts[name].Value {
-			return ClaudeTrustedFacts{}, fmt.Errorf(
-				"Claude 官方 count_tokens 固定 Header 不一致：%s", name,
-			)
-		}
+	if strings.TrimSpace(headers.Get("x-app")) != "cli" {
+		return ClaudeTrustedFacts{}, errors.New("Claude 官方 count_tokens x-app 未登记")
 	}
 	sessionID := strings.TrimSpace(headers.Get("X-Claude-Code-Session-Id"))
 	if _, err := uuid.Parse(sessionID); err != nil {
 		return ClaudeTrustedFacts{}, errors.New("Claude 官方 count_tokens session_id 非法")
-	}
-	requestID := strings.TrimSpace(headers.Get("x-client-request-id"))
-	if _, err := uuid.Parse(requestID); err != nil {
-		return ClaudeTrustedFacts{}, errors.New("Claude 官方 count_tokens request_id 非法")
 	}
 	trusted.Session = ClaudeTrustedSessionFacts{
 		SessionID: sessionID,
 		Source:    ClaudeSessionSourceOfficialConsistent,
 	}
 	trusted.Entrypoint.Entrypoint = ClaudeEntrypointCLI
+	if entry.targetEntrypoint == ClaudeEntrypointCLI {
+		trusted.Entrypoint.Entrypoint = entry.targetEntrypoint
+	}
 	trusted.Features.RequestGzip = snapshot.RequestGzip
 	return trusted, nil
 }
@@ -336,12 +298,12 @@ func extractClaudeOfficialCustomHeaders(
 }
 
 type claudeOfficialMetadata struct {
-	deviceID  string
-	sessionID string
-	extra     json.RawMessage
+	deviceID    string
+	accountUUID string
+	sessionID   string
 }
 
-func extractClaudeOfficialMetadata(body []byte, expectedAccountUUID string) (claudeOfficialMetadata, error) {
+func extractClaudeOfficialMetadata(body []byte) (claudeOfficialMetadata, error) {
 	document, err := decodeClaudeUniqueObject(body)
 	if err != nil {
 		return claudeOfficialMetadata{}, errors.New("Claude 官方 Body 不是唯一对象")
@@ -358,38 +320,33 @@ func extractClaudeOfficialMetadata(body []byte, expectedAccountUUID string) (cla
 	if err != nil {
 		return claudeOfficialMetadata{}, errors.New("Claude 官方 metadata.user_id 内层非法")
 	}
-	values := make(map[string]string)
-	extra := make([]claudeJSONField, 0)
-	for _, field := range fields {
-		switch field.name {
-		case "device_id", "account_uuid", "session_id":
-			var value string
-			if json.Unmarshal(field.raw, &value) != nil {
-				return claudeOfficialMetadata{}, errors.New("Claude 官方 metadata 身份值不是字符串")
-			}
-			values[field.name] = strings.TrimSpace(value)
-		default:
-			extra = append(extra, claudeJSONField{
-				name: field.name, raw: append(json.RawMessage(nil), field.raw...),
-			})
-		}
+	wantOrder := []string{"device_id", "account_uuid", "session_id"}
+	if len(fields) != len(wantOrder) {
+		return claudeOfficialMetadata{}, errors.New("Claude 官方 metadata.user_id 字段闭集非法")
 	}
-	if !claudeDeviceIDPattern.MatchString(values["device_id"]) ||
-		values["account_uuid"] != strings.TrimSpace(expectedAccountUUID) {
-		return claudeOfficialMetadata{}, errors.New("Claude 官方 metadata 账号或 device 身份冲突")
+	values := make(map[string]string, len(fields))
+	for index, field := range fields {
+		if field.name != wantOrder[index] {
+			return claudeOfficialMetadata{}, errors.New("Claude 官方 metadata.user_id 字段顺序非法")
+		}
+		var value string
+		if json.Unmarshal(field.raw, &value) != nil {
+			return claudeOfficialMetadata{}, errors.New("Claude 官方 metadata 身份值不是字符串")
+		}
+		values[field.name] = strings.TrimSpace(value)
+	}
+	if !claudeDeviceIDPattern.MatchString(values["device_id"]) {
+		return claudeOfficialMetadata{}, errors.New("Claude 官方 metadata device_id 形状非法")
+	}
+	if _, err := uuid.Parse(values["account_uuid"]); err != nil {
+		return claudeOfficialMetadata{}, errors.New("Claude 官方 metadata account_uuid 形状非法")
 	}
 	if _, err := uuid.Parse(values["session_id"]); err != nil {
 		return claudeOfficialMetadata{}, errors.New("Claude 官方 metadata session_id 非法")
 	}
-	extraRaw := json.RawMessage(nil)
-	if len(extra) != 0 {
-		extraRaw, err = marshalClaudeOrderedObject(extra)
-		if err != nil {
-			return claudeOfficialMetadata{}, err
-		}
-	}
 	return claudeOfficialMetadata{
-		deviceID: values["device_id"], sessionID: values["session_id"], extra: extraRaw,
+		deviceID: values["device_id"], accountUUID: values["account_uuid"],
+		sessionID: values["session_id"],
 	}, nil
 }
 
@@ -417,40 +374,10 @@ func parseClaudeOfficialUserAgent(
 	return matches[2], features, nil
 }
 
-func validateClaudeOfficialIngressHeaders(headers http.Header, profile claudeFWGProfile) error {
-	endpoint, err := profile.endpoint("messages-inference")
-	if err != nil {
-		return err
-	}
-	facts := claudeHeaderFacts(endpoint.headers)
-	for _, name := range []string{
-		"accept", "accept-encoding", "anthropic-dangerous-direct-browser-access",
-		"anthropic-version", "content-type", "x-stainless-arch", "x-stainless-lang",
-		"x-stainless-os", "x-stainless-package-version", "x-stainless-retry-count",
-		"x-stainless-runtime", "x-stainless-runtime-version",
-	} {
-		if strings.TrimSpace(headers.Get(name)) != facts[name].Value {
-			return fmt.Errorf("Claude 官方入站固定 Header 不一致：%s", name)
-		}
-	}
-	if strings.TrimSpace(headers.Get("Authorization")) == "" ||
-		strings.TrimSpace(headers.Get("anthropic-beta")) == "" {
-		return errors.New("Claude 官方入站缺少认证或 anthropic-beta")
-	}
-	timeout, err := strconv.Atoi(strings.TrimSpace(headers.Get("x-stainless-timeout")))
-	if err != nil || timeout <= 0 || timeout > 3600 {
-		return errors.New("Claude 官方 x-stainless-timeout 非法")
-	}
-	additional := strings.TrimSpace(headers.Get("x-anthropic-additional-protection"))
-	if additional != "" && additional != "true" {
-		return errors.New("Claude additional-protection 条件值非法")
-	}
-	return nil
-}
-
 func parseClaudeOfficialAttribution(
 	body []byte,
 	artifact claudeWireArtifact,
+	match claudeOfficialIngressMatch,
 ) (map[string]string, bool, error) {
 	document, err := decodeClaudeUniqueObject(body)
 	if err != nil {
@@ -479,17 +406,37 @@ func parseClaudeOfficialAttribution(
 		}
 		values[pair[0]] = pair[1]
 	}
-	text, err := firstClaudeUserText(document["messages"])
-	if err != nil {
-		return nil, false, err
-	}
-	fingerprint, err := claudeVersionFingerprint(artifact, text)
-	if err != nil {
-		return nil, false, err
-	}
-	if values["cc_version"] != artifact.Identity.Version+"."+fingerprint ||
-		!claudeCCHPattern.MatchString(values["cch"]) {
+	if match.nativeTargetScenario && !claudeCCHPattern.MatchString(values["cch"]) {
 		return nil, false, errors.New("Claude attribution 版本指纹或 cch 非法")
+	}
+	if !match.nativeTargetScenario && values["cch"] != "" &&
+		!claudeCCHPattern.MatchString(values["cch"]) {
+		return nil, false, errors.New("Claude attribution 来源 cch 非法")
+	}
+	if match.nativeTargetScenario {
+		text, err := firstClaudeUserText(document["messages"])
+		if err != nil {
+			return nil, false, err
+		}
+		fingerprint, err := claudeVersionFingerprint(artifact, text)
+		if err != nil {
+			return nil, false, err
+		}
+		if values["cc_version"] != artifact.Identity.Version+"."+fingerprint {
+			return nil, false, errors.New("Claude attribution target Release 指纹非法")
+		}
+	} else {
+		version := values["cc_version"]
+		if version != match.entry.version &&
+			(!strings.HasPrefix(version, match.entry.version+".") ||
+				len(strings.TrimPrefix(version, match.entry.version+".")) != 3) {
+			return nil, false, errors.New("Claude attribution 来源版本未登记")
+		}
+		switch values["cc_entrypoint"] {
+		case ClaudeEntrypointSDKCLI, ClaudeEntrypointCLI, "claude-desktop", "claude-vscode":
+		default:
+			return nil, false, errors.New("Claude attribution 来源 entrypoint 未登记")
+		}
 	}
 	return values, true, nil
 }

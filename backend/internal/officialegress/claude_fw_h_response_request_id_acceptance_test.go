@@ -209,7 +209,7 @@ func validateClaudeFWHResponseRequestIDAcceptanceIdentity(
 		receipt.Release.WireSHA256 != claudeFWGWireDigest ||
 		receipt.Release.ReleaseSHA256 != ClaudeFWGReleaseDigest ||
 		receipt.Release.BundleSHA256 != ClaudeFWGBundleDigest ||
-		receipt.Release.ApprovalSHA256 != ClaudeFWHProductionApprovalDigest ||
+		receipt.Release.ApprovalSHA256 != ClaudeFWHLegacyRetirementApprovalDigest ||
 		receipt.Release.ProfileChanged || receipt.Release.WireChanged ||
 		receipt.Release.ReleaseBundleChanged {
 		t.Fatal("Claude request-id 最终验收 Release 身份非法")

@@ -20,7 +20,7 @@ func TestProvideOfficialEgressGuardInstallsClaudeProductionCatalogOnlyForActive(
 	require.True(t, ok)
 	require.Equal(t, officialegress.PersonaClaudeCode, binding.Persona())
 	require.True(t, binding.RuntimeBindable())
-	require.Contains(t, binding.MigrationChangeset(), "fw-h-production")
+	require.Equal(t, "claude-code-2.1.226-official-client-only", binding.MigrationChangeset())
 
 	cfg.Gateway.ClaudeOfficialClientProfiles.Mode = "legacy"
 	guard, err = ProvideOfficialEgressGuard(cfg)
