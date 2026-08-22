@@ -155,7 +155,11 @@ func validateClaudeFWHResponseRequestIDReceipt(
 		target, err := os.ReadFile(filepath.Join(
 			"../../..", filepath.FromSlash(transition.Path),
 		))
-		if err != nil || claudeFWHSourceDigest(target) != transition.ToSHA256 {
+		currentDigest := claudeFWHSourceDigest(target)
+		if err != nil || currentDigest != transition.ToSHA256 &&
+			!claudePersonaReleaseCatalogTransitionSupersedes(
+				transition.Path, transition.ToSHA256, currentDigest,
+			) {
 			return errors.New("Claude request-id transition 当前摘要不一致")
 		}
 		paths = append(paths, transition.Path)

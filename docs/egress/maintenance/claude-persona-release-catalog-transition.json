@@ -1,0 +1,163 @@
+{
+  "schema_version": "official-egress-claude-persona-release-catalog-transition/v1",
+  "issued_at_utc": "2026-08-22T09:00:00Z",
+  "scope": "post-fw-h-release-catalog-runtime-refactor",
+  "base_commit": "f7fd07c2a19fded0d33a807167fca11fca32ff6e",
+  "predecessors": [
+    {
+      "kind": "production_acceptance",
+      "path": "docs/egress/maintenance/claude-fw-h-response-request-id-acceptance.json",
+      "sha256": "722df263723bbf64ebc74f9470d4c9725b9e92710feda4a3b55bfa8eb4ad8668"
+    },
+    {
+      "kind": "production_approval",
+      "path": "backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-fw-h-legacy-retirement-approval.json",
+      "sha256": "1d002a2708b198256098999932908d47f0eb90a2c819f11d8393570f33996c2c"
+    }
+  ],
+  "release": {
+    "version": "2.1.226",
+    "profile_sha256": "e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5",
+    "wire_sha256": "a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d",
+    "release_sha256": "48586f47e0abcde9ea357c08c1465253eaa296862153a89c20e4cf0f1e6f52f8",
+    "bundle_sha256": "ceb1e30740ab4223684f478f717dd2902d8fdad0c6efad5a69b761d95b4aefae"
+  },
+  "invariants": {
+    "final_wire_changed": false,
+    "support_envelope_changed": false,
+    "default_persona_registry_changed": false,
+    "rollback_release_fabricated": false
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/claude_body.go",
+      "from_sha256": "736f35a4a0258591fdd700979f1da0ee6c29373d6006bd31501bf1ee4647e102",
+      "to_sha256": "cb97480760bb7f9eb7a664ce7a4eb1b1f0717f412e6b6ba5e9b676eb588f9a9d",
+      "reason": "客户端版本指纹与 attribution 改为从所选 Release 的 Wire 身份派生。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_candidate_catalog.go",
+      "from_sha256": "4fee5d9c1bdad14a94159b77776cea4a27d7c015834013469a24c13f96483053",
+      "to_sha256": "c79cd932e64cdfdabb8641ecfcf4353498713a1e60811456ccdd8240a8c724fc",
+      "reason": "候选与生产 Sink、changeset 和迁移收据改为绑定所选 Release。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_response_request_id_transition_test.go",
+      "from_sha256": "269de6a65a406795a81b685817807a8357ff304543370f14a7f01dd300564d8d",
+      "to_sha256": "9532aced4283cd1b2c496ff73e42a0681606243d602a8fa50043419ef3f85e3e",
+      "reason": "request-id 历史门禁通过本轮精确后继收据承接已变更的 transition 测试。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_state_durability_transition_test.go",
+      "from_sha256": "d20039c45eb1370ff645ba6fca687d9acd9d05a17750a24b70daa313b15c4897",
+      "to_sha256": "9cfa422ffb55dd8ea9686dd69aae2e7f8812ecba87fbeb05878759f4c41c0e21",
+      "reason": "历史耐久性门禁通过本轮精确 path/from/to 后继收据承接当前源码。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_ingress.go",
+      "from_sha256": "18fa37164205d0016107090c91e5a02278ed2bcb5bed8804fb2bab16209dd444",
+      "to_sha256": "d7f2b39481e4da26f175a516e638887bdda07af6fa7b49f9000046413e5d0f92",
+      "reason": "官方 User-Agent 与 attribution 版本校验改为使用已加载 Release 的版本。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_production_release.go",
+      "from_sha256": "4d43c714585fb8035f62d439bfb2f81092b2c6c9bc74dd7708d3cdbb45aa8af8",
+      "to_sha256": "694c0b039add9d47793c8ac777d7529f6eb9014e436e0ad30f268e23061619cf",
+      "reason": "生产 Release 与 Approval 从 production_active selector 动态解析并交叉校验。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_profile.go",
+      "from_sha256": "a3d404cd9501808252ca689d1965cc63d9b4bd1d9f35a5558260c58ec1a7a5bb",
+      "to_sha256": "226a2e2ac54e6af750d14c59963ac574b3542c67c9e3370ed1c22737aea8f565",
+      "reason": "Profile 从 Catalog 选中 Release 的内容寻址原文字节加载和校验。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_runtime.go",
+      "from_sha256": "081b75a2420d4e7ad7a3a9e976e6f6928050708e73b57effcb5b20b63e5a79ac",
+      "to_sha256": "3aa827f35ae49bd43af4f11f8c968790eb2e482b6b25662bdd8b1bbecb320310",
+      "reason": "Runtime 通过共享 Persona selector 选择 Release，并派生状态、连接池与执行 policy 身份。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_wire.go",
+      "from_sha256": "16908550c92c8fad1213b755998109585846951c49987f16d612f16e2bc25f95",
+      "to_sha256": "a0dfb3106949e2f7d7541c13094d77f93a0cbdab7f54522e55c0af405f4a6e99",
+      "reason": "Wire 从 Catalog 选中 Release 的内容寻址原文字节加载和校验。"
+    },
+    {
+      "path": "backend/internal/officialegress/persona_registry.go",
+      "from_sha256": "26588c1082027471ceb43f00b4e3410f47ae7d6a9373cd7e10f8d0edd803ead3",
+      "to_sha256": "2b76ce43a45b66bafec272fb9a1627fc10eb16ccdce3a556879789fc56742da7",
+      "reason": "新增生产用 Codex 与 Claude 多 Persona Registry，同时保持默认 Codex-only 基线。"
+    },
+    {
+      "path": "backend/internal/officialegress/persona_release_catalog.go",
+      "from_sha256": "8ae5bda53df10b5a8b876dd5f3f4ca6e604fd3322b44edd9120b6243a94386c2",
+      "to_sha256": "ffc92d65a183b1f78097efe9f37f95e9b3d7e60808677be4ff95cc0f39e7577e",
+      "reason": "共享 Release Catalog 增加 Claude active Release 与类型化 operational rollback。"
+    },
+    {
+      "path": "backend/internal/service/claude_official_egress_activation_fact.go",
+      "from_sha256": "9c639692e8d724d891a3ce96c829dd266c571d5405ba6f5dac0fbe4f93d29b81",
+      "to_sha256": "6318d2d169fb8b45ef77d0767a81904e10269c441d6cc7442abc6fc78307033e",
+      "reason": "激活事实改为读取生产 Runtime 实际选中的 Release 坐标。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_claude_state_redis.go",
+      "from_sha256": "05bfef20769d65236a74736604d64deb4c2ec49d6cfb576b9a50ecb9a601031f",
+      "to_sha256": "1aab581d4635fefe6131643c98f6da523f323ba09b9222af8e5729cc03bbc6c8",
+      "reason": "Redis 只保留 Persona 基础前缀，版本隔离命名空间由所选 Release 在 Runtime 派生。"
+    },
+    {
+      "path": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "from_sha256": "798310f78d239c7eb00425b6e621171b2c10b0003954a10550b783bc7de0dd54",
+      "to_sha256": "46cf897208663b4c9e462a882305c3ae2d99b92390f20f2b4798c8e28729e94c",
+      "reason": "补充 Claude Release Catalog、换版 generation policy 和当前 DMIT active/rollback 事实。"
+    },
+    {
+      "path": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+      "from_sha256": "d274ab40f022da3124084d51f99b5c403518256ff27c1939282b0d49f7979560",
+      "to_sha256": "273854123d12bc5762d401eb63e6654ac2f69e6e8a1c9d253eecace0452aa688",
+      "reason": "明确类型化 selector、操作回退和 Release 派生运行身份的共享框架合同。"
+    },
+    {
+      "path": "tools/generate_claude_fw_g_profile.py",
+      "from_sha256": "a476f1c75745abacb1c3b1d99542326ad34c17475d16359b4c5454e43b5e54bd",
+      "to_sha256": "2e039e1dc54de7e3a363da4544888498063fbcb85d4a8d49d228a49fe377a612",
+      "reason": "生成器从版本专属 generation policy 加载冻结参数，移除换版硬编码。"
+    }
+  ],
+  "additions": [
+    {
+      "path": "backend/internal/officialegress/catalogdata/claude/release-catalog.json",
+      "sha256": "3f47ee0d89a13478bcce121b956c8e3554685cbffeb47530080684654a1e0fa7",
+      "reason": "新增 Claude 不可变 Release 与 active/candidate/rollback selector 清单。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_release_catalog.go",
+      "sha256": "35f03b923798c33de148200a8b50881de9bb9695b2c05382c340a4d705891712",
+      "reason": "新增 Claude Catalog 的内容寻址加载、摘要校验和类型化 selector 解析。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_release_catalog_test.go",
+      "sha256": "0942d8575a115273132a1de55e6c86874884461e60963de8015db8ddd7a2c68d",
+      "reason": "验证 Claude Catalog、共享 selector、真实操作回退与 Release 派生 policy。"
+    },
+    {
+      "path": "tools/official_client_capture/claude_fw_g_generation_policy_2_1_226.json",
+      "sha256": "61b2e52ed6dd224567e23a9ebd3d3db3d1d202032404170e1aef034497318097",
+      "reason": "冻结 2.1.226 生成输入、模型证据、TLS 向量和迁移参数。"
+    }
+  ],
+  "verification": [
+    "go test -count=1 ./internal/officialegress ./internal/service",
+    "python3 -m py_compile tools/generate_claude_fw_g_profile.py",
+    "generation policy load and identity assertions",
+    "git diff --check"
+  ],
+  "safety": {
+    "deployment_performed": false,
+    "dmit_changed": false,
+    "vircs_changed": false
+  },
+  "result": "passed"
+}

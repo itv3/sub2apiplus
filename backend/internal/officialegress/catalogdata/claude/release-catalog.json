@@ -1,0 +1,62 @@
+{
+  "schema_version": "official-egress-claude-release-catalog/v1",
+  "persona": "claude-code",
+  "source": "campaign:claude-code-2_1_226-fw-g-production-replacement-v2-20260821/approval:claude-code-2.1.226-fw-h-legacy-retirement-v2",
+  "releases": [
+    {
+      "version": "2.1.226",
+      "platform": "linux/amd64",
+      "profile": {
+        "path": "catalogdata/claude/profiles/2.1.226/e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5.json",
+        "sha256": "e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5"
+      },
+      "wire": {
+        "path": "catalogdata/claude/wire/2.1.226/a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d.json",
+        "sha256": "a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d"
+      },
+      "required_rules_manifest_sha256": "c09fdc9158d4d3aee7e5d28cc4a794e259a3c56899e00d558afab4c537389045",
+      "release_sha256": "48586f47e0abcde9ea357c08c1465253eaa296862153a89c20e4cf0f1e6f52f8",
+      "bundle_sha256": "ceb1e30740ab4223684f478f717dd2902d8fdad0c6efad5a69b761d95b4aefae",
+      "required_rule_count": 40,
+      "profile_atomic_assertion_count": 106,
+      "local_scenario_assertion_count": 4,
+      "strict_endpoint_count": 8,
+      "models": [
+        "claude-sonnet-5",
+        "claude-opus-5",
+        "claude-fable-5"
+      ],
+      "model_evidence": {
+        "successful_attempts": 42,
+        "historical_failed_attempts": 3
+      }
+    }
+  ],
+  "selectors": {
+    "validation_candidate": {
+      "kind": "release",
+      "release_sha256": "48586f47e0abcde9ea357c08c1465253eaa296862153a89c20e4cf0f1e6f52f8",
+      "changeset": "claude-code-2.1.226-fw-g-candidate"
+    },
+    "production_active": {
+      "kind": "release",
+      "release_sha256": "48586f47e0abcde9ea357c08c1465253eaa296862153a89c20e4cf0f1e6f52f8",
+      "changeset": "claude-code-2.1.226-fw-h-production",
+      "approval": {
+        "path": "catalogdata/claude/production/claude-code-2.1.226-fw-h-legacy-retirement-approval.json",
+        "sha256": "1d002a2708b198256098999932908d47f0eb90a2c819f11d8393570f33996c2c"
+      }
+    },
+    "production_rollback": {
+      "kind": "operational-deployment",
+      "deployment": {
+        "commit": "e2c80213ab338cc6f91eee00e28a96bc956f0512",
+        "image_digest": "sha256:356384ce0429a2dc30d484648371d1921644184fc978195ae583c23e968dc3d6",
+        "receipt": {
+          "path": "docs/egress/maintenance/claude-fw-h-response-request-id-acceptance.json",
+          "sha256": "722df263723bbf64ebc74f9470d4c9725b9e92710feda4a3b55bfa8eb4ad8668"
+        }
+      }
+    }
+  }
+}

@@ -2,7 +2,6 @@ package officialegress
 
 import (
 	"crypto/sha256"
-	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -15,17 +14,18 @@ import (
 )
 
 const (
-	ClaudeFWGVersion       = "2.1.226"
-	ClaudeFWGProfileDigest = "e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5"
-	ClaudeFWGReleaseDigest = "48586f47e0abcde9ea357c08c1465253eaa296862153a89c20e4cf0f1e6f52f8"
-	ClaudeFWGBundleDigest  = "ceb1e30740ab4223684f478f717dd2902d8fdad0c6efad5a69b761d95b4aefae"
-
 	ClaudeExecutorAuthorityID ExecutorID = "claude-persona-executor"
 	ClaudeTokenIssuerID       ExecutorID = "claude-finalization-token"
 )
 
-//go:embed catalogdata/claude/profiles/2.1.226/e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5.json
-var embeddedClaudeFWGProfile []byte
+// 以下历史名称只保留现有收据和测试的源码兼容性。它们从 Catalog 的
+// validation_candidate 派生，不再拥有生产 selector 的选择权。
+var (
+	ClaudeFWGVersion       = DefaultClaudeReleaseCatalog().ValidationCandidate().Release().Version()
+	ClaudeFWGProfileDigest = DefaultClaudeReleaseCatalog().ValidationCandidate().Release().ProfileDigest()
+	ClaudeFWGReleaseDigest = DefaultClaudeReleaseCatalog().ValidationCandidate().Release().ReleaseDigest()
+	ClaudeFWGBundleDigest  = DefaultClaudeReleaseCatalog().ValidationCandidate().Release().BundleDigest()
+)
 
 type claudeProfileEndpointDocument struct {
 	Scheme        string `json:"scheme"`
@@ -133,36 +133,46 @@ type claudeFWGProfile struct {
 }
 
 func loadClaudeFWGProfile() (claudeFWGProfile, error) {
-	sum := sha256.Sum256(embeddedClaudeFWGProfile)
-	if hex.EncodeToString(sum[:]) != ClaudeFWGProfileDigest {
+	return loadClaudeProfile(
+		DefaultClaudeReleaseCatalog().ValidationCandidate().Release(),
+	)
+}
+
+func loadClaudeProfile(release ResolvedClaudeRelease) (claudeFWGProfile, error) {
+	if err := release.validate(); err != nil {
+		return claudeFWGProfile{}, err
+	}
+	sum := sha256.Sum256(release.profileRaw)
+	if hex.EncodeToString(sum[:]) != release.ProfileDigest() {
 		return claudeFWGProfile{}, errors.New("Claude FW-G 画像原文字节摘要不匹配")
 	}
 	var document claudeProfileDocument
-	if err := json.Unmarshal(embeddedClaudeFWGProfile, &document); err != nil {
+	if err := json.Unmarshal(release.profileRaw, &document); err != nil {
 		return claudeFWGProfile{}, fmt.Errorf("解析 Claude FW-G 画像：%w", err)
 	}
 	if document.SchemaVersion != "claude-code-fw-f-target-profile/v6" ||
-		document.Identity.Version != ClaudeFWGVersion || document.Identity.Platform != "linux/amd64" {
+		document.Identity.Version != release.Version() ||
+		document.Identity.Platform != release.Platform() {
 		return claudeFWGProfile{}, errors.New("Claude FW-G 画像身份不一致")
 	}
-	if !slices.Equal(document.Identity.SupportedModels, []string{
-		"claude-sonnet-5", "claude-opus-5", "claude-fable-5",
-	}) || document.Identity.ModelAliasPolicy != "explicit-only" ||
+	if !slices.Equal(document.Identity.SupportedModels, release.Models()) ||
+		document.Identity.ModelAliasPolicy != "explicit-only" ||
 		document.Identity.UnknownModelPolicy != "deny" ||
 		len(document.Identity.ModelCapabilityCatalogSHA256) != sha256.Size*2 ||
 		!slices.Equal(document.Body.FieldTypes["fallbacks"], []string{"array"}) ||
 		!slices.Contains(document.Body.Optional, "fallbacks") {
 		return claudeFWGProfile{}, errors.New("Claude FW-G 模型能力画像声明不完整")
 	}
-	if len(document.Rules) != 40 || len(document.StrictEndpoints) != 8 {
-		return claudeFWGProfile{}, errors.New("Claude FW-G 画像未冻结 40 条规则或 8 个 strict endpoint")
+	if len(document.Rules) != release.RequiredRuleCount() ||
+		len(document.StrictEndpoints) != release.StrictEndpointCount() {
+		return claudeFWGProfile{}, errors.New("Claude FW-G 画像规则或 strict endpoint 数量与 Release 不一致")
 	}
 	profile := claudeFWGProfile{
 		document:  document,
 		endpoints: make(map[string]claudeEndpointProfile, len(document.StrictEndpoints)),
 		rules:     make(map[string]claudeRuleDocument, len(document.Rules)),
 	}
-	atomicAssertions := make(map[string]string, 106)
+	atomicAssertions := make(map[string]string, release.ProfileAtomicAssertionCount())
 	for _, rule := range document.Rules {
 		if strings.TrimSpace(rule.SpecID) == "" || rule.AssertionResult != "passed" ||
 			rule.EvidenceLevel != "observed" || rule.ProductionEligible != "validation_only" ||
@@ -187,9 +197,9 @@ func loadClaudeFWGProfile() (claudeFWGProfile, error) {
 		}
 		profile.rules[rule.SpecID] = rule
 	}
-	if len(atomicAssertions) != 106 {
+	if len(atomicAssertions) != release.ProfileAtomicAssertionCount() {
 		return claudeFWGProfile{}, fmt.Errorf(
-			"Claude 画像原子断言数量不是 106：%d", len(atomicAssertions),
+			"Claude 画像原子断言数量与 Release 不一致：%d", len(atomicAssertions),
 		)
 	}
 	endpointRuleUnion := make(map[string]struct{}, len(profile.rules))
@@ -230,7 +240,7 @@ func loadClaudeFWGProfile() (claudeFWGProfile, error) {
 		}
 		sort.Strings(missing)
 		return claudeFWGProfile{}, fmt.Errorf(
-			"Claude strict endpoint 规则并集未覆盖 40 条 RequiredRules：%v", missing,
+			"Claude strict endpoint 规则并集未覆盖全部 RequiredRules：%v", missing,
 		)
 	}
 	return profile, nil

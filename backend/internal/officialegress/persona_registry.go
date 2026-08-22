@@ -378,6 +378,15 @@ func NewCodexPersonaRegistry(sinks SinkCatalog) (PersonaRegistry, error) {
 	return NewPersonaRegistry([]PersonaDescriptorInput{codexPersonaDescriptorInput()}, sinks)
 }
 
+// NewProductionPersonaRegistry 为共享 production selector 冻结 Codex 与 Claude
+// 两个已登记 Persona。DefaultPersonaRegistry 继续保持 Codex-only，避免改写 FW-E 基线事实。
+func NewProductionPersonaRegistry(sinks SinkCatalog) (PersonaRegistry, error) {
+	return NewPersonaRegistry([]PersonaDescriptorInput{
+		codexPersonaDescriptorInput(),
+		claudePersonaDescriptorInput(),
+	}, sinks)
+}
+
 func codexPersonaDescriptorInput() PersonaDescriptorInput {
 	return PersonaDescriptorInput{
 		Persona: PersonaCodexCLI,

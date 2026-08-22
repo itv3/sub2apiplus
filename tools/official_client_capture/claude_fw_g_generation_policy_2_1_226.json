@@ -1,0 +1,149 @@
+{
+  "schema_version": "claude-fw-g-generation-policy/v1",
+  "target": {
+    "version": "2.1.226",
+    "required_rule_count": 40,
+    "profile_atomic_assertion_count": 106,
+    "total_atomic_assertion_count": 110,
+    "strict_endpoint_count": 8,
+    "models": [
+      "claude-sonnet-5",
+      "claude-opus-5",
+      "claude-fable-5"
+    ],
+    "efforts": [
+      "low",
+      "medium",
+      "high",
+      "xhigh",
+      "max"
+    ]
+  },
+  "frozen_inputs": {
+    "profile_sha256": "4da60bc238694a06a0dc80d68117abddd2de98c7c924c4db4c5dd929ea411e17",
+    "required_rules_manifest_sha256": "c09fdc9158d4d3aee7e5d28cc4a794e259a3c56899e00d558afab4c537389045",
+    "atomic_ledger_sha256": "20e3c02365893db0af7164acd8300b658f653b29c2340acedfe0abf6973a4200",
+    "snapshot_sha256": "935975161e6b325f2a6459924f9d4bfa59dc9430fcd29e32475694ad0279e79e",
+    "evidence_package_sha256": "4979fd6608e285a5735c416775f5ba48a576e00e26e55ebfbc8641f404606971",
+    "support_envelope_sha256": "f4954a6889f06c782f9d2de6837a82678cbc068ec55002a1fb4c2e3e30324f17",
+    "messages_evidence_sha256": "ca039dfcc431f7980bade1d06302da3703c87c350eac504b7b89161a87e34097",
+    "messages_body_sha256": "0b82aa1ffd4ddd65a7c79101efb340a3c95de3977a4a41ace68b980ec8785063",
+    "tls_pcap_sha256": "f5cd8ea0d20b2db2049822462bb9b8b2322eb4e5954e5c91e15aebb83646fab3",
+    "thinking_display_request_sha256": {
+      "summarized": "454962fdfd52d81ab8200e78b6d158dbc3595c94810737a3c6dd58ad2db096f9",
+      "omitted": "b958407da791047ac69fe05ac5c5fb93e87c839942d4a321d5140650ae49efee"
+    },
+    "system_text_sha256": [
+      "0d7062851dd7bd7e66d4be4f12ac4951e3d2f587ec408295333a49963bd3f6b7",
+      "6ed0608ab0f8a2e5966a72e22ffe1fc04a1ff6d5e220393c1ef30b7c9e336b30",
+      "51e2fcae7a92f7d7ac83e42b2952bb0fa04e4c30eb31afc775c4f82314524321"
+    ]
+  },
+  "previous_release": {
+    "wire_sha256": "07dbb15e8a621c4ef4922a9dec09e08d032fd649414f7d2f572c95c87b5679a7",
+    "release_sha256": "c1053492eabc0b10d9d5f92f807a1df0d507c777b64a528e938426350c0d5350",
+    "bundle_sha256": "4213ea92a7d76c4ef3aa318f4d93628cbcf675dc86566b107dddb70a70e6eb41"
+  },
+  "tls": {
+    "cipher_suites": [4865, 4866, 4867, 49195, 49199, 49196, 49200, 52393, 52392, 49161, 49171, 49162, 49172, 156, 157, 47, 53],
+    "supported_groups": [29, 23, 24],
+    "point_formats": [0],
+    "signature_algorithms": [1027, 2052, 1025, 1283, 2053, 1281, 2054, 1537, 513],
+    "supported_versions": [772, 771],
+    "key_share_groups": [29],
+    "psk_modes": [1],
+    "with_alpn_extensions": [0, 23, 65281, 10, 11, 35, 16, 5, 13, 18, 51, 45, 43, 21],
+    "without_alpn_extensions": [0, 23, 65281, 10, 11, 35, 13, 51, 45, 43]
+  },
+  "model_capability": {
+    "successful_attempts": 42,
+    "historical_failed_attempt_ids": [
+      "claude-opus-5-v4-replay-baseline/attempt-001",
+      "claude-opus-5-v4-replay-tui/attempt-001",
+      "claude-opus-5-v4-replay-tui/attempt-002"
+    ],
+    "base_commit": "c662b59a3e558f7aa352cf3a424a603aa0c254eb",
+    "prior_transitions": [
+      {
+        "path": "docs/egress/maintenance/claude-fw-g-desktop-title-source-transition.json",
+        "sha256": "3d176f9b24549388936fd918e3eb2a160263eac372160611b42ab3dd62da6884"
+      },
+      {
+        "path": "docs/egress/maintenance/claude-fw-g-desktop-title-test-transition.json",
+        "sha256": "eecadfe40a4bf5f6e1e55ac2493d74557cccb0568e61d33ef0291c30ab5056d3"
+      }
+    ],
+    "source_transitions": [
+      {
+        "path": "backend/internal/officialegress/claude_body.go",
+        "from_sha256": "ba45723ed345a30cbd358ea9d0c23fe065df410a921fc3c69aa3eb6d5dd846b7",
+        "reason": "按模型能力目录选择场景并重建 fallbacks、Body 顺序和 Fable server fallback。"
+      },
+      {
+        "path": "backend/internal/officialegress/claude_ingress.go",
+        "from_sha256": "0920335717e3d646bc4d54bda997ea8c81a23bd3fd056d6258b442824abd0204",
+        "reason": "验证官方模型场景、fallbacks 与 Fable 成对锁存 Header。"
+      },
+      {
+        "path": "backend/internal/officialegress/claude_profile.go",
+        "from_sha256": "6c347093c3b722b6b9339fc9f497b279f5d9839d6dc99212313933fe0b5756b1",
+        "reason": "切换到包含三模型能力目录摘要的新内容寻址 Profile。"
+      },
+      {
+        "path": "backend/internal/officialegress/claude_runtime.go",
+        "from_sha256": "5b24eec2cedd2cdd44e9045933261b62dfac2f5d9cc64d6c057ff0024af9167c",
+        "reason": "加载模型能力目录，执行精确模型门禁、count_tokens 和 Fable 会话锁存状态机。"
+      },
+      {
+        "path": "backend/internal/officialegress/claude_runtime_test.go",
+        "from_sha256": "eb8945aec040a5c7107b86138bac48aac467d19fdf453a6105770e46132d8e48",
+        "reason": "增加三模型逐场景、未知模型、错误 fallback、count_tokens 与锁存正负测试。"
+      },
+      {
+        "path": "backend/internal/officialegress/claude_tools.go",
+        "from_sha256": "e49b12302ff469ec5d446f9d184466a25c65c8b7b3e1db8cf793b1bfc63d7b79",
+        "reason": "仅允许官方入口精确承接模型目录中已取证场景的工具形态，不放宽第三方动态工具准入。"
+      },
+      {
+        "path": "backend/internal/officialegress/claude_wire.go",
+        "from_sha256": "9558669b8f9c546116d1942424405d18e9a665b1fd6967e77c35ba4cb6fa14d8",
+        "reason": "切换到新 Wire 并在启动时校验模型目录、证据、场景及 Header／Body 顺序。"
+      },
+      {
+        "path": "backend/internal/officialegress/claude_fw_g_desktop_title_transition_test.go",
+        "from_sha256": "4916d31469ac694b3b6c957551b474adb2206da2db361a3b74bb6dc91931afdb",
+        "reason": "让既有 Desktop 标题迁移只绑定其历史 Wire，并由本轮追加迁移承接当前源码。"
+      },
+      {
+        "path": "backend/internal/officialegress/claude_fw_g_source_transition_test.go",
+        "from_sha256": "e943503961ebaf1e890410fcd61a8745f205b09668b9b807d5d7ec5404961fae",
+        "reason": "让 FW-G 初始收据继续绑定历史制品身份，并允许本轮追加迁移承接当前源码。"
+      },
+      {
+        "path": "backend/internal/officialegress/claude_fw_g_thinking_display_transition_test.go",
+        "from_sha256": "e3abae6d0a1ff445adb531618653b8f0c84e53de7c07705531ee8cfaf5719bd6",
+        "reason": "让 thinking.display 收据只绑定其历史 Profile／Wire，并由本轮追加迁移承接当前源码。"
+      },
+      {
+        "path": "backend/internal/service/gateway_claude_fw_g.go",
+        "from_sha256": "750ecc54194ba13a01bdf42a0a962fc6b76195cca3c00179cf369017407d0e6d",
+        "reason": "把实际上游响应模型交给 Persona 会话 finalizer，禁止客户端预造 Fable 锁存。"
+      },
+      {
+        "path": "backend/internal/service/claude_fw_g_source_transition_test.go",
+        "from_sha256": "9ef2cc4a97c023f6ad4921e2664d823ffcfc2435442b18a9673529d136e93893",
+        "reason": "让 service 层既有 FW-G 收据继续绑定历史制品，并由本轮追加迁移承接当前源码。"
+      },
+      {
+        "path": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+        "from_sha256": "4cc9b2acbbc50203cab78eeeedaf0d4f46aaa4500d082e27fdf5a8e9b937b31b",
+        "reason": "按 Codex 粒度明确公共 RequiredRules 与独立模型能力目录的证据和换版合同。"
+      },
+      {
+        "path": "tools/generate_claude_fw_g_profile.py",
+        "from_sha256": "871e74ac3e0466d26977e9bb44256ec2e4d913b7e87895c7a307c4c5926420e4",
+        "reason": "从三模型官方 Campaign 确定性生成 Profile、Wire、能力目录和追加式迁移收据。"
+      }
+    ]
+  }
+}

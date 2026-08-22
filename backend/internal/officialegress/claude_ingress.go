@@ -15,7 +15,7 @@ import (
 )
 
 // ClaudeIngressSnapshot 是 body 解压前冻结的入站 wire 事实。它只用于验证
-// 官方 2.1.226 条件，不能选择 Persona、Release、route 或 transport。
+// 所选 Release 的官方入口条件，不能选择 Persona、Release、route 或 transport。
 type ClaudeIngressSnapshot struct {
 	Captured    bool
 	RequestGzip bool
@@ -32,7 +32,7 @@ type claudeOfficialIngressState struct {
 
 var (
 	claudeOfficialUAPattern = regexp.MustCompile(
-		`^claude-cli/2\.1\.226 \(external, (sdk-cli|cli)((?:, (?:agent-sdk|client-app|workload)/[A-Za-z0-9._:/-]+)*)\)$`,
+		`^claude-cli/([0-9]+\.[0-9]+\.[0-9]+) \(external, (sdk-cli|cli)((?:, (?:agent-sdk|client-app|workload)/[A-Za-z0-9._:/-]+)*)\)$`,
 	)
 	claudeCCHPattern = regexp.MustCompile(`^[0-9a-f]{5}$`)
 )
@@ -75,7 +75,9 @@ func validateClaudeOfficialIngressBase(
 	if !claudeOfficialUAPattern.MatchString(userAgent) {
 		return trusted, claudeOfficialIngressState{}, false, nil
 	}
-	entrypoint, uaFeatures, err := parseClaudeOfficialUserAgent(userAgent)
+	entrypoint, uaFeatures, err := parseClaudeOfficialUserAgent(
+		userAgent, artifact.Identity.Version,
+	)
 	if err != nil {
 		return ClaudeTrustedFacts{}, claudeOfficialIngressState{}, false, err
 	}
@@ -212,7 +214,7 @@ func validateClaudeOfficialIngressBase(
 	}, true, nil
 }
 
-// resolveClaudeOfficialCountTokensIngress 只在入站明确声明官方 2.1.226
+// resolveClaudeOfficialCountTokensIngress 只在入站明确声明所选 Release
 // 身份时采用客户端会话；普通第三方请求仍使用 Planner 派生会话。认证 Header
 // 始终由已认证的 Sub2API OAuth 账号重新签发，不能信任入站值。
 func resolveClaudeOfficialCountTokensIngress(
@@ -242,7 +244,9 @@ func validateClaudeOfficialCountTokensIngress(
 	if !claudeOfficialUAPattern.MatchString(userAgent) {
 		return trusted, nil
 	}
-	entrypoint, features, err := parseClaudeOfficialUserAgent(userAgent)
+	entrypoint, features, err := parseClaudeOfficialUserAgent(
+		userAgent, profile.document.Identity.Version,
+	)
 	if err != nil {
 		return ClaudeTrustedFacts{}, err
 	}
@@ -389,13 +393,18 @@ func extractClaudeOfficialMetadata(body []byte, expectedAccountUUID string) (cla
 	}, nil
 }
 
-func parseClaudeOfficialUserAgent(value string) (string, map[string]string, error) {
+func parseClaudeOfficialUserAgent(
+	value string,
+	expectedVersion string,
+) (string, map[string]string, error) {
 	matches := claudeOfficialUAPattern.FindStringSubmatch(strings.TrimSpace(value))
-	if len(matches) != 3 {
-		return "", nil, errors.New("Claude 官方 User-Agent 不属于 2.1.226 批准形态")
+	if len(matches) != 4 || matches[1] != strings.TrimSpace(expectedVersion) {
+		return "", nil, fmt.Errorf(
+			"Claude 官方 User-Agent 不属于 %s 批准形态", expectedVersion,
+		)
 	}
 	features := make(map[string]string)
-	segments := strings.TrimPrefix(matches[2], ", ")
+	segments := strings.TrimPrefix(matches[3], ", ")
 	if segments != "" {
 		for _, segment := range strings.Split(segments, ", ") {
 			parts := strings.SplitN(segment, "/", 2)
@@ -405,7 +414,7 @@ func parseClaudeOfficialUserAgent(value string) (string, map[string]string, erro
 			features[parts[0]] = parts[1]
 		}
 	}
-	return matches[1], features, nil
+	return matches[2], features, nil
 }
 
 func validateClaudeOfficialIngressHeaders(headers http.Header, profile claudeFWGProfile) error {
@@ -478,7 +487,7 @@ func parseClaudeOfficialAttribution(
 	if err != nil {
 		return nil, false, err
 	}
-	if values["cc_version"] != ClaudeFWGVersion+"."+fingerprint ||
+	if values["cc_version"] != artifact.Identity.Version+"."+fingerprint ||
 		!claudeCCHPattern.MatchString(values["cch"]) {
 		return nil, false, errors.New("Claude attribution 版本指纹或 cch 非法")
 	}

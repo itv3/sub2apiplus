@@ -13,7 +13,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-const claudeRedisStatePrefix = "official-egress:claude-code:2.1.226:"
+const claudeRedisStatePrefix = "official-egress:claude-code:"
 
 var claudeRedisStateCompareAndSwap = redis.NewScript(`
 local current = redis.call("HGET", KEYS[1], "version")

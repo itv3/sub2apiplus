@@ -11,9 +11,12 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/officialegress/receiptcontract"
 )
 
-const (
-	claudeFWGCandidateChangeset  = "claude-code-2.1.226-fw-g-candidate"
-	claudeFWHProductionChangeset = "claude-code-2.1.226-fw-h-production"
+// 历史名称从 Claude Release Catalog 派生，只保留收据和测试兼容性。
+var (
+	claudeFWGCandidateChangeset = DefaultClaudeReleaseCatalog().
+					ValidationCandidate().Changeset()
+	claudeFWHProductionChangeset = DefaultClaudeReleaseCatalog().
+					ProductionActive().Changeset()
 )
 
 const claudeFWGEgressDispositionInventoryDigest = "2a13ef7d301cd845d501fb21152bbeab3baedaa4c46dbf7ec1343b9bbe867373"
@@ -85,6 +88,7 @@ type claudeCatalogRole struct {
 	owner         string
 	expiry        string
 	receiptSchema string
+	release       ResolvedClaudeRelease
 }
 
 var (
@@ -93,12 +97,14 @@ var (
 		owner:         "official-client-fw-g",
 		expiry:        "FW-G candidate 被作废、晋升或进入 FW-H 后由后继事实替代",
 		receiptSchema: "claude-fw-g-candidate-migration/v1",
+		release:       DefaultClaudeReleaseCatalog().ValidationCandidate().Release(),
 	}
 	claudeProductionCatalogRole = claudeCatalogRole{
 		changeset:     claudeFWHProductionChangeset,
 		owner:         "official-client-fw-h",
 		expiry:        "正式 Release 被后继生产部署替代或回滚到冻结遗留部署",
 		receiptSchema: "claude-fw-h-production-migration/v1",
+		release:       DefaultClaudeReleaseCatalog().ProductionActive().Release(),
 	}
 )
 
@@ -131,7 +137,10 @@ func buildClaudeSinkCatalog(base SinkCatalog, role claudeCatalogRole) (SinkCatal
 		strings.TrimSpace(role.expiry) == "" || strings.TrimSpace(role.receiptSchema) == "" {
 		return SinkCatalog{}, fmt.Errorf("Claude Catalog role 不完整")
 	}
-	profile, err := loadClaudeFWGProfile()
+	if err := role.release.validate(); err != nil {
+		return SinkCatalog{}, err
+	}
+	profile, err := loadClaudeProfile(role.release)
 	if err != nil {
 		return SinkCatalog{}, err
 	}
@@ -194,7 +203,9 @@ func buildClaudeSinkCatalog(base SinkCatalog, role claudeCatalogRole) (SinkCatal
 			ExpiryCondition:    role.expiry,
 			RuntimeBindable:    true,
 		}
-		receipt, err := buildClaudeMigrationReceipt(input, endpoint, role.receiptSchema)
+		receipt, err := buildClaudeMigrationReceipt(
+			input, endpoint, role.receiptSchema, role.release.ReleaseDigest(),
+		)
 		if err != nil {
 			return SinkCatalog{}, err
 		}
@@ -212,8 +223,9 @@ func buildClaudeMigrationReceipt(
 	input SinkBindingInput,
 	endpoint claudeEndpointProfile,
 	schemaVersion string,
+	releaseDigest string,
 ) (MigrationReceipt, error) {
-	if strings.TrimSpace(schemaVersion) == "" {
+	if strings.TrimSpace(schemaVersion) == "" || !receiptSHA256(releaseDigest) {
 		return MigrationReceipt{}, fmt.Errorf("Claude MigrationReceipt schema 为空")
 	}
 	bindingDigest, err := sinkBindingIdentityDigest(input)
@@ -225,7 +237,7 @@ func buildClaudeMigrationReceipt(
 		backend: BackendHTTPUpstream, adapterID: AdapterHTTPUpstream,
 		transportID: endpoint.transportID,
 		transportIDsByRelease: map[string]string{
-			ClaudeFWGReleaseDigest: endpoint.transportID,
+			releaseDigest: endpoint.transportID,
 		},
 	}
 	digestPayload := struct {

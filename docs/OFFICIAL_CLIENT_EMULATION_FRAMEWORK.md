@@ -249,6 +249,12 @@ Validation candidate 不得借用或伪装成 production rollback。当前 Codex
 提供经过启动、数据兼容和回退验证的真实目标，可以是上一正式 Release 或冻结的遗留实现，不能复制
 active 摘要伪造回滚对。
 
+Runtime Selector 的槽位是带类型引用：`production_active` 必须引用可加载的不可变 Release；
+`production_rollback` 可以引用另一 Release，也可以显式引用已演练的 `operational_deployment`，后者只含
+revision、镜像 digest 和回退收据，不能取得 Profile 或参与 final wire 编译。Catalog 在进程启动时统一
+校验 manifest、内容寻址 Profile／Wire 和 Approval；所选 Release 必须派生 changeset、状态命名空间、
+连接池与执行 policy 身份，业务代码不得另存版本或摘要常量。
+
 旧画像不得原位覆盖，证据、发布图、selector 变更和收据只追加；自动发现和入站自报版本均不得改变
 production active。源码常量、测试通过或 Campaign 达到 `ready`，都不能单独证明生产激活。现有 Persona
 Schema 能表达时只追加数据；出现新协议、新状态机制或 Schema 缺口时，优先修改该 Persona 方言，只有
@@ -444,14 +450,15 @@ ApprovalFact、candidate、selector 变更或部署。事实分别见
 
 FW-G 已以追加事实完成：独立官方复测、Candidate 对拍和 DMIT 隔离验收把 40 条 RequiredRules 升级为
 `verified`；后继 `production_replacement` ApprovalFact、固定 ValidationCandidate、40 个唯一
-`PAIR-<SPEC-ID>`、九个场景批准链和 AcceptanceFact 已封存。FW-H 最终状态为：DMIT 运行提交
-`e2c80213a` 的最终镜像，六类 Claude OAuth 入口均为 `migrated_strict`，`retained_legacy` 为空，旧 OAuth
-链已从 active 源码和镜像删除并签发 RemovalReceipt；保留旧链的 `f388cd7d8` 镜像是已完成 46／46
+`PAIR-<SPEC-ID>`、九个场景批准链和 AcceptanceFact 已封存。FW-H 当前状态为：DMIT 运行提交
+`bd1c09d5f`／镜像 `sha256:8117aa6c…`，六类 Claude OAuth 入口均为 `migrated_strict`，
+`retained_legacy` 为空，旧 OAuth 链已从 active 源码和镜像删除并签发 RemovalReceipt；
+`e2c80213a`／镜像 `sha256:356384ce…` 是已完成 46／46
 矩阵的操作回退点。恢复 active 后同一矩阵再次 46／46 通过，DeploymentFact 为 `restored_active`，Codex
 路由保持 `rerouted`。Fable 请求返回画像声明的 `claude-opus-5` 时不建立会话锁存；只有实际返回
 `claude-opus-4-8` 的 server fallback 才按批准状态机锁存。Vircs 本次未连接、未修改。历史生产事实继续
 由原 [FW-H 生产验收包](egress/maintenance/claude-fw-h-production-acceptance-package.json)冻结，当前权威状态见
-[FW-H 最终聚合验收包](egress/maintenance/claude-fw-h-final-acceptance-package.json)。
+[FW-H request-id 后继验收包](egress/maintenance/claude-fw-h-response-request-id-acceptance.json)。
 
 生产事实以镜像 digest、selector、activation fact 和不可覆盖收据为准；缺失或不一致时统一标记
 `production_unverified`。
@@ -463,6 +470,7 @@ FW-G 已以追加事实完成：独立官方复测、Candidate 对拍和 DMIT �
 | 保留 | Persona 身份、Route／Sink 闭集、摘要绑定、每 Persona 独立 authority／issuer／状态、Token 和 Guard |
 | 收窄 | `CompiledEnvelope` 只含厂商无关事实；移除 Codex 专用 Policy／fallback；candidate 与 active／rollback selector 分离 |
 | 隔离 | 各 Persona 的 Plan、IdentityFacts、Schema、Compiler 和 transport 参数留在自有模块；Codex facade 保持 final wire 零差异 |
+| 目录 | 各 Persona 的不可变 Release 进入内容寻址 Catalog；共享 selector 只持有 active／rollback 类型引用，运行时事实从选中 Release 派生 |
 | 收据 | 历史 transition／fixture／receipt 不覆盖；源码、测试、画像或镜像变化均建立后继事实 |
 
 ## 6.3 实施顺序

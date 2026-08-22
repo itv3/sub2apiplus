@@ -2,7 +2,6 @@ package officialegress
 
 import (
 	"crypto/sha256"
-	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -13,10 +12,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
 )
 
-const claudeFWGWireDigest = "a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d"
-
-//go:embed catalogdata/claude/wire/2.1.226/a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d.json
-var embeddedClaudeFWGWire []byte
+// claudeFWGWireDigest 只保留历史收据和测试的源码兼容性。
+var claudeFWGWireDigest = DefaultClaudeReleaseCatalog().ValidationCandidate().Release().WireDigest()
 
 type claudeWireTLSVector struct {
 	CipherSuites        []uint16 `json:"cipher_suites"`
@@ -244,12 +241,21 @@ type claudeWireArtifact struct {
 }
 
 func loadClaudeFWGWire() (claudeWireArtifact, error) {
-	sum := sha256.Sum256(embeddedClaudeFWGWire)
-	if hex.EncodeToString(sum[:]) != claudeFWGWireDigest {
+	return loadClaudeWire(
+		DefaultClaudeReleaseCatalog().ValidationCandidate().Release(),
+	)
+}
+
+func loadClaudeWire(release ResolvedClaudeRelease) (claudeWireArtifact, error) {
+	if err := release.validate(); err != nil {
+		return claudeWireArtifact{}, err
+	}
+	sum := sha256.Sum256(release.wireRaw)
+	if hex.EncodeToString(sum[:]) != release.WireDigest() {
 		return claudeWireArtifact{}, errors.New("Claude FW-G wire 制品原文字节摘要不匹配")
 	}
 	var artifact claudeWireArtifact
-	if err := json.Unmarshal(embeddedClaudeFWGWire, &artifact); err != nil {
+	if err := json.Unmarshal(release.wireRaw, &artifact); err != nil {
 		return claudeWireArtifact{}, fmt.Errorf("解析 Claude FW-G wire 制品：%w", err)
 	}
 	var rawCatalog struct {
@@ -257,16 +263,16 @@ func loadClaudeFWGWire() (claudeWireArtifact, error) {
 			ModelCatalog json.RawMessage `json:"model_catalog"`
 		} `json:"implementation_policy"`
 	}
-	if err := json.Unmarshal(embeddedClaudeFWGWire, &rawCatalog); err != nil ||
+	if err := json.Unmarshal(release.wireRaw, &rawCatalog); err != nil ||
 		!json.Valid(rawCatalog.ImplementationPolicy.ModelCatalog) {
 		return claudeWireArtifact{}, errors.New("Claude 模型能力目录原文缺失")
 	}
 	catalogRaw := append(append([]byte(nil), rawCatalog.ImplementationPolicy.ModelCatalog...), '\n')
 	catalogSum := sha256.Sum256(catalogRaw)
 	if artifact.SchemaVersion != "claude-code-fw-g-wire-artifact/v3" ||
-		artifact.Identity.Version != ClaudeFWGVersion ||
-		artifact.Identity.Platform != "linux/amd64" ||
-		artifact.Identity.ProfileDigest != ClaudeFWGProfileDigest ||
+		artifact.Identity.Version != release.Version() ||
+		artifact.Identity.Platform != release.Platform() ||
+		artifact.Identity.ProfileDigest != release.ProfileDigest() ||
 		hex.EncodeToString(catalogSum[:]) != artifact.Identity.ModelCapabilityCatalogDigest {
 		return claudeWireArtifact{}, errors.New("Claude FW-G wire 制品身份不一致")
 	}
@@ -287,7 +293,7 @@ func loadClaudeFWGWire() (claudeWireArtifact, error) {
 		len(artifact.Messages.SystemSHA256) != len(artifact.Messages.SystemBlocks) {
 		return claudeWireArtifact{}, errors.New("Claude FW-G messages 静态 wire 不完整")
 	}
-	if err := validateClaudeImplementationPolicy(artifact.ImplementationPolicy); err != nil {
+	if err := validateClaudeImplementationPolicy(artifact.ImplementationPolicy, release); err != nil {
 		return claudeWireArtifact{}, err
 	}
 	for index, block := range artifact.Messages.SystemBlocks {
@@ -306,7 +312,10 @@ func loadClaudeFWGWire() (claudeWireArtifact, error) {
 	return artifact, nil
 }
 
-func validateClaudeImplementationPolicy(policy claudeWireImplementationPolicy) error {
+func validateClaudeImplementationPolicy(
+	policy claudeWireImplementationPolicy,
+	release ResolvedClaudeRelease,
+) error {
 	if policy.SchemaVersion != "claude-code-fw-g-implementation-policy/v3" ||
 		len(policy.EvidenceLedger.SHA256) != sha256.Size*2 ||
 		policy.Identity.DeviceIDAlgorithm != "sha256-account-scope-ingress-binding-v1" ||
@@ -344,7 +353,7 @@ func validateClaudeImplementationPolicy(policy claudeWireImplementationPolicy) e
 	if err := validateClaudeThinkingPolicy(policy.Thinking); err != nil {
 		return err
 	}
-	if err := validateClaudeModelCatalog(policy.ModelCatalog, policy.Scenarios); err != nil {
+	if err := validateClaudeModelCatalog(policy.ModelCatalog, policy.Scenarios, release); err != nil {
 		return err
 	}
 	return nil
@@ -353,12 +362,14 @@ func validateClaudeImplementationPolicy(policy claudeWireImplementationPolicy) e
 func validateClaudeModelCatalog(
 	catalog claudeWireModelCatalog,
 	base claudeWireScenarioSet,
+	release ResolvedClaudeRelease,
 ) error {
 	if catalog.SchemaVersion != "claude-code-model-capability-catalog/v1" ||
-		catalog.RequiredRuleCount != 40 || catalog.UnknownModelPolicy != "deny" ||
-		catalog.AliasPolicy != "explicit-only" || len(catalog.Models) != 3 ||
-		catalog.Evidence.SuccessfulAttempts != 42 ||
-		catalog.Evidence.HistoricalFailedAttempts != 3 ||
+		catalog.RequiredRuleCount != release.RequiredRuleCount() ||
+		catalog.UnknownModelPolicy != "deny" || catalog.AliasPolicy != "explicit-only" ||
+		len(catalog.Models) != len(release.models) ||
+		catalog.Evidence.SuccessfulAttempts != release.modelSuccessfulAttempts ||
+		catalog.Evidence.HistoricalFailedAttempts != release.modelHistoricalFailures ||
 		len(catalog.Evidence.CampaignSHA256) != sha256.Size*2 ||
 		catalog.Evidence.BehaviorTrafficDisposition !=
 			"excluded-from-rules-and-difference-judgement" ||
@@ -366,7 +377,7 @@ func validateClaudeModelCatalog(
 		len(catalog.Evidence.ProductionDiff.SHA256) != sha256.Size*2 {
 		return errors.New("Claude 模型能力目录身份或证据摘要不完整")
 	}
-	wantModels := []string{"claude-sonnet-5", "claude-opus-5", "claude-fable-5"}
+	wantModels := release.Models()
 	aliases := make(map[string]string, len(wantModels))
 	for index := range catalog.Models {
 		capability := catalog.Models[index]

@@ -46,6 +46,7 @@ func (claudePreparedState) persona() Persona { return PersonaClaudeCode }
 type claudeDialectCompiler struct {
 	profile      claudeFWGProfile
 	wire         claudeWireArtifact
+	release      ResolvedClaudeRelease
 	sinks        SinkCatalog
 	newRequestID func() string
 }
@@ -123,14 +124,14 @@ func (c claudeDialectCompiler) compile(
 		connectionGroup: "claude-code:" + plan.endpoint.routeID,
 	}}
 	poolDigest := claudeAttestationDigest(
-		"connection-pool", string(PersonaClaudeCode), ClaudeFWGReleaseDigest,
+		"connection-pool", string(PersonaClaudeCode), c.release.ReleaseDigest(),
 		plan.plan.accountScope, string(plan.endpoint.sinkID), plan.endpoint.routeID,
 		plan.endpoint.transportID,
 	)
 	transport := TransportSpec{
 		ID: plan.endpoint.transportID, Backend: BackendHTTPUpstream,
 		Protocol: WireProtocolHTTP, Adapter: AdapterHTTPUpstream,
-		ProfileDigest:        ClaudeFWGProfileDigest,
+		ProfileDigest:        c.release.ProfileDigest(),
 		ConnectionGroup:      endpointPlan.template.connectionGroup,
 		ConnectionPoolDigest: poolDigest,
 		ResourceLifecycle:    claudeResourceLifecycle(),
@@ -141,7 +142,7 @@ func (c claudeDialectCompiler) compile(
 		return CompiledExecution{}, err
 	}
 	compiledDigest := claudeAttestationDigest(
-		"compiled", ClaudeFWGReleaseDigest, string(plan.endpoint.sinkID),
+		"compiled", c.release.ReleaseDigest(), string(plan.endpoint.sinkID),
 		plan.endpoint.id, requestID, claudeSHA256Hex(body),
 	)
 	return CompiledExecution{
@@ -156,8 +157,8 @@ func (c claudeDialectCompiler) compile(
 			invocationAttestationDigest: plan.state.invocationAttestationDigest,
 		},
 		dialectState:  claudePreparedState{},
-		releaseDigest: ClaudeFWGReleaseDigest,
-		profileDigest: ClaudeFWGProfileDigest,
+		releaseDigest: c.release.ReleaseDigest(),
+		profileDigest: c.release.ProfileDigest(),
 		bundleDigest:  claudeBundle.control.bundleDigest,
 		poolDigest:    poolDigest, compiledDigest: compiledDigest,
 		connection: ConnectionIdentity{digest: poolDigest},
@@ -305,6 +306,8 @@ const (
 type ClaudeRuntime struct {
 	role              claudeRuntimeRole
 	approvalDigest    string
+	selection         ResolvedClaudeReleaseSelection
+	release           ResolvedClaudeRelease
 	productionRelease ResolvedClaudeProductionRelease
 	profile           claudeFWGProfile
 	wire              claudeWireArtifact
@@ -431,7 +434,24 @@ func NewClaudeProductionRuntime(
 	if err != nil {
 		return nil, err
 	}
-	release, err := ResolveClaudeProductionRelease()
+	sharedCatalog, err := NewProductionPersonaReleaseCatalog(sinks)
+	if err != nil {
+		return nil, err
+	}
+	sharedSelection, err := sharedCatalog.ResolveSelection(
+		PersonaClaudeCode, ProductionReleaseActive,
+	)
+	if err != nil {
+		return nil, err
+	}
+	sharedRelease, ok := sharedSelection.Release()
+	if !ok {
+		return nil, errors.New("Claude production active 不是 strict Release")
+	}
+	if _, err := sharedCatalog.OperationalRollback(PersonaClaudeCode); err != nil {
+		return nil, errors.New("Claude production selector 缺少真实操作回退")
+	}
+	release, err := resolveClaudeProductionReleaseForCoordinate(sharedRelease)
 	if err != nil {
 		return nil, err
 	}
@@ -464,13 +484,14 @@ func newClaudeRuntime(
 	if guard == nil || port == nil || stateStore == nil {
 		return nil, errors.New("Claude runtime 缺少 Guard、HTTPUpstream port 或状态存储")
 	}
-	wantChangeset := claudeFWGCandidateChangeset
+	claudeCatalog := DefaultClaudeReleaseCatalog()
+	selection := claudeCatalog.ValidationCandidate()
 	approvalDigest := ""
 	switch role {
 	case claudeRuntimeRoleCandidate:
 	case claudeRuntimeRoleProduction:
-		wantChangeset = claudeFWHProductionChangeset
-		approvalDigest = ClaudeFWHProductionApprovalDigest
+		selection = claudeCatalog.ProductionActive()
+		approvalDigest = selection.ApprovalDigest()
 		if len(productionReleases) != 1 ||
 			productionReleases[0].ApprovalDigest() != approvalDigest {
 			return nil, errors.New("Claude production runtime 缺少已解析的正式 Release")
@@ -478,15 +499,20 @@ func newClaudeRuntime(
 	default:
 		return nil, errors.New("Claude runtime role 非法")
 	}
+	release := selection.Release()
+	wantChangeset := selection.Changeset()
+	if err := release.validate(); err != nil || strings.TrimSpace(wantChangeset) == "" {
+		return nil, errors.New("Claude runtime selector 未解析到完整 Release")
+	}
 	stateStore = newClaudeScopedStateStore(stateStore, claudeAttestationDigest(
-		"persona-state-store", ClaudeFWGVersion, string(role), wantChangeset,
-		ClaudeFWGReleaseDigest,
+		"persona-state-store", release.Version(), string(role), wantChangeset,
+		release.ReleaseDigest(),
 	))
-	profile, err := loadClaudeFWGProfile()
+	profile, err := loadClaudeProfile(release)
 	if err != nil {
 		return nil, err
 	}
-	wire, err := loadClaudeFWGWire()
+	wire, err := loadClaudeWire(release)
 	if err != nil {
 		return nil, err
 	}
@@ -502,11 +528,12 @@ func newClaudeRuntime(
 	productionRelease := ResolvedClaudeProductionRelease{}
 	if role == claudeRuntimeRoleProduction {
 		productionRelease = productionReleases[0]
-		if productionRelease.Version() != ClaudeFWGVersion ||
-			productionRelease.ProfileDigest() != ClaudeFWGProfileDigest ||
-			productionRelease.WireDigest() != claudeFWGWireDigest ||
-			productionRelease.ReleaseDigest() != ClaudeFWGReleaseDigest ||
-			productionRelease.BundleDigest() != ClaudeFWGBundleDigest {
+		if productionRelease.Version() != release.Version() ||
+			productionRelease.ProfileDigest() != release.ProfileDigest() ||
+			productionRelease.WireDigest() != release.WireDigest() ||
+			productionRelease.ReleaseDigest() != release.ReleaseDigest() ||
+			productionRelease.BundleDigest() != release.BundleDigest() ||
+			productionRelease.Changeset() != wantChangeset {
 			return nil, errors.New("Claude production Release 与加载的 Profile/Wire 不一致")
 		}
 	}
@@ -528,7 +555,8 @@ func newClaudeRuntime(
 	}
 	requestIDGenerator := uuid.NewString
 	dialect := claudeDialectCompiler{
-		profile: profile, wire: wire, sinks: sinks, newRequestID: requestIDGenerator,
+		profile: profile, wire: wire, release: release, sinks: sinks,
+		newRequestID: requestIDGenerator,
 	}
 	dialects, err := NewDialectCompilerRegistry(personas, []DialectCompiler{dialect})
 	if err != nil {
@@ -555,8 +583,9 @@ func newClaudeRuntime(
 		return nil, err
 	}
 	return &ClaudeRuntime{
-		role: role, approvalDigest: approvalDigest, productionRelease: productionRelease,
-		profile: profile, wire: wire, sinks: sinks, executor: executor,
+		role: role, approvalDigest: approvalDigest, selection: selection, release: release,
+		productionRelease: productionRelease,
+		profile:           profile, wire: wire, sinks: sinks, executor: executor,
 		newRequestID: requestIDGenerator, newCCH: newClaudeCCH,
 		retryJitter: newClaudeRetryJitter, sleep: sleepClaudeRetry,
 		stateStore: stateStore, newStateLeaseID: uuid.NewString,
@@ -577,6 +606,41 @@ func (r *ClaudeRuntime) ProductionApprovalDigest() string {
 
 func (r *ClaudeRuntime) IsProductionActive() bool {
 	return r != nil && r.role == claudeRuntimeRoleProduction
+}
+
+func (r *ClaudeRuntime) ReleaseVersion() string {
+	if r == nil {
+		return ""
+	}
+	return r.release.Version()
+}
+
+func (r *ClaudeRuntime) ProfileDigest() string {
+	if r == nil {
+		return ""
+	}
+	return r.release.ProfileDigest()
+}
+
+func (r *ClaudeRuntime) WireDigest() string {
+	if r == nil {
+		return ""
+	}
+	return r.release.WireDigest()
+}
+
+func (r *ClaudeRuntime) ReleaseDigest() string {
+	if r == nil {
+		return ""
+	}
+	return r.release.ReleaseDigest()
+}
+
+func (r *ClaudeRuntime) BundleDigest() string {
+	if r == nil {
+		return ""
+	}
+	return r.release.BundleDigest()
 }
 
 func (r *ClaudeRuntime) RuleIDs() []string {
@@ -872,7 +936,7 @@ func (r *ClaudeRuntime) prepareClaudeSessionRequestMutableContext(
 		ctx = context.Background()
 	}
 	sessionKey := claudeAttestationDigest(
-		"session-state", ClaudeFWGReleaseDigest, identity.accountScope,
+		"session-state", r.release.ReleaseDigest(), identity.accountScope,
 		identity.sessionID, identity.entrypoint,
 	)
 	lineKey := "main"
@@ -1474,7 +1538,7 @@ func (r *ClaudeRuntime) executeClaudeStartupOnce(
 	identity ClaudeIdentityFacts,
 ) error {
 	stateKey := claudeAttestationDigest(
-		"startup-state", ClaudeFWGReleaseDigest, identity.accountScope,
+		"startup-state", r.release.ReleaseDigest(), identity.accountScope,
 		identity.sessionID, identity.entrypoint,
 		fmt.Sprintf("background=%t", identity.background),
 	)
@@ -1705,7 +1769,7 @@ func (r *ClaudeRuntime) executeClaudeMessagesAttempts(
 	if input.TrustedFacts.Features.FallbackModelEnabled && !initialFallback {
 		attemptBudget++
 	}
-	bundle := newClaudeReleaseBundle(endpoint, attemptBudget)
+	bundle := newClaudeReleaseBundle(r.release, endpoint, attemptBudget)
 	invocation, err := r.executor.beginInvocation(ctx, bundle, invocationID)
 	if err != nil {
 		return ClaudeCandidateResult{}, err
@@ -1995,7 +2059,7 @@ func (r *ClaudeRuntime) executeEndpoint(
 		}
 	}
 	typed := newClaudeDialectPlan(plan, endpoint)
-	bundle := newClaudeReleaseBundle(endpoint, 1)
+	bundle := newClaudeReleaseBundle(r.release, endpoint, 1)
 	invocation, err := r.executor.beginInvocation(ctx, bundle, invocationID)
 	if err != nil {
 		return ClaudeEndpointResult{}, err
@@ -2013,13 +2077,17 @@ func (r *ClaudeRuntime) executeEndpoint(
 	return ClaudeEndpointResult{Response: result.HTTPResponse(), WireBody: wireBody}, nil
 }
 
-func newClaudeReleaseBundle(endpoint claudeEndpointProfile, attempts int) claudeReleaseBundle {
+func newClaudeReleaseBundle(
+	release ResolvedClaudeRelease,
+	endpoint claudeEndpointProfile,
+	attempts int,
+) claudeReleaseBundle {
 	return claudeReleaseBundle{control: executorBundleControl{
 		persona: PersonaClaudeCode, mode: ReleaseModeActive,
-		profileDigest: ClaudeFWGProfileDigest, releaseDigest: ClaudeFWGReleaseDigest,
-		bundleDigest: ClaudeFWGBundleDigest, primarySinkID: endpoint.sinkID,
+		profileDigest: release.ProfileDigest(), releaseDigest: release.ReleaseDigest(),
+		bundleDigest: release.BundleDigest(), primarySinkID: endpoint.sinkID,
 		attempt: executorAttemptControl{
-			policyID:               "claude-code-2.1.226." + endpoint.kind,
+			policyID:               string(PersonaClaudeCode) + "." + release.ReleaseDigest() + "." + endpoint.kind,
 			invocationAttemptLimit: attempts, transportAttemptLimit: attempts,
 			replayable: true,
 		},

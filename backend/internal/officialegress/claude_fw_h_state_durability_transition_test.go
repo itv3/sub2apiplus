@@ -124,7 +124,11 @@ func validateClaudeFWHStateDurabilityReceipt(
 			return errors.New("Claude 状态耐久性 transition 条目非法")
 		}
 		target, err := os.ReadFile(filepath.Join("../../..", filepath.FromSlash(transition.Path)))
-		if err != nil || claudeFWHSourceDigest(target) != transition.ToSHA256 {
+		currentDigest := claudeFWHSourceDigest(target)
+		if err != nil || currentDigest != transition.ToSHA256 &&
+			!claudePersonaReleaseCatalogTransitionSupersedes(
+				transition.Path, transition.ToSHA256, currentDigest,
+			) {
 			return errors.New("Claude 状态耐久性 transition 当前摘要不一致")
 		}
 		paths = append(paths, transition.Path)
@@ -162,6 +166,11 @@ func claudeFWHStateDurabilityTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if claudePersonaReleaseCatalogTransitionSupersedes(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	if claudeFWHResponseRequestIDTransitionSupersedes(
 		path, priorDigest, currentDigest,
 	) {
@@ -173,7 +182,11 @@ func claudeFWHStateDurabilityTransitionSupersedes(
 	}
 	for _, receipt := range receipts {
 		for _, transition := range receipt.Transitions {
-			if transition.Path == path && transition.ToSHA256 == currentDigest &&
+			if transition.Path == path &&
+				(transition.ToSHA256 == currentDigest ||
+					claudePersonaReleaseCatalogTransitionSupersedes(
+						path, transition.ToSHA256, currentDigest,
+					)) &&
 				(transition.FromSHA256 == priorDigest ||
 					claudeFWHImmutableTransitionLedgerSupersedes(
 						path, priorDigest, transition.FromSHA256,

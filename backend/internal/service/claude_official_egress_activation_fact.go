@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
-	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
 	"go.uber.org/zap"
 )
@@ -91,11 +90,11 @@ func resolveClaudeOfficialEgressActivationFact(
 				"Claude production selector 已激活但正式 Runtime 未生效",
 			)
 		}
-		fact.ClaudeVersion = officialegress.ClaudeFWGVersion
-		fact.ProfileDigest = officialegress.ClaudeFWGProfileDigest
-		fact.WireDigest = officialegress.ClaudeFWGWireDigest()
-		fact.ReleaseDigest = officialegress.ClaudeFWGReleaseDigest
-		fact.BundleDigest = officialegress.ClaudeFWGBundleDigest
+		fact.ClaudeVersion = runtimeState.Claude.ReleaseVersion()
+		fact.ProfileDigest = runtimeState.Claude.ProfileDigest()
+		fact.WireDigest = runtimeState.Claude.WireDigest()
+		fact.ReleaseDigest = runtimeState.Claude.ReleaseDigest()
+		fact.BundleDigest = runtimeState.Claude.BundleDigest()
 		fact.ApprovalDigest = runtimeState.Claude.ProductionApprovalDigest()
 		for field, actual := range map[string]string{
 			"profile_digest":  fact.ProfileDigest,

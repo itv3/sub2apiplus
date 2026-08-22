@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""从 FW-F 受批 Snapshot 与 2.1.226 原生证据生成 FW-G 内容寻址制品。"""
+"""从 FW-F 受批 Snapshot 与目标版本原生证据生成 FW-G 内容寻址制品。"""
 
 from __future__ import annotations
 
@@ -18,174 +18,174 @@ sys.path.insert(0, str(ROOT))
 from tools.official_client_capture.claude_fw_f_profile import parse_http_stream
 
 
-EXPECTED_PROFILE_DIGEST = (
-    "4da60bc238694a06a0dc80d68117abddd2de98c7c924c4db4c5dd929ea411e17"
-)
-PREVIOUS_WIRE_DIGEST = (
-    "07dbb15e8a621c4ef4922a9dec09e08d032fd649414f7d2f572c95c87b5679a7"
-)
-PREVIOUS_RELEASE_DIGEST = (
-    "c1053492eabc0b10d9d5f92f807a1df0d507c777b64a528e938426350c0d5350"
-)
-PREVIOUS_BUNDLE_DIGEST = (
-    "4213ea92a7d76c4ef3aa318f4d93628cbcf675dc86566b107dddb70a70e6eb41"
-)
-EXPECTED_REQUIRED_RULES_MANIFEST_DIGEST = (
-    "c09fdc9158d4d3aee7e5d28cc4a794e259a3c56899e00d558afab4c537389045"
-)
-EXPECTED_ATOMIC_LEDGER_DIGEST = (
-    "20e3c02365893db0af7164acd8300b658f653b29c2340acedfe0abf6973a4200"
-)
-EXPECTED_SNAPSHOT_DIGEST = (
-    "935975161e6b325f2a6459924f9d4bfa59dc9430fcd29e32475694ad0279e79e"
-)
-EXPECTED_EVIDENCE_PACKAGE_DIGEST = (
-    "4979fd6608e285a5735c416775f5ba48a576e00e26e55ebfbc8641f404606971"
-)
-EXPECTED_SUPPORT_ENVELOPE_DIGEST = (
-    "f4954a6889f06c782f9d2de6837a82678cbc068ec55002a1fb4c2e3e30324f17"
-)
-EXPECTED_RULE_COUNT = 40
-EXPECTED_PROFILE_ATOMIC_ASSERTION_COUNT = 106
-EXPECTED_TOTAL_ATOMIC_ASSERTION_COUNT = 110
-EXPECTED_VERSION = "2.1.226"
-EXPECTED_MESSAGES_EVIDENCE_DIGEST = (
-    "ca039dfcc431f7980bade1d06302da3703c87c350eac504b7b89161a87e34097"
-)
-EXPECTED_MESSAGES_BODY_DIGEST = (
-    "0b82aa1ffd4ddd65a7c79101efb340a3c95de3977a4a41ace68b980ec8785063"
-)
-EXPECTED_THINKING_DISPLAY_REQUEST_DIGESTS = {
-    "summarized": "454962fdfd52d81ab8200e78b6d158dbc3595c94810737a3c6dd58ad2db096f9",
-    "omitted": "b958407da791047ac69fe05ac5c5fb93e87c839942d4a321d5140650ae49efee",
-}
-EXPECTED_TLS_PCAP_DIGEST = (
-    "f5cd8ea0d20b2db2049822462bb9b8b2322eb4e5954e5c91e15aebb83646fab3"
-)
-EXPECTED_SYSTEM_TEXT_DIGESTS = [
-    "0d7062851dd7bd7e66d4be4f12ac4951e3d2f587ec408295333a49963bd3f6b7",
-    "6ed0608ab0f8a2e5966a72e22ffe1fc04a1ff6d5e220393c1ef30b7c9e336b30",
-    "51e2fcae7a92f7d7ac83e42b2952bb0fa04e4c30eb31afc775c4f82314524321",
-]
-EXPECTED_CIPHERS = [
-    4865,
-    4866,
-    4867,
-    49195,
-    49199,
-    49196,
-    49200,
-    52393,
-    52392,
-    49161,
-    49171,
-    49162,
-    49172,
-    156,
-    157,
-    47,
-    53,
-]
-EXPECTED_GROUPS = [29, 23, 24]
-EXPECTED_POINT_FORMATS = [0]
-EXPECTED_SIGNATURE_ALGORITHMS = [1027, 2052, 1025, 1283, 2053, 1281, 2054, 1537, 513]
-EXPECTED_SUPPORTED_VERSIONS = [772, 771]
-EXPECTED_KEY_SHARE_GROUPS = [29]
-EXPECTED_PSK_MODES = [1]
-EXPECTED_WITH_ALPN_EXTENSIONS = [0, 23, 65281, 10, 11, 35, 16, 5, 13, 18, 51, 45, 43, 21]
-EXPECTED_WITHOUT_ALPN_EXTENSIONS = [0, 23, 65281, 10, 11, 35, 13, 51, 45, 43]
-MODEL_CAPABILITY_MODELS = ("claude-sonnet-5", "claude-opus-5", "claude-fable-5")
-MODEL_CAPABILITY_EFFORTS = ("low", "medium", "high", "xhigh", "max")
-MODEL_CAPABILITY_SUCCESSFUL_ATTEMPTS = 42
-MODEL_CAPABILITY_FAILED_ATTEMPTS = {
-    "claude-opus-5-v4-replay-baseline/attempt-001",
-    "claude-opus-5-v4-replay-tui/attempt-001",
-    "claude-opus-5-v4-replay-tui/attempt-002",
-}
-MODEL_CAPABILITY_BASE_COMMIT = "c662b59a3e558f7aa352cf3a424a603aa0c254eb"
+EXPECTED_PROFILE_DIGEST: str
+PREVIOUS_WIRE_DIGEST: str
+PREVIOUS_RELEASE_DIGEST: str
+PREVIOUS_BUNDLE_DIGEST: str
+EXPECTED_REQUIRED_RULES_MANIFEST_DIGEST: str
+EXPECTED_ATOMIC_LEDGER_DIGEST: str
+EXPECTED_SNAPSHOT_DIGEST: str
+EXPECTED_EVIDENCE_PACKAGE_DIGEST: str
+EXPECTED_SUPPORT_ENVELOPE_DIGEST: str
+EXPECTED_RULE_COUNT: int
+EXPECTED_PROFILE_ATOMIC_ASSERTION_COUNT: int
+EXPECTED_TOTAL_ATOMIC_ASSERTION_COUNT: int
+EXPECTED_STRICT_ENDPOINT_COUNT: int
+EXPECTED_VERSION: str
+EXPECTED_MESSAGES_EVIDENCE_DIGEST: str
+EXPECTED_MESSAGES_BODY_DIGEST: str
+EXPECTED_THINKING_DISPLAY_REQUEST_DIGESTS: dict[str, str]
+EXPECTED_TLS_PCAP_DIGEST: str
+EXPECTED_SYSTEM_TEXT_DIGESTS: list[str]
+EXPECTED_CIPHERS: list[int]
+EXPECTED_GROUPS: list[int]
+EXPECTED_POINT_FORMATS: list[int]
+EXPECTED_SIGNATURE_ALGORITHMS: list[int]
+EXPECTED_SUPPORTED_VERSIONS: list[int]
+EXPECTED_KEY_SHARE_GROUPS: list[int]
+EXPECTED_PSK_MODES: list[int]
+EXPECTED_WITH_ALPN_EXTENSIONS: list[int]
+EXPECTED_WITHOUT_ALPN_EXTENSIONS: list[int]
+MODEL_CAPABILITY_MODELS: tuple[str, ...]
+MODEL_CAPABILITY_EFFORTS: tuple[str, ...]
+MODEL_CAPABILITY_SUCCESSFUL_ATTEMPTS: int
+MODEL_CAPABILITY_FAILED_ATTEMPTS: set[str]
+MODEL_CAPABILITY_BASE_COMMIT: str
 EMPTY_FILE_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-MODEL_CAPABILITY_PRIOR_TRANSITIONS = (
-    (
-        "docs/egress/maintenance/claude-fw-g-desktop-title-source-transition.json",
-        "3d176f9b24549388936fd918e3eb2a160263eac372160611b42ab3dd62da6884",
-    ),
-    (
-        "docs/egress/maintenance/claude-fw-g-desktop-title-test-transition.json",
-        "eecadfe40a4bf5f6e1e55ac2493d74557cccb0568e61d33ef0291c30ab5056d3",
-    ),
+MODEL_CAPABILITY_PRIOR_TRANSITIONS: tuple[tuple[str, str], ...]
+MODEL_CAPABILITY_SOURCE_TRANSITIONS: tuple[tuple[str, str, str], ...]
+
+DEFAULT_GENERATION_POLICY = (
+    ROOT
+    / "tools/official_client_capture/claude_fw_g_generation_policy_2_1_226.json"
 )
-MODEL_CAPABILITY_SOURCE_TRANSITIONS = (
-    (
-        "backend/internal/officialegress/claude_body.go",
-        "ba45723ed345a30cbd358ea9d0c23fe065df410a921fc3c69aa3eb6d5dd846b7",
-        "按模型能力目录选择场景并重建 fallbacks、Body 顺序和 Fable server fallback。",
-    ),
-    (
-        "backend/internal/officialegress/claude_ingress.go",
-        "0920335717e3d646bc4d54bda997ea8c81a23bd3fd056d6258b442824abd0204",
-        "验证官方模型场景、fallbacks 与 Fable 成对锁存 Header。",
-    ),
-    (
-        "backend/internal/officialegress/claude_profile.go",
-        "6c347093c3b722b6b9339fc9f497b279f5d9839d6dc99212313933fe0b5756b1",
-        "切换到包含三模型能力目录摘要的新内容寻址 Profile。",
-    ),
-    (
-        "backend/internal/officialegress/claude_runtime.go",
-        "5b24eec2cedd2cdd44e9045933261b62dfac2f5d9cc64d6c057ff0024af9167c",
-        "加载模型能力目录，执行精确模型门禁、count_tokens 和 Fable 会话锁存状态机。",
-    ),
-    (
-        "backend/internal/officialegress/claude_runtime_test.go",
-        "eb8945aec040a5c7107b86138bac48aac467d19fdf453a6105770e46132d8e48",
-        "增加三模型逐场景、未知模型、错误 fallback、count_tokens 与锁存正负测试。",
-    ),
-    (
-        "backend/internal/officialegress/claude_tools.go",
-        "e49b12302ff469ec5d446f9d184466a25c65c8b7b3e1db8cf793b1bfc63d7b79",
-        "仅允许官方入口精确承接模型目录中已取证场景的工具形态，不放宽第三方动态工具准入。",
-    ),
-    (
-        "backend/internal/officialegress/claude_wire.go",
-        "9558669b8f9c546116d1942424405d18e9a665b1fd6967e77c35ba4cb6fa14d8",
-        "切换到新 Wire 并在启动时校验模型目录、证据、场景及 Header／Body 顺序。",
-    ),
-    (
-        "backend/internal/officialegress/claude_fw_g_desktop_title_transition_test.go",
-        "4916d31469ac694b3b6c957551b474adb2206da2db361a3b74bb6dc91931afdb",
-        "让既有 Desktop 标题迁移只绑定其历史 Wire，并由本轮追加迁移承接当前源码。",
-    ),
-    (
-        "backend/internal/officialegress/claude_fw_g_source_transition_test.go",
-        "e943503961ebaf1e890410fcd61a8745f205b09668b9b807d5d7ec5404961fae",
-        "让 FW-G 初始收据继续绑定历史制品身份，并允许本轮追加迁移承接当前源码。",
-    ),
-    (
-        "backend/internal/officialegress/claude_fw_g_thinking_display_transition_test.go",
-        "e3abae6d0a1ff445adb531618653b8f0c84e53de7c07705531ee8cfaf5719bd6",
-        "让 thinking.display 收据只绑定其历史 Profile／Wire，并由本轮追加迁移承接当前源码。",
-    ),
-    (
-        "backend/internal/service/gateway_claude_fw_g.go",
-        "750ecc54194ba13a01bdf42a0a962fc6b76195cca3c00179cf369017407d0e6d",
-        "把实际上游响应模型交给 Persona 会话 finalizer，禁止客户端预造 Fable 锁存。",
-    ),
-    (
-        "backend/internal/service/claude_fw_g_source_transition_test.go",
-        "9ef2cc4a97c023f6ad4921e2664d823ffcfc2435442b18a9673529d136e93893",
-        "让 service 层既有 FW-G 收据继续绑定历史制品，并由本轮追加迁移承接当前源码。",
-    ),
-    (
-        "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
-        "4cc9b2acbbc50203cab78eeeedaf0d4f46aaa4500d082e27fdf5a8e9b937b31b",
-        "按 Codex 粒度明确公共 RequiredRules 与独立模型能力目录的证据和换版合同。",
-    ),
-    (
-        "tools/generate_claude_fw_g_profile.py",
-        "871e74ac3e0466d26977e9bb44256ec2e4d913b7e87895c7a307c4c5926420e4",
-        "从三模型官方 Campaign 确定性生成 Profile、Wire、能力目录和追加式迁移收据。",
-    ),
-)
+
+
+def configure_generation_policy(policy_path: Path) -> None:
+    """原子加载版本事实；生成器控制流不再因普通换版而修改。"""
+
+    global EXPECTED_PROFILE_DIGEST
+    global PREVIOUS_WIRE_DIGEST, PREVIOUS_RELEASE_DIGEST, PREVIOUS_BUNDLE_DIGEST
+    global EXPECTED_REQUIRED_RULES_MANIFEST_DIGEST, EXPECTED_ATOMIC_LEDGER_DIGEST
+    global EXPECTED_SNAPSHOT_DIGEST, EXPECTED_EVIDENCE_PACKAGE_DIGEST
+    global EXPECTED_SUPPORT_ENVELOPE_DIGEST, EXPECTED_RULE_COUNT
+    global EXPECTED_PROFILE_ATOMIC_ASSERTION_COUNT, EXPECTED_TOTAL_ATOMIC_ASSERTION_COUNT
+    global EXPECTED_STRICT_ENDPOINT_COUNT
+    global EXPECTED_VERSION, EXPECTED_MESSAGES_EVIDENCE_DIGEST
+    global EXPECTED_MESSAGES_BODY_DIGEST, EXPECTED_THINKING_DISPLAY_REQUEST_DIGESTS
+    global EXPECTED_TLS_PCAP_DIGEST, EXPECTED_SYSTEM_TEXT_DIGESTS
+    global EXPECTED_CIPHERS, EXPECTED_GROUPS, EXPECTED_POINT_FORMATS
+    global EXPECTED_SIGNATURE_ALGORITHMS, EXPECTED_SUPPORTED_VERSIONS
+    global EXPECTED_KEY_SHARE_GROUPS, EXPECTED_PSK_MODES
+    global EXPECTED_WITH_ALPN_EXTENSIONS, EXPECTED_WITHOUT_ALPN_EXTENSIONS
+    global MODEL_CAPABILITY_MODELS, MODEL_CAPABILITY_EFFORTS
+    global MODEL_CAPABILITY_SUCCESSFUL_ATTEMPTS, MODEL_CAPABILITY_FAILED_ATTEMPTS
+    global MODEL_CAPABILITY_BASE_COMMIT, MODEL_CAPABILITY_PRIOR_TRANSITIONS
+    global MODEL_CAPABILITY_SOURCE_TRANSITIONS
+
+    try:
+        document = json.loads(policy_path.read_text(encoding="utf-8"))
+        if document["schema_version"] != "claude-fw-g-generation-policy/v1":
+            raise ValueError("schema_version 非法")
+        target = document["target"]
+        frozen = document["frozen_inputs"]
+        previous = document["previous_release"]
+        tls = document["tls"]
+        model = document["model_capability"]
+
+        EXPECTED_VERSION = str(target["version"])
+        EXPECTED_RULE_COUNT = int(target["required_rule_count"])
+        EXPECTED_PROFILE_ATOMIC_ASSERTION_COUNT = int(
+            target["profile_atomic_assertion_count"]
+        )
+        EXPECTED_TOTAL_ATOMIC_ASSERTION_COUNT = int(
+            target["total_atomic_assertion_count"]
+        )
+        EXPECTED_STRICT_ENDPOINT_COUNT = int(target["strict_endpoint_count"])
+        MODEL_CAPABILITY_MODELS = tuple(target["models"])
+        MODEL_CAPABILITY_EFFORTS = tuple(target["efforts"])
+
+        EXPECTED_PROFILE_DIGEST = frozen["profile_sha256"]
+        EXPECTED_REQUIRED_RULES_MANIFEST_DIGEST = frozen[
+            "required_rules_manifest_sha256"
+        ]
+        EXPECTED_ATOMIC_LEDGER_DIGEST = frozen["atomic_ledger_sha256"]
+        EXPECTED_SNAPSHOT_DIGEST = frozen["snapshot_sha256"]
+        EXPECTED_EVIDENCE_PACKAGE_DIGEST = frozen["evidence_package_sha256"]
+        EXPECTED_SUPPORT_ENVELOPE_DIGEST = frozen["support_envelope_sha256"]
+        EXPECTED_MESSAGES_EVIDENCE_DIGEST = frozen["messages_evidence_sha256"]
+        EXPECTED_MESSAGES_BODY_DIGEST = frozen["messages_body_sha256"]
+        EXPECTED_THINKING_DISPLAY_REQUEST_DIGESTS = dict(
+            frozen["thinking_display_request_sha256"]
+        )
+        EXPECTED_TLS_PCAP_DIGEST = frozen["tls_pcap_sha256"]
+        EXPECTED_SYSTEM_TEXT_DIGESTS = list(frozen["system_text_sha256"])
+
+        PREVIOUS_WIRE_DIGEST = previous["wire_sha256"]
+        PREVIOUS_RELEASE_DIGEST = previous["release_sha256"]
+        PREVIOUS_BUNDLE_DIGEST = previous["bundle_sha256"]
+
+        EXPECTED_CIPHERS = list(tls["cipher_suites"])
+        EXPECTED_GROUPS = list(tls["supported_groups"])
+        EXPECTED_POINT_FORMATS = list(tls["point_formats"])
+        EXPECTED_SIGNATURE_ALGORITHMS = list(tls["signature_algorithms"])
+        EXPECTED_SUPPORTED_VERSIONS = list(tls["supported_versions"])
+        EXPECTED_KEY_SHARE_GROUPS = list(tls["key_share_groups"])
+        EXPECTED_PSK_MODES = list(tls["psk_modes"])
+        EXPECTED_WITH_ALPN_EXTENSIONS = list(tls["with_alpn_extensions"])
+        EXPECTED_WITHOUT_ALPN_EXTENSIONS = list(tls["without_alpn_extensions"])
+
+        MODEL_CAPABILITY_SUCCESSFUL_ATTEMPTS = int(model["successful_attempts"])
+        MODEL_CAPABILITY_FAILED_ATTEMPTS = set(
+            model["historical_failed_attempt_ids"]
+        )
+        MODEL_CAPABILITY_BASE_COMMIT = model["base_commit"]
+        MODEL_CAPABILITY_PRIOR_TRANSITIONS = tuple(
+            (item["path"], item["sha256"])
+            for item in model["prior_transitions"]
+        )
+        MODEL_CAPABILITY_SOURCE_TRANSITIONS = tuple(
+            (item["path"], item["from_sha256"], item["reason"])
+            for item in model["source_transitions"]
+        )
+    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise SystemExit(
+            f"Claude FW-G generation policy 非法：{policy_path}: {exc}"
+        ) from exc
+
+    digest_values = [
+        EXPECTED_PROFILE_DIGEST,
+        PREVIOUS_WIRE_DIGEST,
+        PREVIOUS_RELEASE_DIGEST,
+        PREVIOUS_BUNDLE_DIGEST,
+        EXPECTED_REQUIRED_RULES_MANIFEST_DIGEST,
+        EXPECTED_ATOMIC_LEDGER_DIGEST,
+        EXPECTED_SNAPSHOT_DIGEST,
+        EXPECTED_EVIDENCE_PACKAGE_DIGEST,
+        EXPECTED_SUPPORT_ENVELOPE_DIGEST,
+        EXPECTED_MESSAGES_EVIDENCE_DIGEST,
+        EXPECTED_MESSAGES_BODY_DIGEST,
+        EXPECTED_TLS_PCAP_DIGEST,
+        *EXPECTED_THINKING_DISPLAY_REQUEST_DIGESTS.values(),
+        *EXPECTED_SYSTEM_TEXT_DIGESTS,
+    ]
+    if (
+        not EXPECTED_VERSION
+        or min(
+            EXPECTED_RULE_COUNT,
+            EXPECTED_PROFILE_ATOMIC_ASSERTION_COUNT,
+            EXPECTED_TOTAL_ATOMIC_ASSERTION_COUNT,
+            EXPECTED_STRICT_ENDPOINT_COUNT,
+        )
+        <= 0
+        or not MODEL_CAPABILITY_MODELS
+        or not MODEL_CAPABILITY_EFFORTS
+        or any(
+            re.fullmatch(r"[0-9a-f]{64}", value) is None
+            for value in digest_values
+        )
+    ):
+        raise SystemExit(f"Claude FW-G generation policy 坐标不完整：{policy_path}")
 
 
 def canonical_bytes(document: object) -> bytes:
@@ -266,7 +266,9 @@ def load_frozen_json(path: Path, expected_digest: str, label: str) -> dict[str, 
 
 def required_rule_mapping(rules: Any, label: str) -> dict[str, tuple[str, ...]]:
     if not isinstance(rules, list) or len(rules) != EXPECTED_RULE_COUNT:
-        raise SystemExit(f"{label} RequiredRules 数量不是 40")
+        raise SystemExit(
+            f"{label} RequiredRules 数量不是 {EXPECTED_RULE_COUNT}"
+        )
     result: dict[str, tuple[str, ...]] = {}
     for rule in rules:
         if not isinstance(rule, dict):
@@ -316,7 +318,10 @@ def validate_fw_f_rule_authorities(
         len(manifest_profile_atomic) != EXPECTED_PROFILE_ATOMIC_ASSERTION_COUNT
         or len(set(manifest_profile_atomic)) != EXPECTED_PROFILE_ATOMIC_ASSERTION_COUNT
     ):
-        raise SystemExit("106 条画像原子断言未恰好一次归属 RequiredRules")
+        raise SystemExit(
+            f"{EXPECTED_PROFILE_ATOMIC_ASSERTION_COUNT} 条画像原子断言"
+            "未恰好一次归属 RequiredRules"
+        )
 
     scenario_groups = manifest.get("scenario_only_groups")
     if not isinstance(scenario_groups, list):
@@ -338,7 +343,10 @@ def validate_fw_f_rule_authorities(
         or len(ledger_atomic) != EXPECTED_TOTAL_ATOMIC_ASSERTION_COUNT
         or set(ledger_atomic) != set(all_manifest_atomic)
     ):
-        raise SystemExit("110 条 AtomicAssertionLedger 未与画像／scenario-only 映射完全一致")
+        raise SystemExit(
+            f"{EXPECTED_TOTAL_ATOMIC_ASSERTION_COUNT} 条 AtomicAssertionLedger "
+            "未与画像／scenario-only 映射完全一致"
+        )
 
     evidence_spec_ids = [
         rule.get("spec_id") for rule in evidence_rules if isinstance(rule, dict)
@@ -356,8 +364,14 @@ def validate_fw_f_rule_authorities(
         raise SystemExit("EvidencePackage／SupportEnvelope RequiredRule 集合不一致")
 
     strict_endpoints = profile_document.get("strict_endpoints")
-    if not isinstance(strict_endpoints, list) or len(strict_endpoints) != 8:
-        raise SystemExit("Snapshot strict endpoint 数量不是 8")
+    if (
+        not isinstance(strict_endpoints, list)
+        or len(strict_endpoints) != EXPECTED_STRICT_ENDPOINT_COUNT
+    ):
+        raise SystemExit(
+            "Snapshot strict endpoint 数量不是 "
+            f"{EXPECTED_STRICT_ENDPOINT_COUNT}"
+        )
     endpoint_spec_ids: list[str] = []
     for endpoint in strict_endpoints:
         spec_ids = endpoint.get("spec_ids") if isinstance(endpoint, dict) else None
@@ -370,7 +384,10 @@ def validate_fw_f_rule_authorities(
             raise SystemExit("Snapshot strict endpoint 规则引用非法")
         endpoint_spec_ids.extend(spec_ids)
     if set(endpoint_spec_ids) != required_spec_ids:
-        raise SystemExit("8 个 strict endpoint 的 SPEC 并集未覆盖 40 条 RequiredRules")
+        raise SystemExit(
+            f"{EXPECTED_STRICT_ENDPOINT_COUNT} 个 strict endpoint 的 SPEC 并集"
+            f"未覆盖 {EXPECTED_RULE_COUNT} 条 RequiredRules"
+        )
     return profile_document
 
 
@@ -546,18 +563,23 @@ def validate_tls_vector(vector: dict[str, Any], with_alpn: bool) -> None:
     }
     for name, value in expected.items():
         if vector.get(name) != value:
-            raise SystemExit(f"ClientHello {name} 与 2.1.226 P 通道不一致")
+            raise SystemExit(f"ClientHello {name} 与 {EXPECTED_VERSION} P 通道不一致")
     expected_alpn = ["http/1.1"] if with_alpn else []
     expected_extensions = (
         EXPECTED_WITH_ALPN_EXTENSIONS if with_alpn else EXPECTED_WITHOUT_ALPN_EXTENSIONS
     )
     if vector["alpn"] != expected_alpn or vector["extensions"] != expected_extensions:
-        raise SystemExit("ClientHello ALPN／扩展序与 2.1.226 P 通道不一致")
+        raise SystemExit(
+            f"ClientHello ALPN／扩展序与 {EXPECTED_VERSION} P 通道不一致"
+        )
 
 
 def collect_measured_raw_sha256s(ledger_path: Path) -> set[str]:
     ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
-    if ledger.get("target_version") != EXPECTED_VERSION or ledger.get("rule_count") != 110:
+    if (
+        ledger.get("target_version") != EXPECTED_VERSION
+        or ledger.get("rule_count") != EXPECTED_TOTAL_ATOMIC_ASSERTION_COUNT
+    ):
         raise SystemExit("MeasuredRuleLedger 身份或原子断言数量不一致")
     raw_sha256s: set[str] = set()
     for entry in ledger.get("entries", []):
@@ -1072,7 +1094,10 @@ def successful_model_attempts(campaign_root: Path) -> tuple[dict[str, Path], dic
             )
     complete_count = sum(item["status"] == "complete" for item in attempt_receipts)
     if complete_count != MODEL_CAPABILITY_SUCCESSFUL_ATTEMPTS:
-        raise SystemExit(f"模型能力成功 attempt 数量不是 42：{complete_count}")
+        raise SystemExit(
+            "模型能力成功 attempt 数量不是 "
+            f"{MODEL_CAPABILITY_SUCCESSFUL_ATTEMPTS}：{complete_count}"
+        )
     if failed != MODEL_CAPABILITY_FAILED_ATTEMPTS:
         raise SystemExit(f"模型能力历史失败集合漂移：{sorted(failed)}")
 
@@ -1426,7 +1451,9 @@ def extend_profile_for_model_capabilities(
         optional.append("fallbacks")
     optional.sort()
     if len(document.get("rules", [])) != EXPECTED_RULE_COUNT:
-        raise SystemExit("模型能力扩展改变了 40 条 RequiredRules")
+        raise SystemExit(
+            f"模型能力扩展改变了 {EXPECTED_RULE_COUNT} 条 RequiredRules"
+        )
     return document
 
 
@@ -1627,6 +1654,12 @@ def build_model_capability_receipt(
 
 def main() -> int:
     parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--generation-policy",
+        type=Path,
+        default=DEFAULT_GENERATION_POLICY,
+        help="冻结目标版本、输入摘要、模型目录和 TLS 向量的 JSON 策略",
+    )
     parser.add_argument("--snapshot", type=Path, required=True)
     parser.add_argument("--required-rules-manifest", type=Path, required=True)
     parser.add_argument("--measured-ledger", type=Path, required=True)
@@ -1641,6 +1674,8 @@ def main() -> int:
     parser.add_argument("--model-capability-campaign-root", type=Path)
     parser.add_argument("--model-capability-receipt-output", type=Path)
     args = parser.parse_args()
+
+    configure_generation_policy(args.generation_policy)
 
     snapshot = load_frozen_json(args.snapshot, EXPECTED_SNAPSHOT_DIGEST, "Snapshot")
     manifest = load_frozen_json(
@@ -1671,7 +1706,7 @@ def main() -> int:
         support_envelope,
     )
     if document.get("identity", {}).get("version") != EXPECTED_VERSION:
-        raise SystemExit("Snapshot 目标版本不是 2.1.226")
+        raise SystemExit(f"Snapshot 目标版本不是 {EXPECTED_VERSION}")
 
     model_catalog = None
     if args.model_capability_campaign_root is not None:

@@ -982,7 +982,7 @@ func claudeVersionFingerprint(artifact claudeWireArtifact, text string) (string,
 		}
 	}
 	sum := sha256.Sum256([]byte(
-		artifact.Attestation.VersionFingerprint.Salt + selected.String() + ClaudeFWGVersion,
+		artifact.Attestation.VersionFingerprint.Salt + selected.String() + artifact.Identity.Version,
 	))
 	encoded := hex.EncodeToString(sum[:])
 	return encoded[:artifact.Attestation.VersionFingerprint.HexLength], nil
@@ -1311,7 +1311,7 @@ func compileClaudeMessagesBody(
 	if !plan.features.DisableAttribution {
 		attribution := fmt.Sprintf(
 			"x-anthropic-billing-header: cc_version=%s.%s; cc_entrypoint=%s; cch=%s;",
-			ClaudeFWGVersion, fingerprint, plan.identity.entrypoint, plan.cch,
+			artifact.Identity.Version, fingerprint, plan.identity.entrypoint, plan.cch,
 		)
 		if plan.identity.agentID != "" {
 			attribution += " cc_is_subagent=true;"
