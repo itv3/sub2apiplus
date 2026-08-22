@@ -101,6 +101,7 @@ OfficialClientPersona =
 | 规范化语义 | 表达消息、工具、模型意图、流式语义和有类型条件 | 演变成厂商 wire 联合 Schema，或容纳 Header／TLS／版本常量 |
 | Persona Registry | 依据受信认证类型、官方产品和 route 解析 Persona | 仅凭 host、UA 或客户端自报值分类 |
 | PersonaPlanner + Identity Authority | 生成 Persona 自有 Plan，以及受信账号、会话、agent、平台和请求事实 | 从第三方同名 Header 复制官方身份，或选择生产版本 |
+| Persona State Store | 以 Persona／Release 隔离的命名空间保存不透明跨请求状态，并提供版本 CAS、有限租约、TTL 和关联身份的原子提交 | 让进程内存成为生产状态权威、跨 Persona 复用状态，或在重启和并发冲突时静默重置 |
 | ReleaseArtifact Store | 保存内容寻址、不可变的 Persona 画像和 ReleaseBundle | 保存 active／rollback／candidate 等可变部署角色 |
 | Runtime Selector | 独立解析 Persona 的 production active 和 rollback 引用 | 让自动发现、入站版本或 validation candidate 直接激活 |
 | 客户端方言 | 以 Persona 专属 Plan、IdentityFacts 和画像解释 URL、Header、Body、条件与状态语义 | 复用另一客户端的 Plan、Schema、Compiler 或 wire 事实 |
@@ -112,6 +113,11 @@ OfficialClientPersona =
 这里的“共享 Executor”指共享实现，不指一个跨 Persona 复用 authority、issuer、invocation 状态或
 连接状态的全局实例。每个 Persona 必须拥有独立 Executor authority 和 Token issuer；共享 adapter
 也必须按明确 `TransportCapability` 登记，不能因此共享 Persona 状态。
+
+需要跨请求消费的会话、工具往返、agent 谱系、fallback 和 request-id 所有权必须进入 Persona 私有的
+持久状态存储；共享框架只看不透明 Payload、版本和租约，不解释厂商字段。状态提交必须与关联身份声明
+原子完成；Redis／数据库不可用、状态损坏、CAS 冲突耗尽或租约非法时 fail-close。进程内缓存只能合并
+同一实例的并发工作，不能作为容器重启、滚动发布或多实例运行时的生产权威。
 
 共享内核消费的 `CompiledEnvelope` 只允许包含以下厂商无关事实：
 
@@ -349,6 +355,11 @@ Compiler fail-close；只有 validation-only 才能显式记录非无损降级�
 第三方入口按协议类别登记；无法无损映射官方语义时必须拒绝或明确记录降级。任何对齐责任规则仍为
 `blocked`，或已验证规则降为 `regressed_evidence` 时，candidate 不得成为 strict active；验收通过
 也不会自动提升官方规则的证据等级。
+
+凡 SupportEnvelope 含跨请求状态，验收矩阵还必须在已完成状态转换之间执行 Runtime 重建和应用容器
+重启，并复核后续 wire、状态消费及 startup 去重；同时覆盖长历史中“旧工具往返后出现当前普通轮”、
+当前工具成功／失败续轮、并发 CAS、租约释放和状态存储不可用的负例。只在单进程内连续发送基础请求，
+不能证明该状态机制达到 production replacement 等级。
 
 ## 4.2 生产与回滚
 

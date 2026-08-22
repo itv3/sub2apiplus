@@ -291,6 +291,9 @@ func claudeFWHFableDeclaredFallbackDirectSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if claudeFWHStateDurabilityTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	for _, item := range []struct {
 		path string
 		test bool
@@ -319,6 +322,9 @@ func claudeFWHFableDeclaredFallbackTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if claudeFWHStateDurabilityTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if claudeFWHImmutableTransitionLedgerSupersedes(path, priorDigest, currentDigest) {
 		return true
 	}
@@ -385,7 +391,11 @@ func TestClaudeFWHFableDeclaredFallbackTransitionsAreFrozen(t *testing.T) {
 			target, err := os.ReadFile(filepath.Join(
 				"../../..", filepath.FromSlash(transition.Path),
 			))
-			if err != nil || claudeFWHSourceDigest(target) != transition.ToSHA256 {
+			currentDigest := claudeFWHSourceDigest(target)
+			if err != nil || currentDigest != transition.ToSHA256 &&
+				!claudeFWHStateDurabilityTransitionSupersedes(
+					transition.Path, transition.ToSHA256, currentDigest,
+				) {
 				t.Fatalf("Claude FW-H Fable fallback 摘要漂移：%s", transition.Path)
 			}
 		}
@@ -879,7 +889,11 @@ func validateClaudeFWHFinalSafetyAndTransitions(
 			t.Fatalf("Claude FW-H 最终文档 transition 非法：%s", transition.Path)
 		}
 		target, err := os.ReadFile(filepath.Join("../../..", filepath.FromSlash(transition.Path)))
-		if err != nil || claudeFWHSourceDigest(target) != transition.ToSHA256 {
+		currentDigest := claudeFWHSourceDigest(target)
+		if err != nil || currentDigest != transition.ToSHA256 &&
+			!claudeFWHStateDurabilityTransitionSupersedes(
+				transition.Path, transition.ToSHA256, currentDigest,
+			) {
 			t.Fatalf("Claude FW-H 最终文档摘要漂移：%s", transition.Path)
 		}
 		paths = append(paths, transition.Path)

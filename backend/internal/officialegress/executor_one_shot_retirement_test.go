@@ -116,7 +116,10 @@ func TestExecutorOneShotCompatibilityRetirementReceiptAndSourceExtinction(t *tes
 			}
 			expected = approved.ToSHA256
 		}
-		if got := executorRetirementSHA256(source); got != expected {
+		if got := executorRetirementSHA256(source); got != expected &&
+			!claudeFWHStateDurabilityTransitionSupersedes(
+				transition.Path, expected, got,
+			) {
 			t.Fatalf("Executor 一次性兼容源码摘要漂移：path=%s got=%s want=%s", transition.Path, got, expected)
 		}
 	}

@@ -26,6 +26,11 @@ func claudeFWHSourceTransitionSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if claudeFWHStateDurabilityTransitionSupersedesService(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	if claudeFWHLegacyRetirementTransitionSupersedesService(
 		path, priorDigest, currentDigest,
 	) {
@@ -53,6 +58,9 @@ func claudeFWHSourceTransitionSupersedesService(
 		if transition.Path == path && transition.FromSHA256 == priorDigest &&
 			(transition.ToSHA256 == currentDigest ||
 				claudeFWHLegacyRetirementTransitionSupersedesService(
+					path, transition.ToSHA256, currentDigest,
+				) ||
+				claudeFWHStateDurabilityTransitionSupersedesService(
 					path, transition.ToSHA256, currentDigest,
 				)) {
 			return true

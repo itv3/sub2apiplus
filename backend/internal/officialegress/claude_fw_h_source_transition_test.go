@@ -163,6 +163,9 @@ func loadClaudeFWHSourceTransition(t *testing.T) map[string]changeset4SourceTran
 // claudeFWHSourceTransitionSupersedes 只承认本轮收据中的精确 path/from/to，
 // 不覆盖或改写任何 FW-G 历史事实。
 func claudeFWHSourceTransitionSupersedes(path, priorDigest, currentDigest string) bool {
+	if claudeFWHStateDurabilityTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if claudeFWHFableDeclaredFallbackTransitionSupersedes(
 		path, priorDigest, currentDigest,
 	) {
@@ -206,6 +209,9 @@ func TestClaudeFWHSourceTransitionIsFrozen(t *testing.T) {
 			t.Fatal(readErr)
 		}
 		if got := claudeFWHSourceDigest(source); got != transition.ToSHA256 &&
+			!claudeFWHStateDurabilityTransitionSupersedes(
+				transition.Path, transition.ToSHA256, got,
+			) &&
 			!claudeFWHFableDeclaredFallbackTransitionSupersedes(
 				transition.Path, transition.ToSHA256, got,
 			) &&

@@ -314,11 +314,15 @@ type ClaudeRuntime struct {
 	newCCH            func() (string, error)
 	retryJitter       func(int) (int, error)
 	sleep             func(context.Context, time.Duration) error
+	stateStoreMu      sync.Mutex
+	stateStore        ClaudeStateStore
+	newStateLeaseID   func() string
 	startupMu         sync.Mutex
 	startupRuns       map[string]*claudeStartupRun
-	sessionMu         sync.Mutex
-	sessions          map[string]*claudeSessionState
-	requestOwners     map[string]string
+	// 以下字段只保留旧测试构造器的源码兼容性，生产状态统一进入 stateStore。
+	sessionMu     sync.Mutex
+	sessions      map[string]*claudeSessionState
+	requestOwners map[string]string
 }
 
 // ClaudeCandidateRuntime 是旧调用点的源码兼容名，不是第二套执行实现。
@@ -327,6 +331,13 @@ type ClaudeCandidateRuntime = ClaudeRuntime
 type claudeStartupRun struct {
 	done chan struct{}
 	err  error
+}
+
+type claudePersistedStartupState struct {
+	SchemaVersion  int    `json:"schema_version"`
+	Completed      bool   `json:"completed"`
+	LeaseID        string `json:"lease_id,omitempty"`
+	LeaseExpiresAt int64  `json:"lease_expires_at,omitempty"`
 }
 
 type claudeMessageRelations struct {
@@ -341,6 +352,10 @@ const (
 	claudeSessionRequestWebSearchOuter        claudeSessionRequestKind = "web-search-outer"
 	claudeSessionRequestWebSearchServer       claudeSessionRequestKind = "web-search-server"
 	claudeSessionRequestWebSearchContinuation claudeSessionRequestKind = "web-search-continuation"
+	claudeSessionStateTTL                                              = 7 * 24 * time.Hour
+	claudeSessionLeaseTTL                                              = 4 * time.Hour
+	claudeStartupLeaseTTL                                              = 2 * time.Minute
+	claudeSessionStateCASAttempts                                      = 32
 )
 
 type claudeSessionLineState struct {
@@ -348,7 +363,8 @@ type claudeSessionLineState struct {
 	fallbackPrimaryModel string
 	fallbackModel        string
 	fallbackLatchedBy    string
-	inFlight             bool
+	inFlightLeaseID      string
+	inFlightExpiresAt    time.Time
 }
 
 type claudeAgentLineageState struct {
@@ -361,10 +377,12 @@ type claudeSessionState struct {
 	agentLineages            map[string]claudeAgentLineageState
 	requestIDs               map[string]struct{}
 	tuiTitleCompleted        bool
-	tuiTitleInFlight         bool
+	tuiTitleLeaseID          string
+	tuiTitleLeaseExpiresAt   time.Time
 	webSearchParentRequestID string
 	webSearchServerCompleted bool
-	webSearchServerInFlight  bool
+	webSearchServerLeaseID   string
+	webSearchLeaseExpiresAt  time.Time
 	updatedAt                time.Time
 }
 
@@ -379,6 +397,7 @@ type claudeSessionLease struct {
 	agentDepth     int
 	primaryModel   string
 	effectiveModel string
+	leaseID        string
 }
 
 type claudeSessionFinalizer struct {
@@ -391,8 +410,13 @@ func NewClaudeCandidateRuntime(
 	sinks SinkCatalog,
 	guard *Guard,
 	port HTTPUpstreamTransportPort,
+	stateStores ...ClaudeStateStore,
 ) (*ClaudeRuntime, error) {
-	return newClaudeRuntime(claudeRuntimeRoleCandidate, sinks, guard, port)
+	stateStore, err := resolveClaudeStateStore(stateStores)
+	if err != nil {
+		return nil, err
+	}
+	return newClaudeRuntime(claudeRuntimeRoleCandidate, sinks, guard, port, stateStore)
 }
 
 // NewClaudeProductionRuntime 只接受正式 Catalog，并在构造 Executor 前复算 FW-H
@@ -401,12 +425,32 @@ func NewClaudeProductionRuntime(
 	sinks SinkCatalog,
 	guard *Guard,
 	port HTTPUpstreamTransportPort,
+	stateStores ...ClaudeStateStore,
 ) (*ClaudeRuntime, error) {
+	stateStore, err := resolveClaudeStateStore(stateStores)
+	if err != nil {
+		return nil, err
+	}
 	release, err := ResolveClaudeProductionRelease()
 	if err != nil {
 		return nil, err
 	}
-	return newClaudeRuntime(claudeRuntimeRoleProduction, sinks, guard, port, release)
+	return newClaudeRuntime(
+		claudeRuntimeRoleProduction, sinks, guard, port, stateStore, release,
+	)
+}
+
+func resolveClaudeStateStore(stores []ClaudeStateStore) (ClaudeStateStore, error) {
+	if len(stores) > 1 {
+		return nil, errors.New("Claude runtime 只能绑定一个 Persona 状态存储")
+	}
+	if len(stores) == 1 {
+		if stores[0] == nil {
+			return nil, errors.New("Claude runtime 状态存储为空")
+		}
+		return stores[0], nil
+	}
+	return newClaudeMemoryStateStore(), nil
 }
 
 func newClaudeRuntime(
@@ -414,10 +458,11 @@ func newClaudeRuntime(
 	sinks SinkCatalog,
 	guard *Guard,
 	port HTTPUpstreamTransportPort,
+	stateStore ClaudeStateStore,
 	productionReleases ...ResolvedClaudeProductionRelease,
 ) (*ClaudeRuntime, error) {
-	if guard == nil || port == nil {
-		return nil, errors.New("Claude runtime 缺少 Guard 或 HTTPUpstream port")
+	if guard == nil || port == nil || stateStore == nil {
+		return nil, errors.New("Claude runtime 缺少 Guard、HTTPUpstream port 或状态存储")
 	}
 	wantChangeset := claudeFWGCandidateChangeset
 	approvalDigest := ""
@@ -433,6 +478,10 @@ func newClaudeRuntime(
 	default:
 		return nil, errors.New("Claude runtime role 非法")
 	}
+	stateStore = newClaudeScopedStateStore(stateStore, claudeAttestationDigest(
+		"persona-state-store", ClaudeFWGVersion, string(role), wantChangeset,
+		ClaudeFWGReleaseDigest,
+	))
 	profile, err := loadClaudeFWGProfile()
 	if err != nil {
 		return nil, err
@@ -510,6 +559,7 @@ func newClaudeRuntime(
 		profile: profile, wire: wire, sinks: sinks, executor: executor,
 		newRequestID: requestIDGenerator, newCCH: newClaudeCCH,
 		retryJitter: newClaudeRetryJitter, sleep: sleepClaudeRetry,
+		stateStore: stateStore, newStateLeaseID: uuid.NewString,
 		startupRuns:   make(map[string]*claudeStartupRun),
 		sessions:      make(map[string]*claudeSessionState),
 		requestOwners: make(map[string]string),
@@ -653,7 +703,9 @@ func (r *ClaudeRuntime) executePreparedClaudeMessages(
 	if err := r.executeClaudeStartup(ctx, input, identity); err != nil {
 		return ClaudeCandidateResult{}, err
 	}
-	lease, err := r.prepareClaudeSessionRequestMutable(&identity, &canonical, relations)
+	lease, err := r.prepareClaudeSessionRequestMutableContext(
+		ctx, &identity, &canonical, relations,
+	)
 	if err != nil {
 		return ClaudeCandidateResult{}, err
 	}
@@ -711,9 +763,19 @@ func validateClaudeMessageRelations(
 	if json.Unmarshal(canonical.messages, &messages) != nil {
 		return relations, errors.New("Claude messages 无法验证工具往返")
 	}
-	toolUses := make(map[string]string)
+	type toolUseRelation struct {
+		name         string
+		messageIndex int
+	}
+	toolUses := make(map[string]toolUseRelation)
 	toolResults := make(map[string]struct{})
-	for _, message := range messages {
+	lastAssistantMessageIndex := -1
+	webSearchResultMessageIndex := -1
+	webSearchUseMessageIndex := -1
+	for messageIndex, message := range messages {
+		if message.Role == "assistant" {
+			lastAssistantMessageIndex = messageIndex
+		}
 		var blocks []json.RawMessage
 		if json.Unmarshal(message.Content, &blocks) != nil {
 			continue
@@ -744,7 +806,7 @@ func validateClaudeMessageRelations(
 				if _, duplicate := toolUses[id]; duplicate {
 					return relations, errors.New("Claude tool_use id 重复")
 				}
-				toolUses[id] = name
+				toolUses[id] = toolUseRelation{name: name, messageIndex: messageIndex}
 			case "tool_result":
 				if message.Role != "user" {
 					return relations, errors.New("Claude tool_result 必须位于 user 消息")
@@ -754,7 +816,7 @@ func validateClaudeMessageRelations(
 					!claudeToolUseIDPattern.MatchString(id) {
 					return relations, errors.New("Claude tool_result 身份非法")
 				}
-				name, ok := toolUses[id]
+				toolUse, ok := toolUses[id]
 				if !ok {
 					return relations, errors.New("Claude tool_result 缺少同 ID 的先行 tool_use")
 				}
@@ -762,12 +824,15 @@ func validateClaudeMessageRelations(
 					return relations, errors.New("Claude tool_result id 重复消费")
 				}
 				toolResults[id] = struct{}{}
-				if name == "WebSearch" {
-					relations.webSearchRoundTrip = true
+				if toolUse.name == "WebSearch" {
+					webSearchResultMessageIndex = messageIndex
+					webSearchUseMessageIndex = toolUse.messageIndex
 				}
 			}
 		}
 	}
+	relations.webSearchRoundTrip = webSearchResultMessageIndex == len(messages)-1 &&
+		webSearchUseMessageIndex == lastAssistantMessageIndex
 	return relations, nil
 }
 
@@ -776,7 +841,9 @@ func (r *ClaudeRuntime) prepareClaudeSessionRequest(
 	canonical ClaudeCanonicalRequest,
 	relations claudeMessageRelations,
 ) (claudeSessionLease, error) {
-	return r.prepareClaudeSessionRequestMutable(identity, &canonical, relations)
+	return r.prepareClaudeSessionRequestMutableContext(
+		context.Background(), identity, &canonical, relations,
+	)
 }
 
 // prepareClaudeSessionRequestMutable 只供生产执行链和需要验证状态派生的测试使用。
@@ -787,8 +854,22 @@ func (r *ClaudeRuntime) prepareClaudeSessionRequestMutable(
 	canonical *ClaudeCanonicalRequest,
 	relations claudeMessageRelations,
 ) (claudeSessionLease, error) {
+	return r.prepareClaudeSessionRequestMutableContext(
+		context.Background(), identity, canonical, relations,
+	)
+}
+
+func (r *ClaudeRuntime) prepareClaudeSessionRequestMutableContext(
+	ctx context.Context,
+	identity *ClaudeIdentityFacts,
+	canonical *ClaudeCanonicalRequest,
+	relations claudeMessageRelations,
+) (claudeSessionLease, error) {
 	if r == nil || identity == nil || canonical == nil {
 		return claudeSessionLease{}, errors.New("Claude 会话状态机未初始化")
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	sessionKey := claudeAttestationDigest(
 		"session-state", ClaudeFWGReleaseDigest, identity.accountScope,
@@ -811,37 +892,100 @@ func (r *ClaudeRuntime) prepareClaudeSessionRequestMutable(
 	case canonical.toolMode == claudeToolModeWebSearchOuter:
 		kind = claudeSessionRequestWebSearchOuter
 	}
-
-	r.sessionMu.Lock()
-	defer r.sessionMu.Unlock()
-	if r.requestOwners == nil {
-		r.requestOwners = make(map[string]string)
+	baseIdentity := *identity
+	baseCanonical := *canonical
+	store := r.claudeSessionStateStore()
+	for range claudeSessionStateCASAttempts {
+		snapshot, err := store.Load(ctx, sessionKey)
+		if err != nil {
+			return claudeSessionLease{}, fmt.Errorf("读取 Claude Persona 会话状态：%w", err)
+		}
+		state := newClaudeSessionState()
+		if snapshot.Found {
+			state, err = unmarshalClaudeSessionState(snapshot.Payload)
+			if err != nil {
+				return claudeSessionLease{}, err
+			}
+		}
+		workingIdentity := baseIdentity
+		workingCanonical := baseCanonical
+		observedRequestID := workingIdentity.previousRequestID
+		previousOwner := ""
+		if observedRequestID != "" {
+			previousOwner, err = store.LookupRequestOwner(ctx, observedRequestID)
+			if err != nil {
+				return claudeSessionLease{}, fmt.Errorf("读取 Claude request-id 所有权：%w", err)
+			}
+		}
+		leaseID := r.nextClaudeStateLeaseID()
+		now := time.Now()
+		lease, err := r.prepareClaudeSessionState(
+			state, snapshot.Found, sessionKey, lineKey, kind, previousOwner,
+			&workingIdentity, &workingCanonical, now, leaseID,
+		)
+		if err != nil {
+			return claudeSessionLease{}, err
+		}
+		payload, err := marshalClaudeSessionState(state)
+		if err != nil {
+			return claudeSessionLease{}, err
+		}
+		mutation := ClaudeStateMutation{
+			ExpectedVersion: snapshot.Version,
+			Payload:         payload,
+			TTL:             claudeSessionStateTTL,
+		}
+		if observedRequestID != "" {
+			mutation.ObservedRequestID = observedRequestID
+			mutation.ObservedRequestOwner = previousOwner
+		}
+		committed, err := store.CompareAndSwap(ctx, sessionKey, mutation)
+		if errors.Is(err, ErrClaudeStateObservedOwnerChanged) {
+			continue
+		}
+		if err != nil {
+			return claudeSessionLease{}, fmt.Errorf("锁定 Claude Persona 会话状态：%w", err)
+		}
+		if !committed {
+			continue
+		}
+		*identity = workingIdentity
+		*canonical = workingCanonical
+		lease.runtime = r
+		return lease, nil
 	}
-	now := time.Now()
-	r.pruneClaudeSessionsLocked(now)
-	state := r.sessions[sessionKey]
-	stateExisted := state != nil
+	return claudeSessionLease{}, errors.New("Claude 会话状态并发提交超过重试上限")
+}
+
+func (r *ClaudeRuntime) prepareClaudeSessionState(
+	state *claudeSessionState,
+	stateExisted bool,
+	sessionKey string,
+	lineKey string,
+	kind claudeSessionRequestKind,
+	previousOwner string,
+	identity *ClaudeIdentityFacts,
+	canonical *ClaudeCanonicalRequest,
+	now time.Time,
+	leaseID string,
+) (claudeSessionLease, error) {
+	if state == nil || identity == nil || canonical == nil || leaseID == "" {
+		return claudeSessionLease{}, errors.New("Claude 会话状态准备参数不完整")
+	}
+	state.clearExpiredClaudeLeases(now)
 	if identity.forked && stateExisted {
 		return claudeSessionLease{}, errors.New("Claude fork 必须使用新的 Session-Id")
 	}
 	if identity.previousRequestID != "" {
-		if owner := r.requestOwners[identity.previousRequestID]; owner != "" && owner != sessionKey {
+		if previousOwner == "" && !stateExisted {
+			return claudeSessionLease{}, errors.New("Claude previous request 缺少已登记所有权")
+		}
+		if previousOwner != "" && previousOwner != sessionKey {
 			if stateExisted {
 				return claudeSessionLease{}, errors.New("Claude previous request 跨入既有会话")
 			}
 			identity.forked = true
 		}
-	}
-	if state == nil {
-		if len(r.sessions) >= 16384 {
-			return claudeSessionLease{}, errors.New("Claude 会话状态容量已满")
-		}
-		state = &claudeSessionState{
-			lines:         make(map[string]*claudeSessionLineState),
-			agentLineages: make(map[string]claudeAgentLineageState),
-			requestIDs:    make(map[string]struct{}),
-		}
-		r.sessions[sessionKey] = state
 	}
 	state.updatedAt = now
 	if identity.entrypoint == ClaudeEntrypointCLI && !identity.background &&
@@ -892,25 +1036,27 @@ func (r *ClaudeRuntime) prepareClaudeSessionRequestMutable(
 	case claudeSessionRequestTUITitle:
 		if (identity.sessionSource != ClaudeSessionSourceOfficialConsistent &&
 			identity.sessionSource != ClaudeSessionSourcePlannerDerived) ||
-			identity.previousRequestID != "" || state.tuiTitleCompleted || state.tuiTitleInFlight {
+			identity.previousRequestID != "" || state.tuiTitleCompleted || state.tuiTitleLeaseID != "" {
 			return claudeSessionLease{}, errors.New("Claude TUI 标题阶段状态非法")
 		}
-		state.tuiTitleInFlight = true
+		state.tuiTitleLeaseID = leaseID
+		state.tuiTitleLeaseExpiresAt = now.Add(claudeSessionLeaseTTL)
 	case claudeSessionRequestWebSearchServer:
 		if identity.sessionSource != ClaudeSessionSourceOfficialConsistent ||
 			identity.agentID != "" || identity.background || identity.previousRequestID != "" ||
 			state.webSearchParentRequestID == "" || state.webSearchServerCompleted ||
-			state.webSearchServerInFlight {
+			state.webSearchServerLeaseID != "" {
 			return claudeSessionLease{}, errors.New("Claude server web_search 缺少同会话外层父请求")
 		}
-		state.webSearchServerInFlight = true
+		state.webSearchServerLeaseID = leaseID
+		state.webSearchLeaseExpiresAt = now.Add(claudeSessionLeaseTTL)
 	default:
 		line := state.lines[lineKey]
 		if line == nil {
 			line = &claudeSessionLineState{}
 			state.lines[lineKey] = line
 		}
-		if line.inFlight {
+		if line.inFlightLeaseID != "" {
 			return claudeSessionLease{}, errors.New("Claude 同一会话谱系存在并发推理请求")
 		}
 		if line.fallbackLatchedBy != "" {
@@ -950,39 +1096,59 @@ func (r *ClaudeRuntime) prepareClaudeSessionRequestMutable(
 				identity.previousRequestID != state.webSearchParentRequestID) {
 			return claudeSessionLease{}, errors.New("Claude WebSearch 续轮缺少已完成的 server 派生请求")
 		}
-		line.inFlight = true
+		line.inFlightLeaseID = leaseID
+		line.inFlightExpiresAt = now.Add(claudeSessionLeaseTTL)
 	}
 	return claudeSessionLease{
-		runtime: r, sessionKey: sessionKey, lineKey: lineKey, kind: kind,
+		sessionKey: sessionKey, lineKey: lineKey, kind: kind,
 		newAgent: newAgent, agentID: identity.agentID,
 		parentAgentID: identity.parentAgentID, agentDepth: identity.agentDepth,
 		primaryModel: canonical.primaryModel, effectiveModel: canonical.model,
+		leaseID: leaseID,
 	}, nil
 }
 
-func (r *ClaudeRuntime) pruneClaudeSessionsLocked(now time.Time) {
-	if len(r.sessions) < 4096 {
-		return
+func newClaudeSessionState() *claudeSessionState {
+	return &claudeSessionState{
+		lines:         make(map[string]*claudeSessionLineState),
+		agentLineages: make(map[string]claudeAgentLineageState),
+		requestIDs:    make(map[string]struct{}),
 	}
-	for key, state := range r.sessions {
-		if now.Sub(state.updatedAt) < 24*time.Hour || state.tuiTitleInFlight ||
-			state.webSearchServerInFlight {
-			continue
-		}
-		inFlight := false
-		for _, line := range state.lines {
-			if line.inFlight {
-				inFlight = true
-				break
-			}
-		}
-		if !inFlight {
-			for requestID := range state.requestIDs {
-				delete(r.requestOwners, requestID)
-			}
-			delete(r.sessions, key)
+}
+
+func (state *claudeSessionState) clearExpiredClaudeLeases(now time.Time) {
+	if state.tuiTitleLeaseID != "" && !state.tuiTitleLeaseExpiresAt.After(now) {
+		state.tuiTitleLeaseID = ""
+		state.tuiTitleLeaseExpiresAt = time.Time{}
+	}
+	if state.webSearchServerLeaseID != "" && !state.webSearchLeaseExpiresAt.After(now) {
+		state.webSearchServerLeaseID = ""
+		state.webSearchLeaseExpiresAt = time.Time{}
+	}
+	for _, line := range state.lines {
+		if line != nil && line.inFlightLeaseID != "" && !line.inFlightExpiresAt.After(now) {
+			line.inFlightLeaseID = ""
+			line.inFlightExpiresAt = time.Time{}
 		}
 	}
+}
+
+func (r *ClaudeRuntime) claudeSessionStateStore() ClaudeStateStore {
+	r.stateStoreMu.Lock()
+	defer r.stateStoreMu.Unlock()
+	if r.stateStore == nil {
+		r.stateStore = newClaudeMemoryStateStore()
+	}
+	return r.stateStore
+}
+
+func (r *ClaudeRuntime) nextClaudeStateLeaseID() string {
+	r.stateStoreMu.Lock()
+	defer r.stateStoreMu.Unlock()
+	if r.newStateLeaseID == nil {
+		r.newStateLeaseID = uuid.NewString
+	}
+	return r.newStateLeaseID()
 }
 
 func (f *claudeSessionFinalizer) finalize(
@@ -1024,102 +1190,248 @@ func (r *ClaudeRuntime) finalizeClaudeSessionRequestWithResponseModel(
 	requestID string,
 	responseModel string,
 ) error {
-	r.sessionMu.Lock()
-	defer r.sessionMu.Unlock()
-	state := r.sessions[lease.sessionKey]
-	if state == nil {
-		return errors.New("Claude 会话 finalizer 找不到租约状态")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return r.finalizeClaudeSessionRequestWithContext(
+		ctx, lease, accepted, status, requestID, responseModel,
+	)
+}
+
+func (r *ClaudeRuntime) finalizeClaudeSessionRequestWithContext(
+	ctx context.Context,
+	lease claudeSessionLease,
+	accepted bool,
+	status int,
+	requestID string,
+	responseModel string,
+) error {
+	if r == nil || lease.runtime != r || lease.sessionKey == "" || lease.leaseID == "" {
+		return errors.New("Claude 会话 finalizer 缺少有效 Persona 租约")
 	}
-	state.updatedAt = time.Now()
+	requestID = strings.TrimSpace(requestID)
+	responseModel = strings.TrimSpace(responseModel)
+	store := r.claudeSessionStateStore()
+	for range claudeSessionStateCASAttempts {
+		snapshot, err := store.Load(ctx, lease.sessionKey)
+		if err != nil {
+			return fmt.Errorf("读取 Claude finalizer 会话状态：%w", err)
+		}
+		if !snapshot.Found {
+			return errors.New("Claude 会话 finalizer 找不到租约状态")
+		}
+		state, err := unmarshalClaudeSessionState(snapshot.Payload)
+		if err != nil {
+			return err
+		}
+		now := time.Now()
+		line, err := releaseClaudeSessionLease(state, lease, now)
+		if err != nil {
+			return err
+		}
+		state.updatedAt = now
+		if accepted {
+			var validationErr error
+			switch {
+			case status < http.StatusOK || status >= http.StatusMultipleChoices:
+				validationErr = errors.New("Claude 会话不能提交未接受的上游响应")
+			case !claudeRequestIDPattern.MatchString(requestID):
+				validationErr = errors.New("Claude 上游响应缺少合法 request-id")
+			}
+			if validationErr != nil {
+				committed, commitErr := commitClaudeSessionState(
+					ctx, store, lease.sessionKey, snapshot.Version, state, "",
+				)
+				if commitErr != nil {
+					return errors.Join(validationErr, commitErr)
+				}
+				if committed {
+					return validationErr
+				}
+				continue
+			}
+		}
+		if !accepted {
+			committed, commitErr := commitClaudeSessionState(
+				ctx, store, lease.sessionKey, snapshot.Version, state, "",
+			)
+			if commitErr != nil {
+				return commitErr
+			}
+			if committed {
+				return nil
+			}
+			continue
+		}
+		owner, err := store.LookupRequestOwner(ctx, requestID)
+		if err != nil {
+			return fmt.Errorf("读取 Claude finalizer request-id 所有权：%w", err)
+		}
+		if owner != "" && owner != lease.sessionKey {
+			committed, commitErr := commitClaudeSessionState(
+				ctx, store, lease.sessionKey, snapshot.Version, state, "",
+			)
+			if commitErr != nil {
+				return commitErr
+			}
+			if committed {
+				return errors.New("Claude 上游 request-id 跨会话重复")
+			}
+			continue
+		}
+		if _, exists := state.requestIDs[requestID]; !exists && len(state.requestIDs) >= 4096 {
+			validationErr := errors.New("Claude 单会话 request-id 容量已满")
+			committed, commitErr := commitClaudeSessionState(
+				ctx, store, lease.sessionKey, snapshot.Version, state, "",
+			)
+			if commitErr != nil {
+				return errors.Join(validationErr, commitErr)
+			}
+			if committed {
+				return validationErr
+			}
+			continue
+		}
+		if line != nil && lease.primaryModel == "claude-fable-5" {
+			var validationErr error
+			switch lease.effectiveModel {
+			case "claude-fable-5":
+				if responseModel == "" {
+					validationErr = errors.New("Claude Fable 响应缺少可验证模型")
+				}
+				if validationErr == nil && responseModel != "claude-fable-5" &&
+					responseModel != "claude-opus-5" &&
+					responseModel != "claude-opus-4-8" {
+					validationErr = errors.New("Claude Fable 响应模型不在批准闭集")
+				}
+				if validationErr == nil && responseModel == "claude-opus-4-8" {
+					line.fallbackPrimaryModel = lease.primaryModel
+					line.fallbackModel = responseModel
+					line.fallbackLatchedBy = requestID
+				}
+			case "claude-opus-4-8":
+				if responseModel != "claude-opus-4-8" {
+					validationErr = errors.New("Claude Fable 锁存响应模型发生漂移")
+				}
+			default:
+				validationErr = errors.New("Claude Fable 会话有效模型非法")
+			}
+			if validationErr != nil {
+				committed, commitErr := commitClaudeSessionState(
+					ctx, store, lease.sessionKey, snapshot.Version, state, "",
+				)
+				if commitErr != nil {
+					return errors.Join(validationErr, commitErr)
+				}
+				if committed {
+					return validationErr
+				}
+				continue
+			}
+		}
+		switch lease.kind {
+		case claudeSessionRequestTUITitle:
+			state.tuiTitleCompleted = true
+		case claudeSessionRequestWebSearchServer:
+			state.webSearchServerCompleted = true
+		case claudeSessionRequestWebSearchOuter:
+			line.previousRequestID = requestID
+			state.webSearchParentRequestID = requestID
+			state.webSearchServerCompleted = false
+		case claudeSessionRequestWebSearchContinuation:
+			line.previousRequestID = requestID
+			state.webSearchParentRequestID = ""
+			state.webSearchServerCompleted = false
+		default:
+			line.previousRequestID = requestID
+			if lease.lineKey == "main" {
+				state.webSearchParentRequestID = ""
+				state.webSearchServerCompleted = false
+			}
+		}
+		if lease.newAgent {
+			state.agentLineages[lease.agentID] = claudeAgentLineageState{
+				parentAgentID: lease.parentAgentID,
+				depth:         lease.agentDepth,
+			}
+		}
+		state.requestIDs[requestID] = struct{}{}
+		committed, err := commitClaudeSessionState(
+			ctx, store, lease.sessionKey, snapshot.Version, state, requestID,
+		)
+		if errors.Is(err, ErrClaudeStateRequestOwnerConflict) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if committed {
+			return nil
+		}
+	}
+	return errors.New("Claude finalizer 会话状态并发提交超过重试上限")
+}
+
+func releaseClaudeSessionLease(
+	state *claudeSessionState,
+	lease claudeSessionLease,
+	now time.Time,
+) (*claudeSessionLineState, error) {
+	if state == nil {
+		return nil, errors.New("Claude finalizer 会话状态为空")
+	}
 	var line *claudeSessionLineState
 	switch lease.kind {
 	case claudeSessionRequestTUITitle:
-		if !state.tuiTitleInFlight {
-			return errors.New("Claude TUI 标题租约已失效")
+		if state.tuiTitleLeaseID != lease.leaseID || !state.tuiTitleLeaseExpiresAt.After(now) {
+			return nil, errors.New("Claude TUI 标题租约已失效")
 		}
-		state.tuiTitleInFlight = false
+		state.tuiTitleLeaseID = ""
+		state.tuiTitleLeaseExpiresAt = time.Time{}
 	case claudeSessionRequestWebSearchServer:
-		if !state.webSearchServerInFlight {
-			return errors.New("Claude server web_search 租约已失效")
+		if state.webSearchServerLeaseID != lease.leaseID ||
+			!state.webSearchLeaseExpiresAt.After(now) {
+			return nil, errors.New("Claude server web_search 租约已失效")
 		}
-		state.webSearchServerInFlight = false
+		state.webSearchServerLeaseID = ""
+		state.webSearchLeaseExpiresAt = time.Time{}
 	default:
 		line = state.lines[lease.lineKey]
-		if line == nil || !line.inFlight {
-			return errors.New("Claude 会话谱系租约已失效")
+		if line == nil || line.inFlightLeaseID != lease.leaseID ||
+			!line.inFlightExpiresAt.After(now) {
+			return nil, errors.New("Claude 会话谱系租约已失效")
 		}
-		line.inFlight = false
+		line.inFlightLeaseID = ""
+		line.inFlightExpiresAt = time.Time{}
 	}
-	if !accepted {
-		return nil
+	return line, nil
+}
+
+func commitClaudeSessionState(
+	ctx context.Context,
+	store ClaudeStateStore,
+	sessionKey string,
+	expectedVersion uint64,
+	state *claudeSessionState,
+	requestID string,
+) (bool, error) {
+	payload, err := marshalClaudeSessionState(state)
+	if err != nil {
+		return false, err
 	}
-	if status < http.StatusOK || status >= http.StatusMultipleChoices {
-		return errors.New("Claude 会话不能提交未接受的上游响应")
+	mutation := ClaudeStateMutation{
+		ExpectedVersion: expectedVersion,
+		Payload:         payload,
+		TTL:             claudeSessionStateTTL,
 	}
-	requestID = strings.TrimSpace(requestID)
-	if !claudeRequestIDPattern.MatchString(requestID) {
-		return errors.New("Claude 上游响应缺少合法 request-id")
+	if requestID != "" {
+		mutation.RequestID = requestID
+		mutation.RequestOwner = sessionKey
 	}
-	if owner := r.requestOwners[requestID]; owner != "" && owner != lease.sessionKey {
-		return errors.New("Claude 上游 request-id 跨会话重复")
+	committed, err := store.CompareAndSwap(ctx, sessionKey, mutation)
+	if err != nil {
+		return false, fmt.Errorf("提交 Claude Persona 会话状态：%w", err)
 	}
-	if _, exists := state.requestIDs[requestID]; !exists && len(state.requestIDs) >= 4096 {
-		return errors.New("Claude 单会话 request-id 容量已满")
-	}
-	responseModel = strings.TrimSpace(responseModel)
-	if line != nil && lease.primaryModel == "claude-fable-5" {
-		switch lease.effectiveModel {
-		case "claude-fable-5":
-			if responseModel == "" {
-				return errors.New("Claude Fable 响应缺少可验证模型")
-			}
-			if responseModel != "claude-fable-5" &&
-				responseModel != "claude-opus-5" &&
-				responseModel != "claude-opus-4-8" {
-				return errors.New("Claude Fable 响应模型不在批准闭集")
-			}
-			if responseModel == "claude-opus-4-8" {
-				line.fallbackPrimaryModel = lease.primaryModel
-				line.fallbackModel = responseModel
-				line.fallbackLatchedBy = requestID
-			}
-		case "claude-opus-4-8":
-			if responseModel != "claude-opus-4-8" {
-				return errors.New("Claude Fable 锁存响应模型发生漂移")
-			}
-		default:
-			return errors.New("Claude Fable 会话有效模型非法")
-		}
-	}
-	switch lease.kind {
-	case claudeSessionRequestTUITitle:
-		state.tuiTitleCompleted = true
-	case claudeSessionRequestWebSearchServer:
-		state.webSearchServerCompleted = true
-	case claudeSessionRequestWebSearchOuter:
-		line.previousRequestID = requestID
-		state.webSearchParentRequestID = requestID
-		state.webSearchServerCompleted = false
-	case claudeSessionRequestWebSearchContinuation:
-		line.previousRequestID = requestID
-		state.webSearchParentRequestID = ""
-		state.webSearchServerCompleted = false
-	default:
-		line.previousRequestID = requestID
-		if lease.lineKey == "main" {
-			state.webSearchParentRequestID = ""
-			state.webSearchServerCompleted = false
-		}
-	}
-	if lease.newAgent {
-		state.agentLineages[lease.agentID] = claudeAgentLineageState{
-			parentAgentID: lease.parentAgentID,
-			depth:         lease.agentDepth,
-		}
-	}
-	state.requestIDs[requestID] = struct{}{}
-	r.requestOwners[requestID] = lease.sessionKey
-	return nil
+	return committed, nil
 }
 
 func (r *ClaudeRuntime) executeClaudeStartup(
@@ -1161,6 +1473,32 @@ func (r *ClaudeRuntime) executeClaudeStartupOnce(
 	input ClaudeMessagesExecution,
 	identity ClaudeIdentityFacts,
 ) error {
+	stateKey := claudeAttestationDigest(
+		"startup-state", ClaudeFWGReleaseDigest, identity.accountScope,
+		identity.sessionID, identity.entrypoint,
+		fmt.Sprintf("background=%t", identity.background),
+	)
+	leaseID, execute, err := r.acquireClaudeStartupLease(ctx, stateKey)
+	if err != nil {
+		return err
+	}
+	if !execute {
+		return nil
+	}
+	runErr := r.executeClaudeStartupEndpoints(ctx, input, identity)
+	finalizeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	finalizeErr := r.finalizeClaudeStartupLease(
+		finalizeCtx, stateKey, leaseID, runErr == nil,
+	)
+	return errors.Join(runErr, finalizeErr)
+}
+
+func (r *ClaudeRuntime) executeClaudeStartupEndpoints(
+	ctx context.Context,
+	input ClaudeMessagesExecution,
+	identity ClaudeIdentityFacts,
+) error {
 	managed := input.TrustedFacts
 	managed.Entrypoint.IngressProtocol = "managed-internal"
 	if err := r.executeClaudeStartupEndpoint(ctx, input.AccessToken, managed, "lifecycle-hello"); err != nil {
@@ -1187,6 +1525,104 @@ func (r *ClaudeRuntime) executeClaudeStartupOnce(
 		joined = errors.Join(joined, <-errs)
 	}
 	return joined
+}
+
+func (r *ClaudeRuntime) acquireClaudeStartupLease(
+	ctx context.Context,
+	stateKey string,
+) (string, bool, error) {
+	store := r.claudeSessionStateStore()
+	leaseID := r.nextClaudeStateLeaseID()
+	for {
+		snapshot, err := store.Load(ctx, stateKey)
+		if err != nil {
+			return "", false, fmt.Errorf("读取 Claude startup 状态：%w", err)
+		}
+		state := claudePersistedStartupState{SchemaVersion: 1}
+		if snapshot.Found {
+			if err := json.Unmarshal(snapshot.Payload, &state); err != nil {
+				return "", false, fmt.Errorf("解析 Claude startup 状态：%w", err)
+			}
+			if state.SchemaVersion != 1 {
+				return "", false, errors.New("Claude startup 状态 Schema 版本不受支持")
+			}
+			if state.Completed {
+				return "", false, nil
+			}
+		}
+		now := time.Now()
+		if state.LeaseID != "" && time.UnixMilli(state.LeaseExpiresAt).After(now) {
+			timer := time.NewTimer(50 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return "", false, ctx.Err()
+			case <-timer.C:
+				continue
+			}
+		}
+		state.LeaseID = leaseID
+		state.LeaseExpiresAt = now.Add(claudeStartupLeaseTTL).UnixMilli()
+		payload, err := json.Marshal(state)
+		if err != nil {
+			return "", false, err
+		}
+		committed, err := store.CompareAndSwap(ctx, stateKey, ClaudeStateMutation{
+			ExpectedVersion: snapshot.Version,
+			Payload:         payload,
+			TTL:             claudeSessionStateTTL,
+		})
+		if err != nil {
+			return "", false, fmt.Errorf("锁定 Claude startup 状态：%w", err)
+		}
+		if committed {
+			return leaseID, true, nil
+		}
+	}
+}
+
+func (r *ClaudeRuntime) finalizeClaudeStartupLease(
+	ctx context.Context,
+	stateKey string,
+	leaseID string,
+	completed bool,
+) error {
+	store := r.claudeSessionStateStore()
+	for range claudeSessionStateCASAttempts {
+		snapshot, err := store.Load(ctx, stateKey)
+		if err != nil {
+			return fmt.Errorf("读取 Claude startup finalizer 状态：%w", err)
+		}
+		if !snapshot.Found {
+			return errors.New("Claude startup finalizer 找不到租约状态")
+		}
+		var state claudePersistedStartupState
+		if err := json.Unmarshal(snapshot.Payload, &state); err != nil {
+			return fmt.Errorf("解析 Claude startup finalizer 状态：%w", err)
+		}
+		if state.SchemaVersion != 1 || state.LeaseID != leaseID {
+			return errors.New("Claude startup finalizer 租约已失效")
+		}
+		state.Completed = completed
+		state.LeaseID = ""
+		state.LeaseExpiresAt = 0
+		payload, err := json.Marshal(state)
+		if err != nil {
+			return err
+		}
+		committed, err := store.CompareAndSwap(ctx, stateKey, ClaudeStateMutation{
+			ExpectedVersion: snapshot.Version,
+			Payload:         payload,
+			TTL:             claudeSessionStateTTL,
+		})
+		if err != nil {
+			return fmt.Errorf("提交 Claude startup finalizer 状态：%w", err)
+		}
+		if committed {
+			return nil
+		}
+	}
+	return errors.New("Claude startup 状态并发提交超过重试上限")
 }
 
 func (r *ClaudeRuntime) executeClaudeStartupEndpoint(

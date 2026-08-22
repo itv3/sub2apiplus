@@ -291,6 +291,9 @@ func validateClaudeFWGModelCapabilityTransitions(
 		)
 		currentDigest := claudeFWGCountTokensDigest(raw)
 		if err != nil || currentDigest != transition.ToSHA256 &&
+			!claudeFWHStateDurabilityTransitionSupersedes(
+				transition.Path, transition.ToSHA256, currentDigest,
+			) &&
 			!claudeFWGThreeModelAcceptanceAttemptSupersedes(
 				transition.Path, transition.ToSHA256, currentDigest,
 			) && !claudeFWGFableDesktopTitleTransitionSupersedes(
@@ -319,6 +322,9 @@ func claudeFWGModelCapabilityTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if claudeFWHStateDurabilityTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if claudeFWHFableDeclaredFallbackTransitionSupersedes(
 		path, priorDigest, currentDigest,
 	) {

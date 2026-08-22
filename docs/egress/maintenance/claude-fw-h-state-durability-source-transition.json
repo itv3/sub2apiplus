@@ -1,0 +1,90 @@
+{
+  "schema_version": "official-egress-claude-fw-h-state-durability-source-transition/v1",
+  "date": "2026-08-22",
+  "phase": "FW-H",
+  "base_commit": "571370f3be67df3ccca594cd3e3b1eecf15e4421",
+  "scope": "production_state_durability_correction",
+  "trigger": "DMIT 真实长会话暴露进程内状态不可跨 Runtime 或容器恢复，且历史 WebSearch 结果会被误判为当前续轮；本次追加持久状态与末轮关联修正。",
+  "predecessors": [
+    {
+      "kind": "fw_h_final_acceptance_package",
+      "path": "docs/egress/maintenance/claude-fw-h-final-acceptance-package.json",
+      "sha256": "0965d67f4e46f365ac41a3d92dc11012ff9d2c4a47f8f179d18bbe0407888336"
+    }
+  ],
+  "release": {
+    "version": "2.1.226",
+    "profile_sha256": "e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5",
+    "wire_sha256": "a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d",
+    "release_sha256": "48586f47e0abcde9ea357c08c1465253eaa296862153a89c20e4cf0f1e6f52f8",
+    "bundle_sha256": "ceb1e30740ab4223684f478f717dd2902d8fdad0c6efad5a69b761d95b4aefae"
+  },
+  "transitions": [
+    {
+      "path": "backend/cmd/server/wire_gen.go",
+      "from_sha256": "7cad1c7cc65bf93dee48496a7500a4a60584ebf924625ee9ea5b1120a69298b5",
+      "to_sha256": "909ca85de7219d3b112e2bcaaef6ec04f329becc18c2e9ac0171e5083d65635f",
+      "reason": "把生产 Claude Runtime 的持久状态仓库作为必需依赖注入生成装配入口。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_runtime.go",
+      "from_sha256": "fa171c89e08be0a576d1e716da2c7780155699b685d705ce694bdcae618efa5f",
+      "to_sha256": "081b75a2420d4e7ad7a3a9e976e6f6928050708e73b57effcb5b20b63e5a79ac",
+      "reason": "将 TUI、startup、WebSearch、Agent、Fable fallback 与 request-id 状态改为受所有权和 CAS 保护的持久会话状态，并把续轮识别收窄到最后一组 assistant tool_use 与 user tool_result。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_state_store.go",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "1dc820b0a88fde3e67467856e7e4360547b86292bace7fc146563dc992f3ca91",
+      "reason": "新增对 Runtime 不透明的 ClaudeStateStore 合同、命名空间、会话快照、租约和原子提交语义。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_1b_executor.go",
+      "from_sha256": "6771cb9904274a9664292d13094594b6969460f440ee1527fe36e4f2fdb1573d",
+      "to_sha256": "814a7497ab3a97a8239eb187b8226a93fd830258bda7c02659d883c06ba5f9cf",
+      "reason": "为 Candidate、Production 与 Release 建立隔离状态命名空间，并在生产装配时强制要求 Redis 状态仓库可用。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_claude_state_redis.go",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "05bfef20769d65236a74736604d64deb4c2ec49d6cfb576b9a50ecb9a601031f",
+      "reason": "新增 Redis Lua CAS 实现，原子校验 previous request 所有权、请求租约与会话版本后提交新 request-id 和会话状态。"
+    },
+    {
+      "path": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "from_sha256": "6729311fb0152a2e6c100412af96ed5c3c8939675e7daa584349e1bccd5704f8",
+      "to_sha256": "798310f78d239c7eb00425b6e621171b2c10b0003954a10550b783bc7de0dd54",
+      "reason": "把长历史、工具成功与失败续轮、容器重启和 previous request 恢复纳入 Claude 生产验收要求。"
+    },
+    {
+      "path": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+      "from_sha256": "af1066176c33db3580ff4f47b22bbc90ae2fde587357570ad43430ac6975522e",
+      "to_sha256": "d274ab40f022da3124084d51f99b5c403518256ff27c1939282b0d49f7979560",
+      "reason": "明确生产 Persona 的跨请求状态必须持久化、按角色隔离、原子提交，并通过重启与长历史验收。"
+    },
+    {
+      "path": "tools/fw_e_workspace_transition.py",
+      "from_sha256": "5b49a6b0b09e78284223ea4a136271d6deda03c6ce7d4b40de5bab9fb668aba4",
+      "to_sha256": "a474dd35e689e8984b28bc54d206761d87e5db04723964d9f590303aeb9a8de2",
+      "reason": "修正历史 FW-E 门禁：基线后新增文件必须读取指定冻结提交，不得把当前 FW-G／FW-H 工作树内容倒灌为 FW-E 事实。"
+    }
+  ],
+  "verification": [
+    "long_history_347kb_websearch_regression_passed",
+    "state_store_unit_and_race_tests_passed",
+    "redis_cas_ownership_atomicity_tests_passed",
+    "candidate_production_release_namespace_isolation_passed",
+    "production_missing_redis_fail_close_passed"
+  ],
+  "safety": {
+    "production_host": "DMIT",
+    "production_selector": "active",
+    "profile_changed": false,
+    "wire_changed": false,
+    "release_bundle_changed": false,
+    "deployment_performed": false,
+    "dmit_validated": false,
+    "vircs_production_changed": false
+  },
+  "result": "passed"
+}

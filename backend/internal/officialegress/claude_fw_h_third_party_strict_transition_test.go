@@ -162,6 +162,9 @@ func validateClaudeFWHThirdPartyStrictTransitionEntries(
 		source, err := os.ReadFile(filepath.Join("../../..", filepath.FromSlash(transition.Path)))
 		currentDigest := claudeFWHSourceDigest(source)
 		if err != nil || currentDigest != transition.ToSHA256 &&
+			!claudeFWHStateDurabilityTransitionSupersedes(
+				transition.Path, transition.ToSHA256, currentDigest,
+			) &&
 			!claudeFWHFableDeclaredFallbackDirectSupersedes(
 				transition.Path, transition.ToSHA256, currentDigest,
 			) &&
@@ -197,6 +200,9 @@ func claudeFWHThirdPartyStrictSourceTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if claudeFWHStateDurabilityTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if claudeFWHFableDeclaredFallbackDirectSupersedes(
 		path, priorDigest, currentDigest,
 	) {

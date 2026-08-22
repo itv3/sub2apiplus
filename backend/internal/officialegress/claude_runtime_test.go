@@ -102,6 +102,7 @@ func finalizeClaudeTestResult(t *testing.T, result *ClaudeCandidateResult) {
 func newClaudeTestRuntime(
 	t *testing.T,
 	port HTTPUpstreamTransportPort,
+	stateStores ...ClaudeStateStore,
 ) (*ClaudeCandidateRuntime, SinkCatalog, *Guard) {
 	t.Helper()
 	catalog, err := ClaudeFWGCandidateSinkCatalog(DefaultSinkCatalog())
@@ -120,7 +121,7 @@ func newClaudeTestRuntime(
 	if err != nil {
 		t.Fatal(err)
 	}
-	runtime, err := NewClaudeCandidateRuntime(catalog, guard, port)
+	runtime, err := NewClaudeCandidateRuntime(catalog, guard, port, stateStores...)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -526,6 +527,31 @@ func TestClaudeFWGStartupBranchesMatchEntrypointAndBackground(t *testing.T) {
 			t.Fatalf("TUI/background startup 边界不一致：%+v", requests)
 		}
 	})
+}
+
+func TestClaudeStartupStateSurvivesRuntimeRecreation(t *testing.T) {
+	store := newClaudeMemoryStateStore()
+	port := &claudeCapturePort{}
+	trusted := claudeTestTrustedFacts()
+	identity, err := deriveClaudeIdentityFacts(trusted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := ClaudeMessagesExecution{AccessToken: "token", TrustedFacts: trusted}
+	first, _, _ := newClaudeTestRuntime(t, port, store)
+	if err := first.executeClaudeStartup(context.Background(), input, identity); err != nil {
+		t.Fatal(err)
+	}
+	if len(port.snapshot()) != 3 {
+		t.Fatalf("首次 sdk-cli startup 请求数不一致：%d", len(port.snapshot()))
+	}
+	second, _, _ := newClaudeTestRuntime(t, port, store)
+	if err := second.executeClaudeStartup(context.Background(), input, identity); err != nil {
+		t.Fatalf("Runtime 重建后读取 startup 完成状态失败：%v", err)
+	}
+	if len(port.snapshot()) != 3 {
+		t.Fatalf("Runtime 重建后重复发送 startup 请求：%d", len(port.snapshot()))
+	}
 }
 
 func TestClaudeFWGStartupAcceptsOnlyApprovedAbsentManagedState(t *testing.T) {
@@ -1655,6 +1681,25 @@ func TestClaudeFWGToolUseResultRelationsAreClosed(t *testing.T) {
 			wantWeb: true,
 		},
 		{
+			name:  "historical web search followed by ordinary turn",
+			tools: `[{"name":"WebSearch"}]`,
+			messages: `[
+				{"role":"assistant","content":[{"type":"tool_use","id":"toolu_WebOld","name":"WebSearch","input":{"query":"old"}}]},
+				{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_WebOld","content":"old result"}]},
+				{"role":"assistant","content":[{"type":"text","text":"old answer"}]},
+				{"role":"user","content":[{"type":"text","text":"new ordinary turn"}]}
+			]`,
+		},
+		{
+			name:  "failed current web search is still a continuation",
+			tools: `[{"name":"WebSearch"}]`,
+			messages: `[
+				{"role":"assistant","content":[{"type":"tool_use","id":"toolu_WebFailed","name":"WebSearch","input":{"query":"test"}}]},
+				{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_WebFailed","content":"search failed","is_error":true}]}
+			]`,
+			wantWeb: true,
+		},
+		{
 			name:  "result id mismatch",
 			tools: `[{"name":"Bash"}]`,
 			messages: `[
@@ -1723,6 +1768,50 @@ func TestClaudeFWGToolUseResultRelationsAreClosed(t *testing.T) {
 				t.Fatalf("WebSearch 往返识别不一致：%+v", relations)
 			}
 		})
+	}
+}
+
+func TestClaudeFWGLargeHistoricalWebSearchDoesNotBecomeCurrentContinuation(t *testing.T) {
+	port := &claudeCapturePort{}
+	runtime, _, _ := newClaudeTestRuntime(t, port)
+	body, err := json.Marshal(map[string]any{
+		"model": "claude-sonnet-5",
+		"messages": []any{
+			map[string]any{"role": "user", "content": "old search request"},
+			map[string]any{"role": "assistant", "content": []any{map[string]any{
+				"type": "tool_use", "id": "toolu_HistoricalWebSearch",
+				"name": "WebSearch", "input": map[string]any{"query": "old query"},
+			}}},
+			map[string]any{"role": "user", "content": []any{map[string]any{
+				"type": "tool_result", "tool_use_id": "toolu_HistoricalWebSearch",
+				"content": strings.Repeat("historical search result ", 15000),
+			}}},
+			map[string]any{"role": "assistant", "content": "old answer"},
+			map[string]any{"role": "user", "content": "current ordinary turn"},
+		},
+		"tools": []any{map[string]any{
+			"name": "WebSearch", "description": "Search the web",
+			"input_schema": map[string]any{"type": "object"},
+		}},
+		"stream": true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(body) < 347000 {
+		t.Fatalf("长历史回归样本过小：%d", len(body))
+	}
+	result, err := runtime.ExecuteMessages(context.Background(), ClaudeMessagesExecution{
+		Body: body, AccessToken: "token", TrustedFacts: claudeTestTrustedFacts(),
+		InvocationID: uuid.NewString(),
+	})
+	if err != nil {
+		t.Fatalf("历史 WebSearch 后的当前普通轮被误判：%v", err)
+	}
+	_ = result.Response.Body.Close()
+	finalizeClaudeTestResult(t, &result)
+	if len(port.snapshot()) != 4 {
+		t.Fatalf("长历史普通轮未进入唯一主请求：%d", len(port.snapshot()))
 	}
 }
 
@@ -1849,6 +1938,17 @@ func TestClaudeFWGAgentLineageRequiresAcceptedParentAndMaxThreeLevels(t *testing
 
 func TestClaudeFWGForkRequiresNewSessionAndTracksRequestOwnership(t *testing.T) {
 	runtime := &ClaudeCandidateRuntime{sessions: make(map[string]*claudeSessionState)}
+	unknownFacts := claudeTestTrustedFacts()
+	unknownFacts.Session.SessionID = "55555555-5555-4555-8555-555555555555"
+	unknownFacts.Session.Source = ClaudeSessionSourceOfficialConsistent
+	unknownFacts.Session.PreviousRequestID = "req_UnknownOwner"
+	unknown := mustClaudeTestIdentity(t, unknownFacts)
+	if _, err := runtime.prepareClaudeSessionRequest(
+		&unknown, ClaudeCanonicalRequest{}, claudeMessageRelations{},
+	); err == nil || !strings.Contains(err.Error(), "缺少已登记所有权") {
+		t.Fatalf("未知 previous request 被当作可信会话锚点：%v", err)
+	}
+
 	baseIdentity := mustClaudeTestIdentity(t, claudeTestTrustedFacts())
 	baseLease, err := runtime.prepareClaudeSessionRequest(
 		&baseIdentity, ClaudeCanonicalRequest{}, claudeMessageRelations{},
@@ -2001,6 +2101,187 @@ func TestClaudeFWGWebSearchRequiresOuterServerContinuationOrder(t *testing.T) {
 		}
 		finalizeClaudeTestLease(t, continuationLease, "req_Continuation")
 	})
+}
+
+func TestClaudeSessionStateSurvivesRuntimeRecreation(t *testing.T) {
+	newRuntime := func(store ClaudeStateStore) *ClaudeRuntime {
+		return &ClaudeRuntime{stateStore: store, newStateLeaseID: uuid.NewString}
+	}
+	newOfficialFacts := func(previous string) ClaudeTrustedFacts {
+		facts := claudeTestTrustedFacts()
+		facts.Session.Source = ClaudeSessionSourceOfficialConsistent
+		facts.Session.PreviousRequestID = previous
+		return facts
+	}
+
+	t.Run("WebSearch 三请求链与后续普通轮", func(t *testing.T) {
+		store := newClaudeMemoryStateStore()
+		outer := mustClaudeTestIdentity(t, newOfficialFacts(""))
+		outerLease, err := newRuntime(store).prepareClaudeSessionRequest(
+			&outer, ClaudeCanonicalRequest{toolMode: claudeToolModeWebSearchOuter},
+			claudeMessageRelations{},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		finalizeClaudeTestLease(t, outerLease, "req_RestartOuter")
+
+		server := mustClaudeTestIdentity(t, newOfficialFacts(""))
+		serverLease, err := newRuntime(store).prepareClaudeSessionRequest(
+			&server, ClaudeCanonicalRequest{toolMode: claudeToolModeWebSearchServer},
+			claudeMessageRelations{},
+		)
+		if err != nil {
+			t.Fatalf("Runtime 重建后 server web_search 未恢复外层状态：%v", err)
+		}
+		finalizeClaudeTestLease(t, serverLease, "req_RestartServer")
+
+		continuation := mustClaudeTestIdentity(t, newOfficialFacts("req_RestartOuter"))
+		continuationLease, err := newRuntime(store).prepareClaudeSessionRequest(
+			&continuation, ClaudeCanonicalRequest{},
+			claudeMessageRelations{webSearchRoundTrip: true},
+		)
+		if err != nil {
+			t.Fatalf("Runtime 重建后 WebSearch continuation 未恢复 server 完成状态：%v", err)
+		}
+		finalizeClaudeTestLease(t, continuationLease, "req_RestartContinuation")
+
+		ordinary := mustClaudeTestIdentity(t, newOfficialFacts("req_RestartContinuation"))
+		ordinaryLease, err := newRuntime(store).prepareClaudeSessionRequest(
+			&ordinary, ClaudeCanonicalRequest{}, claudeMessageRelations{},
+		)
+		if err != nil {
+			t.Fatalf("WebSearch 完成后的普通轮被错误识别为 continuation：%v", err)
+		}
+		if err := ordinaryLease.runtime.finalizeClaudeSessionRequest(
+			ordinaryLease, false, 0, "",
+		); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("TUI 标题完成状态", func(t *testing.T) {
+		store := newClaudeMemoryStateStore()
+		facts := newOfficialFacts("")
+		facts.Entrypoint.Entrypoint = ClaudeEntrypointCLI
+		title := mustClaudeTestIdentity(t, facts)
+		titleLease, err := newRuntime(store).prepareClaudeSessionRequest(
+			&title, ClaudeCanonicalRequest{scenarioHint: "tui-title"}, claudeMessageRelations{},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		finalizeClaudeTestLease(t, titleLease, "req_RestartTitle")
+
+		main := mustClaudeTestIdentity(t, facts)
+		mainLease, err := newRuntime(store).prepareClaudeSessionRequest(
+			&main, ClaudeCanonicalRequest{}, claudeMessageRelations{},
+		)
+		if err != nil {
+			t.Fatalf("Runtime 重建后 TUI 主请求未恢复标题完成状态：%v", err)
+		}
+		if err := mainLease.runtime.finalizeClaudeSessionRequest(mainLease, false, 0, ""); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("Fable fallback 锁存", func(t *testing.T) {
+		store := newClaudeMemoryStateStore()
+		initialIdentity := mustClaudeTestIdentity(t, claudeTestTrustedFacts())
+		initial := ClaudeCanonicalRequest{model: "claude-fable-5", primaryModel: "claude-fable-5"}
+		initialRuntime := newRuntime(store)
+		lease, err := initialRuntime.prepareClaudeSessionRequestMutable(
+			&initialIdentity, &initial, claudeMessageRelations{},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := initialRuntime.finalizeClaudeSessionRequestWithResponseModel(
+			lease, true, http.StatusOK, "req_RestartFable", "claude-opus-4-8",
+		); err != nil {
+			t.Fatal(err)
+		}
+
+		followUpIdentity := mustClaudeTestIdentity(t, claudeTestTrustedFacts())
+		followUp := ClaudeCanonicalRequest{model: "claude-fable-5", primaryModel: "claude-fable-5"}
+		followUpRuntime := newRuntime(store)
+		followUpLease, err := followUpRuntime.prepareClaudeSessionRequestMutable(
+			&followUpIdentity, &followUp, claudeMessageRelations{},
+		)
+		if err != nil {
+			t.Fatalf("Runtime 重建后未恢复 Fable fallback 锁存：%v", err)
+		}
+		if followUp.model != "claude-opus-4-8" ||
+			followUp.fallbackLatchedBy != "req_RestartFable" || !followUp.refusalFallback {
+			t.Fatalf("Runtime 重建后的 Fable fallback 状态不完整：%+v", followUp)
+		}
+		if err := followUpRuntime.finalizeClaudeSessionRequest(followUpLease, false, 0, ""); err != nil {
+			t.Fatal(err)
+		}
+	})
+
+	t.Run("request-id 跨会话所有权", func(t *testing.T) {
+		store := newClaudeMemoryStateStore()
+		base := mustClaudeTestIdentity(t, claudeTestTrustedFacts())
+		baseLease, err := newRuntime(store).prepareClaudeSessionRequest(
+			&base, ClaudeCanonicalRequest{}, claudeMessageRelations{},
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		finalizeClaudeTestLease(t, baseLease, "req_RestartOwner")
+
+		forkFacts := newOfficialFacts("req_RestartOwner")
+		forkFacts.Session.SessionID = "77777777-7777-4777-8777-777777777777"
+		fork := mustClaudeTestIdentity(t, forkFacts)
+		forkLease, err := newRuntime(store).prepareClaudeSessionRequest(
+			&fork, ClaudeCanonicalRequest{}, claudeMessageRelations{},
+		)
+		if err != nil {
+			t.Fatalf("Runtime 重建后 request-id 所有权未支持合法 fork：%v", err)
+		}
+		if !fork.forked {
+			t.Fatal("Runtime 重建后未从持久所有权识别 fork")
+		}
+		if err := forkLease.runtime.finalizeClaudeSessionRequest(forkLease, false, 0, ""); err != nil {
+			t.Fatal(err)
+		}
+	})
+}
+
+func TestClaudeInvalidFinalizationReleasesPersistentLease(t *testing.T) {
+	store := newClaudeMemoryStateStore()
+	runtime := &ClaudeRuntime{stateStore: store, newStateLeaseID: uuid.NewString}
+	identity := mustClaudeTestIdentity(t, claudeTestTrustedFacts())
+	canonical := ClaudeCanonicalRequest{
+		model: "claude-fable-5", primaryModel: "claude-fable-5",
+	}
+	lease, err := runtime.prepareClaudeSessionRequestMutable(
+		&identity, &canonical, claudeMessageRelations{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.finalizeClaudeSessionRequestWithResponseModel(
+		lease, true, http.StatusOK, "req_InvalidFable", "",
+	); err == nil || !strings.Contains(err.Error(), "缺少可验证模型") {
+		t.Fatalf("缺少 Fable 响应模型未被拒绝：%v", err)
+	}
+
+	recreated := &ClaudeRuntime{stateStore: store, newStateLeaseID: uuid.NewString}
+	followUpIdentity := mustClaudeTestIdentity(t, claudeTestTrustedFacts())
+	followUp := ClaudeCanonicalRequest{
+		model: "claude-fable-5", primaryModel: "claude-fable-5",
+	}
+	followUpLease, err := recreated.prepareClaudeSessionRequestMutable(
+		&followUpIdentity, &followUp, claudeMessageRelations{},
+	)
+	if err != nil {
+		t.Fatalf("无效 finalization 遗留了持久并发租约：%v", err)
+	}
+	if err := recreated.finalizeClaudeSessionRequest(followUpLease, false, 0, ""); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestClaudeFWGStreamFallbackCommitsFallbackResponseID(t *testing.T) {

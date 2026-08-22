@@ -1235,6 +1235,9 @@ Candidate 只能在 DMIT 或等价隔离环境运行，不能在 Vircs 换镜像
 
 - `s1/s2/s4/a1` 的推理与 `HEAD /api/hello` 生命周期 wire；
 - 主请求、续轮和一级子代理的 Header、Body、session、agent、attribution 与连接关系；
+- 长历史中历史 WebSearch 成功／失败往返后的当前普通轮，以及当前 WebSearch 成功／失败续轮；工具阶段只能由最后一轮关系判定；
+- TUI 标题、主轮、WebSearch 三请求链、request-id 所有权和 fallback 锁存在 Runtime 重建及应用容器重启后的恢复；
+- Persona 状态存储不可用、损坏、CAS 冲突、并发租约和无效 finalization 的 fail-close／租约释放；
 - 每个已登记主模型的基础、effort、thinking、TUI、Agent、background、WebSearch、count_tokens、
   fallback／锁存正例，以及未知模型、未登记别名、错误 fallbacks 和跨模型状态复用负例；
 - 空工具、Agent 与 Bash 的实测工具形态；

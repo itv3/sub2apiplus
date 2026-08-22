@@ -350,7 +350,12 @@ def validate_no_strict_persona_additions(target_commit: str = "HEAD") -> None:
     )
     for relative in sorted(OBSERVATION_RUNTIME_PATHS):
         if commit_state(BASE_COMMIT, relative) == empty_state():
-            added = (ROOT / relative).read_bytes()
+            # 文件在 FW-E 基线之后新建时，也必须读取调用方指定的历史提交。
+            # 若读取当前工作树，后续 FW-G／FW-H 的合法晋升会被倒灌成 FW-E 事实。
+            if commit_state(target_commit, relative) == empty_state():
+                added = b""
+            else:
+                added = run_git("show", f"{target_commit}:{relative}")
         else:
             completed = subprocess.run(
                 [

@@ -1,0 +1,107 @@
+{
+  "schema_version": "official-egress-claude-fw-h-state-durability-test-transition/v1",
+  "date": "2026-08-22",
+  "phase": "FW-H",
+  "base_commit": "571370f3be67df3ccca594cd3e3b1eecf15e4421",
+  "scope": "production_state_durability_correction",
+  "trigger": "冻结状态持久化、原子所有权、跨 Runtime 恢复、长历史末轮关联和历史 transition 后继的测试证据。",
+  "predecessors": [
+    {
+      "kind": "fw_h_final_acceptance_package",
+      "path": "docs/egress/maintenance/claude-fw-h-final-acceptance-package.json",
+      "sha256": "0965d67f4e46f365ac41a3d92dc11012ff9d2c4a47f8f179d18bbe0407888336"
+    }
+  ],
+  "source_transition": {
+    "kind": "state_durability_source_transition",
+    "path": "docs/egress/maintenance/claude-fw-h-state-durability-source-transition.json",
+    "sha256": "4d529a58d06a8a597da17b477c17fb5ee99dc6e2b6728e8adeaf3afb98f0fa60"
+  },
+  "release": {
+    "version": "2.1.226",
+    "profile_sha256": "e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5",
+    "wire_sha256": "a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d",
+    "release_sha256": "48586f47e0abcde9ea357c08c1465253eaa296862153a89c20e4cf0f1e6f52f8",
+    "bundle_sha256": "ceb1e30740ab4223684f478f717dd2902d8fdad0c6efad5a69b761d95b4aefae"
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_model_capability_transition_test.go",
+      "from_sha256": "5a5c77ed966303808b9508f407e00635914b5cbd7fdd297f54e95f842c1a2359",
+      "to_sha256": "3afebe6c7acef452989795a87fa6750f80052d7579562b379be13ac8f15746c1",
+      "reason": "让模型能力历史冻结链只通过本次状态耐久性精确后继到达当前摘要。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_fable_declared_fallback_transition_test.go",
+      "from_sha256": "5087dba4128969fa9704baa8e6dcec0eea9320444feb090b889cd2760458144c",
+      "to_sha256": "cc85b844d43b371027b9c20a0e2b7b5766e7e0ba4fb075c5ddb88f18f7da1415",
+      "reason": "让 Fable fallback 冻结链及其当前文件校验承认本次精确状态持久化后继。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_legacy_retirement_transition_test.go",
+      "from_sha256": "6f608a1c2e05b25ee06f50dea3f8a174a38f50126a7541dadaee50da5704c752",
+      "to_sha256": "02953064979285ed9cfb302c076f018b295ece14547f189ce9f436e0d4549e8a",
+      "reason": "让旧链退休冻结门禁通过本次精确后继校验已变化的 Claude Runtime。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_source_transition_test.go",
+      "from_sha256": "bee369a73147fdeefb706a8d76a087a3628188a7289ee41bc2bce45902aa4337",
+      "to_sha256": "87cb831e452973be7d42f99144ea97efbc03fd06fd2fe1ba3841f0c2662b78c4",
+      "reason": "让 FW-H 初始源码冻结链通过追加式状态耐久性收据继续保持不可变。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_third_party_strict_transition_test.go",
+      "from_sha256": "41b008bf91253989594415e1dd09c312b53c233be115591b196b36d83afc2083",
+      "to_sha256": "92918c371b2d61f0fbcbc3c7288ecec0a087aa60f39d330d0042df3cc1d5b573",
+      "reason": "让第三方 strict 历史冻结链只接受本次 path/from/to 后继。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_runtime_test.go",
+      "from_sha256": "efb839ff28e27b29fa16902ad90e9975f43d7272bc349963177c19cf1829cbef",
+      "to_sha256": "04f00c443f15f779334d35426c6e807c73f87501b4a5625dfc0b29e773d0e06b",
+      "reason": "冻结跨 Runtime 状态恢复、previous request 所有权、工具成功与失败续轮，以及 347KB 历史 WebSearch 后普通轮不误判的正负断言。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_state_store_test.go",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "754032288f20f3dcbec99b3f1b34ea0c66d418e64b96c17d0b1d9e9457a0c330",
+      "reason": "冻结状态合同的命名空间、TTL、租约、所有权与原子提交语义。"
+    },
+    {
+      "path": "backend/internal/officialegress/executor_one_shot_retirement_test.go",
+      "from_sha256": "fbb8979a634e6674867147538c12ea2bb81cdb6fc9a8964ebe685395bc03f281",
+      "to_sha256": "7b722ff74ef32666d55da468313e72544f8f1489f9dcfbb6b1816b8553c66c65",
+      "reason": "让 Executor 一次性兼容退休门禁承认本次 Claude 状态耐久性精确后继。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_h_source_transition_test.go",
+      "from_sha256": "280167279665623d67031281401d22e50826e64921c9fb32e90e10ab5b0ce597",
+      "to_sha256": "dba53b2c016460d109b4f68e3ad29b63d3781de84bb56e10b796ecc7b6455180",
+      "reason": "让 service 层 FW-H 历史冻结链承认 Redis 状态仓库与 Runtime 装配的精确后继。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_claude_state_redis_test.go",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "0f6371cd20cda9c5ef30a5ea8e5c02a3e51a299d83a4f9325ae34254af6d1722",
+      "reason": "冻结 Redis Lua CAS、previous request 所有权冲突、请求租约冲突和原子观察提交测试。"
+    }
+  ],
+  "verification": [
+    "runtime_state_durability_matrix_frozen",
+    "long_history_last_turn_correlation_frozen",
+    "redis_atomicity_and_conflict_matrix_frozen",
+    "historical_transition_chain_frozen",
+    "race_and_compile_gates_passed"
+  ],
+  "safety": {
+    "production_host": "DMIT",
+    "production_selector": "active",
+    "profile_changed": false,
+    "wire_changed": false,
+    "release_bundle_changed": false,
+    "deployment_performed": false,
+    "dmit_validated": false,
+    "vircs_production_changed": false
+  },
+  "result": "passed"
+}

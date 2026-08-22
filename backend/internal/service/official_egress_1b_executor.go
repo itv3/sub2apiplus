@@ -15,6 +15,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
 
 const officialCodexExecutorID = officialegress.ExecutorID("codex.executor.changeset1b")
@@ -169,9 +170,14 @@ func ProvideOfficialEgressTransitionRuntime(
 	httpUpstream HTTPUpstream,
 	cfg *config.Config,
 	reqProfileResource OfficialCodexReqProfileTransportResource,
+	redisClient *redis.Client,
 ) (*OfficialEgressTransitionRuntime, error) {
+	if redisClient == nil {
+		return nil, errors.New("Claude production Persona 缺少 Redis 状态存储")
+	}
 	runtimeState, err := BuildOfficialEgressTransitionRuntime(
 		guard, httpUpstream, cfg, reqProfileResource,
+		newClaudeRedisStateStore(redisClient),
 	)
 	if err != nil {
 		return nil, err
@@ -187,7 +193,11 @@ func BuildOfficialEgressTransitionRuntime(
 	httpUpstream HTTPUpstream,
 	cfg *config.Config,
 	reqProfileResource OfficialCodexReqProfileTransportResource,
+	claudeStateStores ...officialegress.ClaudeStateStore,
 ) (*OfficialEgressTransitionRuntime, error) {
+	if len(claudeStateStores) > 1 {
+		return nil, errors.New("Official Egress runtime 只能绑定一个 Claude 状态存储")
+	}
 	runtimeState, err := newOfficialEgressTransitionRuntimeWithExecutor(
 		guard,
 		httpUpstream,
@@ -208,13 +218,25 @@ func BuildOfficialEgressTransitionRuntime(
 	claudePort := &claudeHTTPUpstreamPort{httpUpstream: httpUpstream}
 	var claudeRuntime *officialegress.ClaudeRuntime
 	if candidateEnabled {
-		claudeRuntime, err = officialegress.NewClaudeCandidateRuntime(
-			runtimeState.ProcessSinks, guard, claudePort,
-		)
+		if len(claudeStateStores) == 1 {
+			claudeRuntime, err = officialegress.NewClaudeCandidateRuntime(
+				runtimeState.ProcessSinks, guard, claudePort, claudeStateStores[0],
+			)
+		} else {
+			claudeRuntime, err = officialegress.NewClaudeCandidateRuntime(
+				runtimeState.ProcessSinks, guard, claudePort,
+			)
+		}
 	} else {
-		claudeRuntime, err = officialegress.NewClaudeProductionRuntime(
-			runtimeState.ProcessSinks, guard, claudePort,
-		)
+		if len(claudeStateStores) == 1 {
+			claudeRuntime, err = officialegress.NewClaudeProductionRuntime(
+				runtimeState.ProcessSinks, guard, claudePort, claudeStateStores[0],
+			)
+		} else {
+			claudeRuntime, err = officialegress.NewClaudeProductionRuntime(
+				runtimeState.ProcessSinks, guard, claudePort,
+			)
+		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("构造 Claude Persona runtime：%w", err)

@@ -134,7 +134,7 @@ func initializeApplication(buildInfo handler.BuildInfo) (*Application, error) {
 	oAuthService := service.NewOAuthService(proxyRepository, claudeOAuthClient)
 	oAuthRefreshAPI := service.ProvideOAuthRefreshAPI(accountRepository, geminiTokenCache)
 	officialCodexReqProfileTransportResource := repository.ProvideOfficialCodexReqProfileTransportResource()
-	officialEgressTransitionRuntime, err := service.ProvideOfficialEgressTransitionRuntime(guard, httpUpstream, configConfig, officialCodexReqProfileTransportResource)
+	officialEgressTransitionRuntime, err := service.ProvideOfficialEgressTransitionRuntime(guard, httpUpstream, configConfig, officialCodexReqProfileTransportResource, redisClient)
 	if err != nil {
 		return nil, err
 	}

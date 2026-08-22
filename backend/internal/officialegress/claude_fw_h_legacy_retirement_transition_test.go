@@ -144,6 +144,9 @@ func claudeFWHLegacyRetirementTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if claudeFWHStateDurabilityTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if claudeFWHImmutableTransitionLedgerSupersedes(path, priorDigest, currentDigest) {
 		return true
 	}
@@ -219,6 +222,9 @@ func TestClaudeFWHLegacyRetirementTransitionsAreFrozen(t *testing.T) {
 			}
 			currentDigest := claudeFWHSourceDigest(source)
 			if err != nil || currentDigest != transition.ToSHA256 &&
+				!claudeFWHStateDurabilityTransitionSupersedes(
+					transition.Path, transition.ToSHA256, currentDigest,
+				) &&
 				!claudeFWHFableDeclaredFallbackDirectSupersedes(
 					transition.Path, transition.ToSHA256, currentDigest,
 				) {
