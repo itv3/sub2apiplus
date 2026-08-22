@@ -15,11 +15,13 @@
 > **证据边界**：本文没有未压缩 TS 源码可用，静态规则均从官方生产 bundle 逆向建立；材料、证据、
 > 规则与结论全部独立取自 Claude Code 自身，不继承 Codex 的任何事实结论
 > **运行时状态**：历史 Candidate 和 Vircs 生产验收包均作为不可变事实保留。当前最终生产主机是
-> DMIT，运行提交 `bd1c09d5f`、镜像 `sha256:8117aa6c…` 和三模型 active Release；六类 Claude OAuth
-> 入口均为 `migrated_strict`，旧 OAuth 链已从 active 删除并签发 RemovalReceipt。上一已验收提交
-> `e2c80213a`／镜像 `sha256:356384ce…` 是当前有效操作回退点；rollback 与 active 完整矩阵均为 46／46，
-> DeploymentFact 为 `restored_active`。Fable 的画像内 `claude-opus-5` 声明回退不锁存；仅实际
-> `claude-opus-4-8` server fallback 触发锁存。Vircs 只保留官方 Claude Code 取证角色，本次未连接、未修改
+> DMIT，正式 Compose 运行提交 `4ea8f73e5`、镜像 `sha256:5c48094d…` 和 Claude Persona Release Catalog；
+> active 仍是 2.1.226 三模型 ReleaseBundle，六类 Claude OAuth 入口均为 `migrated_strict`，旧 OAuth 链
+> 已退休。当前可调度账号的 Sonnet／Opus、第三方入口、范围外拒绝和 Codex 隔离矩阵为 37／37；Fable
+> 因账号 #101 处于 `schedulable=false` 未冒充本轮新实测，继续引用同一 ReleaseBundle 的既有三模型验收。
+> `e2c80213a`／镜像 `sha256:356384ce…` 仍是已完成 46／46 的操作回退点。当前 Catalog 维护
+> DeploymentFact 为 `active`；上一 FW-H `restored_active` 和 RemovalReceipt 不被覆盖。Vircs 只保留官方
+> Claude Code 取证角色，本次未连接、未修改
 > **末次更新**：2026-08-22
 
 ---
@@ -935,7 +937,7 @@ selector 切换、入口闭集迁移和旧 OAuth 链退休：
 | strict／managed 出站 | 八类 `persona_strict` 进入 Compiler／Executor／Guard；`non_persona_managed` 进入独立策略，未知 OAuth 出站保持 `denied` |
 | 语义与兼容 | Persona system／identity 由批准事实派生；lossless 请求进入 strict PAIR，有损 compatibility 与 strict 分母隔离 |
 | 候选验收 | 三模型后继 `2f224831f` 已独立完成镜像冻结、三模型 API、真实 Claude Desktop Fable、边界门禁和回滚／恢复；AcceptanceFact 为 `accepted` |
-| 生产边界 | DMIT 已激活提交 `bd1c09d5f`／镜像 `sha256:8117aa6c…`，六类 OAuth 入口均为 `migrated_strict`；旧 OAuth finalizer／旁路已从 active 删除并签发 RemovalReceipt。`e2c80213a`／`sha256:356384ce…` 是当前已演练的操作回退点；Vircs 本次未连接、未修改 |
+| 生产边界 | DMIT 正式 Compose 已激活提交 `4ea8f73e5`／镜像 `sha256:5c48094d…` 和 Claude Persona Release Catalog；六类 OAuth 入口仍为 `migrated_strict`，旧 OAuth finalizer／旁路保持退休。当前矩阵 37／37，Fable 使用同一 ReleaseBundle 的既有验收事实；`e2c80213a`／`sha256:356384ce…` 仍是已演练并保留的操作回退点；Vircs 本次未连接、未修改 |
 
 | 阶段 | 变更 | 完成判据 |
 |---|---|---|
@@ -955,7 +957,10 @@ selector 切换、入口闭集迁移和旧 OAuth 链退休：
 FW-H 生产迁移事实见
 [FW-H 历史 Vircs 生产验收包](egress/maintenance/claude-fw-h-production-acceptance-package.json)保持不可变；
 当前生产、回滚和退休事实见
-[FW-H request-id 后继验收包](egress/maintenance/claude-fw-h-response-request-id-acceptance.json)。
+[FW-H request-id 后继验收包](egress/maintenance/claude-fw-h-response-request-id-acceptance.json)；
+Persona Release Catalog 的当前部署事实和聚合验收见
+[Catalog DeploymentFact](egress/maintenance/claude-persona-release-catalog-deployment-fact.json)与
+[Catalog 生产验收收据](egress/maintenance/claude-persona-release-catalog-production-acceptance.json)。
 
 最新 stable 是目标 Schema、Snapshot 和实现的唯一设计权威。FW-E 只冻结目标规则证据，不预先用
 2.1.220 建画像；FW-F 完成发现项语义清零后，必须先生成目标 stable 画像和样例，随后才把 2.1.220 表达为差分基线、
@@ -1018,7 +1023,9 @@ Messages 与 count_tokens、真实 Claude Desktop Fable 主请求与标题请求
 [验收尝试收据](egress/maintenance/claude-fw-g-three-model-acceptance-attempt.json)不覆盖且不再代表当前状态；
 历史 Vircs 生产事实见 [FW-H 生产验收包](egress/maintenance/claude-fw-h-production-acceptance-package.json)；
 当前 DMIT 最终镜像、有效操作回滚、六入口 strict、RemovalReceipt 和 Vircs 未改事实见
-[FW-H request-id 后继验收包](egress/maintenance/claude-fw-h-response-request-id-acceptance.json)。
+[FW-H request-id 后继验收包](egress/maintenance/claude-fw-h-response-request-id-acceptance.json)；当前
+Persona Release Catalog 镜像、正式 Compose、activation fact 和实时验收边界见
+[Catalog 生产验收收据](egress/maintenance/claude-persona-release-catalog-production-acceptance.json)。
 
 ---
 
@@ -1070,7 +1077,10 @@ Candidate 对拍和 DMIT 隔离验收，将 40 条 RequiredRules 升级为 `veri
 `production_replacement` ApprovalFact、ValidationCandidate 与 AcceptanceFact。FW-H 已在 DMIT 完成最终
 镜像切换、保留旧链镜像的完整回滚矩阵、active 恢复矩阵与稳定观察，DeploymentFact 为
 `restored_active`；六类 OAuth 入口均为 strict，`retained_legacy` 为空，旧 OAuth 链已退休并签发
-RemovalReceipt。范围外能力继续 fail-close 或进入明确的 `non_persona_managed／rerouted` 边界。
+RemovalReceipt。其后 Persona Release Catalog 维护变更没有改变 Profile、Wire、ReleaseBundle 或
+SupportEnvelope；DMIT 已用正式 Compose 固定提交 `4ea8f73e5`／镜像 `sha256:5c48094d…`，当前 Catalog
+维护 DeploymentFact 为 `active`。范围外能力继续 fail-close 或进入明确的
+`non_persona_managed／rerouted` 边界。
 
 ## 4.2 官方取证、分类与批准
 
@@ -1376,10 +1386,11 @@ RemovalReceipt。
 生产数据库、Redis、配置、当前／回滚镜像和唯一证据副本永远不在清理范围。
 
 当前边界：Claude 历史 Sonnet Candidate、三模型后继和历史 Vircs 验收均以追加事实保留。当前生产在
-DMIT：当前 active 镜像 `sha256:8117aa6c…` 与操作回滚镜像 `sha256:356384ce…` 分别完成 46／46
-矩阵，active 已恢复且 DeploymentFact 为 `restored_active`。六类 OAuth 入口均为 `migrated_strict`，
-`retained_legacy` 为空；旧 OAuth 链已从 active 删除并签发 RemovalReceipt。Vircs 只保留官方取证角色，
-本次最终退休未连接、未修改。
+DMIT：active 为正式 Compose 固定的提交 `4ea8f73e5`／镜像 `sha256:5c48094d…`，当前可调度账号范围的
+实时矩阵为 37／37；Fable 继续引用同一 ReleaseBundle 的既有实测，不把禁用账号冒充本轮新实测。
+操作回滚镜像 `sha256:356384ce…` 仍在 DMIT 保留且上一完整矩阵为 46／46。当前 Catalog 维护
+DeploymentFact 为 `active`，上一 `restored_active` 与 RemovalReceipt 保持不可变；六类 OAuth 入口均为
+`migrated_strict`，`retained_legacy` 为空。Vircs 只保留官方取证角色，本次未连接、未修改。
 2.1.220 Campaign／run／提取物已被 FW-F fixture 内容寻址引用，引用有效期间不得删除。
 
 ---
@@ -1482,6 +1493,11 @@ Vircs 上官方 Claude Code 生成的材料才可作为当前 Linux x86_64 官�
 
 DMIT 是当前生产和最终镜像主机。每次切换必须绑定固定的 linux/amd64 OCI digest、image ID、源码树
 摘要、画像摘要、构建 ID、DeploymentFact 和可运行 rollback；只替换应用容器，不重建依赖服务。
+
+当前正式运行入口是 `/root/Docker/sub2apiplus/app/docker-compose.yml` 与
+`/root/Docker/sub2apiplus/app/docker-compose.claude-persona-catalog.yml` 的组合；后者固定 active 镜像
+digest、Catalog Release 摘要和 activation fact 路径。临时 override、容器当前状态或裸标签都不能替代
+这两个正式 Compose 文件及其 DeploymentFact。
 
 受 1 核／1.9G／20G 限制，不在 DMIT 执行 Go／Node 编译；开跑前检查磁盘下限，避免 pcap、R 字节和
 镜像层填满系统盘。候选、故障注入和破坏性验证必须迁到与生产流量、数据库、网络和账号隔离的环境；

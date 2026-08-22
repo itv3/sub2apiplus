@@ -1,0 +1,169 @@
+{
+  "schema_version": "official-egress-claude-persona-release-catalog-production-acceptance/v1",
+  "issued_at_utc": "2026-08-22T10:44:48Z",
+  "phase": "FW-H",
+  "acceptance_id": "claude-code-2.1.226-persona-release-catalog-4ea8f73e5-dmit",
+  "scope": "claude-persona-release-catalog-production-documentation-closeout",
+  "predecessors": [
+    {
+      "kind": "persona_release_catalog_transition",
+      "path": "docs/egress/maintenance/claude-persona-release-catalog-transition.json",
+      "sha256": "16be5939a3c14dd9bc5a7e717583173939ac4d1df4b217e2d15f229d54b21288"
+    },
+    {
+      "kind": "fw_h_response_request_id_acceptance",
+      "path": "docs/egress/maintenance/claude-fw-h-response-request-id-acceptance.json",
+      "sha256": "722df263723bbf64ebc74f9470d4c9725b9e92710feda4a3b55bfa8eb4ad8668"
+    },
+    {
+      "kind": "three_model_acceptance",
+      "path": "docs/egress/maintenance/claude-fw-g-three-model-acceptance.json",
+      "sha256": "16dc60bc46eede747cb0535e53367c134a28466f12399f06a485693e142b15a9"
+    },
+    {
+      "kind": "production_approval",
+      "path": "backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-fw-h-legacy-retirement-approval.json",
+      "sha256": "1d002a2708b198256098999932908d47f0eb90a2c819f11d8393570f33996c2c"
+    }
+  ],
+  "deployment_fact": {
+    "path": "docs/egress/maintenance/claude-persona-release-catalog-deployment-fact.json",
+    "sha256": "766974e7e10d917c4b8691964c50ac4a44b436a2eff072737b6f7d8435b714d2",
+    "remote_path": "/root/Docker/sub2apiplus/app/data/claude-persona-release-catalog-4ea8f73e5-deployment-fact.json",
+    "remote_mode": "0400",
+    "event_id": "6cd5274f37c56ab1f72e647b30695442de869196bec2d65381ee7ca5fc5eb8bb",
+    "stage": "active"
+  },
+  "release": {
+    "version": "2.1.226",
+    "catalog_sha256": "3f47ee0d89a13478bcce121b956c8e3554685cbffeb47530080684654a1e0fa7",
+    "profile_sha256": "e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5",
+    "wire_sha256": "a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d",
+    "release_sha256": "48586f47e0abcde9ea357c08c1465253eaa296862153a89c20e4cf0f1e6f52f8",
+    "bundle_sha256": "ceb1e30740ab4223684f478f717dd2902d8fdad0c6efad5a69b761d95b4aefae",
+    "approval_sha256": "1d002a2708b198256098999932908d47f0eb90a2c819f11d8393570f33996c2c",
+    "final_wire_changed": false,
+    "support_envelope_changed": false
+  },
+  "production": {
+    "host": "DMIT",
+    "commit": "4ea8f73e5b36ce294d71751d795669c3778327cd",
+    "tree": "649542d7d388156f52919aab2c940cba245c84a7",
+    "image_id": "sha256:5c48094d4007bf402f71a9b5d4509b2db5e29378f3758c386d6cb2e2ed61e565",
+    "image_reference": "sub2apiplus@sha256:5c48094d4007bf402f71a9b5d4509b2db5e29378f3758c386d6cb2e2ed61e565",
+    "platform": "linux/amd64",
+    "container_id": "180f6b32bc3f8dd8e07e5da15ef446a61b4e18ce1f6bc42049164d0cc2e34c42",
+    "health": "healthy",
+    "restart_count": 0,
+    "compose_files": [
+      "/root/Docker/sub2apiplus/app/docker-compose.yml",
+      "/root/Docker/sub2apiplus/app/docker-compose.claude-persona-catalog.yml"
+    ],
+    "compose_override_sha256": "9e1d1965e8a287c3a599c0d30aceb61ff7eaaf717f7ae36594a664c2d74ca57e",
+    "activation_fact_sha256": "31bcd0576240e78f0a6f005d875b8748b8835a08bc94a8a4ffed3a08e74f77d2",
+    "activation_event_id": "f40d15402174239e752a035d9d9959f8b29454ed72adeae10db83e1de4a4fe15",
+    "dependency_identity_before_sha256": "76f0127120244bccc8a7d44db3e640dc622ba188850d1ba24038b0bfa0130c00",
+    "dependency_identity_after_sha256": "76f0127120244bccc8a7d44db3e640dc622ba188850d1ba24038b0bfa0130c00",
+    "dependencies_unchanged": true
+  },
+  "verification": {
+    "local_gates": [
+      "make check-egress-spec passed",
+      "go test ./... -count=1 passed",
+      "go vet ./... passed",
+      "git diff --check passed",
+      "changed-file secret scan matched 0"
+    ],
+    "failed_attempts": [
+      {
+        "name": "live-matrix-attempt-001",
+        "log_path": "/root/Docker/sub2apiplus/app/data/deployment-evidence/claude-persona-catalog-4ea8f73e5-live-matrix.log",
+        "log_sha256": "ecff55e83d8d19b929d94b0b767624b43021363085172e138ff55ca09bcb4a71",
+        "disposition": "diagnostic_only"
+      },
+      {
+        "name": "live-matrix-attempt-002",
+        "log_path": "/root/Docker/sub2apiplus/app/data/deployment-evidence/claude-persona-catalog-4ea8f73e5-live-matrix-attempt-002.log",
+        "log_sha256": "ecff55e83d8d19b929d94b0b767624b43021363085172e138ff55ca09bcb4a71",
+        "disposition": "diagnostic_only"
+      }
+    ],
+    "diagnostic_correction": {
+      "runtime_logic_changed": false,
+      "old_runner_sha256": "89a84ea23625914e799f4b115faf99432f75d3d2d0c733ac350ed0d58018b925",
+      "new_runner_sha256": "9f2829f1fd65f84f86c29e16772dffbf4b1cbd80e6d98b94884b446cdba1cd12",
+      "cause": "旧脚本按全库最小可调度 Anthropic OAuth 账号取 metadata UUID，却使用 Group 2 API Key 发请求；脚本取到账号 #92，而真实调度账号为 Group 2 的 #100，导致官方入口身份校验失败",
+      "correction": "脚本按 account_groups.group_id=2、priority、schedulable 和 extra.account_uuid 选择与请求同组的实际账号",
+      "account_or_database_changed": false
+    },
+    "current_live_matrix": {
+      "passed": 37,
+      "failed": 0,
+      "models": [
+        "claude-sonnet-5",
+        "claude-opus-5"
+      ],
+      "started_at_utc": "2026-08-22T10:37:15Z",
+      "finished_at_utc": "2026-08-22T10:37:53Z",
+      "log_path": "/root/Docker/sub2apiplus/app/data/deployment-evidence/claude-persona-catalog-4ea8f73e5-live-matrix-attempt-003.log",
+      "log_sha256": "c04ffdbd329ab2f56eaa6a9de140b5755959d1b798ef1e24bbf90cc10ee8bc7a",
+      "official_ingress": "passed",
+      "third_party_ingress": "passed",
+      "outside_envelope_fail_close": "passed",
+      "codex_isolation": "passed"
+    },
+    "fable": {
+      "current_live_probe_performed": false,
+      "reason": "账号 #101 当前 schedulable=false；未改变生产账号状态",
+      "same_release_acceptance_sha256": "16dc60bc46eede747cb0535e53367c134a28466f12399f06a485693e142b15a9",
+      "same_release_prior_full_matrix_sha256": "722df263723bbf64ebc74f9470d4c9725b9e92710feda4a3b55bfa8eb4ad8668",
+      "claim": "既有同 ReleaseBundle 实测继续有效，本收据不声明新的 Fable 在线实测"
+    },
+    "rollback": {
+      "image_id": "sha256:356384ce0429a2dc30d484648371d1921644184fc978195ae583c23e968dc3d6",
+      "retained_on_dmit": true,
+      "prior_full_matrix_passed": 46,
+      "new_switch_performed": false,
+      "claim": "沿用上一不可变 FW-H 收据中已演练的 operational rollback，不生成新的 restored_active 事实"
+    },
+    "stability": {
+      "stable_seconds": 1173,
+      "fatal_count": 0,
+      "panic_count": 0,
+      "guard_failure_count": 0,
+      "restart_count": 0
+    },
+    "result": "passed"
+  },
+  "transitions": [
+    {
+      "path": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "from_sha256": "46cf897208663b4c9e462a882305c3ae2d99b92390f20f2b4798c8e28729e94c",
+      "to_sha256": "300c6bbe506f6b195b4683f55fac1edf8ac79dad1ca4fb02693ad9add0cf3f1a",
+      "reason": "把 Claude 当前生产权威更新为 DMIT 正式 Compose、Persona Release Catalog 镜像、实时验收边界和不可覆盖 DeploymentFact。"
+    },
+    {
+      "path": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+      "from_sha256": "273854123d12bc5762d401eb63e6654ac2f69e6e8a1c9d253eecace0452aa688",
+      "to_sha256": "3036aff1ecaabadd45b1cc1bde2ab28f58c9367f645eb7ffe3735334112c9f04",
+      "reason": "把共享框架当前运行事实更新为正式 Catalog active，同时保持历史 restored_active、回退和退休收据不可变。"
+    }
+  ],
+  "safety": {
+    "vircs_accessed": false,
+    "vircs_changed": false,
+    "account_state_changed": false,
+    "compose_down_used": false,
+    "unscoped_prune_used": false,
+    "database_or_cache_recreated": false,
+    "dependency_containers_changed": false,
+    "only_dmit_application_recreated": true,
+    "production_logic_changed_during_closeout": false,
+    "secret_scan": {
+      "matched_patterns": 0,
+      "result": "passed"
+    }
+  },
+  "production_state": "active_persona_release_catalog",
+  "result": "accepted"
+}

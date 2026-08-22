@@ -174,7 +174,9 @@ func claudePersonaTransitionTargetMatches(path string, want string) bool {
 		return false
 	}
 	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:]) == want
+	current := hex.EncodeToString(sum[:])
+	return current == want ||
+		claudePersonaReleaseCatalogProductionAcceptanceSupersedes(path, want, current)
 }
 
 // 历史门禁已经独立验证各自 receipt；本函数只证明该路径从基线提交继续演进到
@@ -186,6 +188,9 @@ func claudePersonaReleaseCatalogTransitionSupersedes(
 ) bool {
 	if !receiptSHA256(priorDigest) || !receiptSHA256(currentDigest) {
 		return false
+	}
+	if claudePersonaCatalogCloseoutTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
 	}
 	receipt, err := loadClaudePersonaReleaseCatalogTransition()
 	if err != nil {

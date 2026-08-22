@@ -3,7 +3,8 @@
 > **适用范围**：Sub2APIPlus 对官方 OAuth 客户端出站形态进行画像化实现时的共同控制框架
 > **当前规范已建档客户端**：Codex CLI、Claude Code
 > **当前运行时状态**：Codex CLI 与 Claude Code 均已登记 production active strict 链；Claude Code
-> 当前最终生产主机为 DMIT，六类 OAuth 入口已迁移 strict，旧 OAuth 链已退休
+> 当前最终生产主机为 DMIT，正式 Compose 已固定 Persona Release Catalog active 镜像，六类 OAuth
+> 入口已迁移 strict，旧 OAuth 链已退休
 > **扩展模型**：一份共享框架加若干客户端专属手册；Grok、Gemini 等只能在独立取证和审核后登记
 > **架构原则**：共享内核只解释厂商无关的终态控制事实；协议、身份、状态和 wire 事实由 Persona
 > 自有方言负责。候选共享接口必须经 Codex 零差异和至少一个不可部署的第二 Persona 纵向样例证明后才能冻结
@@ -451,14 +452,16 @@ ApprovalFact、candidate、selector 变更或部署。事实分别见
 FW-G 已以追加事实完成：独立官方复测、Candidate 对拍和 DMIT 隔离验收把 40 条 RequiredRules 升级为
 `verified`；后继 `production_replacement` ApprovalFact、固定 ValidationCandidate、40 个唯一
 `PAIR-<SPEC-ID>`、九个场景批准链和 AcceptanceFact 已封存。FW-H 当前状态为：DMIT 运行提交
-`bd1c09d5f`／镜像 `sha256:8117aa6c…`，六类 Claude OAuth 入口均为 `migrated_strict`，
-`retained_legacy` 为空，旧 OAuth 链已从 active 源码和镜像删除并签发 RemovalReceipt；
-`e2c80213a`／镜像 `sha256:356384ce…` 是已完成 46／46
-矩阵的操作回退点。恢复 active 后同一矩阵再次 46／46 通过，DeploymentFact 为 `restored_active`，Codex
-路由保持 `rerouted`。Fable 请求返回画像声明的 `claude-opus-5` 时不建立会话锁存；只有实际返回
-`claude-opus-4-8` 的 server fallback 才按批准状态机锁存。Vircs 本次未连接、未修改。历史生产事实继续
-由原 [FW-H 生产验收包](egress/maintenance/claude-fw-h-production-acceptance-package.json)冻结，当前权威状态见
-[FW-H request-id 后继验收包](egress/maintenance/claude-fw-h-response-request-id-acceptance.json)。
+`4ea8f73e5`／镜像 `sha256:5c48094d…`，并由正式 Compose 选择 Claude Persona Release Catalog；六类
+Claude OAuth 入口均为 `migrated_strict`，`retained_legacy` 为空，旧 OAuth 链保持退休并已有
+RemovalReceipt。当前可调度账号范围的 Sonnet／Opus、第三方入口、范围外拒绝和 Codex 隔离矩阵为
+37／37；Fable 账号按既有运维状态禁用，本轮只引用同一 ReleaseBundle 的既有实测，不冒充新实测。
+`e2c80213a`／镜像 `sha256:356384ce…` 仍是已完成 46／46 且保留在 DMIT 的操作回退点。当前
+Catalog 维护 DeploymentFact 为 `active`，上一 FW-H 的 `restored_active` 不被覆盖；Codex 路由保持
+`rerouted`。Vircs 本次未连接、未修改。历史生产事实继续由原
+[FW-H 生产验收包](egress/maintenance/claude-fw-h-production-acceptance-package.json)冻结，request-id 后继事实见
+[FW-H request-id 验收包](egress/maintenance/claude-fw-h-response-request-id-acceptance.json)，当前运行事实见
+[Catalog 生产验收收据](egress/maintenance/claude-persona-release-catalog-production-acceptance.json)。
 
 生产事实以镜像 digest、selector、activation fact 和不可覆盖收据为准；缺失或不一致时统一标记
 `production_unverified`。
