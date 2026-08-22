@@ -1,0 +1,325 @@
+{
+  "schema_version": "official-egress-claude-fw-h-final-acceptance-package/v1",
+  "phase": "FW-H",
+  "issued_at_utc": "2026-08-22T04:56:09Z",
+  "acceptance_id": "claude-code-2.1.226-fw-h-final-e2c80213a-dmit",
+  "target": {
+    "product": "claude-code",
+    "version": "2.1.226",
+    "platform": "linux/amd64",
+    "authentication": "claude.ai-oauth",
+    "privacy": "essential-traffic-no-telemetry",
+    "models": [
+      "claude-sonnet-5",
+      "claude-opus-5",
+      "claude-fable-5"
+    ],
+    "required_rules": 40,
+    "profile_sha256": "e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5",
+    "wire_sha256": "a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d",
+    "release_sha256": "48586f47e0abcde9ea357c08c1465253eaa296862153a89c20e4cf0f1e6f52f8",
+    "bundle_sha256": "ceb1e30740ab4223684f478f717dd2902d8fdad0c6efad5a69b761d95b4aefae",
+    "active_approval_sha256": "1d002a2708b198256098999932908d47f0eb90a2c819f11d8393570f33996c2c",
+    "rollback_approval_sha256": "73e690d20fdb36688d70247d4c857f6aa31ebfc6dcd755fbbcc8276e37d74f1a"
+  },
+  "predecessors": [
+    {
+      "kind": "historical_production_acceptance",
+      "path": "docs/egress/maintenance/claude-fw-h-production-acceptance-package.json",
+      "sha256": "45b21fd3e74e6b2a3968c04bf18b416a0a43a157ba7cb7451f32a5d3c711cabd"
+    },
+    {
+      "kind": "legacy_retirement_source_transition",
+      "path": "docs/egress/maintenance/claude-fw-h-legacy-retirement-source-transition.json",
+      "sha256": "13918c77227fcfff5f44daa77d0382630e37998fd926bab2334cb9392bb7eabd"
+    },
+    {
+      "kind": "legacy_retirement_test_transition",
+      "path": "docs/egress/maintenance/claude-fw-h-legacy-retirement-test-transition.json",
+      "sha256": "6eae1f11f3abc5050ead6a31a7eb79ad5ef7e7066915fc2666fa45dcba8304e0"
+    },
+    {
+      "kind": "fable_fallback_source_transition",
+      "path": "docs/egress/maintenance/claude-fw-h-fable-declared-fallback-source-transition.json",
+      "sha256": "e33912bec8e6ff619790fc187312f0d52817e07d6611a93a2d8a7dbfc46c6bc2"
+    },
+    {
+      "kind": "fable_fallback_test_transition",
+      "path": "docs/egress/maintenance/claude-fw-h-fable-declared-fallback-test-transition.json",
+      "sha256": "3092c2d422aea527ef5a2fbb4febbb57753fe5d4c0619a7232d819f7fefecf38"
+    },
+    {
+      "kind": "active_production_approval",
+      "path": "backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-fw-h-legacy-retirement-approval.json",
+      "sha256": "1d002a2708b198256098999932908d47f0eb90a2c819f11d8393570f33996c2c"
+    }
+  ],
+  "deployment_fact": {
+    "stage": "restored_active",
+    "production_host": "DMIT",
+    "active": {
+      "commit": "e2c80213ab338cc6f91eee00e28a96bc956f0512",
+      "tree": "0e7bb9cd9fe66848f3810e4ea7f10f639a638dbc",
+      "version": "0.1.177-4-fw-h-final-e2c80213a",
+      "build_id": "sub2api-v0.1.177-4-fw-h-final-e2c80213a",
+      "image": "sub2apiplus:fw-h-final-e2c80213a",
+      "image_id": "sha256:356384ce0429a2dc30d484648371d1921644184fc978195ae583c23e968dc3d6",
+      "binary_sha256": "05415bb8a59f0b02555a1e2357d87efad3b8a3333912c8220124835c821828a0",
+      "source_archive_sha256": "0a483d9d209e9a1502aebc015afee3d283e27754dfb66bfc25b0cecae7ebd72e",
+      "container_id": "3521e509b068fd9e76ed591226e9519629473533309a4558b08573cabd380536",
+      "started_at_utc": "2026-08-22T04:40:12.230157753Z",
+      "activation_event_id": "5682a83c57d5e947ddaf60169fcb5db1d5f217fc11165489479f1f443341d7b0",
+      "health": "healthy",
+      "restart_count": 0
+    },
+    "rollback": {
+      "branch": "codex/fw-h-rollback-legacy-fable",
+      "commit": "f388cd7d86ebff625bf7f886c06161cff94db22d",
+      "tree": "332cb5762a4636bc970d4ff85d6e753e3c5df5b2",
+      "version": "0.1.177-4-fw-h-rollback-f388cd7d8",
+      "build_id": "sub2api-v0.1.177-4-fw-h-rollback-f388cd7d8",
+      "image": "sub2apiplus:fw-h-rollback-f388cd7d8",
+      "image_id": "sha256:3bde555633311a212387bf6a54eb0bf72e3d17ea35efbce444baaa7f5d165993",
+      "binary_sha256": "5ef83eb9c4c193f25914f52c3eb6340e6a0d22d1cf78e7d0e93660ba6f503e1a",
+      "source_archive_sha256": "b763f783f05e795e7df903bc5d27ed13d58d915b1d59093aea7221cacd892478",
+      "activation_event_id": "f74c842055527a07a6dbb90a0504ef6cadf88746c9556a9bf97ed01c9872ec49",
+      "contains_retired_oauth_chain": true,
+      "role": "operational_rollback_only"
+    },
+    "stability_observation": {
+      "observed_at_utc": "2026-08-22T04:43:50Z",
+      "stable_seconds": 218,
+      "fatal_or_panic_count": 0,
+      "guard_failure_count": 0,
+      "claude_error_count": 0,
+      "dependencies_unchanged": true
+    },
+    "result": "passed"
+  },
+  "production_ingress_inventory": {
+    "oauth_entries": [
+      {
+        "logical_ingress_id": "official-count-tokens-oauth",
+        "protocol_class": "anthropic-count-tokens",
+        "physical_routes": [
+          "POST /v1/messages/count_tokens"
+        ],
+        "request_identity_class": "official",
+        "current_disposition": "migrated_strict"
+      },
+      {
+        "logical_ingress_id": "official-messages-oauth",
+        "protocol_class": "anthropic-messages",
+        "physical_routes": [
+          "POST /v1/messages"
+        ],
+        "request_identity_class": "official",
+        "current_disposition": "migrated_strict"
+      },
+      {
+        "logical_ingress_id": "third-party-count-tokens-oauth",
+        "protocol_class": "anthropic-count-tokens",
+        "physical_routes": [
+          "POST /v1/messages/count_tokens"
+        ],
+        "request_identity_class": "third-party",
+        "current_disposition": "migrated_strict"
+      },
+      {
+        "logical_ingress_id": "third-party-messages-oauth",
+        "protocol_class": "anthropic-messages",
+        "physical_routes": [
+          "POST /v1/messages"
+        ],
+        "request_identity_class": "third-party",
+        "current_disposition": "migrated_strict"
+      },
+      {
+        "logical_ingress_id": "chat-completions-oauth",
+        "protocol_class": "openai-chat-completions",
+        "physical_alias_ids": [
+          "alias-chat-bare",
+          "alias-chat-v1"
+        ],
+        "request_identity_class": "third-party",
+        "current_disposition": "migrated_strict"
+      },
+      {
+        "logical_ingress_id": "responses-oauth",
+        "protocol_class": "openai-responses",
+        "physical_alias_ids": [
+          "alias-responses-bare-http",
+          "alias-responses-bare-subpath",
+          "alias-responses-bare-ws",
+          "alias-responses-v1-http",
+          "alias-responses-v1-subpath",
+          "alias-responses-v1-ws"
+        ],
+        "request_identity_class": "third-party",
+        "unsupported_shape_policy": "strict_fail_close_before_oauth_credential_use",
+        "current_disposition": "migrated_strict"
+      }
+    ],
+    "shared_route_classification": {
+      "messages": "official 与 third-party 共享物理路由，按受信请求身份分成两个逻辑入口",
+      "count_tokens": "official 与 third-party 共享物理路由，按受信请求身份分成两个逻辑入口"
+    },
+    "retained_legacy": [],
+    "rerouted": [
+      {
+        "logical_ingress_id": "codex-direct-rerouted",
+        "physical_alias_ids": [
+          "alias-codex-direct-responses-http",
+          "alias-codex-direct-responses-subpath",
+          "alias-codex-direct-responses-ws"
+        ],
+        "current_disposition": "rerouted"
+      }
+    ],
+    "unknown_oauth_egress": "denied"
+  },
+  "removal_receipt": {
+    "schema_version": "official-egress-claude-oauth-legacy-removal-receipt/v1",
+    "receipt_id": "claude-code-2.1.226-fw-h-legacy-removal-e2c80213a",
+    "issued_at_utc": "2026-08-22T04:56:09Z",
+    "status": "issued",
+    "removed_capability": "claude-oauth-legacy-execution-chain",
+    "active_source_and_image_removed": true,
+    "operational_rollback_copy_retained": true,
+    "retained_legacy": [],
+    "consumer_closure": "passed",
+    "strict_replacement": "six_oauth_ingress_entries",
+    "preserved_product_semantics": [
+      "setup-token-non-persona-managed",
+      "key-based-auth-retained",
+      "service-account-retained",
+      "codex-direct-rerouted"
+    ],
+    "approval_sha256": "1d002a2708b198256098999932908d47f0eb90a2c819f11d8393570f33996c2c",
+    "result": "passed"
+  },
+  "acceptance_package": {
+    "envelopes": {
+      "active_support": [
+        "official-count-tokens-oauth",
+        "official-messages-oauth",
+        "third-party-count-tokens-oauth",
+        "third-party-messages-oauth",
+        "chat-completions-oauth",
+        "responses-oauth"
+      ],
+      "rollback_operational": [
+        "official-count-tokens-oauth",
+        "official-messages-oauth",
+        "third-party-count-tokens-oauth",
+        "third-party-messages-oauth",
+        "chat-completions-oauth",
+        "responses-oauth"
+      ],
+      "deployment_traffic": [
+        "official-count-tokens-oauth",
+        "official-messages-oauth",
+        "third-party-count-tokens-oauth",
+        "third-party-messages-oauth",
+        "chat-completions-oauth",
+        "responses-oauth"
+      ],
+      "deployment_subset_invariant": true
+    },
+    "matrix": {
+      "script_sha256": "466afe463258f73bfb81a9fb4137aa13157eafca1a4cbba1d94f5cc634948806",
+      "total_cases": 46,
+      "positive_and_isolation_cases": 29,
+      "fail_close_cases": 17,
+      "coverage": {
+        "models": [
+          "claude-sonnet-5",
+          "claude-opus-5",
+          "claude-fable-5"
+        ],
+        "api_classes": [
+          "anthropic-messages",
+          "anthropic-count-tokens",
+          "openai-chat-completions",
+          "openai-responses"
+        ],
+        "stream_modes": [
+          false,
+          true
+        ],
+        "ingress_classes": [
+          "official",
+          "third-party"
+        ],
+        "thinking_display_summarized": true,
+        "codex_route_isolation": true
+      },
+      "first_rollback_attempt": {
+        "started_at_utc": "2026-08-22T04:34:34Z",
+        "completed_cases": 20,
+        "matrix_rc": 1,
+        "failure_response_preserved": false,
+        "root_cause": "unresolved",
+        "image_changed_before_retest": false,
+        "original_and_alternate_prompt_retests": "passed",
+        "acceptance_use": "excluded_incomplete_attempt"
+      },
+      "rollback_full": {
+        "started_at_utc": "2026-08-22T04:39:04Z",
+        "finished_at_utc": "2026-08-22T04:40:11Z",
+        "passed": 46,
+        "failed": 0,
+        "matrix_rc": 0,
+        "result": "passed"
+      },
+      "restored_active_full": {
+        "started_at_utc": "2026-08-22T04:40:27Z",
+        "finished_at_utc": "2026-08-22T04:41:29Z",
+        "passed": 46,
+        "failed": 0,
+        "result": "passed"
+      }
+    },
+    "fable_fallback": {
+      "request_model": "claude-fable-5",
+      "declared_fallback_model": "claude-opus-5",
+      "observed_response_model": "claude-opus-5",
+      "declared_fallback_session_latch": false,
+      "server_fallback_model": "claude-opus-4-8",
+      "server_fallback_session_latch_on_actual_response": true
+    },
+    "result": "accepted"
+  },
+  "safety": {
+    "production_host": "DMIT",
+    "vircs_scope": "final_retirement_and_acceptance_closeout",
+    "vircs_accessed": false,
+    "vircs_changed": false,
+    "compose_down_used": false,
+    "unscoped_prune_used": false,
+    "database_or_cache_recreated": false,
+    "dependency_containers_changed": false,
+    "active_and_rollback_images_retained": true,
+    "secret_scan": {
+      "matched_patterns": 0,
+      "result": "passed"
+    }
+  },
+  "transitions": [
+    {
+      "path": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "from_sha256": "258bdff4347573da38df8dcb721c92489dc43fc488018b7f062d25fbe8a65c0c",
+      "to_sha256": "6729311fb0152a2e6c100412af96ed5c3c8939675e7daa584349e1bccd5704f8",
+      "reason": "把 Claude 当前权威状态更新为 DMIT 最终生产、六入口 strict、旧 OAuth 链退休、有效操作回滚和 Vircs 未改。"
+    },
+    {
+      "path": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+      "from_sha256": "d66f73d33602faacf1d7d1b796aa38a9f842e077609960328ec0ac38d64be7eb",
+      "to_sha256": "af1066176c33db3580ff4f47b22bbc90ae2fde587357570ad43430ac6975522e",
+      "reason": "记录 FW-H 最终 DeploymentFact、ProductionIngressInventory、RemovalReceipt 和当前机器角色，不覆盖历史 Vircs 收据。"
+    }
+  ],
+  "production_state": "restored_active",
+  "retirement_state": "completed_removal_receipt_issued",
+  "result": "accepted"
+}

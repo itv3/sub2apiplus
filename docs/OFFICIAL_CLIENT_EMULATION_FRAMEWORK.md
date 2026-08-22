@@ -2,8 +2,8 @@
 
 > **适用范围**：Sub2APIPlus 对官方 OAuth 客户端出站形态进行画像化实现时的共同控制框架
 > **当前规范已建档客户端**：Codex CLI、Claude Code
-> **当前运行时状态**：Codex CLI 已有生产 strict 链；Claude Code 仍是遗留局部仿真，尚未登记为
-> 多 Persona 运行时的可激活 Persona
+> **当前运行时状态**：Codex CLI 与 Claude Code 均已登记 production active strict 链；Claude Code
+> 当前最终生产主机为 DMIT，六类 OAuth 入口已迁移 strict，旧 OAuth 链已退休
 > **扩展模型**：一份共享框架加若干客户端专属手册；Grok、Gemini 等只能在独立取证和审核后登记
 > **架构原则**：共享内核只解释厂商无关的终态控制事实；协议、身份、状态和 wire 事实由 Persona
 > 自有方言负责。候选共享接口必须经 Codex 零差异和至少一个不可部署的第二 Persona 纵向样例证明后才能冻结
@@ -403,8 +403,10 @@ DeploymentTrafficEnvelope
 # 第六部分 首轮迁移实施方案
 
 本部分把现有 Codex 专用 strict 执行链收窄为多 Persona 共享控制内核，并在不把 Claude 遗留输出
-当作规格的前提下重建 Claude Code firstParty OAuth 仿真。DMIT 用于隔离候选验证和回滚演练；Vircs
-用于生产切换与稳定观察。
+当作规格的前提下重建 Claude Code firstParty OAuth 仿真。机器角色必须随 Campaign 和 DeploymentFact
+冻结，不能由主机名隐含决定：历史 FW-C／首次 FW-H 收据保留当时的 Vircs 生产事实；最终 FW-H 经明确
+角色变更后以 DMIT 为当前生产和最终镜像主机，Vircs 只保留官方 Claude Code 取证角色，本次最终退休
+未连接、未修改 Vircs。
 
 ## 6.1 当前状态与本轮目标
 
@@ -431,10 +433,14 @@ ApprovalFact、candidate、selector 变更或部署。事实分别见
 
 FW-G 已以追加事实完成：独立官方复测、Candidate 对拍和 DMIT 隔离验收把 40 条 RequiredRules 升级为
 `verified`；后继 `production_replacement` ApprovalFact、固定 ValidationCandidate、40 个唯一
-`PAIR-<SPEC-ID>`、九个场景批准链和 AcceptanceFact 已封存。FW-H 已完成固定正式镜像的 Vircs 切换、
-真实旧镜像回滚、active 恢复与稳定观察，DeploymentFact 为 `restored_active`，Codex final wire 摘要
-保持不变。两条入口继续 `retained_legacy`，因此没有 RemovalReceipt。事实见
-[Claude FW-H 生产验收包](egress/maintenance/claude-fw-h-production-acceptance-package.json)。
+`PAIR-<SPEC-ID>`、九个场景批准链和 AcceptanceFact 已封存。FW-H 最终状态为：DMIT 运行提交
+`e2c80213a` 的最终镜像，六类 Claude OAuth 入口均为 `migrated_strict`，`retained_legacy` 为空，旧 OAuth
+链已从 active 源码和镜像删除并签发 RemovalReceipt；保留旧链的 `f388cd7d8` 镜像是已完成 46／46
+矩阵的操作回退点。恢复 active 后同一矩阵再次 46／46 通过，DeploymentFact 为 `restored_active`，Codex
+路由保持 `rerouted`。Fable 请求返回画像声明的 `claude-opus-5` 时不建立会话锁存；只有实际返回
+`claude-opus-4-8` 的 server fallback 才按批准状态机锁存。Vircs 本次未连接、未修改。历史生产事实继续
+由原 [FW-H 生产验收包](egress/maintenance/claude-fw-h-production-acceptance-package.json)冻结，当前权威状态见
+[FW-H 最终聚合验收包](egress/maintenance/claude-fw-h-final-acceptance-package.json)。
 
 生产事实以镜像 digest、selector、activation fact 和不可覆盖收据为准；缺失或不一致时统一标记
 `production_unverified`。

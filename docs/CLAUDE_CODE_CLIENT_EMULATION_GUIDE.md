@@ -14,12 +14,13 @@
 > 人类可读权威入口；机器证据和 JSON 台账不得形成第二套规范
 > **证据边界**：本文没有未压缩 TS 源码可用，静态规则均从官方生产 bundle 逆向建立；材料、证据、
 > 规则与结论全部独立取自 Claude Code 自身，不继承 Codex 的任何事实结论
-> **运行时状态**：历史 Sonnet-only Candidate `651ccd518` 与三模型 Candidate `2f224831f` 均保留为
-> 不可变验收事实。FW-H 已把正式提交 `e3d698a31`、镜像 `sha256:9b53120a…` 和三模型 Release 切入
-> Vircs，完成真实旧镜像回滚、active 恢复及稳定观察；DeploymentFact 为 `restored_active`。Fable
-> Messages 按批准机制执行 `claude-fable-5 → claude-opus-4-8` server fallback。`chat-completions-oauth`
-> 与 `responses-oauth` 继续 `retained_legacy`，因此旧链保留且未签发 RemovalReceipt
-> **末次更新**：2026-08-21
+> **运行时状态**：历史 Candidate 和 Vircs 生产验收包均作为不可变事实保留。当前最终生产主机是
+> DMIT，运行提交 `e2c80213a`、镜像 `sha256:356384ce…` 和三模型 active Release；六类 Claude OAuth
+> 入口均为 `migrated_strict`，旧 OAuth 链已从 active 删除并签发 RemovalReceipt。保留旧链的提交
+> `f388cd7d8`／镜像 `sha256:3bde5556…` 是有效操作回退点；rollback 与 active 完整矩阵均为 46／46，
+> DeploymentFact 为 `restored_active`。Fable 的画像内 `claude-opus-5` 声明回退不锁存；仅实际
+> `claude-opus-4-8` server fallback 触发锁存。Vircs 只保留官方 Claude Code 取证角色，本次未连接、未修改
+> **末次更新**：2026-08-22
 
 ---
 
@@ -220,8 +221,9 @@ FW-F v1 把 32 个候选机械拆成 97 条规则提案的做法无效，现已�
   agent-sdk、client-app、workload 的实测顺序追加；
 - Stainless 基础向量为 `x64/js/Linux/0.94.0/retry 0/node/v26.3.0/timeout 600`；
 - Sonnet 基础 Body 顶层顺序为 `model/messages/system/tools/metadata/max_tokens/thinking/`
-  `context_management/output_config/stream`；Opus／Fable 仅在实测场景插入 `fallbacks`，Fable server
-  fallback 还按实测条件插入成对锁存 Header；所有模型的具体顺序均从能力目录场景生成；
+  `context_management/output_config/stream`；Opus／Fable 仅在实测场景插入 `fallbacks`。Fable 请求返回
+  画像声明的 `claude-opus-5` 时不锁存；只有实际 `claude-opus-4-8` server fallback 才按实测条件在后续
+  请求插入成对锁存 Header；所有模型的具体顺序均从能力目录场景生成；
 - request-id、Session-Id、agent lineage、resume／fork、retry、non-stream 与模型 fallback 均按实测
   生命周期生成，不能用入站自报客户端身份补造。
 
@@ -384,6 +386,7 @@ messages egress。
 - **源码**：未取得可审计原源码；官方 2.1.226 二进制与 bundle 只作定位，规则权威来自映射的 R/M 断言。
 - **实测**：基础账本 2 条 R/M 原子断言通过；隔离场景取得三次 Sonnet 与第四次 Haiku 完整转换；Fable 官方请求另取得 Opus 4.8 响应后的成对锁存 Header 和后续 Body 形态。
 - **实现**：FallbackPolicy 与 ModelCapabilityCatalog 共同选择目标 BodyShape；Fable 锁存由会话状态机按实际响应模型提交，第三方入站无权直接声明 fallback Header 或 fallbacks；不得只替换 model 字符串。
+- **响应闭集**：`claude-fable-5` 请求返回画像中声明的 `claude-opus-5` 属于同次请求的允许响应，不建立 server fallback 会话锁存；只有实际响应模型为 `claude-opus-4-8` 才进入上述锁存状态。
 - **状态**：verified；FW-G 独立复测、候选对拍与隔离验收通过。
 
 ### SPEC-EP-001 messages 推理端点坐标
@@ -909,18 +912,18 @@ advisor、web_search、count_tokens 与隔离 OAuth refresh 已纳入；合法�
 
 ## 3.4 当前实现与 FW-A～FW-H 迁移
 
-FW-G 的历史 Sonnet Candidate 与当前三模型后继均已完成各自范围的隔离验收。FW-H 已迁移生产
-selector；遗留链是否退休仍由 Inventory 闭集和 RemovalReceipt 独立控制：
+FW-G 的历史 Sonnet Candidate 与当前三模型后继均已完成各自范围的隔离验收。FW-H 已完成生产
+selector 切换、入口闭集迁移和旧 OAuth 链退休：
 
 | 层 | 当前事实 |
 |---|---|
 | 画像与发布图 | 2.1.226 Profile、Wire、Snapshot、ReleaseArtifact／Bundle 均已内容寻址；2.1.220 只保留同一 Schema／Compiler 下的 baseline fixture |
 | 统一执行链 | Claude 已有独立 PersonaPlanner、IdentityFacts、Compiler、Executor authority、Token issuer 与 invocation 状态；Codex facade 和 final wire 保持零差异 |
-| strict 入口 | 官方 Messages、第三方 Anthropic Messages、官方 count_tokens、第三方标准 count_tokens 四个逻辑入口分开登记，统一使用 `anthropic-messages` 协议类 |
+| strict 入口 | 官方／第三方 Messages 与官方／第三方 count_tokens 按受信请求身份分成四个逻辑入口；两对入口各自共享物理路由但不共享身份分类。Chat Completions 的 bare／v1 两个别名和 Responses 的 bare／v1 HTTP、subpath、WS 六个别名全部归入对应 strict 入口；不支持形态在使用 OAuth 凭据前 fail-close |
 | strict／managed 出站 | 八类 `persona_strict` 进入 Compiler／Executor／Guard；`non_persona_managed` 进入独立策略，未知 OAuth 出站保持 `denied` |
 | 语义与兼容 | Persona system／identity 由批准事实派生；lossless 请求进入 strict PAIR，有损 compatibility 与 strict 分母隔离 |
 | 候选验收 | 三模型后继 `2f224831f` 已独立完成镜像冻结、三模型 API、真实 Claude Desktop Fable、边界门禁和回滚／恢复；AcceptanceFact 为 `accepted` |
-| 生产边界 | Vircs 已激活正式镜像 `sha256:9b53120a…`，DeploymentFact 为 `restored_active`；两条入口继续 `retained_legacy`，旧 finalizer／旁路不得删除 |
+| 生产边界 | DMIT 已激活最终提交 `e2c80213a`／镜像 `sha256:356384ce…`，六类 OAuth 入口均为 `migrated_strict`；旧 OAuth finalizer／旁路已从 active 删除并签发 RemovalReceipt。`f388cd7d8`／`sha256:3bde5556…` 保留旧链，仅作为已演练的操作回退点；Vircs 本次未连接、未修改 |
 
 | 阶段 | 变更 | 完成判据 |
 |---|---|---|
@@ -931,14 +934,16 @@ selector；遗留链是否退休仍由 Inventory 闭集和 RemovalReceipt 独立
 | `FW-E` | 第一步冻结最新 stable；从目标 bundle 原生发现发送点，加载已冻结的 2.1.88／HitCC 候选台账和 2.1.220／前一批准 stable，与目标发现组成并集，分开建立 DiscoveryInventory、SemanticRuleCandidate 和 AtomicAssertionLedger，完成差分、P／R／J／M 和 Evidence 封存，再建立两个 Inventory 与 observation-only Sink | 目标版本、完整 sink／discovery inventory、语义候选、只含 SPEC 的原子断言台账和 EvidencePackage 可复算；没有截断或未分类项；停在 `evidence_recorded`，尚不定义目标 Schema／Snapshot 或签发 Evidence 批准 |
 | `FW-F` | 先把 FW-E 全部发现和语义候选逐项收敛到可审计终态并清零未决项，再由最新 stable 证据生成 Schema、目标 Snapshot、Persona 和不可部署样例；随后用同一 Schema／Compiler 表达 2.1.220 rollback fixture，批准 Profile、范围和多 Persona 合同 | 全量 DiscoveryDispositionLedger 无缺失、重复或未决项；target-first 样例与跨 Persona 负例通过；ApprovalFact 完整；Codex 生产收据对应最终合同；selector 未改变 |
 | `FW-G` | 实现本次已批准的 40 条最新 stable RequiredRules，完成受管语义层、辅助出站三态、全部 strict 入口原子断言、独立复测、DMIT candidate 和 rollback 验收 | 40 条规则、106 条画像原子断言和 4 条客户端本地场景断言通过；三模型正例、范围外拒绝和回退闭环；签发 AcceptanceFact |
-| `FW-H` | 生产切换、真实回滚、active 恢复与稳定观察；满足独立退休门禁后才删除遗留链 | DeploymentFact 达到 `restored_active`；无 `retained_legacy` 才能另行签发 RemovalReceipt |
+| `FW-H` | 生产切换、真实回滚、active 恢复与稳定观察；满足独立退休门禁后删除遗留链 | 已完成：DeploymentFact 为 `restored_active`，`retained_legacy=[]`，RemovalReceipt 已签发 |
 
 历史 Sonnet FW-G 完成事实以 [FW-G 隔离验收收据](egress/maintenance/claude-fw-g-acceptance.json)为准；
 [三模型验收尝试收据](egress/maintenance/claude-fw-g-three-model-acceptance-attempt.json)只保留首次账号权益
 阻断的历史事实，当前结论以
 [三模型 FW-G 验收收据](egress/maintenance/claude-fw-g-three-model-acceptance.json)为准。FW-G 已完成，
 FW-H 生产迁移事实见
-[FW-H 生产验收包](egress/maintenance/claude-fw-h-production-acceptance-package.json)；遗留退休仍须独立门禁。
+[FW-H 历史 Vircs 生产验收包](egress/maintenance/claude-fw-h-production-acceptance-package.json)保持不可变；
+当前生产、回滚和退休事实见
+[FW-H 最终聚合验收包](egress/maintenance/claude-fw-h-final-acceptance-package.json)。
 
 最新 stable 是目标 Schema、Snapshot 和实现的唯一设计权威。FW-E 只冻结目标规则证据，不预先用
 2.1.220 建画像；FW-F 完成发现项语义清零后，必须先生成目标 stable 画像和样例，随后才把 2.1.220 表达为差分基线、
@@ -999,7 +1004,9 @@ Messages 与 count_tokens、真实 Claude Desktop Fable 主请求与标题请求
 为 `accepted`，随后已由 FW-H 晋升并激活，详见
 [三模型 FW-G 验收收据](egress/maintenance/claude-fw-g-three-model-acceptance.json)。历史
 [验收尝试收据](egress/maintenance/claude-fw-g-three-model-acceptance-attempt.json)不覆盖且不再代表当前状态；
-当前生产事实见 [FW-H 生产验收包](egress/maintenance/claude-fw-h-production-acceptance-package.json)。
+历史 Vircs 生产事实见 [FW-H 生产验收包](egress/maintenance/claude-fw-h-production-acceptance-package.json)；
+当前 DMIT 最终镜像、有效操作回滚、六入口 strict、RemovalReceipt 和 Vircs 未改事实见
+[FW-H 最终聚合验收包](egress/maintenance/claude-fw-h-final-acceptance-package.json)。
 
 ---
 
@@ -1047,16 +1054,17 @@ Campaign 只绑定不可变身份。下列事实分别追加并以摘要引用�
 
 当前权威状态见 §2.1、§3.6 及其收据：2.1.226 的发现与候选已清零；FW-G 已通过独立官方复测、
 Candidate 对拍和 DMIT 隔离验收，将 40 条 RequiredRules 升级为 `verified`，并签发
-`production_replacement` ApprovalFact、ValidationCandidate 与 AcceptanceFact。FW-H 已完成正式镜像
-切换、旧镜像回滚演练、active 恢复与稳定观察，DeploymentFact 为 `restored_active`；范围外能力继续
-fail-close、受管或保持遗留隔离。
+`production_replacement` ApprovalFact、ValidationCandidate 与 AcceptanceFact。FW-H 已在 DMIT 完成最终
+镜像切换、保留旧链镜像的完整回滚矩阵、active 恢复矩阵与稳定观察，DeploymentFact 为
+`restored_active`；六类 OAuth 入口均为 strict，`retained_legacy` 为空，旧 OAuth 链已退休并签发
+RemovalReceipt。范围外能力继续 fail-close 或进入明确的 `non_persona_managed／rerouted` 边界。
 
 ## 4.2 官方取证、分类与批准
 
 ### 4.2.1 P0 与官方证据
 
-P0 只读确认目标版本未混入基线、官方包可复算、Vircs 生产健康且不被采集改动、证据目录和端口隔离、
-DMIT 可承载 candidate、ARM64 构建职责明确；身份或恢复条件不完整时停止。FW-E 首先查询并冻结官方
+P0 只读确认目标版本未混入基线、官方包可复算、Vircs 官方取证环境和 DMIT 当前生产均不被采集改动、
+证据目录和端口隔离、独立 candidate 环境可用、构建职责明确；身份或恢复条件不完整时停止。FW-E 首先查询并冻结官方
 `stable`、发行物和环境身份；此前不得定义目标 ProfileSchema、Snapshot 或 candidate，2.1.220 也没有
 目标版本选择权。
 
@@ -1339,10 +1347,11 @@ RemovalReceipt。
 权威源码、正式发布镜像、production tree 与私有证据归档全部闭合，才能按 dry-run 清单清理远端；
 生产数据库、Redis、配置、当前／回滚镜像和唯一证据副本永远不在清理范围。
 
-当前边界：Claude 历史 Sonnet Candidate 与三模型后继均有各自独立的 ValidationCandidate 和
-AcceptanceFact；三模型后继已由 FW-H 晋升。Vircs 当前运行正式镜像 `sha256:9b53120a…`，真实旧镜像
-`sha256:9399e13…` 回滚与 active 恢复均通过，DeploymentFact 为 `restored_active`。两条
-`retained_legacy` 入口阻止遗留退休和 RemovalReceipt，但不否定已完成的生产迁移。
+当前边界：Claude 历史 Sonnet Candidate、三模型后继和历史 Vircs 验收均以追加事实保留。当前生产在
+DMIT：最终镜像 `sha256:356384ce…` 与保留旧链的操作回滚镜像 `sha256:3bde5556…` 分别完成 46／46
+矩阵，active 已恢复且 DeploymentFact 为 `restored_active`。六类 OAuth 入口均为 `migrated_strict`，
+`retained_legacy` 为空；旧 OAuth 链已从 active 删除并签发 RemovalReceipt。Vircs 只保留官方取证角色，
+本次最终退休未连接、未修改。
 2.1.220 Campaign／run／提取物已被 FW-F fixture 内容寻址引用，引用有效期间不得删除。
 
 ---
@@ -1366,10 +1375,10 @@ AcceptanceFact；三模型后继已由 FW-H 晋升。Vircs 当前运行正式镜
 4. 运行完整测试、静态／版本泄漏门禁和 production active／rollback 空 wire 比较；
 5. production replacement 必须重新执行第四部分生产闭环，不复用旧激活收据。
 
-当前 overlay 台账的 86 个文件中 Claude／Anthropic 条目为 0，无法阻止上游静默改动
-`official_egress_anthropic.go`、`official_client_profile_registry.go` 或 `pkg/claude/constants.go`。
-在 §3.4 的发送面闭集进入正式 overlay、且 FW-H 完成生产入口迁移前，每次上游合并必须人工列出这些
-发送面变化；Claude overlay 覆盖应作为 FW-H 前置门禁补齐。
+当前 FW-H source／test transition、生产批准和最终聚合收据已冻结 Claude active 发送面及退休事实。
+若通用 upstream overlay 尚未完整纳入 Claude／Anthropic 路径，每次上游合并仍必须人工列出
+`official_egress_anthropic.go`、`official_client_profile_registry.go`、`pkg/claude/constants.go` 及其消费者
+变化，并由新的 transition 或 Campaign 承接；不得把已完成 FW-H 当作后续合并的永久豁免。
 
 ## 5.2 兼容代码退休
 
@@ -1377,11 +1386,11 @@ AcceptanceFact；三模型后继已由 FW-H 晋升。Vircs 当前运行正式镜
 验证 production active／rollback、fallback、辅助端点和负例 → 删除旧能力并生成 RemovalReceipt。不得删除仍
 服务回滚、非 `claude-code` persona 或 API Key 产品语义的代码。
 
-§3.4 的 FW-G 只建立替代实现和迁移候选，FW-H 才是首个允许 Claude 遗留退休的阶段。
-`internal/pkg/claude` 当前有 17 个非测试文件消费者，必须先建立闭集，只退休 Claude Code 的版本、
-UA、Header 和 beta 面。现有兼容退休台账没有 Claude 条目；在每个消费者被标记为“已退休”或“因
-产品语义保留”，且 `ProductionIngressInventory` 不再含 `retained_legacy` 前，不得宣称清理完成或
-签发迁移完成的 RemovalReceipt。
+§3.4 的 FW-G 只建立替代实现和迁移候选，FW-H 才允许 Claude 遗留退休。本轮已按消费者闭集完成
+处置：Claude OAuth 六类入口全部 strict，旧 OAuth 构造器、finalizer 和旁路从 active 删除；Setup Token
+进入 `non_persona_managed`，API Key 与 Service Account 产品语义保留，Codex direct 保持 `rerouted`。
+最终 `ProductionIngressInventory` 的 `retained_legacy` 为空，RemovalReceipt 已签发；保留旧链的回滚
+镜像只承担操作回退，不重新成为 active 源码或生产画像权威。
 
 ---
 
@@ -1400,9 +1409,9 @@ ImmortalWrt 192.168.9.1
     └── Surge：决定该 Mac 的代理与实际出口
 
 Mac／控制端
-├── SSH／运维 → Vircs x86_64（生产与唯一官方 Claude Code 采集机）
-├── SSH／测试 → DMIT x86_64（候选验证机）
-└── SSH／构建 → ARM64（具体构建职责待核实）
+├── SSH／生产运维 → DMIT x86_64（当前 Sub2API 最终生产机）
+├── SSH／官方取证 → Vircs x86_64（唯一官方 Claude Code 主采集机）
+└── 产物封装 → ARM64（接收 linux/amd64 二进制并封装 amd64 Docker 镜像）
 ```
 
 HomeProxy 的绕过只说明路由器不代理该 Mac；Mac 是否直连仍由 Surge、系统代理、增强模式、CA、DNS
@@ -1417,17 +1426,17 @@ ALPN、连接复用和 HTTP 协议不得作为官方客户端直连证据，只�
 
 | 节点 | 固定角色 | 可以执行 | 禁止或不能证明 |
 |---|---|---|---|
-| Mac `192.168.9.99` | 控制端、第三方入口和桌面测试端 | SSH 编排、协议入口验证、必要的 UI／TTY 驱动 | 默认直连 TLS 权威证据；混用 Desktop 与 Code persona |
-| Vircs x86_64 | Sub2API 生产机、唯一官方 Claude Code 机、官方 P／R／J／M 主证据源 | 隔离取证、只读生产核对、经批准的正式切换与回滚 | 候选换镜像、数据库试验、破坏性故障注入、为抓包中断生产 |
-| DMIT x86_64 | 独立 Sub2API 候选验证机，1 核／1.9G／20G | 重启、换候选镜像、修改测试库、故障注入、成对入口验收 | 真实用户流量；官方 Claude Code 权威证据源 |
-| ARM64 | 候选构建或跨架构验证的待核实节点 | 核实构建链后执行批准任务 | 未核实前承担 x86_64 权威构建、官方取证或 DMIT 验收 |
+| Mac `192.168.9.99` | 控制端、源码与前端构建端、第三方入口和桌面测试端 | SSH 编排、原生构建前端、交叉编译 linux/amd64 Go 后端、协议入口验证和必要的 UI／TTY 驱动 | 默认直连 TLS 权威证据；混用 Desktop 与 Code persona |
+| Vircs x86_64 | 唯一官方 Claude Code 机、官方 P／R／J／M 主证据源 | 隔离取证和取证前后环境核对 | 改动当前 DMIT 生产；把 Vircs 上任何 Sub2API 服务当作当前生产权威；为抓包中断既有服务 |
+| DMIT x86_64 | 当前 Sub2API 最终生产机，1 核／1.9G／20G | 经批准的镜像切换、canary、完整回滚／恢复、稳定观察和只读运行核对 | 现场编译、未隔离候选试验、数据库或依赖重建；官方 Claude Code 权威证据源 |
+| ARM64 | linux/amd64 Docker 镜像封装端 | 接收 Mac 已编译的 linux/amd64 后端和前端产物，封装并核对 amd64 镜像 | 重新编译源码、生成官方规则证据、代替 DMIT 运行验收 |
 
-“好像曾用于编译并把镜像传到 DMIT”不是正式角色。首次受管 Campaign 前须以 P0 只读检查确认
-构建工具、buildx／交叉编译方式、目标 manifest 架构、产物传输路径和摘要链。
+当前已验证的构建链是“Mac 原生前端 → Mac 交叉编译 linux/amd64 Go 后端 → ARM64 仅封装 amd64
+Docker 镜像 → DMIT 仅加载和运行”。每次构建仍须冻结工具、参数、产物传输路径和摘要链。
 
 ## 6.3 Vircs 官方采集纪律
 
-Vircs 的硬约束是任何取证不得改变或中断 Sub2API 生产服务：
+Vircs 的硬约束是任何取证不得改变或中断该机既有 Sub2API 服务；该服务不再是当前生产权威：
 
 1. 官方二进制按版本和 SHA 独立保存，不原位覆盖唯一封存版本；
 2. 使用独立用户目录、证据目录、端口和可证明的网络隔离；
@@ -1438,31 +1447,33 @@ Vircs 的硬约束是任何取证不得改变或中断 Sub2API 生产服务：
 
 必须修改宿主全局状态或重启生产服务的场景不得在 Vircs 执行，应改造为隔离方案或登记为阻断。
 Vircs 上官方 Claude Code 生成的材料才可作为当前 Linux x86_64 官方 wire 主证据；DMIT 上 Sub2API
-生成的是 candidate 证据；Darwin arm64 发行物只作静态交叉复核；故障注入样本必须与自然失败分开。
+生成的是实现与生产验收证据，不能反向证明官方规则；Darwin arm64 发行物只作静态交叉复核；故障注入
+样本必须与自然失败分开。
 
-## 6.4 DMIT 候选验证纪律
+## 6.4 DMIT 生产纪律
 
-DMIT 是候选采集、故障注入和破坏性验证的默认机器。每个 candidate 必须绑定固定的 linux/amd64
-OCI digest、image ID、源码树摘要、画像摘要、构建 ID 和 attempt nonce。
+DMIT 是当前生产和最终镜像主机。每次切换必须绑定固定的 linux/amd64 OCI digest、image ID、源码树
+摘要、画像摘要、构建 ID、DeploymentFact 和可运行 rollback；只替换应用容器，不重建依赖服务。
 
-受 1 核／1.9G／20G 限制，不在 DMIT 执行 Go／Node 全量编译；开跑前检查磁盘下限，避免 pcap、
-R 字节和镜像层填满系统盘。证据完成 inventory、秘密扫描和摘要后同步到受控私有归档；同步和独立
-复算完成前不得删除唯一副本。数据库修改只作用于测试实例，不导入生产真实用户数据。
+受 1 核／1.9G／20G 限制，不在 DMIT 执行 Go／Node 编译；开跑前检查磁盘下限，避免 pcap、R 字节和
+镜像层填满系统盘。候选、故障注入和破坏性验证必须迁到与生产流量、数据库、网络和账号隔离的环境；
+不得因为 DMIT 曾承担候选验证就继续把它当作可破坏测试机。证据完成 inventory、秘密扫描和摘要后
+同步到受控私有归档；同步和独立复算完成前不得删除唯一副本。
 
-环境允许破坏不等于可以省略 before／after、秘密扫描、恢复记录或固定 digest。
+另行隔离环境允许破坏不等于可以省略 before／after、秘密扫描、恢复记录或固定 digest。
 
 ## 6.5 构建与架构边界
 
-正式构建机尚未固定。无论使用 Mac、ARM64 或其他节点，都必须满足：
+当前正式构建职责为 Mac 编译、ARM64 封装；无论后续是否更换节点，都必须满足：
 
 1. 构建源、依赖锁、工具版本和参数可复算；
-2. 目标产物明确为 DMIT／Vircs 所需的 `linux/amd64`；
+2. 目标产物明确为 DMIT 所需的 `linux/amd64`；
 3. 多架构 manifest 的平台 digest 可分别核对；
 4. candidate 与 production 镜像身份分开；
 5. 构建机只证明制品同源性，不产生官方客户端规则事实。
 
-ARM64 原生构建成功不能证明产生了可供 x86_64 服务器运行的镜像，必须核对 registry manifest、
-运行容器架构和实际 image ID。
+ARM64 只封装 Mac 已交叉编译的 amd64 后端，不在该机重新编译；必须核对镜像 platform、DMIT 运行
+容器架构和实际 image ID，不能用 ARM64 宿主架构推断镜像架构。
 
 ## 6.6 Campaign 环境冻结
 

@@ -16,6 +16,7 @@ import (
 const (
 	claudeFWHFableDeclaredFallbackSourceSHA256 = "e33912bec8e6ff619790fc187312f0d52817e07d6611a93a2d8a7dbfc46c6bc2"
 	claudeFWHFableDeclaredFallbackTestSHA256   = "3092c2d422aea527ef5a2fbb4febbb57753fe5d4c0619a7232d819f7fefecf38"
+	claudeFWHFinalAcceptanceSHA256             = "0965d67f4e46f365ac41a3d92dc11012ff9d2c4a47f8f179d18bbe0407888336"
 )
 
 var claudeFWHImmutableTransitionLedgerFiles = map[string]string{
@@ -46,6 +47,7 @@ var claudeFWHImmutableTransitionLedgerFiles = map[string]string{
 	"docs/egress/maintenance/claude-fw-g-three-model-acceptance.json":                    "16dc60bc46eede747cb0535e53367c134a28466f12399f06a485693e142b15a9",
 	"docs/egress/maintenance/claude-fw-h-bare-chat-route-source-transition.json":         "bc4f57df92768a71b5210737121861d9c2dd8234d56e56c84e1a256bd31d60ec",
 	"docs/egress/maintenance/claude-fw-h-bare-chat-route-test-transition.json":           "d3b0312e4f1f2032b36e136f04d60653698f2e1de071c68f4f6c94b4a19fae18",
+	"docs/egress/maintenance/claude-fw-h-final-acceptance-package.json":                  claudeFWHFinalAcceptanceSHA256,
 	"docs/egress/maintenance/claude-fw-h-fable-declared-fallback-source-transition.json": "e33912bec8e6ff619790fc187312f0d52817e07d6611a93a2d8a7dbfc46c6bc2",
 	"docs/egress/maintenance/claude-fw-h-fable-declared-fallback-test-transition.json":   "3092c2d422aea527ef5a2fbb4febbb57753fe5d4c0619a7232d819f7fefecf38",
 	"docs/egress/maintenance/claude-fw-h-legacy-retirement-source-transition.json":       "13918c77227fcfff5f44daa77d0382630e37998fd926bab2334cb9392bb7eabd",
@@ -387,5 +389,504 @@ func TestClaudeFWHFableDeclaredFallbackTransitionsAreFrozen(t *testing.T) {
 				t.Fatalf("Claude FW-H Fable fallback 摘要漂移：%s", transition.Path)
 			}
 		}
+	}
+}
+
+type claudeFWHFinalAcceptancePackage struct {
+	SchemaVersion string `json:"schema_version"`
+	Phase         string `json:"phase"`
+	IssuedAtUTC   string `json:"issued_at_utc"`
+	AcceptanceID  string `json:"acceptance_id"`
+	Target        struct {
+		Product                string   `json:"product"`
+		Version                string   `json:"version"`
+		Platform               string   `json:"platform"`
+		Authentication         string   `json:"authentication"`
+		Privacy                string   `json:"privacy"`
+		Models                 []string `json:"models"`
+		RequiredRules          int      `json:"required_rules"`
+		ProfileSHA256          string   `json:"profile_sha256"`
+		WireSHA256             string   `json:"wire_sha256"`
+		ReleaseSHA256          string   `json:"release_sha256"`
+		BundleSHA256           string   `json:"bundle_sha256"`
+		ActiveApprovalSHA256   string   `json:"active_approval_sha256"`
+		RollbackApprovalSHA256 string   `json:"rollback_approval_sha256"`
+	} `json:"target"`
+	Predecessors   []claudeFWHFableDeclaredFallbackRef `json:"predecessors"`
+	DeploymentFact struct {
+		Stage          string `json:"stage"`
+		ProductionHost string `json:"production_host"`
+		Active         struct {
+			Commit              string `json:"commit"`
+			Tree                string `json:"tree"`
+			Version             string `json:"version"`
+			BuildID             string `json:"build_id"`
+			Image               string `json:"image"`
+			ImageID             string `json:"image_id"`
+			BinarySHA256        string `json:"binary_sha256"`
+			SourceArchiveSHA256 string `json:"source_archive_sha256"`
+			ContainerID         string `json:"container_id"`
+			StartedAtUTC        string `json:"started_at_utc"`
+			ActivationEventID   string `json:"activation_event_id"`
+			Health              string `json:"health"`
+			RestartCount        int    `json:"restart_count"`
+		} `json:"active"`
+		Rollback struct {
+			Branch                    string `json:"branch"`
+			Commit                    string `json:"commit"`
+			Tree                      string `json:"tree"`
+			Version                   string `json:"version"`
+			BuildID                   string `json:"build_id"`
+			Image                     string `json:"image"`
+			ImageID                   string `json:"image_id"`
+			BinarySHA256              string `json:"binary_sha256"`
+			SourceArchiveSHA256       string `json:"source_archive_sha256"`
+			ActivationEventID         string `json:"activation_event_id"`
+			ContainsRetiredOAuthChain bool   `json:"contains_retired_oauth_chain"`
+			Role                      string `json:"role"`
+		} `json:"rollback"`
+		StabilityObservation struct {
+			ObservedAtUTC         string `json:"observed_at_utc"`
+			StableSeconds         int    `json:"stable_seconds"`
+			FatalOrPanicCount     int    `json:"fatal_or_panic_count"`
+			GuardFailureCount     int    `json:"guard_failure_count"`
+			ClaudeErrorCount      int    `json:"claude_error_count"`
+			DependenciesUnchanged bool   `json:"dependencies_unchanged"`
+		} `json:"stability_observation"`
+		Result string `json:"result"`
+	} `json:"deployment_fact"`
+	ProductionIngressInventory struct {
+		OAuthEntries []struct {
+			LogicalIngressID       string   `json:"logical_ingress_id"`
+			ProtocolClass          string   `json:"protocol_class"`
+			PhysicalRoutes         []string `json:"physical_routes,omitempty"`
+			PhysicalAliasIDs       []string `json:"physical_alias_ids,omitempty"`
+			RequestIdentityClass   string   `json:"request_identity_class"`
+			UnsupportedShapePolicy string   `json:"unsupported_shape_policy,omitempty"`
+			CurrentDisposition     string   `json:"current_disposition"`
+		} `json:"oauth_entries"`
+		SharedRouteClassification struct {
+			Messages    string `json:"messages"`
+			CountTokens string `json:"count_tokens"`
+		} `json:"shared_route_classification"`
+		RetainedLegacy []string `json:"retained_legacy"`
+		Rerouted       []struct {
+			LogicalIngressID   string   `json:"logical_ingress_id"`
+			PhysicalAliasIDs   []string `json:"physical_alias_ids"`
+			CurrentDisposition string   `json:"current_disposition"`
+		} `json:"rerouted"`
+		UnknownOAuthEgress string `json:"unknown_oauth_egress"`
+	} `json:"production_ingress_inventory"`
+	RemovalReceipt struct {
+		SchemaVersion               string   `json:"schema_version"`
+		ReceiptID                   string   `json:"receipt_id"`
+		IssuedAtUTC                 string   `json:"issued_at_utc"`
+		Status                      string   `json:"status"`
+		RemovedCapability           string   `json:"removed_capability"`
+		ActiveSourceAndImageRemoved bool     `json:"active_source_and_image_removed"`
+		OperationalRollbackRetained bool     `json:"operational_rollback_copy_retained"`
+		RetainedLegacy              []string `json:"retained_legacy"`
+		ConsumerClosure             string   `json:"consumer_closure"`
+		StrictReplacement           string   `json:"strict_replacement"`
+		PreservedProductSemantics   []string `json:"preserved_product_semantics"`
+		ApprovalSHA256              string   `json:"approval_sha256"`
+		Result                      string   `json:"result"`
+	} `json:"removal_receipt"`
+	AcceptancePackage struct {
+		Envelopes struct {
+			ActiveSupport             []string `json:"active_support"`
+			RollbackOperational       []string `json:"rollback_operational"`
+			DeploymentTraffic         []string `json:"deployment_traffic"`
+			DeploymentSubsetInvariant bool     `json:"deployment_subset_invariant"`
+		} `json:"envelopes"`
+		Matrix struct {
+			ScriptSHA256              string `json:"script_sha256"`
+			TotalCases                int    `json:"total_cases"`
+			PositiveAndIsolationCases int    `json:"positive_and_isolation_cases"`
+			FailCloseCases            int    `json:"fail_close_cases"`
+			Coverage                  struct {
+				Models                    []string `json:"models"`
+				APIClasses                []string `json:"api_classes"`
+				StreamModes               []bool   `json:"stream_modes"`
+				IngressClasses            []string `json:"ingress_classes"`
+				ThinkingDisplaySummarized bool     `json:"thinking_display_summarized"`
+				CodexRouteIsolation       bool     `json:"codex_route_isolation"`
+			} `json:"coverage"`
+			FirstRollbackAttempt struct {
+				StartedAtUTC                      string `json:"started_at_utc"`
+				CompletedCases                    int    `json:"completed_cases"`
+				MatrixRC                          int    `json:"matrix_rc"`
+				FailureResponsePreserved          bool   `json:"failure_response_preserved"`
+				RootCause                         string `json:"root_cause"`
+				ImageChangedBeforeRetest          bool   `json:"image_changed_before_retest"`
+				OriginalAndAlternatePromptRetests string `json:"original_and_alternate_prompt_retests"`
+				AcceptanceUse                     string `json:"acceptance_use"`
+			} `json:"first_rollback_attempt"`
+			RollbackFull struct {
+				StartedAtUTC  string `json:"started_at_utc"`
+				FinishedAtUTC string `json:"finished_at_utc"`
+				Passed        int    `json:"passed"`
+				Failed        int    `json:"failed"`
+				MatrixRC      int    `json:"matrix_rc"`
+				Result        string `json:"result"`
+			} `json:"rollback_full"`
+			RestoredActiveFull struct {
+				StartedAtUTC  string `json:"started_at_utc"`
+				FinishedAtUTC string `json:"finished_at_utc"`
+				Passed        int    `json:"passed"`
+				Failed        int    `json:"failed"`
+				Result        string `json:"result"`
+			} `json:"restored_active_full"`
+		} `json:"matrix"`
+		FableFallback struct {
+			RequestModel                               string `json:"request_model"`
+			DeclaredFallbackModel                      string `json:"declared_fallback_model"`
+			ObservedResponseModel                      string `json:"observed_response_model"`
+			DeclaredFallbackSessionLatch               bool   `json:"declared_fallback_session_latch"`
+			ServerFallbackModel                        string `json:"server_fallback_model"`
+			ServerFallbackSessionLatchOnActualResponse bool   `json:"server_fallback_session_latch_on_actual_response"`
+		} `json:"fable_fallback"`
+		Result string `json:"result"`
+	} `json:"acceptance_package"`
+	Safety struct {
+		ProductionHost                  string `json:"production_host"`
+		VircsScope                      string `json:"vircs_scope"`
+		VircsAccessed                   bool   `json:"vircs_accessed"`
+		VircsChanged                    bool   `json:"vircs_changed"`
+		ComposeDownUsed                 bool   `json:"compose_down_used"`
+		UnscopedPruneUsed               bool   `json:"unscoped_prune_used"`
+		DatabaseOrCacheRecreated        bool   `json:"database_or_cache_recreated"`
+		DependencyContainersChanged     bool   `json:"dependency_containers_changed"`
+		ActiveAndRollbackImagesRetained bool   `json:"active_and_rollback_images_retained"`
+		SecretScan                      struct {
+			MatchedPatterns int    `json:"matched_patterns"`
+			Result          string `json:"result"`
+		} `json:"secret_scan"`
+	} `json:"safety"`
+	Transitions     []changeset4SourceTransitionEntry `json:"transitions"`
+	ProductionState string                            `json:"production_state"`
+	RetirementState string                            `json:"retirement_state"`
+	Result          string                            `json:"result"`
+}
+
+func readClaudeFWHFinalAcceptancePackage() (claudeFWHFinalAcceptancePackage, []byte, error) {
+	var receipt claudeFWHFinalAcceptancePackage
+	raw, err := os.ReadFile("../../../docs/egress/maintenance/claude-fw-h-final-acceptance-package.json")
+	if err != nil {
+		return receipt, nil, err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&receipt); err != nil {
+		return receipt, nil, err
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return receipt, nil, errors.New("Claude FW-H 最终聚合验收包尾部存在额外 JSON")
+	}
+	if claudeFWHSourceDigest(raw) != claudeFWHFinalAcceptanceSHA256 {
+		return receipt, nil, errors.New("Claude FW-H 最终聚合验收包摘要漂移")
+	}
+	return receipt, raw, nil
+}
+
+func TestClaudeFWHFinalAcceptancePackageIsFrozen(t *testing.T) {
+	receipt, raw, err := readClaudeFWHFinalAcceptancePackage()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.SchemaVersion != "official-egress-claude-fw-h-final-acceptance-package/v1" ||
+		receipt.Phase != "FW-H" || receipt.IssuedAtUTC != "2026-08-22T04:56:09Z" ||
+		receipt.AcceptanceID != "claude-code-2.1.226-fw-h-final-e2c80213a-dmit" ||
+		receipt.ProductionState != "restored_active" ||
+		receipt.RetirementState != "completed_removal_receipt_issued" ||
+		receipt.Result != "accepted" {
+		t.Fatal("Claude FW-H 最终聚合验收包顶层事实非法")
+	}
+	validateClaudeFWHFinalTargetAndPredecessors(t, receipt)
+	validateClaudeFWHFinalDeployment(t, receipt)
+	validateClaudeFWHFinalIngressAndRemoval(t, receipt)
+	validateClaudeFWHFinalAcceptanceMatrix(t, receipt)
+	validateClaudeFWHFinalSafetyAndTransitions(t, receipt)
+	for _, marker := range []string{
+		"sk-", "access_token", "refresh_token", "authorization: bearer", "bearer ",
+	} {
+		if strings.Contains(strings.ToLower(string(raw)), marker) {
+			t.Fatalf("Claude FW-H 最终聚合验收包包含秘密模式：%s", marker)
+		}
+	}
+}
+
+func validateClaudeFWHFinalTargetAndPredecessors(
+	t *testing.T,
+	receipt claudeFWHFinalAcceptancePackage,
+) {
+	t.Helper()
+	target := receipt.Target
+	if target.Product != "claude-code" || target.Version != ClaudeFWGVersion ||
+		target.Platform != "linux/amd64" || target.Authentication != "claude.ai-oauth" ||
+		target.Privacy != "essential-traffic-no-telemetry" || target.RequiredRules != 40 ||
+		!slices.Equal(target.Models, []string{"claude-sonnet-5", "claude-opus-5", "claude-fable-5"}) ||
+		target.ProfileSHA256 != ClaudeFWGProfileDigest ||
+		target.WireSHA256 != claudeFWGWireDigest ||
+		target.ReleaseSHA256 != ClaudeFWGReleaseDigest ||
+		target.BundleSHA256 != ClaudeFWGBundleDigest ||
+		target.ActiveApprovalSHA256 != ClaudeFWHProductionApprovalDigest ||
+		target.RollbackApprovalSHA256 != ClaudeFWHInitialProductionApprovalDigest {
+		t.Fatal("Claude FW-H 最终目标身份非法")
+	}
+	want := map[string]string{
+		"docs/egress/maintenance/claude-fw-h-production-acceptance-package.json":                                                 claudeFWHProductionAcceptanceSHA256,
+		"docs/egress/maintenance/claude-fw-h-legacy-retirement-source-transition.json":                                           claudeFWHLegacyRetirementSourceSHA256,
+		"docs/egress/maintenance/claude-fw-h-legacy-retirement-test-transition.json":                                             claudeFWHLegacyRetirementTestSHA256,
+		"docs/egress/maintenance/claude-fw-h-fable-declared-fallback-source-transition.json":                                     claudeFWHFableDeclaredFallbackSourceSHA256,
+		"docs/egress/maintenance/claude-fw-h-fable-declared-fallback-test-transition.json":                                       claudeFWHFableDeclaredFallbackTestSHA256,
+		"backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-fw-h-legacy-retirement-approval.json": ClaudeFWHProductionApprovalDigest,
+	}
+	if len(receipt.Predecessors) != len(want) {
+		t.Fatal("Claude FW-H 最终前序数量非法")
+	}
+	for _, predecessor := range receipt.Predecessors {
+		wantDigest, ok := want[predecessor.Path]
+		if !ok || predecessor.SHA256 != wantDigest || strings.TrimSpace(predecessor.Kind) == "" {
+			t.Fatal("Claude FW-H 最终前序引用非法")
+		}
+		predecessorRaw, err := os.ReadFile(filepath.Join(
+			"../../..", filepath.FromSlash(predecessor.Path),
+		))
+		if err != nil || claudeFWHSourceDigest(predecessorRaw) != predecessor.SHA256 {
+			t.Fatal("Claude FW-H 最终前序摘要不一致")
+		}
+		delete(want, predecessor.Path)
+	}
+	if len(want) != 0 {
+		t.Fatal("Claude FW-H 最终前序集合不闭合")
+	}
+}
+
+func validateClaudeFWHFinalDeployment(t *testing.T, receipt claudeFWHFinalAcceptancePackage) {
+	t.Helper()
+	fact := receipt.DeploymentFact
+	active := fact.Active
+	rollback := fact.Rollback
+	stable := fact.StabilityObservation
+	if fact.Stage != "restored_active" || fact.ProductionHost != "DMIT" || fact.Result != "passed" ||
+		active.Commit != "e2c80213ab338cc6f91eee00e28a96bc956f0512" ||
+		active.Tree != "0e7bb9cd9fe66848f3810e4ea7f10f639a638dbc" ||
+		active.Version != "0.1.177-4-fw-h-final-e2c80213a" ||
+		active.BuildID != "sub2api-v0.1.177-4-fw-h-final-e2c80213a" ||
+		active.Image != "sub2apiplus:fw-h-final-e2c80213a" ||
+		active.ImageID != "sha256:356384ce0429a2dc30d484648371d1921644184fc978195ae583c23e968dc3d6" ||
+		active.BinarySHA256 != "05415bb8a59f0b02555a1e2357d87efad3b8a3333912c8220124835c821828a0" ||
+		active.SourceArchiveSHA256 != "0a483d9d209e9a1502aebc015afee3d283e27754dfb66bfc25b0cecae7ebd72e" ||
+		active.ContainerID != "3521e509b068fd9e76ed591226e9519629473533309a4558b08573cabd380536" ||
+		active.StartedAtUTC != "2026-08-22T04:40:12.230157753Z" ||
+		active.ActivationEventID != "5682a83c57d5e947ddaf60169fcb5db1d5f217fc11165489479f1f443341d7b0" ||
+		active.Health != "healthy" || active.RestartCount != 0 {
+		t.Fatal("Claude FW-H 最终 active DeploymentFact 非法")
+	}
+	if rollback.Branch != "codex/fw-h-rollback-legacy-fable" ||
+		rollback.Commit != "f388cd7d86ebff625bf7f886c06161cff94db22d" ||
+		rollback.Tree != "332cb5762a4636bc970d4ff85d6e753e3c5df5b2" ||
+		rollback.Version != "0.1.177-4-fw-h-rollback-f388cd7d8" ||
+		rollback.BuildID != "sub2api-v0.1.177-4-fw-h-rollback-f388cd7d8" ||
+		rollback.Image != "sub2apiplus:fw-h-rollback-f388cd7d8" ||
+		rollback.ImageID != "sha256:3bde555633311a212387bf6a54eb0bf72e3d17ea35efbce444baaa7f5d165993" ||
+		rollback.BinarySHA256 != "5ef83eb9c4c193f25914f52c3eb6340e6a0d22d1cf78e7d0e93660ba6f503e1a" ||
+		rollback.SourceArchiveSHA256 != "b763f783f05e795e7df903bc5d27ed13d58d915b1d59093aea7221cacd892478" ||
+		rollback.ActivationEventID != "f74c842055527a07a6dbb90a0504ef6cadf88746c9556a9bf97ed01c9872ec49" ||
+		!rollback.ContainsRetiredOAuthChain || rollback.Role != "operational_rollback_only" {
+		t.Fatal("Claude FW-H 最终 rollback DeploymentFact 非法")
+	}
+	if stable.ObservedAtUTC != "2026-08-22T04:43:50Z" || stable.StableSeconds != 218 ||
+		stable.FatalOrPanicCount != 0 || stable.GuardFailureCount != 0 ||
+		stable.ClaudeErrorCount != 0 || !stable.DependenciesUnchanged {
+		t.Fatal("Claude FW-H 最终稳定观察事实非法")
+	}
+}
+
+func validateClaudeFWHFinalIngressAndRemoval(
+	t *testing.T,
+	receipt claudeFWHFinalAcceptancePackage,
+) {
+	t.Helper()
+	inventory := receipt.ProductionIngressInventory
+	type wantIngress struct {
+		protocol    string
+		routes      []string
+		aliases     []string
+		identity    string
+		unsupported string
+	}
+	want := map[string]wantIngress{
+		"official-count-tokens-oauth": {
+			protocol: "anthropic-count-tokens", routes: []string{"POST /v1/messages/count_tokens"}, identity: "official",
+		},
+		"official-messages-oauth": {
+			protocol: "anthropic-messages", routes: []string{"POST /v1/messages"}, identity: "official",
+		},
+		"third-party-count-tokens-oauth": {
+			protocol: "anthropic-count-tokens", routes: []string{"POST /v1/messages/count_tokens"}, identity: "third-party",
+		},
+		"third-party-messages-oauth": {
+			protocol: "anthropic-messages", routes: []string{"POST /v1/messages"}, identity: "third-party",
+		},
+		"chat-completions-oauth": {
+			protocol: "openai-chat-completions", identity: "third-party",
+			aliases: []string{"alias-chat-bare", "alias-chat-v1"},
+		},
+		"responses-oauth": {
+			protocol: "openai-responses", identity: "third-party",
+			aliases: []string{
+				"alias-responses-bare-http", "alias-responses-bare-subpath",
+				"alias-responses-bare-ws", "alias-responses-v1-http",
+				"alias-responses-v1-subpath", "alias-responses-v1-ws",
+			},
+			unsupported: "strict_fail_close_before_oauth_credential_use",
+		},
+	}
+	if len(inventory.OAuthEntries) != len(want) {
+		t.Fatal("Claude FW-H 最终 OAuth 入口数量非法")
+	}
+	for _, entry := range inventory.OAuthEntries {
+		expected, ok := want[entry.LogicalIngressID]
+		if !ok || entry.ProtocolClass != expected.protocol ||
+			!slices.Equal(entry.PhysicalRoutes, expected.routes) ||
+			!slices.Equal(entry.PhysicalAliasIDs, expected.aliases) ||
+			entry.RequestIdentityClass != expected.identity ||
+			entry.UnsupportedShapePolicy != expected.unsupported ||
+			entry.CurrentDisposition != "migrated_strict" {
+			t.Fatalf("Claude FW-H 最终 OAuth 入口非法：%s", entry.LogicalIngressID)
+		}
+		delete(want, entry.LogicalIngressID)
+	}
+	if len(want) != 0 || len(inventory.RetainedLegacy) != 0 ||
+		inventory.SharedRouteClassification.Messages != "official 与 third-party 共享物理路由，按受信请求身份分成两个逻辑入口" ||
+		inventory.SharedRouteClassification.CountTokens != "official 与 third-party 共享物理路由，按受信请求身份分成两个逻辑入口" ||
+		inventory.UnknownOAuthEgress != "denied" || len(inventory.Rerouted) != 1 ||
+		inventory.Rerouted[0].LogicalIngressID != "codex-direct-rerouted" ||
+		inventory.Rerouted[0].CurrentDisposition != "rerouted" ||
+		!slices.Equal(inventory.Rerouted[0].PhysicalAliasIDs, []string{
+			"alias-codex-direct-responses-http", "alias-codex-direct-responses-subpath",
+			"alias-codex-direct-responses-ws",
+		}) {
+		t.Fatal("Claude FW-H 最终 Inventory 闭集非法")
+	}
+	removal := receipt.RemovalReceipt
+	if removal.SchemaVersion != "official-egress-claude-oauth-legacy-removal-receipt/v1" ||
+		removal.ReceiptID != "claude-code-2.1.226-fw-h-legacy-removal-e2c80213a" ||
+		removal.IssuedAtUTC != receipt.IssuedAtUTC || removal.Status != "issued" ||
+		removal.RemovedCapability != "claude-oauth-legacy-execution-chain" ||
+		!removal.ActiveSourceAndImageRemoved || !removal.OperationalRollbackRetained ||
+		len(removal.RetainedLegacy) != 0 || removal.ConsumerClosure != "passed" ||
+		removal.StrictReplacement != "six_oauth_ingress_entries" ||
+		!slices.Equal(removal.PreservedProductSemantics, []string{
+			"setup-token-non-persona-managed", "key-based-auth-retained",
+			"service-account-retained", "codex-direct-rerouted",
+		}) || removal.ApprovalSHA256 != ClaudeFWHProductionApprovalDigest ||
+		removal.Result != "passed" {
+		t.Fatal("Claude FW-H RemovalReceipt 非法")
+	}
+}
+
+func validateClaudeFWHFinalAcceptanceMatrix(
+	t *testing.T,
+	receipt claudeFWHFinalAcceptancePackage,
+) {
+	t.Helper()
+	wantIngress := []string{
+		"official-count-tokens-oauth", "official-messages-oauth",
+		"third-party-count-tokens-oauth", "third-party-messages-oauth",
+		"chat-completions-oauth", "responses-oauth",
+	}
+	acceptance := receipt.AcceptancePackage
+	if !slices.Equal(acceptance.Envelopes.ActiveSupport, wantIngress) ||
+		!slices.Equal(acceptance.Envelopes.RollbackOperational, wantIngress) ||
+		!slices.Equal(acceptance.Envelopes.DeploymentTraffic, wantIngress) ||
+		!acceptance.Envelopes.DeploymentSubsetInvariant || acceptance.Result != "accepted" {
+		t.Fatal("Claude FW-H 最终三个 Envelope 非法")
+	}
+	matrix := acceptance.Matrix
+	coverage := matrix.Coverage
+	first := matrix.FirstRollbackAttempt
+	rollback := matrix.RollbackFull
+	active := matrix.RestoredActiveFull
+	if matrix.ScriptSHA256 != "466afe463258f73bfb81a9fb4137aa13157eafca1a4cbba1d94f5cc634948806" ||
+		matrix.TotalCases != 46 || matrix.PositiveAndIsolationCases != 29 ||
+		matrix.FailCloseCases != 17 ||
+		!slices.Equal(coverage.Models, []string{"claude-sonnet-5", "claude-opus-5", "claude-fable-5"}) ||
+		!slices.Equal(coverage.APIClasses, []string{
+			"anthropic-messages", "anthropic-count-tokens",
+			"openai-chat-completions", "openai-responses",
+		}) || !slices.Equal(coverage.StreamModes, []bool{false, true}) ||
+		!slices.Equal(coverage.IngressClasses, []string{"official", "third-party"}) ||
+		!coverage.ThinkingDisplaySummarized || !coverage.CodexRouteIsolation {
+		t.Fatal("Claude FW-H 最终矩阵覆盖事实非法")
+	}
+	if first.StartedAtUTC != "2026-08-22T04:34:34Z" || first.CompletedCases != 20 ||
+		first.MatrixRC != 1 || first.FailureResponsePreserved || first.RootCause != "unresolved" ||
+		first.ImageChangedBeforeRetest || first.OriginalAndAlternatePromptRetests != "passed" ||
+		first.AcceptanceUse != "excluded_incomplete_attempt" {
+		t.Fatal("Claude FW-H 首次瞬态退出记录非法")
+	}
+	if rollback.StartedAtUTC != "2026-08-22T04:39:04Z" ||
+		rollback.FinishedAtUTC != "2026-08-22T04:40:11Z" || rollback.Passed != 46 ||
+		rollback.Failed != 0 || rollback.MatrixRC != 0 || rollback.Result != "passed" ||
+		active.StartedAtUTC != "2026-08-22T04:40:27Z" ||
+		active.FinishedAtUTC != "2026-08-22T04:41:29Z" || active.Passed != 46 ||
+		active.Failed != 0 || active.Result != "passed" {
+		t.Fatal("Claude FW-H rollback／active 完整矩阵非法")
+	}
+	fallback := acceptance.FableFallback
+	if fallback.RequestModel != "claude-fable-5" ||
+		fallback.DeclaredFallbackModel != "claude-opus-5" ||
+		fallback.ObservedResponseModel != "claude-opus-5" ||
+		fallback.DeclaredFallbackSessionLatch ||
+		fallback.ServerFallbackModel != "claude-opus-4-8" ||
+		!fallback.ServerFallbackSessionLatchOnActualResponse {
+		t.Fatal("Claude FW-H 最终 Fable fallback 事实非法")
+	}
+}
+
+func validateClaudeFWHFinalSafetyAndTransitions(
+	t *testing.T,
+	receipt claudeFWHFinalAcceptancePackage,
+) {
+	t.Helper()
+	safety := receipt.Safety
+	if safety.ProductionHost != "DMIT" ||
+		safety.VircsScope != "final_retirement_and_acceptance_closeout" ||
+		safety.VircsAccessed || safety.VircsChanged || safety.ComposeDownUsed ||
+		safety.UnscopedPruneUsed || safety.DatabaseOrCacheRecreated ||
+		safety.DependencyContainersChanged || !safety.ActiveAndRollbackImagesRetained ||
+		safety.SecretScan.MatchedPatterns != 0 || safety.SecretScan.Result != "passed" {
+		t.Fatal("Claude FW-H 最终安全事实非法")
+	}
+	want := map[string][2]string{
+		"docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md": {
+			"258bdff4347573da38df8dcb721c92489dc43fc488018b7f062d25fbe8a65c0c",
+			"6729311fb0152a2e6c100412af96ed5c3c8939675e7daa584349e1bccd5704f8",
+		},
+		"docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md": {
+			"d66f73d33602faacf1d7d1b796aa38a9f842e077609960328ec0ac38d64be7eb",
+			"af1066176c33db3580ff4f47b22bbc90ae2fde587357570ad43430ac6975522e",
+		},
+	}
+	paths := make([]string, 0, len(receipt.Transitions))
+	for _, transition := range receipt.Transitions {
+		digests, ok := want[transition.Path]
+		if !ok || transition.FromSHA256 != digests[0] || transition.ToSHA256 != digests[1] ||
+			strings.TrimSpace(transition.Reason) == "" {
+			t.Fatalf("Claude FW-H 最终文档 transition 非法：%s", transition.Path)
+		}
+		target, err := os.ReadFile(filepath.Join("../../..", filepath.FromSlash(transition.Path)))
+		if err != nil || claudeFWHSourceDigest(target) != transition.ToSHA256 {
+			t.Fatalf("Claude FW-H 最终文档摘要漂移：%s", transition.Path)
+		}
+		paths = append(paths, transition.Path)
+		delete(want, transition.Path)
+	}
+	if len(want) != 0 || len(paths) != 2 || !slices.IsSorted(paths) ||
+		len(paths) != len(slices.Compact(paths)) {
+		t.Fatal("Claude FW-H 最终文档 transition 集合不闭合")
 	}
 }
