@@ -656,6 +656,15 @@ func tlsFingerprintProfileCacheKey(profile *tlsfingerprint.Profile) string {
 	if profile == nil {
 		return "nil"
 	}
+	// TransportOptions 会改变连接及 wire 行为，必须整体进入缓存身份。
+	// 尤其 strict H1 画像会按请求条件生成精确 Header 规则；若只按 TLS 向量复用
+	// Transport，fallback 请求会拿到首个请求的旧规则并在写出前被 fail-close。
+	transportIdentity, err := json.Marshal(profile.Transport)
+	if err != nil {
+		// TransportOptions 当前只含 JSON 可编码的标量与切片。保留显式兜底，避免
+		// 将来扩展字段后因编码失败而把不同画像静默合并到同一个连接池。
+		transportIdentity = []byte(fmt.Sprintf("unencodable:%#v", profile.Transport))
+	}
 	hasCustomRootCAs := profile.RootCAs != nil
 	rootCAIdentity := "system"
 	if hasCustomRootCAs {
@@ -663,7 +672,7 @@ func tlsFingerprintProfileCacheKey(profile *tlsfingerprint.Profile) string {
 		rootCAIdentity = fmt.Sprintf("%p", profile.RootCAs)
 	}
 	raw := fmt.Sprintf(
-		"name:%s|grease:%t|ciphers:%v|curves:%v|points:%v|sigalgs:%v|alpn:%v|versions:%v|keyshares:%v|psk:%v|ext:%v|randomize_ext:%t|min:%04x|max:%04x|custom_root_ca:%t|root_ca_identity:%s|disable_compression:%t",
+		"name:%s|grease:%t|ciphers:%v|curves:%v|points:%v|sigalgs:%v|alpn:%v|versions:%v|keyshares:%v|psk:%v|ext:%v|randomize_ext:%t|min:%04x|max:%04x|custom_root_ca:%t|root_ca_identity:%s|transport:%s",
 		profile.Name,
 		profile.EnableGREASE,
 		profile.CipherSuites,
@@ -680,7 +689,7 @@ func tlsFingerprintProfileCacheKey(profile *tlsfingerprint.Profile) string {
 		profile.TLSVersMax,
 		hasCustomRootCAs,
 		rootCAIdentity,
-		profile.Transport.DisableCompression,
+		transportIdentity,
 	)
 	sum := sha256.Sum256([]byte(raw))
 	return hex.EncodeToString(sum[:8])

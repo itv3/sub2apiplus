@@ -100,6 +100,55 @@ func TestOfficialEgressT3_TLSClientCacheSeparatesCustomRootCAs(t *testing.T) {
 	)
 }
 
+func TestOfficialEgressT3_TLSClientCacheSeparatesConditionalH1WireProfiles(t *testing.T) {
+	baseOrder := []string{
+		"authorization", "anthropic-version", "content-type", "user-agent",
+	}
+	fallbackOrder := append(
+		append([]string(nil), baseOrder...),
+		"x-cc-fallback-latched-by", "x-is-refusal-fallback",
+	)
+	profileForOrder := func(order []string) *tlsfingerprint.Profile {
+		return &tlsfingerprint.Profile{
+			Name: "same-claude-transport",
+			Transport: tlsfingerprint.TransportOptions{
+				DisableCompression: true,
+				H1HeaderOrders: []tlsfingerprint.H1HeaderOrderRule{{
+					Method: http.MethodPost, Path: "/v1/messages",
+					Order: append([]string(nil), order...), RejectUnlisted: true,
+				}},
+				StrictH1Wire: true,
+			},
+		}
+	}
+
+	base := profileForOrder(baseOrder)
+	fallback := profileForOrder(fallbackOrder)
+	require.NotEqual(
+		t,
+		tlsFingerprintProfileCacheKey(base),
+		tlsFingerprintProfileCacheKey(fallback),
+		"同一 invocation 的 fallback Header 规则必须使用独立 H1 wire 连接池",
+	)
+
+	cfg := &config.Config{}
+	cfg.Gateway.ConnectionPoolIsolation = config.ConnectionPoolIsolationProxy
+	upstream, ok := NewHTTPUpstream(cfg).(*httpUpstreamService)
+	require.True(t, ok)
+	const officialPoolID = "claude-account-100-messages"
+	first, err := upstream.getClientEntryWithTLS(
+		"", 100, 1, base, service.HTTPUpstreamProfileDefault,
+		false, false, officialPoolID,
+	)
+	require.NoError(t, err)
+	second, err := upstream.getClientEntryWithTLS(
+		"", 100, 1, fallback, service.HTTPUpstreamProfileDefault,
+		false, false, officialPoolID,
+	)
+	require.NoError(t, err)
+	require.NotSame(t, first, second, "不同 H1 wire 画像不得复用旧 Transport")
+}
+
 func TestOfficialEgressT3_TLSFingerprintWorksThroughSOCKS5WithCustomCA(t *testing.T) {
 	upstream := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
