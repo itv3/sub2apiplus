@@ -1,0 +1,191 @@
+{
+  "schema_version": "official-egress-claude-fw-h-response-request-id-acceptance/v1",
+  "issued_at_utc": "2026-08-22T08:01:19Z",
+  "phase": "FW-H",
+  "acceptance_id": "claude-code-2.1.226-fw-h-response-request-id-bd1c09d5f-dmit",
+  "scope": "official_response_request_id_continuity_correction",
+  "predecessors": [
+    {
+      "kind": "fw_h_final_acceptance_package",
+      "path": "docs/egress/maintenance/claude-fw-h-final-acceptance-package.json",
+      "sha256": "0965d67f4e46f365ac41a3d92dc11012ff9d2c4a47f8f179d18bbe0407888336"
+    },
+    {
+      "kind": "response_request_id_source_transition",
+      "path": "docs/egress/maintenance/claude-fw-h-response-request-id-source-transition.json",
+      "sha256": "b4febb67d2690fe2a95c47258b66b6e5d7dea8b551f3635a281073709ae76b76"
+    },
+    {
+      "kind": "response_request_id_test_transition",
+      "path": "docs/egress/maintenance/claude-fw-h-response-request-id-test-transition.json",
+      "sha256": "cb540e6053aa693a9de3b210094f5a517bff2c430b5c9c49ade01458ba1cdeab"
+    }
+  ],
+  "release": {
+    "version": "2.1.226",
+    "profile_sha256": "e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5",
+    "wire_sha256": "a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d",
+    "release_sha256": "48586f47e0abcde9ea357c08c1465253eaa296862153a89c20e4cf0f1e6f52f8",
+    "bundle_sha256": "ceb1e30740ab4223684f478f717dd2902d8fdad0c6efad5a69b761d95b4aefae",
+    "approval_sha256": "1d002a2708b198256098999932908d47f0eb90a2c819f11d8393570f33996c2c",
+    "profile_changed": false,
+    "wire_changed": false,
+    "release_bundle_changed": false
+  },
+  "build": {
+    "commit": "bd1c09d5f7b531fae1e0e8d22a56135017cb1420",
+    "tree": "8925bc7224646855e0542d7b8d12cf7a2f518036",
+    "source_archive_sha256": "1be021203291849ba1f15c52fa833cd6730be520cb18a2cdbf5d823b37e385e7",
+    "binary_sha256": "0cea841d579549f7d01f490457144cb92d04973088676098348bef757cec2b14",
+    "build_date_utc": "2026-08-22T07:43:09Z",
+    "version": "0.1.177-4-fw-h-final-bd1c09d5f",
+    "build_id": "sub2api-v0.1.177-4-fw-h-final-bd1c09d5f",
+    "image": "sub2apiplus:fw-h-final-bd1c09d5f",
+    "image_id": "sha256:8117aa6cf7a8c83d5c7ca6536154fa4e4acd2ad273a0fddb617d80656bd62c85",
+    "platform": "linux/amd64",
+    "target_override_sha256": "2f142e6fc7970af6e175c39f82f31166d8de57943d6477bc038ebd4088c4e94b",
+    "frontend_build_host": "local-mac-native",
+    "backend_build_host": "local-mac-cross-linux-amd64",
+    "image_packaging_host": "ARM64",
+    "arm64_source_compilation": false,
+    "dmit_source_compilation": false
+  },
+  "deployment": {
+    "host": "DMIT",
+    "selector": "active",
+    "container_id": "126d11dd532b7387ba33a7b37cc15ae5f62bb33780abe6440b9ab8a1a71785c1",
+    "started_at_utc": "2026-08-22T07:54:38.473927205Z",
+    "health": "healthy",
+    "compose_files": [
+      "/root/Docker/sub2apiplus/app/docker-compose.yml",
+      "/root/sub2apiplus-fw-h-final-bd1c09d5f/private/target.override.yml"
+    ],
+    "activation_fact_sha256": "961fa049ca0e5ae5d851fcb062bb3bd7c0354b99b17e3d86e8f8319a452e5574",
+    "activation_event_id": "8d6ef9e8924c5379d8ed2a7a4cf91309e2f65b2664c18b048f3f229eaae1446f",
+    "activation_observed_at_utc": "2026-08-22T07:54:39.470736283Z",
+    "dependency_identity_sha256": "c815b310f9c704c12c02e7504e84b73636cc95855769dc42334ac940154e4dc5",
+    "dependency_containers": [
+      "3x-ui",
+      "mihomo",
+      "sub2apiplus-keeper",
+      "sub2apiplus-postgres",
+      "sub2apiplus-redis"
+    ],
+    "dependencies_unchanged": true,
+    "disk_available_after_validation": "4.8G"
+  },
+  "verification": {
+    "local_gates": [
+      "request_id_targeted_tests_passed",
+      "request_id_exact_race_tests_passed",
+      "go_test_all_passed",
+      "go_vet_all_passed",
+      "check_egress_spec_passed",
+      "git_diff_check_passed"
+    ],
+    "response_contract": {
+      "official_header_name": "request-id",
+      "x_request_id_accepted_as_test_substitute": false,
+      "forward_result_uses_final_response": true,
+      "unit_paths": [
+        "messages-stream",
+        "messages-non-stream",
+        "messages-stream-fallback",
+        "messages-count-tokens"
+      ]
+    },
+    "live_matrices": [
+      {
+        "name": "active-before-rollback",
+        "passed": 46,
+        "restarts": 0,
+        "started_at_utc": "2026-08-22T07:48:37Z",
+        "finished_at_utc": "2026-08-22T07:49:29Z",
+        "log_sha256": "fe2d469611e34de8e88fd6a6fff4a78eff23c9263791dc12f3ab0d17a7f71666"
+      },
+      {
+        "name": "active-state-durability-before-rollback",
+        "passed": 4,
+        "restarts": 2,
+        "started_at_utc": "2026-08-22T07:49:39Z",
+        "finished_at_utc": "2026-08-22T07:50:12Z",
+        "log_sha256": "1cdee8f1f8b0f0eb61b86442822841a9e9c959355d0747dc36498f3b24170ed3"
+      },
+      {
+        "name": "rollback-e2c80213a",
+        "passed": 46,
+        "restarts": 0,
+        "started_at_utc": "2026-08-22T07:51:58Z",
+        "finished_at_utc": "2026-08-22T07:53:06Z",
+        "log_sha256": "91a9e06c56c528d8ba229d050deed0fa2ab491244365c86709be36acab5a54a1"
+      },
+      {
+        "name": "active-after-restore",
+        "passed": 46,
+        "restarts": 0,
+        "started_at_utc": "2026-08-22T07:53:26Z",
+        "finished_at_utc": "2026-08-22T07:54:15Z",
+        "log_sha256": "8f5a0f68d491617c334701e29bbad9bccf8c60b48c1f4043a864b5944ec2b298"
+      },
+      {
+        "name": "active-state-durability-after-restore",
+        "passed": 4,
+        "restarts": 2,
+        "started_at_utc": "2026-08-22T07:54:22Z",
+        "finished_at_utc": "2026-08-22T07:54:55Z",
+        "log_sha256": "2c487430b33f809912bfbfc3e0465b4b4f9d3cdfa66756ef06eca10a4dc63f3e"
+      }
+    ],
+    "state_durability": {
+      "script_sha256": "94fad77d304eaa07b6752b048fadc485ef825c26eb3f229217a6306f7782a7da",
+      "request_id_header_required_by_original_name": true,
+      "title_state_survives_restart": true,
+      "previous_request_state_survives_restart": true,
+      "long_history_bytes_minimum": 347000,
+      "long_history_passed": true
+    },
+    "rollback": {
+      "commit": "e2c80213ab338cc6f91eee00e28a96bc956f0512",
+      "image_id": "sha256:356384ce0429a2dc30d484648371d1921644184fc978195ae583c23e968dc3d6",
+      "full_matrix_passed": 46,
+      "restored_image_id": "sha256:8117aa6cf7a8c83d5c7ca6536154fa4e4acd2ad273a0fddb617d80656bd62c85",
+      "restore_result": "passed"
+    },
+    "real_clients": {
+      "claude_desktop": {
+        "mode": "Code",
+        "model": "claude-sonnet-5",
+        "turn_1_marker": "DESKTOP_REQUEST_ID_TURN1_OK",
+        "turn_2_marker": "DESKTOP_REQUEST_ID_TURN2_OK",
+        "turn_1_gateway_request_id": "c80c06a3-24f8-4612-bddf-fc6f91f9ffbe",
+        "turn_2_gateway_request_id": "fe8c265c-3d21-4da3-acb6-ebc8149d84f7",
+        "turn_1_status": 200,
+        "turn_2_status": 200,
+        "same_session_continuation": true,
+        "result": "passed"
+      },
+      "kilocode_code_mode": {
+        "model": "claude-sonnet-5",
+        "gateway_request_id": "9b0bc0ea-9165-4b5d-8530-171b462eac07",
+        "status": 400,
+        "result": "expected_fail_close",
+        "reason": "Claude 动态工具目录不接受未实测 tool_choice",
+        "tool_bridge_approval": "not_approved",
+        "matches_documented_support_envelope": true
+      }
+    },
+    "result": "passed"
+  },
+  "safety": {
+    "vircs_accessed": false,
+    "vircs_changed": false,
+    "compose_down_used": false,
+    "unscoped_prune_used": false,
+    "database_or_cache_recreated": false,
+    "dependency_containers_changed": false,
+    "only_dmit_sub2api_recreated": true,
+    "rollback_and_restore_completed": true
+  },
+  "production_state": "active_response_request_id_correction",
+  "result": "accepted"
+}
