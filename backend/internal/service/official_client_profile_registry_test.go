@@ -29,7 +29,9 @@ func TestAnthropicClientProfileCatalogDigestsAreLocked(t *testing.T) {
 	aggregate := hex.EncodeToString(sum[:])
 
 	const expectedProfileCount = 6
-	const expectedAggregateDigest = "37e0a5db1b0f8f4957e01ba885ccf61facec6a258de1fb7c461851483188108e"
+	// FW-H 退休 Claude OAuth 旧画像后，这组遗留 HTTP 画像仅服务 Setup Token
+	// 产品语义；摘要变化来自身份范围收窄，不是官方抓包规则变化。
+	const expectedAggregateDigest = "2140255a783a98614b16092dc6ee0bc6efc4459ac4878edb8116782cf91b8a30"
 	require.Equalf(
 		t,
 		expectedProfileCount,

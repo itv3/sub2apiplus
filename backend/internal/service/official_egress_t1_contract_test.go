@@ -68,7 +68,7 @@ func TestOfficialEgressT1_AnthropicHTTPBuiltInProfileIgnoresLegacyIdentityOverri
 	account := &Account{
 		ID:       50,
 		Platform: PlatformAnthropic,
-		Type:     AccountTypeOAuth,
+		Type:     AccountTypeSetupToken,
 		Extra: map[string]any{
 			"account_uuid":               accountUUID,
 			"session_id_masking_enabled": true,

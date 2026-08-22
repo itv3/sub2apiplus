@@ -57,7 +57,10 @@ func fwEObservationSourceTransitionSupersedes(
 	}
 	for _, transition := range receipt.SourceTransitions {
 		if transition.Path == path && transition.FromSHA256 == priorDigest &&
-			transition.ToSHA256 == currentDigest && transition.Reason != "" {
+			(transition.ToSHA256 == currentDigest ||
+				claudeFWHLegacyRetirementTransitionSupersedesService(
+					path, transition.ToSHA256, currentDigest,
+				)) && transition.Reason != "" {
 			return true
 		}
 	}

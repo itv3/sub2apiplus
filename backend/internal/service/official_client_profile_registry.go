@@ -16,7 +16,7 @@ const (
 	officialClientProfileModeActive   = "active"
 	officialClientProfileModePrevious = "previous"
 
-	officialClientPurposeAnthropicOAuthMessagesHTTP       = "anthropic_oauth_messages_http"
+	officialClientPurposeAnthropicSetupTokenMessagesHTTP  = "anthropic_setup_token_messages_http"
 	officialClientPurposeAnthropicAPIKeyMessagesHTTP      = "anthropic_apikey_messages_http"
 	officialClientPurposeAnthropicAPIKeyCountTokensCompat = "anthropic_apikey_count_tokens_generic"
 	officialClientPurposeOpenAIOAuthResponsesHTTP         = "openai_oauth_responses_http"
@@ -407,8 +407,8 @@ func officialClientWireProfileDefinitions() []officialClientWireProfile {
 	const anthropicDesktopBeta = "claude-code-20250219,context-1m-2025-08-07,interleaved-thinking-2025-05-14,mid-conversation-system-2026-04-07,effort-2025-11-24,fallback-credit-2026-06-01"
 
 	profiles := []officialClientWireProfile{
-		newAnthropicWireProfile("anthropic_claude_code_2_1_220_oauth_messages_http_direct", officialClientPurposeAnthropicOAuthMessagesHTTP, officialClientBuildAnthropicCLI21220, "oauth", "messages", anthropicOAuthBeta, "capture:oauth-20260726T014021Z"),
-		newAnthropicWireProfile("anthropic_claude_code_2_1_218_oauth_messages_http_direct", officialClientPurposeAnthropicOAuthMessagesHTTP, officialClientBuildAnthropicCLI21218, "oauth", "messages", anthropicOAuthBeta, "capture:phase0-20260724"),
+		newAnthropicWireProfile("anthropic_claude_code_2_1_220_setup_token_messages_http_direct", officialClientPurposeAnthropicSetupTokenMessagesHTTP, officialClientBuildAnthropicCLI21220, "setup-token", "messages", anthropicOAuthBeta, "capture:oauth-20260726T014021Z"),
+		newAnthropicWireProfile("anthropic_claude_code_2_1_218_setup_token_messages_http_direct", officialClientPurposeAnthropicSetupTokenMessagesHTTP, officialClientBuildAnthropicCLI21218, "setup-token", "messages", anthropicOAuthBeta, "capture:phase0-20260724"),
 		newAnthropicWireProfile("anthropic_claude_code_2_1_220_apikey_messages_http_direct", officialClientPurposeAnthropicAPIKeyMessagesHTTP, officialClientBuildAnthropicCLI21220, "apikey", "messages", anthropicAPIKeyBeta, "capture:api-20260726T014252Z"),
 		newAnthropicWireProfile("anthropic_claude_desktop_2_1_209_apikey_messages_http_previous", officialClientPurposeAnthropicAPIKeyMessagesHTTP, officialClientBuildAnthropicDesktop, "apikey", "messages", anthropicDesktopBeta, "capture:desktop-2.1.209-202607"),
 		newAnthropicWireProfile("anthropic_claude_code_2_1_220_apikey_count_tokens_generic", officialClientPurposeAnthropicAPIKeyCountTokensCompat, officialClientBuildAnthropicCLI21220, "apikey", "count_tokens_generic", anthropicAPIKeyBeta+",token-counting-2024-11-01", "derived:messages-client-build-with-generic-count-tokens-contract"),
@@ -450,9 +450,9 @@ func newAnthropicWireProfile(id, purpose, buildID, authMode, endpoint, betaHeade
 
 func officialClientReleaseDefinitions() map[string]officialClientReleasePointer {
 	return map[string]officialClientReleasePointer{
-		officialClientPurposeAnthropicOAuthMessagesHTTP: {
-			Active:   "anthropic_claude_code_2_1_220_oauth_messages_http_direct",
-			Previous: "anthropic_claude_code_2_1_218_oauth_messages_http_direct",
+		officialClientPurposeAnthropicSetupTokenMessagesHTTP: {
+			Active:   "anthropic_claude_code_2_1_220_setup_token_messages_http_direct",
+			Previous: "anthropic_claude_code_2_1_218_setup_token_messages_http_direct",
 		},
 		officialClientPurposeAnthropicAPIKeyMessagesHTTP: {
 			Active:   "anthropic_claude_code_2_1_220_apikey_messages_http_direct",

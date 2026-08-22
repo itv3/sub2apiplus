@@ -158,6 +158,14 @@ func TestProvisionalLegacyBaselineMatchesUnfinalizedReachableCatalog(t *testing.
 			}
 			continue
 		}
+		if _, managed := binding.ManagedPolicy(); managed {
+			if binding.MigrationReceiptDigest() != "" ||
+				(binding.EnforcementState() != SinkStateCanaryEnforce &&
+					binding.EnforcementState() != SinkStateEnforced) {
+				t.Fatalf("non_persona_managed Sink 状态非法：%s", binding.ID())
+			}
+			continue
+		}
 		if binding.MigrationReceiptDigest() == "" && binding.EnforcementState() != SinkStateLegacyObserve {
 			t.Fatalf("无 MigrationReceipt 的可达 Sink %s 必须是 legacy_observe", binding.ID())
 		}

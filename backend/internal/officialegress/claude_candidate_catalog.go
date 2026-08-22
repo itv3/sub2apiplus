@@ -31,10 +31,6 @@ var claudeFWGManagedPolicies = map[SinkID]ManagedEgressPolicy{
 		ID: "egress-claude-cookie-organizations", Authentication: "claude.ai-session-cookie",
 		Endpoint: "GET https://claude.ai/api/organizations", Client: "req_profile",
 	},
-	SinkClaudeLegacyMessagesInference: {
-		ID: "egress-claude-messages-inference", Authentication: "claude.ai-oauth",
-		Endpoint: "POST https://api.anthropic.com/v1/messages", Client: "http_upstream",
-	},
 	SinkClaudeLegacyOAuthExchange: {
 		ID: "egress-claude-oauth-exchange", Authentication: "claude.ai-oauth",
 		Endpoint: "POST https://platform.claude.com/v1/oauth/token", Client: "req_profile",
@@ -43,10 +39,6 @@ var claudeFWGManagedPolicies = map[SinkID]ManagedEgressPolicy{
 		ID: "egress-claude-oauth-refresh", Authentication: "claude.ai-oauth",
 		Endpoint: "POST https://platform.claude.com/v1/oauth/token", Client: "req_profile",
 	},
-	SinkClaudeLegacyTokenCount: {
-		ID: "egress-claude-token-count", Authentication: "claude.ai-oauth",
-		Endpoint: "POST https://api.anthropic.com/v1/messages/count_tokens", Client: "http_upstream",
-	},
 	SinkClaudeLegacyUpstreamModels: {
 		ID: "egress-claude-upstream-models", Authentication: "claude.ai-oauth",
 		Endpoint: "GET https://api.anthropic.com/v1/models", Client: "http_upstream",
@@ -54,6 +46,37 @@ var claudeFWGManagedPolicies = map[SinkID]ManagedEgressPolicy{
 	SinkClaudeLegacyUsage: {
 		ID: "egress-claude-usage", Authentication: "claude.ai-oauth",
 		Endpoint: "GET https://api.anthropic.com/api/oauth/usage", Client: "http_upstream",
+	},
+}
+
+type claudeManagedBindingDefinition struct {
+	purpose Purpose
+	route   CatalogRoute
+	policy  ManagedEgressPolicy
+}
+
+var claudeSetupTokenManagedBindings = map[SinkID]claudeManagedBindingDefinition{
+	SinkClaudeSetupTokenMessagesInference: {
+		purpose: Purpose("claude_setup_token.messages_inference"),
+		route: CatalogRoute{Key: RouteKey{
+			Method: "POST", Host: "api.anthropic.com", Path: "/v1/messages",
+			Purpose: Purpose("claude_setup_token.messages_inference"),
+		}, Protocol: WireProtocolHTTP},
+		policy: ManagedEgressPolicy{
+			ID: "egress-claude-setup-token-messages", Authentication: "claude.ai-setup-token",
+			Endpoint: "POST https://api.anthropic.com/v1/messages", Client: "http_upstream",
+		},
+	},
+	SinkClaudeSetupTokenTokenCount: {
+		purpose: Purpose("claude_setup_token.token_count"),
+		route: CatalogRoute{Key: RouteKey{
+			Method: "POST", Host: "api.anthropic.com", Path: "/v1/messages/count_tokens",
+			Purpose: Purpose("claude_setup_token.token_count"),
+		}, Protocol: WireProtocolHTTP},
+		policy: ManagedEgressPolicy{
+			ID: "egress-claude-setup-token-count", Authentication: "claude.ai-setup-token",
+			Endpoint: "POST https://api.anthropic.com/v1/messages/count_tokens", Client: "http_upstream",
+		},
 	},
 }
 
@@ -116,6 +139,10 @@ func buildClaudeSinkCatalog(base SinkCatalog, role claudeCatalogRole) (SinkCatal
 	for id, binding := range base.bindings {
 		out.bindings[id] = binding
 	}
+	// FW-E 的两条 OAuth 推理观察 Sink 已由 strict Sink 完整替代，active／candidate
+	// Catalog 都不得继续注册它们。Setup Token 使用下方独立受管 Sink。
+	delete(out.bindings, SinkClaudeLegacyMessagesInference)
+	delete(out.bindings, SinkClaudeLegacyTokenCount)
 	for sinkID, rawPolicy := range claudeFWGManagedPolicies {
 		legacy, ok := out.bindings[sinkID]
 		if !ok || legacy.EnforcementState() != SinkStateLegacyObserve ||
@@ -137,6 +164,15 @@ func buildClaudeSinkCatalog(base SinkCatalog, role claudeCatalogRole) (SinkCatal
 			return SinkCatalog{}, err
 		}
 		out.bindings[sinkID] = binding
+	}
+	for sinkID, definition := range claudeSetupTokenManagedBindings {
+		binding, exists := out.bindings[sinkID]
+		policy, managed := binding.ManagedPolicy()
+		wantPolicy := completeClaudeFWGManagedPolicy(definition.policy)
+		if !exists || !managed || binding.EnforcementState() != SinkStateEnforced ||
+			binding.Persona() != PersonaUnclassified || policy.Digest() != wantPolicy.Digest() {
+			return SinkCatalog{}, fmt.Errorf("Claude Setup Token 受管 Sink 基线不一致：%s", sinkID)
+		}
 	}
 	for _, kind := range claudeStrictEndpointKinds() {
 		endpoint, err := profile.endpoint(kind)

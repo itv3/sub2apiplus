@@ -1,0 +1,190 @@
+{
+  "schema_version": "official-egress-claude-fw-h-legacy-retirement-test-transition/v1",
+  "date": "2026-08-22",
+  "phase": "FW-H",
+  "base_commit": "c51fb5d2cf052f47db9f27926d8340c2c218e2af",
+  "scope": "legacy_retirement",
+  "approval_fact": {
+    "path": "backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-fw-h-legacy-retirement-approval.json",
+    "sha256": "1d002a2708b198256098999932908d47f0eb90a2c819f11d8393570f33996c2c"
+  },
+  "logical_ingress_ids": [
+    "official-count-tokens-oauth",
+    "official-messages-oauth",
+    "third-party-count-tokens-oauth",
+    "third-party-messages-oauth",
+    "chat-completions-oauth",
+    "responses-oauth"
+  ],
+  "safety": {
+    "production_host": "DMIT",
+    "production_selector": "active",
+    "candidate_enabled": false,
+    "retained_legacy": [],
+    "setup_token_semantics": "non_persona_managed",
+    "api_key_semantics": "retained",
+    "service_account_semantics": "retained",
+    "removal_receipt_allowed": true,
+    "deployment_performed": false,
+    "vircs_production_changed": false
+  },
+  "result": "passed",
+  "source_transition": {
+    "path": "docs/egress/maintenance/claude-fw-h-legacy-retirement-source-transition.json",
+    "sha256": "13918c77227fcfff5f44daa77d0382630e37998fd926bab2334cb9392bb7eabd"
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/catalog_retirements_test.go",
+      "from_sha256": "ebb7e1a9314f1ce50983631d201ba7777cfd525d346bce8fe6c9e495313b61f0",
+      "to_sha256": "598fcad7db865ea09b74c0690078053bc84f89d2d210b85a26382fb149414afd",
+      "reason": "让不可变历史退休收据通过连续 transition 精确承接到本次 FW-H 旧链退休摘要。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_model_capability_transition_test.go",
+      "from_sha256": "ee8a989a4c81b055a5df58c5e0789de709f92d95995af60fc8f795fa9401f514",
+      "to_sha256": "b50789d84bda42d17f15eb6c4f1e0e2b041bb40ccd793a3d400997e9323d8c89",
+      "reason": "更新或新增回归门禁，证明 Claude OAuth 旧链不可达、六类入口统一 strict，且必须保留的非 Persona 产品语义不回归。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_bare_chat_route_transition_test.go",
+      "from_sha256": "2a70431b45bf8693f0e7e6204e4e67ef3ce7dd74b7e6940a171adec557c40f3f",
+      "to_sha256": "325dc948c57dd0e3a121b20ff7cadac118ec8e9e602a8d270d035803f077f054",
+      "reason": "更新或新增回归门禁，证明 Claude OAuth 旧链不可达、六类入口统一 strict，且必须保留的非 Persona 产品语义不回归。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_production_acceptance_test.go",
+      "from_sha256": "e90d991ac119f71ae9cd4131c4303ad5f91ab427e9642b5da9273d2f00fb69b2",
+      "to_sha256": "8fe26ba5f79bff41166cbf9a6c20608dfacf0c03cebdf82daba24f3b6d9ce2a6",
+      "reason": "更新或新增回归门禁，证明 Claude OAuth 旧链不可达、六类入口统一 strict，且必须保留的非 Persona 产品语义不回归。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_production_test.go",
+      "from_sha256": "b1bdedffc56a9b01918c75b88f148a6cbf35f7f37aaaee0b636f97005adad6ef",
+      "to_sha256": "f727f409093630317644f37d0d5850f3166440ad9b69bd55dca8592d5de91d12",
+      "reason": "证明 production Catalog 的 Anthropic 共享路由只有显式绑定才进入 Persona，同时 Setup Token 仍进入 non_persona_managed。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_source_transition_test.go",
+      "from_sha256": "a1ff79a9197ce1252856fa8829e17971e0d6061a060e7d006d66a257ba5ae8cb",
+      "to_sha256": "092c202b754038c012351d60cd0eea8efa1d26a8669b690a95a6f3b8fd95a380",
+      "reason": "更新或新增回归门禁，证明 Claude OAuth 旧链不可达、六类入口统一 strict，且必须保留的非 Persona 产品语义不回归。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_third_party_strict_transition_test.go",
+      "from_sha256": "ee6641a431be5e31c98a3d623a75007e2dcc44038fe8b6c46031af941932c7ff",
+      "to_sha256": "211e46cfcfba1ea8adfee204508137b9cac3606952ade41db8d705cec85acbe2",
+      "reason": "更新或新增回归门禁，证明 Claude OAuth 旧链不可达、六类入口统一 strict，且必须保留的非 Persona 产品语义不回归。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_runtime_test.go",
+      "from_sha256": "1ee2703a674a38d9ce09010fe0716a4feb3776c50c92edf78a1d1850eec49314",
+      "to_sha256": "be9d07c8a9799b5bda8608c457163f5ba433e82053c800a4d012a856ed9c7a27",
+      "reason": "更新或新增回归门禁，证明 Claude OAuth 旧链不可达、六类入口统一 strict，且必须保留的非 Persona 产品语义不回归。"
+    },
+    {
+      "path": "backend/internal/officialegress/fw_e_observation_source_transition_test.go",
+      "from_sha256": "8009c8dae09ef8863bf1d65917b5690d77cf5d85f8b4bf25d6bee6e89f22b15f",
+      "to_sha256": "46e0442369a36a869ac0d6243bf3f7e5213736d8789fb9f21e4ca50726b9b113",
+      "reason": "更新或新增回归门禁，证明 Claude OAuth 旧链不可达、六类入口统一 strict，且必须保留的非 Persona 产品语义不回归。"
+    },
+    {
+      "path": "backend/internal/officialegress/legacy_baseline_test.go",
+      "from_sha256": "61410d1c8b977e84897ea1ab82c7c10783f97ac42b353d49021acd1d134503a5",
+      "to_sha256": "c48fe0b50e07440df283d52e0be27198873a29ae1b86e734f319d79fdfafa78a",
+      "reason": "更新或新增回归门禁，证明 Claude OAuth 旧链不可达、六类入口统一 strict，且必须保留的非 Persona 产品语义不回归。"
+    },
+    {
+      "path": "backend/internal/officialegress/officialegress_test.go",
+      "from_sha256": "3865e9bd04be5586fac2df84dc6bbedaffd6a218f22a9256cdef4b701d52116a",
+      "to_sha256": "10b5015bbb0a0fcf4568c238937663f5b3e14e81d500697ab72eeca242afa877",
+      "reason": "把 non_persona_managed 的受管策略摘要作为 Enforcement 证据，并保持未绑定第三方共享路由在管理域外。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_e_observation_binding_test.go",
+      "from_sha256": "23987c534e0114448881c97ca56a8bdf95b5723ec3d9218629484b703b91f602",
+      "to_sha256": "4705c40652a44a01553ab6c50a576f791aa492ba3aa71695eeab6a68d9969155",
+      "reason": "更新或新增回归门禁，证明 Claude OAuth 旧链不可达、六类入口统一 strict，且必须保留的非 Persona 产品语义不回归。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_h_legacy_retirement_test.go",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "33901ecd35164e2158e19ef045deca65064309f858677c394f72f47a34bf30e0",
+      "reason": "证明 Claude OAuth 旧构造器不可达且已无源码符号，六类入口统一 strict，Setup Token 独立保留。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_h_source_transition_test.go",
+      "from_sha256": "9acfc4ea876cacc39e72314ca4e9c7b7150dc5f29c16532208ac290acc649ad6",
+      "to_sha256": "280167279665623d67031281401d22e50826e64921c9fb32e90e10ab5b0ce597",
+      "reason": "更新或新增回归门禁，证明 Claude OAuth 旧链不可达、六类入口统一 strict，且必须保留的非 Persona 产品语义不回归。"
+    },
+    {
+      "path": "backend/internal/service/fw_e_observation_source_transition_test.go",
+      "from_sha256": "9ca338653e809a3dbe55e925c8680c0b902b4100d1653cbe22a1ada143ee9cd5",
+      "to_sha256": "e49974bb255a5a95ecfdd8e947c9e4afda7efd94bae21752fb79e500e5be1974",
+      "reason": "更新或新增回归门禁，证明 Claude OAuth 旧链不可达、六类入口统一 strict，且必须保留的非 Persona 产品语义不回归。"
+    },
+    {
+      "path": "backend/internal/service/gateway_anthropic_apikey_passthrough_test.go",
+      "from_sha256": "9d601ea9ef69e50c9f17af58e947d3e212fa18bb5828506b999bff9ef5aa4572",
+      "to_sha256": "7f7c0cd353993b526f0d973901ef250a2cf6422f3ef8d6485c25dd40215d2217",
+      "reason": "将遗留兼容画像回归测试收窄为 Setup Token 产品语义，证明 Claude OAuth 不再消费旧画像。"
+    },
+    {
+      "path": "backend/internal/service/gateway_context_management_test.go",
+      "from_sha256": "ab6efe1dc65548fd59b8497e69f68892ca12421d71df9242803ad388e68e6f50",
+      "to_sha256": "c172a385e3e89ef3926a5daa44fca3aa1a29a689bed3548591b60a51013a333a",
+      "reason": "更新或新增回归门禁，证明 Claude OAuth 旧链不可达、六类入口统一 strict，且必须保留的非 Persona 产品语义不回归。"
+    },
+    {
+      "path": "backend/internal/service/gateway_forward_partial_usage_test.go",
+      "from_sha256": "e4f0c833a7b61c3f6c5cf0772ecc5067b6786be42114694134693e03915c4ee9",
+      "to_sha256": "b55906b014c971fdc8308e71f54042a2c506b0bbbca6cc92cd0fc210f7459ea9",
+      "reason": "将通用流式用量回归夹具改为 Setup Token，避免测试重新打开 Claude OAuth 旧 Messages 构造链。"
+    },
+    {
+      "path": "backend/internal/service/gateway_oauth_metadata_test.go",
+      "from_sha256": "f87ca13d72fd13398cbb4ebc13210c06b08a79ffde9f887667665e0e5dcaad10",
+      "to_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "reason": "删除只为无生产消费者的 OAuth metadata 构造器续命的遗留单测。"
+    },
+    {
+      "path": "backend/internal/service/official_client_profile_registry_test.go",
+      "from_sha256": "47746c5fc267ab45fa9c5a562aa18acfcd7d0aa4bde251c039b3ae7811f12f24",
+      "to_sha256": "6a1d7c063e9c81362cdb4a0c1aac1a3154b8e7c033e8e1e49aaefa1a1c51b4b1",
+      "reason": "锁定旧画像收窄为 Setup Token 产品语义后的聚合摘要，并明确该变化不是官方抓包规则变化。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_anthropic_test.go",
+      "from_sha256": "c431c41a365cdb5c614af948b85f24b61d115819173f63d331b841dd5317f32e",
+      "to_sha256": "687ed121106b5e8372867f2d584d0c56cd941a3517af365c2cc9c25d3c0f4b17",
+      "reason": "更新或新增回归门禁，证明 Claude OAuth 旧链不可达、六类入口统一 strict，且必须保留的非 Persona 产品语义不回归。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_p0_regression_test.go",
+      "from_sha256": "67f2062006e873e6e32c662f74b23c544cfb4bb2b7a8581f237ce946fcc1aa46",
+      "to_sha256": "f15611ee934a7c4704d15dd24563d4c68f62487eadb16464244a4aa96cca3d75",
+      "reason": "更新或新增回归门禁，证明 Claude OAuth 旧链不可达、六类入口统一 strict，且必须保留的非 Persona 产品语义不回归。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_profile_test.go",
+      "from_sha256": "131305397eff824bafd1f46a65ee224380e288552dbb8cdfb1085c2bea672814",
+      "to_sha256": "f1a744dc697603b5983cf7c94c4af900238fe633068701636f0ddfb0ead18591",
+      "reason": "更新或新增回归门禁，证明 Claude OAuth 旧链不可达、六类入口统一 strict，且必须保留的非 Persona 产品语义不回归。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_t1_contract_test.go",
+      "from_sha256": "344577161d9fdf20ffd7e4e391b28cc0026eb726ef4dee9c0f6d7d53acc539a9",
+      "to_sha256": "50e4cb06b847a871f866653b6aa9c570b83d3ce1e19835732834e9ec8def2a42",
+      "reason": "更新或新增回归门禁，证明 Claude OAuth 旧链不可达、六类入口统一 strict，且必须保留的非 Persona 产品语义不回归。"
+    }
+  ],
+  "gates": [
+    "go test ./internal/officialegress ./internal/service -count=1",
+    "go test ./... -count=1",
+    "go vet ./...",
+    "Claude OAuth 旧构造器消费者归零",
+    "Setup Token、API Key、Service Account 产品语义保留",
+    "Codex final wire 零差异"
+  ]
+}

@@ -15,7 +15,7 @@ import (
 
 func TestOfficialAnthropicBetaHeaderPreservesDynamicCapabilities(t *testing.T) {
 	profile, err := resolveOfficialClientProfile(
-		officialClientPurposeAnthropicOAuthMessagesHTTP,
+		officialClientPurposeAnthropicSetupTokenMessagesHTTP,
 		officialClientProfileModeActive,
 	)
 	require.NoError(t, err)
@@ -57,7 +57,7 @@ func TestOfficialAnthropicAdvancedToolUseRejectsFalseDeferredLoading(t *testing.
 func TestOfficialAnthropicDynamicBetasHonorFilterPolicy(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	profile, err := resolveOfficialClientProfile(
-		officialClientPurposeAnthropicOAuthMessagesHTTP,
+		officialClientPurposeAnthropicSetupTokenMessagesHTTP,
 		officialClientProfileModeActive,
 	)
 	require.NoError(t, err)

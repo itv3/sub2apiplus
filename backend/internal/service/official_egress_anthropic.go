@@ -44,9 +44,10 @@ type officialAnthropicIngressContract struct {
 	migratedSystemCacheControlFound bool
 }
 
-// finalizeAnthropicOfficialEgressRequest 在所有既有转换之后执行最小差异修正。
+// finalizeAnthropicSetupTokenEgressRequest 在所有既有转换之后执行 Setup Token
+// 产品语义的最小差异修正。Claude OAuth Persona 不得进入该兼容链。
 // 未启用 Profile 时原样返回；启用后任何身份冲突或结构不满足都会明确失败。
-func (s *GatewayService) finalizeAnthropicOfficialEgressRequest(
+func (s *GatewayService) finalizeAnthropicSetupTokenEgressRequest(
 	req *http.Request,
 	c *gin.Context,
 	account *Account,
@@ -59,6 +60,10 @@ func (s *GatewayService) finalizeAnthropicOfficialEgressRequest(
 	egressContext, enabled := OfficialEgressContextFromContext(req.Context())
 	if !enabled {
 		return req, body, result, nil
+	}
+	if account == nil || account.Platform != PlatformAnthropic ||
+		account.Type != AccountTypeSetupToken {
+		return nil, nil, result, errors.New("Anthropic Setup Token finalizer 拒绝非 Setup Token 账号")
 	}
 	if c == nil || c.Request == nil {
 		return nil, nil, result, errors.New("anthropic official egress requires ingress request")

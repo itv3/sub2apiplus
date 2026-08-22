@@ -183,6 +183,9 @@ func loadClaudeFWHProductionAcceptance() (claudeFWHProductionAcceptancePackage, 
 }
 
 func claudeFWHProductionAcceptanceSupersedes(path, priorDigest, currentDigest string) bool {
+	if claudeFWHLegacyRetirementTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if claudeFWHBareChatRouteTransitionSupersedes(path, priorDigest, currentDigest) {
 		return true
 	}
@@ -197,7 +200,10 @@ func claudeFWHProductionAcceptanceSupersedes(path, priorDigest, currentDigest st
 	}
 	for _, transition := range receipt.Transitions {
 		if transition.Path == path && transition.FromSHA256 == priorDigest &&
-			transition.ToSHA256 == currentDigest {
+			(transition.ToSHA256 == currentDigest ||
+				claudeFWHLegacyRetirementTransitionSupersedes(
+					path, transition.ToSHA256, currentDigest,
+				)) {
 			return true
 		}
 	}
@@ -241,7 +247,7 @@ func validateClaudeFWHProductionTarget(t *testing.T, receipt claudeFWHProduction
 		!slices.Equal(target.Models, []string{"claude-sonnet-5", "claude-opus-5", "claude-fable-5"}) ||
 		target.ProfileSHA256 != ClaudeFWGProfileDigest || target.WireSHA256 != claudeFWGWireDigest ||
 		target.ReleaseSHA256 != ClaudeFWGReleaseDigest || target.BundleSHA256 != ClaudeFWGBundleDigest ||
-		target.ApprovalSHA256 != ClaudeFWHProductionApprovalDigest {
+		target.ApprovalSHA256 != ClaudeFWHInitialProductionApprovalDigest {
 		t.Fatal("Claude FW-H 生产目标身份非法")
 	}
 }
@@ -251,7 +257,7 @@ func validateClaudeFWHProductionPredecessors(t *testing.T, receipt claudeFWHProd
 	want := map[string]string{
 		"docs/egress/maintenance/claude-fw-g-three-model-acceptance.json":                                      "16dc60bc46eede747cb0535e53367c134a28466f12399f06a485693e142b15a9",
 		"docs/egress/maintenance/claude-fw-h-source-transition.json":                                           claudeFWHSourceTransitionSHA256,
-		"backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-fw-h-approval.json": ClaudeFWHProductionApprovalDigest,
+		"backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-fw-h-approval.json": ClaudeFWHInitialProductionApprovalDigest,
 	}
 	for _, predecessor := range receipt.Predecessors {
 		if want[predecessor.Path] != predecessor.SHA256 {
@@ -373,7 +379,7 @@ func validateClaudeFWHProductionActivation(t *testing.T, receipt claudeFWHProduc
 		activation.Claude.WireSHA256 != claudeFWGWireDigest ||
 		activation.Claude.ReleaseSHA256 != ClaudeFWGReleaseDigest ||
 		activation.Claude.BundleSHA256 != ClaudeFWGBundleDigest ||
-		activation.Claude.ApprovalSHA256 != ClaudeFWHProductionApprovalDigest ||
+		activation.Claude.ApprovalSHA256 != ClaudeFWHInitialProductionApprovalDigest ||
 		activation.Codex.EventID != "2d7136df4d50c1625bbfd3ddfcc21db9394fedb98842ddf7ecf0f12e868afd69" ||
 		activation.Codex.ProfileMode != "active" ||
 		activation.Codex.ProfileSHA256 != "94071c8eb93cfd337ac6eabc291d878084e3dcec8a9e618e04e6f68792d1a7bc" ||
@@ -439,7 +445,11 @@ func validateClaudeFWHProductionTransitions(t *testing.T, receipt claudeFWHProdu
 	paths := make([]string, 0, len(receipt.Transitions))
 	for _, transition := range receipt.Transitions {
 		raw, err := os.ReadFile(filepath.Join("../../..", filepath.FromSlash(transition.Path)))
-		if err != nil || claudeFWHSourceDigest(raw) != transition.ToSHA256 ||
+		currentDigest := claudeFWHSourceDigest(raw)
+		if err != nil || currentDigest != transition.ToSHA256 &&
+			!claudeFWHLegacyRetirementTransitionSupersedes(
+				transition.Path, transition.ToSHA256, currentDigest,
+			) ||
 			transition.FromSHA256 == transition.ToSHA256 || strings.TrimSpace(transition.Reason) == "" {
 			t.Fatalf("Claude FW-H 生产 transition 非法：%s", transition.Path)
 		}

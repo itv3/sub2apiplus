@@ -193,6 +193,10 @@ func imagesRetirementReferenceWasSuperseded(path, priorDigest, currentDigest str
 // 精确的 path/from/to 链可以解释后续合法维护；两份闭集收据自身另由 service 门禁
 // 固定原文摘要。
 func compatibilityCodeRetirementTransitionSupersedes(path, priorDigest, currentDigest string) bool {
+	if retirementPrior, ok := claudeFWHLegacyRetirementTransitionPrior(path, currentDigest); ok &&
+		upstreamV0177SourceTransitionSupersedes(path, priorDigest, retirementPrior) {
+		return true
+	}
 	if claudeFWGTestTransitionSupersedes(path, priorDigest, currentDigest) {
 		return true
 	}

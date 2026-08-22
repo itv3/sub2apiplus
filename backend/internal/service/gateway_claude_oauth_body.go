@@ -349,47 +349,11 @@ func isPlainAnthropicAutoToolChoice(choice gjson.Result) bool {
 	return fieldCount == 1
 }
 
-func (s *GatewayService) buildOAuthMetadataUserID(parsed *ParsedRequest, account *Account, fp *Fingerprint) string {
-	if parsed == nil || account == nil {
-		return ""
-	}
-	if parsed.MetadataUserID != "" {
-		return ""
-	}
-
-	userID := strings.TrimSpace(account.GetClaudeUserID())
-	if userID == "" && fp != nil {
-		userID = fp.ClientID
-	}
-	if userID == "" {
-		// Fall back to a random, well-formed client id so we can still satisfy
-		// Claude Code OAuth requirements when account metadata is incomplete.
-		userID = generateClientID()
-	}
-
-	// session_id 用"会话级稳定种子"派生（账号 + 客户端区分因子 + 首条 user 文本）：
-	// 随对话在尾部追加 messages 时保持不变，贴近真实 CC 进程级稳定的 session_id。
-	// 不复用 GenerateSessionHash —— 后者是粘性路由键、按设计逐轮变化（见其测试）。
-	var firstUserText string
-	if parsed.Body != nil {
-		firstUserText = extractFirstUserText(parsed.Body.Bytes())
-	}
-	seed := buildStableSessionSeed(account.ID, sessionContextDiscriminator(parsed.SessionContext), firstUserText)
-	sessionID := generateSessionUUID(seed)
-
-	// 根据指纹 UA 版本选择输出格式
-	var uaVersion string
-	if fp != nil {
-		uaVersion = ExtractCLIVersion(fp.UserAgent)
-	}
-	accountUUID := strings.TrimSpace(account.GetExtraString("account_uuid"))
-	return FormatMetadataUserID(userID, accountUUID, sessionID, uaVersion)
-}
-
-// applyClaudeOAuthThirdPartyCompatibilityToBody 统一处理“第三方客户端 + Claude
-// OAuth 账号”的协议兼容和旧版画像逻辑。
+// applyClaudeSetupTokenThirdPartyCompatibilityToBody 统一处理“第三方客户端 +
+// Claude Setup Token 账号”的协议兼容和既有产品语义。
 //
-// 这是 /v1/messages 主路径上 rewriteSystemForNonClaudeCode +
+// Claude OAuth Persona 已由 strict ReleaseBundle 独占，禁止进入本函数。这是
+// /v1/messages 主路径上 rewriteSystemForNonClaudeCode +
 // normalizeClaudeOAuthRequestBody 流程的通用版，供 OpenAI 协议兼容层
 // (ForwardAsChatCompletions / ForwardAsResponses) 复用。
 //
@@ -399,7 +363,7 @@ func (s *GatewayService) buildOAuthMetadataUserID(parsed *ParsedRequest, account
 //
 // 参数：
 //   - ctx / c：用于读取指纹和 gateway settings；c 可为 nil（如 count_tokens）。
-//   - account：必须是 OAuth 账号，且调用方已判断不是 Claude Code 客户端。
+//   - account：必须是 Setup Token 账号，且调用方已判断不是 Claude Code 客户端。
 //   - body：已经 marshal 成 Anthropic /v1/messages 格式的请求体。
 //   - systemRaw：body 中原始 system 字段（用于判断是否需要 rewrite）。
 //   - model：最终会发给上游的模型 ID（用于模型规范化 + metadata 版本选择）。
@@ -408,7 +372,7 @@ func (s *GatewayService) buildOAuthMetadataUserID(parsed *ParsedRequest, account
 //
 // 返回：改写后的 body 和规范化模型。即使中间任何一步失败，也会退化成可继续
 // 处理的 body（不会 panic）。
-func (s *GatewayService) applyClaudeOAuthThirdPartyCompatibilityToBody(
+func (s *GatewayService) applyClaudeSetupTokenThirdPartyCompatibilityToBody(
 	ctx context.Context,
 	c *gin.Context,
 	account *Account,
@@ -417,7 +381,8 @@ func (s *GatewayService) applyClaudeOAuthThirdPartyCompatibilityToBody(
 	model string,
 	officialEgressOwnsProfile bool,
 ) ([]byte, string) {
-	if account == nil || !account.IsOAuth() || len(body) == 0 {
+	if account == nil || account.Platform != PlatformAnthropic ||
+		account.Type != AccountTypeSetupToken || len(body) == 0 {
 		return body, model
 	}
 
@@ -445,7 +410,7 @@ func (s *GatewayService) applyClaudeOAuthThirdPartyCompatibilityToBody(
 					_, mimicMPT, _ = s.settingService.GetGatewayForwardingSettings(ctx)
 				}
 				if !mimicMPT {
-					if uid := s.buildOAuthMetadataUserIDFromBody(ctx, account, fp, body); uid != "" {
+					if uid := s.buildSetupTokenMetadataUserIDFromBody(ctx, account, fp, body); uid != "" {
 						normalizeOpts.injectMetadata = true
 						normalizeOpts.metadataUserID = uid
 					}
@@ -477,21 +442,18 @@ func (s *GatewayService) applyClaudeOAuthThirdPartyCompatibilityToBody(
 	return body, model
 }
 
-// buildOAuthMetadataUserIDFromBody 是 buildOAuthMetadataUserID 的变体，
-// 适用于调用方手上没有 ParsedRequest 的场景（如 OpenAI 协议兼容层）。
-//
-// 与 buildOAuthMetadataUserID 的唯一区别：
-//   - session hash 从 body 本体按同样规则重算，而不是读取 ParsedRequest 缓存值。
-//   - 如果 body 里已经存在 metadata.user_id，则返回空（由 ensureClaudeOAuthMetadataUserID
-//     自行决定是否覆盖）。
-func (s *GatewayService) buildOAuthMetadataUserIDFromBody(
+// buildSetupTokenMetadataUserIDFromBody 直接基于 body 构造 Setup Token 的
+// metadata.user_id，供 OpenAI 协议兼容层等没有 ParsedRequest 的调用方复用。
+// body 已有 metadata.user_id 时返回空，由 ensureClaudeOAuthMetadataUserID 决定是否覆盖。
+func (s *GatewayService) buildSetupTokenMetadataUserIDFromBody(
 	ctx context.Context,
 	account *Account,
 	fp *Fingerprint,
 	body []byte,
 ) string {
 	_ = ctx
-	if account == nil {
+	if account == nil || account.Platform != PlatformAnthropic ||
+		account.Type != AccountTypeSetupToken {
 		return ""
 	}
 	if existing := gjson.GetBytes(body, "metadata.user_id").String(); existing != "" {
@@ -506,8 +468,7 @@ func (s *GatewayService) buildOAuthMetadataUserIDFromBody(
 		userID = generateClientID()
 	}
 
-	// 与 buildOAuthMetadataUserID 一致：用会话级稳定种子，避免整 body 哈希导致
-	// 每轮（甚至每个 token 变化）都重算出不同的 session_id。
+	// 使用会话级稳定种子，避免整 body 哈希导致每轮都重算出不同的 session_id。
 	var clientDiscriminator string
 	if fp != nil {
 		clientDiscriminator = fp.ClientID

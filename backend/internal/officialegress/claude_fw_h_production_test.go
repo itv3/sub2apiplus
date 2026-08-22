@@ -1,6 +1,10 @@
 package officialegress
 
-import "testing"
+import (
+	"context"
+	"net/http"
+	"testing"
+)
 
 func newClaudeProductionTestRuntime(
 	t *testing.T,
@@ -57,6 +61,46 @@ func TestClaudeFWHProductionApprovalAndRuntimeAreBound(t *testing.T) {
 	}
 }
 
+func TestClaudeFWHProductionSharedRoutesRequireExplicitPersonaBinding(t *testing.T) {
+	_, catalog, guard := newClaudeProductionTestRuntime(t, &claudeCapturePort{})
+
+	for _, testCase := range []struct {
+		path   string
+		sinkID SinkID
+	}{
+		{path: "/v1/messages", sinkID: SinkClaudeSetupTokenMessagesInference},
+		{path: "/v1/messages/count_tokens", sinkID: SinkClaudeSetupTokenTokenCount},
+	} {
+		unbound, err := http.NewRequest(
+			http.MethodPost, "https://api.anthropic.com"+testCase.path, nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		unbound.Header.Set("x-api-key", "<api-key>")
+		decision := guard.Evaluate(unbound, BackendHTTPUpstream, WireProtocolHTTP)
+		if !decision.Allow || decision.Scope != EgressScopeOutOfScope {
+			t.Fatalf("共享路由误把未绑定 API Key 纳入 Claude Persona：%s %+v", testCase.path, decision)
+		}
+
+		boundContext, err := catalog.StartAttemptContext(context.Background(), testCase.sinkID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		bound, err := http.NewRequestWithContext(
+			boundContext, http.MethodPost, "https://api.anthropic.com"+testCase.path, nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		decision = guard.Evaluate(bound, BackendHTTPUpstream, WireProtocolHTTP)
+		if !decision.Allow || decision.Scope != EgressScopeManaged ||
+			decision.SinkState != SinkStateEnforced {
+			t.Fatalf("已绑定 Setup Token 未进入 non_persona_managed：%s %+v", testCase.path, decision)
+		}
+	}
+}
+
 func TestClaudeCandidateAndProductionCatalogCannotBeCrossUsed(t *testing.T) {
 	candidateCatalog, err := ClaudeFWGCandidateSinkCatalog(DefaultSinkCatalog())
 	if err != nil {
@@ -105,10 +149,8 @@ func TestClaudeFWHApprovalRejectsEnvelopeOrReleaseDrift(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	approval.DeploymentTrafficEnvelope.LogicalIngressIDs = append(
-		approval.DeploymentTrafficEnvelope.LogicalIngressIDs,
-		"responses-oauth",
-	)
+	approval.DeploymentTrafficEnvelope.LogicalIngressIDs =
+		approval.DeploymentTrafficEnvelope.LogicalIngressIDs[:5]
 	if err := validateClaudeFWHProductionApproval(approval); err == nil {
 		t.Fatal("Claude FW-H ApprovalFact 未拒绝 DeploymentTrafficEnvelope 扩大")
 	}

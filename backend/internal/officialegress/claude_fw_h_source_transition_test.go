@@ -78,7 +78,7 @@ func validateClaudeFWHSourceTransition(
 		receipt.BaseCommit != "619a63818f49ecc0b99bf4a16b7d776f939a452e" ||
 		receipt.ApprovalFact.Path !=
 			"backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-fw-h-approval.json" ||
-		receipt.ApprovalFact.SHA256 != ClaudeFWHProductionApprovalDigest ||
+		receipt.ApprovalFact.SHA256 != ClaudeFWHInitialProductionApprovalDigest ||
 		len(receipt.PriorReceipts) != 3 || len(receipt.Transitions) != 27 ||
 		receipt.Result != "passed" {
 		return errors.New("Claude FW-H source transition 顶层事实非法")
@@ -163,13 +163,19 @@ func loadClaudeFWHSourceTransition(t *testing.T) map[string]changeset4SourceTran
 // claudeFWHSourceTransitionSupersedes 只承认本轮收据中的精确 path/from/to，
 // 不覆盖或改写任何 FW-G 历史事实。
 func claudeFWHSourceTransitionSupersedes(path, priorDigest, currentDigest string) bool {
+	if claudeFWHLegacyRetirementTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	receipt, raw, err := readClaudeFWHSourceTransition()
 	if err != nil || validateClaudeFWHSourceTransition(receipt, raw) != nil {
 		return false
 	}
 	for _, transition := range receipt.Transitions {
 		if transition.Path == path && transition.FromSHA256 == priorDigest &&
-			transition.ToSHA256 == currentDigest {
+			(transition.ToSHA256 == currentDigest ||
+				claudeFWHLegacyRetirementTransitionSupersedes(
+					path, transition.ToSHA256, currentDigest,
+				)) {
 			return true
 		}
 	}

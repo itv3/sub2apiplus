@@ -54,15 +54,6 @@ func claudeFWGIngressSnapshotFromContext(
 	return snapshot, true
 }
 
-func (s *GatewayService) claudeStrictRoutingEnabled() bool {
-	if s == nil || s.cfg == nil {
-		return false
-	}
-	return s.cfg.Gateway.ClaudeFWGCandidateEnabled || strings.EqualFold(
-		strings.TrimSpace(s.cfg.Gateway.ClaudeOfficialClientProfiles.Mode), "active",
-	)
-}
-
 func (s *GatewayService) claudeStrictRuntime() *officialegress.ClaudeRuntime {
 	if s == nil || s.officialEgress == nil {
 		return nil
@@ -74,8 +65,7 @@ func (s *GatewayService) claudeStrictRuntime() *officialegress.ClaudeRuntime {
 }
 
 func (s *GatewayService) shouldRouteClaudeStrictMessages(c *gin.Context, account *Account) bool {
-	if !s.claudeStrictRoutingEnabled() ||
-		c == nil || c.Request == nil || c.Request.URL == nil || account == nil {
+	if c == nil || c.Request == nil || c.Request.URL == nil || account == nil {
 		return false
 	}
 	return account.Platform == PlatformAnthropic && account.Type == AccountTypeOAuth &&
@@ -88,8 +78,7 @@ func (s *GatewayService) shouldRouteClaudeFWGCandidate(c *gin.Context, account *
 }
 
 func (s *GatewayService) shouldRouteClaudeStrictCountTokens(c *gin.Context, account *Account) bool {
-	if !s.claudeStrictRoutingEnabled() ||
-		c == nil || c.Request == nil || c.Request.URL == nil || account == nil {
+	if c == nil || c.Request == nil || c.Request.URL == nil || account == nil {
 		return false
 	}
 	path := c.Request.URL.Path

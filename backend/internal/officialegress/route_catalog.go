@@ -125,9 +125,7 @@ func NewOfficialRouteCatalog(sinks SinkCatalog) (OfficialRouteCatalog, error) {
 			entry := officialRouteEntry{
 				sinkID: sink.ID(), route: route, physicalID: physicalID,
 				persona: sink.Persona(), evidence: sink.EndpointEvidence(),
-				claimsScope: !(sink.Persona() == PersonaUnclassified &&
-					sink.EndpointEvidence() == EndpointEvidenceExternalPersona &&
-					sink.EnforcementState() == SinkStateLegacyObserve),
+				claimsScope: routeClaimsPhysicalScope(sink, route),
 			}
 			if entry.claimsScope {
 				scopeClaims[physicalID] = true
@@ -198,6 +196,28 @@ func NewOfficialRouteCatalog(sinks SinkCatalog) (OfficialRouteCatalog, error) {
 		entries: entries, managedPurposes: managedPurposes,
 		scopeClaims: scopeClaims, physical: physical,
 	}, nil
+}
+
+// routeClaimsPhysicalScope 决定“仅凭 method/host/path”能否把未绑定请求纳入 Guard。
+// Claude OAuth、Setup Token、API Key 与 Service Account 可能共用 Anthropic Messages
+// 路由，生产身份只能由账号选择后的显式 SinkID 决定；这些共享路由不得仅凭 URL
+// 抢占其它产品流量。已绑定的 strict／non_persona_managed 请求仍会在 Scope 第 0 档
+// 通过 RegisteredSink 进入受管域，因此不会降低 Claude OAuth 的 fail-close 强度。
+func routeClaimsPhysicalScope(sink SinkBinding, route CatalogRoute) bool {
+	if sink.Persona() == PersonaUnclassified &&
+		sink.EndpointEvidence() == EndpointEvidenceExternalPersona &&
+		sink.EnforcementState() == SinkStateLegacyObserve {
+		return false
+	}
+	if normalizeRouteHost(route.Key.Host) != "api.anthropic.com" {
+		return true
+	}
+	switch route.Key.Path {
+	case "/v1/messages", "/v1/messages/count_tokens", "/v1/models":
+		return false
+	default:
+		return true
+	}
 }
 
 // sinkCatalogHasClaudeProfile 只从当前进程实际安装的 SinkCatalog 决定是否加载

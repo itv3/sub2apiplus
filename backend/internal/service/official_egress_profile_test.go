@@ -13,12 +13,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestOfficialEgressT2_OAuthAccountAutomaticallyAttachesHTTPProfile(t *testing.T) {
+func TestOfficialEgressT2_SetupTokenAccountAutomaticallyAttachesHTTPProfile(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	account := &Account{
 		ID:       50,
 		Platform: PlatformAnthropic,
-		Type:     AccountTypeOAuth,
+		Type:     AccountTypeSetupToken,
 		Extra: map[string]any{
 			"official_egress_enabled":         false,
 			"official_egress_profile_version": "deprecated-version",
@@ -357,10 +357,14 @@ func TestOfficialEgressT2_ConnectionPoolKeySeparatesAccountProxyAndTransport(t *
 }
 
 func officialEgressTestAccount(id int64, platform string) *Account {
+	accountType := AccountTypeOAuth
+	if platform == PlatformAnthropic {
+		accountType = AccountTypeSetupToken
+	}
 	return &Account{
 		ID:       id,
 		Platform: platform,
-		Type:     AccountTypeOAuth,
+		Type:     accountType,
 		Extra:    map[string]any{},
 	}
 }

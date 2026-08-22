@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -19,6 +20,12 @@ import (
 )
 
 func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token, tokenType, modelID string, reqStream bool, mimicClaudeCode bool) (*http.Request, []byte, error) {
+	if account == nil {
+		return nil, nil, errors.New("构建 Anthropic 上游请求时账号为空")
+	}
+	if account.Platform == PlatformAnthropic && account.Type == AccountTypeOAuth {
+		return nil, nil, errors.New("Claude OAuth 旧 Messages 构造链已退休，必须使用 strict ReleaseBundle")
+	}
 	if account.Platform == PlatformAnthropic && account.Type == AccountTypeServiceAccount {
 		req, err := s.buildUpstreamRequestAnthropicVertex(ctx, c, account, body, token, modelID, reqStream)
 		return req, body, err
@@ -133,16 +140,16 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	if err != nil {
 		return nil, nil, err
 	}
-	if tokenType == "oauth" {
-		req, err = bindClaudeFWELegacyObservationRequest(
+	if account.Platform == PlatformAnthropic && account.Type == AccountTypeSetupToken {
+		req, err = bindClaudeManagedEndpointRequest(
 			req,
-			officialEgressSinkClaudeLegacyMessages,
+			officialEgressSinkClaudeSetupTokenMessages,
 			http.MethodPost,
 			"api.anthropic.com",
 			"/v1/messages",
 		)
 		if err != nil {
-			return nil, nil, fmt.Errorf("绑定 Claude FW-E 推理观察 Sink：%w", err)
+			return nil, nil, fmt.Errorf("绑定 Claude Setup Token 推理受管 Sink：%w", err)
 		}
 	}
 
@@ -236,7 +243,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	if err != nil {
 		return nil, nil, fmt.Errorf("resolve official egress profile: %w", err)
 	}
-	req, body, _, err = s.finalizeAnthropicOfficialEgressRequest(req, c, account, body)
+	req, body, _, err = s.finalizeAnthropicSetupTokenEgressRequest(req, c, account, body)
 	if err != nil {
 		return nil, nil, fmt.Errorf("finalize Anthropic official egress request: %w", err)
 	}

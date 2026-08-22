@@ -289,7 +289,7 @@ func (s *AccountTestService) buildAnthropicUpstreamModelsRequest(ctx context.Con
 		return nil, newUpstreamModelSyncConfigError("Invalid Anthropic model list URL", err)
 	}
 	if account.IsOAuth() {
-		req, err = bindClaudeFWELegacyObservationRequest(
+		req, err = bindClaudeManagedEndpointRequest(
 			req,
 			officialEgressSinkClaudeLegacyModels,
 			http.MethodGet,

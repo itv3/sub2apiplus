@@ -194,6 +194,9 @@ func claudeFWHThirdPartyStrictSourceTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if claudeFWHLegacyRetirementTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	receipt, raw, err := readClaudeFWHThirdPartyStrictTransition(
 		"docs/egress/maintenance/claude-fw-h-third-party-strict-source-transition.json",
 	)
@@ -202,7 +205,11 @@ func claudeFWHThirdPartyStrictSourceTransitionSupersedes(
 		return false
 	}
 	for _, transition := range receipt.Transitions {
-		if transition.Path != path || transition.ToSHA256 != currentDigest {
+		if transition.Path != path ||
+			(transition.ToSHA256 != currentDigest &&
+				!claudeFWHLegacyRetirementTransitionSupersedes(
+					path, transition.ToSHA256, currentDigest,
+				)) {
 			continue
 		}
 		if transition.FromSHA256 == priorDigest {

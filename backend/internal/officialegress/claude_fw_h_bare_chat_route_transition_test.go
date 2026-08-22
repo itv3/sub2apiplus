@@ -59,6 +59,9 @@ func claudeFWHBareChatRouteTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if claudeFWHLegacyRetirementTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	for _, receiptPath := range []string{
 		"docs/egress/maintenance/claude-fw-h-bare-chat-route-source-transition.json",
 		"docs/egress/maintenance/claude-fw-h-bare-chat-route-test-transition.json",
@@ -68,7 +71,11 @@ func claudeFWHBareChatRouteTransitionSupersedes(
 			return false
 		}
 		for _, transition := range receipt.Transitions {
-			if transition.Path == path && transition.ToSHA256 == currentDigest &&
+			if transition.Path == path &&
+				(transition.ToSHA256 == currentDigest ||
+					claudeFWHLegacyRetirementTransitionSupersedes(
+						path, transition.ToSHA256, currentDigest,
+					)) &&
 				(transition.FromSHA256 == priorDigest ||
 					claudeFWGThinkingDisplayTransitionSupersedes(
 						path, priorDigest, transition.FromSHA256,

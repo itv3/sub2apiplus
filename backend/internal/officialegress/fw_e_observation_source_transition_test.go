@@ -94,7 +94,10 @@ func fwEObservationSourceTransitionSupersedes(
 	}
 	for _, transition := range receipt.SourceTransitions {
 		if transition.Path == path && transition.FromSHA256 == priorDigest &&
-			transition.ToSHA256 == currentDigest {
+			(transition.ToSHA256 == currentDigest ||
+				claudeFWHLegacyRetirementTransitionSupersedes(
+					path, transition.ToSHA256, currentDigest,
+				)) {
 			return true
 		}
 	}
@@ -127,9 +130,15 @@ func TestFWEObservationSourceTransitionIsFrozen(t *testing.T) {
 		if readErr != nil {
 			t.Fatal(readErr)
 		}
-		if got := sha256Hex(source); got != transition.ToSHA256 &&
+		got := sha256Hex(source)
+		retirementPrior, hasRetirementPrior :=
+			claudeFWHLegacyRetirementTransitionPrior(transition.Path, got)
+		if got != transition.ToSHA256 &&
 			!claudeFWGSourceTransitionSupersedes(transition.Path, transition.ToSHA256, got) &&
-			!claudeFWGTestTransitionSupersedes(transition.Path, transition.ToSHA256, got) {
+			!claudeFWGTestTransitionSupersedes(transition.Path, transition.ToSHA256, got) &&
+			!(hasRetirementPrior && claudeFWGCountTokensSourceTransitionSupersedes(
+				transition.Path, transition.ToSHA256, retirementPrior,
+			)) {
 			t.Fatalf(
 				"FW-E observation source transition 漂移：path=%s got=%s want=%s",
 				transition.Path,

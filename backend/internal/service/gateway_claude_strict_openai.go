@@ -23,7 +23,7 @@ const claudeStrictSSEPreludeLimit = 1 << 20
 const claudeStrictJSONResponseLimit = 64 << 20
 
 func (s *GatewayService) shouldRouteClaudeStrictOpenAI(account *Account) bool {
-	return s.claudeStrictRoutingEnabled() && account != nil &&
+	return account != nil &&
 		account.Platform == PlatformAnthropic && account.Type == AccountTypeOAuth
 }
 
@@ -36,13 +36,7 @@ func (s *GatewayService) ShouldFailCloseClaudeStrictResponsesWebSocket(account *
 // ShouldFailCloseClaudeStrictResponsesWebSocket 为 OpenAI WebSocket 调度链提供同一门禁。
 // WebSocket 不在 Claude lossless 适配闭集内，因此只能在凭据和上游调用前拒绝。
 func (s *OpenAIGatewayService) ShouldFailCloseClaudeStrictResponsesWebSocket(account *Account) bool {
-	if s == nil || s.cfg == nil {
-		return false
-	}
-	enabled := s.cfg.Gateway.ClaudeFWGCandidateEnabled || strings.EqualFold(
-		strings.TrimSpace(s.cfg.Gateway.ClaudeOfficialClientProfiles.Mode), "active",
-	)
-	return enabled && account != nil && account.Platform == PlatformAnthropic &&
+	return account != nil && account.Platform == PlatformAnthropic &&
 		account.Type == AccountTypeOAuth
 }
 

@@ -188,7 +188,7 @@ func TestOfficialEgressT4_AnthropicFinalizerMatchesPhase0ApplicationContract(t *
 func officialAnthropicCurrentTestHeaders(t *testing.T) []officialClientHeaderValue {
 	t.Helper()
 	profile, err := resolveOfficialClientProfile(
-		officialClientPurposeAnthropicOAuthMessagesHTTP,
+		officialClientPurposeAnthropicSetupTokenMessagesHTTP,
 		officialClientProfileModeActive,
 	)
 	require.NoError(t, err)
@@ -346,7 +346,7 @@ func TestOfficialEgressT4_CompatibilityLayerDefersProfileFieldsToFinalizer(t *te
 	c := officialEgressT4KiloGinContext("kilo-ownership-session")
 	captureOfficialAnthropicIngressContract(c, ingressBody)
 
-	compatibilityBody, model := svc.applyClaudeOAuthThirdPartyCompatibilityToBody(
+	compatibilityBody, model := svc.applyClaudeSetupTokenThirdPartyCompatibilityToBody(
 		context.Background(),
 		c,
 		account,
@@ -398,7 +398,7 @@ func TestOfficialEgressT4_CrossProtocolIngressDefersProfileToAnthropicFinalizer(
 			require.NoError(t, err)
 			require.True(t, officialEgressOwnsProfile)
 
-			compatibilityBody, model := svc.applyClaudeOAuthThirdPartyCompatibilityToBody(
+			compatibilityBody, model := svc.applyClaudeSetupTokenThirdPartyCompatibilityToBody(
 				context.Background(),
 				c,
 				account,
@@ -526,7 +526,7 @@ func TestOfficialEgressT4_AnthropicFinalizerRecordsDerivedKiloIdentity(t *testin
 	req, err = attachOfficialEgressHTTPContext(req, c, account, PlatformAnthropic)
 	require.NoError(t, err)
 
-	req, _, _, err = svc.finalizeAnthropicOfficialEgressRequest(req, c, account, body)
+	req, _, _, err = svc.finalizeAnthropicSetupTokenEgressRequest(req, c, account, body)
 	require.NoError(t, err)
 	egressContext, ok := OfficialEgressContextFromContext(req.Context())
 	require.True(t, ok)
@@ -556,7 +556,7 @@ func TestOfficialEgressT4_AnthropicFinalizerReportsModificationsAndProvenance(t 
 	req, err = attachOfficialEgressHTTPContext(req, c, account, PlatformAnthropic)
 	require.NoError(t, err)
 
-	req, _, result, err := svc.finalizeAnthropicOfficialEgressRequest(req, c, account, body)
+	req, _, result, err := svc.finalizeAnthropicSetupTokenEgressRequest(req, c, account, body)
 	require.NoError(t, err)
 	require.Equal(t, []OfficialEgressModification{
 		{Kind: "body", Field: "metadata.user_id"},
@@ -605,7 +605,7 @@ func officialEgressT4AnthropicAccount(accountUUID string) *Account {
 	return &Account{
 		ID:       50,
 		Platform: PlatformAnthropic,
-		Type:     AccountTypeOAuth,
+		Type:     AccountTypeSetupToken,
 		Extra: map[string]any{
 			"account_uuid":               accountUUID,
 			"session_id_masking_enabled": true,

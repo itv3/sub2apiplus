@@ -317,6 +317,9 @@ func claudeFWGModelCapabilityTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if claudeFWHLegacyRetirementTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if claudeFWHProductionAcceptanceSupersedes(
 		path, priorDigest, currentDigest,
 	) || claudeFWHSourceTransitionSupersedes(
@@ -335,6 +338,9 @@ func claudeFWGModelCapabilityTransitionSupersedes(
 	}
 	for _, transition := range receipt.Transitions {
 		currentReached := transition.ToSHA256 == currentDigest ||
+			claudeFWHLegacyRetirementTransitionSupersedes(
+				path, transition.ToSHA256, currentDigest,
+			) ||
 			claudeFWGThreeModelAcceptanceAttemptSupersedes(
 				path, transition.ToSHA256, currentDigest,
 			) || claudeFWGFableDesktopTitleTransitionSupersedes(

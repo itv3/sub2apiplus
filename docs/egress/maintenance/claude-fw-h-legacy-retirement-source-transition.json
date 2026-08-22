@@ -1,0 +1,176 @@
+{
+  "schema_version": "official-egress-claude-fw-h-legacy-retirement-source-transition/v1",
+  "date": "2026-08-22",
+  "phase": "FW-H",
+  "base_commit": "c51fb5d2cf052f47db9f27926d8340c2c218e2af",
+  "scope": "legacy_retirement",
+  "approval_fact": {
+    "path": "backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-fw-h-legacy-retirement-approval.json",
+    "sha256": "1d002a2708b198256098999932908d47f0eb90a2c819f11d8393570f33996c2c"
+  },
+  "logical_ingress_ids": [
+    "official-count-tokens-oauth",
+    "official-messages-oauth",
+    "third-party-count-tokens-oauth",
+    "third-party-messages-oauth",
+    "chat-completions-oauth",
+    "responses-oauth"
+  ],
+  "safety": {
+    "production_host": "DMIT",
+    "production_selector": "active",
+    "candidate_enabled": false,
+    "retained_legacy": [],
+    "setup_token_semantics": "non_persona_managed",
+    "api_key_semantics": "retained",
+    "service_account_semantics": "retained",
+    "removal_receipt_allowed": true,
+    "deployment_performed": false,
+    "vircs_production_changed": false
+  },
+  "result": "passed",
+  "predecessors": [
+    {
+      "kind": "prior_production_approval",
+      "path": "backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-fw-h-approval.json",
+      "sha256": "73e690d20fdb36688d70247d4c857f6aa31ebfc6dcd755fbbcc8276e37d74f1a"
+    },
+    {
+      "kind": "production_acceptance",
+      "path": "docs/egress/maintenance/claude-fw-h-production-acceptance-package.json",
+      "sha256": "45b21fd3e74e6b2a3968c04bf18b416a0a43a157ba7cb7451f32a5d3c711cabd"
+    },
+    {
+      "kind": "candidate_approval",
+      "path": "docs/egress/maintenance/claude-fw-h-third-party-strict-candidate-approval.json",
+      "sha256": "7763d9337f1529dba2bdb8bdf07a98d78cb57749f75ba38a7f80fa82bd80e297"
+    },
+    {
+      "kind": "dmit_acceptance",
+      "path": "docs/egress/maintenance/claude-fw-h-third-party-strict-dmit-acceptance.json",
+      "sha256": "1a77cc26952355e13d486cdf7979f1bf9ed8a40d413cf55999cb5e8093c8fcfc"
+    }
+  ],
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-fw-h-legacy-retirement-approval.json",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "1d002a2708b198256098999932908d47f0eb90a2c819f11d8393570f33996c2c",
+      "reason": "新增不可变后继生产批准，覆盖六类入口、清空 retained_legacy，并允许在独立门禁通过后签发 RemovalReceipt。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_candidate_catalog.go",
+      "from_sha256": "c37324eeb697fa1ff7a33d273eeb7d50dd5c50f8c96d54868944500e232dd4b1",
+      "to_sha256": "4fee5d9c1bdad14a94159b77776cea4a27d7c015834013469a24c13f96483053",
+      "reason": "从 active／candidate Catalog 删除已退休的 OAuth Messages 与 count_tokens 观察 Sink，并把 Setup Token 作为独立 non_persona_managed 产品能力登记。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_production_release.go",
+      "from_sha256": "989e86699caf844fd62baebc40641978fdb975443f4857a695fdc428070f07f8",
+      "to_sha256": "4d43c714585fb8035f62d439bfb2f81092b2c6c9bc74dd7708d3cdbb45aa8af8",
+      "reason": "激活覆盖六类生产入口且 retained_legacy 为空的后继 ApprovalFact，同时保留首次生产批准的历史摘要。"
+    },
+    {
+      "path": "backend/internal/officialegress/legacy_observation_catalog.go",
+      "from_sha256": "3eb6057b791c48b96b1a65fb227393a071f8ef7ce1647296a942d76e2f986c9a",
+      "to_sha256": "df4d148dde9ed0c1ddad2e22151beb4e2b7b23e73e05a894bb7468eadb3c8f43",
+      "reason": "把 Setup Token 推理与 token_count 作为 post-bootstrap non_persona_managed Sink 登记到默认 Catalog，不改写 sealed legacy baseline。"
+    },
+    {
+      "path": "backend/internal/officialegress/route_catalog.go",
+      "from_sha256": "fe5a14a77cf48441390a465c82dc3933cd711a3da62b514738406edce2ec6d79",
+      "to_sha256": "a893e3bb05b2ffd003a6910ff530388e5583083fee1f37b6dc80b91f380fac07",
+      "reason": "Anthropic 多认证家族共享路由只接受账号选择后的显式 SinkID，防止生产 Claude Catalog 抢占 API Key 与 Service Account 流量。"
+    },
+    {
+      "path": "backend/internal/officialegress/sink_ids.go",
+      "from_sha256": "8a89a8771a8410a9e106887bcc8af5f89af21d5ae01837a39b59d14ab354d6b3",
+      "to_sha256": "ccd77badfe4a78b8493c2aa6abdc9f90334759abb5641e0436f79d22cdc5b0d2",
+      "reason": "为 Setup Token 推理与 token_count 建立不冒充 Claude OAuth Persona 的独立受管 SinkID。"
+    },
+    {
+      "path": "backend/internal/service/account_test_service.go",
+      "from_sha256": "be884895e4a230e9e101ce1149dfe4a4f1973af48bb097628dff3e2ff40ea08d",
+      "to_sha256": "87be85247043a2ee5921cf18475f8b71c63fcb06809ffb306e221d5ff9ab8a54",
+      "reason": "保持 Claude OAuth 账号测试辅助出站受管，不复用已退休的推理 Sink。"
+    },
+    {
+      "path": "backend/internal/service/gateway_claude_fw_g.go",
+      "from_sha256": "8978cf81424e8d141eec31b016f84292b743384c92ccf90aba507d9f98a36b2c",
+      "to_sha256": "2a0456aa53102502be65aee3f8830db85c1b8bf08f01951789a3654918ca388b",
+      "reason": "移除 Claude OAuth strict 路由对 candidate／active 开关的依赖，保证旧链无法因配置回落。"
+    },
+    {
+      "path": "backend/internal/service/gateway_claude_oauth_body.go",
+      "from_sha256": "dd599cd8cfb1f442e9c394b8cd959a822f24aa6d524b3d28cd261a8366f34134",
+      "to_sha256": "be4e8c65605cbcd91b5aaf2bd283a8b18ab5e242820f36190c7c00b911179724",
+      "reason": "把遗留第三方语义兼容函数收窄为 Setup Token 专用，并删除已无生产消费者的 OAuth metadata 构造器。"
+    },
+    {
+      "path": "backend/internal/service/gateway_claude_strict_openai.go",
+      "from_sha256": "20492d5427fcfb90d88006df8215e2777b79bee4fc60d2e4c34169b9a8902582",
+      "to_sha256": "a1a39f1011dbc02f2f9ff711e38e0acfc5656123ef6d1aba85b8bce2d3f475a9",
+      "reason": "让 Chat Completions／Responses 的 Claude OAuth 路由始终进入 strict，WebSocket 始终在凭据使用前 fail-close。"
+    },
+    {
+      "path": "backend/internal/service/gateway_count_tokens.go",
+      "from_sha256": "703072dd64f23ab39ccc4579f21c503aca9c3d991121b97dc2558ce453a876dd",
+      "to_sha256": "06336443d8a0e8fec49fb1cf9999c41d5d2afd8ba1969589c8d7a5adebcaf997",
+      "reason": "禁止 Claude OAuth 进入旧 count_tokens builder，并为 Setup Token 绑定独立受管 Sink。"
+    },
+    {
+      "path": "backend/internal/service/gateway_forward.go",
+      "from_sha256": "655b5433c97856f654ca1bc46899d726f3c43fe627e301989e2d0fb2f8268fa2",
+      "to_sha256": "4d7a69ef69c7a752ce83c24f3a54b5316d85005b1fc283b20fe44b6d8dd99a4f",
+      "reason": "把旧第三方请求补全限定为 Setup Token 产品语义。"
+    },
+    {
+      "path": "backend/internal/service/gateway_forward_as_chat_completions.go",
+      "from_sha256": "243be47814ab71d960b87032644092e90ef2f8c2f319cdefcc9e7aebc1fd04ae",
+      "to_sha256": "1395a0760ade13707b4242bc604fe6b26851c2f615042624d503ca3a4cf45de2",
+      "reason": "把旧 Chat Completions 兼容链限定为 Setup Token；Claude OAuth 已由 strict 入口接管。"
+    },
+    {
+      "path": "backend/internal/service/gateway_forward_as_responses.go",
+      "from_sha256": "1efd342643a33c111339e09a4dc173cfdb776c65e186673e0ffd736950db9180",
+      "to_sha256": "c9d297ecc04022104f727dadb0cf048581d972fc76a5909042d296558e4324bb",
+      "reason": "把旧 Responses 兼容链限定为 Setup Token；Claude OAuth 已由 strict 入口接管。"
+    },
+    {
+      "path": "backend/internal/service/gateway_upstream_request.go",
+      "from_sha256": "0ccb96b3b8315db857458be289d32d8da22f16a568979e6c0a8b41426152f442",
+      "to_sha256": "b41ecf58734bcdf6fbcbf193b20bad86f86dbc91d35088a7ed21cd1cc38ef0b1",
+      "reason": "禁止 Claude OAuth 进入旧 Messages builder／finalizer，并把 Setup Token 绑定到独立受管执行链。"
+    },
+    {
+      "path": "backend/internal/service/official_client_profile_registry.go",
+      "from_sha256": "f9c4af1603b63fa4ed1f8875d60cce14ab93c6aeba48c52f3210c24567ec97a6",
+      "to_sha256": "426562cbbfb234014c0833ac2f33b5a2208b6242d3976d109bb4436edc42e992",
+      "reason": "退休旧 Claude OAuth 代码画像注册项，仅保留 Setup Token 产品语义所需的独立注册项。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_1a_binding.go",
+      "from_sha256": "e8d4ba520182cf7c1c07ff533d77a67ffe9900b5cdfae57066e32a10698559fd",
+      "to_sha256": "797fa51a2cdea544c1b2d86cb4fc69049debe51a6060776ea4b1cb5d3986abab",
+      "reason": "用受管端点绑定替代 FW-E 遗留观察绑定名称，并接入 Setup Token 独立 Sink。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_anthropic.go",
+      "from_sha256": "534fa20eb916411ea5bd999a8ba6e28050506ab8be06bd390b5bd1a2684adfc0",
+      "to_sha256": "c90e231cc940e739e176fe8cd0a85397899466159534261916a05d41b3429bdd",
+      "reason": "把遗留 Anthropic finalizer 收窄为 Setup Token 专用并拒绝其他账号类型。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_profile.go",
+      "from_sha256": "02af82c1a12cb655c15cce91c7dab21b34692c25869830d980798526c03db5f9",
+      "to_sha256": "c0f57e836b0c9eb200693190e5004ff197eb9bbede4d70693b88316209b7a676",
+      "reason": "旧画像 Resolver 对 Claude OAuth fail-close，只允许 Setup Token 使用保留的产品语义画像。"
+    },
+    {
+      "path": "backend/internal/service/upstream_models.go",
+      "from_sha256": "3899766a1c7b9a3bb1d3caee90eb1085e5ce9e01c3ac6f102d5ce49ecfde0e0d",
+      "to_sha256": "9498a8a6c225fbe0dc16a0380aa38066e08d2afed01fe8ebbeaf7aaed23519f8",
+      "reason": "保持 Claude OAuth 模型列表辅助出站受管，不复用已退休的推理 Sink。"
+    }
+  ]
+}

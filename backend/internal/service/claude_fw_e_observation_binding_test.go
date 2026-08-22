@@ -12,7 +12,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestClaudeFWEObservationBindingChangesOnlyRequestContext(t *testing.T) {
+func TestClaudeManagedBindingChangesOnlyRequestContext(t *testing.T) {
 	body := []byte(`{"model":"claude-sonnet-5","messages":[]}`)
 	req, err := http.NewRequestWithContext(
 		context.Background(),
@@ -28,9 +28,9 @@ func TestClaudeFWEObservationBindingChangesOnlyRequestContext(t *testing.T) {
 	beforeHeader := req.Header.Clone()
 	beforeLength := req.ContentLength
 
-	bound, err := bindClaudeFWELegacyObservationRequest(
+	bound, err := bindClaudeManagedEndpointRequest(
 		req,
-		officialegress.SinkClaudeLegacyMessagesInference,
+		officialegress.SinkClaudeSetupTokenMessagesInference,
 		http.MethodPost,
 		"api.anthropic.com",
 		"/v1/messages",
@@ -38,7 +38,7 @@ func TestClaudeFWEObservationBindingChangesOnlyRequestContext(t *testing.T) {
 	require.NoError(t, err)
 	identity, ok := officialegress.AttemptIdentityFromContext(bound.Context())
 	require.True(t, ok)
-	require.Equal(t, officialegress.SinkClaudeLegacyMessagesInference, identity.SinkID)
+	require.Equal(t, officialegress.SinkClaudeSetupTokenMessagesInference, identity.SinkID)
 	require.Equal(t, officialegress.PersonaUnclassified, identity.DeclaredPersona)
 	require.Equal(t, beforeURL, bound.URL.String())
 	require.True(t, reflect.DeepEqual(beforeHeader, bound.Header))
@@ -48,7 +48,7 @@ func TestClaudeFWEObservationBindingChangesOnlyRequestContext(t *testing.T) {
 	require.Equal(t, body, actualBody)
 }
 
-func TestClaudeFWEObservationBindingDoesNotClaimOtherProductTraffic(t *testing.T) {
+func TestClaudeManagedBindingDoesNotClaimOtherProductTraffic(t *testing.T) {
 	testCases := []struct {
 		name   string
 		method string
@@ -66,9 +66,9 @@ func TestClaudeFWEObservationBindingDoesNotClaimOtherProductTraffic(t *testing.T
 				context.Background(), testCase.method, testCase.target, nil,
 			)
 			require.NoError(t, err)
-			bound, err := bindClaudeFWELegacyObservationRequest(
+			bound, err := bindClaudeManagedEndpointRequest(
 				req,
-				officialegress.SinkClaudeLegacyMessagesInference,
+				officialegress.SinkClaudeSetupTokenMessagesInference,
 				http.MethodPost,
 				"api.anthropic.com",
 				"/v1/messages",
@@ -80,7 +80,7 @@ func TestClaudeFWEObservationBindingDoesNotClaimOtherProductTraffic(t *testing.T
 	}
 }
 
-func TestClaudeOAuthRequestBuildersBindExpectedFWEObservationSinks(t *testing.T) {
+func TestClaudeSetupTokenRequestBuildersBindManagedSinks(t *testing.T) {
 	account := officialEgressT4AnthropicAccount(
 		"11111111-1111-4111-8111-111111111111",
 	)
@@ -97,7 +97,7 @@ func TestClaudeOAuthRequestBuildersBindExpectedFWEObservationSinks(t *testing.T)
 	)
 	require.NoError(t, err)
 	assertClaudeFWEObservationIdentity(
-		t, messages, officialegress.SinkClaudeLegacyMessagesInference,
+		t, messages, officialegress.SinkClaudeSetupTokenMessagesInference,
 	)
 
 	countTokens, _, err := gateway.buildCountTokensRequest(
@@ -106,7 +106,7 @@ func TestClaudeOAuthRequestBuildersBindExpectedFWEObservationSinks(t *testing.T)
 	)
 	require.NoError(t, err)
 	assertClaudeFWEObservationIdentity(
-		t, countTokens, officialegress.SinkClaudeLegacyTokenCount,
+		t, countTokens, officialegress.SinkClaudeSetupTokenTokenCount,
 	)
 
 	account.Credentials = map[string]any{"access_token": "oauth-token"}

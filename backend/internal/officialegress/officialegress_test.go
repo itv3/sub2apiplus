@@ -27,11 +27,11 @@ func TestEmbeddedSinkCatalogCurrentStateIsMachineProvable(t *testing.T) {
 		t.Fatalf("加载 Catalog 失败: %v", err)
 	}
 	bindings := catalog.Bindings()
-	if len(bindings) != 41 {
-		t.Fatalf("当前 SinkID 数量=%d，期望 41；其中 9 条是 FW-E Claude observation-only Sink", len(bindings))
+	if len(bindings) != 43 {
+		t.Fatalf("当前 SinkID 数量=%d，期望 43；其中 9 条是 FW-E Claude observation-only、2 条是 Setup Token managed Sink", len(bindings))
 	}
 
-	var runtimeBindable, legacyReachable, canaryReachable, enforcedReachable, facades, pending, scopeExcluded int
+	var runtimeBindable, legacyReachable, canaryReachable, enforcedReachable, managedReachable, facades, pending, scopeExcluded int
 	for _, binding := range bindings {
 		if binding.RuntimeBindable() {
 			runtimeBindable++
@@ -60,23 +60,34 @@ func TestEmbeddedSinkCatalogCurrentStateIsMachineProvable(t *testing.T) {
 			}
 		case SinkStateCanaryEnforce:
 			canaryReachable++
-			if binding.MigrationReceiptDigest() == "" {
+			if policy, managed := binding.ManagedPolicy(); managed {
+				managedReachable++
+				if binding.MigrationReceiptDigest() != "" || policy.Digest() == "" {
+					t.Fatalf("canary non_persona_managed Sink %s 的策略证据非法", binding.ID())
+				}
+			} else if binding.MigrationReceiptDigest() == "" {
 				t.Fatalf("canary Sink %s 缺少 MigrationReceipt", binding.ID())
 			}
 		case SinkStateEnforced:
 			enforcedReachable++
-			if binding.MigrationReceiptDigest() == "" {
+			if policy, managed := binding.ManagedPolicy(); managed {
+				managedReachable++
+				if binding.MigrationReceiptDigest() != "" || policy.Digest() == "" {
+					t.Fatalf("enforced non_persona_managed Sink %s 的策略证据非法", binding.ID())
+				}
+			} else if binding.MigrationReceiptDigest() == "" {
 				t.Fatalf("enforced Sink %s 缺少 MigrationReceipt", binding.ID())
 			}
 		default:
 			t.Fatalf("可达 Sink %s 的状态=%s 不符合 1C 收据闭环", binding.ID(), binding.EnforcementState())
 		}
 	}
-	if runtimeBindable != 36 || legacyReachable != 20 || canaryReachable != 0 || enforcedReachable != 21 ||
+	if runtimeBindable != 38 || legacyReachable != 20 || canaryReachable != 0 || enforcedReachable != 23 ||
+		managedReachable != 2 ||
 		facades != 3 || pending != 0 || scopeExcluded != 2 {
 		t.Fatalf(
-			"分类数量异常：runtime=%d legacy=%d canary=%d enforced=%d facade=%d pending=%d scope_excluded=%d",
-			runtimeBindable, legacyReachable, canaryReachable, enforcedReachable, facades, pending, scopeExcluded,
+			"分类数量异常：runtime=%d legacy=%d canary=%d enforced=%d managed=%d facade=%d pending=%d scope_excluded=%d",
+			runtimeBindable, legacyReachable, canaryReachable, enforcedReachable, managedReachable, facades, pending, scopeExcluded,
 		)
 	}
 }

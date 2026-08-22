@@ -188,7 +188,8 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 		isClaudeCode = systemHasBillingAttributionBlock(body)
 	}
 
-	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCode
+	shouldMimicClaudeCode := account.Platform == PlatformAnthropic &&
+		account.Type == AccountTypeSetupToken && !isClaudeCode
 
 	// Official Egress 开启后，system/cache/metadata 只能由发送前的 Finalizer
 	// 写入。旧兼容层仍负责模型和工具名等语义兼容，但不能再提前塑造画像字段。
@@ -199,7 +200,7 @@ func (s *GatewayService) Forward(ctx context.Context, c *gin.Context, account *A
 
 	if shouldMimicClaudeCode {
 		systemRaw, _ := parsed.SystemValue()
-		normalizedBody, normalizedModel := s.applyClaudeOAuthThirdPartyCompatibilityToBody(
+		normalizedBody, normalizedModel := s.applyClaudeSetupTokenThirdPartyCompatibilityToBody(
 			ctx,
 			c,
 			account,

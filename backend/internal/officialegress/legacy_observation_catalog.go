@@ -122,5 +122,25 @@ func applyLegacyObservationSinks(inputs []SinkBindingInput) ([]SinkBindingInput,
 			RuntimeBindable:    true,
 		})
 	}
+	// Setup Token 不属于 Claude OAuth Persona，但推理与 token_count 是必须保留的
+	// 产品能力。它们作为 post-bootstrap 的 non_persona_managed Sink 直接进入默认
+	// Catalog，不得倒灌 sealed legacy baseline，也不受 Claude Persona selector 控制。
+	for sinkID, definition := range claudeSetupTokenManagedBindings {
+		if _, duplicate := existing[sinkID]; duplicate {
+			return nil, fmt.Errorf("Claude Setup Token 受管 SinkID 重复：%s", sinkID)
+		}
+		existing[sinkID] = struct{}{}
+		policy := completeClaudeFWGManagedPolicy(definition.policy)
+		result = append(result, SinkBindingInput{
+			ID: sinkID, Purpose: definition.purpose, Persona: PersonaUnclassified,
+			EndpointEvidence: EndpointEvidenceExternalPersona,
+			Routes:           []CatalogRoute{definition.route}, TargetBackend: BackendHTTPUpstream,
+			LegacyBackends:   []BackendKind{BackendHTTPUpstream},
+			EnforcementState: SinkStateEnforced,
+			Owner:            "official-client-fw-h/setup-token", MigrationChangeset: "FW-H",
+			ExpiryCondition: "Setup Token 产品能力被明确迁移或退休",
+			RuntimeBindable: true, ManagedPolicy: &policy,
+		})
+	}
 	return result, nil
 }

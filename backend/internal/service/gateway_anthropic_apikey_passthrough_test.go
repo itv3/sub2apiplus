@@ -770,7 +770,7 @@ func TestGatewayService_AnthropicAPIKeyPassthrough_BuildRequestRejectsInvalidBas
 	require.Error(t, err)
 }
 
-func TestGatewayService_AnthropicOAuth_NotAffectedByAPIKeyPassthroughToggle(t *testing.T) {
+func TestGatewayService_AnthropicSetupToken_NotAffectedByAPIKeyPassthroughToggle(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -784,7 +784,7 @@ func TestGatewayService_AnthropicOAuth_NotAffectedByAPIKeyPassthroughToggle(t *t
 	account := &Account{
 		ID:       1,
 		Platform: PlatformAnthropic,
-		Type:     AccountTypeOAuth,
+		Type:     AccountTypeSetupToken,
 		Extra: map[string]any{
 			"anthropic_passthrough": true,
 			"account_uuid":          "11111111-1111-4111-8111-111111111111",
@@ -794,10 +794,10 @@ func TestGatewayService_AnthropicOAuth_NotAffectedByAPIKeyPassthroughToggle(t *t
 	require.False(t, account.IsAnthropicAPIKeyPassthroughEnabled())
 
 	body := []byte(`{"model":"claude-3-7-sonnet-20250219","messages":[{"role":"user","content":"hello"}]}`)
-	req, _, err := svc.buildUpstreamRequest(context.Background(), c, account, body, "oauth-token", "oauth", "claude-3-7-sonnet-20250219", true, false)
+	req, _, err := svc.buildUpstreamRequest(context.Background(), c, account, body, "setup-token", "oauth", "claude-3-7-sonnet-20250219", true, false)
 	require.NoError(t, err)
-	require.Equal(t, "Bearer oauth-token", getHeaderRaw(req.Header, "authorization"))
-	require.Contains(t, getHeaderRaw(req.Header, "anthropic-beta"), claude.BetaOAuth, "OAuth 链路仍应按原逻辑补齐 oauth beta")
+	require.Equal(t, "Bearer setup-token", getHeaderRaw(req.Header, "authorization"))
+	require.Contains(t, getHeaderRaw(req.Header, "anthropic-beta"), claude.BetaOAuth, "Setup Token 链路仍应按产品语义补齐 oauth beta")
 }
 
 func TestGatewayService_AnthropicAPIKeyMimicBuildRequestStripsClientHeadersAndOAuthBeta(t *testing.T) {
@@ -1173,7 +1173,7 @@ func TestGatewayService_AnthropicAPIKeyMimicEnforcesFinalCacheControlLimit(t *te
 	require.NotContains(t, string(wireBody), `"ttl"`)
 }
 
-func TestGatewayService_AnthropicOAuthMimic_RewritesSystemWithBillingBlock(t *testing.T) {
+func TestGatewayService_AnthropicSetupTokenMimic_RewritesSystemWithBillingBlock(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	tests := []struct {
@@ -1242,12 +1242,12 @@ func TestGatewayService_AnthropicOAuthMimic_RewritesSystemWithBillingBlock(t *te
 
 			account := &Account{
 				ID:          301,
-				Name:        "anthropic-oauth-mimic",
+				Name:        "anthropic-setup-token-mimic",
 				Platform:    PlatformAnthropic,
-				Type:        AccountTypeOAuth,
+				Type:        AccountTypeSetupToken,
 				Concurrency: 1,
 				Credentials: map[string]any{
-					"access_token": "oauth-token",
+					"access_token": "setup-token",
 				},
 				Extra: map[string]any{
 					"account_uuid": "30130130-1301-4301-8301-301301301301",
@@ -1260,7 +1260,7 @@ func TestGatewayService_AnthropicOAuthMimic_RewritesSystemWithBillingBlock(t *te
 			require.NoError(t, err)
 			require.NotNil(t, result)
 			require.NotNil(t, upstream.lastReq)
-			require.Equal(t, "Bearer oauth-token", getHeaderRaw(upstream.lastReq.Header, "authorization"))
+			require.Equal(t, "Bearer setup-token", getHeaderRaw(upstream.lastReq.Header, "authorization"))
 			finalBeta := getHeaderRaw(upstream.lastReq.Header, "anthropic-beta")
 			require.Equal(t, officialAnthropicBetaHeader, finalBeta)
 			require.False(t, anthropicBetaTokensContains(finalBeta, "client-only-beta"))
@@ -1311,7 +1311,7 @@ func TestGatewayService_AnthropicOAuthMimic_RewritesSystemWithBillingBlock(t *te
 	}
 }
 
-func TestGatewayService_AnthropicOAuthRealClaudeCodeHaiku_NormalizesToBuiltInProfile(t *testing.T) {
+func TestGatewayService_AnthropicSetupTokenRealClaudeCodeHaiku_NormalizesToBuiltInProfile(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	metadataUserID := FormatMetadataUserID(
@@ -1355,8 +1355,8 @@ func TestGatewayService_AnthropicOAuthRealClaudeCodeHaiku_NormalizesToBuiltInPro
 		deferredService:      &DeferredService{},
 	}
 	account := &Account{
-		ID: 302, Name: "anthropic-real-cc", Platform: PlatformAnthropic, Type: AccountTypeOAuth, Concurrency: 1,
-		Credentials: map[string]any{"access_token": "oauth-token"},
+		ID: 302, Name: "anthropic-setup-token-real-cc", Platform: PlatformAnthropic, Type: AccountTypeSetupToken, Concurrency: 1,
+		Credentials: map[string]any{"access_token": "setup-token"},
 		Extra:       map[string]any{"account_uuid": "550e8400-e29b-41d4-a716-446655440000"},
 		Status:      StatusActive, Schedulable: true,
 	}
@@ -1383,7 +1383,7 @@ func TestGatewayService_AnthropicOAuthRealClaudeCodeHaiku_NormalizesToBuiltInPro
 	require.Contains(t, string(upstream.lastBody), "cc_version="+officialAnthropicCLIVersion+".")
 }
 
-func TestGatewayService_AnthropicOAuth_LegacySystemSettingDoesNotDisableBuiltInProfile(t *testing.T) {
+func TestGatewayService_AnthropicSetupToken_LegacySystemSettingDoesNotDisableBuiltInProfile(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	resetGatewayForwardingSettingsCacheForTest(t)
 
@@ -1426,12 +1426,12 @@ func TestGatewayService_AnthropicOAuth_LegacySystemSettingDoesNotDisableBuiltInP
 
 	account := &Account{
 		ID:          302,
-		Name:        "anthropic-oauth-no-system-injection",
+		Name:        "anthropic-setup-token-no-system-injection",
 		Platform:    PlatformAnthropic,
-		Type:        AccountTypeOAuth,
+		Type:        AccountTypeSetupToken,
 		Concurrency: 1,
 		Credentials: map[string]any{
-			"access_token": "oauth-token",
+			"access_token": "setup-token",
 		},
 		Extra: map[string]any{
 			"account_uuid": "30230230-2302-4302-8302-302302302302",

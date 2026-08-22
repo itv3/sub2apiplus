@@ -340,12 +340,12 @@ func TestNormalizeClaudeOAuthRequestBody_HaikuShortModelStillNormalizesToDatedID
 	require.Equal(t, "claude-haiku-4-5-20251001", gjson.GetBytes(out, "model").String())
 }
 
-func TestApplyClaudeOAuthThirdPartyCompatibilityToBody_HaikuRewritesSystem(t *testing.T) {
-	account := &Account{ID: 405, Platform: PlatformAnthropic, Type: AccountTypeOAuth}
+func TestApplyClaudeSetupTokenThirdPartyCompatibilityToBody_HaikuRewritesSystem(t *testing.T) {
+	account := &Account{ID: 405, Platform: PlatformAnthropic, Type: AccountTypeSetupToken}
 	body := []byte(`{"model":"claude-haiku-4-5","system":"Pi project instructions","messages":[{"role":"user","content":"hello"}]}`)
 	svc := &GatewayService{cfg: &config.Config{}}
 
-	out, _ := svc.applyClaudeOAuthThirdPartyCompatibilityToBody(
+	out, _ := svc.applyClaudeSetupTokenThirdPartyCompatibilityToBody(
 		context.Background(), nil, account, body, "Pi project instructions", "claude-haiku-4-5", false,
 	)
 
@@ -357,8 +357,8 @@ func TestApplyClaudeOAuthThirdPartyCompatibilityToBody_HaikuRewritesSystem(t *te
 	require.Equal(t, "claude-haiku-4-5-20251001", gjson.GetBytes(out, "model").String())
 }
 
-func TestApplyClaudeOAuthThirdPartyCompatibilityToBody_OfficialEgressPreservesOwnedFields(t *testing.T) {
-	account := &Account{ID: 406, Platform: PlatformAnthropic, Type: AccountTypeOAuth}
+func TestApplyClaudeSetupTokenThirdPartyCompatibilityToBody_OfficialEgressPreservesOwnedFields(t *testing.T) {
+	account := &Account{ID: 406, Platform: PlatformAnthropic, Type: AccountTypeSetupToken}
 	body := []byte(`{
 		"model":"claude-haiku-4-5",
 		"system":[
@@ -380,7 +380,7 @@ func TestApplyClaudeOAuthThirdPartyCompatibilityToBody_OfficialEgressPreservesOw
 	originalSystem := gjson.GetBytes(body, "system").Raw
 	originalMetadata := gjson.GetBytes(body, "metadata").Raw
 
-	out, model := svc.applyClaudeOAuthThirdPartyCompatibilityToBody(
+	out, model := svc.applyClaudeSetupTokenThirdPartyCompatibilityToBody(
 		context.Background(),
 		nil,
 		account,

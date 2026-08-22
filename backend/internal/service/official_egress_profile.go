@@ -663,8 +663,8 @@ func validateOfficialEgressScope(
 
 	switch egressContext.targetPlatform {
 	case PlatformAnthropic:
-		if !account.IsOAuth() {
-			return errors.New("official egress only supports Anthropic OAuth or SetupToken accounts")
+		if account.Type != AccountTypeSetupToken {
+			return errors.New("旧 Anthropic official egress 只保留 Setup Token 产品语义")
 		}
 		if transport != OfficialEgressTransportHTTP ||
 			!supportsOfficialEgressHTTPProfile(PlatformAnthropic, normalizedEndpoint) {
@@ -848,7 +848,13 @@ func resolveOfficialEgressAccountProfile(account *Account, modes ...string) (boo
 	purpose := ""
 	switch account.Platform {
 	case PlatformAnthropic:
-		purpose = officialClientPurposeAnthropicOAuthMessagesHTTP
+		if account.Type == AccountTypeOAuth {
+			return false, "", errors.New("Claude OAuth 旧画像解析器已退休，必须使用 strict ReleaseBundle")
+		}
+		if account.Type != AccountTypeSetupToken {
+			return false, "", nil
+		}
+		purpose = officialClientPurposeAnthropicSetupTokenMessagesHTTP
 	case PlatformOpenAI:
 		release, releaseErr := officialegress.DefaultReleaseCatalog().Resolve(
 			officialegress.ReleaseMode(mode),
@@ -982,7 +988,7 @@ func officialEgressWebSocketIdentityKey(
 func resolveOfficialEgressClientPurpose(targetPlatform string, transport OfficialEgressTransport) string {
 	switch {
 	case targetPlatform == PlatformAnthropic && transport == OfficialEgressTransportHTTP:
-		return officialClientPurposeAnthropicOAuthMessagesHTTP
+		return officialClientPurposeAnthropicSetupTokenMessagesHTTP
 	case targetPlatform == PlatformOpenAI && transport == OfficialEgressTransportHTTP:
 		return officialClientPurposeOpenAIOAuthResponsesHTTP
 	case targetPlatform == PlatformOpenAI && transport == OfficialEgressTransportWebSocket:

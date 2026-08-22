@@ -102,20 +102,21 @@ func (s *GatewayService) ForwardAsResponses(
 		return nil, fmt.Errorf("marshal anthropic request: %w", err)
 	}
 
-	// 6. 应用 OAuth 第三方协议兼容。
-	// OpenAI Responses 协议进来的请求永远不是 Claude Code 客户端，所以对 OAuth 账号
-	// 仍需执行原有兼容链路；Official Egress 开启时，只保留协议与请求语义兼容，
+	// 6. 应用 Setup Token 第三方协议兼容。
+	// Claude OAuth 已在函数入口无条件进入 strict ReleaseBundle；这里只为明确排除在
+	// Persona 外的 Setup Token 保留原有产品语义兼容，
 	// system/cache/metadata 由后置 Finalizer 统一生成。
-	// 见 applyClaudeOAuthThirdPartyCompatibilityToBody 的 godoc。
+	// 见 applyClaudeSetupTokenThirdPartyCompatibilityToBody 的 godoc。
 	isClaudeCode := false
-	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCode
+	shouldMimicClaudeCode := account.Platform == PlatformAnthropic &&
+		account.Type == AccountTypeSetupToken && !isClaudeCode
 	officialEgressOwnsProfile, configErr := resolveAnthropicOfficialEgressOwnership(account, c, s.cfg)
 	if configErr != nil {
 		return nil, fmt.Errorf("resolve Anthropic official egress ownership: %w", configErr)
 	}
 
 	if shouldMimicClaudeCode {
-		anthropicBody, mappedModel = s.applyClaudeOAuthThirdPartyCompatibilityToBody(
+		anthropicBody, mappedModel = s.applyClaudeSetupTokenThirdPartyCompatibilityToBody(
 			ctx, c, account, anthropicBody, anthropicReq.System, mappedModel, officialEgressOwnsProfile,
 		)
 	}

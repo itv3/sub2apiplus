@@ -12,11 +12,17 @@ import (
 	"strings"
 )
 
-const ClaudeFWHProductionApprovalDigest = "73e690d20fdb36688d70247d4c857f6aa31ebfc6dcd755fbbcc8276e37d74f1a"
+const (
+	// ClaudeFWHInitialProductionApprovalDigest 固定首次生产迁移批准，历史验收与
+	// 收据只能继续引用它，后继退休批准不得覆盖该事实。
+	ClaudeFWHInitialProductionApprovalDigest = "73e690d20fdb36688d70247d4c857f6aa31ebfc6dcd755fbbcc8276e37d74f1a"
+	// ClaudeFWHProductionApprovalDigest 是当前正式运行时唯一接受的后继批准。
+	ClaudeFWHProductionApprovalDigest = "1d002a2708b198256098999932908d47f0eb90a2c819f11d8393570f33996c2c"
+)
 
 func ClaudeFWGWireDigest() string { return claudeFWGWireDigest }
 
-//go:embed catalogdata/claude/production/claude-code-2.1.226-fw-h-approval.json
+//go:embed catalogdata/claude/production/claude-code-2.1.226-fw-h-legacy-retirement-approval.json
 var claudeFWHProductionApprovalRaw []byte
 
 // ResolvedClaudeProductionRelease 是 Claude 自有发布源向共享运行时暴露的只读坐标。
@@ -113,10 +119,11 @@ func loadClaudeFWHProductionApproval() (claudeFWHProductionApproval, error) {
 }
 
 func validateClaudeFWHProductionApproval(approval claudeFWHProductionApproval) error {
-	if approval.SchemaVersion != "claude-fw-h-production-approval/v1" ||
-		approval.ApprovalID != "claude-code-2.1.226-fw-h-production-v1" ||
-		approval.IssuedAtUTC != "2026-08-21T13:54:03Z" ||
-		approval.ApprovalPurpose != "production_replacement" || approval.Status != "approved" {
+	if approval.SchemaVersion != "claude-fw-h-production-approval/v2" ||
+		approval.ApprovalID != "claude-code-2.1.226-fw-h-legacy-retirement-v2" ||
+		approval.IssuedAtUTC != "2026-08-22T02:30:04Z" ||
+		approval.ApprovalPurpose != "production_replacement_legacy_retirement" ||
+		approval.Status != "approved" {
 		return errors.New("Claude FW-H production ApprovalFact 顶层身份非法")
 	}
 	target := approval.Target
@@ -132,10 +139,10 @@ func validateClaudeFWHProductionApproval(approval claudeFWHProductionApproval) e
 		return errors.New("Claude FW-H production ApprovalFact Release 身份非法")
 	}
 	wantPredecessors := map[string]string{
-		"acceptance_fact\x00docs/egress/maintenance/claude-fw-g-three-model-acceptance.json":                  "16dc60bc46eede747cb0535e53367c134a28466f12399f06a485693e142b15a9",
-		"release_transition\x00docs/egress/maintenance/claude-fw-g-model-capability-source-transition.json":   "f65639b6805a9bc43344bfaa7c912d6a7522df8db15510e6f35ef4aa786afb8f",
-		"source_transition\x00docs/egress/maintenance/claude-fw-g-fable-desktop-title-source-transition.json": "d03add436e6e970bbaca3947d7fdf9a50a43879f78a3f89e49bcf1534d28bc56",
-		"test_transition\x00docs/egress/maintenance/claude-fw-g-fable-desktop-title-test-transition.json":     "089b0f1c13f1e2a34aa982f8e2220c4a8c4149df1746d932ac14daa40babdb61",
+		"prior_production_approval\x00backend/internal/officialegress/catalogdata/claude/production/claude-code-2.1.226-fw-h-approval.json": ClaudeFWHInitialProductionApprovalDigest,
+		"production_acceptance\x00docs/egress/maintenance/claude-fw-h-production-acceptance-package.json":                                   "45b21fd3e74e6b2a3968c04bf18b416a0a43a157ba7cb7451f32a5d3c711cabd",
+		"candidate_approval\x00docs/egress/maintenance/claude-fw-h-third-party-strict-candidate-approval.json":                              "7763d9337f1529dba2bdb8bdf07a98d78cb57749f75ba38a7f80fa82bd80e297",
+		"dmit_acceptance\x00docs/egress/maintenance/claude-fw-h-third-party-strict-dmit-acceptance.json":                                    "1a77cc26952355e13d486cdf7979f1bf9ed8a40d413cf55999cb5e8093c8fcfc",
 	}
 	for _, predecessor := range approval.Predecessors {
 		key := predecessor.Kind + "\x00" + predecessor.Path
@@ -152,6 +159,8 @@ func validateClaudeFWHProductionApproval(approval claudeFWHProductionApproval) e
 		"official-messages-oauth",
 		"third-party-count-tokens-oauth",
 		"third-party-messages-oauth",
+		"chat-completions-oauth",
+		"responses-oauth",
 	}
 	wantEgress := []string{
 		"egress-claude-count-tokens",
@@ -169,9 +178,8 @@ func validateClaudeFWHProductionApproval(approval claudeFWHProductionApproval) e
 		approval.RollbackOperationalEnvelope.WireEvidence != "diagnostic-only" ||
 		!slices.Equal(approval.RollbackOperationalEnvelope.LogicalIngressIDs, wantIngress) ||
 		!slices.Equal(approval.DeploymentTrafficEnvelope.LogicalIngressIDs, wantIngress) ||
-		!slices.Equal(approval.RetainedLegacy, []string{
-			"chat-completions-oauth", "responses-oauth",
-		}) || approval.UnknownOAuthEgress != "denied" || approval.RemovalReceiptAllowed {
+		len(approval.RetainedLegacy) != 0 || approval.UnknownOAuthEgress != "denied" ||
+		!approval.RemovalReceiptAllowed {
 		return errors.New("Claude FW-H production ApprovalFact Envelope 或遗留处置非法")
 	}
 	return nil

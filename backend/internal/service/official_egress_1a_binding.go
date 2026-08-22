@@ -20,10 +20,10 @@ func preserveOfficialEgressSinkAttempt(ctx context.Context, sinkID officialegres
 	return officialegress.PreserveDefaultSinkAttempt(ctx, sinkID)
 }
 
-// bindClaudeFWELegacyObservationRequest 只在请求精确指向官方 Claude OAuth
-// 物理端点时绑定 observation-only Sink。自定义 base URL、API Key 与其他产品路径
-// 不得因复用同一 HTTP 客户端而被错误归入 Claude OAuth 管理域。
-func bindClaudeFWELegacyObservationRequest(
+// bindClaudeManagedEndpointRequest 只在请求精确指向登记的 Claude 物理端点时
+// 绑定受管 Sink。自定义 base URL、API Key 与其他产品路径不得因复用同一 HTTP
+// 客户端而被错误归入 Claude 管理域。
+func bindClaudeManagedEndpointRequest(
 	req *http.Request,
 	sinkID officialegress.SinkID,
 	method string,
@@ -31,7 +31,7 @@ func bindClaudeFWELegacyObservationRequest(
 	path string,
 ) (*http.Request, error) {
 	if req == nil || req.URL == nil {
-		return nil, errors.New("Claude FW-E 遗留观察请求为空")
+		return nil, errors.New("Claude 受管请求为空")
 	}
 	port := req.URL.Port()
 	if !strings.EqualFold(req.Method, method) ||
@@ -48,33 +48,33 @@ func bindClaudeFWELegacyObservationRequest(
 }
 
 const (
-	officialEgressSinkAdminTestCompact         = officialegress.SinkCodexAdminTestCompact
-	officialEgressSinkAdminTestResponses       = officialegress.SinkCodexAdminTestResponses
-	officialEgressSinkAlphaSearchDirect        = officialegress.SinkCodexAlphaSearchDirect
-	officialEgressSinkAlphaSearchPATFallback   = officialegress.SinkCodexAlphaSearchPATFallback
-	officialEgressSinkFilesBlobUpload          = officialegress.SinkCodexFilesBlobUpload
-	officialEgressSinkFilesRegister            = officialegress.SinkCodexFilesRegister
-	officialEgressSinkImagesOAuthTest          = officialegress.SinkCodexImagesOAuthTest
-	officialEgressSinkImagesResponses          = officialegress.SinkCodexImagesResponses
-	officialEgressSinkModelsList               = officialegress.SinkCodexModelsList
-	officialEgressSinkQuotaWHAM                = officialegress.SinkCodexQuotaWHAM
-	officialEgressSinkRealtimeCalls            = officialegress.SinkCodexRealtimeCalls
-	officialEgressSinkRealtimeSideband         = officialegress.SinkCodexRealtimeSideband
-	officialEgressSinkResponsesAnthropicCompat = officialegress.SinkCodexResponsesAnthropicCompat
-	officialEgressSinkResponsesChatCompletions = officialegress.SinkCodexResponsesChatCompletions
-	officialEgressSinkResponsesForward         = officialegress.SinkCodexResponsesForward
-	officialEgressSinkResponsesPassthrough     = officialegress.SinkCodexResponsesPassthrough
-	officialEgressSinkResponsesWS              = officialegress.SinkCodexResponsesWS
-	officialEgressSinkResponsesWSHTTPBridge    = officialegress.SinkCodexResponsesWSHTTPBridge
-	officialEgressSinkResponsesWSV2Passthrough = officialegress.SinkCodexResponsesWSV2Passthrough
-	officialEgressSinkUsageProbe               = officialegress.SinkCodexUsageProbe
-	officialEgressSinkAgentTaskRegister        = officialegress.SinkUnclassifiedAgentTaskRegister
-	officialEgressSinkPATWhoAmI                = officialegress.SinkUnclassifiedPATWhoAmI
-	officialEgressSinkPrivacyAccountInfo       = officialegress.SinkWebPrivacyAccountInfo
-	officialEgressSinkPrivacyDisableTraining   = officialegress.SinkWebPrivacyDisableTraining
-	officialEgressSinkPrivacySubscription      = officialegress.SinkWebPrivacySubscription
-	officialEgressSinkClaudeLegacyAccountTest  = officialegress.SinkClaudeLegacyAccountTest
-	officialEgressSinkClaudeLegacyMessages     = officialegress.SinkClaudeLegacyMessagesInference
-	officialEgressSinkClaudeLegacyTokenCount   = officialegress.SinkClaudeLegacyTokenCount
-	officialEgressSinkClaudeLegacyModels       = officialegress.SinkClaudeLegacyUpstreamModels
+	officialEgressSinkAdminTestCompact           = officialegress.SinkCodexAdminTestCompact
+	officialEgressSinkAdminTestResponses         = officialegress.SinkCodexAdminTestResponses
+	officialEgressSinkAlphaSearchDirect          = officialegress.SinkCodexAlphaSearchDirect
+	officialEgressSinkAlphaSearchPATFallback     = officialegress.SinkCodexAlphaSearchPATFallback
+	officialEgressSinkFilesBlobUpload            = officialegress.SinkCodexFilesBlobUpload
+	officialEgressSinkFilesRegister              = officialegress.SinkCodexFilesRegister
+	officialEgressSinkImagesOAuthTest            = officialegress.SinkCodexImagesOAuthTest
+	officialEgressSinkImagesResponses            = officialegress.SinkCodexImagesResponses
+	officialEgressSinkModelsList                 = officialegress.SinkCodexModelsList
+	officialEgressSinkQuotaWHAM                  = officialegress.SinkCodexQuotaWHAM
+	officialEgressSinkRealtimeCalls              = officialegress.SinkCodexRealtimeCalls
+	officialEgressSinkRealtimeSideband           = officialegress.SinkCodexRealtimeSideband
+	officialEgressSinkResponsesAnthropicCompat   = officialegress.SinkCodexResponsesAnthropicCompat
+	officialEgressSinkResponsesChatCompletions   = officialegress.SinkCodexResponsesChatCompletions
+	officialEgressSinkResponsesForward           = officialegress.SinkCodexResponsesForward
+	officialEgressSinkResponsesPassthrough       = officialegress.SinkCodexResponsesPassthrough
+	officialEgressSinkResponsesWS                = officialegress.SinkCodexResponsesWS
+	officialEgressSinkResponsesWSHTTPBridge      = officialegress.SinkCodexResponsesWSHTTPBridge
+	officialEgressSinkResponsesWSV2Passthrough   = officialegress.SinkCodexResponsesWSV2Passthrough
+	officialEgressSinkUsageProbe                 = officialegress.SinkCodexUsageProbe
+	officialEgressSinkAgentTaskRegister          = officialegress.SinkUnclassifiedAgentTaskRegister
+	officialEgressSinkPATWhoAmI                  = officialegress.SinkUnclassifiedPATWhoAmI
+	officialEgressSinkPrivacyAccountInfo         = officialegress.SinkWebPrivacyAccountInfo
+	officialEgressSinkPrivacyDisableTraining     = officialegress.SinkWebPrivacyDisableTraining
+	officialEgressSinkPrivacySubscription        = officialegress.SinkWebPrivacySubscription
+	officialEgressSinkClaudeLegacyAccountTest    = officialegress.SinkClaudeLegacyAccountTest
+	officialEgressSinkClaudeSetupTokenMessages   = officialegress.SinkClaudeSetupTokenMessagesInference
+	officialEgressSinkClaudeSetupTokenTokenCount = officialegress.SinkClaudeSetupTokenTokenCount
+	officialEgressSinkClaudeLegacyModels         = officialegress.SinkClaudeLegacyUpstreamModels
 )

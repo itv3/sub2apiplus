@@ -231,6 +231,27 @@ func TestClaudeFWGCandidateCatalogSeparatesStrictManagedAndDenied(t *testing.T) 
 	if strictCount != 8 || managedCount != 9 {
 		t.Fatalf("Claude 三态数量不一致：strict=%d managed=%d", strictCount, managedCount)
 	}
+	for _, retired := range []SinkID{
+		SinkClaudeLegacyMessagesInference,
+		SinkClaudeLegacyTokenCount,
+	} {
+		if _, ok := catalog.Resolve(retired); ok {
+			t.Fatalf("Claude OAuth 遗留推理 Sink 仍在当前 Catalog：%s", retired)
+		}
+	}
+	for _, retained := range []SinkID{
+		SinkClaudeSetupTokenMessagesInference,
+		SinkClaudeSetupTokenTokenCount,
+	} {
+		binding, ok := catalog.Resolve(retained)
+		if !ok || binding.EnforcementState() != SinkStateEnforced {
+			t.Fatalf("Claude Setup Token 产品语义未进入受管第三态：%s", retained)
+		}
+		policy, managed := binding.ManagedPolicy()
+		if !managed || policy.Authentication != "claude.ai-setup-token" {
+			t.Fatalf("Claude Setup Token 受管策略非法：%s", retained)
+		}
+	}
 
 	managed, ok := catalog.Resolve(SinkClaudeLegacyUsage)
 	if !ok {

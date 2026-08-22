@@ -70,7 +70,8 @@ func (s *GatewayService) ForwardCountTokens(ctx context.Context, c *gin.Context,
 	}
 
 	isClaudeCodeCT := IsClaudeCodeClient(ctx) || isClaudeCodeClient(c.GetHeader("User-Agent"), parsed.MetadataUserID)
-	shouldMimicClaudeCode := account.IsOAuth() && !isClaudeCodeCT
+	shouldMimicClaudeCode := account.Platform == PlatformAnthropic &&
+		account.Type == AccountTypeSetupToken && !isClaudeCodeCT
 
 	if shouldMimicClaudeCode {
 		normalizeOpts := claudeOAuthNormalizeOptions{stripSystemCacheControl: true}
@@ -445,6 +446,12 @@ func (s *GatewayService) buildCountTokensRequestAnthropicAPIKeyPassthrough(
 
 // buildCountTokensRequest 构建 count_tokens 上游请求
 func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Context, account *Account, body []byte, token, tokenType, modelID string, mimicClaudeCode bool) (*http.Request, []byte, error) {
+	if account == nil {
+		return nil, nil, errors.New("构建 Anthropic count_tokens 请求时账号为空")
+	}
+	if account.Platform == PlatformAnthropic && account.Type == AccountTypeOAuth {
+		return nil, nil, errors.New("Claude OAuth 旧 count_tokens 构造链已退休，必须使用 strict ReleaseBundle")
+	}
 	// 确定目标 URL
 	targetURL := claudeAPICountTokensURL
 	if account.Type == AccountTypeAPIKey {
@@ -485,7 +492,7 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 		ctEnableFP, ctEnableMPT, _ = s.settingService.GetGatewayForwardingSettings(ctx)
 	}
 	var ctFingerprint *Fingerprint
-	if account.IsOAuth() && s.identityService != nil {
+	if account.Platform == PlatformAnthropic && account.Type == AccountTypeSetupToken && s.identityService != nil {
 		fp, err := s.identityService.GetOrCreateFingerprint(ctx, account.ID, clientHeaders)
 		if err == nil {
 			ctFingerprint = fp
@@ -531,16 +538,16 @@ func (s *GatewayService) buildCountTokensRequest(ctx context.Context, c *gin.Con
 	if err != nil {
 		return nil, nil, err
 	}
-	if tokenType == "oauth" {
-		req, err = bindClaudeFWELegacyObservationRequest(
+	if account.Platform == PlatformAnthropic && account.Type == AccountTypeSetupToken {
+		req, err = bindClaudeManagedEndpointRequest(
 			req,
-			officialEgressSinkClaudeLegacyTokenCount,
+			officialEgressSinkClaudeSetupTokenTokenCount,
 			http.MethodPost,
 			"api.anthropic.com",
 			"/v1/messages/count_tokens",
 		)
 		if err != nil {
-			return nil, nil, fmt.Errorf("绑定 Claude FW-E count_tokens 观察 Sink：%w", err)
+			return nil, nil, fmt.Errorf("绑定 Claude Setup Token count_tokens 受管 Sink：%w", err)
 		}
 	}
 

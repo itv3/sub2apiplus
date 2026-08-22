@@ -478,7 +478,7 @@ func (s *AccountTestService) testClaudeAccountConnection(c *gin.Context, account
 
 	if account.IsOAuth() {
 		var bindErr error
-		req, bindErr = bindClaudeFWELegacyObservationRequest(
+		req, bindErr = bindClaudeManagedEndpointRequest(
 			req,
 			officialEgressSinkClaudeLegacyAccountTest,
 			http.MethodPost,

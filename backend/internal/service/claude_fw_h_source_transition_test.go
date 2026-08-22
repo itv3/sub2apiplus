@@ -26,6 +26,11 @@ func claudeFWHSourceTransitionSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if claudeFWHLegacyRetirementTransitionSupersedesService(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	raw, err := os.ReadFile(
 		"../../../docs/egress/maintenance/claude-fw-h-source-transition.json",
 	)
@@ -46,7 +51,10 @@ func claudeFWHSourceTransitionSupersedesService(
 	}
 	for _, transition := range receipt.Transitions {
 		if transition.Path == path && transition.FromSHA256 == priorDigest &&
-			transition.ToSHA256 == currentDigest {
+			(transition.ToSHA256 == currentDigest ||
+				claudeFWHLegacyRetirementTransitionSupersedesService(
+					path, transition.ToSHA256, currentDigest,
+				)) {
 			return true
 		}
 	}

@@ -42,8 +42,13 @@ const (
 	SinkClaudeOAuthTokenRefresh SinkID = "claude.oauth.token_refresh"
 	SinkClaudeMCPServers        SinkID = "claude.mcp_servers"
 
-	// 以下 Sink 只为 FW-E 冻结遗留 Claude OAuth 调用点提供 observation-only
-	// 身份；它们仍是 unclassified，不代表 Claude Persona、画像或 strict 已登记。
+	// Setup Token 明确排除在 Claude OAuth Persona 外，但推理与 token_count 仍是
+	// 必须保留的产品能力，因此使用 non_persona_managed 的独立 Sink。
+	SinkClaudeSetupTokenMessagesInference SinkID = "managed.claude.setup_token.messages_inference"
+	SinkClaudeSetupTokenTokenCount        SinkID = "managed.claude.setup_token.token_count"
+
+	// 以下 Sink 是 FW-E 的不可变历史基线。Claude active Catalog 会删除其中已退休的
+	// Messages／TokenCount 两项；其余辅助出站按 non_persona_managed 继续受管。
 	SinkClaudeLegacyAccountTest         SinkID = "unclassified.claude.account_test"
 	SinkClaudeLegacyCookieAuthorize     SinkID = "unclassified.claude.cookie_authorize"
 	SinkClaudeLegacyCookieOrganizations SinkID = "unclassified.claude.cookie_organizations"
