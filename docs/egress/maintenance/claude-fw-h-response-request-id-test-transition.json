@@ -1,0 +1,59 @@
+{
+  "schema_version": "official-egress-claude-fw-h-response-request-id-test-transition/v1",
+  "date": "2026-08-22",
+  "phase": "FW-H",
+  "base_commit": "a6a5ce61fbadac73a821debef94c0d18156e421c",
+  "scope": "official_response_request_id_continuity_correction",
+  "trigger": "冻结官方 request-id 响应头、客户端续轮锚点、流式与非流式响应以及历史 transition 精确后继的测试证据。",
+  "predecessors": [
+    {
+      "kind": "state_durability_test_transition",
+      "path": "docs/egress/maintenance/claude-fw-h-state-durability-test-transition.json",
+      "sha256": "5ab18f3424aa6b2300ae865999019c586814896a0d805c6fed6a48eaa7647d40"
+    }
+  ],
+  "source_transition": {
+    "kind": "response_request_id_source_transition",
+    "path": "docs/egress/maintenance/claude-fw-h-response-request-id-source-transition.json",
+    "sha256": "b4febb67d2690fe2a95c47258b66b6e5d7dea8b551f3635a281073709ae76b76"
+  },
+  "release": {
+    "version": "2.1.226",
+    "profile_sha256": "e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5",
+    "wire_sha256": "a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d",
+    "release_sha256": "48586f47e0abcde9ea357c08c1465253eaa296862153a89c20e4cf0f1e6f52f8",
+    "bundle_sha256": "ceb1e30740ab4223684f478f717dd2902d8fdad0c6efad5a69b761d95b4aefae"
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_state_durability_transition_test.go",
+      "from_sha256": "53b4b5793d2f89ecb62885ce0a3df9fd886f5e0526a03d03409f93d3b5ef3d7c",
+      "to_sha256": "d20039c45eb1370ff645ba6fca687d9acd9d05a17750a24b70daa313b15c4897",
+      "reason": "让既有不可变 transition 只通过本次精确 request-id 后继到达当前实现。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_candidate_test.go",
+      "from_sha256": "a5aefdce3b5e37644d71c5824bacf76c77bfcacd8336fb99ab32649316b9373e",
+      "to_sha256": "ae41668681af96e05d7ac37b1546cec2447cddaad62cb169eef8281532a097d7",
+      "reason": "冻结 Desktop 非流式、messages 流式、stream fallback 与 count_tokens 对官方 Request-Id 原名返回的断言。"
+    }
+  ],
+  "verification": [
+    "stream_response_request_id_passed",
+    "non_stream_response_request_id_passed",
+    "stream_fallback_response_request_id_passed",
+    "count_tokens_response_request_id_passed",
+    "live_matrix_requires_request_id_not_x_request_id"
+  ],
+  "safety": {
+    "production_host": "DMIT",
+    "production_selector": "active",
+    "profile_changed": false,
+    "wire_changed": false,
+    "release_bundle_changed": false,
+    "deployment_performed": false,
+    "dmit_validated": false,
+    "vircs_production_changed": false
+  },
+  "result": "passed"
+}

@@ -1,0 +1,56 @@
+{
+  "schema_version": "official-egress-claude-fw-h-response-request-id-source-transition/v1",
+  "date": "2026-08-22",
+  "phase": "FW-H",
+  "base_commit": "a6a5ce61fbadac73a821debef94c0d18156e421c",
+  "scope": "official_response_request_id_continuity_correction",
+  "trigger": "DMIT 状态耐久性实测确认上游已返回并持久化 request-id，但 strict 响应链未把该官方响应头交还客户端，导致客户端无法生成下一轮 cc_prev_req。",
+  "predecessors": [
+    {
+      "kind": "fw_h_final_acceptance_package",
+      "path": "docs/egress/maintenance/claude-fw-h-final-acceptance-package.json",
+      "sha256": "0965d67f4e46f365ac41a3d92dc11012ff9d2c4a47f8f179d18bbe0407888336"
+    },
+    {
+      "kind": "state_durability_source_transition",
+      "path": "docs/egress/maintenance/claude-fw-h-state-durability-source-transition.json",
+      "sha256": "4d529a58d06a8a597da17b477c17fb5ee99dc6e2b6728e8adeaf3afb98f0fa60"
+    },
+    {
+      "kind": "state_durability_test_transition",
+      "path": "docs/egress/maintenance/claude-fw-h-state-durability-test-transition.json",
+      "sha256": "5ab18f3424aa6b2300ae865999019c586814896a0d805c6fed6a48eaa7647d40"
+    }
+  ],
+  "release": {
+    "version": "2.1.226",
+    "profile_sha256": "e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5",
+    "wire_sha256": "a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d",
+    "release_sha256": "48586f47e0abcde9ea357c08c1465253eaa296862153a89c20e4cf0f1e6f52f8",
+    "bundle_sha256": "ceb1e30740ab4223684f478f717dd2902d8fdad0c6efad5a69b761d95b4aefae"
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/service/gateway_claude_fw_g.go",
+      "from_sha256": "2a0456aa53102502be65aee3f8830db85c1b8bf08f01951789a3654918ca388b",
+      "to_sha256": "b39f1f82400d96d61588a2671566db5f36e16852ada992095d238cf326507314",
+      "reason": "在 Claude strict messages、stream fallback 与 count_tokens 的成功响应中原名返回上游 request-id，并让 ForwardResult 使用同一最终响应标识。"
+    }
+  ],
+  "verification": [
+    "official_capture_request_id_header_confirmed",
+    "response_request_id_preserved_without_rename",
+    "profile_wire_release_bundle_unchanged"
+  ],
+  "safety": {
+    "production_host": "DMIT",
+    "production_selector": "active",
+    "profile_changed": false,
+    "wire_changed": false,
+    "release_bundle_changed": false,
+    "deployment_performed": false,
+    "dmit_validated": false,
+    "vircs_production_changed": false
+  },
+  "result": "passed"
+}

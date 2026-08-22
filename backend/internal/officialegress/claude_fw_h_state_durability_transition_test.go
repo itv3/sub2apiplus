@@ -162,6 +162,11 @@ func claudeFWHStateDurabilityTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if claudeFWHResponseRequestIDTransitionSupersedes(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	receipts, err := loadClaudeFWHStateDurabilityReceipts()
 	if err != nil {
 		return false

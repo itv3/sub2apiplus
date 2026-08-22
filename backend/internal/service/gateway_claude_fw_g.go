@@ -194,6 +194,7 @@ func (s *GatewayService) forwardClaudeFWGCountTokens(
 	writeAnthropicPassthroughResponseHeaders(
 		c.Writer.Header(), result.Response.Header, s.responseHeaderFilter,
 	)
+	writeClaudeOfficialResponseRequestID(c.Writer.Header(), result.Response.Header)
 	contentType := strings.TrimSpace(result.Response.Header.Get("Content-Type"))
 	if contentType == "" {
 		contentType = "application/json"
@@ -383,6 +384,32 @@ func claudeFWGConcurrencyLimit(account *Account) int {
 	return account.Concurrency
 }
 
+// Claude Code 从响应 request-id 派生下一轮 cc_prev_req，因此该头属于 Persona 状态协议。
+func writeClaudeOfficialResponseRequestID(dst http.Header, src http.Header) {
+	if dst == nil || src == nil {
+		return
+	}
+	dst.Del("request-id")
+	dst.Del("x-request-id")
+	if requestID := strings.TrimSpace(src.Get("request-id")); requestID != "" {
+		dst.Set("request-id", requestID)
+	}
+	if requestID := strings.TrimSpace(src.Get("x-request-id")); requestID != "" {
+		dst.Set("x-request-id", requestID)
+	}
+}
+
+func claudeOfficialResponseRequestID(src http.Header) string {
+	if src == nil {
+		return ""
+	}
+	requestID := strings.TrimSpace(src.Get("request-id"))
+	if requestID == "" {
+		requestID = strings.TrimSpace(src.Get("x-request-id"))
+	}
+	return requestID
+}
+
 func (s *GatewayService) finishClaudeFWGCandidateResponse(
 	ctx context.Context,
 	c *gin.Context,
@@ -430,6 +457,7 @@ func (s *GatewayService) finishClaudeFWGCandidateResponse(
 	var firstTokenMS *int
 	var clientDisconnect bool
 	var err error
+	writeClaudeOfficialResponseRequestID(c.Writer.Header(), resp.Header)
 	if result.Stream && !clientStream {
 		responseBody, bufferErr := s.bufferClaudeFWGSSEToJSON(resp)
 		if bufferErr != nil {
@@ -472,6 +500,9 @@ func (s *GatewayService) finishClaudeFWGCandidateResponse(
 				if err := parsed.ReplaceBody(fallback.WireBody); err != nil {
 					return nil, fmt.Errorf("记录 Claude FW-G stream fallback wire：%w", err)
 				}
+				writeClaudeOfficialResponseRequestID(
+					c.Writer.Header(), fallback.Response.Header,
+				)
 				usage, firstTokenMS, clientDisconnect, err = s.bridgeClaudeFWGJSONToSSE(
 					ctx, fallback.Response, c, account, startTime, originalModel, fallback.Model,
 				)
@@ -517,7 +548,9 @@ func (s *GatewayService) finishClaudeFWGCandidateResponse(
 	}
 	sessionFinalized = true
 	return &ForwardResult{
-		RequestID:                     resp.Header.Get("x-request-id"),
+		RequestID: claudeOfficialResponseRequestID(
+			sessionResult.Response.Header,
+		),
 		Usage:                         *usage,
 		Model:                         originalModel,
 		UpstreamModel:                 result.Model,

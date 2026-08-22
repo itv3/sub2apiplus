@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,6 +34,7 @@ type claudeFWGServiceCapture struct {
 }
 
 type claudeFWGServiceUpstream struct {
+	mu                sync.Mutex
 	captures          []claudeFWGServiceCapture
 	rejectFirstStream bool
 	streamRejected    bool
@@ -59,11 +61,13 @@ func (u *claudeFWGServiceUpstream) DoWithTLS(
 	if err != nil {
 		return nil, err
 	}
+	u.mu.Lock()
 	u.captures = append(u.captures, claudeFWGServiceCapture{
 		method: request.Method, url: request.URL.String(), header: request.Header.Clone(),
 		body: body, proxyURL: proxyURL, accountID: accountID,
 		concurrency: concurrency, tlsProfile: profile,
 	})
+	u.mu.Unlock()
 	status := http.StatusOK
 	responseBody := `{}`
 	contentType := "application/json"
@@ -157,6 +161,8 @@ func TestGatewayClaudeFWGDesktopNonStreamBuffersOfficialStream(t *testing.T) {
 			require.Equal(t, 3, result.Usage.InputTokens)
 			require.Equal(t, 2, result.Usage.OutputTokens)
 			require.Equal(t, "application/json", recorder.Header().Get("Content-Type"))
+			require.Equal(t, "req_servicetest", recorder.Header().Get("Request-Id"))
+			require.Equal(t, "req_servicetest", result.RequestID)
 			require.JSONEq(t,
 				`{"id":"msg_fwg","type":"message","role":"assistant","model":"claude-sonnet-5","content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":3,"output_tokens":2}}`,
 				recorder.Body.String(),
@@ -232,6 +238,8 @@ func TestGatewayClaudeFWGUntrustedClientIdentityAndLargeCatalogUsePersonaRelease
 			)
 			require.NoError(t, forwardErr)
 			require.True(t, result.Stream)
+			require.Equal(t, "req_servicetest", recorder.Header().Get("Request-Id"))
+			require.Equal(t, "req_servicetest", result.RequestID)
 
 			var messageCapture *claudeFWGServiceCapture
 			for index := range upstream.captures {
@@ -377,6 +385,8 @@ func TestGatewayClaudeFWGStreamFallbackBridgesJSONToSSE(t *testing.T) {
 	require.Equal(t, 3, result.Usage.InputTokens)
 	require.Equal(t, 2, result.Usage.OutputTokens)
 	require.Equal(t, "text/event-stream", recorder.Header().Get("Content-Type"))
+	require.Equal(t, "req_servicetest", recorder.Header().Get("Request-Id"))
+	require.Equal(t, "req_servicetest", result.RequestID)
 	require.Contains(t, recorder.Body.String(), "event: message_start")
 	require.Contains(t, recorder.Body.String(), "event: content_block_delta")
 	require.Contains(t, recorder.Body.String(), "event: message_stop")
@@ -532,6 +542,7 @@ func TestClaudeFWGServiceCountTokensUsesStrictCandidateRoute(t *testing.T) {
 	require.True(t, svc.shouldRouteClaudeFWGCountTokens(c, account))
 	require.NoError(t, svc.ForwardCountTokens(context.Background(), c, account, parsed))
 	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, "req_servicetest", recorder.Header().Get("Request-Id"))
 	require.JSONEq(t, `{"input_tokens":42}`, recorder.Body.String())
 	require.Len(t, upstream.captures, 1)
 	capture := upstream.captures[0]
