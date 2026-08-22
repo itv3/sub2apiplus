@@ -1,0 +1,58 @@
+{
+  "schema_version": "official-egress-claude-offline-release-repair-transition/v1",
+  "issued_at_utc": "2026-08-22T15:30:00Z",
+  "base_commit": "8a33e1c902f5b5bf911b4625dea6f35b70321183",
+  "checkpoint_commit": "e2ef4c5c28f79ea86b32e582ba1d7a24ee4d91c8",
+  "scope": "claude-offline-ci-repair",
+  "predecessor": {
+    "kind": "official_client_only_transition",
+    "path": "docs/egress/maintenance/claude-official-client-only-transition.json",
+    "sha256": "8e7d6cd4750a06cb3233bf5d0c579b51b0271d5c76a9ddf45eec54b5a7e05be9"
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_legacy_retirement_transition_test.go",
+      "from_sha256": "fabaf5cf55fdb973b07015a9b4baf2ecc1b3258d9e108a83fd124eea36aa815f",
+      "to_sha256": "6882ec3399ad4bcdcf11728847e314f69f4308f1f632139705f901d3395735e2",
+      "reason": "允许历史遗留退休账本通过本轮精确收据连接到离线修复后的测试源码"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_official_client_only_transition_test.go",
+      "from_sha256": "8e8fdcee9f00d586a1b04eb91aee8b974078b56da83f2fb860574a097b0c33c5",
+      "to_sha256": "cadf9ee72387d1b938dcc845b71127f74d22680a8bc4a4149cc5eb9a8b80a746",
+      "reason": "让 official-client-only 固定收据显式承认后继检查点与离线修复收据"
+    },
+    {
+      "path": "backend/internal/service/gateway_context_management_test.go",
+      "from_sha256": "c172a385e3e89ef3926a5daa44fca3aa1a29a689bed3548591b60a51013a333a",
+      "to_sha256": "806f03addf0884548ea34e3ee4ac252c736a3f1e08c875f4861f0aa75f0068f3",
+      "reason": "把五项旧 Claude OAuth 构造链断言迁移为 strict ReleaseBundle 退休入口失败关闭断言"
+    },
+    {
+      "path": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "from_sha256": "b21c647e9c7027d846ffb47a5bb654fa1b19dd4369fbc29ee65326b0cb2db3e8",
+      "to_sha256": "83c7f959af4a43b9b7e1a596ebea3ea2b1bd415da04a24c402ff568445c6b5d9",
+      "reason": "登记 official-client-only 候选部署后的账号撤销阻断与可恢复续作检查点"
+    },
+    {
+      "path": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+      "from_sha256": "fe969b696bee84456948673fcf051ab24b17cc72c97fa23dca58ee1d8e69c5ce",
+      "to_sha256": "92ce59b2fc90014f11ae41127b4a1f6b8b71c8a248fc8078ef55125f4b3cec22",
+      "reason": "登记框架文档中的候选状态、账号阻断与 Vircs 未触碰边界"
+    }
+  ],
+  "verification": [
+    "go test -tags=unit ./internal/service",
+    "go test -tags=unit ./internal/officialegress",
+    "EGRESS_SEAL_BASE_REF=origin/main make check-egress-spec-ci"
+  ],
+  "safety": {
+    "live_account_used": false,
+    "online_acceptance_performed": false,
+    "release_readiness_changed": false,
+    "release_state": "candidate_deployed/not_ready_for_operator_release",
+    "vircs_accessed": false,
+    "vircs_changed": false
+  },
+  "result": "passed_offline_ci_validation"
+}

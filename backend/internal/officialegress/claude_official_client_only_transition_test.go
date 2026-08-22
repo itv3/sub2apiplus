@@ -214,7 +214,10 @@ func claudeOfficialClientOnlyTargetMatches(path string, want string) bool {
 		return false
 	}
 	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:]) == want
+	current := hex.EncodeToString(sum[:])
+	return current == want || claudeOfflineReleaseRepairTransitionSupersedes(
+		path, want, current,
+	)
 }
 
 // claudeOfficialClientOnlyTransitionSupersedes 只接受本轮固定收据，并允许
@@ -232,7 +235,11 @@ func claudeOfficialClientOnlyTransitionSupersedes(
 		return false
 	}
 	for _, transition := range receipt.Transitions {
-		if transition.Path != path || transition.ToSHA256 != currentDigest {
+		if transition.Path != path ||
+			(transition.ToSHA256 != currentDigest &&
+				!claudeOfflineReleaseRepairTransitionSupersedes(
+					path, transition.ToSHA256, currentDigest,
+				)) {
 			continue
 		}
 		if transition.FromSHA256 == priorDigest ||

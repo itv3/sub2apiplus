@@ -489,7 +489,7 @@ func TestBuildCountTokensRequestAnthropicAPIKeyPassthrough_StripsContextManageme
 // 这个测试能挡住未来某人忘调 sanitize / 将 sanitize 挪到 CCH 之后 等 regression。
 // ============================================================================
 
-func TestBuildUpstreamRequest_OAuthMimicHaiku_PreservesContextManagementEndToEnd(t *testing.T) {
+func TestBuildUpstreamRequest_OAuthMimicHaiku_RetiredBuilderFailsClose(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -502,24 +502,17 @@ func TestBuildUpstreamRequest_OAuthMimicHaiku_PreservesContextManagementEndToEnd
 		Status:      StatusActive,
 		Schedulable: true,
 	}
-	// Haiku + mimic CC 使用完整 beta，其中包含 context-management；body 必须对称保留。
+	// Claude OAuth 已由 strict ReleaseBundle 独占；旧构造函数即使收到历史上合法的
+	// context_management 请求，也必须在本地失败关闭，不能重新产生旁路上游请求。
 	body := []byte(`{"model":"claude-haiku-4-5","context_management":{"edits":[{"type":"clear_thinking_20251015"}]},"messages":[{"role":"user","content":"hi"}]}`)
 	svc := &GatewayService{cfg: &config.Config{}}
-	req, _, err := svc.buildUpstreamRequest(
+	req, wireBody, err := svc.buildUpstreamRequest(
 		context.Background(), c, account, body,
 		"oauth-tok", "oauth", "claude-haiku-4-5", false, true, // mimicClaudeCode=true
 	)
-	require.NoError(t, err)
-
-	outBody := readUpstreamBodyForTest(t, req)
-	outBeta := getHeaderRaw(req.Header, "anthropic-beta")
-
-	require.True(t, gjson.GetBytes(outBody, "context_management").Exists(),
-		"OAuth mimic + Haiku 端到端：outgoing body 必须保留 context_management")
-	require.True(t, anthropicBetaTokensContains(outBeta, claude.BetaContextManagement),
-		"对称约束：outgoing anthropic-beta header 必须包含 context-management beta")
-	require.True(t, anthropicBetaTokensContains(outBeta, claude.BetaClaudeCode),
-		"Haiku mimic 必须携带 claude-code beta")
+	require.Nil(t, req)
+	require.Nil(t, wireBody)
+	require.ErrorContains(t, err, "旧 Messages 构造链已退休")
 }
 
 func TestBuildUpstreamRequest_APIKeyHaiku_RemainsUnmimicked(t *testing.T) {
@@ -548,7 +541,7 @@ func TestBuildUpstreamRequest_APIKeyHaiku_RemainsUnmimicked(t *testing.T) {
 	require.NotContains(t, string(outBody), "x-anthropic-billing-header:")
 }
 
-func TestBuildUpstreamRequest_OAuthMimicNonHaiku_PreservesContextManagementEndToEnd(t *testing.T) {
+func TestBuildUpstreamRequest_OAuthMimicNonHaiku_RetiredBuilderFailsClose(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -560,28 +553,20 @@ func TestBuildUpstreamRequest_OAuthMimicNonHaiku_PreservesContextManagementEndTo
 		Status:      StatusActive,
 		Schedulable: true,
 	}
-	// sonnet + mimic CC → final beta = FullClaudeCodeMimicryBetas（含 context-management）→
-	// body 保留。
+	// 非 Haiku 的历史 mimic 请求同样不得绕过 strict ReleaseBundle。
 	body := []byte(`{"model":"claude-sonnet-4-6","context_management":{"edits":[{"type":"clear_thinking_20251015"}]},"messages":[{"role":"user","content":"hi"}]}`)
 	svc := &GatewayService{cfg: &config.Config{}}
-	req, _, err := svc.buildUpstreamRequest(
+	req, wireBody, err := svc.buildUpstreamRequest(
 		context.Background(), c, account, body,
 		"oauth-tok", "oauth", "claude-sonnet-4-6", false, true,
 	)
-	require.NoError(t, err)
-
-	outBody := readUpstreamBodyForTest(t, req)
-	outBeta := getHeaderRaw(req.Header, "anthropic-beta")
-
-	require.True(t, gjson.GetBytes(outBody, "context_management").Exists(),
-		"OAuth mimic + non-haiku：outgoing body 必须保留 context_management。")
-	require.True(t, anthropicBetaTokensContains(outBeta, claude.BetaContextManagement),
-		"对称约束：outgoing anthropic-beta header 同时含 context-management beta")
+	require.Nil(t, req)
+	require.Nil(t, wireBody)
+	require.ErrorContains(t, err, "旧 Messages 构造链已退休")
 }
 
-func TestBuildUpstreamRequest_OAuthTransparentHaikuWithRealCCBeta_PreservesField(t *testing.T) {
-	// 端到端验证：真 CC 客户端 + haiku + 客户端 header 带 context-management beta
-	// → final beta 透传 → 不应该过度删除 body 字段
+func TestBuildUpstreamRequest_OAuthTransparentHaikuWithRealCCBeta_RetiredBuilderFailsClose(t *testing.T) {
+	// 官方客户端请求也必须进入 strict ReleaseBundle；客户端 Beta 完整不能成为旧链旁路条件。
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -596,25 +581,17 @@ func TestBuildUpstreamRequest_OAuthTransparentHaikuWithRealCCBeta_PreservesField
 	}
 	body := []byte(`{"model":"claude-haiku-4-5","context_management":{"edits":[{"type":"clear_thinking_20251015","keep":"all"}]},"messages":[{"role":"user","content":"hi"}]}`)
 	svc := &GatewayService{cfg: &config.Config{}}
-	req, _, err := svc.buildUpstreamRequest(
+	req, wireBody, err := svc.buildUpstreamRequest(
 		context.Background(), c, account, body,
 		"oauth-tok", "oauth", "claude-haiku-4-5", false, false, // mimicClaudeCode=false（真 CC）
 	)
-	require.NoError(t, err)
-
-	outBody := readUpstreamBodyForTest(t, req)
-	outBeta := getHeaderRaw(req.Header, "anthropic-beta")
-
-	require.True(t, anthropicBetaTokensContains(outBeta, claude.BetaContextManagement),
-		"真 CC 透传路径：客户端 header 中的 context-management beta 必须保留")
-	require.True(t, gjson.GetBytes(outBody, "context_management").Exists(),
-		"回归保护：真 CC + haiku + 客户端带 beta token 时，clear_thinking_20251015 功能不能静默失效")
+	require.Nil(t, req)
+	require.Nil(t, wireBody)
+	require.ErrorContains(t, err, "旧 Messages 构造链已退休")
 }
 
-// count_tokens 主路径 E2E 集成测试
-func TestBuildCountTokensRequest_OAuthMimicHaiku_PreservesContextManagementEndToEnd(t *testing.T) {
-	// count_tokens 继续注入 BetaContextManagement 和 BetaTokenCounting；
-	// sanitize 看到最终 beta header 含 context-management beta 后保留字段。
+// Claude OAuth count_tokens 已由 strict ReleaseBundle 独占；旧构造函数只验证失败关闭。
+func TestBuildCountTokensRequest_OAuthMimicHaiku_RetiredBuilderFailsClose(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -626,26 +603,17 @@ func TestBuildCountTokensRequest_OAuthMimicHaiku_PreservesContextManagementEndTo
 	}
 	body := []byte(`{"model":"claude-haiku-4-5","context_management":{"edits":[{"type":"clear_thinking_20251015"}]},"messages":[]}`)
 	svc := &GatewayService{cfg: &config.Config{}}
-	req, _, err := svc.buildCountTokensRequest(
+	req, wireBody, err := svc.buildCountTokensRequest(
 		context.Background(), c, account, body,
 		"oauth-tok", "oauth", "claude-haiku-4-5", true, // mimicClaudeCode=true
 	)
-	require.NoError(t, err)
-
-	outBody := readUpstreamBodyForTest(t, req)
-	outBeta := getHeaderRaw(req.Header, "anthropic-beta")
-
-	require.True(t, anthropicBetaTokensContains(outBeta, claude.BetaContextManagement),
-		"count_tokens mimic 始终注入 context-management beta")
-	require.True(t, gjson.GetBytes(outBody, "context_management").Exists(),
-		"对称约束：final beta 含 token 时 body 字段保留")
-	require.True(t, anthropicBetaTokensContains(outBeta, claude.BetaTokenCounting),
-		"count_tokens 路径必须含 token-counting beta")
+	require.Nil(t, req)
+	require.Nil(t, wireBody)
+	require.ErrorContains(t, err, "旧 count_tokens 构造链已退休")
 }
 
-func TestBuildCountTokensRequest_OAuthMimic_DropsInjectedMaxTokens(t *testing.T) {
-	// OAuth mimicry injects max_tokens=128000 for normal messages requests. It is
-	// invalid for Anthropic's count_tokens endpoint and must be stripped on wire.
+func TestBuildCountTokensRequest_OAuthMimicWithLegacyMaxTokens_RetiredBuilderFailsClose(t *testing.T) {
+	// 历史归一化结果即使带有 max_tokens，也不能重新进入退休的 count_tokens 构造链。
 	gin.SetMode(gin.TestMode)
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
@@ -663,13 +631,13 @@ func TestBuildCountTokensRequest_OAuthMimic_DropsInjectedMaxTokens(t *testing.T)
 		"precondition: OAuth mimicry injects the Claude Code default")
 
 	svc := &GatewayService{cfg: &config.Config{}}
-	req, _, err := svc.buildCountTokensRequest(
+	req, wireBody, err := svc.buildCountTokensRequest(
 		context.Background(), c, account, normalized,
 		"oauth-tok", "oauth", "claude-sonnet-4-5", true,
 	)
-	require.NoError(t, err)
-	require.False(t, gjson.GetBytes(readUpstreamBodyForTest(t, req), "max_tokens").Exists(),
-		"count_tokens wire body must not contain max_tokens")
+	require.Nil(t, req)
+	require.Nil(t, wireBody)
+	require.ErrorContains(t, err, "旧 count_tokens 构造链已退休")
 }
 
 func TestBuildCountTokensRequest_APIKeyHaiku_StripsContextManagementEndToEnd(t *testing.T) {

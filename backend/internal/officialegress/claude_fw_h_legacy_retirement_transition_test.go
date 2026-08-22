@@ -222,6 +222,9 @@ func TestClaudeFWHLegacyRetirementTransitionsAreFrozen(t *testing.T) {
 			}
 			currentDigest := claudeFWHSourceDigest(source)
 			if err != nil || currentDigest != transition.ToSHA256 &&
+				!claudeOfflineReleaseRepairTransitionSupersedes(
+					transition.Path, transition.ToSHA256, currentDigest,
+				) &&
 				!claudeFWHStateDurabilityTransitionSupersedes(
 					transition.Path, transition.ToSHA256, currentDigest,
 				) &&
