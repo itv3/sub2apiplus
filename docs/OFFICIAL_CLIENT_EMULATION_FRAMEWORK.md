@@ -470,6 +470,16 @@ KiloCode、zlfcode、curl、Chat Completions、Responses、未登记版本、Hea
 目录均在读取 OAuth 凭据前拒绝。历史六入口 strict 和 DMIT-as-production 收据保持不可变，但不再代表
 当前目标。当前只允许在 DMIT 构建候选验收事实；Vircs 保持 `operator_managed／unverified／not_touched`。
 
+截至 2026-08-22，official-client-only 后继源码已冻结在提交
+`8a33e1c902f5b5bf911b4625dea6f35b70321183`，固定 amd64 镜像
+`sha256:1de00f4b89a0aa16184186a923856ea13ee88cd504681c0233bd03d77b7f9ad4` 已部署 DMIT 且容器健康、
+重启数为 0。完整在线矩阵因测试账号 `#100` 的 Anthropic access／refresh token 均被撤销而停止；正常
+refresh 返回 `invalid_grant`，必须先由用户重新 OAuth 授权。因此当前状态只能是
+`candidate_deployed／not_ready_for_operator_release`，不能签发本轮 AcceptancePackage。可恢复制品、
+凭据边界和严格续作顺序见
+[`CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md` §3.6.1](CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md#361-fw-h-当前续作检查点2026-08-22)；
+Vircs 仍未连接、未修改。
+
 ## 6.2 现有代码处置
 
 | 处置 | 必须满足 |

@@ -19,6 +19,9 @@
 > 2.1.226、Claude Desktop 2.1.237 和 Claude Code for VS Code 2.1.239；正向逻辑入口仅为 Messages 与
 > count_tokens。KiloCode、zlfcode、curl、Chat Completions、Responses、未登记版本或工具目录均在读取
 > OAuth 凭据前拒绝。DMIT 只做候选验收；Vircs 是用户管理的生产机，本任务不连接、不部署、不验证
+> **当前执行点**：official-client-only 候选已部署 DMIT，但账号 `#100` 的 Anthropic OAuth 凭据被上游
+> 撤销，完整在线矩阵尚未完成，状态仍为 `candidate_deployed／not_ready_for_operator_release`；续作检查点
+> 见 §3.6.1
 > **末次更新**：2026-08-22
 
 ---
@@ -1022,6 +1025,44 @@ OfficialIngressCatalog：只有 Claude Code 2.1.226、Claude Desktop 2.1.237、C
 2.1.239 的已登记 wire 可进入 Messages／count_tokens 正向链；第三方与未知形态统一在 OAuth 凭据读取前
 拒绝。该后继在 DMIT 验收前状态为 `candidate_sealed／not_ready_for_operator_release`；DMIT 通过后最高
 状态为 `ready_for_operator_release`。Vircs 始终保持 `operator_managed／unverified／not_touched`。
+
+### 3.6.1 FW-H 当前续作检查点（2026-08-22）
+
+本节只记录当前 official-client-only 后继的可恢复执行点，不改写历史 FW-G／FW-H 收据。当前状态为
+`candidate_deployed／not_ready_for_operator_release`，尚未签发本轮 `ready_for_operator_release`：
+
+| 项目 | 当前事实 |
+|---|---|
+| 源码 | 提交 `8a33e1c902f5b5bf911b4625dea6f35b70321183`（`feat: Claude OAuth 仅接受官方客户端`）；提交前 `go test ./... -count=1`、`make check-egress-spec`、`go vet ./...` 与 `git diff --check` 均通过 |
+| 构建链 | Mac 原生构建前端并交叉编译 `linux/amd64` 后端，ARM64 只封装 amd64 镜像；后端二进制 SHA-256 为 `5b93521312a1625dd661860b074aae6aaa0e79ccc0bb4e1964a2337bb21b9bc2` |
+| DMIT 镜像 | 标签 `sub2apiplus:official-client-only-8a33e1c90`，OCI image／运行摘要均为 `sha256:1de00f4b89a0aa16184186a923856ea13ee88cd504681c0233bd03d77b7f9ad4` |
+| DMIT 容器 | 容器 ID `184fce0d30d164e6e39d7949d37abe21c4d05d57aa15910aace8579746c3c35b`，`running／healthy`，重启数 `0`；依赖容器未替换 |
+| Compose | `/root/Docker/sub2apiplus/app/docker-compose.claude-official-client-only.yml`，SHA-256 `46ec692020f01b3769f2dc8c34c91ebd27ca88aae2313ff13f564f3f5b2e6279`；旧 override、正式镜像和回退镜像均保留 |
+| 在线矩阵 | 脚本 `/root/Docker/sub2apiplus/app/data/deployment-evidence/claude-official-client-only-8a33e1c90-live-matrix.sh`，SHA-256 `6f7a5239ab6eaf1ab58b9fb2ec689f78c8a4efd19081d65461417bf7c6ec933d`；wire 文件 `claude-wire-a7d2c91f.json`，SHA-256 `a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d` |
+| 当前阻断 | 矩阵脚本已补齐 `x-stainless-timeout`；`attempt-002` 已通过 official-client-only 准入并到达 Anthropic，但上游返回 `401`。通过 DMIT 后台对账号 `#100` 执行正常“刷新令牌”又得到 `invalid_grant: Refresh token not found or invalid`，证明 access token 与 refresh token 均需重新授权 |
+| 账号边界 | 只处理账号 `#100`；账号 `#101` 保持暂停／不可调度，不得改变。DMIT 后台已生成 `#100` 的重新授权流程，授权 URL、PKCE verifier、授权码和 OAuth Token 不写入本文或仓库 |
+| Vircs | 未连接、未部署、未验证、未修改，保持 `operator_managed／unverified／not_touched` |
+
+后台页面的版本角标仍显示历史构建字符串 `v0.1.177-4-fw-h-final-e2c80213a`，不能据此判定当前候选身份；
+本轮续作必须以源码提交、OCI digest、容器 ID、Compose 摘要和收据联合判定。最终收据签发前应明确处置
+该显示差异：重新构建正确版本字符串，或在收据中把它登记为非身份字段，不能保持歧义。
+
+恢复执行时按以下顺序继续，中间不得把账号故障误判为画像通过或失败：
+
+1. 由用户在已生成的 Claude OAuth 页面完成账号 `#100` 登录授权，把授权码通过 DMIT 后台正常流程
+   持久化；禁止直接修改数据库，并复核 `#101` 未变化；
+2. 运行在线矩阵 `attempt-003`，验证 Claude Code 2.1.226、Claude Desktop 2.1.237、Claude Code for
+   VS Code 2.1.239 的 Messages／流式响应／工具往返／标题／count_tokens 正例，以及 Sonnet、Opus、
+   Fable 的登记模型能力；
+3. 验证 KiloCode、zlfcode、curl、第三方 Messages／count_tokens、Chat Completions、Responses、未知
+   版本、Header、metadata、System、工具目录和跨 Persona 请求均在读取 OAuth 凭据前拒绝，并复核
+   Codex final wire 隔离；
+4. 使用本机真实 Claude Code、Claude Desktop、Claude Code for VS Code 完成正例；测试前只读确认
+   客户端版本与 OfficialIngressCatalog 一致；
+5. 在 DMIT 切回已冻结回退镜像验证，再恢复上述 OCI digest，并重跑核心矩阵；完成稳定观察、容器／
+   依赖身份、日志、磁盘、网络和 3x-ui 核对；
+6. 清理本轮临时传输包和构建临时目录，但不执行 Docker prune、不删除回退镜像或验收日志；随后追加
+   独立的 `ready_for_operator_release` 收据，跑全量门禁并完成文档闭环。
 
 ---
 
