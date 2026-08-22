@@ -3,6 +3,7 @@ package officialegress
 import (
 	"errors"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -45,13 +46,34 @@ func loadClaudeFWHBareChatRouteTransition(
 		len(receipt.Gates) != 5) {
 		return receipt, nil, errors.New("Claude FW-H 裸 Chat 路由测试引用非法")
 	}
-	if err := validateClaudeFWHThirdPartyStrictTransitionEntries(receipt.Transitions); err != nil {
+	if err := validateClaudeFWHBareChatRouteTransitionEntries(receipt.Transitions); err != nil {
 		return receipt, nil, err
 	}
 	if err := validateClaudeFWHThirdPartyStrictSafety(receipt); err != nil {
 		return receipt, nil, err
 	}
 	return receipt, raw, nil
+}
+
+// 裸 Chat 后继在装载时只校验自身条目结构；目标摘要由本文件的冻结测试校验。
+// 这里不能调用第三方 strict 的当前目标校验，否则两条后继链会相互递归。
+func validateClaudeFWHBareChatRouteTransitionEntries(
+	transitions []changeset4SourceTransitionEntry,
+) error {
+	paths := make([]string, 0, len(transitions))
+	for _, transition := range transitions {
+		if strings.TrimSpace(transition.Path) == "" ||
+			len(transition.FromSHA256) != 64 || len(transition.ToSHA256) != 64 ||
+			transition.FromSHA256 == transition.ToSHA256 ||
+			strings.TrimSpace(transition.Reason) == "" {
+			return errors.New("Claude FW-H 裸 Chat 路由 transition 条目非法")
+		}
+		paths = append(paths, transition.Path)
+	}
+	if !slices.IsSorted(paths) || len(paths) != len(slices.Compact(paths)) {
+		return errors.New("Claude FW-H 裸 Chat 路由 transition 路径未排序或重复")
+	}
+	return nil
 }
 
 func claudeFWHBareChatRouteTransitionSupersedes(

@@ -1,0 +1,87 @@
+{
+  "schema_version": "official-egress-claude-fw-h-fable-declared-fallback-test-transition/v1",
+  "date": "2026-08-22",
+  "phase": "FW-H",
+  "base_commit": "6a54801ed0df531fe6f066a79315d0f4001b7ea1",
+  "scope": "fable_declared_fallback_response_closure",
+  "predecessors": [
+    {
+      "kind": "legacy_retirement_test_transition",
+      "path": "docs/egress/maintenance/claude-fw-h-legacy-retirement-test-transition.json",
+      "sha256": "6eae1f11f3abc5050ead6a31a7eb79ad5ef7e7066915fc2666fa45dcba8304e0"
+    }
+  ],
+  "source_transition": {
+    "path": "docs/egress/maintenance/claude-fw-h-fable-declared-fallback-source-transition.json",
+    "sha256": "e33912bec8e6ff619790fc187312f0d52817e07d6611a93a2d8a7dbfc46c6bc2"
+  },
+  "release": {
+    "version": "2.1.226",
+    "profile_sha256": "e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5",
+    "wire_sha256": "a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d",
+    "release_sha256": "48586f47e0abcde9ea357c08c1465253eaa296862153a89c20e4cf0f1e6f52f8",
+    "bundle_sha256": "ceb1e30740ab4223684f478f717dd2902d8fdad0c6efad5a69b761d95b4aefae"
+  },
+  "observation": {
+    "host": "DMIT",
+    "request_model": "claude-fable-5",
+    "response_model": "claude-opus-5",
+    "declared_fallback_model": "claude-opus-5",
+    "disposition": "批准的画像内 fallback，不建立 server fallback 会话锁存"
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_model_capability_transition_test.go",
+      "from_sha256": "b50789d84bda42d17f15eb6c4f1e0e2b041bb40ccd793a3d400997e9323d8c89",
+      "to_sha256": "5a5c77ed966303808b9508f407e00635914b5cbd7fdd297f54e95f842c1a2359",
+      "reason": "让模型能力历史冻结链通过精确后继承接本次 Fable 画像内 fallback 修复。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_bare_chat_route_transition_test.go",
+      "from_sha256": "325dc948c57dd0e3a121b20ff7cadac118ec8e9e602a8d270d035803f077f054",
+      "to_sha256": "26b273a77f860907a6b4287cb895fdd02ee0ea4ff24ec8756dd090327b9ea5a0",
+      "reason": "拆开裸 Chat 后继的结构校验与目标摘要校验，消除历史后继链之间的递归复算，不改变任何 path/from/to 判据。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_legacy_retirement_transition_test.go",
+      "from_sha256": "284d94c43ce4e2742796026484c3b93e2251b9aa156fdb51cc32b71e6b5be01c",
+      "to_sha256": "6f608a1c2e05b25ee06f50dea3f8a174a38f50126a7541dadaee50da5704c752",
+      "reason": "保持旧链退休收据不可变，仅允许 claude_runtime_test.go 的本次精确测试后继。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_source_transition_test.go",
+      "from_sha256": "092c202b754038c012351d60cd0eea8efa1d26a8669b690a95a6f3b8fd95a380",
+      "to_sha256": "bee369a73147fdeefb706a8d76a087a3628188a7289ee41bc2bce45902aa4337",
+      "reason": "让 FW-H 初始共享运行时摘要经第三方 strict 后继继续到达本次精确修复。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_third_party_strict_transition_test.go",
+      "from_sha256": "211e46cfcfba1ea8adfee204508137b9cac3606952ade41db8d705cec85acbe2",
+      "to_sha256": "41b008bf91253989594415e1dd09c312b53c233be115591b196b36d83afc2083",
+      "reason": "让第三方 strict 运行时摘要只接受本次 path/from/to 后继，不放宽其他漂移。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_runtime_test.go",
+      "from_sha256": "be9d07c8a9799b5bda8608c457163f5ba433e82053c800a4d012a856ed9c7a27",
+      "to_sha256": "efb839ff28e27b29fa16902ad90e9975f43d7272bc349963177c19cf1829cbef",
+      "reason": "冻结 claude-opus-5 正常返回且不锁存、claude-opus-4-8 继续锁存、未批准模型继续拒绝的正负断言。"
+    }
+  ],
+  "gates": [
+    "fable_declared_fallback_unit_passed",
+    "historical_transition_chain_passed",
+    "full_go_test_passed",
+    "go_vet_passed"
+  ],
+  "safety": {
+    "production_host": "DMIT",
+    "production_selector": "active",
+    "candidate_enabled": false,
+    "profile_changed": false,
+    "wire_changed": false,
+    "release_bundle_changed": false,
+    "deployment_performed": false,
+    "vircs_production_changed": false
+  },
+  "result": "passed"
+}

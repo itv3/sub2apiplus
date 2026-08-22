@@ -297,6 +297,8 @@ func validateClaudeFWGModelCapabilityTransitions(
 			transition.Path, transition.ToSHA256, currentDigest,
 		) && !claudeFWGThreeModelAcceptanceSupersedes(
 			transition.Path, transition.ToSHA256, currentDigest,
+		) && !claudeFWHFableDeclaredFallbackTransitionSupersedes(
+			transition.Path, transition.ToSHA256, currentDigest,
 		) {
 			return errors.New("Claude 模型能力源码 transition 当前摘要不一致")
 		}
@@ -317,6 +319,11 @@ func claudeFWGModelCapabilityTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if claudeFWHFableDeclaredFallbackTransitionSupersedes(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	if claudeFWHLegacyRetirementTransitionSupersedes(path, priorDigest, currentDigest) {
 		return true
 	}
@@ -338,6 +345,9 @@ func claudeFWGModelCapabilityTransitionSupersedes(
 	}
 	for _, transition := range receipt.Transitions {
 		currentReached := transition.ToSHA256 == currentDigest ||
+			claudeFWHFableDeclaredFallbackTransitionSupersedes(
+				path, transition.ToSHA256, currentDigest,
+			) ||
 			claudeFWHLegacyRetirementTransitionSupersedes(
 				path, transition.ToSHA256, currentDigest,
 			) ||

@@ -1073,7 +1073,9 @@ func (r *ClaudeRuntime) finalizeClaudeSessionRequestWithResponseModel(
 			if responseModel == "" {
 				return errors.New("Claude Fable 响应缺少可验证模型")
 			}
-			if responseModel != "claude-fable-5" && responseModel != "claude-opus-4-8" {
+			if responseModel != "claude-fable-5" &&
+				responseModel != "claude-opus-5" &&
+				responseModel != "claude-opus-4-8" {
 				return errors.New("Claude Fable 响应模型不在批准闭集")
 			}
 			if responseModel == "claude-opus-4-8" {

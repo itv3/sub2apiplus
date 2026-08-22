@@ -2332,6 +2332,62 @@ func TestClaudeFWGFableServerFallbackSessionLatch(t *testing.T) {
 	}
 }
 
+func TestClaudeFWGFableDeclaredFallbackDoesNotLatch(t *testing.T) {
+	runtime := &ClaudeCandidateRuntime{
+		sessions:      make(map[string]*claudeSessionState),
+		requestOwners: make(map[string]string),
+	}
+	initialIdentity := mustClaudeTestIdentity(t, claudeTestTrustedFacts())
+	initial := ClaudeCanonicalRequest{
+		model: "claude-fable-5", primaryModel: "claude-fable-5",
+	}
+	lease, err := runtime.prepareClaudeSessionRequestMutable(
+		&initialIdentity, &initial, claudeMessageRelations{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.finalizeClaudeSessionRequestWithResponseModel(
+		lease, true, http.StatusOK, "req_FableDeclaredFallback", "claude-opus-5",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	plannerIdentity := mustClaudeTestIdentity(t, claudeTestTrustedFacts())
+	planner := ClaudeCanonicalRequest{
+		model: "claude-fable-5", primaryModel: "claude-fable-5",
+	}
+	plannerLease, err := runtime.prepareClaudeSessionRequestMutable(
+		&plannerIdentity, &planner, claudeMessageRelations{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if planner.model != "claude-fable-5" || planner.serverFallback ||
+		planner.fallbackLatchedBy != "" || planner.refusalFallback {
+		t.Fatalf("画像声明的 Fable fallback 被错误锁存为 server fallback：%+v", planner)
+	}
+	if err := runtime.finalizeClaudeSessionRequest(plannerLease, false, 0, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	rejectedIdentity := mustClaudeTestIdentity(t, claudeTestTrustedFacts())
+	rejected := ClaudeCanonicalRequest{
+		model: "claude-fable-5", primaryModel: "claude-fable-5",
+	}
+	rejectedLease, err := runtime.prepareClaudeSessionRequestMutable(
+		&rejectedIdentity, &rejected, claudeMessageRelations{},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runtime.finalizeClaudeSessionRequestWithResponseModel(
+		rejectedLease, true, http.StatusOK, "req_FableUnknownFallback", "claude-unknown-5",
+	); err == nil || !strings.Contains(err.Error(), "响应模型不在批准闭集") {
+		t.Fatalf("未批准的 Fable 响应模型未 fail-close：%v", err)
+	}
+}
+
 func TestClaudeFWGCountTokensUsesRegisteredModelCapability(t *testing.T) {
 	wire, err := loadClaudeFWGWire()
 	if err != nil {

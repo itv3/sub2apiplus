@@ -1,0 +1,62 @@
+{
+  "schema_version": "official-egress-claude-fw-h-fable-declared-fallback-source-transition/v1",
+  "date": "2026-08-22",
+  "phase": "FW-H",
+  "base_commit": "6a54801ed0df531fe6f066a79315d0f4001b7ea1",
+  "scope": "fable_declared_fallback_response_closure",
+  "predecessors": [
+    {
+      "kind": "third_party_strict_source_transition",
+      "path": "docs/egress/maintenance/claude-fw-h-third-party-strict-source-transition.json",
+      "sha256": "92c7a0f1d1150cb12004705347c18cc9d0b411439b8fca865cb8a395569b1f6d"
+    },
+    {
+      "kind": "legacy_retirement_source_transition",
+      "path": "docs/egress/maintenance/claude-fw-h-legacy-retirement-source-transition.json",
+      "sha256": "13918c77227fcfff5f44daa77d0382630e37998fd926bab2334cb9392bb7eabd"
+    },
+    {
+      "kind": "active_profile",
+      "path": "backend/internal/officialegress/catalogdata/claude/profiles/2.1.226/e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5.json",
+      "sha256": "e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5"
+    },
+    {
+      "kind": "active_wire",
+      "path": "backend/internal/officialegress/catalogdata/claude/wire/2.1.226/a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d.json",
+      "sha256": "a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d"
+    }
+  ],
+  "release": {
+    "version": "2.1.226",
+    "profile_sha256": "e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5",
+    "wire_sha256": "a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d",
+    "release_sha256": "48586f47e0abcde9ea357c08c1465253eaa296862153a89c20e4cf0f1e6f52f8",
+    "bundle_sha256": "ceb1e30740ab4223684f478f717dd2902d8fdad0c6efad5a69b761d95b4aefae"
+  },
+  "observation": {
+    "host": "DMIT",
+    "request_model": "claude-fable-5",
+    "response_model": "claude-opus-5",
+    "declared_fallback_model": "claude-opus-5",
+    "disposition": "批准的画像内 fallback，不建立 server fallback 会话锁存"
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/claude_runtime.go",
+      "from_sha256": "2730de466f960db35021198d83d9a1cf284fded42235ec927c204f5f464d003f",
+      "to_sha256": "fa171c89e08be0a576d1e716da2c7780155699b685d705ce694bdcae618efa5f",
+      "reason": "把画像已声明的 claude-opus-5 纳入 Fable 初始响应闭集；仅 claude-opus-4-8 保持实测 server fallback 锁存，其他模型继续 fail-close。"
+    }
+  ],
+  "safety": {
+    "production_host": "DMIT",
+    "production_selector": "active",
+    "candidate_enabled": false,
+    "profile_changed": false,
+    "wire_changed": false,
+    "release_bundle_changed": false,
+    "deployment_performed": false,
+    "vircs_production_changed": false
+  },
+  "result": "passed"
+}
