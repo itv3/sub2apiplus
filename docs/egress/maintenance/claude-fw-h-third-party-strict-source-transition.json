@@ -1,0 +1,84 @@
+{
+  "schema_version": "claude-fw-h-third-party-strict-source-transition/v1",
+  "date": "2026-08-22",
+  "phase": "FW-H",
+  "base_commit": "a181859d374821d0c514e00a684ba15a6b8f59c3",
+  "scope": "candidate_only",
+  "predecessor": {
+    "path": "docs/egress/maintenance/claude-fw-h-production-acceptance-package.json",
+    "sha256": "45b21fd3e74e6b2a3968c04bf18b416a0a43a157ba7cb7451f32a5d3c711cabd"
+  },
+  "logical_ingress_ids": [
+    "chat-completions-oauth",
+    "responses-oauth"
+  ],
+  "transitions": [
+    {
+      "path": "backend/internal/handler/openai_gateway_handler.go",
+      "from_sha256": "eaf943a49c3838be83efe4c26dd88e6bb3cdbe34e8c6c459ddf6cbccb9c8d8cf",
+      "to_sha256": "226800bec6331094a49d36d6150cfe3fe31424c566d1c204b162d0baba7729e5",
+      "reason": "让 Responses WebSocket 在选中 Claude OAuth Persona 后、读取凭据与连接上游前 fail-close。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_body.go",
+      "from_sha256": "f5630f1a1907d54eb8b5f5dfff111e55a7a6c07fcb18779856f17844e0939f3a",
+      "to_sha256": "736f35a4a0258591fdd700979f1da0ee6c29373d6006bd31501bf1ee4647e102",
+      "reason": "把 TranslationReport 从 Claude 方言移入共享入站协议合同，Claude Body 只保留 Persona 自有语义。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_canonical.go",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "237782c0906802206bd7ce106f0189677242cb9117f191d38ff1af6557f8547c",
+      "reason": "新增 Claude PersonaPlanner 对共享 CanonicalRequest 的方言投影，禁止共享 Adapter 读取 Claude 画像。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_identity.go",
+      "from_sha256": "070b3bd60f7a2cafa3e301e332c01d09f9da373574210da3f7ba7f543409da24",
+      "to_sha256": "a810459b5780879d0ba06dd8d6acde4e8baff0ff4182f52e7fdb70864b7149d9",
+      "reason": "把两种已登记的标准 API 协议身份加入 Claude Identity Authority 闭集。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_runtime.go",
+      "from_sha256": "6b018039f988c30b1d1e5e6b3d468d005cee285c05ff4a07aa07e2e246825c71",
+      "to_sha256": "2730de466f960db35021198d83d9a1cf284fded42235ec927c204f5f464d003f",
+      "reason": "新增共享 CanonicalRequest 的上游前验证和 Claude strict 执行入口，并复用既有 Planner、Compiler、Executor 与 Guard。"
+    },
+    {
+      "path": "backend/internal/officialegress/ingress_adapter.go",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "9de40f015a0da3f11c23030fefe829ee7b50f9506f70fb1d20059defd49a4176",
+      "reason": "新增按协议实现的 Chat Completions 与 Responses Adapter、厂商无关 CanonicalRequest 及逐字段 TranslationReport。"
+    },
+    {
+      "path": "backend/internal/service/gateway_claude_strict_openai.go",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "20492d5427fcfb90d88006df8215e2777b79bee4fc60d2e4c34169b9a8902582",
+      "reason": "新增 Claude OAuth 标准 API strict 编排、物理入口门禁、协议响应转换及 HTTP/SSE fallback。"
+    },
+    {
+      "path": "backend/internal/service/gateway_forward_as_chat_completions.go",
+      "from_sha256": "62c236ca8f8a65c22334c75b59fe199d0c39f13a3964425b63f6865d7c505e92",
+      "to_sha256": "243be47814ab71d960b87032644092e90ef2f8c2f319cdefcc9e7aebc1fd04ae",
+      "reason": "在旧 Chat Completions 转换器之前接管 Claude OAuth，并补齐响应模型与 SSE error 观测。"
+    },
+    {
+      "path": "backend/internal/service/gateway_forward_as_responses.go",
+      "from_sha256": "751b2a0cc80a5c04d8b078325a8841a9f1fa46bafa9a9d0077b6325a8e768fe7",
+      "to_sha256": "1efd342643a33c111339e09a4dc173cfdb776c65e186673e0ffd736950db9180",
+      "reason": "在旧 Responses 工具与协议转换器之前接管 Claude OAuth，并补齐响应模型与 SSE error 观测。"
+    }
+  ],
+  "safety": {
+    "current_disposition": "retained_legacy_until_dmit_acceptance",
+    "retained_legacy": [
+      "chat-completions-oauth",
+      "responses-oauth"
+    ],
+    "production_selector": "unchanged",
+    "deployment_performed": false,
+    "dmit_validated": false,
+    "vircs_production_changed": false,
+    "removal_receipt_allowed": false
+  },
+  "result": "passed"
+}

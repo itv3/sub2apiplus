@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -36,6 +37,12 @@ func (s *GatewayService) ForwardAsResponses(
 	parsed *ParsedRequest,
 ) (*ForwardResult, error) {
 	startTime := time.Now()
+	if s.shouldRouteClaudeStrictOpenAI(account) {
+		return s.forwardClaudeStrictOpenAI(
+			ctx, c, account, body, parsed,
+			officialegress.IngressProtocolOpenAIResponses, startTime,
+		)
+	}
 
 	// 1. Lower Codex client-side tools to function tools understood by Anthropic.
 	adaptedBody, clientToolMapping, err := adaptResponsesClientToolsForAnthropic(body)
@@ -334,6 +341,10 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 	// Accumulate the final Anthropic response from streaming events
 	var finalResp *apicompat.AnthropicResponse
 	var usage ClaudeUsage
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
 
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -351,6 +362,7 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 		if !ok {
 			continue
 		}
+		observer.ObserveAnthropic([]byte(payload))
 
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
@@ -360,6 +372,9 @@ func (s *GatewayService) handleResponsesBufferedStreamingResponse(
 				zap.String("event_type", eventType),
 			)
 			continue
+		}
+		if eventType == "error" || event.Type == "error" {
+			return nil, &sseStreamErrorEventError{RawData: payload}
 		}
 
 		// message_start carries the initial response structure
@@ -484,6 +499,10 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 	var usage ClaudeUsage
 	var firstTokenMs *int
 	firstChunk := true
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
 
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
@@ -590,6 +609,7 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 		if !ok {
 			continue
 		}
+		observer.ObserveAnthropic([]byte(payload))
 
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
@@ -599,6 +619,9 @@ func (s *GatewayService) handleResponsesStreamingResponse(
 				zap.String("event_type", eventType),
 			)
 			continue
+		}
+		if eventType == "error" || event.Type == "error" {
+			return resultWithUsage(), &sseStreamErrorEventError{RawData: payload}
 		}
 
 		if processEvent(&event) {

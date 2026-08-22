@@ -59,13 +59,6 @@ type ClaudeCanonicalRequest struct {
 	refusalFallback          bool
 }
 
-// TranslationReport 明确记录当前 candidate 是否进行了有损协议翻译。
-type TranslationReport struct {
-	IngressProtocol string
-	Lossless        bool
-	Compatibility   string
-}
-
 type claudeModelShape string
 
 const (

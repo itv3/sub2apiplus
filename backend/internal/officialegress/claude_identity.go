@@ -167,7 +167,9 @@ func deriveClaudeIdentityFacts(trusted ClaudeTrustedFacts) (ClaudeIdentityFacts,
 		return ClaudeIdentityFacts{}, errors.New("Claude entrypoint 不在 SupportEnvelope")
 	}
 	if trusted.Entrypoint.IngressProtocol != "anthropic-messages" &&
-		trusted.Entrypoint.IngressProtocol != "managed-internal" {
+		trusted.Entrypoint.IngressProtocol != "managed-internal" &&
+		trusted.Entrypoint.IngressProtocol != IngressProtocolOpenAIChatCompletions &&
+		trusted.Entrypoint.IngressProtocol != IngressProtocolOpenAIResponses {
 		return ClaudeIdentityFacts{}, errors.New("Claude ingress protocol 不在批准闭集")
 	}
 	if err := validateClaudeAgentLineage(trusted.Agent); err != nil {

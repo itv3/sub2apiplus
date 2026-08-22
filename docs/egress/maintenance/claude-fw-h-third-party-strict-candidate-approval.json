@@ -1,0 +1,109 @@
+{
+  "schema_version": "claude-fw-h-third-party-strict-candidate-approval/v1",
+  "approval_id": "claude-code-2.1.226-fw-h-third-party-strict-v1",
+  "issued_at_utc": "2026-08-22T00:06:35Z",
+  "phase": "FW-H",
+  "status": "accepted_not_activated",
+  "target": {
+    "product": "claude-code",
+    "version": "2.1.226",
+    "models": [
+      "claude-sonnet-5",
+      "claude-opus-5",
+      "claude-fable-5"
+    ],
+    "profile_sha256": "e02a3af6fa56cf09b6525d884c9de3f7b76ffe84eb000d92606681b0085b9ab5",
+    "wire_sha256": "a7d2c91fc5c4b43bd49f93b60d0d681e487db0e1cdb25d3096e703cb85587c4d",
+    "release_sha256": "48586f47e0abcde9ea357c08c1465253eaa296862153a89c20e4cf0f1e6f52f8",
+    "bundle_sha256": "ceb1e30740ab4223684f478f717dd2902d8fdad0c6efad5a69b761d95b4aefae"
+  },
+  "predecessors": [
+    {
+      "kind": "production_acceptance",
+      "path": "docs/egress/maintenance/claude-fw-h-production-acceptance-package.json",
+      "sha256": "45b21fd3e74e6b2a3968c04bf18b416a0a43a157ba7cb7451f32a5d3c711cabd"
+    },
+    {
+      "kind": "source_transition",
+      "path": "docs/egress/maintenance/claude-fw-h-third-party-strict-source-transition.json",
+      "sha256": "92c7a0f1d1150cb12004705347c18cc9d0b411439b8fca865cb8a395569b1f6d"
+    },
+    {
+      "kind": "test_transition",
+      "path": "docs/egress/maintenance/claude-fw-h-third-party-strict-test-transition.json",
+      "sha256": "646d66a654a2fece0081e08710a687563e6d67750351c48dbdb114c0b3dd234c"
+    }
+  ],
+  "ingress_targets": [
+    {
+      "logical_ingress_id": "chat-completions-oauth",
+      "protocol_class": "openai-chat-completions",
+      "physical_alias_ids": [
+        "alias-chat-bare",
+        "alias-chat-v1"
+      ],
+      "current_disposition": "retained_legacy",
+      "target_disposition": "migrated_strict"
+    },
+    {
+      "logical_ingress_id": "responses-oauth",
+      "protocol_class": "openai-responses",
+      "physical_alias_ids": [
+        "alias-responses-bare-http",
+        "alias-responses-bare-subpath",
+        "alias-responses-bare-ws",
+        "alias-responses-v1-http",
+        "alias-responses-v1-subpath",
+        "alias-responses-v1-ws"
+      ],
+      "current_disposition": "retained_legacy",
+      "target_disposition": "migrated_strict"
+    },
+    {
+      "logical_ingress_id": "codex-direct-rerouted",
+      "protocol_class": "codex-responses",
+      "physical_alias_ids": [
+        "alias-codex-direct-responses-http",
+        "alias-codex-direct-responses-subpath",
+        "alias-codex-direct-responses-ws"
+      ],
+      "current_disposition": "rerouted",
+      "target_disposition": "rerouted"
+    }
+  ],
+  "compatibility": {
+    "lossless": [
+      "text_messages_and_order",
+      "leading_system",
+      "stream_and_non_stream_response_mode",
+      "max_output_tokens",
+      "reasoning_effort",
+      "store_false",
+      "empty_tools_and_default_text_format"
+    ],
+    "denied": [
+      "third_party_tool_catalog_and_history",
+      "images",
+      "audio",
+      "json_schema_output",
+      "temperature_top_p_and_stop",
+      "previous_response_conversation_and_background",
+      "encrypted_reasoning_replay",
+      "unknown_fields_roles_and_duplicates",
+      "responses_subpaths",
+      "responses_websocket"
+    ]
+  },
+  "safety": {
+    "production_selector_changed": false,
+    "deployment_performed": false,
+    "dmit_validated": false,
+    "vircs_production_changed": false,
+    "retained_legacy": [
+      "chat-completions-oauth",
+      "responses-oauth"
+    ],
+    "removal_receipt_allowed": false
+  },
+  "result": "approved_for_dmit_validation"
+}

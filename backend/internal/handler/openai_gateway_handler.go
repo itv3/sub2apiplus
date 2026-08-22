@@ -2050,6 +2050,17 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 				return
 			}
 		}
+		if h.gatewayService.ShouldFailCloseClaudeStrictResponsesWebSocket(account) {
+			reqLog.Info("openai.websocket_claude_strict_fail_closed",
+				zap.Int64("account_id", account.ID),
+			)
+			closeOpenAIClientWS(
+				wsConn,
+				coderws.StatusPolicyViolation,
+				"Responses WebSocket is outside the Claude Code SupportEnvelope",
+			)
+			return
+		}
 
 		token, _, err := h.gatewayService.GetRequestCredential(accountCtx, c, account)
 		if err != nil {

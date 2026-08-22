@@ -173,6 +173,15 @@ type ClaudeMessagesExecution struct {
 	InvocationID string
 }
 
+// ClaudeCanonicalExecution 是共享协议适配器交给 Claude PersonaPlanner 的可信输入。
+type ClaudeCanonicalExecution struct {
+	Canonical    CanonicalRequest
+	Translation  TranslationReport
+	AccessToken  string
+	TrustedFacts ClaudeTrustedFacts
+	InvocationID string
+}
+
 // claudeSupportEnvelopeRejection 标记在任何上游发送前即可确定的入口拒绝。
 // service 只能依据这个稳定类型返回 400，禁止解析中文错误文本或把传输故障误报为客户端错误。
 type claudeSupportEnvelopeRejection struct {
@@ -567,18 +576,80 @@ func (r *ClaudeRuntime) ExecuteMessages(
 	} else if err := completeClaudeThirdPartyTitleFacts(&trusted, canonical); err != nil {
 		return ClaudeCandidateResult{}, newClaudeSupportEnvelopeRejection(err)
 	}
+	input.TrustedFacts = trusted
+	return r.executePreparedClaudeMessages(
+		ctx, input, canonical, translation, "anthropic-messages",
+	)
+}
+
+// ValidateCanonical 在任何凭据刷新或上游调用前验证共享规范化语义。
+func (r *ClaudeRuntime) ValidateCanonical(
+	canonical CanonicalRequest,
+	report TranslationReport,
+) error {
+	if r == nil || r.executor == nil {
+		return errors.New("Claude FW-G runtime 未初始化")
+	}
+	if err := validateCanonicalTranslation(canonical, report); err != nil {
+		return newClaudeSupportEnvelopeRejection(err)
+	}
+	projected, err := projectCanonicalRequestToClaude(canonical, r.wire)
+	if err != nil {
+		return newClaudeSupportEnvelopeRejection(err)
+	}
+	if _, err := validateClaudeMessageRelations(projected); err != nil {
+		return newClaudeSupportEnvelopeRejection(err)
+	}
+	if _, err := claudeModelCapabilityForPlan(ClaudeEgressPlan{canonical: projected}, r.wire); err != nil {
+		return newClaudeSupportEnvelopeRejection(err)
+	}
+	return nil
+}
+
+// ExecuteCanonical 只执行已经由共享适配器证明为 lossless 的规范化请求。
+func (r *ClaudeRuntime) ExecuteCanonical(
+	ctx context.Context,
+	input ClaudeCanonicalExecution,
+) (ClaudeCandidateResult, error) {
+	if err := r.ValidateCanonical(input.Canonical, input.Translation); err != nil {
+		return ClaudeCandidateResult{}, err
+	}
+	input.AccessToken = strings.TrimSpace(input.AccessToken)
+	if input.AccessToken == "" {
+		return ClaudeCandidateResult{}, errors.New("Claude canonical 执行缺少 OAuth access token")
+	}
+	canonical, err := projectCanonicalRequestToClaude(input.Canonical, r.wire)
+	if err != nil {
+		return ClaudeCandidateResult{}, newClaudeSupportEnvelopeRejection(err)
+	}
+	messagesInput := ClaudeMessagesExecution{
+		AccessToken: input.AccessToken, TrustedFacts: input.TrustedFacts,
+		InvocationID: input.InvocationID,
+	}
+	return r.executePreparedClaudeMessages(
+		ctx, messagesInput, canonical, input.Translation, input.Canonical.IngressProtocol,
+	)
+}
+
+func (r *ClaudeRuntime) executePreparedClaudeMessages(
+	ctx context.Context,
+	input ClaudeMessagesExecution,
+	canonical ClaudeCanonicalRequest,
+	translation TranslationReport,
+	expectedProtocol string,
+) (ClaudeCandidateResult, error) {
 	relations, err := validateClaudeMessageRelations(canonical)
 	if err != nil {
 		return ClaudeCandidateResult{}, newClaudeSupportEnvelopeRejection(err)
 	}
-	identity, err := deriveClaudeIdentityFacts(trusted)
+	identity, err := deriveClaudeIdentityFacts(input.TrustedFacts)
 	if err != nil {
 		return ClaudeCandidateResult{}, err
 	}
-	if identity.ingressProtocol != "anthropic-messages" {
-		return ClaudeCandidateResult{}, errors.New("Claude messages 入口协议不是 anthropic-messages")
+	if identity.ingressProtocol != expectedProtocol ||
+		translation.IngressProtocol != expectedProtocol {
+		return ClaudeCandidateResult{}, errors.New("Claude canonical 入口协议身份冲突")
 	}
-	input.TrustedFacts = trusted
 	if err := r.executeClaudeStartup(ctx, input, identity); err != nil {
 		return ClaudeCandidateResult{}, err
 	}

@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/claude"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
@@ -34,6 +35,12 @@ func (s *GatewayService) ForwardAsChatCompletions(
 	parsed *ParsedRequest,
 ) (*ForwardResult, error) {
 	startTime := time.Now()
+	if s.shouldRouteClaudeStrictOpenAI(account) {
+		return s.forwardClaudeStrictOpenAI(
+			ctx, c, account, body, parsed,
+			officialegress.IngressProtocolOpenAIChatCompletions, startTime,
+		)
+	}
 
 	// 1. Parse Chat Completions request
 	var ccReq apicompat.ChatCompletionsRequest
@@ -251,12 +258,17 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 
 	var finalResp *apicompat.AnthropicResponse
 	var usage ClaudeUsage
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
 
 	for scanner.Scan() {
 		line := scanner.Text()
 		// SSE 规范允许 `event:xxx`（冒号后无空格）：Kimi 等 Anthropic 兼容上游
 		// 返回紧凑格式，严格匹配 "event: " 会丢弃全部事件（#4653 同根因）。
-		if _, ok := extractOpenAISSEEventLine(line); !ok {
+		eventName, ok := extractOpenAISSEEventLine(line)
+		if !ok {
 			continue
 		}
 
@@ -267,10 +279,14 @@ func (s *GatewayService) handleCCBufferedFromAnthropic(
 		if !ok {
 			continue
 		}
+		observer.ObserveAnthropic([]byte(payload))
 
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			continue
+		}
+		if eventName == "error" || event.Type == "error" {
+			return nil, &sseStreamErrorEventError{RawData: payload}
 		}
 
 		// message_start carries the initial response structure and cache usage
@@ -395,6 +411,10 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	var usage ClaudeUsage
 	var firstTokenMs *int
 	firstChunk := true
+	observer := upstreamResponseModelObserverFromContext(c)
+	if observer == nil {
+		observer = beginUpstreamResponseModelObservation(c)
+	}
 
 	scanner := bufio.NewScanner(resp.Body)
 	maxLineSize := defaultMaxLineSize
@@ -463,7 +483,8 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 	for scanner.Scan() {
 		line := scanner.Text()
 		// 与缓冲路径一致：接受 SSE 紧凑格式（冒号后无空格，#4653 同根因）。
-		if _, ok := extractOpenAISSEEventLine(line); !ok {
+		eventName, ok := extractOpenAISSEEventLine(line)
+		if !ok {
 			continue
 		}
 
@@ -474,10 +495,14 @@ func (s *GatewayService) handleCCStreamingFromAnthropic(
 		if !ok {
 			continue
 		}
+		observer.ObserveAnthropic([]byte(payload))
 
 		var event apicompat.AnthropicStreamEvent
 		if err := json.Unmarshal([]byte(payload), &event); err != nil {
 			continue
+		}
+		if eventName == "error" || event.Type == "error" {
+			return resultWithUsage(), &sseStreamErrorEventError{RawData: payload}
 		}
 
 		if processAnthropicEvent(&event) {

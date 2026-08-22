@@ -183,6 +183,11 @@ func loadClaudeFWHProductionAcceptance() (claudeFWHProductionAcceptancePackage, 
 }
 
 func claudeFWHProductionAcceptanceSupersedes(path, priorDigest, currentDigest string) bool {
+	if claudeFWHThirdPartyStrictSourceTransitionSupersedes(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	receipt, _, err := loadClaudeFWHProductionAcceptance()
 	if err != nil {
 		return false

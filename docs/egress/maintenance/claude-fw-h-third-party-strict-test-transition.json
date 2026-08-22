@@ -1,0 +1,65 @@
+{
+  "schema_version": "claude-fw-h-third-party-strict-test-transition/v1",
+  "date": "2026-08-22",
+  "phase": "FW-H",
+  "base_commit": "a181859d374821d0c514e00a684ba15a6b8f59c3",
+  "scope": "candidate_only",
+  "predecessor": {
+    "path": "docs/egress/maintenance/claude-fw-h-production-acceptance-package.json",
+    "sha256": "45b21fd3e74e6b2a3968c04bf18b416a0a43a157ba7cb7451f32a5d3c711cabd"
+  },
+  "source_transition": {
+    "path": "docs/egress/maintenance/claude-fw-h-third-party-strict-source-transition.json",
+    "sha256": "92c7a0f1d1150cb12004705347c18cc9d0b411439b8fca865cb8a395569b1f6d"
+  },
+  "logical_ingress_ids": [
+    "chat-completions-oauth",
+    "responses-oauth"
+  ],
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/claude_canonical_runtime_test.go",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "27872d1657b84c4f7bacd5cbb6933384b3cdca9ae69464ba461905b05660de6d",
+      "reason": "冻结三模型、两种流式形态和三入口 final wire 对拍，以及上游前拒绝断言。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_production_acceptance_test.go",
+      "from_sha256": "d83fa8c31b3ffedeb13cdf0b5eb6e54d7eda1938faa52355065be59c105537c5",
+      "to_sha256": "79d9ec88b1e38bd74d4dbfe804fb30672a319df14eb89fe2637ebb9aa1ae1c14",
+      "reason": "让历史生产验收冻结链只承认本次追加 source transition 的精确 path/from/to 后继。"
+    },
+    {
+      "path": "backend/internal/officialegress/ingress_adapter_test.go",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "6ddd22d28fbb1badcc9cff2c0abf7f4f9274799ba798f548f7bac36226a36e89",
+      "reason": "冻结无损语义正例、未知字段、有损功能、重复字段、JSON null 和文本空白负例。"
+    },
+    {
+      "path": "backend/internal/service/gateway_claude_strict_openai_test.go",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "f76a12197c0072f349c4108a7a727b7ed1ec134a026bac017b6dccc051c691fb",
+      "reason": "冻结协议响应、usage/终止原因、物理别名、零上游拒绝、HTTP fallback、SSE error fallback 和旧转换器前接管断言。"
+    }
+  ],
+  "gates": [
+    "adapter_unit_passed",
+    "canonical_final_wire_pair_passed",
+    "service_strict_matrix_passed",
+    "handler_build_passed",
+    "go_vet_passed"
+  ],
+  "safety": {
+    "current_disposition": "retained_legacy_until_dmit_acceptance",
+    "retained_legacy": [
+      "chat-completions-oauth",
+      "responses-oauth"
+    ],
+    "production_selector": "unchanged",
+    "deployment_performed": false,
+    "dmit_validated": false,
+    "vircs_production_changed": false,
+    "removal_receipt_allowed": false
+  },
+  "result": "passed"
+}
