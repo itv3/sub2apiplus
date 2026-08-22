@@ -9,6 +9,7 @@ import (
 
 	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/alicebob/miniredis/v2"
+	//nolint:depguard // 测试需要构造与生产适配器相同的 Redis 客户端。
 	"github.com/redis/go-redis/v9"
 )
 

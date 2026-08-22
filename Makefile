@@ -201,8 +201,9 @@ test-frontend:
 test-frontend-critical:
 	@pnpm --dir frontend exec vitest run $(FRONTEND_CRITICAL_VITEST)
 
-# 抓包工具测试只使用合成数据，不联网、不读取真实凭据、不启动抓包进程；Claude
-# bundle AST 用 frontend lockfile 中的 TypeScript 解析器，禁止临时下载或浮动版本。
+# 抓包工具提交态测试只使用合成数据，不联网、不读取真实凭据、不启动抓包进程；
+# 依赖 local-analysis 的原始证据复算仅在本机证据存在时执行。Claude bundle AST 用
+# frontend lockfile 中的 TypeScript 解析器，禁止临时下载或浮动版本。
 test-capture-tools:
 	@test -f frontend/node_modules/typescript/lib/typescript.js || \
 		{ echo "🔴 缺少锁定的 TypeScript AST 解析器，请先执行 pnpm --dir frontend install --frozen-lockfile"; exit 1; }

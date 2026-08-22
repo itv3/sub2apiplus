@@ -28,6 +28,11 @@ func claudeFWHLegacyRetirementTransitionSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if claudeOfflineCIStabilizationTransitionSupersedesService(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	for _, item := range []struct {
 		path   string
 		digest string
@@ -62,7 +67,10 @@ func claudeFWHLegacyRetirementTransitionSupersedesService(
 		}
 		for _, transition := range receipt.Transitions {
 			if transition.Path == path && transition.FromSHA256 == priorDigest &&
-				transition.ToSHA256 == currentDigest {
+				(transition.ToSHA256 == currentDigest ||
+					claudeOfflineCIStabilizationTransitionSupersedesService(
+						path, transition.ToSHA256, currentDigest,
+					)) {
 				return true
 			}
 		}

@@ -187,6 +187,18 @@ func validateClaudeFWGModelCapabilityEvidence(
 		evidence.ProductionDiff.SHA256 != claudeFWGModelCapabilityProductionSHA256 {
 		return errors.New("Claude 模型能力 Campaign 事实非法")
 	}
+	campaignRoot := filepath.Join(
+		"../../..", filepath.FromSlash(evidence.CampaignRoot),
+	)
+	campaignInfo, err := os.Stat(campaignRoot)
+	if errors.Is(err, os.ErrNotExist) {
+		// 原始 Campaign 位于被 .gitignore 排除的本地证据区。提交态 CI 继续校验
+		// 已提交 transition 的内容寻址事实；本机存在原始证据时仍执行完整复算。
+		return nil
+	}
+	if err != nil || !campaignInfo.IsDir() {
+		return errors.New("Claude 模型能力 Campaign 根目录非法")
+	}
 	attemptIDs := make([]string, 0, len(evidence.Attempts))
 	failed := map[string]struct{}{
 		"claude-opus-5-v4-replay-baseline/attempt-001": {},
@@ -202,8 +214,7 @@ func validateClaudeFWGModelCapabilityEvidence(
 		}
 		attemptIDs = append(attemptIDs, attempt.AttemptID)
 		manifestPath := filepath.Join(
-			"../../..", filepath.FromSlash(evidence.CampaignRoot),
-			"attempts", scenario, ordinal, "relay-manifest.json",
+			campaignRoot, "attempts", scenario, ordinal, "relay-manifest.json",
 		)
 		manifest, err := os.ReadFile(manifestPath)
 		if err != nil || claudeFWGCountTokensDigest(manifest) != attempt.ManifestSHA256 {
@@ -216,8 +227,7 @@ func validateClaudeFWGModelCapabilityEvidence(
 				return errors.New("Claude 模型能力成功 attempt 状态非法")
 			}
 			runtimePath := filepath.Join(
-				"../../..", filepath.FromSlash(evidence.CampaignRoot), "runtime-receipts",
-				scenario+"-"+ordinal+".json",
+				campaignRoot, "runtime-receipts", scenario+"-"+ordinal+".json",
 			)
 			runtimeReceipt, readErr := os.ReadFile(runtimePath)
 			if readErr != nil ||

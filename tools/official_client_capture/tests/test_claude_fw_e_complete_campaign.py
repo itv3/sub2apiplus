@@ -9,6 +9,7 @@ from pathlib import Path
 
 from tools.official_client_capture.claude_fw_e_complete_campaign import (
     EXPECTED_COUNTS,
+    MATRIX_PATH,
     CompleteCampaignError,
     build_denominator,
     freeze_campaign,
@@ -19,6 +20,10 @@ from tools.official_client_capture.claude_fw_e_complete_campaign import (
 REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
+@unittest.skipUnless(
+    (REPO_ROOT / MATRIX_PATH).is_file(),
+    "本地忽略区没有完整 Campaign 证据",
+)
 class ClaudeFWCompleteCampaignTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

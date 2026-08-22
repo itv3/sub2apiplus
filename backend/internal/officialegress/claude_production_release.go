@@ -46,6 +46,8 @@ func (r ResolvedClaudeProductionRelease) ReleaseDigest() string  { return r.rele
 func (r ResolvedClaudeProductionRelease) BundleDigest() string   { return r.bundleDigest }
 func (r ResolvedClaudeProductionRelease) ApprovalDigest() string { return r.approvalDigest }
 func (r ResolvedClaudeProductionRelease) Changeset() string      { return r.selection.Changeset() }
+
+//nolint:unused // 保留只读桥接方法，供历史生产迁移收据复算旧 Release 坐标。
 func (r ResolvedClaudeProductionRelease) releaseArtifact() ResolvedClaudeRelease {
 	return r.selection.Release()
 }

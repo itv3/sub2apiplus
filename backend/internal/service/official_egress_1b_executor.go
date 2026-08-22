@@ -15,6 +15,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/officialegress"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
+	//nolint:depguard // 该文件是进程级运行时 wiring，Redis 仅用于构造状态存储适配器。
 	"github.com/redis/go-redis/v9"
 )
 

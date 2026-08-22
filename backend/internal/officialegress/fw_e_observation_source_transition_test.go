@@ -136,7 +136,7 @@ func TestFWEObservationSourceTransitionIsFrozen(t *testing.T) {
 		if got != transition.ToSHA256 &&
 			!claudeFWGSourceTransitionSupersedes(transition.Path, transition.ToSHA256, got) &&
 			!claudeFWGTestTransitionSupersedes(transition.Path, transition.ToSHA256, got) &&
-			!(hasRetirementPrior && claudeFWGCountTokensSourceTransitionSupersedes(
+			(!hasRetirementPrior || !claudeFWGCountTokensSourceTransitionSupersedes(
 				transition.Path, transition.ToSHA256, retirementPrior,
 			)) {
 			t.Fatalf(

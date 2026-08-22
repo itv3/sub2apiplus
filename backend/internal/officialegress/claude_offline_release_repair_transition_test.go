@@ -132,7 +132,10 @@ func claudeOfflineReleaseRepairTargetMatches(path string, want string) bool {
 		return false
 	}
 	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:]) == want
+	current := hex.EncodeToString(sum[:])
+	return current == want || claudeOfflineCIStabilizationTransitionSupersedes(
+		path, want, current,
+	)
 }
 
 // claudeOfflineReleaseRepairTransitionSupersedes 只接受固定修复收据中的精确
@@ -150,12 +153,16 @@ func claudeOfflineReleaseRepairTransitionSupersedes(
 		return false
 	}
 	for _, transition := range receipt.Transitions {
-		if transition.Path == path && transition.FromSHA256 == priorDigest &&
-			transition.ToSHA256 == currentDigest {
-			return true
+		if transition.Path == path && transition.FromSHA256 == priorDigest {
+			return transition.ToSHA256 == currentDigest ||
+				claudeOfflineCIStabilizationTransitionSupersedes(
+					path, transition.ToSHA256, currentDigest,
+				)
 		}
 	}
-	return false
+	return claudeOfflineCIStabilizationTransitionSupersedes(
+		path, priorDigest, currentDigest,
+	)
 }
 
 func TestClaudeOfflineReleaseRepairTransitionIsFrozen(t *testing.T) {

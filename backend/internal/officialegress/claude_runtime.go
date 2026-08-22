@@ -323,7 +323,7 @@ type ClaudeRuntime struct {
 	startupMu         sync.Mutex
 	startupRuns       map[string]*claudeStartupRun
 	// 以下字段只保留旧测试构造器的源码兼容性，生产状态统一进入 stateStore。
-	sessionMu     sync.Mutex
+	sessionMu     sync.Mutex //nolint:unused // 旧测试构造器的结构兼容字段。
 	sessions      map[string]*claudeSessionState
 	requestOwners map[string]string
 }

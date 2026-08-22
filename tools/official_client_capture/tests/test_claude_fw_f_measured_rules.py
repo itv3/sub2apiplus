@@ -47,6 +47,12 @@ def load(path: Path) -> dict[str, object]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+@unittest.skipUnless(
+    IDENTITY_PATH.is_file()
+    and RELAY_INDEX_PATH.is_file()
+    and FINAL_LEDGER_PATH.is_file(),
+    "本地忽略区没有 FW-F 实测证据",
+)
 class MeasuredRuleLedgerTests(unittest.TestCase):
     """验证活动规则只能来自当前版本真实 R/M 断言。"""
 

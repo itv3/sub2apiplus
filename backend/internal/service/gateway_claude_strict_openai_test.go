@@ -202,6 +202,7 @@ func newClaudeStrictOpenAIService(
 	}
 }
 
+//nolint:unused // 保留历史 strict 抓包筛选器，供冻结测试证据复算使用。
 func claudeStrictMessageCaptures(captures []claudeFWGServiceCapture) []claudeFWGServiceCapture {
 	out := make([]claudeFWGServiceCapture, 0, 2)
 	for _, capture := range captures {

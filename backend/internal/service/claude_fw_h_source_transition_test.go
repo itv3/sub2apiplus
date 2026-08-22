@@ -45,6 +45,11 @@ func claudeFWHSourceTransitionSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if claudeOfflineCIStabilizationTransitionSupersedesService(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	if claudeOfficialClientOnlyTransitionSupersedesService(
 		path, priorDigest, currentDigest,
 	) {
@@ -131,7 +136,11 @@ func claudeOfficialClientOnlyTransitionSupersedesService(
 		return false
 	}
 	for _, transition := range receipt.Transitions {
-		if transition.Path != path || transition.ToSHA256 != currentDigest ||
+		if transition.Path != path ||
+			(transition.ToSHA256 != currentDigest &&
+				!claudeOfflineCIStabilizationTransitionSupersedesService(
+					path, transition.ToSHA256, currentDigest,
+				)) ||
 			len(transition.FromSHA256) != 64 ||
 			transition.FromSHA256 == transition.ToSHA256 {
 			continue

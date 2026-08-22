@@ -317,6 +317,7 @@ func claudeEndpointForRoute(
 	return claudeEndpointProfile{}, false
 }
 
+//nolint:unused // 保留历史候选目录摘要算法，供冻结 transition 的离线复算使用。
 func claudeCatalogDigest(catalog SinkCatalog) string {
 	parts := make([]string, 0, len(catalog.bindings))
 	for _, binding := range catalog.Bindings() {

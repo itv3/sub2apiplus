@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/officialegress"
+	//nolint:depguard // 该文件本身就是 ClaudeStateStore 的 Redis 基础设施适配器。
 	"github.com/redis/go-redis/v9"
 )
 

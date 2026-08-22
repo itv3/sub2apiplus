@@ -148,13 +148,54 @@ func claudeDesktopFableTitleRequestBody(
 	return claudeDesktopTitleRequestBody(t, wire, func(document map[string]any) {
 		document["model"] = "claude-fable-5"
 		delete(document, "thinking")
-		system := document["system"].([]any)
-		system[0].(map[string]any)["text"] =
+		claudeDesktopTitleSystemBlock(t, document, 0)["text"] =
 			"x-anthropic-billing-header: cc_version=2.1.237.3c9; cc_entrypoint=claude-desktop"
 		if mutate != nil {
 			mutate(document)
 		}
 	})
+}
+
+func claudeDesktopTitleObjectAt(
+	t *testing.T,
+	document map[string]any,
+	keys ...string,
+) map[string]any {
+	t.Helper()
+	var current any = document
+	for _, key := range keys {
+		object, ok := current.(map[string]any)
+		if !ok {
+			t.Fatalf("Claude Desktop 标题对象路径非法：%s", strings.Join(keys, "."))
+		}
+		value, exists := object[key]
+		if !exists {
+			t.Fatalf("Claude Desktop 标题对象路径缺失：%s", strings.Join(keys, "."))
+		}
+		current = value
+	}
+	object, ok := current.(map[string]any)
+	if !ok {
+		t.Fatalf("Claude Desktop 标题对象类型非法：%s", strings.Join(keys, "."))
+	}
+	return object
+}
+
+func claudeDesktopTitleSystemBlock(
+	t *testing.T,
+	document map[string]any,
+	index int,
+) map[string]any {
+	t.Helper()
+	system, ok := document["system"].([]any)
+	if !ok || index < 0 || index >= len(system) {
+		t.Fatalf("Claude Desktop 标题 system[%d] 非法", index)
+	}
+	block, ok := system[index].(map[string]any)
+	if !ok {
+		t.Fatalf("Claude Desktop 标题 system[%d] 不是对象", index)
+	}
+	return block
 }
 
 func assertClaudeDesktopTitleNormalizesToFrozenWire(
@@ -344,34 +385,35 @@ func TestClaudeFWGDesktopTitleUnknownShapesRemainFailClosed(t *testing.T) {
 		{
 			name: "未知 format schema",
 			mutate: func(document map[string]any) {
-				format := document["output_config"].(map[string]any)["format"].(map[string]any)
-				schema := format["schema"].(map[string]any)
-				schema["properties"].(map[string]any)["title"] = map[string]any{"type": "number"}
+				properties := claudeDesktopTitleObjectAt(
+					t, document, "output_config", "format", "schema", "properties",
+				)
+				properties["title"] = map[string]any{"type": "number"}
 			},
 		},
 		{
 			name: "额外 output_config 字段",
 			mutate: func(document map[string]any) {
-				document["output_config"].(map[string]any)["extra"] = true
+				claudeDesktopTitleObjectAt(t, document, "output_config")["extra"] = true
 			},
 		},
 		{
 			name: "format-only 未实测形态",
 			mutate: func(document map[string]any) {
-				delete(document["output_config"].(map[string]any), "effort")
+				delete(claudeDesktopTitleObjectAt(t, document, "output_config"), "effort")
 			},
 		},
 		{
 			name: "标题 effort 漂移",
 			mutate: func(document map[string]any) {
-				document["output_config"].(map[string]any)["effort"] = "medium"
+				claudeDesktopTitleObjectAt(t, document, "output_config")["effort"] = "medium"
 			},
 		},
 		{
 			name: "标题提示词漂移",
 			mutate: func(document map[string]any) {
-				system := document["system"].([]any)
-				system[2].(map[string]any)["text"] = "Generate an arbitrary JSON title."
+				claudeDesktopTitleSystemBlock(t, document, 2)["text"] =
+					"Generate an arbitrary JSON title."
 			},
 		},
 		{
@@ -433,8 +475,8 @@ func TestClaudeFWGDesktopTitleUnknownShapesRemainFailClosed(t *testing.T) {
 				return claudeDesktopFableTitleRequestBody(t, wire, mutate)
 			},
 			mutate: func(document map[string]any) {
-				system := document["system"].([]any)
-				system[2].(map[string]any)["text"] = "Generate an arbitrary JSON title."
+				claudeDesktopTitleSystemBlock(t, document, 2)["text"] =
+					"Generate an arbitrary JSON title."
 			},
 		},
 		{
@@ -443,9 +485,10 @@ func TestClaudeFWGDesktopTitleUnknownShapesRemainFailClosed(t *testing.T) {
 				return claudeDesktopFableTitleRequestBody(t, wire, mutate)
 			},
 			mutate: func(document map[string]any) {
-				format := document["output_config"].(map[string]any)["format"].(map[string]any)
-				schema := format["schema"].(map[string]any)
-				schema["properties"].(map[string]any)["title"] = map[string]any{"type": "number"}
+				properties := claudeDesktopTitleObjectAt(
+					t, document, "output_config", "format", "schema", "properties",
+				)
+				properties["title"] = map[string]any{"type": "number"}
 			},
 		},
 	}

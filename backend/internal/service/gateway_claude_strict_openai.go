@@ -19,7 +19,10 @@ import (
 	"github.com/google/uuid"
 )
 
+//nolint:unused // 已退休 strict 转换链仍作为历史回退证据保留。
 const claudeStrictSSEPreludeLimit = 1 << 20
+
+//nolint:unused // 已退休 strict 转换链仍作为历史回退证据保留。
 const claudeStrictJSONResponseLimit = 64 << 20
 
 func (s *GatewayService) shouldRouteClaudeStrictOpenAI(account *Account) bool {
@@ -91,6 +94,7 @@ func writeClaudeStrictOpenAIRejection(c *gin.Context, protocol string) {
 		"Request is outside the Claude Code SupportEnvelope")
 }
 
+//nolint:unused // 已退休 strict 转换链仍作为历史回退证据保留。
 func buildClaudeStrictCanonicalTrustedFacts(
 	c *gin.Context,
 	account *Account,
@@ -147,6 +151,7 @@ func buildClaudeStrictCanonicalTrustedFacts(
 	}, nil
 }
 
+//nolint:unused // 已退休 strict 转换链仍作为历史回退证据保留。
 func (s *GatewayService) finishClaudeStrictOpenAIResponse(
 	ctx context.Context,
 	c *gin.Context,
@@ -263,6 +268,7 @@ func (s *GatewayService) finishClaudeStrictOpenAIResponse(
 	}
 }
 
+//nolint:unused // 已退休 strict 转换链仍作为历史回退证据保留。
 func (s *GatewayService) handleClaudeStrictOpenAIError(
 	ctx context.Context,
 	c *gin.Context,
@@ -295,6 +301,7 @@ func (s *GatewayService) handleClaudeStrictOpenAIError(
 	return fmt.Errorf("Claude strict 上游状态 %d：%s", resp.StatusCode, message)
 }
 
+//nolint:unused // 已退休 strict 转换链仍作为历史回退证据保留。
 func (s *GatewayService) prepareClaudeStrictOpenAIResponse(
 	ctx context.Context,
 	result officialegress.ClaudeCandidateResult,
@@ -332,11 +339,13 @@ func (s *GatewayService) prepareClaudeStrictOpenAIResponse(
 	}
 }
 
+//nolint:unused // 已退休 strict 转换链仍作为历史回退证据保留。
 type claudeStrictBufferedBody struct {
 	io.Reader
 	io.Closer
 }
 
+//nolint:unused // 已退休 strict 转换链仍作为历史回退证据保留。
 func preflightClaudeStrictSSE(resp *http.Response) (bool, error) {
 	reader := bufio.NewReader(resp.Body)
 	var prefix bytes.Buffer
@@ -346,7 +355,7 @@ func preflightClaudeStrictSSE(resp *http.Response) (bool, error) {
 			if prefix.Len()+len(raw) > claudeStrictSSEPreludeLimit {
 				return false, errors.New("Claude strict SSE 首帧超过上限")
 			}
-			prefix.Write(raw)
+			_, _ = prefix.Write(raw)
 		}
 		if err != nil {
 			return false, err
@@ -365,6 +374,7 @@ func preflightClaudeStrictSSE(resp *http.Response) (bool, error) {
 	}
 }
 
+//nolint:unused // 已退休 strict 转换链仍作为历史回退证据保留。
 func readClaudeStrictSSEEvent(reader *bufio.Reader) (string, string, []byte, error) {
 	var raw bytes.Buffer
 	eventName := ""
@@ -372,7 +382,7 @@ func readClaudeStrictSSEEvent(reader *bufio.Reader) (string, string, []byte, err
 	for {
 		line, err := reader.ReadString('\n')
 		if line != "" {
-			raw.WriteString(line)
+			_, _ = raw.WriteString(line)
 			trimmed := strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
 			if value, ok := parseAnthropicSSEField(trimmed, "event"); ok {
 				eventName = value
@@ -406,6 +416,7 @@ func readClaudeStrictSSEEvent(reader *bufio.Reader) (string, string, []byte, err
 	return eventName, eventType, raw.Bytes(), nil
 }
 
+//nolint:unused // 已退休 strict 转换链仍作为历史回退证据保留。
 func convertClaudeStrictJSONResponseToSSE(resp *http.Response) error {
 	body, err := io.ReadAll(io.LimitReader(resp.Body, claudeStrictJSONResponseLimit+1))
 	if err != nil {

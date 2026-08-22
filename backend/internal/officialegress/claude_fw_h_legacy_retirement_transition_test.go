@@ -191,7 +191,11 @@ func claudeFWHLegacyRetirementTransitionPrior(path string, currentDigest string)
 			return "", false
 		}
 		for _, transition := range receipt.Transitions {
-			if transition.Path == path && transition.ToSHA256 == currentDigest {
+			if transition.Path == path &&
+				(transition.ToSHA256 == currentDigest ||
+					claudeOfflineCIStabilizationTransitionSupersedes(
+						path, transition.ToSHA256, currentDigest,
+					)) {
 				return transition.FromSHA256, true
 			}
 		}

@@ -250,6 +250,7 @@ func validateClaudeOfficialCountTokensIngress(
 	return trusted, nil
 }
 
+//nolint:unused // 旧官方入口已退休，保留该提取器用于历史 wire 证据复算。
 func extractClaudeOfficialCustomHeaders(
 	headers http.Header,
 	profile claudeFWGProfile,

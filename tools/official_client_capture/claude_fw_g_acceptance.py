@@ -119,7 +119,11 @@ def candidate_git_material_digests(
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )
-    require(completed.returncode == 0 and not completed.stderr, "无法复算候选 Git 树")
+    stderr = completed.stderr.decode("utf-8", errors="replace").strip()
+    require(
+        completed.returncode == 0,
+        f"无法复算候选 Git 树：{stderr or f'退出码 {completed.returncode}'}",
+    )
     entries: list[dict[str, Any]] = []
     for raw in completed.stdout.split(b"\0"):
         if not raw:

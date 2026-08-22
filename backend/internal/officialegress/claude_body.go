@@ -1043,9 +1043,9 @@ func claudeVersionFingerprint(artifact claudeWireArtifact, text string) (string,
 	var selected strings.Builder
 	for _, index := range artifact.Attestation.VersionFingerprint.MessageIndexes {
 		if index >= 0 && index < len(runes) {
-			selected.WriteRune(runes[index])
+			_, _ = selected.WriteRune(runes[index])
 		} else {
-			selected.WriteByte('0')
+			_ = selected.WriteByte('0')
 		}
 	}
 	sum := sha256.Sum256([]byte(
@@ -1621,7 +1621,7 @@ type claudeJSONField struct {
 
 func marshalClaudeOrderedObject(fields []claudeJSONField) ([]byte, error) {
 	var output bytes.Buffer
-	output.WriteByte('{')
+	_ = output.WriteByte('{')
 	seen := make(map[string]struct{}, len(fields))
 	for index, field := range fields {
 		if strings.TrimSpace(field.name) == "" || !json.Valid(field.raw) {
@@ -1632,14 +1632,14 @@ func marshalClaudeOrderedObject(fields []claudeJSONField) ([]byte, error) {
 		}
 		seen[field.name] = struct{}{}
 		if index > 0 {
-			output.WriteByte(',')
+			_ = output.WriteByte(',')
 		}
 		name, _ := marshalClaudeJSON(field.name)
-		output.Write(name)
-		output.WriteByte(':')
-		output.Write(bytes.TrimSpace(field.raw))
+		_, _ = output.Write(name)
+		_ = output.WriteByte(':')
+		_, _ = output.Write(bytes.TrimSpace(field.raw))
 	}
-	output.WriteByte('}')
+	_ = output.WriteByte('}')
 	return output.Bytes(), nil
 }
 

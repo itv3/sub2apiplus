@@ -441,6 +441,10 @@ class ClaudeFWFProfileTests(unittest.TestCase):
             ["SPEC-EP-001", "SPEC-EP-008"],
         )
 
+    @unittest.skipUnless(
+        FINAL_ATOMIC_LEDGER_PATH.is_file(),
+        "本地忽略区没有 FW-F 原子断言台账",
+    )
     def test_required_rule_manifest_losslessly_maps_110_atomic_assertions(self) -> None:
         manifest = json.loads(RULE_MANIFEST_PATH.read_text(encoding="utf-8"))
         ledger = json.loads(FINAL_ATOMIC_LEDGER_PATH.read_text(encoding="utf-8"))
@@ -477,6 +481,10 @@ class ClaudeFWFProfileTests(unittest.TestCase):
         )
         self.assertEqual(set(protocol["evidence_channels"]), {"M", "P", "R"})
 
+    @unittest.skipUnless(
+        FINAL_ATOMIC_LEDGER_PATH.is_file(),
+        "本地忽略区没有 FW-F 原子断言台账",
+    )
     def test_required_rule_manifest_rejects_duplicate_atomic_mapping(self) -> None:
         manifest = json.loads(RULE_MANIFEST_PATH.read_text(encoding="utf-8"))
         ledger = json.loads(FINAL_ATOMIC_LEDGER_PATH.read_text(encoding="utf-8"))

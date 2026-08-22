@@ -1,0 +1,191 @@
+{
+  "schema_version": "official-egress-claude-offline-ci-stabilization-transition/v1",
+  "issued_at_utc": "2026-08-22T16:05:00Z",
+  "base_commit": "7a0c4bdc199bfda81e3cdd64c4ad4237c4ffe5d9",
+  "scope": "claude-offline-ci-stabilization",
+  "predecessor": {
+    "kind": "offline_release_repair_transition",
+    "path": "docs/egress/maintenance/claude-offline-release-repair-transition.json",
+    "sha256": "3f13b450e44ae619520bae561b9fd6f68ba08c032aabdf94cfea35cbbd0258ec"
+  },
+  "transitions": [
+    {
+      "path": "Makefile",
+      "from_sha256": "fda874af797442e8238a7a4b011cedc7f4f724e5ace635244b19d770b454782d",
+      "to_sha256": "070cfac169fefc59dcfc968d0f46a72935d825ef44332a5364adeeb7cc40b490",
+      "reason": "澄清提交态抓包测试与本地忽略证据复算的边界"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_body.go",
+      "from_sha256": "a3e4264c9f8a5bccec8de19e259dc2d20950be1616da3d0f818bd00b6aa6f09e",
+      "to_sha256": "3d90294dfe5f45b61a98eca44816209035548706258f55b287c4e05d850ea242",
+      "reason": "显式忽略内存 Builder 与 Buffer 按契约不会返回的写入错误"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_candidate_catalog.go",
+      "from_sha256": "c79cd932e64cdfdabb8641ecfcf4353498713a1e60811456ccdd8240a8c724fc",
+      "to_sha256": "683d7c86827738dc11b887285ce457ef0408bedd40396852d73c34e112eefdd8",
+      "reason": "标记仅供历史 transition 离线复算保留的目录摘要算法"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_desktop_title_test.go",
+      "from_sha256": "4ce5ff6d1efb55c37cf1337c81a877a31144bab599d674a4d723e28255b52424",
+      "to_sha256": "dcf168016ab982ddb4afc2e37aad533489691c3ed4f3a6abb8636fab45307da7",
+      "reason": "将测试 JSON 类型断言改为带路径诊断的失败关闭取值"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_model_capability_transition_test.go",
+      "from_sha256": "3afebe6c7acef452989795a87fa6750f80052d7579562b379be13ac8f15746c1",
+      "to_sha256": "164fe08eae7c12d747ac9c69787ec085085a9e5d00ae1e89b104b90c874015ff",
+      "reason": "提交态仅校验已提交摘要，本机存在原始 Campaign 时继续完整复算"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_legacy_retirement_transition_test.go",
+      "from_sha256": "6882ec3399ad4bcdcf11728847e314f69f4308f1f632139705f901d3395735e2",
+      "to_sha256": "63cbd59d9fb97d71531f32fef80e720ff192747fe42e7e1e12fd4cab79fd8c73",
+      "reason": "允许遗留退休 transition 通过本收据连接到 CI 稳定化摘要"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_state_durability_transition_test.go",
+      "from_sha256": "9cfa422ffb55dd8ea9686dd69aae2e7f8812ecba87fbeb05878759f4c41c0e21",
+      "to_sha256": "31650f20d7ddd4123e47d6dce019feeb8a5247b91a80bbc65c739a6be19cd835",
+      "reason": "补充状态耐久性收据失败时的精确路径诊断"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_ingress.go",
+      "from_sha256": "13e1c1947ac4b46d44764ee1f409655dcb42e147f71b053144747f2a32736aaf",
+      "to_sha256": "5758ec909629b8832f2a8a44279ae554c4f6f553a3a78b8bdacfff8463aa99fc",
+      "reason": "标记仅供历史 wire 证据复算保留的旧入口提取器"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_offline_release_repair_transition_test.go",
+      "from_sha256": "56e083ea4e3e4962a5b9474c7354ee242a503e92c795ab7fc21dbd583afb0329",
+      "to_sha256": "be8fc931c1e20a8a061ab1f9275b7fe9e8dff92973f5884d9568684ec9af1568",
+      "reason": "让上一轮离线修复收据显式承接本轮后继稳定化收据"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_persona_release_catalog_transition_test.go",
+      "from_sha256": "6446c7890abe5fb3063696bcac131961dc226a1ffffb44997fe7bb9d54cc6b5d",
+      "to_sha256": "5a5a60ad47ed0ccf35c02507b52a5050e82cb0c40b2cef1af3f64be27a2dc255",
+      "reason": "让 Persona Catalog 汇合点承接本轮离线 CI 稳定化收据"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_production_release.go",
+      "from_sha256": "62354107b3ab97eb9174e7f9a427966a3f0bfaab47626467a79e9603b8effdf0",
+      "to_sha256": "48e926a45cb0a4408ac6489529b9426d26d92ba88cefa697dd1b4c8c28fd33d0",
+      "reason": "标记仅供历史生产迁移坐标复算保留的桥接方法"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_runtime.go",
+      "from_sha256": "c8c764873aaf615a2256a0bac2b2875db1db00e8d6c7d9a7deb52bd478801f5b",
+      "to_sha256": "775ec7883f5a664ff43b86fc554e43dd185aeb56e55d097a1215aeaf4223fb81",
+      "reason": "标记旧测试构造器为结构兼容保留的互斥字段"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_runtime_test.go",
+      "from_sha256": "213517afb5236008d1c75b189584833120b15785bce7e9e5afbd8b28052abf49",
+      "to_sha256": "d5a9aaffe0d1788140dedceb96e8fb6cd69dd7589e80a47fb3f0166c6a7b1e09",
+      "reason": "把运行时编译器断言改为带诊断的失败关闭检查"
+    },
+    {
+      "path": "backend/internal/officialegress/fw_e_observation_source_transition_test.go",
+      "from_sha256": "46e0442369a36a869ac0d6243bf3f7e5213736d8789fb9f21e4ca50726b9b113",
+      "to_sha256": "2d15e35e00d03c1e5f9c4c9b0cbaf21a35bb9daebf0900d848de8a01e31c2307",
+      "reason": "采用等价德摩根表达式通过静态分析且保持 transition 判据不变"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_transport_capture_test.go",
+      "from_sha256": "df7bc0da920038bf2bb4315c7e5225495805b1af175ac6d8501652c0f131c30a",
+      "to_sha256": "51a4ee6975efff0af5235de32c3ce930eeb0ec7b2a794a188bc6e43f94721c85",
+      "reason": "显式处理测试连接关闭与内存 Builder 写入结果"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_h_legacy_retirement_transition_test.go",
+      "from_sha256": "dc885dcd4c4a0cb99ee2ca53f84037a8ea6a7270db3c5dbeb92f6d2eec2a4776",
+      "to_sha256": "e41011e36d8a413014886ce61f2eaed54088fbf0a85991c3747be3f55462b51d",
+      "reason": "让 service 遗留退休汇合点承接离线 CI 稳定化收据"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_h_source_transition_test.go",
+      "from_sha256": "52071ccab574e1761f0d3771dd525ffe8a22667953031a0679a3078f307f93d1",
+      "to_sha256": "0983cda9fb876c383749660e81f32829d4e27d44dd7971424c670b02d58b5f92",
+      "reason": "让 service FW-H 源码与 official-client-only 汇合点承接后继收据"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_h_state_durability_transition_test.go",
+      "from_sha256": "0b641efecc1505ac338238b349d43b172b8663753a82cf5b1743291b846e859d",
+      "to_sha256": "015edb744ef023653120b7b489abe87a5646d18b6184496790271d3ee59c96db",
+      "reason": "让 service 状态耐久性汇合点承接离线 CI 稳定化收据"
+    },
+    {
+      "path": "backend/internal/service/gateway_claude_strict_openai.go",
+      "from_sha256": "08337d0d8d07329a82a6e0dc42980bd343d01aeff7c68abaa6be45188eed2452",
+      "to_sha256": "659b782d4af22cac0b418c1f0c35987bf41020254590c092ace43d1e0a212fe5",
+      "reason": "精确标记已退休但仍作为历史回退证据保留的 strict 转换符号"
+    },
+    {
+      "path": "backend/internal/service/gateway_claude_strict_openai_test.go",
+      "from_sha256": "f8fb3718a0caf040c25a824ce1f22f7374075f195e0954dcc215d120a7302b65",
+      "to_sha256": "8fcb0c56051f3dc8b999d712b125fbf5cd9d865862115764c7e263dd7ac18fc0",
+      "reason": "标记仅供历史抓包证据复算保留的 strict 筛选器"
+    },
+    {
+      "path": "backend/internal/service/official_egress_1b_executor.go",
+      "from_sha256": "814a7497ab3a97a8239eb187b8226a93fd830258bda7c02659d883c06ba5f9cf",
+      "to_sha256": "8947e4e8d6fb86fbaf86a072a34793d145fe85ca2b87b0d6cd0f9c7c284b2632",
+      "reason": "精确登记进程级运行时 wiring 的 Redis 基础设施导入例外"
+    },
+    {
+      "path": "backend/internal/service/official_egress_claude_state_redis.go",
+      "from_sha256": "1aab581d4635fefe6131643c98f6da523f323ba09b9222af8e5729cc03bbc6c8",
+      "to_sha256": "c079e37efb566d59a1c86d3ed5695699bb6a972f0f34e9f467972f9cd5396306",
+      "reason": "精确登记 ClaudeStateStore Redis 基础设施适配器的依赖例外"
+    },
+    {
+      "path": "backend/internal/service/official_egress_claude_state_redis_test.go",
+      "from_sha256": "0f6371cd20cda9c5ef30a5ea8e5c02a3e51a299d83a4f9325ae34254af6d1722",
+      "to_sha256": "f43666d3895fe3067ebc4c7d6f5db074af228cd3354f475de05921f841852783",
+      "reason": "精确登记 Redis 状态适配器测试客户端的依赖例外"
+    },
+    {
+      "path": "tools/official_client_capture/claude_fw_g_acceptance.py",
+      "from_sha256": "bd7e52e02d8b7c14e66a71972a124f822a529a7e9c49714848f2842456698692",
+      "to_sha256": "a5c35ce93615caf5c051682154067a116523d0831c40b472ade47291cb3c0cc8",
+      "reason": "候选 Git 树命令成功时允许新版 Git 输出非致命 stderr"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_claude_fw_e_complete_campaign.py",
+      "from_sha256": "a9f6e0008d50a794b94b68e0dcae497784e65af316b8076532bbd167e53ebeb7",
+      "to_sha256": "3bf2a0288437400afb30c01bc64309a3f83a13b2ed0fac2c4f1b229f9e34d2e7",
+      "reason": "本地忽略区缺少完整 Campaign 时跳过原始证据复算"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_claude_fw_f_measured_rules.py",
+      "from_sha256": "e0959e86ee1ca54921770713f6214577d447714599c337dd813aba18fb36cd35",
+      "to_sha256": "d31ae1fadcc3e93a9d240ff546de1e6179a5fdea6240120ad04bb1b559b6dc71",
+      "reason": "本地忽略区缺少 FW-F 实测证据时跳过原始证据复算"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_claude_fw_f_profile.py",
+      "from_sha256": "f66b7d0e8cfaf38fcb78fb40edf47e2f1e3e65e565ca852c6e10506f56b44edf",
+      "to_sha256": "f4c0048008dfa056dfdfb21a9a19ffc76abbcc6d1ef2ceffc82d659714585951",
+      "reason": "本地忽略区缺少原子断言台账时跳过对应证据映射复算"
+    }
+  ],
+  "verification": [
+    "make test-capture-tools",
+    "go test -tags=unit ./...",
+    "go test -tags=integration ./...",
+    "golangci-lint run --timeout=30m",
+    "EGRESS_SEAL_BASE_REF=cb7e85b577cbe8fcc75c34b56238981cc4f7c8ea make check-egress-spec-ci"
+  ],
+  "safety": {
+    "live_account_used": false,
+    "online_acceptance_performed": false,
+    "release_readiness_changed": false,
+    "release_state": "candidate_deployed/not_ready_for_operator_release",
+    "vircs_accessed": false,
+    "vircs_changed": false
+  },
+  "result": "passed_offline_ci_stabilization"
+}

@@ -161,7 +161,7 @@ func startClaudeFWGTLSCapture(
 			result <- claudeFWGTLSCaptureResult{err: acceptErr}
 			return
 		}
-		defer connection.Close()
+		defer func() { _ = connection.Close() }()
 		var hello claudeFWGClientHelloCapture
 		server := tls.Server(connection, &tls.Config{
 			Certificates: []tls.Certificate{certificate},
@@ -187,7 +187,7 @@ func startClaudeFWGTLSCapture(
 		var wire strings.Builder
 		for {
 			line, readErr := reader.ReadString('\n')
-			wire.WriteString(line)
+			_, _ = wire.WriteString(line)
 			if readErr != nil {
 				result <- claudeFWGTLSCaptureResult{hello: hello, wire: wire.String(), err: readErr}
 				return

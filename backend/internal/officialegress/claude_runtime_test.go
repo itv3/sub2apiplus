@@ -129,7 +129,10 @@ func newClaudeTestRuntime(
 	runtime.newCCH = func() (string, error) { return "abcde", nil }
 	runtime.retryJitter = func(int) (int, error) { return 0, nil }
 	runtime.sleep = func(context.Context, time.Duration) error { return nil }
-	compiler := runtime.executor.dialects.compilers[PersonaClaudeCode].(claudeDialectCompiler)
+	compiler, ok := runtime.executor.dialects.compilers[PersonaClaudeCode].(claudeDialectCompiler)
+	if !ok {
+		t.Fatal("Claude 测试 Runtime 缺少已注册编译器")
+	}
 	compiler.newRequestID = runtime.newRequestID
 	runtime.executor.dialects.compilers[PersonaClaudeCode] = compiler
 	return runtime, catalog, guard
@@ -1561,7 +1564,10 @@ func TestClaudeFWGTransportErrorIsRetryableWithoutStateReuse(t *testing.T) {
 		requestIDIndex++
 		return id
 	}
-	compiler := runtime.executor.dialects.compilers[PersonaClaudeCode].(claudeDialectCompiler)
+	compiler, ok := runtime.executor.dialects.compilers[PersonaClaudeCode].(claudeDialectCompiler)
+	if !ok {
+		t.Fatal("Claude 重试测试 Runtime 缺少已注册编译器")
+	}
 	compiler.newRequestID = runtime.newRequestID
 	runtime.executor.dialects.compilers[PersonaClaudeCode] = compiler
 	trusted := claudeTestTrustedFacts()

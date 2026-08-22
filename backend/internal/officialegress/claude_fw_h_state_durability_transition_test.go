@@ -129,7 +129,7 @@ func validateClaudeFWHStateDurabilityReceipt(
 			!claudePersonaReleaseCatalogTransitionSupersedes(
 				transition.Path, transition.ToSHA256, currentDigest,
 			) {
-			return errors.New("Claude 状态耐久性 transition 当前摘要不一致")
+			return errors.New("Claude 状态耐久性 transition 当前摘要不一致：" + transition.Path)
 		}
 		paths = append(paths, transition.Path)
 	}
@@ -153,8 +153,13 @@ func loadClaudeFWHStateDurabilityReceipts() (
 	receipts := make([]claudeFWHStateDurabilityReceipt, 0, len(items))
 	for _, item := range items {
 		receipt, raw, err := readClaudeFWHStateDurabilityReceipt(item.path)
-		if err != nil || validateClaudeFWHStateDurabilityReceipt(receipt, raw, item.test) != nil {
-			return nil, errors.New("Claude 状态耐久性 transition 无法验证")
+		if err != nil {
+			return nil, err
+		}
+		if validateErr := validateClaudeFWHStateDurabilityReceipt(
+			receipt, raw, item.test,
+		); validateErr != nil {
+			return nil, errors.New(item.path + "：" + validateErr.Error())
 		}
 		receipts = append(receipts, receipt)
 	}

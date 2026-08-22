@@ -176,6 +176,7 @@ func claudePersonaTransitionTargetMatches(path string, want string) bool {
 	sum := sha256.Sum256(raw)
 	current := hex.EncodeToString(sum[:])
 	return current == want ||
+		claudeOfflineCIStabilizationTransitionSupersedes(path, want, current) ||
 		claudeOfficialClientOnlyTransitionSupersedes(path, want, current) ||
 		claudePersonaReleaseCatalogProductionAcceptanceSupersedes(path, want, current)
 }
@@ -189,6 +190,11 @@ func claudePersonaReleaseCatalogTransitionSupersedes(
 ) bool {
 	if !receiptSHA256(priorDigest) || !receiptSHA256(currentDigest) {
 		return false
+	}
+	if claudeOfflineCIStabilizationTransitionSupersedes(
+		path, priorDigest, currentDigest,
+	) {
+		return true
 	}
 	if claudeOfficialClientOnlyTransitionSupersedes(path, priorDigest, currentDigest) {
 		return true
