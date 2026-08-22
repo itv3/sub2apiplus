@@ -183,6 +183,9 @@ func loadClaudeFWHProductionAcceptance() (claudeFWHProductionAcceptancePackage, 
 }
 
 func claudeFWHProductionAcceptanceSupersedes(path, priorDigest, currentDigest string) bool {
+	if claudeFWHBareChatRouteTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if claudeFWHThirdPartyStrictSourceTransitionSupersedes(
 		path, priorDigest, currentDigest,
 	) {

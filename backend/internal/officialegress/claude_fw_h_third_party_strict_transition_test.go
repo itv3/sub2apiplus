@@ -160,7 +160,11 @@ func validateClaudeFWHThirdPartyStrictTransitionEntries(
 			return errors.New("Claude FW-H 第三方 strict transition 条目不完整")
 		}
 		source, err := os.ReadFile(filepath.Join("../../..", filepath.FromSlash(transition.Path)))
-		if err != nil || claudeFWHSourceDigest(source) != transition.ToSHA256 {
+		currentDigest := claudeFWHSourceDigest(source)
+		if err != nil || currentDigest != transition.ToSHA256 &&
+			!claudeFWHBareChatRouteTransitionSupersedes(
+				transition.Path, transition.ToSHA256, currentDigest,
+			) {
 			return errors.New("Claude FW-H 第三方 strict transition 当前摘要不一致")
 		}
 		paths = append(paths, transition.Path)

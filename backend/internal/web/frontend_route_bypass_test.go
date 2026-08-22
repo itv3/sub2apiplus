@@ -20,3 +20,22 @@ func TestClaudeFWGBareCountTokensAliasBypassesEmbeddedFrontend(t *testing.T) {
 		}
 	}
 }
+
+func TestClaudeFWHBareChatCompletionsAliasBypassesEmbeddedFrontend(t *testing.T) {
+	for _, path := range []string{
+		"/chat/completions",
+		"  /chat/completions  ",
+	} {
+		if !shouldBypassEmbeddedFrontend(path) {
+			t.Fatalf("Claude FW-H chat/completions 裸路径别名被前端中间件吞掉：%q", path)
+		}
+	}
+	for _, path := range []string{
+		"/chat/completions/unknown",
+		"/chat/completions-extra",
+	} {
+		if shouldBypassEmbeddedFrontend(path) {
+			t.Fatalf("未注册的 Claude 裸路径不应绕过前端中间件：%q", path)
+		}
+	}
+}

@@ -1,0 +1,70 @@
+{
+  "schema_version": "claude-fw-h-bare-chat-route-test-transition/v1",
+  "date": "2026-08-22",
+  "phase": "FW-H",
+  "base_commit": "0e0d8960621dad12ea57bfd66fec9380de901fc9",
+  "scope": "candidate_route_repair",
+  "predecessor": {
+    "path": "docs/egress/maintenance/claude-fw-h-third-party-strict-candidate-approval.json",
+    "sha256": "7763d9337f1529dba2bdb8bdf07a98d78cb57749f75ba38a7f80fa82bd80e297"
+  },
+  "source_transition": {
+    "path": "docs/egress/maintenance/claude-fw-h-bare-chat-route-source-transition.json",
+    "sha256": "bc4f57df92768a71b5210737121861d9c2dd8234d56e56c84e1a256bd31d60ec"
+  },
+  "logical_ingress_ids": [
+    "chat-completions-oauth"
+  ],
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_desktop_compat_transition_test.go",
+      "from_sha256": "ddbd623140801d4eb7b5c7fc7dc61a36d85948b213d192d34b286df1bd5a63fb",
+      "to_sha256": "cfd057f1ca1bf49e2fbbeaf99fb9e0851c63500ea516c037172ffe1f65121bdc",
+      "reason": "让历史 FW-G 冻结链只接受本次裸 Chat 路由修复的精确 path/from/to 后继。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_thinking_display_transition_test.go",
+      "from_sha256": "108a1cee07325d3f63e56b0c7578cb0a3031ca05a810d7a7f4ff2bc4bff28db2",
+      "to_sha256": "dd1e6794ffd732105880683377c09a4351b5895dd740d8be481bf647c852540f",
+      "reason": "让 ingress authority 之后的历史冻结链承认本次裸 Chat 路由修复的精确后继。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_production_acceptance_test.go",
+      "from_sha256": "79d9ec88b1e38bd74d4dbfe804fb30672a319df14eb89fe2637ebb9aa1ae1c14",
+      "to_sha256": "e90d991ac119f71ae9cd4131c4303ad5f91ab427e9642b5da9273d2f00fb69b2",
+      "reason": "把候选路由修复纳入 FW-H 后继可达性，不覆盖既有生产验收事实。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_third_party_strict_transition_test.go",
+      "from_sha256": "56fd975b4ec9f7340a0dcd2045455a49eb23dc4cb1b6dab39e6c4f845fa28ecc",
+      "to_sha256": "ee6641a431be5e31c98a3d623a75007e2dcc44038fe8b6c46031af941932c7ff",
+      "reason": "让第三方 strict 候选冻结门禁承认本次精确后继，继续拒绝未登记漂移。"
+    },
+    {
+      "path": "backend/internal/web/frontend_route_bypass_test.go",
+      "from_sha256": "182c6cfdf2d0264362968392022b7bf4d1245f43300380d611e21e9da0306715",
+      "to_sha256": "91fad822c41b5e8dd31a2a4f4c5a9938ea9ba2f9d9d4767dbe5c32e4f4dcdd11",
+      "reason": "冻结裸 Chat 正确旁路 SPA、相邻未注册路径仍不旁路的边界。"
+    }
+  ],
+  "gates": [
+    "embedded_frontend_bypass_unit_passed",
+    "historical_transition_chain_passed",
+    "full_go_test_passed",
+    "go_vet_passed",
+    "dmit_runtime_alias_pending"
+  ],
+  "safety": {
+    "current_disposition": "retained_legacy_until_dmit_acceptance",
+    "retained_legacy": [
+      "chat-completions-oauth",
+      "responses-oauth"
+    ],
+    "production_selector": "unchanged",
+    "deployment_performed": false,
+    "dmit_validated": false,
+    "vircs_production_changed": false,
+    "removal_receipt_allowed": false
+  },
+  "result": "passed"
+}

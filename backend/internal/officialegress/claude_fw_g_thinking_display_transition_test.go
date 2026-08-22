@@ -198,6 +198,9 @@ func claudeFWGThinkingDisplayTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if claudeFWHBareChatRouteTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if claudeFWGDesktopTitleTransitionSupersedes(path, priorDigest, currentDigest) {
 		return true
 	}

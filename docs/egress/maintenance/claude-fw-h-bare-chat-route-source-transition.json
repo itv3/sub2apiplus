@@ -1,0 +1,35 @@
+{
+  "schema_version": "claude-fw-h-bare-chat-route-source-transition/v1",
+  "date": "2026-08-22",
+  "phase": "FW-H",
+  "base_commit": "0e0d8960621dad12ea57bfd66fec9380de901fc9",
+  "scope": "candidate_route_repair",
+  "predecessor": {
+    "path": "docs/egress/maintenance/claude-fw-h-third-party-strict-candidate-approval.json",
+    "sha256": "7763d9337f1529dba2bdb8bdf07a98d78cb57749f75ba38a7f80fa82bd80e297"
+  },
+  "logical_ingress_ids": [
+    "chat-completions-oauth"
+  ],
+  "transitions": [
+    {
+      "path": "backend/internal/web/frontend_route_bypass.go",
+      "from_sha256": "bcf72161da6fbe078cfd53062c8853fa3117cc6c2e6a904486d815db7ba54336",
+      "to_sha256": "e8126797c3dba707fc691c857c2322ff8346f0ccb98fd68ba959bda6f410df44",
+      "reason": "让已注册的 /chat/completions 裸路径别名绕过嵌入式 SPA 中间件，进入既有鉴权、调度与 Claude strict Persona 链。"
+    }
+  ],
+  "safety": {
+    "current_disposition": "retained_legacy_until_dmit_acceptance",
+    "retained_legacy": [
+      "chat-completions-oauth",
+      "responses-oauth"
+    ],
+    "production_selector": "unchanged",
+    "deployment_performed": false,
+    "dmit_validated": false,
+    "vircs_production_changed": false,
+    "removal_receipt_allowed": false
+  },
+  "result": "passed"
+}
