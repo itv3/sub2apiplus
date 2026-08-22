@@ -1,0 +1,149 @@
+{
+  "schema_version": "claude-fw-h-third-party-strict-dmit-acceptance/v1",
+  "acceptance_id": "claude-code-2.1.226-fw-h-third-party-strict-a9b5dfd20-dmit",
+  "phase": "FW-H",
+  "issued_at_utc": "2026-08-22T01:42:37Z",
+  "predecessors": [
+    {
+      "kind": "candidate_approval",
+      "path": "docs/egress/maintenance/claude-fw-h-third-party-strict-candidate-approval.json",
+      "sha256": "7763d9337f1529dba2bdb8bdf07a98d78cb57749f75ba38a7f80fa82bd80e297"
+    },
+    {
+      "kind": "bare_route_source_transition",
+      "path": "docs/egress/maintenance/claude-fw-h-bare-chat-route-source-transition.json",
+      "sha256": "bc4f57df92768a71b5210737121861d9c2dd8234d56e56c84e1a256bd31d60ec"
+    },
+    {
+      "kind": "bare_route_test_transition",
+      "path": "docs/egress/maintenance/claude-fw-h-bare-chat-route-test-transition.json",
+      "sha256": "d3b0312e4f1f2032b36e136f04d60653698f2e1de071c68f4f6c94b4a19fae18"
+    },
+    {
+      "kind": "prior_production_acceptance",
+      "path": "docs/egress/maintenance/claude-fw-h-production-acceptance-package.json",
+      "sha256": "45b21fd3e74e6b2a3968c04bf18b416a0a43a157ba7cb7451f32a5d3c711cabd"
+    }
+  ],
+  "candidate": {
+    "commit": "a9b5dfd2070d1423824ef785faa563d34797ec8f",
+    "tree": "bbe6c211fe9e7f84eec714bb9a7214eeaccfef38",
+    "source_archive_sha256": "8375c146f3558dfcae65b075101c7e2e3ba65c962074d643e26bb8d652af1d33",
+    "binary_sha256": "8b7cd68a50f1e47d03daf32ca1b11deeb9d1c16e6c0f4bc2e9eff84367e53ac6",
+    "version": "0.1.177-4-fw-h-strict-a9b5dfd20",
+    "architecture": "linux/amd64",
+    "image": "sub2apiplus:fw-h-strict-a9b5dfd20",
+    "image_id": "sha256:821037ac096d8698f2a051dcb72ecbdfff1868c83ec6f1a83b5937b1d0a3be57",
+    "deployed_host": "DMIT",
+    "container_id": "1e145b01fbd6e15acd50eb1ac089048b3932ae9043f406a4589d0fac09e58238",
+    "activation_fact_path": "/app/data/claude-fw-h-strict-a9b5dfd20-candidate-activation-fact.json",
+    "activation_fact_sha256": "6d557c31fa9c10c75096bf1771e449c553aac3f8fb439691f99095d5a11becbf",
+    "selector": "legacy",
+    "candidate_override": true,
+    "health": "healthy",
+    "restart_count": 0
+  },
+  "ingress_dispositions": [
+    {
+      "logical_ingress_id": "chat-completions-oauth",
+      "candidate_disposition": "migrated_strict",
+      "production_current_disposition": "retained_legacy"
+    },
+    {
+      "logical_ingress_id": "responses-oauth",
+      "candidate_disposition": "migrated_strict",
+      "production_current_disposition": "retained_legacy"
+    }
+  ],
+  "validation": {
+    "positive_matrix": {
+      "models": [
+        "claude-fable-5",
+        "claude-sonnet-5",
+        "claude-opus-5"
+      ],
+      "protocols": [
+        "openai-chat-completions",
+        "openai-responses"
+      ],
+      "stream_modes": [
+        false,
+        true
+      ],
+      "three_model_protocol_cases": 12,
+      "bare_alias_cases": 2,
+      "lossless_field_cases": 2,
+      "http_200_cases": 16,
+      "result": "passed"
+    },
+    "negative_matrix": {
+      "http_fail_close_cases": 24,
+      "http_status": 400,
+      "responses_websocket_paths": 2,
+      "websocket_handshake_status": 101,
+      "websocket_close_code": 1008,
+      "result": "passed"
+    },
+    "anthropic_messages": {
+      "thinking_display_summarized": "http-200-passed",
+      "consecutive_fable_requests": "passed"
+    },
+    "rollback_and_restoration": {
+      "rollback_image": "sub2apiplus:fw-h-e3d698a31",
+      "rollback_image_id": "sha256:9b53120a8d61c46ae32a6336b1201f1c8736c710eb692cceb468ad3e1c4ce846",
+      "rollback_container_id": "067d9a92b6254c9a949dec58c9ee3d1a5d956648a74ab6f0ca9c495558d71c5f",
+      "rollback_health": "passed",
+      "rollback_messages": "http-200-marker-passed",
+      "rollback_chat_completions": "http-200-marker-passed",
+      "restored_image_id": "sha256:821037ac096d8698f2a051dcb72ecbdfff1868c83ec6f1a83b5937b1d0a3be57",
+      "restoration_health": "passed",
+      "dependencies_unchanged": true,
+      "result": "passed"
+    },
+    "stability": {
+      "observed_seconds": 127,
+      "restart_count": 0,
+      "fatal_or_panic_count": 0,
+      "guard_or_h1_failure_count": 0,
+      "strict_route_log_count": 22,
+      "result": "passed"
+    },
+    "codex_isolation": {
+      "current_live_probe": "not_executable_no_schedulable_openai_account",
+      "openai_oauth_accounts_observed": 2,
+      "schedulable_openai_oauth_accounts": 0,
+      "account_state_modified": false,
+      "local_full_go_test": "passed",
+      "local_go_vet": "passed",
+      "transport_profile_isolation_regression": "passed",
+      "prior_dmit_live_evidence_path": "docs/egress/guard/active-exercises.json",
+      "prior_dmit_live_evidence_sha256": "88dc1e2dfed3ffa4dd78718cfc701ce917fdd0d447a86f25dfaf524a3aedb80b",
+      "prior_dmit_live_result": "gpt-5.6-luna-http-200-completed",
+      "result": "passed_with_current_local_gate_and_frozen_live_evidence"
+    }
+  },
+  "dependency_container_ids": {
+    "postgres": "b9b6915c5336f1857d279e953e9c3f179c1082af99addffdaacd3ace0d6caf0f",
+    "redis": "b1135fe353ccd78302b1ddc7b306e9fa66038856909bcd315b61ee920a9039bd",
+    "keeper": "8a9c64670c152b41b648f81ee8d107be326d00b3276bd9a1ef77bf773022dbe5",
+    "three_x_ui": "3a5bef805f0be14fd4b6667aac6ce45c4f243f1df6f083d6040df32df84048f9",
+    "mihomo": "ccfd6674b3034b584f5bdfbd1f68610349d09c38b8366167f918499f9f0fdac1",
+    "shadowtls": "c8c7a291df340c88103c888064bebbeea040fff47234382a0cb9e37a675d3dbc",
+    "watchtower": "bd64a63a86f88f9e0167d1bda73a861885e35cf54620357ed72a0561ac3d4dc0"
+  },
+  "safety": {
+    "compose_down_used": false,
+    "unscoped_prune_used": false,
+    "database_or_cache_recreated": false,
+    "unrelated_containers_recreated": false,
+    "vircs_connected_for_mutation": false,
+    "vircs_service_changed": false,
+    "production_disposition_changed": false,
+    "legacy_chain_removed": false,
+    "removal_receipt_allowed": false
+  },
+  "candidate_state": "ready_for_production_canary",
+  "production_state": "not_changed_by_this_acceptance",
+  "retirement_state": "blocked_until_production_migration_and_consumer_closure",
+  "result": "accepted"
+}
