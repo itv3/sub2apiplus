@@ -31,6 +31,28 @@ ROUTE_RE = re.compile(
     re.MULTILINE,
 )
 
+GO_FUNCTION_RE = re.compile(
+    r"^func\s+(?:(?P<receiver>\([^\n)]+\))\s*)?"
+    r"(?P<name>[A-Za-z_][A-Za-z0-9_]*)\s*(?:\[[^\n\]]+\]\s*)?\(",
+    re.MULTILINE,
+)
+
+
+def _route_function_identity(source: str, offset: int) -> str:
+    """返回路由调用所属的稳定 Go 函数身份，区分不同作用域中的同名局部变量。"""
+
+    enclosing: re.Match[str] | None = None
+    for match in GO_FUNCTION_RE.finditer(source, 0, offset):
+        enclosing = match
+    if enclosing is None:
+        return "<package>"
+    receiver = enclosing.group("receiver")
+    name = enclosing.group("name")
+    if receiver is None:
+        return name
+    normalized_receiver = " ".join(receiver.split())
+    return f"{normalized_receiver}.{name}"
+
 
 def run_process(
     argv: Sequence[str],
@@ -288,13 +310,16 @@ def route_snapshot(repository_root: Path, commit: str, tree: str) -> dict[str, A
             for match in ROUTE_RE.finditer(text):
                 raw_path = bytes(match.group("path"), "utf-8").decode("unicode_escape")
                 line = text.count("\n", 0, match.start()) + 1
+                function = _route_function_identity(text, match.start())
                 fingerprint_raw = (
-                    f"{relative}\0{match.group('receiver')}\0{match.group('method')}\0{raw_path}"
+                    f"{relative}\0{function}\0{match.group('receiver')}\0"
+                    f"{match.group('method')}\0{raw_path}"
                 ).encode("utf-8")
                 entries.append(
                     {
                         "route_fingerprint": sha256_bytes(fingerprint_raw),
                         "file": relative,
+                        "function": function,
                         "receiver": match.group("receiver"),
                         "method": match.group("method").upper(),
                         "path": raw_path,

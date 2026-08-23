@@ -1,0 +1,51 @@
+{
+  "schema_version": "official-egress-upstream-merge-route-scope-source-transition/v1",
+  "date": "2026-08-23",
+  "base_commit": "7d0d6c98f9f291aa96eeb1b968d2e0896f421be1",
+  "purpose": "route_scope_identity_repair",
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/upstream_merge_framework_transition_test.go",
+      "predecessor_sha256s": [
+        "bb0af3ce58f351054fea326a660c1bc635b93daaf39ed67c260498070a8f0edf",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e53ad1c9b514311bcb247d90135283d1d593d2f0d3edd98b37b936c29e3df23e"
+      ],
+      "to_sha256": "1d5f701752a2f1960b4f87924af5ceb3e93e3049bd2a34947599166aeb7a66af",
+      "reason": "允许原框架冻结收据仅通过本次追加 transition 的精确三元组承接工具修复。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_merge_route_scope_transition_test.go",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "bd80c8fdc01e848bc1156e255232c817e0428063dcf70845da147e11fa55d582",
+      "reason": "新增追加式路由作用域 transition 校验器，冻结本次工具修复的前序与当前摘要。"
+    },
+    {
+      "path": "tools/upstream_merge/gitops.py",
+      "predecessor_sha256s": [
+        "a9d4ea4a532e4352d6b3caf58dd0eeb391e058b6a9679faabb401f30d417abf0",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "5bfe32178bc3f3e456178761d328c360efd0ae4ef0214f6aae78c7ca3465f5e6",
+      "reason": "把所属 Go 函数身份纳入路由指纹，区分不同作用域中的同名局部 receiver。"
+    },
+    {
+      "path": "tools/upstream_merge/tests/test_workflow.py",
+      "predecessor_sha256s": [
+        "4bfd6c6eadc4b7dd22b769346de000aef2b9baf24d9274e35fa5086e33d822a9",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "81dbb171da724fc5a2ace027a28fb055af9034088a302418b220ee8cffb69b60",
+      "reason": "增加不同注册函数复用同名局部 receiver 时路由指纹仍唯一的回归测试。"
+    }
+  ],
+  "verification": [
+    "python3 -m unittest tools.upstream_merge.tests.test_workflow",
+    "python3 -m tools.upstream_merge plan-create (route snapshot stage)",
+    "go test ./internal/officialegress/..."
+  ],
+  "result": "passed",
+  "identity_sha256": "3302beb7da9eff78a3b1f1935b7f99cae11f0e4e0147d26cda3cc336875c3029"
+}

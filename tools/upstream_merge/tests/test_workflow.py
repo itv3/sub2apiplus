@@ -31,6 +31,7 @@ from tools.upstream_merge.gitops import (
     merge_base,
     protected_objects,
     rev_parse,
+    route_snapshot,
     run_egress_snapshot,
     tool_bundle,
     validate_tool_bundle,
@@ -197,6 +198,35 @@ class UpstreamMergeWorkflowTests(unittest.TestCase):
         self.assertEqual(
             candidate["candidate_tree"],
             commit_tree(self.fixture.root, candidate["merge_commit"]),
+        )
+
+    def test_route_snapshot_distinguishes_local_receivers_across_functions(self) -> None:
+        repository = self.temp_root / "route-repository"
+        routes = repository / "backend/internal/server/routes"
+        server = repository / "backend/cmd/server"
+        routes.mkdir(parents=True)
+        server.mkdir(parents=True)
+        (routes / "admin.go").write_text(
+            "package routes\n\n"
+            "func registerUsers() {\n"
+            "\tusers.GET(\"\", first)\n"
+            "}\n\n"
+            "func registerAffiliates() {\n"
+            "\tusers.GET(\"\", second)\n"
+            "}\n",
+            encoding="utf-8",
+        )
+
+        snapshot = route_snapshot(repository, "a" * 40, "b" * 40)
+
+        self.assertEqual(snapshot["entry_count"], 2)
+        self.assertEqual(
+            sorted(entry["function"] for entry in snapshot["entries"]),
+            ["registerAffiliates", "registerUsers"],
+        )
+        self.assertEqual(
+            len({entry["route_fingerprint"] for entry in snapshot["entries"]}),
+            2,
         )
 
     def test_conflict_requires_exact_decision_and_records_resolved_blob(self) -> None:
