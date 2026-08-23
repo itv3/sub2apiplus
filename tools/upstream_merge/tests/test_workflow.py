@@ -27,6 +27,7 @@ from tools.upstream_merge.contracts import (
 )
 from tools.upstream_merge.errors import UpstreamMergeError
 from tools.upstream_merge.gitops import (
+    EGRESS_MIGRATION_RECEIPT_PATHS,
     commit_tree,
     merge_base,
     protected_objects,
@@ -287,8 +288,17 @@ class UpstreamMergeWorkflowTests(unittest.TestCase):
         def fake_scan(argv, *, cwd, check):
             if argv[0] != "go":
                 return original_run_process(argv, cwd=cwd, check=check)
-            self.assertEqual(argv[3:5], ("-mode", "bootstrap"))
-            raw_output = Path(argv[6])
+            self.assertEqual(argv[3:5], ("-mode", "snapshot"))
+            receipt_flag = argv.index("-migration-receipts")
+            self.assertEqual(
+                argv[receipt_flag + 1],
+                ",".join(
+                    str(self.fixture.root / relative)
+                    for relative in EGRESS_MIGRATION_RECEIPT_PATHS
+                ),
+            )
+            out_flag = argv.index("-out")
+            raw_output = Path(argv[out_flag + 1])
             raw_output.write_text(
                 json.dumps(
                     {

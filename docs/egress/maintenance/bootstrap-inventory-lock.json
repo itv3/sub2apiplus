@@ -3,9 +3,9 @@
   "bootstrap_commit": "38a9929eac35a39c86de2f27de8f7a805d7dae52",
   "bootstrap_tree": "a8c3dee18a01a6138bfcea60860bb5ad11548c3a",
   "inventory_sha256": "46593243b1bd315eafcb54335502a1f46bc2b8bfc0ecc2d3146da4e7087bfaeb",
-  "scanner_algorithm_sha256": "91095dda8897184cc4eff978c426fe188fe0035472c70b4e45498b0224172e25",
-  "reconstructed_at": "2026-08-21T22:18:00+08:00",
-  "reviewed_by": "official-client-emulation-fw-h",
-  "review_ref": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md#638-fw-h生产迁移与遗留退休",
-  "rationale": "保持 bootstrap commit、tree 和 inventory 原文不变；复审 Claude Candidate 与 Production 共用 Executor 后重命名的精确 TLS terminal delegation。该允许项仍只覆盖受管 Executor 最终传输，业务 SinkID、Persona 画像、FinalizationToken 与 Guard 必须完整通过；未登记发送点继续失败关闭。"
+  "scanner_algorithm_sha256": "8a90cb0ca6e0aa5593beb84a84892347a2d90450ac10c7d837463c5c49722223",
+  "reconstructed_at": "2026-08-23T19:05:26+08:00",
+  "reviewed_by": "sub2api-v0.1.179-upstream-merge-prerequisite",
+  "review_ref": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md#52-合并-sub2api-上游更新",
+  "rationale": "保持 bootstrap commit、tree 和 inventory 原文不变；复审新增 snapshot 模式仅加载受审 MigrationReceipt 的 Codex route 覆盖证明并输出当前完整 Baseline，不改变扫描候选发现、分类、历史回放或 Guard 语义。未登记物理发送点仍须逐候选分类，缺失或非法收据继续失败关闭。"
 }

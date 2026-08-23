@@ -14,7 +14,7 @@ import (
 
 // decodeBaseline 严格解析人工审核后的基线。未知字段、尾随 JSON、重复 ID 或字段间
 // 自相矛盾都必须失败，不能让 map 覆盖或 json.Unmarshal 忽略字段制造假绿。
-func decodeBaseline(raw []byte) (Baseline, error) {
+func decodeBaseline(raw []byte, reviewedRouteSets ...[]string) (Baseline, error) {
 	var baseline Baseline
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
@@ -27,7 +27,7 @@ func decodeBaseline(raw []byte) (Baseline, error) {
 		}
 		return Baseline{}, fmt.Errorf("基线 JSON 尾部非法: %w", err)
 	}
-	if err := validateBaseline(baseline); err != nil {
+	if err := validateBaseline(baseline, reviewedRouteSets...); err != nil {
 		return Baseline{}, err
 	}
 	return baseline, nil

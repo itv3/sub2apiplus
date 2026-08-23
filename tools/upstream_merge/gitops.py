@@ -37,6 +37,11 @@ GO_FUNCTION_RE = re.compile(
     re.MULTILINE,
 )
 
+EGRESS_MIGRATION_RECEIPT_PATHS = (
+    "docs/egress/lifecycle/migration-receipts.json",
+    "docs/egress/migration/migration-receipts.json",
+)
+
 
 def _route_function_identity(source: str, offset: int) -> str:
     """返回路由调用所属的稳定 Go 函数身份，区分不同作用域中的同名局部变量。"""
@@ -366,7 +371,12 @@ def run_egress_snapshot(repository_root: Path, output: Path) -> None:
                 "run",
                 "./cmd/egressscan",
                 "-mode",
-                "bootstrap",
+                "snapshot",
+                "-migration-receipts",
+                ",".join(
+                    str(repository_root / relative)
+                    for relative in EGRESS_MIGRATION_RECEIPT_PATHS
+                ),
                 "-out",
                 str(raw_output),
             ),
@@ -377,8 +387,8 @@ def run_egress_snapshot(repository_root: Path, output: Path) -> None:
             detail = completed.stderr.strip() or completed.stdout.strip()
             raise UpstreamMergeError(f"发送面快照失败：{detail}")
         baseline = expect_object(
-            load_json(raw_output, "egressscan bootstrap output"),
-            "egressscan bootstrap output",
+            load_json(raw_output, "egressscan snapshot output"),
+            "egressscan snapshot output",
         )
     required = {
         "bootstrap_commit",
@@ -389,14 +399,14 @@ def run_egress_snapshot(repository_root: Path, output: Path) -> None:
     }
     actual_fields = set(baseline)
     if actual_fields != required and actual_fields != required | {"syntax_fallback_files"}:
-        raise UpstreamMergeError("egressscan bootstrap 输出字段不闭合")
+        raise UpstreamMergeError("egressscan snapshot 输出字段不闭合")
     sinks = baseline.get("sinks")
     contexts = baseline.get("build_contexts")
     package_count = baseline.get("packages_loaded")
     if not isinstance(sinks, list) or not isinstance(contexts, list):
-        raise UpstreamMergeError("egressscan bootstrap 输出缺少 sinks 或 build_contexts")
+        raise UpstreamMergeError("egressscan snapshot 输出缺少 sinks 或 build_contexts")
     if isinstance(package_count, bool) or not isinstance(package_count, int) or package_count < 0:
-        raise UpstreamMergeError("egressscan bootstrap packages_loaded 非法")
+        raise UpstreamMergeError("egressscan snapshot packages_loaded 非法")
     snapshot: dict[str, Any] = {
         "schema_version": "official-egress-upstream-source-to-sink-snapshot/v1",
         "source_commit": source_commit,

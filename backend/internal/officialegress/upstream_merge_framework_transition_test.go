@@ -140,6 +140,9 @@ func upstreamMergeFrameworkTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if upstreamMergeEgressSnapshotTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	receipt, err := loadUpstreamMergeFrameworkTransition()
 	if err != nil {
 		return false

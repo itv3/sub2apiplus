@@ -10,7 +10,8 @@
 //
 // 用法：
 //
-//	egressscan -mode bootstrap -out <baseline.json>   生成候选全集快照
+//	egressscan -mode bootstrap -out <baseline.json>   生成不含迁移证据的候选全集快照
+//	egressscan -mode snapshot -migration-receipts <paths> -out <snapshot.json> 生成当前受审发送面快照
 //	egressscan -mode check -baseline <baseline.json>  与基线比对，有漂移则非零退出
 //	egressscan -mode replay -baseline <baseline.json>  在 bootstrap 源码上回放并验证遗漏补录
 //	egressscan -mode stats -baseline <baseline.json> -out <stats.md> 生成文档统计
@@ -142,7 +143,7 @@ type Baseline struct {
 }
 
 func main() {
-	mode := flag.String("mode", "bootstrap", "bootstrap | check | replay | stats | self-test")
+	mode := flag.String("mode", "bootstrap", "bootstrap | snapshot | check | replay | stats | self-test")
 	out := flag.String("out", "", "输出基线文件路径")
 	baselinePath := flag.String("baseline", "", "check/stats 模式下的基线文件路径")
 	supplementsPath := flag.String("supplements", "", "1A 受审 pre-bootstrap 补录清单")
@@ -158,6 +159,8 @@ func main() {
 		os.Exit(runSelfTest())
 	case "bootstrap":
 		os.Exit(runBootstrap(*out))
+	case "snapshot":
+		os.Exit(runSnapshot(*out, *migrationReceiptsPath))
 	case "check":
 		os.Exit(runCheck(
 			*baselinePath, *supplementsPath, *removalsPath, *migrationReceiptsPath,
@@ -560,7 +563,26 @@ func relPath(abs string) string {
 }
 
 func runBootstrap(out string) int {
-	baseline, err := scan()
+	return runBaselineOutput(out, nil)
+}
+
+// runSnapshot 只读取当前源码和受审 MigrationReceipt，生成包含已迁入统一
+// Executor 路由覆盖证明的完整当前发送面。它不校验或改写历史 bootstrap 基线。
+func runSnapshot(out, migrationReceiptsPath string) int {
+	if strings.TrimSpace(out) == "" {
+		fmt.Fprintln(os.Stderr, "snapshot 模式需要 -out")
+		return 2
+	}
+	migrations, err := loadMigrationReceiptIndex(migrationReceiptsPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "读取 MigrationReceipt 清单失败：%v\n", err)
+		return 1
+	}
+	return runBaselineOutput(out, migrations.codexRoutes())
+}
+
+func runBaselineOutput(out string, reviewedRoutes []string) int {
+	baseline, err := scanWithCodexRouteEvidence(reviewedRoutes)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "扫描失败：%v\n", err)
 		return 1

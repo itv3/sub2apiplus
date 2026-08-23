@@ -1,0 +1,97 @@
+{
+  "schema_version": "official-egress-upstream-merge-egress-snapshot-source-transition/v1",
+  "date": "2026-08-23",
+  "base_commit": "ce9deb3fabe0b99bf1c6d3be1c3ff472007ef9ac",
+  "purpose": "egress_snapshot_migration_receipt_repair",
+  "transitions": [
+    {
+      "path": "backend/cmd/egressscan/baseline.go",
+      "predecessor_sha256s": [
+        "17ac1206e9244eb7f3843b0df5957adba356c0d0c1b4877bffe41cb3db01be25"
+      ],
+      "to_sha256": "92e300a6b8afe188a9a5021b35386905341f9732bbcceb98680bcd582bfa3053",
+      "reason": "让严格 Baseline 解码显式接受调用方提供的受审 route 覆盖证明，既有无参数调用仍保持原失败关闭语义。"
+    },
+    {
+      "path": "backend/cmd/egressscan/lifecycle_test.go",
+      "predecessor_sha256s": [
+        "9b225bcd4b1ffbe20a9f03fccd6efd84f8d8422b3a08df301d8a519a3f9d1f32"
+      ],
+      "to_sha256": "b20d6ff74b93b9cc9c827bb1284060e46ce7f3ca76d43e99b221dcaaa37f8ab9",
+      "reason": "冻结本次复审后的当前 bootstrap inventory lock 摘要，历史 lock 原文继续由既有收据保留。"
+    },
+    {
+      "path": "backend/cmd/egressscan/main.go",
+      "predecessor_sha256s": [
+        "007c84013c4f8f64ea06892419d5913c33c5fa56e3cb05ce5551adc6d9785f5d"
+      ],
+      "to_sha256": "3954450dae0c7e11a77fbb2b28879d75d342d60352fd5280f3f41d5a871d3c1c",
+      "reason": "新增只读 snapshot 模式，加载 MigrationReceipt 后复用 check 模式相同的 Codex route 覆盖扫描语义。"
+    },
+    {
+      "path": "backend/cmd/egressscan/snapshot_test.go",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "3ff0f677894ebcaa103eae91d185063310113a83d8b26dd8b1eb889933336daf",
+      "reason": "新增 snapshot 加载 route 证明、生成完整 Baseline 与缺失收据失败关闭的回归测试。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_merge_egress_snapshot_transition_test.go",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "6b19ea585910eb13091d5995cab13ec5817ea62c693c35da6c2095f7575d7e4d",
+      "reason": "新增追加式 egress snapshot transition 校验器，冻结本次修复的精确前序与当前摘要。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_merge_framework_transition_test.go",
+      "predecessor_sha256s": [
+        "1d5f701752a2f1960b4f87924af5ceb3e93e3049bd2a34947599166aeb7a66af"
+      ],
+      "to_sha256": "11ea1e9db4f989f1bf5dbdc6612858125cb467d327506eb6b49a77a435fb0d12",
+      "reason": "让历史框架冻结测试仅通过本次后继 transition 的精确三元组承接 scanner lock 与工具修复。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_merge_route_scope_transition_test.go",
+      "predecessor_sha256s": [
+        "bd80c8fdc01e848bc1156e255232c817e0428063dcf70845da147e11fa55d582"
+      ],
+      "to_sha256": "0a2bf5f80b2ad6c6343bd61acb53272dfe9c6ac3deee70b115167ade6c2f7cc8",
+      "reason": "让既有路由作用域 transition 保持不可变，并只接受本次后继收据登记的精确摘要链。"
+    },
+    {
+      "path": "docs/egress/maintenance/bootstrap-inventory-lock.json",
+      "predecessor_sha256s": [
+        "88d027eefa197d564d1bc3a902581be412768239a06902facf448d51e5f7d24c"
+      ],
+      "to_sha256": "629cb0a8b32532d98edc52693c8bf00c70ec81145f0a870b870a63cebd238594",
+      "reason": "保持 bootstrap commit、tree 与 inventory 原文不变，追加复审 snapshot 入口带来的 scanner algorithm 摘要。"
+    },
+    {
+      "path": "tools/upstream_merge/gitops.py",
+      "predecessor_sha256s": [
+        "5bfe32178bc3f3e456178761d328c360efd0ae4ef0214f6aae78c7ca3465f5e6"
+      ],
+      "to_sha256": "44d33ec647d18aaf23622310a451d2c4f8be489842b7a61acb91b8a9090c4a7c",
+      "reason": "U-0 发送面快照改用 snapshot 模式，并显式绑定仓库中的两份受审 MigrationReceipt。"
+    },
+    {
+      "path": "tools/upstream_merge/tests/test_workflow.py",
+      "predecessor_sha256s": [
+        "81dbb171da724fc5a2ace027a28fb055af9034088a302418b220ee8cffb69b60"
+      ],
+      "to_sha256": "8783e42366787c049e09edca51f642016ccc4e5de8ffab9dd018f7be8e6d8c10",
+      "reason": "回归验证上游合并工具只能调用 snapshot 模式并传入固定的 MigrationReceipt 闭集。"
+    }
+  ],
+  "allowed_wire_deltas": [],
+  "verification": [
+    "python3 -m unittest tools.upstream_merge.tests.test_workflow",
+    "go test ./cmd/egressscan",
+    "go test ./internal/officialegress/...",
+    "make check-egress-spec"
+  ],
+  "result": "passed",
+  "identity_sha256": "d417ea934dbc1150cd67f86997c5f10d456c81c1b5d2e2853f458e4a3a5e2db1"
+}

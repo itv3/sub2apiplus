@@ -102,7 +102,13 @@ func readUpstreamMergeRouteScopeTransition() (
 		current, readErr := os.ReadFile(filepath.Join(
 			"../../..", filepath.FromSlash(transition.Path),
 		))
-		if readErr != nil || upstreamMergeFrameworkDigest(current) != transition.ToSHA256 {
+		currentDigest := upstreamMergeFrameworkDigest(current)
+		if readErr != nil || (currentDigest != transition.ToSHA256 &&
+			!upstreamMergeEgressSnapshotTransitionSupersedes(
+				transition.Path,
+				transition.ToSHA256,
+				currentDigest,
+			)) {
 			return receipt, errors.New("上游合并路由作用域 transition 当前摘要不一致：" + transition.Path)
 		}
 		paths = append(paths, transition.Path)
@@ -125,8 +131,13 @@ func upstreamMergeRouteScopeTransitionSupersedes(
 		return false
 	}
 	for _, transition := range receipt.Transitions {
-		if transition.Path == path && transition.ToSHA256 == currentDigest &&
-			slices.Contains(transition.PredecessorSHA256s, priorDigest) {
+		if transition.Path == path && slices.Contains(transition.PredecessorSHA256s, priorDigest) &&
+			(transition.ToSHA256 == currentDigest ||
+				upstreamMergeEgressSnapshotTransitionSupersedes(
+					path,
+					transition.ToSHA256,
+					currentDigest,
+				)) {
 			return true
 		}
 	}
