@@ -6,25 +6,26 @@ package gatewayendpoint
 import "strings"
 
 const (
-	Messages            = "/v1/messages"
-	MessagesCountTokens = "/v1/messages/count_tokens"
-	ChatCompletions     = "/v1/chat/completions"
-	Embeddings          = "/v1/embeddings"
-	AlphaSearch         = "/v1/alpha/search"
-	Responses           = "/v1/responses"
-	ResponsesCompact    = "/v1/responses/compact"
-	ImagesGenerations   = "/v1/images/generations"
-	ImagesEdits         = "/v1/images/edits"
-	ImageTasks          = "/v1/images/tasks"
-	VideosGenerations   = "/v1/videos/generations"
-	VideosEdits         = "/v1/videos/edits"
-	VideosExtensions    = "/v1/videos/extensions"
-	Videos              = "/v1/videos"
-	GeminiModels        = "/v1beta/models"
+	Messages             = "/v1/messages"
+	MessagesCountTokens  = "/v1/messages/count_tokens"
+	ChatCompletions      = "/v1/chat/completions"
+	Embeddings           = "/v1/embeddings"
+	AlphaSearch          = "/v1/alpha/search"
+	Responses            = "/v1/responses"
+	ResponsesCompact     = "/v1/responses/compact"
+	ResponsesInputTokens = "/v1/responses/input_tokens"
+	ImagesGenerations    = "/v1/images/generations"
+	ImagesEdits          = "/v1/images/edits"
+	ImageTasks           = "/v1/images/tasks"
+	VideosGenerations    = "/v1/videos/generations"
+	VideosEdits          = "/v1/videos/edits"
+	VideosExtensions     = "/v1/videos/extensions"
+	Videos               = "/v1/videos"
+	GeminiModels         = "/v1beta/models"
 )
 
 // NormalizeInboundEndpoint 将带平台前缀、裸路径或 Codex 直连别名的入口路径
-// 统一为网关内部使用的规范端点。compact 必须先于 Responses 根路径判断。
+// 统一为网关内部使用的规范端点。compact 与 input_tokens 必须先于 Responses 根路径判断。
 func NormalizeInboundEndpoint(path string) string {
 	path = strings.TrimSpace(path)
 	switch {
@@ -54,6 +55,8 @@ func NormalizeInboundEndpoint(path string) string {
 		return Videos
 	case strings.Contains(path, ResponsesCompact) || isResponsesCompactAliasPath(path):
 		return ResponsesCompact
+	case strings.Contains(path, ResponsesInputTokens) || isResponsesInputTokensAliasPath(path):
+		return ResponsesInputTokens
 	case strings.Contains(path, Responses) || isResponsesRootAliasPath(path):
 		return Responses
 	case strings.Contains(path, GeminiModels):
@@ -61,6 +64,15 @@ func NormalizeInboundEndpoint(path string) string {
 	default:
 		return path
 	}
+}
+
+func isResponsesInputTokensAliasPath(path string) bool {
+	trimmed := strings.TrimRight(strings.TrimSpace(path), "/")
+	if trimmed == "" {
+		return false
+	}
+	return isBareOrSubpathOf(trimmed, "/responses/input_tokens") ||
+		isBareOrSubpathOf(trimmed, "/backend-api/codex/responses/input_tokens")
 }
 
 func isResponsesCompactAliasPath(path string) bool {

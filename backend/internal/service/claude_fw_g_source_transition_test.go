@@ -334,6 +334,9 @@ func TestClaudeFWGServiceSourceTransitionIsFrozen(t *testing.T) {
 			) &&
 			!claudeFWGModelCapabilitySourceTransitionSupersedesService(
 				transition.Path, transition.ToSHA256, got,
+			) &&
+			!upstreamMergeFrameworkTransitionSupersedesService(
+				transition.Path, transition.ToSHA256, got,
 			) {
 			t.Fatalf(
 				"Claude FW-G source transition 漂移：path=%s got=%s want=%s",

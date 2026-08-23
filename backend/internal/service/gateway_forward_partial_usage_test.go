@@ -237,7 +237,7 @@ func TestGatewayService_Forward_PreOutputSSEOverloadedErrorUsesSemantic529(t *te
 		rateLimitService:     NewRateLimitService(repo, nil, cfg, nil, nil),
 		deferredService:      &DeferredService{},
 	}
-	account := newAnthropicOAuthAccountForPartialUsageTest()
+	account := newAnthropicSetupTokenAccountForPartialUsageTest()
 	account.Credentials["temp_unschedulable_enabled"] = true
 	account.Credentials["temp_unschedulable_rules"] = []any{map[string]any{
 		"error_code":       float64(529),
@@ -288,7 +288,7 @@ func TestGatewayService_Forward_PostOutputSSEOverloadedErrorKeepsExistingStatus(
 		deferredService:      &DeferredService{},
 	}
 
-	result, err := svc.Forward(context.Background(), c, newAnthropicOAuthAccountForPartialUsageTest(), parsed)
+	result, err := svc.Forward(context.Background(), c, newAnthropicSetupTokenAccountForPartialUsageTest(), parsed)
 	require.Error(t, err)
 	require.Nil(t, result)
 

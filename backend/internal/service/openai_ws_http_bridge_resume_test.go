@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -40,7 +41,13 @@ func TestProxyOpenAIWSHTTPBridgeTurnLaterTurn429FailsOverBeforeClientWrite(t *te
 		Body:       io.NopCloser(strings.NewReader(`{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached"}}`)),
 	}}
 	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
-	account := &Account{ID: 129, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
+	account := &Account{
+		ID: 129, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token":       "access-token",
+			"chatgpt_account_id": "chatgpt-account-129",
+		},
+	}
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)
@@ -147,11 +154,19 @@ func TestOpenAIWSHTTPBridgeLaterTurn429RetriesCurrentTurnOnReplacementAccount(t 
 	account := &Account{
 		ID: 129, Name: "limited", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
 		Status: StatusActive, Schedulable: true, Concurrency: 1,
+		Credentials: map[string]any{
+			"access_token":       "access-token-a",
+			"chatgpt_account_id": "chatgpt-account-129",
+		},
 		Extra: map[string]any{"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeHTTPBridge},
 	}
 	nextAccount := *account
 	nextAccount.ID = 130
 	nextAccount.Name = "replacement"
+	nextAccount.Credentials = map[string]any{
+		"access_token":       "access-token-b",
+		"chatgpt_account_id": "chatgpt-account-130",
+	}
 
 	serverErrCh := make(chan error, 1)
 	failoverCh := make(chan []byte, 1)
@@ -181,7 +196,13 @@ func TestOpenAIWSHTTPBridgeLaterTurn429RetriesCurrentTurnOnReplacementAccount(t 
 		}
 		retryPayload, retryCurrentTurn := OpenAIWSCurrentTurnRetryPayload(proxyErr)
 		if !retryCurrentTurn || len(retryPayload) == 0 {
-			serverErrCh <- errors.New("missing current-turn retry payload")
+			upstreamMessage, _ := ginCtx.Get(OpsUpstreamErrorMessageKey)
+			serverErrCh <- fmt.Errorf(
+				"missing current-turn retry payload: status=%d body=%s upstream=%v",
+				failoverErr.StatusCode,
+				string(failoverErr.ResponseBody),
+				upstreamMessage,
+			)
 			return
 		}
 		failoverCh <- retryPayload
@@ -198,18 +219,46 @@ func TestOpenAIWSHTTPBridgeLaterTurn429RetriesCurrentTurnOnReplacementAccount(t 
 	defer func() { _ = clientConn.CloseNow() }()
 
 	writeCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	err = clientConn.Write(writeCtx, websocket.MessageText, []byte(`{"type":"response.create","model":"gpt-5.6-sol","input":[{"role":"user","content":"first"}]}`))
+	err = clientConn.Write(writeCtx, websocket.MessageText, []byte(`{
+		"type":"response.create",
+		"model":"gpt-5.6-sol",
+		"store":false,
+		"stream":true,
+		"tool_choice":"auto",
+		"parallel_tool_calls":true,
+		"reasoning":{"effort":"medium"},
+		"include":["reasoning.encrypted_content"],
+		"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"first"}]}]
+	}`))
 	cancel()
 	require.NoError(t, err)
 
 	readCtx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	_, completed, err := clientConn.Read(readCtx)
 	cancel()
+	if err != nil {
+		select {
+		case proxyErr := <-serverErrCh:
+			t.Fatalf("首次 HTTP bridge turn 失败：%v", proxyErr)
+		default:
+		}
+	}
 	require.NoError(t, err)
 	require.Equal(t, "response.completed", gjson.GetBytes(completed, "type").String())
 
 	writeCtx, cancel = context.WithTimeout(context.Background(), 3*time.Second)
-	err = clientConn.Write(writeCtx, websocket.MessageText, []byte(`{"type":"response.create","model":"gpt-5.6-sol","previous_response_id":"resp_first","input":[{"type":"function_call_output","call_id":"call_1","output":"second"}]}`))
+	err = clientConn.Write(writeCtx, websocket.MessageText, []byte(`{
+		"type":"response.create",
+		"model":"gpt-5.6-sol",
+		"store":false,
+		"stream":true,
+		"tool_choice":"auto",
+		"parallel_tool_calls":true,
+		"reasoning":{"effort":"medium"},
+		"include":["reasoning.encrypted_content"],
+		"previous_response_id":"resp_first",
+		"input":[{"type":"function_call_output","call_id":"call_1","output":"second"}]
+	}`))
 	cancel()
 	require.NoError(t, err)
 

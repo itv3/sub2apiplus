@@ -157,7 +157,7 @@ func (s *AccountTestService) testCNProviderAdaptiveResponsesConnection(c *gin.Co
 	}
 	apiURL := buildOpenAIResponsesURLForPlatform(account.Platform, baseURL)
 
-	payload := createOpenAITestPayload(testModelID, false)
+	payload := createOpenAITestPayload(testModelID, "", false, 0)
 	// DeepSeek's native Responses endpoint is stateless and does not need the
 	// OpenAI probe's synthetic instructions.
 	delete(payload, "instructions")
@@ -202,5 +202,11 @@ func (s *AccountTestService) doCNProviderAdaptiveRequest(req *http.Request, acco
 	if account.ProxyID != nil && account.Proxy != nil {
 		proxyURL = account.Proxy.URL()
 	}
-	return s.httpUpstream.DoWithTLS(req, proxyURL, account.ID, account.Concurrency, s.tlsFPProfileService.ResolveTLSProfile(account))
+	return doOpenAIAPIKeyHTTPTransport(
+		s.httpUpstream,
+		req,
+		proxyURL,
+		account,
+		s.tlsFPProfileService.ResolveTLSProfile(account),
+	)
 }

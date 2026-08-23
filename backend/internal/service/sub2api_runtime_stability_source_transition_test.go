@@ -123,7 +123,12 @@ func TestSub2APIRuntimeStabilityTransitionMatchesCurrentSources(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got := sub2APIRuntimeStabilityDigest(raw); got != transition.ToSHA256 {
+		if got := sub2APIRuntimeStabilityDigest(raw); got != transition.ToSHA256 &&
+			!upstreamV0179SourceTransitionSupersedesService(
+				transition.Path,
+				transition.ToSHA256,
+				got,
+			) {
 			t.Fatalf(
 				"Sub2API 运行稳定性源码摘要漂移：path=%s got=%s want=%s",
 				transition.Path,

@@ -122,7 +122,11 @@ func readUpstreamMergeFrameworkTransition() (
 				transition.Path,
 				transition.ToSHA256,
 				currentDigest,
-			)) {
+			) && !upstreamV0179SourceTransitionSupersedes(
+			transition.Path,
+			transition.ToSHA256,
+			currentDigest,
+		)) {
 			return receipt, errors.New("上游合并框架 transition 当前摘要不一致：" + transition.Path)
 		}
 		paths = append(paths, transition.Path)
@@ -140,6 +144,9 @@ func upstreamMergeFrameworkTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if upstreamV0179SourceTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if upstreamMergeEgressSnapshotTransitionSupersedes(path, priorDigest, currentDigest) {
 		return true
 	}
@@ -148,8 +155,13 @@ func upstreamMergeFrameworkTransitionSupersedes(
 		return false
 	}
 	for _, transition := range receipt.Transitions {
-		if transition.Path == path && transition.ToSHA256 == currentDigest &&
-			slices.Contains(transition.PredecessorSHA256s, priorDigest) {
+		if transition.Path == path && slices.Contains(transition.PredecessorSHA256s, priorDigest) &&
+			(transition.ToSHA256 == currentDigest ||
+				upstreamV0179SourceTransitionSupersedes(
+					path,
+					transition.ToSHA256,
+					currentDigest,
+				)) {
 			return true
 		}
 	}

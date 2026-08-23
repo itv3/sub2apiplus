@@ -66,6 +66,26 @@ func TestForwardResponsesInputTokensGrokOAuthUsesLocalEstimate(t *testing.T) {
 	require.Nil(t, upstream.lastReq)
 }
 
+func TestForwardResponsesInputTokensOpenAIOAuthUsesLocalEstimate(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses/input_tokens", nil)
+
+	upstream := &httpUpstreamRecorder{}
+	svc := &OpenAIGatewayService{httpUpstream: upstream}
+	account := &Account{ID: 161, Platform: PlatformOpenAI, Type: AccountTypeOAuth}
+	body := []byte(`{"model":"gpt-5.4","instructions":"Be concise.","input":"hello world"}`)
+
+	err := svc.ForwardResponsesInputTokens(context.Background(), c, account, body)
+
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, recorder.Code)
+	require.Equal(t, "response.input_tokens", gjson.Get(recorder.Body.String(), "object").String())
+	require.Positive(t, gjson.Get(recorder.Body.String(), "input_tokens").Int())
+	require.Nil(t, upstream.lastReq, "OpenAI OAuth 账号不得向未批准的 input_tokens 官方路由发送请求")
+}
+
 func TestForwardResponsesInputTokensUpstream404FallsBackLocally(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	recorder := httptest.NewRecorder()

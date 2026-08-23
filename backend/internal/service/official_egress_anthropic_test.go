@@ -52,6 +52,14 @@ func (c *officialEgressT4Cache) ReleaseGrokVideoBilled(context.Context, string) 
 	return nil
 }
 
+func (c *officialEgressT4Cache) SetReasoningContent(context.Context, string, string, time.Duration) error {
+	return nil
+}
+
+func (c *officialEgressT4Cache) GetReasoningContent(context.Context, string) (string, error) {
+	return "", ErrReasoningContentNotFound
+}
+
 type officialEgressT4IdentityCache struct {
 	getCalls int
 }

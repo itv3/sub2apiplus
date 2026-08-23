@@ -1070,8 +1070,7 @@ func TestOpenAIGatewayService_Forward_WSv2_CodexFingerprintHandshakeBodyParityAn
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)
 	c.Request = httptest.NewRequest(http.MethodPost, "/openai/v1/responses", nil)
-	c.Request.Header.Set("User-Agent", "codex_cli_rs/0.144.1")
-	c.Request.Header.Set("originator", "codex_cli_rs")
+	c.Request.Header.Set("User-Agent", "unit-test-agent/1.0")
 	c.Request.Header.Set("session-id", "header-session")
 	c.Request.Header.Set("x-codex-turn-metadata", `{"installation_id":"header-install","session_id":"header-session","thread_id":"header-thread","turn_id":"header-turn","window_id":"header-window","sandbox":"seatbelt"}`)
 
@@ -1112,6 +1111,10 @@ func TestOpenAIGatewayService_Forward_WSv2_CodexFingerprintHandshakeBodyParityAn
 	account.Schedulable = true
 	account.Concurrency = 1
 	account.Credentials = map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-acc"}
+	svc.openaiModelCapabilities.replaceFromManifest(
+		account.ID,
+		[]byte(`{"models":[{"slug":"gpt-5.2","use_responses_lite":false}]}`),
+	)
 
 	body := []byte(`{"model":"gpt-5.2","stream":true,"prompt_cache_key":"body-session","client_metadata":{"session_id":"body-session","x-codex-turn-metadata":"{\"installation_id\":\"body-install\",\"session_id\":\"body-session\",\"thread_id\":\"body-thread\",\"turn_id\":\"body-turn\",\"window_id\":\"body-window\",\"sandbox\":\"seatbelt\"}"},"input":[{"type":"input_text","text":"hi"}]}`)
 	result, err := svc.Forward(context.Background(), c, account, body)
@@ -1124,34 +1127,37 @@ func TestOpenAIGatewayService_Forward_WSv2_CodexFingerprintHandshakeBodyParityAn
 	require.True(t, ok)
 	wantInstall := resolveConvergedInstallationID(account, seed)
 	wantSession := resolveConvergedSessionID(seed)
-	wantThread := resolveConvergedThreadID(seed, "header-session")
 	payloadJSON := requestToJSONString(captureConn.lastWrite)
+	wireSession := captureDialer.lastHeaders.Get("session-id")
+	parsedSession, err := uuid.Parse(wireSession)
+	require.NoError(t, err)
+	require.Equal(t, uuid.Version(7), parsedSession.Version())
 
-	require.Equal(t, wantInstall, captureDialer.lastHeaders.Get("x-codex-installation-id"))
-	require.Equal(t, wantSession, captureDialer.lastHeaders.Get("session-id"))
-	require.Equal(t, wantSession, captureDialer.lastHeaders.Get("session_id"))
-	require.Equal(t, wantThread, captureDialer.lastHeaders.Get("thread-id"))
-	require.Equal(t, wantThread, captureDialer.lastHeaders.Get("x-client-request-id"))
-	require.Equal(t, wantThread+":0", captureDialer.lastHeaders.Get("x-codex-window-id"))
+	require.Empty(t, captureDialer.lastHeaders.Get("x-codex-installation-id"))
+	require.NotEqual(t, wantSession, wireSession)
+	require.Empty(t, captureDialer.lastHeaders.Get("session_id"))
+	require.Equal(t, wireSession, captureDialer.lastHeaders.Get("thread-id"))
+	require.Equal(t, wireSession, captureDialer.lastHeaders.Get("x-client-request-id"))
+	require.Equal(t, wireSession+":0", captureDialer.lastHeaders.Get("x-codex-window-id"))
 
-	require.Equal(t, wantSession, gjson.Get(payloadJSON, "prompt_cache_key").String())
-	require.Equal(t, wantInstall, gjson.Get(payloadJSON, "client_metadata.x-codex-installation-id").String())
-	require.Equal(t, wantSession, gjson.Get(payloadJSON, "client_metadata.session_id").String())
-	require.Equal(t, wantThread, gjson.Get(payloadJSON, "client_metadata.thread_id").String())
-	require.Equal(t, wantThread+":0", gjson.Get(payloadJSON, "client_metadata.x-codex-window-id").String())
+	require.Equal(t, wireSession, gjson.Get(payloadJSON, "prompt_cache_key").String())
+	wireInstall := gjson.Get(payloadJSON, "client_metadata.x-codex-installation-id").String()
+	require.NotEmpty(t, wireInstall)
+	require.NotEqual(t, wantInstall, wireInstall)
+	require.Equal(t, wireSession, gjson.Get(payloadJSON, "client_metadata.session_id").String())
+	require.Equal(t, wireSession, gjson.Get(payloadJSON, "client_metadata.thread_id").String())
+	require.Equal(t, wireSession+":0", gjson.Get(payloadJSON, "client_metadata.x-codex-window-id").String())
 
 	bodyTurnMetadata := gjson.Get(payloadJSON, "client_metadata.x-codex-turn-metadata").String()
 	headerTurnMetadata := captureDialer.lastHeaders.Get("x-codex-turn-metadata")
-	require.Equal(t, wantInstall, gjson.Get(bodyTurnMetadata, "installation_id").String())
-	require.Equal(t, wantSession, gjson.Get(bodyTurnMetadata, "session_id").String())
-	require.Equal(t, wantThread, gjson.Get(bodyTurnMetadata, "thread_id").String())
-	require.Equal(t, wantSession, gjson.Get(headerTurnMetadata, "session_id").String())
-	require.Equal(t, gjson.Get(bodyTurnMetadata, "turn_id").String(), gjson.Get(headerTurnMetadata, "turn_id").String())
+	require.Equal(t, wireInstall, gjson.Get(bodyTurnMetadata, "installation_id").String())
+	require.Equal(t, wireSession, gjson.Get(bodyTurnMetadata, "session_id").String())
+	require.Equal(t, wireSession, gjson.Get(bodyTurnMetadata, "thread_id").String())
+	require.Equal(t, wireSession, gjson.Get(headerTurnMetadata, "session_id").String())
+	require.NotEmpty(t, gjson.Get(bodyTurnMetadata, "turn_id").String())
+	require.Empty(t, gjson.Get(headerTurnMetadata, "turn_id").String())
 	require.NotZero(t, gjson.Get(bodyTurnMetadata, "turn_started_at_unix_ms").Int())
-	require.Equal(t,
-		gjson.Get(bodyTurnMetadata, "turn_started_at_unix_ms").Int(),
-		gjson.Get(headerTurnMetadata, "turn_started_at_unix_ms").Int(),
-	)
+	require.False(t, gjson.Get(headerTurnMetadata, "turn_started_at_unix_ms").Exists())
 }
 
 func TestOpenAIGatewayService_Forward_WSv2_ResponseDoneUsageParsed(t *testing.T) {

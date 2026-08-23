@@ -203,12 +203,9 @@ func allowOpenAICompatibleMessagesDispatch(c *gin.Context, apiKey *service.APIKe
 		return true
 	}
 	switch apiKey.Group.Platform {
-	case service.PlatformGrok, service.PlatformComposite:
+	case service.PlatformGrok:
 		// allow_messages_dispatch 是 OpenAI 分组专属的 opt-in 开关：Grok 分组
-		// 没有该开关的配置入口，Composite 分组保存时该字段会被强制清零
-		// （见 sanitizeGroupMessagesDispatchFields），两者都无法配置为 true。
-		// Composite 的跨平台准入由自身路由解析控制（见
-		// openAICompatibleMessagesTargetAllowed），因此这两类分组直接豁免。
+		// 没有该开关的配置入口，因此直接豁免。
 		return true
 	}
 	// 国产供应商分组与 grok 同语义:/v1/messages 就是其主要服务形态(anthropic

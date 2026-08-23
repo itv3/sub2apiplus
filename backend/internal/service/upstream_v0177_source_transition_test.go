@@ -17,6 +17,14 @@ const (
 // upstreamV0177SourceTransitionSupersedes 验证历史摘要是否由本次上游合并的
 // 固定 transition 精确承接。旧退休收据保持不可变，路径和摘要均不得模糊匹配。
 func upstreamV0177SourceTransitionSupersedes(path, priorDigest, currentDigest string) bool {
+	if upstreamMergeEgressSnapshotTransitionSupersedesService(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
+	if upstreamV0179SourceTransitionSupersedesService(path, priorDigest, currentDigest) {
+		return true
+	}
 	if claudeFWGTestTransitionSupersedesService(path, priorDigest, currentDigest) {
 		return true
 	}
@@ -62,7 +70,10 @@ func upstreamV0177SourceTransitionBeforeFWE(path, priorDigest, currentDigest str
 	for _, transition := range receipt.SourceTransitions {
 		if transition.Path == path && transition.FromSHA256 == priorDigest {
 			if transition.ToSHA256 == currentDigest ||
-				runtimeReliabilityRepairTransitionSupersedes(path, transition.ToSHA256, currentDigest) {
+				runtimeReliabilityRepairTransitionSupersedes(path, transition.ToSHA256, currentDigest) ||
+				upstreamV0179SourceTransitionSupersedesService(
+					path, transition.ToSHA256, currentDigest,
+				) {
 				return true
 			}
 		}

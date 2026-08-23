@@ -105,7 +105,13 @@ func readUpstreamMergeEgressSnapshotTransition() (
 		current, readErr := os.ReadFile(filepath.Join(
 			"../../..", filepath.FromSlash(transition.Path),
 		))
-		if readErr != nil || upstreamMergeFrameworkDigest(current) != transition.ToSHA256 {
+		currentDigest := upstreamMergeFrameworkDigest(current)
+		if readErr != nil || (currentDigest != transition.ToSHA256 &&
+			!upstreamV0179SourceTransitionSupersedes(
+				transition.Path,
+				transition.ToSHA256,
+				currentDigest,
+			)) {
 			return receipt, errors.New("上游合并 egress snapshot transition 当前摘要不一致：" + transition.Path)
 		}
 		paths = append(paths, transition.Path)
@@ -128,8 +134,13 @@ func upstreamMergeEgressSnapshotTransitionSupersedes(
 		return false
 	}
 	for _, transition := range receipt.Transitions {
-		if transition.Path == path && transition.ToSHA256 == currentDigest &&
-			slices.Contains(transition.PredecessorSHA256s, priorDigest) {
+		if transition.Path == path && slices.Contains(transition.PredecessorSHA256s, priorDigest) &&
+			(transition.ToSHA256 == currentDigest ||
+				upstreamV0179SourceTransitionSupersedes(
+					path,
+					transition.ToSHA256,
+					currentDigest,
+				)) {
 			return true
 		}
 	}

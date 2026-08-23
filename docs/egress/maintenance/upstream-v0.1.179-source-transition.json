@@ -1,0 +1,506 @@
+{
+  "activation_status": "accepted_not_activated",
+  "allowed_wire_deltas": [],
+  "base_commit": "3743f5f62d8cf40bdccc8f8add717cda809ce767",
+  "classification": "implementation_and_validation",
+  "date": "2026-08-23",
+  "identity_sha256": "826842fa5bc9d49d3e71bc748e6c727f6e8adf00ab03e4e296db56b529f44196",
+  "plan_identity_sha256": "c2eed1886c938bc1d3dbe23d0b810e865ecbc7b2197ca378810cb553c1be87ef",
+  "required_verification": [
+    "go test ./internal/service",
+    "go test ./internal/handler ./internal/repository",
+    "go test ./internal/officialegress/...",
+    "make check-egress-spec",
+    "tools/upstream_merge U-2～U-6 finalize 与 replay"
+  ],
+  "result": "passed",
+  "schema_version": "official-egress-upstream-source-transition/v2",
+  "source_transitions": [
+    {
+      "path": "backend/cmd/server/wire.go",
+      "predecessor_sha256s": [
+        "46154f837a1f8a350928666d557542120addefad15b850335a96d9bf10db0bc8"
+      ],
+      "reason": "承接上游服务装配依赖与构造参数更新，同时保持官方出站 Executor、Token 和 Guard 的唯一生产接线。",
+      "to_sha256": "eed1893b88880d8531bea542407f3050f486cfc71817dbcf9a8c170d67a7a018"
+    },
+    {
+      "path": "backend/cmd/server/wire_gen.go",
+      "predecessor_sha256s": [
+        "909ca85de7219d3b112e2bcaaef6ec04f329becc18c2e9ac0171e5083d65635f"
+      ],
+      "reason": "同步上游依赖注入生成结果，确保新增服务与既有官方出站权威实例使用同一受审装配图。",
+      "to_sha256": "82b7ea7769b45cdde388917c814bb3f424c5e5d36086c819f568ec20f5335c16"
+    },
+    {
+      "path": "backend/internal/config/config.go",
+      "predecessor_sha256s": [
+        "f76b526f55f00db9c7509d8f3ee517223086f3a852a544d4dbeeddab71a9008c"
+      ],
+      "reason": "承接上游渠道监控、配额及代理探测配置扩展，同时保持官方客户端画像与运行选择器不从普通配置取得激活权。",
+      "to_sha256": "7d5f38bc9f3e11fc7e3fa0818f9990ae718e9209eaa279f50641a03b7915000a"
+    },
+    {
+      "path": "backend/internal/handler/admin/setting_handler.go",
+      "predecessor_sha256s": [
+        "682cf63c55dd5459c8fe84cdebfb498011c9c668bffa54879189e2f30c6ffcbe"
+      ],
+      "reason": "承接上游管理设置、渠道监控与配额接口更新，同时保持这些管理面字段不能绕过官方出站 Persona、Profile 和 Guard。",
+      "to_sha256": "b444329932274865c307403540e9946bda8161b55a462c48f703a9635496d581"
+    },
+    {
+      "path": "backend/internal/handler/admin/setting_handler_update.go",
+      "predecessor_sha256s": [
+        "04133448f9da176cfad7a8f38fdd2bf852ebd7a7d7f8a1a32aa4f379ef4cc325"
+      ],
+      "reason": "承接上游管理设置、渠道监控与配额接口更新，同时保持这些管理面字段不能绕过官方出站 Persona、Profile 和 Guard。",
+      "to_sha256": "cae7214fdc8a0f5c93e876dc433b25d239097749368b755d027d048147b0d3ec"
+    },
+    {
+      "path": "backend/internal/handler/dto/settings.go",
+      "predecessor_sha256s": [
+        "e506ddd13708ec6f2f9fb326d254ebb46d5d9773000b12bac326e1cca310b9cf"
+      ],
+      "reason": "承接上游管理设置、渠道监控与配额接口更新，同时保持这些管理面字段不能绕过官方出站 Persona、Profile 和 Guard。",
+      "to_sha256": "af459a05fe9df520f405aa4b698ce2dac32ecb3ade96ac3413a8bc49c78ca113"
+    },
+    {
+      "path": "backend/internal/handler/gateway_handler.go",
+      "predecessor_sha256s": [
+        "672c3fe54d16645053ca9553724c7a35af0255dff75bc003fb20a08b21ac0092"
+      ],
+      "reason": "承接上游网关入口处理更新，并保持 Anthropic Messages、count_tokens 与 Composite 入口的 Persona 绑定及凭据前门禁。",
+      "to_sha256": "8c4090270bc2b038cef630c95eb9cf4f96c69fa4162a8eb0f6594151532b110a"
+    },
+    {
+      "path": "backend/internal/handler/openai_gateway_handler.go",
+      "predecessor_sha256s": [
+        "268eb5fc6b126320167bb349ac5d38c915338a474512ca946a275e1daa3ed184"
+      ],
+      "reason": "承接上游 OpenAI 网关入口与 WebSocket 故障转移行为，将 Responses input_tokens 归一化继续收敛到共享 endpoint 权威。",
+      "to_sha256": "fcb44519ab1cf9382d9f1b1f456b64d07f613fa8fd3611db722524f7fb5f977d"
+    },
+    {
+      "path": "backend/internal/handler/openai_live.go",
+      "predecessor_sha256s": [
+        "44b104dd1fc06825ed400a03b1c539bd332bdf005a6d9f8822e05961b76d616f"
+      ],
+      "reason": "承接上游 OpenAI realtime／live 入口处理更新，同时保持已批准入口到 Codex Persona 的唯一绑定。",
+      "to_sha256": "96c82058e5dd7878488e4ddfbaea66bcbf8e18653005600595bde53cacf27180"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_legacy_retirement_transition_test.go",
+      "predecessor_sha256s": [
+        "cf1695ce7eb3dcd50d982fd54d6d8aa42d0d3e5424ca7c1522622d7dc78e2b9a"
+      ],
+      "reason": "让 Claude FW-H 遗留退休后继关系先验证既有 from／to，再通过本次 v0.1.179 直接前序承接当前源码；历史退休收据与生产选择状态保持不变。",
+      "to_sha256": "ab7d3f3749821d093ecb7412279bce87139fa140820a709ceebe6d63613e53a4"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_merge_egress_snapshot_transition_test.go",
+      "predecessor_sha256s": [
+        "6b19ea585910eb13091d5995cab13ec5817ea62c693c35da6c2095f7575d7e4d"
+      ],
+      "reason": "让 egress snapshot 历史收据在验证既有中间摘要后，仅通过本次 v0.1.179 直接后继收据承接当前源码，消除加载器递归并保持旧收据原文不变。",
+      "to_sha256": "d63e163f3246b6adf60510592bcd6556f77705fd5044d2a573f280377ce91bb5"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_merge_framework_transition_test.go",
+      "predecessor_sha256s": [
+        "11ea1e9db4f989f1bf5dbdc6612858125cb467d327506eb6b49a77a435fb0d12"
+      ],
+      "reason": "让 officialegress 框架冻结门禁通过本次 v0.1.179 追加收据连续承接上游源码摘要，既有框架、路由作用域和 snapshot 收据原文保持不变。",
+      "to_sha256": "ff03fe3995be282fcb9fc7f0181704c072859249635ea629b2cb3de33b2af3eb"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_v0179_source_transition_test.go",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "reason": "新增 strict JSON、自摘要、排序、当前源码摘要和精确 predecessor 校验，冻结 60 个敏感路径并把 v0.1.179 收据接入 officialegress 历史连续性门禁。",
+      "to_sha256": "ebb80b8bc044372bd7263970b0a9b20b3cfeef6ffbf039cae1df6fda72a27e35"
+    },
+    {
+      "path": "backend/internal/pkg/apicompat/chatcompletions_responses_bridge.go",
+      "predecessor_sha256s": [
+        "0c9ab9934226923d34c7a850072e3ecc7467e58b605d9a5fe7a233324853a742"
+      ],
+      "reason": "承接上游 Chat Completions 到 Responses 的推理缓存与工具桥接更新，同时保持最终官方请求由 Active Profile 和 Executor 编译。",
+      "to_sha256": "2b96615340ef78edc649e8a8ad0d57ed5ae08780f7fbc0d64de850e213763d6c"
+    },
+    {
+      "path": "backend/internal/server/routes/gateway.go",
+      "predecessor_sha256s": [
+        "49ad1e668b51bb441d110084d4113c646d28824c8943c1476ed76db674f57043"
+      ],
+      "reason": "承接上游网关路由注册变化，并保持官方及已批准第三方入口到 Persona／Profile 的唯一绑定。",
+      "to_sha256": "acdc53cfbc80a70a3bd56537c4c422ea4a7feb8bf9ae5e637d42aea00ba29fbe"
+    },
+    {
+      "path": "backend/internal/service/account.go",
+      "predecessor_sha256s": [
+        "97c9f6e313db0f9bff04e2f6a32bedbc20cbfe7e58c3b3bbe426adea2878b25c"
+      ],
+      "reason": "承接上游账号、用量与调度实现更新，同时保持 OAuth 身份隔离、凭据处理和官方出站 Guard 边界。",
+      "to_sha256": "d3e7944f5def10b9a3fa0e124ab35d4cfd5aeb6e2a3c270a68a5885a3e856aaa"
+    },
+    {
+      "path": "backend/internal/service/account_test_service.go",
+      "predecessor_sha256s": [
+        "87be85247043a2ee5921cf18475f8b71c63fcb06809ffb306e221d5ff9ab8a54"
+      ],
+      "reason": "承接上游账号、用量与调度实现更新，同时保持 OAuth 身份隔离、凭据处理和官方出站 Guard 边界。",
+      "to_sha256": "d09f96e2c1be03548d912282b4b4b5e9ebcfa2b01e534636c4cc966ab4b2940e"
+    },
+    {
+      "path": "backend/internal/service/account_usage_service.go",
+      "predecessor_sha256s": [
+        "26ba0f3610e702e3f81c6c5dd0c5abfed1b896a981c94b9e8870f5393d8eaac2"
+      ],
+      "reason": "承接上游账号、用量与调度实现更新，同时保持 OAuth 身份隔离、凭据处理和官方出站 Guard 边界。",
+      "to_sha256": "e3a5c53d3659ce9de24f05e0f6db5bc7c72dd545bcdd89cf1c0a90de49050e61"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_source_transition_test.go",
+      "predecessor_sha256s": [
+        "f7ac7a794bde6e297d560c0ab84efe6fc6a8db08360f8a2ff17c3fa1a9c8d4b4"
+      ],
+      "reason": "让 Claude FW-G 历史冻结测试通过既有 egress snapshot 追加收据连续承接当前摘要，历史 source transition 原文保持不变。",
+      "to_sha256": "af150bb2d69255212bb6e44b856cfd7ca73bbacf4f4e4e117e4fba08fee7d6b6"
+    },
+    {
+      "path": "backend/internal/service/domain_constants.go",
+      "predecessor_sha256s": [
+        "22d4ce9bbb2650fd766495fc0cffcf0bc002a9c944837fac0b555e5d3b3df1dc"
+      ],
+      "reason": "同步上游领域常量与平台能力集合，保持官方客户端 Persona 和生产选择状态由受审 Catalog 决定。",
+      "to_sha256": "3ebbd02a6c672bd804abda286df7241acdd0002d1381ae60fb60430b681911d5"
+    },
+    {
+      "path": "backend/internal/service/gateway_anthropic_apikey_passthrough_test.go",
+      "predecessor_sha256s": [
+        "7f7c0cd353993b526f0d973901ef250a2cf6422f3ef8d6485c25dd40215d2217"
+      ],
+      "reason": "承接上游对应实现的回归测试与夹具更新，并继续验证当前 Active Profile、受管 Executor、入口门禁和既有业务行为。",
+      "to_sha256": "c3eb97b9d5ebc7acd2b2d871e533fcdad124a3f46576cdb677fc7c2a301a677b"
+    },
+    {
+      "path": "backend/internal/service/gateway_context_management_test.go",
+      "predecessor_sha256s": [
+        "806f03addf0884548ea34e3ee4ac252c736a3f1e08c875f4861f0aa75f0068f3"
+      ],
+      "reason": "承接上游对应实现的回归测试与夹具更新，并继续验证当前 Active Profile、受管 Executor、入口门禁和既有业务行为。",
+      "to_sha256": "8d55618054876037df8df965d644f84acba08ec17924b3c9800b4eb4c0465ed7"
+    },
+    {
+      "path": "backend/internal/service/gateway_count_tokens.go",
+      "predecessor_sha256s": [
+        "06336443d8a0e8fec49fb1cf9999c41d5d2afd8ba1969589c8d7a5adebcaf997"
+      ],
+      "reason": "承接上游 token count 入口与服务调度更新，同时保持 Claude 官方／第三方入口矩阵和凭据前拒绝。",
+      "to_sha256": "4a1725fa3679ac982e943d868da113e5f60295760d3a12c29eabc9822b16af3a"
+    },
+    {
+      "path": "backend/internal/service/gateway_forward.go",
+      "predecessor_sha256s": [
+        "4d7a69ef69c7a752ce83c24f3a54b5316d85005b1fc283b20fe44b6d8dd99a4f"
+      ],
+      "reason": "承接上游网关转发、用量与上游请求构造更新，同时保持最终官方请求由 Persona Executor 统一发送。",
+      "to_sha256": "83c88415b955ef3dc7b38b8c1d7cd8f378b7a3657d0d1e2980317061bfd8b7fa"
+    },
+    {
+      "path": "backend/internal/service/gateway_forward_partial_usage_test.go",
+      "predecessor_sha256s": [
+        "b55906b014c971fdc8308e71f54042a2c506b0bbbca6cc92cd0fc210f7459ea9"
+      ],
+      "reason": "承接上游对应实现的回归测试与夹具更新，并继续验证当前 Active Profile、受管 Executor、入口门禁和既有业务行为。",
+      "to_sha256": "cc80e98ef8c3f9e87a55181f6d890deedf71cf1424760fc6b1903240c63f9896"
+    },
+    {
+      "path": "backend/internal/service/gateway_upstream_request.go",
+      "predecessor_sha256s": [
+        "b41ecf58734bcdf6fbcbf193b20bad86f86dbc91d35088a7ed21cd1cc38ef0b1"
+      ],
+      "reason": "承接上游网关转发、用量与上游请求构造更新，同时保持最终官方请求由 Persona Executor 统一发送。",
+      "to_sha256": "7d6c5f7067f64b1f6e118f951bf438d6b0eaae31b01e8785e13297b9a956719d"
+    },
+    {
+      "path": "backend/internal/service/official_egress_anthropic_test.go",
+      "predecessor_sha256s": [
+        "687ed121106b5e8372867f2d584d0c56cd941a3517af365c2cc9c25d3c0f4b17"
+      ],
+      "reason": "承接上游对应实现的回归测试与夹具更新，并继续验证当前 Active Profile、受管 Executor、入口门禁和既有业务行为。",
+      "to_sha256": "965c226c44ced48872b24a1f36c0705ea2250316dbfbfffef4b65b7cb6ec039b"
+    },
+    {
+      "path": "backend/internal/service/official_egress_t1_contract_test.go",
+      "predecessor_sha256s": [
+        "50e4cb06b847a871f866653b6aa9c570b83d3ce1e19835732834e9ec8def2a42"
+      ],
+      "reason": "承接上游对应实现的回归测试与夹具更新，并继续验证当前 Active Profile、受管 Executor、入口门禁和既有业务行为。",
+      "to_sha256": "1e4af2ad89f56930b6f0806391b91d4f70432027ca77c340ddadc56637a11784"
+    },
+    {
+      "path": "backend/internal/service/openai_codex_identity.go",
+      "predecessor_sha256s": [
+        "39ae9be2e80e3b6fd7f9c9754ae48678f1943b3f29558b7521847fefefbf58f6"
+      ],
+      "reason": "承接上游 Codex 指纹和稳定身份更新，同时保持 Active Profile、账号身份隔离与受管 Invocation 权威。",
+      "to_sha256": "83a286f7ac727e23e860fddefefe20f0c98693c033fda203b5a4ac43b9b2659b"
+    },
+    {
+      "path": "backend/internal/service/openai_codex_models_service.go",
+      "predecessor_sha256s": [
+        "4ed62e7afacf6341d0942f317372c8f7d2b23e426ab1594bded68189ef4b312d"
+      ],
+      "reason": "合并上游 API Key Models 响应版本校验，同时保留 OAuth Active Profile 身份、受管 Invocation 和已退休裸 transport 的绝迹语义。",
+      "to_sha256": "e55889f113eba404ab17fccd8b4d6bb2cb3a2d7abb54a5330e39b9bfbb487986"
+    },
+    {
+      "path": "backend/internal/service/openai_codex_models_service_test.go",
+      "predecessor_sha256s": [
+        "6ba9672486cd78d97af89d85d9639b2606fda98ccc980a8f45ce5f260c359a16"
+      ],
+      "reason": "承接上游 API Key Models 版本校验测试并继续覆盖 OAuth 与 API Key 两类身份路径，退休裸 transport 负例保持不变。",
+      "to_sha256": "874f5ed35f11666b7d50b71f3b6e549137fe2c361e88389299ca1d67ea6e8dc0"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_chat_completions.go",
+      "predecessor_sha256s": [
+        "8da80a2cae3bfc174a9645646402c2bc6428dd5bca94a3bb86ed0358817ca2ee"
+      ],
+      "reason": "承接上游 OpenAI 网关协议适配、工具与故障转移实现，同时保持 Active Profile、final-wire 合同和账号身份隔离。",
+      "to_sha256": "4f4cbe8c89fb88134779b8204803d945470cae2db4026ba4ceaba7f9d87360cc"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_count_tokens.go",
+      "predecessor_sha256s": [
+        "ba7ff0e974841235d552d0725138ebc3e39ebe2a6ddd3bc6089cc6d64f5e909e"
+      ],
+      "reason": "承接上游 Composite count_tokens 调度与协议适配；OpenAI OAuth 的 Responses input_tokens 强制本地估算，API Key 路径统一委托既有受审 custom-provider transport，使未批准官方路由无法绕过 Codex Persona Executor；Claude Persona Guard 和凭据前拒绝保持不变。",
+      "to_sha256": "d06f064fbe3017dd657f925bc91dbb32429d994593ce20106bacb51c9f066fad"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_forward.go",
+      "predecessor_sha256s": [
+        "0836d180f6c05419a992d9b825d4d8891ddfc17825500fc59fdf3490000ecec8"
+      ],
+      "reason": "承接上游网关转发、用量与上游请求构造更新，同时保持最终官方请求由 Persona Executor 统一发送。",
+      "to_sha256": "a66ce368dbf7f3acb43d65544ba126643a83bacbec6587bc38df3fcf9167da82"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_messages.go",
+      "predecessor_sha256s": [
+        "6e5826a21755709324487862c417982b6984d62c6eb1038824776831748f0fda"
+      ],
+      "reason": "承接上游 OpenAI 网关协议适配、工具与故障转移实现，同时保持 Active Profile、final-wire 合同和账号身份隔离。",
+      "to_sha256": "befcf73a99e2533bd43c8b2f447d829394c105dceca7bd092e61fc1d4ebdb096"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_passthrough.go",
+      "predecessor_sha256s": [
+        "615f4466be7043ad1eef213f2009345104acc52eb3a7a8aaee6216df7c4d6967"
+      ],
+      "reason": "承接上游 OpenAI 透传、客户端工具和故障转移更新，同时保持最终请求只能经批准 Persona Executor 发送。",
+      "to_sha256": "896de5eb6a1acf980b0db8ad2c2e2f283d7dae4d7a938d1eae3b0049bd38a8ce"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_request_body.go",
+      "predecessor_sha256s": [
+        "77733f7ca1b61fe9355f521ece6c4fbfc886908cc5111c0730d3c4319bf6d06a"
+      ],
+      "reason": "承接上游 OpenAI 网关协议适配、工具与故障转移实现，同时保持 Active Profile、final-wire 合同和账号身份隔离。",
+      "to_sha256": "5c8a7a0b2a46296a2adc99e15a103ee2162da371f52c65f2ae75415957a44a39"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_response_handling.go",
+      "predecessor_sha256s": [
+        "4b1e7553927131cec753c270789b0f69ecba2ef6da552637d14d4a8716f5a046"
+      ],
+      "reason": "承接上游 OpenAI 网关协议适配、工具与故障转移实现，同时保持 Active Profile、final-wire 合同和账号身份隔离。",
+      "to_sha256": "6f193a00301e699d650fc9c32dfbdd1b21f722e6f254a1d4c99505d953c7eeff"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_service.go",
+      "predecessor_sha256s": [
+        "6b42eb987067c4195a3f207a0f0e4263cd84f65c9e6e4d781eac666506b3c199"
+      ],
+      "reason": "承接上游 OpenAI 网关协议适配、工具与故障转移实现，同时保持 Active Profile、final-wire 合同和账号身份隔离。",
+      "to_sha256": "8d2be26ae50fc48b95ba1ad3ed1558b7a8aef4e432b063562bb187a6bb59b89f"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder.go",
+      "predecessor_sha256s": [
+        "95f997c57467b37bfd94f2d39ade71898e13cf77612ab25633b4f0a1d7861626"
+      ],
+      "reason": "承接上游 WebSocket turn 状态、重放和故障转移编排，同时保持官方握手画像与账号身份隔离。",
+      "to_sha256": "f8361b3f9470088ce209838d4b80dd1e5ce2729ad6c9757213370bf82121d502"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_ingress.go",
+      "predecessor_sha256s": [
+        "ac6ec70c90ea61fa9bcb90b3eea1eedf5655078c7812b18cbf6ab99aa38158a4"
+      ],
+      "reason": "承接上游 WebSocket HTTP bridge 的跨账号故障转移重放与 turn 计费起点，同时保留官方画像、Persona Guard 和凭据前拒绝边界。",
+      "to_sha256": "57f4ecf978c571a639dcfb8e4d691f860d052efea30e90508b715db5c429efac"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_v2.go",
+      "predecessor_sha256s": [
+        "fe7020dc6640d7b76d5caf3621513cace8b02785444d98213ff2a0948641bca9"
+      ],
+      "reason": "承接上游 WebSocket v2 转发回调与 turn 元数据更新，同时保持 transport adapter 不取得画像编译权。",
+      "to_sha256": "ba149360fefe37bf4dd00aed4311fc7bf12578f8716f1f46ccc094c16b7cb98a"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_http_bridge.go",
+      "predecessor_sha256s": [
+        "8116f0e19eeb06c35afb944e48a96fa24e72b473b0740f63ecdfa0278e12ff80"
+      ],
+      "reason": "承接上游 WebSocket HTTP bridge 的 turn 重放、client-tools 和跨账号故障转移实现，保持 final-wire 合同不变。",
+      "to_sha256": "8b0734d7dbce1a7b94b1d51928b1e3e18529bb3c985ac20a08dfed872c0f4eb9"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_pool.go",
+      "predecessor_sha256s": [
+        "e56252152cb32ea47db00ea66983d7a987154e6691ff4d48532a556d960b8528"
+      ],
+      "reason": "承接上游 WebSocket 连接池调度与生命周期实现，同时保留既有官方握手画像、身份隔离和稳定性收据链。",
+      "to_sha256": "7cc28e30a4b0f96f0b926ad6a75fd85419b6c3db8f2d609bc8da9c401c66bfb0"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_pool_test.go",
+      "predecessor_sha256s": [
+        "9cfe3919bcaef8dd14322b6c528364090e4c2215a1193c406df921640607902a"
+      ],
+      "reason": "承接上游 WebSocket 连接池稳定身份复用、身份隔离及软路由亲和测试矩阵，冻结官方握手画像的连接复用边界。",
+      "to_sha256": "fb4e385c8a47bbd9d400c07767b56323dc3838216126bb799671cb41fa4ca1d0"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_v2_passthrough_adapter.go",
+      "predecessor_sha256s": [
+        "f7226d7f58b2c912c735d8a157c62a90f775e740bf7ecc9e768786388bc6a791"
+      ],
+      "reason": "合并上游 WebSocket HTTP bridge 的 client-tools 与 failover 行为，并保留官方 body contract、fallback plan 和最终握手身份权威。",
+      "to_sha256": "46d5884fc4b4d27e39cfe34a30f99605208a9e19617bd36e699eddfdd9d3963e"
+    },
+    {
+      "path": "backend/internal/service/setting_parse.go",
+      "predecessor_sha256s": [
+        "2ceeebf378cb6b0148985be308fde9f3c203e3e2190eacd9f2cfc1b0501c71da"
+      ],
+      "reason": "承接上游设置解析、更新与展示模型扩展，同时保持普通设置不取得官方客户端画像或生产激活选择权。",
+      "to_sha256": "2e74d2409b74933931ba48d87355d6ff738eb66d58dc69034074c6b4a18be736"
+    },
+    {
+      "path": "backend/internal/service/setting_update.go",
+      "predecessor_sha256s": [
+        "f3ffce520739650a5ab55f0a1edbd8ade65fc82b6ffc7fcd5dd45827b999cdd6"
+      ],
+      "reason": "承接上游设置解析、更新与展示模型扩展，同时保持普通设置不取得官方客户端画像或生产激活选择权。",
+      "to_sha256": "39ffacf6553d68f01e07eb0dc009983cf21b1258cff6be72bb90e9bcc2034c2c"
+    },
+    {
+      "path": "backend/internal/service/settings_view.go",
+      "predecessor_sha256s": [
+        "4929898868254c8bf7a42f76c6f50ce5c790ecf27e1a348021853e8e118a98e8"
+      ],
+      "reason": "承接上游设置解析、更新与展示模型扩展，同时保持普通设置不取得官方客户端画像或生产激活选择权。",
+      "to_sha256": "af1f892392b33b4f4543c74c846525aa50041bee86de380e4be2d2d88e91863d"
+    },
+    {
+      "path": "backend/internal/service/sub2api_runtime_stability_source_transition_test.go",
+      "predecessor_sha256s": [
+        "1334414da8730885bc634818d44d6c20094585f7e63cf54d0513f8acd4cda642"
+      ],
+      "reason": "让运行稳定性历史冻结门禁仅通过本次追加收据承接 WebSocket 连接池后继摘要，历史收据原文保持不变。",
+      "to_sha256": "0a253c009006379e0874745b6ad0d686a2f3825668940a04d72c3583078cad5c"
+    },
+    {
+      "path": "backend/internal/service/upstream_merge_framework_transition_test.go",
+      "predecessor_sha256s": [
+        "9da70966f4168afa5551c1e45fdbff02ad4967978363b148d944bb8f541a490b"
+      ],
+      "reason": "让 service 层框架冻结门禁消费既有 egress snapshot 收据和本次 v0.1.179 后继收据，只接受精确摘要三元组。",
+      "to_sha256": "ad36563747358488e97d46051d9ba626a3dad1a003a94d97eb881b3891d519da"
+    },
+    {
+      "path": "backend/internal/service/upstream_models.go",
+      "predecessor_sha256s": [
+        "9498a8a6c225fbe0dc16a0380aa38066e08d2afed01fe8ebbeaf7aaed23519f8"
+      ],
+      "reason": "承接上游模型目录与可用性元数据更新，同时保持 discovered_latest 不取得 production active 选择权。",
+      "to_sha256": "b1dc1214c904ceeb496ad885e54d6bdab6b27f6ca2ca6e30698caf55a068e9c7"
+    },
+    {
+      "path": "backend/internal/service/upstream_v0177_source_transition_test.go",
+      "predecessor_sha256s": [
+        "be6f0f8da0bd8afeec42c580467dfb7768a436a31d9a174fbea445e0f4829618"
+      ],
+      "reason": "让 v0.1.177 历史冻结门禁仅通过本次追加收据承接后继源码摘要，不覆盖旧上游收据。",
+      "to_sha256": "9d3c999478d408ba79e2edc653caceadc1cf264f194748a140a735e700e9f821"
+    },
+    {
+      "path": "backend/internal/service/upstream_v0179_source_transition_test.go",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "reason": "新增严格解码、自摘要、排序、当前源码摘要和精确 predecessor 校验，并让最新 v0.1.179 收据只通过已完整校验的历史链单向抵达 predecessor；冻结 60 个敏感路径且不改写历史收据。",
+      "to_sha256": "98c59518a91b7bfc702bb8ceb4094b0c6966f0069ac42b95449f640636e2316f"
+    },
+    {
+      "path": "backend/internal/service/wire.go",
+      "predecessor_sha256s": [
+        "9101d38edf45b13ae3bfdd218cadbcdd7b0a667f6a2b10ec9ad7650266d534b4"
+      ],
+      "reason": "承接上游依赖装配更新，同时保持官方出站 Registry、Selector、Executor、Token 与 Guard 的唯一生产接线。",
+      "to_sha256": "e3d10c78e558d12609c3394cb8b47e7cba66943f21a7dc190f0f71ade40aa528"
+    },
+    {
+      "path": "deploy/config.example.yaml",
+      "predecessor_sha256s": [
+        "58a1bff6653169a20f96a563be567b1ff4c9dfc2714d51d30f34472665cf8183"
+      ],
+      "reason": "同步上游公开配置示例中的监控、配额与渠道能力字段，不改变已批准官方客户端画像或激活状态。",
+      "to_sha256": "49775cee38da80ac703d331be9224c0865e2e05bc950b0d59375abe65988d564"
+    },
+    {
+      "path": "frontend/src/api/admin/settings.ts",
+      "predecessor_sha256s": [
+        "7303213d955c3df4fb03a1303b63ccf6d9286bbaad22f6d1b66a7bd170671cae"
+      ],
+      "reason": "同步上游管理端设置 API 类型，覆盖新增监控、配额与渠道能力字段，不涉及官方出站运行时选择。",
+      "to_sha256": "7600f4bc33683662bf9131aeec789785dfe886f5003a27df55403837d5a5e824"
+    },
+    {
+      "path": "frontend/src/i18n/locales/en/admin/settings.ts",
+      "predecessor_sha256s": [
+        "ce4e0ed303457b9eda1675db92b66b16e7e7b2b3a0181f3b390c81a538fc0afd"
+      ],
+      "reason": "同步上游英文管理设置文案，反映新增监控与渠道配置项，不改变任何 final-wire 行为。",
+      "to_sha256": "e75a8673c854042cc8404fa1ed01a0bd8ccf45834bd2acff2cf31a93495ee09d"
+    },
+    {
+      "path": "frontend/src/i18n/locales/zh/admin/settings.ts",
+      "predecessor_sha256s": [
+        "184ca062332bd9e9e6b1cc25c3ce701de9ba3085bec69ab181b6b7638ab3e56a"
+      ],
+      "reason": "同步上游中文管理设置文案，反映新增监控与渠道配置项，不改变任何 final-wire 行为。",
+      "to_sha256": "a696bc2ead944596efbf4ad93cee59ad4d1271ee84d5af0502575508d9c6f446"
+    },
+    {
+      "path": "frontend/src/views/admin/SettingsView.vue",
+      "predecessor_sha256s": [
+        "90e23e6f5bdf71dffd2d464fa6601b280cca63f126957e5ec1140eb26f9ee79d"
+      ],
+      "reason": "承接上游管理设置界面变化，展示新增监控与渠道配置项，不改变后端官方出站权威。",
+      "to_sha256": "f3d7d0d7bbb1e354be111bb63c2e34df28cd6e4060999fe26a7465b53dcfe9f6"
+    }
+  ],
+  "target_clients": {
+    "claude": "2.1.226",
+    "codex": "0.147.0"
+  },
+  "upstream_commit": "75f88be5f75c27771836b586f7de1503afa0e3bc",
+  "upstream_tag": "v0.1.179"
+}

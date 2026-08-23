@@ -22,7 +22,7 @@ const (
 	EndpointAlphaSearch          = gatewayendpoint.AlphaSearch
 	EndpointResponses            = gatewayendpoint.Responses
 	EndpointResponsesCompact     = gatewayendpoint.ResponsesCompact
-	EndpointResponsesInputTokens = "/v1/responses/input_tokens"
+	EndpointResponsesInputTokens = gatewayendpoint.ResponsesInputTokens
 	EndpointImagesGenerations    = gatewayendpoint.ImagesGenerations
 	EndpointImagesEdits          = gatewayendpoint.ImagesEdits
 	EndpointImageTasks           = gatewayendpoint.ImageTasks
@@ -80,28 +80,7 @@ const (
 // otherwise "/v1/responses" (a prefix of "/v1/responses/compact")
 // would erroneously match first.
 func NormalizeInboundEndpoint(path string) string {
-	path = strings.TrimSpace(path)
-	if strings.Contains(path, EndpointResponsesInputTokens) || isResponsesInputTokensAliasPath(path) {
-		return EndpointResponsesInputTokens
-	}
 	return gatewayendpoint.NormalizeInboundEndpoint(path)
-}
-
-func isResponsesInputTokensAliasPath(path string) bool {
-	trimmed := strings.TrimRight(strings.TrimSpace(path), "/")
-	if trimmed == "" {
-		return false
-	}
-	return isBareOrSubpathOf(trimmed, "/responses/input_tokens") ||
-		isBareOrSubpathOf(trimmed, "/backend-api/codex/responses/input_tokens")
-}
-
-// isBareOrSubpathOf reports whether path is exactly root, or a subpath
-// rooted at root (i.e. root followed by "/"). This anchors the match
-// at the start of path so it cannot match paths where root appears
-// nested under some other unrelated prefix.
-func isBareOrSubpathOf(path, root string) bool {
-	return path == root || strings.HasPrefix(path, root+"/")
 }
 
 // DeriveUpstreamEndpoint determines the upstream endpoint from the

@@ -171,7 +171,12 @@ func claudeFWHLegacyRetirementTransitionSupersedes(
 		}
 		for _, transition := range receipt.Transitions {
 			if transition.Path == path && transition.FromSHA256 == priorDigest &&
-				transition.ToSHA256 == currentDigest {
+				(transition.ToSHA256 == currentDigest ||
+					upstreamV0179SourceTransitionSupersedes(
+						path,
+						transition.ToSHA256,
+						currentDigest,
+					)) {
 				return true
 			}
 		}
@@ -196,6 +201,11 @@ func claudeFWHLegacyRetirementTransitionPrior(path string, currentDigest string)
 		for _, transition := range receipt.Transitions {
 			if transition.Path == path &&
 				(transition.ToSHA256 == currentDigest ||
+					upstreamV0179SourceTransitionSupersedes(
+						path,
+						transition.ToSHA256,
+						currentDigest,
+					) ||
 					claudeOfflineCIStabilizationTransitionSupersedes(
 						path, transition.ToSHA256, currentDigest,
 					)) {

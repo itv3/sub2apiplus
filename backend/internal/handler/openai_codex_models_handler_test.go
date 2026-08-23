@@ -318,11 +318,6 @@ func performCodexModelsRequest(t *testing.T, handler *OpenAIGatewayHandler, grou
 	return performCodexModelsRequestForPlatform(t, handler, groupID, service.PlatformOpenAI)
 }
 
-func performCodexModelsRequestForPlatform(t *testing.T, handler *OpenAIGatewayHandler, groupID int64, platform string) *httptest.ResponseRecorder {
-	t.Helper()
-	return performCodexModelsRequestForPlatform(t, handler, groupID, service.PlatformOpenAI)
-}
-
 func performCodexModelsRequestForPlatform(
 	t *testing.T,
 	handler *OpenAIGatewayHandler,

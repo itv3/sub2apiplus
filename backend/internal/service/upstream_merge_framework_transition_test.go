@@ -102,13 +102,24 @@ func upstreamMergeFrameworkTransitionSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if upstreamMergeEgressSnapshotTransitionSupersedesService(
+		path, priorDigest, currentDigest,
+	) || upstreamV0179SourceTransitionSupersedesService(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	receipt, err := loadUpstreamMergeFrameworkServiceReceipt()
 	if err != nil {
 		return false
 	}
 	for _, transition := range receipt.Transitions {
-		if transition.Path == path && transition.ToSHA256 == currentDigest &&
-			slices.Contains(transition.PredecessorSHA256s, priorDigest) {
+		if transition.Path == path &&
+			slices.Contains(transition.PredecessorSHA256s, priorDigest) &&
+			(transition.ToSHA256 == currentDigest ||
+				upstreamV0179SourceTransitionSupersedesService(
+					path, transition.ToSHA256, currentDigest,
+				)) {
 			return true
 		}
 	}

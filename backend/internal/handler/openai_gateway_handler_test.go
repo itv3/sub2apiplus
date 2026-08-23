@@ -796,16 +796,19 @@ func TestOpenAIGatewayMessagesDispatchGateAllowsGrokGroups(t *testing.T) {
 	})
 }
 
-// Composite 分组的 allow_messages_dispatch 被保存逻辑强制清零，门禁必须按平台豁免，
-// 否则 Anthropic 协议 /v1/messages 永远无法调度到 OpenAI/Grok 上游。
-func TestOpenAIGatewayMessagesDispatchGateAllowsCompositeGroups(t *testing.T) {
+// Composite 分组的 allow_messages_dispatch 被保存逻辑强制清零，门禁必须按已解析目标平台决策：
+// Grok/CN 目标豁免，OpenAI 或尚未解析的目标仍受开关控制。
+func TestOpenAIGatewayMessagesDispatchGateUsesCompositeResolvedTarget(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	newCompositeContext := func(t *testing.T, body string) (*httptest.ResponseRecorder, *gin.Context) {
+	newCompositeContext := func(t *testing.T, body string, resolvedPlatform string) (*httptest.ResponseRecorder, *gin.Context) {
 		t.Helper()
 		rec := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(rec)
 		c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+		if resolvedPlatform != "" {
+			c.Request = c.Request.WithContext(service.WithResolvedTargetPlatform(c.Request.Context(), resolvedPlatform))
+		}
 		groupID := int64(4103)
 		c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
 			ID:      5103,
@@ -821,38 +824,60 @@ func TestOpenAIGatewayMessagesDispatchGateAllowsCompositeGroups(t *testing.T) {
 		return rec, c
 	}
 
-	t.Run("composite_group_with_openai_model_passes_dispatch_gate", func(t *testing.T) {
-		rec, c := newCompositeContext(t, `{"model":"gpt-5.4","messages":[{"role":"user","content":"hi"}]}`)
+	t.Run("composite_group_with_openai_target_is_rejected", func(t *testing.T) {
+		rec, c := newCompositeContext(t, `{"model":"gpt-5.4","messages":[{"role":"user","content":"hi"}]}`, service.PlatformOpenAI)
 
 		h := &OpenAIGatewayHandler{}
 		h.Messages(c)
 
-		require.Equal(t, http.StatusServiceUnavailable, rec.Code)
-		require.Equal(t, "api_error", gjson.GetBytes(rec.Body.Bytes(), "error.type").String())
-		require.NotContains(t, rec.Body.String(), "This group does not allow /v1/messages dispatch")
+		require.Equal(t, http.StatusForbidden, rec.Code)
+		require.Contains(t, rec.Body.String(), "This group does not allow /v1/messages dispatch")
 	})
 
-	t.Run("composite_group_with_grok_model_passes_dispatch_gate", func(t *testing.T) {
-		rec, c := newCompositeContext(t, `{"model":"grok-4.3","messages":[{"role":"user","content":"hi"}]}`)
+	t.Run("composite_group_without_resolved_target_is_rejected", func(t *testing.T) {
+		rec, c := newCompositeContext(t, `{"model":"grok-4.3","messages":[{"role":"user","content":"hi"}]}`, "")
 
 		h := &OpenAIGatewayHandler{}
 		h.Messages(c)
 
-		require.Equal(t, http.StatusServiceUnavailable, rec.Code)
-		require.Equal(t, "api_error", gjson.GetBytes(rec.Body.Bytes(), "error.type").String())
-		require.NotContains(t, rec.Body.String(), "This group does not allow /v1/messages dispatch")
+		require.Equal(t, http.StatusForbidden, rec.Code)
+		require.Contains(t, rec.Body.String(), "This group does not allow /v1/messages dispatch")
 	})
+
+	for _, tc := range []struct {
+		name     string
+		model    string
+		platform string
+	}{
+		{name: "grok_target_passes_dispatch_gate", model: "grok-4.3", platform: service.PlatformGrok},
+		{name: "cn_target_passes_dispatch_gate", model: "deepseek-v3.2", platform: service.PlatformDeepseek},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec, c := newCompositeContext(t, `{"model":"`+tc.model+`","messages":[{"role":"user","content":"hi"}]}`, tc.platform)
+
+			h := &OpenAIGatewayHandler{}
+			h.Messages(c)
+
+			require.Equal(t, http.StatusServiceUnavailable, rec.Code)
+			require.Equal(t, "api_error", gjson.GetBytes(rec.Body.Bytes(), "error.type").String())
+			require.NotContains(t, rec.Body.String(), "This group does not allow /v1/messages dispatch")
+		})
+	}
 }
 
-// count_tokens 与 Messages 共用同一门禁语义：OpenAI 分组受开关控制，Composite 豁免。
+// count_tokens 与 Messages 共用同一门禁语义：OpenAI 分组受开关控制，
+// Composite 仅在已解析到 Grok/CN 目标时豁免。
 func TestOpenAICountTokensDispatchGate(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	newCountTokensContext := func(t *testing.T, platform string, groupID int64) (*httptest.ResponseRecorder, *gin.Context) {
+	newCountTokensContext := func(t *testing.T, platform string, groupID int64, resolvedPlatform string) (*httptest.ResponseRecorder, *gin.Context) {
 		t.Helper()
 		rec := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(rec)
 		c.Request = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(`{"model":"gpt-5.4","messages":[{"role":"user","content":"hi"}]}`))
+		if resolvedPlatform != "" {
+			c.Request = c.Request.WithContext(service.WithResolvedTargetPlatform(c.Request.Context(), resolvedPlatform))
+		}
 		c.Set(string(middleware.ContextKeyAPIKey), &service.APIKey{
 			ID:      5104,
 			GroupID: &groupID,
@@ -868,7 +893,7 @@ func TestOpenAICountTokensDispatchGate(t *testing.T) {
 	}
 
 	t.Run("openai_group_without_dispatch_flag_is_rejected", func(t *testing.T) {
-		rec, c := newCountTokensContext(t, service.PlatformOpenAI, 4104)
+		rec, c := newCountTokensContext(t, service.PlatformOpenAI, 4104, "")
 
 		h := &OpenAIGatewayHandler{}
 		h.CountTokens(c)
@@ -877,15 +902,30 @@ func TestOpenAICountTokensDispatchGate(t *testing.T) {
 		require.Contains(t, rec.Body.String(), "This group does not allow /v1/messages dispatch")
 	})
 
-	t.Run("composite_group_passes_dispatch_gate", func(t *testing.T) {
-		rec, c := newCountTokensContext(t, service.PlatformComposite, 4105)
+	for _, tc := range []struct {
+		name             string
+		resolvedPlatform string
+		expectedStatus   int
+	}{
+		{name: "composite_openai_target_is_rejected", resolvedPlatform: service.PlatformOpenAI, expectedStatus: http.StatusForbidden},
+		{name: "composite_without_resolved_target_is_rejected", expectedStatus: http.StatusForbidden},
+		{name: "composite_grok_target_passes_dispatch_gate", resolvedPlatform: service.PlatformGrok, expectedStatus: http.StatusServiceUnavailable},
+		{name: "composite_cn_target_passes_dispatch_gate", resolvedPlatform: service.PlatformDeepseek, expectedStatus: http.StatusServiceUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec, c := newCountTokensContext(t, service.PlatformComposite, 4105, tc.resolvedPlatform)
 
-		h := &OpenAIGatewayHandler{}
-		h.CountTokens(c)
+			h := &OpenAIGatewayHandler{}
+			h.CountTokens(c)
 
-		require.Equal(t, http.StatusServiceUnavailable, rec.Code)
-		require.NotContains(t, rec.Body.String(), "This group does not allow /v1/messages dispatch")
-	})
+			require.Equal(t, tc.expectedStatus, rec.Code)
+			if tc.expectedStatus == http.StatusForbidden {
+				require.Contains(t, rec.Body.String(), "This group does not allow /v1/messages dispatch")
+			} else {
+				require.NotContains(t, rec.Body.String(), "This group does not allow /v1/messages dispatch")
+			}
+		})
+	}
 }
 
 func TestOpenAIModelMappedBody(t *testing.T) {
