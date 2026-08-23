@@ -16,20 +16,21 @@ import (
 // ──────────────────────────────────────────────────────────
 
 const (
-	EndpointMessages          = gatewayendpoint.Messages
-	EndpointChatCompletions   = gatewayendpoint.ChatCompletions
-	EndpointEmbeddings        = gatewayendpoint.Embeddings
-	EndpointAlphaSearch       = gatewayendpoint.AlphaSearch
-	EndpointResponses         = gatewayendpoint.Responses
-	EndpointResponsesCompact  = gatewayendpoint.ResponsesCompact
-	EndpointImagesGenerations = gatewayendpoint.ImagesGenerations
-	EndpointImagesEdits       = gatewayendpoint.ImagesEdits
-	EndpointImageTasks        = gatewayendpoint.ImageTasks
-	EndpointVideosGenerations = gatewayendpoint.VideosGenerations
-	EndpointVideosEdits       = gatewayendpoint.VideosEdits
-	EndpointVideosExtensions  = gatewayendpoint.VideosExtensions
-	EndpointVideos            = gatewayendpoint.Videos
-	EndpointGeminiModels      = gatewayendpoint.GeminiModels
+	EndpointMessages             = gatewayendpoint.Messages
+	EndpointChatCompletions      = gatewayendpoint.ChatCompletions
+	EndpointEmbeddings           = gatewayendpoint.Embeddings
+	EndpointAlphaSearch          = gatewayendpoint.AlphaSearch
+	EndpointResponses            = gatewayendpoint.Responses
+	EndpointResponsesCompact     = gatewayendpoint.ResponsesCompact
+	EndpointResponsesInputTokens = "/v1/responses/input_tokens"
+	EndpointImagesGenerations    = gatewayendpoint.ImagesGenerations
+	EndpointImagesEdits          = gatewayendpoint.ImagesEdits
+	EndpointImageTasks           = gatewayendpoint.ImageTasks
+	EndpointVideosGenerations    = gatewayendpoint.VideosGenerations
+	EndpointVideosEdits          = gatewayendpoint.VideosEdits
+	EndpointVideosExtensions     = gatewayendpoint.VideosExtensions
+	EndpointVideos               = gatewayendpoint.Videos
+	EndpointGeminiModels         = gatewayendpoint.GeminiModels
 )
 
 const EndpointAntigravityGenerateContent = "/v1internal:streamGenerateContent"
@@ -79,7 +80,28 @@ const (
 // otherwise "/v1/responses" (a prefix of "/v1/responses/compact")
 // would erroneously match first.
 func NormalizeInboundEndpoint(path string) string {
+	path = strings.TrimSpace(path)
+	if strings.Contains(path, EndpointResponsesInputTokens) || isResponsesInputTokensAliasPath(path) {
+		return EndpointResponsesInputTokens
+	}
 	return gatewayendpoint.NormalizeInboundEndpoint(path)
+}
+
+func isResponsesInputTokensAliasPath(path string) bool {
+	trimmed := strings.TrimRight(strings.TrimSpace(path), "/")
+	if trimmed == "" {
+		return false
+	}
+	return isBareOrSubpathOf(trimmed, "/responses/input_tokens") ||
+		isBareOrSubpathOf(trimmed, "/backend-api/codex/responses/input_tokens")
+}
+
+// isBareOrSubpathOf reports whether path is exactly root, or a subpath
+// rooted at root (i.e. root followed by "/"). This anchors the match
+// at the start of path so it cannot match paths where root appears
+// nested under some other unrelated prefix.
+func isBareOrSubpathOf(path, root string) bool {
+	return path == root || strings.HasPrefix(path, root+"/")
 }
 
 // DeriveUpstreamEndpoint determines the upstream endpoint from the
@@ -101,7 +123,7 @@ func DeriveUpstreamEndpoint(inbound, rawRequestPath, platform string) string {
 
 	switch platform {
 	case service.PlatformOpenAI, service.PlatformGrok:
-		if inbound == EndpointEmbeddings || inbound == EndpointAlphaSearch || inbound == EndpointImagesGenerations || inbound == EndpointImagesEdits || inbound == EndpointVideosGenerations || inbound == EndpointVideosEdits || inbound == EndpointVideosExtensions || inbound == EndpointVideos {
+		if inbound == EndpointEmbeddings || inbound == EndpointAlphaSearch || inbound == EndpointResponsesInputTokens || inbound == EndpointImagesGenerations || inbound == EndpointImagesEdits || inbound == EndpointVideosGenerations || inbound == EndpointVideosEdits || inbound == EndpointVideosExtensions || inbound == EndpointVideos {
 			return inbound
 		}
 		// OpenAI forwards everything to the Responses API.

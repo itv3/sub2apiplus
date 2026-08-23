@@ -438,10 +438,24 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifest(
 		}
 		setOpenAIChatGPTAccountHeaders(headers, credAccount)
 	}
-	// 官方 models 端点层不设 accept，由 reqwest 补默认 */*（规格表 SPEC-HDR-006）。
-	headers.Set("Accept", "*/*")
-	applyOpenAICodexAuxiliaryHeaders(headers)
-	headers.Set("Version", requestedClientVersion)
+	if useAPIKeyUpstream {
+		// 自定义 API Key 上游不属于官方 OAuth persona，保留上游通用 JSON 协商，
+		// 同时校验客户端版本，避免把陈旧 version 头发送给兼容端点。
+		headers.Set("Accept", "application/json")
+		identity := resolveCodexOutboundIdentity("")
+		headers.Set("Originator", identity.originator)
+		headers.Set("User-Agent", identity.userAgent)
+		headerVersion := NormalizeCodexClientVersion(requestedClientVersion)
+		if headerVersion == "" || CompareVersions(headerVersion, codexUpstreamMinVersion) < 0 {
+			headerVersion = identity.version
+		}
+		headers.Set("Version", headerVersion)
+	} else {
+		// 官方 models 端点层不设 accept，由 reqwest 补默认 */*（规格表 SPEC-HDR-006）。
+		headers.Set("Accept", "*/*")
+		applyOpenAICodexAuxiliaryHeaders(headers)
+		headers.Set("Version", requestedClientVersion)
+	}
 
 	proxyURL := ""
 	if account.ProxyID != nil && account.Proxy != nil {

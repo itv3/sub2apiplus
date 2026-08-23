@@ -28,7 +28,7 @@ func (h *OpenAIGatewayHandler) CodexModels(c *gin.Context) {
 	}
 	if apiKey.Group.Platform != service.PlatformOpenAI &&
 		apiKey.Group.Platform != service.PlatformComposite {
-		h.errorResponse(c, http.StatusNotFound, "not_found_error", "Codex models manifest is only available for OpenAI groups")
+		h.errorResponse(c, http.StatusNotFound, "not_found_error", "Codex models manifest is only available for OpenAI and Composite groups")
 		return
 	}
 

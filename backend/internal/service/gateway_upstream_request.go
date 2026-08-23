@@ -26,6 +26,7 @@ func (s *GatewayService) buildUpstreamRequest(ctx context.Context, c *gin.Contex
 	if account.Platform == PlatformAnthropic && account.Type == AccountTypeOAuth {
 		return nil, nil, errors.New("Claude OAuth 旧 Messages 构造链已退休，必须使用 strict ReleaseBundle")
 	}
+	body = stripDeferredToolCacheControl(body)
 	if account.Platform == PlatformAnthropic && account.Type == AccountTypeServiceAccount {
 		req, err := s.buildUpstreamRequestAnthropicVertex(ctx, c, account, body, token, modelID, reqStream)
 		return req, body, err
