@@ -148,7 +148,7 @@ func (p *OpenAITokenProvider) GetAccessToken(ctx context.Context, account *Accou
 			slog.Debug("openai_token_cache_hit", "account_id", account.ID)
 			return token, nil
 		} else if err != nil {
-			slog.Warn("openai_token_cache_get_failed", "account_id", account.ID, "error", err)
+			logTokenCacheFailure("openai_token_cache_get_failed", account.ID, err)
 		}
 	}
 
@@ -212,7 +212,7 @@ func (p *OpenAITokenProvider) GetAccessToken(ctx context.Context, account *Accou
 		} else if lockErr != nil {
 			p.metrics.lockAcquireFailure.Add(1)
 			p.metrics.touchNow()
-			slog.Warn("openai_token_lock_failed", "account_id", account.ID, "error", lockErr)
+			logTokenCacheFailure("openai_token_lock_failed", account.ID, lockErr)
 		} else {
 			p.metrics.lockContention.Add(1)
 			p.metrics.touchNow()
@@ -262,7 +262,7 @@ func (p *OpenAITokenProvider) GetAccessToken(ctx context.Context, account *Accou
 				}
 			}
 			if err := p.tokenCache.SetAccessToken(ctx, cacheKey, accessToken, ttl); err != nil {
-				slog.Warn("openai_token_cache_set_failed", "account_id", account.ID, "error", err)
+				logTokenCacheFailure("openai_token_cache_set_failed", account.ID, err)
 			}
 		}
 	}
@@ -294,10 +294,7 @@ func (p *OpenAITokenProvider) disableAccountMissingRefreshToken(account *Account
 	if p.tokenCache != nil {
 		cacheKey := OpenAITokenCacheKey(account)
 		if err := p.tokenCache.DeleteAccessToken(bgCtx, cacheKey); err != nil {
-			slog.Warn("openai_token_provider.cache_delete_failed",
-				"account_id", account.ID,
-				"error", err,
-			)
+			logTokenCacheFailure("openai_token_provider.cache_delete_failed", account.ID, err)
 		}
 	}
 	slog.Warn("openai_token_provider.account_disabled_missing_refresh_token",

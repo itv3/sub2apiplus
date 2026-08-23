@@ -70,7 +70,5 @@ func (s *DeferredService) flushLastUsed() {
 		for id, ts := range updates {
 			s.lastUsedUpdates.Store(id, ts)
 		}
-	} else {
-		log.Printf("[DeferredService] BatchUpdateLastUsed flushed %d accounts", len(updates))
 	}
 }

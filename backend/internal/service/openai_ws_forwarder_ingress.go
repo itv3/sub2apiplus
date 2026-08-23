@@ -26,6 +26,17 @@ func (s *OpenAIGatewayService) openAIWSIngressInterTurnIdleTimeout() time.Durati
 	return time.Duration(s.cfg.Gateway.OpenAIWS.IngressInterTurnIdleTimeoutSeconds) * time.Second
 }
 
+type openAIWSLeaseRetirementAware interface {
+	ShouldRetire() bool
+}
+
+// shouldRetireOpenAIWSLease 采用可选能力探测，既让真实连接在轮次边界主动换连，
+// 又不扩大 openAIWSLeaseSession 接口，避免测试替身和其他传输适配器被迫实现池内状态。
+func shouldRetireOpenAIWSLease(lease openAIWSLeaseSession) bool {
+	retirementAware, ok := lease.(openAIWSLeaseRetirementAware)
+	return ok && retirementAware.ShouldRetire()
+}
+
 // newOpenAIWSDownstreamWriteContext binds writes directly to the client
 // lifecycle while excluding the separate ingress-lease cancellation signal.
 // This lets a lease-loss path finish its current client write before
@@ -1561,119 +1572,143 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 				unpinSessionConn(sessionConnID)
 			}
 		}
-		shouldPreflightPing := turn > 1 && sessionLease != nil && sessionLease.SupportsIdlePingWithoutReader() && turnRetry == 0
+		retireBeforeTurn := turn > 1 && sessionLease != nil &&
+			turnRetry == 0 && shouldRetireOpenAIWSLease(sessionLease)
+		shouldPreflightPing := turn > 1 && sessionLease != nil &&
+			!retireBeforeTurn && sessionLease.SupportsIdlePingWithoutReader() && turnRetry == 0
 		if shouldPreflightPing && openAIWSIngressPreflightPingIdle > 0 && !lastTurnFinishedAt.IsZero() {
 			if time.Since(lastTurnFinishedAt) < openAIWSIngressPreflightPingIdle {
 				shouldPreflightPing = false
 			}
 		}
-		if shouldPreflightPing {
-			if pingErr := sessionLease.PingWithTimeout(openAIWSConnHealthCheckTO); pingErr != nil {
+		var preflightErr error
+		preflightTrigger := ""
+		if retireBeforeTurn {
+			preflightErr = errOpenAIWSConnRetiring
+			preflightTrigger = "connection_retiring"
+			logOpenAIWSModeInfo(
+				"ingress_ws_upstream_retire_before_turn account_id=%d turn=%d conn_id=%s",
+				account.ID,
+				turn,
+				truncateOpenAIWSLogValue(sessionConnID, openAIWSIDValueMaxLen),
+			)
+		} else if shouldPreflightPing {
+			preflightErr = sessionLease.PingWithTimeout(openAIWSConnHealthCheckTO)
+			preflightTrigger = "ping_failed"
+			if preflightErr != nil {
 				logOpenAIWSModeInfo(
 					"ingress_ws_upstream_preflight_ping_fail account_id=%d turn=%d conn_id=%s cause=%s",
 					account.ID,
 					turn,
 					truncateOpenAIWSLogValue(sessionConnID, openAIWSIDValueMaxLen),
-					truncateOpenAIWSLogValue(pingErr.Error(), openAIWSLogValueMaxLen),
+					truncateOpenAIWSLogValue(preflightErr.Error(), openAIWSLogValueMaxLen),
 				)
-				if forcePreferredConn {
-					// 携带 function_call_output 的请求不能丢弃 previous_response_id：
-					// 上游 API 需要 response chain 来匹配 tool_result 与之前的 tool_use，
-					// 除非 replay input 已经包含与每个 tool_result 匹配的 tool_use 上下文。
-					hasFCOutput := hasFunctionCallOutput
-					hasReplayToolContext := hasFCOutput &&
-						currentTurnReplayInputExists &&
-						openAIWSRawItemsHaveToolCallContextForOutputs(currentTurnReplayInput)
-					preserveOfficialChain := shouldPreserveOpenAIOfficialEgressWSPreviousResponseID(
-						ctx,
-						currentPreviousResponseID,
-						expectedPrev,
-					)
-					if !preserveOfficialChain &&
-						!turnPrevRecoveryTried &&
-						currentPreviousResponseID != "" &&
-						(!hasFCOutput || hasReplayToolContext) {
-						updatedPayload, removed, dropErr := dropPreviousResponseIDFromRawPayload(currentPayload)
-						if dropErr != nil || !removed {
-							reason := "not_removed"
-							if dropErr != nil {
-								reason = "drop_error"
-							}
-							logOpenAIWSModeInfo(
-								"ingress_ws_preflight_ping_recovery_skip account_id=%d turn=%d conn_id=%s reason=%s previous_response_id=%s",
-								account.ID,
-								turn,
-								truncateOpenAIWSLogValue(sessionConnID, openAIWSIDValueMaxLen),
-								normalizeOpenAIWSLogValue(reason),
-								truncateOpenAIWSLogValue(currentPreviousResponseID, openAIWSIDValueMaxLen),
-							)
-						} else {
-							updatedWithInput, setInputErr := setOpenAIWSPayloadInputSequence(
-								updatedPayload,
-								currentTurnReplayInput,
-								currentTurnReplayInputExists,
-							)
-							if setInputErr != nil {
-								logOpenAIWSModeInfo(
-									"ingress_ws_preflight_ping_recovery_skip account_id=%d turn=%d conn_id=%s reason=set_full_input_error previous_response_id=%s cause=%s",
-									account.ID,
-									turn,
-									truncateOpenAIWSLogValue(sessionConnID, openAIWSIDValueMaxLen),
-									truncateOpenAIWSLogValue(currentPreviousResponseID, openAIWSIDValueMaxLen),
-									truncateOpenAIWSLogValue(setInputErr.Error(), openAIWSLogValueMaxLen),
-								)
-							} else {
-								logOpenAIWSModeInfo(
-									"ingress_ws_preflight_ping_recovery account_id=%d turn=%d conn_id=%s action=drop_previous_response_id_retry previous_response_id=%s has_function_call_output=%v has_replay_tool_context=%v",
-									account.ID,
-									turn,
-									truncateOpenAIWSLogValue(sessionConnID, openAIWSIDValueMaxLen),
-									truncateOpenAIWSLogValue(currentPreviousResponseID, openAIWSIDValueMaxLen),
-									hasFCOutput,
-									hasReplayToolContext,
-								)
-								turnPrevRecoveryTried = true
-								currentPayload = updatedWithInput
-								currentPayloadBytes = len(updatedWithInput)
-								resetSessionLease(true)
-								skipBeforeTurn = true
-								continue
-							}
-						}
-					}
-					if hasFCOutput && currentPreviousResponseID != "" {
-						reason := "function_call_output_missing_replay_context"
-						if hasReplayToolContext {
-							reason = "function_call_output_replay_not_applied"
+			}
+		}
+		if preflightErr != nil {
+			if forcePreferredConn {
+				// 携带 function_call_output 的请求不能丢弃 previous_response_id：
+				// 上游 API 需要 response chain 来匹配 tool_result 与之前的 tool_use，
+				// 除非 replay input 已经包含与每个 tool_result 匹配的 tool_use 上下文。
+				// 主动退休是确定性的换连边界；此时完整回放可以开启新链，不能继续
+				// 因官方上一轮锚点有效而强行保留旧连接专属的 previous_response_id。
+				hasFCOutput := hasFunctionCallOutput
+				hasReplayToolContext := hasFCOutput &&
+					currentTurnReplayInputExists &&
+					openAIWSRawItemsHaveToolCallContextForOutputs(currentTurnReplayInput)
+				preserveOfficialChain := shouldPreserveOpenAIOfficialEgressWSPreviousResponseID(
+					ctx,
+					currentPreviousResponseID,
+					expectedPrev,
+				) && !retireBeforeTurn
+				if !preserveOfficialChain &&
+					!turnPrevRecoveryTried &&
+					currentPreviousResponseID != "" &&
+					(!hasFCOutput || hasReplayToolContext) {
+					updatedPayload, removed, dropErr := dropPreviousResponseIDFromRawPayload(currentPayload)
+					if dropErr != nil || !removed {
+						reason := "not_removed"
+						if dropErr != nil {
+							reason = "drop_error"
 						}
 						logOpenAIWSModeInfo(
-							"ingress_ws_preflight_ping_recovery_skip account_id=%d turn=%d conn_id=%s reason=%s action=fail_close previous_response_id=%s has_replay_tool_context=%v",
+							"ingress_ws_preflight_ping_recovery_skip account_id=%d turn=%d conn_id=%s trigger=%s reason=%s previous_response_id=%s",
 							account.ID,
 							turn,
 							truncateOpenAIWSLogValue(sessionConnID, openAIWSIDValueMaxLen),
-							reason,
+							preflightTrigger,
+							normalizeOpenAIWSLogValue(reason),
 							truncateOpenAIWSLogValue(currentPreviousResponseID, openAIWSIDValueMaxLen),
-							hasReplayToolContext,
 						)
+					} else {
+						updatedWithInput, setInputErr := setOpenAIWSPayloadInputSequence(
+							updatedPayload,
+							currentTurnReplayInput,
+							currentTurnReplayInputExists,
+						)
+						if setInputErr != nil {
+							logOpenAIWSModeInfo(
+								"ingress_ws_preflight_ping_recovery_skip account_id=%d turn=%d conn_id=%s trigger=%s reason=set_full_input_error previous_response_id=%s cause=%s",
+								account.ID,
+								turn,
+								truncateOpenAIWSLogValue(sessionConnID, openAIWSIDValueMaxLen),
+								preflightTrigger,
+								truncateOpenAIWSLogValue(currentPreviousResponseID, openAIWSIDValueMaxLen),
+								truncateOpenAIWSLogValue(setInputErr.Error(), openAIWSLogValueMaxLen),
+							)
+						} else {
+							logOpenAIWSModeInfo(
+								"ingress_ws_preflight_ping_recovery account_id=%d turn=%d conn_id=%s trigger=%s action=drop_previous_response_id_retry previous_response_id=%s has_function_call_output=%v has_replay_tool_context=%v",
+								account.ID,
+								turn,
+								truncateOpenAIWSLogValue(sessionConnID, openAIWSIDValueMaxLen),
+								preflightTrigger,
+								truncateOpenAIWSLogValue(currentPreviousResponseID, openAIWSIDValueMaxLen),
+								hasFCOutput,
+								hasReplayToolContext,
+							)
+							turnPrevRecoveryTried = true
+							currentPayload = updatedWithInput
+							currentPayloadBytes = len(updatedWithInput)
+							resetSessionLease(true)
+							skipBeforeTurn = true
+							continue
+						}
 					}
-					resetSessionLease(true)
-					return NewOpenAIWSClientCloseError(
-						coderws.StatusPolicyViolation,
-						"upstream continuation connection is unavailable; please restart the conversation",
-						pingErr,
+				}
+				if hasFCOutput && currentPreviousResponseID != "" {
+					reason := "function_call_output_missing_replay_context"
+					if hasReplayToolContext {
+						reason = "function_call_output_replay_not_applied"
+					}
+					logOpenAIWSModeInfo(
+						"ingress_ws_preflight_ping_recovery_skip account_id=%d turn=%d conn_id=%s trigger=%s reason=%s action=fail_close previous_response_id=%s has_replay_tool_context=%v",
+						account.ID,
+						turn,
+						truncateOpenAIWSLogValue(sessionConnID, openAIWSIDValueMaxLen),
+						preflightTrigger,
+						reason,
+						truncateOpenAIWSLogValue(currentPreviousResponseID, openAIWSIDValueMaxLen),
+						hasReplayToolContext,
 					)
 				}
 				resetSessionLease(true)
+				return NewOpenAIWSClientCloseError(
+					coderws.StatusPolicyViolation,
+					"upstream continuation connection is unavailable; please restart the conversation",
+					preflightErr,
+				)
+			}
+			resetSessionLease(true)
 
-				acquiredLease, acquireErr := acquireTurnLease(turn, preferredConnID, forcePreferredConn)
-				if acquireErr != nil {
-					return fmt.Errorf("acquire upstream websocket after preflight ping fail: %w", acquireErr)
-				}
-				sessionLease = acquiredLease
-				sessionConnID = strings.TrimSpace(sessionLease.ConnID())
-				if storeDisabled {
-					pinSessionConn(sessionConnID)
-				}
+			acquiredLease, acquireErr := acquireTurnLease(turn, preferredConnID, forcePreferredConn)
+			if acquireErr != nil {
+				return fmt.Errorf("acquire upstream websocket after preflight check: %w", acquireErr)
+			}
+			sessionLease = acquiredLease
+			sessionConnID = strings.TrimSpace(sessionLease.ConnID())
+			if storeDisabled {
+				pinSessionConn(sessionConnID)
 			}
 		}
 		connID := sessionConnID

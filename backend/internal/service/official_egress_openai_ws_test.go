@@ -487,10 +487,27 @@ func TestOpenAIOfficialEgressWSDerivesKiloIdentityAndCanonicalFrame(t *testing.T
 		"client_metadata.turn_id",
 	).String()
 	require.Equal(t, toolRequestTurnID, fullHistoryTurnID)
+	fullHistoryPayload, err := decodeOfficialJSONObjectUseNumber(fullHistoryFinal)
+	require.NoError(t, err)
+	fullHistoryInput, ok := fullHistoryPayload["input"].([]any)
+	require.True(t, ok)
+	currentToolOutput, ok := fullHistoryInput[len(fullHistoryInput)-1].(map[string]any)
+	require.True(t, ok)
+	historicalToolOutput := cloneOfficialOpenAIMap(currentToolOutput)
+	historicalToolOutput["call_id"] = "call_kilo_ws_historical"
+	historicalToolOutput[officialOpenAIWSItemTurnMetadata] = map[string]any{
+		"turn_id": "bee3cd38-4511-4497-899e-f19f04f953fd",
+	}
+	fullHistoryPayload["input"] = []any{historicalToolOutput, currentToolOutput}
+	fullHistoryMetadata, ok := fullHistoryPayload["client_metadata"].(map[string]any)
+	require.True(t, ok)
+	fullHistoryMetadata[openAIWSTurnStateHeader] = "turn-state-kilo-current"
+	fullHistoryWithHistoricalOutput, err := json.Marshal(fullHistoryPayload)
+	require.NoError(t, err)
 	toolDelta, changed, err :=
 		buildDerivedOpenAIOfficialEgressWSToolContinuationFrame(
 			ctx,
-			fullHistoryFinal,
+			fullHistoryWithHistoricalOutput,
 			"resp_kilo_ws_tool_parent",
 		)
 	require.NoError(t, err)
@@ -523,6 +540,11 @@ func TestOpenAIOfficialEgressWSDerivesKiloIdentityAndCanonicalFrame(t *testing.T
 			toolDelta,
 			"input.0."+officialOpenAIWSItemTurnMetadata+".turn_id",
 		).String(),
+	)
+	require.Equal(
+		t,
+		"turn-state-kilo-current",
+		gjson.GetBytes(toolDelta, "client_metadata."+openAIWSTurnStateHeader).String(),
 	)
 
 	newChain, changed, err :=

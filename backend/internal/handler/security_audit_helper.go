@@ -130,7 +130,7 @@ func logSecurityAuditStart(reqLog *zap.Logger, request securityaudit.Request, bo
 	if reqLog == nil {
 		return
 	}
-	reqLog.Info("security_audit.gateway_check_start",
+	reqLog.Debug("security_audit.gateway_check_start",
 		zap.String("request_id", request.RequestID), zap.Int64("user_id", request.UserID),
 		zap.Int64("api_key_id", request.APIKeyID), zap.Int64p("group_id", request.GroupID),
 		zap.String("endpoint", request.Endpoint), zap.String("provider", request.Provider),
@@ -142,10 +142,16 @@ func logSecurityAuditDone(reqLog *zap.Logger, request securityaudit.Request, dec
 	if reqLog == nil {
 		return
 	}
-	reqLog.Info("security_audit.gateway_check_done",
+	fields := []zap.Field{
 		zap.String("request_id", request.RequestID), zap.String("decision", string(decision.Kind)),
 		zap.String("error_code", decision.ErrorCode), zap.Bool("allow_next_stage", decision.AllowNextStage),
-		zap.String("stage", request.Stage), zap.Bool("cached", cached))
+		zap.String("stage", request.Stage), zap.Bool("cached", cached),
+	}
+	if decision.AllowNextStage && decision.ErrorCode == "" {
+		reqLog.Debug("security_audit.gateway_check_done", fields...)
+		return
+	}
+	reqLog.Info("security_audit.gateway_check_done", fields...)
 }
 
 func securityAuditWSTurn(c *gin.Context) (int, bool) {

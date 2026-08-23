@@ -63,6 +63,64 @@ func TestOpenAIWSConnPool_AcquireCleanupInterval(t *testing.T) {
 	require.Less(t, openAIWSAcquireCleanupInterval, openAIWSBackgroundSweepTicker)
 }
 
+func TestOpenAIWSConnPool_RetiresBeforeUpstreamHardLimit(t *testing.T) {
+	require.Equal(t, 60*time.Minute, openAIWSUpstreamConnMaxAge)
+	require.Equal(t, 5*time.Minute, openAIWSConnRetireMargin)
+	require.Equal(t, 55*time.Minute, openAIWSConnMaxAge)
+
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 2
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 2
+	pool := newOpenAIWSConnPool(cfg)
+	accountID := int64(11)
+	ap := pool.getOrCreateAccountPool(accountID)
+	now := time.Now()
+
+	young := newOpenAIWSConn("young", accountID, &openAIWSFakeConn{}, nil)
+	young.createdAtNano.Store(now.Add(-openAIWSConnMaxAge + time.Second).UnixNano())
+	retiring := newOpenAIWSConn("retiring", accountID, &openAIWSFakeConn{}, nil)
+	retiring.createdAtNano.Store(now.Add(-openAIWSConnMaxAge - time.Second).UnixNano())
+	ap.conns[young.id] = young
+	ap.conns[retiring.id] = retiring
+
+	evicted := pool.cleanupAccountLocked(ap, now, pool.maxConnsHardCap())
+	closeOpenAIWSConns(evicted)
+	require.NotNil(t, ap.conns[young.id], "安全窗口内的连接仍可复用")
+	require.Nil(t, ap.conns[retiring.id], "连接必须在上游六十分钟硬限制前退休")
+}
+
+func TestOpenAIWSConnLease_ReleaseRetiresConnectionThatAgedWhileLeased(t *testing.T) {
+	cfg := &config.Config{}
+	cfg.Gateway.OpenAIWS.MaxConnsPerAccount = 1
+	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
+	pool := newOpenAIWSConnPool(cfg)
+	defer pool.Close()
+
+	accountID := int64(12)
+	ap := pool.getOrCreateAccountPool(accountID)
+	conn := newOpenAIWSConn("aged_while_leased", accountID, &openAIWSFakeConn{}, nil)
+	require.True(t, conn.tryAcquire())
+	conn.createdAtNano.Store(time.Now().Add(-openAIWSConnMaxAge - time.Second).UnixNano())
+	ap.conns[conn.id] = conn
+	ap.pinnedConns[conn.id] = 1
+
+	lease := &openAIWSConnLease{
+		pool:      pool,
+		accountID: accountID,
+		conn:      conn,
+	}
+	require.True(t, lease.ShouldRetire(), "持有期间跨过退休线的连接必须可被轮次边界识别")
+	lease.Release()
+
+	require.Nil(t, ap.conns[conn.id], "释放过期租约后连接不得重新进入空闲池")
+	require.Empty(t, ap.pinnedConns, "连接退休时必须同步清理残留亲和绑定")
+	select {
+	case <-conn.closedCh:
+	default:
+		t.Fatal("释放过期租约后底层连接必须关闭")
+	}
+}
+
 func TestNormalizeOpenAIWSRoutingAffinityPrefersCanonicalAndSortsVariants(t *testing.T) {
 	headers := http.Header{
 		"X-CODEX-ROUTING-HINT": []string{" variant-uppercase "},

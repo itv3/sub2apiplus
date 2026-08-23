@@ -1052,7 +1052,7 @@ func logOfficialEgressProfileResolved(egressContext *OfficialEgressContext, prof
 	if !profile.Enabled {
 		return
 	}
-	slog.Info("official_egress_profile_resolved", officialEgressRedactedLogAttributes(egressContext, profile)...)
+	slog.Debug("official_egress_profile_resolved", officialEgressRedactedLogAttributes(egressContext, profile)...)
 }
 
 func normalizeOfficialEgressHost(raw string) string {

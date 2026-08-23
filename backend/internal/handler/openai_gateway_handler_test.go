@@ -1765,6 +1765,26 @@ func TestShouldReportOpenAIWSProxyAccountFailure(t *testing.T) {
 	})
 }
 
+func TestOpenAIWSNormalCloseReason(t *testing.T) {
+	reason, ok := openAIWSNormalCloseReason(service.NewOpenAIWSClientCloseError(
+		coderws.StatusNormalClosure,
+		"done",
+		nil,
+	))
+	require.True(t, ok)
+	require.Equal(t, "done", reason)
+
+	reason, ok = openAIWSNormalCloseReason(coderws.CloseError{
+		Code:   coderws.StatusNormalClosure,
+		Reason: "client done",
+	})
+	require.True(t, ok)
+	require.Equal(t, "client done", reason)
+
+	_, ok = openAIWSNormalCloseReason(coderws.CloseError{Code: coderws.StatusPolicyViolation})
+	require.False(t, ok)
+}
+
 func TestSetOpenAIClientTransportHTTP(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 

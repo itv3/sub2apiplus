@@ -2319,12 +2319,19 @@ func (h *OpenAIGatewayHandler) ResponsesWebSocket(c *gin.Context) {
 			}
 
 			var closeErr *service.OpenAIWSClientCloseError
-			if errors.As(err, &closeErr) && closeErr.StatusCode() == coderws.StatusNormalClosure {
+			if normalReason, normal := openAIWSNormalCloseReason(err); normal {
 				reqLog.Info("openai.websocket_ingress_closed_normally",
 					zap.Int64("account_id", account.ID),
-					zap.String("reason", closeErr.Reason()),
+					zap.String("reason", normalReason),
 				)
-				closeOpenAIClientWS(wsConn, closeErr.StatusCode(), closeErr.Reason())
+				closeOpenAIClientWS(wsConn, coderws.StatusNormalClosure, normalReason)
+				return
+			}
+			if errors.Is(err, context.Canceled) {
+				reqLog.Debug("openai.websocket_ingress_client_canceled",
+					zap.Int64("account_id", account.ID),
+					zap.Error(err),
+				)
 				return
 			}
 
@@ -3407,4 +3414,23 @@ func summarizeWSCloseErrorForLog(err error) (string, string) {
 		}
 	}
 	return closeStatus, closeReason
+}
+
+func openAIWSNormalCloseReason(err error) (string, bool) {
+	if err == nil {
+		return "", false
+	}
+	var clientCloseErr *service.OpenAIWSClientCloseError
+	if errors.As(err, &clientCloseErr) &&
+		clientCloseErr.StatusCode() == coderws.StatusNormalClosure {
+		return clientCloseErr.Reason(), true
+	}
+	if coderws.CloseStatus(err) != coderws.StatusNormalClosure {
+		return "", false
+	}
+	_, reason := summarizeWSCloseErrorForLog(err)
+	if reason == "-" {
+		reason = ""
+	}
+	return reason, true
 }

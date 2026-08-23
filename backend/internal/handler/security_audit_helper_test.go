@@ -137,7 +137,7 @@ func TestRunSecurityAuditLogsWebSocketChecksAndCacheHits(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	engine := &turnCountingEngine{mode: securityaudit.ModeBlocking}
 	coordinator := securityaudit.NewCoordinator(nil, engine)
-	core, logs := observer.New(zap.InfoLevel)
+	core, logs := observer.New(zap.DebugLevel)
 	reqLog := zap.New(core)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
@@ -159,6 +159,24 @@ func TestRunSecurityAuditLogsWebSocketChecksAndCacheHits(t *testing.T) {
 	require.Equal(t, "allow", doneLogs[1].ContextMap()["decision"])
 	require.Equal(t, "subsequent_turn", doneLogs[1].ContextMap()["stage"])
 	require.Equal(t, int64(1), engine.evaluates.Load())
+}
+
+func TestLogSecurityAuditDoneKeepsRejectedDecisionAtInfo(t *testing.T) {
+	core, logs := observer.New(zap.InfoLevel)
+	logSecurityAuditDone(
+		zap.New(core),
+		securityaudit.Request{RequestID: "request-rejected", Stage: "http"},
+		securityaudit.Decision{
+			Kind:           securityaudit.DecisionBlock,
+			ErrorCode:      "prompt_blocked",
+			AllowNextStage: false,
+		},
+		false,
+	)
+
+	entries := logs.FilterMessage("security_audit.gateway_check_done").All()
+	require.Len(t, entries, 1)
+	require.Equal(t, "prompt_blocked", entries[0].ContextMap()["error_code"])
 }
 
 type turnCountingEngine struct {

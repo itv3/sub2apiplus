@@ -61,7 +61,11 @@ func (c *CompositeTokenCacheInvalidator) InvalidateToken(ctx context.Context, ac
 		}
 		seen[key] = true
 		if err := c.cache.DeleteAccessToken(ctx, key); err != nil {
-			slog.Warn("token_cache_delete_failed", "key", key, "account_id", account.ID, "error", err)
+			if tokenCacheFailureLogLevel(err) == slog.LevelDebug {
+				slog.Debug("token_cache_delete_failed", "key", key, "account_id", account.ID, "error", err)
+			} else {
+				slog.Warn("token_cache_delete_failed", "key", key, "account_id", account.ID, "error", err)
+			}
 		}
 	}
 

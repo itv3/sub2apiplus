@@ -19,7 +19,9 @@ import (
 )
 
 const (
-	openAIWSConnMaxAge             = 60 * time.Minute
+	openAIWSUpstreamConnMaxAge     = 60 * time.Minute
+	openAIWSConnRetireMargin       = 5 * time.Minute
+	openAIWSConnMaxAge             = openAIWSUpstreamConnMaxAge - openAIWSConnRetireMargin
 	openAIWSConnHealthCheckIdle    = 90 * time.Second
 	openAIWSConnHealthCheckTO      = 2 * time.Second
 	openAIWSConnPrewarmExtraDelay  = 2 * time.Second
@@ -33,6 +35,7 @@ const (
 
 var (
 	errOpenAIWSConnClosed               = errors.New("openai ws connection closed")
+	errOpenAIWSConnRetiring             = errors.New("openai ws connection retiring before upstream hard limit")
 	errOpenAIWSConnQueueFull            = errors.New("openai ws connection queue full")
 	errOpenAIWSPreferredConnUnavailable = errors.New("openai ws preferred connection unavailable")
 )
@@ -286,6 +289,20 @@ func (l *openAIWSConnLease) MarkBroken() {
 	l.pool.evictConn(l.accountID, l.conn.id)
 }
 
+// ShouldRetire 表示当前租约对应的上游连接已经进入主动退休窗口。
+// 该能力由长驻的 ingress WebSocket 在每轮发送前探测，避免一条持续持有的
+// 连接绕过空闲池清理，最终撞上上游六十分钟硬断开。
+func (l *openAIWSConnLease) ShouldRetire() bool {
+	if l == nil || l.conn == nil || l.released.Load() {
+		return true
+	}
+	maxAge := openAIWSConnMaxAge
+	if l.pool != nil {
+		maxAge = l.pool.maxConnAge()
+	}
+	return maxAge > 0 && l.conn.age(time.Now()) >= maxAge
+}
+
 func (l *openAIWSConnLease) Release() {
 	if l == nil || l.conn == nil {
 		return
@@ -295,6 +312,13 @@ func (l *openAIWSConnLease) Release() {
 	}
 	l.conn.release()
 	if l.pool != nil {
+		// 长请求可能在持有租约期间跨过退休线；释放时立即从池中移除，
+		// 不能再等下一轮后台清理后被其他请求短暂复用。
+		if maxAge := l.pool.maxConnAge(); maxAge > 0 &&
+			l.conn.age(time.Now()) >= maxAge {
+			l.pool.evictConn(l.accountID, l.conn.id)
+			return
+		}
 		l.pool.notifyAccountPoolChanged(l.accountID)
 	}
 }
@@ -1485,15 +1509,18 @@ func (p *openAIWSConnPool) cleanupAccountLocked(ap *openAIWSAccountPool, now tim
 			continue
 		default:
 		}
-		if p.isConnPinnedLocked(ap, id) {
-			continue
-		}
-		if maxAge > 0 && !conn.isLeased() && conn.age(now) > maxAge {
+		// pin 只保护仍被会话占用的连接；若连接已经空闲且越过退休线，
+		// 必须连同残留 pin 一起移除，避免后续严格亲和请求复用过期连接。
+		if maxAge > 0 && !conn.isLeased() && conn.age(now) >= maxAge {
 			delete(ap.conns, id)
 			if len(ap.pinnedConns) > 0 {
 				delete(ap.pinnedConns, id)
 			}
 			evicted = append(evicted, conn)
+			continue
+		}
+		if p.isConnPinnedLocked(ap, id) {
+			continue
 		}
 	}
 

@@ -71,7 +71,7 @@ func (p *ClaudeTokenProvider) GetAccessToken(ctx context.Context, account *Accou
 			slog.Debug("claude_token_cache_hit", "account_id", account.ID)
 			return token, nil
 		} else if err != nil {
-			slog.Warn("claude_token_cache_get_failed", "account_id", account.ID, "error", err)
+			logTokenCacheFailure("claude_token_cache_get_failed", account.ID, err)
 		}
 	}
 
@@ -108,7 +108,7 @@ func (p *ClaudeTokenProvider) GetAccessToken(ctx context.Context, account *Accou
 		if lockErr == nil && locked {
 			defer func() { _ = p.tokenCache.ReleaseRefreshLock(ctx, cacheKey) }()
 		} else if lockErr != nil {
-			slog.Warn("claude_token_lock_failed", "account_id", account.ID, "error", lockErr)
+			logTokenCacheFailure("claude_token_lock_failed", account.ID, lockErr)
 		} else {
 			time.Sleep(claudeLockWaitTime)
 			if token, err := p.tokenCache.GetAccessToken(ctx, cacheKey); err == nil && strings.TrimSpace(token) != "" {
@@ -153,7 +153,7 @@ func (p *ClaudeTokenProvider) GetAccessToken(ctx context.Context, account *Accou
 				}
 			}
 			if err := p.tokenCache.SetAccessToken(ctx, cacheKey, accessToken, ttl); err != nil {
-				slog.Warn("claude_token_cache_set_failed", "account_id", account.ID, "error", err)
+				logTokenCacheFailure("claude_token_cache_set_failed", account.ID, err)
 			}
 		}
 	}

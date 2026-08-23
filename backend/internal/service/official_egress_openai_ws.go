@@ -985,6 +985,13 @@ func buildDerivedOpenAIOfficialEgressWSToolContinuationFrame(
 			err,
 		)
 	}
+	previousMetadata, _ := payload["client_metadata"].(map[string]any)
+	currentTurnID := strings.TrimSpace(officialOpenAIString(previousMetadata, "turn_id"))
+	if currentTurnID == "" {
+		return nil, false, errors.New(
+			"OpenAI official egress WebSocket tool continuation current turn_id is empty",
+		)
+	}
 	input, _ := payload["input"].([]any)
 	toolOutputs := make([]any, 0, len(input))
 	for _, rawItem := range input {
@@ -1002,23 +1009,44 @@ func buildDerivedOpenAIOfficialEgressWSToolContinuationFrame(
 				"OpenAI official egress WebSocket tool output call_id is empty",
 			)
 		}
+		itemTurnID := ""
+		if rawItemMetadata, exists := item[officialOpenAIWSItemTurnMetadata]; exists {
+			itemMetadata, valid := rawItemMetadata.(map[string]any)
+			if !valid {
+				return nil, false, errors.New(
+					"OpenAI official egress WebSocket tool output turn metadata must be object",
+				)
+			}
+			itemTurnID = strings.TrimSpace(officialOpenAIString(itemMetadata, "turn_id"))
+		}
+		// 完整历史可能包含以前轮次的工具输出；previous_response_id 已经让
+		// 上游持有这些历史项，本次只发送当前轮新增的工具结果。
+		if itemTurnID != "" && itemTurnID != currentTurnID {
+			continue
+		}
 		toolOutputs = append(toolOutputs, item)
 	}
 	if len(toolOutputs) == 0 {
 		return nil, false, errors.New(
-			"OpenAI official egress WebSocket tool continuation has no tool output",
+			"OpenAI official egress WebSocket tool continuation has no current-turn tool output",
 		)
 	}
 
 	payload["input"] = toolOutputs
 	payload["previous_response_id"] = previousResponseID
 	delete(payload, "generate")
-	metadata, promptCacheKey, err := buildDerivedOfficialOpenAIWSFrameMetadata(
+	metadata, promptCacheKey, err := buildDerivedOfficialOpenAIWSFrameMetadataWithTurnPolicy(
 		egressContext,
 		payload,
+		true,
 	)
 	if err != nil {
 		return nil, false, err
+	}
+	// turn-state 属于当前连接，重建逐帧 metadata 时必须原样带回。
+	if turnState, ok := previousMetadata[openAIWSTurnStateHeader].(string); ok &&
+		strings.TrimSpace(turnState) != "" {
+		metadata[openAIWSTurnStateHeader] = turnState
 	}
 	payload["client_metadata"] = metadata
 	payload["prompt_cache_key"] = promptCacheKey

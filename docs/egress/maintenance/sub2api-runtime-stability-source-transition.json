@@ -1,0 +1,60 @@
+{
+  "schema_version": "sub2api-runtime-stability-source-transition/v1",
+  "date": "2026-08-23",
+  "base_commit": "216bb205be76136358b27b0f0af10b463701522a",
+  "release_tag": "v0.1.177-6",
+  "scope": "turn_state_websocket_pool_and_log_stability",
+  "transitions": [
+    {
+      "path": "backend/internal/service/official_egress_openai_ws.go",
+      "from_sha256": "96045283a4861f38168c9673499ecc1bde50750c480f667e490380742ccecbb1",
+      "to_sha256": "8ccd28fc1fb21d7d2abcd32914b3ac1c25d5b834cd13904121f4d81225f4d363",
+      "reason": "工具续轮只投影当前 turn_id 的新增工具输出，重建 metadata 时继承当前轮 turn_id 与连接签发的 turn-state，避免完整历史重复提交造成 turn_state 冲突。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_ws_test.go",
+      "from_sha256": "069c00267e3976bc3f2b068ad08ddc07f4f60fe87627f2dd3073d6478f327b86",
+      "to_sha256": "ad385312fadcdda6fa6f219e8829c828323d8c3ed80c8c2b7789046ebbc12188",
+      "reason": "补充跨轮工具历史过滤、当前 turn_id 继承和 turn-state 保留的回归断言。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_pool.go",
+      "from_sha256": "bc4b83a16d3b1d9b2dfa7f7827efbda8b4724a9eae1fe0d84cffc425e796d4cc",
+      "to_sha256": "e56252152cb32ea47db00ea66983d7a987154e6691ff4d48532a556d960b8528",
+      "reason": "连接池在上游六十分钟硬限制前预留五分钟退休窗口，并在租约释放或残留 pin 空闲时立即淘汰越界连接。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_pool_test.go",
+      "from_sha256": "9e3819979c96438ba16528025095ccca97c634a247262b255f0ad0003e2ccb40",
+      "to_sha256": "9cfe3919bcaef8dd14322b6c528364090e4c2215a1193c406df921640607902a",
+      "reason": "固定五分钟退休裕量，并验证连接在持有租约期间跨线后不会重新进入空闲池。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_ingress.go",
+      "from_sha256": "f9a271b480fa02bb7068e2ec2ab5e47ae5c5022bceeb3582bc95b277af300333",
+      "to_sha256": "ac6ec70c90ea61fa9bcb90b3eea1eedf5655078c7812b18cbf6ab99aa38158a4",
+      "reason": "长驻 ingress 会话在每轮发送前探测租约年龄；进入退休窗口时按完整回放规则主动换连，避免业务轮次撞上上游硬断开。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_ingress_session_test.go",
+      "from_sha256": "af21806461f16c1b1faf56bdc12e71c6ac4b5a0468ef42eb0b7e9c2564b8f7a1",
+      "to_sha256": "04fae9071fb740e7e6578e01bcd67430851c06b073e522b14835846307d51adf",
+      "reason": "新增两轮长驻会话回归测试，证明第二轮不会继续写入已进入退休窗口的旧连接。"
+    },
+    {
+      "path": "backend/internal/service/claude_offline_ci_stabilization_transition_test.go",
+      "from_sha256": "3896b275b5a054d06a55145f1b603d1c6ec2ec458cadeb75f0f5627ff7280493",
+      "to_sha256": "87bfb2f625745cd2953fe8b6a450a8698b3799e681897c03978b2bcbeef05d0c",
+      "reason": "从当前最新后继门禁接入本次精确 transition，并把前驱验证委托给既有不可变收据链；所有历史冻结文件和收据原文保持不变。"
+    }
+  ],
+  "verification": [
+    "turn_state_tool_continuation_regression_passed",
+    "websocket_retirement_pool_regression_passed",
+    "websocket_retirement_ingress_regression_passed",
+    "handler_test_suite_passed",
+    "service_test_suite_passed",
+    "backend_build_passed"
+  ],
+  "result": "passed"
+}

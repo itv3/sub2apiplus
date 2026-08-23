@@ -34,6 +34,18 @@ func claudeOfflineCIStabilizationTransitionSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if sub2APIRuntimeStabilityTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
+	if transitionPrior, ok := sub2APIRuntimeStabilityTransitionPrior(path, currentDigest); ok {
+		// 本次收据只承接一个精确后继；其前驱仍交给既有不可变收据链验证，
+		// 既不修改历史摘要，也不把任意中间状态视为合法。
+		return upstreamV0177SourceTransitionSupersedes(
+			path,
+			priorDigest,
+			transitionPrior,
+		)
+	}
 	raw, err := os.ReadFile(claudeOfflineCIStabilizationServicePath)
 	if err != nil || compatibilityClosureDigest(raw) != claudeOfflineCIStabilizationServiceSHA {
 		return false
