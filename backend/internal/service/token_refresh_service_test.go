@@ -894,6 +894,42 @@ func TestTokenRefreshService_RefreshWithRetry_NonRetryableErrorAllPlatforms(t *t
 	}
 }
 
+func TestTokenRefreshService_ClaudeFWGInvalidGrantStopsImmediately(t *testing.T) {
+	upstream := &claudeFWGRefreshErrorUpstream{}
+	runtimeState, _ := newClaudeFWGServiceRuntime(t, upstream)
+	refresher, err := newClaudeFWGTokenRefresher(
+		&ClaudeTokenRefresher{}, runtimeState.ClaudeCandidate, &claudeFWGProxyRepoStub{},
+	)
+	require.NoError(t, err)
+	account := claudeFWGServiceAccount()
+	account.Credentials["refresh_token"] = "<secret-old-refresh-token>"
+	account.Credentials["scope"] = "user:inference"
+	account.Status = StatusActive
+	account.Schedulable = true
+
+	repo := &tokenRefreshAccountRepo{
+		mockAccountRepoForGemini: mockAccountRepoForGemini{
+			accountsByID: map[int64]*Account{account.ID: account},
+		},
+	}
+	cfg := &config.Config{TokenRefresh: config.TokenRefreshConfig{
+		MaxRetries: 3, RetryBackoffSeconds: 0,
+	}}
+	service := NewTokenRefreshService(repo, nil, nil, nil, nil, nil, nil, cfg, nil)
+	service.SetRefreshAPI(NewOAuthRefreshAPI(repo, &mockTokenCacheForRefreshAPI{lockResult: true}))
+
+	err = service.refreshWithRetry(context.Background(), account, refresher, refresher, time.Hour)
+	require.Error(t, err)
+	var permanentErr *accountPermanentRefreshError
+	require.ErrorAs(t, err, &permanentErr)
+	require.Equal(t, 1, upstream.calls, "invalid_grant 不得进入第二次上游尝试")
+	require.Equal(t, 1, repo.setErrorCalls)
+	require.Zero(t, repo.setTempUnschedCalls)
+	require.Contains(t, repo.lastErrorMessage, "invalid_grant")
+	require.NotContains(t, repo.lastErrorMessage, "<secret-must-not-leak>")
+	require.NotContains(t, repo.lastErrorMessage, "<secret-old-refresh-token>")
+}
+
 func TestTokenRefreshService_RefreshWithRetry_NoRefreshTokenDoesNotTempUnschedule(t *testing.T) {
 	repo := &tokenRefreshAccountRepo{}
 	cfg := &config.Config{

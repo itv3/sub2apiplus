@@ -1,49 +1,51 @@
 # 官方 OAuth 客户端出站仿真共享框架
 
-> **适用范围**：Sub2APIPlus 对官方 OAuth 客户端出站形态进行画像化实现时的共同控制框架
-> **当前规范已建档客户端**：Codex CLI、Claude Code
-> **当前运行时状态**：Codex CLI 保持既有 production active strict 链；Claude Persona 已收窄为
-> `official-client-only` 候选，只接受其 `OfficialIngressCatalog` 登记的官方客户端。DMIT 只承担候选
-> 验收，Vircs 是用户管理的生产机，本任务不连接、不部署、不验证 Vircs
-> **扩展模型**：一份共享框架加若干客户端专属手册；Grok、Gemini 等只能在独立取证和审核后登记
-> **架构原则**：共享内核只解释厂商无关的终态控制事实；协议、身份、状态和 wire 事实由 Persona
-> 自有方言负责。候选共享接口必须经 Codex 零差异和至少一个不可部署的第二 Persona 纵向样例证明后才能冻结
-> **文档边界**：本文不定义任何客户端的具体 Header、Body、TLS、端点、版本或状态事实
+> **适用范围**：Sub2APIPlus 官方 OAuth 客户端出站仿真的共享控制框架，当前覆盖 Codex CLI 和 Claude Code。
+> **文档职责**：本文定义共享架构、版本画像的可信证明及公共维护流程；客户端事实与专用步骤见各自手册。
+> **文档边界**：本文不定义具体客户端的 wire、版本、机器环境或当前状态；共享合同冲突时以本文为准。
+> **文档体系**：人类可读权威规范仅本文、[`CODEX_CLI_CLIENT_EMULATION_GUIDE.md`](CODEX_CLI_CLIENT_EMULATION_GUIDE.md)
+> 和 [`CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md`](CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md)；机器证据、JSON 台账、
+> Schema、Campaign Store 和收据不得形成第二套规范。新增 Persona 必须扩展本文和最接近的客户端手册，
+> 即使重新划分两份专属手册的职责，也不得新增第四份人类可读规范。
 
 ---
 
-# 第一部分 唯一目标与等价标准
+# 第一部分 仿真目标与等价边界
 
-## 1.1 唯一目标
+## 1.1 两类客户端的仿真目标
 
-只要最终使用某个已登记的官方 OAuth persona 出站，Sub2APIPlus 就必须先执行该 Persona 的入站准入，
-再把已准入请求转换为规范化语义请求，并由其 active ReleaseBundle 生成最终 wire。最终出站形态应与
-对应版本的官方客户端在相同平台、入口、配置、账号、模型和触发条件下直接使用同类 OAuth 时一致。
+当业务系统最终选择官方 OAuth 账号出站时，入站客户端不拥有最终 wire。兼容层只负责协议、模型、
+工具和请求语义转换；Key、Group、账号路由、调度及计费归属仍由原业务系统管理。
 
-每个 Persona 必须明确选择 `canonical-semantic` 或 `official-client-only` 入站策略。前者可以批准官方
-客户端和可证明无损的第三方标准 API；后者只接受内容寻址 `OfficialIngressCatalog` 中登记的官方产品、
-版本、平台、UA、固定 Header、System 和工具目录，其他客户端、版本、协议或目录必须在读取 OAuth
-凭据前 fail-close。第三方入口是否被其他产品支持，不等于有权进入该官方 OAuth Persona。
+| 仿真对象 | 允许的正向入站 | 最终出站规则 | 拒绝边界 |
+|---|---|---|---|
+| Codex CLI | 官方 Codex CLI，以及通过 Codex、Compatible、Responses 等接口接入且能够无损转换的第三方客户端 | 只要最终使用 OpenAI OAuth 账号出站，最终 wire 均由 Codex CLI 的 production active 版本画像统一生成 | 无法无损转换、未登记协议或范围外语义不得进入 strict 出站 |
+| Claude Code | 仅接受已登记的 Claude 官方客户端 | 使用 Anthropic firstParty OAuth 出站时，最终 wire 均由 Claude Code 的 production active 版本画像统一生成 | 第三方客户端、未登记版本或不匹配的官方客户端形态在读取 OAuth 凭据前直接拒绝 |
 
-入站客户端名称、版本、User-Agent、Header 顺序和自报身份均不拥有生产画像选择权，也不得直接透传
-为官方身份。账号、Group、计费和调度仍由原业务系统管理；画像只拥有官方上游可见的最终出站形态。
+两者共享同一出站所有权模型，关键策略差异在入站准入范围；各自的 wire 事实仍完全独立。请求通过
+准入后，均由对应 Persona 的 active ReleaseBundle、方言编译器和受信执行链生成最终 wire。入站名称、
+版本、User-Agent、Header、协议形态或自报身份均不能选择生产画像，也不能直接透传为官方客户端身份。
 
-## 1.2 “一致”的可验收定义
+## 1.2 最终 wire 的等价标准
 
-“一致”不是把一次抓包中的随机字节永久写死，而是按可观测层次分别比较：
+“一致”不是固化某次抓包中的随机字节，而是在相同平台、入口、配置、账号、模型和触发条件下，按以下
+可观测维度比较目标版本官方客户端与 Sub2APIPlus 的最终出站：
 
-| 类型 | 一致性要求 |
+| 验收维度 | 等价要求 |
 |---|---|
 | 静态 wire | method、URL、Header 名称／大小写／顺序／值、Body 字段／类型／顺序、压缩和帧形态一致 |
 | transport | 在证据覆盖的平台与条件下，TLS、ALPN、HTTP／WS、连接复用和重试行为一致 |
-| 动态事实 | 生成来源、格式、相等关系、作用域、复用和生命周期一致，不比较某次随机字面值 |
-| 条件行为 | 相同受信条件下产生相同结果；条件不成立时按官方行为省略或采用对应分支 |
+| 动态事实 | 生成来源、格式、相等关系、作用域、复用和生命周期一致，不比较单次随机字面值 |
+| 条件行为 | 相同受信条件产生相同分支；条件不成立时按官方行为省略或采用对应结果 |
 | 跨请求状态 | 会话、turn、agent、retry 等状态的建立、消费、回送和失效关系一致 |
+
+Codex CLI 的所有批准正向入口都必须使用语义等价请求执行最终 wire 成对验收。Claude Code 只对已登记
+官方客户端执行正向验收；第三方客户端只进入凭据前拒绝的负例分母，不建立正向 wire 对拍责任。
 
 每条结论都必须声明适用版本、平台、入口、认证、模型、配置和证据边界。没有证据覆盖的产品、端点、
 平台或后继版本不得使用“完全一致”等全称表述。
 
-## 1.3 统一链路
+## 1.3 统一链路与所有权边界
 
 ```text
 入站请求
@@ -60,227 +62,157 @@
 → 官方 OAuth 上游
 ```
 
-`IngressProtocolAdapter` 按入站协议实现，而不是按 Persona 重复实现；它只把消息、工具、模型意图、
-流式请求和明确条件转换为厂商无关的 `CanonicalRequest`。`TranslationReport` 必须记录映射是否无损、
-丢失了什么语义以及拒绝原因。Persona 自有 `PersonaPlanner` 再把规范化语义和受信事实转换为独立的
-`TypedEgressPlan`。这两层分离后，增加一种入站协议和增加一个 Persona 不会形成协议数乘 Persona 数
-的适配器矩阵。
+该链路只有三项核心所有权：
 
-官方入口也必须经过对应的入站适配器和同一终态链。只有被 IngressPolicy 批准、
-`TranslationReport=lossless`、语义等价且受信条件相同的入口，才要求命中同一 ReleaseArtifact 并通过
-同一组 wire 断言。`official-client-only` Persona 不建立第三方正向转换责任；第三方入口只作为准入
-负例。无法无损表达的官方语义必须拒绝，或在批准的非 strict 用途中显式记录降级；不得静默补造
-客户端状态。
+1. `IngressProtocolAdapter` 只转换请求语义，不选择账号、Persona、生产版本或最终 wire；
+2. `PersonaPlanner + Identity Authority` 只能从规范化语义和受信事实生成 Persona 专属计划与身份；
+3. active ReleaseBundle、DialectCompiler、Executor 和 Guard 共同拥有最终出站定型，后续普通业务代码不得改写。
 
-`TranslationReport=lossless` 只证明用户提交的消息角色、顺序、system、工具、模型意图和流式语义
-无损进入 `CanonicalRequest`，不表示最终请求只能包含入站字段。官方客户端固有且已有证据的 system
-blocks、metadata、设备或会话事实，可以由 PersonaPlanner／Identity Authority 受管派生；每项派生都
-必须记录目标字段、权威来源、证据或规则、派生原因、作用域、生命周期和冲突处置，并纳入
-Identity／Dialect attestation。此类 Persona 固有内容不得回写或冒充用户语义，也不得由
-IngressProtocolAdapter 临时猜测。
-
-角色重排、删除用户 system，或把 system 改写为 user message，均属于语义变化，不能标记为
-`lossless`。strict 路径必须拒绝这类请求；确有历史兼容需要时，只能进入明确批准的 compatibility
-模式，记录降级内容和用途，并与 strict Release、验收结果和生产流量范围隔离。本文所称“不得静默
-补造客户端状态”，禁止的是无权威来源或无派生记录的伪造，不禁止上述 evidence-derived Persona 事实。
+语义无损判定、Persona 固有事实派生和 compatibility 隔离的详细合同见 §2.3。
 
 ---
 
-# 第二部分 最小可扩展的共享运行架构
+# 第二部分 共享运行架构
 
-## 2.1 核心身份
+## 2.1 Persona 身份与边界
 
-一个 persona 至少由以下身份共同确定，不能只用 provider 名称或上游 host 代替：
+一个 Persona 至少由以下事实共同确定，不能只用 provider、host 或入站自报身份代替：
 
 ```text
 OfficialClientPersona =
   provider + official_product + auth_family + upstream_route_family
 ```
 
-例如，官方 CLI、官方桌面应用和 API Key mimic 即使访问同一厂商，也可能是不同 persona。只有官方
-客户端确实使用可取证的官方 OAuth 路径时，才属于本文当前目标；其他认证方式必须另立范围，不能
-伪装成 OAuth persona。
+官方 CLI、桌面应用、API Key mimic 或其他产品即使访问同一厂商，也可能属于不同 Persona。只有官方
+客户端确实使用可取证的官方 OAuth 路径时，才属于本文范围；其他认证方式必须另立产品边界。
 
-## 2.2 责任分层
+## 2.2 分层执行架构
 
-| 层 | 共同责任 | 禁止事项 |
+| 层 | 核心责任 | 禁止事项 |
 |---|---|---|
-| IngressProtocolAdapter | 按入站协议生成 `CanonicalRequest + TranslationReport` | 选择 Persona／生产版本，或保留入站 wire 身份 |
-| 规范化语义 | 表达消息、工具、模型意图、流式语义和有类型条件 | 演变成厂商 wire 联合 Schema，或容纳 Header／TLS／版本常量 |
-| Persona Registry | 依据受信认证类型、官方产品和 route 解析 Persona | 仅凭 host、UA 或客户端自报值分类 |
-| PersonaPlanner + Identity Authority | 生成 Persona 自有 Plan，以及受信账号、会话、agent、平台和请求事实 | 从第三方同名 Header 复制官方身份，或选择生产版本 |
-| Persona State Store | 以 Persona／Release 隔离的命名空间保存不透明跨请求状态，并提供版本 CAS、有限租约、TTL 和关联身份的原子提交 | 让进程内存成为生产状态权威、跨 Persona 复用状态，或在重启和并发冲突时静默重置 |
-| ReleaseArtifact Store | 保存内容寻址、不可变的 Persona 画像和 ReleaseBundle | 保存 active／rollback／candidate 等可变部署角色 |
-| Runtime Selector | 独立解析 Persona 的 production active 和 rollback 引用 | 让自动发现、入站版本或 validation candidate 直接激活 |
-| 客户端方言 | 以 Persona 专属 Plan、IdentityFacts 和画像解释 URL、Header、Body、条件与状态语义 | 复用另一客户端的 Plan、Schema、Compiler 或 wire 事实 |
-| DialectCompiler | 把专属 Plan 编译成最小 `CompiledEnvelope` | 要求共享内核理解厂商 Header／Body／IdentityMode／fallback 语义 |
-| Executor | 以每 Persona 独立 authority 实例校验 envelope、管理 attempt、签发 FinalizationToken 并选择 adapter | 签发后允许普通业务代码改写 wire，或在不同 Persona 间复用 issuer／状态 |
-| transport adapter | 执行画像声明的 TLS、HTTP、WS、压缩和连接行为 | 执行 Token 未授权的语义变化 |
-| Runtime Guard | 校验 route、persona、Sink、Release、画像和最终摘要 | 对未知 route 或终态篡改静默放行 |
+| 入站准入与适配 | 由 IngressPolicy／OfficialIngressCatalog 决定准入，并生成 `CanonicalRequest + TranslationReport` | 选择账号、Persona、生产版本，或保留入站 wire 身份 |
+| Persona 规划与状态 | Registry 解析 Persona；Planner、Identity Authority 和私有 State Store 生成专属 Plan、身份及跨请求状态 | 从不可信 Header 复制官方身份、跨 Persona 复用状态，或选择生产版本 |
+| Release 控制 | ReleaseArtifact Store 保存不可变画像；Runtime Selector 独立解析 production active／rollback | 原位覆盖 Release，或让自动发现、入站版本和 validation candidate 直接激活 |
+| 方言编译 | Persona 自有 Plan、IdentityFacts、ProfileSchema 和 DialectCompiler 生成最小 `CompiledEnvelope` | 共享另一 Persona 的 Schema／Compiler，或把厂商 wire 事实塞入共享内核 |
+| 执行与传输 | 每 Persona 的 Executor authority 管理 attempt、签发 Token，并调用受信 transport adapter | Token 签发后改写 wire，或跨 Persona 复用 issuer、invocation、连接和状态 |
+| Runtime Guard | 校验 route、Persona、Sink、Release、画像和最终请求摘要 | 对未知路径、身份冲突或终态篡改静默放行 |
 
-这里的“共享 Executor”指共享实现，不指一个跨 Persona 复用 authority、issuer、invocation 状态或
-连接状态的全局实例。每个 Persona 必须拥有独立 Executor authority 和 Token issuer；共享 adapter
-也必须按明确 `TransportCapability` 登记，不能因此共享 Persona 状态。
+`IngressProtocolAdapter` 按入站协议实现，而不是按 Persona 复制。只有出现现有协议无法表达的新入站
+协议时才新增 adapter；新增 Persona 默认复用已有 adapter，从而避免形成“协议数量 × Persona 数量”的
+适配器矩阵。
 
-需要跨请求消费的会话、工具往返、agent 谱系、fallback 和 request-id 所有权必须进入 Persona 私有的
-持久状态存储；共享框架只看不透明 Payload、版本和租约，不解释厂商字段。状态提交必须与关联身份声明
-原子完成；Redis／数据库不可用、状态损坏、CAS 冲突耗尽或租约非法时 fail-close。进程内缓存只能合并
-同一实例的并发工作，不能作为容器重启、滚动发布或多实例运行时的生产权威。
+## 2.3 语义、状态与最终定型不变量
+
+**语义转换。** `TranslationReport=lossless` 只证明用户提交的消息角色、顺序、system、工具、模型
+意图和流式语义无损进入 `CanonicalRequest`。只有被 IngressPolicy 批准且转换无损的入口才能进入
+strict 正向链；`official-client-only` Persona 的第三方入口只作为准入负例。
+
+**Persona 固有事实。** 官方客户端固有且已有证据的 system blocks、metadata、设备或会话事实，可以由
+PersonaPlanner／Identity Authority 受管派生。每项派生必须记录目标字段、权威来源、证据或规则、派生
+原因、作用域、生命周期和冲突处置，并纳入 Identity／Dialect attestation；不得回写或冒充用户语义，
+也不得由协议适配器临时猜测。
+
+**有损转换。** 角色重排、删除用户 system 或把 system 改写为 user message 均不能标记为 `lossless`。
+strict 路径必须拒绝；确有历史兼容需要时，只能进入明确批准的 compatibility 模式，并与 strict Release、
+验收结果和生产流量范围隔离。禁止的是无权威来源或无派生记录的伪造，不禁止上述 evidence-derived 事实。
+
+**状态与 authority 隔离。** 会话、工具往返、agent 谱系、fallback 和 request-id 等跨请求状态必须保存
+在 Persona／Release 私有的持久命名空间，通过 CAS、有限租约、TTL 和关联身份原子提交。存储不可用、
+状态损坏、CAS 冲突耗尽或租约非法时 fail-close；进程内缓存不能成为生产权威。每个 Persona 的 Executor
+authority、Token issuer、invocation 和连接身份必须独立，共享的是实现而不是运行状态。
 
 共享内核消费的 `CompiledEnvelope` 只允许包含以下厂商无关事实：
 
-| 事实 | 作用 |
+| 事实组 | 允许内容 |
 |---|---|
-| Persona 与 Release／Profile／Bundle digest | 绑定编译归属和不可变画像 |
-| Sink、Route、Endpoint、method、protocol | 绑定最终物理出口和 Guard 闭集 |
-| invocation／attempt 身份与 Body 可重放性 | 管理一次调用、重试预算和 single-use 能力 |
-| `TransportCapability` 引用 | 选择受信 adapter，而不是由业务代码选择具体 client |
-| Identity／Dialect attestation digest | 把 Persona 自有身份、Header、Body、状态策略整体纳入签名，但共享层不解释其内部字段 |
-| Prepared request capability | 供 Executor 计算 final request digest 并签发 Token；普通业务代码不能拆解后重组 |
+| 归属与证明 | Persona、Release／Profile／Bundle digest，以及 Identity／Dialect attestation digest |
+| 出口与能力 | Sink、Route、Endpoint、method、protocol 和 `TransportCapability` 引用 |
+| 调用与重放 | invocation／attempt 身份、重试预算和 Body 可重放性 |
+| 最终请求能力 | Prepared request capability、最终请求摘要和 single-use FinalizationToken 所需事实 |
 
-共享内核不得出现 `CodexIdentityMode`、`ClaudeBetaPolicy`、某厂商 Header／Body Policy、版本常量或
-只有单一 Persona 使用的 fallback／状态字段。Header 集合、Body 方言、协议能力、状态机、重试语义
-及 transport 参数均属于客户端画像或方言层；只有 attempt 上限、可重放性、终态归属和签名等确实
-需要由控制内核执行的结果，才投影为上述最小事实。
+共享内核不得出现厂商 Header／Body Policy、版本常量、`CodexIdentityMode`、
+`ClaudeBetaPolicy` 或单一 Persona 的 fallback／状态字段。Header、Body、协议、状态机、重试及
+transport 参数均属于 Persona 画像和方言；共享接口的新增与冻结按 §5.4 执行。
 
-`CodexEgressPlan`、`ClaudeEgressPlan` 及其 IdentityFacts、ProfileSchema、DialectCompiler 保持独立。
-方言代码应位于 Persona 自有模块；闭集由 composition root、Registry、构造能力和测试门禁建立，不得
-仅依靠包私有接口迫使所有方言堆积在共享核心包。候选共享接口只有同时通过 Codex 零差异和不可部署的
-第二 Persona 纵向样例后才能冻结。现有抽象无法表达新机制时，先判断该机制是否应留在 Persona 内；
-只有确属控制面不变量时才修改共享引擎，并回归全部受影响 Persona 的 active、rollback 和 candidate。
+## 2.4 Persona 接入合同
 
-## 2.3 客户端接入契约
+新增或重建 Persona 时，必须登记以下五组合同：
 
-新增 Grok、Gemini 或其他官方客户端时，必须以独立变更集登记以下扩展点：
-
-| 扩展点 | 必须提供的内容 |
+| 合同组 | 必须提供的内容 |
 |---|---|
-| `PersonaDescriptor` | provider、官方产品、OAuth family、route／Sink 闭集和明确排除项 |
-| `IngressPolicy` | `canonical-semantic` 或 `official-client-only`；声明正向入口类别、凭据前拒绝边界和物理别名闭集 |
-| `OfficialIngressCatalog` | official-client-only 时必需；冻结官方产品、版本、平台、二进制摘要、UA、固定 Header、System／工具目录摘要及目标 Release |
-| `SupportEnvelope` | 平台、入口、隐私模式、模型、功能、端点及明确不支持条件；范围外请求必须 fail-close |
-| `ProductionIngressInventory` | 当前生产的逻辑入口、全部物理别名、调用方和处置状态，以及入口到 adapter／route 的绑定 |
-| `EgressDispositionInventory` | Persona 相关的推理、生命周期和辅助出站闭集，以及每项的运行时处置类别 |
-| `PersonaPlanner` | 从已有 `CanonicalRequest + TranslationReport` 生成专属 Plan；不得复制每种入站协议的解析器 |
-| `TypedEgressPlan` | 该 Persona 独立的规范化业务事实；不得扩张 Codex、Claude 或全局联合 Plan 来容纳新厂商 |
-| `IdentityFacts` | 该 persona 独立的受信身份来源、类型、生命周期和冲突处置 |
-| `ProfileSchema` | 版本、端点、Header、Body、状态、transport 和条件的可表达范围 |
-| `DialectCompiler` | 从该 Persona 的 TypedEgressPlan、IdentityFacts 与画像生成 `CompiledEnvelope` 的规则 |
-| `TransportCapability` | 可复用 adapter 与确需新增的窄 adapter；不得把客户端差异塞进全局分支 |
-| `EvidencePackage` | 官方产物、源码／bundle、P／R／J／M、摘要、适用范围、AtomicAssertionLedger 和 RequiredRules 映射 |
-| `AcceptancePackage` | 聚合引用 AcceptanceFact、适用的 DeploymentFact、全部批准正向入口的成对断言、全部拒绝入口负例、candidate 验收、发布和回滚收据 |
+| 身份与准入 | PersonaDescriptor、IngressPolicy、SupportEnvelope；official-client-only 还必须提供内容寻址 OfficialIngressCatalog |
+| 语义与方言 | adapter 复用／新增结论、PersonaPlanner、TypedEgressPlan、IdentityFacts、ProfileSchema 和 DialectCompiler |
+| 状态与执行 | 私有状态命名空间、Route／Sink 闭集、Executor authority、TransportCapability 和 Guard 绑定 |
+| 画像与证据 | 不可变 ReleaseArtifact、EvidencePackage、AtomicAssertionLedger 和 RequiredRules 映射 |
+| 验收与生产范围 | ProductionIngressInventory、EgressDispositionInventory、正负 PAIR、AcceptancePackage 及 active／rollback／deployment 范围 |
 
-只有出现新的入站协议时才登记新的 `IngressProtocolAdapter`。新增 Persona 默认复用已有协议适配器；
-其官方专属入口若含标准协议无法表达的语义，应新增窄入口适配器并输出同一个 CanonicalRequest 合同，
-不能把解析逻辑藏进 Persona Compiler。
+第三方 Agent 工具只适用于已批准第三方入口的 `canonical-semantic` Persona。工具目录必须冻结
+产品、版本和摘要，并选择有官方证据的内置无损映射、经官方 MCP 取证的双向 bridge 或 `denied`；
+不得原样透传第三方工具。`official-client-only` Persona 一律拒绝第三方工具目录。Codex 的具体映射
+合同见其专属手册。
 
-**第三方 Agent 工具接入。** 本段只适用于 `canonical-semantic` 且已把相应第三方入口列入正向
-SupportEnvelope 的 Persona。`official-client-only` Persona 直接选择 `denied`，不建设工具映射，也不把
-该映射当作上线前置条件。第三方 IDE／Agent 自带的工具目录不得因为上游 API 接受自定义工具，或
-官方客户端支持 MCP，就原样进入官方 Persona wire。接入时必须冻结第三方产品、版本、入口、工具目录
-摘要，以及名称、说明、Schema、顺序、条件和多轮 `tool_use／tool_result` 关系，并对每项工具选择以下
-且仅以下一种处置：
+完成合同登记只表示共享架构能够承载该 Persona，不表示仿真已经成立。必须先取得独立官方证据并用
+专属 Plan、Schema 和 DialectCompiler 表达，再按 §5.4 判断是否需要扩展共享层；客户端之间不得交叉
+继承 wire 事实。
 
-| 工具处置 | 运行语义 |
-|---|---|
-| `official_builtin_lossless` | 与目标版本官方内置工具的请求、结果和错误语义无损等价；由受管双向映射转换，最终目录仍由 ReleaseBundle 生成 |
-| `official_mcp_bridge` | 没有内置等价项；先用目标官方客户端和冻结的 MCP 配置取得证据，再由画像生成官方实测的 `mcp__<server>__<tool>` 名称、说明／截断、Schema、顺序、deferred／ToolSearch 条件及工具往返 |
-| `denied` | 无法无损转换、缺少官方证据，或第三方目录摘要未知；Planner／Compiler fail-close |
+## 2.5 共享代码边界与 Guard 合同
 
-`official_mcp_bridge` 仍是双向协议映射，不是第三方工具透传：官方 `tool_use` 必须转换为第三方客户端能
-执行的调用，第三方结果必须再转换为官方实测的 `tool_result`，ID、并行关系、流式参数、错误和历史均须
-闭合。每个第三方目录必须单独进入 SupportEnvelope、RequiredRules／PAIR 和最终 wire 对拍；名称、说明、
-Schema、顺序或条件发生变化即视为新目录，未重新批准前 fail-close。该路径只能主张“目标官方客户端 +
-冻结 MCP 配置”的等价性，不能冒充默认无 MCP 的官方客户端。若直接使用目标官方客户端能够满足产品
-需求，应优先使用官方入口；第三方 Agent 工具桥是可选扩展，不是 Persona 上线的前置条件。
+§2.2 的分层合同在当前仓库中统一映射为：
 
-`ProductionIngressInventory` 中每个入口必须取以下且仅以下一种处置，不得用缩小
-`SupportEnvelope` 隐藏现存生产入口：
+```text
+service ───────────────────→ officialegress core ←──────── repository 窄 port
+officialegress/adapter/* ───→ core + 受信物理资源
+wiring ────────────────────→ 闭集 adapter 注册
+```
 
-| 入口处置 | 运行语义 |
-|---|---|
-| `migrated_strict` | 已进入目标 Persona strict 链，且属于其批准的 SupportEnvelope 和成对断言范围 |
-| `retained_legacy` | 继续走已冻结遗留链；必须保持独立可观测、可回滚，且阻止遗留代码退休 |
-| `explicitly_retired` | 已证明无生产消费者或完成有意下线；保留不可覆盖的退休证据 |
-| `rerouted` | 已迁往明确的非本 Persona 产品路径；目标 route、认证和失败行为均已验证 |
+`officialegress` core 不得 import `service` 或 `repository`。可共享的是 Artifact Store、Runtime Selector、
+编译注册、Executor 实现、FinalizationToken、Guard 和 adapter 注册合同；每个 Persona 的 IngressPolicy、
+OfficialIngressCatalog、Plan、IdentityFacts、ProfileSchema、DialectCompiler、Executor authority、Token
+issuer、invocation／状态命名空间及 transport 参数必须独立。业务层只提交规范化语义和受信业务事实，
+repository 只提供窄资源能力；两者均不得选择 Persona Release 或改写最终 wire。
 
-Inventory 必须把 `current_disposition` 与 ApprovalFact 中的 `target_disposition` 分开记录。目标计划不能
-覆盖当前事实；只有真实切换、退休或改路完成并签发 DeploymentFact 后，才能追加新的当前处置。
-
-逻辑入口必须展开到所有物理路由、别名和内部调用点；未知别名、无处置入口或新增裸调用都使闭集门禁
-失败。只有 `migrated_strict` 才计入 Persona 的 strict SupportEnvelope；其余三态不能伪装成 strict
-验收成功。`official-client-only` Persona 对第三方逻辑入口使用 `explicitly_retired`，并另记运行时
-`denied_before_oauth`；这表示入口仍返回明确协议错误，而不是继续走遗留或第三方转换链。
-
-`EgressDispositionInventory` 中每个已知出站必须取以下运行时处置之一：
-
-| 出站处置 | 运行语义 |
-|---|---|
-| `persona_strict` | 属于官方客户端仿真责任；必须由画像、Compiler、Executor 和 Guard 管理，并纳入适用 SPEC／PAIR 与 SupportEnvelope |
-| `non_persona_managed` | 不主张官方客户端 wire 等价，但必须登记 route／Sink、认证、endpoint、client、超时、重试、秘密和审计策略 |
-| `denied` | 未批准或不应发出的路径；运行时 fail-close |
-
-Inventory 还必须独立记录 `current_guard_state`：无发送源为 `source_absent`，未纳管历史事实为
-`out_of_scope_passthrough`，已纳管路径按 `legacy_observe → canary_enforce → enforced` 记录。该字段只陈述
-当前事实，不能由目标计划覆盖；FW-E 封存时，有发送源的已知 Persona OAuth 出站不得仍是
-`out_of_scope_passthrough`，只能绑定 observation-only Sink 后记为 `legacy_observe`。
-
-明确排除项不是 `out_of_scope_passthrough` 的同义词。Persona 相关 OAuth 出站即使不属于 strict wire
-责任，也必须进入 `non_persona_managed` 或 `denied`；未知项默认 `denied`。只有与该 Persona 及其
-OAuth 生命周期确实无关的其他产品流量，才可由更外层、另有闭集的产品策略处置。
-
-完成上述登记只表示架构可承载该客户端，不表示仿真已经成立。客户端必须拥有独立手册和证据；Codex、
-Claude、Grok、Gemini 之间不得交叉继承 wire 事实。
-
-第三个及后续 persona 的接入顺序固定为：先完成独立取证并用专属 Plan、Schema 和 DialectCompiler
-表达；再识别它与既有 persona 重复且稳定的机制；最后才提交共享层扩展方案。只在一个客户端出现的
-机制留在该客户端内，不能仅因“未来可能复用”而上提。共享层发生变化时，必须同时回归所有受影响
-persona；仅新增客户端画像和方言时，不得无故改写既有 Codex 或 Claude 的 final wire。
+Guard 统一校验 method、route、Persona、Sink、binding、Release／Profile、adapter、FinalizationToken 和
+最终请求摘要。状态只允许 `legacy_observe → canary_enforce → enforced` 单调推进，`enforced` 仅能受控
+回退到 `canary_enforce`；`legacy_observe` 只记录已冻结遗留基线，不能成为长期 passthrough。未知 route、
+无效 binding、跨 Persona 身份或终态篡改在 canary／enforced 必须 fail-close。
 
 ---
 
-# 第三部分 版本画像与证据生命周期
+# 第三部分 版本画像的建立与可信证明
 
-## 3.1 不可变制品与正交状态
+本部分回答：运行时采用的官方客户端版本画像凭什么可以被信任、批准并进入生产。这里只定义事实关系
+和身份边界，具体换版步骤见 §5.3。
 
-版本画像必须是内容寻址、不可变、可复算的数据。`persona + version + profile digest` 构成
-`ReleaseArtifact` 的不可变坐标；ReleaseBundle 绑定画像、端点、transport、状态和 Persona 自有策略。
-发现、证据、批准、验证和生产角色是正交事实，不能压缩成一个状态枚举：
+## 3.1 画像如何成为不可变 Release
+
+版本画像必须内容寻址、不可变且可复算。`persona + version + profile digest` 构成 `ReleaseArtifact`
+坐标；`ReleaseBundle` 绑定画像、端点、transport、状态机制和 Persona 自有策略。以下事实相互正交，
+不能压缩成单一状态：
 
 | 维度 | 事实 |
 |---|---|
 | Discovery | 自动或人工发现的上游版本，仅供评估 |
-| Evidence | 官方产物和证据绑定，以及 `verified／observed／blocked／regressed_evidence` 等充分度 |
-| Approval | 画像是否经过批准，以及批准的 `SupportEnvelope` 和目标规则集合 |
-| Validation | candidate ID、固定源码／镜像／画像和验收结果；只允许按不可变 Release 引用选择 |
+| Evidence | 官方产物、证据绑定及 `verified／observed／blocked／regressed_evidence` 等充分度 |
+| Approval | 已批准的画像、`SupportEnvelope` 和目标规则集合 |
+| Validation | candidate ID、固定源码／镜像／Release 引用和验收结果 |
 | Runtime Selector | 每个 Persona 的 `production_active` 与 `production_rollback` 引用 |
-| Deployment | canary、正式切换、回滚、恢复和 activation receipt 证明的实际运行事实 |
+| Deployment | canary、切换、回滚、恢复和 activation receipt 证明的运行事实 |
 
-Validation candidate 不得借用或伪装成 production rollback。当前 Codex 工具在隔离候选 RuntimeCatalog
-中使用 `previous` 槽位承载 candidate，只是待退休的兼容实现，不属于新的多 Persona 合同，也不得据此
-改变生产 rollback 引用。新 Persona 首次登记时可以尚无 production rollback；但首次生产激活前必须
-提供经过启动、数据兼容和回退验证的真实目标，可以是上一正式 Release 或冻结的遗留实现，不能复制
-active 摘要伪造回滚对。
+Runtime Selector 只保存带类型引用：active 必须指向可加载的不可变 Release；rollback 可以指向另一
+Release，或只含 revision、镜像 digest 和回退收据的已演练 `operational_deployment`，后者不能取得
+Profile 或参与 final wire 编译。Validation candidate 使用独立 Release 引用，不得占用或伪装成
+production rollback；首次生产激活的回退要求见 §4.2。
 
-Runtime Selector 的槽位是带类型引用：`production_active` 必须引用可加载的不可变 Release；
-`production_rollback` 可以引用另一 Release，也可以显式引用已演练的 `operational_deployment`，后者只含
-revision、镜像 digest 和回退收据，不能取得 Profile 或参与 final wire 编译。Catalog 在进程启动时统一
-校验 manifest、内容寻址 Profile／Wire 和 Approval；所选 Release 必须派生 changeset、状态命名空间、
-连接池与执行 policy 身份，业务代码不得另存版本或摘要常量。
+Catalog 在启动时统一校验 manifest、Profile／Wire 内容摘要和 Approval。所选 Release 必须派生
+changeset、状态命名空间、连接池和执行 policy 身份，业务代码不得另存版本或摘要常量。旧画像不得
+原位覆盖；自动发现、入站自报版本、测试通过或 Campaign 状态均不能改变或证明 production active。
 
-旧画像不得原位覆盖，证据、发布图、selector 变更和收据只追加；自动发现和入站自报版本均不得改变
-production active。源码常量、测试通过或 Campaign 达到 `ready`，都不能单独证明生产激活。现有 Persona
-Schema 能表达时只追加数据；出现新协议、新状态机制或 Schema 缺口时，优先修改该 Persona 方言，只有
-最小 `CompiledEnvelope` 或共享终态控制确有缺口时才修改共享引擎并执行多 Persona 回归。
+## 3.2 证据如何形成批准
 
-## 3.2 证据与变更身份
-
-客户端规则至少声明版本、产物摘要、平台、入口、认证、模型、配置、网络条件、观测通道、实测分母、
-条件对照和适用边界。条件规则必须采集官方条件成立／不成立样本；无条件规则不得伪造“官方负例”，
-而应以多个适用官方样本、零违规分母和 candidate mutation／不匹配负断言闭环。只能从证据实际可见的
-层次得出结论，pcap、原始应用层字节、MITM 解析、源码或 bundle 控制流不能互相替代。
-
-规则同样不得用一个枚举混合不同维度：
+客户端规则至少绑定版本、产物摘要、平台、入口、认证、模型、配置、网络条件、观测通道、实测分母、
+条件对照和适用边界。条件规则采集官方正反样本；无条件规则使用多个适用样本、零违规分母和 candidate
+负断言闭环，不伪造官方负例。pcap、原始应用层字节、MITM、源码或 bundle 控制流只能证明各自可见
+的事实，不能互相替代。
 
 | 维度 | 允许值示例 |
 |---|---|
@@ -289,119 +221,103 @@ Schema 能表达时只追加数据；出现新协议、新状态机制或 Schema
 | `compatibility_class` | `request_egress`、`response_compat`、`not_applicable` |
 | `migration_decision` | `inherit`、`change`、`add`、`delete`、`condition_change` |
 
-只有 `evidence_level=verified` 表示规则、条件、运行证据与复算链闭环；其他维度不能提升证据等级。
-旧 JSON 台账在迁移期可以保留单字段兼容投影，但新的 Persona Schema 和 Campaign 必须保存上述正交事实。
+证据链固定为 `DiscoveryInventory → SemanticRuleCandidate → AtomicAssertionLedger → RequiredRules`。
+Inventory 无截断保存且封存后不可改写；候选仅按 `source_ids` 归并待验证语义。`mapped_validation` 只能
+支持封存当前 EvidencePackage，不是证据等级、迁移决策或终态处置，也不能进入生产批准。
 
-`mapped_validation` 是发现项到 `SemanticRuleCandidate` 的处置关系，不是规则、迁移决策或新的证据
-等级，也不表示目标 wire 已验证。FW-E 必须分开保存三层数据：`DiscoveryInventory` 无截断保留每个
-原始发现，`SemanticRuleCandidate` 用 `source_ids` 把同一语义的多个发现归并为待验证工作项，
-`AtomicAssertionLedger` 保存已经原子化、可执行并可逐项断言的证据命题。历史制品中的
-`RuleLedger／MeasuredRuleLedger` 文件名可以继续保留，但必须显式声明其原子断言语义。
+不得从发现 ID 或 `CAND-*` 机械生成 `SPEC-*`。候选收敛前保持规则台账和生产资格均为 `denied`；每条
+原子断言必须恰好归属一个 RequiredRule 或明确的 scenario-only／supporting-fact 组，客户端本地行为
+不能因结果出现在请求中就自动成为网关 RequiredRule。
 
-FW-F 再从原子断言生成 `RequiredRules`：按 Codex 的“范围、规则／机制、源码、实测、实现、状态”
-六字段归并属于 Persona 出站实现责任的复合机制。每条原子断言必须恰好归属一个 RequiredRule 或一个
-明确的 scenario-only／supporting-fact 组；客户端本地文件读取、Hook、TUI 本地装配和本地拒绝不得因
-其结果最终出现在请求中就自动成为网关 RequiredRule。一个发现跨越多个语义时可以引用多个候选，但
-每个引用必须双向闭合。
+`DiscoveryDispositionLedger` 基于冻结 Inventory 只写追加，并为每个发现提供唯一终态；未分类、映射
+待验证、上下文登记和未收敛候选均阻断 ApprovalFact。终态必须解析到可执行规则、明确支撑事实、受管
+出站处置、目标证据证明的非出站／历史缺失事实或规范重复项；缩小 SupportEnvelope、词法未命中和
+“留待后续版本”均不是终态。ApprovalFact 必须同时绑定该 Ledger、RequiredRules 和 SupportEnvelope。
 
-语义候选保留真实的 `observed／blocked`，并固定 `rule_ledger_membership=denied` 与
-`production_eligibility=denied`；不得用发现 ID 或 `CAND-*` 自动生成 `SPEC-*`。只有后续语义审查把
-候选收敛成可执行规则时，才能显式新建或修改 SPEC，再独立登记迁移决策、场景和断言。
-`mapped_validation` 可以消除发现分类账中的 `unclassified`，使 EvidencePackage 在
-`evidence_recorded` 封存当前事实，但不得进入 production SupportEnvelope、不得签发
-production-replacement ApprovalFact，也不得生成生产画像。
+只有 `evidence_level=verified` 表示证据与复算链闭环。字符串相同、窗口邻近或 minify 标识符相同不能
+单独支持 `inherit`；语义片段、依赖和 sink 关系无法证明时，必须重新观察目标版本。VC 操作统一见 §5.3。
 
-FW-E 封存的 `DiscoveryInventory` 不得改写或删减。FW-F 必须基于其摘要追加
-`DiscoveryDispositionLedger`，逐一覆盖全部 `discovery_id`；`unclassified`、`mapped_validation`、
-`catalogued_context` 和未收敛的 `CAND-*` 都是非终态，不能带入 ProfileApprovalFact。每个发现最终只能
-绑定到可执行 `SPEC-*`、规则／画像／受管出站的支撑事实、受管出站处置、经目标证据证明的非出站事实、
-经目标负证据证明的历史缺失项，或一个最终能解析到上述终态的规范重复项。SupportEnvelope 缩小、词法
-未命中和“留待后续版本”均不是终态处置。
+## 3.3 变更如何生成新身份
 
-| 单元 | 身份变化边界 |
+| 单元 | 必须新建身份的变化 |
 |---|---|
-| Campaign | 官方目标版本、产物、平台、入口、默认条件或产出 EvidencePackage 的工具身份变化 |
+| Campaign | 官方目标版本、产物、平台、入口、默认条件或影响 EvidencePackage 语义的产出工具变化 |
 | ApprovalFact | DiscoveryDispositionLedger 摘要、SupportEnvelope、目标规则、迁移决策、画像、场景、断言或批准用途变化 |
 | candidate | ApprovalFact 引用、Sub2APIPlus 源码、测试树、构建、镜像或候选用途变化 |
-| attempt | 上述身份不变，只因临时网络、额度或运行失败重试 |
+| attempt | 上述身份不变，仅因临时网络、额度或运行失败重试 |
 
-四者均只写追加。新 ApprovalFact 不覆盖旧批准，新 attempt 不覆盖旧失败；candidate 验收通过不代表
-生产已经部署。
+四者及其证据、发布图、selector 变更和收据均只写追加。新 ApprovalFact 不覆盖旧批准，新 attempt
+不覆盖旧失败；candidate 验收通过不表示已经部署，也不能改变 production selector。源码常量、测试
+结果或流程状态均不能替代 DeploymentFact 和实际激活收据。
 
-## 3.3 高频版本闭环
-
-1. 冻结目标官方产物、依赖、运行时和平台身份；
-2. 比较每条规则的语义锚点、sink 绑定和运行时依赖；
-3. 独立记录 `inherit／change／add／delete／condition_change` 迁移决策，以及
-   `verified／observed／blocked／regressed_evidence` 证据等级；
-4. 始终重跑最小 P／R／J／M 哨兵场景；
-5. 对受影响规则、动态条件、远程 gate、TLS／运行时变化和条件对照重新采集原子断言；
-6. 逐项收敛 DiscoveryInventory 和语义候选，封存未决数为 0 的 DiscoveryDispositionLedger；
-7. 按实现责任把 AtomicAssertionLedger 归并为 RequiredRules，并证明全部原子断言唯一、有归属；
-8. 签发绑定该账本、映射、SupportEnvelope、目标规则、画像、场景和断言的不可变 ApprovalFact；
-9. 生成 candidate ReleaseArtifact 后，用不可变引用在隔离验证目录选择，不改写 production selector；
-10. 在 `SupportEnvelope` 内的所有规定入口执行同一组 RequiredRules 及其原子断言。
-
-字符串相同、窗口邻近或 minify 标识符相同都不足以证明规则未变。只有工具能证明语义片段、依赖和
-sink 关系时，静态锚点才可支持继承；能力不足时使用目标版本重新观察的保守路径。
+现有 Persona Schema 能表达变化时只追加画像数据；需要新协议、新状态机制或 Schema 字段时，优先扩展
+该 Persona 方言。只有最小 `CompiledEnvelope` 或共享终态控制确有缺口时，才按 §5.4 修改共享引擎并
+回归全部受影响 Persona；具体变更分类以 §5.1 为唯一入口。
 
 ---
 
-# 第四部分 验收、发布与回滚
+# 第四部分 候选验收与生产启用
 
-## 4.1 成对验收与 strict 门槛
+本部分回答：候选达到什么条件才能承接生产流量，以及如何保证能够安全回退。这里只定义验收门槛和
+生产不变量；换版阶段见 §5.3，候选交付、实际激活和回滚步骤见 §5.6。
 
-每条原子断言建立独立 `PAIR-*`；一个 RequiredRule 的验收结果由其映射的全部原子断言合取而成，
-不得为减少数量丢弃底层断言。所有被 IngressPolicy 批准的正向入口提交语义等价请求，并在同一
-candidate、画像和条件下验证最终 wire 收敛；未批准入口只进入凭据前 fail-close 的负例分母，不得
-伪造正向 `PAIR-*`。动态字段比较来源、格式、关系和生命周期，不比较一次抓包的随机字面值。客户端
-本地 scenario-only 断言只验证输入边界，不要求网关重演本地文件或 Hook。
+## 4.1 候选如何通过 strict 验收
 
-每个 candidate 必须先冻结 `SupportEnvelope`。目标规则全集是该范围内所有 request-egress 规则，
-而不是把尚未支持的平台、入口、隐私模式或功能静默算作成功。范围外条件必须在 PersonaPlanner 或
-Compiler fail-close；只有 validation-only 才能显式记录非无损降级。
+每个 candidate 必须冻结用途和 `SupportEnvelope`。`validation_only` 可以保留已记录的
+`blocked／regressed_evidence`，但止于诊断；`production_replacement` 必须覆盖范围内全部
+request-egress 规则并达到批准等级，范围外条件由 PersonaPlanner／Compiler fail-close。
 
-`SupportEnvelope` 的批准还必须绑定同一时点的 `ProductionIngressInventory`。每个
-`migrated_strict` 入口都必须位于该 Envelope 内，并按其批准的入口类别完成逐规则断言；
-每个 `retained_legacy`、`explicitly_retired` 或 `rerouted` 入口都必须分别证明遗留隔离、退休或目标
-路由事实。只要仍有 `retained_legacy`，candidate 可以在较小范围灰度，但不得据此删除旧 finalizer、
-旁路或画像构造器，也不得生成表示迁移完成的 RemovalReceipt。
+每条原子断言建立独立 `PAIR-*`，RequiredRule 的结果由其全部原子断言合取。批准的正向入口必须在同一
+candidate、画像和条件下以语义等价请求证明最终 wire 收敛；未批准入口只进入凭据前拒绝的负例分母。
+动态字段比较来源、格式、关系和生命周期；scenario-only 只验证客户端输入边界。
 
-| 用途 | 允许终态 |
+`SupportEnvelope` 必须绑定同一时点的 `ProductionIngressInventory`，每个逻辑入口及其全部物理别名取得
+以下且仅以下一种处置：
+
+| 入口处置 | 验收语义 |
 |---|---|
-| `validation_only` | 可保留已记录的 `blocked`／`regressed_evidence`，止于诊断或 provisional |
-| `production_replacement` | SupportEnvelope 内全部目标规则达到批准等级，不存在阻断 strict wire 的未决项；范围外请求已证明 fail-close |
+| `migrated_strict` | 位于批准范围内，并按入口类别完成全部逐规则断言 |
+| `retained_legacy` | 继续走独立可观测、可回滚的冻结遗留链，并阻止遗留代码退休 |
+| `explicitly_retired` | 已证明无生产消费者或完成有意下线，并保留不可覆盖的退休证据 |
+| `rerouted` | 已迁往明确的非本 Persona 产品路径，并验证 route、认证和失败行为 |
 
-第三方入口按协议类别登记；`official-client-only` 一律拒绝，`canonical-semantic` 中无法无损映射官方
-语义的入口也必须拒绝或明确记录降级。任何对齐责任规则仍为
-`blocked`，或已验证规则降为 `regressed_evidence` 时，candidate 不得成为 strict active；验收通过
-也不会自动提升官方规则的证据等级。
+Inventory 分开记录 `current_disposition` 与 ApprovalFact 的 `target_disposition`，目标计划不得覆盖当前事实。
+`official-client-only` 的第三方入口使用 `explicitly_retired + denied_before_oauth`；未知别名、无处置入口或
+新增裸调用均阻断验收。仍有 `retained_legacy` 时可以缩小灰度，但不得签发 RemovalReceipt 或删除遗留链。
 
-凡 SupportEnvelope 含跨请求状态，验收矩阵还必须在已完成状态转换之间执行 Runtime 重建和应用容器
-重启，并复核后续 wire、状态消费及 startup 去重；同时覆盖长历史中“旧工具往返后出现当前普通轮”、
-当前工具成功／失败续轮、并发 CAS、租约释放和状态存储不可用的负例。只在单进程内连续发送基础请求，
-不能证明该状态机制达到 production replacement 等级。
+`EgressDispositionInventory` 为每个已知出站选择以下且仅以下一种处置：
 
-## 4.2 生产与回滚
+| 出站处置 | 验收语义 |
+|---|---|
+| `persona_strict` | 由画像、Compiler、Executor 和 Guard 管理，并纳入适用 SPEC／PAIR 与 SupportEnvelope |
+| `non_persona_managed` | 不主张官方 wire 等价，但登记 route／Sink、认证、endpoint、client、超时、重试、秘密和审计策略 |
+| `denied` | 未批准、未知或不应发出的路径，运行时 fail-close |
 
-生产启用必须绑定同一 candidate 的验收、画像晋升、正式镜像、终态门禁、独立 canary、正式切换、
-旧版回滚和目标恢复。只替换应用容器，不重建数据库、缓存和依赖服务。运行容器 digest、active／
-rollback、画像摘要和 activation fact 不一致时，状态为 `production_unverified`。
+Persona OAuth 出站即使不属于 strict，也必须进入 `non_persona_managed` 或 `denied`。入口准入沿用 §2.3；
+任何目标规则仍为 `blocked／regressed_evidence` 时，candidate 不得成为 strict active，验收结果也不能
+反向提升官方证据等级。
 
-Runtime Catalog 应按 Persona 独立构造和原子发布。candidate 或未启用 Persona 的画像无效时，不得影响
-其他 Persona 的 production active；已启用 Persona 的 active 无法验证时，该 Persona 的 route 必须
-fail-close，且不得自动借用另一 Persona 或 rollback 画像继续发送。部署可以选择让整个进程停止，或让
-故障 Persona 单独不可用，但必须在部署策略中显式固定，并证明不会跨 Persona 级联或静默降级。
+SupportEnvelope 含跨请求状态时，必须在状态转换间重建 Runtime、重启应用并复核后续 wire、状态消费和
+startup 去重；同时覆盖长历史、工具成功／失败续轮、并发 CAS、租约释放及状态存储不可用。单进程连续
+基础请求不足以证明该状态机制达到 production replacement 等级。
 
-每次生产激活或扩大灰度前，必须分别冻结：
+## 4.2 如何安全激活与回滚
+
+只有通过 §4.1 的 `production_replacement` 才能申请生产激活。生产事实必须绑定同一 candidate 的
+AcceptanceFact、active Release／画像、正式镜像、selector、终态门禁和 DeploymentFact／activation
+receipt；任一不一致均为 `production_unverified`，不得继续或扩大流量。具体操作顺序见 §5.6。
+
+Runtime Catalog 按 Persona 独立构造并原子发布。一个 candidate 或未启用 Persona 的画像无效，不得影响
+其他 Persona；已启用 Persona 的 active 无法验证时，其 route 必须 fail-close，不能借用另一 Persona 或
+rollback 画像发送。进程级停止或 Persona 级隔离必须由部署策略预先固定，禁止静默降级和跨 Persona 级联。
+
+每次生产激活或扩大灰度前，必须冻结：
 
 | 范围 | 含义 |
 |---|---|
-| `ActiveSupportEnvelope` | production active Release 经 ApprovalFact 批准并已通过 strict 验收的能力范围 |
-| `RollbackOperationalEnvelope` | rollback 镜像、selector、配置、依赖和路由已完成真实回退演练的可运行范围 |
-| `DeploymentTrafficEnvelope` | 本次准备切入该 active deployment 的实际生产流量范围 |
-
-必须满足以下不变量：
+| `ActiveSupportEnvelope` | active Release 经 ApprovalFact 批准并通过 strict 验收的能力范围 |
+| `RollbackOperationalEnvelope` | rollback 镜像、selector、配置、依赖和路由经真实回退演练的可运行范围 |
+| `DeploymentTrafficEnvelope` | 本次准备切入 active deployment 的实际生产流量范围 |
 
 ```text
 DeploymentTrafficEnvelope
@@ -410,283 +326,367 @@ DeploymentTrafficEnvelope
 ```
 
 不满足时禁止激活或扩大流量，只能收窄 DeploymentTrafficEnvelope、补足 active／rollback 证明，或让
-范围外入口继续保持 `retained_legacy`／`rerouted`。`RollbackOperationalEnvelope` 只证明操作回退后
-请求不会因范围缺口突然断线，不会提升 rollback 的官方 wire 证据或 strict SupportEnvelope；冻结遗留
-部署可以作为 operational rollback，但其输出仍是 diagnostic-only。
+范围外入口保持 `retained_legacy／rerouted`。RollbackOperationalEnvelope 只证明操作回退可运行，不会
+提升 rollback 的官方 wire 证据；冻结遗留部署可作为 operational rollback，但输出仍是 diagnostic-only。
 
 ---
 
-# 第五部分 文档职责与客户端登记
+# 第五部分 版本与系统变化时如何维护
 
-当前人类可读权威文档为：
+本部分回答：版本或系统发生变化时，应走哪条维护路径、生成哪些新身份，以及如何交付或回退。所有
+变更先经 §5.1 分类；同时包含 Sub2API 上游更新和官方客户端升级时，必须先执行 §5.2，再执行 §5.3。
+客户端手册只能补充证据来源、画像差异、场景、命令和环境约束，不得改写共享状态语义；当前版本、
+机器、账号、候选进度和历史收据只在对应客户端手册及其机器制品中记录。
 
-| 文档 | 责任 |
-|---|---|
-| 本文 | 稳定的共享运行架构、终态合同、证据维度和 Persona 接入不变量 |
-| [`CODEX_CLI_CLIENT_EMULATION_GUIDE.md`](CODEX_CLI_CLIENT_EMULATION_GUIDE.md) | Codex CLI 官方事实、画像、实现和版本流程 |
-| [`CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md`](CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md) | Claude Code 官方事实、画像、环境、实现和版本流程 |
+## 5.1 先判断属于哪种变更
 
-未来新增官方客户端时采用“一客户端一专属手册”，并在本节登记。Grok、Gemini 目前只是架构可扩展性
-示例，不表示已经确认其官方客户端、OAuth 路径、规则或仿真实现。机器证据、JSON 台账、Schema 和
-收据可以分目录保存，但不得形成第二套人类可读规范。
+开始修改前必须先选择以下且仅以下一种主变更类型；若一个需求同时命中多类，必须拆成按依赖顺序执行
+的独立变更集：
 
----
+| 主变更类型 | 识别条件 | 公共流程入口 | 最低身份变化 |
+|---|---|---|---|
+| Sub2API 上游更新 | 合并新的 upstream commit，目标官方客户端版本不变 | §5.2 | 独立 upstream changeset；按影响判断新 candidate 或同版本后继 Campaign |
+| 官方客户端换版 | 官方产品版本、发行物、依赖、平台、默认条件或目标画像变化 | §5.3 | 新 Campaign；后续生成新 ApprovalFact 和 candidate |
+| 共享合同／运行时变化 | Registry、Store、Selector、Executor、Token、Guard 或最小 CompiledEnvelope 合同变化 | §5.4 | 后继共享合同和全部受影响 Persona 的新验证事实 |
+| 同版本实现变化 | 官方规则、画像、场景和产出侧证据工具不变，仅实现、测试或构建变化 | §5.5.1 | 原 Campaign 下的新 candidate |
+| 兼容代码退休 | 删除遗留入口、finalizer、旁路、类型或构造接线 | §5.5.2 | 独立退休变更集和 RemovalReceipt |
+| 纯文档澄清 | 不改变规范语义、机器事实、代码、画像、场景或门禁 | 对应文档直接修订 | 不复用或覆盖任何历史收据 |
 
-# 第六部分 首轮迁移实施方案
+官方客户端换版不得夹带 Sub2API 上游合并或无关重构；上游更新也不得顺手改变目标客户端版本。两类
+变化同时存在时，必须先按 §5.2 完成独立上游变更集，证明现有 Persona 的 production active／rollback
+无非预期 final-wire 差异并冻结新基线，再按 §5.3 新建客户端换版 Campaign；两者不得共享 Campaign、
+candidate 或批准事实。
 
-本部分把现有 Codex 专用 strict 执行链收窄为多 Persona 共享控制内核，并在不把 Claude 遗留输出
-当作规格的前提下重建 Claude Code firstParty OAuth 仿真。机器角色必须随 Campaign 和验收事实冻结，
-不能由主机名隐含决定：历史 FW-C／FW-H 收据只陈述签发时的事实；当前 DMIT 是候选验收机，Vircs 是
-用户管理的生产机。本任务以 DMIT 达到 `ready_for_operator_release` 为终点，不连接、不修改 Vircs，
-也不签发声称 Vircs 已部署的 DeploymentFact。
+若规则、SupportEnvelope、画像、断言、场景或产出侧证据工具发生变化，即使官方版本字符串不变，也
+必须建立同版本后继 Campaign，不能按普通实现变更处理。Campaign、ApprovalFact、candidate 与 attempt
+的身份边界以 §3.3 为准，所有事实只写追加。
 
-## 6.1 当前状态与本轮目标
+## 5.2 合并 Sub2API 上游更新
 
-Codex active／rollback 及 final wire 是零差异基线；Claude 2.1.220 只作为差分证据和 baseline fixture，
-遗留 Claude 输出只作诊断。先完成 Codex-only 发布，再开始 Claude 工作；Grok、Gemini 不在本轮范围。
+### 5.2.1 目标、边界与完成条件
 
-Claude 的实现权威是 FW-E 冻结的最新 stable。ProfileSchema、目标 Snapshot 和实现必须先由该版本证据
-驱动；2.1.220 只能随后由同一 Schema／Compiler 表达为基线 fixture 或受范围约束的 rollback，不得反向
-决定目标设计。candidate 冻结后，即使官方 stable 再变化也不得中途换版。
-
-FW-F 已按 `validation_only` 完成：7,368 个发现、593 个正交候选和 32 个语义候选族未决数均为 0；
-FW-F v1 机械生成的 97 条提案已全部撤回。593 个候选覆盖 331 个目标发送点、102 个旧源码机制、71 个
-HitCC 线索、57 条历史规则和 32 个候选族。AtomicAssertionLedger 保留 110 条经 Vircs 上 2.1.226
-官方客户端实测通过的断言，其中 107 条普通断言使用 R/M，3 条 TLS 断言使用原生 P/M；106 条归并为
-40 条 RequiredRules，4 条归入客户端本地 scenario-only。
-遥测关闭、非必要流量及 usage／models 等合法零流量只作支撑事实，不进入规则集。八类 strict egress
-分别是 messages、hello、OAuth profile、policy limits、settings、count_tokens、OAuth refresh 和 MCP
-servers；已 target-first 生成 2.1.226 的 ProfileSchema、Snapshot、ReleaseArtifact 与八个纵向样例，再以
-同一 Schema 文档／Compiler attestation 生成 2.1.220 的两个 baseline fixture，并签发 Evidence／Profile
-ApprovalFact。FW-F 的 40 条 RequiredRules 保持 `observed`，且该阶段没有 production-replacement
-ApprovalFact、candidate、selector 变更或部署。事实分别见
-[发现项清零收据](egress/maintenance/fw-f-discovery-clearance/receipt.json)和
-[FW-F RequiredRules 规范化收据](egress/maintenance/fw-f-required-rules-normalization/receipt.json)。
-
-FW-G 的历史 40 条 RequiredRules、`PAIR-<SPEC-ID>`、ValidationCandidate 和 AcceptanceFact 继续作为
-不可变证据。当前后继变更把 Claude IngressPolicy 收窄为 `official-client-only`：正向范围只有已登记
-Claude Code、Claude Desktop、Claude Code for VS Code 经由 Messages／count_tokens 的两类逻辑入口；
-KiloCode、zlfcode、curl、Chat Completions、Responses、未登记版本、Header、metadata、System 或工具
-目录均在读取 OAuth 凭据前拒绝。历史六入口 strict 和 DMIT-as-production 收据保持不可变，但不再代表
-当前目标。当前只允许在 DMIT 构建候选验收事实；Vircs 保持 `operator_managed／unverified／not_touched`。
-
-截至 2026-08-22，official-client-only 后继源码已冻结在提交
-`8a33e1c902f5b5bf911b4625dea6f35b70321183`，固定 amd64 镜像
-`sha256:1de00f4b89a0aa16184186a923856ea13ee88cd504681c0233bd03d77b7f9ad4` 已部署 DMIT 且容器健康、
-重启数为 0。完整在线矩阵因测试账号 `#100` 的 Anthropic access／refresh token 均被撤销而停止；正常
-refresh 返回 `invalid_grant`，必须先由用户重新 OAuth 授权。因此当前状态只能是
-`candidate_deployed／not_ready_for_operator_release`，不能签发本轮 AcceptancePackage。可恢复制品、
-凭据边界和严格续作顺序见
-[`CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md` §3.6.1](CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md#361-fw-h-当前续作检查点2026-08-22)；
-Vircs 仍未连接、未修改。
-
-## 6.2 现有代码处置
-
-| 处置 | 必须满足 |
-|---|---|
-| 保留 | Persona 身份、Route／Sink 闭集、摘要绑定、每 Persona 独立 authority／issuer／状态、Token 和 Guard |
-| 收窄 | `CompiledEnvelope` 只含厂商无关事实；移除 Codex 专用 Policy／fallback；candidate 与 active／rollback selector 分离 |
-| 隔离 | 各 Persona 的 Plan、IdentityFacts、Schema、Compiler 和 transport 参数留在自有模块；Codex facade 保持 final wire 零差异 |
-| 目录 | 各 Persona 的不可变 Release 进入内容寻址 Catalog；共享 selector 只持有 active／rollback 类型引用，运行时事实从选中 Release 派生 |
-| 收据 | 历史 transition／fixture／receipt 不覆盖；源码、测试、画像或镜像变化均建立后继事实 |
-
-## 6.3 实施顺序
-
-`FW-A～FW-H` 是唯一阶段编号，并按以下顺序执行：
+本节是 Sub2API 上游合并的共享操作规程，只更新受维护的源码基线，不改变 Codex CLI 或 Claude Code
+目标版本。每个 upstream commit 必须使用独立 changeset、计划和证据目录；
+`tools/upstream_merge/` 负责 `U-0～U-6` 状态约束，不负责选择上游目标、代替人工判断、生成客户端专用
+证据、推送远端或部署生产。
 
 ```text
-FW-A 基线 → FW-B 暂定合同 → FW-C Codex-only 发布 → FW-D 通用工具链
-→ FW-E 最新 stable 取证 → FW-F target-first 画像与最终合同
-→ FW-G 完整实现与隔离验收 → FW-H DMIT 发布候选验收与交付
+Framework §5.2 的 U-0～U-6 全部完成
+∧ Codex 三类门禁（active wire／rollback wire／ingress matrix）全部 passed
+∧ Claude 三类门禁（active wire／rollback wire／ingress matrix）全部 passed
+∧ 当前工具阻断数 = 0
+⇒ upstream_source_baseline_updated
 ```
 
-每阶段是独立变更集。输入必须引用前序不可变制品；输出只写追加；退出门禁未满足时不得开始下一阶段。
+完整 v2 计划、阶段制品、客户端收据、12 类门禁、冲突独立复算或最终重放任一缺失／失败，阻断数
+即大于 0；只有 `finalize` 与 `replay` 均成功才封存 `current_tool_blocker_count=0`。该状态只证明
+本地受维护分支完成受审合并，不表示 candidate 已交付或生产已更新。
 
-### 6.3.1 FW-A：只读冻结基线
+### 5.2.2 准备计划、门禁与人工输入
 
-- **前置输入**：当前仓库、Codex 官方证据与 production active／rollback、Vircs 运行态，以及 Claude
-  2.1.220 证据目录和遗留发送面；本阶段只需只读权限。
-- **必做动作**：冻结 Codex 源码、测试、画像、selector、镜像、final wire 和生产恢复点；冻结 Claude
-  2.1.220 的官方产物、P／R／J／M、规则台账，以及遗留入口、出站和运行输出。
-- **输出制品**：两类基线的摘要清单、Codex active／rollback fixture、生产恢复资料、Claude
-  2.1.220 evidence baseline，以及标为 `diagnostic-only` 的遗留观察结果。
-- **退出门禁**：Codex 两个 Release 和 final wire 可复算；Claude 证据来源、规则计数和缺口可复算；
-  只读前后生产镜像、selector、配置和依赖一致。
-- **禁止／回退**：不得改代码、画像、selector 或生产；不得把 Claude 遗留输出当 expected wire。任一
-  基线不完整时留在 FW-A 补齐。
+1. 在干净的受维护本地分支上获取并人工确认目标 tag 的完整 commit；不得使用浮动远端分支，工具也不联网
+   猜测 latest。
+2. 按 `tools/upstream_merge_request.schema.json` 编写只读 `UpstreamMergeRequest v1`，绑定 upstream、
+   受维护分支、目标版本和 commit、active／rollback、两类 Inventory、运行状态、恢复点、受保护路径，
+   以及不存在的隔离 worktree 和空且权限为 `0700` 的证据目录；要求排序的字段必须保持排序。
+3. `gates` 按 `id` 排序并恰好覆盖下表六类客户端门禁，以及 `cross_persona`、`inventory_closure`、
+   `original_business`、`secret_scan`、`shared_full_regression`、`shared_static` 六类共享门禁。客户端收据
+   使用 `receipt_replay` 并显式消费 `{receipt}`。
+4. 门禁以 `argv` 数组执行，不经 shell；只允许 `{candidate_commit}`、`{candidate_tree}`、`{evidence_root}`、
+   `{plan}`、`{receipt}`、`{repository}` 占位符。六类客户端门禁按下表定义，不再由客户端手册另设上游
+   更新步骤。
 
-### 6.3.2 FW-B：抽取暂定共享合同
-
-- **前置输入**：FW-A 的 Codex 基线、现有 Codex strict 执行链及其本地门禁。
-- **必做动作**：只抽取 Persona 身份／Registry、ReleaseArtifact Store／Runtime Selector 的只读运行时
-  合同、Executor authority、FinalizationToken、Guard、Route／Sink 闭集和既有 Codex 收据校验接口；
-  保留 Codex facade，并把 Codex 专用 Plan、Identity、Policy、Schema 和 Compiler 留在 Codex 方言。
-- **输出制品**：标为 `Codex-compatible` 的暂定共享合同、对应实现，以及覆盖 active／rollback 的
-  Codex 零差异回归。
-- **退出门禁**：共享 `CompiledEnvelope` 不含厂商 Header／Body／版本／fallback 字段；Codex 全部门禁
-  通过，active／rollback 的画像选择和 final wire 与 FW-A 逐字节零差异。
-- **禁止／回退**：不得登记 Claude Persona、Route、Sink、画像或 production binding；不得为未来厂商
-  预造协议抽象。非零差异在 FW-B 修正，不得进入 FW-C。
-
-### 6.3.3 FW-C：Codex-only 验证与生产发布
-
-- **前置输入**：FW-B 的固定源码与测试树、FW-A 的 Codex fixture 和 Vircs 恢复点。
-- **必做动作**：构建固定 digest 的 `linux/amd64` Codex-only candidate；在 DMIT 验证 active／rollback、
-  Compiler、Route／Sink、Token、Guard、final wire，并完成 canary、回滚和目标恢复；随后只读冻结
-  Vircs，再仅替换应用容器，核对 health、日志、镜像、selector、activation fact 和 Guard，完成稳定观察。
-- **输出制品**：DMIT 验收／回滚／恢复收据，Vircs 发布收据、运行事实和稳定观察结果，以及可恢复的
-  旧生产镜像、配置和依赖引用。
-- **退出门禁**：Codex final wire 零差异；DMIT 回滚与恢复成功；Vircs 运行态与发布收据一致且观察期
-  通过；本轮镜像中没有新增 Claude Persona、画像或 strict 注册。
-- **禁止／回退**：不得在 Vircs 做探索性测试或为演练切换生产；不得夹带 Claude 实现。发布异常按
-  FW-A 恢复点回滚；FW-C 后共享运行时代码再变化，必须返回 FW-B 并重走 FW-C。
-
-### 6.3.4 FW-D：建设通用受管工具链
-
-- **前置输入**：FW-C 已稳定的 Codex 生产收据和暂定共享合同；测试只使用 Codex 与合成数据。
-- **必做动作**：围绕 FW-B 的只读运行时合同实现 Campaign 编排、正交事实账本、Evidence／Profile
-  两段式批准、Snapshot／ReleaseArtifact 的写入／封存／复算、独立 ValidationCandidate 引用、
-  原子 `PAIR-*`、RequiredRules 映射、两个 Inventory、SupportEnvelope、ActiveSupportEnvelope、
-  RollbackOperationalEnvelope、DeploymentTrafficEnvelope，以及晋升、激活和不可覆盖收据的生成与复算。
-- **输出制品**：可执行工具、Schema／Store、状态转换门禁、条件对照／mutation 测试和收据重放能力；此阶段不产生
-  Claude Profile、Snapshot 或 Runtime 注册。
-- **退出门禁**：工具能机器阻断越权转换、原位覆盖、摘要漂移、candidate 借用 production selector、
-  入口别名遗漏、未处置出站、Envelope 范围缺口和收据不匹配；追加事实可独立重放。
-- **禁止／回退**：不得查询并预选 Claude 目标 stable，不得接入 Claude 生产 route／Sink。若工具实现
-  改动共享运行时代码，先返回 FW-B／FW-C 重新证明 Codex，再继续 FW-D。
-
-### 6.3.5 FW-E：冻结最新 stable、取证并封存发送面
-
-- **前置输入**：FW-D 工具链、FW-A 的 2.1.220 evidence baseline／遗留观察面，以及 FW-C 的生产收据。
-- **必做动作**：第一步查询官方 `stable`，立即冻结准确版本、发行物来源／integrity／摘要、平台、
-  entrypoint、隐私模式、默认条件和工具身份；先从目标官方产物独立枚举全部网络 sink、请求构造、
-  条件 gate 和跨请求状态，再取目标原生发现、历史规则、旧源码／线索账本及前一批准 stable 的候选
-  并集，逐项执行语义差分、P／R／J／M 哨兵和 `inherit／change／add／delete／condition_change` 分类，
-  并独立记录 evidence level。首次 Claude Campaign 以 2.1.220 为历史比较基线；后继换版以最近批准
-  stable 为增量基线，但不得因此丢弃永久历史候选。最后完成逻辑入口、物理别名、消费者和全部 OAuth
-  出站的 source-to-sink 盘点，只在冻结遗留路径启用 `legacy_observe`。
-- **闭集发现要求**：目标原子断言全集不得由旧规则台账枚举后迁移得到，也不得截断 sink、只扫描已知
-  host／path 或只运行固定字面量探针。每个目标 sink 必须有稳定身份、可复算来源、可达性边界和唯一
-  disposition。原始发现先进入无截断 `DiscoveryInventory`，再按语义归并为候选；只有形成可执行语义、
-  适用条件和断言的项才进入 `AtomicAssertionLedger`。目标独有机制经语义审查后必须能显式形成 `add`，不得按
-  “一个发现一条规则”自动生成。仍不知道下一步如何处置的项保持 `unclassified` 并阻止闭集；已经取得
-  稳定身份和证据绑定、但尚缺目标语义或运行证明的项使用 `mapped_validation` 进入语义候选，保留真实
-  `observed／blocked` 并禁止加入原子断言台账和生产。静态分析只能把精确调用存在性记为 `observed`，不能
-  据此证明触发条件、流量类别或 wire；strict 命题仍须由目标版本运行证据闭环。
-- **行为层边界**：是否产生某类流量不作为独立的一致性对比维度。`essential traffic` 只界定后续
-  strict wire／PAIR 的场景范围；场景被调用时仍须按 §1.2 核对实际请求的 wire、transport、动态事实、
-  条件分支和跨请求状态。官方可配置关闭的 telemetry 与 nonessential traffic 只记录配置、可达性和
-  观测事实，其缺失属于合法状态，不得计为一致性差异或“不像官方客户端”的依据。Claude 的
-  `DISABLE_TELEMETRY` 与 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 是该判据的官方实现依据。
-- **输出制品**：目标 Campaign 身份、不可变 EvidencePackage、目标 sink inventory、
-  `DiscoveryInventory`、`SemanticRuleCandidate`、只含 SPEC 的原子断言迁移台账、跨来源矩阵及三层间的双向
-  来源绑定，以及两个 Inventory 的当前事实；拟议 `target_disposition`／出站处置只作为未批准提案，
-  不覆盖当前事实。
-- **退出门禁**：官方产物和目标版本可复算；每条现有或新增 SPEC 都有迁移决策、证据等级和适用边界；
-  历史候选和目标原生发现均有唯一处置，目标 sink inventory 无截断、重复或未分类项，运行观测没有
-  出现 inventory 外 host／path／sink；所有发现均在 DiscoveryInventory，所有语义候选均禁止加入
-  AtomicAssertionLedger／生产且与发现双向绑定，AtomicAssertionLedger 不含 `CAND-*` 或发现 ID；两个 Inventory 覆盖全部已知
-  别名／调用方／出站并能报告未知项；Store 只追加
-  `discovery_recorded／evidence_recorded`，没有 Evidence／Profile 批准；观察过程未改变生产流量。
-- **禁止／回退**：本阶段不得定义目标 ProfileSchema、Snapshot、Persona 实现或 production strict
-  binding；只允许为已冻结遗留调用点追加 `unclassified + legacy_observe` 的 observation-only Sink，且不得
-  主张 Persona 或 wire 等价。不得用 2.1.220 或遗留输出补足目标 stable 证据；证据不足时缩小候选范围
-  或归入禁止生产的语义候选；不得为了闭合发现清单自动生成规则。
-
-### 6.3.6 FW-F：target-first 画像、样例与最终合同
-
-- **前置输入**：FW-E 的 EvidencePackage／两个 Inventory、FW-D 工具链，以及 FW-C 对应当前共享合同的
-  Codex 生产收据。
-- **必做动作**：先对 FW-E 全部发现和语义候选执行受管语义审查，生成逐项
-  `DiscoveryDispositionLedger`，把每个发现收敛到规则、支撑事实、受管出站、非出站、目标版本缺失或
-  规范重复项；只有目标版本 R/M（必要时 P）和逐项断言闭合的 request-egress 命题才能进入
-  AtomicAssertionLedger。随后按 Codex 六字段和 Persona 实现责任归并 RequiredRules，客户端本地行为
-  进入 scenario-only，并证明全部原子断言恰好一次归属。未决数清零后，才由最新 stable 证据定义 Claude
-  PersonaDescriptor、IngressPolicy、必要的 OfficialIngressCatalog、PersonaPlanner、ClaudeEgressPlan、IdentityFacts、ProfileSchema 和
-  DialectCompiler，登记 IngressProtocolAdapter 的复用／新增结论及 TransportCapability，生成目标
-  Snapshot／ReleaseArtifact 与不可部署纵向样例。随后用同一 Schema／Compiler 生成 2.1.220
-  baseline／rollback fixture；通过样例后才冻结最终共享合同，并在 ApprovalFact 中批准 Persona 派生、
-  compatibility 边界、SupportEnvelope、两个 Inventory 的 `target_disposition` 及三个 Envelope 计划。
-- **输出制品**：目标 stable 和 2.1.220 两个不可变 ReleaseArtifact／fixture、target-first 样例、最终
-  多 Persona 合同、覆盖全部发现的不可变 `DiscoveryDispositionLedger`、AtomicAssertionLedger、
-  RequiredRules manifest，以及绑定其摘要、规则、映射、画像、场景、断言、Inventory 和范围的目标
-  stable ApprovalFact。
-  规则证据未全部达到 `verified` 时，ApprovalFact 只能是 `validation_only`；它可以封存 FW-F 合同，
-  但不能生成 production-replacement candidate。
-  只有计划把 2.1.220 用作 strict rollback 时，才为其自身规则和窄 SupportEnvelope 另签独立 ApprovalFact；
-  否则它只保持 baseline／conformance fixture 身份。
-- **退出门禁**：`DiscoveryDispositionLedger` 与 FW-E inventory 摘要一致，每个发现恰好一个已解决记录、
-  至少一个终态绑定且可双向追溯；跨语义发现可以有多个绑定。发现缺失／重复记录／未决、仅
-  `catalogued_context`、未收敛语义候选和无主支撑事实均为 0；
-  全部正交候选均有唯一终态；每条原子断言都有独立 `PAIR-*`、官方正例、明确分母／条件／适用范围，
-  条件命题有官方条件对照，无条件命题有零违规分母且不伪称独立官方负例；普通原子断言严格绑定 R/M，
-  TLS 原子断言严格绑定 P/M。每条 RequiredRule 按 Codex 六字段记录并映射一条或多条原子断言，全部
-  原子断言必须唯一归入 RequiredRule 或明确的 scenario-only／supporting-fact；不得存在未测能力占位。
-  客户端指南、RequiredRules manifest、Snapshot、EvidencePackage 和 SupportEnvelope 的 RequiredRule
-  ID 集合必须完全一致。目标样例、candidate mutation、跨 Persona／跨 Release 负例和 Codex 零差异通过；
-  Schema 能表达两个版本且不以 2.1.220
-  限制目标设计；Codex 生产收据对应最终合同；所有 production selector 保持不变。
-- **禁止／回退**：不得先构造 2.1.220 画像，不得把样例注册到 production Runtime Catalog。Persona
-  自有缺口留在 Claude 方言；不得按发现数量自动生成 SPEC，也不得以聚类、关键词未命中或缩小范围
-  隐藏未决项。共享控制合同确有缺口时作废本阶段批准，返回 FW-B 并重走 FW-C、FW-F。
-
-### 6.3.7 FW-G：完整实现与隔离验收
-
-- **前置输入**：FW-F 的目标 stable ApprovalFact、可选的 2.1.220 rollback ApprovalFact、最终合同、
-  两个 ReleaseArtifact／fixture 和 FW-D 工具链。
-- **必做动作**：完整实现 FW-F 已批准 SupportEnvelope 内的最新 stable Header、Body、状态、transport、
-  受管 Persona system／identity
-  派生及有损 compatibility 隔离；所有入口经过 §1.3 统一链路，Claude 使用独立 Executor authority、
-  Token issuer 和 invocation 状态；`persona_strict` 全部进入 Compiler／Executor／Guard，
-  `non_persona_managed` 进入独立受管策略，未知 OAuth 出站 `denied`。若 FW-F 只有 `validation_only`
-  ApprovalFact，先通过独立官方运行、实现后对拍和负例把所需规则升级到 `verified`，并签发后继
-  `production_replacement` ApprovalFact，再封存
-  ValidationCandidate；随后在 DMIT 对全部 strict 入口执行 PAIR、范围外拒绝、managed 出站和
-  rollback／恢复验收。
-- **输出制品**：固定源码／测试／镜像／Release 引用的 ValidationCandidate、逐规则 PAIR 结果、
-  AcceptanceFact，以及 rollback 演练和 Codex 回归结果。
-- **退出门禁**：SupportEnvelope 内目标规则唯一全覆盖，所有批准正向入口均通过；所有未批准客户端、
-  版本、协议和工具目录在凭据前 fail-close，三种出站处置、统一链路、Persona 派生、独立 authority／issuer／状态、跨 Persona
-  隔离、compatibility 隔离和 rollback 均通过；candidate 达到 `production-replacement ready`，且 Codex
-  final wire 零差异。
-- **禁止／回退**：不得修改 production selector 或删除遗留链；`observed／blocked／regressed_evidence`
-  只要仍位于已批准 SupportEnvelope，就必须留在 strict 分母并阻止 production-replacement ready；只有
-  新 ApprovalFact 真实收窄范围且范围外 fail-close 后才能移出。证据不足止于 validation-only；共享合同
-  缺口按 FW-F 回退，任何批准内容或构建变化均建立新的 ApprovalFact 或 ValidationCandidate，不复用
-  AcceptanceFact。
-
-### 6.3.8 FW-H：DMIT 发布候选验收与交付
-
-- **前置输入**：FW-G 的 production-replacement AcceptanceFact、不可变 candidate／Release、FW-F 的
-  两个 Inventory，以及已冻结的 DMIT 现状和可运行回退镜像。
-- **必做动作**：在 Mac／ARM64 按冻结构建链生成固定 `linux/amd64` 镜像，只替换 DMIT 应用容器；在
-  DMIT 执行三类已登记官方客户端的 Messages／count_tokens 正例，以及 KiloCode、zlfcode、curl、Chat
-  Completions、Responses、未登记版本／Header／metadata／System／工具目录和跨 Persona 负例；完成
-  DMIT 镜像回退、候选恢复、稳定观察和依赖不变核对。
-- **输出制品**：固定源码、二进制与镜像摘要，DMIT 候选验收／回退／恢复／稳定观察收据，最终
-  ProductionIngressInventory，以及状态为 `ready_for_operator_release` 的 AcceptancePackage。
-- **交付门禁**：DMIT 运行镜像、Release、Profile、OfficialIngressCatalog、Approval、Inventory 和收据
-  一致；两类官方逻辑入口正例全通过，全部拒绝入口在读取 OAuth 凭据前失败；Codex final wire 零差异，
-  应用回退与候选恢复成功，依赖服务未改变。
-- **禁止／回退**：不得连接、修改或部署 Vircs，不得签发 Vircs DeploymentFact，也不得把 DMIT 验收
-  写成生产已激活。不得重建数据库／缓存／依赖服务或覆盖历史事实；任一门禁失败时恢复 DMIT 冻结
-  镜像并保持 `not_ready_for_operator_release`。
-
-用户后续自行替换 Vircs 时，必须另行冻结真实生产范围、回退目标并签发 DeploymentFact；DMIT 的
-`ready_for_operator_release` 收据不能代替生产激活事实。2.1.220 只有在其独立 ApprovalFact 和真实演练
-覆盖实际生产范围时，才能作为 strict rollback；否则只能使用已冻结的操作回退镜像。
-
-## 6.4 失败与回退规则
-
-以下规则优先于阶段内的正常推进：
-
-| 触发条件 | 必须动作 |
+| 门禁 | 必须重放的客户端事实 |
 |---|---|
-| Codex final wire 非零差异，或共享运行时代码变化 | 返回 FW-B，建立后继合同并重新完成 FW-C |
-| FW-D 不能机器阻断越权、范围缺口或收据不匹配 | 停在 FW-D，不得启动 stable Campaign |
-| FW-E 存在未分类／被截断的目标 sink、未处置历史发现，或语义候选与发现未双向闭合 | 停在 FW-E，补目标原生发现和运行证据，或把证据不足项登记为禁止进入 AtomicAssertionLedger／生产的 `mapped_validation` 语义候选；不得按发现数量生成 SPEC，也不得以遗留输出补证。候选可随 EvidencePackage 封存，但不能据此进入 production replacement |
-| FW-F 仍有仅归档／待判断发现、未收敛语义候选，或逐项终态不能反向解析到 FW-E inventory | 停在 FW-F，补语义审查、目标证据和终态绑定；未决数清零前不得签发 ProfileApprovalFact、生成 candidate 或缩小范围绕过 |
-| FW-F／FW-G 发现共享合同缺口 | 作废相关 ApprovalFact／candidate，返回 FW-B；重走 FW-C，并重验两个 fixture |
-| 官方产物、批准内容、源码、测试、画像或镜像变化 | 按 §3.2 建立新 Campaign、ApprovalFact 或 candidate；旧验收和收据不得复用 |
-| FW-H DMIT 镜像、Catalog、批准、Inventory、正负矩阵或回退恢复不一致 | 恢复 DMIT 冻结镜像，保持 `not_ready_for_operator_release`；不得触碰 Vircs |
-| 仍有 `retained_legacy`、未知入口或未处置出站 | 不得退休遗留链；未知 OAuth 出站保持 `denied` |
+| `codex_active_wire` | 当前 Active Release／Profile 的 final-wire 空允许列表；覆盖 HTTP／WS、realtime、compact、images、文件上传、OAuth refresh、WHAM、Route／Sink 与 turn-state |
+| `codex_rollback_wire` | 当前 Previous Release／Profile 的 final-wire 空允许列表，以及 rollback 路由和选择器可恢复性 |
+| `codex_ingress_matrix` | 官方及已批准第三方入口的完整正负矩阵，以及入口到批准 Persona／Profile 的唯一绑定 |
+| `claude_active_wire` | 当前 production active Release／Profile、OfficialIngressCatalog、ModelCapabilityCatalog 和全部 strict egress 的 final-wire 空允许列表 |
+| `claude_rollback_wire` | 当前 rollback Release／Profile、Catalog、模型能力与 strict egress 的 final-wire 空允许列表及可恢复性 |
+| `claude_ingress_matrix` | 官方 Messages／count_tokens 正例，以及第三方 Messages／count_tokens、Chat Completions、Responses、未登记版本、System／工具目录的凭据前拒绝负例；同时重放当前受审 RequiredRules、原子断言、模型能力和 Catalog 摘要 |
+
+`U-2` 还必须复核 Codex 手册 §3.5.2 的高风险接缝，以及 Claude／Anthropic source-to-sink、入口别名和
+Persona Guard。新增官方出站不得使用裸 client；ReleaseCatalog／SnapshotCatalog、版本泄漏 baseline、
+账号 UA 和 `discovered_latest` 不得因本次合并取得 active 选择权。`U-4` 的共享门禁必须包含
+`check_ledger_completeness.py`、`check_version_leak.py` 和完整 `make check-egress-spec`；范围无法可靠收窄时，
+执行相应客户端手册第四部分的完整候选验收。
+
+人工输入均为只写一次的严格 JSON：先编写不含 `identity_sha256` 的草稿，再用 `identity-seal` 写入新文件；
+禁止手填自摘要或覆盖旧输入。
+
+| 输入 | 使用条件 | 核心内容 |
+|---|---|---|
+| `ConflictResolutionInput v1` | 合并有冲突 | 每个冲突路径的 `fork／upstream／manual` 决策、理由和解决后 blob |
+| `SourceChangeInput v1` | 自动 Codex overlay 之外还有变化 | merge commit、全部额外路径及理由；不得重复登记自动 overlay |
+| `SurfaceDecision v1` | route 或 source-to-sink 有 delta | 每个 delta 的唯一处置、理由和候选 Inventory 条目 |
+| `ChangeDecision v1` | 每次合并 | 逐文件／逐 delta 分类、动作及身份／证据语义变化判定 |
+| `CandidateDispositionInput v1` | 12 类门禁全通过 | 两个 Persona 的处置模式及 Campaign／candidate／Approval／Acceptance、共享合同和原业务收据 |
+
+`UpstreamMergePlan v1` 与 v0.1.177 台账只用于历史重放。新合并只允许 v2；计划生成后若工具、Schema
+或门禁漂移，必须作废计划，先独立补齐并测试工具，再从 `U-0` 重新开始。
+
+### 5.2.3 按 U-0～U-6 执行
+
+顺序固定且 CLI 会验证前置状态：`U-0` 冻结计划；`U-1` 形成可重放的双父 merge commit；`U-2` 唯一写入
+新 Codex overlay 并闭合发送面；`U-3` 完成逐项影响分类；`U-4` 要求 12 类门禁全部通过，任一失败或
+污染均生成 `blocked` 收据；`U-5` 处置必须与 `U-3` 推导一致并绑定共享／原业务收据；`U-6` 仅以
+`--ff-only` 快进本地分支，并通过 finalizer 与独立 replay。
+
+以下变量均为绝对路径；`PLAN` 固定为请求中的 `evidence_root/plan.json`。先按标准路径执行；出现冲突、
+额外源码变化或发送面 delta 时，用后面的条件命令替换对应步骤。
+
+```bash
+#U-0：生成并复算完整计划
+python3 -m tools.upstream_merge plan-create --repository "$REPO" --request "$REQUEST"
+python3 -m tools.upstream_merge plan-validate --repository "$REPO" --plan "$PLAN"
+
+#U-1：标准路径无冲突
+python3 -m tools.upstream_merge merge-start --repository "$REPO" --plan "$PLAN"
+python3 -m tools.upstream_merge merge-seal --repository "$REPO" --plan "$PLAN"
+
+#U-2：标准路径无额外源码变化，四个发送面均为零差异
+python3 -m tools.upstream_merge source-seal --repository "$REPO" --plan "$PLAN"
+python3 -m tools.upstream_merge surface-scan --repository "$REPO" --plan "$PLAN"
+python3 -m tools.upstream_merge inventory-carry-forward --repository "$REPO" --plan "$PLAN" --client claude --kind ingress
+python3 -m tools.upstream_merge inventory-carry-forward --repository "$REPO" --plan "$PLAN" --client claude --kind egress
+python3 -m tools.upstream_merge inventory-carry-forward --repository "$REPO" --plan "$PLAN" --client codex --kind ingress
+python3 -m tools.upstream_merge inventory-carry-forward --repository "$REPO" --plan "$PLAN" --client codex --kind egress
+python3 -m tools.upstream_merge surface-seal --repository "$REPO" --plan "$PLAN"
+
+#U-3：生成影响分母并封存逐项决策
+python3 -m tools.upstream_merge impact-generate --repository "$REPO" --plan "$PLAN"
+python3 -m tools.upstream_merge identity-seal --input "$CHANGE_DRAFT" --output "$CHANGE_INPUT"
+python3 -m tools.upstream_merge impact-seal --repository "$REPO" --plan "$PLAN" --decision "$CHANGE_INPUT"
+
+#U-4：attempt id 必须全新
+python3 -m tools.upstream_merge gates-run --repository "$REPO" --plan "$PLAN" --attempt-id attempt-001
+
+#U-5：封存两个 Persona 及共享／原业务回归的处置
+python3 -m tools.upstream_merge identity-seal --input "$DISPOSITION_DRAFT" --output "$DISPOSITION_INPUT"
+python3 -m tools.upstream_merge disposition-seal \
+  --repository "$REPO" --plan "$PLAN" --input "$DISPOSITION_INPUT" \
+  --verification-receipt "$VERIFICATION_RECEIPT"
+
+#U-6：仅快进本地受维护分支，然后最终化并独立重放
+python3 -m tools.upstream_merge apply --repository "$REPO" --plan "$PLAN"
+python3 -m tools.upstream_merge finalize --repository "$REPO" --plan "$PLAN"
+python3 -m tools.upstream_merge replay --repository "$REPO" --plan "$PLAN" --receipt "$UPSTREAM_RECEIPT"
+```
+
+条件分支只替换对应的标准命令：
+
+```bash
+#U-1：有冲突时逐项解决并 git add，再替换 merge-seal；fork/upstream 的 index blob 必须匹配冲突阶段
+python3 -m tools.upstream_merge identity-seal --input "$CONFLICT_DRAFT" --output "$CONFLICT_INPUT"
+python3 -m tools.upstream_merge merge-seal --repository "$REPO" --plan "$PLAN" --conflict-decisions "$CONFLICT_INPUT"
+
+#U-2：有额外源码变化时，封存 SourceChangeInput 并替换 source-seal
+python3 -m tools.upstream_merge identity-seal --input "$SOURCE_CHANGE_DRAFT" --output "$SOURCE_CHANGE_INPUT"
+python3 -m tools.upstream_merge source-seal --repository "$REPO" --plan "$PLAN" --source-changes "$SOURCE_CHANGE_INPUT"
+
+#U-2：有 delta 时只 carry-forward 零差异项；重建其余 Inventory，四份齐备后替换 surface-seal
+python3 -m tools.upstream_merge identity-seal --input "$SURFACE_DRAFT" --output "$SURFACE_INPUT"
+python3 -m tools.upstream_merge surface-seal --repository "$REPO" --plan "$PLAN" --decisions "$SURFACE_INPUT"
+```
+
+### 5.2.4 失败恢复与最终状态
+
+- 门禁失败时保留原 attempt，修复后使用新 attempt id；普通阶段只能写入尚不存在的输出。若不可变制品已使
+  当前计划无法继续，保留证据并从 `U-0` 新建 changeset。
+- 需要复证当前环境时，以全新 attempt id 运行下列命令；它从 source commit 创建临时 detached worktree，
+  重跑 12 类门禁并清理，不替换 `U-5` 原收据：
+
+```bash
+python3 -m tools.upstream_merge replay \
+  --repository "$REPO" --plan "$PLAN" --receipt "$UPSTREAM_RECEIPT" \
+  --rerun-gates post-final-001
+```
+
+- `current_guard_state` 只允许 `source_absent／out_of_scope_passthrough／legacy_observe／canary_enforce／
+  enforced` 并仅陈述当前事实；目标计划不得覆盖。已知 Persona OAuth 发送源封存前至少为 observation-only
+  `legacy_observe`，未知 OAuth 出站始终为 `denied`。
+- merge commit 或 candidate tree 不等于交付或生产更新；`accepted_not_activated` 也只表示候选可交付。
+  `U-6` 只更新本地受审源码基线；只有另行取得部署权限并完成 §5.6，才能声明生产已更新。
+
+## 5.3 官方客户端升级
+
+### 5.3.1 冻结目标、基线和升级终点
+
+本节是官方客户端升级的总操作入口。主文档定义执行顺序和统一状态；Codex、Claude 手册第四部分只提供
+对应轨道的参数、证据和专用门禁，不能建立另一套升级流程。一次 Campaign 只绑定一个客户端、一个目标
+stable 和一个用途；Codex 与 Claude 同时换版时必须建立两个 Campaign，不得混用画像或收据。
+
+开始前先冻结：
+
+1. 目标官方身份。Codex 绑定版本、源码、`Cargo.lock`／依赖、二进制与摘要；Claude 绑定 npm identity、
+   integrity、tgz／二进制／bundle、平台、entrypoint 和隐私模式。
+2. 当前基线。绑定 production active／rollback Release、Profile、final wire、两个 Inventory、Runtime
+   Selector、运行镜像、环境、最近有效激活／回滚收据和恢复点。
+3. 升级用途。`validation_only` 只交付固定候选；`production_replacement` 还必须具备部署授权并执行 §5.6。
+4. 受管坐标。Campaign、candidate、attempt、证据根和输出均使用新的持久绝对路径，冻结工具与 Schema
+   摘要；历史制品只读，不得覆盖。
+
+`VC-0／P0` 必须先证明当前工具能从输入身份读取目标版本、active／rollback 和规则全集。任何旧目标版本
+常量、缺少必填 policy／Schema／生成器、不可独立重放的收据或缺失 mutation 门禁都计为工具阻断；先以
+独立工具变更修复并重跑 P0，阻断清零前不得创建正式 Campaign。
+
+```text
+VC-0～VC-6 公共状态全部完成
+∧ 所选客户端轨道第四部分的专用制品与门禁全部完成
+∧ 当前工具阻断数 = 0
+⇒ ready_for_operator_release
+
+ready_for_operator_release
+∧ 已取得部署授权
+∧ Framework §5.6 与客户端生产轨道全部完成
+∧ DeploymentFact／activation receipt 可独立重放
+⇒ production_active_upgraded
+```
+
+### 5.3.2 按 VC-0～VC-6 推进
+
+| 阶段 | 操作 | 必须输出 | 退出条件 |
+|---|---|---|---|
+| `VC-0` 预检与基线 | 冻结 §5.3.1 全部输入，运行客户端 P0 | `UpgradePlan + CampaignIdentity`、工具就绪收据 | 当前生产可复算，工具阻断为 0；退出后才可创建正式 Campaign |
+| `VC-1` 目标取证 | 从目标官方产物独立发现 sink、构造路径、条件和状态，采集适用 P／R／J／M | EvidencePackage、DiscoveryInventory、SinkInventory | 目标身份完整、发现无预设截断，未知项保持未分类 |
+| `VC-2` 语义清零 | 对每个发现作唯一终态处置，建立原子断言、迁移决策和 RequiredRules 映射 | DiscoveryDispositionLedger、AtomicAssertionLedger、RequiredRules manifest | 未决、遗漏、重复和无主断言均为 0，不从发现数量机械生成 SPEC |
+| `VC-3` 画像与批准 | target-first 生成 ProfileSchema、ReleaseArtifact、SupportEnvelope、Persona 派生和验收矩阵 | ApprovalFact、ReleaseArtifact、目标 ingress／egress Inventory | 画像、规则、断言、范围和证据摘要一致；范围外 fail-close，production selector 未改变 |
+| `VC-4` 实现与候选 | 在 Persona 方言内实现差异，冻结源码、测试、构建、镜像和独立 Release 引用 | ValidationCandidate、candidate inventory | 同源身份闭合，无厂商事实泄入共享层，跨 Persona 隔离通过 |
+| `VC-5` 成对验收 | 批准入口执行逐规则 PAIR，拒绝入口执行凭据前负例，并覆盖状态重建、故障和回退 | AcceptanceFact、逐规则结果、回退／恢复收据 | final wire 对拍通过，无未决 strict 项；失败 attempt 只读保留 |
+| `VC-6` 交付或激活 | 无生产权限时封存固定候选；有权限时继续 §5.6 的 canary、切换、回滚和恢复 | `ready_for_operator_release`；生产激活另有 DeploymentFact | 交付边界明确；生产激活还须满足 §4.2 三个 Envelope 及 §5.6 收据 |
+
+目标证据是新画像的唯一设计权威；未收敛发现和证据不足能力保持 `denied`，只有 IngressPolicy 批准的
+正向入口进入 PAIR。`VC-4` 若暴露共享合同缺口，作废当前 candidate，先执行 §5.4。目标 stable、阶段
+制品、工具或身份变化时按 §3.3 新建 Campaign／candidate／attempt，不得借用旧事实跨阶段继续。
+
+### 5.3.3 选择并执行客户端轨道
+
+先选择且只选择一条轨道。下表给出从 P0 到交付的实际顺序；完整参数合同和证据格式分别以
+[`CODEX_CLI_CLIENT_EMULATION_GUIDE.md`](CODEX_CLI_CLIENT_EMULATION_GUIDE.md) 第四部分和
+[`CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md`](CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md) 第四部分为准。
+
+| 阶段 | Codex CLI 轨道 | Claude Code 轨道 |
+|---|---|---|
+| `VC-0` | 在干净 HEAD 运行 `make test-capture-tools`、`make check-egress-spec`；复算 Active／Previous 后执行 `codex_upgrade.py plan` | 冻结 generation policy、Vircs／DMIT 和 active／rollback；审计全部工具的版本参数化后执行 `claude_fw_e.py freeze` |
+| `VC-1` | `capture-official run` → 生成受管证据 → `capture-official seal` | `analyze-bundles` → 全 host/path 捕获与 `capture-index` → validation closure／crosswalk → `rule-assessments` → `seal` |
+| `VC-2` | `classify` 生成草案，逐项审核目标规则、迁移、场景、画像和断言清单，再用联合摘要批准 | 清零 DiscoveryDispositionLedger 和语义候选，形成 RequiredRules／AtomicAssertionLedger 及迁移决定 |
+| `VC-3` | `prepare-profile` → 审核五份清单 → 批准版 `classify` → `stage-profile`；只能追加候选 Catalog，不切 Active | 复制并更新目标 generation policy → `generate_claude_fw_g_profile.py` → `claude_fw_g_official_finalize.py` → 签发 ApprovalFact／ReleaseArtifact；不得修改 production selector |
+| `VC-4` | 将暂存画像纳入同源 candidate、构建固定镜像，执行 `capture-candidate run` → 生成收据 → `capture-candidate seal` 两阶段批准 | 实现批准差异、构建固定 candidate，并用目标 policy 驱动的 PAIR 工具完成 DMIT `prepare → capture → seal → approve` |
+| `VC-5` | `compare` → `build_rule_assertion_results.py` → candidate 外部门禁收据 `finalize/replay` → `codex_upgrade.py accept` | 重放批准 Store 和官方复算，完成正向 PAIR、第三方凭据前负例、回退／恢复，再执行 `claude_fw_g_acceptance.py` |
+| `VC-6` | `validation_only` 停在 `accepted_not_activated`；`production_replacement` 继续 Codex 手册 §4.6 和 Framework §5.6 | 在 DMIT 签发 `ready_for_operator_release`；Vircs 生产替换必须另获授权并执行 Framework §5.6 |
+
+Codex 的统一入口为 `python3 tools/official_client_capture/codex_upgrade.py --help`；每阶段前后使用
+`status` 只读推导状态，只有身份未变化的临时失败才使用 `resume`。Claude 每个新版本先复制并更新
+`claude_fw_g_generation_policy_<version>_v2.json`，再把同一 policy 传给画像生成、官方 finalizer、
+candidate PAIR 和 Acceptance finalizer。
+
+当前工具状态：`claude_fw_g_candidate_pair.py` 仍固定绑定 2.1.226，只能重放历史 Campaign。下一个 Claude
+版本必须在 P0 前让它从 generation policy 读取目标版本、规则／断言计数和输入摘要，并补齐 Schema、
+mutation 测试及独立重放，否则 `current_tool_blocker_count > 0`。历史基线规则见 Claude 手册 §4.2。
+
+### 5.3.4 失败恢复
+
+- P0 失败：不创建 Campaign；独立修复工具、Schema 或环境后从 `VC-0` 重来。
+- 官方产物、目标 stable、画像、规则、断言、用途或证据语义变化：新建 Campaign；源码、测试、构建、
+  镜像或 Release 引用变化：新建 candidate；身份不变的临时采集失败：保留旧 attempt 并新建 attempt。
+- 任一阶段失败或摘要漂移时保留旧制品和收据，按状态机回到最近合法身份；不得覆盖、跳过门禁或手工清除
+  阻断。升级完成状态只按 §5.3.1 的两个公式判定。
+
+## 5.4 修改共享合同或共享运行时
+
+正常官方客户端升级不得进入本节。客户端专属的 Header、Body、IdentityMode、fallback、状态机、重试和
+transport 事实，应由该 Persona 的 Plan、Schema 与 DialectCompiler 表达，并按 §5.3 升级。只有现有
+Persona 方言无法承载，且缺口属于厂商无关的共享控制面时，才允许修改共享合同或运行时。
+
+| 变化 | 操作入口 |
+|---|---|
+| 合并 Sub2API 上游，且共享合同语义不变 | §5.2 |
+| 官方客户端画像、规则或方言变化 | §5.3 |
+| 同版本实现修改，且共享合同语义不变 | §5.5 |
+| `CompiledEnvelope`，或 Registry、Store、Selector、Executor、Token、Guard 的合同或语义变化 | 本节；若由上游合并触发，还必须同时满足 §5.2 |
+
+新增 Persona 时，先以专属 Plan、Schema 和 DialectCompiler 表达其事实。只有证据证明某项机制在至少两个
+Persona 间重复、稳定且属于共享控制面，才可进入本节；单客户端机制和仅为未来复用的设想不得上提。
+
+共享合同或运行时的批准顺序固定为：
+
+1. 只读冻结全部受影响 Persona 的 active／rollback Release、final wire、Runtime Selector、运行镜像、
+   回退收据，以及引用旧合同的 validation candidate。
+2. 证明共享变更的必要性，定义后继合同、影响分母和失败关闭行为；厂商 wire 事实不得进入共享合同。
+3. 以 Codex active／rollback 建立逐字节零差异基线，并用至少一个不可部署的第二 Persona 纵向样例证明
+   接口可表达性及 authority、issuer、状态和连接隔离。
+4. 生成后继合同与测试，为全部受影响实现建立新 candidate，并完成 route／Sink、Release、Token、Guard、
+   状态、连接和跨 Persona 负例；旧 candidate 不得借新合同继续验收。
+5. 全部受影响 Persona 的验收与回退事实闭合后，才允许按 §5.6 发布；此前 production selector 保持不变，
+   任何非预期 final-wire 差异都阻止发布。
+
+`CompiledEnvelope` 仍只能包含 §2.3 的厂商无关事实。共享实现可以复用代码，但每个 Persona 的 authority、
+Token issuer、invocation、状态命名空间和连接身份必须独立。
+
+## 5.5 同版本实现修改与兼容代码退休
+
+### 5.5.1 同版本修改
+
+仅当官方产物、目标规则、SupportEnvelope、画像、场景、断言和产出侧证据工具均未变化时，才允许在
+原 Campaign 下建立新 candidate。新 candidate 必须重新绑定源码、测试、构建、镜像和用途，重跑受影响
+规则及公共终态门禁；准备替换生产时继续 §5.6，不得复用旧 candidate 的交付、激活、回滚或恢复事实。
+
+实现过程中一旦发现现有规则或 Schema 不能表达真实官方行为，立即停止普通 candidate 路径，建立
+同版本后继 Campaign；不得修改旧 ApprovalFact 或用实现测试提升官方证据等级。
+
+### 5.5.2 退休旧代码
+
+每次退休使用独立变更集，并按以下顺序执行：
+
+1. 用类型扫描、调用图、ProductionIngressInventory 和 EgressDispositionInventory 证明全部生产消费者，
+   区分 `migrated_strict`、`retained_legacy`、`explicitly_retired` 与 `rerouted`。
+2. 迁移真实消费者并让旧入口明确 fail-close；未知入口或出站保持 `denied`，不得先删除 Guard。
+3. 验证全部受影响 Persona 的 active／rollback、HTTP／WS／fallback、辅助端点、状态恢复和跨 Persona
+   负例，以空 wire 允许列表比较前后。
+4. 删除旧类型、字段、构造接线、finalizer、旁路和只验证旧实现的测试；同步收紧源码绝迹门禁，防止
+   通过别名或 wrapper 恢复。
+5. 生成不可覆盖的 RemovalReceipt 和机器退休收据并完成公共门禁；需要部署时继续 §5.6，不得以退休
+   收据代替生产激活事实。
+
+只要仍有 `retained_legacy`、未知消费者、未处置出站或回滚依赖，就不得签发 RemovalReceipt。服务 API
+Key、其他 Persona、业务认证、平滑升级或已演练回滚的代码不能因名称相似而随官方 OAuth 兼容层删除。
+
+## 5.6 候选交付、生产激活与回滚
+
+<a id="638-fw-h生产迁移与遗留退休"></a>
+
+该兼容锚点只供历史 bootstrap 收据解析，不属于当前流程。
+
+每次执行必须先固定一个终点：
+
+| 终点 | 必须完成 | 不得声明 |
+|---|---|---|
+| 候选交付 | 固定 candidate、隔离验收、应用回退／恢复、稳定观察及 `ready_for_operator_release` 收据 | production selector 已改变、DeploymentFact 已签发或生产已激活 |
+| 生产激活 | 已取得部署授权，并完成下列六步及可重放的 DeploymentFact／activation receipt | 在任一步骤或身份尚未闭合时声明生产升级完成 |
+
+所有生产激活，无论 candidate 来自换版、上游更新、共享合同还是同版本实现变化，都必须执行：
+
+1. 写操作前只读冻结生产镜像、compose／配置、selector、Release、画像、activation fact、数据和依赖；
+2. 从已验收 candidate 生成 production Catalog、差异清单和正式目标架构镜像，重跑终态门禁；
+3. 在隔离环境以默认 production active 运行独立 canary，不得通过强制 candidate／rollback mode 命中目标；
+4. 只替换应用容器完成正式切换，不重建数据库、缓存、挂载、网络或其他依赖；
+5. 切回冻结回退镜像验证真实入口和数据兼容，再恢复目标镜像并完成稳定观察；
+6. 生成绑定 Campaign／candidate／Approval／Acceptance、源码、镜像、Release、三个 Envelope、
+   canary、切换、回滚和恢复事实的不可覆盖收据。
+
+客户端手册必须声明部署权限、执行终点以及对应的工具、环境和专用收据。运行镜像、selector、Release、
+画像或收据任一不一致时，状态保持 `production_unverified` 并执行已冻结回退，不得在故障实例上补画像
+或修改 selector。
+
+## 5.7 失败路由速查
+
+本表只确定返回入口；失败制品和收据仍须只读保留，具体恢复动作以目标章节为准。
+
+| 失败类型 | 返回入口 |
+|---|---|
+| Sub2API 上游合并计划、隔离工作树、冲突处置、影响分母或门禁不完整 | §5.2.4 |
+| 官方客户端取证、规则收敛、画像、candidate 身份或换版门禁失败 | §5.3.4；身份变化同时按 §3.3 建立新事实 |
+| 共享合同出现厂商事实、隔离破坏或非预期 final-wire 差异 | §5.4 |
+| 同版本实现不再满足原 Campaign 条件，或兼容代码退休无法闭合 | §5.5 |
+| PAIR、状态重建、负例或候选专用门禁失败 | §4.1 及产生该 candidate 的流程；不得进入生产激活 |
+| 生产镜像、Catalog、Release、selector、Envelope、canary、切换、回滚或恢复失败 | §5.6；保持 `production_unverified` 并使用冻结回退点 |

@@ -94,6 +94,9 @@ func TestWebSocketTokenlessCompatibilityRetirementReceiptAndSourceExtinction(t *
 // 旧收据保持不可变；后续变更必须从旧 to 摘要出发，并精确落到当前源码摘要。
 func websocketRetirementTransitionSuperseded(t *testing.T, path, priorDigest, currentDigest string) bool {
 	t.Helper()
+	if upstreamMergeFrameworkTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if claudeFWGSourceTransitionSupersedes(path, priorDigest, currentDigest) {
 		return true
 	}

@@ -15,10 +15,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+if __package__ in {None, ""}:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-FACTS_SCHEMA = "codex-production-activation-facts/v1"
-RECEIPT_SCHEMA = "codex-production-activation-receipt/v1"
-PRODUCER_SCHEMA = "codex-production-activation-producer/v1"
+from tools.official_client_capture import codex_upgrade_gate_receipt
+
+FACTS_SCHEMA = "codex-production-activation-facts/v2"
+RECEIPT_SCHEMA = "codex-production-activation-receipt/v2"
+PRODUCER_SCHEMA = "codex-production-activation-producer/v2"
 STAGE_ORDER = ("canary", "production_switch", "rollback", "target_restore")
 TARGET_STAGES = frozenset({"canary", "production_switch", "target_restore"})
 SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
@@ -243,6 +247,8 @@ def build_receipt(root: Path, facts_relative: str) -> dict[str, Any]:
         {
             "schema_version",
             "campaign",
+            "promotion",
+            "post_promotion_gate",
             "target",
             "rollback",
             "stages",
@@ -283,6 +289,76 @@ def build_receipt(root: Path, facts_relative: str) -> dict[str, Any]:
     if target["image_id"] == rollback["image_id"]:
         raise ProductionReceiptError("目标镜像与回滚镜像不能相同")
 
+    promotion_reference = facts.get("promotion")
+    if not isinstance(promotion_reference, dict):
+        raise ProductionReceiptError("facts.promotion 必须是文件引用")
+    _expect_keys(promotion_reference, {"path", "sha256"}, "promotion")
+    promotion_path = _require_string(promotion_reference, "path", "promotion")
+    promotion_sha256 = _require_sha(promotion_reference, "sha256", "promotion")
+    promotion = _binding(root, promotion_path, promotion_sha256)
+    promotion_payload, _ = _load_json(_resolve_relative(root, promotion_path))
+    if (
+        promotion_payload.get("schema_version")
+        != "official-egress-catalog-promotion/v1"
+        or promotion_payload.get("campaign_id") != campaign["id"]
+        or promotion_payload.get("acceptance_sha256") != acceptance_sha256
+        or promotion_payload.get("target_version") != target["version"]
+        or promotion_payload.get("target_profile_digest")
+        != target["profile_digest"]
+        or promotion_payload.get("rollback_version") != rollback["version"]
+        or promotion_payload.get("rollback_profile_digest")
+        != rollback["profile_digest"]
+        or promotion_payload.get("production_selector_changed") is not True
+    ):
+        raise ProductionReceiptError("promotion receipt 与验收或目标／回滚身份不一致")
+
+    gate_reference = facts.get("post_promotion_gate")
+    if not isinstance(gate_reference, dict):
+        raise ProductionReceiptError("facts.post_promotion_gate 必须是文件引用")
+    _expect_keys(gate_reference, {"path", "sha256"}, "post_promotion_gate")
+    gate_path = _require_string(gate_reference, "path", "post_promotion_gate")
+    gate_sha256 = _require_sha(gate_reference, "sha256", "post_promotion_gate")
+    post_promotion_gate = _binding(root, gate_path, gate_sha256)
+    try:
+        gate_payload = codex_upgrade_gate_receipt.replay(root, gate_path)
+    except (OSError, codex_upgrade_gate_receipt.GateReceiptError) as error:
+        raise ProductionReceiptError(
+            f"post-promotion 门禁收据无法独立重放：{error}"
+        ) from error
+    gate_subject = gate_payload.get("subject")
+    candidate_identity = acceptance_payload.get("candidate_identity")
+    if not isinstance(gate_subject, dict) or not isinstance(candidate_identity, dict):
+        raise ProductionReceiptError("acceptance 或 post-promotion 门禁缺少候选身份")
+    expected_gate_subject = {
+        "campaign_id": campaign["id"],
+        "candidate_id": campaign["candidate_id"],
+        "target_version": target["version"],
+        "profile_id": target["profile_id"],
+        "profile_digest": target["profile_digest"],
+        "candidate_package_digest": acceptance_payload.get(
+            "candidate_package_digest"
+        ),
+        "candidate_source_tree_sha256": candidate_identity.get(
+            "source_tree_sha256"
+        ),
+        "candidate_image_id": candidate_identity.get("image_id"),
+        "candidate_image_reference": candidate_identity.get("image_reference"),
+        "production_tree_sha256": target["source_tree_sha256"],
+        "acceptance_sha256": acceptance_sha256,
+        "promotion_receipt_sha256": promotion_sha256,
+    }
+    if (
+        gate_payload.get("phase")
+        != codex_upgrade_gate_receipt.POST_PROMOTION_PHASE
+        or any(
+            gate_subject.get(key) != value
+            for key, value in expected_gate_subject.items()
+        )
+    ):
+        raise ProductionReceiptError(
+            "post-promotion 门禁与 Campaign、candidate、promotion 或 production tree 不一致"
+        )
+
     stages = facts.get("stages")
     if not isinstance(stages, list) or len(stages) != len(STAGE_ORDER):
         raise ProductionReceiptError("stages 必须完整覆盖四阶段")
@@ -308,6 +384,21 @@ def build_receipt(root: Path, facts_relative: str) -> dict[str, Any]:
             raise ProductionReceiptError(f"阶段 {expected_name} 时间顺序非法")
         previous_completed = completed
         normalized_stages.append({**stage, "evidence": evidence})
+    gate_completed = datetime.fromisoformat(
+        gate_payload["completed_at_utc"].replace("Z", "+00:00")
+    )
+    first_stage_started = datetime.fromisoformat(
+        stages[0]["started_at_utc"].replace("Z", "+00:00")
+    )
+    if gate_completed > first_stage_started:
+        raise ProductionReceiptError("post-promotion 门禁必须先于 canary 完成")
+    target_architecture = gate_subject.get("target_architecture")
+    if any(
+        stage["architecture"] != target_architecture
+        for stage in stages
+        if stage["name"] in TARGET_STAGES
+    ):
+        raise ProductionReceiptError("post-promotion 目标架构与激活阶段不一致")
 
     final_state = facts.get("final_state")
     if not isinstance(final_state, dict):
@@ -346,6 +437,8 @@ def build_receipt(root: Path, facts_relative: str) -> dict[str, Any]:
             "candidate_id": campaign["candidate_id"],
             "acceptance": acceptance,
         },
+        "promotion": promotion,
+        "post_promotion_gate": post_promotion_gate,
         "target": target,
         "rollback": rollback,
         "stages": normalized_stages,

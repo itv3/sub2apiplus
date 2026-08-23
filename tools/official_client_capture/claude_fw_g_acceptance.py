@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""封存 Claude Code 2.1.226 FW-G 后继批准与隔离验收事实。"""
+"""按 generation policy 封存 Claude Code FW-G 后继批准与隔离验收事实。"""
 
 from __future__ import annotations
 
@@ -37,33 +37,11 @@ from tools.official_client_control.receipts import (  # noqa: E402
     control_tool_bundle_sha256,
 )
 from tools.official_client_control.store import ControlStore  # noqa: E402
+from tools.official_client_capture.claude_generation_policy import (  # noqa: E402
+    GenerationPolicyError,
+    load_generation_policy,
+)
 
-
-TARGET_VERSION = "2.1.226"
-EXPECTED_REQUIRED_RULES = 40
-EXPECTED_PROFILE_ASSERTIONS = 106
-EXPECTED_SCENARIO_ASSERTIONS = 4
-EXPECTED_ATOMIC_ASSERTIONS = 110
-EXPECTED_OFFICIAL_PROBES = 77
-EXPECTED_OFFICIAL_REQUESTS = 394
-EXPECTED_OFFICIAL_CANDIDATES = 593
-EXPECTED_OFFICIAL_DIMENSIONS = 49
-
-CANDIDATE_COMMIT = "651ccd518d97c53bb3089860a0fdf80009c1be9e"
-CANDIDATE_TREE = "71eccef8c9498de12bafaa7006108c10996cd10d"
-CANDIDATE_IMAGE = "sha256:9b923fd1a60835fa8474712764befba34a02f06e8642c5ac3af1aa9967464566"
-CANDIDATE_PROFILE = "4da60bc238694a06a0dc80d68117abddd2de98c7c924c4db4c5dd929ea411e17"
-CANDIDATE_WIRE = "c1c3c8c83710c9afc7005f71fa45d0837484a6bd042f75c08e5cde5451822a3e"
-CANDIDATE_RELEASE = "c1053492eabc0b10d9d5f92f807a1df0d507c777b64a528e938426350c0d5350"
-CANDIDATE_RELEASE_BUNDLE = "4213ea92a7d76c4ef3aa318f4d93628cbcf675dc86566b107dddb70a70e6eb41"
-CANDIDATE_SOURCE_TREE = "2792b9d29e57b66a12bc80f576e02dd06306eac467b8dda73e2dbd7a69b19d5b"
-CANDIDATE_TEST_TREE = "6ef5c064a3e489579e4f471d3ad954de132e1e8260058bb1438c74d81905f3e3"
-CANDIDATE_DEPENDENCY_LOCK = "bad9c6d5cd2e48d916e8c1f217f43951984be6d8cd0892ef9e22d8e43e071339"
-
-CAMPAIGN_ID = "claude-code-2_1_226-fw-g-production-replacement-v2-20260821"
-CANDIDATE_ID = "claude-code-2_1_226-fw-g-651ccd518"
-REVIEWER = "project-owner-confirmed"
-REVIEW_REF = "codex-task-fw-g-desktop-fix-owner-confirmation-20260821"
 
 CANDIDATE_TREE_SCHEMA = "claude-fw-g-candidate-git-tree/v1"
 CANDIDATE_DEPENDENCY_NAMES = {
@@ -221,6 +199,7 @@ def scan_secret_bytes(content: bytes, label: str) -> None:
 def run_go_receipt(
     repository_root: Path,
     *,
+    candidate_commit: str,
     receipt_id: str,
     packages: Sequence[str],
     tests: Sequence[str],
@@ -241,7 +220,7 @@ def run_go_receipt(
     return {
         "schema_version": "claude-code-fw-g-local-regression/v1",
         "receipt_id": receipt_id,
-        "candidate_commit": CANDIDATE_COMMIT,
+        "candidate_commit": candidate_commit,
         "packages": list(packages),
         "tests": list(tests),
         "command_sha256": hashlib.sha256("\0".join(command).encode()).hexdigest(),
@@ -258,15 +237,25 @@ def validate_inputs(
     candidate_rules: dict[str, Any],
     candidate_verification: dict[str, Any],
     dmit: dict[str, Any],
+    *,
+    target_version: str,
+    target: dict[str, Any],
+    official_policy: dict[str, Any],
+    acceptance_policy: dict[str, Any],
 ) -> list[str]:
     rules = old_evidence.get("rules")
-    require(isinstance(rules, list) and len(rules) == EXPECTED_REQUIRED_RULES, "FW-F EvidencePackage 不是 40 条")
+    require(
+        isinstance(rules, list)
+        and len(rules) == target["required_rule_count"],
+        "FW-F EvidencePackage 规则数量不匹配",
+    )
     spec_ids = [item.get("spec_id") for item in rules]
     require(spec_ids == sorted(set(spec_ids)), "FW-F RequiredRules 未排序或重复")
     require(
         official.get("schema_version") == "claude-code-fw-g-required-rule-official-verification/v1"
-        and official.get("target_version") == TARGET_VERSION
-        and official.get("required_rule_count") == EXPECTED_REQUIRED_RULES
+        and official.get("campaign_id") == official_policy["campaign_id"]
+        and official.get("target_version") == target_version
+        and official.get("required_rule_count") == target["required_rule_count"]
         and official.get("result") == "passed",
         "FW-G 官方逐规则复测未闭合",
     )
@@ -274,8 +263,8 @@ def validate_inputs(
     require(official_specs == spec_ids, "官方复测与 RequiredRules 集合不一致")
     require(
         candidate_rules.get("schema_version") == "claude-code-fw-g-required-rule-candidate-pair/v1"
-        and candidate_rules.get("target_version") == TARGET_VERSION
-        and candidate_rules.get("required_rule_count") == EXPECTED_REQUIRED_RULES
+        and candidate_rules.get("target_version") == target_version
+        and candidate_rules.get("required_rule_count") == target["required_rule_count"]
         and candidate_rules.get("result") == "passed",
         "FW-G 候选逐规则 PAIR 未闭合",
     )
@@ -285,13 +274,15 @@ def validate_inputs(
     require(
         candidate_verification.get("result") == "passed"
         and source.get("clean") is True
-        and source.get("commit") == CANDIDATE_COMMIT
-        and source.get("tree") == CANDIDATE_TREE,
+        and source.get("commit") == acceptance_policy["candidate_commit"]
+        and source.get("tree") == acceptance_policy["candidate_tree"],
         "候选源码身份不一致",
     )
     require(
-        candidate_verification.get("candidate_profile", {}).get("sha256") == CANDIDATE_PROFILE
-        and candidate_verification.get("candidate_wire", {}).get("sha256") == CANDIDATE_WIRE,
+        candidate_verification.get("candidate_profile", {}).get("sha256")
+        == acceptance_policy["candidate_profile_sha256"]
+        and candidate_verification.get("candidate_wire", {}).get("sha256")
+        == acceptance_policy["candidate_wire_sha256"],
         "候选 Profile/Wire 身份不一致",
     )
     require(
@@ -302,19 +293,24 @@ def validate_inputs(
     )
     dmit_candidate = dmit.get("candidate", {})
     require(
-        dmit_candidate.get("commit") == CANDIDATE_COMMIT
-        and dmit_candidate.get("tree") == CANDIDATE_TREE
-        and dmit_candidate.get("image_digest") == CANDIDATE_IMAGE
+        dmit_candidate.get("commit") == acceptance_policy["candidate_commit"]
+        and dmit_candidate.get("tree") == acceptance_policy["candidate_tree"]
+        and dmit_candidate.get("image_digest")
+        == acceptance_policy["candidate_image_digest"]
         and dmit_candidate.get("architecture") == "linux/amd64",
         "DMIT 候选身份不一致",
     )
     release = dmit.get("release", {})
     require(
-        release.get("version") == TARGET_VERSION
-        and release.get("profile_sha256") == CANDIDATE_PROFILE
-        and release.get("release_sha256") == CANDIDATE_RELEASE
-        and release.get("bundle_sha256") == CANDIDATE_RELEASE_BUNDLE
-        and release.get("wire_sha256") == CANDIDATE_WIRE,
+        release.get("version") == target_version
+        and release.get("profile_sha256")
+        == acceptance_policy["candidate_profile_sha256"]
+        and release.get("release_sha256")
+        == acceptance_policy["candidate_release_sha256"]
+        and release.get("bundle_sha256")
+        == acceptance_policy["candidate_release_bundle_sha256"]
+        and release.get("wire_sha256")
+        == acceptance_policy["candidate_wire_sha256"],
         "DMIT Release 身份不一致",
     )
     ingress = dmit.get("ingress_assertions", {})
@@ -339,7 +335,8 @@ def validate_inputs(
         and rollback.get("messages_positive") == "passed"
         and rollback.get("count_tokens_positive") == "passed"
         and rollback.get("candidate_restored") is True
-        and rollback.get("restored_image_digest") == CANDIDATE_IMAGE,
+        and rollback.get("restored_image_digest")
+        == acceptance_policy["candidate_image_digest"],
         "DMIT rollback/恢复未闭合",
     )
     scripts = dmit.get("script_results")
@@ -392,6 +389,48 @@ def validate_inputs(
         "FW-G 隔离边界不成立",
     )
     return spec_ids
+
+
+def validate_approved_baseline(
+    old_campaign: dict[str, Any],
+    old_approval: dict[str, Any],
+    release_artifact: dict[str, Any],
+    target: dict[str, Any],
+    acceptance_policy: dict[str, Any],
+) -> str:
+    """把批准 Campaign、ProfileApprovalFact 和 ReleaseArtifact 锁到同一目标。"""
+
+    target_version = old_campaign.get("target_version")
+    require(
+        isinstance(target_version, str)
+        and target_version == target["version"],
+        "FW-F Campaign 目标版本与 generation policy 不一致",
+    )
+    require(
+        campaign_identity_sha256(old_campaign)
+        == old_campaign.get("identity_sha256"),
+        "FW-F Campaign 身份摘要漂移",
+    )
+    require(
+        old_approval.get("approval_purpose") == "validation_only",
+        "FW-F 前置批准不是 validation_only",
+    )
+    require(
+        profile_approval_identity_sha256(old_approval)
+        == old_approval.get("identity_sha256"),
+        "FW-F ProfileApprovalFact 身份摘要漂移",
+    )
+    require(
+        old_approval.get("release_artifact_ref", {}).get("sha256")
+        == acceptance_policy["candidate_release_sha256"]
+        and release_artifact.get("version") == target_version
+        and release_artifact.get("profile_digest")
+        == acceptance_policy["candidate_profile_sha256"]
+        and release_artifact.get("release_bundle_ref", {}).get("sha256")
+        == acceptance_policy["candidate_release_bundle_sha256"],
+        "FW-F ReleaseArtifact 与 generation policy 不一致",
+    )
+    return target_version
 
 
 def build_ingress_observation(persona: dict[str, Any], source_ref: dict[str, Any]) -> dict[str, Any]:
@@ -824,6 +863,14 @@ class FactClock:
 
 def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
     repository_root = arguments.repository_root.resolve()
+    generation_policy_path = arguments.generation_policy.resolve()
+    try:
+        generation_policy = load_generation_policy(generation_policy_path)
+    except GenerationPolicyError as error:
+        raise AcceptanceError(str(error)) from error
+    target = generation_policy["target"]
+    official_policy = generation_policy["official_finalize"]
+    acceptance_policy = generation_policy["acceptance"]
     base_store_root = arguments.base_store.resolve()
     official_dir = arguments.official_dir.resolve()
     candidate_dir = arguments.candidate_dir.resolve()
@@ -831,13 +878,24 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
     output = arguments.output.resolve()
     public_receipt = arguments.public_receipt.resolve()
     require(repository_root == REPOSITORY_ROOT.resolve(), "必须在当前仓库执行 FW-G finalizer")
-    git_material = candidate_git_material_digests(repository_root, CANDIDATE_COMMIT)
+    require(
+        generation_policy_path.is_relative_to(repository_root),
+        "generation policy 不在当前仓库内",
+    )
+    generation_policy_ref = external_binding(
+        generation_policy_path,
+        repository_root,
+    )
+    git_material = candidate_git_material_digests(
+        repository_root,
+        acceptance_policy["candidate_commit"],
+    )
     require(
         git_material
         == {
-            "source": CANDIDATE_SOURCE_TREE,
-            "test": CANDIDATE_TEST_TREE,
-            "dependency": CANDIDATE_DEPENDENCY_LOCK,
+            "source": acceptance_policy["candidate_source_tree_sha256"],
+            "test": acceptance_policy["candidate_test_tree_sha256"],
+            "dependency": acceptance_policy["candidate_dependency_lock_sha256"],
         },
         "Candidate 源码、测试或依赖树摘要漂移",
     )
@@ -870,7 +928,16 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
         ]
         require(len(old_approvals) == 1, "FW-F validation-only ProfileApproval 不唯一")
         old_approval = old_approvals[0]["payload"]
-        require(old_approval["approval_purpose"] == "validation_only", "FW-F 前置批准不是 validation_only")
+        release_artifact = store.load_object(
+            old_approval["release_artifact_ref"]
+        )["payload"]
+        target_version = validate_approved_baseline(
+            old_campaign,
+            old_approval,
+            release_artifact,
+            target,
+            acceptance_policy,
+        )
         old_evidence_approval = store.load_fact(old_approval["evidence_approval_ref"])
         old_evidence_ref = old_evidence_approval["payload"]["evidence_package_ref"]
         old_evidence = store.load_object(old_evidence_ref)["payload"]
@@ -880,18 +947,23 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
             candidate_rules,
             candidate_verification,
             dmit,
+            target_version=target_version,
+            target=target,
+            official_policy=official_policy,
+            acceptance_policy=acceptance_policy,
         )
         require(old_approval["target_spec_ids"] == spec_ids, "FW-F Approval 与 40 条规则集合不一致")
-        require(old_approval["release_artifact_ref"]["sha256"] == CANDIDATE_RELEASE, "FW-F Release 引用漂移")
 
         tls_receipt = run_go_receipt(
             repository_root,
+            candidate_commit=acceptance_policy["candidate_commit"],
             receipt_id="claude-fw-g-tls-h1-wire",
             packages=["./internal/service"],
             tests=["TestClaudeFWGCandidateCapturesFrozenTLSAndH1Wire"],
         )
         codex_receipt = run_go_receipt(
             repository_root,
+            candidate_commit=acceptance_policy["candidate_commit"],
             receipt_id="codex-final-wire-zero-difference",
             packages=["./internal/officialegress", "./internal/service"],
             tests=[
@@ -932,14 +1004,27 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
                         "id": "official-retest",
                         "facts": {
                             "binding": official_binding,
-                            "required_rules": EXPECTED_REQUIRED_RULES,
-                            "profile_assertions": EXPECTED_PROFILE_ASSERTIONS,
-                            "scenario_assertions": EXPECTED_SCENARIO_ASSERTIONS,
-                            "atomic_assertions": EXPECTED_ATOMIC_ASSERTIONS,
-                            "probes": EXPECTED_OFFICIAL_PROBES,
-                            "requests": EXPECTED_OFFICIAL_REQUESTS,
-                            "candidates": EXPECTED_OFFICIAL_CANDIDATES,
-                            "dimensions": EXPECTED_OFFICIAL_DIMENSIONS,
+                            "required_rules": target["required_rule_count"],
+                            "profile_assertions": target[
+                                "profile_atomic_assertion_count"
+                            ],
+                            "scenario_assertions": target[
+                                "total_atomic_assertion_count"
+                            ]
+                            - target["profile_atomic_assertion_count"],
+                            "atomic_assertions": target[
+                                "total_atomic_assertion_count"
+                            ],
+                            "probes": acceptance_policy["official_probe_count"],
+                            "requests": acceptance_policy[
+                                "official_request_count"
+                            ],
+                            "candidates": acceptance_policy[
+                                "official_candidate_count"
+                            ],
+                            "dimensions": acceptance_policy[
+                                "official_dimension_count"
+                            ],
                             "result": "passed",
                         },
                     }
@@ -958,10 +1043,12 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
                         "facts": {
                             "candidate_binding": candidate_binding,
                             "identity_binding": candidate_verification_binding,
-                            "commit": CANDIDATE_COMMIT,
-                            "tree": CANDIDATE_TREE,
-                            "required_rules": EXPECTED_REQUIRED_RULES,
-                            "profile_assertions": EXPECTED_PROFILE_ASSERTIONS,
+                            "commit": acceptance_policy["candidate_commit"],
+                            "tree": acceptance_policy["candidate_tree"],
+                            "required_rules": target["required_rule_count"],
+                            "profile_assertions": target[
+                                "profile_atomic_assertion_count"
+                            ],
                             "result": "passed",
                         },
                     }
@@ -1009,6 +1096,27 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
                 [{"id": "codex-zero-difference", "facts": {"binding": codex_binding, "result": "passed"}}],
             ),
         )
+        policy_evidence_ref = store.seal_object(
+            "operational_evidence",
+            generic_manifest(
+                "operational_evidence",
+                persona,
+                "claude-fw-g-generation-policy",
+                [
+                    {
+                        "id": "generation-policy",
+                        "facts": {
+                            "binding": generation_policy_ref,
+                            "identity_sha256": generation_policy[
+                                "identity_sha256"
+                            ],
+                            "target_version": target_version,
+                            "result": "passed",
+                        },
+                    }
+                ],
+            ),
+        )
         acceptance_evidence_ref = store.seal_object(
             "operational_evidence",
             generic_manifest(
@@ -1020,6 +1128,7 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
                     {"id": "codex", "facts": {"ref": codex_evidence_ref}},
                     {"id": "dmit", "facts": {"ref": dmit_evidence_ref}},
                     {"id": "official", "facts": {"ref": official_evidence_ref}},
+                    {"id": "policy", "facts": {"ref": policy_evidence_ref}},
                     {"id": "tls", "facts": {"ref": tls_evidence_ref}},
                 ],
             ),
@@ -1048,7 +1157,12 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
             old_evidence,
             tool_sha256,
             acceptance_evidence_ref,
-            [official_binding, candidate_binding, dmit_binding],
+            [
+                official_binding,
+                candidate_binding,
+                dmit_binding,
+                generation_policy_ref,
+            ],
             tls_binding,
         )
         verified_evidence_ref = store.seal_object("evidence_package", verified_evidence)
@@ -1164,7 +1278,9 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
                         "id": "response-boundary",
                         "facts": {
                             "strict_request_denominator": "excluded",
-                            "supporting_fact": "FACT-2_1_226-RESPONSE-COMPATIBILITY",
+                            "supporting_fact": acceptance_policy[
+                                "response_compatibility_fact_id"
+                            ],
                         },
                     },
                     {"id": "verification", "facts": {"acceptance_evidence_ref": acceptance_evidence_ref}},
@@ -1174,9 +1290,9 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
 
         campaign = {
             "schema_version": "official-client-control-campaign/v1",
-            "campaign_id": CAMPAIGN_ID,
+            "campaign_id": acceptance_policy["campaign_id"],
             "persona": persona,
-            "target_version": TARGET_VERSION,
+            "target_version": target_version,
             "official_artifacts": copy.deepcopy(old_campaign["official_artifacts"]),
             "platforms": copy.deepcopy(old_campaign["platforms"]),
             "entrypoints": copy.deepcopy(old_campaign["entrypoints"]),
@@ -1190,14 +1306,22 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
         store.create_campaign(campaign)
         clock = FactClock(datetime(2026, 8, 20, 17, 41, 1, tzinfo=timezone.utc))
         discovery_bindings = sorted(
-            [official_binding, candidate_binding, candidate_verification_binding, dmit_binding, tls_binding, codex_binding],
+            [
+                official_binding,
+                candidate_binding,
+                candidate_verification_binding,
+                dmit_binding,
+                tls_binding,
+                codex_binding,
+                generation_policy_ref,
+            ],
             key=lambda item: item["path"],
         )
         discovery_ref = store.append_fact(
-            CAMPAIGN_ID,
+            acceptance_policy["campaign_id"],
             "discovery_recorded",
             {
-                "version": TARGET_VERSION,
+                "version": target_version,
                 "source": "fw-g-official-retest-candidate-pair-dmit-acceptance",
                 "discovered_at_utc": clock.next(),
                 "tool_sha256": tool_sha256,
@@ -1206,19 +1330,19 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
             clock.next(),
         )
         evidence_ref = store.append_fact(
-            CAMPAIGN_ID,
+            acceptance_policy["campaign_id"],
             "evidence_recorded",
             {"discovery_fact_ref": discovery_ref, "evidence_package_ref": verified_evidence_ref},
             clock.next(),
         )
         evidence_approval_ref = store.append_fact(
-            CAMPAIGN_ID,
+            acceptance_policy["campaign_id"],
             "evidence_approved",
             {
                 "evidence_fact_ref": evidence_ref,
                 "evidence_package_ref": verified_evidence_ref,
-                "reviewer": REVIEWER,
-                "review_ref": f"{REVIEW_REF}:evidence",
+                "reviewer": acceptance_policy["reviewer"],
+                "review_ref": f"{acceptance_policy['review_ref']}:evidence",
             },
             clock.next(),
         )
@@ -1265,34 +1389,47 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
             "target_spec_ids": spec_ids,
             "ingress_target_dispositions": ingress_targets,
             "egress_target_dispositions": egress_targets,
-            "reviewer": REVIEWER,
-            "review_ref": f"{REVIEW_REF}:profile",
+            "reviewer": acceptance_policy["reviewer"],
+            "review_ref": f"{acceptance_policy['review_ref']}:profile",
             "identity_sha256": "",
         }
         profile_approval["identity_sha256"] = profile_approval_identity_sha256(profile_approval)
         profile_approval_ref = store.append_fact(
-            CAMPAIGN_ID,
+            acceptance_policy["campaign_id"],
             "profile_approved",
             profile_approval,
             clock.next(),
         )
 
         candidate = {
-            "candidate_id": CANDIDATE_ID,
+            "candidate_id": acceptance_policy["candidate_id"],
             "profile_approval_ref": profile_approval_ref,
             "release_artifact_ref": copy.deepcopy(old_approval["release_artifact_ref"]),
             "support_envelope_ref": support_ref,
-            "source_tree_sha256": CANDIDATE_SOURCE_TREE,
-            "test_tree_sha256": CANDIDATE_TEST_TREE,
-            "dependency_lock_sha256": CANDIDATE_DEPENDENCY_LOCK,
+            "source_tree_sha256": acceptance_policy[
+                "candidate_source_tree_sha256"
+            ],
+            "test_tree_sha256": acceptance_policy[
+                "candidate_test_tree_sha256"
+            ],
+            "dependency_lock_sha256": acceptance_policy[
+                "candidate_dependency_lock_sha256"
+            ],
             "target_architecture": "linux/amd64",
-            "build_id": "fw-g-651ccd518-linux-amd64",
-            "image_digest": CANDIDATE_IMAGE,
+            "build_id": (
+                f"fw-g-{acceptance_policy['candidate_commit'][:9]}-linux-amd64"
+            ),
+            "image_digest": acceptance_policy["candidate_image_digest"],
             "candidate_purpose": "production_replacement",
             "identity_sha256": "",
         }
         candidate["identity_sha256"] = candidate_identity_sha256(candidate)
-        candidate_ref = store.append_fact(CAMPAIGN_ID, "candidate_frozen", candidate, clock.next())
+        candidate_ref = store.append_fact(
+            acceptance_policy["campaign_id"],
+            "candidate_frozen",
+            candidate,
+            clock.next(),
+        )
 
         scenario_artifacts = sorted_refs(
             [official_evidence_ref, candidate_evidence_ref, dmit_evidence_ref, tls_evidence_ref, codex_evidence_ref]
@@ -1307,9 +1444,11 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
                 ("approve", "scenario_approved", "pass"),
             ):
                 payload: dict[str, Any] = {
-                    "candidate_id": CANDIDATE_ID,
+                    "candidate_id": acceptance_policy["candidate_id"],
                     "scenario_id": scenario["id"],
-                    "attempt_id": "dmit-651ccd518",
+                    "attempt_id": (
+                        f"dmit-{acceptance_policy['candidate_commit'][:9]}"
+                    ),
                     "stage": stage_name,
                     "previous_stage_ref": previous,
                     "artifact_refs": [] if stage_name == "prepare" else scenario_artifacts,
@@ -1317,10 +1456,18 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
                 }
                 if stage_name == "approve":
                     payload |= {
-                        "reviewer": REVIEWER,
-                        "review_ref": f"{REVIEW_REF}:scenario:{scenario['id']}",
+                        "reviewer": acceptance_policy["reviewer"],
+                        "review_ref": (
+                            f"{acceptance_policy['review_ref']}:scenario:"
+                            f"{scenario['id']}"
+                        ),
                     }
-                previous = store.append_fact(CAMPAIGN_ID, fact_kind, payload, clock.next())
+                previous = store.append_fact(
+                    acceptance_policy["campaign_id"],
+                    fact_kind,
+                    payload,
+                    clock.next(),
+                )
             require(previous is not None, f"场景未完成：{scenario['id']}")
             scenario_approvals[scenario["id"]] = previous
 
@@ -1338,7 +1485,7 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
             pair = {
                 "pair_id": f"PAIR-{spec_id}",
                 "spec_id": spec_id,
-                "candidate_id": CANDIDATE_ID,
+                "candidate_id": acceptance_policy["candidate_id"],
                 "release_artifact_ref": copy.deepcopy(old_approval["release_artifact_ref"]),
                 "condition_sha256": candidate_rules_by_spec[spec_id]["atomic_pair_sha256"],
                 "scenario_approval_refs": sorted_refs(spec_scenarios[spec_id]),
@@ -1346,7 +1493,9 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
                     "ingress_id": official_ingress,
                     "translation": "lossless",
                     "result": "pass",
-                    "final_wire_sha256": CANDIDATE_WIRE,
+                    "final_wire_sha256": acceptance_policy[
+                        "candidate_wire_sha256"
+                    ],
                 },
                 "third_party_results": [
                     {
@@ -1354,7 +1503,9 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
                         "ingress_id": third_party_ingress,
                         "translation": "lossless",
                         "result": "pass",
-                        "final_wire_sha256": CANDIDATE_WIRE,
+                        "final_wire_sha256": acceptance_policy[
+                            "candidate_wire_sha256"
+                        ],
                     }
                 ],
                 "dynamic_field_checks": [
@@ -1365,13 +1516,20 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
                     }
                 ],
             }
-            pair_refs.append(store.append_fact(CAMPAIGN_ID, "pair_recorded", pair, clock.next()))
+            pair_refs.append(
+                store.append_fact(
+                    acceptance_policy["campaign_id"],
+                    "pair_recorded",
+                    pair,
+                    clock.next(),
+                )
+            )
 
         acceptance_ref = store.append_fact(
-            CAMPAIGN_ID,
+            acceptance_policy["campaign_id"],
             "acceptance_recorded",
             {
-                "candidate_id": CANDIDATE_ID,
+                "candidate_id": acceptance_policy["candidate_id"],
                 "profile_approval_ref": profile_approval_ref,
                 "candidate_ref": candidate_ref,
                 "pair_refs": sorted_refs(pair_refs),
@@ -1396,14 +1554,18 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
         )
         status = __import__(
             "tools.official_client_control.gates", fromlist=["WorkflowGates"]
-        ).WorkflowGates(store).status(CAMPAIGN_ID)
+        ).WorkflowGates(store).status(acceptance_policy["campaign_id"])
         require(status["checkpoint"] == "ready", "FW-G Campaign 未达到 ready")
         require(status["production_state"] == "not_activated", "FW-G 越权进入生产状态")
 
         local_summary = {
             "schema_version": "claude-code-fw-g-acceptance-summary/v1",
-            "campaign_id": CAMPAIGN_ID,
-            "candidate_id": CANDIDATE_ID,
+            "campaign_id": acceptance_policy["campaign_id"],
+            "candidate_id": acceptance_policy["candidate_id"],
+            "generation_policy": {
+                "binding": generation_policy_ref,
+                "identity_sha256": generation_policy["identity_sha256"],
+            },
             "profile_approval_ref": profile_approval_ref,
             "candidate_ref": candidate_ref,
             "acceptance_ref": acceptance_ref,
@@ -1428,35 +1590,50 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
         "phase": "FW-G",
         "target": {
             "product": "claude-code",
-            "version": TARGET_VERSION,
+            "version": target_version,
             "platform": "linux/amd64",
-            "profile_sha256": CANDIDATE_PROFILE,
-            "wire_sha256": CANDIDATE_WIRE,
-            "release_artifact_sha256": CANDIDATE_RELEASE,
+            "profile_sha256": acceptance_policy["candidate_profile_sha256"],
+            "wire_sha256": acceptance_policy["candidate_wire_sha256"],
+            "release_artifact_sha256": acceptance_policy[
+                "candidate_release_sha256"
+            ],
+        },
+        "generation_policy": {
+            "binding": generation_policy_ref,
+            "identity_sha256": generation_policy["identity_sha256"],
         },
         "campaign": {
-            "campaign_id": CAMPAIGN_ID,
+            "campaign_id": acceptance_policy["campaign_id"],
             "identity_sha256": campaign["identity_sha256"],
             "profile_approval_ref": profile_approval_ref,
             "approval_purpose": "production_replacement",
         },
         "candidate": {
-            "candidate_id": CANDIDATE_ID,
+            "candidate_id": acceptance_policy["candidate_id"],
             "candidate_ref": candidate_ref,
-            "commit": CANDIDATE_COMMIT,
-            "tree": CANDIDATE_TREE,
-            "image_digest": CANDIDATE_IMAGE,
+            "commit": acceptance_policy["candidate_commit"],
+            "tree": acceptance_policy["candidate_tree"],
+            "image_digest": acceptance_policy["candidate_image_digest"],
             "architecture": "linux/amd64",
         },
         "coverage": {
-            "required_rules": EXPECTED_REQUIRED_RULES,
-            "profile_atomic_assertions": EXPECTED_PROFILE_ASSERTIONS,
-            "scenario_only_assertions": EXPECTED_SCENARIO_ASSERTIONS,
-            "atomic_assertions": EXPECTED_ATOMIC_ASSERTIONS,
-            "official_probes": EXPECTED_OFFICIAL_PROBES,
-            "official_requests": EXPECTED_OFFICIAL_REQUESTS,
-            "official_candidates": EXPECTED_OFFICIAL_CANDIDATES,
-            "official_dimensions": EXPECTED_OFFICIAL_DIMENSIONS,
+            "required_rules": target["required_rule_count"],
+            "profile_atomic_assertions": target[
+                "profile_atomic_assertion_count"
+            ],
+            "scenario_only_assertions": target[
+                "total_atomic_assertion_count"
+            ]
+            - target["profile_atomic_assertion_count"],
+            "atomic_assertions": target["total_atomic_assertion_count"],
+            "official_probes": acceptance_policy["official_probe_count"],
+            "official_requests": acceptance_policy["official_request_count"],
+            "official_candidates": acceptance_policy[
+                "official_candidate_count"
+            ],
+            "official_dimensions": acceptance_policy[
+                "official_dimension_count"
+            ],
             "scenario_approvals": len(scenario_approvals),
             "pair_facts": len(pair_refs),
         },
@@ -1499,36 +1676,13 @@ def finalize(arguments: argparse.Namespace) -> dict[str, Any]:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="封存 Claude Code FW-G 后继批准与 AcceptanceFact")
     parser.add_argument("--repository-root", type=Path, default=REPOSITORY_ROOT)
-    parser.add_argument(
-        "--base-store",
-        type=Path,
-        default=REPOSITORY_ROOT / "local-analysis/fw-f/claude-code-2.1.226/profile-approval-v5/control-store",
-    )
-    parser.add_argument(
-        "--official-dir",
-        type=Path,
-        default=REPOSITORY_ROOT / "local-analysis/fw-g/claude-code-2.1.226/fw-g-official-derived-v2-v9-19a2e8ba7/portable-v1",
-    )
-    parser.add_argument(
-        "--candidate-dir",
-        type=Path,
-        default=REPOSITORY_ROOT / "local-analysis/fw-g/claude-code-2.1.226/candidate-pair-651ccd518",
-    )
-    parser.add_argument(
-        "--dmit-receipt",
-        type=Path,
-        default=REPOSITORY_ROOT / "local-analysis/fw-g/claude-code-2.1.226/dmit-acceptance-651ccd518/dmit-acceptance.json",
-    )
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=REPOSITORY_ROOT / "local-analysis/fw-g/claude-code-2.1.226/acceptance-v2-651ccd518",
-    )
-    parser.add_argument(
-        "--public-receipt",
-        type=Path,
-        default=REPOSITORY_ROOT / "docs/egress/maintenance/claude-fw-g-acceptance.json",
-    )
+    parser.add_argument("--generation-policy", type=Path, required=True)
+    parser.add_argument("--base-store", type=Path, required=True)
+    parser.add_argument("--official-dir", type=Path, required=True)
+    parser.add_argument("--candidate-dir", type=Path, required=True)
+    parser.add_argument("--dmit-receipt", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--public-receipt", type=Path, required=True)
     return parser
 
 

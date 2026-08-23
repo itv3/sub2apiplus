@@ -16,6 +16,10 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from tools.official_client_capture.claude_fw_f_profile import parse_http_stream
+from tools.official_client_capture.claude_generation_policy import (
+    GenerationPolicyError,
+    load_generation_policy,
+)
 
 
 EXPECTED_PROFILE_DIGEST: str
@@ -55,12 +59,6 @@ EMPTY_FILE_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b785
 MODEL_CAPABILITY_PRIOR_TRANSITIONS: tuple[tuple[str, str], ...]
 MODEL_CAPABILITY_SOURCE_TRANSITIONS: tuple[tuple[str, str, str], ...]
 
-DEFAULT_GENERATION_POLICY = (
-    ROOT
-    / "tools/official_client_capture/claude_fw_g_generation_policy_2_1_226.json"
-)
-
-
 def configure_generation_policy(policy_path: Path) -> None:
     """原子加载版本事实；生成器控制流不再因普通换版而修改。"""
 
@@ -84,9 +82,7 @@ def configure_generation_policy(policy_path: Path) -> None:
     global MODEL_CAPABILITY_SOURCE_TRANSITIONS
 
     try:
-        document = json.loads(policy_path.read_text(encoding="utf-8"))
-        if document["schema_version"] != "claude-fw-g-generation-policy/v1":
-            raise ValueError("schema_version 非法")
+        document = load_generation_policy(policy_path)
         target = document["target"]
         frozen = document["frozen_inputs"]
         previous = document["previous_release"]
@@ -148,7 +144,7 @@ def configure_generation_policy(policy_path: Path) -> None:
             (item["path"], item["from_sha256"], item["reason"])
             for item in model["source_transitions"]
         )
-    except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+    except (GenerationPolicyError, KeyError, TypeError, ValueError) as exc:
         raise SystemExit(
             f"Claude FW-G generation policy 非法：{policy_path}: {exc}"
         ) from exc
@@ -1657,7 +1653,7 @@ def main() -> int:
     parser.add_argument(
         "--generation-policy",
         type=Path,
-        default=DEFAULT_GENERATION_POLICY,
+        required=True,
         help="冻结目标版本、输入摘要、模型目录和 TLS 向量的 JSON 策略",
     )
     parser.add_argument("--snapshot", type=Path, required=True)

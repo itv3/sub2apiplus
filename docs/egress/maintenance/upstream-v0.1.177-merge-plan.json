@@ -1,0 +1,14 @@
+{
+  "schema_version": "official-egress-upstream-merge-plan/v1",
+  "plan_id": "sub2api-v0.1.177-ledger-replay-20260823",
+  "purpose": "baseline_replay",
+  "upstream": {
+    "url": "https://github.com/Wei-Shaw/sub2api.git",
+    "tag": "v0.1.177",
+    "commit": "073e92d17178a1ccdb0a27017f572f10c9c7ab62"
+  },
+  "outputs": {
+    "egress_merge_ledger": "docs/egress/maintenance/upstream-v0.1.177-egress-merge-ledger.json"
+  },
+  "identity_sha256": "3d299218551e2a566fb5c6cd8efcfc150527e7bf30b0089cdb86956b72cf67fb"
+}

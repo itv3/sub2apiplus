@@ -306,6 +306,9 @@ func claudeFWHFableDeclaredFallbackDirectSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if upstreamMergeFrameworkTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if claudeFWHStateDurabilityTransitionSupersedes(path, priorDigest, currentDigest) {
 		return true
 	}
@@ -410,7 +413,9 @@ func TestClaudeFWHFableDeclaredFallbackTransitionsAreFrozen(t *testing.T) {
 			if err != nil || currentDigest != transition.ToSHA256 &&
 				!claudeFWHStateDurabilityTransitionSupersedes(
 					transition.Path, transition.ToSHA256, currentDigest,
-				) {
+				) && !upstreamMergeFrameworkTransitionSupersedes(
+				transition.Path, transition.ToSHA256, currentDigest,
+			) {
 				t.Fatalf("Claude FW-H Fable fallback 摘要漂移：%s", transition.Path)
 			}
 		}

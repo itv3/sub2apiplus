@@ -215,7 +215,9 @@ func claudeOfficialClientOnlyTargetMatches(path string, want string) bool {
 	}
 	sum := sha256.Sum256(raw)
 	current := hex.EncodeToString(sum[:])
-	return current == want || claudeOfflineReleaseRepairTransitionSupersedes(
+	return current == want || upstreamMergeFrameworkTransitionSupersedes(
+		path, want, current,
+	) || claudeOfflineReleaseRepairTransitionSupersedes(
 		path, want, current,
 	)
 }
@@ -227,6 +229,9 @@ func claudeOfficialClientOnlyTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if upstreamMergeFrameworkTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if !receiptSHA256(priorDigest) || !receiptSHA256(currentDigest) {
 		return false
 	}

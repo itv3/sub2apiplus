@@ -310,7 +310,9 @@ func TestClaudeFWGFableDesktopTitleTransitionsAreFrozen(t *testing.T) {
 			if got := claudeFWGCountTokensDigest(raw); got != transition.ToSHA256 &&
 				!claudeFWGThreeModelAcceptanceSupersedes(
 					transition.Path, transition.ToSHA256, got,
-				) {
+				) && !upstreamMergeFrameworkTransitionSupersedes(
+				transition.Path, transition.ToSHA256, got,
+			) {
 				t.Fatalf(
 					"Claude FW-G Fable Desktop 标题 transition 漂移：path=%s got=%s want=%s",
 					transition.Path, got, transition.ToSHA256,

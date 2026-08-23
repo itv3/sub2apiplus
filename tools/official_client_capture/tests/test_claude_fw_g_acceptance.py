@@ -7,10 +7,21 @@ import unittest
 from pathlib import Path
 
 from tools.official_client_capture import claude_fw_g_acceptance as acceptance
+from tools.official_client_capture.claude_generation_policy import (
+    load_generation_policy,
+)
 from tools.official_client_control.contracts import validate_object_document
 
 
 class ClaudeFWGAcceptanceTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.policy = load_generation_policy(
+            acceptance.REPOSITORY_ROOT
+            / "tools/official_client_capture/claude_fw_g_generation_policy_2_1_226_v2.json"
+        )
+        cls.acceptance_policy = cls.policy["acceptance"]
+
     def setUp(self) -> None:
         self.persona = {
             "provider": "anthropic",
@@ -24,14 +35,29 @@ class ClaudeFWGAcceptanceTest(unittest.TestCase):
         self.assertEqual(
             acceptance.candidate_git_material_digests(
                 acceptance.REPOSITORY_ROOT,
-                acceptance.CANDIDATE_COMMIT,
+                self.acceptance_policy["candidate_commit"],
             ),
             {
-                "source": acceptance.CANDIDATE_SOURCE_TREE,
-                "test": acceptance.CANDIDATE_TEST_TREE,
-                "dependency": acceptance.CANDIDATE_DEPENDENCY_LOCK,
+                "source": self.acceptance_policy[
+                    "candidate_source_tree_sha256"
+                ],
+                "test": self.acceptance_policy["candidate_test_tree_sha256"],
+                "dependency": self.acceptance_policy[
+                    "candidate_dependency_lock_sha256"
+                ],
             },
         )
+
+    def test_rejects_approved_campaign_target_version_mismatch(self) -> None:
+        old_campaign = {"target_version": "9.9.9"}
+        with self.assertRaisesRegex(acceptance.AcceptanceError, "目标版本"):
+            acceptance.validate_approved_baseline(
+                old_campaign,
+                {},
+                {},
+                self.policy["target"],
+                self.acceptance_policy,
+            )
 
     def test_ingress_inventory_splits_official_and_third_party_strict_branches(self) -> None:
         observation = acceptance.build_ingress_observation(self.persona, self.evidence_ref)

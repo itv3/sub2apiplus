@@ -283,6 +283,8 @@ func TestClaudeFWGDesktopCompatibilityTransitionsAreFrozen(t *testing.T) {
 					transition.Path, transition.ToSHA256, got,
 				) && !claudeFWGDesktopTitleTransitionSupersedes(
 				transition.Path, transition.ToSHA256, got,
+			) && !upstreamMergeFrameworkTransitionSupersedes(
+				transition.Path, transition.ToSHA256, got,
 			) {
 				t.Fatalf(
 					"Claude FW-G Desktop compatibility transition 漂移：path=%s got=%s want=%s",

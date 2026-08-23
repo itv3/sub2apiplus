@@ -312,6 +312,8 @@ func validateClaudeFWGModelCapabilityTransitions(
 			transition.Path, transition.ToSHA256, currentDigest,
 		) && !claudeFWHFableDeclaredFallbackTransitionSupersedes(
 			transition.Path, transition.ToSHA256, currentDigest,
+		) && !upstreamMergeFrameworkTransitionSupersedes(
+			transition.Path, transition.ToSHA256, currentDigest,
 		) {
 			return errors.New("Claude 模型能力源码 transition 当前摘要不一致")
 		}
@@ -332,6 +334,9 @@ func claudeFWGModelCapabilityTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if upstreamMergeFrameworkTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if claudeFWHStateDurabilityTransitionSupersedes(path, priorDigest, currentDigest) {
 		return true
 	}

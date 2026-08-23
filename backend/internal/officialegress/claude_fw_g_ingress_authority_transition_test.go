@@ -238,7 +238,9 @@ func TestClaudeFWGIngressAuthorityTransitionsAreFrozen(t *testing.T) {
 			if got := claudeFWGCountTokensDigest(raw); got != transition.ToSHA256 &&
 				!claudeFWGThinkingDisplayTransitionSupersedes(
 					transition.Path, transition.ToSHA256, got,
-				) {
+				) && !upstreamMergeFrameworkTransitionSupersedes(
+				transition.Path, transition.ToSHA256, got,
+			) {
 				t.Fatalf(
 					"Claude FW-G ingress authority transition 漂移：path=%s got=%s want=%s",
 					transition.Path, got, transition.ToSHA256,

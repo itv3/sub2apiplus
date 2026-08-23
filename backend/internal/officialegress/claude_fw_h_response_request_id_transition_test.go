@@ -199,6 +199,9 @@ func claudeFWHResponseRequestIDTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if upstreamMergeFrameworkTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	receipts, err := loadClaudeFWHResponseRequestIDReceipts()
 	if err != nil {
 		return false

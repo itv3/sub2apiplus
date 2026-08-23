@@ -1,4 +1,4 @@
-.PHONY: build build-backend build-frontend test test-backend test-frontend test-frontend-critical test-capture-tools test-official-client-control check-egress-spec check-egress-spec-ci check-egress-spec-local-source check-egress-bootstrap-replay check-egress-seal
+.PHONY: build build-backend build-frontend test test-backend test-frontend test-frontend-critical test-capture-tools test-official-client-control test-upstream-merge-tools check-egress-spec check-egress-spec-ci check-egress-spec-local-source check-egress-bootstrap-replay check-egress-seal
 
 EGRESS_BOOTSTRAP_COMMIT := 38a9929eac35a39c86de2f27de8f7a805d7dae52
 EGRESS_BOOTSTRAP_BASELINE := $(CURDIR)/docs/egress/foundation/sink-baseline.json
@@ -16,6 +16,7 @@ EGRESS_LEGACY_BASELINE := $(CURDIR)/docs/egress/lifecycle/legacy-baseline.json
 EGRESS_LEGACY_CEILING := $(CURDIR)/docs/egress/lifecycle/legacy-ceiling.json
 EGRESS_LEGACY_SEAL_RECEIPT := $(CURDIR)/docs/egress/lifecycle/legacy-seal-receipt.json
 EGRESS_SEAL_BASE_REF ?=
+UPSTREAM_MERGE_PLAN ?= $(CURDIR)/docs/egress/maintenance/upstream-v0.1.177-merge-plan.json
 
 FRONTEND_CRITICAL_VITEST := \
 	src/api/__tests__/client.spec.ts \
@@ -64,7 +65,7 @@ check-egress-spec: check-egress-spec-local-source check-egress-spec-ci
 check-egress-spec-local-source:
 	@python3 tools/check_spec_refs.py
 
-check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal test-official-client-control
+check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal test-official-client-control test-upstream-merge-tools
 	@python3 tools/check_version_leak.py --self-test
 	@python3 tools/check_version_leak.py
 	@python3 tools/check_changeset5_0145_symbols.py --self-test
@@ -86,7 +87,8 @@ check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal test-offic
 	@python3 tools/fw_e_r_disposition_transition.py
 	@python3 tools/changeset6_benchmark_evidence.py --self-test
 	@python3 tools/changeset6_benchmark_evidence.py
-	@python3 tools/check_ledger_completeness.py
+	@python3 tools/check_ledger_completeness.py \
+		--upstream-merge-plan "$(UPSTREAM_MERGE_PLAN)"
 	@cd backend && go run ./cmd/egressscan -mode self-test
 	@cd backend && go run ./cmd/egressscan -mode check \
 		-baseline ../docs/egress/foundation/sink-baseline.json \
@@ -216,3 +218,9 @@ test-capture-tools:
 test-official-client-control:
 	@PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
 		-s tools/official_client_control/tests -p 'test_*.py'
+
+# Sub2API 上游合并 U-0～U-6 状态机只使用合成 Git 图，
+# 不联网、不触碰真实上游分支，也不推送或部署。
+test-upstream-merge-tools:
+	@PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover \
+		-s tools/upstream_merge/tests -p 'test_*.py'

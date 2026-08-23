@@ -144,6 +144,9 @@ func claudeFWHLegacyRetirementTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if upstreamMergeFrameworkTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if claudeFWHStateDurabilityTransitionSupersedes(path, priorDigest, currentDigest) {
 		return true
 	}
@@ -234,7 +237,9 @@ func TestClaudeFWHLegacyRetirementTransitionsAreFrozen(t *testing.T) {
 				) &&
 				!claudeFWHFableDeclaredFallbackDirectSupersedes(
 					transition.Path, transition.ToSHA256, currentDigest,
-				) {
+				) && !upstreamMergeFrameworkTransitionSupersedes(
+				transition.Path, transition.ToSHA256, currentDigest,
+			) {
 				t.Fatalf("Claude FW-H 遗留退休摘要漂移：%s", transition.Path)
 			}
 		}

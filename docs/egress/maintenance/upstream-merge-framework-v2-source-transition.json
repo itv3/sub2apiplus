@@ -1,0 +1,933 @@
+{
+  "schema_version": "official-egress-upstream-merge-framework-source-transition/v1",
+  "date": "2026-08-23",
+  "base_commit": "5d99bb5b44013ffe0dd21174842f30fe9453a99f",
+  "purpose": "framework_prerequisite",
+  "target_clients": {
+    "claude": "2.1.226",
+    "codex": "0.147.0"
+  },
+  "transitions": [
+    {
+      "path": ".gitignore",
+      "predecessor_sha256s": [
+        "f77204a3f1da502d1819f53129ad3d8daa523f716096d86ff4d0ab550015baf3"
+      ],
+      "to_sha256": "b31486272278ea54a2fecfcb4fd2be8f69ebca13f9179c084af108c36054a31e",
+      "reason": "显式纳入上游合并状态机测试目录，确保新增门禁测试进入版本控制。"
+    },
+    {
+      "path": "Makefile",
+      "predecessor_sha256s": [
+        "070cfac169fefc59dcfc968d0f46a72935d825ef44332a5364adeeb7cc40b490"
+      ],
+      "to_sha256": "1c1e7f1b3f60294b980812140a223a2cbf6ac499302b777338a034a38920c80a",
+      "reason": "接入上游合并工具测试与完整 egress 门禁，并将 overlay 目标改由冻结计划提供。"
+    },
+    {
+      "path": "backend/internal/handler/openai_gateway_handler.go",
+      "predecessor_sha256s": [
+        "226800bec6331094a49d36d6150cfe3fe31424c566d1c204b162d0baba7729e5"
+      ],
+      "to_sha256": "268eb5fc6b126320167bb349ac5d38c915338a474512ca946a275e1daa3ed184",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/officialegress/catalog_retirements_test.go",
+      "predecessor_sha256s": [
+        "2f597cac545897f1f33bd99db52dd877d2b790e9c72602f7d3976284a994aa35",
+        "4c87fe2d74d780911b570b5a18127e9ed9c82b356c3f7a55a4e981c554f93913",
+        "598fcad7db865ea09b74c0690078053bc84f89d2d210b85a26382fb149414afd",
+        "de6b85f943953917d9c61804da10ddc1105dc3b9c9dffecfebf2d217b43c9ba8",
+        "ebb7e1a9314f1ce50983631d201ba7777cfd525d346bce8fe6c9e495313b61f0"
+      ],
+      "to_sha256": "c3e6e3261b7658e5da04953a1b7edf41ccc57a70478a5852902a34f08377503a",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_body.go",
+      "predecessor_sha256s": [
+        "0bbd57f2f656f1fb6a7ebb02031466d99f87a2775c44eb3aaee9af1a9b41cff9",
+        "0dad456982d4135eb9a4e71cf20c8f13e117dcd6f92f9e6e96f80e253378406c",
+        "6877123a881ba1ade19f51120d39d77f12f878b99ba5d4cb7c5603a8711b7823",
+        "736f35a4a0258591fdd700979f1da0ee6c29373d6006bd31501bf1ee4647e102",
+        "a3e4264c9f8a5bccec8de19e259dc2d20950be1616da3d0f818bd00b6aa6f09e",
+        "a4559ce277a1bf1c8c554ab42fd70695d141a8ab64f16b28afde1de8b1329c50",
+        "ba45723ed345a30cbd358ea9d0c23fe065df410a921fc3c69aa3eb6d5dd846b7",
+        "cb97480760bb7f9eb7a664ce7a4eb1b1f0717f412e6b6ba5e9b676eb588f9a9d",
+        "f5630f1a1907d54eb8b5f5dfff111e55a7a6c07fcb18779856f17844e0939f3a"
+      ],
+      "to_sha256": "3d90294dfe5f45b61a98eca44816209035548706258f55b287c4e05d850ea242",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_candidate_catalog.go",
+      "predecessor_sha256s": [
+        "4fee5d9c1bdad14a94159b77776cea4a27d7c015834013469a24c13f96483053",
+        "c37324eeb697fa1ff7a33d273eeb7d50dd5c50f8c96d54868944500e232dd4b1",
+        "c79cd932e64cdfdabb8641ecfcf4353498713a1e60811456ccdd8240a8c724fc"
+      ],
+      "to_sha256": "683d7c86827738dc11b887285ce457ef0408bedd40396852d73c34e112eefdd8",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_alias_route_transition_test.go",
+      "predecessor_sha256s": [
+        "368e08ed053cd26e0e8aecdf35e25aecf19527298dad2efffdf55c6794eb0136",
+        "7357b32caa9c130f814a096da9c7c9b3b0f2186ae7a13efaa1498d3e77cddd96"
+      ],
+      "to_sha256": "117cb66c68507725dd5453001929320c55e4fc91d9ce99d4e8569168dde0d25a",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_desktop_compat_transition_test.go",
+      "predecessor_sha256s": [
+        "1a307102cd7481d2563406d503506795142786201d7ad2955e53060f0c3b6a87",
+        "cfd057f1ca1bf49e2fbbeaf99fb9e0851c63500ea516c037172ffe1f65121bdc",
+        "ddbd623140801d4eb7b5c7fc7dc61a36d85948b213d192d34b286df1bd5a63fb"
+      ],
+      "to_sha256": "2d01ee381e0ca3906774624d687d34b0a80fc3f3879211aeb76060d23df0f93a",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_desktop_ingress_transition_test.go",
+      "predecessor_sha256s": [
+        "5fcd0654f0adeb2a5ae2bd5c3b19fb04590a5c4e6564830e8132293d49640f58"
+      ],
+      "to_sha256": "49d90536c3bdc085d8b068dce9fe203e753b2498478e1f816042dce58fae3fb4",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_desktop_title_transition_test.go",
+      "predecessor_sha256s": [
+        "55f9b903bc692002529658b9ad3c181ae2bdcf71a12e8aba50e992b538854270"
+      ],
+      "to_sha256": "4f5029b0177ecb1f5c29854c6b63eaf586de1428d089973862fdc66ab5332500",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_fable_desktop_title_transition_test.go",
+      "predecessor_sha256s": [
+        "b285b2a9b2c595fb1b8f25bd070f0691f8c5bad83fb08de46150c3cd7a3fb64f"
+      ],
+      "to_sha256": "9670be7c4f9a2e32ef6fdd2b161bd5b9aa66f3bbe498966448d10b7e8bbb7f78",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_ingress_authority_transition_test.go",
+      "predecessor_sha256s": [
+        "63b4c343f64f5d27a7c6ce31b7cc40e7a1dc27717b84bf344e22c35a9db7969d"
+      ],
+      "to_sha256": "a69a1b9605940b384787ddadd72b8f226394d97991a857aac3f890c0d4bd0b7a",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_model_capability_transition_test.go",
+      "predecessor_sha256s": [
+        "164fe08eae7c12d747ac9c69787ec085085a9e5d00ae1e89b104b90c874015ff",
+        "21cf6f30608d2347dff283a115ab13d18b0d97a919b1eaf8d5c454fd73afd639",
+        "3afebe6c7acef452989795a87fa6750f80052d7579562b379be13ac8f15746c1",
+        "5a5c77ed966303808b9508f407e00635914b5cbd7fdd297f54e95f842c1a2359",
+        "9173c5b7ed29798ceb5728679a7a795b0b5edeb2b65ce3186e1fc0d5aa05f969",
+        "b50789d84bda42d17f15eb6c4f1e0e2b041bb40ccd793a3d400997e9323d8c89",
+        "ee8a989a4c81b055a5df58c5e0789de709f92d95995af60fc8f795fa9401f514"
+      ],
+      "to_sha256": "0c8ddd5eeddd4239a342f19862cb78b224be8927660717dd07483e395c2fd3b5",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_source_transition_test.go",
+      "predecessor_sha256s": [
+        "68d3fc2c9544b690b5590bac7632c0a23913cf265cefc3e2ebbc9b9ca0cde5e3",
+        "e943503961ebaf1e890410fcd61a8745f205b09668b9b807d5d7ec5404961fae",
+        "fbef8a45a7e4c1d9940926d24e6caba1785591399e61f4c0a3255c88d3cdf118"
+      ],
+      "to_sha256": "c404a18b6b64940230ff4d2d54a24084c009e0f26909e40c2416253f9cd5935c",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_g_thinking_display_transition_test.go",
+      "predecessor_sha256s": [
+        "108a1cee07325d3f63e56b0c7578cb0a3031ca05a810d7a7f4ff2bc4bff28db2",
+        "dd1e6794ffd732105880683377c09a4351b5895dd740d8be481bf647c852540f",
+        "e3abae6d0a1ff445adb531618653b8f0c84e53de7c07705531ee8cfaf5719bd6"
+      ],
+      "to_sha256": "d8829060e2243fe27d44e9e2c42b3cc29423099026bef506db3184c5ad1a9d01",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_bare_chat_route_transition_test.go",
+      "predecessor_sha256s": [
+        "325dc948c57dd0e3a121b20ff7cadac118ec8e9e602a8d270d035803f077f054"
+      ],
+      "to_sha256": "26b273a77f860907a6b4287cb895fdd02ee0ea4ff24ec8756dd090327b9ea5a0",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_fable_declared_fallback_transition_test.go",
+      "predecessor_sha256s": [
+        "5df62a666d47ab93b86bb6bc0d90fd526ec669b3fc57ef8a1222e45ff74e6920",
+        "cc85b844d43b371027b9c20a0e2b7b5766e7e0ba4fb075c5ddb88f18f7da1415"
+      ],
+      "to_sha256": "0bcdc32facae66708a3eb1c4503cef163799e134bf612ad720d4fd07d94973ae",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_legacy_retirement_transition_test.go",
+      "predecessor_sha256s": [
+        "02953064979285ed9cfb302c076f018b295ece14547f189ce9f436e0d4549e8a",
+        "63cbd59d9fb97d71531f32fef80e720ff192747fe42e7e1e12fd4cab79fd8c73",
+        "6882ec3399ad4bcdcf11728847e314f69f4308f1f632139705f901d3395735e2",
+        "6f608a1c2e05b25ee06f50dea3f8a174a38f50126a7541dadaee50da5704c752",
+        "fabaf5cf55fdb973b07015a9b4baf2ecc1b3258d9e108a83fd124eea36aa815f"
+      ],
+      "to_sha256": "cf1695ce7eb3dcd50d982fd54d6d8aa42d0d3e5424ca7c1522622d7dc78e2b9a",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_production_acceptance_test.go",
+      "predecessor_sha256s": [
+        "79d9ec88b1e38bd74d4dbfe804fb30672a319df14eb89fe2637ebb9aa1ae1c14",
+        "8fe26ba5f79bff41166cbf9a6c20608dfacf0c03cebdf82daba24f3b6d9ce2a6",
+        "e90d991ac119f71ae9cd4131c4303ad5f91ab427e9642b5da9273d2f00fb69b2"
+      ],
+      "to_sha256": "8156647f0919e4d518d3d88a2aecd996107ea16653da424bdd4d054f1a5d3942",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_production_test.go",
+      "predecessor_sha256s": [
+        "b1bdedffc56a9b01918c75b88f148a6cbf35f7f37aaaee0b636f97005adad6ef",
+        "f727f409093630317644f37d0d5850f3166440ad9b69bd55dca8592d5de91d12"
+      ],
+      "to_sha256": "f5b918c2f24106188c9db41d040083b610250b0375c9ca4a0463a9db0660e57d",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_response_request_id_transition_test.go",
+      "predecessor_sha256s": [
+        "9532aced4283cd1b2c496ff73e42a0681606243d602a8fa50043419ef3f85e3e"
+      ],
+      "to_sha256": "9e7386d825f9c8552d10dc25c417f4d57cb70335d2eaf0368948fa9a5ffe50c2",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_source_transition_test.go",
+      "predecessor_sha256s": [
+        "092c202b754038c012351d60cd0eea8efa1d26a8669b690a95a6f3b8fd95a380",
+        "87cb831e452973be7d42f99144ea97efbc03fd06fd2fe1ba3841f0c2662b78c4",
+        "a1ff79a9197ce1252856fa8829e17971e0d6061a060e7d006d66a257ba5ae8cb",
+        "bee369a73147fdeefb706a8d76a087a3628188a7289ee41bc2bce45902aa4337",
+        "f0fb7bc7b99f8500d43785f85d4cb9033aa1be6674caa315e11a9f4c95dfa79c"
+      ],
+      "to_sha256": "d21ab94266805733e2037ed84a9d4dc3b069e955acacccc1d55c740d18657110",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_state_durability_transition_test.go",
+      "predecessor_sha256s": [
+        "31650f20d7ddd4123e47d6dce019feeb8a5247b91a80bbc65c739a6be19cd835",
+        "9cfa422ffb55dd8ea9686dd69aae2e7f8812ecba87fbeb05878759f4c41c0e21",
+        "d20039c45eb1370ff645ba6fca687d9acd9d05a17750a24b70daa313b15c4897",
+        "df618bf3cf6d0ea1e119a2876ea00035279443a5b755559dcadbaf1ffd6f70eb"
+      ],
+      "to_sha256": "ef1f8d7261463a9ea63d4c5de245b3b8ea561673503bb2903f6d4d29a607ee35",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_third_party_strict_transition_test.go",
+      "predecessor_sha256s": [
+        "211e46cfcfba1ea8adfee204508137b9cac3606952ade41db8d705cec85acbe2",
+        "41b008bf91253989594415e1dd09c312b53c233be115591b196b36d83afc2083",
+        "92918c371b2d61f0fbcbc3c7288ecec0a087aa60f39d330d0042df3cc1d5b573",
+        "ee6641a431be5e31c98a3d623a75007e2dcc44038fe8b6c46031af941932c7ff"
+      ],
+      "to_sha256": "6905a38ee23b21076dd4f3d90fdfb9cfd93eaa94a49e68df5b8b4bbc5ea16ecb",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_ingress.go",
+      "predecessor_sha256s": [
+        "0920335717e3d646bc4d54bda997ea8c81a23bd3fd056d6258b442824abd0204",
+        "13e1c1947ac4b46d44764ee1f409655dcb42e147f71b053144747f2a32736aaf",
+        "18fa37164205d0016107090c91e5a02278ed2bcb5bed8804fb2bab16209dd444",
+        "27abd1e5c54bb4a980eaf00e744c6507bacb4da0bbf4eaead7e4329b2ebef6e8",
+        "aac2e5e9326cb97a14f0b0bcf81505418a54bc233bef85f14099d68d5ae6f57e",
+        "d7f2b39481e4da26f175a516e638887bdda07af6fa7b49f9000046413e5d0f92",
+        "d999c542e0bcb582beab24a3d3c46dd0759ffe6608716f05b708bdee86a33d98",
+        "eec9e4c32e1d53f2e470cd5d3e86405e78d15370227597757ea1ed18521143fd"
+      ],
+      "to_sha256": "5758ec909629b8832f2a8a44279ae554c4f6f553a3a78b8bdacfff8463aa99fc",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_official_client_only_transition_test.go",
+      "predecessor_sha256s": [
+        "730a5ac4e08805b5036d5a2e904ff1823a67e2c55114e0928cdfc6c879117bf3",
+        "cadf9ee72387d1b938dcc845b71127f74d22680a8bc4a4149cc5eb9a8b80a746"
+      ],
+      "to_sha256": "9fadd328ac7823c558e858f376d4f5d53ee6eeb8c56fd5ae72f9d49b27101520",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_offline_ci_stabilization_transition_test.go",
+      "predecessor_sha256s": [
+        "66df608f0a7c9e452b6e8b302f50816330174ff03977c7a9d3d7a90f722789d5",
+        "9df05373d5d79990e3d538f076033fb4be09f3e1e01656f32cc0be0e9610b514"
+      ],
+      "to_sha256": "97cb1562230740cd390251ed328036d9776855cd32da5fff006a57861be0c25c",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_offline_release_repair_transition_test.go",
+      "predecessor_sha256s": [
+        "be8fc931c1e20a8a061ab1f9275b7fe9e8dff92973f5884d9568684ec9af1568"
+      ],
+      "to_sha256": "5b8c34d1b412434d5af10adf614397a1ba8a1700f39c25bda02506d4cffd29d3",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_persona_release_catalog_transition_test.go",
+      "predecessor_sha256s": [
+        "5a5a60ad47ed0ccf35c02507b52a5050e82cb0c40b2cef1af3f64be27a2dc255",
+        "6446c7890abe5fb3063696bcac131961dc226a1ffffb44997fe7bb9d54cc6b5d",
+        "865126826fb0fdbe736015a39e9246db9b2e960724f21c304a05194e7f9860eb"
+      ],
+      "to_sha256": "31fed94b6c57d65dd785d08fe525b66bdcda971d343f5e2b20cadca1f53dd463",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_production_release.go",
+      "predecessor_sha256s": [
+        "4d43c714585fb8035f62d439bfb2f81092b2c6c9bc74dd7708d3cdbb45aa8af8",
+        "62354107b3ab97eb9174e7f9a427966a3f0bfaab47626467a79e9603b8effdf0",
+        "694c0b039add9d47793c8ac777d7529f6eb9014e436e0ad30f268e23061619cf",
+        "989e86699caf844fd62baebc40641978fdb975443f4857a695fdc428070f07f8"
+      ],
+      "to_sha256": "48e926a45cb0a4408ac6489529b9426d26d92ba88cefa697dd1b4c8c28fd33d0",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_profile.go",
+      "predecessor_sha256s": [
+        "a3d404cd9501808252ca689d1965cc63d9b4bd1d9f35a5558260c58ec1a7a5bb"
+      ],
+      "to_sha256": "226a2e2ac54e6af750d14c59963ac574b3542c67c9e3370ed1c22737aea8f565",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_runtime.go",
+      "predecessor_sha256s": [
+        "081b75a2420d4e7ad7a3a9e976e6f6928050708e73b57effcb5b20b63e5a79ac",
+        "22c631761c28a142c70f064debe2c386517471b2e7b585acdf3bdb9063af9a54",
+        "2730de466f960db35021198d83d9a1cf284fded42235ec927c204f5f464d003f",
+        "3aa827f35ae49bd43af4f11f8c968790eb2e482b6b25662bdd8b1bbecb320310",
+        "5942bfd60b41f55ddaf923c97464ea6746d7579b52fb5bdc6ea5dbf42e66fc00",
+        "5b24eec2cedd2cdd44e9045933261b62dfac2f5d9cc64d6c057ff0024af9167c",
+        "607fea56eb0e5791d5df6e61e4cb2d903c4384e9f0520b988b8f21f0f6ea9719",
+        "6b018039f988c30b1d1e5e6b3d468d005cee285c05ff4a07aa07e2e246825c71",
+        "c8c764873aaf615a2256a0bac2b2875db1db00e8d6c7d9a7deb52bd478801f5b",
+        "fa171c89e08be0a576d1e716da2c7780155699b685d705ce694bdcae618efa5f"
+      ],
+      "to_sha256": "775ec7883f5a664ff43b86fc554e43dd185aeb56e55d097a1215aeaf4223fb81",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_runtime_test.go",
+      "predecessor_sha256s": [
+        "04f00c443f15f779334d35426c6e807c73f87501b4a5625dfc0b29e773d0e06b",
+        "0b6937795cceea8a2ad8d157e376a717d2230710890d991385a8ab5f6ef268b7",
+        "1ee2703a674a38d9ce09010fe0716a4feb3776c50c92edf78a1d1850eec49314",
+        "213517afb5236008d1c75b189584833120b15785bce7e9e5afbd8b28052abf49",
+        "2427ef52e7bd52a6667c0ec1c67549a5f92a77fd8a827b5e3f0a2e98dda5b750",
+        "b2d983d68c5c06f025831407d2d36ec5fb96b80a9030bfa1f93e44d146495352",
+        "be9d07c8a9799b5bda8608c457163f5ba433e82053c800a4d012a856ed9c7a27",
+        "eb8945aec040a5c7107b86138bac48aac467d19fdf453a6105770e46132d8e48",
+        "efb839ff28e27b29fa16902ad90e9975f43d7272bc349963177c19cf1829cbef",
+        "f695cba17c1f3d2de882b1b6e43e47367e8cc9ed35e1b80e4789f677050a05c4"
+      ],
+      "to_sha256": "d5a9aaffe0d1788140dedceb96e8fb6cd69dd7589e80a47fb3f0166c6a7b1e09",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_tools.go",
+      "predecessor_sha256s": [
+        "b31599b9552aed54e9f4380951ae0403a25da0af376e13027f39d4f3fd76806e",
+        "b700b2e054bb010f95940bcd94d6c4e1ca5c0a59b5ecf3dfb3fd8fc876f1abdd",
+        "e49b12302ff469ec5d446f9d184466a25c65c8b7b3e1db8cf793b1bfc63d7b79"
+      ],
+      "to_sha256": "696dfd1406fc5584d50d7159a02ce58b3edc9f97378a26c97dddb87964df8526",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_wire.go",
+      "predecessor_sha256s": [
+        "16908550c92c8fad1213b755998109585846951c49987f16d612f16e2bc25f95",
+        "9558669b8f9c546116d1942424405d18e9a665b1fd6967e77c35ba4cb6fa14d8"
+      ],
+      "to_sha256": "a0dfb3106949e2f7d7541c13094d77f93a0cbdab7f54522e55c0af405f4a6e99",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/officialegress/executor_one_shot_retirement_test.go",
+      "predecessor_sha256s": [
+        "2dec8cd717b38d06b3659538c9863858dd6da9d4a4da602d1ed5d92c7553a566",
+        "4fcdaa8fca4efd325185785ee3c76d9c5261b230634a4292ffce9af856db89de",
+        "7b722ff74ef32666d55da468313e72544f8f1489f9dcfbb6b1816b8553c66c65",
+        "84dfe4a0d9ea5fd77386cc529ded3dac8f4bac1b4567654eb5595e951720a247",
+        "fbb8979a634e6674867147538c12ea2bb81cdb6fc9a8964ebe685395bc03f281"
+      ],
+      "to_sha256": "ac7853d4405664730c7991b8451707cdaf68cb8bf7ad6dd243529d199f270dae",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/officialegress/fw_e_observation_source_transition_test.go",
+      "predecessor_sha256s": [
+        "46e0442369a36a869ac0d6243bf3f7e5213736d8789fb9f21e4ca50726b9b113",
+        "8009c8dae09ef8863bf1d65917b5690d77cf5d85f8b4bf25d6bee6e89f22b15f"
+      ],
+      "to_sha256": "2d15e35e00d03c1e5f9c4c9b0cbaf21a35bb9daebf0900d848de8a01e31c2307",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_merge_framework_transition_test.go",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e53ad1c9b514311bcb247d90135283d1d593d2f0d3edd98b37b936c29e3df23e"
+      ],
+      "to_sha256": "bb0af3ce58f351054fea326a660c1bc635b93daaf39ed67c260498070a8f0edf",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_v0177_source_transition_test.go",
+      "predecessor_sha256s": [
+        "19aca87c1d1b164695e81d54b94f99a78c0b20250797018e238997af60bb1a26",
+        "2503c45f88ba2e9d4cf5b9890fd7484e0123bf9ec32f021b066ac16ebbca576d",
+        "9ad61f93e878a1854c1631cf956b9222560156d8940c70adf139066e010bae89"
+      ],
+      "to_sha256": "80c080f9ac4dfb67607432737e6413e31f473781f3f3c780056d3d968023e46c",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/officialegress/websocket_tokenless_retirement_test.go",
+      "predecessor_sha256s": [
+        "077774926c40aadd1b1bc0fcdd9809e4ffb5031eafdfb10540db0a9e39550ad6",
+        "434a15a5919409aea4885ca8ceb827a443c614c33676ea14542ff7e253a9bb5f",
+        "7da08cb7032ee300cdc5a12d05a0c086ff9f2761f047a2a11441eed5e28b69c3",
+        "93e9c73d203dd8c1dd2d073c2d5ee199c581c0b03a8fc31e23280ad70a2d5359"
+      ],
+      "to_sha256": "835d79f90b1854aed3cf966a5aa5c37eedc9ece06e3a1076cf259cf697f5645a",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_candidate_test.go",
+      "predecessor_sha256s": [
+        "23129b4738e4ef010e6c4fe42629e55a8d4d1df364c8bb26e876c6a74264f998",
+        "717069e45ffbd97fd33ae6c30389868c4b3ba39651a16476a5d67ca94d30aa98",
+        "76ece1896fcacd385f35168c1655e35338c0d8fb6e402585ca95ce10b17808a3",
+        "a5aefdce3b5e37644d71c5824bacf76c77bfcacd8336fb99ab32649316b9373e",
+        "aa4f97f1fb19c007529857a0401092bcfc121cae126b9481922015e322fa89e2",
+        "ae41668681af96e05d7ac37b1546cec2447cddaad62cb169eef8281532a097d7",
+        "da34b47877ba8e5c1a4aedf731f5ebd18dd279dd0b261630468ef6c69d226ef7"
+      ],
+      "to_sha256": "684f42f98c96e5fc0bdc8a097d9e1e692aa430d67b4cbb5003de27624e5370db",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_source_transition_test.go",
+      "predecessor_sha256s": [
+        "2802379d33652a36b5d1c0d19c2723ffea7e2c220df14f1b28be99fedd16c55d",
+        "9ef2cc4a97c023f6ad4921e2664d823ffcfc2435442b18a9673529d136e93893"
+      ],
+      "to_sha256": "f7ac7a794bde6e297d560c0ab84efe6fc6a8db08360f8a2ff17c3fa1a9c8d4b4",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_test_transition_test.go",
+      "predecessor_sha256s": [
+        "8babbac8d5049542c2f0f6cc31c1577a5dcc1afe4b9107aad74e1915fbb575cf"
+      ],
+      "to_sha256": "1658b7647c238493228183ff8d23a21a794e1e2e57e8c94ce65af4493df5c7a1",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_token_refresher.go",
+      "predecessor_sha256s": [
+        "d097a40532241105a8de413efe663e83b92e89d54d3219ef592873f81bcdd048"
+      ],
+      "to_sha256": "e78ad3054b7a8156ee93a99e38b878494f0dbdc044a08796967e8561091fbbb1",
+      "reason": "保留并净化 Claude OAuth invalid_grant 错误码，使永久凭据错误停止重试且不泄漏响应正文。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_token_refresher_test.go",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "2ab4c63c6415bdf495ce26335b83f3b767807b54bc1b86d9e3f5f712ef561c99",
+      "reason": "保留并净化 Claude OAuth invalid_grant 错误码，使永久凭据错误停止重试且不泄漏响应正文。"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_h_source_transition_test.go",
+      "predecessor_sha256s": [
+        "280167279665623d67031281401d22e50826e64921c9fb32e90e10ab5b0ce597",
+        "52071ccab574e1761f0d3771dd525ffe8a22667953031a0679a3078f307f93d1",
+        "dba53b2c016460d109b4f68e3ad29b63d3781de84bb56e10b796ecc7b6455180"
+      ],
+      "to_sha256": "0983cda9fb876c383749660e81f32829d4e27d44dd7971424c670b02d58b5f92",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/service/compatibility_code_retirement_closure_test.go",
+      "predecessor_sha256s": [
+        "2fbdceac5e91d51bb20b192f8c26f964e19648faaadad94b4b39f9dc6e1d6923",
+        "6836d0f491155c396be34228437ce0bab3cee835a9343a9b6f2b8921574c1309"
+      ],
+      "to_sha256": "2ede77848d2d45c86b6a03ae4ee22f56a5de18b9571516ae19a4aa084547b681",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/service/gateway_claude_fw_g.go",
+      "predecessor_sha256s": [
+        "1a43809d795bf4cd03b721a1faef2758f7100b1b3ff2f85bc51f9131347bde2e",
+        "2a0456aa53102502be65aee3f8830db85c1b8bf08f01951789a3654918ca388b",
+        "2c0cebeb86d90296d83d3e9b75b26d7aeeab7f42f17bd7d27db1471a13c54267",
+        "750ecc54194ba13a01bdf42a0a962fc6b76195cca3c00179cf369017407d0e6d",
+        "8978cf81424e8d141eec31b016f84292b743384c92ccf90aba507d9f98a36b2c",
+        "a2645eb7fafe510ad565591a749e14cd0a6417beb1dbcf40357ed8eaab153dc3",
+        "b39f1f82400d96d61588a2671566db5f36e16852ada992095d238cf326507314",
+        "ccdfb6001a3380043e82e26fa083d33a4d4d4a5528ed7310ea53a9c17c51c07f",
+        "f242a7b38d2e7a48bac1dbde3e428f6876dc1c393db1bfea9cb55afa54680988"
+      ],
+      "to_sha256": "5ea6d4fcf27fc9c6ef95c93907b8aaa912a9078b6122219a83967a8b7753f9f9",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/service/gateway_claude_strict_openai.go",
+      "predecessor_sha256s": [
+        "08337d0d8d07329a82a6e0dc42980bd343d01aeff7c68abaa6be45188eed2452",
+        "20492d5427fcfb90d88006df8215e2777b79bee4fc60d2e4c34169b9a8902582",
+        "a1a39f1011dbc02f2f9ff711e38e0acfc5656123ef6d1aba85b8bce2d3f475a9"
+      ],
+      "to_sha256": "659b782d4af22cac0b418c1f0c35987bf41020254590c092ace43d1e0a212fe5",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/service/gateway_claude_strict_openai_test.go",
+      "predecessor_sha256s": [
+        "f76a12197c0072f349c4108a7a727b7ed1ec134a026bac017b6dccc051c691fb",
+        "f8fb3718a0caf040c25a824ce1f22f7374075f195e0954dcc215d120a7302b65"
+      ],
+      "to_sha256": "8fcb0c56051f3dc8b999d712b125fbf5cd9d865862115764c7e263dd7ac18fc0",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/service/gateway_context_management_test.go",
+      "predecessor_sha256s": [
+        "c172a385e3e89ef3926a5daa44fca3aa1a29a689bed3548591b60a51013a333a"
+      ],
+      "to_sha256": "806f03addf0884548ea34e3ee4ac252c736a3f1e08c875f4861f0aa75f0068f3",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/service/gateway_forward_as_chat_completions.go",
+      "predecessor_sha256s": [
+        "243be47814ab71d960b87032644092e90ef2f8c2f319cdefcc9e7aebc1fd04ae"
+      ],
+      "to_sha256": "1395a0760ade13707b4242bc604fe6b26851c2f615042624d503ca3a4cf45de2",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/service/gateway_forward_as_responses.go",
+      "predecessor_sha256s": [
+        "1efd342643a33c111339e09a4dc173cfdb776c65e186673e0ffd736950db9180"
+      ],
+      "to_sha256": "c9d297ecc04022104f727dadb0cf048581d972fc76a5909042d296558e4324bb",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_files.go",
+      "predecessor_sha256s": [
+        "f52e89fb7659ac5af8b3321fb98bc2af7dd68d5fcce95f2478ac79a5387e14f0"
+      ],
+      "to_sha256": "109c39f3e608b8fb1b5a3e86b24be2afae65f3fceef1df639ab12ac32f0048ca",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_ws.go",
+      "predecessor_sha256s": [
+        "3ee8d5bea8ec90b23de0f15f704e12996b2ac9b746ef5ecb36cc64e663468490",
+        "95601bf42caf100e2503ff09689cd4eb086e06bab47aa19e5e2b9b56f5ccd158",
+        "96045283a4861f38168c9673499ecc1bde50750c480f667e490380742ccecbb1"
+      ],
+      "to_sha256": "8ccd28fc1fb21d7d2abcd32914b3ac1c25d5b834cd13904121f4d81225f4d363",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_ws_test.go",
+      "predecessor_sha256s": [
+        "069c00267e3976bc3f2b068ad08ddc07f4f60fe87627f2dd3073d6478f327b86",
+        "dc1be426fb124b2e7c714088bf3e18b88acc4086343ac49a8324e19c4451439b"
+      ],
+      "to_sha256": "ad385312fadcdda6fa6f219e8829c828323d8c3ed80c8c2b7789046ebbc12188",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_profile.go",
+      "predecessor_sha256s": [
+        "c0f57e836b0c9eb200693190e5004ff197eb9bbede4d70693b88316209b7a676"
+      ],
+      "to_sha256": "39f603dab7903a4c3c73897ba61617ce4aab22afcff7b421f56b8ef1fa23d34d",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_pool.go",
+      "predecessor_sha256s": [
+        "4974af082bedc10fc7f8415e152233e15894e4415667598933f2b37e5fa07462",
+        "bc4b83a16d3b1d9b2dfa7f7827efbda8b4724a9eae1fe0d84cffc425e796d4cc"
+      ],
+      "to_sha256": "e56252152cb32ea47db00ea66983d7a987154e6691ff4d48532a556d960b8528",
+      "reason": "追加闭合 main 既有但尚未登记的后继摘要；仅补证据链，不改变当前生产字节。"
+    },
+    {
+      "path": "backend/internal/service/token_refresh_service_test.go",
+      "predecessor_sha256s": [
+        "08ce82cba71c39e3ce7186829d0b04a3d95a5f10344966f376edbac7e3c682e8"
+      ],
+      "to_sha256": "8e309931b207b729c631567d8cfd4cff9a4270c3ebc2df222762621de9f995ab",
+      "reason": "保留并净化 Claude OAuth invalid_grant 错误码，使永久凭据错误停止重试且不泄漏响应正文。"
+    },
+    {
+      "path": "backend/internal/service/upstream_merge_framework_transition_test.go",
+      "predecessor_sha256s": [
+        "7b93338b91898234e83b59bc343c50b3eb4f775a66bd765d4f6ef24721a74085",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "9da70966f4168afa5551c1e45fdbff02ad4967978363b148d944bb8f541a490b",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "backend/internal/service/version_leak_debt_closure_test.go",
+      "predecessor_sha256s": [
+        "c2327a24d99ddb0258b42486544c4261395ae80dfb90e23ca0d716907b046535"
+      ],
+      "to_sha256": "28801e3661b4b381004cd3e2afabfa8c93f325e687e5964e86f815af8249b2dc",
+      "reason": "让历史冻结测试仅通过本次追加 transition 的精确前序与当前摘要承接后继变化。"
+    },
+    {
+      "path": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "predecessor_sha256s": [
+        "1a882aec8fcff55693126d5d2d8cadb6e8460cf59762c27de76e24a39a0e4a81",
+        "258bdff4347573da38df8dcb721c92489dc43fc488018b7f062d25fbe8a65c0c",
+        "25b8688b5ef288826bf225ae3046250680f331906c1e0c09484320677f54e39d",
+        "300c6bbe506f6b195b4683f55fac1edf8ac79dad1ca4fb02693ad9add0cf3f1a",
+        "46cf897208663b4c9e462a882305c3ae2d99b92390f20f2b4798c8e28729e94c",
+        "4cc9b2acbbc50203cab78eeeedaf0d4f46aaa4500d082e27fdf5a8e9b937b31b",
+        "6729311fb0152a2e6c100412af96ed5c3c8939675e7daa584349e1bccd5704f8",
+        "798310f78d239c7eb00425b6e621171b2c10b0003954a10550b783bc7de0dd54",
+        "83c7f959af4a43b9b7e1a596ebea3ea2b1bd415da04a24c402ff568445c6b5d9",
+        "b21c647e9c7027d846ffb47a5bb654fa1b19dd4369fbc29ee65326b0cb2db3e8",
+        "e2f91f2e16edd5618446df27c5a31c2868e1197a762cc40b647c27c0d3a2529a",
+        "f764d050426d02b0ca8404747c698c21a42b545f224b93332a8a5dbad4a99bfe"
+      ],
+      "to_sha256": "1c2dadb394a57928c5ff21a1ede8241d885932213e6db37d04a30754821f025c",
+      "reason": "固化共享维护流程、客户端门禁边界和历史 v0.1.177 计划重放身份，不改变目标客户端版本。"
+    },
+    {
+      "path": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+      "predecessor_sha256s": [
+        "43af2571424da85583debe82fac969fd252f6f9f635ced42e7fd9cda2aa987ba",
+        "49e4fa750d76e9d822ddadb02e9e68f3ed89d2d7dff7162386b7204bb0b75a9c",
+        "54f012645b71530fa737855bec0b10d10f8213a7605c674f7a76c1c83aa476ff",
+        "82b45ac16832984bc3a4b82b801c7a2e70590cb33ca3089cad312f791898a28f",
+        "b2f1609bd2dc4d9cae66442abc9d7512ab411360d99ce85a131e319ab6c457f3",
+        "beee3741049a35515ee4da07d4888c2e723928b8e770b40b7a362aa38e1ffd9b",
+        "e07a9565900677aa4bd4e5899a80ee554f96c20127cacd3361a6d215c856b61f",
+        "f5ad2e49f9f225f94cfc7deda008332a33a8da6e321c4d718da9def5ef7bd3cb"
+      ],
+      "to_sha256": "0168d542f49d544ad1a85b092a9d05b12c9b82ac4e21a914ca22acefce12e43d",
+      "reason": "固化共享维护流程、客户端门禁边界和历史 v0.1.177 计划重放身份，不改变目标客户端版本。"
+    },
+    {
+      "path": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+      "predecessor_sha256s": [
+        "273854123d12bc5762d401eb63e6654ac2f69e6e8a1c9d253eecace0452aa688",
+        "3036aff1ecaabadd45b1cc1bde2ab28f58c9367f645eb7ffe3735334112c9f04",
+        "5f9271412f2adde4c1fed3b67fafbbd25cf7ddf62df75354c78ed9d141c459f5",
+        "92ce59b2fc90014f11ae41127b4a1f6b8b71c8a248fc8078ef55125f4b3cec22",
+        "af1066176c33db3580ff4f47b22bbc90ae2fde587357570ad43430ac6975522e",
+        "d274ab40f022da3124084d51f99b5c403518256ff27c1939282b0d49f7979560",
+        "d66f73d33602faacf1d7d1b796aa38a9f842e077609960328ec0ac38d64be7eb",
+        "fe969b696bee84456948673fcf051ab24b17cc72c97fa23dca58ee1d8e69c5ce"
+      ],
+      "to_sha256": "684e9c0f9d7acbf115dd8365ff27c66ce22eecfb6b381b805c0feb5249e5cc7c",
+      "reason": "固化共享维护流程、客户端门禁边界和历史 v0.1.177 计划重放身份，不改变目标客户端版本。"
+    },
+    {
+      "path": "docs/egress/maintenance/upstream-v0.1.177-merge-plan.json",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "17d1ba9e8762964d3e07315b91299a0436bde631fd78c1fae6047eb1bc563fb3",
+      "reason": "固化共享维护流程、客户端门禁边界和历史 v0.1.177 计划重放身份，不改变目标客户端版本。"
+    },
+    {
+      "path": "tools/check_ledger_completeness.py",
+      "predecessor_sha256s": [
+        "1b6acef5b27e4f73994e04b6338256ca22ad223da72794f7f9a290e88cd1b248"
+      ],
+      "to_sha256": "3e650b9d07982ff96f1c90f6fcf70b4ba9264df7183b0ef91edfcc3cbd1cf375",
+      "reason": "让 Codex overlay 只消费完整 UpstreamMergePlan，并严格复算 tag、commit 与输出路径。"
+    },
+    {
+      "path": "tools/generate_claude_fw_g_profile.py",
+      "predecessor_sha256s": [
+        "2e039e1dc54de7e3a363da4544888498063fbcb85d4a8d49d228a49fe377a612",
+        "871e74ac3e0466d26977e9bb44256ec2e4d913b7e87895c7a307c4c5926420e4",
+        "a476f1c75745abacb1c3b1d99542326ad34c17475d16359b4c5454e43b5e54bd"
+      ],
+      "to_sha256": "2ec7faf3f39582c6e91e12ba6f2a3b6f925cb926d34b940caa7eabb96a6fe14a",
+      "reason": "将客户端门禁、生成策略、批准和激活事实绑定到不可变身份与可重放收据。"
+    },
+    {
+      "path": "tools/official_client_capture/claude_fw_g_acceptance.py",
+      "predecessor_sha256s": [
+        "a5c35ce93615caf5c051682154067a116523d0831c40b472ade47291cb3c0cc8"
+      ],
+      "to_sha256": "48df4b8a2a7b0a8bced36e9b1aa878f551b8c5642260ed5cc2872ac59f7f69b0",
+      "reason": "将客户端门禁、生成策略、批准和激活事实绑定到不可变身份与可重放收据。"
+    },
+    {
+      "path": "tools/official_client_capture/claude_fw_g_generation_policy.schema.json",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "bc0f7faf4761ab53efa30a20b7b0c6b22aa950c343c7e4de841942175121e549",
+      "reason": "将客户端门禁、生成策略、批准和激活事实绑定到不可变身份与可重放收据。"
+    },
+    {
+      "path": "tools/official_client_capture/claude_fw_g_generation_policy_2_1_226_v2.json",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "8e96d5841daececc778dd9ee5a9791abbdbc59f1422d81613c04b125723d8e17",
+      "reason": "将客户端门禁、生成策略、批准和激活事实绑定到不可变身份与可重放收据。"
+    },
+    {
+      "path": "tools/official_client_capture/claude_fw_g_official_finalize.py",
+      "predecessor_sha256s": [
+        "a8cb2d119e4c4eaff9ecb75b661a019c32f2ee5307e646b6fe13c22ae2f918d2"
+      ],
+      "to_sha256": "3c9da2757566caecedc137eb5c4077cf6ad76900fc73a9fed1f4688744cd5614",
+      "reason": "将客户端门禁、生成策略、批准和激活事实绑定到不可变身份与可重放收据。"
+    },
+    {
+      "path": "tools/official_client_capture/claude_generation_policy.py",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "a3f3b9557bc4d2e84bf44a3a2a941036c31722e26f1ed3390d4178c8cd93058a",
+      "reason": "将客户端门禁、生成策略、批准和激活事实绑定到不可变身份与可重放收据。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade.py",
+      "predecessor_sha256s": [
+        "11b4d8ef561052155b9282069353a45b1d6fd1030fda30e9dda12c8334e64195"
+      ],
+      "to_sha256": "2d908fa6bfda9ad2cfcea8d8af8fcd62ac6bdf4735b1175cd622b526eb3ba329",
+      "reason": "将客户端门禁、生成策略、批准和激活事实绑定到不可变身份与可重放收据。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_gate_receipt.py",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "c60b3c4992b5a6081e678eb6c3b23e308ca6ea82e8be395e66a9705c01375abb",
+      "reason": "将客户端门禁、生成策略、批准和激活事实绑定到不可变身份与可重放收据。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_gate_receipt.schema.json",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "9dd199157683be777a2a575ea06d947ec40d40ae321acdaf7e8f6109c9cc6131",
+      "reason": "将客户端门禁、生成策略、批准和激活事实绑定到不可变身份与可重放收据。"
+    },
+    {
+      "path": "tools/official_client_capture/production_activation_receipt.py",
+      "predecessor_sha256s": [
+        "09fdd6afeaa003ca4f35a7b5281392780ed60bd37e9fad732527c9adc4976202"
+      ],
+      "to_sha256": "f292af9d4d81c8d839618cc0065fbe89ce23761365929490b5300a756ecf9ae5",
+      "reason": "将客户端门禁、生成策略、批准和激活事实绑定到不可变身份与可重放收据。"
+    },
+    {
+      "path": "tools/official_client_capture/production_activation_receipt.schema.json",
+      "predecessor_sha256s": [
+        "e9045c5e6bcb9ed5e65befd5fa1afab61680f4c9d89b7dabeac497f3afe0f795"
+      ],
+      "to_sha256": "77c3529fec4b2796926671d81c2923a5647010e4b7cf43ec67960b4688898fc5",
+      "reason": "将客户端门禁、生成策略、批准和激活事实绑定到不可变身份与可重放收据。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_check_ledger_completeness.py",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "5b746382929aeb499ff555c37103888135232a00e01ed9222082f5c31863c50c",
+      "reason": "将客户端门禁、生成策略、批准和激活事实绑定到不可变身份与可重放收据。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_claude_fw_g_acceptance.py",
+      "predecessor_sha256s": [
+        "ca179a5fc9a027844e1870294f7859b55a7d163eb5470104fbe52e4b9fd26040"
+      ],
+      "to_sha256": "e510cb59b7d2368e118584eb4ffad2d62a9d5e3c5a6f62537c506eba91c0e151",
+      "reason": "将客户端门禁、生成策略、批准和激活事实绑定到不可变身份与可重放收据。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_claude_fw_g_official_finalize.py",
+      "predecessor_sha256s": [
+        "890f784dc252fbfa6e0d5501d1332f8a0aa2a5f0eb50cb312092682a9ff87e06"
+      ],
+      "to_sha256": "25ad457188647937d2bf433727972b6cde7af3850553f27d0fd59ad05dcbae2a",
+      "reason": "将客户端门禁、生成策略、批准和激活事实绑定到不可变身份与可重放收据。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_claude_generation_policy.py",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "44a9abcc5f547424c542164c13c0387e90f6bf755351f1fffecca808d601fbdf",
+      "reason": "将客户端门禁、生成策略、批准和激活事实绑定到不可变身份与可重放收据。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_upgrade.py",
+      "predecessor_sha256s": [
+        "f5889686d7ce9efe53561be4c0a9adccc49ab42c4ed29691ca615cb7303b8631"
+      ],
+      "to_sha256": "ce450f428db89c5a6f2295914267c35e436b8297ee6044836e03e4e234b8e534",
+      "reason": "将客户端门禁、生成策略、批准和激活事实绑定到不可变身份与可重放收据。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_upgrade_gate_receipt.py",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "dcbb5b251bbf7ff376ecf75b88bcb684679d9eb3ed0ad5f30dbcb8b6812ce3b3",
+      "reason": "将客户端门禁、生成策略、批准和激活事实绑定到不可变身份与可重放收据。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_production_activation_receipt.py",
+      "predecessor_sha256s": [
+        "0f894bc143480dbacd634aa76dd2870520225580aa5776a85271128692580e52"
+      ],
+      "to_sha256": "eab63014f52a0cb3047ea18ddb8b716f822856a901b42bd83bf9a9fe74b7be7a",
+      "reason": "将客户端门禁、生成策略、批准和激活事实绑定到不可变身份与可重放收据。"
+    },
+    {
+      "path": "tools/upstream_merge/__init__.py",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "a8f4cb24dba9a962ef86e5038d9774ed093df55536ebf8fde0cf56c12d1e2c76",
+      "reason": "新增并冻结 Sub2API 上游合并 U-0～U-6 状态机、严格合同和合成 Git 图测试。"
+    },
+    {
+      "path": "tools/upstream_merge/__main__.py",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "b81e7a85a9581bcb165475fbcb2151a2b0ba0c29fb244334c711f6f1ae994eaa",
+      "reason": "新增并冻结 Sub2API 上游合并 U-0～U-6 状态机、严格合同和合成 Git 图测试。"
+    },
+    {
+      "path": "tools/upstream_merge/canonical.py",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "c134e5be0d0c6d6a978224c37a189b9d579cadcace9cfd9992d0872e650bfbf5",
+      "reason": "新增并冻结 Sub2API 上游合并 U-0～U-6 状态机、严格合同和合成 Git 图测试。"
+    },
+    {
+      "path": "tools/upstream_merge/contracts.py",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "8a6f56dde81714b044d2ce7af8ff5a471a6b71d87565dcd5c04ccbbd5849afbf",
+      "reason": "新增并冻结 Sub2API 上游合并 U-0～U-6 状态机、严格合同和合成 Git 图测试。"
+    },
+    {
+      "path": "tools/upstream_merge/errors.py",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "33b0c23fb6348b7aad5e78373cc669be30b1451fd4622465a647c30425be9123",
+      "reason": "新增并冻结 Sub2API 上游合并 U-0～U-6 状态机、严格合同和合成 Git 图测试。"
+    },
+    {
+      "path": "tools/upstream_merge/gitops.py",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "a9d4ea4a532e4352d6b3caf58dd0eeb391e058b6a9679faabb401f30d417abf0",
+      "reason": "新增并冻结 Sub2API 上游合并 U-0～U-6 状态机、严格合同和合成 Git 图测试。"
+    },
+    {
+      "path": "tools/upstream_merge/tests/__init__.py",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "f9e7f46f0d42f3d311ba8ac898121104bde23feeb050bd61c3ed8c6bf9f08a99",
+      "reason": "新增并冻结 Sub2API 上游合并 U-0～U-6 状态机、严格合同和合成 Git 图测试。"
+    },
+    {
+      "path": "tools/upstream_merge/tests/test_workflow.py",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "4bfd6c6eadc4b7dd22b769346de000aef2b9baf24d9274e35fa5086e33d822a9",
+      "reason": "新增并冻结 Sub2API 上游合并 U-0～U-6 状态机、严格合同和合成 Git 图测试。"
+    },
+    {
+      "path": "tools/upstream_merge/workflow.py",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "490c6d3186f95fe67fcf5440df1a0286e0d8fee537c4613ab5f640235d16404a",
+      "reason": "新增并冻结 Sub2API 上游合并 U-0～U-6 状态机、严格合同和合成 Git 图测试。"
+    },
+    {
+      "path": "tools/upstream_merge_artifacts.schema.json",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "510e4a57214cf13169ebb10064ad87097f5f5ef313df52c3628478cec5f1b625",
+      "reason": "新增并冻结 Sub2API 上游合并 U-0～U-6 状态机、严格合同和合成 Git 图测试。"
+    },
+    {
+      "path": "tools/upstream_merge_plan.schema.json",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "952ca5e3ffb8f4e972137d73747c169ae9968eafc1dd405561337776bac89451",
+      "reason": "新增并冻结 Sub2API 上游合并 U-0～U-6 状态机、严格合同和合成 Git 图测试。"
+    },
+    {
+      "path": "tools/upstream_merge_request.schema.json",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "67cf3ea1c63f2ab7c6a68456e0554201284e2c2a8f89368bb510ef43f05efaaa",
+      "reason": "新增并冻结 Sub2API 上游合并 U-0～U-6 状态机、严格合同和合成 Git 图测试。"
+    }
+  ],
+  "allowed_wire_deltas": [],
+  "verification": [
+    "make test-upstream-merge-tools",
+    "make test-capture-tools",
+    "make check-egress-spec",
+    "go test ./internal/service"
+  ],
+  "result": "passed",
+  "identity_sha256": "f8f6b8c60b2b5ead02a8725b5f9fbf60224408ef1b64457fa402b8aeb59d3da7"
+}

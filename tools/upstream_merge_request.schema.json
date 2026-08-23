@@ -1,0 +1,96 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/official-egress-upstream-merge-request-v1.json",
+  "title": "完整上游合并计划生成请求",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version", "plan_id", "upstream", "repository", "workspace",
+    "official_clients", "baselines", "protected_repository_paths", "gates"
+  ],
+  "properties": {
+    "schema_version": {"const": "official-egress-upstream-merge-request/v1"},
+    "plan_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,191}$"},
+    "upstream": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["remote", "url", "tag", "commit"],
+      "properties": {
+        "remote": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,191}$"},
+        "url": {"type": "string", "pattern": "^https://"},
+        "tag": {"type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$"},
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{40}$"}
+      }
+    },
+    "repository": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["managed_ref"],
+      "properties": {"managed_ref": {"type": "string", "pattern": "^refs/heads/"}}
+    },
+    "workspace": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["worktree", "evidence_root"],
+      "properties": {
+        "worktree": {"type": "string", "pattern": "^/"},
+        "evidence_root": {"type": "string", "pattern": "^/"}
+      }
+    },
+    "official_clients": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claude", "codex"],
+      "properties": {
+        "claude": {"$ref": "#/$defs/client"},
+        "codex": {"$ref": "#/$defs/client"}
+      }
+    },
+    "baselines": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["production_ingress_inventory", "egress_disposition_inventory", "runtime_state_path", "recovery_point_path"],
+      "properties": {
+        "production_ingress_inventory": {"$ref": "#/$defs/clientPaths"},
+        "egress_disposition_inventory": {"$ref": "#/$defs/clientPaths"},
+        "runtime_state_path": {"type": "string", "pattern": "^/"},
+        "recovery_point_path": {"type": "string", "pattern": "^/"}
+      }
+    },
+    "protected_repository_paths": {"type": "array", "minItems": 6, "uniqueItems": true, "items": {"type": "string", "minLength": 1}},
+    "gates": {"type": "array", "minItems": 12, "maxItems": 12, "items": {"type": "object"}}
+  },
+  "$defs": {
+    "persona": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "official_product", "auth_family", "upstream_route_family"],
+      "properties": {
+        "provider": {"type": "string", "minLength": 1},
+        "official_product": {"type": "string", "minLength": 1},
+        "auth_family": {"const": "oauth"},
+        "upstream_route_family": {"type": "string", "minLength": 1}
+      }
+    },
+    "client": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["persona", "target_version", "active_path", "rollback_path"],
+      "properties": {
+        "persona": {"$ref": "#/$defs/persona"},
+        "target_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$"},
+        "active_path": {"type": "string", "pattern": "^/"},
+        "rollback_path": {"type": "string", "pattern": "^/"}
+      }
+    },
+    "clientPaths": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claude", "codex"],
+      "properties": {
+        "claude": {"type": "string", "pattern": "^/"},
+        "codex": {"type": "string", "pattern": "^/"}
+      }
+    }
+  }
+}

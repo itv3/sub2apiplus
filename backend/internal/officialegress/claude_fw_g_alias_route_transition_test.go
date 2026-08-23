@@ -80,6 +80,9 @@ func claudeFWGAliasRouteTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if upstreamMergeFrameworkTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	source, err := loadClaudeFWGAliasRouteSourceReceipt()
 	if err != nil {
 		return false
@@ -129,6 +132,8 @@ func TestClaudeFWGAliasRouteTransitionsAreFrozen(t *testing.T) {
 				!claudeFWGSupportEnvelopeTransitionSupersedes(
 					transition.Path, transition.ToSHA256, got,
 				) && !claudeFWGDesktopIngressTransitionSupersedes(
+				transition.Path, transition.ToSHA256, got,
+			) && !upstreamMergeFrameworkTransitionSupersedes(
 				transition.Path, transition.ToSHA256, got,
 			) {
 				t.Fatalf(

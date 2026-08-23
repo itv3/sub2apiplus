@@ -183,6 +183,9 @@ func loadClaudeFWHProductionAcceptance() (claudeFWHProductionAcceptancePackage, 
 }
 
 func claudeFWHProductionAcceptanceSupersedes(path, priorDigest, currentDigest string) bool {
+	if upstreamMergeFrameworkTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if claudeFWHLegacyRetirementTransitionSupersedes(path, priorDigest, currentDigest) {
 		return true
 	}

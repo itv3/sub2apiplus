@@ -145,6 +145,9 @@ func claudeOfflineReleaseRepairTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if upstreamMergeFrameworkTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if !receiptSHA256(priorDigest) || !receiptSHA256(currentDigest) {
 		return false
 	}

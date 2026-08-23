@@ -128,7 +128,9 @@ func validateClaudeFWHStateDurabilityReceipt(
 		if err != nil || currentDigest != transition.ToSHA256 &&
 			!claudePersonaReleaseCatalogTransitionSupersedes(
 				transition.Path, transition.ToSHA256, currentDigest,
-			) {
+			) && !upstreamMergeFrameworkTransitionSupersedes(
+			transition.Path, transition.ToSHA256, currentDigest,
+		) {
 			return errors.New("Claude 状态耐久性 transition 当前摘要不一致：" + transition.Path)
 		}
 		paths = append(paths, transition.Path)
@@ -171,6 +173,9 @@ func claudeFWHStateDurabilityTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if upstreamMergeFrameworkTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if claudePersonaReleaseCatalogTransitionSupersedes(
 		path, priorDigest, currentDigest,
 	) {

@@ -16,6 +16,7 @@ from unittest import mock
 
 from tools.official_client_capture import candidate_evidence_guard
 from tools.official_client_capture import codex_upgrade
+from tools.official_client_capture import codex_upgrade_gate_receipt
 from tools.official_client_capture import codex_upgrade_receipt_finalizer
 from tools.official_client_capture.codex_upgrade import (
     build_coverage,
@@ -1416,6 +1417,106 @@ class CodexUpgradeTest(unittest.TestCase):
         )
         return evidence_root, identity
 
+    def _candidate_gate_receipt(
+        self,
+        root: Path,
+        campaign_dir: Path,
+        candidate_id: str = "candidate-a",
+    ) -> tuple[Path, Path]:
+        """生成与当前封存 candidate 精确绑定的合成外部门禁收据。"""
+
+        manifest = codex_upgrade.load_campaign_manifest(campaign_dir)
+        candidate = codex_upgrade._load_stage_result(
+            campaign_dir,
+            "capture-candidate",
+            candidate_id,
+        )
+        identity = candidate["identity"]
+        gate_root = root / f"{candidate_id}-external-gate"
+        gate_root.mkdir(mode=0o700)
+        gates = []
+        for index, gate_id in enumerate(
+            sorted(codex_upgrade_gate_receipt.CANDIDATE_COMMANDS)
+        ):
+            cwd, command = codex_upgrade_gate_receipt.CANDIDATE_COMMANDS[gate_id]
+            evidence = gate_root / "evidence" / f"{gate_id}.json"
+            self._write_json(evidence, {"gate_id": gate_id, "passed": True})
+            evidence.chmod(0o600)
+            gates.append(
+                {
+                    "gate_id": gate_id,
+                    "command": list(command),
+                    "working_directory": cwd,
+                    "host": "runner-1",
+                    "architecture": "linux/amd64",
+                    "started_at_utc": f"2026-08-23T00:{index:02d}:00Z",
+                    "completed_at_utc": f"2026-08-23T00:{index:02d}:30Z",
+                    "exit_code": 0,
+                    "status": "passed",
+                    "passed_count": 1,
+                    "failed_count": 0,
+                    "skipped_count": 0,
+                    "stdout_sha256": "1" * 64,
+                    "stderr_sha256": "2" * 64,
+                    "evidence": [
+                        {
+                            "path": evidence.relative_to(gate_root).as_posix(),
+                            "sha256": codex_upgrade.file_sha256(evidence),
+                        }
+                    ],
+                }
+            )
+        facts = {
+            "schema_version": codex_upgrade_gate_receipt.FACTS_SCHEMA,
+            "phase": codex_upgrade_gate_receipt.CANDIDATE_PHASE,
+            "subject": {
+                "campaign_id": manifest["campaign_id"],
+                "candidate_id": candidate_id,
+                "target_version": manifest["target_version"],
+                "target_architecture": "linux/amd64",
+                "profile_id": identity["profile_id"],
+                "profile_digest": identity["profile_digest"],
+                "candidate_package_digest": candidate["package_digest"],
+                "candidate_source_tree_sha256": identity["source_tree_sha256"],
+                "candidate_image_id": identity["image_id"],
+                "candidate_image_reference": identity["image_reference"],
+                "production_tree_sha256": None,
+                "acceptance_sha256": None,
+                "promotion_receipt_sha256": None,
+            },
+            "inputs": [],
+            "gates": gates,
+        }
+        facts_path = gate_root / "facts.json"
+        self._write_json(facts_path, facts)
+        facts_path.chmod(0o600)
+        codex_upgrade_gate_receipt.finalize(
+            gate_root,
+            "facts.json",
+            "receipt.json",
+        )
+        return gate_root, gate_root / "receipt.json"
+
+    def _accept_campaign(
+        self,
+        root: Path,
+        campaign_dir: Path,
+        candidate_id: str,
+        assertions: Path,
+    ) -> dict[str, object]:
+        gate_root, gate_receipt = self._candidate_gate_receipt(
+            root,
+            campaign_dir,
+            candidate_id,
+        )
+        return codex_upgrade.accept_campaign(
+            campaign_dir,
+            candidate_id,
+            assertions,
+            gate_root,
+            gate_receipt,
+        )
+
     def _write_assertions(
         self,
         root: Path,
@@ -2311,8 +2412,8 @@ class CodexUpgradeTest(unittest.TestCase):
                 root, rules, identity, omit_last=True
             )
             with self.assertRaises(codex_upgrade.ConfigurationError):
-                codex_upgrade.accept_campaign(
-                    campaign_dir, "candidate-a", assertions
+                self._accept_campaign(
+                    root, campaign_dir, "candidate-a", assertions
                 )
 
     def test_accept_rejects_profile_identity_digest_mismatch(self) -> None:
@@ -2328,8 +2429,8 @@ class CodexUpgradeTest(unittest.TestCase):
                 profile_digest="f" * 64,
             )
             with self.assertRaises(codex_upgrade.ConfigurationError):
-                codex_upgrade.accept_campaign(
-                    campaign_dir, "candidate-a", assertions
+                self._accept_campaign(
+                    root, campaign_dir, "candidate-a", assertions
                 )
 
     def test_accept_rejects_not_applicable_without_full_evidence(self) -> None:
@@ -2346,8 +2447,8 @@ class CodexUpgradeTest(unittest.TestCase):
                 first_rule_evidence_level="partial",
             )
             with self.assertRaises(codex_upgrade.ConfigurationError):
-                codex_upgrade.accept_campaign(
-                    campaign_dir, "candidate-a", assertions
+                self._accept_campaign(
+                    root, campaign_dir, "candidate-a", assertions
                 )
 
     def test_accept_succeeds_only_after_compare_and_all_rule_assertions(self) -> None:
@@ -2361,10 +2462,17 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertTrue(comparison["equal"])
             assertions = self._write_assertions(root, rules, identity)
             with mock.patch.object(codex_upgrade, "_rerun_machine_assertion"):
-                acceptance = codex_upgrade.accept_campaign(
-                    campaign_dir, "candidate-a", assertions
+                acceptance = self._accept_campaign(
+                    root, campaign_dir, "candidate-a", assertions
                 )
             self.assertTrue(acceptance["accepted"])
+            self.assertTrue(
+                acceptance["gates"]["candidate_external_gate_complete"]
+            )
+            self.assertEqual(
+                acceptance["candidate_identity"]["source_tree_sha256"],
+                identity["source_tree_sha256"],
+            )
             candidate = codex_upgrade._load_stage_result(
                 campaign_dir, "capture-candidate", "candidate-a"
             )
@@ -2389,6 +2497,49 @@ class CodexUpgradeTest(unittest.TestCase):
             status = codex_upgrade.campaign_status(campaign_dir)
             self.assertEqual(status["status"], "ready")
 
+    def test_accept_rejects_missing_candidate_external_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            campaign_dir, _, rules = self._create_classified_campaign(root)
+            _, identity = self._seal_candidate_stage(root, campaign_dir)
+            codex_upgrade.compare_campaign(campaign_dir, "candidate-a")
+            assertions = self._write_assertions(root, rules, identity)
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "外部门禁收据无法重放",
+            ):
+                codex_upgrade.accept_campaign(
+                    campaign_dir,
+                    "candidate-a",
+                    assertions,
+                    root / "missing-gate-root",
+                    root / "missing-gate-root/receipt.json",
+                )
+
+    def test_ready_status_replays_candidate_external_gate(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            campaign_dir, _, rules = self._create_classified_campaign(root)
+            _, identity = self._seal_candidate_stage(root, campaign_dir)
+            codex_upgrade.compare_campaign(campaign_dir, "candidate-a")
+            assertions = self._write_assertions(root, rules, identity)
+            with mock.patch.object(codex_upgrade, "_rerun_machine_assertion"):
+                accepted = self._accept_campaign(
+                    root, campaign_dir, "candidate-a", assertions
+                )
+            self.assertTrue(accepted["accepted"])
+            evidence = (
+                root
+                / "candidate-a-external-gate/evidence/check-egress-spec.json"
+            )
+            self._write_json(evidence, {"tampered": True})
+            evidence.chmod(0o600)
+            with self.assertRaisesRegex(
+                codex_upgrade.ConfigurationError,
+                "外部门禁收据无法重放",
+            ):
+                codex_upgrade.campaign_status(campaign_dir, "candidate-a")
+
     def test_accept_uses_rule_contract_instead_of_raw_surface_set_equality(self) -> None:
         """28／7 任务计划的完整指纹集合可不同，验收结论必须来自批准规则重放。"""
 
@@ -2406,8 +2557,8 @@ class CodexUpgradeTest(unittest.TestCase):
             self.assertFalse(comparison["equal"])
             assertions = self._write_assertions(root, rules, identity)
             with mock.patch.object(codex_upgrade, "_rerun_machine_assertion"):
-                acceptance = codex_upgrade.accept_campaign(
-                    campaign_dir, "candidate-a", assertions
+                acceptance = self._accept_campaign(
+                    root, campaign_dir, "candidate-a", assertions
                 )
             self.assertTrue(acceptance["accepted"])
             self.assertFalse(acceptance["equal"])
@@ -2427,8 +2578,8 @@ class CodexUpgradeTest(unittest.TestCase):
             codex_upgrade.compare_campaign(campaign_dir, "candidate-a")
             assertions = self._write_assertions(root, rules, identity)
             with mock.patch.object(codex_upgrade, "_rerun_machine_assertion"):
-                acceptance = codex_upgrade.accept_campaign(
-                    campaign_dir, "candidate-a", assertions
+                acceptance = self._accept_campaign(
+                    root, campaign_dir, "candidate-a", assertions
                 )
             self.assertFalse(acceptance["accepted"])
             self.assertEqual(
@@ -2458,8 +2609,8 @@ class CodexUpgradeTest(unittest.TestCase):
                 codex_upgrade.ConfigurationError,
                 "离线重放",
             ):
-                codex_upgrade.accept_campaign(
-                    campaign_dir, "candidate-a", assertions
+                self._accept_campaign(
+                    root, campaign_dir, "candidate-a", assertions
                 )
 
     def test_accept_rejects_evidence_tampering_after_compare(self) -> None:
@@ -2479,8 +2630,8 @@ class CodexUpgradeTest(unittest.TestCase):
                 codex_upgrade.ConfigurationError,
                 "原始证据摘要",
             ):
-                codex_upgrade.accept_campaign(
-                    campaign_dir, "candidate-a", assertions
+                self._accept_campaign(
+                    root, campaign_dir, "candidate-a", assertions
                 )
 
     def _accept_with_mutated_results(
@@ -2498,8 +2649,8 @@ class CodexUpgradeTest(unittest.TestCase):
         mutate(document)
         self._write_json(assertions, document)
         with mock.patch.object(codex_upgrade, "_rerun_machine_assertion"):
-            return codex_upgrade.accept_campaign(
-                campaign_dir, "candidate-a", assertions
+            return self._accept_campaign(
+                root, campaign_dir, "candidate-a", assertions
             )
 
     def test_accept_rejects_legacy_v1_results_schema(self) -> None:
@@ -2588,8 +2739,8 @@ class CodexUpgradeTest(unittest.TestCase):
                 candidate_id="candidate-a",
             )
             with mock.patch.object(codex_upgrade, "_rerun_machine_assertion"):
-                accepted = codex_upgrade.accept_campaign(
-                    campaign_dir, "candidate-a", assertions
+                accepted = self._accept_campaign(
+                    root, campaign_dir, "candidate-a", assertions
                 )
             self.assertTrue(accepted["accepted"])
             self._seal_candidate_stage(

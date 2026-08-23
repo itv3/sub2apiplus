@@ -89,6 +89,9 @@ func validateClaudeFWGServiceTestTransition(
 }
 
 func claudeFWGTestTransitionSupersedesService(path, priorDigest, currentDigest string) bool {
+	if upstreamMergeFrameworkTransitionSupersedesService(path, priorDigest, currentDigest) {
+		return true
+	}
 	if claudeFWHSourceTransitionSupersedesService(path, priorDigest, currentDigest) {
 		return true
 	}
@@ -129,7 +132,9 @@ func TestClaudeFWGServiceTestTransitionIsFrozen(t *testing.T) {
 		if got := compatibilityClosureDigest(source); got != transition.ToSHA256 &&
 			!claudeFWHSourceTransitionSupersedesService(
 				transition.Path, transition.ToSHA256, got,
-			) {
+			) && !upstreamMergeFrameworkTransitionSupersedesService(
+			transition.Path, transition.ToSHA256, got,
+		) {
 			t.Fatalf(
 				"Claude FW-G test transition 漂移：path=%s got=%s want=%s",
 				transition.Path,

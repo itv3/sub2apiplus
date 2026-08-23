@@ -122,6 +122,8 @@ backend/.installed
 tests
 !deploy/tests/
 !deploy/tests/**
+!tools/upstream_merge/tests/
+!tools/upstream_merge/tests/*.py
 CLAUDE.md
 .claude
 scripts

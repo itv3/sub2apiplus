@@ -1,12 +1,14 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sub2api.local/schemas/codex-production-activation-receipt-v1.json",
+  "$id": "https://sub2api.local/schemas/codex-production-activation-receipt-v2.json",
   "title": "Codex 客户端仿真生产激活收据",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "schema_version",
     "campaign",
+    "promotion",
+    "post_promotion_gate",
     "target",
     "rollback",
     "stages",
@@ -16,8 +18,10 @@
   ],
   "properties": {
     "schema_version": {
-      "const": "codex-production-activation-receipt/v1"
+      "const": "codex-production-activation-receipt/v2"
     },
+    "promotion": {"$ref": "#/$defs/fileBinding"},
+    "post_promotion_gate": {"$ref": "#/$defs/fileBinding"},
     "campaign": {
       "type": "object",
       "additionalProperties": false,
@@ -69,7 +73,7 @@
       "additionalProperties": false,
       "required": ["schema_version", "tool", "tool_sha256", "facts"],
       "properties": {
-        "schema_version": {"const": "codex-production-activation-producer/v1"},
+        "schema_version": {"const": "codex-production-activation-producer/v2"},
         "tool": {"type": "string", "minLength": 1},
         "tool_sha256": {"$ref": "#/$defs/sha256"},
         "facts": {"$ref": "#/$defs/fileBinding"}

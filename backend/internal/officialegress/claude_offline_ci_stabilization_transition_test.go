@@ -117,7 +117,10 @@ func claudeOfflineCIStabilizationTargetMatches(path string, want string) bool {
 		return false
 	}
 	sum := sha256.Sum256(raw)
-	return hex.EncodeToString(sum[:]) == want
+	current := hex.EncodeToString(sum[:])
+	return current == want || upstreamMergeFrameworkTransitionSupersedes(
+		path, want, current,
+	)
 }
 
 // claudeOfflineCIStabilizationTransitionSupersedes 只接受本轮固定收据中的精确
@@ -127,6 +130,9 @@ func claudeOfflineCIStabilizationTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if upstreamMergeFrameworkTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if !receiptSHA256(priorDigest) || !receiptSHA256(currentDigest) {
 		return false
 	}

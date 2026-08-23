@@ -1,0 +1,272 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/official-egress-upstream-merge-artifacts-v1.json",
+  "title": "Sub2API 上游合并阶段制品",
+  "oneOf": [
+    {"$ref": "#/$defs/mergeStart"},
+    {"$ref": "#/$defs/mergeCandidate"},
+    {"$ref": "#/$defs/conflictLedger"},
+    {"$ref": "#/$defs/sourceCandidate"},
+    {"$ref": "#/$defs/surfaceDelta"},
+    {"$ref": "#/$defs/surfaceReceipt"},
+    {"$ref": "#/$defs/impactMatrix"},
+    {"$ref": "#/$defs/changeDecisionReceipt"},
+    {"$ref": "#/$defs/verificationReceipt"},
+    {"$ref": "#/$defs/candidateDisposition"},
+    {"$ref": "#/$defs/branchApply"},
+    {"$ref": "#/$defs/upstreamReceipt"}
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "gitObject": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "bytes"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "bytes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "mergeStart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "plan_id", "plan_identity_sha256", "fork_head", "upstream_commit", "merge_base", "worktree", "merge_exit_code", "status", "conflict_paths", "conflict_stages", "stdout", "stderr", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-egress-upstream-merge-start/v1"},
+        "plan_id": {"type": "string"},
+        "plan_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "fork_head": {"$ref": "#/$defs/gitObject"},
+        "upstream_commit": {"$ref": "#/$defs/gitObject"},
+        "merge_base": {"$ref": "#/$defs/gitObject"},
+        "worktree": {"type": "string", "pattern": "^/"},
+        "merge_exit_code": {"type": "integer"},
+        "status": {"enum": ["conflicts_pending", "ready_to_seal"]},
+        "conflict_paths": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "conflict_stages": {"type": "array", "items": {"type": "object"}},
+        "stdout": {"$ref": "#/$defs/binding"},
+        "stderr": {"$ref": "#/$defs/binding"},
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "mergeCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "plan_id", "plan_identity_sha256", "merge_start", "conflict_ledger", "parents", "merge_commit", "candidate_tree", "changed_paths", "protected_objects_unchanged", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-egress-upstream-merge-candidate-tree/v1"},
+        "plan_id": {"type": "string"},
+        "plan_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "merge_start": {"$ref": "#/$defs/binding"},
+        "conflict_ledger": {"$ref": "#/$defs/binding"},
+        "parents": {"type": "array", "minItems": 2, "maxItems": 2, "items": {"$ref": "#/$defs/gitObject"}},
+        "merge_commit": {"$ref": "#/$defs/gitObject"},
+        "candidate_tree": {"$ref": "#/$defs/gitObject"},
+        "changed_paths": {"type": "array", "items": {"type": "object"}},
+        "protected_objects_unchanged": {"const": true},
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "conflictLedger": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "plan_id", "plan_identity_sha256", "merge_start", "conflict_count", "conflict_paths", "resolution_input", "resolutions", "result", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-egress-upstream-conflict-resolution-ledger/v1"},
+        "plan_id": {"type": "string"},
+        "plan_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "merge_start": {"$ref": "#/$defs/binding"},
+        "conflict_count": {"type": "integer", "minimum": 0},
+        "conflict_paths": {"type": "array", "uniqueItems": true, "items": {"type": "string"}},
+        "resolution_input": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/binding"}]},
+        "resolutions": {"type": "array", "items": {"type": "object"}},
+        "result": {"const": "closed"},
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "sourceCandidate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "plan_id", "plan_identity_sha256", "merge_candidate", "source_commit", "source_tree", "changed_paths", "source_change_input", "codex_overlay_ledger", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-egress-upstream-source-candidate/v1"},
+        "plan_id": {"type": "string"},
+        "plan_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "merge_candidate": {"$ref": "#/$defs/binding"},
+        "source_commit": {"$ref": "#/$defs/gitObject"},
+        "source_tree": {"$ref": "#/$defs/gitObject"},
+        "changed_paths": {"type": "array", "items": {"type": "object"}},
+        "source_change_input": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/binding"}]},
+        "codex_overlay_ledger": {"$ref": "#/$defs/binding"},
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "surfaceDelta": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "plan_id", "plan_identity_sha256", "source_candidate", "baseline_route_snapshot", "candidate_route_snapshot", "baseline_source_to_sink_snapshot", "candidate_source_to_sink_snapshot", "route_delta_count", "egress_delta_count", "deltas", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-egress-upstream-surface-delta/v1"},
+        "plan_id": {"type": "string"},
+        "plan_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "source_candidate": {"$ref": "#/$defs/binding"},
+        "baseline_route_snapshot": {"$ref": "#/$defs/binding"},
+        "candidate_route_snapshot": {"$ref": "#/$defs/binding"},
+        "baseline_source_to_sink_snapshot": {"$ref": "#/$defs/binding"},
+        "candidate_source_to_sink_snapshot": {"$ref": "#/$defs/binding"},
+        "route_delta_count": {"type": "integer", "minimum": 0},
+        "egress_delta_count": {"type": "integer", "minimum": 0},
+        "deltas": {"type": "array", "items": {"type": "object"}},
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "surfaceReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "plan_id", "plan_identity_sha256", "source_candidate", "surface_delta", "route_snapshot", "source_to_sink_snapshot", "candidate_inventories", "surface_decision", "unknown_oauth_egress_count", "unclassified_delta_count", "result", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-egress-upstream-surface-recalculation-receipt/v1"},
+        "plan_id": {"type": "string"},
+        "plan_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "source_candidate": {"$ref": "#/$defs/binding"},
+        "surface_delta": {"$ref": "#/$defs/binding"},
+        "route_snapshot": {"$ref": "#/$defs/binding"},
+        "source_to_sink_snapshot": {"$ref": "#/$defs/binding"},
+        "candidate_inventories": {"type": "object"},
+        "surface_decision": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/binding"}]},
+        "unknown_oauth_egress_count": {"const": 0},
+        "unclassified_delta_count": {"const": 0},
+        "result": {"const": "closed"},
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "impactMatrix": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "plan_id", "plan_identity_sha256", "source_candidate", "surface_receipt", "file_change_count", "file_changes", "surface_delta_count", "surface_deltas", "classification_rule", "result", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-egress-upstream-impact-matrix/v1"},
+        "plan_id": {"type": "string"},
+        "plan_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "source_candidate": {"$ref": "#/$defs/binding"},
+        "surface_receipt": {"$ref": "#/$defs/binding"},
+        "file_change_count": {"type": "integer", "minimum": 1},
+        "file_changes": {"type": "array", "minItems": 1, "items": {"type": "object"}},
+        "surface_delta_count": {"type": "integer", "minimum": 0},
+        "surface_deltas": {"type": "array", "items": {"type": "object"}},
+        "classification_rule": {"type": "string"},
+        "result": {"const": "pending_change_decision"},
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "changeDecisionReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "plan_id", "plan_identity_sha256", "impact_matrix", "change_decision", "file_decision_count", "surface_decision_count", "client_impacts", "successor_campaign_required", "shared_contract_required", "unclassified_count", "official_client_identity_change_count", "result", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-egress-upstream-change-decision-receipt/v1"},
+        "plan_id": {"type": "string"},
+        "plan_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "impact_matrix": {"$ref": "#/$defs/binding"},
+        "change_decision": {"$ref": "#/$defs/binding"},
+        "file_decision_count": {"type": "integer", "minimum": 1},
+        "surface_decision_count": {"type": "integer", "minimum": 0},
+        "client_impacts": {"type": "object"},
+        "successor_campaign_required": {"type": "object"},
+        "shared_contract_required": {"type": "boolean"},
+        "unclassified_count": {"const": 0},
+        "official_client_identity_change_count": {"const": 0},
+        "result": {"const": "closed"},
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "verificationReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "plan_id", "plan_identity_sha256", "attempt_id", "source_candidate", "impact_receipt", "required_categories", "gate_count", "failed_gate_ids", "skipped_gate_count", "worktree_status_paths", "gates", "result", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-egress-upstream-verification-receipt/v1"},
+        "plan_id": {"type": "string"},
+        "plan_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "attempt_id": {"type": "string"},
+        "source_candidate": {"$ref": "#/$defs/binding"},
+        "impact_receipt": {"$ref": "#/$defs/binding"},
+        "required_categories": {"type": "array", "minItems": 12, "maxItems": 12},
+        "gate_count": {"const": 12},
+        "failed_gate_ids": {"type": "array"},
+        "skipped_gate_count": {"const": 0},
+        "worktree_status_paths": {"type": "array"},
+        "gates": {"type": "array", "minItems": 12, "maxItems": 12},
+        "result": {"enum": ["blocked", "passed"]},
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "candidateDisposition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "plan_id", "plan_identity_sha256", "source_candidate", "impact_receipt", "verification_receipt", "disposition_input", "purpose", "clients", "shared_contract_receipt", "original_business_receipt", "result", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-egress-upstream-candidate-disposition/v1"},
+        "plan_id": {"type": "string"},
+        "plan_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "source_candidate": {"$ref": "#/$defs/binding"},
+        "impact_receipt": {"$ref": "#/$defs/binding"},
+        "verification_receipt": {"$ref": "#/$defs/binding"},
+        "disposition_input": {"$ref": "#/$defs/binding"},
+        "purpose": {"enum": ["validation_only", "production_replacement"]},
+        "clients": {"type": "object"},
+        "shared_contract_receipt": {"oneOf": [{"type": "null"}, {"$ref": "#/$defs/binding"}]},
+        "original_business_receipt": {"$ref": "#/$defs/binding"},
+        "result": {"const": "closed"},
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "branchApply": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "plan_id", "plan_identity_sha256", "managed_ref", "before_commit", "after_commit", "after_tree", "operation", "remote_push_performed", "result", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-egress-upstream-branch-apply/v1"},
+        "plan_id": {"type": "string"},
+        "plan_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "managed_ref": {"type": "string", "pattern": "^refs/heads/"},
+        "before_commit": {"$ref": "#/$defs/gitObject"},
+        "after_commit": {"$ref": "#/$defs/gitObject"},
+        "after_tree": {"$ref": "#/$defs/gitObject"},
+        "operation": {"const": "git_merge_ff_only"},
+        "remote_push_performed": {"const": false},
+        "result": {"const": "applied"},
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "upstreamReceipt": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "plan_id", "plan_identity_sha256", "upstream", "repository", "merge_start", "merge_candidate", "conflict_ledger", "source_candidate", "surface_receipt", "impact_matrix", "change_decision_receipt", "verification_receipt", "candidate_disposition", "branch_apply", "production_baselines", "official_clients", "tool_bundle_sha256", "current_tool_blocker_count", "result", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-egress-upstream-merge-receipt/v1"},
+        "plan_id": {"type": "string"},
+        "plan_identity_sha256": {"$ref": "#/$defs/sha256"},
+        "upstream": {"type": "object"},
+        "repository": {"type": "object"},
+        "merge_start": {"$ref": "#/$defs/binding"},
+        "merge_candidate": {"$ref": "#/$defs/binding"},
+        "conflict_ledger": {"$ref": "#/$defs/binding"},
+        "source_candidate": {"$ref": "#/$defs/binding"},
+        "surface_receipt": {"$ref": "#/$defs/binding"},
+        "impact_matrix": {"$ref": "#/$defs/binding"},
+        "change_decision_receipt": {"$ref": "#/$defs/binding"},
+        "verification_receipt": {"$ref": "#/$defs/binding"},
+        "candidate_disposition": {"$ref": "#/$defs/binding"},
+        "branch_apply": {"$ref": "#/$defs/binding"},
+        "production_baselines": {"type": "object"},
+        "official_clients": {"type": "object"},
+        "tool_bundle_sha256": {"$ref": "#/$defs/sha256"},
+        "current_tool_blocker_count": {"const": 0},
+        "result": {"const": "upstream_source_baseline_updated"},
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    }
+  }
+}

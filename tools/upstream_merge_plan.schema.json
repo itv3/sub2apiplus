@@ -1,0 +1,277 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/official-egress-upstream-merge-plan.json",
+  "title": "Sub2API 上游合并计划",
+  "oneOf": [
+    {"$ref": "#/$defs/v1"},
+    {"$ref": "#/$defs/v2"}
+  ],
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "gitObject": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,191}$"},
+    "binding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256", "bytes"],
+      "properties": {
+        "path": {"type": "string", "minLength": 1},
+        "sha256": {"$ref": "#/$defs/sha256"},
+        "bytes": {"type": "integer", "minimum": 0}
+      }
+    },
+    "persona": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["provider", "official_product", "auth_family", "upstream_route_family"],
+      "properties": {
+        "provider": {"$ref": "#/$defs/safeId"},
+        "official_product": {"$ref": "#/$defs/safeId"},
+        "auth_family": {"const": "oauth"},
+        "upstream_route_family": {"$ref": "#/$defs/safeId"}
+      }
+    },
+    "client": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["persona", "target_version", "active", "rollback"],
+      "properties": {
+        "persona": {"$ref": "#/$defs/persona"},
+        "target_version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$"},
+        "active": {"$ref": "#/$defs/binding"},
+        "rollback": {"$ref": "#/$defs/binding"}
+      }
+    },
+    "gateCategory": {
+      "enum": [
+        "claude_active_wire",
+        "claude_ingress_matrix",
+        "claude_rollback_wire",
+        "codex_active_wire",
+        "codex_ingress_matrix",
+        "codex_rollback_wire",
+        "cross_persona",
+        "inventory_closure",
+        "original_business",
+        "secret_scan",
+        "shared_full_regression",
+        "shared_static"
+      ]
+    },
+    "commandGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "category", "mode", "cwd", "argv"],
+      "properties": {
+        "id": {"$ref": "#/$defs/safeId"},
+        "category": {"$ref": "#/$defs/gateCategory"},
+        "mode": {"const": "command"},
+        "cwd": {"type": "string", "minLength": 1},
+        "argv": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}}
+      }
+    },
+    "receiptGate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "category", "mode", "cwd", "argv", "receipt"],
+      "properties": {
+        "id": {"$ref": "#/$defs/safeId"},
+        "category": {"$ref": "#/$defs/gateCategory"},
+        "mode": {"const": "receipt_replay"},
+        "cwd": {"type": "string", "minLength": 1},
+        "argv": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "receipt": {"type": "string", "minLength": 1}
+      }
+    },
+    "gate": {
+      "oneOf": [
+        {"$ref": "#/$defs/commandGate"},
+        {"$ref": "#/$defs/receiptGate"}
+      ]
+    },
+    "v1": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "plan_id", "purpose", "upstream", "outputs", "identity_sha256"],
+      "properties": {
+        "schema_version": {"const": "official-egress-upstream-merge-plan/v1"},
+        "plan_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"},
+        "purpose": {"enum": ["baseline_replay", "upstream_merge"]},
+        "upstream": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["url", "tag", "commit"],
+          "properties": {
+            "url": {"type": "string", "pattern": "^https://"},
+            "tag": {"type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$"},
+            "commit": {"$ref": "#/$defs/gitObject"}
+          }
+        },
+        "outputs": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["egress_merge_ledger"],
+          "properties": {
+            "egress_merge_ledger": {"type": "string", "pattern": "^docs/egress/maintenance/upstream-v[^/]+-egress-merge-ledger\\.json$"}
+          }
+        },
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "v2": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version", "plan_id", "purpose", "upstream", "repository", "workspace",
+        "official_clients", "baselines", "discovery_baseline", "tool_bundle", "environment",
+        "gates", "outputs", "identity_sha256"
+      ],
+      "properties": {
+        "schema_version": {"const": "official-egress-upstream-merge-plan/v2"},
+        "plan_id": {"$ref": "#/$defs/safeId"},
+        "purpose": {"const": "upstream_merge"},
+        "upstream": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["remote", "url", "tag", "commit"],
+          "properties": {
+            "remote": {"$ref": "#/$defs/safeId"},
+            "url": {"type": "string", "pattern": "^https://"},
+            "tag": {"type": "string", "pattern": "^v[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$"},
+            "commit": {"$ref": "#/$defs/gitObject"}
+          }
+        },
+        "repository": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["managed_ref", "fork_head", "fork_tree", "merge_base", "protected_objects"],
+          "properties": {
+            "managed_ref": {"type": "string", "pattern": "^refs/heads/"},
+            "fork_head": {"$ref": "#/$defs/gitObject"},
+            "fork_tree": {"$ref": "#/$defs/gitObject"},
+            "merge_base": {"$ref": "#/$defs/gitObject"},
+            "protected_objects": {
+              "type": "array",
+              "minItems": 1,
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["path", "object_id", "object_type"],
+                "properties": {
+                  "path": {"type": "string", "minLength": 1},
+                  "object_id": {"$ref": "#/$defs/gitObject"},
+                  "object_type": {"enum": ["blob", "tree"]}
+                }
+              }
+            }
+          }
+        },
+        "workspace": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["worktree", "evidence_root"],
+          "properties": {
+            "worktree": {"type": "string", "pattern": "^/"},
+            "evidence_root": {"type": "string", "pattern": "^/"}
+          }
+        },
+        "official_clients": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["claude", "codex"],
+          "properties": {
+            "claude": {"$ref": "#/$defs/client"},
+            "codex": {"$ref": "#/$defs/client"}
+          }
+        },
+        "baselines": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["production_ingress_inventory", "egress_disposition_inventory", "runtime_state", "recovery_point"],
+          "properties": {
+            "production_ingress_inventory": {"$ref": "#/$defs/clientBindings"},
+            "egress_disposition_inventory": {"$ref": "#/$defs/clientBindings"},
+            "runtime_state": {"$ref": "#/$defs/binding"},
+            "recovery_point": {"$ref": "#/$defs/binding"}
+          }
+        },
+        "discovery_baseline": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["route_snapshot", "source_to_sink_snapshot"],
+          "properties": {
+            "route_snapshot": {"$ref": "#/$defs/binding"},
+            "source_to_sink_snapshot": {"$ref": "#/$defs/binding"}
+          }
+        },
+        "tool_bundle": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["files", "bundle_sha256"],
+          "properties": {
+            "files": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/binding"}},
+            "bundle_sha256": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "environment": {"$ref": "#/$defs/binding"},
+        "gates": {"type": "array", "minItems": 12, "maxItems": 12, "items": {"$ref": "#/$defs/gate"}},
+        "outputs": {"$ref": "#/$defs/outputs"},
+        "identity_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "clientBindings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["claude", "codex"],
+      "properties": {
+        "claude": {"$ref": "#/$defs/binding"},
+        "codex": {"$ref": "#/$defs/binding"}
+      }
+    },
+    "inventoryPaths": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ingress", "egress"],
+      "properties": {
+        "ingress": {"type": "string", "minLength": 1},
+        "egress": {"type": "string", "minLength": 1}
+      }
+    },
+    "outputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "branch_apply", "candidate_disposition", "candidate_inventories", "codex_overlay_ledger",
+        "conflict_ledger", "gate_attempts_root", "impact_matrix", "impact_receipt",
+        "merge_candidate", "merge_start", "source_candidate", "surface_delta",
+        "surface_egress_snapshot", "surface_receipt", "surface_route_snapshot", "upstream_merge_receipt"
+      ],
+      "properties": {
+        "branch_apply": {"type": "string", "minLength": 1},
+        "candidate_disposition": {"type": "string", "minLength": 1},
+        "candidate_inventories": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["claude", "codex"],
+          "properties": {
+            "claude": {"$ref": "#/$defs/inventoryPaths"},
+            "codex": {"$ref": "#/$defs/inventoryPaths"}
+          }
+        },
+        "codex_overlay_ledger": {"type": "string", "pattern": "^docs/egress/maintenance/upstream-v[^/]+-egress-merge-ledger\\.json$"},
+        "conflict_ledger": {"type": "string", "minLength": 1},
+        "gate_attempts_root": {"type": "string", "minLength": 1},
+        "impact_matrix": {"type": "string", "minLength": 1},
+        "impact_receipt": {"type": "string", "minLength": 1},
+        "merge_candidate": {"type": "string", "minLength": 1},
+        "merge_start": {"type": "string", "minLength": 1},
+        "source_candidate": {"type": "string", "minLength": 1},
+        "surface_delta": {"type": "string", "minLength": 1},
+        "surface_egress_snapshot": {"type": "string", "minLength": 1},
+        "surface_receipt": {"type": "string", "minLength": 1},
+        "surface_route_snapshot": {"type": "string", "minLength": 1},
+        "upstream_merge_receipt": {"type": "string", "minLength": 1}
+      }
+    }
+  }
+}

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import tempfile
 import unittest
 from pathlib import Path
 
 from tools.official_client_capture import claude_fw_g_official_finalize as finalizer
+from tools.official_client_capture.claude_generation_policy import (
+    load_generation_policy,
+)
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -13,6 +17,15 @@ ROOT = Path(__file__).resolve().parents[3]
 
 class ClaudeFWGOfficialFinalizeTests(unittest.TestCase):
     """使用无秘密合成数据验证 40/110 和 593 项闭合。"""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.policy = load_generation_policy(
+            ROOT
+            / "tools/official_client_capture/claude_fw_g_generation_policy_2_1_226_v2.json"
+        )
+        cls.target = cls.policy["target"]
+        cls.official_policy = cls.policy["official_finalize"]
 
     @staticmethod
     def _manifest() -> dict:
@@ -63,14 +76,24 @@ class ClaudeFWGOfficialFinalizeTests(unittest.TestCase):
     def test_maps_all_atomic_assertions_once(self) -> None:
         manifest = self._manifest()
         required, profile_owner, scenario_owner = finalizer.validate_required_rules(
-            manifest
+            manifest,
+            self.target,
         )
         all_ids = sorted(set(profile_owner) | set(scenario_owner))
         measured = {"entries": [self._measured_entry(value) for value in all_ids]}
         atomic = finalizer.build_atomic_verification(
-            measured, profile_owner, scenario_owner
+            measured,
+            profile_owner,
+            scenario_owner,
+            self.target,
+            self.official_policy,
         )
-        rules = finalizer.build_required_rule_verification(required, atomic)
+        rules = finalizer.build_required_rule_verification(
+            required,
+            atomic,
+            self.target,
+            self.official_policy,
+        )
         self.assertEqual(atomic["atomic_assertion_count"], 110)
         self.assertEqual(atomic["profile_atomic_assertion_count"], 106)
         self.assertEqual(atomic["scenario_only_assertion_count"], 4)
@@ -79,7 +102,10 @@ class ClaudeFWGOfficialFinalizeTests(unittest.TestCase):
 
     def test_rejects_unowned_atomic_assertion(self) -> None:
         manifest = self._manifest()
-        _, profile_owner, scenario_owner = finalizer.validate_required_rules(manifest)
+        _, profile_owner, scenario_owner = finalizer.validate_required_rules(
+            manifest,
+            self.target,
+        )
         measured = {
             "entries": [
                 self._measured_entry(value)
@@ -90,8 +116,38 @@ class ClaudeFWGOfficialFinalizeTests(unittest.TestCase):
         measured["entries"][0]["assertion_id"] = "PAIR-SPEC-UNOWNED-001"
         with self.assertRaisesRegex(finalizer.OfficialFinalizeError, "无归属"):
             finalizer.build_atomic_verification(
-                measured, profile_owner, scenario_owner
+                measured,
+                profile_owner,
+                scenario_owner,
+                self.target,
+                self.official_policy,
             )
+
+    def test_rejects_required_rules_target_version_mismatch(self) -> None:
+        manifest = self._manifest()
+        manifest["target_version"] = "9.9.9"
+        with self.assertRaisesRegex(finalizer.OfficialFinalizeError, "目标版本"):
+            finalizer.validate_required_rules(manifest, self.target)
+
+    def test_rejects_required_rules_file_digest_drift(self) -> None:
+        source = (
+            ROOT
+            / "tools/official_client_capture/claude_required_rules_2_1_226.json"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            candidate = Path(directory) / "required-rules.json"
+            candidate.write_bytes(source.read_bytes() + b"\n")
+            with self.assertRaisesRegex(
+                finalizer.OfficialFinalizeError,
+                "文件摘要",
+            ):
+                finalizer.load_required_rules(
+                    candidate,
+                    self.policy["frozen_inputs"][
+                        "required_rules_manifest_sha256"
+                    ],
+                    self.target,
+                )
 
     def test_secret_scan_rejects_oauth_callback(self) -> None:
         documents = {
@@ -100,7 +156,10 @@ class ClaudeFWGOfficialFinalizeTests(unittest.TestCase):
             }
         }
         with self.assertRaisesRegex(finalizer.OfficialFinalizeError, "oauth_callback"):
-            finalizer.scan_documents(documents)
+            finalizer.scan_documents(
+                documents,
+                self.official_policy["campaign_id"],
+            )
 
     def test_compacts_all_orthogonal_candidates(self) -> None:
         dimensions = {
@@ -136,7 +195,11 @@ class ClaudeFWGOfficialFinalizeTests(unittest.TestCase):
                 for index in range(593)
             ],
         }
-        closure = finalizer.build_orthogonal_closure(dimensions, candidates)
+        closure = finalizer.build_orthogonal_closure(
+            dimensions,
+            candidates,
+            self.official_policy,
+        )
         self.assertEqual(closure["candidate_count"], 593)
         self.assertEqual(closure["unresolved_count"], 0)
         self.assertTrue(

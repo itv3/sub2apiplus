@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""复算 Claude Code 2.1.226 FW-G 独立官方 Campaign 并生成脱敏派生证据。
+"""按 generation policy 复算 Claude Code FW-G 独立官方 Campaign。
 
 本工具只读取 Vircs 隔离 Campaign。它复用 FW-F 的逐原子断言实现重新解析全部
 P/R/M，随后把 110 条断言唯一映射回 40 条 RequiredRules 和 4 条
@@ -27,36 +27,17 @@ if str(REPOSITORY_ROOT) not in sys.path:
 
 from tools.official_client_capture import claude_fw_f_measured_rules  # noqa: E402
 from tools.official_client_capture import claude_fw_f_v21_finalize  # noqa: E402
+from tools.official_client_capture.claude_generation_policy import (  # noqa: E402
+    GenerationPolicyError,
+    load_generation_policy,
+    policy_binding,
+)
 from tools.official_client_control.canonical import (  # noqa: E402
     canonical_json_bytes,
     canonical_sha256,
     sha256_file,
 )
 
-
-CAMPAIGN_ID = "fw-g-official-rerun-v9-19a2e8ba7"
-CAMPAIGN_SHA256 = "708e0de2b9cc6b1987b603c87e5ed13491695f39dba3c51dc27d12b613c6c881"
-SOURCE_BUNDLE_SHA256 = "b7c5e8baf7a911d55bb84623f8c98e445c350574d5ded774d2eb2bc536a92af1"
-TARGET_BINARY_SHA256 = "4e9bec1177ce9690e8bd988b710ac24105e70da428dd094c5adcbbe786a55555"
-IMPLEMENTATION_BASE_COMMIT = "19a2e8ba719b35803992eb7b01bd73bee6bc1a24"
-EXPECTED_REQUIRED_RULES = 40
-EXPECTED_PROFILE_ASSERTIONS = 106
-EXPECTED_SCENARIO_ASSERTIONS = 4
-EXPECTED_ATOMIC_ASSERTIONS = 110
-EXPECTED_PROBES = 77
-EXPECTED_CANDIDATES = 593
-EXPECTED_DIMENSIONS = 49
-EXPECTED_REQUEST_OCCURRENCES = 394
-EXPECTED_ENDPOINT_COUNTS = {
-    "egress-claude-count-tokens": 36,
-    "egress-claude-lifecycle-hello": 81,
-    "egress-claude-mcp-servers": 4,
-    "egress-claude-messages-inference": 123,
-    "egress-claude-oauth-profile": 7,
-    "egress-claude-oauth-token-refresh": 1,
-    "egress-claude-policy-limits": 71,
-    "egress-claude-settings": 71,
-}
 
 EMAIL_RE = re.compile(r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b")
 BEARER_RE = re.compile(r"(?i)\bBearer\s+(?!<)[A-Za-z0-9._~+/-]{20,}")
@@ -130,19 +111,24 @@ def stripped_evidence_refs(values: Iterable[dict[str, Any]]) -> list[dict[str, A
 
 def validate_required_rules(
     manifest: dict[str, Any],
+    target: dict[str, Any],
 ) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, str]]:
     """验证 40/106/4 分母，并构造每条原子断言的唯一归属。"""
 
+    expected_rules = target["required_rule_count"]
+    expected_profile = target["profile_atomic_assertion_count"]
+    expected_atomic = target["total_atomic_assertion_count"]
+    expected_scenario = expected_atomic - expected_profile
     require(manifest.get("schema_version") == "claude-code-required-rule-manifest/v1", "RequiredRules schema 不匹配")
-    require(manifest.get("target_version") == "2.1.226", "RequiredRules 目标版本不匹配")
-    require(manifest.get("required_rule_count") == EXPECTED_REQUIRED_RULES, "RequiredRules 不是 40 条")
-    require(manifest.get("profile_atomic_assertion_count") == EXPECTED_PROFILE_ASSERTIONS, "画像原子断言不是 106 条")
-    require(manifest.get("scenario_only_assertion_count") == EXPECTED_SCENARIO_ASSERTIONS, "scenario-only 断言不是 4 条")
-    require(manifest.get("atomic_assertion_count") == EXPECTED_ATOMIC_ASSERTIONS, "原子断言总数不是 110 条")
+    require(manifest.get("target_version") == target["version"], "RequiredRules 目标版本不匹配")
+    require(manifest.get("required_rule_count") == expected_rules, "RequiredRules 数量不匹配")
+    require(manifest.get("profile_atomic_assertion_count") == expected_profile, "画像原子断言数量不匹配")
+    require(manifest.get("scenario_only_assertion_count") == expected_scenario, "scenario-only 断言数量不匹配")
+    require(manifest.get("atomic_assertion_count") == expected_atomic, "原子断言总数不匹配")
 
     required_rules = manifest.get("required_rules")
     scenario_groups = manifest.get("scenario_only_groups")
-    require(isinstance(required_rules, list) and len(required_rules) == EXPECTED_REQUIRED_RULES, "RequiredRules 数组不闭合")
+    require(isinstance(required_rules, list) and len(required_rules) == expected_rules, "RequiredRules 数组不闭合")
     require(isinstance(scenario_groups, list) and scenario_groups, "scenario-only 分组缺失")
 
     profile_owner: dict[str, str] = {}
@@ -168,9 +154,27 @@ def validate_required_rules(
             )
             scenario_owner[atomic_id] = group_id
 
-    require(len(profile_owner) == EXPECTED_PROFILE_ASSERTIONS, "画像断言唯一归属不是 106 条")
-    require(len(scenario_owner) == EXPECTED_SCENARIO_ASSERTIONS, "scenario-only 唯一归属不是 4 条")
+    require(len(profile_owner) == expected_profile, "画像断言唯一归属数量不匹配")
+    require(len(scenario_owner) == expected_scenario, "scenario-only 唯一归属数量不匹配")
     return required_rules, profile_owner, scenario_owner
+
+
+def load_required_rules(
+    path: Path,
+    expected_sha256: str,
+    target: dict[str, Any],
+) -> tuple[list[dict[str, Any]], dict[str, str], dict[str, str]]:
+    """先校验冻结文件摘要，再解析目标版本和规则分母。"""
+
+    require(
+        path.is_file() and not path.is_symlink(),
+        "RequiredRules 不是可信普通文件",
+    )
+    require(
+        sha256_file(path) == expected_sha256,
+        "RequiredRules 文件摘要与 generation policy 不一致",
+    )
+    return validate_required_rules(load_json(path), target)
 
 
 def compact_result(value: dict[str, Any], label: str) -> dict[str, Any]:
@@ -197,11 +201,17 @@ def build_atomic_verification(
     measured: dict[str, Any],
     profile_owner: dict[str, str],
     scenario_owner: dict[str, str],
+    target: dict[str, Any],
+    official_policy: dict[str, Any],
 ) -> dict[str, Any]:
     """把 v5 的 110 条实测断言转换为无正文的可携带证明。"""
 
     entries = measured.get("entries")
-    require(isinstance(entries, list) and len(entries) == EXPECTED_ATOMIC_ASSERTIONS, "v5 实测断言不是 110 条")
+    require(
+        isinstance(entries, list)
+        and len(entries) == target["total_atomic_assertion_count"],
+        "v5 实测断言数量不匹配",
+    )
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
     for entry in entries:
@@ -238,9 +248,9 @@ def build_atomic_verification(
     require(seen == set(profile_owner) | set(scenario_owner), "v5 与 40/110 映射集合不一致")
     return {
         "schema_version": "claude-code-fw-g-official-atomic-verification/v1",
-        "campaign_id": CAMPAIGN_ID,
-        "target_version": "2.1.226",
-        "target_binary_sha256": TARGET_BINARY_SHA256,
+        "campaign_id": official_policy["campaign_id"],
+        "target_version": target["version"],
+        "target_binary_sha256": official_policy["target_binary_sha256"],
         "atomic_assertion_count": len(result),
         "profile_atomic_assertion_count": len(profile_owner),
         "scenario_only_assertion_count": len(scenario_owner),
@@ -252,6 +262,8 @@ def build_atomic_verification(
 def build_required_rule_verification(
     required_rules: list[dict[str, Any]],
     atomic: dict[str, Any],
+    target: dict[str, Any],
+    official_policy: dict[str, Any],
 ) -> dict[str, Any]:
     """证明 40 条 RequiredRules 均由 v5 画像断言唯一全覆盖。"""
 
@@ -278,13 +290,16 @@ def build_required_rule_verification(
                 "evidence_level_before_implementation_pair": "observed",
             }
         )
-    require(len(entries) == EXPECTED_REQUIRED_RULES, "RequiredRules 复测映射不是 40 条")
+    require(
+        len(entries) == target["required_rule_count"],
+        "RequiredRules 复测映射数量不匹配",
+    )
     return {
         "schema_version": "claude-code-fw-g-required-rule-official-verification/v1",
-        "campaign_id": CAMPAIGN_ID,
-        "target_version": "2.1.226",
+        "campaign_id": official_policy["campaign_id"],
+        "target_version": target["version"],
         "required_rule_count": len(entries),
-        "profile_atomic_assertion_count": EXPECTED_PROFILE_ASSERTIONS,
+        "profile_atomic_assertion_count": target["profile_atomic_assertion_count"],
         "result": "passed",
         "promotion_eligibility": "blocked_until_implementation_pair_and_negative_gates",
         "entries": sorted(entries, key=lambda value: value["spec_id"]),
@@ -294,6 +309,7 @@ def build_required_rule_verification(
 def build_orthogonal_closure(
     dimensions: dict[str, Any],
     candidates: dict[str, Any],
+    official_policy: dict[str, Any],
 ) -> dict[str, Any]:
     """保留 49 维和 593 候选的唯一终态，不复制历史线索正文。"""
 
@@ -301,14 +317,14 @@ def build_orthogonal_closure(
     candidate_entries = candidates.get("entries")
     require(
         dimensions.get("result") == "passed"
-        and dimensions.get("resolved_count") == EXPECTED_DIMENSIONS
+        and dimensions.get("resolved_count") == official_policy["dimension_count"]
         and dimensions.get("unresolved_count") == 0
         and isinstance(dimension_entries, list),
         "v5 49 维没有闭合",
     )
     require(
         candidates.get("result") == "passed"
-        and candidates.get("resolved_count") == EXPECTED_CANDIDATES
+        and candidates.get("resolved_count") == official_policy["candidate_count"]
         and candidates.get("unresolved_count") == 0
         and isinstance(candidate_entries, list),
         "v5 593 候选没有闭合",
@@ -324,14 +340,19 @@ def build_orthogonal_closure(
         for value in candidate_entries
     ]
     candidate_ids = [value["candidate_id"] for value in compact_candidates]
-    require(len(candidate_ids) == len(set(candidate_ids)) == EXPECTED_CANDIDATES, "v5 候选终态重复或缺失")
+    require(
+        len(candidate_ids)
+        == len(set(candidate_ids))
+        == official_policy["candidate_count"],
+        "v5 候选终态重复或缺失",
+    )
     return {
         "schema_version": "claude-code-fw-g-orthogonal-closure/v1",
-        "campaign_id": CAMPAIGN_ID,
-        "dimension_count": EXPECTED_DIMENSIONS,
+        "campaign_id": official_policy["campaign_id"],
+        "dimension_count": official_policy["dimension_count"],
         "dimension_disposition_counts": dimensions.get("disposition_counts"),
         "dimensions": dimension_entries,
-        "candidate_count": EXPECTED_CANDIDATES,
+        "candidate_count": official_policy["candidate_count"],
         "candidate_group_counts": candidates.get("group_counts"),
         "candidate_disposition_counts": candidates.get("disposition_counts"),
         "candidates": compact_candidates,
@@ -345,23 +366,49 @@ def build_campaign_verification(
     evidence_root: Path,
     inputs: dict[str, Any],
     wire: dict[str, Any],
+    target: dict[str, Any],
+    official_policy: dict[str, Any],
+    generation_policy_ref: dict[str, Any],
 ) -> dict[str, Any]:
     """冻结 v5 Campaign、生产零差异和完整请求分母。"""
 
     campaign = inputs["campaign"]
     summary = inputs["summary"]
     production = inputs["production_diff"]
-    require(campaign.get("campaign_id") == CAMPAIGN_ID, "v5 Campaign ID 不一致")
-    require(sha256_file(campaign_root / "campaign.json") == CAMPAIGN_SHA256, "v5 Campaign 摘要不一致")
-    require(summary.get("capture_source_bundle_sha256") == SOURCE_BUNDLE_SHA256, "v5 Source Bundle 摘要不一致")
-    require(summary.get("target_binary_sha256") == TARGET_BINARY_SHA256, "v5 官方二进制摘要不一致")
-    require(summary.get("probe_count") == summary.get("passed_count") == EXPECTED_PROBES, "v5 不是 77/77")
+    require(campaign.get("campaign_id") == official_policy["campaign_id"], "v5 Campaign ID 不一致")
+    require(campaign.get("target_version") == target["version"], "v5 Campaign 目标版本不一致")
+    require(
+        sha256_file(campaign_root / "campaign.json")
+        == official_policy["campaign_sha256"],
+        "v5 Campaign 摘要不一致",
+    )
+    require(
+        summary.get("capture_source_bundle_sha256")
+        == official_policy["source_bundle_sha256"],
+        "v5 Source Bundle 摘要不一致",
+    )
+    require(
+        summary.get("target_binary_sha256")
+        == official_policy["target_binary_sha256"],
+        "v5 官方二进制摘要不一致",
+    )
+    require(
+        summary.get("probe_count")
+        == summary.get("passed_count")
+        == official_policy["probe_count"],
+        "v5 探针分母不一致",
+    )
     require(summary.get("failed_count") == 0 and summary.get("result") == "passed", "v5 存在失败事件")
     require(production.get("result") == "passed" and production.get("differences") == [], "Vircs 生产前后存在差异")
-    require(wire.get("result") == "passed" and wire.get("scenario_count") == EXPECTED_PROBES, "v9 WireInventory 未闭合")
     require(
-        wire.get("request_occurrence_count") == EXPECTED_REQUEST_OCCURRENCES
-        and wire.get("endpoint_counts") == EXPECTED_ENDPOINT_COUNTS,
+        wire.get("result") == "passed"
+        and wire.get("scenario_count") == official_policy["probe_count"],
+        "v9 WireInventory 未闭合",
+    )
+    require(
+        wire.get("request_occurrence_count")
+        == official_policy["request_occurrence_count"]
+        and wire.get("endpoint_counts") == official_policy["endpoint_counts"],
         "v9 实际请求分母漂移",
     )
     behavior_condition_path = campaign_root / "environment/profile-cache-condition.json"
@@ -370,7 +417,7 @@ def build_campaign_verification(
         behavior_condition
         == {
             "schema_version": "claude-code-fw-g-behavior-coverage-condition/v1",
-            "campaign_id": CAMPAIGN_ID,
+            "campaign_id": official_policy["campaign_id"],
             "condition": "profile_cache_timestamp_forced_stale_on_tmpfs_copy",
             "purpose": "obtain_positive_wire_occurrence_without_defining_traffic_presence_rule",
             "source_global_state_modified": False,
@@ -384,14 +431,15 @@ def build_campaign_verification(
     )
     return {
         "schema_version": "claude-code-fw-g-official-campaign-verification/v1",
-        "campaign_id": CAMPAIGN_ID,
-        "campaign_sha256": CAMPAIGN_SHA256,
-        "capture_source_bundle_sha256": SOURCE_BUNDLE_SHA256,
-        "implementation_base_commit": IMPLEMENTATION_BASE_COMMIT,
-        "target_version": "2.1.226",
-        "target_binary_sha256": TARGET_BINARY_SHA256,
-        "probe_count": EXPECTED_PROBES,
-        "passed_count": EXPECTED_PROBES,
+        "campaign_id": official_policy["campaign_id"],
+        "campaign_sha256": official_policy["campaign_sha256"],
+        "capture_source_bundle_sha256": official_policy["source_bundle_sha256"],
+        "implementation_base_commit": official_policy["implementation_base_commit"],
+        "target_version": target["version"],
+        "target_binary_sha256": official_policy["target_binary_sha256"],
+        "generation_policy": generation_policy_ref,
+        "probe_count": official_policy["probe_count"],
+        "passed_count": official_policy["probe_count"],
         "failed_count": 0,
         "request_occurrence_count": wire.get("request_occurrence_count"),
         "unique_wire_content_count": wire.get("unique_wire_content_count"),
@@ -401,8 +449,8 @@ def build_campaign_verification(
             "occurrence_counts_are_campaign_integrity_only": True,
             "profile_positive_condition": "profile_cache_timestamp_forced_stale_on_tmpfs_copy",
         },
-        "candidate_count": EXPECTED_CANDIDATES,
-        "matrix_dimension_count": EXPECTED_DIMENSIONS,
+        "candidate_count": official_policy["candidate_count"],
+        "matrix_dimension_count": official_policy["dimension_count"],
         "privacy_configuration": inputs["catalog"].get("privacy_configuration"),
         "production_comparison": {
             "result": "passed",
@@ -426,7 +474,10 @@ def build_campaign_verification(
     }
 
 
-def scan_documents(documents: dict[str, dict[str, Any]]) -> dict[str, Any]:
+def scan_documents(
+    documents: dict[str, dict[str, Any]],
+    campaign_id: str,
+) -> dict[str, Any]:
     """阻断 OAuth secret、回调码、邮箱和未脱敏 Bearer 进入可携带制品。"""
 
     patterns = {
@@ -449,7 +500,7 @@ def scan_documents(documents: dict[str, dict[str, Any]]) -> dict[str, Any]:
     require(not findings, f"可携带制品命中敏感模式：{findings}")
     return {
         "schema_version": "claude-code-fw-g-portable-secret-scan/v1",
-        "campaign_id": CAMPAIGN_ID,
+        "campaign_id": campaign_id,
         "scanned_files": scanned,
         "finding_count": 0,
         "result": "passed",
@@ -471,6 +522,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """解析只读证据根和输出位置。"""
 
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--generation-policy", required=True, type=Path)
     parser.add_argument("--evidence-root", required=True, type=Path)
     parser.add_argument("--campaign-root", required=True, type=Path)
     parser.add_argument("--prior-measured-rules", required=True, type=Path)
@@ -485,6 +537,21 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parse_args(argv)
     try:
+        generation_policy_path = args.generation_policy.resolve()
+        generation_policy = load_generation_policy(generation_policy_path)
+        target = generation_policy["target"]
+        official_policy = generation_policy["official_finalize"]
+        require(
+            generation_policy_path.is_relative_to(REPOSITORY_ROOT),
+            "generation policy 不在当前仓库内",
+        )
+        generation_policy_ref = policy_binding(
+            generation_policy_path,
+            generation_policy,
+        )
+        generation_policy_ref["path"] = generation_policy_path.relative_to(
+            REPOSITORY_ROOT
+        ).as_posix()
         evidence_root = args.evidence_root.resolve()
         campaign_root = args.campaign_root.resolve()
         output_dir = args.output_dir.resolve()
@@ -499,7 +566,7 @@ def main(argv: list[str] | None = None) -> int:
 
         inputs, runs = claude_fw_f_v21_finalize.load_campaign(
             campaign_root,
-            expected_source_sha256=SOURCE_BUNDLE_SHA256,
+            expected_source_sha256=official_policy["source_bundle_sha256"],
             production_comparison_relative="environment/production-compare.json",
         )
         inputs["denominator_path"] = campaign_root / "candidate-denominator.json"
@@ -507,8 +574,10 @@ def main(argv: list[str] | None = None) -> int:
             campaign_root,
             inputs,
             runs,
-            expected_request_occurrence_count=EXPECTED_REQUEST_OCCURRENCES,
-            expected_endpoint_counts=EXPECTED_ENDPOINT_COUNTS,
+            expected_request_occurrence_count=official_policy[
+                "request_occurrence_count"
+            ],
+            expected_endpoint_counts=official_policy["endpoint_counts"],
         )
         revalidated = claude_fw_f_v21_finalize.revalidate_prior_atomic_rules(
             campaign_root, runs
@@ -529,13 +598,40 @@ def main(argv: list[str] | None = None) -> int:
             args.prior_candidate_resolutions.resolve(),
         )
 
-        manifest = load_json(args.required_rules.resolve())
-        required_rules, profile_owner, scenario_owner = validate_required_rules(manifest)
-        atomic = build_atomic_verification(measured, profile_owner, scenario_owner)
-        required = build_required_rule_verification(required_rules, atomic)
-        orthogonal = build_orthogonal_closure(dimensions, candidates)
+        required_rules_path = args.required_rules.resolve()
+        required_rules, profile_owner, scenario_owner = load_required_rules(
+            required_rules_path,
+            generation_policy["frozen_inputs"][
+                "required_rules_manifest_sha256"
+            ],
+            target,
+        )
+        atomic = build_atomic_verification(
+            measured,
+            profile_owner,
+            scenario_owner,
+            target,
+            official_policy,
+        )
+        required = build_required_rule_verification(
+            required_rules,
+            atomic,
+            target,
+            official_policy,
+        )
+        orthogonal = build_orthogonal_closure(
+            dimensions,
+            candidates,
+            official_policy,
+        )
         campaign = build_campaign_verification(
-            campaign_root, evidence_root, inputs, wire
+            campaign_root,
+            evidence_root,
+            inputs,
+            wire,
+            target,
+            official_policy,
+            generation_policy_ref,
         )
         producer = portable_binding(Path(__file__), evidence_root)
         documents = {
@@ -547,8 +643,9 @@ def main(argv: list[str] | None = None) -> int:
         }
         manifest_document = {
             "schema_version": "claude-code-fw-g-official-portable-manifest/v1",
-            "campaign_id": CAMPAIGN_ID,
+            "campaign_id": official_policy["campaign_id"],
             "producer": producer,
+            "generation_policy": generation_policy_ref,
             "artifacts": [
                 {
                     "path": name,
@@ -565,9 +662,16 @@ def main(argv: list[str] | None = None) -> int:
             "result": "passed",
         }
         documents["portable-manifest.json"] = manifest_document
-        documents["portable-secret-scan.json"] = scan_documents(documents)
+        documents["portable-secret-scan.json"] = scan_documents(
+            documents,
+            official_policy["campaign_id"],
+        )
         write_once(output_dir, documents)
-    except (OfficialFinalizeError, claude_fw_f_v21_finalize.FinalizeError) as exc:
+    except (
+        GenerationPolicyError,
+        OfficialFinalizeError,
+        claude_fw_f_v21_finalize.FinalizeError,
+    ) as exc:
         print(f"Claude FW-G 官方复测派生失败：{exc}", file=sys.stderr)
         return 1
 
@@ -575,12 +679,21 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(
             {
                 "result": "passed",
-                "campaign_id": CAMPAIGN_ID,
-                "probe_count": EXPECTED_PROBES,
-                "required_rule_count": EXPECTED_REQUIRED_RULES,
-                "profile_atomic_assertion_count": EXPECTED_PROFILE_ASSERTIONS,
-                "scenario_only_assertion_count": EXPECTED_SCENARIO_ASSERTIONS,
-                "candidate_count": EXPECTED_CANDIDATES,
+                "campaign_id": official_policy["campaign_id"],
+                "target_version": target["version"],
+                "generation_policy_identity_sha256": generation_policy[
+                    "identity_sha256"
+                ],
+                "probe_count": official_policy["probe_count"],
+                "required_rule_count": target["required_rule_count"],
+                "profile_atomic_assertion_count": target[
+                    "profile_atomic_assertion_count"
+                ],
+                "scenario_only_assertion_count": target[
+                    "total_atomic_assertion_count"
+                ]
+                - target["profile_atomic_assertion_count"],
+                "candidate_count": official_policy["candidate_count"],
                 "approval_issued": False,
             },
             ensure_ascii=False,

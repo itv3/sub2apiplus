@@ -210,6 +210,8 @@ func assertCompatibilityClosureFileDigest(
 		}
 	}
 	if got != expected &&
+		!upstreamMergeFrameworkTransitionSupersedesService(path, expected, got) &&
+		!upstreamMergeFrameworkTransitionSupersedesService(path, want, got) &&
 		!claudeFWGTestTransitionSupersedesService(path, expected, got) &&
 		!claudeFWGSourceTransitionSupersedesService(path, expected, got) &&
 		!versionLeakDebtTransitionSupersedes(path, want, got) &&

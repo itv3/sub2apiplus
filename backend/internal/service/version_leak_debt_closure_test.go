@@ -96,7 +96,10 @@ func TestVersionLeakDebtClosureIsComplete(t *testing.T) {
 			t.Fatal(err)
 		}
 		if got := versionLeakDebtDigest(raw); got != transition.ToSHA256 &&
-			!upstreamV0177SourceTransitionSupersedes(transition.Path, transition.ToSHA256, got) {
+			!upstreamV0177SourceTransitionSupersedes(transition.Path, transition.ToSHA256, got) &&
+			!upstreamMergeFrameworkTransitionSupersedesService(
+				transition.Path, transition.ToSHA256, got,
+			) {
 			t.Fatalf("版本泄漏源码摘要漂移：path=%s got=%s want=%s", transition.Path, got, transition.ToSHA256)
 		}
 	}

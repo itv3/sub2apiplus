@@ -170,7 +170,9 @@ func validateClaudeFWHThirdPartyStrictTransitionEntries(
 			) &&
 			!claudeFWHBareChatRouteTransitionSupersedes(
 				transition.Path, transition.ToSHA256, currentDigest,
-			) {
+			) && !upstreamMergeFrameworkTransitionSupersedes(
+			transition.Path, transition.ToSHA256, currentDigest,
+		) {
 			return errors.New("Claude FW-H 第三方 strict transition 当前摘要不一致")
 		}
 		paths = append(paths, transition.Path)
@@ -200,6 +202,9 @@ func claudeFWHThirdPartyStrictSourceTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if upstreamMergeFrameworkTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	if claudeFWHStateDurabilityTransitionSupersedes(path, priorDigest, currentDigest) {
 		return true
 	}

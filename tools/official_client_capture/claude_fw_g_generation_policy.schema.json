@@ -1,0 +1,268 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sub2apiplus.local/schemas/claude-fw-g-generation-policy-v2.json",
+  "title": "Claude FW-G Generation Policy v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "target",
+    "frozen_inputs",
+    "previous_release",
+    "tls",
+    "model_capability",
+    "official_finalize",
+    "acceptance",
+    "identity_sha256"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "claude-fw-g-generation-policy/v2"
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "version",
+        "required_rule_count",
+        "profile_atomic_assertion_count",
+        "total_atomic_assertion_count",
+        "strict_endpoint_count",
+        "models",
+        "efforts"
+      ],
+      "properties": {
+        "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "required_rule_count": {"type": "integer", "minimum": 1},
+        "profile_atomic_assertion_count": {"type": "integer", "minimum": 1},
+        "total_atomic_assertion_count": {"type": "integer", "minimum": 2},
+        "strict_endpoint_count": {"type": "integer", "minimum": 1},
+        "models": {"$ref": "#/$defs/nonEmptyUniqueStrings"},
+        "efforts": {"$ref": "#/$defs/nonEmptyUniqueStrings"}
+      }
+    },
+    "frozen_inputs": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "profile_sha256",
+        "required_rules_manifest_sha256",
+        "atomic_ledger_sha256",
+        "snapshot_sha256",
+        "evidence_package_sha256",
+        "support_envelope_sha256",
+        "messages_evidence_sha256",
+        "messages_body_sha256",
+        "tls_pcap_sha256",
+        "thinking_display_request_sha256",
+        "system_text_sha256"
+      ],
+      "properties": {
+        "profile_sha256": {"$ref": "#/$defs/sha256"},
+        "required_rules_manifest_sha256": {"$ref": "#/$defs/sha256"},
+        "atomic_ledger_sha256": {"$ref": "#/$defs/sha256"},
+        "snapshot_sha256": {"$ref": "#/$defs/sha256"},
+        "evidence_package_sha256": {"$ref": "#/$defs/sha256"},
+        "support_envelope_sha256": {"$ref": "#/$defs/sha256"},
+        "messages_evidence_sha256": {"$ref": "#/$defs/sha256"},
+        "messages_body_sha256": {"$ref": "#/$defs/sha256"},
+        "tls_pcap_sha256": {"$ref": "#/$defs/sha256"},
+        "thinking_display_request_sha256": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["summarized", "omitted"],
+          "properties": {
+            "summarized": {"$ref": "#/$defs/sha256"},
+            "omitted": {"$ref": "#/$defs/sha256"}
+          }
+        },
+        "system_text_sha256": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {"$ref": "#/$defs/sha256"}
+        }
+      }
+    },
+    "previous_release": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["wire_sha256", "release_sha256", "bundle_sha256"],
+      "properties": {
+        "wire_sha256": {"$ref": "#/$defs/sha256"},
+        "release_sha256": {"$ref": "#/$defs/sha256"},
+        "bundle_sha256": {"$ref": "#/$defs/sha256"}
+      }
+    },
+    "tls": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "cipher_suites",
+        "supported_groups",
+        "point_formats",
+        "signature_algorithms",
+        "supported_versions",
+        "key_share_groups",
+        "psk_modes",
+        "with_alpn_extensions",
+        "without_alpn_extensions"
+      ],
+      "properties": {
+        "cipher_suites": {"$ref": "#/$defs/integerVector"},
+        "supported_groups": {"$ref": "#/$defs/integerVector"},
+        "point_formats": {"$ref": "#/$defs/integerVector"},
+        "signature_algorithms": {"$ref": "#/$defs/integerVector"},
+        "supported_versions": {"$ref": "#/$defs/integerVector"},
+        "key_share_groups": {"$ref": "#/$defs/integerVector"},
+        "psk_modes": {"$ref": "#/$defs/integerVector"},
+        "with_alpn_extensions": {"$ref": "#/$defs/integerVector"},
+        "without_alpn_extensions": {"$ref": "#/$defs/integerVector"}
+      }
+    },
+    "model_capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "successful_attempts",
+        "historical_failed_attempt_ids",
+        "base_commit",
+        "prior_transitions",
+        "source_transitions"
+      ],
+      "properties": {
+        "successful_attempts": {"type": "integer", "minimum": 1},
+        "historical_failed_attempt_ids": {"$ref": "#/$defs/nonEmptyUniqueStrings"},
+        "base_commit": {"$ref": "#/$defs/gitObject"},
+        "prior_transitions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "sha256"],
+            "properties": {
+              "path": {"$ref": "#/$defs/relativePath"},
+              "sha256": {"$ref": "#/$defs/sha256"}
+            }
+          }
+        },
+        "source_transitions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["path", "from_sha256", "reason"],
+            "properties": {
+              "path": {"$ref": "#/$defs/relativePath"},
+              "from_sha256": {"$ref": "#/$defs/sha256"},
+              "reason": {"type": "string", "minLength": 1}
+            }
+          }
+        }
+      }
+    },
+    "official_finalize": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "campaign_id",
+        "campaign_sha256",
+        "source_bundle_sha256",
+        "target_binary_sha256",
+        "implementation_base_commit",
+        "probe_count",
+        "candidate_count",
+        "dimension_count",
+        "request_occurrence_count",
+        "endpoint_counts"
+      ],
+      "properties": {
+        "campaign_id": {"$ref": "#/$defs/safeId"},
+        "campaign_sha256": {"$ref": "#/$defs/sha256"},
+        "source_bundle_sha256": {"$ref": "#/$defs/sha256"},
+        "target_binary_sha256": {"$ref": "#/$defs/sha256"},
+        "implementation_base_commit": {"$ref": "#/$defs/gitObject"},
+        "probe_count": {"type": "integer", "minimum": 1},
+        "candidate_count": {"type": "integer", "minimum": 1},
+        "dimension_count": {"type": "integer", "minimum": 1},
+        "request_occurrence_count": {"type": "integer", "minimum": 1},
+        "endpoint_counts": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {"type": "integer", "minimum": 1}
+        }
+      }
+    },
+    "acceptance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "campaign_id",
+        "candidate_id",
+        "candidate_commit",
+        "candidate_tree",
+        "candidate_image_digest",
+        "candidate_profile_sha256",
+        "candidate_wire_sha256",
+        "candidate_release_sha256",
+        "candidate_release_bundle_sha256",
+        "candidate_source_tree_sha256",
+        "candidate_test_tree_sha256",
+        "candidate_dependency_lock_sha256",
+        "official_probe_count",
+        "official_request_count",
+        "official_candidate_count",
+        "official_dimension_count",
+        "reviewer",
+        "review_ref",
+        "response_compatibility_fact_id"
+      ],
+      "properties": {
+        "campaign_id": {"$ref": "#/$defs/safeId"},
+        "candidate_id": {"$ref": "#/$defs/safeId"},
+        "candidate_commit": {"$ref": "#/$defs/gitObject"},
+        "candidate_tree": {"$ref": "#/$defs/gitObject"},
+        "candidate_image_digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
+        "candidate_profile_sha256": {"$ref": "#/$defs/sha256"},
+        "candidate_wire_sha256": {"$ref": "#/$defs/sha256"},
+        "candidate_release_sha256": {"$ref": "#/$defs/sha256"},
+        "candidate_release_bundle_sha256": {"$ref": "#/$defs/sha256"},
+        "candidate_source_tree_sha256": {"$ref": "#/$defs/sha256"},
+        "candidate_test_tree_sha256": {"$ref": "#/$defs/sha256"},
+        "candidate_dependency_lock_sha256": {"$ref": "#/$defs/sha256"},
+        "official_probe_count": {"type": "integer", "minimum": 1},
+        "official_request_count": {"type": "integer", "minimum": 1},
+        "official_candidate_count": {"type": "integer", "minimum": 1},
+        "official_dimension_count": {"type": "integer", "minimum": 1},
+        "reviewer": {"$ref": "#/$defs/safeId"},
+        "review_ref": {"$ref": "#/$defs/safeId"},
+        "response_compatibility_fact_id": {"$ref": "#/$defs/safeId"}
+      }
+    },
+    "identity_sha256": {"$ref": "#/$defs/sha256"}
+  },
+  "$defs": {
+    "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "gitObject": {"type": "string", "pattern": "^[0-9a-f]{40}$"},
+    "safeId": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,191}$"},
+    "relativePath": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+    },
+    "nonEmptyUniqueStrings": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1}
+    },
+    "integerVector": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": {"type": "integer", "minimum": 0}
+    }
+  }
+}

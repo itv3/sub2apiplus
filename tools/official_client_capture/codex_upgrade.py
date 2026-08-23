@@ -76,6 +76,7 @@ from tools.official_client_capture.codex_upgrade_environment_probe import (
     STATE_FILES as ENVIRONMENT_STATE_FILES,
     run_probe as run_environment_probe,
 )
+from tools.official_client_capture import codex_upgrade_gate_receipt as external_gate_receipt
 from tools.official_client_capture.codex_upgrade_receipt_finalizer import (
     CLIENT_BINDING_SCHEMA as FINALIZED_CLIENT_BINDING_SCHEMA,
     OBSERVED_PROFILE_SCHEMA as FINALIZED_OBSERVED_PROFILE_SCHEMA,
@@ -2320,6 +2321,18 @@ def _build_parser() -> argparse.ArgumentParser:
     accept = subparsers.add_parser("accept", help="执行逐规则正式验收门禁")
     add_candidate_reference(accept)
     accept.add_argument("--assertions", type=Path)
+    accept.add_argument(
+        "--external-gate-root",
+        type=Path,
+        required=True,
+        help="candidate 外部门禁收据所在的 0700 evidence root",
+    )
+    accept.add_argument(
+        "--external-gate-receipt",
+        type=Path,
+        required=True,
+        help="由独立 finalizer 生成并可重放的 candidate_external 收据",
+    )
 
     all_command = subparsers.add_parser(
         "all", help="兼容入口：对已批准画像只启动一次候选 run"
@@ -2349,6 +2362,8 @@ def _build_parser() -> argparse.ArgumentParser:
     resume.add_argument("--profile-id")
     resume.add_argument("--profile-digest")
     resume.add_argument("--assertions", type=Path)
+    resume.add_argument("--external-gate-root", type=Path)
+    resume.add_argument("--external-gate-receipt", type=Path)
     resume.add_argument("--rerun-failed", action="store_true")
     resume.add_argument("--acknowledge-live-requests", action="store_true")
     return parser
@@ -3402,6 +3417,31 @@ def _validate_stage_contract(document: dict[str, Any]) -> None:
     if stage == "accept" and status == "complete":
         _require_file_binding(document.get("assertion_result"), "逐规则断言结果")
         _require_file_binding(document.get("evidence_seal"), "验收证据封印")
+        external_gate = document.get("candidate_external_gate")
+        if (
+            not isinstance(external_gate, dict)
+            or set(external_gate) != {"evidence_root", "receipt"}
+            or not isinstance(external_gate.get("evidence_root"), str)
+            or not isinstance(external_gate.get("receipt"), dict)
+            or set(external_gate["receipt"]) != {"path", "sha256", "bytes"}
+        ):
+            raise ConfigurationError("验收阶段缺少 candidate 外部门禁绑定。")
+        identity = document.get("candidate_identity")
+        if (
+            not isinstance(identity, dict)
+            or set(identity)
+            != {
+                "source_tree_sha256",
+                "image_id",
+                "image_reference",
+                "build_id",
+                "deployed_version",
+            }
+            or not SHA256_RE.fullmatch(str(identity.get("source_tree_sha256", "")))
+            or not IMAGE_ID_RE.fullmatch(str(identity.get("image_id", "")))
+            or not IMMUTABLE_IMAGE_RE.fullmatch(str(identity.get("image_reference", "")))
+        ):
+            raise ConfigurationError("验收阶段 candidate 身份投影非法。")
 
 
 def save_stage_result(
@@ -3531,6 +3571,27 @@ def _load_stage_result(
         )
         if payload.get("joint_manifest_sha256") != expected_joint:
             raise ConfigurationError("分类五件套联合摘要不一致。")
+    if canonical == "accept" and payload.get("status") == "complete":
+        candidate = _load_stage_result(
+            campaign_dir,
+            "capture-candidate",
+            candidate_id,
+        )
+        _replay_bound_candidate_external_gate(
+            payload.get("candidate_external_gate"),
+            manifest=campaign_manifest,
+            candidate_id=str(candidate_id),
+            candidate=candidate,
+        )
+        seal_path = _campaign_file(
+            campaign_dir,
+            str(payload["evidence_seal"]["path"]),
+        )
+        seal = _read_json(seal_path, "验收证据封印")
+        if seal.get("candidate_external_gate") != payload.get(
+            "candidate_external_gate"
+        ):
+            raise ConfigurationError("验收证据封印未绑定同一 candidate 外部门禁。")
     return payload
 
 
@@ -8736,10 +8797,102 @@ def _write_blocked_acceptance_attempt(
     return attempt_root
 
 
+def _candidate_external_gate_binding(
+    *,
+    evidence_root: Path,
+    receipt_path: Path,
+    manifest: dict[str, Any],
+    candidate_id: str,
+    candidate: dict[str, Any],
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """独立重放 candidate 外部门禁，并与封存候选身份逐字段交叉验证。"""
+
+    try:
+        root = evidence_root.resolve(strict=True)
+        candidate_receipt = (
+            receipt_path.resolve(strict=True)
+            if receipt_path.is_absolute()
+            else (root / receipt_path).resolve(strict=True)
+        )
+        relative = candidate_receipt.relative_to(root).as_posix()
+        payload = external_gate_receipt.replay(root, relative)
+    except (
+        OSError,
+        RuntimeError,
+        ValueError,
+        external_gate_receipt.GateReceiptError,
+    ) as error:
+        raise ConfigurationError(f"candidate 外部门禁收据无法重放：{error}") from error
+    identity = candidate.get("identity")
+    subject = payload.get("subject")
+    if not isinstance(identity, dict) or not isinstance(subject, dict):
+        raise ConfigurationError("candidate 外部门禁缺少候选身份。")
+    expected = {
+        "campaign_id": manifest.get("campaign_id"),
+        "candidate_id": candidate_id,
+        "target_version": manifest.get("target_version"),
+        "profile_id": identity.get("profile_id"),
+        "profile_digest": identity.get("profile_digest"),
+        "candidate_package_digest": candidate.get("package_digest"),
+        "candidate_source_tree_sha256": identity.get("source_tree_sha256"),
+        "candidate_image_id": identity.get("image_id"),
+        "candidate_image_reference": identity.get("image_reference"),
+    }
+    if payload.get("phase") != external_gate_receipt.CANDIDATE_PHASE or any(
+        subject.get(key) != value for key, value in expected.items()
+    ):
+        raise ConfigurationError("candidate 外部门禁收据与 Campaign／候选身份不一致。")
+    binding = {
+        "evidence_root": str(root),
+        "receipt": {
+            "path": relative,
+            "sha256": file_sha256(candidate_receipt),
+            "bytes": candidate_receipt.stat().st_size,
+        },
+    }
+    return binding, payload
+
+
+def _replay_bound_candidate_external_gate(
+    value: Any,
+    *,
+    manifest: dict[str, Any],
+    candidate_id: str,
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
+    """从 AcceptanceFact 保存的根与相对路径重放外部门禁。"""
+
+    if not isinstance(value, dict) or set(value) != {"evidence_root", "receipt"}:
+        raise ConfigurationError("AcceptanceFact candidate 外部门禁绑定非法。")
+    receipt = value.get("receipt")
+    if (
+        not isinstance(value.get("evidence_root"), str)
+        or not isinstance(receipt, dict)
+        or set(receipt) != {"path", "sha256", "bytes"}
+        or not isinstance(receipt.get("path"), str)
+        or not SHA256_RE.fullmatch(str(receipt.get("sha256")))
+        or not isinstance(receipt.get("bytes"), int)
+        or receipt.get("bytes") <= 0
+    ):
+        raise ConfigurationError("AcceptanceFact candidate 外部门禁文件绑定非法。")
+    binding, payload = _candidate_external_gate_binding(
+        evidence_root=Path(value["evidence_root"]),
+        receipt_path=Path(receipt["path"]),
+        manifest=manifest,
+        candidate_id=candidate_id,
+        candidate=candidate,
+    )
+    if binding != value:
+        raise ConfigurationError("AcceptanceFact candidate 外部门禁摘要或大小漂移。")
+    return payload
+
+
 def accept_campaign(
     campaign_dir: Path,
     candidate_id: str,
     assertions_path: Path,
+    external_gate_root: Path,
+    external_gate_path: Path,
 ) -> dict[str, Any]:
     _reject_contaminated_campaign(campaign_dir)
     if assertions_path.is_symlink() or not assertions_path.is_file():
@@ -8752,6 +8905,13 @@ def accept_campaign(
         campaign_dir, "capture-candidate", candidate_id
     )
     comparison = _load_stage_result(campaign_dir, "compare", candidate_id)
+    external_gate_binding, external_gate = _candidate_external_gate_binding(
+        evidence_root=external_gate_root,
+        receipt_path=external_gate_path,
+        manifest=manifest,
+        candidate_id=candidate_id,
+        candidate=candidate,
+    )
     _verify_stage_evidence(official, "官方")
     _verify_stage_evidence(candidate, "候选")
     rules = _approved_rules(campaign_dir, manifest, require_approved=True)
@@ -8902,6 +9062,8 @@ def accept_campaign(
         and _fingerprint({"items": client_bindings})
         == _fingerprint({"items": reparsed_client_bindings})
         and required_clients.issubset(observed_clients),
+        "candidate_external_gate_complete": external_gate.get("phase")
+        == external_gate_receipt.CANDIDATE_PHASE,
     }
     accepted = all(gates.values())
     result = {
@@ -8921,6 +9083,14 @@ def accept_campaign(
         "classification_package_digest": classification["package_digest"],
         "official_evidence_inventory_digest": official_inventory_digest,
         "candidate_evidence_inventory_digest": candidate_inventory_digest,
+        "candidate_identity": {
+            "source_tree_sha256": identity.get("source_tree_sha256"),
+            "image_id": identity.get("image_id"),
+            "image_reference": identity.get("image_reference"),
+            "build_id": identity.get("build_id"),
+            "deployed_version": identity.get("deployed_version"),
+        },
+        "candidate_external_gate": external_gate_binding,
         # 保留原始集合是否逐项相等的诊断事实，但不把不同采集计划造成的差集伪装成失败。
         "equal": bool(comparison.get("equal")),
     }
@@ -8950,6 +9120,7 @@ def accept_campaign(
             "candidate_package_digest": candidate["package_digest"],
             "comparison_package_digest": comparison["package_digest"],
             "assertion_result": assertion_binding,
+            "candidate_external_gate": external_gate_binding,
             "official_evidence_inventory_digest": official_inventory_digest,
             "candidate_evidence_inventory_digest": candidate_inventory_digest,
         }
@@ -9104,11 +9275,20 @@ def _resume_campaign(arguments: argparse.Namespace) -> tuple[dict[str, Any], int
     if current == "compared":
         if not arguments.candidate_id:
             raise ConfigurationError("resume accept 必须指定 --candidate-id。")
+        if not arguments.external_gate_root or not arguments.external_gate_receipt:
+            raise ConfigurationError(
+                "resume accept 必须提供 --external-gate-root 和 "
+                "--external-gate-receipt。"
+            )
         assertions = arguments.assertions or _default_assertions_path(
             arguments.campaign_dir, arguments.candidate_id
         )
         result = accept_campaign(
-            arguments.campaign_dir, arguments.candidate_id, assertions
+            arguments.campaign_dir,
+            arguments.candidate_id,
+            assertions,
+            arguments.external_gate_root,
+            arguments.external_gate_receipt,
         )
         return result, 0 if result["accepted"] else 2
     return status, 0
@@ -9181,7 +9361,11 @@ def main(argv: list[str] | None = None) -> int:
                 arguments.campaign_dir, arguments.candidate_id
             )
             result = accept_campaign(
-                arguments.campaign_dir, arguments.candidate_id, assertions
+                arguments.campaign_dir,
+                arguments.candidate_id,
+                assertions,
+                arguments.external_gate_root,
+                arguments.external_gate_receipt,
             )
             return_code = 0 if result["accepted"] else 2
         elif command == "all":

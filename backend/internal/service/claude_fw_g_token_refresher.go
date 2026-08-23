@@ -22,6 +22,21 @@ type claudeFWGTokenRefresher struct {
 	proxyRepo ProxyRepository
 }
 
+type claudeFWGOAuthRefreshStatusError struct {
+	statusCode int
+	oauthCode  string
+}
+
+func (e *claudeFWGOAuthRefreshStatusError) Error() string {
+	if e == nil || e.statusCode <= 0 {
+		return "Claude FW-G refresh 上游状态未知"
+	}
+	if e.oauthCode != "" {
+		return fmt.Sprintf("Claude FW-G refresh 上游状态 %d：%s", e.statusCode, e.oauthCode)
+	}
+	return fmt.Sprintf("Claude FW-G refresh 上游状态 %d", e.statusCode)
+}
+
 func newClaudeFWGTokenRefresher(
 	legacy *ClaudeTokenRefresher,
 	runtime *officialegress.ClaudeCandidateRuntime,
@@ -112,8 +127,7 @@ func (r *claudeFWGTokenRefresher) Refresh(
 	}
 	defer func() { _ = response.Body.Close() }()
 	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
-		return nil, fmt.Errorf("Claude FW-G refresh 上游状态 %d", response.StatusCode)
+		return nil, decodeClaudeFWGOAuthRefreshStatusError(response)
 	}
 	var tokenResponse struct {
 		AccessToken  string `json:"access_token"`
@@ -144,6 +158,38 @@ func (r *claudeFWGTokenRefresher) Refresh(
 		Scope:        tokenResponse.Scope,
 	}
 	return MergeCredentials(account.Credentials, BuildClaudeAccountCredentials(tokenInfo)), nil
+}
+
+func decodeClaudeFWGOAuthRefreshStatusError(response *http.Response) error {
+	if response == nil {
+		return &claudeFWGOAuthRefreshStatusError{}
+	}
+	payload := struct {
+		Error string `json:"error"`
+	}{}
+	_ = json.NewDecoder(io.LimitReader(response.Body, 64<<10)).Decode(&payload)
+	return &claudeFWGOAuthRefreshStatusError{
+		statusCode: response.StatusCode,
+		oauthCode:  normalizeClaudeFWGOAuthErrorCode(payload.Error),
+	}
+}
+
+// normalizeClaudeFWGOAuthErrorCode 只允许 OAuth 错误码字符进入内部错误链，
+// 避免把上游响应正文、描述或凭据带入日志与管理接口。
+func normalizeClaudeFWGOAuthErrorCode(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || len(value) > 128 {
+		return ""
+	}
+	for index := 0; index < len(value); index++ {
+		char := value[index]
+		if char >= 'a' && char <= 'z' || char >= 'A' && char <= 'Z' ||
+			char >= '0' && char <= '9' || char == '_' || char == '-' || char == '.' {
+			continue
+		}
+		return ""
+	}
+	return value
 }
 
 func (r *claudeFWGTokenRefresher) resolveProxyURL(

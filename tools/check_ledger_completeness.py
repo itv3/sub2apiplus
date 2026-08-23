@@ -2,7 +2,8 @@
 """检查 §3.5 人工合并缝与机器精确台账是否覆盖 Codex/OpenAI 出站定型面。
 
 §5.1 要求每次合并上游后刷新台账。文档只保留少量高风险合并缝；完整路径集合由本脚本
-相对冻结 upstream commit 自动复算，并与结构化 JSON 比对，避免继续人工维护几十行路径。
+相对 UpstreamMergePlan 冻结的 upstream commit 自动复算，并与结构化 JSON 比对，避免继续
+人工维护几十行路径。目标 tag、commit 和输出位置只能来自不可变计划，工具本身不保存版本事实。
 
 判据是「生产 Go 代码中引用了 Codex/OpenAI 出站定型专属符号」。该判据刻意不使用
 通用的 OfficialEgress 前缀：那个前缀同时覆盖 Anthropic 画像，会把 §1.1 明确排除
@@ -11,7 +12,8 @@
 
 用法：
 
-    python3 tools/check_ledger_completeness.py
+    python3 tools/check_ledger_completeness.py \
+      --upstream-merge-plan docs/egress/maintenance/upstream-<tag>-merge-plan.json
 """
 
 from __future__ import annotations
@@ -23,6 +25,9 @@ import pathlib
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
+from pathlib import PurePosixPath
+from typing import Callable
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 SPEC = ROOT / "docs" / "CODEX_CLI_CLIENT_EMULATION_GUIDE.md"
@@ -30,10 +35,26 @@ SCAN_ROOT = ROOT / "backend"
 INVENTORY = ROOT / "docs" / "egress" / "consolidation" / "egress-surface-inventory.json"
 CHANGESET6_TRANSITION = ROOT / "docs" / "egress" / "validation" / "egress-surface-transition.json"
 MAINTENANCE_RETIREMENT = ROOT / "docs" / "egress" / "maintenance" / "official-egress-consolidation-retirement.json"
-UPSTREAM_MERGE_LEDGER = ROOT / "docs" / "egress" / "maintenance" / "upstream-v0.1.177-egress-merge-ledger.json"
 MAINTENANCE_RETIREMENT_SHA256 = "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36"
-CURRENT_UPSTREAM_TAG = "v0.1.177"
-CURRENT_UPSTREAM_BASE = "073e92d17178a1ccdb0a27017f572f10c9c7ab62"
+UPSTREAM_MERGE_PLAN_SCHEMA = "official-egress-upstream-merge-plan/v1"
+UPSTREAM_MERGE_PLAN_SCHEMA_V2 = "official-egress-upstream-merge-plan/v2"
+UPSTREAM_MERGE_PLAN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+UPSTREAM_TAG_RE = re.compile(r"^v[0-9]+\.[0-9]+\.[0-9]+(?:[-+][A-Za-z0-9.-]+)?$")
+GIT_COMMIT_RE = re.compile(r"^[0-9a-f]{40}$")
+SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
+
+
+@dataclass(frozen=True)
+class UpstreamMergePlan:
+    """台账生成器实际消费的不可变上游计划投影。"""
+
+    plan_id: str
+    upstream_url: str
+    upstream_tag: str
+    upstream_commit: str
+    ledger_relative: str
+    ledger_path: pathlib.Path
+    identity_sha256: str
 
 # 这些文件直接改变 Codex body、namespace、能力、身份、连接或 Guard，但不一定
 # 命中 SURFACE_RE。单独冻结必要集合，防止人工表格在保持总数不变时用无关路径替换。
@@ -60,7 +81,7 @@ REQUIRED_REVIEW_TOUCHPOINTS = {
     "backend/internal/service/official_egress_upstream_identity_bridge.go",
 }
 
-# 上游 v0.1.177 继承的身份发现/归一化基础设施不一定直接命中 strict surface 扫描，
+# 上游继承的身份发现／归一化基础设施不一定直接命中 strict surface 扫描，
 # 但它们决定“发现值是否能越权成为 active wire 身份”，必须进入机器合并台账。
 IDENTITY_BOUNDARY_TOUCHPOINTS = {
     "backend/internal/handler/admin/setting_handler.go",
@@ -156,6 +177,214 @@ def ledger_subsection(ledger: str, heading: str, next_heading: str) -> str:
     return ledger[start:end]
 
 
+def _unique_json_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    """拒绝重复键，避免计划或台账产生多重解释。"""
+
+    result: dict[str, object] = {}
+    for key, value in pairs:
+        if key in result:
+            raise RuntimeError(f"JSON 对象包含重复字段：{key}")
+        result[key] = value
+    return result
+
+
+def _expect_exact_fields(
+    value: object,
+    expected: set[str],
+    label: str,
+) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise RuntimeError(f"{label}必须是对象")
+    actual = set(value)
+    if actual != expected:
+        raise RuntimeError(
+            f"{label}字段不闭合：缺失={sorted(expected - actual)}，"
+            f"多余={sorted(actual - expected)}"
+        )
+    return value
+
+
+def upstream_merge_plan_identity(document: dict[str, object]) -> str:
+    """复算排除自摘要字段后的计划身份。"""
+
+    payload = {key: value for key, value in document.items() if key != "identity_sha256"}
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(canonical).hexdigest()
+
+
+def resolve_tag_commit(repository_root: pathlib.Path, tag: str) -> str:
+    """只从本地 Git 对象库解析 tag，禁止以网络最新值补足计划。"""
+
+    completed = subprocess.run(
+        ["git", "rev-parse", "--verify", f"refs/tags/{tag}^{{commit}}"],
+        cwd=repository_root,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        check=False,
+    )
+    resolved = completed.stdout.strip()
+    if completed.returncode != 0 or not GIT_COMMIT_RE.fullmatch(resolved):
+        detail = completed.stderr.strip() or f"退出码 {completed.returncode}"
+        raise RuntimeError(f"无法从本地 Git 解析 upstream tag {tag}：{detail}")
+    return resolved
+
+
+def _safe_plan_output(
+    repository_root: pathlib.Path,
+    raw_path: object,
+    upstream_tag: str,
+) -> tuple[str, pathlib.Path]:
+    if not isinstance(raw_path, str) or not raw_path or "\\" in raw_path:
+        raise RuntimeError("UpstreamMergePlan 台账输出路径必须是非空 POSIX 相对路径")
+    relative = PurePosixPath(raw_path)
+    if (
+        relative.is_absolute()
+        or str(relative) != raw_path
+        or any(part in {"", ".", ".."} for part in relative.parts)
+    ):
+        raise RuntimeError("UpstreamMergePlan 台账输出路径不规范或发生目录逃逸")
+    expected = (
+        f"docs/egress/maintenance/upstream-{upstream_tag}-egress-merge-ledger.json"
+    )
+    if raw_path != expected:
+        raise RuntimeError(
+            "UpstreamMergePlan 台账输出路径必须按目标 tag 使用不可变命名："
+            f"{expected}"
+        )
+    output = repository_root.joinpath(*relative.parts)
+    current = repository_root
+    for part in relative.parts[:-1]:
+        current /= part
+        if current.is_symlink():
+            raise RuntimeError(f"UpstreamMergePlan 台账输出父路径包含符号链接：{current}")
+    if output.is_symlink():
+        raise RuntimeError("UpstreamMergePlan 台账输出不能是符号链接")
+    return raw_path, output
+
+
+def load_upstream_merge_plan(
+    plan_path: pathlib.Path,
+    *,
+    repository_root: pathlib.Path = ROOT,
+    tag_resolver: Callable[[pathlib.Path, str], str] = resolve_tag_commit,
+) -> UpstreamMergePlan:
+    """加载、复算并交叉验证不可变 UpstreamMergePlan。"""
+
+    if plan_path.is_symlink() or not plan_path.is_file():
+        raise RuntimeError(f"UpstreamMergePlan 必须是可信普通文件：{plan_path}")
+    try:
+        document = json.loads(
+            plan_path.read_text(encoding="utf-8"),
+            object_pairs_hook=_unique_json_object,
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"无法读取 UpstreamMergePlan：{exc}") from exc
+    if isinstance(document, dict) and document.get("schema_version") == UPSTREAM_MERGE_PLAN_SCHEMA_V2:
+        # v2 的其余字段由统一状态机完整验证；本工具只消费其中的 Codex overlay 投影。
+        # 不能只在这里挑出 tag/commit，否则会让缺失 U-0 基线的伪计划绕过完整合同。
+        repository_text = str(repository_root.resolve())
+        if repository_text not in sys.path:
+            sys.path.insert(0, repository_text)
+        try:
+            from tools.upstream_merge.contracts import load_plan as load_complete_plan
+            from tools.upstream_merge.errors import UpstreamMergeError
+
+            complete = load_complete_plan(
+                plan_path.resolve(),
+                repository_root.resolve(),
+                allow_execution_worktree=True,
+            )
+        except (ImportError, UpstreamMergeError) as exc:
+            raise RuntimeError(f"完整 UpstreamMergePlan v2 校验失败：{exc}") from exc
+        upstream = complete.document["upstream"]
+        outputs = complete.document["outputs"]
+        ledger_relative, ledger_path = _safe_plan_output(
+            repository_root,
+            outputs.get("codex_overlay_ledger"),
+            upstream["tag"],
+        )
+        return UpstreamMergePlan(
+            plan_id=complete.plan_id,
+            upstream_url=upstream["url"],
+            upstream_tag=upstream["tag"],
+            upstream_commit=upstream["commit"],
+            ledger_relative=ledger_relative,
+            ledger_path=ledger_path,
+            identity_sha256=complete.identity,
+        )
+    plan = _expect_exact_fields(
+        document,
+        {
+            "schema_version",
+            "plan_id",
+            "purpose",
+            "upstream",
+            "outputs",
+            "identity_sha256",
+        },
+        "UpstreamMergePlan",
+    )
+    if plan.get("schema_version") != UPSTREAM_MERGE_PLAN_SCHEMA:
+        raise RuntimeError("UpstreamMergePlan schema_version 非法")
+    plan_id = plan.get("plan_id")
+    if not isinstance(plan_id, str) or not UPSTREAM_MERGE_PLAN_ID_RE.fullmatch(plan_id):
+        raise RuntimeError("UpstreamMergePlan plan_id 非法")
+    if plan.get("purpose") not in {"baseline_replay", "upstream_merge"}:
+        raise RuntimeError("UpstreamMergePlan purpose 非法")
+    identity = plan.get("identity_sha256")
+    if not isinstance(identity, str) or not SHA256_RE.fullmatch(identity):
+        raise RuntimeError("UpstreamMergePlan identity_sha256 非法")
+    if upstream_merge_plan_identity(plan) != identity:
+        raise RuntimeError("UpstreamMergePlan identity_sha256 漂移")
+
+    upstream = _expect_exact_fields(
+        plan.get("upstream"), {"url", "tag", "commit"}, "UpstreamMergePlan.upstream"
+    )
+    upstream_url = upstream.get("url")
+    upstream_tag = upstream.get("tag")
+    upstream_commit = upstream.get("commit")
+    if (
+        not isinstance(upstream_url, str)
+        or not upstream_url.startswith("https://")
+        or upstream_url != upstream_url.strip()
+    ):
+        raise RuntimeError("UpstreamMergePlan upstream.url 必须是非空 HTTPS URL")
+    if not isinstance(upstream_tag, str) or not UPSTREAM_TAG_RE.fullmatch(upstream_tag):
+        raise RuntimeError("UpstreamMergePlan upstream.tag 不是受支持的版本 tag")
+    if not isinstance(upstream_commit, str) or not GIT_COMMIT_RE.fullmatch(upstream_commit):
+        raise RuntimeError("UpstreamMergePlan upstream.commit 不是完整 Git commit")
+    resolved_commit = tag_resolver(repository_root, upstream_tag)
+    if resolved_commit != upstream_commit:
+        raise RuntimeError(
+            "UpstreamMergePlan tag／commit 不匹配："
+            f"tag={upstream_tag} resolved={resolved_commit} planned={upstream_commit}"
+        )
+
+    outputs = _expect_exact_fields(
+        plan.get("outputs"), {"egress_merge_ledger"}, "UpstreamMergePlan.outputs"
+    )
+    ledger_relative, ledger_path = _safe_plan_output(
+        repository_root,
+        outputs.get("egress_merge_ledger"),
+        upstream_tag,
+    )
+    return UpstreamMergePlan(
+        plan_id=plan_id,
+        upstream_url=upstream_url,
+        upstream_tag=upstream_tag,
+        upstream_commit=upstream_commit,
+        ledger_relative=ledger_relative,
+        ledger_path=ledger_path,
+        identity_sha256=identity,
+    )
+
+
 def git_path_exists(commit: str, path: str) -> bool:
     result = subprocess.run(
         ["git", "cat-file", "-e", f"{commit}:{path}"],
@@ -192,7 +421,10 @@ def validate_human_ledger(ledger: str) -> None:
             raise RuntimeError(f"§3.5.2 高风险合并缝不是普通文件：{path}")
 
 
-def current_upstream_merge_entries(surface: list[str]) -> list[dict[str, object]]:
+def current_upstream_merge_entries(
+    surface: list[str],
+    upstream_commit: str,
+) -> list[dict[str, object]]:
     """生成相对当前 upstream 基线的 Codex 出站 overlay 精确闭集。"""
 
     strict_surface = set(surface) - set(SCOPE_EXCLUSIONS)
@@ -201,7 +433,7 @@ def current_upstream_merge_entries(surface: list[str]) -> list[dict[str, object]
     for path in sorted(candidates):
         if not (ROOT / path).is_file():
             raise RuntimeError(f"机器合并台账候选不是普通文件：{path}")
-        if not git_path_differs(CURRENT_UPSTREAM_BASE, path):
+        if not git_path_differs(upstream_commit, path):
             continue
         scopes: list[str] = []
         if path in strict_surface:
@@ -213,21 +445,24 @@ def current_upstream_merge_entries(surface: list[str]) -> list[dict[str, object]
         entries.append(
             {
                 "path": path,
-                "source": "upstream" if git_path_exists(CURRENT_UPSTREAM_BASE, path) else "fork",
+                "source": "upstream" if git_path_exists(upstream_commit, path) else "fork",
                 "scopes": scopes,
             }
         )
     return entries
 
 
-def upstream_merge_ledger_payload(entries: list[dict[str, object]]) -> dict[str, object]:
+def upstream_merge_ledger_payload(
+    entries: list[dict[str, object]],
+    plan: UpstreamMergePlan,
+) -> dict[str, object]:
     """构造可精确重放的 upstream overlay 台账。"""
 
     canonical = json.dumps(entries, ensure_ascii=False, separators=(",", ":")).encode()
     return {
         "schema_version": "upstream-egress-merge-ledger/v1",
-        "upstream_tag": CURRENT_UPSTREAM_TAG,
-        "upstream_commit": CURRENT_UPSTREAM_BASE,
+        "upstream_tag": plan.upstream_tag,
+        "upstream_commit": plan.upstream_commit,
         "generation_rule": "strict_surface ∪ required_review_touchpoint ∪ identity_boundary 中相对 upstream 有差异的普通文件",
         "overlay_count": len(entries),
         "overlay_sha256": sha256(canonical),
@@ -235,21 +470,44 @@ def upstream_merge_ledger_payload(entries: list[dict[str, object]]) -> dict[str,
     }
 
 
-def validate_upstream_merge_ledger(expected: dict[str, object]) -> None:
+def validate_upstream_merge_ledger(
+    ledger_path: pathlib.Path,
+    expected: dict[str, object],
+    upstream_tag: str,
+) -> None:
     """要求结构化台账与当前工作树复算结果逐字段一致。"""
 
     try:
-        actual = json.loads(UPSTREAM_MERGE_LEDGER.read_text(encoding="utf-8"))
+        actual = json.loads(
+            ledger_path.read_text(encoding="utf-8"),
+            object_pairs_hook=_unique_json_object,
+        )
     except (OSError, json.JSONDecodeError) as exc:
         raise RuntimeError(
-            "无法读取 v0.1.177 机器合并台账；请先运行 "
-            "python3 tools/check_ledger_completeness.py --write-upstream-merge-ledger："
+            f"无法读取 {upstream_tag} 机器合并台账；请使用同一 UpstreamMergePlan 运行 "
+            "check_ledger_completeness.py --write-upstream-merge-ledger："
             f"{exc}"
         ) from exc
     if actual != expected:
         raise RuntimeError(
-            "v0.1.177 机器合并台账与当前源码 overlay 不一致；请重生成后审阅 JSON 差异"
+            f"{upstream_tag} 机器合并台账与当前源码 overlay 不一致；"
+            "必须为新计划生成新路径，禁止覆盖历史台账"
         )
+
+
+def write_json_once(path: pathlib.Path, payload: dict[str, object]) -> None:
+    """只允许写入新台账，历史计划的输出不得原位覆盖。"""
+
+    if path.exists() or path.is_symlink():
+        raise RuntimeError(f"台账输出已存在，禁止覆盖：{path}")
+    if not path.parent.is_dir() or path.parent.is_symlink():
+        raise RuntimeError(f"台账输出父目录不存在或不可信：{path.parent}")
+    try:
+        with path.open("x", encoding="utf-8") as stream:
+            json.dump(payload, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+    except FileExistsError as exc:
+        raise RuntimeError(f"台账输出已存在，禁止覆盖：{path}") from exc
 
 
 def sha256(raw: bytes) -> str:
@@ -314,6 +572,12 @@ def maintenance_removals(frozen_paths: set[str]) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--upstream-merge-plan",
+        required=True,
+        type=pathlib.Path,
+        help="不可变 UpstreamMergePlan；目标 tag、commit 和台账输出位置只从此处读取",
+    )
     writes = parser.add_mutually_exclusive_group()
     writes.add_argument(
         "--write-inventory",
@@ -323,7 +587,7 @@ def main() -> int:
     writes.add_argument(
         "--write-upstream-merge-ledger",
         action="store_true",
-        help="按当前源码写入相对 v0.1.177 的结构化 Codex 出站 overlay 台账",
+        help="按计划目标写入新的结构化 Codex 出站 overlay 台账；禁止覆盖已有路径",
     )
     args = parser.parse_args()
 
@@ -331,27 +595,35 @@ def main() -> int:
     surface = scan_surface_files()
 
     try:
+        plan = load_upstream_merge_plan(args.upstream_merge_plan.resolve())
         validate_human_ledger(ledger)
-        upstream_entries = current_upstream_merge_entries(surface)
-        upstream_payload = upstream_merge_ledger_payload(upstream_entries)
+        upstream_entries = current_upstream_merge_entries(
+            surface,
+            plan.upstream_commit,
+        )
+        upstream_payload = upstream_merge_ledger_payload(upstream_entries, plan)
     except RuntimeError as exc:
         print(f"🔴 {exc}", file=sys.stderr)
         return 1
 
     if args.write_upstream_merge_ledger:
-        UPSTREAM_MERGE_LEDGER.parent.mkdir(parents=True, exist_ok=True)
-        UPSTREAM_MERGE_LEDGER.write_text(
-            json.dumps(upstream_payload, ensure_ascii=False, indent=2) + "\n",
-            encoding="utf-8",
-        )
+        try:
+            write_json_once(plan.ledger_path, upstream_payload)
+        except RuntimeError as exc:
+            print(f"🔴 {exc}", file=sys.stderr)
+            return 1
         print(
-            f"✅ 已写入 {len(upstream_entries)} 个 v0.1.177 出站 overlay："
-            f"{UPSTREAM_MERGE_LEDGER}"
+            f"✅ 已按计划 {plan.plan_id} 写入 {len(upstream_entries)} 个 "
+            f"{plan.upstream_tag} 出站 overlay：{plan.ledger_path}"
         )
         return 0
 
     try:
-        validate_upstream_merge_ledger(upstream_payload)
+        validate_upstream_merge_ledger(
+            plan.ledger_path,
+            upstream_payload,
+            plan.upstream_tag,
+        )
     except RuntimeError as exc:
         print(f"🔴 {exc}", file=sys.stderr)
         return 1
@@ -456,7 +728,8 @@ def main() -> int:
     print(
         f"✅ §3.5 台账完整：变更集 5 冻结 52 面 + 变更集 6 增量 {len(additions)} 面"
         f" - 维护退休 {len(removal_paths)} 面 = {covered} 个出站定型文件全部登记"
-        f"；v0.1.177 机器 overlay {len(upstream_entries)} 个文件逐项一致"
+        f"；{plan.upstream_tag} 机器 overlay {len(upstream_entries)} 个文件逐项一致"
+        f"（plan={plan.plan_id}）"
         f"；人工只保留 {len(HUMAN_REVIEW_SEAMS)} 个高风险合并缝"
         + (f"，另有 {len(SCOPE_EXCLUSIONS)} 个工具自引用排除" if SCOPE_EXCLUSIONS else "")
     )
