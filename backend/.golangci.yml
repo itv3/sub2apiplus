@@ -13,6 +13,13 @@ linters:
 
   exclusions:
     rules:
+      # scan 是 egressscan 早期调用入口的兼容包装；当前生产命令已统一通过
+      # scanWithCodexRouteEvidence 传入受审迁移路由，但保留该包装便于旧调用方迁移。
+      # 这里只精确排除该函数的 unused 诊断，不放宽其他未使用代码检查。
+      - path: cmd/egressscan/main.go
+        linters:
+          - unused
+        text: "func scan is unused"
       # 该 benchmark driver 的完整源码摘要属于变更集 6 冻结证据；只能由
       # changeset6_benchmark_evidence.py 校验，不能为 errcheck 改写字节。
       - path: internal/service/official_egress_changeset6_benchmark_test.go
