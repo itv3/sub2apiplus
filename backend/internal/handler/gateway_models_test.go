@@ -286,7 +286,7 @@ func TestGatewayModels_CustomModelsListFiltersAndOrdersMappedModels(t *testing.T
 	require.Equal(t, []string{"gpt-5.5", "gpt-5.4"}, modelIDsForTest(got.Data))
 }
 
-func TestGatewayModels_CompositeCustomModelsListFiltersAcrossConcretePlatforms(t *testing.T) {
+func TestGatewayModels_CompositeCustomModelsListFiltersAcrossOpenAIProtocolAccounts(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
 	groupID := int64(33)
@@ -343,6 +343,13 @@ func TestGatewayModels_CompositeCustomModelsListFiltersAcrossConcretePlatforms(t
 							"model_mapping": map[string]any{"deepseek-custom": "deepseek-upstream"},
 						},
 					},
+					{
+						ID:       7,
+						Platform: service.PlatformAnthropic,
+						Credentials: map[string]any{
+							"model_mapping": map[string]any{"claude-custom": "claude-upstream"},
+						},
+					},
 				},
 			},
 		},
@@ -357,7 +364,7 @@ func TestGatewayModels_CompositeCustomModelsListFiltersAcrossConcretePlatforms(t
 			Platform: service.PlatformComposite,
 			ModelsListConfig: service.GroupModelsListConfig{
 				Enabled: true,
-				Models:  []string{"gemini-2.5-flash", "missing-model", "ag-custom-model", "gpt-5.5", "kimi-custom", "glm-custom", "deepseek-custom"},
+				Models:  []string{"gemini-2.5-flash", "missing-model", "ag-custom-model", "claude-custom", "gpt-5.5", "kimi-custom", "glm-custom", "deepseek-custom"},
 			},
 		},
 	})
@@ -368,7 +375,177 @@ func TestGatewayModels_CompositeCustomModelsListFiltersAcrossConcretePlatforms(t
 
 	var got gatewayModelsResponseForTest
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
-	require.Equal(t, []string{"gemini-2.5-flash", "ag-custom-model", "gpt-5.5", "kimi-custom", "glm-custom", "deepseek-custom"}, modelIDsForTest(got.Data))
+	require.Equal(t, []string{"gpt-5.5", "kimi-custom", "glm-custom", "deepseek-custom"}, modelIDsForTest(got.Data))
+}
+
+func TestGatewayModels_CompositeFiltersModelsByActualAccountProtocol(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(3301)
+	h := newGatewayModelsHandlerForTest(
+		&gatewayModelsAccountRepoStub{
+			byGroup: map[int64][]service.Account{
+				groupID: {
+					{
+						ID:       1,
+						Platform: service.PlatformAnthropic,
+						Credentials: map[string]any{
+							"model_mapping": map[string]any{"claude-native": "claude-native"},
+						},
+					},
+					{
+						ID:       2,
+						Platform: service.PlatformOpenAI,
+						Credentials: map[string]any{
+							"model_mapping": map[string]any{"gpt-native": "gpt-native"},
+						},
+					},
+					{
+						ID:       3,
+						Platform: service.PlatformZhipu,
+						Credentials: map[string]any{
+							"api_protocol":  service.APIProtocolAnthropic,
+							"model_mapping": map[string]any{"glm-anthropic": "glm-anthropic"},
+						},
+					},
+					{
+						ID:       4,
+						Platform: service.PlatformZhipu,
+						Credentials: map[string]any{
+							"api_protocol":  service.APIProtocolChatCompletions,
+							"model_mapping": map[string]any{"glm-openai": "glm-openai"},
+						},
+					},
+					{
+						ID:       5,
+						Platform: service.PlatformDeepseek,
+						Credentials: map[string]any{
+							"api_protocol":  service.APIProtocolResponses,
+							"model_mapping": map[string]any{"deepseek-responses": "deepseek-responses"},
+						},
+					},
+					{
+						ID:       6,
+						Platform: service.PlatformKimi,
+						Credentials: map[string]any{
+							"api_protocol":  service.APIProtocolAdaptive,
+							"model_mapping": map[string]any{"kimi-adaptive": "kimi-adaptive"},
+						},
+					},
+					{
+						ID:       7,
+						Platform: service.PlatformGemini,
+						Credentials: map[string]any{
+							"model_mapping": map[string]any{"gemini-native": "gemini-native"},
+						},
+					},
+				},
+			},
+		},
+	)
+
+	requestModels := func(t *testing.T, anthropic bool) []string {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(rec)
+		c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+		if anthropic {
+			c.Request.Header.Set("Anthropic-Version", "2023-06-01")
+		}
+		c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+			Group: &service.Group{ID: groupID, Platform: service.PlatformComposite},
+		})
+
+		h.Models(c)
+
+		require.Equal(t, http.StatusOK, rec.Code)
+		var got gatewayModelsResponseForTest
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+		return modelIDsForTest(got.Data)
+	}
+
+	t.Run("OpenAI 目录", func(t *testing.T) {
+		require.Equal(t, []string{"gpt-native", "kimi-adaptive", "glm-openai", "deepseek-responses"}, requestModels(t, false))
+	})
+
+	t.Run("Anthropic 目录", func(t *testing.T) {
+		require.Equal(t, []string{"claude-native", "kimi-adaptive", "glm-anthropic"}, requestModels(t, true))
+	})
+}
+
+func TestGatewayModels_CompositeDoesNotFallbackAcrossProtocols(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	groupID := int64(3302)
+	h := newGatewayModelsHandlerForTest(
+		&gatewayModelsAccountRepoStub{
+			byGroup: map[int64][]service.Account{
+				groupID: {
+					{
+						ID:       1,
+						Platform: service.PlatformAnthropic,
+						Credentials: map[string]any{
+							"model_mapping": map[string]any{"claude-only": "claude-only"},
+						},
+					},
+				},
+			},
+		},
+	)
+
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	c.Set(string(middleware2.ContextKeyAPIKey), &service.APIKey{
+		Group: &service.Group{
+			ID:       groupID,
+			Platform: service.PlatformComposite,
+			ModelsListConfig: service.GroupModelsListConfig{
+				Enabled: true,
+				Models:  []string{"claude-only"},
+			},
+		},
+	})
+
+	h.Models(c)
+
+	require.Equal(t, http.StatusOK, rec.Code)
+	var got gatewayModelsResponseForTest
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &got))
+	require.Empty(t, modelIDsForTest(got.Data))
+}
+
+func TestCompositeModelListProtocolForRequest(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	testCases := []struct {
+		name     string
+		headers  map[string]string
+		protocol string
+	}{
+		{name: "普通请求使用 OpenAI 目录", protocol: service.CompositeModelListProtocolOpenAI},
+		{
+			name:     "Anthropic-Version 使用 Anthropic 目录",
+			headers:  map[string]string{"Anthropic-Version": "2023-06-01"},
+			protocol: service.CompositeModelListProtocolAnthropic,
+		},
+		{
+			name:     "Claude CLI 使用 Anthropic 目录",
+			headers:  map[string]string{"User-Agent": "claude-cli/1.0.83 (external, cli)"},
+			protocol: service.CompositeModelListProtocolAnthropic,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			c, _ := gin.CreateTestContext(httptest.NewRecorder())
+			c.Request = httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+			for name, value := range testCase.headers {
+				c.Request.Header.Set(name, value)
+			}
+			require.Equal(t, testCase.protocol, compositeModelListProtocolForRequest(c))
+		})
+	}
 }
 
 func TestGatewayModels_CompositeUnmappedAccountsFallbackToLinkedPlatformsOnly(t *testing.T) {

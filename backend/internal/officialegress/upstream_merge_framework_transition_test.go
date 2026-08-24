@@ -118,6 +118,11 @@ func readUpstreamMergeFrameworkTransition() (
 		))
 		currentDigest := upstreamMergeFrameworkDigest(current)
 		if readErr != nil || (currentDigest != transition.ToSHA256 &&
+			!compositeModelProtocolSourceTransitionSupersedes(
+				transition.Path,
+				transition.ToSHA256,
+				currentDigest,
+			) &&
 			!upstreamMergeRouteScopeTransitionSupersedes(
 				transition.Path,
 				transition.ToSHA256,
@@ -144,6 +149,11 @@ func upstreamMergeFrameworkTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if compositeModelProtocolSourceTransitionSupersedes(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	if upstreamV0179SourceTransitionSupersedes(path, priorDigest, currentDigest) {
 		return true
 	}
@@ -157,6 +167,11 @@ func upstreamMergeFrameworkTransitionSupersedes(
 	for _, transition := range receipt.Transitions {
 		if transition.Path == path && slices.Contains(transition.PredecessorSHA256s, priorDigest) &&
 			(transition.ToSHA256 == currentDigest ||
+				compositeModelProtocolSourceTransitionSupersedes(
+					path,
+					transition.ToSHA256,
+					currentDigest,
+				) ||
 				upstreamV0179SourceTransitionSupersedes(
 					path,
 					transition.ToSHA256,

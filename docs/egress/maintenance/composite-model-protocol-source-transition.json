@@ -1,0 +1,81 @@
+{
+  "schema_version": "sub2apiplus-composite-model-protocol-source-transition/v1",
+  "issued_at_utc": "2026-08-24T04:45:26Z",
+  "base_commit": "3a34b59ba98d303bc575b2e214c200b14752d979",
+  "scope": "composite-model-list-protocol-isolation",
+  "predecessor": {
+    "kind": "upstream_release_ci_repair",
+    "path": "docs/egress/maintenance/upstream-v0.1.179-release-ci-repair-transition.json",
+    "sha256": "e51a96c4cd1b3fc7eca44372c6d2c02556070b387be69ba3482dfd1839e3020b"
+  },
+  "transitions": [
+    {
+      "path": "README.md",
+      "from_sha256": "e332ca33d40b654cbdcf685fe89b33c4b102abba767f93a8f2c42f5b561372cd",
+      "to_sha256": "5b490117e540c7b2b7f05f552ccd6c127faeeba3b01b4f8a3cc5ac35db09be59",
+      "reason": "把 README 的 OAuth 仿真内容收敛为共享框架摘要，并补充 Composite 模型列表按协议过滤的产品行为说明。"
+    },
+    {
+      "path": "backend/internal/handler/gateway_handler.go",
+      "from_sha256": "8c4090270bc2b038cef630c95eb9cf4f96c69fa4162a8eb0f6594151532b110a",
+      "to_sha256": "7808c3aeef6f0715292120f76be27bb2bfa946cf212ba94405bf4281722504e3",
+      "reason": "Composite 模型列表按入站协议和账号实际 api_protocol 聚合，禁止 OpenAI 与 Anthropic 目录互相回退，同时不改变 OAuth Persona、凭据读取和最终出站 wire。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_merge_framework_transition_test.go",
+      "from_sha256": "ff03fe3995be282fcb9fc7f0181704c072859249635ea629b2cb3de33b2af3eb",
+      "to_sha256": "1c917085f00d2b3a0ce8892652589cdffaf5d15dcd01547e5e21b7d8f185a9b8",
+      "reason": "让 officialegress 共享框架门禁通过同一份本轮 transition 承接协议实现和文档摘要，避免复制历史事实。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_v0179_release_ci_repair_transition_test.go",
+      "from_sha256": "86859c3681e7e83a3dca31d3120bc14170f5b5576cef5d8c9bb4e43a2d9140b8",
+      "to_sha256": "8b1cf81befcae36c74e416da9f45dfa3d5f51e18623bbb7979d6044105de4933",
+      "reason": "让 officialegress 的 v0.1.179 冻结门禁消费本轮精确后继，同时保持既有发版 CI 修复收据不可变。"
+    },
+    {
+      "path": "backend/internal/service/upstream_merge_framework_transition_test.go",
+      "from_sha256": "ad36563747358488e97d46051d9ba626a3dad1a003a94d97eb881b3891d519da",
+      "to_sha256": "e741ec9be5e3c34868caf6ed615bb69d9ec74caa4784f6fc5329ab748bfba256",
+      "reason": "让共享框架历史摘要只通过本轮不可变 transition 承接 README 与三份客户端仿真文档的新摘要。"
+    },
+    {
+      "path": "backend/internal/service/upstream_v0179_release_ci_repair_transition_test.go",
+      "from_sha256": "36eedbfaf3e9857e9075e37774e410f92a1bb03f0901f5954bff5d8926b037db",
+      "to_sha256": "271edd7545950ec255b651a3b40fdfe6781c5a4119d3c5ee0d7f233f82f158b2",
+      "reason": "让 v0.1.179 上游源码冻结门禁消费本轮精确 path/from/to，保留既有发版 CI 修复收据原文。"
+    },
+    {
+      "path": "docs/CLAUDE_CODE_CLIENT_EMULATION_GUIDE.md",
+      "from_sha256": "1c2dadb394a57928c5ff21a1ede8241d885932213e6db37d04a30754821f025c",
+      "to_sha256": "353e2699077a45486315febe8b5879780abe062829db17ba0564b74078d1b746",
+      "reason": "集中说明 Claude 官方隐私门控、冻结配置和零流量证据边界，避免把合法关闭的外围流量误算为差异。"
+    },
+    {
+      "path": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+      "from_sha256": "0168d542f49d544ad1a85b092a9d05b12c9b82ac4e21a914ca22acefce12e43d",
+      "to_sha256": "85d3a86211256c8f9f580a7ee8e9dfc6b2477f91a2131f0a174104e439c1e9e8",
+      "reason": "固定 Codex analytics 与 OTEL metrics 的独立关闭条件，明确零遥测不生成 RequiredRule。"
+    },
+    {
+      "path": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+      "from_sha256": "684e9c0f9d7acbf115dd8365ff27c66ce22eecfb6b381b805c0feb5249e5cc7c",
+      "to_sha256": "6d9a82b2d9e1346f543c9a12568511dd1f53a36049cc13edbd0e04912c66bbc9",
+      "reason": "在共享框架中统一合法关闭外围流量的证据身份、适用边界和禁止外推规则。"
+    }
+  ],
+  "verification": [
+    "go test ./internal/handler -run '^(TestGatewayModels_Composite.*|TestCompositeModelListProtocolForRequest)$' -count=1",
+    "go test ./internal/service -run '^TestAccountSupportsCompositeModelListProtocol$' -count=1",
+    "go test -tags=unit ./...",
+    "EGRESS_SEAL_BASE_REF=3a34b59ba98d303bc575b2e214c200b14752d979 make check-egress-spec-ci"
+  ],
+  "safety": {
+    "oauth_wire_contract_changed": false,
+    "database_migration_added": false,
+    "keeper_changed": false,
+    "live_account_used": false,
+    "deployment_performed": false
+  },
+  "result": "passed_local_release_gates"
+}

@@ -1090,17 +1090,17 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	}
 
 	if platform == service.PlatformComposite {
-		availableModels := h.compositeAvailableModels(c.Request.Context(), groupID)
+		protocol := compositeModelListProtocolForRequest(c)
+		availableModels := h.compositeAvailableModels(c.Request.Context(), groupID, protocol)
 		if apiKey != nil && apiKey.Group != nil && apiKey.Group.CustomModelsListEnabled() {
-			availableModels = filterModelsByCustomList(availableModels, defaultModelIDsForPlatform(service.PlatformComposite), apiKey.Group.ModelsListConfig.Models)
+			// Composite 模型源已经包含对应协议下允许使用的默认回退模型；这里不再
+			// 使用全协议默认目录，避免自定义列表把其他协议模型重新带回响应。
+			availableModels = filterModelsByCustomList(availableModels, nil, apiKey.Group.ModelsListConfig.Models)
 			writeCustomModelsList(c, service.PlatformComposite, availableModels)
 			return
 		}
-		if len(availableModels) > 0 {
-			writeModelsList(c, service.PlatformComposite, availableModels)
-			return
-		}
-		writeModelsList(c, service.PlatformComposite, defaultModelIDsForPlatform(service.PlatformComposite))
+		// 没有对应协议账号时返回空目录，不能回退到 Composite 全协议默认模型。
+		writeModelsList(c, service.PlatformComposite, availableModels)
 		return
 	}
 
@@ -1150,19 +1150,36 @@ func (h *GatewayHandler) Models(c *gin.Context) {
 	})
 }
 
-func (h *GatewayHandler) compositeAvailableModels(ctx context.Context, groupID *int64) []string {
+func compositeModelListProtocolForRequest(c *gin.Context) string {
+	if c != nil {
+		if strings.TrimSpace(c.GetHeader("Anthropic-Version")) != "" {
+			return service.CompositeModelListProtocolAnthropic
+		}
+		userAgent := strings.ToLower(strings.TrimSpace(c.GetHeader("User-Agent")))
+		if strings.HasPrefix(userAgent, "claude-cli") {
+			return service.CompositeModelListProtocolAnthropic
+		}
+	}
+	// OpenAI Compatible 与 OpenAI Responses 共用 OpenAI 模型目录。
+	return service.CompositeModelListProtocolOpenAI
+}
+
+func (h *GatewayHandler) compositeAvailableModels(ctx context.Context, groupID *int64, protocol string) []string {
 	if h == nil || h.gatewayService == nil {
 		return nil
 	}
 	seen := make(map[string]struct{})
 	models := make([]string, 0)
-	schedulablePlatforms := h.gatewayService.GetSchedulablePlatforms(ctx, groupID)
+	modelSources := h.gatewayService.GetCompositeProtocolModelSources(ctx, groupID, protocol)
 	for _, platform := range []string{service.PlatformAnthropic, service.PlatformGemini, service.PlatformOpenAI, service.PlatformAntigravity, service.PlatformGrok, service.PlatformKimi, service.PlatformZhipu, service.PlatformDeepseek} {
-		platformModels := h.gatewayService.GetAvailableModels(ctx, groupID, platform)
+		platformModels, hasProtocolAccount := modelSources[platform]
+		if !hasProtocolAccount {
+			continue
+		}
 		if len(platformModels) == 0 {
 			// CN 供应商没有静态默认模型列表（defaultModelIDsForPlatform 的
 			// default 分支是 Claude 列表），composite 下只暴露账号映射键。
-			if _, ok := schedulablePlatforms[platform]; ok && !service.IsCNProvider(platform) {
+			if !service.IsCNProvider(platform) {
 				platformModels = defaultModelIDsForPlatform(platform)
 			}
 		}

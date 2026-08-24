@@ -148,6 +148,11 @@ func upstreamV0179ReleaseCIRepairTransitionSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if compositeModelProtocolSourceTransitionSupersedesService(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	receipt, err := loadUpstreamV0179ReleaseCIRepairTransitionService()
 	if err != nil {
 		return false

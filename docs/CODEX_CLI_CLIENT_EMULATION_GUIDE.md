@@ -27,6 +27,15 @@ HTTP／WebSocket、Header、Body、端点和跨请求状态。当前版本及依
 mimic、其他供应商及可关闭的 plugins、apps、analytics、otel 流量。自定义 CA 和自定义
 provider 规则仅作为条件分支记录。
 
+**遥测零流量边界。** Framework §1.2、§3.2 的公共规则适用于当前 active 0.147.0。官方源码中，
+`config/src/types.rs:219-223` 的 `AnalyticsConfigToml.enabled=false` 经
+`core/src/config/mod.rs:4261` 传入 analytics client，并由 `analytics/src/client.rs:220-226` 禁用事件队列。
+OTEL 是独立配置：`otel.metrics_exporter=none` 才关闭默认 Statsig metrics；不能只写笼统的
+`otel.exporter=none`，因为 `config/src/types.rs:583-592` 中 log／trace exporter 默认是 `None`，metrics
+exporter 默认仍为 `Statsig`，`otel/src/provider.rs:137-159` 仅在 metrics exporter 非 `None` 时构建指标
+管线。上述配置及源码摘要冻结后，候选“零遥测”不计为仿真差异，也不能生成 RequiredRule；未关闭或
+实际触发的请求仍按正常出站规则验收。
+
 ## 1.2 客户端仿真链路
 
 ```text

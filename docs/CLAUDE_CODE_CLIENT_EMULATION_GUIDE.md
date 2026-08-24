@@ -44,7 +44,7 @@
 | 已登记 Claude 官方入口 | Claude Code 2.1.226、Claude Desktop 2.1.237、Claude Code for VS Code 2.1.239；必须同时命中 OfficialIngressCatalog 的版本、平台和 wire 摘要条件 |
 | 第三方 API／IDE／Agent | 不属于 Claude Persona 正向 SupportEnvelope；在读取 OAuth 凭据前拒绝 |
 | API Key、Bedrock、Vertex、Foundry | 范围外；只可作为差分对照 |
-| 遥测与非必要流量 | 仅记录配置与可达性，不进入行为一致性维度；官方允许关闭，零流量不得计为差异 |
+| 遥测与非必要流量 | 隐私模式属于证据身份；在冻结的官方关闭模式内，零流量不进入 strict 等价分母 |
 | 机器环境 | 是证据身份；具体职责与限制见第六部分 |
 
 当前全部目标运行证据使用 `essential-traffic` 与 `no-telemetry` 模式。官方客户端的隐私状态为：
@@ -55,16 +55,7 @@
 | `no-telemetry` | `DISABLE_TELEMETRY=1` 或 `DO_NOT_TRACK` | 关闭遥测，但不等同于 essential-only |
 | `default` | 上述条件均不成立 | 会放行额外请求，必须另建证据范围 |
 
-这些都是官方原生配置，不是候选规避取证：`DISABLE_TELEMETRY` 经 `isAnalyticsDisabled()` 关闭
-Datadog 与第一方 `event_logging`（`src/services/analytics/`）；
-`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 经 `isEssentialTrafficOnly()` 门控 mcp-registry、
-policy_limits、grove、releaseNotes、feedback、modelCapabilities、referral 等非必要请求，
-`privacyLevel.ts` 的定义即“关闭全部非必要网络流量”。因此，流量类别是否出现这一行为层不作一致性
-对比维度；`essential-traffic` 只界定当前 strict wire／PAIR 的取证范围，不是行为维度。场景被调用时
-仍须逐规则核对实际 essential 请求；外围流量只记录，零遥测／零非必要流量不得计为一致性差异。
-
-bundle 中 essential gate 有 53 个调用点、非 default gate 有 7 个调用点；这些数字只证明静态门控面，
-不能代替运行端点全集。每条规则仍须绑定二进制摘要、平台、入口、模型、账号／feature 条件与观测通道。
+这些模式均为官方原生配置；读取点、门控范围和零流量证据语义统一见 §2.2.2。
 
 ## 1.2 Persona 链路与阅读顺序
 
@@ -184,14 +175,22 @@ RequiredRules 映射清单分别为：
 后者保存 40→106 与 2 个本地场景组→4 的唯一映射，并作为指南、Snapshot、EvidencePackage 和
 SupportEnvelope 对账权威。Authorization 已等长脱敏，不保存 OAuth secret。
 
-### 2.2.2 证据边界与零流量事实
+### 2.2.2 证据边界、隐私模式与零流量事实
 
 当前 Campaign 已在原生 TLS attempt 中取得 ClientHello pcap，3 条 TLS 原子断言使用 P/M；普通
 HTTP、Header、Body、状态与工具原子断言仍使用 R/M，不允许以 relay 元数据冒充原生 TLS 证据。
 
-行为层不作对比维度。官方配置已合法关闭遥测与非必要流量，候选“零遥测”不是“不像官方客户端”的
-判据，也不生成 `traceparent`／span 规则。响应解析属于 downstream compatibility，不进入客户端请求
-出站画像。
+当前全部目标运行证据冻结为 `essential-traffic + no-telemetry`。`DISABLE_TELEMETRY` 经
+`isAnalyticsDisabled()` 关闭 Datadog 与第一方 `event_logging`（`src/services/analytics/`）；
+`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` 经 `isEssentialTrafficOnly()` 门控 mcp-registry、
+policy_limits、grove、releaseNotes、feedback、modelCapabilities、referral 等非必要请求，
+`privacyLevel.ts` 明确定义为关闭全部非必要网络流量。这些是官方配置，不是 candidate 规避取证。
+
+bundle 中 essential gate 有 53 个调用点、非 default gate 有 7 个调用点；数字只证明静态门控面，不能
+代替运行端点全集。按 Framework §1.2、§3.2，在上述同一冻结模式内，候选“零遥测／零非必要流量”
+不计为仿真差异，也不生成 `traceparent`／span 或其他 RequiredRule，只能登记为 supporting-fact／
+`record_only`。零流量不能用于删除发现项、Sink 或 essential 请求依赖的共享状态；场景实际触发的
+essential 请求仍须逐规则核对。响应解析属于 downstream compatibility，不进入客户端请求出站画像。
 
 ## 2.3 规则准入合同
 
