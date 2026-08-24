@@ -1,0 +1,49 @@
+{
+  "schema_version": "official-egress-upstream-v0.1.179-release-ci-repair-transition/v1",
+  "issued_at_utc": "2026-08-24T00:13:42Z",
+  "base_commit": "f6e7bd478a8c5bd1418a8fdb8baa32b33e210a56",
+  "scope": "upstream-v0.1.179-release-ci-repair",
+  "predecessor": {
+    "kind": "upstream_source_transition",
+    "path": "docs/egress/maintenance/upstream-v0.1.179-source-transition.json",
+    "sha256": "52a0ab6bde326bc0cbedd87f8623daa035ed1c6438f94cb2b4ae74bfb3787121"
+  },
+  "transitions": [
+    {
+      "path": ".github/workflows/backend-ci.yml",
+      "from_sha256": "718f02550142ad0cb0c265f9c7b978b97371f28f8572f46b958bd60c85c08d0f",
+      "to_sha256": "0f6c1230a7306e46e22948ee5be7fb594e8cd09a6753f3d878e0163f570ac221",
+      "reason": "在 GitHub Actions 中精确获取历史计划冻结的上游 v0.1.177 标签，使离线台账复算具备与受维护本地仓库相同的不可变 Git 坐标。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_v0179_source_transition_test.go",
+      "from_sha256": "ebb80b8bc044372bd7263970b0a9b20b3cfeef6ffbf039cae1df6fda72a27e35",
+      "to_sha256": "52c45f57b404e42bda5de3693b4655018a0aa98a7281a13221f85b8db7ef17e0",
+      "reason": "让 officialegress 的 v0.1.179 冻结门禁仅通过本修复收据承接后继摘要，既有上游合并收据保持不可变。"
+    },
+    {
+      "path": "backend/internal/service/gateway_context_management_test.go",
+      "from_sha256": "8d55618054876037df8df965d644f84acba08ec17924b3c9800b4eb4c0465ed7",
+      "to_sha256": "a15304642a243ef16f2d91870c6a9d9d1b089481d62c5c697986d82ac9706f41",
+      "reason": "把上游新增的 Claude OAuth 非 mimicry 用例对齐到 strict ReleaseBundle 独占契约，同时保留 API Key deferred tool cache_control 清理断言。"
+    },
+    {
+      "path": "backend/internal/service/upstream_v0179_source_transition_test.go",
+      "from_sha256": "98c59518a91b7bfc702bb8ceb4094b0c6966f0069ac42b95449f640636e2316f",
+      "to_sha256": "acba02ace84efed2fb3eab287a8830d00bd08f62d44cf49c924cb8cf574a4c26",
+      "reason": "让 service 的 v0.1.179 冻结门禁仅通过本修复收据承接后继摘要，历史 transition 原文与客户端选择状态不变。"
+    }
+  ],
+  "verification": [
+    "go test -tags=unit ./internal/service -run '^TestBuildCountTokensRequest_StripsCacheControlOnlyFromLiteralDeferredTools$' -count=1",
+    "go test -tags=unit ./...",
+    "EGRESS_SEAL_BASE_REF=f6e7bd478a8c5bd1418a8fdb8baa32b33e210a56 make check-egress-spec-ci"
+  ],
+  "safety": {
+    "live_account_used": false,
+    "online_acceptance_performed": false,
+    "release_readiness_changed": false,
+    "upstream_tags_pushed_to_origin": false
+  },
+  "result": "passed_release_ci_repair"
+}

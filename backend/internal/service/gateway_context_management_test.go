@@ -671,10 +671,11 @@ func TestBuildCountTokensRequest_StripsCacheControlOnlyFromLiteralDeferredTools(
 	body := []byte(`{"model":"claude-haiku-4-5","messages":[],"tools":[{"name":"deferred","custom":{"defer_loading":true},"cache_control":{"type":"ephemeral"}},{"name":"ordinary","custom":{"defer_loading":false},"cache_control":{"type":"ephemeral"}},{"name":"string","custom":{"defer_loading":"true"},"cache_control":{"type":"ephemeral"}},{"name":"number","custom":{"defer_loading":1},"cache_control":{"type":"ephemeral"}},{"name":"object","custom":{"defer_loading":{}},"cache_control":{"type":"ephemeral"}}]}`)
 
 	tests := []struct {
-		name      string
-		account   *Account
-		token     string
-		tokenType string
+		name          string
+		account       *Account
+		token         string
+		tokenType     string
+		expectRetired bool
 	}{
 		{
 			name:      "generic API key",
@@ -683,10 +684,11 @@ func TestBuildCountTokensRequest_StripsCacheControlOnlyFromLiteralDeferredTools(
 			tokenType: "apikey",
 		},
 		{
-			name:      "recognized Claude Code OAuth without mimicry",
-			account:   &Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth},
-			token:     "oauth-token",
-			tokenType: "oauth",
+			name:          "recognized Claude Code OAuth without mimicry",
+			account:       &Account{Platform: PlatformAnthropic, Type: AccountTypeOAuth},
+			token:         "oauth-token",
+			tokenType:     "oauth",
+			expectRetired: true,
 		},
 	}
 
@@ -701,6 +703,14 @@ func TestBuildCountTokensRequest_StripsCacheControlOnlyFromLiteralDeferredTools(
 				context.Background(), c, tt.account, body,
 				tt.token, tt.tokenType, "claude-haiku-4-5", false,
 			)
+			// Claude OAuth 无论 mimic 标志如何都必须由 strict ReleaseBundle 承接，
+			// 旧构造链只能失败关闭；API Key 路径继续验证 deferred tool 清理语义。
+			if tt.expectRetired {
+				require.Nil(t, req)
+				require.Nil(t, wireBody)
+				require.ErrorContains(t, err, "旧 count_tokens 构造链已退休")
+				return
+			}
 			require.NoError(t, err)
 			require.False(t, gjson.GetBytes(wireBody, "tools.0.cache_control").Exists())
 			for idx := 1; idx < 5; idx++ {

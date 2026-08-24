@@ -41,6 +41,10 @@ jobs:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
+      - name: 获取冻结的上游基线标签
+        run: |
+          git fetch --no-tags https://github.com/Wei-Shaw/sub2api.git \
+            refs/tags/v0.1.177:refs/tags/v0.1.177
       - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
