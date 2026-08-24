@@ -791,7 +791,12 @@ func runCheck(
 			changed = append(changed, fmt.Sprintf("%s  受审补录项在当前生产树中不存在", id))
 		}
 	}
+	transitionIDs, transitionProblems := validateReviewedPostBootstrapInfrastructureTransitions(curByID)
+	changed = append(changed, transitionProblems...)
 	for id := range reviewedPostBootstrapInfrastructure {
+		if _, managedByTransition := transitionIDs[id]; managedByTransition {
+			continue
+		}
 		if _, exists := curByID[id]; !exists {
 			changed = append(changed, fmt.Sprintf("%s  post-bootstrap 基础设施豁免已陈旧", id))
 		}
@@ -841,7 +846,8 @@ func runCheck(
 
 	if len(added) == 0 && len(removed) == 0 && len(changed) == 0 {
 		fmt.Printf("✅ 当前发送面通过：bootstrap=%d，受审补录=%d，受审移除=%d，1A 基础设施=%d\n",
-			len(old.Sinks), len(supplementByID), len(removalByID), len(reviewedPostBootstrapInfrastructure))
+			len(old.Sinks), len(supplementByID), len(removalByID),
+			countPresentReviewedPostBootstrapInfrastructure(curByID))
 		return 0
 	}
 
@@ -859,4 +865,81 @@ func runCheck(
 	fmt.Println("bootstrap_commit 之后新增的裸 sink 禁止进入 legacy，必须立即失败。")
 	fmt.Println("仅 pre-bootstrap 遗漏可进入受审补录清单，并须通过 replay 证明其在锚点提交中已存在。")
 	return 1
+}
+
+func validateReviewedPostBootstrapInfrastructureTransitions(
+	current map[string]SinkRecord,
+) (map[string]struct{}, []string) {
+	managed := make(map[string]struct{})
+	var problems []string
+	for _, transition := range reviewedPostBootstrapInfrastructureTransitions {
+		if strings.TrimSpace(transition.name) == "" || len(transition.alternatives) < 2 {
+			problems = append(problems, "post-bootstrap 基础设施 transition 定义不完整")
+			continue
+		}
+		seen := make(map[string]struct{})
+		matched := 0
+		for _, alternative := range transition.alternatives {
+			if len(alternative) == 0 {
+				problems = append(problems, fmt.Sprintf(
+					"%s  post-bootstrap 基础设施 transition 存在空 alternative", transition.name))
+				continue
+			}
+			complete := true
+			for _, id := range alternative {
+				if _, duplicate := seen[id]; duplicate {
+					problems = append(problems, fmt.Sprintf(
+						"%s  post-bootstrap 基础设施 transition 候选重复: %s", transition.name, id))
+				}
+				seen[id] = struct{}{}
+				managed[id] = struct{}{}
+				if _, reviewed := reviewedPostBootstrapInfrastructure[id]; !reviewed {
+					problems = append(problems, fmt.Sprintf(
+						"%s  post-bootstrap 基础设施 transition 候选未登记: %s", transition.name, id))
+				}
+				if _, exists := current[id]; !exists {
+					complete = false
+				}
+			}
+			if complete {
+				matched++
+			}
+		}
+		present := 0
+		for id := range seen {
+			if _, exists := current[id]; exists {
+				present++
+			}
+		}
+		if matched != 1 {
+			problems = append(problems, fmt.Sprintf(
+				"%s  post-bootstrap 基础设施 transition 必须完整且唯一命中一个 alternative", transition.name))
+			continue
+		}
+		for _, alternative := range transition.alternatives {
+			complete := true
+			for _, id := range alternative {
+				if _, exists := current[id]; !exists {
+					complete = false
+					break
+				}
+			}
+			if complete && present != len(alternative) {
+				problems = append(problems, fmt.Sprintf(
+					"%s  post-bootstrap 基础设施 transition 混用了多个 alternative", transition.name))
+				break
+			}
+		}
+	}
+	return managed, problems
+}
+
+func countPresentReviewedPostBootstrapInfrastructure(current map[string]SinkRecord) int {
+	count := 0
+	for id := range reviewedPostBootstrapInfrastructure {
+		if _, exists := current[id]; exists {
+			count++
+		}
+	}
+	return count
 }

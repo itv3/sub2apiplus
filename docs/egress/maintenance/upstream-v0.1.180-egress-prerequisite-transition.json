@@ -1,0 +1,73 @@
+{
+  "schema_version": "official-egress-upstream-v0.1.180-prerequisite-transition/v1",
+  "issued_at_utc": "2026-08-24T15:29:13Z",
+  "base_commit": "cd13abbc8364a90ddeabddf86a68de7c6057dd2a",
+  "scope": "upstream-v0.1.180-egress-lifecycle-prerequisite",
+  "target_upstream_tag": "v0.1.180",
+  "target_upstream_commit": "c40edb4070a9274e8c23f161b4ed552051b14698",
+  "predecessor": {
+    "kind": "composite_model_protocol_source_transition",
+    "path": "docs/egress/maintenance/composite-model-protocol-source-transition.json",
+    "sha256": "acfcd0f6f627d104a993d28bbb80d3ccd63d776372f574b0354c98db8326a65f"
+  },
+  "transitions": [
+    {
+      "path": "backend/cmd/egressscan/classify.go",
+      "from_sha256": "dc3449aed5f180862f3e294d6f518130b05ae4df325fd79badb7a6538e7aee33",
+      "to_sha256": "1ed55101182ad64efaed965794a982ac4dad1a62fcde58260f02969d6d830378",
+      "reason": "预先登记 v0.1.180 的 Grok Realtime Open/Probe 精确候选，并把 v0.1.179 单入口与目标双入口冻结为互斥生命周期集合；两代实现均属于 xAI 范围外发送。"
+    },
+    {
+      "path": "backend/cmd/egressscan/lifecycle_test.go",
+      "from_sha256": "b20d6ff74b93b9cc9c827bb1284060e46ce7f3ca76d43e99b221dcaaa37f8ab9",
+      "to_sha256": "f0f4b3e03341e2b949b91a5722f8b0951ddd055906a63f8fbc015f6c2e02532b",
+      "reason": "覆盖旧入口、新双入口、缺失与混用四类状态，并冻结本轮复审后的 bootstrap inventory lock 摘要。"
+    },
+    {
+      "path": "backend/cmd/egressscan/main.go",
+      "from_sha256": "3954450dae0c7e11a77fbb2b28879d75d342d60352fd5280f3f41d5a871d3c1c",
+      "to_sha256": "d927a4992234f6a33815fc889f636fa0fe2d2168ccf935847b37b39fcef66ec6",
+      "reason": "扫描门禁只接受一个完整生命周期 alternative，继续拒绝部分迁移、两代混用、未登记候选和陈旧普通豁免。"
+    },
+    {
+      "path": "backend/internal/officialegress/composite_model_protocol_source_transition_test.go",
+      "from_sha256": "acec3b25982aabb63eeaf759092f6039e306995ba25d9d2a8ad0fdb04a9bd773",
+      "to_sha256": "03efafa7dc01ffc5d54158e67a5abbe735a85574e6f924a55b0389f248b50a00",
+      "reason": "让当前最新历史 transition 只通过本前置收据的精确 path/from/to 承接 scanner 与 lock 后继摘要。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_merge_egress_snapshot_transition_test.go",
+      "from_sha256": "d63e163f3246b6adf60510592bcd6556f77705fd5044d2a573f280377ce91bb5",
+      "to_sha256": "5d757fe1ae7372e658d358ddb09a49f395ca4290ecbc7a138737d22d88f6ac95",
+      "reason": "让 snapshot 历史收据在校验自身与后继时消费本前置的精确 scanner/lock transition，同时保持旧 snapshot 收据原文不变。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_v0180_egress_prerequisite_transition_test.go",
+      "from_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "to_sha256": "f7ee4c384a85cab6031dd88b4440a3f1adb1ca1ba558fa9506126f2560301886",
+      "reason": "新增严格收据解析、自摘要、前序、路径闭集、当前文件摘要与安全边界校验，禁止前置授权外推到业务源码或部署。"
+    },
+    {
+      "path": "docs/egress/maintenance/bootstrap-inventory-lock.json",
+      "from_sha256": "629cb0a8b32532d98edc52693c8bf00c70ec81145f0a870b870a63cebd238594",
+      "to_sha256": "d94bfe584b1cfb61bb852c7c6de9dbc3298084c0a95e329c960b0ee12fc0f0a2",
+      "reason": "保持 bootstrap commit、tree 与 inventory 原文不变，仅追加对精确双态生命周期算法的复审摘要。"
+    }
+  ],
+  "verification": [
+    "go test ./cmd/egressscan -count=1",
+    "go test ./internal/officialegress/... -count=1",
+    "EGRESS_SEAL_BASE_REF=cd13abbc8364a90ddeabddf86a68de7c6057dd2a make check-egress-spec-ci"
+  ],
+  "safety": {
+    "scanner_algorithm_changed": true,
+    "bootstrap_source_changed": false,
+    "bootstrap_inventory_changed": false,
+    "oauth_wire_contract_changed": false,
+    "upstream_merge_performed": false,
+    "live_account_used": false,
+    "deployment_performed": false
+  },
+  "result": "passed_local_prerequisite_gates",
+  "identity_sha256": "d69805fab7c2fec47e65112c0e08e69548106256f7deb04913fef800da589575"
+}

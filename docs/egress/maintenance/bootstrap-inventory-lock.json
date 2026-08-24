@@ -3,9 +3,9 @@
   "bootstrap_commit": "38a9929eac35a39c86de2f27de8f7a805d7dae52",
   "bootstrap_tree": "a8c3dee18a01a6138bfcea60860bb5ad11548c3a",
   "inventory_sha256": "46593243b1bd315eafcb54335502a1f46bc2b8bfc0ecc2d3146da4e7087bfaeb",
-  "scanner_algorithm_sha256": "8a90cb0ca6e0aa5593beb84a84892347a2d90450ac10c7d837463c5c49722223",
-  "reconstructed_at": "2026-08-23T19:05:26+08:00",
-  "reviewed_by": "sub2api-v0.1.179-upstream-merge-prerequisite",
+  "scanner_algorithm_sha256": "7fc36d87a19e0c948ad8c15e92a15a3973d7001f4fadd7ddcec467e874e5aebc",
+  "reconstructed_at": "2026-08-24T23:29:13+08:00",
+  "reviewed_by": "sub2api-v0.1.180-egress-lifecycle-prerequisite",
   "review_ref": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md#52-合并-sub2api-上游更新",
-  "rationale": "保持 bootstrap commit、tree 和 inventory 原文不变；复审新增 snapshot 模式仅加载受审 MigrationReceipt 的 Codex route 覆盖证明并输出当前完整 Baseline，不改变扫描候选发现、分类、历史回放或 Guard 语义。未登记物理发送点仍须逐候选分类，缺失或非法收据继续失败关闭。"
+  "rationale": "保持 bootstrap commit、tree 和 inventory 原文不变；新增精确双态生命周期约束，只允许 Grok Realtime 在 v0.1.179 的单一 Proxy 拨号入口或 v0.1.180 的 Open/Probe 双入口之间完整切换。缺失、混用或额外发送点继续失败关闭；该范围属于 xAI，不能取得 Codex Persona、ReleaseBundle 或 Guard 选择权。"
 }

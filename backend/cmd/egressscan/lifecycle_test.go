@@ -144,6 +144,37 @@ func TestHistoricalRetirementClassificationRequiresExactReceipt(t *testing.T) {
 	}
 }
 
+func TestReviewedPostBootstrapInfrastructureTransitionRequiresOneCompleteAlternative(t *testing.T) {
+	oldID := reviewedPostBootstrapInfrastructureTransitions[0].alternatives[0][0]
+	newIDs := reviewedPostBootstrapInfrastructureTransitions[0].alternatives[1]
+	tests := []struct {
+		name    string
+		ids     []string
+		wantErr bool
+	}{
+		{name: "旧入口", ids: []string{oldID}},
+		{name: "新双入口", ids: newIDs},
+		{name: "新入口不完整", ids: newIDs[:1], wantErr: true},
+		{name: "两代混用", ids: append([]string{oldID}, newIDs...), wantErr: true},
+		{name: "全部缺失", wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			current := make(map[string]SinkRecord, len(tt.ids))
+			for _, id := range tt.ids {
+				current[id] = SinkRecord{ScanCandidateID: id}
+			}
+			managed, problems := validateReviewedPostBootstrapInfrastructureTransitions(current)
+			if len(managed) != 3 {
+				t.Fatalf("transition 管理候选数错误：%d", len(managed))
+			}
+			if (len(problems) > 0) != tt.wantErr {
+				t.Fatalf("transition 校验结果错误：%v", problems)
+			}
+		})
+	}
+}
+
 func TestBootstrapInventoryLockMatchesCurrentReviewedScanner(t *testing.T) {
 	historicalLockRaw, err := os.ReadFile("../../../docs/egress/consolidation/bootstrap-inventory-lock.json")
 	if err != nil {
@@ -158,7 +189,7 @@ func TestBootstrapInventoryLockMatchesCurrentReviewedScanner(t *testing.T) {
 		t.Fatal(err)
 	}
 	currentLockSum := sha256.Sum256(currentLockRaw)
-	if hex.EncodeToString(currentLockSum[:]) != "629cb0a8b32532d98edc52693c8bf00c70ec81145f0a870b870a63cebd238594" {
+	if hex.EncodeToString(currentLockSum[:]) != "d94bfe584b1cfb61bb852c7c6de9dbc3298084c0a95e329c960b0ee12fc0f0a2" {
 		t.Fatal("当前 bootstrap inventory lock 摘要漂移")
 	}
 	baseline, err := os.ReadFile("../../../docs/egress/foundation/sink-baseline.json")

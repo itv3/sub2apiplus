@@ -150,6 +150,11 @@ func compositeModelProtocolSourceTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if upstreamV0180EgressPrerequisiteTransitionSupersedes(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	receipt, err := loadCompositeModelProtocolSourceTransition()
 	if err != nil {
 		return false

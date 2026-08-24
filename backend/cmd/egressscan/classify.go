@@ -122,7 +122,35 @@ var reviewedPostBootstrapInfrastructure = map[string]string{
 	"github.com/Wei-Shaw/sub2api/internal/service.*GatewayService.DoGrokNativeResponsesJSON@backend/internal/service/gateway_service.go#facade_http_upstream_do#1":                                     "本次上游同步新增的 Grok 原生 Responses 发送点，属于 xAI 平台，不承载 Codex persona",
 	"github.com/Wei-Shaw/sub2api/internal/service.*GrokQuotaService.syncGrokObservedModels@backend/internal/service/grok_observed_models.go#facade_http_upstream_do#1":                                 "本次上游同步新增的 Grok 模型观测同步，属于 xAI 平台，不承载 Codex persona",
 	"github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.ForwardGrokVoice@backend/internal/service/grok_audio.go#facade_http_upstream_do#1":                                             "本次上游同步新增的 Grok 语音发送点，属于 xAI 桥接，不承载 Codex persona",
+	"github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.OpenGrokRealtime@backend/internal/service/grok_audio.go#facade_ws_dialer#1":                                                    "目标上游将 Grok Realtime 预握手独立为可复用连接入口，仍只访问 xAI，不承载 Codex persona",
+	"github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.ProbeGrokRealtime@backend/internal/service/grok_audio.go#facade_ws_dialer#1":                                                   "目标上游保留 Grok Realtime 探测握手入口，仍只访问 xAI，不承载 Codex persona",
 	"github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.ProxyGrokRealtime@backend/internal/service/grok_audio.go#facade_ws_dialer#1":                                                   "本次上游同步新增的 Grok 实时语音拨号点，属于 xAI 桥接，不承载 Codex persona",
+}
+
+// reviewedPostBootstrapInfrastructureTransitions 固定上游重构前后的精确候选集合。
+// 每个时刻必须完整命中且只能命中一个 alternative；因此合并前的旧入口与合并后的
+// 新入口都能被复算，但缺一条、混用两代入口或出现第三条发送点都会失败关闭。
+//
+// 这类双态规则只用于“工具必须先于上游合并冻结”的生命周期接缝。上游合并完成后，
+// RemovalReceipt 仍会让已经消失的旧候选保持不可恢复，不能借此重新启用旧实现。
+type reviewedPostBootstrapInfrastructureTransition struct {
+	name         string
+	alternatives [][]string
+}
+
+var reviewedPostBootstrapInfrastructureTransitions = []reviewedPostBootstrapInfrastructureTransition{
+	{
+		name: "upstream-grok-realtime-preaccept",
+		alternatives: [][]string{
+			{
+				"github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.ProxyGrokRealtime@backend/internal/service/grok_audio.go#facade_ws_dialer#1",
+			},
+			{
+				"github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.OpenGrokRealtime@backend/internal/service/grok_audio.go#facade_ws_dialer#1",
+				"github.com/Wei-Shaw/sub2api/internal/service.*OpenAIGatewayService.ProbeGrokRealtime@backend/internal/service/grok_audio.go#facade_ws_dialer#1",
+			},
+		},
+	},
 }
 
 var classifyRules = []classifyRule{

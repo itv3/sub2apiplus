@@ -107,6 +107,11 @@ func readUpstreamMergeEgressSnapshotTransition() (
 		))
 		currentDigest := upstreamMergeFrameworkDigest(current)
 		if readErr != nil || (currentDigest != transition.ToSHA256 &&
+			!upstreamV0180EgressPrerequisiteTransitionSupersedes(
+				transition.Path,
+				transition.ToSHA256,
+				currentDigest,
+			) &&
 			!upstreamV0179SourceTransitionSupersedes(
 				transition.Path,
 				transition.ToSHA256,
@@ -129,6 +134,11 @@ func upstreamMergeEgressSnapshotTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if upstreamV0180EgressPrerequisiteTransitionSupersedes(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	receipt, err := loadUpstreamMergeEgressSnapshotTransition()
 	if err != nil {
 		return false
@@ -136,6 +146,11 @@ func upstreamMergeEgressSnapshotTransitionSupersedes(
 	for _, transition := range receipt.Transitions {
 		if transition.Path == path && slices.Contains(transition.PredecessorSHA256s, priorDigest) &&
 			(transition.ToSHA256 == currentDigest ||
+				upstreamV0180EgressPrerequisiteTransitionSupersedes(
+					path,
+					transition.ToSHA256,
+					currentDigest,
+				) ||
 				upstreamV0179SourceTransitionSupersedes(
 					path,
 					transition.ToSHA256,
