@@ -15,6 +15,7 @@ import (
 
 type openAICompatSessionResponseBinding struct {
 	ResponseID           string
+	TurnState            string
 	ContinuationDisabled bool
 	ExpiresAt            time.Time
 }
@@ -208,6 +209,7 @@ func (s *OpenAIGatewayService) bindOpenAICompatSessionResponseID(_ context.Conte
 				s.openaiCompatSessionResponses.Store(key, existing)
 				return
 			}
+			binding.TurnState = existing.TurnState
 		}
 	}
 	s.openaiCompatSessionResponses.Store(key, binding)
@@ -231,7 +233,7 @@ func (s *OpenAIGatewayService) deleteOpenAICompatSessionResponseID(_ context.Con
 		return
 	}
 	binding.ResponseID = ""
-	if !binding.ContinuationDisabled {
+	if strings.TrimSpace(binding.TurnState) == "" && !binding.ContinuationDisabled {
 		s.openaiCompatSessionResponses.Delete(key)
 		return
 	}
@@ -250,6 +252,11 @@ func (s *OpenAIGatewayService) disableOpenAICompatSessionContinuation(_ context.
 	binding := openAICompatSessionResponseBinding{
 		ContinuationDisabled: true,
 		ExpiresAt:            time.Now().Add(s.openAIWSResponseStickyTTL()),
+	}
+	if raw, ok := s.openaiCompatSessionResponses.Load(key); ok {
+		if existing, ok := raw.(openAICompatSessionResponseBinding); ok {
+			binding.TurnState = existing.TurnState
+		}
 	}
 	s.openaiCompatSessionResponses.Store(key, binding)
 }
@@ -276,4 +283,51 @@ func (s *OpenAIGatewayService) isOpenAICompatSessionContinuationDisabled(_ conte
 		return false
 	}
 	return binding.ContinuationDisabled
+}
+
+// getOpenAICompatSessionTurnState 仅服务无法自行回带状态的协议兼容桥。
+// 严格官方 OAuth 走绑定 Release、authority 与账号身份的新状态域，不调用本缓存。
+func (s *OpenAIGatewayService) getOpenAICompatSessionTurnState(_ context.Context, c *gin.Context, account *Account, promptCacheKey string) string {
+	if s == nil {
+		return ""
+	}
+	key := openAICompatSessionResponseKey(c, account, promptCacheKey)
+	if key == "" {
+		return ""
+	}
+	raw, ok := s.openaiCompatSessionResponses.Load(key)
+	if !ok {
+		return ""
+	}
+	binding, ok := raw.(openAICompatSessionResponseBinding)
+	if !ok || strings.TrimSpace(binding.TurnState) == "" {
+		return ""
+	}
+	if !binding.ExpiresAt.IsZero() && time.Now().After(binding.ExpiresAt) {
+		s.openaiCompatSessionResponses.Delete(key)
+		return ""
+	}
+	return strings.TrimSpace(binding.TurnState)
+}
+
+func (s *OpenAIGatewayService) bindOpenAICompatSessionTurnState(_ context.Context, c *gin.Context, account *Account, promptCacheKey, turnState string) {
+	if s == nil {
+		return
+	}
+	key := openAICompatSessionResponseKey(c, account, promptCacheKey)
+	state := strings.TrimSpace(turnState)
+	if key == "" || state == "" {
+		return
+	}
+	binding := openAICompatSessionResponseBinding{
+		TurnState: state,
+		ExpiresAt: time.Now().Add(s.openAIWSResponseStickyTTL()),
+	}
+	if raw, ok := s.openaiCompatSessionResponses.Load(key); ok {
+		if existing, ok := raw.(openAICompatSessionResponseBinding); ok {
+			binding.ResponseID = existing.ResponseID
+			binding.ContinuationDisabled = existing.ContinuationDisabled
+		}
+	}
+	s.openaiCompatSessionResponses.Store(key, binding)
 }

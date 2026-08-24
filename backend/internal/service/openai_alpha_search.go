@@ -555,7 +555,7 @@ func (s *OpenAIGatewayService) buildOpenAIAlphaSearchRequest(ctx context.Context
 			req.Header.Set("User-Agent", canonical.userAgent)
 		}
 		if s.cfg != nil && s.cfg.Gateway.ForceCodexCLI {
-				req.Header.Set("User-Agent", canonical.userAgent)
+			req.Header.Set("User-Agent", canonical.userAgent)
 		}
 		enforceCodexIdentityHeadersWithUA(req.Header, s.codexIdentityOverrideUA(account))
 	}

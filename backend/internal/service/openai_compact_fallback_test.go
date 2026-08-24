@@ -381,9 +381,11 @@ func TestOpenAIPassthroughCompactFallbackSecondStreamFailureUsesStandardErrorPat
 		Credentials: map[string]any{"access_token": "oauth-token", "chatgpt_account_id": "chatgpt-account"},
 		Status:      StatusActive, Schedulable: true,
 	}
+	bodyContract, contractErr := captureOfficialOpenAIHTTPBodyContractForRequest(c, body)
+	require.NoError(t, contractErr)
 
 	result, err := svc.forwardOpenAIPassthrough(
-		context.Background(), c, account, body, body, "gpt-5.5", false, nil, true, time.Now(),
+		context.Background(), c, account, body, body, "gpt-5.5", false, nil, true, time.Now(), bodyContract,
 	)
 
 	require.Error(t, err)

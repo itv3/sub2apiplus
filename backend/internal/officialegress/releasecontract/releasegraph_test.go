@@ -187,7 +187,7 @@ func TestReleaseGraphRejectsInvalidEvidence(t *testing.T) {
 
 func corruptReleaseLeaves(value reflect.Value) int {
 	switch value.Kind() {
-	case reflect.Ptr, reflect.Interface:
+	case reflect.Pointer, reflect.Interface:
 		if value.IsNil() {
 			return 0
 		}

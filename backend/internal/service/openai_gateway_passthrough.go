@@ -350,8 +350,14 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		}
 	}
 
+	// 插件只能承载 Official Egress 闭集之外的 OAuth；官方账号仍绑定冻结 Sink，
+	// 并在下方使用同一轮 invocation 的 Codex Executor Plan。
+	officialEgressEnabled, _, err := resolveOfficialEgressAccountProfile(account)
+	if err != nil {
+		return nil, fmt.Errorf("resolve official egress config: %w", err)
+	}
 	// Get access token
-	if account.IsOpenAIOAuth() {
+	if officialEgressEnabled && account.IsOpenAIOAuth() {
 		ctx, err = bindOfficialEgressSink(ctx, officialEgressSinkResponsesPassthrough)
 		if err != nil {
 			return nil, fmt.Errorf("bind Responses passthrough official egress sink: %w", err)
@@ -371,7 +377,7 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 		c.Set("openai_passthrough", true)
 	}
 	var officialForwardPlan *OpenAIForwardInvocationPlan
-	if account.IsOpenAIOAuth() && officialEgressBodyContract != nil {
+	if officialEgressEnabled && account.IsOpenAIOAuth() && officialEgressBodyContract != nil {
 		officialForwardPlan, err = s.officialCodexResponseForwardPlan(
 			ctx, c, account,
 			officialegress.SinkCodexResponsesPassthrough,
@@ -431,6 +437,8 @@ func (s *OpenAIGatewayService) forwardOpenAIPassthrough(
 			resp, err = officialForwardPlan.ExecuteHTTPRequest(
 				upstreamReq.Context(), upstreamReq, endpointID,
 			)
+		} else if account.IsOpenAIOAuth() && !officialEgressEnabled {
+			resp, err = s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 		} else {
 			resp, err = doOpenAIHTTPUpstreamWithProfile(
 				s.httpUpstream,

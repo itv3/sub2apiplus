@@ -827,6 +827,14 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	} else {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Unsupported account type: %s", account.Type))
 	}
+	officialEgressEnabled := false
+	if isOAuth {
+		var configErr error
+		officialEgressEnabled, _, configErr = resolveOfficialEgressAccountProfile(credentialAccount)
+		if configErr != nil {
+			return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to resolve official egress config: %s", configErr.Error()))
+		}
+	}
 
 	// Set SSE headers
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
@@ -854,11 +862,13 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	// 只有 ChatGPT OAuth 内部端点属于 Codex 官方 persona。API-Key 与自定义
 	// base URL 是通用第三方发送，不能通过非空 SinkID 把它们强行纳入受管闭集。
 	if isOAuth {
-		boundCtx, bindErr := bindOfficialEgressSink(ctx, officialEgressSinkAdminTestResponses)
-		if bindErr != nil {
-			return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to bind official egress sink: %s", bindErr.Error()))
+		if officialEgressEnabled {
+			boundCtx, bindErr := bindOfficialEgressSink(ctx, officialEgressSinkAdminTestResponses)
+			if bindErr != nil {
+				return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to bind official egress sink: %s", bindErr.Error()))
+			}
+			ctx = boundCtx
 		}
-		ctx = boundCtx
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(payloadBytes))
@@ -910,7 +920,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 	}
 
 	var resp *http.Response
-	if isOAuth {
+	if isOAuth && officialEgressEnabled {
 		officialEgress, runtimeErr := resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream)
 		if runtimeErr != nil {
 			return s.sendErrorAndEnd(c, fmt.Sprintf("Codex Executor is not configured: %s", runtimeErr.Error()))
@@ -921,6 +931,9 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 			PolicyID: "changeset1b.admin_test.responses.v1", PolicySource: "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md#policy-changeset-1b",
 			ConcurrencyLimit: 1, HasBillingSideEffect: true,
 		})
+	} else if isOAuth {
+		// 非 Official Egress 的 OAuth 才允许进入上游 PluginManager facade。
+		resp, err = s.doOpenAIAccountTestUpstream(req, proxyURL, account, true)
 	} else {
 		// API-Key/custom base URL 不属于 Codex persona，继续使用原有通用发送逻辑。
 		resp, err = doOpenAIHTTPUpstreamWithProfile(s.httpUpstream, req, proxyURL, account, s.tlsFPProfileService, mimicProfile)
@@ -2194,6 +2207,14 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 	default:
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Unsupported account type: %s", credentialAccount.Type))
 	}
+	officialEgressEnabled := false
+	if isOAuth {
+		var configErr error
+		officialEgressEnabled, _, configErr = resolveOfficialEgressAccountProfile(credentialAccount)
+		if configErr != nil {
+			return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to resolve official egress config: %s", configErr.Error()))
+		}
+	}
 
 	c.Writer.Header().Set("Content-Type", "text/event-stream")
 	c.Writer.Header().Set("Cache-Control", "no-cache")
@@ -2208,11 +2229,13 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 	// Compact 同时支持 OAuth 与 API-Key/custom base URL；仅 OAuth 分支使用
 	// chatgpt.com 的已举证 Codex route，API-Key 分支必须保持 out-of-scope。
 	if isOAuth {
-		boundCtx, bindErr := bindOfficialEgressSink(ctx, officialEgressSinkAdminTestCompact)
-		if bindErr != nil {
-			return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to bind official egress sink: %s", bindErr.Error()))
+		if officialEgressEnabled {
+			boundCtx, bindErr := bindOfficialEgressSink(ctx, officialEgressSinkAdminTestCompact)
+			if bindErr != nil {
+				return s.sendErrorAndEnd(c, fmt.Sprintf("Failed to bind official egress sink: %s", bindErr.Error()))
+			}
+			ctx = boundCtx
 		}
-		ctx = boundCtx
 	}
 
 	req, err := http.NewRequestWithContext(ctx, "POST", apiURL, bytes.NewReader(payloadBytes))
@@ -2275,7 +2298,7 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 	}
 
 	var resp *http.Response
-	if isOAuth {
+	if isOAuth && officialEgressEnabled {
 		officialEgress, runtimeErr := resolveOfficialEgressRuntime(s.officialEgress, s.httpUpstream)
 		if runtimeErr != nil {
 			return s.sendErrorAndEnd(c, fmt.Sprintf("Codex Executor is not configured: %s", runtimeErr.Error()))
@@ -2286,6 +2309,9 @@ func (s *AccountTestService) testOpenAICompactConnection(c *gin.Context, account
 			PolicyID: "changeset1b.admin_test.compact.v1", PolicySource: "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md#policy-changeset-1b",
 			ConcurrencyLimit: 1, HasBillingSideEffect: true,
 		})
+	} else if isOAuth {
+		// 非 Official Egress 的 OAuth 才允许进入上游 PluginManager facade。
+		resp, err = s.doOpenAIAccountTestUpstream(req, proxyURL, account, true)
 	} else {
 		resp, err = doOpenAIHTTPUpstreamWithProfile(s.httpUpstream, req, proxyURL, account, s.tlsFPProfileService, mimicProfile)
 	}

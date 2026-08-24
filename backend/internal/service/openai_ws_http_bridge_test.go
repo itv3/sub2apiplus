@@ -413,7 +413,6 @@ func TestOpenAIWSHTTPBridgeAPIKeyReusesClientToolMappingWhenFollowupOmitsTools(t
 		Credentials: map[string]any{"api_key": "sk-upstream"}, Extra: map[string]any{"responses_websockets_v2_enabled": true},
 		Concurrency: 1, Status: StatusActive, Schedulable: true,
 	}
-
 	errCh := make(chan error, 1)
 	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		conn, err := coderws.Accept(w, r, nil)
@@ -522,9 +521,17 @@ func TestOpenAIWSHTTPBridgeFullCustomToolHistoryWithoutPreviousResponseIDDoesNot
 	}
 	account := &Account{
 		ID: 9002, Name: "oauth-full-context", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
-		Credentials: map[string]any{"access_token": "test-token"}, Extra: map[string]any{"responses_websockets_v2_enabled": true},
+		Credentials: map[string]any{
+			"access_token":       "test-token",
+			"chatgpt_account_id": "account-full-context",
+		},
+		Extra:       map[string]any{"responses_websockets_v2_enabled": true},
 		Concurrency: 1, Status: StatusActive, Schedulable: true,
 	}
+	svc.openaiModelCapabilities.replaceFromManifest(
+		account.ID,
+		[]byte(`{"models":[{"slug":"gpt-5.1","use_responses_lite":false}]}`),
+	)
 
 	errCh := make(chan error, 1)
 	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -544,6 +551,7 @@ func TestOpenAIWSHTTPBridgeFullCustomToolHistoryWithoutPreviousResponseIDDoesNot
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 		ginCtx.Request = r.Clone(r.Context())
+		ginCtx.Request.URL.Path = "/v1/responses"
 		errCh <- svc.ProxyResponsesWebSocketFromClient(r.Context(), ginCtx, conn, account, "test-token", firstMessage, nil)
 	}))
 	defer wsServer.Close()
@@ -561,8 +569,22 @@ func TestOpenAIWSHTTPBridgeFullCustomToolHistoryWithoutPreviousResponseIDDoesNot
 		readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
 		_, event, readErr := clientConn.Read(readCtx)
 		cancelRead()
-		require.NoError(t, readErr)
-		require.Equal(t, "response.completed", gjson.GetBytes(event, "type").String())
+		if readErr != nil {
+			select {
+			case proxyErr := <-errCh:
+				t.Fatalf("HTTP bridge 读取失败：read=%v proxy=%v", readErr, proxyErr)
+			case <-time.After(time.Second):
+				t.Fatalf("HTTP bridge 读取失败且服务端未返回错误：%v", readErr)
+			}
+		}
+		if eventType := gjson.GetBytes(event, "type").String(); eventType != "response.completed" {
+			select {
+			case proxyErr := <-errCh:
+				t.Fatalf("HTTP bridge 事件异常：event=%s proxy=%v", event, proxyErr)
+			case <-time.After(time.Second):
+				t.Fatalf("HTTP bridge 事件异常且服务端未返回错误：%s", event)
+			}
+		}
 	}
 
 	writeAndRead(`{"type":"response.create","model":"gpt-5.1","input":"run pwd"}`)
@@ -621,9 +643,17 @@ func TestOpenAIWSHTTPBridgeObjectToolOutputWithoutPreviousResponseIDReplaysMatch
 	}
 	account := &Account{
 		ID: 9003, Name: "oauth-output-only", Platform: PlatformOpenAI, Type: AccountTypeOAuth,
-		Credentials: map[string]any{"access_token": "test-token"}, Extra: map[string]any{"responses_websockets_v2_enabled": true},
+		Credentials: map[string]any{
+			"access_token":       "test-token",
+			"chatgpt_account_id": "account-output-only",
+		},
+		Extra:       map[string]any{"responses_websockets_v2_enabled": true},
 		Concurrency: 1, Status: StatusActive, Schedulable: true,
 	}
+	svc.openaiModelCapabilities.replaceFromManifest(
+		account.ID,
+		[]byte(`{"models":[{"slug":"gpt-5.1","use_responses_lite":false}]}`),
+	)
 
 	errCh := make(chan error, 1)
 	wsServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -643,6 +673,7 @@ func TestOpenAIWSHTTPBridgeObjectToolOutputWithoutPreviousResponseIDReplaysMatch
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 		ginCtx.Request = r.Clone(r.Context())
+		ginCtx.Request.URL.Path = "/v1/responses"
 		errCh <- svc.ProxyResponsesWebSocketFromClient(r.Context(), ginCtx, conn, account, "test-token", firstMessage, nil)
 	}))
 	defer wsServer.Close()
@@ -660,8 +691,22 @@ func TestOpenAIWSHTTPBridgeObjectToolOutputWithoutPreviousResponseIDReplaysMatch
 		readCtx, cancelRead := context.WithTimeout(context.Background(), 3*time.Second)
 		_, event, readErr := clientConn.Read(readCtx)
 		cancelRead()
-		require.NoError(t, readErr)
-		require.Equal(t, "response.completed", gjson.GetBytes(event, "type").String())
+		if readErr != nil {
+			select {
+			case proxyErr := <-errCh:
+				t.Fatalf("HTTP bridge 读取失败：read=%v proxy=%v", readErr, proxyErr)
+			case <-time.After(time.Second):
+				t.Fatalf("HTTP bridge 读取失败且服务端未返回错误：%v", readErr)
+			}
+		}
+		if eventType := gjson.GetBytes(event, "type").String(); eventType != "response.completed" {
+			select {
+			case proxyErr := <-errCh:
+				t.Fatalf("HTTP bridge 事件异常：event=%s proxy=%v", event, proxyErr)
+			case <-time.After(time.Second):
+				t.Fatalf("HTTP bridge 事件异常且服务端未返回错误：%s", event)
+			}
+		}
 	}
 
 	writeAndRead(`{"type":"response.create","model":"gpt-5.1","input":"run pwd"}`)
@@ -731,6 +776,9 @@ func TestProxyOpenAIWSHTTPBridgeTurnOfficialEgressUsesHTTPProfile(t *testing.T) 
 	c := newOfficialOpenAIHTTPTestContext(body, "/v1/responses")
 	upstream := &httpUpstreamRecorder{resp: newOfficialOpenAIHTTPSSECompletedResponse("resp_http_bridge")}
 	svc := newOfficialOpenAIHTTPTestService(upstream)
+	pluginManager := &PluginManager{}
+	pluginManager.route.Store(&pluginRoute{pluginID: 1, rolloutPercent: 100, unavailable: "官方画像不得进入插件"})
+	svc.pluginManager = pluginManager
 	svc.openaiModelCapabilities.replaceFromManifest(
 		94,
 		[]byte(`{"models":[{"slug":"gpt-5.4","use_responses_lite":false}]}`),
@@ -1106,7 +1154,10 @@ func TestProxyOpenAIWSHTTPBridgeTurnBareErrorFollowedByCompletedUsesCompleted(t 
 	}, "\n")
 	upstream := &httpUpstreamRecorder{resp: &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(strings.NewReader(body))}}
 	svc := &OpenAIGatewayService{cfg: &config.Config{}, httpUpstream: upstream}
-	account := &Account{ID: 113, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
+	account := &Account{
+		ID: 113, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
+		Credentials: map[string]any{"chatgpt_account_id": "acct-ws-http-bridge"},
+	}
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodGet, "/v1/responses", nil)

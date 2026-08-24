@@ -112,7 +112,7 @@ func TestProfileSpecIsDeeplyImmutable(t *testing.T) {
 // corruptAllLeaves 递归破坏所有可寻址的标量叶子，返回改写计数。
 func corruptAllLeaves(v reflect.Value) int {
 	switch v.Kind() {
-	case reflect.Ptr, reflect.Interface:
+	case reflect.Pointer, reflect.Interface:
 		if v.IsNil() {
 			return 0
 		}

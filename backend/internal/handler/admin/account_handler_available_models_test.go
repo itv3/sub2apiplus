@@ -370,7 +370,7 @@ func TestAccountHandlerGetAvailableModels_AntigravityWithoutMappingAdvertisesOff
 	for _, model := range resp.Data {
 		ids = append(ids, model.ID)
 	}
-	want := antigravity.OfficialModelIDs()
+	want := append(antigravity.OfficialModelIDs(), "gemini-3.1-flash-image")
 	sort.Strings(want)
 	require.Equal(t, want, ids)
 }

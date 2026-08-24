@@ -185,6 +185,9 @@ func claudeFWHSourceTransitionSupersedes(path, priorDigest, currentDigest string
 	for _, transition := range receipt.Transitions {
 		if transition.Path == path && transition.FromSHA256 == priorDigest &&
 			(transition.ToSHA256 == currentDigest ||
+				claudePersonaReleaseCatalogTransitionSupersedes(
+					path, transition.ToSHA256, currentDigest,
+				) ||
 				claudeFWHFableDeclaredFallbackTransitionSupersedes(
 					path, transition.ToSHA256, currentDigest,
 				) ||
@@ -215,7 +218,9 @@ func TestClaudeFWHSourceTransitionIsFrozen(t *testing.T) {
 		if got := claudeFWHSourceDigest(source); got != transition.ToSHA256 &&
 			!claudeFWHStateDurabilityTransitionSupersedes(
 				transition.Path, transition.ToSHA256, got,
-			) &&
+			) && !claudePersonaReleaseCatalogTransitionSupersedes(
+			transition.Path, transition.ToSHA256, got,
+		) &&
 			!claudeFWHFableDeclaredFallbackTransitionSupersedes(
 				transition.Path, transition.ToSHA256, got,
 			) &&

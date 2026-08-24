@@ -132,7 +132,9 @@ func TestClaudeFWGServiceTestTransitionIsFrozen(t *testing.T) {
 		if got := compatibilityClosureDigest(source); got != transition.ToSHA256 &&
 			!claudeFWHSourceTransitionSupersedesService(
 				transition.Path, transition.ToSHA256, got,
-			) && !upstreamMergeFrameworkTransitionSupersedesService(
+			) && !upstreamV0180EgressPrerequisiteTransitionSupersedesService(
+			transition.Path, transition.ToSHA256, got,
+		) && !upstreamMergeFrameworkTransitionSupersedesService(
 			transition.Path, transition.ToSHA256, got,
 		) {
 			t.Fatalf(

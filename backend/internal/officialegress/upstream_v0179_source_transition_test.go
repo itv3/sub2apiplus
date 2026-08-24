@@ -118,7 +118,9 @@ func readUpstreamV0179SourceTransition() (
 		if currentDigest != transition.ToSHA256 &&
 			!upstreamV0179ReleaseCIRepairTransitionSupersedes(
 				transition.Path, transition.ToSHA256, currentDigest,
-			) {
+			) && !upstreamV0180SourceTransitionSupersedes(
+			transition.Path, transition.ToSHA256, currentDigest,
+		) {
 			return receipt, errors.New("上游 v0.1.179 source transition 当前摘要不一致：" + transition.Path)
 		}
 		paths = append(paths, transition.Path)
@@ -136,6 +138,9 @@ func upstreamV0179SourceTransitionSupersedes(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if upstreamV0180SourceTransitionSupersedes(path, priorDigest, currentDigest) {
+		return true
+	}
 	receipt, err := loadUpstreamV0179SourceTransition()
 	if err != nil {
 		return false
@@ -148,7 +153,9 @@ func upstreamV0179SourceTransitionSupersedes(
 		if transition.ToSHA256 == currentDigest ||
 			upstreamV0179ReleaseCIRepairTransitionSupersedes(
 				path, transition.ToSHA256, currentDigest,
-			) {
+			) || upstreamV0180SourceTransitionSupersedes(
+			path, transition.ToSHA256, currentDigest,
+		) {
 			return true
 		}
 	}

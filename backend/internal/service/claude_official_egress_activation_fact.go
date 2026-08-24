@@ -163,8 +163,8 @@ func writeClaudeOfficialEgressActivationFact(
 		return err
 	}
 	payload = append(payload, '\n')
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil { //nolint:gosec // path 已验证为部署者显式配置的绝对路径。
 		return err
 	}
-	return os.WriteFile(path, payload, 0o600)
+	return os.WriteFile(path, payload, 0o600) //nolint:gosec // 激活事实只写入上述受信部署路径。
 }

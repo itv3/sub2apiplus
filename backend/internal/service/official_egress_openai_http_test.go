@@ -660,8 +660,12 @@ func TestOpenAIGatewayForwardOfficialEgressHTTPPassthroughUnaffectedByWSMode(t *
 			account := newOfficialOpenAIHTTPTestAccount(94)
 			account.Extra["openai_passthrough"] = true
 			account.Extra["openai_oauth_responses_websockets_v2_mode"] = mode
+			pluginManager := &PluginManager{}
+			pluginManager.route.Store(&pluginRoute{pluginID: 1, rolloutPercent: 100, unavailable: "官方画像不得进入插件"})
+			service := newOfficialOpenAIHTTPTestService(upstream)
+			service.pluginManager = pluginManager
 
-			result, err := newOfficialOpenAIHTTPTestService(upstream).Forward(
+			result, err := service.Forward(
 				context.Background(),
 				c,
 				account,

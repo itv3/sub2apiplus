@@ -245,7 +245,7 @@ func TestOpenAIGatewayService_Forward_MimicAPIKeyStaysHTTPWhenWSv2Enabled(t *tes
 	require.NotNil(t, result)
 	require.False(t, result.OpenAIWSMode, "mimic API Key 当前应强制走 HTTP")
 	require.NotNil(t, upstream.lastReq, "mimic API Key 应命中 HTTP 上游")
-	require.False(t, gjson.GetBytes(upstream.lastBody, "previous_response_id").Exists(), "HTTP 路径应移除 previous_response_id")
+	require.Equal(t, "resp_http_mimic_prev", gjson.GetBytes(upstream.lastBody, "previous_response_id").String(), "API Key mimic HTTP 路径应保留上游 v0.1.180 continuation")
 
 	decision, _ := c.Get("openai_ws_transport_decision")
 	reason, _ := c.Get("openai_ws_transport_reason")

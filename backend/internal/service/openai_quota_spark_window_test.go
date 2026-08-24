@@ -245,7 +245,7 @@ func TestResetCreditTargetedSendsStableCreditAndRedeemIDs(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	svc := NewOpenAIQuotaService(repo, nil, tokenProvider, newQuotaRedirectingFactory(srv))
+	svc := NewOpenAIQuotaService(repo, nil, tokenProvider, newQuotaRedirectingUpstream(srv))
 	result, err := svc.ResetCreditTargeted(context.Background(), account.ID, "credit-123", "redeem-456")
 	require.NoError(t, err)
 	require.Equal(t, "ok", result.Code)

@@ -141,6 +141,9 @@ func TestAccountTestService_OpenAISuccessPersistsSnapshotFromHeaders(t *testing.
 	repo := &openAIAccountTestRepo{}
 	upstream := &queuedHTTPUpstream{responses: []*http.Response{resp}}
 	svc := &AccountTestService{accountRepo: repo, httpUpstream: upstream}
+	pluginManager := &PluginManager{}
+	pluginManager.route.Store(&pluginRoute{pluginID: 1, rolloutPercent: 100, unavailable: "官方画像不得进入插件"})
+	svc.pluginManager = pluginManager
 	account := &Account{
 		ID:          89,
 		Platform:    PlatformOpenAI,

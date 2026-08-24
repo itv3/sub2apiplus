@@ -438,7 +438,7 @@ func TestForwardAlphaSearchSetupToken429CarriesSameAccountRetryWindow(t *testing
 
 func TestForwardAlphaSearchAccessStateUsesTypedFailover(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	body := []byte(`{"id":"search-session","model":"gpt-5.6-sol","commands":{}}`)
+	body := []byte(`{"id":"search-session","model":"gpt-5.6-sol","input":[],"commands":{},"settings":{},"max_output_tokens":2000}`)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/alpha/search", bytes.NewReader(body))
@@ -473,7 +473,7 @@ func TestForwardAlphaSearchAccessStateUsesTypedFailover(t *testing.T) {
 
 func TestForwardAlphaSearchPATFallbackAccessStateUsesTypedFailover(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	body := []byte(`{"id":"search-session","model":"gpt-5.6-sol","commands":{"search_query":[{"q":"news"}]}}`)
+	body := []byte(`{"id":"search-session","model":"gpt-5.6-sol","input":[],"commands":{"search_query":[{"q":"news"}]},"settings":{},"max_output_tokens":2000}`)
 	recorder := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(recorder)
 	c.Request = httptest.NewRequest(http.MethodPost, "/v1/alpha/search", bytes.NewReader(body))

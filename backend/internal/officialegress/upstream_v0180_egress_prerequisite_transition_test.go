@@ -152,7 +152,14 @@ func validateUpstreamV0180EgressPrerequisiteTransition(
 		current, readErr := os.ReadFile(filepath.Join(
 			"../../..", filepath.FromSlash(transition.Path),
 		))
-		if readErr != nil || upstreamMergeFrameworkDigest(current) != transition.ToSHA256 {
+		if readErr != nil {
+			return errors.New("上游 v0.1.180 egress 前置 transition 当前源码不可读：" + transition.Path)
+		}
+		currentDigest := upstreamMergeFrameworkDigest(current)
+		if currentDigest != transition.ToSHA256 &&
+			!upstreamV0180SourceTransitionSupersedes(
+				transition.Path, transition.ToSHA256, currentDigest,
+			) {
 			return errors.New("上游 v0.1.180 egress 前置 transition 当前摘要不一致：" + transition.Path)
 		}
 		paths = append(paths, transition.Path)

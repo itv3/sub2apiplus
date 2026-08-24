@@ -46,6 +46,9 @@ func TestAccountTestService_TestAccountConnection_OpenAICompactOAuthSuccessPersi
 		accountRepo:  repo,
 		httpUpstream: upstream,
 	}
+	pluginManager := &PluginManager{}
+	pluginManager.route.Store(&pluginRoute{pluginID: 1, rolloutPercent: 100, unavailable: "官方画像不得进入插件"})
+	svc.pluginManager = pluginManager
 
 	rec := httptest.NewRecorder()
 	c, _ := gin.CreateTestContext(rec)

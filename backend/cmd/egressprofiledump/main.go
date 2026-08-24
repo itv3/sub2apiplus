@@ -44,7 +44,7 @@ func main() {
 		os.Exit(1)
 	}
 	data = append(data, '\n')
-	if err := os.WriteFile(out, data, 0o644); err != nil {
+	if err := os.WriteFile(out, data, 0o644); err != nil { //nolint:gosec // 离线导出路径由本地操作者显式指定。
 		fmt.Fprintf(os.Stderr, "写入失败: %v\n", err)
 		os.Exit(1)
 	}

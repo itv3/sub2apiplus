@@ -111,7 +111,7 @@ func TestCodexAccountIdentitySourceResolvesShadowAndOverwritesFailoverContext(t 
 	req, err := service.buildUpstreamRequest(
 		context.Background(), c, shadow,
 		[]byte(`{"model":"gpt-5.6-codex","stream":true,"prompt_cache_key":"client-session"}`),
-		"token", true, "client-session", true,
+		"token", openAIUpstreamRequestPlan{IsStream: true, PromptCacheKey: "client-session", IsCodexCLI: true},
 	)
 	require.NoError(t, err)
 	require.Equal(t, isolateOpenAIUpstreamSessionID(0, parent, "client-session"), req.Header.Get("session_id"))
@@ -162,7 +162,7 @@ func TestBuildOpenAIWSHeadersNamespacesCodexIdentityByOAuthAccount(t *testing.T)
 	httpRequest, err := service.buildUpstreamRequest(
 		context.Background(), c, account11,
 		[]byte(`{"model":"gpt-5.6-codex","stream":true,"prompt_cache_key":"client-session"}`),
-		"token", true, "client-session", true,
+		"token", openAIUpstreamRequestPlan{IsStream: true, PromptCacheKey: "client-session", IsCodexCLI: true},
 	)
 	require.NoError(t, err)
 	require.Equal(t, httpRequest.Header.Get("session_id"), first.Get("session_id"), "HTTP and WS must derive the same identity from the raw client key")
@@ -196,7 +196,8 @@ func TestBuildUpstreamRequestNamespacesCodexIdentityByOAuthAccount(t *testing.T)
 			},
 		}
 		req, err := svc.buildUpstreamRequest(
-			context.Background(), c, account, body, "oauth-token", true, "client-session", true,
+			context.Background(), c, account, body, "oauth-token",
+			openAIUpstreamRequestPlan{IsStream: true, PromptCacheKey: "client-session", IsCodexCLI: true},
 		)
 		require.NoError(t, err)
 		return req.Header

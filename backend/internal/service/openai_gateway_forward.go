@@ -731,6 +731,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			strings.TrimSpace(firstNonEmptyString(decoded["previous_response_id"])) != "",
 		) {
 			markDecodedModified()
+			if officialEgressBodyContract != nil {
+				// 这里只承接本分支明确执行的孤立工具输出清理：清理后重新冻结
+				// call_id 闭集，避免后续 finalizer 把已批准删除误判为篡改。
+				// 通用 finalizer 的逐字校验保持不变，其他改写仍会失败关闭。
+				officialEgressBodyContract.callIDs = collectOfficialOpenAICallIDs(decoded)
+			}
 		}
 	}
 	if reqBody != nil || openAIResponsesInputMayNeedTruncation(body) {

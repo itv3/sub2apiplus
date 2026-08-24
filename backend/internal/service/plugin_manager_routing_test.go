@@ -78,7 +78,7 @@ func TestPluginManagerRoutingSelectsOnlyEligibleOpenAIOAuthAccounts(t *testing.T
 	assert.False(t, manager.ShouldRouteOpenAIOAuth(nil))
 }
 
-func TestOpenAIGatewayPluginRoutingPreservesAPIKeyAndFailsClosedForOAuth(t *testing.T) {
+func TestOpenAIGatewayPluginRoutingPreservesAPIKeyAndSkipsOfficialOAuth(t *testing.T) {
 	manager := &PluginManager{}
 	manager.route.Store(&pluginRoute{pluginID: 1, rolloutPercent: 100, unavailable: "测试不可用"})
 	upstream := &pluginRoutingHTTPUpstream{}
@@ -99,9 +99,33 @@ func TestOpenAIGatewayPluginRoutingPreservesAPIKeyAndFailsClosedForOAuth(t *test
 	oauthResponse, err := service.doOpenAIUpstream(oauthRequest, "", &Account{
 		ID: 2, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
 	})
-	require.Error(t, err)
-	assert.Nil(t, oauthResponse)
-	assert.Contains(t, err.Error(), "插件不可用")
+	require.NoError(t, err)
+	require.NotNil(t, oauthResponse)
+	_ = oauthResponse.Body.Close()
+	assert.Equal(t, 2, upstream.doCalls)
+}
+
+func TestAccountTestPluginRoutingSkipsOfficialOAuthFallback(t *testing.T) {
+	manager := &PluginManager{}
+	manager.route.Store(&pluginRoute{pluginID: 1, rolloutPercent: 100, unavailable: "测试不可用"})
+	upstream := &pluginRoutingHTTPUpstream{}
+	service := &AccountTestService{
+		pluginManager:       manager,
+		httpUpstream:        upstream,
+		tlsFPProfileService: &TLSFingerprintProfileService{},
+	}
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://chatgpt.com/backend-api/codex/responses", nil)
+	require.NoError(t, err)
+	account := &Account{ID: 3, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1}
+
+	allowed, err := openAIPluginTransportAllowed(account)
+	require.NoError(t, err)
+	assert.False(t, allowed)
+	response, err := service.doOpenAIAccountTestUpstream(request, "", account, true)
+	require.NoError(t, err)
+	require.NotNil(t, response)
+	_ = response.Body.Close()
+	assert.Equal(t, 0, upstream.doWithTLSCalls)
 	assert.Equal(t, 1, upstream.doCalls)
 }
 

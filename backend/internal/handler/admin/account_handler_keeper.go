@@ -283,7 +283,7 @@ func (h *AccountHandler) proxyKeeper(c *gin.Context, method string, path string,
 		response.Error(c, http.StatusServiceUnavailable, "SUB2APIPLUS_KEEPER_INTERNAL_TOKEN is not configured")
 		return
 	}
-	req, err := http.NewRequestWithContext(c.Request.Context(), method, baseURL+path, body)
+	req, err := http.NewRequestWithContext(c.Request.Context(), method, baseURL+path, body) //nolint:gosec // baseURL 来自受信 Keeper 配置，path 仅由本地管理端固定调用点提供。
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -293,7 +293,7 @@ func (h *AccountHandler) proxyKeeper(c *gin.Context, method string, path string,
 		req.Header.Set("Content-Type", "application/json")
 	}
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := client.Do(req) //nolint:gosec // 请求目标已由上述受信 Keeper 配置边界固定。
 	if err != nil {
 		response.Error(c, http.StatusBadGateway, err.Error())
 		return

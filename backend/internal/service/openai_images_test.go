@@ -1111,7 +1111,10 @@ func TestOpenAIGatewayServiceForwardImages_OAuth429CarriesSameAccountRetryWindow
 	}}}
 	parsed, err := svc.ParseOpenAIImagesRequest(c, body)
 	require.NoError(t, err)
-	account := &Account{ID: 22, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{"access_token": "token-123"}}
+	account := &Account{ID: 22, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Credentials: map[string]any{
+		"access_token":       "token-123",
+		"chatgpt_account_id": "acct-images-429",
+	}}
 	startedAt := time.Now()
 
 	result, err := svc.ForwardImages(context.Background(), c, account, body, parsed, "")

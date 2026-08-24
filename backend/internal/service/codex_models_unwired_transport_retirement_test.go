@@ -127,7 +127,10 @@ func TestCodexModelsUnwiredTransportRetirementReceiptAndSourceExtinction(t *test
 		later, superseded := laterTransitions[transition.Path]
 		if !superseded || later.FromSHA256 != transition.ToSHA256 ||
 			(later.ToSHA256 != got &&
-				!upstreamV0177SourceTransitionSupersedes(transition.Path, later.ToSHA256, got)) {
+				!upstreamV0177SourceTransitionSupersedes(transition.Path, later.ToSHA256, got) &&
+				!upstreamV0180EgressPrerequisiteTransitionSupersedesService(
+					transition.Path, later.ToSHA256, got,
+				)) {
 			t.Fatalf("Codex Models unwired transport 源码摘要没有形成追加式 transition：path=%s got=%s prior=%s later=%+v", transition.Path, got, transition.ToSHA256, later)
 		}
 	}

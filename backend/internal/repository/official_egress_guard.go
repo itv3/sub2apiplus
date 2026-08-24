@@ -161,7 +161,7 @@ func (openAIOAuthReqProfileTransport) Do(
 	if err != nil {
 		return nil, err
 	}
-	return client.GetClient().Do(request)
+	return client.GetClient().Do(request) //nolint:gosec // request 已由官方出站 Release、Profile 与 TLS 传输合同定型。
 }
 
 func resolveOpenAIExchangeTLSProfile(mode officialegress.ReleaseMode) (*tlsfingerprint.Profile, error) {

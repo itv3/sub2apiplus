@@ -2701,14 +2701,12 @@ func (h *AccountHandler) availableModelsForAccount(account *service.Account) any
 	if account.IsGemini() {
 		// Google One OAuth 仍使用旧版 Gemini CLI／Code Assist 渠道，不能公布
 		// 该渠道无法提供的较新 3.x 或图片模型。
-		if account.IsOAuth() {
-			if account.IsGeminiGoogleOne() {
-				return geminicli.GoogleOneModels
-			}
-			return geminicli.DefaultModels
+		if account.IsOAuth() && account.IsGeminiGoogleOne() {
+			return geminicli.GoogleOneModels
 		}
 
-		// API Key 账号支持白名单：未配置时回落到默认模型集。
+		// 其他 Gemini OAuth 与 API Key 账号都尊重显式白名单；未配置时才回落到
+		// 默认模型集，避免管理端展示账号实际未授权的模型。
 		mapping := account.GetModelMapping()
 		if len(mapping) == 0 {
 			return geminicli.DefaultModels

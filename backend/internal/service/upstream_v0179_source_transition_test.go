@@ -196,7 +196,9 @@ func validateUpstreamServiceTransitionEntries(
 			if currentDigest != transition.ToSHA256 &&
 				!upstreamV0179ReleaseCIRepairTransitionSupersedesService(
 					transition.Path, transition.ToSHA256, currentDigest,
-				) {
+				) && !upstreamV0180SourceTransitionSupersedesService(
+				transition.Path, transition.ToSHA256, currentDigest,
+			) {
 				return errors.New("上游 source transition 当前摘要不一致：" + transition.Path)
 			}
 		}
@@ -246,6 +248,9 @@ func upstreamV0179SourceTransitionSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if upstreamV0180SourceTransitionSupersedesService(path, priorDigest, currentDigest) {
+		return true
+	}
 	receipt, err := loadUpstreamV0179SourceTransitionServiceReceipt()
 	if err != nil {
 		return false
@@ -255,7 +260,9 @@ func upstreamV0179SourceTransitionSupersedesService(
 			(transition.ToSHA256 != currentDigest &&
 				!upstreamV0179ReleaseCIRepairTransitionSupersedesService(
 					path, transition.ToSHA256, currentDigest,
-				)) {
+				) && !upstreamV0180SourceTransitionSupersedesService(
+				path, transition.ToSHA256, currentDigest,
+			)) {
 			continue
 		}
 		for _, predecessor := range transition.PredecessorSHA256s {

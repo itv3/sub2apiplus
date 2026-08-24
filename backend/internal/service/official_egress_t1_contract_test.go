@@ -227,11 +227,11 @@ func TestOfficialEgressT1_OpenAIWSCharacterizesHandshakeAndContinuationRewrite(t
 	require.NoError(t, err)
 
 	require.Len(t, headers.Get("session_id"), 16)
-	require.Equal(t, "77777777-7777-4777-8777-777777777777", headers.Get("session-id"))
-	require.Equal(t, "88888888-8888-4888-8888-888888888888", headers.Get("thread-id"))
-	require.Equal(t, "99999999-9999-4999-8999-999999999999", headers.Get("x-client-request-id"))
+	require.Equal(t, scopeCodexAccountIdentityValue(account, 1, "session", "77777777-7777-4777-8777-777777777777"), headers.Get("session-id"))
+	require.Equal(t, scopeCodexAccountIdentityValue(account, 1, "thread", "88888888-8888-4888-8888-888888888888"), headers.Get("thread-id"))
+	require.Equal(t, scopeCodexAccountIdentityValue(account, 1, "request", "99999999-9999-4999-8999-999999999999"), headers.Get("x-client-request-id"))
 	require.Empty(t, headers.Get("version"))
-	require.Equal(t, "window-ws:0", headers.Get("x-codex-window-id"))
+	require.Equal(t, scopeCodexAccountIdentityValue(account, 1, "window", "window-ws:0"), headers.Get("x-codex-window-id"))
 
 	// 夹具只保留决定续轮策略的结构，不包含抓包中的提示词、工具参数或真实动态标识。
 	initialPayload := []byte(`{

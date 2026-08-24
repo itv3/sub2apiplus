@@ -183,10 +183,14 @@ func TestBuildUpstreamModelsRequestSupportsOpenAIOAuth(t *testing.T) {
 }
 
 func TestFetchUpstreamSupportedModelsParsesOpenAIOAuthManifest(t *testing.T) {
-	upstream := &httpUpstreamRecorder{resp: &http.Response{
-		StatusCode: http.StatusOK,
-		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       io.NopCloser(strings.NewReader(`{"models":[{"slug":"gpt-5.6-sol"},{"slug":"gpt-5.5-codex"}]}`)),
+	var upstreamRequest *http.Request
+	upstream := &codexModelsHTTPUpstreamStub{do: func(req *http.Request, _ string, _ int64, _ int) (*http.Response, error) {
+		upstreamRequest = req
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"models":[{"slug":"gpt-5.6-sol"},{"slug":"gpt-5.5-codex"}]}`)),
+		}, nil
 	}}
 	svc := &AccountTestService{
 		httpUpstream: upstream,
@@ -203,7 +207,8 @@ func TestFetchUpstreamSupportedModelsParsesOpenAIOAuthManifest(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, []string{"gpt-5.5-codex", "gpt-5.6-sol"}, models)
-	require.Equal(t, "Bearer openai-oauth-token", upstream.lastReq.Header.Get("Authorization"))
+	require.NotNil(t, upstreamRequest)
+	require.Equal(t, "Bearer openai-oauth-token", upstreamRequest.Header.Get("Authorization"))
 }
 
 func TestExtractGrokUpstreamModelIDs(t *testing.T) {

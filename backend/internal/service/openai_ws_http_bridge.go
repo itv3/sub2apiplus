@@ -343,8 +343,10 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 	var officialEgressBodyContract *officialOpenAIHTTPBodyContract
 	upstreamRequestContext := c
 	managedOfficialBridge := false
+	officialEgressEnabled := false
 	if account.Platform == PlatformOpenAI {
-		officialEgressEnabled, _, configErr := resolveOfficialEgressAccountProfile(account)
+		var configErr error
+		officialEgressEnabled, _, configErr = resolveOfficialEgressAccountProfile(account)
 		if configErr != nil {
 			return nil, fmt.Errorf("resolve official egress config: %w", configErr)
 		}
@@ -526,6 +528,8 @@ func (s *OpenAIGatewayService) proxyOpenAIWSHTTPBridgeTurn(
 					upstreamReq.Context(), upstreamReq, officialCodexEndpointResponsesHTTP,
 				)
 			}
+		case account.IsOpenAIOAuth() && !officialEgressEnabled:
+			resp, err = s.doOpenAIUpstream(upstreamReq, proxyURL, account)
 		default:
 			resp, err = doOpenAIHTTPUpstreamWithProfile(
 				s.httpUpstream,

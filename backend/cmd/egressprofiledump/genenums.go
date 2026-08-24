@@ -124,7 +124,7 @@ func genEnums(snapshotPath, outPath, pkgName string) error {
 		_, _ = b.WriteString("},\n")
 	}
 	_, _ = b.WriteString("\t})\n}\n")
-	return os.WriteFile(outPath, []byte(b.String()), 0o644)
+	return os.WriteFile(outPath, []byte(b.String()), 0o644) //nolint:gosec // 生成命令只写入操作者指定的仓库内输出路径。
 }
 
 type enumSnapshotCatalog struct {
@@ -136,7 +136,7 @@ type enumSnapshotCatalog struct {
 // loadEnumSnapshots 同时兼容单快照和 snapshot-catalog.json。
 // 目录模式会合并 active/previous 引用的全部不可变快照，旧版本独有值不会因升级被删除。
 func loadEnumSnapshots(inputPath string) ([]enumScan, error) {
-	raw, err := os.ReadFile(inputPath)
+	raw, err := os.ReadFile(inputPath) //nolint:gosec // inputPath 来自本地维护命令显式指定的受审快照或目录。
 	if err != nil {
 		return nil, err
 	}
@@ -158,7 +158,7 @@ func loadEnumSnapshots(inputPath string) ([]enumScan, error) {
 		if strings.TrimSpace(entry.File) == "" {
 			return nil, fmt.Errorf("快照目录包含空文件名")
 		}
-		snapshotRaw, err := os.ReadFile(filepath.Join(baseDir, filepath.FromSlash(entry.File)))
+		snapshotRaw, err := os.ReadFile(filepath.Join(baseDir, filepath.FromSlash(entry.File))) //nolint:gosec // entry.File 来自本地不可变快照目录，不接收网络输入。
 		if err != nil {
 			return nil, err
 		}

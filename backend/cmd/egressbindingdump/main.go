@@ -14,7 +14,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "用法: egressbindingdump <sink-baseline.json> <binding-catalog.json>")
 		os.Exit(2)
 	}
-	raw, err := os.ReadFile(os.Args[1])
+	raw, err := os.ReadFile(os.Args[1]) //nolint:gosec // 本地受审工具只读取操作者显式给出的基线文件路径。
 	if err != nil {
 		fail(err)
 	}
@@ -27,7 +27,7 @@ func main() {
 		fail(err)
 	}
 	out = append(out, '\n')
-	if err := os.WriteFile(os.Args[2], out, 0o644); err != nil {
+	if err := os.WriteFile(os.Args[2], out, 0o644); err != nil { //nolint:gosec // 输出路径同样由本地操作者显式指定。
 		fail(err)
 	}
 }

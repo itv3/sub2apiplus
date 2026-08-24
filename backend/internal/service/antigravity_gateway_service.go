@@ -362,10 +362,14 @@ func antigravityAllowedModelSet(account *Account) map[string]struct{} {
 	mapping, explicit := rawAntigravityModelMapping(account)
 	if !explicit {
 		models := antigravity.OfficialModelIDs()
-		allowed := make(map[string]struct{}, len(models))
+		allowed := make(map[string]struct{}, len(models)+1)
 		for _, model := range models {
 			allowed[normalizeAntigravityModelID(model)] = struct{}{}
 		}
+		// 上游 v0.1.180 已支持 Gemini 3.1 Flash Image 的原生图片请求，但
+		// OfficialModelIDs 尚未把该客户端模型列为发包 ID。仅在账号没有显式
+		// model_mapping 时允许原样透传；显式白名单仍保持失败关闭。
+		allowed["gemini-3.1-flash-image"] = struct{}{}
 		return allowed
 	}
 

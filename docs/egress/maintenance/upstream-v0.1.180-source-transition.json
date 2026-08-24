@@ -1,0 +1,948 @@
+{
+  "activation_status": "accepted_not_activated",
+  "allowed_wire_deltas": [],
+  "base_commit": "2dbbe53a3c85cfae2737bc7de85328c42c9fa16e",
+  "classification": "implementation_and_validation",
+  "date": "2026-08-25",
+  "identity_sha256": "12c07a81726ed5f8fab5ceff2e78ad4633a879541a1ba3c94bfabdd6f7a48100",
+  "plan_identity_sha256": "0e3d358fed57a721cf5637dc1609d2a1c7e0adbf0d08230ff7ae6b66746ac954",
+  "required_verification": [
+    "go test ./cmd/egressscan -count=1",
+    "go test ./internal/officialegress/... -count=1",
+    "go test ./internal/service/... -count=1",
+    "make check-egress-spec-ci",
+    "python3 -m tools.upstream_merge gates-run --attempt-id attempt-001"
+  ],
+  "result": "passed",
+  "schema_version": "official-egress-upstream-source-transition/v2",
+  "source_transitions": [
+    {
+      "path": ".github/workflows/backend-ci.yml",
+      "predecessor_sha256s": [
+        "0f6c1230a7306e46e22948ee5be7fb594e8cd09a6753f3d878e0163f570ac221"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "e756b8314ff6a4d305b680e8c0832412c9970ee2f6d82d61932ab08d6dbab6cc"
+    },
+    {
+      "path": ".gitignore",
+      "predecessor_sha256s": [
+        "b31486272278ea54a2fecfcb4fd2be8f69ebca13f9179c084af108c36054a31e"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "df1cdba2e13c5f37e5e5c64c18bdf03d321d329d1908bb0e57b434ca15b505fc"
+    },
+    {
+      "path": "backend/.golangci.yml",
+      "predecessor_sha256s": [
+        "5e627ef57f441edf0a10ef383b85aab52f4893d6735ecbede2a1722ead2af895"
+      ],
+      "reason": "将 fork 的精确 lint 排除与上游 G703/G704 测试豁免合并到单一 exclusions 映射，并仅对 egressscan 受审指纹原文排除 QF1012；不放宽生产 gosec 门禁。",
+      "to_sha256": "eb6de8696f50aa57a8e03e58b75e297d9d2310c60c6b17da7d4a4e79bba9ec23"
+    },
+    {
+      "path": "backend/cmd/egressbindingdump/main.go",
+      "predecessor_sha256s": [
+        "59eb014d29011675c172dc31ff9b0041ded7398f217cc4501309d15959d21e16"
+      ],
+      "reason": "为本地受审绑定目录转换工具逐点声明路径来自操作者显式参数，闭合 Go 1.27 G703 告警且不接受网络输入。",
+      "to_sha256": "3b862119fe4caf7a33d26b83e4d6e12460e25d67dac490a28bf60738465afa63"
+    },
+    {
+      "path": "backend/cmd/egressprofiledump/genenums.go",
+      "predecessor_sha256s": [
+        "c515aaa9a3046dc4c9039a41a0f58499fb9936d06c3c2bd221400e8314f80458",
+        "d612a482494fa28bdaa222023f8172746339bc80d927f9ddf15172cd7ec56865"
+      ],
+      "reason": "为本地受审画像枚举生成器逐点声明输入目录、不可变快照文件与输出路径信任边界，闭合 Go 1.27 G703 且不改变生成内容。",
+      "to_sha256": "05fd69eaedd11cbfc74347363ade45166dcc2f95ff3d38e3f625d6fbf9f08ccb"
+    },
+    {
+      "path": "backend/cmd/egressprofiledump/main.go",
+      "predecessor_sha256s": [
+        "749e38435ebc56fc8972592250ca5939ea84ef40d44ce95fa3034cf06dfcaba7"
+      ],
+      "reason": "为离线画像快照导出工具逐点声明输出路径来自本地操作者显式参数，闭合 Go 1.27 G703 且不改变画像内容。",
+      "to_sha256": "cb7925979001b3cf228e60ce7bab45cfba5c15d46f9400e2a99c071eac488bc9"
+    },
+    {
+      "path": "backend/cmd/egressreleasegraphdump/main.go",
+      "predecessor_sha256s": [
+        "0525f0424c7df7139a42371f498548581a797be383e1ae65700c2ddbe50b722f"
+      ],
+      "reason": "为本地受审发布图导出工具逐点声明输出路径来自操作者显式参数，闭合 Go 1.27 G703 且不改变发布图内容。",
+      "to_sha256": "2f5de67f5ebdfb1d60b67122b6ba955473d3ea510b32e1e31e83270a43282da5"
+    },
+    {
+      "path": "backend/cmd/egressscan/classify.go",
+      "predecessor_sha256s": [
+        "5d20596c2e4da6f5e64cb454f7dd045ba92664cc5673f9b869a889dfe5436b2d",
+        "c39ba21bc773991c5eb5929b3fdb8e646fac85b612d68e88be738d160e26f9b4",
+        "dc3449aed5f180862f3e294d6f518130b05ae4df325fd79badb7a6538e7aee33"
+      ],
+      "reason": "承接 v0.1.180 发送面生命周期前置的精确 path/from/to，使 service 与 officialegress 历史验证共同复算同一前置事实。",
+      "to_sha256": "1ed55101182ad64efaed965794a982ac4dad1a62fcde58260f02969d6d830378"
+    },
+    {
+      "path": "backend/cmd/egressscan/main.go",
+      "predecessor_sha256s": [
+        "3954450dae0c7e11a77fbb2b28879d75d342d60352fd5280f3f41d5a871d3c1c"
+      ],
+      "reason": "承接 v0.1.180 发送面生命周期前置的精确 path/from/to，使 service 与 officialegress 历史验证共同复算同一前置事实。",
+      "to_sha256": "d927a4992234f6a33815fc889f636fa0fe2d2168ccf935847b37b39fcef66ec6"
+    },
+    {
+      "path": "backend/cmd/server/main.go",
+      "predecessor_sha256s": [
+        "ed6112349e20ff9609f5556da1a63887d453db04697441d58a651542c9da9009"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "dc8a2bd6537b4e1d87715f9e8f1768e11c1398670af1f3a1df6237b087e5f718"
+    },
+    {
+      "path": "backend/cmd/server/wire.go",
+      "predecessor_sha256s": [
+        "eed1893b88880d8531bea542407f3050f486cfc71817dbcf9a8c170d67a7a018"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "22e7ff931ac57900f39ca5f49a9c548a7caceed957a2469e6c3ff9fe602d838b"
+    },
+    {
+      "path": "backend/cmd/server/wire_gen.go",
+      "predecessor_sha256s": [
+        "82b7ea7769b45cdde388917c814bb3f424c5e5d36086c819f568ec20f5335c16",
+        "909ca85de7219d3b112e2bcaaef6ec04f329becc18c2e9ac0171e5083d65635f"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "7fc08bddf23518938ade99a2fe2402f83f0795662c2a68510d597566d0f810ff"
+    },
+    {
+      "path": "backend/internal/config/config.go",
+      "predecessor_sha256s": [
+        "7d5f38bc9f3e11fc7e3fa0818f9990ae718e9209eaa279f50641a03b7915000a",
+        "f76b526f55f00db9c7509d8f3ee517223086f3a852a544d4dbeeddab71a9008c"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "18809baead630b1edd72570f3acd0bf3777ff9857b69b824407a11fffec07712"
+    },
+    {
+      "path": "backend/internal/config/config_test.go",
+      "predecessor_sha256s": [
+        "d31256a91b019f3cb9ecfdd33d52b7a2e6fa833eea02be6a4e6d4289c1d6aeba"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "08809523c38d2a64c478d64c008239c82e1805c4d809fdc790250831035148a8"
+    },
+    {
+      "path": "backend/internal/handler/admin/account_handler.go",
+      "predecessor_sha256s": [
+        "a669b8ddb44a5d93c49b13a3835a8d3ce13b7208cbc75db29eaea2af05f3233c"
+      ],
+      "reason": "保留 Google One OAuth 的保守模型目录，同时让其他 Gemini OAuth 账号继续尊重显式模型白名单；不扩大 Persona 或 wire 选择权。",
+      "to_sha256": "50af122349316c799e5dc4e98efe3259b25cefe862a377e0f59a19295be9f7dc"
+    },
+    {
+      "path": "backend/internal/handler/admin/account_handler_available_models_test.go",
+      "predecessor_sha256s": [
+        "1ed5a91a86f5de000cbcf00bb14a1af1e22c841b0e8c7b2dc6b392a2fdf094a4"
+      ],
+      "reason": "更新无映射 Antigravity 模型目录回归期望，显式承接上游新增 gemini-3.1-flash-image；仅修正测试夹具，不改变 Persona 或 wire 选择权。",
+      "to_sha256": "1eb845e41eccff4d14db69e6a40d2217b1755c54136c44ac0ad77bcc3228fa3f"
+    },
+    {
+      "path": "backend/internal/handler/admin/account_handler_keeper.go",
+      "predecessor_sha256s": [
+        "89abdf9099e41f8cbc4c6b2a555587162997680b59cc5906302fb42984b6c1c3"
+      ],
+      "reason": "逐点冻结 Keeper 基址来自受信部署配置、子路径来自固定管理端调用点的 SSRF 信任边界，闭合 Go 1.27 G704 且不改变请求目标。",
+      "to_sha256": "eb43753cad36fdbb2d62d3f193e853fc7879c647e1a9932a57a5e0c2a0bb5625"
+    },
+    {
+      "path": "backend/internal/handler/admin/setting_handler.go",
+      "predecessor_sha256s": [
+        "b444329932274865c307403540e9946bda8161b55a462c48f703a9635496d581"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "290bbdab05885e2985801bbf4407d1c5664a37fb6ee29131f86e27cdcd2527d8"
+    },
+    {
+      "path": "backend/internal/handler/admin/setting_handler_update.go",
+      "predecessor_sha256s": [
+        "cae7214fdc8a0f5c93e876dc433b25d239097749368b755d027d048147b0d3ec"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "00bab42848488a56798ddc56801aa7dd0193ebe27b1d45242d93be42129a2397"
+    },
+    {
+      "path": "backend/internal/handler/dto/settings.go",
+      "predecessor_sha256s": [
+        "af459a05fe9df520f405aa4b698ce2dac32ecb3ade96ac3413a8bc49c78ca113"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "fb939f6fde7562b7b4e7bdb63fb780dfd06d9a6c50b99d6cec456665cba613d3"
+    },
+    {
+      "path": "backend/internal/handler/openai_gateway_handler.go",
+      "predecessor_sha256s": [
+        "226800bec6331094a49d36d6150cfe3fe31424c566d1c204b162d0baba7729e5",
+        "268eb5fc6b126320167bb349ac5d38c915338a474512ca946a275e1daa3ed184",
+        "fcb44519ab1cf9382d9f1b1f456b64d07f613fa8fd3611db722524f7fb5f977d"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "e04a4a304b17b67442e77f3b32d38b477970e2656200ff189a46dc8e2ad450a6"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_fw_h_source_transition_test.go",
+      "predecessor_sha256s": [
+        "d21ab94266805733e2037ed84a9d4dc3b069e955acacccc1d55c740d18657110"
+      ],
+      "reason": "让 Claude FW-H 历史封印经 Persona Release Catalog 中间摘要继续消费 v0.1.180 的精确后继，旧收据保持只读。",
+      "to_sha256": "d3f3c5011c03cc5915cfbf4b5c5c55bcbf7671646a220ef707cef946e68faf4f"
+    },
+    {
+      "path": "backend/internal/officialegress/claude_persona_release_catalog_transition_test.go",
+      "predecessor_sha256s": [
+        "31fed94b6c57d65dd785d08fe525b66bdcda971d343f5e2b20cadca1f53dd463"
+      ],
+      "reason": "让 Claude Persona Release Catalog 的当前目标摘要只通过 v0.1.180 source transition 精确承接，不改写历史收据。",
+      "to_sha256": "356c481f6add4afff14871da01b66c1876a95d02ec4cdb0718ddaa6c8fa65d54"
+    },
+    {
+      "path": "backend/internal/officialegress/composite_model_protocol_source_transition_test.go",
+      "predecessor_sha256s": [
+        "03efafa7dc01ffc5d54158e67a5abbe735a85574e6f924a55b0389f248b50a00"
+      ],
+      "reason": "让 Composite 模型协议收据只通过 v0.1.180 source transition 承接后继摘要，协议隔离与前序安全边界保持不变。",
+      "to_sha256": "fbc7c2149738b1af6e22eea35504d7f535e6173f3f4cc79318bb9c74105a51ed"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/profile_test.go",
+      "predecessor_sha256s": [
+        "305e665bde6a6494c43d3c51aae47c4cbc97370e8ee584388488757d023a9a97"
+      ],
+      "reason": "将 Go 1.27 已标记为旧名的 reflect.Ptr 等价替换为 reflect.Pointer，保持画像深拷贝破坏测试语义不变。",
+      "to_sha256": "b038297012d16560cbba19b99856245bbd64e1b6eb60f2aeba873e111a258975"
+    },
+    {
+      "path": "backend/internal/officialegress/releasecontract/releasegraph_test.go",
+      "predecessor_sha256s": [
+        "0769655fce21316bb049484ed0a937af76d122da8af7072c155385b2cbcb8a76"
+      ],
+      "reason": "将 Go 1.27 已标记为旧名的 reflect.Ptr 等价替换为 reflect.Pointer，保持发布图叶子破坏测试语义不变。",
+      "to_sha256": "983ab25a2c82cf08560eca2bb95a1793b018529eb32cf208e7612448f42a6626"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_merge_egress_snapshot_transition_test.go",
+      "predecessor_sha256s": [
+        "6b19ea585910eb13091d5995cab13ec5817ea62c693c35da6c2095f7575d7e4d",
+        "d63e163f3246b6adf60510592bcd6556f77705fd5044d2a573f280377ce91bb5"
+      ],
+      "reason": "承接 v0.1.180 发送面生命周期前置的精确 path/from/to，使 service 与 officialegress 历史验证共同复算同一前置事实。",
+      "to_sha256": "5d757fe1ae7372e658d358ddb09a49f395ca4290ecbc7a138737d22d88f6ac95"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_v0179_release_ci_repair_transition_test.go",
+      "predecessor_sha256s": [
+        "8b1cf81befcae36c74e416da9f45dfa3d5f51e18623bbb7979d6044105de4933"
+      ],
+      "reason": "让 v0.1.179 发版 CI 修复收据只通过 v0.1.180 source transition 承接其四个路径的当前摘要，历史收据原文保持不变。",
+      "to_sha256": "7ed25330efa408d276a3a59fdf0d360782b51a777249321cbc0fe3ba619584dc"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_v0179_source_transition_test.go",
+      "predecessor_sha256s": [
+        "52c45f57b404e42bda5de3693b4655018a0aa98a7281a13221f85b8db7ef17e0",
+        "ebb80b8bc044372bd7263970b0a9b20b3cfeef6ffbf039cae1df6fda72a27e35"
+      ],
+      "reason": "让 v0.1.179 历史 source transition 只通过 v0.1.180 收据的精确 path/predecessor/to 单向承接当前摘要。",
+      "to_sha256": "f2eb8c66d46a12f9746b285690d4d8e47cda1cc123ab4a86d829ec8fc7820a92"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_v0180_egress_prerequisite_transition_test.go",
+      "predecessor_sha256s": [
+        "f7ee4c384a85cab6031dd88b4440a3f1adb1ca1ba558fa9506126f2560301886"
+      ],
+      "reason": "让扫描器前置收据只通过本次 source transition 的精确后继摘要承接生命周期冻结测试，前置安全边界保持不变。",
+      "to_sha256": "5436004aefcca8c745ebccbc60f37ca5cfa0d644d5aa45ccf5de13d576d50695"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_v0180_source_transition_test.go",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "reason": "新增 strict JSON、自摘要、路径排序、当前源码摘要与精确 predecessor 校验，冻结本次 112 个敏感路径。",
+      "to_sha256": "65e6a3e6c9a00e63f122556e3187b4549b6a34eaed443dbbe7b78aad5101a1e8"
+    },
+    {
+      "path": "backend/internal/pkg/apicompat/chatcompletions_responses_bridge.go",
+      "predecessor_sha256s": [
+        "2b96615340ef78edc649e8a8ad0d57ed5ae08780f7fbc0d64de850e213763d6c"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "587c800d774ae6642de25930dddebe447ac9ba9d259e4f98d44d54a70536b9cf"
+    },
+    {
+      "path": "backend/internal/repository/http_upstream.go",
+      "predecessor_sha256s": [
+        "3dc55ac374fe38e4e4309b6e700f1d4d78c7776bc87995d9f687e8678c9fcde9"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "1abc4573b99df318470244cd3f3004e2ad30ddb69a59eb9c3089e02a136c6eae"
+    },
+    {
+      "path": "backend/internal/repository/official_egress_guard.go",
+      "predecessor_sha256s": [
+        "599d96a8b8c49003f7e342820acb0eeb6c8bb0a26ec43d32a5dc2a473448cd62"
+      ],
+      "reason": "逐点声明官方请求已由 Release、Profile 与 TLS 传输合同定型的 SSRF 信任边界，闭合 Go 1.27 G704 且不绕过 Guard。",
+      "to_sha256": "4f906eb81e5011883edf1b75e70d9c66d31c337b34d34f1a51a2f4455bc1ea58"
+    },
+    {
+      "path": "backend/internal/repository/wire.go",
+      "predecessor_sha256s": [
+        "7bf91ddaf4f33bd5caf6ff782afba87b2f2c10e96c38eee6705629f25ca82094"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "5f61c17a581113c79a274eed411310e8365e4fe4fbbca231c24af4babcdbb534"
+    },
+    {
+      "path": "backend/internal/server/routes/gateway.go",
+      "predecessor_sha256s": [
+        "acdc53cfbc80a70a3bd56537c4c422ea4a7feb8bf9ae5e637d42aea00ba29fbe"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "5dcb87b701a641d9063f81cc264f205cfa0a076691070ed43956fc2c71c48d60"
+    },
+    {
+      "path": "backend/internal/service/account.go",
+      "predecessor_sha256s": [
+        "d3e7944f5def10b9a3fa0e124ab35d4cfd5aeb6e2a3c270a68a5885a3e856aaa"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "345de9109e14be850ec3b9c9f9468e998d081baf5eff2d6ad4c4f8acf40ea4f4"
+    },
+    {
+      "path": "backend/internal/service/account_test_service.go",
+      "predecessor_sha256s": [
+        "87be85247043a2ee5921cf18475f8b71c63fcb06809ffb306e221d5ff9ab8a54",
+        "be884895e4a230e9e101ce1149dfe4a4f1973af48bb097628dff3e2ff40ea08d",
+        "d09f96e2c1be03548d912282b4b4b5e9ebcfa2b01e534636c4cc966ab4b2940e"
+      ],
+      "reason": "重放 fork 自定义覆盖：PluginManager 仅接管非官方身份，官方 OAuth 的 HTTP、WS、compact、images 与账号测试仍由既有 Executor 和 Guard 独占。",
+      "to_sha256": "25e8fcf84b3e5cc8a87c6abd8a87033f1687ffe23d2d03e2079a66f9ff741737"
+    },
+    {
+      "path": "backend/internal/service/account_test_service_openai_compact_test.go",
+      "predecessor_sha256s": [
+        "d76f5ab2e0406ed6cc33d8c2a8bb39f858de1c1e25217a5d43fc3cafe136d424"
+      ],
+      "reason": "重放 fork 自定义覆盖：PluginManager 仅接管非官方身份，官方 OAuth 的 HTTP、WS、compact、images 与账号测试仍由既有 Executor 和 Guard 独占。",
+      "to_sha256": "61b811e62cbf58676a4d685b22bcec013aa8f6509d66d755916c362b224e7d70"
+    },
+    {
+      "path": "backend/internal/service/account_test_service_openai_test.go",
+      "predecessor_sha256s": [
+        "697bbaa27eac4ed08b1759a9f55c3d601fbe2dc6ebb4c31d2ea769927ae76b1a"
+      ],
+      "reason": "重放 fork 自定义覆盖：PluginManager 仅接管非官方身份，官方 OAuth 的 HTTP、WS、compact、images 与账号测试仍由既有 Executor 和 Guard 独占。",
+      "to_sha256": "98a7192bccac99709800cbf7a88835b37837049f0a00766338f8a4f8ae37c4a8"
+    },
+    {
+      "path": "backend/internal/service/account_usage_service.go",
+      "predecessor_sha256s": [
+        "e3a5c53d3659ce9de24f05e0f6db5bc7c72dd545bcdd89cf1c0a90de49050e61"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "6af18976b51e953cf55752c7cb09a7fbbae42bccfde73fc02fbc2ae197dea481"
+    },
+    {
+      "path": "backend/internal/service/antigravity_gateway_service.go",
+      "predecessor_sha256s": [
+        "7a261719bc585bf31750903e4d19644539e36c87926336aab2f8540f92d7fb00"
+      ],
+      "reason": "在未配置显式映射时允许 gemini-3.1-flash-image 原样透传，显式模型白名单仍然失败关闭。",
+      "to_sha256": "ea0ca258fa3362a897a5b68de4786d94c95df3f70d32c11051358aeea7712973"
+    },
+    {
+      "path": "backend/internal/service/claude_fw_g_test_transition_test.go",
+      "predecessor_sha256s": [
+        "1658b7647c238493228183ff8d23a21a794e1e2e57e8c94ce65af4493df5c7a1"
+      ],
+      "reason": "承接未缓存客户端门禁暴露的历史 transition 与测试夹具缺口；仅修复追加式证据消费和既有生产合同断言，不改变 Codex 或 Claude wire。",
+      "to_sha256": "725da9037a210b8d1c8f16086bf219ccf6b669efc4df465e207b351ff7f92f3d"
+    },
+    {
+      "path": "backend/internal/service/claude_official_egress_activation_fact.go",
+      "predecessor_sha256s": [
+        "6318d2d169fb8b45ef77d0767a81904e10269c441d6cc7442abc6fc78307033e"
+      ],
+      "reason": "逐点声明 Claude 激活事实输出路径由部署者显式配置且已验证为绝对路径，闭合 Go 1.27 G703 并保持失败关闭。",
+      "to_sha256": "3e29005dfc4c61aa0a373a7fbd61271b8ec2bd80977b6044951bfed5b96a28e5"
+    },
+    {
+      "path": "backend/internal/service/codex_models_unwired_transport_retirement_test.go",
+      "predecessor_sha256s": [
+        "81d6e11f3b2950d84f21e6f9e32eda33f743e607359be3aa3150523ea1bd7440"
+      ],
+      "reason": "承接未缓存客户端门禁暴露的历史 transition 与测试夹具缺口；仅修复追加式证据消费和既有生产合同断言，不改变 Codex 或 Claude wire。",
+      "to_sha256": "ebb266c1cb45bef0bd1a3d7378e6aea911fe8924f193232d8141e8b88d96cc27"
+    },
+    {
+      "path": "backend/internal/service/compatibility_code_retirement_closure_test.go",
+      "predecessor_sha256s": [
+        "2ede77848d2d45c86b6a03ae4ee22f56a5de18b9571516ae19a4aa084547b681"
+      ],
+      "reason": "让兼容代码退休闭集消费既有 v0.1.180 egress 前置 transition，并保持历史收据只读。",
+      "to_sha256": "9e7ba19d2a4dc810c660836e07da9a583f58e97ac7cf4a6ef7b7dd7093c323ad"
+    },
+    {
+      "path": "backend/internal/service/composite_model_protocol_source_transition_test.go",
+      "predecessor_sha256s": [
+        "f2c155a58df01e2b8f82229eddd089f7ea59b32b23f3f60c5d22ec374f6b21df"
+      ],
+      "reason": "让 Composite 模型协议收据只通过 v0.1.180 source transition 承接后继摘要，协议隔离与前序安全边界保持不变。",
+      "to_sha256": "5e39bee2ada02ad6c6ace490d4bb33e882b1f3b0516ae7cca5b8e783764b8681"
+    },
+    {
+      "path": "backend/internal/service/domain_constants.go",
+      "predecessor_sha256s": [
+        "3ebbd02a6c672bd804abda286df7241acdd0002d1381ae60fb60430b681911d5"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "f2aae7fa7cd07736c79b4e91fd91aec16c4228b1a5f7207a8941eab61452d4e7"
+    },
+    {
+      "path": "backend/internal/service/gateway_forward.go",
+      "predecessor_sha256s": [
+        "4d7a69ef69c7a752ce83c24f3a54b5316d85005b1fc283b20fe44b6d8dd99a4f",
+        "83c88415b955ef3dc7b38b8c1d7cd8f378b7a3657d0d1e2980317061bfd8b7fa"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "e99128238536c46beda0f56ffc53beff34faf6571ce0bdca3aa9532135899da4"
+    },
+    {
+      "path": "backend/internal/service/gateway_forward_as_chat_completions.go",
+      "predecessor_sha256s": [
+        "1395a0760ade13707b4242bc604fe6b26851c2f615042624d503ca3a4cf45de2",
+        "243be47814ab71d960b87032644092e90ef2f8c2f319cdefcc9e7aebc1fd04ae"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "ce75d3720da98bde94c17ccba387b5b0ca9c4c8a25a492e1afc5248f2a6b5fc7"
+    },
+    {
+      "path": "backend/internal/service/gateway_forward_as_responses.go",
+      "predecessor_sha256s": [
+        "1efd342643a33c111339e09a4dc173cfdb776c65e186673e0ffd736950db9180",
+        "c9d297ecc04022104f727dadb0cf048581d972fc76a5909042d296558e4324bb"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "2657c0f62fc269ddb604738ca17d43b0dbe6f38828747b8351f1a840d03473ac"
+    },
+    {
+      "path": "backend/internal/service/gateway_forward_partial_usage_test.go",
+      "predecessor_sha256s": [
+        "b55906b014c971fdc8308e71f54042a2c506b0bbbca6cc92cd0fc210f7459ea9",
+        "cc80e98ef8c3f9e87a55181f6d890deedf71cf1424760fc6b1903240c63f9896"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "4c863caf0a4dafda2640a10f5e3b7abb36a3663197fa09b6c5946089e96380eb"
+    },
+    {
+      "path": "backend/internal/service/official_egress_activation_fact.go",
+      "predecessor_sha256s": [
+        "2ae0cbf72604d1a23e30cb22401757c143c375022dcc4dbbad8c4d801b14c1c0"
+      ],
+      "reason": "逐点声明 Codex 激活事实输出路径由部署者显式配置且已验证为绝对路径，闭合 Go 1.27 G703 并保持失败关闭。",
+      "to_sha256": "2fe704a81d880faf53cbf00bf6a9c8f176b8a9756112839aa58fa5c01e085819"
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_http_test.go",
+      "predecessor_sha256s": [
+        "ca599ad4068bff6db6b6251c92bcf159963c5c2bb29fc9ef75cc68d331cd7298"
+      ],
+      "reason": "重放 fork 自定义覆盖：PluginManager 仅接管非官方身份，官方 OAuth 的 HTTP、WS、compact、images 与账号测试仍由既有 Executor 和 Guard 独占。",
+      "to_sha256": "61dd0992b86d535bdcffd4df51f4cf1a9458a13b7accac7d7b4d45679f8e416f"
+    },
+    {
+      "path": "backend/internal/service/official_egress_t1_contract_test.go",
+      "predecessor_sha256s": [
+        "1e4af2ad89f56930b6f0806391b91d4f70432027ca77c340ddadc56637a11784"
+      ],
+      "reason": "承接未缓存客户端门禁暴露的历史 transition 与测试夹具缺口；仅修复追加式证据消费和既有生产合同断言，不改变 Codex 或 Claude wire。",
+      "to_sha256": "f1a414bdad7a9bb7aa96e2b01ca2a474a7b14d208a40b361e4a05c0fdc5e6e2c"
+    },
+    {
+      "path": "backend/internal/service/openai_alpha_search.go",
+      "predecessor_sha256s": [
+        "3ca21570d15382b873f287fd36c889ac40d5fed503003d52263dec0407dbeac4",
+        "c980eafe7baed3cf4b67a029dc5cf9601a744da9097c52746585573b73aab47f"
+      ],
+      "reason": "承接上游 v0.1.180 的 Alpha Search 身份逻辑，并仅修正冲突重放遗留缩进；Header、Persona 与 Guard 语义不变。",
+      "to_sha256": "4dc961146e1a56d43dbd23b5faa4550f1719a1106e106a4119da5a4e5cb14ff3"
+    },
+    {
+      "path": "backend/internal/service/openai_alpha_search_test.go",
+      "predecessor_sha256s": [
+        "5b763e967364796faa8ce97fd1c19728b9ea661b4913692329ac7e6749a1b1cf"
+      ],
+      "reason": "补齐 alpha search 回归夹具的输入与输出上限字段，使测试继续验证既有 typed failover 合同。",
+      "to_sha256": "8df678fb2fa2520d99d0d3224f1bbd2d358c9b5a98b5be7922ab28b750c3c21b"
+    },
+    {
+      "path": "backend/internal/service/openai_codex_account_identity_test.go",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "reason": "重放 fork 自定义覆盖：PluginManager 仅接管非官方身份，官方 OAuth 的 HTTP、WS、compact、images 与账号测试仍由既有 Executor 和 Guard 独占。",
+      "to_sha256": "eface55e19e319abe877ff1e71625d36f41b8d37e2203ab5cf85cef695d596c6"
+    },
+    {
+      "path": "backend/internal/service/openai_codex_models_service.go",
+      "predecessor_sha256s": [
+        "e55889f113eba404ab17fccd8b4d6bb2cb3a2d7abb54a5330e39b9bfbb487986"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "44fba8bd7739c4e4267bb96f486010850e6e90ff07ec3f3a2196f06527ca80c2"
+    },
+    {
+      "path": "backend/internal/service/openai_codex_models_service_test.go",
+      "predecessor_sha256s": [
+        "874f5ed35f11666b7d50b71f3b6e549137fe2c361e88389299ca1d67ea6e8dc0"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "0d374c9d16e82da6eca3c2645efedef6824874fbbb042d0bce2dd0b31e34813a"
+    },
+    {
+      "path": "backend/internal/service/openai_codex_transform.go",
+      "predecessor_sha256s": [
+        "66f7b03dce446d83fe8857e598db07380da70c6d3b97c2e2ebbce4ad524d2303"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "4bf522f626c4a32bf02daf5ae31321162641bda7cf889cf1b9df584aa1866b53"
+    },
+    {
+      "path": "backend/internal/service/openai_compact_fallback_test.go",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "reason": "重放 fork 自定义覆盖：PluginManager 仅接管非官方身份，官方 OAuth 的 HTTP、WS、compact、images 与账号测试仍由既有 Executor 和 Guard 独占。",
+      "to_sha256": "c07fe7d4b05b59391507ac8c4f1936e77da144d26fb2b54825294b10c69c4e5f"
+    },
+    {
+      "path": "backend/internal/service/openai_content_session_seed.go",
+      "predecessor_sha256s": [
+        "0b72cb05801140468370530a6438e196183ab2c3de536a7db0e50130f633319a"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "0fcc327bbc870ca152daa62d0311ac72dc43b44ae29f3e063e7b34f0b2b87f71"
+    },
+    {
+      "path": "backend/internal/service/openai_embeddings.go",
+      "predecessor_sha256s": [
+        "e6f719866869a02eb95f441d0f22580f04a68886e0fd295b5ef1804692defe90"
+      ],
+      "reason": "承接上游将 Embeddings 范围外直连收口到 doOpenAIUpstream；API Key 与第三方兼容入口不能取得 Codex OAuth Persona 选择权。",
+      "to_sha256": "6789e4cb7e348d775590eaa6984dfe6d04b2f7ee4c920e4950cb7678ff9eff67"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_cc_pipeline.go",
+      "predecessor_sha256s": [
+        "241c159f51d94a34996d43dbfe3e7eabe55c7b75fb65c000c9f1eb72daacd0a3"
+      ],
+      "reason": "承接上游将 Chat Completions 兼容回退直连收口到 doOpenAIUpstream；API Key/Grok 兼容入口不能接管官方 Codex OAuth。",
+      "to_sha256": "da5d9a844063bc5f40290e054f768c26b1a9f621fe6359c3d8e00d2bc1d09c33"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_chat_completions.go",
+      "predecessor_sha256s": [
+        "4f4cbe8c89fb88134779b8204803d945470cae2db4026ba4ceaba7f9d87360cc"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "b16ccb5a4e261d6982dbf80c8deb83b7f1600a71dd12be804ca2d8596054d3d1"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_forward.go",
+      "predecessor_sha256s": [
+        "a66ce368dbf7f3acb43d65544ba126643a83bacbec6587bc38df3fcf9167da82"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "9a264e127550ec927b7e45bbc38867971e8b4d591aebf5cf2ff3c88bfe7fbea5"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_grok.go",
+      "predecessor_sha256s": [
+        "52433a1e1f05c9577d3261d06f1c71c5c04b56b913017102f368d3d499bdbc1a"
+      ],
+      "reason": "承接上游将 Grok 范围外直连收口到 doOpenAIUpstream；xAI/Grok 协议继续与 Codex OAuth Executor 隔离。",
+      "to_sha256": "b8c26608986f94f86e8970a5330e2b2c98dea6e013f697fbc4c038624299c8d4"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_grok_chat_bridge.go",
+      "predecessor_sha256s": [
+        "8e2c18b43abc22c8528fa4a45b38a277a67ad207c53e6a0fa2a2be5b5fd2bde7"
+      ],
+      "reason": "承接上游将 Grok 范围外直连收口到 doOpenAIUpstream；xAI/Grok 协议继续与 Codex OAuth Executor 隔离。",
+      "to_sha256": "febe241913b8a7e05ca548a486f8d329fc7fc3657cc828d62930e2aea1e740ee"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_messages.go",
+      "predecessor_sha256s": [
+        "befcf73a99e2533bd43c8b2f447d829394c105dceca7bd092e61fc1d4ebdb096"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "179dce94c34c8165cca43c49565affa68729f936ed279bbc708c33d78f89fbf7"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_passthrough.go",
+      "predecessor_sha256s": [
+        "896de5eb6a1acf980b0db8ad2c2e2f283d7dae4d7a938d1eae3b0049bd38a8ce"
+      ],
+      "reason": "重放 fork 自定义覆盖：PluginManager 仅接管非官方身份，官方 OAuth 的 HTTP、WS、compact、images 与账号测试仍由既有 Executor 和 Guard 独占。",
+      "to_sha256": "ad2310940ea873e8d5aea83a159eedc8678da9228a18be5c0922ad51f17f8bbe"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_request_body.go",
+      "predecessor_sha256s": [
+        "5c8a7a0b2a46296a2adc99e15a103ee2162da371f52c65f2ae75415957a44a39"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "c0bf95716c827b24dd3756c41076180672e6a362ce019d0de5da3cc7c110aeaf"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_response_handling.go",
+      "predecessor_sha256s": [
+        "6f193a00301e699d650fc9c32dfbdd1b21f722e6f254a1d4c99505d953c7eeff"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "73c6226c167410b64763c5fb309bd1d41a9e6aa935c5b1c2c4b14c59ef2996b7"
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_service.go",
+      "predecessor_sha256s": [
+        "8d2be26ae50fc48b95ba1ad3ed1558b7a8aef4e432b063562bb187a6bb59b89f"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "fa32c2517da9470c942e59c13dafccc9af473508ce6e5862b10706ad84486aaf"
+    },
+    {
+      "path": "backend/internal/service/openai_images.go",
+      "predecessor_sha256s": [
+        "753e640e3b5199abaa081e951ad90a3edea2790b3a3e8f2329cdc69a08538cb1"
+      ],
+      "reason": "承接上游将 Images API Key 范围外直连收口到 doOpenAIUpstream；官方 OAuth Images 仍由独立受审 endpoint 执行。",
+      "to_sha256": "702af76efd5d22cfe3b9e6d65bfe3c053c9cec38ed6573741cbe941bf11cb8d7"
+    },
+    {
+      "path": "backend/internal/service/openai_images_responses.go",
+      "predecessor_sha256s": [
+        "f407c1b471cf449a8724ef382365729ff68dcdc39bcbda1d5dedcd018c1833ae"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "674358682c32cee196d94bc98151186df8f99cd18b92c9c9175f86d629ffff89"
+    },
+    {
+      "path": "backend/internal/service/openai_images_test.go",
+      "predecessor_sha256s": [
+        "43460ad1d2d9f349a69b136901c73c8fe31e2bd04689122e743bdb10489f1346"
+      ],
+      "reason": "为 OAuth Images 429 回归夹具补齐账号命名空间，继续验证同账号重试窗口而不改变发送合同。",
+      "to_sha256": "7b62f06bb09d004e4625f755386c380f222bb2780a09298b4d4238306d8ae50c"
+    },
+    {
+      "path": "backend/internal/service/openai_messages_continuation.go",
+      "predecessor_sha256s": [
+        "75481af9f901802bc6aed5d5a0933b111a0eb8eeb4dfba03ab3b63514e689fcf"
+      ],
+      "reason": "重放 fork 自定义覆盖：PluginManager 仅接管非官方身份，官方 OAuth 的 HTTP、WS、compact、images 与账号测试仍由既有 Executor 和 Guard 独占。",
+      "to_sha256": "b7af273cfdda7012476606384bda9ee1e75a2c46f62e76e2298858cf07731e17"
+    },
+    {
+      "path": "backend/internal/service/openai_plugin_transport.go",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "reason": "重放 fork 自定义覆盖：PluginManager 仅接管非官方身份，官方 OAuth 的 HTTP、WS、compact、images 与账号测试仍由既有 Executor 和 Guard 独占。",
+      "to_sha256": "e8fc59dceb2bed45e643c5533d2e3b85ecd7df25de92b22cdfce01d2d65389d5"
+    },
+    {
+      "path": "backend/internal/service/openai_quota_service.go",
+      "predecessor_sha256s": [
+        "20c9a2618c7958366392a3d399cd61df3e76e53c25adefb87917f5d0e4ebba82"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "5eead2136901a91ace7002f9e4a5615fb51eb2449d5c4b5d519e8d918422e040"
+    },
+    {
+      "path": "backend/internal/service/openai_quota_spark_window_test.go",
+      "predecessor_sha256s": [
+        "775c619bc43e05ab532c5c336d80490a6c9b8b52aaecf65a8f44cbf8e1121bc3"
+      ],
+      "reason": "重放 fork 自定义覆盖：PluginManager 仅接管非官方身份，官方 OAuth 的 HTTP、WS、compact、images 与账号测试仍由既有 Executor 和 Guard 独占。",
+      "to_sha256": "e75e16e6e4e1cee297c0048b8009a10f878448c35e74cc07eddf171446f7b930"
+    },
+    {
+      "path": "backend/internal/service/openai_responses_lite_tools.go",
+      "predecessor_sha256s": [
+        "66771e83699bc059896cac5901e48536b3a037a2a30ffad4518fef7b201850c6"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "050cc847d8558d33f97d2b3ab8b6c0d10d11af978607036d391f08bb414049cd"
+    },
+    {
+      "path": "backend/internal/service/openai_responses_namespace.go",
+      "predecessor_sha256s": [
+        "7afcb178f0084fcd5bcf81659f56283033261e869a555ba6df9cc0bd48c6df90"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "33888420868560004dfe93bd4403ce8200d263bf16808fbaedb77a553000d353"
+    },
+    {
+      "path": "backend/internal/service/openai_setup_token_compat_test.go",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "reason": "重放 fork 自定义覆盖：PluginManager 仅接管非官方身份，官方 OAuth 的 HTTP、WS、compact、images 与账号测试仍由既有 Executor 和 Guard 独占。",
+      "to_sha256": "8b217423926b5922ab6aa487fb731e5ea9b8903c65a2cd6dff3ec9ab6acde338"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_ingress.go",
+      "predecessor_sha256s": [
+        "57f4ecf978c571a639dcfb8e4d691f860d052efea30e90508b715db5c429efac",
+        "ac6ec70c90ea61fa9bcb90b3eea1eedf5655078c7812b18cbf6ab99aa38158a4"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "a01d4ce6a3723e2d0d910f20d72c02653faf906caf1aeeaf20e5485effa83892"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_ingress_session_test.go",
+      "predecessor_sha256s": [
+        "04fae9071fb740e7e6578e01bcd67430851c06b073e522b14835846307d51adf"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "857b6c70620cc34f9acce725c776dce2ebba3cc5f2afeff070e432e1ebac9444"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_support.go",
+      "predecessor_sha256s": [
+        "68aedf8e47036b43694cebee094b6fd57531481c6cae338979fb774eb8b682ef"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "06c7a49ae50719eb64153ef2847123672db4b20731dbc50f39537039667e6f6a"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_v2.go",
+      "predecessor_sha256s": [
+        "ba149360fefe37bf4dd00aed4311fc7bf12578f8716f1f46ccc094c16b7cb98a"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "14d5ff523e60f37f8c82343532685a0f790d2690fe11615fa3187b649a722141"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_http_bridge.go",
+      "predecessor_sha256s": [
+        "8b0734d7dbce1a7b94b1d51928b1e3e18529bb3c985ac20a08dfed872c0f4eb9"
+      ],
+      "reason": "重放 fork 自定义覆盖：PluginManager 仅接管非官方身份，官方 OAuth 的 HTTP、WS、compact、images 与账号测试仍由既有 Executor 和 Guard 独占。",
+      "to_sha256": "0f4525fe51d59ffcd11f4912d6bba4c69b03e46d495139673ebf89d50e5fe9be"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_http_bridge_test.go",
+      "predecessor_sha256s": [
+        "1f99f9d44798d0ea4fb6133c3c481ef43e7221250305de4125e53d7434ba7f1d"
+      ],
+      "reason": "重放 fork 自定义覆盖：PluginManager 仅接管非官方身份，官方 OAuth 的 HTTP、WS、compact、images 与账号测试仍由既有 Executor 和 Guard 独占。",
+      "to_sha256": "067dc2983c6e01eae565839ab83ef4637fbe01823eb2e27bf61123c040a1338f"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_protocol_forward_test.go",
+      "predecessor_sha256s": [
+        "75dd7aa0eaccc21534bb43fe854ddcc76a05bcc9a7eb7ed134abf5b65d3a8466"
+      ],
+      "reason": "更新 API Key mimic HTTP 回归断言，冻结 previous_response_id 在该路径上的保留语义。",
+      "to_sha256": "4ef89e6717e2716ebfcf2e4930a9b8c8dd5598d25c860bd1f3d02fdcb5342ce1"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_protocol_resolver.go",
+      "predecessor_sha256s": [
+        "08450401fec9a74f82d480de38f94e5a3bbeb912daf8ce23653867988d13efe0"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "18436c00a4417fe6ec807d1a7d487676f99e679a156e77b5394c65af9d117dad"
+    },
+    {
+      "path": "backend/internal/service/openai_ws_v2_passthrough_adapter.go",
+      "predecessor_sha256s": [
+        "46d5884fc4b4d27e39cfe34a30f99605208a9e19617bd36e699eddfdd9d3963e",
+        "f7226d7f58b2c912c735d8a157c62a90f775e740bf7ecc9e768786388bc6a791"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "45d786045c38573a775a37c0a33af011b03601ab6b53f37f8c095def8ef4abf3"
+    },
+    {
+      "path": "backend/internal/service/plugin_manager_routing_test.go",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "reason": "重放 fork 自定义覆盖：PluginManager 仅接管非官方身份，官方 OAuth 的 HTTP、WS、compact、images 与账号测试仍由既有 Executor 和 Guard 独占。",
+      "to_sha256": "a2de49f1dcf21eceb67dcdfdb413ad75205760cce344083c32ec11d25cbb5f4d"
+    },
+    {
+      "path": "backend/internal/service/setting_gateway_runtime.go",
+      "predecessor_sha256s": [
+        "66ea5f26a69d755fc5513d5ee025bec8057536e04ce22a2a74b5a806801ce1c1"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "8931092bcebb8d66f2af6bfcaba23bb93264cb31732df11a8bf72a90eb512024"
+    },
+    {
+      "path": "backend/internal/service/setting_parse.go",
+      "predecessor_sha256s": [
+        "2e74d2409b74933931ba48d87355d6ff738eb66d58dc69034074c6b4a18be736"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "9a5db2d05022c62d1c659b462a14f0e1fb8c903b4977e4c5609268a6049ce858"
+    },
+    {
+      "path": "backend/internal/service/setting_update.go",
+      "predecessor_sha256s": [
+        "39ffacf6553d68f01e07eb0dc009983cf21b1258cff6be72bb90e9bcc2034c2c"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "a19d2023119e45fba1e1b496b42d616dd526ead8350f7759ce61efb81c429d68"
+    },
+    {
+      "path": "backend/internal/service/settings_view.go",
+      "predecessor_sha256s": [
+        "af1f892392b33b4f4543c74c846525aa50041bee86de380e4be2d2d88e91863d"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "5b949dcb0d24ea0103c12a7e3baf1b39bd6903432775c4e77a2034ff355cff9e"
+    },
+    {
+      "path": "backend/internal/service/upstream_models.go",
+      "predecessor_sha256s": [
+        "3899766a1c7b9a3bb1d3caee90eb1085e5ce9e01c3ac6f102d5ce49ecfde0e0d",
+        "9498a8a6c225fbe0dc16a0380aa38066e08d2afed01fe8ebbeaf7aaed23519f8",
+        "b1dc1214c904ceeb496ad885e54d6bdab6b27f6ca2ca6e30698caf55a068e9c7"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "83fe5a75478e8968ebb84486856243a66ad193a70b33b4544fa495133c0df2d8"
+    },
+    {
+      "path": "backend/internal/service/upstream_models_test.go",
+      "predecessor_sha256s": [
+        "968cf0bc2df9dd4027e436d7ce8c353e9509ff751648bbd00cb4e57e70ba0d58"
+      ],
+      "reason": "改用不会拦截 /codex/models 的专用 HTTPUpstream 测试桩，继续验证 OAuth 模型清单解析。",
+      "to_sha256": "4525b557a5455c61a56bff3d9e69fa3c7a325c873585384bc289c7830806535b"
+    },
+    {
+      "path": "backend/internal/service/upstream_v0179_release_ci_repair_transition_test.go",
+      "predecessor_sha256s": [
+        "271edd7545950ec255b651a3b40fdfe6781c5a4119d3c5ee0d7f233f82f158b2"
+      ],
+      "reason": "让 v0.1.179 发版 CI 修复收据只通过 v0.1.180 source transition 承接其四个路径的当前摘要，历史收据原文保持不变。",
+      "to_sha256": "f31df14ce7a1924caee147caeb18065a7bee79f506c1be4e5a15ed90f4047eff"
+    },
+    {
+      "path": "backend/internal/service/upstream_v0179_source_transition_test.go",
+      "predecessor_sha256s": [
+        "98c59518a91b7bfc702bb8ceb4094b0c6966f0069ac42b95449f640636e2316f",
+        "acba02ace84efed2fb3eab287a8830d00bd08f62d44cf49c924cb8cf574a4c26"
+      ],
+      "reason": "让 v0.1.179 历史 source transition 只通过 v0.1.180 收据的精确 path/predecessor/to 单向承接当前摘要。",
+      "to_sha256": "781aeee1b1489bebe4d672341049a4fd90f894551d2b985bc01dc3971bbefac7"
+    },
+    {
+      "path": "backend/internal/service/upstream_v0180_egress_prerequisite_transition_test.go",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "reason": "新增 service 侧严格前置收据消费器，将历史摘要经已冻结 snapshot 精确承接到 v0.1.180 生命周期摘要，不扩大业务源码或 OAuth wire 权限。",
+      "to_sha256": "9a138074aadeed87c57c4515662d8bfd965a955fa9f03cb8bd05c080e1507ffc"
+    },
+    {
+      "path": "backend/internal/service/upstream_v0180_source_transition_test.go",
+      "predecessor_sha256s": [
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "reason": "在 service 包复算同一 source transition，自历史收据精确承接当前摘要且不扩大官方 OAuth 发送权限。",
+      "to_sha256": "ef6d2245a8119174edb3f481945b0701660edfa95669ec34cb1aa6c6d73dcd59"
+    },
+    {
+      "path": "backend/internal/service/wire.go",
+      "predecessor_sha256s": [
+        "9101d38edf45b13ae3bfdd218cadbcdd7b0a667f6a2b10ec9ad7650266d534b4",
+        "e3d10c78e558d12609c3394cb8b47e7cba66943f21a7dc190f0f71ade40aa528"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "a828db4b27330b9eba1916154ecf7e0b193c0cc7103d366c750a848e3f320af6"
+    },
+    {
+      "path": "deploy/config.example.yaml",
+      "predecessor_sha256s": [
+        "49775cee38da80ac703d331be9224c0865e2e05bc950b0d59375abe65988d564",
+        "58a1bff6653169a20f96a563be567b1ff4c9dfc2714d51d30f34472665cf8183"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "b1c98a8f865a923330cd332b961a95fff6a196f7f23a7165f2bd710ff16889ed"
+    },
+    {
+      "path": "docs/egress/maintenance/bootstrap-inventory-lock.json",
+      "predecessor_sha256s": [
+        "629cb0a8b32532d98edc52693c8bf00c70ec81145f0a870b870a63cebd238594",
+        "88d027eefa197d564d1bc3a902581be412768239a06902facf448d51e5f7d24c",
+        "917fbcc0c6cf8f0a28b553837e167c07efc38aec566a98ab52c59d68ceec1b65",
+        "edf349af67eb9821014c8639df4f2a76e61f6cb1a024d09a2019bb37816200b1"
+      ],
+      "reason": "承接 v0.1.180 发送面生命周期前置的精确 path/from/to，使 service 与 officialegress 历史验证共同复算同一前置事实。",
+      "to_sha256": "d94bfe584b1cfb61bb852c7c6de9dbc3298084c0a95e329c960b0ee12fc0f0a2"
+    },
+    {
+      "path": "docs/egress/maintenance/removal-receipts.json",
+      "predecessor_sha256s": [
+        "a7c63a97d683674f918ea824ed2c01f7a831689240444d6d63a0c467c460fbfb"
+      ],
+      "reason": "追加 6 条 out_of_scope_refactored 收据，逐项冻结上游已收口的旧 HTTPUpstream.Do 候选、当前源码摘要和 §5.2 审核责任。",
+      "to_sha256": "2a96fcae846f0e1135537cb5942467c77cefd8d26ca9f7423da952fa4c9ccc15"
+    },
+    {
+      "path": "frontend/src/api/admin/settings.ts",
+      "predecessor_sha256s": [
+        "7600f4bc33683662bf9131aeec789785dfe886f5003a27df55403837d5a5e824"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "9a5a08284724b8569f5788ee2484c4d9f0cd71d1b88e3901f6e41b882d56ef82"
+    },
+    {
+      "path": "frontend/src/i18n/locales/en/admin/settings.ts",
+      "predecessor_sha256s": [
+        "e75a8673c854042cc8404fa1ed01a0bd8ccf45834bd2acff2cf31a93495ee09d"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "8a6652d01e096697814917c471ac4287656ba308e7f82c7b3014415a0acb178e"
+    },
+    {
+      "path": "frontend/src/i18n/locales/zh/admin/settings.ts",
+      "predecessor_sha256s": [
+        "a696bc2ead944596efbf4ad93cee59ad4d1271ee84d5af0502575508d9c6f446"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "5feb7c359f610c3dac54ee2be8671c7e1fe12db02c03ce1465e7e74fb67c3c88"
+    },
+    {
+      "path": "frontend/src/views/admin/SettingsView.vue",
+      "predecessor_sha256s": [
+        "f3d7d0d7bbb1e354be111bb63c2e34df28cd6e4060999fe26a7465b53dcfe9f6"
+      ],
+      "reason": "承接上游 v0.1.180 对受审发送面、身份边界或历史验证夹具的变化；Codex 与 Claude 的 active、rollback、Persona、Executor、Token 和 Guard 选择权保持不变。",
+      "to_sha256": "79809091223dbf14b736d0963c393fe98918c08cecc057d76551988fddca5a29"
+    }
+  ],
+  "target_clients": {
+    "claude": "2.1.226",
+    "codex": "0.147.0"
+  },
+  "upstream_commit": "c40edb4070a9274e8c23f161b4ed552051b14698",
+  "upstream_tag": "v0.1.180"
+}

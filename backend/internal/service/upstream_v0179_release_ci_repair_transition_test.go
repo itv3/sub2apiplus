@@ -130,7 +130,14 @@ func validateUpstreamV0179ReleaseCIRepairTransitionService(
 		current, readErr := os.ReadFile(filepath.Join(
 			"../../..", filepath.FromSlash(transition.Path),
 		))
-		if readErr != nil || upstreamMergeFrameworkServiceDigest(current) != transition.ToSHA256 {
+		if readErr != nil {
+			return errors.New("上游 v0.1.179 发版 CI 修复 transition 当前源码不可读：" + transition.Path)
+		}
+		currentDigest := upstreamMergeFrameworkServiceDigest(current)
+		if currentDigest != transition.ToSHA256 &&
+			!upstreamV0180SourceTransitionSupersedesService(
+				transition.Path, transition.ToSHA256, currentDigest,
+			) {
 			return errors.New("上游 v0.1.179 发版 CI 修复 transition 当前摘要不一致：" + transition.Path)
 		}
 		paths = append(paths, transition.Path)
@@ -148,6 +155,9 @@ func upstreamV0179ReleaseCIRepairTransitionSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if upstreamV0180SourceTransitionSupersedesService(path, priorDigest, currentDigest) {
+		return true
+	}
 	if compositeModelProtocolSourceTransitionSupersedesService(
 		path, priorDigest, currentDigest,
 	) {
@@ -159,7 +169,10 @@ func upstreamV0179ReleaseCIRepairTransitionSupersedesService(
 	}
 	for _, transition := range receipt.Transitions {
 		if transition.Path == path && transition.FromSHA256 == priorDigest &&
-			transition.ToSHA256 == currentDigest {
+			(transition.ToSHA256 == currentDigest ||
+				upstreamV0180SourceTransitionSupersedesService(
+					path, transition.ToSHA256, currentDigest,
+				)) {
 			return true
 		}
 	}

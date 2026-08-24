@@ -1,0 +1,613 @@
+{
+  "schema_version": "upstream-egress-merge-ledger/v1",
+  "upstream_tag": "v0.1.180",
+  "upstream_commit": "c40edb4070a9274e8c23f161b4ed552051b14698",
+  "generation_rule": "strict_surface ∪ required_review_touchpoint ∪ identity_boundary 中相对 upstream 有差异的普通文件",
+  "overlay_count": 86,
+  "overlay_sha256": "4a17f1e2b38acfe073cbe48928c7f34d62403a02aa863e77af591c6c8080dda0",
+  "overlays": [
+    {
+      "path": "backend/cmd/server/wire.go",
+      "source": "upstream",
+      "scopes": [
+        "required_review_touchpoint"
+      ]
+    },
+    {
+      "path": "backend/cmd/server/wire_gen.go",
+      "source": "upstream",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/config/config.go",
+      "source": "upstream",
+      "scopes": [
+        "required_review_touchpoint"
+      ]
+    },
+    {
+      "path": "backend/internal/handler/admin/setting_handler.go",
+      "source": "upstream",
+      "scopes": [
+        "identity_boundary"
+      ]
+    },
+    {
+      "path": "backend/internal/handler/admin/setting_handler_update.go",
+      "source": "upstream",
+      "scopes": [
+        "identity_boundary"
+      ]
+    },
+    {
+      "path": "backend/internal/handler/dto/settings.go",
+      "source": "upstream",
+      "scopes": [
+        "identity_boundary"
+      ]
+    },
+    {
+      "path": "backend/internal/handler/openai_gateway_handler.go",
+      "source": "upstream",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/handler/openai_live.go",
+      "source": "upstream",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/body_document.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/profile.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/snapshotdoc.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/zerovalues.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/pkg/apicompat/chatcompletions_responses_bridge.go",
+      "source": "upstream",
+      "scopes": [
+        "required_review_touchpoint"
+      ]
+    },
+    {
+      "path": "backend/internal/pkg/apicompat/responses_namespace.go",
+      "source": "upstream",
+      "scopes": [
+        "required_review_touchpoint"
+      ]
+    },
+    {
+      "path": "backend/internal/pkg/httpclient/pool.go",
+      "source": "upstream",
+      "scopes": [
+        "required_review_touchpoint"
+      ]
+    },
+    {
+      "path": "backend/internal/pkg/openai/request.go",
+      "source": "upstream",
+      "scopes": [
+        "identity_boundary"
+      ]
+    },
+    {
+      "path": "backend/internal/repository/http_upstream.go",
+      "source": "upstream",
+      "scopes": [
+        "required_review_touchpoint"
+      ]
+    },
+    {
+      "path": "backend/internal/repository/official_egress_guard.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/repository/wire.go",
+      "source": "upstream",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/server/routes/gateway.go",
+      "source": "upstream",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/account.go",
+      "source": "upstream",
+      "scopes": [
+        "required_review_touchpoint"
+      ]
+    },
+    {
+      "path": "backend/internal/service/account_test_service.go",
+      "source": "upstream",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/account_test_service_openai_files.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/account_usage_service.go",
+      "source": "upstream",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/domain_constants.go",
+      "source": "upstream",
+      "scopes": [
+        "identity_boundary"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_client_profile_registry.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_1a_transition.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_1b_executor.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_engine.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_files.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_integration.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_release_projection.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_http_invocation.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_identity_authority.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_integration.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_http.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_json.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_openai_ws.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_profile.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_transport.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_transport_adapters.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_upstream_identity_bridge.go",
+      "source": "fork",
+      "scopes": [
+        "required_review_touchpoint"
+      ]
+    },
+    {
+      "path": "backend/internal/service/official_egress_websocket_invocation.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_alpha_search.go",
+      "source": "upstream",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_apikey_mimic_profile.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_codex_identity.go",
+      "source": "upstream",
+      "scopes": [
+        "required_review_touchpoint"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_codex_models_service.go",
+      "source": "upstream",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_codex_transform.go",
+      "source": "upstream",
+      "scopes": [
+        "required_review_touchpoint"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_codex_version_sync_service.go",
+      "source": "upstream",
+      "scopes": [
+        "identity_boundary"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_content_session_seed.go",
+      "source": "upstream",
+      "scopes": [
+        "required_review_touchpoint"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_cookie_jar.go",
+      "source": "fork",
+      "scopes": [
+        "required_review_touchpoint"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_forward_plan.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_chat_completions.go",
+      "source": "upstream",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_count_tokens.go",
+      "source": "upstream",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_forward.go",
+      "source": "upstream",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_messages.go",
+      "source": "upstream",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_passthrough.go",
+      "source": "upstream",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_request_body.go",
+      "source": "upstream",
+      "scopes": [
+        "required_review_touchpoint"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_gateway_service.go",
+      "source": "upstream",
+      "scopes": [
+        "required_review_touchpoint"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_images_responses.go",
+      "source": "upstream",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_live.go",
+      "source": "upstream",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_model_capabilities.go",
+      "source": "fork",
+      "scopes": [
+        "required_review_touchpoint"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_oauth_service.go",
+      "source": "upstream",
+      "scopes": [
+        "strict_surface",
+        "required_review_touchpoint"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_quota_service.go",
+      "source": "upstream",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_responses_lite_tools.go",
+      "source": "upstream",
+      "scopes": [
+        "required_review_touchpoint"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_responses_namespace.go",
+      "source": "upstream",
+      "scopes": [
+        "required_review_touchpoint"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_upstream_http.go",
+      "source": "fork",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_ws_client.go",
+      "source": "upstream",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder.go",
+      "source": "upstream",
+      "scopes": [
+        "required_review_touchpoint"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_ingress.go",
+      "source": "upstream",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_support.go",
+      "source": "upstream",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_ws_forwarder_v2.go",
+      "source": "upstream",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_ws_http_bridge.go",
+      "source": "upstream",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_ws_pool.go",
+      "source": "upstream",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_ws_protocol_resolver.go",
+      "source": "upstream",
+      "scopes": [
+        "required_review_touchpoint"
+      ]
+    },
+    {
+      "path": "backend/internal/service/openai_ws_v2_passthrough_adapter.go",
+      "source": "upstream",
+      "scopes": [
+        "strict_surface"
+      ]
+    },
+    {
+      "path": "backend/internal/service/setting_gateway_runtime.go",
+      "source": "upstream",
+      "scopes": [
+        "identity_boundary"
+      ]
+    },
+    {
+      "path": "backend/internal/service/setting_parse.go",
+      "source": "upstream",
+      "scopes": [
+        "identity_boundary"
+      ]
+    },
+    {
+      "path": "backend/internal/service/setting_update.go",
+      "source": "upstream",
+      "scopes": [
+        "identity_boundary"
+      ]
+    },
+    {
+      "path": "backend/internal/service/settings_view.go",
+      "source": "upstream",
+      "scopes": [
+        "identity_boundary"
+      ]
+    },
+    {
+      "path": "backend/internal/service/wire.go",
+      "source": "upstream",
+      "scopes": [
+        "identity_boundary"
+      ]
+    },
+    {
+      "path": "frontend/src/api/admin/settings.ts",
+      "source": "upstream",
+      "scopes": [
+        "identity_boundary"
+      ]
+    },
+    {
+      "path": "frontend/src/i18n/locales/en/admin/settings.ts",
+      "source": "upstream",
+      "scopes": [
+        "identity_boundary"
+      ]
+    },
+    {
+      "path": "frontend/src/i18n/locales/zh/admin/settings.ts",
+      "source": "upstream",
+      "scopes": [
+        "identity_boundary"
+      ]
+    },
+    {
+      "path": "frontend/src/views/admin/SettingsView.vue",
+      "source": "upstream",
+      "scopes": [
+        "identity_boundary"
+      ]
+    }
+  ]
+}

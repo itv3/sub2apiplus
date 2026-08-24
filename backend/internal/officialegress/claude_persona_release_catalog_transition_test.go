@@ -211,11 +211,17 @@ func claudePersonaReleaseCatalogTransitionSupersedes(
 		return false
 	}
 	for _, transition := range receipt.Transitions {
-		if transition.Path == path && transition.ToSHA256 == currentDigest &&
-			(transition.FromSHA256 == priorDigest ||
-				claudeFWHImmutableTransitionLedgerSupersedes(
-					path, priorDigest, transition.FromSHA256,
+		if transition.Path != path ||
+			(transition.ToSHA256 != currentDigest &&
+				!upstreamV0180SourceTransitionSupersedes(
+					path, transition.ToSHA256, currentDigest,
 				)) {
+			continue
+		}
+		if transition.FromSHA256 == priorDigest ||
+			claudeFWHImmutableTransitionLedgerSupersedes(
+				path, priorDigest, transition.FromSHA256,
+			) {
 			return true
 		}
 	}
