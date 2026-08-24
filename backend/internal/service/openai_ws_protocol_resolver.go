@@ -73,7 +73,7 @@ func (r *defaultOpenAIWSProtocolResolver) ResolveForRequest(ctx context.Context,
 	if account.IsOpenAIAPIKeyCodexMimicEnabled() && !isOpenAIOfficialClientRequestContext(ctx) {
 		return openAIWSHTTPDecision("apikey_mimic_http_only")
 	}
-	if account.IsOpenAIOAuth() {
+	if account.IsOpenAIOAuthLike() {
 		if !wsCfg.OAuthEnabled {
 			return openAIWSHTTPDecision("oauth_disabled")
 		}

@@ -122,6 +122,7 @@ type OpenAIQuotaUsage struct {
 	AdditionalRateLimits  []OpenAIAdditionalRateLimit  `json:"additional_rate_limits,omitempty"`
 	RateLimitResetCredits *OpenAIRateLimitResetCredits `json:"rate_limit_reset_credits,omitempty"`
 	FetchedAt             int64                        `json:"fetched_at"`
+	autoResetCandidates   []openAIAutoResetCreditCandidate
 }
 
 // OpenAIQuotaResetCredit captures the redeemed credit metadata returned by the
@@ -263,6 +264,10 @@ func (s *OpenAIQuotaService) queryUsage(
 				}
 				continue
 			}
+			if isOpenAIAutoResetContext(ctx) {
+				slog.Warn("openai_quota_query_failed", "account_id", accountID, "status", status, "source", "auto_reset")
+				return nil, infraerrors.Newf(mapUpstreamStatus(status), "OPENAI_QUOTA_UPSTREAM_ERROR", "upstream returned %d", status)
+			}
 			body := truncate(s.redactQuotaErrorBody(ctx, accountID, string(responseBody)), 240)
 			slog.Warn("openai_quota_query_failed", "account_id", accountID, "status", status, "body", body)
 			return nil, infraerrors.Newf(
@@ -285,6 +290,7 @@ func (s *OpenAIQuotaService) queryUsage(
 	}
 	details := s.queryResetCreditDetails(callCtx, accessToken, chatGPTAccountID, proxyURL, accountID)
 	if details != nil {
+		payload.autoResetCandidates = details.AutoResetCandidates
 		hasDetailCount := details.AvailableCount != nil
 		if payload.RateLimitResetCredits == nil {
 			payload.RateLimitResetCredits = &OpenAIRateLimitResetCredits{}
@@ -374,6 +380,25 @@ func (s *OpenAIQuotaService) queryResetCreditDetails(ctx context.Context, access
 // ResetCredit 为指定 OpenAI 账号消费一个 rate_limit_reset_credit。
 // redeem_request_id 由服务端生成，用作上游幂等键。
 func (s *OpenAIQuotaService) ResetCredit(ctx context.Context, accountID int64) (*OpenAIQuotaResetResult, error) {
+	redeemRequestID, err := generateRedeemRequestID()
+	if err != nil {
+		return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_QUOTA_REDEEM_ID_FAILED", "failed to generate redeem id: %v", err)
+	}
+	return s.resetCredit(ctx, accountID, "", redeemRequestID, false)
+}
+
+// ResetCreditTargeted 使用固定卡 ID 与兑换 ID执行自动消费。调用方必须在重试时
+// 复用同一组参数；本方法不会回退到不带 credit_id 的旧消费方式。
+func (s *OpenAIQuotaService) ResetCreditTargeted(ctx context.Context, accountID int64, creditID, redeemRequestID string) (*OpenAIQuotaResetResult, error) {
+	creditID = strings.TrimSpace(creditID)
+	redeemRequestID = strings.TrimSpace(redeemRequestID)
+	if creditID == "" || redeemRequestID == "" {
+		return nil, infraerrors.New(http.StatusBadRequest, "OPENAI_QUOTA_TARGETED_RESET_INVALID", "credit_id and redeem_request_id are required")
+	}
+	return s.resetCredit(ctx, accountID, creditID, redeemRequestID, true)
+}
+
+func (s *OpenAIQuotaService) resetCredit(ctx context.Context, accountID int64, creditID, redeemRequestID string, targeted bool) (*OpenAIQuotaResetResult, error) {
 	// Shadow guard: resetting credits via a shadow account would silently
 	// operate on the parent's quota; that is surprising and unwanted. Callers
 	// must reset the parent account directly.
@@ -402,11 +427,6 @@ func (s *OpenAIQuotaService) ResetCredit(ctx context.Context, accountID int64) (
 	}
 	mode := string(runtimeState.CodexReleaseMode)
 
-	redeemRequestID, err := generateRedeemRequestID()
-	if err != nil {
-		return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_QUOTA_REDEEM_ID_FAILED", "failed to generate redeem id: %v", err)
-	}
-
 	callCtx, cancel := context.WithTimeout(ctx, openaiQuotaUpstreamTimeout)
 	defer cancel()
 	callCtx = context.WithValue(
@@ -415,9 +435,11 @@ func (s *OpenAIQuotaService) ResetCredit(ctx context.Context, accountID int64) (
 		&officialCodexBundleHolder{httpAttemptBudget: 3},
 	)
 	agentIdentity := s.isAgentIdentityAccount(ctx, accountID)
-	body, err := json.Marshal(struct {
-		RedeemRequestID string `json:"redeem_request_id"`
-	}{RedeemRequestID: redeemRequestID})
+	requestBody := map[string]string{"redeem_request_id": redeemRequestID}
+	if targeted {
+		requestBody["credit_id"] = creditID
+	}
+	body, err := json.Marshal(requestBody)
 	if err != nil {
 		return nil, infraerrors.Newf(http.StatusInternalServerError, "OPENAI_QUOTA_REQUEST_INVALID", "failed to encode reset request: %v", err)
 	}
@@ -429,6 +451,11 @@ func (s *OpenAIQuotaService) ResetCredit(ctx context.Context, accountID int64) (
 		)
 		if headerErr != nil {
 			return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_QUOTA_AUTH_FAILED", "failed to build upstream authentication: %v", headerErr)
+		}
+		if targeted {
+			// credit-id 仅是严格编译器消费的结构化存在性事实，不会进入最终
+			// wire；真实卡 ID 只保留在受 Body 闭集约束的 credit_id 字段中。
+			headers.Set("credit-id", "present")
 		}
 		status, responseBody, err := s.doCodexQuotaRequest(
 			callCtx,
@@ -448,6 +475,10 @@ func (s *OpenAIQuotaService) ResetCredit(ctx context.Context, accountID int64) (
 					return nil, infraerrors.Newf(http.StatusBadGateway, "OPENAI_QUOTA_AUTH_FAILED", "agent identity task recovery failed: %v", err)
 				}
 				continue
+			}
+			if targeted {
+				slog.Warn("openai_quota_targeted_reset_failed", "account_id", accountID, "status", status)
+				return nil, infraerrors.Newf(mapUpstreamStatus(status), "OPENAI_QUOTA_RESET_UPSTREAM_ERROR", "upstream returned %d", status)
 			}
 			redactedBody := truncate(s.redactQuotaErrorBody(callCtx, accountID, string(responseBody)), 240)
 			slog.Warn("openai_quota_reset_failed", "account_id", accountID, "status", status, "body", redactedBody)

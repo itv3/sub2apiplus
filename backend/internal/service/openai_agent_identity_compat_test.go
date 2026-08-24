@@ -133,8 +133,14 @@ func TestOpenAIAgentIdentityPassthroughUsesBuiltInOfficialIdentity(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, "AgentAssertion", strings.SplitN(req.Header.Get("Authorization"), " ", 2)[0])
 	require.Equal(t, "account-agent-passthrough", req.Header.Get("chatgpt-account-id"))
+	require.NotEqual(t, "client-session", req.Header.Get("session_id"))
+	require.NotEqual(t, "client-conversation", req.Header.Get("conversation_id"))
+	require.Equal(t, isolateOpenAIUpstreamSessionID(0, account, "client-session"), req.Header.Get("session_id"))
+	require.Equal(t, isolateOpenAIUpstreamSessionID(0, account, "client-conversation"), req.Header.Get("conversation_id"))
+	requestBody, err := io.ReadAll(req.Body)
+	require.NoError(t, err)
 	semantic, err := prepareOfficialCodexSemanticAttempt(
-		req, mustReadRequestBody(t, req), officialCodexEndpointResponsesHTTP,
+		req, requestBody, officialCodexEndpointResponsesHTTP,
 		"agent-identity-structured-test", projectOfficialCodexIdentityAccount(account),
 	)
 	require.NoError(t, err)
@@ -151,7 +157,7 @@ func TestOpenAIAgentIdentityPassthroughUsesBuiltInOfficialIdentity(t *testing.T)
 		Platform: PlatformOpenAI,
 		Type:     AccountTypeOAuth,
 		Credentials: map[string]any{
-			"chatgpt_account_id": "account-oauth-passthrough",
+			"chatgpt_account_id": "account-agent-passthrough",
 		},
 	}
 	oauthRecorder := httptest.NewRecorder()

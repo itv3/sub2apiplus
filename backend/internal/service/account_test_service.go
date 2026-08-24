@@ -101,7 +101,7 @@ const (
 	AccountTestModeGrokRealtime = "realtime"
 
 	defaultGrokRealtimeTestModel = "grok-voice-latest"
-	grokRealtimeProbeTimeout     = 12 * time.Second
+	grokRealtimeProbeTimeout     = DefaultGrokRealtimeDialTimeout
 )
 
 // isOpenAIImageModel checks if the model is an OpenAI image generation model (e.g. gpt-image-2).
@@ -149,6 +149,7 @@ type AccountTestService struct {
 	settingService            *SettingService
 	tlsFPProfileService       *TLSFingerprintProfileService
 	officialEgress            *OfficialEgressTransitionRuntime
+	pluginManager             *PluginManager
 	agentIdentityTaskMu       sync.Mutex
 	agentIdentityWS           agentIdentityWSConnectionInvalidator
 	// grokWSDialer is optional; realtime account tests use the default OpenAI-style
@@ -159,6 +160,12 @@ type AccountTestService struct {
 func (s *AccountTestService) SetSettingService(settingService *SettingService) {
 	if s != nil {
 		s.settingService = settingService
+	}
+}
+
+func (s *AccountTestService) SetPluginManager(pluginManager *PluginManager) {
+	if s != nil {
+		s.pluginManager = pluginManager
 	}
 }
 
@@ -335,8 +342,12 @@ func (s *AccountTestService) TestAccountConnection(c *gin.Context, accountID int
 		switch account.GetAPIProtocol() {
 		case APIProtocolAdaptive:
 			return s.testCNProviderAdaptiveConnection(c, account, modelID, prompt)
+		case APIProtocolResponses:
+			return s.testOpenAIAccountConnection(c, account, modelID, prompt, normalizeAccountTestMode(mode))
 		case APIProtocolChatCompletions:
 			return s.testCNProviderChatCompletionsConnection(c, account, modelID, prompt)
+		case APIProtocolAnthropic:
+			return s.testCNProviderAnthropicConnection(c, account, modelID)
 		}
 	}
 
@@ -796,7 +807,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		apiURL = chatgptCodexAPIURL
 	} else if credentialAccount.Type == "apikey" {
 		// API Key - use Platform API
-		authToken = credentialAccount.GetOpenAIApiKey()
+		authToken = credentialAccount.GetOpenAIProtocolAPIKey()
 		if authToken == "" {
 			return s.sendErrorAndEnd(c, "No API key available")
 		}
@@ -812,7 +823,7 @@ func (s *AccountTestService) testOpenAIAccountConnection(c *gin.Context, account
 		if !mimicProfile.ShouldUseResponsesAPI(account.Extra) {
 			return s.testOpenAIChatCompletionsConnection(c, account, testModelID, prompt, normalizedBaseURL, authToken, mimicProfile)
 		}
-		apiURL = buildOpenAIResponsesURL(normalizedBaseURL)
+		apiURL = buildOpenAIResponsesURLForPlatform(credentialAccount.Platform, normalizedBaseURL)
 	} else {
 		return s.sendErrorAndEnd(c, fmt.Sprintf("Unsupported account type: %s", account.Type))
 	}

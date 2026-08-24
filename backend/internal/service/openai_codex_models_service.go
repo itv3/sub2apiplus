@@ -32,12 +32,11 @@ const chatgptCodexModelsDefaultURL = "https://chatgpt.com/backend-api/codex/mode
 var chatgptCodexModelsURL = chatgptCodexModelsDefaultURL
 
 const (
-	codexModelsManifestBodyLimit       int64 = 8 << 20
-	codexModelsManifestCacheBodyLimit        = 1 << 20
-	codexModelsManifestCacheMaxEntries       = 64
-	codexModelsManifestCacheTTL              = 30 * time.Second
-	codexModelsManifestCacheStaleTTL         = 5 * time.Minute
-	codexModelsManifestRequestTimeout        = 15 * time.Second
+	codexModelsManifestCacheBodyLimit  = 1 << 20
+	codexModelsManifestCacheMaxEntries = 64
+	codexModelsManifestCacheTTL        = 30 * time.Second
+	codexModelsManifestCacheStaleTTL   = 5 * time.Minute
+	codexModelsManifestRequestTimeout  = 15 * time.Second
 )
 
 // CodexModelsManifest carries the client representation plus caching metadata.
@@ -729,11 +728,18 @@ func (s *OpenAIGatewayService) fetchCodexModelsManifestUpstream(ctx context.Cont
 		}
 	}
 
-	body, err := io.ReadAll(io.LimitReader(resp.Body, codexModelsManifestBodyLimit))
+	bodyLimit := resolveModelsListReadLimit(s.cfg)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, bodyLimit+1))
 	if err != nil {
 		return nil, &codexModelsManifestUpstreamError{
 			err:       infraerrors.Newf(http.StatusBadGateway, "OPENAI_CODEX_MODELS_UPSTREAM_FAILED", "read codex models manifest response: %v", err),
 			retryable: isRetryableCodexModelsManifestTransportError(err),
+		}
+	}
+	if int64(len(body)) > bodyLimit {
+		return nil, &codexModelsManifestUpstreamError{
+			err:       infraerrors.Newf(http.StatusBadGateway, "OPENAI_CODEX_MODELS_UPSTREAM_FAILED", "codex models manifest response exceeds %d bytes", bodyLimit),
+			retryable: true,
 		}
 	}
 	upstreamBody := body

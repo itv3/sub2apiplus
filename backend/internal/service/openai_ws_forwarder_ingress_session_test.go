@@ -750,6 +750,8 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_OfficialEgressSk
 	// 首帧带 developer 上下文：画像据此构造连接级 prewarm 帧。
 	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{
 		"type":"response.create","model":"gpt-5.5","stream":false,
+		"parallel_tool_calls":true,
+		"sequence":900719925474099312345,
 		"input":[
 			{"type":"message","role":"developer","content":[{"type":"input_text","text":"developer context"}]},
 			{"type":"message","role":"user","content":[{"type":"input_text","text":"draw a cat"}]}
@@ -772,6 +774,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_OfficialEgressSk
 		"stream":false,
 		"previous_response_id":"resp_codex_image_bridge",
 		"reasoning":{"effort":"high"},
+		"parallel_tool_calls":true,
 		"client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"true"},
 		"tools":[{"type":"namespace","name":"collaboration","tools":[{"type":"function","name":"spawn_agent"}]}],
 		"input":[
@@ -809,11 +812,23 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_OfficialEgressSk
 	require.Equal(t, coderws.MessageText, msgType)
 	require.Equal(t, "resp_codex_image_function", gjson.GetBytes(message, "response.id").String())
 
-	_ = clientConn.Close(coderws.StatusNormalClosure, "done")
+	writeCtx, cancelWrite = context.WithTimeout(context.Background(), 3*time.Second)
+	err = clientConn.Write(writeCtx, coderws.MessageText, []byte(`{
+		"type":"response.create",
+		"model":"gpt-5.5",
+		"parallel_tool_calls":"false",
+		"client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"true"},
+		"tools":[{"type":"function","name":"shell"}]
+	}`))
+	cancelWrite()
+	require.NoError(t, err)
 
 	select {
 	case serverErr := <-serverErrCh:
-		require.NoError(t, serverErr)
+		var closeErr *OpenAIWSClientCloseError
+		require.ErrorAs(t, serverErr, &closeErr)
+		require.Equal(t, coderws.StatusPolicyViolation, closeErr.StatusCode())
+		require.Contains(t, closeErr.Reason(), "parallel_tool_calls to be a boolean")
 	case <-time.After(5 * time.Second):
 		t.Fatal("等待 ingress websocket 结束超时")
 	}
@@ -829,6 +844,10 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_OfficialEgressSk
 		require.NotContains(t, gjson.Get(payload, "instructions").String(), codexImageGenerationBridgeMarker,
 			"第 %d 帧不得携带桥接指令", i)
 	}
+	nonLitePayload := requestToJSONString(captureConn.writes[1])
+	require.Equal(t, "all_turns", gjson.Get(nonLitePayload, "reasoning.context").String())
+	require.False(t, gjson.Get(nonLitePayload, "parallel_tool_calls").Bool())
+	require.False(t, gjson.Get(nonLitePayload, "sequence").Exists())
 
 	// 画像仍按官方形态整形请求：顶层 namespace 工具搬入 input.additional_tools。
 	litePayload := requestToJSONString(captureConn.writes[2])
@@ -837,6 +856,8 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_OfficialEgressSk
 	require.Equal(t, "collaboration", gjson.Get(litePayload, `input.#(type=="additional_tools").tools.1.name`).String())
 	require.Equal(t, "high", gjson.Get(litePayload, "reasoning.effort").String())
 	require.Equal(t, "all_turns", gjson.Get(litePayload, "reasoning.context").String())
+	require.True(t, gjson.Get(litePayload, "parallel_tool_calls").Exists())
+	require.False(t, gjson.Get(litePayload, "parallel_tool_calls").Bool())
 
 	// 客户端自带的 image_gen.imagegen function tool 属于业务输入，不受桥接影响。
 	functionPayload := requestToJSONString(captureConn.writes[3])
@@ -1247,6 +1268,7 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughHeade
 		"stream":false,
 		"prompt_cache_key":"pcache_passthrough",
 		"reasoning":{"effort":"medium","context":"current_turn"},
+		"parallel_tool_calls":true,
 		"client_metadata":{"ws_request_header_x_openai_internal_codex_responses_lite":"true"},
 		"tools":[{"type":"namespace","name":"collaboration","tools":[{"type":"function","name":"spawn_agent"}]}],
 		"input":[{"type":"message","role":"user","content":"hello"}],
@@ -1321,6 +1343,8 @@ func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_PassthroughHeade
 	require.Equal(t, "medium", gjson.Get(forwarded, "reasoning.effort").String())
 	require.Equal(t, "all_turns", gjson.Get(forwarded, "reasoning.context").String())
 	require.Equal(t, "turn-state-upstream", gjson.Get(forwarded, "client_metadata.x-codex-turn-state").String())
+	require.True(t, gjson.Get(forwarded, "parallel_tool_calls").Exists())
+	require.False(t, gjson.Get(forwarded, "parallel_tool_calls").Bool())
 }
 
 func TestOpenAIGatewayService_ProxyResponsesWebSocketFromClient_HTTPBridgeModeRelaysHTTPStream(t *testing.T) {

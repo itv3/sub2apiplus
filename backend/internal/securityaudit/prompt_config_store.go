@@ -136,11 +136,11 @@ func (m *ConfigManager) Reload(ctx context.Context) error {
 	previous := m.snapshot.Load()
 	m.snapshot.Store(&activeConfigSnapshot{storage: cloneStorageConfig(storage), active: cloneActiveConfig(active), loadedAt: now})
 	m.configUntrusted.Store(false)
-	m.clearLoadError()
+	recovered := m.clearLoadError()
 	m.logInvalidTokenEndpoints(previous, active)
-	// 5 秒兜底刷新仍会更新运行态快照，但只有首次加载、配置版本变化或全局
-	// 风控开关变化时才记录事件，避免稳定配置持续刷屏。
-	if shouldLogConfigLoaded(previous, storage, active) {
+	// 5 秒兜底刷新仍会更新运行态快照；仅在故障恢复、首次加载、配置版本变化或
+	// 全局风控开关变化时记录事件，避免稳定配置持续刷屏。
+	if recovered || shouldLogConfigLoaded(previous, storage, active) {
 		LogInfo(EventConfigLoaded, map[string]any{
 			"config_version": storage.ConfigVersion, "status": "loaded",
 		})
@@ -148,6 +148,8 @@ func (m *ConfigManager) Reload(ctx context.Context) error {
 	return nil
 }
 
+// shouldLogConfigLoaded 判断成功刷新是否包含新事实：首次快照、配置版本变化，
+// 或位于独立设置中且不会更新配置版本的全局风控开关变化。
 func shouldLogConfigLoaded(previous *activeConfigSnapshot, storage storageConfig, active ActiveConfig) bool {
 	return previous == nil ||
 		previous.storage.ConfigVersion != storage.ConfigVersion ||
@@ -500,11 +502,15 @@ func (m *ConfigManager) recordLoadError(_ error) {
 	m.stateMu.Unlock()
 }
 
-func (m *ConfigManager) clearLoadError() {
+// clearLoadError drops the recorded load failure and reports whether one was
+// pending, so callers can tell a recovery apart from an unchanged reload.
+func (m *ConfigManager) clearLoadError() bool {
 	m.stateMu.Lock()
+	recovered := m.lastLoadError != ""
 	m.lastLoadError = ""
 	m.lastErrorAt = nil
 	m.stateMu.Unlock()
+	return recovered
 }
 
 func cloneStorageConfig(cfg storageConfig) storageConfig {

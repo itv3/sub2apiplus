@@ -1,4 +1,5 @@
-docs/claude-relay-service/
+# 本地杂项文档、测试数据和外部项目副本
+/docs-local/
 .codex
 
 # Python 缓存（仓库任意层级）
@@ -158,8 +159,15 @@ docs/egress/**/.DS_Store
 !docs/PAYMENT_CN.md
 !docs/ADMIN_PAYMENT_INTEGRATION_API.md
 !docs/ASYNC_IMAGE_TASKS.md
+!docs/BATCH_IMAGE_MVP.md
+!docs/COMPOSITE_GROUPS.md
+!docs/PLUGIN_DEVELOPMENT.md
+!docs/channel-monitor-v2-safe-defaults.md
 !docs/legal/
 !docs/legal/*.md
+!docs/screenshots/
+docs/screenshots/*
+!docs/screenshots/mobile-account-actions-menu.png
 .serena/
 .codex/
 frontend/coverage/
@@ -190,6 +198,7 @@ tools/official_client_capture/**/*.flow
 # 不要在仓库顶层另建 captures/：那条规则已随证据目录迁移废弃。
 /local-analysis/
 output/
+.codegraph/
 
 # egressscan 构建产物（go build ./cmd/egressscan 的默认输出）
 /backend/egressscan
@@ -197,3 +206,6 @@ output/
 # 本地测试缓存与误用 -h 作为位置参数产生的画像导出文件，不属于源码或验收证据。
 /.vite/
 /backend/-h
+
+# 本地闭源插件开发目录及构建产物不进入 Sub2API 仓库
+/plugins/

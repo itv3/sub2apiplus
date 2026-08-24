@@ -104,7 +104,10 @@ func TestProxyOpenAIWSHTTPBridgeTurnLaterTurnDoesNotFailOverAfterDownstreamOutpu
 	require.False(t, errors.As(err, &failoverErr))
 	require.Len(t, writes, 2)
 	require.Equal(t, "response.output_text.delta", gjson.GetBytes(writes[0], "type").String())
-	require.Equal(t, "error", gjson.GetBytes(writes[1], "type").String())
+	// P0.1: after downstream output, retain the upstream error and synthesize
+	// the official Responses terminal so Codex clients do not see a bare error
+	// followed by a closed stream.
+	require.Equal(t, "response.failed", gjson.GetBytes(writes[1], "type").String())
 }
 
 func TestOpenAIWSHTTPBridgeLaterTurn429RetriesCurrentTurnOnReplacementAccount(t *testing.T) {
@@ -156,7 +159,8 @@ func TestOpenAIWSHTTPBridgeLaterTurn429RetriesCurrentTurnOnReplacementAccount(t 
 		Status: StatusActive, Schedulable: true, Concurrency: 1,
 		Credentials: map[string]any{
 			"access_token":       "access-token-a",
-			"chatgpt_account_id": "chatgpt-account-129",
+			"chatgpt_account_id": "account-a",
+			"chatgpt_user_id":    "user-a",
 		},
 		Extra: map[string]any{"openai_oauth_responses_websockets_v2_mode": OpenAIWSIngressModeHTTPBridge},
 	}
@@ -165,8 +169,17 @@ func TestOpenAIWSHTTPBridgeLaterTurn429RetriesCurrentTurnOnReplacementAccount(t 
 	nextAccount.Name = "replacement"
 	nextAccount.Credentials = map[string]any{
 		"access_token":       "access-token-b",
-		"chatgpt_account_id": "chatgpt-account-130",
+		"chatgpt_account_id": "account-b",
+		"chatgpt_user_id":    "user-b",
 	}
+	svc.openaiModelCapabilities.replaceFromManifest(
+		account.ID,
+		[]byte(`{"models":[{"slug":"gpt-5.6-sol","use_responses_lite":true}]}`),
+	)
+	svc.openaiModelCapabilities.replaceFromManifest(
+		nextAccount.ID,
+		[]byte(`{"models":[{"slug":"gpt-5.6-sol","use_responses_lite":true}]}`),
+	)
 
 	serverErrCh := make(chan error, 1)
 	failoverCh := make(chan []byte, 1)
@@ -181,6 +194,7 @@ func TestOpenAIWSHTTPBridgeLaterTurn429RetriesCurrentTurnOnReplacementAccount(t 
 		rec := httptest.NewRecorder()
 		ginCtx, _ := gin.CreateTestContext(rec)
 		ginCtx.Request = r.Clone(r.Context())
+		ginCtx.Request.URL.Path = "/v1/responses"
 		readCtx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
 		_, firstMessage, readErr := conn.Read(readCtx)
 		cancel()
@@ -257,6 +271,8 @@ func TestOpenAIWSHTTPBridgeLaterTurn429RetriesCurrentTurnOnReplacementAccount(t 
 		"reasoning":{"effort":"medium"},
 		"include":["reasoning.encrypted_content"],
 		"previous_response_id":"resp_first",
+		"prompt_cache_key":"client-session",
+		"client_metadata":{"session_id":"client-session","thread_id":"client-thread"},
 		"input":[{"type":"function_call_output","call_id":"call_1","output":"second"}]
 	}`))
 	cancel()
@@ -266,7 +282,14 @@ func TestOpenAIWSHTTPBridgeLaterTurn429RetriesCurrentTurnOnReplacementAccount(t 
 	_, retriedCompleted, err := clientConn.Read(readCtx)
 	cancel()
 	require.NoError(t, err)
-	require.Equal(t, "response.completed", gjson.GetBytes(retriedCompleted, "type").String())
+	if eventType := gjson.GetBytes(retriedCompleted, "type").String(); eventType != "response.completed" {
+		select {
+		case proxyErr := <-serverErrCh:
+			t.Fatalf("替换账号失败：event=%s proxy=%v", retriedCompleted, proxyErr)
+		case <-time.After(time.Second):
+			t.Fatalf("替换账号事件异常且服务端未返回错误：%s", retriedCompleted)
+		}
+	}
 	require.Equal(t, "resp_second", gjson.GetBytes(retriedCompleted, "response.id").String())
 	_ = clientConn.Close(websocket.StatusNormalClosure, "done")
 
@@ -283,6 +306,8 @@ func TestOpenAIWSHTTPBridgeLaterTurn429RetriesCurrentTurnOnReplacementAccount(t 
 		require.Contains(t, input.Raw, "second")
 		require.Equal(t, 1, strings.Count(input.Raw, `"id":"fc_1"`))
 		require.Equal(t, 2, strings.Count(input.Raw, `"call_id":"call_1"`))
+		require.Equal(t, "client-session", gjson.GetBytes(retryPayload, "client_metadata.session_id").String())
+		require.Equal(t, "client-thread", gjson.GetBytes(retryPayload, "client_metadata.thread_id").String())
 	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for current-turn failover")
 	}
@@ -295,7 +320,18 @@ func TestOpenAIWSHTTPBridgeLaterTurn429RetriesCurrentTurnOnReplacementAccount(t 
 	}
 	require.Len(t, upstream.bodies, 3)
 	require.Contains(t, string(upstream.bodies[0]), "first")
+	firstSessionID := gjson.GetBytes(upstream.bodies[0], "client_metadata.session_id").String()
+	firstThreadID := gjson.GetBytes(upstream.bodies[0], "client_metadata.thread_id").String()
+	require.NotEmpty(t, firstSessionID)
+	require.NotEmpty(t, firstThreadID)
+	require.Equal(t, firstSessionID, gjson.GetBytes(upstream.bodies[1], "client_metadata.session_id").String())
+	require.Equal(t, firstThreadID, gjson.GetBytes(upstream.bodies[1], "client_metadata.thread_id").String())
 	require.NotContains(t, string(upstream.bodies[2]), "previous_response_id")
 	require.Contains(t, string(upstream.bodies[2]), "second")
+	require.NotEqual(t, firstSessionID, gjson.GetBytes(upstream.bodies[2], "client_metadata.session_id").String())
+	require.NotEqual(t, firstThreadID, gjson.GetBytes(upstream.bodies[2], "client_metadata.thread_id").String())
+	for _, request := range upstream.requests {
+		require.Empty(t, request.Header.Get(openCodeSessionAffinityHeader))
+	}
 	require.Empty(t, upstream.requests[2].Header.Get(openAIWSTurnStateHeader))
 }
