@@ -1,0 +1,65 @@
+{
+  "schema_version": "official-client-codex-0.149.1-p0-transition-chain-repair/v1",
+  "issued_at_utc": "2026-08-25T13:21:45Z",
+  "base_commit": "75a4470e7fd6a2e77556d481ea879c77d441529a",
+  "scope": "codex-0.149.1-p0-transition-chain-repair",
+  "framework_stage": "VC-0/P0",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-doc-pre-tooling-transition.json",
+    "file_sha256": "af4608567d8105ff938f7332c70873fcf7a14a3cab94ea1409cf05bc1a1b011f",
+    "identity_sha256": "f22eadc6c7213e8103b87c26ad476097b2791d6a2fb386fe4936b86ae08e4f3c"
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/codex_01491_p0_transition_chain_repair_test.go",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "0d2ca6d13f335f7b5674164c71aa1ad70ef10610507ebf133f253e8f12cc2718",
+      "reason": "新增严格 Go 校验器，重放 DOC-PRE 与本修复收据，并只接受登记的 path/predecessor/to 三元组。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_merge_framework_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "11ea1e9db4f989f1bf5dbdc6612858125cb467d327506eb6b49a77a435fb0d12",
+        "1c917085f00d2b3a0ce8892652589cdffaf5d15dcd01547e5e21b7d8f185a9b8",
+        "1d5f701752a2f1960b4f87924af5ceb3e93e3049bd2a34947599166aeb7a66af",
+        "bb0af3ce58f351054fea326a660c1bc635b93daaf39ed67c260498070a8f0edf",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "e53ad1c9b514311bcb247d90135283d1d593d2f0d3edd98b37b936c29e3df23e",
+        "ff03fe3995be282fcb9fc7f0181704c072859249635ea629b2cb3de33b2af3eb"
+      ],
+      "to_sha256": "d31422f05e1846f84dd8452943414b5734f3506ddc7371e4ae0475671402750a",
+      "reason": "让 upstream-merge-framework 末端验证器承认 Codex 0.149.1 已冻结后继 transition，历史收据原文保持不变。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_v0180_source_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "65e6a3e6c9a00e63f122556e3187b4549b6a34eaed443dbbe7b78aad5101a1e8",
+        "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      ],
+      "to_sha256": "2740790aba554fd259487a300a5884a3dbb0cd9d950d2e6a5f5935f62305277a",
+      "reason": "让 v0.1.180 末端验证器承认 Codex 0.149.1 已冻结后继 transition，避免单一路径更新使整条历史链级联失效。"
+    }
+  ],
+  "verification": {
+    "doc_pre_transition_replayed": true,
+    "mutation_tests_passed": true,
+    "officialegress_tests_passed": true,
+    "p0_capture_tool_tests_passed": true,
+    "p0_egress_spec_passed": true
+  },
+  "safety": {
+    "active_previous_changed": false,
+    "catalog_promoted": false,
+    "deployment_performed": false,
+    "formal_campaign_created": false,
+    "historical_receipts_modified": false,
+    "live_request_sent": false,
+    "production_selector_changed": false,
+    "server_accessed": false
+  },
+  "result": "p0_transition_chain_repaired",
+  "identity_sha256": "215633b1c984be9f63727474847a76981c7435225a4f3ff8854d8388cc020569"
+}
