@@ -576,7 +576,7 @@ ready_for_operator_release
 
 | 阶段 | Codex CLI 轨道 | Claude Code 轨道 |
 |---|---|---|
-| `VC-0` | 在干净 HEAD 运行 `make test-capture-tools`、`make check-egress-spec`；复算 Active／Previous 后执行 `codex_upgrade.py plan` | 冻结 generation policy、Vircs／DMIT 和 active／rollback；审计全部工具的版本参数化后执行 `claude_fw_e.py freeze` |
+| `VC-0` | 在干净 HEAD 运行 `make test-capture-tools`、`make check-egress-spec`；复算 Active／Previous 后以 `preflight_only` 模式执行 `codex_upgrade.py plan`，通过后换新目录以 `formal` 模式建正式 Campaign | 冻结 generation policy、Vircs／DMIT 和 active／rollback；审计全部工具的版本参数化后执行 `claude_fw_e.py freeze` |
 | `VC-1` | `capture-official run` → 生成受管证据 → `capture-official seal` | `analyze-bundles` → 全 host/path 捕获与 `capture-index` → validation closure／crosswalk → `rule-assessments` → `seal` |
 | `VC-2` | `classify` 生成草案，逐项审核目标规则、迁移、场景、画像和断言清单，再用联合摘要批准 | 清零 DiscoveryDispositionLedger 和语义候选，形成 RequiredRules／AtomicAssertionLedger 及迁移决定 |
 | `VC-3` | `prepare-profile` → 审核五份清单 → 批准版 `classify` → `stage-profile`；只能追加候选 Catalog，不切 Active | 复制并更新目标 generation policy → `generate_claude_fw_g_profile.py` → `claude_fw_g_official_finalize.py` → 签发 ApprovalFact／ReleaseArtifact；不得修改 production selector |
@@ -588,6 +588,12 @@ Codex 的统一入口为 `python3 tools/official_client_capture/codex_upgrade.py
 `status` 只读推导状态，只有身份未变化的临时失败才使用 `resume`。Claude 每个新版本先复制并更新
 `claude_fw_g_generation_policy_<version>_v2.json`，再把同一 policy 传给画像生成、官方 finalizer、
 candidate PAIR 和 Acceptance finalizer。
+
+Codex `plan` 必须显式冻结 `campaign_mode=preflight_only|formal` 和
+`campaign_purpose=validation_only|production_replacement`。preflight 目录只允许 `plan/status`；正式
+candidate 还须重申与 Campaign 相同的用途，并由预约、attempt、seal、compare、AcceptanceFact 和外部
+收据逐级重放。`production_replacement` 在 `ready` 后仍为 `accepted_not_activated`，不得把 Campaign
+状态冒充 §5.6 的生产激活事实。
 
 当前工具状态：`claude_fw_g_candidate_pair.py` 仍固定绑定 2.1.226，只能重放历史 Campaign。下一个 Claude
 版本必须在 P0 前让它从 generation policy 读取目标版本、规则／断言计数和输入摘要，并补齐 Schema、

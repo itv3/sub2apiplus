@@ -6,6 +6,7 @@ import hashlib
 import json
 import subprocess
 import unittest
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +16,15 @@ BASE_COMMIT = "3d6082f44f289ec80e0e29eb2643cda78113eef0"
 TRANSITION_PATH = (
     ROOT
     / "docs/egress/maintenance/codex-0.149.1-doc-pre-tooling-transition.json"
+)
+HARDENING_BASE_COMMIT = "f0ec0ea0cb235d4a6845558f11d74ed067919fd2"
+P0_TRANSITION_PATH = (
+    ROOT
+    / "docs/egress/maintenance/codex-0.149.1-p0-transition-chain-repair.json"
+)
+HARDENING_TRANSITION_PATH = (
+    ROOT
+    / "docs/egress/maintenance/codex-0.149.1-campaign-boundary-hardening-transition.json"
 )
 EXPECTED_PATHS = {
     ".gitignore",
@@ -52,6 +62,28 @@ EXPECTED_PATHS = {
     "tools/spec_source_deps/h2-0.4.16/src/hpack/encoder.rs",
     "tools/spec_source_deps/manifest_0_149_1.json",
     "tools/update_spec_ref_anchors.py",
+}
+HARDENING_EXPECTED_PATHS = {
+    "backend/internal/officialegress/codex_01491_p0_transition_chain_repair_test.go",
+    "backend/internal/officialegress/upstream_merge_framework_transition_test.go",
+    "backend/internal/officialegress/upstream_v0180_source_transition_test.go",
+    "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+    "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+    "tools/official_client_capture/codex_upgrade.py",
+    "tools/official_client_capture/codex_upgrade_campaign.schema.json",
+    "tools/official_client_capture/codex_upgrade_capture_attempt.schema.json",
+    "tools/official_client_capture/codex_upgrade_capture_reservation.schema.json",
+    "tools/official_client_capture/codex_upgrade_gate_receipt.py",
+    "tools/official_client_capture/codex_upgrade_gate_receipt.schema.json",
+    "tools/official_client_capture/codex_upgrade_seal_failure.schema.json",
+    "tools/official_client_capture/codex_upgrade_seal_preview.schema.json",
+    "tools/official_client_capture/codex_upgrade_stage_result.schema.json",
+    "tools/official_client_capture/production_activation_receipt.py",
+    "tools/official_client_capture/tests/test_codex_01491_doc_pre_transition.py",
+    "tools/official_client_capture/tests/test_codex_upgrade.py",
+    "tools/official_client_capture/tests/test_codex_upgrade_capture_lifecycle.py",
+    "tools/official_client_capture/tests/test_codex_upgrade_gate_receipt.py",
+    "tools/official_client_capture/tests/test_production_activation_receipt.py",
 }
 FORBIDDEN_TRANSITION_PREFIXES = (
     "backend/internal/officialegress/catalogdata/",
@@ -92,11 +124,25 @@ def load_transition() -> dict[str, Any]:
     return value
 
 
-def commit_blob(path: str) -> bytes | None:
+def load_json_document(path: Path, label: str) -> dict[str, Any]:
+    """严格读取 transition 链上的普通 JSON 文件。"""
+
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"{label}必须是普通文件")
+    value = json.loads(
+        path.read_text(encoding="utf-8"),
+        object_pairs_hook=reject_duplicate_keys,
+    )
+    if not isinstance(value, dict):
+        raise ValueError(f"{label}顶层必须是对象")
+    return value
+
+
+def commit_blob(path: str, commit: str = BASE_COMMIT) -> bytes | None:
     """读取基线提交中的文件；不存在时返回 None。"""
 
     completed = subprocess.run(
-        ["git", "show", f"{BASE_COMMIT}:{path}"],
+        ["git", "show", f"{commit}:{path}"],
         cwd=ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
@@ -105,7 +151,7 @@ def commit_blob(path: str) -> bytes | None:
     if completed.returncode == 0:
         return completed.stdout
     missing = subprocess.run(
-        ["git", "cat-file", "-e", f"{BASE_COMMIT}:{path}"],
+        ["git", "cat-file", "-e", f"{commit}:{path}"],
         cwd=ROOT,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -116,9 +162,143 @@ def commit_blob(path: str) -> bytes | None:
     raise ValueError(f"无法读取基线文件：{path}")
 
 
+def load_hardening_transition() -> dict[str, Any]:
+    """读取并完整重放 B1+B2 Campaign 边界后继 transition。"""
+
+    document = load_json_document(HARDENING_TRANSITION_PATH, "Campaign 边界 transition")
+    expected_keys = {
+        "schema_version",
+        "issued_at_utc",
+        "base_commit",
+        "scope",
+        "framework_stage",
+        "predecessor_transition",
+        "boundaries",
+        "transitions",
+        "verification",
+        "safety",
+        "result",
+        "identity_sha256",
+    }
+    if set(document) != expected_keys:
+        raise ValueError("Campaign 边界 transition 顶层字段非法")
+    if (
+        document["schema_version"]
+        != "official-client-codex-0.149.1-campaign-boundary-hardening-transition/v1"
+        or document["base_commit"] != HARDENING_BASE_COMMIT
+        or document["scope"] != "codex-0.149.1-campaign-boundary-hardening"
+        or document["framework_stage"] != "VC-0/P0-B1-B2"
+        or document["result"] != "campaign_boundary_hardening_complete"
+    ):
+        raise ValueError("Campaign 边界 transition 顶层事实非法")
+    try:
+        datetime.fromisoformat(document["issued_at_utc"].replace("Z", "+00:00"))
+    except (AttributeError, ValueError) as error:
+        raise ValueError("Campaign 边界 transition 时间非法") from error
+
+    identity = dict(document)
+    recorded_identity = identity.pop("identity_sha256")
+    canonical = (
+        json.dumps(
+            identity,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        ).encode("utf-8")
+        + b"\n"
+    )
+    if recorded_identity != sha256(canonical):
+        raise ValueError("Campaign 边界 transition 自摘要不一致")
+
+    predecessor = load_json_document(P0_TRANSITION_PATH, "P0 链修复 transition")
+    expected_predecessor = {
+        "path": P0_TRANSITION_PATH.relative_to(ROOT).as_posix(),
+        "file_sha256": sha256(P0_TRANSITION_PATH.read_bytes()),
+        "identity_sha256": predecessor.get("identity_sha256"),
+    }
+    if document["predecessor_transition"] != expected_predecessor:
+        raise ValueError("Campaign 边界 transition 前序绑定非法")
+
+    if document["boundaries"] != {
+        "accepted_not_activated_enforced": True,
+        "candidate_purpose_frozen": True,
+        "formal_mode_required_for_live_stages": True,
+        "preflight_only_plan_status_only": True,
+    }:
+        raise ValueError("Campaign 边界 transition 能力事实非法")
+    if set(document["verification"]) != {
+        "capture_tool_tests_passed",
+        "egress_spec_passed",
+        "schema_validation_passed",
+        "targeted_tests_passed",
+        "transition_chain_replayed",
+    } or not all(document["verification"].values()):
+        raise ValueError("Campaign 边界 transition 门禁未闭合")
+    if set(document["safety"]) != {
+        "active_previous_changed",
+        "catalog_promoted",
+        "deployment_performed",
+        "formal_campaign_created",
+        "historical_receipts_modified",
+        "live_request_sent",
+        "production_selector_changed",
+        "server_accessed",
+    } or any(document["safety"].values()):
+        raise ValueError("Campaign 边界 transition 安全边界非法")
+
+    entries = document["transitions"]
+    paths = [entry.get("path") for entry in entries]
+    if paths != sorted(HARDENING_EXPECTED_PATHS) or len(paths) != len(set(paths)):
+        raise ValueError("Campaign 边界 transition 路径闭集非法")
+    for entry in entries:
+        if set(entry) != {
+            "path",
+            "change",
+            "predecessor_sha256s",
+            "to_sha256",
+            "reason",
+        }:
+            raise ValueError("Campaign 边界 transition 条目字段非法")
+        path = entry["path"]
+        before = commit_blob(path, HARDENING_BASE_COMMIT)
+        current = ROOT / path
+        if (
+            before is None
+            or entry["change"] != "modified"
+            or entry["predecessor_sha256s"] != [sha256(before)]
+            or not current.is_file()
+            or current.is_symlink()
+            or entry["to_sha256"] != sha256(current.read_bytes())
+            or not isinstance(entry["reason"], str)
+            or not entry["reason"].strip()
+        ):
+            raise ValueError(f"Campaign 边界 transition 条目非法：{path}")
+        if path.startswith(FORBIDDEN_TRANSITION_PREFIXES):
+            raise ValueError(f"Campaign 边界 transition 命中历史只读路径：{path}")
+    return document
+
+
+def hardening_transition_supersedes(
+    document: dict[str, Any],
+    path: str,
+    prior_digest: str,
+    current_digest: str,
+) -> bool:
+    """只承认 B1+B2 receipt 中登记的精确三元组。"""
+
+    return any(
+        entry["path"] == path
+        and entry["to_sha256"] == current_digest
+        and prior_digest in entry["predecessor_sha256s"]
+        for entry in document["transitions"]
+    )
+
+
 class Codex01491DocPreTransitionTest(unittest.TestCase):
     def test_transition_identity_and_file_closure_are_frozen(self) -> None:
         document = load_transition()
+        hardening = load_hardening_transition()
         self.assertEqual(
             set(document),
             {
@@ -180,7 +360,17 @@ class Codex01491DocPreTransitionTest(unittest.TestCase):
             self.assertEqual(entry["from_sha256"], expected_before, path)
             current = ROOT / path
             self.assertTrue(current.is_file() and not current.is_symlink(), path)
-            self.assertEqual(entry["to_sha256"], sha256(current.read_bytes()), path)
+            current_digest = sha256(current.read_bytes())
+            self.assertTrue(
+                entry["to_sha256"] == current_digest
+                or hardening_transition_supersedes(
+                    hardening,
+                    path,
+                    entry["to_sha256"],
+                    current_digest,
+                ),
+                path,
+            )
             self.assertNotEqual(entry["from_sha256"], entry["to_sha256"], path)
             self.assertIsInstance(entry["reason"], str)
             self.assertTrue(entry["reason"].strip(), path)
@@ -252,6 +442,26 @@ class Codex01491DocPreTransitionTest(unittest.TestCase):
                 "production_selector_changed": False,
                 "server_required_for_this_transition": False,
             },
+        )
+
+    def test_campaign_boundary_hardening_transition_is_frozen(self) -> None:
+        document = load_hardening_transition()
+        entry = document["transitions"][0]
+        self.assertTrue(
+            hardening_transition_supersedes(
+                document,
+                entry["path"],
+                entry["predecessor_sha256s"][0],
+                entry["to_sha256"],
+            )
+        )
+        self.assertFalse(
+            hardening_transition_supersedes(
+                document,
+                entry["path"],
+                "0" * 64,
+                entry["to_sha256"],
+            )
         )
 
 

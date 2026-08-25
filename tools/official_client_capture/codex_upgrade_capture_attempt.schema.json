@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-capture-attempt-v1.json",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-capture-attempt-v2.json",
   "title": "Codex 出站抓包不可变 Attempt",
   "description": "run 阶段只写一次的抓包事实；seal 只能引用其摘要，不能回写本文件。",
   "type": "object",
@@ -8,8 +8,11 @@
   "required": [
     "schema_version",
     "campaign_id",
+    "campaign_mode",
+    "campaign_purpose",
     "phase",
     "candidate_id",
+    "candidate_purpose",
     "status",
     "identity",
     "results",
@@ -29,10 +32,16 @@
   ],
   "properties": {
     "schema_version": {
-      "const": "codex-upgrade-capture-attempt/v1"
+      "const": "codex-upgrade-capture-attempt/v2"
     },
     "campaign_id": {
       "$ref": "#/$defs/safeId"
+    },
+    "campaign_mode": {
+      "const": "formal"
+    },
+    "campaign_purpose": {
+      "$ref": "#/$defs/candidatePurpose"
     },
     "phase": {
       "enum": [
@@ -48,6 +57,12 @@
         {
           "type": "null"
         }
+      ]
+    },
+    "candidate_purpose": {
+      "oneOf": [
+        {"$ref": "#/$defs/candidatePurpose"},
+        {"type": "null"}
       ]
     },
     "status": {
@@ -151,6 +166,9 @@
           "candidate_id": {
             "const": null
           },
+          "candidate_purpose": {
+            "const": null
+          },
           "identity": {
             "$ref": "#/$defs/officialIdentity"
           },
@@ -175,6 +193,9 @@
         "properties": {
           "candidate_id": {
             "$ref": "#/$defs/safeId"
+          },
+          "candidate_purpose": {
+            "$ref": "#/$defs/candidatePurpose"
           },
           "identity": {
             "$ref": "#/$defs/candidateIdentity"
@@ -241,6 +262,12 @@
     "safeId": {
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "candidatePurpose": {
+      "enum": [
+        "validation_only",
+        "production_replacement"
+      ]
     },
     "version": {
       "type": "string",
@@ -404,6 +431,7 @@
       "required": [
         "cli_version",
         "binary_sha256",
+        "package",
         "source_tree_sha256",
         "cargo_lock_sha256",
         "git_commit",
@@ -418,6 +446,10 @@
         },
         "binary_sha256": {
           "$ref": "#/$defs/sha256"
+        },
+        "package": {
+          "type": "object",
+          "minProperties": 1
         },
         "source_tree_sha256": {
           "$ref": "#/$defs/sha256"
@@ -455,7 +487,8 @@
         "build_id",
         "deployed_version",
         "profile_id",
-        "profile_digest"
+        "profile_digest",
+        "candidate_purpose"
       ],
       "properties": {
         "git_commit": {
@@ -487,6 +520,9 @@
         },
         "profile_digest": {
           "$ref": "#/$defs/sha256"
+        },
+        "candidate_purpose": {
+          "$ref": "#/$defs/candidatePurpose"
         }
       }
     },

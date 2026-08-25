@@ -1203,6 +1203,13 @@ P0 产物标为 `preflight-only`，不得发送真实请求、使用 `--acknowle
 Campaign，或修改 Active／Previous、运行环境和历史证据。阻断修复应独立提交，随后重跑 P0；
 只有干净、同源的受管树才能创建正式 Campaign。
 
+工具以不可省略的机器坐标隔离两类目录。P0 必须在新的持久目录执行
+`plan --campaign-mode preflight_only --campaign-purpose <validation_only|production_replacement>`；该目录
+只允许 `plan/status`，`capture-official`、`classify`、画像暂存、candidate、compare、accept、`all` 和
+`resume` 均失败关闭。P0 通过后，必须换一个尚不存在的目录执行
+`plan --campaign-mode formal --campaign-purpose <同一用途>`。模式缺失、非法、摘要篡改或试图借
+preflight 目录续跑，均不得自动回退为 formal。
+
 ### 4.0.2 共享身份边界在 Codex 工具中的投影
 
 Campaign、candidate 与 attempt 的规范身份边界以 Framework §3.3、§5.1 为准。下表只说明现有 Codex
@@ -1229,6 +1236,10 @@ Campaign、candidate 与 attempt 的规范身份边界以 Framework §3.3、§5.
 同一 Campaign 后续出现新的 `production_replacement` candidate 时，旧生产收据只证明历史事实，
 不得继续代表当前生产；新 candidate 不能借旧 candidate 的 canary、镜像、回滚演练或激活收据。
 如果尚未完成 §4.6，其状态必须明确报告为 `accepted_not_activated`。
+
+`campaign_mode`、`campaign_purpose` 和 `candidate_purpose` 必须进入 Campaign、预约、attempt、seal
+预览、阶段收据、comparison、AcceptanceFact、evidence seal 与外部门禁重放。candidate 的用途必须
+等于 Campaign 用途；缺失、漂移或把 `validation_only` 改写成 `production_replacement` 均须失败关闭。
 
 ### 4.0.3 Codex 工具状态投影与专用不变量
 
@@ -1311,7 +1322,7 @@ Lite 等互斥条件使用独立 track、job、evidence root 和 receipt；只�
 
 | 顺序 | 命令 | 机器产物 |
 |---:|---|---|
-| 1 | `codex_upgrade.py plan` | 冻结输入，生成 `target-source.json`、`source-diff.json` 和 `baseline-surface.json` |
+| 1 | `codex_upgrade.py plan --campaign-mode formal --campaign-purpose <用途>` | 在 P0 目录之外冻结正式输入，生成 `target-source.json`、`source-diff.json` 和 `baseline-surface.json` |
 | 2 | `capture-official run` | 按场景采集 HTTP、WS、TLS、端点、状态和错误分支证据 |
 | 3 | `capture-official seal` | 校验恢复、权限、秘密扫描、inventory 和 finalizer，进入 `official_sealed` |
 | 4 | `classify`（不传批准清单） | 生成官方差异和 `classification/draft/<revision>/` 五份草案 |
@@ -1446,6 +1457,7 @@ python3 tools/official_client_capture/codex_upgrade.py capture-candidate run \
   --deployed-version <deployed-version> \
   --profile-id <approved-profile-id> \
   --profile-digest <approved-profile-digest> \
+  --candidate-purpose <validation_only|production_replacement> \
   --acknowledge-live-requests
 ~~~
 
@@ -1493,6 +1505,7 @@ usage 必须绑定本次 Campaign／attempt／`run_nonce`，并位于 attempt �
    python3 tools/official_client_capture/codex_upgrade.py capture-candidate seal \
      --campaign-dir /绝对路径/campaign \
      --candidate-id <candidate-id> \
+     --candidate-purpose <与 run 完全相同的用途> \
      --attempt-id <attempt-id> \
      --capture-manifest /绝对路径/capture-manifest.json \
      --assertion-evidence-root /绝对路径/attempt-evidence \
@@ -1595,8 +1608,8 @@ python3 tools/official_client_capture/codex_upgrade_gate_receipt.py replay \
   --receipt candidate-gates.receipt.json
 ~~~
 
-finalizer 固定检查三项门禁均为退出码 0、失败 0、跳过 0，并绑定 Campaign、candidate、目标版本／架构、
-Profile、candidate package、源码树和镜像。缺项、替换命令、证据摘要漂移或身份不一致时不得执行
+finalizer 固定检查三项门禁均为退出码 0、失败 0、跳过 0，并绑定 formal 模式、Campaign／candidate
+用途、目标版本／架构、Profile、candidate package、源码树和镜像。缺项、替换命令、用途漂移、证据摘要漂移或身份不一致时不得执行
 `accept`。
 
 ~~~bash
@@ -1619,7 +1632,8 @@ python3 tools/official_client_capture/codex_upgrade.py accept \
 
 `accept` 会重新独立重放外部门禁，并把收据、candidate identity、candidate package digest 和 evidence
 seal 绑定为同一 AcceptanceFact。全部通过后，工具只写一次地保存断言、`accepted=true`、
-`failed_gates=[]` 和 evidence seal，Campaign 进入 `ready`；收据事后漂移会使 `status` 重新退回非 ready。
+`failed_gates=[]`、`production_state=accepted_not_activated` 和 evidence seal，Campaign 进入 `ready`；
+收据事后漂移会使 `status` 重新退回非 ready。
 失败 attempt 不可覆盖，Campaign 保持 `compared`。
 
 ### 4.5.4 ready 边界
@@ -1630,6 +1644,8 @@ seal 绑定为同一 AcceptanceFact。全部通过后，工具只写一次地保
 
 `validation_only` candidate 到此结束并标记为 `accepted_not_activated`。`production_replacement`
 candidate 不得在此结束；必须使用本次 acceptance 和已验收 candidate 源码继续执行 §4.6。
+对后者，`status --candidate-id` 必须继续返回 `production_status=accepted_not_activated` 并明确提示
+§4.6；在 promotion、canary、activation 和 rollback 收据完成前不得宣称升级完成。
 候选验证镜像以 `previous` 运行，只证明候选规则，不能直接作为默认 `active` 的生产镜像。后继
 candidate 一旦准备替换生产，旧 candidate 的生产收据不得复用。
 

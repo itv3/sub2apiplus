@@ -42,7 +42,10 @@ class CodexUpgradeGateReceiptTests(unittest.TestCase):
     def _subject(self, phase: str) -> dict[str, object]:
         return {
             "campaign_id": "codex-0_999_0-campaign",
+            "campaign_mode": "formal",
+            "campaign_purpose": "production_replacement",
             "candidate_id": "candidate-a",
+            "candidate_purpose": "production_replacement",
             "target_version": "0.999.0",
             "target_architecture": "linux/amd64",
             "profile_id": "codex-0.999.0",
@@ -104,7 +107,11 @@ class CodexUpgradeGateReceiptTests(unittest.TestCase):
                 {
                     "status": "complete",
                     "accepted": True,
+                    "campaign_mode": subject["campaign_mode"],
+                    "campaign_purpose": subject["campaign_purpose"],
                     "candidate_id": subject["candidate_id"],
+                    "candidate_purpose": subject["candidate_purpose"],
+                    "production_state": "accepted_not_activated",
                     "target_version": subject["target_version"],
                     "profile_id": subject["profile_id"],
                     "profile_digest": subject["profile_digest"],
@@ -172,6 +179,16 @@ class CodexUpgradeGateReceiptTests(unittest.TestCase):
         self._write("skipped.json", facts)
         with self.assertRaisesRegex(receipt.GateReceiptError, "非预期跳过"):
             receipt.build_receipt(self.root, "skipped.json")
+
+    def test_candidate_purpose_drift_fails_closed(self) -> None:
+        facts = self._facts(receipt.CANDIDATE_PHASE)
+        facts["subject"]["candidate_purpose"] = "validation_only"
+        self._write("purpose-drift.json", facts)
+        with self.assertRaisesRegex(
+            receipt.GateReceiptError,
+            "与 Campaign 用途不一致",
+        ):
+            receipt.build_receipt(self.root, "purpose-drift.json")
 
     def test_replay_rejects_tampered_gate_evidence(self) -> None:
         facts = self._facts(receipt.CANDIDATE_PHASE)

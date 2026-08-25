@@ -86,6 +86,8 @@ class CaptureLifecycleTest(unittest.TestCase):
         )
         manifest: dict[str, object] = {
             "campaign_id": "capture-lifecycle-test",
+            "campaign_mode": "formal",
+            "campaign_purpose": "production_replacement",
             "official_identity": {"version": "0.146.0"},
             "configuration": {
                 "service_container": "sub2apiplus",
@@ -350,6 +352,9 @@ class CaptureLifecycleTest(unittest.TestCase):
             attempt_root.mkdir(parents=True, mode=0o700)
             attempt = {
                 "campaign_id": "capture-lifecycle-test",
+                "campaign_mode": "formal",
+                "campaign_purpose": "production_replacement",
+                "candidate_purpose": None,
                 "attempt_id": "attempt-a",
                 "attempt_digest": "1" * 64,
             }
@@ -400,9 +405,17 @@ class CaptureLifecycleTest(unittest.TestCase):
 
     def test_run_rejects_seal_only_receipt_arguments(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            arguments = self._arguments(Path(temporary) / "campaign")
+            campaign_dir, _, _, manifest = self._fixture(Path(temporary))
+            arguments = self._arguments(campaign_dir)
             arguments.capture_manifest = Path("capture-manifest.json")
-            with self.assertRaises(codex_upgrade.ConfigurationError) as caught:
+            with (
+                mock.patch.object(
+                    codex_upgrade,
+                    "load_campaign_manifest",
+                    return_value=manifest,
+                ),
+                self.assertRaises(codex_upgrade.ConfigurationError) as caught,
+            ):
                 codex_upgrade._run_capture_attempt(arguments, "official")
             self.assertIn("run 不读取 seal 收据参数", str(caught.exception))
 
@@ -425,6 +438,8 @@ class CaptureLifecycleTest(unittest.TestCase):
                 "codex-0.146.0",
                 "--profile-digest",
                 "2" * 64,
+                "--candidate-purpose",
+                "production_replacement",
             ]
             output = io.StringIO()
             with (
@@ -469,6 +484,8 @@ class CaptureLifecycleTest(unittest.TestCase):
                     "codex-0.146.0",
                     "--profile-digest",
                     "2" * 64,
+                    "--candidate-purpose",
+                    "production_replacement",
                     "--assertions",
                     "/tmp/results.json",
                 ]
@@ -481,6 +498,14 @@ class CaptureLifecycleTest(unittest.TestCase):
             rerun_failed=True,
         )
         with (
+            mock.patch.object(
+                codex_upgrade,
+                "_require_formal_campaign",
+                return_value={
+                    "campaign_mode": "formal",
+                    "campaign_purpose": "production_replacement",
+                },
+            ),
             mock.patch.object(
                 codex_upgrade,
                 "campaign_status",
@@ -720,7 +745,11 @@ class CaptureLifecycleTest(unittest.TestCase):
                 mock.patch.object(
                     codex_upgrade,
                     "load_campaign_manifest",
-                    return_value={"campaign_id": "seal-drift-test"},
+                    return_value={
+                        "campaign_id": "seal-drift-test",
+                        "campaign_mode": "formal",
+                        "campaign_purpose": "production_replacement",
+                    },
                 ),
                 mock.patch.object(
                     codex_upgrade,
@@ -959,9 +988,13 @@ class CaptureLifecycleTest(unittest.TestCase):
                 "build_id": "build-a",
                 "deployed_version": "release-a",
                 "source_root": str(root),
+                "candidate_purpose": "production_replacement",
             }
             attempt = {
                 "campaign_id": "campaign-a",
+                "campaign_mode": "formal",
+                "campaign_purpose": "production_replacement",
+                "candidate_purpose": "production_replacement",
                 "campaign_manifest_sha256": "5" * 64,
                 "attempt_id": attempt_root.name,
                 "attempt_digest": "6" * 64,
@@ -994,6 +1027,7 @@ class CaptureLifecycleTest(unittest.TestCase):
                 deployed_version=None,
                 profile_id=None,
                 profile_digest=None,
+                candidate_purpose="production_replacement",
                 evidence_root=[],
                 restoration_report=None,
                 capture_manifest=None,
@@ -1004,6 +1038,8 @@ class CaptureLifecycleTest(unittest.TestCase):
             )
             manifest = {
                 "campaign_id": "campaign-a",
+                "campaign_mode": "formal",
+                "campaign_purpose": "production_replacement",
                 "target_version": "0.146.0",
                 "configuration": {"model": "gpt-5.6-luna"},
             }

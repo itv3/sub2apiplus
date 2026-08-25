@@ -1,0 +1,219 @@
+{
+  "schema_version": "official-client-codex-0.149.1-campaign-boundary-hardening-transition/v1",
+  "issued_at_utc": "2026-08-25T23:20:45Z",
+  "base_commit": "f0ec0ea0cb235d4a6845558f11d74ed067919fd2",
+  "scope": "codex-0.149.1-campaign-boundary-hardening",
+  "framework_stage": "VC-0/P0-B1-B2",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-p0-transition-chain-repair.json",
+    "file_sha256": "6388f7f84cd4789271a26dd48ee104816ca3fc7b06c697e02c59a40498837062",
+    "identity_sha256": "215633b1c984be9f63727474847a76981c7435225a4f3ff8854d8388cc020569"
+  },
+  "boundaries": {
+    "accepted_not_activated_enforced": true,
+    "candidate_purpose_frozen": true,
+    "formal_mode_required_for_live_stages": true,
+    "preflight_only_plan_status_only": true
+  },
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/codex_01491_p0_transition_chain_repair_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "0d2ca6d13f335f7b5674164c71aa1ad70ef10610507ebf133f253e8f12cc2718"
+      ],
+      "to_sha256": "8ec9acd6b3507e9bde91b130915dc519f44c2debcc62e3e36d4afe4d3a569a5e",
+      "reason": "追加 B1+B2 后继 transition 校验、精确三元组重放和跨历史收据的传递闭包。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_merge_framework_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "d31422f05e1846f84dd8452943414b5734f3506ddc7371e4ae0475671402750a"
+      ],
+      "to_sha256": "86c64d4418bce2f8a54aca4cc965f37d5bff5a5cb9c0448e1269e82ad4df144c",
+      "reason": "让上游合并框架只通过可重放的 Codex maintenance transition 链承认当前摘要。"
+    },
+    {
+      "path": "backend/internal/officialegress/upstream_v0180_source_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "2740790aba554fd259487a300a5884a3dbb0cd9d950d2e6a5f5935f62305277a"
+      ],
+      "to_sha256": "8223a57b52e10791a8dce975fdc4cbf1072f977694b2d363429d013af90c2935",
+      "reason": "让 v0.1.180 源码 transition 通过同一后继链重放工具摘要，保持历史收据只读。"
+    },
+    {
+      "path": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "b1c5878688c5d7b356d54f18aabf872cdff59b03ed09f78b60a078fdc40e0f59"
+      ],
+      "to_sha256": "e0ae32d4124e25d5a5f895b8d9af055d40ef967b0606a53d5ac19cd8edd4b580",
+      "reason": "明确 preflight/formal 目录隔离、用途冻结和 accepted_not_activated 的 Codex 操作边界。"
+    },
+    {
+      "path": "docs/OFFICIAL_CLIENT_EMULATION_FRAMEWORK.md",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "6d9a82b2d9e1346f543c9a12568511dd1f53a36049cc13edbd0e04912c66bbc9"
+      ],
+      "to_sha256": "4ebd8481d0d8df18cb9da60b5ae5ba4853a009026c8109d19f6060b0bf4a19c9",
+      "reason": "把 Campaign 模式、用途及 VC-6 生产激活边界纳入通用升级规范。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "d2942d9ed54944bafc9eeeba05651ad4e8304ce453fd4374bc5a3361c00d07d9"
+      ],
+      "to_sha256": "681b40075e8aa1c42dded69d73a87607654b0b6df61adfb2029609782937149f",
+      "reason": "强制 Campaign 模式与用途坐标贯穿正式阶段、candidate 身份、收据和验收状态。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_campaign.schema.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "6ef5a0c79ed363461761921666da2916b254bc5c17d0d3e53e17ec7dbefd1992"
+      ],
+      "to_sha256": "75642a60d2f229affa434b86ddb4bcb93275e5a7b4f143263d118a19c747b1d3",
+      "reason": "升级 Campaign Schema，冻结 campaign_mode 与 campaign_purpose。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_capture_attempt.schema.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "0ed634e60ed60c32a907bfad0be94b2c7ef3ca327ac8ca58d38e3ad0e31b2a69"
+      ],
+      "to_sha256": "efdce23f7e70b681ae8c07286970348a99618021c5dfe22a6dd3d9c70747ad79",
+      "reason": "升级 attempt Schema，绑定 Campaign 坐标和 candidate purpose。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_capture_reservation.schema.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "78af22dfe5cec6cdd1f31bd7f07b5692f1290556109b4d635173fc78536854e2"
+      ],
+      "to_sha256": "91db9de39a99d6787e30db351b0c57f434cedd75320d14c13a8572511a199a02",
+      "reason": "升级预约 Schema，在 live 执行前封存模式和用途。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_gate_receipt.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "c60b3c4992b5a6081e678eb6c3b23e308ca6ea82e8be395e66a9705c01375abb"
+      ],
+      "to_sha256": "861d07d5d6574c0e953df930907bfc8d5a2a64f34072b2f204992362f22327d8",
+      "reason": "让 candidate 外部门禁生成和重放均核对冻结用途。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_gate_receipt.schema.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "9dd199157683be777a2a575ea06d947ec40d40ae321acdaf7e8f6109c9cc6131"
+      ],
+      "to_sha256": "b140621fb5fbf27292ab11e7ac4eec165bc8e86932528736c0bb4f6226ee4ea3",
+      "reason": "升级外部门禁 Schema，拒绝 Campaign 或 candidate 用途漂移。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_seal_failure.schema.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "47c2349912a20442fe85f2f183d3e3b587a34d0c16d5cc953d088a238749f02c"
+      ],
+      "to_sha256": "617608ec566f7b85dd13ec1708364c827bdfdf2475fd58e9d34bb0b06c5ec77b",
+      "reason": "升级 seal failure Schema，使失败事实也保留模式与用途身份。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_seal_preview.schema.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "851a7c599a4f207c6e32506dedcaa004f205171a5f7c30bc86a231be646f1259"
+      ],
+      "to_sha256": "0160c1a05416cd7b3660404bb90add3098cbdd15b954c562baa3bc11deee0a76",
+      "reason": "升级 seal preview Schema，将人工批准摘要绑定到 Campaign 坐标。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_stage_result.schema.json",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "cf22cab76f83f3b44d3ee8d03d983262d5cf863d8d051588b377c783edeb1d84"
+      ],
+      "to_sha256": "e443ad697d8be1eef9e8536f66e316d2e79571527db33c27acaacfd52b357d02",
+      "reason": "升级阶段收据 Schema，并要求 accept 显式记录 accepted_not_activated。"
+    },
+    {
+      "path": "tools/official_client_capture/production_activation_receipt.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "f292af9d4d81c8d839618cc0065fbe89ce23761365929490b5300a756ecf9ae5"
+      ],
+      "to_sha256": "83ed012547421355251e0cbc28a3c8b9cb471250170e9b2d11242356cd085382",
+      "reason": "生产激活前重验 candidate purpose 为 production_replacement。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_doc_pre_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "b957c8464221d36b9c80caf5a9d48b79a64ffeda17a53661d95334890e9a0cf1"
+      ],
+      "to_sha256": "7a7f082b666176ebb02813d8d7ee8041f083237022e1373b3198f99389237f39",
+      "reason": "保持 DOC-PRE 收据只读，并通过严格后继 transition 重放当前文件闭包。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_upgrade.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "1eaaca734fa901974059e5f36e29180272eaafd850a0f1cdda4d96717acc0bb0"
+      ],
+      "to_sha256": "ae5b7ca72b6681c0678892dabd806ddd00a45430461948ceefb0b6e38f986157",
+      "reason": "覆盖模式缺失、preflight continuation、用途篡改及 accepted_not_activated 边界。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_upgrade_capture_lifecycle.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "cd7729abfa376ec1f12e3d88ecec94643befeb42a498a0eabd2e5faf3f0f92a7"
+      ],
+      "to_sha256": "10c58cd23995dd2ae61bd81df591be3fca7540177ad605ccc319cf7dba28f15f",
+      "reason": "让抓包生命周期回归夹具显式使用 formal 和冻结用途，保留旧门禁语义。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_upgrade_gate_receipt.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "dcbb5b251bbf7ff376ecf75b88bcb684679d9eb3ed0ad5f30dbcb8b6812ce3b3"
+      ],
+      "to_sha256": "c0d4d642248a00687c4bf9d462ea3ec8d69830cd1cbcfaecd49552486edd16d7",
+      "reason": "覆盖 candidate 外部门禁用途漂移的生成与重放失败关闭。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_production_activation_receipt.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "eab63014f52a0cb3047ea18ddb8b716f822856a901b42bd83bf9a9fe74b7be7a"
+      ],
+      "to_sha256": "9871203509cb1087e785a62ebdfcd56b5a2795d756510c51a381ba3ac81c850b",
+      "reason": "覆盖 validation_only candidate 禁止生成生产激活收据。"
+    }
+  ],
+  "verification": {
+    "capture_tool_tests_passed": true,
+    "egress_spec_passed": true,
+    "schema_validation_passed": true,
+    "targeted_tests_passed": true,
+    "transition_chain_replayed": true
+  },
+  "safety": {
+    "active_previous_changed": false,
+    "catalog_promoted": false,
+    "deployment_performed": false,
+    "formal_campaign_created": false,
+    "historical_receipts_modified": false,
+    "live_request_sent": false,
+    "production_selector_changed": false,
+    "server_accessed": false
+  },
+  "result": "campaign_boundary_hardening_complete",
+  "identity_sha256": "a6333959127274ec091e6007b89a53d548a87436b4f8de3933cb06b2a6a8666f"
+}

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-capture-reservation-v1.json",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-capture-reservation-v2.json",
   "title": "Codex 出站抓包原子预约",
   "description": "run 发出请求前在 Campaign 锁内原子发布，用于关闭并发竞态和进程中断空目录窗口。",
   "type": "object",
@@ -8,9 +8,12 @@
   "required": [
     "schema_version",
     "campaign_id",
+    "campaign_mode",
+    "campaign_purpose",
     "campaign_manifest_sha256",
     "phase",
     "candidate_id",
+    "candidate_purpose",
     "attempt_id",
     "run_nonce",
     "started_at_utc",
@@ -20,10 +23,16 @@
   ],
   "properties": {
     "schema_version": {
-      "const": "codex-upgrade-capture-reservation/v1"
+      "const": "codex-upgrade-capture-reservation/v2"
     },
     "campaign_id": {
       "$ref": "#/$defs/safeId"
+    },
+    "campaign_mode": {
+      "const": "formal"
+    },
+    "campaign_purpose": {
+      "$ref": "#/$defs/candidatePurpose"
     },
     "campaign_manifest_sha256": {
       "$ref": "#/$defs/sha256"
@@ -34,6 +43,12 @@
     "candidate_id": {
       "oneOf": [
         {"$ref": "#/$defs/safeId"},
+        {"type": "null"}
+      ]
+    },
+    "candidate_purpose": {
+      "oneOf": [
+        {"$ref": "#/$defs/candidatePurpose"},
         {"type": "null"}
       ]
     },
@@ -75,7 +90,10 @@
         "required": ["phase"]
       },
       "then": {
-        "properties": {"candidate_id": {"const": null}}
+        "properties": {
+          "candidate_id": {"const": null},
+          "candidate_purpose": {"const": null}
+        }
       }
     },
     {
@@ -84,7 +102,10 @@
         "required": ["phase"]
       },
       "then": {
-        "properties": {"candidate_id": {"$ref": "#/$defs/safeId"}}
+        "properties": {
+          "candidate_id": {"$ref": "#/$defs/safeId"},
+          "candidate_purpose": {"$ref": "#/$defs/candidatePurpose"}
+        }
       }
     }
   ],
@@ -92,6 +113,9 @@
     "safeId": {
       "type": "string",
       "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$"
+    },
+    "candidatePurpose": {
+      "enum": ["validation_only", "production_replacement"]
     },
     "attemptId": {
       "type": "string",

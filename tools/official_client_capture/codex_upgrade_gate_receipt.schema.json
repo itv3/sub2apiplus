@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-external-gate-receipt-v1.json",
+  "$id": "https://sub2apiplus.local/schemas/codex-upgrade-external-gate-receipt-v2.json",
   "title": "Codex 升级外部门禁收据",
   "type": "object",
   "additionalProperties": false,
@@ -15,7 +15,7 @@
   ],
   "properties": {
     "schema_version": {
-      "const": "codex-upgrade-external-gate-receipt/v1"
+      "const": "codex-upgrade-external-gate-receipt/v2"
     },
     "phase": {
       "enum": [
@@ -92,6 +92,15 @@
               },
               "promotion_receipt_sha256": {
                 "$ref": "#/$defs/sha256"
+              },
+              "campaign_mode": {
+                "const": "formal"
+              },
+              "campaign_purpose": {
+                "const": "production_replacement"
+              },
+              "candidate_purpose": {
+                "const": "production_replacement"
               }
             }
           }
@@ -103,6 +112,12 @@
     "sha256": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$"
+    },
+    "candidatePurpose": {
+      "enum": [
+        "validation_only",
+        "production_replacement"
+      ]
     },
     "binding": {
       "type": "object",
@@ -160,7 +175,10 @@
       "additionalProperties": false,
       "required": [
         "campaign_id",
+        "campaign_mode",
+        "campaign_purpose",
         "candidate_id",
+        "candidate_purpose",
         "target_version",
         "target_architecture",
         "profile_id",
@@ -178,9 +196,18 @@
           "type": "string",
           "minLength": 1
         },
+        "campaign_mode": {
+          "const": "formal"
+        },
+        "campaign_purpose": {
+          "$ref": "#/$defs/candidatePurpose"
+        },
         "candidate_id": {
           "type": "string",
           "minLength": 1
+        },
+        "candidate_purpose": {
+          "$ref": "#/$defs/candidatePurpose"
         },
         "target_version": {
           "type": "string",
@@ -340,7 +367,7 @@
       ],
       "properties": {
         "schema_version": {
-          "const": "codex-upgrade-external-gate-producer/v1"
+          "const": "codex-upgrade-external-gate-producer/v2"
         },
         "tool": {
           "type": "string",
