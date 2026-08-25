@@ -1,0 +1,75 @@
+{
+  "schema_version": 1,
+  "cargo_lock": "local-analysis/sources/codex-cli-0.149.1/codex-rs/Cargo.lock",
+  "dependencies": [
+    {
+      "name": "hyper",
+      "version": "1.8.1",
+      "upstream": "https://github.com/hyperium/hyper",
+      "commit": "166c6cacc74b215674937e782b3ab2cbd8b69883",
+      "lock_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "lock_checksum": "2ab2d4f250c3d7b1c9fcdff1cece94ea4e2dfbec68614f7b87cb205f24ca9d11",
+      "files": {
+        "hyper-1.8.1/Cargo.toml": "8ef7ebe4b1d923d9764f8004e72198059ce123261164be77de7378df1704d406",
+        "hyper-1.8.1/LICENSE": "8f2eee700f56dd8b381d92dc5b136befe09f90e186f2c1c8414a70c4c7534550",
+        "hyper-1.8.1/src/proto/h1/role.rs": "210ad28ef2e3c35f2268e3dac979e519c02193b4ba6f895de86442b26b802fad",
+        "hyper-1.8.1/src/proto/h2/client.rs": "5fa59359de28a055ab7e05c79f8046394602aeeb4427c5af48b3acec8e438202"
+      }
+    },
+    {
+      "name": "hyper-util",
+      "version": "0.1.20",
+      "upstream": "https://github.com/hyperium/hyper-util",
+      "commit": "b23a13e2b7ee73e15ba008cd9b19dcd2d3861957",
+      "lock_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "lock_checksum": "96547c2556ec9d12fb1578c4eaf448b04993e7fb79cbaad930a656880a6bdfa0",
+      "files": {
+        "hyper-util-0.1.20/Cargo.toml": "b1afe14c09fd4495db247133cb53cbdc06077df7afb4172b8250bb14de9b60e2",
+        "hyper-util-0.1.20/LICENSE": "9e0a97848ea543aef745c98e84fde696a9a3e0735538f6daefdd3cb1942effc1",
+        "hyper-util-0.1.20/src/client/legacy/client.rs": "cd5b32ba07ef6db7b51ffe36586ce355faec8f991ded275cb12dbc5aaaab808a"
+      }
+    },
+    {
+      "name": "http",
+      "version": "1.4.0",
+      "upstream": "https://github.com/hyperium/http",
+      "commit": "b9625d83b524f7a8306883484f29a746eefc1bab",
+      "lock_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "lock_checksum": "e3ba2a386d7f85a81f119ad7498ebe444d2e22c2af0b86b069416ace48b3311a",
+      "files": {
+        "http-1.4.0/Cargo.toml": "f75ba4b9e29ead4f2bb8b32ae0ca05f0e21dab6369f83afac5ddb217354481ee",
+        "http-1.4.0/LICENSE-APACHE": "8bb1b50b0e5c9399ae33bd35fab2769010fa6c14e8860c729a52295d84896b7a",
+        "http-1.4.0/LICENSE-MIT": "dc91f8200e4b2a1f9261035d4c18c33c246911a6c0f7b543d75347e61b249cff",
+        "http-1.4.0/src/header/map.rs": "b7e85adc5525c2849bd92a9164b9203f2d93de650c36eda90abf5f71405f72d2"
+      }
+    },
+    {
+      "name": "h2",
+      "version": "0.4.16",
+      "upstream": "https://github.com/hyperium/h2",
+      "commit": "b84b96cdcb15fb5190c151aaf7273c7986e22976",
+      "lock_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "lock_checksum": "a9f37a958b41b3b19ee2707c06439c0e9e547e847223eb791ecb0cb821c65e27",
+      "files": {
+        "h2-0.4.16/Cargo.toml": "da03a1b0bf2ace0356d5edc4b11c55897dc10909fbbaf764f0472121ac3318d8",
+        "h2-0.4.16/LICENSE": "b21623012e6c453d944b0342c515b631cfcbf30704c2621b291526b69c10724d",
+        "h2-0.4.16/src/frame/headers.rs": "a7630564280006b29488c2fb399d52a70d8d7ccc6d1276fd291410b329d038c5",
+        "h2-0.4.16/src/frame/settings.rs": "9aed52868a1ddbb5570025edde2e073d3da1291b58d8759bfed7f086d40ef293",
+        "h2-0.4.16/src/hpack/encoder.rs": "b41373f9fe02022a30e669a780c97399af964d338dc671ec12a79592157b5a46"
+      }
+    },
+    {
+      "name": "tungstenite",
+      "version": "0.27.0",
+      "upstream": "https://github.com/openai-oss-forks/tungstenite-rs",
+      "commit": "4fffad30fe373adbdcffab9545e9e9bf4f2fc19f",
+      "lock_source": "git+https://github.com/openai-oss-forks/tungstenite-rs?rev=4fffad30fe373adbdcffab9545e9e9bf4f2fc19f#4fffad30fe373adbdcffab9545e9e9bf4f2fc19f",
+      "files": {
+        "tungstenite-openai-0.27.0/Cargo.toml": "d83cc5d81bfbf9c793e261be449cb3e115894e49b3d35d5ca7e7bce3d7190817",
+        "tungstenite-openai-0.27.0/LICENSE-APACHE": "a60eea817514531668d7e00765731449fe14d059d3249e0bc93b36de45f759f2",
+        "tungstenite-openai-0.27.0/LICENSE-MIT": "7fea0ee51a4ca5d5cea7464135fd55e8b09caf3a61da3d451ac8a22af95c033f",
+        "tungstenite-openai-0.27.0/src/handshake/client.rs": "9b7b6180e5203e44b58efcb66c8540e2599b305eb9a924c21c240ab2e7a28dfd"
+      }
+    }
+  ]
+}

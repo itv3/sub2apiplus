@@ -1,0 +1,1146 @@
+{
+  "schema_version": 1,
+  "spec": "docs/CODEX_CLI_0_149_1_CANDIDATE_RULE_PROFILE.md",
+  "source_version": "0.149.1",
+  "rules": {
+    "SPEC-TLS-001": [],
+    "SPEC-TLS-002": [
+      {
+        "path": "http-client/src/custom_ca.rs",
+        "start": 296,
+        "end": 320,
+        "context_sha256": "44adf938b6eacfe214f66d00804508e4026802e9ea912af7d8aa88ec5735b768",
+        "anchor": "fn build_reqwest_client_with_env("
+      },
+      {
+        "path": "http-client/src/custom_ca.rs",
+        "start": 398,
+        "end": 398,
+        "context_sha256": "cf694d36d8a16a873cf06e473e1a52faef5f1aa1096d2519bcb85f0822411caf",
+        "anchor": "fn configured_ca_bundle(&self) -> Option<ConfiguredCaBundle> {"
+      },
+      {
+        "path": "login/src/auth/default_client.rs",
+        "start": 305,
+        "end": 310,
+        "context_sha256": "76a69b90020a0058fa894d741a85151026bb8de59972f7f92aa0cae14275c583",
+        "anchor": "fn build_default_client(builder: HttpClientBuilder) -> HttpClient {"
+      }
+    ],
+    "SPEC-TLS-003": [
+      {
+        "path": "websocket-client/src/lib.rs",
+        "start": 68,
+        "end": 73,
+        "context_sha256": "1cb214b6f325bf6f9b5be11d9e6bb23a7b5cb2db683a0be3e07a455cffbcd74d",
+        "anchor": "tls_mode: WebSocketTlsMode,"
+      }
+    ],
+    "SPEC-PROTO-001": [
+      {
+        "path": "http-client/src/custom_ca.rs",
+        "start": 296,
+        "end": 320,
+        "context_sha256": "44adf938b6eacfe214f66d00804508e4026802e9ea912af7d8aa88ec5735b768",
+        "anchor": "fn build_reqwest_client_with_env("
+      }
+    ],
+    "SPEC-PROTO-002": [
+      {
+        "path": "model-provider-info/src/lib.rs",
+        "start": 146,
+        "end": 146,
+        "context_sha256": "8442e9ae11a70ecf55c49b63d5fa4ff4915b3507b621374e37c2868e53d6ce64",
+        "anchor": "pub supports_websockets: bool,"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 524,
+        "end": 524,
+        "context_sha256": "e416c9c6c8d13fe179511cf28131fb953b17369327fc5fb27df456a962baacf6",
+        "anchor": "pub(crate) fn force_http_fallback("
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 955,
+        "end": 955,
+        "context_sha256": "5be557f1c329130371ec5debd41212b716959e059a33c7bb10f07ca88a3851fc",
+        "anchor": "pub fn responses_websocket_enabled(&self) -> bool {"
+      },
+      {
+        "path": "core/src/responses_retry.rs",
+        "start": 85,
+        "end": 99,
+        "context_sha256": "d232fd2dd70783845a604f7ae1be00a66e915b2a2f0e2c6a6072e0f0c822688b",
+        "anchor": "if retry_state.retries >= max_retries"
+      }
+    ],
+    "SPEC-CONN-001": [
+      {
+        "path": "login/src/auth/default_client.rs",
+        "start": 226,
+        "end": 228,
+        "context_sha256": "3b26e09b0320aca9674a75432df59cabdcd19cbdb8130b9a099f23d7342579af",
+        "anchor": "pub fn create_client() -> HttpClient {"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 1014,
+        "end": 1027,
+        "context_sha256": "7668908557b3b6c1cd7f31add4f417420532267f4620c00e86e4a7bc0c24cab6",
+        "anchor": "fn build_api_transport("
+      },
+      {
+        "path": "codex-api/src/endpoint/session.rs",
+        "start": 80,
+        "end": 154,
+        "context_sha256": "c6a25a846155fee7d7956758c02de288071a34c7088fa0a8fa5ad4bda782c4f9",
+        "anchor": "pub(crate) async fn execute_with<C>("
+      },
+      {
+        "path": "model-provider/src/models_endpoint.rs",
+        "start": 76,
+        "end": 76,
+        "context_sha256": "6b85d097ee1bc631d96245669878e2be583204ba101e798240d244e53e5e169e",
+        "anchor": "async fn list_models("
+      },
+      {
+        "path": "ext/image-generation/src/backend.rs",
+        "start": 62,
+        "end": 78,
+        "context_sha256": "b1e8c0e1fb7b3404ffe73f7e3d9637f687624deafb5983c39b2b07f42d0bea1d",
+        "anchor": "async fn client(&self) -> Result<ImagesClient<ReqwestTransport>, ImageBackendError> {"
+      },
+      {
+        "path": "ext/web-search/src/tool.rs",
+        "start": 91,
+        "end": 91,
+        "context_sha256": "e188fae743bba30daf3dc604b623948927046ceaa1fd06f126c26ba573641bdc",
+        "anchor": "impl WebSearchTool {"
+      }
+    ],
+    "SPEC-H1-001": [
+      {
+        "path": "tools/spec_source_deps/hyper-1.8.1/src/proto/h1/role.rs",
+        "start": 1572,
+        "end": 1578,
+        "context_sha256": "2a56ee30e690d0337c40a746f1096c51b62d694a79efcd2a22898c5612c67da2",
+        "anchor": "pub(crate) fn write_headers(headers: &HeaderMap, dst: &mut Vec<u8>) {"
+      }
+    ],
+    "SPEC-H1-002": [
+      {
+        "path": "tools/spec_source_deps/hyper-util-0.1.20/src/client/legacy/client.rs",
+        "start": 298,
+        "end": 306,
+        "context_sha256": "a26a5cce45921b91cee3a5f2dd41586875700f583840f367297eaa9b8dddd4f6",
+        "anchor": "if self.config.set_host {"
+      },
+      {
+        "path": "tools/spec_source_deps/hyper-util-0.1.20/src/client/legacy/client.rs",
+        "start": 1033,
+        "end": 1036,
+        "context_sha256": "2daf2c62c2cff4868dda62a818d700041b614894c8b26212e36742d975043ad4",
+        "anchor": "client_config: Config {"
+      }
+    ],
+    "SPEC-H1-003": [
+      {
+        "path": "tools/spec_source_deps/hyper-1.8.1/src/proto/h1/role.rs",
+        "start": 1410,
+        "end": 1419,
+        "context_sha256": "a3b7a6328e686b234b6894dcbd16335106b1b08214074fdde5e4dd13477b88eb",
+        "anchor": "// User didn't set transfer-encoding, AND we know body length,"
+      },
+      {
+        "path": "tools/spec_source_deps/hyper-1.8.1/src/proto/h1/role.rs",
+        "start": 1483,
+        "end": 1512,
+        "context_sha256": "ee03cdfc082c32b98749d02afb5f81698d4fc4dbbf4f8b1eff73af49b912f719",
+        "anchor": "fn set_content_length(headers: &mut HeaderMap, len: u64) -> Encoder {"
+      }
+    ],
+    "SPEC-H1-004": [
+      {
+        "path": "tools/spec_source_deps/http-1.4.0/src/header/map.rs",
+        "start": 923,
+        "end": 928,
+        "context_sha256": "4c3e633b54534902713a73d5b5b1fee7c0a7d6ee63bb491fe9f8861864812916",
+        "anchor": "pub fn iter(&self) -> Iter<'_, T> {"
+      },
+      {
+        "path": "tools/spec_source_deps/http-1.4.0/src/header/map.rs",
+        "start": 1572,
+        "end": 1602,
+        "context_sha256": "59331f5a9c0cc56e89c44ad829f5ac3406850be5b49c3ca864c92560889900f8",
+        "anchor": "pub fn remove<K>(&mut self, key: K) -> Option<T>"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 1187,
+        "end": 1211,
+        "context_sha256": "57d8d16b710ad7d9b48b9a69e6a16538b5f9d5660ad93dd3b780d4eb7f4070a7",
+        "anchor": "async fn build_responses_options("
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 1974,
+        "end": 1980,
+        "context_sha256": "af5ee349e142bbc6a974f48d201eb389b4825eabfb2be9d31b522f04485ffc0a",
+        "anchor": "fn add_responses_lite_header(headers: &mut ApiHeaderMap, use_responses_lite: bool) {"
+      }
+    ],
+    "SPEC-H2-001": [
+      {
+        "path": "tools/spec_source_deps/hyper-1.8.1/src/proto/h2/client.rs",
+        "start": 110,
+        "end": 110,
+        "context_sha256": "af8139d8b9f46458c73d883033dba5f85df81cc1e08b37e30fe83186fc05deaa",
+        "anchor": ".enable_push(false);"
+      },
+      {
+        "path": "tools/spec_source_deps/h2-0.4.16/src/frame/settings.rs",
+        "start": 213,
+        "end": 259,
+        "context_sha256": "f8982df007b37a9e53850633cba382006e77cf89e13884cad07657e23823152e",
+        "anchor": "pub fn encode(&self, dst: &mut BytesMut) {"
+      }
+    ],
+    "SPEC-H2-002": [
+      {
+        "path": "tools/spec_source_deps/hyper-1.8.1/src/proto/h2/client.rs",
+        "start": 110,
+        "end": 110,
+        "context_sha256": "af8139d8b9f46458c73d883033dba5f85df81cc1e08b37e30fe83186fc05deaa",
+        "anchor": ".enable_push(false);"
+      }
+    ],
+    "SPEC-H2-003": [
+      {
+        "path": "tools/spec_source_deps/hyper-1.8.1/src/proto/h2/client.rs",
+        "start": 49,
+        "end": 49,
+        "context_sha256": "a4304d25e6cf36684a90cf073356c0559e75234595ebb158d7808badc8d350b4",
+        "anchor": "const DEFAULT_STREAM_WINDOW: u32 = 1024 * 1024 * 2; // 2mb"
+      }
+    ],
+    "SPEC-H2-004": [
+      {
+        "path": "tools/spec_source_deps/hyper-1.8.1/src/proto/h2/client.rs",
+        "start": 50,
+        "end": 50,
+        "context_sha256": "86c495853ef1fae90b2383b853be0533219588cf1abe8bfc4f915d3b183f2bed",
+        "anchor": "const DEFAULT_MAX_FRAME_SIZE: u32 = 1024 * 16; // 16kb"
+      }
+    ],
+    "SPEC-H2-005": [
+      {
+        "path": "tools/spec_source_deps/hyper-1.8.1/src/proto/h2/client.rs",
+        "start": 52,
+        "end": 52,
+        "context_sha256": "eadf8472b083a412189c9e53bcce63d7f147ce6e235a8675e03ea6137c82dc9f",
+        "anchor": "const DEFAULT_MAX_HEADER_LIST_SIZE: u32 = 1024 * 16; // 16kb"
+      }
+    ],
+    "SPEC-H2-006": [
+      {
+        "path": "tools/spec_source_deps/hyper-1.8.1/src/proto/h2/client.rs",
+        "start": 48,
+        "end": 48,
+        "context_sha256": "e0ad8955cc3a2b2e051f4b4b6561936b3d6e6fe37d6711f9ba28f787a6771d2e",
+        "anchor": "const DEFAULT_CONN_WINDOW: u32 = 1024 * 1024 * 5; // 5mb"
+      },
+      {
+        "path": "tools/spec_source_deps/h2-0.4.16/src/frame/settings.rs",
+        "start": 43,
+        "end": 44,
+        "context_sha256": "cf3f017a5fa5a55a0b77e088e46413c4d731388c915d70129d30d820f3e09a7e",
+        "anchor": "/// The default value of SETTINGS_INITIAL_WINDOW_SIZE"
+      }
+    ],
+    "SPEC-H2-007": [
+      {
+        "path": "tools/spec_source_deps/h2-0.4.16/src/frame/headers.rs",
+        "start": 698,
+        "end": 718,
+        "context_sha256": "d2245305e46b0355afffbdf7e353025bedec3368649d746bc66f8f20f0c18815",
+        "anchor": "if continuation.is_some() {"
+      },
+      {
+        "path": "tools/spec_source_deps/h2-0.4.16/src/hpack/encoder.rs",
+        "start": 61,
+        "end": 78,
+        "context_sha256": "5e02e59f5176e2a3797d97a51c24c9d6160449b64147b5ce5f9215b312d77012",
+        "anchor": "}"
+      }
+    ],
+    "SPEC-WS-001": [
+      {
+        "path": "tools/spec_source_deps/tungstenite-openai-0.27.0/src/handshake/client.rs",
+        "start": 137,
+        "end": 175,
+        "context_sha256": "b5e98405685956b7d1396272ec5dc169a4559db3017fea694c459aeb3b676384",
+        "anchor": "const WEBSOCKET_HEADERS: [&str; 5] ="
+      }
+    ],
+    "SPEC-WS-002": [
+      {
+        "path": "tools/spec_source_deps/tungstenite-openai-0.27.0/src/handshake/client.rs",
+        "start": 159,
+        "end": 206,
+        "context_sha256": "3b69a5682f058aa07237485463f9c91869d54c02a40cfbf7c6394e5e74824093",
+        "anchor": "let headers = request.headers_mut();"
+      },
+      {
+        "path": "tools/spec_source_deps/http-1.4.0/src/header/map.rs",
+        "start": 1572,
+        "end": 1602,
+        "context_sha256": "59331f5a9c0cc56e89c44ad829f5ac3406850be5b49c3ca864c92560889900f8",
+        "anchor": "pub fn remove<K>(&mut self, key: K) -> Option<T>"
+      }
+    ],
+    "SPEC-WS-003": [
+      {
+        "path": "model-provider-info/src/lib.rs",
+        "start": 122,
+        "end": 122,
+        "context_sha256": "46cc3bb7f5f6f86a556b89a122a327e614c271ac8661ddd84717058bc6590985",
+        "anchor": "pub http_headers: Option<HashMap<String, String>>,"
+      },
+      {
+        "path": "tools/spec_source_deps/tungstenite-openai-0.27.0/src/handshake/client.rs",
+        "start": 190,
+        "end": 206,
+        "context_sha256": "95ea1be018454fba2eb4148da3ffed1bbdd4b2f6c8b76a047610a96ce010bfe5",
+        "anchor": "for (k, v) in headers {"
+      }
+    ],
+    "SPEC-WS-004": [],
+    "SPEC-WS-005": [
+      {
+        "path": "codex-api/src/common.rs",
+        "start": 302,
+        "end": 328,
+        "context_sha256": "3482df38c69add5040b9513da18d4df8285dcf342be840e301d69d6bdd751212",
+        "anchor": "pub struct ResponseCreateWsRequest<'a> {"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 1674,
+        "end": 1710,
+        "context_sha256": "e993eb53cd0b8ab0b47501bc56548ced3bcbe6e37d9479ce65e6e67cfebf12d3",
+        "anchor": "self.prepare_websocket_request(&request);"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 930,
+        "end": 930,
+        "context_sha256": "76f4e3a85cac742fa9d7bc4e76b8bf858e7fcf3fff49998e9859fe8a0360e083",
+        "anchor": "parallel_tool_calls: prompt.parallel_tool_calls && !model_info.use_responses_lite,"
+      }
+    ],
+    "SPEC-HDR-001": [
+      {
+        "path": "codex-api/src/endpoint/session.rs",
+        "start": 48,
+        "end": 48,
+        "context_sha256": "f280ee34cc064b3cb09f81b7ff5d32561ac37346dd7259f749155c95549c2b72",
+        "anchor": "fn make_request("
+      },
+      {
+        "path": "codex-api/src/endpoint/session.rs",
+        "start": 80,
+        "end": 154,
+        "context_sha256": "c6a25a846155fee7d7956758c02de288071a34c7088fa0a8fa5ad4bda782c4f9",
+        "anchor": "pub(crate) async fn execute_with<C>("
+      },
+      {
+        "path": "login/src/auth/default_client.rs",
+        "start": 296,
+        "end": 310,
+        "context_sha256": "bb7dcb71819bf9a60711f3de77785e259ae228125ee69486398bbb9261eec269",
+        "anchor": "fn default_http_client_builder() -> HttpClientBuilder {"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 630,
+        "end": 635,
+        "context_sha256": "013a61aec77509ef4b7775ae70b866a4f15561c4e600748a5c027bb970c030b6",
+        "anchor": "if let Some(header_value) = self.build_routing_hint_header("
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 989,
+        "end": 1011,
+        "context_sha256": "ab381321a5812cd0db1c47edd496324e68ed8c410b4f219045a7aa8b1b7b9ae5",
+        "anchor": "fn build_routing_hint_header("
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 1140,
+        "end": 1141,
+        "context_sha256": "377f77a37dfda54d5d981dad16feb7b4e8114efcad86ccc456c9bb3e784e4e5c",
+        "anchor": "if let Some(routing_hint) = &responses_metadata.routing_hint {"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 1491,
+        "end": 1498,
+        "context_sha256": "683d1e6d2f4ed2aba49d1760a3025d3f3bc5679eafcccf6e88da7ff09cf7b4b4",
+        "anchor": "if let Some(header_value) = self.client.build_routing_hint_header("
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 1619,
+        "end": 1623,
+        "context_sha256": "cc9129a406f9fd66a7b6ca74dee051017aacc2d9a1090cd1ef152b63302f8466",
+        "anchor": "websocket_metadata.routing_hint = self.client.build_routing_hint_header("
+      }
+    ],
+    "SPEC-HDR-002": [
+      {
+        "path": "login/src/auth/default_client.rs",
+        "start": 52,
+        "end": 52,
+        "context_sha256": "695914e92fe0bcfa98b54be760f8b81a708b8a4199228b00749ba6dc3aa01d8e",
+        "anchor": "static REQUIREMENTS_RESIDENCY: LazyLock<RwLock<Option<ResidencyRequirement>>> ="
+      },
+      {
+        "path": "login/src/auth/default_client.rs",
+        "start": 99,
+        "end": 104,
+        "context_sha256": "47663829be983e9c27563e54dfa8625987418ca532ede8fe87995e0bffbf052b",
+        "anchor": "pub fn set_default_client_residency_requirement(enforce_residency: Option<ResidencyRequirement>) {"
+      },
+      {
+        "path": "login/src/auth/default_client.rs",
+        "start": 335,
+        "end": 348,
+        "context_sha256": "98d66146a0a68468eae6439f35694d8992fd786afb02ad64ea688bf8b8db3761",
+        "anchor": "pub fn default_headers() -> HeaderMap {"
+      },
+      {
+        "path": "config/src/config_requirements.rs",
+        "start": 954,
+        "end": 954,
+        "context_sha256": "f29f087c2ae0d2f5aabf1e7b9fbae85c4b6a75c3feb4282c08391bc2d93e8dec",
+        "anchor": "pub enforce_residency: Option<ResidencyRequirement>,"
+      },
+      {
+        "path": "exec/src/lib.rs",
+        "start": 471,
+        "end": 471,
+        "context_sha256": "56e82a01b95d9b6aaa752273078fde8afbed038c55f4b1c4eb874ccd279ebd52",
+        "anchor": "set_default_client_residency_requirement(config.enforce_residency.value());"
+      },
+      {
+        "path": "tui/src/lib.rs",
+        "start": 1562,
+        "end": 1562,
+        "context_sha256": "c693f11fd817a35317cec23528bad9cc80b5256d58aeaba36db8fa4752b1aeb8",
+        "anchor": "set_default_client_residency_requirement(config.enforce_residency.value());"
+      },
+      {
+        "path": "app-server/src/request_processors/initialize_processor.rs",
+        "start": 136,
+        "end": 136,
+        "context_sha256": "c9c0f74aaecc2affe3b2320255e81aaf4a61864af16c6bf14357f0c2d25cd373",
+        "anchor": "set_default_client_residency_requirement(self.config.enforce_residency.value());"
+      }
+    ],
+    "SPEC-HDR-004": [
+      {
+        "path": "core/src/client.rs",
+        "start": 143,
+        "end": 143,
+        "context_sha256": "ee3e55da71f4ade2847e252fac038c03f61157306bdbd7b3b795108b03c4364b",
+        "anchor": "pub const OPENAI_BETA_HEADER: &str = \"OpenAI-Beta\";"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 1147,
+        "end": 1147,
+        "context_sha256": "42018bbdb65c3bbeb9f7bb1789903cc2621947020df56fe546206685c7e52a33",
+        "anchor": "OPENAI_BETA_HEADER,"
+      },
+      {
+        "path": "cli/src/doctor.rs",
+        "start": 110,
+        "end": 110,
+        "context_sha256": "b692a673ce37824502f1206233074dbffa6039669d267b76c0f41e7ab2c1076a",
+        "anchor": "const OPENAI_BETA_HEADER: &str = \"OpenAI-Beta\";"
+      },
+      {
+        "path": "cli/src/doctor.rs",
+        "start": 2396,
+        "end": 2396,
+        "context_sha256": "1d743d403341f83fd4ee67033965142ddb0317b8f3a83d8328491b344ac7d130",
+        "anchor": "OPENAI_BETA_HEADER,"
+      }
+    ],
+    "SPEC-HDR-005": [
+      {
+        "path": "login/src/auth/default_client.rs",
+        "start": 39,
+        "end": 39,
+        "context_sha256": "b9cb8d7549157bf2dc653075fef38c6afdf9f3d04170d80a46879f7928568fe0",
+        "anchor": "pub static USER_AGENT_SUFFIX: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));"
+      },
+      {
+        "path": "login/src/auth/default_client.rs",
+        "start": 164,
+        "end": 164,
+        "context_sha256": "d29cfa239b73601946f99ced5ae1e6d3bcda1f5a64f402a3e388870404771c4c",
+        "anchor": "pub fn get_codex_user_agent() -> String {"
+      },
+      {
+        "path": "app-server/src/request_processors/initialize_processor.rs",
+        "start": 94,
+        "end": 137,
+        "context_sha256": "247ce6ee017f58254eb2f528ab619916cd704b92c4a1a9c5f89756e350456271",
+        "anchor": "let user_agent_suffix = format!(\"{name}; {version}\");"
+      },
+      {
+        "path": "cloud-tasks/src/util.rs",
+        "start": 13,
+        "end": 13,
+        "context_sha256": "ddbd1109755498974dace4df4e8bb59a992f3f61de31f28c52dd8c6b0db8fe6b",
+        "anchor": "if let Ok(mut guard) = codex_login::default_client::USER_AGENT_SUFFIX.lock() {"
+      }
+    ],
+    "SPEC-HDR-006": [
+      {
+        "path": "codex-api/src/endpoint/responses.rs",
+        "start": 149,
+        "end": 149,
+        "context_sha256": "63633a1c8bc6d6778dde47a0405fa69445bbe8f50deb251b355a152da122b44d",
+        "anchor": "http::header::ACCEPT,"
+      }
+    ],
+    "SPEC-HDR-007": [
+      {
+        "path": "codex-api/src/requests/headers.rs",
+        "start": 8,
+        "end": 8,
+        "context_sha256": "607ed45888164598adb9609e9862f57fc1e4bbe3205ad924d608e795e7bc30f7",
+        "anchor": "insert_header(&mut headers, \"session-id\", &id);"
+      },
+      {
+        "path": "codex-api/src/requests/headers.rs",
+        "start": 11,
+        "end": 11,
+        "context_sha256": "7582cc36b9544364e4873f996199a766e12732b5d29910662ade8efdb12c9a82",
+        "anchor": "insert_header(&mut headers, \"thread-id\", &id);"
+      },
+      {
+        "path": "core/src/realtime_conversation.rs",
+        "start": 1672,
+        "end": 1672,
+        "context_sha256": "01ab17aba3b145204920f3eb9df1f06d47096246e60871fc1205da9489df37a5",
+        "anchor": "headers.insert(\"x-session-id\", realtime_session_id);"
+      }
+    ],
+    "SPEC-HDR-008": [
+      {
+        "path": "core/src/responses_metadata.rs",
+        "start": 317,
+        "end": 404,
+        "context_sha256": "35e2ec55d9277ad576a8d24260518665b96370ec6d7b87b716b927fa5fc45c0b",
+        "anchor": "pub(crate) fn compatibility_headers(&self) -> ApiHeaderMap {"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 742,
+        "end": 775,
+        "context_sha256": "98b507f0159cf7efc6ebb8a1a37361a04b685e41d9ae3ccf6d9525608ea6d007",
+        "anchor": "fn build_subagent_headers(&self) -> ApiHeaderMap {"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 1139,
+        "end": 1154,
+        "context_sha256": "cb450552d3a3f306d77586b2a8bcf9bd56882296e29fc9fa929565aa66d82c61",
+        "anchor": "headers.extend(self.build_responses_compatibility_headers(responses_metadata));"
+      },
+      {
+        "path": "features/src/lib.rs",
+        "start": 973,
+        "end": 977,
+        "context_sha256": "f45c34958ac425865e3b6e4c677fd5f1203fc24bb3a6992a3e539d0f4ed28bf2",
+        "anchor": "id: Feature::RuntimeMetrics,"
+      }
+    ],
+    "SPEC-BODY-001": [
+      {
+        "path": "codex-api/src/common.rs",
+        "start": 252,
+        "end": 328,
+        "context_sha256": "e0d9a14686275cf7333fcb1e5fa2019ede8f139093804ea2342c336cd67b216f",
+        "anchor": "pub struct ResponsesApiRequest {"
+      }
+    ],
+    "SPEC-BODY-002": [
+      {
+        "path": "features/src/lib.rs",
+        "start": 1087,
+        "end": 1090,
+        "context_sha256": "3d35167bbf6d77ada96923dca060be08478c9062ce25572492b9847ee29d47b8",
+        "anchor": "id: Feature::EnableRequestCompression,"
+      },
+      {
+        "path": "core/src/session/session.rs",
+        "start": 1403,
+        "end": 1403,
+        "context_sha256": "7118516f5cba883d9816112ca862ef2f4ddd7b6dfaa1baeefba54057d0223ec5",
+        "anchor": "config.features.enabled(Feature::EnableRequestCompression),"
+      },
+      {
+        "path": "http-client/src/request.rs",
+        "start": 41,
+        "end": 43,
+        "context_sha256": "dfa6c9b85d40ff15f19fa1e4ff9d1706b7bd1dd5fa19faec451663c2b50662f0",
+        "anchor": "#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]"
+      }
+    ],
+    "SPEC-BODY-003": [
+      {
+        "path": "core/src/client.rs",
+        "start": 825,
+        "end": 841,
+        "context_sha256": "2e4035c9c15d4a29025e23e2a6d9e9578b12851d979ef7b7872e4467fcbf9b03",
+        "anchor": "fn build_reasoning("
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 868,
+        "end": 897,
+        "context_sha256": "2ef9d305f804c509924c3243258f0f594aeeed0ce63de1ae14c2a2cb2169b6e1",
+        "anchor": "let (instructions, tools) = if model_info.use_responses_lite {"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 930,
+        "end": 930,
+        "context_sha256": "76f4e3a85cac742fa9d7bc4e76b8bf858e7fcf3fff49998e9859fe8a0360e083",
+        "anchor": "parallel_tool_calls: prompt.parallel_tool_calls && !model_info.use_responses_lite,"
+      }
+    ],
+    "SPEC-BODY-004": [
+      {
+        "path": "codex-api/src/sse/responses.rs",
+        "start": 62,
+        "end": 70,
+        "context_sha256": "2648d6b8d2e9cb37c8217c9732b5e5763ed10771823f8fabbe00cf7b95088c29",
+        "anchor": "if let Some(turn_state) = turn_state.as_ref()"
+      },
+      {
+        "path": "codex-api/src/endpoint/responses_websocket.rs",
+        "start": 747,
+        "end": 750,
+        "context_sha256": "9132ab40eb07a1d33418ac4b5e29f630bd6883b77b6e10690cf1b3fd0ec14013",
+        "anchor": "if let Some(response_turn_state) = event.turn_state()"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 1630,
+        "end": 1634,
+        "context_sha256": "ac01469045a0abf9a8a0ac76433267b80b35253c98c04236cf514ed1da1b230e",
+        "anchor": "let mut client_metadata = self"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 1954,
+        "end": 1970,
+        "context_sha256": "afa5598b0068d92dd0e7b160c5004c2a94e80d24b89eec06c3f544f35032d020",
+        "anchor": "fn build_responses_headers("
+      }
+    ],
+    "SPEC-BODY-005": [
+      {
+        "path": "codex-api/src/common.rs",
+        "start": 259,
+        "end": 259,
+        "context_sha256": "4aaeb4b8157b39539afe5d37362451730299930ca8028f6168951d62073ba136",
+        "anchor": "pub tool_choice: String,"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 929,
+        "end": 929,
+        "context_sha256": "b55bb276e24355715a3406b97df4815f0c788e6147c8ba937554d45757dfe952",
+        "anchor": "tool_choice: \"auto\".to_string(),"
+      }
+    ],
+    "SPEC-BODY-006": [
+      {
+        "path": "codex-api/src/common.rs",
+        "start": 253,
+        "end": 274,
+        "context_sha256": "c0ddabb50f3fe6e056b5e97cf9c187aad6a5f4ade82ca00e653e92c80ccf3c15",
+        "anchor": "pub model: String,"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 825,
+        "end": 930,
+        "context_sha256": "4afb7783b32395a30dcb22d375e16c7a11972890fc36ce8f532f0966547b72c8",
+        "anchor": "fn build_reasoning("
+      }
+    ],
+    "SPEC-BODY-007": [],
+    "SPEC-EP-001": [
+      {
+        "path": "core/src/tools/spec_plan.rs",
+        "start": 106,
+        "end": 107,
+        "context_sha256": "fbbd5196ad71b9e33b15f0a2e184431f58133a09eb3eeb32cc2223cbbabcfc95",
+        "anchor": "const IMAGE_GEN_NAMESPACE: &str = \"image_gen\";"
+      },
+      {
+        "path": "tools/src/tool_spec.rs",
+        "start": 22,
+        "end": 45,
+        "context_sha256": "451bed5cc2a23c2f7db66f285f1a39128196135eed778de782aa89266d29e4c4",
+        "anchor": "pub enum ToolSpec {"
+      },
+      {
+        "path": "ext/image-generation/src/backend.rs",
+        "start": 61,
+        "end": 110,
+        "context_sha256": "d6e55db08c237d99a08945c8c3c6c56c499a72d1ad444ad8021801e187048291",
+        "anchor": "/// Resolves the provider and auth required for the current image API request."
+      },
+      {
+        "path": "codex-api/src/endpoint/images.rs",
+        "start": 33,
+        "end": 68,
+        "context_sha256": "01a5ce6e71f46e6b2e8edec423982ef1e2aee4c59c36d4a74b9e6349a4e465c3",
+        "anchor": "pub async fn generate("
+      }
+    ],
+    "SPEC-EP-002": [
+      {
+        "path": "model-provider-info/src/lib.rs",
+        "start": 377,
+        "end": 380,
+        "context_sha256": "a4b0d87a534b529c5c17bf379c018ec20374f072ca750a579a4de39d3ee2405c",
+        "anchor": "pub fn create_openai_provider(base_url: Option<String>) -> ModelProviderInfo {"
+      },
+      {
+        "path": "login/src/auth/manager.rs",
+        "start": 194,
+        "end": 194,
+        "context_sha256": "2653366b02129d76476b2c96889e989af9b480eef396d7c3ee6ed6f2353c60e8",
+        "anchor": "const REFRESH_TOKEN_URL: &str = \"https://auth.openai.com/oauth/token\";"
+      },
+      {
+        "path": "core/src/realtime_conversation.rs",
+        "start": 1161,
+        "end": 1169,
+        "context_sha256": "31e07fbe83aba93757d72e4860311bf762915ff7954b6a1518c58173c3780974",
+        "anchor": "let mut api_provider = provider.to_api_provider(Some(AuthMode::ApiKey))?;"
+      },
+      {
+        "path": "core/src/mcp_tool_call.rs",
+        "start": 441,
+        "end": 449,
+        "context_sha256": "52e4140c887c110427fc96fdabf359a37c48ae53247a1b361d0c502dc1d58fac",
+        "anchor": "let hosted_upload = item_metadata"
+      },
+      {
+        "path": "core/src/mcp_openai_file.rs",
+        "start": 198,
+        "end": 243,
+        "context_sha256": "9dcc350399995c68b159e707713da1bb6f01cee10a76221452622a852adbf075",
+        "anchor": "let fs = turn_environment.environment.get_filesystem();"
+      },
+      {
+        "path": "codex-api/src/files.rs",
+        "start": 26,
+        "end": 39,
+        "context_sha256": "1e376d0d1375b89e57a9fde7833b828011d84cbac93184377589617346fab647",
+        "anchor": "pub struct HostedFileUploadContext {"
+      },
+      {
+        "path": "codex-api/src/files.rs",
+        "start": 119,
+        "end": 188,
+        "context_sha256": "315a0f68c06011cc39010c4d42a1bd8b99895af87b04026a77c9af93a974d6d9",
+        "anchor": "pub async fn upload_openai_file("
+      },
+      {
+        "path": "codex-api/src/files.rs",
+        "start": 254,
+        "end": 319,
+        "context_sha256": "3a2300a26f016a9326dc99140e3b7690cc40797fb9dd5e4efe3ba03f1692c34f",
+        "anchor": "let finalize_url = format!("
+      }
+    ],
+    "SPEC-EP-005": [
+      {
+        "path": "codex-api/src/endpoint/session.rs",
+        "start": 63,
+        "end": 154,
+        "context_sha256": "3dabe22c291b3be06ecd4b46bb11e08363f33f84839dc3469a7861ef63507433",
+        "anchor": "pub(crate) async fn execute("
+      },
+      {
+        "path": "codex-api/src/endpoint/responses.rs",
+        "start": 135,
+        "end": 153,
+        "context_sha256": "cfde2c46be41d9d41a1483aefe127249af33be4613168a90e68710d049c1b51f",
+        "anchor": "let request_compression = match compression {"
+      },
+      {
+        "path": "codex-api/src/endpoint/models.rs",
+        "start": 46,
+        "end": 62,
+        "context_sha256": "06b282d7f5f59f47786bcceba36e707a87be85d1f753382a1655584a1e3607a9",
+        "anchor": "pub async fn list_models("
+      },
+      {
+        "path": "codex-api/src/endpoint/compact.rs",
+        "start": 46,
+        "end": 56,
+        "context_sha256": "0cb1ec43d41d81ca64b471d05e3fd33e39843d398d9edf33641c1cecc93a1d0b",
+        "anchor": "let resp = self"
+      },
+      {
+        "path": "codex-api/src/endpoint/search.rs",
+        "start": 35,
+        "end": 45,
+        "context_sha256": "eaf5e126ef545a5407732d514f68203e3e2b14c30363bc119731f93c107d2202",
+        "anchor": "pub async fn search("
+      },
+      {
+        "path": "codex-api/src/endpoint/images.rs",
+        "start": 33,
+        "end": 68,
+        "context_sha256": "01a5ce6e71f46e6b2e8edec423982ef1e2aee4c59c36d4a74b9e6349a4e465c3",
+        "anchor": "pub async fn generate("
+      }
+    ],
+    "SPEC-EP-006": [
+      {
+        "path": "codex-api/src/endpoint/models.rs",
+        "start": 31,
+        "end": 55,
+        "context_sha256": "58d0b7e0914567098600f9422c3d14162d07ca27e58176015fe81d158d5428b4",
+        "anchor": "fn path() -> &'static str {"
+      }
+    ],
+    "SPEC-EP-007": [
+      {
+        "path": "codex-api/src/endpoint/compact.rs",
+        "start": 35,
+        "end": 50,
+        "context_sha256": "5038b4b14dab56aed87973faaf4760b98c0949042ac0efe348c6b7c240b4b295",
+        "anchor": "fn path() -> &'static str {"
+      }
+    ],
+    "SPEC-EP-008": [
+      {
+        "path": "codex-api/src/endpoint/search.rs",
+        "start": 31,
+        "end": 44,
+        "context_sha256": "cb5724457325b5ac709d1eba6aed0f2d5d91c10e3b9aae3e299fb3868e5ee0e3",
+        "anchor": "fn path() -> &'static str {"
+      }
+    ],
+    "SPEC-EP-009": [
+      {
+        "path": "codex-api/src/endpoint/realtime_call.rs",
+        "start": 62,
+        "end": 72,
+        "context_sha256": "e4542896056019aff4c67f940565e031abe5acce78de6fbb393afef5d22e1890",
+        "anchor": "fn path() -> &'static str {"
+      },
+      {
+        "path": "codex-api/src/endpoint/realtime_call.rs",
+        "start": 108,
+        "end": 155,
+        "context_sha256": "a4331bfe0e413d82b0ff4d568402ba2ce01486585563200161e24ebeec923064",
+        "anchor": "let resp = self"
+      }
+    ],
+    "SPEC-EP-012": [
+      {
+        "path": "codex-api/src/endpoint/realtime_call.rs",
+        "start": 213,
+        "end": 224,
+        "context_sha256": "bce3de80f270bd5355a452049d99aa74a84cf5b7754858844b21e0fdf235fe63",
+        "anchor": "fn configure_realtime_call_request("
+      },
+      {
+        "path": "core/src/realtime_conversation.rs",
+        "start": 1161,
+        "end": 1161,
+        "context_sha256": "994ad4243bd434a95d39a5f67035a5fa4802a6569ae534fb88470acb55882c29",
+        "anchor": "let mut api_provider = provider.to_api_provider(Some(AuthMode::ApiKey))?;"
+      },
+      {
+        "path": "core/src/realtime_conversation.rs",
+        "start": 1192,
+        "end": 1210,
+        "context_sha256": "1684375a16dc8fd6db4d935d0c91bd539734a055654596591224d41c1089c9ee",
+        "anchor": "let mut extra_headers = match transport {"
+      },
+      {
+        "path": "core/src/realtime_conversation.rs",
+        "start": 1661,
+        "end": 1661,
+        "context_sha256": "7d4b456b5ab861aa085545f8ef84604e24d1eebc351d78376f69c8fb9958417c",
+        "anchor": "headers.insert(\"openai-alpha\", HeaderValue::from_static(\"quicksilver=v1\"));"
+      },
+      {
+        "path": "codex-api/src/endpoint/realtime_websocket/methods.rs",
+        "start": 808,
+        "end": 886,
+        "context_sha256": "ec16e8626691131374a22703b32cd5db0e2be8a209aea0b47387278c816f3962",
+        "anchor": "pub async fn connect_webrtc_sideband("
+      },
+      {
+        "path": "codex-api/src/endpoint/realtime_websocket/methods.rs",
+        "start": 1014,
+        "end": 1089,
+        "context_sha256": "812f60273234d5e96538cda6afe8fff85cf02aecc65e53ce812ed78ee917fffe",
+        "anchor": "fn websocket_url_from_api_url("
+      },
+      {
+        "path": "core/src/realtime_conversation/sideband.rs",
+        "start": 50,
+        "end": 59,
+        "context_sha256": "797c2b210402b8c0a65f28deee7cf5b7cca8375dccef994878d67b7d72da00b7",
+        "anchor": "let connection = match tokio::select! {"
+      }
+    ],
+    "SPEC-EP-013": [
+      {
+        "path": "codex-api/src/provider.rs",
+        "start": 53,
+        "end": 53,
+        "context_sha256": "b89659c793984a6f25871c775e3c48cea6c55636bc99df02cd3d786dad774a49",
+        "anchor": "pub fn url_for_path(&self, path: &str) -> String {"
+      },
+      {
+        "path": "model-provider-info/src/lib.rs",
+        "start": 387,
+        "end": 387,
+        "context_sha256": "8533fc20b706f2c8ef52a7abdcc622f41859e2c129bff1d021ef2464a00934dd",
+        "anchor": "query_params: None,"
+      },
+      {
+        "path": "codex-api/src/endpoint/realtime_call.rs",
+        "start": 213,
+        "end": 224,
+        "context_sha256": "bce3de80f270bd5355a452049d99aa74a84cf5b7754858844b21e0fdf235fe63",
+        "anchor": "fn configure_realtime_call_request("
+      }
+    ],
+    "SPEC-EP-014": [
+      {
+        "path": "core/src/client.rs",
+        "start": 613,
+        "end": 638,
+        "context_sha256": "153bba85ca87d27e7de4c517df45047b284ee3206c92a3ca060db82a0b645916",
+        "anchor": "let mut extra_headers = ApiHeaderMap::new();"
+      },
+      {
+        "path": "core/src/client.rs",
+        "start": 1954,
+        "end": 1971,
+        "context_sha256": "0dabbc4abcf30bdcf39b68d514c58c415f57f0f21f81b680d244aa53241f320a",
+        "anchor": "fn build_responses_headers("
+      },
+      {
+        "path": "codex-api/src/endpoint/responses.rs",
+        "start": 89,
+        "end": 89,
+        "context_sha256": "862d1a27db55bb5160921c5e077648dbcce71234a4ee973b687ca958214ad3b4",
+        "anchor": "insert_header(&mut headers, \"x-client-request-id\", thread_id);"
+      }
+    ],
+    "SPEC-EP-015": [
+      {
+        "path": "codex-api/src/search.rs",
+        "start": 9,
+        "end": 21,
+        "context_sha256": "499ab570dc0d0a1229cbba21087f824d2f54d6e17d28f2673358d32263e63ea1",
+        "anchor": "pub struct SearchRequest {"
+      },
+      {
+        "path": "ext/web-search/src/tool.rs",
+        "start": 110,
+        "end": 120,
+        "context_sha256": "acdff0615a3c99cfc26fd87405a61a65a2533ab8f1749cdd1900f3cce023b292",
+        "anchor": "let request = SearchRequest {"
+      },
+      {
+        "path": "ext/web-search/src/tool.rs",
+        "start": 185,
+        "end": 195,
+        "context_sha256": "7a39eb681d3a558ad4951e47c1498cb5ee11bb7aa8c7c37cd4812ea404240e8b",
+        "anchor": "fn search_request_headers(originator: Option<&str>, turn_metadata: Option<&str>) -> HeaderMap {"
+      }
+    ],
+    "SPEC-EP-019": [
+      {
+        "path": "backend-client/src/client/rate_limit_resets.rs",
+        "start": 15,
+        "end": 19,
+        "context_sha256": "642e8a28bb801b4a03780979a2ade24b2efba9b38a9323ac4cf6677b62506b47",
+        "anchor": "#[derive(Serialize)]"
+      },
+      {
+        "path": "backend-client/src/client/rate_limit_resets.rs",
+        "start": 31,
+        "end": 109,
+        "context_sha256": "a6c142980349e5c07f25b575d9b73a0fffd6ca7495969e9270254a202ce8d916",
+        "anchor": "pub(super) async fn get_rate_limit_status(&self) -> Result<RateLimitStatusWithResetCredits> {"
+      },
+      {
+        "path": "backend-client/src/client.rs",
+        "start": 226,
+        "end": 245,
+        "context_sha256": "2b3b32cefe69e20e09acf597ff4a176e53c782bb77950a90a9b4b5c19a2c149f",
+        "anchor": "fn headers(&self) -> HeaderMap {"
+      },
+      {
+        "path": "backend-client/src/client.rs",
+        "start": 463,
+        "end": 480,
+        "context_sha256": "d4efbf99f78735b19b71e992c7e104ae91d5d8e8d172f7fca00cd99e700acf4d",
+        "anchor": "/// Fetch authenticated Codex user settings from the active backend route."
+      },
+      {
+        "path": "backend-client/src/client.rs",
+        "start": 642,
+        "end": 646,
+        "context_sha256": "7365fd55cb7aa60d365e9ab555f6aa93757e654e45e3b318b2cc1efe76be3165",
+        "anchor": "fn user_settings_url(&self) -> String {"
+      }
+    ],
+    "SPEC-EP-020": [
+      {
+        "path": "codex-api/src/common.rs",
+        "start": 28,
+        "end": 43,
+        "context_sha256": "82cab4f333a78d32a438c279684938c47980554f54a3391170d40a5bdae97454",
+        "anchor": "pub struct CompactionInput<'a> {"
+      }
+    ],
+    "SPEC-EP-021": [
+      {
+        "path": "core/src/compact_remote_v2_attempt.rs",
+        "start": 77,
+        "end": 77,
+        "context_sha256": "899ace0daf8b8d1e815138273e6f8ccaf93585bca22a06e8fa88f0c57984a8e6",
+        "anchor": "input.push(ResponseItem::CompactionTrigger {});"
+      },
+      {
+        "path": "model-provider/src/provider.rs",
+        "start": 69,
+        "end": 77,
+        "context_sha256": "5c7bf3691139b6a55d360e219a55b76e4d62cfff3eec945324d7647d9fec48a5",
+        "anchor": "impl Default for ProviderCapabilities {"
+      },
+      {
+        "path": "features/src/lib.rs",
+        "start": 1529,
+        "end": 1532,
+        "context_sha256": "09b6d4bb864bb1ac49660fe2a701ff41cc45294425f580a90bc53c85862bbebb",
+        "anchor": "id: Feature::RemoteCompactionV2,"
+      },
+      {
+        "path": "core/src/tasks/compact.rs",
+        "start": 41,
+        "end": 50,
+        "context_sha256": "26934c1d259eca317fa6196670cff962c2f2a20e4619fd833277233150f01856",
+        "anchor": "let result = match ctx.provider.capabilities().remote_compaction {"
+      }
+    ],
+    "SPEC-EP-022": [
+      {
+        "path": "codex-api/src/images.rs",
+        "start": 5,
+        "end": 30,
+        "context_sha256": "76524bc062dd06bbb6dcc94d80e5dd4720b336725dd4ebe26eb7b028c82b2a53",
+        "anchor": "pub struct ImageGenerationRequest {"
+      },
+      {
+        "path": "codex-api/src/endpoint/images.rs",
+        "start": 33,
+        "end": 68,
+        "context_sha256": "01a5ce6e71f46e6b2e8edec423982ef1e2aee4c59c36d4a74b9e6349a4e465c3",
+        "anchor": "pub async fn generate("
+      },
+      {
+        "path": "ext/image-generation/src/tool.rs",
+        "start": 412,
+        "end": 469,
+        "context_sha256": "4c89d13267c8fdcac1cc4266e42a76b3f6a516dc24777a3d03e3f1b981295b87",
+        "anchor": "let images = match (paths.is_empty(), args.num_last_images_to_include) {"
+      }
+    ],
+    "SPEC-EP-023": [
+      {
+        "path": "analytics/src/facts.rs",
+        "start": 404,
+        "end": 417,
+        "context_sha256": "0b4f7e969e86dd6fc428e9261f228212e7e887743025b71e5a2c021ba89173d2",
+        "anchor": "pub enum CompactionReason {"
+      },
+      {
+        "path": "core/src/tasks/compact.rs",
+        "start": 34,
+        "end": 65,
+        "context_sha256": "b7a01c12a7de6a6aef2d1fdc9eae637ffc1726540ad04f790aff5c744a8239a4",
+        "anchor": ") -> SessionTaskResult {"
+      },
+      {
+        "path": "core/src/compact_token_budget.rs",
+        "start": 21,
+        "end": 92,
+        "context_sha256": "e1bce45e3df9e3e261b4291b36dc4bc8db3a6c33666d80d1c5f0581e3af4e53e",
+        "anchor": "/// Runs token-budget manual compaction as a normal compaction lifecycle."
+      },
+      {
+        "path": "core/src/session/turn.rs",
+        "start": 1013,
+        "end": 1242,
+        "context_sha256": "02be7b1db62824489047990cd758b2affd1a67d2dc59fe5d57a60d23e2fe7934",
+        "anchor": "#[instrument(level = \"trace\", skip_all)]"
+      },
+      {
+        "path": "core/src/compact_model_fallback.rs",
+        "start": 30,
+        "end": 40,
+        "context_sha256": "b2eb0c234f7cbd107c1fca0b208e271abd4a760f6c140de76db0a1d85fb9587f",
+        "anchor": "let reason_tag = match reason {"
+      },
+      {
+        "path": "core/src/compact_remote_v2_attempt.rs",
+        "start": 77,
+        "end": 77,
+        "context_sha256": "899ace0daf8b8d1e815138273e6f8ccaf93585bca22a06e8fa88f0c57984a8e6",
+        "anchor": "input.push(ResponseItem::CompactionTrigger {});"
+      }
+    ],
+    "SPEC-EP-024": [
+      {
+        "path": "tui/src/slash_command.rs",
+        "start": 40,
+        "end": 40,
+        "context_sha256": "4e1958baf8da363d6fc06206f03fd055862672359f7e1d5edb70543beb6ceebf",
+        "anchor": "Compact,"
+      },
+      {
+        "path": "tui/src/chatwidget/slash_dispatch.rs",
+        "start": 264,
+        "end": 264,
+        "context_sha256": "404b4c1e69dfcf590459231f0500d1fbcc16c8d47996c390c44e5ae19171738f",
+        "anchor": "SlashCommand::Compact => {"
+      }
+    ]
+  }
+}

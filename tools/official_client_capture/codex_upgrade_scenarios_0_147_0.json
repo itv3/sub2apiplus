@@ -1,0 +1,2299 @@
+{
+  "$schema": "./codex_upgrade_scenarios.schema.json",
+  "schema_version": "codex-upgrade-scenarios/v1",
+  "codex_version": "0.147.0",
+  "profile_id": "codex-cli-0.147.0",
+  "source_spec": {
+    "path": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+    "fragment": "第二章",
+    "sha256": "2b3000dfd75d997dd41e103fef281df453e6ff459316c5af2237cbafec116402"
+  },
+  "rule_manifest": {
+    "path": "tools/official_client_capture/codex_upgrade_rules_0_147_0.json",
+    "sha256": "81b53d878f2a86b9861c90b11fb2f696a5789c9b494833544add3b2a526f94a5",
+    "rule_count": 42
+  },
+  "variable_contract": [
+    {
+      "name": "campaign_id",
+      "type": "string",
+      "required": true,
+      "sensitive": false,
+      "description": "本次升级 Campaign 的不可变安全 ID。"
+    },
+    {
+      "name": "target_version",
+      "type": "string",
+      "required": true,
+      "sensitive": false,
+      "description": "目标 Codex CLI 三段版本号，必须由 Campaign 显式注入。"
+    },
+    {
+      "name": "target_sha256",
+      "type": "sha256",
+      "required": true,
+      "sensitive": false,
+      "description": "目标官方 Codex CLI 二进制 SHA-256。"
+    },
+    {
+      "name": "runtime_image",
+      "type": "image_reference",
+      "required": true,
+      "sensitive": false,
+      "description": "官方抓包运行时镜像引用，必须含不可变 digest。"
+    },
+    {
+      "name": "repo_root",
+      "type": "absolute_path",
+      "required": true,
+      "sensitive": false,
+      "description": "sub2apiplus 仓库根目录绝对路径。"
+    },
+    {
+      "name": "capture_root",
+      "type": "absolute_path",
+      "required": false,
+      "sensitive": false,
+      "default": "/root/oauth-capture",
+      "description": "远端抓包与证据根目录。"
+    },
+    {
+      "name": "capture_container",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "default": "capture-cli",
+      "description": "隔离抓包容器名称。"
+    },
+    {
+      "name": "service_container",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "default": "sub2apiplus",
+      "description": "候选服务容器名称。"
+    },
+    {
+      "name": "keeper_container",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "default": "sub2apiplus-keeper",
+      "description": "候选 keeper 容器名称。"
+    },
+    {
+      "name": "postgres_container",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "default": "sub2apiplus-postgres",
+      "description": "候选 PostgreSQL 容器名称。"
+    },
+    {
+      "name": "redis_container",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "default": "sub2apiplus-redis",
+      "description": "候选 Redis 容器名称。"
+    },
+    {
+      "name": "capture_codex_bin",
+      "type": "absolute_path",
+      "required": false,
+      "sensitive": false,
+      "default": "/usr/local/bin/codex-capture",
+      "description": "抓包容器中的官方 Codex CLI 路径。"
+    },
+    {
+      "name": "relay_codex_bin",
+      "type": "absolute_path",
+      "required": false,
+      "sensitive": false,
+      "default": "/root/.local/bin/codex",
+      "description": "官方复杂状态链使用的 Codex CLI 路径。"
+    },
+    {
+      "name": "model",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "description": "目标版本 main 轨模型，必须由 Campaign 显式注入。"
+    },
+    {
+      "name": "lite_model",
+      "type": "string",
+      "required": true,
+      "sensitive": false,
+      "description": "目标版本 lite 轨模型，必须由 Campaign 显式注入。"
+    },
+    {
+      "name": "codex_account_id",
+      "type": "integer",
+      "required": true,
+      "sensitive": false,
+      "description": "专用 OpenAI OAuth 验收账号 ID。"
+    },
+    {
+      "name": "api_key_id",
+      "type": "integer",
+      "required": true,
+      "sensitive": false,
+      "description": "专用 ingress API Key 数据库 ID；清单中禁止保存 key 值。"
+    },
+    {
+      "name": "build_id",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "description": "候选构建流水线或制品的不可变安全 ID；官方阶段为空。"
+    },
+    {
+      "name": "deployed_version",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "description": "候选服务实际部署版本；官方阶段为空。"
+    },
+    {
+      "name": "candidate_image_id",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "description": "候选运行容器实际 image ID；官方阶段为空。"
+    },
+    {
+      "name": "source_tree_sha256",
+      "type": "sha256",
+      "required": false,
+      "sensitive": false,
+      "description": "候选源码树摘要；官方阶段为空。"
+    },
+    {
+      "name": "live_attestation_compose_dir",
+      "type": "absolute_path",
+      "required": false,
+      "sensitive": false,
+      "description": "候选部署的 docker compose 工作目录；A11 需按本轮四元组重建服务以启用 candidatecapture provider。"
+    },
+    {
+      "name": "live_attestation_compose_files",
+      "type": "string",
+      "required": false,
+      "sensitive": false,
+      "description": "候选部署的 compose -f 参数串；恢复时按同一串拉回原部署。"
+    }
+  ],
+  "required_client_bindings": [
+    "kilo-compatible",
+    "kilo-responses"
+  ],
+  "evidence_scenarios": [
+    {
+      "scenario_id": "A01",
+      "description": "默认系统 CA 的 HTTP ClientHello 与 models 请求",
+      "trigger": "使用隔离账号执行一次启动 models 和一次 HTTP Responses 调用。",
+      "preconditions": [
+        "Ubuntu 24.04",
+        "未配置有效自定义 CA",
+        "候选出站 netns 抓包已启动"
+      ],
+      "required_artifact_kinds": [
+        "pcap",
+        "process_trace"
+      ],
+      "covers": [
+        "SPEC-TLS-001",
+        "SPEC-PROTO-001",
+        "SPEC-H1-001",
+        "SPEC-H1-002",
+        "SPEC-H1-004",
+        "SPEC-EP-002",
+        "SPEC-EP-013"
+      ]
+    },
+    {
+      "scenario_id": "A02",
+      "description": "四次彼此独立的 Responses WS ClientHello",
+      "trigger": "每次重启候选进程后分别触发一次 Responses WS 握手。",
+      "preconditions": [
+        "至少四份独立 pcap",
+        "内置 OpenAI OAuth",
+        "未配置有效自定义 CA"
+      ],
+      "required_artifact_kinds": [
+        "pcap"
+      ],
+      "covers": [
+        "SPEC-TLS-003"
+      ]
+    },
+    {
+      "scenario_id": "A03",
+      "description": "Responses HTTP Lite、zstd 与 HTTP turn-state 闭环",
+      "trigger": "使用 Lite 模型执行两轮 HTTP Responses，并由受控上游在首轮注入 turn-state。",
+      "preconditions": [
+        "use_responses_lite=true",
+        "enable_request_compression=true",
+        "字节中继开启"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary",
+        "process_trace"
+      ],
+      "covers": [
+        "SPEC-H1-001",
+        "SPEC-H1-002",
+        "SPEC-H1-003",
+        "SPEC-H1-004",
+        "SPEC-HDR-001",
+        "SPEC-HDR-004",
+        "SPEC-HDR-006",
+        "SPEC-HDR-007",
+        "SPEC-BODY-001",
+        "SPEC-BODY-002",
+        "SPEC-BODY-003",
+        "SPEC-BODY-004",
+        "SPEC-BODY-005",
+        "SPEC-BODY-006",
+        "SPEC-EP-001",
+        "SPEC-EP-005",
+        "SPEC-EP-013"
+      ]
+    },
+    {
+      "scenario_id": "A04",
+      "description": "Responses HTTP 非 Lite、按样本标注压缩条件及条件 Header 矩阵",
+      "trigger": "使用非 Lite 模型分别触发 residency、subagent、memgen、parent thread 和 runtime metrics 分支。",
+      "preconditions": [
+        "use_responses_lite=false",
+        "压缩开启与关闭样本分别以 labels.compression 标注",
+        "各条件分支分别留有正负样本"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary",
+        "process_trace"
+      ],
+      "covers": [
+        "SPEC-H1-001",
+        "SPEC-H1-003",
+        "SPEC-HDR-002",
+        "SPEC-HDR-008",
+        "SPEC-BODY-001",
+        "SPEC-BODY-002",
+        "SPEC-BODY-005",
+        "SPEC-BODY-006",
+        "SPEC-EP-001"
+      ]
+    },
+    {
+      "scenario_id": "A05",
+      "description": "Responses WS Lite S2、turn-state 与压缩上下文",
+      "trigger": "执行两轮 Lite WS 会话并由受控上游回送 response.metadata turn-state。",
+      "preconditions": [
+        "WS 握手成功",
+        "permessage-deflate 已协商",
+        "原始双向字节完整"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary",
+        "websocket_trace"
+      ],
+      "covers": [
+        "SPEC-PROTO-002",
+        "SPEC-WS-001",
+        "SPEC-WS-002",
+        "SPEC-WS-004",
+        "SPEC-WS-005",
+        "SPEC-HDR-004",
+        "SPEC-HDR-006",
+        "SPEC-HDR-008",
+        "SPEC-BODY-001",
+        "SPEC-BODY-003",
+        "SPEC-BODY-004",
+        "SPEC-BODY-005"
+      ]
+    },
+    {
+      "scenario_id": "A06",
+      "description": "Responses WS 非 Lite、warmup 与增量帧",
+      "trigger": "在同一 WS 会话依次执行 warmup、首轮和可复用前缀的增量请求。",
+      "preconditions": [
+        "use_responses_lite=false",
+        "上游返回可复用 previous_response_id",
+        "原始 WS 帧完整"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary",
+        "websocket_trace"
+      ],
+      "covers": [
+        "SPEC-WS-001",
+        "SPEC-WS-002",
+        "SPEC-WS-005",
+        "SPEC-BODY-001",
+        "SPEC-BODY-005"
+      ]
+    },
+    {
+      "scenario_id": "A07",
+      "description": "WS 重试预算耗尽后的 HTTP fallback",
+      "trigger": "受控中继连续返回足量可重试 WS 失败，直到同一调用改发 HTTP POST。",
+      "preconditions": [
+        "故障次数由冻结场景配置",
+        "入口 invocation_id 全程可追踪",
+        "不得手工发起独立 HTTP 请求"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary",
+        "process_trace"
+      ],
+      "covers": [
+        "SPEC-PROTO-002"
+      ]
+    },
+    {
+      "scenario_id": "A08",
+      "description": "HTTP Client 生命周期与 retry 连接关系",
+      "trigger": "分别执行跨上层调用、keepalive 500 重试和受控断连重试。",
+      "preconditions": [
+        "使用隔离账户固定到同一上游",
+        "三种分支分别记录 invocation_id 与 connection_id",
+        "样本完整性检查通过"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary",
+        "process_trace"
+      ],
+      "covers": [
+        "SPEC-CONN-001",
+        "SPEC-HDR-001"
+      ]
+    },
+    {
+      "scenario_id": "A09",
+      "description": "models、legacy compact、alpha-search 与 images 辅助链",
+      "trigger": "分别触发 models、显式 legacy compact、两阶段搜索、图像生成与编辑。",
+      "preconditions": [
+        "各端点使用独立调用",
+        "legacy 分支显式关闭 remote_compaction_v2",
+        "字节中继开启"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary",
+        "process_trace"
+      ],
+      "covers": [
+        "SPEC-H1-001",
+        "SPEC-H1-003",
+        "SPEC-HDR-004",
+        "SPEC-HDR-006",
+        "SPEC-HDR-007",
+        "SPEC-BODY-002",
+        "SPEC-BODY-004",
+        "SPEC-EP-001",
+        "SPEC-EP-005",
+        "SPEC-EP-006",
+        "SPEC-EP-007",
+        "SPEC-EP-008",
+        "SPEC-EP-014",
+        "SPEC-EP-015",
+        "SPEC-EP-020",
+        "SPEC-EP-021",
+        "SPEC-EP-022"
+      ]
+    },
+    {
+      "scenario_id": "A10",
+      "description": "Remote Compaction V2 与四种 reason",
+      "trigger": "分别触发 manual、context_limit、model_downshift、comp_hash_changed 和 TokenBudget 分支。",
+      "preconditions": [
+        "每个 reason 有独立 process trace",
+        "默认 remote_compaction_v2=true",
+        "已有 trigger 的负向样本存在"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary",
+        "process_trace"
+      ],
+      "covers": [
+        "SPEC-EP-021",
+        "SPEC-EP-023"
+      ]
+    },
+    {
+      "scenario_id": "A11",
+      "description": "realtime 第一跳、sideband WS 与终止清理",
+      "trigger": "Realtime sideband 会话真实建立，并留下可关联的 call_id 与 api.openai.com SNI。",
+      "preconditions": [
+        "第一跳和第二跳可用同一 call_id 哈希关联",
+        "api.openai.com SNI 抓包开启",
+        "只清理本轮 Redis 临时键"
+      ],
+      "required_artifact_kinds": [
+        "pcap",
+        "relay_binary",
+        "process_trace"
+      ],
+      "covers": [
+        "SPEC-H1-001",
+        "SPEC-H1-003",
+        "SPEC-HDR-007",
+        "SPEC-EP-002",
+        "SPEC-EP-009",
+        "SPEC-EP-012",
+        "SPEC-EP-013"
+      ],
+      "side_triggers": {
+        "official": {
+          "trigger": "官方 CLI 走 V3／quicksilver=v2 路径发起 realtime，等待异步 started 或 SDP 最终事件；不手工拼 sideband。",
+          "preconditions": [
+            "call-create 返回 2xx 并取得 call_id",
+            "sideband 请求与 call_id 可哈希关联",
+            "api.openai.com SNI 由 -i any 抓包取得",
+            "不接受受控第二跳合成的 call_id"
+          ]
+        },
+        "candidate": {
+          "trigger": "受控第一跳返回 call_id，随后接受 sideband WS 并发送 session.ended。",
+          "preconditions": [
+            "第一跳和第二跳可用同一 call_id 哈希关联",
+            "api.openai.com SNI 抓包开启",
+            "只清理本轮 Redis 临时键"
+          ]
+        }
+      }
+    },
+    {
+      "scenario_id": "A12",
+      "description": "wham usage、reset credits 查询与安全 consume",
+      "trigger": "调用配额查询并将 consume 发往受控响应器。",
+      "preconditions": [
+        "consume 不连接生产 wham",
+        "三个请求属于同一验收批次",
+        "redeem_request_id 已脱敏"
+      ],
+      "required_artifact_kinds": [
+        "relay_binary"
+      ],
+      "covers": [
+        "SPEC-H1-001",
+        "SPEC-H1-003",
+        "SPEC-EP-019"
+      ]
+    },
+    {
+      "scenario_id": "A13",
+      "description": "OAuth dummy refresh",
+      "trigger": "OAuth access token 真实刷新，并留下 auth.openai.com 的握手与 /oauth/token 请求形态。",
+      "preconditions": [
+        "不写入账户凭据",
+        "dummy token 纳入 secret scan",
+        "auth.openai.com SNI 可见"
+      ],
+      "required_artifact_kinds": [
+        "pcap",
+        "relay_binary"
+      ],
+      "covers": [
+        "SPEC-H1-001",
+        "SPEC-H1-003",
+        "SPEC-EP-002"
+      ],
+      "side_triggers": {
+        "official": {
+          "trigger": "在隔离账号与隔离 CODEX_HOME 中，等待 access token JWT 的 exp 自然进入 5 分钟刷新窗口，由官方 CLI 真实发送 refresh。",
+          "preconditions": [
+            "刷新由 JWT exp 触发，不改写 last_refresh",
+            "采集前记录 exp 与 token 摘要，绝不落 token 本体",
+            "auth.openai.com SNI 由抓包取得",
+            "cleanup 后 auth.json 逐字还原并留下前后摘要"
+          ]
+        },
+        "candidate": {
+          "trigger": "通过 raw refresh-token 管理入口提交验收 dummy token，并由受控 auth 端点返回 invalid_grant。",
+          "preconditions": [
+            "不写入账户凭据",
+            "dummy token 纳入 secret scan",
+            "auth.openai.com SNI 可见"
+          ]
+        }
+      }
+    },
+    {
+      "scenario_id": "A14",
+      "description": "文件 create、区域 blob PUT 与 uploaded 三阶段链",
+      "trigger": "文件上传三跳链路真实走完 create → 区域 PUT → uploaded，区域主机由响应派生。",
+      "preconditions": [
+        "区域 URL 由响应返回而非客户端硬编码",
+        "PUT 不离开受控端点",
+        "file_id 与 URL 只保留哈希"
+      ],
+      "required_artifact_kinds": [
+        "pcap",
+        "relay_binary",
+        "process_trace"
+      ],
+      "covers": [
+        "SPEC-H1-001",
+        "SPEC-EP-002"
+      ],
+      "side_triggers": {
+        "official": {
+          "trigger": "官方 CLI 通过 Apps 工具调用发起文件上传，create 响应返回本轮区域 URL，PUT 直连该区域主机后由 uploaded 收口。",
+          "preconditions": [
+            "模型可见的 Apps 工具调用契约已冻结",
+            "区域主机由 create 响应派生，RELAY_HOSTS 不预列",
+            "按端口 -i any 抓包覆盖响应返回的任意区域主机",
+            "官方侧不声称从加密 pcap 取得 PUT URL"
+          ]
+        },
+        "candidate": {
+          "trigger": "使用生产 service 调用路径执行受控文件上传，create 返回本轮区域 URL。",
+          "preconditions": [
+            "区域 URL 由响应返回而非客户端硬编码",
+            "PUT 不离开受控端点",
+            "file_id 与 URL 只保留哈希"
+          ]
+        }
+      }
+    },
+    {
+      "scenario_id": "A15",
+      "description": "exec、TUI 与启动 models UA 画像",
+      "trigger": "分别由 目标 Codex CLI exec 和 TUI 入口触发，并取得启动 models 有 suffix 与无 suffix 两种样本。",
+      "preconditions": [
+        "入口 surface 由 process trace 证明",
+        "UA 已解析为前缀和 suffix",
+        "不接受 curl 伪造入口头"
+      ],
+      "required_artifact_kinds": [
+        "process_trace"
+      ],
+      "covers": [
+        "SPEC-HDR-002",
+        "SPEC-HDR-005"
+      ]
+    }
+  ],
+  "capture_jobs": [
+    {
+      "id": "official-core",
+      "phase": "official",
+      "suites": [
+        "core",
+        "full"
+      ],
+      "scenario_ids": [
+        "A01",
+        "A02",
+        "A03",
+        "A04",
+        "A05",
+        "A06",
+        "A09",
+        "A11",
+        "A15"
+      ],
+      "description": "官方 Codex HTTP／WS 的 direct 与 MITM 核心矩阵",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "docker",
+            "exec",
+            "{capture_container}",
+            "python3",
+            "{repo_root}/tools/official_client_capture/capture.py",
+            "--codex-model",
+            "{model}",
+            "--task",
+            "oauth",
+            "--batch-id",
+            "{campaign_id}",
+            "--scenarios",
+            "s1,s2,s4",
+            "--subjects",
+            "codex-http,codex-ws",
+            "--evidence",
+            "direct,mitm",
+            "--expected-codex-version",
+            "{target_version}",
+            "--expected-codex-sha256",
+            "{target_sha256}",
+            "--runtime-image",
+            "{runtime_image}",
+            "--profile-version",
+            "codex-{target_version}-upgrade-v1",
+            "--codex-bin",
+            "{capture_codex_bin}",
+            "--execute",
+            "--acknowledge-live-requests"
+          ],
+          "environment": {},
+          "timeout_seconds": 3600
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/official-client/oauth/oauth-{campaign_id}"
+      ],
+      "covers": [
+        "SPEC-TLS-001",
+        "SPEC-TLS-003",
+        "SPEC-PROTO-001",
+        "SPEC-WS-001",
+        "SPEC-WS-002",
+        "SPEC-WS-004",
+        "SPEC-WS-005",
+        "SPEC-HDR-001",
+        "SPEC-HDR-002",
+        "SPEC-HDR-004",
+        "SPEC-HDR-005",
+        "SPEC-HDR-006",
+        "SPEC-HDR-007",
+        "SPEC-HDR-008",
+        "SPEC-BODY-001",
+        "SPEC-BODY-002",
+        "SPEC-BODY-003",
+        "SPEC-BODY-004",
+        "SPEC-BODY-005",
+        "SPEC-BODY-006",
+        "SPEC-EP-005",
+        "SPEC-EP-006",
+        "SPEC-EP-009",
+        "SPEC-EP-013"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "official-ws-handshake-repeat",
+      "phase": "official",
+      "suites": [
+        "core",
+        "full"
+      ],
+      "scenario_ids": [
+        "A02"
+      ],
+      "description": "官方 Responses WS 握手补采：A02 要求至少四份彼此独立的 WS ClientHello，而 official-core 的 s1/s2/s4 只产三份 pcap，且每份都混有 models 的 native-tls 握手。本 job 用独立 batch-id 与独立证据根重跑 codex-ws direct，把 artifact 数补足到 SPEC-TLS-003 的 minimum_artifacts。",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "docker",
+            "exec",
+            "{capture_container}",
+            "python3",
+            "{repo_root}/tools/official_client_capture/capture.py",
+            "--codex-model",
+            "{model}",
+            "--task",
+            "oauth",
+            "--batch-id",
+            "{campaign_id}-ws-repeat",
+            "--scenarios",
+            "s1,s2,s4",
+            "--subjects",
+            "codex-ws",
+            "--evidence",
+            "direct",
+            "--expected-codex-version",
+            "{target_version}",
+            "--expected-codex-sha256",
+            "{target_sha256}",
+            "--runtime-image",
+            "{runtime_image}",
+            "--profile-version",
+            "codex-{target_version}-upgrade-v1",
+            "--codex-bin",
+            "{capture_codex_bin}",
+            "--execute",
+            "--acknowledge-live-requests"
+          ],
+          "environment": {},
+          "timeout_seconds": 3600
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/official-client/oauth/oauth-{campaign_id}-ws-repeat"
+      ],
+      "covers": [
+        "SPEC-TLS-003"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "official-compact",
+      "phase": "official",
+      "suites": [
+        "core",
+        "full"
+      ],
+      "scenario_ids": [
+        "A09",
+        "A10"
+      ],
+      "description": "官方 legacy compact 的 direct 与 MITM 证据",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_codex_compact_capture.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-compact",
+            "CODEX_MODEL": "{model}"
+          },
+          "timeout_seconds": 1200
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-compact"
+      ],
+      "covers": [
+        "SPEC-EP-007",
+        "SPEC-EP-014",
+        "SPEC-EP-020",
+        "SPEC-EP-021",
+        "SPEC-EP-023"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "official-http-fallback",
+      "phase": "official",
+      "suites": [
+        "core",
+        "full"
+      ],
+      "scenario_ids": [
+        "A03",
+        "A07"
+      ],
+      "description": "官方 WS 失败后降级 HTTP 的原始字节",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_http_fallback_baseline.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-http-fallback"
+          },
+          "timeout_seconds": 1200
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-http-fallback"
+      ],
+      "covers": [
+        "SPEC-PROTO-002",
+        "SPEC-H1-001",
+        "SPEC-H1-002",
+        "SPEC-H1-003",
+        "SPEC-H1-004"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "candidate-core-direct",
+      "phase": "candidate",
+      "suites": [
+        "core",
+        "full"
+      ],
+      "scenario_ids": [
+        "A01",
+        "A02",
+        "A03",
+        "A04",
+        "A05",
+        "A06",
+        "A09",
+        "A11",
+        "A15"
+      ],
+      "description": "Sub2API HTTP／WS 的 direct TLS 核心矩阵",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_sub2api_direct_matrix.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "SERVICE_CONTAINER": "{service_container}",
+            "POSTGRES_CONTAINER": "{postgres_container}",
+            "CODEX_ACCOUNT_ID": "{codex_account_id}",
+            "API_KEY_ID": "{api_key_id}",
+            "SUBJECTS": "codex-http codex-ws",
+            "SCENARIOS": "s1 s2 s4",
+            "CODEX_MODEL": "{model}",
+            "CODEX_VERSION": "{target_version}",
+            "RUN_ID": "{campaign_id}-candidate-direct-core"
+          },
+          "timeout_seconds": 3600
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-candidate-direct-core"
+      ],
+      "covers": [
+        "SPEC-TLS-001",
+        "SPEC-TLS-003",
+        "SPEC-PROTO-001",
+        "SPEC-WS-001",
+        "SPEC-WS-002",
+        "SPEC-WS-004",
+        "SPEC-WS-005",
+        "SPEC-HDR-001",
+        "SPEC-HDR-002",
+        "SPEC-HDR-004",
+        "SPEC-HDR-005",
+        "SPEC-HDR-006",
+        "SPEC-HDR-007",
+        "SPEC-HDR-008",
+        "SPEC-BODY-001",
+        "SPEC-BODY-002",
+        "SPEC-BODY-003",
+        "SPEC-BODY-004",
+        "SPEC-BODY-005",
+        "SPEC-BODY-006",
+        "SPEC-EP-005",
+        "SPEC-EP-006",
+        "SPEC-EP-009",
+        "SPEC-EP-013"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "candidate-ws-handshake-repeat",
+      "phase": "candidate",
+      "suites": [
+        "core",
+        "full"
+      ],
+      "scenario_ids": [
+        "A02"
+      ],
+      "description": "候选 Responses WS 握手补采：与 official-ws-handshake-repeat 同构，把候选侧 A02 的独立 WS ClientHello artifact 数补足到 SPEC-TLS-003 要求。",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_sub2api_direct_matrix.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "SERVICE_CONTAINER": "{service_container}",
+            "POSTGRES_CONTAINER": "{postgres_container}",
+            "CODEX_ACCOUNT_ID": "{codex_account_id}",
+            "API_KEY_ID": "{api_key_id}",
+            "SUBJECTS": "codex-ws",
+            "SCENARIOS": "s1 s2 s4",
+            "CODEX_MODEL": "{model}",
+            "CODEX_VERSION": "{target_version}",
+            "RUN_ID": "{campaign_id}-candidate-ws-repeat"
+          },
+          "timeout_seconds": 3600
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-candidate-ws-repeat"
+      ],
+      "covers": [
+        "SPEC-TLS-003"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "candidate-core-mitm",
+      "phase": "candidate",
+      "suites": [
+        "core",
+        "full"
+      ],
+      "scenario_ids": [
+        "A01",
+        "A02",
+        "A03",
+        "A04",
+        "A05",
+        "A06",
+        "A09",
+        "A11",
+        "A15"
+      ],
+      "description": "Sub2API HTTP／WS 的应用层核心矩阵",
+      "required": false,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_sub2api_openai_mitm_matrix.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "SERVICE_CONTAINER": "{service_container}",
+            "KEEPER_CONTAINER": "{keeper_container}",
+            "POSTGRES_CONTAINER": "{postgres_container}",
+            "CODEX_ACCOUNT_ID": "{codex_account_id}",
+            "API_KEY_ID": "{api_key_id}",
+            "SUBJECTS": "codex-http codex-ws",
+            "SCENARIOS": "s1 s2 s4",
+            "CODEX_MODEL": "{model}",
+            "CODEX_VERSION": "{target_version}",
+            "RUN_ID_PREFIX": "{campaign_id}-candidate-mitm-core",
+            "WINDOW_ID": "run"
+          },
+          "timeout_seconds": 3600
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-candidate-mitm-core-*-run"
+      ],
+      "covers": [
+        "SPEC-TLS-001",
+        "SPEC-TLS-003",
+        "SPEC-PROTO-001",
+        "SPEC-WS-001",
+        "SPEC-WS-002",
+        "SPEC-WS-004",
+        "SPEC-WS-005",
+        "SPEC-HDR-001",
+        "SPEC-HDR-002",
+        "SPEC-HDR-004",
+        "SPEC-HDR-005",
+        "SPEC-HDR-006",
+        "SPEC-HDR-007",
+        "SPEC-HDR-008",
+        "SPEC-BODY-001",
+        "SPEC-BODY-002",
+        "SPEC-BODY-003",
+        "SPEC-BODY-004",
+        "SPEC-BODY-005",
+        "SPEC-BODY-006",
+        "SPEC-EP-005",
+        "SPEC-EP-006",
+        "SPEC-EP-009",
+        "SPEC-EP-013"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "candidate-h1-wire",
+      "phase": "candidate",
+      "suites": [
+        "core",
+        "full"
+      ],
+      "scenario_ids": [
+        "A01",
+        "A03"
+      ],
+      "description": "Sub2API HTTP/1.1 原始 header 线序",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_h1_wire_probe.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "SERVICE_CONTAINER": "{service_container}",
+            "KEEPER_CONTAINER": "{keeper_container}",
+            "POSTGRES_CONTAINER": "{postgres_container}",
+            "ACCOUNT_ID": "{codex_account_id}",
+            "API_KEY_ID": "{api_key_id}",
+            "CODEX_VERSION": "{target_version}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-candidate-h1"
+          },
+          "timeout_seconds": 1200
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-candidate-h1"
+      ],
+      "covers": [
+        "SPEC-PROTO-001",
+        "SPEC-H1-001",
+        "SPEC-H1-002",
+        "SPEC-H1-003",
+        "SPEC-H1-004"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "candidate-compact-direct",
+      "phase": "candidate",
+      "suites": [
+        "core",
+        "full"
+      ],
+      "scenario_ids": [
+        "A09",
+        "A10"
+      ],
+      "description": "Sub2API compact 的 direct TLS 证据",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_sub2api_direct_matrix.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "SERVICE_CONTAINER": "{service_container}",
+            "POSTGRES_CONTAINER": "{postgres_container}",
+            "CODEX_ACCOUNT_ID": "{codex_account_id}",
+            "API_KEY_ID": "{api_key_id}",
+            "SUBJECTS": "codex-compact",
+            "SCENARIOS": "compact",
+            "CODEX_MODEL": "{model}",
+            "CODEX_VERSION": "{target_version}",
+            "RUN_ID": "{campaign_id}-candidate-direct-compact"
+          },
+          "timeout_seconds": 1200
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-candidate-direct-compact"
+      ],
+      "covers": [
+        "SPEC-EP-007",
+        "SPEC-EP-014",
+        "SPEC-EP-020",
+        "SPEC-EP-021",
+        "SPEC-EP-023"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "candidate-compact-mitm",
+      "phase": "candidate",
+      "suites": [
+        "core",
+        "full"
+      ],
+      "scenario_ids": [
+        "A09",
+        "A10"
+      ],
+      "description": "Sub2API compact 的应用层证据",
+      "required": false,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_sub2api_openai_mitm_matrix.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "SERVICE_CONTAINER": "{service_container}",
+            "KEEPER_CONTAINER": "{keeper_container}",
+            "POSTGRES_CONTAINER": "{postgres_container}",
+            "CODEX_ACCOUNT_ID": "{codex_account_id}",
+            "API_KEY_ID": "{api_key_id}",
+            "SUBJECTS": "codex-compact",
+            "SCENARIOS": "compact",
+            "CODEX_MODEL": "{model}",
+            "CODEX_VERSION": "{target_version}",
+            "RUN_ID_PREFIX": "{campaign_id}-candidate-mitm-compact",
+            "WINDOW_ID": "run"
+          },
+          "timeout_seconds": 1200
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-candidate-mitm-compact-*-run"
+      ],
+      "covers": [
+        "SPEC-EP-007",
+        "SPEC-EP-014",
+        "SPEC-EP-020",
+        "SPEC-EP-021",
+        "SPEC-EP-023"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "official-relay-http-response",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A01",
+        "A04"
+      ],
+      "description": "主线 {model}：普通非 Lite HTTP Responses 与启动 models 原始字节",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-http-response",
+            "SCENARIO": "http-response",
+            "SCENARIO_JOB_ID": "official-relay-http-response",
+            "REQUIRE_MODEL_CONDITION_RECEIPT": "1",
+            "MODEL_TRACK": "main",
+            "EXPECT_USE_RESPONSES_LITE": "false",
+            "REQUIRE_REQUEST_METHOD": "POST",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-http-response"
+      ],
+      "covers": [
+        "SPEC-PROTO-001",
+        "SPEC-H1-001",
+        "SPEC-H1-003",
+        "SPEC-BODY-006"
+      ],
+      "required_scenario_receipts": [],
+      "track": "main",
+      "model_id": "{model}",
+      "expected_use_responses_lite": false,
+      "required_model_receipt": true
+    },
+    {
+      "id": "official-relay-http-response-plain",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A04"
+      ],
+      "description": "主线 {model}：关闭请求压缩的非 Lite HTTP Responses 负样本",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-http-response-plain",
+            "SCENARIO": "http-response-plain",
+            "SCENARIO_JOB_ID": "official-relay-http-response-plain",
+            "REQUIRE_MODEL_CONDITION_RECEIPT": "1",
+            "MODEL_TRACK": "main",
+            "EXPECT_USE_RESPONSES_LITE": "false",
+            "REQUIRE_REQUEST_METHOD": "POST",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-http-response-plain"
+      ],
+      "covers": [
+        "SPEC-BODY-002"
+      ],
+      "required_scenario_receipts": [],
+      "track": "main",
+      "model_id": "{model}",
+      "expected_use_responses_lite": false,
+      "required_model_receipt": true
+    },
+    {
+      "id": "official-lite-http-response",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A03"
+      ],
+      "description": "Lite 专项 {lite_model}：HTTP Responses 字段省略与原始 H1 形态",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{lite_model}",
+            "RUN_ID": "{campaign_id}-lite-http-response",
+            "SCENARIO": "http-response",
+            "SCENARIO_JOB_ID": "official-lite-http-response",
+            "REQUIRE_MODEL_CONDITION_RECEIPT": "1",
+            "MODEL_TRACK": "lite",
+            "EXPECT_USE_RESPONSES_LITE": "true",
+            "REQUIRE_REQUEST_METHOD": "POST",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-lite-http-response"
+      ],
+      "covers": [
+        "SPEC-H1-001",
+        "SPEC-H1-002",
+        "SPEC-H1-003",
+        "SPEC-H1-004",
+        "SPEC-BODY-006"
+      ],
+      "required_scenario_receipts": [],
+      "track": "lite",
+      "model_id": "{lite_model}",
+      "expected_use_responses_lite": true,
+      "required_model_receipt": true
+    },
+    {
+      "id": "official-relay-conn-retry",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A07",
+        "A08"
+      ],
+      "description": "官方复杂状态链：conn-retry",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-conn-retry",
+            "SCENARIO": "conn-retry",
+            "RELAY_FORCE_WS_FALLBACK_426": "1",
+            "RELAY_RETRY_PROBE": "keepalive-500",
+            "RELAY_RETRY_PROBE_TARGET": "responses"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-conn-retry"
+      ],
+      "covers": [
+        "SPEC-CONN-001",
+        "SPEC-PROTO-002"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "official-relay-turnstate-compact",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A09"
+      ],
+      "description": "官方复杂状态链：turnstate-compact",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-turnstate-compact",
+            "SCENARIO": "turnstate-compact",
+            "RELAY_INJECT_WS_TURN_STATE": "upgrade-turn-state",
+            "REQUIRE_REQUEST_METHOD": "POST",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses/compact"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-turnstate-compact"
+      ],
+      "covers": [
+        "SPEC-EP-014"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "official-relay-legacy-compact-default",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A09"
+      ],
+      "description": "官方 legacy compact 默认条件槽位（无 turn-state、无 beta feature）",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-legacy-compact-default",
+            "SCENARIO": "legacy-compact-default",
+            "SCENARIO_JOB_ID": "official-relay-legacy-compact-default",
+            "REQUIRE_MODEL_CONDITION_RECEIPT": "1",
+            "MODEL_TRACK": "main",
+            "EXPECT_USE_RESPONSES_LITE": "false",
+            "REQUIRE_REQUEST_METHOD": "POST",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses/compact"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-legacy-compact-default"
+      ],
+      "covers": [
+        "SPEC-EP-014",
+        "SPEC-EP-020"
+      ],
+      "required_scenario_receipts": [],
+      "track": "main",
+      "model_id": "{model}",
+      "expected_use_responses_lite": false,
+      "required_model_receipt": true
+    },
+    {
+      "id": "official-lite-legacy-compact-default",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A09"
+      ],
+      "description": "Lite 专项 {lite_model}：legacy compact 默认头序与 Lite body 子集",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{lite_model}",
+            "RUN_ID": "{campaign_id}-lite-legacy-compact-default",
+            "SCENARIO": "legacy-compact-default",
+            "SCENARIO_JOB_ID": "official-lite-legacy-compact-default",
+            "REQUIRE_MODEL_CONDITION_RECEIPT": "1",
+            "MODEL_TRACK": "lite",
+            "EXPECT_USE_RESPONSES_LITE": "true",
+            "REQUIRE_REQUEST_METHOD": "POST",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses/compact",
+            "COMPACT_TOKEN_LIMIT": "2000"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-lite-legacy-compact-default"
+      ],
+      "covers": [
+        "SPEC-EP-014",
+        "SPEC-EP-020"
+      ],
+      "required_scenario_receipts": [],
+      "track": "lite",
+      "model_id": "{lite_model}",
+      "expected_use_responses_lite": true,
+      "required_model_receipt": true
+    },
+    {
+      "id": "official-lite-ws-turnstate",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A05"
+      ],
+      "description": "Lite 专项 {lite_model}：Lite WS 会话与受控 turn-state 回送（A05 唯一证据来源）",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{lite_model}",
+            "RUN_ID": "{campaign_id}-lite-ws-turnstate",
+            "SCENARIO": "tool",
+            "SCENARIO_JOB_ID": "official-lite-ws-turnstate",
+            "REQUIRE_MODEL_CONDITION_RECEIPT": "1",
+            "MODEL_TRACK": "lite",
+            "EXPECT_USE_RESPONSES_LITE": "true",
+            "RELAY_INJECT_WS_TURN_STATE": "lite-ws-turn-state",
+            "TURNS": "2"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-lite-ws-turnstate"
+      ],
+      "covers": [
+        "SPEC-WS-001",
+        "SPEC-WS-002",
+        "SPEC-HDR-004",
+        "SPEC-HDR-006",
+        "SPEC-BODY-005"
+      ],
+      "required_scenario_receipts": [],
+      "track": "lite",
+      "model_id": "{lite_model}",
+      "expected_use_responses_lite": true,
+      "required_model_receipt": true
+    },
+    {
+      "id": "official-relay-legacy-compact-beta",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A09"
+      ],
+      "description": "官方 legacy compact beta 条件槽位（I 类：复现 0.145 基线的 network_proxy 条件）",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-legacy-compact-beta",
+            "SCENARIO": "legacy-compact-beta",
+            "REQUIRE_REQUEST_METHOD": "POST",
+            "REQUIRE_REQUEST_PATH": "/backend-api/codex/responses/compact"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-legacy-compact-beta"
+      ],
+      "covers": [
+        "SPEC-EP-014"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "official-relay-ws-default",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A06"
+      ],
+      "description": "官方 WS 默认握手独立样本（不开 runtime_metrics 等条件 feature）",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-ws-default",
+            "SCENARIO": "ws-default"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-ws-default"
+      ],
+      "covers": [
+        "SPEC-WS-002"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "official-relay-ws-optional-missing",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A06"
+      ],
+      "description": "官方 WS 握手可选头缺失扰动样本（关闭 remote_compaction_v2 使 x-codex-beta-features 消失）",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-ws-optional-missing",
+            "SCENARIO": "ws-optional-missing"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-ws-optional-missing"
+      ],
+      "covers": [
+        "SPEC-WS-002"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "official-relay-residency-us",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A04"
+      ],
+      "description": "官方复杂状态链：residency-us",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-residency-us",
+            "SCENARIO": "residency-us"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-residency-us"
+      ],
+      "covers": [
+        "SPEC-HDR-002"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "official-relay-image",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A03",
+        "A09"
+      ],
+      "description": "官方复杂状态链：image",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-image",
+            "SCENARIO": "image"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-image"
+      ],
+      "covers": [
+        "SPEC-EP-001",
+        "SPEC-EP-022",
+        "SPEC-BODY-006"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "official-relay-image-edit",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A03",
+        "A09"
+      ],
+      "description": "官方复杂状态链：image-edit",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-image-edit",
+            "SCENARIO": "image-edit"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-image-edit"
+      ],
+      "covers": [
+        "SPEC-EP-001",
+        "SPEC-EP-022",
+        "SPEC-BODY-006"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "official-relay-search",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A09"
+      ],
+      "description": "官方复杂状态链：search",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-search",
+            "SCENARIO": "search"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-search"
+      ],
+      "covers": [
+        "SPEC-EP-008",
+        "SPEC-EP-015"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "official-relay-realtime-webrtc",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A11"
+      ],
+      "description": "官方复杂状态链：realtime-webrtc",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-realtime-webrtc",
+            "SCENARIO": "realtime-webrtc",
+            "RELAY_HOSTS": "chatgpt.com api.openai.com",
+            "CAPTURE_CLIENT_HELLO": "1"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-realtime-webrtc"
+      ],
+      "covers": [
+        "SPEC-EP-009",
+        "SPEC-EP-012"
+      ],
+      "required_scenario_receipts": [
+        "A11"
+      ]
+    },
+    {
+      "id": "official-relay-runtime-metrics",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A04",
+        "A06"
+      ],
+      "description": "官方复杂状态链：runtime-metrics",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-runtime-metrics",
+            "SCENARIO": "runtime-metrics"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-runtime-metrics"
+      ],
+      "covers": [
+        "SPEC-HDR-008"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "official-relay-oauth-refresh",
+      "phase": "official",
+      "suites": [
+        "core",
+        "full"
+      ],
+      "scenario_ids": [
+        "A13"
+      ],
+      "description": "官方 OAuth token 刷新：A13 要求 auth.openai.com 的握手与刷新请求形态，官方侧此前无任何 job 覆盖。",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-oauth-refresh",
+            "SCENARIO": "oauth-refresh",
+            "RELAY_HOSTS": "chatgpt.com auth.openai.com",
+            "CAPTURE_CLIENT_HELLO": "1"
+          },
+          "timeout_seconds": 3600
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-oauth-refresh"
+      ],
+      "covers": [
+        "SPEC-EP-002",
+        "SPEC-H1-001",
+        "SPEC-H1-003"
+      ],
+      "required_scenario_receipts": [
+        "A13"
+      ]
+    },
+    {
+      "id": "official-relay-compact",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A10"
+      ],
+      "description": "官方复杂状态链：compact",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-relay-compact",
+            "SCENARIO": "compact"
+          },
+          "timeout_seconds": 5400
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-relay-compact"
+      ],
+      "covers": [
+        "SPEC-EP-021",
+        "SPEC-EP-023"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "official-relay-comp-hash-changed",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A10"
+      ],
+      "description": "官方复杂状态链：comp-hash-changed",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-comp-hash-changed",
+            "SCENARIO": "comp-hash-changed"
+          },
+          "timeout_seconds": 5400
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-comp-hash-changed"
+      ],
+      "covers": [
+        "SPEC-EP-023"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "official-relay-model-downshift",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A10"
+      ],
+      "description": "官方复杂状态链：model-downshift",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-model-downshift",
+            "SCENARIO": "model-downshift"
+          },
+          "timeout_seconds": 5400
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-model-downshift"
+      ],
+      "covers": [
+        "SPEC-EP-023"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "official-relay-file-upload",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A14"
+      ],
+      "description": "官方复杂状态链：file-upload",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-file-upload",
+            "SCENARIO": "file-upload",
+            "DISABLE_FEATURES": "plugins",
+            "RELAY_HOSTS": "chatgpt.com auth.openai.com api.openai.com",
+            "CAPTURE_CLIENT_HELLO": "1"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-file-upload"
+      ],
+      "covers": [
+        "SPEC-EP-002"
+      ],
+      "required_scenario_receipts": [
+        "A14"
+      ]
+    },
+    {
+      "id": "official-relay-wham-get",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A12"
+      ],
+      "description": "官方 TUI 经字节中继补采两个 Wham GET 的原始 HTTP/1.1 头序",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_relay_scenario.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-wham-wire",
+            "SCENARIO": "compact-tui",
+            "REQUIRE_REQUEST_METHOD": "GET",
+            "REQUIRE_REQUEST_PATH": "/backend-api/wham/usage"
+          },
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-wham-wire"
+      ],
+      "covers": [
+        "SPEC-EP-019"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "official-wham-safe",
+      "phase": "official",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A12"
+      ],
+      "description": "先由 legacy/TUI 抓包取得两个 Wham GET，再由无外网官方 app-server 安全驱动取得 consume POST",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_official_codex_compact_capture.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "CODEX_VERSION": "{target_version}",
+            "CODEX_BIN": "{relay_codex_bin}",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-official-wham-get",
+            "CODEX_MODEL": "{model}"
+          },
+          "timeout_seconds": 1800
+        },
+        {
+          "argv": [
+            "bash",
+            "-c",
+            "set -Eeuo pipefail\nrun_root={capture_root}/runs/{campaign_id}-official-wham-safe\nruntime_root={capture_root}/runtime/{campaign_id}-official-wham-safe\ntest ! -e \"$run_root\"\ninstall -d -m 0700 \"$run_root\" \"$runtime_root\"\ncleanup() {{ rm -f -- \"$runtime_root/request.bin\" \"$runtime_root/ca.key\" \"$runtime_root/ca.crt\" \"$runtime_root/ca.srl\" \"$runtime_root/server.key\" \"$runtime_root/server.csr\" \"$runtime_root/server.ext\" \"$runtime_root/server.crt\"; rmdir -- \"$runtime_root\" 2>/dev/null || true; }}\ntrap cleanup EXIT INT TERM\nopenssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=Codex-Wham-Probe-CA -addext basicConstraints=critical,CA:TRUE -addext keyUsage=critical,keyCertSign,cRLSign -keyout \"$runtime_root/ca.key\" -out \"$runtime_root/ca.crt\"\nopenssl req -newkey rsa:2048 -nodes -subj /CN=chatgpt.com -keyout \"$runtime_root/server.key\" -out \"$runtime_root/server.csr\"\nprintf 'subjectAltName=DNS:chatgpt.com\\nbasicConstraints=critical,CA:FALSE\\nkeyUsage=critical,digitalSignature,keyEncipherment\\nextendedKeyUsage=serverAuth\\n' > \"$runtime_root/server.ext\"\nopenssl x509 -req -in \"$runtime_root/server.csr\" -CA \"$runtime_root/ca.crt\" -CAkey \"$runtime_root/ca.key\" -CAcreateserial -days 1 -sha256 -extfile \"$runtime_root/server.ext\" -out \"$runtime_root/server.crt\"\nchmod 0600 \"$runtime_root\"/*\ndocker run --rm --network none --add-host chatgpt.com:127.0.0.1 --cap-drop ALL --cap-add NET_BIND_SERVICE --security-opt no-new-privileges -v {capture_root}:/capture -v {repo_root}:{repo_root}:ro -v {relay_codex_bin}:/usr/local/bin/codex:ro -e SSL_CERT_FILE=/capture/runtime/{campaign_id}-official-wham-safe/ca.crt {runtime_image} python3 {repo_root}/tools/official_client_capture/drive_codex_wham_consume.py --codex-bin /usr/local/bin/codex --codex-version {target_version} --cert /capture/runtime/{campaign_id}-official-wham-safe/server.crt --key /capture/runtime/{campaign_id}-official-wham-safe/server.key --output /capture/runtime/{campaign_id}-official-wham-safe/request.bin --metadata /capture/runs/{campaign_id}-official-wham-safe/metadata.json\npython3 {repo_root}/tools/official_client_capture/scrub_raw_bytes.py --src \"$runtime_root\" --dst \"$run_root\" --verify"
+          ],
+          "environment": {},
+          "timeout_seconds": 1800
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-official-wham-get",
+        "{capture_root}/runs/{campaign_id}-official-wham-safe"
+      ],
+      "covers": [
+        "SPEC-EP-019"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "candidate-frozen-core",
+      "phase": "candidate",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A03",
+        "A04",
+        "A05",
+        "A06",
+        "A07",
+        "A08",
+        "A10",
+        "A15"
+      ],
+      "description": "Sub2API A03/A04/A05/A06/A07/A08/A10/A15 冻结核心场景",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_candidate_core_capture.sh"
+          ],
+          "environment": {
+            "ENABLE_CANDIDATE_CORE_SYNTHETIC": "YES_I_ACCEPT_SYNTHETIC_ONLY",
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "SERVICE_CONTAINER": "{service_container}",
+            "KEEPER_CONTAINER": "{keeper_container}",
+            "POSTGRES_CONTAINER": "{postgres_container}",
+            "ACCOUNT_ID": "{codex_account_id}",
+            "API_KEY_ID": "{api_key_id}",
+            "CODEX_VERSION": "{target_version}",
+            "RUN_ID": "{campaign_id}-candidate-frozen-core",
+            "MAIN_MODEL": "{model}",
+            "LITE_MODEL": "{lite_model}"
+          },
+          "timeout_seconds": 5400
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-candidate-frozen-core"
+      ],
+      "covers": [
+        "SPEC-CONN-001",
+        "SPEC-PROTO-002"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "candidate-frozen-aux",
+      "phase": "candidate",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A09",
+        "A11",
+        "A12",
+        "A13",
+        "A14"
+      ],
+      "description": "Sub2API A09/A11/A12/A13/A14 受控辅助端点场景；管理凭据只允许由进程环境或只读文件注入",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_candidate_aux_capture.sh"
+          ],
+          "environment": {
+            "ENABLE_CANDIDATE_AUX_SYNTHETIC": "YES_I_ACCEPT_SYNTHETIC_ONLY",
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "SERVICE_CONTAINER": "{service_container}",
+            "KEEPER_CONTAINER": "{keeper_container}",
+            "POSTGRES_CONTAINER": "{postgres_container}",
+            "ACCOUNT_ID": "{codex_account_id}",
+            "API_KEY_ID": "{api_key_id}",
+            "CODEX_VERSION": "{target_version}",
+            "RUN_ID": "{campaign_id}-candidate-frozen-aux",
+            "MODEL": "{lite_model}",
+            "LIVE_ATTESTATION_COMPOSE_DIR": "{live_attestation_compose_dir}",
+            "LIVE_ATTESTATION_COMPOSE_FILES": "{live_attestation_compose_files}"
+          },
+          "timeout_seconds": 5400
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-candidate-frozen-aux"
+      ],
+      "covers": [
+        "SPEC-EP-002",
+        "SPEC-EP-008",
+        "SPEC-EP-012",
+        "SPEC-EP-015",
+        "SPEC-EP-019"
+      ],
+      "required_scenario_receipts": []
+    },
+    {
+      "id": "candidate-images-wire",
+      "phase": "candidate",
+      "suites": [
+        "full"
+      ],
+      "scenario_ids": [
+        "A03",
+        "A09"
+      ],
+      "description": "Sub2API images 端点的 HTTP/1.1 原始字节",
+      "required": true,
+      "steps": [
+        {
+          "argv": [
+            "bash",
+            "{repo_root}/tools/official_client_capture/run_images_wire_probe.sh"
+          ],
+          "environment": {
+            "CAPTURE_CONTAINER": "{capture_container}",
+            "CAPTURE_ROOT": "{capture_root}",
+            "SERVICE_CONTAINER": "{service_container}",
+            "KEEPER_CONTAINER": "{keeper_container}",
+            "POSTGRES_CONTAINER": "{postgres_container}",
+            "ACCOUNT_ID": "{codex_account_id}",
+            "API_KEY_ID": "{api_key_id}",
+            "CODEX_VERSION": "{target_version}",
+            "EXPECT_REQUESTS": "1",
+            "MODEL": "{model}",
+            "RUN_ID": "{campaign_id}-candidate-images"
+          },
+          "timeout_seconds": 1200
+        }
+      ],
+      "evidence_roots": [
+        "{capture_root}/runs/{campaign_id}-candidate-images"
+      ],
+      "covers": [
+        "SPEC-EP-001",
+        "SPEC-EP-022",
+        "SPEC-BODY-006"
+      ],
+      "required_scenario_receipts": []
+    }
+  ]
+}

@@ -10,6 +10,10 @@ import sys
 
 from check_spec_refs import DEFAULT_ANCHOR_MANIFEST
 from check_spec_refs import DEFAULT_SPEC
+from check_spec_refs import CODEX_SOURCE_ROOT
+from check_spec_refs import CODEX_SOURCE_VERSION
+from check_spec_refs import DEPENDENCY_SOURCE_ROOT
+from check_spec_refs import ROOT
 from check_spec_refs import build_index
 from check_spec_refs import context_digest
 from check_spec_refs import extract_rule_source_refs
@@ -21,6 +25,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--spec", type=pathlib.Path, default=DEFAULT_SPEC)
     parser.add_argument("--output", type=pathlib.Path, default=DEFAULT_ANCHOR_MANIFEST)
+    parser.add_argument("--source-root", type=pathlib.Path, default=CODEX_SOURCE_ROOT)
+    parser.add_argument("--source-version", default=CODEX_SOURCE_VERSION)
     parser.add_argument(
         "--write",
         action="store_true",
@@ -38,7 +44,7 @@ def main() -> int:
         print(f"第二部分应有 53 条规则，实际为 {len(rules)}。", file=sys.stderr)
         return 1
 
-    index = build_index()
+    index = build_index([args.source_root, ROOT / "backend", DEPENDENCY_SOURCE_ROOT])
     output_rules: dict[str, list[dict[str, object]]] = {}
     for sid, refs in rules.items():
         entries: list[dict[str, object]] = []
@@ -62,8 +68,8 @@ def main() -> int:
 
     manifest = {
         "schema_version": 1,
-        "spec": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
-        "source_version": "0.147.0",
+        "spec": args.spec.resolve().relative_to(ROOT.resolve()).as_posix(),
+        "source_version": args.source_version,
         "rules": output_rules,
     }
     args.output.write_text(

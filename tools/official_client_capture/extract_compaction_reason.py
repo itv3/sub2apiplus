@@ -43,7 +43,14 @@ ALLOWED_METADATA = {
 # 必须覆盖 capturelib.model 的 MAIN_TRACK_MODELS 与 LITE_TRACK_MODELS，
 # 否则换主线模型后 compact 证据会被判为未知模型而整条丢弃；
 # tests/test_main_track_models.py 锁定这层覆盖关系。
-ALLOWED_MODELS = {"gpt-5.6-luna", "gpt-5.4", "gpt-5.5", "gpt-5.3-codex-spark"}
+ALLOWED_MODELS = {
+    "gpt-5.4",
+    "gpt-5.5",
+    "gpt-5.4-mini",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.3-codex-spark",
+}
 ALLOWED_INPUT_TYPES = {
     "additional_tools",
     "compaction",

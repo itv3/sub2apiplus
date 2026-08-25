@@ -30,17 +30,20 @@ from tools.official_client_capture.codex_upgrade import Job
 
 
 class CodexUpgradeTest(unittest.TestCase):
-    def test_0145_to_0147_main_model_default_is_gpt_5_4(self) -> None:
+    def test_plan_requires_all_versioned_policy_inputs(self) -> None:
         parser = codex_upgrade._build_parser()
         plan_parser = next(
             action.choices["plan"]
             for action in parser._actions
             if getattr(action, "choices", None) and "plan" in action.choices
         )
-        model_action = next(
-            action for action in plan_parser._actions if action.dest == "model"
-        )
-        self.assertEqual(model_action.default, "gpt-5.4")
+        actions = {action.dest: action for action in plan_parser._actions}
+        self.assertTrue(actions["rule_manifest"].required)
+        self.assertTrue(actions["scenario_manifest"].required)
+        self.assertTrue(actions["model"].required)
+        self.assertTrue(actions["lite_model"].required)
+        self.assertIsNone(actions["model"].default)
+        self.assertIsNone(actions["lite_model"].default)
 
     def test_checked_in_baseline_scenario_bindings_match_sources(self) -> None:
         tool_root = Path(__file__).resolve().parents[1]
@@ -120,6 +123,42 @@ class CodexUpgradeTest(unittest.TestCase):
             "Campaign target_version",
         ):
             codex_upgrade._validate_scenario_manifest_shape(mutated)
+
+    def test_01491_scenario_manifests_are_additive_and_model_parameterized(self) -> None:
+        tool_root = Path(__file__).resolve().parents[1]
+        repo_root = tool_root.parents[1]
+        for version in ("0.147.0", "0.149.1"):
+            suffix = version.replace(".", "_")
+            scenario_path = tool_root / f"codex_upgrade_scenarios_{suffix}.json"
+            scenario = json.loads(scenario_path.read_text(encoding="utf-8"))
+            self.assertEqual(scenario["codex_version"], version)
+            codex_upgrade._validate_scenario_manifest_shape(scenario)
+
+            source = scenario["source_spec"]
+            self.assertEqual(
+                source["sha256"],
+                codex_upgrade.source_spec_section_sha256(
+                    repo_root / source["path"], source["fragment"]
+                ),
+            )
+            rules = scenario["rule_manifest"]
+            self.assertEqual(
+                rules["sha256"], codex_upgrade.file_sha256(repo_root / rules["path"])
+            )
+
+            serialized = json.dumps(scenario, ensure_ascii=False)
+            self.assertNotIn("gpt-5.4\"", serialized)
+            self.assertNotIn("gpt-5.6-luna\"", serialized)
+            core = next(
+                job for job in scenario["capture_jobs"]
+                if job["id"] == "candidate-frozen-core"
+            )
+            self.assertEqual(
+                core["steps"][0]["environment"]["MAIN_MODEL"], "{model}"
+            )
+            self.assertEqual(
+                core["steps"][0]["environment"]["LITE_MODEL"], "{lite_model}"
+            )
 
     def test_campaign_capture_scripts_bind_frozen_tool_root(self) -> None:
         tool_root = Path(__file__).resolve().parents[1]
@@ -484,6 +523,7 @@ class CodexUpgradeTest(unittest.TestCase):
             suite="full",
             campaign_id=campaign_id,
             model="gpt-5.6-luna",
+            lite_model="gpt-5.6-luna",
             capture_root=Path("/root/oauth-capture"),
             capture_container="capture-cli",
             service_container="sub2apiplus",
@@ -1790,6 +1830,10 @@ class CodexUpgradeTest(unittest.TestCase):
                     str(arguments.scenario_manifest),
                     "--campaign-id",
                     arguments.campaign_id,
+                    "--model",
+                    "gpt-5.5",
+                    "--lite-model",
+                    "gpt-5.6-terra",
                 ]
             )
             self.assertEqual(plan_code, 0, plan_stderr)
@@ -1984,9 +2028,34 @@ class CodexUpgradeTest(unittest.TestCase):
         updated, count = codex_upgrade._apply_assertion_profile_overrides(
             profile,
             target_version="0.147.0",
+            base_profile_path=base_path,
         )
         self.assertEqual(count, 0)
         self.assertEqual(updated, profile)
+
+    def test_01491_期望覆盖从_0147_精确追加_routing_hint(self) -> None:
+        tool_root = Path(__file__).resolve().parents[1]
+        base_path = tool_root / "candidate_rule_expectations_0_147_0.json"
+        profile = json.loads(base_path.read_text(encoding="utf-8"))
+        updated, count = codex_upgrade._apply_assertion_profile_overrides(
+            profile,
+            target_version="0.149.1",
+            base_profile_path=base_path,
+        )
+        self.assertEqual(count, 3)
+        for rule_id, check_id in (
+            ("SPEC-H1-004", "responses-order"),
+            ("SPEC-WS-002", "default-swap-remove-order"),
+            ("SPEC-EP-014", "legacy-default-headers"),
+        ):
+            check = next(
+                check
+                for rule in updated["rules"]
+                if rule["rule_id"] == rule_id
+                for check in rule["checks"]
+                if check["id"] == check_id
+            )
+            self.assertIn("x-codex-routing-hint", check["assertion"]["value"])
 
     def test_wham_get_paths_保持_0145_原期望(self) -> None:
         """防回归：不得再把 usage 换成 settings/user。"""

@@ -1,0 +1,390 @@
+{
+  "schema_version": "official-client-codex-0.149.1-doc-pre-tooling-transition/v1",
+  "issued_at_utc": "2026-08-25T03:58:15Z",
+  "base_commit": "3d6082f44f289ec80e0e29eb2643cda78113eef0",
+  "scope": "codex-0.149.1-doc-pre-tooling",
+  "framework_stage": "VC-0/DOC-PRE",
+  "baseline": {
+    "sub2api_version": "0.1.180",
+    "production_active": "0.147.0",
+    "production_previous": "0.145.0"
+  },
+  "target": {
+    "codex_version": "0.149.1",
+    "formal_campaign_created": false,
+    "campaign_purpose": "unassigned_until_formal_campaign"
+  },
+  "private_archive": {
+    "archive_path": "/Users/czs/Developer/sub2apiplus-private-archive/codex-0.149.1-dmit-20260824-final.tar.gz",
+    "archive_size_bytes": 228703660,
+    "archive_sha256": "b76b8033b2ac71e3beda404c57b52d006bd7bf8901fc2791b1031cb2e5b705d7",
+    "checksum_path": "/Users/czs/Developer/sub2apiplus-private-archive/codex-0.149.1-dmit-20260824-final.tar.gz.sha256",
+    "checksum_sha256": "2039a917dbace6a0896b38f798eae81aa946cdc0e239bfa5372ad9b5ead8dcc5",
+    "readme_path": "/Users/czs/Developer/sub2apiplus-private-archive/codex-0.149.1-dmit-20260824/README.md",
+    "readme_sha256": "f13b0251a4e56974c56f45e7ea3cf19f7aae995622f4664f6b3f3a3ecead0728",
+    "source_base_commit": "cd13abbc8364a90ddeabddf86a68de7c6057dd2a",
+    "source_backend_version": "0.1.179-2",
+    "reuse_policy": "可作目标源码、官方抓包和旧部署事实的只读输入；不得充当 Sub2API 0.1.180 的 Campaign、AcceptanceFact、Catalog promotion 或 production activation 收据。"
+  },
+  "historical_read_only_bindings": [
+    {
+      "path": "backend/internal/officialegress/catalogdata/runtime/profiles/0.147.0/94071c8eb93cfd337ac6eabc291d878084e3dcec8a9e618e04e6f68792d1a7bc.json",
+      "sha256": "af25bfd22f65298b07cf58708736cb29c4813988b6a3fed0dd55e457bfc33c1d",
+      "role": "当前 0.147.0 生产画像，只读"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/runtime/release-catalog.json",
+      "sha256": "131c1a474cca85db02f96a5c7f357cf0425f13ca408403844cb3c01fe03d3b0d",
+      "role": "当前生产 release Catalog，只读"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/runtime/release-graphs/d8a7634c9af52159c912b539df74b9fa3b92664c0b90cc0defd6789cd07c846d.json",
+      "sha256": "d8a7634c9af52159c912b539df74b9fa3b92664c0b90cc0defd6789cd07c846d",
+      "role": "当前 Active/Previous release graph，只读"
+    },
+    {
+      "path": "backend/internal/officialegress/catalogdata/runtime/snapshot-catalogs/0e66972cc5f27fe1a1fe710f2ba1565e220ec7ca0cf4e6e6d6acf29ac63fcc88.json",
+      "sha256": "0e66972cc5f27fe1a1fe710f2ba1565e220ec7ca0cf4e6e6d6acf29ac63fcc88",
+      "role": "当前 snapshot Catalog，只读"
+    },
+    {
+      "path": "backend/internal/officialegress/profilecontract/testdata/snapshots/0.147.0/94071c8eb93cfd337ac6eabc291d878084e3dcec8a9e618e04e6f68792d1a7bc.json",
+      "sha256": "af25bfd22f65298b07cf58708736cb29c4813988b6a3fed0dd55e457bfc33c1d",
+      "role": "0.147.0 画像契约冻结副本，只读"
+    },
+    {
+      "path": "backend/internal/officialegress/releasecontract/testdata/release-graph.json",
+      "sha256": "d8a7634c9af52159c912b539df74b9fa3b92664c0b90cc0defd6789cd07c846d",
+      "role": "release graph 契约冻结副本，只读"
+    },
+    {
+      "path": "docs/egress/maintenance/CODEX_CLI_0145_TO_0147_CATALOG_PROMOTION_RECEIPT.json",
+      "sha256": "6f7b51b11510c4e9c9532afad9423d630827b162fd36e367603636fd382ddae4",
+      "role": "0.145.0→0.147.0 Catalog promotion 历史收据，只读"
+    },
+    {
+      "path": "docs/egress/maintenance/CODEX_CLI_0145_TO_0147_K83_CATALOG_PROMOTION_RECEIPT.json",
+      "sha256": "9e1a84d754acd04c14317689b06bfcbb0948f8e04184fc2eb3846155481d4d0e",
+      "role": "0.145.0→0.147.0 K83 Catalog promotion 历史收据，只读"
+    },
+    {
+      "path": "docs/egress/maintenance/CODEX_CLI_0145_TO_0147_K83_PRODUCTION_ACTIVATION_RECEIPT.json",
+      "sha256": "9e9fa48f06e92619226a2ab2db687009841ac8501f6ff2d6612c7a9f8d6eabcb",
+      "role": "0.145.0→0.147.0 K83 production activation 历史收据，只读"
+    },
+    {
+      "path": "docs/egress/maintenance/CODEX_CLI_0145_TO_0147_PRODUCTION_ACTIVATION_RECEIPT.json",
+      "sha256": "d717941c0dd37c1422145cbc7522e2b5e25dc75961d3d549d5b35ca99cef41a3",
+      "role": "0.145.0→0.147.0 production activation 历史收据，只读"
+    },
+    {
+      "path": "docs/egress/validation/baseline/workspace-manifest.json",
+      "sha256": "c8c6e6452390abd076ae771b17b11bf079a2a3c45359707cf6ac8fb11ed5c760",
+      "role": "包含 changeset1b 冻结制品摘要的历史工作区清单，只读"
+    }
+  ],
+  "transitions": [
+    {
+      "path": ".gitignore",
+      "change": "modified",
+      "from_sha256": "df1cdba2e13c5f37e5e5c64c18bdf03d321d329d1908bb0e57b434ca15b505fc",
+      "to_sha256": "47212e56124a4b91668148b38833519170e21ae8e91eec8a3290de04b9b56b33",
+      "reason": "放行版本化的 0.149.1 候选规则文档，同时继续排除运行证据。"
+    },
+    {
+      "path": "Makefile",
+      "change": "modified",
+      "from_sha256": "1c1e7f1b3f60294b980812140a223a2cbf6ac499302b777338a034a38920c80a",
+      "to_sha256": "e220d5f015316b76fc881827d3684c5e4fe41af1667d24b4788bd06a46b871d4",
+      "reason": "为 0.147.0 与 0.149.1 规格门禁显式绑定各自只读源码根和版本化清单。"
+    },
+    {
+      "path": "docs/CODEX_CLI_0_149_1_CANDIDATE_RULE_PROFILE.md",
+      "change": "added",
+      "from_sha256": null,
+      "to_sha256": "0973663c92a3abb56593a80ca3a06ae9ed3de7403111098e12b44ae95d068ebe",
+      "reason": "新增 0.149.1 候选规则画像；仅描述候选事实，不声明 Catalog promotion 或 production activation。"
+    },
+    {
+      "path": "docs/CODEX_CLI_CLIENT_EMULATION_GUIDE.md",
+      "change": "modified",
+      "from_sha256": "85d3a86211256c8f9f580a7ee8e9dfc6b2477f91a2131f0a174104e439c1e9e8",
+      "to_sha256": "b1c5878688c5d7b356d54f18aabf872cdff59b03ed09f78b60a078fdc40e0f59",
+      "reason": "修正生产 Active/Previous 状态，并补充 0.149.1 追加式候选流程。"
+    },
+    {
+      "path": "tools/check_spec_refs.py",
+      "change": "modified",
+      "from_sha256": "f62a5ffd67a635f03b631214bea93d4f05d2bfd0b9b2bd8799ff5b8e86360539",
+      "to_sha256": "1cdb2d7d28ce688a470d97e82ad8f350b405e2f74b5355ac69b588fafe752c49",
+      "reason": "支持按版本选择规格、源码根、Cargo.lock、锚点和可并存的依赖快照清单。"
+    },
+    {
+      "path": "tools/official_client_capture/candidate_rule_expectation_overrides_0_149_1.json",
+      "change": "added",
+      "from_sha256": null,
+      "to_sha256": "69dad495d31380267c78f4b786c8e0e4914b90cf007f5b94e26c6cc8ed6f71a6",
+      "reason": "追加经审核的 0.147.0→0.149.1 候选断言差异，不覆盖旧版本画像。"
+    },
+    {
+      "path": "tools/official_client_capture/candidate_rule_expectations_0_149_1.json",
+      "change": "added",
+      "from_sha256": null,
+      "to_sha256": "52e01054111a54086a76256832b9a126fa307e261de993573365640f05611b23",
+      "reason": "追加 0.149.1 候选断言画像，不覆盖历史画像。"
+    },
+    {
+      "path": "tools/official_client_capture/capturelib/model.py",
+      "change": "modified",
+      "from_sha256": "362e4b82a04de817217cbc9f4c4f8c134a55b81d8dd6248f37ab02b5f5ff3d6f",
+      "to_sha256": "3eb5ba89ab9f7047a02b8201f58c6e29facf1ef57097c2be1d67e373425d51cd",
+      "reason": "按 Codex 版本冻结 main/lite 模型政策，并对未知版本失败关闭。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade.py",
+      "change": "modified",
+      "from_sha256": "2d908fa6bfda9ad2cfcea8d8af8fcd62ac6bdf4735b1175cd622b526eb3ba329",
+      "to_sha256": "d2942d9ed54944bafc9eeeba05651ad4e8304ce453fd4374bc5a3361c00d07d9",
+      "reason": "要求计划显式传入规则、场景和双轨模型，并按目标版本验证候选输入。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_campaign.schema.json",
+      "change": "modified",
+      "from_sha256": "05ba09397fb1dc7905309f1d6c34f95a3bc53a7de73884579ed2669d93b09051",
+      "to_sha256": "6ef5a0c79ed363461761921666da2916b254bc5c17d0d3e53e17ec7dbefd1992",
+      "reason": "在新 Campaign 配置中记录显式 Lite 模型，同时保留历史 Campaign 恢复兼容。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_rules_0_147_0.json",
+      "change": "added",
+      "from_sha256": null,
+      "to_sha256": "81b53d878f2a86b9861c90b11fb2f696a5789c9b494833544add3b2a526f94a5",
+      "reason": "把 0.147.0 规则清单版本化，作为 0.149.1 升级的显式基线输入。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_rules_0_149_1.json",
+      "change": "added",
+      "from_sha256": null,
+      "to_sha256": "9a685259e3437ffe0c2b74fe4cfed9de226ed98294fd724bdf2257cf0dfb1546",
+      "reason": "追加 0.149.1 候选规则清单，不切换生产 Catalog。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_scenarios_0_147_0.json",
+      "change": "added",
+      "from_sha256": null,
+      "to_sha256": "af78e419eb35279318bb8e9093c359046a5d11744ce974cf7185443a6e1125f0",
+      "reason": "把 0.147.0 场景清单版本化，避免升级编排猜测历史默认值。"
+    },
+    {
+      "path": "tools/official_client_capture/codex_upgrade_scenarios_0_149_1.json",
+      "change": "added",
+      "from_sha256": null,
+      "to_sha256": "cd677141b20a500370c392ba47c01ed3b4f34abb0bc1f91a3cd1e874dfb90c0c",
+      "reason": "追加 0.149.1 候选场景清单并显式注入主线与 Lite 模型。"
+    },
+    {
+      "path": "tools/official_client_capture/extract_compaction_reason.py",
+      "change": "modified",
+      "from_sha256": "f97ed34f2d5ed349253d23c07b7673fbb771e094433b21512a9046566fdbdc5a",
+      "to_sha256": "02f8a4c661cc94a2425cd08901573182bf31d0d1f8eea7ba6a83efc9df8a79de",
+      "reason": "允许解析 0.149.1 已受管模型的压缩原因证据。"
+    },
+    {
+      "path": "tools/official_client_capture/h1_wire_probe.py",
+      "change": "modified",
+      "from_sha256": "7449e445e5e36dff9278d025ea6ff929418384a045148c8607787cc899952100",
+      "to_sha256": "9f4eab19e8321b67185246884d449f55f61855de81099a93807e0057154c81b2",
+      "reason": "让受控模型元数据覆盖 0.147.0 与 0.149.1 的版本化模型并集。"
+    },
+    {
+      "path": "tools/official_client_capture/run_candidate_aux_capture.sh",
+      "change": "modified",
+      "from_sha256": "11af8753f967178eac0ed8d3afbd0e272b4a40e839164e50aa8009e362e9ac0b",
+      "to_sha256": "aeda674cc698af56b9a496f1ef50a725765c5db0eadbafd7bdf0169c949bc567",
+      "reason": "强制由 Campaign 显式注入辅助采集模型，禁止脚本猜测版本默认值。"
+    },
+    {
+      "path": "tools/official_client_capture/run_candidate_core_capture.sh",
+      "change": "modified",
+      "from_sha256": "efa9428ba87aa7ca3839f4d88095432466a1e749b4852937a9c0cd61ddfe6acf",
+      "to_sha256": "21120eda6dcee740b256780baf1d3c491665e20938b4896ec9e34e99aea05cb5",
+      "reason": "强制由 Campaign 显式注入主线和 Lite 模型，禁止脚本猜测版本默认值。"
+    },
+    {
+      "path": "tools/official_client_capture/scrub_raw_bytes.py",
+      "change": "modified",
+      "from_sha256": "7462d0c66d57a0ff9159e33248e457922d2a4293f4545e237572273a12907597",
+      "to_sha256": "4574ea19b355565658cbf499573a2843429de0290531349d0242f653d8cf7726",
+      "reason": "统一脱敏与复扫的压缩保护边界，保护已协商 permessage-deflate 的帧字节。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_candidate_aux_capture.py",
+      "change": "modified",
+      "from_sha256": "f54cb4a9fee0de4a57cf8886bd4366cc861d6b979d124a9fb8656cb167107985",
+      "to_sha256": "8b13bb11934e33164e87cf39945151e0d7dcdf4803edd59e5c43753e1bcecf83",
+      "reason": "冻结 0.149.1 版本化输入、模型政策、脱敏边界和 DOC-PRE 安全不变量的本地回归。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_candidate_rule_assertion.py",
+      "change": "modified",
+      "from_sha256": "b421aad028fe2fc76fd0c3c9eca7b950a89708d525ce5e615dc7741a61e02d1f",
+      "to_sha256": "7903954d793b1ea450e4b3dea6f0cbab21737308529de6ff9a7e72abe4afca94",
+      "reason": "冻结 0.149.1 版本化输入、模型政策、脱敏边界和 DOC-PRE 安全不变量的本地回归。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_doc_pre_transition.py",
+      "change": "added",
+      "from_sha256": null,
+      "to_sha256": "b957c8464221d36b9c80caf5a9d48b79a64ffeda17a53661d95334890e9a0cf1",
+      "reason": "冻结 0.149.1 版本化输入、模型政策、脱敏边界和 DOC-PRE 安全不变量的本地回归。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_upgrade.py",
+      "change": "modified",
+      "from_sha256": "ce450f428db89c5a6f2295914267c35e436b8297ee6044836e03e4e234b8e534",
+      "to_sha256": "1eaaca734fa901974059e5f36e29180272eaafd850a0f1cdda4d96717acc0bb0",
+      "reason": "要求计划显式传入规则、场景和双轨模型，并按目标版本验证候选输入。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_main_track_models.py",
+      "change": "modified",
+      "from_sha256": "c0185826a25b96fe963c41d683408b53a040363d74f197e1bd4771c1ad350452",
+      "to_sha256": "5ecc7627c4b4ee8a674a3c99289423e45cea534f8bdd5b2da286ee0d080d0cac",
+      "reason": "冻结 0.149.1 版本化输入、模型政策、脱敏边界和 DOC-PRE 安全不变量的本地回归。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_scenario_receipt.py",
+      "change": "modified",
+      "from_sha256": "47591ebdf4f0ec69e8eafe158ec18f1880c5a6a5b232003d031957932593a41e",
+      "to_sha256": "acd4da4126c35bba36cb83bd7f350d0de9a3d80fe35e80b38004c8a8d35477c0",
+      "reason": "冻结 0.149.1 版本化输入、模型政策、脱敏边界和 DOC-PRE 安全不变量的本地回归。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_upstream_byte_relay.py",
+      "change": "modified",
+      "from_sha256": "c5805283c19c906bc438accbdc848b8d18177bac3bd347fde872897e6de31ca0",
+      "to_sha256": "e62b81ff20666b24b4b420750b752d2668caa65108d86bdf4446ffa294cee01b",
+      "reason": "冻结 0.149.1 版本化输入、模型政策、脱敏边界和 DOC-PRE 安全不变量的本地回归。"
+    },
+    {
+      "path": "tools/spec_ref_anchors_0_149_1.json",
+      "change": "added",
+      "from_sha256": null,
+      "to_sha256": "e83ea5ebd1d40291c31768507188dadfa7c56af9b62d7264d40d662bad4fa006",
+      "reason": "追加绑定 Codex CLI 0.149.1 源码上下文的规则锚点清单。"
+    },
+    {
+      "path": "tools/spec_source_deps/README.md",
+      "change": "modified",
+      "from_sha256": "06a73cd23264bce80991812176af88fdc29992d9df62289def7989f439a8bc29",
+      "to_sha256": "dbc57e9e7e22fc974a25f5a60a5606e54479c4971af587816306ffffa8b1e8f6",
+      "reason": "说明多个 Codex 版本的依赖源码快照采用追加式并存规则。"
+    },
+    {
+      "path": "tools/spec_source_deps/h2-0.4.16/Cargo.toml",
+      "change": "added",
+      "from_sha256": null,
+      "to_sha256": "da03a1b0bf2ace0356d5edc4b11c55897dc10909fbbaf764f0472121ac3318d8",
+      "reason": "追加 Codex CLI 0.149.1 Cargo.lock 对应的 h2 0.4.16 最小只读源码快照。"
+    },
+    {
+      "path": "tools/spec_source_deps/h2-0.4.16/LICENSE",
+      "change": "added",
+      "from_sha256": null,
+      "to_sha256": "b21623012e6c453d944b0342c515b631cfcbf30704c2621b291526b69c10724d",
+      "reason": "追加 Codex CLI 0.149.1 Cargo.lock 对应的 h2 0.4.16 最小只读源码快照。"
+    },
+    {
+      "path": "tools/spec_source_deps/h2-0.4.16/src/frame/headers.rs",
+      "change": "added",
+      "from_sha256": null,
+      "to_sha256": "a7630564280006b29488c2fb399d52a70d8d7ccc6d1276fd291410b329d038c5",
+      "reason": "追加 Codex CLI 0.149.1 Cargo.lock 对应的 h2 0.4.16 最小只读源码快照。"
+    },
+    {
+      "path": "tools/spec_source_deps/h2-0.4.16/src/frame/settings.rs",
+      "change": "added",
+      "from_sha256": null,
+      "to_sha256": "9aed52868a1ddbb5570025edde2e073d3da1291b58d8759bfed7f086d40ef293",
+      "reason": "追加 Codex CLI 0.149.1 Cargo.lock 对应的 h2 0.4.16 最小只读源码快照。"
+    },
+    {
+      "path": "tools/spec_source_deps/h2-0.4.16/src/hpack/encoder.rs",
+      "change": "added",
+      "from_sha256": null,
+      "to_sha256": "b41373f9fe02022a30e669a780c97399af964d338dc671ec12a79592157b5a46",
+      "reason": "追加 Codex CLI 0.149.1 Cargo.lock 对应的 h2 0.4.16 最小只读源码快照。"
+    },
+    {
+      "path": "tools/spec_source_deps/manifest_0_149_1.json",
+      "change": "added",
+      "from_sha256": null,
+      "to_sha256": "a94acc981008bfabbb35e02c5a43f1db62bf6cd9433fd5a8b97d779dbfa9173c",
+      "reason": "追加 0.149.1 依赖源码摘要清单，不覆盖 0.147.0 清单。"
+    },
+    {
+      "path": "tools/update_spec_ref_anchors.py",
+      "change": "modified",
+      "from_sha256": "82a2648ac488ca9eb31b2737e164627945a8eaf9fb0ca1792bf0be87d56c42af",
+      "to_sha256": "f1ec176202a5909e35ebb8891ffbdada3736a09745706502e4021505b8259604",
+      "reason": "支持为指定 Codex 版本和规格文件确定性生成独立锚点清单。"
+    }
+  ],
+  "verification": {
+    "archive_sha256_recomputed": true,
+    "change_set_closed_against_base_commit": true,
+    "full_synthetic_suite": {
+      "run_count": 925,
+      "skipped": 21,
+      "failures": 0,
+      "errors": 0
+    },
+    "historical_bindings_sha256_frozen": true,
+    "local_only": true,
+    "required_transition_test": "tools/official_client_capture/tests/test_codex_01491_doc_pre_transition.py",
+    "spec_reference_gates": [
+      {
+        "codex_version": "0.147.0",
+        "dependency_snapshots": 5,
+        "source_refs": 136,
+        "rules": 53,
+        "anchors": 140,
+        "result": "passed"
+      },
+      {
+        "codex_version": "0.149.1",
+        "dependency_snapshots": 5,
+        "source_refs": 139,
+        "rules": 53,
+        "anchors": 148,
+        "result": "passed"
+      }
+    ],
+    "targeted_regression": {
+      "run_count": 237,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0
+    },
+    "transition_self_test": {
+      "run_count": 3,
+      "skipped": 0,
+      "failures": 0,
+      "errors": 0
+    },
+    "verification_scope": "静态规格、合成回归与本地制品摘要；不包含部署、真实请求或生产激活。"
+  },
+  "safety": {
+    "active_previous_changed": false,
+    "catalog_promoted": false,
+    "deployment_performed": false,
+    "formal_campaign_created": false,
+    "historical_artifacts_modified": false,
+    "live_request_sent": false,
+    "production_activation_receipt_created": false,
+    "production_selector_changed": false,
+    "server_required_for_this_transition": false
+  },
+  "result": "ready_for_clean_head_p0",
+  "identity_sha256": "f22eadc6c7213e8103b87c26ad476097b2791d6a2fb386fe4936b86ae08e4f3c"
+}

@@ -34,9 +34,8 @@ account_id=${ACCOUNT_ID:?必须提供专用 OpenAI OAuth ACCOUNT_ID}
 api_key_id=${API_KEY_ID:-1}
 run_id=${RUN_ID:?必须提供 RUN_ID}
 relay_port=${RELAY_PORT:-18443}
-# 默认取 Lite 轨的权威模型（capturelib.model.LITE_TRACK_MODELS[0]），
-# tests/test_main_track_models.py 锁定一致；原默认 gpt-5.6-sol 在 free 账号上 404。
-model=${MODEL:-gpt-5.6-luna}
+# Lite 轨模型必须由 Campaign 场景清单显式注入，禁止脚本按当前版本猜测。
+model=${MODEL:?必须由 Campaign 提供 MODEL}
 image_model=${IMAGE_MODEL:-gpt-image-2}
 
 for numeric in "$account_id" "$api_key_id" "$relay_port"; do

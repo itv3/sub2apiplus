@@ -197,7 +197,11 @@ def sha256_file(path: pathlib.Path) -> str:
     return digest.hexdigest()
 
 
-def validate_dependency_snapshot(manifest_path: pathlib.Path) -> tuple[int, list[str]]:
+def validate_dependency_snapshot(
+    manifest_path: pathlib.Path,
+    *,
+    cargo_lock_path: pathlib.Path | None = None,
+) -> tuple[int, list[str]]:
     errors: list[str] = []
     if not manifest_path.is_file():
         return 0, [f"L2 依赖清单不存在：{manifest_path}"]
@@ -210,7 +214,7 @@ def validate_dependency_snapshot(manifest_path: pathlib.Path) -> tuple[int, list
     if manifest.get("schema_version") != 1:
         errors.append("L2 依赖清单 schema_version 必须为 1")
 
-    lock_path = ROOT / str(manifest.get("cargo_lock", ""))
+    lock_path = cargo_lock_path or ROOT / str(manifest.get("cargo_lock", ""))
     if not lock_path.is_file():
         errors.append(f"Cargo.lock 不存在：{lock_path}")
         lock_packages: list[dict[str, Any]] = []
@@ -218,7 +222,6 @@ def validate_dependency_snapshot(manifest_path: pathlib.Path) -> tuple[int, list
         lock_data = tomllib.loads(lock_path.read_text(encoding="utf-8"))
         lock_packages = lock_data.get("package", [])
 
-    expected_files: set[pathlib.Path] = set()
     dependencies = manifest.get("dependencies", [])
     for dependency in dependencies:
         name = str(dependency.get("name", ""))
@@ -245,7 +248,9 @@ def validate_dependency_snapshot(manifest_path: pathlib.Path) -> tuple[int, list
         files = dependency.get("files", {})
         for relative, expected_hash in files.items():
             relative_path = pathlib.Path(relative)
-            expected_files.add(relative_path)
+            if relative_path.is_absolute() or ".." in relative_path.parts:
+                errors.append(f"L2 快照路径越界：{relative}")
+                continue
             path = manifest_path.parent / relative_path
             if not path.is_file():
                 errors.append(f"L2 快照文件不存在：{relative}")
@@ -254,14 +259,46 @@ def validate_dependency_snapshot(manifest_path: pathlib.Path) -> tuple[int, list
             if actual_hash != expected_hash:
                 errors.append(f"L2 快照哈希不一致：{relative}")
 
+    # 同一目录允许追加其他版本的 manifest 与依赖源码，但旧 manifest 原文保持只读。
+    # 目录闭集取全部受管 manifest 的并集；当前调用仍逐项校验所选版本的 Cargo.lock
+    # 与文件摘要，不能借另一个版本的登记掩盖当前版本漂移。
+    inventory_files: set[pathlib.Path] = set()
+    inventory_manifests = sorted(manifest_path.parent.glob("manifest*.json"))
+    for inventory_manifest in inventory_manifests:
+        try:
+            inventory = json.loads(inventory_manifest.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            errors.append(f"L2 并存清单无法读取：{inventory_manifest.name}：{exc}")
+            continue
+        if inventory.get("schema_version") != 1 or not isinstance(
+            inventory.get("dependencies"), list
+        ):
+            errors.append(f"L2 并存清单结构非法：{inventory_manifest.name}")
+            continue
+        for dependency in inventory["dependencies"]:
+            files = dependency.get("files") if isinstance(dependency, dict) else None
+            if not isinstance(files, dict):
+                errors.append(f"L2 并存清单 files 非法：{inventory_manifest.name}")
+                continue
+            for relative in files:
+                relative_path = pathlib.Path(relative)
+                if relative_path.is_absolute() or ".." in relative_path.parts:
+                    errors.append(
+                        f"L2 并存清单路径越界：{inventory_manifest.name}：{relative}"
+                    )
+                    continue
+                inventory_files.add(relative_path)
+
     actual_files = {
         path.relative_to(manifest_path.parent)
         for path in manifest_path.parent.rglob("*")
-        if path.is_file() and path.name not in {"manifest.json", "README.md"}
+        if path.is_file()
+        and not path.name.startswith("manifest")
+        and path.name != "README.md"
     }
-    for relative in sorted(actual_files - expected_files):
+    for relative in sorted(actual_files - inventory_files):
         errors.append(f"L2 快照存在未登记文件：{relative}")
-    for relative in sorted(expected_files - actual_files):
+    for relative in sorted(inventory_files - actual_files):
         errors.append(f"L2 快照清单登记但文件缺失：{relative}")
     return len(dependencies), errors
 
@@ -270,6 +307,9 @@ def validate_rule_anchors(
     spec_text: str,
     manifest_path: pathlib.Path,
     index: dict[str, list[pathlib.Path]],
+    *,
+    expected_spec: str | None = None,
+    expected_source_version: str | None = None,
 ) -> tuple[int, int, list[str]]:
     errors: list[str] = []
     if not manifest_path.is_file():
@@ -282,6 +322,13 @@ def validate_rule_anchors(
 
     if manifest.get("schema_version") != 1:
         errors.append("规则锚点清单 schema_version 必须为 1")
+    if expected_spec is not None and manifest.get("spec") != expected_spec:
+        errors.append("规则锚点清单 spec 与本次规格文件不一致")
+    if (
+        expected_source_version is not None
+        and manifest.get("source_version") != expected_source_version
+    ):
+        errors.append("规则锚点清单 source_version 与源码树不一致")
 
     current = extract_rule_source_refs(spec_text)
     expected = manifest.get("rules", {})
@@ -339,19 +386,22 @@ def find_no_line_gaps(spec_text: str) -> tuple[list[str], list[str]]:
     return allowed, gaps
 
 
-def codex_version_error() -> str | None:
-    cargo = CODEX_SOURCE_ROOT / "codex-rs" / "Cargo.toml"
+def codex_version_error(
+    source_root: pathlib.Path = CODEX_SOURCE_ROOT,
+    source_version: str = CODEX_SOURCE_VERSION,
+) -> str | None:
+    cargo = source_root / "codex-rs" / "Cargo.toml"
     if not cargo.is_file():
-        return f"找不到 Codex 源码树：{CODEX_SOURCE_ROOT}"
+        return f"找不到 Codex 源码树：{source_root}"
     match = re.search(
         r'^version\s*=\s*"([^"]+)"',
         cargo.read_text(encoding="utf-8"),
         re.M,
     )
     version = match.group(1) if match else "?"
-    if version != CODEX_SOURCE_VERSION:
-        return f"源码树版本为 {version}，规格表要求 {CODEX_SOURCE_VERSION}"
-    print(f"源码基线：codex-cli {CODEX_SOURCE_VERSION} ✅")
+    if version != source_version:
+        return f"源码树版本为 {version}，规格表要求 {source_version}"
+    print(f"源码基线：codex-cli {source_version} ✅")
     return None
 
 
@@ -369,6 +419,16 @@ def main() -> int:
         help="禁止 L1/L2 引用落入 #[cfg(test)] 区间",
     )
     parser.add_argument("--spec", type=pathlib.Path, default=DEFAULT_SPEC)
+    parser.add_argument("--source-root", type=pathlib.Path, default=CODEX_SOURCE_ROOT)
+    parser.add_argument("--source-version", default=CODEX_SOURCE_VERSION)
+    parser.add_argument(
+        "--cargo-lock",
+        type=pathlib.Path,
+        help=(
+            "覆盖依赖清单记录的仓库相对 Cargo.lock；用于从隔离工作树校验"
+            "另一处只读 Codex 源码树。"
+        ),
+    )
     parser.add_argument(
         "--anchor-manifest",
         type=pathlib.Path,
@@ -382,7 +442,7 @@ def main() -> int:
     args = parser.parse_args()
 
     fatal: list[str] = []
-    version_error = codex_version_error()
+    version_error = codex_version_error(args.source_root, args.source_version)
     if version_error:
         fatal.append(version_error)
 
@@ -393,13 +453,16 @@ def main() -> int:
         spec_text = args.spec.read_text(encoding="utf-8")
 
     dependency_count, dependency_errors = validate_dependency_snapshot(
-        args.dependency_manifest
+        args.dependency_manifest,
+        cargo_lock_path=args.cargo_lock,
     )
     fatal.extend(dependency_errors)
     if not dependency_errors:
         print(f"L2 依赖源码快照：{dependency_count} 个 ✅")
 
-    index = build_index()
+    index = build_index(
+        [args.source_root, ROOT / "backend", args.dependency_manifest.parent]
+    )
     seen: set[SourceRef] = set()
     located = 0
     external = 0
@@ -437,6 +500,12 @@ def main() -> int:
             spec_text,
             args.anchor_manifest,
             index,
+            expected_spec=(
+                args.spec.resolve().relative_to(ROOT.resolve()).as_posix()
+                if args.spec.resolve().is_relative_to(ROOT.resolve())
+                else None
+            ),
+            expected_source_version=args.source_version,
         )
         if not anchor_errors:
             print(f"第二部分规则锚点：{rule_count} 条规则、{anchor_count} 处引用 ✅")

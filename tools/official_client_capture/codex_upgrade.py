@@ -32,8 +32,8 @@ if __package__ in {None, ""}:
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from tools.official_client_capture.capturelib.model import (
-    MAIN_TRACK_MODELS,
     ConfigurationError,
+    track_models_for_version,
 )
 from tools.official_client_capture.capturelib.security import (
     ensure_private_directory,
@@ -2207,9 +2207,9 @@ def _build_parser() -> argparse.ArgumentParser:
     plan.add_argument(
         "--rule-manifest",
         type=Path,
-        default=Path(__file__).with_name("codex_upgrade_rules_0_145_0.json"),
+        required=True,
     )
-    plan.add_argument("--scenario-manifest", type=Path)
+    plan.add_argument("--scenario-manifest", type=Path, required=True)
     plan.add_argument("--extra-jobs", type=Path)
     plan.add_argument("--suite", choices=("core", "full"), default="full")
     plan.add_argument(
@@ -2219,11 +2219,16 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     plan.add_argument(
         "--model",
-        default="gpt-5.4",
+        required=True,
         help=(
-            "主升级线模型，必须是 capturelib.model.MAIN_TRACK_MODELS 之一"
-            "（上游 use_responses_lite=false）；Lite job 在场景清单中独立声明。"
+            "主升级线模型，必须属于目标版本 main 轨道"
+            "（上游 use_responses_lite=false）。"
         ),
+    )
+    plan.add_argument(
+        "--lite-model",
+        required=True,
+        help="Lite 专项模型，必须属于目标版本 lite 轨道。",
     )
     plan.add_argument("--capture-root", type=Path, default=Path("/root/oauth-capture"))
     plan.add_argument("--capture-container", default="capture-cli")
@@ -2378,16 +2383,24 @@ def _validate_arguments(arguments: argparse.Namespace) -> None:
     ):
         if not VERSION_RE.fullmatch(value):
             raise ConfigurationError(f"{field} 必须是三段版本号。")
-    if (
-        arguments.baseline_version == "0.145.0"
-        and arguments.target_version == "0.147.0"
-        and arguments.model not in MAIN_TRACK_MODELS
-    ):
-        raise ConfigurationError(
-            "0.145→0.147 主升级线只能使用 "
-            f"{'／'.join(MAIN_TRACK_MODELS)}（上游 use_responses_lite=false）；"
-            "Lite 模型只能由场景清单中的 Lite 专项 job 使用。"
-        )
+    supported_upgrade_pairs = {
+        ("0.145.0", "0.147.0"),
+        ("0.147.0", "0.149.1"),
+    }
+    upgrade_pair = (arguments.baseline_version, arguments.target_version)
+    if upgrade_pair in supported_upgrade_pairs:
+        main_models = track_models_for_version(arguments.target_version, "main")
+        lite_models = track_models_for_version(arguments.target_version, "lite")
+        if arguments.model not in main_models:
+            raise ConfigurationError(
+                f"{arguments.baseline_version}→{arguments.target_version} 主升级线"
+                f"只能使用 {'／'.join(main_models)}。"
+            )
+        if arguments.lite_model not in lite_models:
+            raise ConfigurationError(
+                f"{arguments.baseline_version}→{arguments.target_version} Lite 专项"
+                f"只能使用 {'／'.join(lite_models)}。"
+            )
     if not SHA256_RE.fullmatch(arguments.target_sha256):
         raise ConfigurationError("--target-sha256 必须是 64 位小写 SHA-256。")
     if not SHA256_RE.fullmatch(arguments.target_package_sha256):
@@ -2431,6 +2444,7 @@ def _validate_arguments(arguments: argparse.Namespace) -> None:
         "postgres_container",
         "redis_container",
         "model",
+        "lite_model",
     ):
         value = str(getattr(arguments, field))
         if not SAFE_ID_RE.fullmatch(value):
@@ -2608,10 +2622,6 @@ def _campaign_file(campaign_dir: Path, relative: str) -> Path:
     if not resolved.is_relative_to(campaign_dir.resolve()):
         raise ConfigurationError(f"Campaign 文件越过根目录：{relative}")
     return path
-
-
-def _default_scenario_manifest() -> Path:
-    return Path(__file__).with_name("codex_upgrade_scenarios_0_145_0.json")
 
 
 def _git_commit(root: Path) -> str | None:
@@ -2937,6 +2947,7 @@ def _job_context(arguments: argparse.Namespace) -> dict[str, str]:
         "campaign_dir": str(arguments.output),
         "repo_root": str(Path(__file__).resolve().parents[2]),
         "model": arguments.model,
+        "lite_model": str(getattr(arguments, "lite_model", "") or ""),
         "runtime_image": str(arguments.runtime_image),
         "target_sha256": arguments.target_sha256,
         "profile_id": str(getattr(arguments, "profile_id", "") or ""),
@@ -3031,7 +3042,7 @@ def _load_plan_jobs(
     arguments: argparse.Namespace,
     rules: tuple[str, ...],
 ) -> tuple[list[Job], Path]:
-    scenario_manifest = arguments.scenario_manifest or _default_scenario_manifest()
+    scenario_manifest = arguments.scenario_manifest
     if not scenario_manifest.is_file() or scenario_manifest.is_symlink():
         raise ConfigurationError(f"场景清单不存在或不可信：{scenario_manifest}")
     context = _job_context(arguments)
@@ -3156,6 +3167,7 @@ def create_campaign(arguments: argparse.Namespace) -> dict[str, Any]:
             "baseline_evidence": str(arguments.baseline_evidence.resolve()),
             "runtime_image": arguments.runtime_image,
             "model": arguments.model,
+            "lite_model": arguments.lite_model,
             "capture_root": str(arguments.capture_root),
             "capture_container": arguments.capture_container,
             "service_container": arguments.service_container,
@@ -4197,6 +4209,12 @@ def _campaign_arguments(
         suite=manifest["suite"],
         campaign_id=run_id,
         model=configuration["model"],
+        # 历史 Campaign Schema 尚无 lite_model；只按其冻结 target_version
+        # 恢复当时受管轨道。新 Campaign 在 plan 阶段必须显式写入该字段。
+        lite_model=(
+            configuration.get("lite_model")
+            or track_models_for_version(manifest["target_version"], "lite")[0]
+        ),
         capture_root=Path(configuration["capture_root"]),
         capture_container=configuration["capture_container"],
         service_container=configuration["service_container"],
@@ -7042,6 +7060,7 @@ def _apply_assertion_profile_overrides(
     profile: dict[str, Any],
     *,
     target_version: str,
+    base_profile_path: Path,
 ) -> tuple[dict[str, Any], int]:
     """把版本专属、人工审核过的期望变更确定性应用到 classify 草案。
 
@@ -7071,8 +7090,7 @@ def _apply_assertion_profile_overrides(
         raise ConfigurationError("目标版本断言期望覆盖清单基线版本不一致。")
     if payload["target_codex_version"] != target_version:
         raise ConfigurationError("目标版本断言期望覆盖清单目标版本不一致。")
-    base_path = Path(__file__).with_name("candidate_rule_expectations_0_145_0.json")
-    if payload["base_profile_sha256"] != file_sha256(base_path):
+    if payload["base_profile_sha256"] != file_sha256(base_profile_path):
         raise ConfigurationError("目标版本断言期望覆盖清单绑定的基线画像摘要不一致。")
     operations = payload["operations"]
     if not isinstance(operations, list) or not operations:
@@ -7189,13 +7207,15 @@ def _write_classification_draft(
         "profile_digest": "0" * 64,
         "status": "draft",
     }
-    assertion_profile = _read_json(
-        Path(__file__).with_name("candidate_rule_expectations_0_145_0.json"),
-        "基线断言画像",
+    baseline_profile_path = Path(__file__).with_name(
+        "candidate_rule_expectations_"
+        f"{manifest['baseline_version'].replace('.', '_')}.json"
     )
+    assertion_profile = _read_json(baseline_profile_path, "基线断言画像")
     assertion_profile, assertion_override_count = _apply_assertion_profile_overrides(
         assertion_profile,
         target_version=manifest["target_version"],
+        base_profile_path=baseline_profile_path,
     )
     assertion_profile = json.loads(
         json.dumps(assertion_profile, ensure_ascii=False)

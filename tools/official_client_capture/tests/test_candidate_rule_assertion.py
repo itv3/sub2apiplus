@@ -87,6 +87,30 @@ class CandidateRuleExpectationTest(unittest.TestCase):
             profile["source_spec_sha256"],
         )
 
+    def test_01491_profile_uses_independent_candidate_spec(self) -> None:
+        profile_path = TOOL_ROOT / "candidate_rule_expectations_0_149_1.json"
+        rule_manifest = TOOL_ROOT / "codex_upgrade_rules_0_149_1.json"
+        profile = load_profile(
+            profile_path,
+            rule_manifest,
+            verify_frozen_digest=False,
+            expected_codex_version="0.149.1",
+            expected_profile_sha256=file_sha256(profile_path),
+        )
+        self.assertEqual(len(profile["scenarios"]), 15)
+        self.assertEqual(len(profile["rules"]), 42)
+        self.assertEqual(
+            profile["source_spec"],
+            "docs/CODEX_CLI_0_149_1_CANDIDATE_RULE_PROFILE.md#第二章",
+        )
+        spec_relative, _, fragment = profile["source_spec"].partition("#")
+        self.assertEqual(
+            source_spec_section_sha256(
+                TOOL_ROOT.parents[1] / spec_relative, fragment
+            ),
+            profile["source_spec_sha256"],
+        )
+
     def test_profile_is_independent_from_candidate_go_profile(self) -> None:
         checker_source = (TOOL_ROOT / "candidate_rule_assertion.py").read_text(
             encoding="utf-8"

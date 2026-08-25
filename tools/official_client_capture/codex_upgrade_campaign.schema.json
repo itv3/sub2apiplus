@@ -414,6 +414,9 @@
         "model": {
           "$ref": "#/$defs/nonEmptyText"
         },
+        "lite_model": {
+          "$ref": "#/$defs/nonEmptyText"
+        },
         "capture_root": {
           "$ref": "#/$defs/absolutePath"
         },

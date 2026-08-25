@@ -1172,6 +1172,13 @@ Framework §5.3 是升级总操作入口并规定 `VC-0～VC-6` 顺序；本部�
 正式 Campaign 前先完成可丢弃的 DOC-PRE／P0。DOC-PRE 只登记并审核本次 maintenance
 transition；合并后必须从干净 HEAD 执行 P0。P0 只发现阻断，不形成目标版本证据：
 
+0.149.1 的 DOC-PRE 使用独立的
+[`候选规则画像`](CODEX_CLI_0_149_1_CANDIDATE_RULE_PROFILE.md)、
+`candidate_rule_expectations_0_149_1.json`、`codex_upgrade_scenarios_0_147_0.json`、
+`codex_upgrade_scenarios_0_149_1.json`、`spec_ref_anchors_0_149_1.json` 与
+`spec_source_deps/manifest_0_149_1.json`。这些文件只提供目标版本和工具能力输入；当前 production
+active／previous 仍为 0.147.0／0.145.0，不能据此推断 Catalog 晋升、生产激活或部署完成。
+
 | 类别 | P0 通过条件 |
 |---|---|
 | 身份与角色 | 冻结官方二进制、源码／依赖／平台／feature／镜像和网络条件；执行副本、测试树与 finalizer 同源 |

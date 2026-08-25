@@ -17,6 +17,8 @@ EGRESS_LEGACY_CEILING := $(CURDIR)/docs/egress/lifecycle/legacy-ceiling.json
 EGRESS_LEGACY_SEAL_RECEIPT := $(CURDIR)/docs/egress/lifecycle/legacy-seal-receipt.json
 EGRESS_SEAL_BASE_REF ?=
 UPSTREAM_MERGE_PLAN ?= $(CURDIR)/docs/egress/maintenance/upstream-v0.1.177-merge-plan.json
+CODEX_0_147_SOURCE_ROOT ?= $(CURDIR)/local-analysis/sources/codex-cli-0.147
+CODEX_0_149_1_SOURCE_ROOT ?= $(CURDIR)/local-analysis/sources/codex-cli-0.149.1
 
 FRONTEND_CRITICAL_VITEST := \
 	src/api/__tests__/client.spec.ts \
@@ -63,7 +65,18 @@ check-egress-spec: check-egress-spec-local-source check-egress-spec-ci
 # 本地完整门禁额外校验被 .gitignore 排除的 Codex CLI 源码引用；CI checkout
 # 不包含 local-analysis，因此只执行下面的可复现提交态闭集。
 check-egress-spec-local-source:
-	@python3 tools/check_spec_refs.py
+	@python3 tools/check_spec_refs.py \
+		--source-root "$(CODEX_0_147_SOURCE_ROOT)" \
+		--cargo-lock "$(CODEX_0_147_SOURCE_ROOT)/codex-rs/Cargo.lock" \
+		--symbol --cfg-test
+	@python3 tools/check_spec_refs.py \
+		--spec docs/CODEX_CLI_0_149_1_CANDIDATE_RULE_PROFILE.md \
+		--source-root "$(CODEX_0_149_1_SOURCE_ROOT)" \
+		--source-version 0.149.1 \
+		--cargo-lock "$(CODEX_0_149_1_SOURCE_ROOT)/codex-rs/Cargo.lock" \
+		--anchor-manifest tools/spec_ref_anchors_0_149_1.json \
+		--dependency-manifest tools/spec_source_deps/manifest_0_149_1.json \
+		--symbol --cfg-test
 
 check-egress-spec-ci: check-egress-bootstrap-replay check-egress-seal test-official-client-control test-upstream-merge-tools
 	@python3 tools/check_version_leak.py --self-test

@@ -15,6 +15,7 @@ from tools.official_client_capture.candidate_evidence_guard import scan_files_fo
 from tools.official_client_capture.relay_extract import parse_ws_frames
 from tools.official_client_capture.scrub_raw_bytes import (
     GENERIC_TOKEN,
+    count_unscrubbed_credentials,
     rewrite_relay_manifest,
     scrub,
 )
@@ -1023,6 +1024,23 @@ class ScrubbedRelayEvidenceTest(unittest.TestCase):
         self.assertEqual(replacements, 1)
         self.assertNotIn(b"real-token-value", scrubbed)
         self.assertEqual(scrubbed[-len(body):], body)
+
+    def test_permessage_deflate_frames_are_never_scanned_as_plaintext(self) -> None:
+        """WS 压缩帧中的偶然 query 字节不得被误改而破坏 deflate 流。"""
+
+        frame_bytes = b"\xc1\x10binary?sig=random-compressed-bytes"
+        source = (
+            b"GET /backend-api/codex/responses HTTP/1.1\r\n"
+            b"upgrade: websocket\r\n"
+            b"sec-websocket-extensions: permessage-deflate; client_max_window_bits\r\n"
+            b"authorization: Bearer real-token-value-123456789\r\n\r\n"
+            + frame_bytes
+        )
+        scrubbed, replacements = scrub(source)
+        self.assertEqual(replacements, 1)
+        self.assertNotIn(b"real-token-value", scrubbed)
+        self.assertEqual(scrubbed[-len(frame_bytes):], frame_bytes)
+        self.assertEqual(count_unscrubbed_credentials(scrubbed), (0, 0))
 
     def test_identity_signal_token_is_scrubbed_in_header_and_body(self) -> None:
         """A13 刷新响应里的 identity-signal 令牌必须与 access_token 同等脱敏。

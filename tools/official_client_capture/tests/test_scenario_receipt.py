@@ -1357,7 +1357,7 @@ class OfficialCaptureScriptTest(unittest.TestCase):
         """探针是受控上游，模型元数据由它权威给出，写错即等于伪造 Lite 条件。
 
         清单缺主线模型时 CLI 查不到元数据会落到默认值，采集条件与标签声明脱节；
-        k41 的 /models 原文已核实 gpt-5.4=false、gpt-5.6-*=true。
+        0.147.0 与 0.149.1 的 /models 原文共同核实受管模型的 Lite 条件。
         """
 
         source = (TOOL_ROOT / "h1_wire_probe.py").read_text(encoding="utf-8")
@@ -1374,6 +1374,9 @@ class OfficialCaptureScriptTest(unittest.TestCase):
             item["slug"]: item["use_responses_lite"] for item in payload["models"]
         }
         self.assertIs(lite_by_slug["gpt-5.4"], False)
+        self.assertIs(lite_by_slug["gpt-5.5"], False)
+        self.assertIs(lite_by_slug["gpt-5.4-mini"], False)
+        self.assertIs(lite_by_slug["gpt-5.6-terra"], True)
         self.assertIs(lite_by_slug["gpt-5.6-luna"], True)
 
     def test_A13_不再改写_last_refresh(self) -> None:
