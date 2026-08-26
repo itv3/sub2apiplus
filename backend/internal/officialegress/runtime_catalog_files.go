@@ -1,12 +1,15 @@
 package officialegress
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"path"
 	"sort"
+	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/officialegress/profilecontract"
 )
@@ -77,6 +80,51 @@ func (c ReleaseCatalog) RuntimeCatalogFiles() ([]RuntimeCatalogFile, error) {
 	manifestRaw = append(manifestRaw, '\n')
 	files = append(files, RuntimeCatalogFile{Path: "release-catalog.json", Data: manifestRaw})
 
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	return files, nil
+}
+
+// RuntimeCatalogArchiveFiles 在当前可复算目录之后追加已嵌入的历史聚合制品。
+// release-catalog selector 仍只指向当前候选；历史内容寻址 blob 只读保留，
+// 不会重新进入 Active／Previous 选择器。
+func (c ReleaseCatalog) RuntimeCatalogArchiveFiles() ([]RuntimeCatalogFile, error) {
+	files, err := c.RuntimeCatalogFiles()
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string][]byte, len(files))
+	for _, file := range files {
+		seen[file.Path] = file.Data
+	}
+	for _, directory := range []string{"release-graphs", "snapshot-catalogs"} {
+		base := path.Join("catalogdata/runtime", directory)
+		entries, readErr := fs.ReadDir(releaseCatalogFS, base)
+		if readErr != nil {
+			return nil, readErr
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".json") {
+				return nil, errors.New("正式版本历史聚合目录包含非法条目")
+			}
+			relativePath := path.Join(directory, entry.Name())
+			raw, readErr := fs.ReadFile(releaseCatalogFS, path.Join(base, entry.Name()))
+			if readErr != nil {
+				return nil, readErr
+			}
+			wantDigest := strings.TrimSuffix(entry.Name(), ".json")
+			if runtimeCatalogSHA256(raw) != wantDigest {
+				return nil, errors.New("正式版本历史聚合内容寻址摘要不一致")
+			}
+			if current, ok := seen[relativePath]; ok {
+				if !bytes.Equal(current, raw) {
+					return nil, errors.New("正式版本当前聚合与历史同路径字节不一致")
+				}
+				continue
+			}
+			files = append(files, RuntimeCatalogFile{Path: relativePath, Data: raw})
+			seen[relativePath] = raw
+		}
+	}
 	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
 	return files, nil
 }

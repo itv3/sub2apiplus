@@ -10,6 +10,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from tools.official_client_capture.tests.test_codex_01491_candidate_gate_successor_transition import (
+    transition_chain_supersedes as candidate_gate_transition_chain_supersedes,
+)
+
 
 ROOT = Path(__file__).resolve().parents[3]
 BASE_COMMIT = "ecd794c2fa13881db7be0ac8c0d728a2d8ab9490"
@@ -198,7 +202,14 @@ def validate_transition(document: dict[str, Any]) -> None:
             or entry["predecessor_sha256s"] != expected_predecessors
             or not current.is_file()
             or current.is_symlink()
-            or entry["to_sha256"] != sha256(current.read_bytes())
+            or (
+                entry["to_sha256"] != sha256(current.read_bytes())
+                and not candidate_gate_transition_chain_supersedes(
+                    path,
+                    entry["to_sha256"],
+                    sha256(current.read_bytes()),
+                )
+            )
             or not isinstance(entry["reason"], str)
             or not entry["reason"].strip()
         ):

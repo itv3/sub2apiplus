@@ -15,8 +15,8 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/officialegress/releasecontract"
 )
 
-// 合成异版本目录用的目标坐标。刻意避开 0.147.0：升级期间正式 previous 已指向真实
-// 0.147.0 画像，撞车会让「异版本」退化成同版本，三坐标里的 version 一维不再分离。
+// 合成异版本目录用的目标坐标。它必须与正式 previous 的 0.147.0 不同，
+// 否则「异版本」会退化成同版本，三坐标里的 version 一维不再分离。
 const (
 	syntheticHigherVersion           = "0.149.0"
 	syntheticHigherVersionUnderscore = "0_149_0"
@@ -176,10 +176,9 @@ func syntheticChangeset2ReleaseCatalog(t *testing.T) ReleaseCatalog {
 }
 
 // syntheticChangeset2MixedVersionReleaseCatalog 构造只用于门禁自测的异版本目录。
-// 它完整替换画像中的行为版本坐标，让 active 指向一个合成的更高版本、previous 保留
-// 正式发布图的取值。合成版本刻意避开 0.147.0：升级期间正式 previous 已指向真实
-// 0.147.0 画像，若合成 active 也用 0.147.0，三坐标里的 version 一维就不再分离，
-// 本测试要验证的「异版本三坐标全部分离」失去意义。
+// 它完整替换画像中的行为版本坐标，让 active 指向合成版本、previous 保留
+// 正式发布图的取值。合成版本刻意避开当前 previous 的 0.147.0，否则三坐标里的
+// version 一维不再分离，本测试要验证的「异版本三坐标全部分离」会失去意义。
 // 该目录不写入 runtime，也不得作为正式画像或取证结果。
 func syntheticChangeset2MixedVersionReleaseCatalog(t *testing.T) ReleaseCatalog {
 	t.Helper()
@@ -192,14 +191,9 @@ func syntheticChangeset2MixedVersionReleaseCatalog(t *testing.T) ReleaseCatalog 
 	if !ok {
 		t.Fatal("正式 previous HTTP release 缺失")
 	}
-	if baselineNode.Snapshot.Version != "0.145.0" {
-		baselineNode, ok = base.graph.Resolve(
-			RegistryPurposeOpenAIOAuthHTTP,
-			releasecontract.ReleaseModeActive,
-		)
-		if !ok || baselineNode.Snapshot.Version != "0.145.0" {
-			t.Fatal("正式 ReleaseGraph 不再引用 0.145.0 baseline")
-		}
+	baselineVersion := baselineNode.Snapshot.Version
+	if baselineVersion == syntheticHigherVersion {
+		t.Fatal("正式 previous 与合成版本相同")
 	}
 	var sourceEntry profilecontract.SnapshotCatalogEntry
 	for _, entry := range base.snapshots.ToDoc().Snapshots {
@@ -216,9 +210,9 @@ func syntheticChangeset2MixedVersionReleaseCatalog(t *testing.T) ReleaseCatalog 
 	if err != nil {
 		t.Fatal(err)
 	}
-	targetRaw := []byte(strings.ReplaceAll(string(baselineRaw), "0.145.0", syntheticHigherVersion))
-	if strings.Contains(string(targetRaw), "0.145.0") {
-		t.Fatal("异版本合成画像仍残留 0.145.0 行为坐标")
+	targetRaw := []byte(strings.ReplaceAll(string(baselineRaw), baselineVersion, syntheticHigherVersion))
+	if strings.Contains(string(targetRaw), baselineVersion) {
+		t.Fatalf("异版本合成画像仍残留 %s 行为坐标", baselineVersion)
 	}
 	var targetDoc profilecontract.SnapshotDoc
 	if err := json.Unmarshal(targetRaw, &targetDoc); err != nil {
@@ -314,23 +308,24 @@ func syntheticChangeset2MixedVersionReleaseCatalog(t *testing.T) ReleaseCatalog 
 	if err != nil {
 		t.Fatal(err)
 	}
-	replacer := strings.NewReplacer(
-		"0.145.0", syntheticHigherVersion,
-		"0_145_0", syntheticHigherVersionUnderscore,
-	)
 	for index := range graphDoc.Nodes {
 		node := &graphDoc.Nodes[index]
 		if node.Mode != releasecontract.ReleaseModeActive {
 			continue
 		}
+		nodeVersion := node.Build.Version
+		replacer := strings.NewReplacer(
+			nodeVersion, syntheticHigherVersion,
+			strings.ReplaceAll(nodeVersion, ".", "_"), syntheticHigherVersionUnderscore,
+		)
 		node.Build.ID = replacer.Replace(node.Build.ID)
 		node.Build.Version = targetDoc.Version
 		node.Build.UserAgent = replacer.Replace(node.Build.UserAgent)
-		node.Build.Source = "synthetic:0.145.0-to-" + syntheticHigherVersion
+		node.Build.Source = "synthetic:" + nodeVersion + "-to-" + syntheticHigherVersion
 		node.Wire.ID = replacer.Replace(node.Wire.ID)
 		node.Wire.BuildID = node.Build.ID
 		node.Wire.TransportProfileID = replacer.Replace(node.Wire.TransportProfileID)
-		node.Wire.Source = "synthetic:0.145.0-to-" + syntheticHigherVersion
+		node.Wire.Source = "synthetic:" + nodeVersion + "-to-" + syntheticHigherVersion
 		node.Snapshot = releasecontract.SnapshotReferenceDoc{
 			Version: targetDoc.Version,
 			Digest:  targetDoc.Digest,
@@ -447,6 +442,13 @@ func compileSyntheticChangeset2Endpoint(
 	}
 	identityFacts := executorInvocationIdentityFacts(t)
 	identityFacts.Conditions.BetaFeaturesPresent = true
+	routingHint := CodexRoutingHintFacts{}
+	if bundle.Version() == "0.149.1" && officialCodexRoutingHintEndpoint(endpointID) {
+		routingHint, err = ParseOfficialCodexRoutingHintFacts(endpointID, []byte(semanticBody))
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	execution, err := NewCompiler().Compile(context.Background(), bundle, CodexEgressPlan{
 		SinkID: sinkID, Purpose: binding.Purpose(), EndpointID: endpointID,
 		InvocationID: "changeset2-synthetic-" + string(bundle.Mode()) + "-" + endpointID,
@@ -456,6 +458,7 @@ func compileSyntheticChangeset2Endpoint(
 		Authentication: authentication,
 		HeaderPolicy:   HeaderPolicy{ID: "synthetic.rollback.headers", Source: "test"},
 		BodyPolicy:     BodyPolicy{ID: "synthetic.rollback.body", Source: "test"},
+		RoutingHint:    routingHint,
 		BehaviorPolicy: bundle.Behavior(), Body: NewReplayableRequestBody([]byte(semanticBody)),
 		DeclaredPersona: PersonaCodexCLI,
 	}, EndpointDynamicInputs{})

@@ -25,6 +25,15 @@ type OfficialCodexFileUploadInput struct {
 	FileName      string
 	FileSizeBytes uint64
 	Contents      io.Reader
+	HostedUpload  *OfficialCodexHostedFileUploadContext
+}
+
+// OfficialCodexHostedFileUploadContext 是 hosted connector 发起文件上传时
+// 由 Codex CLI 附加的三元上下文；三个字段必须同时提供且均为非空字符串。
+type OfficialCodexHostedFileUploadContext struct {
+	ConnectorID string
+	ActionName  string
+	Model       string
 }
 
 // OfficialCodexUploadedFile 对应官方 codex-api 的 UploadedOpenAiFile。
@@ -43,11 +52,12 @@ type officialCodexFileCreateResponse struct {
 }
 
 type officialCodexFileUploadedResponse struct {
-	Status       *string `json:"status"`
-	DownloadURL  *string `json:"download_url"`
-	FileName     *string `json:"file_name"`
-	MIMEType     *string `json:"mime_type"`
-	ErrorMessage *string `json:"error_message"`
+	Status        *string `json:"status"`
+	DownloadURL   *string `json:"download_url"`
+	FileName      *string `json:"file_name"`
+	MIMEType      *string `json:"mime_type"`
+	ErrorMessage  *string `json:"error_message"`
+	FileSizeBytes *uint64 `json:"file_size_bytes"`
 }
 
 // officialCodexFileUploadCall 固定一次三段式调用使用的账号、代理、版本快照和
@@ -55,7 +65,8 @@ type officialCodexFileUploadedResponse struct {
 type officialCodexFileUploadCall struct {
 	service            *OpenAIGatewayService
 	runtime            *OfficialEgressTransitionRuntime
-	registerInvocation *officialCodexHTTPInvocation
+	createInvocation   *officialCodexHTTPInvocation
+	finalizeInvocation *officialCodexHTTPInvocation
 	blobInvocation     *officialCodexHTTPInvocation
 	profile            *officialCodexVersionProfile
 	routeAccount       *Account
@@ -68,9 +79,12 @@ type officialCodexFileUploadCall struct {
 }
 
 type officialCodexFileCreateSemanticBody struct {
-	UseCase  string `json:"use_case"`
-	FileSize uint64 `json:"file_size"`
-	FileName string `json:"file_name"`
+	UseCase          string `json:"use_case"`
+	FileSize         uint64 `json:"file_size"`
+	FileName         string `json:"file_name"`
+	CodexConnectorID string `json:"codex_connector_id,omitempty"`
+	CodexActionName  string `json:"codex_action_name,omitempty"`
+	CodexModel       string `json:"codex_model,omitempty"`
 }
 
 func marshalOfficialCodexFileSemanticBody(payload any) ([]byte, error) {
@@ -128,12 +142,17 @@ func (s *OpenAIGatewayService) UploadOfficialCodexFile(
 	if input.FileSizeBytes > 0 && input.Contents == nil {
 		return nil, errors.New("Codex 文件上传内容为空")
 	}
+	if input.HostedUpload != nil && (strings.TrimSpace(input.HostedUpload.ConnectorID) == "" ||
+		strings.TrimSpace(input.HostedUpload.ActionName) == "" ||
+		strings.TrimSpace(input.HostedUpload.Model) == "") {
+		return nil, errors.New("Codex hosted 文件上传上下文三个字段必须同时为非空字符串")
+	}
 
 	call, err := newOfficialCodexFileUploadCall(ctx, s, runtimeState, account, profile)
 	if err != nil {
 		return nil, err
 	}
-	created, err := call.create(input.FileName, input.FileSizeBytes)
+	created, err := call.create(input.FileName, input.FileSizeBytes, input.HostedUpload)
 	if err != nil {
 		return nil, err
 	}
@@ -190,11 +209,17 @@ func newOfficialCodexFileUploadCall(
 func (c *officialCodexFileUploadCall) create(
 	fileName string,
 	fileSizeBytes uint64,
+	hostedUpload *OfficialCodexHostedFileUploadContext,
 ) (*officialCodexFileCreateResponse, error) {
 	// 结构体顺序是业务构造顺序，并刻意不等同于 Profile wire 顺序；最终
 	// file_name/file_size/use_case 线序只能由 officialegress compiler 决定。
 	body := officialCodexFileCreateSemanticBody{
 		UseCase: c.profile.Files.UseCase, FileSize: fileSizeBytes, FileName: fileName,
+	}
+	if hostedUpload != nil {
+		body.CodexConnectorID = hostedUpload.ConnectorID
+		body.CodexActionName = hostedUpload.ActionName
+		body.CodexModel = hostedUpload.Model
 	}
 	responseBody, err := c.executeJSON(
 		codexEndpointID(c.profile.Files.CreateEndpointID),
@@ -326,12 +351,16 @@ func (c *officialCodexFileUploadCall) finalize(
 			if payload.FileName != nil {
 				fileName = *payload.FileName
 			}
+			resolvedFileSizeBytes := fileSizeBytes
+			if payload.FileSizeBytes != nil {
+				resolvedFileSizeBytes = *payload.FileSizeBytes
+			}
 			return &OfficialCodexUploadedFile{
 				FileID:        fileID,
 				URI:           c.profile.Files.URIPrefix + fileID,
 				DownloadURL:   *payload.DownloadURL,
 				FileName:      fileName,
-				FileSizeBytes: fileSizeBytes,
+				FileSizeBytes: resolvedFileSizeBytes,
 				MIMEType:      payload.MIMEType,
 			}, nil
 		case c.profile.Files.FinalizeRetryStatus:
@@ -408,8 +437,20 @@ func (c *officialCodexFileUploadCall) executeJSON(
 		}
 	}
 	setOpenAIChatGPTAccountHeaders(request.Header, c.credentialAccount)
-	if c.registerInvocation == nil {
-		c.registerInvocation, err = newOfficialCodexHTTPInvocation(
+	// files_create 的 hosted_file_upload 条件属于该 attempt 的 Persona
+	// attestation，而 files_uploaded 的空 Body 不具备该条件。二者必须各自
+	// 冻结 invocation；uploaded 的多次轮询仍复用同一个 finalize invocation。
+	var invocation **officialCodexHTTPInvocation
+	switch endpointID {
+	case codexEndpointID(c.profile.Files.CreateEndpointID):
+		invocation = &c.createInvocation
+	case codexEndpointID(c.profile.Files.UploadedEndpointID):
+		invocation = &c.finalizeInvocation
+	default:
+		return nil, fmt.Errorf("Codex 文件登记端点不受支持：%s", endpoint.ID)
+	}
+	if *invocation == nil {
+		*invocation, err = newOfficialCodexHTTPInvocation(
 			requestContext,
 			officialCodexHTTPInvocationInput{
 				Runtime: c.runtime, Account: c.routeAccount,
@@ -424,7 +465,7 @@ func (c *officialCodexFileUploadCall) executeJSON(
 			return nil, fmt.Errorf("创建 Codex 文件 register invocation：%w", err)
 		}
 	}
-	response, err := c.registerInvocation.Execute(
+	response, err := (*invocation).Execute(
 		requestContext,
 		officialCodexHTTPAttemptInput{EndpointID: string(endpointID), Request: request},
 	)

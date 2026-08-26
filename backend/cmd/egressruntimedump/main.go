@@ -19,7 +19,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, "导出失败：必须提供 -output")
 		os.Exit(2)
 	}
-	files, err := officialegress.DefaultReleaseCatalog().RuntimeCatalogFiles()
+	files, err := officialegress.DefaultReleaseCatalog().RuntimeCatalogArchiveFiles()
 	if err == nil {
 		err = writeRuntimeCatalog(*output, files)
 	}

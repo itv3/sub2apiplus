@@ -14,6 +14,9 @@ from tools.official_client_capture.tests.test_codex_01491_target_scenario_bindin
     load_transition as load_target_scenario_binding_transition,
     transition_supersedes as target_scenario_binding_transition_supersedes,
 )
+from tools.official_client_capture.tests.test_codex_01491_candidate_gate_successor_transition import (
+    transition_chain_supersedes as candidate_gate_transition_chain_supersedes,
+)
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -96,6 +99,12 @@ def transition_supersedes(
 ) -> bool:
     """重放出站门禁修复及 target 场景绑定后继的传递边。"""
 
+    if candidate_gate_transition_chain_supersedes(
+        path,
+        prior_digest,
+        current_digest,
+    ):
+        return True
     if any(
         entry["path"] == path
         and entry["to_sha256"] == current_digest

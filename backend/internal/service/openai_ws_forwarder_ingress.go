@@ -823,6 +823,20 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 	}
 
 	firstRoutingFields := gjson.GetManyBytes(firstPayload.payloadRaw, "model", "service_tier")
+	var firstRoutingHint officialegress.CodexRoutingHintFacts
+	if officialRuntime != nil {
+		firstRoutingHint, err = officialegress.ParseOfficialCodexRoutingHintFacts(
+			officialCodexEndpointResponsesWS,
+			firstPayload.payloadRaw,
+		)
+		if err != nil {
+			return NewOpenAIWSClientCloseError(
+				coderws.StatusPolicyViolation,
+				"official egress websocket routing hint validation failed",
+				err,
+			)
+		}
+	}
 	wsHeaders, _, buildHdrErr := s.buildOpenAIWSHeaders(
 		ctx,
 		c,
@@ -840,10 +854,11 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		return fmt.Errorf("build ws headers: %w", buildHdrErr)
 	}
 	baseAcquireReq := openAIWSAcquireRequest{
-		Account: account,
-		WSURL:   wsURL,
-		Headers: wsHeaders,
-		SinkID:  runtimeSinkID,
+		Account:     account,
+		WSURL:       wsURL,
+		Headers:     wsHeaders,
+		RoutingHint: firstRoutingHint,
+		SinkID:      runtimeSinkID,
 		HeadersFactory: func(factoryCtx context.Context, headers http.Header) (http.Header, error) {
 			return s.refreshOpenAIAgentIdentityHeaders(factoryCtx, account, headers)
 		},
@@ -2098,6 +2113,20 @@ func (s *OpenAIGatewayService) ProxyResponsesWebSocketFromClient(
 		nextPayload, parseErr := parseClientPayload(turn+1, nextClientMessage)
 		if parseErr != nil {
 			return parseErr
+		}
+		if officialRuntime != nil {
+			nextRoutingHint, routingHintErr := officialegress.ParseOfficialCodexRoutingHintFacts(
+				officialCodexEndpointResponsesWS,
+				nextPayload.payloadRaw,
+			)
+			if routingHintErr != nil {
+				return NewOpenAIWSClientCloseError(
+					coderws.StatusPolicyViolation,
+					"official egress websocket routing hint validation failed",
+					routingHintErr,
+				)
+			}
+			baseAcquireReq.RoutingHint = nextRoutingHint
 		}
 		nextRoutingFields := gjson.GetManyBytes(nextPayload.payloadRaw, "model", "service_tier")
 		if nextPayload.promptCacheKey != "" {

@@ -21,6 +21,9 @@ from tools.official_client_capture.tests.test_codex_01491_egress_gate_chain_repa
 from tools.official_client_capture.tests.test_codex_01491_target_scenario_binding_transition import (
     load_transition as load_target_scenario_binding_transition,
 )
+from tools.official_client_capture.tests.test_codex_01491_candidate_gate_successor_transition import (
+    transition_chain_supersedes as candidate_gate_transition_chain_supersedes,
+)
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -516,6 +519,13 @@ def maintenance_transition_chain_supersedes(
 ) -> bool:
     """重放 Campaign 边界、失败恢复与 Formal Attempt 修复的传递闭包。"""
 
+    if candidate_gate_transition_chain_supersedes(
+        path,
+        prior_digest,
+        current_digest,
+    ):
+        return True
+
     edges: dict[str, list[str]] = {}
     formal_attempt_repair = load_formal_attempt_repair_transition()
     egress_gate_chain_repair = load_egress_gate_chain_repair_transition()
@@ -647,7 +657,16 @@ class Codex01491DocPreTransitionTest(unittest.TestCase):
             self.assertEqual(set(binding), {"path", "sha256", "role"})
             path = ROOT / binding["path"]
             self.assertTrue(path.is_file() and not path.is_symlink())
-            self.assertEqual(binding["sha256"], sha256(path.read_bytes()))
+            current_digest = sha256(path.read_bytes())
+            self.assertTrue(
+                binding["sha256"] == current_digest
+                or candidate_gate_transition_chain_supersedes(
+                    binding["path"],
+                    binding["sha256"],
+                    current_digest,
+                ),
+                binding["path"],
+            )
             self.assertNotIn(binding["path"], transition_paths)
 
         catalog_path = (
@@ -662,7 +681,7 @@ class Codex01491DocPreTransitionTest(unittest.TestCase):
         )
         self.assertEqual(
             {node["build"]["version"] for node in graph["nodes"] if node["mode"] == "previous"},
-            {"0.145.0"},
+            {"0.149.1"},
         )
 
     def test_archive_is_legacy_input_not_current_acceptance(self) -> None:

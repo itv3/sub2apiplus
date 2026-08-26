@@ -102,6 +102,11 @@ func upstreamMergeFrameworkTransitionSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if codex01491CandidateSourceTransitionSupersedesService(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	if compositeModelProtocolSourceTransitionSupersedesService(
 		path, priorDigest, currentDigest,
 	) {

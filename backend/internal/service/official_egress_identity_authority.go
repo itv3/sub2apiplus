@@ -19,6 +19,7 @@ type officialCodexSemanticAttempt struct {
 	Headers        http.Header
 	Body           officialegress.RequestBody
 	BodyConditions officialegress.BodyRuntimeConditions
+	RoutingHint    officialegress.CodexRoutingHintFacts
 	IdentityFacts  officialegress.CodexIdentityFacts
 	Authentication officialegress.AttemptAuthentication
 }
@@ -193,8 +194,10 @@ func prepareOfficialCodexSemanticAttempt(
 	return officialCodexSemanticAttempt{
 		Headers: semanticHeaders, Body: semanticBody,
 		BodyConditions: officialegress.BodyRuntimeConditions{
-			CreditIDPresent: strings.TrimSpace(headers.Get("credit-id")) != "",
+			CreditIDPresent:         strings.TrimSpace(headers.Get("credit-id")) != "",
+			HostedFileUploadPresent: ownedFields.HostedFileUploadPresent,
 		},
+		RoutingHint:   ownedFields.RoutingHint,
 		IdentityFacts: facts, Authentication: authentication,
 	}, nil
 }

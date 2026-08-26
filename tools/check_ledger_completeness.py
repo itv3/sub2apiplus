@@ -34,6 +34,20 @@ SPEC = ROOT / "docs" / "CODEX_CLI_CLIENT_EMULATION_GUIDE.md"
 SCAN_ROOT = ROOT / "backend"
 INVENTORY = ROOT / "docs" / "egress" / "consolidation" / "egress-surface-inventory.json"
 CHANGESET6_TRANSITION = ROOT / "docs" / "egress" / "validation" / "egress-surface-transition.json"
+CANDIDATE_SURFACE_SUCCESSOR = (
+    ROOT
+    / "docs"
+    / "egress"
+    / "maintenance"
+    / "codex-0.149.1-egress-surface-successor-transition.json"
+)
+CANDIDATE_GATE_TRANSITION = (
+    ROOT
+    / "docs"
+    / "egress"
+    / "maintenance"
+    / "codex-0.149.1-candidate-gate-successor-transition.json"
+)
 MAINTENANCE_RETIREMENT = ROOT / "docs" / "egress" / "maintenance" / "official-egress-consolidation-retirement.json"
 MAINTENANCE_RETIREMENT_SHA256 = "d60fb470a83f4a98f5de231265d2f695f3963536ec45290b36341c248a56ee36"
 UPSTREAM_MERGE_PLAN_SCHEMA = "official-egress-upstream-merge-plan/v1"
@@ -544,6 +558,238 @@ def changeset6_additions(inventory_raw: bytes) -> list[dict[str, str]]:
     return additions
 
 
+def candidate_surface_successor_identity(document: dict[str, object]) -> str:
+    """复算候选出站面后继 transition 排除自摘要后的规范身份。"""
+
+    payload = {key: value for key, value in document.items() if key != "identity_sha256"}
+    canonical = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        allow_nan=False,
+    ).encode("utf-8") + b"\n"
+    return sha256(canonical)
+
+
+def validate_candidate_surface_successor(
+    transition: dict[str, object],
+    inventory_raw: bytes,
+    changeset6_raw: bytes,
+    candidate_gate_raw: bytes,
+) -> list[dict[str, str]]:
+    """验证追加式候选出站面登记，历史清单与变更集 6 原文保持只读。"""
+
+    expected_fields = {
+        "schema_version",
+        "issued_at_utc",
+        "base_commit",
+        "scope",
+        "predecessor_transition",
+        "candidate_gate_transition",
+        "base_inventory",
+        "additions",
+        "removals",
+        "resulting_surface_count",
+        "implementation_transitions",
+        "safety",
+        "result",
+        "identity_sha256",
+    }
+    if set(transition) != expected_fields:
+        raise RuntimeError("候选出站面后继 transition 顶层字段不闭合")
+    if (
+        transition.get("schema_version")
+        != "official-client-codex-0.149.1-egress-surface-successor-transition/v1"
+        or transition.get("issued_at_utc") != "2026-08-26T11:50:00Z"
+        or transition.get("base_commit")
+        != "580ac615c759170cfb745e7b71fa02a9e1c3f12e"
+        or transition.get("scope") != "codex-0.149.1-egress-surface-successor"
+        or transition.get("result") != "candidate_surface_successor_frozen"
+    ):
+        raise RuntimeError("候选出站面后继 transition 顶层事实非法")
+    if transition.get("identity_sha256") != candidate_surface_successor_identity(
+        transition
+    ):
+        raise RuntimeError("候选出站面后继 transition 自摘要漂移")
+
+    expected_predecessor = {
+        "path": "docs/egress/validation/egress-surface-transition.json",
+        "file_sha256": sha256(changeset6_raw),
+    }
+    if transition.get("predecessor_transition") != expected_predecessor:
+        raise RuntimeError("候选出站面后继 transition 未精确绑定变更集 6 原文")
+
+    try:
+        candidate_gate = json.loads(
+            candidate_gate_raw,
+            object_pairs_hook=_unique_json_object,
+        )
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"无法读取候选门禁 transition：{exc}") from exc
+    expected_candidate_gate = {
+        "path": (
+            "docs/egress/maintenance/"
+            "codex-0.149.1-candidate-gate-successor-transition.json"
+        ),
+        "file_sha256": sha256(candidate_gate_raw),
+        "identity_sha256": candidate_gate.get("identity_sha256"),
+    }
+    if transition.get("candidate_gate_transition") != expected_candidate_gate:
+        raise RuntimeError("候选出站面后继 transition 未精确绑定候选门禁后继")
+
+    expected_inventory = {
+        "path": "docs/egress/consolidation/egress-surface-inventory.json",
+        "sha256": sha256(inventory_raw),
+        "surface_count": 52,
+    }
+    if transition.get("base_inventory") != expected_inventory:
+        raise RuntimeError("候选出站面后继 transition 基线清单绑定非法")
+
+    additions = transition.get("additions")
+    if not isinstance(additions, list) or additions != [
+        {
+            "path": "backend/internal/officialegress/routing_hint.go",
+            "file_type": "regular",
+            "sha256": "80626878919a1a06f54361da972efab2db4e3750babb90053ece3f2bf6c71282",
+            "reason": "候选画像新增官方 routing hint 定型面，必须追加登记到 Codex/OpenAI 出站闭集。",
+        }
+    ]:
+        raise RuntimeError("候选出站面后继 transition additions 非法")
+    if transition.get("removals") != [] or transition.get("resulting_surface_count") != 54:
+        raise RuntimeError("候选出站面后继 transition 禁止移除历史路径且结果计数必须为 54")
+
+    implementation_transitions = transition.get("implementation_transitions")
+    expected_implementations = [
+        (
+            "backend/cmd/egressruntimedump/main.go",
+            "modified",
+            ["6e02a1a8b937a50b761b2031630994ace2267372d99e52db648283a946c5e8b1"],
+        ),
+        (
+            "backend/internal/officialegress/"
+            "codex_01491_candidate_source_transition_test.go",
+            "modified",
+            ["115eff32cfdb74f097f657b74fcf5c9c251f84850beeb59ac738329f3a6db46e"],
+        ),
+        (
+            "backend/internal/officialegress/runtime_catalog_files.go",
+            "modified",
+            ["67751e305d14e0c9529d0e7316da14f9348096dbb99cceedb5dada89fcd8f311"],
+        ),
+        (
+            "backend/internal/officialegress/runtime_catalog_files_test.go",
+            "modified",
+            ["38c6a15738edd545e64bdb62d6d0ddf6bf2fafc42a4b3be2f91dda8a73a37058"],
+        ),
+        (
+            "backend/internal/officialegress/"
+            "upstream_merge_framework_transition_test.go",
+            "modified",
+            ["86c64d4418bce2f8a54aca4cc965f37d5bff5a5cb9c0448e1269e82ad4df144c"],
+        ),
+        (
+            "backend/internal/service/"
+            "codex_01491_candidate_source_transition_test.go",
+            "modified",
+            ["e3458abc3bdd7a3b285819c0a4c7b8313665262da9b49fbf34ed08aaf029dd28"],
+        ),
+        (
+            "tools/check_ledger_completeness.py",
+            "modified",
+            ["3e650b9d07982ff96f1c90f6fcf70b4ba9264df7183b0ef91edfcc3cbd1cf375"],
+        ),
+        (
+            "tools/official_client_capture/tests/"
+            "test_codex_01491_candidate_gate_successor_transition.py",
+            "modified",
+            ["d9adc78a868492110d0c277731f617ac1d836aa74295ea534a1317c5c1f0121d"],
+        ),
+        (
+            "tools/official_client_capture/tests/"
+            "test_codex_01491_egress_surface_successor_transition.py",
+            "added",
+            [],
+        ),
+    ]
+    if not isinstance(implementation_transitions, list) or len(
+        implementation_transitions
+    ) != len(expected_implementations):
+        raise RuntimeError("候选出站面后继 transition 实现路径数量非法")
+    for entry, (expected_path, expected_change, expected_predecessors) in zip(
+        implementation_transitions,
+        expected_implementations,
+        strict=True,
+    ):
+        if not isinstance(entry, dict) or set(entry) != {
+            "path",
+            "change",
+            "predecessor_sha256s",
+            "to_sha256",
+            "reason",
+        }:
+            raise RuntimeError("候选出站面后继 transition 实现条目字段非法")
+        implementation_path = ROOT / expected_path
+        if (
+            entry.get("path") != expected_path
+            or entry.get("change") != expected_change
+            or entry.get("predecessor_sha256s") != expected_predecessors
+            or not isinstance(entry.get("reason"), str)
+            or not entry["reason"].strip()
+            or implementation_path.is_symlink()
+            or not implementation_path.is_file()
+            or entry.get("to_sha256") != sha256(implementation_path.read_bytes())
+        ):
+            raise RuntimeError(
+                f"候选出站面后继 transition 实现摘要非法：{expected_path}"
+            )
+    if transition.get("safety") != {
+        "active_remained_0_147_0": True,
+        "arm64_accessed": False,
+        "deployment_performed": False,
+        "historical_inventory_modified": False,
+        "historical_transition_modified": False,
+        "vircs_accessed": False,
+    }:
+        raise RuntimeError("候选出站面后继 transition 安全边界非法")
+
+    addition = additions[0]
+    path = ROOT / addition["path"]
+    if (
+        path.is_symlink()
+        or not path.is_file()
+        or sha256(path.read_bytes()) != addition["sha256"]
+    ):
+        raise RuntimeError("候选新增出站面文件类型或摘要漂移")
+    return [
+        {
+            "path": addition["path"],
+            "file_type": addition["file_type"],
+            "reason": addition["reason"],
+        }
+    ]
+
+
+def candidate_surface_additions(inventory_raw: bytes) -> list[dict[str, str]]:
+    """读取并验证候选出站面追加登记。"""
+
+    try:
+        changeset6_raw = CHANGESET6_TRANSITION.read_bytes()
+        candidate_gate_raw = CANDIDATE_GATE_TRANSITION.read_bytes()
+        transition = json.loads(
+            CANDIDATE_SURFACE_SUCCESSOR.read_text(encoding="utf-8"),
+            object_pairs_hook=_unique_json_object,
+        )
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"无法读取候选出站面后继 transition：{exc}") from exc
+    return validate_candidate_surface_successor(
+        transition,
+        inventory_raw,
+        changeset6_raw,
+        candidate_gate_raw,
+    )
+
+
 def maintenance_removals(frozen_paths: set[str]) -> list[str]:
     """读取本次退休收据，只允许删除收据绑定且确已不存在的历史出站面。"""
 
@@ -679,7 +925,9 @@ def main() -> int:
         print("🔴 变更集 5 的完整出站面必须严格为 52 项", file=sys.stderr)
         return 1
     try:
-        additions = changeset6_additions(inventory_raw)
+        changeset6 = changeset6_additions(inventory_raw)
+        candidate_additions = candidate_surface_additions(inventory_raw)
+        additions = changeset6 + candidate_additions
     except RuntimeError as exc:
         print(f"🔴 {exc}", file=sys.stderr)
         return 1
@@ -726,7 +974,8 @@ def main() -> int:
 
     covered = len(declared_paths)
     print(
-        f"✅ §3.5 台账完整：变更集 5 冻结 52 面 + 变更集 6 增量 {len(additions)} 面"
+        f"✅ §3.5 台账完整：变更集 5 冻结 52 面 + 变更集 6 增量 {len(changeset6)} 面"
+        f" + 候选后继增量 {len(candidate_additions)} 面"
         f" - 维护退休 {len(removal_paths)} 面 = {covered} 个出站定型文件全部登记"
         f"；{plan.upstream_tag} 机器 overlay {len(upstream_entries)} 个文件逐项一致"
         f"（plan={plan.plan_id}）"

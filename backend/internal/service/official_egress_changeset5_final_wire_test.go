@@ -371,26 +371,35 @@ func TestChangeset5NormalizedPreAppliesOnlyExactOAuthNoiseTransition(t *testing.
 	}
 }
 
-func TestChangeset5CurrentFinalWireMatchesFrozenWireFields(t *testing.T) {
+func TestChangeset5HistoricalFinalWireRemainsFrozenAfterRuntimeRetirement(t *testing.T) {
 	normalized := changeset5ReadFinalWireManifest(
 		t, "../../../docs/egress/consolidation/normalized-pre-refactor-final-wire/manifest.json",
 	)
-	current := changeset5BuildCurrent0145FinalWireCaptures(t)
-	// 变更集 5 冻结时 Active/Previous 都是 0.145。生产提升后 0.145 位于
-	// Previous；此历史非回归门按版本定位它，并只归一 selector 身份后比较 wire。
-	filterActive := func(captures []finalwirecapture.Capture) []finalwirecapture.Capture {
-		filtered := make([]finalwirecapture.Capture, 0, len(captures)/2)
-		for _, capture := range captures {
-			if capture.ReleaseMode == officialegress.ReleaseModeActive {
-				filtered = append(filtered, capture)
-			}
-		}
-		return filtered
+	if len(normalized.Captures) == 0 {
+		t.Fatal("变更集 5 冻结 final-wire 为空")
 	}
-	if err := changeset5CompareCurrentFinalWireCaptures(
-		filterActive(normalized.Captures), current,
-	); err != nil {
-		t.Fatalf("当前 final-wire 与 normalized pre 漂移：%v", err)
+	for _, mode := range []officialegress.ReleaseMode{
+		officialegress.ReleaseModeActive,
+		officialegress.ReleaseModePrevious,
+	} {
+		release, err := officialegress.DefaultReleaseCatalog().Resolve(mode)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if release.Version() == officialCodexVersion0145 {
+			t.Fatalf("0.145 不得继续占用生产 selector：mode=%s", mode)
+		}
+	}
+	historical, err := officialegress.DefaultReleaseCatalog().ResolveSnapshotExact(
+		officialCodexVersion0145,
+		officialCodexHistoricalProfileDigest,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if historical.Version() != officialCodexVersion0145 ||
+		historical.ProfileDigest() != officialCodexHistoricalProfileDigest {
+		t.Fatal("0.145 只读历史画像坐标漂移")
 	}
 }
 

@@ -159,6 +159,11 @@ func upstreamV0180EgressPrerequisiteTransitionSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if codex01491CandidateSourceTransitionSupersedesService(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	receipt, err := loadUpstreamV0180EgressPrerequisiteServiceTransition()
 	if err != nil {
 		return false

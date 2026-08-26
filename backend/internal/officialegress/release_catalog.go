@@ -268,6 +268,23 @@ type ResolvedCodexRelease struct {
 	executable    profilecontract.ExecutableProfile
 }
 
+// ResolvedCodexSnapshot 是只读历史画像坐标，不包含 ReleaseGraph 节点、selector、
+// ReleaseDigest 或可执行 Bundle。它只供冻结证据复算和离线兼容性门禁使用，不能
+// 被生产请求当作 active/previous 发布选择。
+type ResolvedCodexSnapshot struct {
+	profileDigest string
+	profile       profilecontract.ProfileSpec
+	executable    profilecontract.ExecutableProfile
+}
+
+func (r ResolvedCodexSnapshot) Version() string                      { return r.profile.Version() }
+func (r ResolvedCodexSnapshot) ProfileDigest() string                { return r.profileDigest }
+func (r ResolvedCodexSnapshot) Profile() profilecontract.ProfileSpec { return r.profile }
+func (r ResolvedCodexSnapshot) ExecutableProfile() profilecontract.ExecutableProfile {
+	return r.executable
+}
+func (r ResolvedCodexSnapshot) ExecutableProfileDigest() string { return r.executable.Digest() }
+
 func (r ResolvedCodexRelease) Mode() ReleaseMode                    { return r.mode }
 func (r ResolvedCodexRelease) Persona() Persona                     { return PersonaCodexCLI }
 func (r ResolvedCodexRelease) ReleaseDigest() string                { return r.releaseDigest }
@@ -322,6 +339,32 @@ func (c ReleaseCatalog) Resolve(mode ReleaseMode) (ResolvedCodexRelease, error) 
 			errors.New("ReleaseMode 非法"),
 		)
 	}
+}
+
+// ResolveSnapshotExact 按不可变 version+digest 坐标读取历史画像。该入口不解析
+// ReleaseMode，也不生成发布身份；线上请求仍只能通过 Resolve(active|previous)。
+func (c ReleaseCatalog) ResolveSnapshotExact(
+	version string,
+	digest string,
+) (ResolvedCodexSnapshot, error) {
+	key := profilecontract.SnapshotKey{Version: version, Digest: digest}
+	profile, ok := c.snapshots.Resolve(key)
+	if !ok {
+		return ResolvedCodexSnapshot{}, fmt.Errorf(
+			"ReleaseCatalog 缺少精确历史 Snapshot: version=%s digest=%s", version, digest,
+		)
+	}
+	executable, ok := c.snapshots.ResolveExecutable(key)
+	if !ok {
+		return ResolvedCodexSnapshot{}, fmt.Errorf(
+			"ReleaseCatalog 历史 Snapshot 未预编译: version=%s digest=%s", version, digest,
+		)
+	}
+	return ResolvedCodexSnapshot{
+		profileDigest: profile.OfficialDigest(),
+		profile:       profile,
+		executable:    executable,
+	}, nil
 }
 
 // resolveUncached 只允许在 newReleaseCatalog 的启动期编译过程中调用。

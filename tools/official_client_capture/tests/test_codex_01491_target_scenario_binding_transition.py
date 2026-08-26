@@ -11,6 +11,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from tools.official_client_capture.tests.test_codex_01491_candidate_gate_successor_transition import (
+    transition_chain_supersedes as candidate_gate_transition_chain_supersedes,
+)
+
 
 ROOT = Path(__file__).resolve().parents[3]
 BASE_COMMIT = "0566654268ba060f3549869169ef21e9d7828bc7"
@@ -114,6 +118,10 @@ def transition_supersedes(
         and entry["to_sha256"] == current_digest
         and prior_digest in entry["predecessor_sha256s"]
         for entry in document["transitions"]
+    ) or candidate_gate_transition_chain_supersedes(
+        path,
+        prior_digest,
+        current_digest,
     )
 
 
@@ -245,7 +253,15 @@ def validate_transition(document: dict[str, Any]) -> None:
             entry["change"] != expected_change
             or entry["predecessor_sha256s"] != expected_predecessors
             or target is None
-            or entry["to_sha256"] != sha256(target)
+            or (
+                entry["to_sha256"] != sha256(target)
+                and not transition_supersedes(
+                    document,
+                    path,
+                    entry["to_sha256"],
+                    sha256(target),
+                )
+            )
             or not isinstance(entry["reason"], str)
             or not entry["reason"].strip()
         ):

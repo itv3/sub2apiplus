@@ -1,0 +1,168 @@
+{
+  "schema_version": "official-client-codex-0.149.1-candidate-gate-successor-transition/v1",
+  "issued_at_utc": "2026-08-26T11:45:00Z",
+  "base_commit": "580ac615c759170cfb745e7b71fa02a9e1c3f12e",
+  "scope": "codex-0.149.1-candidate-gate-successor",
+  "framework_stage": "VC-4/CANDIDATE-GATE-SUCCESSOR",
+  "predecessor_transition": {
+    "path": "docs/egress/maintenance/codex-0.149.1-candidate-source-transition.json",
+    "file_sha256": "9fc08bbe6fedad1290c427f9ef470d820a097c2faeb8a90e10364c4bf643abd8",
+    "identity_sha256": "66f9a961ce9d5c72edba019f33e21e5d0692c4f5b644da7b472b4f5f95c3e858"
+  },
+  "campaign": {
+    "id": "codex-0_149_1-formal-production-replacement-20260826T092125Z-580ac615c",
+    "purpose": "production_replacement",
+    "target_version": "0.149.1",
+    "target_profile_sha256": "8e59b38e2ad90a1fd4eb7520c2c54f01fc62f802690d45a2cdab5f91f249fb60"
+  },
+  "staged_catalog": {
+    "active_version": "0.147.0",
+    "previous_version": "0.149.1",
+    "release_catalog_path": "backend/internal/officialegress/catalogdata/runtime/release-catalog.json",
+    "release_catalog_sha256": "f7d4c7b6f6ab045c4c4cec1ca87f29928366199c16f1838717dd02dc91a50259",
+    "release_graph_path": "backend/internal/officialegress/catalogdata/runtime/release-graphs/591347d95b380bdb789a0c05f76796e61c8f7e7bdd8f0eb39442c0c4f3716f25.json",
+    "release_graph_sha256": "591347d95b380bdb789a0c05f76796e61c8f7e7bdd8f0eb39442c0c4f3716f25",
+    "contract_release_graph_path": "backend/internal/officialegress/releasecontract/testdata/release-graph.json",
+    "contract_release_graph_sha256": "591347d95b380bdb789a0c05f76796e61c8f7e7bdd8f0eb39442c0c4f3716f25"
+  },
+  "path_set_sha256": "8fb6e2e5c2f470524ecef07be88e6d9e51dd511b261766c69a0b1f391231c466",
+  "transitions": [
+    {
+      "path": "backend/internal/officialegress/codex_01491_candidate_source_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "7b78f5b936adc89b10abf20f61d481dce092a61fdb9431df02b3c3585474fca6"
+      ],
+      "to_sha256": "115eff32cfdb74f097f657b74fcf5c9c251f84850beeb59ac738329f3a6db46e",
+      "reason": "让候选源码门禁只通过本后继的精确 path/from/to 三元组承接新增修改。"
+    },
+    {
+      "path": "backend/internal/officialegress/routing_hint.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "ff1ee1771d881732eb0d43eb8bba09358bf22b932b5d3637263b97c6d548665a"
+      ],
+      "to_sha256": "80626878919a1a06f54361da972efab2db4e3750babb90053ece3f2bf6c71282",
+      "reason": "移除生产源码注释中的目标版本字面量，保持版本事实只来自受管画像。"
+    },
+    {
+      "path": "backend/internal/service/codex_01491_candidate_source_transition_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "1c773ab0564cff1026dff22a50c7d0217bf19c4f48ded285d434e7abb543b155"
+      ],
+      "to_sha256": "e3458abc3bdd7a3b285819c0a4c7b8313665262da9b49fbf34ed08aaf029dd28",
+      "reason": "让 service 摘要门禁独立重放同一候选后继且拒绝未知前序。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_changeset5_final_wire_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "7de36fe52b194ca8d1d06bba789cab2c424ab371bc187ae8ca525ac00980fc89"
+      ],
+      "to_sha256": "687a27153325f0d242f8bbd363ac4cf2bde249c92b9396bd98ef35de5b4c05b9",
+      "reason": "同步历史画像离线复算测试使用不含版本号的证据摘要标识符。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_0145_profile.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "06f501e3482f94fd135a9531835951f51eecff401c19c000fec09ad822fe5857"
+      ],
+      "to_sha256": "ff294fadf78ca94be8a9234eac066ee3921a178f0e904a8204f65de079b19343",
+      "reason": "把历史画像摘要常量改为版本无关名称，避免恢复已关闭的生产 0145 标识符债务。"
+    },
+    {
+      "path": "backend/internal/service/official_egress_codex_0145_profile_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "19523d4b3749a77c192dc9ed5fe306b91bbe846538a6f5343364462bee096b95"
+      ],
+      "to_sha256": "be193774299abeb9e92c3c9d0efc5f560018c5bf4eea56637326d18898c2f860",
+      "reason": "同步历史画像定向测试使用版本无关证据摘要标识符。"
+    },
+    {
+      "path": "backend/internal/service/openai_forward_plan_test.go",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "50fd8c97fb61e60592cb9bf982be6027e65202038be0f1ad5309034f1fe8923f"
+      ],
+      "to_sha256": "d45e55f96cba3efb3267b02608e954477bc9b76ec477e6205d4f35360ef18dee",
+      "reason": "为每个 Forward Plan 测试创建独立 Guard，消除全量回归中的 issuer 注册顺序污染。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_candidate_gate_successor_transition.py",
+      "change": "added",
+      "predecessor_sha256s": [],
+      "to_sha256": "d9adc78a868492110d0c277731f617ac1d836aa74295ea534a1317c5c1f0121d",
+      "reason": "新增候选门禁后继的身份、闭集、摘要链和 mutation 独立重放器。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_capture_runtime_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "f235301e3ea5bb74489b591badf263c2467c3e747e220dc84bcc902c9ffd9b65"
+      ],
+      "to_sha256": "af4e5011e180e2aa520121f0e1ae9ef2c28d3a52b2e30338f0bfa71f6e4a30d9",
+      "reason": "把旧生产基线断言更新为 Active 不变且 Previous 暂存 0.149.1 的候选阶段事实。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_direct_readiness_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "7de5edbccb9552f89e11c727d65465cf52bf7185422ed345f8d8126053735d2f"
+      ],
+      "to_sha256": "7127bdaa927c1bc78afdcd587762b2fca9ea4c3a9445299b789e20a217b48a43",
+      "reason": "让 direct 就绪历史 transition 通过候选后继承接抓包运行时测试的新摘要。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_doc_pre_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "52e2af97136f30680aaa07d37e902e56bd6ecb3265181dc88754259edacd2f15"
+      ],
+      "to_sha256": "0fd4e5b9c748fef722c1313865b5976df33b8a59577ee545beb3a4270b20ea0a",
+      "reason": "保留 DOC-PRE 历史绑定原文，并通过追加式候选摘要链承接暂存 Catalog。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_egress_gate_chain_repair_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "1b48d824cdba2997603bbc0789865d9a158fbfd103a48aa7734b2208dc1d70ca"
+      ],
+      "to_sha256": "33363e7b8e48d61a236ac1fc13d611f8844390a3011f9097851c867cc28efe9e",
+      "reason": "将候选源码与门禁后继纳入旧出站门禁链的传递摘要闭包。"
+    },
+    {
+      "path": "tools/official_client_capture/tests/test_codex_01491_target_scenario_binding_transition.py",
+      "change": "modified",
+      "predecessor_sha256s": [
+        "fe037949dfe4c24a07092572c3edb7678d13ec34e0c1243db532a25c6a1bf4df"
+      ],
+      "to_sha256": "5165744434a76800db78e445aaf4461d31196e9dbd8d3706aa5ed5467195efc4",
+      "reason": "让 target 场景绑定历史 transition 只接受候选后继登记的精确摘要链。"
+    }
+  ],
+  "verification": {
+    "candidate_source_transition_replayed": true,
+    "historical_transition_chain_replayed": true,
+    "mutation_tests_passed": true,
+    "staged_catalog_state_verified": true,
+    "targeted_tests_passed": true
+  },
+  "safety": {
+    "active_remained_0_147_0": true,
+    "arm64_accessed_for_this_transition": false,
+    "catalog_promoted": false,
+    "deployment_performed": false,
+    "historical_content_addressed_artifacts_overwritten": false,
+    "historical_receipts_modified": false,
+    "historical_transitions_modified": false,
+    "live_request_sent": false,
+    "previous_staged_0_149_1": true,
+    "production_selector_changed": false,
+    "vircs_accessed": false
+  },
+  "result": "candidate_gate_successor_frozen",
+  "identity_sha256": "20f5b1a4b5e3eab7a4ea8bea11214c79209703532185e568286789afd3306bd5"
+}

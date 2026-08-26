@@ -234,7 +234,7 @@ class Codex01491CaptureRuntimeTransitionTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "执行边界"):
             validate_transition(document)
 
-    def test_production_catalog_仍保持_0147_active_0145_previous(self) -> None:
+    def test_candidate_catalog_保持_0147_active_并暂存_01491_previous(self) -> None:
         catalog_path = (
             ROOT
             / "backend/internal/officialegress/catalogdata/runtime/release-catalog.json"
@@ -257,7 +257,7 @@ class Codex01491CaptureRuntimeTransitionTest(unittest.TestCase):
             if node["mode"] == "previous"
         }
         self.assertEqual(active, {"0.147.0"})
-        self.assertEqual(previous, {"0.145.0"})
+        self.assertEqual(previous, {"0.149.1"})
 
 
 if __name__ == "__main__":

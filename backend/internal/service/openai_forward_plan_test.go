@@ -29,10 +29,45 @@ type openAIForwardPlanWebSocketAcquirer struct {
 	identities []officialegress.AttemptIdentity
 }
 
+type openAIForwardPlanCaptureDialer struct {
+	mu      sync.Mutex
+	headers http.Header
+}
+
+func (d *openAIForwardPlanCaptureDialer) Dial(
+	_ context.Context,
+	_ string,
+	headers http.Header,
+	_ string,
+) (openAIWSClientConn, int, http.Header, error) {
+	d.mu.Lock()
+	d.headers = cloneHeader(headers)
+	d.mu.Unlock()
+	return &openAIWSFakeConn{}, 0, nil, nil
+}
+
+func (d *openAIForwardPlanCaptureDialer) Headers() http.Header {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return cloneHeader(d.headers)
+}
+
 type openAIForwardPlanTerminalGuardUpstream struct {
 	guard    *officialegress.Guard
 	request  *http.Request
 	decision officialegress.GuardDecision
+}
+
+func newOpenAIForwardPlanGuard(t *testing.T) *officialegress.Guard {
+	t.Helper()
+	guard, err := officialegress.NewGuard(
+		officialegress.DefaultGuard().Config(),
+		officialegress.DefaultSinkCatalog(),
+		officialegress.DefaultOfficialRouteCatalog(),
+		nil,
+	)
+	require.NoError(t, err)
+	return guard
 }
 
 func (u *openAIForwardPlanTerminalGuardUpstream) Do(
@@ -168,7 +203,7 @@ func (u *openAIForwardPlanUpstream) snapshot() []*http.Request {
 func TestOpenAIForwardInvocationPlanFreezesIdentityAndResolvesBundleOnce(t *testing.T) {
 	upstream := &openAIForwardPlanUpstream{}
 	runtimeState, err := newOfficialEgressTransitionRuntimeWithExecutor(
-		officialegress.DefaultGuard(),
+		newOpenAIForwardPlanGuard(t),
 		upstream,
 		officialegress.ExecutorID(t.Name()),
 		officialegress.ReleaseModeActive,
@@ -255,7 +290,7 @@ func TestOpenAIForwardInvocationPlanFreezesIdentityAndResolvesBundleOnce(t *test
 func TestOpenAIForwardInvocationPlanRequiresExplicitWebSocketHTTPFallback(t *testing.T) {
 	upstream := &openAIForwardPlanUpstream{}
 	runtimeState, err := newOfficialEgressTransitionRuntimeWithExecutor(
-		officialegress.DefaultGuard(),
+		newOpenAIForwardPlanGuard(t),
 		upstream,
 		officialegress.ExecutorID(t.Name()),
 		officialegress.ReleaseModeActive,
@@ -308,6 +343,11 @@ func TestOpenAIForwardInvocationPlanRequiresExplicitWebSocketHTTPFallback(t *tes
 		http.MethodGet, strings.Replace(chatgptCodexURL, "https://", "wss://", 1), nil,
 	)
 	require.NoError(t, err)
+	routingHint, err := officialegress.ParseOfficialCodexRoutingHintFacts(
+		officialCodexEndpointResponsesWS,
+		[]byte(`{"model":"gpt-5.5","service_tier":"priority"}`),
+	)
+	require.NoError(t, err)
 	first, err := plan.NewAttempt(openAIForwardAttemptInput{
 		Reason: officialegress.AttemptReasonInitial,
 		SinkID: officialEgressSinkResponsesWS, EndpointID: officialCodexEndpointResponsesWS,
@@ -316,6 +356,7 @@ func TestOpenAIForwardInvocationPlanRequiresExplicitWebSocketHTTPFallback(t *tes
 		Headers:        http.Header{"Upgrade": []string{"websocket"}},
 		Authentication: http.Header{"Authorization": []string{"Bearer ws-attempt"}},
 		Body:           officialegress.NewReplayableRequestBody(nil),
+		RoutingHint:    routingHint,
 	})
 	require.NoError(t, err)
 	result, err := plan.ExecuteAttempt(context.Background(), first)
@@ -363,7 +404,12 @@ func TestOpenAIForwardInvocationPlanRequiresExplicitWebSocketHTTPFallback(t *tes
 
 func TestOpenAIForwardInvocationPlanAcquireThenHTTPFallbackUsesOneBundle(t *testing.T) {
 	upstream := &openAIForwardPlanUpstream{}
-	runtimeState, err := newOfficialEgressTestRuntime(upstream)
+	runtimeState, err := newOfficialEgressTransitionRuntimeWithExecutor(
+		newOpenAIForwardPlanGuard(t),
+		upstream,
+		officialCodexExecutorID,
+		officialegress.ReleaseModePrevious,
+	)
 	require.NoError(t, err)
 	account := &Account{
 		ID: 713, Platform: PlatformOpenAI, Type: AccountTypeOAuth, Concurrency: 1,
@@ -389,21 +435,30 @@ func TestOpenAIForwardInvocationPlanAcquireThenHTTPFallbackUsesOneBundle(t *test
 	cfg.Gateway.OpenAIWS.MaxIdlePerAccount = 1
 	pool := newOpenAIWSConnPool(cfg)
 	t.Cleanup(pool.Close)
-	pool.setClientDialerForTest(&openAIWSCountingDialer{})
+	dialer := &openAIForwardPlanCaptureDialer{}
+	pool.setClientDialerForTest(dialer)
+	routingHint, err := officialegress.ParseOfficialCodexRoutingHintFacts(
+		officialCodexEndpointResponsesWS,
+		[]byte(`{"model":"gpt-5.5","service_tier":"priority"}`),
+	)
+	require.NoError(t, err)
 	lease, err := plan.AcquireWebSocketPool(
 		context.Background(), pool,
 		openAIWSAcquireRequest{
 			Account: account,
 			WSURL:   "wss://chatgpt.com/backend-api/codex/responses",
 			Headers: http.Header{
-				"Authorization":      []string{"Bearer ws-attempt"},
-				"Chatgpt-Account-Id": []string{"acct-forward"},
+				"Authorization":        []string{"Bearer ws-attempt"},
+				"Chatgpt-Account-Id":   []string{"acct-forward"},
+				"X-Codex-Routing-Hint": []string{"model=caller-spoof;tier=flex"},
 			},
+			RoutingHint: routingHint,
 		},
 		officialCodexEndpointResponsesWS,
 	)
 	require.NoError(t, err)
 	lease.Release()
+	require.Equal(t, "model=gpt-5.5;tier=priority", dialer.Headers().Get(openAICodexRoutingHintHeader))
 
 	target, found := plan.FallbackNode(officialegress.SinkCodexResponsesWSHTTPBridge)
 	require.True(t, found)
@@ -431,7 +486,7 @@ func TestOpenAIForwardInvocationPlanAcquireThenHTTPFallbackUsesOneBundle(t *test
 }
 
 func TestOpenAIForwardInvocationPlanLinuxLiteHTTPFallbackPassesTerminalGuard(t *testing.T) {
-	guard := officialegress.DefaultGuard()
+	guard := newOpenAIForwardPlanGuard(t)
 	upstream := &openAIForwardPlanTerminalGuardUpstream{guard: guard}
 	runtimeState, err := newOfficialEgressTransitionRuntimeWithExecutor(
 		guard,
@@ -479,6 +534,11 @@ func TestOpenAIForwardInvocationPlanLinuxLiteHTTPFallbackPassesTerminalGuard(t *
 
 	wsTarget, err := http.NewRequest(http.MethodGet, "wss://chatgpt.com/backend-api/codex/responses", nil)
 	require.NoError(t, err)
+	routingHint, err := officialegress.ParseOfficialCodexRoutingHintFacts(
+		officialCodexEndpointResponsesWS,
+		[]byte(`{"model":"gpt-5.6-luna"}`),
+	)
+	require.NoError(t, err)
 	first, err := plan.NewAttempt(openAIForwardAttemptInput{
 		Reason: officialegress.AttemptReasonInitial,
 		SinkID: officialEgressSinkResponsesWS, EndpointID: officialCodexEndpointResponsesWS,
@@ -487,6 +547,7 @@ func TestOpenAIForwardInvocationPlanLinuxLiteHTTPFallbackPassesTerminalGuard(t *
 		Headers:        make(http.Header),
 		Authentication: http.Header{"Authorization": []string{"Bearer ws-token"}},
 		Body:           officialegress.NewReplayableRequestBody(nil),
+		RoutingHint:    routingHint,
 	})
 	require.NoError(t, err)
 	result, err := plan.ExecuteAttempt(context.Background(), first)

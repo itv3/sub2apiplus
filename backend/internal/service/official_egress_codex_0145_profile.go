@@ -20,6 +20,8 @@ const officialCodexProfileVersion = officialCodexVersion0145
 
 const (
 	officialCodexVersion0145 = "0.145.0"
+	// 0.145 已退出生产 selector；该摘要只用于冻结历史画像的离线复算。
+	officialCodexHistoricalProfileDigest = "e0b59772622f14717f1fdf5c15bfae5758226a04fe8f030110d8a616e20fdf6b"
 
 	officialCodexSurfaceExec = "exec"
 	officialCodexSurfaceTUI  = "tui"
@@ -314,7 +316,20 @@ func resolveCodexVersionProfile(version string) (*officialCodexVersionProfile, e
 		found = true
 	}
 	if !found {
-		return nil, fmt.Errorf("未知 Codex 官方出站版本画像：%q", version)
+		// 生产选择始终走 resolveCodexVersionProfileForMode，并且只能得到
+		// Active/Previous。这里保留 0.145 的精确摘要入口，仅供冻结历史测试、
+		// 收据复算和不生成 ReleaseBundle 的离线工具使用。
+		if version != officialCodexVersion0145 {
+			return nil, fmt.Errorf("未知 Codex 官方出站版本画像：%q", version)
+		}
+		historical, err := officialegress.DefaultReleaseCatalog().ResolveSnapshotExact(
+			version,
+			officialCodexHistoricalProfileDigest,
+		)
+		if err != nil {
+			return nil, err
+		}
+		return resolveOfficialCodexExecutableProfile(historical.ExecutableProfile())
 	}
 	return resolveOfficialCodexReleaseProfile(selected)
 }
@@ -323,6 +338,19 @@ func resolveOfficialCodexReleaseProfile(
 	release officialegress.ResolvedCodexRelease,
 ) (*officialCodexVersionProfile, error) {
 	executable := release.ExecutableProfile()
+	profile, err := resolveOfficialCodexExecutableProfile(executable)
+	if err != nil {
+		return nil, err
+	}
+	if profile.Digest != release.ExecutableProfileDigest() {
+		return nil, errors.New("service 投影与正式 ExecutableProfileDigest 不一致")
+	}
+	return profile, nil
+}
+
+func resolveOfficialCodexExecutableProfile(
+	executable profilecontract.ExecutableProfile,
+) (*officialCodexVersionProfile, error) {
 	if cached, ok := officialCodexFormalProfileCache.Load(executable.Digest()); ok {
 		profile, valid := cached.(*officialCodexVersionProfile)
 		if !valid {
@@ -331,8 +359,8 @@ func resolveOfficialCodexReleaseProfile(
 		return profile, nil
 	}
 	profile := projectExecutableCodexProfile(executable)
-	if profile.Digest != release.ExecutableProfileDigest() {
-		return nil, errors.New("service 投影与正式 ExecutableProfileDigest 不一致")
+	if profile.Digest != executable.Digest() {
+		return nil, errors.New("service 投影与 ExecutableProfileDigest 不一致")
 	}
 	actual, _ := officialCodexFormalProfileCache.LoadOrStore(executable.Digest(), &profile)
 	cachedProfile, valid := actual.(*officialCodexVersionProfile)

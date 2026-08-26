@@ -70,8 +70,11 @@ func readUpstreamV0180SourceTransitionServiceReceipt() (
 		current, readErr := os.ReadFile(filepath.Join(
 			"../../..", filepath.FromSlash(transition.Path),
 		))
-		if readErr != nil ||
-			upstreamMergeFrameworkServiceDigest(current) != transition.ToSHA256 {
+		currentDigest := upstreamMergeFrameworkServiceDigest(current)
+		if readErr != nil || (currentDigest != transition.ToSHA256 &&
+			!codex01491CandidateSourceTransitionSupersedesService(
+				transition.Path, transition.ToSHA256, currentDigest,
+			)) {
 			return receipt, os.ErrInvalid
 		}
 	}
@@ -85,6 +88,11 @@ func upstreamV0180SourceTransitionSupersedesService(
 	priorDigest string,
 	currentDigest string,
 ) bool {
+	if codex01491CandidateSourceTransitionSupersedesService(
+		path, priorDigest, currentDigest,
+	) {
+		return true
+	}
 	receipt, err := loadUpstreamV0180SourceTransitionServiceReceipt()
 	if err != nil {
 		return false

@@ -229,7 +229,10 @@ type OpenAIForwardAttempt struct {
 	headers        http.Header
 	authentication http.Header
 	body           officialegress.RequestBody
-	dynamicInputs  officialegress.EndpointDynamicInputs
+	// WS 握手本身没有语义 Body；路由提示只能从已解析的首个
+	// response.create 帧单独携带，不能回读同名普通 Header。
+	routingHint   officialegress.CodexRoutingHintFacts
+	dynamicInputs officialegress.EndpointDynamicInputs
 }
 
 type openAIForwardAttemptInput struct {
@@ -242,6 +245,7 @@ type openAIForwardAttemptInput struct {
 	Headers        http.Header
 	Authentication http.Header
 	Body           officialegress.RequestBody
+	RoutingHint    officialegress.CodexRoutingHintFacts
 	DynamicInputs  officialegress.EndpointDynamicInputs
 }
 
@@ -317,6 +321,7 @@ func (p *OpenAIForwardInvocationPlan) newAttemptLocked(
 		protocol: input.Protocol, method: strings.ToUpper(strings.TrimSpace(input.Method)),
 		target: &clonedTarget, headers: input.Headers.Clone(),
 		authentication: input.Authentication.Clone(), body: input.Body,
+		routingHint:   input.RoutingHint,
 		dynamicInputs: input.DynamicInputs,
 	}, nil
 }
@@ -327,6 +332,15 @@ func validateOpenAIForwardAttemptInput(input openAIForwardAttemptInput) error {
 		strings.TrimSpace(input.Method) == "" || input.URL == nil ||
 		strings.TrimSpace(input.URL.Hostname()) == "" {
 		return errors.New("OpenAI Forward attempt 字段不完整")
+	}
+	if !input.RoutingHint.IsZero() {
+		if input.Protocol != officialegress.WireProtocolWebSocket ||
+			input.EndpointID != officialCodexEndpointResponsesWS {
+			return errors.New("Codex routing hint 只能由 Responses WebSocket attempt 携带")
+		}
+		if err := input.RoutingHint.Validate(); err != nil {
+			return fmt.Errorf("Codex routing hint 非法：%w", err)
+		}
 	}
 	return nil
 }
@@ -370,6 +384,13 @@ func (p *OpenAIForwardInvocationPlan) ExecuteAttempt(
 	if err != nil {
 		return officialegress.TransportResult{}, err
 	}
+	routingHint := semantic.RoutingHint
+	if !attempt.routingHint.IsZero() {
+		if !routingHint.IsZero() && routingHint.Digest() != attempt.routingHint.Digest() {
+			return officialegress.TransportResult{}, errors.New("OpenAI Forward attempt 的 Body 与 WebSocket routing hint 冲突")
+		}
+		routingHint = attempt.routingHint
+	}
 	transportContext := context.WithValue(
 		ctx,
 		officialCodexHTTPTransportContextKey{},
@@ -392,6 +413,7 @@ func (p *OpenAIForwardInvocationPlan) ExecuteAttempt(
 				ID: p.headerPolicy.ID + ".body", Source: p.headerPolicy.Source,
 				Conditions: semantic.BodyConditions,
 			},
+			RoutingHint:    routingHint,
 			BehaviorPolicy: p.behaviorPolicy,
 			Body:           semantic.Body,
 			InvocationID:   p.invocation.InvocationID(), DeclaredPersona: officialegress.PersonaCodexCLI,
@@ -525,7 +547,8 @@ func (p *OpenAIForwardInvocationPlan) AcquireWebSocketPool(
 		Protocol: officialegress.WireProtocolWebSocket,
 		Method:   http.MethodGet, URL: target,
 		Headers: baseHeaders, Authentication: authentication,
-		Body: officialegress.NewReplayableRequestBody(nil),
+		Body:        officialegress.NewReplayableRequestBody(nil),
+		RoutingHint: request.RoutingHint,
 	})
 	if err != nil {
 		return nil, err

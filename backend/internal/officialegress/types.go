@@ -730,6 +730,7 @@ type CodexEgressPlan struct {
 	Authentication          AttemptAuthentication
 	HeaderPolicy            HeaderPolicy
 	BodyPolicy              BodyPolicy
+	RoutingHint             CodexRoutingHintFacts
 	BehaviorPolicy          BehaviorPolicy
 	Body                    RequestBody
 	InvocationID            string

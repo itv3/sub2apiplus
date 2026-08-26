@@ -8,7 +8,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/officialegress/bindingcontract"
 )
 
-func TestVersionRouteReceiptBindsOnlyProfilesThatContainEndpoint(t *testing.T) {
+func TestVersionRouteReceiptBindsCurrentProfilesThatContainEndpoint(t *testing.T) {
 	binding, ok := DefaultSinkCatalog().Resolve(SinkCodexQuotaWHAM)
 	if !ok || len(binding.Routes()) != 4 {
 		t.Fatalf("WHAM 版本 route 未进入最终 Catalog：%+v", binding.Routes())
@@ -21,18 +21,14 @@ func TestVersionRouteReceiptBindsOnlyProfilesThatContainEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	legacy := versionRouteResolveBundleByVersion(t, resolver, "0.145.0")
-	if _, err := legacy.ResolveEndpointPlan(
-		SinkCodexQuotaWHAM, "GET", target, WireProtocolHTTP,
-	); err == nil {
-		t.Fatal("0.145 画像不存在 settings/user，却生成了 EndpointPlan")
-	}
-	targetBundle := versionRouteResolveBundleByVersion(t, resolver, "0.147.0")
-	plan, err := targetBundle.ResolveEndpointPlan(
-		SinkCodexQuotaWHAM, "GET", target, WireProtocolHTTP,
-	)
-	if err != nil || plan.EndpointID() != "wham_settings_user" {
-		t.Fatalf("0.147 画像未生成 settings/user EndpointPlan：plan=%+v err=%v", plan, err)
+	for _, version := range []string{"0.147.0", "0.149.1"} {
+		targetBundle := versionRouteResolveBundleByVersion(t, resolver, version)
+		plan, err := targetBundle.ResolveEndpointPlan(
+			SinkCodexQuotaWHAM, "GET", target, WireProtocolHTTP,
+		)
+		if err != nil || plan.EndpointID() != "wham_settings_user" {
+			t.Fatalf("%s 画像未生成 settings/user EndpointPlan：plan=%+v err=%v", version, plan, err)
+		}
 	}
 }
 

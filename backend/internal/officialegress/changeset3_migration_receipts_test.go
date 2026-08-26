@@ -58,19 +58,22 @@ func TestChangeset3MigrationReceiptsMatchRuntimeContracts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var release ResolvedCodexRelease
-	for _, mode := range []ReleaseMode{ReleaseModeActive, ReleaseModePrevious} {
-		candidate, resolveErr := DefaultReleaseCatalog().Resolve(mode)
-		if resolveErr != nil {
-			t.Fatal(resolveErr)
-		}
-		if candidate.Version() == "0.145.0" {
-			release = candidate
-			break
-		}
+	historicalKey := profilecontract.SnapshotKey{
+		Version: "0.145.0",
+		Digest:  "e0b59772622f14717f1fdf5c15bfae5758226a04fe8f030110d8a616e20fdf6b",
 	}
-	if release.Version() != "0.145.0" {
-		t.Fatal("变更集 3 历史收据缺少 0.145 Release")
+	releaseCatalog := DefaultReleaseCatalog()
+	historicalProfile, ok := releaseCatalog.snapshots.Resolve(historicalKey)
+	if !ok {
+		t.Fatal("变更集 3 历史收据缺少 0.145 Profile")
+	}
+	historicalExecutable, ok := releaseCatalog.snapshots.ResolveExecutable(historicalKey)
+	if !ok {
+		t.Fatal("变更集 3 历史收据缺少 0.145 执行画像")
+	}
+	release := ResolvedCodexRelease{
+		mode: ReleaseModePrevious, profileDigest: historicalKey.Digest,
+		profile: historicalProfile, executable: historicalExecutable,
 	}
 	endpointBindings, err := NewEndpointBindingCatalog(catalog, physical, release.ExecutableProfile())
 	if err != nil {
